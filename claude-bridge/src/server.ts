@@ -24,7 +24,7 @@ const INTERNAL = process.env.WERKBANK_INTERNAL_TOKEN || '';
 const MCP_DIR = process.env.WERKBANK_MCP_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'mcp');
 
 /** MCP-Server nur für Werkbank-Sitzungen — die Nutzer-Konfiguration von Claude Code bleibt unberührt. */
-function mcpServersFor(userId: string): Record<string, unknown> {
+function mcpServersFor(userId: string, claudeToken: string): Record<string, unknown> {
   const node = process.execPath;
   const servers: Record<string, unknown> = {
     'vault-search': {
@@ -32,11 +32,20 @@ function mcpServersFor(userId: string): Record<string, unknown> {
       env: { WERKBANK_VAULT_DIR: process.env.BRIDGE_VAULT_DIR || '/vault', MEILI_HOST: process.env.MEILI_HOST || 'http://127.0.0.1:7700', MEILI_MASTER_KEY: process.env.MEILI_MASTER_KEY || '', PATH: process.env.PATH || '' },
     },
   };
-  // Platzhalter: forge-review (PR-Review als Entwurf) wird von ~/work/forge geliefert und hier angebunden,
-  // sobald WERKBANK_FORGE_MCP gesetzt ist (Befehl, z. B. "node /home/knut/work/forge/…/server.js").
+  // forge-review (PR-Review als Entwurf, nur lesend gegen GitHub), angebunden über WERKBANK_FORGE_MCP
+  // (Launcher ~/work/forge/tools/forge-review-mcp). Die Modellaufrufe laufen mit dem Claude-Zugang
+  // DER PERSON (CLAUDE_CODE_OAUTH_TOKEN), nie mit dem Login der VM. Den GitHub-Lese-Token liest der
+  // Launcher selbst aus seiner Datei (FORGE_REVIEW_ENV); die Brücke reicht keine Werkbank-Geheimnisse durch.
   if (process.env.WERKBANK_FORGE_MCP) {
     const [command, ...args] = process.env.WERKBANK_FORGE_MCP.split(' ');
-    servers['forge-review'] = { type: 'stdio', command, args, env: { PATH: process.env.PATH || '' } };
+    servers['forge-review'] = {
+      type: 'stdio', command, args,
+      env: {
+        PATH: process.env.PATH || '', HOME: process.env.HOME || '',
+        FORGE_REVIEW_ENV: process.env.FORGE_REVIEW_ENV || '',
+        CLAUDE_CODE_OAUTH_TOKEN: claudeToken,
+      },
+    };
   }
   if (INTERNAL) {
     servers.werkbank = {
@@ -235,7 +244,7 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
   await handleTurn({
     userId, convId, token, prompt, history, model: MODELS[model], sink, query: query as any, readonly, instructions: instructions || undefined,
     sessionContext: known ? () => sessionContext(userId, convId, /Tagesabschluss/i.test(instructions) || /^\s*tagesabschluss\b/i.test(prompt), skillsFor(STATE_DIR, `${safeId(userId)}:${safeId(convId)}`, instructions, prompt)) : undefined,
-    mcpServers: known ? mcpServersFor(userId) : undefined,
+    mcpServers: known ? mcpServersFor(userId, token) : undefined,
     onMeasure: known && INTERNAL ? (m) => {
       log('kontext gemessen', { user: userId, ...m });
       fetch(`${WEB_URL}/internal/measure`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, conv: convId, measured: m }) }).catch(() => {});

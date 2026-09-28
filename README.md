@@ -433,7 +433,7 @@ was an ihnen hängt, werden danach gelöscht.
 | Status „läuft / wartet“ je Agent | coder/agentapi | **gebaut** — läuft / wartet auf ja / bereit; auf Karten „🤖 läuft“ |
 | Agent auf Karte, Ergebnis an der Karte, Nachfrage in derselben Sitzung | Vibe Kanban, kandev | **gebaut** — Agent ansetzen (nur lesend), Verlauf, Entwurf, Nachfrage setzt fort |
 | Eigener Worktree je Karten-Agent | kandev, Vibe Kanban | **abgelehnt** — Board-Agenten ändern keinen Code (nur lesend); Code-Arbeit bleibt im Chat mit Rückfrage |
-| PR-Review am Board und im Chat | forge | **Platzhalter** — `forge-review` wird von ~/work/forge geliefert; Brücke bindet ihn an, sobald `WERKBANK_FORGE_MCP` gesetzt ist (Posten nach GitHub bleibt gesperrt), Board-Aktion „Review PR“ bis dahin deaktiviert |
+| PR-Review am Board und im Chat | forge | **angebunden** (29.09.) — MCP `forge-review` aus `~/work/forge` (Zweig `werkbank-hardening`, lokal) über `WERKBANK_FORGE_MCP` in `.env.local`; Einstellungen in `~/.config/forge/review-mcp.env` (nur Pfade). Modellaufrufe mit dem **Claude-Zugang der Person**, GitHub nur lesend, Posten gesperrt, Testausführung aus (keine Sandbox auf der VM). Kosten: #171 (3 Dateien) brauchte im Modus `concerns` ~1,5 Mio. Tokens und blieb `incomplete` — Budget je Review 600k, ein unvollständiges Review wird als solches gemeldet |
 
 ## Offene Entscheidungen
 

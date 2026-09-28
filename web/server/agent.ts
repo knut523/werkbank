@@ -44,7 +44,7 @@ export async function startAgentRun(u: User, token: string, issue: Issue, note: 
   const prompt = followUp
     ? `Nachfrage der Person zu deinem Ergebnis: ${note}\n\nSchließe wieder mit "### Kommentarentwurf".`
     : kind === 'forge'
-      ? `${AGENT_INSTRUCTION}\n\nZusätzlich: Prüfe den Pull Request ${note} mit dem Werkzeug forge-review (nur als Entwurf, nichts auf GitHub posten) und fasse Befunde mit Bezug zum Ticket zusammen.\n\n---\n\n${ticketPrompt(issue)}`
+      ? `${AGENT_INSTRUCTION}\n\nZusätzlich: Prüfe den Pull Request ${note} mit dem Werkzeug forge-review: \`review_pr\` mit \`wait_seconds: 30\`, danach \`review_status\` mit der run_id abfragen, bis der Lauf fertig ist. Nur Entwurf, nichts auf GitHub posten. Fasse die Befunde mit Bezug zum Ticket zusammen: gleiche Befunde aus verschiedenen Concerns zusammenlegen, je Befund Datei:Zeile, Schwere und ob er verifiziert ist. Ist der Status \`incomplete\`, schreibe das in die erste Zeile mit den Gründen — ein unvollständiges Review ist nie „sauber“.\n\n---\n\n${ticketPrompt(issue)}`
       : `${AGENT_INSTRUCTION}\n\n---\n\n${ticketPrompt(issue, note ? `Hinweis der Person: ${note}` : '')}`;
   (async () => {
     let output = '';
