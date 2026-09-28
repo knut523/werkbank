@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Startet MongoDB, Meilisearch, claude-bridge und LibreChat im Hintergrund (alles auf 127.0.0.1).
+# Startet MongoDB, Meilisearch, claude-bridge, LibreChat und die Werkbank-Web-App im Hintergrund
+# (alles auf 127.0.0.1). Überspringt, was schon läuft.
 # Logs: .runtime/logs/<dienst>.log · PIDs: .runtime/pids/<dienst>.pid
 # BRIDGE_MOCK=1 scripts/start.sh startet die Brücke im Mock-Modus (kein Claude-Aufruf).
 set -euo pipefail
@@ -36,5 +37,8 @@ start claude-bridge 3090 "$WB/claude-bridge" env BRIDGE_PORT=3090 BRIDGE_HOST=12
   BRIDGE_STATE_DIR="$RT/bridge" BRIDGE_MOCK="${BRIDGE_MOCK:-0}" \
   BRIDGE_ALLOWED_EMAILS="${BRIDGE_ALLOWED_EMAILS-knut.peters@maxenergy.at}" node src/server.ts
 start librechat 3080 "$RT/librechat" env CONFIG_PATH="$WB/librechat/librechat.yaml" node api/server/index.js
+# Freigabe wie bei der Brücke: dieselbe Liste, solange die Sitzungen als VM-Nutzer laufen.
+start werkbank-web 3070 "$WB/web" env WERKBANK_PORT=3070 WERKBANK_HOST=127.0.0.1 BRIDGE_STATE_DIR="$RT/bridge" \
+  WERKBANK_ALLOWED_EMAILS="${WERKBANK_ALLOWED_EMAILS-${BRIDGE_ALLOWED_EMAILS-knut.peters@maxenergy.at}}" node server/main.ts
 
-echo "Fertig: https://3080--main--dev--knut.ws.konekto.energy (lokal http://127.0.0.1:3080)"
+echo "Fertig: Chat ${LIBRECHAT_PUBLIC_URL:-http://127.0.0.1:3080} · Werkbank ${WERKBANK_PUBLIC_URL:-http://127.0.0.1:3070}"

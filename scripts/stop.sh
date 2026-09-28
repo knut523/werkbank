@@ -2,7 +2,7 @@
 # Stoppt alle Werkbank-Dienste (umgekehrte Reihenfolge), gezielt über die PID-Dateien.
 set -uo pipefail
 source "$(dirname "$0")/env.sh"
-for name in librechat claude-bridge meilisearch mongodb; do
+for name in werkbank-web librechat claude-bridge meilisearch mongodb; do
   f="$PIDS/$name.pid"
   [ -f "$f" ] || continue
   pid=$(cat "$f")

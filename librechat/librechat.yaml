@@ -1,4 +1,4 @@
-# LibreChat-Konfiguration der OLAF-Werkbank (Pilot, Phase 1).
+# LibreChat-Konfiguration der OLAF-Werkbank (Pilot).
 # Wird über CONFIG_PATH geladen (siehe scripts/start.sh). Keine Geheimnisse hier.
 version: 1.3.13
 cache: true
@@ -13,7 +13,8 @@ registration:
 interface:
   customWelcome: |
     Willkommen in der OLAF-Werkbank – hier arbeitet Claude Code mit unseren Skills, dem Vault und Jira, unter deinem eigenen Claude-Konto.
-    Zum Verbinden einmal im Terminal `claude setup-token` ausführen und den Token oben im Modell-Menü bei „Claude Code“ über das Zahnrad eintragen (Ablauf: „nie“).
+    Zum Verbinden einmal im Terminal `claude setup-token` ausführen und den Token in der Werkbank unter „Einrichtung“ eintragen (Link unten) — oder oben im Modell-Menü bei „Claude Code“ über das Zahnrad (Ablauf: „nie“).
+    Wissen, Board, Sprint, Skills und Dateien: Links unten in der Fußzeile. Vorlagen für Skills (Spec schreiben, Council, Jira-Ticket, Sprint-Review, Service-Fall, Vault aufräumen) im Modell-Menü.
   modelSelect: true
   parameters: false
   presets: true
@@ -33,6 +34,17 @@ interface:
     use: false
   remoteAgents:
     use: false
+  # Chats teilen: nur mit angemeldeten Werkbank-Konten (ALLOW_SHARED_LINKS_PUBLIC=false in .env),
+  # gezielt an Personen (Personenauswahl), nie öffentlich.
+  sharedLinks:
+    create: true
+    share: true
+    public: false
+    snapshotFiles: false
+  peoplePicker:
+    users: true
+    groups: false
+    roles: false
 
 modelSpecs:
   enforce: false
@@ -57,6 +69,69 @@ modelSpecs:
         endpoint: Claude Code
         model: claude-code-sonnet
         modelLabel: Claude Code (OLAF, schnell)
+
+    # Vorlagen für die nützlichsten Team-Skills. Die Brücke gibt promptPrefix beim Sitzungsstart als
+    # Vorgabe an Claude weiter; die Skills selbst kommen aus ~/.claude/skills (aus dem Vault).
+    - name: vorlage-spec
+      label: Spec schreiben (plan-to-pr)
+      description: Aus einer Anforderung eine Spec bzw. einen PR-Plan machen — erst verstehen, dann planen.
+      iconURL: anthropic
+      preset:
+        endpoint: Claude Code
+        model: claude-code
+        modelLabel: Spec schreiben
+        promptPrefix: |
+          Nutze den Skill `plan-to-pr` (und für die Roadmap-Einordnung `olaf-produkt-roadmap`). Kläre offene Entscheidungen in einer Runde, jeweils mit Empfehlung. Schreib die Spec erst nach meiner Bestätigung in den Vault. Nie mergen, nichts pushen.
+    - name: vorlage-council
+      label: Council
+      description: Einen Plan oder eine Entscheidung aus mehreren Rollen prüfen lassen, mit bindenden Bedingungen.
+      iconURL: anthropic
+      preset:
+        endpoint: Claude Code
+        model: claude-code
+        modelLabel: Council
+        promptPrefix: |
+          Nutze den Skill `council`: spiele die festen Rollen gegeneinander aus und schließe mit einem Urteil samt bindenden Bedingungen. Ich gebe dir gleich den Plan oder die Frage.
+    - name: vorlage-jira-ticket
+      label: Jira-Ticket anlegen (olaf-jira)
+      description: Ein Ticket im Board PM sauber anlegen — Duplikatsuche, Workstream, Owner, Ziel/DoD, Sub-tasks.
+      iconURL: anthropic
+      preset:
+        endpoint: Claude Code
+        model: claude-code
+        modelLabel: Jira-Ticket anlegen
+        promptPrefix: |
+          Nutze die Skills `olaf-jira` und `maxenergy-jira`. Board PM (Projekt „OLAF“), nicht das Projekt mit dem Schlüssel OLAF. Vor dem Anlegen: Duplikatsuche mit mehreren Stichwörtern und Ergebnis nennen, Parent-Workstream, Owner, Fälligkeit und Ziel/DoD bestimmen, große Aufgaben in Sub-tasks zerlegen. Angelegt wird nur nach meiner ausdrücklichen Bestätigung.
+    - name: vorlage-sprint-review
+      label: Sprint-Review
+      description: Review und Planning nach dem Vault-Zyklus vorbereiten (Sprint-Ziel, Ergebnisse S1–S4, Bewertung).
+      iconURL: anthropic
+      preset:
+        endpoint: Claude Code
+        model: claude-code
+        modelLabel: Sprint-Review
+        promptPrefix: |
+          Nutze den Skill `olaf-sprint-planning` (und `olaf-jira-sync`). Der aktuelle Zyklus liegt unter /vault/olaf/1-Projects/sprint-*/. Board-Stand ist nicht Arbeitsstand; keine vergleichenden Aussagen über Arbeitsmenge. Schreiben in den Vault und nach Jira nur nach meiner Bestätigung.
+    - name: vorlage-service-fall
+      label: Service-Fall
+      description: Einen Kundenfall bearbeiten — Fallnotiz, Textbausteine, nächste Schritte. Personendaten bleiben in Claude.
+      iconURL: anthropic
+      preset:
+        endpoint: Claude Code
+        model: claude-code
+        modelLabel: Service-Fall
+        promptPrefix: |
+          Nutze die Skills `olaf-service-cases` und `olaf-service-textbausteine`. Personendaten nur so weit wie nötig, keine Weitergabe an andere Dienste. Schreiben in den Vault nur nach meiner Bestätigung.
+    - name: vorlage-vault-aufraeumen
+      label: Vault aufräumen
+      description: Veraltete Notizen, kaputte Links und Frontmatter finden — Vorschläge statt stiller Änderungen.
+      iconURL: anthropic
+      preset:
+        endpoint: Claude Code
+        model: claude-code
+        modelLabel: Vault aufräumen
+        promptPrefix: |
+          Nutze die Skills `inno-vault` und `olaf-jira-sync`. Prüfe (nur lesend) Frontmatter nach /vault/_meta/frontmatter-schema.md, kaputte Wikilinks, veraltete `last-verified`-Daten und Register, die sich widersprechen. Leg eine Liste mit Vorschlägen vor; geändert wird nur, was ich einzeln bestätige.
 
 endpoints:
   custom:
