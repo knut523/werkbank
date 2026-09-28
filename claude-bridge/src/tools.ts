@@ -40,6 +40,10 @@ export function classify(tool: string, input: Record<string, unknown>): { cls: T
   if (READ_TOOLS.has(tool)) return { cls: 'read' };
   if (tool.startsWith('mcp__')) {
     const [, server, name = ''] = tool.split('__');
+    // Eigene Werkbank-Werkzeuge: vault-search nur lesend; "später" ändert nur Werkbank-Zustand.
+    if (server === 'vault-search') return { cls: 'read' };
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze')) return { cls: 'read' };
+    if (server === 'werkbank' && name === 'jira_update') return { cls: 'confirm' };
     if (/github/i.test(server) && !MCP_READ.test(name)) return { cls: 'blocked', why: 'GitHub schreiben' };
     if (/merge/i.test(name)) return { cls: 'blocked', why: 'Merge' };
     if (MCP_READ.test(name)) return { cls: 'read' };
@@ -91,6 +95,8 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
   if (tool.startsWith('mcp__')) {
     const [, server, name] = tool.split('__');
     const key = input.issueIdOrKey ?? input.issueKey ?? input.jql ?? input.query ?? input.cql ?? '';
+    if (server === 'vault-search') return `📚 Vault-Suche: ${name}${input.query || input.note || input.folder ? ` – ${short(input.query ?? input.note ?? input.folder, 70)}` : ''}`;
+    if (server === 'werkbank') return name === 'jira_update' ? `🎫 Jira nachgezogen: ${input.key}` : name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
     const icon = server === 'atlassian' ? '🎫 Jira' : server === 'compartment' ? '🧠 Gedächtnis' : `🔌 ${server}`;
     return `${icon}: ${name}${key ? ` – ${short(key, 70)}` : ''}`;
   }
@@ -118,6 +124,14 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
       detail = (input.description ? `_${short(input.description, 200)}_\n` : '') + fence(String(input.command ?? ''), 'bash');
       break;
     default:
+      if (tool === 'mcp__werkbank__jira_update') {
+        const parts = [
+          input.status ? `Status → **${short(input.status, 30)}**` : '',
+          input.due !== undefined && input.due !== null ? `Fällig → **${input.due || 'ohne Datum'}**` : '',
+          input.comment ? `Kommentar: „${short(input.comment, 300)}“` : '',
+        ].filter(Boolean);
+        return `**Soll ich ${input.key} in Jira nachziehen?** (mit deinem Jira-Zugang)\n\n${parts.map((p) => '- ' + p).join('\n')}\n\nAntworte mit **ja** oder **nein**.`;
+      }
       if (tool.startsWith('mcp__atlassian__')) {
         what = `in Jira **${tool.split('__')[2]}** ausführen`;
       } else if (tool.startsWith('mcp__')) {

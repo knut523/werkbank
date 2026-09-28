@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { classify, statusLine, confirmQuestion, parseAnswer, VAULT_DIR } from './tools.ts';
 import { log } from './log.ts';
+import { skillsFor } from './skills.ts';
 
 export interface Sink {
   write(text: string): void;
@@ -51,7 +52,7 @@ const cfg = {
 const SYSTEM_APPEND = `
 Du läufst in der OLAF-Werkbank: Die Person schreibt dir über eine Chat-Oberfläche (LibreChat), nicht im Terminal.
 - Antworte auf Deutsch, in gut lesbarem Markdown.
-- Der Obsidian-Vault liegt unter ${VAULT_DIR}. Lies ihn frei.
+- Der Obsidian-Vault liegt unter ${VAULT_DIR}. Lies ihn frei; zum Finden nimm zuerst das Werkzeug vault-search (search, read_note, backlinks, links, list_folder, recent).
 - Schreibzugriffe (Dateien schreiben/ändern, Bash-Befehle, Jira ändern) bestätigt die Person im Chat. Frag nicht selbst vorher nach, sondern ruf das Werkzeug direkt auf — das System stellt die Rückfrage und macht nach "ja" weiter. Wird ein Aufruf abgelehnt, respektiere das und frag nach, was stattdessen gewünscht ist.
 - GitHub schreiben, pushen und mergen ist hier gesperrt.
 - Rückfragen stellst du als normalen Text am Ende deiner Antwort.
@@ -258,6 +259,9 @@ export interface TurnRequest {
   query: QueryFn;
   readonly?: boolean;      // Board-Agent: Schreibwerkzeuge ohne Rückfrage ablehnen
   instructions?: string;   // System-Vorgabe der Vorlage (LibreChat promptPrefix), gilt ab Sitzungsbeginn
+  sessionContext?: () => Promise<string>;       // Kontext-Paket für neue Sitzungen
+  mcpServers?: Record<string, unknown>;         // Werkbank-eigene MCP-Server (nur für diese Sitzung)
+  onMeasure?: (m: Record<string, number>) => void;   // echte Kontext-Aufteilung nach dem ersten Zug
 }
 
 /** Führt eine Nachricht aus. Kehrt zurück, sobald die HTTP-Antwort geschlossen werden kann. */
@@ -311,19 +315,30 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     : req.prompt;
   if (!resume && req.instructions) prompt = `Vorgabe für diesen Chat (aus der gewählten Vorlage):\n${req.instructions}\n\n---\n\n${prompt}`;
 
+  // Die Sitzung (und ihre Bash-Befehle) bekommt keine Geheimnisse der Werkbank mit.
   const env: Record<string, string | undefined> = { ...process.env };
-  for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL']) delete env[k];
+  for (const k of Object.keys(env)) if (/KEY|SECRET|TOKEN|PASSWORD|CREDS|_IV$|MONGO_URI/i.test(k)) delete env[k];
+  for (const k of ['ANTHROPIC_BASE_URL', 'BW_SESSION']) delete env[k];
   env.CLAUDE_CODE_OAUTH_TOKEN = req.token;
   env.CLAUDE_AGENT_SDK_CLIENT_APP = 'olaf-werkbank-bridge/0.1';
   env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1';
+  // MCP-Werkzeuge erst bei Bedarf laden (Tool Search), statt alle Schemas in jede Runde zu packen.
+  env.ENABLE_TOOL_SEARCH = process.env.BRIDGE_TOOL_SEARCH || 'auto';
 
+  // Kontext-Paket + Hygiene-Fragen nur für neue Sitzungen (nicht bei resume, nicht im Nur-lesen-Lauf).
+  let extra = '';
+  if (!resume && !req.readonly && req.sessionContext) {
+    try { extra = await req.sessionContext(); } catch (e: any) { log('kontext fehlgeschlagen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); }
+  }
   const guard = makeGuard(live);
   const options: Record<string, any> = {
     cwd: scratch,
     additionalDirectories: [VAULT_DIR],
     settingSources: ['user', 'project'],
-    skills: 'all',
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: SYSTEM_APPEND },
+    // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
+    skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: extra ? `${SYSTEM_APPEND}\n\n${extra}` : SYSTEM_APPEND },
+    mcpServers: req.mcpServers ?? {},
     permissionMode: 'default',
     // Zweite Sicherung, falls ein Aufruf am Hook vorbei beim Rechte-Dialog landet.
     canUseTool: async (tool: string, input: Record<string, unknown>) => {
@@ -351,7 +366,20 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Die Sitzung läuft unabhängig von der HTTP-Antwort weiter (Rückfragen!).
   (async () => {
     try {
-      for await (const msg of req.query({ prompt, options })) handleMessage(live, msg);
+      const q: any = req.query({ prompt, options });
+      let measured = false;
+      for await (const msg of q) {
+        handleMessage(live, msg);
+        // Einmal je neuer Sitzung messen, was den Kontext füllt (lokale Schätzung des CLI, kein Extra-Aufruf).
+        if (msg.type === 'result' && !resume && !measured && typeof q.getContextUsage === 'function' && req.onMeasure) {
+          measured = true;
+          try {
+            const u: any = await Promise.race([q.getContextUsage({ detail: 'summary' }), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))]);
+            const cat = (re: RegExp) => (u.categories ?? []).filter((c: any) => re.test(c.name) && c.kind !== 'deferred').reduce((a: number, c: any) => a + (c.tokens ?? 0), 0);
+            req.onMeasure({ total: u.totalTokens, systemPrompt: cat(/system prompt/i), tools: cat(/tools/i), skills: cat(/skill/i), memory: cat(/memory/i), deferredTools: (u.categories ?? []).filter((c: any) => c.kind === 'deferred').reduce((a: number, c: any) => a + (c.tokens ?? 0), 0) });
+          } catch { /* Messung ist optional */ }
+        }
+      }
     } catch (e: any) {
       if (live.abort.signal.aborted) log('turn aborted', { conv: key });
       else {

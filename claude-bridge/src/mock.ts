@@ -28,6 +28,12 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
     const anh = lines.filter((l) => /^- anhaenge\//.test(l)).map((l) => l.slice(2).split(' (')[0]);
     const last = [...lines].reverse().find((l) => l.trim() && !/^- anhaenge\//.test(l) && !/^(---|Angehängte Dateien)/.test(l)) ?? '';
     if (/^Vorgabe für diesen Chat/.test(prompt)) yield text('(Mock) Vorlage erkannt. ');
+    const append = String(options.systemPrompt?.append ?? '');
+    if (append.includes('Werkbank-Kontext')) {
+      const q = append.match(/^1\. (.+)$/m)?.[1];
+      yield text(`(Mock) Kontext-Paket: ${append.length} Zeichen, Werkzeuge: ${Object.keys(options.mcpServers ?? {}).join(', ') || '—'}.${q ? ` Erste Frage: ${q}` : ''} `);
+    }
+    if (Array.isArray(options.skills)) yield text(`(Mock) Skills: ${options.skills.length} [${options.skills.join(',')}]. `);
     if (anh.length) {
       const { existsSync } = await import('node:fs');
       const { join } = await import('node:path');

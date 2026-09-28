@@ -1,0 +1,7 @@
+{
+  "_hinweis": "Skills, die jede Werkbank-Sitzung sieht (BRIDGE_SKILLS=all schaltet alle zu). Weitere kommen je Vorlage (Skill `name` in der Vorgabe) oder wenn die Person sie im Chat nennt (\"Skill olaf-email-templates\" oder /olaf-email-templates). Alle anderen findet Claude über das Werkzeug skills_list und kann ihre SKILL.md lesen.",
+  "core": [
+    "inno-vault", "olaf-jira", "maxenergy-jira", "olaf-jira-sync", "olaf-sprint-planning", "olaf-produkt-roadmap",
+    "plan-to-pr", "grilling", "council", "ponytail", "olaf-service-cases", "olaf-service-textbausteine", "konekto-team-secrets"
+  ]
+}

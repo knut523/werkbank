@@ -2,7 +2,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, existsSync, statSync } from 'node:fs';
+import { mkdtempSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classify, parseAnswer } from '../src/tools.ts';
@@ -10,10 +11,24 @@ import { classify, parseAnswer } from '../src/tools.ts';
 const PORT = 3098;
 let proc: ChildProcess;
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-'));
+const SKILLS = mkdtempSync(join(tmpdir(), 'skills-'));
+for (const n of ['olaf-jira', 'plan-to-pr', 'olaf-email-templates', 'amper-board']) { mkdirSync(join(SKILLS, n)); writeFileSync(join(SKILLS, n, 'SKILL.md'), `---\nname: ${n}\n---\n`); }
+const sessionStarts: any[] = [];
+let web: Server;
 
 before(async () => {
+  // Nachgebaute Werkbank-Web: liefert das Kontext-Paket und zählt die Aufrufe.
+  web = createServer(async (req, res) => {
+    let b = ''; for await (const c of req) b += c;
+    if (req.url === '/internal/session-start' && req.headers['x-werkbank-internal'] === 'geheim') {
+      sessionStarts.push(JSON.parse(b));
+      res.end(JSON.stringify({ text: '## Werkbank-Kontext (Test)\n- Deine PM-Tickets: 2 offen\n\n### Task-Hygiene\n1. PM-1 ist überfällig — Stand?', tokens: 30, cached: false, questions: [{ key: 'PM-1' }] }));
+    } else { res.statusCode = 403; res.end('{}'); }
+  });
+  await new Promise<void>((r) => web.listen(0, '127.0.0.1', () => r()));
   proc = spawn(process.execPath, ['src/server.ts'], {
-    env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE },
+    env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS,
+      WERKBANK_URL: `http://127.0.0.1:${(web.address() as any).port}`, WERKBANK_INTERNAL_TOKEN: 'geheim', BRIDGE_SKILLS: '' },
     stdio: 'ignore',
   });
   for (let i = 0; i < 50; i++) {
@@ -22,7 +37,7 @@ before(async () => {
   }
   throw new Error('Brücke startet nicht');
 });
-after(() => proc.kill());
+after(() => { proc.kill(); web.close(); });
 
 async function send(conv: string, content: unknown, opts: { user?: string; model?: string; token?: string; headers?: Record<string, string>; system?: string } = {}) {
   const res = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
@@ -121,4 +136,35 @@ test('Nur-lesen-Modus (Board-Agent) lehnt Schreiben ohne Rückfrage ab', async (
 test('Vorgabe der Vorlage (System-Nachricht) erreicht die neue Sitzung', async () => {
   const a = await send('c8', 'Los geht es', { user: 'u8', system: 'Nutze den Skill `plan-to-pr`.' });
   assert.match(a, /Vorlage erkannt/);
+});
+
+test('Neue Sitzung bekommt das Kontext-Paket und die Werkbank-Werkzeuge — fortgesetzte nicht', async () => {
+  const n0 = sessionStarts.length;
+  const a = await send('c9', 'Guten Morgen', { user: 'u9' });
+  assert.match(a, /Kontext-Paket: \d+ Zeichen, Werkzeuge: vault-search, werkbank\. Erste Frage: PM-1 ist überfällig/);
+  assert.equal(sessionStarts.length, n0 + 1);
+  assert.deepEqual(sessionStarts.at(-1).skills.sort(), ['olaf-jira', 'plan-to-pr']);
+  const b = await send('c9', 'Weiter', { user: 'u9' });
+  assert.doesNotMatch(b, /Kontext-Paket/);
+  assert.equal(sessionStarts.length, n0 + 1, 'kein zweiter Abruf bei resume');
+  const t = await send('c10', 'Tagesabschluss bitte', { user: 'u9' });
+  assert.match(t, /Kontext-Paket/);
+  assert.equal(sessionStarts.at(-1).eod, true);
+});
+
+test('Skills: Kern statt aller, Zuschaltung per Nennung bleibt in der Unterhaltung', async () => {
+  const a = await send('c11', 'Hallo', { user: 'u11' });
+  assert.match(a, /Skills: 2 \[/);
+  const b = await send('c11', 'nimm Skill olaf-email-templates dafür', { user: 'u11' });
+  assert.match(b, /Skills: 3 \[.*olaf-email-templates/);
+  const c = await send('c11', 'und weiter', { user: 'u11' });
+  assert.match(c, /olaf-email-templates/, 'bleibt zugeschaltet');
+  const d = await send('c12', 'Los', { user: 'u11', system: 'Nutze den Skill `amper-board`.' });
+  assert.match(d, /amper-board/, 'aus der Vorlage');
+});
+
+test('Einordnung der Werkbank-Werkzeuge', () => {
+  assert.equal(classify('mcp__vault-search__read_note', {}).cls, 'read');
+  assert.equal(classify('mcp__werkbank__hygiene_snooze', {}).cls, 'read');
+  assert.equal(classify('mcp__werkbank__jira_update', {}).cls, 'confirm');
 });
