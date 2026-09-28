@@ -38,7 +38,7 @@ export const searchState = { lastRun: 0, docs: 0, error: '' as string };
 
 export async function ensureIndex() {
   if (ready) return;
-  await waitTask(await meili('POST', '/indexes', { uid: cfg.meiliIndex, primaryKey: 'id' }));
+  if (!(await meili('GET', `/indexes/${cfg.meiliIndex}`))) await waitTask(await meili('POST', '/indexes', { uid: cfg.meiliIndex, primaryKey: 'id' }));
   await meili('PATCH', `/indexes/${cfg.meiliIndex}/settings`, {
     searchableAttributes: ['title', 'name', 'aliases', 'tags', 'path', 'body'],
     filterableAttributes: ['team', 'type', 'status', 'folder'],

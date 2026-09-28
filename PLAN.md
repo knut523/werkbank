@@ -62,6 +62,15 @@ Bausteine und woher die Ideen kommen:
 3. **Board** mit Jira-Spiegel und „Agent auf Karte".
 4. **Team-Workspace**, Logins für das Team, Einführung, DSGVO-Abschnitt.
 
+### Erweiterung 28.09.2026 (Knut: „one click setup … skills, structure, jira copy, planning and review, sharing“)
+
+Umgesetzt im Pilot (Details, Stand und offene Entscheidungen in [`README.md`](README.md)):
+`scripts/werkbank.sh up` als Ein-Klick-Einrichtung; Web-App auf :3070 mit **Einrichtung** (eigenes
+Claude, eigenes Jira), **Wissen** (Vault nur lesend, Suche, Backlinks, Roadmap), **Board** (Jira-Kopie PM,
+Schreiben mit Bestätigung, Agent ansetzen nur lesend → Kommentarentwurf — Phase 3 vorgezogen),
+**Sprint** (Ziel, S1–S4, Antwortzeilen, Sprint-Sync mit Freigabe, neuer Zyklus), **Skills** (aus dem Vault,
+Vorlagen im Chat), **Dateien & Teilen** (Team-Dateien, Chats nur team-intern teilen, Anhänge erreichen die Sitzung).
+
 ## Leitplanken
 
 - Keine Zugangsdaten im Repo oder im Log; Tokens je Nutzer verschlüsselt gespeichert.

@@ -108,6 +108,7 @@ case "${1:-}" in
   bridge-mock)
     f="$PIDS/claude-bridge.pid"
     if [ -f "$f" ] && kill -0 "$(cat "$f")" 2>/dev/null; then kill "$(cat "$f")"; for _ in $(seq 1 20); do kill -0 "$(cat "$f")" 2>/dev/null || break; sleep 0.3; done; rm -f "$f"; fi
+    for _ in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/3090) 2>/dev/null || break; sleep 0.2; done   # Port frei?
     if [ "${2:-}" = on ]; then BRIDGE_MOCK=1 "$HERE/start.sh" | grep -E 'claude-bridge'; else BRIDGE_MOCK=0 "$HERE/start.sh" | grep -E 'claude-bridge'; fi
     curl -s http://127.0.0.1:3090/health; echo ;;
   *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
