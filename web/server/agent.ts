@@ -33,13 +33,19 @@ export function extractDraft(output: string): string {
 }
 
 /** Startet den Lauf im Hintergrund; der Stand liegt in werkbank.agent_runs. */
-export async function startAgentRun(u: User, token: string, issue: Issue, note: string): Promise<string> {
+export async function startAgentRun(u: User, token: string, issue: Issue, note: string, followUp?: { conv: string; parent: string }, kind: 'ticket' | 'forge' = 'ticket'): Promise<string> {
   const id = randomUUID();
   const runs = wb().collection('agent_runs');
   const running = await runs.findOne({ key: issue.key, status: 'läuft' });
   if (running) throw Object.assign(new Error('Auf diesem Ticket läuft schon ein Agent.'), { status: 409 });
-  await runs.insertOne({ _id: id as any, key: issue.key, userId: u.id, userName: u.name, status: 'läuft', output: '', draft: null, startedAt: new Date() });
-  const prompt = `${AGENT_INSTRUCTION}\n\n---\n\n${ticketPrompt(issue, note ? `Hinweis der Person: ${note}` : '')}`;
+  // Nachfrage (Idee: Vibe Kanban „follow-up“): dieselbe Sitzung der Brücke fortsetzen.
+  const conv = followUp?.conv ?? `board-${issue.key}-${id.slice(0, 8)}`;
+  await runs.insertOne({ _id: id as any, key: issue.key, userId: u.id, userName: u.name, status: 'läuft', output: '', draft: null, startedAt: new Date(), conv, parent: followUp?.parent ?? null, note: note.slice(0, 300), kind });
+  const prompt = followUp
+    ? `Nachfrage der Person zu deinem Ergebnis: ${note}\n\nSchließe wieder mit "### Kommentarentwurf".`
+    : kind === 'forge'
+      ? `${AGENT_INSTRUCTION}\n\nZusätzlich: Prüfe den Pull Request ${note} mit dem Werkzeug forge-review (nur als Entwurf, nichts auf GitHub posten) und fasse Befunde mit Bezug zum Ticket zusammen.\n\n---\n\n${ticketPrompt(issue)}`
+      : `${AGENT_INSTRUCTION}\n\n---\n\n${ticketPrompt(issue, note ? `Hinweis der Person: ${note}` : '')}`;
   (async () => {
     let output = '';
     let lastFlush = 0;
@@ -49,7 +55,7 @@ export async function startAgentRun(u: User, token: string, issue: Issue, note: 
         headers: {
           authorization: `Bearer ${token}`, 'content-type': 'application/json',
           'x-librechat-user-id': u.id, 'x-librechat-user-email': u.email,
-          'x-librechat-conversation-id': `board-${issue.key}-${id.slice(0, 8)}`,
+          'x-librechat-conversation-id': conv,
           'x-werkbank-mode': 'readonly',
         },
         body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: prompt }] }),

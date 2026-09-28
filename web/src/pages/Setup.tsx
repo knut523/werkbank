@@ -43,6 +43,28 @@ export function Setup({ cfg, onLogin }: { cfg: Config; onLogin: () => void }) {
   return <Wizard cfg={cfg} />;
 }
 
+function Sessions() {
+  const s = useLoad(() => api('/api/sessions'));
+  const d: any = s.data;
+  if (!d || !d.sessions.length) return null;
+  return (
+    <>
+      <h2>Deine Claude-Sitzungen</h2>
+      <table className="t small" data-testid="sessions">
+        <thead><tr><th>Sitzung</th><th>Status</th><th>Züge</th><th>Zuletzt</th></tr></thead>
+        <tbody>{d.sessions.slice(0, 10).map((x: any) => (
+          <tr key={x.conv}>
+            <td>{x.url ? <a href={x.url} target={chatTarget}>{x.title || x.conv.slice(0, 8)}</a> : <>{x.title || x.conv} <span className="tiny">(Board-Agent)</span></>}</td>
+            <td><span className={`chip ${x.status === 'wartet auf ja' ? 'warn' : x.status === 'läuft' ? 'ok' : ''}`}>{x.status}</span></td>
+            <td>{x.turns ?? '—'}</td><td>{fmtDateTime(x.lastActivity)}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+      <p className="tiny">Jede Unterhaltung ist eine fortsetzbare Claude-Code-Sitzung. „wartet auf ja“: dort steht eine Rückfrage offen.</p>
+    </>
+  );
+}
+
 function ContextInfo() {
   const c = useLoad(() => api('/api/context'));
   const [show, setShow] = useState(false);
@@ -171,6 +193,7 @@ function Wizard({ cfg }: { cfg: Config }) {
         </div>
       </div>
 
+      <Sessions />
       <ContextInfo />
 
       <h2>Dienste</h2>

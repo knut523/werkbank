@@ -15,6 +15,7 @@ function Card({ i, onOpen }: { i: any; onOpen: () => void }) {
         {i.duedate ? <span className={`chip ${overdue(i) ? 'bad' : ''}`}>{overdue(i) ? 'über ' : ''}{fmtDate(i.duedate)}</span> : i.status !== 'Done' && <span className="chip warn">ohne Datum</span>}
         {i.comments > 0 && <span className="chip">💬 {i.comments}</span>}
         {i.hygiene?.length > 0 && <span className="badge-hyg" title={i.hygiene.join(', ')}>🧹 {i.hygiene.length}</span>}
+        {i.agent && <span className="chip warn" title="Ein Agent arbeitet gerade an dieser Karte">🤖 läuft</span>}
       </div>
     </button>
   );
@@ -27,6 +28,7 @@ function AgentPanel({ issueKey, runs, onChange }: { issueKey: string; runs: any[
   const [runId, setRunId] = useState<string | null>(runs[0]?._id ?? null);
   const [run, setRun] = useState<any>(runs[0] ?? null);
   const [draft, setDraft] = useState<string>(runs[0]?.draft ?? '');
+  const [follow, setFollow] = useState('');
   const [err, setErr] = useState<unknown>(null);
   useEffect(() => {
     if (!runId) return;
@@ -62,6 +64,14 @@ function AgentPanel({ issueKey, runs, onChange }: { issueKey: string; runs: any[
           <div className="row small"><StateChip state={run.status} /> <span className="muted">gestartet {fmtDateTime(run.startedAt)} von {run.userName}</span>{run.sentAt && <span className="chip ok">gesendet {fmtDateTime(run.sentAt)}</span>}</div>
           {run.error && <div className="err small" style={{ marginTop: 6 }}>{run.error}</div>}
           <details open={run.status === 'läuft'} style={{ marginTop: 6 }}><summary className="small">Verlauf</summary><div className="run-log">{run.output || '…'}</div></details>
+          {run.status === 'fertig' && (
+            <div className="row" style={{ marginTop: 8 }}>
+              <input aria-label="Nachfrage an den Agenten" placeholder="Nachfrage an den Agenten (setzt dieselbe Sitzung fort) …" value={follow} onChange={(e) => setFollow(e.target.value)} style={{ flex: 1, minWidth: 220 }} />
+              <button className="btn small" disabled={!follow.trim()} onClick={async () => {
+                try { const r: any = await api(`/api/board/runs/${runId}/followup`, { body: { text: follow } }); setFollow(''); setDraft(''); setRunId(r.id); } catch (e) { setErr(e); }
+              }}>Nachfragen</button>
+            </div>
+          )}
           {run.status === 'fertig' && !run.sentAt && (
             <div className="col" style={{ marginTop: 8 }}>
               <label htmlFor="draft">Kommentarentwurf (bearbeitbar)</label>
@@ -79,7 +89,26 @@ function AgentPanel({ issueKey, runs, onChange }: { issueKey: string; runs: any[
   );
 }
 
-function Detail({ k, onClose, onChanged, site }: { k: string; onClose: () => void; onChanged: () => void; site: string }) {
+function ForgePanel({ issueKey, enabled, onStarted }: { issueKey: string; enabled: boolean; onStarted: () => void }) {
+  const [pr, setPr] = useState('');
+  const [err, setErr] = useState<unknown>(null);
+  const toast = useToast();
+  return (
+    <div className="card soft" style={{ marginTop: 12 }} data-testid="forge-panel">
+      <h3 style={{ marginTop: 0 }}>🔍 PR prüfen (forge)</h3>
+      {!enabled && <p className="small muted" style={{ margin: 0 }}>Kommt bald: forge-review wird gerade abgesichert und danach hier und im Chat angebunden. Ergebnis immer als Entwurf, nichts wird auf GitHub gepostet.</p>}
+      <div className="row" style={{ marginTop: 6 }}>
+        <input aria-label="Pull Request" placeholder="olaf-admin#171 oder GitHub-Link" value={pr} onChange={(e) => setPr(e.target.value)} disabled={!enabled} style={{ flex: 1, minWidth: 200 }} />
+        <button className="btn small" disabled={!enabled || !pr.trim()} onClick={async () => {
+          try { await api(`/api/board/issue/${issueKey}/forge`, { body: { pr } }); toast('Review gestartet'); onStarted(); } catch (e) { setErr(e); }
+        }}>Review PR</button>
+      </div>
+      <Err e={err} />
+    </div>
+  );
+}
+
+function Detail({ k, onClose, onChanged, site, forge }: { k: string; onClose: () => void; onChanged: () => void; site: string; forge?: boolean }) {
   const d = useLoad(() => api('/api/board/issue/' + k), [k]);
   const confirm = useConfirm();
   const toast = useToast();
@@ -134,6 +163,7 @@ function Detail({ k, onClose, onChanged, site }: { k: string; onClose: () => voi
             {i.duedate && <button className="btn small" onClick={() => write('due', { date: null }, `Fälligkeit von ${k} entfernen?`, <p>{fmtDate(i.duedate)} → ohne Datum</p>)}>Entfernen</button>}
           </div>
           <AgentPanel issueKey={k} runs={(d.data as any).runs} onChange={() => d.reload()} />
+          <ForgePanel issueKey={k} enabled={!!forge} onStarted={() => d.reload()} />
           <p className="tiny" style={{ marginTop: 12 }}>Neue Tickets legt die Werkbank bewusst nicht an (olaf-jira: nur auf ausdrücklichen Auftrag, mit Duplikatsuche und Workstream) — dafür den Chat nutzen.</p>
         </>
       )}
@@ -200,7 +230,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
           </div>
         </section>
       ))}
-      {open && <Detail k={open} site={data?.site ?? cfg.jiraSite} onClose={() => setOpen(null)} onChanged={() => b.reload()} />}
+      {open && <Detail k={open} site={data?.site ?? cfg.jiraSite} forge={cfg.forge} onClose={() => setOpen(null)} onChanged={() => b.reload()} />}
     </div>
   );
 }

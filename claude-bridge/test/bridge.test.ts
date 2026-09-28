@@ -167,4 +167,16 @@ test('Einordnung der Werkbank-Werkzeuge', () => {
   assert.equal(classify('mcp__vault-search__read_note', {}).cls, 'read');
   assert.equal(classify('mcp__werkbank__hygiene_snooze', {}).cls, 'read');
   assert.equal(classify('mcp__werkbank__jira_update', {}).cls, 'confirm');
+  assert.equal(classify('mcp__forge-review__review_pr', {}).cls, 'read');
+  assert.equal(classify('mcp__forge-review__post_review', {}).cls, 'blocked');
+});
+
+test('Sitzungsstatus je Person nur mit internem Token', async () => {
+  assert.equal((await fetch(`http://127.0.0.1:${PORT}/sessions?user=u9`)).status, 403);
+  const j: any = await (await fetch(`http://127.0.0.1:${PORT}/sessions?user=u9`, { headers: { 'x-werkbank-internal': 'geheim' } })).json();
+  const c9 = j.sessions.find((s: any) => s.conv === 'c9');
+  assert.equal(c9.status, 'bereit');
+  assert.equal(c9.turns, 2);
+  assert.equal(c9.resumable, true);
+  assert.equal(c9.title, 'Guten Morgen');
 });

@@ -97,6 +97,8 @@ try {
   const t1 = await lcToken(U1), t2 = await lcToken(U2);
   const id1 = t1.user._id ?? t1.user.id, id2 = t2.user._id ?? t2.user.id;
   jira = await startJiraMock(0);
+  log('Werkbank-Web (3070) vorübergehend auch für die Testkonten freigeben');
+  execFileSync(join(WB, 'scripts/werkbank.sh'), ['restart-web'], { env: { ...process.env, WERKBANK_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}` }, stdio: 'ignore' });
   log('Brücke → Mock-Modus');
   execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'on'], { env: { ...process.env, BRIDGE_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}` }, stdio: 'ignore' });
   web = spawn(process.execPath, ['server/main.ts'], {
@@ -267,6 +269,7 @@ try {
     await a.locator('#prompt-textarea').fill('Was siehst du in der Datei?');
     await a.getByRole('button', { name: 'Nachricht senden' }).click();
     await a.getByText(/Anhänge im Arbeitsverzeichnis: anhaenge\/[^ ]+\.png ✓/).waitFor({ timeout: 30000 });
+    await a.getByText(/Kontext-Paket: \d+ Zeichen, Werkzeuge: vault-search, werkbank/).first().waitFor({ timeout: 10000 });
     await shot(a, '16-chat-anhang');
     convId = a.url().match(/\/c\/([0-9a-f-]{36})/)?.[1] ?? '';
     assert.ok(convId, 'Chat-ID aus der URL');
@@ -334,6 +337,40 @@ try {
     await shot(a, '20-protokoll');
   });
 
+  await step('LibreChat-Leiste: Werkbank-Seiten im Hauptbereich, eine Anmeldung', async () => {
+    await a.goto(LC + '/c/new');
+    await a.getByTestId('werkbank-nav-einrichtung').click();
+    await a.waitForURL(/\/wb\/einrichtung/);
+    const f = a.frameLocator('[data-testid="werkbank-frame"]');
+    await f.getByRole('heading', { name: 'Einrichtung' }).waitFor({ timeout: 20000 });
+    assert.equal(await f.locator('#pw').count(), 0, 'kein zweites Login');
+    await f.getByTestId('context-info').waitFor();
+    await shot(a, '22-leiste-einrichtung');
+    for (const [id, text, name] of [['wissen', 'Produkt-OLAF-Roadmap', '23-leiste-wissen'], ['board', 'Board · PM', '24-leiste-board'], ['sprint', 'Sprint-Ziel', '25-leiste-sprint'], ['skills', 'Alle Skills', '26-leiste-skills'], ['dateien', 'Dateien & Teilen', '27-leiste-dateien']]) {
+      await a.getByTestId(`werkbank-nav-${id}`).click();
+      await a.waitForURL(new RegExp(`/wb/${id}`));
+      await a.frameLocator('[data-testid="werkbank-frame"]').getByText(text).first().waitFor({ timeout: 20000 });
+      assert.equal(await a.getByTestId(`werkbank-nav-${id}`).getAttribute('aria-pressed'), 'true');
+      await shot(a, name);
+    }
+    // Unterseite landet in der Adresszeile und übersteht Neuladen
+    await a.getByTestId('werkbank-nav-wissen').click();
+    await a.frameLocator('[data-testid="werkbank-frame"]').getByRole('link', { name: 'Roadmap', exact: true }).first().click();
+    await a.waitForURL(/\/wb\/wissen\?h=%23%2Fwissen%2F~roadmap/);
+    await a.reload();
+    await a.frameLocator('[data-testid="werkbank-frame"]').getByText('Thema × Zustand').waitFor({ timeout: 20000 });
+  });
+
+  await step('LibreChat dunkel → Werkbank-Seite dunkel', async () => {
+    await a.evaluate(() => localStorage.setItem('color-theme', 'dark'));
+    await a.goto(LC + '/wb/board');
+    await a.frameLocator('[data-testid="werkbank-frame"]').getByText('Board · PM').waitFor({ timeout: 20000 });
+    const theme = await a.frames().find((x) => x.url().includes('/werkbank/')).evaluate(() => document.documentElement.dataset.theme);
+    assert.equal(theme, 'dark');
+    await shot(a, '28-leiste-board-dunkel');
+    await a.evaluate(() => localStorage.setItem('color-theme', 'light'));
+  });
+
   await step('Board in Dunkel', async () => {
     await a.goto(W + '/#/board');
     await a.getByRole('button', { name: 'Hell/Dunkel umschalten' }).click();
@@ -347,6 +384,8 @@ try {
   await browser?.close();
   web?.kill();
   await jira?.close();
+  log('Werkbank-Web → Freigabeliste wie vorher');
+  try { execFileSync(join(WB, 'scripts/werkbank.sh'), ['restart-web'], { stdio: 'ignore' }); } catch { console.error('Web-App konnte nicht neu gestartet werden: scripts/werkbank.sh restart-web'); }
   log('Brücke → wieder echt');
   try { execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'off'], { stdio: 'ignore' }); } catch (e) { console.error('Brücke konnte nicht zurückgeschaltet werden: scripts/werkbank.sh bridge-mock off'); }
   if (!process.env.E2E_KEEP) await cleanupUsers();

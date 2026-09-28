@@ -74,6 +74,23 @@ function saveMap() {
 const lives = new Map<string, Live>();       // Unterhaltung → laufende Sitzung
 const userLive = new Map<string, string>();  // Nutzer → Unterhaltung mit laufender Sitzung
 
+// Status je Unterhaltung (Idee: coder/agentapi „running/stable“, CloudCLI Sitzungsliste).
+const lastSeen = new Map<string, { at: number; turns: number; title: string }>();
+
+/** Sitzungen einer Person: läuft / wartet auf „ja“ / bereit — neueste zuerst. */
+export function sessionsOf(userId: string) {
+  const prefix = safeId(userId) + ':';
+  const keys = new Set([...Object.keys(sessionMap), ...lastSeen.keys()].filter((k) => k.startsWith(prefix)));
+  return [...keys].map((k) => {
+    const l = lives.get(k);
+    const seen = lastSeen.get(k);
+    return {
+      conv: k.slice(prefix.length), status: l ? (l.pending ? 'wartet auf ja' : 'läuft') : 'bereit',
+      lastActivity: seen?.at ?? null, turns: seen?.turns ?? null, title: seen?.title ?? '', resumable: !!sessionMap[k],
+    };
+  }).sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0)).slice(0, 30);
+}
+
 export function stats() {
   return { live: lives.size, pending: [...lives.values()].filter(l => l.pending).length, sessions: Object.keys(sessionMap).length };
 }
@@ -267,6 +284,8 @@ export interface TurnRequest {
 /** Führt eine Nachricht aus. Kehrt zurück, sobald die HTTP-Antwort geschlossen werden kann. */
 export async function handleTurn(req: TurnRequest): Promise<void> {
   const key = `${safeId(req.userId)}:${safeId(req.convId)}`;
+  const seen = lastSeen.get(key);
+  lastSeen.set(key, { at: Date.now(), turns: (seen?.turns ?? 0) + 1, title: seen?.title || req.prompt.replace(/\s+/g, ' ').slice(0, 60) });
   const existing = lives.get(key);
 
   // 1) Antwort auf eine offene Rückfrage in dieser Unterhaltung.

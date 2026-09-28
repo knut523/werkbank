@@ -178,3 +178,8 @@ table.t th { font-weight: 600; color: var(--text-secondary); font-size: 12.5px; 
 .hyg .item { padding: 8px 0; border-bottom: 1px solid var(--border-light); }
 .hyg .item:last-child { border-bottom: none; }
 .badge-hyg { background: var(--chip-warn); color: var(--chip-warn-text); border-radius: 999px; font-size: 11px; padding: 0 6px; }
+/* Dunkel eingebettet: Flächen wie LibreChats Hauptbereich (gray-800), Karten eine Stufe heller */
+:root[data-theme='dark'] .embedded { --surface-primary: var(--gray-800); --surface-secondary: var(--gray-850); --surface-dialog: var(--gray-850); }
+:root[data-theme='dark'] .embedded .tcard, :root[data-theme='dark'] .embedded .card { background: var(--gray-700); }
+:root[data-theme='dark'] .embedded .card.soft { background: var(--gray-850); }
+.embedded .board-bar { background: var(--presentation); }

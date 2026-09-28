@@ -67,7 +67,7 @@ before(async () => {
       WERKBANK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3`, WERKBANK_ALLOWED_EMAILS: `${users.a.email},${users.b.email}`,
       CREDS_KEY, CREDS_IV, WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: DATA,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
-      WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET,
+      WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, WERKBANK_FORGE_MCP: '',
     },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -409,4 +409,22 @@ test('Task-Hygiene: Antwort → Vorschlag → Bestätigung → Jira; später; Bo
   const keys = b.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).map((i: any) => i.key);
   assert.ok(keys.includes('PM-900') && keys.includes('PM-902'));
   assert.ok(b.j.hygiene.perOwner['Anna Test'] >= 3);
+});
+
+test('Board-Agent: Nachfrage setzt dieselbe Sitzung fort; forge-Platzhalter; Sitzungsliste', async () => {
+  const d = await anna.req('/api/board/issue/PM-321');
+  const first = d.j.runs.find((r: any) => r.status === 'fertig');
+  const f = await anna.req(`/api/board/runs/${first._id}/followup`, { body: { text: 'Und was fehlt noch?' } });
+  assert.equal(f.status, 200);
+  let run: any;
+  for (let i = 0; i < 40; i++) { run = (await anna.req('/api/board/runs/' + f.j.id)).j; if (run.status !== 'läuft') break; await new Promise((r) => setTimeout(r, 150)); }
+  assert.equal(run.status, 'fertig');
+  assert.equal(run.conv, first.conv, 'gleiche Brücken-Sitzung');
+  assert.match(run.output, /Sitzung fortgesetzt/);
+  const forge = await anna.req('/api/board/issue/PM-321/forge', { body: { pr: 'olaf-admin#171' } });
+  assert.equal(forge.status, 412);
+  assert.match(forge.j.error, /noch nicht angebunden/);
+  assert.equal((await anna.req('/api/config')).j.forge, false);
+  const s = await anna.req('/api/sessions');
+  assert.ok(Array.isArray(s.j.sessions));
 });

@@ -155,7 +155,7 @@ on('GET', /^\/api\/health$/, async (_q, res) => send(res, 200, { ok: true, ...(a
 on('GET', /^\/api\/config$/, async (req, res) => {
   const u = await currentUser(req);
   send(res, 200, {
-    librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u,
+    librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: !!process.env.WERKBANK_FORGE_MCP,
     jiraSite: cfg.jiraSite, project: cfg.jiraProject, vault: cfg.vaultDir,
   });
 });
@@ -262,7 +262,8 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
   await needUser(req);
   const all = [...(await issueMap()).values()];
   const hyg = hygieneAll(all);
-  const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [] }));
+  const running = new Set((await wb().collection('agent_runs').find({ status: 'läuft' }, { projection: { key: 1 } }).toArray()).map((r: any) => r.key));
+  const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [], agent: running.has(i.key) }));
   const filter = url.searchParams.get('filter') || undefined;
   const issues = filter === 'pflege' ? annotated.filter((i) => i.hygiene.length || i.type === 'Workstream') : annotated;
   const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
@@ -336,6 +337,42 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res
   if (!token) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen.');
   const id = await startAgentRun(u, token, i, String(b.note ?? '').slice(0, 2000));
   send(res, 200, { id });
+});
+
+on('POST', /^\/api\/board\/runs\/([0-9a-f-]{36})\/followup$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const run: any = await wb().collection('agent_runs').findOne({ _id: m[1] as any });
+  if (!run) throw new HttpError(404, 'Lauf nicht gefunden.');
+  if (!String(b.text ?? '').trim()) throw new HttpError(400, 'Leere Nachfrage.');
+  const i = (await issueMap()).get(run.key);
+  const token = await getClaudeToken(u);
+  if (!i || !token) throw new HttpError(412, 'Ticket oder Claude-Zugang fehlt.');
+  // Nur die eigene Sitzung fortsetzen: die Brücke ordnet sie ohnehin dem Nutzer zu.
+  const conv = run.userId === u.id ? run.conv : undefined;
+  const id = await startAgentRun(u, token, i, String(b.text).slice(0, 2000), conv ? { conv, parent: run._id } : undefined);
+  send(res, 200, { id });
+});
+
+on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/forge$/, async (req, res, m) => {
+  const u = await needUser(req);
+  if (!process.env.WERKBANK_FORGE_MCP) throw new HttpError(412, 'forge-review ist noch nicht angebunden (wird gerade abgesichert).');
+  const b = await body(req);
+  const pr = String(b.pr ?? '').trim();
+  if (!/^([\w.-]+\/[\w.-]+)?#\d+$|^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(pr)) throw new HttpError(400, 'PR als „repo#123“ oder GitHub-Link angeben.');
+  const i = (await issueMap()).get(m[1]);
+  const token = await getClaudeToken(u);
+  if (!i || !token) throw new HttpError(412, 'Ticket oder Claude-Zugang fehlt.');
+  send(res, 200, { id: await startAgentRun(u, token, i, pr, undefined, 'forge') });
+});
+
+on('GET', /^\/api\/sessions$/, async (req, res) => {
+  const u = await needUser(req);
+  try {
+    const r = await fetch(`${cfg.bridgeUrl}/sessions?user=${encodeURIComponent(u.id)}`, { headers: { 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' }, signal: AbortSignal.timeout(3000) });
+    const j: any = await r.json();
+    send(res, 200, { sessions: (j.sessions ?? []).map((s: any) => ({ ...s, url: s.conv.startsWith('board-') ? null : `${cfg.librechatPublicUrl}/c/${s.conv}` })) });
+  } catch { send(res, 200, { sessions: [], error: 'Brücke nicht erreichbar' }); }
 });
 
 on('GET', /^\/api\/board\/runs\/([0-9a-f-]{36})$/, async (req, res, m) => {

@@ -26,7 +26,7 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
 }
 
 export interface User { id: string; email: string; name: string; role?: string }
-export interface Config { librechatUrl: string; publicUrl: string; demo: boolean; user: User | null; jiraSite: string; project: string; vault: string }
+export interface Config { librechatUrl: string; publicUrl: string; demo: boolean; user: User | null; jiraSite: string; project: string; vault: string; forge?: boolean }
 
 export const fmtDate = (s?: string | null) => (s ? new Date(s.length === 10 ? s + 'T12:00:00' : s).toLocaleDateString('de-AT', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—');
 export const fmtDateTime = (s?: string | number | null) => (s ? new Date(s).toLocaleString('de-AT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');

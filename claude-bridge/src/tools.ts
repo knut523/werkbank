@@ -44,6 +44,9 @@ export function classify(tool: string, input: Record<string, unknown>): { cls: T
     if (server === 'vault-search') return { cls: 'read' };
     if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze')) return { cls: 'read' };
     if (server === 'werkbank' && name === 'jira_update') return { cls: 'confirm' };
+    // forge-review (Platzhalter): Review rechnen/lesen frei; nach GitHub posten ist wie alles GitHub-Schreiben
+    // im Pilot gesperrt (Ergebnis bleibt Entwurf), mergen nie.
+    if (server === 'forge-review') return /merge|post|publish|submit|comment|approve|request_changes/i.test(name) ? { cls: 'blocked', why: 'GitHub schreiben (forge-Ergebnis bleibt Entwurf)' } : { cls: 'read' };
     if (/github/i.test(server) && !MCP_READ.test(name)) return { cls: 'blocked', why: 'GitHub schreiben' };
     if (/merge/i.test(name)) return { cls: 'blocked', why: 'Merge' };
     if (MCP_READ.test(name)) return { cls: 'read' };

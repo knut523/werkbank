@@ -9,7 +9,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
-import { handleTurn, stats, scratchFor, safeId, type Sink } from './sessions.ts';
+import { handleTurn, stats, scratchFor, safeId, sessionsOf, type Sink } from './sessions.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
 import { mockQuery } from './mock.ts';
@@ -32,6 +32,12 @@ function mcpServersFor(userId: string): Record<string, unknown> {
       env: { WERKBANK_VAULT_DIR: process.env.BRIDGE_VAULT_DIR || '/vault', MEILI_HOST: process.env.MEILI_HOST || 'http://127.0.0.1:7700', MEILI_MASTER_KEY: process.env.MEILI_MASTER_KEY || '', PATH: process.env.PATH || '' },
     },
   };
+  // Platzhalter: forge-review (PR-Review als Entwurf) wird von ~/work/forge geliefert und hier angebunden,
+  // sobald WERKBANK_FORGE_MCP gesetzt ist (Befehl, z. B. "node /home/knut/work/forge/…/server.js").
+  if (process.env.WERKBANK_FORGE_MCP) {
+    const [command, ...args] = process.env.WERKBANK_FORGE_MCP.split(' ');
+    servers['forge-review'] = { type: 'stdio', command, args, env: { PATH: process.env.PATH || '' } };
+  }
   if (INTERNAL) {
     servers.werkbank = {
       type: 'stdio', command: node, args: [join(MCP_DIR, 'werkbank-tools.ts')],
@@ -241,6 +247,11 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://x');
   try {
     if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, mock: MOCK, ...stats() });
+    // Sitzungen einer Person (nur für Werkbank-Web, mit internem Token; ohne Inhalte außer dem Kurztitel).
+    if (req.method === 'GET' && url.pathname === '/sessions') {
+      if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
+      return json(res, 200, { sessions: sessionsOf(url.searchParams.get('user') ?? '') });
+    }
     if (req.method === 'GET' && url.pathname === '/v1/models') {
       return json(res, 200, { object: 'list', data: Object.keys(MODELS).map((id) => ({ id, object: 'model', created: 0, owned_by: 'olaf-werkbank' })) });
     }

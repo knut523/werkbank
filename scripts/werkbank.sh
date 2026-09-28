@@ -11,6 +11,7 @@
 #   scripts/werkbank.sh test      Tests der Brücke und der Web-App
 #   scripts/werkbank.sh e2e       Playwright-Durchlauf durch alle Seiten (Demo-Daten, eigene Instanz)
 #   scripts/werkbank.sh bridge-mock on|off   Brücke im Mock-Modus (kein Claude-Aufruf) bzw. wieder echt
+#   scripts/werkbank.sh restart-web   nur die Web-App neu starten
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/env.sh"
@@ -108,11 +109,16 @@ case "${1:-}" in
   test)
     (cd "$WB/claude-bridge" && npm test 2>&1 | grep -E '^# (pass|fail)') && (cd "$WB/web" && npm test 2>&1 | grep -E '^# (pass|fail)') ;;
   e2e) (cd "$WB/web" && node e2e/smoke.mjs) ;;
+  restart-web)   # nur die Web-App neu (z. B. mit anderer Freigabeliste: WERKBANK_ALLOWED_EMAILS=… werkbank.sh restart-web)
+    f="$PIDS/werkbank-web.pid"
+    if [ -f "$f" ] && kill -0 "$(cat "$f")" 2>/dev/null; then kill "$(cat "$f")"; for _ in $(seq 1 20); do kill -0 "$(cat "$f")" 2>/dev/null || break; sleep 0.3; done; rm -f "$f"; fi
+    for _ in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/3070) 2>/dev/null || break; sleep 0.2; done
+    "$HERE/start.sh" | grep -E 'werkbank-web' ;;
   bridge-mock)
     f="$PIDS/claude-bridge.pid"
     if [ -f "$f" ] && kill -0 "$(cat "$f")" 2>/dev/null; then kill "$(cat "$f")"; for _ in $(seq 1 20); do kill -0 "$(cat "$f")" 2>/dev/null || break; sleep 0.3; done; rm -f "$f"; fi
     for _ in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/3090) 2>/dev/null || break; sleep 0.2; done   # Port frei?
     if [ "${2:-}" = on ]; then BRIDGE_MOCK=1 "$HERE/start.sh" | grep -E 'claude-bridge'; else BRIDGE_MOCK=0 "$HERE/start.sh" | grep -E 'claude-bridge'; fi
     curl -s http://127.0.0.1:3090/health; echo ;;
-  *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
