@@ -22,7 +22,8 @@ start() { # name port dir cmd...
   local name=$1 port=$2 dir=$3; shift 3
   if running "$name"; then echo "  = $name läuft schon (pid $(cat "$PIDS/$name.pid"))"; return; fi
   # Der Kindprozess schreibt seine eigene PID (setsid kann forken, $! wäre dann falsch).
-  (cd "$dir" && setsid bash -c 'echo $$ > "$0"; exec "$@"' "$PIDS/$name.pid" "$@" >> "$LOGS/$name.log" 2>&1 < /dev/null &)
+  # exec: keine Hülle bleibt hängen, die stdout offen hält.
+  (cd "$dir" && exec setsid bash -c 'echo $$ > "$0"; exec "$@"' "$PIDS/$name.pid" "$@" >> "$LOGS/$name.log" 2>&1 < /dev/null) &
   wait_port "$name" "$port"
 }
 
