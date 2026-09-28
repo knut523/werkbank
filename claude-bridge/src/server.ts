@@ -24,6 +24,10 @@ const MODELS: Record<string, string | undefined> = {
 };
 const TITLE_MODEL = 'olaf-titel';
 
+// Pilot: Die Sitzungen laufen als VM-Nutzer (Knuts Dateien, Knuts Jira-Anmeldung).
+// Deshalb nur freigegebene LibreChat-Konten; leer = alle (nur für Tests/Mock).
+const ALLOWED_EMAILS = (process.env.BRIDGE_ALLOWED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+
 const query = MOCK ? mockQuery : (await import('@anthropic-ai/claude-agent-sdk')).query;
 
 // ---------- Hilfen ----------
@@ -134,7 +138,7 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
   if (model === TITLE_MODEL) { sink.write(titleFrom(messages)); sink.finish(); return; }
 
   if (!token || token === 'user_provided') {
-    sink.write('Es ist noch kein Claude-Token hinterlegt. Führe im Terminal `claude setup-token` aus und trag den Token im Schlüssel-Dialog dieses Endpunkts ein.');
+    sink.write('Es ist noch kein Claude-Token hinterlegt. Führe im Terminal `claude setup-token` aus und trag den Token im Modell-Menü bei „Claude Code“ über das Zahnrad ein.');
     return sink.finish();
   }
   if (/^sk-ant-api/.test(token)) {
@@ -144,6 +148,15 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
   if (!(model in MODELS)) {
     sink.write(`Unbekanntes Modell „${model}“.`);
     return sink.finish();
+  }
+
+  if (ALLOWED_EMAILS.length) {
+    const email = (header(req, 'x-librechat-user-email') ?? '').toLowerCase();
+    if (!ALLOWED_EMAILS.includes(email)) {
+      log('not allowed', { user: header(req, 'x-librechat-user-id') ?? '?' });
+      sink.write('Der Pilot der Werkbank ist noch nicht für dein Konto freigeschaltet: Claude Code läuft hier vorerst unter dem Nutzer der VM (mit dessen Dateien und Jira-Zugang). Der Team-Zugang kommt mit dem eigenen Team-Workspace.');
+      return sink.finish();
+    }
   }
 
   const lastUserIdx = messages.map((m) => m.role).lastIndexOf('user');

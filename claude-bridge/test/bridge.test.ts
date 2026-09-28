@@ -46,7 +46,7 @@ test('/v1/models listet die Claude-Code-Modelle', async () => {
 
 test('Streaming mit Statuszeile, danach Fortsetzung derselben Sitzung', async () => {
   const a = await send('c1', 'Hallo Welt');
-  assert.match(a, /> 🔎 Suche im Vault/);
+  assert.match(a, /\*🔎 Suche im Vault: „Hallo Welt“\*/);
   assert.match(a, /Du hast geschrieben: Hallo Welt/);
   const b = await send('c1', 'Noch was');
   assert.match(b, /Sitzung fortgesetzt/);

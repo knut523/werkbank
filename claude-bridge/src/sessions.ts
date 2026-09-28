@@ -33,6 +33,7 @@ interface Live {
   buffer: string[];
   pending: Pending | null;
   lastKind: 'none' | 'text' | 'status';
+  lastStatus: string;
   sawStreamText: boolean;
   usage: { input: number; output: number };
   turnTimer: NodeJS.Timeout | null;
@@ -88,15 +89,18 @@ function emit(live: Live, text: string) {
 }
 
 function emitText(live: Live, text: string) {
-  if (live.lastKind === 'status') text = text.replace(/^\n+/, '');
+  if (live.lastKind === 'status') text = '\n' + text.replace(/^\n+/, '');
   live.lastKind = 'text';
   emit(live, text);
 }
 
 function emitStatus(live: Live, line: string) {
+  // Kursiv, eine Zeile je Werkzeug; mehrere Statuszeilen stehen kompakt untereinander.
+  if (line === live.lastStatus) return;
   const sep = live.lastKind === 'text' ? '\n\n' : '';
   live.lastKind = 'status';
-  emit(live, `${sep}> ${line}\n\n`);
+  live.lastStatus = line;  // dieselbe Warnung nicht doppelt (s. o.)
+  emit(live, `${sep}*${line.replace(/([\\*_\[\]<>])/g, '\\$1')}*  \n`);
 }
 
 function detach(live: Live) {
@@ -128,7 +132,7 @@ function end(live: Live) {
 // ---------- Übersetzung der SDK-Nachrichten ----------
 
 const AUTH_HINTS: Record<string, string> = {
-  authentication_failed: 'Dein Claude-Token wurde abgelehnt. Erzeuge im Terminal mit `claude setup-token` einen neuen und trag ihn oben im Schlüssel-Dialog ein.',
+  authentication_failed: 'Dein Claude-Token wurde abgelehnt. Erzeuge im Terminal mit `claude setup-token` einen neuen und trag ihn im Modell-Menü bei „Claude Code“ über das Zahnrad ein.',
   oauth_org_not_allowed: 'Dein Claude-Konto darf hier nicht verwendet werden (Organisation nicht zugelassen).',
   billing_error: 'Claude meldet ein Abrechnungsproblem mit deinem Konto.',
   rate_limit: 'Dein Claude-Kontingent ist gerade ausgeschöpft. Bitte später noch einmal.',
@@ -172,7 +176,7 @@ function handleMessage(live: Live, msg: any) {
       live.usage.input += (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
       live.usage.output += u.output_tokens ?? 0;
       if (msg.subtype === 'error_max_turns') emitStatus(live, `⏹️ Maximale Schrittzahl (${cfg.maxTurns}) erreicht. Schreib „weiter“, dann mache ich dort weiter.`);
-      else if (msg.subtype !== 'success') emitStatus(live, '⚠️ Bei der Ausführung ist ein Fehler aufgetreten.');
+      else if (msg.subtype !== 'success' || msg.is_error) emitStatus(live, /authenticat|401|token/i.test(String(msg.result ?? '')) ? `⚠️ ${AUTH_HINTS.authentication_failed}` : '⚠️ Bei der Ausführung ist ein Fehler aufgetreten.');
       return;
     }
   }
@@ -280,7 +284,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // 3) Neuer Zug.
   const live: Live = {
     key, userId: req.userId, abort: new AbortController(), sink: null, buffer: [], pending: null,
-    lastKind: 'none', sawStreamText: false, usage: { input: 0, output: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
+    lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
   };
   lives.set(key, live);
   userLive.set(req.userId, key);
@@ -317,7 +321,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     },
     hooks: { PreToolUse: [{ hooks: [guard], timeout: Math.ceil(cfg.confirmTimeoutMs / 1000) + 60 }] },
     disallowedTools: ['AskUserQuestion'],
-    mcpServers: { atlassian: { type: 'http', url: 'https://mcp.atlassian.com/v1/mcp' } },
+    // Jira: kein eigener Eintrag – der Atlassian-MCP kommt wie im Terminal aus der Nutzer-Konfiguration
+    // (~/.claude.json, Scope "user", OAuth-Anmeldung per /mcp). Im Pilot ist das Knuts Jira-Zugang.
     maxTurns: cfg.maxTurns,
     includePartialMessages: true,
     abortController: live.abort,

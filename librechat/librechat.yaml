@@ -1,0 +1,92 @@
+# LibreChat-Konfiguration der OLAF-Werkbank (Pilot, Phase 1).
+# Wird über CONFIG_PATH geladen (siehe scripts/start.sh). Keine Geheimnisse hier.
+version: 1.3.13
+cache: true
+
+registration:
+  # Keine Social-Logins; Registrierung nur mit Firmen-Adresse.
+  socialLogins: []
+  allowedDomains:
+    - maxenergy.at
+    - konekto.energy
+
+interface:
+  customWelcome: |
+    Willkommen in der OLAF-Werkbank – hier arbeitet Claude Code mit unseren Skills, dem Vault und Jira, unter deinem eigenen Claude-Konto.
+    Zum Verbinden einmal im Terminal `claude setup-token` ausführen und den Token oben im Modell-Menü bei „Claude Code“ über das Zahnrad eintragen (Ablauf: „nie“).
+  modelSelect: true
+  parameters: false
+  presets: true
+  prompts: true
+  bookmarks: true
+  multiConvo: false
+  temporaryChat: true
+  memories: false
+  agents: false
+  marketplace:
+    use: false
+  runCode: false
+  webSearch: false
+  fileSearch: false
+  fileCitations: false
+  mcpServers:
+    use: false
+  remoteAgents:
+    use: false
+
+modelSpecs:
+  enforce: false
+  prioritize: true
+  addedEndpoints:
+    - Claude Code
+  list:
+    - name: claude-code-olaf
+      label: Claude Code (OLAF)
+      description: Claude Code mit OLAF-Skills, Vault und Jira. Schreibt nur nach deinem „ja“.
+      default: true
+      iconURL: anthropic
+      preset:
+        endpoint: Claude Code
+        model: claude-code
+        modelLabel: Claude Code (OLAF)
+    - name: claude-code-olaf-sonnet
+      label: Claude Code (OLAF, schnell)
+      description: Wie oben, mit Sonnet – schneller, für einfache Fragen.
+      iconURL: anthropic
+      preset:
+        endpoint: Claude Code
+        model: claude-code-sonnet
+        modelLabel: Claude Code (OLAF, schnell)
+
+endpoints:
+  custom:
+    - name: Claude Code
+      # Der Nutzer trägt hier SEINEN Token aus `claude setup-token` ein (LibreChat speichert ihn verschlüsselt).
+      apiKey: user_provided
+      baseURL: http://127.0.0.1:3090/v1
+      iconURL: anthropic
+      modelDisplayLabel: Claude Code
+      models:
+        default:
+          - claude-code
+          - claude-code-sonnet
+          - claude-code-opus
+        fetch: false
+      headers:
+        X-LibreChat-User-Id: '{{LIBRECHAT_USER_ID}}'
+        X-LibreChat-Conversation-Id: '{{LIBRECHAT_BODY_CONVERSATIONID}}'
+        X-LibreChat-User-Email: '{{LIBRECHAT_USER_EMAIL}}'
+      # Titel erzeugt die Brücke selbst aus der ersten Nachricht – ohne Claude-Aufruf.
+      titleConvo: true
+      titleModel: olaf-titel
+      titleMethod: completion
+      titlePrompt: |
+        OLAF-TITEL
+        {convo}
+      dropParams:
+        - temperature
+        - top_p
+        - frequency_penalty
+        - presence_penalty
+        - stop
+        - user

@@ -104,11 +104,11 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
   switch (tool) {
     case 'Write':
       what = `die Datei **${where(input.file_path)}** schreiben`;
-      detail = fence(clip(input.content, 1500));
+      detail = fence(clip(input.content, 1500), langOf(input.file_path));
       break;
     case 'Edit': case 'MultiEdit':
       what = `die Datei **${where(input.file_path)}** ändern`;
-      if (input.old_string !== undefined) detail = `Ersetzen:\n${fence(clip(input.old_string, 600))}\ndurch:\n${fence(clip(input.new_string, 1000))}`;
+      if (input.old_string !== undefined) detail = `Ersetzen:\n${fence(clip(input.old_string, 600), langOf(input.file_path))}\ndurch:\n${fence(clip(input.new_string, 1000), langOf(input.file_path))}`;
       break;
     case 'NotebookEdit':
       what = `das Notebook **${where(input.notebook_path)}** ändern`;
@@ -131,7 +131,12 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
   return `**Soll ich ${what}?**\n\n${detail}\n\nAntworte mit **ja** oder **nein**.`;
 }
 
-function fence(s: string, lang = ''): string {
+const LANGS: Record<string, string> = { md: 'markdown', ts: 'typescript', tsx: 'tsx', js: 'javascript', mjs: 'javascript', py: 'python', json: 'json', sh: 'bash', yaml: 'yaml', yml: 'yaml', sql: 'sql', html: 'html', css: 'css' };
+function langOf(p: unknown): string {
+  return LANGS[String(p ?? '').split('.').pop()?.toLowerCase() ?? ''] ?? 'text';
+}
+
+function fence(s: string, lang = 'text'): string {
   const ticks = s.includes('```') ? '````' : '```';
   return `${ticks}${lang}\n${s}\n${ticks}`;
 }
