@@ -162,7 +162,9 @@ on('POST', /^\/api\/login$/, async (req, res) => {
   if (req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Werkbank-Header.');
   const { email, password } = await body(req);
   if (!email || !password) throw new HttpError(400, 'E-Mail und Passwort angeben.');
-  const u = await librechatLogin(String(email), String(password));
+  // Letzter Eintrag = vom Coder-Proxy angehängt (der erste ist vom Client frei wählbar).
+  const ip = String(req.headers['x-forwarded-for'] ?? '').split(',').pop()!.trim() || req.socket.remoteAddress || undefined;
+  const u = await librechatLogin(String(email), String(password), ip);
   if (!allowed(u.email)) throw new HttpError(403, 'Dein Konto ist für die Werkbank noch nicht freigeschaltet (Pilot). Frag Knut.');
   await createSession(res, u);
   log('login', { user: u.id });

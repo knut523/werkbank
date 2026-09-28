@@ -21,13 +21,24 @@ async function meili(method: string, path: string, body?: unknown): Promise<any>
   return r.status === 404 ? null : r.json();
 }
 
+async function waitTask(t: any, ms = 60_000) {
+  const uid = t?.taskUid ?? t?.uid;
+  if (uid === undefined) return;
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    const r = await meili('GET', `/tasks/${uid}`);
+    if (!r || r.status === 'succeeded' || r.status === 'failed' || r.status === 'canceled') return;
+    await new Promise((res) => setTimeout(res, 150));
+  }
+}
+
 let known = new Map<string, number>();   // path → mtime im Index
 let ready = false;
 export const searchState = { lastRun: 0, docs: 0, error: '' as string };
 
 export async function ensureIndex() {
   if (ready) return;
-  await meili('POST', '/indexes', { uid: cfg.meiliIndex, primaryKey: 'id' });
+  await waitTask(await meili('POST', '/indexes', { uid: cfg.meiliIndex, primaryKey: 'id' }));
   await meili('PATCH', `/indexes/${cfg.meiliIndex}/settings`, {
     searchableAttributes: ['title', 'name', 'aliases', 'tags', 'path', 'body'],
     filterableAttributes: ['team', 'type', 'status', 'folder'],
@@ -62,10 +73,12 @@ export async function reindex(idx: VaultIndex, full = false): Promise<{ added: n
         body: body.replace(/<!--[\s\S]*?-->/g, '').slice(0, 60_000), mtime: n.mtime,
       });
     }
-    for (let i = 0; i < docs.length; i += 200) await meili('POST', `/indexes/${cfg.meiliIndex}/documents`, docs.slice(i, i + 200));
+    let last: any;
+    for (let i = 0; i < docs.length; i += 200) last = await meili('POST', `/indexes/${cfg.meiliIndex}/documents`, docs.slice(i, i + 200));
     for (const d of docs) known.set(d.path, d.mtime);
     const gone = [...known.keys()].filter((p) => !idx.notes.has(p));
-    if (gone.length) await meili('POST', `/indexes/${cfg.meiliIndex}/documents/delete-batch`, gone.map(idOf));
+    if (gone.length) last = await meili('POST', `/indexes/${cfg.meiliIndex}/documents/delete-batch`, gone.map(idOf));
+    await waitTask(last);   // erst melden, wenn Meilisearch fertig ist
     for (const p of gone) known.delete(p);
     Object.assign(searchState, { lastRun: Date.now(), docs: known.size, error: '' });
     return { added: docs.length, removed: gone.length };

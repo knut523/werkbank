@@ -48,9 +48,9 @@ function Question({ q, file, hash, cycle, me, onSaved }: { q: any; file: string;
   const open = q.answers.filter((a: any) => a.kind === 'empty');
   return (
     <div className="q" data-line={q.line}>
-      {q.context.length > 0 && <div className="small muted">{q.context.map((c: string, i: number) => <div key={i}><Md text={c} /></div>)}</div>}
+      {q.context.length > 0 && <div className="small muted">{q.context.map((c: string, i: number) => <div key={i}><Md text={c.replace(/^\s*([-*]|\d+\.)\s+/, '')} /></div>)}</div>}
       <div className="row" style={{ alignItems: 'baseline' }}>
-        <div style={{ flex: 1 }}><Md text={q.text || q.key} /></div>
+        <div style={{ flex: 1 }}><Md text={(q.text || q.key).replace(/^\s*([-*]|\d+\.)\s+/, '')} /></div>
         {q.ticket && <a className="chip" href={`#/board?key=${q.ticket}`}>{q.ticket}{q.issue ? ` · ${q.issue.status}` : ''}</a>}
         {q.key.startsWith('ZIEL:') && <span className="chip">Ziel</span>}
       </div>

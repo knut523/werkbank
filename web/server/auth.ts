@@ -27,10 +27,11 @@ function cookies(req: IncomingMessage): Record<string, string> {
   return out;
 }
 
-export async function librechatLogin(email: string, password: string): Promise<User> {
+export async function librechatLogin(email: string, password: string, clientIp?: string): Promise<User> {
   const r = await fetch(`${cfg.librechatUrl}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    // Client-IP weitergeben, damit LibreChats Anmelde-Limit je Person greift und nicht für alle (127.0.0.1).
+    headers: { 'content-type': 'application/json', ...(clientIp ? { 'x-forwarded-for': clientIp } : {}) },
     body: JSON.stringify({ email, password }),
   });
   if (r.status === 429) throw Object.assign(new Error('Zu viele Anmeldeversuche. Bitte ein paar Minuten warten.'), { status: 429 });
