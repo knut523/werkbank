@@ -47,9 +47,14 @@ if [ ! -d "$RT/librechat" ]; then
   say "LibreChat $LIBRECHAT_TAG klonen"
   git clone -q --depth 1 --branch "$LIBRECHAT_TAG" https://github.com/danny-avila/LibreChat.git "$RT/librechat"
 fi
+# Werkbank-Anpassungen (Leiste, /werkbank-Proxy) vor dem Bau einspielen, siehe librechat-patch.sh
+"$(dirname "$0")/librechat-patch.sh" --no-build
 if [ ! -d "$RT/librechat/client/dist" ]; then
   say "LibreChat bauen (einige Minuten, Log: $LOGS/librechat-build.log)"
   (cd "$RT/librechat" && npm ci && npm run frontend) > "$LOGS/librechat-build.log" 2>&1
+  "$(dirname "$0")/librechat-patch.sh" --stamp-only
+else
+  "$(dirname "$0")/librechat-patch.sh"
 fi
 
 # 5) Geheimnisse: fehlende Einträge ergänzen, vorhandene nie ändern oder ausgeben
@@ -59,7 +64,7 @@ ensure() { # NAME BYTES
   grep -q "^$1=" "$WB/.env.local" || { echo "$1=$(openssl rand -hex "$2")" >> "$WB/.env.local"; say "Geheimnis $1 erzeugt"; }
 }
 ensure CREDS_KEY 32; ensure CREDS_IV 16; ensure JWT_SECRET 32; ensure JWT_REFRESH_SECRET 32
-ensure MEILI_MASTER_KEY 24; ensure WERKBANK_CREDS_KEY 32
+ensure MEILI_MASTER_KEY 24; ensure WERKBANK_CREDS_KEY 32; ensure WERKBANK_INTERNAL_TOKEN 32
 chmod 600 "$WB/.env.local"
 
 # 6) URLs dieser Workspace (verwalteter Block, wird bei jedem Lauf neu geschrieben)

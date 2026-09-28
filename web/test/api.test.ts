@@ -22,6 +22,7 @@ const VAULT = join(tmp, 'vault');
 const STATE = join(tmp, 'bridge');
 const DATA = join(tmp, 'data');
 const CREDS_KEY = randomBytes(32).toString('hex'), CREDS_IV = randomBytes(16).toString('hex');
+const INTERNAL = randomBytes(16).toString('hex'), REFRESH_SECRET = randomBytes(16).toString('hex');
 const users = {
   a: { _id: new ObjectId(), email: 'anna@maxenergy.at', name: 'Anna Test', pw: 'pw-anna' },
   b: { _id: new ObjectId(), email: 'bernd@maxenergy.at', name: 'Bernd Test', pw: 'pw-bernd' },
@@ -66,7 +67,7 @@ before(async () => {
       WERKBANK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3`, WERKBANK_ALLOWED_EMAILS: `${users.a.email},${users.b.email}`,
       CREDS_KEY, CREDS_IV, WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: DATA,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
-      WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`,
+      WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET,
     },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -326,4 +327,86 @@ test('Chats: geteilt mit mir (LibreChat-Freigabe), als Kopie weiterführen, nie 
   // Nicht freigegebener Chat: verboten.
   await lc.collection('sharedlinks').insertOne({ conversationId: 'c2', title: 'Privat', user: String(users.a._id), shareId: 'share-privat1', messages: [] });
   assert.equal((await bernd.req('/api/chats/share-privat1/copy', { method: 'POST' })).status, 403);
+});
+
+async function internal(path: string, body: unknown, token = INTERNAL) {
+  const r = await fetch(B + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': token }, body: JSON.stringify(body) });
+  return { status: r.status, j: await r.json() };
+}
+
+test('Eine Anmeldung: LibreChats Refresh-Cookie reicht (Werkbank unter /werkbank)', async () => {
+  const { createHmac, createHash } = await import('node:crypto');
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const sign = (payload: unknown, secret: string) => { const h = b64({ alg: 'HS256', typ: 'JWT' }) + '.' + b64(payload); return h + '.' + createHmac('sha256', secret).update(h).digest('base64url'); };
+  const tok = sign({ id: String(users.b._id), sessionId: 'x', exp: Math.floor(Date.now() / 1000) + 3600 }, REFRESH_SECRET);
+  const get = (cookie: string) => fetch(B + '/api/config', { headers: { cookie } }).then((r) => r.json());
+  assert.equal((await get(`refreshToken=${tok}`)).user, null, 'ohne gültige LibreChat-Sitzung: nein');
+  await mongo.db(LCDB).collection('sessions').insertOne({ user: users.b._id, refreshTokenHash: createHash('sha256').update(tok).digest('hex'), expiration: new Date(Date.now() + 3600e3) });
+  assert.equal((await get(`refreshToken=${tok}`)).user.email, users.b.email);
+  const forged = sign({ id: String(users.b._id), exp: Math.floor(Date.now() / 1000) + 3600 }, 'falsch');
+  assert.equal((await get(`refreshToken=${forged}`)).user, null, 'falsche Signatur: nein');
+  const tc = sign({ id: String(users.c._id), exp: Math.floor(Date.now() / 1000) + 3600 }, REFRESH_SECRET);
+  await mongo.db(LCDB).collection('sessions').insertOne({ user: users.c._id, refreshTokenHash: createHash('sha256').update(tc).digest('hex'), expiration: new Date(Date.now() + 3600e3) });
+  assert.equal((await get(`refreshToken=${tc}`)).user, null, 'nicht freigeschaltet: nein');
+});
+
+test('Interne Schnittstelle nur mit Token; Kontext-Paket klein; Pflegefragen nur zu Tagesbeginn', async () => {
+  const col = mongo.db(DB).collection('jira_issues');
+  const base = { status: 'To Do', statusCategory: 'new', type: 'Task', assignee: 'Anna Test', assigneeId: null, parent: 'PM-70', priority: 'Medium', updated: '2026-09-20T10:00:00Z', description: '', comments: 0, lastComment: null, workstream: 'PM-70', syncedAt: new Date() };
+  await col.insertMany([
+    { ...base, key: 'PM-900', summary: 'Angebot Anna', duedate: '2026-09-01' },
+    { ...base, key: 'PM-901', summary: 'Konzept Anna', duedate: null },
+    { ...base, key: 'PM-902', summary: 'Ohne Workstream', duedate: '2099-01-01', parent: null, workstream: null },
+  ]);
+  assert.equal((await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c1' }, 'falsch')).status, 403);
+  assert.equal((await internal('/internal/session-start', { userId: String(users.c._id), conv: 'c1' })).status, 403, 'nicht freigeschaltetes Konto');
+  const s1 = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c1', skills: ['olaf-jira'] });
+  assert.equal(s1.status, 200);
+  assert.equal(s1.j.slot, 'morgen');
+  assert.equal(s1.j.questions.length, 3);
+  assert.match(s1.j.text, /## Werkbank-Kontext/);
+  assert.match(s1.j.text, /Deine PM-Tickets: 3 offen, 1 überfällig/);
+  assert.match(s1.j.text, /PM-900 .* überfällig/);
+  assert.ok(s1.j.tokens < 1500);
+  const s1b = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c1' });
+  assert.deepEqual(s1b.j.questions, s1.j.questions, 'gleiche Sitzung → gleiche Fragen');
+  assert.equal(s1b.j.cached, true, 'Paket aus dem Zwischenspeicher');
+  const s2 = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c2' });
+  assert.equal(s2.j.questions.length, 0, 'zweite Sitzung am Tag: keine Fragen');
+  assert.doesNotMatch(s2.j.text, /Task-Hygiene/);
+  const eod = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c3', eod: true });
+  assert.equal(eod.j.slot, 'abend');
+  const m = await internal('/internal/measure', { userId: String(users.a._id), conv: 'c1', measured: { total: 23000, tools: 4000, skills: 900, evil: 'x' } });
+  assert.equal(m.status, 200);
+  const stats = await anna.req('/api/context');
+  const row = stats.j.recent.find((r: any) => r.conv === 'c1' && r.measured);
+  assert.deepEqual(row.measured, { total: 23000, tools: 4000, skills: 900 });
+  assert.ok(stats.j.fixed.ownTools > 0);
+});
+
+test('Task-Hygiene: Antwort → Vorschlag → Bestätigung → Jira; später; Board-Filter', async () => {
+  const h = await anna.req('/api/hygiene');
+  assert.deepEqual(h.j.items.map((i: any) => i.key + ':' + i.rule).sort(), ['PM-900:überfällig', 'PM-901:ohne Datum', 'PM-902:ohne Workstream']);
+  assert.match(h.j.eodUrl, /spec=vorlage-tagesabschluss/);
+  const p = await anna.req('/api/hygiene/PM-900/answer', { body: { text: 'neues Datum 15.10.2026' } });
+  assert.equal(p.j.needsConfirm, true);
+  assert.deepEqual(p.j.actions, [{ type: 'due', date: '2026-10-15', from: '2026-09-01' }]);
+  const before = jira.writes.length;
+  assert.equal(jira.writes.length, before, 'Vorschlag schreibt nichts');
+  const later = await anna.req('/api/hygiene/PM-901/answer', { body: { text: 'später' } });
+  assert.equal(later.j.snoozed, true);
+  assert.deepEqual((await anna.req('/api/hygiene')).j.snoozed, ['PM-901']);
+  // PM-900 gibt es im Jira-Nachbau nicht → Fehler kommt sauber zurück, nichts halb geschrieben
+  const w = await anna.req('/api/hygiene/PM-900/answer', { body: { confirm: true, actions: p.j.actions } });
+  assert.equal(w.status, 404);
+  assert.match(w.j.error, /Jira antwortet mit 404/);
+  // Chat-Weg (jira_update über die Brücke) auf ein echtes Ticket
+  const u = await internal('/internal/jira-update', { userId: String(users.a._id), key: 'PM-322', comment: 'Stand: läuft', due: '2026-10-20' });
+  assert.equal(u.status, 200);
+  assert.deepEqual(u.j.done, ['Kommentar', 'Fällig → 2026-10-20']);
+  assert.equal((await internal('/internal/jira-update', { userId: String(users.a._id), key: 'PM-99999', comment: 'x' })).status, 404, 'keine neuen Tickets');
+  const b = await anna.req('/api/board?filter=pflege');
+  const keys = b.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).map((i: any) => i.key);
+  assert.ok(keys.includes('PM-900') && keys.includes('PM-902'));
+  assert.ok(b.j.hygiene.perOwner['Anna Test'] >= 3);
 });

@@ -1,9 +1,4 @@
 /* Optik wie LibreChat: Inter, dieselben Grautöne und Grün, hell und dunkel. */
-@font-face { font-family: Inter; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/Inter-Regular.woff2') format('woff2'); }
-@font-face { font-family: Inter; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/Inter-SemiBold.woff2') format('woff2'); }
-@font-face { font-family: Inter; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/Inter-Bold.woff2') format('woff2'); }
-@font-face { font-family: Inter; font-style: italic; font-weight: 400; font-display: swap; src: url('/fonts/Inter-Italic.woff2') format('woff2'); }
-@font-face { font-family: 'Roboto Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/roboto-mono-latin-400-normal.woff2') format('woff2'); }
 
 :root {
   --gray-50: #f7f7f8; --gray-100: #ececec; --gray-200: #e3e3e3; --gray-300: #cdcdcd; --gray-400: #999696;
@@ -172,3 +167,14 @@ table.t th { font-weight: 600; color: var(--text-secondary); font-size: 12.5px; 
   .wissen { grid-template-columns: 1fr; } .wtree { position: static; max-height: 260px; }
   .page { padding: 16px; }
 }
+
+/* Eingebettet in LibreChat (/wb/<seite>): kein eigenes Gerüst, Fläche wie LibreChats Hauptbereich */
+:root { --presentation: #fff; }
+:root[data-theme='dark'] { --presentation: var(--gray-800); }
+.embedded { min-height: 100%; background: var(--presentation); }
+.embedded .page { padding-top: 20px; }
+:root[data-theme='dark'] body:has(.embedded) { background: var(--gray-800); }
+.hyg { border-left: 3px solid var(--amber-500); }
+.hyg .item { padding: 8px 0; border-bottom: 1px solid var(--border-light); }
+.hyg .item:last-child { border-bottom: none; }
+.badge-hyg { background: var(--chip-warn); color: var(--chip-warn-text); border-radius: 999px; font-size: 11px; padding: 0 6px; }

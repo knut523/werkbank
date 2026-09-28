@@ -22,6 +22,8 @@ import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
 import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog } from './sharing.ts';
 import { log } from './log.ts';
+import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
+import { timingSafeEqual } from 'node:crypto';
 
 const DIST = join(WEB_DIR, 'dist');
 const FONTS = join(cfg.librechatDist, 'client', 'public', 'fonts');
@@ -258,13 +260,22 @@ on('POST', /^\/api\/vault\/reindex$/, async (req, res) => {
 
 on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
   await needUser(req);
-  const issues = [...(await issueMap()).values()];
+  const all = [...(await issueMap()).values()];
+  const hyg = hygieneAll(all);
+  const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [] }));
+  const filter = url.searchParams.get('filter') || undefined;
+  const issues = filter === 'pflege' ? annotated.filter((i) => i.hygiene.length || i.type === 'Workstream') : annotated;
   const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+  const model = boardModel(issues as Issue[], {
+    owner: url.searchParams.get('owner') || undefined, filter: filter === 'pflege' ? undefined : filter,
+    q: url.searchParams.get('q') || undefined, showDone: url.searchParams.get('done') === '1',
+  });
+  const perOwner: Record<string, number> = {};
+  for (const i of annotated) if (i.hygiene.length && i.type !== 'Workstream') perOwner[i.assignee ?? '—'] = (perOwner[i.assignee ?? '—'] ?? 0) + 1;
   send(res, 200, {
-    ...boardModel(issues, {
-      owner: url.searchParams.get('owner') || undefined, filter: url.searchParams.get('filter') || undefined,
-      q: url.searchParams.get('q') || undefined, showDone: url.searchParams.get('done') === '1',
-    }),
+    ...model,
+    lanes: model.lanes.map((l) => ({ ...l, hygiene: Object.values(l.columns).flat().filter((c: any) => c.hygiene?.length).length })),
+    hygiene: { perOwner, total: [...hyg.keys()].length },
     sync: sync ? { at: sync.at, by: sync.by, count: sync.count, source: sync.source, error: sync.error, errorAt: sync.errorAt } : null,
     site: cfg.jiraSite,
   });
@@ -530,6 +541,94 @@ on('GET', /^\/api\/sharelog$/, async (req, res) => {
   send(res, 200, { entries: u.role === 'ADMIN' ? all : all.filter((e: any) => e.actor === u.email || e.target === u.email) });
 });
 
+// --- Task-Hygiene und Kontext ---
+
+on('GET', /^\/api\/hygiene$/, async (req, res) => {
+  const u = await needUser(req);
+  send(res, 200, { ...(await hygieneOf(u)), eodUrl: chatUrl('Tagesabschluss', { spec: 'vorlage-tagesabschluss' }) });
+});
+
+on('POST', /^\/api\/hygiene\/([A-Z][A-Z0-9]+-\d+)\/snooze$/, async (req, res, m) => {
+  const u = await needUser(req);
+  await snoozeItem(u, m[1]);
+  send(res, 200, { ok: true });
+});
+
+on('POST', /^\/api\/hygiene\/([A-Z][A-Z0-9]+-\d+)\/answer$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  if (b.confirm !== true) {
+    const p = await proposeFromAnswer(u, m[1], String(b.text ?? ''));
+    if (p.snooze) { await snoozeItem(u, m[1]); return send(res, 200, { snoozed: true }); }
+    return send(res, 200, { needsConfirm: true, ...p });
+  }
+  const actions = Array.isArray(b.actions) ? b.actions : [];
+  if (!actions.length) throw new HttpError(400, 'Keine Aktion.');
+  const done = await jiraWrite(u, () => applyActions(u, m[1], actions));
+  log('hygiene write', { user: u.id, key: m[1], n: done.length });
+  send(res, 200, { ok: true, done });
+});
+
+on('GET', /^\/api\/context$/, async (req, res) => {
+  const u = await needUser(req);
+  send(res, 200, await contextStats(u));
+});
+
+// --- intern: nur für die Brücke und ihre Werkzeuge (Header mit WERKBANK_INTERNAL_TOKEN) ---
+
+async function internalUser(req: IncomingMessage, b: any): Promise<User> {
+  const want = Buffer.from(process.env.WERKBANK_INTERNAL_TOKEN ?? '');
+  const got = Buffer.from(String(req.headers['x-werkbank-internal'] ?? ''));
+  if (!want.length || want.length !== got.length || !timingSafeEqual(want, got)) throw new HttpError(403, 'Nicht erlaubt.');
+  const u = await userById(String(b.userId ?? ''));
+  if (!u || !allowed(u.email)) throw new HttpError(403, 'Konto nicht freigeschaltet.');
+  return u;
+}
+
+on('POST', /^\/internal\/session-start$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const r = await sessionStart(u, String(b.conv ?? ''), { eod: b.eod === true, skills: b.skills });
+  log('kontext', { user: u.id, tokens: r.tokens, cached: r.cached, slot: r.slot, questions: r.questions.length });
+  send(res, 200, r);
+});
+
+on('POST', /^\/internal\/measure$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  await recordMeasure(u, String(b.conv ?? ''), b.measured);
+  send(res, 200, { ok: true });
+});
+
+on('POST', /^\/internal\/hygiene$/, async (req, res) => {
+  const u = await internalUser(req, await body(req));
+  send(res, 200, await hygieneOf(u));
+});
+
+on('POST', /^\/internal\/hygiene-snooze$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  await snoozeItem(u, String(b.key ?? ''));
+  send(res, 200, { ok: true });
+});
+
+on('POST', /^\/internal\/jira-update$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const key = String(b.key ?? '');
+  if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw new HttpError(400, 'Ungültiger Schlüssel.');
+  if (!(await allIssues()).some((i) => i.key === key)) throw new HttpError(404, 'Ticket nicht in der Jira-Kopie (nur bestehende Tickets, keine neuen).');
+  const actions: any[] = [];
+  if (b.comment) actions.push({ type: 'comment', text: String(b.comment) });
+  if (b.status) actions.push({ type: 'status', to: String(b.status) });
+  if (b.due !== undefined && b.due !== null) actions.push({ type: 'due', date: String(b.due) || null });
+  if (!actions.length) throw new HttpError(400, 'Nichts zu tun.');
+  // Die Bestätigung ist schon passiert: die Brücke fragt vor jedem jira_update im Chat nach ("ja").
+  const done = await jiraWrite(u, () => applyActions(u, key, actions));
+  log('jira write (chat)', { user: u.id, key, n: done.length });
+  send(res, 200, { ok: true, done });
+});
+
 // ---------- Statische Dateien ----------
 
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
@@ -544,8 +643,8 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, path: string) {
   res.writeHead(200, {
     'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
     'cache-control': file.includes('/assets/') || file.startsWith(FONTS) ? 'public, max-age=31536000, immutable' : 'no-cache',
-    'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'DENY',
-    'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+    'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'SAMEORIGIN',
+    'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'",
   });
   if (req.method === 'HEAD') return res.end();
   createReadStream(file).pipe(res);
@@ -556,7 +655,7 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, path: string) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://x');
   try {
-    if (url.pathname.startsWith('/api/')) {
+    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/internal/')) {
       for (const [method, re, h] of routes) {
         const m = url.pathname.match(re);
         if (m && method === req.method) return await h(req, res, m, url);

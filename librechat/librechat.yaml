@@ -122,6 +122,16 @@ modelSpecs:
         modelLabel: Service-Fall
         promptPrefix: |
           Nutze die Skills `olaf-service-cases` und `olaf-service-textbausteine`. Personendaten nur so weit wie nötig, keine Weitergabe an andere Dienste. Schreiben in den Vault nur nach meiner Bestätigung.
+    - name: vorlage-tagesabschluss
+      label: Tagesabschluss
+      description: Was du heute angefasst hast — Stand und Daten deiner Tickets kurz nachziehen (höchstens drei Fragen).
+      iconURL: anthropic
+      preset:
+        endpoint: Claude Code
+        model: claude-code
+        modelLabel: Tagesabschluss
+        promptPrefix: |
+          Tagesabschluss: Fass in drei Zeilen zusammen, welche meiner PM-Tickets ich heute angefasst habe (Werkbank-Kontext unten), und frag dann kurz — eine Frage nach der anderen, höchstens drei — nach Stand und Datum. Aus meiner Antwort schlägst du eine Jira-Aktion vor und schreibst sie mit `jira_update` (ich bestätige mit „ja“); bei „später“ `hygiene_snooze`. Skill `olaf-jira`. Keine neuen Tickets.
     - name: vorlage-vault-aufraeumen
       label: Vault aufräumen
       description: Veraltete Notizen, kaputte Links und Frontmatter finden — Vorschläge statt stiller Änderungen.

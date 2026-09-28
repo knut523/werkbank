@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api, fmtDateTime, type Config } from '../api.ts';
+import { api, fmtDateTime, chatTarget, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useToast, useConfirm, StateChip } from '../ui.tsx';
 
 const EXPLAIN: Record<string, string> = {
@@ -42,7 +42,7 @@ export function Skills({ cfg }: { cfg: Config }) {
       <p className="small muted">Vorlagen starten einen Chat mit der passenden Anweisung (im Chat im Modell-Menü genauso auswählbar).</p>
       <div className="grid2">
         {d.presets.filter((p: any) => p.skill).map((p: any) => (
-          <a key={p.name} className="card soft" href={p.url} target="_blank" rel="noreferrer">
+          <a key={p.name} className="card soft" href={p.url} target={chatTarget} rel="noreferrer">
             <b>{p.label}</b><div className="small muted">{p.description}</div><div className="tiny">Skill: {p.skill}</div>
           </a>
         ))}

@@ -117,3 +117,24 @@ export async function jiraStatus(u: User) {
   }
   return { connected: false };
 }
+
+// ---------- Wer bin ich in Jira? ----------
+
+/** accountId/Anzeigename der Person in Jira (GET /myself mit ihrem Zugang), 1 Tag zwischengespeichert. */
+export async function jiraIdentity(u: User): Promise<{ accountId?: string | null; displayName?: string | null; name: string }> {
+  const key = `jira_identity:${u.id}`;
+  const m: any = await wb().collection('meta').findOne({ _id: key as any });
+  if (m && Date.now() - new Date(m.at).getTime() < 864e5) return { accountId: m.accountId, displayName: m.displayName, name: u.name };
+  if (!cfg.demo) {
+    try {
+      const c = await jiraCreds(u);
+      if (c) {
+        const { jiraFetch } = await import('./jira.ts');
+        const me = await jiraFetch(c, 'GET', '/myself');
+        await wb().collection('meta').updateOne({ _id: key as any }, { $set: { accountId: me.accountId, displayName: me.displayName, at: new Date() } }, { upsert: true });
+        return { accountId: me.accountId, displayName: me.displayName, name: u.name };
+      }
+    } catch { /* ohne Jira: über den Namen */ }
+  }
+  return { name: u.name, displayName: u.name };
+}

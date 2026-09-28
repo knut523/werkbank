@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, fmtDateTime, type Config } from '../api.ts';
+import { api, fmtDateTime, chatTarget, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useToast } from '../ui.tsx';
 
 interface TreeNode { name: string; path: string; kind: 'dir' | 'note'; title?: string; children?: TreeNode[]; count?: number }
@@ -69,7 +69,7 @@ function NoteView({ path }: { path: string }) {
         <div dangerouslySetInnerHTML={{ __html: d.html }} />
       </article>
       <aside className="side-panel">
-        <a className="btn primary" href={d.chatUrl} target="_blank" rel="noreferrer" style={{ width: '100%', justifyContent: 'center' }}>💬 Im Chat öffnen</a>
+        <a className="btn primary" href={d.chatUrl} target={chatTarget} rel="noreferrer" style={{ width: '100%', justifyContent: 'center' }}>💬 Im Chat öffnen</a>
         <p className="tiny" style={{ marginTop: 6 }}>Startet einen neuen Chat mit dieser Notiz als Kontext. Hier wird nur gelesen; Änderungen macht Claude im Chat nach deinem „ja“.</p>
         <MiniGraph center={d.title} links={d.links} backlinks={d.backlinks} />
         <b>Backlinks ({d.backlinks.length})</b>

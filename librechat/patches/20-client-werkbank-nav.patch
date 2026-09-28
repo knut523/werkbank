@@ -1,0 +1,45 @@
+diff --git a/client/src/components/UnifiedSidebar/ExpandedPanel.tsx b/client/src/components/UnifiedSidebar/ExpandedPanel.tsx
+index 46aebd2..33f3ee2 100644
+--- a/client/src/components/UnifiedSidebar/ExpandedPanel.tsx
++++ b/client/src/components/UnifiedSidebar/ExpandedPanel.tsx
+@@ -11,6 +11,7 @@ import { CLOSE_SIDEBAR_ID } from '~/components/Chat/Menus/OpenSidebar';
+ import { useLocalize, useNewConvo } from '~/hooks';
+ import { clearMessagesCache, cn } from '~/utils';
+ import store from '~/store';
++import WerkbankNav from '~/components/Werkbank/WerkbankNav'; // OLAF-Werkbank
+ 
+ const AccountSettings = lazy(() => import('~/components/Nav/AccountSettings'));
+ 
+@@ -178,6 +179,8 @@ function ExpandedPanel({
+             onCollapse={onCollapse}
+           />
+         ))}
++        {/* OLAF-Werkbank: Einrichtung, Wissen, Board, Sprint, Skills, Dateien */}
++        <WerkbankNav />
+       </div>
+ 
+       <div className="mt-auto">
+diff --git a/client/src/routes/index.tsx b/client/src/routes/index.tsx
+index ebcab40..5270052 100644
+--- a/client/src/routes/index.tsx
++++ b/client/src/routes/index.tsx
+@@ -21,6 +21,7 @@ import ShareRoute from './ShareRoute';
+ import ChatRoute from './ChatRoute';
+ import Search from './Search';
+ import Root from './Root';
++import WerkbankRoute from '~/components/Werkbank/WerkbankRoute'; // OLAF-Werkbank
+ 
+ const AuthLayout = () => (
+   <AuthContextProvider>
+@@ -126,6 +127,11 @@ export const router = createBrowserRouter(
+               index: true,
+               element: <Navigate to="/c/new" replace={true} />,
+             },
++            {
++              // OLAF-Werkbank-Seiten im Hauptbereich
++              path: 'wb/:page',
++              element: <WerkbankRoute />,
++            },
+             {
+               path: 'c/:conversationId?',
+               element: <ChatRoute />,

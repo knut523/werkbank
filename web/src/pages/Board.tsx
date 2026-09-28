@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { api, fmtDate, fmtDateTime, today, type Config } from '../api.ts';
+import { api, fmtDate, fmtDateTime, today, chatTarget, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, StateChip } from '../ui.tsx';
+import { HygienePanel } from '../components.tsx';
 
 const overdue = (i: any) => i.duedate && i.duedate < today() && i.status !== 'Done';
 
@@ -13,6 +14,7 @@ function Card({ i, onOpen }: { i: any; onOpen: () => void }) {
         <span className="chip">{i.assignee ?? 'ohne Owner'}</span>
         {i.duedate ? <span className={`chip ${overdue(i) ? 'bad' : ''}`}>{overdue(i) ? 'über ' : ''}{fmtDate(i.duedate)}</span> : i.status !== 'Done' && <span className="chip warn">ohne Datum</span>}
         {i.comments > 0 && <span className="chip">💬 {i.comments}</span>}
+        {i.hygiene?.length > 0 && <span className="badge-hyg" title={i.hygiene.join(', ')}>🧹 {i.hygiene.length}</span>}
       </div>
     </button>
   );
@@ -111,7 +113,7 @@ function Detail({ k, onClose, onChanged, site }: { k: string; onClose: () => voi
           {i.description && <div className="card soft small" style={{ whiteSpace: 'pre-wrap' }}>{i.description}</div>}
           {i.lastComment && <p className="small"><b>Letzter Kommentar</b> ({i.lastComment.author}, {fmtDate(i.lastComment.created)}): {i.lastComment.text}</p>}
           {(d.data as any).children.length > 0 && <><b className="small">Sub-tasks</b><ul className="small">{(d.data as any).children.map((c: any) => <li key={c.key}>{c.key} {c.summary} · <i>{c.status}</i> · {c.assignee ?? '—'}</li>)}</ul></>}
-          <div className="row"><a className="btn" href={(d.data as any).chatUrl} target="_blank" rel="noreferrer">💬 Im Chat besprechen</a></div>
+          <div className="row"><a className="btn" href={(d.data as any).chatUrl} target={chatTarget} rel="noreferrer">💬 Im Chat besprechen</a></div>
           <Err e={err} />
 
           <h3>Aktionen <span className="tiny">(je mit Bestätigung, unter deinem Jira-Konto)</span></h3>
@@ -167,13 +169,14 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
         </div>
       </div>
       <Err e={err} />
+      <HygienePanel onChange={() => b.reload()} />
       <div className="board-bar">
         <select value={owner} onChange={(e) => setOwner(e.target.value)} aria-label="Owner">
           <option value="">Alle Owner</option>
-          {data?.owners.map((o: string) => <option key={o} value={o}>{o}</option>)}
+          {data?.owners.map((o: string) => <option key={o} value={o}>{o}{data.hygiene.perOwner[o] ? ` · 🧹 ${data.hygiene.perOwner[o]}` : ''}</option>)}
         </select>
         <div className="row" role="group" aria-label="Filter">
-          {[['', 'Alle'], ['overdue', `Überfällig${data ? ` (${data.totals.overdue})` : ''}`], ['undated', `Ohne Datum${data ? ` (${data.totals.undated})` : ''}`]].map(([v, l]) => (
+          {[['', 'Alle'], ['overdue', `Überfällig${data ? ` (${data.totals.overdue})` : ''}`], ['undated', `Ohne Datum${data ? ` (${data.totals.undated})` : ''}`], ['pflege', `Braucht Pflege${data ? ` (${data.hygiene.total})` : ''}`]].map(([v, l]) => (
             <button key={v} className={`btn small ${filter === v ? 'primary' : ''}`} onClick={() => setFilter(v)}>{l}</button>
           ))}
         </div>
@@ -186,7 +189,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
         <div className="card soft"><p>Keine Tickets in der Kopie{filter || owner || q ? ' für diesen Filter' : ''}.</p>{!data.sync && <p className="small">Noch nie synchronisiert — oben auf „Jetzt synchronisieren“ klicken (braucht deinen Jira-Zugang aus der Einrichtung).</p>}</div>
       ) : data.lanes.map((lane: any) => (
         <section className="lane" key={lane.key}>
-          <h3>{lane.name} <span className="chip">{lane.count}</span>{lane.workstream && <span className="tiny">{lane.key}{lane.workstream.assignee ? ` · ${lane.workstream.assignee}` : ''}</span>}</h3>
+          <h3>{lane.name} <span className="chip">{lane.count}</span>{lane.hygiene > 0 && <span className="badge-hyg" title="Karten, die Pflege brauchen">🧹 {lane.hygiene}</span>}{lane.workstream && <span className="tiny">{lane.key}{lane.workstream.assignee ? ` · ${lane.workstream.assignee}` : ''}</span>}</h3>
           <div className="cols" style={{ gridTemplateColumns: `repeat(${data.statuses.length}, minmax(180px, 1fr))` }}>
             {data.statuses.map((s: string) => (
               <div key={s}>

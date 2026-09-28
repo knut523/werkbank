@@ -2,7 +2,7 @@
 // (POST /api/auth/login, serverseitig); die Werkbank merkt sich danach nur eine eigene Sitzung
 // (Cookie, 7 Tage, in Mongo nur als Hash). Zugelassen sind nur Konten aus der Freigabeliste.
 
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ObjectId } from 'mongodb';
 import { cfg } from './config.ts';
@@ -58,7 +58,44 @@ export async function destroySession(req: IncomingMessage, res: ServerResponse) 
   res.setHeader('set-cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${cfg.secureCookies ? '; Secure' : ''}`);
 }
 
+/** HS256-JWT prüfen (wie jsonwebtoken.verify), ohne Abhängigkeit. */
+export function verifyJwt(token: string, secret: string): Record<string, any> | null {
+  const parts = token.split('.');
+  if (parts.length !== 3 || !secret) return null;
+  try {
+    const head = JSON.parse(Buffer.from(parts[0], 'base64url').toString());
+    if (head.alg !== 'HS256') return null;
+    const sig = createHmac('sha256', secret).update(parts[0] + '.' + parts[1]).digest();
+    const got = Buffer.from(parts[2], 'base64url');
+    if (got.length !== sig.length || !timingSafeEqual(got, sig)) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+    if (payload.exp && payload.exp < Date.now() / 1000) return null;
+    return payload;
+  } catch { return null; }
+}
+
+/**
+ * Eine Anmeldung für Chat und Werkbank: läuft die Werkbank unter dem LibreChat-Ursprung (/werkbank),
+ * kommt LibreChats Refresh-Cookie mit. Es wird wie in LibreChat geprüft (Signatur mit
+ * JWT_REFRESH_SECRET + gültige Sitzung mit diesem Token-Hash in LibreChats DB).
+ */
+export async function librechatSessionUser(req: IncomingMessage): Promise<User | null> {
+  const rt = cookies(req).refreshToken;
+  const secret = process.env.JWT_REFRESH_SECRET ?? '';
+  if (!rt || !secret) return null;
+  const payload = verifyJwt(rt, secret);
+  if (!payload?.id || !ObjectId.isValid(payload.id)) return null;
+  const sess = await lc().collection('sessions').findOne({ refreshTokenHash: hash(rt), user: new ObjectId(payload.id), expiration: { $gt: new Date() } });
+  if (!sess) return null;
+  const u: any = await lc().collection('users').findOne({ _id: new ObjectId(payload.id) }, { projection: { email: 1, name: 1, username: 1, role: 1 } });
+  if (!u) return null;
+  return { id: String(u._id), email: String(u.email).toLowerCase(), name: String(u.name || u.username || u.email), role: u.role };
+}
+
 export async function currentUser(req: IncomingMessage): Promise<User | null> {
+  // 1) LibreChat-Anmeldung (Werkbank unter /werkbank im Chat), 2) eigene Sitzung (direkt auf :3070).
+  const viaChat = await librechatSessionUser(req);
+  if (viaChat) return allowed(viaChat.email) ? viaChat : null;
   const t = cookies(req)[COOKIE];
   if (!t || !/^[0-9a-f]{64}$/.test(t)) return null;
   const s: any = await wb().collection('sessions').findOne({ _id: hash(t) as any, expiresAt: { $gt: new Date() } });

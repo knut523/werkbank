@@ -8,6 +8,19 @@ import { createHash } from 'node:crypto';
 import { cfg } from './config.ts';
 import { parseFrontmatter, type VaultIndex } from './vault.ts';
 
+/** Domäne/Thema und Zustand aus dem Pfad: 2-Areas/<Domäne>/…, 1-Roadmap/<Thema>/<n-Zustand>/… */
+export function topicState(path: string): { topic: string[]; state: string } {
+  const p = path.split('/');
+  const topic: string[] = [];
+  const a = p.indexOf('2-Areas');
+  if (a >= 0 && p[a + 1] && p.length > a + 2) topic.push(p[a + 1]);
+  if (a >= 0 && p[a + 2] && p.length > a + 3) topic.push(p[a + 2]);
+  const r = p.indexOf('1-Roadmap');
+  if (r >= 0 && p[r + 1] && p.length > r + 2) topic.push(p[r + 1]);
+  const st = r >= 0 && /^\d-/.test(p[r + 2] ?? '') && p.length > r + 3 ? p[r + 2] : '';
+  return { topic, state: st };
+}
+
 const idOf = (path: string) => createHash('sha1').update(path).digest('hex');
 
 async function meili(method: string, path: string, body?: unknown): Promise<any> {
@@ -33,6 +46,7 @@ async function waitTask(t: any, ms = 60_000) {
 }
 
 let known = new Map<string, number>();   // path → mtime im Index
+const SCHEMA = 2;                          // bei neuen Feldern erhöhen → einmal alles neu
 let ready = false;
 export const searchState = { lastRun: 0, docs: 0, error: '' as string };
 
@@ -41,7 +55,8 @@ export async function ensureIndex() {
   if (!(await meili('GET', `/indexes/${cfg.meiliIndex}`))) await waitTask(await meili('POST', '/indexes', { uid: cfg.meiliIndex, primaryKey: 'id' }));
   await meili('PATCH', `/indexes/${cfg.meiliIndex}/settings`, {
     searchableAttributes: ['title', 'name', 'aliases', 'tags', 'path', 'body'],
-    filterableAttributes: ['team', 'type', 'status', 'folder'],
+    filterableAttributes: ['team', 'type', 'status', 'folder', 'folders', 'tags', 'area', 'topic', 'state', 'mtime'],
+    sortableAttributes: ['mtime'],
     displayedAttributes: ['*'],
   });
   ready = true;
@@ -54,8 +69,8 @@ export async function reindex(idx: VaultIndex, full = false): Promise<{ added: n
       // Bestand aus Meilisearch holen, damit ein Neustart nicht alles neu schickt.
       known = new Map();
       for (let offset = 0; ; offset += 1000) {
-        const r = await meili('GET', `/indexes/${cfg.meiliIndex}/documents?limit=1000&offset=${offset}&fields=path,mtime`);
-        for (const d of r?.results ?? []) known.set(d.path, d.mtime);
+        const r = await meili('GET', `/indexes/${cfg.meiliIndex}/documents?limit=1000&offset=${offset}&fields=path,mtime,schema`);
+        for (const d of r?.results ?? []) if (d.schema === SCHEMA) known.set(d.path, d.mtime);
         if (!r || (r.results ?? []).length < 1000) break;
       }
     }
@@ -67,10 +82,13 @@ export async function reindex(idx: VaultIndex, full = false): Promise<{ added: n
       docs.push({
         id: idOf(n.path), path: n.path, name: n.name, title: n.title, team: n.team || 'wurzel',
         folder: n.path.split('/').slice(0, 2).join('/'),
+        folders: n.path.split('/').slice(0, -1).map((_, k, a) => a.slice(0, k + 1).join('/')),
+        area: typeof n.fm.area === 'string' ? n.fm.area : '',
+        ...topicState(n.path),
         type: typeof n.fm.type === 'string' ? n.fm.type : '', status: typeof n.fm.status === 'string' ? n.fm.status : '',
         tags: Array.isArray(n.fm.tags) ? n.fm.tags.map(String) : [],
         aliases: Array.isArray(n.fm.aliases) ? n.fm.aliases.map(String) : [],
-        body: body.replace(/<!--[\s\S]*?-->/g, '').slice(0, 60_000), mtime: n.mtime,
+        body: body.replace(/<!--[\s\S]*?-->/g, '').slice(0, 60_000), mtime: n.mtime, schema: SCHEMA,
       });
     }
     let last: any;

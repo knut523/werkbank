@@ -41,7 +41,7 @@ export function runSyncPlan(sprintDir: string): Promise<PlanRow[]> {
 }
 
 const STATUS_WORDS: [RegExp, string][] = [
-  [/\b(auf|nach) (done|erledigt)\b|\bschlie(ß|ss)en\b|\bdone setzen\b|\bclose\b|\bist (durch|erledigt)\b.*\bdone\b/i, 'Done'],
+  [/\b(auf|nach) (done|erledigt)\b|\bschlie(ß|ss)en\b|\bdone setzen\b|\bclose\b|\bist (durch|erledigt)\b.*\bdone\b|^\s*(erledigt|ist erledigt|fertig|done)\b/i, 'Done'],
   [/\b(in progress|in arbeit)\b/i, 'In Progress'],
   [/\bauf to ?do\b|\bzurück auf to ?do\b/i, 'To Do'],
   [/\b(in den |auf )?backlog\b/i, 'Backlog'],
@@ -76,17 +76,10 @@ export function proposalsFor(rows: PlanRow[], issues: Map<string, Issue>, sprint
     if (row.kind === 'status') {
       p.actions.push({ type: 'status', to: text.trim(), from: cur?.status });
     } else {
-      const st = STATUS_WORDS.find(([re]) => re.test(text))?.[1];
-      if (st) p.actions.push({ type: 'status', to: st, from: cur?.status });
-      const due = parseDue(text);
-      if (due) p.actions.push({ type: 'due', date: due.date, from: cur?.duedate ?? null });
-      else if (/(neues? datum|neu setzen|verschieben)/i.test(text)) p.question = 'Neues Datum fehlt — bitte angeben.';
-      // Alles, was Information trägt, wird Kommentar; reine Statusanweisung braucht keinen.
-      const pureInstruction = (st || due) && text.replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(' ').length <= 5;
-      if (!pureInstruction) {
-        const speaker = row.speaker && row.speaker !== '-' ? `${row.speaker} (Sprint Review, ${dateDe})` : `Sprint Review, ${dateDe}`;
-        p.actions.push({ type: 'comment', text: `${speaker}: ${text}` });
-      }
+      const speaker = row.speaker && row.speaker !== '-' ? `${row.speaker} (Sprint Review, ${dateDe})` : `Sprint Review, ${dateDe}`;
+      const r = actionsFromText(text, cur, speaker);
+      p.actions.push(...r.actions);
+      if (r.question) p.question = r.question;
     }
     if (cur) {
       const st = p.actions.find((a) => a.type === 'status') as any;
@@ -96,4 +89,22 @@ export function proposalsFor(rows: PlanRow[], issues: Map<string, Issue>, sprint
     } else p.conflict = 'Ticket ist nicht in der Jira-Kopie — erst synchronisieren.';
     return p;
   });
+}
+
+/**
+ * Freitext → Jira-Aktionen (Status / Fälligkeit / Kommentar). Gemeinsam für Sprint-Sync und
+ * Task-Hygiene. Mehrdeutiges wird nicht geraten, sondern als Frage zurückgegeben.
+ */
+export function actionsFromText(text: string, cur: Pick<Issue, 'status' | 'duedate'> | undefined, commentPrefix: string): { actions: Proposal['actions']; question?: string } {
+  const actions: Proposal['actions'] = [];
+  let question: string | undefined;
+  const st = STATUS_WORDS.find(([re]) => re.test(text))?.[1];
+  if (st) actions.push({ type: 'status', to: st, from: cur?.status });
+  const due = parseDue(text);
+  if (due) actions.push({ type: 'due', date: due.date, from: cur?.duedate ?? null });
+  else if (/(neues? datum|neu setzen|verschieben)/i.test(text)) question = 'Neues Datum fehlt — bitte angeben.';
+  // Alles, was Information trägt, wird Kommentar; eine reine Anweisung braucht keinen.
+  const pureInstruction = (st || due) && text.replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(' ').length <= 5;
+  if (!pureInstruction) actions.push({ type: 'comment', text: `${commentPrefix}: ${text}` });
+  return { actions, question };
 }

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { api, fmtDateTime, type Config } from '../api.ts';
+import { api, fmtDateTime, openChat, chatTarget, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useToast, useConfirm } from '../ui.tsx';
 
 const size = (b: number) => (b < 1024 * 1024 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${(b / 1048576).toFixed(1)} MB`);
@@ -43,7 +43,7 @@ export function Dateien({ cfg }: { cfg: Config }) {
   const f: any = files.data;
   const reloadAll = () => { files.reload(); logs.reload(); };
   const toChat = async (id: string) => {
-    try { const r: any = await api(`/api/files/${id}/chat`, { method: 'POST' }); window.open(r.chatUrl, '_blank', 'noopener'); } catch (e) { setErr(e); }
+    try { const r: any = await api(`/api/files/${id}/chat`, { method: 'POST' }); openChat(r.chatUrl); } catch (e) { setErr(e); }
   };
   return (
     <div className="page">
@@ -85,7 +85,7 @@ export function Dateien({ cfg }: { cfg: Config }) {
               <thead><tr><th>Datei</th><th>Größe</th><th>Hochgeladen</th><th>Geteilt mit</th><th></th></tr></thead>
               <tbody>{f.mine.map((x: any) => (
                 <tr key={x.id} data-file={x.name}>
-                  <td><a href={`/api/files/${x.id}/download`}>{x.name}</a>{x.personal && <span className="chip warn" style={{ marginLeft: 6 }}>Personendaten</span>}</td>
+                  <td><a href={`api/files/${x.id}/download`}>{x.name}</a>{x.personal && <span className="chip warn" style={{ marginLeft: 6 }}>Personendaten</span>}</td>
                   <td>{size(x.size)}</td>
                   <td>{fmtDateTime(x.createdAt)}</td>
                   <td>
@@ -117,7 +117,7 @@ export function Dateien({ cfg }: { cfg: Config }) {
               <thead><tr><th>Datei</th><th>Von</th><th>Größe</th><th></th></tr></thead>
               <tbody>{f.shared.map((x: any) => (
                 <tr key={x.id} data-shared-file={x.name}>
-                  <td><a href={`/api/files/${x.id}/download`}>{x.name}</a>{x.personal && <span className="chip warn" style={{ marginLeft: 6 }}>Personendaten</span>}</td>
+                  <td><a href={`api/files/${x.id}/download`}>{x.name}</a>{x.personal && <span className="chip warn" style={{ marginLeft: 6 }}>Personendaten</span>}</td>
                   <td>{x.ownerName}</td><td>{size(x.size)}</td>
                   <td><button className="btn small" onClick={() => toChat(x.id)}>💬 Im Chat</button></td>
                 </tr>
@@ -138,10 +138,10 @@ export function Dateien({ cfg }: { cfg: Config }) {
             <table className="t small"><thead><tr><th>Chat</th><th>Von</th><th>Geteilt</th><th></th></tr></thead>
               <tbody>{(chats.data as any).withMe.map((c: any) => (
                 <tr key={c.shareId} data-share={c.shareId}>
-                  <td><a href={c.url} target="_blank" rel="noreferrer">{c.title}</a> <span className="tiny">{c.messages} Nachrichten</span></td>
+                  <td><a href={c.url} target={chatTarget} rel="noreferrer">{c.title}</a> <span className="tiny">{c.messages} Nachrichten</span></td>
                   <td>{c.owner}</td><td>{fmtDateTime(c.sharedAt)}</td>
                   <td><button className="btn small" onClick={async () => {
-                    try { const r: any = await api(`/api/chats/${c.shareId}/copy`, { method: 'POST' }); window.open(r.chatUrl, '_blank', 'noopener'); logs.reload(); } catch (e) { setErr(e); }
+                    try { const r: any = await api(`/api/chats/${c.shareId}/copy`, { method: 'POST' }); openChat(r.chatUrl); logs.reload(); } catch (e) { setErr(e); }
                   }}>Als Kopie weiterführen</button></td>
                 </tr>
               ))}</tbody>
@@ -151,7 +151,7 @@ export function Dateien({ cfg }: { cfg: Config }) {
           {(chats.data as any).byMe.length === 0 ? <p className="muted small">Noch keine.</p> : (
             <table className="t small"><thead><tr><th>Chat</th><th>Mit</th><th>Erstellt</th></tr></thead>
               <tbody>{(chats.data as any).byMe.map((c: any) => (
-                <tr key={c.shareId}><td><a href={c.url} target="_blank" rel="noreferrer">{c.title}</a></td><td>{c.with.join(', ') || <span className="muted">noch niemand</span>}{c.public && <span className="chip bad">öffentlich</span>}</td><td>{fmtDateTime(c.createdAt)}</td></tr>
+                <tr key={c.shareId}><td><a href={c.url} target={chatTarget} rel="noreferrer">{c.title}</a></td><td>{c.with.join(', ') || <span className="muted">noch niemand</span>}{c.public && <span className="chip bad">öffentlich</span>}</td><td>{fmtDateTime(c.createdAt)}</td></tr>
               ))}</tbody>
             </table>
           )}

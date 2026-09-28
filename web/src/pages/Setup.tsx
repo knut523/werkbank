@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api, fmtDateTime, type Config } from '../api.ts';
+import { api, fmtDateTime, chatTarget, embedded, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useToast, useConfirm } from '../ui.tsx';
 
 function Login({ cfg, onLogin }: { cfg: Config; onLogin: () => void }) {
@@ -43,6 +43,43 @@ export function Setup({ cfg, onLogin }: { cfg: Config; onLogin: () => void }) {
   return <Wizard cfg={cfg} />;
 }
 
+function ContextInfo() {
+  const c = useLoad(() => api('/api/context'));
+  const [show, setShow] = useState(false);
+  if (!c.data) return null;
+  const d: any = c.data;
+  const avg = d.recent.length ? Math.round(d.recent.reduce((s: number, r: any) => s + r.tokens, 0) / d.recent.length) : 0;
+  return (
+    <>
+      <h2>Kontext für Claude</h2>
+      <div className="card" data-testid="context-info">
+        <p className="small" style={{ marginTop: 0 }}>Jede <b>neue</b> Chat-Sitzung bekommt ein kurzes Kontext-Paket (deine Tickets, Sprint, Roadmap, offene Fragen, Vault-Karte — nur Zeiger, keine Kundendaten). Pflegefragen (höchstens drei) nur in der ersten Sitzung des Tages und zum Tagesabschluss (ab 16 Uhr oder über die Vorlage). Fortgesetzte Sitzungen bekommen nichts noch einmal.</p>
+        <table className="t small" style={{ marginBottom: 8 }}>
+          <thead><tr><th>Fester Teil je Sitzung (geschätzt)</th><th>vorher</th><th>jetzt</th></tr></thead>
+          <tbody>
+            <tr><td>Skill-Liste</td><td>~{d.fixed.skillsAll} Tokens ({d.fixed.skillsAllCount} Skills)</td><td>~{d.fixed.skillsCore} Tokens ({d.fixed.skillsCoreCount} Kern-Skills, weitere je Vorlage/Nennung)</td></tr>
+            <tr><td>Eigene MCP-Werkzeuge (vault-search, werkbank)</td><td>—</td><td>~{d.fixed.ownTools} Tokens (per Tool Search erst bei Bedarf)</td></tr>
+            <tr><td>Kontext-Paket</td><td>—</td><td>~{d.current.tokens} Tokens (Obergrenze 1500)</td></tr>
+          </tbody>
+        </table>
+        <div className="row small">
+          <span className="chip">jetzt: ~{d.current.tokens} Tokens{d.current.cached ? ' (aus dem Zwischenspeicher)' : ''}</span>
+          <span className="chip">Obergrenze 1500</span>
+          {avg > 0 && <span className="chip">Ø letzte {d.recent.length} Sitzungen: ~{avg} Tokens</span>}
+          <button className="btn small" onClick={() => setShow(!show)}>{show ? 'ausblenden' : 'Paket ansehen'}</button>
+        </div>
+        {show && <pre style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{d.current.pack}</pre>}
+        {d.recent.length > 0 && (
+          <table className="t small" style={{ marginTop: 8 }}>
+            <thead><tr><th>Zeit</th><th>Paket + Fragen</th><th>Anlass</th><th>Skills (geschätzt)</th><th>gemessen (Claude Code)</th><th>Zwischenspeicher</th></tr></thead>
+            <tbody>{d.recent.slice(0, 8).map((r: any, i: number) => <tr key={i}><td>{fmtDateTime(r.at)}</td><td>{r.tokens} ({r.questions} Fragen)</td><td>{r.slot === 'morgen' ? 'Tagesbeginn' : r.slot === 'abend' ? 'Tagesabschluss' : '—'}</td><td>{r.skillsTokens ?? '—'}{r.skillsCount ? ` (${r.skillsCount})` : ''}</td><td>{r.measured ? `gesamt ${r.measured.total}, Werkzeuge ${r.measured.tools}, Skills ${r.measured.skills}${r.measured.deferredTools ? `, zurückgestellt ${r.measured.deferredTools}` : ''}` : '—'}</td><td>{r.cached ? 'ja' : 'nein'}</td></tr>)}</tbody>
+          </table>
+        )}
+      </div>
+    </>
+  );
+}
+
 function Wizard({ cfg }: { cfg: Config }) {
   const st = useLoad(() => api('/api/setup/status'));
   const toast = useToast();
@@ -67,7 +104,7 @@ function Wizard({ cfg }: { cfg: Config }) {
           <h1>Einrichtung</h1>
           <p className="muted" style={{ margin: 0 }}>Einmal durchklicken, dann arbeitet Claude Code im Chat, am Board und im Sprint mit deinen eigenen Zugängen.</p>
         </div>
-        <a className="btn primary" href={cfg.librechatUrl}>💬 Zum Chat</a>
+        {!embedded && <a className="btn primary" href={cfg.librechatUrl}>💬 Zum Chat</a>}
       </div>
       <Err e={err} />
       <div className="steps" style={{ marginTop: 12 }}>
@@ -123,7 +160,7 @@ function Wizard({ cfg }: { cfg: Config }) {
           <div className="card">
             <h3 style={{ marginTop: 0 }}>Loslegen</h3>
             <div className="grid2">
-              <a className="card soft" href={cfg.librechatUrl}><b>💬 Chat</b><div className="small muted">Claude Code mit Skills, Vault und Jira. Schreibt nur nach deinem „ja“.</div></a>
+              <a className="card soft" href={cfg.librechatUrl} target={chatTarget}><b>💬 Chat</b><div className="small muted">Claude Code mit Skills, Vault und Jira. Schreibt nur nach deinem „ja“.</div></a>
               <a className="card soft" href="#/wissen"><b>📚 Wissen</b><div className="small muted">Der Vault: Struktur, Roadmap, Suche, Backlinks.</div></a>
               <a className="card soft" href="#/board"><b>🗂️ Board</b><div className="small muted">Jira-Kopie von {cfg.project}, Agent auf Karte ansetzen.</div></a>
               <a className="card soft" href="#/sprint"><b>🔁 Sprint</b><div className="small muted">Review und Planning: Fragen beantworten, Sprint-Sync vorbereiten.</div></a>
@@ -133,6 +170,8 @@ function Wizard({ cfg }: { cfg: Config }) {
           </div>
         </div>
       </div>
+
+      <ContextInfo />
 
       <h2>Dienste</h2>
       <div className="row">
