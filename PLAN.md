@@ -71,6 +71,13 @@ Schreiben mit Bestätigung, Agent ansetzen nur lesend → Kommentarentwurf — P
 **Sprint** (Ziel, S1–S4, Antwortzeilen, Sprint-Sync mit Freigabe, neuer Zyklus), **Skills** (aus dem Vault,
 Vorlagen im Chat), **Dateien & Teilen** (Team-Dateien, Chats nur team-intern teilen, Anhänge erreichen die Sitzung).
 
+### Erweiterung 28.09.2026, abends (Werkbank in LibreChats Leiste, vault-search, Kontext, Task-Hygiene)
+
+Werkbank-Seiten in LibreChats linker Leiste (eine Anmeldung, Pfad-Proxy `/werkbank`), MCP `vault-search`,
+Kontext-Paket je Person (Index-Stufe, Vault-Karte, Obergrenze, Cache, Messung), Task-Hygiene nur zu Tagesbeginn
+und Tagesabschluss, Skills je Vorlage, Sitzungsstatus, Nachfrage an Board-Agenten, Platzhalter für forge-review.
+Übernommene Ideen mit Quelle und Stand: README, Abschnitt „Forschung“.
+
 ## Leitplanken
 
 - Keine Zugangsdaten im Repo oder im Log; Tokens je Nutzer verschlüsselt gespeichert.

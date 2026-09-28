@@ -65,15 +65,15 @@ Alles läuft nativ und lauscht nur auf `127.0.0.1`. Erreichbar über die Coder-V
 
 | Dienst | Port | Link |
 |---|---|---|
-| **Werkbank-Web** (Einrichtung, Wissen, Board, Sprint, Skills, Dateien) | 3070 | **https://3070--main--dev--knut.ws.konekto.energy** |
-| **LibreChat** (Chat) | 3080 | **https://3080--main--dev--knut.ws.konekto.energy** |
+| **LibreChat** (Chat **und** alle Werkbank-Seiten in der linken Leiste) | 3080 | **https://3080--main--dev--knut.ws.konekto.energy** (Werkbank-Seiten unter `/wb/einrichtung`, `/wb/wissen`, `/wb/board`, `/wb/sprint`, `/wb/skills`, `/wb/dateien`) |
+| Werkbank-Web direkt (Health/Debug, eigenes Login) | 3070 | https://3070--main--dev--knut.ws.konekto.energy |
 | claude-bridge | 3090 | nur intern |
 | MongoDB 8.0.20 | 27017 | nur intern |
 | Meilisearch v1.35.1 | 7700 | nur intern (Chat-Suche + Vault-Suche) |
 
-Querverweise: in LibreChat führen die Links in der **Fußzeile** zur Web-App (🚀 Einrichtung, 📚 Wissen,
-🗂️ Board, 🔁 Sprint, 🧰 Skills, 📎 Dateien); in der Web-App führt **💬 Chat** oben links zurück.
-„Im Chat öffnen“, „Im Chat besprechen“ usw. starten einen neuen LibreChat-Chat mit vorbereitetem Text.
+Die Werkbank-Seiten sind **Einträge in LibreChats linker Leiste** (siehe „Die Werkbank im Chat“ unten) und öffnen
+im Hauptbereich — mit einer Anmeldung. Die Fußzeilen-Links gibt es weiterhin. „Im Chat öffnen“, „Im Chat
+besprechen“ usw. starten einen neuen Chat mit vorbereitetem Text im selben Fenster.
 
 ## Erste Schritte im Browser
 
@@ -93,6 +93,24 @@ Die Web-App führt beim ersten Aufruf durch vier Schritte (Seite **Einrichtung**
    `maxenergy-jira/scripts/jira-read.sh` (Eintrag „Jira api“, `JIRA_EMAIL`, `bw` mit `~/.config/vw/session`),
    nur im Speicher, 10 Minuten. Dieser Token **darf nicht schreiben**.
 4. **Loslegen** — Kacheln zu Chat, Wissen, Board, Sprint, Skills, Dateien; darunter der Zustand der Dienste.
+
+## Die Werkbank im Chat (linke Leiste)
+
+Unter dem „Neuer Chat“-Knopf stehen sechs Symbole: 🚀 Einrichtung · 📖 Wissen · 🗂 Board · 🔁 Sprint ·
+🧩 Skills · 🔗 Dateien & Teilen. Ein Klick öffnet die Seite im Hauptbereich von LibreChat (Adresse
+`/wb/<seite>`, Unterseiten stehen als `?h=…` in der Adresszeile und überstehen Neuladen).
+
+- **Eine Anmeldung:** LibreChat reicht `/werkbank/*` an die Web-App (3070) durch. Dort kommt LibreChats
+  Refresh-Cookie mit; die Web-App prüft ihn wie LibreChat selbst (Signatur mit `JWT_REFRESH_SECRET` und
+  gültige Sitzung mit diesem Token-Hash in LibreChats DB). Die Freigabeliste gilt weiter. Direkt auf 3070
+  gibt es weiter das eigene Login (für Health/Debug). `/werkbank/internal/*` reicht der Proxy nie durch.
+- **Optik:** gleiche Schrift (Inter), Farben und Abstände wie LibreChat; **Hell/Dunkel folgt dem Chat**
+  (die Seite beobachtet LibreChats `dark`-Klasse), Symbole aus LibreChats Symbolsatz (lucide).
+- **Technik, klein und wiederholbar:** zwei neue Dateien (`librechat/overlay/…`: Proxy, Leiste, Seite) und zwei
+  kleine Patches (`librechat/patches/10-server-werkbank-proxy.patch`: 2 Zeilen in `api/server/index.js`;
+  `20-client-werkbank-nav.patch`: Leiste + Route). `scripts/librechat-patch.sh` spielt sie bei jedem
+  `werkbank.sh up|update` ein (schon angewandte werden erkannt; passt ein Patch nach einem LibreChat-Update
+  nicht mehr, bricht es mit Hinweis ab) und baut nur den Client neu, wenn sich etwas geändert hat.
 
 ## Die Seiten
 
@@ -171,6 +189,31 @@ Die Web-App führt beim ersten Aufruf durch vier Schritte (Seite **Einrichtung**
 - **Protokoll**: wer hat was (nur ID) mit wem geteilt, append-only in `.runtime/werkbank/share-log.jsonl`,
   ohne Inhalt und ohne Dateinamen. Jede Person sieht ihre Einträge, Admins alle.
 
+### 🧹 Task-Hygiene — eigene Tickets sauber halten, sanft
+
+Regeln (Skill `olaf-jira`: Daten folgen der Realität; keine neuen Tickets; Statuswechsel nur mit Bestätigung),
+angewandt auf die **eigenen** PM-Tickets aus der Jira-Kopie (Zuordnung über `GET /myself` bzw. den Namen):
+
+| Regel | Wann |
+|---|---|
+| überfällig | Fälligkeit < heute, nicht Done |
+| ohne Datum | offen, nicht Backlog, kein Datum |
+| still | In Progress und seit 7 Tagen kein Update/Kommentar (`WERKBANK_STALE_DAYS`) |
+| Widerspruch | letzter Kommentar klingt erledigt („erledigt“, „ist durch“, „live“ …, ohne „nicht/noch/wartet“), Status offen |
+| ohne Workstream | kein Parent |
+| Sub-task ohne Owner | Sub-task unter einem eigenen Ticket ohne Owner |
+
+- **Wann gefragt wird (Knut, 28.09.):** nur in der **ersten Werkbank-Chat-Sitzung des Tages** (Wiener Zeit) und
+  zum **Tagesabschluss** — erste Sitzung ab 16 Uhr (`WERKBANK_EOD_HOUR`) oder ausdrücklich über die Vorlage
+  **„Tagesabschluss“** bzw. den Knopf 🌙 Tagesabschluss (dann zuerst die heute angefassten eigenen Tickets).
+  Alle anderen Sitzungen: keine Fragen. Höchstens **3 Fragen**, je Ticket eine, nichts doppelt am selben Tag,
+  „später“ = heute nicht mehr. Die eigentliche Anfrage hat immer Vorrang.
+- **Im Chat:** Claude fragt kurz, eine Frage nach der anderen; aus der Antwort wird eine Jira-Aktion, die das
+  Werkzeug `jira_update` schreibt — **erst nach „ja“** und **mit dem Jira-Zugang der Person** (wie am Board).
+  „später“ → `hygiene_snooze`.
+- **Board:** 🧹-Zähler je Karte, Bahn und Owner, Filter **„Braucht Pflege“**, oben die eigenen Fragen (höchstens 3).
+  **Sprint:** Liste aller eigenen Pflegepunkte. Antworten dort: eine Zeile → Vorschlag → Bestätigen → Jira.
+
 ## Was im Chat passiert
 
 - **Eine Claude-Code-Sitzung je Chat.** Die Brücke merkt sich Chat-ID → SDK-Sitzung
@@ -195,6 +238,80 @@ Die Web-App führt beim ersten Aufruf durch vier Schritte (Seite **Einrichtung**
   `interface.sharedLinks.public: false`, Rolle ohne `SHARE_PUBLIC`); ohne Anmeldung → 401.
 - **Grenzen gegen Missbrauch:** ein laufender Zug je Nutzer, 15 Minuten je Zug, höchstens 40 Schritte.
 - **Titel** erzeugt die Brücke aus der ersten Nachricht, ohne Claude aufzurufen.
+- **Kontext-Paket** für jede **neue** Sitzung (nicht bei Fortsetzung), siehe unten.
+- **Werkzeuge nur für Werkbank-Sitzungen** (Konfiguration der Brücke, nicht die Nutzer-Konfiguration):
+  `vault-search` (Vault durchsuchen, lesend) und `werkbank` (`hygiene_list`, `hygiene_snooze`, `skills_list`, `jira_update` mit Rückfrage).
+- **Skills je Bedarf:** statt aller Skills sieht eine Sitzung den Kern (`claude-bridge/skills-core.json`, 13 Skills),
+  dazu die Skills der gewählten Vorlage und jeden, den man im Chat nennt („Skill olaf-email-templates“,
+  `/olaf-email-templates` oder in Backticks) — die Zuschaltung bleibt für die Unterhaltung. `BRIDGE_SKILLS=all` schaltet zurück.
+- **Deine Claude-Sitzungen** (Einrichtung): Status je Unterhaltung — läuft / wartet auf „ja“ / bereit — mit Link zum Fortsetzen.
+- **Die Sitzung bekommt keine Werkbank-Geheimnisse** in ihre Umgebung (vorher erbte sie `.env.local`).
+
+## Such-Werkzeug `vault-search`
+
+Kleiner MCP-Server (stdio, nur lesend, ohne Abhängigkeiten): `web/mcp/vault-search.ts`. Sucht im
+Meilisearch-Index der Werkbank (Tippfehler-tolerant) und fällt ohne Meilisearch/Schlüssel auf eine Suche im
+Dateisystem zurück (ebenfalls mit Tippfehler-Toleranz). Der Index bleibt frisch: Web-App beobachtet `/vault`
+(20 s gebündelt) + alle 10 Minuten + bei `werkbank.sh up|update`.
+
+| Werkzeug | Was |
+|---|---|
+| `search` | Volltext; Filter `folder`, `team`, `topic` (Domäne unter `2-Areas` oder Roadmap-Thema), `state` (Roadmap-Zustand oder `status`), `type`, `status`, `tags`, `fields` (Frontmatter), `modified_since`; liefert Treffer mit kurzem Ausschnitt, nicht ganze Dateien |
+| `outline` | Frontmatter + Gliederung (Überschriften mit Länge) — die billige Mittelstufe |
+| `read_note` | Frontmatter geparst, Wikilinks aufgelöst, Inhalt; `section` = nur ein Abschnitt, `max_chars` (Vorgabe 12 000) |
+| `backlinks`, `links`, `list_folder`, `recent` | Verlinkung, Ordner, zuletzt geändert |
+
+### Such-Werkzeug auch in Claude Code nutzen
+
+Nicht eingerichtet — wer es im eigenen Claude Code (Terminal) will, führt einmal aus:
+
+```bash
+claude mcp add --scope user vault-search -- node /home/knut/work/werkbank-dev/web/mcp/vault-search.ts
+```
+
+Der Server liest den Meilisearch-Schlüssel selbst aus `.env.local` des Werkbank-Repos (er landet also nicht in
+`~/.claude.json`); ohne ihn sucht er im Dateisystem. Entfernen: `claude mcp remove --scope user vault-search`.
+
+## Kontext-Paket und Token-Sparsamkeit
+
+Jede **neue** Werkbank-Sitzung bekommt am Ende des System-Prompts ein kurzes Paket (Stufe „Index“ der
+schrittweisen Offenlegung — Details holt Claude selbst über `vault-search`/Jira):
+
+- deine PM-Tickets (Zahlen + die nächsten 3 Fälligkeiten), Sprint-Ziel und deine S-Zeilen (sonst die ersten 3),
+- Roadmap-Hub (Stand + „In Arbeit / Als nächstes“), offene Fragen (Anzahl + Top 3), PR-Register (Überschriften),
+  Daily Debrief von heute (Überschrift + Pfad),
+- **Vault-Karte:** die wichtigsten Notizen als `[[Basename]]`, gerankt nach Verlinkung (Backlinks) und Nähe zu
+  deinem Sprint und dem Roadmap-Hub, gefüllt bis ~260 Tokens,
+- nur zu Tagesbeginn/Tagesabschluss: höchstens 3 Pflegefragen (am Ende, damit der Rest des Präfixes stabil bleibt).
+
+Regeln: **Obergrenze 1 500 Tokens** (geschätzt), jenseits der Top 3 nur Zahlen, **keine Kundendaten** (nur
+Überschriften, Zahlen, Pfade); **neu erzeugt nur, wenn sich Eingaben ändern** (Hash über mtime/Größe der Quellen
++ Jira-Stand; innerhalb des Tages bytegleich → Prompt-Cache greift); fortgesetzte Sitzungen bekommen es nicht noch einmal.
+
+**Gemessen** (Seite Einrichtung → „Kontext für Claude“; je Sitzung ohne Inhalt in `werkbank.context_log`):
+
+| Fester Teil je Sitzung | vorher | jetzt |
+|---|---|---|
+| Skill-Liste (nur `~/.claude/skills`, geschätzt) | ~7 600 Tokens (49 Skills; mit Plugins waren es 222 Skills, also deutlich mehr) | ~2 200 Tokens (13 Kern-Skills) |
+| Kontext-Paket (Knut, echte Daten) | — | ~700 Tokens |
+| eigene MCP-Werkzeuge (vault-search + werkbank) | — | ~970 Tokens, per Tool Search (`ENABLE_TOOL_SEARCH=auto`) erst bei Bedarf |
+
+Nach dem ersten Zug jeder neuen Sitzung fragt die Brücke Claude Codes eigene Aufteilung ab
+(`getContextUsage`, Stufe „summary“, ohne Extra-Aufruf) und legt sie daneben: gesamt, Werkzeuge, Skills,
+zurückgestellte Werkzeuge. Das passiert erst mit echtem Claude — hier im Pilot noch nicht gelaufen.
+
+### Kontext-Paket auch in Claude Code (Terminal) nutzen
+
+Nicht eingerichtet — wer es will, ergänzt in `~/.claude/settings.json` einen SessionStart-Hook:
+
+```json
+{ "hooks": { "SessionStart": [ { "hooks": [ { "type": "command",
+  "command": "node /home/knut/work/werkbank-dev/web/server/context-cli.ts knut.peters@maxenergy.at" } ] } ] } }
+```
+
+Der Befehl druckt nur das Paket (lesend, gleicher Zwischenspeicher-Hash, keine Pflegefragen).
+
+
 
 ## Umgebung der Claude-Sitzungen (Pilot)
 
@@ -237,8 +354,8 @@ Die Web-App führt beim ersten Aufruf durch vier Schritte (Seite **Einrichtung**
 ## Tests
 
 ```bash
-scripts/werkbank.sh test   # Brücke (10) + Web-App (29), ohne echte Konten, ohne /vault zu ändern
-scripts/werkbank.sh e2e    # Playwright, ca. 1 Minute
+scripts/werkbank.sh test   # Brücke (14) + Web-App (48), ohne echte Konten, ohne /vault zu ändern
+scripts/werkbank.sh e2e    # Playwright, 18 Schritte, ca. 1–2 Minuten
 ```
 
 - **Parser** (`web/test/parsers.test.ts`): Frontmatter, Wikilinks, Backlinks, Darstellung (Callouts,
@@ -250,10 +367,21 @@ scripts/werkbank.sh e2e    # Playwright, ca. 1 Minute
 - **API Ende-zu-Ende** (`api.test.ts`): Login/Freigabe, CSRF, Token-Speicherung, Board-Sync und Filter,
   Bestätigungspfade (Vorschau schreibt nie), Agent-Lauf, Antworten mit Konfliktschutz, Sprint-Sync mit
   ✓-Markierung, neuer Zyklus, Skills, Dateien (Typen, Teilen, fremder Zugriff), geteilte Chats und Kopie.
-- **Brücke** (`claude-bridge/test`): zusätzlich Anhänge, Nur-lesen-Modus, Vorlagen-Vorgabe.
+- **Brücke** (`claude-bridge/test`): zusätzlich Anhänge, Nur-lesen-Modus, Vorlagen-Vorgabe, Kontext-Paket nur
+  für neue Sitzungen, Skills-Auswahl und Zuschaltung, Einordnung der neuen Werkzeuge, Sitzungsstatus.
+- **Hygiene + Kontext** (`assist.test.ts`): alle Regeln auf Fixtures, Identität über den Namen, Tagesbeginn/
+  Tagesabschluss/„später“/höchstens 3, Wiener Datum, Antwort → Aktion, Paket-Inhalt und Obergrenze, Cache-Schlüssel,
+  Vault-Karte unter Budget.
+- **MCP** (`mcp.test.ts`): Protokoll, Suche mit Tippfehler und allen Filtern, outline/section, read_note, Links, Ordner.
+- **API** zusätzlich: eine Anmeldung über LibreChats Cookie (gültig/gefälscht/nicht freigeschaltet), interne
+  Schnittstelle nur mit Token, Pflegefragen nur zu Tagesbeginn, Messung, Hygiene-Antwort, Board-Filter,
+  `jira_update` nur auf bestehende Tickets, Nachfrage an den Board-Agenten, forge-Platzhalter.
 - **Playwright** (`web/e2e/smoke.mjs`): alle Seiten mit zwei Testkonten, dazu echt durch LibreChat:
   Anhang erreicht die Sitzung, Vorlage gibt ihre Vorgabe weiter, Chat teilen nur mit dem Teammate
-  (anonym 401), Kopie weiterführen, Freigaben zurücknehmen. Bilder unter `.runtime/e2e/web/`.
+  (anonym 401), Kopie weiterführen, Freigaben zurücknehmen, Kontext-Paket erreicht die Sitzung, **alle sechs
+  Werkbank-Seiten in LibreChats Leiste** (eine Anmeldung, Adresszeile übersteht Neuladen, Dunkel folgt dem Chat).
+  Dafür gibt `e2e` die Testkonten für die Dauer auch auf 3070 frei (`werkbank.sh restart-web`) und setzt es
+  danach zurück. Bilder unter `.runtime/e2e/web/`.
 
 **Was dabei ersetzt ist:** Jira (lokaler Nachbau), Claude (Brücke im Mock-Modus — `e2e` schaltet sie für
 die Dauer um und danach zurück), der Vault (Kopie von `web/test/fixtures/vault`). Die Testkonten und alles,
@@ -277,7 +405,7 @@ was an ihnen hängt, werden danach gelöscht.
 
 ## Bekannte Grenzen
 
-- Web-App und Chat haben **getrennte Sitzungen** (zwei Subdomains) — einmal in jeder anmelden, gleiche Zugangsdaten.
+- Direkt auf 3070 braucht die Web-App ein eigenes Login; in LibreChats Leiste nicht.
 - Board-Schreibaktionen gehen nur mit einem eigenen Jira-Token mit `write:jira-work`; sonst Fehlermeldung
   mit Hinweis, und der Weg über den Chat (Atlassian-MCP, Rückfrage) bleibt.
 - Die Jira-Kopie ist für alle Werkbank-Konten gleich (gelesen mit dem Zugang des Pilot-Kontos bzw. der klickenden Person).
@@ -286,6 +414,26 @@ was an ihnen hängt, werden danach gelöscht.
 - Bash-Befehle brauchen im Chat immer ein „ja“, auch rein lesende.
 - Die Pilot-Sitzungen haben Knuts Rechte auf der VM (Dateien, Hooks, Gedächtnis, Jira).
 - Hochgeladene Dateien: kein Virenscan (siehe oben).
+
+## Forschung: was aus anderen Repos übernommen wurde
+
+| Idee | Quelle | Stand |
+|---|---|---|
+| Rang-Karte unter festem Budget (PageRank-artig, Bezug zur Unterhaltung) | aider (repo map) | **gebaut** — Vault-Karte im Kontext-Paket: Backlinks + Nähe zu Sprint/Roadmap, ~260 Tokens |
+| Schrittweise Offenlegung: Index → Zusammenfassung → Volltext | claude-mem, centminmod/my-claude-code-setup | **gebaut** — Paket = Index, `outline` = Mitte, `read_note`/`section` = Volltext |
+| Skills je Vorlage statt aller | pmcp-Gateway-Befund, Claude Code | **gebaut** — Kern + Vorlage + Nennung; alle anderen findet Claude über das Werkzeug `skills_list` (Name + eine Zeile) |
+| MCP-Werkzeuge erst bei Bedarf (Tool Search, zurückgestellte Schemas) | Claude Code Tool Search, pmcp | **gebaut, ungeprüft** — `ENABLE_TOOL_SEARCH=auto`; Wirkung zeigt erst die echte Messung |
+| Ausschnitte statt ganzer Dateien | zilliztech/claude-context, basic-memory, Smart Connections | **gebaut** — `search` mit Ausschnitt, `read_note` mit `section`/`max_chars` |
+| Hybride Suche mit Embeddings | zilliztech/claude-context, Smart Connections | **zurückgestellt** — bräuchte einen zweiten Anbieter oder ein lokales Modell; Knut: Vault-Inhalte nur zu Claude. Meilisearch (Stichwort + Tippfehler) reicht vorerst |
+| Stabiles Präfix für Prompt-Caching | Anthropic Prompt-Caching, claude-mem | **gebaut** — Paket tagesstabil, nur bei geänderten Eingaben neu, Pflegefragen am Ende |
+| Token-Messung je Sitzung in der Oberfläche | ooples/token-optimizer-mcp | **gebaut** — Schätzung (Paket, Skills, eigene Werkzeuge) + echte Aufteilung via `getContextUsage` |
+| Gedächtnis über Sitzungen (Beobachtungen komprimieren) | claude-mem | **abgelehnt** — Knuts compartment-Gedächtnis gibt es schon (Nutzer-Ebene); ein zweites wäre Doppelung |
+| Gateway vor allen MCP-Servern | pmcp | **zurückgestellt** — Tool Search deckt das Wichtigste; ein Gateway wäre zusätzliche Infrastruktur |
+| Sitzungsliste und Fortsetzen | CloudCLI (claudecodeui) | **gebaut** — „Deine Claude-Sitzungen“ mit Link zum Fortsetzen |
+| Status „läuft / wartet“ je Agent | coder/agentapi | **gebaut** — läuft / wartet auf ja / bereit; auf Karten „🤖 läuft“ |
+| Agent auf Karte, Ergebnis an der Karte, Nachfrage in derselben Sitzung | Vibe Kanban, kandev | **gebaut** — Agent ansetzen (nur lesend), Verlauf, Entwurf, Nachfrage setzt fort |
+| Eigener Worktree je Karten-Agent | kandev, Vibe Kanban | **abgelehnt** — Board-Agenten ändern keinen Code (nur lesend); Code-Arbeit bleibt im Chat mit Rückfrage |
+| PR-Review am Board und im Chat | forge | **Platzhalter** — `forge-review` wird von ~/work/forge geliefert; Brücke bindet ihn an, sobald `WERKBANK_FORGE_MCP` gesetzt ist (Posten nach GitHub bleibt gesperrt), Board-Aktion „Review PR“ bis dahin deaktiviert |
 
 ## Offene Entscheidungen
 
@@ -305,8 +453,8 @@ was an ihnen hängt, werden danach gelöscht.
 4. **Darf ein geteilter Chat weitergeführt werden?** Umgesetzt als „Als Kopie weiterführen“ — neuer Chat mit
    dem eigenen Claude, Verlauf als Datei. *Empfehlung:* so lassen; nie die Sitzung der teilenden Person fortsetzen.
    - Knut:
-5. **Eine Anmeldung für Chat und Werkbank.** Heute zwei Sitzungen (zwei Coder-Subdomains). *Empfehlung:* im
-   Pilot so lassen; im Team-Workspace beide hinter einer Domain (Pfad-Proxy) oder per OIDC anbinden.
+5. **Eine Anmeldung für Chat und Werkbank.** Umgesetzt als Pfad-Proxy: in LibreChats Leiste gilt die Chat-Anmeldung
+   (Refresh-Cookie), direkt auf 3070 bleibt das eigene Login. *Empfehlung:* so lassen; 3070 später nur noch für Health/Debug.
    - Knut:
 6. **Alten Sprint-Zyklus beim Anlegen archivieren?** *Empfehlung:* nein, nicht automatisch — die Runde
    verschiebt den Ordner im Chat (Skill: als Einheit nach `4-Archive/`, nicht per `mv`), die Werkbank legt nur an.
@@ -321,3 +469,15 @@ was an ihnen hängt, werden danach gelöscht.
 9. **Aufbewahrung geteilter Dateien.** Derzeit unbegrenzt bis zum Löschen. *Empfehlung:* Dateien mit
    „Personendaten“ nach 90 Tagen automatisch löschen (mit Hinweis vorher).
    - Knut:
+10. **Skill-Kern.** 13 Skills in `claude-bridge/skills-core.json` (inno-vault, olaf-jira, maxenergy-jira, olaf-jira-sync,
+    olaf-sprint-planning, olaf-produkt-roadmap, plan-to-pr, grilling, council, ponytail, olaf-service-cases,
+    olaf-service-textbausteine, konekto-team-secrets). *Empfehlung:* nach einer Woche echter Nutzung mit den
+    gemessenen Zahlen nachschärfen.
+    - Knut:
+11. **Uhrzeit des Tagesabschlusses.** Vorgabe 16 Uhr (Wien), je Person gleich. *Empfehlung:* so lassen; bei Bedarf
+    je Person einstellbar machen.
+    - Knut:
+12. **Pflegefragen auch ohne eigenen Jira-Schreibzugang?** Heute wird gefragt; ohne Schreib-Token scheitert
+    das Schreiben mit Hinweis. *Empfehlung:* nur fragen, wenn ein Schreibzugang hinterlegt ist, sonst nur die
+    Badges zeigen.
+    - Knut:

@@ -8,6 +8,11 @@
 // Umgebung (von der Brücke gesetzt): WERKBANK_URL, WERKBANK_INTERNAL_TOKEN, WERKBANK_USER_ID.
 
 import { serve } from './stdio.ts';
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+
+const SKILLS_DIR = process.env.BRIDGE_SKILLS_DIR || join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'skills');
 
 const URL_ = process.env.WERKBANK_URL || 'http://127.0.0.1:3070';
 const TOKEN = process.env.WERKBANK_INTERNAL_TOKEN || '';
@@ -38,6 +43,22 @@ serve('werkbank', '0.1.0', [
     description: 'Hygiene-Punkt für heute auf „später“ setzen (wird heute nicht mehr gefragt).',
     inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
     run: async (a: any) => { await call('/internal/hygiene-snooze', { key: a.key }); return `${a.key}: heute nicht mehr nachfragen.`; },
+  },
+  {
+    name: 'skills_list',
+    description: 'Alle verfügbaren Skills (Name + eine Zeile). In dieser Sitzung ist nur ein Kern aktiv; nennt die Person einen Skill („Skill <name>“), ist er ab der nächsten Nachricht zugeschaltet. SKILL.md liegt unter dem angegebenen Pfad.',
+    inputSchema: { type: 'object', properties: { filter: { type: 'string' } } },
+    run: async (a: any) => {
+      const rows: string[] = [];
+      for (const n of readdirSync(SKILLS_DIR).sort()) {
+        const f = join(SKILLS_DIR, n, 'SKILL.md');
+        if (!existsSync(f)) continue;
+        const d = (readFileSync(f, 'utf8').match(/^description:\s*(.+)$/m)?.[1] ?? '').replace(/^["']|["']$/g, '');
+        const line = `- ${n}: ${d.length > 140 ? d.slice(0, 139) + '…' : d}`;
+        if (!a.filter || line.toLowerCase().includes(String(a.filter).toLowerCase())) rows.push(line);
+      }
+      return `${rows.length} Skills (Pfad: ${SKILLS_DIR}/<name>/SKILL.md):\n${rows.join('\n')}`;
+    },
   },
   {
     name: 'jira_update',

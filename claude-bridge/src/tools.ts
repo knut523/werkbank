@@ -42,7 +42,7 @@ export function classify(tool: string, input: Record<string, unknown>): { cls: T
     const [, server, name = ''] = tool.split('__');
     // Eigene Werkbank-Werkzeuge: vault-search nur lesend; "später" ändert nur Werkbank-Zustand.
     if (server === 'vault-search') return { cls: 'read' };
-    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze')) return { cls: 'read' };
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list')) return { cls: 'read' };
     if (server === 'werkbank' && name === 'jira_update') return { cls: 'confirm' };
     // forge-review (Platzhalter): Review rechnen/lesen frei; nach GitHub posten ist wie alles GitHub-Schreiben
     // im Pilot gesperrt (Ergebnis bleibt Entwurf), mergen nie.
