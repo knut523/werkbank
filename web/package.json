@@ -1,0 +1,27 @@
+{
+  "name": "werkbank-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OLAF-Werkbank: Einrichtung, Wissen, Board, Sprint, Skills, Dateien (Port 3070)",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "start": "node server/main.ts",
+    "test": "node --test test/*.test.ts",
+    "e2e": "node e2e/smoke.mjs"
+  },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "markdown-it": "14.1.0",
+    "mongodb": "6.20.0",
+    "yaml": "2.8.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "5.0.4",
+    "playwright": "1.62.1",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "vite": "7.1.9"
+  }
+}

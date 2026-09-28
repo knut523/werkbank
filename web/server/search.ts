@@ -1,0 +1,92 @@
+// Volltextsuche über den Vault mit dem Meilisearch, das LibreChat ohnehin nutzt (eigener Index).
+// Nur lesend: Notizen werden gelesen und indiziert, nie verändert. Neu indiziert wird, was sich
+// seit dem letzten Lauf geändert hat (mtime), gelöschte Notizen fallen heraus.
+
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { cfg } from './config.ts';
+import { parseFrontmatter, type VaultIndex } from './vault.ts';
+
+const idOf = (path: string) => createHash('sha1').update(path).digest('hex');
+
+async function meili(method: string, path: string, body?: unknown): Promise<any> {
+  const r = await fetch(cfg.meiliHost + path, {
+    method,
+    headers: { authorization: `Bearer ${cfg.meiliKey}`, 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!r.ok && r.status !== 404) throw new Error(`Meilisearch ${r.status}`);
+  return r.status === 404 ? null : r.json();
+}
+
+let known = new Map<string, number>();   // path → mtime im Index
+let ready = false;
+export const searchState = { lastRun: 0, docs: 0, error: '' as string };
+
+export async function ensureIndex() {
+  if (ready) return;
+  await meili('POST', '/indexes', { uid: cfg.meiliIndex, primaryKey: 'id' });
+  await meili('PATCH', `/indexes/${cfg.meiliIndex}/settings`, {
+    searchableAttributes: ['title', 'name', 'aliases', 'tags', 'path', 'body'],
+    filterableAttributes: ['team', 'type', 'status', 'folder'],
+    displayedAttributes: ['*'],
+  });
+  ready = true;
+}
+
+export async function reindex(idx: VaultIndex, full = false): Promise<{ added: number; removed: number }> {
+  try {
+    await ensureIndex();
+    if (full || known.size === 0) {
+      // Bestand aus Meilisearch holen, damit ein Neustart nicht alles neu schickt.
+      known = new Map();
+      for (let offset = 0; ; offset += 1000) {
+        const r = await meili('GET', `/indexes/${cfg.meiliIndex}/documents?limit=1000&offset=${offset}&fields=path,mtime`);
+        for (const d of r?.results ?? []) known.set(d.path, d.mtime);
+        if (!r || (r.results ?? []).length < 1000) break;
+      }
+    }
+    const docs = [];
+    for (const n of idx.notes.values()) {
+      if (known.get(n.path) === n.mtime) continue;
+      let body = '';
+      try { body = parseFrontmatter(readFileSync(join(idx.root, n.path), 'utf8')).body; } catch { continue; }
+      docs.push({
+        id: idOf(n.path), path: n.path, name: n.name, title: n.title, team: n.team || 'wurzel',
+        folder: n.path.split('/').slice(0, 2).join('/'),
+        type: typeof n.fm.type === 'string' ? n.fm.type : '', status: typeof n.fm.status === 'string' ? n.fm.status : '',
+        tags: Array.isArray(n.fm.tags) ? n.fm.tags.map(String) : [],
+        aliases: Array.isArray(n.fm.aliases) ? n.fm.aliases.map(String) : [],
+        body: body.replace(/<!--[\s\S]*?-->/g, '').slice(0, 60_000), mtime: n.mtime,
+      });
+    }
+    for (let i = 0; i < docs.length; i += 200) await meili('POST', `/indexes/${cfg.meiliIndex}/documents`, docs.slice(i, i + 200));
+    for (const d of docs) known.set(d.path, d.mtime);
+    const gone = [...known.keys()].filter((p) => !idx.notes.has(p));
+    if (gone.length) await meili('POST', `/indexes/${cfg.meiliIndex}/documents/delete-batch`, gone.map(idOf));
+    for (const p of gone) known.delete(p);
+    Object.assign(searchState, { lastRun: Date.now(), docs: known.size, error: '' });
+    return { added: docs.length, removed: gone.length };
+  } catch (e: any) {
+    searchState.error = String(e.message ?? e);
+    throw e;
+  }
+}
+
+export async function search(q: string, opts: { team?: string; limit?: number } = {}) {
+  await ensureIndex();
+  const r = await meili('POST', `/indexes/${cfg.meiliIndex}/search`, {
+    q, limit: opts.limit ?? 30,
+    filter: opts.team ? `team = "${opts.team.replace(/"/g, '')}"` : undefined,
+    attributesToCrop: ['body'], cropLength: 28, attributesToHighlight: ['title', 'body'],
+    highlightPreTag: '\u0001', highlightPostTag: '\u0002',
+    attributesToRetrieve: ['path', 'title', 'team', 'type', 'status'],
+    showMatchesPosition: false,
+  });
+  return (r?.hits ?? []).map((h: any) => ({
+    path: h.path, title: h.title, team: h.team, type: h.type, status: h.status,
+    snippet: String(h._formatted?.body ?? '').replace(/\s+/g, ' ').slice(0, 300),
+  }));
+}
