@@ -38,6 +38,7 @@ interface Live {
   usage: { input: number; output: number };
   turnTimer: NodeJS.Timeout | null;
   confirmChain: Promise<unknown>;
+  readonly: boolean;
 }
 
 const cfg = {
@@ -74,6 +75,12 @@ const userLive = new Map<string, string>();  // Nutzer → Unterhaltung mit lauf
 
 export function stats() {
   return { live: lives.size, pending: [...lives.values()].filter(l => l.pending).length, sessions: Object.keys(sessionMap).length };
+}
+
+export function scratchFor(userId: string): string {
+  const dir = join(cfg.stateDir, 'scratch', safeId(userId));
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 export function safeId(s: string): string {
@@ -197,6 +204,10 @@ function makeGuard(live: Live) {
       emitStatus(live, `⛔ Gesperrt im Pilot: ${why}`);
       return decide('deny', `Im OLAF-Werkbank-Pilot gesperrt (${why}). Nicht erneut versuchen; sag der Person, dass sie das selbst im Terminal tun muss.`);
     }
+    if (live.readonly) {
+      emitStatus(live, `🔒 Nur lesen (Board-Agent): ${statusLine(tool, toolInput)} nicht ausgeführt`);
+      return decide('deny', 'Dieser Lauf ist nur lesend (vom Werkbank-Board gestartet). Nichts schreiben; schreib stattdessen auf, was zu tun wäre.');
+    }
     // confirm: Rückfrage stellen, Antwort schließen, auf die nächste Nachricht warten.
     // Parallele Schreibaufrufe werden nacheinander abgefragt.
     const run = live.confirmChain.then(() => confirm(tool, toolInput));
@@ -245,6 +256,8 @@ export interface TurnRequest {
   model?: string;
   sink: Sink;
   query: QueryFn;
+  readonly?: boolean;      // Board-Agent: Schreibwerkzeuge ohne Rückfrage ablehnen
+  instructions?: string;   // System-Vorgabe der Vorlage (LibreChat promptPrefix), gilt ab Sitzungsbeginn
 }
 
 /** Führt eine Nachricht aus. Kehrt zurück, sobald die HTTP-Antwort geschlossen werden kann. */
@@ -285,17 +298,18 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const live: Live = {
     key, userId: req.userId, abort: new AbortController(), sink: null, buffer: [], pending: null,
     lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
+    readonly: !!req.readonly,
   };
   lives.set(key, live);
   userLive.set(req.userId, key);
   attach(live, req.sink);
 
-  const scratch = join(cfg.stateDir, 'scratch', safeId(req.userId));
-  mkdirSync(scratch, { recursive: true });
+  const scratch = scratchFor(req.userId);
   const resume = sessionMap[key];
-  const prompt = !resume && req.history
+  let prompt = !resume && req.history
     ? `Bisheriger Verlauf dieser Unterhaltung (aus der Chat-Oberfläche, zur Orientierung):\n\n${req.history}\n\n---\n\nNeue Nachricht:\n${req.prompt}`
     : req.prompt;
+  if (!resume && req.instructions) prompt = `Vorgabe für diesen Chat (aus der gewählten Vorlage):\n${req.instructions}\n\n---\n\n${prompt}`;
 
   const env: Record<string, string | undefined> = { ...process.env };
   for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL']) delete env[k];

@@ -2,17 +2,18 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classify, parseAnswer } from '../src/tools.ts';
 
 const PORT = 3098;
 let proc: ChildProcess;
+const STATE = mkdtempSync(join(tmpdir(), 'bridge-'));
 
 before(async () => {
   proc = spawn(process.execPath, ['src/server.ts'], {
-    env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: mkdtempSync(join(tmpdir(), 'bridge-')) },
+    env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE },
     stdio: 'ignore',
   });
   for (let i = 0; i < 50; i++) {
@@ -23,14 +24,14 @@ before(async () => {
 });
 after(() => proc.kill());
 
-async function send(conv: string, content: string, opts: { user?: string; model?: string; token?: string } = {}) {
+async function send(conv: string, content: unknown, opts: { user?: string; model?: string; token?: string; headers?: Record<string, string>; system?: string } = {}) {
   const res = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${opts.token ?? 'mock-token'}`, 'content-type': 'application/json',
-      'x-librechat-user-id': opts.user ?? 'u1', 'x-librechat-conversation-id': conv,
+      'x-librechat-user-id': opts.user ?? 'u1', 'x-librechat-conversation-id': conv, ...(opts.headers ?? {}),
     },
-    body: JSON.stringify({ model: opts.model ?? 'claude-code', stream: true, messages: [{ role: 'user', content }] }),
+    body: JSON.stringify({ model: opts.model ?? 'claude-code', stream: true, messages: [...(opts.system ? [{ role: 'system', content: opts.system }] : []), { role: 'user', content }] }),
   });
   assert.equal(res.status, 200);
   const raw = await res.text();
@@ -93,4 +94,31 @@ test('Einordnung der Werkzeuge', () => {
   assert.equal(parseAnswer('Ja.'), 'yes');
   assert.equal(parseAnswer('nein'), 'no');
   assert.equal(parseAnswer('lieber in einen anderen Ordner'), 'other');
+});
+
+test('Anhänge landen im Arbeitsverzeichnis der Sitzung', async () => {
+  const pdf = Buffer.from('%PDF-1.4 Mock').toString('base64');
+  const a = await send('c6', [
+    { type: 'text', text: 'Was steht in der Datei?' },
+    { type: 'file', file: { filename: '../../Rechnung Mai.pdf', file_data: `data:application/pdf;base64,${pdf}` } },
+    { type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from('png').toString('base64')}` } },
+    { type: 'file', file: { filename: 'boese.sh', file_data: `data:text/x-sh;base64,${Buffer.from('rm -rf /').toString('base64')}` } },
+  ], { user: 'u6' });
+  assert.match(a, /anhaenge\/c6\/Rechnung Mai\.pdf ✓/);
+  assert.match(a, /anhaenge\/c6\/anhang-2\.png ✓/);
+  assert.ok(existsSync(join(STATE, 'scratch', 'u6', 'anhaenge', 'c6', 'Rechnung Mai.pdf')));
+  assert.ok(!existsSync(join(STATE, 'scratch', 'u6', 'anhaenge', 'c6', 'boese.sh')), 'nicht erlaubter Typ wird nicht abgelegt');
+  assert.equal(statSync(join(STATE, 'scratch', 'u6', 'anhaenge', 'c6', 'Rechnung Mai.pdf')).mode & 0o777, 0o600);
+});
+
+test('Nur-lesen-Modus (Board-Agent) lehnt Schreiben ohne Rückfrage ab', async () => {
+  const a = await send('c7', 'schreib eine Notiz', { user: 'u7', headers: { 'x-werkbank-mode': 'readonly' } });
+  assert.match(a, /Nur lesen/);
+  assert.match(a, /schreibe nichts/);
+  assert.doesNotMatch(a, /Soll ich/);
+});
+
+test('Vorgabe der Vorlage (System-Nachricht) erreicht die neue Sitzung', async () => {
+  const a = await send('c8', 'Los geht es', { user: 'u8', system: 'Nutze den Skill `plan-to-pr`.' });
+  assert.match(a, /Vorlage erkannt/);
 });

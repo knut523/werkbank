@@ -9,7 +9,8 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
-import { handleTurn, stats, type Sink } from './sessions.ts';
+import { handleTurn, stats, scratchFor, type Sink } from './sessions.ts';
+import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
 import { mockQuery } from './mock.ts';
 import { log } from './log.ts';
 
@@ -160,13 +161,24 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
   }
 
   const lastUserIdx = messages.map((m) => m.role).lastIndexOf('user');
-  const prompt = lastUserIdx >= 0 ? textOf(messages[lastUserIdx].content).trim() : '';
-  if (!prompt) { sink.write('Leere Nachricht.'); return sink.finish(); }
+  let prompt = lastUserIdx >= 0 ? textOf(messages[lastUserIdx].content).trim() : '';
+  const atts = lastUserIdx >= 0 ? extractAttachments(messages[lastUserIdx].content) : [];
+  if (!prompt && !atts.length) { sink.write('Leere Nachricht.'); return sink.finish(); }
 
   const tokenHash = createHash('sha256').update(token).digest('hex').slice(0, 16);
   const userId = header(req, 'x-librechat-user-id') ?? `t-${tokenHash}`;
   const firstUser = textOf(messages.find((m) => m.role === 'user')?.content);
   const convId = header(req, 'x-librechat-conversation-id') ?? `h-${createHash('sha256').update(firstUser).digest('hex').slice(0, 24)}`;
+
+  // Anhänge ins Arbeitsverzeichnis der Person legen und im Prompt nennen.
+  if (atts.length) {
+    const { saved, rejected } = saveAttachments(scratchFor(userId), convId, atts);
+    log('attachments', { user: userId, saved: saved.length, rejected: rejected.length });
+    prompt = (prompt || 'Sieh dir bitte die angehängten Dateien an.') + '\n' + attachmentNote(saved, rejected);
+  }
+  // Vorgabe der gewählten Vorlage (LibreChat schickt promptPrefix als System-Nachricht).
+  const instructions = messages.filter((m) => m.role === 'system' || m.role === 'developer').map((m) => textOf(m.content)).join('\n\n').trim().slice(0, 8000);
+  const readonly = header(req, 'x-werkbank-mode') === 'readonly';
 
   const history = messages.slice(0, lastUserIdx)
     .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -174,7 +186,7 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
     .join('\n\n')
     .slice(-30000);
 
-  await handleTurn({ userId, convId, token, prompt, history, model: MODELS[model], sink, query: query as any });
+  await handleTurn({ userId, convId, token, prompt, history, model: MODELS[model], sink, query: query as any, readonly, instructions: instructions || undefined });
 }
 
 const server = createServer(async (req, res) => {

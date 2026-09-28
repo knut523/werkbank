@@ -24,7 +24,15 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
 
   async function* run() {
     yield { type: 'system', subtype: 'init', session_id };
-    const last = prompt.split('\n').pop() ?? '';
+    const lines = prompt.split('\n');
+    const anh = lines.filter((l) => /^- anhaenge\//.test(l)).map((l) => l.slice(2).split(' (')[0]);
+    const last = [...lines].reverse().find((l) => l.trim() && !/^- anhaenge\//.test(l) && !/^(---|Angehängte Dateien)/.test(l)) ?? '';
+    if (/^Vorgabe für diesen Chat/.test(prompt)) yield text('(Mock) Vorlage erkannt. ');
+    if (anh.length) {
+      const { existsSync } = await import('node:fs');
+      const { join } = await import('node:path');
+      yield text(`(Mock) Anhänge im Arbeitsverzeichnis: ${anh.map((a) => a + (existsSync(join(options.cwd ?? '.', a)) ? ' ✓' : ' ✗')).join(', ')}. `);
+    }
     yield toolUse('Grep', { pattern: last.slice(0, 40), path: VAULT_DIR });
     await sleep(50);
     const words = `(Mock, kein Claude-Aufruf${options.resume ? ', Sitzung fortgesetzt' : ''}) Du hast geschrieben: ${last}`.split(/(?<= )/);
