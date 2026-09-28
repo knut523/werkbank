@@ -51,7 +51,7 @@ async function sessionContext(userId: string, convId: string, eod: boolean, skil
   if (!INTERNAL) return '';
   const r = await fetch(`${WEB_URL}/internal/session-start`, {
     method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL },
-    body: JSON.stringify({ userId, conv: convId, eod, skills }), signal: AbortSignal.timeout(4000),
+    body: JSON.stringify({ userId, conv: convId, eod, skills }), signal: AbortSignal.timeout(10_000),
   });
   if (!r.ok) throw new Error(`Werkbank ${r.status}`);
   const j: any = await r.json();

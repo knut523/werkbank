@@ -124,7 +124,7 @@ export async function jiraStatus(u: User) {
 export async function jiraIdentity(u: User): Promise<{ accountId?: string | null; displayName?: string | null; name: string }> {
   const key = `jira_identity:${u.id}`;
   const m: any = await wb().collection('meta').findOne({ _id: key as any });
-  if (m && Date.now() - new Date(m.at).getTime() < 864e5) return { accountId: m.accountId, displayName: m.displayName, name: u.name };
+  if (m && Date.now() - new Date(m.at).getTime() < (m.failed ? 36e5 : 864e5)) return { accountId: m.accountId ?? null, displayName: m.displayName ?? u.name, name: u.name };
   if (!cfg.demo) {
     try {
       const c = await jiraCreds(u);
@@ -134,7 +134,10 @@ export async function jiraIdentity(u: User): Promise<{ accountId?: string | null
         await wb().collection('meta').updateOne({ _id: key as any }, { $set: { accountId: me.accountId, displayName: me.displayName, at: new Date() } }, { upsert: true });
         return { accountId: me.accountId, displayName: me.displayName, name: u.name };
       }
-    } catch { /* ohne Jira: über den Namen */ }
+    } catch {
+      // ohne /myself (z. B. Lesetoken ohne read:jira-user): über den Namen; eine Stunde nicht erneut versuchen
+      await wb().collection('meta').updateOne({ _id: key as any }, { $set: { failed: true, at: new Date() }, $unset: { accountId: '' } }, { upsert: true });
+    }
   }
   return { name: u.name, displayName: u.name };
 }
