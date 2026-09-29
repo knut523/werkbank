@@ -555,7 +555,7 @@ Knut: „auch instant update des board wenn etwas geändert geschrieben wird mit
   Atlassian-OAuth-Anmeldung im Klartext-Format von Claude Code (`.credentials.json`, 0600), wie `~/.claude` auch.
   Alle Verzeichnisse gehören dem Unix-Nutzer der VM; gegeneinander abgeschottet sind sie erst mit eigenen Unix-Nutzern.
 - In Werkbank-Sitzungen laufen keine Hooks der Nutzer-Konfiguration mehr — damit gehen auch keine Werkbank-Verläufe
-  mehr über Knuts Stop-Hook an knut-agent-memory (vorher: ja, bei jeder Sitzung).
+  mehr über Knuts Stop-Hook an knut-agent-memory (vorher: nach jedem Zug die letzten bis zu 40 Nachrichten).
 - Der Live-Strom (`/api/events`) braucht eine Werkbank-Sitzung und trägt nur Ticket-Schlüssel; `/internal/jira-touched`
   nur mit internem Token, nur Schlüssel aus PM, höchstens 10 je Aufruf.
 
@@ -744,8 +744,8 @@ Siehe „Claude-Konfiguration je Person → Einmalig je Person“: eigener `clau
 ### Neu aus Runde 4
 
 1. **R4-1 — Knuts Hooks in Werkbank-Sitzungen.** Sie sind jetzt aus (auch für Knuts geteilte Konfiguration): der
-   SessionStart-Hook kostet ~4,5 s je Sitzung, und der Stop-Hook schickte bisher **jeden Werkbank-Verlauf** an
-   knut-agent-memory (TDAI) — auch Service-Fälle. Die Brücke hat eigene Wächter (Merge/Push gesperrt).
+   SessionStart-Hook kostet ~4,5 s je Sitzung, und der Stop-Hook (`memory-capture.sh`) schickte bisher nach jedem Zug
+   die **letzten bis zu 40 Nachrichten** jeder Werkbank-Sitzung an knut-agent-memory (TDAI) — auch Service-Fälle. Die Brücke hat eigene Wächter (Merge/Push gesperrt).
    *Empfehlung:* aus lassen. Zurück: `BRIDGE_SHARED_USER_HOOKS=on`.
    - Knut:
 2. **R4-2 — Knut selbst auf „je Person“?** Dann gleiche Bedingungen wie das Team (schnellster Start, keine
