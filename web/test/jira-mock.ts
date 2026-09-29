@@ -30,6 +30,9 @@ export function demoIssues() {
     t('PM-267', 'Bill-OCR Phase 1', 'Ongoing', 'Lisa Probe', 'PM-70', null),
     t('PM-340', 'Textbausteine Service', 'Backlog', null, 'PM-73', null),
     t('PM-341', 'Abrechnung Oktober', 'Done', 'Daniela Muster', 'PM-73', '2026-09-20'),
+    t('PM-323', 'Admin-Rolle anlegen', 'Done', 'Knut Peters', 'PM-321', '2026-09-10', 'Sub-task'),
+    t('PM-324', 'Geräteliste importieren', 'To Do', null, 'PM-321', '2026-10-05', 'Sub-task'),
+    { ...t('PM-259', 'Feedback Umfragen holen', 'To Do', 'Daniela Muster', 'PM-73', null, 'Sub-task'), fields: { ...t('PM-259', 'Feedback Umfragen holen', 'To Do', 'Daniela Muster', 'PM-73', null, 'Sub-task').fields, parent: null } },
   ];
 }
 

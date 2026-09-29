@@ -4,7 +4,7 @@
 
 import type { Issue } from './jira.ts';
 
-export type Rule = 'überfällig' | 'ohne Datum' | 'still' | 'Widerspruch' | 'ohne Workstream' | 'Sub-task ohne Owner' | 'heute bearbeitet';
+export type Rule = 'überfällig' | 'ohne Datum' | 'still' | 'Widerspruch' | 'ohne Workstream' | 'Sub-task ohne Parent' | 'Sub-task ohne Owner' | 'heute bearbeitet';
 
 export interface HygieneItem {
   key: string;
@@ -78,7 +78,9 @@ export function hygieneFor(all: Issue[], who: Identity, opts: { now?: Date; stal
     if (c && DONE_WORDS.test(c) && !NOT_DONE.test(c)) {
       out.push({ ...base, rule: 'Widerspruch', priority: 2, detail: `letzter Kommentar klingt erledigt, Status ${i.status}`, question: `${i.key}: Der letzte Kommentar klingt erledigt, der Status ist ${i.status} — auf Done setzen?` });
     }
-    if (!i.parent) {
+    if (!i.parent && i.type === 'Sub-task') {
+      out.push({ ...base, rule: 'Sub-task ohne Parent', priority: 4, detail: 'Sub-task ohne Parent (kaputt)', question: `${i.key} („${short(i.summary)}“) ist ein Sub-task ohne Parent-Ticket — unter welches Ticket gehört es (oder in einen Task umwandeln)?` });
+    } else if (!i.parent) {
       out.push({ ...base, rule: 'ohne Workstream', priority: 5, detail: 'hängt an keinem Workstream', question: `${i.key} („${short(i.summary)}“) hängt an keinem Workstream — zu welchem gehört es?` });
     }
   }

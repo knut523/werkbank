@@ -280,17 +280,17 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
   }
   const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [], agent: running.get(i.key) ?? null }));
   const filter = url.searchParams.get('filter') || undefined;
-  const issues = filter === 'pflege' ? annotated.filter((i) => i.hygiene.length || i.type === 'Workstream') : annotated;
+  const issues = annotated;
   const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
   const model = boardModel(issues as Issue[], {
-    owner: url.searchParams.get('owner') || undefined, filter: filter === 'pflege' ? undefined : filter,
+    owner: url.searchParams.get('owner') || undefined, filter,
     q: url.searchParams.get('q') || undefined, showDone: url.searchParams.get('done') === '1',
   });
   const perOwner: Record<string, number> = {};
   for (const i of annotated) if (i.hygiene.length && i.type !== 'Workstream') perOwner[i.assignee ?? '—'] = (perOwner[i.assignee ?? '—'] ?? 0) + 1;
   send(res, 200, {
     ...model,
-    lanes: model.lanes.map((l) => ({ ...l, hygiene: Object.values(l.columns).flat().filter((c: any) => c.hygiene?.length).length })),
+    lanes: model.lanes.map((l) => ({ ...l, hygiene: Object.values(l.columns).flat().reduce((n: number, c: any) => n + (c.hygiene?.length ? 1 : 0) + c.subtasks.filter((x: any) => x.hygiene?.length).length, 0) })),
     hygiene: { perOwner, total: [...hyg.keys()].length },
     sync: sync ? { at: sync.at, by: sync.by, count: sync.count, source: sync.source, error: sync.error, errorAt: sync.errorAt } : null,
     site: cfg.jiraSite,
@@ -309,7 +309,9 @@ on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => 
   if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
   await refreshChatRuns({ key: i.key });
   const runs = await wb().collection('agent_runs').find({ key: i.key }).sort({ startedAt: -1 }).limit(8).toArray();
-  const children = [...im.values()].filter((x) => x.parent === i.key).map((x) => ({ key: x.key, summary: x.summary, status: x.status, assignee: x.assignee }));
+  const hygI = hygieneAll([...im.values()]);
+  const children = [...im.values()].filter((x) => x.parent === i.key).sort((a, b) => a.key.localeCompare(b.key, 'de', { numeric: true }))
+    .map((x) => ({ key: x.key, summary: x.summary, status: x.status, statusCategory: x.statusCategory, assignee: x.assignee, duedate: x.duedate, overdue: isOverdue(x), hygiene: hygI.get(x.key) ?? [] }));
   send(res, 200, {
     issue: i, url: browseUrl(i.key), children, runs,
     parent: i.parent ? { key: i.parent, summary: im.get(i.parent)?.summary ?? i.parentSummary } : null,

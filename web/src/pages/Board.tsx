@@ -5,11 +5,31 @@ import { HygienePanel } from '../components.tsx';
 
 const overdue = (i: any) => i.duedate && i.duedate < today() && i.status !== 'Done';
 
-function Card({ i, onOpen }: { i: any; onOpen: () => void }) {
+function SubRow({ s, onOpen }: { s: any; onOpen: (k: string) => void }) {
+  const done = s.status === 'Done' || s.statusCategory === 'done';
   return (
-    <button className="tcard" onClick={onOpen} data-key={i.key}>
+    <li className={`sub ${done ? 'done' : ''} ${s.match === false ? 'dim' : ''}`} data-sub={s.key}>
+      <button className="sublink" onClick={(e) => { e.stopPropagation(); onOpen(s.key); }} title={s.summary}>
+        <span className="subk">{done ? '✓' : '○'} {s.key}</span> <span className="subs">{s.summary}</span>
+      </button>
+      <span className="row" style={{ gap: 3 }}>
+        <span className="chip tiny-chip">{s.status}</span>
+        <span className={`chip tiny-chip ${s.assignee ? '' : 'warn'}`}>{s.assignee ?? 'ohne Owner'}</span>
+        {s.duedate ? <span className={`chip tiny-chip ${s.overdue ? 'bad' : ''}`}>{s.overdue ? 'über ' : ''}{fmtDate(s.duedate)}</span> : !done && <span className="chip tiny-chip warn">ohne Datum</span>}
+        {s.hygiene?.length > 0 && <span className="badge-hyg" title={'Braucht Pflege: ' + s.hygiene.join(', ')}>🧹 {s.hygiene.length}</span>}
+      </span>
+    </li>
+  );
+}
+
+function Card({ i, onOpen, expanded, onToggle }: { i: any; onOpen: (k: string) => void; expanded: boolean; onToggle: () => void }) {
+  const subs: any[] = i.subtasks ?? [];
+  const subHyg = subs.filter((s) => s.hygiene?.length).length;
+  return (
+    <div className={`tcard ${i.broken ? 'broken' : ''} ${i.onlyViaSubtask ? 'dim' : ''}`} role="button" tabIndex={0} onClick={() => onOpen(i.key)} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(i.key); }} data-key={i.key}>
       <div className="k"><span>{i.key}{i.type === 'Sub-task' ? ' · Sub' : ''}</span><span>{i.priority && i.priority !== 'Medium' ? i.priority : ''}</span></div>
       <div className="s">{i.summary}</div>
+      {i.broken && <div className="chip bad" style={{ marginBottom: 4 }} title="Sub-task ohne Parent-Ticket — in Jira einem Ticket zuordnen oder in einen Task umwandeln">⚠ kaputt: {i.broken}</div>}
       <div className="row" style={{ gap: 4 }}>
         <span className="chip">{i.assignee ?? 'ohne Owner'}</span>
         {i.duedate ? <span className={`chip ${overdue(i) ? 'bad' : ''}`}>{overdue(i) ? 'über ' : ''}{fmtDate(i.duedate)}</span> : i.status !== 'Done' && <span className="chip warn">ohne Datum</span>}
@@ -17,7 +37,17 @@ function Card({ i, onOpen }: { i: any; onOpen: () => void }) {
         {i.hygiene?.length > 0 && <span className="badge-hyg" title={i.hygiene.join(', ')}>🧹 {i.hygiene.length}</span>}
         {i.agent && <span className={`chip ${i.agent === 'wartet auf ja' ? 'bad' : 'warn'}`} title="Ein Agent arbeitet an dieser Karte (Chat)">🤖 {i.agent}</span>}
       </div>
-    </button>
+      {subs.length > 0 && (
+        <div className="subbox">
+          <button className="subtoggle" aria-expanded={expanded} onClick={(e) => { e.stopPropagation(); onToggle(); }} data-testid={`subtoggle-${i.key}`}>
+            {expanded ? '▾' : '▸'} Sub-tasks <b>{i.subtaskDone}/{subs.length}</b> erledigt
+            <span className="subbar"><span style={{ width: `${Math.round((i.subtaskDone / subs.length) * 100)}%` }} /></span>
+            {subHyg > 0 && <span className="badge-hyg" title="Sub-tasks, die Pflege brauchen">🧹 {subHyg}</span>}
+          </button>
+          {expanded && <ul className="sublist">{subs.map((s) => <SubRow key={s.key} s={s} onOpen={onOpen} />)}</ul>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -152,7 +182,7 @@ function ForgePanel({ issueKey, enabled, onStarted }: { issueKey: string; enable
   );
 }
 
-function Detail({ k, onClose, onChanged, site, forge }: { k: string; onClose: () => void; onChanged: () => void; site: string; forge?: boolean }) {
+function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: string; onClose: () => void; onChanged: () => void; site: string; forge?: boolean; onOpenKey: (k: string) => void }) {
   const d = useLoad(() => api('/api/board/issue/' + k), [k]);
   const confirm = useConfirm();
   const toast = useToast();
@@ -186,7 +216,12 @@ function Detail({ k, onClose, onChanged, site, forge }: { k: string; onClose: ()
           {(d.data as any).parent && <p className="small">Übergeordnet: <b>{(d.data as any).parent.key}</b> {(d.data as any).parent.summary}</p>}
           {i.description && <div className="card soft small" style={{ whiteSpace: 'pre-wrap' }}>{i.description}</div>}
           {i.lastComment && <p className="small"><b>Letzter Kommentar</b> ({i.lastComment.author}, {fmtDate(i.lastComment.created)}): {i.lastComment.text}</p>}
-          {(d.data as any).children.length > 0 && <><b className="small">Sub-tasks</b><ul className="small">{(d.data as any).children.map((c: any) => <li key={c.key}>{c.key} {c.summary} · <i>{c.status}</i> · {c.assignee ?? '—'}</li>)}</ul></>}
+          {(d.data as any).children.length > 0 && (() => { const ch = (d.data as any).children; const dn = ch.filter((c: any) => c.status === 'Done' || c.statusCategory === 'done').length; return (
+            <div className="card soft" style={{ marginTop: 8 }} data-testid="detail-subtasks">
+              <b className="small">Sub-tasks · {dn}/{ch.length} erledigt</b>
+              <ul className="sublist">{ch.map((c: any) => <SubRow key={c.key} s={c} onOpen={onOpenKey} />)}</ul>
+            </div>); })()}
+          {i.type === 'Sub-task' && !i.parent && <p className="err small">⚠ Kaputter Sub-task: kein Parent-Ticket. In Jira einem Ticket zuordnen oder in einen Task umwandeln.</p>}
           <div className="row"><button className="btn" onClick={async () => {
             setErr(null);
             try { const r: any = await api(`/api/board/issue/${k}/discuss`, { method: 'POST' }); openChat(r.url); } catch (e) { setErr(e); }
@@ -227,6 +262,9 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
   const [q, setQ] = useState('');
   const [done, setDone] = useState(false);
   const [open, setOpen] = useState<string | null>(params.get('key'));
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [allOpen, setAllOpen] = useState(false);
+  const toggle = (k: string) => setExpanded((x) => { const n = new Set(x); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const [syncing, setSyncing] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const toast = useToast();
@@ -261,7 +299,8 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
         </div>
         <input type="search" placeholder="Suchen (Key, Titel, Owner)" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tickets suchen" />
         <label className="row small"><input type="checkbox" checked={done} onChange={(e) => setDone(e.target.checked)} /> ältere erledigte zeigen</label>
-        {data && <span className="tiny">{data.totals.cards} Karten</span>}
+        <label className="row small"><input type="checkbox" checked={allOpen} onChange={(e) => { setAllOpen(e.target.checked); setExpanded(new Set()); }} /> Sub-tasks aufklappen</label>
+        {data && <span className="tiny">{data.totals.cards} Karten · {data.totals.subtasks} Sub-tasks{data.totals.broken ? <> · <span className="chip bad">⚠ {data.totals.broken} kaputt</span></> : null}</span>}
       </div>
       {b.error && <Err e={b.error} />}
       {!data ? <Loading /> : data.lanes.length === 0 ? (
@@ -273,13 +312,13 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
             {data.statuses.map((s: string) => (
               <div key={s}>
                 <div className="colhead">{s} · {lane.columns[s].length}</div>
-                <div className="col-cards">{lane.columns[s].map((i: any) => <Card key={i.key} i={i} onOpen={() => setOpen(i.key)} />)}</div>
+                <div className="col-cards">{lane.columns[s].map((i: any) => <Card key={i.key} i={i} onOpen={setOpen} expanded={allOpen !== expanded.has(i.key)} onToggle={() => toggle(i.key)} />)}</div>
               </div>
             ))}
           </div>
         </section>
       ))}
-      {open && <Detail k={open} site={data?.site ?? cfg.jiraSite} forge={cfg.forge} onClose={() => { setOpen(null); b.reload(); }} onChanged={() => b.reload()} />}
+      {open && <Detail k={open} onOpenKey={setOpen} site={data?.site ?? cfg.jiraSite} forge={cfg.forge} onClose={() => { setOpen(null); b.reload(); }} onChanged={() => b.reload()} />}
     </div>
   );
 }

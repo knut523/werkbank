@@ -164,16 +164,24 @@ test('Einrichtung: Claude-Token landet verschlüsselt im LibreChat-Schlüsselspe
 test('Board: Sync aus Jira (mit Blättern), Bahnen = Workstreams, Filter', async () => {
   const s = await anna.req('/api/board/sync', { method: 'POST' });
   assert.equal(s.status, 200);
-  assert.equal(s.j.count, 9);
+  assert.equal(s.j.count, 12);
   const b = await anna.req('/api/board');
   assert.deepEqual(b.j.statuses, ['Backlog', 'To Do', 'In Progress', 'Ongoing', 'Done']);
-  assert.deepEqual(b.j.lanes.map((l: any) => l.name), ['Operations Setup & UX', 'Produkt OLAF']);
+  assert.deepEqual(b.j.lanes.map((l: any) => l.name), ['Operations Setup & UX', 'Produkt OLAF', 'Ohne Workstream']);
+  const orphan = b.j.lanes.at(-1).columns['To Do'][0];
+  assert.equal(orphan.key, 'PM-259');
+  assert.equal(orphan.broken, 'Sub-task ohne Parent', 'kaputter Sub-task markiert');
+  const hw = b.j.lanes.find((l: any) => l.key === 'PM-70').columns['To Do'].find((i: any) => i.key === 'PM-321');
+  assert.equal(hw.subtaskDone, 1);
+  assert.deepEqual(hw.subtasks.map((x: any) => [x.key, x.assignee, x.hygiene]), [['PM-323', 'Knut Peters', []], ['PM-324', null, ['Sub-task ohne Owner']]], 'Pflege je Sub-task');
   const prod = b.j.lanes.find((l: any) => l.key === 'PM-70');
-  assert.deepEqual(prod.columns['To Do'].map((i: any) => i.key).sort(), ['PM-321', 'PM-322', 'PM-332'], 'Sub-task über den Parent dem Workstream zugeordnet');
+  assert.deepEqual(prod.columns['To Do'].map((i: any) => i.key).sort(), ['PM-321', 'PM-322']);
+  const pm331 = prod.columns['In Progress'].find((i: any) => i.key === 'PM-331');
+  assert.deepEqual(pm331.subtasks.map((x: any) => x.key), ['PM-332'], 'Sub-task hängt unter seiner Karte');
   const od = await anna.req('/api/board?filter=overdue');
   assert.deepEqual(od.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).map((i: any) => i.key).sort(), ['PM-321', 'PM-322']);
   const nd = await anna.req('/api/board?filter=undated');
-  assert.ok(nd.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).every((i: any) => !i.duedate));
+  assert.ok(nd.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).every((i: any) => !i.duedate || i.onlyViaSubtask), "ohne Datum — oder nur wegen eines Sub-tasks ohne Datum sichtbar");
   const ow = await anna.req('/api/board?owner=' + encodeURIComponent('Lisa Probe'));
   assert.equal(ow.j.totals.cards, 1);
 });

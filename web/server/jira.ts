@@ -168,17 +168,34 @@ export function isOverdue(i: Pick<Issue, 'duedate' | 'statusCategory' | 'status'
   return !!i.duedate && i.duedate < today && i.statusCategory !== 'done' && i.status !== 'Done';
 }
 
-export function boardModel(issues: Issue[], opts: { owner?: string; filter?: string; q?: string; showDone?: boolean } = {}) {
+export function boardModel(issues: (Issue & { hygiene?: string[] })[], opts: { owner?: string; filter?: string; q?: string; showDone?: boolean } = {}) {
   const ws = issues.filter((i) => i.type === 'Workstream');
   const names = new Map(ws.map((w) => [w.key, w.summary]));
   const today = new Date().toISOString().slice(0, 10);
-  const cards = issues.filter((i) => i.type !== 'Workstream').filter((i) => {
+  const byKey = new Map(issues.map((i) => [i.key, i]));
+  const isDoneI = (i: Issue) => i.status === 'Done' || i.statusCategory === 'done';
+  const oldDone = (i: Issue) => isDoneI(i) && (i.updated ?? '') < new Date(Date.now() - 14 * 864e5).toISOString();
+  const matches = (i: Issue & { hygiene?: string[] }) => {
     if (opts.owner && (i.assignee ?? '—') !== opts.owner) return false;
     if (opts.filter === 'overdue' && !isOverdue(i, today)) return false;
-    if (opts.filter === 'undated' && (i.duedate || i.status === 'Done')) return false;
-    if (!opts.showDone && i.status === 'Done' && (i.updated ?? '') < new Date(Date.now() - 14 * 864e5).toISOString()) return false;
+    if (opts.filter === 'undated' && (i.duedate || isDoneI(i))) return false;
+    if (opts.filter === 'pflege' && !i.hygiene?.length) return false;
     if (opts.q) { const q = opts.q.toLowerCase(); if (!`${i.key} ${i.summary} ${i.assignee ?? ''}`.toLowerCase().includes(q)) return false; }
     return true;
+  };
+  // Sub-tasks mit Parent in der Kopie hängen unter ihrer Karte; ohne Parent sind sie „kaputt“ und eigene Karten.
+  const nested = (i: Issue) => i.type === 'Sub-task' && !!i.parent && byKey.has(i.parent) && byKey.get(i.parent)!.type !== 'Workstream';
+  const children = new Map<string, Issue[]>();
+  for (const i of issues) if (nested(i)) children.set(i.parent!, [...(children.get(i.parent!) ?? []), i]);
+  const cards = issues.filter((i) => i.type !== 'Workstream' && !nested(i)).flatMap((i) => {
+    const subs = (children.get(i.key) ?? []).slice().sort((a, b) => a.key.localeCompare(b.key, 'de', { numeric: true }))
+      .map((s) => ({ ...s, overdue: isOverdue(s, today), match: matches(s) }));
+    const self = matches(i);
+    const viaSub = subs.some((s) => s.match && !oldDone(s));
+    if (!self && !viaSub) return [];
+    if (!opts.showDone && oldDone(i) && !viaSub) return [];
+    const broken = i.type === 'Sub-task' ? (i.parent ? (byKey.get(i.parent)?.type === 'Workstream' ? 'Sub-task direkt unter Workstream' : 'Parent nicht in der Kopie') : 'Sub-task ohne Parent') : null;
+    return [{ ...i, subtasks: subs, subtaskDone: subs.filter(isDoneI).length, broken, onlyViaSubtask: !self }];
   });
   const statuses = [...STATUS_COLUMNS, ...[...new Set(cards.map((c) => c.status))].filter((s) => !STATUS_COLUMNS.includes(s)).sort()];
   const laneKeys = [...new Set(cards.map((c) => c.workstream ?? '—'))];
@@ -195,8 +212,10 @@ export function boardModel(issues: Issue[], opts: { owner?: string; filter?: str
     statuses, lanes, owners,
     totals: {
       cards: cards.length,
+      subtasks: cards.reduce((n, c) => n + c.subtasks.length, 0),
+      broken: cards.filter((c) => c.broken).length,
       overdue: issues.filter((i) => i.type !== 'Workstream' && isOverdue(i, today)).length,
-      undated: issues.filter((i) => i.type !== 'Workstream' && !i.duedate && i.status !== 'Done').length,
+      undated: issues.filter((i) => i.type !== 'Workstream' && !i.duedate && !isDoneI(i)).length,
     },
   };
 }

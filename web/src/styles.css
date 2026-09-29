@@ -183,3 +183,23 @@ table.t th { font-weight: 600; color: var(--text-secondary); font-size: 12.5px; 
 :root[data-theme='dark'] .embedded .tcard, :root[data-theme='dark'] .embedded .card { background: var(--gray-700); }
 :root[data-theme='dark'] .embedded .card.soft { background: var(--gray-850); }
 .embedded .board-bar { background: var(--presentation); }
+
+/* Sub-tasks unter der Karte */
+.tcard { cursor: pointer; }
+.tcard.broken { border-color: var(--chip-bad-text); box-shadow: inset 3px 0 0 var(--chip-bad-text); }
+.tcard.dim { opacity: .75; }
+.subbox { margin-top: 6px; border-top: 1px dashed var(--border-light); padding-top: 4px; }
+.subtoggle { all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12px; width: 100%; }
+.subtoggle:focus-visible { outline: 2px solid var(--link); }
+.subbar { flex: 1; height: 4px; border-radius: 2px; background: var(--border-light); overflow: hidden; min-width: 30px; }
+.subbar > span { display: block; height: 100%; background: var(--chip-ok-text); }
+.sublist { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.sub { font-size: 12px; display: flex; flex-direction: column; gap: 2px; padding: 3px 4px; border-radius: 6px; background: var(--surface-secondary); }
+.sub.done .subs { text-decoration: line-through; opacity: .7; }
+.sub.dim { opacity: .6; }
+.sublink { all: unset; cursor: pointer; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sublink:hover .subs { text-decoration: underline; }
+.subk { font-weight: 600; }
+.tiny-chip { font-size: 11px; padding: 0 5px; }
+.subtoggle { white-space: nowrap; }
+.subtoggle .badge-hyg, .sub .badge-hyg { font-size: 11px; padding: 0 5px; line-height: 16px; }

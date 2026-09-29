@@ -180,7 +180,15 @@ try {
     await a.getByRole('button', { name: /Jetzt synchronisieren/ }).click();
     await a.locator('.tcard[data-key="PM-321"]').waitFor();
     await shot(a, '07-board');
-    await a.locator('.tcard[data-key="PM-321"]').click();
+    // Sub-tasks unter der Karte: 1/2 erledigt, aufklappen, je Sub-task Owner/Status/Datum/Pflege
+    await a.getByTestId('subtoggle-PM-321').getByText('1/2').waitFor();
+    await a.getByTestId('subtoggle-PM-321').click();
+    await a.locator('.tcard[data-key="PM-321"] [data-sub="PM-324"]').getByText('ohne Owner').waitFor();
+    await a.locator('.tcard[data-key="PM-259"]').getByText(/kaputt: Sub-task ohne Parent/).waitFor();
+    await shot(a, '07a-board-subtasks');
+    await a.locator('.tcard[data-key="PM-259"]').scrollIntoViewIfNeeded();
+    await shot(a, '07b-board-kaputter-subtask');
+    await a.locator('.tcard[data-key="PM-321"] .s').click();
     await a.getByRole('heading', { name: 'Hardware Admin Flow' }).waitFor();
     await a.getByLabel('Kommentar', { exact: true }).fill('E2E: Kommentar vom Board');
     await a.getByRole('button', { name: 'Kommentar senden' }).click();
@@ -204,7 +212,7 @@ try {
   });
 
   await step('Board: Nur Entwurf → an Jira senden', async () => {
-    await a.locator('.tcard[data-key="PM-321"]').click();
+    await a.locator('.tcard[data-key="PM-321"] .s').click();
     await a.getByText('📝 Nur Entwurf').click();
     await a.getByRole('button', { name: 'Entwurf erstellen' }).click();
     await a.getByLabel('Kommentarentwurf (bearbeitbar)').waitFor({ timeout: 20000 });
