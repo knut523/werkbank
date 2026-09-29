@@ -261,6 +261,33 @@ test('Agent ansetzen = echter Chat „PM-123 · Titel“: läuft → wartet auf 
   assert.match(lcChats.at(-1).body.text, /^PM-322 · .*Lass uns an diesem Ticket arbeiten/s);
 });
 
+test('Dokumente am Ticket: Vault-Notizen mit Key, Vorschlag bestätigen (jira:-Frontmatter), Datei anhängen', async () => {
+  const d = await anna.req('/api/board/issue/PM-321');
+  assert.ok(d.j.docs.notes.some((n: any) => n.path.endsWith('sprint-2026-09-28-review.md')), 'Sprint-Review erwähnt PM-321');
+  const rel = 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/Service-View/1-Backlog/service-view-mailprotokoll.md';
+  const pre = await anna.req('/api/links/confirm', { body: { path: rel, key: 'PM-340' } });
+  assert.equal(pre.j.needsConfirm, true);
+  assert.match(pre.j.preview.after, /jira: PM-340/);
+  assert.doesNotMatch(readFileSync(join(VAULT, rel), 'utf8'), /jira: PM-340/, 'Vorschau schreibt nicht');
+  const bad = await anna.req('/api/links/confirm', { body: { path: rel, key: 'PM-340', confirm: true, hash: 'alt' } });
+  assert.equal(bad.status, 409);
+  const ok = await anna.req('/api/links/confirm', { body: { path: rel, key: 'PM-340', confirm: true, hash: pre.j.hash } });
+  assert.equal(ok.status, 200);
+  assert.match(readFileSync(join(VAULT, rel), 'utf8'), /^---\n(.|\n)*jira: PM-340\n(.|\n)*---\n/);
+  const d2 = await anna.req('/api/board/issue/PM-340');
+  assert.deepEqual(d2.j.docs.notes.map((n: any) => [n.path, n.via]), [[rel, 'frontmatter']]);
+  const note = await anna.req('/api/vault/note?path=' + encodeURIComponent(rel));
+  assert.deepEqual(note.j.tickets.map((t: any) => [t.key, t.summary]), [['PM-340', 'Textbausteine Service']]);
+  // Datei an Ticket hängen
+  const up = await anna.req('/api/files?name=' + encodeURIComponent('angebot.pdf'), { method: 'PUT', raw: Buffer.from('%PDF-1.4 test') });
+  assert.equal(up.status, 200, JSON.stringify(up.j));
+  const fid = up.j.file?._id ?? up.j._id ?? up.j.id;
+  assert.equal((await anna.req(`/api/files/${fid}/ticket`, { body: { key: 'PM-340' } })).status, 200);
+  const d3 = await anna.req('/api/board/issue/PM-340');
+  assert.deepEqual(d3.j.docs.files.map((f: any) => f.name), ['angebot.pdf']);
+  assert.equal((await bernd.req('/api/board/issue/PM-340')).j.docs.files.length, 0, 'fremde Dateien sieht man nicht');
+});
+
 test('Sprint: Antwort mit Vorschau und Bestätigung in die Notiz, Konfliktschutz', async () => {
   const v = await anna.req('/api/sprint/sprint-2026-09-28');
   assert.equal(v.status, 200);

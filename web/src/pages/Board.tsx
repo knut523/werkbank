@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, fmtDate, fmtDateTime, today, chatTarget, openChat, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, StateChip } from '../ui.tsx';
-import { HygienePanel } from '../components.tsx';
+import { HygienePanel, LinkButton } from '../components.tsx';
 
 const overdue = (i: any) => i.duedate && i.duedate < today() && i.status !== 'Done';
 
@@ -163,6 +163,44 @@ function AgentPanel({ issueKey, runs, onChange }: { issueKey: string; runs: any[
   );
 }
 
+/** Dokumente am Ticket: Vault-Notizen mit dem Key, Dateien, Chats von der Karte, PRs, Vorschläge. */
+function Docs({ k, docs, runs, onChange }: { k: string; docs: any; runs: any[]; onChange: () => void }) {
+  const [more, setMore] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const files = useLoad(() => api('/api/files'), []);
+  const toast = useToast();
+  const chats = runs.filter((r) => r.mode === 'chat');
+  const mine: any[] = ((files.data as any)?.mine ?? []).filter((f: any) => !(f.tickets ?? []).includes(k));
+  const notes = more ? docs.notes : docs.notes.slice(0, 6);
+  return (
+    <div className="card soft" style={{ marginTop: 10 }} data-testid="ticket-docs">
+      <h3 style={{ marginTop: 0 }}>📎 Dokumente <span className="tiny">Vault-Notizen mit {k}, angehängte Dateien, Chats von dieser Karte</span></h3>
+      <div className="small docs-h">Vault ({docs.notesTotal})</div>
+      {docs.notes.length ? <ul className="small">{notes.map((n: any) => <li key={n.path}><a href={`#/wissen/${n.path.split('/').map(encodeURIComponent).join('/')}`} title={n.path}>{n.title}</a> <span className="tiny">{n.via === 'frontmatter' ? 'Frontmatter' : n.via === 'link' ? 'Jira-Link' : 'im Text'}</span></li>)}</ul> : <p className="tiny">Keine Notiz nennt {k}.</p>}
+      {docs.notes.length > 6 && <button className="btn ghost small" onClick={() => setMore(!more)}>{more ? 'weniger' : `alle ${docs.notes.length}`}</button>}
+      {docs.agentFiles?.length > 0 && <><div className="small docs-h">Vom Agenten geschrieben</div><ul className="small">{docs.agentFiles.map((w: any) => <li key={w.file}>{w.path ? <a href={`#/wissen/${w.path.split('/').map(encodeURIComponent).join('/')}`}>{w.path}</a> : <code>{w.file}</code>}</li>)}</ul></>}
+      {docs.prs?.length > 0 && <><div className="small docs-h">PRs (aus dem Vault)</div><ul className="small">{docs.prs.map((p: string) => <li key={p}><a href={p} target="_blank" rel="noreferrer">{p.replace('https://github.com/', '')}</a></li>)}</ul></>}
+      <div className="small docs-h">Dateien ({docs.files.length})</div>
+      {docs.files.length > 0 && <ul className="small">{docs.files.map((f: any) => <li key={f.id}><a href={`api/files/${f.id}/download`}>{f.name}</a> <span className="tiny">{f.ownerName}</span></li>)}</ul>}
+      {mine.length > 0 && (
+        <div className="row small">
+          <select aria-label="Datei an Ticket hängen" defaultValue="" onChange={async (e) => {
+            const id = e.target.value; if (!id) return;
+            try { await api(`/api/files/${id}/ticket`, { body: { key: k } }); toast('An Ticket gehängt'); files.reload(); onChange(); } catch (x) { setErr(x); }
+            e.target.value = '';
+          }}><option value="">Eigene Datei an {k} hängen …</option>{mine.map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+        </div>
+      )}
+      {chats.length > 0 && <><div className="small docs-h">Chats von dieser Karte ({chats.length})</div><ul className="small">{chats.map((r: any) => <li key={r._id}><a href={r.url} target={chatTarget}>{r.kind === 'discuss' ? 'Besprechung' : 'Agent'} · {fmtDateTime(r.startedAt)}</a> <span className="tiny">{r.status}</span></li>)}</ul></>}
+      {docs.suggestions?.length > 0 && <>
+        <div className="small docs-h">Passt vielleicht (ohne Key)</div>
+        <ul className="small">{docs.suggestions.map((s: any) => <li key={s.path}><a href={`#/wissen/${s.path.split('/').map(encodeURIComponent).join('/')}`}>{s.title}</a> <span className="tiny">{s.why}</span> <LinkButton path={s.path} ticket={k} onDone={onChange} /> <button className="btn ghost small" onClick={async () => { await api('/api/links/dismiss', { body: { key: k, path: s.path } }); onChange(); }}>passt nicht</button></li>)}</ul>
+      </>}
+      <Err e={err} />
+    </div>
+  );
+}
+
 function ForgePanel({ issueKey, enabled, onStarted }: { issueKey: string; enabled: boolean; onStarted: () => void }) {
   const [pr, setPr] = useState('');
   const [err, setErr] = useState<unknown>(null);
@@ -222,6 +260,7 @@ function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: string; 
               <ul className="sublist">{ch.map((c: any) => <SubRow key={c.key} s={c} onOpen={onOpenKey} />)}</ul>
             </div>); })()}
           {i.type === 'Sub-task' && !i.parent && <p className="err small">⚠ Kaputter Sub-task: kein Parent-Ticket. In Jira einem Ticket zuordnen oder in einen Task umwandeln.</p>}
+          <Docs k={k} docs={(d.data as any).docs} runs={(d.data as any).runs} onChange={d.reload} />
           <div className="row"><button className="btn" onClick={async () => {
             setErr(null);
             try { const r: any = await api(`/api/board/issue/${k}/discuss`, { method: 'POST' }); openChat(r.url); } catch (e) { setErr(e); }
@@ -262,6 +301,8 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
   const [q, setQ] = useState('');
   const [done, setDone] = useState(false);
   const [open, setOpen] = useState<string | null>(params.get('key'));
+  const hashKey = params.get('key');
+  useEffect(() => { if (hashKey) setOpen(hashKey); }, [hashKey]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [allOpen, setAllOpen] = useState(false);
   const toggle = (k: string) => setExpanded((x) => { const n = new Set(x); if (n.has(k)) n.delete(k); else n.add(k); return n; });

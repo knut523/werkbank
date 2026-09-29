@@ -6,6 +6,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, basename, sep } from 'node:path';
 import MarkdownIt from 'markdown-it';
 import YAML from 'yaml';
+import { extractTicketRefs, type TicketRef } from './links.ts';
 
 export interface NoteMeta {
   path: string;            // relativ zum Vault, mit "/"
@@ -17,6 +18,7 @@ export interface NoteMeta {
   size: number;
   links: string[];         // aufgelöste Zielpfade
   unresolved: string[];
+  tickets: string[];       // verknüpfte Jira-Keys (Frontmatter, Text, Jira-Link)
 }
 
 export interface VaultIndex {
@@ -26,6 +28,7 @@ export interface VaultIndex {
   byName: Map<string, string[]>;   // basename (klein) → Pfade
   backlinks: Map<string, Set<string>>;
   files: Map<string, string>;      // Nicht-Markdown-Dateien: basename (klein) → Pfad
+  tickets: Map<string, { path: string; via: TicketRef['via']; prs: string[] }[]>;   // Jira-Key → Notizen
 }
 
 const SKIP_DIRS = new Set(['.git', '.obsidian', '.trash', 'node_modules', '.claude', '.stfolder', '.stversions']);
@@ -115,7 +118,7 @@ export function buildIndex(root: string): VaultIndex {
     const parts = path.split('/');
     notes.set(path, {
       path, name, title: titleOf(fm, body, name), team: parts.length > 1 ? parts[0] : '',
-      fm, mtime: st.mtimeMs, size: st.size, links: [], unresolved: [],
+      fm, mtime: st.mtimeMs, size: st.size, links: [], unresolved: [], tickets: [],
     });
     bodies.set(path, body);
     const k = name.toLowerCase();
@@ -123,8 +126,12 @@ export function buildIndex(root: string): VaultIndex {
   }
   const other = new Map<string, string>();
   for (const abs of files.other) other.set(basename(abs).toLowerCase(), rel(root, abs));
-  const idx: VaultIndex = { root, builtAt: Date.now(), notes, byName, backlinks: new Map(), files: other };
+  const idx: VaultIndex = { root, builtAt: Date.now(), notes, byName, backlinks: new Map(), files: other, tickets: new Map() };
   for (const [path, meta] of notes) {
+    for (const r of extractTicketRefs(meta.fm, bodies.get(path) ?? '')) {
+      meta.tickets.push(r.key);
+      idx.tickets.set(r.key, [...(idx.tickets.get(r.key) ?? []), { path, via: r.via, prs: r.prs }]);
+    }
     const seen = new Set<string>();
     const fmLinks = [meta.fm.related, meta.fm.supersedes, meta.fm['superseded-by']].flat().filter((x) => typeof x === 'string').join(' ');
     for (const l of [...extractWikilinks(bodies.get(path) ?? ''), ...extractWikilinks(fmLinks)]) {

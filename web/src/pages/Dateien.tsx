@@ -101,6 +101,7 @@ export function Dateien({ cfg }: { cfg: Config }) {
                   </td>
                   <td className="row">
                     <button className="btn small" onClick={() => toChat(x.id)} title="Kopie in dein Claude-Arbeitsverzeichnis legen und einen Chat starten">💬 Im Chat</button>
+                    <TicketAttach f={x} onDone={reloadAll} />
                     <button className="btn small danger" onClick={async () => {
                       if (!(await confirm({ title: `„${x.name}“ löschen?`, body: <p>Auch für alle, mit denen sie geteilt ist.</p>, danger: true, confirmLabel: 'Löschen' }))) return;
                       try { await api(`/api/files/${x.id}`, { method: 'DELETE' }); toast('Gelöscht'); reloadAll(); } catch (e) { setErr(e); }
@@ -170,5 +171,22 @@ export function Dateien({ cfg }: { cfg: Config }) {
         </>
       ))}
     </div>
+  );
+}
+
+/** „an Ticket hängen“: Datei erscheint dann an der Karte (Dokumente). */
+function TicketAttach({ f, onDone }: { f: any; onDone: () => void }) {
+  const [key, setKey] = useState('');
+  const [err, setErr] = useState<unknown>(null);
+  return (
+    <span className="row" style={{ gap: 4 }}>
+      {(f.tickets ?? []).map((k: string) => <span key={k} className="chip">{k}</span>)}
+      <input aria-label={`${f.name} an Ticket hängen`} placeholder="PM-…" value={key} onChange={(e) => setKey(e.target.value)} style={{ width: 80 }} />
+      <button className="btn small" disabled={!/^[A-Za-z]+-\d+$/.test(key.trim())} onClick={async () => {
+        setErr(null);
+        try { await api(`/api/files/${f.id}/ticket`, { body: { key: key.trim().toUpperCase() } }); setKey(''); onDone(); } catch (e) { setErr(e); }
+      }}>an Ticket</button>
+      <Err e={err} />
+    </span>
   );
 }

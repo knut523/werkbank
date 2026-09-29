@@ -1,3 +1,4 @@
+import { LinkButton } from '../components.tsx';
 import { useEffect, useMemo, useState } from 'react';
 import { api, fmtDateTime, chatTarget, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useToast } from '../ui.tsx';
@@ -71,6 +72,15 @@ function NoteView({ path }: { path: string }) {
       <aside className="side-panel">
         <a className="btn primary" href={d.chatUrl} target={chatTarget} rel="noreferrer" style={{ width: '100%', justifyContent: 'center' }}>💬 Im Chat öffnen</a>
         <p className="tiny" style={{ marginTop: 6 }}>Startet einen neuen Chat mit dieser Notiz als Kontext. Hier wird nur gelesen; Änderungen macht Claude im Chat nach deinem „ja“.</p>
+        <div data-testid="note-tickets" style={{ margin: '10px 0' }}>
+          <b>Verknüpfte Tickets ({d.tickets.length})</b>
+          {d.tickets.length ? <ul>{d.tickets.map((t: any) => <li key={t.key}><a href={`#/board?key=${t.key}`}><b>{t.key}</b></a> {t.summary ?? <span className="tiny">(nicht in der Kopie)</span>} {t.status && <span className="chip">{t.status}</span>} <span className="tiny">{t.via === 'frontmatter' ? 'Frontmatter' : t.via === 'link' ? 'Jira-Link' : 'im Text'}</span></li>)}</ul>
+            : <p className="tiny" style={{ margin: '2px 0' }}>Keine — kein Ticket-Key in Frontmatter oder Text.</p>}
+          {d.suggestedTickets?.length > 0 && <>
+            <b className="small">Passt vielleicht zu</b>
+            <ul>{d.suggestedTickets.map((t: any) => <li key={t.key} className="small"><b>{t.key}</b> {t.summary} <span className="tiny">({t.why})</span> <LinkButton path={path} ticket={t.key} onDone={() => n.reload()} /></li>)}</ul>
+          </>}
+        </div>
         <MiniGraph center={d.title} links={d.links} backlinks={d.backlinks} />
         <b>Backlinks ({d.backlinks.length})</b>
         <ul>{d.backlinks.map((b: any) => <li key={b.path}><a href={hrefOf(b.path)} title={b.path}>{b.title}</a></li>)}</ul>

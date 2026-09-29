@@ -25,6 +25,7 @@ import { log } from './log.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError } from './jirawrite.ts';
+import { suggestTickets, addJiraFrontmatter } from './links.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 const FONTS = join(cfg.librechatDist, 'client', 'public', 'fonts');
@@ -73,6 +74,35 @@ function vaultPath(rel: string): string {
 async function issueMap(): Promise<Map<string, Issue>> {
   const all = (await wb().collection('jira_issues').find({}, { projection: { _id: 0 } }).toArray()) as unknown as Issue[];
   return new Map(all.map((i) => [i.key, i]));
+}
+
+// ---------- Verknüpfung Vault ↔ Tickets (Index-Refresh bei jeder Vault-Änderung über vaultIdx) ----------
+
+let suggestCache: { at: number; n: number; map: Map<string, any[]> } | null = null;
+async function suggestions(): Promise<Map<string, any[]>> {
+  const idx = vaultIdx();
+  const im = await issueMap();
+  if (suggestCache && suggestCache.at === idx.builtAt && suggestCache.n === im.size) return suggestCache.map;
+  const dismissed = new Set((await wb().collection('link_dismissed').find({}).toArray()).map((d: any) => String(d._id)));
+  const map = suggestTickets([...idx.notes.values()], [...im.values()].filter((i) => i.type !== 'Workstream'), dismissed);
+  suggestCache = { at: idx.builtAt, n: im.size, map };
+  return map;
+}
+
+async function ticketDocs(u: User, key: string) {
+  const idx = vaultIdx();
+  const refs = idx.tickets.get(key) ?? [];
+  const notes = refs.map((r) => ({ path: r.path, title: idx.notes.get(r.path)?.title ?? r.path, via: r.via, mtime: idx.notes.get(r.path)?.mtime }))
+    .sort((a, b) => (a.via === 'frontmatter' ? -1 : 0) - (b.via === 'frontmatter' ? -1 : 0) || (b.mtime ?? 0) - (a.mtime ?? 0));
+  const prs = [...new Set(refs.flatMap((r) => r.prs))];
+  const files = (await wb().collection('files').find({ tickets: key, $or: [{ owner: u.id }, { sharedWith: u.id }] }, { projection: { name: 1, size: 1, ownerName: 1, createdAt: 1 } }).toArray())
+    .map((f: any) => ({ id: f._id, name: f.name, size: f.size, ownerName: f.ownerName, createdAt: f.createdAt }));
+  const sugg = (await suggestions()).get(key) ?? [];
+  // Was ein Karten-Agent geschrieben hat (auch ohne Key in der Datei).
+  const written = [...new Set((await wb().collection('agent_runs').find({ key, mode: 'chat' }, { projection: { written: 1 } }).toArray()).flatMap((r: any) => r.written ?? []))]
+    .map((f: string) => ({ file: f, path: f.startsWith(cfg.vaultDir + '/') ? f.slice(cfg.vaultDir.length + 1) : null }))
+    .filter((w) => !w.path || !notes.some((n) => n.path === w.path));
+  return { notes: notes.slice(0, 40), notesTotal: notes.length, prs, files, suggestions: sugg, agentFiles: written };
 }
 
 async function jiraWrite<T>(u: User, fn: () => Promise<T>): Promise<T> {
@@ -250,6 +280,8 @@ on('GET', /^\/api\/vault\/note$/, async (req, res, _m, url) => {
     path, title: n.meta.title, fm: n.meta.fm, mtime: n.meta.mtime, html: n.html,
     links: n.meta.links.map(info), unresolved: n.meta.unresolved,
     backlinks: [...(idx.backlinks.get(path) ?? [])].sort().map(info),
+    tickets: await (async () => { const im = await issueMap(); return n.meta.tickets.map((k) => { const i = im.get(k); const r = (idx.tickets.get(k) ?? []).find((x) => x.path === path); return { key: k, summary: i?.summary ?? null, status: i?.status ?? null, assignee: i?.assignee ?? null, via: r?.via ?? 'text' }; }); })(),
+    suggestedTickets: n.meta.tickets.length ? [] : await (async () => { const im = await issueMap(); const out: any[] = []; for (const [k, list] of await suggestions()) { const hit = list.find((x: any) => x.path === path); if (hit) out.push({ key: k, summary: im.get(k)?.summary, status: im.get(k)?.status, why: hit.why, score: hit.score }); } return out.sort((a, b) => b.score - a.score).slice(0, 5); })(),
     chatUrl: chatUrl(`Lies die Notiz ${cfg.vaultDir}/${path} („${n.meta.title}“) und fass kurz zusammen, was drinsteht und was offen ist. Danach arbeiten wir damit weiter. Änderungen am Vault nur nach meiner Bestätigung.`),
   });
 });
@@ -303,7 +335,7 @@ on('POST', /^\/api\/board\/sync$/, async (req, res) => {
 });
 
 on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => {
-  await needUser(req);
+  const u = await needUser(req);
   const im = await issueMap();
   const i = im.get(m[1]);
   if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
@@ -315,6 +347,7 @@ on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => 
   send(res, 200, {
     issue: i, url: browseUrl(i.key), children, runs,
     parent: i.parent ? { key: i.parent, summary: im.get(i.parent)?.summary ?? i.parentSummary } : null,
+    docs: await ticketDocs(u, i.key),
     chatUrl: chatUrl(`${ticketPrompt(i)}\n\nLass uns an diesem Ticket arbeiten. Lies zuerst, was Vault und Jira dazu sagen.`),
   });
 });
@@ -423,6 +456,55 @@ on('POST', /^\/api\/board\/runs\/([0-9a-f-]{36})\/send$/, async (req, res, m) =>
   await wb().collection('agent_runs').updateOne({ _id: m[1] as any }, { $set: { sentAt: new Date(), sentBy: u.email, draft: text } });
   log('agent draft gesendet', { user: u.id, key: run.key });
   send(res, 200, { ok: true, via: r.via });
+});
+
+// --- Verknüpfen: Vault-Notiz ↔ Ticket (jira:-Frontmatter, optional Kommentar im Ticket über den MCP) ---
+
+on('POST', /^\/api\/links\/confirm$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const key = String(b.key ?? '');
+  if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key) || !(await issueMap()).has(key)) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  const abs = vaultPath(String(b.path ?? ''));
+  if (!existsSync(abs)) throw new HttpError(404, 'Notiz nicht gefunden.');
+  const text = readFileSync(abs, 'utf8');
+  const next = addJiraFrontmatter(text, key);
+  const rel = abs.slice(cfg.vaultDir.length + 1);
+  if (next === null) return send(res, 200, { ok: true, already: true });
+  const head = (t: string) => t.slice(0, Math.min(t.length, (t.indexOf('\n---', 3) + 4) || 300));
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, hash: hashText(text), preview: { path: rel, before: text.startsWith('---') ? head(text) : '(kein Frontmatter)', after: head(next) } });
+  if (String(b.hash ?? '') !== hashText(text)) throw new HttpError(409, 'Die Notiz hat sich inzwischen geändert — bitte neu laden.');
+  writeFileSync(abs, next);
+  invalidateIndex(); suggestCache = null;
+  log('vault link', { user: u.id, key, path: rel });
+  let commented = false;
+  if (b.comment === true) {
+    await jiraWrite(u, () => writeJira(u, key, [{ type: 'comment', text: `Vault-Notiz verknüpft: ${idxTitle(rel)} (${rel})` }]));
+    commented = true;
+  }
+  send(res, 200, { ok: true, path: rel, commented });
+});
+
+function idxTitle(rel: string) { return vaultIdx().notes.get(rel)?.title ?? rel; }
+
+on('POST', /^\/api\/links\/dismiss$/, async (req, res) => {
+  await needUser(req);
+  const b = await body(req);
+  await wb().collection('link_dismissed').updateOne({ _id: `${b.key}|${b.path}` as any }, { $set: { at: new Date() } }, { upsert: true });
+  suggestCache = null;
+  send(res, 200, { ok: true });
+});
+
+on('POST', /^\/api\/files\/([0-9a-f-]{36})\/ticket$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const key = String(b.key ?? '').trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key) || !(await issueMap()).has(key)) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  const f = await fileFor(u, m[1]);
+  if (!f) throw new HttpError(404, 'Datei nicht gefunden.');
+  await wb().collection('files').updateOne({ _id: m[1] as any }, b.remove ? { $pull: { tickets: key } } as any : { $addToSet: { tickets: key } });
+  log('datei an ticket', { user: u.id, key, remove: !!b.remove });
+  send(res, 200, { ok: true });
 });
 
 // --- Sprint ---

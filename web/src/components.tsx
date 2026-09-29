@@ -64,3 +64,35 @@ function HygieneItem({ i, onDone }: { i: any; onDone: () => void }) {
     </div>
   );
 }
+
+/** Vault-Notiz mit einem Ticket verknüpfen: Vorschau (Frontmatter vorher/nachher) → Bestätigen → `jira:` in die Notiz. */
+export function LinkButton({ path, ticket, label = 'Verknüpfen', onDone }: { path: string; ticket: string; label?: string; onDone: () => void }) {
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [err, setErr] = useState<unknown>(null);
+  return (
+    <>
+      <button className="btn small" data-testid={`link-${ticket}-${path.split('/').pop()}`} onClick={async () => {
+        setErr(null);
+        try {
+          const p: any = await api('/api/links/confirm', { body: { path, key: ticket } });
+          if (p.already) { toast('Schon verknüpft'); onDone(); return; }
+          const opt = { comment: false };
+          const ok = await confirm({
+            title: `${p.preview.path.split('/').pop()} mit ${ticket} verknüpfen?`, confirmLabel: 'In den Vault schreiben',
+            body: <>
+              <p className="small">In die Notiz <code>{p.preview.path}</code> kommt <code>jira: {ticket}</code> ins Frontmatter — sonst ändert sich nichts.</p>
+              <div className="grid2"><div><b className="tiny">vorher</b><pre className="small">{p.preview.before}</pre></div><div><b className="tiny">nachher</b><pre className="small">{p.preview.after}</pre></div></div>
+              <label className="row small"><input type="checkbox" onChange={(e) => { opt.comment = e.target.checked; }} /> zusätzlich als Kommentar in {ticket} vermerken (über den Jira-MCP)</label>
+            </>,
+          });
+          if (!ok) return;
+          const r: any = await api('/api/links/confirm', { body: { path, key: ticket, confirm: true, hash: p.hash, comment: opt.comment } });
+          toast(r.commented ? 'Verknüpft und im Ticket vermerkt' : 'Verknüpft');
+          onDone();
+        } catch (e) { setErr(e); }
+      }}>{label}</button>
+      <Err e={err} />
+    </>
+  );
+}

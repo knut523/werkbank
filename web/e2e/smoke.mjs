@@ -225,6 +225,26 @@ try {
     await a.getByRole('button', { name: 'Schließen' }).click();
   });
 
+  await step('Dokumente am Ticket: Vault-Notizen, Vorschlag bestätigen → jira: im Frontmatter, Wissen zeigt das Ticket', async () => {
+    await a.goto(W + '/#/board?key=PM-321');
+    await a.getByTestId('ticket-docs').getByText(/Sprint 2026-09-28|sprint-2026-09-28/i).first().waitFor({ timeout: 15000 });
+    await a.getByTestId('ticket-docs').getByText(/Chats von dieser Karte \(/).waitFor();
+    await a.getByTestId('ticket-docs').scrollIntoViewIfNeeded();
+    await shot(a, '09c-board-dokumente');
+    await a.goto(W + '/#/board?key=PM-340');
+    const docs = a.getByTestId('ticket-docs');
+    await docs.getByText('Passt vielleicht (ohne Key)').waitFor({ timeout: 15000 });
+    await docs.getByRole('button', { name: 'Verknüpfen' }).first().click();
+    await confirmDialog(a, '09d-verknuepfen-vorschau');
+    await a.getByText('Verknüpft').first().waitFor();
+    const linked = ['olaf/3-Resources/textbausteine-service-vorlagen.md']
+      .filter((p) => /jira: PM-340/.test(readFileSync(join(VAULT, p), 'utf8')));
+    assert.equal(linked.length, 1, 'genau eine Notiz bekam jira: PM-340');
+    await a.goto(W + '/#/wissen/' + linked[0]);
+    await a.getByTestId('note-tickets').getByText('PM-340').waitFor({ timeout: 15000 });
+    await shot(a, '09e-wissen-verknuepfte-tickets');
+  });
+
   await step('Sprint: Ziel, Ergebnisse, Antwort mit Vorschau in den (Test-)Vault', async () => {
     await a.goto(W + '/#/sprint');
     await a.getByText('Sicherheitsfixes laufen auf Prod und sind nachgeprüft', { exact: false }).first().waitFor();
