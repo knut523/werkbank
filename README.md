@@ -346,9 +346,9 @@ ms ab Absenden; lokal, ohne Coder-Proxy):
 | Brücke direkt, vorher | 2 116 | — | 2 116 | 2 427 | 6 003 | 48 |
 | Brücke direkt, jetzt | **54** | 670 | 2 137 | 2 443 | 6 024 | 50 |
 | Browser durch LibreChat, vorher | 3 071 | — | 3 071 | 3 416 | 6 955 | 48 |
-| Browser durch LibreChat, jetzt | **936** | 1 381 | 2 837 | 3 154 | 6 719 | 49 |
+| Browser durch LibreChat, jetzt | **936** (2. Lauf 1 346) | 1 381 | 2 837 | 3 154 | 6 719 | 49 |
 
-LibreChat selbst kostet ~0,9 s bis zum ersten Stück (Anlegen des Jobs, Schlüssel, Aufbau). **Nicht gemessen:** der
+LibreChat selbst kostet ~0,9–1,3 s bis zum ersten Stück (Anlegen des Jobs, Schlüssel, Aufbau). **Nicht gemessen:** der
 Coder-Proxy (`*.ws.konekto.energy`, braucht Coder-Anmeldung) und ein echter Claude-Zug — die neuen Zeiten im Log
 zeigen das beim nächsten echten Chat.
 
