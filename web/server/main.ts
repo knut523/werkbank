@@ -716,7 +716,9 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
 
 on('GET', /^\/api\/skills$/, async (req, res) => {
   await needUser(req);
-  send(res, 200, { source: cfg.skillsSource, target: cfg.skillsTarget, skills: listSkills(cfg.skillsSource, cfg.skillsTarget), presets: presets() });
+  const usage = new Map((await wb().collection('skill_usage').find({}).toArray()).map((d: any) => [String(d._id), { count: d.count ?? 0, users: (d.users ?? []).length, lastUsed: d.lastUsed ?? null, since: d.since ?? null }]));
+  const core: string[] = (() => { try { const j = JSON.parse(readFileSync(join(WB_ROOT, 'claude-bridge', 'skills-core.json'), 'utf8')); return Array.isArray(j) ? j : j.core ?? j.skills ?? []; } catch { return []; } })();
+  send(res, 200, { source: cfg.skillsSource, target: cfg.skillsTarget, skills: listSkills(cfg.skillsSource, cfg.skillsTarget).map((x: any) => ({ ...x, usage: usage.get(x.name) ?? null, core: core.includes(x.name) })), presets: presets(), usageSince: [...usage.values()].map((u) => u.since).filter(Boolean).sort()[0] ?? null });
 });
 
 on('POST', /^\/api\/skills\/sync$/, async (req, res) => {
@@ -855,6 +857,16 @@ on('POST', /^\/internal\/measure$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
   await recordMeasure(u, String(b.conv ?? ''), b.measured);
+  send(res, 200, { ok: true });
+});
+
+// Nutzung je Skill (Knut, 29.09.: nach einer Woche den Skill-Kern mit echten Zahlen nachschärfen).
+on('POST', /^\/internal\/skill-used$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const skill = String(b.skill ?? '');
+  if (!/^[\w:.-]{1,80}$/.test(skill)) throw new HttpError(400, 'Ungültiger Skill.');
+  await wb().collection('skill_usage').updateOne({ _id: skill as any }, { $inc: { count: 1 }, $addToSet: { users: u.id }, $set: { lastUsed: new Date() }, $setOnInsert: { since: new Date() } }, { upsert: true });
   send(res, 200, { ok: true });
 });
 

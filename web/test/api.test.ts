@@ -518,6 +518,16 @@ test('Interne Schnittstelle nur mit Token; Kontext-Paket klein; Pflegefragen nur
   assert.ok(stats.j.fixed.ownTools > 0);
 });
 
+test('Skill-Nutzung wird gezählt und auf der Skills-Seite gezeigt', async () => {
+  assert.equal((await internal('/internal/skill-used', { userId: String(users.a._id), skill: 'demo-skill' })).status, 200);
+  await internal('/internal/skill-used', { userId: String(users.a._id), skill: 'demo-skill' });
+  const s = await anna.req('/api/skills');
+  const d = s.j.skills.find((x: any) => x.name === 'demo-skill');
+  assert.equal(d.usage.count, 2);
+  assert.equal(d.usage.users, 1);
+  assert.equal((await internal('/internal/skill-used', { userId: String(users.a._id), skill: '../x y' })).status, 400);
+});
+
 test('Task-Hygiene: Antwort → Vorschlag → Bestätigung → Jira; später; Board-Filter', async () => {
   const h = await anna.req('/api/hygiene');
   assert.deepEqual(h.j.items.map((i: any) => i.key + ':' + i.rule).sort(), ['PM-900:überfällig', 'PM-901:ohne Datum', 'PM-902:ohne Workstream']);

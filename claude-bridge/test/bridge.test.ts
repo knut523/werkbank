@@ -14,12 +14,14 @@ const STATE = mkdtempSync(join(tmpdir(), 'bridge-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-'));
 for (const n of ['olaf-jira', 'plan-to-pr', 'olaf-email-templates', 'amper-board']) { mkdirSync(join(SKILLS, n)); writeFileSync(join(SKILLS, n, 'SKILL.md'), `---\nname: ${n}\n---\n`); }
 const sessionStarts: any[] = [];
+const skillUses: any[] = [];
 let web: Server;
 
 before(async () => {
   // Nachgebaute Werkbank-Web: liefert das Kontext-Paket und zählt die Aufrufe.
   web = createServer(async (req, res) => {
     let b = ''; for await (const c of req) b += c;
+    if (req.url === '/internal/skill-used' && req.headers['x-werkbank-internal'] === 'geheim') { skillUses.push(JSON.parse(b)); res.end('{}'); return; }
     if (req.url === '/internal/session-start' && req.headers['x-werkbank-internal'] === 'geheim') {
       sessionStarts.push(JSON.parse(b));
       res.end(JSON.stringify({ text: '## Werkbank-Kontext (Test)\n- Deine PM-Tickets: 2 offen\n\n### Task-Hygiene\n1. PM-1 ist überfällig — Stand?', tokens: 30, cached: false, questions: [{ key: 'PM-1' }] }));
@@ -244,4 +246,10 @@ test('Offene Rückfrage bleibt stehen, während die Person in einem anderen Chat
   assert.match(other, /Du hast geschrieben: Hallo nebenbei/);
   const a = await send('c50', 'ja', { user: 'u50' });
   assert.match(a, /hätte die Datei jetzt geschrieben/);
+});
+
+test('Skill-Aufrufe werden gezählt (nur Name, an die Werkbank)', async () => {
+  await send('c60', 'bitte Skill-Test', { user: 'u60' });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.deepEqual(skillUses.at(-1), { userId: 'u60', skill: 'olaf-jira' });
 });

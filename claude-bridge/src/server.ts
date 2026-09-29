@@ -249,6 +249,10 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
     userId, convId, token, prompt, history, model: MODELS[model], sink, query: query as any, readonly, receivedAt, instructions: instructions || undefined,
     sessionContext: known ? () => sessionContext(userId, convId, /Tagesabschluss/i.test(instructions) || /^\s*tagesabschluss\b/i.test(prompt), skillsFor(STATE_DIR, `${safeId(userId)}:${safeId(convId)}`, instructions, prompt)) : undefined,
     mcpServers: known ? mcpServersFor(userId, token) : undefined,
+    onSkill: known && INTERNAL ? (name) => {
+      if (!/^[\w:.-]{1,80}$/.test(name)) return;
+      fetch(`${WEB_URL}/internal/skill-used`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, skill: name }) }).catch(() => {});
+    } : undefined,
     onMeasure: known && INTERNAL ? (m) => {
       log('kontext gemessen', { user: userId, ...m });
       fetch(`${WEB_URL}/internal/measure`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, conv: convId, measured: m }) }).catch(() => {});

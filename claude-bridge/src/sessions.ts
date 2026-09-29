@@ -44,6 +44,7 @@ interface Live {
   t0: number;
   times: Record<string, number>;
   progressShown: Map<string, number>;
+  onSkill?: (name: string) => void;
 }
 
 const cfg = {
@@ -211,6 +212,8 @@ function handleMessage(live: Live, msg: any) {
       for (const block of msg.message?.content ?? []) {
         if (block.type === 'tool_use') {
           const cls = classify(block.name, block.input ?? {}).cls;
+          // Nutzung je Skill zählen (Knut, 29.09.: Skill-Kern nach einer Woche mit echten Zahlen nachschärfen).
+          if (block.name === 'Skill' && live.onSkill) { try { live.onSkill(String(block.input?.skill ?? block.input?.command ?? '').replace(/^\//, '').split(/\s/)[0]); } catch { /* egal */ } }
           if (cls === 'read') emitStatus(live, (msg.parent_tool_use_id ? '↳ ' : '') + statusLine(block.name, block.input ?? {}));
           // Schreibende Werkzeuge melden sich erst nach der Bestätigung (siehe Hook).
         } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
@@ -309,6 +312,7 @@ export interface TurnRequest {
   mcpServers?: Record<string, unknown>;         // Werkbank-eigene MCP-Server (nur für diese Sitzung)
   onMeasure?: (m: Record<string, number>) => void;   // echte Kontext-Aufteilung nach dem ersten Zug
   receivedAt?: number;     // Eingang der HTTP-Anfrage (für die Zeitmessung)
+  onSkill?: (name: string) => void;   // ein Skill wurde aufgerufen (Zählung, ohne Inhalt)
 }
 
 /** Führt eine Nachricht aus. Kehrt zurück, sobald die HTTP-Antwort geschlossen werden kann. */
@@ -353,7 +357,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const live: Live = {
     key, userId: req.userId, abort: new AbortController(), sink: null, buffer: [], pending: null,
     lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
-    readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(),
+    readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
   };
   lives.set(key, live);
   attach(live, req.sink);

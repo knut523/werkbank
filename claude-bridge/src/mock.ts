@@ -82,6 +82,7 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 100, output_tokens: 60 } };
       return;
     }
+    if (/skill-test/i.test(last)) yield toolUse('Skill', { skill: 'olaf-jira' });
     yield toolUse('Grep', { pattern: last.slice(0, 40), path: VAULT_DIR });
     await sleep(50);
     const words = `(Mock, kein Claude-Aufruf${options.resume ? ', Sitzung fortgesetzt' : ''}) Du hast geschrieben: ${last}`.split(/(?<= )/);

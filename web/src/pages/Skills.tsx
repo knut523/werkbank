@@ -51,13 +51,14 @@ export function Skills({ cfg }: { cfg: Config }) {
       <h2>Alle Skills</h2>
       <input type="search" placeholder="Skills filtern …" aria-label="Skills filtern" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 10, width: 320 }} />
       <table className="t small">
-        <thead><tr><th>Name</th><th>Was er kann</th><th>Stand</th><th>Quelle</th><th>Version</th></tr></thead>
+        <thead><tr><th>Name</th><th>Was er kann</th><th>Stand</th><th title="Aufrufe über das Skill-Werkzeug in Werkbank-Sitzungen">Nutzung</th><th>Quelle</th><th>Version</th></tr></thead>
         <tbody>
           {list.map((x: any) => (
             <tr key={x.name} data-skill={x.name}>
               <td><b>{x.name}</b>{x.hasScripts && <div className="tiny">mit Skripten</div>}</td>
               <td style={{ maxWidth: 520 }}>{x.description.length > 260 ? x.description.slice(0, 259) + '…' : x.description}</td>
               <td><StateChip state={x.state} /><div className="tiny">{EXPLAIN[x.state]}</div></td>
+              <td className="small">{x.usage ? <><b>{x.usage.count}×</b><div className="tiny">{x.usage.users} Pers. · zuletzt {fmtDateTime(x.usage.lastUsed)}</div></> : <span className="tiny">—</span>}{x.core && <div className="chip tiny-chip">Kern</div>}</td>
               <td className="tiny">{x.source ?? x.realPath ?? x.path}</td>
               <td className="tiny">{x.version}<div>{fmtDateTime(x.mtime)}</div></td>
             </tr>
