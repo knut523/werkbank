@@ -121,8 +121,12 @@ function McpStep({ claude }: { claude: boolean }) {
           : d.status || d.problem
             ? <p className="err small">Nicht verbunden{d.status && d.status !== 'connected' ? ` (Status: ${d.status})` : d.problem === 'mcp_auth' ? ' (letzter Schreibversuch: nicht angemeldet)' : ''}.</p>
             : <p className="note small">Noch nicht geprüft.</p>)}
+        {d?.home && <p className="small" data-testid="claude-home">Deine Claude-Konfiguration: {d.home.mode === 'person'
+          ? <><b>eigene</b> (<code>{d.home.dir}</code>) — eigene MCP-Anmeldungen, keine fremden Hooks oder Erinnerungen.</>
+          : <><b>geteilt</b> mit dem VM-Nutzer (Pilot) — Jira-Anmeldung aus dessen <code>~/.claude</code>.</>}</p>}
         <ol className="small">
-          <li>Einmalig im Terminal: <code>claude</code> starten → <code>/mcp</code> → <b>atlassian</b> → <b>Authenticate</b> → im Browser mit deinem Atlassian-Konto anmelden. (Fehlt „atlassian“ in der Liste: <code>claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp</code>)</li>
+          <li>Einmalig anmelden, am einfachsten <b>im Chat</b>: <a className="btn small" href={d?.loginChatUrl} target={chatTarget} data-testid="mcp-login-chat">Im Chat bei Jira anmelden</a> — Claude gibt dir einen Link, du meldest dich mit deinem Atlassian-Konto an und kopierst danach die <b>komplette Adresse</b> der Seite, auf der du landest (sie zeigt einen Verbindungsfehler — das ist so), zurück in den Chat.</li>
+          {d?.terminal && <li>Oder im Terminal der Workspace: <code>{d.terminal}</code> → <code>/mcp</code> → <b>atlassian</b> → <b>Authenticate</b>.</li>}
           <li>Hier prüfen — es wird nur der Verbindungsstatus gelesen, kein Modellaufruf.</li>
         </ol>
         <div className="row">

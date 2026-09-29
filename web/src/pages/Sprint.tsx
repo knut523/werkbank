@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, fmtDate, fmtDateTime, type Config } from '../api.ts';
-import { Err, Loading, useLoad, useConfirm, useToast } from '../ui.tsx';
+import { Err, Loading, useLoad, useConfirm, useToast, useJiraLive } from '../ui.tsx';
 import { HygienePanel } from '../components.tsx';
 
 const noteHref = (p: string) => '#/wissen/' + p.split('/').map(encodeURIComponent).join('/');
@@ -188,6 +188,8 @@ export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
   const cycles: any[] = (cyc.data as any)?.cycles ?? [];
   const id = want ?? cycles.find((c) => !c.archived)?.id ?? cycles[0]?.id;
   const v = useLoad(() => (id ? api('/api/sprint/' + id) : Promise.resolve(null)), [id]);
+  // Jira-Status der Tickets live nachziehen (Schreiben am Board, im Chat, Sprint-Sync, Abgleich).
+  useJiraLive(() => { if (id) api('/api/sprint/' + id).then(v.setData).catch(() => {}); });
   const [tab, setTab] = useState<string>('review');
   const [onlyOpen, setOnlyOpen] = useState(false);
   const toast = useToast();

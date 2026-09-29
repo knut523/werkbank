@@ -21,11 +21,14 @@ export class JiraWriteError extends Error {
 
 export const writeMode = () => (process.env.WERKBANK_JIRA_WRITE === 'rest' ? 'rest' : 'mcp');
 
-export const MCP_HELP = 'Einmalig im Terminal: `claude` starten → `/mcp` → „atlassian“ → „Authenticate“ und im Browser mit deinem Atlassian-Konto anmelden. Danach unter „Einrichtung“ → „Jira-MCP prüfen“.';
+// Anmeldung beim Atlassian-MCP: gilt je Claude-Konfiguration (je Person .runtime/claude/<id>, Pilot ~/.claude).
+// Am einfachsten im Werkbank-Chat — Claude Code bietet dort bei „needs-auth“ das Werkzeug authenticate an (Link öffnen,
+// anmelden, die Adresse der Fehlerseite in den Chat kopieren). Terminal-Weg in der README.
+export const MCP_HELP = 'Einmalig anmelden: unter „Einrichtung“ → „Im Chat bei Jira anmelden“ (Link öffnen, mit deinem Atlassian-Konto anmelden, die Adresse der danach erscheinenden Fehlerseite in den Chat kopieren). Danach „Jira-MCP prüfen“.';
 
 const MESSAGES: Record<string, string> = {
   mcp_auth: `Jira-Schreiben über den Atlassian-MCP ist nicht angemeldet (401 / Anmeldung abgelaufen). ${MCP_HELP}`,
-  mcp_missing: `Der Atlassian-MCP ist in deiner Claude-Konfiguration nicht eingerichtet. Einmalig: \`claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp\`, dann ${MCP_HELP}`,
+  mcp_missing: 'Der Atlassian-MCP ist in der Werkbank abgeschaltet (BRIDGE_ATLASSIAN_MCP_URL=off) — Jira-Schreiben geht so nicht.',
   claude_auth: 'Dein Claude-Token wurde abgelehnt — unter „Einrichtung“ einen neuen aus `claude setup-token` eintragen.',
   not_called: 'Claude hat den Jira-Aufruf nicht ausgeführt. Bitte noch einmal versuchen.',
 };
@@ -48,7 +51,7 @@ async function claudeToken(u: User): Promise<string> {
 
 /** Ein MCP-Aufruf; Fehler werden zu klaren Meldungen. */
 export async function mcpWrite(u: User, tool: string, input: Record<string, unknown>): Promise<string> {
-  const r = await bridge('/internal/mcp-call', await claudeToken(u), { userId: u.id, tool, input });
+  const r = await bridge('/internal/mcp-call', await claudeToken(u), { userId: u.id, email: u.email, tool, input });
   if (r.ok) return String(r.result ?? '');
   await setMcpState(u, r.error === 'mcp_auth' || r.error === 'mcp_missing' ? r.error : null);
   throw new JiraWriteError(r.error === 'tool_error' ? 502 : 412, r.error, MESSAGES[r.error] ?? `Jira (MCP): ${r.message ?? 'Fehler'}`);
@@ -60,17 +63,17 @@ async function setMcpState(u: User, problem: string | null) {
 
 /** Atlassian-MCP der Person prüfen (nur Init der Sitzung, kein Modellaufruf). */
 export async function checkMcp(u: User) {
-  const r = await bridge('/internal/mcp-status', await claudeToken(u), { userId: u.id });
+  const r = await bridge('/internal/mcp-status', await claudeToken(u), { userId: u.id, email: u.email });
   const s = (r.servers ?? []).find((x: any) => x.name === 'atlassian');
   const status = s?.status ?? 'fehlt';
-  const doc = { status, checkedAt: new Date(), problem: status === 'connected' ? null : status === 'fehlt' ? 'mcp_missing' : 'mcp_auth' };
+  const doc = { status, checkedAt: new Date(), problem: status === 'connected' ? null : status === 'fehlt' ? 'mcp_missing' : 'mcp_auth', home: r.home ?? null };
   await wb().collection('mcp_status').updateOne({ _id: u.id as any }, { $set: doc }, { upsert: true });
   return { ...doc, help: status === 'connected' ? null : MESSAGES[doc.problem!] };
 }
 
 export async function mcpState(u: User) {
   const d: any = await wb().collection('mcp_status').findOne({ _id: u.id as any });
-  return d ? { status: d.status ?? null, checkedAt: d.checkedAt ?? null, problem: d.problem ?? null } : { status: null, checkedAt: null, problem: null };
+  return d ? { status: d.status ?? null, checkedAt: d.checkedAt ?? null, problem: d.problem ?? null, home: d.home ?? null } : { status: null, checkedAt: null, problem: null, home: null };
 }
 
 /** Ist Jira-Schreiben für diese Person möglich? (für Pflegefragen: nur fragen, wenn ja) */
@@ -111,7 +114,9 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
   }
   if (via === 'mcp') await setMcpState(u, null);
   log('jira write', { user: u.id, key, via, n: done.length });
-  if (read) { try { await refreshIssue(read, key); } catch { /* nächster Sync */ } }
+  // Sofort nachziehen (Kopie + offene Boards). Ohne eigenen Lesezugang mit dem der Kopie (Entscheidung 3: Knuts Token).
+  const mirror = read ?? (await jiraCreds(null));
+  if (mirror) { try { await refreshIssue(mirror, key); } catch { /* nächster Sync */ } }
   return { done, via };
 }
 

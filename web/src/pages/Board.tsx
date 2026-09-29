@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, fmtDate, fmtDateTime, today, chatTarget, openChat, type Config } from '../api.ts';
-import { Err, Loading, useLoad, useConfirm, useToast, StateChip } from '../ui.tsx';
+import { Err, Loading, useLoad, useConfirm, useToast, StateChip, useJiraLive } from '../ui.tsx';
 import { HygienePanel, LinkButton } from '../components.tsx';
 
 const overdue = (i: any) => i.duedate && i.duedate < today() && i.status !== 'Done';
@@ -22,11 +22,11 @@ function SubRow({ s, onOpen }: { s: any; onOpen: (k: string) => void }) {
   );
 }
 
-function Card({ i, onOpen, expanded, onToggle }: { i: any; onOpen: (k: string) => void; expanded: boolean; onToggle: () => void }) {
+function Card({ i, onOpen, expanded, onToggle, fresh }: { i: any; onOpen: (k: string) => void; expanded: boolean; onToggle: () => void; fresh?: boolean }) {
   const subs: any[] = i.subtasks ?? [];
   const subHyg = subs.filter((s) => s.hygiene?.length).length;
   return (
-    <div className={`tcard ${i.broken ? 'broken' : ''} ${i.onlyViaSubtask ? 'dim' : ''}`} role="button" tabIndex={0} onClick={() => onOpen(i.key)} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(i.key); }} data-key={i.key}>
+    <div className={`tcard ${i.broken ? 'broken' : ''} ${i.onlyViaSubtask ? 'dim' : ''} ${fresh ? 'fresh' : ''}`} role="button" tabIndex={0} onClick={() => onOpen(i.key)} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(i.key); }} data-key={i.key}>
       <div className="k"><span>{i.key}{i.type === 'Sub-task' ? ' · Sub' : ''}</span><span>{i.priority && i.priority !== 'Medium' ? i.priority : ''}</span></div>
       <div className="s">{i.summary}</div>
       {i.broken && <div className="chip bad" style={{ marginBottom: 4 }} title="Sub-task ohne Parent-Ticket — in Jira einem Ticket zuordnen oder in einen Task umwandeln">⚠ kaputt: {i.broken}</div>}
@@ -222,6 +222,8 @@ function ForgePanel({ issueKey, enabled, onStarted }: { issueKey: string; enable
 
 function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: string; onClose: () => void; onChanged: () => void; site: string; forge?: boolean; onOpenKey: (k: string) => void }) {
   const d = useLoad(() => api('/api/board/issue/' + k), [k]);
+  // Jira-Änderung an genau diesem Ticket (z. B. aus einem Chat) → Details still nachladen.
+  useJiraLive((e) => { if (e.all || e.keys.includes(k)) api('/api/board/issue/' + k).then(d.setData).catch(() => {}); });
   const confirm = useConfirm();
   const toast = useToast();
   const [comment, setComment] = useState('');
@@ -309,8 +311,20 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
   const [syncing, setSyncing] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const toast = useToast();
-  const b = useLoad(() => api(`/api/board?owner=${encodeURIComponent(owner)}&filter=${filter}&q=${encodeURIComponent(q)}&done=${done ? 1 : 0}`), [owner, filter, q, done]);
+  const boardUrl = `/api/board?owner=${encodeURIComponent(owner)}&filter=${filter}&q=${encodeURIComponent(q)}&done=${done ? 1 : 0}`;
+  const b = useLoad(() => api(boardUrl), [owner, filter, q, done]);
   const data: any = b.data;
+  // Live: jede Jira-Änderung (Board, Sprint, Chat, Abgleich) lädt das Board still nach; geänderte Karten leuchten kurz auf.
+  const [fresh, setFresh] = useState<Set<string>>(new Set());
+  const liveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const urlRef = useRef(boardUrl);
+  urlRef.current = boardUrl;
+  useJiraLive((e) => {
+    if (liveTimer.current) clearTimeout(liveTimer.current);
+    liveTimer.current = setTimeout(() => {
+      api(urlRef.current).then((x) => { b.setData(x); if (e.keys.length) { setFresh(new Set(e.keys)); setTimeout(() => setFresh(new Set()), 2500); } }).catch(() => {});
+    }, 200);
+  });
   return (
     <div className="page wide">
       <div className="head">
@@ -353,7 +367,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
             {data.statuses.map((s: string) => (
               <div key={s}>
                 <div className="colhead">{s} · {lane.columns[s].length}</div>
-                <div className="col-cards">{lane.columns[s].map((i: any) => <Card key={i.key} i={i} onOpen={setOpen} expanded={allOpen !== expanded.has(i.key)} onToggle={() => toggle(i.key)} />)}</div>
+                <div className="col-cards">{lane.columns[s].map((i: any) => <Card key={i.key} i={i} fresh={fresh.has(i.key)} onOpen={setOpen} expanded={allOpen !== expanded.has(i.key)} onToggle={() => toggle(i.key)} />)}</div>
               </div>
             ))}
           </div>

@@ -3,6 +3,8 @@
 # (alles auf 127.0.0.1). Überspringt, was schon läuft.
 # Logs: .runtime/logs/<dienst>.log · PIDs: .runtime/pids/<dienst>.pid
 # BRIDGE_MOCK=1 scripts/start.sh startet die Brücke im Mock-Modus (kein Claude-Aufruf).
+# Claude-Konfiguration: je Person (.runtime/claude/<id>); nur die Konten in BRIDGE_CLAUDE_CONFIG_SHARED laufen mit
+# der Konfiguration des VM-Nutzers (Pilot: Knut). BRIDGE_CLAUDE_CONFIG_SHARED= (leer) → alle je Person.
 set -euo pipefail
 source "$(dirname "$0")/env.sh"
 
@@ -35,7 +37,8 @@ start meilisearch 7700 "$RT/data/meili" "$RT/bin/meilisearch" --http-addr 127.0.
   --db-path "$RT/data/meili/data.ms" --env production --no-analytics
 start claude-bridge 3090 "$WB/claude-bridge" env BRIDGE_PORT=3090 BRIDGE_HOST=127.0.0.1 \
   BRIDGE_STATE_DIR="$RT/bridge" BRIDGE_MOCK="${BRIDGE_MOCK:-0}" \
-  BRIDGE_ALLOWED_EMAILS="${BRIDGE_ALLOWED_EMAILS-knut.peters@maxenergy.at}" node src/server.ts
+  BRIDGE_ALLOWED_EMAILS="${BRIDGE_ALLOWED_EMAILS-knut.peters@maxenergy.at}" \
+  BRIDGE_CLAUDE_CONFIG_SHARED="${BRIDGE_CLAUDE_CONFIG_SHARED-knut.peters@maxenergy.at}" node src/server.ts
 start librechat 3080 "$RT/librechat" env CONFIG_PATH="$WB/librechat/librechat.yaml" node api/server/index.js
 # Freigabe wie bei der Brücke: dieselbe Liste, solange die Sitzungen als VM-Nutzer laufen.
 start werkbank-web 3070 "$WB/web" env WERKBANK_PORT=3070 WERKBANK_HOST=127.0.0.1 BRIDGE_STATE_DIR="$RT/bridge" \

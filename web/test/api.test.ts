@@ -71,7 +71,8 @@ before(async () => {
   bridge = spawn(process.execPath, ['src/server.ts'], {
     cwd: join(WEB, '..', 'claude-bridge'),
     env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(BRIDGE_PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_ALLOWED_EMAILS: '',
-      WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_URL: B, BRIDGE_MOCK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3` },
+      WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_URL: B, BRIDGE_MOCK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3`,
+      BRIDGE_CLAUDE_CONFIG_SHARED: '', WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src') },
     stdio: 'ignore',
   });
   web = spawn(process.execPath, ['server/main.ts'], {
@@ -199,7 +200,7 @@ test('Board: Kommentar/Status/Fälligkeit erst nach Bestätigung, dann in Jira',
   const denied = await anna.req('/api/board/issue/PM-331/comment', { body: { text: '401-TEST', confirm: true } });
   assert.equal(denied.status, 412);
   assert.equal(denied.j.code, 'mcp_auth');
-  assert.match(denied.j.error, /nicht angemeldet.*\/mcp.*Authenticate/);
+  assert.match(denied.j.error, /nicht angemeldet.*Im Chat bei Jira anmelden/);
   assert.equal(jira.writes.length, n, 'nichts geschrieben');
   assert.equal((await anna.req('/api/board/issue/PM-331/status', { body: { to: 'Done', confirm: true } })).j.issue.status, 'Done');
   const bad = await anna.req('/api/board/issue/PM-340/status', { body: { to: 'Done', confirm: true } });
@@ -488,11 +489,16 @@ test('Interne Schnittstelle nur mit Token; Kontext-Paket klein; Pflegefragen nur
   const s0 = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c0' });
   assert.equal(s0.j.questions.length, 0);
   assert.match(s0.j.text, /Hinweis an die Person \(einmalig/);
-  assert.match(s0.j.text, /\/mcp/);
+  assert.match(s0.j.text, /Im Chat bei Jira anmelden/);
   const s0b = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c0b' });
   assert.doesNotMatch(s0b.j.text, /Hinweis an die Person/, 'Hinweis nur einmal');
   const chk = await anna.req('/api/setup/mcp/check', { method: 'POST' });
   assert.equal(chk.j.status, 'connected');
+  // Je Person eigene Claude-Konfiguration (Brücke), Anmeldung im Chat oder im Terminal mit genau diesem Verzeichnis.
+  assert.equal(chk.j.home.mode, 'person');
+  assert.equal(chk.j.home.dir, join(tmp, 'claude', String(users.a._id)));
+  assert.match(prompt(chk.j.loginChatUrl), /mcp__atlassian__authenticate/);
+  assert.match(chk.j.terminal, new RegExp(`^CLAUDE_CONFIG_DIR=${chk.j.home.dir} claude --strict-mcp-config --mcp-config '\\{"mcpServers":\\{"atlassian"`));
   assert.equal((await anna.req('/api/setup/mcp')).j.status, 'connected');
   const s1 = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c1', skills: ['olaf-jira'] });
   assert.equal(s1.status, 200);
@@ -571,4 +577,68 @@ test('Board-Agent: Nachfrage setzt dieselbe Sitzung fort; forge-Platzhalter; Sit
   assert.equal((await anna.req('/api/config')).j.forge, false);
   const s = await anna.req('/api/sessions');
   assert.ok(Array.isArray(s.j.sessions));
+});
+
+/** Liest den SSE-Strom /api/events, bis `until` passt (oder Zeitlimit). */
+async function events(c: Client, until: (e: any[]) => boolean, act: () => Promise<unknown>, ms = 8000) {
+  const ac = new AbortController();
+  const r = await fetch(B + '/api/events', { headers: { cookie: c.cookie }, signal: ac.signal });
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type') ?? '', /text\/event-stream/);
+  assert.match(r.headers.get('cache-control') ?? '', /no-transform/);
+  const got: any[] = [];
+  const dec = new TextDecoder();
+  let buf = '';
+  const timer = setTimeout(() => ac.abort(), ms);
+  const reading = (async () => {
+    try {
+      for await (const part of r.body as any) {
+        buf += dec.decode(part, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, i); buf = buf.slice(i + 2);
+          const ev = block.match(/^event: (.+)$/m)?.[1];
+          const data = block.match(/^data: (.+)$/m)?.[1];
+          if (ev === 'jira' && data) got.push(JSON.parse(data));
+          if (until(got)) { ac.abort(); return; }
+        }
+      }
+    } catch { /* abgebrochen */ }
+  })();
+  await new Promise((r) => setTimeout(r, 100));
+  await act();
+  await reading;
+  clearTimeout(timer);
+  return got;
+}
+
+test('Live: bestätigtes Schreiben am Board schiebt die Änderung an offene Seiten (SSE)', async () => {
+  assert.equal((await new Client().req('/api/events')).status, 401, 'nur angemeldet');
+  // Bernd hat das Board offen, Anna schreibt einen Kommentar.
+  const got = await events(bernd, (e) => e.some((x) => x.keys.includes('PM-322')), () => anna.req('/api/board/issue/PM-322/comment', { body: { text: 'Live-Test', confirm: true } }));
+  const e = got.find((x) => x.keys.includes('PM-322'));
+  assert.equal(e.why, 'refresh');
+  const b = await bernd.req('/api/board');
+  const card = b.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).find((i: any) => i.key === 'PM-322');
+  assert.ok(card.comments >= 1, 'Kopie ist schon nachgezogen');
+});
+
+test('Live: Jira-Schreiben im Chat (Brücke meldet den Schlüssel) → Kopie nachgezogen, Board bekommt es', async () => {
+  // Jemand kommentiert PM-321 in Jira direkt (wie der Atlassian-MCP im Chat); die Kopie weiß davon noch nichts.
+  const before = (await anna.req('/api/board/issue/PM-321')).j.issue.comments;
+  await fetch(`http://127.0.0.1:${jira.port}/rest/api/3/issue/PM-321/comment`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Basic ' + Buffer.from('mcp:mock').toString('base64') }, body: JSON.stringify({ body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'aus dem Chat' }] }] } }) }).then((r) => assert.ok(r.ok, 'Jira-Nachbau nimmt den Kommentar an'));
+  assert.equal((await internal('/internal/jira-touched', { userId: String(users.a._id), keys: ['PM-321'] }, 'falsch')).status, 403);
+  let res: any;
+  const got = await events(bernd, (e) => e.some((x) => x.keys.includes('PM-321')), async () => { res = await internal('/internal/jira-touched', { userId: String(users.a._id), keys: ['PM-321', 'OLAF-1', 'kaputt'], tool: 'mcp__atlassian__addCommentToJiraIssue' }); });
+  assert.deepEqual(res.j.refreshed, ['PM-321'], 'nur Schlüssel aus PM');
+  assert.ok(got.some((x) => x.keys.includes('PM-321')));
+  assert.equal((await anna.req('/api/board/issue/PM-321')).j.issue.comments, before + 1);
+});
+
+test('Live: der ganze Weg — Claude kommentiert im Chat (Mock-Brücke), das Board bekommt die Änderung', async () => {
+  const conv = crypto.randomUUID();
+  const chat = (text: string) => fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/chat/completions`, { method: 'POST', headers: { authorization: 'Bearer mock-token', 'content-type': 'application/json', 'x-librechat-user-id': String(users.a._id), 'x-librechat-conversation-id': conv, 'x-librechat-user-email': users.a.email }, body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: text }] }) }).then((r) => r.text());
+  assert.match(await chat('bitte jira-kommentar PM-331'), /Soll ich in Jira/);
+  const got = await events(bernd, (e) => e.some((x) => x.keys.includes('PM-331')), () => chat('ja'));
+  assert.ok(got.some((x) => x.keys.includes('PM-331')));
 });

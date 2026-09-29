@@ -3,6 +3,7 @@
 // Schreiben (Kommentar, Status, Fälligkeit): nur nach Bestätigung in der Oberfläche und nur mit
 // dem Token der Person, die klickt. Neue Tickets legt die Werkbank nicht an (olaf-jira-Regel).
 
+import { jiraChanged } from './events.ts';
 import { cfg, jiraBase } from './config.ts';
 import { wb } from './db.ts';
 import type { JiraCreds } from './creds.ts';
@@ -141,6 +142,7 @@ export async function syncMirror(creds: JiraCreds, by: string): Promise<{ count:
     const removed = (await col.deleteMany({ syncedAt: { $lt: started } })).deletedCount ?? 0;
     const at = new Date();
     await wb().collection('meta').updateOne({ _id: 'jira_sync' as any }, { $set: { at, by, source: creds.source, count: issues.length, error: null } }, { upsert: true });
+    jiraChanged([], 'sync', true);
     return { count: issues.length, removed, at };
   })();
   try { return await syncing; } catch (e: any) {
@@ -159,6 +161,7 @@ export async function refreshIssue(creds: JiraCreds, key: string): Promise<Issue
     i.workstream = p?.type === 'Workstream' ? p.key : p?.workstream ?? i.parent;
   } else i.workstream = i.type === 'Workstream' ? i.key : null;
   await col.replaceOne({ key }, { ...i, syncedAt: new Date() }, { upsert: true });
+  jiraChanged([key, ...(i.parent ? [i.parent] : [])], 'refresh');
   return i;
 }
 

@@ -25,6 +25,7 @@ import { log } from './log.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError } from './jirawrite.ts';
+import { jiraEventStream } from './events.ts';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal } from './roadmap.ts';
 
@@ -250,14 +251,25 @@ on('POST', /^\/api\/setup\/jira$/, async (req, res) => {
   send(res, 200, { ok: true, count, jira: await jiraStatus(u) });
 });
 
+// Einmalige Anmeldung beim Atlassian-MCP, ohne Terminal: im Werkbank-Chat bietet Claude Code bei „needs-auth“ die
+// Werkzeuge authenticate/complete_authentication an (Link → Anmeldung → Adresse der Fehlerseite zurück in den Chat).
+const MCP_LOGIN_PROMPT = 'Melde mich beim Atlassian-MCP (Jira) an: Ruf das Werkzeug mcp__atlassian__authenticate auf und gib mir den Link. Ich melde mich im Browser an und kopiere dir danach die komplette Adresse der Seite, auf der ich lande (auch wenn sie einen Verbindungsfehler zeigt). Damit schließt du die Anmeldung mit mcp__atlassian__complete_authentication ab. Sonst nichts tun.';
+const ATLASSIAN_JSON = JSON.stringify({ mcpServers: { atlassian: { type: 'http', url: process.env.BRIDGE_ATLASSIAN_MCP_URL || 'https://mcp.atlassian.com/v1/mcp' } } });
+const mcpExtras = (home: any) => ({
+  loginChatUrl: chatUrl(MCP_LOGIN_PROMPT),
+  terminal: home?.dir ? `CLAUDE_CONFIG_DIR=${home.dir} claude --strict-mcp-config --mcp-config '${ATLASSIAN_JSON}'` : home ? 'claude' : null,
+});
+
 on('GET', /^\/api\/setup\/mcp$/, async (req, res) => {
   const u = await needUser(req);
-  send(res, 200, { ...(await mcpState(u)), mode: writeMode() });
+  const st = await mcpState(u);
+  send(res, 200, { ...st, mode: writeMode(), ...mcpExtras(st.home) });
 });
 
 on('POST', /^\/api\/setup\/mcp\/check$/, async (req, res) => {
   const u = await needUser(req);
-  send(res, 200, { ...(await checkMcp(u)), mode: writeMode() });
+  const st = await checkMcp(u);
+  send(res, 200, { ...st, mode: writeMode(), ...mcpExtras(st.home) });
 });
 
 on('DELETE', /^\/api\/setup\/jira$/, async (req, res) => { const u = await needUser(req); await removeJiraCreds(u); send(res, 200, { ok: true }); });
@@ -328,6 +340,12 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
     sync: sync ? { at: sync.at, by: sync.by, count: sync.count, source: sync.source, error: sync.error, errorAt: sync.errorAt } : null,
     site: cfg.jiraSite,
   });
+});
+
+// Änderungen an der Jira-Kopie live (SSE): Board und Sprint laden betroffene Karten ohne Neuladen nach.
+on('GET', /^\/api\/events$/, async (req, res) => {
+  await needUser(req);
+  jiraEventStream(req, res);
 });
 
 on('POST', /^\/api\/board\/sync$/, async (req, res) => {
@@ -897,6 +915,20 @@ on('POST', /^\/internal\/jira-update$/, async (req, res) => {
   const done = await jiraWrite(u, () => applyActions(u, key, actions));
   log('jira write (chat)', { user: u.id, key, n: done.length });
   send(res, 200, { ok: true, done });
+});
+
+// Die Brücke hat im Chat einen schreibenden Atlassian-Aufruf gesehen (Kommentar, Status, Anlegen …): diese Tickets
+// sofort in die Kopie holen — refreshIssue schiebt die Änderung an offene Board-/Sprint-Seiten.
+on('POST', /^\/internal\/jira-touched$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const prefix = cfg.jiraProject + '-';
+  const keys = [...new Set((Array.isArray(b.keys) ? b.keys : []).map(String))].filter((k) => /^[A-Z][A-Z0-9]+-\d+$/.test(k) && k.startsWith(prefix)).slice(0, 10);
+  const creds = (await jiraCreds(u)) ?? (await jiraCreds(null));
+  const done: string[] = [];
+  if (creds) for (const k of keys) { try { await refreshIssue(creds, k); done.push(k); } catch (e: any) { log('jira nachziehen', { key: k, error: String(e.message).slice(0, 120) }); } }
+  log('jira im chat geschrieben', { user: u.id, keys: done, tool: String(b.tool ?? '').slice(0, 80) });
+  send(res, 200, { ok: true, refreshed: done });
 });
 
 // ---------- Statische Dateien ----------
