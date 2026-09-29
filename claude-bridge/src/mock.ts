@@ -9,6 +9,14 @@ import { VAULT_DIR } from './tools.ts';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function mockQuery({ prompt, options }: { prompt: string; options: Record<string, any> }) {
+  if (typeof prompt !== 'string') {
+    // Streaming-Eingabe ohne Nachricht (MCP-Status): nur Steuerabfragen, keine Modellantwort.
+    const signal: AbortSignal = options.abortController?.signal;
+    return {
+      async *[Symbol.asyncIterator]() { await new Promise<void>((r) => signal?.addEventListener('abort', () => r())); },
+      mcpServerStatus: async () => [{ name: 'atlassian', status: process.env.BRIDGE_MOCK_ATLASSIAN || 'connected' }],
+    } as any;
+  }
   const session_id: string = options.resume ?? randomUUID();
   const signal: AbortSignal = options.abortController?.signal;
   const guard = options.hooks?.PreToolUse?.[0]?.hooks?.[0];
@@ -24,7 +32,6 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
 
   async function* run() {
     yield { type: 'system', subtype: 'init', session_id, mcp_servers: [{ name: 'atlassian', status: process.env.BRIDGE_MOCK_ATLASSIAN || 'connected' }] };
-    if (prompt === 'status') { await sleep(5000); return; }
     if (prompt.startsWith('WERKBANK-MCP-AUFRUF')) {
       // Ein bestätigter MCP-Aufruf: Werkzeug + Argumente aus dem Prompt, Ergebnis ins Protokoll (für Tests).
       const tool = prompt.match(/`(mcp__[^`]+)`/)?.[1] ?? '';

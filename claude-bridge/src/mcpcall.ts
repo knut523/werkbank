@@ -36,20 +36,29 @@ function textOfResult(content: unknown): string {
   return '';
 }
 
-/** Status der MCP-Server (z. B. atlassian: connected / needs-auth / failed), ohne Modellaufruf. */
+/**
+ * Status der MCP-Server (z. B. atlassian: connected / needs-auth / failed), ohne Modellaufruf: die Sitzung
+ * startet im Streaming-Eingabemodus ohne Nachricht, fragt `mcpServerStatus()` ab (wartet, solange ein Server
+ * noch „pending“ ist, höchstens 25 s) und wird dann beendet.
+ */
 export async function mcpStatus(query: QueryFn, token: string, cwd: string): Promise<{ servers: { name: string; status: string }[] }> {
   const abort = new AbortController();
-  const q = query({ prompt: 'status', options: { cwd, settingSources: ['user', 'project'], abortController: abort, env: cleanEnv(token), maxTurns: 1, permissionMode: 'default', canUseTool: async () => ({ behavior: 'deny', message: 'nur Status' }) } });
-  const timer = setTimeout(() => abort.abort(), 30_000);
+  const idle = (async function* () { await new Promise<void>((r) => abort.signal.addEventListener('abort', () => r())); })();
+  const q: any = query({ prompt: idle as any, options: { cwd, settingSources: ['user', 'project'], abortController: abort, env: cleanEnv(token), maxTurns: 1, permissionMode: 'default', canUseTool: async () => ({ behavior: 'deny', message: 'nur Status' }) } });
+  // Nachrichten abholen, damit die Sitzung nicht stockt (es kommen keine Modellantworten).
+  (async () => { try { for await (const _ of q) { /* nichts */ } } catch { /* beendet */ } })();
+  const deadline = Date.now() + 25_000;
+  let servers: { name: string; status: string }[] = [];
   try {
-    for await (const msg of q) {
-      if (msg.type === 'system' && msg.subtype === 'init') {
-        abort.abort();
-        return { servers: (msg.mcp_servers ?? []).map((s: any) => ({ name: String(s.name), status: String(s.status) })) };
-      }
+    while (Date.now() < deadline) {
+      const st = await Promise.race([q.mcpServerStatus(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10_000))]) as any[];
+      servers = (st ?? []).map((x: any) => ({ name: String(x.name), status: String(x.status) }));
+      if (!servers.some((x) => x.status === 'pending')) break;
+      await new Promise((r) => setTimeout(r, 500));
     }
-  } catch { /* abgebrochen */ } finally { clearTimeout(timer); }
-  return { servers: [] };
+  } catch (e: any) { log('mcp status error', { error: String(e?.message ?? e).replaceAll(token, '***').slice(0, 200) }); }
+  finally { abort.abort(); }
+  return { servers };
 }
 
 /** Führt genau einen (schon bestätigten) MCP-Aufruf aus. */
@@ -89,7 +98,8 @@ export async function mcpCall(query: QueryFn, p: { token: string; cwd: string; t
     for await (const msg of q) {
       if (msg.type === 'system' && msg.subtype === 'init') {
         serverStatus = String((msg.mcp_servers ?? []).find((s: any) => s.name === server)?.status ?? 'fehlt');
-        if (serverStatus !== 'connected') {
+        // „pending“ = verbindet noch — weiterlaufen lassen; kommt der Aufruf nicht zustande, meldet es not_called.
+        if (serverStatus !== 'connected' && serverStatus !== 'pending') {
           abort.abort();
           return serverStatus === 'fehlt'
             ? { ok: false, error: 'mcp_missing', message: `Der MCP-Server „${server}“ ist in deiner Claude-Konfiguration nicht eingerichtet.` }
