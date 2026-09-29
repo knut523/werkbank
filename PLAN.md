@@ -1,6 +1,6 @@
 # OLAF-Werkbank — Plan
 
-Stand 28.09.2026 · Owner Knut · lokal auf der VM (`~/work/werkbank`, Arbeits-Worktree `~/work/werkbank-dev`), kein Remote.
+Stand 29.09.2026 · Owner Knut · lokal auf der VM (`~/work/werkbank`, Arbeits-Worktree `~/work/werkbank-dev`), kein Remote.
 
 ## Ziel
 
@@ -77,6 +77,13 @@ Werkbank-Seiten in LibreChats linker Leiste (eine Anmeldung, Pfad-Proxy `/werkba
 Kontext-Paket je Person (Index-Stufe, Vault-Karte, Obergrenze, Cache, Messung), Task-Hygiene nur zu Tagesbeginn
 und Tagesabschluss, Skills je Vorlage, Sitzungsstatus, Nachfrage an Board-Agenten, Platzhalter für forge-review.
 Übernommene Ideen mit Quelle und Stand: README, Abschnitt „Forschung“.
+
+### Runde 3, 29.09.2026 (Knuts Live-Feedback)
+
+Streaming (Arbeitsanzeige sofort, Denken/Werkzeuge als Fortschritt, Messung), „Agent ansetzen“ als echter Chat
+„PM-123 · Titel“ mit Status an der Karte, Jira-Schreiben über den Atlassian-MCP der Person, Sub-tasks unter der Karte,
+Dokumente und Vault-Seiten an Tickets (Verknüpfungsindex, Vorschläge), eigene Sektion Roadmap, Knuts Antworten auf
+die zwölf Entscheidungen. Details: README.
 
 ## Leitplanken
 

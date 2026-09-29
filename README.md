@@ -3,7 +3,7 @@
 Chat-Oberfläche fürs Team (LibreChat), hinter der **Claude Code** arbeitet — mit unseren Skills,
 dem Obsidian-Vault und Jira, **unter dem eigenen Claude-Konto jeder Person, ohne API-Schlüssel** —
 und daneben die **Werkbank-Web-App** mit Einrichtung, Wissen (Vault), Board (Jira-Kopie PM),
-Sprint (Review/Planning), Skills und Dateien & Teilen.
+Sprint (Review/Planning), Roadmap, Skills und Dateien & Teilen.
 Plan und Entscheidungen: [`PLAN.md`](PLAN.md).
 
 ```
@@ -15,12 +15,13 @@ Browser ─► LibreChat :3080 ── Endpunkt „Claude Code“ + Vorlagen (Sch
    │            ▼
    │       Claude Agent SDK ── Skills (~/.claude/skills ← /vault/_meta/dist-skill), Vault /vault, Jira-MCP
    │
-   └──► Werkbank-Web :3070 ── Einrichtung · Wissen · Board · Sprint · Skills · Dateien & Teilen
+   └──► Werkbank-Web :3070 ── Einrichtung · Wissen · Board · Sprint · Roadmap · Skills · Dateien & Teilen
                 │  Login = LibreChat-Konto · Vault nur lesend (Schreiben nur nach Bestätigung)
                 ├── MongoDB (eigene DB „werkbank“: Jira-Kopie, Sitzungen, verschlüsselte Zugänge, Dateien)
                 ├── Meilisearch (Index „werkbank_vault“: Volltextsuche im Vault)
-                ├── Jira REST (Lesen: Kopie von PM; Schreiben: nur nach Klick, mit dem Token der Person)
-                └── claude-bridge („Agent ansetzen“: nur lesend, Ergebnis als Kommentarentwurf)
+                ├── Jira REST — nur Lesen (Kopie von PM, Übergänge) mit dem Lesetoken
+                ├── claude-bridge /internal/mcp-call — Jira-Schreiben über den Atlassian-MCP der Person (nach Bestätigung)
+                └── LibreChat /api/agents/chat — „Agent ansetzen“ legt einen echten Chat „PM-123 · Titel“ an
 ```
 
 ## Ein-Klick-Einrichtung
@@ -53,6 +54,7 @@ wiederholbar. Es
 | `scripts/werkbank.sh skills [--apply]` | Vault-Skills: Bericht bzw. fehlende verlinken |
 | `scripts/werkbank.sh test` | Tests der Brücke und der Web-App |
 | `scripts/werkbank.sh e2e` | Playwright-Durchlauf durch alle Seiten (siehe „Tests“) |
+| `scripts/werkbank.sh stream-timing` | Zeitmessung Streaming: Brücke direkt und im Browser durch LibreChat (Mock) |
 | `scripts/werkbank.sh bridge-mock on\|off` | Brücke im Mock-Modus (kein Claude-Aufruf) bzw. wieder echt |
 
 Die alten Einzelskripte (`setup.sh`, `start.sh`, `stop.sh`, `status.sh`) gibt es weiter; `werkbank.sh`
@@ -65,7 +67,7 @@ Alles läuft nativ und lauscht nur auf `127.0.0.1`. Erreichbar über die Coder-V
 
 | Dienst | Port | Link |
 |---|---|---|
-| **LibreChat** (Chat **und** alle Werkbank-Seiten in der linken Leiste) | 3080 | **https://3080--main--dev--knut.ws.konekto.energy** (Werkbank-Seiten unter `/wb/einrichtung`, `/wb/wissen`, `/wb/board`, `/wb/sprint`, `/wb/skills`, `/wb/dateien`) |
+| **LibreChat** (Chat **und** alle Werkbank-Seiten in der linken Leiste) | 3080 | **https://3080--main--dev--knut.ws.konekto.energy** (Werkbank-Seiten unter `/wb/einrichtung`, `/wb/wissen`, `/wb/board`, `/wb/sprint`, `/wb/roadmap`, `/wb/skills`, `/wb/dateien`) |
 | Werkbank-Web direkt (Health/Debug, eigenes Login) | 3070 | https://3070--main--dev--knut.ws.konekto.energy |
 | claude-bridge | 3090 | nur intern |
 | MongoDB 8.0.20 | 27017 | nur intern |
@@ -77,7 +79,7 @@ besprechen“ usw. starten einen neuen Chat mit vorbereitetem Text im selben Fen
 
 ## Erste Schritte im Browser
 
-Die Web-App führt beim ersten Aufruf durch vier Schritte (Seite **Einrichtung**):
+Die Web-App führt beim ersten Aufruf durch fünf Schritte (Seite **Einrichtung**):
 
 1. **Konto anlegen** — im Chat „Registrieren“ (nur `@maxenergy.at` / `@konekto.energy`), dann in der
    Werkbank mit **denselben Zugangsdaten** anmelden. Das Passwort prüft LibreChat; die Werkbank merkt
@@ -86,18 +88,21 @@ Die Web-App führt beim ersten Aufruf durch vier Schritte (Seite **Einrichtung**
 2. **Eigenes Claude verbinden** — im Terminal `claude setup-token`, den Token (`sk-ant-oat…`) einfügen.
    Er landet verschlüsselt im **LibreChat-Schlüsselspeicher** (gleiches Verfahren wie das Zahnrad im
    Modell-Menü, Ablauf „nie“) und gilt damit im Chat und für „Agent ansetzen“. API-Schlüssel werden abgelehnt.
-3. **Eigenes Jira verbinden** — E-Mail + Atlassian-API-Token (mit Bereichen: `read:jira-work`, für
-   Schreiben vom Board zusätzlich `write:jira-work`). Wird geprüft (zählt die Tickets in PM),
+3. **Jira lesen** — E-Mail + Atlassian-API-Token (Bereich `read:jira-work` reicht). Wird geprüft (zählt die Tickets in PM),
    AES-256-GCM-verschlüsselt gespeichert (`WERKBANK_CREDS_KEY`), nie angezeigt, nie geloggt.
    **Pilot:** Für Knut kommt der Lesezugang ohne Eintrag aus dem Vaultwarden der VM — derselbe Weg wie
    `maxenergy-jira/scripts/jira-read.sh` (Eintrag „Jira api“, `JIRA_EMAIL`, `bw` mit `~/.config/vw/session`),
    nur im Speicher, 10 Minuten. Dieser Token **darf nicht schreiben**.
-4. **Loslegen** — Kacheln zu Chat, Wissen, Board, Sprint, Skills, Dateien; darunter der Zustand der Dienste.
+4. **Jira schreiben (Atlassian-MCP)** — Knut, 29.09.: „Schreiben erstmal über MCP“. Kommentare, Statuswechsel und
+   Fälligkeiten (Board, Sprint-Sync, Pflegefragen, Werkzeug `jira_update`) gehen über den Atlassian-MCP **in der
+   Claude-Code-Sitzung der Person**, siehe „Jira schreiben über den MCP“. Knopf **„Jira-MCP prüfen“** liest nur den
+   Verbindungsstatus (Init der Sitzung, kein Modellaufruf).
+5. **Loslegen** — Kacheln zu Chat, Wissen, Board, Sprint, Skills, Dateien; darunter der Zustand der Dienste.
 
 ## Die Werkbank im Chat (linke Leiste)
 
-Unter dem „Neuer Chat“-Knopf stehen sechs Symbole: 🚀 Einrichtung · 📖 Wissen · 🗂 Board · 🔁 Sprint ·
-🧩 Skills · 🔗 Dateien & Teilen. Ein Klick öffnet die Seite im Hauptbereich von LibreChat (Adresse
+Unter dem „Neuer Chat“-Knopf stehen sieben Symbole: 🚀 Einrichtung · 📖 Wissen · 🗂 Board · 🔁 Sprint ·
+🧭 Roadmap · 🧩 Skills · 🔗 Dateien & Teilen. Ein Klick öffnet die Seite im Hauptbereich von LibreChat (Adresse
 `/wb/<seite>`, Unterseiten stehen als `?h=…` in der Adresszeile und überstehen Neuladen).
 
 - **Eine Anmeldung:** LibreChat reicht `/werkbank/*` an die Web-App (3070) durch. Dort kommt LibreChats
@@ -127,7 +132,11 @@ Unter dem „Neuer Chat“-Knopf stehen sechs Symbole: 🚀 Einrichtung · 📖 
 - **Volltextsuche** über Meilisearch (eigener Index, nur lesend indiziert; neu bei Änderungen am Vault
   nach 20 s und alle 10 Minuten, oder per „↻ Index“).
 - **„Im Chat öffnen“** startet einen Chat mit der Notiz als Kontext. Geändert wird der Vault von hier
-  aus nie — das macht Claude im Chat, nach „ja“.
+  aus nur an zwei Stellen, jeweils nach Vorschau und Bestätigung: `jira:` ins Frontmatter (Verknüpfen) und
+  Antwortzeilen (Sprint, Roadmap). Alles andere macht Claude im Chat, nach „ja“.
+- **Verknüpfte Tickets** je Notiz (rechts): Keys aus Frontmatter (`jira`, `ticket`, `tickets`, `jira-key`), aus dem
+  Text (ohne Code) und aus Jira-Links, mit Status aus der Kopie. Für Notizen **ohne** Key: „Passt vielleicht zu“
+  (siehe „Dokumente an Tickets“).
 
 ### 🗂️ Board — Jira-Kopie von PM
 
@@ -135,14 +144,29 @@ Unter dem „Neuer Chat“-Knopf stehen sechs Symbole: 🚀 Einrichtung · 📖 
   Owner, Parent/Workstream, Fälligkeit, Priorität, Aktualisiert, Beschreibungsauszug, Anzahl Kommentare,
   letzter Kommentar. Abgleich alle 15 Minuten (Pilot: mit Knuts Lesetoken) und per „↻ Jetzt synchronisieren“
   (mit dem Zugang der klickenden Person).
-- **Spalten** = Status (Backlog, To Do, In Progress, Ongoing, Done), **Bahnen** = Workstreams
-  (Sub-tasks über ihren Parent). **Filter:** Owner, überfällig, ohne Datum, Suche; ältere erledigte ausgeblendet.
-- **Karte:** Details, Sub-tasks, „Im Chat besprechen“ und — jeweils mit **Bestätigungsdialog**, unter dem
-  eigenen Jira-Konto — **Kommentar**, **Statuswechsel** (nur Übergänge, die es wirklich gibt) und **Fälligkeit**.
-- **🤖 Agent ansetzen** (Idee kandev/Vibe Kanban): startet über die Brücke eine Claude-Code-Sitzung mit
-  dem eigenen Claude-Token und dem Ticket als Kontext, **nur lesend** (Schreibwerkzeuge werden ohne
-  Rückfrage abgelehnt). Verlauf live an der Karte; am Ende ein **Kommentarentwurf**, bearbeitbar, der
-  erst nach „An Jira senden“ + Bestätigung gepostet wird.
+- **Spalten** = Status (Backlog, To Do, In Progress, Ongoing, Done), **Bahnen** = Workstreams.
+  **Filter:** Owner, überfällig, ohne Datum, Braucht Pflege, Suche; ältere erledigte ausgeblendet.
+- **Sub-tasks hängen unter ihrer Karte** (keine eigenen Karten mehr): „▸ Sub-tasks **2/5** erledigt“ mit
+  Fortschrittsbalken, auf-/zuklappen je Karte oder alle („Sub-tasks aufklappen“), je Sub-task Key, Titel,
+  Status, Owner, Datum (überfällig rot) und 🧹 „Braucht Pflege“; Klick öffnet den Sub-task. Filter greifen auch
+  über Sub-tasks (eine Karte bleibt sichtbar, wenn nur ein Sub-task passt, dann blasser).
+  **Kaputte Sub-tasks** — Sub-task ohne Parent (in der echten Kopie PM-259…264 und PM-266: Jira liefert
+  dort kein `parent`, sie hängen also *nicht* unter dem Workstream) — stehen als eigene Karte mit
+  „⚠ kaputt: Sub-task ohne Parent“ in „Ohne Workstream“, oben gezählt, und haben die Pflegeregel
+  „Sub-task ohne Parent“.
+- **Karte:** Details, Sub-tasks, **Dokumente**, „Im Chat besprechen“ (legt einen verknüpften Chat an) und —
+  jeweils mit **Bestätigungsdialog** — **Kommentar**, **Statuswechsel** (nur Übergänge, die es wirklich gibt)
+  und **Fälligkeit**, geschrieben **über den Atlassian-MCP** (siehe unten).
+- **🤖 Agent ansetzen = echter Chat** (Knut, 29.09.): legt in LibreChat eine neue Unterhaltung
+  **„PM-123 · Titel“** mit dem Ticket als Kontext an — im Namen der Person (kurzlebiger LibreChat-Zugangstoken,
+  derselbe Aufruf wie „Senden“), unter ihrem Claude. LibreChat fährt den Zug serverseitig weiter, der Agent
+  arbeitet also **auch ohne offenen Tab**; wer den Chat öffnet, sieht den Fortschritt live. Jedes Schreiben
+  (Vault, Dateien, Jira) hält im Chat an und wartet auf **„ja“**; GitHub-Schreiben ist gesperrt. An der Karte:
+  Status **läuft / wartet auf ja / fertig** (aus der Brücke), „Im Chat öffnen“, welche Dateien der Agent
+  geschrieben hat; am Board-Kärtchen „🤖 wartet auf ja“. Ein Agent je Karte und Person; eine offene Rückfrage
+  bleibt stehen, auch wenn die Person inzwischen woanders chattet (höchstens 5 wartende je Person).
+- **📝 Nur Entwurf** bleibt als Option: lesend im Hintergrund, Ergebnis als bearbeitbarer Kommentarentwurf,
+  der erst nach „An Jira senden“ + Bestätigung gepostet wird.
 - **Keine neuen Tickets** aus der Werkbank (olaf-jira: nur auf ausdrücklichen Auftrag, mit Duplikatsuche
   und Workstream) — dafür die Chat-Vorlage „Jira-Ticket anlegen“.
 
@@ -166,9 +190,59 @@ Unter dem „Neuer Chat“-Knopf stehen sechs Symbole: 🚀 Einrichtung · 📖 
   Frontmatter, Sprint-Ziel, Tabelle S1–S4, Review-Abschnittsfolge nach `olaf-sprint-planning`) — nach
   Vorschau und Bestätigung. Den alten Zyklus archiviert die Runde (nicht automatisch).
 
+### 🧭 Roadmap — Produkt OLAF, eigene Sektion (Knut, 29.09.)
+
+Quelle nur der Vault unter `olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/` (Regeln aus dem Skill `olaf-produkt-roadmap`).
+Eigener Eintrag in LibreChats Leiste (🧭) und in der Web-App, fünf Reiter:
+
+| Reiter | Was | Schreibt |
+|---|---|---|
+| **Priorisierung** | Rangliste aus `0-Overview/priorisierung-roadmap-produkt-olaf.md` (die Tabelle, die `scripts/rank.py` erzeugt): Rang, WSJF, GW/ZK/RR/Größe, Kategorie, blockiert durch, nächster Schritt, **Gründe** (Abschnitt 2.1), offene Knut-Zeilen, Jira-Keys und PRs der Spec. ▲/▼ verschiebt | nach Bestätigung **einen Vorschlag** als Zeile unter „## Vorschläge aus der Werkbank“ auf der Priorisierungsseite — neu gerechnet wird die Tabelle in der Hauptsitzung (`rank.py` hält die Werte) |
+| **Zustände** | Kanban je Thema × Zustandsordner (`1-Backlog … 6-Archive`), je Spec Status, ❓ offene Entscheidungen, Tickets, PRs | — |
+| **PR-Review** | PRs aus `0-Overview/pr-stand-produkt-olaf.md` und den PR-Links der Specs: Review-Stand (Änderungen verlangt / freigegeben / offen), **wer ist dran**, Deploy-Gates (Deploy/Migration/Rotation/Flag aus dem Register), Specs, Jira über die Spec. **GitHub nur lesend** (Links) | — |
+| **Offene Entscheidungen** | alle leeren `- Knut:`-Zeilen aus Specs und Übersichten (echt: 330), mit Frage (übergeordneter Listenpunkt) und Abschnitt, filterbar nach Thema | Antwort → Vorschau → Bestätigen → genau diese Zeile wird gefüllt (Konfliktschutz über Hash) |
+| **Konsistenz** | `scripts/roadmap_check.py` (nur lesend): Befunde je Prüfung B1–B5 (echt heute: 12 Fehler, 58 Hinweise) | — |
+
+Verknüpfung **Spec ↔ Jira ↔ PR**: Jira-Keys einer Spec kommen aus dem Verknüpfungsindex (unten), PRs aus
+GitHub-Links und Kurzformen (`admin#175`, `tariff-app #166`) im Spec-Text.
+
+### 📎 Dokumente an Tickets, Vault-Seiten mit Tasks verknüpfen
+
+- **Verknüpfungsindex** (einmal über den ganzen Vault, danach laufend: jede Vault-Änderung baut den Index neu, wie
+  die Suche): je Notiz die Keys `PM-\d+` aus Frontmatter (`jira`, `ticket`, `tickets`, `jira-key`), Text (ohne
+  Code) und Jira-Links (`…/browse/PM-123`); PR-Links in derselben Zeile wie der Key. Echt: 201 Keys, 115 Notizen mit Key.
+- **An der Karte** („📎 Dokumente“): Vault-Notizen mit dem Key (Frontmatter zuerst), vom Karten-Agenten geschriebene
+  Dateien (auch ohne Key; der Agent setzt außerdem `jira: <Key>` in neue Notizen), PRs aus dem Vault, **angehängte
+  Dateien** (Dateien & Teilen → „an Ticket“, oder an der Karte „Eigene Datei an PM-… hängen“; sichtbar nur für
+  Besitzer und Freigegebene), **Chats von dieser Karte** (Agent und „Im Chat besprechen“).
+- **Vorschläge** für Notizen ohne Key: Titel, Dateiname und Tags gegen den Ticket-Titel (ohne Personennamen und
+  Allgemeinwörter; mindestens zwei gemeinsame Begriffe, einer davon selten, oder ein seltener langer Begriff; ohne
+  Transkripte/Daily/Personen). Nur Vorschlag: **Verknüpfen** zeigt vorher/nachher des Frontmatters und schreibt nach
+  Bestätigung `jira: PM-123` (vorhandener Wert wird zur Liste); optional zusätzlich ein Kommentar im Ticket über den
+  MCP. **„passt nicht“** merkt sich die Ablehnung. Echt: 67 Tickets mit Vorschlag — spürbar Rauschen dabei, deshalb
+  bewusst nur Vorschlag.
+- **Wissen** zeigt je Notiz „Verknüpfte Tickets“ bzw. „Passt vielleicht zu“.
+- PRs direkt von GitHub: **nicht gebaut** (die Werkbank hat keinen GitHub-Lesezugang; PRs kommen aus dem Vault).
+
+### ✍️ Jira schreiben über den MCP
+
+- Lesen bleibt beim **Lesetoken** (Kopie, Übergänge). Geschrieben wird über den **Atlassian-MCP in der
+  Claude-Code-Sitzung der Person**: die Web-App ruft die Brücke (`/internal/mcp-call`, interner Token + Claude-Token
+  der Person), die eine kurze SDK-Sitzung startet. Deren Wächter erlaubt **genau den einen bestätigten Aufruf mit genau
+  diesen Argumenten** (`addCommentToJiraIssue` mit `contentFormat: markdown`, `transitionJiraIssue` mit der Übergangs-ID
+  aus dem Lesen, `editJiraIssue` mit `duedate`) und lehnt alles andere ab. Dauert einige Sekunden und ist ein
+  kleiner Claude-Zug.
+- **401 / nicht angemeldet / MCP fehlt** → klare Meldung mit dem einmaligen Schritt (unten); der Status steht dann
+  auch in der Einrichtung. Ohne verbundenen MCP: **keine Pflegefragen** im Chat, nur die Badges und einmal ein Hinweis.
+- `WERKBANK_JIRA_WRITE=rest` schaltet auf das alte REST-Schreiben mit eigenem Token zurück.
+- **Pilot:** Die Sitzungen laufen als VM-Nutzer `knut` — der Atlassian-MCP ist also Knuts OAuth-Anmeldung, egal
+  wer klickt. Deshalb weiter nur Knut freigeschaltet; im Team-Workspace braucht jede Person ihre eigene
+  Claude-Konfiguration (eigener Unix-Nutzer oder `CLAUDE_CONFIG_DIR`) mit eigener MCP-Anmeldung.
+
 ### 🧰 Skills
 
-- Alle Skills, die Claude in der Werkbank hat: Name, Beschreibung, Stand, Quelle, Version (Frontmatter
+- Alle Skills, die Claude in der Werkbank hat: Name, Beschreibung, Stand, **Nutzung** (Aufrufe über das
+  Skill-Werkzeug in Werkbank-Sitzungen, Personen, zuletzt; „Kern“ markiert), Quelle, Version (Frontmatter
   `version` oder Inhalts-Hash) und letzte Änderung. Stände: *verlinkt* (aus dem Vault, immer aktuell),
   *fehlt*, *lokale Kopie gleich/abweichend*, *nur lokal*, *Link woandershin*, *kaputter Link*.
 - **Einrichten** wie das Coder-Startskript: fehlende Vault-Skills (`/vault/_meta/dist-skill/*/`) werden
@@ -220,6 +294,9 @@ angewandt auf die **eigenen** PM-Tickets aus der Jira-Kopie (Zuordnung über `GE
   (`.runtime/bridge/sessions.json`) und setzt bei der nächsten Nachricht fort (`resume`).
 - **Statuszeilen statt JSON:** Werkzeugaufrufe erscheinen als kurze kursive Zeilen, z. B.
   „🔎 Suche im Vault: …“, „📄 Datei gelesen: …“, „🎫 Jira: getJiraIssue – PM-123“, „🧰 Skill: olaf-jira“.
+- **Streaming (Knut, 29.09.: „erscheint erst, wenn final da“):** sofort „⏳ Claude arbeitet …“, bei Denkblöcken
+  „💭 denkt nach …“, bei langen Werkzeugschritten alle 15 s „⏳ … läuft seit N s“, Text Wort für Wort. Siehe
+  „Streaming: Ursache und Messung“.
 - **Schreiben nur nach „ja“.** Lesen, Suchen, Skills und Teilagenten laufen ohne Rückfrage. Vor jedem
   Schreiben/Ändern von Dateien, jedem Bash-Befehl und jedem schreibenden Jira-/MCP-Aufruf hält die
   Sitzung an und fragt; die nächste Nachricht ist die Antwort („ja“ → ausführen, sonst nicht). Offene
@@ -246,6 +323,34 @@ angewandt auf die **eigenen** PM-Tickets aus der Jira-Kopie (Zuordnung über `GE
   `/olaf-email-templates` oder in Backticks) — die Zuschaltung bleibt für die Unterhaltung. `BRIDGE_SKILLS=all` schaltet zurück.
 - **Deine Claude-Sitzungen** (Einrichtung): Status je Unterhaltung — läuft / wartet auf „ja“ / bereit — mit Link zum Fortsetzen.
 - **Die Sitzung bekommt keine Werkbank-Geheimnisse** in ihre Umgebung (vorher erbte sie `.env.local`).
+
+## Streaming: Ursache und Messung
+
+**Befund (Ende-zu-Ende, im Code nachgesehen):** Die Brücke hatte `includePartialMessages` schon an und schreibt
+jedes Textstück sofort; LibreChat v0.8.7 reicht es über den fortsetzbaren Stream (`/api/agents/chat/stream`,
+`Content-Encoding: identity`, `X-Accel-Buffering: no`, `res.flush()` je Ereignis) durch — **gepuffert wird dort
+nicht** (Messung: 48 von 48 Stücken kommen einzeln im Browser an). Die gefühlte Langsamkeit kommt **vor** dem
+ersten Token: CLI-Start, alle MCP-Server der Nutzer-Konfiguration, ein sehr langer System-Prompt (im ersten echten
+Zug 77 314 Tokens, davon **Werkzeuge 66 805** — `ENABLE_TOOL_SEARCH=auto` hat nichts zurückgestellt, deferred 0) und
+nicht gestreamtes Denken. Bis dahin war die Antwortblase leer. Der Zug selbst dauerte 21 s.
+
+**Geändert:** sofortige Arbeitsanzeige (vor Kontext-Paket und CLI-Start), 💭 bei Denkblöcken, ⏳ bei langen
+Werkzeugschritten, `ENABLE_TOOL_SEARCH=true` (MCP-Schemas erst bei Bedarf; `BRIDGE_TOOL_SEARCH=auto` stellt zurück),
+Zeiten je Zug im Log der Brücke (`turn end … ms: {arbeitet, kontext, init, ersteNachricht, denkt, ersterText, ende}`).
+
+**Gemessen** (`scripts/werkbank.sh stream-timing`, Mock-Zug mit ~2 s bis zum ersten Token, ein Werkzeug, 40 Wörter;
+ms ab Absenden; lokal, ohne Coder-Proxy):
+
+| | erstes Sichtbares | „denkt nach“ | erster Text | Werkzeugzeile | letztes Wort | Zwischenstände |
+|---|---:|---:|---:|---:|---:|---:|
+| Brücke direkt, vorher | 2 116 | — | 2 116 | 2 427 | 6 003 | 48 |
+| Brücke direkt, jetzt | **54** | 670 | 2 137 | 2 443 | 6 024 | 50 |
+| Browser durch LibreChat, vorher | 3 071 | — | 3 071 | 3 416 | 6 955 | 48 |
+| Browser durch LibreChat, jetzt | **936** | 1 381 | 2 837 | 3 154 | 6 719 | 49 |
+
+LibreChat selbst kostet ~0,9 s bis zum ersten Stück (Anlegen des Jobs, Schlüssel, Aufbau). **Nicht gemessen:** der
+Coder-Proxy (`*.ws.konekto.energy`, braucht Coder-Anmeldung) und ein echter Claude-Zug — die neuen Zeiten im Log
+zeigen das beim nächsten echten Chat.
 
 ## Such-Werkzeug `vault-search`
 
@@ -336,6 +441,10 @@ Der Befehl druckt nur das Paket (lesend, gleicher Zwischenspeicher-Hash, keine P
   ausgeliefert, und nur erlaubte Typen werden angenommen — trotzdem nur Dateien aus bekannter Quelle
   hochladen. Dateien mit Personendaten bleiben in der Workspace (keine öffentlichen Links, kein zweiter Anbieter).
 - Die Anmeldung der Web-App gibt die Client-IP an LibreChat weiter, damit dessen Anmelde-Limit je Person greift.
+- „Agent ansetzen“ signiert für genau eine Anfrage einen LibreChat-Zugangstoken der angemeldeten Person
+  (`JWT_SECRET`, 5 Minuten, wie LibreChats eigener) — nie gespeichert oder geloggt.
+- Der MCP-Aufruf der Brücke ist nur mit dem internen Token erreichbar und lässt genau das bestätigte Werkzeug mit
+  genau den bestätigten Argumenten durch; Schreiben in Dateien/Bash/Teilagenten ist in dieser Sitzung abgeschaltet.
 
 ## Konfiguration im Repo
 
@@ -346,16 +455,17 @@ Der Befehl druckt nur das Paket (lesend, gleicher Zwischenspeicher-Hash, keine P
 | `librechat/librechat.yaml` | Endpunkt „Claude Code“, Modell-Specs und Vorlagen, Teilen, Oberfläche, Registrierung |
 | `librechat/.env` | LibreChat-Umgebung **ohne** Geheimnisse (Ports, Login-Schalter, Teilen) |
 | `.env.local` | Geheimnisse + verwalteter URL-Block — erzeugt, gitignored, 600 |
-| `claude-bridge/src/` | Brücke: `server.ts` (HTTP, Anhänge, Vorgaben, Nur-lesen-Modus), `sessions.ts`, `tools.ts`, `attachments.ts`, `mock.ts` |
-| `web/server/` | Web-App-Server (TypeScript, läuft ohne Build): `main.ts` (Routen), `auth.ts`, `creds.ts`, `crypto.ts`, `vault.ts`, `search.ts`, `jira.ts`, `agent.ts`, `sprint.ts`, `syncplan.ts`, `skills.ts`, `sharing.ts` |
+| `claude-bridge/src/` | Brücke: `server.ts` (HTTP, Anhänge, Vorgaben, Nur-lesen-Modus), `sessions.ts`, `tools.ts`, `attachments.ts`, `mcpcall.ts` (ein bestätigter MCP-Aufruf, MCP-Status), `mock.ts` |
+| `web/server/` | Web-App-Server (TypeScript, läuft ohne Build): `main.ts` (Routen), `auth.ts`, `creds.ts`, `crypto.ts`, `vault.ts`, `search.ts`, `jira.ts`, `jirawrite.ts` (Schreiben über MCP), `agent.ts` (auch Agent-Chat), `links.ts` (Vault ↔ Tickets), `roadmap.ts`, `sprint.ts`, `syncplan.ts`, `skills.ts`, `sharing.ts` |
 | `web/src/` | Oberfläche (Vite + React), Optik wie LibreChat (Inter, hell/dunkel) |
 | `templates/sprint/` | Vorlagen für neue Sprint-Zyklen (Summary, Review, Planning mit S1–S4) |
 
 ## Tests
 
 ```bash
-scripts/werkbank.sh test   # Brücke (14) + Web-App (48), ohne echte Konten, ohne /vault zu ändern
-scripts/werkbank.sh e2e    # Playwright, 18 Schritte, ca. 1–2 Minuten
+scripts/werkbank.sh test   # Brücke (19) + Web-App (63), ohne echte Konten, ohne /vault zu ändern
+scripts/werkbank.sh e2e    # Playwright, 22 Schritte, ca. 2 Minuten
+scripts/werkbank.sh stream-timing   # Zeitmessung Streaming (Mock), Ergebnis auch in .runtime/e2e/stream-timing.json
 ```
 
 - **Parser** (`web/test/parsers.test.ts`): Frontmatter, Wikilinks, Backlinks, Darstellung (Callouts,
@@ -376,9 +486,17 @@ scripts/werkbank.sh e2e    # Playwright, 18 Schritte, ca. 1–2 Minuten
 - **API** zusätzlich: eine Anmeldung über LibreChats Cookie (gültig/gefälscht/nicht freigeschaltet), interne
   Schnittstelle nur mit Token, Pflegefragen nur zu Tagesbeginn, Messung, Hygiene-Antwort, Board-Filter,
   `jira_update` nur auf bestehende Tickets, Nachfrage an den Board-Agenten, forge-Platzhalter.
+- **Neu (29.09.):** Streaming (Arbeitsanzeige < 1 s, Denken, Wörter einzeln), MCP-Aufruf nur mit genau den
+  bestätigten Argumenten und 401 → `mcp_auth`, MCP-Status, Board-Schreiben über den (Mock-)MCP, Agent als Chat
+  (läuft → wartet auf ja → fertig, Titel, geschriebene Dateien), offene Rückfrage übersteht einen zweiten Chat,
+  Sub-tasks unter der Karte und kaputte Sub-tasks (`jira.test.ts`), Verknüpfungsindex/Vorschläge/`jira:`-Frontmatter
+  (`links.test.ts`), Roadmap-Parser (`roadmap.test.ts`) und -API, Skill-Nutzung, Pflegefragen nur mit MCP.
+  Der Mock der Brücke spielt den Atlassian-MCP gegen den Jira-Nachbau nach (`BRIDGE_MOCK_JIRA_BASE`).
 - **Playwright** (`web/e2e/smoke.mjs`): alle Seiten mit zwei Testkonten, dazu echt durch LibreChat:
-  Anhang erreicht die Sitzung, Vorlage gibt ihre Vorgabe weiter, Chat teilen nur mit dem Teammate
-  (anonym 401), Kopie weiterführen, Freigaben zurücknehmen, Kontext-Paket erreicht die Sitzung, **alle sechs
+  **Agent-Chat vom Board** („PM-321 · …“ angelegt, ohne offenen Tab bis „wartet auf ja“, im Chat „ja“, Karte fertig),
+  Sub-tasks auf-/zuklappen, kaputter Sub-task, Dokumente + Vorschlag verknüpfen, Roadmap (alle fünf Reiter, Rang-
+  Vorschlag und Antwort in den Test-Vault), Jira-MCP prüfen, Anhang erreicht die Sitzung, Vorlage gibt ihre Vorgabe weiter, Chat teilen nur mit dem Teammate
+  (anonym 401), Kopie weiterführen, Freigaben zurücknehmen, Kontext-Paket erreicht die Sitzung, **alle sieben
   Werkbank-Seiten in LibreChats Leiste** (eine Anmeldung, Adresszeile übersteht Neuladen, Dunkel folgt dem Chat).
   Dafür gibt `e2e` die Testkonten für die Dauer auch auf 3070 frei (`werkbank.sh restart-web`) und setzt es
   danach zurück. Bilder unter `.runtime/e2e/web/`.
@@ -387,27 +505,51 @@ scripts/werkbank.sh e2e    # Playwright, 18 Schritte, ca. 1–2 Minuten
 die Dauer um und danach zurück), der Vault (Kopie von `web/test/fixtures/vault`). Die Testkonten und alles,
 was an ihnen hängt, werden danach gelöscht.
 
-## Stand (28.09.2026)
+## Stand (29.09.2026, Runde 3)
 
-**Erledigt und geprüft**
-- Ein-Klick-Einrichtung `werkbank.sh up` (hier idempotent erneut gelaufen), `doctor` grün.
-- Web-App auf 3070 läuft mit echten Daten: Vault-Index 869 Notizen, Jira-Kopie 307 Tickets (28 überfällig,
-  21 offen ohne Datum), aktueller Zyklus 2026-09-28 mit 117 + 15 Ankern; Seiten mit echten Daten
-  nur lesend durchgesehen (keine Seitenfehler).
-- Skills: 8 fehlende Vault-Skills verlinkt (amper-*, claude-slides, paca-env), 39 verlinkt, 2 abweichende
-  lokale Kopien gemeldet, nicht angefasst.
-- Alle Tests und der Playwright-Durchlauf grün (16 Schritte).
+**Erledigt und geprüft** (Tests + Playwright, mit Mock-Claude, Jira-Nachbau und Fixture-Vault)
+- Streaming: Arbeitsanzeige nach 54 ms (Brücke) bzw. 936 ms (Browser), vorher 2,1 s bzw. 3,1 s bis zum ersten Zeichen.
+- Jira-Schreiben über den Atlassian-MCP (Board, Sprint-Sync, Pflegefragen, `jira_update`), 401 → klare Meldung,
+  MCP-Schritt in der Einrichtung, Pflegefragen nur mit verbundenem MCP.
+- „Agent ansetzen“ als echter LibreChat-Chat „PM-123 · Titel“ — durch das echte LibreChat (v0.8.7) im e2e: Chat entsteht
+  und läuft bis zur Rückfrage ohne offenen Tab, „ja“ im Chat, Karte fertig mit geschriebener Datei.
+- Sub-tasks unter der Karte, kaputte Sub-tasks markiert; Dokumente an Tickets, Verknüpfungsindex, Vorschläge;
+  Roadmap-Sektion mit fünf Reitern; Nutzung je Skill.
+- Nur lesend gegen echte Daten geprüft: Verknüpfungsindex (872 Notizen, 201 Keys, 115 Notizen mit Key, Aufbau ~1 s),
+  Vorschläge (67 Tickets), Roadmap-Parser (95 Rangzeilen, 69 Begründungen, 333 Knut-Zeilen davon 330 offen,
+  43 PR-Registerzeilen), `roadmap_check.py` (12 Fehler, 58 Hinweise).
 
 **Nicht echt geprüft**
-- Echter Claude-Durchlauf mit eigenem Token (bewusst nicht — kein Token hier).
-- Schreiben nach Jira mit einem echten Schreib-Token (der Pilot-Token darf nur lesen; geprüft gegen den Nachbau).
+- **Echter Claude-Zug** mit Knuts Token: die Streaming-Verbesserung vor dem ersten Token, `ENABLE_TOOL_SEARCH=true`
+  (ob die MCP-Schemas wirklich zurückgestellt werden) und die Zeitwerte im Log.
+- **Echter Atlassian-MCP (OAuth)**: dass `/internal/mcp-call` mit Knuts MCP-Anmeldung wirklich kommentiert/umstellt,
+  wie der echte MCP bei abgelaufener Anmeldung antwortet (erkannt werden `401`, „unauthorized“, „needs-auth“,
+  „authenticate“ und der Init-Status ≠ `connected`), und dass Claude den Aufruf ohne Umweg ausführt.
+- Der Coder-Proxy vor LibreChat (Streaming dort, gzip) — ohne Coder-Anmeldung nicht messbar.
 - Der Teilen-Dialog von LibreChat wurde per API bedient, nicht durchgeklickt.
+
+## Einmalige Schritte für Knut
+
+1. **Atlassian-MCP anmelden** (falls noch nicht, oder wenn die Einrichtung „nicht verbunden“ zeigt): im Terminal
+   `claude` → `/mcp` → **atlassian** → **Authenticate** → im Browser mit dem Atlassian-Konto anmelden. Fehlt der
+   Eintrag: `claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp`. Danach in der
+   Werkbank **Einrichtung → „Jira-MCP prüfen“**.
+2. **Einen echten Chat** schicken (irgendeine Frage) und prüfen, ob „⏳ Claude arbeitet …“ sofort kommt; die Zeiten
+   stehen danach in `.runtime/logs/claude-bridge.log` (`turn end`, Feld `ms`). Unter Einrichtung → „Kontext für Claude“
+   zeigt „gemessen“, ob Werkzeuge jetzt zurückgestellt sind („zurückgestellt …“).
+3. **Board → eine Karte → „Agent im Chat starten“** einmal mit echtem Claude; im Chat die erste Rückfrage mit „ja“
+   oder „nein“ beantworten.
+4. Optional: `vault-search` und Kontext-Paket im eigenen Terminal (siehe oben) — nicht eingerichtet, weil das die
+   Nutzer-Konfiguration ändern würde.
 
 ## Bekannte Grenzen
 
 - Direkt auf 3070 braucht die Web-App ein eigenes Login; in LibreChats Leiste nicht.
-- Board-Schreibaktionen gehen nur mit einem eigenen Jira-Token mit `write:jira-work`; sonst Fehlermeldung
-  mit Hinweis, und der Weg über den Chat (Atlassian-MCP, Rückfrage) bleibt.
+- Jira-Schreiben kostet je Aktion einen kleinen Claude-Zug (Sekunden) und hängt an der MCP-Anmeldung; im Pilot ist
+  das Knuts Atlassian-Anmeldung für alle freigeschalteten Konten.
+- Die Roadmap-Rangliste rechnet die Werkbank nicht neu; Verschiebungen sind Vorschläge.
+- Status „fertig“ eines Agent-Chats heißt: kein Zug läuft und keine Rückfrage offen — die Unterhaltung lässt sich
+  weiterführen. Nach einem Neustart der Brücke fehlt die Liste der geschriebenen Dateien früherer Züge.
 - Die Jira-Kopie ist für alle Werkbank-Konten gleich (gelesen mit dem Zugang des Pilot-Kontos bzw. der klickenden Person).
 - **Bearbeiten/Neu generieren** älterer Nachrichten verzweigt in LibreChat, die Claude-Sitzung läuft linear weiter.
 - Bei einem Neustart der Brücke gehen offene Rückfragen verloren; die Sitzung lässt sich fortsetzen.
@@ -435,49 +577,32 @@ was an ihnen hängt, werden danach gelöscht.
 | Eigener Worktree je Karten-Agent | kandev, Vibe Kanban | **abgelehnt** — Board-Agenten ändern keinen Code (nur lesend); Code-Arbeit bleibt im Chat mit Rückfrage |
 | PR-Review am Board und im Chat | forge | **angebunden** (29.09.) — MCP `forge-review` aus `~/work/forge` (Zweig `werkbank-hardening`, lokal) über `WERKBANK_FORGE_MCP` in `.env.local`; Einstellungen in `~/.config/forge/review-mcp.env` (nur Pfade). Modellaufrufe mit dem **Claude-Zugang der Person**, GitHub nur lesend, Posten gesperrt, Testausführung aus (keine Sandbox auf der VM). Kosten: #171 (3 Dateien) brauchte im Modus `concerns` ~1,5 Mio. Tokens und blieb `incomplete` — Budget je Review 600k, ein unvollständiges Review wird als solches gemeldet |
 
-## Offene Entscheidungen
+## Entscheidungen (Knut, 29.09.2026) und wie sie umgesetzt sind
 
-1. **Zielstruktur S1–S4 im Skill festschreiben.** Die Vorlagen in `templates/sprint/` nutzen je eine
-   Tabelle `| # | Ergebnis | DoD | Owner | Datum |` (Planning) und `| # | Ergebnis | Bewertung | Beleg | Warum / was ändern wir |`
-   (Review); der Skill `olaf-sprint-planning` beschreibt das noch nicht, der Zyklus 2026-09-28 hat noch keine S-Zeilen.
-   *Empfehlung:* Tabellenform übernehmen und den Skill im Chat (mit Bestätigung) auf v1.6 nachziehen.
+| # | Frage | Knut | Umsetzung |
+|---|---|---|---|
+| 1 | Zielstruktur S1–S4 im Skill | **Tabelle ja** (Skill macht die Hauptsitzung) | Vorlagen in `templates/sprint/` bleiben Tabellen; `olaf-sprint-planning` → v1.6 zieht die Hauptsitzung nach |
+| 2 | Jira-Schreiben vom Board | **MCP** | umgesetzt: alle Schreibwege über den Atlassian-MCP der Person, Lesen weiter mit dem Lesetoken |
+| 3 | Wessen Sicht speist die Jira-Kopie? | **weiter Knuts Token** | unverändert: 15-Minuten-Abgleich mit Knuts Lesetoken |
+| 4 | Geteilten Chat weiterführen? | **nur als Kopie** | unverändert: „Als Kopie weiterführen“, nie die fremde Sitzung |
+| 5 | Eine Anmeldung für Chat und Werkbank | **so lassen** | unverändert (Pfad-Proxy; 3070 für Health/Debug) |
+| 6 | Alten Sprint-Zyklus archivieren? | **nicht automatisch** | unverändert: die Werkbank legt nur an |
+| 7 | Abweichende lokale Skill-Kopien | **Hauptsitzung** | nicht angefasst; `olaf-jira-sync`/`olaf-service-cases` vergleicht die Hauptsitzung gegen den Vault |
+| 8 | Virenscan für Uploads | **Pilot ohne, Team ClamAV** | Pilot ohne (Typ-Liste, nie ausführen); Team-Workspace: ClamAV vor dem Speichern — noch zu bauen |
+| 9 | Aufbewahrung geteilter Dateien | **unbegrenzt** | unverändert: bis zum Löschen |
+| 10 | Skill-Kern | **nach 1 Woche, Nutzung je Skill zählen** | umgesetzt: Brücke zählt Skill-Aufrufe, Skills-Seite zeigt Nutzung; Kern am/ab 06.10. mit diesen Zahlen nachschärfen |
+| 11 | Uhrzeit Tagesabschluss | **16 Uhr** | unverändert (`WERKBANK_EOD_HOUR=16`) |
+| 12 | Pflegefragen ohne Schreibzugang? | **nur mit verbundenem Jira-MCP, sonst Badges + einmaliger Hinweis** | umgesetzt |
+
+## Offene Entscheidungen (Runde 3)
+
+1. **Rang-Vorschläge zurück in `rank.py`.** Die Werkbank hält Verschiebungen nur als Zeile fest; die Werte liegen im
+   Skript des Skills. *Empfehlung:* die Hauptsitzung übernimmt Vorschläge bei der nächsten Priorisierungsrunde und
+   löscht die Zeilen danach.
    - Knut:
-2. **Jira-Schreiben vom Board.** Der Pilot-Lesetoken darf nicht schreiben. *Empfehlung:* jede Person trägt
-   in der Einrichtung einen eigenen Token mit `write:jira-work` ein (Zuordnung stimmt, keine zweite Identität);
-   bis dahin schreibt der Chat über den MCP.
+2. **Vorschläge zum Verknüpfen.** Die Trefferliste ist brauchbar, aber rauscht (z. B. allgemeine Wörter).
+   *Empfehlung:* so lassen (nur Vorschlag, „passt nicht“ lernt mit) und nach einer Woche ansehen.
    - Knut:
-3. **Wessen Sicht speist die Jira-Kopie?** Im Pilot liest der 15-Minuten-Abgleich mit Knuts Lesetoken, alle
-   Werkbank-Konten sehen dieselbe Kopie. *Empfehlung:* für PM so lassen (Team-Board); im Team-Workspace ein
-   festes Sync-Konto mit reinem Lesetoken bestimmen.
+3. **Antworten auf Knut-Zeilen durch andere.** Die Roadmap-Seite schreibt immer `- Knut:`. *Empfehlung:* nur Knut
+   darf dort antworten, alle anderen bekommen eine eigene Zeile `- <Name>:` darunter.
    - Knut:
-4. **Darf ein geteilter Chat weitergeführt werden?** Umgesetzt als „Als Kopie weiterführen“ — neuer Chat mit
-   dem eigenen Claude, Verlauf als Datei. *Empfehlung:* so lassen; nie die Sitzung der teilenden Person fortsetzen.
-   - Knut:
-5. **Eine Anmeldung für Chat und Werkbank.** Umgesetzt als Pfad-Proxy: in LibreChats Leiste gilt die Chat-Anmeldung
-   (Refresh-Cookie), direkt auf 3070 bleibt das eigene Login. *Empfehlung:* so lassen; 3070 später nur noch für Health/Debug.
-   - Knut:
-6. **Alten Sprint-Zyklus beim Anlegen archivieren?** *Empfehlung:* nein, nicht automatisch — die Runde
-   verschiebt den Ordner im Chat (Skill: als Einheit nach `4-Archive/`, nicht per `mv`), die Werkbank legt nur an.
-   - Knut:
-7. **Abweichende lokale Skill-Kopien** `olaf-jira-sync` und `olaf-service-cases` in `~/.claude/skills`.
-   *Empfehlung:* prüfen, ob die lokale Fassung neuer ist; wenn nicht, Ordner löschen und `werkbank.sh skills --apply`
-   verlinkt die Vault-Fassung.
-   - Knut:
-8. **Virenscan für Uploads.** *Empfehlung:* für den Pilot ohne (Typ-Liste, nie ausführen); im Team-Workspace
-   ClamAV vor dem Speichern.
-   - Knut:
-9. **Aufbewahrung geteilter Dateien.** Derzeit unbegrenzt bis zum Löschen. *Empfehlung:* Dateien mit
-   „Personendaten“ nach 90 Tagen automatisch löschen (mit Hinweis vorher).
-   - Knut:
-10. **Skill-Kern.** 13 Skills in `claude-bridge/skills-core.json` (inno-vault, olaf-jira, maxenergy-jira, olaf-jira-sync,
-    olaf-sprint-planning, olaf-produkt-roadmap, plan-to-pr, grilling, council, ponytail, olaf-service-cases,
-    olaf-service-textbausteine, konekto-team-secrets). *Empfehlung:* nach einer Woche echter Nutzung mit den
-    gemessenen Zahlen nachschärfen.
-    - Knut:
-11. **Uhrzeit des Tagesabschlusses.** Vorgabe 16 Uhr (Wien), je Person gleich. *Empfehlung:* so lassen; bei Bedarf
-    je Person einstellbar machen.
-    - Knut:
-12. **Pflegefragen auch ohne eigenen Jira-Schreibzugang?** Heute wird gefragt; ohne Schreib-Token scheitert
-    das Schreiben mit Hinweis. *Empfehlung:* nur fragen, wenn ein Schreibzugang hinterlegt ist, sonst nur die
-    Badges zeigen.
-    - Knut:
