@@ -38,6 +38,7 @@ async function cleanup() {
   for (const col of await lcdb.listCollections().toArray()) await lcdb.collection(col.name).deleteMany({ $or: [{ user: doc._id }, { user: String(doc._id) }, { userId: doc._id }, { userId: String(doc._id) }] });
   await lcdb.collection('users').deleteOne({ _id: doc._id });
   rmSync(join(RT, 'bridge', 'scratch', String(doc._id)), { recursive: true, force: true });
+  rmSync(join(RT, 'claude', String(doc._id)), { recursive: true, force: true });
 }
 
 async function direct() {
@@ -110,6 +111,7 @@ try {
   try { execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'off'], { stdio: 'ignore' }); } catch { console.error('Brücke zurückschalten: scripts/werkbank.sh bridge-mock off'); }
   await cleanup();
   rmSync(join(RT, 'bridge', 'scratch', 'zeitmessung'), { recursive: true, force: true });
+  rmSync(join(RT, 'claude', 'zeitmessung'), { recursive: true, force: true });
   await mongo.close();
 }
 writeFileSync(join(OUT, 'stream-timing.json'), JSON.stringify({ at: new Date().toISOString(), ...result }, null, 1));
