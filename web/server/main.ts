@@ -26,6 +26,7 @@ import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, a
 import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError } from './jirawrite.ts';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
+import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal } from './roadmap.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 const FONTS = join(cfg.librechatDist, 'client', 'public', 'fonts');
@@ -504,6 +505,123 @@ on('POST', /^\/api\/files\/([0-9a-f-]{36})\/ticket$/, async (req, res, m) => {
   if (!f) throw new HttpError(404, 'Datei nicht gefunden.');
   await wb().collection('files').updateOne({ _id: m[1] as any }, b.remove ? { $pull: { tickets: key } } as any : { $addToSet: { tickets: key } });
   log('datei an ticket', { user: u.id, key, remove: !!b.remove });
+  send(res, 200, { ok: true });
+});
+
+// --- Roadmap (Priorisierung, Zustands-Kanban, PR-Review, offene Entscheidungen, Konsistenz) ---
+
+const ROADMAP_BASE = 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap';
+const OVERVIEW = `${ROADMAP_BASE}/0-Overview`;
+let checkCache: { at: number; built: number; data: any } | null = null;
+
+function runRoadmapCheck(): Promise<any> {
+  const idx = vaultIdx();
+  if (checkCache && checkCache.built === idx.builtAt && Date.now() - checkCache.at < 5 * 60_000) return Promise.resolve(checkCache.data);
+  const script = process.env.WERKBANK_ROADMAP_CHECK || join(cfg.skillsTarget, 'olaf-produkt-roadmap', 'scripts', 'roadmap_check.py');
+  if (!existsSync(script)) return Promise.resolve({ available: false, findings: [], errors: 0, warnings: 0 });
+  return new Promise((resolve) => execFile('python3', [script, join(cfg.vaultDir, ROADMAP_BASE)], { timeout: 30_000, maxBuffer: 4 << 20 }, (_err, stdout) => {
+    const data = { available: true, at: new Date(), ...parseCheck(String(stdout ?? '')) };
+    checkCache = { at: Date.now(), built: idx.builtAt, data };
+    resolve(data);
+  }));
+}
+
+const readVault = (rel: string) => { try { return readFileSync(join(cfg.vaultDir, rel), 'utf8'); } catch { return ''; } };
+
+on('GET', /^\/api\/roadmap$/, async (req, res) => {
+  await needUser(req);
+  const idx = vaultIdx();
+  const im = await issueMap();
+  const rm = roadmap(idx, ROADMAP_BASE);
+  const byName = new Map<string, any>();
+  const decisions: any[] = [];
+  const specPrs = new Map<string, string[]>();
+  for (const t of rm.topics) {
+    for (const [state, specs] of Object.entries(t.states)) {
+      for (const sp of specs) {
+        const text = readVault(sp.path);
+        const ds = parseDecisions(text);
+        const prs = prRefs(text);
+        const n = idx.notes.get(sp.path)!;
+        const tickets = n.tickets.map((k) => ({ key: k, status: im.get(k)?.status ?? null, summary: im.get(k)?.summary ?? null }));
+        const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text) };
+        byName.set(n.name, info);
+        for (const pr of prs) specPrs.set(pr, [...(specPrs.get(pr) ?? []), n.name]);
+        for (const d of ds) if (d.open) decisions.push({ ...d, path: sp.path, spec: n.name, title: sp.title, topic: t.name, state, hash: info.hash });
+      }
+    }
+  }
+  // Übersichtsseiten und Register haben auch „- Knut:“-Zeilen.
+  for (const o of [...rm.overview, ...rm.topics.filter((t) => t.overview).map((t) => ({ path: t.overview!, title: idx.notes.get(t.overview!)?.title ?? t.overview! }))]) {
+    const text = readVault(o.path);
+    for (const d of parseDecisions(text)) if (d.open) decisions.push({ ...d, path: o.path, spec: idx.notes.get(o.path)?.name, title: o.title, topic: o.path.includes('/0-Overview/') ? 'Übersicht' : o.path.split('/').at(-2), state: 'Übersicht', hash: hashText(text) });
+  }
+  const prio = readVault(`${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`);
+  const reasons = parseReasons(prio);
+  const ranking = parseRankTable(prio).map((r) => {
+    const sp = byName.get(r.spec);
+    return { ...r, why: reasons.get(r.spec.replace(/^[a-z]+-spec-/, '')) ?? reasons.get(r.spec) ?? [...reasons].find(([k]) => r.spec.endsWith('-' + k))?.[1] ?? null, path: sp?.path ?? null, folderState: sp?.state ?? null, open: sp?.open ?? 0, tickets: sp?.tickets ?? [], prs: sp?.prs ?? [] };
+  });
+  const register = parsePrRegister(readVault(`${OVERVIEW}/pr-stand-produkt-olaf.md`));
+  const prMap = new Map<string, any>();
+  for (const r of register) {
+    const p = prMap.get(r.pr) ?? { pr: r.pr, url: `https://github.com/WirStrom1/${r.pr.replace('#', '/pull/')}`, rows: [], specs: specPrs.get(r.pr) ?? [] };
+    p.rows.push({ section: r.section, cols: r.cols });
+    prMap.set(r.pr, p);
+  }
+  for (const [pr, specs] of specPrs) if (!prMap.has(pr)) prMap.set(pr, { pr, url: `https://github.com/WirStrom1/${pr.replace('#', '/pull/')}`, rows: [], specs });
+  const prs = [...prMap.values()].map((p) => {
+    const txt = p.rows.map((r: any) => Object.values(r.cols).join(' ')).join(' ');
+    const review = /CHANGES_REQUESTED|❌/.test(txt) ? 'Änderungen verlangt' : /APPROVED|✅/.test(txt) ? 'freigegeben' : /merged|gemergt/i.test(txt) ? 'gemergt' : p.rows.length ? 'offen' : 'nur in Specs';
+    const turn = review === 'Änderungen verlangt' ? 'Autor (Knut/Agent)' : review === 'freigegeben' ? 'Merge (Mensch)' : review === 'offen' ? 'Reviewer (Christoph)' : '—';
+    const gates = [...new Set((txt.match(/\b(Deploy[^.;|]*|Migration[^.;|]*|Rotation[^.;|]*|Flag[^.;|]*)/g) ?? []).map((g: string) => g.trim().slice(0, 80)))].slice(0, 3);
+    const tickets = [...new Set(p.specs.flatMap((s: string) => (byName.get(s)?.tickets ?? []).map((t: any) => t.key)))];
+    return { ...p, review, turn, gates, tickets };
+  }).sort((a, b) => a.pr.localeCompare(b.pr, 'de', { numeric: true }));
+  send(res, 200, {
+    base: ROADMAP_BASE, states: rm.states, overview: rm.overview,
+    topics: rm.topics.map((t) => ({ name: t.name, overview: t.overview, states: Object.fromEntries(Object.entries(t.states).map(([st, specs]) => [st, specs.map((sp) => byName.get(idx.notes.get(sp.path)!.name))])) })),
+    ranking, prs, decisions,
+    hub: { path: `${OVERVIEW}/0-roadmap-produkt-olaf.md`, prio: `${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`, register: `${OVERVIEW}/pr-stand-produkt-olaf.md` },
+    githubReadOnly: true,
+  });
+});
+
+on('GET', /^\/api\/roadmap\/check$/, async (req, res) => { await needUser(req); send(res, 200, await runRoadmapCheck()); });
+
+on('POST', /^\/api\/roadmap\/answer$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const abs = vaultPath(String(b.path ?? ''));
+  if (!abs.includes(`/${ROADMAP_BASE}/`)) throw new HttpError(400, 'Nur Roadmap-Notizen.');
+  const text = readFileSync(abs, 'utf8');
+  let r;
+  try { r = fillDecision(text, Number(b.line), String(b.text ?? ''), String(b.hash ?? '')); }
+  catch (e: any) { throw new HttpError(/geändert/.test(e.message) ? 409 : 400, e.message); }
+  const rel = abs.slice(cfg.vaultDir.length + 1);
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: { path: rel, line: r.line, before: r.before, after: r.after } });
+  writeFileSync(abs, r.text);
+  invalidateIndex(); checkCache = null;
+  log('roadmap antwort', { user: u.id, path: rel, line: r.line });
+  send(res, 200, { ok: true, path: rel, line: r.line });
+});
+
+on('POST', /^\/api\/roadmap\/rank-proposal$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const rel = `${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`;
+  const abs = vaultPath(rel);
+  if (!existsSync(abs)) throw new HttpError(404, 'Priorisierungsseite fehlt.');
+  const text = readFileSync(abs, 'utf8');
+  const from = Number(b.from), to = Number(b.to);
+  if (!/^[a-z0-9-]+$/.test(String(b.spec ?? '')) || !(from > 0) || !(to > 0) || from === to) throw new HttpError(400, 'Spec und neuer Rang angeben.');
+  if (String(b.hash ?? '') && String(b.hash) !== hashText(text)) throw new HttpError(409, 'Die Priorisierung hat sich inzwischen geändert — bitte neu laden.');
+  const d = new Date();
+  const next = addRankProposal(text, { spec: String(b.spec), from, to, why: String(b.why ?? '').slice(0, 300), who: u.name.split(' ')[0], date: `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}` });
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, hash: hashText(text), preview: { path: rel, add: next.slice(text.replace(/\n*$/, '').length).trim() } });
+  writeFileSync(abs, next);
+  invalidateIndex();
+  log('rang vorschlag', { user: u.id, spec: b.spec, from, to });
   send(res, 200, { ok: true });
 });
 

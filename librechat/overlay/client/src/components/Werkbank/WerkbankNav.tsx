@@ -1,7 +1,7 @@
 // OLAF-Werkbank: Einträge in LibreChats linker Leiste (aus dem Werkbank-Repo, librechat/overlay).
 import { memo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Rocket, BookOpen, SquareKanban, RefreshCw, Blocks, Share2 } from 'lucide-react';
+import { Rocket, BookOpen, SquareKanban, RefreshCw, Blocks, Share2, Compass } from 'lucide-react';
 import { Button, TooltipAnchor } from '@librechat/client';
 import { cn } from '~/utils';
 
@@ -10,6 +10,7 @@ export const WERKBANK_PAGES = [
   { id: 'wissen', hash: '#/wissen', label: 'Wissen (Vault)', icon: BookOpen },
   { id: 'board', hash: '#/board', label: 'Board (Jira PM)', icon: SquareKanban },
   { id: 'sprint', hash: '#/sprint', label: 'Sprint', icon: RefreshCw },
+  { id: 'roadmap', hash: '#/roadmap', label: 'Roadmap', icon: Compass },
   { id: 'skills', hash: '#/skills', label: 'Skills', icon: Blocks },
   { id: 'dateien', hash: '#/dateien', label: 'Dateien & Teilen', icon: Share2 },
 ];

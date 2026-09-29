@@ -37,7 +37,7 @@ test('Wikilinks: Alias, Überschrift, Tabellen-Escape, Code wird ignoriert', () 
 
 test('Index: Basename-Auflösung, Backlinks, nicht aufgelöste Links, Team', () => {
   const idx = buildIndex(FIX);
-  assert.equal(idx.notes.size, 13);
+  assert.equal(idx.notes.size, 15);
   const home = idx.notes.get('olaf/olaf-Home.md')!;
   assert.equal(home.team, 'olaf');
   assert.ok(home.links.includes('olaf/MOCs/Olaf-Sprint-MOC.md'));
@@ -57,7 +57,7 @@ test('Struktur: Teams, Roadmap Thema × Zustand, Baum', () => {
   assert.equal(rm.topics[0].name, 'Service-View');
   assert.equal(rm.topics[0].states['3-Plan'][0].title, 'Service View: Kundenakte');
   assert.ok(rm.topics[0].overview?.endsWith('0-service-view-uebersicht.md'));
-  assert.equal(tree(idx).count, 13);
+  assert.equal(tree(idx).count, 15);
 });
 
 test('Darstellung: Callout → details, Anker weg, Wikilinks klickbar, kein Roh-HTML', () => {

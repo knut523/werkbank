@@ -204,3 +204,8 @@ table.t th { font-weight: 600; color: var(--text-secondary); font-size: 12.5px; 
 .subtoggle { white-space: nowrap; }
 .subtoggle .badge-hyg, .sub .badge-hyg { font-size: 11px; padding: 0 5px; line-height: 16px; }
 .docs-h { font-weight: 600; margin-top: 8px; }
+tr.moved td { background: var(--chip-warn); }
+.nowrap { white-space: nowrap; }
+a.tcard { display: block; color: inherit; text-decoration: none; }
+.tabs a { padding: 8px 12px; color: var(--text-secondary); text-decoration: none; border-bottom: 2px solid transparent; }
+.tabs a.active { color: var(--text-primary); border-bottom-color: var(--green-600); font-weight: 600; }

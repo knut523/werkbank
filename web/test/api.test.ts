@@ -288,6 +288,38 @@ test('Dokumente am Ticket: Vault-Notizen mit Key, Vorschlag bestätigen (jira:-F
   assert.equal((await bernd.req('/api/board/issue/PM-340')).j.docs.files.length, 0, 'fremde Dateien sieht man nicht');
 });
 
+test('Roadmap: Rangliste mit Gründen, Kanban, PRs je Spec, offene Entscheidungen beantworten, Rang-Vorschlag', async () => {
+  const r = await anna.req('/api/roadmap');
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.j.ranking.map((x: any) => [x.rank, x.spec, x.folderState]), [[1, 'service-view-kundenakte', '3-Plan'], [2, 'service-view-mailprotokoll', '1-Backlog']]);
+  assert.match(r.j.ranking[0].why, /an einem Ort/);
+  assert.deepEqual(r.j.ranking[0].tickets.map((t: any) => t.key), ['PM-321'], 'Spec ↔ Jira');
+  const sv = r.j.topics.find((t: any) => t.name === 'Service-View');
+  assert.equal(sv.states['3-Plan'][0].open, 1);
+  const pr = r.j.prs.find((p: any) => p.pr === 'olaf-admin#175');
+  assert.equal(pr.review, 'Änderungen verlangt');
+  assert.deepEqual(pr.specs, ['service-view-kundenakte'], 'PR ↔ Spec');
+  assert.deepEqual(pr.tickets, ['PM-321'], 'PR ↔ Jira über die Spec');
+  assert.ok(pr.gates.some((g: string) => /Deploy/.test(g)));
+  assert.equal(r.j.prs.find((p: any) => p.pr === 'olaf-tariff-app#166').turn, 'Merge (Mensch)');
+  const d = r.j.decisions.find((x: any) => x.spec === 'service-view-kundenakte');
+  assert.match(d.question, /stornierte Verträge/);
+  const pre = await anna.req('/api/roadmap/answer', { body: { path: d.path, line: d.line, hash: d.hash, text: 'ja, ausgegraut' } });
+  assert.equal(pre.j.needsConfirm, true);
+  assert.equal(pre.j.preview.after, '  - Knut: ja, ausgegraut');
+  const ok = await anna.req('/api/roadmap/answer', { body: { path: d.path, line: d.line, hash: d.hash, text: 'ja, ausgegraut', confirm: true } });
+  assert.equal(ok.status, 200);
+  assert.match(readFileSync(join(VAULT, d.path), 'utf8'), /\n  - Knut: ja, ausgegraut\n/);
+  assert.equal((await anna.req('/api/roadmap/answer', { body: { path: d.path, line: d.line, hash: d.hash, text: 'nochmal', confirm: true } })).status, 409, 'Konfliktschutz');
+  assert.equal((await anna.req('/api/roadmap')).j.decisions.filter((x: any) => x.spec === 'service-view-kundenakte').length, 0);
+  const rp = await anna.req('/api/roadmap/rank-proposal', { body: { spec: 'service-view-mailprotokoll', from: 2, to: 1, why: 'Kunde fragt' } });
+  assert.match(rp.j.preview.add, /Anna \(\d\d\.\d\d\.\d{4}\): \[\[service-view-mailprotokoll\]\] Rang 2 → 1 — Kunde fragt/);
+  await anna.req('/api/roadmap/rank-proposal', { body: { spec: 'service-view-mailprotokoll', from: 2, to: 1, why: 'Kunde fragt', confirm: true, hash: rp.j.hash } });
+  assert.match(readFileSync(join(VAULT, r.j.hub.prio), 'utf8'), /## Vorschläge aus der Werkbank\n\n- Anna/);
+  const c = await anna.req('/api/roadmap/check');
+  assert.equal(c.status, 200);
+});
+
 test('Sprint: Antwort mit Vorschau und Bestätigung in die Notiz, Konfliktschutz', async () => {
   const v = await anna.req('/api/sprint/sprint-2026-09-28');
   assert.equal(v.status, 200);

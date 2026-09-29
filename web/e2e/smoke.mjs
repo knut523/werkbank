@@ -111,6 +111,7 @@ try {
       WERKBANK_ALLOWED_EMAILS: `${U1.email},${U2.email}`, CREDS_KEY: env.CREDS_KEY, CREDS_IV: env.CREDS_IV,
       WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), MEILI_MASTER_KEY: env.MEILI_MASTER_KEY, WERKBANK_MEILI_INDEX: `werkbank_e2e_${tag}`,
       WERKBANK_DATA_DIR: join(tmp, 'data'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills'), WERKBANK_JIRA_SYNC_MIN: '600',
+      WERKBANK_ROADMAP_CHECK: join(process.env.HOME, '.claude/skills/olaf-produkt-roadmap/scripts/roadmap_check.py'),
       WERKBANK_INTERNAL_TOKEN: env.WERKBANK_INTERNAL_TOKEN, JWT_SECRET: env.JWT_SECRET, JWT_REFRESH_SECRET: env.JWT_REFRESH_SECRET,
     },
     stdio: ['ignore', 'ignore', 'inherit'],
@@ -281,6 +282,35 @@ try {
     assert.ok(!readdirSync(join(VAULT, 'olaf/1-Projects')).includes('sprint-2026-10-12'));
   });
 
+  await step('Roadmap: Priorisierung (verschieben → Vorschlag), Zustände, PR-Review, Entscheidung beantworten, Konsistenz', async () => {
+    await a.goto(W + '/#/roadmap');
+    await a.getByTestId('rank-table').locator('tr[data-spec="service-view-kundenakte"]').waitFor({ timeout: 15000 });
+    await shot(a, '30-roadmap-priorisierung');
+    await a.getByRole('button', { name: 'service-view-mailprotokoll hoch' }).click();
+    await a.getByLabel('Begründung').fill('E2E: Kunde fragt');
+    await a.getByRole('button', { name: 'Vorschlag festhalten' }).click();
+    await confirmDialog(a, '31-roadmap-rang-vorschlag');
+    await a.getByText('Vorschlag festgehalten').waitFor();
+    assert.match(readFileSync(join(VAULT, 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/0-Overview/priorisierung-roadmap-produkt-olaf.md'), 'utf8'), /Vorschläge aus der Werkbank\n\n- E2E \(\d\d\.\d\d\.\d{4}\): \[\[service-view-mailprotokoll\]\] Rang 2 → 1 — E2E: Kunde fragt/);
+    await a.getByRole('tab', { name: 'Zustände' }).click();
+    await a.locator('a.tcard[data-spec="service-view-kundenakte"]').waitFor();
+    await shot(a, '32-roadmap-zustaende');
+    await a.getByRole('tab', { name: /PR-Review/ }).click();
+    await a.getByTestId('pr-table').locator('tr[data-pr="olaf-admin#175"]').getByText('PM-321').waitFor();
+    await shot(a, '33-roadmap-pr-review');
+    await a.getByRole('tab', { name: /Offene Entscheidungen/ }).click();
+    const box = a.locator('[data-decisions="service-view-kundenakte"]');
+    await box.getByText(/stornierte Verträge/).waitFor();
+    await box.getByRole('textbox').first().fill('ja, ausgegraut (E2E)');
+    await box.getByRole('button', { name: 'Antworten' }).first().click();
+    await confirmDialog(a, '34-roadmap-entscheidung-vorschau');
+    await a.getByText('Antwort gespeichert').waitFor();
+    assert.match(readFileSync(join(VAULT, 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/Service-View/3-Plan/service-view-kundenakte.md'), 'utf8'), /\n  - Knut: ja, ausgegraut \(E2E\)\n/);
+    await a.getByRole('tab', { name: 'Konsistenz' }).click();
+    await a.getByText(/\d+ Fehler/).first().waitFor({ timeout: 30000 });
+    await shot(a, '35-roadmap-konsistenz');
+  });
+
   await step('Skills: Vault-Skills mit Stand und Vorlagen', async () => {
     await a.goto(W + '/#/skills');
     await a.locator('tr[data-skill="plan-to-pr"]').waitFor();
@@ -413,7 +443,7 @@ try {
     assert.equal(await f.locator('#pw').count(), 0, 'kein zweites Login');
     await f.getByTestId('context-info').waitFor();
     await shot(a, '22-leiste-einrichtung');
-    for (const [id, text, name] of [['wissen', 'Produkt-OLAF-Roadmap', '23-leiste-wissen'], ['board', 'Board · PM', '24-leiste-board'], ['sprint', 'Sprint-Ziel', '25-leiste-sprint'], ['skills', 'Alle Skills', '26-leiste-skills'], ['dateien', 'Dateien & Teilen', '27-leiste-dateien']]) {
+    for (const [id, text, name] of [['wissen', 'Produkt-OLAF-Roadmap', '23-leiste-wissen'], ['board', 'Board · PM', '24-leiste-board'], ['sprint', 'Sprint-Ziel', '25-leiste-sprint'], ['skills', 'Alle Skills', '26-leiste-skills'], ['dateien', 'Dateien & Teilen', '27-leiste-dateien'], ['roadmap', 'Roadmap · Produkt OLAF', '27b-leiste-roadmap']]) {
       await a.getByTestId(`werkbank-nav-${id}`).click();
       await a.waitForURL(new RegExp(`/wb/${id}`));
       await a.frameLocator('[data-testid="werkbank-frame"]').getByText(text).first().waitFor({ timeout: 20000 });

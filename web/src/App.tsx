@@ -5,6 +5,7 @@ import { Setup } from './pages/Setup.tsx';
 import { Wissen } from './pages/Wissen.tsx';
 import { Board } from './pages/Board.tsx';
 import { Sprint } from './pages/Sprint.tsx';
+import { Roadmap } from './pages/Roadmap.tsx';
 import { Skills } from './pages/Skills.tsx';
 import { Dateien } from './pages/Dateien.tsx';
 
@@ -28,6 +29,7 @@ const NAV = [
   { href: '#/wissen', label: 'Wissen', ico: '📚', match: /^#\/wissen/ },
   { href: '#/board', label: 'Board', ico: '🗂️', match: /^#\/board/ },
   { href: '#/sprint', label: 'Sprint', ico: '🔁', match: /^#\/sprint/ },
+  { href: '#/roadmap', label: 'Roadmap', ico: '🧭', match: /^#\/roadmap/ },
   { href: '#/skills', label: 'Skills', ico: '🧰', match: /^#\/skills/ },
   { href: '#/dateien', label: 'Dateien & Teilen', ico: '📎', match: /^#\/dateien/ },
 ];
@@ -68,6 +70,7 @@ export function App() {
     : /^#\/wissen/.test(hash) ? <Wissen cfg={cfg} hash={hash} />
     : /^#\/board/.test(hash) ? <Board cfg={cfg} hash={hash} />
     : /^#\/sprint/.test(hash) ? <Sprint cfg={cfg} hash={hash} />
+    : /^#\/roadmap/.test(hash) ? <Roadmap cfg={cfg} hash={hash} />
     : /^#\/skills/.test(hash) ? <Skills cfg={cfg} />
     : /^#\/dateien/.test(hash) ? <Dateien cfg={cfg} />
     : <Setup cfg={cfg} onLogin={load} />;
