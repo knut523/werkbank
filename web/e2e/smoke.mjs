@@ -83,6 +83,7 @@ async function cleanupUsers() {
     }
     await lcdb.collection('users').deleteOne({ _id: id });
     rmSync(join(RT, 'bridge', 'scratch', sid), { recursive: true, force: true });
+    rmSync(join(RT, 'claude', sid), { recursive: true, force: true });   // eigene Claude-Konfiguration des Testkontos
   }
 }
 
@@ -196,6 +197,27 @@ try {
     await confirmDialog(a, '08-board-bestaetigung');
     await a.getByText('In Jira geschrieben').waitFor({ timeout: 20000 });
     assert.equal(jira.writes.at(-1).type, 'comment', 'über den (Mock-)Atlassian-MCP in Jira angekommen');
+  });
+
+  await step('Board live: Schreiben in einem anderen Tab und Jira-Schreiben im Chat erscheinen ohne Neuladen', async () => {
+    const a2 = await ctxA.newPage();
+    await a2.goto(W + '/#/board');
+    const card = a2.locator('.tcard[data-key="PM-322"]');
+    await card.waitFor();
+    const chip = card.locator('.chip', { hasText: '💬' });
+    const c0 = (await chip.count()) ? Number((await chip.textContent()).replace(/\D/g, '')) : 0;
+    // 1) Im ersten Tab bestätigt geschrieben (derselbe Weg wie der Dialog: über den Mock-Atlassian-MCP).
+    const r = await a.evaluate(() => fetch('api/board/issue/PM-322/comment', { method: 'POST', headers: { 'x-werkbank': '1', 'content-type': 'application/json' }, body: JSON.stringify({ text: 'E2E: live', confirm: true }) }).then((x) => x.status));
+    assert.equal(r, 200);
+    await a2.locator('.tcard.fresh[data-key="PM-322"]').waitFor({ timeout: 5000 });
+    await card.locator('.chip', { hasText: `💬 ${c0 + 1}` }).waitFor({ timeout: 5000 });
+    await shot(a2, '08b-board-live');
+    // 2) Jira-Schreiben aus einem Chat: Jira ändert sich (Nachbau), die Brücke meldet den Schlüssel → Karte zieht nach.
+    await fetch(`http://127.0.0.1:${jira.port}/rest/api/3/issue/PM-322/comment`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Basic ' + Buffer.from('mcp:mock').toString('base64') }, body: JSON.stringify({ body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'aus dem Chat' }] }] } }) });
+    const t = await fetch(W + '/internal/jira-touched', { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': env.WERKBANK_INTERNAL_TOKEN }, body: JSON.stringify({ userId: id1, keys: ['PM-322'], tool: 'mcp__atlassian__addCommentToJiraIssue' }) });
+    assert.equal(t.status, 200);
+    await card.locator('.chip', { hasText: `💬 ${c0 + 2}` }).waitFor({ timeout: 5000 });
+    await a2.close();
   });
 
   let agentChat = '';
@@ -456,6 +478,10 @@ try {
     await a.waitForURL(/\/wb\/wissen\?h=%23%2Fwissen%2F~roadmap/);
     await a.reload();
     await a.frameLocator('[data-testid="werkbank-frame"]').getByText('Thema × Zustand').waitFor({ timeout: 20000 });
+    // Live-Strom (SSE) auch durch LibreChats /werkbank-Proxy: „hello“ kommt sofort an, nicht gepuffert.
+    const fr = a.frames().find((x) => x.url().includes('/werkbank/'));
+    const ms = await fr.evaluate(() => new Promise((res) => { const t0 = performance.now(); const es = new EventSource('api/events'); es.addEventListener('hello', () => { es.close(); res(performance.now() - t0); }); setTimeout(() => { es.close(); res(-1); }, 5000); }));
+    assert.ok(ms >= 0 && ms < 3000, `SSE durch den Proxy: hello nach ${ms} ms`);
   });
 
   await step('LibreChat dunkel → Werkbank-Seite dunkel', async () => {

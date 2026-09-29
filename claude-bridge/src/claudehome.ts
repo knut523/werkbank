@@ -59,13 +59,20 @@ export async function ensureHome(h: ClaudeHome): Promise<void> {
   const md = join(h.dir, 'CLAUDE.md');
   const tpl = process.env.BRIDGE_CLAUDE_MD_TEMPLATE || join(REPO, 'templates', 'claude', 'CLAUDE.md');
   if (!exists(md) && existsSync(tpl)) { try { symlinkSync(tpl, md); } catch { /* gleichzeitig angelegt */ } }
+  // Schon eingerichtet → im Hintergrund abgleichen (kostet ~0,3 s, soll den Zug nicht aufhalten).
+  const fresh = !existsSync(join(h.dir, 'skills'));
+  const sync = syncSkills(h.dir);
+  if (fresh) await sync;
+}
+
+async function syncSkills(dir: string) {
   try {
     // Genau das, was `scripts/werkbank.sh skills --apply` mit CLAUDE_CONFIG_DIR tut.
     await promisify(execFile)(process.execPath, [join(REPO, 'web', 'server', 'skills-cli.ts'), '--apply', '--json'], {
-      env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', CLAUDE_CONFIG_DIR: h.dir, WERKBANK_SKILLS_TARGET: join(h.dir, 'skills'), ...(process.env.WERKBANK_SKILLS_SOURCE ? { WERKBANK_SKILLS_SOURCE: process.env.WERKBANK_SKILLS_SOURCE } : {}) },
+      env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', CLAUDE_CONFIG_DIR: dir, WERKBANK_SKILLS_TARGET: join(dir, 'skills'), ...(process.env.WERKBANK_SKILLS_SOURCE ? { WERKBANK_SKILLS_SOURCE: process.env.WERKBANK_SKILLS_SOURCE } : {}) },
       timeout: 20_000, maxBuffer: 4 << 20,
     });
-  } catch (e: any) { log('skills für konfig fehlgeschlagen', { dir: h.dir, error: String(e?.stderr ?? e?.message ?? e).slice(0, 200) }); }
+  } catch (e: any) { log('skills für konfig fehlgeschlagen', { dir, error: String(e?.stderr ?? e?.message ?? e).slice(0, 200) }); }
 }
 
 function exists(p: string) { try { lstatSync(p); return true; } catch { return false; } }
