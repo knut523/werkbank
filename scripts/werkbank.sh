@@ -77,6 +77,8 @@ doctor() {
   echo "Vault und Skills"
   [ -r /vault/CLAUDE.md ] && ok "Vault lesbar (/vault)" || bad "Vault /vault nicht lesbar"
   node "$WB/web/server/skills-cli.ts" 2>/dev/null | sed 's/^/  /'
+  n=$(find "$RT/claude" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+  ok "Claude-Konfigurationen je Person: $n (.runtime/claude/<id>; Skills dort: werkbank.sh skills --people)"
   [ -f "$HOME/.config/vw/session" ] && ok "Vaultwarden-Sitzung da (Jira-Pilotzugang)" || warn "keine Vaultwarden-Sitzung (~/.config/vw/session) — Jira-Sync nur mit eigenem Token"
   health
   echo "Logs (Fehlerzeilen der letzten 200 Zeilen)"

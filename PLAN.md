@@ -85,6 +85,14 @@ Streaming (Arbeitsanzeige sofort, Denken/Werkzeuge als Fortschritt, Messung), �
 Dokumente und Vault-Seiten an Tickets (Verknüpfungsindex, Vorschläge), eigene Sektion Roadmap, Knuts Antworten auf
 die zwölf Entscheidungen. Details: README.
 
+### Runde 4, 29.09.2026 (schneller, team-fähig, Board live)
+
+Werkbank-Sitzungen laden nur noch ihre eigenen MCP-Server (strict) und laufen je Person mit eigenem
+`CLAUDE_CONFIG_DIR` unter `.runtime/claude/<id>` (Vault-Skills, Team-CLAUDE.md, eigene Atlassian-Anmeldung, headless im
+Chat möglich); Knuts Pilot-Konto bleibt per Schalter auf seiner Konfiguration, ohne seine Hooks. Start der CLI bis `init`
+5,4 s → 1,3–1,6 s. Jede Jira-Änderung (Board, Sprint, Chat über den Atlassian-MCP) zieht das Ticket sofort in die Kopie
+und erscheint per SSE auf offenen Board-/Sprint-Seiten. Details und offene Entscheidungen R4-1 … R4-3: README.
+
 ## Leitplanken
 
 - Keine Zugangsdaten im Repo oder im Log; Tokens je Nutzer verschlüsselt gespeichert.
