@@ -8,6 +8,7 @@
 // mcpStatus(): liest nur die Init-Nachricht (Status der MCP-Server) und bricht dann ab — kein Modellaufruf.
 
 import { log } from './log.ts';
+import { applyHome, atlassianServer, type ClaudeHome } from './claudehome.ts';
 
 type QueryFn = (p: { prompt: string; options: Record<string, any> }) => AsyncIterable<any>;
 
@@ -41,10 +42,13 @@ function textOfResult(content: unknown): string {
  * startet im Streaming-Eingabemodus ohne Nachricht, fragt `mcpServerStatus()` ab (wartet, solange ein Server
  * noch „pending“ ist, höchstens 25 s) und wird dann beendet.
  */
-export async function mcpStatus(query: QueryFn, token: string, cwd: string): Promise<{ servers: { name: string; status: string }[] }> {
+export async function mcpStatus(query: QueryFn, token: string, cwd: string, home: ClaudeHome): Promise<{ servers: { name: string; status: string }[] }> {
   const abort = new AbortController();
   const idle = (async function* () { await new Promise<void>((r) => abort.signal.addEventListener('abort', () => r())); })();
-  const q: any = query({ prompt: idle as any, options: { cwd, settingSources: ['user', 'project'], abortController: abort, env: cleanEnv(token), maxTurns: 1, permissionMode: 'default', canUseTool: async () => ({ behavior: 'deny', message: 'nur Status' }) } });
+  const env = cleanEnv(token);
+  const options: Record<string, any> = { cwd, settingSources: ['user', 'project'], abortController: abort, env, maxTurns: 1, permissionMode: 'default', mcpServers: atlassianServer(), canUseTool: async () => ({ behavior: 'deny', message: 'nur Status' }) };
+  applyHome(home, env, options);
+  const q: any = query({ prompt: idle as any, options });
   // Nachrichten abholen, damit die Sitzung nicht stockt (es kommen keine Modellantworten).
   (async () => { try { for await (const _ of q) { /* nichts */ } } catch { /* beendet */ } })();
   const deadline = Date.now() + 25_000;
@@ -62,7 +66,7 @@ export async function mcpStatus(query: QueryFn, token: string, cwd: string): Pro
 }
 
 /** Führt genau einen (schon bestätigten) MCP-Aufruf aus. */
-export async function mcpCall(query: QueryFn, p: { token: string; cwd: string; tool: string; input: Record<string, unknown>; server?: string }): Promise<McpCallResult> {
+export async function mcpCall(query: QueryFn, p: { token: string; cwd: string; home: ClaudeHome; tool: string; input: Record<string, unknown>; server?: string }): Promise<McpCallResult> {
   const server = p.server ?? p.tool.split('__')[1];
   const key = String(p.input.issueIdOrKey ?? '');
   const abort = new AbortController();
@@ -90,11 +94,15 @@ export async function mcpCall(query: QueryFn, p: { token: string; cwd: string; t
   ].join('\n');
   const timer = setTimeout(() => abort.abort(), 120_000);
   try {
-    const q = query({ prompt, options: {
+    const env = cleanEnv(p.token);
+    const options: Record<string, any> = {
       cwd: p.cwd, settingSources: ['user', 'project'], skills: [], maxTurns: 6, permissionMode: 'default', abortController: abort,
       canUseTool: guard, hooks: { PreToolUse: [{ hooks: [hook] }] }, disallowedTools: ['AskUserQuestion', 'Bash', 'Write', 'Edit', 'Task', 'Agent'],
-      env: cleanEnv(p.token),
-    } });
+      env, mcpServers: server === 'atlassian' ? atlassianServer() : {},
+    };
+    // Eigene (oder geteilte) Claude-Konfiguration, nur der Atlassian-MCP — kein Laden der übrigen Server/Hooks.
+    applyHome(p.home, env, options);
+    const q = query({ prompt, options });
     for await (const msg of q) {
       if (msg.type === 'system' && msg.subtype === 'init') {
         serverStatus = String((msg.mcp_servers ?? []).find((s: any) => s.name === server)?.status ?? 'fehlt');

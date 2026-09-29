@@ -14,6 +14,7 @@ import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
 import { mockQuery } from './mock.ts';
 import { mcpCall, mcpStatus } from './mcpcall.ts';
+import { homeFor, ensureHome, atlassianServer, type ClaudeHome } from './claudehome.ts';
 import { log } from './log.ts';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -24,8 +25,11 @@ const STATE_DIR = process.env.BRIDGE_STATE_DIR || join(dirname(fileURLToPath(imp
 const INTERNAL = process.env.WERKBANK_INTERNAL_TOKEN || '';
 const MCP_DIR = process.env.WERKBANK_MCP_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'mcp');
 
-/** MCP-Server nur für Werkbank-Sitzungen — die Nutzer-Konfiguration von Claude Code bleibt unberührt. */
-function mcpServersFor(userId: string, claudeToken: string): Record<string, unknown> {
+/**
+ * Die MCP-Server einer Werkbank-Sitzung — und nur diese (strictMcpConfig): vault-search, werkbank,
+ * forge-review (falls eingerichtet), atlassian (Jira, OAuth je Claude-Konfiguration).
+ */
+function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome): Record<string, unknown> {
   const node = process.execPath;
   const servers: Record<string, unknown> = {
     'vault-search': {
@@ -45,6 +49,7 @@ function mcpServersFor(userId: string, claudeToken: string): Record<string, unkn
         PATH: process.env.PATH || '', HOME: process.env.HOME || '',
         FORGE_REVIEW_ENV: process.env.FORGE_REVIEW_ENV || '',
         CLAUDE_CODE_OAUTH_TOKEN: claudeToken,
+        ...(home.dir ? { CLAUDE_CONFIG_DIR: home.dir } : {}),
       },
     };
   }
@@ -54,7 +59,7 @@ function mcpServersFor(userId: string, claudeToken: string): Record<string, unkn
       env: { WERKBANK_URL: WEB_URL, WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_USER_ID: userId, PATH: process.env.PATH || '' },
     };
   }
-  return servers;
+  return { ...servers, ...atlassianServer() };
 }
 
 async function sessionContext(userId: string, convId: string, eod: boolean, skills: unknown): Promise<string> {
@@ -245,10 +250,16 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
     .slice(-30000);
 
   const known = !!header(req, 'x-librechat-user-id');   // echtes Konto, nicht nur Token-Hash
-  await handleTurn({
+  const email = (header(req, 'x-librechat-user-email') ?? '').toLowerCase() || undefined;
+  await handleTurn({ email,
     userId, convId, token, prompt, history, model: MODELS[model], sink, query: query as any, readonly, receivedAt, instructions: instructions || undefined,
     sessionContext: known ? () => sessionContext(userId, convId, /Tagesabschluss/i.test(instructions) || /^\s*tagesabschluss\b/i.test(prompt), skillsFor(STATE_DIR, `${safeId(userId)}:${safeId(convId)}`, instructions, prompt)) : undefined,
-    mcpServers: known ? mcpServersFor(userId, token) : undefined,
+    mcpServers: known ? mcpServersFor(userId, token, homeFor(safeId(userId), email)) : undefined,
+    // Jira im Chat geändert → Werkbank zieht die Tickets sofort nach und schiebt die Änderung an offene Boards.
+    onJiraWrite: known && INTERNAL ? (keys, tool) => {
+      log('jira im chat geschrieben', { user: userId, keys, tool });
+      fetch(`${WEB_URL}/internal/jira-touched`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, keys, tool }) }).catch(() => {});
+    } : undefined,
     onSkill: known && INTERNAL ? (name) => {
       if (!/^[\w:.-]{1,80}$/.test(name)) return;
       fetch(`${WEB_URL}/internal/skill-used`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, skill: name }) }).catch(() => {});
@@ -275,11 +286,14 @@ const server = createServer(async (req, res) => {
       const token = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '').trim();
       if (!/^sk-ant-oat|^mock-/.test(token) && !MOCK) return json(res, 400, { ok: false, error: 'claude_auth', message: 'Kein gültiger Claude-Token.' });
       const b = await readBody(req);
-      const cwd = scratchFor(String(b.userId ?? 'werkbank'));
-      if (url.pathname === '/internal/mcp-status') return json(res, 200, await mcpStatus(query as any, token, cwd));
+      const uid = String(b.userId ?? 'werkbank');
+      const cwd = scratchFor(uid);
+      const home = homeFor(safeId(uid), b.email ? String(b.email) : undefined);
+      await ensureHome(home);
+      if (url.pathname === '/internal/mcp-status') return json(res, 200, { ...(await mcpStatus(query as any, token, cwd, home)), home: { mode: home.mode, dir: home.dir } });
       if (!/^mcp__[\w-]+__\w+$/.test(String(b.tool ?? ''))) return json(res, 400, { ok: false, error: 'failed', message: 'Ungültiges Werkzeug.' });
       const t0 = Date.now();
-      const r = await mcpCall(query as any, { token, cwd, tool: String(b.tool), input: b.input ?? {} });
+      const r = await mcpCall(query as any, { token, cwd, home, tool: String(b.tool), input: b.input ?? {} });
       log('mcp call', { user: String(b.userId ?? '?'), tool: b.tool, ok: r.ok, error: r.error, ms: Date.now() - t0 });
       return json(res, 200, r);
     }

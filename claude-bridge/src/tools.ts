@@ -49,6 +49,9 @@ export function classify(tool: string, input: Record<string, unknown>): { cls: T
     if (server === 'forge-review') return /merge|post|publish|submit|comment|approve|request_changes/i.test(name) ? { cls: 'blocked', why: 'GitHub schreiben (forge-Ergebnis bleibt Entwurf)' } : { cls: 'read' };
     if (/github/i.test(server) && !MCP_READ.test(name)) return { cls: 'blocked', why: 'GitHub schreiben' };
     if (/merge/i.test(name)) return { cls: 'blocked', why: 'Merge' };
+    // Anmelden beim MCP-Server (Claude Codes eigene Pseudo-Werkzeuge bei „needs-auth“): schreibt nur die
+    // eigene OAuth-Anmeldung in die eigene Claude-Konfiguration — ohne Rückfrage.
+    if (name === 'authenticate' || name === 'complete_authentication') return { cls: 'read' };
     if (MCP_READ.test(name)) return { cls: 'read' };
     return { cls: 'confirm' };
   }
@@ -164,4 +167,25 @@ export function parseAnswer(text: string): 'yes' | 'no' | 'other' {
   if (/^(ja|j|yes|y|ok|okay|passt|mach|mach das|go|jawohl|klar|ja bitte|bitte)$/.test(t)) return 'yes';
   if (/^(nein|n|no|nö|stopp|stop|abbrechen|lieber nicht|nicht)$/.test(t)) return 'no';
   return 'other';
+}
+
+const KEY_RE = /^[A-Z][A-Z0-9]+-\d+$/;
+
+/**
+ * Hat ein erfolgreicher Atlassian-MCP-Aufruf Jira geändert? Dann die betroffenen Schlüssel (für das sofortige
+ * Nachziehen der Jira-Kopie am Board), sonst null. Schlüssel aus den Argumenten (issueIdOrKey, parent, Links)
+ * und — beim Anlegen — aus der Antwort.
+ */
+export function jiraWriteKeys(tool: string, input: Record<string, unknown>, result = ''): string[] | null {
+  if (!tool.startsWith('mcp__atlassian__')) return null;
+  const name = tool.split('__')[2] ?? '';
+  if (!/jira|issuelink|worklog/i.test(name) || classify(tool, input).cls !== 'confirm') return null;
+  const keys = new Set<string>();
+  const take = (v: unknown) => {
+    if (typeof v === 'string' && KEY_RE.test(v.trim())) keys.add(v.trim());
+    else if (v && typeof v === 'object' && !Array.isArray(v)) { const k = (v as any).key ?? (v as any).issueKey; if (typeof k === 'string' && KEY_RE.test(k)) keys.add(k); }
+  };
+  for (const v of Object.values(input)) take(v);
+  if (/^create/i.test(name)) for (const m of String(result).matchAll(/\b[A-Z][A-Z0-9]+-\d+\b/g)) { keys.add(m[0]); if (keys.size >= 5) break; }
+  return [...keys];
 }
