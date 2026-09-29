@@ -102,6 +102,44 @@ function ContextInfo() {
   );
 }
 
+/** Jira schreiben über den Atlassian-MCP in der eigenen Claude-Sitzung (Knut, 29.09.). */
+function McpStep({ claude }: { claude: boolean }) {
+  const m = useLoad(() => api('/api/setup/mcp'));
+  const [err, setErr] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const [help, setHelp] = useState<string | null>(null);
+  const d: any = m.data;
+  const ok = d?.status === 'connected' && !d?.problem;
+  return (
+    <div className={`step ${ok ? 'done' : ''}`} data-testid="mcp-step">
+      <div className="num">{ok ? '✓' : '4'}</div>
+      <div className="card">
+        <h3 style={{ marginTop: 0 }}>Jira schreiben (Atlassian-MCP)</h3>
+        <p className="small" style={{ marginTop: 0 }}>Kommentare, Statuswechsel und Fälligkeiten vom Board, aus dem Sprint und aus den Pflegefragen schreibt die Werkbank <b>über den Atlassian-MCP in deiner eigenen Claude-Sitzung</b> — unter deinem Atlassian-Konto, jeweils erst nach deiner Bestätigung. Gelesen wird weiter mit dem Lesezugang oben.</p>
+        {d && (ok
+          ? <p className="okbox">Verbunden (geprüft {fmtDateTime(d.checkedAt)}).</p>
+          : d.status || d.problem
+            ? <p className="err small">Nicht verbunden{d.status && d.status !== 'connected' ? ` (Status: ${d.status})` : d.problem === 'mcp_auth' ? ' (letzter Schreibversuch: nicht angemeldet)' : ''}.</p>
+            : <p className="note small">Noch nicht geprüft.</p>)}
+        <ol className="small">
+          <li>Einmalig im Terminal: <code>claude</code> starten → <code>/mcp</code> → <b>atlassian</b> → <b>Authenticate</b> → im Browser mit deinem Atlassian-Konto anmelden. (Fehlt „atlassian“ in der Liste: <code>claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp</code>)</li>
+          <li>Hier prüfen — es wird nur der Verbindungsstatus gelesen, kein Modellaufruf.</li>
+        </ol>
+        <div className="row">
+          <button className="btn primary" disabled={!claude || busy} onClick={async () => {
+            setBusy(true); setErr(null);
+            try { const r: any = await api('/api/setup/mcp/check', { method: 'POST' }); setHelp(r.help); await m.reload(); } catch (e) { setErr(e); } finally { setBusy(false); }
+          }}>{busy ? 'Prüfe …' : 'Jira-MCP prüfen'}</button>
+          {!claude && <span className="tiny">erst Claude verbinden</span>}
+        </div>
+        {help && <p className="small">{help}</p>}
+        <p className="tiny">Ohne verbundenen MCP: keine Pflegefragen im Chat (nur die 🧹-Badges am Board, einmal ein Hinweis), und Schreibaktionen melden sich mit dieser Anleitung.</p>
+        <Err e={err} />
+      </div>
+    </div>
+  );
+}
+
 function Wizard({ cfg }: { cfg: Config }) {
   const st = useLoad(() => api('/api/setup/status'));
   const toast = useToast();
@@ -160,12 +198,12 @@ function Wizard({ cfg }: { cfg: Config }) {
         <div className={`step ${s.jira.connected ? 'done' : ''}`}>
           <div className="num">{s.jira.connected ? '✓' : '3'}</div>
           <div className="card">
-            <h3 style={{ marginTop: 0 }}>Eigenes Jira verbinden</h3>
+            <h3 style={{ marginTop: 0 }}>Jira lesen (Board-Kopie)</h3>
             {s.jira.connected && <p className="okbox">Verbunden als {s.jira.email} · Quelle: {s.jira.source}{s.jira.canWrite === false ? ' · nur lesen' : s.jira.canWrite ? ' · darf schreiben' : ''}.</p>}
-            {s.jira.source === 'Pilot (Vaultwarden der VM)' && <p className="note small">Pilot: gelesen wird mit dem Team-Lesetoken „Jira api“ aus dem Vaultwarden der VM. Er darf <b>nicht schreiben</b> — für Kommentare, Status und Fälligkeiten vom Board aus hier einen eigenen Token mit Schreibrecht eintragen. Ohne ihn geht Schreiben weiter über den Chat (Atlassian-MCP, mit Rückfrage).</p>}
+            {s.jira.source === 'Pilot (Vaultwarden der VM)' && <p className="note small">Pilot: gelesen wird mit dem Team-Lesetoken „Jira api“ aus dem Vaultwarden der VM. Er darf <b>nicht schreiben</b> — geschrieben wird über den Atlassian-MCP (nächster Schritt).</p>}
             <ol className="small">
               <li><a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noreferrer">id.atlassian.com → API-Tokens</a> → <b>API-Token mit Bereichen erstellen</b> → App <b>Jira</b>.</li>
-              <li>Bereiche: <code>read:jira-work</code> (Lesen) und — wenn du vom Board aus kommentieren/Status ändern willst — <code>write:jira-work</code>. Ablaufdatum setzen.</li>
+              <li>Bereich: <code>read:jira-work</code> reicht (geschrieben wird über den Atlassian-MCP). Ablaufdatum setzen.</li>
               <li>E-Mail deines Atlassian-Kontos und den Token hier eintragen. Er wird verschlüsselt gespeichert, nie angezeigt und nie geloggt.</li>
             </ol>
             <form className="row" onSubmit={(e) => { e.preventDefault(); run('jira', async () => { const r: any = await api('/api/setup/jira', { body: { email: jEmail, token: jToken } }); setJToken(''); toast(r.count != null ? `Jira verbunden — ${r.count} Tickets in ${cfg.project} sichtbar` : 'Jira verbunden'); }); }}>
@@ -177,8 +215,10 @@ function Wizard({ cfg }: { cfg: Config }) {
           </div>
         </div>
 
+        <McpStep claude={s.claude.connected} />
+
         <div className={`step ${allOk ? 'done' : ''}`}>
-          <div className="num">{allOk ? '✓' : '4'}</div>
+          <div className="num">{allOk ? '✓' : '5'}</div>
           <div className="card">
             <h3 style={{ marginTop: 0 }}>Loslegen</h3>
             <div className="grid2">

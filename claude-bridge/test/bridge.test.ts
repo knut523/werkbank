@@ -206,3 +206,24 @@ test('Streaming: „arbeitet …“ sofort, Denken als Fortschrittszeile, Text t
   assert.equal(words.length, 40, 'jedes Wort ein eigenes Stück');
   assert.ok(words[39].t - words[0].t > 1500, 'Wörter kommen verteilt, nicht auf einmal');
 });
+
+async function internal(path: string, body: unknown, token = 'mock-token') {
+  const r = await fetch(`http://127.0.0.1:${PORT}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': 'geheim', authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+  return { status: r.status, j: await r.json() as any };
+}
+
+test('MCP-Aufruf: nur mit internem Token, genau die bestätigten Argumente, 401 → klare Fehlerart', async () => {
+  const no = await fetch(`http://127.0.0.1:${PORT}/internal/mcp-call`, { method: 'POST', body: '{}' });
+  assert.equal(no.status, 403);
+  const input = { cloudId: 'c', issueIdOrKey: 'PM-5', commentBody: 'Hallo', contentFormat: 'markdown' };
+  const ok = await internal('/internal/mcp-call', { userId: 'u30', tool: 'mcp__atlassian__addCommentToJiraIssue', input });
+  assert.equal(ok.j.ok, true, JSON.stringify(ok.j));
+  const { readFileSync } = await import('node:fs');
+  const calls = readFileSync(join(STATE, 'mock-mcp-calls.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(calls.at(-1), { tool: 'mcp__atlassian__addCommentToJiraIssue', input });
+  const bad = await internal('/internal/mcp-call', { userId: 'u30', tool: 'mcp__atlassian__addCommentToJiraIssue', input: { ...input, commentBody: '401-TEST' } });
+  assert.equal(bad.j.ok, false);
+  assert.equal(bad.j.error, 'mcp_auth');
+  const st = await internal('/internal/mcp-status', { userId: 'u30' });
+  assert.deepEqual(st.j.servers, [{ name: 'atlassian', status: 'connected' }]);
+});

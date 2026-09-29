@@ -55,7 +55,8 @@ before(async () => {
   jira = await startJiraMock(0);
   bridge = spawn(process.execPath, ['src/server.ts'], {
     cwd: join(WEB, '..', 'claude-bridge'),
-    env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(BRIDGE_PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_ALLOWED_EMAILS: '' },
+    env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(BRIDGE_PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_ALLOWED_EMAILS: '',
+      WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_URL: B, BRIDGE_MOCK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3` },
     stdio: 'ignore',
   });
   web = spawn(process.execPath, ['server/main.ts'], {
@@ -168,6 +169,15 @@ test('Board: Kommentar/Status/Fälligkeit erst nach Bestätigung, dann in Jira',
   assert.equal(jira.writes.length, 0, 'Vorschau schreibt nichts');
   assert.equal((await anna.req('/api/board/issue/PM-331/comment', { body: { text: 'Hallo', confirm: true } })).status, 200);
   assert.equal(jira.writes.at(-1).type, 'comment');
+  // Geschrieben wird über den Atlassian-MCP (Mock), mit genau den bestätigten Argumenten.
+  const calls = readFileSync(join(STATE, 'mock-mcp-calls.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(calls.at(-1), { tool: 'mcp__atlassian__addCommentToJiraIssue', input: { cloudId: '606f753a-fd3a-4d69-9b8b-ef9574984080', issueIdOrKey: 'PM-331', commentBody: 'Hallo', contentFormat: 'markdown' } });
+  const n = jira.writes.length;
+  const denied = await anna.req('/api/board/issue/PM-331/comment', { body: { text: '401-TEST', confirm: true } });
+  assert.equal(denied.status, 412);
+  assert.equal(denied.j.code, 'mcp_auth');
+  assert.match(denied.j.error, /nicht angemeldet.*\/mcp.*Authenticate/);
+  assert.equal(jira.writes.length, n, 'nichts geschrieben');
   assert.equal((await anna.req('/api/board/issue/PM-331/status', { body: { to: 'Done', confirm: true } })).j.issue.status, 'Done');
   const bad = await anna.req('/api/board/issue/PM-340/status', { body: { to: 'Done', confirm: true } });
   assert.equal(bad.status, 400);
@@ -360,6 +370,17 @@ test('Interne Schnittstelle nur mit Token; Kontext-Paket klein; Pflegefragen nur
   ]);
   assert.equal((await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c1' }, 'falsch')).status, 403);
   assert.equal((await internal('/internal/session-start', { userId: String(users.c._id), conv: 'c1' })).status, 403, 'nicht freigeschaltetes Konto');
+  // Entscheidung 12: ohne verbundenen Jira-MCP keine Pflegefragen, nur ein einmaliger Hinweis.
+  await mongo.db(DB).collection('mcp_status').deleteMany({});
+  const s0 = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c0' });
+  assert.equal(s0.j.questions.length, 0);
+  assert.match(s0.j.text, /Hinweis an die Person \(einmalig/);
+  assert.match(s0.j.text, /\/mcp/);
+  const s0b = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c0b' });
+  assert.doesNotMatch(s0b.j.text, /Hinweis an die Person/, 'Hinweis nur einmal');
+  const chk = await anna.req('/api/setup/mcp/check', { method: 'POST' });
+  assert.equal(chk.j.status, 'connected');
+  assert.equal((await anna.req('/api/setup/mcp')).j.status, 'connected');
   const s1 = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c1', skills: ['olaf-jira'] });
   assert.equal(s1.status, 200);
   assert.equal(s1.j.slot, 'morgen');
@@ -398,8 +419,8 @@ test('Task-Hygiene: Antwort → Vorschlag → Bestätigung → Jira; später; Bo
   assert.deepEqual((await anna.req('/api/hygiene')).j.snoozed, ['PM-901']);
   // PM-900 gibt es im Jira-Nachbau nicht → Fehler kommt sauber zurück, nichts halb geschrieben
   const w = await anna.req('/api/hygiene/PM-900/answer', { body: { confirm: true, actions: p.j.actions } });
-  assert.equal(w.status, 404);
-  assert.match(w.j.error, /Jira antwortet mit 404/);
+  assert.equal(w.status, 502);
+  assert.match(w.j.error, /Jira \(MCP\): Jira 404/);
   // Chat-Weg (jira_update über die Brücke) auf ein echtes Ticket
   const u = await internal('/internal/jira-update', { userId: String(users.a._id), key: 'PM-322', comment: 'Stand: läuft', due: '2026-10-20' });
   assert.equal(u.status, 200);

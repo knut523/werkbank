@@ -4,7 +4,7 @@
 //   hygiene_list    eigene Task-Hygiene-Punkte (lesend)
 //   hygiene_snooze  einen Punkt für heute auf "später" setzen (ändert nur Werkbank-Zustand)
 //   jira_update     Kommentar / Status / Fälligkeit auf einem eigenen PM-Ticket — die Brücke fragt vorher
-//                   im Chat nach ("ja"); geschrieben wird mit dem Jira-Zugang der Person (Werkbank-Einrichtung).
+//                   im Chat nach ("ja"); geschrieben wird über den Atlassian-MCP der Person (eigene kurze Claude-Sitzung, nur dieser Aufruf).
 // Umgebung (von der Brücke gesetzt): WERKBANK_URL, WERKBANK_INTERNAL_TOKEN, WERKBANK_USER_ID.
 
 import { serve } from './stdio.ts';

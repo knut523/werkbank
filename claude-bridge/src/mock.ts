@@ -23,7 +23,34 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
   });
 
   async function* run() {
-    yield { type: 'system', subtype: 'init', session_id };
+    yield { type: 'system', subtype: 'init', session_id, mcp_servers: [{ name: 'atlassian', status: process.env.BRIDGE_MOCK_ATLASSIAN || 'connected' }] };
+    if (prompt === 'status') { await sleep(5000); return; }
+    if (prompt.startsWith('WERKBANK-MCP-AUFRUF')) {
+      // Ein bestätigter MCP-Aufruf: Werkzeug + Argumente aus dem Prompt, Ergebnis ins Protokoll (für Tests).
+      const tool = prompt.match(/`(mcp__[^`]+)`/)?.[1] ?? '';
+      const input = JSON.parse(prompt.match(/```json\n(.+)\n```/)?.[1] ?? '{}');
+      const id = randomUUID();
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, message: { content: [{ type: 'tool_use', id, name: tool, input }] } };
+      const ok = await options.canUseTool?.(tool, input);
+      if (ok?.behavior !== 'allow') { yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: 'abgelehnt' }] } }; return; }
+      if (JSON.stringify(input).includes('401-TEST')) { yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: 'Error: 401 Unauthorized — please re-authenticate' }] } }; return; }
+      const { appendFileSync } = await import('node:fs');
+      const { join } = await import('node:path');
+      const inp: any = ok.updatedInput;
+      appendFileSync(join(process.env.BRIDGE_STATE_DIR ?? '.', 'mock-mcp-calls.jsonl'), JSON.stringify({ tool, input: inp }) + '\n');
+      // Mit BRIDGE_MOCK_JIRA_BASE spielt der Mock den Atlassian-MCP gegen einen Jira-Nachbau (REST) nach.
+      const base = process.env.BRIDGE_MOCK_JIRA_BASE;
+      if (base) {
+        const k = encodeURIComponent(String(inp.issueIdOrKey));
+        const [method, path, body] = tool.endsWith('addCommentToJiraIssue') ? ['POST', `/issue/${k}/comment`, { body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: inp.commentBody }] }] } }]
+          : tool.endsWith('transitionJiraIssue') ? ['POST', `/issue/${k}/transitions`, { transition: inp.transition }]
+          : tool.endsWith('editJiraIssue') ? ['PUT', `/issue/${k}`, { fields: inp.fields }] : ['GET', `/issue/${k}`, undefined];
+        const r = await fetch(base + path, { method, headers: { 'content-type': 'application/json', authorization: 'Basic ' + Buffer.from('mcp:mock').toString('base64') }, body: body ? JSON.stringify(body) : undefined });
+        if (!r.ok) { yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: `Jira ${r.status}: ${(await r.text()).slice(0, 200)}` }] } }; return; }
+      }
+      yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: 'OK (Mock)' }] }] } };
+      return;
+    }
     const lines = prompt.split('\n');
     const anh = lines.filter((l) => /^- anhaenge\//.test(l)).map((l) => l.slice(2).split(' (')[0]);
     const last = [...lines].reverse().find((l) => l.trim() && !/^- anhaenge\//.test(l) && !/^(---|Angehängte Dateien)/.test(l)) ?? '';

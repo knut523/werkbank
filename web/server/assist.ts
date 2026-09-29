@@ -1,6 +1,7 @@
 // Kontext-Paket + Task-Hygiene je Person: gemeinsam genutzt von der Oberfläche (Board, Sprint,
 // Einrichtung) und der Brücke (Sitzungsstart, Werkzeuge jira_update / hygiene_snooze).
 
+import { writeJira, canWriteJira, takeMcpHint, MCP_HELP, type JiraAction } from './jirawrite.ts';
 import { cfg, sprintRoot, WB_ROOT } from './config.ts';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -88,9 +89,15 @@ export async function sessionStart(u: User, conv: string, opts: { eod?: boolean;
     const [issues, who] = await Promise.all([allIssues(), jiraIdentity(u)]);
     pool = [...touchedToday(issues, who, today()), ...items];
   }
-  const r = pickQuestions(pool, st, conv, slot);
+  // Knut, 29.09. (Entscheidung 12): Pflegefragen nur mit verbundenem Jira-MCP — sonst nur Badges und
+  // ein einmaliger Hinweis, dass die Fragen ausfallen und wie man den MCP verbindet.
+  const writable = await canWriteJira(u);
+  const r = pickQuestions(pool, st, conv, writable ? slot : null);
   await saveState(u, r.state);
-  const text = [pack, hygieneBlock(r.picked, items.length, r.slot)].filter(Boolean).join('\n\n');
+  const hint = !writable && slot && items.length && await takeMcpHint(u)
+    ? `### Hinweis an die Person (einmalig, kurz am Ende deiner ersten Antwort)\nDu hast ${items.length} offene Pflegepunkte an deinen Tickets (Board: 🧹). Ich frage dazu nicht nach, solange dein Jira-MCP nicht verbunden ist — ${MCP_HELP}`
+    : '';
+  const text = [pack, hygieneBlock(r.picked, items.length, r.slot), hint].filter(Boolean).join('\n\n');
   const tokens = approxTokens(text);
   await wb().collection('context_log').insertOne({
     userId: u.id, conv: conv.slice(0, 64), at: new Date(), tokens, packTokens: approxTokens(pack), questions: r.picked.length, slot: r.slot, cached,
@@ -130,16 +137,8 @@ export async function proposeFromAnswer(u: User, key: string, answer: string) {
 }
 
 export async function applyActions(u: User, key: string, actions: { type: string; text?: string; to?: string; date?: string | null }[]) {
-  const creds = await jiraCreds(u);
-  if (!creds) throw Object.assign(new Error('Kein Jira-Zugang hinterlegt — unter „Einrichtung“ verbinden.'), { status: 412 });
-  const done: string[] = [];
-  for (const a of actions) {
-    if (a.type === 'comment' && a.text?.trim()) { await addComment(creds, key, a.text.trim()); done.push('Kommentar'); }
-    if (a.type === 'status' && a.to) { await transitionTo(creds, key, a.to); done.push(`Status → ${a.to}`); }
-    if (a.type === 'due') { await setDueDate(creds, key, a.date || null); done.push(`Fällig → ${a.date || 'ohne'}`); }
-  }
-  try { await refreshIssue(creds, key); } catch { /* nächster Sync */ }
-  return done;
+  // Geschrieben wird über den Atlassian-MCP der Person (jirawrite.ts), gelesen mit dem Lesezugang.
+  return (await writeJira(u, key, actions as JiraAction[])).done;
 }
 
 /** Board: welche Karten brauchen Pflege (für alle Owner, je Owner-Identität gerechnet). */

@@ -24,6 +24,7 @@ import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyTo
 import { log } from './log.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
+import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError } from './jirawrite.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 const FONTS = join(cfg.librechatDist, 'client', 'public', 'fonts');
@@ -218,6 +219,16 @@ on('POST', /^\/api\/setup\/jira$/, async (req, res) => {
   send(res, 200, { ok: true, count, jira: await jiraStatus(u) });
 });
 
+on('GET', /^\/api\/setup\/mcp$/, async (req, res) => {
+  const u = await needUser(req);
+  send(res, 200, { ...(await mcpState(u)), mode: writeMode() });
+});
+
+on('POST', /^\/api\/setup\/mcp\/check$/, async (req, res) => {
+  const u = await needUser(req);
+  send(res, 200, { ...(await checkMcp(u)), mode: writeMode() });
+});
+
 on('DELETE', /^\/api\/setup\/jira$/, async (req, res) => { const u = await needUser(req); await removeJiraCreds(u); send(res, 200, { ok: true }); });
 
 // --- Wissen ---
@@ -312,17 +323,12 @@ const writeRoute = (kind: 'comment' | 'status' | 'due') => async (req: IncomingM
   const key = m[1];
   const preview = kind === 'comment' ? `Kommentar auf ${key}: „${String(b.text ?? '').slice(0, 200)}“`
     : kind === 'status' ? `Status von ${key} → „${b.to}“` : `Fälligkeit von ${key} → ${b.date || 'ohne Datum'}`;
-  if (b.confirm !== true) return send(res, 200, { preview, needsConfirm: true });
-  const creds = await needJira(u);
-  await jiraWrite(u, async () => {
-    if (kind === 'comment') { if (!String(b.text ?? '').trim()) throw new HttpError(400, 'Leerer Kommentar.'); await addComment(creds, key, String(b.text).trim()); }
-    if (kind === 'status') await transitionTo(creds, key, String(b.to));
-    if (kind === 'due') await setDueDate(creds, key, b.date ? String(b.date) : null);
-  });
-  log('jira write', { user: u.id, key, kind });
-  let issue: Issue | null = null;
-  try { issue = await refreshIssue(creds, key); } catch { /* Kopie holt es beim nächsten Sync */ }
-  send(res, 200, { ok: true, issue });
+  if (b.confirm !== true) return send(res, 200, { preview, needsConfirm: true, via: writeMode() });
+  if (kind === 'comment' && !String(b.text ?? '').trim()) throw new HttpError(400, 'Leerer Kommentar.');
+  const action = kind === 'comment' ? { type: 'comment' as const, text: String(b.text) } : kind === 'status' ? { type: 'status' as const, to: String(b.to) } : { type: 'due' as const, date: b.date ? String(b.date) : null };
+  const r = await jiraWrite(u, () => writeJira(u, key, [action]));
+  const issue = (await issueMap()).get(key) ?? null;
+  send(res, 200, { ok: true, issue, via: r.via });
 };
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/comment$/, writeRoute('comment'));
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/status$/, writeRoute('status'));
@@ -390,12 +396,10 @@ on('POST', /^\/api\/board\/runs\/([0-9a-f-]{36})\/send$/, async (req, res, m) =>
   const text = String(b.text ?? run.draft ?? '').trim();
   if (!text) throw new HttpError(400, 'Leerer Entwurf.');
   if (b.confirm !== true) return send(res, 200, { preview: `Kommentar auf ${run.key}: „${text.slice(0, 300)}“`, needsConfirm: true });
-  const creds = await needJira(u);
-  await jiraWrite(u, () => addComment(creds, run.key, text));
+  const r = await jiraWrite(u, () => writeJira(u, run.key, [{ type: 'comment', text }]));
   await wb().collection('agent_runs').updateOne({ _id: m[1] as any }, { $set: { sentAt: new Date(), sentBy: u.email, draft: text } });
   log('agent draft gesendet', { user: u.id, key: run.key });
-  try { await refreshIssue(creds, run.key); } catch { /* egal */ }
-  send(res, 200, { ok: true });
+  send(res, 200, { ok: true, via: r.via });
 });
 
 // --- Sprint ---
@@ -443,7 +447,6 @@ on('POST', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/apply$/, async (req, res
   // Plan frisch berechnen und nur die freigegebenen IDs ausführen, deren Inhalt unverändert ist.
   const props = proposalsFor(await runSyncPlan(c.dir), await issueMap(), c.date);
   const approved: Record<string, any> = b.approved ?? {};
-  const creds = await needJira(u);
   const results: any[] = [];
   const done = new Map<string, number[]>();
   for (const p of props) {
@@ -452,15 +455,10 @@ on('POST', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/apply$/, async (req, res
     if (a.payload !== p.row.payload) { results.push({ id: p.id, ok: false, error: 'Notiz hat sich geändert — neu vorbereiten.' }); continue; }
     const actions = (Array.isArray(a.actions) ? a.actions : p.actions) as Proposal['actions'];
     try {
-      for (const act of actions) {
-        if (act.type === 'comment') await jiraWrite(u, () => addComment(creds, p.ticket!, String(act.text)));
-        if (act.type === 'status') await jiraWrite(u, () => transitionTo(creds, p.ticket!, String(act.to)));
-        if (act.type === 'due') await jiraWrite(u, () => setDueDate(creds, p.ticket!, act.date ? String(act.date) : null));
-      }
+      await jiraWrite(u, () => writeJira(u, p.ticket!, actions.map((act: any) => act.type === 'comment' ? { type: 'comment', text: String(act.text) } : act.type === 'status' ? { type: 'status', to: String(act.to) } : { type: 'due', date: act.date ? String(act.date) : null })));
       results.push({ id: p.id, ok: true });
       if (!done.has(p.row.file)) done.set(p.row.file, []);
       done.get(p.row.file)!.push(p.row.line);
-      try { await refreshIssue(creds, p.ticket); } catch { /* egal */ }
     } catch (e: any) { results.push({ id: p.id, ok: false, error: String(e.message).slice(0, 300) }); }
   }
   // Nur vollständig erfolgreiche Notizen markieren (✓ Datum → Jira), mit dem Skript des Skills.
@@ -703,8 +701,9 @@ const server = createServer(async (req, res) => {
     serveStatic(req, res, url.pathname);
   } catch (e: any) {
     const status = e.status ?? (e instanceof JiraError ? 502 : 500);
+    const known = e instanceof JiraError || e instanceof JiraWriteError;
     if (status >= 500) log('fehler', { path: url.pathname, error: String(e.message ?? e).slice(0, 300) });
-    if (!res.headersSent) send(res, status, { error: status >= 500 && !(e instanceof JiraError) ? 'Interner Fehler.' : e.message });
+    if (!res.headersSent) send(res, status, { error: status >= 500 && !known ? 'Interner Fehler.' : e.message, ...(e instanceof JiraWriteError ? { code: e.code } : {}) });
     else res.end();
   }
 });

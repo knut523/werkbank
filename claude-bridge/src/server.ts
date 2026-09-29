@@ -13,6 +13,7 @@ import { handleTurn, stats, scratchFor, safeId, sessionsOf, type Sink } from './
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
 import { mockQuery } from './mock.ts';
+import { mcpCall, mcpStatus } from './mcpcall.ts';
 import { log } from './log.ts';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -261,6 +262,20 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/sessions') {
       if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
       return json(res, 200, { sessions: sessionsOf(url.searchParams.get('user') ?? '') });
+    }
+    // Ein bestätigter MCP-Aufruf (Jira-Schreiben vom Board) bzw. der MCP-Status — nur für Werkbank-Web.
+    if (req.method === 'POST' && (url.pathname === '/internal/mcp-call' || url.pathname === '/internal/mcp-status')) {
+      if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
+      const token = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '').trim();
+      if (!/^sk-ant-oat|^mock-/.test(token) && !MOCK) return json(res, 400, { ok: false, error: 'claude_auth', message: 'Kein gültiger Claude-Token.' });
+      const b = await readBody(req);
+      const cwd = scratchFor(String(b.userId ?? 'werkbank'));
+      if (url.pathname === '/internal/mcp-status') return json(res, 200, await mcpStatus(query as any, token, cwd));
+      if (!/^mcp__[\w-]+__\w+$/.test(String(b.tool ?? ''))) return json(res, 400, { ok: false, error: 'failed', message: 'Ungültiges Werkzeug.' });
+      const t0 = Date.now();
+      const r = await mcpCall(query as any, { token, cwd, tool: String(b.tool), input: b.input ?? {} });
+      log('mcp call', { user: String(b.userId ?? '?'), tool: b.tool, ok: r.ok, error: r.error, ms: Date.now() - t0 });
+      return json(res, 200, r);
     }
     if (req.method === 'GET' && url.pathname === '/v1/models') {
       return json(res, 200, { object: 'list', data: Object.keys(MODELS).map((id) => ({ id, object: 'model', created: 0, owned_by: 'olaf-werkbank' })) });

@@ -120,6 +120,7 @@ function Detail({ k, onClose, onChanged, site, forge }: { k: string; onClose: ()
   const write = async (kind: 'comment' | 'status' | 'due', payload: any, title: string, body: ReactNode) => {
     setErr(null);
     if (!(await confirm({ title, body, confirmLabel: 'In Jira schreiben' }))) return false;
+    toast('Schreibe über den Jira-MCP …');
     try { await api(`/api/board/issue/${k}/${kind}`, { body: { ...payload, confirm: true } }); toast('In Jira geschrieben'); await d.reload(); onChanged(); return true; }
     catch (e) { setErr(e); return false; }
   };
@@ -145,7 +146,7 @@ function Detail({ k, onClose, onChanged, site, forge }: { k: string; onClose: ()
           <div className="row"><a className="btn" href={(d.data as any).chatUrl} target={chatTarget} rel="noreferrer">💬 Im Chat besprechen</a></div>
           <Err e={err} />
 
-          <h3>Aktionen <span className="tiny">(je mit Bestätigung, unter deinem Jira-Konto)</span></h3>
+          <h3>Aktionen <span className="tiny">(je mit Bestätigung — geschrieben über den Atlassian-MCP in deiner Claude-Sitzung, dauert einige Sekunden)</span></h3>
           <div className="col">
             <textarea rows={3} placeholder="Kommentar …" value={comment} onChange={(e) => setComment(e.target.value)} aria-label="Kommentar" />
             <div><button className="btn" disabled={!comment.trim()} onClick={async () => { if (await write('comment', { text: comment }, `Kommentar an ${k}?`, <pre style={{ whiteSpace: 'pre-wrap' }}>{comment}</pre>)) setComment(''); }}>Kommentar senden</button></div>
