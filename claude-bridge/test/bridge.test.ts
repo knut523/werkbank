@@ -227,3 +227,21 @@ test('MCP-Aufruf: nur mit internem Token, genau die bestätigten Argumente, 401 
   const st = await internal('/internal/mcp-status', { userId: 'u30' });
   assert.deepEqual(st.j.servers, [{ name: 'atlassian', status: 'connected' }]);
 });
+
+test('Titel: Board-Chats „PM-123 · Titel“ bleiben ganz; geschriebene Dateien in der Sitzungsliste', async () => {
+  const t = await send('c40', 'OLAF-TITEL\nUser: PM-321 · Hardware Admin Flow mit langer Überschrift\nAI: …', { model: 'olaf-titel' });
+  assert.equal(t, 'PM-321 · Hardware Admin Flow mit langer Überschrift');
+  await send('c41', 'schreib bitte', { user: 'u41' });
+  await send('c41', 'ja', { user: 'u41' });
+  const j: any = await (await fetch(`http://127.0.0.1:${PORT}/sessions?user=u41`, { headers: { 'x-werkbank-internal': 'geheim' } })).json();
+  assert.deepEqual(j.sessions.find((s: any) => s.conv === 'c41').written, ['/vault/_werkbank-mock/notiz.md']);
+});
+
+test('Offene Rückfrage bleibt stehen, während die Person in einem anderen Chat weiterarbeitet', async () => {
+  const q = await send('c50', 'schreib die Notiz', { user: 'u50' });
+  assert.match(q, /Soll ich die Datei/);
+  const other = await send('c51', 'Hallo nebenbei', { user: 'u50' });
+  assert.match(other, /Du hast geschrieben: Hallo nebenbei/);
+  const a = await send('c50', 'ja', { user: 'u50' });
+  assert.match(a, /hätte die Datei jetzt geschrieben/);
+});

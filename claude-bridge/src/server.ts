@@ -173,6 +173,8 @@ function titleFrom(messages: any[]): string {
   // LibreChats Titel-Vorlage enthält den Verlauf als "User: …" / "AI: …"
   const m = all.match(/(?:^|\n)\s*(?:User|Nutzer|Human)\s*:\s*(.+)/i);
   const src = (m ? m[1] : textOf(messages.at(-1)?.content)).replace(/[`*_#>"„“]/g, '').trim();
+  // Vom Board angelegte Chats beginnen mit „PM-123 · Titel“ — die Zeile ist der Titel.
+  if (/^[A-Z][A-Z0-9]+-\d+ · \S/.test(src)) return src.length > 70 ? src.slice(0, 69) + '…' : src;
   const words = src.split(/\s+/).filter(Boolean).slice(0, 6).join(' ');
   return (words.length > 60 ? words.slice(0, 59) + '…' : words) || 'Neuer Chat';
 }

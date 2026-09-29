@@ -68,6 +68,6 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[] = []) {
 }
 
 export function StateChip({ state }: { state: string }) {
-  const cls = /verlinkt|gleich|✅|ok|fertig|Done/.test(state) ? 'ok' : /fehlt|abweichend|kaputt|❌|fehler/.test(state) ? 'bad' : /🟡|läuft|woandershin/.test(state) ? 'warn' : '';
+  const cls = /verlinkt|gleich|✅|ok|fertig|Done/.test(state) ? 'ok' : /fehlt|abweichend|kaputt|❌|fehler/.test(state) ? 'bad' : /🟡|läuft|wartet|woandershin/.test(state) ? 'warn' : '';
   return <span className={`chip ${cls}`}>{state}</span>;
 }

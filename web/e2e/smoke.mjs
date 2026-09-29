@@ -100,7 +100,8 @@ try {
   log('Werkbank-Web (3070) vorübergehend auch für die Testkonten freigeben');
   execFileSync(join(WB, 'scripts/werkbank.sh'), ['restart-web'], { env: { ...process.env, WERKBANK_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}` }, stdio: 'ignore' });
   log('Brücke → Mock-Modus');
-  execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'on'], { env: { ...process.env, BRIDGE_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}` }, stdio: 'ignore' });
+  // Der Mock spielt den Atlassian-MCP gegen den Jira-Nachbau nach (Schreiben vom Board geht über den MCP).
+  execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'on'], { env: { ...process.env, BRIDGE_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}`, BRIDGE_MOCK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3` }, stdio: 'ignore' });
   web = spawn(process.execPath, ['server/main.ts'], {
     cwd: WEB,
     env: {
@@ -110,6 +111,7 @@ try {
       WERKBANK_ALLOWED_EMAILS: `${U1.email},${U2.email}`, CREDS_KEY: env.CREDS_KEY, CREDS_IV: env.CREDS_IV,
       WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), MEILI_MASTER_KEY: env.MEILI_MASTER_KEY, WERKBANK_MEILI_INDEX: `werkbank_e2e_${tag}`,
       WERKBANK_DATA_DIR: join(tmp, 'data'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills'), WERKBANK_JIRA_SYNC_MIN: '600',
+      WERKBANK_INTERNAL_TOKEN: env.WERKBANK_INTERNAL_TOKEN, JWT_SECRET: env.JWT_SECRET, JWT_REFRESH_SECRET: env.JWT_REFRESH_SECRET,
     },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -143,6 +145,9 @@ try {
     await a.getByLabel('Atlassian-API-Token').fill('e2e-atlassian-token-' + 'z'.repeat(20));
     await a.getByRole('button', { name: 'Prüfen & speichern' }).click();
     await a.getByText(/Verbunden als .* Quelle: eigener Token/).waitFor();
+    await a.getByRole('button', { name: 'Jira-MCP prüfen' }).click();
+    await a.getByTestId('mcp-step').getByText(/Verbunden \(geprüft/).waitFor({ timeout: 20000 });
+    await a.getByTestId('mcp-step').scrollIntoViewIfNeeded();
     await shot(a, '02-einrichtung');
     const k = await lcdb.collection('keys').findOne({ userId: new ObjectId(id1), name: 'Claude Code' });
     assert.ok(k, 'Claude-Token im LibreChat-Schlüsselspeicher');
@@ -180,18 +185,34 @@ try {
     await a.getByLabel('Kommentar', { exact: true }).fill('E2E: Kommentar vom Board');
     await a.getByRole('button', { name: 'Kommentar senden' }).click();
     await confirmDialog(a, '08-board-bestaetigung');
-    await a.getByText('In Jira geschrieben').waitFor();
-    assert.equal(jira.writes.at(-1).type, 'comment');
+    await a.getByText('In Jira geschrieben').waitFor({ timeout: 20000 });
+    assert.equal(jira.writes.at(-1).type, 'comment', 'über den (Mock-)Atlassian-MCP in Jira angekommen');
   });
 
-  await step('Board: Agent ansetzen → Entwurf → an Jira senden', async () => {
-    await a.getByRole('button', { name: 'Agent starten' }).click();
+  let agentChat = '';
+  await step('Board: Agent im Chat starten → läuft/wartet auf ja → im Chat „ja“ → fertig', async () => {
+    const panel = a.getByTestId('agent-chat');
+    await panel.getByLabel('Auftrag für den Agenten').fill('schreib eine kurze Notiz');
+    await panel.getByRole('button', { name: 'Agent im Chat starten' }).click();
+    await panel.getByTestId('agent-chats').getByText('wartet auf ja').waitFor({ timeout: 30000 });
+    await shot(a, '09a-board-agent-chat-wartet');
+    agentChat = await panel.getByRole('link', { name: 'Im Chat öffnen' }).first().getAttribute('href');
+    assert.match(agentChat, /\/c\/[0-9a-f-]{36}$/);
+    await a.getByRole('button', { name: 'Schließen' }).click();
+    await a.locator('.tcard[data-key="PM-321"]').getByText('🤖 wartet auf ja').waitFor({ timeout: 10000 });
+    await shot(a, '09b-board-karte-agent');
+  });
+
+  await step('Board: Nur Entwurf → an Jira senden', async () => {
+    await a.locator('.tcard[data-key="PM-321"]').click();
+    await a.getByText('📝 Nur Entwurf').click();
+    await a.getByRole('button', { name: 'Entwurf erstellen' }).click();
     await a.getByLabel('Kommentarentwurf (bearbeitbar)').waitFor({ timeout: 20000 });
     await a.getByLabel('Kommentarentwurf (bearbeitbar)').fill('E2E: Agent-Entwurf geprüft.');
     await shot(a, '09-board-agent');
     await a.getByRole('button', { name: 'An Jira senden' }).click();
     await confirmDialog(a);
-    await a.getByText('Kommentar gesendet').waitFor();
+    await a.getByText('Kommentar gesendet').waitFor({ timeout: 20000 });
     assert.equal(jira.writes.at(-1).body.content[0].content[0].text, 'E2E: Agent-Entwurf geprüft.');
     await a.getByRole('button', { name: 'Schließen' }).click();
   });
@@ -254,11 +275,29 @@ try {
   });
 
   // ---------- Chat (LibreChat) ----------
-  let convId = '';
-  await step('Chat: Anhang erreicht die Claude-Sitzung (Brücke im Mock)', async () => {
+  await step('Chat: vom Board angelegter Agent-Chat „PM-321 · …“ zeigt Fortschritt, „ja“ → fertig', async () => {
     await a.goto(LC + '/login');
     await a.fill('input[name=email]', U1.email); await a.fill('input[name=password]', PW);
     await a.click('button[type=submit]');
+    await a.locator('#prompt-textarea').waitFor();
+    await a.goto(LC + new URL(agentChat).pathname);
+    await a.getByText(/Soll ich die Datei .*notiz\.md.* schreiben/).first().waitFor({ timeout: 30000 });
+    await a.getByText('Claude arbeitet').first().waitFor();
+    await a.getByRole('link', { name: /PM-321 · Hardware Admin Flow/ }).first().waitFor({ timeout: 15000 }).catch(() => {});
+    await shot(a, '16a-agent-chat-rueckfrage');
+    await a.locator('#prompt-textarea').fill('ja');
+    await a.getByRole('button', { name: 'Nachricht senden' }).click();
+    await a.getByText(/hätte die Datei jetzt geschrieben/).first().waitFor({ timeout: 30000 });
+    await shot(a, '16b-agent-chat-ja');
+    await a.goto(W + '/#/board?key=PM-321');
+    await a.getByTestId('agent-chats').getByText('fertig').first().waitFor({ timeout: 20000 });
+    await a.getByTestId('agent-chats').getByText(/schrieb _werkbank-mock\/notiz\.md/).waitFor();
+    await shot(a, '16c-board-agent-fertig');
+  });
+
+  let convId = '';
+  await step('Chat: Anhang erreicht die Claude-Sitzung (Brücke im Mock)', async () => {
+    await a.goto(LC + '/c/new');
     await a.getByRole('button', { name: 'Attach File Options' }).waitFor();
     await a.getByRole('button', { name: 'Attach File Options' }).click();
     const png = join(tmp, 'e2e-bild.png');
@@ -268,8 +307,8 @@ try {
     await a.waitForTimeout(1500);
     await a.locator('#prompt-textarea').fill('Was siehst du in der Datei?');
     await a.getByRole('button', { name: 'Nachricht senden' }).click();
-    await a.getByText(/Anhänge im Arbeitsverzeichnis: anhaenge\/[^ ]+\.png ✓/).waitFor({ timeout: 30000 });
-    await a.getByText(/Kontext-Paket: \d+ Zeichen, Werkzeuge: vault-search, werkbank/).first().waitFor({ timeout: 10000 });
+    await a.getByText(/Anhänge im Arbeitsverzeichnis: anhaenge\/[^ ]+\.png ✓/).first().waitFor({ timeout: 30000 });
+    await a.getByText(/Kontext-Paket: \d+ Zeichen, Werkzeuge: vault-search, (forge-review, )?werkbank/).first().waitFor({ timeout: 10000 });
     await shot(a, '16-chat-anhang');
     convId = a.url().match(/\/c\/([0-9a-f-]{36})/)?.[1] ?? '';
     assert.ok(convId, 'Chat-ID aus der URL');

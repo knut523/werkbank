@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { api, fmtDate, fmtDateTime, today, chatTarget, type Config } from '../api.ts';
+import { api, fmtDate, fmtDateTime, today, chatTarget, openChat, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, StateChip } from '../ui.tsx';
 import { HygienePanel } from '../components.tsx';
 
@@ -15,9 +15,52 @@ function Card({ i, onOpen }: { i: any; onOpen: () => void }) {
         {i.duedate ? <span className={`chip ${overdue(i) ? 'bad' : ''}`}>{overdue(i) ? 'über ' : ''}{fmtDate(i.duedate)}</span> : i.status !== 'Done' && <span className="chip warn">ohne Datum</span>}
         {i.comments > 0 && <span className="chip">💬 {i.comments}</span>}
         {i.hygiene?.length > 0 && <span className="badge-hyg" title={i.hygiene.join(', ')}>🧹 {i.hygiene.length}</span>}
-        {i.agent && <span className="chip warn" title="Ein Agent arbeitet gerade an dieser Karte">🤖 läuft</span>}
+        {i.agent && <span className={`chip ${i.agent === 'wartet auf ja' ? 'bad' : 'warn'}`} title="Ein Agent arbeitet an dieser Karte (Chat)">🤖 {i.agent}</span>}
       </div>
     </button>
+  );
+}
+
+/** „Agent ansetzen“ als echter Chat: Status je Lauf (läuft / wartet auf ja / fertig), Link in den Chat. */
+function ChatAgents({ issueKey, runs, onChange }: { issueKey: string; runs: any[]; onChange: () => void }) {
+  const [note, setNote] = useState('');
+  const [err, setErr] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const chats = runs.filter((r) => r.mode === 'chat');
+  const active = chats.some((r) => r.status === 'läuft' || r.status === 'wartet auf ja');
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(onChange, 2500);
+    return () => clearInterval(t);
+  }, [active, onChange]);
+  return (
+    <div className="card soft" style={{ marginTop: 12 }} data-testid="agent-chat">
+      <h3 style={{ marginTop: 0 }}>🤖 Agent ansetzen</h3>
+      <p className="small muted">Startet einen <b>neuen Chat „{issueKey} · …“</b> mit dem Ticket als Kontext, unter deinem Claude. Der Agent arbeitet wirklich — auch ohne offenen Tab; jede Schreibaktion (Vault, Dateien, Jira) wartet im Chat auf dein <b>„ja“</b>. GitHub schreiben ist gesperrt.</p>
+      <div className="col">
+        <textarea rows={2} placeholder="Optional: was genau soll der Agent tun / worauf achten?" value={note} onChange={(e) => setNote(e.target.value)} aria-label="Auftrag für den Agenten" />
+        <div className="row">
+          <button className="btn primary" disabled={busy || active} onClick={async () => {
+            setErr(null); setBusy(true);
+            try { await api(`/api/board/issue/${issueKey}/agent`, { body: { note } }); setNote(''); toast('Agent arbeitet im Chat'); onChange(); } catch (e) { setErr(e); } finally { setBusy(false); }
+          }}>{busy ? 'Lege Chat an …' : 'Agent im Chat starten'}</button>
+          {active && <span className="tiny">Auf dieser Karte arbeitet schon ein Agent — im Chat weitermachen.</span>}
+        </div>
+      </div>
+      <Err e={err} />
+      {chats.length > 0 && (
+        <table className="t small" style={{ marginTop: 10 }} data-testid="agent-chats">
+          <tbody>{chats.map((r) => (
+            <tr key={r._id}>
+              <td><StateChip state={r.status} />{r.kind === 'discuss' ? <span className="tiny"> besprechen</span> : null}</td>
+              <td className="tiny">{fmtDateTime(r.startedAt)} · {r.userName}{r.written?.length ? <> · schrieb {r.written.map((f: string) => f.replace(/^\/vault\//, '')).join(', ')}</> : null}</td>
+              <td><a className="btn small" href={r.url} target={chatTarget} rel="noreferrer">Im Chat öffnen</a></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      )}
+    </div>
   );
 }
 
@@ -25,9 +68,10 @@ function AgentPanel({ issueKey, runs, onChange }: { issueKey: string; runs: any[
   const confirm = useConfirm();
   const toast = useToast();
   const [note, setNote] = useState('');
-  const [runId, setRunId] = useState<string | null>(runs[0]?._id ?? null);
-  const [run, setRun] = useState<any>(runs[0] ?? null);
-  const [draft, setDraft] = useState<string>(runs[0]?.draft ?? '');
+  const drafts = runs.filter((r) => r.mode !== 'chat');
+  const [runId, setRunId] = useState<string | null>(drafts[0]?._id ?? null);
+  const [run, setRun] = useState<any>(drafts[0] ?? null);
+  const [draft, setDraft] = useState<string>(drafts[0]?.draft ?? '');
   const [follow, setFollow] = useState('');
   const [err, setErr] = useState<unknown>(null);
   useEffect(() => {
@@ -46,8 +90,8 @@ function AgentPanel({ issueKey, runs, onChange }: { issueKey: string; runs: any[
     return () => { stop = true; };
   }, [runId]);
   return (
-    <div className="card soft" style={{ marginTop: 12 }}>
-      <h3 style={{ marginTop: 0 }}>🤖 Agent ansetzen</h3>
+    <details className="card soft" style={{ marginTop: 12 }} open={!!run}>
+      <summary><b>📝 Nur Entwurf</b> <span className="small muted">— lesend im Hintergrund, Ergebnis als Kommentarentwurf an der Karte</span></summary>
       <p className="small muted">Startet eine Claude-Code-Sitzung mit deinem eigenen Claude, das Ticket als Kontext, <b>nur lesend</b>. Das Ergebnis kommt als Kommentarentwurf hierher — nach Jira geht er erst nach deinem Klick.</p>
       <Err e={err} />
       {(!run || run.status !== 'läuft') && (
@@ -55,8 +99,8 @@ function AgentPanel({ issueKey, runs, onChange }: { issueKey: string; runs: any[
           <textarea rows={2} placeholder="Optional: worauf soll der Agent achten?" value={note} onChange={(e) => setNote(e.target.value)} aria-label="Hinweis für den Agenten" />
           <div><button className="btn primary" onClick={async () => {
             setErr(null);
-            try { const r: any = await api(`/api/board/issue/${issueKey}/agent`, { body: { note } }); setDraft(''); setRunId(r.id); toast('Agent gestartet'); } catch (e) { setErr(e); }
-          }}>Agent starten</button></div>
+            try { const r: any = await api(`/api/board/issue/${issueKey}/agent`, { body: { note, mode: 'draft' } }); setDraft(''); setRunId(r.id); toast('Agent gestartet'); } catch (e) { setErr(e); }
+          }}>Entwurf erstellen</button></div>
         </div>
       )}
       {run && (
@@ -85,7 +129,7 @@ function AgentPanel({ issueKey, runs, onChange }: { issueKey: string; runs: any[
           )}
         </div>
       )}
-    </div>
+    </details>
   );
 }
 
@@ -143,7 +187,10 @@ function Detail({ k, onClose, onChanged, site, forge }: { k: string; onClose: ()
           {i.description && <div className="card soft small" style={{ whiteSpace: 'pre-wrap' }}>{i.description}</div>}
           {i.lastComment && <p className="small"><b>Letzter Kommentar</b> ({i.lastComment.author}, {fmtDate(i.lastComment.created)}): {i.lastComment.text}</p>}
           {(d.data as any).children.length > 0 && <><b className="small">Sub-tasks</b><ul className="small">{(d.data as any).children.map((c: any) => <li key={c.key}>{c.key} {c.summary} · <i>{c.status}</i> · {c.assignee ?? '—'}</li>)}</ul></>}
-          <div className="row"><a className="btn" href={(d.data as any).chatUrl} target={chatTarget} rel="noreferrer">💬 Im Chat besprechen</a></div>
+          <div className="row"><button className="btn" onClick={async () => {
+            setErr(null);
+            try { const r: any = await api(`/api/board/issue/${k}/discuss`, { method: 'POST' }); openChat(r.url); } catch (e) { setErr(e); }
+          }}>💬 Im Chat besprechen</button></div>
           <Err e={err} />
 
           <h3>Aktionen <span className="tiny">(je mit Bestätigung — geschrieben über den Atlassian-MCP in deiner Claude-Sitzung, dauert einige Sekunden)</span></h3>
@@ -163,6 +210,7 @@ function Detail({ k, onClose, onChanged, site, forge }: { k: string; onClose: ()
             <button className="btn small" disabled={!due} onClick={() => write('due', { date: due }, `Fälligkeit von ${k} setzen?`, <p>{fmtDate(i.duedate)} → <b>{fmtDate(due)}</b></p>)}>Setzen</button>
             {i.duedate && <button className="btn small" onClick={() => write('due', { date: null }, `Fälligkeit von ${k} entfernen?`, <p>{fmtDate(i.duedate)} → ohne Datum</p>)}>Entfernen</button>}
           </div>
+          <ChatAgents issueKey={k} runs={(d.data as any).runs} onChange={d.reload} />
           <AgentPanel issueKey={k} runs={(d.data as any).runs} onChange={() => d.reload()} />
           <ForgePanel issueKey={k} enabled={!!forge} onStarted={() => d.reload()} />
           <p className="tiny" style={{ marginTop: 12 }}>Neue Tickets legt die Werkbank bewusst nicht an (olaf-jira: nur auf ausdrücklichen Auftrag, mit Duplikatsuche und Workstream) — dafür den Chat nutzen.</p>
@@ -231,7 +279,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
           </div>
         </section>
       ))}
-      {open && <Detail k={open} site={data?.site ?? cfg.jiraSite} forge={cfg.forge} onClose={() => setOpen(null)} onChanged={() => b.reload()} />}
+      {open && <Detail k={open} site={data?.site ?? cfg.jiraSite} forge={cfg.forge} onClose={() => { setOpen(null); b.reload(); }} onChanged={() => b.reload()} />}
     </div>
   );
 }

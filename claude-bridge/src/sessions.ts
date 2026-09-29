@@ -76,10 +76,10 @@ function saveMap() {
 }
 
 const lives = new Map<string, Live>();       // Unterhaltung → laufende Sitzung
-const userLive = new Map<string, string>();  // Nutzer → Unterhaltung mit laufender Sitzung
+const MAX_WAITING = 5;   // offene Rückfragen je Person (je eine wartende Claude-Sitzung)
 
 // Status je Unterhaltung (Idee: coder/agentapi „running/stable“, CloudCLI Sitzungsliste).
-const lastSeen = new Map<string, { at: number; turns: number; title: string }>();
+const lastSeen = new Map<string, { at: number; turns: number; title: string; written?: string[] }>();
 
 /** Sitzungen einer Person: läuft / wartet auf „ja“ / bereit — neueste zuerst. */
 export function sessionsOf(userId: string) {
@@ -90,7 +90,7 @@ export function sessionsOf(userId: string) {
     const seen = lastSeen.get(k);
     return {
       conv: k.slice(prefix.length), status: l ? (l.pending ? 'wartet auf ja' : 'läuft') : 'bereit',
-      lastActivity: seen?.at ?? null, turns: seen?.turns ?? null, title: seen?.title ?? '', resumable: !!sessionMap[k],
+      lastActivity: seen?.at ?? null, turns: seen?.turns ?? null, title: seen?.title ?? '', resumable: !!sessionMap[k], written: seen?.written ?? [],
     };
   }).sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0)).slice(0, 30);
 }
@@ -155,7 +155,6 @@ function end(live: Live) {
   if (live.pending) { clearTimeout(live.pending.timer); live.pending = null; }
   detach(live);
   lives.delete(live.key);
-  if (userLive.get(live.userId) === live.key) userLive.delete(live.userId);
 }
 
 // ---------- Übersetzung der SDK-Nachrichten ----------
@@ -278,6 +277,12 @@ function makeGuard(live: Live) {
     const a = parseAnswer(answer);
     if (a === 'yes') {
       emitStatus(live, '✅ ' + statusLine(tool, toolInput));
+      // Geschriebene Dateien merken (für „Dokumente an der Karte“), nur Pfade.
+      const f = toolInput.file_path ?? toolInput.notebook_path;
+      if (f && /^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) {
+        const seen = lastSeen.get(live.key);
+        if (seen) seen.written = [...new Set([...(seen.written ?? []), String(f)])].slice(-50);
+      }
       return decide('allow', 'Von der Person im Chat bestätigt.');
     }
     emitStatus(live, '🚫 Nicht ausgeführt.');
@@ -310,7 +315,7 @@ export interface TurnRequest {
 export async function handleTurn(req: TurnRequest): Promise<void> {
   const key = `${safeId(req.userId)}:${safeId(req.convId)}`;
   const seen = lastSeen.get(key);
-  lastSeen.set(key, { at: Date.now(), turns: (seen?.turns ?? 0) + 1, title: seen?.title || req.prompt.replace(/\s+/g, ' ').slice(0, 60) });
+  lastSeen.set(key, { at: Date.now(), turns: (seen?.turns ?? 0) + 1, title: seen?.title || req.prompt.replace(/\s+/g, ' ').slice(0, 60), written: seen?.written });
   const existing = lives.get(key);
 
   // 1) Antwort auf eine offene Rückfrage in dieser Unterhaltung.
@@ -326,20 +331,22 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     return;
   }
 
-  // 2) Höchstens ein aktiver Zug je Nutzer.
-  const otherKey = userLive.get(req.userId);
-  const other = otherKey ? lives.get(otherKey) : undefined;
-  if (other && !other.pending) {
+  // 2) Höchstens ein aktiver Zug je Nutzer. Chats, die nur auf „ja“ warten, zählen nicht — ein vom
+  //    Board angesetzter Agent darf auf die Antwort warten, während die Person woanders weiterchattet.
+  const mine = [...lives.values()].filter((l) => l.userId === req.userId);
+  if (mine.some((l) => !l.pending)) {
     req.sink.write('Bei dir läuft gerade schon eine Anfrage in einem anderen Chat. Bitte warte, bis sie fertig ist.');
     req.sink.finish();
     return;
   }
-  if (other?.pending) {
-    // Offene Rückfrage in einem anderen Chat verfällt; dort bleibt die Sitzung fortsetzbar.
-    log('abandon pending', { conv: other.key });
-    other.pending.resolve('nein');
-    other.abort.abort();
-    end(other);
+  const waiting = mine.filter((l) => l.pending);
+  if (waiting.length >= MAX_WAITING) {
+    // Die älteste offene Rückfrage verfällt; dort bleibt die Sitzung fortsetzbar.
+    const oldest = waiting[0];
+    log('abandon pending', { conv: oldest.key });
+    oldest.pending!.resolve('nein');
+    oldest.abort.abort();
+    end(oldest);
   }
 
   // 3) Neuer Zug.
@@ -349,7 +356,6 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(),
   };
   lives.set(key, live);
-  userLive.set(req.userId, key);
   attach(live, req.sink);
   // Sofort ein Lebenszeichen: bis zum ersten Token vergehen mit echtem Claude einige Sekunden
   // (CLI-Start, MCP-Server, langer System-Prompt, Denken).

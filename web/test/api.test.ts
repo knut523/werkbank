@@ -22,7 +22,8 @@ const VAULT = join(tmp, 'vault');
 const STATE = join(tmp, 'bridge');
 const DATA = join(tmp, 'data');
 const CREDS_KEY = randomBytes(32).toString('hex'), CREDS_IV = randomBytes(16).toString('hex');
-const INTERNAL = randomBytes(16).toString('hex'), REFRESH_SECRET = randomBytes(16).toString('hex');
+const INTERNAL = randomBytes(16).toString('hex'), REFRESH_SECRET = randomBytes(16).toString('hex'), JWT_SECRET = randomBytes(16).toString('hex');
+const lcChats: any[] = [];
 const users = {
   a: { _id: new ObjectId(), email: 'anna@maxenergy.at', name: 'Anna Test', pw: 'pw-anna' },
   b: { _id: new ObjectId(), email: 'bernd@maxenergy.at', name: 'Bernd Test', pw: 'pw-bernd' },
@@ -46,6 +47,20 @@ before(async () => {
   lcFake = createServer(async (req, res) => {
     if (req.url === '/health') { res.end('OK'); return; }
     let b = ''; for await (const c of req) b += c;
+    // Nachbau von LibreChats „Nachricht senden“: Zugangstoken prüfen, Unterhaltung anlegen, Zug an die Brücke.
+    if (req.url === '/api/agents/chat/Claude%20Code') {
+      const { verifyJwt } = await import('../server/auth.ts');
+      const p = verifyJwt(String(req.headers.authorization ?? '').replace(/^Bearer /, ''), JWT_SECRET);
+      if (!p?.id) { res.writeHead(401); res.end('{}'); return; }
+      const body = JSON.parse(b);
+      const conversationId = crypto.randomUUID();
+      lcChats.push({ user: p.id, email: p.email, conversationId, body, ua: req.headers['user-agent'] });
+      fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/chat/completions`, { method: 'POST', headers: { authorization: 'Bearer mock-token', 'content-type': 'application/json', 'x-librechat-user-id': p.id, 'x-librechat-conversation-id': conversationId, 'x-librechat-user-email': p.email },
+        body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: body.text }] }) }).then((r) => r.text()).catch(() => {});
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ streamId: conversationId, conversationId, status: 'started' }));
+      return;
+    }
     const { email, password } = JSON.parse(b || '{}');
     const u = Object.values(users).find((x) => x.email === email && x.pw === password);
     res.writeHead(u ? 200 : 401, { 'content-type': 'application/json' });
@@ -68,7 +83,7 @@ before(async () => {
       WERKBANK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3`, WERKBANK_ALLOWED_EMAILS: `${users.a.email},${users.b.email}`,
       CREDS_KEY, CREDS_IV, WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: DATA,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
-      WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, WERKBANK_FORGE_MCP: '',
+      WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
     },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -192,7 +207,7 @@ test('Board: Kommentar/Status/Fälligkeit erst nach Bestätigung, dann in Jira',
 test('Agent ansetzen: Brücke nur lesend, Ergebnis als Entwurf, gesendet erst nach Klick', async () => {
   const noClaude = await bernd.req('/api/board/issue/PM-321/agent', { body: {} });
   assert.equal(noClaude.status, 412);
-  const st = await anna.req('/api/board/issue/PM-321/agent', { body: { note: 'kurz' } });
+  const st = await anna.req('/api/board/issue/PM-321/agent', { body: { note: 'kurz', mode: 'draft' } });
   assert.equal(st.status, 200);
   let run: any;
   for (let i = 0; i < 40; i++) { run = (await anna.req('/api/board/runs/' + st.j.id)).j; if (run.status !== 'läuft') break; await new Promise((r) => setTimeout(r, 150)); }
@@ -206,6 +221,36 @@ test('Agent ansetzen: Brücke nur lesend, Ergebnis als Entwurf, gesendet erst na
   await anna.req(`/api/board/runs/${st.j.id}/send`, { body: { text: 'Entwurf: passt.', confirm: true } });
   assert.equal(jira.writes.at(-1).key, 'PM-321');
   assert.equal(jira.writes.at(-1).body.content[0].content[0].text, 'Entwurf: passt.');
+});
+
+test('Agent ansetzen = echter Chat „PM-123 · Titel“: läuft → wartet auf ja → fertig, Link an der Karte', async () => {
+  const st = await anna.req('/api/board/issue/PM-322/agent', { body: { note: 'schreib eine Notiz dazu' } });
+  assert.equal(st.status, 200, JSON.stringify(st.j));
+  assert.equal(st.j.mode, 'chat');
+  assert.match(st.j.url, /^https:\/\/chat\.example\/c\/[0-9a-f-]{36}$/);
+  const chat = lcChats.at(-1);
+  assert.equal(chat.email, users.a.email, 'im Namen der Person');
+  assert.match(chat.body.text, /^PM-322 · /, 'erste Zeile = Titel');
+  assert.match(chat.body.text, /Schreibaktionen .* fragt die Person/);
+  assert.equal(chat.body.spec, 'claude-code-olaf');
+  const again = await anna.req('/api/board/issue/PM-322/agent', { body: {} });
+  assert.equal(again.status, 409, 'kein zweiter Agent auf derselben Karte');
+  let run: any;
+  for (let i = 0; i < 60; i++) { run = (await anna.req('/api/board/runs/' + st.j.id)).j; if (run.status === 'wartet auf ja') break; await new Promise((r) => setTimeout(r, 150)); }
+  assert.equal(run.status, 'wartet auf ja', 'Schreiben wartet auf das „ja“ im Chat');
+  const board = await anna.req('/api/board');
+  const card = board.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).find((c: any) => c.key === 'PM-322');
+  assert.equal(card.agent, 'wartet auf ja');
+  // Die Person antwortet im Chat mit „ja“ (hier direkt an die Brücke, wie LibreChat es täte).
+  await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/chat/completions`, { method: 'POST', headers: { authorization: 'Bearer mock-token', 'content-type': 'application/json', 'x-librechat-user-id': String(users.a._id), 'x-librechat-conversation-id': st.j.conv }, body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: 'ja' }] }) })).text();
+  for (let i = 0; i < 60; i++) { run = (await anna.req('/api/board/runs/' + st.j.id)).j; if (run.status === 'fertig') break; await new Promise((r) => setTimeout(r, 150)); }
+  assert.equal(run.status, 'fertig');
+  assert.deepEqual(run.written, ['/vault/_werkbank-mock/notiz.md'], 'was der Agent geschrieben hat, hängt am Lauf');
+  const d = await anna.req('/api/board/issue/PM-322');
+  assert.ok(d.j.runs.some((r: any) => r.mode === 'chat' && r.url === st.j.url));
+  const disc = await anna.req('/api/board/issue/PM-322/discuss', { method: 'POST' });
+  assert.match(disc.j.url, /\/c\//);
+  assert.match(lcChats.at(-1).body.text, /^PM-322 · .*Lass uns an diesem Ticket arbeiten/s);
 });
 
 test('Sprint: Antwort mit Vorschau und Bestätigung in die Notiz, Konfliktschutz', async () => {
@@ -372,6 +417,7 @@ test('Interne Schnittstelle nur mit Token; Kontext-Paket klein; Pflegefragen nur
   assert.equal((await internal('/internal/session-start', { userId: String(users.c._id), conv: 'c1' })).status, 403, 'nicht freigeschaltetes Konto');
   // Entscheidung 12: ohne verbundenen Jira-MCP keine Pflegefragen, nur ein einmaliger Hinweis.
   await mongo.db(DB).collection('mcp_status').deleteMany({});
+  await mongo.db(DB).collection('hygiene_state').deleteMany({});   // frischer Tag (vorige Tests haben Sitzungen gestartet)
   const s0 = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c0' });
   assert.equal(s0.j.questions.length, 0);
   assert.match(s0.j.text, /Hinweis an die Person \(einmalig/);
@@ -434,7 +480,7 @@ test('Task-Hygiene: Antwort → Vorschlag → Bestätigung → Jira; später; Bo
 
 test('Board-Agent: Nachfrage setzt dieselbe Sitzung fort; forge-Platzhalter; Sitzungsliste', async () => {
   const d = await anna.req('/api/board/issue/PM-321');
-  const first = d.j.runs.find((r: any) => r.status === 'fertig');
+  const first = d.j.runs.find((r: any) => r.status === 'fertig' && r.mode !== 'chat');
   const f = await anna.req(`/api/board/runs/${first._id}/followup`, { body: { text: 'Und was fehlt noch?' } });
   assert.equal(f.status, 200);
   let run: any;

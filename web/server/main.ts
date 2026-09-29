@@ -16,7 +16,7 @@ import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCr
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
 import { syncMirror, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, JiraError, type Issue } from './jira.ts';
-import { startAgentRun, chatUrl, ticketPrompt } from './agent.ts';
+import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns } from './agent.ts';
 import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles } from './sprint.ts';
 import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
@@ -273,8 +273,12 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
   await needUser(req);
   const all = [...(await issueMap()).values()];
   const hyg = hygieneAll(all);
-  const running = new Set((await wb().collection('agent_runs').find({ status: 'läuft' }, { projection: { key: 1 } }).toArray()).map((r: any) => r.key));
-  const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [], agent: running.has(i.key) }));
+  await refreshChatRuns();
+  const running = new Map<string, string>();
+  for (const r of await wb().collection('agent_runs').find({ status: { $in: ['läuft', 'wartet auf ja'] } }, { projection: { key: 1, status: 1 } }).toArray() as any[]) {
+    if (running.get(r.key) !== 'wartet auf ja') running.set(r.key, r.status);
+  }
+  const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [], agent: running.get(i.key) ?? null }));
   const filter = url.searchParams.get('filter') || undefined;
   const issues = filter === 'pflege' ? annotated.filter((i) => i.hygiene.length || i.type === 'Workstream') : annotated;
   const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
@@ -303,7 +307,8 @@ on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => 
   const im = await issueMap();
   const i = im.get(m[1]);
   if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
-  const runs = await wb().collection('agent_runs').find({ key: i.key }).sort({ startedAt: -1 }).limit(5).toArray();
+  await refreshChatRuns({ key: i.key });
+  const runs = await wb().collection('agent_runs').find({ key: i.key }).sort({ startedAt: -1 }).limit(8).toArray();
   const children = [...im.values()].filter((x) => x.parent === i.key).map((x) => ({ key: x.key, summary: x.summary, status: x.status, assignee: x.assignee }));
   send(res, 200, {
     issue: i, url: browseUrl(i.key), children, runs,
@@ -341,8 +346,23 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res
   if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
   const token = await getClaudeToken(u);
   if (!token) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen.');
+  // Standard: echter Chat („PM-123 · Titel“), der Agent arbeitet mit Rückfrage vor jedem Schreiben.
+  // „Nur Entwurf“: wie bisher lesend im Hintergrund, Ergebnis als Kommentarentwurf an der Karte.
+  if (b.mode !== 'draft') {
+    const r = await startChatAgent(u, i, String(b.note ?? '').slice(0, 2000), 'work');
+    log('agent chat', { user: u.id, key: i.key, conv: r.conv });
+    return send(res, 200, { ...r, mode: 'chat' });
+  }
   const id = await startAgentRun(u, token, i, String(b.note ?? '').slice(0, 2000));
-  send(res, 200, { id });
+  send(res, 200, { id, mode: 'draft' });
+});
+
+on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/discuss$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const i = (await issueMap()).get(m[1]);
+  if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  if (!(await getClaudeToken(u))) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen.');
+  send(res, 200, await startChatAgent(u, i, '', 'discuss'));
 });
 
 on('POST', /^\/api\/board\/runs\/([0-9a-f-]{36})\/followup$/, async (req, res, m) => {
@@ -383,8 +403,9 @@ on('GET', /^\/api\/sessions$/, async (req, res) => {
 
 on('GET', /^\/api\/board\/runs\/([0-9a-f-]{36})$/, async (req, res, m) => {
   await needUser(req);
-  const r = await wb().collection('agent_runs').findOne({ _id: m[1] as any });
+  let r: any = await wb().collection('agent_runs').findOne({ _id: m[1] as any });
   if (!r) throw new HttpError(404, 'Lauf nicht gefunden.');
+  if (r.mode === 'chat' && r.status !== 'fertig') { await refreshChatRuns({ _id: r._id }); r = await wb().collection('agent_runs').findOne({ _id: m[1] as any }); }
   send(res, 200, r);
 });
 

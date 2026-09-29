@@ -116,3 +116,25 @@ export async function userById(id: string): Promise<User | null> {
   const u: any = await lc().collection('users').findOne({ _id: new ObjectId(id) }, { projection: { email: 1, name: 1, username: 1 } });
   return u ? { id, email: String(u.email).toLowerCase(), name: String(u.name || u.username || u.email) } : null;
 }
+
+/** HS256-JWT signieren (Gegenstück zu verifyJwt). */
+export function signJwt(payload: Record<string, unknown>, secret: string, ttlSeconds: number): string {
+  const now = Math.floor(Date.now() / 1000);
+  const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const head = enc({ alg: 'HS256', typ: 'JWT' });
+  const body = enc({ ...payload, iat: now, exp: now + ttlSeconds });
+  return `${head}.${body}.${createHmac('sha256', secret).update(`${head}.${body}`).digest('base64url')}`;
+}
+
+/**
+ * Kurzlebiger LibreChat-Zugangstoken für die angemeldete Person (wie LibreChats generateToken:
+ * id/username/provider/email, JWT_SECRET, hier 5 Minuten) — damit die Werkbank in ihrem Namen einen
+ * Chat anlegt („Agent ansetzen“). Nur für diese eine Anfrage, nie gespeichert oder geloggt.
+ */
+export async function librechatAccessToken(u: User): Promise<string> {
+  const secret = process.env.JWT_SECRET ?? '';
+  if (!secret) throw Object.assign(new Error('JWT_SECRET fehlt (Werkbank-Konfiguration).'), { status: 500 });
+  const d: any = await lc().collection('users').findOne({ _id: new ObjectId(u.id) }, { projection: { username: 1, provider: 1, email: 1 } });
+  if (!d) throw Object.assign(new Error('Konto nicht gefunden.'), { status: 404 });
+  return signJwt({ id: String(d._id), username: d.username ?? '', provider: d.provider ?? 'local', email: d.email }, secret, 300);
+}
