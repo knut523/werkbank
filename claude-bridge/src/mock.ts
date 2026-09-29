@@ -39,6 +39,22 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       const { join } = await import('node:path');
       yield text(`(Mock) Anhänge im Arbeitsverzeichnis: ${anh.map((a) => a + (existsSync(join(options.cwd ?? '.', a)) ? ' ✓' : ' ✗')).join(', ')}. `);
     }
+    if (/zeitmessung/i.test(last)) {
+      // Nachbau eines echten Zuges mit Zeiten wie gemessen: Start des CLI + erster Token (~2 s),
+      // ein Satz, ein Werkzeug (~1,2 s), dann die eigentliche Antwort Wort für Wort (~60 ms je Wort).
+      await sleep(600);
+      yield { type: 'stream_event', parent_tool_use_id: null, session_id, event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } } };
+      await sleep(1400);
+      for (const w of 'Ich schaue kurz im Vault nach. '.split(/(?<= )/)) { yield text(w); await sleep(60); }
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, message: { content: [{ type: 'text', text: 'Ich schaue kurz im Vault nach. ' }] } };
+      yield toolUse('mcp__vault-search__search', { query: 'Zeitmessung' });
+      await sleep(1200);
+      const answer = Array.from({ length: 40 }, (_, i) => `Wort${i + 1} `);
+      for (const w of answer) { if (signal?.aborted) throw new Error('aborted'); yield text(w); await sleep(60); }
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, message: { content: [{ type: 'text', text: answer.join('') }] } };
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 100, output_tokens: 60 } };
+      return;
+    }
     yield toolUse('Grep', { pattern: last.slice(0, 40), path: VAULT_DIR });
     await sleep(50);
     const words = `(Mock, kein Claude-Aufruf${options.resume ? ', Sitzung fortgesetzt' : ''}) Du hast geschrieben: ${last}`.split(/(?<= )/);

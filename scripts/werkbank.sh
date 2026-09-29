@@ -10,6 +10,7 @@
 #   scripts/werkbank.sh skills [--apply]   Vault-Skills: Bericht bzw. fehlende verlinken
 #   scripts/werkbank.sh test      Tests der Brücke und der Web-App
 #   scripts/werkbank.sh e2e       Playwright-Durchlauf durch alle Seiten (Demo-Daten, eigene Instanz)
+#   scripts/werkbank.sh stream-timing   Zeitmessung Streaming (Brücke direkt und im Browser durch LibreChat)
 #   scripts/werkbank.sh bridge-mock on|off   Brücke im Mock-Modus (kein Claude-Aufruf) bzw. wieder echt
 #   scripts/werkbank.sh restart-web   nur die Web-App neu starten
 set -uo pipefail
@@ -109,6 +110,7 @@ case "${1:-}" in
   test)
     (cd "$WB/claude-bridge" && npm test 2>&1 | grep -E '^# (pass|fail)') && (cd "$WB/web" && npm test 2>&1 | grep -E '^# (pass|fail)') ;;
   e2e) (cd "$WB/web" && node e2e/smoke.mjs) ;;
+  stream-timing) (cd "$WB/web" && node e2e/stream-timing.mjs) ;;
   restart-web)   # nur die Web-App neu (z. B. mit anderer Freigabeliste: WERKBANK_ALLOWED_EMAILS=… werkbank.sh restart-web)
     f="$PIDS/werkbank-web.pid"
     if [ -f "$f" ] && kill -0 "$(cat "$f")" 2>/dev/null; then kill "$(cat "$f")"; for _ in $(seq 1 20); do kill -0 "$(cat "$f")" 2>/dev/null || break; sleep 0.3; done; rm -f "$f"; fi

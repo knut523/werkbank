@@ -179,6 +179,7 @@ function titleFrom(messages: any[]): string {
 // ---------- Routen ----------
 
 async function chat(req: IncomingMessage, res: ServerResponse) {
+  const receivedAt = Date.now();
   const auth = String(req.headers.authorization ?? '');
   const token = auth.replace(/^Bearer\s+/i, '').trim();
   let body: any;
@@ -242,7 +243,7 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
 
   const known = !!header(req, 'x-librechat-user-id');   // echtes Konto, nicht nur Token-Hash
   await handleTurn({
-    userId, convId, token, prompt, history, model: MODELS[model], sink, query: query as any, readonly, instructions: instructions || undefined,
+    userId, convId, token, prompt, history, model: MODELS[model], sink, query: query as any, readonly, receivedAt, instructions: instructions || undefined,
     sessionContext: known ? () => sessionContext(userId, convId, /Tagesabschluss/i.test(instructions) || /^\s*tagesabschluss\b/i.test(prompt), skillsFor(STATE_DIR, `${safeId(userId)}:${safeId(convId)}`, instructions, prompt)) : undefined,
     mcpServers: known ? mcpServersFor(userId, token) : undefined,
     onMeasure: known && INTERNAL ? (m) => {

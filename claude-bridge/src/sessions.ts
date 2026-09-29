@@ -40,6 +40,10 @@ interface Live {
   turnTimer: NodeJS.Timeout | null;
   confirmChain: Promise<unknown>;
   readonly: boolean;
+  // Zeitmessung je Zug (ms seit Eingang der Anfrage), nur für das Log.
+  t0: number;
+  times: Record<string, number>;
+  progressShown: Map<string, number>;
 }
 
 const cfg = {
@@ -164,9 +168,15 @@ const AUTH_HINTS: Record<string, string> = {
   overloaded: 'Claude ist gerade überlastet. Bitte gleich noch einmal versuchen.',
 };
 
+function mark(live: Live, what: string) {
+  if (live.times[what] === undefined) live.times[what] = Date.now() - live.t0;
+}
+
 function handleMessage(live: Live, msg: any) {
+  if (msg.type !== 'system') mark(live, 'ersteNachricht');
   switch (msg.type) {
     case 'system':
+      if (msg.subtype === 'init') mark(live, 'init');
       if (msg.subtype === 'init' && msg.session_id && sessionMap[live.key] !== msg.session_id) {
         sessionMap[live.key] = msg.session_id;
         saveMap();
@@ -176,9 +186,23 @@ function handleMessage(live: Live, msg: any) {
       if (msg.parent_tool_use_id) return;
       const ev = msg.event;
       if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+        mark(live, 'ersterText');
         live.sawStreamText = true;
         emitText(live, ev.delta.text);
+      } else if (ev?.type === 'content_block_start' && /thinking/.test(ev.content_block?.type ?? '')) {
+        // Denken wird nicht gestreamt – aber man soll sehen, dass etwas passiert.
+        mark(live, 'denkt');
+        emitStatus(live, '💭 denkt nach …');
       }
+      return;
+    }
+    case 'tool_progress': {
+      // Lange Werkzeugschritte (Teilagent, Suche, MCP): alle 15 s ein Lebenszeichen.
+      if (msg.parent_tool_use_id) return;
+      const s = Math.floor(Number(msg.elapsed_time_seconds ?? 0) / 15) * 15;
+      if (s < 15 || (live.progressShown.get(msg.tool_use_id) ?? 0) >= s) return;
+      live.progressShown.set(msg.tool_use_id, s);
+      emitStatus(live, `⏳ ${statusLine(String(msg.tool_name ?? ''), {}).replace(/:.*$/, '')} läuft seit ${s} s …`);
       return;
     }
     case 'assistant': {
@@ -279,6 +303,7 @@ export interface TurnRequest {
   sessionContext?: () => Promise<string>;       // Kontext-Paket für neue Sitzungen
   mcpServers?: Record<string, unknown>;         // Werkbank-eigene MCP-Server (nur für diese Sitzung)
   onMeasure?: (m: Record<string, number>) => void;   // echte Kontext-Aufteilung nach dem ersten Zug
+  receivedAt?: number;     // Eingang der HTTP-Anfrage (für die Zeitmessung)
 }
 
 /** Führt eine Nachricht aus. Kehrt zurück, sobald die HTTP-Antwort geschlossen werden kann. */
@@ -321,11 +346,15 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const live: Live = {
     key, userId: req.userId, abort: new AbortController(), sink: null, buffer: [], pending: null,
     lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
-    readonly: !!req.readonly,
+    readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(),
   };
   lives.set(key, live);
   userLive.set(req.userId, key);
   attach(live, req.sink);
+  // Sofort ein Lebenszeichen: bis zum ersten Token vergehen mit echtem Claude einige Sekunden
+  // (CLI-Start, MCP-Server, langer System-Prompt, Denken).
+  emitStatus(live, '⏳ Claude arbeitet …');
+  mark(live, 'arbeitet');
 
   const scratch = scratchFor(req.userId);
   const resume = sessionMap[key];
@@ -342,13 +371,16 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   env.CLAUDE_AGENT_SDK_CLIENT_APP = 'olaf-werkbank-bridge/0.1';
   env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1';
   // MCP-Werkzeuge erst bei Bedarf laden (Tool Search), statt alle Schemas in jede Runde zu packen.
-  env.ENABLE_TOOL_SEARCH = process.env.BRIDGE_TOOL_SEARCH || 'auto';
+  // „auto“ hat im ersten echten Zug nichts zurückgestellt (Werkzeuge 66 805 Tokens, deferred 0) —
+  // deshalb „true“: MCP-Schemas immer erst bei Bedarf (kürzerer Prompt, schnellerer erster Token).
+  env.ENABLE_TOOL_SEARCH = process.env.BRIDGE_TOOL_SEARCH || 'true';
 
   // Kontext-Paket + Hygiene-Fragen nur für neue Sitzungen (nicht bei resume, nicht im Nur-lesen-Lauf).
   let extra = '';
   if (!resume && !req.readonly && req.sessionContext) {
     try { extra = await req.sessionContext(); } catch (e: any) { log('kontext fehlgeschlagen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); }
   }
+  mark(live, 'kontext');
   const guard = makeGuard(live);
   const options: Record<string, any> = {
     cwd: scratch,
@@ -408,7 +440,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         emitStatus(live, auth ? `⚠️ ${AUTH_HINTS.authentication_failed}` : '⚠️ Die Claude-Sitzung ist unerwartet beendet worden. Schreib einfach noch einmal.');
       }
     } finally {
-      log('turn end', { conv: key, usage: live.usage });
+      mark(live, 'ende');
+      log('turn end', { conv: key, usage: live.usage, ms: live.times });
       end(live);
     }
   })();

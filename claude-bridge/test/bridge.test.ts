@@ -180,3 +180,29 @@ test('Sitzungsstatus je Person nur mit internem Token', async () => {
   assert.equal(c9.resumable, true);
   assert.equal(c9.title, 'Guten Morgen');
 });
+
+test('Streaming: „arbeitet …“ sofort, Denken als Fortschrittszeile, Text tokenweise', async () => {
+  const t0 = Date.now();
+  const res = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer mock-token', 'content-type': 'application/json', 'x-librechat-user-id': 'u20', 'x-librechat-conversation-id': 'c20' },
+    body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: 'Zeitmessung' }] }),
+  });
+  const seen: { t: number; c: string }[] = [];
+  const dec = new TextDecoder();
+  for await (const part of res.body as any) {
+    for (const line of dec.decode(part, { stream: true }).split('\n')) {
+      if (!line.startsWith('data: {')) continue;
+      const c = JSON.parse(line.slice(6)).choices[0]?.delta?.content;
+      if (c) seen.push({ t: Date.now() - t0, c });
+    }
+  }
+  assert.match(seen[0].c, /Claude arbeitet/, 'erste sichtbare Zeile ist die Arbeitsanzeige');
+  assert.ok(seen[0].t < 1000, `Arbeitsanzeige nach ${seen[0].t} ms`);
+  const all = seen.map((s) => s.c).join('');
+  assert.match(all, /denkt nach/);
+  assert.match(all, /📚 Vault-Suche: search – Zeitmessung/);
+  const words = seen.filter((s) => /^\n?Wort\d+ $/.test(s.c));
+  assert.equal(words.length, 40, 'jedes Wort ein eigenes Stück');
+  assert.ok(words[39].t - words[0].t > 1500, 'Wörter kommen verteilt, nicht auf einmal');
+});
