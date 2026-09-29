@@ -952,10 +952,17 @@ async function backgroundJobs() {
   // Änderungen am Vault: gebündelt nach 20 s neu indizieren.
   let t: NodeJS.Timeout | null = null;
   try {
-    watch(cfg.vaultDir, { recursive: true }, (_ev, f) => {
+    const w = watch(cfg.vaultDir, { recursive: true }, (_ev, f) => {
       if (!f || !String(f).endsWith('.md')) return;
       if (t) clearTimeout(t);
       t = setTimeout(vaultTick, 20_000);
+    });
+    // Fehler kommen später als Ereignis (z. B. ENOSPC, wenn die Dateibeobachter des Systems aufgebraucht
+    // sind — Node beobachtet rekursiv je Datei). Ohne Handler reißt das den ganzen Server mit (29.09.2026).
+    // Dann ohne Beobachtung weiter: das 10-Minuten-Intervall hält den Index trotzdem aktuell.
+    w.on('error', (e: any) => {
+      log('vault-beobachtung aus', { code: e?.code, error: String(e?.message ?? e).slice(0, 200) });
+      try { w.close(); } catch { /* schon zu */ }
     });
   } catch { /* ohne Beobachtung reicht das Intervall */ }
 
