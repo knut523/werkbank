@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 
 // ---------- Bestätigung: jede Schreibaktion geht durch diesen Dialog ----------
 
@@ -70,4 +70,22 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[] = []) {
 export function StateChip({ state }: { state: string }) {
   const cls = /verlinkt|gleich|✅|ok|fertig|Done/.test(state) ? 'ok' : /fehlt|abweichend|kaputt|❌|fehler/.test(state) ? 'bad' : /🟡|läuft|wartet|woandershin/.test(state) ? 'warn' : '';
   return <span className={`chip ${cls}`}>{state}</span>;
+}
+
+/**
+ * Live-Änderungen an der Jira-Kopie (SSE /api/events): nach jedem Jira-Schreiben (Board, Sprint, Chat) und nach
+ * jedem Abgleich. `fn` bekommt die geänderten Schlüssel (oder all=true). Verbindet sich selbst neu.
+ */
+export function useJiraLive(fn: (e: { keys: string[]; all?: boolean; why: string }) => void) {
+  const ref = useRef(fn);
+  ref.current = fn;
+  useEffect(() => {
+    if (typeof EventSource === 'undefined') return;
+    const es = new EventSource('api/events', { withCredentials: true });
+    let first = true;
+    // Nach einem Verbindungsabbruch kann etwas verpasst worden sein → einmal alles nachladen.
+    es.addEventListener('hello', () => { if (!first) ref.current({ keys: [], all: true, why: 'reconnect' }); first = false; });
+    es.addEventListener('jira', (m: MessageEvent) => { try { ref.current(JSON.parse(m.data)); } catch { /* kaputte Nachricht */ } });
+    return () => es.close();
+  }, []);
 }
