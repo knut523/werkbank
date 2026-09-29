@@ -14,7 +14,7 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
     const signal: AbortSignal = options.abortController?.signal;
     return {
       async *[Symbol.asyncIterator]() { await new Promise<void>((r) => signal?.addEventListener('abort', () => r())); },
-      mcpServerStatus: async () => [{ name: 'atlassian', status: process.env.BRIDGE_MOCK_ATLASSIAN || 'connected' }],
+      mcpServerStatus: async () => mcpList(options),
     } as any;
   }
   const session_id: string = options.resume ?? randomUUID();
@@ -31,7 +31,7 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
   });
 
   async function* run() {
-    yield { type: 'system', subtype: 'init', session_id, mcp_servers: [{ name: 'atlassian', status: process.env.BRIDGE_MOCK_ATLASSIAN || 'connected' }] };
+    yield { type: 'system', subtype: 'init', session_id, mcp_servers: mcpList(options) };
     if (prompt.startsWith('WERKBANK-MCP-AUFRUF')) {
       // Ein bestätigter MCP-Aufruf: Werkzeug + Argumente aus dem Prompt, Ergebnis ins Protokoll (für Tests).
       const tool = prompt.match(/`(mcp__[^`]+)`/)?.[1] ?? '';
@@ -45,16 +45,8 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       const { join } = await import('node:path');
       const inp: any = ok.updatedInput;
       appendFileSync(join(process.env.BRIDGE_STATE_DIR ?? '.', 'mock-mcp-calls.jsonl'), JSON.stringify({ tool, input: inp }) + '\n');
-      // Mit BRIDGE_MOCK_JIRA_BASE spielt der Mock den Atlassian-MCP gegen einen Jira-Nachbau (REST) nach.
-      const base = process.env.BRIDGE_MOCK_JIRA_BASE;
-      if (base) {
-        const k = encodeURIComponent(String(inp.issueIdOrKey));
-        const [method, path, body] = tool.endsWith('addCommentToJiraIssue') ? ['POST', `/issue/${k}/comment`, { body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: inp.commentBody }] }] } }]
-          : tool.endsWith('transitionJiraIssue') ? ['POST', `/issue/${k}/transitions`, { transition: inp.transition }]
-          : tool.endsWith('editJiraIssue') ? ['PUT', `/issue/${k}`, { fields: inp.fields }] : ['GET', `/issue/${k}`, undefined];
-        const r = await fetch(base + path, { method, headers: { 'content-type': 'application/json', authorization: 'Basic ' + Buffer.from('mcp:mock').toString('base64') }, body: body ? JSON.stringify(body) : undefined });
-        if (!r.ok) { yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: `Jira ${r.status}: ${(await r.text()).slice(0, 200)}` }] } }; return; }
-      }
+      const err = await replayJira(tool, inp);
+      if (err) { yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: err }] } }; return; }
       yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: 'OK (Mock)' }] }] } };
       return;
     }
@@ -90,6 +82,25 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       return;
     }
     if (/skill-test/i.test(last)) yield toolUse('Skill', { skill: 'olaf-jira' });
+    if (/konfig-test/i.test(last)) {
+      yield text(`(Mock) Konfig: ${options.env?.CLAUDE_CONFIG_DIR ?? 'geteilt'}; strict: ${options.strictMcpConfig === true}; Nutzer-Hooks aus: ${options.settings?.disableAllHooks === true}; MCP: ${Object.keys(options.mcpServers ?? {}).join(',')}. `);
+    }
+    // „jira-kommentar PM-123“: Claude kommentiert im Chat über den Atlassian-MCP (Rückfrage → ja → Ergebnis).
+    const jk = last.match(/jira-kommentar ([A-Z][A-Z0-9]+-\d+)/);
+    if (jk && guard) {
+      const tool = 'mcp__atlassian__addCommentToJiraIssue';
+      const input = { cloudId: 'x', issueIdOrKey: jk[1], commentBody: '(Mock) Kommentar aus dem Chat', contentFormat: 'markdown' };
+      const id = randomUUID();
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, message: { content: [{ type: 'tool_use', id, name: tool, input }] } };
+      const r = await guard({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input }, id, { signal });
+      if (r?.hookSpecificOutput?.permissionDecision === 'allow') {
+        const err = await replayJira(tool, input);
+        yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, ...(err ? { is_error: true, content: err } : { content: [{ type: 'text', text: 'Kommentar angelegt' }] }) }] } };
+        yield text(err ? '(Mock) Jira hat abgelehnt.' : `(Mock) Kommentar auf ${jk[1]} geschrieben.`);
+      } else yield text('(Mock) Kein Jira-Kommentar.');
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 10, output_tokens: 5 } };
+      return;
+    }
     yield toolUse('Grep', { pattern: last.slice(0, 40), path: VAULT_DIR });
     await sleep(50);
     const words = `(Mock, kein Claude-Aufruf${options.resume ? ', Sitzung fortgesetzt' : ''}) Du hast geschrieben: ${last}`.split(/(?<= )/);
@@ -108,4 +119,21 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
     yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: prompt.length >> 2, output_tokens: 20 } };
   }
   return run();
+}
+
+/** MCP-Server, wie Claude Code sie in der Init-Nachricht meldet — nur die übergebenen (strictMcpConfig). */
+function mcpList(options: Record<string, any>) {
+  return Object.keys(options.mcpServers ?? {}).map((name) => ({ name, status: name === 'atlassian' ? process.env.BRIDGE_MOCK_ATLASSIAN || 'connected' : 'connected' }));
+}
+
+/** Mit BRIDGE_MOCK_JIRA_BASE spielt der Mock den Atlassian-MCP gegen einen Jira-Nachbau (REST) nach. Fehlertext oder ''. */
+async function replayJira(tool: string, inp: any): Promise<string> {
+  const base = process.env.BRIDGE_MOCK_JIRA_BASE;
+  if (!base) return '';
+  const k = encodeURIComponent(String(inp.issueIdOrKey));
+  const [method, path, body] = tool.endsWith('addCommentToJiraIssue') ? ['POST', `/issue/${k}/comment`, { body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: inp.commentBody }] }] } }]
+    : tool.endsWith('transitionJiraIssue') ? ['POST', `/issue/${k}/transitions`, { transition: inp.transition }]
+    : tool.endsWith('editJiraIssue') ? ['PUT', `/issue/${k}`, { fields: inp.fields }] : ['GET', `/issue/${k}`, undefined];
+  const r = await fetch(base + path, { method, headers: { 'content-type': 'application/json', authorization: 'Basic ' + Buffer.from('mcp:mock').toString('base64') }, body: body ? JSON.stringify(body) : undefined });
+  return r.ok ? '' : `Jira ${r.status}: ${(await r.text()).slice(0, 200)}`;
 }

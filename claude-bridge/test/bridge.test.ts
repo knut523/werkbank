@@ -6,13 +6,15 @@ import { mkdtempSync, existsSync, statSync, mkdirSync, writeFileSync } from 'nod
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { classify, parseAnswer } from '../src/tools.ts';
+import { classify, parseAnswer, jiraWriteKeys } from '../src/tools.ts';
 
 const PORT = 3098;
 let proc: ChildProcess;
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-'));
 for (const n of ['olaf-jira', 'plan-to-pr', 'olaf-email-templates', 'amper-board']) { mkdirSync(join(SKILLS, n)); writeFileSync(join(SKILLS, n, 'SKILL.md'), `---\nname: ${n}\n---\n`); }
+const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-'));
+const jiraTouched: any[] = [];
 const sessionStarts: any[] = [];
 const skillUses: any[] = [];
 let web: Server;
@@ -22,6 +24,7 @@ before(async () => {
   web = createServer(async (req, res) => {
     let b = ''; for await (const c of req) b += c;
     if (req.url === '/internal/skill-used' && req.headers['x-werkbank-internal'] === 'geheim') { skillUses.push(JSON.parse(b)); res.end('{}'); return; }
+    if (req.url === '/internal/jira-touched' && req.headers['x-werkbank-internal'] === 'geheim') { jiraTouched.push(JSON.parse(b)); res.end('{}'); return; }
     if (req.url === '/internal/session-start' && req.headers['x-werkbank-internal'] === 'geheim') {
       sessionStarts.push(JSON.parse(b));
       res.end(JSON.stringify({ text: '## Werkbank-Kontext (Test)\n- Deine PM-Tickets: 2 offen\n\n### Task-Hygiene\n1. PM-1 ist überfällig — Stand?', tokens: 30, cached: false, questions: [{ key: 'PM-1' }] }));
@@ -30,7 +33,8 @@ before(async () => {
   await new Promise<void>((r) => web.listen(0, '127.0.0.1', () => r()));
   proc = spawn(process.execPath, ['src/server.ts'], {
     env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS,
-      WERKBANK_URL: `http://127.0.0.1:${(web.address() as any).port}`, WERKBANK_INTERNAL_TOKEN: 'geheim', BRIDGE_SKILLS: '' },
+      WERKBANK_URL: `http://127.0.0.1:${(web.address() as any).port}`, WERKBANK_INTERNAL_TOKEN: 'geheim', BRIDGE_SKILLS: '',
+      BRIDGE_CLAUDE_HOMES: HOMES, WERKBANK_SKILLS_SOURCE: SKILLS, BRIDGE_CLAUDE_CONFIG_SHARED: 'pilot@maxenergy.at', BRIDGE_CLAUDE_CONFIG: '' },
     stdio: 'ignore',
   });
   for (let i = 0; i < 50; i++) {
@@ -143,7 +147,7 @@ test('Vorgabe der Vorlage (System-Nachricht) erreicht die neue Sitzung', async (
 test('Neue Sitzung bekommt das Kontext-Paket und die Werkbank-Werkzeuge — fortgesetzte nicht', async () => {
   const n0 = sessionStarts.length;
   const a = await send('c9', 'Guten Morgen', { user: 'u9' });
-  assert.match(a, /Kontext-Paket: \d+ Zeichen, Werkzeuge: vault-search, werkbank\. Erste Frage: PM-1 ist überfällig/);
+  assert.match(a, /Kontext-Paket: \d+ Zeichen, Werkzeuge: vault-search, werkbank, atlassian\. Erste Frage: PM-1 ist überfällig/);
   assert.equal(sessionStarts.length, n0 + 1);
   assert.deepEqual(sessionStarts.at(-1).skills.sort(), ['olaf-jira', 'plan-to-pr']);
   const b = await send('c9', 'Weiter', { user: 'u9' });
@@ -228,6 +232,60 @@ test('MCP-Aufruf: nur mit internem Token, genau die bestätigten Argumente, 401 
   assert.equal(bad.j.error, 'mcp_auth');
   const st = await internal('/internal/mcp-status', { userId: 'u30' });
   assert.deepEqual(st.j.servers, [{ name: 'atlassian', status: 'connected' }]);
+  assert.deepEqual(st.j.home, { mode: 'person', dir: join(HOMES, 'u30') });
+  const shared = await internal('/internal/mcp-status', { userId: 'u30', email: 'Pilot@maxenergy.at' });
+  assert.deepEqual(shared.j.home, { mode: 'shared', dir: null });
+});
+
+test('Eigene Claude-Konfiguration je Person: Verzeichnis, Skills, CLAUDE.md, nur Werkbank-MCP', async () => {
+  const a = await send('c70', 'konfig-test', { user: 'u70', headers: { 'x-librechat-user-email': 'lisa@maxenergy.at' } });
+  assert.match(a, new RegExp(`Konfig: ${join(HOMES, 'u70')}; strict: true; Nutzer-Hooks aus: false; MCP: vault-search,werkbank,atlassian\\.`));
+  const { lstatSync, readlinkSync, statSync: st } = await import('node:fs');
+  assert.equal(st(join(HOMES, 'u70')).mode & 0o777, 0o700);
+  assert.ok(lstatSync(join(HOMES, 'u70', 'CLAUDE.md')).isSymbolicLink(), 'CLAUDE.md aus templates/claude');
+  assert.equal(readlinkSync(join(HOMES, 'u70', 'skills', 'olaf-jira')).replace(/\/$/, ''), join(SKILLS, 'olaf-jira'), 'Skills verlinkt');
+  // Pilot-Konto (BRIDGE_CLAUDE_CONFIG_SHARED): echte Konfiguration, aber ebenfalls nur Werkbank-MCP und ohne Knuts Hooks.
+  const b = await send('c71', 'konfig-test', { user: 'u71', headers: { 'x-librechat-user-email': 'pilot@maxenergy.at' } });
+  assert.match(b, /Konfig: geteilt; strict: true; Nutzer-Hooks aus: true; MCP: vault-search,werkbank,atlassian\./);
+  assert.equal(existsSync(join(HOMES, 'u71')), false);
+});
+
+test('Fortsetzen nur in derselben Claude-Konfiguration (dort liegt der Verlauf)', async () => {
+  await send('c72', 'Hallo', { user: 'u72', headers: { 'x-librechat-user-email': 'pilot@maxenergy.at' } });
+  const same = await send('c72', 'weiter', { user: 'u72', headers: { 'x-librechat-user-email': 'pilot@maxenergy.at' } });
+  assert.match(same, /Sitzung fortgesetzt/);
+  const other = await send('c72', 'und jetzt', { user: 'u72', headers: { 'x-librechat-user-email': 'jemand@maxenergy.at' } });
+  assert.doesNotMatch(other, /Sitzung fortgesetzt/);
+});
+
+test('Jira im Chat geschrieben → Schlüssel an die Werkbank (sofortiges Nachziehen am Board)', async () => {
+  const q = await send('c73', 'bitte jira-kommentar PM-321', { user: 'u73' });
+  assert.match(q, /Soll ich in Jira \*\*addCommentToJiraIssue\*\* ausführen\?/);
+  assert.equal(jiraTouched.length, 0, 'vor dem ja nichts');
+  const a = await send('c73', 'ja', { user: 'u73' });
+  assert.match(a, /Kommentar auf PM-321 geschrieben/);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.deepEqual(jiraTouched.at(-1), { userId: 'u73', keys: ['PM-321'], tool: 'mcp__atlassian__addCommentToJiraIssue' });
+  const n = jiraTouched.length;
+  await send('c74', 'bitte jira-kommentar PM-322', { user: 'u73' });
+  await send('c74', 'nein', { user: 'u73' });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(jiraTouched.length, n, 'abgelehnt → nichts nachzuziehen');
+});
+
+test('Welche Aufrufe Jira ändern (und welche Schlüssel)', () => {
+  assert.deepEqual(jiraWriteKeys('mcp__atlassian__addCommentToJiraIssue', { issueIdOrKey: 'PM-1', commentBody: 'x' }), ['PM-1']);
+  assert.deepEqual(jiraWriteKeys('mcp__atlassian__transitionJiraIssue', { issueIdOrKey: 'PM-2', transition: { id: '31' } }), ['PM-2']);
+  assert.deepEqual(jiraWriteKeys('mcp__atlassian__editJiraIssue', { issueIdOrKey: 'PM-3', fields: { duedate: '2026-10-01' } }), ['PM-3']);
+  assert.deepEqual(jiraWriteKeys('mcp__atlassian__createJiraIssue', { projectKey: 'PM', parent: 'PM-10', summary: 'Neu' }, '{"key":"PM-400","id":"1"}').sort(), ['PM-10', 'PM-400']);
+  assert.deepEqual(jiraWriteKeys('mcp__atlassian__createIssueLink', { inwardIssue: { key: 'PM-5' }, outwardIssue: { key: 'PM-6' }, type: { name: 'Blocks' } }).sort(), ['PM-5', 'PM-6']);
+  assert.equal(jiraWriteKeys('mcp__atlassian__getJiraIssue', { issueIdOrKey: 'PM-1' }), null, 'lesend');
+  assert.equal(jiraWriteKeys('mcp__atlassian__createConfluencePage', { spaceId: '1' }), null, 'Confluence');
+  assert.equal(jiraWriteKeys('mcp__vault-search__search', {}), null);
+  // Anmelden beim MCP (Claude Codes Pseudo-Werkzeuge) ohne Rückfrage, Schreiben weiter mit.
+  assert.equal(classify('mcp__atlassian__authenticate', {}).cls, 'read');
+  assert.equal(classify('mcp__atlassian__complete_authentication', { callback_url: 'http://localhost:1/callback?code=x' }).cls, 'read');
+  assert.equal(classify('mcp__atlassian__createJiraIssue', {}).cls, 'confirm');
 });
 
 test('Titel: Board-Chats „PM-123 · Titel“ bleiben ganz; geschriebene Dateien in der Sitzungsliste', async () => {

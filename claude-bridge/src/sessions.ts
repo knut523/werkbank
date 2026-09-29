@@ -9,7 +9,8 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { classify, statusLine, confirmQuestion, parseAnswer, VAULT_DIR } from './tools.ts';
+import { classify, statusLine, confirmQuestion, parseAnswer, jiraWriteKeys, VAULT_DIR } from './tools.ts';
+import { homeFor, ensureHome, applyHome } from './claudehome.ts';
 import { log } from './log.ts';
 import { skillsFor } from './skills.ts';
 
@@ -45,6 +46,10 @@ interface Live {
   times: Record<string, number>;
   progressShown: Map<string, number>;
   onSkill?: (name: string) => void;
+  // Schreibende Atlassian-Aufrufe dieses Zuges (tool_use_id → Werkzeug/Argumente), bis ihr Ergebnis kommt.
+  jiraCalls: Map<string, { name: string; input: Record<string, unknown> }>;
+  onJiraWrite?: (keys: string[], tool: string) => void;
+  home: string;   // CLAUDE_CONFIG_DIR dieser Sitzung oder 'shared'
 }
 
 const cfg = {
@@ -70,10 +75,18 @@ const mapFile = join(cfg.stateDir, 'sessions.json');
 let sessionMap: Record<string, string> = {};
 try { sessionMap = JSON.parse(readFileSync(mapFile, 'utf8')); } catch { /* erste Sitzung */ }
 
+// Mit welcher Claude-Konfiguration eine Sitzung angelegt wurde (Verlauf liegt dort; Fortsetzen nur mit derselben).
+// Ohne Eintrag: vor Runde 4 angelegt, also mit der Konfiguration des VM-Nutzers ('shared').
+const homeFile = join(cfg.stateDir, 'session-homes.json');
+let homeMap: Record<string, string> = {};
+try { homeMap = JSON.parse(readFileSync(homeFile, 'utf8')); } catch { /* keine */ }
+
 function saveMap() {
-  const tmp = mapFile + '.tmp';
-  writeFileSync(tmp, JSON.stringify(sessionMap, null, 1));
-  renameSync(tmp, mapFile);
+  for (const [f, data] of [[mapFile, sessionMap], [homeFile, homeMap]] as const) {
+    const tmp = f + '.tmp';
+    writeFileSync(tmp, JSON.stringify(data, null, 1));
+    renameSync(tmp, f);
+  }
 }
 
 const lives = new Map<string, Live>();       // Unterhaltung → laufende Sitzung
@@ -179,6 +192,7 @@ function handleMessage(live: Live, msg: any) {
       if (msg.subtype === 'init') mark(live, 'init');
       if (msg.subtype === 'init' && msg.session_id && sessionMap[live.key] !== msg.session_id) {
         sessionMap[live.key] = msg.session_id;
+        homeMap[live.key] = live.home;
         saveMap();
       }
       return;
@@ -212,6 +226,7 @@ function handleMessage(live: Live, msg: any) {
       for (const block of msg.message?.content ?? []) {
         if (block.type === 'tool_use') {
           const cls = classify(block.name, block.input ?? {}).cls;
+          if (live.onJiraWrite && jiraWriteKeys(block.name, block.input ?? {}) !== null) live.jiraCalls.set(block.id, { name: block.name, input: block.input ?? {} });
           // Nutzung je Skill zählen (Knut, 29.09.: Skill-Kern nach einer Woche mit echten Zahlen nachschärfen).
           if (block.name === 'Skill' && live.onSkill) { try { live.onSkill(String(block.input?.skill ?? block.input?.command ?? '').replace(/^\//, '').split(/\s/)[0]); } catch { /* egal */ } }
           if (cls === 'read') emitStatus(live, (msg.parent_tool_use_id ? '↳ ' : '') + statusLine(block.name, block.input ?? {}));
@@ -219,6 +234,21 @@ function handleMessage(live: Live, msg: any) {
         } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
           emitText(live, block.text);
         }
+      }
+      return;
+    }
+    case 'user': {
+      // Ergebnis eines schreibenden Jira-Aufrufs (auch aus Teilagenten): Schlüssel an die Werkbank, damit die
+      // Jira-Kopie und offene Board-Seiten sofort nachziehen (Knut, 29.09.: „instant update des board“).
+      if (!live.jiraCalls.size) return;
+      for (const b of msg.message?.content ?? []) {
+        const call = b?.type === 'tool_result' ? live.jiraCalls.get(b.tool_use_id) : undefined;
+        if (!call) continue;
+        live.jiraCalls.delete(b.tool_use_id);
+        if (b.is_error) continue;
+        const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.map((c: any) => c?.text ?? '').join('\n') : '';
+        const keys = jiraWriteKeys(call.name, call.input, text) ?? [];
+        if (keys.length) { try { live.onJiraWrite!(keys, call.name); } catch { /* egal */ } }
       }
       return;
     }
@@ -313,6 +343,8 @@ export interface TurnRequest {
   onMeasure?: (m: Record<string, number>) => void;   // echte Kontext-Aufteilung nach dem ersten Zug
   receivedAt?: number;     // Eingang der HTTP-Anfrage (für die Zeitmessung)
   onSkill?: (name: string) => void;   // ein Skill wurde aufgerufen (Zählung, ohne Inhalt)
+  email?: string;          // für die Wahl der Claude-Konfiguration (je Person / geteilt)
+  onJiraWrite?: (keys: string[], tool: string) => void;   // erfolgreicher schreibender Jira-Aufruf im Chat
 }
 
 /** Führt eine Nachricht aus. Kehrt zurück, sobald die HTTP-Antwort geschlossen werden kann. */
@@ -358,6 +390,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     key, userId: req.userId, abort: new AbortController(), sink: null, buffer: [], pending: null,
     lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
+    jiraCalls: new Map(), onJiraWrite: req.onJiraWrite, home: '',
   };
   lives.set(key, live);
   attach(live, req.sink);
@@ -367,7 +400,12 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   mark(live, 'arbeitet');
 
   const scratch = scratchFor(req.userId);
-  const resume = sessionMap[key];
+  // Eigene Claude-Konfiguration je Person (oder die geteilte des VM-Nutzers, siehe claudehome.ts).
+  const home = homeFor(safeId(req.userId), req.email);
+  live.home = home.dir ?? 'shared';
+  try { await ensureHome(home); } catch (e: any) { log('konfig fehlgeschlagen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); }
+  // Fortsetzen nur in derselben Konfiguration — dort liegt der Verlauf der Sitzung; sonst neu mit dem Verlauf aus LibreChat.
+  const resume = sessionMap[key] && (homeMap[key] ?? 'shared') === live.home ? sessionMap[key] : undefined;
   let prompt = !resume && req.history
     ? `Bisheriger Verlauf dieser Unterhaltung (aus der Chat-Oberfläche, zur Orientierung):\n\n${req.history}\n\n---\n\nNeue Nachricht:\n${req.prompt}`
     : req.prompt;
@@ -411,18 +449,19 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     },
     hooks: { PreToolUse: [{ hooks: [guard], timeout: Math.ceil(cfg.confirmTimeoutMs / 1000) + 60 }] },
     disallowedTools: ['AskUserQuestion'],
-    // Jira: kein eigener Eintrag – der Atlassian-MCP kommt wie im Terminal aus der Nutzer-Konfiguration
-    // (~/.claude.json, Scope "user", OAuth-Anmeldung per /mcp). Im Pilot ist das Knuts Jira-Zugang.
+    // MCP: nur die Werkbank-Server aus req.mcpServers (vault-search, werkbank, forge-review, atlassian) —
+    // strictMcpConfig (applyHome) blendet Nutzer-, Projekt- und Plugin-Server aus. Jira-OAuth je Konfiguration.
     maxTurns: cfg.maxTurns,
     includePartialMessages: true,
     abortController: live.abort,
     env,
     stderr: (d: string) => { if (/error/i.test(d)) log('sdk stderr', { conv: key, line: d.slice(0, 300).replaceAll(req.token, '***') }); },
   };
+  applyHome(home, env, options);
   if (resume) options.resume = resume;
   if (req.model) options.model = req.model;
 
-  log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default' });
+  log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers) });
 
   // Die Sitzung läuft unabhängig von der HTTP-Antwort weiter (Rückfragen!).
   (async () => {
