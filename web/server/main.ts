@@ -12,7 +12,7 @@ import YAML from 'yaml';
 import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl } from './config.ts';
 import { connect, wb } from './db.ts';
 import { librechatLogin, createSession, destroySession, currentUser, allowed, teammates, userById, type User } from './auth.ts';
-import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
+import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraIdentity, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
@@ -28,6 +28,9 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream } from './events.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
+import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './timebox.ts';
+import { isMine, resolveIdentity } from './hygiene.ts';
+import { ObjectId } from 'mongodb';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES } from './roadmap.ts';
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, type GoalNode } from './goals.ts';
@@ -881,6 +884,72 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
   invalidateIndex();
   log('sprint neu', { user: u.id, cycle: id });
   send(res, 200, { ok: true, id, dir: rel });
+});
+
+// --- Mein Tag / Timebox (privat je Person, kein Jira-Schreiben) ---
+
+const tbCol = () => wb().collection('timebox');
+const tbOut = (b: any) => ({ ...b, id: String(b._id), _id: undefined, userId: undefined });
+
+on('GET', /^\/api\/timebox$/, async (req, res, _m, url) => {
+  const u = await needUser(req);
+  const from = url.searchParams.get('from') ?? new Date().toISOString().slice(0, 10);
+  const days = Math.min(7, Math.max(1, Number(url.searchParams.get('days') ?? 1)));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) throw new HttpError(400, 'Datum im Format JJJJ-MM-TT.');
+  const dates: string[] = [from];
+  while (dates.length < days) dates.push(nextDay(dates.at(-1)!));
+  const blocks = (await tbCol().find({ userId: u.id, date: { $in: dates } }).sort({ date: 1, start: 1 }).toArray()) as any[];
+  const im = await issueMap();
+  const cur = cycles().find((c) => !c.archived);
+  const sl = cur ? sprintLabel(cur.date) : null;
+  const who = resolveIdentity(await jiraIdentity(u), [...im.values()]);
+  const mine = sortMyTickets([...im.values()].filter((i) => i.type !== 'Workstream' && i.status !== 'Done' && i.statusCategory !== 'done' && isMine(i, who)), sl);
+  const ticket = (k?: string | null) => { const i = k ? im.get(k) : undefined; return i ? { key: i.key, summary: i.summary, status: i.status, goals: goalsOf(i.labels), inSprint: !!sl && (i.labels ?? []).includes(sl) } : null; };
+  send(res, 200, {
+    dates, sprint: cur ? { id: cur.id, label: sl } : null,
+    blocks: blocks.map((b) => ({ ...tbOut(b), ticket: ticket(b.key) })),
+    summary: Object.fromEntries(dates.map((d) => [d, daySummary(blocks.filter((b) => b.date === d), im)])),
+    tickets: mine.slice(0, 80).map((i) => ({ ...ticket(i.key)!, duedate: i.duedate, overdue: isOverdue(i) })),
+    grid: { start: 7 * 60, end: 20 * 60, step: 15 },
+  });
+});
+
+on('POST', /^\/api\/timebox$/, async (req, res) => {
+  const u = await needUser(req);
+  const r = cleanBlock(await body(req));
+  if ('error' in r) throw new HttpError(400, r.error);
+  if (r.ok.key && !(await issueMap()).has(r.ok.key)) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  const doc = { ...r.ok, userId: u.id, state: r.ok.state ?? 'geplant', createdAt: new Date() };
+  const ins = await tbCol().insertOne(doc as any);
+  send(res, 200, { ok: true, id: String(ins.insertedId) });
+});
+
+on('PATCH', /^\/api\/timebox\/([0-9a-f]{24})$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const r = cleanBlock(await body(req), true);
+  if ('error' in r) throw new HttpError(400, r.error);
+  const cur: any = await tbCol().findOne({ _id: new ObjectId(m[1]), userId: u.id });
+  if (!cur) throw new HttpError(404, 'Block nicht gefunden.');
+  if ((r.ok.start ?? cur.start) + (r.ok.dur ?? cur.dur) > 24 * 60) throw new HttpError(400, 'Block geht über Mitternacht.');
+  await tbCol().updateOne({ _id: cur._id, userId: u.id }, { $set: { ...r.ok, updatedAt: new Date() } });
+  send(res, 200, { ok: true });
+});
+
+on('DELETE', /^\/api\/timebox\/([0-9a-f]{24})$/, async (req, res, m) => {
+  const u = await needUser(req);
+  await tbCol().deleteOne({ _id: new ObjectId(m[1]), userId: u.id });
+  send(res, 200, { ok: true });
+});
+
+on('POST', /^\/api\/timebox\/carry$/, async (req, res) => {
+  const u = await needUser(req);
+  const date = String((await body(req)).date ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, 'Datum im Format JJJJ-MM-TT.');
+  const blocks = (await tbCol().find({ userId: u.id, date }).toArray()) as any[];
+  const { copies, mark } = carryOver(blocks, date);
+  if (copies.length) await tbCol().insertMany(copies.map((c) => ({ ...c, createdAt: new Date() })) as any[]);
+  if (mark.length) await tbCol().updateMany({ userId: u.id, _id: { $in: mark.map((x) => new ObjectId(x)) } }, { $set: { state: 'verschoben', carriedTo: nextDay(date) } });
+  send(res, 200, { ok: true, carried: copies.length, to: nextDay(date) });
 });
 
 // --- Skills ---

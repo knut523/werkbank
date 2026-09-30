@@ -237,3 +237,34 @@ a.tcard { display: block; color: inherit; text-decoration: none; }
 .tcard[draggable="true"] { cursor: grab; }
 .movebtn { padding: 0 6px; line-height: 1.4; }
 .movetoast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 60; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--surface-dialog); color: var(--text-primary); border: 1px solid var(--border-medium); box-shadow: var(--shadow); border-radius: 10px; padding: 8px 12px; max-width: calc(100vw - 32px); }
+/* Mein Tag / Timebox */
+.tb-nav { flex-wrap: wrap; }
+.tb-sum { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin-bottom: 10px; }
+.tb-share { display: inline-flex; align-items: center; gap: 6px; }
+.tb-share .subbar { flex: 0 0 90px; height: 6px; }
+.tb-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: start; }
+.tb-scroll { overflow-x: auto; max-width: 100%; }
+.tb-grid { display: grid; column-gap: 6px; min-width: 0; user-select: none; touch-action: none; }
+.tb-dayhead { position: sticky; top: 0; padding: 4px 2px; font-size: 13px; background: var(--surface-primary); z-index: 2; }
+.tb-dayhead.today button { font-weight: 700; }
+.tb-times { position: relative; }
+.tb-time { position: absolute; right: 4px; transform: translateY(-50%); font-size: 11px; color: var(--text-tertiary); }
+.tb-col { position: relative; border-radius: 6px; background:
+  repeating-linear-gradient(to bottom, var(--border-light) 0 1px, transparent 1px 64px),
+  repeating-linear-gradient(to bottom, transparent 0 32px, var(--surface-tertiary) 32px 33px, transparent 33px 64px),
+  var(--surface-primary-alt); cursor: crosshair; }
+.tb-ghost { position: absolute; left: 3px; right: 3px; background: color-mix(in srgb, var(--green-500) 25%, transparent); border: 1px dashed var(--green-600); border-radius: 6px; font-size: 11px; padding: 2px 4px; pointer-events: none; }
+.tb-block { position: absolute; left: 3px; right: 3px; overflow: hidden; background: var(--surface-primary); border: 1px solid var(--border-medium); border-left: 4px solid var(--border-heavy); border-radius: 6px; padding: 2px 6px 6px; font-size: 12px; cursor: grab; box-shadow: var(--shadow); }
+.tb-block.has-goal { border-left-color: var(--green-600); }
+.tb-block.st-erledigt { opacity: .6; background: var(--chip-ok); }
+.tb-block.st-verschoben { opacity: .5; border-style: dashed; }
+.tb-block.dragging { cursor: grabbing; outline: 2px solid var(--amber-500); z-index: 5; }
+.tb-bhead { display: flex; justify-content: space-between; align-items: center; gap: 4px; }
+.tb-actions { display: inline-flex; gap: 0; }
+.tb-actions .btn { padding: 0 4px; line-height: 1.3; }
+.tb-btitle { line-height: 1.25; }
+.tb-resize { position: absolute; left: 0; right: 0; bottom: 0; height: 7px; cursor: ns-resize; }
+.tb-resize::after { content: ''; position: absolute; left: 40%; right: 40%; bottom: 2px; height: 2px; border-radius: 1px; background: var(--border-heavy); }
+.tb-side { position: sticky; top: 8px; max-height: calc(100vh - 32px); overflow: auto; }
+.tb-ticket { cursor: grab; }
+@media (max-width: 900px) { .tb-wrap { grid-template-columns: minmax(0, 1fr); } .tb-side { position: static; max-height: none; } }
