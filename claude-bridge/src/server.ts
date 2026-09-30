@@ -14,6 +14,7 @@ import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
 import { mockQuery } from './mock.ts';
 import { mcpCall, mcpStatus } from './mcpcall.ts';
+import { directCall } from './mcpdirect.ts';
 import { homeFor, ensureHome, atlassianServer, type ClaudeHome } from './claudehome.ts';
 import { log } from './log.ts';
 import { fileURLToPath } from 'node:url';
@@ -293,8 +294,11 @@ const server = createServer(async (req, res) => {
       if (url.pathname === '/internal/mcp-status') return json(res, 200, { ...(await mcpStatus(query as any, token, cwd, home)), home: { mode: home.mode, dir: home.dir } });
       if (!/^mcp__[\w-]+__\w+$/.test(String(b.tool ?? ''))) return json(res, 400, { ok: false, error: 'failed', message: 'Ungültiges Werkzeug.' });
       const t0 = Date.now();
-      const r = await mcpCall(query as any, { token, cwd, home, tool: String(b.tool), input: b.input ?? {} });
-      log('mcp call', { user: String(b.userId ?? '?'), tool: b.tool, ok: r.ok, error: r.error, ms: Date.now() - t0 });
+      // Schnell: direkt als MCP-Client mit Claude Codes gespeichertem Atlassian-Zugang (kein Modell). Geht das nicht
+      // (kein/abgelaufener Zugang, Mock), der bisherige Weg über eine Claude-Sitzung. BRIDGE_MCP_DIRECT=off schaltet ab.
+      const direct = MOCK || process.env.BRIDGE_MCP_DIRECT === 'off' ? null : await directCall({ home, tool: String(b.tool), input: b.input ?? {} });
+      const r = direct ?? await mcpCall(query as any, { token, cwd, home, tool: String(b.tool), input: b.input ?? {} });
+      log('mcp call', { user: String(b.userId ?? '?'), tool: b.tool, ok: r.ok, error: r.error, ms: Date.now() - t0, via: direct ? 'direkt' : 'sitzung' });
       return json(res, 200, r);
     }
     if (req.method === 'GET' && url.pathname === '/v1/models') {
