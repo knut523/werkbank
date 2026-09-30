@@ -32,7 +32,7 @@ import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './tim
 import { isMine, resolveIdentity, vienna } from './hygiene.ts';
 import { ObjectId } from 'mongodb';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
-import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES } from './roadmap.ts';
+import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, type GoalNode } from './goals.ts';
 
 const DIST = join(WEB_DIR, 'dist');
@@ -836,6 +836,103 @@ on('POST', /^\/api\/roadmap\/github$/, async (req, res) => {
   await needUser(req);
   const r = await syncGithub(await githubReadToken()).catch((e: any) => { throw new HttpError(502, e.message); });
   send(res, 200, r ?? { count: 0, changed: 0, error: 'Kein GitHub-Lesetoken.' });
+});
+
+// --- Spec-Ordnung (Runde 6): Regel-Check je Spec, Zustandswechsel als Kopiertext, neue Spec aus Vorlage ---
+
+on('GET', /^\/api\/roadmap\/order$/, async (req, res) => {
+  await needUser(req);
+  const im = await issueMap();
+  const specs = roadmapSpecs();
+  const ranking = parseRankTable(readVault(`${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`));
+  const rankOf = new Map(ranking.map((r) => [r.spec, r.rank]));
+  const infos = specs.map((sp) => ({ ...sp, tickets: sp.tickets.map((k) => ({ key: k, status: im.get(k)?.status ?? null })), jiraKey: true, rank: null }));
+  const cons = roadmapInsights(infos as any, ranking).consistency;
+  const gh = await livePrs();
+  const today = vienna().date;
+  const ovCache = new Map<string, string>();
+  const rows = specs.map((sp) => {
+    const ticketGoals = [...new Set(sp.tickets.flatMap((k) => { const i = im.get(k); return i ? effectiveGoals(i, im).goals : []; }))];
+    if (sp.overview && !ovCache.has(sp.overview)) ovCache.set(sp.overview, readVault(sp.overview));
+    const checks = specChecks(sp, { rank: rankOf.get(sp.name) ?? null, overviewText: sp.overview ? ovCache.get(sp.overview)! : '', consistency: cons.filter((c) => c.spec === sp.name), ticketGoals, today });
+    return {
+      name: sp.name, title: sp.title, path: sp.path, topic: sp.topic, state: sp.state, lastVerified: sp.fm['last-verified'] ?? null,
+      tickets: sp.tickets.map((k) => ({ key: k, status: im.get(k)?.status ?? null })),
+      prs: sp.prs.map((pr) => { const l = gh.map.get(pr); return { pr, conflict: l?.mergeable === 'CONFLICTING', open: !!l, turn: l?.turn.who ?? null }; }),
+      checks,
+    };
+  });
+  const n = (f: (r: typeof rows[number]) => boolean) => rows.filter(f).length;
+  send(res, 200, {
+    specs: rows, states: KANBAN_STATES, topics: [...new Set(rows.map((r) => r.topic))],
+    summary: { total: rows.length, noJira: n((r) => !r.checks.jira), noGoal: n((r) => !r.checks.goal.ok), noDod: n((r) => !r.checks.dod), fmBad: n((r) => !r.checks.fm.ok), unranked: n((r) => r.checks.rank == null), inconsistent: n((r) => !r.checks.consistent), notInOverview: n((r) => !r.checks.inOverview), openDecisions: rows.reduce((a, r) => a + r.checks.openDecisions, 0) },
+    vaultDryRun: vaultDry(),
+  });
+});
+
+// Zustandswechsel: kein sauberer Schreibweg (Hub-Zahlen, Kreuztabelle, Prosa, rank.py) → nur Kopiertext, schreibt nie.
+on('POST', /^\/api\/roadmap\/spec-move$/, async (req, res) => {
+  await needUser(req);
+  const b = await body(req);
+  const sp = roadmapSpecs().find((x) => x.path === String(b.path ?? ''));
+  if (!sp) throw new HttpError(404, 'Spec nicht gefunden.');
+  const to = String(b.to ?? '');
+  if (!KANBAN_STATES.includes(to) && to !== '6-Archive') throw new HttpError(400, 'Unbekannter Zustand.');
+  const newPath = `${ROADMAP_BASE}/${sp.topic}/${to}/${sp.path.split('/').pop()}`;
+  const today = vienna().date;
+  const warn: string[] = [];
+  const idx = KANBAN_STATES.indexOf(to);
+  if (idx >= KANBAN_STATES.indexOf('3-Plan') && !/^##\s+Definition of Done/im.test(sp.text)) warn.push('Plan verlangt eine Definition of Done in prüfbaren Sätzen.');
+  if (sp.state === '2-Pre-Plan' && parseDecisions(sp.text).some((d) => d.open)) warn.push('Offene „- Knut:“-Zeilen: Pre-Plan → Plan erst, wenn jede Entscheidung beantwortet ist, die ändert, was gebaut wird.');
+  if (to === '4-Review' && !sp.prs.length) warn.push('Review verlangt einen PR-Link in der Spec.');
+  const slug = (st: string) => st.replace(/^\d-/, '').toLowerCase();
+  const page = (st: string) => `${OVERVIEW}/${st.toLowerCase()}-roadmap-produkt-olaf.md`;
+  const copy = [
+    `Zustandswechsel: [[${sp.name}]]  ${sp.state} → ${to}  (${today})`,
+    '',
+    '1. Datei verschieben:',
+    `   mv "${cfg.vaultDir}/${sp.path}" "${cfg.vaultDir}/${newPath}"`,
+    `2. Frontmatter: lifecycle: ${slug(to)} · last-verified: ${today}${idx >= 2 ? ' · ENTWURF-Marker entfernen' : ''}`,
+    `3. Zustandsseiten: Zeile aus ${page(sp.state)} entfernen, in ${page(to)} ergänzen`,
+    `4. Hub ${OVERVIEW}/0-roadmap-produkt-olaf.md: Zählzeile „Wo was liegt“, Kreuztabelle nach Thema und Prosa darunter; „Woran wir gerade arbeiten“ neu schreiben`,
+    `5. Themen-Übersicht ${sp.overview ?? `${sp.topic}/0-…-uebersicht.md`}: „Aktueller Stand“ und „Wo die Arbeit steht“ (Zahlen + Link)`,
+    '6. Priorisierung: Zeile in scripts/rank.py anpassen, Rangliste neu erzeugen',
+    ...(to === '4-Review' ? ['7. PR-Register pr-stand-produkt-olaf.md nachziehen'] : []),
+    `${to === '4-Review' ? 8 : 7}. Prüfen: python3 /vault/_meta/dist-skill/olaf-produkt-roadmap/scripts/roadmap_check.py`,
+    ...(warn.length ? ['', 'Vorher klären:', ...warn.map((w) => `- ${w}`)] : []),
+  ].join('\n');
+  send(res, 200, { copy, newPath, warn, writes: false });
+});
+
+on('POST', /^\/api\/roadmap\/spec-new$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const topic = String(b.topic ?? ''), state = String(b.state ?? ''), slugIn = String(b.slug ?? '').trim(), title = String(b.title ?? '').replace(/\s+/g, ' ').trim();
+  const rm = roadmap(vaultIdx(), ROADMAP_BASE);
+  const t = rm.topics.find((x) => x.name === topic);
+  if (!t) throw new HttpError(400, 'Unbekanntes Thema.');
+  if (!KANBAN_STATES.includes(state)) throw new HttpError(400, 'Unbekannter Zustand.');
+  if (!/^[a-z0-9]+(-[a-z0-9]+){0,8}$/.test(slugIn) || slugIn.length > 60) throw new HttpError(400, 'Kurzname: klein, mit Bindestrichen (z. B. kundenakte-export).');
+  if (title.length < 4) throw new HttpError(400, 'Titel angeben.');
+  const goal = b.goal ? String(b.goal).toUpperCase() : undefined;
+  if (goal && !GOAL_ID.test(goal)) throw new HttpError(400, 'Ungültige Ziel-ID.');
+  const jiraKey = b.jira ? String(b.jira).toUpperCase() : undefined;
+  if (jiraKey && !/^[A-Z][A-Z0-9]+-\d+$/.test(jiraKey)) throw new HttpError(400, 'Ungültiger Jira-Schlüssel.');
+  // Präfix wie die vorhandenen Specs des Themas (cockpit-spec-, service-spec- …)
+  const prefixes = Object.values(t.states).flat().map((x) => x.path.split('/').pop()!.match(/^([a-z0-9]+)-spec-/)?.[1]).filter(Boolean) as string[];
+  const prefix = prefixes.sort((a, c) => prefixes.filter((x) => x === c).length - prefixes.filter((x) => x === a).length)[0] ?? topic.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const rel = `${ROADMAP_BASE}/${topic}/${state}/${prefix}-spec-${slugIn}.md`;
+  const abs = vaultPath(rel);
+  if (existsSync(abs)) throw new HttpError(409, `${rel} gibt es schon.`);
+  const content = specTemplate({ topic, state, title, goal, jira: jiraKey, today: vienna().date, overview: t.overview?.split('/').pop()?.replace(/\.md$/, '') });
+  const follow = ['Zustandsseite ergänzen', 'Hub: Zählzeile + Kreuztabelle', 'Themen-Übersicht: Link + Zahlen', 'Priorisierung: rank.py-Zeile', 'roadmap_check.py'];
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: { path: rel, content, follow }, dryRun: vaultDry() });
+  if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: rel, follow });
+  mkdirSync(join(cfg.vaultDir, ROADMAP_BASE, topic, state), { recursive: true });
+  writeFileSync(abs, content, { flag: 'wx' });
+  invalidateIndex(); checkCache = null;
+  log('spec neu', { user: u.id, path: rel });
+  send(res, 200, { ok: true, path: rel, follow });
 });
 
 on('GET', /^\/api\/roadmap\/check$/, async (req, res) => { await needUser(req); send(res, 200, await runRoadmapCheck()); });
