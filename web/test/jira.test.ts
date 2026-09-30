@@ -74,3 +74,15 @@ test('Board: Bahnen für alle Workstreams (auch leer) mit Kopf; Ongoing nie übe
   // Mit Filter keine leeren Bahnen
   assert.equal(boardModel(is, { owner: 'Knut' }).lanes.some((l: any) => l.key === 'PM-223'), false);
 });
+
+test('Board: Filter „nur aktueller Sprint“ über das Sprint-Label', async () => {
+  const { boardModel } = await import('../server/jira.ts');
+  const base = { statusCategory: 'new', priority: 'Medium', updated: new Date().toISOString(), description: '', comments: 0, lastComment: null, duedate: null };
+  const is: any[] = [
+    { ...base, key: 'PM-70', summary: 'WS', status: 'In Progress', type: 'Workstream', assignee: 'K', parent: null, workstream: 'PM-70', labels: [] },
+    { ...base, key: 'PM-1', summary: 'a', status: 'To Do', type: 'Task', assignee: 'K', parent: 'PM-70', workstream: 'PM-70', labels: ['sprint-2026-09-28', 'ziel-s0928-1'] },
+    { ...base, key: 'PM-2', summary: 'b', status: 'To Do', type: 'Task', assignee: 'K', parent: 'PM-70', workstream: 'PM-70', labels: [] },
+  ];
+  const b = boardModel(is, { label: 'sprint-2026-09-28' });
+  assert.deepEqual(b.lanes.flatMap((l: any) => Object.values(l.columns).flat()).map((c: any) => c.key), ['PM-1']);
+});

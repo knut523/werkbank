@@ -24,14 +24,16 @@ import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyTo
 import { log } from './log.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
-import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError } from './jirawrite.ts';
+import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, type JiraAction } from './jirawrite.ts';
 import { jiraEventStream } from './events.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES } from './roadmap.ts';
-import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg } from './goals.ts';
+import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, type GoalNode } from './goals.ts';
 
 const DIST = join(WEB_DIR, 'dist');
+// Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
+const vaultDry = () => process.env.WERKBANK_VAULT_DRYRUN === '1' || process.env.WERKBANK_DRYRUN === '1';
 const FONTS = join(cfg.librechatDist, 'client', 'public', 'fonts');
 const TEMPLATES = join(WB_ROOT, 'templates', 'sprint');
 
@@ -172,10 +174,61 @@ async function sprintView(id: string) {
   const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
   return {
     cycle: { id: c.id, date: c.date, archived: c.archived },
+    ...goalsView(c, files, im),
     files,
     overdue: open.filter((i) => isOverdue(i, today)).sort((a, b) => a.duedate!.localeCompare(b.duedate!)),
     undated: open.filter((i) => !i.duedate && !isRecurring(i)),
     jiraSync: sync ? { at: sync.at, count: sync.count } : null,
+  };
+}
+
+
+// ---------- Ziele & Sprint (Zielbaum, Im Sprint, Kandidaten) ----------
+
+const GOALS_FILE = () => process.env.WERKBANK_GOALS_FILE || 'olaf/1-Projects/ziele-olaf.md';
+const tinyIssue = (i: Issue) => ({ key: i.key, summary: i.summary, status: i.status, statusCategory: i.statusCategory, assignee: i.assignee, duedate: i.duedate, type: i.type, labels: i.labels ?? [], goals: goalsOf(i.labels), overdue: isOverdue(i), blockedBy: i.blockedBy ?? [] });
+const stripTree = (n: GoalNode): any => ({ ...n, children: n.children.map(stripTree) });
+
+function goalsView(c: { id: string; date: string }, files: Record<string, any>, im: Map<string, Issue>) {
+  const text = readVault(GOALS_FILE());
+  const parsed = text ? parseGoalsFile(text) : { goals: [], ratings: [] };
+  const sprintRows = sprintGoalsFromOutcomes(files.planning?.outcomes ?? [], c.date);
+  const issues = [...im.values()];
+  const { roots, byId } = goalTree([...parsed.goals, ...sprintRows], parsed.ratings, issues);
+  const tag = sprintTag(c.date);
+  const sprintGoals = [...byId.values()].filter((n) => n.level === 'Sprint' && n.id.startsWith(`S${tag}-`)).sort((a, b) => a.id.localeCompare(b.id, 'de', { numeric: true }));
+  const end = new Date(c.date + 'T12:00:00Z'); end.setUTCDate(end.getUTCDate() + 13);
+  const months = new Set([c.date.slice(5, 7), end.toISOString().slice(5, 7)]);
+  const monthGoals = [...byId.values()].filter((n) => n.level === 'Monat' && months.has(n.id.slice(1, 3)));
+  const label = sprintLabel(c.date);
+  const members = issues.filter((i) => i.type !== 'Workstream' && inSprint(i, c.date));
+  const sprintIds = new Set(sprintGoals.map((g) => g.id));
+  const groups = sprintGoals.map((g) => ({ goal: { id: g.id, result: g.result }, tickets: members.filter((i) => goalsOf(i.labels).includes(g.id) || g.tickets.includes(i.key)).map(tinyIssue) }));
+  const otherGoal = members.filter((i) => !groups.some((gr) => gr.tickets.some((t) => t.key === i.key)) && goalsOf(i.labels).length);
+  const noGoal = members.filter((i) => !groups.some((gr) => gr.tickets.some((t) => t.key === i.key)) && !goalsOf(i.labels).length);
+  // Kandidaten: Mitnahme (→ mitnehmen mit Ticket), Tickets der Sprintziele/Monatsziele, überfällige, Top-Rang-Specs — nicht im Sprint.
+  const why = new Map<string, Set<string>>();
+  const add = (k: string, w: string) => { const i = im.get(k); if (!i || i.type === 'Workstream' || i.status === 'Done' || inSprint(i, c.date)) return; if (!why.has(k)) why.set(k, new Set()); why.get(k)!.add(w); };
+  for (const f of Object.values(files)) for (const q of f.questions ?? []) if (q.ticket && q.answers.some((a: any) => a.kind === 'carry')) add(q.ticket, 'Mitnahme');
+  for (const g of [...sprintGoals, ...monthGoals]) for (const k of [...g.tickets, ...g.labelTickets]) add(k, `Ziel ${g.id}`);
+  for (const i of issues) if (isOverdue(i)) add(i.key, 'überfällig');
+  const idx = vaultIdx();
+  const nameToPath = new Map([...idx.notes.values()].map((n) => [n.name, n]));
+  for (const r of parseRankTable(readVault(`${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`)).filter((r) => r.rank <= 10)) {
+    for (const k of nameToPath.get(r.spec)?.tickets ?? []) add(k, `Rang ${r.rank}`);
+  }
+  const candidates = [...why.entries()].map(([k, w]) => ({ ...tinyIssue(im.get(k)!), why: [...w] }))
+    .sort((a, b) => Number(b.why.includes('Mitnahme')) - Number(a.why.includes('Mitnahme')) || b.why.length - a.why.length || a.key.localeCompare(b.key, 'de', { numeric: true }));
+  return {
+    goals: {
+      file: GOALS_FILE(), missing: !text, roots: roots.map(stripTree), gate: roots.filter((r) => r.level === 'Gate').map((r) => ({ id: r.id, result: r.result })),
+      sprintGoals: sprintGoals.map(stripTree), monthGoals: monthGoals.map(stripTree),
+      labels: { sprint: label, goalPrefix: labelCfg().goalPrefix, sprintPrefix: labelCfg().sprintPrefix },
+      goalIds: [...byId.values()].filter((n) => n.level !== 'Gate').map((n) => ({ id: n.id, level: n.level, result: valueOf(n.result) ?? n.id })),
+    },
+    inSprint: { label, count: members.length, groups, otherGoal: otherGoal.map(tinyIssue), noGoal: noGoal.map(tinyIssue) },
+    candidates: candidates.slice(0, 60),
+    dryRun: dryRun(),
   };
 }
 
@@ -192,6 +245,7 @@ on('GET', /^\/api\/config$/, async (req, res) => {
   send(res, 200, {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: !!process.env.WERKBANK_FORGE_MCP,
     jiraSite: cfg.jiraSite, project: cfg.jiraProject, vault: cfg.vaultDir,
+    dryRun: dryRun(), vaultDryRun: vaultDry(),
   });
 });
 
@@ -325,13 +379,15 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
   for (const r of await wb().collection('agent_runs').find({ status: { $in: ['läuft', 'wartet auf ja'] } }, { projection: { key: 1, status: 1 } }).toArray() as any[]) {
     if (running.get(r.key) !== 'wartet auf ja') running.set(r.key, r.status);
   }
-  const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [], agent: running.get(i.key) ?? null }));
+  const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [], agent: running.get(i.key) ?? null, goals: goalsOf(i.labels) }));
+  const curCycle = cycles().find((c) => !c.archived);
+  const sprintOnly = url.searchParams.get('sprint') === '1' && curCycle ? sprintLabel(curCycle.date) : undefined;
   const filter = url.searchParams.get('filter') || undefined;
   const issues = annotated;
   const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
   const model = boardModel(issues as Issue[], {
     owner: url.searchParams.get('owner') || undefined, filter,
-    q: url.searchParams.get('q') || undefined, showDone: url.searchParams.get('done') === '1',
+    q: url.searchParams.get('q') || undefined, showDone: url.searchParams.get('done') === '1', label: sprintOnly,
   });
   const perOwner: Record<string, number> = {};
   for (const i of annotated) if (i.hygiene.length && i.type !== 'Workstream') perOwner[i.assignee ?? '—'] = (perOwner[i.assignee ?? '—'] ?? 0) + 1;
@@ -341,6 +397,8 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
     hygiene: { perOwner, total: [...hyg.keys()].length },
     sync: sync ? { at: sync.at, by: sync.by, count: sync.count, source: sync.source, error: sync.error, errorAt: sync.errorAt, errorKind: sync.errorKind ?? null, incAt: sync.incAt ?? null } : null,
     site: cfg.jiraSite,
+    sprint: curCycle ? { id: curCycle.id, date: curCycle.date, label: sprintLabel(curCycle.date), count: all.filter((i) => inSprint(i, curCycle.date)).length } : null,
+    dryRun: dryRun(),
   });
 });
 
@@ -389,7 +447,7 @@ const writeRoute = (kind: 'comment' | 'status' | 'due') => async (req: IncomingM
   const action = kind === 'comment' ? { type: 'comment' as const, text: String(b.text) } : kind === 'status' ? { type: 'status' as const, to: String(b.to) } : { type: 'due' as const, date: b.date ? String(b.date) : null };
   const r = await jiraWrite(u, () => writeJira(u, key, [action]));
   const issue = (await issueMap()).get(key) ?? null;
-  send(res, 200, { ok: true, issue, via: r.via });
+  send(res, 200, { ok: true, issue, via: r.via, dryRun: r.dryRun ?? false, calls: r.calls });
 };
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/comment$/, writeRoute('comment'));
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/status$/, writeRoute('status'));
@@ -397,6 +455,7 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/due$/, writeRoute('due')
 
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res, m) => {
   const u = await needUser(req);
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
   const b = await body(req);
   const i = (await issueMap()).get(m[1]);
   if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
@@ -415,6 +474,7 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res
 
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/discuss$/, async (req, res, m) => {
   const u = await needUser(req);
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
   const i = (await issueMap()).get(m[1]);
   if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
   if (!(await getClaudeToken(u))) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen.');
@@ -495,6 +555,7 @@ on('POST', /^\/api\/links\/confirm$/, async (req, res) => {
   const head = (t: string) => t.slice(0, Math.min(t.length, (t.indexOf('\n---', 3) + 4) || 300));
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, hash: hashText(text), preview: { path: rel, before: text.startsWith('---') ? head(text) : '(kein Frontmatter)', after: head(next) } });
   if (String(b.hash ?? '') !== hashText(text)) throw new HttpError(409, 'Die Notiz hat sich inzwischen geändert — bitte neu laden.');
+  if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: rel });
   writeFileSync(abs, next);
   invalidateIndex(); suggestCache = null;
   log('vault link', { user: u.id, key, path: rel });
@@ -645,6 +706,7 @@ on('POST', /^\/api\/roadmap\/answer$/, async (req, res) => {
   catch (e: any) { throw new HttpError(/geändert/.test(e.message) ? 409 : 400, e.message); }
   const rel = abs.slice(cfg.vaultDir.length + 1);
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: { path: rel, line: r.line, before: r.before, after: r.after } });
+  if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: rel, path: rel, line: r.line });
   writeFileSync(abs, r.text);
   invalidateIndex(); checkCache = null;
   log('roadmap antwort', { user: u.id, path: rel, line: r.line });
@@ -664,6 +726,7 @@ on('POST', /^\/api\/roadmap\/rank-proposal$/, async (req, res) => {
   const d = new Date();
   const next = addRankProposal(text, { spec: String(b.spec), from, to, why: String(b.why ?? '').slice(0, 300), who: u.name.split(' ')[0], date: `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}` });
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, hash: hashText(text), preview: { path: rel, add: next.slice(text.replace(/\n*$/, '').length).trim() } });
+  if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: rel });
   writeFileSync(abs, next);
   invalidateIndex();
   log('rang vorschlag', { user: u.id, spec: b.spec, from, to });
@@ -693,6 +756,7 @@ on('POST', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/answer$/, async (req, re
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: { file: rel, line: edit.line, before: edit.before, after: edit.after, mode: edit.mode } });
   // Unmittelbar vor dem Schreiben nochmals prüfen (Obsidian-Sync, andere Person).
   if (hashText(readFileSync(f, 'utf8')) !== b.hash) throw new HttpError(409, 'Die Notiz hat sich inzwischen geändert — bitte neu laden.');
+  if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: rel, line: edit.line, hash: b.hash });
   writeFileSync(f, edit.text);
   invalidateIndex();
   log('vault antwort', { user: u.id, file: rel, line: edit.line });
@@ -731,11 +795,36 @@ on('POST', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/apply$/, async (req, res
   }
   // Nur vollständig erfolgreiche Notizen markieren (✓ Datum → Jira), mit dem Skript des Skills.
   const marked: string[] = [];
-  for (const [file, lines] of done) {
+  if (!dryRun() && !vaultDry()) for (const [file, lines] of done) {
     await new Promise<void>((resolve) => execFile(join(cfg.jiraScripts, 'jira-sync-mark.sh'), ['--file', file, ...lines.map(String)], { timeout: 20_000 }, (err) => { if (!err) marked.push(file.slice(cfg.vaultDir.length + 1)); resolve(); }));
   }
   log('sprint sync', { user: u.id, cycle: c.id, ok: results.filter((r) => r.ok).length, fail: results.filter((r) => !r.ok).length });
   send(res, 200, { results, marked });
+});
+
+// Sprint-Mitgliedschaft / Ziel zuordnen = Jira-Labels (nur Sprint-/Ziel-Labels, nur nach Bestätigung, Trockenlauf in der Vorschau).
+on('POST', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/labels$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const c = cycleById(m[1]);
+  const key = String(b.key ?? '');
+  const i = (await issueMap()).get(key);
+  if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  const lc = labelCfg();
+  const ok = (l: string) => l === sprintLabel(c.date) || (l.startsWith(lc.goalPrefix) && GOAL_ID.test(l.slice(lc.goalPrefix.length)));
+  const addL = (Array.isArray(b.add) ? b.add : []).map(String), rmL = (Array.isArray(b.remove) ? b.remove : []).map(String);
+  const bad = [...addL, ...rmL].filter((l) => !ok(l));
+  if (bad.length) throw new HttpError(400, `Nur Sprint-/Ziel-Labels: ${bad.join(', ')}`);
+  const action: JiraAction = { type: 'labels', add: addL, remove: rmL };
+  const preview = `${key}: ${describe(action)}`;
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview, dryRun: dryRun(), labels: i.labels ?? [] });
+  const r = await jiraWrite(u, () => writeJira(u, key, [action]));
+  send(res, 200, { ok: true, done: r.done, dryRun: r.dryRun ?? false, calls: r.calls });
+});
+
+on('GET', /^\/api\/dryrun$/, async (req, res) => {
+  const u = await needUser(req);
+  send(res, 200, { dryRun: dryRun(), entries: await wb().collection('jira_dryrun').find({ userId: u.id }).sort({ at: -1 }).limit(50).toArray() });
 });
 
 on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
@@ -750,6 +839,7 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
   if (existsSync(dir)) throw new HttpError(409, `${id} gibt es schon.`);
   const rel = dir.slice(cfg.vaultDir.length + 1);
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: { dir: rel, files: files.map((f) => ({ name: f.name, lines: f.content.split('\n').length, head: f.content.slice(0, 1200) })) } });
+  if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: rel, id, dir: rel });
   mkdirSync(dir);
   for (const f of files) writeFileSync(join(dir, f.name), f.content, { flag: 'wx' });
   invalidateIndex();

@@ -100,3 +100,19 @@ test('Einzel-Refresh: neuer Parent eines Tickets zieht Workstream der Sub-tasks 
   assert.ok(kids.length >= 2);
   for (const k of kids) assert.equal(k.workstream, 'PM-73', `${k.key} mitgezogen`);
 });
+
+test('Trockenlauf: writeJira schreibt nichts, merkt sich die Aufrufe (Labels frisch berechnet)', async () => {
+  process.env.WERKBANK_JIRA_DRYRUN = '1';
+  try {
+    const W = await import('../server/jirawrite.ts');
+    const u = { id: 'u1', email: 'x@maxenergy.at', name: 'X' };
+    await D.wb().collection('jira_issues').updateOne({ key: 'PM-331' }, { $set: { labels: ['alt'] } });
+    const n = m.writes.length;
+    const r = await W.writeJira(u, 'PM-331', [{ type: 'labels', add: ['sprint-2026-09-28'], remove: ['alt'] }, { type: 'parent', key: 'PM-73' }]);
+    assert.equal(r.dryRun, true);
+    assert.equal(m.writes.length, n, 'nichts nach Jira');
+    assert.deepEqual(r.calls?.map((c: any) => c.input.fields), [{ labels: ['sprint-2026-09-28'] }, { parent: { key: 'PM-73' } }]);
+    assert.equal(await D.wb().collection('jira_dryrun').countDocuments({ key: 'PM-331' }), 1);
+    assert.deepEqual(W.applyLabels(['a', 'b'], ['c', 'a'], ['b']), ['a', 'c']);
+  } finally { delete process.env.WERKBANK_JIRA_DRYRUN; }
+});
