@@ -303,6 +303,11 @@ test('Roadmap: Rangliste mit Gründen, Kanban, PRs je Spec, offene Entscheidunge
   assert.deepEqual(pr.tickets, ['PM-321'], 'PR ↔ Jira über die Spec');
   assert.ok(pr.gates.some((g: string) => /Deploy/.test(g)));
   assert.equal(r.j.prs.find((p: any) => p.pr === 'olaf-tariff-app#166').turn, 'Merge (Mensch)');
+  // Thema → Rang, Swimlanes mit Rang-Chip, „Als Nächstes“
+  assert.deepEqual(r.j.prioTopics.map((t: any) => [t.topic, t.ranked.map((x: any) => x.spec)]), [['Service-View', ['service-view-kundenakte', 'service-view-mailprotokoll']]]);
+  assert.equal(r.j.lanes[0].states['3-Plan'][0].rank, 1);
+  assert.deepEqual(r.j.kanbanStates, ['1-Backlog', '2-Pre-Plan', '3-Plan', '4-Review', '5-Live']);
+  assert.ok(Array.isArray(r.j.nextUp) && Array.isArray(r.j.consistency) && Array.isArray(r.j.withoutJira));
   const d = r.j.decisions.find((x: any) => x.spec === 'service-view-kundenakte');
   assert.match(d.question, /stornierte Verträge/);
   const pre = await anna.req('/api/roadmap/answer', { body: { path: d.path, line: d.line, hash: d.hash, text: 'ja, ausgegraut' } });

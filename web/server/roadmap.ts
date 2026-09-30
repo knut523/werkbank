@@ -145,3 +145,73 @@ export function parseCheck(out: string) {
   const sum = out.match(/(\d+) error\(s\), (\d+) warning\(s\)/);
   return { findings, errors: sum ? Number(sum[1]) : findings.filter((f) => f.level === 'ERROR').length, warnings: sum ? Number(sum[2]) : findings.filter((f) => f.level === 'WARN').length };
 }
+
+// ---------- Thema → Rang, Swimlanes, „Als Nächstes“, Konsistenz (Knut, 30.09.) ----------
+
+export const KANBAN_STATES = ['1-Backlog', '2-Pre-Plan', '3-Plan', '4-Review', '5-Live'];
+const IN_WORK = new Set(['4-Review', '5-Live', '6-Archive']);
+
+export interface SpecInfo {
+  name: string; topic: string; state: string; title: string; path: string;
+  tickets: { key: string; status: string | null; summary?: string | null }[];
+  prs: string[]; jiraKey: boolean; rank?: number | null; [k: string]: unknown;
+}
+
+const ticketDone = (t: { status: string | null }) => t.status === 'Done';
+const ticketActive = (t: { status: string | null }) => t.status === 'In Progress' || t.status === 'Ongoing';
+
+/**
+ * Aus Specs (Ordner = Thema/Zustand) und Rangtabelle: Priorisierung je Thema (nach Rang, unpriorisierte unten),
+ * Swimlanes Thema × Zustand (nach Rang sortiert), „Als Nächstes“ (Top 5, Sprint-Zuordnung zuerst) und Widersprüche.
+ */
+export function roadmapInsights(specs: SpecInfo[], ranking: (Pick<RankRow, 'rank' | 'spec' | 'topic'> & Record<string, any>)[], opts: { sprintTickets?: Set<string>; top?: number } = {}) {
+  const byName = new Map(specs.map((s) => [s.name, s]));
+  const rankOf = new Map(ranking.map((r) => [r.spec, r.rank]));
+  for (const s of specs) s.rank = rankOf.get(s.name) ?? null;
+  const byRank = (a: SpecInfo, b: SpecInfo) => (a.rank ?? 1e9) - (b.rank ?? 1e9) || a.title.localeCompare(b.title, 'de');
+
+  // Priorisierung: Thema aus dem Ordner (die Tabelle schreibt z. B. „Service“ statt „Service-View“), sonst aus der Tabelle.
+  const topics = new Map<string, { topic: string; ranked: any[]; unranked: SpecInfo[] }>();
+  const topicOf = (t: string) => { if (!topics.has(t)) topics.set(t, { topic: t, ranked: [], unranked: [] }); return topics.get(t)!; };
+  for (const r of [...ranking].sort((a, b) => a.rank - b.rank)) {
+    const sp = byName.get(r.spec);
+    topicOf(sp?.topic ?? r.topic).ranked.push({ ...r, path: sp?.path ?? null, folderState: sp?.state ?? null });
+  }
+  for (const s of specs) if (s.rank == null && !IN_WORK.has(s.state) && KANBAN_STATES.includes(s.state)) topicOf(s.topic).unranked.push(s);
+  for (const t of topics.values()) t.unranked.sort(byRank);
+  const prioTopics = [...topics.values()].sort((a, b) => (a.ranked[0]?.rank ?? 1e9) - (b.ranked[0]?.rank ?? 1e9) || a.topic.localeCompare(b.topic, 'de'));
+
+  // Swimlanes Thema × Zustand
+  const laneMap = new Map<string, Record<string, SpecInfo[]>>();
+  for (const s of specs) {
+    if (!KANBAN_STATES.includes(s.state)) continue;
+    const l = laneMap.get(s.topic) ?? Object.fromEntries(KANBAN_STATES.map((k) => [k, [] as SpecInfo[]]));
+    l[s.state].push(s);
+    laneMap.set(s.topic, l);
+  }
+  const lanes = [...laneMap.entries()].map(([topic, states]) => {
+    for (const k of KANBAN_STATES) states[k].sort(byRank);
+    const best = Math.min(...Object.values(states).flat().map((s) => s.rank ?? 1e9));
+    return { topic, states, best };
+  }).sort((a, b) => a.best - b.best || a.topic.localeCompare(b.topic, 'de'));
+
+  // Als Nächstes: höchster Rang, noch nicht in Arbeit; zum aktuellen Sprint gehörig (Ticket mit Sprint-Label) zuerst.
+  const sprint = opts.sprintTickets ?? new Set<string>();
+  const cands = ranking.map((r) => ({ r, s: byName.get(r.spec) })).filter(({ s }) => s && !IN_WORK.has(s.state) && !s.tickets.some((t) => ticketDone(t) || ticketActive(t)))
+    .map(({ r, s }) => ({ ...r, path: s!.path, folderState: s!.state, topic: s!.topic, title: s!.title, tickets: s!.tickets, inSprint: s!.tickets.some((t) => sprint.has(t.key)) }));
+  const nextUp = [...cands].sort((a, b) => Number(b.inSprint) - Number(a.inSprint) || a.rank - b.rank).slice(0, opts.top ?? 5);
+
+  // Konsistenz: Zustandsordner gegen Jira-Status
+  const consistency: { spec: string; path: string; topic: string; state: string; ticket: string; status: string | null; kind: string; level: 'Widerspruch' | 'Hinweis' }[] = [];
+  for (const s of specs) {
+    for (const t of s.tickets) {
+      if (!t.status) continue;
+      const base = { spec: s.name, path: s.path, topic: s.topic, state: s.state, ticket: t.key, status: t.status };
+      if (s.state === '5-Live' && !ticketDone(t)) consistency.push({ ...base, kind: 'Spec live, Ticket offen', level: 'Widerspruch' });
+      else if (s.state === '4-Review' && !ticketDone(t)) consistency.push({ ...base, kind: 'Spec in Review, Ticket offen', level: 'Hinweis' });
+      else if (['1-Backlog', '2-Pre-Plan', '3-Plan'].includes(s.state) && ticketDone(t)) consistency.push({ ...base, kind: 'Ticket erledigt, Spec nicht in Review/Live', level: 'Widerspruch' });
+    }
+  }
+  const withoutJira = specs.filter((s) => !s.jiraKey && KANBAN_STATES.includes(s.state)).sort(byRank);
+  return { prioTopics, lanes, nextUp, consistency, withoutJira };
+}

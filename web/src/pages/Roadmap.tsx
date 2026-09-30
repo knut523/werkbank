@@ -18,6 +18,18 @@ function Prs({ prs }: { prs: string[] }) {
   return <>{prs.map((p) => <a key={p} className="chip" href={`https://github.com/WirStrom1/${p.replace('#', '/pull/')}`} target="_blank" rel="noreferrer">{p.replace('olaf-', '')}</a>)}</>;
 }
 
+function NextUp({ d }: { d: any }) {
+  if (!d.nextUp?.length) return null;
+  return (
+    <div className="card nextup" data-testid="next-up">
+      <div className="row" style={{ justifyContent: 'space-between' }}><b>Als Nächstes</b><span className="tiny">höchster Rang, noch nicht in Arbeit{d.sprint ? ` · Sprint ${d.sprint.date}: ${d.sprint.tickets} Tickets mit Sprint-Label` : ''}</span></div>
+      <ol className="nextup-list">{d.nextUp.map((x: any) => (
+        <li key={x.spec}><span className="chip rank">#{x.rank}</span> {x.path ? <a href={note(x.path)}>{x.title ?? x.spec}</a> : x.spec} <span className="tiny">{x.topic} · {x.folderState?.replace(/^\d-/, '')}</span>{x.inSprint && <span className="chip ok">im Sprint</span>} <Tickets ts={x.tickets} /></li>
+      ))}</ol>
+    </div>
+  );
+}
+
 function Prio({ d, reload }: { d: any; reload: () => void }) {
   const [order, setOrder] = useState<string[] | null>(null);
   const [why, setWhy] = useState('');
@@ -25,23 +37,28 @@ function Prio({ d, reload }: { d: any; reload: () => void }) {
   const [q, setQ] = useState('');
   const confirm = useConfirm();
   const toast = useToast();
-  const rows: any[] = useMemo(() => {
-    const base = d.ranking as any[];
-    if (!order) return base;
-    return order.map((s) => base.find((r) => r.spec === s)!);
-  }, [d, order]);
-  const move = (i: number, dir: -1 | 1) => {
-    const cur = (order ?? d.ranking.map((r: any) => r.spec)).slice();
-    const j = i + dir;
-    if (j < 0 || j >= cur.length) return;
-    [cur[i], cur[j]] = [cur[j], cur[i]];
-    setOrder(cur);
+  const base = d.ranking as any[];
+  const cur: string[] = order ?? base.map((r: any) => r.spec);
+  const pos = new Map(cur.map((s, i) => [s, i]));
+  const topicOf = new Map<string, string>();
+  for (const t of d.prioTopics) for (const r of t.ranked) topicOf.set(r.spec, t.topic);
+  // Verschieben innerhalb des Themas: mit dem Nachbarn desselben Themas die Plätze tauschen (globaler Rang).
+  const move = (spec: string, dir: -1 | 1) => {
+    const list = cur.slice();
+    const i = list.indexOf(spec);
+    let j = i + dir;
+    while (j >= 0 && j < list.length && topicOf.get(list[j]) !== topicOf.get(spec)) j += dir;
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    setOrder(list);
   };
-  const moved = order ? rows.map((r, i) => ({ r, to: i + 1 })).filter(({ r, to }) => r.rank !== to) : [];
-  const shown = rows.filter((r) => !q || `${r.spec} ${r.topic} ${r.state}`.toLowerCase().includes(q.toLowerCase()));
+  const byRow = new Map(base.map((r: any) => [r.spec, r]));
+  const moved = order ? cur.map((s, i) => ({ r: byRow.get(s), to: i + 1 })).filter(({ r, to }) => r.rank !== to) : [];
+  const match = (r: any) => !q || `${r.spec} ${r.topic} ${r.state}`.toLowerCase().includes(q.toLowerCase());
   return (
     <>
-      <p className="small muted">Rangliste aus <a href={note(d.hub.prio)}>der Priorisierungsseite</a> (WSJF-leicht: (GW+ZK+RR)/Größe, gerechnet von <code>rank.py</code> im Skill <code>olaf-produkt-roadmap</code>). Verschieben erzeugt einen <b>Vorschlag</b> — er wird nach Bestätigung als Zeile auf der Priorisierungsseite festgehalten; neu gerechnet wird die Tabelle in der Hauptsitzung.</p>
+      <NextUp d={d} />
+      <p className="small muted">Nach Thema gruppiert, innerhalb nach Rang aus <a href={note(d.hub.prio)}>der Priorisierungsseite</a> (WSJF-leicht: (GW+ZK+RR)/Größe, gerechnet von <code>rank.py</code>). „Noch nicht priorisiert“ = Specs ohne Zeile in der Rangtabelle. Verschieben erzeugt einen <b>Vorschlag</b> — nach Bestätigung als Zeile auf der Priorisierungsseite; neu gerechnet wird in der Hauptsitzung.</p>
       <div className="row" style={{ marginBottom: 8 }}>
         <input type="search" placeholder="Spec, Thema, Zustand …" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Rangliste filtern" />
         {order && <>
@@ -60,49 +77,68 @@ function Prio({ d, reload }: { d: any; reload: () => void }) {
         </>}
       </div>
       <Err e={err} />
-      <table className="t small" data-testid="rank-table">
-        <thead><tr><th>#</th><th></th><th>Spec</th><th>Thema</th><th>Zustand</th><th title="(GW+ZK+RR)/Größe">WSJF</th><th>Kat</th><th>blockiert durch</th><th>nächster Schritt</th><th>Jira · PR</th></tr></thead>
-        <tbody>{shown.map((r) => {
-          const i = rows.indexOf(r);
-          return (
-            <tr key={r.spec} data-spec={r.spec} className={order && r.rank !== i + 1 ? 'moved' : ''}>
-              <td><b>{i + 1}</b>{order && r.rank !== i + 1 && <span className="tiny"> (war {r.rank})</span>}</td>
-              <td className="nowrap"><button className="btn ghost small" aria-label={`${r.spec} hoch`} onClick={() => move(i, -1)}>▲</button><button className="btn ghost small" aria-label={`${r.spec} runter`} onClick={() => move(i, 1)}>▼</button></td>
-              <td>{r.path ? <a href={note(r.path)}>{r.spec}</a> : r.spec}{r.open > 0 && <span className="chip warn" title="offene Knut-Zeilen">❓ {r.open}</span>}{r.why && <details><summary className="tiny">Gründe</summary><span className="tiny">{r.why}</span></details>}</td>
-              <td>{r.topic}</td><td className="tiny">{r.state}</td>
-              <td title={`GW ${r.gw} · ZK ${r.zk} · RR ${r.rr} · Größe ${r.size}`}>{r.wsjf.toFixed(1)}</td><td>{r.cat}</td>
-              <td className="tiny">{r.blocked}</td><td className="tiny">{r.next}</td>
-              <td><Tickets ts={r.tickets} /> <Prs prs={r.prs} /></td>
-            </tr>
-          );
-        })}</tbody>
-      </table>
+      <div data-testid="rank-table">
+      {d.prioTopics.map((t: any) => {
+        const rows = t.ranked.slice().sort((a: any, b: any) => pos.get(a.spec)! - pos.get(b.spec)!).filter(match);
+        const un = t.unranked.filter((s: any) => !q || `${s.name} ${s.topic} ${s.state}`.toLowerCase().includes(q.toLowerCase()));
+        if (!rows.length && !un.length) return null;
+        return (
+          <section key={t.topic} className="card topic-block" data-topic={t.topic}>
+            <h3 style={{ marginTop: 0 }}>{t.topic} <span className="chip">{t.ranked.length} priorisiert</span>{t.unranked.length > 0 && <span className="chip warn">{t.unranked.length} ohne Rang</span>}</h3>
+            {rows.length > 0 && <table className="t small">
+              <thead><tr><th>Rang</th><th></th><th>Spec</th><th>Zustand</th><th title="(GW+ZK+RR)/Größe">WSJF</th><th>Kat</th><th>blockiert durch</th><th>nächster Schritt</th><th>Jira · PR</th></tr></thead>
+              <tbody>{rows.map((r: any) => {
+                const full = byRow.get(r.spec) ?? r;
+                const i = pos.get(r.spec)!;
+                return (
+                  <tr key={r.spec} data-spec={r.spec} className={order && full.rank !== i + 1 ? 'moved' : ''}>
+                    <td><span className="chip rank">#{i + 1}</span>{order && full.rank !== i + 1 && <span className="tiny"> (war {full.rank})</span>}</td>
+                    <td className="nowrap"><button className="btn ghost small" aria-label={`${r.spec} hoch`} onClick={() => move(r.spec, -1)}>▲</button><button className="btn ghost small" aria-label={`${r.spec} runter`} onClick={() => move(r.spec, 1)}>▼</button></td>
+                    <td>{full.path ? <a href={note(full.path)}>{r.spec}</a> : r.spec}{full.open > 0 && <span className="chip warn" title="offene Knut-Zeilen">❓ {full.open}</span>}{full.why && <details><summary className="tiny">Gründe</summary><span className="tiny">{full.why}</span></details>}</td>
+                    <td className="tiny">{full.state}</td>
+                    <td title={`GW ${full.gw} · ZK ${full.zk} · RR ${full.rr} · Größe ${full.size}`}>{Number(full.wsjf ?? 0).toFixed(1)}</td><td>{full.cat}</td>
+                    <td className="tiny">{full.blocked}</td><td className="tiny">{full.next}</td>
+                    <td><Tickets ts={full.tickets} /> <Prs prs={full.prs} /></td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>}
+            {un.length > 0 && <div className="unranked"><div className="tiny"><b>Noch nicht priorisiert</b> — in <code>rank.py</code> aufnehmen</div>
+              <ul className="small">{un.map((s: any) => <li key={s.path}><a href={note(s.path)}>{s.title}</a> <span className="tiny">{s.state.replace(/^\d-/, '')}</span> <Tickets ts={s.tickets} /></li>)}</ul></div>}
+          </section>
+        );
+      })}
+      </div>
     </>
+  );
+}
+
+function SpecCard({ sp }: { sp: any }) {
+  return (
+    <a className="tcard" href={note(sp.path)} data-spec={sp.name}>
+      <div className="k"><span>{sp.rank ? <span className="chip rank">#{sp.rank}</span> : <span className="chip warn" title="nicht in der Rangtabelle">ohne Rang</span>}</span>{sp.open > 0 && <span className="chip tiny-chip warn" title="offene Knut-Zeilen">❓ {sp.open}</span>}</div>
+      <div className="s">{sp.title}</div>
+      <div className="row" style={{ gap: 3 }}>
+        {sp.tickets.map((x: any) => <span key={x.key} className={`chip tiny-chip ${x.status === 'Done' ? 'ok' : x.status === 'In Progress' ? 'warn' : ''}`} title={x.summary ?? ''}>{x.key}{x.status ? ` · ${x.status}` : ''}</span>)}
+        {(sp.prLive ?? []).map((p: any) => <span key={p.pr} className={`chip tiny-chip ${p.conflict ? 'bad' : p.review === 'APPROVED' ? 'ok' : p.closed ? '' : 'warn'}`} title={p.turn ? `dran: ${p.turn}` : p.closed ? 'nicht mehr offen (gemergt/geschlossen)' : 'GitHub-Stand unbekannt'}>{p.pr.replace('olaf-', '')}{p.conflict ? ' ⚠ Konflikt' : p.draft ? ' · Entwurf' : p.review === 'APPROVED' ? ' ✓' : p.closed ? ' · zu' : p.turn ? ` · ${p.turn}` : ''}</span>)}
+      </div>
+    </a>
   );
 }
 
 function Kanban({ d }: { d: any }) {
   return (
     <>
-      <p className="small muted">Specs je Thema und Zustandsordner (<code>1-Backlog … 6-Archive</code>) mit offenen Entscheidungen, Tickets und PRs.</p>
-      {d.topics.map((t: any) => (
-        <section className="lane" key={t.name}>
-          <h3>{t.overview ? <a href={note(t.overview)}>{t.name}</a> : t.name} <span className="chip">{Object.values(t.states).flat().length}</span></h3>
-          <div className="cols" style={{ gridTemplateColumns: `repeat(${d.states.length}, minmax(170px, 1fr))` }}>
-            {d.states.map((s: string) => (
+      <NextUp d={d} />
+      <p className="small muted">Swimlanes Thema × Zustand (<code>1-Backlog … 5-Live</code>), Karten nach Rang sortiert, mit Jira-Status und PR-Live-Zustand von GitHub.</p>
+      {d.lanes.map((t: any) => (
+        <section className="lane" key={t.topic} data-lane={t.topic}>
+          <h3>{t.topic} <span className="chip">{Object.values(t.states).flat().length}</span></h3>
+          <div className="cols" style={{ gridTemplateColumns: `repeat(${d.kanbanStates.length}, minmax(170px, 1fr))` }}>
+            {d.kanbanStates.map((s: string) => (
               <div key={s}>
-                <div className="colhead">{s} · {(t.states[s] ?? []).length}</div>
-                <div className="col-cards">{(t.states[s] ?? []).map((sp: any) => (
-                  <a key={sp.path} className="tcard" href={note(sp.path)} data-spec={sp.name}>
-                    <div className="s">{sp.title}</div>
-                    <div className="row" style={{ gap: 3 }}>
-                      {sp.status && <span className="chip tiny-chip">{sp.status}</span>}
-                      {sp.open > 0 && <span className="chip tiny-chip warn">❓ {sp.open}</span>}
-                      {sp.tickets.map((x: any) => <span key={x.key} className="chip tiny-chip">{x.key}</span>)}
-                      {sp.prs.map((p: string) => <span key={p} className="chip tiny-chip">{p.replace('olaf-', '')}</span>)}
-                    </div>
-                  </a>
-                ))}</div>
+                <div className="colhead">{s.replace(/^\d-/, '')} · {t.states[s].length}</div>
+                <div className="col-cards">{t.states[s].map((sp: any) => <SpecCard key={sp.path} sp={sp} />)}</div>
               </div>
             ))}
           </div>
@@ -204,16 +240,29 @@ function Decisions({ d, reload, user }: { d: any; reload: () => void; user: stri
   );
 }
 
-function Check() {
+function SpecVsJira({ d }: { d: any }) {
+  const w = d.consistency.filter((x: any) => x.level === 'Widerspruch'), h = d.consistency.filter((x: any) => x.level === 'Hinweis');
+  return (
+    <div className="card" style={{ marginBottom: 10 }} data-testid="spec-jira">
+      <h3 style={{ marginTop: 0 }}>Spec ↔ Jira <span className="chip bad">{w.length} Widersprüche</span> <span className="chip warn">{h.length} Hinweise</span> <span className="chip">{d.withoutJira.length} Specs ohne jira:-Key</span></h3>
+      {d.consistency.length > 0 && <table className="t small"><thead><tr><th></th><th>Spec</th><th>Zustand</th><th>Ticket</th><th>Befund</th></tr></thead>
+        <tbody>{[...w, ...h].map((x: any) => <tr key={x.spec + x.ticket}><td><span className={`chip ${x.level === 'Widerspruch' ? 'bad' : 'warn'}`}>{x.level}</span></td><td><a href={note(x.path)}>{x.spec}</a> <span className="tiny">{x.topic}</span></td><td className="tiny">{x.state}</td><td><a className="chip" href={`#/board?key=${x.ticket}`}>{x.ticket} · {x.status}</a></td><td>{x.kind}</td></tr>)}</tbody></table>}
+      {d.withoutJira.length > 0 && <details><summary className="small">Specs ohne <code>jira:</code> im Frontmatter ({d.withoutJira.length})</summary><ul className="small">{d.withoutJira.map((s: any) => <li key={s.path}><a href={note(s.path)}>{s.title}</a> <span className="tiny">{s.topic} · {s.state}</span></li>)}</ul></details>}
+    </div>
+  );
+}
+
+function Check({ d: rd }: { d: any }) {
   const c = useLoad(() => api('/api/roadmap/check'));
   const d: any = c.data;
-  if (!d) return c.error ? <Err e={c.error} /> : <Loading what="Prüfe die Roadmap (roadmap_check.py)" />;
-  if (!d.available) return <p className="note small">Der Konsistenz-Check (<code>roadmap_check.py</code> aus dem Skill <code>olaf-produkt-roadmap</code>) ist hier nicht eingerichtet.</p>;
+  if (!d) return <><SpecVsJira d={rd} />{c.error ? <Err e={c.error} /> : <Loading what="Prüfe die Roadmap (roadmap_check.py)" />}</>;
+  if (!d.available) return <><SpecVsJira d={rd} /><p className="note small">Der Konsistenz-Check (<code>roadmap_check.py</code> aus dem Skill <code>olaf-produkt-roadmap</code>) ist hier nicht eingerichtet.</p></>;
   const by = new Map<string, any[]>();
   for (const f of d.findings) by.set(f.check, [...(by.get(f.check) ?? []), f]);
   const names: Record<string, string> = { B1: 'Hub ↔ Ordner', B2: 'Zustandsseiten ↔ Ordner', B3: 'Themen-Übersichten', B4: 'Specs (Zustand, Abschnitte, Knut-Zeilen, Bau-Stand)', B5: 'Review ↔ PR-Register' };
   return (
     <>
+      <SpecVsJira d={rd} />
       <p className="small muted">Ausgabe von <code>roadmap_check.py</code> (nur lesend) — Kette Hub → Zustandsseite → Übersicht → Spec → PR-Register. <span className="chip bad">{d.errors} Fehler</span> <span className="chip warn">{d.warnings} Hinweise</span> <button className="btn small" onClick={() => c.reload()}>↻ neu prüfen</button></p>
       {[...by.entries()].map(([k, fs]) => (
         <details key={k} className="card" open={fs.some((f) => f.level === 'ERROR')} style={{ marginBottom: 8 }}>
@@ -244,7 +293,7 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
         {TABS.map(([id, label]) => <a key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} href={`#/roadmap/${id}`}>{label}{d && id === 'entscheidungen' ? ` (${d.decisions.length})` : d && id === 'prs' ? ` (${d.prs.length})` : d && id === 'prio' ? ` (${d.ranking.length})` : ''}</a>)}
       </div>
       {r.error && <Err e={r.error} />}
-      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' ? <Check /> : <Prio d={d} reload={r.reload} />}
+      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' ? <Check d={d} /> : <Prio d={d} reload={r.reload} />}
     </div>
   );
 }
