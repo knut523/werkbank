@@ -107,3 +107,25 @@ test('Jedes Ticket ein Ziel: eigenes Label oder vom Parent geerbt, Ausnahme ziel
   assert.deepEqual(sameLevelRemovals(['ziel-kr1', 'ziel-s0928-1', 'ziel-keins', 'ziel-quatsch', 'sprint-2026-09-28'], 'KR3'), ['ziel-kr1', 'ziel-keins']);
   assert.deepEqual(sameLevelRemovals(['ziel-kr1', 'ziel-s0928-1'], 'S0928-2'), ['ziel-s0928-1', ]);
 });
+
+test('Runde 7: lokale Zuordnung gewinnt vor Jira-Label, ziel-keins lokal, gelöscht = kein Ziel, Sub-task erbt lokal; Sprint lokal', async () => {
+  const { ownGoals, effectiveGoals, needsGoal, inSprint } = await import('../server/goals.ts');
+  const I = (key: string, o: any = {}) => ({ key, type: 'Task', status: 'To Do', statusCategory: 'new', parent: 'PM-70', labels: [], ...o });
+  const xs = [
+    I('PM-70', { type: 'Workstream', parent: null }),
+    I('PM-1', { labels: ['ziel-kr1'], localGoal: 'KR2' }),           // lokal gewinnt
+    I('PM-2', { type: 'Sub-task', parent: 'PM-1' }),                  // erbt lokal KR2
+    I('PM-3', { localGoal: 'KEINS' }),                                // Ausnahme lokal
+    I('PM-4', { labels: ['ziel-kr1'], localGoal: null }),             // lokal entfernt → Label zählt nicht
+    I('PM-5', { labels: ['ziel-kr1'] }),                              // nur Label (Fallback)
+  ];
+  const by = new Map(xs.map((x) => [x.key, x]));
+  assert.deepEqual(ownGoals(xs[1] as any), ['KR2']);
+  assert.deepEqual(effectiveGoals(xs[2] as any, by as any).goals, ['KR2']);
+  assert.equal(effectiveGoals(xs[3] as any, by as any).exempt, true);
+  assert.deepEqual(xs.filter((x) => needsGoal(x as any, by as any)).map((x) => x.key), ['PM-4']);
+  assert.deepEqual(ownGoals(xs[5] as any), ['KR1']);
+  assert.equal(inSprint({ labels: ['sprint-2026-09-28'] } as any, '2026-09-28'), true, 'Label als Fallback');
+  assert.equal(inSprint({ labels: ['sprint-2026-09-28'], localSprints: { '2026-09-28': false } } as any, '2026-09-28'), false, 'lokal rausgenommen');
+  assert.equal(inSprint({ labels: [], localSprints: { '2026-09-28': true } } as any, '2026-09-28'), true);
+});

@@ -149,3 +149,11 @@ test('Spec-Ordnung: Regel-Check je Spec (Frontmatter, jira:, Ziel, DoD, Knut-Zei
   for (const h of ['## Befund', '## Umsetzung', '## Messung', '## Definition of Done', '## Offene Punkte', '  - Knut:', 'lifecycle: backlog', 'domain: Anmeldestrecke', 'ziel: KR4', 'jira: [PM-5]', 'status: draft']) assert.ok(t.includes(h), h);
   assert.ok(!specTemplate({ topic: 'Cockpit', state: '1-Backlog', title: 'N', today: '2026-09-30' }).includes('## Messung'), 'Messung nur Anmeldestrecke');
 });
+
+test('Runde 7: jira: ist kein Mangel; Ziel aus lokaler Zuordnung', async () => {
+  const { specChecks } = await import('../server/roadmap.ts');
+  const sp = { name: 'x', topic: 'Cockpit', state: '1-Backlog', fm: {}, text: '', goals: [] };
+  const c = specChecks(sp as any, { rank: null, overviewText: '', consistency: [], ticketGoals: [], today: '2026-09-30', localGoal: 'KR2' } as any);
+  assert.deepEqual(c.goal, { ok: true, via: 'Werkbank', ids: ['KR2'] });
+  assert.equal(c.jira, false, 'nur Anzeige, zählt nicht als Mangel');
+});

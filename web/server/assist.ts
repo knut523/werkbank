@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { wb } from './db.ts';
 import { jiraIdentity, jiraCreds } from './creds.ts';
+import { attachLocal } from './local.ts';
 import { buildPack, inputsHash, approxTokens, hygieneBlock } from './context.ts';
 import { hygieneFor, freshState, pickQuestions, snooze, slotFor, touchedToday, vienna, type HygieneItem, type HygieneState } from './hygiene.ts';
 import { actionsFromText } from './syncplan.ts';
@@ -38,7 +39,8 @@ export const toolsEstimate = () => approxTokens(JSON.stringify(toolDefs({ vaultD
 const today = () => vienna().date;   // Tagesgrenze in Wien
 
 export async function allIssues(): Promise<Issue[]> {
-  return (await wb().collection('jira_issues').find({}, { projection: { _id: 0 } }).toArray()) as unknown as Issue[];
+  // Mit Werkbank-Zuordnung (Ziel, Sprint) — die gewinnt vor den Jira-Labels.
+  return attachLocal((await wb().collection('jira_issues').find({}, { projection: { _id: 0 } }).toArray()) as unknown as Issue[]);
 }
 
 export async function hygieneOf(u: User): Promise<{ items: HygieneItem[]; snoozed: string[] }> {

@@ -65,7 +65,7 @@ function Detail({ id }: { id: string }) {
         </div>
         <div className="card"><b>Tickets je Workstream</b>
           <table className="t small"><tbody>{x.perWorkstream.map((w: any) => <tr key={w.key}><td>{w.name}</td><td><Bar p={w} /></td></tr>)}</tbody></table>
-          {!x.perWorkstream.length && <p className="tiny">Noch keine Tickets zugeordnet (Label <code>ziel-{g.id.toLowerCase()}</code>).</p>}
+          {!x.perWorkstream.length && <p className="tiny">Noch keine Tickets zugeordnet (Ziele → „Ziele zuordnen“).</p>}
         </div>
       </div>
       <div className="card" style={{ marginTop: 10 }}><b>Bewertungsverlauf</b> <span className="tiny">aus „## Bewertung“</span>
@@ -78,12 +78,12 @@ function Detail({ id }: { id: string }) {
       </div>}
       <div className="card" style={{ marginTop: 10 }}><b>Tickets ({x.tickets.length})</b>
         {statuses.map((st) => <div key={st}><div className="small docs-h">{st} · {byStatus.get(st)!.length}</div><ul className="tlist">{byStatus.get(st)!.map((t: any) => <TicketLine key={t.key} t={t} />)}</ul></div>)}
-        {!x.tickets.length && <p className="tiny">Keine Tickets — über „Ziele zuordnen“ oder Label <code>ziel-{g.id.toLowerCase()}</code>.</p>}
+        {!x.tickets.length && <p className="tiny">Keine Tickets — über „Ziele zuordnen“.</p>}
       </div>
       <div className="card" style={{ marginTop: 10 }}><b>Specs und PRs ({x.specs.length})</b>
         <ul className="tlist">{x.specs.map((sp: any) => <li key={sp.path} className="trow"><a href={note(sp.path)}>{sp.title}</a> <span className="tiny">{sp.topic} · {sp.state.replace(/^\d-/, '')} · über {sp.via}</span>
           <span className="row" style={{ gap: 3 }}>{sp.prs.map((p: any) => <a key={p.pr} href={p.url} target="_blank" rel="noreferrer" className={`chip tiny-chip ${p.live?.conflict ? 'bad' : p.live?.review === 'APPROVED' ? 'ok' : p.live ? 'warn' : ''}`}>{p.pr.replace('olaf-', '')}{p.live ? (p.live.conflict ? ' ⚠ Konflikt' : ` · ${p.live.turn}`) : ' · zu'}</a>)}</span></li>)}</ul>
-        {!x.specs.length && <p className="tiny">Keine Spec mit <code>ziel: {g.id}</code> im Frontmatter oder mit einem zugeordneten Ticket.</p>}
+        {!x.specs.length && <p className="tiny">Keine Spec diesem Ziel zugeordnet (Werkbank, Frontmatter <code>ziel:</code> oder über Tickets).</p>}
       </div>
     </div>
   );
@@ -106,28 +106,39 @@ function Assign() {
   const G = { ...(init?.g ?? {}), ...goal }, S = { ...(init?.s ?? {}), ...sel }, W = { ...(init?.w ?? {}), ...why };
   const list = x.tickets.filter((t: any) => !q || `${t.key} ${t.summary} ${t.assignee ?? ''} ${t.workstreamName}`.toLowerCase().includes(q.toLowerCase()));
   const chosen = list.filter((t: any) => S[t.key] && G[t.key]);
+  const importProp = async (body: any, title: string) => {
+    setErr(null);
+    try {
+      const pre: any = await api('/api/goals/import', { body });
+      if (!pre.items.length) { toast('Nichts zu übernehmen'); return; }
+      if (!(await confirm({ title, confirmLabel: `${pre.items.length} übernehmen`, body: <><p className="small">Aus <code>{pre.file}</code>, gespeichert in der Werkbank (nicht Jira):</p><pre className="small" style={{ maxHeight: 280, overflow: 'auto' }}>{pre.items.map((i: any) => `${i.key} → ${i.goal}${i.begruendung ? ` — ${i.begruendung}` : ''}`).join('\n')}</pre></> }))) return;
+      const r: any = await api('/api/goals/import', { body: { ...body, confirm: true } });
+      toast(`${r.imported} übernommen`); setSel({}); setGoal({}); setWhy({}); d.reload();
+    } catch (e) { setErr(e); }
+  };
   const run = async () => {
     setErr(null);
     const items = chosen.map((t: any) => ({ key: t.key, goal: G[t.key], begruendung: W[t.key] }));
     try {
       const pre: any = await api('/api/goals/assign', { body: { items } });
-      if (!(await confirm({ title: `${items.length} Tickets Zielen zuordnen?`, confirmLabel: pre.dryRun ? 'Trockenlauf ausführen' : 'In Jira schreiben', body: <><p className="small">Jira-Labels (nur die Ebene des gewählten Ziels wird ersetzt):</p><pre className="small" style={{ maxHeight: 280, overflow: 'auto' }}>{pre.preview.join('\n')}</pre>{pre.dryRun && <p className="note small">Vorschau: <b>Trockenlauf</b> — nichts wird geschrieben.</p>}</> }))) return;
+      if (!(await confirm({ title: `${items.length} Tickets Zielen zuordnen?`, confirmLabel: 'In der Werkbank speichern', body: <><p className="small">Die Zuordnung wird <b>in der Werkbank</b> gespeichert (mit Verlauf), nicht in Jira{pre.toJira ? ' — zusätzlich Jira-Labels (WERKBANK_GOALS_TO_JIRA=labels)' : ''}:</p><pre className="small" style={{ maxHeight: 280, overflow: 'auto' }}>{pre.preview.join('\n')}</pre></> }))) return;
       const r: any = await api('/api/goals/assign', { body: { items, confirm: true } });
       const bad = r.results.filter((y: any) => !y.ok);
-      toast(`${r.results.length - bad.length} ${r.dryRun ? 'im Trockenlauf' : 'zugeordnet'}${bad.length ? `, ${bad.length} Fehler` : ''}`);
+      toast(`${r.results.length - bad.length} zugeordnet (Werkbank)${bad.length ? `, ${bad.length} Fehler` : ''}`);
       if (bad.length) setErr(new Error(bad.map((y: any) => `${y.key}: ${y.error}`).join(' · ')));
       setSel({}); setGoal({}); setWhy({}); d.reload();
     } catch (e) { setErr(e); }
   };
   return (
     <>
-      <p className="small muted">Offene Tickets ohne Ziel-Label (auch nicht vom Parent geerbt). Ausnahme: <code>{x.labels.exempt}</code> mit Begründung als Kommentar. {x.proposals > 0 ? <>Vorausgewählt: <b>{x.proposals}</b> Vorschläge aus <code>{x.proposalFile}</code>.</> : <>Keine Vorschlagsdatei unter <code>{x.proposalFile}</code>.</>}{x.proposalError && <span className="chip bad">{x.proposalError}</span>}</p>
+      <p className="small muted">Offene Tickets ohne Ziel (Werkbank-Zuordnung oder Jira-Label, auch nicht vom Parent geerbt). Gespeichert wird <b>in der Werkbank</b>, nicht in Jira. „Bewusst ohne Ziel“ nur mit Begründung. {x.proposals > 0 ? <>Vorausgewählt: <b>{x.proposals}</b> Vorschläge aus <code>{x.proposalFile}</code>.</> : <>Keine Vorschlagsdatei unter <code>{x.proposalFile}</code>.</>}{x.proposalError && <span className="chip bad">{x.proposalError}</span>}</p>
       <div className="row" style={{ marginBottom: 8 }}>
         <input type="search" placeholder="Suchen …" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tickets filtern" />
         <select value={bulk} onChange={(e) => setBulk(e.target.value)} aria-label="Ziel für Auswahl"><option value="">Ziel für alle gewählten …</option>{x.goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 50)}</option>)}</select>
         <button className="btn small" disabled={!bulk} onClick={() => { const n = { ...goal }; for (const t of list) if (S[t.key]) n[t.key] = bulk; setGoal(n); }}>übernehmen</button>
         <button className="btn small" onClick={() => { const n: Record<string, boolean> = {}; for (const t of list) n[t.key] = true; setSel(n); }}>alle wählen</button>
         <button className="btn primary" disabled={!chosen.length} onClick={run}>Zuordnen ({chosen.length})</button>
+        {x.proposals > 0 && <button className="btn" data-testid="import-high" onClick={() => importProp({ mode: 'hoch' }, 'Vorschlag übernehmen (alle mit Sicherheit hoch)?')}>Vorschlag übernehmen (alle mit Sicherheit hoch)</button>}
       </div>
       <Err e={err} />
       <table className="t small" data-testid="assign-table">
@@ -146,7 +157,7 @@ function Assign() {
               </select>
               {G[t.key] === 'KEINS' && <input placeholder="Begründung (Kommentar)" value={W[t.key] ?? ''} onChange={(e) => setWhy({ ...W, [t.key]: e.target.value })} aria-label={`Begründung ${t.key}`} style={{ marginTop: 4, width: '100%' }} />}
             </td>
-            <td className="tiny">{t.proposal ? <><b>{t.proposal.ziel}</b>{t.proposal.sicherheit != null && ` · ${typeof t.proposal.sicherheit === 'number' ? `${Math.round(t.proposal.sicherheit <= 1 ? t.proposal.sicherheit * 100 : t.proposal.sicherheit)} %` : `Sicherheit ${t.proposal.sicherheit}`}`}<div>{t.proposal.begruendung}</div></> : '—'}</td>
+            <td className="tiny">{t.proposal ? <><button className="btn ghost small" title="diesen Vorschlag einzeln übernehmen" onClick={() => importProp({ mode: 'keys', keys: [t.key] }, `Vorschlag für ${t.key} übernehmen?`)}>übernehmen</button> <b>{t.proposal.ziel}</b>{t.proposal.sicherheit != null && ` · ${typeof t.proposal.sicherheit === 'number' ? `${Math.round(t.proposal.sicherheit <= 1 ? t.proposal.sicherheit * 100 : t.proposal.sicherheit)} %` : `Sicherheit ${t.proposal.sicherheit}`}`}<div>{t.proposal.begruendung}</div></> : '—'}</td>
           </tr>
         ))}</tbody>
       </table>

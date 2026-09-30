@@ -25,18 +25,20 @@ import { log } from './log.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, type JiraAction } from './jirawrite.ts';
-import { jiraEventStream } from './events.ts';
+import { jiraEventStream, jiraChanged } from './events.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
+import { attachLocal, setGoal, setSprint, goalHistory, assignments, goalsToJira } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
 import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './timebox.ts';
 import { isMine, resolveIdentity, vienna } from './hygiene.ts';
 import { ObjectId } from 'mongodb';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
-import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, type GoalNode } from './goals.ts';
+import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, type GoalNode } from './goals.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
+const specCreate = () => process.env.WERKBANK_SPEC_CREATE === 'on';   // „Neue Spec“: Standard aus (Knut, 30.09.)
 const vaultDry = () => process.env.WERKBANK_VAULT_DRYRUN === '1' || process.env.WERKBANK_DRYRUN === '1';
 const FONTS = join(cfg.librechatDist, 'client', 'public', 'fonts');
 const TEMPLATES = join(WB_ROOT, 'templates', 'sprint');
@@ -82,7 +84,8 @@ function vaultPath(rel: string): string {
 }
 
 async function issueMap(): Promise<Map<string, Issue>> {
-  const all = (await wb().collection('jira_issues').find({}, { projection: { _id: 0 } }).toArray()) as unknown as Issue[];
+  // Jira-Kopie + Werkbank-Zuordnung (Ziel/Sprint lokal, Runde 7).
+  const all = await attachLocal((await wb().collection('jira_issues').find({}, { projection: { _id: 0 } }).toArray()) as unknown as Issue[]);
   return new Map(all.map((i) => [i.key, i]));
 }
 
@@ -190,7 +193,7 @@ async function sprintView(id: string) {
 // ---------- Ziele & Sprint (Zielbaum, Im Sprint, Kandidaten) ----------
 
 const GOALS_FILE = () => process.env.WERKBANK_GOALS_FILE || 'olaf/1-Projects/ziele-olaf.md';
-const tinyIssue = (i: Issue, im?: Map<string, Issue>) => ({ noGoal: im ? needsGoal(i, im) : undefined, key: i.key, summary: i.summary, status: i.status, statusCategory: i.statusCategory, assignee: i.assignee, duedate: i.duedate, type: i.type, labels: i.labels ?? [], goals: goalsOf(i.labels), overdue: isOverdue(i), blockedBy: i.blockedBy ?? [] });
+const tinyIssue = (i: Issue, im?: Map<string, Issue>, known?: Set<string>) => ({ noGoal: im ? needsGoal(i, im, known) : undefined, key: i.key, summary: i.summary, status: i.status, statusCategory: i.statusCategory, assignee: i.assignee, duedate: i.duedate, type: i.type, labels: i.labels ?? [], goals: ownGoals(i), overdue: isOverdue(i), blockedBy: i.blockedBy ?? [] });
 const stripTree = (n: GoalNode): any => ({ ...n, children: n.children.map(stripTree) });
 
 function goalsView(c: { id: string; date: string }, files: Record<string, any>, im: Map<string, Issue>) {
@@ -207,9 +210,11 @@ function goalsView(c: { id: string; date: string }, files: Record<string, any>, 
   const label = sprintLabel(c.date);
   const members = issues.filter((i) => i.type !== 'Workstream' && inSprint(i, c.date));
   const sprintIds = new Set(sprintGoals.map((g) => g.id));
-  const groups = sprintGoals.map((g) => ({ goal: { id: g.id, result: g.result }, tickets: members.filter((i) => goalsOf(i.labels).includes(g.id) || g.tickets.includes(i.key)).map((i) => tinyIssue(i, im)) }));
-  const otherGoal = members.filter((i) => !groups.some((gr) => gr.tickets.some((t) => t.key === i.key)) && goalsOf(i.labels).length);
-  const noGoal = members.filter((i) => !groups.some((gr) => gr.tickets.some((t) => t.key === i.key)) && !goalsOf(i.labels).length);
+  const known = new Set(byId.keys());
+  const eff = (i: Issue) => effectiveGoals(i, im, known).goals;
+  const groups = sprintGoals.map((g) => ({ goal: { id: g.id, result: g.result }, tickets: members.filter((i) => eff(i).includes(g.id) || g.tickets.includes(i.key)).map((i) => tinyIssue(i, im, known)) }));
+  const otherGoal = members.filter((i) => !groups.some((gr) => gr.tickets.some((t) => t.key === i.key)) && eff(i).length);
+  const noGoal = members.filter((i) => !groups.some((gr) => gr.tickets.some((t) => t.key === i.key)) && !eff(i).length);
   // Kandidaten: Mitnahme (→ mitnehmen mit Ticket), Tickets der Sprintziele/Monatsziele, überfällige, Top-Rang-Specs — nicht im Sprint.
   const why = new Map<string, Set<string>>();
   const add = (k: string, w: string) => { const i = im.get(k); if (!i || i.type === 'Workstream' || i.status === 'Done' || i.statusCategory === 'done' || inSprint(i, c.date)) return; if (!why.has(k)) why.set(k, new Set()); why.get(k)!.add(w); };
@@ -221,7 +226,7 @@ function goalsView(c: { id: string; date: string }, files: Record<string, any>, 
   for (const r of parseRankTable(readVault(`${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`)).filter((r) => r.rank <= 10)) {
     for (const k of nameToPath.get(r.spec)?.tickets ?? []) add(k, `Rang ${r.rank}`);
   }
-  const candidates = [...why.entries()].map(([k, w]) => ({ ...tinyIssue(im.get(k)!, im), why: [...w] }))
+  const candidates = [...why.entries()].map(([k, w]) => ({ ...tinyIssue(im.get(k)!, im, known), why: [...w] }))
     .sort((a, b) => Number(b.why.includes('Mitnahme')) - Number(a.why.includes('Mitnahme')) || b.why.length - a.why.length || a.key.localeCompare(b.key, 'de', { numeric: true }));
   return {
     goals: {
@@ -230,7 +235,7 @@ function goalsView(c: { id: string; date: string }, files: Record<string, any>, 
       labels: { sprint: label, goalPrefix: labelCfg().goalPrefix, sprintPrefix: labelCfg().sprintPrefix },
       goalIds: [...byId.values()].filter((n) => n.level !== 'Gate').map((n) => ({ id: n.id, level: n.level, result: valueOf(n.result) ?? n.id })),
     },
-    inSprint: { label, count: members.length, groups, otherGoal: otherGoal.map((i) => tinyIssue(i, im)), noGoal: noGoal.map((i) => tinyIssue(i, im)) },
+    inSprint: { label, count: members.length, groups, otherGoal: otherGoal.map((i) => tinyIssue(i, im, known)), noGoal: noGoal.map((i) => tinyIssue(i, im, known)) },
     candidates: candidates.slice(0, 60),
     dryRun: dryRun(),
   };
@@ -274,7 +279,7 @@ function loadProposals(): { map: Map<string, { ziel: string; begruendung: string
 }
 
 const wsName = (im: Map<string, Issue>, k?: string | null) => (k ? im.get(k)?.summary ?? k : 'Ohne Workstream');
-const richIssue = (im: Map<string, Issue>, i: Issue) => ({ ...tinyIssue(i, im), statusSince: i.statusSince ?? null, priority: i.priority, workstream: i.workstream ?? null, workstreamName: wsName(im, i.workstream), parent: i.parent, noGoal: needsGoal(i, im), recurring: isRecurring(i) });
+const richIssue = (im: Map<string, Issue>, i: Issue, known?: Set<string>) => ({ ...tinyIssue(i, im, known), statusSince: i.statusSince ?? null, priority: i.priority, workstream: i.workstream ?? null, workstreamName: wsName(im, i.workstream), parent: i.parent, noGoal: needsGoal(i, im, known), recurring: isRecurring(i) });
 
 // ---------- Routen ----------
 
@@ -289,7 +294,7 @@ on('GET', /^\/api\/config$/, async (req, res) => {
   send(res, 200, {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: !!process.env.WERKBANK_FORGE_MCP,
     jiraSite: cfg.jiraSite, project: cfg.jiraProject, vault: cfg.vaultDir,
-    dryRun: dryRun(), vaultDryRun: vaultDry(),
+    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(),
   });
 });
 
@@ -423,7 +428,7 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
   for (const r of await wb().collection('agent_runs').find({ status: { $in: ['läuft', 'wartet auf ja'] } }, { projection: { key: 1, status: 1 } }).toArray() as any[]) {
     if (running.get(r.key) !== 'wartet auf ja') running.set(r.key, r.status);
   }
-  const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [], agent: running.get(i.key) ?? null, goals: goalsOf(i.labels) }));
+  const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [], agent: running.get(i.key) ?? null, goals: ownGoals(i) }));
   const curCycle = cycles().find((c) => !c.archived);
   const sprintOnly = url.searchParams.get('sprint') === '1' && curCycle ? sprintLabel(curCycle.date) : undefined;
   const filter = url.searchParams.get('filter') || undefined;
@@ -572,17 +577,20 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/edit$/, async (req, res,
     if (acc && !name) throw new HttpError(400, 'Unbekannte Person (nur Personen aus der Jira-Kopie).');
     if (acc !== (i.assigneeId ?? null)) actions.push({ type: 'assignee', accountId: acc, name: name ?? undefined });
   }
+  // Ziel: lokal in der Werkbank (Runde 7), nicht als Jira-Label.
+  let goal: string | null = null;
   if (b.goal !== undefined && b.goal !== '') {
-    const goal = String(b.goal).toUpperCase();
+    goal = String(b.goal).toUpperCase();
     const g = goalsAll(im);
     if (!g.byId.has(goal) || goalLevel(goal) === 'Gate') throw new HttpError(400, `Unbekanntes Ziel ${goal}.`);
-    actions.push({ type: 'labels', add: [goalLabel(goal)], remove: sameLevelRemovals(i.labels ?? [], goal), replaceLevelOf: goal });
   }
-  if (!actions.length) return send(res, 200, { ok: true, nothing: true });
-  const preview = `${i.key}: ${actions.map(describe).join(' · ')}`;
-  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview, dryRun: dryRun() });
-  const w = await jiraWrite(u, () => writeJira(u, i.key, actions));
-  send(res, 200, { ok: true, preview, done: w.done, dryRun: w.dryRun ?? false, calls: w.calls, issue: (await issueMap()).get(i.key) ?? null });
+  if (!actions.length && !goal) return send(res, 200, { ok: true, nothing: true });
+  const preview = `${i.key}: ${[...actions.map(describe), ...(goal ? [`Ziel → ${goal} (Werkbank)`] : [])].join(' · ')}`;
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview, dryRun: dryRun() && actions.length > 0 });
+  const done: string[] = [];
+  if (goal) { await assignGoals(u, [{ key: i.key, goal }], im, true); done.push(`Ziel → ${goal} (Werkbank)`); }
+  const w = actions.length ? await jiraWrite(u, () => writeJira(u, i.key, actions)) : null;
+  send(res, 200, { ok: true, preview, done: [...(w?.done ?? []), ...done], dryRun: w?.dryRun ?? false, calls: w?.calls, issue: (await issueMap()).get(i.key) ?? null });
 });
 
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res, m) => {
@@ -742,17 +750,19 @@ function runRoadmapCheck(): Promise<any> {
 const readVault = (rel: string) => { try { return readFileSync(join(cfg.vaultDir, rel), 'utf8'); } catch { return ''; } };
 
 /** Alle Specs der Roadmap (Thema/Zustand aus den Ordnern) mit Frontmatter, Tickets, PRs, Ziel (Frontmatter ziel:). */
-function roadmapSpecs() {
+function roadmapSpecs(local?: Map<string, { ziel: string | null }>) {
   const idx = vaultIdx();
   const rm = roadmap(idx, ROADMAP_BASE);
-  const out: { name: string; title: string; path: string; topic: string; state: string; fm: Record<string, unknown>; tickets: string[]; prs: string[]; goals: string[]; text: string; overview?: string }[] = [];
+  const out: { name: string; title: string; path: string; topic: string; state: string; fm: Record<string, unknown>; tickets: string[]; prs: string[]; goals: string[]; goalVia: 'Werkbank' | 'ziel:' | null; text: string; overview?: string }[] = [];
   for (const t of rm.topics) for (const [state, specs] of Object.entries(t.states)) for (const sp of specs) {
     const n = idx.notes.get(sp.path);
     if (!n) continue;
     const text = readVault(sp.path);
     const z = n.fm.ziel;
     const goals = (Array.isArray(z) ? z : z != null ? String(z).split(/[,\s]+/) : []).map((x) => String(x).replace(/^ziel-/i, '').trim().toUpperCase()).filter((x) => GOAL_ID.test(x));
-    out.push({ name: n.name, title: sp.title, path: sp.path, topic: t.name, state, fm: n.fm, tickets: n.tickets, prs: prRefs(text), goals, text, overview: t.overview });
+    const loc = local?.get(sp.path);
+    const lg = loc && loc.ziel && GOAL_ID.test(loc.ziel) ? [loc.ziel] : loc ? [] : null;   // lokal gewinnt (auch „entfernt“)
+    out.push({ name: n.name, title: sp.title, path: sp.path, topic: t.name, state, fm: n.fm, tickets: n.tickets, prs: prRefs(text), goals: lg ?? goals, goalVia: lg ? 'Werkbank' : goals.length ? 'ziel:' : null, text, overview: t.overview });
   }
   return out;
 }
@@ -846,7 +856,7 @@ on('POST', /^\/api\/roadmap\/github$/, async (req, res) => {
 on('GET', /^\/api\/roadmap\/order$/, async (req, res) => {
   await needUser(req);
   const im = await issueMap();
-  const specs = roadmapSpecs();
+  const specs = roadmapSpecs(await assignments('spec'));
   const ranking = parseRankTable(readVault(`${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`));
   const rankOf = new Map(ranking.map((r) => [r.spec, r.rank]));
   const infos = specs.map((sp) => ({ ...sp, tickets: sp.tickets.map((k) => ({ key: k, status: im.get(k)?.status ?? null })), jiraKey: true, rank: null }));
@@ -857,7 +867,7 @@ on('GET', /^\/api\/roadmap\/order$/, async (req, res) => {
   const rows = specs.map((sp) => {
     const ticketGoals = [...new Set(sp.tickets.flatMap((k) => { const i = im.get(k); return i ? effectiveGoals(i, im).goals : []; }))];
     if (sp.overview && !ovCache.has(sp.overview)) ovCache.set(sp.overview, readVault(sp.overview));
-    const checks = specChecks(sp, { rank: rankOf.get(sp.name) ?? null, overviewText: sp.overview ? ovCache.get(sp.overview)! : '', consistency: cons.filter((c) => c.spec === sp.name), ticketGoals, today });
+    const checks = specChecks({ ...sp, goals: sp.goalVia === 'ziel:' ? sp.goals : [] }, { rank: rankOf.get(sp.name) ?? null, overviewText: sp.overview ? ovCache.get(sp.overview)! : '', consistency: cons.filter((c) => c.spec === sp.name), ticketGoals, today, localGoal: sp.goalVia === 'Werkbank' ? sp.goals[0] : undefined });
     return {
       name: sp.name, title: sp.title, path: sp.path, topic: sp.topic, state: sp.state, lastVerified: sp.fm['last-verified'] ?? null,
       tickets: sp.tickets.map((k) => ({ key: k, status: im.get(k)?.status ?? null })),
@@ -868,8 +878,8 @@ on('GET', /^\/api\/roadmap\/order$/, async (req, res) => {
   const n = (f: (r: typeof rows[number]) => boolean) => rows.filter(f).length;
   send(res, 200, {
     specs: rows, states: KANBAN_STATES, topics: [...new Set(rows.map((r) => r.topic))],
-    summary: { total: rows.length, noJira: n((r) => !r.checks.jira), noGoal: n((r) => !r.checks.goal.ok), noDod: n((r) => !r.checks.dod), fmBad: n((r) => !r.checks.fm.ok), unranked: n((r) => r.checks.rank == null), inconsistent: n((r) => !r.checks.consistent), notInOverview: n((r) => !r.checks.inOverview), openDecisions: rows.reduce((a, r) => a + r.checks.openDecisions, 0) },
-    vaultDryRun: vaultDry(),
+    summary: { total: rows.length, withJira: n((r) => r.checks.jira), noGoal: n((r) => !r.checks.goal.ok), noDod: n((r) => !r.checks.dod), fmBad: n((r) => !r.checks.fm.ok), unranked: n((r) => r.checks.rank == null), inconsistent: n((r) => !r.checks.consistent), notInOverview: n((r) => !r.checks.inOverview), openDecisions: rows.reduce((a, r) => a + r.checks.openDecisions, 0) },
+    vaultDryRun: vaultDry(), specCreate: specCreate(),
   });
 });
 
@@ -929,7 +939,8 @@ on('POST', /^\/api\/roadmap\/spec-new$/, async (req, res) => {
   if (existsSync(abs)) throw new HttpError(409, `${rel} gibt es schon.`);
   const content = specTemplate({ topic, state, title, goal, jira: jiraKey, today: vienna().date, overview: t.overview?.split('/').pop()?.replace(/\.md$/, '') });
   const follow = ['Zustandsseite ergänzen', 'Hub: Zählzeile + Kreuztabelle', 'Themen-Übersicht: Link + Zahlen', 'Priorisierung: rank.py-Zeile', 'roadmap_check.py'];
-  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: { path: rel, content, follow }, dryRun: vaultDry() });
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: { path: rel, content, follow }, dryRun: vaultDry(), copyOnly: !specCreate() });
+  if (!specCreate()) throw new HttpError(403, '„Neue Spec“ ist abgeschaltet (WERKBANK_SPEC_CREATE=on schaltet ein) — bitte die Vorlage als Text kopieren.');
   if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: rel, follow });
   mkdirSync(join(cfg.vaultDir, ROADMAP_BASE, topic, state), { recursive: true });
   writeFileSync(abs, content, { flag: 'wx' });
@@ -1048,7 +1059,24 @@ on('POST', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/apply$/, async (req, res
 });
 
 // Sprint-Mitgliedschaft / Ziel zuordnen = Jira-Labels (nur Sprint-/Ziel-Labels, nur nach Bestätigung, Trockenlauf in der Vorschau).
+// Sprint-Mitgliedschaft lokal (Runde 7): in Sprint nehmen / rausnehmen, mit Bestätigung, nichts nach Jira.
+on('POST', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/member$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const c = cycleById(m[1]);
+  const key = String(b.key ?? '');
+  if (!(await issueMap()).has(key)) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  const member = b.in !== false;
+  const preview = member ? `${key} → Sprint ${c.date}` : `${key} aus Sprint ${c.date} nehmen`;
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview });
+  await setSprint(u, key, c.date, member);
+  jiraChanged([key], 'sprint');
+  send(res, 200, { ok: true, preview });
+});
+
+// Alter Label-Weg nach Jira: nur mit WERKBANK_GOALS_TO_JIRA=labels.
 on('POST', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/labels$/, async (req, res, m) => {
+  if (!goalsToJira()) throw new HttpError(410, 'Sprint und Ziel werden in der Werkbank gespeichert, nicht als Jira-Label (WERKBANK_GOALS_TO_JIRA=labels schaltet den alten Weg ein).');
   const u = await needUser(req);
   const b = await body(req);
   const c = cycleById(m[1]);
@@ -1110,7 +1138,7 @@ on('GET', /^\/api\/goals\/assign$/, async (req, res) => {
   const known = knownGoals(g);
   // Nur Vorschläge auf bestehende, zuordenbare Ziele (kein Gate) oder KEINS vorauswählen.
   const usable = (x: any) => x && (x.ziel === 'KEINS' || (known.has(x.ziel) && goalLevel(x.ziel) !== 'Gate'));
-  const tickets = [...im.values()].filter((i) => needsGoal(i, im, known)).map((i) => ({ ...richIssue(im, i), proposal: usable(p.map.get(i.key)) ? p.map.get(i.key)! : null }))
+  const tickets = [...im.values()].filter((i) => needsGoal(i, im, known)).map((i) => ({ ...richIssue(im, i, known), proposal: usable(p.map.get(i.key)) ? p.map.get(i.key)! : null }))
     .sort((a, b) => a.workstreamName.localeCompare(b.workstreamName, 'de') || a.key.localeCompare(b.key, 'de', { numeric: true }));
   send(res, 200, {
     tickets, proposalFile: p.file, proposalError: p.error, proposals: tickets.filter((t) => t.proposal).length,
@@ -1119,40 +1147,86 @@ on('GET', /^\/api\/goals\/assign$/, async (req, res) => {
   });
 });
 
-// Sammelaktion: je Ticket Ziel-Label derselben Ebene ersetzen; „KEINS“ = Ausnahme-Label + Begründung als Kommentar.
+// Sammelaktion (Runde 7): Zuordnung lokal in der Werkbank (goal_assignments + Verlauf), NICHT in Jira.
+// „KEINS“ = bewusst ohne Ziel, nur mit Begründung. goal '' = lokale Zuordnung entfernen (Jira-Labels zählen dann nicht).
+// WERKBANK_GOALS_TO_JIRA=labels schreibt zusätzlich die Labels wie früher (Standard: aus).
+async function assignGoals(u: User, items: any[], im: Map<string, Issue>, confirm: boolean, source = 'werkbank') {
+  const g = goalsAll(im);
+  const known = knownGoals(g);
+  const plan: { key: string; goal: string | null; why: string; text: string; actions: JiraAction[] }[] = [];
+  for (const it of items) {
+    const key = String(it.key ?? ''), raw = String(it.goal ?? '').toUpperCase();
+    const i = im.get(key);
+    if (!i) throw new HttpError(404, `${key} nicht in der Kopie.`);
+    const why = String(it.begruendung ?? '').replace(/\s+/g, ' ').trim();
+    if (raw === 'KEINS') {
+      if (why.length < 5) throw new HttpError(400, `${key}: „bewusst ohne Ziel“ braucht eine Begründung.`);
+      if (effectiveGoals(i, im, known).goals.length && i.localGoal === undefined) throw new HttpError(400, `${key} hat schon ein Ziel — „ohne Ziel“ passt nicht.`);
+      plan.push({ key, goal: 'KEINS', why, text: `${key} → bewusst ohne Ziel („${why.slice(0, 80)}“)`, actions: [{ type: 'comment', text: `Bewusst ohne Ziel (${exemptLabel()}): ${why}` }, { type: 'labels', add: [exemptLabel()], remove: [] }] });
+      continue;
+    }
+    if (raw === '') { plan.push({ key, goal: null, why, text: `${key} → Zuordnung entfernen`, actions: [] }); continue; }
+    if (!g.byId.has(raw) || goalLevel(raw) === 'Gate') throw new HttpError(400, `${key}: unbekanntes Ziel ${raw}.`);
+    plan.push({ key, goal: raw, why, text: `${key} → ${raw}${why ? ` („${why.slice(0, 60)}“)` : ''}`, actions: [{ type: 'labels', add: [goalLabel(raw)], remove: sameLevelRemovals(i.labels ?? [], raw), replaceLevelOf: raw }] });
+  }
+  if (!confirm) return { needsConfirm: true, preview: plan.map((p) => p.text), toJira: goalsToJira(), dryRun: dryRun() };
+  const results: any[] = [];
+  for (const p of plan) {
+    try {
+      const r = await setGoal(u, p.key, 'ticket', p.goal, p.why, source);
+      let jira: any = null;
+      if (goalsToJira() && p.actions.length) jira = await jiraWrite(u, () => writeJira(u, p.key, p.actions));
+      results.push({ key: p.key, ok: true, goal: p.goal, prev: r.prev ?? null, jira: jira ? { done: jira.done, dryRun: jira.dryRun ?? false } : null });
+    } catch (e: any) { results.push({ key: p.key, ok: false, error: String(e.message).slice(0, 300) }); }
+  }
+  log('ziele zuordnen (lokal)', { user: u.id, n: results.length, ok: results.filter((r) => r.ok).length, source });
+  jiraChanged(results.filter((r) => r.ok).map((r) => r.key), 'ziel');
+  return { ok: true, results, toJira: goalsToJira() };
+}
+
 on('POST', /^\/api\/goals\/assign$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const items = (Array.isArray(b.items) ? b.items : []).slice(0, 200);
+  if (!items.length) throw new HttpError(400, 'Keine Tickets gewählt.');
+  send(res, 200, await assignGoals(u, items, await issueMap(), b.confirm === true));
+});
+
+// Vorschlagsdatei übernehmen: mode 'hoch' = alle mit Sicherheit hoch (oder ≥ 0,8), mode 'keys' = die genannten.
+on('POST', /^\/api\/goals\/import$/, async (req, res) => {
   const u = await needUser(req);
   const b = await body(req);
   const im = await issueMap();
   const g = goalsAll(im);
-  const items = (Array.isArray(b.items) ? b.items : []).slice(0, 100);
-  if (!items.length) throw new HttpError(400, 'Keine Tickets gewählt.');
-  const plan: { key: string; actions: JiraAction[]; text: string }[] = [];
-  for (const it of items) {
-    const key = String(it.key ?? ''), goal = String(it.goal ?? '').toUpperCase();
-    const i = im.get(key);
-    if (!i) throw new HttpError(404, `${key} nicht in der Kopie.`);
-    if (goal === 'KEINS') {
-      const why = String(it.begruendung ?? '').replace(/\s+/g, ' ').trim();
-      if (why.length < 5) throw new HttpError(400, `${key}: „ohne Ziel (${exemptLabel()})“ braucht eine Begründung.`);
-      if (effectiveGoals(i, im, knownGoals(g)).goals.length) throw new HttpError(400, `${key} hat schon ein Ziel — „ohne Ziel“ passt nicht.`);
-      // Erst die Begründung, dann das Label: scheitert der Kommentar, bleibt das Ticket ohne Ausnahme (statt Ausnahme ohne Grund).
-      const actions: JiraAction[] = [{ type: 'comment', text: `Bewusst ohne Ziel (${exemptLabel()}): ${why}` }, { type: 'labels', add: [exemptLabel()], remove: [] }];
-      plan.push({ key, actions, text: `${key}: +${exemptLabel()} · Kommentar „${why.slice(0, 80)}“` });
-      continue;
-    }
-    if (!g.byId.has(goal) || goalLevel(goal) === 'Gate') throw new HttpError(400, `${key}: unbekanntes Ziel ${goal}.`);
-    const action: JiraAction = { type: 'labels', add: [goalLabel(goal)], remove: sameLevelRemovals(i.labels ?? [], goal), replaceLevelOf: goal };
-    plan.push({ key, actions: [action], text: `${key}: ${describe(action)}` });
-  }
-  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: plan.map((p) => p.text), dryRun: dryRun() });
-  const results: any[] = [];
-  for (const p of plan) {
-    try { const r = await jiraWrite(u, () => writeJira(u, p.key, p.actions)); results.push({ key: p.key, ok: true, done: r.done, dryRun: r.dryRun ?? false, calls: r.calls }); }
-    catch (e: any) { results.push({ key: p.key, ok: false, error: String(e.message).slice(0, 300) }); }
-  }
-  log('ziele zuordnen', { user: u.id, n: results.length, ok: results.filter((r) => r.ok).length });
-  send(res, 200, { ok: true, results, dryRun: dryRun() });
+  const known = knownGoals(g);
+  const p = loadProposals();
+  const high = (x: any) => (typeof x === 'number' ? (x <= 1 ? x >= 0.8 : x >= 80) : /^(hoch|high|sicher)$/i.test(String(x ?? '')));
+  const keys = b.mode === 'keys' ? new Set((Array.isArray(b.keys) ? b.keys : []).map(String)) : null;
+  const items = [...p.map.entries()].filter(([k, x]) => im.has(k) && needsGoal(im.get(k)!, im, known) && (keys ? keys.has(k) : high(x.sicherheit)) && (x.ziel === 'KEINS' ? x.begruendung.length >= 5 : known.has(x.ziel) && goalLevel(x.ziel) !== 'Gate'))
+    .map(([k, x]) => ({ key: k, goal: x.ziel, begruendung: x.begruendung }));
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, items, file: p.file });
+  const r = await assignGoals(u, items, im, true, 'vorschlag');
+  send(res, 200, { ...r, imported: (r as any).results.filter((x: any) => x.ok).length });
+});
+
+on('GET', /^\/api\/goals\/history\/(.+)$/, async (req, res, m) => {
+  await needUser(req);
+  send(res, 200, { entries: await goalHistory(decodeURIComponent(m[1])) });
+});
+
+// Spec lokal einem Ziel zuordnen (key = Spec-Pfad) — niemand muss 115 Frontmatter pflegen.
+on('POST', /^\/api\/goals\/assign-spec$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const sp = roadmapSpecs().find((x) => x.path === String(b.path ?? ''));
+  if (!sp) throw new HttpError(404, 'Spec nicht gefunden.');
+  const goal = String(b.goal ?? '').toUpperCase();
+  const g = goalsAll(await issueMap());
+  if (goal && (!g.byId.has(goal) || goalLevel(goal) === 'Gate')) throw new HttpError(400, `Unbekanntes Ziel ${goal}.`);
+  const preview = `${sp.name} → ${goal || 'Zuordnung entfernen'}`;
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview });
+  await setGoal(u, sp.path, 'spec', goal || null, String(b.begruendung ?? ''));
+  send(res, 200, { ok: true, preview });
 });
 
 on('GET', /^\/api\/goals\/([A-Za-z0-9-]{2,20})$/, async (req, res, m) => {
@@ -1173,15 +1247,15 @@ on('GET', /^\/api\/goals\/([A-Za-z0-9-]{2,20})$/, async (req, res, m) => {
     for (const k of goalNode.tickets) if (im.has(k) && !via.has(k)) via.set(k, `${goalNode.id} · Beleg`);
   };
   claim(n); for (const d of desc) claim(d);
-  const tickets = [...via.entries()].map(([k, v]) => ({ ...richIssue(im, im.get(k)!), via: v }));
+  const tickets = [...via.entries()].map(([k, v]) => ({ ...richIssue(im, im.get(k)!, knownGoals(g)), via: v }));
   const open = tickets.filter((t) => t.status !== 'Done' && t.statusCategory !== 'done');
   const perWs = new Map<string, { name: string; done: number; total: number }>();
   for (const t of tickets) { const w = perWs.get(t.workstream ?? '—') ?? { name: t.workstreamName, done: 0, total: 0 }; w.total++; if (t.status === 'Done' || t.statusCategory === 'done') w.done++; perWs.set(t.workstream ?? '—', w); }
   // Specs: Frontmatter ziel: oder über Tickets; PRs mit Live-Zustand.
   const keys = new Set(tickets.map((t) => t.key));
   const gh = await livePrs();
-  const specs = roadmapSpecs().filter((sp) => sp.goals.includes(id) || sp.tickets.some((k) => keys.has(k)))
-    .map((sp) => ({ name: sp.name, title: sp.title, path: sp.path, topic: sp.topic, state: sp.state, via: sp.goals.includes(id) ? 'ziel:' : 'Ticket', prs: sp.prs.map((pr) => { const l = gh.map.get(pr); return { pr, url: l?.url ?? `https://github.com/WirStrom1/${pr.replace('#', '/pull/')}`, live: l ? { conflict: l.mergeable === 'CONFLICTING', draft: l.isDraft, review: l.reviewDecision, turn: l.turn.who } : null }; }) }));
+  const specs = roadmapSpecs(await assignments('spec')).filter((sp) => sp.goals.includes(id) || sp.tickets.some((k) => keys.has(k)))
+    .map((sp) => ({ name: sp.name, title: sp.title, path: sp.path, topic: sp.topic, state: sp.state, via: sp.goals.includes(id) ? (sp.goalVia ?? 'ziel:') : 'Ticket', prs: sp.prs.map((pr) => { const l = gh.map.get(pr); return { pr, url: l?.url ?? `https://github.com/WirStrom1/${pr.replace('#', '/pull/')}`, live: l ? { conflict: l.mergeable === 'CONFLICTING', draft: l.isDraft, review: l.reviewDecision, turn: l.turn.who } : null }; }) }));
   send(res, 200, {
     goal: stripTree(n), file: GOALS_FILE(),
     history: g.ratings.filter((r) => r.id === id).sort((a, b) => a.date.localeCompare(b.date)),
@@ -1225,7 +1299,8 @@ on('GET', /^\/api\/timebox$/, async (req, res, _m, url) => {
   const pblocks = pday === from || dates.includes(pday) ? blocks : (await tbCol().find({ userId: u.id, date: pday }).toArray()) as any[];
   for (const b of pblocks) if (b.date === pday && b.key && b.prio && !explicit.has(b.key)) dayPrio.set(b.key, Math.min(b.prio, dayPrio.get(b.key) ?? 9));
   const mine = sortMyTickets([...im.values()].filter((i) => i.type !== 'Workstream' && i.status !== 'Done' && i.statusCategory !== 'done' && isMine(i, who)), sl, dayPrio);
-  const ticket = (k?: string | null) => { const i = k ? im.get(k) : undefined; return i ? { key: i.key, summary: i.summary, status: i.status, goals: goalsOf(i.labels), inSprint: !!sl && (i.labels ?? []).includes(sl), noGoal: needsGoal(i, im), priority: i.priority } : null; };
+  const tbKnown = knownGoals(goalsAll(im));
+  const ticket = (k?: string | null) => { const i = k ? im.get(k) : undefined; return i ? { key: i.key, summary: i.summary, status: i.status, goals: ownGoals(i), inSprint: !!cur && inSprint(i, cur.date), noGoal: needsGoal(i, im, tbKnown), priority: i.priority } : null; };
   send(res, 200, {
     dates, prioDay: pday, sprint: cur ? { id: cur.id, label: sl } : null,
     blocks: blocks.map((b) => ({ ...tbOut(b), ticket: ticket(b.key) })),

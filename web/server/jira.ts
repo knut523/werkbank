@@ -71,6 +71,10 @@ export interface Issue {
   duedate: string | null; priority: string | null; updated: string; created?: string;
   description: string; comments: number; lastComment?: { author: string; created: string; text: string } | null;
   labels?: string[]; workstream?: string | null; syncedAt?: Date;
+  /** Werkbank-Zuordnung (nicht Jira): undefined = keine lokale, null = lokal entfernt, 'KEINS' = bewusst ohne. */
+  localGoal?: string | null;
+  /** Werkbank-Sprint-Mitgliedschaft je Sprintdatum (true drin, false rausgenommen). */
+  localSprints?: Record<string, boolean>;
   /** Seit wann in der aktuellen Statuskategorie (Jira: statuscategorychangedate). */
   statusSince?: string | null;
   links?: IssueLink[];

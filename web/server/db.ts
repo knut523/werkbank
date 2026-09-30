@@ -20,6 +20,12 @@ export async function connect(): Promise<MongoClient> {
       db.collection('files').createIndex({ sharedWith: 1 }),
       db.collection('agent_runs').createIndex({ key: 1, startedAt: -1 }),
       db.collection('timebox').createIndex({ userId: 1, date: 1 }),
+      // Runde 7: Werkbank-Zuordnung — entsteht hier bzw. beim ersten Schreiben, keine Migration
+      db.collection('goal_assignments').createIndex({ kind: 1, ziel: 1 }),
+      db.collection('goal_assignments_log').createIndex({ key: 1, at: -1 }),
+      db.collection('sprint_members').createIndex({ sprint: 1, key: 1 }),
+      db.collection('sprint_members_log').createIndex({ key: 1, at: -1 }),
+      db.collection('timebox_prio').createIndex({ userId: 1, date: 1 }),
       db.collection('github_prs').createIndex({ pr: 1 }, { unique: true }),
     ]);
   }

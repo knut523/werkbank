@@ -278,3 +278,4 @@ tr.proposed td { background: color-mix(in srgb, var(--chip-ok) 45%, transparent)
 .prio-chip.p3, .prio-sel.p3 { background: var(--surface-tertiary); color: var(--text-secondary); }
 .prio-sel { font-size: 11px; padding: 1px 4px; border-radius: 6px; }
 .tb-block .sublink { text-align: left; }
+.spec-goal { font-size: 11px; padding: 1px 4px; margin-left: 4px; max-width: 120px; }

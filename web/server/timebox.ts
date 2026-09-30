@@ -3,7 +3,7 @@
 // Aus der Timebox wird nie nach Jira geschrieben — dafür bleiben die vorhandenen Knöpfe mit Bestätigung.
 
 import type { Issue } from './jira.ts';
-import { goalsOf } from './goals.ts';
+import { ownGoals } from './goals.ts';
 
 export const DAY_START = 7 * 60, DAY_END = 20 * 60, STEP = 15;
 export type BlockState = 'geplant' | 'erledigt' | 'verschoben';
@@ -48,22 +48,23 @@ export function carryOver(blocks: Block[], date: string): { copies: Block[]; mar
 }
 
 /** Tagessumme: geplant gegen erledigt, Anteil Zeit auf Ziele (Ticket mit Ziel-Label) gegen „ohne Ziel“. */
-export function daySummary(blocks: Block[], issues: Map<string, Pick<Issue, 'labels'>>) {
+export function daySummary(blocks: Block[], issues: Map<string, Pick<Issue, 'labels' | 'localGoal'>>) {
   let planned = 0, done = 0, goal = 0, noGoal = 0, moved = 0;
   for (const b of blocks) {
     if (b.state === 'verschoben') { moved += b.dur; continue; }
     planned += b.dur;
     if (b.state === 'erledigt') done += b.dur;
-    const g = b.key ? goalsOf(issues.get(b.key)?.labels) : [];
+    const it = b.key ? issues.get(b.key) : undefined;
+    const g = it ? ownGoals(it) : [];
     if (g.length) goal += b.dur; else noGoal += b.dur;
   }
   return { planned, done, goal, noGoal, moved, goalShare: planned ? Math.round((goal / planned) * 100) : 0, doneShare: planned ? Math.round((done / planned) * 100) : 0 };
 }
 
 /** „Meine offenen Tickets“: im aktuellen Sprint zuerst, dann nach Fälligkeit, dann mit Ziel vor ohne. */
-export function sortMyTickets<T extends Pick<Issue, 'key' | 'duedate' | 'labels'>>(ts: T[], sprintLabel: string | null, dayPrio: Map<string, number> = new Map()): T[] {
+export function sortMyTickets<T extends Pick<Issue, 'key' | 'duedate' | 'labels' | 'localGoal'>>(ts: T[], sprintLabel: string | null, dayPrio: Map<string, number> = new Map()): T[] {
   const dp = (t: T) => dayPrio.get(t.key) ?? 9;
   const inS = (t: T) => (sprintLabel && (t.labels ?? []).includes(sprintLabel) ? 0 : 1);
-  const hasGoal = (t: T) => (goalsOf(t.labels).length ? 0 : 1);
+  const hasGoal = (t: T) => (ownGoals(t).length ? 0 : 1);
   return [...ts].sort((a, b) => dp(a) - dp(b) || inS(a) - inS(b) || (a.duedate ?? '9999').localeCompare(b.duedate ?? '9999') || hasGoal(a) - hasGoal(b) || a.key.localeCompare(b.key, 'de', { numeric: true }));
 }

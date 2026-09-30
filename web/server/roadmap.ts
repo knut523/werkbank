@@ -225,13 +225,13 @@ const FM_REQUIRED = ['title', 'type', 'team', 'status', 'created', 'last-verifie
 
 export interface SpecCheck {
   fm: { ok: boolean; missing: string[]; problems: string[] };
-  jira: boolean; goal: { ok: boolean; via: 'ziel:' | 'Ticket' | null; ids: string[] }; dod: boolean;
+  jira: boolean; goal: { ok: boolean; via: 'ziel:' | 'Werkbank' | 'Ticket' | null; ids: string[] }; dod: boolean;
   openDecisions: number; rank: number | null; consistent: boolean; consistency: string[]; inOverview: boolean; age: number | null;
 }
 
 export function specChecks(
   sp: { name: string; topic: string; state: string; fm: Record<string, unknown>; text: string; goals: string[] },
-  ctx: { rank: number | null; overviewText: string; consistency: { kind: string }[]; ticketGoals: string[]; today: string },
+  ctx: { rank: number | null; overviewText: string; consistency: { kind: string }[]; ticketGoals: string[]; today: string; localGoal?: string },
 ): SpecCheck {
   const fm = sp.fm ?? {};
   const has = (k: string) => fm[k] !== undefined && fm[k] !== null && String(fm[k]).trim() !== '';
@@ -243,7 +243,8 @@ export function specChecks(
   if (has('lifecycle') && String(fm.lifecycle) !== stateSlug(sp.state)) problems.push(`lifecycle „${fm.lifecycle}“ ≠ Ordner ${stateSlug(sp.state)}`);
   if (has('domain') && String(fm.domain) !== domainOf(sp.topic)) problems.push(`domain „${fm.domain}“ ≠ Thema ${domainOf(sp.topic)}`);
   const jira = Array.isArray(fm.jira) ? fm.jira.length > 0 : has('jira') && String(fm.jira) !== '[]';
-  const goal = sp.goals.length ? { ok: true, via: 'ziel:' as const, ids: sp.goals } : ctx.ticketGoals.length ? { ok: true, via: 'Ticket' as const, ids: ctx.ticketGoals } : { ok: false, via: null, ids: [] };
+  // Ziel: Werkbank-Zuordnung (goal_assignments) → Frontmatter ziel: → über Tickets. jira: ist nur Anzeige (Runde 7).
+  const goal = ctx.localGoal ? { ok: true, via: 'Werkbank' as const, ids: [ctx.localGoal] } : sp.goals.length ? { ok: true, via: 'ziel:' as const, ids: sp.goals } : ctx.ticketGoals.length ? { ok: true, via: 'Ticket' as const, ids: ctx.ticketGoals } : { ok: false, via: null, ids: [] };
   const lv = has('last-verified') ? String(fm['last-verified']).slice(0, 10) : null;
   const age = lv && /^\d{4}-\d{2}-\d{2}$/.test(lv) ? Math.round((Date.parse(ctx.today + 'T12:00:00Z') - Date.parse(lv + 'T12:00:00Z')) / 864e5) : null;
   return {

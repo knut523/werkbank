@@ -629,6 +629,19 @@ nichts, Agenten/Chats sind aus.
   - **Zustandswechsel nur als Kopiertext:** Laut Skill betrifft ein Wechsel Hub-Zahlen, Kreuztabelle, Prosa und rank.py; dafür gibt es keinen sauberen automatischen Schreibweg, deshalb schreibt die Werkbank dort nie.
   - **Neue Spec aus Vorlage:** mit Vorschau und Bestätigung, im Trockenlauf nicht.
 
+### Runde 7 (30.09.2026, Knuts Entscheidung): Zuordnung in der Werkbank, nicht in Jira
+- **Ticket → Ziel** steht in Mongo, nicht in Jira:
+  - `goal_assignments` hält den aktuellen Stand je Key {key, kind: ticket|spec, ziel, begruendung, by, at};
+  - `goal_assignments_log` ist der append-only-Verlauf.
+  - `ziel` ist eine Ziel-ID, `KEINS` (bewusst ohne, nur mit Begründung) oder `null` (lokal entfernt; ein altes Jira-Label zählt dann nicht mehr).
+  - Jira-Labels `ziel-*` werden weiter gelesen, als Fallback bzw. Import; die Werkbank-Zuordnung gewinnt. Sub-tasks erben vom Task.
+- **Sprint-Mitgliedschaft** genauso: `sprint_members` {key, sprint, in, by, at} plus `sprint_members_log`. `in: false` schlägt ein altes Label `sprint-*`.
+- Zuordnungsseite, Sammelaktion, „in Sprint nehmen / rausnehmen“, das Ziel im Ticket-Detail und „Vorschlag übernehmen (alle mit Sicherheit hoch)“ bzw. einzeln schreiben **nur lokal**, mit Bestätigung. Das gilt auch in der Vorschau: dort landet es in deren eigener Mongo.
+- Specs lassen sich lokal einem Ziel zuordnen (`goal_assignments`, key = Spec-Pfad). Reihenfolge der Quellen: Werkbank → Frontmatter `ziel:` → über Tickets. `jira:` ist kein Mangel mehr, nur Anzeige.
+- Der Label-Schreibweg nach Jira bleibt im Code, ist aber aus; `WERKBANK_GOALS_TO_JIRA=labels` schaltet ihn zusätzlich ein.
+- „Neue Spec“ ist standardmäßig aus und nur noch Kopiertext; `WERKBANK_SPEC_CREATE=on` schaltet das Anlegen ein.
+- **Übernahme ohne Migration:** Die Collections entstehen beim Start der Werkbank (Indizes in `db.ts`) bzw. beim ersten Schreiben in der Werkbank-DB (live: `werkbank`). Bestehende Jira-Labels wirken sofort als Fallback. Vorschau-Daten (27117) werden nicht übernommen.
+
 ### Tests ohne Live-Mongo
 `MONGO_URI_WERKBANK=mongodb://127.0.0.1:<eigener Port> WERKBANK_TEST_PORT=3171 WERKBANK_TEST_BRIDGE_PORT=3196 npm test`
 — mit eigenem `mongod --dbpath <scratch> --port <Port>`; nicht gegen die Live-Mongo auf 27017.
