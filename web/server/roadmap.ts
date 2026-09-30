@@ -215,3 +215,64 @@ export function roadmapInsights(specs: SpecInfo[], ranking: (Pick<RankRow, 'rank
   const withoutJira = specs.filter((s) => !s.jiraKey && KANBAN_STATES.includes(s.state)).sort(byRank);
   return { prioTopics, lanes, nextUp, consistency, withoutJira };
 }
+
+// ---------- Spec-Ordnung (Knut, 30.09., Runde 6) — Regeln aus dem Skill olaf-produkt-roadmap ----------
+
+export const domainOf = (topic: string) => (topic === 'Service-View' ? 'Service' : topic);
+export const stateSlug = (state: string) => state.replace(/^\d-/, '').toLowerCase();
+const STATUS = ['current', 'proposed', 'accepted', 'superseded', 'deprecated', 'archived', 'draft'];
+const FM_REQUIRED = ['title', 'type', 'team', 'status', 'created', 'last-verified', 'tags', 'sources', 'domain', 'lifecycle'];
+
+export interface SpecCheck {
+  fm: { ok: boolean; missing: string[]; problems: string[] };
+  jira: boolean; goal: { ok: boolean; via: 'ziel:' | 'Ticket' | null; ids: string[] }; dod: boolean;
+  openDecisions: number; rank: number | null; consistent: boolean; consistency: string[]; inOverview: boolean; age: number | null;
+}
+
+export function specChecks(
+  sp: { name: string; topic: string; state: string; fm: Record<string, unknown>; text: string; goals: string[] },
+  ctx: { rank: number | null; overviewText: string; consistency: { kind: string }[]; ticketGoals: string[]; today: string },
+): SpecCheck {
+  const fm = sp.fm ?? {};
+  const has = (k: string) => fm[k] !== undefined && fm[k] !== null && String(fm[k]).trim() !== '';
+  const missing = FM_REQUIRED.filter((k) => !(k === 'tags' || k === 'sources' ? Array.isArray(fm[k]) || has(k) : has(k)));
+  if ((fm.type === 'reference' || fm.type === 'project') && !has('area')) missing.push('area');
+  const problems: string[] = [];
+  if (has('status') && !STATUS.includes(String(fm.status))) problems.push(`status „${fm.status}“ nicht im Schema`);
+  if (has('team') && fm.team !== 'olaf') problems.push('team ≠ olaf');
+  if (has('lifecycle') && String(fm.lifecycle) !== stateSlug(sp.state)) problems.push(`lifecycle „${fm.lifecycle}“ ≠ Ordner ${stateSlug(sp.state)}`);
+  if (has('domain') && String(fm.domain) !== domainOf(sp.topic)) problems.push(`domain „${fm.domain}“ ≠ Thema ${domainOf(sp.topic)}`);
+  const jira = Array.isArray(fm.jira) ? fm.jira.length > 0 : has('jira') && String(fm.jira) !== '[]';
+  const goal = sp.goals.length ? { ok: true, via: 'ziel:' as const, ids: sp.goals } : ctx.ticketGoals.length ? { ok: true, via: 'Ticket' as const, ids: ctx.ticketGoals } : { ok: false, via: null, ids: [] };
+  const lv = has('last-verified') ? String(fm['last-verified']).slice(0, 10) : null;
+  const age = lv && /^\d{4}-\d{2}-\d{2}$/.test(lv) ? Math.round((Date.parse(ctx.today + 'T12:00:00Z') - Date.parse(lv + 'T12:00:00Z')) / 864e5) : null;
+  return {
+    fm: { ok: !missing.length && !problems.length, missing, problems },
+    jira, goal,
+    dod: /^##\s+Definition of Done/im.test(sp.text),
+    openDecisions: parseDecisions(sp.text).filter((d) => d.open).length,
+    rank: ctx.rank, consistent: !ctx.consistency.length, consistency: ctx.consistency.map((c) => c.kind),
+    inOverview: new RegExp(`\\[\\[${sp.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\||\\]|#)`).test(ctx.overviewText),
+    age,
+  };
+}
+
+/** Neue Spec nach Skill-Vorlage: Frontmatter nach Vault-Schema + domain/lifecycle, Pflichtabschnitte, Knut-Zeile. */
+export function specTemplate(p: { topic: string; state: string; title: string; goal?: string; jira?: string; today: string; overview?: string }): string {
+  const q = (s: string) => `"${s.replace(/"/g, '\\"')}"`;
+  const fm = [
+    '---', `title: ${q(`olaf — Spec: ${p.title}`)}`, 'type: reference', 'team: olaf', 'area: product',
+    `domain: ${domainOf(p.topic)}`, `lifecycle: ${stateSlug(p.state)}`, 'status: draft', `created: ${p.today}`, `last-verified: ${p.today}`,
+    'tags: [roadmap]', 'sources: []', `related: ["[[0-roadmap-produkt-olaf]]"${p.overview ? `, "[[${p.overview}]]"` : ''}]`,
+    ...(p.jira ? [`jira: [${p.jira}]`] : []), ...(p.goal ? [`ziel: ${p.goal}`] : []), '---', '',
+  ];
+  const body = [
+    `# ${p.title}`, '', '**Ziel:** ‹ein Satz, aus Nutzersicht›', '',
+    '## Befund', '', '‹Fundstellen (`datei.ts:zeile`) und Fehlerszenario; Unbestätigtes als solches markieren›', '',
+    '## Umsetzung', '', '‹kleinster tragfähiger Schnitt, ein PR›', '',
+    ...(p.topic === 'Anmeldestrecke' ? ['## Messung', '', '‹Hypothese, Primärmetrik, Leitplanken, Ereignisse, Fallzahl, Laufzeit — oder „Messung: entfällt, weil …“›', ''] : []),
+    '## Definition of Done', '', '- ‹prüfbarer Satz›', '',
+    '## Offene Punkte', '', '- ‹Frage› Empfehlung: ‹…›', '  - Knut:', '',
+  ];
+  return [...fm, ...body].join('\n');
+}

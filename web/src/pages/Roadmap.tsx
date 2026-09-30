@@ -6,7 +6,7 @@ import { api, type Config } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, StateChip, useJiraLive } from '../ui.tsx';
 
 const note = (p: string) => '#/wissen/' + p.split('/').map(encodeURIComponent).join('/');
-const TABS = [['prio', 'Priorisierung'], ['kanban', 'Zustände'], ['prs', 'PR-Review'], ['entscheidungen', 'Offene Entscheidungen'], ['check', 'Konsistenz']] as const;
+const TABS = [['prio', 'Priorisierung'], ['kanban', 'Zustände'], ['ordnung', 'Ordnung'], ['prs', 'PR-Review'], ['entscheidungen', 'Offene Entscheidungen'], ['check', 'Konsistenz']] as const;
 
 function Tickets({ ts }: { ts: any[] }) {
   if (!ts?.length) return null;
@@ -192,6 +192,112 @@ function PrReview({ d, reload }: { d: any; reload: () => void }) {
   );
 }
 
+
+const STATES = ['1-Backlog', '2-Pre-Plan', '3-Plan', '4-Review', '5-Live'];
+
+function Chk({ ok, label, title }: { ok: boolean; label: string; title?: string }) {
+  return <span className={`chip tiny-chip ${ok ? 'ok' : 'bad'}`} title={title}>{ok ? '✓' : '✗'} {label}</span>;
+}
+
+/** Spec-Ordnung nach dem Skill olaf-produkt-roadmap: je Spec Zustand, Rang, Ziel, Jira, PR, Knut-Zeilen, Alter, Regel-Check. */
+function Order() {
+  const o = useLoad(() => api('/api/roadmap/order'));
+  const d: any = o.data;
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [err, setErr] = useState<unknown>(null);
+  const [f, setF] = useState({ topic: '', state: '', goal: '', noGoal: false });
+  const [nw, setNw] = useState({ topic: '', state: '1-Backlog', slug: '', title: '', goal: '', jira: '' });
+  if (!d) return o.error ? <Err e={o.error} /> : <Loading />;
+  const goals = [...new Set(d.specs.flatMap((x: any) => x.checks.goal.ids))].sort() as string[];
+  const list = d.specs.filter((x: any) => (!f.topic || x.topic === f.topic) && (!f.state || x.state === f.state) && (!f.goal || x.checks.goal.ids.includes(f.goal)) && (!f.noGoal || !x.checks.goal.ok));
+  const sm = d.summary;
+  const move = async (x: any, to: string) => {
+    setErr(null);
+    try {
+      const r: any = await api('/api/roadmap/spec-move', { body: { path: x.path, to } });
+      await confirm({ title: `${x.name}: ${x.state} → ${to}`, confirmLabel: 'Text kopieren', body: <><p className="small">Ein Zustandswechsel betrifft nach dem Skill mehrere Seiten (Zustandsseiten, Hub-Zahlen und Prosa, Themen-Übersicht, rank.py). Dafür gibt es keinen sauberen automatischen Schreibweg — die Werkbank schreibt hier <b>nicht</b>, sondern gibt dir die Änderung als Text:</p><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{r.copy}</pre></> }).then((ok) => { if (ok) { try { navigator.clipboard.writeText(r.copy); toast('Kopiert'); } catch { toast('Kopieren nicht möglich — Text markieren'); } } });
+    } catch (e) { setErr(e); }
+  };
+  const create = async () => {
+    setErr(null);
+    try {
+      const body = { ...nw, goal: nw.goal || undefined, jira: nw.jira || undefined };
+      const pre: any = await api('/api/roadmap/spec-new', { body });
+      if (!(await confirm({ title: 'Neue Spec anlegen?', confirmLabel: pre.dryRun ? 'Trockenlauf' : 'In den Vault schreiben', body: <><p className="small"><code>{pre.preview.path}</code></p><pre className="small" style={{ maxHeight: 300, overflow: 'auto' }}>{pre.preview.content}</pre><p className="tiny">Danach nachziehen: {pre.preview.follow.join(' · ')}</p>{pre.dryRun && <p className="note small">Vorschau: <b>Trockenlauf</b> — die Vorschau schreibt nie in den Vault.</p>}</> }))) return;
+      const r: any = await api('/api/roadmap/spec-new', { body: { ...body, confirm: true } });
+      toast(r.dryRun ? `Trockenlauf: würde ${r.wouldWrite} anlegen` : `Angelegt: ${r.path}`);
+      o.reload();
+    } catch (e) { setErr(e); }
+  };
+  return (
+    <>
+      <p className="small muted">Regeln aus dem Skill <code>olaf-produkt-roadmap</code>: eine Spec je PR, Thema/Zustand über die Ordner, Frontmatter nach Vault-Schema (+ <code>domain</code>, <code>lifecycle</code>), DoD, „- Knut:“-Zeilen, Rang in der Priorisierung, Eintrag in der Themen-Übersicht.</p>
+      <div className="card soft row" data-testid="order-summary" style={{ gap: 8, marginBottom: 10 }}>
+        <b>{sm.total} Specs</b>
+        <span className={`chip ${sm.noJira ? 'bad' : 'ok'}`}>{sm.noJira} ohne jira:</span>
+        <button className={`chip ${sm.noGoal ? 'bad' : 'ok'}`} onClick={() => setF({ ...f, noGoal: !f.noGoal })} title="Filter „ohne Ziel“">{sm.noGoal} ohne Ziel</button>
+        <span className={`chip ${sm.noDod ? 'warn' : 'ok'}`}>{sm.noDod} ohne DoD</span>
+        <span className={`chip ${sm.fmBad ? 'warn' : 'ok'}`}>{sm.fmBad} Frontmatter unvollständig</span>
+        <span className="chip warn">{sm.unranked} ohne Rang</span>
+        <span className={`chip ${sm.inconsistent ? 'bad' : 'ok'}`}>{sm.inconsistent} Zustand ≠ Ticket/PR</span>
+        <span className="chip warn">{sm.notInOverview} nicht in der Übersicht</span>
+        <span className="chip">{sm.openDecisions} offene Knut-Zeilen</span>
+      </div>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <select value={f.topic} onChange={(e) => setF({ ...f, topic: e.target.value })} aria-label="Thema"><option value="">Alle Themen</option>{d.topics.map((t: string) => <option key={t}>{t}</option>)}</select>
+        <select value={f.state} onChange={(e) => setF({ ...f, state: e.target.value })} aria-label="Zustand"><option value="">Alle Zustände</option>{d.states.map((t: string) => <option key={t}>{t}</option>)}</select>
+        <select value={f.goal} onChange={(e) => setF({ ...f, goal: e.target.value })} aria-label="Ziel"><option value="">Alle Ziele</option>{goals.map((g) => <option key={g}>{g}</option>)}</select>
+        <label className="row small"><input type="checkbox" checked={f.noGoal} onChange={(e) => setF({ ...f, noGoal: e.target.checked })} /> ohne Ziel</label>
+        <span className="tiny">{list.length} von {d.specs.length}</span>
+      </div>
+      <Err e={err} />
+      <table className="t small" data-testid="order-table">
+        <thead><tr><th>Spec</th><th>Thema · Zustand</th><th>Rang</th><th>Ziel</th><th>Jira · PR</th><th>❓</th><th>Alter</th><th>Regel-Check</th><th></th></tr></thead>
+        <tbody>{list.map((x: any) => {
+          const c = x.checks, i = STATES.indexOf(x.state);
+          return (
+            <tr key={x.path} data-spec={x.name}>
+              <td><a href={note(x.path)}>{x.title}</a><div className="tiny">{x.name}</div></td>
+              <td className="tiny">{x.topic} · {x.state.replace(/^\d-/, '')}</td>
+              <td>{c.rank ? <span className="chip rank">#{c.rank}</span> : <span className="chip tiny-chip warn">ohne</span>}</td>
+              <td>{c.goal.ok ? c.goal.ids.map((g: string) => <a key={g} className="chip tiny-chip goal-id" href={`#/ziele/${g}`} title={`über ${c.goal.via}`}>{g}</a>) : <span className="chip tiny-chip bad">ohne Ziel – genauer anschauen</span>}</td>
+              <td><Tickets ts={x.tickets} /> {x.prs.map((p: any) => <span key={p.pr} className={`chip tiny-chip ${p.conflict ? 'bad' : p.open ? 'warn' : ''}`}>{p.pr.replace('olaf-', '')}{p.conflict ? ' ⚠' : p.open ? '' : ' · zu'}</span>)}</td>
+              <td>{c.openDecisions > 0 ? <span className="chip tiny-chip warn">{c.openDecisions}</span> : '—'}</td>
+              <td className="tiny">{c.age != null ? `${c.age} T.` : '—'}</td>
+              <td className="row" style={{ gap: 3 }}>
+                <Chk ok={c.fm.ok} label="Frontmatter" title={[...c.fm.missing.map((m: string) => `fehlt: ${m}`), ...c.fm.problems].join('\n') || 'vollständig'} />
+                <Chk ok={c.jira} label="jira:" />
+                <Chk ok={c.goal.ok} label="Ziel" />
+                <Chk ok={c.dod} label="DoD" />
+                <Chk ok={c.rank != null} label="Rang" />
+                <Chk ok={c.consistent} label="Zustand" title={c.consistency.join('\n') || 'passt zu Ticket/PR'} />
+                <Chk ok={c.inOverview} label="Übersicht" />
+              </td>
+              <td className="nowrap">
+                {i > 0 && <button className="btn ghost small" title={`nach ${STATES[i - 1]}`} onClick={() => move(x, STATES[i - 1])}>←</button>}
+                {i >= 0 && i < STATES.length - 1 && <button className="btn small" onClick={() => move(x, STATES[i + 1])}>nach {STATES[i + 1].replace(/^\d-/, '')} →</button>}
+              </td>
+            </tr>
+          );
+        })}</tbody>
+      </table>
+      <details className="card" style={{ marginTop: 12 }} data-testid="spec-new">
+        <summary><b>Neue Spec aus Vorlage</b> <span className="tiny">Frontmatter nach Vault-Schema, Pflichtabschnitte (Befund, Umsetzung, {`Messung bei Anmeldestrecke, `}DoD, Offene Punkte mit „- Knut:“)</span></summary>
+        <div className="row" style={{ marginTop: 8 }}>
+          <select value={nw.topic} onChange={(e) => setNw({ ...nw, topic: e.target.value })} aria-label="Thema der neuen Spec"><option value="">Thema …</option>{d.topics.map((t: string) => <option key={t}>{t}</option>)}</select>
+          <select value={nw.state} onChange={(e) => setNw({ ...nw, state: e.target.value })} aria-label="Zustand der neuen Spec">{STATES.slice(0, 3).map((t) => <option key={t}>{t}</option>)}</select>
+          <input placeholder="kurzname-mit-bindestrich" value={nw.slug} onChange={(e) => setNw({ ...nw, slug: e.target.value })} aria-label="Kurzname" />
+          <input placeholder="Titel" value={nw.title} onChange={(e) => setNw({ ...nw, title: e.target.value })} aria-label="Titel" style={{ minWidth: 240 }} />
+          <input placeholder="Ziel (z. B. KR1)" value={nw.goal} onChange={(e) => setNw({ ...nw, goal: e.target.value })} aria-label="Ziel" style={{ width: 110 }} />
+          <input placeholder="PM-123" value={nw.jira} onChange={(e) => setNw({ ...nw, jira: e.target.value })} aria-label="Jira" style={{ width: 90 }} />
+          <button className="btn primary" disabled={!nw.topic || !nw.slug || !nw.title} onClick={create}>Vorschau & anlegen</button>
+        </div>
+      </details>
+    </>
+  );
+}
+
 function Decisions({ d, reload, user }: { d: any; reload: () => void; user: string }) {
   const [topic, setTopic] = useState('');
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -293,7 +399,7 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
         {TABS.map(([id, label]) => <a key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} href={`#/roadmap/${id}`}>{label}{d && id === 'entscheidungen' ? ` (${d.decisions.length})` : d && id === 'prs' ? ` (${d.prs.length})` : d && id === 'prio' ? ` (${d.ranking.length})` : ''}</a>)}
       </div>
       {r.error && <Err e={r.error} />}
-      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' ? <Check d={d} /> : <Prio d={d} reload={r.reload} />}
+      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' ? <Check d={d} /> : <Prio d={d} reload={r.reload} />}
     </div>
   );
 }

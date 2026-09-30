@@ -796,3 +796,34 @@ test('Mein Tag: Tagespriorität je Block und je Ticket (privat), Seitenleiste da
   assert.equal(f.assignee.accountId, 'acc-knutpeters');
   assert.ok(f.labels.includes('ziel-kr1'));
 });
+
+test('Spec-Ordnung: Regel-Check je Spec mit Zusammenfassung; Zustandswechsel nur als Kopiertext; neue Spec aus Vorlage nach Bestätigung', async () => {
+  const o = await anna.req('/api/roadmap/order');
+  assert.equal(o.status, 200, JSON.stringify(o.j));
+  const ka = o.j.specs.find((x: any) => x.name === 'service-view-kundenakte');
+  assert.equal(ka.checks.rank, 1);
+  assert.equal(ka.checks.inOverview, true);
+  assert.equal(ka.checks.fm.ok, false, 'Fixture ohne domain/lifecycle');
+  assert.equal(o.j.summary.total, o.j.specs.length);
+  assert.ok(typeof o.j.summary.noGoal === 'number' && typeof o.j.summary.noJira === 'number');
+  const file = join(VAULT, ka.path);
+  const before = readFileSync(file, 'utf8');
+  const mv = await anna.req('/api/roadmap/spec-move', { body: { path: ka.path, to: '4-Review' } });
+  assert.equal(mv.j.writes, false);
+  assert.match(mv.j.copy, /mv ".*service-view-kundenakte\.md" ".*4-Review\/service-view-kundenakte\.md"/);
+  assert.match(mv.j.copy, /roadmap_check\.py/);
+  assert.equal(readFileSync(file, 'utf8'), before, 'nichts geschrieben');
+  assert.equal((await anna.req('/api/roadmap/spec-new', { body: { topic: 'Service-View', state: '1-Backlog', slug: 'Böse Datei', title: 'x' } })).status, 400);
+  const pre = await anna.req('/api/roadmap/spec-new', { body: { topic: 'Service-View', state: '1-Backlog', slug: 'export-csv', title: 'Kundenakte als CSV', goal: 'KR1' } });
+  assert.equal(pre.j.needsConfirm, true);
+  assert.match(pre.j.preview.path, /Service-View\/1-Backlog\/service-view-spec-export-csv\.md$|Service-View\/1-Backlog\/[a-z]+-spec-export-csv\.md$/);
+  assert.match(pre.j.preview.content, /## Definition of Done[\s\S]*  - Knut:/);
+  const ok = await anna.req('/api/roadmap/spec-new', { body: { topic: 'Service-View', state: '1-Backlog', slug: 'export-csv', title: 'Kundenakte als CSV', goal: 'KR1', confirm: true } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.j));
+  assert.ok(existsSync(join(VAULT, ok.j.path)));
+  assert.equal((await anna.req('/api/roadmap/spec-new', { body: { topic: 'Service-View', state: '1-Backlog', slug: 'export-csv', title: 'Kundenakte als CSV', confirm: true } })).status, 409);
+  const o2 = await anna.req('/api/roadmap/order');
+  const neu = o2.j.specs.find((x: any) => x.path === ok.j.path);
+  assert.equal(neu.checks.fm.ok, true, JSON.stringify(neu.checks.fm));
+  assert.deepEqual(neu.checks.goal.ids, ['KR1']);
+});

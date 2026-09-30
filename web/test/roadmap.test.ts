@@ -125,3 +125,27 @@ test('Roadmap nach Thema → Rang, Swimlanes sortiert, „Als Nächstes“, Kons
   assert.deepEqual(kinds, ['s-live:Spec live, Ticket offen', 's-plan:Ticket erledigt, Spec nicht in Review/Live', 's-rev:Spec in Review, Ticket offen'].sort());
   assert.deepEqual(r.withoutJira.map((x: any) => x.name).sort(), ['a-drei', 'a-zwei']);
 });
+
+test('Spec-Ordnung: Regel-Check je Spec (Frontmatter, jira:, Ziel, DoD, Knut-Zeilen, Rang, Konsistenz, Übersicht, Alter)', async () => {
+  const { specChecks, specTemplate, domainOf, stateSlug } = await import('../server/roadmap.ts');
+  const text = `---\ntitle: "x"\ntype: reference\nteam: olaf\narea: product\ndomain: Service\nlifecycle: plan\nstatus: current\ncreated: 2026-09-01\nlast-verified: 2026-09-20\ntags: [roadmap]\nsources: []\njira: [PM-1]\nziel: KR1\n---\n# x\n## Definition of Done\n- a\n## Offene Punkte\n- Frage? Empfehlung: ja\n  - Knut:\n`;
+  const fm = { title: 'x', type: 'reference', team: 'olaf', area: 'product', domain: 'Service', lifecycle: 'plan', status: 'current', created: '2026-09-01', 'last-verified': '2026-09-20', tags: ['roadmap'], sources: [], jira: ['PM-1'], ziel: 'KR1' };
+  const sp = { name: 'service-spec-a', path: 'p', topic: 'Service-View', state: '3-Plan', fm, text, tickets: ['PM-1'], prs: [], goals: ['KR1'] };
+  const c = specChecks(sp as any, { rank: 4, overviewText: 'Plan: [[service-spec-a]]', consistency: [], ticketGoals: [], today: '2026-09-30' });
+  assert.deepEqual({ fm: c.fm.ok, jira: c.jira, goal: c.goal, dod: c.dod, open: c.openDecisions, rank: c.rank, consistent: c.consistent, inOverview: c.inOverview, age: c.age }, { fm: true, jira: true, goal: { ok: true, via: 'ziel:', ids: ['KR1'] }, dod: true, open: 1, rank: 4, consistent: true, inOverview: true, age: 10 });
+  const bad = specChecks({ ...sp, state: '4-Review', fm: { title: 'x' }, text: '# x', goals: [] } as any, { rank: null, overviewText: '', consistency: [{ kind: 'Spec in Review, Ticket offen' }], ticketGoals: ['KR2'], today: '2026-09-30' });
+  assert.equal(bad.fm.ok, false);
+  assert.ok(bad.fm.missing.includes('lifecycle') && bad.fm.missing.includes('domain'));
+  assert.equal(bad.jira, false);
+  assert.deepEqual(bad.goal, { ok: true, via: 'Ticket', ids: ['KR2'] });
+  assert.equal(bad.dod, false);
+  assert.equal(bad.consistent, false);
+  assert.equal(bad.inOverview, false);
+  const drift = specChecks({ ...sp, state: '2-Pre-Plan' } as any, { rank: 4, overviewText: '', consistency: [], ticketGoals: [], today: '2026-09-30' });
+  assert.ok(drift.fm.problems.some((p: string) => /lifecycle/.test(p)), 'lifecycle ≠ Ordner');
+  assert.equal(domainOf('Service-View'), 'Service');
+  assert.equal(stateSlug('2-Pre-Plan'), 'pre-plan');
+  const t = specTemplate({ topic: 'Anmeldestrecke', state: '1-Backlog', title: 'Neu', goal: 'KR4', jira: 'PM-5', today: '2026-09-30', overview: '0-anmeldestrecke-uebersicht' });
+  for (const h of ['## Befund', '## Umsetzung', '## Messung', '## Definition of Done', '## Offene Punkte', '  - Knut:', 'lifecycle: backlog', 'domain: Anmeldestrecke', 'ziel: KR4', 'jira: [PM-5]', 'status: draft']) assert.ok(t.includes(h), h);
+  assert.ok(!specTemplate({ topic: 'Cockpit', state: '1-Backlog', title: 'N', today: '2026-09-30' }).includes('## Messung'), 'Messung nur Anmeldestrecke');
+});
