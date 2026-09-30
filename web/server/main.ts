@@ -12,7 +12,7 @@ import YAML from 'yaml';
 import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl } from './config.ts';
 import { connect, wb } from './db.ts';
 import { librechatLogin, createSession, destroySession, currentUser, allowed, teammates, userById, type User } from './auth.ts';
-import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
+import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
@@ -26,6 +26,7 @@ import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, a
 import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError } from './jirawrite.ts';
 import { jiraEventStream } from './events.ts';
+import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal } from './roadmap.ts';
 
@@ -588,21 +589,39 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
     prMap.set(r.pr, p);
   }
   for (const [pr, specs] of specPrs) if (!prMap.has(pr)) prMap.set(pr, { pr, url: `https://github.com/WirStrom1/${pr.replace('#', '/pull/')}`, rows: [], specs });
+  // Live-Zustand aus GitHub (alle 5 min gecacht): offene PRs, die nicht im Register stehen, kommen dazu.
+  const gh = await livePrs();
+  for (const pr of gh.map.keys()) if (!prMap.has(pr)) prMap.set(pr, { pr, url: gh.map.get(pr)!.url, rows: [], specs: specPrs.get(pr) ?? [] });
+  const ghOk = !!gh.sync?.at && !gh.sync?.error;
   const prs = [...prMap.values()].map((p) => {
     const txt = p.rows.map((r: any) => Object.values(r.cols).join(' ')).join(' ');
-    const review = /CHANGES_REQUESTED|❌/.test(txt) ? 'Änderungen verlangt' : /APPROVED|✅/.test(txt) ? 'freigegeben' : /merged|gemergt/i.test(txt) ? 'gemergt' : p.rows.length ? 'offen' : 'nur in Specs';
-    const turn = review === 'Änderungen verlangt' ? 'Autor (Knut/Agent)' : review === 'freigegeben' ? 'Merge (Mensch)' : review === 'offen' ? 'Reviewer (Christoph)' : '—';
+    const live = gh.map.get(p.pr) ?? null;
+    let review = /CHANGES_REQUESTED|❌/.test(txt) ? 'Änderungen verlangt' : /APPROVED|✅/.test(txt) ? 'freigegeben' : /merged|gemergt/i.test(txt) ? 'gemergt' : p.rows.length ? 'offen' : 'nur in Specs';
+    let turn = review === 'Änderungen verlangt' ? 'Autor' : review === 'freigegeben' ? 'Merge (Mensch)' : review === 'offen' ? 'Reviewer' : '—';
+    if (live) {
+      review = live.isDraft ? 'Entwurf' : live.reviewDecision === 'APPROVED' ? 'freigegeben' : live.reviewDecision === 'CHANGES_REQUESTED' ? 'Änderungen verlangt' : 'offen';
+      turn = live.turn.who;
+    } else if (ghOk && /^[\w.-]+#\d+$/.test(p.pr) && review !== 'gemergt') {
+      review = 'nicht mehr offen'; turn = '—';   // GitHub kennt ihn nicht als offen: gemergt oder geschlossen
+    }
     const gates = [...new Set((txt.match(/\b(Deploy[^.;|]*|Migration[^.;|]*|Rotation[^.;|]*|Flag[^.;|]*)/g) ?? []).map((g: string) => g.trim().slice(0, 80)))].slice(0, 3);
     const tickets = [...new Set(p.specs.flatMap((s: string) => (byName.get(s)?.tickets ?? []).map((t: any) => t.key)))];
-    return { ...p, review, turn, gates, tickets };
-  }).sort((a, b) => a.pr.localeCompare(b.pr, 'de', { numeric: true }));
+    return { ...p, review, turn, gates, tickets, live };
+  }).sort((a, b) => (a.live ? 0 : 1) - (b.live ? 0 : 1) || a.pr.localeCompare(b.pr, 'de', { numeric: true }));
+  const github = { at: gh.sync?.at ?? null, error: gh.sync?.error ?? null, count: gh.map.size, org: GH_ORG };
   send(res, 200, {
     base: ROADMAP_BASE, states: rm.states, overview: rm.overview,
     topics: rm.topics.map((t) => ({ name: t.name, overview: t.overview, states: Object.fromEntries(Object.entries(t.states).map(([st, specs]) => [st, specs.map((sp) => byName.get(idx.notes.get(sp.path)!.name))])) })),
-    ranking, prs, decisions,
+    ranking, prs, decisions, github,
     hub: { path: `${OVERVIEW}/0-roadmap-produkt-olaf.md`, prio: `${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`, register: `${OVERVIEW}/pr-stand-produkt-olaf.md` },
     githubReadOnly: true,
   });
+});
+
+on('POST', /^\/api\/roadmap\/github$/, async (req, res) => {
+  await needUser(req);
+  const r = await syncGithub(await githubReadToken()).catch((e: any) => { throw new HttpError(502, e.message); });
+  send(res, 200, r ?? { count: 0, changed: 0, error: 'Kein GitHub-Lesetoken.' });
 });
 
 on('GET', /^\/api\/roadmap\/check$/, async (req, res) => { await needUser(req); send(res, 200, await runRoadmapCheck()); });
@@ -1027,6 +1046,15 @@ async function backgroundJobs() {
     } catch (e: any) { log('jira inkrementell', { error: String(e.message).slice(0, 200) }); }
   };
   if (cfg.jiraIncMinutes > 0) setInterval(incTick, cfg.jiraIncMinutes * 60_000);
+
+  // PR-Review live: offene PRs der Organisation alle 5 Minuten (nur lesend).
+  const ghTick = async () => {
+    if (cfg.demo && !process.env.WERKBANK_GITHUB_API) return;
+    try { const r = await syncGithub(await githubReadToken()); if (r?.changed) log('github', { count: r.count, changed: r.changed }); }
+    catch (e: any) { log('github', { error: String(e.message).slice(0, 200) }); }
+  };
+  setTimeout(ghTick, 8000);
+  setInterval(ghTick, Number(process.env.WERKBANK_GITHUB_MIN || 5) * 60_000);
 
   const shareTick = async () => { try { await watchChatShares(); } catch (e: any) { log('freigaben', { error: String(e.message).slice(0, 200) }); } };
   setTimeout(shareTick, 3000);

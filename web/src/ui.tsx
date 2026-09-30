@@ -76,7 +76,7 @@ export function StateChip({ state }: { state: string }) {
  * Live-Änderungen an der Jira-Kopie (SSE /api/events): nach jedem Jira-Schreiben (Board, Sprint, Chat) und nach
  * jedem Abgleich. `fn` bekommt die geänderten Schlüssel (oder all=true). Verbindet sich selbst neu.
  */
-export function useJiraLive(fn: (e: { keys: string[]; all?: boolean; why: string }) => void) {
+export function useJiraLive(fn: (e: { keys: string[]; all?: boolean; why: string }) => void, event: 'jira' | 'github' | 'both' = 'jira') {
   const ref = useRef(fn);
   ref.current = fn;
   useEffect(() => {
@@ -85,7 +85,9 @@ export function useJiraLive(fn: (e: { keys: string[]; all?: boolean; why: string
     let first = true;
     // Nach einem Verbindungsabbruch kann etwas verpasst worden sein → einmal alles nachladen.
     es.addEventListener('hello', () => { if (!first) ref.current({ keys: [], all: true, why: 'reconnect' }); first = false; });
-    es.addEventListener('jira', (m: MessageEvent) => { try { ref.current(JSON.parse(m.data)); } catch { /* kaputte Nachricht */ } });
+    for (const ev of event === 'both' ? ['jira', 'github'] : [event]) {
+      es.addEventListener(ev, (m: MessageEvent) => { try { ref.current({ keys: [], why: ev, ...JSON.parse(m.data) }); } catch { /* kaputte Nachricht */ } });
+    }
     return () => es.close();
-  }, []);
+  }, [event]);
 }

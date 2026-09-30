@@ -141,3 +141,31 @@ export async function jiraIdentity(u: User): Promise<{ accountId?: string | null
   }
   return { name: u.name, displayName: u.name };
 }
+
+// ---------- GitHub (nur lesend) ----------
+// PR-Review live: ein Lesetoken für die Organisation WirStrom1. Reihenfolge: WERKBANK_GITHUB_TOKEN (Env), sonst — nur
+// im Pilot — das Vaultwarden-Element „View only github API“ (wie im Skill wirstrom-github-team). Nur im Speicher,
+// 10 Minuten; nie ins Frontend, nie ins Log. Benutzt wird er ausschließlich für GraphQL-Abfragen (keine Mutation).
+
+let ghCache: { token: string; at: number } | null = null;
+
+export function githubReadToken(): Promise<string | null> {
+  if (process.env.WERKBANK_GITHUB_TOKEN) return Promise.resolve(process.env.WERKBANK_GITHUB_TOKEN);
+  if (cfg.demo) return Promise.resolve(process.env.WERKBANK_GITHUB_API ? 'demo' : null);
+  if (ghCache && Date.now() - ghCache.at < 600_000) return Promise.resolve(ghCache.token);
+  const sessionFile = join(homedir(), '.config/vw/session');
+  if (!cfg.pilotJira || !existsSync(sessionFile)) return Promise.resolve(null);
+  const session = readFileSync(sessionFile, 'utf8').trim();
+  const item = process.env.WERKBANK_GITHUB_BW_ITEM || 'View only github API';
+  return new Promise((resolve) => {
+    execFile('bw', ['get', 'item', item], { env: { ...process.env, BW_SESSION: session }, timeout: 20_000, maxBuffer: 1 << 20 }, (err, stdout) => {
+      if (err) return resolve(null);
+      let pw = '';
+      try { pw = String(JSON.parse(String(stdout)).login?.password ?? ''); } catch { return resolve(null); }
+      const t = pw.match(/(ghp_|github_pat_)[A-Za-z0-9_]+/)?.[0] ?? '';
+      if (!t) return resolve(null);
+      ghCache = { token: t, at: Date.now() };
+      resolve(t);
+    });
+  });
+}

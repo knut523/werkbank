@@ -24,6 +24,11 @@ export function onJiraChange(fn: (e: JiraChange) => void): () => void {
   return () => bus.off('change', fn);
 }
 
+/** PR-Zustand von GitHub hat sich geändert (Abruf alle 5 min) → Roadmap/PR-Review lädt nach. */
+export function githubChanged(n: number) {
+  bus.emit('github', { seq: ++seq, n, at: Date.now() });
+}
+
 /** SSE-Strom für eine angemeldete Person. Kein Inhalt außer Schlüsseln; die Seite lädt dann selbst nach. */
 export function jiraEventStream(req: IncomingMessage, res: ServerResponse) {
   res.writeHead(200, {
@@ -33,8 +38,10 @@ export function jiraEventStream(req: IncomingMessage, res: ServerResponse) {
   });
   res.write(`retry: 3000\nevent: hello\ndata: ${JSON.stringify({ seq })}\n\n`);
   const off = onJiraChange((e) => res.write(`event: jira\ndata: ${JSON.stringify(e)}\n\n`));
+  const gh = (e: unknown) => res.write(`event: github\ndata: ${JSON.stringify(e)}\n\n`);
+  bus.on('github', gh);
   const ping = setInterval(() => res.write(': ping\n\n'), 20_000);
-  const close = () => { clearInterval(ping); off(); };
+  const close = () => { clearInterval(ping); off(); bus.off('github', gh); };
   req.on('close', close);
   res.on('error', close);
 }
