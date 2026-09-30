@@ -254,8 +254,8 @@ test('Timebox: Blöcke anlegen/verschieben/erledigen, privat je Person, Übertra
   assert.equal((await bernd.req('/api/timebox?from=2026-09-30')).j.blocks.length, 0);
   await bernd.req(`/api/timebox/${a.j.id}`, { method: 'PATCH', body: { start: 420 } });
   assert.equal((await bernd.req(`/api/timebox/${a.j.id}`, { method: 'PATCH', body: { start: 420 } })).status, 404);
-  const c = await anna.req('/api/timebox/carry', { body: { date: '2026-09-30' } });
-  assert.equal(c.j.carried, 1);
+  const [c, c2] = await Promise.all([anna.req('/api/timebox/carry', { body: { date: '2026-09-30' } }), anna.req('/api/timebox/carry', { body: { date: '2026-09-30' } })]);
+  assert.equal(c.j.carried + c2.j.carried, 1, 'zwei Klicks gleichzeitig → eine Kopie');
   assert.equal((await anna.req('/api/timebox/carry', { body: { date: '2026-09-30' } })).j.carried, 0, 'nicht doppelt');
   const next = await anna.req('/api/timebox?from=2026-10-01');
   assert.deepEqual(next.j.blocks.map((b: any) => [b.start, b.ticket?.key]), [[540, 'PM-322']]);
