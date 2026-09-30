@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, fmtDate, fmtDateTime, today, chatTarget, openChat, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, StateChip, useJiraLive } from '../ui.tsx';
 import { HygienePanel, LinkButton } from '../components.tsx';
+import { moveActions, allowedStatuses, laneAllowed, moveCard, describeMove, type Transition } from '../boardMove.ts';
 
 const overdue = (i: any) => i.duedate && i.duedate < today() && i.status !== 'Done' && i.status !== 'Ongoing';
 /** Datums-Chip: überfällig / Datum / „wiederkehrend“ (Ongoing) / „ohne Datum“. */
@@ -41,12 +42,15 @@ function SubRow({ s, onOpen }: { s: any; onOpen: (k: string) => void }) {
   );
 }
 
-function Card({ i, onOpen, expanded, onToggle, fresh }: { i: any; onOpen: (k: string) => void; expanded: boolean; onToggle: () => void; fresh?: boolean }) {
+interface Mover { start: (i: any) => void; end: () => void; menu: (i: any) => void }
+
+function Card({ i, onOpen, expanded, onToggle, fresh, mover }: { i: any; onOpen: (k: string) => void; expanded: boolean; onToggle: () => void; fresh?: boolean; mover?: Mover }) {
   const subs: any[] = i.subtasks ?? [];
   const subHyg = subs.filter((s) => s.hygiene?.length).length;
   return (
-    <div className={`tcard ${i.broken ? 'broken' : ''} ${i.onlyViaSubtask ? 'dim' : ''} ${fresh ? 'fresh' : ''}`} role="button" tabIndex={0} onClick={() => onOpen(i.key)} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(i.key); }} data-key={i.key}>
-      <div className="k"><span>{i.key}{i.type === 'Sub-task' ? ' · Sub' : ''}</span><span>{i.priority && i.priority !== 'Medium' ? i.priority : ''}</span></div>
+    <div className={`tcard ${i.broken ? 'broken' : ''} ${i.onlyViaSubtask ? 'dim' : ''} ${fresh ? 'fresh' : ''} ${i.pending ? 'pending' : ''}`} role="button" tabIndex={0} onClick={() => onOpen(i.key)} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(i.key); }} data-key={i.key}
+      draggable={!!mover} onDragStart={(e) => { e.dataTransfer.setData('text/plain', i.key); e.dataTransfer.effectAllowed = 'move'; mover?.start(i); }} onDragEnd={() => mover?.end()}>
+      <div className="k"><span>{i.key}{i.type === 'Sub-task' ? ' · Sub' : ''}</span><span className="row" style={{ gap: 4 }}>{i.priority && i.priority !== 'Medium' ? i.priority : ''}{mover && <button className="btn ghost small movebtn" aria-label={`${i.key} verschieben nach …`} title="Verschieben nach …" onClick={(e) => { e.stopPropagation(); mover.menu(i); }}>⇄</button>}</span></div>
       <div className="s">{i.summary}</div>
       {i.broken && (i.type === 'Sub-task'
         ? <div className="chip bad" style={{ marginBottom: 4 }} title="Sub-task ohne Parent-Ticket — in Jira einem Ticket zuordnen oder in einen Task umwandeln">⚠ kaputt: {i.broken}</div>
@@ -322,6 +326,52 @@ function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: string; 
   );
 }
 
+
+/** „Verschieben nach …“ — Tastatur-/Mobil-Alternative zum Ziehen. */
+function MoveMenu({ i, lanes, ts, onMove, onClose }: { i: any; lanes: any[]; ts: Transition[] | null; onMove: (lane: string, status: string) => void; onClose: () => void }) {
+  const [status, setStatus] = useState(i.status);
+  const [lane, setLane] = useState(i.workstream ?? '—');
+  const wsLanes = lanes.filter((l) => l.workstream);
+  return (
+    <div className="backdrop" onClick={onClose}>
+      <div className="dialog" role="dialog" aria-modal="true" aria-label={`${i.key} verschieben`} onClick={(e) => e.stopPropagation()}>
+        <h3>{i.key} verschieben nach …</h3>
+        <label className="small">Status</label>
+        {ts === null ? <p className="tiny">Lade Übergänge aus Jira …</p> : (
+          <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Neuer Status">
+            <option value={i.status}>{i.status} (bleibt)</option>
+            {ts.map((t) => <option key={t.id} value={t.to}>→ {t.to}</option>)}
+          </select>
+        )}
+        <label className="small" style={{ marginTop: 8 }}>Workstream</label>
+        {i.type === 'Sub-task' ? <p className="tiny">Sub-tasks bleiben an ihrem Task.</p> : (
+          <select value={lane} onChange={(e) => setLane(e.target.value)} aria-label="Neuer Workstream">
+            {(i.workstream ?? '—') === '—' && <option value="—">Ohne Workstream (bleibt)</option>}
+            {wsLanes.map((l) => <option key={l.key} value={l.key}>{l.name}{l.key === i.workstream ? ' (bleibt)' : ''}</option>)}
+          </select>
+        )}
+        <div className="row" style={{ justifyContent: 'flex-end', marginTop: 14 }}>
+          <button className="btn" onClick={onClose}>Abbrechen</button>
+          <button className="btn primary" disabled={status === i.status && lane === (i.workstream ?? '—')} onClick={() => { onMove(lane, status); onClose(); }}>Verschieben</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Kompakter Bestätigungs-Toast nach dem Ziehen: bestätigen / rückgängig / nicht mehr fragen. */
+function MoveToast({ text, dry, onConfirm, onUndo, busy }: { text: string; dry: boolean; onConfirm: (noAsk: boolean) => void; onUndo: () => void; busy: boolean }) {
+  const [noAsk, setNoAsk] = useState(false);
+  return (
+    <div className="movetoast" role="alertdialog" aria-label="Verschieben bestätigen" data-testid="move-toast">
+      <span className="small"><b>{text}</b>{dry ? ' · Trockenlauf' : ''}</span>
+      <button className="btn small primary" disabled={busy} autoFocus onClick={() => onConfirm(noAsk)}>{busy ? 'schreibe …' : 'bestätigen'}</button>
+      <button className="btn small" disabled={busy} onClick={onUndo}>rückgängig</button>
+      <label className="tiny row" style={{ gap: 4 }}><input type="checkbox" checked={noAsk} onChange={(e) => setNoAsk(e.target.checked)} /> nicht mehr fragen</label>
+    </div>
+  );
+}
+
 export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
   const params = new URLSearchParams(hash.split('?')[1] ?? '');
   const [owner, setOwner] = useState(params.get('owner') ?? '');
@@ -347,11 +397,63 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
   const urlRef = useRef(boardUrl);
   urlRef.current = boardUrl;
   useJiraLive((e) => {
+    if (pending || moving) return;   // nicht die optimistisch verschobene Karte überschreiben
     if (liveTimer.current) clearTimeout(liveTimer.current);
     liveTimer.current = setTimeout(() => {
       api(urlRef.current).then((x) => { b.setData(x); if (e.keys.length) { setFresh(new Set(e.keys)); setTimeout(() => setFresh(new Set()), 2500); } }).catch(() => {});
     }, 200);
   });
+  // ---------- Ziehen / Verschieben ----------
+  const prefs = useLoad(() => api('/api/prefs'), []);
+  const confirmMove = (prefs.data as any)?.confirmMove ?? true;
+  const tsCache = useRef(new Map<string, Transition[]>());
+  const [drag, setDrag] = useState<any>(null);
+  const [dragTs, setDragTs] = useState<Transition[] | null>(null);
+  const [menuFor, setMenuFor] = useState<any>(null);
+  const [pending, setPending] = useState<{ i: any; prev: any; lane: string; status: string; text: string } | null>(null);
+  const [moving, setMoving] = useState(false);
+  const loadTs = async (k: string) => {
+    if (tsCache.current.has(k)) return tsCache.current.get(k)!;
+    const r: any = await api(`/api/board/issue/${k}/transitions`);
+    tsCache.current.set(k, r.transitions);
+    return r.transitions as Transition[];
+  };
+  const isWs = (k: string) => !!data?.lanes.find((l: any) => l.key === k)?.workstream;
+  const laneName = (k: string) => data?.lanes.find((l: any) => l.key === k)?.name ?? k;
+  const commit = async (p: NonNullable<typeof pending>) => {
+    setMoving(true); setErr(null);
+    try {
+      const r: any = await api(`/api/board/issue/${p.i.key}/move`, { body: { status: p.status, lane: p.lane, confirm: true } });
+      tsCache.current.delete(p.i.key);
+      if (r.dryRun) { b.setData(p.prev); toast(`Trockenlauf: würde schreiben — ${r.done.join(' · ')}`); }
+      else { toast(`In Jira: ${p.text}`); api(urlRef.current).then(b.setData).catch(() => {}); }
+    } catch (e) { b.setData(p.prev); setErr(e); }   // Jira lehnt ab → Karte springt zurück
+    finally { setMoving(false); setPending(null); }
+  };
+  const doMove = async (i: any, lane: string, status: string) => {
+    setErr(null);
+    let ts: Transition[] | null = null;
+    try { ts = status !== i.status ? await loadTs(i.key) : []; } catch (e) { setErr(e); return; }
+    const r = moveActions(i, { status, lane }, ts, isWs);
+    if ('error' in r) { setErr(new Error(r.error)); return; }
+    if (!r.actions.length) return;
+    const prev = data;
+    b.setData(moveCard(data, i.key, lane, status));
+    const p = { i, prev, lane, status, text: describeMove(i, r.actions, laneName) };
+    if (confirmMove) setPending(p); else commit(p);
+  };
+  const mover: Mover = {
+    start: (i) => { setDrag(i); setDragTs(tsCache.current.get(i.key) ?? null); loadTs(i.key).then((t) => setDragTs(t)).catch(() => setDragTs([])); },
+    end: () => { setDrag(null); setDragTs(null); },
+    menu: (i) => { setMenuFor(i); setDragTs(null); loadTs(i.key).then(setDragTs).catch((e) => { setErr(e); setDragTs([]); }); },
+  };
+  const dropOk = (lane: string, status: string) => {
+    if (!drag) return false;
+    if (!laneAllowed(drag, lane, isWs)) return false;
+    if (status === drag.status) return true;
+    return !!dragTs && allowedStatuses(drag.status, dragTs).has(status);
+  };
+
   return (
     <div className="page wide">
       <div className="head">
@@ -383,6 +485,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
         {data?.sprint && <button className={`btn small ${sprint ? 'primary' : ''}`} onClick={() => setSprint(!sprint)} title={`Nur Tickets mit dem Label ${data.sprint.label}`} aria-pressed={sprint}>🎯 nur aktueller Sprint ({data.sprint.count})</button>}
         <input type="search" placeholder="Suchen (Key, Titel, Owner)" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tickets suchen" />
         <label className="row small"><input type="checkbox" checked={done} onChange={(e) => setDone(e.target.checked)} /> ältere erledigte zeigen</label>
+        <label className="row small" title="Beim Ziehen einer Karte erst bestätigen (Einstellung je Person)"><input type="checkbox" checked={confirmMove} onChange={async (e) => { await api('/api/prefs', { body: { confirmMove: e.target.checked } }); prefs.reload(); }} /> Verschieben bestätigen</label>
         <label className="row small"><input type="checkbox" checked={allOpen} onChange={(e) => { setAllOpen(e.target.checked); setExpanded(new Set()); }} /> Sub-tasks aufklappen</label>
         {data && <span className="tiny">{data.totals.cards} Karten · {data.totals.subtasks} Sub-tasks{data.totals.broken ? <> · <span className="chip bad">⚠ {data.totals.broken} kaputt</span></> : null}{data.totals.orphans ? <> · <span className="chip bad" title="Tickets ohne Parent (kein Workstream)">⚠ {data.totals.orphans} ohne Parent</span></> : null}</span>}
       </div>
@@ -407,12 +510,19 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
             {data.statuses.map((s: string) => (
               <div key={s}>
                 <div className="colhead">{s} · {lane.columns[s].length}</div>
-                <div className="col-cards">{lane.columns[s].map((i: any) => <Card key={i.key} i={i} fresh={fresh.has(i.key)} onOpen={setOpen} expanded={allOpen !== expanded.has(i.key)} onToggle={() => toggle(i.key)} />)}</div>
+                <div className={`col-cards ${drag ? (dropOk(lane.key, s) ? 'drop-ok' : 'drop-no') : ''}`} data-drop={`${lane.key}|${s}`}
+                  onDragOver={(e) => { if (dropOk(lane.key, s)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; } }}
+                  onDrop={(e) => { e.preventDefault(); const i = drag; mover.end(); if (i && dropOk(lane.key, s)) doMove(i, lane.key, s); }}>
+                  {lane.columns[s].map((i: any) => <Card key={i.key} i={i} fresh={fresh.has(i.key)} onOpen={setOpen} expanded={allOpen !== expanded.has(i.key)} onToggle={() => toggle(i.key)} mover={mover} />)}
+                </div>
               </div>
             ))}
           </div>}
         </section>
       ))}
+      {menuFor && <MoveMenu i={menuFor} lanes={data?.lanes ?? []} ts={dragTs} onClose={() => setMenuFor(null)} onMove={(lane, status) => doMove(menuFor, lane, status)} />}
+      {pending && <MoveToast text={pending.text} dry={!!data?.dryRun} busy={moving} onUndo={() => { b.setData(pending.prev); setPending(null); }}
+        onConfirm={async (noAsk) => { if (noAsk) { await api('/api/prefs', { body: { confirmMove: false } }).catch(() => {}); prefs.reload(); } commit(pending); }} />}
       {open && <Detail k={open} onOpenKey={setOpen} site={data?.site ?? cfg.jiraSite} forge={cfg.forge} onClose={() => { setOpen(null); b.reload(); }} onChanged={() => b.reload()} />}
     </div>
   );

@@ -215,6 +215,28 @@ test('Board: Kommentar/Status/Fälligkeit erst nach Bestätigung, dann in Jira',
   assert.match(detail.j.chatUrl, /^https:\/\/chat\.example\/c\/new\?spec=claude-code-olaf&prompt=/);
 });
 
+test('Board ziehen: Spalte → echter Übergang, Bahn → Parent (nur Tasks), Fehler ohne Schreiben, Einstellung je Person', async () => {
+  const pre = await anna.req('/api/board/issue/PM-322/move', { body: { status: 'Done' } });
+  assert.equal(pre.status, 200, JSON.stringify(pre.j));
+  assert.equal(pre.j.needsConfirm, true);
+  assert.match(pre.j.preview, /To Do → Done/);
+  const bad = await anna.req('/api/board/issue/PM-322/move', { body: { status: 'Ongoing', confirm: true } });
+  assert.equal(bad.status, 400);
+  assert.match(bad.j.error, /keinen Übergang/);
+  const sub = await anna.req('/api/board/issue/PM-324/move', { body: { lane: 'PM-73', confirm: true } });
+  assert.equal(sub.status, 400, 'Sub-task bleibt');
+  const n = jira.writes.length;
+  const lane = await anna.req('/api/board/issue/PM-340/move', { body: { lane: 'PM-70', status: 'To Do', confirm: true } });
+  assert.equal(lane.status, 200, JSON.stringify(lane.j));
+  assert.ok(jira.writes.length > n);
+  assert.equal(lane.j.issue.parent, 'PM-70');
+  assert.equal(lane.j.issue.workstream, 'PM-70');
+  assert.equal(lane.j.issue.status, 'To Do');
+  assert.equal((await anna.req('/api/prefs')).j.confirmMove, true, 'Vorgabe: mit Bestätigung');
+  await anna.req('/api/prefs', { body: { confirmMove: false } });
+  assert.equal((await anna.req('/api/prefs')).j.confirmMove, false);
+});
+
 test('Agent ansetzen: Brücke nur lesend, Ergebnis als Entwurf, gesendet erst nach Klick', async () => {
   const noClaude = await bernd.req('/api/board/issue/PM-321/agent', { body: {} });
   assert.equal(noClaude.status, 412);

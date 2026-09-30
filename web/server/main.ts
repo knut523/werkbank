@@ -27,6 +27,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, type JiraAction } from './jirawrite.ts';
 import { jiraEventStream } from './events.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
+import { moveActions, describeMove } from '../src/boardMove.ts';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES } from './roadmap.ts';
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, type GoalNode } from './goals.ts';
@@ -452,6 +453,41 @@ const writeRoute = (kind: 'comment' | 'status' | 'due') => async (req: IncomingM
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/comment$/, writeRoute('comment'));
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/status$/, writeRoute('status'));
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/due$/, writeRoute('due'));
+
+// Karte gezogen (Spalte = Status, Bahn = Parent). Ohne confirm nur Prüfung + Vorschau; mit confirm schreiben (Trockenlauf in der Vorschau).
+on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/move$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const im = await issueMap();
+  const i = im.get(m[1]);
+  if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  const wantStatus = b.status ? String(b.status) : undefined;
+  const ts = wantStatus && wantStatus !== i.status ? await transitions(await needJira(u), i.key) : [];
+  const r = moveActions(i, { status: wantStatus, lane: b.lane ? String(b.lane) : undefined }, ts, (k) => im.get(k)?.type === 'Workstream');
+  if ('error' in r) throw new HttpError(400, r.error);
+  if (!r.actions.length) return send(res, 200, { ok: true, nothing: true });
+  const preview = describeMove(i, r.actions, (k) => im.get(k)?.summary ?? k);
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview, dryRun: dryRun() });
+  // Parent vor Status: der Übergang gilt für das Ticket unabhängig vom Workstream.
+  const acts = [...r.actions].sort((a, c) => (a.type === 'parent' ? -1 : 0) - (c.type === 'parent' ? -1 : 0)) as JiraAction[];
+  const w = await jiraWrite(u, () => writeJira(u, i.key, acts));
+  send(res, 200, { ok: true, preview, done: w.done, dryRun: w.dryRun ?? false, calls: w.calls, issue: (await issueMap()).get(i.key) ?? null });
+});
+
+// Einstellungen je Person (z. B. „Statuswechsel beim Ziehen bestätigen“, Vorgabe an).
+on('GET', /^\/api\/prefs$/, async (req, res) => {
+  const u = await needUser(req);
+  const d: any = await wb().collection('user_prefs').findOne({ _id: u.id as any });
+  send(res, 200, { confirmMove: d?.confirmMove ?? true });
+});
+on('POST', /^\/api\/prefs$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const set: any = {};
+  if (typeof b.confirmMove === 'boolean') set.confirmMove = b.confirmMove;
+  await wb().collection('user_prefs').updateOne({ _id: u.id as any }, { $set: { ...set, at: new Date() } }, { upsert: true });
+  send(res, 200, { ok: true, ...set });
+});
 
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res, m) => {
   const u = await needUser(req);
