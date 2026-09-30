@@ -28,7 +28,8 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError } from './jira
 import { jiraEventStream } from './events.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
-import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal } from './roadmap.ts';
+import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES } from './roadmap.ts';
+import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg } from './goals.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 const FONTS = join(cfg.librechatDist, 'client', 'public', 'fonts');
@@ -563,7 +564,7 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
         const prs = prRefs(text);
         const n = idx.notes.get(sp.path)!;
         const tickets = n.tickets.map((k) => ({ key: k, status: im.get(k)?.status ?? null, summary: im.get(k)?.summary ?? null }));
-        const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text) };
+        const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text), jiraKey: n.fm.jira != null && String(n.fm.jira).trim() !== '' && String(n.fm.jira) !== '[]' };
         byName.set(n.name, info);
         for (const pr of prs) specPrs.set(pr, [...(specPrs.get(pr) ?? []), n.name]);
         for (const d of ds) if (d.open) decisions.push({ ...d, path: sp.path, spec: n.name, title: sp.title, topic: t.name, state, hash: info.hash });
@@ -609,7 +610,14 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
     return { ...p, review, turn, gates, tickets, live };
   }).sort((a, b) => (a.live ? 0 : 1) - (b.live ? 0 : 1) || a.pr.localeCompare(b.pr, 'de', { numeric: true }));
   const github = { at: gh.sync?.at ?? null, error: gh.sync?.error ?? null, count: gh.map.size, org: GH_ORG };
+  // Thema → Rang, Swimlanes, „Als Nächstes“ (Sprint-Zuordnung über Ticket-Labels), Konsistenz Spec ↔ Ticket.
+  const cur = cycles().find((c) => !c.archived);
+  const sprintTickets = new Set(cur ? [...im.values()].filter((i) => inSprint(i, cur.date)).map((i) => i.key) : []);
+  const livePr = (pr: string) => { const l = gh.map.get(pr); return l ? { pr, conflict: l.mergeable === 'CONFLICTING', draft: l.isDraft, review: l.reviewDecision, turn: l.turn.who } : { pr, closed: ghOk }; };
+  const specList = [...byName.values()].map((x) => ({ ...x, prLive: x.prs.map(livePr) }));
+  const insights = roadmapInsights(specList, ranking, { sprintTickets });
   send(res, 200, {
+    ...insights, kanbanStates: KANBAN_STATES, sprint: cur ? { id: cur.id, date: cur.date, tickets: sprintTickets.size } : null,
     base: ROADMAP_BASE, states: rm.states, overview: rm.overview,
     topics: rm.topics.map((t) => ({ name: t.name, overview: t.overview, states: Object.fromEntries(Object.entries(t.states).map(([st, specs]) => [st, specs.map((sp) => byName.get(idx.notes.get(sp.path)!.name))])) })),
     ranking, prs, decisions, github,

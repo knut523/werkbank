@@ -92,3 +92,36 @@ test('Rang-Vorschlag landet als Zeile im Abschnitt „Vorschläge aus der Werkba
   assert.equal(b.split('## Vorschläge aus der Werkbank').length, 2, 'Abschnitt nur einmal');
   assert.match(b, /- Knut .*\n- Anna \(29\.09\.2026\): \[\[x\]\] Rang 5 → 3\n$/);
 });
+
+test('Roadmap nach Thema → Rang, Swimlanes sortiert, „Als Nächstes“, Konsistenz', async () => {
+  const { roadmapInsights, KANBAN_STATES } = await import('../server/roadmap.ts');
+  const sp = (name: string, topic: string, state: string, tickets: any[] = [], o: any = {}) => ({ name, topic, state, title: name, path: `${topic}/${state}/${name}.md`, tickets, prs: [], jiraKey: tickets.length > 0, ...o });
+  const specs = [
+    sp('a-eins', 'Admin', '3-Plan', [{ key: 'PM-1', status: 'To Do' }]),
+    sp('a-zwei', 'Admin', '1-Backlog'),
+    sp('a-drei', 'Admin', '2-Pre-Plan'),                                   // nicht priorisiert
+    sp('s-live', 'Service', '5-Live', [{ key: 'PM-2', status: 'In Progress' }]),   // Widerspruch: live, Ticket offen
+    sp('s-plan', 'Service', '3-Plan', [{ key: 'PM-3', status: 'Done' }]),          // umgekehrt: Ticket erledigt, Spec Plan
+    sp('s-rev', 'Service', '4-Review', [{ key: 'PM-4', status: 'In Progress' }]),
+    sp('s-bl', 'Service', '1-Backlog', [{ key: 'PM-5', status: 'To Do' }]),
+  ];
+  const ranking = [
+    { rank: 1, spec: 's-rev', topic: 'Service' }, { rank: 2, spec: 'a-zwei', topic: 'Admin' }, { rank: 3, spec: 's-bl', topic: 'Service' },
+    { rank: 4, spec: 'a-eins', topic: 'Admin' }, { rank: 5, spec: 's-plan', topic: 'Service' }, { rank: 9, spec: 'weg', topic: 'Service' },
+  ] as any[];
+  const r = roadmapInsights(specs as any, ranking, { sprintTickets: new Set(['PM-1']) });
+  assert.deepEqual(r.prioTopics.map((t) => t.topic), ['Service', 'Admin'], 'Thema mit bestem Rang zuerst');
+  assert.deepEqual(r.prioTopics[1].ranked.map((x: any) => x.spec), ['a-zwei', 'a-eins']);
+  assert.deepEqual(r.prioTopics[1].unranked.map((x: any) => x.name), ['a-drei']);
+  assert.deepEqual(r.prioTopics[0].ranked.map((x: any) => x.spec), ['s-rev', 's-bl', 's-plan', 'weg'], 'Rang ohne Spec-Datei bleibt beim Thema aus der Tabelle');
+  assert.deepEqual(KANBAN_STATES, ['1-Backlog', '2-Pre-Plan', '3-Plan', '4-Review', '5-Live']);
+  const admin = r.lanes.find((l) => l.topic === 'Admin')!;
+  assert.deepEqual(admin.states['3-Plan'].map((x: any) => x.name), ['a-eins']);
+  assert.equal(admin.states['1-Backlog'][0].rank, 2);
+  // Als Nächstes: nicht in Arbeit (kein Review/Live, kein Ticket In Progress/Done), Sprint-Zuordnung zuerst (a-eins via PM-1)
+  assert.deepEqual(r.nextUp.map((x: any) => x.spec), ['a-eins', 'a-zwei', 's-bl']);
+  assert.equal(r.nextUp[0].inSprint, true);
+  const kinds = r.consistency.map((c: any) => `${c.spec}:${c.kind}`).sort();
+  assert.deepEqual(kinds, ['s-live:Spec live, Ticket offen', 's-plan:Ticket erledigt, Spec nicht in Review/Live', 's-rev:Spec in Review, Ticket offen'].sort());
+  assert.deepEqual(r.withoutJira.map((x: any) => x.name).sort(), ['a-drei', 'a-zwei']);
+});
