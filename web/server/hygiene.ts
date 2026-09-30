@@ -63,7 +63,10 @@ export function hygieneFor(all: Issue[], who: Identity, opts: { now?: Date; stal
   for (const i of mine) {
     if (isDone(i)) continue;
     const base = { key: i.key, summary: i.summary };
-    if (i.duedate && i.duedate < today) {
+    // Ongoing = wiederkehrende Arbeit: kein Enddatum, also weder „überfällig“ noch „ohne Datum“.
+    const recurring = i.status === 'Ongoing';
+    if (recurring) { /* keine Datumsregeln */ }
+    else if (i.duedate && i.duedate < today) {
       const d = daysBetween(i.duedate + 'T00:00:00Z', new Date(today + 'T00:00:00Z'));
       out.push({ ...base, rule: 'überfällig', days: d, priority: 1, detail: `seit ${d} ${d === 1 ? 'Tag' : 'Tagen'} überfällig`, question: `${i.key} („${short(i.summary)}“) ist seit ${d} ${d === 1 ? 'Tag' : 'Tagen'} überfällig — Stand? Neues Datum, erledigt, oder weiter?` });
     } else if (!i.duedate && i.status !== 'Backlog') {

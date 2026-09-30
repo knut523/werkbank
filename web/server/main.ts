@@ -15,7 +15,7 @@ import { librechatLogin, createSession, destroySession, currentUser, allowed, te
 import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
-import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, JiraError, type Issue } from './jira.ts';
+import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns } from './agent.ts';
 import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles } from './sprint.ts';
 import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
@@ -172,7 +172,7 @@ async function sprintView(id: string) {
     cycle: { id: c.id, date: c.date, archived: c.archived },
     files,
     overdue: open.filter((i) => isOverdue(i, today)).sort((a, b) => a.duedate!.localeCompare(b.duedate!)),
-    undated: open.filter((i) => !i.duedate),
+    undated: open.filter((i) => !i.duedate && !isRecurring(i)),
     jiraSync: sync ? { at: sync.at, count: sync.count } : null,
   };
 }

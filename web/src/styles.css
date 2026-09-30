@@ -113,7 +113,7 @@ table.t th { font-weight: 600; color: var(--text-secondary); font-size: 12.5px; 
 /* Board */
 .board-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; position: sticky; top: 0; background: var(--surface-primary); padding: 8px 0; z-index: 5; }
 .lane { margin-bottom: 18px; }
-.lane h3 { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+.lane h3 { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
 .cols { display: grid; gap: 8px; }
 .colhead { font-size: 12px; font-weight: 600; color: var(--text-secondary); padding: 0 4px 4px; text-transform: none; }
 .col-cards { background: var(--surface-secondary); border-radius: 10px; padding: 6px; min-height: 44px; display: flex; flex-direction: column; gap: 6px; }
