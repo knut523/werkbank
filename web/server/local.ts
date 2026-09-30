@@ -34,12 +34,20 @@ export async function attachLocal<T extends Issue>(issues: T[]): Promise<T[]> {
 
 export async function setGoal(u: User, key: string, kind: Kind, ziel: string | null, begruendung = '', source = 'werkbank'): Promise<{ prev: string | null | undefined }> {
   const col = wb().collection('goal_assignments');
-  const prevDoc: any = await col.findOne({ _id: key as any });
-  const at = new Date();
-  const doc = { key, kind, ziel, begruendung: begruendung.slice(0, 500), by: u.name, byId: u.id, at, source };
-  await col.replaceOne({ _id: key as any }, doc, { upsert: true });
-  await wb().collection('goal_assignments_log').insertOne({ ...doc, prev: prevDoc ? prevDoc.ziel : undefined } as any);
-  return { prev: prevDoc?.ziel };
+  const doc = { key, kind, ziel, begruendung: begruendung.slice(0, 500), by: u.name, byId: u.id, at: new Date(), source };
+  // Atomar: alter Stand kommt aus derselben Operation; scheitert der Verlaufseintrag, wird zurückgesetzt.
+  const before: any = await col.findOneAndReplace({ _id: key as any }, doc, { upsert: true, returnDocument: 'before' });
+  try { await wb().collection('goal_assignments_log').insertOne({ ...doc, action: 'set', prev: before ? before.ziel : undefined } as any); }
+  catch (e) { if (before) await col.replaceOne({ _id: key as any }, before); else await col.deleteOne({ _id: key as any }); throw e; }
+  return { prev: before?.ziel };
+}
+
+/** Werkbank-Zuordnung zurücksetzen: Dokument weg, danach gelten wieder Jira-Label bzw. Frontmatter ziel:. */
+export async function resetGoal(u: User, key: string, kind: Kind): Promise<{ prev: string | null | undefined }> {
+  const col = wb().collection('goal_assignments');
+  const before: any = await col.findOneAndDelete({ _id: key as any });
+  if (before) await wb().collection('goal_assignments_log').insertOne({ key, kind, ziel: null, action: 'reset', prev: before.ziel, by: u.name, byId: u.id, at: new Date(), source: 'werkbank' } as any);
+  return { prev: before?.ziel };
 }
 
 export async function setSprint(u: User, key: string, sprint: string, member: boolean, source = 'werkbank') {

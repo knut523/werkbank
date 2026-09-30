@@ -132,7 +132,7 @@ export function Timebox({ cfg }: { cfg: Config }) {
           <span><b>{fmtDate(date)}</b></span>
           <span>geplant <b>{hours(sum.planned)} h</b></span>
           <span>erledigt <b>{hours(sum.done)} h</b> ({sum.doneShare} %)</span>
-          <span className="tb-share" title="Anteil der geplanten Zeit auf Tickets mit Ziel-Label"><span className="subbar"><span style={{ width: `${sum.goalShare}%` }} /></span> Ziele <b>{sum.goalShare} %</b> · ohne Ziel {hours(sum.noGoal)} h</span>
+          <span className="tb-share" title="Anteil der geplanten Zeit auf Tickets mit Ziel (Werkbank-Zuordnung)"><span className="subbar"><span style={{ width: `${sum.goalShare}%` }} /></span> Ziele <b>{sum.goalShare} %</b> · ohne Ziel {hours(sum.noGoal)} h</span>
           {sum.moved > 0 && <span className="tiny">verschoben {hours(sum.moved)} h</span>}
           {wsum && <span className="tiny">Woche: {hours(wsum.planned)} h geplant · {hours(wsum.done)} h erledigt</span>}
           <button className="btn small" disabled={!blocksOf(date).some((b: any) => b.state !== 'erledigt' && !b.carriedTo)} onClick={async () => {

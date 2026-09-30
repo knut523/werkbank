@@ -89,7 +89,7 @@ function Detail({ id }: { id: string }) {
   );
 }
 
-function Assign() {
+function Assign({ onChange }: { onChange: () => void }) {
   const d = useLoad(() => api('/api/goals/assign'));
   const x: any = d.data;
   const confirm = useConfirm();
@@ -113,7 +113,7 @@ function Assign() {
       if (!pre.items.length) { toast('Nichts zu übernehmen'); return; }
       if (!(await confirm({ title, confirmLabel: `${pre.items.length} übernehmen`, body: <><p className="small">Aus <code>{pre.file}</code>, gespeichert in der Werkbank (nicht Jira):</p><pre className="small" style={{ maxHeight: 280, overflow: 'auto' }}>{pre.items.map((i: any) => `${i.key} → ${i.goal}${i.begruendung ? ` — ${i.begruendung}` : ''}`).join('\n')}</pre></> }))) return;
       const r: any = await api('/api/goals/import', { body: { ...body, confirm: true } });
-      toast(`${r.imported} übernommen`); setSel({}); setGoal({}); setWhy({}); d.reload();
+      toast(`${r.imported} übernommen`); setSel({}); setGoal({}); setWhy({}); d.reload(); onChange();
     } catch (e) { setErr(e); }
   };
   const run = async () => {
@@ -126,7 +126,7 @@ function Assign() {
       const bad = r.results.filter((y: any) => !y.ok);
       toast(`${r.results.length - bad.length} zugeordnet (Werkbank)${bad.length ? `, ${bad.length} Fehler` : ''}`);
       if (bad.length) setErr(new Error(bad.map((y: any) => `${y.key}: ${y.error}`).join(' · ')));
-      setSel({}); setGoal({}); setWhy({}); d.reload();
+      setSel({}); setGoal({}); setWhy({}); d.reload(); onChange();
     } catch (e) { setErr(e); }
   };
   return (
@@ -153,9 +153,9 @@ function Assign() {
               <select value={G[t.key] ?? ''} aria-label={`Ziel für ${t.key}`} onChange={(e) => { setGoal({ ...G, [t.key]: e.target.value }); setSel({ ...S, [t.key]: !!e.target.value }); }}>
                 <option value="">— wählen —</option>
                 {x.goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 40)}</option>)}
-                <option value="KEINS">bewusst ohne Ziel ({x.labels.exempt})</option>
+                <option value="KEINS">bewusst ohne Ziel (mit Begründung)</option>
               </select>
-              {G[t.key] === 'KEINS' && <input placeholder="Begründung (Kommentar)" value={W[t.key] ?? ''} onChange={(e) => setWhy({ ...W, [t.key]: e.target.value })} aria-label={`Begründung ${t.key}`} style={{ marginTop: 4, width: '100%' }} />}
+              {G[t.key] === 'KEINS' && <input placeholder="Begründung (Pflicht)" value={W[t.key] ?? ''} onChange={(e) => setWhy({ ...W, [t.key]: e.target.value })} aria-label={`Begründung ${t.key}`} style={{ marginTop: 4, width: '100%' }} />}
             </td>
             <td className="tiny">{t.proposal ? <><button className="btn ghost small" title="diesen Vorschlag einzeln übernehmen" onClick={() => importProp({ mode: 'keys', keys: [t.key] }, `Vorschlag für ${t.key} übernehmen?`)}>übernehmen</button> <b>{t.proposal.ziel}</b>{t.proposal.sicherheit != null && ` · ${typeof t.proposal.sicherheit === 'number' ? `${Math.round(t.proposal.sicherheit <= 1 ? t.proposal.sicherheit * 100 : t.proposal.sicherheit)} %` : `Sicherheit ${t.proposal.sicherheit}`}`}<div>{t.proposal.begruendung}</div></> : '—'}</td>
           </tr>
@@ -185,7 +185,7 @@ export function Ziele({ hash }: { cfg: Config; hash: string }) {
         {sub && sub !== 'zuordnen' && <a role="tab" className="active" href={`#/ziele/${sub}`}>{sub.toUpperCase()}</a>}
       </div>
       {tree.error && <Err e={tree.error} />}
-      {sub === 'zuordnen' ? <Assign /> : sub ? <Detail id={sub} /> : !t ? <Loading /> : t.missing
+      {sub === 'zuordnen' ? <Assign onChange={() => tree.reload()} /> : sub ? <Detail id={sub} /> : !t ? <Loading /> : t.missing
         ? <div className="card soft"><b>Stage Gate nicht definiert</b><p className="small muted">Die Zieldatei fehlt.</p></div>
         : <div className="card"><ul className="goal-tree root">{t.roots.map((n: any) => <GoalNodeView key={n.id} n={n} />)}</ul></div>}
     </div>

@@ -50,3 +50,10 @@ test('Tagespriorität: 1–3 (Muss/Soll/Kann) je Block, steuert die Sortierung v
   const r = sortMyTickets([t('PM-1', '2026-10-01', ['sprint-2026-09-28']), t('PM-2', null), t('PM-3', '2026-12-01')], 'sprint-2026-09-28', new Map([['PM-3', 1], ['PM-2', 3]]));
   assert.deepEqual(r.map((x) => x.key), ['PM-3', 'PM-2', 'PM-1']);
 });
+
+test('Runde 7: „im Sprint zuerst“ nach lokaler Mitgliedschaft', () => {
+  const t = (key: string, labels: string[] = []) => ({ key, duedate: null, labels });
+  const members = new Set(['PM-2']);
+  const r = sortMyTickets([t('PM-1', ['sprint-2026-09-28']), t('PM-2')], 'sprint-2026-09-28', new Map(), (x) => members.has(x.key));
+  assert.deepEqual(r.map((x) => x.key), ['PM-2', 'PM-1']);
+});

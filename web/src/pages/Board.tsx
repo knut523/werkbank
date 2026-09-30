@@ -65,7 +65,7 @@ function Card({ i, onOpen, expanded, onToggle, fresh, mover }: { i: any; onOpen:
         {i.agent && <span className={`chip ${i.agent === 'wartet auf ja' ? 'bad' : 'warn'}`} title="Ein Agent arbeitet an dieser Karte (Chat)">🤖 {i.agent}</span>}
         <Since i={i} />
         <Blocked i={i} />
-        {i.goals?.map((g: string) => <a key={g} className="chip goal-id" href={`#/ziele/${g}`} onClick={(e) => e.stopPropagation()} title="Ziel (Jira-Label)">🎯 {g}</a>)}
+        {i.goals?.map((g: string) => <a key={g} className="chip goal-id" href={`#/ziele/${g}`} onClick={(e) => e.stopPropagation()} title="Ziel (Werkbank-Zuordnung, sonst Jira-Label)">🎯 {g}</a>)}
         {i.noGoal && <NoGoal small={false} />}
       </div>
       {subs.length > 0 && (
@@ -264,9 +264,10 @@ function EditFields({ i, onDone }: { i: any; onDone: () => void }) {
     try {
       const pre: any = await api(`/api/board/issue/${i.key}/edit`, { body });
       if (pre.nothing) return;
-      if (!(await confirm({ title, confirmLabel: pre.dryRun ? 'Trockenlauf ausführen' : 'In Jira schreiben', body: <><pre className="small">{pre.preview}</pre>{pre.dryRun && <p className="note small">Vorschau: <b>Trockenlauf</b> — nichts wird geschrieben.</p>}</> }))) return;
+      const onlyGoal = body.goal !== undefined && body.priority === undefined && body.assignee === undefined;
+      if (!(await confirm({ title, confirmLabel: onlyGoal ? 'In der Werkbank speichern' : pre.dryRun ? 'Trockenlauf ausführen' : 'In Jira schreiben', body: <><pre className="small">{pre.preview}</pre>{pre.dryRun && <p className="note small">Vorschau: <b>Trockenlauf</b> — nichts wird geschrieben.</p>}</> }))) return;
       const r: any = await api(`/api/board/issue/${i.key}/edit`, { body: { ...body, confirm: true } });
-      toast(r.dryRun ? `Trockenlauf: würde schreiben — ${r.done.join(' · ')}` : `In Jira: ${r.done.join(' · ')}`);
+      toast(r.dryRun ? `Trockenlauf: würde schreiben — ${r.done.join(' · ')}` : onlyGoal ? `Gespeichert: ${r.done.join(' · ')}` : `In Jira: ${r.done.join(' · ')}`);
       onDone();
     } catch (e) { setErr(e); }
   };
@@ -523,7 +524,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
             <button key={v} className={`btn small ${filter === v ? 'primary' : ''}`} onClick={() => setFilter(v)}>{l}</button>
           ))}
         </div>
-        {data?.sprint && <button className={`btn small ${sprint ? 'primary' : ''}`} onClick={() => setSprint(!sprint)} title={`Nur Tickets mit dem Label ${data.sprint.label}`} aria-pressed={sprint}>🎯 nur aktueller Sprint ({data.sprint.count})</button>}
+        {data?.sprint && <button className={`btn small ${sprint ? 'primary' : ''}`} onClick={() => setSprint(!sprint)} title="Nur Tickets im aktuellen Sprint (Werkbank-Zuordnung)" aria-pressed={sprint}>🎯 nur aktueller Sprint ({data.sprint.count})</button>}
         <input type="search" placeholder="Suchen (Key, Titel, Owner)" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tickets suchen" />
         <label className="row small"><input type="checkbox" checked={done} onChange={(e) => setDone(e.target.checked)} /> ältere erledigte zeigen</label>
         <label className="row small" title="Beim Ziehen einer Karte erst bestätigen (Einstellung je Person)"><input type="checkbox" checked={confirmMove} onChange={async (e) => { await api('/api/prefs', { body: { confirmMove: e.target.checked } }); prefs.reload(); }} /> Verschieben bestätigen</label>

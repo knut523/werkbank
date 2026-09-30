@@ -177,8 +177,11 @@ type Min = Pick<Issue, 'key' | 'type' | 'status' | 'statusCategory' | 'parent' |
 
 /** Eigene Ziele eines Tickets: lokale Zuordnung (Werkbank, goal_assignments) gewinnt; ohne lokale die Jira-Labels ziel-*. */
 export function ownGoals(i: Pick<Issue, 'labels' | 'localGoal'>): string[] {
-  if (i.localGoal !== undefined) return i.localGoal && i.localGoal !== 'KEINS' ? [i.localGoal] : [];
-  return goalsOf(i.labels);
+  if (i.localGoal === undefined) return goalsOf(i.labels);
+  if (!i.localGoal || i.localGoal === 'KEINS') return [];
+  // Lokales Ziel ersetzt nur Label-Ziele derselben Ebene (ein KR-Label bleibt neben einem lokalen Sprintziel stehen).
+  const lvl = goalLevel(i.localGoal);
+  return [i.localGoal, ...goalsOf(i.labels).filter((g) => goalLevel(g) !== lvl)];
 }
 export function ownExempt(i: Pick<Issue, 'labels' | 'localGoal'>): boolean {
   if (i.localGoal !== undefined) return i.localGoal === 'KEINS';

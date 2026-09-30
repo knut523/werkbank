@@ -28,7 +28,7 @@ function Md({ text }: { text: string }) {
 /** Zelle mit Lücken „‹… fehlt – Quelle: …›“: Lücken grau/kursiv, zählen nicht als Wert. */
 /** Hinweis „ohne Ziel – genauer anschauen“ (Board, Sprint, Mein Tag). */
 export function NoGoal({ small = true }: { small?: boolean }) {
-  return <a className={`chip ${small ? 'tiny-chip' : ''} bad nogoal`} href="#/ziele/zuordnen" title="Kein Ziel-Label, auch nicht vom Parent geerbt — einem Ziel zuordnen oder bewusst ziel-keins (mit Grund)" onClick={(e) => e.stopPropagation()}>ohne Ziel – genauer anschauen</a>;
+  return <a className={`chip ${small ? 'tiny-chip' : ''} bad nogoal`} href="#/ziele/zuordnen" title="Kein Ziel (Werkbank-Zuordnung oder Jira-Label), auch nicht vom Parent geerbt — einem Ziel zuordnen oder bewusst ohne Ziel (mit Grund)" onClick={(e) => e.stopPropagation()}>ohne Ziel – genauer anschauen</a>;
 }
 
 export function Gap({ text }: { text?: string | null }) {
@@ -107,6 +107,7 @@ function TicketRow({ t, children }: { t: any; children?: ReactNode }) {
         {t.duedate && <span className={`chip tiny-chip ${t.overdue ? 'bad' : ''}`}>{fmtDate(t.duedate)}</span>}
         {t.goals?.map((g: string) => <a key={g} className="chip tiny-chip goal-id" href={`#/ziele/${g}`}>{g}</a>)}
         {t.noGoal && <NoGoal />}
+        {t.exempt && <span className="chip tiny-chip" title="bewusst ohne Ziel (Werkbank, mit Begründung)">bewusst ohne Ziel</span>}
         {t.why?.map((w: string) => <span key={w} className="chip tiny-chip warn">{w}</span>)}
         {children}
       </span>
@@ -123,7 +124,7 @@ function SprintPlan({ d, cycle, reload }: { d: any; cycle: string; reload: () =>
     <select aria-label={`Ziel für ${t.key}`} value="" onChange={(e) => { if (e.target.value !== '') assign(t, e.target.value === '-' ? '' : e.target.value); }}>
       <option value="">Ziel zuordnen …</option>
       {g.goalIds.map((x: any) => <option key={x.id} value={x.id}>{x.id} · {String(x.result).slice(0, 40)}</option>)}
-      {t.goals?.length > 0 && <option value="-">— keine Zuordnung</option>}
+      {t.goals?.length > 0 && <option value="-">— Werkbank-Zuordnung zurücksetzen</option>}
     </select>
   );
   const inRow = (t: any) => <TicketRow key={t.key} t={t}><GoalSelect t={t} /><button className="btn small" onClick={() => lc.member(t.key, false)}>rausnehmen</button></TicketRow>;
