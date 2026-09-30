@@ -3,7 +3,7 @@
 // jeweils nach Vorschau und Bestätigung. GitHub nur lesend (Links).
 import { useMemo, useState } from 'react';
 import { api, type Config } from '../api.ts';
-import { Err, Loading, useConfirm, useLoad, useToast, StateChip } from '../ui.tsx';
+import { Err, Loading, useConfirm, useLoad, useToast, StateChip, useJiraLive } from '../ui.tsx';
 
 const note = (p: string) => '#/wissen/' + p.split('/').map(encodeURIComponent).join('/');
 const TABS = [['prio', 'Priorisierung'], ['kanban', 'Zustände'], ['prs', 'PR-Review'], ['entscheidungen', 'Offene Entscheidungen'], ['check', 'Konsistenz']] as const;
@@ -112,23 +112,45 @@ function Kanban({ d }: { d: any }) {
   );
 }
 
-function PrReview({ d }: { d: any }) {
+const ago = (s?: string | null) => { if (!s) return '—'; const d = Math.floor((Date.now() - new Date(s).getTime()) / 864e5); return d <= 0 ? 'heute' : d === 1 ? '1 Tag' : `${d} Tage`; };
+
+function PrReview({ d, reload }: { d: any; reload: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const [onlyOpen, setOnlyOpen] = useState(true);
+  const gh = d.github ?? {};
+  const list = d.prs.filter((p: any) => !onlyOpen || p.live || !['nicht mehr offen', 'gemergt'].includes(p.review));
   return (
     <>
-      <p className="small muted">Aus dem <a href={note(d.hub.register)}>PR-Register</a> und den PR-Links in den Specs. <b>GitHub nur lesend</b> — Review, Merge und Deploy passieren dort bzw. durch Menschen.</p>
+      <p className="small muted">Live von GitHub (<b>{gh.org ?? 'WirStrom1'}</b>, alle offenen PRs, alle 5 Minuten, <b>nur lesend</b>) plus <a href={note(d.hub.register)}>PR-Register</a> und PR-Links in den Specs (Spec ↔ PR, Deploy-Gates). Review, Merge und Deploy passieren auf GitHub bzw. durch Menschen.</p>
+      <div className="row small" style={{ marginBottom: 8 }}>
+        {gh.error ? <span className="chip bad" data-testid="gh-error">GitHub: {gh.error}</span> : gh.at ? <span className="chip ok">GitHub-Stand {new Date(gh.at).toLocaleString('de-AT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {gh.count} offen</span> : <span className="chip warn">GitHub noch nicht abgerufen</span>}
+        <button className="btn small" disabled={busy} onClick={async () => { setBusy(true); setErr(null); try { await api('/api/roadmap/github', { method: 'POST' }); reload(); } catch (e) { setErr(e); } finally { setBusy(false); } }}>{busy ? 'Frage GitHub …' : '↻ jetzt abrufen'}</button>
+        <label className="row small"><input type="checkbox" checked={onlyOpen} onChange={(e) => setOnlyOpen(e.target.checked)} /> nur offene</label>
+        <span className="tiny">{list.length} PRs · {list.filter((p: any) => p.live?.mergeable === 'CONFLICTING').length} mit Konflikt</span>
+      </div>
+      <Err e={err} />
       <table className="t small" data-testid="pr-table">
-        <thead><tr><th>PR</th><th>Review</th><th>wer ist dran</th><th>Specs</th><th>Jira</th><th>Deploy-Gates / Hinweise</th><th>Register</th></tr></thead>
-        <tbody>{d.prs.map((p: any) => (
+        <thead><tr><th>PR</th><th>Zustand</th><th>Review</th><th>wer ist dran</th><th>Alter · zuletzt</th><th>Specs</th><th>Jira</th><th>Deploy-Gates / Hinweise</th><th>Register</th></tr></thead>
+        <tbody>{list.map((p: any) => {
+          const l = p.live;
+          return (
           <tr key={p.pr} data-pr={p.pr}>
-            <td><a href={p.url} target="_blank" rel="noreferrer"><b>{p.pr.replace('olaf-', '')}</b> ↗</a></td>
+            <td><a href={p.url} target="_blank" rel="noreferrer"><b>{p.pr.replace('olaf-', '')}</b> ↗</a>{l && <div className="tiny" title={`${l.headRefName} → ${l.baseRefName}`}>{l.title}</div>}{l && l.baseRefName !== 'develop' && <span className="chip warn" title="Feature-PRs gehen gegen develop, nie main">→ {l.baseRefName}</span>}</td>
+            <td className="nowrap">{l ? <>
+              {l.isDraft && <span className="chip">Entwurf</span>}
+              {l.mergeable === 'CONFLICTING' ? <span className="chip bad" data-conflict="1">⚠ Konflikt</span> : l.mergeable === 'MERGEABLE' ? <span className="chip ok">mergebar</span> : <span className="chip">{l.mergeable === 'UNKNOWN' ? 'prüft …' : l.mergeable ?? '?'}</span>}
+              {l.openThreads > 0 && <span className="chip warn" title="offene Review-Threads">💬 {l.openThreads}</span>}
+            </> : <span className="tiny">{p.review === 'nicht mehr offen' ? 'nicht mehr offen' : 'nur Vault'}</span>}</td>
             <td><StateChip state={p.review === 'freigegeben' ? 'ok · freigegeben' : p.review === 'Änderungen verlangt' ? 'fehlt · Änderungen verlangt' : p.review} /></td>
-            <td>{p.turn}</td>
+            <td>{l ? <><b>{l.turn.who}</b><div className="tiny">{l.turn.why}</div></> : p.turn}</td>
+            <td className="tiny nowrap">{l ? <>{ago(l.createdAt)} · {ago(l.updatedAt)}</> : '—'}</td>
             <td>{p.specs.map((s: string) => <div key={s} className="tiny">{s}</div>)}</td>
             <td>{p.tickets.map((k: string) => <a key={k} className="chip" href={`#/board?key=${k}`}>{k}</a>)}</td>
             <td className="tiny">{p.gates.join(' · ') || '—'}</td>
             <td className="tiny">{p.rows.map((r: any, i: number) => <div key={i} title={Object.entries(r.cols).map(([k, v]) => `${k}: ${v}`).join('\n')}>{r.section.slice(0, 50)}</div>)}</td>
-          </tr>
-        ))}</tbody>
+          </tr>);
+        })}</tbody>
       </table>
     </>
   );
@@ -207,6 +229,8 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
   const tab = hash.match(/^#\/roadmap\/(\w+)/)?.[1] ?? 'prio';
   const r = useLoad(() => api('/api/roadmap'));
   const d: any = r.data;
+  // Live: neuer GitHub-Stand (alle 5 min) oder Jira-Änderung → still nachladen.
+  useJiraLive(() => { api('/api/roadmap').then(r.setData).catch(() => {}); }, 'both');
   return (
     <div className="page wide">
       <div className="head">
@@ -220,7 +244,7 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
         {TABS.map(([id, label]) => <a key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} href={`#/roadmap/${id}`}>{label}{d && id === 'entscheidungen' ? ` (${d.decisions.length})` : d && id === 'prs' ? ` (${d.prs.length})` : d && id === 'prio' ? ` (${d.ranking.length})` : ''}</a>)}
       </div>
       {r.error && <Err e={r.error} />}
-      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'prs' ? <PrReview d={d} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' ? <Check /> : <Prio d={d} reload={r.reload} />}
+      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' ? <Check /> : <Prio d={d} reload={r.reload} />}
     </div>
   );
 }
