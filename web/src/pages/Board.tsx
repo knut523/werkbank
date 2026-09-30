@@ -3,7 +3,15 @@ import { api, fmtDate, fmtDateTime, today, chatTarget, openChat, type Config } f
 import { Err, Loading, useLoad, useConfirm, useToast, StateChip, useJiraLive } from '../ui.tsx';
 import { HygienePanel, LinkButton } from '../components.tsx';
 
-const overdue = (i: any) => i.duedate && i.duedate < today() && i.status !== 'Done';
+const overdue = (i: any) => i.duedate && i.duedate < today() && i.status !== 'Done' && i.status !== 'Ongoing';
+/** Datums-Chip: überfällig / Datum / „wiederkehrend“ (Ongoing) / „ohne Datum“. */
+function DueChip({ i, small }: { i: any; small?: boolean }) {
+  const c = small ? 'chip tiny-chip' : 'chip';
+  if (i.status === 'Ongoing') return <span className={c} title="Ongoing = wiederkehrende Arbeit, braucht kein Enddatum">↻ wiederkehrend</span>;
+  if (i.duedate) return <span className={`${c} ${overdue(i) ? 'bad' : ''}`}>{overdue(i) ? 'über ' : ''}{fmtDate(i.duedate)}</span>;
+  if (i.status === 'Done' || i.statusCategory === 'done') return null;
+  return <span className={`${c} warn`}>ohne Datum</span>;
+}
 const daysSince = (s?: string | null) => (s ? Math.max(0, Math.floor((Date.now() - new Date(s).getTime()) / 864e5)) : null);
 /** „seit X Tagen in Status“ — aus statuscategorychangedate (Kategoriewechsel). */
 function Since({ i }: { i: any }) {
@@ -26,7 +34,7 @@ function SubRow({ s, onOpen }: { s: any; onOpen: (k: string) => void }) {
       <span className="row" style={{ gap: 3 }}>
         <span className="chip tiny-chip">{s.status}</span>
         <span className={`chip tiny-chip ${s.assignee ? '' : 'warn'}`}>{s.assignee ?? 'ohne Owner'}</span>
-        {s.duedate ? <span className={`chip tiny-chip ${s.overdue ? 'bad' : ''}`}>{s.overdue ? 'über ' : ''}{fmtDate(s.duedate)}</span> : !done && <span className="chip tiny-chip warn">ohne Datum</span>}
+        <DueChip i={s} small />
         {s.hygiene?.length > 0 && <span className="badge-hyg" title={'Braucht Pflege: ' + s.hygiene.join(', ')}>🧹 {s.hygiene.length}</span>}
       </span>
     </li>
@@ -40,10 +48,12 @@ function Card({ i, onOpen, expanded, onToggle, fresh }: { i: any; onOpen: (k: st
     <div className={`tcard ${i.broken ? 'broken' : ''} ${i.onlyViaSubtask ? 'dim' : ''} ${fresh ? 'fresh' : ''}`} role="button" tabIndex={0} onClick={() => onOpen(i.key)} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(i.key); }} data-key={i.key}>
       <div className="k"><span>{i.key}{i.type === 'Sub-task' ? ' · Sub' : ''}</span><span>{i.priority && i.priority !== 'Medium' ? i.priority : ''}</span></div>
       <div className="s">{i.summary}</div>
-      {i.broken && <div className="chip bad" style={{ marginBottom: 4 }} title="Sub-task ohne Parent-Ticket — in Jira einem Ticket zuordnen oder in einen Task umwandeln">⚠ kaputt: {i.broken}</div>}
+      {i.broken && (i.type === 'Sub-task'
+        ? <div className="chip bad" style={{ marginBottom: 4 }} title="Sub-task ohne Parent-Ticket — in Jira einem Ticket zuordnen oder in einen Task umwandeln">⚠ kaputt: {i.broken}</div>
+        : <div className="chip bad" style={{ marginBottom: 4 }} title="Jedes Ticket hängt an einem Workstream (olaf-jira). In Jira den Parent auf den passenden Workstream setzen — oder im Chat fragen, wohin es gehört.">⚠ {i.broken} — in Jira Parent setzen</div>)}
       <div className="row" style={{ gap: 4 }}>
         <span className="chip">{i.assignee ?? 'ohne Owner'}</span>
-        {i.duedate ? <span className={`chip ${overdue(i) ? 'bad' : ''}`}>{overdue(i) ? 'über ' : ''}{fmtDate(i.duedate)}</span> : i.status !== 'Done' && <span className="chip warn">ohne Datum</span>}
+        <DueChip i={i} />
         {i.comments > 0 && <span className="chip">💬 {i.comments}</span>}
         {i.hygiene?.length > 0 && <span className="badge-hyg" title={i.hygiene.join(', ')}>🧹 {i.hygiene.length}</span>}
         {i.agent && <span className={`chip ${i.agent === 'wartet auf ja' ? 'bad' : 'warn'}`} title="Ein Agent arbeitet an dieser Karte (Chat)">🤖 {i.agent}</span>}
@@ -371,14 +381,25 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
         <input type="search" placeholder="Suchen (Key, Titel, Owner)" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tickets suchen" />
         <label className="row small"><input type="checkbox" checked={done} onChange={(e) => setDone(e.target.checked)} /> ältere erledigte zeigen</label>
         <label className="row small"><input type="checkbox" checked={allOpen} onChange={(e) => { setAllOpen(e.target.checked); setExpanded(new Set()); }} /> Sub-tasks aufklappen</label>
-        {data && <span className="tiny">{data.totals.cards} Karten · {data.totals.subtasks} Sub-tasks{data.totals.broken ? <> · <span className="chip bad">⚠ {data.totals.broken} kaputt</span></> : null}</span>}
+        {data && <span className="tiny">{data.totals.cards} Karten · {data.totals.subtasks} Sub-tasks{data.totals.broken ? <> · <span className="chip bad">⚠ {data.totals.broken} kaputt</span></> : null}{data.totals.orphans ? <> · <span className="chip bad" title="Tickets ohne Parent (kein Workstream)">⚠ {data.totals.orphans} ohne Parent</span></> : null}</span>}
       </div>
       {b.error && <Err e={b.error} />}
       {!data ? <Loading /> : data.lanes.length === 0 ? (
         <div className="card soft"><p>Keine Tickets in der Kopie{filter || owner || q ? ' für diesen Filter' : ''}.</p>{!data.sync && <p className="small">Noch nie synchronisiert — oben auf „Jetzt synchronisieren“ klicken (braucht deinen Jira-Zugang aus der Einrichtung).</p>}</div>
       ) : data.lanes.map((lane: any) => (
         <section className="lane" key={lane.key}>
-          <h3>{lane.name} <span className="chip">{lane.count}</span>{lane.hygiene > 0 && <span className="badge-hyg" title="Karten, die Pflege brauchen">🧹 {lane.hygiene}</span>}{lane.workstream && <span className="tiny">{lane.key}{lane.workstream.assignee ? ` · ${lane.workstream.assignee}` : ''}</span>}</h3>
+          <h3 className="lane-head">
+            {lane.workstream ? <button className="sublink" onClick={() => setOpen(lane.key)} title="Workstream öffnen"><b>{lane.name}</b></button> : lane.name} <span className="chip">{lane.count}</span>
+            {lane.hygiene > 0 && <span className="badge-hyg" title="Karten, die Pflege brauchen">🧹 {lane.hygiene}</span>}
+            {lane.head && <>
+              <span className="tiny">{lane.key}</span>
+              <StateChip state={lane.head.status} />
+              <span className={`chip ${lane.head.owner ? '' : 'warn'}`}>{lane.head.owner ?? 'ohne Owner'}</span>
+              {lane.head.duedate ? <span className={`chip ${lane.head.overdue ? 'bad' : ''}`}>{lane.head.overdue ? 'über ' : 'bis '}{fmtDate(lane.head.duedate)}</span> : <span className="chip">ohne Datum</span>}
+            </>}
+            {lane.key === '—' && <span className="tiny">Tickets ohne Parent — in Jira einem Workstream zuordnen</span>}
+          </h3>
+          {lane.count === 0 ? <p className="tiny" style={{ margin: '2px 0 10px' }}>Keine sichtbaren Tickets in diesem Workstream.</p> :
           <div className="cols" style={{ gridTemplateColumns: `repeat(${data.statuses.length}, minmax(180px, 1fr))` }}>
             {data.statuses.map((s: string) => (
               <div key={s}>
@@ -386,7 +407,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
                 <div className="col-cards">{lane.columns[s].map((i: any) => <Card key={i.key} i={i} fresh={fresh.has(i.key)} onOpen={setOpen} expanded={allOpen !== expanded.has(i.key)} onToggle={() => toggle(i.key)} />)}</div>
               </div>
             ))}
-          </div>
+          </div>}
         </section>
       ))}
       {open && <Detail k={open} onOpenKey={setOpen} site={data?.site ?? cfg.jiraSite} forge={cfg.forge} onClose={() => { setOpen(null); b.reload(); }} onChanged={() => b.reload()} />}

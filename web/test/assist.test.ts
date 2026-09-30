@@ -147,3 +147,9 @@ test('Hygiene-Block: Anweisung + höchstens die gewählten Fragen', () => {
   assert.equal(b.split('\n').filter((l) => /^\d\. /.test(l)).length, 3);
   assert.equal(hygieneBlock([], 0), '');
 });
+
+test('Ongoing = wiederkehrend: kein Überfällig-/Ohne-Datum-Alarm', () => {
+  const xs = [...ISSUES, I('PM-11', { status: 'Ongoing', statusCategory: 'indeterminate', duedate: '2026-09-01' }), I('PM-12', { status: 'Ongoing', statusCategory: 'indeterminate', duedate: null })];
+  const h = hygieneFor(xs, { accountId: 'acc-knut' }, { now: NOW });
+  assert.equal(h.some((x) => x.key === 'PM-11' || x.key === 'PM-12'), false);
+});

@@ -49,3 +49,28 @@ test('Board: Sub-tasks hängen unter ihrer Karte (x/y erledigt), kaputte Sub-tas
   assert.deepEqual(odc.map((c) => c.key), ['PM-331']);
   assert.deepEqual(odc[0].subtasks.filter((s: any) => s.match).map((s: any) => s.key), ['PM-332']);
 });
+
+test('Board: Bahnen für alle Workstreams (auch leer) mit Kopf; Ongoing nie überfällig; Task ohne Parent rot mit Hinweis', async () => {
+  const { boardModel, isOverdue } = await import('../server/jira.ts');
+  const base = { statusCategory: 'new', priority: 'Medium', updated: new Date().toISOString(), description: '', comments: 0, lastComment: null };
+  const is: any[] = [
+    { ...base, key: 'PM-70', summary: 'Produkt OLAF', status: 'In Progress', type: 'Workstream', assignee: 'Knut', parent: null, duedate: '2026-12-31', workstream: 'PM-70' },
+    { ...base, key: 'PM-223', summary: 'Leerer Workstream', status: 'To Do', type: 'Workstream', assignee: 'Lisa', parent: null, duedate: null, workstream: 'PM-223' },
+    { ...base, key: 'PM-1', summary: 'Laufend', status: 'Ongoing', statusCategory: 'indeterminate', type: 'Task', assignee: 'Knut', parent: 'PM-70', duedate: '2020-01-01', workstream: 'PM-70' },
+    { ...base, key: 'PM-2', summary: 'Waise', status: 'To Do', type: 'Task', assignee: 'Knut', parent: null, duedate: null, workstream: null },
+  ];
+  assert.equal(isOverdue(is[2], '2026-09-30'), false, 'Ongoing ist wiederkehrend');
+  const b = boardModel(is);
+  const empty = b.lanes.find((l: any) => l.key === 'PM-223')!;
+  assert.ok(empty, 'leere Bahn da');
+  assert.equal(empty.count, 0);
+  assert.equal(empty.head.status, 'To Do');
+  assert.equal(empty.head.owner, 'Lisa');
+  assert.equal(b.lanes.find((l: any) => l.key === 'PM-70')!.head.duedate, '2026-12-31');
+  assert.equal(b.totals.overdue, 0);
+  assert.equal(b.totals.undated, 1, 'nur die Waise, nicht Ongoing');
+  const orphan = b.lanes.find((l: any) => l.key === '—')!.columns['To Do'][0];
+  assert.match(orphan.broken, /ohne Parent/);
+  // Mit Filter keine leeren Bahnen
+  assert.equal(boardModel(is, { owner: 'Knut' }).lanes.some((l: any) => l.key === 'PM-223'), false);
+});
