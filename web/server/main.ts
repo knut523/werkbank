@@ -534,6 +534,54 @@ on('POST', /^\/api\/prefs$/, async (req, res) => {
   send(res, 200, { ok: true, ...set });
 });
 
+const PRIORITIES = ['Highest', 'High', 'Medium', 'Low', 'Lowest'];
+
+on('GET', /^\/api\/jira\/meta$/, async (req, res) => {
+  await needUser(req);
+  const im = await issueMap();
+  const people = new Map<string, string>();
+  for (const i of im.values()) if (i.assigneeId && i.assignee) people.set(i.assigneeId, i.assignee);
+  const g = goalsAll(im);
+  send(res, 200, {
+    people: [...people.entries()].map(([accountId, name]) => ({ accountId, name })).sort((a, b) => a.name.localeCompare(b.name, 'de')),
+    priorities: [...new Set([...PRIORITIES, ...[...im.values()].map((i) => i.priority).filter(Boolean) as string[]])],
+    goalIds: [...g.byId.values()].filter((n) => n.level !== 'Gate').map((n) => ({ id: n.id, level: n.level, result: valueOf(n.result) ?? n.id })),
+    exempt: exemptLabel(), dryRun: dryRun(),
+  });
+});
+
+// Ticket bearbeiten (Priorität, Owner, Ziel-Label) — Vorschau ohne confirm, dann schneller Schreibweg (Trockenlauf in der Vorschau).
+on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/edit$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const im = await issueMap();
+  const i = im.get(m[1]);
+  if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  const actions: JiraAction[] = [];
+  if (b.priority !== undefined) {
+    const known = new Set([...PRIORITIES, ...[...im.values()].map((x) => x.priority).filter(Boolean) as string[]]);
+    if (!known.has(String(b.priority))) throw new HttpError(400, `Unbekannte Priorität „${b.priority}“.`);
+    if (String(b.priority) !== i.priority) actions.push({ type: 'priority', name: String(b.priority) });
+  }
+  if (b.assignee !== undefined) {
+    const acc = b.assignee ? String(b.assignee) : null;
+    const name = acc ? [...im.values()].find((x) => x.assigneeId === acc)?.assignee : 'niemand';
+    if (acc && !name) throw new HttpError(400, 'Unbekannte Person (nur Personen aus der Jira-Kopie).');
+    if (acc !== (i.assigneeId ?? null)) actions.push({ type: 'assignee', accountId: acc, name: name ?? undefined });
+  }
+  if (b.goal !== undefined && b.goal !== '') {
+    const goal = String(b.goal).toUpperCase();
+    const g = goalsAll(im);
+    if (!g.byId.has(goal) || goalLevel(goal) === 'Gate') throw new HttpError(400, `Unbekanntes Ziel ${goal}.`);
+    actions.push({ type: 'labels', add: [goalLabel(goal)], remove: sameLevelRemovals(i.labels ?? [], goal) });
+  }
+  if (!actions.length) return send(res, 200, { ok: true, nothing: true });
+  const preview = `${i.key}: ${actions.map(describe).join(' · ')}`;
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview, dryRun: dryRun() });
+  const w = await jiraWrite(u, () => writeJira(u, i.key, actions));
+  send(res, 200, { ok: true, preview, done: w.done, dryRun: w.dryRun ?? false, calls: w.calls, issue: (await issueMap()).get(i.key) ?? null });
+});
+
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res, m) => {
   const u = await needUser(req);
   if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
@@ -1062,13 +1110,17 @@ on('GET', /^\/api\/timebox$/, async (req, res, _m, url) => {
   const cur = cycles().find((c) => !c.archived);
   const sl = cur ? sprintLabel(cur.date) : null;
   const who = resolveIdentity(await jiraIdentity(u), [...im.values()]);
-  const mine = sortMyTickets([...im.values()].filter((i) => i.type !== 'Workstream' && i.status !== 'Done' && i.statusCategory !== 'done' && isMine(i, who)), sl);
+  // Tagespriorität des ersten Tages: je Ticket gesetzt (timebox_prio) oder die höchste seiner Blöcke an diesem Tag.
+  const dayPrio = new Map<string, number>();
+  for (const p of (await wb().collection('timebox_prio').find({ userId: u.id, date: from }).toArray()) as any[]) if (p.prio) dayPrio.set(p.key, p.prio);
+  for (const b of blocks) if (b.date === from && b.key && b.prio) dayPrio.set(b.key, Math.min(b.prio, dayPrio.get(b.key) ?? 9));
+  const mine = sortMyTickets([...im.values()].filter((i) => i.type !== 'Workstream' && i.status !== 'Done' && i.statusCategory !== 'done' && isMine(i, who)), sl, dayPrio);
   const ticket = (k?: string | null) => { const i = k ? im.get(k) : undefined; return i ? { key: i.key, summary: i.summary, status: i.status, goals: goalsOf(i.labels), inSprint: !!sl && (i.labels ?? []).includes(sl), noGoal: needsGoal(i, im), priority: i.priority } : null; };
   send(res, 200, {
     dates, sprint: cur ? { id: cur.id, label: sl } : null,
     blocks: blocks.map((b) => ({ ...tbOut(b), ticket: ticket(b.key) })),
     summary: Object.fromEntries(dates.map((d) => [d, daySummary(blocks.filter((b) => b.date === d), im)])),
-    tickets: mine.slice(0, 80).map((i) => ({ ...ticket(i.key)!, duedate: i.duedate, overdue: isOverdue(i) })),
+    tickets: mine.slice(0, 80).map((i) => ({ ...ticket(i.key)!, duedate: i.duedate, overdue: isOverdue(i), dayPrio: dayPrio.get(i.key) ?? null })),
     grid: { start: 7 * 60, end: 20 * 60, step: 15 },
   });
 });
@@ -1098,6 +1150,18 @@ on('PATCH', /^\/api\/timebox\/([0-9a-f]{24})$/, async (req, res, m) => {
 on('DELETE', /^\/api\/timebox\/([0-9a-f]{24})$/, async (req, res, m) => {
   const u = await needUser(req);
   await tbCol().deleteOne({ _id: new ObjectId(m[1]), userId: u.id });
+  send(res, 200, { ok: true });
+});
+
+// Tagespriorität je Ticket (privat, nur Mongo): 1 Muss · 2 Soll · 3 Kann · null = keine.
+on('POST', /^\/api\/timebox\/prio$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const date = String(b.date ?? ''), key = String(b.key ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw new HttpError(400, 'Datum und Ticket angeben.');
+  const prio = b.prio === null || b.prio === undefined || b.prio === '' ? null : Number(b.prio);
+  if (prio !== null && ![1, 2, 3].includes(prio)) throw new HttpError(400, 'Tagespriorität 1 (Muss), 2 (Soll), 3 (Kann) oder leer.');
+  await wb().collection('timebox_prio').updateOne({ userId: u.id, date, key }, { $set: { prio, at: new Date() } }, { upsert: true });
   send(res, 200, { ok: true });
 });
 

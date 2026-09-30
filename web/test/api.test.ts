@@ -770,3 +770,29 @@ test('Ziel-Deep-Dive: Felder mit Lücken, Kindziele, Tickets direkt und über Ki
   const tree = await anna.req('/api/goals');
   assert.deepEqual(tree.j.roots.map((r: any) => r.id), ['GATE-2701']);
 });
+
+test('Mein Tag: Tagespriorität je Block und je Ticket (privat), Seitenleiste danach sortiert; Ticket bearbeiten (Priorität, Owner, Ziel) nach Bestätigung', async () => {
+  const blk = await anna.req('/api/timebox', { body: { date: '2026-10-05', start: 480, dur: 60, key: 'PM-267', prio: 1 } });
+  assert.equal(blk.status, 200, JSON.stringify(blk.j));
+  assert.equal((await anna.req('/api/timebox/prio', { body: { date: '2026-10-05', key: 'PM-332', prio: 2 } })).status, 200);
+  assert.equal((await anna.req('/api/timebox/prio', { body: { date: '2026-10-05', key: 'PM-332', prio: 7 } })).status, 400);
+  const day = await anna.req('/api/timebox?from=2026-10-05');
+  assert.equal(day.j.blocks[0].prio, 1);
+  const pr = Object.fromEntries(day.j.tickets.map((t: any) => [t.key, t.dayPrio]));
+  if ('PM-267' in pr) assert.equal(pr['PM-267'], 1);
+  assert.equal((await bernd.req('/api/timebox?from=2026-10-05')).j.tickets.some((t: any) => t.dayPrio), false, 'privat');
+  // Ticket bearbeiten
+  const meta = await anna.req('/api/jira/meta');
+  assert.ok(meta.j.priorities.includes('High'));
+  assert.ok(meta.j.people.some((p: any) => p.accountId === 'acc-knutpeters'));
+  const pre = await anna.req('/api/board/issue/PM-332/edit', { body: { priority: 'High' } });
+  assert.equal(pre.j.needsConfirm, true);
+  assert.match(pre.j.preview, /Priorität → High/);
+  assert.equal((await anna.req('/api/board/issue/PM-332/edit', { body: { priority: 'Irgendwas', confirm: true } })).status, 400);
+  const ok = await anna.req('/api/board/issue/PM-332/edit', { body: { priority: 'High', assignee: 'acc-knutpeters', goal: 'KR1', confirm: true } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.j));
+  const f = jira.issues.find((i: any) => i.key === 'PM-332').fields;
+  assert.equal(f.priority.name, 'High');
+  assert.equal(f.assignee.accountId, 'acc-knutpeters');
+  assert.ok(f.labels.includes('ziel-kr1'));
+});

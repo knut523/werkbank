@@ -7,7 +7,7 @@ import { goalsOf } from './goals.ts';
 
 export const DAY_START = 7 * 60, DAY_END = 20 * 60, STEP = 15;
 export type BlockState = 'geplant' | 'erledigt' | 'verschoben';
-export interface Block { _id?: string; userId: string; date: string; start: number; dur: number; title?: string; key?: string | null; state: BlockState; carriedFrom?: string; carriedTo?: string }
+export interface Block { _id?: string; userId: string; date: string; start: number; dur: number; title?: string; key?: string | null; state: BlockState; carriedFrom?: string; carriedTo?: string; prio?: 1 | 2 | 3 | null }
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -30,6 +30,7 @@ export function cleanBlock(b: any, partial = false): { ok: Partial<Block> } | { 
   if (b.title !== undefined) out.title = String(b.title).replace(/\s+/g, ' ').trim().slice(0, 200);
   if (b.key !== undefined) { const k = b.key ? String(b.key) : null; if (k && !/^[A-Z][A-Z0-9]+-\d+$/.test(k)) return { error: 'Ungültiger Ticket-Schlüssel.' }; out.key = k; }
   if (b.state !== undefined) { if (!['geplant', 'erledigt', 'verschoben'].includes(b.state)) return { error: 'Ungültiger Zustand.' }; out.state = b.state; }
+  if (b.prio !== undefined) { if (b.prio !== null && ![1, 2, 3].includes(Number(b.prio))) return { error: 'Tagespriorität 1 (Muss), 2 (Soll), 3 (Kann) oder leer.' }; out.prio = b.prio === null ? null : (Number(b.prio) as 1 | 2 | 3); }
   if (!partial && !out.title && !out.key) return { error: 'Titel oder Ticket angeben.' };
   return { ok: out };
 }
@@ -41,7 +42,7 @@ export function carryOver(blocks: Block[], date: string): { copies: Block[]; mar
   const open = blocks.filter((b) => b.date === date && b.state !== 'erledigt' && !b.carriedTo);   // schon übertragen: nicht doppelt
   const to = nextDay(date);
   return {
-    copies: open.map((b) => ({ userId: b.userId, date: to, start: b.start, dur: b.dur, title: b.title, key: b.key ?? null, state: 'geplant' as const, carriedFrom: date })),
+    copies: open.map((b) => ({ userId: b.userId, date: to, start: b.start, dur: b.dur, title: b.title, key: b.key ?? null, state: 'geplant' as const, carriedFrom: date, prio: b.prio ?? null })),
     mark: open.map((b) => String(b._id)),
   };
 }
@@ -60,8 +61,9 @@ export function daySummary(blocks: Block[], issues: Map<string, Pick<Issue, 'lab
 }
 
 /** „Meine offenen Tickets“: im aktuellen Sprint zuerst, dann nach Fälligkeit, dann mit Ziel vor ohne. */
-export function sortMyTickets<T extends Pick<Issue, 'key' | 'duedate' | 'labels'>>(ts: T[], sprintLabel: string | null): T[] {
+export function sortMyTickets<T extends Pick<Issue, 'key' | 'duedate' | 'labels'>>(ts: T[], sprintLabel: string | null, dayPrio: Map<string, number> = new Map()): T[] {
+  const dp = (t: T) => dayPrio.get(t.key) ?? 9;
   const inS = (t: T) => (sprintLabel && (t.labels ?? []).includes(sprintLabel) ? 0 : 1);
   const hasGoal = (t: T) => (goalsOf(t.labels).length ? 0 : 1);
-  return [...ts].sort((a, b) => inS(a) - inS(b) || (a.duedate ?? '9999').localeCompare(b.duedate ?? '9999') || hasGoal(a) - hasGoal(b) || a.key.localeCompare(b.key, 'de', { numeric: true }));
+  return [...ts].sort((a, b) => dp(a) - dp(b) || inS(a) - inS(b) || (a.duedate ?? '9999').localeCompare(b.duedate ?? '9999') || hasGoal(a) - hasGoal(b) || a.key.localeCompare(b.key, 'de', { numeric: true }));
 }

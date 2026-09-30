@@ -13,7 +13,8 @@ import { log } from './log.ts';
 import type { User } from './auth.ts';
 
 export type JiraAction = { type: 'comment'; text: string } | { type: 'status'; to: string } | { type: 'due'; date: string | null }
-  | { type: 'labels'; add?: string[]; remove?: string[] } | { type: 'parent'; key: string };
+  | { type: 'labels'; add?: string[]; remove?: string[] } | { type: 'parent'; key: string }
+  | { type: 'priority'; name: string } | { type: 'assignee'; accountId: string | null; name?: string };
 
 /** Trockenlauf (Vorschau-Instanz): zeigen, was geschrieben würde, nichts nach Jira schreiben. */
 export const dryRun = () => process.env.WERKBANK_JIRA_DRYRUN === '1' || process.env.WERKBANK_DRYRUN === '1';
@@ -24,7 +25,15 @@ export function describe(a: JiraAction): string {
   if (a.type === 'status') return `Status → ${a.to}`;
   if (a.type === 'due') return `Fällig → ${a.date || 'ohne'}`;
   if (a.type === 'labels') return `Labels ${[...(a.add ?? []).map((x) => '+' + x), ...(a.remove ?? []).map((x) => '−' + x)].join(' ')}`;
+  if (a.type === 'priority') return `Priorität → ${a.name}`;
+  if (a.type === 'assignee') return `Owner → ${a.name ?? a.accountId ?? 'niemand'}`;
   return `Parent → ${a.key}`;
+}
+
+export function editFields(a: JiraAction): Record<string, unknown> {
+  if (a.type === 'priority') return { priority: { name: a.name } };
+  if (a.type === 'assignee') return { assignee: a.accountId ? { accountId: a.accountId } : null };
+  return {};
 }
 
 /** Neue Label-Liste aus der aktuellen (frisch gelesenen) und den Änderungen. */
@@ -138,6 +147,7 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
       if (a.type === 'due') calls.push({ tool: 'mcp__atlassian__editJiraIssue', input: { ...base, fields: { duedate: a.date || null } } });
       if (a.type === 'labels') calls.push({ tool: 'mcp__atlassian__editJiraIssue', input: { ...base, fields: { labels: applyLabels(await currentLabels(), a.add, a.remove) } } });
       if (a.type === 'parent') calls.push({ tool: 'mcp__atlassian__editJiraIssue', input: { ...base, fields: { parent: { key: a.key } } } });
+      if (a.type === 'priority' || a.type === 'assignee') calls.push({ tool: 'mcp__atlassian__editJiraIssue', input: { ...base, fields: editFields(a) } });
     } else if (via === 'rest') {
       if (!read) throw new JiraWriteError(412, 'jira_missing', 'Kein Jira-Zugang hinterlegt — unter „Einrichtung“ verbinden.');
       if (a.type === 'comment') await addComment(read, key, a.text.trim());
@@ -145,6 +155,7 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
       if (a.type === 'due') await setDueDate(read, key, a.date || null);
       if (a.type === 'labels') await jiraFetch(read, 'PUT', `/issue/${encodeURIComponent(key)}`, { update: { labels: [...(a.add ?? []).map((l) => ({ add: l })), ...(a.remove ?? []).map((l) => ({ remove: l }))] } });
       if (a.type === 'parent') await jiraFetch(read, 'PUT', `/issue/${encodeURIComponent(key)}`, { fields: { parent: { key: a.key } } });
+      if (a.type === 'priority' || a.type === 'assignee') await jiraFetch(read, 'PUT', `/issue/${encodeURIComponent(key)}`, { fields: editFields(a) });
     } else {
       if (a.type === 'comment') await mcpWrite(u, 'mcp__atlassian__addCommentToJiraIssue', { ...base, commentBody: a.text.trim(), contentFormat: 'markdown' });
       if (a.type === 'status') {
@@ -157,6 +168,7 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
       if (a.type === 'due') await mcpWrite(u, 'mcp__atlassian__editJiraIssue', { ...base, fields: { duedate: a.date || null } });
       if (a.type === 'labels') await mcpWrite(u, 'mcp__atlassian__editJiraIssue', { ...base, fields: { labels: applyLabels(await currentLabels(), a.add, a.remove) } });
       if (a.type === 'parent') await mcpWrite(u, 'mcp__atlassian__editJiraIssue', { ...base, fields: { parent: { key: a.key } } });
+      if (a.type === 'priority' || a.type === 'assignee') await mcpWrite(u, 'mcp__atlassian__editJiraIssue', { ...base, fields: editFields(a) });
     }
     done.push(describe(a));
   }
