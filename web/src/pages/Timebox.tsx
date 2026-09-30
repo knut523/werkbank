@@ -4,6 +4,8 @@
 import { useRef, useState, type PointerEvent as RPE } from 'react';
 import { api, fmtDate, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useToast, useConfirm } from '../ui.tsx';
+import { Detail } from './Board.tsx';
+import { NoGoal } from './Sprint.tsx';
 
 const SLOT = 16;           // px je 15 Minuten
 const STEP = 15;
@@ -13,6 +15,8 @@ const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.ge
 const addDays = (s: string, n: number) => { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + n); return iso(d); };
 const monday = (s: string) => { const d = new Date(s + 'T12:00:00'); const w = (d.getDay() + 6) % 7; d.setDate(d.getDate() - w); return iso(d); };
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+const PRIO: Record<number, string> = { 1: 'Muss', 2: 'Soll', 3: 'Kann' };
+const nextPrio = (p?: number | null) => (p ? (p < 3 ? p + 1 : null) : 1);
 const hours = (m: number) => (m / 60).toLocaleString('de-AT', { maximumFractionDigits: 1 });
 
 type Op = { kind: 'create'; date: string; from: number; to: number }
@@ -34,6 +38,7 @@ export function Timebox({ cfg }: { cfg: Config }) {
   const [ask, setAsk] = useState<{ date: string; start: number; dur: number } | null>(null);
   const [title, setTitle] = useState('');
   const [askKey, setAskKey] = useState('');
+  const [openKey, setOpenKey] = useState<string | null>(null);
   const g = data?.grid ?? { start: 420, end: 1200, step: 15 };
   const H = ((g.end - g.start) / STEP) * SLOT;
   const minuteAt = (el: HTMLElement, clientY: number) => {
@@ -102,6 +107,8 @@ export function Timebox({ cfg }: { cfg: Config }) {
 
   const dates: string[] = data?.dates ?? [from];
   const blocksOf = (day: string) => (data?.blocks ?? []).filter((b: any) => b.date === day);
+  // Beim Ziehen auf einen anderen Tag erscheint der Block in der Zielspalte (nicht unsichtbar).
+  const shownIn = (day: string) => (data?.blocks ?? []).filter((b: any) => { const o = op && op.kind !== 'create' && op.id === b.id ? op : null; return (o ? o.date : b.date) === day; });
   const sum = (data?.summary ?? {})[date] ?? null;
   const wsum = week && data ? Object.values(data.summary as Record<string, any>).reduce((a: any, s: any) => ({ planned: a.planned + s.planned, done: a.done + s.done, goal: a.goal + s.goal }), { planned: 0, done: 0, goal: 0 }) : null;
   return (
@@ -147,23 +154,23 @@ export function Timebox({ cfg }: { cfg: Config }) {
                 <div key={day} className="tb-col" data-col={day} style={{ height: H }} onPointerDown={(e) => onColDown(e, day)}
                   onDragOver={(e) => { if (e.dataTransfer.types.includes('application/x-ticket')) e.preventDefault(); }} onDrop={(e) => onDrop(e, day)} data-testid={`tb-col-${day}`}>
                   {op?.kind === 'create' && op.date === day && <div className="tb-ghost" style={{ top: ((op.from - g.start) / STEP) * SLOT, height: ((op.to - op.from) / STEP) * SLOT }}>{hm(op.from)}–{hm(op.to)}</div>}
-                  {blocksOf(day).map((b: any) => {
+                  {shownIn(day).map((b: any) => {
                     const live = op && op.kind !== 'create' && op.id === b.id ? op : null;
-                    if (live && live.date !== day) return null;
                     const start = live ? live.start : b.start, dur = live ? live.dur : b.dur;
                     return (
-                      <div key={b.id} className={`tb-block st-${b.state} ${b.ticket?.goals?.length ? 'has-goal' : ''} ${live ? 'dragging' : ''}`} data-block={b.id}
+                      <div key={b.id} className={`tb-block st-${b.state} bp${b.prio ?? 0} ${b.ticket?.goals?.length ? "has-goal" : ""} ${live ? "dragging" : ""}`} data-block={b.id}
                         style={{ top: ((start - g.start) / STEP) * SLOT, height: Math.max(SLOT, (dur / STEP) * SLOT - 2) }} onPointerDown={(e) => onBlockDown(e, b, 'move')}>
                         <div className="tb-bhead">
-                          <span className="tiny">{hm(start)}–{hm(start + dur)}</span>
+                          <span className="tiny row" style={{ gap: 4 }}>{hm(start)}–{hm(start + dur)}
+                            <button className={`prio-chip p${b.prio ?? 0}`} title="Tagespriorität (Muss/Soll/Kann) — klicken zum Wechseln" aria-label="Tagespriorität" onClick={() => call(() => api(`/api/timebox/${b.id}`, { method: 'PATCH', body: { prio: nextPrio(b.prio) } }))}>{b.prio ? PRIO[b.prio] : '·'}</button></span>
                           <span className="tb-actions">
                             <button className="btn ghost small" title={b.state === 'erledigt' ? 'wieder offen' : 'erledigt'} aria-label="erledigt" onClick={() => call(() => api(`/api/timebox/${b.id}`, { method: 'PATCH', body: { state: b.state === 'erledigt' ? 'geplant' : 'erledigt' } }))}>✓</button>
                             <button className="btn ghost small" title={b.state === 'verschoben' ? 'wieder geplant' : 'verschoben'} aria-label="verschoben" onClick={() => call(() => api(`/api/timebox/${b.id}`, { method: 'PATCH', body: { state: b.state === 'verschoben' ? 'geplant' : 'verschoben' } }))}>↷</button>
                             <button className="btn ghost small" title="löschen" aria-label="löschen" onClick={() => call(() => api(`/api/timebox/${b.id}`, { method: 'DELETE' }))}>✕</button>
                           </span>
                         </div>
-                        {b.ticket ? <div className="tb-btitle"><a href={`#/board?key=${b.ticket.key}`} onPointerDown={(e) => e.stopPropagation()}><b>{b.ticket.key}</b></a> {b.ticket.summary}</div> : <div className="tb-btitle">{b.title || b.key}</div>}
-                        {b.ticket && <div className="row" style={{ gap: 3 }}>{b.ticket.goals.map((x: string) => <span key={x} className="chip tiny-chip goal-id">🎯 {x}</span>)}<span className="chip tiny-chip">{b.ticket.status}</span></div>}
+                        {b.ticket ? <div className="tb-btitle"><button className="sublink" onPointerDown={(e) => e.stopPropagation()} onClick={() => setOpenKey(b.ticket.key)} title="Ticket öffnen und bearbeiten"><b>{b.ticket.key}</b> {b.ticket.summary}</button></div> : <div className="tb-btitle">{b.title || b.key}</div>}
+                        {b.ticket && <div className="row" style={{ gap: 3 }}>{b.ticket.goals.map((x: string) => <span key={x} className="chip tiny-chip goal-id">🎯 {x}</span>)}{b.ticket.noGoal && <NoGoal />}<span className="chip tiny-chip">{b.ticket.status}</span>{b.ticket.priority && b.ticket.priority !== 'Medium' && <span className="chip tiny-chip">{b.ticket.priority}</span>}</div>}
                         {b.state !== 'geplant' && <span className="chip tiny-chip">{b.state}</span>}
                         <div className="tb-resize" onPointerDown={(e) => onBlockDown(e, b, 'resize')} aria-label="Länge ändern" />
                       </div>
@@ -174,11 +181,16 @@ export function Timebox({ cfg }: { cfg: Config }) {
             </div>
           </div>
           <aside className="tb-side card soft" aria-label="Meine offenen Tickets">
-            <b>Meine offenen Tickets</b> <span className="tiny">({data.tickets.length}) · Sprint → Fälligkeit → Ziel · auf den Tag ziehen</span>
+            <b>Meine offenen Tickets</b> <span className="tiny">({data.tickets.length}) · Tagesprio → Sprint → Fälligkeit → Ziel · auf den Tag ziehen, Klick öffnet</span>
             <ul className="tlist">{data.tickets.map((t: any) => (
               <li key={t.key} className="trow tb-ticket" draggable onDragStart={(e) => { e.dataTransfer.setData('application/x-ticket', t.key); e.dataTransfer.effectAllowed = 'copy'; }} data-ticket={t.key}>
-                <span className="trow-s"><b>{t.key}</b> {t.summary}</span>
+                <span className="trow-s"><button className="sublink" onClick={() => setOpenKey(t.key)} title="Ticket öffnen und bearbeiten"><b>{t.key}</b> {t.summary}</button></span>
                 <span className="row" style={{ gap: 3 }}>
+                  <select className={`prio-sel p${t.dayPrio ?? 0}`} aria-label={`Tagespriorität ${t.key}`} value={t.dayPrio ?? ''} onChange={(e) => call(() => api('/api/timebox/prio', { body: { date: from, key: t.key, prio: e.target.value ? Number(e.target.value) : null } }))}>
+                    <option value="">Prio –</option><option value="1">Muss</option><option value="2">Soll</option><option value="3">Kann</option>
+                  </select>
+                  {t.priority && <span className="chip tiny-chip" title="Jira-Priorität">{t.priority}</span>}
+                  {t.noGoal && <NoGoal />}
                   {t.inSprint && <span className="chip tiny-chip ok">Sprint</span>}
                   {t.goals.map((x: string) => <span key={x} className="chip tiny-chip goal-id">🎯 {x}</span>)}
                   {t.duedate && <span className={`chip tiny-chip ${t.overdue ? 'bad' : ''}`}>{fmtDate(t.duedate)}</span>}
@@ -190,6 +202,7 @@ export function Timebox({ cfg }: { cfg: Config }) {
           </aside>
         </div>
       )}
+      {openKey && <Detail k={openKey} site={cfg.jiraSite} forge={cfg.forge} onOpenKey={setOpenKey} onClose={() => { setOpenKey(null); d.reload(); }} onChanged={() => d.reload()} />}
       {ask && (
         <div className="backdrop" onClick={() => setAsk(null)}>
           <form className="dialog" role="dialog" aria-modal="true" aria-label="Block anlegen" onClick={(e) => e.stopPropagation()} onSubmit={(e) => {

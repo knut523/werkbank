@@ -251,7 +251,37 @@ function ForgePanel({ issueKey, enabled, onStarted }: { issueKey: string; enable
   );
 }
 
-function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: string; onClose: () => void; onChanged: () => void; site: string; forge?: boolean; onOpenKey: (k: string) => void }) {
+
+/** Priorität, Owner, Ziel-Label ändern — je mit Bestätigung; Trockenlauf in der Vorschau. */
+function EditFields({ i, onDone }: { i: any; onDone: () => void }) {
+  const meta = useLoad(() => api('/api/jira/meta'), []);
+  const m: any = meta.data;
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [err, setErr] = useState<unknown>(null);
+  const edit = async (body: any, title: string) => {
+    setErr(null);
+    try {
+      const pre: any = await api(`/api/board/issue/${i.key}/edit`, { body });
+      if (pre.nothing) return;
+      if (!(await confirm({ title, confirmLabel: pre.dryRun ? 'Trockenlauf ausführen' : 'In Jira schreiben', body: <><pre className="small">{pre.preview}</pre>{pre.dryRun && <p className="note small">Vorschau: <b>Trockenlauf</b> — nichts wird geschrieben.</p>}</> }))) return;
+      const r: any = await api(`/api/board/issue/${i.key}/edit`, { body: { ...body, confirm: true } });
+      toast(r.dryRun ? `Trockenlauf: würde schreiben — ${r.done.join(' · ')}` : `In Jira: ${r.done.join(' · ')}`);
+      onDone();
+    } catch (e) { setErr(e); }
+  };
+  if (!m) return null;
+  return (
+    <div className="row" style={{ marginTop: 10, gap: 10 }} data-testid="edit-fields">
+      <label className="small">Priorität <select aria-label="Jira-Priorität" value={i.priority ?? ''} onChange={(e) => edit({ priority: e.target.value }, `Priorität von ${i.key} ändern?`)}>{m.priorities.map((p: string) => <option key={p} value={p}>{p}</option>)}</select></label>
+      <label className="small">Owner <select aria-label="Owner" value={i.assigneeId ?? ''} onChange={(e) => edit({ assignee: e.target.value || null }, `Owner von ${i.key} ändern?`)}><option value="">— niemand —</option>{m.people.map((p: any) => <option key={p.accountId} value={p.accountId}>{p.name}</option>)}</select></label>
+      <label className="small">Ziel <select aria-label="Ziel zuordnen" value="" onChange={(e) => e.target.value && edit({ goal: e.target.value }, `${i.key} dem Ziel ${e.target.value} zuordnen?`)}><option value="">{(i.labels ?? []).filter((l: string) => l.startsWith('ziel-')).join(', ') || 'ohne Ziel'} → …</option>{m.goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 40)}</option>)}</select></label>
+      <Err e={err} />
+    </div>
+  );
+}
+
+export function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: string; onClose: () => void; onChanged: () => void; site: string; forge?: boolean; onOpenKey: (k: string) => void }) {
   const d = useLoad(() => api('/api/board/issue/' + k), [k]);
   // Jira-Änderung an genau diesem Ticket (z. B. aus einem Chat) → Details still nachladen.
   useJiraLive((e) => { if (e.all || e.keys.includes(k)) api('/api/board/issue/' + k).then(d.setData).catch(() => {}); });
@@ -302,7 +332,7 @@ function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: string; 
           }}>💬 Im Chat besprechen</button></div>
           <Err e={err} />
 
-          <h3>Aktionen <span className="tiny">(je mit Bestätigung — geschrieben über den Atlassian-MCP in deiner Claude-Sitzung, dauert einige Sekunden)</span></h3>
+          <h3>Aktionen <span className="tiny">(je mit Bestätigung — geschrieben über den Atlassian-MCP, schneller Weg ohne Modell)</span></h3>
           <div className="col">
             <textarea rows={3} placeholder="Kommentar …" value={comment} onChange={(e) => setComment(e.target.value)} aria-label="Kommentar" />
             <div><button className="btn" disabled={!comment.trim()} onClick={async () => { if (await write('comment', { text: comment }, `Kommentar an ${k}?`, <pre style={{ whiteSpace: 'pre-wrap' }}>{comment}</pre>)) setComment(''); }}>Kommentar senden</button></div>
@@ -319,6 +349,7 @@ function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: string; 
             <button className="btn small" disabled={!due} onClick={() => write('due', { date: due }, `Fälligkeit von ${k} setzen?`, <p>{fmtDate(i.duedate)} → <b>{fmtDate(due)}</b></p>)}>Setzen</button>
             {i.duedate && <button className="btn small" onClick={() => write('due', { date: null }, `Fälligkeit von ${k} entfernen?`, <p>{fmtDate(i.duedate)} → ohne Datum</p>)}>Entfernen</button>}
           </div>
+          <EditFields i={i} onDone={async () => { await d.reload(); onChanged(); }} />
           <ChatAgents issueKey={k} runs={(d.data as any).runs} onChange={d.reload} />
           <AgentPanel issueKey={k} runs={(d.data as any).runs} onChange={() => d.reload()} />
           <ForgePanel issueKey={k} enabled={!!forge} onStarted={() => d.reload()} />

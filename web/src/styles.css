@@ -271,3 +271,9 @@ a.tcard { display: block; color: inherit; text-decoration: none; }
 .chip.nogoal { font-weight: 600; text-decoration: none; }
 .goal-link { color: inherit; }
 tr.proposed td { background: color-mix(in srgb, var(--chip-ok) 45%, transparent); }
+.prio-chip { border: 1px solid var(--border-medium); background: var(--surface-primary); border-radius: 999px; font-size: 10px; padding: 0 6px; line-height: 1.5; cursor: pointer; color: var(--text-secondary); }
+.prio-chip.p1, .prio-sel.p1 { background: var(--chip-bad); color: var(--chip-bad-text); border-color: var(--red-500); }
+.prio-chip.p2, .prio-sel.p2 { background: var(--chip-warn); color: var(--chip-warn-text); border-color: var(--amber-500); }
+.prio-chip.p3, .prio-sel.p3 { background: var(--surface-tertiary); color: var(--text-secondary); }
+.prio-sel { font-size: 11px; padding: 1px 4px; border-radius: 6px; }
+.tb-block .sublink { text-align: left; }

@@ -41,3 +41,12 @@ test('Meine offenen Tickets: Sprint zuerst, dann Fälligkeit, dann mit Ziel', ()
   const r = sortMyTickets([t('PM-1', null), t('PM-2', '2026-10-01'), t('PM-3', '2026-12-01', ['sprint-2026-09-28']), t('PM-4', null, ['ziel-kr1'])], 'sprint-2026-09-28');
   assert.deepEqual(r.map((x) => x.key), ['PM-3', 'PM-2', 'PM-4', 'PM-1']);
 });
+
+test('Tagespriorität: 1–3 (Muss/Soll/Kann) je Block, steuert die Sortierung vor Sprint/Fälligkeit/Ziel', () => {
+  assert.deepEqual(cleanBlock({ prio: 1 }, true), { ok: { prio: 1 } });
+  assert.deepEqual(cleanBlock({ prio: null }, true), { ok: { prio: null } });
+  assert.ok('error' in cleanBlock({ prio: 4 }, true));
+  const t = (key: string, duedate: string | null, labels: string[] = []) => ({ key, duedate, labels });
+  const r = sortMyTickets([t('PM-1', '2026-10-01', ['sprint-2026-09-28']), t('PM-2', null), t('PM-3', '2026-12-01')], 'sprint-2026-09-28', new Map([['PM-3', 1], ['PM-2', 3]]));
+  assert.deepEqual(r.map((x) => x.key), ['PM-3', 'PM-2', 'PM-1']);
+});
