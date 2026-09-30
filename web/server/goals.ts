@@ -110,7 +110,8 @@ export function parseGoalsFile(text: string): { goals: GoalRow[]; ratings: Ratin
 
 /** Sprintziele aus dem Planning (alt S1–S4 oder neu S<MMTT>-<n>) → GoalRow mit normierter ID. */
 export function sprintGoalsFromOutcomes(outcomes: Outcome[], date: string): GoalRow[] {
-  return outcomes.map((o) => ({
+  // Vorlagenzeilen („| S1 | … |“) sind noch keine Ziele.
+  return outcomes.filter((o) => o.title && !/^[…\s.-]*$/.test(o.title)).map((o) => ({
     id: normSprintGoalId(o.id, date), level: 'Sprint', result: o.title, metric: o.dod ?? '', baseline: '', target: '', due: o.date ?? '',
     owner: o.owner ?? '', parent: o.parent ?? null, evidence: o.evidence ?? '', line: o.line, gaps: [], tickets: o.tickets ?? [], source: 'planning' as const,
     anchor: o.anchor,
@@ -162,4 +163,50 @@ export function goalTree(rows: GoalRow[], ratings: Rating[], issues: Issue[]): {
   sortNodes(roots);
   for (const r of roots) walk(r, new Set([r.id]));
   return { roots, byId };
+}
+
+// ---------- Jedes Ticket gehört zu einem Ziel (Knut, 30.09., Runde 6) ----------
+// Offene Tickets (außer Workstream/Epic) brauchen ein gültiges Ziel-Label — eigenes oder vom Parent geerbt
+// (Sub-task erbt vom Task). Ausnahme: Label ziel-keins (WERKBANK_GOAL_EXEMPT_LABEL), Begründung im Kommentar.
+
+export const exemptLabel = () => (process.env.WERKBANK_GOAL_EXEMPT_LABEL || `${labelCfg().goalPrefix}keins`).toLowerCase();
+
+type Min = Pick<Issue, 'key' | 'type' | 'status' | 'statusCategory' | 'parent' | 'labels'>;
+
+export function effectiveGoals(i: Min, byKey: Map<string, Min>): { goals: string[]; inherited: string | null; exempt: boolean } {
+  const ex = exemptLabel();
+  const own = goalsOf(i.labels);
+  const ownEx = (i.labels ?? []).some((l) => l.toLowerCase() === ex);
+  if (own.length || ownEx) return { goals: own, inherited: null, exempt: !own.length && ownEx };
+  const p = i.parent ? byKey.get(i.parent) : undefined;
+  if (p && p.type !== 'Workstream' && p.type !== 'Epic') {
+    const pg = goalsOf(p.labels);
+    const pex = (p.labels ?? []).some((l) => l.toLowerCase() === ex);
+    if (pg.length || pex) return { goals: pg, inherited: p.key, exempt: !pg.length && pex };
+  }
+  return { goals: [], inherited: null, exempt: false };
+}
+
+export function needsGoal(i: Min, byKey: Map<string, Min>): boolean {
+  if (i.type === 'Workstream' || i.type === 'Epic') return false;
+  if (i.status === 'Done' || i.statusCategory === 'done') return false;
+  const e = effectiveGoals(i, byKey);
+  return !e.goals.length && !e.exempt;
+}
+
+export function goalLevel(id: string): Level | '?' {
+  const x = id.toUpperCase();
+  return x.startsWith('GATE-') ? 'Gate' : x.startsWith('Z-') ? 'Ziel' : /^KR\d/.test(x) ? 'KR' : /^M\d{2}-/.test(x) ? 'Monat' : /^S\d{4}-/.test(x) ? 'Sprint' : '?';
+}
+
+/** Ziel-Labels, die beim Zuordnen von `id` wegfallen: nur dieselbe Ebene (+ die Ausnahme ziel-keins). */
+export function sameLevelRemovals(labels: string[], id: string): string[] {
+  const p = labelCfg().goalPrefix, lvl = goalLevel(id), ex = exemptLabel();
+  return labels.filter((l) => {
+    const low = l.toLowerCase();
+    if (low === ex) return true;
+    if (!low.startsWith(p)) return false;
+    const gid = low.slice(p.length).toUpperCase();
+    return GOAL_ID.test(gid) && goalLevel(gid) === lvl && gid !== id.toUpperCase();
+  });
 }

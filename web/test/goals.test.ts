@@ -84,3 +84,26 @@ test('Sprintziele: altes S1–S4 und neues S<MMTT>-<n> mit Eltern-ID, Anker blei
   assert.equal(n[1].anchor, 'PM-379');
   assert.equal(normSprintGoalId('S3', '2026-10-12'), 'S1012-3');
 });
+
+test('Jedes Ticket ein Ziel: eigenes Label oder vom Parent geerbt, Ausnahme ziel-keins, nur offene', async () => {
+  const { effectiveGoals, needsGoal, sameLevelRemovals, goalLevel, exemptLabel } = await import('../server/goals.ts');
+  const I = (key: string, o: any = {}) => ({ key, type: 'Task', status: 'To Do', statusCategory: 'new', parent: 'PM-70', labels: [], ...o });
+  const xs = [
+    I('PM-70', { type: 'Workstream', parent: null }),
+    I('PM-1', { labels: ['ziel-kr1'] }),
+    I('PM-2', { type: 'Sub-task', parent: 'PM-1' }),                   // erbt KR1
+    I('PM-3'),                                                          // ohne Ziel
+    I('PM-4', { labels: ['ziel-keins'] }),                              // Ausnahme
+    I('PM-5', { type: 'Sub-task', parent: 'PM-4' }),                    // erbt Ausnahme
+    I('PM-6', { status: 'Done', statusCategory: 'done' }),              // erledigt: egal
+    I('PM-7', { labels: ['ziel-quatsch'] }),                            // kein gültiges Ziel
+  ];
+  const by = new Map(xs.map((x) => [x.key, x]));
+  assert.deepEqual(effectiveGoals(xs[2] as any, by as any), { goals: ['KR1'], inherited: 'PM-1', exempt: false });
+  assert.deepEqual(xs.filter((x) => needsGoal(x as any, by as any)).map((x) => x.key), ['PM-3', 'PM-7']);
+  assert.equal(exemptLabel(), 'ziel-keins');
+  assert.equal(goalLevel('S0928-1'), 'Sprint');
+  assert.equal(goalLevel('KR2'), 'KR');
+  assert.deepEqual(sameLevelRemovals(['ziel-kr1', 'ziel-s0928-1', 'ziel-keins', 'ziel-quatsch', 'sprint-2026-09-28'], 'KR3'), ['ziel-kr1', 'ziel-keins']);
+  assert.deepEqual(sameLevelRemovals(['ziel-kr1', 'ziel-s0928-1'], 'S0928-2'), ['ziel-s0928-1', ]);
+});

@@ -9,6 +9,7 @@ import { Roadmap } from './pages/Roadmap.tsx';
 import { Skills } from './pages/Skills.tsx';
 import { Dateien } from './pages/Dateien.tsx';
 import { Timebox } from './pages/Timebox.tsx';
+import { Ziele } from './pages/Ziele.tsx';
 
 function useHash() {
   const [h, setH] = useState(() => window.location.hash || '#/');
@@ -30,6 +31,7 @@ const NAV = [
   { href: '#/wissen', label: 'Wissen', ico: '📚', match: /^#\/wissen/ },
   { href: '#/board', label: 'Board', ico: '🗂️', match: /^#\/board/ },
   { href: '#/sprint', label: 'Sprint', ico: '🔁', match: /^#\/sprint/ },
+  { href: '#/ziele', label: 'Ziele', ico: '🎯', match: /^#\/ziele/ },
   { href: '#/timebox', label: 'Mein Tag', ico: '⏱️', match: /^#\/timebox/ },
   { href: '#/roadmap', label: 'Roadmap', ico: '🧭', match: /^#\/roadmap/ },
   { href: '#/skills', label: 'Skills', ico: '🧰', match: /^#\/skills/ },
@@ -73,6 +75,7 @@ export function App() {
     : /^#\/board/.test(hash) ? <Board cfg={cfg} hash={hash} />
     : /^#\/sprint/.test(hash) ? <Sprint cfg={cfg} hash={hash} />
     : /^#\/timebox/.test(hash) ? <Timebox cfg={cfg} />
+    : /^#\/ziele/.test(hash) ? <Ziele cfg={cfg} hash={hash} />
     : /^#\/roadmap/.test(hash) ? <Roadmap cfg={cfg} hash={hash} />
     : /^#\/skills/.test(hash) ? <Skills cfg={cfg} />
     : /^#\/dateien/.test(hash) ? <Dateien cfg={cfg} />

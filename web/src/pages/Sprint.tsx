@@ -26,23 +26,28 @@ function Md({ text }: { text: string }) {
 // ---------- Ziele & Sprint (klassisch) ----------
 
 /** Zelle mit Lücken „‹… fehlt – Quelle: …›“: Lücken grau/kursiv, zählen nicht als Wert. */
+/** Hinweis „ohne Ziel – genauer anschauen“ (Board, Sprint, Mein Tag). */
+export function NoGoal({ small = true }: { small?: boolean }) {
+  return <a className={`chip ${small ? 'tiny-chip' : ''} bad nogoal`} href="#/ziele/zuordnen" title="Kein Ziel-Label, auch nicht vom Parent geerbt — einem Ziel zuordnen oder bewusst ziel-keins (mit Grund)" onClick={(e) => e.stopPropagation()}>ohne Ziel – genauer anschauen</a>;
+}
+
 export function Gap({ text }: { text?: string | null }) {
   if (!text) return <span className="gap">—</span>;
   const parts = text.split(/(‹[^›]*›)/g).filter(Boolean);
   return <>{parts.map((p, i) => p.startsWith('‹') ? <span key={i} className="gap" title="Lücke — noch nicht festgelegt">{p}</span> : <Md key={i} text={p.replace(/\[\[([^\]|]+)(\|[^\]]+)?\]\]/g, '$1')} />)}</>;
 }
 
-function Bar({ p }: { p: { done: number; total: number } }) {
+export function Bar({ p }: { p: { done: number; total: number } }) {
   if (!p?.total) return <span className="tiny">keine Tickets zugeordnet</span>;
   return <span className="progress" title={`${p.done} von ${p.total} Tickets erledigt`}><span className="subbar"><span style={{ width: `${Math.round((p.done / p.total) * 100)}%` }} /></span> <b>{p.done}/{p.total}</b></span>;
 }
 
-function GoalNodeView({ n, depth = 0 }: { n: any; depth?: number }) {
+export function GoalNodeView({ n, depth = 0 }: { n: any; depth?: number }) {
   return (
     <li className={`goal lvl-${n.level}`} data-goal={n.id}>
       <div className="row" style={{ gap: 6, alignItems: 'baseline' }}>
-        <span className="chip goal-id">{n.id}</span><span className="tiny">{n.level}</span>
-        <span style={{ flex: 1, minWidth: 200 }}><Gap text={n.result} /></span>
+        <a className="chip goal-id" href={`#/ziele/${n.id}`} title="Ziel im Detail">{n.id}</a><span className="tiny">{n.level}</span>
+        <a href={`#/ziele/${n.id}`} className="goal-link" style={{ flex: 1, minWidth: 200 }}><Gap text={n.result} /></a>
         {n.rating && <span className="rating" title={`${n.rating.date}: ${n.rating.actual}`}>{n.rating.rating}</span>}
         <Bar p={n.subtree} />
       </div>
@@ -98,7 +103,8 @@ function TicketRow({ t, children }: { t: any; children?: ReactNode }) {
         <span className={`chip tiny-chip ${t.status === 'Done' ? 'ok' : ''}`}>{t.status}</span>
         <span className="chip tiny-chip">{t.assignee ?? 'ohne Owner'}</span>
         {t.duedate && <span className={`chip tiny-chip ${t.overdue ? 'bad' : ''}`}>{fmtDate(t.duedate)}</span>}
-        {t.goals?.map((g: string) => <span key={g} className="chip tiny-chip goal-id">{g}</span>)}
+        {t.goals?.map((g: string) => <a key={g} className="chip tiny-chip goal-id" href={`#/ziele/${g}`}>{g}</a>)}
+        {t.noGoal && <NoGoal />}
         {t.why?.map((w: string) => <span key={w} className="chip tiny-chip warn">{w}</span>)}
         {children}
       </span>

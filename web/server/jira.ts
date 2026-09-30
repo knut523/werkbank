@@ -7,6 +7,7 @@ import { jiraChanged } from './events.ts';
 import { cfg, jiraBase } from './config.ts';
 import { wb } from './db.ts';
 import type { JiraCreds } from './creds.ts';
+import { needsGoal } from './goals.ts';
 
 export const STATUS_COLUMNS = ['Backlog', 'To Do', 'In Progress', 'Ongoing', 'Done'];
 const FIELDS = ['summary', 'status', 'assignee', 'parent', 'duedate', 'priority', 'updated', 'created', 'description', 'comment', 'issuetype', 'labels', 'issuelinks', 'statuscategorychangedate'];
@@ -288,6 +289,7 @@ export function boardModel(issues: (Issue & { hygiene?: string[] })[], opts: { o
     if (opts.filter === 'undated' && (i.duedate || isDoneI(i) || isRecurring(i))) return false;
     if (opts.filter === 'pflege' && !i.hygiene?.length) return false;
     if (opts.label && !(i.labels ?? []).includes(opts.label)) return false;
+    if (opts.filter === 'ohneziel' && !needsGoal(i, byKey)) return false;
     if (opts.q) { const q = opts.q.toLowerCase(); if (!`${i.key} ${i.summary} ${i.assignee ?? ''}`.toLowerCase().includes(q)) return false; }
     return true;
   };
@@ -297,14 +299,14 @@ export function boardModel(issues: (Issue & { hygiene?: string[] })[], opts: { o
   for (const i of issues) if (nested(i)) children.set(i.parent!, [...(children.get(i.parent!) ?? []), i]);
   const cards = issues.filter((i) => i.type !== 'Workstream' && !nested(i)).flatMap((i) => {
     const subs = (children.get(i.key) ?? []).slice().sort((a, b) => a.key.localeCompare(b.key, 'de', { numeric: true }))
-      .map((s) => ({ ...s, overdue: isOverdue(s, today), match: matches(s) }));
+      .map((s) => ({ ...s, overdue: isOverdue(s, today), match: matches(s), noGoal: needsGoal(s, byKey) }));
     const self = matches(i);
     const viaSub = subs.some((s) => s.match && !oldDone(s));
     if (!self && !viaSub) return [];
     if (!opts.showDone && oldDone(i) && !viaSub) return [];
     const broken = i.type === 'Sub-task' ? (i.parent ? (byKey.get(i.parent)?.type === 'Workstream' ? 'Sub-task direkt unter Workstream' : 'Parent nicht in der Kopie') : 'Sub-task ohne Parent')
       : !i.parent ? 'ohne Parent — keinem Workstream zugeordnet' : null;
-    return [{ ...i, subtasks: subs, subtaskDone: subs.filter(isDoneI).length, broken, onlyViaSubtask: !self }];
+    return [{ ...i, subtasks: subs, subtaskDone: subs.filter(isDoneI).length, broken, onlyViaSubtask: !self, noGoal: needsGoal(i, byKey) }];
   });
   const statuses = [...STATUS_COLUMNS, ...[...new Set(cards.map((c) => c.status))].filter((s) => !STATUS_COLUMNS.includes(s)).sort()];
   // Ohne Filter: Bahnen für alle Workstreams, auch ohne sichtbare Kinder (PM-223); alte erledigte nur mit showDone.
@@ -330,6 +332,7 @@ export function boardModel(issues: (Issue & { hygiene?: string[] })[], opts: { o
       orphans: cards.filter((c) => c.broken && c.type !== 'Sub-task').length,
       overdue: issues.filter((i) => i.type !== 'Workstream' && isOverdue(i, today)).length,
       undated: issues.filter((i) => i.type !== 'Workstream' && !i.duedate && !isDoneI(i) && !isRecurring(i)).length,
+      noGoal: issues.filter((i) => needsGoal(i, byKey)).length,
     },
   };
 }
