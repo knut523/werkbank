@@ -39,7 +39,7 @@ async function waitFor(url: string) {
 
 before(async () => {
   cpSync(new URL('./fixtures/vault', import.meta.url).pathname, VAULT, { recursive: true });
-  writeFileSync(join(tmp, 'vorschlag.json'), JSON.stringify([{ key: 'PM-267', ziel: 'ziel-kr1', begruendung: 'Hardware-Flow trägt den Vertrieb', sicherheit: 0.8 }, { key: 'PM-999', ziel: 'KR1' }, { key: 'PM-322', ziel: 'quatsch' }]));
+  writeFileSync(join(tmp, 'vorschlag.json'), JSON.stringify([{ key: 'PM-267', ziel: 'ziel-kr1', begruendung: 'Hardware-Flow trägt den Vertrieb', sicherheit: 0.8 }, { key: 'PM-999', ziel: 'KR1' }, { key: 'PM-322', ziel: 'KR9' }, { key: 'PM-332', ziel: 'GATE-2701' }]));
   // Ziele-Datei nur in der Kopie (andere Tests zählen die Notizen des Fixture-Vaults).
   cpSync(new URL('./fixtures/ziele-olaf.md', import.meta.url).pathname, join(VAULT, 'olaf/1-Projects/ziele-olaf.md'));
   mkdirSync(join(tmp, 'skills-src', 'demo-skill'), { recursive: true });
@@ -734,6 +734,7 @@ test('Jedes Ticket ein Ziel: Liste ohne Ziel mit Vorschlag, Sammelaktion nach Be
   assert.equal(a.j.proposals, 1, 'unbekannte Tickets/Ziele fallen weg');
   assert.ok(a.j.goalIds.some((g: any) => g.id === 'KR1') && !a.j.goalIds.some((g: any) => g.id === 'GATE-2701'));
   const bad = await anna.req('/api/goals/assign', { body: { items: [{ key: 'PM-340', goal: 'keins' }] } });
+  assert.equal(a.j.tickets.find((t: any) => t.key === 'PM-322')?.proposal ?? null, null, 'Vorschlag auf unbekanntes Ziel nicht vorausgewählt');
   assert.equal(bad.status, 400, 'ziel-keins nur mit Begründung');
   const items = [{ key: 'PM-321', goal: 'KR1' }, { key: 'PM-340', goal: 'KEINS', begruendung: 'laufender Betrieb, kein Projektziel' }];
   const pre = await anna.req('/api/goals/assign', { body: { items } });
@@ -750,7 +751,8 @@ test('Jedes Ticket ein Ziel: Liste ohne Ziel mit Vorschlag, Sammelaktion nach Be
   assert.ok(!keys.includes('PM-321') && !keys.includes('PM-340'));
   assert.ok(!keys.includes('PM-324'), 'Sub-task erbt das Ziel vom Task');
   const b = await anna.req('/api/board');
-  assert.ok(typeof b.j.totals.noGoal === 'number');
+  assert.ok(b.j.totals.noGoal > 0);
+  assert.ok(b.j.hygiene.total < b.j.totals.noGoal + 10, '„ohne Ziel“ bläht die Pflege-Zahl nicht auf');
 });
 
 test('Ziel-Deep-Dive: Felder mit Lücken, Kindziele, Tickets direkt und über Kindziele, Risiken, eigene URL', async () => {
@@ -762,7 +764,7 @@ test('Ziel-Deep-Dive: Felder mit Lücken, Kindziele, Tickets direkt und über Ki
   assert.equal(d.j.parent.id, 'GATE-2701');
   const via = Object.fromEntries(d.j.tickets.map((t: any) => [t.key, t.via]));
   assert.equal(via['PM-321'], 'KR1');
-  assert.equal(via['PM-331'], 'M10-1');
+  assert.equal(via['PM-331'], 'M10-1 · Beleg');
   assert.equal(via['PM-324'], 'KR1', 'Sub-task über den Task');
   assert.equal(d.j.progress.total, d.j.tickets.length);
   assert.ok(Array.isArray(d.j.risks.overdue) && Array.isArray(d.j.perWorkstream) && Array.isArray(d.j.history) && Array.isArray(d.j.specs));
@@ -772,15 +774,24 @@ test('Ziel-Deep-Dive: Felder mit Lücken, Kindziele, Tickets direkt und über Ki
 });
 
 test('Mein Tag: Tagespriorität je Block und je Ticket (privat), Seitenleiste danach sortiert; Ticket bearbeiten (Priorität, Owner, Ziel) nach Bestätigung', async () => {
-  const blk = await anna.req('/api/timebox', { body: { date: '2026-10-05', start: 480, dur: 60, key: 'PM-267', prio: 1 } });
+  // PM-900 gehört Anna (aus dem Hygiene-Test): Block „Muss“, dann Ticket ausdrücklich „Kann“ → die ausdrückliche gewinnt.
+  const blk = await anna.req('/api/timebox', { body: { date: '2026-10-05', start: 480, dur: 60, key: 'PM-900', prio: 1 } });
   assert.equal(blk.status, 200, JSON.stringify(blk.j));
-  assert.equal((await anna.req('/api/timebox/prio', { body: { date: '2026-10-05', key: 'PM-332', prio: 2 } })).status, 200);
-  assert.equal((await anna.req('/api/timebox/prio', { body: { date: '2026-10-05', key: 'PM-332', prio: 7 } })).status, 400);
-  const day = await anna.req('/api/timebox?from=2026-10-05');
+  let day = await anna.req('/api/timebox?from=2026-10-05');
   assert.equal(day.j.blocks[0].prio, 1);
-  const pr = Object.fromEntries(day.j.tickets.map((t: any) => [t.key, t.dayPrio]));
-  if ('PM-267' in pr) assert.equal(pr['PM-267'], 1);
-  assert.equal((await bernd.req('/api/timebox?from=2026-10-05')).j.tickets.some((t: any) => t.dayPrio), false, 'privat');
+  assert.equal(day.j.tickets.find((t: any) => t.key === 'PM-900').dayPrio, 1, 'aus dem Block');
+  assert.equal(day.j.tickets[0].key, 'PM-900', 'Tagesprio sortiert nach vorn');
+  assert.equal((await anna.req('/api/timebox/prio', { body: { date: '2026-10-05', key: 'PM-900', prio: 3 } })).status, 200);
+  assert.equal((await anna.req('/api/timebox/prio', { body: { date: '2026-10-05', key: 'PM-900', prio: 7 } })).status, 400);
+  day = await anna.req('/api/timebox?from=2026-10-05');
+  assert.equal(day.j.tickets.find((t: any) => t.key === 'PM-900').dayPrio, 3, 'ausdrücklich gesetzt gewinnt');
+  // Wochenansicht: Priorität des gewählten Tages (?day=), nicht des Montags
+  const wk = await anna.req('/api/timebox?from=2026-09-29&days=7&day=2026-10-05');
+  assert.equal(wk.j.prioDay, '2026-10-05');
+  assert.equal(wk.j.tickets.find((t: any) => t.key === 'PM-900').dayPrio, 3);
+  // privat: Bernds Priorität auf dasselbe Ticket ändert Annas nicht
+  await bernd.req('/api/timebox/prio', { body: { date: '2026-10-05', key: 'PM-900', prio: 1 } });
+  assert.equal((await anna.req('/api/timebox?from=2026-10-05')).j.tickets.find((t: any) => t.key === 'PM-900').dayPrio, 3);
   // Ticket bearbeiten
   const meta = await anna.req('/api/jira/meta');
   assert.ok(meta.j.priorities.includes('High'));

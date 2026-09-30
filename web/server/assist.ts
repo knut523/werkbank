@@ -147,6 +147,7 @@ export function hygieneAll(issues: Issue[]): Map<string, string[]> {
   const out = new Map<string, string[]>();
   for (const [name, id] of owners) {
     for (const h of hygieneFor(issues, { displayName: name, accountId: id ?? null, name }, { staleDays: Number(process.env.WERKBANK_STALE_DAYS || 7) })) {
+      if (h.rule === 'ohne Ziel') continue;   // hat eigenen Zähler/Filter „Ohne Ziel“ — nicht die Pflege-Zahl aufblähen
       out.set(h.key, [...(out.get(h.key) ?? []), h.rule]);
     }
   }

@@ -259,7 +259,7 @@ export function specChecks(
 
 /** Neue Spec nach Skill-Vorlage: Frontmatter nach Vault-Schema + domain/lifecycle, Pflichtabschnitte, Knut-Zeile. */
 export function specTemplate(p: { topic: string; state: string; title: string; goal?: string; jira?: string; today: string; overview?: string }): string {
-  const q = (s: string) => `"${s.replace(/"/g, '\\"')}"`;
+  const q = (s: string) => JSON.stringify(s);   // gültiger YAML-String (Backslash, Anführungszeichen)
   const fm = [
     '---', `title: ${q(`olaf — Spec: ${p.title}`)}`, 'type: reference', 'team: olaf', 'area: product',
     `domain: ${domainOf(p.topic)}`, `lifecycle: ${stateSlug(p.state)}`, 'status: draft', `created: ${p.today}`, `last-verified: ${p.today}`,

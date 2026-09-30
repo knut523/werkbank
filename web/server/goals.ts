@@ -173,24 +173,26 @@ export const exemptLabel = () => (process.env.WERKBANK_GOAL_EXEMPT_LABEL || `${l
 
 type Min = Pick<Issue, 'key' | 'type' | 'status' | 'statusCategory' | 'parent' | 'labels'>;
 
-export function effectiveGoals(i: Min, byKey: Map<string, Min>): { goals: string[]; inherited: string | null; exempt: boolean } {
+/** known: gültige Ziel-IDs (aus ziele-olaf.md + Planning). Labels auf unbekannte/alte Ziele zählen dann nicht. */
+export function effectiveGoals(i: Min, byKey: Map<string, Min>, known?: Set<string>): { goals: string[]; inherited: string | null; exempt: boolean } {
   const ex = exemptLabel();
-  const own = goalsOf(i.labels);
+  const ok = (ids: string[]) => (known ? ids.filter((x) => known.has(x)) : ids);
+  const own = ok(goalsOf(i.labels));
   const ownEx = (i.labels ?? []).some((l) => l.toLowerCase() === ex);
   if (own.length || ownEx) return { goals: own, inherited: null, exempt: !own.length && ownEx };
   const p = i.parent ? byKey.get(i.parent) : undefined;
   if (p && p.type !== 'Workstream' && p.type !== 'Epic') {
-    const pg = goalsOf(p.labels);
+    const pg = ok(goalsOf(p.labels));
     const pex = (p.labels ?? []).some((l) => l.toLowerCase() === ex);
     if (pg.length || pex) return { goals: pg, inherited: p.key, exempt: !pg.length && pex };
   }
   return { goals: [], inherited: null, exempt: false };
 }
 
-export function needsGoal(i: Min, byKey: Map<string, Min>): boolean {
+export function needsGoal(i: Min, byKey: Map<string, Min>, known?: Set<string>): boolean {
   if (i.type === 'Workstream' || i.type === 'Epic') return false;
   if (i.status === 'Done' || i.statusCategory === 'done') return false;
-  const e = effectiveGoals(i, byKey);
+  const e = effectiveGoals(i, byKey, known);
   return !e.goals.length && !e.exempt;
 }
 
