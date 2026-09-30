@@ -129,13 +129,14 @@ test('Kontext-Paket: Cache-Schlüssel ändert sich nur, wenn sich Eingaben ände
   const v = mkdtempSync(join(tmpdir(), 'ctx-'));
   cpSync(FIX, v, { recursive: true });
   const inp = { vaultDir: v, projectsDir: join(v, 'olaf/1-Projects'), issues: ISSUES, who: { name: 'Knut' }, userName: 'Knut', now: NOW };
-  const h1 = inputsHash(inp, '2026-09-28T08:00:00Z');
-  assert.equal(inputsHash(inp, '2026-09-28T08:00:00Z'), h1);
-  assert.notEqual(inputsHash(inp, '2026-09-28T08:15:00Z'), h1, 'neuer Jira-Stand');
+  const h1 = inputsHash(inp);
+  assert.equal(inputsHash(inp), h1, 'gleicher Ticket-Inhalt → gleicher Schlüssel (ein Abgleich allein macht ihn nicht ungültig)');
+  assert.equal(inputsHash({ ...inp, issues: [...ISSUES].reverse() }), h1, 'Reihenfolge egal');
+  assert.notEqual(inputsHash({ ...inp, issues: ISSUES.map((i) => (i.key === 'PM-1' ? { ...i, updated: '2026-09-28T09:00:00Z' } : i)) }), h1, 'Ticket geändert');
   const planning = join(v, 'olaf/1-Projects/sprint-2026-09-28/sprint-2026-09-28-planning.md');
   writeFileSync(planning, '---\ntitle: x\n---\n# neu\n');
   utimesSync(planning, new Date(), new Date(Date.now() + 5000));
-  assert.notEqual(inputsHash(inp, '2026-09-28T08:00:00Z'), h1, 'Planning geändert');
+  assert.notEqual(inputsHash(inp), h1, 'Planning geändert');
 });
 
 test('Hygiene-Block: Anweisung + höchstens die gewählten Fragen', () => {
