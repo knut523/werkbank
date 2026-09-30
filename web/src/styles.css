@@ -163,7 +163,7 @@ table.t th { font-weight: 600; color: var(--text-secondary); font-size: 12.5px; 
 @media (max-width: 1100px) { .wissen { grid-template-columns: 240px 1fr; } .wissen .side-panel { grid-column: 2; position: static; } }
 @media (max-width: 760px) {
   .shell { flex-direction: column; } .side { width: auto; flex-direction: row; overflow-x: auto; padding: 6px; }
-  .side .brand span, .side .foot, .side .spacer { display: none; } .nav { display: flex; }
+  .side .brand span, .side .foot, .side .spacer { display: none; } .nav { display: flex; } .side .nav.col { flex-direction: row; flex-wrap: nowrap; } .side .nav a { white-space: nowrap; }
   .wissen { grid-template-columns: 1fr; } .wtree { position: static; max-height: 260px; }
   .page { padding: 16px; }
 }

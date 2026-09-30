@@ -536,6 +536,83 @@ Knut: „auch instant update des board wenn etwas geändert geschrieben wird mit
   **aufleuchten**; ein offenes Ticket-Detail und die Sprint-Seite laden ebenso nach. Nach einem Verbindungsabbruch
   verbindet sich die Seite selbst neu und lädt einmal alles. Der Strom trägt nur Schlüssel, keine Inhalte.
 
+## Runde 5 (30.09.2026): Sync, Board, PR-Review live, Roadmap, Ziele & Sprint, Mein Tag
+
+### Jira-Abgleich
+- **Vollabgleich** alle 15 min (`WERKBANK_JIRA_SYNC_MIN`), **inkrementell** jede Minute (`WERKBANK_JIRA_INC_MIN`, 0 = aus;
+  JQL `project = PM AND updated >= -2m`, löscht nie, rechnet Workstreams nach).
+- **Löschschutz:** der Vollabgleich löscht nur, wenn Jira vollständig geblättert hat und mindestens 80 % der Tickets
+  des letzten Laufs liefert — sonst nichts gelöscht und Fehler in `meta.jira_sync` (rot am Board).
+- Fehlender Zugang im Hintergrund (Vaultwarden-Sitzung weg) steht als Fehler am Board statt still auszufallen.
+- Karten zeigen „seit X Tagen in <Status>“ (`statuscategorychangedate`) und „⛔ blockiert von …“ (`issuelinks`, nur offene Blocker).
+
+### Board
+- Bahnen für **alle** Workstreams (auch leere), im Kopf Status, Owner, Datum. `Ongoing` = wiederkehrend: nie überfällig,
+  kein „ohne Datum“. Tickets ohne Parent sind rot mit Hinweis „in Jira Parent setzen“.
+- **Ziehen:** Spalte = Statuswechsel (nur Übergänge, die Jira für das Ticket anbietet; andere Spalten sind beim Ziehen
+  gesperrt), Bahn = Parent-Wechsel (nur Tasks; Sub-tasks bleiben an ihrem Task). Die Karte bewegt sich sofort, dann
+  „bestätigen / rückgängig“. Einstellung je Person „Verschieben bestätigen“ (Vorgabe an). Schlägt Jira fehl, springt die
+  Karte zurück. Tastatur/Mobil: ⇄ auf der Karte → „Verschieben nach …“.
+- Filter „🎯 nur aktueller Sprint“ (Label `sprint-JJJJ-MM-TT`), Ziel-Chip 🎯 auf Karten.
+
+### Jira schreiben: schneller Weg
+Die Brücke ruft den Atlassian-MCP **direkt als MCP-Client** auf (kein Modell), mit dem OAuth-Zugang, den Claude Code für
+die Person gespeichert hat. Der Zugang wird nur gelesen, nie erneuert; ist er abgelaufen oder fehlt, läuft der
+bisherige Weg über eine Claude-Sitzung (die ihn erneuert). Gemessen: bisher 10–18 s je Aktion (Median 12,4 s), direkt
+0,2–1,4 s. `BRIDGE_MCP_DIRECT=off` schaltet ab.
+
+### PR-Review live
+Offene PRs aller Repos von `WirStrom1` über die GitHub-GraphQL-API, alle 5 min (`WERKBANK_GITHUB_MIN`), Cache in Mongo
+(`github_prs`), SSE an offene Seiten. Zeigt Konflikt, Entwurf, offene Threads, Alter, Ziel-Branch (≠ develop wird
+markiert) und **wer dran ist** (aus Entwurf/Konflikt/Review-Entscheidung/Threads/angefragten Reviewern, nicht hart).
+Nur lesende Abfragen — `graphql()` weist Mutationen ab, bevor etwas gesendet wird. Token: `WERKBANK_GITHUB_TOKEN`, sonst
+(Pilot) Vaultwarden-Element `WERKBANK_GITHUB_BW_ITEM` (Vorgabe „View only github API“); nie im Frontend oder Log.
+Namen: `WERKBANK_GITHUB_NAMES="login=Name,…"` (Vorgabe knut523=Knut, bizarrochris=Christoph). Das PR-Register im
+Vault bleibt Quelle für Spec ↔ PR und Deploy-Gates.
+
+### Roadmap
+„Priorisierung“ nach Thema, innerhalb nach Rang, „noch nicht priorisiert“ unten je Thema. „Zustände“: Swimlanes
+Thema × (Backlog, Pre-Plan, Plan, Review, Live), Karten nach Rang, mit Rang-Chip, Jira-Status und PR-Live-Zustand.
+Oben „Als Nächstes“: Top 5 mit höchstem Rang, noch nicht in Arbeit (kein Review/Live, kein Ticket In Progress/Done);
+Specs mit Ticket im aktuellen Sprint zuerst. „Konsistenz“: Spec 4-Review/5-Live vs. Ticket offen und umgekehrt,
+Specs ohne `jira:` im Frontmatter.
+
+### Ziele & Sprint
+Quelle (nur lesen): `olaf/1-Projects/ziele-olaf.md` (`WERKBANK_GOALS_FILE`). Format (von Knut festgelegt):
+
+| Abschnitt | Spalten |
+|---|---|
+| `## Ziele` | ID \| Ebene \| Ergebnis \| Messgröße \| Baseline \| Ziel \| Stichtag \| Owner \| Eltern-ID \| Beleg |
+| `## Bewertung` | ID \| Datum \| Ist \| Bewertung ✅/🟡/❌ \| Beleg \| Warum |
+
+Ebenen `Gate | Ziel | KR | Monat | Sprint`; IDs `GATE-<JJMM>`, `Z-<kürzel>`, `KR<n>`, `M<MM>-<n>`, `S<MMTT>-<n>`; die
+Eltern-ID baut den Baum. Lücken `‹… fehlt – Quelle: …›` werden grau/kursiv gezeigt und nie als Wert gezählt. Fehlt die
+Datei oder eine Gate-Zeile: „Stage Gate nicht definiert“. Sprintziele im Planning: neu `S<MMTT>-<n>` mit Eltern-ID,
+alt `S1`–`S4` (→ `S<MMTT des Sprints>-<n>`); Anker `<!--k:…-->` bleiben erhalten und verknüpfen Tickets.
+
+**Jira-Labels** (Empfehlung, noch nicht final bestätigt — konfigurierbar): Sprint `sprint-JJJJ-MM-TT`
+(`WERKBANK_SPRINT_LABEL_PREFIX`), Ziel = ID kleingeschrieben mit Präfix: `ziel-kr1`, `ziel-s0928-1`
+(`WERKBANK_GOAL_LABEL_PREFIX`). Fortschritt je Ziel = erledigte / zugeordnete Tickets (Label oder in der Zeile genannt).
+Sprint-Seite: Zielbaum, Sprintziele mit Fortschritt, „Im Sprint“ nach Ziel (Rest „ohne Ziel“), „Kandidaten – nicht im
+Sprint“ (Mitnahme, Ziel-Tickets, überfällig, Top-10-Specs); Knöpfe „in Sprint nehmen / rausnehmen / Ziel zuordnen“
+ändern nur Sprint-/Ziel-Labels, nach Bestätigung, über den MCP (`editJiraIssue`, Labels frisch gelesen).
+
+### ⏱️ Mein Tag (Timebox)
+Persönlicher Tagesplan 07–20 Uhr im 15-min-Raster, Tag- und Wochenansicht. Im Raster ziehen = Block anlegen, Block
+ziehen = verschieben, unterer Rand = Länge. Blöcke frei betitelt oder an ein Ticket gebunden (Seitenleiste „Meine
+offenen Tickets“, sortiert Sprint → Fälligkeit → Ziel; ziehen oder „+ heute“). Je Block erledigt/verschoben,
+„Unerledigtes auf morgen“, Tagessumme geplant/erledigt und Anteil Ziele vs. ohne Ziel. Privat je Person (Mongo
+`timebox`, jede Abfrage mit der eigenen userId), kein Kalender, kein Jira-Schreiben.
+
+### Trockenlauf (Vorschau)
+`WERKBANK_DRYRUN=1` (oder einzeln `WERKBANK_JIRA_DRYRUN` / `WERKBANK_VAULT_DRYRUN`): Jira-Schreibwege zeigen nur, was
+geschrieben würde (Werkzeug + Argumente, gespeichert in `jira_dryrun`, `GET /api/dryrun`), Vault-Schreibwege schreiben
+nichts, Agenten/Chats sind aus.
+
+### Tests ohne Live-Mongo
+`MONGO_URI_WERKBANK=mongodb://127.0.0.1:<eigener Port> WERKBANK_TEST_PORT=3171 WERKBANK_TEST_BRIDGE_PORT=3196 npm test`
+— mit eigenem `mongod --dbpath <scratch> --port <Port>`; nicht gegen die Live-Mongo auf 27017.
+
 ## Sicherheit und Datenschutz
 
 - Keine Zugangsdaten im Repo oder im Log: Claude-Token im LibreChat-Schlüsselspeicher (AES-CBC mit
