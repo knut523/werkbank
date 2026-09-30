@@ -86,3 +86,21 @@ test('Board: Filter „nur aktueller Sprint“ über das Sprint-Label', async ()
   const b = boardModel(is, { label: 'sprint-2026-09-28' });
   assert.deepEqual(b.lanes.flatMap((l: any) => Object.values(l.columns).flat()).map((c: any) => c.key), ['PM-1']);
 });
+
+test('Board: „ohne Ziel – genauer anschauen“ je Karte, Zähler und Filter', async () => {
+  const { boardModel } = await import('../server/jira.ts');
+  const base = { statusCategory: 'new', priority: 'Medium', updated: new Date().toISOString(), description: '', comments: 0, lastComment: null, duedate: '2026-12-01' };
+  const is: any[] = [
+    { ...base, key: 'PM-70', summary: 'WS', status: 'In Progress', type: 'Workstream', assignee: 'K', parent: null, workstream: 'PM-70', labels: [] },
+    { ...base, key: 'PM-1', summary: 'a', status: 'To Do', type: 'Task', assignee: 'K', parent: 'PM-70', workstream: 'PM-70', labels: ['ziel-kr1'] },
+    { ...base, key: 'PM-2', summary: 'b', status: 'To Do', type: 'Task', assignee: 'K', parent: 'PM-70', workstream: 'PM-70', labels: [] },
+    { ...base, key: 'PM-3', summary: 'c', status: 'To Do', type: 'Sub-task', assignee: 'K', parent: 'PM-1', workstream: 'PM-70', labels: [] },
+  ];
+  const b = boardModel(is);
+  const cards = b.lanes.flatMap((l: any) => Object.values(l.columns).flat()) as any[];
+  assert.equal(cards.find((c) => c.key === 'PM-2').noGoal, true);
+  assert.equal(cards.find((c) => c.key === 'PM-1').noGoal, false);
+  assert.equal(cards.find((c) => c.key === 'PM-1').subtasks[0].noGoal, false, 'Sub-task erbt');
+  assert.equal(b.totals.noGoal, 1);
+  assert.deepEqual((boardModel(is, { filter: 'ohneziel' }).lanes.flatMap((l: any) => Object.values(l.columns).flat()) as any[]).map((c) => c.key), ['PM-2']);
+});

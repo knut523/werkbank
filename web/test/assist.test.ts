@@ -32,7 +32,7 @@ const ISSUES: Issue[] = [
 
 test('Hygiene-Regeln auf eigenen Tickets', () => {
   const h = hygieneFor(ISSUES, { accountId: 'acc-knut' }, { now: NOW });
-  const got = h.map((x) => `${x.key}:${x.rule}`).sort();
+  const got = h.filter((x) => x.rule !== 'ohne Ziel').map((x) => `${x.key}:${x.rule}`).sort();
   assert.deepEqual(got, ['PM-1:überfällig', 'PM-2:ohne Datum', 'PM-2:still', 'PM-4:Widerspruch', 'PM-6:ohne Workstream', 'PM-7:Sub-task ohne Owner'].sort());
   assert.equal(h[0].key, 'PM-1', 'Überfälliges zuerst');
   assert.match(h[0].question, /^PM-1 \(„Aufgabe PM-1“\) ist seit 5 Tagen überfällig — Stand\? Neues Datum, erledigt, oder weiter\?$/);
@@ -46,7 +46,7 @@ test('Identität ohne accountId: voller Name oder eindeutiger Vorname', () => {
   assert.equal(resolveIdentity({ name: 'Nemo' }, ISSUES).accountId, undefined);
   const two = [...ISSUES, I('PM-99', { assignee: 'Knut Anders', assigneeId: 'acc-ka' })];
   assert.equal(resolveIdentity({ name: 'Knut' }, two).accountId, undefined, 'mehrdeutiger Vorname → keine Zuordnung');
-  assert.equal(hygieneFor(ISSUES, { name: 'Knut' }, { now: NOW }).length, 6);
+  assert.equal(hygieneFor(ISSUES, { name: 'Knut' }, { now: NOW }).filter((x) => x.rule !== 'ohne Ziel').length, 6);
 });
 
 test('Fragen nur zu Tagesbeginn und Tagesabschluss, höchstens drei, "später" gilt für heute', () => {
@@ -152,5 +152,13 @@ test('Hygiene-Block: Anweisung + höchstens die gewählten Fragen', () => {
 test('Ongoing = wiederkehrend: kein Überfällig-/Ohne-Datum-Alarm', () => {
   const xs = [...ISSUES, I('PM-11', { status: 'Ongoing', statusCategory: 'indeterminate', duedate: '2026-09-01' }), I('PM-12', { status: 'Ongoing', statusCategory: 'indeterminate', duedate: null })];
   const h = hygieneFor(xs, { accountId: 'acc-knut' }, { now: NOW });
-  assert.equal(h.some((x) => x.key === 'PM-11' || x.key === 'PM-12'), false);
+  assert.equal(h.some((x) => (x.key === 'PM-11' || x.key === 'PM-12') && x.rule !== 'ohne Ziel'), false);
+});
+
+test('Pflege-Regel „ohne Ziel“: offene eigene Tickets ohne Ziel-Label (auch nicht geerbt)', () => {
+  const xs = [...ISSUES, I('PM-20', { labels: ['ziel-kr1'] }), I('PM-21', { type: 'Sub-task', parent: 'PM-20', labels: [] }), I('PM-22', { labels: ['ziel-keins'] })];
+  const h = hygieneFor(xs, { accountId: 'acc-knut' }, { now: NOW });
+  const noGoal = h.filter((x) => x.rule === 'ohne Ziel').map((x) => x.key);
+  assert.ok(noGoal.includes('PM-1') && !noGoal.includes('PM-20') && !noGoal.includes('PM-21') && !noGoal.includes('PM-22'));
+  assert.match(h.find((x) => x.rule === 'ohne Ziel')!.question, /ohne Ziel/);
 });

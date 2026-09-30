@@ -39,6 +39,7 @@ async function waitFor(url: string) {
 
 before(async () => {
   cpSync(new URL('./fixtures/vault', import.meta.url).pathname, VAULT, { recursive: true });
+  writeFileSync(join(tmp, 'vorschlag.json'), JSON.stringify([{ key: 'PM-267', ziel: 'ziel-kr1', begruendung: 'Hardware-Flow trägt den Vertrieb', sicherheit: 0.8 }, { key: 'PM-999', ziel: 'KR1' }, { key: 'PM-322', ziel: 'quatsch' }]));
   // Ziele-Datei nur in der Kopie (andere Tests zählen die Notizen des Fixture-Vaults).
   cpSync(new URL('./fixtures/ziele-olaf.md', import.meta.url).pathname, join(VAULT, 'olaf/1-Projects/ziele-olaf.md'));
   mkdirSync(join(tmp, 'skills-src', 'demo-skill'), { recursive: true });
@@ -86,7 +87,7 @@ before(async () => {
       WERKBANK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3`, WERKBANK_ALLOWED_EMAILS: `${users.a.email},${users.b.email}`,
       CREDS_KEY, CREDS_IV, WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: DATA,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
-      WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
+      WERKBANK_GOAL_PROPOSALS: join(tmp, 'vorschlag.json'), WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
     },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -618,7 +619,7 @@ test('Skill-Nutzung wird gezählt und auf der Skills-Seite gezeigt', async () =>
 
 test('Task-Hygiene: Antwort → Vorschlag → Bestätigung → Jira; später; Board-Filter', async () => {
   const h = await anna.req('/api/hygiene');
-  assert.deepEqual(h.j.items.map((i: any) => i.key + ':' + i.rule).sort(), ['PM-900:überfällig', 'PM-901:ohne Datum', 'PM-902:ohne Workstream']);
+  assert.deepEqual(h.j.items.filter((i: any) => i.rule !== 'ohne Ziel').map((i: any) => i.key + ':' + i.rule).sort(), ['PM-900:überfällig', 'PM-901:ohne Datum', 'PM-902:ohne Workstream']);
   assert.match(h.j.eodUrl, /spec=vorlage-tagesabschluss/);
   const p = await anna.req('/api/hygiene/PM-900/answer', { body: { text: 'neues Datum 15.10.2026' } });
   assert.equal(p.j.needsConfirm, true);
@@ -723,4 +724,49 @@ test('Live: der ganze Weg — Claude kommentiert im Chat (Mock-Brücke), das Boa
   assert.match(await chat('bitte jira-kommentar PM-331'), /Soll ich in Jira/);
   const got = await events(bernd, (e) => e.some((x) => x.keys.includes('PM-331')), () => chat('ja'));
   assert.ok(got.some((x) => x.keys.includes('PM-331')));
+});
+
+test('Jedes Ticket ein Ziel: Liste ohne Ziel mit Vorschlag, Sammelaktion nach Bestätigung (gleiche Ebene, ziel-keins mit Begründung), Sub-task erbt', async () => {
+  const a = await anna.req('/api/goals/assign');
+  assert.equal(a.status, 200, JSON.stringify(a.j));
+  assert.ok(a.j.tickets.some((t: any) => t.key === 'PM-324'), 'Sub-task ohne Ziel (Parent hat keins)');
+  assert.deepEqual(a.j.tickets.find((t: any) => t.key === 'PM-267').proposal, { ziel: 'KR1', begruendung: 'Hardware-Flow trägt den Vertrieb', sicherheit: 0.8 });
+  assert.equal(a.j.proposals, 1, 'unbekannte Tickets/Ziele fallen weg');
+  assert.ok(a.j.goalIds.some((g: any) => g.id === 'KR1') && !a.j.goalIds.some((g: any) => g.id === 'GATE-2701'));
+  const bad = await anna.req('/api/goals/assign', { body: { items: [{ key: 'PM-340', goal: 'keins' }] } });
+  assert.equal(bad.status, 400, 'ziel-keins nur mit Begründung');
+  const items = [{ key: 'PM-321', goal: 'KR1' }, { key: 'PM-340', goal: 'KEINS', begruendung: 'laufender Betrieb, kein Projektziel' }];
+  const pre = await anna.req('/api/goals/assign', { body: { items } });
+  assert.equal(pre.j.needsConfirm, true);
+  assert.match(pre.j.preview[0], /PM-321: Labels \+ziel-kr1/);
+  const n = jira.writes.length;
+  const ok = await anna.req('/api/goals/assign', { body: { items, confirm: true } });
+  assert.ok(ok.j.results.every((r: any) => r.ok), JSON.stringify(ok.j));
+  assert.ok(jira.issues.find((i: any) => i.key === 'PM-321').fields.labels.includes('ziel-kr1'));
+  assert.ok(jira.issues.find((i: any) => i.key === 'PM-340').fields.labels.includes('ziel-keins'));
+  assert.ok(jira.writes.slice(n).some((w: any) => w.type === 'comment' && w.key === 'PM-340'));
+  const after = await anna.req('/api/goals/assign');
+  const keys = after.j.tickets.map((t: any) => t.key);
+  assert.ok(!keys.includes('PM-321') && !keys.includes('PM-340'));
+  assert.ok(!keys.includes('PM-324'), 'Sub-task erbt das Ziel vom Task');
+  const b = await anna.req('/api/board');
+  assert.ok(typeof b.j.totals.noGoal === 'number');
+});
+
+test('Ziel-Deep-Dive: Felder mit Lücken, Kindziele, Tickets direkt und über Kindziele, Risiken, eigene URL', async () => {
+  const d = await anna.req('/api/goals/kr1');
+  assert.equal(d.status, 200, JSON.stringify(d.j));
+  assert.equal(d.j.goal.id, 'KR1');
+  assert.deepEqual(d.j.goal.gaps.sort(), ['baseline', 'target']);
+  assert.deepEqual(d.j.children.map((c: any) => c.id), ['M10-1']);
+  assert.equal(d.j.parent.id, 'GATE-2701');
+  const via = Object.fromEntries(d.j.tickets.map((t: any) => [t.key, t.via]));
+  assert.equal(via['PM-321'], 'KR1');
+  assert.equal(via['PM-331'], 'M10-1');
+  assert.equal(via['PM-324'], 'KR1', 'Sub-task über den Task');
+  assert.equal(d.j.progress.total, d.j.tickets.length);
+  assert.ok(Array.isArray(d.j.risks.overdue) && Array.isArray(d.j.perWorkstream) && Array.isArray(d.j.history) && Array.isArray(d.j.specs));
+  assert.equal((await anna.req('/api/goals/KR99')).status, 404);
+  const tree = await anna.req('/api/goals');
+  assert.deepEqual(tree.j.roots.map((r: any) => r.id), ['GATE-2701']);
 });

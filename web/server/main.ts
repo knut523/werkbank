@@ -33,7 +33,7 @@ import { isMine, resolveIdentity, vienna } from './hygiene.ts';
 import { ObjectId } from 'mongodb';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES } from './roadmap.ts';
-import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, type GoalNode } from './goals.ts';
+import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, type GoalNode } from './goals.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -190,7 +190,7 @@ async function sprintView(id: string) {
 // ---------- Ziele & Sprint (Zielbaum, Im Sprint, Kandidaten) ----------
 
 const GOALS_FILE = () => process.env.WERKBANK_GOALS_FILE || 'olaf/1-Projects/ziele-olaf.md';
-const tinyIssue = (i: Issue) => ({ key: i.key, summary: i.summary, status: i.status, statusCategory: i.statusCategory, assignee: i.assignee, duedate: i.duedate, type: i.type, labels: i.labels ?? [], goals: goalsOf(i.labels), overdue: isOverdue(i), blockedBy: i.blockedBy ?? [] });
+const tinyIssue = (i: Issue, im?: Map<string, Issue>) => ({ noGoal: im ? needsGoal(i, im) : undefined, key: i.key, summary: i.summary, status: i.status, statusCategory: i.statusCategory, assignee: i.assignee, duedate: i.duedate, type: i.type, labels: i.labels ?? [], goals: goalsOf(i.labels), overdue: isOverdue(i), blockedBy: i.blockedBy ?? [] });
 const stripTree = (n: GoalNode): any => ({ ...n, children: n.children.map(stripTree) });
 
 function goalsView(c: { id: string; date: string }, files: Record<string, any>, im: Map<string, Issue>) {
@@ -207,7 +207,7 @@ function goalsView(c: { id: string; date: string }, files: Record<string, any>, 
   const label = sprintLabel(c.date);
   const members = issues.filter((i) => i.type !== 'Workstream' && inSprint(i, c.date));
   const sprintIds = new Set(sprintGoals.map((g) => g.id));
-  const groups = sprintGoals.map((g) => ({ goal: { id: g.id, result: g.result }, tickets: members.filter((i) => goalsOf(i.labels).includes(g.id) || g.tickets.includes(i.key)).map(tinyIssue) }));
+  const groups = sprintGoals.map((g) => ({ goal: { id: g.id, result: g.result }, tickets: members.filter((i) => goalsOf(i.labels).includes(g.id) || g.tickets.includes(i.key)).map((i) => tinyIssue(i, im)) }));
   const otherGoal = members.filter((i) => !groups.some((gr) => gr.tickets.some((t) => t.key === i.key)) && goalsOf(i.labels).length);
   const noGoal = members.filter((i) => !groups.some((gr) => gr.tickets.some((t) => t.key === i.key)) && !goalsOf(i.labels).length);
   // Kandidaten: Mitnahme (→ mitnehmen mit Ticket), Tickets der Sprintziele/Monatsziele, überfällige, Top-Rang-Specs — nicht im Sprint.
@@ -221,7 +221,7 @@ function goalsView(c: { id: string; date: string }, files: Record<string, any>, 
   for (const r of parseRankTable(readVault(`${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`)).filter((r) => r.rank <= 10)) {
     for (const k of nameToPath.get(r.spec)?.tickets ?? []) add(k, `Rang ${r.rank}`);
   }
-  const candidates = [...why.entries()].map(([k, w]) => ({ ...tinyIssue(im.get(k)!), why: [...w] }))
+  const candidates = [...why.entries()].map(([k, w]) => ({ ...tinyIssue(im.get(k)!, im), why: [...w] }))
     .sort((a, b) => Number(b.why.includes('Mitnahme')) - Number(a.why.includes('Mitnahme')) || b.why.length - a.why.length || a.key.localeCompare(b.key, 'de', { numeric: true }));
   return {
     goals: {
@@ -230,11 +230,49 @@ function goalsView(c: { id: string; date: string }, files: Record<string, any>, 
       labels: { sprint: label, goalPrefix: labelCfg().goalPrefix, sprintPrefix: labelCfg().sprintPrefix },
       goalIds: [...byId.values()].filter((n) => n.level !== 'Gate').map((n) => ({ id: n.id, level: n.level, result: valueOf(n.result) ?? n.id })),
     },
-    inSprint: { label, count: members.length, groups, otherGoal: otherGoal.map(tinyIssue), noGoal: noGoal.map(tinyIssue) },
+    inSprint: { label, count: members.length, groups, otherGoal: otherGoal.map((i) => tinyIssue(i, im)), noGoal: noGoal.map((i) => tinyIssue(i, im)) },
     candidates: candidates.slice(0, 60),
     dryRun: dryRun(),
   };
 }
+
+// ---------- Ziele: ganzer Baum, Zuordnung, Deep-Dive (Runde 6) ----------
+
+/** Zielbaum aus ziele-olaf.md + Sprintzielen des aktuellen Planning. */
+function goalsAll(im: Map<string, Issue>) {
+  const text = readVault(GOALS_FILE());
+  const parsed = text ? parseGoalsFile(text) : { goals: [], ratings: [] };
+  const cur = cycles().find((c) => !c.archived);
+  let sprintRows: ReturnType<typeof sprintGoalsFromOutcomes> = [];
+  if (cur?.files.planning) { try { sprintRows = sprintGoalsFromOutcomes(parseOutcomes(readFileSync(cur.files.planning, 'utf8')), cur.date); } catch { /* ohne */ } }
+  const t = goalTree([...parsed.goals, ...sprintRows], parsed.ratings, [...im.values()]);
+  return { ...t, ratings: parsed.ratings, missing: !text, cur };
+}
+
+const PROPOSALS = () => process.env.WERKBANK_GOAL_PROPOSALS || join(cfg.dataDir, 'ziel-vorschlag.json');
+
+/** Vorschlagsdatei {key, ziel, begruendung, sicherheit} (Liste oder {vorschlaege: […]}) → key → Vorschlag. */
+function loadProposals(): { map: Map<string, { ziel: string; begruendung: string; sicherheit: any }>; file: string; error: string | null } {
+  const file = PROPOSALS();
+  const map = new Map<string, any>();
+  if (!existsSync(file)) return { map, file, error: null };
+  try {
+    const j = JSON.parse(readFileSync(file, 'utf8'));
+    const list = Array.isArray(j) ? j : j.vorschlaege ?? j.proposals ?? j.items ?? [];
+    for (const x of list) {
+      const key = String(x.key ?? '').trim();
+      let ziel = String(x.ziel ?? x.goal ?? '').trim();
+      const pre = labelCfg().goalPrefix;
+      if (ziel.toLowerCase().startsWith(pre)) ziel = ziel.slice(pre.length);
+      ziel = ziel.toUpperCase();
+      if (/^[A-Z][A-Z0-9]+-\d+$/.test(key) && (GOAL_ID.test(ziel) || ziel === 'KEINS')) map.set(key, { ziel, begruendung: String(x.begruendung ?? x.reason ?? '').slice(0, 500), sicherheit: x.sicherheit ?? x.confidence ?? null });
+    }
+    return { map, file, error: null };
+  } catch (e: any) { return { map, file, error: `Vorschlagsdatei nicht lesbar: ${String(e.message).slice(0, 120)}` }; }
+}
+
+const wsName = (im: Map<string, Issue>, k?: string | null) => (k ? im.get(k)?.summary ?? k : 'Ohne Workstream');
+const richIssue = (im: Map<string, Issue>, i: Issue) => ({ ...tinyIssue(i, im), statusSince: i.statusSince ?? null, priority: i.priority, workstream: i.workstream ?? null, workstreamName: wsName(im, i.workstream), parent: i.parent, noGoal: needsGoal(i, im), recurring: isRecurring(i) });
 
 // ---------- Routen ----------
 
@@ -652,6 +690,22 @@ function runRoadmapCheck(): Promise<any> {
 
 const readVault = (rel: string) => { try { return readFileSync(join(cfg.vaultDir, rel), 'utf8'); } catch { return ''; } };
 
+/** Alle Specs der Roadmap (Thema/Zustand aus den Ordnern) mit Frontmatter, Tickets, PRs, Ziel (Frontmatter ziel:). */
+function roadmapSpecs() {
+  const idx = vaultIdx();
+  const rm = roadmap(idx, ROADMAP_BASE);
+  const out: { name: string; title: string; path: string; topic: string; state: string; fm: Record<string, unknown>; tickets: string[]; prs: string[]; goals: string[]; text: string; overview?: string }[] = [];
+  for (const t of rm.topics) for (const [state, specs] of Object.entries(t.states)) for (const sp of specs) {
+    const n = idx.notes.get(sp.path);
+    if (!n) continue;
+    const text = readVault(sp.path);
+    const z = n.fm.ziel;
+    const goals = (Array.isArray(z) ? z : z != null ? String(z).split(/[,\s]+/) : []).map((x) => String(x).replace(/^ziel-/i, '').trim().toUpperCase()).filter((x) => GOAL_ID.test(x));
+    out.push({ name: n.name, title: sp.title, path: sp.path, topic: t.name, state, fm: n.fm, tickets: n.tickets, prs: prRefs(text), goals, text, overview: t.overview });
+  }
+  return out;
+}
+
 on('GET', /^\/api\/roadmap$/, async (req, res) => {
   await needUser(req);
   const idx = vaultIdx();
@@ -890,6 +944,107 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
   send(res, 200, { ok: true, id, dir: rel });
 });
 
+// --- Ziele (Runde 6) ---
+
+on('GET', /^\/api\/goals$/, async (req, res) => {
+  await needUser(req);
+  const im = await issueMap();
+  const g = goalsAll(im);
+  const noGoal = [...im.values()].filter((i) => needsGoal(i, im)).length;
+  send(res, 200, { file: GOALS_FILE(), missing: g.missing, roots: g.roots.map(stripTree), noGoal, labels: { goalPrefix: labelCfg().goalPrefix, exempt: exemptLabel() } });
+});
+
+on('GET', /^\/api\/goals\/assign$/, async (req, res) => {
+  await needUser(req);
+  const im = await issueMap();
+  const g = goalsAll(im);
+  const p = loadProposals();
+  const tickets = [...im.values()].filter((i) => needsGoal(i, im)).map((i) => ({ ...richIssue(im, i), proposal: p.map.get(i.key) ?? null }))
+    .sort((a, b) => a.workstreamName.localeCompare(b.workstreamName, 'de') || a.key.localeCompare(b.key, 'de', { numeric: true }));
+  send(res, 200, {
+    tickets, proposalFile: p.file, proposalError: p.error, proposals: [...p.map.keys()].filter((k) => im.has(k)).length,
+    goalIds: [...g.byId.values()].filter((n) => n.level !== 'Gate').map((n) => ({ id: n.id, level: n.level, result: valueOf(n.result) ?? n.id })),
+    labels: { goalPrefix: labelCfg().goalPrefix, exempt: exemptLabel() }, dryRun: dryRun(),
+  });
+});
+
+// Sammelaktion: je Ticket Ziel-Label derselben Ebene ersetzen; „KEINS“ = Ausnahme-Label + Begründung als Kommentar.
+on('POST', /^\/api\/goals\/assign$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const im = await issueMap();
+  const g = goalsAll(im);
+  const items = (Array.isArray(b.items) ? b.items : []).slice(0, 100);
+  if (!items.length) throw new HttpError(400, 'Keine Tickets gewählt.');
+  const plan: { key: string; actions: JiraAction[]; text: string }[] = [];
+  for (const it of items) {
+    const key = String(it.key ?? ''), goal = String(it.goal ?? '').toUpperCase();
+    const i = im.get(key);
+    if (!i) throw new HttpError(404, `${key} nicht in der Kopie.`);
+    if (goal === 'KEINS') {
+      const why = String(it.begruendung ?? '').replace(/\s+/g, ' ').trim();
+      if (why.length < 5) throw new HttpError(400, `${key}: „ohne Ziel (${exemptLabel()})“ braucht eine Begründung.`);
+      const actions: JiraAction[] = [{ type: 'labels', add: [exemptLabel()], remove: [] }, { type: 'comment', text: `Bewusst ohne Ziel (${exemptLabel()}): ${why}` }];
+      plan.push({ key, actions, text: `${key}: +${exemptLabel()} · Kommentar „${why.slice(0, 80)}“` });
+      continue;
+    }
+    if (!g.byId.has(goal) || goalLevel(goal) === 'Gate') throw new HttpError(400, `${key}: unbekanntes Ziel ${goal}.`);
+    const action: JiraAction = { type: 'labels', add: [goalLabel(goal)], remove: sameLevelRemovals(i.labels ?? [], goal) };
+    plan.push({ key, actions: [action], text: `${key}: ${describe(action)}` });
+  }
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: plan.map((p) => p.text), dryRun: dryRun() });
+  const results: any[] = [];
+  for (const p of plan) {
+    try { const r = await jiraWrite(u, () => writeJira(u, p.key, p.actions)); results.push({ key: p.key, ok: true, done: r.done, dryRun: r.dryRun ?? false, calls: r.calls }); }
+    catch (e: any) { results.push({ key: p.key, ok: false, error: String(e.message).slice(0, 300) }); }
+  }
+  log('ziele zuordnen', { user: u.id, n: results.length, ok: results.filter((r) => r.ok).length });
+  send(res, 200, { ok: true, results, dryRun: dryRun() });
+});
+
+on('GET', /^\/api\/goals\/([A-Za-z0-9-]{2,20})$/, async (req, res, m) => {
+  await needUser(req);
+  const id = m[1].toUpperCase();
+  const im = await issueMap();
+  const g = goalsAll(im);
+  const n = g.byId.get(id);
+  if (!n) throw new HttpError(404, `Ziel ${id} nicht in ${GOALS_FILE()} bzw. im Planning.`);
+  // Tickets: direkt (Label/in der Zeile, Sub-tasks erben) und über Kindziele.
+  const desc: GoalNode[] = [];
+  const walk = (x: GoalNode) => { for (const c of x.children) { if (!desc.includes(c)) { desc.push(c); walk(c); } } };
+  walk(n);
+  const via = new Map<string, string>();
+  const claim = (goalNode: GoalNode) => {
+    for (const k of goalNode.tickets) if (im.has(k) && !via.has(k)) via.set(k, goalNode.id);
+    for (const i of im.values()) if (!via.has(i.key) && effectiveGoals(i, im).goals.includes(goalNode.id)) via.set(i.key, goalNode.id);
+  };
+  claim(n); for (const d of desc) claim(d);
+  const tickets = [...via.entries()].map(([k, v]) => ({ ...richIssue(im, im.get(k)!), via: v }));
+  const open = tickets.filter((t) => t.status !== 'Done' && t.statusCategory !== 'done');
+  const perWs = new Map<string, { name: string; done: number; total: number }>();
+  for (const t of tickets) { const w = perWs.get(t.workstream ?? '—') ?? { name: t.workstreamName, done: 0, total: 0 }; w.total++; if (t.status === 'Done' || t.statusCategory === 'done') w.done++; perWs.set(t.workstream ?? '—', w); }
+  // Specs: Frontmatter ziel: oder über Tickets; PRs mit Live-Zustand.
+  const keys = new Set(tickets.map((t) => t.key));
+  const gh = await livePrs();
+  const specs = roadmapSpecs().filter((sp) => sp.goals.includes(id) || sp.tickets.some((k) => keys.has(k)))
+    .map((sp) => ({ name: sp.name, title: sp.title, path: sp.path, topic: sp.topic, state: sp.state, via: sp.goals.includes(id) ? 'ziel:' : 'Ticket', prs: sp.prs.map((pr) => { const l = gh.map.get(pr); return { pr, url: l?.url ?? `https://github.com/WirStrom1/${pr.replace('#', '/pull/')}`, live: l ? { conflict: l.mergeable === 'CONFLICTING', draft: l.isDraft, review: l.reviewDecision, turn: l.turn.who } : null }; }) }));
+  send(res, 200, {
+    goal: stripTree(n), file: GOALS_FILE(),
+    history: g.ratings.filter((r) => r.id === id).sort((a, b) => a.date.localeCompare(b.date)),
+    children: n.children.map((c) => ({ id: c.id, level: c.level, result: c.result, subtree: c.subtree, rating: c.rating, gaps: c.gaps })),
+    parent: n.parent ? { id: n.parent, result: g.byId.get(n.parent)?.result ?? null } : null,
+    tickets, specs,
+    progress: { done: tickets.length - open.length, total: tickets.length },
+    perWorkstream: [...perWs.entries()].map(([k, v]) => ({ key: k, ...v })).sort((a, b) => b.total - a.total),
+    risks: {
+      overdue: open.filter((t) => t.overdue).map((t) => t.key),
+      blocked: open.filter((t) => t.blockedBy.length).map((t) => t.key),
+      noOwner: open.filter((t) => !t.assignee).map((t) => t.key),
+      noDate: open.filter((t) => !t.duedate && !t.recurring).map((t) => t.key),
+    },
+  });
+});
+
 // --- Mein Tag / Timebox (privat je Person, kein Jira-Schreiben) ---
 
 const tbCol = () => wb().collection('timebox');
@@ -908,7 +1063,7 @@ on('GET', /^\/api\/timebox$/, async (req, res, _m, url) => {
   const sl = cur ? sprintLabel(cur.date) : null;
   const who = resolveIdentity(await jiraIdentity(u), [...im.values()]);
   const mine = sortMyTickets([...im.values()].filter((i) => i.type !== 'Workstream' && i.status !== 'Done' && i.statusCategory !== 'done' && isMine(i, who)), sl);
-  const ticket = (k?: string | null) => { const i = k ? im.get(k) : undefined; return i ? { key: i.key, summary: i.summary, status: i.status, goals: goalsOf(i.labels), inSprint: !!sl && (i.labels ?? []).includes(sl) } : null; };
+  const ticket = (k?: string | null) => { const i = k ? im.get(k) : undefined; return i ? { key: i.key, summary: i.summary, status: i.status, goals: goalsOf(i.labels), inSprint: !!sl && (i.labels ?? []).includes(sl), noGoal: needsGoal(i, im), priority: i.priority } : null; };
   send(res, 200, {
     dates, sprint: cur ? { id: cur.id, label: sl } : null,
     blocks: blocks.map((b) => ({ ...tbOut(b), ticket: ticket(b.key) })),

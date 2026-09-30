@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, fmtDate, fmtDateTime, today, chatTarget, openChat, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, StateChip, useJiraLive } from '../ui.tsx';
 import { HygienePanel, LinkButton } from '../components.tsx';
+import { NoGoal } from './Sprint.tsx';
 import { moveActions, allowedStatuses, laneAllowed, moveCard, describeMove, type Transition } from '../boardMove.ts';
 
 const overdue = (i: any) => i.duedate && i.duedate < today() && i.status !== 'Done' && i.status !== 'Ongoing';
@@ -36,6 +37,7 @@ function SubRow({ s, onOpen }: { s: any; onOpen: (k: string) => void }) {
         <span className="chip tiny-chip">{s.status}</span>
         <span className={`chip tiny-chip ${s.assignee ? '' : 'warn'}`}>{s.assignee ?? 'ohne Owner'}</span>
         <DueChip i={s} small />
+        {s.noGoal && <NoGoal />}
         {s.hygiene?.length > 0 && <span className="badge-hyg" title={'Braucht Pflege: ' + s.hygiene.join(', ')}>🧹 {s.hygiene.length}</span>}
       </span>
     </li>
@@ -63,7 +65,8 @@ function Card({ i, onOpen, expanded, onToggle, fresh, mover }: { i: any; onOpen:
         {i.agent && <span className={`chip ${i.agent === 'wartet auf ja' ? 'bad' : 'warn'}`} title="Ein Agent arbeitet an dieser Karte (Chat)">🤖 {i.agent}</span>}
         <Since i={i} />
         <Blocked i={i} />
-        {i.goals?.map((g: string) => <span key={g} className="chip goal-id" title="Ziel (Jira-Label)">🎯 {g}</span>)}
+        {i.goals?.map((g: string) => <a key={g} className="chip goal-id" href={`#/ziele/${g}`} onClick={(e) => e.stopPropagation()} title="Ziel (Jira-Label)">🎯 {g}</a>)}
+        {i.noGoal && <NoGoal small={false} />}
       </div>
       {subs.length > 0 && (
         <div className="subbox">
@@ -485,7 +488,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
           {data?.owners.map((o: string) => <option key={o} value={o}>{o}{data.hygiene.perOwner[o] ? ` · 🧹 ${data.hygiene.perOwner[o]}` : ''}</option>)}
         </select>
         <div className="row" role="group" aria-label="Filter">
-          {[['', 'Alle'], ['overdue', `Überfällig${data ? ` (${data.totals.overdue})` : ''}`], ['undated', `Ohne Datum${data ? ` (${data.totals.undated})` : ''}`], ['pflege', `Braucht Pflege${data ? ` (${data.hygiene.total})` : ''}`]].map(([v, l]) => (
+          {[['', 'Alle'], ['overdue', `Überfällig${data ? ` (${data.totals.overdue})` : ''}`], ['undated', `Ohne Datum${data ? ` (${data.totals.undated})` : ''}`], ['pflege', `Braucht Pflege${data ? ` (${data.hygiene.total})` : ''}`], ['ohneziel', `Ohne Ziel${data ? ` (${data.totals.noGoal})` : ''}`]].map(([v, l]) => (
             <button key={v} className={`btn small ${filter === v ? 'primary' : ''}`} onClick={() => setFilter(v)}>{l}</button>
           ))}
         </div>
