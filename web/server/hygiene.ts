@@ -83,7 +83,7 @@ export function hygieneFor(all: Issue[], who: Identity, opts: { now?: Date; stal
       out.push({ ...base, rule: 'Widerspruch', priority: 2, detail: `letzter Kommentar klingt erledigt, Status ${i.status}`, question: `${i.key}: Der letzte Kommentar klingt erledigt, der Status ist ${i.status} — auf Done setzen?` });
     }
     if (needsGoal(i, by)) {
-      out.push({ ...base, rule: 'ohne Ziel', priority: 5, detail: 'ohne Ziel – genauer anschauen', question: `${i.key} („${short(i.summary)}“) ist ohne Ziel — auf welches Ziel zahlt es ein (KR, Monat, Sprint)? Oder bewusst ohne (ziel-keins, mit Grund)?` });
+      out.push({ ...base, rule: 'ohne Ziel', priority: 5, detail: 'ohne Ziel – genauer anschauen', question: `${i.key} („${short(i.summary)}“) ist ohne Ziel — auf welches Ziel zahlt es ein (KR, Monat, Sprint)? Oder bewusst ohne Ziel (mit Grund)? Zuordnen unter Ziele → Ziele zuordnen.` });
     }
     if (!i.parent && i.type === 'Sub-task') {
       out.push({ ...base, rule: 'Sub-task ohne Parent', priority: 4, detail: 'Sub-task ohne Parent (kaputt)', question: `${i.key} („${short(i.summary)}“) ist ein Sub-task ohne Parent-Ticket — unter welches Ticket gehört es (oder in einen Task umwandeln)?` });

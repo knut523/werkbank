@@ -870,3 +870,24 @@ test('Runde 7: Vorschlag übernehmen (Sicherheit hoch), Audit append-only, Spec 
   const cfg = await anna.req('/api/config');
   assert.equal(cfg.j.specCreate, true, 'im Test eingeschaltet (WERKBANK_SPEC_CREATE=on)');
 });
+
+test('Runde 7: Board-Filter „nur aktueller Sprint“ und Mein Tag nach lokaler Mitgliedschaft; alter Label-Weg 410; Zurücksetzen lässt Fallback wieder gelten', async () => {
+  const cur = (await anna.req('/api/board')).j.sprint.id;   // aktueller Zyklus (im Testlauf ggf. der neu angelegte)
+  await anna.req(`/api/sprint/${cur}/member`, { body: { key: 'PM-900', in: true, confirm: true } });
+  const b = await anna.req('/api/board?sprint=1');
+  const keys = b.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).map((c: any) => c.key);
+  assert.ok(keys.includes('PM-900'), JSON.stringify(keys));
+  assert.equal(b.j.sprint.count >= 1, true);
+  const day = await anna.req('/api/timebox?from=2026-10-06');
+  assert.equal(day.j.tickets.find((t: any) => t.key === 'PM-900')?.inSprint, true);
+  assert.equal((await anna.req('/api/sprint/sprint-2026-09-28/labels', { body: { key: 'PM-900', add: ['sprint-2026-09-28'], confirm: true } })).status, 410);
+  assert.equal((await anna.req(`/api/sprint/${cur}/member`, { body: { key: 'PM-900', in: 'false', confirm: true } })).status, 200);
+  assert.equal((await anna.req('/api/board?sprint=1')).j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).some((c: any) => c.key === 'PM-900'), false);
+  // Zurücksetzen: Dokument weg, Verlauf hat 'reset'
+  await anna.req('/api/goals/assign', { body: { items: [{ key: 'PM-900', goal: 'KR1' }], confirm: true } });
+  await anna.req('/api/goals/assign', { body: { items: [{ key: 'PM-900', goal: '' }], confirm: true } });
+  const h = (await anna.req('/api/goals/history/PM-900')).j.entries;
+  assert.equal(h[0].action, 'reset');
+  assert.equal(h[0].prev, 'KR1');
+  assert.equal((await anna.req('/api/goals/history/%E0%A4%A')).status, 400);
+});

@@ -129,3 +129,10 @@ test('Runde 7: lokale Zuordnung gewinnt vor Jira-Label, ziel-keins lokal, gelös
   assert.equal(inSprint({ labels: ['sprint-2026-09-28'], localSprints: { '2026-09-28': false } } as any, '2026-09-28'), false, 'lokal rausgenommen');
   assert.equal(inSprint({ labels: [], localSprints: { '2026-09-28': true } } as any, '2026-09-28'), true);
 });
+
+test('Runde 7: lokales Ziel ersetzt nur Label-Ziele derselben Ebene', async () => {
+  const { ownGoals } = await import('../server/goals.ts');
+  assert.deepEqual(ownGoals({ labels: ['ziel-kr1'], localGoal: 'S0928-1' } as any), ['S0928-1', 'KR1']);
+  assert.deepEqual(ownGoals({ labels: ['ziel-kr1'], localGoal: 'KR2' } as any), ['KR2']);
+  assert.deepEqual(ownGoals({ labels: ['ziel-kr1'], localGoal: 'KEINS' } as any), []);
+});

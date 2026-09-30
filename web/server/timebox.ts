@@ -62,9 +62,10 @@ export function daySummary(blocks: Block[], issues: Map<string, Pick<Issue, 'lab
 }
 
 /** „Meine offenen Tickets“: im aktuellen Sprint zuerst, dann nach Fälligkeit, dann mit Ziel vor ohne. */
-export function sortMyTickets<T extends Pick<Issue, 'key' | 'duedate' | 'labels' | 'localGoal'>>(ts: T[], sprintLabel: string | null, dayPrio: Map<string, number> = new Map()): T[] {
+export function sortMyTickets<T extends Pick<Issue, 'key' | 'duedate' | 'labels' | 'localGoal'>>(ts: T[], sprintLabel: string | null, dayPrio: Map<string, number> = new Map(), isIn?: (t: T) => boolean): T[] {
   const dp = (t: T) => dayPrio.get(t.key) ?? 9;
-  const inS = (t: T) => (sprintLabel && (t.labels ?? []).includes(sprintLabel) ? 0 : 1);
+  // Sprint: lokale Mitgliedschaft (isIn), sonst Label.
+  const inS = (t: T) => ((isIn ? isIn(t) : !!sprintLabel && (t.labels ?? []).includes(sprintLabel)) ? 0 : 1);
   const hasGoal = (t: T) => (ownGoals(t).length ? 0 : 1);
   return [...ts].sort((a, b) => dp(a) - dp(b) || inS(a) - inS(b) || (a.duedate ?? '9999').localeCompare(b.duedate ?? '9999') || hasGoal(a) - hasGoal(b) || a.key.localeCompare(b.key, 'de', { numeric: true }));
 }
