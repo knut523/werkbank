@@ -43,7 +43,7 @@ before(async () => {
   cpSync(new URL('./fixtures/ziele-olaf.md', import.meta.url).pathname, join(VAULT, 'olaf/1-Projects/ziele-olaf.md'));
   mkdirSync(join(tmp, 'skills-src', 'demo-skill'), { recursive: true });
   writeFileSync(join(tmp, 'skills-src', 'demo-skill', 'SKILL.md'), '---\nname: demo-skill\ndescription: Nur ein Test\n---\n# x\n');
-  mongo = await MongoClient.connect('mongodb://127.0.0.1:27017');
+  mongo = await MongoClient.connect(process.env.MONGO_URI_WERKBANK || 'mongodb://127.0.0.1:27017');
   await mongo.db(LCDB).collection('users').insertMany(Object.values(users).map(({ pw, ...u }) => u));
   // Nachgebauter LibreChat-Login (Antwortform wie /api/auth/login).
   lcFake = createServer(async (req, res) => {
@@ -235,6 +235,33 @@ test('Board ziehen: Spalte → echter Übergang, Bahn → Parent (nur Tasks), Fe
   assert.equal((await anna.req('/api/prefs')).j.confirmMove, true, 'Vorgabe: mit Bestätigung');
   await anna.req('/api/prefs', { body: { confirmMove: false } });
   assert.equal((await anna.req('/api/prefs')).j.confirmMove, false);
+});
+
+test('Timebox: Blöcke anlegen/verschieben/erledigen, privat je Person, Übertrag auf morgen, kein Jira-Schreiben', async () => {
+  const n = jira.writes.length;
+  const a = await anna.req('/api/timebox', { body: { date: '2026-09-30', start: 480, dur: 60, key: 'PM-322' } });
+  assert.equal(a.status, 200, JSON.stringify(a.j));
+  const f = await anna.req('/api/timebox', { body: { date: '2026-09-30', start: 600, dur: 30, title: 'Mails' } });
+  assert.equal((await anna.req('/api/timebox', { body: { date: '2026-09-30', start: 600, dur: 30, key: 'PM-99999' } })).status, 404);
+  const mv = await anna.req(`/api/timebox/${a.j.id}`, { method: 'PATCH', body: { start: 540, dur: 90 } });
+  assert.equal(mv.status, 200);
+  await anna.req(`/api/timebox/${f.j.id}`, { method: 'PATCH', body: { state: 'erledigt' } });
+  const day = await anna.req('/api/timebox?from=2026-09-30&days=1');
+  assert.deepEqual(day.j.blocks.map((b: any) => [b.start, b.dur, b.ticket?.key ?? b.title, b.state]), [[540, 90, 'PM-322', 'geplant'], [600, 30, 'Mails', 'erledigt']]);
+  assert.equal(day.j.summary['2026-09-30'].planned, 120);
+  assert.equal(day.j.summary['2026-09-30'].done, 30);
+  // privat: Bernd sieht nichts und kann nichts ändern
+  assert.equal((await bernd.req('/api/timebox?from=2026-09-30')).j.blocks.length, 0);
+  await bernd.req(`/api/timebox/${a.j.id}`, { method: 'PATCH', body: { start: 420 } });
+  assert.equal((await bernd.req(`/api/timebox/${a.j.id}`, { method: 'PATCH', body: { start: 420 } })).status, 404);
+  const c = await anna.req('/api/timebox/carry', { body: { date: '2026-09-30' } });
+  assert.equal(c.j.carried, 1);
+  assert.equal((await anna.req('/api/timebox/carry', { body: { date: '2026-09-30' } })).j.carried, 0, 'nicht doppelt');
+  const next = await anna.req('/api/timebox?from=2026-10-01');
+  assert.deepEqual(next.j.blocks.map((b: any) => [b.start, b.ticket?.key]), [[540, 'PM-322']]);
+  const week = await anna.req('/api/timebox?from=2026-09-28&days=7');
+  assert.equal(week.j.dates.length, 7);
+  assert.equal(jira.writes.length, n, 'kein Jira-Schreiben');
 });
 
 test('Agent ansetzen: Brücke nur lesend, Ergebnis als Entwurf, gesendet erst nach Klick', async () => {

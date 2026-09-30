@@ -19,6 +19,8 @@ export async function connect(): Promise<MongoClient> {
       db.collection('files').createIndex({ owner: 1 }),
       db.collection('files').createIndex({ sharedWith: 1 }),
       db.collection('agent_runs').createIndex({ key: 1, startedAt: -1 }),
+      db.collection('timebox').createIndex({ userId: 1, date: 1 }),
+      db.collection('github_prs').createIndex({ pr: 1 }, { unique: true }),
     ]);
   }
   return client;
