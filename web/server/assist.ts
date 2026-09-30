@@ -65,9 +65,8 @@ const cache = new Map<string, { hash: string; pack: string }>();
 
 export async function packFor(u: User): Promise<{ pack: string; cached: boolean }> {
   const [issues, who] = await Promise.all([allIssues(), jiraIdentity(u)]);
-  const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
   const inp = { vaultDir: cfg.vaultDir, projectsDir: sprintRoot(), issues, who, userName: u.name.split(' ')[0] };
-  const hash = inputsHash(inp, sync?.at ? new Date(sync.at).toISOString() : null);
+  const hash = inputsHash(inp);
   const c = cache.get(u.id);
   if (c && c.hash === hash) return { pack: c.pack, cached: true };
   const pack = buildPack(inp);

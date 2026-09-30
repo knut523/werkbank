@@ -176,9 +176,12 @@ export function buildPack(inp: PackInput): string {
   return out;
 }
 
-export function inputsHash(inp: PackInput, jiraSyncAt: string | null): string {
+/** Cache-Schlüssel: Person, Tag, Inhalt der Ticket-Kopie (Schlüssel/updated/Status/Fälligkeit/Owner/Labels) und
+ *  Vault-Quellen. Nicht der Abgleichszeitpunkt — sonst wäre er nach jedem 15-min-Abgleich ungültig (~1,4 s je Sitzung). */
+export function inputsHash(inp: PackInput): string {
   const today = vienna(inp.now ?? new Date()).date;
-  const h = createHash('sha256').update(`${inp.who.accountId ?? ''}|${inp.who.name ?? ''}|${today}|${jiraSyncAt ?? ''}`);
+  const h = createHash('sha256').update(`${inp.who.accountId ?? ''}|${inp.who.name ?? ''}|${today}`);
+  for (const i of [...inp.issues].sort((a, b) => a.key.localeCompare(b.key))) h.update(`|${i.key}:${i.updated}:${i.status}:${i.duedate ?? ''}:${i.assigneeId ?? i.assignee ?? ''}:${(i.labels ?? []).join(',')}`);
   const cycle = listCycles(inp.projectsDir).find((x) => !x.archived);
   for (const f of [...Object.values(sourcesOf(inp.vaultDir, today)), cycle?.files.planning, cycle?.files.summary]) {
     if (!f) continue;
