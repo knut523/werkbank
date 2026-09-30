@@ -13,7 +13,7 @@ import { MongoClient, ObjectId } from 'mongodb';
 import { startJiraMock, type JiraMock } from './jira-mock.ts';
 
 const WEB = new URL('..', import.meta.url).pathname;
-const PORT = 3071, BRIDGE_PORT = 3096;
+const PORT = Number(process.env.WERKBANK_TEST_PORT || 3071), BRIDGE_PORT = Number(process.env.WERKBANK_TEST_BRIDGE_PORT || 3096);
 const B = `http://127.0.0.1:${PORT}`;
 const tag = randomBytes(4).toString('hex');
 const DB = `werkbank_test_${tag}`, LCDB = `librechat_test_${tag}`;
