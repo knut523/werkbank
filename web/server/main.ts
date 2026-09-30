@@ -15,7 +15,7 @@ import { librechatLogin, createSession, destroySession, currentUser, allowed, te
 import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
-import { syncMirror, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, JiraError, type Issue } from './jira.ts';
+import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns } from './agent.ts';
 import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles } from './sprint.ts';
 import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
@@ -337,7 +337,7 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
     ...model,
     lanes: model.lanes.map((l) => ({ ...l, hygiene: Object.values(l.columns).flat().reduce((n: number, c: any) => n + (c.hygiene?.length ? 1 : 0) + c.subtasks.filter((x: any) => x.hygiene?.length).length, 0) })),
     hygiene: { perOwner, total: [...hyg.keys()].length },
-    sync: sync ? { at: sync.at, by: sync.by, count: sync.count, source: sync.source, error: sync.error, errorAt: sync.errorAt } : null,
+    sync: sync ? { at: sync.at, by: sync.by, count: sync.count, source: sync.source, error: sync.error, errorAt: sync.errorAt, errorKind: sync.errorKind ?? null, incAt: sync.incAt ?? null } : null,
     site: cfg.jiraSite,
   });
 });
@@ -998,16 +998,35 @@ async function backgroundJobs() {
     });
   } catch { /* ohne Beobachtung reicht das Intervall */ }
 
+  // Jira-Kopie: Vollabgleich alle 15 min (mit Löschschutz), inkrementell jede Minute. Fehlt der Zugang, steht das als
+  // Fehler in meta.jira_sync (rot am Board) statt still auszufallen.
+  const noJobs = () => cfg.demo && !process.env.WERKBANK_JIRA_BASE;
+  const credsOrError = async () => {
+    const creds = await jiraCreds(null);   // Pilot: Vaultwarden der VM; sonst nur auf Knopfdruck
+    if (!creds) await recordSyncError('zugang', 'Kein Jira-Zugang für den automatischen Abgleich (Vaultwarden-Sitzung der VM fehlt oder ist abgelaufen) — die Kopie veraltet. „Jetzt synchronisieren“ geht mit dem eigenen Token.');
+    return creds;
+  };
   const jiraTick = async () => {
+    if (noJobs()) return;
     try {
-      const creds = await jiraCreds(null);   // Pilot: Vaultwarden der VM; sonst nur auf Knopfdruck
-      if (!creds || cfg.demo && !process.env.WERKBANK_JIRA_BASE) return;
+      const creds = await credsOrError();
+      if (!creds) return;
       const r = await syncMirror(creds, 'Intervall');
       log('jira sync', { count: r.count, removed: r.removed });
     } catch (e: any) { log('jira sync', { error: String(e.message).slice(0, 200) }); }
   };
   setTimeout(jiraTick, 5000);
   setInterval(jiraTick, cfg.jiraSyncMinutes * 60_000);
+  const incTick = async () => {
+    if (noJobs()) return;
+    try {
+      const creds = await credsOrError();
+      if (!creds) return;
+      const r = await syncIncremental(creds, cfg.jiraIncMinutes * 2);
+      if (r?.keys.length) log('jira inkrementell', { n: r.keys.length });
+    } catch (e: any) { log('jira inkrementell', { error: String(e.message).slice(0, 200) }); }
+  };
+  if (cfg.jiraIncMinutes > 0) setInterval(incTick, cfg.jiraIncMinutes * 60_000);
 
   const shareTick = async () => { try { await watchChatShares(); } catch (e: any) { log('freigaben', { error: String(e.message).slice(0, 200) }); } };
   setTimeout(shareTick, 3000);
