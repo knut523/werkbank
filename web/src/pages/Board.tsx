@@ -388,6 +388,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
   const [syncing, setSyncing] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const toast = useToast();
+  const confirm = useConfirm();
   const boardUrl = `/api/board?owner=${encodeURIComponent(owner)}&filter=${filter}&q=${encodeURIComponent(q)}&done=${done ? 1 : 0}&sprint=${sprint ? 1 : 0}`;
   const b = useLoad(() => api(boardUrl), [owner, filter, q, done, sprint]);
   const data: any = b.data;
@@ -443,12 +444,13 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
     if (confirmMove) setPending(p); else commit(p);
   };
   const mover: Mover = {
-    start: (i) => { setDrag(i); setDragTs(tsCache.current.get(i.key) ?? null); loadTs(i.key).then((t) => setDragTs(t)).catch(() => setDragTs([])); },
+    start: (i) => { if (busy) { setErr(new Error('Erst die offene Verschiebung bestätigen oder rückgängig machen.')); return; } setDrag(i); setDragTs(tsCache.current.get(i.key) ?? null); loadTs(i.key).then((t) => setDragTs(t)).catch(() => setDragTs([])); },
     end: () => { setDrag(null); setDragTs(null); },
-    menu: (i) => { setMenuFor(i); setDragTs(null); loadTs(i.key).then(setDragTs).catch((e) => { setErr(e); setDragTs([]); }); },
+    menu: (i) => { if (busy) { setErr(new Error('Erst die offene Verschiebung bestätigen oder rückgängig machen.')); return; } setMenuFor(i); setDragTs(null); loadTs(i.key).then(setDragTs).catch((e) => { setErr(e); setDragTs([]); }); },
   };
+  const busy = !!pending || moving;   // ein offener Toast / laufendes Schreiben: erst bestätigen oder rückgängig
   const dropOk = (lane: string, status: string) => {
-    if (!drag) return false;
+    if (!drag || busy) return false;
     if (!laneAllowed(drag, lane, isWs)) return false;
     if (status === drag.status) return true;
     return !!dragTs && allowedStatuses(drag.status, dragTs).has(status);
@@ -469,7 +471,12 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
           {data?.sync && <span className="tiny">Voll {fmtDateTime(data.sync.at)} · {data.sync.count} Tickets · {data.sync.source}{data.sync.incAt ? ` · zuletzt nachgezogen ${fmtDateTime(data.sync.incAt)}` : ''}</span>}
         </div>
       </div>
-      {data?.sync?.error && <div className="err" role="alert" data-testid="sync-error"><b>Jira-Abgleich gestört{data.sync.errorKind ? ` (${data.sync.errorKind})` : ''}:</b> {data.sync.error} <span className="tiny">seit {fmtDateTime(data.sync.errorAt)}</span></div>}
+      {data?.sync?.error && <div className="err" role="alert" data-testid="sync-error"><b>Jira-Abgleich gestört{data.sync.errorKind ? ` (${data.sync.errorKind})` : ''}:</b> {data.sync.error} <span className="tiny">seit {fmtDateTime(data.sync.errorAt)}</span>
+        {data.sync.errorKind === 'löschschutz' && <button className="btn small danger" style={{ marginLeft: 8 }} onClick={async () => {
+          if (!(await confirm({ title: 'Trotzdem abgleichen und löschen?', danger: true, confirmLabel: 'Abgleichen, Löschen erlauben', body: <p className="small">Nur wenn Jira wirklich weniger Tickets hat (z. B. nach dem Verschieben in ein anderes Projekt). Was Jira nicht mehr liefert, fällt aus der Kopie. Vollständiges Blättern bleibt Pflicht.</p> }))) return;
+          setSyncing(true); setErr(null);
+          try { const r: any = await api('/api/board/sync', { body: { force: true, confirm: true } }); toast(`${r.count} Tickets, ${r.removed} entfernt`); await b.reload(); } catch (e) { setErr(e); } finally { setSyncing(false); }
+        }}>Trotzdem abgleichen …</button>}</div>}
       <Err e={err} />
       <HygienePanel onChange={() => b.reload()} />
       <div className="board-bar">
@@ -505,7 +512,8 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
             </>}
             {lane.key === '—' && <span className="tiny">Tickets ohne Parent — in Jira einem Workstream zuordnen</span>}
           </h3>
-          {lane.count === 0 ? <p className="tiny" style={{ margin: '2px 0 10px' }}>Keine sichtbaren Tickets in diesem Workstream.</p> :
+          {lane.count === 0 && <p className="tiny" style={{ margin: '2px 0 4px' }}>Keine sichtbaren Tickets in diesem Workstream{lane.workstream ? ' — Tasks lassen sich hierher ziehen.' : '.'}</p>}
+          {(lane.count > 0 || (drag && lane.workstream)) &&
           <div className="cols" style={{ gridTemplateColumns: `repeat(${data.statuses.length}, minmax(180px, 1fr))` }}>
             {data.statuses.map((s: string) => (
               <div key={s}>

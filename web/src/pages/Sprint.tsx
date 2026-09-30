@@ -110,8 +110,12 @@ function SprintPlan({ d, cycle, reload }: { d: any; cycle: string; reload: () =>
   const g = d.goals, s = d.inSprint;
   const { change, err } = useLabelChange(cycle, reload);
   const gl = (id: string) => g.labels.goalPrefix + id.toLowerCase();
+  // Nur Ziel-Labels derselben Ebene ersetzen (Sprintziel ersetzt Sprintziel, KR bleibt); fremde „ziel-…“ nie anfassen.
+  const level = (x: string) => (/^s\d{4}-/i.test(x) ? 'S' : /^kr\d/i.test(x) ? 'KR' : /^m\d{2}-/i.test(x) ? 'M' : /^z-/i.test(x) ? 'Z' : /^gate-/i.test(x) ? 'G' : '?');
+  const ID = /^(gate-\d{4}|z-[a-z0-9]+|kr\d{1,2}|m\d{2}-\d{1,2}|s\d{4}-\d{1,2})$/i;
   const assign = (t: any, id: string) => {
-    const rm = (t.labels ?? []).filter((l: string) => l.startsWith(g.labels.goalPrefix) && l !== gl(id));
+    const goalLabels = (t.labels ?? []).filter((l: string) => l.toLowerCase().startsWith(g.labels.goalPrefix) && ID.test(l.slice(g.labels.goalPrefix.length)));
+    const rm = id ? goalLabels.filter((l: string) => l !== gl(id) && level(l.slice(g.labels.goalPrefix.length)) === level(id)) : goalLabels;
     change(t.key, id ? [gl(id)] : [], rm, id ? `${t.key} dem Ziel ${id} zuordnen?` : `Zielzuordnung von ${t.key} entfernen?`);
   };
   const GoalSelect = ({ t }: { t: any }) => (

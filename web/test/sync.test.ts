@@ -116,3 +116,17 @@ test('Trockenlauf: writeJira schreibt nichts, merkt sich die Aufrufe (Labels fri
     assert.deepEqual(W.applyLabels(['a', 'b'], ['c', 'a'], ['b']), ['a', 'c']);
   } finally { delete process.env.WERKBANK_JIRA_DRYRUN; }
 });
+
+test('Löschschutz lässt sich nach echtem Schrumpfen bestätigt übergehen; Labels ohne frische Liste werden nicht geschrieben', async () => {
+  await J.syncMirror(creds, 'test').catch(() => {});
+  const before = await count();
+  const saved = m.issues.splice(0, 5);
+  await assert.rejects(J.syncMirror(creds, 'test'), /nichts gelöscht/);
+  const r = await J.syncMirror(creds, 'test', { force: true });
+  assert.equal(r.removed, 5);
+  assert.equal(await count(), before - 5);
+  m.issues.unshift(...saved);
+  await J.syncMirror(creds, 'test', { force: true });
+  const W = await import('../server/jirawrite.ts');
+  await assert.rejects(W.writeJira({ id: 'u1', email: 'x@maxenergy.at', name: 'X' }, 'PM-331', [{ type: 'labels', add: ['sprint-2026-09-28'] }]), /Lesezugang/);
+});

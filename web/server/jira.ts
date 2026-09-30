@@ -190,20 +190,23 @@ export async function recomputeWorkstreams(): Promise<string[]> {
 let syncing: Promise<any> | null = null;
 let syncingKind: 'voll' | 'inkrementell' | null = null;
 
-export async function syncMirror(creds: JiraCreds, by: string): Promise<{ count: number; removed: number; at: Date; complete: boolean }> {
+export async function syncMirror(creds: JiraCreds, by: string, opts: { force?: boolean } = {}): Promise<{ count: number; removed: number; at: Date; complete: boolean }> {
   if (syncing && syncingKind === 'voll') return syncing;
-  while (syncing) { try { await syncing; } catch { /* egal */ } }
+  while (syncing) { try { await syncing; } catch { /* egal */ } if (syncing && syncingKind === 'voll') return syncing; }
   syncingKind = 'voll';
   syncing = (async () => {
     const started = new Date();
-    const { issues: raw, complete } = await fetchPages(creds);
+    // Nach Schlüssel blättern (nicht nach „updated“): ein während des Laufs geändertes Ticket springt sonst von hinten
+    // nach vorn, fehlt in der Liste und würde gelöscht.
+    const { issues: raw, complete } = await fetchPages(creds, `project = ${cfg.jiraProject} ORDER BY key ASC`, 20_000);
     const issues = assignWorkstreams(raw.map(mapIssue));
     const col = wb().collection('jira_issues');
     const meta: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
     if (issues.length) {
       await col.bulkWrite(issues.map((i) => ({ replaceOne: { filter: { key: i.key }, replacement: { ...i, syncedAt: started }, upsert: true } })));
     }
-    const guard = deletionAllowed(complete, issues.length, meta?.count);
+    // force (bestätigt in der Oberfläche): Schwelle ignorieren — z. B. nach echtem Schrumpfen; Vollständigkeit bleibt Pflicht.
+    const guard = deletionAllowed(complete, issues.length, opts.force ? null : meta?.count);
     if (!guard.ok) {
       await recordSyncError('löschschutz', guard.reason);
       jiraChanged(issues.map((i) => i.key), 'sync', true);

@@ -120,10 +120,12 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
     if (a.type === 'due' && a.date && !/^\d{4}-\d{2}-\d{2}$/.test(a.date)) throw new JiraWriteError(400, 'bad_date', 'Datum im Format JJJJ-MM-TT.');
     const base = { cloudId: cfg.jiraCloudId, issueIdOrKey: key };
     // Aktuelle Labels frisch lesen (Lesezugang), damit nichts überschrieben wird, was inzwischen dazukam.
+    // Ohne frische Liste wird nicht geschrieben (die Kopie kann 15 min alt sein → Labels würden überschrieben).
     const currentLabels = async (): Promise<string[]> => {
-      if (read) { try { const r = await jiraFetch(read, 'GET', `/issue/${encodeURIComponent(key)}?fields=labels`); return r?.fields?.labels ?? []; } catch { /* Kopie */ } }
-      const d: any = await wb().collection('jira_issues').findOne({ key });
-      return d?.labels ?? [];
+      if (!read && dry) { const d: any = await wb().collection('jira_issues').findOne({ key }); return d?.labels ?? []; }   // nur Anzeige
+      if (!read) throw new JiraWriteError(412, 'jira_missing', 'Für Label-Änderungen braucht die Werkbank den Jira-Lesezugang (aktuelle Labels lesen).');
+      try { const r = await jiraFetch(read, 'GET', `/issue/${encodeURIComponent(key)}?fields=labels`); return r?.fields?.labels ?? []; }
+      catch (e: any) { throw new JiraWriteError(502, 'labels_read', `Aktuelle Labels von ${key} nicht lesbar — nichts geschrieben (${String(e.message).slice(0, 120)}).`); }
     };
     if (dry) {
       // Nur beschreiben, was geschrieben würde (Übergänge/Labels werden lesend aufgelöst).

@@ -29,7 +29,7 @@ import { jiraEventStream } from './events.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
 import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './timebox.ts';
-import { isMine, resolveIdentity } from './hygiene.ts';
+import { isMine, resolveIdentity, vienna } from './hygiene.ts';
 import { ObjectId } from 'mongodb';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES } from './roadmap.ts';
@@ -118,7 +118,7 @@ async function ticketDocs(u: User, key: string) {
 async function jiraWrite<T>(u: User, fn: () => Promise<T>): Promise<T> {
   try {
     const r = await fn();
-    await markJiraWrite(u, true);
+    if (!dryRun()) await markJiraWrite(u, true);   // Trockenlauf beweist kein Schreibrecht
     return r;
   } catch (e) {
     if (e instanceof JiraError && (e.status === 401 || e.status === 403)) await markJiraWrite(u, false);
@@ -212,7 +212,7 @@ function goalsView(c: { id: string; date: string }, files: Record<string, any>, 
   const noGoal = members.filter((i) => !groups.some((gr) => gr.tickets.some((t) => t.key === i.key)) && !goalsOf(i.labels).length);
   // Kandidaten: Mitnahme (→ mitnehmen mit Ticket), Tickets der Sprintziele/Monatsziele, überfällige, Top-Rang-Specs — nicht im Sprint.
   const why = new Map<string, Set<string>>();
-  const add = (k: string, w: string) => { const i = im.get(k); if (!i || i.type === 'Workstream' || i.status === 'Done' || inSprint(i, c.date)) return; if (!why.has(k)) why.set(k, new Set()); why.get(k)!.add(w); };
+  const add = (k: string, w: string) => { const i = im.get(k); if (!i || i.type === 'Workstream' || i.status === 'Done' || i.statusCategory === 'done' || inSprint(i, c.date)) return; if (!why.has(k)) why.set(k, new Set()); why.get(k)!.add(w); };
   for (const f of Object.values(files)) for (const q of f.questions ?? []) if (q.ticket && q.answers.some((a: any) => a.kind === 'carry')) add(q.ticket, 'Mitnahme');
   for (const g of [...sprintGoals, ...monthGoals]) for (const k of [...g.tickets, ...g.labelTickets]) add(k, `Ziel ${g.id}`);
   for (const i of issues) if (isOverdue(i)) add(i.key, 'überfällig');
@@ -414,7 +414,11 @@ on('GET', /^\/api\/events$/, async (req, res) => {
 
 on('POST', /^\/api\/board\/sync$/, async (req, res) => {
   const u = await needUser(req);
-  send(res, 200, await syncMirror(await needJira(u), u.email));
+  const b = await body(req);
+  // force: Löschschutz-Schwelle einmal übergehen (nach echtem Schrumpfen) — nur mit Bestätigung aus der Oberfläche.
+  const force = b.force === true && b.confirm === true;
+  if (force) log('jira sync erzwungen', { user: u.id });
+  send(res, 200, await syncMirror(await needJira(u), u.email, { force }));
 });
 
 on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => {
@@ -893,7 +897,7 @@ const tbOut = (b: any) => ({ ...b, id: String(b._id), _id: undefined, userId: un
 
 on('GET', /^\/api\/timebox$/, async (req, res, _m, url) => {
   const u = await needUser(req);
-  const from = url.searchParams.get('from') ?? new Date().toISOString().slice(0, 10);
+  const from = url.searchParams.get('from') ?? vienna().date;
   const days = Math.min(7, Math.max(1, Number(url.searchParams.get('days') ?? 1)));
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) throw new HttpError(400, 'Datum im Format JJJJ-MM-TT.');
   const dates: string[] = [from];
@@ -930,6 +934,7 @@ on('PATCH', /^\/api\/timebox\/([0-9a-f]{24})$/, async (req, res, m) => {
   if ('error' in r) throw new HttpError(400, r.error);
   const cur: any = await tbCol().findOne({ _id: new ObjectId(m[1]), userId: u.id });
   if (!cur) throw new HttpError(404, 'Block nicht gefunden.');
+  if (r.ok.key && !(await issueMap()).has(r.ok.key)) throw new HttpError(404, 'Ticket nicht in der Kopie.');
   if ((r.ok.start ?? cur.start) + (r.ok.dur ?? cur.dur) > 24 * 60) throw new HttpError(400, 'Block geht über Mitternacht.');
   await tbCol().updateOne({ _id: cur._id, userId: u.id }, { $set: { ...r.ok, updatedAt: new Date() } });
   send(res, 200, { ok: true });
@@ -947,9 +952,14 @@ on('POST', /^\/api\/timebox\/carry$/, async (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, 'Datum im Format JJJJ-MM-TT.');
   const blocks = (await tbCol().find({ userId: u.id, date }).toArray()) as any[];
   const { copies, mark } = carryOver(blocks, date);
-  if (copies.length) await tbCol().insertMany(copies.map((c) => ({ ...c, createdAt: new Date() })) as any[]);
-  if (mark.length) await tbCol().updateMany({ userId: u.id, _id: { $in: mark.map((x) => new ObjectId(x)) } }, { $set: { state: 'verschoben', carriedTo: nextDay(date) } });
-  send(res, 200, { ok: true, carried: copies.length, to: nextDay(date) });
+  // Atomar je Block markieren; nur wer die Markierung gewinnt, bekommt eine Kopie (zwei Klicks → keine Doppel).
+  const won: typeof copies = [];
+  for (let k = 0; k < mark.length; k++) {
+    const r = await tbCol().updateOne({ _id: new ObjectId(mark[k]), userId: u.id, carriedTo: { $exists: false } }, { $set: { state: 'verschoben', carriedTo: nextDay(date) } });
+    if (r.modifiedCount) won.push(copies[k]);
+  }
+  if (won.length) await tbCol().insertMany(won.map((c) => ({ ...c, createdAt: new Date() })) as any[]);
+  send(res, 200, { ok: true, carried: won.length, to: nextDay(date) });
 });
 
 // --- Skills ---
