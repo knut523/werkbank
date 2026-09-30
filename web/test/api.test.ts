@@ -87,7 +87,7 @@ before(async () => {
       WERKBANK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3`, WERKBANK_ALLOWED_EMAILS: `${users.a.email},${users.b.email}`,
       CREDS_KEY, CREDS_IV, WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: DATA,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
-      WERKBANK_GOAL_PROPOSALS: join(tmp, 'vorschlag.json'), WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
+      WERKBANK_GOAL_PROPOSALS: join(tmp, 'vorschlag.json'), WERKBANK_SPEC_CREATE: 'on', WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
     },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -429,21 +429,24 @@ test('Ziele & Sprint: Zielbaum aus ziele-olaf.md, S1–S4 → S0928-n, in Sprint
   assert.deepEqual(v.j.goals.sprintGoals.map((g: any) => g.id), ['S0928-1', 'S0928-2', 'S0928-3', 'S0928-4']);
   assert.deepEqual(v.j.goals.monthGoals.map((g: any) => g.id), ['M10-1']);
   assert.equal(v.j.inSprint.label, 'sprint-2026-09-28');
-  const pre = await anna.req('/api/sprint/sprint-2026-09-28/labels', { body: { key: 'PM-322', add: ['sprint-2026-09-28', 'ziel-s0928-1'] } });
+  // Runde 7: Sprint-Mitgliedschaft und Ziel lokal in der Werkbank, nichts nach Jira
+  const n0 = jira.writes.length;
+  const pre = await anna.req('/api/sprint/sprint-2026-09-28/member', { body: { key: 'PM-322', in: true } });
   assert.equal(pre.j.needsConfirm, true);
-  assert.match(pre.j.preview, /\+sprint-2026-09-28 \+ziel-s0928-1/);
-  const bad = await anna.req('/api/sprint/sprint-2026-09-28/labels', { body: { key: 'PM-322', add: ['irgendwas'], confirm: true } });
-  assert.equal(bad.status, 400, 'nur Sprint-/Ziel-Labels');
-  const ok = await anna.req('/api/sprint/sprint-2026-09-28/labels', { body: { key: 'PM-322', add: ['sprint-2026-09-28', 'ziel-s0928-1'], confirm: true } });
+  assert.match(pre.j.preview, /PM-322 → Sprint 2026-09-28/);
+  assert.equal((await anna.req('/api/sprint/sprint-2026-09-28/member', { body: { key: 'PM-99999', in: true, confirm: true } })).status, 404);
+  const ok = await anna.req('/api/sprint/sprint-2026-09-28/member', { body: { key: 'PM-322', in: true, confirm: true } });
   assert.equal(ok.status, 200, JSON.stringify(ok.j));
-  assert.deepEqual(jira.issues.find((i: any) => i.key === 'PM-322').fields.labels, ['sprint-2026-09-28', 'ziel-s0928-1']);
+  assert.equal((await anna.req('/api/goals/assign', { body: { items: [{ key: 'PM-322', goal: 'S0928-1' }], confirm: true } })).status, 200);
+  assert.equal(jira.writes.length, n0, 'nichts nach Jira');
   const v2 = await anna.req('/api/sprint/sprint-2026-09-28');
   assert.equal(v2.j.inSprint.count, 1);
   assert.deepEqual(v2.j.inSprint.groups[0].tickets.map((t: any) => t.key), ['PM-322']);
   assert.equal(v2.j.goals.sprintGoals[0].progress.total >= 1, true);
-  const out = await anna.req('/api/sprint/sprint-2026-09-28/labels', { body: { key: 'PM-322', remove: ['sprint-2026-09-28'], confirm: true } });
+  const out = await anna.req('/api/sprint/sprint-2026-09-28/member', { body: { key: 'PM-322', in: false, confirm: true } });
   assert.equal(out.status, 200);
-  assert.deepEqual(jira.issues.find((i: any) => i.key === 'PM-322').fields.labels, ['ziel-s0928-1']);
+  assert.equal((await anna.req('/api/sprint/sprint-2026-09-28')).j.inSprint.count, 0);
+  assert.equal(jira.writes.length, n0);
 });
 
 test('Sprint: neuen Zyklus anlegen nur nach Bestätigung', async () => {
@@ -739,13 +742,14 @@ test('Jedes Ticket ein Ziel: Liste ohne Ziel mit Vorschlag, Sammelaktion nach Be
   const items = [{ key: 'PM-321', goal: 'KR1' }, { key: 'PM-340', goal: 'KEINS', begruendung: 'laufender Betrieb, kein Projektziel' }];
   const pre = await anna.req('/api/goals/assign', { body: { items } });
   assert.equal(pre.j.needsConfirm, true);
-  assert.match(pre.j.preview[0], /PM-321: Labels \+ziel-kr1/);
+  assert.match(pre.j.preview[0], /PM-321 → KR1/);
   const n = jira.writes.length;
   const ok = await anna.req('/api/goals/assign', { body: { items, confirm: true } });
   assert.ok(ok.j.results.every((r: any) => r.ok), JSON.stringify(ok.j));
-  assert.ok(jira.issues.find((i: any) => i.key === 'PM-321').fields.labels.includes('ziel-kr1'));
-  assert.ok(jira.issues.find((i: any) => i.key === 'PM-340').fields.labels.includes('ziel-keins'));
-  assert.ok(jira.writes.slice(n).some((w: any) => w.type === 'comment' && w.key === 'PM-340'));
+  assert.equal(jira.writes.length, n, 'Runde 7: Zuordnung nur lokal, keine Labels/Kommentare in Jira');
+  const hist = await anna.req('/api/goals/history/PM-340');
+  assert.equal(hist.j.entries[0].ziel, 'KEINS');
+  assert.match(hist.j.entries[0].begruendung, /laufender Betrieb/);
   const after = await anna.req('/api/goals/assign');
   const keys = after.j.tickets.map((t: any) => t.key);
   assert.ok(!keys.includes('PM-321') && !keys.includes('PM-340'));
@@ -805,7 +809,8 @@ test('Mein Tag: Tagespriorität je Block und je Ticket (privat), Seitenleiste da
   const f = jira.issues.find((i: any) => i.key === 'PM-332').fields;
   assert.equal(f.priority.name, 'High');
   assert.equal(f.assignee.accountId, 'acc-knutpeters');
-  assert.ok(f.labels.includes('ziel-kr1'));
+  assert.ok(!(f.labels ?? []).includes('ziel-kr1'), 'Ziel nicht als Label');
+  assert.equal((await anna.req('/api/goals/history/PM-332')).j.entries[0].ziel, 'KR1', 'Ziel lokal');
 });
 
 test('Spec-Ordnung: Regel-Check je Spec mit Zusammenfassung; Zustandswechsel nur als Kopiertext; neue Spec aus Vorlage nach Bestätigung', async () => {
@@ -816,7 +821,7 @@ test('Spec-Ordnung: Regel-Check je Spec mit Zusammenfassung; Zustandswechsel nur
   assert.equal(ka.checks.inOverview, true);
   assert.equal(ka.checks.fm.ok, false, 'Fixture ohne domain/lifecycle');
   assert.equal(o.j.summary.total, o.j.specs.length);
-  assert.ok(typeof o.j.summary.noGoal === 'number' && typeof o.j.summary.noJira === 'number');
+  assert.ok(typeof o.j.summary.noGoal === 'number' && typeof o.j.summary.withJira === 'number');
   const file = join(VAULT, ka.path);
   const before = readFileSync(file, 'utf8');
   const mv = await anna.req('/api/roadmap/spec-move', { body: { path: ka.path, to: '4-Review' } });
@@ -837,4 +842,31 @@ test('Spec-Ordnung: Regel-Check je Spec mit Zusammenfassung; Zustandswechsel nur
   const neu = o2.j.specs.find((x: any) => x.path === ok.j.path);
   assert.equal(neu.checks.fm.ok, true, JSON.stringify(neu.checks.fm));
   assert.deepEqual(neu.checks.goal.ids, ['KR1']);
+});
+
+test('Runde 7: Vorschlag übernehmen (Sicherheit hoch), Audit append-only, Spec lokal einem Ziel zuordnen, jira: kein Mangel, Neuer Spec abschaltbar', async () => {
+  writeFileSync(join(tmp, 'vorschlag.json'), JSON.stringify([{ key: 'PM-332', ziel: 'KR1', begruendung: 'passt', sicherheit: 'hoch' }, { key: 'PM-267', ziel: 'KR1', begruendung: 'vielleicht', sicherheit: 'mittel' }, { key: 'PM-259', ziel: 'M10-1', sicherheit: 0.9 }]));
+  const pre = await anna.req('/api/goals/import', { body: { mode: 'hoch' } });
+  assert.equal(pre.j.needsConfirm, true);
+  assert.deepEqual(pre.j.items.map((x: any) => x.key).sort(), ['PM-259'], 'PM-332 hat schon ein Ziel, PM-267 nur mittel');
+  const ok = await anna.req('/api/goals/import', { body: { mode: 'hoch', confirm: true } });
+  assert.equal(ok.j.imported, 1);
+  const n = (await anna.req('/api/goals/history/PM-259')).j.entries.length;
+  await anna.req('/api/goals/assign', { body: { items: [{ key: 'PM-259', goal: 'KR1' }], confirm: true } });
+  const h = (await anna.req('/api/goals/history/PM-259')).j.entries;
+  assert.equal(h.length, n + 1, 'append-only');
+  assert.equal(h[0].prev, 'M10-1');
+  const o = await anna.req('/api/roadmap/order');
+  const ka = o.j.specs.find((x: any) => x.name === 'service-view-kundenakte');
+  assert.equal('noJira' in o.j.summary, false, 'jira: ist kein Mangel');
+  const sp = await anna.req('/api/goals/assign-spec', { body: { path: ka.path, goal: 'KR1' } });
+  assert.equal(sp.j.needsConfirm, true);
+  assert.equal((await anna.req('/api/goals/assign-spec', { body: { path: '../../etc/passwd', goal: 'KR1', confirm: true } })).status, 404);
+  assert.equal((await anna.req('/api/goals/assign-spec', { body: { path: ka.path, goal: 'KR1', confirm: true } })).status, 200);
+  const o2 = await anna.req('/api/roadmap/order');
+  assert.deepEqual(o2.j.specs.find((x: any) => x.name === 'service-view-kundenakte').checks.goal, { ok: true, via: 'Werkbank', ids: ['KR1'] });
+  const d = await anna.req('/api/goals/KR1');
+  assert.ok(d.j.specs.some((x: any) => x.name === 'service-view-kundenakte' && x.via === 'Werkbank'));
+  const cfg = await anna.req('/api/config');
+  assert.equal(cfg.j.specCreate, true, 'im Test eingeschaltet (WERKBANK_SPEC_CREATE=on)');
 });

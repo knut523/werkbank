@@ -20,7 +20,9 @@ export const labelCfg = () => ({
 
 export const sprintLabel = (date: string) => `${labelCfg().sprintPrefix}${date}`;
 export const goalLabel = (id: string) => `${labelCfg().goalPrefix}${id.toLowerCase()}`;
-export const inSprint = (i: Pick<Issue, 'labels'>, date: string) => (i.labels ?? []).includes(sprintLabel(date));
+/** Sprint-Mitgliedschaft: lokal (Werkbank, sprint_members) gewinnt; sonst Jira-Label sprint-JJJJ-MM-TT (Fallback/Import). */
+export const inSprint = (i: Pick<Issue, 'labels' | 'localSprints'>, date: string) =>
+  (i.localSprints && date in i.localSprints ? !!i.localSprints[date] : (i.labels ?? []).includes(sprintLabel(date)));
 
 export const GOAL_ID = /^(GATE-\d{4}|Z-[A-Za-z0-9]+|KR\d{1,2}|M\d{2}-\d{1,2}|S\d{4}-\d{1,2})$/i;
 
@@ -122,7 +124,7 @@ export function sprintGoalsFromOutcomes(outcomes: Outcome[], date: string): Goal
 
 export interface GoalNode extends GoalRow {
   children: GoalNode[];
-  labelTickets: string[];       // Tickets mit dem Label dieses Ziels
+  labelTickets: string[];       // Tickets, die diesem Ziel zugeordnet sind (lokal, sonst Jira-Label)
   progress: { done: number; total: number };        // eigene Tickets (Label + im Text genannt)
   subtree: { done: number; total: number };         // inkl. Unterziele
   rating: Rating | null;
@@ -134,7 +136,7 @@ const isDone = (i?: Pick<Issue, 'status' | 'statusCategory'>) => !!i && (i.statu
 export function goalTree(rows: GoalRow[], ratings: Rating[], issues: Issue[]): { roots: GoalNode[]; byId: Map<string, GoalNode> } {
   const byKey = new Map(issues.map((i) => [i.key, i]));
   const labelled = new Map<string, string[]>();
-  for (const i of issues) for (const g of goalsOf(i.labels)) labelled.set(g, [...(labelled.get(g) ?? []), i.key]);
+  for (const i of issues) for (const g of ownGoals(i)) labelled.set(g, [...(labelled.get(g) ?? []), i.key]);
   const last = new Map<string, Rating>();
   for (const r of ratings) { const p = last.get(r.id); if (!p || r.date >= p.date) last.set(r.id, r); }
   const byId = new Map<string, GoalNode>();
@@ -171,19 +173,28 @@ export function goalTree(rows: GoalRow[], ratings: Rating[], issues: Issue[]): {
 
 export const exemptLabel = () => (process.env.WERKBANK_GOAL_EXEMPT_LABEL || `${labelCfg().goalPrefix}keins`).toLowerCase();
 
-type Min = Pick<Issue, 'key' | 'type' | 'status' | 'statusCategory' | 'parent' | 'labels'>;
+type Min = Pick<Issue, 'key' | 'type' | 'status' | 'statusCategory' | 'parent' | 'labels' | 'localGoal'>;
+
+/** Eigene Ziele eines Tickets: lokale Zuordnung (Werkbank, goal_assignments) gewinnt; ohne lokale die Jira-Labels ziel-*. */
+export function ownGoals(i: Pick<Issue, 'labels' | 'localGoal'>): string[] {
+  if (i.localGoal !== undefined) return i.localGoal && i.localGoal !== 'KEINS' ? [i.localGoal] : [];
+  return goalsOf(i.labels);
+}
+export function ownExempt(i: Pick<Issue, 'labels' | 'localGoal'>): boolean {
+  if (i.localGoal !== undefined) return i.localGoal === 'KEINS';
+  return (i.labels ?? []).some((l) => l.toLowerCase() === exemptLabel());
+}
 
 /** known: gültige Ziel-IDs (aus ziele-olaf.md + Planning). Labels auf unbekannte/alte Ziele zählen dann nicht. */
 export function effectiveGoals(i: Min, byKey: Map<string, Min>, known?: Set<string>): { goals: string[]; inherited: string | null; exempt: boolean } {
-  const ex = exemptLabel();
   const ok = (ids: string[]) => (known ? ids.filter((x) => known.has(x)) : ids);
-  const own = ok(goalsOf(i.labels));
-  const ownEx = (i.labels ?? []).some((l) => l.toLowerCase() === ex);
+  const own = ok(ownGoals(i));
+  const ownEx = ownExempt(i);
   if (own.length || ownEx) return { goals: own, inherited: null, exempt: !own.length && ownEx };
   const p = i.parent ? byKey.get(i.parent) : undefined;
   if (p && p.type !== 'Workstream' && p.type !== 'Epic') {
-    const pg = ok(goalsOf(p.labels));
-    const pex = (p.labels ?? []).some((l) => l.toLowerCase() === ex);
+    const pg = ok(ownGoals(p));
+    const pex = ownExempt(p);
     if (pg.length || pex) return { goals: pg, inherited: p.key, exempt: !pg.length && pex };
   }
   return { goals: [], inherited: null, exempt: false };

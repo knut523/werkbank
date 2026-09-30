@@ -66,7 +66,7 @@ function GoalTree({ g }: { g: any }) {
   if (g.missing) return <div className="card soft" data-testid="goal-tree"><b>Stage Gate nicht definiert</b><p className="small muted" style={{ margin: 0 }}>Die Zieldatei <code>{g.file}</code> fehlt. Format: Tabelle unter <code>## Ziele</code> mit ID | Ebene | Ergebnis | Messgröße | Baseline | Ziel | Stichtag | Owner | Eltern-ID | Beleg (siehe README).</p></div>;
   return (
     <details className="card" open data-testid="goal-tree">
-      <summary><b>Zielbaum</b> <span className="tiny">Gate → Ziel → KR → Monat → Sprint · aus <a href={noteHref(g.file)}>{g.file.split('/').pop()}</a> · Fortschritt = erledigte / zugeordnete Tickets (Label <code>{g.labels.goalPrefix}&lt;id&gt;</code> oder in der Zeile genannt)</span></summary>
+      <summary><b>Zielbaum</b> <span className="tiny">Gate → Ziel → KR → Monat → Sprint · aus <a href={noteHref(g.file)}>{g.file.split('/').pop()}</a> · Fortschritt = erledigte / zugeordnete Tickets (Zuordnung in der Werkbank, sonst Jira-Label, oder in der Zeile genannt)</span></summary>
       {!g.gate.length && <p className="note small">Stage Gate nicht definiert (keine Zeile mit Ebene „Gate“).</p>}
       <ul className="goal-tree root">{g.roots.map((n: any) => <GoalNodeView key={n.id} n={n} />)}</ul>
       {!g.monthGoals.length && <p className="tiny">Monatsziele für diesen Sprint noch nicht gesetzt (Ebene „Monat“, ID M&lt;MM&gt;-&lt;n&gt;).</p>}
@@ -74,25 +74,27 @@ function GoalTree({ g }: { g: any }) {
   );
 }
 
-function useLabelChange(cycle: string, reload: () => void) {
+/** Sprint-Mitgliedschaft und Ziel werden in der Werkbank gespeichert (Runde 7), nicht als Jira-Label — mit Bestätigung. */
+function useLocalChange(cycle: string, reload: () => void) {
   const confirm = useConfirm();
   const toast = useToast();
   const [err, setErr] = useState<unknown>(null);
-  const change = async (key: string, add: string[], remove: string[], title: string) => {
+  const run = async (url: string, body: any, title: string) => {
     setErr(null);
     try {
-      const pre: any = await api(`/api/sprint/${cycle}/labels`, { body: { key, add, remove } });
-      const ok = await confirm({
-        title, confirmLabel: pre.dryRun ? 'Trockenlauf ausführen' : 'In Jira schreiben',
-        body: <><p className="small">Jira-Labels ändern (über den Atlassian-MCP in deiner Claude-Sitzung):</p><pre className="small">{pre.preview}</pre><p className="tiny">Labels jetzt: {(pre.labels ?? []).join(', ') || '—'}</p>{pre.dryRun && <p className="note small">Vorschau-Instanz: <b>Trockenlauf</b> — es wird nur gezeigt, was geschrieben würde.</p>}</>,
-      });
-      if (!ok) return;
-      const r: any = await api(`/api/sprint/${cycle}/labels`, { body: { key, add, remove, confirm: true } });
-      toast(r.dryRun ? `Trockenlauf: würde schreiben — ${r.done.join(' · ')}` : `In Jira geschrieben: ${r.done.join(' · ')}`);
+      const pre: any = await api(url, { body });
+      const text = Array.isArray(pre.preview) ? pre.preview.join('\n') : pre.preview;
+      if (!(await confirm({ title, confirmLabel: 'Speichern', body: <><pre className="small">{text}</pre><p className="tiny">Gespeichert in der Werkbank (mit Verlauf) — nichts wird nach Jira geschrieben.</p></> }))) return;
+      await api(url, { body: { ...body, confirm: true } });
+      toast('Gespeichert (Werkbank)');
       reload();
     } catch (e) { setErr(e); }
   };
-  return { change, err };
+  return {
+    member: (key: string, inSprint: boolean) => run(`/api/sprint/${cycle}/member`, { key, in: inSprint }, inSprint ? `${key} in den Sprint nehmen?` : `${key} aus dem Sprint nehmen?`),
+    goal: (key: string, id: string) => run('/api/goals/assign', { items: [{ key, goal: id }] }, id ? `${key} dem Ziel ${id} zuordnen?` : `Zielzuordnung von ${key} entfernen?`),
+    err,
+  };
 }
 
 function TicketRow({ t, children }: { t: any; children?: ReactNode }) {
@@ -114,16 +116,9 @@ function TicketRow({ t, children }: { t: any; children?: ReactNode }) {
 
 function SprintPlan({ d, cycle, reload }: { d: any; cycle: string; reload: () => void }) {
   const g = d.goals, s = d.inSprint;
-  const { change, err } = useLabelChange(cycle, reload);
-  const gl = (id: string) => g.labels.goalPrefix + id.toLowerCase();
-  // Nur Ziel-Labels derselben Ebene ersetzen (Sprintziel ersetzt Sprintziel, KR bleibt); fremde „ziel-…“ nie anfassen.
-  const level = (x: string) => (/^s\d{4}-/i.test(x) ? 'S' : /^kr\d/i.test(x) ? 'KR' : /^m\d{2}-/i.test(x) ? 'M' : /^z-/i.test(x) ? 'Z' : /^gate-/i.test(x) ? 'G' : '?');
-  const ID = /^(gate-\d{4}|z-[a-z0-9]+|kr\d{1,2}|m\d{2}-\d{1,2}|s\d{4}-\d{1,2})$/i;
-  const assign = (t: any, id: string) => {
-    const goalLabels = (t.labels ?? []).filter((l: string) => l.toLowerCase().startsWith(g.labels.goalPrefix) && ID.test(l.slice(g.labels.goalPrefix.length)));
-    const rm = id ? goalLabels.filter((l: string) => l !== gl(id) && level(l.slice(g.labels.goalPrefix.length)) === level(id)) : goalLabels;
-    change(t.key, id ? [gl(id)] : [], rm, id ? `${t.key} dem Ziel ${id} zuordnen?` : `Zielzuordnung von ${t.key} entfernen?`);
-  };
+  const lc = useLocalChange(cycle, reload);
+  const err = lc.err;
+  const assign = (t: any, id: string) => lc.goal(t.key, id);
   const GoalSelect = ({ t }: { t: any }) => (
     <select aria-label={`Ziel für ${t.key}`} value="" onChange={(e) => { if (e.target.value !== '') assign(t, e.target.value === '-' ? '' : e.target.value); }}>
       <option value="">Ziel zuordnen …</option>
@@ -131,19 +126,19 @@ function SprintPlan({ d, cycle, reload }: { d: any; cycle: string; reload: () =>
       {t.goals?.length > 0 && <option value="-">— keine Zuordnung</option>}
     </select>
   );
-  const inRow = (t: any) => <TicketRow key={t.key} t={t}><GoalSelect t={t} /><button className="btn small" onClick={() => change(t.key, [], [s.label], `${t.key} aus dem Sprint nehmen?`)}>rausnehmen</button></TicketRow>;
+  const inRow = (t: any) => <TicketRow key={t.key} t={t}><GoalSelect t={t} /><button className="btn small" onClick={() => lc.member(t.key, false)}>rausnehmen</button></TicketRow>;
   return (
     <>
-      {d.dryRun && <p className="note small" data-testid="dryrun-note">Vorschau: Jira-Schreiben im <b>Trockenlauf</b> — Knöpfe zeigen, was geschrieben würde.</p>}
+
       <Err e={err} />
       <div className="card" data-testid="sprint-goals">
-        <h3 style={{ marginTop: 0 }}>Sprintziele <span className="tiny">Label im Sprint: <code>{s.label}</code> · Ziel: <code>{g.labels.goalPrefix}s{cycle.slice(12, 14)}{cycle.slice(15, 17)}-1</code> …</span></h3>
+        <h3 style={{ marginTop: 0 }}>Sprintziele <span className="tiny">Sprint und Ziel werden in der Werkbank gespeichert (nicht in Jira); vorhandene Jira-Labels gelten als Fallback.</span></h3>
         {g.sprintGoals.length ? <table className="t small"><tbody>{g.sprintGoals.map((x: any) => (
           <tr key={x.id} data-goal={x.id}><td><span className="chip goal-id">{x.id}</span></td><td><Gap text={x.result} />{x.parent && <div className="tiny">zahlt ein auf {x.parent}</div>}</td><td className="tiny">{x.owner || '—'}</td><td className="tiny">{x.due || '—'}</td><td><Bar p={x.progress} /></td></tr>
         ))}</tbody></table> : <p className="small muted">Keine Sprintziele im Planning (S1–S4 oder S&lt;MMTT&gt;-&lt;n&gt;).</p>}
       </div>
       <h2>Im Sprint <span className="chip">{s.count}</span></h2>
-      {s.count === 0 && <p className="small muted">Noch kein Ticket trägt das Label <code>{s.label}</code> — unten bei den Kandidaten „in Sprint nehmen“.</p>}
+      {s.count === 0 && <p className="small muted">Noch kein Ticket im Sprint — unten bei den Kandidaten „in Sprint nehmen“.</p>}
       {s.groups.filter((gr: any) => gr.tickets.length).map((gr: any) => (
         <div className="card" key={gr.goal.id} style={{ marginBottom: 8 }}><b><span className="chip goal-id">{gr.goal.id}</span> <Gap text={gr.goal.result} /></b><ul className="tlist">{gr.tickets.map(inRow)}</ul></div>
       ))}
@@ -151,7 +146,7 @@ function SprintPlan({ d, cycle, reload }: { d: any; cycle: string; reload: () =>
       {s.noGoal.length > 0 && <div className="card warnbox" style={{ marginBottom: 8 }}><b>⚠ Ohne Ziel</b> <span className="tiny">im Sprint, aber keinem Ziel zugeordnet</span><ul className="tlist">{s.noGoal.map(inRow)}</ul></div>}
       <h2>Kandidaten – nicht im Sprint <span className="chip">{d.candidates.length}</span></h2>
       <p className="small muted">Mitnahme aus Review/Planning, Tickets der Sprint- und Monatsziele, überfällige und Tickets der Top-10-Specs der Rangliste.</p>
-      <ul className="tlist card">{d.candidates.map((t: any) => <TicketRow key={t.key} t={t}><button className="btn small primary" onClick={() => change(t.key, [s.label], [], `${t.key} in den Sprint nehmen?`)}>in Sprint nehmen</button></TicketRow>)}</ul>
+      <ul className="tlist card">{d.candidates.map((t: any) => <TicketRow key={t.key} t={t}><button className="btn small primary" onClick={() => lc.member(t.key, true)}>in Sprint nehmen</button></TicketRow>)}</ul>
     </>
   );
 }
