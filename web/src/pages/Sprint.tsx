@@ -22,6 +22,130 @@ function Md({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
+
+// ---------- Ziele & Sprint (klassisch) ----------
+
+/** Zelle mit Lücken „‹… fehlt – Quelle: …›“: Lücken grau/kursiv, zählen nicht als Wert. */
+export function Gap({ text }: { text?: string | null }) {
+  if (!text) return <span className="gap">—</span>;
+  const parts = text.split(/(‹[^›]*›)/g).filter(Boolean);
+  return <>{parts.map((p, i) => p.startsWith('‹') ? <span key={i} className="gap" title="Lücke — noch nicht festgelegt">{p}</span> : <Md key={i} text={p.replace(/\[\[([^\]|]+)(\|[^\]]+)?\]\]/g, '$1')} />)}</>;
+}
+
+function Bar({ p }: { p: { done: number; total: number } }) {
+  if (!p?.total) return <span className="tiny">keine Tickets zugeordnet</span>;
+  return <span className="progress" title={`${p.done} von ${p.total} Tickets erledigt`}><span className="subbar"><span style={{ width: `${Math.round((p.done / p.total) * 100)}%` }} /></span> <b>{p.done}/{p.total}</b></span>;
+}
+
+function GoalNodeView({ n, depth = 0 }: { n: any; depth?: number }) {
+  return (
+    <li className={`goal lvl-${n.level}`} data-goal={n.id}>
+      <div className="row" style={{ gap: 6, alignItems: 'baseline' }}>
+        <span className="chip goal-id">{n.id}</span><span className="tiny">{n.level}</span>
+        <span style={{ flex: 1, minWidth: 200 }}><Gap text={n.result} /></span>
+        {n.rating && <span className="rating" title={`${n.rating.date}: ${n.rating.actual}`}>{n.rating.rating}</span>}
+        <Bar p={n.subtree} />
+      </div>
+      <div className="tiny goal-meta">
+        <span>Messgröße: <Gap text={n.metric} /></span> · <span>Baseline <Gap text={n.baseline} /> → Ziel <Gap text={n.target} /></span> · <span>Stichtag <Gap text={n.due} /></span> · <span>{n.owner || '—'}</span>
+        {n.gaps?.length > 0 && <span className="chip warn tiny-chip" title={`Lücken: ${n.gaps.join(', ')}`}>{n.gaps.length} Lücke{n.gaps.length === 1 ? '' : 'n'}</span>}
+        {n.orphan && <span className="chip bad tiny-chip">Eltern-ID {n.parent} unbekannt</span>}
+        {n.source === 'planning' && <span className="chip tiny-chip">aus Planning</span>}
+      </div>
+      {n.children?.length > 0 && <ul className="goal-tree">{n.children.map((c: any) => <GoalNodeView key={c.id} n={c} depth={depth + 1} />)}</ul>}
+    </li>
+  );
+}
+
+function GoalTree({ g }: { g: any }) {
+  if (g.missing) return <div className="card soft" data-testid="goal-tree"><b>Stage Gate nicht definiert</b><p className="small muted" style={{ margin: 0 }}>Die Zieldatei <code>{g.file}</code> fehlt. Format: Tabelle unter <code>## Ziele</code> mit ID | Ebene | Ergebnis | Messgröße | Baseline | Ziel | Stichtag | Owner | Eltern-ID | Beleg (siehe README).</p></div>;
+  return (
+    <details className="card" open data-testid="goal-tree">
+      <summary><b>Zielbaum</b> <span className="tiny">Gate → Ziel → KR → Monat → Sprint · aus <a href={noteHref(g.file)}>{g.file.split('/').pop()}</a> · Fortschritt = erledigte / zugeordnete Tickets (Label <code>{g.labels.goalPrefix}&lt;id&gt;</code> oder in der Zeile genannt)</span></summary>
+      {!g.gate.length && <p className="note small">Stage Gate nicht definiert (keine Zeile mit Ebene „Gate“).</p>}
+      <ul className="goal-tree root">{g.roots.map((n: any) => <GoalNodeView key={n.id} n={n} />)}</ul>
+      {!g.monthGoals.length && <p className="tiny">Monatsziele für diesen Sprint noch nicht gesetzt (Ebene „Monat“, ID M&lt;MM&gt;-&lt;n&gt;).</p>}
+    </details>
+  );
+}
+
+function useLabelChange(cycle: string, reload: () => void) {
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [err, setErr] = useState<unknown>(null);
+  const change = async (key: string, add: string[], remove: string[], title: string) => {
+    setErr(null);
+    try {
+      const pre: any = await api(`/api/sprint/${cycle}/labels`, { body: { key, add, remove } });
+      const ok = await confirm({
+        title, confirmLabel: pre.dryRun ? 'Trockenlauf ausführen' : 'In Jira schreiben',
+        body: <><p className="small">Jira-Labels ändern (über den Atlassian-MCP in deiner Claude-Sitzung):</p><pre className="small">{pre.preview}</pre><p className="tiny">Labels jetzt: {(pre.labels ?? []).join(', ') || '—'}</p>{pre.dryRun && <p className="note small">Vorschau-Instanz: <b>Trockenlauf</b> — es wird nur gezeigt, was geschrieben würde.</p>}</>,
+      });
+      if (!ok) return;
+      const r: any = await api(`/api/sprint/${cycle}/labels`, { body: { key, add, remove, confirm: true } });
+      toast(r.dryRun ? `Trockenlauf: würde schreiben — ${r.done.join(' · ')}` : `In Jira geschrieben: ${r.done.join(' · ')}`);
+      reload();
+    } catch (e) { setErr(e); }
+  };
+  return { change, err };
+}
+
+function TicketRow({ t, children }: { t: any; children?: ReactNode }) {
+  return (
+    <li className="trow" data-ticket={t.key}>
+      <a href={`#/board?key=${t.key}`}><b>{t.key}</b></a> <span className="trow-s">{t.summary}</span>
+      <span className="row" style={{ gap: 3 }}>
+        <span className={`chip tiny-chip ${t.status === 'Done' ? 'ok' : ''}`}>{t.status}</span>
+        <span className="chip tiny-chip">{t.assignee ?? 'ohne Owner'}</span>
+        {t.duedate && <span className={`chip tiny-chip ${t.overdue ? 'bad' : ''}`}>{fmtDate(t.duedate)}</span>}
+        {t.goals?.map((g: string) => <span key={g} className="chip tiny-chip goal-id">{g}</span>)}
+        {t.why?.map((w: string) => <span key={w} className="chip tiny-chip warn">{w}</span>)}
+        {children}
+      </span>
+    </li>
+  );
+}
+
+function SprintPlan({ d, cycle, reload }: { d: any; cycle: string; reload: () => void }) {
+  const g = d.goals, s = d.inSprint;
+  const { change, err } = useLabelChange(cycle, reload);
+  const gl = (id: string) => g.labels.goalPrefix + id.toLowerCase();
+  const assign = (t: any, id: string) => {
+    const rm = (t.labels ?? []).filter((l: string) => l.startsWith(g.labels.goalPrefix) && l !== gl(id));
+    change(t.key, id ? [gl(id)] : [], rm, id ? `${t.key} dem Ziel ${id} zuordnen?` : `Zielzuordnung von ${t.key} entfernen?`);
+  };
+  const GoalSelect = ({ t }: { t: any }) => (
+    <select aria-label={`Ziel für ${t.key}`} value="" onChange={(e) => { if (e.target.value !== '') assign(t, e.target.value === '-' ? '' : e.target.value); }}>
+      <option value="">Ziel zuordnen …</option>
+      {g.goalIds.map((x: any) => <option key={x.id} value={x.id}>{x.id} · {String(x.result).slice(0, 40)}</option>)}
+      {t.goals?.length > 0 && <option value="-">— keine Zuordnung</option>}
+    </select>
+  );
+  const inRow = (t: any) => <TicketRow key={t.key} t={t}><GoalSelect t={t} /><button className="btn small" onClick={() => change(t.key, [], [s.label], `${t.key} aus dem Sprint nehmen?`)}>rausnehmen</button></TicketRow>;
+  return (
+    <>
+      {d.dryRun && <p className="note small" data-testid="dryrun-note">Vorschau: Jira-Schreiben im <b>Trockenlauf</b> — Knöpfe zeigen, was geschrieben würde.</p>}
+      <Err e={err} />
+      <div className="card" data-testid="sprint-goals">
+        <h3 style={{ marginTop: 0 }}>Sprintziele <span className="tiny">Label im Sprint: <code>{s.label}</code> · Ziel: <code>{g.labels.goalPrefix}s{cycle.slice(12, 14)}{cycle.slice(15, 17)}-1</code> …</span></h3>
+        {g.sprintGoals.length ? <table className="t small"><tbody>{g.sprintGoals.map((x: any) => (
+          <tr key={x.id} data-goal={x.id}><td><span className="chip goal-id">{x.id}</span></td><td><Gap text={x.result} />{x.parent && <div className="tiny">zahlt ein auf {x.parent}</div>}</td><td className="tiny">{x.owner || '—'}</td><td className="tiny">{x.due || '—'}</td><td><Bar p={x.progress} /></td></tr>
+        ))}</tbody></table> : <p className="small muted">Keine Sprintziele im Planning (S1–S4 oder S&lt;MMTT&gt;-&lt;n&gt;).</p>}
+      </div>
+      <h2>Im Sprint <span className="chip">{s.count}</span></h2>
+      {s.count === 0 && <p className="small muted">Noch kein Ticket trägt das Label <code>{s.label}</code> — unten bei den Kandidaten „in Sprint nehmen“.</p>}
+      {s.groups.filter((gr: any) => gr.tickets.length).map((gr: any) => (
+        <div className="card" key={gr.goal.id} style={{ marginBottom: 8 }}><b><span className="chip goal-id">{gr.goal.id}</span> <Gap text={gr.goal.result} /></b><ul className="tlist">{gr.tickets.map(inRow)}</ul></div>
+      ))}
+      {s.otherGoal.length > 0 && <div className="card" style={{ marginBottom: 8 }}><b>Anderes Ziel (KR/Monat)</b><ul className="tlist">{s.otherGoal.map(inRow)}</ul></div>}
+      {s.noGoal.length > 0 && <div className="card warnbox" style={{ marginBottom: 8 }}><b>⚠ Ohne Ziel</b> <span className="tiny">im Sprint, aber keinem Ziel zugeordnet</span><ul className="tlist">{s.noGoal.map(inRow)}</ul></div>}
+      <h2>Kandidaten – nicht im Sprint <span className="chip">{d.candidates.length}</span></h2>
+      <p className="small muted">Mitnahme aus Review/Planning, Tickets der Sprint- und Monatsziele, überfällige und Tickets der Top-10-Specs der Rangliste.</p>
+      <ul className="tlist card">{d.candidates.map((t: any) => <TicketRow key={t.key} t={t}><button className="btn small primary" onClick={() => change(t.key, [s.label], [], `${t.key} in den Sprint nehmen?`)}>in Sprint nehmen</button></TicketRow>)}</ul>
+    </>
+  );
+}
+
 function Question({ q, file, hash, cycle, me, onSaved }: { q: any; file: string; hash: string; cycle: string; me: string; onSaved: () => void }) {
   const [text, setText] = useState('');
   const [name, setName] = useState(me);
@@ -229,7 +353,10 @@ export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
             <div style={{ fontSize: 16, fontWeight: 600 }}>{goal ?? <span className="muted">— noch kein Sprint-Ziel in der Planning-Notiz —</span>}</div>
           </div>
 
-          <h2>Ergebnisse</h2>
+          {d.goals && <GoalTree g={d.goals} />}
+          {d.goals && <SprintPlan d={d} cycle={id} reload={() => v.reload()} />}
+
+          <h2>Ergebnisse (Planning-Tabelle)</h2>
           {planning?.outcomes.length ? (
             <table className="t small">
               <thead><tr><th>#</th><th>Ergebnis</th><th>DoD</th><th>Owner</th><th>Datum</th><th>Review</th></tr></thead>

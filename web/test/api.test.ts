@@ -39,6 +39,8 @@ async function waitFor(url: string) {
 
 before(async () => {
   cpSync(new URL('./fixtures/vault', import.meta.url).pathname, VAULT, { recursive: true });
+  // Ziele-Datei nur in der Kopie (andere Tests zählen die Notizen des Fixture-Vaults).
+  cpSync(new URL('./fixtures/ziele-olaf.md', import.meta.url).pathname, join(VAULT, 'olaf/1-Projects/ziele-olaf.md'));
   mkdirSync(join(tmp, 'skills-src', 'demo-skill'), { recursive: true });
   writeFileSync(join(tmp, 'skills-src', 'demo-skill', 'SKILL.md'), '---\nname: demo-skill\ndescription: Nur ein Test\n---\n# x\n');
   mongo = await MongoClient.connect('mongodb://127.0.0.1:27017');
@@ -366,6 +368,32 @@ test('Sprint-Sync: Plan aus jira-sync-plan.sh, nur Freigegebenes, danach ✓-Mar
   assert.match(text, />   - ✓ \d{4}-\d{2}-\d{2} → Jira: Knut: ist durch/);
   const again = await anna.req('/api/sprint/sprint-2026-09-28/syncplan', { method: 'POST' });
   assert.equal(again.j.proposals.find((x: any) => x.ticket === 'PM-321'), undefined, 'markierte Zeile kommt nicht wieder');
+});
+
+test('Ziele & Sprint: Zielbaum aus ziele-olaf.md, S1–S4 → S0928-n, in Sprint nehmen / Ziel zuordnen = Labels nach Bestätigung', async () => {
+  const v = await anna.req('/api/sprint/sprint-2026-09-28');
+  assert.equal(v.j.goals.missing, false);
+  assert.deepEqual(v.j.goals.gate.map((g: any) => g.id), ['GATE-2701']);
+  assert.deepEqual(v.j.goals.roots[0].children.map((c: any) => c.id), ['KR1']);
+  assert.deepEqual(v.j.goals.roots[0].gaps, ['due'], 'Lücke markiert');
+  assert.deepEqual(v.j.goals.sprintGoals.map((g: any) => g.id), ['S0928-1', 'S0928-2', 'S0928-3', 'S0928-4']);
+  assert.deepEqual(v.j.goals.monthGoals.map((g: any) => g.id), ['M10-1']);
+  assert.equal(v.j.inSprint.label, 'sprint-2026-09-28');
+  const pre = await anna.req('/api/sprint/sprint-2026-09-28/labels', { body: { key: 'PM-322', add: ['sprint-2026-09-28', 'ziel-s0928-1'] } });
+  assert.equal(pre.j.needsConfirm, true);
+  assert.match(pre.j.preview, /\+sprint-2026-09-28 \+ziel-s0928-1/);
+  const bad = await anna.req('/api/sprint/sprint-2026-09-28/labels', { body: { key: 'PM-322', add: ['irgendwas'], confirm: true } });
+  assert.equal(bad.status, 400, 'nur Sprint-/Ziel-Labels');
+  const ok = await anna.req('/api/sprint/sprint-2026-09-28/labels', { body: { key: 'PM-322', add: ['sprint-2026-09-28', 'ziel-s0928-1'], confirm: true } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.j));
+  assert.deepEqual(jira.issues.find((i: any) => i.key === 'PM-322').fields.labels, ['sprint-2026-09-28', 'ziel-s0928-1']);
+  const v2 = await anna.req('/api/sprint/sprint-2026-09-28');
+  assert.equal(v2.j.inSprint.count, 1);
+  assert.deepEqual(v2.j.inSprint.groups[0].tickets.map((t: any) => t.key), ['PM-322']);
+  assert.equal(v2.j.goals.sprintGoals[0].progress.total >= 1, true);
+  const out = await anna.req('/api/sprint/sprint-2026-09-28/labels', { body: { key: 'PM-322', remove: ['sprint-2026-09-28'], confirm: true } });
+  assert.equal(out.status, 200);
+  assert.deepEqual(jira.issues.find((i: any) => i.key === 'PM-322').fields.labels, ['ziel-s0928-1']);
 });
 
 test('Sprint: neuen Zyklus anlegen nur nach Bestätigung', async () => {

@@ -272,7 +272,7 @@ export function isOverdue(i: Pick<Issue, 'duedate' | 'statusCategory' | 'status'
   return !!i.duedate && i.duedate < today && i.statusCategory !== 'done' && i.status !== 'Done' && !isRecurring(i);
 }
 
-export function boardModel(issues: (Issue & { hygiene?: string[] })[], opts: { owner?: string; filter?: string; q?: string; showDone?: boolean } = {}) {
+export function boardModel(issues: (Issue & { hygiene?: string[] })[], opts: { owner?: string; filter?: string; q?: string; showDone?: boolean; label?: string } = {}) {
   const ws = issues.filter((i) => i.type === 'Workstream');
   const names = new Map(ws.map((w) => [w.key, w.summary]));
   const today = new Date().toISOString().slice(0, 10);
@@ -284,6 +284,7 @@ export function boardModel(issues: (Issue & { hygiene?: string[] })[], opts: { o
     if (opts.filter === 'overdue' && !isOverdue(i, today)) return false;
     if (opts.filter === 'undated' && (i.duedate || isDoneI(i) || isRecurring(i))) return false;
     if (opts.filter === 'pflege' && !i.hygiene?.length) return false;
+    if (opts.label && !(i.labels ?? []).includes(opts.label)) return false;
     if (opts.q) { const q = opts.q.toLowerCase(); if (!`${i.key} ${i.summary} ${i.assignee ?? ''}`.toLowerCase().includes(q)) return false; }
     return true;
   };
@@ -304,7 +305,7 @@ export function boardModel(issues: (Issue & { hygiene?: string[] })[], opts: { o
   });
   const statuses = [...STATUS_COLUMNS, ...[...new Set(cards.map((c) => c.status))].filter((s) => !STATUS_COLUMNS.includes(s)).sort()];
   // Ohne Filter: Bahnen für alle Workstreams, auch ohne sichtbare Kinder (PM-223); alte erledigte nur mit showDone.
-  const filtered = !!(opts.owner || opts.filter || opts.q);
+  const filtered = !!(opts.owner || opts.filter || opts.q || opts.label);
   const wsLanes = filtered ? [] : ws.filter((w) => opts.showDone || !oldDone(w)).map((w) => w.key);
   const laneKeys = [...new Set([...wsLanes, ...cards.map((c) => c.workstream ?? '—')])];
   const lanes = laneKeys.map((k) => ({

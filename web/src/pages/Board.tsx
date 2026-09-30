@@ -59,6 +59,7 @@ function Card({ i, onOpen, expanded, onToggle, fresh }: { i: any; onOpen: (k: st
         {i.agent && <span className={`chip ${i.agent === 'wartet auf ja' ? 'bad' : 'warn'}`} title="Ein Agent arbeitet an dieser Karte (Chat)">🤖 {i.agent}</span>}
         <Since i={i} />
         <Blocked i={i} />
+        {i.goals?.map((g: string) => <span key={g} className="chip goal-id" title="Ziel (Jira-Label)">🎯 {g}</span>)}
       </div>
       {subs.length > 0 && (
         <div className="subbox">
@@ -258,7 +259,7 @@ function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: string; 
     setErr(null);
     if (!(await confirm({ title, body, confirmLabel: 'In Jira schreiben' }))) return false;
     toast('Schreibe über den Jira-MCP …');
-    try { await api(`/api/board/issue/${k}/${kind}`, { body: { ...payload, confirm: true } }); toast('In Jira geschrieben'); await d.reload(); onChanged(); return true; }
+    try { const r: any = await api(`/api/board/issue/${k}/${kind}`, { body: { ...payload, confirm: true } }); toast(r.dryRun ? 'Trockenlauf: nichts geschrieben (siehe Vorschau-Protokoll)' : 'In Jira geschrieben'); await d.reload(); onChanged(); return true; }
     catch (e) { setErr(e); return false; }
   };
   const i: any = (d.data as any)?.issue;
@@ -327,6 +328,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
   const [filter, setFilter] = useState(params.get('filter') ?? '');
   const [q, setQ] = useState('');
   const [done, setDone] = useState(false);
+  const [sprint, setSprint] = useState(params.get('sprint') === '1');
   const [open, setOpen] = useState<string | null>(params.get('key'));
   const hashKey = params.get('key');
   useEffect(() => { if (hashKey) setOpen(hashKey); }, [hashKey]);
@@ -336,8 +338,8 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
   const [syncing, setSyncing] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const toast = useToast();
-  const boardUrl = `/api/board?owner=${encodeURIComponent(owner)}&filter=${filter}&q=${encodeURIComponent(q)}&done=${done ? 1 : 0}`;
-  const b = useLoad(() => api(boardUrl), [owner, filter, q, done]);
+  const boardUrl = `/api/board?owner=${encodeURIComponent(owner)}&filter=${filter}&q=${encodeURIComponent(q)}&done=${done ? 1 : 0}&sprint=${sprint ? 1 : 0}`;
+  const b = useLoad(() => api(boardUrl), [owner, filter, q, done, sprint]);
   const data: any = b.data;
   // Live: jede Jira-Änderung (Board, Sprint, Chat, Abgleich) lädt das Board still nach; geänderte Karten leuchten kurz auf.
   const [fresh, setFresh] = useState<Set<string>>(new Set());
@@ -378,6 +380,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
             <button key={v} className={`btn small ${filter === v ? 'primary' : ''}`} onClick={() => setFilter(v)}>{l}</button>
           ))}
         </div>
+        {data?.sprint && <button className={`btn small ${sprint ? 'primary' : ''}`} onClick={() => setSprint(!sprint)} title={`Nur Tickets mit dem Label ${data.sprint.label}`} aria-pressed={sprint}>🎯 nur aktueller Sprint ({data.sprint.count})</button>}
         <input type="search" placeholder="Suchen (Key, Titel, Owner)" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tickets suchen" />
         <label className="row small"><input type="checkbox" checked={done} onChange={(e) => setDone(e.target.checked)} /> ältere erledigte zeigen</label>
         <label className="row small"><input type="checkbox" checked={allOpen} onChange={(e) => { setAllOpen(e.target.checked); setExpanded(new Set()); }} /> Sub-tasks aufklappen</label>

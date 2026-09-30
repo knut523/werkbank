@@ -198,7 +198,13 @@ export interface Outcome {
   dod?: string; owner?: string; date?: string;
   rating?: '✅' | '🟡' | '❌'; evidence?: string; why?: string;
   line: number;
+  anchor?: string;            // Schlüssel aus <!--k:…--> (bleibt erhalten, z. B. PM-321 oder ZIEL:PM-70)
+  tickets?: string[];         // Ticket-Keys aus Anker und Zeile
+  parent?: string | null;     // Eltern-ID (neues Format S<MMTT>-<n>)
 }
+
+const ANCHOR = /<!--k:([^>]+)-->/;
+const ticketsIn = (s: string) => [...new Set((s.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? []).filter((k) => !/^(GATE|KR|Z|M|S)\d*-/.test(k)))];
 
 function cells(row: string): string[] {
   return row.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim());
@@ -242,28 +248,33 @@ export function parseOutcomes(text: string): Outcome[] {
     if (/^\s*\|/.test(l)) {
       const c = cells(l);
       if (c.every((x) => /^:?-{2,}:?$/.test(x))) continue;
-      const first = plain(c[0] ?? '');
-      const idm = first.match(/^(S\d{1,2})\b\.?\s*(.*)$/);
+      const first = plain((c[0] ?? '').replace(ANCHOR, ''));
+      const idm = first.match(/^(S\d{4}-\d{1,2}|S\d{1,2})\b\.?\s*(.*)$/);
       if (!idm) { header = c.map((h) => plain(h).toLowerCase()); continue; }
       const col = (re: RegExp) => { const k = header?.findIndex((h) => re.test(h)) ?? -1; return k >= 0 ? c[k] : undefined; };
-      const title = col(/ergebnis|ziel|was/) ?? (idm[2] || c[1] || '');
+      const anchor = l.match(ANCHOR)?.[1]?.trim();
+      const rowPlain = l.replace(/<!--k:[^>]+-->/g, '');
+      const parentCell = col(/eltern/);
+      const title = (col(/ergebnis|^ziel$|was/) ?? (idm[2] || c[1] || '')).replace(/<!--k:[^>]+-->/g, '');
       const ratingCell = col(/bewertung|stand|erreicht/) ?? c.find((x) => RATING.test(x));
       out.push({
-        id: idm[1], title: plain(idm[2] && !col(/ergebnis|ziel|was/) ? idm[2] : title),
+        id: idm[1], title: plain(idm[2] && !col(/ergebnis|^ziel$|was/) ? idm[2] : title),
         dod: col(/dod|definition|fertig/) && plain(col(/dod|definition|fertig/)!),
         owner: col(/owner|wer/) && plain(col(/owner|wer/)!),
-        date: col(/datum|bis|fällig|termin/) && plain(col(/datum|bis|fällig|termin/)!),
+        date: col(/datum|bis|fällig|termin|stichtag/) && plain(col(/datum|bis|fällig|termin|stichtag/)!),
         rating: ratingCell?.match(RATING)?.[1] as Outcome['rating'],
         evidence: col(/beleg|nachweis/) && plain(col(/beleg|nachweis/)!),
         why: col(/warum|ändern/) && plain(col(/warum|ändern/)!),
         line: i + 1,
+        anchor, tickets: ticketsIn(`${anchor ?? ''} ${rowPlain}`), parent: parentCell ? (plain(parentCell).toUpperCase() || null) : null,
       });
       continue;
     }
     header = null;
-    const li = l.match(/^\s*[-*] \*\*(S\d{1,2})\*\*:?\s*(.*)$/);
+    const li = l.match(/^\s*[-*] \*\*(S\d{4}-\d{1,2}|S\d{1,2})\*\*:?\s*(.*)$/);
     if (li) {
-      const rest = li[2].replace(/<!--k:[^>]+-->/, '').trim();
+      const anchor = li[2].match(ANCHOR)?.[1]?.trim();
+      const rest = li[2].replace(/<!--k:[^>]+-->/g, '').trim();
       const part = (re: RegExp) => rest.match(re)?.[1]?.trim();
       out.push({
         id: li[1],
@@ -272,6 +283,7 @@ export function parseOutcomes(text: string): Outcome[] {
         rating: rest.match(RATING)?.[1] as Outcome['rating'],
         evidence: part(/Beleg:\s*([^·]+)/i), why: part(/Warum[^:]*:\s*([^·]+)/i),
         line: i + 1,
+        anchor, tickets: ticketsIn(`${anchor ?? ''} ${rest}`), parent: part(/Eltern(?:-ID)?:\s*([^·\s]+)/i)?.toUpperCase() ?? null,
       });
     }
   }

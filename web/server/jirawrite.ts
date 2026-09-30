@@ -8,11 +8,30 @@
 import { cfg } from './config.ts';
 import { wb } from './db.ts';
 import { jiraCreds, getClaudeToken } from './creds.ts';
-import { addComment, transitionTo, transitions, setDueDate, refreshIssue } from './jira.ts';
+import { addComment, transitionTo, transitions, setDueDate, refreshIssue, jiraFetch } from './jira.ts';
 import { log } from './log.ts';
 import type { User } from './auth.ts';
 
-export type JiraAction = { type: 'comment'; text: string } | { type: 'status'; to: string } | { type: 'due'; date: string | null };
+export type JiraAction = { type: 'comment'; text: string } | { type: 'status'; to: string } | { type: 'due'; date: string | null }
+  | { type: 'labels'; add?: string[]; remove?: string[] } | { type: 'parent'; key: string };
+
+/** Trockenlauf (Vorschau-Instanz): zeigen, was geschrieben würde, nichts nach Jira schreiben. */
+export const dryRun = () => process.env.WERKBANK_JIRA_DRYRUN === '1' || process.env.WERKBANK_DRYRUN === '1';
+
+const LABEL = /^[^\s]{1,255}$/;
+export function describe(a: JiraAction): string {
+  if (a.type === 'comment') return 'Kommentar';
+  if (a.type === 'status') return `Status → ${a.to}`;
+  if (a.type === 'due') return `Fällig → ${a.date || 'ohne'}`;
+  if (a.type === 'labels') return `Labels ${[...(a.add ?? []).map((x) => '+' + x), ...(a.remove ?? []).map((x) => '−' + x)].join(' ')}`;
+  return `Parent → ${a.key}`;
+}
+
+/** Neue Label-Liste aus der aktuellen (frisch gelesenen) und den Änderungen. */
+export function applyLabels(current: string[], add: string[] = [], remove: string[] = []): string[] {
+  const rm = new Set(remove);
+  return [...new Set([...current.filter((l) => !rm.has(l)), ...add.filter((l) => !rm.has(l))])];
+}
 
 export class JiraWriteError extends Error {
   status: number; code: string;
@@ -78,25 +97,53 @@ export async function mcpState(u: User) {
 
 /** Ist Jira-Schreiben für diese Person möglich? (für Pflegefragen: nur fragen, wenn ja) */
 export async function canWriteJira(u: User): Promise<boolean> {
+  if (dryRun()) return true;
   if (writeMode() === 'rest') return !!(await jiraCreds(u));
   const s = await mcpState(u);
   return s.status === 'connected' && !s.problem;
 }
 
 /** Führt bestätigte Aktionen auf einem Ticket aus. Lesen (Übergänge, Kopie) mit dem Lesezugang. */
-export async function writeJira(u: User, key: string, actions: JiraAction[]): Promise<{ done: string[]; via: 'mcp' | 'rest' }> {
+export async function writeJira(u: User, key: string, actions: JiraAction[]): Promise<{ done: string[]; via: 'mcp' | 'rest'; dryRun?: boolean; calls?: { tool: string; input: unknown }[] }> {
   const read = await jiraCreds(u);
   const done: string[] = [];
   const via = writeMode();
+  const calls: { tool: string; input: unknown }[] = [];
+  const dry = dryRun();
   for (const a of actions) {
     if (a.type === 'comment' && !a.text?.trim()) continue;
-    if (via === 'rest') {
+    if (a.type === 'labels') {
+      for (const l of [...(a.add ?? []), ...(a.remove ?? [])]) if (!LABEL.test(l)) throw new JiraWriteError(400, 'bad_label', `Ungültiges Label „${l}“ (keine Leerzeichen).`);
+      if (!(a.add?.length || a.remove?.length)) continue;
+    }
+    if (a.type === 'parent' && !/^[A-Z][A-Z0-9]+-\d+$/.test(a.key)) throw new JiraWriteError(400, 'bad_parent', 'Ungültiger Parent-Schlüssel.');
+    if (a.type === 'due' && a.date && !/^\d{4}-\d{2}-\d{2}$/.test(a.date)) throw new JiraWriteError(400, 'bad_date', 'Datum im Format JJJJ-MM-TT.');
+    const base = { cloudId: cfg.jiraCloudId, issueIdOrKey: key };
+    // Aktuelle Labels frisch lesen (Lesezugang), damit nichts überschrieben wird, was inzwischen dazukam.
+    const currentLabels = async (): Promise<string[]> => {
+      if (read) { try { const r = await jiraFetch(read, 'GET', `/issue/${encodeURIComponent(key)}?fields=labels`); return r?.fields?.labels ?? []; } catch { /* Kopie */ } }
+      const d: any = await wb().collection('jira_issues').findOne({ key });
+      return d?.labels ?? [];
+    };
+    if (dry) {
+      // Nur beschreiben, was geschrieben würde (Übergänge/Labels werden lesend aufgelöst).
+      if (a.type === 'comment') calls.push({ tool: 'mcp__atlassian__addCommentToJiraIssue', input: { ...base, commentBody: a.text.trim(), contentFormat: 'markdown' } });
+      if (a.type === 'status') {
+        let t: any = null;
+        if (read) { try { const ts = await transitions(read, key); t = ts.find((x) => x.to.toLowerCase() === a.to.toLowerCase()) ?? ts.find((x) => x.name.toLowerCase() === a.to.toLowerCase()); if (!t) throw new JiraWriteError(400, 'no_transition', `Von hier aus gibt es keinen Übergang nach „${a.to}“ (möglich: ${ts.map((x) => x.to).join(', ') || '—'}).`); } catch (e) { if (e instanceof JiraWriteError) throw e; } }
+        calls.push({ tool: 'mcp__atlassian__transitionJiraIssue', input: { ...base, transition: { id: t?.id ?? `(Übergang nach ${a.to})` } } });
+      }
+      if (a.type === 'due') calls.push({ tool: 'mcp__atlassian__editJiraIssue', input: { ...base, fields: { duedate: a.date || null } } });
+      if (a.type === 'labels') calls.push({ tool: 'mcp__atlassian__editJiraIssue', input: { ...base, fields: { labels: applyLabels(await currentLabels(), a.add, a.remove) } } });
+      if (a.type === 'parent') calls.push({ tool: 'mcp__atlassian__editJiraIssue', input: { ...base, fields: { parent: { key: a.key } } } });
+    } else if (via === 'rest') {
       if (!read) throw new JiraWriteError(412, 'jira_missing', 'Kein Jira-Zugang hinterlegt — unter „Einrichtung“ verbinden.');
       if (a.type === 'comment') await addComment(read, key, a.text.trim());
       if (a.type === 'status') await transitionTo(read, key, a.to);
       if (a.type === 'due') await setDueDate(read, key, a.date || null);
+      if (a.type === 'labels') await jiraFetch(read, 'PUT', `/issue/${encodeURIComponent(key)}`, { update: { labels: [...(a.add ?? []).map((l) => ({ add: l })), ...(a.remove ?? []).map((l) => ({ remove: l }))] } });
+      if (a.type === 'parent') await jiraFetch(read, 'PUT', `/issue/${encodeURIComponent(key)}`, { fields: { parent: { key: a.key } } });
     } else {
-      const base = { cloudId: cfg.jiraCloudId, issueIdOrKey: key };
       if (a.type === 'comment') await mcpWrite(u, 'mcp__atlassian__addCommentToJiraIssue', { ...base, commentBody: a.text.trim(), contentFormat: 'markdown' });
       if (a.type === 'status') {
         if (!read) throw new JiraWriteError(412, 'jira_missing', 'Für die Übergänge braucht die Werkbank den Jira-Lesezugang (Einrichtung).');
@@ -105,12 +152,16 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
         if (!t) throw new JiraWriteError(400, 'no_transition', `Von hier aus gibt es keinen Übergang nach „${a.to}“ (möglich: ${ts.map((x) => x.to).join(', ') || '—'}).`);
         await mcpWrite(u, 'mcp__atlassian__transitionJiraIssue', { ...base, transition: { id: t.id } });
       }
-      if (a.type === 'due') {
-        if (a.date && !/^\d{4}-\d{2}-\d{2}$/.test(a.date)) throw new JiraWriteError(400, 'bad_date', 'Datum im Format JJJJ-MM-TT.');
-        await mcpWrite(u, 'mcp__atlassian__editJiraIssue', { ...base, fields: { duedate: a.date || null } });
-      }
+      if (a.type === 'due') await mcpWrite(u, 'mcp__atlassian__editJiraIssue', { ...base, fields: { duedate: a.date || null } });
+      if (a.type === 'labels') await mcpWrite(u, 'mcp__atlassian__editJiraIssue', { ...base, fields: { labels: applyLabels(await currentLabels(), a.add, a.remove) } });
+      if (a.type === 'parent') await mcpWrite(u, 'mcp__atlassian__editJiraIssue', { ...base, fields: { parent: { key: a.key } } });
     }
-    done.push(a.type === 'comment' ? 'Kommentar' : a.type === 'status' ? `Status → ${a.to}` : `Fällig → ${a.date || 'ohne'}`);
+    done.push(describe(a));
+  }
+  if (dry) {
+    await wb().collection('jira_dryrun').insertOne({ at: new Date(), userId: u.id, user: u.name, key, done, calls } as any);
+    log('jira trockenlauf', { user: u.id, key, n: done.length });
+    return { done, via, dryRun: true, calls };
   }
   if (via === 'mcp') await setMcpState(u, null);
   log('jira write', { user: u.id, key, via, n: done.length });
