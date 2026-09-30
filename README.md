@@ -609,6 +609,26 @@ offenen Tickets“, sortiert Sprint → Fälligkeit → Ziel; ziehen oder „+ h
 geschrieben würde (Werkzeug + Argumente, gespeichert in `jira_dryrun`, `GET /api/dryrun`), Vault-Schreibwege schreiben
 nichts, Agenten/Chats sind aus.
 
+### Runde 6 (30.09.2026): jedes Ticket ein Ziel, Ziel-Deep-Dive, Mein Tag bearbeiten, Spec-Ordnung
+- **Jedes Ticket ein Ziel:** Offene Tickets ohne gültiges Ziel-Label bekommen „ohne Ziel – genauer anschauen“. Gezählt wird das eigene Label oder das des Parents (ein Sub-task erbt vom Task). Labels auf Ziele, die es nicht mehr gibt, zählen nicht. Der Hinweis erscheint auf dem Board (mit Zähler und Filter), auf der Sprint-Seite, in „Mein Tag“ und als Pflege-Frage.
+  - Ausnahme: `ziel-keins` (`WERKBANK_GOAL_EXEMPT_LABEL`), nur mit Begründung; die Begründung kommt vor dem Label als Kommentar.
+  - Zuordnung unter `#/ziele/zuordnen`: Liste, Dropdown, Mehrfachauswahl und Sammelaktion mit Bestätigung. Ersetzt wird nur das Label derselben Ebene, berechnet aus der frisch gelesenen Label-Liste.
+  - Vorschläge kommen aus `WERKBANK_GOAL_PROPOSALS` (JSON `[{key, ziel, begruendung, sicherheit}]`) und sind vorausgewählt.
+- **Ziel-Deep-Dive:** `#/ziele/<ID>` (z. B. `#/ziele/KR1`, teilbar). Enthält:
+  - die Felder mit Lücken und den Bewertungsverlauf,
+  - die Kindziele,
+  - die Tickets direkt und über Kindziele, nach Status; nur in der Zielzeile genannte Tickets sind als „Beleg“ markiert,
+  - Specs (`ziel:` im Frontmatter oder über Tickets) mit PR-Live-Status,
+  - Fortschritt, Tickets je Workstream und Risiken.
+- **Mein Tag:** Ein Klick auf einen Ticket-Block oder ein Ticket in der Seitenleiste öffnet die Board-Detailansicht. Dort lassen sich Status, Fälligkeit, Kommentar, Owner, Ziel und Jira-Priorität ändern, jeweils mit Bestätigung.
+  - Tagespriorität Muss/Soll/Kann je Block und je Ticket, privat. Eine ausdrücklich gesetzte Ticket-Priorität gewinnt vor der des Blocks.
+  - Die Seitenleiste sortiert nach Tagesprio, Sprint, Fälligkeit, Ziel.
+- **Spec-Ordnung:** Roadmap-Tab „Ordnung“ mit Regel-Check je Spec:
+  - Frontmatter nach Vault-Schema plus `domain`/`lifecycle` gegen Ordner und Thema,
+  - `jira:`, Ziel, DoD, offene Knut-Zeilen, Rang, Zustand gegen Ticket/PR, Eintrag in der Themen-Übersicht, Alter.
+  - **Zustandswechsel nur als Kopiertext:** Laut Skill betrifft ein Wechsel Hub-Zahlen, Kreuztabelle, Prosa und rank.py; dafür gibt es keinen sauberen automatischen Schreibweg, deshalb schreibt die Werkbank dort nie.
+  - **Neue Spec aus Vorlage:** mit Vorschau und Bestätigung, im Trockenlauf nicht.
+
 ### Tests ohne Live-Mongo
 `MONGO_URI_WERKBANK=mongodb://127.0.0.1:<eigener Port> WERKBANK_TEST_PORT=3171 WERKBANK_TEST_BRIDGE_PORT=3196 npm test`
 — mit eigenem `mongod --dbpath <scratch> --port <Port>`; nicht gegen die Live-Mongo auf 27017.
