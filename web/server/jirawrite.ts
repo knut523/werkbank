@@ -10,10 +10,11 @@ import { wb } from './db.ts';
 import { jiraCreds, getClaudeToken } from './creds.ts';
 import { addComment, transitionTo, transitions, setDueDate, refreshIssue, jiraFetch } from './jira.ts';
 import { log } from './log.ts';
+import { sameLevelRemovals } from './goals.ts';
 import type { User } from './auth.ts';
 
 export type JiraAction = { type: 'comment'; text: string } | { type: 'status'; to: string } | { type: 'due'; date: string | null }
-  | { type: 'labels'; add?: string[]; remove?: string[] } | { type: 'parent'; key: string }
+  | { type: 'labels'; add?: string[]; remove?: string[]; replaceLevelOf?: string } | { type: 'parent'; key: string }
   | { type: 'priority'; name: string } | { type: 'assignee'; accountId: string | null; name?: string };
 
 /** Trockenlauf (Vorschau-Instanz): zeigen, was geschrieben würde, nichts nach Jira schreiben. */
@@ -136,6 +137,11 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
       try { const r = await jiraFetch(read, 'GET', `/issue/${encodeURIComponent(key)}?fields=labels`); return r?.fields?.labels ?? []; }
       catch (e: any) { throw new JiraWriteError(502, 'labels_read', `Aktuelle Labels von ${key} nicht lesbar — nichts geschrieben (${String(e.message).slice(0, 120)}).`); }
     };
+    // Ziel ersetzen: die zu entfernenden Labels derselben Ebene aus der FRISCH gelesenen Liste (nicht aus der Kopie).
+    if (a.type === 'labels' && a.replaceLevelOf) {
+      const fresh = await currentLabels();
+      a.remove = [...new Set([...(a.remove ?? []), ...sameLevelRemovals(fresh, a.replaceLevelOf)])].filter((l) => !(a.add ?? []).includes(l));
+    }
     if (dry) {
       // Nur beschreiben, was geschrieben würde (Übergänge/Labels werden lesend aufgelöst).
       if (a.type === 'comment') calls.push({ tool: 'mcp__atlassian__addCommentToJiraIssue', input: { ...base, commentBody: a.text.trim(), contentFormat: 'markdown' } });

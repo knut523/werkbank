@@ -116,7 +116,7 @@ function Assign() {
       const bad = r.results.filter((y: any) => !y.ok);
       toast(`${r.results.length - bad.length} ${r.dryRun ? 'im Trockenlauf' : 'zugeordnet'}${bad.length ? `, ${bad.length} Fehler` : ''}`);
       if (bad.length) setErr(new Error(bad.map((y: any) => `${y.key}: ${y.error}`).join(' · ')));
-      setSel({}); setGoal({}); d.reload();
+      setSel({}); setGoal({}); setWhy({}); d.reload();
     } catch (e) { setErr(e); }
   };
   return (
@@ -146,7 +146,7 @@ function Assign() {
               </select>
               {G[t.key] === 'KEINS' && <input placeholder="Begründung (Kommentar)" value={W[t.key] ?? ''} onChange={(e) => setWhy({ ...W, [t.key]: e.target.value })} aria-label={`Begründung ${t.key}`} style={{ marginTop: 4, width: '100%' }} />}
             </td>
-            <td className="tiny">{t.proposal ? <><b>{t.proposal.ziel}</b>{t.proposal.sicherheit != null && ` · ${Math.round(Number(t.proposal.sicherheit) * (Number(t.proposal.sicherheit) <= 1 ? 100 : 1))} %`}<div>{t.proposal.begruendung}</div></> : '—'}</td>
+            <td className="tiny">{t.proposal ? <><b>{t.proposal.ziel}</b>{t.proposal.sicherheit != null && ` · ${typeof t.proposal.sicherheit === 'number' ? `${Math.round(t.proposal.sicherheit <= 1 ? t.proposal.sicherheit * 100 : t.proposal.sicherheit)} %` : `Sicherheit ${t.proposal.sicherheit}`}`}<div>{t.proposal.begruendung}</div></> : '—'}</td>
           </tr>
         ))}</tbody>
       </table>

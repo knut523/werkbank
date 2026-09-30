@@ -28,7 +28,7 @@ export function Timebox({ cfg }: { cfg: Config }) {
   const [week, setWeek] = useState(false);
   const from = week ? monday(date) : date;
   const days = week ? 7 : 1;
-  const d = useLoad(() => api(`/api/timebox?from=${from}&days=${days}`), [from, days]);
+  const d = useLoad(() => api(`/api/timebox?from=${from}&days=${days}&day=${date}`), [from, days, date]);
   const data: any = d.data;
   const toast = useToast();
   const confirm = useConfirm();
@@ -186,7 +186,7 @@ export function Timebox({ cfg }: { cfg: Config }) {
               <li key={t.key} className="trow tb-ticket" draggable onDragStart={(e) => { e.dataTransfer.setData('application/x-ticket', t.key); e.dataTransfer.effectAllowed = 'copy'; }} data-ticket={t.key}>
                 <span className="trow-s"><button className="sublink" onClick={() => setOpenKey(t.key)} title="Ticket öffnen und bearbeiten"><b>{t.key}</b> {t.summary}</button></span>
                 <span className="row" style={{ gap: 3 }}>
-                  <select className={`prio-sel p${t.dayPrio ?? 0}`} aria-label={`Tagespriorität ${t.key}`} value={t.dayPrio ?? ''} onChange={(e) => call(() => api('/api/timebox/prio', { body: { date: from, key: t.key, prio: e.target.value ? Number(e.target.value) : null } }))}>
+                  <select className={`prio-sel p${t.dayPrio ?? 0}`} aria-label={`Tagespriorität ${t.key}`} value={t.dayPrio ?? ''} onChange={(e) => call(() => api('/api/timebox/prio', { body: { date, key: t.key, prio: e.target.value ? Number(e.target.value) : null } }))}>
                     <option value="">Prio –</option><option value="1">Muss</option><option value="2">Soll</option><option value="3">Kann</option>
                   </select>
                   {t.priority && <span className="chip tiny-chip" title="Jira-Priorität">{t.priority}</span>}

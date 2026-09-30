@@ -166,6 +166,7 @@ table.t th { font-weight: 600; color: var(--text-secondary); font-size: 12.5px; 
   .side .brand span, .side .foot, .side .spacer { display: none; } .nav { display: flex; } .side .nav.col { flex-direction: row; flex-wrap: nowrap; } .side .nav a { white-space: nowrap; }
   .wissen { grid-template-columns: 1fr; } .wtree { position: static; max-height: 260px; }
   .page { padding: 16px; }
+  table.t { display: block; overflow-x: auto; max-width: 100%; }
 }
 
 /* Eingebettet in LibreChat (/wb/<seite>): kein eigenes Gerüst, Fläche wie LibreChats Hauptbereich */

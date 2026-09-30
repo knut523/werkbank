@@ -273,9 +273,9 @@ function EditFields({ i, onDone }: { i: any; onDone: () => void }) {
   if (!m) return null;
   return (
     <div className="row" style={{ marginTop: 10, gap: 10 }} data-testid="edit-fields">
-      <label className="small">Priorität <select aria-label="Jira-Priorität" value={i.priority ?? ''} onChange={(e) => edit({ priority: e.target.value }, `Priorität von ${i.key} ändern?`)}>{m.priorities.map((p: string) => <option key={p} value={p}>{p}</option>)}</select></label>
+      <label className="small">Priorität <select aria-label="Jira-Priorität" value={i.priority ?? ''} onChange={(e) => e.target.value && edit({ priority: e.target.value }, `Priorität von ${i.key} ändern?`)}>{!i.priority && <option value="">— keine —</option>}{m.priorities.map((p: string) => <option key={p} value={p}>{p}</option>)}</select></label>
       <label className="small">Owner <select aria-label="Owner" value={i.assigneeId ?? ''} onChange={(e) => edit({ assignee: e.target.value || null }, `Owner von ${i.key} ändern?`)}><option value="">— niemand —</option>{m.people.map((p: any) => <option key={p.accountId} value={p.accountId}>{p.name}</option>)}</select></label>
-      <label className="small">Ziel <select aria-label="Ziel zuordnen" value="" onChange={(e) => e.target.value && edit({ goal: e.target.value }, `${i.key} dem Ziel ${e.target.value} zuordnen?`)}><option value="">{(i.labels ?? []).filter((l: string) => l.startsWith('ziel-')).join(', ') || 'ohne Ziel'} → …</option>{m.goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 40)}</option>)}</select></label>
+      <label className="small">Ziel <select aria-label="Ziel zuordnen" value="" onChange={(e) => e.target.value && edit({ goal: e.target.value }, `${i.key} dem Ziel ${e.target.value} zuordnen?`)}><option value="">{(i.labels ?? []).filter((l: string) => l.toLowerCase().startsWith(m.goalPrefix)).join(', ') || 'ohne Ziel'} → …</option>{m.goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 40)}</option>)}</select></label>
       <Err e={err} />
     </div>
   );

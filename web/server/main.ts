@@ -249,6 +249,8 @@ function goalsAll(im: Map<string, Issue>) {
   return { ...t, ratings: parsed.ratings, missing: !text, cur };
 }
 
+const knownGoals = (g: { byId: Map<string, GoalNode> }) => new Set([...g.byId.keys()]);
+
 const PROPOSALS = () => process.env.WERKBANK_GOAL_PROPOSALS || join(cfg.dataDir, 'ziel-vorschlag.json');
 
 /** Vorschlagsdatei {key, ziel, begruendung, sicherheit} (Liste oder {vorschlaege: […]}) → key → Vorschlag. */
@@ -430,6 +432,7 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
   const model = boardModel(issues as Issue[], {
     owner: url.searchParams.get('owner') || undefined, filter,
     q: url.searchParams.get('q') || undefined, showDone: url.searchParams.get('done') === '1', label: sprintOnly,
+    knownGoals: knownGoals(goalsAll(new Map(all.map((i) => [i.key, i])))),
   });
   const perOwner: Record<string, number> = {};
   for (const i of annotated) if (i.hygiene.length && i.type !== 'Workstream') perOwner[i.assignee ?? '—'] = (perOwner[i.assignee ?? '—'] ?? 0) + 1;
@@ -546,7 +549,7 @@ on('GET', /^\/api\/jira\/meta$/, async (req, res) => {
     people: [...people.entries()].map(([accountId, name]) => ({ accountId, name })).sort((a, b) => a.name.localeCompare(b.name, 'de')),
     priorities: [...new Set([...PRIORITIES, ...[...im.values()].map((i) => i.priority).filter(Boolean) as string[]])],
     goalIds: [...g.byId.values()].filter((n) => n.level !== 'Gate').map((n) => ({ id: n.id, level: n.level, result: valueOf(n.result) ?? n.id })),
-    exempt: exemptLabel(), dryRun: dryRun(),
+    exempt: exemptLabel(), goalPrefix: labelCfg().goalPrefix, dryRun: dryRun(),
   });
 });
 
@@ -573,7 +576,7 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/edit$/, async (req, res,
     const goal = String(b.goal).toUpperCase();
     const g = goalsAll(im);
     if (!g.byId.has(goal) || goalLevel(goal) === 'Gate') throw new HttpError(400, `Unbekanntes Ziel ${goal}.`);
-    actions.push({ type: 'labels', add: [goalLabel(goal)], remove: sameLevelRemovals(i.labels ?? [], goal) });
+    actions.push({ type: 'labels', add: [goalLabel(goal)], remove: sameLevelRemovals(i.labels ?? [], goal), replaceLevelOf: goal });
   }
   if (!actions.length) return send(res, 200, { ok: true, nothing: true });
   const preview = `${i.key}: ${actions.map(describe).join(' · ')}`;
@@ -915,7 +918,7 @@ on('POST', /^\/api\/roadmap\/spec-new$/, async (req, res) => {
   if (!/^[a-z0-9]+(-[a-z0-9]+){0,8}$/.test(slugIn) || slugIn.length > 60) throw new HttpError(400, 'Kurzname: klein, mit Bindestrichen (z. B. kundenakte-export).');
   if (title.length < 4) throw new HttpError(400, 'Titel angeben.');
   const goal = b.goal ? String(b.goal).toUpperCase() : undefined;
-  if (goal && !GOAL_ID.test(goal)) throw new HttpError(400, 'Ungültige Ziel-ID.');
+  if (goal && (!GOAL_ID.test(goal) || !goalsAll(await issueMap()).byId.has(goal))) throw new HttpError(400, `Ziel ${goal} gibt es nicht in ${GOALS_FILE()}.`);
   const jiraKey = b.jira ? String(b.jira).toUpperCase() : undefined;
   if (jiraKey && !/^[A-Z][A-Z0-9]+-\d+$/.test(jiraKey)) throw new HttpError(400, 'Ungültiger Jira-Schlüssel.');
   // Präfix wie die vorhandenen Specs des Themas (cockpit-spec-, service-spec- …)
@@ -1095,7 +1098,7 @@ on('GET', /^\/api\/goals$/, async (req, res) => {
   await needUser(req);
   const im = await issueMap();
   const g = goalsAll(im);
-  const noGoal = [...im.values()].filter((i) => needsGoal(i, im)).length;
+  const noGoal = [...im.values()].filter((i) => needsGoal(i, im, knownGoals(g))).length;
   send(res, 200, { file: GOALS_FILE(), missing: g.missing, roots: g.roots.map(stripTree), noGoal, labels: { goalPrefix: labelCfg().goalPrefix, exempt: exemptLabel() } });
 });
 
@@ -1104,10 +1107,13 @@ on('GET', /^\/api\/goals\/assign$/, async (req, res) => {
   const im = await issueMap();
   const g = goalsAll(im);
   const p = loadProposals();
-  const tickets = [...im.values()].filter((i) => needsGoal(i, im)).map((i) => ({ ...richIssue(im, i), proposal: p.map.get(i.key) ?? null }))
+  const known = knownGoals(g);
+  // Nur Vorschläge auf bestehende, zuordenbare Ziele (kein Gate) oder KEINS vorauswählen.
+  const usable = (x: any) => x && (x.ziel === 'KEINS' || (known.has(x.ziel) && goalLevel(x.ziel) !== 'Gate'));
+  const tickets = [...im.values()].filter((i) => needsGoal(i, im, known)).map((i) => ({ ...richIssue(im, i), proposal: usable(p.map.get(i.key)) ? p.map.get(i.key)! : null }))
     .sort((a, b) => a.workstreamName.localeCompare(b.workstreamName, 'de') || a.key.localeCompare(b.key, 'de', { numeric: true }));
   send(res, 200, {
-    tickets, proposalFile: p.file, proposalError: p.error, proposals: [...p.map.keys()].filter((k) => im.has(k)).length,
+    tickets, proposalFile: p.file, proposalError: p.error, proposals: tickets.filter((t) => t.proposal).length,
     goalIds: [...g.byId.values()].filter((n) => n.level !== 'Gate').map((n) => ({ id: n.id, level: n.level, result: valueOf(n.result) ?? n.id })),
     labels: { goalPrefix: labelCfg().goalPrefix, exempt: exemptLabel() }, dryRun: dryRun(),
   });
@@ -1129,12 +1135,14 @@ on('POST', /^\/api\/goals\/assign$/, async (req, res) => {
     if (goal === 'KEINS') {
       const why = String(it.begruendung ?? '').replace(/\s+/g, ' ').trim();
       if (why.length < 5) throw new HttpError(400, `${key}: „ohne Ziel (${exemptLabel()})“ braucht eine Begründung.`);
-      const actions: JiraAction[] = [{ type: 'labels', add: [exemptLabel()], remove: [] }, { type: 'comment', text: `Bewusst ohne Ziel (${exemptLabel()}): ${why}` }];
+      if (effectiveGoals(i, im, knownGoals(g)).goals.length) throw new HttpError(400, `${key} hat schon ein Ziel — „ohne Ziel“ passt nicht.`);
+      // Erst die Begründung, dann das Label: scheitert der Kommentar, bleibt das Ticket ohne Ausnahme (statt Ausnahme ohne Grund).
+      const actions: JiraAction[] = [{ type: 'comment', text: `Bewusst ohne Ziel (${exemptLabel()}): ${why}` }, { type: 'labels', add: [exemptLabel()], remove: [] }];
       plan.push({ key, actions, text: `${key}: +${exemptLabel()} · Kommentar „${why.slice(0, 80)}“` });
       continue;
     }
     if (!g.byId.has(goal) || goalLevel(goal) === 'Gate') throw new HttpError(400, `${key}: unbekanntes Ziel ${goal}.`);
-    const action: JiraAction = { type: 'labels', add: [goalLabel(goal)], remove: sameLevelRemovals(i.labels ?? [], goal) };
+    const action: JiraAction = { type: 'labels', add: [goalLabel(goal)], remove: sameLevelRemovals(i.labels ?? [], goal), replaceLevelOf: goal };
     plan.push({ key, actions: [action], text: `${key}: ${describe(action)}` });
   }
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: plan.map((p) => p.text), dryRun: dryRun() });
@@ -1160,8 +1168,9 @@ on('GET', /^\/api\/goals\/([A-Za-z0-9-]{2,20})$/, async (req, res, m) => {
   walk(n);
   const via = new Map<string, string>();
   const claim = (goalNode: GoalNode) => {
-    for (const k of goalNode.tickets) if (im.has(k) && !via.has(k)) via.set(k, goalNode.id);
-    for (const i of im.values()) if (!via.has(i.key) && effectiveGoals(i, im).goals.includes(goalNode.id)) via.set(i.key, goalNode.id);
+    // Label (auch geerbt) zuerst; nur in der Zielzeile genannt = „Beleg“ (zählt, trägt aber kein Label → bleibt „ohne Ziel“).
+    for (const i of im.values()) if (!via.has(i.key) && effectiveGoals(i, im, knownGoals(g)).goals.includes(goalNode.id)) via.set(i.key, goalNode.id);
+    for (const k of goalNode.tickets) if (im.has(k) && !via.has(k)) via.set(k, `${goalNode.id} · Beleg`);
   };
   claim(n); for (const d of desc) claim(d);
   const tickets = [...via.entries()].map(([k, v]) => ({ ...richIssue(im, im.get(k)!), via: v }));
@@ -1208,13 +1217,17 @@ on('GET', /^\/api\/timebox$/, async (req, res, _m, url) => {
   const sl = cur ? sprintLabel(cur.date) : null;
   const who = resolveIdentity(await jiraIdentity(u), [...im.values()]);
   // Tagespriorität des ersten Tages: je Ticket gesetzt (timebox_prio) oder die höchste seiner Blöcke an diesem Tag.
+  // Gesetzte Ticket-Priorität gewinnt (auch „keine“); sonst die höchste der Blöcke dieses Tages. Tag = gewählter Tag (?day=).
+  const pday = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('day') ?? '') ? url.searchParams.get('day')! : from;
   const dayPrio = new Map<string, number>();
-  for (const p of (await wb().collection('timebox_prio').find({ userId: u.id, date: from }).toArray()) as any[]) if (p.prio) dayPrio.set(p.key, p.prio);
-  for (const b of blocks) if (b.date === from && b.key && b.prio) dayPrio.set(b.key, Math.min(b.prio, dayPrio.get(b.key) ?? 9));
+  const explicit = new Set<string>();
+  for (const p of (await wb().collection('timebox_prio').find({ userId: u.id, date: pday }).toArray()) as any[]) { explicit.add(p.key); if (p.prio) dayPrio.set(p.key, p.prio); }
+  const pblocks = pday === from || dates.includes(pday) ? blocks : (await tbCol().find({ userId: u.id, date: pday }).toArray()) as any[];
+  for (const b of pblocks) if (b.date === pday && b.key && b.prio && !explicit.has(b.key)) dayPrio.set(b.key, Math.min(b.prio, dayPrio.get(b.key) ?? 9));
   const mine = sortMyTickets([...im.values()].filter((i) => i.type !== 'Workstream' && i.status !== 'Done' && i.statusCategory !== 'done' && isMine(i, who)), sl, dayPrio);
   const ticket = (k?: string | null) => { const i = k ? im.get(k) : undefined; return i ? { key: i.key, summary: i.summary, status: i.status, goals: goalsOf(i.labels), inSprint: !!sl && (i.labels ?? []).includes(sl), noGoal: needsGoal(i, im), priority: i.priority } : null; };
   send(res, 200, {
-    dates, sprint: cur ? { id: cur.id, label: sl } : null,
+    dates, prioDay: pday, sprint: cur ? { id: cur.id, label: sl } : null,
     blocks: blocks.map((b) => ({ ...tbOut(b), ticket: ticket(b.key) })),
     summary: Object.fromEntries(dates.map((d) => [d, daySummary(blocks.filter((b) => b.date === d), im)])),
     tickets: mine.slice(0, 80).map((i) => ({ ...ticket(i.key)!, duedate: i.duedate, overdue: isOverdue(i), dayPrio: dayPrio.get(i.key) ?? null })),
