@@ -17,14 +17,17 @@ export function demoIssues() {
       duedate: due, priority: { name: 'Medium' }, updated: '2026-09-27T10:00:00.000+0200', created: '2026-09-01T10:00:00.000+0200',
       description: adf(`Beschreibung von ${key}: ${summary}.`),
       comment: { total: comments, comments: comments ? [{ author: user('Knut Peters'), created: '2026-09-26T09:00:00.000+0200', body: adf('Letzter Stand: wartet auf Review.') }] : [] },
-      labels: [],
+      labels: [], statuscategorychangedate: '2026-09-20T10:00:00.000+0200', issuelinks: [],
     },
   });
   return [
     ws('PM-70', 'Produkt OLAF', 'Knut Peters'),
     ws('PM-73', 'Operations Setup & UX', 'Daniela Muster'),
     t('PM-321', 'Hardware Admin Flow', 'To Do', 'Knut Peters', 'PM-70', '2026-09-15', 'Task', 2),
-    t('PM-322', 'Kalender Booking Page', 'To Do', 'Knut Peters', 'PM-70', '2026-09-15'),
+    (() => { const x: any = t('PM-322', 'Kalender Booking Page', 'To Do', 'Knut Peters', 'PM-70', '2026-09-15'); x.fields.issuelinks = [
+      { type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' }, inwardIssue: { key: 'PM-331', fields: { summary: 'Prod-Push Sicherheitsfixes', status: status('In Progress') } } },
+      { type: { name: 'Relates', inward: 'relates to', outward: 'relates to' }, outwardIssue: { key: 'PM-341', fields: { summary: 'Abrechnung Oktober', status: status('Done') } } },
+    ]; return x; })(),
     t('PM-331', 'Prod-Push Sicherheitsfixes', 'In Progress', 'Christoph Beispiel', 'PM-70', '2026-10-02'),
     t('PM-332', 'Leak-Check #208 dokumentieren', 'To Do', 'Knut Peters', 'PM-331', null, 'Sub-task'),
     t('PM-267', 'Bill-OCR Phase 1', 'Ongoing', 'Lisa Probe', 'PM-70', null),
@@ -38,7 +41,7 @@ export function demoIssues() {
 
 export interface JiraMock { server: Server; port: number; writes: any[]; issues: any[]; close: () => Promise<void> }
 
-export function startJiraMock(port = 0, opts: { readOnly?: boolean } = {}): Promise<JiraMock> {
+export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: boolean } = {}): Promise<JiraMock> {
   const issues = demoIssues();
   const writes: any[] = [];
   const TRANS: Record<string, string[]> = { 'Backlog': ['To Do', 'In Progress'], 'To Do': ['In Progress', 'Done', 'Backlog'], 'In Progress': ['Done', 'To Do', 'Ongoing'], 'Ongoing': ['Done', 'In Progress'], 'Done': ['To Do'] };
@@ -55,9 +58,13 @@ export function startJiraMock(port = 0, opts: { readOnly?: boolean } = {}): Prom
     const find = (k: string) => issues.find((i) => i.key === k);
     let m;
     if (req.method === 'POST' && p === '/search/jql') {
+      // „updated >= -Nm“: nur Tickets, deren updated in den letzten N Minuten liegt (inkrementeller Abgleich).
+      const inc = String(body.jql ?? '').match(/updated >= -(\d+)m/);
+      const pool = inc ? issues.filter((i) => Date.parse(i.fields.updated) >= Date.now() - Number(inc[1]) * 60_000) : issues;
       const start = Number(body.nextPageToken ?? 0);
-      const page = issues.slice(start, start + 4);   // kleine Seiten, damit das Blättern getestet wird
-      return send(200, { issues: page, ...(start + 4 < issues.length ? { nextPageToken: String(start + 4) } : {}) });
+      if (opts.truncate && start > 0) return send(200, { issues: [], nextPageToken: String(start) });   // kaputte Seite
+      const page = pool.slice(start, start + 4);   // kleine Seiten, damit das Blättern getestet wird
+      return send(200, { issues: page, ...(start + 4 < pool.length ? { nextPageToken: String(start + 4) } : {}) });
     }
     if (req.method === 'POST' && p === '/search/approximate-count') return send(200, { count: issues.length });
     if ((m = p.match(/^\/issue\/([A-Z]+-\d+)$/))) {

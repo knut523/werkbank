@@ -39,6 +39,8 @@ export const cfg = {
   jiraSite: env.WERKBANK_JIRA_SITE || 'https://maxenergy.atlassian.net',
   jiraProject: env.WERKBANK_JIRA_PROJECT || 'PM',
   jiraSyncMinutes: Number(env.WERKBANK_JIRA_SYNC_MIN || 15),
+  // Inkrementeller Abgleich (nur kürzlich Geändertes): alle N Minuten, 0 = aus. Fenster = 2 × N Minuten.
+  jiraIncMinutes: Number(env.WERKBANK_JIRA_INC_MIN ?? 1),
   jiraScripts: env.WERKBANK_JIRA_SCRIPTS || join(homedir(), '.claude/skills/maxenergy-jira/scripts'),
   skillsSource: env.WERKBANK_SKILLS_SOURCE || '/vault/_meta/dist-skill',
   skillsTarget: env.WERKBANK_SKILLS_TARGET || join(env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'skills'),

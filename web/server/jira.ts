@@ -9,7 +9,7 @@ import { wb } from './db.ts';
 import type { JiraCreds } from './creds.ts';
 
 export const STATUS_COLUMNS = ['Backlog', 'To Do', 'In Progress', 'Ongoing', 'Done'];
-const FIELDS = ['summary', 'status', 'assignee', 'parent', 'duedate', 'priority', 'updated', 'created', 'description', 'comment', 'issuetype', 'labels'];
+const FIELDS = ['summary', 'status', 'assignee', 'parent', 'duedate', 'priority', 'updated', 'created', 'description', 'comment', 'issuetype', 'labels', 'issuelinks', 'statuscategorychangedate'];
 
 export class JiraError extends Error {
   status: number;
@@ -70,6 +70,30 @@ export interface Issue {
   duedate: string | null; priority: string | null; updated: string; created?: string;
   description: string; comments: number; lastComment?: { author: string; created: string; text: string } | null;
   labels?: string[]; workstream?: string | null; syncedAt?: Date;
+  /** Seit wann in der aktuellen Statuskategorie (Jira: statuscategorychangedate). */
+  statusSince?: string | null;
+  links?: IssueLink[];
+  /** Offene Tickets, die dieses blockieren („is blocked by“, Blocker nicht erledigt). */
+  blockedBy?: string[];
+}
+
+export interface IssueLink { type: string; label: string; key: string; summary?: string; status?: string; done?: boolean; blocks?: 'blocks' | 'blocked-by' }
+
+/** issuelinks → kurze Liste; „Blocks“-Links bekommen eine Richtung (dieses Ticket blockiert / wird blockiert). */
+export function mapLinks(raw: any[]): IssueLink[] {
+  return (raw ?? []).map((l: any) => {
+    const other = l.inwardIssue ?? l.outwardIssue;
+    if (!other?.key) return null;
+    const inward = !!l.inwardIssue;
+    const type = l.type?.name ?? '';
+    const isBlock = /^block/i.test(type) || /block/i.test(l.type?.inward ?? '');
+    return {
+      type, key: other.key, label: (inward ? l.type?.inward : l.type?.outward) ?? type,
+      summary: other.fields?.summary, status: other.fields?.status?.name,
+      done: other.fields?.status?.statusCategory?.key === 'done' || other.fields?.status?.name === 'Done',
+      ...(isBlock ? { blocks: inward ? 'blocked-by' as const : 'blocks' as const } : {}),
+    };
+  }).filter(Boolean) as IssueLink[];
 }
 
 export function mapIssue(raw: any): Issue {
@@ -94,6 +118,8 @@ export function mapIssue(raw: any): Issue {
     comments: f.comment?.total ?? cs.length,
     lastComment: last ? { author: last.author?.displayName ?? '?', created: last.created, text: adfText(last.body, 400) } : null,
     labels: f.labels ?? [],
+    statusSince: f.statuscategorychangedate ?? null,
+    ...(() => { const links = mapLinks(f.issuelinks); return { links, blockedBy: links.filter((l) => l.blocks === 'blocked-by' && !l.done).map((l) => l.key) }; })(),
   };
 }
 
@@ -111,58 +137,130 @@ export function assignWorkstreams(issues: Issue[]): Issue[] {
 }
 
 // ---------- Synchronisation ----------
+// Vollabgleich (alle 15 min, Knopf) holt das ganze Projekt und löscht, was nicht mehr kommt — aber nur mit
+// Löschschutz. Der inkrementelle Abgleich (jede Minute) holt nur kürzlich Geändertes und löscht nie.
 
-export async function fetchAll(creds: JiraCreds, jql = `project = ${cfg.jiraProject} ORDER BY updated DESC`, max = 2000): Promise<any[]> {
+export async function fetchPages(creds: JiraCreds, jql = `project = ${cfg.jiraProject} ORDER BY updated DESC`, max = 2000): Promise<{ issues: any[]; complete: boolean }> {
   const out: any[] = [];
   let token = '';
   while (out.length < max) {
     const body: any = { jql, fields: FIELDS, maxResults: 100 };
     if (token) body.nextPageToken = token;
     const r = await jiraFetch(creds, 'POST', '/search/jql', body);
-    out.push(...(r.issues ?? []));
+    const page = r.issues ?? [];
+    out.push(...page);
     token = r.nextPageToken ?? '';
-    if (!token || !(r.issues ?? []).length) break;
+    if (!token) return { issues: out, complete: true };
+    if (!page.length) return { issues: out, complete: false };   // Seite leer, aber „es gibt mehr“: nicht vollständig
   }
-  return out;
+  return { issues: out, complete: false };   // Obergrenze erreicht
+}
+
+export async function fetchAll(creds: JiraCreds, jql?: string, max?: number): Promise<any[]> {
+  return (await fetchPages(creds, jql, max)).issues;
+}
+
+export const DELETE_MIN_SHARE = 0.8;
+
+/** Löschschutz: nur löschen, wenn vollständig geblättert und nicht drastisch weniger als beim letzten Lauf. */
+export function deletionAllowed(complete: boolean, count: number, lastCount: number | null | undefined): { ok: true } | { ok: false; reason: string } {
+  if (!complete) return { ok: false, reason: 'Jira hat nicht alle Seiten geliefert — nichts gelöscht.' };
+  if (count === 0 && (lastCount ?? 0) > 0) return { ok: false, reason: `Jira liefert 0 Tickets (letzter Lauf: ${lastCount}) — nichts gelöscht.` };
+  if (lastCount && count < lastCount * DELETE_MIN_SHARE) return { ok: false, reason: `Jira liefert nur ${count} Tickets (letzter Lauf: ${lastCount}, Schwelle ${Math.round(DELETE_MIN_SHARE * 100)} %) — nichts gelöscht.` };
+  return { ok: true };
+}
+
+type SyncErrorKind = 'zugang' | 'voll' | 'inkrementell' | 'löschschutz';
+
+export async function recordSyncError(kind: SyncErrorKind, message: string) {
+  await wb().collection('meta').updateOne({ _id: 'jira_sync' as any }, { $set: { errorAt: new Date(), error: message.slice(0, 300), errorKind: kind } }, { upsert: true });
+}
+
+/** Workstream aller Tickets neu rechnen und geänderte zurückschreiben; gibt die geänderten Schlüssel zurück. */
+export async function recomputeWorkstreams(): Promise<string[]> {
+  const col = wb().collection('jira_issues');
+  const all = (await col.find({}, { projection: { _id: 0, key: 1, type: 1, parent: 1, workstream: 1 } }).toArray()) as any[];
+  const before = new Map(all.map((i) => [i.key, i.workstream ?? null]));
+  assignWorkstreams(all as Issue[]);
+  const changed = all.filter((i) => (i.workstream ?? null) !== before.get(i.key));
+  if (changed.length) await col.bulkWrite(changed.map((i) => ({ updateOne: { filter: { key: i.key }, update: { $set: { workstream: i.workstream ?? null } } } })));
+  return changed.map((i) => i.key);
 }
 
 let syncing: Promise<any> | null = null;
+let syncingKind: 'voll' | 'inkrementell' | null = null;
 
-export async function syncMirror(creds: JiraCreds, by: string): Promise<{ count: number; removed: number; at: Date }> {
-  if (syncing) return syncing;
+export async function syncMirror(creds: JiraCreds, by: string): Promise<{ count: number; removed: number; at: Date; complete: boolean }> {
+  if (syncing && syncingKind === 'voll') return syncing;
+  while (syncing) { try { await syncing; } catch { /* egal */ } }
+  syncingKind = 'voll';
   syncing = (async () => {
     const started = new Date();
-    const raw = await fetchAll(creds);
+    const { issues: raw, complete } = await fetchPages(creds);
     const issues = assignWorkstreams(raw.map(mapIssue));
     const col = wb().collection('jira_issues');
+    const meta: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
     if (issues.length) {
       await col.bulkWrite(issues.map((i) => ({ replaceOne: { filter: { key: i.key }, replacement: { ...i, syncedAt: started }, upsert: true } })));
+    }
+    const guard = deletionAllowed(complete, issues.length, meta?.count);
+    if (!guard.ok) {
+      await recordSyncError('löschschutz', guard.reason);
+      jiraChanged(issues.map((i) => i.key), 'sync', true);
+      throw Object.assign(new JiraError(502, guard.reason), { guard: true });
     }
     // Vollständiger Lauf: was nicht mehr kommt (gelöscht/verschoben), fällt aus der Kopie.
     const removed = (await col.deleteMany({ syncedAt: { $lt: started } })).deletedCount ?? 0;
     const at = new Date();
-    await wb().collection('meta').updateOne({ _id: 'jira_sync' as any }, { $set: { at, by, source: creds.source, count: issues.length, error: null } }, { upsert: true });
+    await wb().collection('meta').updateOne({ _id: 'jira_sync' as any }, { $set: { at, by, source: creds.source, count: issues.length, complete, error: null, errorKind: null } }, { upsert: true });
     jiraChanged([], 'sync', true);
-    return { count: issues.length, removed, at };
+    return { count: issues.length, removed, at, complete };
   })();
   try { return await syncing; } catch (e: any) {
-    await wb().collection('meta').updateOne({ _id: 'jira_sync' as any }, { $set: { errorAt: new Date(), error: String(e.message).slice(0, 300) } }, { upsert: true });
+    if (!e?.guard) await recordSyncError('voll', String(e.message));
     throw e;
-  } finally { syncing = null; }
+  } finally { syncing = null; syncingKind = null; }
 }
 
-/** Einzelnes Ticket nach einer Änderung neu in die Kopie holen. */
+/** Inkrementell: nur in den letzten `minutes` Minuten Geändertes holen, einspielen, Workstreams nachrechnen. Löscht nie. */
+export async function syncIncremental(creds: JiraCreds, minutes = 2): Promise<{ keys: string[]; at: Date } | null> {
+  if (syncing) return null;   // ein Vollabgleich läuft gerade
+  syncingKind = 'inkrementell';
+  syncing = (async () => {
+    const jql = `project = ${cfg.jiraProject} AND updated >= -${Math.max(1, Math.round(minutes))}m ORDER BY updated DESC`;
+    const { issues: raw } = await fetchPages(creds, jql, 500);
+    const issues = raw.map(mapIssue);
+    const col = wb().collection('jira_issues');
+    const now = new Date();
+    if (issues.length) {
+      // Workstream vorerst behalten, gleich darauf aus der ganzen Kopie neu gerechnet.
+      await col.bulkWrite(issues.map((i) => ({ updateOne: { filter: { key: i.key }, update: { $set: { ...i, syncedAt: now } }, upsert: true } })));
+    }
+    const ws = issues.length ? await recomputeWorkstreams() : [];
+    const at = new Date();
+    const meta: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+    const clear = meta?.errorKind === 'zugang' || meta?.errorKind === 'inkrementell' ? { error: null, errorKind: null } : {};
+    await wb().collection('meta').updateOne({ _id: 'jira_sync' as any }, { $set: { incAt: at, incCount: issues.length, ...clear } }, { upsert: true });
+    const keys = [...new Set([...issues.map((i) => i.key), ...ws])];
+    if (keys.length) jiraChanged(keys, 'inkrementell');
+    return { keys, at };
+  })();
+  try { return await syncing; } catch (e: any) {
+    await recordSyncError('inkrementell', String(e.message));
+    throw e;
+  } finally { syncing = null; syncingKind = null; }
+}
+
+/** Einzelnes Ticket nach einer Änderung neu in die Kopie holen (Workstreams der Kinder werden mitgerechnet). */
 export async function refreshIssue(creds: JiraCreds, key: string): Promise<Issue> {
   const raw = await jiraFetch(creds, 'GET', `/issue/${encodeURIComponent(key)}?fields=${FIELDS.join(',')}`);
   const i = mapIssue(raw);
   const col = wb().collection('jira_issues');
-  if (i.parent) {
-    const p: any = await col.findOne({ key: i.parent });
-    i.workstream = p?.type === 'Workstream' ? p.key : p?.workstream ?? i.parent;
-  } else i.workstream = i.type === 'Workstream' ? i.key : null;
-  await col.replaceOne({ key }, { ...i, syncedAt: new Date() }, { upsert: true });
-  jiraChanged([key, ...(i.parent ? [i.parent] : [])], 'refresh');
-  return i;
+  await col.updateOne({ key }, { $set: { ...i, syncedAt: new Date() } }, { upsert: true });
+  const changed = await recomputeWorkstreams();
+  const fresh = ((await col.findOne({ key }, { projection: { _id: 0 } })) ?? i) as unknown as Issue;
+  jiraChanged([key, ...(i.parent ? [i.parent] : []), ...changed], 'refresh');
+  return fresh;
 }
 
 // ---------- Board ----------

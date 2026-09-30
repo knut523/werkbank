@@ -4,6 +4,17 @@ import { Err, Loading, useLoad, useConfirm, useToast, StateChip, useJiraLive } f
 import { HygienePanel, LinkButton } from '../components.tsx';
 
 const overdue = (i: any) => i.duedate && i.duedate < today() && i.status !== 'Done';
+const daysSince = (s?: string | null) => (s ? Math.max(0, Math.floor((Date.now() - new Date(s).getTime()) / 864e5)) : null);
+/** „seit X Tagen in Status“ — aus statuscategorychangedate (Kategoriewechsel). */
+function Since({ i }: { i: any }) {
+  const d = daysSince(i.statusSince);
+  if (d === null || i.status === 'Done' || i.statusCategory === 'done') return null;
+  return <span className={`chip ${d >= 14 && i.status === 'In Progress' ? 'warn' : ''}`} title={`Seit ${new Date(i.statusSince).toLocaleDateString('de-AT')} in dieser Statuskategorie`}>seit {d} {d === 1 ? 'Tag' : 'Tagen'} {i.status}</span>;
+}
+function Blocked({ i }: { i: any }) {
+  if (!i.blockedBy?.length) return null;
+  return <span className="chip bad" title="Offene Tickets, die dieses blockieren (Jira-Link „is blocked by“)">⛔ blockiert von {i.blockedBy.join(', ')}</span>;
+}
 
 function SubRow({ s, onOpen }: { s: any; onOpen: (k: string) => void }) {
   const done = s.status === 'Done' || s.statusCategory === 'done';
@@ -36,6 +47,8 @@ function Card({ i, onOpen, expanded, onToggle, fresh }: { i: any; onOpen: (k: st
         {i.comments > 0 && <span className="chip">💬 {i.comments}</span>}
         {i.hygiene?.length > 0 && <span className="badge-hyg" title={i.hygiene.join(', ')}>🧹 {i.hygiene.length}</span>}
         {i.agent && <span className={`chip ${i.agent === 'wartet auf ja' ? 'bad' : 'warn'}`} title="Ein Agent arbeitet an dieser Karte (Chat)">🤖 {i.agent}</span>}
+        <Since i={i} />
+        <Blocked i={i} />
       </div>
       {subs.length > 0 && (
         <div className="subbox">
@@ -254,6 +267,8 @@ function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: string; 
             {i.priority && <span className="chip">{i.priority}</span>}
           </div>
           {(d.data as any).parent && <p className="small">Übergeordnet: <b>{(d.data as any).parent.key}</b> {(d.data as any).parent.summary}</p>}
+          <div className="row small"><Since i={i} /><Blocked i={i} /></div>
+          {i.links?.length > 0 && <ul className="small" data-testid="detail-links">{i.links.map((l: any) => <li key={l.type + l.key}>{l.label} <button className="sublink" onClick={() => onOpenKey(l.key)}><b>{l.key}</b></button> {l.summary} {l.status && <span className={`chip tiny-chip ${l.done ? 'ok' : l.blocks === 'blocked-by' ? 'bad' : ''}`}>{l.status}</span>}</li>)}</ul>}
           {i.description && <div className="card soft small" style={{ whiteSpace: 'pre-wrap' }}>{i.description}</div>}
           {i.lastComment && <p className="small"><b>Letzter Kommentar</b> ({i.lastComment.author}, {fmtDate(i.lastComment.created)}): {i.lastComment.text}</p>}
           {(d.data as any).children.length > 0 && (() => { const ch = (d.data as any).children; const dn = ch.filter((c: any) => c.status === 'Done' || c.statusCategory === 'done').length; return (
@@ -337,9 +352,10 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
             setSyncing(true); setErr(null);
             try { const r: any = await api('/api/board/sync', { method: 'POST' }); toast(`${r.count} Tickets synchronisiert`); await b.reload(); } catch (e) { setErr(e); } finally { setSyncing(false); }
           }}>{syncing ? 'Synchronisiere …' : '↻ Jetzt synchronisieren'}</button>
-          {data?.sync && <span className="tiny">Stand {fmtDateTime(data.sync.at)} · {data.sync.count} Tickets · {data.sync.source}{data.sync.error ? ` · letzter Fehler: ${data.sync.error}` : ''}</span>}
+          {data?.sync && <span className="tiny">Voll {fmtDateTime(data.sync.at)} · {data.sync.count} Tickets · {data.sync.source}{data.sync.incAt ? ` · zuletzt nachgezogen ${fmtDateTime(data.sync.incAt)}` : ''}</span>}
         </div>
       </div>
+      {data?.sync?.error && <div className="err" role="alert" data-testid="sync-error"><b>Jira-Abgleich gestört{data.sync.errorKind ? ` (${data.sync.errorKind})` : ''}:</b> {data.sync.error} <span className="tiny">seit {fmtDateTime(data.sync.errorAt)}</span></div>}
       <Err e={err} />
       <HygienePanel onChange={() => b.reload()} />
       <div className="board-bar">
