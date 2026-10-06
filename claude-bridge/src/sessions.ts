@@ -13,6 +13,7 @@ import { classify, statusLine, confirmQuestion, parseAnswer, jiraWriteKeys, VAUL
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { log } from './log.ts';
 import { skillsFor } from './skills.ts';
+import { pickAccounts, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, type Account } from './accounts.ts';
 
 export interface Sink {
   write(text: string): void;
@@ -56,6 +57,10 @@ interface Live {
   workDir?: string;
   autoCalls: Map<string, { name: string; input: Record<string, unknown>; sub: boolean }>;
   denials: string[];
+  // Mehrere Claude-Konten: hat dieser Versuch rate_limit gemeldet (mit Reset), und ist schon etwas passiert?
+  rateLimited: { resetsAt?: number } | null;
+  rateLimitReset?: number;
+  progressed: boolean;
 }
 
 export type PermissionMode = 'default' | 'auto' | 'dontAsk';
@@ -221,8 +226,12 @@ function mark(live: Live, what: string) {
 }
 
 function handleMessage(live: Live, msg: any) {
-  if (msg.type !== 'system') mark(live, 'ersteNachricht');
+  if (msg.type !== 'system' && msg.type !== 'rate_limit_event') mark(live, 'ersteNachricht');
   switch (msg.type) {
+    case 'rate_limit_event':
+      // Reset-Zeitpunkt merken; ob das Konto wirklich erschöpft ist, sagt erst die Fehlerart rate_limit.
+      if (msg.rate_limit_info?.status === 'rejected') live.rateLimitReset = resetMs(msg.rate_limit_info.resetsAt);
+      return;
     case 'system':
       if (msg.subtype === 'init') mark(live, 'init');
       if (msg.subtype === 'init' && msg.session_id && sessionMap[live.key] !== msg.session_id) {
@@ -245,6 +254,7 @@ function handleMessage(live: Live, msg: any) {
       if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
         mark(live, 'ersterText');
         live.sawStreamText = true;
+        live.progressed = true;
         emitText(live, ev.delta.text);
       } else if (ev?.type === 'content_block_start' && /thinking/.test(ev.content_block?.type ?? '')) {
         // Denken wird nicht gestreamt – aber man soll sehen, dass etwas passiert.
@@ -263,11 +273,15 @@ function handleMessage(live: Live, msg: any) {
       return;
     }
     case 'assistant': {
-      if (msg.error) {
+      if (msg.error === 'rate_limit') {
+        // Kontingent ausgeschöpft: die Meldung kommt erst, wenn kein weiteres Konto übernehmen kann (handleTurn).
+        live.rateLimited = { resetsAt: live.rateLimitReset };
+      } else if (msg.error) {
         emitStatus(live, `⚠️ ${AUTH_HINTS[msg.error] ?? `Claude meldet einen Fehler (${msg.error}).`}`);
       }
       for (const block of msg.message?.content ?? []) {
         if (block.type === 'tool_use') {
+          live.progressed = true;
           const cls = classify(block.name, block.input ?? {}, { workDir: live.workDir }).cls;
           if (cls === 'auto' && live.mode === 'auto') live.autoCalls.set(block.id, { name: block.name, input: block.input ?? {}, sub: !!msg.parent_tool_use_id });
           if (live.onJiraWrite && jiraWriteKeys(block.name, block.input ?? {}) !== null) live.jiraCalls.set(block.id, { name: block.name, input: block.input ?? {} });
@@ -276,6 +290,7 @@ function handleMessage(live: Live, msg: any) {
           if (cls === 'read') emitStatus(live, (msg.parent_tool_use_id ? '↳ ' : '') + statusLine(block.name, block.input ?? {}));
           // Schreibende Werkzeuge melden sich erst nach der Bestätigung (siehe Hook).
         } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
+          live.progressed = true;
           emitText(live, block.text);
         }
       }
@@ -312,7 +327,8 @@ function handleMessage(live: Live, msg: any) {
       const u = msg.usage ?? {};
       live.usage.input += (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
       live.usage.output += u.output_tokens ?? 0;
-      if (msg.subtype === 'error_max_turns') emitStatus(live, `⏹️ Maximale Schrittzahl (${cfg.maxTurns}) erreicht. Schreib „weiter“, dann mache ich dort weiter.`);
+      if (live.rateLimited) { /* Meldung bzw. Kontowechsel in handleTurn */ }
+      else if (msg.subtype === 'error_max_turns') emitStatus(live, `⏹️ Maximale Schrittzahl (${cfg.maxTurns}) erreicht. Schreib „weiter“, dann mache ich dort weiter.`);
       else if (msg.subtype !== 'success' || msg.is_error) emitStatus(live, /authenticat|401|token/i.test(String(msg.result ?? '')) ? `⚠️ ${AUTH_HINTS.authentication_failed}` : '⚠️ Bei der Ausführung ist ein Fehler aufgetreten.');
       return;
     }
@@ -412,7 +428,11 @@ export interface TurnRequest {
   onSkill?: (name: string) => void;   // ein Skill wurde aufgerufen (Zählung, ohne Inhalt)
   email?: string;          // für die Wahl der Claude-Konfiguration (je Person / geteilt)
   onJiraWrite?: (keys: string[], tool: string) => void;   // erfolgreicher schreibender Jira-Aufruf im Chat
+  // Weitere Claude-Konten der Person in Reihenfolge (über den internen Kanal von der Werkbank; chat = req.token).
+  accounts?: () => Promise<{ id: string; label: string; token: string | null }[]>;
 }
+
+const CONTINUE_PROMPT = 'Mach bitte genau dort weiter, wo du unterbrochen wurdest — das Claude-Konto wurde gewechselt, weil das Kontingent ausgeschöpft war. Wiederhole keine Schritte, die schon erledigt sind.';
 
 /** Führt eine Nachricht aus. Kehrt zurück, sobald die HTTP-Antwort geschlossen werden kann. */
 export async function handleTurn(req: TurnRequest): Promise<void> {
@@ -458,7 +478,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
     jiraCalls: new Map(), onJiraWrite: req.onJiraWrite, home: '',
-    mode: autoFor(req), autoCalls: new Map(), denials: [],
+    mode: autoFor(req), autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
   };
   lives.set(key, live);
   attach(live, req.sink);
@@ -493,10 +513,20 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   env.ENABLE_TOOL_SEARCH = process.env.BRIDGE_TOOL_SEARCH || 'true';
 
   // Kontext-Paket + Hygiene-Fragen nur für neue Sitzungen (nicht bei resume, nicht im Nur-lesen-Lauf).
+  // Parallel dazu: die Claude-Konten der Person (ohne Werkbank: nur der Schlüssel aus der Anfrage).
+  const accountsP = (req.accounts ? req.accounts().catch((e: any) => { log('konten nicht geladen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); return null; }) : Promise.resolve(null))
+    .then((list) => normalizeAccounts(list, req.token));
   let extra = '';
   if (!resume && !req.readonly && req.sessionContext) {
     try { extra = await req.sessionContext(); } catch (e: any) { log('kontext fehlgeschlagen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); }
   }
+  const user = safeId(req.userId);
+  const accounts = await accountsP;
+  const queue = pickAccounts(accounts, exhaustedOf(user));
+  const tokens = accounts.map((a) => a.token);
+  const redact = (t: string) => tokens.reduce((x, tok) => x.replaceAll(tok, '***'), t);
+  let acct: Account = queue[0];
+  env.CLAUDE_CODE_OAUTH_TOKEN = acct.token;
   mark(live, 'kontext');
   const guard = makeGuard(live);
   const options: Record<string, any> = {
@@ -506,7 +536,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
     systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? AUTO_APPEND : '', extra].filter(Boolean).join('\n\n') },
-    mcpServers: req.mcpServers ?? {},
+    mcpServers: withToken(req.mcpServers ?? {}, acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim
     // Rechte-Dialog landet.
@@ -526,24 +556,54 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     includePartialMessages: true,
     abortController: live.abort,
     env,
-    stderr: (d: string) => { if (/error/i.test(d)) log('sdk stderr', { conv: key, line: d.slice(0, 300).replaceAll(req.token, '***') }); },
+    stderr: (d: string) => { if (/error/i.test(d)) log('sdk stderr', { conv: key, line: redact(d.slice(0, 300)) }); },
   };
   if (live.mode === 'auto') options.settings = autoSettings();
   applyHome(home, env, options);
   if (resume) options.resume = resume;
   if (req.model) options.model = req.model;
 
-  log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers), permissionMode: live.mode });
+  log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers), permissionMode: live.mode, ...(accounts.length > 1 ? { konto: acct.id, konten: accounts.length } : {}) });
 
   // Die Sitzung läuft unabhängig von der HTTP-Antwort weiter (Rückfragen!).
   (async () => {
     try {
-      const q: any = req.query({ prompt, options });
+      // Ein Versuch je Konto: meldet einer rate_limit, übernimmt das nächste dieselbe Anfrage.
+      for (let i = 0; ; i++) {
+        live.rateLimited = null; live.rateLimitReset = undefined; live.progressed = false;
+        await attempt(prompt);
+        if (!live.rateLimited || live.abort.signal.aborted) break;
+        markExhausted(user, acct, live.rateLimited.resetsAt);
+        const next = queue[i + 1];
+        if (!next) {
+          log('kontingent erschöpft', { conv: key, konto: acct.id, konten: accounts.length });
+          emitStatus(live, `⚠️ ${AUTH_HINTS.rate_limit}`);
+          break;
+        }
+        log('konto gewechselt', { conv: key, von: acct.id, nach: next.id, mitten: live.progressed });
+        emitStatus(live, `↻ Konto „${next.label}“ übernimmt (Kontingent von „${acct.label}“ ausgeschöpft)`);
+        acct = next;
+        env.CLAUDE_CODE_OAUTH_TOKEN = acct.token;
+        options.mcpServers = withToken(req.mcpServers ?? {}, acct.token);
+        // Noch nichts passiert → dieselbe Anfrage von vorn (gleiche Ausgangslage). Schon mitten im Zug → die Sitzung
+        // fortsetzen (alle Konten teilen die Konfiguration und damit den Verlauf), ohne Schritte doppelt zu machen.
+        if (live.progressed && sessionMap[key]) { options.resume = sessionMap[key]; prompt = CONTINUE_PROMPT; }
+      }
+    } finally {
+      mark(live, 'ende');
+      log('turn end', { conv: key, usage: live.usage, ms: live.times, ...(live.denials.length ? { denials: live.denials } : {}) });
+      end(live);
+    }
+  })();
+
+  async function attempt(p: string) {
+    try {
+      const q: any = req.query({ prompt: p, options });
       let measured = false;
       for await (const msg of q) {
         handleMessage(live, msg);
         // Einmal je neuer Sitzung messen, was den Kontext füllt (lokale Schätzung des CLI, kein Extra-Aufruf).
-        if (msg.type === 'result' && !resume && !measured && typeof q.getContextUsage === 'function' && req.onMeasure) {
+        if (msg.type === 'result' && !resume && !measured && !live.rateLimited && typeof q.getContextUsage === 'function' && req.onMeasure) {
           measured = true;
           try {
             const u: any = await Promise.race([q.getContextUsage({ detail: 'summary' }), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))]);
@@ -553,21 +613,23 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         }
       }
     } catch (e: any) {
-      if (live.abort.signal.aborted) log('turn aborted', { conv: key });
-      else {
-        const text = String(e?.message ?? e).replaceAll(req.token, '***');
-        log('turn error', { conv: key, error: text.slice(0, 300) });
-        const auth = /auth|401|token|login/i.test(text);
-        emitStatus(live, auth ? `⚠️ ${AUTH_HINTS.authentication_failed}` : '⚠️ Die Claude-Sitzung ist unerwartet beendet worden. Schreib einfach noch einmal.');
-      }
-    } finally {
-      mark(live, 'ende');
-      log('turn end', { conv: key, usage: live.usage, ms: live.times, ...(live.denials.length ? { denials: live.denials } : {}) });
-      end(live);
+      if (live.abort.signal.aborted) { log('turn aborted', { conv: key }); return; }
+      const text = redact(String(e?.message ?? e));
+      log('turn error', { conv: key, error: text.slice(0, 300) });
+      if (live.rateLimited || isRateLimitText(text)) { live.rateLimited = live.rateLimited ?? { resetsAt: live.rateLimitReset }; return; }
+      const auth = /auth|401|token|login/i.test(text);
+      emitStatus(live, auth ? `⚠️ ${AUTH_HINTS.authentication_failed}` : '⚠️ Die Claude-Sitzung ist unerwartet beendet worden. Schreib einfach noch einmal.');
     }
-  })();
+  }
 
   return waitClosed(req.sink, live);
+}
+
+/** MCP-Server mit dem Claude-Token des aktiven Kontos (forge-review rechnet mit dem Zugang der Person). */
+function withToken(servers: Record<string, any>, token: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(servers)) out[k] = v?.env?.CLAUDE_CODE_OAUTH_TOKEN ? { ...v, env: { ...v.env, CLAUDE_CODE_OAUTH_TOKEN: token } } : v;
+  return out;
 }
 
 /** Wartet, bis die HTTP-Antwort geschlossen ist. Bricht der Browser ab, wird die Sitzung gestoppt. */
