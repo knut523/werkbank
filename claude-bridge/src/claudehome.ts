@@ -46,7 +46,7 @@ export function homeFor(safeUserId: string, email?: string): ClaudeHome {
 const prepared = new Map<string, number>();
 
 /**
- * Legt das Verzeichnis an (0700), verlinkt CLAUDE.md und die Vault-Skills. Nichts wird überschrieben.
+ * Legt das Verzeichnis an (0700), verlinkt CLAUDE.md, settings.json und die Vault-Skills. Nichts wird überschrieben.
  * Skills höchstens alle 10 Minuten je Verzeichnis abgleichen (neue Vault-Skills kommen so von selbst dazu).
  */
 export async function ensureHome(h: ClaudeHome): Promise<void> {
@@ -59,6 +59,11 @@ export async function ensureHome(h: ClaudeHome): Promise<void> {
   const md = join(h.dir, 'CLAUDE.md');
   const tpl = process.env.BRIDGE_CLAUDE_MD_TEMPLATE || join(REPO, 'templates', 'claude', 'CLAUDE.md');
   if (!exists(md) && existsSync(tpl)) { try { symlinkSync(tpl, md); } catch { /* gleichzeitig angelegt */ } }
+  // Auto-Modus (Plan 71 P1): autoMode-Regeln (hard_deny, environment) als Nutzer-Settings — wie CLAUDE.md verlinkt,
+  // eine eigene settings.json der Person bleibt unangetastet. Außerhalb des Auto-Modus wirkungslos.
+  const st = join(h.dir, 'settings.json');
+  const stTpl = process.env.BRIDGE_CLAUDE_SETTINGS_TEMPLATE || join(REPO, 'templates', 'claude', 'settings.json');
+  if (!exists(st) && existsSync(stTpl)) { try { symlinkSync(stTpl, st); } catch { /* gleichzeitig angelegt */ } }
   // Schon eingerichtet → im Hintergrund abgleichen (kostet ~0,3 s, soll den Zug nicht aufhalten).
   const fresh = !existsSync(join(h.dir, 'skills'));
   const sync = syncSkills(h.dir);

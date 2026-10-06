@@ -1,11 +1,16 @@
 // Werkzeug-Einordnung und lesbare Statuszeilen.
 //
-// Drei Klassen:
+// Vier Klassen:
 //   read    – läuft ohne Rückfrage (Lesen, Suchen, Skills, Teilagenten)
 //   confirm – Schreiben/Ausführen: erst nach "ja" im Chat
 //   blocked – im Pilot nie erlaubt (GitHub-Schreiben, Push, Merge)
+//   auto    – nur im Auto-Modus (mit Arbeitsordner): Bash und Edits im eigenen Arbeitsordner entscheidet der
+//             Klassifikator des SDK (Plan 71 P1, Knut 06.10.2026). Ohne Arbeitsordner gibt es diese Klasse nie.
 
-export type ToolClass = 'read' | 'confirm' | 'blocked';
+import { realpathSync } from 'node:fs';
+import { resolve, dirname, sep } from 'node:path';
+
+export type ToolClass = 'read' | 'confirm' | 'blocked' | 'auto';
 
 export const VAULT_DIR = process.env.BRIDGE_VAULT_DIR || '/vault';
 
@@ -31,10 +36,59 @@ const BASH_BLOCKED: [RegExp, string][] = [
   [/\/merge\b[^|;&]*github|github[^|;&]*\/merge\b/i, 'Merge über GitHub'],
 ];
 
-export function classify(tool: string, input: Record<string, unknown>): { cls: ToolClass; why?: string } {
+// Bash im Auto-Modus: was den Vault, Konfigurationen, Geheimnisse oder Jira berührt, bleibt beim „ja“. Heuristik —
+// die eigentliche Grenze ist der Klassifikator mit permissions.deny und autoMode.hard_deny (templates/claude/settings.json).
+const BASH_KEEP_CONFIRM = [
+  /\.runtime\b/, /\.config\/vw\b/, /\.ssh\b/, /\.credentials/, /(^|[\s;&|(`$])bw\s/, /(^|[\s;&|(`$])sudo\b/,
+  /atlassian|jira/i, /\.env\b/, /\.claude\b/,
+];
+
+/**
+ * Deny-Regeln im Auto-Modus (als Flag-Settings je Zug, nur im Auto-Modus — im Not-Aus gilt keine davon). Deny greift vor
+ * dem Klassifikator und auch gegen ein Hook-„allow“; darum hier **keine** Regel für den Vault oder Jira (die bleiben beim
+ * „ja“ im Chat). Absolute Pfade beginnen mit //; die Konfigurationen je Person ergänzt die Brücke (homesRoot).
+ */
+export const AUTO_DENY = [
+  'Bash(git push:*)', 'Bash(git merge:*)', 'Bash(gh pr merge:*)', 'Bash(gh pr create:*)', 'Bash(gh api:*)', 'Bash(bw:*)',
+  'Read(~/.config/vw/**)', 'Read(~/.ssh/**)', 'Read(~/.claude/.credentials.json)', 'Edit(~/.claude/**)', 'Read(**/.env*)',
+];
+
+const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+
+/** Echter Pfad: realpath des tiefsten vorhandenen Vorfahren + Rest (ein Symlink auf den Vault zählt als Vault). */
+function realish(p: string): string {
+  let cur = p;
+  const rest: string[] = [];
+  for (let i = 0; i < 64; i++) {
+    try { return [realpathSync(cur), ...rest.reverse()].join(sep).replace(/\/+/g, '/'); } catch { /* gibt es noch nicht */ }
+    const up = dirname(cur);
+    if (up === cur) break;
+    rest.push(cur.slice(up.length).replace(/^\/+/, ''));
+    cur = up;
+  }
+  return p;
+}
+
+const within = (p: string, dir: string) => p === dir || p.startsWith(dir.endsWith('/') ? dir : dir + '/');
+
+export interface ClassifyContext {
+  workDir?: string;   // Arbeitsordner der Person — nur im Auto-Modus gesetzt
+}
+
+export function classify(tool: string, input: Record<string, unknown>, ctx: ClassifyContext = {}): { cls: ToolClass; why?: string } {
   if (tool === 'Bash') {
     const cmd = String(input.command ?? '');
     for (const [re, why] of BASH_BLOCKED) if (re.test(cmd)) return { cls: 'blocked', why };
+    if (ctx.workDir && !cmd.includes(VAULT_DIR) && !BASH_KEEP_CONFIRM.some((re) => re.test(cmd))) return { cls: 'auto' };
+    return { cls: 'confirm' };
+  }
+  if (FILE_TOOLS.has(tool) && ctx.workDir) {
+    const f = String(input.file_path ?? input.notebook_path ?? '');
+    if (!f) return { cls: 'confirm' };
+    const work = realish(resolve(ctx.workDir));
+    const target = realish(resolve(work, f));
+    const vault = realish(resolve(VAULT_DIR));
+    if (within(target, work) && !within(target, vault)) return { cls: 'auto' };
     return { cls: 'confirm' };
   }
   if (READ_TOOLS.has(tool)) return { cls: 'read' };
