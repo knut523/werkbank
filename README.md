@@ -167,7 +167,7 @@ Unter dem „Neuer Chat“-Knopf stehen sieben Symbole: 🚀 Einrichtung · 📖
   **„PM-123 · Titel“** mit dem Ticket als Kontext an — im Namen der Person (kurzlebiger LibreChat-Zugangstoken,
   derselbe Aufruf wie „Senden“), unter ihrem Claude. LibreChat fährt den Zug serverseitig weiter, der Agent
   arbeitet also **auch ohne offenen Tab**; wer den Chat öffnet, sieht den Fortschritt live. Jedes Schreiben
-  (Vault, Dateien, Jira) hält im Chat an und wartet auf **„ja“**; GitHub-Schreiben ist gesperrt. An der Karte:
+  (Vault, Dateien, Jira, GitHub) hält im Chat an und wartet auf **„ja“**; Merge ist gesperrt. An der Karte:
   Status **läuft / wartet auf ja / fertig** (aus der Brücke), „Im Chat öffnen“, welche Dateien der Agent
   geschrieben hat; am Board-Kärtchen „🤖 wartet auf ja“. Ein Agent je Karte und Person; eine offene Rückfrage
   bleibt stehen, auch wenn die Person inzwischen woanders chattet (höchstens 5 wartende je Person).
@@ -312,8 +312,11 @@ angewandt auf die **eigenen** PM-Tickets aus der Jira-Kopie (Zuordnung über `GE
   Sitzung an und fragt; die nächste Nachricht ist die Antwort („ja“ → ausführen, sonst nicht). Offene
   Rückfragen verfallen nach 30 Minuten. **Ausnahme Auto-Modus** (freigeschaltete Konten): Bash/Edits im eigenen
   Arbeitsordner entscheidet ein Klassifikator, siehe „Auto-Modus“.
-- **Gesperrt, auch mit „ja“:** `git push`, `git merge`, `gh pr merge|create|comment|review…`, schreibende
-  GitHub-API-Aufrufe, GitHub-MCP-Schreibwerkzeuge (Hook `PreToolUse` + `canUseTool`).
+- **GitHub (Knut, 06.10.2026):** Lesen frei (`gh api` ohne Schreib-Optionen, `gh pr view|diff|list`). **Schreiben nur
+  nach „ja“**, auch im Auto-Modus: `git push`, `gh pr create|comment|review|edit…`, `gh issue …`, schreibende
+  GitHub-API-Aufrufe (`-X POST|PATCH|PUT|DELETE`, `-f/-F`, GraphQL-Mutationen). **Gesperrt, auch mit „ja“:** Merge
+  (`git merge`, `gh pr merge`, `…/merge(s)` über die API, GitHub-MCP-Merge), Force-Push und Push auf `main`/`master`/`develop`
+  (Hook `PreToolUse` + `canUseTool`).
 - **Anhänge erreichen die Sitzung:** Dateien, die im Chat mit **„Hochladen zum KI-Anbieter“** angehängt
   werden, legt die Brücke in `anhaenge/<chat>/` im Arbeitsverzeichnis der Person ab (erlaubte Typen,
   20 MB je Datei, Rechte 0600, Namen bereinigt, nie ausführbar) und nennt sie Claude im Prompt.
@@ -539,7 +542,9 @@ Rückfrage im Chat, eingeleitet mit „Der Auto-Modus fragt nach: <Grund>“.
 | Edits außerhalb des Arbeitsordners, unter `/vault` oder über einen Symlink dorthin | Rückfrage („ja“) |
 | Bash, der den Vault, `.runtime`, `.claude`, `.env`, `~/.ssh`, `~/.config/vw`, `bw`, `sudo` oder Jira/Atlassian nennt | Rückfrage („ja“) |
 | Jira-Schreiben (Atlassian-MCP, `jira_update`) | Rückfrage („ja“) |
-| `git push`/`merge`, GitHub schreiben | gesperrt, auch mit „ja“ |
+| GitHub lesen (`gh api` ohne Schreib-Optionen, `gh pr view/diff`) | Klassifikator |
+| `git push`, PR anlegen/kommentieren, GitHub-API schreiben | Rückfrage („ja“) — nie automatisch |
+| Merge, Force-Push, Push auf `main`/`master`/`develop` | gesperrt, auch mit „ja“ |
 | Board-Agent „nur lesen“ | lehnt alles Schreibende ab (Wächter) — zusätzlich SDK-Modus `dontAsk` |
 
 **Schalter (scripts/start.sh):**
@@ -555,9 +560,10 @@ Rückfrage im Chat, eingeleitet mit „Der Auto-Modus fragt nach: <Grund>“.
 - Der Wächter (PreToolUse-Hook) gibt für die Klasse `auto` **keine Entscheidung** zurück — nur dann kommt der Klassifikator
   zum Zug. Alle anderen Klassen entscheidet er wie bisher selbst.
 - Deny-Regeln als Flag-Settings je Zug (`AUTO_DENY` in `claude-bridge/src/tools.ts`, plus Lesen von `.credentials.json` und
-  Schreiben unter `.runtime/claude/`): `git push`/`merge`, `gh pr merge|create`, `gh api`, `bw`, `~/.ssh`, `~/.config/vw`,
+  Schreiben unter `.runtime/claude/`): `git merge`, `gh pr merge`, `bw`, `~/.ssh`, `~/.config/vw`,
   `~/.claude/.credentials.json`, `.env*`, `disableBypassPermissionsMode`. Deny schlägt auch ein „ja“ — deshalb gibt es
-  **keine** Deny-Regel für Vault oder Jira. Hinweis: `gh api` ist im Auto-Modus auch lesend gesperrt (vorher mit „ja“ möglich).
+  **keine** Deny-Regel für Vault, Jira, `git push` oder `gh api` — die fragen über den Wächter (GitHub-Schreiben) bzw. sind frei
+  (GitHub-Lesen, Knut 06.10.2026).
 - `templates/claude/settings.json` (wird wie `CLAUDE.md` in jede Konfiguration je Person verlinkt, eine eigene
   `settings.json` bleibt unangetastet): `autoMode.hard_deny` (Jira/Vault nur über die Rückfrage, fremde Konfigurationen,
   Vaultwarden, GitHub schreiben), `soft_deny`, `environment`. Außerhalb des Auto-Modus wirkungslos.

@@ -23,17 +23,28 @@ const READ_TOOLS = new Set([
 // Lesende MCP-Werkzeuge erkennt man am Namen (Atlassian: get*/search*/lookup*/fetch …).
 const MCP_READ = /^(get|search|lookup|fetch|list|atlassianUserInfo|memory_(search|get|recent|status|relations|list_namespaces|selftest))/;
 
-// Bash-Befehle, die im Pilot gesperrt sind, auch mit Bestätigung.
+// Bash-Befehle, die immer gesperrt sind, auch mit Bestätigung: Merge, Force-Push, Push auf die geschützten Zweige.
 const BASH_BLOCKED: [RegExp, string][] = [
-  [/\bgit\s+push\b/, 'git push'],
   [/\bgit\s+merge\b/, 'git merge'],
-  [/\bgh\s+pr\s+(merge|create|comment|review|edit|close|reopen|ready)\b/, 'GitHub-PR schreiben'],
-  [/\bgh\s+(issue|release|repo|label|secret|variable|workflow)\s+(create|edit|close|delete|comment|reopen|set|run|enable|disable|fork|rename|archive)\b/, 'GitHub schreiben'],
+  [/\bgh\s+pr\s+merge\b/, 'GitHub-PR mergen'],
+  [/\bgh\s+api\b[^|;&]*\/(merge|merges)\b/, 'Merge über die GitHub-API'],
+  [/\/merge\b[^|;&]*github|github[^|;&]*\/merge\b/i, 'Merge über GitHub'],
+  [/\bgit\s+push\b[^|;&]*(\s--force\b|\s--force-with-lease\b|\s-f\b|\s\+\S)/, 'Force-Push'],
+  [/\bgit\s+push\b[^|;&]*[\s:](main|master|develop)\b/, 'Push auf main/master/develop'],
+];
+
+// GitHub schreiben (Knut, 06.10.2026: „push only with acceptance or orders“): immer erst nach „ja“ im Chat — auch im
+// Auto-Modus nie dem Klassifikator überlassen. Lesen (gh api ohne Schreib-Optionen, gh pr view/diff/list) bleibt frei.
+const BASH_GITHUB_WRITE: [RegExp, string][] = [
+  [/\bgit\s+push\b/, 'git push'],
+  [/\bgh\s+pr\s+(create|comment|review|edit|close|reopen|ready)\b/, 'GitHub-PR schreiben'],
+  [/\bgh\s+(issue|release|repo|label|secret|variable|workflow|gist)\s+(create|edit|close|delete|comment|reopen|set|run|enable|disable|fork|rename|archive|upload)\b/, 'GitHub schreiben'],
   [/\bgh\s+api\b[^|;&]*(-X|--method)\s*(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],
-  [/\bgh\s+api\b[^|;&]*\s(-f|-F|--field|--raw-field|--input)\s/, 'GitHub-API schreiben'],
+  [/\bgh\s+api\s+(?!graphql\b)[^|;&]*\s(-f|-F|--field|--raw-field|--input)\s/, 'GitHub-API schreiben'],
+  [/\bgh\s+api\s+graphql\b[^|;&]*\bmutation\b/i, 'GitHub-API schreiben (GraphQL-Mutation)'],
+  [/\bgh\s+api\s+graphql\b[^|;&]*\s--input\s/, 'GitHub-API schreiben (GraphQL aus Datei)'],
   [/api\.github\.com[^|;&]*(-X|--request)\s*(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],
   [/(-X|--request)\s*(POST|PATCH|PUT|DELETE)[^|;&]*api\.github\.com/i, 'GitHub-API schreiben'],
-  [/\/merge\b[^|;&]*github|github[^|;&]*\/merge\b/i, 'Merge über GitHub'],
 ];
 
 // Bash im Auto-Modus: was den Vault, Konfigurationen, Geheimnisse oder Jira berührt, bleibt beim „ja“. Heuristik —
@@ -49,7 +60,9 @@ const BASH_KEEP_CONFIRM = [
  * „ja“ im Chat). Absolute Pfade beginnen mit //; die Konfigurationen je Person ergänzt die Brücke (homesRoot).
  */
 export const AUTO_DENY = [
-  'Bash(git push:*)', 'Bash(git merge:*)', 'Bash(gh pr merge:*)', 'Bash(gh pr create:*)', 'Bash(gh api:*)', 'Bash(bw:*)',
+  // Kein git push / gh api / gh pr create hier: Deny schlägt auch ein „ja“ im Chat — GitHub-Schreiben fragt stattdessen
+  // (BASH_GITHUB_WRITE), GitHub-Lesen ist frei (Knut, 06.10.2026).
+  'Bash(git merge:*)', 'Bash(gh pr merge:*)', 'Bash(bw:*)',
   'Read(~/.config/vw/**)', 'Read(~/.ssh/**)', 'Read(~/.claude/.credentials.json)', 'Edit(~/.claude/**)', 'Read(**/.env*)',
 ];
 
@@ -79,6 +92,7 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
   if (tool === 'Bash') {
     const cmd = String(input.command ?? '');
     for (const [re, why] of BASH_BLOCKED) if (re.test(cmd)) return { cls: 'blocked', why };
+    for (const [re, why] of BASH_GITHUB_WRITE) if (re.test(cmd)) return { cls: 'confirm', why };
     if (ctx.workDir && !cmd.includes(VAULT_DIR) && !BASH_KEEP_CONFIRM.some((re) => re.test(cmd))) return { cls: 'auto' };
     return { cls: 'confirm' };
   }

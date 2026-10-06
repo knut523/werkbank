@@ -104,9 +104,16 @@ test('Einordnung der Werkzeuge', () => {
   assert.equal(classify('Read', {}).cls, 'read');
   assert.equal(classify('Write', {}).cls, 'confirm');
   assert.equal(classify('Bash', { command: 'ls /vault' }).cls, 'confirm');
-  assert.equal(classify('Bash', { command: 'git push origin dev' }).cls, 'blocked');
-  assert.equal(classify('Bash', { command: 'gh pr merge 12' }).cls, 'blocked');
-  assert.equal(classify('Bash', { command: 'gh api -X PUT repos/a/b/pulls/1/merge' }).cls, 'blocked');
+  // GitHub (Knut, 06.10.2026): Merge, Force-Push und Push auf main/master/develop nie; Schreiben nur nach „ja“; Lesen frei.
+  for (const command of ['gh pr merge 12', 'gh api -X PUT repos/a/b/pulls/1/merge', 'gh api repos/a/b/merges -f base=dev -f head=x', 'git merge origin/develop',
+    'git push --force origin feat/x', 'git push -f origin feat/x', 'git push origin +feat/x', 'git push origin main', 'git push origin HEAD:develop', 'git push origin master']) {
+    assert.equal(classify('Bash', { command }).cls, 'blocked', command);
+  }
+  for (const command of ['git push origin dev', 'git push -u origin feat/auto', 'gh pr create --fill', 'gh pr comment 3 --body x', 'gh pr review 3 --approve',
+    'gh api -X POST repos/a/b/issues/1/comments -f body=x', 'gh api repos/a/b/issues/1/comments -f body=x', 'gh api graphql -f query="mutation { x }"',
+    'curl -X POST https://api.github.com/repos/a/b/issues', 'gh issue create -t x']) {
+    assert.equal(classify('Bash', { command }).cls, 'confirm', command);
+  }
   assert.equal(classify('mcp__atlassian__getJiraIssue', {}).cls, 'read');
   assert.equal(classify('mcp__atlassian__searchJiraIssuesUsingJql', {}).cls, 'read');
   assert.equal(classify('mcp__atlassian__createJiraIssue', {}).cls, 'confirm');
