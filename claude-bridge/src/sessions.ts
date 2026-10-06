@@ -351,10 +351,15 @@ function rememberWritten(live: Live, tool: string, toolInput: Record<string, unk
  * zweite Sicherung): escalated = true, dann gibt es für „auto“ keine Durchreiche mehr, sondern die Rückfrage im Chat.
  */
 function makeGuard(live: Live) {
-  return async (input: any, _toolUseId?: unknown, _opts?: unknown, escalated?: { reason?: string }) => {
+  return async (input: any, toolUseId?: unknown, _opts?: unknown, escalated?: { reason?: string }) => {
     const tool: string = input.tool_name;
     const toolInput: Record<string, unknown> = input.tool_input ?? {};
     const { cls, why } = classify(tool, toolInput, { workDir: live.workDir });
+    // Der Hook ist maßgeblich dafür, was als „automatisch erlaubt“ gemeldet wird (nicht die Einordnung beim Streamen).
+    if (typeof toolUseId === 'string') {
+      if (cls === 'auto' && live.mode === 'auto' && !escalated) live.autoCalls.set(toolUseId, live.autoCalls.get(toolUseId) ?? { name: tool, input: toolInput, sub: false });
+      else live.autoCalls.delete(toolUseId);
+    }
     const decide = (permissionDecision: 'allow' | 'deny', reason: string) => ({
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason },
     });
