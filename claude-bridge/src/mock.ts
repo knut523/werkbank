@@ -2,6 +2,9 @@
 // Er liefert dieselben Nachrichtenformen, damit Streaming, Statuszeilen und die
 // Bestätigungs-Rückfrage ohne echten Token durchgetestet werden können.
 // Enthält die Nachricht "schreib", versucht der Mock eine Datei zu schreiben (→ Rückfrage).
+// „mock-tool <Werkzeug> <JSON>“ ruft ein beliebiges Werkzeug auf und spielt dabei den Rechteweg des SDK nach:
+// PreToolUse-Hook → (ohne Entscheidung) Modus → im Auto-Modus ein Nachbau des Klassifikators (RISKANT → nachfragen,
+// VERBOTEN → ablehnen, sonst erlauben) → bei „nachfragen“ canUseTool. $CWD steht für den Arbeitsordner.
 
 import { randomUUID } from 'node:crypto';
 import { VAULT_DIR } from './tools.ts';
@@ -84,6 +87,35 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
     if (/skill-test/i.test(last)) yield toolUse('Skill', { skill: 'olaf-jira' });
     if (/konfig-test/i.test(last)) {
       yield text(`(Mock) Konfig: ${options.env?.CLAUDE_CONFIG_DIR ?? 'geteilt'}; strict: ${options.strictMcpConfig === true}; Nutzer-Hooks aus: ${options.settings?.disableAllHooks === true}; MCP: ${Object.keys(options.mcpServers ?? {}).join(',')}. `);
+      yield text(`(Mock) Modus: ${options.permissionMode}; Deny-Regeln: ${options.settings?.permissions?.deny?.length ?? 0}; bypass aus: ${options.settings?.permissions?.disableBypassPermissionsMode === 'disable'}. `);
+    }
+    const mt = last.match(/^mock-tool (\S+) (\{.*\})\s*$/);
+    if (mt) {
+      const name = mt[1];
+      const input = JSON.parse(mt[2].replaceAll('$CWD', String(options.cwd ?? '.')));
+      const denials: any[] = [];
+      yield text(`(Mock) Modus: ${options.permissionMode}. `);
+      const id = randomUUID();
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, message: { content: [{ type: 'tool_use', id, name, input }] } };
+      const r = guard ? await guard({ hook_event_name: 'PreToolUse', tool_name: name, tool_input: input }, id, { signal }) : {};
+      let d: string | undefined = r?.hookSpecificOutput?.permissionDecision;
+      if (!d) {
+        const mode = options.permissionMode ?? 'default';
+        const what = JSON.stringify(input);
+        const v = mode === 'auto' ? (/VERBOTEN/.test(what) ? 'deny' : /RISKANT/.test(what) ? 'ask' : 'allow') : mode === 'dontAsk' ? 'deny' : 'ask';
+        if (v === 'ask') {
+          const c = await options.canUseTool?.(name, input, { signal, toolUseID: id, decisionReason: mode === 'auto' ? '\u001b[1mKlassifikator\u001b[0m: Löschen außerhalb von Build-Artefakten' : undefined });
+          d = c?.behavior === 'allow' ? 'allow' : 'deny';
+        } else if (v === 'deny') {
+          d = 'deny';
+          denials.push({ tool_name: name, tool_use_id: id, tool_input: input });
+          yield { type: 'system', subtype: 'permission_denied', tool_name: name, tool_use_id: id, decision_reason_type: mode === 'auto' ? 'classifier' : 'mode', message: 'abgelehnt', session_id };
+        } else d = 'allow';
+      }
+      yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, ...(d === 'allow' ? { content: [{ type: 'text', text: 'ok' }] } : { is_error: true, content: 'abgelehnt' }) }] } };
+      yield text(d === 'allow' ? `(Mock) ${name} ausgeführt.` : `(Mock) ${name} nicht ausgeführt.`);
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 10, output_tokens: 5 }, permission_denials: denials };
+      return;
     }
     // „jira-kommentar PM-123“: Claude kommentiert im Chat über den Atlassian-MCP (Rückfrage → ja → Ergebnis).
     const jk = last.match(/jira-kommentar ([A-Z][A-Z0-9]+-\d+)/);

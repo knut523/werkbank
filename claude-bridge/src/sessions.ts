@@ -7,10 +7,10 @@
 // weiter und schreibt in die neue Antwort.
 
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { classify, statusLine, confirmQuestion, parseAnswer, jiraWriteKeys, VAULT_DIR } from './tools.ts';
-import { homeFor, ensureHome, applyHome } from './claudehome.ts';
+import { classify, statusLine, confirmQuestion, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY } from './tools.ts';
+import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { log } from './log.ts';
 import { skillsFor } from './skills.ts';
 
@@ -50,7 +50,15 @@ interface Live {
   jiraCalls: Map<string, { name: string; input: Record<string, unknown> }>;
   onJiraWrite?: (keys: string[], tool: string) => void;
   home: string;   // CLAUDE_CONFIG_DIR dieser Sitzung oder 'shared'
+  // Auto-Modus (Plan 71 P1): Rechte-Modus des Zuges, Arbeitsordner für die Klasse „auto“ (nur im Auto-Modus gesetzt),
+  // automatisch zu entscheidende Aufrufe bis zu ihrem Ergebnis, abgelehnte Werkzeuge (nur Namen, fürs Log).
+  mode: PermissionMode;
+  workDir?: string;
+  autoCalls: Map<string, { name: string; input: Record<string, unknown>; sub: boolean }>;
+  denials: string[];
 }
+
+export type PermissionMode = 'default' | 'auto' | 'dontAsk';
 
 const cfg = {
   stateDir: process.env.BRIDGE_STATE_DIR || join(process.cwd(), '..', '.runtime', 'bridge'),
@@ -58,6 +66,31 @@ const cfg = {
   turnTimeoutMs: Number(process.env.BRIDGE_TURN_TIMEOUT_S || 900) * 1000,
   confirmTimeoutMs: Number(process.env.BRIDGE_CONFIRM_TIMEOUT_S || 1800) * 1000,
 };
+
+// ---------- Auto-Modus (Plan 71 P1, Knut 06.10.2026) ----------
+// BRIDGE_PERMISSION_MODE=auto (Vorgabe in scripts/start.sh) + E-Mail in BRIDGE_AUTO_EMAILS (Vorgabe: Knut) → der
+// SDK-Modus „auto“: Bash/Edits im eigenen Arbeitsordner entscheidet der Klassifikator. Alles andere wie heute.
+// BRIDGE_PERMISSION_MODE=default (oder nicht gesetzt) ist der Not-Aus: exakt das bisherige Verhalten.
+
+const emailList = (s: string | undefined) => (s ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+
+/** Rechte-Modus für einen Zug. Board-readonly → dontAsk (der Wächter lehnt weiter selbst ab; dontAsk ist die zweite Schicht). */
+export function autoFor(req: { email?: string; readonly?: boolean }): PermissionMode {
+  if (process.env.BRIDGE_PERMISSION_MODE !== 'auto') return 'default';
+  if (req.readonly) return 'dontAsk';
+  return req.email && emailList(process.env.BRIDGE_AUTO_EMAILS).includes(req.email.toLowerCase()) ? 'auto' : 'default';
+}
+
+/**
+ * Flag-Settings im Auto-Modus (gelten auch für die geteilte Konfiguration): AUTO_DENY plus die absoluten Pfade der
+ * Konfigurationen je Person. Keine Deny-Regel für den Vault — Deny schlägt das „ja“ im Chat.
+ */
+export function autoSettings(): { permissions: { deny: string[]; disableBypassPermissionsMode: 'disable' } } {
+  const homes = resolve(homesRoot());
+  return { permissions: { deny: [...AUTO_DENY, `Read(/${homes}/*/.credentials.json)`, `Edit(/${homes}/**)`], disableBypassPermissionsMode: 'disable' } };
+}
+
+const ansi = (s: unknown) => String(s ?? '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
 
 const SYSTEM_APPEND = `
 Du läufst in der OLAF-Werkbank: Die Person schreibt dir über eine Chat-Oberfläche (LibreChat), nicht im Terminal.
@@ -67,6 +100,8 @@ Du läufst in der OLAF-Werkbank: Die Person schreibt dir über eine Chat-Oberfl�
 - GitHub schreiben, pushen und mergen ist hier gesperrt.
 - Rückfragen stellst du als normalen Text am Ende deiner Antwort.
 `.trim();
+
+const AUTO_APPEND = 'Auto-Modus ist an: Bash-Befehle und Datei-Änderungen in deinem Arbeitsordner (dem aktuellen Arbeitsverzeichnis) laufen ohne Rückfrage, wenn der Sicherheits-Klassifikator zustimmt; jede solche Freigabe sieht die Person als Statuszeile. Vault, Jira und alles außerhalb des Arbeitsordners bestätigt die Person weiterhin im Chat.';
 
 // ---------- Zuordnung Unterhaltung → SDK-Sitzung (ohne Geheimnisse, als JSON-Datei) ----------
 
@@ -195,6 +230,14 @@ function handleMessage(live: Live, msg: any) {
         homeMap[live.key] = live.home;
         saveMap();
       }
+      if (msg.subtype === 'permission_denied') {
+        // Vom Klassifikator (oder dontAsk/Deny-Regel) abgelehnt — sichtbar machen, ohne Argumente ins Log.
+        const call = live.autoCalls.get(msg.tool_use_id);
+        live.autoCalls.delete(msg.tool_use_id);
+        live.denials.push(String(msg.tool_name ?? '?'));
+        log('auto abgelehnt', { conv: live.key, tool: msg.tool_name, grund: msg.decision_reason_type });
+        if (live.mode === 'auto') emitStatus(live, `🛑 Auto-Modus hat abgelehnt: ${(call?.sub ? '↳ ' : '') + statusLine(String(msg.tool_name ?? ''), call?.input ?? {})}`);
+      }
       return;
     case 'stream_event': {
       if (msg.parent_tool_use_id) return;
@@ -225,7 +268,8 @@ function handleMessage(live: Live, msg: any) {
       }
       for (const block of msg.message?.content ?? []) {
         if (block.type === 'tool_use') {
-          const cls = classify(block.name, block.input ?? {}).cls;
+          const cls = classify(block.name, block.input ?? {}, { workDir: live.workDir }).cls;
+          if (cls === 'auto' && live.mode === 'auto') live.autoCalls.set(block.id, { name: block.name, input: block.input ?? {}, sub: !!msg.parent_tool_use_id });
           if (live.onJiraWrite && jiraWriteKeys(block.name, block.input ?? {}) !== null) live.jiraCalls.set(block.id, { name: block.name, input: block.input ?? {} });
           // Nutzung je Skill zählen (Knut, 29.09.: Skill-Kern nach einer Woche mit echten Zahlen nachschärfen).
           if (block.name === 'Skill' && live.onSkill) { try { live.onSkill(String(block.input?.skill ?? block.input?.command ?? '').replace(/^\//, '').split(/\s/)[0]); } catch { /* egal */ } }
@@ -240,6 +284,17 @@ function handleMessage(live: Live, msg: any) {
     case 'user': {
       // Ergebnis eines schreibenden Jira-Aufrufs (auch aus Teilagenten): Schlüssel an die Werkbank, damit die
       // Jira-Kopie und offene Board-Seiten sofort nachziehen (Knut, 29.09.: „instant update des board“).
+      // Auto-Modus: Ergebnis eines Aufrufs, den niemand gefragt hat → der Klassifikator hat ihn erlaubt.
+      if (live.autoCalls.size) {
+        for (const b of msg.message?.content ?? []) {
+          const call = b?.type === 'tool_result' ? live.autoCalls.get(b.tool_use_id) : undefined;
+          if (!call) continue;
+          live.autoCalls.delete(b.tool_use_id);
+          log('auto erlaubt', { conv: live.key, tool: call.name });
+          emitStatus(live, `🤖 automatisch erlaubt: ${(call.sub ? '↳ ' : '') + statusLine(call.name, call.input)}`);
+          rememberWritten(live, call.name, call.input);
+        }
+      }
       if (!live.jiraCalls.size) return;
       for (const b of msg.message?.content ?? []) {
         const call = b?.type === 'tool_result' ? live.jiraCalls.get(b.tool_use_id) : undefined;
@@ -253,6 +308,7 @@ function handleMessage(live: Live, msg: any) {
       return;
     }
     case 'result': {
+      for (const d of msg.permission_denials ?? []) if (!live.denials.includes(String(d?.tool_name))) live.denials.push(String(d?.tool_name ?? '?'));
       const u = msg.usage ?? {};
       live.usage.input += (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
       live.usage.output += u.output_tokens ?? 0;
@@ -265,11 +321,24 @@ function handleMessage(live: Live, msg: any) {
 
 // ---------- Bestätigung für Schreibzugriffe ----------
 
+function rememberWritten(live: Live, tool: string, toolInput: Record<string, unknown>) {
+  // Geschriebene Dateien merken (für „Dokumente an der Karte“), nur Pfade.
+  const f = toolInput.file_path ?? toolInput.notebook_path;
+  if (f && /^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) {
+    const seen = lastSeen.get(live.key);
+    if (seen) seen.written = [...new Set([...(seen.written ?? []), String(f)])].slice(-50);
+  }
+}
+
+/**
+ * Der Wächter. Als PreToolUse-Hook: (input) mit tool_name/tool_input. Als canUseTool (Eskalation des Auto-Modus oder
+ * zweite Sicherung): escalated = true, dann gibt es für „auto“ keine Durchreiche mehr, sondern die Rückfrage im Chat.
+ */
 function makeGuard(live: Live) {
-  return async (input: any) => {
+  return async (input: any, _toolUseId?: unknown, _opts?: unknown, escalated?: { reason?: string }) => {
     const tool: string = input.tool_name;
     const toolInput: Record<string, unknown> = input.tool_input ?? {};
-    const { cls, why } = classify(tool, toolInput);
+    const { cls, why } = classify(tool, toolInput, { workDir: live.workDir });
     const decide = (permissionDecision: 'allow' | 'deny', reason: string) => ({
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason },
     });
@@ -282,19 +351,22 @@ function makeGuard(live: Live) {
       emitStatus(live, `🔒 Nur lesen (Board-Agent): ${statusLine(tool, toolInput)} nicht ausgeführt`);
       return decide('deny', 'Dieser Lauf ist nur lesend (vom Werkbank-Board gestartet). Nichts schreiben; schreib stattdessen auf, was zu tun wäre.');
     }
+    // Auto-Modus: keine Entscheidung — der Klassifikator des SDK entscheidet; eskaliert er, kommt canUseTool (unten).
+    if (cls === 'auto' && live.mode === 'auto' && !escalated) return {};
     // confirm: Rückfrage stellen, Antwort schließen, auf die nächste Nachricht warten.
     // Parallele Schreibaufrufe werden nacheinander abgefragt.
-    const run = live.confirmChain.then(() => confirm(tool, toolInput));
+    const note = escalated && cls === 'auto' ? `_Der Auto-Modus fragt nach${escalated.reason ? `: ${ansi(escalated.reason)}` : '.'}_\n\n` : '';
+    const run = live.confirmChain.then(() => confirm(tool, toolInput, note));
     live.confirmChain = run.catch(() => undefined);
     return run;
   };
 
-  async function confirm(tool: string, toolInput: Record<string, unknown>) {
+  async function confirm(tool: string, toolInput: Record<string, unknown>, note = '') {
     const decide = (permissionDecision: 'allow' | 'deny', reason: string) => ({
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason },
     });
     if (live.abort.signal.aborted) return decide('deny', 'Abgebrochen.');
-    emitText(live, (live.lastKind === 'none' ? '' : '\n\n') + confirmQuestion(tool, toolInput));
+    emitText(live, (live.lastKind === 'none' ? '' : '\n\n') + note + confirmQuestion(tool, toolInput));
     const answer = await new Promise<string>((resolve) => {
       live.pending = {
         resolve,
@@ -310,12 +382,7 @@ function makeGuard(live: Live) {
     const a = parseAnswer(answer);
     if (a === 'yes') {
       emitStatus(live, '✅ ' + statusLine(tool, toolInput));
-      // Geschriebene Dateien merken (für „Dokumente an der Karte“), nur Pfade.
-      const f = toolInput.file_path ?? toolInput.notebook_path;
-      if (f && /^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) {
-        const seen = lastSeen.get(live.key);
-        if (seen) seen.written = [...new Set([...(seen.written ?? []), String(f)])].slice(-50);
-      }
+      rememberWritten(live, tool, toolInput);
       return decide('allow', 'Von der Person im Chat bestätigt.');
     }
     emitStatus(live, '🚫 Nicht ausgeführt.');
@@ -391,6 +458,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
     jiraCalls: new Map(), onJiraWrite: req.onJiraWrite, home: '',
+    mode: autoFor(req), autoCalls: new Map(), denials: [],
   };
   lives.set(key, live);
   attach(live, req.sink);
@@ -400,6 +468,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   mark(live, 'arbeitet');
 
   const scratch = scratchFor(req.userId);
+  if (live.mode === 'auto') live.workDir = scratch;
   // Eigene Claude-Konfiguration je Person (oder die geteilte des VM-Nutzers, siehe claudehome.ts).
   const home = homeFor(safeId(req.userId), req.email);
   live.home = home.dir ?? 'shared';
@@ -436,12 +505,14 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: extra ? `${SYSTEM_APPEND}\n\n${extra}` : SYSTEM_APPEND },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? AUTO_APPEND : '', extra].filter(Boolean).join('\n\n') },
     mcpServers: req.mcpServers ?? {},
-    permissionMode: 'default',
-    // Zweite Sicherung, falls ein Aufruf am Hook vorbei beim Rechte-Dialog landet.
-    canUseTool: async (tool: string, input: Record<string, unknown>) => {
-      const r: any = await guard({ tool_name: tool, tool_input: input });
+    permissionMode: live.mode,
+    // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim
+    // Rechte-Dialog landet.
+    canUseTool: async (tool: string, input: Record<string, unknown>, opts?: { toolUseID?: string; decisionReason?: string }) => {
+      if (opts?.toolUseID) live.autoCalls.delete(opts.toolUseID);
+      const r: any = await guard({ tool_name: tool, tool_input: input }, opts?.toolUseID, undefined, { reason: opts?.decisionReason });
       const d = r.hookSpecificOutput;
       return d.permissionDecision === 'allow'
         ? { behavior: 'allow', updatedInput: input }
@@ -457,11 +528,12 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     env,
     stderr: (d: string) => { if (/error/i.test(d)) log('sdk stderr', { conv: key, line: d.slice(0, 300).replaceAll(req.token, '***') }); },
   };
+  if (live.mode === 'auto') options.settings = autoSettings();
   applyHome(home, env, options);
   if (resume) options.resume = resume;
   if (req.model) options.model = req.model;
 
-  log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers) });
+  log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers), permissionMode: live.mode });
 
   // Die Sitzung läuft unabhängig von der HTTP-Antwort weiter (Rückfragen!).
   (async () => {
@@ -490,7 +562,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       }
     } finally {
       mark(live, 'ende');
-      log('turn end', { conv: key, usage: live.usage, ms: live.times });
+      log('turn end', { conv: key, usage: live.usage, ms: live.times, ...(live.denials.length ? { denials: live.denials } : {}) });
       end(live);
     }
   })();
