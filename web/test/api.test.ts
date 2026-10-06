@@ -891,3 +891,63 @@ test('Runde 7: Board-Filter „nur aktueller Sprint“ und Mein Tag nach lokaler
   assert.equal(h[0].prev, 'KR1');
   assert.equal((await anna.req('/api/goals/history/%E0%A4%A')).status, 400);
 });
+
+test('Mehrere Claude-Konten: hinzufügen, maskiert auflisten, umsortieren, testen, entfernen — Tokens nie zurück', async () => {
+  const uid = String(users.a._id);
+  const t1 = 'sk-ant-oat01-' + 'f'.repeat(36) + 'FIRM', t2 = 'sk-ant-oat01-' + 'p'.repeat(30) + 'limitPRIV';
+  // Bisherige Nutzerin: genau der Chat-Schlüssel, nichts sonst.
+  const l0 = await anna.req('/api/setup/claude-accounts');
+  assert.equal(l0.status, 200);
+  assert.deepEqual(l0.j.accounts.map((a: any) => [a.id, a.label, a.source, a.last4]), [['chat', 'Chat-Schlüssel', 'chat', 'xxxx']]);
+  assert.deepEqual((await internal('/internal/claude-accounts', { userId: uid })).j.accounts, [{ id: 'chat', label: 'Chat-Schlüssel', token: null }]);
+  // Bernd hat noch gar keinen Schlüssel.
+  assert.deepEqual((await bernd.req('/api/setup/claude-accounts')).j.accounts, []);
+  // Hinzufügen: CSRF, Format, Name.
+  assert.equal((await anna.req('/api/setup/claude-accounts', { body: { label: 'Firma', token: t1 }, csrf: false })).status, 403);
+  assert.match((await anna.req('/api/setup/claude-accounts', { body: { label: 'Firma', token: 'sk-ant-api03-xyz' } })).j.error, /API-Schlüssel/);
+  assert.equal((await anna.req('/api/setup/claude-accounts', { body: { label: '  ', token: t1 } })).status, 400);
+  const a1 = await anna.req('/api/setup/claude-accounts', { body: { label: 'Firma', token: t1 } });
+  assert.equal(a1.status, 200, JSON.stringify(a1.j));
+  assert.equal((await anna.req('/api/setup/claude-accounts', { body: { label: 'Doppelt', token: t1 } })).status, 409, 'derselbe Token nicht zweimal');
+  const a2 = await anna.req('/api/setup/claude-accounts', { body: { label: 'Privat', token: t2 } });
+  assert.equal(a2.status, 200);
+  const l1 = await anna.req('/api/setup/claude-accounts');
+  assert.deepEqual(l1.j.accounts.map((a: any) => [a.label, a.last4]), [['Chat-Schlüssel', 'xxxx'], ['Firma', 'FIRM'], ['Privat', 'PRIV']]);
+  assert.equal(JSON.stringify([a1.j, a2.j, l1.j]).includes('sk-ant'), false, 'Tokens nie an den Browser');
+  const [idF, idP] = [l1.j.accounts[1].id, l1.j.accounts[2].id];
+  // Verschlüsselt gespeichert.
+  const cr = await mongo.db(DB).collection('creds').findOne({ userId: uid });
+  assert.equal(cr!.claudeAccounts.length, 2);
+  assert.equal(JSON.stringify(cr).includes('sk-ant-oat'), false, 'nur verschlüsselt in der DB');
+  // Interner Kanal für die Brücke: nur mit Token, Klartext in Reihenfolge, chat ohne Token.
+  assert.equal((await internal('/internal/claude-accounts', { userId: uid }, 'falsch')).status, 403);
+  assert.deepEqual((await internal('/internal/claude-accounts', { userId: uid })).j.accounts,
+    [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, { id: idF, label: 'Firma', token: t1 }, { id: idP, label: 'Privat', token: t2 }]);
+  // Umsortieren: nur eine vollständige Umordnung der vorhandenen Konten.
+  assert.equal((await anna.req('/api/setup/claude-accounts/order', { method: 'PUT', body: { ids: [idP, 'chat'] } })).status, 400);
+  assert.equal((await anna.req('/api/setup/claude-accounts/order', { method: 'PUT', body: { ids: [idP, 'chat', 'fremd'] } })).status, 400);
+  assert.equal((await anna.req('/api/setup/claude-accounts/order', { method: 'PUT', body: { ids: [idP, 'chat', idF] } })).status, 200);
+  assert.deepEqual((await internal('/internal/claude-accounts', { userId: uid })).j.accounts.map((a: any) => a.id), [idP, 'chat', idF]);
+  // Testen über die Brücke (Mock: Token mit „limit“ ist ausgeschöpft) — danach steht der Zustand in der Liste.
+  const tp = await anna.req(`/api/setup/claude-accounts/${idP}/test`, { method: 'POST' });
+  assert.deepEqual([tp.j.ok, tp.j.error], [false, 'rate_limit']);
+  assert.ok(new Date(tp.j.resetsAt).getTime() > Date.now());
+  assert.equal((await anna.req(`/api/setup/claude-accounts/${idF}/test`, { method: 'POST' })).j.ok, true);
+  assert.equal((await anna.req('/api/setup/claude-accounts/chat/test', { method: 'POST' })).j.ok, true);
+  assert.equal((await anna.req('/api/setup/claude-accounts/gibtsnicht/test', { method: 'POST' })).status, 404);
+  const l2 = await anna.req('/api/setup/claude-accounts');
+  assert.ok(l2.j.accounts.find((a: any) => a.id === idP).exhaustedUntil > Date.now(), 'Zustand aus der Brücke');
+  assert.equal(l2.j.accounts.find((a: any) => a.id === idF).exhaustedUntil, null);
+  assert.equal(JSON.stringify(l2.j).includes('sk-ant'), false);
+  // Bernd sieht Annas Konten nie.
+  assert.equal((await bernd.req(`/api/setup/claude-accounts/${idF}/test`, { method: 'POST' })).status, 404);
+  assert.equal((await bernd.req(`/api/setup/claude-accounts/${idF}`, { method: 'DELETE' })).status, 404);
+  // Entfernen; der Chat-Schlüssel geht nur über „Trennen“.
+  assert.equal((await anna.req('/api/setup/claude-accounts/chat', { method: 'DELETE' })).status, 400);
+  assert.equal((await anna.req(`/api/setup/claude-accounts/${idP}`, { method: 'DELETE' })).status, 200);
+  assert.deepEqual((await internal('/internal/claude-accounts', { userId: uid })).j.accounts.map((a: any) => a.id), ['chat', idF]);
+  assert.deepEqual((await anna.req('/api/setup/claude-accounts')).j.accounts.map((a: any) => a.label), ['Chat-Schlüssel', 'Firma']);
+  // Höchstens 5 weitere Konten.
+  for (let i = 0; i < 4; i++) assert.equal((await anna.req('/api/setup/claude-accounts', { body: { label: `K${i}`, token: 'sk-ant-oat01-' + String(i).repeat(40) } })).status, 200);
+  assert.equal((await anna.req('/api/setup/claude-accounts', { body: { label: 'K9', token: 'sk-ant-oat01-' + '9'.repeat(40) } })).status, 400);
+});

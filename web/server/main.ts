@@ -12,6 +12,7 @@ import YAML from 'yaml';
 import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl } from './config.ts';
 import { connect, wb } from './db.ts';
 import { librechatLogin, createSession, destroySession, currentUser, allowed, teammates, userById, type User } from './auth.ts';
+import { listClaudeAccounts, addClaudeAccount, removeClaudeAccount, reorderClaudeAccounts, claudeAccountToken, claudeAccountsForBridge } from './creds.ts';
 import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraIdentity, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
@@ -338,6 +339,63 @@ on('POST', /^\/api\/setup\/claude$/, async (req, res) => {
 });
 
 on('DELETE', /^\/api\/setup\/claude$/, async (req, res) => { const u = await needUser(req); await removeClaudeToken(u); send(res, 200, { ok: true }); });
+
+// --- Mehrere Claude-Konten (Knut, 06.10.2026): bei ausgeschöpftem Kontingent übernimmt das nächste ---
+// Nie Tokens an den Browser oder ins Log: nur Name, die letzten 4 Zeichen, Herkunft und der Zustand aus der Brücke.
+
+const bridgeInternal = { 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' };
+
+async function accountsView(u: User) {
+  const list = await listClaudeAccounts(u);
+  let exhausted: Record<string, number> = {};
+  try {
+    const r = await fetch(`${cfg.bridgeUrl}/internal/accounts-state?user=${encodeURIComponent(u.id)}`, { headers: bridgeInternal, signal: AbortSignal.timeout(1500) });
+    if (r.ok) exhausted = ((await r.json()) as any).exhausted ?? {};
+  } catch { /* Brücke nicht erreichbar: ohne Zustand */ }
+  const now = Date.now();
+  const accounts = list.map((a) => ({ ...a, exhaustedUntil: exhausted[a.id] > now ? exhausted[a.id] : null }));
+  return { accounts, active: accounts.find((a) => !a.exhaustedUntil)?.id ?? null, max: 5 };
+}
+
+on('GET', /^\/api\/setup\/claude-accounts$/, async (req, res) => send(res, 200, await accountsView(await needUser(req))));
+
+on('POST', /^\/api\/setup\/claude-accounts$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const a = await addClaudeAccount(u, String(b.label ?? ''), String(b.token ?? ''));
+  log('claude konto hinzugefügt', { user: u.id, konto: a.id });
+  send(res, 200, { ok: true, account: a, ...(await accountsView(u)) });
+});
+
+on('PUT', /^\/api\/setup\/claude-accounts\/order$/, async (req, res) => {
+  const u = await needUser(req);
+  await reorderClaudeAccounts(u, (await body(req)).ids);
+  send(res, 200, { ok: true, ...(await accountsView(u)) });
+});
+
+on('DELETE', /^\/api\/setup\/claude-accounts\/([\w-]{1,40})$/, async (req, res, m) => {
+  const u = await needUser(req);
+  await removeClaudeAccount(u, m[1]);
+  log('claude konto entfernt', { user: u.id, konto: m[1] });
+  send(res, 200, { ok: true, ...(await accountsView(u)) });
+});
+
+// Ein Konto testen: die Brücke macht einen Minimalzug mit genau diesem Token (ein kleiner Modellaufruf).
+on('POST', /^\/api\/setup\/claude-accounts\/([\w-]{1,40})\/test$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const token = await claudeAccountToken(u, m[1]);
+  if (!token) throw new HttpError(404, 'Konto nicht gefunden.');
+  let r: any;
+  try {
+    const resp = await fetch(`${cfg.bridgeUrl}/internal/account-test`, {
+      method: 'POST', headers: { ...bridgeInternal, 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ userId: u.id, email: u.email, accountId: m[1] }), signal: AbortSignal.timeout(75_000),
+    });
+    r = await resp.json();
+  } catch { throw new HttpError(502, 'Die Brücke antwortet nicht — Test nicht möglich.'); }
+  log('claude konto getestet', { user: u.id, konto: m[1], ok: !!r.ok, error: r.error });
+  send(res, 200, { ok: !!r.ok, error: r.error ?? null, resetsAt: r.resetsAt ? new Date(r.resetsAt).toISOString() : null });
+});
 
 on('POST', /^\/api\/setup\/jira$/, async (req, res) => {
   const u = await needUser(req);
@@ -1511,6 +1569,12 @@ on('POST', /^\/internal\/session-start$/, async (req, res) => {
   const r = await sessionStart(u, String(b.conv ?? ''), { eod: b.eod === true, skills: b.skills });
   log('kontext', { user: u.id, tokens: r.tokens, cached: r.cached, slot: r.slot, questions: r.questions.length });
   send(res, 200, r);
+});
+
+// Claude-Konten der Person für die Brücke (Klartext nur über diesen Kanal; chat = Schlüssel aus der Anfrage).
+on('POST', /^\/internal\/claude-accounts$/, async (req, res) => {
+  const u = await internalUser(req, await body(req));
+  send(res, 200, { accounts: await claudeAccountsForBridge(u) });
 });
 
 on('POST', /^\/internal\/measure$/, async (req, res) => {
