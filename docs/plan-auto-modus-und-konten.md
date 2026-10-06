@@ -125,33 +125,33 @@ quelle: review-pakete/71-werkbank-auto-multi/plan.md, Abschnitte 1, 2, 4 P1
 ## DoD (wörtlich abzuhaken)
 
 A — Auto-Modus
-- [ ] Im Mock erscheint bei `ls` und bei einem Edit im Arbeitsordner keine Rückfrage; stattdessen „🤖 automatisch erlaubt: …“ im Chat.
-- [ ] Vault-Edit fragt weiter nach (Test).
-- [ ] Jira-Kommentar fragt weiter nach (Test).
-- [ ] `git push` bleibt gesperrt (Test).
-- [ ] Eskalation des Klassifikators → Rückfrage im Chat mit Grund; Ablehnung → „🛑 Auto-Modus hat abgelehnt“ (Test).
-- [ ] Ein Symlink im Arbeitsordner auf den Vault zählt als Vault (Test).
-- [ ] Mit `BRIDGE_PERMISSION_MODE=default` ist das Verhalten exakt wie heute (Test: Modus `default`, Rückfrage bei `ls`).
-- [ ] Nicht freigeschaltete Personen bleiben im Modus `default` (alle bisherigen Brückentests grün, Test).
-- [ ] Board-`readonly` lehnt weiter alles ab (Test, auch im Auto-Modus).
-- [ ] `permission_denials` stehen im Log.
-- [ ] `templates/claude/settings.json` wird verlinkt, eine vorhandene Datei bleibt unangetastet (Test).
-- [ ] `start.sh` setzt `BRIDGE_PERMISSION_MODE` (Vorgabe `auto`) und `BRIDGE_AUTO_EMAILS` (Vorgabe Knut).
-- [ ] README-Abschnitt „Auto-Modus“ inkl. Risiko „Abo/Modell ohne Auto-Modus → ersten echten Zug prüfen“.
+- [x] Im Mock erscheint bei `ls` und bei einem Edit im Arbeitsordner keine Rückfrage; stattdessen „🤖 automatisch erlaubt: …“ im Chat.
+- [x] Vault-Edit fragt weiter nach (Test).
+- [x] Jira-Kommentar fragt weiter nach (Test).
+- [x] `git push` bleibt gesperrt (Test).
+- [x] Eskalation des Klassifikators → Rückfrage im Chat mit Grund; Ablehnung → „🛑 Auto-Modus hat abgelehnt“ (Test).
+- [x] Ein Symlink im Arbeitsordner auf den Vault zählt als Vault (Test).
+- [x] Mit `BRIDGE_PERMISSION_MODE=default` ist das Verhalten exakt wie heute (Test: Modus `default`, Rückfrage bei `ls`).
+- [x] Nicht freigeschaltete Personen bleiben im Modus `default` (alle bisherigen Brückentests grün, Test).
+- [x] Board-`readonly` lehnt weiter alles ab (Test, auch im Auto-Modus).
+- [x] `permission_denials` stehen im Log.
+- [x] `templates/claude/settings.json` wird verlinkt, eine vorhandene Datei bleibt unangetastet (Test).
+- [x] `start.sh` setzt `BRIDGE_PERMISSION_MODE` (Vorgabe `auto`) und `BRIDGE_AUTO_EMAILS` (Vorgabe Knut).
+- [x] README-Abschnitt „Auto-Modus“ inkl. Risiko „Abo/Modell ohne Auto-Modus → ersten echten Zug prüfen“.
 
 B — mehrere Konten
-- [ ] Wechsel auf das nächste Konto bei `rate_limit` innerhalb derselben Anfrage, mit Statuszeile (Test).
-- [ ] Alle erschöpft → heutige `rate_limit`-Meldung (Test).
-- [ ] Das aktive Konto wird gemerkt: der nächste Zug beginnt auf dem funktionierenden Konto (Test).
-- [ ] Tokens nie im Log und nie in Antworten an den Browser (Tests: Log der Brücke, API-Antworten).
-- [ ] Einrichtungs-API: hinzufügen, auflisten (maskiert), entfernen, umsortieren, testen (Tests).
-- [ ] Interner Endpunkt nur mit internem Token (Test).
-- [ ] Bestehende Nutzer mit nur dem LibreChat-Schlüssel: unverändert (Liste zeigt nur `chat`, Brückentests grün).
-- [ ] Einrichtung zeigt die Konten (Build grün).
+- [x] Wechsel auf das nächste Konto bei `rate_limit` innerhalb derselben Anfrage, mit Statuszeile (Test).
+- [x] Alle erschöpft → heutige `rate_limit`-Meldung (Test).
+- [x] Das aktive Konto wird gemerkt: der nächste Zug beginnt auf dem funktionierenden Konto (Test).
+- [x] Tokens nie im Log und nie in Antworten an den Browser (Tests: Log der Brücke, API-Antworten).
+- [x] Einrichtungs-API: hinzufügen, auflisten (maskiert), entfernen, umsortieren, testen (Tests).
+- [x] Interner Endpunkt nur mit internem Token (Test).
+- [x] Bestehende Nutzer mit nur dem LibreChat-Schlüssel: unverändert (Liste zeigt nur `chat`, Brückentests grün).
+- [x] Einrichtung zeigt die Konten (Build grün).
 
 Gates
-- [ ] `scripts/werkbank.sh test` bzw. beide Testsuiten grün, `vite build` grün.
-- [ ] README nachgezogen.
+- [x] `scripts/werkbank.sh test` bzw. beide Testsuiten grün, `vite build` grün.
+- [x] README nachgezogen.
 
 ## Risiken
 
@@ -166,3 +166,18 @@ Gates
   ansetzen; Schreibendes läuft dabei wieder durch den Wächter.
 - **Mehrere Konten = mehrere Abos einer Person:** Die Nutzungsbedingungen der Konten liegen bei der Person.
 - **Klartext-Token über den internen Kanal** (nur 127.0.0.1, interner Token) — wie heute LibreChat → Brücke.
+
+## Stand (06.10.2026, abends)
+
+Alles oben gebaut und abgehakt, lokal auf `feat/auto-modus-und-konten`, nichts gepusht, nichts auf der laufenden
+Werkbank. Abweichungen vom Entwurf:
+
+- **Deny-Regeln nicht in `templates/claude/settings.json`**, sondern als Flag-Settings je Zug nur im Auto-Modus
+  (`AUTO_DENY` in `tools.ts`): Nutzer-Settings gälten auch im Not-Aus und für Personen ohne Auto-Modus — das hätte den
+  Not-Aus „exakt wie heute“ gebrochen (z. B. `gh api` auch nach „ja“ gesperrt). Die Vorlage trägt nur `autoMode` und
+  `disableBypassPermissionsMode` (beide außerhalb des Auto-Modus wirkungslos).
+- Fehlt der Chat-Schlüssel in der Kontenliste der Werkbank, hängt die Brücke ihn **hinten** an (nicht vorn).
+- Nebenbei: `web/test/jira-mock.ts` PM-331 fällig 2099 statt 2026-10-02 — der Board-Filter-Test war seit 03.10. rot.
+- Offen / beim ersten echten Zug prüfen: Auto-Modus mit Knuts Abo und Modell auf der VM (Log `permissionMode: auto`,
+  Statuszeile „🤖“); Kontowechsel mit echten Konten (die Fehlerform `rate_limit` ist aus den SDK-Typen, nicht aus einem
+  echten Lauf).
