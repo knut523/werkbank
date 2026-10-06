@@ -28,7 +28,7 @@ export function demoIssues() {
       { type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' }, inwardIssue: { key: 'PM-331', fields: { summary: 'Prod-Push Sicherheitsfixes', status: status('In Progress') } } },
       { type: { name: 'Relates', inward: 'relates to', outward: 'relates to' }, outwardIssue: { key: 'PM-341', fields: { summary: 'Abrechnung Oktober', status: status('Done') } } },
     ]; return x; })(),
-    t('PM-331', 'Prod-Push Sicherheitsfixes', 'In Progress', 'Christoph Beispiel', 'PM-70', '2026-10-02'),
+    t('PM-331', 'Prod-Push Sicherheitsfixes', 'In Progress', 'Christoph Beispiel', 'PM-70', '2099-10-02'),
     t('PM-332', 'Leak-Check #208 dokumentieren', 'To Do', 'Knut Peters', 'PM-331', null, 'Sub-task'),
     t('PM-267', 'Bill-OCR Phase 1', 'Ongoing', 'Lisa Probe', 'PM-70', null),
     t('PM-340', 'Textbausteine Service', 'Backlog', null, 'PM-73', null),
