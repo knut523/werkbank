@@ -69,7 +69,7 @@ quelle: review-pakete/71-werkbank-auto-multi/plan.md, Abschnitte 1, 2, 4 P1
    - Statuszeile **„🤖 automatisch erlaubt: …“** beim Ergebnis eines automatisch erlaubten Aufrufs (Chat + Log
      `auto erlaubt`); **„🛑 Auto-Modus hat abgelehnt: …“** bei `system/permission_denied`; `result.permission_denials`
      (nur Werkzeugnamen, keine Argumente) ins Log `turn end`.
-   - Flag-Settings nur im Auto-Modus: `permissions.deny` (Push/Merge/`gh pr`/`gh api`/`bw`, Lesen fremder
+   - Flag-Settings nur im Auto-Modus: `permissions.deny` (Merge/`gh pr merge`/`bw`, Lesen fremder
      Konfigurationen und `.credentials.json`, `.env*`, `~/.ssh`, `~/.config/vw`) und
      `disableBypassPermissionsMode`. **Keine** Deny-Regel für den Vault — Deny schlägt Hook-„allow“, sonst ginge
      Vault-Schreiben auch nach „ja“ nicht mehr.
@@ -181,3 +181,12 @@ Werkbank. Abweichungen vom Entwurf:
 - Offen / beim ersten echten Zug prüfen: Auto-Modus mit Knuts Abo und Modell auf der VM (Log `permissionMode: auto`,
   Statuszeile „🤖“); Kontowechsel mit echten Konten (die Fehlerform `rate_limit` ist aus den SDK-Typen, nicht aus einem
   echten Lauf).
+
+## Nachtrag 06.10.2026 — GitHub im Auto-Modus (Knut)
+
+„lets make sure he can read but carefully only push — only with acceptance or orders“:
+- GitHub **lesen** (`gh api` ohne Schreib-Optionen, `gh pr view|diff|list`, GraphQL ohne Mutation) geht an den Klassifikator.
+- GitHub **schreiben** (`git push`, `gh pr create|comment|review|edit…`, `gh issue …`, API mit `-X POST|PATCH|PUT|DELETE`,
+  `-f/-F`, GraphQL-Mutation) ist immer `confirm` — auch im Auto-Modus, nie automatisch (`BASH_GITHUB_WRITE` in `tools.ts`).
+- **Gesperrt, auch mit „ja“:** Merge auf jedem Weg, Force-Push, Push auf `main`/`master`/`develop`.
+- `git push`, `gh pr create` und `gh api` sind aus `AUTO_DENY` entfernt: Deny schlüge auch das „ja“.

@@ -93,9 +93,15 @@ test('Einordnung: Klasse auto nur mit Arbeitsordner, nur darin, nie Vault/Jira/G
   for (const command of [`cat > ${VAULT}/olaf/x.md`, 'cat ~/.config/vw/session', 'ls ../../claude/u1/.credentials.json', 'bw get password x', 'sudo apt install bwrap', 'curl https://maxenergy.atlassian.net/rest/api/3/issue/PM-1', 'cat /home/knut/work/werkbank-dev/.runtime/claude/x', 'cat ~/.ssh/id_ed25519']) {
     assert.equal(classify('Bash', { command }, ctx).cls, 'confirm', command);
   }
-  // GitHub-Sperren gewinnen immer.
-  assert.equal(classify('Bash', { command: 'git push origin dev' }, ctx).cls, 'blocked');
+  // GitHub-Sperren gewinnen immer; GitHub-Schreiben fragt auch im Auto-Modus; GitHub-Lesen geht an den Klassifikator.
+  assert.equal(classify('Bash', { command: 'git push origin main' }, ctx).cls, 'blocked');
   assert.equal(classify('Bash', { command: 'gh pr merge 1' }, ctx).cls, 'blocked');
+  for (const command of ['git push origin dev', 'gh pr create --fill', 'gh api -X PATCH repos/a/b/pulls/1 -f title=x']) {
+    assert.equal(classify('Bash', { command }, ctx).cls, 'confirm', command);
+  }
+  for (const command of ['gh api repos/WirStrom1/olaf-admin/pulls/267', 'gh api "repos/a/b/pulls/1/comments?per_page=100" --jq ".[].body"', 'gh api graphql -f query="{ viewer { login } }"', 'gh pr view 3 --json title', 'gh pr diff 3']) {
+    assert.equal(classify('Bash', { command }, ctx).cls, 'auto', command);
+  }
   // Jira und Werkbank-Jira bleiben bestätigen, Lesen bleibt lesen.
   assert.equal(classify('mcp__atlassian__addCommentToJiraIssue', {}, ctx).cls, 'confirm');
   assert.equal(classify('mcp__werkbank__jira_update', {}, ctx).cls, 'confirm');
@@ -131,9 +137,9 @@ test('Auto-Modus: Jira-Kommentar fragt weiter nach', async () => {
   assert.match(a, /Kein Jira-Kommentar/);
 });
 
-test('Auto-Modus: git push bleibt gesperrt', async () => {
-  const a = await send(AUTO_PORT, 'a5', tool('Bash', { command: 'git push origin dev' }));
-  assert.match(a, /⛔ Gesperrt im Pilot: git push/);
+test('Auto-Modus: Push auf main bleibt gesperrt', async () => {
+  const a = await send(AUTO_PORT, 'a5', tool('Bash', { command: 'git push origin main' }));
+  assert.match(a, /⛔ Gesperrt im Pilot: Push auf main\/master\/develop/);
   assert.doesNotMatch(a, /Bash ausgeführt/);
 });
 
@@ -207,7 +213,8 @@ test('settings.json je Person: verlinkt, vorhandene Datei bleibt; Deny-Regeln nu
   assert.ok(Array.isArray(tpl.autoMode.hard_deny) && tpl.autoMode.hard_deny.length > 1);
   assert.equal(tpl.permissions.deny, undefined, 'keine Deny-Regeln in der Vorlage — sie gälten auch im Not-Aus');
   assert.equal(AUTO_DENY.some((r) => /vault|jira|atlassian/i.test(r)), false, 'keine Deny-Regel für Vault/Jira (Deny schlägt das „ja“)');
-  assert.ok(AUTO_DENY.includes('Bash(git push:*)'));
+  assert.ok(AUTO_DENY.includes('Bash(gh pr merge:*)'));
+  assert.equal(AUTO_DENY.some((r) => /git push|gh api|gh pr create/.test(r)), false, 'GitHub-Schreiben fragt, statt per Deny jedes „ja“ zu schlagen');
   // Eigene Datei einer Person wird nicht überschrieben.
   mkdirSync(join(autoBridge.HOMES, 'uh'), { recursive: true, mode: 0o700 });
   writeFileSync(join(autoBridge.HOMES, 'uh', 'settings.json'), '{"eigene":true}');
