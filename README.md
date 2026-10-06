@@ -574,6 +574,35 @@ Rückfrage im Chat, eingeleitet mit „Der Auto-Modus fragt nach: <Grund>“.
   Ohne eigenen Unix-Nutzer oder Sandbox läuft Bash mit den Rechten des VM-Nutzers — darum nur Knut.
 - Der Klassifikator ist ein zusätzlicher kleiner Modellaufruf je Bash/Edit auf dem Abo der Person.
 
+## Mehrere Claude-Konten je Person (06.10.2026)
+
+Knut, 06.10.2026: mehrere Claude-Konten je Person mit automatischem Wechsel, „wie `cswap auto`“. Plan:
+`docs/plan-auto-modus-und-konten.md`.
+
+- **Einrichtung → Eigenes Claude verbinden → „Weitere Claude-Konten“:** Name (z. B. „Firma“, „Privat“) + Token aus
+  `claude setup-token` hinzufügen, Reihenfolge mit ↑/↓, **Testen** (ein sehr kleiner Modellaufruf auf genau diesem Konto),
+  Entfernen. Der bisherige Schlüssel aus dem Chat-Modellmenü ist das Konto **„Chat-Schlüssel“** und bleibt Pflicht
+  (LibreChat schickt ohne ihn keine Anfrage); ohne weitere Konten ändert sich nichts. Höchstens 5 weitere Konten.
+- **Wechsel:** Meldet Claude `rate_limit` (Kontingent ausgeschöpft), vermerkt die Brücke das Konto bis zum Reset (aus dem
+  `rate_limit_event`, sonst 1 Stunde) und wiederholt **dieselbe Anfrage** mit dem nächsten Konto. Im Chat:
+  **„↻ Konto „Privat“ übernimmt (Kontingent von „Firma“ ausgeschöpft)“**. War schon etwas passiert (Text, Werkzeuge),
+  setzt das nächste Konto die Sitzung mit „mach genau dort weiter“ fort, statt von vorn zu beginnen. Sind alle erschöpft:
+  die bisherige Meldung „Dein Claude-Kontingent ist gerade ausgeschöpft“. Bei `overloaded` wird **nicht** gewechselt
+  (Server-Engpass, ein anderes Konto hilft nicht).
+- **Gemerkt:** Bis zum Reset beginnt jeder neue Zug auf dem ersten Konto, das noch geht (Zustand ohne Geheimnisse in
+  `.runtime/bridge/claude-accounts.json`, übersteht Neustarts; ein ersetzter Token zählt als neues Konto). Die Einrichtung
+  zeigt je Konto „aktiv“ / „bereit“ / „ausgeschöpft bis …“.
+- **Speicher und Weg der Tokens:** weitere Konten in `werkbank.creds` (`claudeAccounts`, AES-256-GCM mit
+  `WERKBANK_CREDS_KEY`, wie der Jira-Token; `claudeOrder`). Der Browser bekommt nur Name und die letzten 4 Zeichen. Die
+  Brücke holt die Liste je Zug über den internen Kanal (`POST /internal/claude-accounts`, `WERKBANK_INTERNAL_TOKEN`, nur
+  127.0.0.1); antwortet die Werkbank nicht, läuft der Zug wie bisher mit dem einen Schlüssel. Tokens stehen nie im Log
+  (die Brücke schwärzt alle Konten-Tokens auch in SDK-Fehlerzeilen).
+- **Eine Konfiguration für alle Konten:** alle Konten einer Person teilen `.runtime/claude/<id>` (Skills, `CLAUDE.md`,
+  Atlassian-Anmeldung, Sitzungsverläufe — nur so kann das nächste Konto eine Sitzung fortsetzen). Es unterscheidet sich nur
+  `CLAUDE_CODE_OAUTH_TOKEN` (auch für `forge-review`).
+- Brücke: `claude-bridge/src/accounts.ts` (Auswahl, Zustand, Kontotest), `/internal/account-test`,
+  `/internal/accounts-state` (beide nur mit internem Token).
+
 ## Board live (Runde 4)
 
 Knut: „auch instant update des board wenn etwas geändert geschrieben wird mit jira“.
@@ -723,6 +752,8 @@ nichts, Agenten/Chats sind aus.
   Alle Verzeichnisse gehören dem Unix-Nutzer der VM; gegeneinander abgeschottet sind sie erst mit eigenen Unix-Nutzern.
 - In Werkbank-Sitzungen laufen keine Hooks der Nutzer-Konfiguration mehr — damit gehen auch keine Werkbank-Verläufe
   mehr über Knuts Stop-Hook an knut-agent-memory (vorher: nach jedem Zug die letzten bis zu 40 Nachrichten).
+- Weitere Claude-Konten: AES-256-GCM in `werkbank.creds`, zum Browser nur Name + letzte 4 Zeichen, zur Brücke nur über
+  den internen Kanal; Zustand der Konten ohne Geheimnisse.
 - Der Live-Strom (`/api/events`) braucht eine Werkbank-Sitzung und trägt nur Ticket-Schlüssel; `/internal/jira-touched`
   nur mit internem Token, nur Schlüssel aus PM, höchstens 10 je Aufruf.
 
@@ -735,7 +766,7 @@ nichts, Agenten/Chats sind aus.
 | `librechat/librechat.yaml` | Endpunkt „Claude Code“, Modell-Specs und Vorlagen, Teilen, Oberfläche, Registrierung |
 | `librechat/.env` | LibreChat-Umgebung **ohne** Geheimnisse (Ports, Login-Schalter, Teilen) |
 | `.env.local` | Geheimnisse + verwalteter URL-Block — erzeugt, gitignored, 600 |
-| `claude-bridge/src/` | Brücke: `server.ts` (HTTP, Anhänge, Vorgaben, Nur-lesen-Modus, MCP-Auswahl), `sessions.ts`, `tools.ts` (auch: welche Atlassian-Aufrufe Jira ändern), `claudehome.ts` (Claude-Konfiguration je Person, strict MCP, Hooks), `attachments.ts`, `mcpcall.ts` (ein bestätigter MCP-Aufruf, MCP-Status), `init-timing.ts`, `mock.ts` |
+| `claude-bridge/src/` | Brücke: `server.ts` (HTTP, Anhänge, Vorgaben, Nur-lesen-Modus, MCP-Auswahl), `sessions.ts` (auch Auto-Modus und Kontowechsel), `accounts.ts` (mehrere Claude-Konten), `tools.ts` (auch: welche Atlassian-Aufrufe Jira ändern), `claudehome.ts` (Claude-Konfiguration je Person, strict MCP, Hooks), `attachments.ts`, `mcpcall.ts` (ein bestätigter MCP-Aufruf, MCP-Status), `init-timing.ts`, `mock.ts` |
 | `web/server/` | Web-App-Server (TypeScript, läuft ohne Build): `main.ts` (Routen), `auth.ts`, `creds.ts`, `crypto.ts`, `vault.ts`, `search.ts`, `jira.ts`, `jirawrite.ts` (Schreiben über MCP), `events.ts` (Live-Strom), `agent.ts` (auch Agent-Chat), `links.ts` (Vault ↔ Tickets), `roadmap.ts`, `sprint.ts`, `syncplan.ts`, `skills.ts`, `sharing.ts` |
 | `web/src/` | Oberfläche (Vite + React), Optik wie LibreChat (Inter, hell/dunkel) |
 | `templates/sprint/` | Vorlagen für neue Sprint-Zyklen (Summary, Review, Planning mit S1–S4) |
@@ -745,7 +776,7 @@ nichts, Agenten/Chats sind aus.
 ## Tests
 
 ```bash
-scripts/werkbank.sh test   # Brücke (23) + Web-App (66), ohne echte Konten, ohne /vault zu ändern
+scripts/werkbank.sh test   # Brücke (44) + Web-App (110), ohne echte Konten, ohne /vault zu ändern
 scripts/werkbank.sh e2e    # Playwright, 23 Schritte, ca. 2 Minuten
 scripts/werkbank.sh stream-timing   # Zeitmessung Streaming (Mock), Ergebnis auch in .runtime/e2e/stream-timing.json
 scripts/werkbank.sh init-timing 3   # Start der echten CLI bis „init“ (ohne Modellaufruf), .runtime/e2e/init-timing.json
@@ -784,6 +815,12 @@ scripts/werkbank.sh init-timing 3   # Start der echten CLI bis „init“ (ohne 
   der ganze Weg Chat (Mock-Brücke) → Jira → Kopie → Board-Strom; Einrichtung zeigt Konfiguration, Chat-Anmeldung und
   Terminal-Befehl. Playwright — Karte leuchtet auf und zählt Kommentare hoch ohne Neuladen (anderer Tab; Jira-Schreiben im
   Chat), `hello` des Live-Stroms kommt durch LibreChats `/werkbank`-Proxy sofort an.
+- **Neu (06.10.2026):** Auto-Modus (`claude-bridge/test/auto.test.ts`: Klasse `auto` nur im Arbeitsordner, Symlink auf den
+  Vault, keine Rückfrage bei `ls`/Edit, Vault-Edit und Jira-Kommentar fragen, `git push` gesperrt, Eskalation und Ablehnung
+  des Klassifikators, nur freigeschaltete Personen, Board-readonly, Not-Aus, `settings.json`-Link). Mehrere Konten
+  (`claude-bridge/test/accounts.test.ts`: Wechsel bei `rate_limit`, mitten im Zug fortsetzen, gemerkt, alle erschöpft,
+  einzelner Schlüssel unverändert, Kontotest, keine Tokens im Log; `web/test/api.test.ts`: Einrichtungs-API maskiert,
+  verschlüsselt, Umsortieren, Testen, Entfernen, fremde Konten, interner Kanal).
 - **Playwright** (`web/e2e/smoke.mjs`): alle Seiten mit zwei Testkonten, dazu echt durch LibreChat:
   **Agent-Chat vom Board** („PM-321 · …“ angelegt, ohne offenen Tab bis „wartet auf ja“, im Chat „ja“, Karte fertig),
   Sub-tasks auf-/zuklappen, kaputter Sub-task, Dokumente + Vorschlag verknüpfen, Roadmap (alle fünf Reiter, Rang-
