@@ -310,7 +310,8 @@ angewandt auf die **eigenen** PM-Tickets aus der Jira-Kopie (Zuordnung über `GE
 - **Schreiben nur nach „ja“.** Lesen, Suchen, Skills und Teilagenten laufen ohne Rückfrage. Vor jedem
   Schreiben/Ändern von Dateien, jedem Bash-Befehl und jedem schreibenden Jira-/MCP-Aufruf hält die
   Sitzung an und fragt; die nächste Nachricht ist die Antwort („ja“ → ausführen, sonst nicht). Offene
-  Rückfragen verfallen nach 30 Minuten.
+  Rückfragen verfallen nach 30 Minuten. **Ausnahme Auto-Modus** (freigeschaltete Konten): Bash/Edits im eigenen
+  Arbeitsordner entscheidet ein Klassifikator, siehe „Auto-Modus“.
 - **Gesperrt, auch mit „ja“:** `git push`, `git merge`, `gh pr merge|create|comment|review…`, schreibende
   GitHub-API-Aufrufe, GitHub-MCP-Schreibwerkzeuge (Hook `PreToolUse` + `canUseTool`).
 - **Anhänge erreichen die Sitzung:** Dateien, die im Chat mit **„Hochladen zum KI-Anbieter“** angehängt
@@ -517,6 +518,62 @@ Unix-Nutzer der VM (Dateirechte, `/vault`); das ändert erst ein eigener Unix-Nu
    → `/mcp` → **atlassian** → **Authenticate** (auch hier: Adresse der Fehlerseite zurückkopieren, wenn der Browser nicht
    auf der VM läuft).
 
+## Auto-Modus (06.10.2026)
+
+Knut, 06.10.2026: „switch it on automatically“ — Plan `docs/plan-auto-modus-und-konten.md` (Quelle: Plan 71 P1).
+
+**Was er tut:** Für freigeschaltete Konten läuft die Sitzung im SDK-Modus `auto`. Bash-Befehle und Datei-Änderungen
+(`Write`/`Edit`/`MultiEdit`/`NotebookEdit`) **im eigenen Arbeitsordner** (`.runtime/bridge/scratch/<person>`) entscheidet
+ein Klassifikator-Modell statt des „ja“ im Chat. Jede automatische Freigabe steht als Statuszeile im Chat
+(**„🤖 automatisch erlaubt: 💻 Befehl: …“**) und im Log (`auto erlaubt`, nur der Werkzeugname). Lehnt der Klassifikator ab:
+**„🛑 Auto-Modus hat abgelehnt: …“**, Log `auto abgelehnt`, und `turn end` führt die abgelehnten Werkzeuge
+(`denials`, aus `result.permission_denials`, ohne Argumente). Ist er unsicher, eskaliert er: dann kommt die gewohnte
+Rückfrage im Chat, eingeleitet mit „Der Auto-Modus fragt nach: <Grund>“.
+
+**Was bleibt wie heute (Knuts Entscheidung E1):**
+
+| | im Auto-Modus |
+|---|---|
+| Lesen, Suchen, Skills, Teilagenten | frei (wie bisher) |
+| Bash/Edit im eigenen Arbeitsordner | **Klassifikator** |
+| Edits außerhalb des Arbeitsordners, unter `/vault` oder über einen Symlink dorthin | Rückfrage („ja“) |
+| Bash, der den Vault, `.runtime`, `.claude`, `.env`, `~/.ssh`, `~/.config/vw`, `bw`, `sudo` oder Jira/Atlassian nennt | Rückfrage („ja“) |
+| Jira-Schreiben (Atlassian-MCP, `jira_update`) | Rückfrage („ja“) |
+| `git push`/`merge`, GitHub schreiben | gesperrt, auch mit „ja“ |
+| Board-Agent „nur lesen“ | lehnt alles Schreibende ab (Wächter) — zusätzlich SDK-Modus `dontAsk` |
+
+**Schalter (scripts/start.sh):**
+
+- `BRIDGE_PERMISSION_MODE` — Vorgabe in `start.sh`: **`auto`**. **Not-Aus:** `BRIDGE_PERMISSION_MODE=default
+  scripts/werkbank.sh restart` → exakt das bisherige Verhalten (Modus `default`, keine zusätzlichen Regeln, auch der
+  Board-Agent wie bisher). Im Code ist die Vorgabe `default`: wer die Brücke ohne `start.sh` startet, bekommt nichts Neues.
+- `BRIDGE_AUTO_EMAILS` — wer den Auto-Modus bekommt. Vorgabe in `start.sh`: `knut.peters@maxenergy.at` (E2: nur Knut,
+  solange es keine Unix-Trennung oder Sandbox gibt, E3). Alle anderen bleiben im Modus `default`.
+
+**Leitplanken im Auto-Modus:**
+
+- Der Wächter (PreToolUse-Hook) gibt für die Klasse `auto` **keine Entscheidung** zurück — nur dann kommt der Klassifikator
+  zum Zug. Alle anderen Klassen entscheidet er wie bisher selbst.
+- Deny-Regeln als Flag-Settings je Zug (`AUTO_DENY` in `claude-bridge/src/tools.ts`, plus Lesen von `.credentials.json` und
+  Schreiben unter `.runtime/claude/`): `git push`/`merge`, `gh pr merge|create`, `gh api`, `bw`, `~/.ssh`, `~/.config/vw`,
+  `~/.claude/.credentials.json`, `.env*`, `disableBypassPermissionsMode`. Deny schlägt auch ein „ja“ — deshalb gibt es
+  **keine** Deny-Regel für Vault oder Jira. Hinweis: `gh api` ist im Auto-Modus auch lesend gesperrt (vorher mit „ja“ möglich).
+- `templates/claude/settings.json` (wird wie `CLAUDE.md` in jede Konfiguration je Person verlinkt, eine eigene
+  `settings.json` bleibt unangetastet): `autoMode.hard_deny` (Jira/Vault nur über die Rückfrage, fremde Konfigurationen,
+  Vaultwarden, GitHub schreiben), `soft_deny`, `environment`. Außerhalb des Auto-Modus wirkungslos.
+- **Knut läuft mit der geteilten Konfiguration** (`~/.claude`): dort gilt seine eigene `autoMode`-Konfiguration; die
+  Vorlage greift nicht. Vorschlag (nicht angewendet): die `hard_deny`- und `environment`-Zeilen aus
+  `templates/claude/settings.json` in `~/.claude/settings.json` ergänzen.
+
+**Risiken:**
+
+- **Abo/Modell ohne Auto-Modus:** Kann das Konto oder Modell auf der VM keinen Auto-Modus, meldet die CLI einen Fehler
+  oder fragt wieder. **Den ersten echten Zug prüfen:** Log `turn start … "permissionMode":"auto"`, im Chat erscheint bei
+  `ls` „🤖 automatisch erlaubt“. Sonst Not-Aus.
+- Bash-Umgehungen der Regexe (Skript, das pusht; `curl` mit Token) fängt nur der Klassifikator plus Deny/`hard_deny`.
+  Ohne eigenen Unix-Nutzer oder Sandbox läuft Bash mit den Rechten des VM-Nutzers — darum nur Knut.
+- Der Klassifikator ist ein zusätzlicher kleiner Modellaufruf je Bash/Edit auf dem Abo der Person.
+
 ## Board live (Runde 4)
 
 Knut: „auch instant update des board wenn etwas geändert geschrieben wird mit jira“.
@@ -683,6 +740,7 @@ nichts, Agenten/Chats sind aus.
 | `web/src/` | Oberfläche (Vite + React), Optik wie LibreChat (Inter, hell/dunkel) |
 | `templates/sprint/` | Vorlagen für neue Sprint-Zyklen (Summary, Review, Planning mit S1–S4) |
 | `templates/claude/CLAUDE.md` | Arbeitsweise für die Claude-Konfiguration je Person (verlinkt, nicht kopiert) |
+| `templates/claude/settings.json` | `autoMode`-Regeln für den Auto-Modus (verlinkt in jede Konfiguration je Person) |
 
 ## Tests
 
