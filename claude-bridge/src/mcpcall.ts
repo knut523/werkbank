@@ -21,7 +21,7 @@ export interface McpCallResult {
 
 const AUTH_RE = /\b401\b|unauthori[sz]ed|needs[- ]auth|authenticat|re-?auth|oauth|not (logged|signed) in|token (expired|invalid)/i;
 
-function cleanEnv(token: string): Record<string, string | undefined> {
+export function cleanEnv(token: string): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
   for (const k of Object.keys(env)) if (/KEY|SECRET|TOKEN|PASSWORD|CREDS|_IV$|MONGO_URI/i.test(k)) delete env[k];
   for (const k of ['ANTHROPIC_BASE_URL', 'BW_SESSION']) delete env[k];

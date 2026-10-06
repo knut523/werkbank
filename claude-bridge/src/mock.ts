@@ -35,6 +35,28 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
 
   async function* run() {
     yield { type: 'system', subtype: 'init', session_id, mcp_servers: mcpList(options) };
+    // Mehrere Claude-Konten: Tokens mit „limit“ sind ausgeschöpft (rate_limit, Reset in 2 h), „midlimit“ erst nach einem
+    // Werkzeug mitten im Zug; „bad-auth“ wird abgelehnt. Tokens mit „acct“ nennen ihre letzten 4 Zeichen.
+    const tok = String(options.env?.CLAUDE_CODE_OAUTH_TOKEN ?? '');
+    const limited = function* () {
+      yield { type: 'rate_limit_event', session_id, rate_limit_info: { status: 'rejected', resetsAt: Math.floor(Date.now() / 1000) + 7200, rateLimitType: 'five_hour' } };
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, error: 'rate_limit', message: { content: [{ type: 'text', text: 'API Error: Rate limit reached' }] } };
+      yield { type: 'result', subtype: 'success', session_id, is_error: true, result: 'Rate limit reached', usage: { input_tokens: 0, output_tokens: 0 } };
+    };
+    if (/bad-auth/.test(tok)) {
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, error: 'authentication_failed', message: { content: [{ type: 'text', text: 'Invalid token' }] } };
+      yield { type: 'result', subtype: 'success', session_id, is_error: true, result: 'auth', usage: { input_tokens: 0, output_tokens: 0 } };
+      return;
+    }
+    if (/midlimit/.test(tok)) {
+      yield toolUse('Grep', { pattern: 'Vorarbeit', path: VAULT_DIR });
+      yield text('(Mock) Erste Schritte erledigt. ');
+      yield* limited();
+      return;
+    }
+    if (/limit/.test(tok)) { yield* limited(); return; }
+    if (/acct/.test(tok)) yield text(`(Mock) Konto: …${tok.slice(-4)}. `);
+    if (prompt === 'Antworte nur mit: ok') { yield text('ok'); yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 1 } }; return; }
     if (prompt.startsWith('WERKBANK-MCP-AUFRUF')) {
       // Ein bestätigter MCP-Aufruf: Werkzeug + Argumente aus dem Prompt, Ergebnis ins Protokoll (für Tests).
       const tool = prompt.match(/`(mcp__[^`]+)`/)?.[1] ?? '';
