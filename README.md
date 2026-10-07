@@ -335,7 +335,7 @@ Unter 760 px Breite (Befund `review-pakete/77-werkbank-live-mobile`, Knut 07.10.
   20 MB je Datei, Rechte 0600, Namen bereinigt, nie ausführbar) und nennt sie Claude im Prompt.
   („Hochladen als Text“ schickt den Text direkt mit.)
 - **Vorlagen** im Modell-Menü starten einen Chat mit passender Vorgabe (LibreChat `promptPrefix`, von der
-  Brücke beim Sitzungsstart weitergegeben): **Spec schreiben (plan-to-pr)**, **Council**,
+  Brücke beim Sitzungsstart weitergegeben): **Spec schreiben (plan-to-pr)**, **Council**, **Koordinator (Teilagenten)**,
   **Jira-Ticket anlegen (olaf-jira)**, **Sprint-Review**, **Service-Fall**, **Vault aufräumen**.
 - **Chats teilen:** oben rechts „Teilen“ → Link erstellen → Zugriff verwalten → Teammates auswählen.
   Links sind **nur für angemeldete Konten** lesbar (`ALLOW_SHARED_LINKS_PUBLIC=false`,
@@ -597,6 +597,34 @@ Rückfrage im Chat, eingeleitet mit „Der Auto-Modus fragt nach: <Grund>“.
   Ohne eigenen Unix-Nutzer oder Sandbox läuft Bash mit den Rechten des VM-Nutzers — darum nur Knut.
 - Der Klassifikator ist ein zusätzlicher kleiner Modellaufruf je Bash/Edit auf dem Abo der Person.
 
+## Orchestrator-Chat (07.10.2026)
+
+Knut, 07.10.2026: E4 (2) „P2, dann P3“ — Plan `docs/plan-orchestrator-chat.md` (Quelle: Plan 71 P2).
+
+**Was er tut:** Ein Chat verteilt einen größeren Auftrag auf Teilagenten (Werkzeug `Task`) und führt die Ergebnisse im
+selben Chat zusammen. Vorlage im Modell-Menü: **Koordinator (Teilagenten)**. Die Brücke gibt jeder Sitzung drei feste
+Rollen mit (SDK-Option `agents`, `claude-bridge/src/agents.ts`):
+
+| Rolle | darf | Durchsetzung |
+|---|---|---|
+| `leser` | Vault, Dateien, Suche, Jira lesen | Wächter lehnt alles außer „lesen“ ab (`agent_type` im Hook), auch mit „ja“ nicht |
+| `ticket-pruefer` | wie `leser`, prüft Tickets (Stand, Owner, Fälligkeit, DoD) | wie `leser` |
+| `schreiber` | schreiben | jede Änderung fragt im Chat wie sonst, Rückfrage beginnt mit **„Teilagent „schreiber“ möchte:“** |
+
+- **Im Chat:** „🤖 Teilagent: <Beschreibung>“ beim Start, dann je Werkzeug „↳ Teilagent <Beschreibung> (<Rolle>): 🔎 …“
+  und „↳ Teilagent <Beschreibung> fertig“. Text und Denken der Teilagenten bleiben verborgen; ihr Ergebnis fasst der
+  Chat zusammen.
+- **Rückfragen** aus Teilagenten laufen nacheinander (dieselbe Warteschlange wie im Chat) und nennen die Rolle.
+- **Obergrenze:** höchstens `BRIDGE_MAX_SUBAGENTS` (Vorgabe 4) Teilagenten je Nachricht; weitere lehnt der Wächter ab
+  („⛔ Höchstens 4 Teilagenten …“). Keine verschachtelten Teilagenten.
+- **Log:** `turn end` führt `teilagenten: N` neben den Tokens des Zuges.
+- Eingebaute Agenten (`general-purpose`, `Explore`) bleiben verfügbar und laufen wie bisher über den Wächter.
+- **Abschalten:** `BRIDGE_SUBAGENT_ROLES=off` (keine Rollen, kein Hinweis im System-Prompt; Obergrenze und Zeilen bleiben).
+- Keine Änderung an der Sperre „ein Zug je Person“. Parallele Chats sind P3 (erst nach eigener Sandbox bzw. Unix-Nutzern).
+- **Ungeprüft mit echtem Claude:** ob das CLI `agent_type` im Hook liefert und die Rollen wählt. Erster echter Test:
+  Vorlage „Koordinator“, „prüfe PM-321, PM-322 und PM-331“; im Log `turn end … "teilagenten":3`. Fehlt `agent_type`,
+  greifen die lesenden Rollen nur über `disallowedTools` (Schreiben fragt dann wie bei jedem Teilagenten).
+
 ## Mehrere Claude-Konten je Person (06.10.2026)
 
 Knut, 06.10.2026: mehrere Claude-Konten je Person mit automatischem Wechsel, „wie `cswap auto`“. Plan:
@@ -799,7 +827,7 @@ nichts, Agenten/Chats sind aus.
 ## Tests
 
 ```bash
-scripts/werkbank.sh test   # Brücke (48) + Web-App (110), ohne echte Konten, ohne /vault zu ändern
+scripts/werkbank.sh test   # Brücke (50) + Web-App (110), ohne echte Konten, ohne /vault zu ändern
 scripts/werkbank.sh e2e    # Playwright, 23 Schritte, ca. 2 Minuten
 scripts/werkbank.sh stream-timing   # Zeitmessung Streaming (Mock), Ergebnis auch in .runtime/e2e/stream-timing.json
 scripts/werkbank.sh init-timing 3   # Start der echten CLI bis „init“ (ohne Modellaufruf), .runtime/e2e/init-timing.json
@@ -846,7 +874,9 @@ scripts/werkbank.sh init-timing 3   # Start der echten CLI bis „init“ (ohne 
   verschlüsselt, Umsortieren, Testen, Entfernen, fremde Konten, interner Kanal).
 - **Neu (07.10.2026):** Live-Anzeige (`bridge.test.ts`, Gedanken/Werkzeugbeginn/Lebenszeichen mit Ankunftszeit) und E5
   (`auto.test.ts`: Board-Lauf neben Chat und umgekehrt, zweiter Chat weiter gesperrt, höchstens 2 Board-Läufe, andere
-  Person unberührt, Not-Aus unverändert).
+  Person unberührt, Not-Aus unverändert). Orchestrator (`auto.test.ts`: drei Teilagenten in einem Chat, Zeilen je
+  Teilagent, Lese-Rolle schreibt nie, Rückfrage mit Präfix und nach „ja“ die Zusammenfassung, höchstens 4 Teilagenten,
+  `teilagenten` im Log).
 - **Playwright** (`web/e2e/smoke.mjs`): alle Seiten mit zwei Testkonten, dazu echt durch LibreChat:
   **Agent-Chat vom Board** („PM-321 · …“ angelegt, ohne offenen Tab bis „wartet auf ja“, im Chat „ja“, Karte fertig),
   Sub-tasks auf-/zuklappen, kaputter Sub-task, Dokumente + Vorschlag verknüpfen, Roadmap (alle fünf Reiter, Rang-

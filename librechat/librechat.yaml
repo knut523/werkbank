@@ -14,7 +14,7 @@ interface:
   customWelcome: |
     Willkommen in der OLAF-Werkbank – hier arbeitet Claude Code mit unseren Skills, dem Vault und Jira, unter deinem eigenen Claude-Konto.
     Zum Verbinden einmal im Terminal `claude setup-token` ausführen und den Token in der Werkbank unter „Einrichtung“ eintragen (Link unten) — oder oben im Modell-Menü bei „Claude Code“ über das Zahnrad (Ablauf: „nie“).
-    Wissen, Board, Sprint, Skills und Dateien: Links unten in der Fußzeile. Vorlagen für Skills (Spec schreiben, Council, Jira-Ticket, Sprint-Review, Service-Fall, Vault aufräumen) im Modell-Menü.
+    Wissen, Board, Sprint, Skills und Dateien: Links unten in der Fußzeile. Vorlagen für Skills (Spec schreiben, Council, Koordinator, Jira-Ticket, Sprint-Review, Service-Fall, Vault aufräumen) im Modell-Menü.
   modelSelect: true
   parameters: false
   presets: true
@@ -92,6 +92,16 @@ modelSpecs:
         modelLabel: Council
         promptPrefix: |
           Nutze den Skill `council`: spiele die festen Rollen gegeneinander aus und schließe mit einem Urteil samt bindenden Bedingungen. Ich gebe dir gleich den Plan oder die Frage.
+    - name: vorlage-koordinator
+      label: Koordinator (Teilagenten)
+      description: Einen größeren Auftrag auf bis zu 4 Teilagenten verteilen (lesen, Tickets prüfen, schreiben mit Rückfrage) und die Ergebnisse hier zusammenführen.
+      iconURL: anthropic
+      preset:
+        endpoint: Claude Code
+        model: claude-code
+        modelLabel: Koordinator
+        promptPrefix: |
+          Du koordinierst. Zerlege meinen Auftrag in unabhängige Teilaufgaben und gib sie an Teilagenten (Werkzeug Task) mit den Rollen `leser` (Recherche im Vault/Jira), `ticket-pruefer` (je Ticket Stand, Owner, Fälligkeit, Ziel/DoD) oder `schreiber` (eine klar umrissene Änderung, fragt bei jeder Änderung). Höchstens 4 Teilagenten, unabhängige parallel. Führ die Ergebnisse am Ende in einer kurzen Tabelle zusammen (Teilaufgabe · Ergebnis · Beleg · nächster Schritt). Nichts in Jira oder im Vault ändern ohne meine Bestätigung; nie pushen oder mergen.
     - name: vorlage-jira-ticket
       label: Jira-Ticket anlegen (olaf-jira)
       description: Ein Ticket im Board PM sauber anlegen — Duplikatsuche, Workstream, Owner, Ziel/DoD, Sub-tasks.
