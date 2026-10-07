@@ -169,6 +169,11 @@ function makeSink(res: ServerResponse, model: string, stream: boolean, includeUs
       if (stream) res.write(chunk({ content: text }));
       else collected += text;
     },
+    reason(text: string) {
+      // Nur im Stream: LibreChat liest `reasoning_content` bei eigenen Endpunkten als Denk-Abschnitt.
+      if (closed || res.writableEnded || !stream) return;
+      res.write(chunk({ reasoning_content: text }));
+    },
     finish(usage) {
       if (closed || res.writableEnded) return;
       if (heartbeat) clearInterval(heartbeat);

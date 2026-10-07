@@ -74,6 +74,39 @@ test('Streaming mit Statuszeile, danach Fortsetzung derselben Sitzung', async ()
   assert.match(b, /Sitzung fortgesetzt/);
 });
 
+test('Live: Gedanken als reasoning_content, Werkzeugbeginn sofort, Lebenszeichen nach 5 s (Knut, 07.10.2026)', async () => {
+  // Jedes SSE-Stück mit Ankunftszeit lesen — „live“ heißt: kommt an, bevor der Zug fertig ist.
+  const t0 = Date.now();
+  const res = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer mock-token', 'content-type': 'application/json', 'x-librechat-user-id': 'u-live', 'x-librechat-conversation-id': 'c-live' },
+    body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: 'live-test' }] }),
+  });
+  const seen: { at: number; content?: string; reasoning?: string }[] = [];
+  const dec = new TextDecoder();
+  let rest = '';
+  for await (const part of res.body as any) {
+    rest += dec.decode(part, { stream: true });
+    const lines = rest.split('\n'); rest = lines.pop() ?? '';
+    for (const l of lines) {
+      if (!l.startsWith('data: {')) continue;
+      const d = JSON.parse(l.slice(6)).choices[0]?.delta ?? {};
+      if (d.content || d.reasoning_content) seen.push({ at: Date.now() - t0, content: d.content, reasoning: d.reasoning_content });
+    }
+  }
+  const text = seen.map((s) => s.content ?? '').join('');
+  const thoughts = seen.map((s) => s.reasoning ?? '').join('');
+  const when = (re: RegExp) => seen.find((s) => re.test(s.content ?? ''))?.at ?? -1;
+  assert.match(text, /thinking-display: summarized/, 'Zusammenfassung des Denkens wird beim CLI angefordert');
+  assert.equal(thoughts, 'Ich überlege, wo das steht.', 'Gedanken getrennt vom Antworttext');
+  assert.doesNotMatch(text, /Ich überlege/);
+  assert.match(text, /💭 denkt nach/);
+  const prep = when(/bereitet einen Teilagenten vor/), done = when(/🤖 Teilagent: Recherche/);
+  assert.ok(prep >= 0 && done >= 0, text);
+  assert.ok(done - prep >= 600, `Werkzeugzeile kommt beim Beginn des Aufrufs, nicht erst mit der fertigen Eingabe (${prep} vs. ${done} ms)`);
+  assert.match(text, /⏳ 🤖 Teilagent läuft seit 5 s/);
+});
+
 test('Schreiben braucht Bestätigung: ja', async () => {
   const q = await send('c2', 'schreib eine Notiz');
   assert.match(q, /Soll ich die Datei \*\*Vault: _werkbank-mock\/notiz.md\*\* schreiben\?/);
