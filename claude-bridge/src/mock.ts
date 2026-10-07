@@ -123,6 +123,46 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 10, output_tokens: 5 } };
       return;
     }
+    const orch = last.match(/^orchestrator-(test|viele)$/i);
+    if (orch && guard) {
+      // Orchestrator (P2): der Haupt-Faden startet Teilagenten (Task), deren Werkzeuge kommen mit parent_tool_use_id und
+      // feuern den Hook mit agent_id/agent_type (wie sdk.d.ts BaseHookInput). Danach die Ergebnisse und die Zusammenfassung.
+      yield text(`(Mock) Rollen: ${Object.keys(options.agents ?? {}).join(',') || '—'}. `);
+      const plan: [string, string][] = orch[1] === 'viele'
+        ? Array.from({ length: 6 }, (_, i) => ['leser', `Recherche ${i + 1}`])
+        : [['ticket-pruefer', 'PM-321 prüfen'], ['ticket-pruefer', 'PM-322 prüfen'], ['schreiber', 'Notiz anlegen']];
+      const started: { id: string; role: string; desc: string; agentId: string }[] = [];
+      for (const [role, desc] of plan) {
+        const id = randomUUID();
+        const input = { description: desc, subagent_type: role, prompt: '…' };
+        yield { type: 'assistant', parent_tool_use_id: null, session_id, message: { content: [{ type: 'tool_use', id, name: 'Task', input }] } };
+        const r = await guard({ hook_event_name: 'PreToolUse', tool_name: 'Task', tool_input: input }, id, { signal });
+        if (r?.hookSpecificOutput?.permissionDecision === 'deny') { yield { type: 'user', session_id, parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: 'abgelehnt' }] } }; continue; }
+        started.push({ id, role, desc, agentId: randomUUID() });
+      }
+      const results: string[] = [];
+      for (const a of started) {
+        const sub = (name: string, input: Record<string, unknown>) => ({ type: 'assistant', parent_tool_use_id: a.id, session_id, message: { content: [{ type: 'tool_use', id: randomUUID(), name, input }] } });
+        const hook = (name: string, input: Record<string, unknown>) => guard({ hook_event_name: 'PreToolUse', tool_name: name, tool_input: input, agent_id: a.agentId, agent_type: a.role }, randomUUID(), { signal });
+        const g = { pattern: a.desc.split(' ')[0], path: VAULT_DIR };
+        yield sub('Grep', g); await hook('Grep', g);
+        if (a.desc === 'PM-322 prüfen') {
+          const w = { file_path: `${VAULT_DIR}/_werkbank-mock/pruefer.md`, content: 'x' };
+          yield sub('Write', w);
+          const r = await hook('Write', w);
+          results.push(`${a.desc}: Schreiben ${r?.hookSpecificOutput?.permissionDecision === 'allow' ? 'erlaubt' : 'abgelehnt'}`);
+        } else if (a.role === 'schreiber') {
+          const w = { file_path: `${VAULT_DIR}/_werkbank-mock/orchestrator.md`, content: '# Ergebnis\n' };
+          yield sub('Write', w);
+          const r = await hook('Write', w);
+          results.push(`${a.desc}: ${r?.hookSpecificOutput?.permissionDecision === 'allow' ? 'geschrieben' : 'nicht geschrieben'}`);
+        } else results.push(`${a.desc}: ok`);
+        yield { type: 'user', session_id, parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: a.id, content: [{ type: 'text', text: results.at(-1) }] }] } };
+      }
+      yield text(`\n\n(Mock) Zusammenfassung von ${started.length} Teilagenten: ${results.join('; ')}.`);
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 300, output_tokens: 90 } };
+      return;
+    }
     const slow = last.match(/^langsam (\d+)$/);
     if (slow) {
       // Ein langer Zug (Sperre je Person, E5): wartet N ms, dann eine Zeile.

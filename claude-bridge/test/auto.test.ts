@@ -262,3 +262,31 @@ test('E5: ohne Auto-Modus (readonly, aber kein dontAsk) bleibt die Sperre wie bi
   assert.match(b, /läuft gerade schon eine Anfrage/);
   assert.match(await c1, /Langsamer Zug fertig/);
 });
+
+// ---------- P2: Orchestrator-Chat (docs/plan-orchestrator-chat.md) ----------
+
+test('P2: drei Teilagenten in einem Chat — Zeilen je Teilagent, Lese-Rolle schreibt nie, Rückfrage mit Präfix', async () => {
+  const a = await send(OFF_PORT, 'p2-1', 'orchestrator-test', { user: 'up2' });
+  assert.match(a, /Rollen: leser,ticket-pruefer,schreiber/);
+  assert.match(a, /↳ Teilagent PM-321 prüfen \(ticket-pruefer\): 🔎/);
+  assert.match(a, /↳ Teilagent PM-321 prüfen \(ticket-pruefer\) fertig/);
+  assert.match(a, /🔒 Teilagent „ticket-pruefer“ ist nur lesend/);
+  assert.doesNotMatch(a, /pruefer\.md.*\?/, 'keine Rückfrage für die Lese-Rolle');
+  // Die Rückfrage des schreibenden Teilagenten ist zuzuordnen; der Zug wartet auf „ja“.
+  assert.match(a, /\*\*Teilagent „schreiber“ möchte:\*\*/);
+  assert.match(a, /Soll ich die Datei/);
+  assert.doesNotMatch(a, /Zusammenfassung/);
+  const b = await send(OFF_PORT, 'p2-1', 'ja', { user: 'up2' });
+  assert.match(b, /↳ Teilagent Notiz anlegen \(schreiber\) fertig/);
+  assert.match(b, /Zusammenfassung von 3 Teilagenten: PM-321 prüfen: ok; PM-322 prüfen: Schreiben abgelehnt; Notiz anlegen: geschrieben/);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.match(logs[OFF_PORT], /"teilagenten":3/);
+});
+
+test('P2: höchstens 4 Teilagenten je Nachricht; Lese-Rolle bleibt auch im Auto-Modus gesperrt', async () => {
+  const a = await send(AUTO_PORT, 'p2-2', 'orchestrator-viele', { user: 'up3' });
+  assert.match(a, /⛔ Höchstens 4 Teilagenten je Nachricht/);
+  assert.match(a, /Zusammenfassung von 4 Teilagenten/);
+  const t = await send(AUTO_PORT, 'p2-3', 'orchestrator-test', { user: 'up4' });
+  assert.match(t, /🔒 Teilagent „ticket-pruefer“ ist nur lesend/);
+});
