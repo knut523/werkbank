@@ -19,6 +19,7 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns } from './agent.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
+import { ingestSessions } from './agentfiles.ts';
 import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles } from './sprint.ts';
 import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
@@ -1466,9 +1467,12 @@ on('GET', /^\/api\/files$/, async (req, res) => {
   const { mine, shared } = await listFiles(u);
   const people = await teammates();
   const name = (id: string) => people.find((p) => p.id === id)?.name ?? '?';
+  const pids = [...new Set([...mine, ...shared].map((f: any) => f.projectId).filter(Boolean))];
+  const projectNames = new Map((await wb().collection('projects').find({ _id: { $in: pids as any[] } }, { projection: { name: 1 } }).toArray()).map((p: any) => [p._id, p.name]));
+  const shape = (f: any) => ({ ...f, id: f._id, projectName: f.projectId ? projectNames.get(f.projectId) ?? null : null, source: f.source ? { conv: f.source.conv } : undefined });
   send(res, 200, {
-    mine: mine.map((f: any) => ({ ...f, id: f._id, sharedWithNames: f.sharedWith.map(name) })),
-    shared: shared.map((f: any) => ({ ...f, id: f._id, sharedWith: undefined })),
+    mine: mine.map((f: any) => ({ ...shape(f), sharedWithNames: f.sharedWith.map(name) })),
+    shared: shared.map((f: any) => ({ ...shape(f), sharedWith: undefined })),
     maxMb: Math.round(cfg.fileMaxBytes / 1048576),
   });
 });
@@ -1754,6 +1758,32 @@ async function backgroundJobs() {
   const shareTick = async () => { try { await watchChatShares(); } catch (e: any) { log('freigaben', { error: String(e.message).slice(0, 200) }); } };
   setTimeout(shareTick, 3000);
   setInterval(shareTick, 60_000);
+
+  // Plan 81, Schnitt 3: was ein Agent fertig geschrieben hat, landet von selbst in „Meine Dateien“ (Vault-Notizen als
+  // Link, Dateien aus dem Arbeitsordner als Kopie); die Workstream-Übersichten der berührten Projekte ziehen nach.
+  const filesTick = async () => {
+    try {
+      const im = await issueMap();
+      const touched = new Set<string>();
+      for (const person of (await teammates()).filter((x) => allowed(x.email))) {
+        let sessions: any[] = [];
+        try {
+          const r = await fetch(`${cfg.bridgeUrl}/sessions?user=${encodeURIComponent(person.id)}`, { headers: { 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' }, signal: AbortSignal.timeout(5000) });
+          if (r.ok) sessions = ((await r.json()) as any).sessions ?? [];
+        } catch { continue; }
+        const { changed, projects } = await ingestSessions(person, sessions);
+        if (changed) log('agenten-dateien', { user: person.id, changed });
+        for (const id of projects) touched.add(id);
+      }
+      for (const id of touched) {
+        const pr: any = await wb().collection('projects').findOne({ _id: id as any });
+        const ws = pr?.workstream ? im.get(pr.workstream) : undefined;
+        if (ws) await syncWorkstreamOverview(ws, im);
+      }
+    } catch (e: any) { log('agenten-dateien', { error: String(e?.message ?? e).slice(0, 200) }); }
+  };
+  setTimeout(filesTick, 20_000);
+  setInterval(filesTick, 2 * 60_000);
 }
 
 await connect();

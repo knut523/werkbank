@@ -89,7 +89,8 @@ export async function fileFor(u: User, id: string): Promise<any> {
   return f;
 }
 
-export const filePath = (f: any) => join(filesDir(), f._id, f.name);
+// Vault-Einträge (von Agenten geschriebene Notizen, Plan 81) liegen im Vault, nicht im Speicher.
+export const filePath = (f: any) => (f.kind === 'vault' ? join(cfg.vaultDir, f.vaultPath) : join(filesDir(), f._id, f.name));
 
 export async function listFiles(u: User) {
   const col = wb().collection('files');

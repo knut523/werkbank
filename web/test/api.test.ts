@@ -292,7 +292,10 @@ test('Agent ansetzen = echter Chat „PM-123 · Titel“: läuft → wartet auf 
   const chat = lcChats.at(-1);
   assert.equal(chat.email, users.a.email, 'im Namen der Person');
   assert.match(chat.body.text, /^PM-322 · /, 'erste Zeile = Titel');
-  assert.match(chat.body.text, /Schreibaktionen .* fragt die Person/);
+  // Plan 81, Schnitt 7: erst plan-to-pr und alle offenen Fragen, dann umsetzen; Schreiben fragt das System im Chat.
+  assert.match(chat.body.text, /Arbeite nach plan-to-pr/);
+  assert.match(chat.body.text, /ALLE offenen Fragen auf einmal/);
+  assert.match(chat.body.text, /Schreibaktionen rufst du einfach auf/);
   assert.equal(chat.body.spec, 'claude-code-olaf');
   const again = await anna.req('/api/board/issue/PM-322/agent', { body: {} });
   assert.equal(again.status, 409, 'kein zweiter Agent auf derselben Karte');
