@@ -133,6 +133,20 @@ function saveMap() {
 
 const lives = new Map<string, Live>();       // Unterhaltung → laufende Sitzung
 const MAX_WAITING = 5;   // offene Rückfragen je Person (je eine wartende Claude-Sitzung)
+// Board-Agenten (Plan 71 E5, Knut 07.10.2026): nur lesende Läufe (readonly + dontAsk) zählen nicht gegen die Sperre
+// „ein Zug je Person“, haben aber eine eigene Obergrenze je Person.
+const MAX_BOARD_RUNS = Math.max(1, Number(process.env.BRIDGE_MAX_BOARD_RUNS || 2));
+
+/** Nur lesender Board-Lauf: der Wächter lehnt jedes Schreiben ab, das SDK fragt nie (dontAsk). */
+export function isBoardRun(l: { readonly: boolean; mode: PermissionMode }): boolean {
+  return l.readonly && l.mode === 'dontAsk';
+}
+
+/** Darf ein neuer Zug starten? Normale Chats: einer zur Zeit je Person; Board-Läufe: bis MAX_BOARD_RUNS daneben. */
+export function lockFor(mine: { readonly: boolean; mode: PermissionMode; pending: unknown }[], next: { readonly: boolean; mode: PermissionMode }): 'ok' | 'chat-busy' | 'board-full' {
+  if (isBoardRun(next)) return mine.filter(isBoardRun).length >= MAX_BOARD_RUNS ? 'board-full' : 'ok';
+  return mine.some((l) => !isBoardRun(l) && !l.pending) ? 'chat-busy' : 'ok';
+}
 
 // Status je Unterhaltung (Idee: coder/agentapi „running/stable“, CloudCLI Sitzungsliste).
 const lastSeen = new Map<string, { at: number; turns: number; title: string; written?: string[] }>();
@@ -483,13 +497,18 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
 
   // 2) Höchstens ein aktiver Zug je Nutzer. Chats, die nur auf „ja“ warten, zählen nicht — ein vom
   //    Board angesetzter Agent darf auf die Antwort warten, während die Person woanders weiterchattet.
+  //    Board-Läufe (nur lesend) laufen daneben, höchstens MAX_BOARD_RUNS je Person (E5).
   const mine = [...lives.values()].filter((l) => l.userId === req.userId);
-  if (mine.some((l) => !l.pending)) {
-    req.sink.write('Bei dir läuft gerade schon eine Anfrage in einem anderen Chat. Bitte warte, bis sie fertig ist.');
+  const mode = autoFor(req);
+  const lock = lockFor(mine, { readonly: !!req.readonly, mode });
+  if (lock !== 'ok') {
+    req.sink.write(lock === 'board-full'
+      ? `Bei dir laufen schon ${MAX_BOARD_RUNS} Board-Agenten. Bitte warte, bis einer fertig ist.`
+      : 'Bei dir läuft gerade schon eine Anfrage in einem anderen Chat. Bitte warte, bis sie fertig ist.');
     req.sink.finish();
     return;
   }
-  const waiting = mine.filter((l) => l.pending);
+  const waiting = mine.filter((l) => l.pending && !isBoardRun(l));
   if (waiting.length >= MAX_WAITING) {
     // Die älteste offene Rückfrage verfällt; dort bleibt die Sitzung fortsetzbar.
     const oldest = waiting[0];
@@ -505,7 +524,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
     jiraCalls: new Map(), onJiraWrite: req.onJiraWrite, home: '',
-    mode: autoFor(req), autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
+    mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
   };
   lives.set(key, live);
   attach(live, req.sink);

@@ -222,3 +222,43 @@ test('settings.json je Person: verlinkt, vorhandene Datei bleibt; Deny-Regeln nu
   assert.equal(readFileSync(join(autoBridge.HOMES, 'uh', 'settings.json'), 'utf8'), '{"eigene":true}');
   assert.ok(existsSync(join(autoBridge.HOMES, 'uh', 'CLAUDE.md')));
 });
+
+// ---------- E5: Board-Agenten und die Ein-Zug-Sperre (Knut, 07.10.2026) ----------
+
+test('E5: lesender Board-Lauf läuft neben einem Chat, Chat läuft neben Board-Läufen', async () => {
+  const ro = { user: 'ue5', headers: { 'x-werkbank-mode': 'readonly' } };
+  // Board-Lauf zuerst, Chat währenddessen.
+  const board = send(AUTO_PORT, 'e5-b1', 'langsam 1200', ro);
+  await new Promise((r) => setTimeout(r, 200));
+  const chat = await send(AUTO_PORT, 'e5-c1', 'Hallo nebenbei', { user: 'ue5' });
+  assert.match(chat, /Du hast geschrieben: Hallo nebenbei/);
+  assert.match(await board, /Langsamer Zug fertig/);
+  // Chat zuerst, Board-Lauf währenddessen.
+  const c2 = send(AUTO_PORT, 'e5-c2', 'langsam 1200', { user: 'ue5' });
+  await new Promise((r) => setTimeout(r, 200));
+  const b2 = await send(AUTO_PORT, 'e5-b2', 'Hallo Board', ro);
+  assert.match(b2, /Du hast geschrieben: Hallo Board/);
+  assert.match(await c2, /Langsamer Zug fertig/);
+});
+
+test('E5: normaler Chat bleibt einer zur Zeit; Board-Läufe höchstens 2 je Person', async () => {
+  const ro = { user: 'uf5', headers: { 'x-werkbank-mode': 'readonly' } };
+  const c1 = send(AUTO_PORT, 'f5-c1', 'langsam 1500', { user: 'uf5' });
+  const b1 = send(AUTO_PORT, 'f5-b1', 'langsam 1500', ro);
+  const b2 = send(AUTO_PORT, 'f5-b2', 'langsam 1500', ro);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.match(await send(AUTO_PORT, 'f5-c2', 'Hallo', { user: 'uf5' }), /läuft gerade schon eine Anfrage in einem anderen Chat/);
+  assert.match(await send(AUTO_PORT, 'f5-b3', 'Hallo', ro), /schon 2 Board-Agenten/);
+  // Eine andere Person ist davon nicht betroffen.
+  assert.match(await send(AUTO_PORT, 'f5-x', 'Hallo', { user: 'uf5-andere', headers: { 'x-werkbank-mode': 'readonly' } }), /Du hast geschrieben/);
+  for (const p of [c1, b1, b2]) assert.match(await p, /Langsamer Zug fertig/);
+  assert.match(await send(AUTO_PORT, 'f5-b3', 'Hallo', ro), /Du hast geschrieben/, 'nach dem Ende wieder frei');
+});
+
+test('E5: ohne Auto-Modus (readonly, aber kein dontAsk) bleibt die Sperre wie bisher', async () => {
+  const c1 = send(OFF_PORT, 'g5-c1', 'langsam 1000', { user: 'ug5' });
+  await new Promise((r) => setTimeout(r, 200));
+  const b = await send(OFF_PORT, 'g5-b1', 'Hallo', { user: 'ug5', headers: { 'x-werkbank-mode': 'readonly' } });
+  assert.match(b, /läuft gerade schon eine Anfrage/);
+  assert.match(await c1, /Langsamer Zug fertig/);
+});
