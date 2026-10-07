@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { classify, statusLine, prepLine, confirmQuestion, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { log } from './log.ts';
+import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { pickAccounts, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, type Account } from './accounts.ts';
 
@@ -63,6 +64,10 @@ interface Live {
   rateLimited: { resetsAt?: number } | null;
   rateLimitReset?: number;
   progressed: boolean;
+  // Orchestrator (P2): gestartete Teilagenten (tool_use_id → Beschreibung), Starts in diesem Zug, Rolle je agent_id.
+  subagents: Map<string, string>;
+  subagentStarts: number;
+  agentTypes: Map<string, string>;
 }
 
 export type PermissionMode = 'default' | 'auto' | 'dontAsk';
@@ -246,6 +251,20 @@ function mark(live: Live, what: string) {
   if (live.times[what] === undefined) live.times[what] = Date.now() - live.t0;
 }
 
+/** „Teilagent <Beschreibung>“ für Statuszeilen. */
+function subLabel(input: Record<string, any>): string {
+  const d = String(input.description ?? '').replace(/\s+/g, ' ').trim().slice(0, 50);
+  const t = input.subagent_type ? String(input.subagent_type) : '';
+  return d ? (t && t !== 'general-purpose' ? `${d} (${t})` : d) : t || '…';
+}
+
+/** Präfix für Zeilen aus einem Teilagenten: „↳ Teilagent <Beschreibung>: “ bzw. „↳ “, wenn er unbekannt ist. */
+function subPrefix(live: Live, parent: string | null | undefined): string {
+  if (!parent) return '';
+  const label = live.subagents.get(parent);
+  return label ? `↳ Teilagent ${label}: ` : '↳ ';
+}
+
 function handleMessage(live: Live, msg: any) {
   if (msg.type !== 'system' && msg.type !== 'rate_limit_event') mark(live, 'ersteNachricht');
   switch (msg.type) {
@@ -318,7 +337,8 @@ function handleMessage(live: Live, msg: any) {
           if (live.onJiraWrite && jiraWriteKeys(block.name, block.input ?? {}) !== null) live.jiraCalls.set(block.id, { name: block.name, input: block.input ?? {} });
           // Nutzung je Skill zählen (Knut, 29.09.: Skill-Kern nach einer Woche mit echten Zahlen nachschärfen).
           if (block.name === 'Skill' && live.onSkill) { try { live.onSkill(String(block.input?.skill ?? block.input?.command ?? '').replace(/^\//, '').split(/\s/)[0]); } catch { /* egal */ } }
-          if (cls === 'read') emitStatus(live, (msg.parent_tool_use_id ? '↳ ' : '') + statusLine(block.name, block.input ?? {}));
+          if ((block.name === 'Task' || block.name === 'Agent') && !msg.parent_tool_use_id) live.subagents.set(block.id, subLabel(block.input ?? {}));
+          if (cls === 'read') emitStatus(live, subPrefix(live, msg.parent_tool_use_id) + statusLine(block.name, block.input ?? {}));
           // Schreibende Werkzeuge melden sich erst nach der Bestätigung (siehe Hook).
         } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
           live.progressed = true;
@@ -339,6 +359,15 @@ function handleMessage(live: Live, msg: any) {
           log('auto erlaubt', { conv: live.key, tool: call.name });
           emitStatus(live, `🤖 automatisch erlaubt: ${(call.sub ? '↳ ' : '') + statusLine(call.name, call.input)}`);
           rememberWritten(live, call.name, call.input);
+        }
+      }
+      // Ergebnis eines Teilagenten (Haupt-Faden): eine Abschlusszeile je Teilagent.
+      if (live.subagents.size && !msg.parent_tool_use_id) {
+        for (const b of msg.message?.content ?? []) {
+          const label = b?.type === 'tool_result' ? live.subagents.get(b.tool_use_id) : undefined;
+          if (label === undefined) continue;
+          live.subagents.delete(b.tool_use_id);
+          emitStatus(live, `↳ Teilagent ${label} ${b.is_error ? 'abgebrochen' : 'fertig'}`);
         }
       }
       if (!live.jiraCalls.size) return;
@@ -386,6 +415,10 @@ function makeGuard(live: Live) {
     const tool: string = input.tool_name;
     const toolInput: Record<string, unknown> = input.tool_input ?? {};
     const { cls, why } = classify(tool, toolInput, { workDir: live.workDir });
+    // Teilagent? Der Hook nennt agent_id/agent_type; canUseTool nur die agent_id (Rolle aus einem früheren Hook-Aufruf).
+    const agentId: string | undefined = input.agent_id;
+    if (agentId && input.agent_type) live.agentTypes.set(agentId, String(input.agent_type));
+    const role = agentId ? (input.agent_type ? String(input.agent_type) : live.agentTypes.get(agentId)) : undefined;
     // Der Hook ist maßgeblich dafür, was als „automatisch erlaubt“ gemeldet wird (nicht die Einordnung beim Streamen).
     if (typeof toolUseId === 'string') {
       if (cls === 'auto' && live.mode === 'auto' && !escalated) live.autoCalls.set(toolUseId, live.autoCalls.get(toolUseId) ?? { name: tool, input: toolInput, sub: false });
@@ -394,6 +427,18 @@ function makeGuard(live: Live) {
     const decide = (permissionDecision: 'allow' | 'deny', reason: string) => ({
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason },
     });
+    if ((tool === 'Task' || tool === 'Agent') && !agentId) {
+      // Obergrenze an Teilagenten je Zug (Kosten).
+      if (live.subagentStarts >= maxSubagents()) {
+        emitStatus(live, `⛔ Höchstens ${maxSubagents()} Teilagenten je Nachricht — weitere nicht gestartet`);
+        return decide('deny', `Höchstens ${maxSubagents()} Teilagenten je Nachricht. Keine weiteren starten; fasse die vorhandenen Ergebnisse zusammen oder erledige den Rest selbst.`);
+      }
+      live.subagentStarts++;
+    }
+    if (role && READONLY_ROLES.has(role) && cls !== 'read') {
+      emitStatus(live, `🔒 Teilagent „${role}“ ist nur lesend: ${statusLine(tool, toolInput)} nicht ausgeführt`);
+      return decide('deny', `Teilagent „${role}“ ist nur lesend. Nichts schreiben oder ausführen; schreib in dein Ergebnis, was zu tun wäre.`);
+    }
     if (cls === 'read') return decide('allow', 'Lesen ist ohne Rückfrage erlaubt.');
     if (cls === 'blocked') {
       emitStatus(live, `⛔ Gesperrt im Pilot: ${why}`);
@@ -407,7 +452,8 @@ function makeGuard(live: Live) {
     if (cls === 'auto' && live.mode === 'auto' && !escalated) return {};
     // confirm: Rückfrage stellen, Antwort schließen, auf die nächste Nachricht warten.
     // Parallele Schreibaufrufe werden nacheinander abgefragt.
-    const note = escalated && cls === 'auto' ? `_Der Auto-Modus fragt nach${escalated.reason ? `: ${ansi(escalated.reason)}` : '.'}_\n\n` : '';
+    const note = (agentId ? `**Teilagent „${role ?? 'Teilagent'}“ möchte:**\n\n` : '')
+      + (escalated && cls === 'auto' ? `_Der Auto-Modus fragt nach${escalated.reason ? `: ${ansi(escalated.reason)}` : '.'}_\n\n` : '');
     const run = live.confirmChain.then(() => confirm(tool, toolInput, note));
     live.confirmChain = run.catch(() => undefined);
     return run;
@@ -525,6 +571,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
     jiraCalls: new Map(), onJiraWrite: req.onJiraWrite, home: '',
     mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
+    subagents: new Map(), subagentStarts: 0, agentTypes: new Map(),
   };
   lives.set(key, live);
   attach(live, req.sink);
@@ -581,14 +628,14 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? AUTO_APPEND : '', extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? AUTO_APPEND : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? '' : orchestratorAppend(), extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim
     // Rechte-Dialog landet.
-    canUseTool: async (tool: string, input: Record<string, unknown>, opts?: { toolUseID?: string; decisionReason?: string }) => {
+    canUseTool: async (tool: string, input: Record<string, unknown>, opts?: { toolUseID?: string; decisionReason?: string; agentID?: string }) => {
       if (opts?.toolUseID) live.autoCalls.delete(opts.toolUseID);
-      const r: any = await guard({ tool_name: tool, tool_input: input }, opts?.toolUseID, undefined, { reason: opts?.decisionReason });
+      const r: any = await guard({ tool_name: tool, tool_input: input, agent_id: opts?.agentID }, opts?.toolUseID, undefined, { reason: opts?.decisionReason });
       const d = r.hookSpecificOutput;
       return d.permissionDecision === 'allow'
         ? { behavior: 'allow', updatedInput: input }
@@ -596,6 +643,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     },
     hooks: { PreToolUse: [{ hooks: [guard], timeout: Math.ceil(cfg.confirmTimeoutMs / 1000) + 60 }] },
     disallowedTools: ['AskUserQuestion'],
+    // Orchestrator (P2): feste Rollen für Teilagenten; durchgesetzt im Wächter (agent_type), BRIDGE_SUBAGENT_ROLES=off schaltet ab.
+    ...(process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? {} : { agents: AGENTS }),
     // MCP: nur die Werkbank-Server aus req.mcpServers (vault-search, werkbank, forge-review, atlassian) —
     // strictMcpConfig (applyHome) blendet Nutzer-, Projekt- und Plugin-Server aus. Jira-OAuth je Konfiguration.
     maxTurns: cfg.maxTurns,
@@ -640,7 +689,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       }
     } finally {
       mark(live, 'ende');
-      log('turn end', { conv: key, usage: live.usage, ms: live.times, ...(live.denials.length ? { denials: live.denials } : {}) });
+      log('turn end', { conv: key, usage: live.usage, ms: live.times, ...(live.subagentStarts ? { teilagenten: live.subagentStarts } : {}), ...(live.denials.length ? { denials: live.denials } : {}) });
       end(live);
     }
   })();
