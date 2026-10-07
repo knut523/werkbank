@@ -43,6 +43,9 @@ export function App() {
   const [cfg, setCfg] = useState<Config | null>(null);
   const [err, setErr] = useState<unknown>(null);
   const [theme, setTheme] = useState(document.documentElement.dataset.theme ?? 'light');
+  // Handy (≤ 760 px): Navigation und Fuß stecken im Menü oben (Knut, 07.10.2026: Abmelden/Hell-Dunkel fehlten am Handy).
+  const [menu, setMenu] = useState(false);
+  useEffect(() => setMenu(false), [hash]);
   const load = () => api<Config>('/api/config').then(setCfg, setErr);
   useEffect(() => { load(); }, []);
   const toggleTheme = () => {
@@ -82,12 +85,17 @@ export function App() {
     : <Setup cfg={cfg} onLogin={load} />;
 
   if (embedded) return <div className="embedded">{page}</div>;
+  const current = NAV.find((n) => n.match.test(hash));
 
   return (
     <div className="shell">
-      <aside className="side" aria-label="Navigation">
+      <aside className={`side${menu ? ' open' : ''}`} aria-label="Navigation">
         <div className="brand"><img src="favicon.svg" alt="" /><span>OLAF-Werkbank</span></div>
-        <nav className="nav col" style={{ gap: 2 }}>
+        <a href={cfg.librechatUrl} className="menu-chat btn small" title="Zurück zum Chat (LibreChat)">💬 Chat</a>
+        <button className="menu-btn btn small" aria-expanded={menu} aria-controls="werkbank-nav" onClick={() => setMenu(!menu)}>
+          {current ? <>{current.ico} {current.label}</> : 'Menü'}{!menu && <span className="menu-more">· {NAV.length - (current ? 1 : 0)} weitere</span>}<span aria-hidden>{menu ? '▴' : '▾'}</span>
+        </button>
+        <nav className="nav col" id="werkbank-nav" style={{ gap: 2 }}>
           <a href={cfg.librechatUrl} className="" title="Zurück zum Chat (LibreChat)"><span className="ico">💬</span>Chat</a>
           {NAV.map((n) => (
             <a key={n.href} href={n.href} className={n.match.test(hash) ? 'active' : ''} aria-current={n.match.test(hash) ? 'page' : undefined}>

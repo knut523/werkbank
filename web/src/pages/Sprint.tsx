@@ -134,7 +134,7 @@ function SprintPlan({ d, cycle, reload }: { d: any; cycle: string; reload: () =>
       <Err e={err} />
       <div className="card" data-testid="sprint-goals">
         <h3 style={{ marginTop: 0 }}>Sprintziele <span className="tiny">Sprint und Ziel werden in der Werkbank gespeichert (nicht in Jira); vorhandene Jira-Labels gelten als Fallback.</span></h3>
-        {g.sprintGoals.length ? <table className="t small"><tbody>{g.sprintGoals.map((x: any) => (
+        {g.sprintGoals.length ? <table className="t small goals-t"><tbody>{g.sprintGoals.map((x: any) => (
           <tr key={x.id} data-goal={x.id}><td><span className="chip goal-id">{x.id}</span></td><td><Gap text={x.result} />{x.parent && <div className="tiny">zahlt ein auf {x.parent}</div>}</td><td className="tiny">{x.owner || '—'}</td><td className="tiny">{x.due || '—'}</td><td><Bar p={x.progress} /></td></tr>
         ))}</tbody></table> : <p className="small muted">Keine Sprintziele im Planning (S1–S4 oder S&lt;MMTT&gt;-&lt;n&gt;).</p>}
       </div>
@@ -364,20 +364,20 @@ export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
 
           <h2>Ergebnisse (Planning-Tabelle)</h2>
           {planning?.outcomes.length ? (
-            <table className="t small">
+            <table className="t small stack-t">
               <thead><tr><th>#</th><th>Ergebnis</th><th>DoD</th><th>Owner</th><th>Datum</th><th>Review</th></tr></thead>
               <tbody>{planning.outcomes.map((o: any) => {
                 const r = review?.outcomes.find((x: any) => x.id === o.id);
-                return <tr key={o.id}><td><b>{o.id}</b></td><td>{o.title}</td><td>{o.dod ?? '—'}</td><td>{o.owner ?? '—'}</td><td>{o.date ?? '—'}</td><td>{r?.rating ? <span className="rating" title={r.evidence}>{r.rating}</span> : '—'}</td></tr>;
+                return <tr key={o.id}><td><b>{o.id}</b></td><td>{o.title}</td><td data-label="DoD">{o.dod ?? '—'}</td><td data-label="Owner">{o.owner ?? '—'}</td><td data-label="Datum">{o.date ?? '—'}</td><td data-label="Review">{r?.rating ? <span className="rating" title={r.evidence}>{r.rating}</span> : '—'}</td></tr>;
               })}</tbody>
             </table>
           ) : <p className="small muted">Die Planning-Notiz hat noch keine Ergebniszeilen S1–S4 (Sprint-Ziel + Ergebnisse mit DoD/Owner/Datum). Neue Zyklen aus der Werkbank bringen die Tabelle mit.</p>}
           {review?.outcomes.length > 0 && (
             <>
               <h3>Review-Bewertung (Soll-Ist)</h3>
-              <table className="t small">
+              <table className="t small stack-t">
                 <thead><tr><th>#</th><th>Ergebnis</th><th>Bewertung</th><th>Beleg</th><th>Warum / was ändern wir</th></tr></thead>
-                <tbody>{review.outcomes.map((o: any) => <tr key={o.id}><td><b>{o.id}</b></td><td>{o.title}</td><td className="rating">{o.rating ?? '—'}</td><td>{o.evidence ?? '—'}</td><td>{o.why ?? '—'}</td></tr>)}</tbody>
+                <tbody>{review.outcomes.map((o: any) => <tr key={o.id}><td><b>{o.id}</b></td><td>{o.title}</td><td className="rating" data-label="Bewertung">{o.rating ?? '—'}</td><td data-label="Beleg">{o.evidence ?? '—'}</td><td data-label="Warum">{o.why ?? '—'}</td></tr>)}</tbody>
               </table>
             </>
           )}

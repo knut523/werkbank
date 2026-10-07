@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react';
 import { api, fmtDate, fmtDateTime, today, chatTarget, openChat, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, StateChip, useJiraLive } from '../ui.tsx';
 import { HygienePanel, LinkButton } from '../components.tsx';
@@ -549,7 +549,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
           </h3>
           {lane.count === 0 && <p className="tiny" style={{ margin: '2px 0 4px' }}>Keine sichtbaren Tickets in diesem Workstream{lane.workstream ? ' — Tasks lassen sich hierher ziehen.' : '.'}</p>}
           {(lane.count > 0 || (drag && lane.workstream)) &&
-          <div className="cols" style={{ gridTemplateColumns: `repeat(${data.statuses.length}, minmax(180px, 1fr))` }}>
+          <div className="cols" style={{ '--ncol': data.statuses.length } as CSSProperties}>
             {data.statuses.map((s: string) => (
               <div key={s}>
                 <div className="colhead">{s} · {lane.columns[s].length}</div>
