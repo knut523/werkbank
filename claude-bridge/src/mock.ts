@@ -123,6 +123,14 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 10, output_tokens: 5 } };
       return;
     }
+    const slow = last.match(/^langsam (\d+)$/);
+    if (slow) {
+      // Ein langer Zug (Sperre je Person, E5): wartet N ms, dann eine Zeile.
+      await sleep(Math.min(Number(slow[1]), 10000));
+      yield text('(Mock) Langsamer Zug fertig.');
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
     if (/skill-test/i.test(last)) yield toolUse('Skill', { skill: 'olaf-jira' });
     if (/konfig-test/i.test(last)) {
       yield text(`(Mock) Konfig: ${options.env?.CLAUDE_CONFIG_DIR ?? 'geteilt'}; strict: ${options.strictMcpConfig === true}; Nutzer-Hooks aus: ${options.settings?.disableAllHooks === true}; MCP: ${Object.keys(options.mcpServers ?? {}).join(',')}. `);

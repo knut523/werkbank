@@ -328,6 +328,10 @@ angewandt auf die **eigenen** PM-Tickets aus der Jira-Kopie (Zuordnung über `GE
   Links sind **nur für angemeldete Konten** lesbar (`ALLOW_SHARED_LINKS_PUBLIC=false`,
   `interface.sharedLinks.public: false`, Rolle ohne `SHARE_PUBLIC`); ohne Anmeldung → 401.
 - **Grenzen gegen Missbrauch:** ein laufender Zug je Nutzer, 15 Minuten je Zug, höchstens 40 Schritte.
+  **Ausnahme Board-Agenten (E5, Knut 07.10.2026):** nur lesende Läufe vom Board (`x-werkbank-mode: readonly` **und**
+  SDK-Modus `dontAsk`, also mit `BRIDGE_PERMISSION_MODE=auto`) zählen nicht gegen diese Sperre — „Agent auf Karte“ läuft,
+  während man weiterchattet, und umgekehrt. Dafür gilt eine eigene Obergrenze von **2 Board-Läufen je Person**
+  (`BRIDGE_MAX_BOARD_RUNS`). Ein normaler Chat bleibt einer zur Zeit. Im Not-Aus (`default`) bleibt alles wie vorher.
 - **Titel** erzeugt die Brücke aus der ersten Nachricht, ohne Claude aufzurufen.
 - **Kontext-Paket** für jede **neue** Sitzung (nicht bei Fortsetzung), siehe unten.
 - **MCP-Server: genau diese, sonst keine** (Runde 4, `strictMcpConfig`): `vault-search` (Vault durchsuchen, lesend),
@@ -782,7 +786,7 @@ nichts, Agenten/Chats sind aus.
 ## Tests
 
 ```bash
-scripts/werkbank.sh test   # Brücke (44) + Web-App (110), ohne echte Konten, ohne /vault zu ändern
+scripts/werkbank.sh test   # Brücke (48) + Web-App (110), ohne echte Konten, ohne /vault zu ändern
 scripts/werkbank.sh e2e    # Playwright, 23 Schritte, ca. 2 Minuten
 scripts/werkbank.sh stream-timing   # Zeitmessung Streaming (Mock), Ergebnis auch in .runtime/e2e/stream-timing.json
 scripts/werkbank.sh init-timing 3   # Start der echten CLI bis „init“ (ohne Modellaufruf), .runtime/e2e/init-timing.json
@@ -827,6 +831,9 @@ scripts/werkbank.sh init-timing 3   # Start der echten CLI bis „init“ (ohne 
   (`claude-bridge/test/accounts.test.ts`: Wechsel bei `rate_limit`, mitten im Zug fortsetzen, gemerkt, alle erschöpft,
   einzelner Schlüssel unverändert, Kontotest, keine Tokens im Log; `web/test/api.test.ts`: Einrichtungs-API maskiert,
   verschlüsselt, Umsortieren, Testen, Entfernen, fremde Konten, interner Kanal).
+- **Neu (07.10.2026):** Live-Anzeige (`bridge.test.ts`, Gedanken/Werkzeugbeginn/Lebenszeichen mit Ankunftszeit) und E5
+  (`auto.test.ts`: Board-Lauf neben Chat und umgekehrt, zweiter Chat weiter gesperrt, höchstens 2 Board-Läufe, andere
+  Person unberührt, Not-Aus unverändert).
 - **Playwright** (`web/e2e/smoke.mjs`): alle Seiten mit zwei Testkonten, dazu echt durch LibreChat:
   **Agent-Chat vom Board** („PM-321 · …“ angelegt, ohne offenen Tab bis „wartet auf ja“, im Chat „ja“, Karte fertig),
   Sub-tasks auf-/zuklappen, kaputter Sub-task, Dokumente + Vorschlag verknüpfen, Roadmap (alle fünf Reiter, Rang-
