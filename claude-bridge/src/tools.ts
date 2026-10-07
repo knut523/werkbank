@@ -86,6 +86,21 @@ const within = (p: string, dir: string) => p === dir || p.startsWith(dir.endsWit
 
 export interface ClassifyContext {
   workDir?: string;   // Arbeitsordner der Person — nur im Auto-Modus gesetzt
+  // Reichweite des Auto-Modus (BRIDGE_AUTO_SCOPE). „voll“ (Knut, 07.10.2026: „voll autonom wie hier“): auch Vault,
+  // Repos, Gedächtnis und andere MCP-Werkzeuge entscheidet der Klassifikator. Rückfrage bleibt für Jira- und
+  // GitHub-Schreiben und Geheimnisse; die Sperren bleiben. Ohne Angabe: nur der Arbeitsordner (Stand 06.10.2026).
+  scope?: 'arbeitsordner' | 'voll';
+}
+
+// Voller Auto-Modus: Bash fragt nur noch bei Geheimnissen, fremden Konfigurationen und Jira-Schreiben nach.
+const BASH_KEEP_CONFIRM_VOLL = [
+  /\.runtime\b/, /\.config\/vw\b/, /\.ssh\b/, /\.credentials/, /(^|[\s;&|(`$])bw\s/, /(^|[\s;&|(`$])sudo\b/, /\.env\b/,
+];
+const bashTouchesJiraWrite = (cmd: string) => /atlassian|jira/i.test(cmd) && !/^\s*\S*jira-read\.sh\s/.test(cmd);
+
+/** Dateien, die auch der volle Auto-Modus nicht ohne „ja“ ändert: Werkbank-Zustand, Konfigurationen, Geheimnisse. */
+function sensitiveTarget(target: string): boolean {
+  return /(^|\/)(\.runtime|\.claude|\.ssh)(\/|$)|(^|\/)\.config\/vw(\/|$)|(^|\/)\.env[^/]*$/.test(target);
 }
 
 export function classify(tool: string, input: Record<string, unknown>, ctx: ClassifyContext = {}): { cls: ToolClass; why?: string } {
@@ -93,6 +108,10 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     const cmd = String(input.command ?? '');
     for (const [re, why] of BASH_BLOCKED) if (re.test(cmd)) return { cls: 'blocked', why };
     for (const [re, why] of BASH_GITHUB_WRITE) if (re.test(cmd)) return { cls: 'confirm', why };
+    if (ctx.workDir && ctx.scope === 'voll') {
+      if (BASH_KEEP_CONFIRM_VOLL.some((re) => re.test(cmd)) || bashTouchesJiraWrite(cmd)) return { cls: 'confirm' };
+      return { cls: 'auto' };
+    }
     if (ctx.workDir && !cmd.includes(VAULT_DIR) && !BASH_KEEP_CONFIRM.some((re) => re.test(cmd))) return { cls: 'auto' };
     return { cls: 'confirm' };
   }
@@ -103,6 +122,7 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     const target = realish(resolve(work, f));
     const vault = realish(resolve(VAULT_DIR));
     if (within(target, work) && !within(target, vault)) return { cls: 'auto' };
+    if (ctx.scope === 'voll' && !sensitiveTarget(target)) return { cls: 'auto' };
     return { cls: 'confirm' };
   }
   if (READ_TOOLS.has(tool)) return { cls: 'read' };
@@ -121,6 +141,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // eigene OAuth-Anmeldung in die eigene Claude-Konfiguration — ohne Rückfrage.
     if (name === 'authenticate' || name === 'complete_authentication') return { cls: 'read' };
     if (MCP_READ.test(name)) return { cls: 'read' };
+    // Voller Auto-Modus: Jira-Schreiben bleibt beim „ja“ (jira_update steht oben), der Rest geht an den Klassifikator.
+    if (ctx.workDir && ctx.scope === 'voll' && server !== 'atlassian') return { cls: 'auto' };
     return { cls: 'confirm' };
   }
   // Write, Edit, MultiEdit, NotebookEdit und alles Unbekannte: nachfragen.

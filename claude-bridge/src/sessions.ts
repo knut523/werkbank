@@ -113,6 +113,8 @@ Du läufst in der OLAF-Werkbank: Die Person schreibt dir über eine Chat-Oberfl�
 - Rückfragen stellst du als normalen Text am Ende deiner Antwort.
 `.trim();
 
+const autoScope = (): 'arbeitsordner' | 'voll' => (process.env.BRIDGE_AUTO_SCOPE === 'voll' ? 'voll' : 'arbeitsordner');
+const AUTO_APPEND_VOLL = 'Auto-Modus (voll) ist an: Bash-Befehle, Datei-Änderungen (auch im Vault und in Repos) und Werkzeuge wie das Gedächtnis laufen ohne Rückfrage, wenn der Sicherheits-Klassifikator zustimmt; jede solche Freigabe sieht die Person als Statuszeile. Jira schreiben, GitHub schreiben und alles mit Zugangsdaten bestätigt die Person weiterhin im Chat. Arbeite selbstständig durch und frag nur, wenn eine Entscheidung wirklich bei der Person liegt.';
 const AUTO_APPEND = 'Auto-Modus ist an: Bash-Befehle und Datei-Änderungen in deinem Arbeitsordner (dem aktuellen Arbeitsverzeichnis) laufen ohne Rückfrage, wenn der Sicherheits-Klassifikator zustimmt; jede solche Freigabe sieht die Person als Statuszeile. Vault, Jira und alles außerhalb des Arbeitsordners bestätigt die Person weiterhin im Chat.';
 
 // ---------- Zuordnung Unterhaltung → SDK-Sitzung (ohne Geheimnisse, als JSON-Datei) ----------
@@ -332,7 +334,7 @@ function handleMessage(live: Live, msg: any) {
       for (const block of msg.message?.content ?? []) {
         if (block.type === 'tool_use') {
           live.progressed = true;
-          const cls = classify(block.name, block.input ?? {}, { workDir: live.workDir }).cls;
+          const cls = classify(block.name, block.input ?? {}, { workDir: live.workDir, scope: autoScope() }).cls;
           if (cls === 'auto' && live.mode === 'auto') live.autoCalls.set(block.id, { name: block.name, input: block.input ?? {}, sub: !!msg.parent_tool_use_id });
           if (live.onJiraWrite && jiraWriteKeys(block.name, block.input ?? {}) !== null) live.jiraCalls.set(block.id, { name: block.name, input: block.input ?? {} });
           // Nutzung je Skill zählen (Knut, 29.09.: Skill-Kern nach einer Woche mit echten Zahlen nachschärfen).
@@ -414,7 +416,7 @@ function makeGuard(live: Live) {
   return async (input: any, toolUseId?: unknown, _opts?: unknown, escalated?: { reason?: string }) => {
     const tool: string = input.tool_name;
     const toolInput: Record<string, unknown> = input.tool_input ?? {};
-    const { cls, why } = classify(tool, toolInput, { workDir: live.workDir });
+    const { cls, why } = classify(tool, toolInput, { workDir: live.workDir, scope: autoScope() });
     // Teilagent? Der Hook nennt agent_id/agent_type; canUseTool nur die agent_id (Rolle aus einem früheren Hook-Aufruf).
     const agentId: string | undefined = input.agent_id;
     if (agentId && input.agent_type) live.agentTypes.set(agentId, String(input.agent_type));
@@ -628,7 +630,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? AUTO_APPEND : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? '' : orchestratorAppend(), extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? '' : orchestratorAppend(), extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim

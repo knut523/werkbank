@@ -43,6 +43,7 @@ start claude-bridge 3090 "$WB/claude-bridge" env BRIDGE_PORT=3090 BRIDGE_HOST=12
   BRIDGE_ALLOWED_EMAILS="${BRIDGE_ALLOWED_EMAILS-knut.peters@maxenergy.at}" \
   BRIDGE_CLAUDE_CONFIG_SHARED="${BRIDGE_CLAUDE_CONFIG_SHARED-knut.peters@maxenergy.at}" \
   BRIDGE_PERMISSION_MODE="${BRIDGE_PERMISSION_MODE-auto}" \
+  BRIDGE_AUTO_SCOPE="${BRIDGE_AUTO_SCOPE-voll}" \
   BRIDGE_AUTO_EMAILS="${BRIDGE_AUTO_EMAILS-knut.peters@maxenergy.at}" node src/server.ts
 start librechat 3080 "$RT/librechat" env CONFIG_PATH="$WB/librechat/librechat.yaml" node api/server/index.js
 # Freigabe wie bei der Brücke: dieselbe Liste, solange die Sitzungen als VM-Nutzer laufen.
