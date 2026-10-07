@@ -298,6 +298,19 @@ angewandt auf die **eigenen** PM-Tickets aus der Jira-Kopie (Zuordnung über `GE
 - **Board:** 🧹-Zähler je Karte, Bahn und Owner, Filter **„Braucht Pflege“**, oben die eigenen Fragen (höchstens 3).
   **Sprint:** Liste aller eigenen Pflegepunkte. Antworten dort: eine Zeile → Vorschlag → Bestätigen → Jira.
 
+## Handy (07.10.2026)
+
+Unter 760 px Breite (Befund `review-pakete/77-werkbank-live-mobile`, Knut 07.10.2026):
+
+- **Kopfleiste statt Seitenleiste:** Logo · „💬 Chat“ · Knopf „<aktuelle Seite> · 8 weitere ▾“. Aufgeklappt stehen alle
+  Seiten untereinander, darunter Name/E-Mail, Demo-Hinweis, **Hell/Dunkel** und **Abmelden** (vorher auf dem Handy
+  nicht erreichbar). Das Menü schließt sich beim Seitenwechsel.
+- **Board:** jede Bahn wischt für sich seitlich, eine Spalte (84 % der Breite) rastet ein (`scroll-snap`); der Rand der
+  nächsten Spalte bleibt als Hinweis sichtbar. Auch der Roadmap-Kanban.
+- **Sprint:** Sprintziele zeigen den Fortschritt in einer eigenen Zeile; Planning- und Review-Tabelle werden je Zeile
+  ein Block mit „DoD: … / Owner: … / Review: …“ statt einer abgeschnittenen letzten Spalte.
+- Ab 760 px bleibt alles wie vorher. Screenshots vorher/nachher: `screens/before|after` im Review-Paket.
+
 ## Was im Chat passiert
 
 - **Eine Claude-Code-Sitzung je Chat.** Die Brücke merkt sich Chat-ID → SDK-Sitzung

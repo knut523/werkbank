@@ -1,7 +1,7 @@
 // Roadmap: Priorisierung · Zustände je Thema · PR-Review · offene Entscheidungen · Konsistenz.
 // Alles aus dem Vault (lesend); geschrieben wird nur eine Antwort („- Knut:“) oder ein Rang-Vorschlag —
 // jeweils nach Vorschau und Bestätigung. GitHub nur lesend (Links).
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { api, type Config } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, StateChip, useJiraLive } from '../ui.tsx';
 
@@ -134,7 +134,7 @@ function Kanban({ d }: { d: any }) {
       {d.lanes.map((t: any) => (
         <section className="lane" key={t.topic} data-lane={t.topic}>
           <h3>{t.topic} <span className="chip">{Object.values(t.states).flat().length}</span></h3>
-          <div className="cols" style={{ gridTemplateColumns: `repeat(${d.kanbanStates.length}, minmax(170px, 1fr))` }}>
+          <div className="cols" style={{ '--ncol': d.kanbanStates.length } as CSSProperties}>
             {d.kanbanStates.map((s: string) => (
               <div key={s}>
                 <div className="colhead">{s.replace(/^\d-/, '')} · {t.states[s].length}</div>
