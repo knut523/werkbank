@@ -100,11 +100,13 @@ export function chatUrl(prompt: string, opts: { spec?: string; submit?: boolean 
 
 import { librechatAccessToken } from './auth.ts';
 
-export const CHAT_AGENT_INSTRUCTION = `Du bist vom Werkbank-Board auf dieses Ticket angesetzt. Arbeite es so weit ab, wie es ohne Rückfrage an Menschen geht:
+export const CHAT_AGENT_INSTRUCTION = `Du bist vom Werkbank-Board auf dieses Ticket angesetzt. Arbeite nach plan-to-pr — auch wenn es keine Coding-Aufgabe ist (Recherche, Dokument, Abstimmung) (Knut, 07.10.2026):
 1. Lies zuerst, was Vault-Register und Jira sagen (Vault vor Code, Board-Stand ist nicht Arbeitsstand).
-2. Mach dann die nächsten sinnvollen Schritte. Schreibaktionen (Dateien, Vault, Jira) rufst du einfach auf — das System fragt die Person vorher im Chat, und nur nach „ja“ passiert es. GitHub schreiben, pushen, mergen ist gesperrt.
-3. Neue Vault-Notizen oder Dateien zu diesem Ticket bekommen im Frontmatter \`jira: <Key>\` (dann erscheinen sie an der Karte).
-4. Keine neuen Tickets ohne ausdrücklichen Auftrag.
+2. Schreib dann einen kurzen Plan (Skill plan-to-pr bzw. grilling): Ziel, Ergebnis (was am Ende übergeben wird und wo es liegt), Stand heute, Schnitte, Definition of Done. Lege ihn als Vault-Notiz im Workstream-Bereich unten ab, mit \`jira: <Key>\` und \`projekt: <Projekt>\` im Frontmatter.
+3. Stell danach ALLE offenen Fragen auf einmal, jede im Format Kontext · Optionen · Empfehlung · leere Zeile „  - Knut:“ — und warte auf die Antworten, bevor du umsetzt. Gibt es keine offene Frage, sag das ausdrücklich und mach weiter.
+4. Setz dann die Schnitte um. Schreibaktionen rufst du einfach auf; was eine Rückfrage braucht, fragt das System im Chat. GitHub pushen und mergen ist gesperrt.
+5. Neue Vault-Notizen oder Dateien zu diesem Ticket bekommen im Frontmatter \`jira: <Key>\` (dann erscheinen sie an der Karte); Dokumente, die du erstellst, landen nach dem Lauf von selbst unter „Meine Dateien“.
+6. Keine neuen Tickets ohne ausdrücklichen Auftrag.
 Schließe mit „### Stand“ (3–5 Zeilen: was erledigt ist, was offen ist, wer dran ist) und „### Kommentarentwurf“ (höchstens 8 Zeilen für Jira).`;
 
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 OLAF-Werkbank';
@@ -132,23 +134,31 @@ export async function createLibreChat(u: User, text: string): Promise<string> {
   return String(j.conversationId);
 }
 
-export function chatAgentPrompt(i: Issue, note: string, kind: 'work' | 'discuss'): string {
+export interface AgentPlace { projectName?: string | null; areaDir?: string | null }
+
+/** Projekt und Workstream-Bereich als Zeile für den Prompt (Plan 81, Schnitte 6/7). */
+export function placeLine(place: AgentPlace = {}): string {
+  const parts = [place.projectName ? `Projekt: ${place.projectName}` : '', place.areaDir ? `Workstream-Bereich im Vault: ${place.areaDir}/ (Plan und neue Notizen dorthin, wenn es keinen besseren Ort gibt)` : ''].filter(Boolean);
+  return parts.join('\n');
+}
+
+export function chatAgentPrompt(i: Issue, note: string, kind: 'work' | 'discuss', place: AgentPlace = {}): string {
   // Erste Zeile = Titel der Unterhaltung (die Brücke übernimmt „PM-123 · Titel“ unverändert).
   const title = `${i.key} · ${i.summary}`.slice(0, 80);
   return kind === 'discuss'
     ? `${title}\n\n${ticketPrompt(i)}\n\nLass uns an diesem Ticket arbeiten. Lies zuerst, was Vault und Jira dazu sagen.${note ? `\n\n${note}` : ''}`
-    : `${title}\n\n${CHAT_AGENT_INSTRUCTION}\n\n---\n\n${ticketPrompt(i, note ? `Hinweis der Person: ${note}` : '')}`;
+    : `${title}\n\n${CHAT_AGENT_INSTRUCTION}\n\n---\n\n${ticketPrompt(i, [placeLine(place), note ? `Hinweis der Person: ${note}` : ''].filter(Boolean).join('\n\n'))}`;
 }
 
-export async function startChatAgent(u: User, issue: Issue, note: string, kind: 'work' | 'discuss' = 'work'): Promise<{ id: string; conv: string; url: string }> {
+export async function startChatAgent(u: User, issue: Issue, note: string, kind: 'work' | 'discuss' = 'work', place: AgentPlace & { projectId?: string | null } = {}): Promise<{ id: string; conv: string; url: string }> {
   const runs = wb().collection('agent_runs');
   if (kind === 'work' && await runs.findOne({ key: issue.key, userId: u.id, mode: 'chat', status: { $in: ['läuft', 'wartet auf ja'] } })) {
     throw Object.assign(new Error('Auf diesem Ticket arbeitet schon ein Agent von dir — im Chat weitermachen.'), { status: 409 });
   }
-  const conv = await createLibreChat(u, chatAgentPrompt(issue, note, kind));
+  const conv = await createLibreChat(u, chatAgentPrompt(issue, note, kind, place));
   const id = randomUUID();
   const url = `${cfg.librechatPublicUrl}/c/${conv}`;
-  await runs.insertOne({ _id: id as any, key: issue.key, userId: u.id, userName: u.name, mode: 'chat', kind, status: kind === 'work' ? 'läuft' : 'fertig', conv, url, startedAt: new Date(), note: note.slice(0, 300), written: [] });
+  await runs.insertOne({ _id: id as any, key: issue.key, userId: u.id, userName: u.name, mode: 'chat', kind, status: kind === 'work' ? 'läuft' : 'fertig', conv, url, startedAt: new Date(), note: note.slice(0, 300), written: [], projectId: place.projectId ?? null });
   return { id, conv, url };
 }
 

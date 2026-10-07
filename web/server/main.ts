@@ -18,6 +18,7 @@ import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontma
 import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns } from './agent.ts';
+import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles } from './sprint.ts';
 import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
@@ -665,8 +666,15 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res
   if (!token) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen.');
   // Standard: echter Chat („PM-123 · Titel“), der Agent arbeitet mit Rückfrage vor jedem Schreiben.
   // „Nur Entwurf“: wie bisher lesend im Hintergrund, Ergebnis als Kommentarentwurf an der Karte.
+  // Plan 81 (Schnitte 6/7): das Ticket bekommt sein Projekt (zuordnen vor anlegen), der Agent den Bereich seines
+  // Workstreams im Vault für Plan und Notizen. Die Übersicht des Bereichs wird danach nachgezogen.
+  const im = await issueMap();
+  const project = await assignProject(u, i).catch((e) => { log('projekt fehlgeschlagen', { key: i.key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
+  const ws = i.workstream ? im.get(i.workstream) : undefined;
+  const areaDir = ws ? workstreamArea(ws).dir : null;
+  if (ws) syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 120) }));
   if (b.mode !== 'draft') {
-    const r = await startChatAgent(u, i, String(b.note ?? '').slice(0, 2000), 'work');
+    const r = await startChatAgent(u, i, String(b.note ?? '').slice(0, 2000), 'work', { projectName: project?.name ?? null, areaDir, projectId: project?._id ?? null });
     log('agent chat', { user: u.id, key: i.key, conv: r.conv });
     return send(res, 200, { ...r, mode: 'chat' });
   }
