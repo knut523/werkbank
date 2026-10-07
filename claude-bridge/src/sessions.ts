@@ -9,7 +9,7 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { classify, statusLine, prepLine, confirmQuestion, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY } from './tools.ts';
+import { classify, statusLine, prepLine, confirmQuestion, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
@@ -39,6 +39,8 @@ interface Live {
   buffer: string[];
   pending: Pending | null;
   lastKind: 'none' | 'text' | 'status';
+  /** Ende des zuletzt gesendeten Modelltexts, damit ein über zwei Deltas verteilter Knopf-Anker erkannt wird. */
+  modelTail?: string;
   lastStatus: string;
   sawStreamText: boolean;
   usage: { input: number; output: number };
@@ -231,6 +233,18 @@ function emitText(live: Live, text: string) {
   emit(live, text);
 }
 
+/**
+ * Text des Modells: Ja/Nein-Knopf-Anker (`#werkbank-antwort:`) entschärfen. Knöpfe darf nur die Rückfrage der
+ * Brücke selbst tragen — sonst könnte Claude (oder eingeschleuster Text) einen Knopf setzen, der eine wartende
+ * Rückfrage bestätigt (Review Runde 2). Ein Nullbreite-Leerzeichen im Anker bricht den Präfix, sichtbar bleibt alles.
+ */
+function emitModelText(live: Live, text: string) {
+  const tail = live.modelTail ?? '';
+  const out = neutralizeAnswerAnchors(tail, text);
+  live.modelTail = (tail + out).slice(-(ANSWER_MARK.length - 1));
+  emitText(live, out);
+}
+
 function emitStatus(live: Live, line: string) {
   // Kursiv, eine Zeile je Werkzeug; mehrere Statuszeilen stehen kompakt untereinander.
   if (line === live.lastStatus) return;
@@ -323,7 +337,7 @@ function handleMessage(live: Live, msg: any) {
         mark(live, 'ersterText');
         live.sawStreamText = true;
         live.progressed = true;
-        emitText(live, ev.delta.text);
+        emitModelText(live, ev.delta.text);
       } else if (ev?.type === 'content_block_delta' && ev.delta?.type === 'thinking_delta') {
         // Zusammengefasstes Denken (thinking display „summarized“, s. u.) live als Gedanken.
         emitReason(live, String(ev.delta.thinking ?? ''));
@@ -370,7 +384,7 @@ function handleMessage(live: Live, msg: any) {
           // Schreibende Werkzeuge melden sich erst nach der Bestätigung (siehe Hook).
         } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
           live.progressed = true;
-          emitText(live, block.text);
+          emitModelText(live, block.text);
         }
       }
       return;
@@ -492,7 +506,7 @@ function makeGuard(live: Live) {
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason },
     });
     if (live.abort.signal.aborted) return decide('deny', 'Abgebrochen.');
-    emitText(live, (live.lastKind === 'none' ? '' : '\n\n') + note + confirmQuestion(tool, toolInput));
+    emitText(live, (live.lastKind === 'none' ? '' : '\n\n') + neutralizeAnswerAnchors('', note) + confirmQuestion(tool, toolInput));
     const answer = await new Promise<string>((resolve) => {
       live.pending = {
         resolve,

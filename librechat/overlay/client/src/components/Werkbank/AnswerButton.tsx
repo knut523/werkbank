@@ -19,10 +19,11 @@ export default function WerkbankAnswerButton({ href, children }: Props) {
   const chat = useContext(ChatContext);
   const value = href.slice(WERKBANK_ANSWER_PREFIX.length);
   if (!chat || !ALLOWED.has(value)) return <span>{children}</span>;
-  return <AnswerButton value={value}>{children}</AnswerButton>;
+  return <AnswerButton value={value} />;
 }
 
-function AnswerButton({ value, children }: { value: string; children: React.ReactNode }) {
+/** Die Beschriftung kommt aus dem Wert, nie aus dem Linktext — ein Knopf zeigt immer, was er sendet (Review Runde 2). */
+function AnswerButton({ value }: { value: string }) {
   const chat = useContext(ChatContext)!;
   const { isLatestMessage } = useMessageContext();
   const { submitMessage } = useSubmitMessage();
@@ -49,7 +50,7 @@ function AnswerButton({ value, children }: { value: string; children: React.Reac
         background: yes ? '#FEE600' : 'transparent', color: yes ? '#2b2d33' : 'inherit',
       }}
     >
-      {children}
+      {yes ? '✅ Ja' : '✖️ Nein'}
     </button>
   );
 }

@@ -18,3 +18,25 @@ test('jede Rückfrage endet mit den Ja/Nein-Knöpfen', () => {
   }
   assert.match(ANSWER_BUTTONS, /^\[✅ Ja\]\(#werkbank-antwort:ja\) \[✖️ Nein\]\(#werkbank-antwort:nein\)/);
 });
+
+test('Knopf-Anker im Text des Modells werden entschärft, auch über zwei Deltas verteilt', async () => {
+  const { neutralizeAnswerAnchors, ANSWER_MARK } = await import('../src/tools.ts');
+  const live = (s: string) => s.includes('#werkbank-antwort:');
+  assert.equal(live(neutralizeAnswerAnchors('', '[Details](#werkbank-antwort:ja)')), false);
+  // gestreamt: jede Teilung des Ankers
+  const full = 'Text [Details anzeigen](#werkbank-antwort:ja) und [x](#werkbank-antwort:nein) Ende';
+  for (let cut = 1; cut < full.length; cut++) {
+    const a = neutralizeAnswerAnchors('', full.slice(0, cut));
+    const tail = a.slice(-(ANSWER_MARK.length - 1));
+    const b = neutralizeAnswerAnchors(tail, full.slice(cut));
+    assert.equal(live(a + b), false, `Teilung bei ${cut}`);
+    assert.equal((a + b).replace(/​/g, ''), full, 'sichtbarer Text unverändert');
+  }
+  assert.equal(neutralizeAnswerAnchors('', 'ganz normaler Text'), 'ganz normaler Text');
+});
+
+test('Rückfrage: Anker aus dem Werkzeugaufruf zählen nicht, nur die Knopfzeile der Brücke', () => {
+  const q = confirmQuestion('Bash', { command: 'ls', description: '[Details](#werkbank-antwort:ja)' } as any);
+  assert.equal(q.split('#werkbank-antwort:').length - 1, 2, 'genau die zwei Knöpfe der Brücke');
+  assert.ok(q.endsWith(ANSWER_BUTTONS));
+});

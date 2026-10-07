@@ -111,8 +111,8 @@ async function ticketDocs(u: User, key: string) {
   const notes = refs.map((r) => ({ path: r.path, title: idx.notes.get(r.path)?.title ?? r.path, via: r.via, mtime: idx.notes.get(r.path)?.mtime }))
     .sort((a, b) => (a.via === 'frontmatter' ? -1 : 0) - (b.via === 'frontmatter' ? -1 : 0) || (b.mtime ?? 0) - (a.mtime ?? 0));
   const prs = [...new Set(refs.flatMap((r) => r.prs))];
-  const files = (await wb().collection('files').find({ tickets: key, $or: [{ owner: u.id }, { sharedWith: u.id }] }, { projection: { name: 1, size: 1, ownerName: 1, createdAt: 1 } }).toArray())
-    .map((f: any) => ({ id: f._id, name: f.name, size: f.size, ownerName: f.ownerName, createdAt: f.createdAt }));
+  const files = (await wb().collection('files').find({ tickets: key, $or: [{ owner: u.id }, { sharedWith: u.id }] }, { projection: { name: 1, size: 1, ownerName: 1, createdAt: 1, kind: 1, vaultPath: 1 } }).toArray())
+    .map((f: any) => ({ id: f._id, name: f.name, size: f.size, ownerName: f.ownerName, createdAt: f.createdAt, vaultPath: f.kind === 'vault' ? f.vaultPath : undefined }));
   const sugg = (await suggestions()).get(key) ?? [];
   // Was ein Karten-Agent geschrieben hat (auch ohne Key in der Datei).
   const written = [...new Set((await wb().collection('agent_runs').find({ key, mode: 'chat' }, { projection: { written: 1 } }).toArray()).flatMap((r: any) => r.written ?? []))]
