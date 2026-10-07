@@ -106,6 +106,23 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 100, output_tokens: 60 } };
       return;
     }
+    if (/live-test/i.test(last)) {
+      // Live-Anzeige (07.10.2026): Gedanken als Deltas, Werkzeugbeginn vor fertiger Eingabe, Lebenszeichen nach 5 s.
+      // Ereignisformen wie die Anthropic-Streaming-API (content_block_start/-delta), die das SDK als stream_event durchreicht.
+      const ev = (event: Record<string, unknown>) => ({ type: 'stream_event', parent_tool_use_id: null, session_id, event });
+      yield text(`(Mock) thinking-display: ${options.extraArgs?.['thinking-display'] ?? '—'}. `);
+      yield ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } });
+      for (const t of ['Ich überlege, ', 'wo das steht.']) { yield ev({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: t } }); await sleep(30); }
+      const id = randomUUID();
+      yield ev({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id, name: 'Task', input: {} } });
+      for (const part of ['{"description":', '"Recherche",', '"prompt":"…"}']) { yield ev({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: part } }); await sleep(300); }
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, message: { content: [{ type: 'tool_use', id, name: 'Task', input: { description: 'Recherche', prompt: '…' } }] } };
+      yield { type: 'tool_progress', parent_tool_use_id: null, session_id, tool_use_id: id, tool_name: 'Task', elapsed_time_seconds: 6 };
+      yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: 'ok' }] }] } };
+      yield text('(Mock) Fertig.');
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 10, output_tokens: 5 } };
+      return;
+    }
     if (/skill-test/i.test(last)) yield toolUse('Skill', { skill: 'olaf-jira' });
     if (/konfig-test/i.test(last)) {
       yield text(`(Mock) Konfig: ${options.env?.CLAUDE_CONFIG_DIR ?? 'geteilt'}; strict: ${options.strictMcpConfig === true}; Nutzer-Hooks aus: ${options.settings?.disableAllHooks === true}; MCP: ${Object.keys(options.mcpServers ?? {}).join(',')}. `);

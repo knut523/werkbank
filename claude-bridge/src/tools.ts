@@ -177,6 +177,22 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
   return `🔧 ${tool}`;
 }
 
+/**
+ * Sofort-Zeile, sobald Claude ANFÄNGT, einen Werkzeugaufruf mit langer Eingabe zu formulieren (Datei, Änderung,
+ * Teilagent, schreibender MCP-Aufruf). Bis die Eingabe fertig ist, vergehen bei großen Dateien leicht 30 s und mehr,
+ * in denen sonst nichts zu sehen ist (Knut, 07.10.2026: „tools appear as he is working, not after“).
+ * Lesende Werkzeuge und Bash haben kurze Eingaben — deren Zeile kommt wie bisher mit dem fertigen Aufruf. null = keine.
+ */
+export function prepLine(tool: string): string | null {
+  switch (tool) {
+    case 'Write': return '✍️ schreibt eine Datei …';
+    case 'Edit': case 'MultiEdit': case 'NotebookEdit': return '✍️ bereitet eine Änderung vor …';
+    case 'Task': case 'Agent': return '✍️ bereitet einen Teilagenten vor …';
+  }
+  if (tool.startsWith('mcp__') && classify(tool, {}).cls === 'confirm') return `✍️ bereitet vor: ${statusLine(tool, {})} …`;
+  return null;
+}
+
 /** Die Rückfrage vor einem Schreibzugriff, auf Deutsch. */
 export function confirmQuestion(tool: string, input: Record<string, unknown>): string {
   let what: string;

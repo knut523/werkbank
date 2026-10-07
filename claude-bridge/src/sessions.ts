@@ -9,7 +9,7 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { classify, statusLine, confirmQuestion, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY } from './tools.ts';
+import { classify, statusLine, prepLine, confirmQuestion, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { log } from './log.ts';
 import { skillsFor } from './skills.ts';
@@ -17,6 +17,8 @@ import { pickAccounts, exhaustedOf, markExhausted, normalizeAccounts, resetMs, i
 
 export interface Sink {
   write(text: string): void;
+  /** Denken (Zusammenfassung) als eigener Kanal — im Stream `delta.reasoning_content`, LibreChat zeigt es als „Gedanken“. */
+  reason?(text: string): void;
   finish(usage?: { input: number; output: number }): void;
   readonly closed: boolean;
 }
@@ -171,6 +173,11 @@ function emit(live: Live, text: string) {
   else live.buffer.push(text);
 }
 
+/** Gedanken nur live — ohne offene Antwort (wartet auf „ja“) gibt es keine, also auch nichts zu puffern. */
+function emitReason(live: Live, text: string) {
+  if (text && live.sink && !live.sink.closed) live.sink.reason?.(text);
+}
+
 function emitText(live: Live, text: string) {
   if (live.lastKind === 'status') text = '\n' + text.replace(/^\n+/, '');
   live.lastKind = 'text';
@@ -256,18 +263,28 @@ function handleMessage(live: Live, msg: any) {
         live.sawStreamText = true;
         live.progressed = true;
         emitText(live, ev.delta.text);
+      } else if (ev?.type === 'content_block_delta' && ev.delta?.type === 'thinking_delta') {
+        // Zusammengefasstes Denken (thinking display „summarized“, s. u.) live als Gedanken.
+        emitReason(live, String(ev.delta.thinking ?? ''));
       } else if (ev?.type === 'content_block_start' && /thinking/.test(ev.content_block?.type ?? '')) {
-        // Denken wird nicht gestreamt – aber man soll sehen, dass etwas passiert.
+        // Man soll sehen, dass etwas passiert — auch wenn keine Gedanken-Zusammenfassung kommt.
         mark(live, 'denkt');
         emitStatus(live, '💭 denkt nach …');
+      } else if (ev?.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
+        // Werkzeugaufruf beginnt: bei langen Eingaben (Datei, Teilagent, Jira anlegen) sofort eine Zeile,
+        // nicht erst, wenn die ganze Eingabe formuliert ist.
+        const line = prepLine(String(ev.content_block.name ?? ''));
+        if (line) { live.progressed = true; emitStatus(live, line); }
       }
       return;
     }
     case 'tool_progress': {
       // Lange Werkzeugschritte (Teilagent, Suche, MCP): alle 15 s ein Lebenszeichen.
       if (msg.parent_tool_use_id) return;
-      const s = Math.floor(Number(msg.elapsed_time_seconds ?? 0) / 15) * 15;
-      if (s < 15 || (live.progressShown.get(msg.tool_use_id) ?? 0) >= s) return;
+      // Erstes Lebenszeichen nach 5 s, danach alle 15 s.
+      const el = Number(msg.elapsed_time_seconds ?? 0);
+      const s = el >= 15 ? Math.floor(el / 15) * 15 : el >= 5 ? 5 : 0;
+      if (s < 5 || (live.progressShown.get(msg.tool_use_id) ?? 0) >= s) return;
       live.progressShown.set(msg.tool_use_id, s);
       emitStatus(live, `⏳ ${statusLine(String(msg.tool_name ?? ''), {}).replace(/:.*$/, '')} läuft seit ${s} s …`);
       return;
@@ -437,6 +454,11 @@ export interface TurnRequest {
   accounts?: () => Promise<{ id: string; label: string; token: string | null }[]>;
 }
 
+function thinkingDisplay(): string | null {
+  const v = (process.env.BRIDGE_THINKING_DISPLAY ?? 'summarized').trim();
+  return v === 'off' || v === '' ? null : v;
+}
+
 const CONTINUE_PROMPT = 'Mach bitte genau dort weiter, wo du unterbrochen wurdest — das Claude-Konto wurde gewechselt, weil das Kontingent ausgeschöpft war. Wiederhole keine Schritte, die schon erledigt sind.';
 
 /** Führt eine Nachricht aus. Kehrt zurück, sobald die HTTP-Antwort geschlossen werden kann. */
@@ -559,6 +581,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     // strictMcpConfig (applyHome) blendet Nutzer-, Projekt- und Plugin-Server aus. Jira-OAuth je Konfiguration.
     maxTurns: cfg.maxTurns,
     includePartialMessages: true,
+    // Gedanken als Zusammenfassung anfordern, damit sie live erscheinen (nur die Anzeige; Denkmodus und -budget bleiben
+    // wie in Claude Code eingestellt). BRIDGE_THINKING_DISPLAY=omitted|off schaltet ab.
+    ...(thinkingDisplay() ? { extraArgs: { 'thinking-display': thinkingDisplay() } } : {}),
     abortController: live.abort,
     env,
     stderr: (d: string) => { if (/error/i.test(d)) log('sdk stderr', { conv: key, line: redact(d.slice(0, 300)) }); },
