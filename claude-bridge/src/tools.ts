@@ -215,6 +215,14 @@ export function prepLine(tool: string): string | null {
   return null;
 }
 
+/**
+ * Ja/Nein-Knöpfe unter jeder Rückfrage (docs/plan-ja-nein-knoepfe.md; Knut, 07.10.2026: „gib mir einen Button zum
+ * Klicken oder Tappen“). Der Werkbank-Patch für LibreChat (`librechat/patches/30-client-antwort-knoepfe.patch`) rendert
+ * genau diese zwei Anker als Knöpfe, die „ja“ bzw. „nein“ als Chat-Nachricht senden; ohne Patch bleiben sie harmlose
+ * Anker, und der Satz darunter sagt, was man tippen kann.
+ */
+export const ANSWER_BUTTONS = '[✅ Ja](#werkbank-antwort:ja) [✖️ Nein](#werkbank-antwort:nein)\n\n_oder **ja** / **nein** tippen_';
+
 /** Die Rückfrage vor einem Schreibzugriff, auf Deutsch. */
 export function confirmQuestion(tool: string, input: Record<string, unknown>): string {
   let what: string;
@@ -242,7 +250,7 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
           input.due !== undefined && input.due !== null ? `Fällig → **${input.due || 'ohne Datum'}**` : '',
           input.comment ? `Kommentar: „${short(input.comment, 300)}“` : '',
         ].filter(Boolean);
-        return `**Soll ich ${input.key} in Jira nachziehen?** (mit deinem Jira-Zugang)\n\n${parts.map((p) => '- ' + p).join('\n')}\n\nAntworte mit **ja** oder **nein**.`;
+        return `**Soll ich ${input.key} in Jira nachziehen?** (mit deinem Jira-Zugang)\n\n${parts.map((p) => '- ' + p).join('\n')}\n\n${ANSWER_BUTTONS}`;
       }
       if (tool.startsWith('mcp__atlassian__')) {
         what = `in Jira **${tool.split('__')[2]}** ausführen`;
@@ -254,7 +262,7 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
       }
       detail = fence(clip(JSON.stringify(input, null, 2), 1500), 'json');
   }
-  return `**Soll ich ${what}?**\n\n${detail}\n\nAntworte mit **ja** oder **nein**.`;
+  return `**Soll ich ${what}?**\n\n${detail}\n\n${ANSWER_BUTTONS}`;
 }
 
 const LANGS: Record<string, string> = { md: 'markdown', ts: 'typescript', tsx: 'tsx', js: 'javascript', mjs: 'javascript', py: 'python', json: 'json', sh: 'bash', yaml: 'yaml', yml: 'yaml', sql: 'sql', html: 'html', css: 'css' };
