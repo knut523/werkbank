@@ -130,8 +130,14 @@ const homeFile = join(cfg.stateDir, 'session-homes.json');
 let homeMap: Record<string, string> = {};
 try { homeMap = JSON.parse(readFileSync(homeFile, 'utf8')); } catch { /* keine */ }
 
+// In welchem Ordner eine Unterhaltung arbeitet (Plan parallele Chats, Knut 07.10.2026). Claude Code legt den Verlauf
+// unter dem cwd ab, darum bleibt eine Unterhaltung für immer in dem Ordner, in dem sie angefangen hat.
+const cwdFile = join(cfg.stateDir, 'cwd.json');
+let cwdMap: Record<string, string> = {};
+try { cwdMap = JSON.parse(readFileSync(cwdFile, 'utf8')); } catch { /* keine */ }
+
 function saveMap() {
-  for (const [f, data] of [[mapFile, sessionMap], [homeFile, homeMap]] as const) {
+  for (const [f, data] of [[mapFile, sessionMap], [homeFile, homeMap], [cwdFile, cwdMap]] as const) {
     const tmp = f + '.tmp';
     writeFileSync(tmp, JSON.stringify(data, null, 1));
     renameSync(tmp, f);
@@ -149,10 +155,14 @@ export function isBoardRun(l: { readonly: boolean; mode: PermissionMode }): bool
   return l.readonly && l.mode === 'dontAsk';
 }
 
-/** Darf ein neuer Zug starten? Normale Chats: einer zur Zeit je Person; Board-Läufe: bis MAX_BOARD_RUNS daneben. */
+// Parallele Chats (Plan docs/plan-parallele-chats.md, Knut 07.10.2026): so viele Züge je Person gleichzeitig.
+// 1 = das Verhalten vor dem 07.10. (ein Chat zur Zeit). Jeder neue Chat hat seinen eigenen Ordner (workDirFor).
+export const maxParallelChats = () => Math.max(1, Number(process.env.BRIDGE_MAX_PARALLEL_CHATS || 3));
+
+/** Darf ein neuer Zug starten? Chats: bis maxParallelChats() gleichzeitig je Person; Board-Läufe: bis MAX_BOARD_RUNS daneben. */
 export function lockFor(mine: { readonly: boolean; mode: PermissionMode; pending: unknown }[], next: { readonly: boolean; mode: PermissionMode }): 'ok' | 'chat-busy' | 'board-full' {
   if (isBoardRun(next)) return mine.filter(isBoardRun).length >= MAX_BOARD_RUNS ? 'board-full' : 'ok';
-  return mine.some((l) => !isBoardRun(l) && !l.pending) ? 'chat-busy' : 'ok';
+  return mine.filter((l) => !isBoardRun(l) && !l.pending).length >= maxParallelChats() ? 'chat-busy' : 'ok';
 }
 
 // Status je Unterhaltung (Idee: coder/agentapi „running/stable“, CloudCLI Sitzungsliste).
@@ -179,6 +189,22 @@ export function stats() {
 export function scratchFor(userId: string): string {
   const dir = join(cfg.stateDir, 'scratch', safeId(userId));
   mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/**
+ * Arbeitsordner einer Unterhaltung. Eine, die schon eine Sitzung hat (angefangen vor den parallelen Chats), bleibt im
+ * Ordner der Person — dort liegt ihr Verlauf. Jede neue bekommt `scratch/<person>/chats/<chat>`, damit parallele
+ * Chats sich keine Dateien überschreiben. Die Zuordnung gilt für alle weiteren Züge (cwd.json).
+ */
+export function workDirFor(userId: string, convId: string): string {
+  const key = `${safeId(userId)}:${safeId(convId)}`;
+  const known = cwdMap[key];
+  if (known) { mkdirSync(known, { recursive: true }); return known; }
+  const dir = sessionMap[key] ? scratchFor(userId) : join(scratchFor(userId), 'chats', safeId(convId));
+  mkdirSync(dir, { recursive: true });
+  cwdMap[key] = dir;
+  saveMap();
   return dir;
 }
 
@@ -543,16 +569,17 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     return;
   }
 
-  // 2) Höchstens ein aktiver Zug je Nutzer. Chats, die nur auf „ja“ warten, zählen nicht — ein vom
-  //    Board angesetzter Agent darf auf die Antwort warten, während die Person woanders weiterchattet.
-  //    Board-Läufe (nur lesend) laufen daneben, höchstens MAX_BOARD_RUNS je Person (E5).
+  // 2) Höchstens maxParallelChats() aktive Züge je Nutzer, jeder Chat in seinem eigenen Ordner. Chats, die nur auf
+  //    „ja“ warten, zählen nicht. Board-Läufe (nur lesend) laufen daneben, höchstens MAX_BOARD_RUNS je Person (E5).
   const mine = [...lives.values()].filter((l) => l.userId === req.userId);
   const mode = autoFor(req);
   const lock = lockFor(mine, { readonly: !!req.readonly, mode });
   if (lock !== 'ok') {
     req.sink.write(lock === 'board-full'
       ? `Bei dir laufen schon ${MAX_BOARD_RUNS} Board-Agenten. Bitte warte, bis einer fertig ist.`
-      : 'Bei dir läuft gerade schon eine Anfrage in einem anderen Chat. Bitte warte, bis sie fertig ist.');
+      : maxParallelChats() === 1
+        ? 'Bei dir läuft gerade schon eine Anfrage in einem anderen Chat. Bitte warte, bis sie fertig ist.'
+        : `Bei dir laufen schon ${maxParallelChats()} Chats gleichzeitig. Bitte warte, bis einer fertig ist.`);
     req.sink.finish();
     return;
   }
@@ -582,7 +609,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   emitStatus(live, '⏳ Claude arbeitet …');
   mark(live, 'arbeitet');
 
-  const scratch = scratchFor(req.userId);
+  const scratch = workDirFor(req.userId, req.convId);
   if (live.mode === 'auto') live.workDir = scratch;
   // Eigene Claude-Konfiguration je Person (oder die geteilte des VM-Nutzers, siehe claudehome.ts).
   const home = homeFor(safeId(req.userId), req.email);

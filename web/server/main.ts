@@ -1499,7 +1499,7 @@ on('POST', /^\/api\/files\/([0-9a-f-]{36})\/chat$/, async (req, res, m) => {
   const f = await fileFor(u, m[1]);
   if (!f) throw new HttpError(404, 'Datei nicht gefunden.');
   const rel = copyToScratch(u, f);
-  send(res, 200, { chatUrl: chatUrl(`Ich habe dir die Datei \`${rel}\` in dein Arbeitsverzeichnis gelegt („${f.name}“). Lies sie und sag mir kurz, was drinsteht.`) });
+  send(res, 200, { chatUrl: chatUrl(`Ich habe dir die Datei \`${rel}\` abgelegt („${f.name}“). Lies sie und sag mir kurz, was drinsteht.`) });
 });
 
 on('GET', /^\/api\/chats\/shared$/, async (req, res) => {
@@ -1510,7 +1510,7 @@ on('GET', /^\/api\/chats\/shared$/, async (req, res) => {
 on('POST', /^\/api\/chats\/([A-Za-z0-9_-]{6,64})\/copy$/, async (req, res, m) => {
   const u = await needUser(req);
   const c = await copySharedChat(u, m[1]);
-  send(res, 200, { ...c, chatUrl: chatUrl(`${c.owner} hat den Chat „${c.title}“ mit mir geteilt. Der Verlauf liegt als \`${c.file}\` in deinem Arbeitsverzeichnis. Lies ihn und mach mit mir dort weiter, wo er aufhört — als neue, eigene Unterhaltung.`) });
+  send(res, 200, { ...c, chatUrl: chatUrl(`${c.owner} hat den Chat „${c.title}“ mit mir geteilt. Der Verlauf liegt unter \`${c.file}\`. Lies ihn und mach mit mir dort weiter, wo er aufhört — als neue, eigene Unterhaltung.`) });
 });
 
 on('GET', /^\/api\/sharelog$/, async (req, res) => {

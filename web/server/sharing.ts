@@ -127,7 +127,8 @@ export function copyToScratch(u: User, f: any): string {
   const dest = join(dir, f.name);
   copyFileSync(filePath(f), dest);
   chmodSync(dest, 0o600);
-  return `dateien/${f.name}`;
+  // Absolut: jeder neue Chat arbeitet in seinem eigenen Ordner (parallele Chats), ein relativer Pfad liefe dort ins Leere.
+  return dest;
 }
 
 // ---------- Chats (LibreChat-Links) ----------
@@ -191,7 +192,7 @@ export async function copySharedChat(u: User, shareId: string): Promise<{ file: 
   const file = join(dir, `${shareId.replace(/[^A-Za-z0-9_-]/g, '')}.md`);
   writeFileSync(file, md, { mode: 0o600 });
   logShare({ actor: u.email, action: 'copy', kind: 'chat', resource: shareId });
-  return { file: `geteilt/${shareId.replace(/[^A-Za-z0-9_-]/g, '')}.md`, title: link.title || 'Ohne Titel', owner: owner?.name ?? '?' };
+  return { file, title: link.title || 'Ohne Titel', owner: owner?.name ?? '?' };
 }
 
 /** Protokoll für Chat-Freigaben: LibreChat schreibt sie in aclentries; wir vergleichen periodisch. */

@@ -167,9 +167,9 @@ test('Anhänge landen im Arbeitsverzeichnis der Sitzung', async () => {
   ], { user: 'u6' });
   assert.match(a, /anhaenge\/c6\/Rechnung Mai\.pdf ✓/);
   assert.match(a, /anhaenge\/c6\/anhang-2\.png ✓/);
-  assert.ok(existsSync(join(STATE, 'scratch', 'u6', 'anhaenge', 'c6', 'Rechnung Mai.pdf')));
-  assert.ok(!existsSync(join(STATE, 'scratch', 'u6', 'anhaenge', 'c6', 'boese.sh')), 'nicht erlaubter Typ wird nicht abgelegt');
-  assert.equal(statSync(join(STATE, 'scratch', 'u6', 'anhaenge', 'c6', 'Rechnung Mai.pdf')).mode & 0o777, 0o600);
+  assert.ok(existsSync(join(STATE, 'scratch', 'u6', 'chats', 'c6', 'anhaenge', 'c6', 'Rechnung Mai.pdf')));
+  assert.ok(!existsSync(join(STATE, 'scratch', 'u6', 'chats', 'c6', 'anhaenge', 'c6', 'boese.sh')), 'nicht erlaubter Typ wird nicht abgelegt');
+  assert.equal(statSync(join(STATE, 'scratch', 'u6', 'chats', 'c6', 'anhaenge', 'c6', 'Rechnung Mai.pdf')).mode & 0o777, 0o600);
 });
 
 test('Nur-lesen-Modus (Board-Agent) lehnt Schreiben ohne Rückfrage ab', async () => {

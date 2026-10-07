@@ -9,7 +9,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
-import { handleTurn, stats, scratchFor, safeId, sessionsOf, type Sink } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, type Sink } from './sessions.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
 import { mockQuery } from './mock.ts';
@@ -251,9 +251,9 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
   const firstUser = textOf(messages.find((m) => m.role === 'user')?.content);
   const convId = header(req, 'x-librechat-conversation-id') ?? `h-${createHash('sha256').update(firstUser).digest('hex').slice(0, 24)}`;
 
-  // Anhänge ins Arbeitsverzeichnis der Person legen und im Prompt nennen.
+  // Anhänge in den Arbeitsordner dieses Chats legen und im Prompt nennen (relativer Pfad = relativ zu dessen cwd).
   if (atts.length) {
-    const { saved, rejected } = saveAttachments(scratchFor(userId), convId, atts);
+    const { saved, rejected } = saveAttachments(workDirFor(userId, convId), convId, atts);
     log('attachments', { user: userId, saved: saved.length, rejected: rejected.length });
     prompt = (prompt || 'Sieh dir bitte die angehängten Dateien an.') + '\n' + attachmentNote(saved, rejected);
   }
