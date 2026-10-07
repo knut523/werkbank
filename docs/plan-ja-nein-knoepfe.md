@@ -1,5 +1,5 @@
 ---
-status: Plan, nicht gebaut
+status: gebaut, reviewt (2 Runden), auf der Werkbank ausgerollt am 07.10.2026 — Tipp-Test im Browser offen
 quelle: Knut, 07.10.2026: „und gib mir einen Button zum Klicken oder Tappen“ (zu den Rückfragen der Werkbank) · „auch hier sollten wir plan-to-pr machen und reviewen“
 ---
 
@@ -47,13 +47,14 @@ die Antwort, die man sonst tippen würde.
 
 ## Definition of Done
 
-- [ ] Jede Rückfrage der Brücke endet mit den zwei Knöpfen; Tests in `claude-bridge/test` prüfen die Knopfzeile.
+- [x] Jede Rückfrage der Brücke endet mit den zwei Knöpfen; Tests in `claude-bridge/test` prüfen die Knopfzeile.
 - [ ] In LibreChat: Tipp auf ✅ Ja sendet „ja“, auf ✖️ Nein sendet „nein“, die Antwort des Agenten streamt wie gewohnt.
-- [ ] Knöpfe gesperrt während des Streamens, nach dem ersten Tipp und in älteren Rückfragen.
+- [x] Knöpfe gesperrt während des Streamens, nach dem ersten Tipp und in älteren Rückfragen.
 - [ ] Auf dem Handy (390 px) gut tippbar; hell und dunkel lesbar.
-- [ ] `href`s außer `#werkbank-antwort:ja|nein` bleiben normale Links (kein beliebiger Text per Link sendbar).
-- [ ] Patch passt auf den LibreChat-Stand der Werkbank; Client-Build grün; ausgerollt.
-- [ ] Review (unabhängig) vor dem Ausrollen.
+- [x] `href`s außer `#werkbank-antwort:ja|nein` bleiben normale Links (kein beliebiger Text per Link sendbar).
+- [x] Beschriftung kommt aus dem Wert, nicht aus dem Linktext; Knopf-Anker im Text des Modells (auch über Stream-Deltas verteilt) und in Werkzeugeingaben der Rückfrage werden entschärft (Review Runde 2).
+- [x] Patch passt auf den LibreChat-Stand der Werkbank; Client-Build grün; ausgerollt.
+- [x] Review (unabhängig) vor dem Ausrollen.
 
 ## Fertig heißt
 
