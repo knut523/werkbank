@@ -100,11 +100,11 @@ export function chatUrl(prompt: string, opts: { spec?: string; submit?: boolean 
 
 import { librechatAccessToken } from './auth.ts';
 
-export const CHAT_AGENT_INSTRUCTION = `Du bist vom Werkbank-Board auf dieses Ticket angesetzt. Arbeite nach plan-to-pr — auch wenn es keine Coding-Aufgabe ist (Recherche, Dokument, Abstimmung) (Knut, 07.10.2026):
+export const CHAT_AGENT_INSTRUCTION = `Du bist vom Werkbank-Board auf dieses Ticket angesetzt. Arbeite nach plan-to-pr — auch wenn es keine Coding-Aufgabe ist (Recherche, Dokument, Abstimmung):
 1. Lies zuerst, was Vault-Register und Jira sagen (Vault vor Code, Board-Stand ist nicht Arbeitsstand).
-2. Schreib dann einen kurzen Plan (Skill plan-to-pr bzw. grilling): Ziel, Ergebnis (was am Ende übergeben wird und wo es liegt), Stand heute, Schnitte, Definition of Done. Lege ihn als Vault-Notiz im Workstream-Bereich unten ab, mit \`jira: <Key>\` und \`projekt: <Projekt>\` im Frontmatter.
-3. Stell danach ALLE offenen Fragen auf einmal, jede im Format Kontext · Optionen · Empfehlung · leere Zeile „  - Knut:“ — und warte auf die Antworten, bevor du umsetzt. Gibt es keine offene Frage, sag das ausdrücklich und mach weiter.
-4. Setz dann die Schnitte um. Schreibaktionen rufst du einfach auf; was eine Rückfrage braucht, fragt das System im Chat. GitHub pushen und mergen ist gesperrt.
+2. Schreib dann einen kurzen Plan (Skill plan-to-pr bzw. grilling): Ziel, Ergebnis (was am Ende übergeben wird und wo es liegt), Stand heute, Schnitte, Definition of Done. Leg ihn als Vault-Notiz ab — im Workstream-Bereich unten, wenn einer genannt ist, sonst neben die passende Area-Notiz —, mit \`jira: <Key>\` und \`projekt: <Projekt>\` im Frontmatter.
+3. Stell danach alle offenen inhaltlichen Entscheidungen auf einmal, als Text am Ende deiner Antwort (je Kontext · Optionen · Empfehlung · leere Zeile „  - {{NAME}}:“), und setz erst nach den Antworten um. Gibt es keine, sag das und mach weiter. Ob du eine Datei schreiben oder einen Befehl ausführen darfst, fragst du nicht selbst — ruf das Werkzeug direkt auf, das System fragt, wo nötig.
+4. Setz dann die Schnitte um. GitHub pushen und mergen ist gesperrt.
 5. Neue Vault-Notizen oder Dateien zu diesem Ticket bekommen im Frontmatter \`jira: <Key>\` (dann erscheinen sie an der Karte); Dokumente, die du erstellst, landen nach dem Lauf von selbst unter „Meine Dateien“.
 6. Keine neuen Tickets ohne ausdrücklichen Auftrag.
 Schließe mit „### Stand“ (3–5 Zeilen: was erledigt ist, was offen ist, wer dran ist) und „### Kommentarentwurf“ (höchstens 8 Zeilen für Jira).`;
@@ -134,7 +134,7 @@ export async function createLibreChat(u: User, text: string): Promise<string> {
   return String(j.conversationId);
 }
 
-export interface AgentPlace { projectName?: string | null; areaDir?: string | null }
+export interface AgentPlace { projectName?: string | null; areaDir?: string | null; personName?: string | null }
 
 /** Projekt und Workstream-Bereich als Zeile für den Prompt (Plan 81, Schnitte 6/7). */
 export function placeLine(place: AgentPlace = {}): string {
@@ -147,7 +147,7 @@ export function chatAgentPrompt(i: Issue, note: string, kind: 'work' | 'discuss'
   const title = `${i.key} · ${i.summary}`.slice(0, 80);
   return kind === 'discuss'
     ? `${title}\n\n${ticketPrompt(i)}\n\nLass uns an diesem Ticket arbeiten. Lies zuerst, was Vault und Jira dazu sagen.${note ? `\n\n${note}` : ''}`
-    : `${title}\n\n${CHAT_AGENT_INSTRUCTION}\n\n---\n\n${ticketPrompt(i, [placeLine(place), note ? `Hinweis der Person: ${note}` : ''].filter(Boolean).join('\n\n'))}`;
+    : `${title}\n\n${CHAT_AGENT_INSTRUCTION.replace('{{NAME}}', (place.personName || 'Name').split(/\s+/)[0])}\n\n---\n\n${ticketPrompt(i, [placeLine(place), note ? `Hinweis der Person: ${note}` : ''].filter(Boolean).join('\n\n'))}`;
 }
 
 export async function startChatAgent(u: User, issue: Issue, note: string, kind: 'work' | 'discuss' = 'work', place: AgentPlace & { projectId?: string | null } = {}): Promise<{ id: string; conv: string; url: string }> {

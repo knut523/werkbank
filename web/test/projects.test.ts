@@ -28,10 +28,11 @@ test('Begriffe: ohne Key, Füllwörter und kurze Wörter', () => {
   assert.deepEqual([...p.terms('PM-321 · BLZ-Liste für die Bankberater prüfen')].sort(), ['bankberater', 'liste']);
 });
 
-test('passt: zwei gemeinsame Begriffe oder ein langer', () => {
+test('passt: zwei gemeinsame Begriffe; ein einzelnes (auch langes) Wort reicht nicht', () => {
   assert.ok(p.matches('BLZ-Liste Bankberater', 'Bankberater: BLZ-Liste nachziehen'));
-  assert.ok(p.matches('Sammelanmeldung', 'Sammelanmeldung für Gemeinden'), 'ein langer Begriff reicht');
-  assert.ok(!p.matches('Cockpit Report', 'Report an MAXENERGY'), 'ein kurzer gemeinsamer Begriff reicht nicht');
+  assert.ok(!p.matches('Sammelanmeldung', 'Sammelanmeldung für Gemeinden'), 'ein Wort allein verbindet nicht mehr');
+  assert.ok(!p.matches('Konzept Abstimmung mit Raiffeisen', 'Abstimmung Preisblatt Partner'), 'allgemeine Projektwörter zählen nicht');
+  assert.ok(!p.matches('Cockpit Report', 'Report an MAXENERGY'));
 });
 
 test('Projektname: Titel ohne führenden Key', () => {
@@ -45,12 +46,19 @@ test('Workstream-Slug wie die vorhandenen Ordner', () => {
   assert.equal(p.workstreamSlug('Laufender Betrieb'), 'Laufender-Betrieb');
 });
 
-test('Workstream-Bereich: vorhandener Ordner wird genommen, sonst Domäne nach Titel, sonst Workstreams', () => {
-  assert.equal(p.workstreamArea({ key: 'PM-70', summary: 'Produkt OLAF' }).dir, 'olaf/2-Areas/Product/Produkt-OLAF');
-  assert.equal(p.workstreamArea({ key: 'PM-153', summary: 'Laufender Betrieb' }).dir, 'olaf/2-Areas/Operations/Laufender-Betrieb');
-  assert.equal(p.workstreamArea({ key: 'PM-71', summary: 'Vermarktung & GTM OLAF' }).dir, 'olaf/2-Areas/Marketing/Vermarktung-GTM-OLAF');
-  assert.equal(p.workstreamArea({ key: 'PM-155', summary: 'Telefonagent Partnerschaft & Venture Evaluierung' }).dir, 'olaf/2-Areas/Workstreams/Telefonagent-Partnerschaft-Venture-Evaluierung');
-  assert.equal(p.workstreamArea({ key: 'PM-70', summary: 'Produkt OLAF' }).overview, 'olaf/2-Areas/Product/Produkt-OLAF/0-produkt-olaf-uebersicht.md');
+test('Workstream-Bereich: Domäne nach olaf-2-areas.md (Key), vorhandener Ordner wird genommen, unbekannt → keiner', () => {
+  assert.equal(p.workstreamArea({ key: 'PM-70', summary: 'Produkt OLAF' })!.dir, 'olaf/2-Areas/Product/Produkt-OLAF');
+  assert.equal(p.workstreamArea({ key: 'PM-153', summary: 'Laufender Betrieb' })!.dir, 'olaf/2-Areas/Operations/Laufender-Betrieb');
+  assert.equal(p.workstreamArea({ key: 'PM-71', summary: 'Vermarktung & GTM OLAF' })!.dir, 'olaf/2-Areas/Marketing/Vermarktung-GTM-OLAF');
+  assert.equal(p.workstreamArea({ key: 'PM-155', summary: 'Telefonagent Partnerschaft & Venture Evaluierung' })!.dir, 'olaf/2-Areas/Governance/Telefonagent-Partnerschaft-Venture-Evaluierung');
+  assert.equal(p.workstreamArea({ key: 'PM-154', summary: 'GF-Modelle außerhalb OLAF' })!.dir, 'olaf/2-Areas/Governance/GF-Modelle-ausserhalb-OLAF');
+  assert.equal(p.workstreamArea({ key: 'PM-72', summary: 'Tarif & Tracking & Beschaffung' })!.dir, 'olaf/2-Areas/Product/Tarif-Tracking-Beschaffung');
+  assert.equal(p.workstreamArea({ key: 'PM-999', summary: '../../etc' }), null, 'ohne Domäne kein Ordner');
+  assert.equal(p.workstreamArea({ key: 'PM-70', summary: 'Produkt OLAF' })!.overview, 'olaf/2-Areas/Product/Produkt-OLAF/0-produkt-olaf-uebersicht.md');
+});
+
+test('Slug kann nicht aus dem Bereich ausbrechen', () => {
+  assert.equal(p.workstreamSlug('../../etc/passwd'), 'etc-passwd');
 });
 
 test('Werkbank-Block: ersetzt nur zwischen den Markern, hängt sonst an', () => {
@@ -63,6 +71,14 @@ test('Werkbank-Block: ersetzt nur zwischen den Markern, hängt sonst an', () => 
   assert.doesNotMatch(twice, /- A/);
   assert.match(twice, /Nachtrag der Menschen\./, 'Text nach dem Block bleibt');
   assert.equal((twice.match(/<!-- werkbank:projekte -->/g) ?? []).length, 1, "ein Block, nicht zwei");
+});
+
+test('Werkbank-Block: kaputte Marker → nicht schreiben (kein Textverlust, kein zweiter Block)', () => {
+  assert.equal(p.spliceBlock('# B\n<!-- werkbank:projekte -->\nalt\n\nWichtiger Text der Menschen.\n', '- X'), null, 'End-Marker fehlt');
+  assert.equal(p.spliceBlock('# B\nText\n<!-- /werkbank:projekte -->\n', '- X'), null, 'Start-Marker fehlt');
+  assert.equal(p.spliceBlock('<!-- werkbank:projekte -->\na\n<!-- /werkbank:projekte -->\n<!-- werkbank:projekte -->\nb\n<!-- /werkbank:projekte -->\n', '- X'), null, 'doppelt');
+  assert.equal(p.spliceBlock('<!-- /werkbank:projekte -->\nText\n<!-- werkbank:projekte -->\n', '- X'), null, 'vertauscht');
+  assert.match(p.spliceBlock('# B\r\n<!-- werkbank:projekte -->\r\nalt\r\n<!-- /werkbank:projekte -->\r\nRest\r\n', '- X')!, /- X[\s\S]*Rest/, 'CRLF-Notiz: ersetzt, Rest bleibt');
 });
 
 const user = { id: 'u1', name: 'Knut', email: 'knut@example.test' } as any;
@@ -85,11 +101,17 @@ test('Übersicht: legt den Bereich an, listet Projekte und Tickets, bleibt beim 
   await p.assignProject(user, issue('PM-9', 'Service-Mails prüfen', 'PM-153'));
   const im = new Map([['PM-9', issue('PM-9', 'Service-Mails prüfen', 'PM-153')]]);
   const rel = await p.syncWorkstreamOverview(ws, im);
-  const abs = join(VAULT, rel);
+  const abs = join(VAULT, rel!);
   assert.ok(existsSync(abs));
   const first = readFileSync(abs, 'utf8');
   assert.match(first, /^---\njira: PM-153/);
   assert.match(first, /### Service-Mails prüfen\n- \[PM-9\]/);
+  // Dateinamen erscheinen nie in der Team-Übersicht (Personendaten), nur die Anzahl.
+  const pr: any = await db!.wb().collection('projects').findOne({ tickets: 'PM-9' });
+  await db!.wb().collection('files').insertOne({ _id: 'f-x' as any, kind: 'agent', name: 'Rechnung Huber Maria.pdf', owner: 'u1', projectId: pr._id, source: { path: '/x' } } as any);
+  await p.syncWorkstreamOverview(ws, im);
+  assert.doesNotMatch(readFileSync(abs, 'utf8'), /Huber/);
+  assert.match(readFileSync(abs, 'utf8'), /1 Datei in der Werkbank/);
   writeFileSync(abs, first.replace('# Laufender Betrieb', '# Laufender Betrieb\n\nNotiz von Daniela.'));
   await p.syncWorkstreamOverview(ws, im);
   const second = readFileSync(abs, 'utf8');

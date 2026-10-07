@@ -57,12 +57,17 @@ export async function ingestOne(u: User, path: string, ctx: RunContext): Promise
   if (c.kind === 'skip') return c.why;
   const col = wb().collection('files');
   const sourcePath = c.kind === 'vault' ? `vault:${c.vaultPath}` : real(c.abs);
+  // Von der Person gelöscht: nicht wiederholen, auch wenn die Brücke den Pfad noch in `written` führt (Review S1).
+  if (await wb().collection('files_ignored').findOne({ owner: u.id, sourcePath })) return 'gelöscht';
   const existing: any = await col.findOne({ owner: u.id, 'source.path': sourcePath });
   const tickets = ctx.key ? [ctx.key] : [];
   const now = new Date();
   if (c.kind === 'vault') {
     if (existing) {
-      await col.updateOne({ _id: existing._id }, { $set: { updatedAt: now, ...(ctx.projectId ? { projectId: ctx.projectId } : {}) }, $addToSet: { tickets: { $each: tickets } } });
+      // Nur wenn sich wirklich etwas ändert, bekommt der Eintrag einen neuen Stand (Review S3).
+      const newTicket = tickets.some((t) => !(existing.tickets ?? []).includes(t));
+      const newProject = !!ctx.projectId && existing.projectId !== ctx.projectId;
+      if (newTicket || newProject) await col.updateOne({ _id: existing._id }, { $set: { updatedAt: now, ...(newProject ? { projectId: ctx.projectId } : {}) }, $addToSet: { tickets: { $each: tickets } } });
       return 'unverändert';
     }
     await col.insertOne({
@@ -72,9 +77,15 @@ export async function ingestOne(u: User, path: string, ctx: RunContext): Promise
     } as any);
     return 'neu';
   }
+  // Größe und Änderungszeit gleich: nicht neu lesen und hashen (Review S2 — sonst jede Datei bei jedem Takt).
+  const st = statSync(c.abs);
+  if (existing && existing.source?.size === st.size && existing.source?.mtimeMs === st.mtimeMs) return 'unverändert';
   const bytes = readFileSync(c.abs);
   const sha256 = createHash('sha256').update(bytes).digest('hex');
-  if (existing && existing.sha256 === sha256) return 'unverändert';
+  if (existing && existing.sha256 === sha256) {
+    await col.updateOne({ _id: existing._id }, { $set: { 'source.size': st.size, 'source.mtimeMs': st.mtimeMs } });
+    return 'unverändert';
+  }
   const id = existing?._id ?? randomUUID();
   const name = existing?.name ?? safeName(basename(c.abs));
   const dir = join(filesDir(), id);
@@ -82,13 +93,13 @@ export async function ingestOne(u: User, path: string, ctx: RunContext): Promise
   copyFileSync(c.abs, join(dir, name));
   chmodSync(join(dir, name), 0o600);
   if (existing) {
-    await col.updateOne({ _id: id }, { $set: { size: bytes.length, sha256, updatedAt: now, status: 'fertig', ...(ctx.projectId ? { projectId: ctx.projectId } : {}) }, $addToSet: { tickets: { $each: tickets } } });
+    await col.updateOne({ _id: id }, { $set: { size: bytes.length, sha256, updatedAt: now, status: 'fertig', 'source.size': st.size, 'source.mtimeMs': st.mtimeMs, ...(ctx.projectId ? { projectId: ctx.projectId } : {}) }, $addToSet: { tickets: { $each: tickets } } });
     return 'aktualisiert';
   }
   await col.insertOne({
     _id: id as any, kind: 'agent', name, size: bytes.length, mime: ALLOWED_EXT[extname(name).toLowerCase()], sha256,
     owner: u.id, ownerEmail: u.email, ownerName: u.name, sharedWith: [], personal: false, tickets, projectId: ctx.projectId ?? null,
-    source: { path: sourcePath, conv: ctx.conv, runId: ctx.runId ?? null }, status: 'fertig', createdAt: now, updatedAt: now,
+    source: { path: sourcePath, conv: ctx.conv, runId: ctx.runId ?? null, size: st.size, mtimeMs: st.mtimeMs }, status: 'fertig', createdAt: now, updatedAt: now,
   } as any);
   return 'neu';
 }

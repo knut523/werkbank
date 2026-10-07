@@ -7,7 +7,7 @@
 // Notiz gehört den Menschen.
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { cfg, browseUrl } from './config.ts';
 import { wb } from './db.ts';
@@ -21,18 +21,20 @@ export interface Project {
 
 const STOP = new Set(['und', 'oder', 'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einen', 'mit', 'für', 'fuer', 'von', 'auf',
   'aus', 'bei', 'nach', 'über', 'ueber', 'unter', 'zum', 'zur', 'ist', 'sind', 'wird', 'werden', 'noch', 'neue', 'neuer', 'alle',
-  'olaf', 'the', 'and', 'for', 'with', 'task', 'ticket', 'klären', 'klaeren', 'prüfen', 'pruefen', 'erstellen', 'umsetzen', 'machen']);
+  'olaf', 'the', 'and', 'for', 'with', 'task', 'ticket', 'klären', 'klaeren', 'prüfen', 'pruefen', 'erstellen', 'umsetzen', 'machen',
+  // Allgemeine Projektwörter, die nichts über das Thema sagen (Review 07.10.: „Abstimmung“ verband fremde Tickets).
+  'abstimmung', 'dokumentation', 'anforderungen', 'anforderung', 'konzept', 'umsetzung', 'analyse', 'planung', 'update',
+  'review', 'test', 'tests', 'testen', 'fehler', 'anpassen', 'anpassung', 'erweitern', 'erweiterung', 'thema', 'themen']);
 
 /** Begriffe eines Titels: klein, ohne Key, ohne Füllwörter, ab 4 Zeichen. */
 export function terms(s: string): Set<string> {
   return new Set(s.toLowerCase().replace(/\b[a-z]+-\d+\b/g, ' ').split(/[^a-z0-9äöüß]+/).filter((w) => w.length >= 4 && !STOP.has(w)));
 }
 
-/** Passt ein Projektname zum Ticket? Zwei gemeinsame Begriffe, oder einer, der lang (≥ 8) ist. */
+/** Passt ein Projektname zum Ticket? Mindestens zwei gemeinsame Begriffe (ein einzelnes Wort verband fremde Tickets). */
 export function matches(projectName: string, title: string): boolean {
   const a = terms(projectName), b = terms(title);
-  const common = [...a].filter((w) => b.has(w));
-  return common.length >= 2 || common.some((w) => w.length >= 8);
+  return [...a].filter((w) => b.has(w)).length >= 2;
 }
 
 /** Name eines neuen Projekts: der Ticket-Titel ohne führenden Key. */
@@ -58,6 +60,9 @@ export async function assignProject(u: User, i: Issue): Promise<Project | null> 
   }
   const p: Project = { _id: randomUUID(), name: projectNameFor(i), workstream: ws, tickets: [i.key], createdBy: u.id, createdByName: u.name, createdAt: now, updatedAt: now };
   await col().insertOne(p as any);
+  // Zwei gleichzeitige Starts am selben Ticket: das älteste Projekt gewinnt, das jüngere geht wieder.
+  const all = await col().find({ tickets: i.key }).sort({ createdAt: 1, _id: 1 }).toArray();
+  if (all.length > 1 && all[0]._id !== p._id) { await col().deleteOne({ _id: p._id }); return all[0]; }
   return p;
 }
 
@@ -113,19 +118,22 @@ export async function mergeProjects(fromId: string, intoId: string): Promise<voi
 
 // ---------- Workstream = eigener Bereich im Vault ----------
 
-/** Domäne unter olaf/2-Areas je Workstream-Titel. Überschreibbar: WERKBANK_WORKSTREAM_AREAS='[["regex","Domäne"],…]'. */
-const DEFAULT_AREAS: [RegExp, string][] = [
-  [/produkt/i, 'Product'],
-  [/vermarktung|gtm|marketing/i, 'Marketing'],
-  [/operations|betrieb/i, 'Operations'],
-  [/strategie|intern|orga/i, 'Governance'],
-  [/gf-modell|geschäftsfeld|geschaeftsfeld/i, 'Neue-Geschaeftsfelder'],
-];
+/**
+ * Domäne unter olaf/2-Areas je Workstream — wie `olaf/2-Areas/olaf-2-areas.md` sie führt (Review 07.10.2026; vorher
+ * aus dem Titel geraten, das legte einen fünften Ordner an). Überschreibbar: WERKBANK_WORKSTREAM_AREAS='{"PM-70":"Product",…}'.
+ * Ein Workstream ohne Eintrag bekommt keinen automatisch angelegten Bereich (kein erfundener Ordner).
+ */
+const DEFAULT_AREAS: Record<string, string> = {
+  'PM-69': 'Governance', 'PM-75': 'Governance', 'PM-150': 'Governance', 'PM-152': 'Governance', 'PM-154': 'Governance', 'PM-155': 'Governance',
+  'PM-70': 'Product', 'PM-72': 'Product', 'PM-223': 'Product',
+  'PM-71': 'Marketing',
+  'PM-73': 'Operations', 'PM-153': 'Operations',
+};
 
-function areaRules(): [RegExp, string][] {
+function areaRules(): Record<string, string> {
   try {
     const raw = process.env.WERKBANK_WORKSTREAM_AREAS;
-    if (raw) return (JSON.parse(raw) as [string, string][]).map(([re, d]) => [new RegExp(re, 'i'), d]);
+    if (raw) return { ...DEFAULT_AREAS, ...(JSON.parse(raw) as Record<string, string>) };
   } catch { /* Vorgabe */ }
   return DEFAULT_AREAS;
 }
@@ -149,10 +157,11 @@ function existingArea(slug: string): string | null {
   return null;
 }
 
-/** Ordner und Übersicht des Workstream-Bereichs (relativ zum Vault). */
-export function workstreamArea(ws: Pick<Issue, 'key' | 'summary'>): { dir: string; overview: string } {
+/** Ordner und Übersicht des Workstream-Bereichs (relativ zum Vault); null, wenn der Workstream keine Domäne hat. */
+export function workstreamArea(ws: Pick<Issue, 'key' | 'summary'>): { dir: string; overview: string } | null {
   const slug = workstreamSlug(ws.summary);
-  const domain = areaRules().find(([re]) => re.test(ws.summary))?.[1] ?? 'Workstreams';
+  const domain = areaRules()[ws.key];
+  if (!domain || !/^[A-Za-z0-9-]+$/.test(domain)) return null;
   const abs = existingArea(slug) ?? join(olafRoot(), '2-Areas', domain, slug);
   const dir = relative(cfg.vaultDir, abs);
   return { dir, overview: join(dir, `0-${slug.toLowerCase()}-uebersicht.md`) };
@@ -161,12 +170,21 @@ export function workstreamArea(ws: Pick<Issue, 'key' | 'summary'>): { dir: strin
 export const MARK_START = '<!-- werkbank:projekte -->';
 export const MARK_END = '<!-- /werkbank:projekte -->';
 
-/** Setzt den Werkbank-Block in eine Notiz ein (ersetzt ihn, oder hängt ihn an); der Rest bleibt unangetastet. */
-export function spliceBlock(note: string, block: string): string {
+const count = (s: string, x: string) => s.split(x).length - 1;
+
+/**
+ * Setzt den Werkbank-Block in eine Notiz ein: ersetzt ihn, wenn genau ein Start- und danach genau ein End-Marker
+ * stehen; hängt ihn an, wenn keiner da ist. Bei jedem anderen Zustand (einer fehlt, doppelt, vertauscht) null — dann
+ * schreibt die Werkbank NICHT, statt menschlichen Text zu löschen oder einen zweiten Block anzuhängen (Review B1).
+ */
+export function spliceBlock(note: string, block: string): string | null {
   const full = `${MARK_START}\n${block.trim()}\n${MARK_END}`;
-  const a = note.indexOf(MARK_START), b = note.indexOf(MARK_END);
-  if (a >= 0 && b > a) return note.slice(0, a) + full + note.slice(b + MARK_END.length);
-  return note.replace(/\s*$/, '') + `\n\n## Projekte (Werkbank)\n\n${full}\n`;
+  const starts = count(note, MARK_START), ends = count(note, MARK_END);
+  if (starts === 0 && ends === 0) return note.replace(/\s*$/, '') + `\n\n## Projekte (Werkbank)\n\n${full}\n`;
+  const a = note.indexOf(MARK_START);
+  const b = note.indexOf(MARK_END, a + MARK_START.length);
+  if (starts !== 1 || ends !== 1 || a < 0 || b < 0) return null;
+  return note.slice(0, a) + full + note.slice(b + MARK_END.length);
 }
 
 function newOverview(ws: Pick<Issue, 'key' | 'summary'>): string {
@@ -185,8 +203,10 @@ function newOverview(ws: Pick<Issue, 'key' | 'summary'>): string {
 }
 
 /** Übersicht eines Workstreams neu schreiben (nur den Werkbank-Block). Liefert den Vault-Pfad. */
-export async function syncWorkstreamOverview(ws: Pick<Issue, 'key' | 'summary'>, issues: Map<string, Issue>): Promise<string> {
-  const { dir, overview } = workstreamArea(ws);
+export async function syncWorkstreamOverview(ws: Pick<Issue, 'key' | 'summary'>, issues: Map<string, Issue>): Promise<string | null> {
+  const area = workstreamArea(ws);
+  if (!area) return null;
+  const { dir, overview } = area;
   const projects = await col().find({ workstream: ws.key }).sort({ updatedAt: -1 }).toArray();
   const lines: string[] = [];
   if (!projects.length) lines.push('_Noch keine Projekte._');
@@ -196,9 +216,12 @@ export async function syncWorkstreamOverview(ws: Pick<Issue, 'key' | 'summary'>,
       const i = issues.get(k);
       lines.push(`- [${k}](${browseUrl(k)}) ${i ? `${i.summary} — ${i.status}${i.assignee ? `, ${i.assignee}` : ''}` : ''}`.trimEnd());
     }
-    // Dateien: nur Namen und nur nicht personenbezogene (die Datei selbst bleibt privat in der Werkbank).
-    const files = await wb().collection('files').find({ projectId: p._id, personal: { $ne: true } }, { projection: { name: 1, kind: 1, vaultPath: 1 } }).toArray();
-    for (const f of files as any[]) lines.push(f.kind === 'vault' && f.vaultPath ? `- 📝 [[${String(f.vaultPath).replace(/\.md$/, '')}]]` : `- 📎 ${f.name}`);
+    // Vault-Notizen als Link; Dateien nur als Anzahl — ein Dateiname kann Personendaten tragen (Review S4), die Dateien
+    // selbst bleiben privat in der Werkbank.
+    const files = await wb().collection('files').find({ projectId: p._id }, { projection: { kind: 1, vaultPath: 1 } }).toArray();
+    for (const f of files as any[]) if (f.kind === 'vault' && f.vaultPath) lines.push(`- 📝 [[${String(f.vaultPath).replace(/\.md$/, '')}]]`);
+    const other = (files as any[]).filter((f) => f.kind !== 'vault').length;
+    if (other) lines.push(`- 📎 ${other} ${other === 1 ? 'Datei' : 'Dateien'} in der Werkbank (an den Tickets)`);
     const chats = await wb().collection('agent_runs').find({ projectId: p._id, url: { $exists: true } }, { projection: { url: 1, key: 1, startedAt: 1 } }).sort({ startedAt: -1 }).limit(5).toArray();
     for (const c of chats as any[]) lines.push(`- 💬 [Chat ${c.key}, ${new Date(c.startedAt).toISOString().slice(0, 10)}](${c.url})`);
     lines.push('');
@@ -207,9 +230,12 @@ export async function syncWorkstreamOverview(ws: Pick<Issue, 'key' | 'summary'>,
   const existed = existsSync(abs);
   const before = existed ? readFileSync(abs, 'utf8') : newOverview(ws);
   const after = spliceBlock(before, lines.join('\n'));
+  if (after === null) throw new Error(`Werkbank-Marker in ${overview} unvollständig oder doppelt — nicht geschrieben`);
   if (!existed || after !== before) {
     mkdirSync(join(cfg.vaultDir, dir), { recursive: true });
-    writeFileSync(abs, after);
+    const tmp = `${abs}.werkbank-${process.pid}.tmp`;
+    writeFileSync(tmp, after);
+    renameSync(tmp, abs); // atomar: nie eine halbe Übersicht im Vault
   }
   return overview;
 }

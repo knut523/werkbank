@@ -30,7 +30,8 @@ export async function connect(): Promise<MongoClient> {
       // Plan 81: Projekte je Workstream, Agenten-Dateien je Lauf
       db.collection('projects').createIndex({ tickets: 1 }),
       db.collection('projects').createIndex({ workstream: 1, updatedAt: -1 }),
-      db.collection('files').createIndex({ owner: 1, 'source.path': 1 }),
+      db.collection('files').createIndex({ owner: 1, 'source.path': 1 }, { unique: true, partialFilterExpression: { 'source.path': { $exists: true } } }),
+      db.collection('files_ignored').createIndex({ owner: 1, sourcePath: 1 }, { unique: true }),
     ]);
   }
   return client;

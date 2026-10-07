@@ -669,13 +669,18 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res
   // „Nur Entwurf“: wie bisher lesend im Hintergrund, Ergebnis als Kommentarentwurf an der Karte.
   // Plan 81 (Schnitte 6/7): das Ticket bekommt sein Projekt (zuordnen vor anlegen), der Agent den Bereich seines
   // Workstreams im Vault für Plan und Notizen. Die Übersicht des Bereichs wird danach nachgezogen.
-  const im = await issueMap();
-  const project = await assignProject(u, i).catch((e) => { log('projekt fehlgeschlagen', { key: i.key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
-  const ws = i.workstream ? im.get(i.workstream) : undefined;
-  const areaDir = ws ? workstreamArea(ws).dir : null;
-  if (ws) syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 120) }));
   if (b.mode !== 'draft') {
-    const r = await startChatAgent(u, i, String(b.note ?? '').slice(0, 2000), 'work', { projectName: project?.name ?? null, areaDir, projectId: project?._id ?? null });
+    // Erst prüfen, ob schon ein Agent der Person auf der Karte arbeitet — sonst entstünde für einen abgelehnten Start
+    // ein Projekt und ein Vault-Eintrag (Review).
+    if (await wb().collection('agent_runs').findOne({ key: i.key, userId: u.id, mode: 'chat', status: { $in: ['läuft', 'wartet auf ja'] } })) {
+      throw new HttpError(409, 'Auf diesem Ticket arbeitet schon ein Agent von dir — im Chat weitermachen.');
+    }
+    const im = await issueMap();
+    const project = await assignProject(u, i).catch((e) => { log('projekt fehlgeschlagen', { key: i.key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
+    const ws = i.workstream ? im.get(i.workstream) : undefined;
+    const areaDir = ws ? workstreamArea(ws)?.dir ?? null : null;
+    if (ws) syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 120) }));
+    const r = await startChatAgent(u, i, String(b.note ?? '').slice(0, 2000), 'work', { projectName: project?.name ?? null, areaDir, projectId: project?._id ?? null, personName: u.name });
     log('agent chat', { user: u.id, key: i.key, conv: r.conv });
     return send(res, 200, { ...r, mode: 'chat' });
   }
@@ -1487,12 +1492,14 @@ on('GET', /^\/api\/files\/([0-9a-f-]{36})\/download$/, async (req, res, m) => {
   const u = await needUser(req);
   const f = await fileFor(u, m[1]);
   if (!f) throw new HttpError(404, 'Datei nicht gefunden.');
+  // Eine verschobene Vault-Notiz (oder eine fehlende Kopie) ist ein 404, kein Absturz des Prozesses (Review B2).
+  if (!existsSync(filePath(f))) throw new HttpError(404, f.kind === 'vault' ? 'Die Notiz liegt nicht mehr an dieser Stelle im Vault.' : 'Datei nicht mehr vorhanden.');
   res.writeHead(200, {
     'content-type': 'application/octet-stream', 'x-content-type-options': 'nosniff',
     'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(f.name)}`,
     'content-security-policy': "sandbox; default-src 'none'", 'cache-control': 'no-store',
   });
-  createReadStream(filePath(f)).pipe(res);
+  createReadStream(filePath(f)).on('error', () => res.destroy()).pipe(res);
 });
 
 on('POST', /^\/api\/files\/([0-9a-f-]{36})\/share$/, async (req, res, m) => {
@@ -1510,6 +1517,7 @@ on('POST', /^\/api\/files\/([0-9a-f-]{36})\/chat$/, async (req, res, m) => {
   const u = await needUser(req);
   const f = await fileFor(u, m[1]);
   if (!f) throw new HttpError(404, 'Datei nicht gefunden.');
+  if (!existsSync(filePath(f))) throw new HttpError(404, f.kind === 'vault' ? 'Die Notiz liegt nicht mehr an dieser Stelle im Vault.' : 'Datei nicht mehr vorhanden.');
   const rel = copyToScratch(u, f);
   send(res, 200, { chatUrl: chatUrl(`Ich habe dir die Datei \`${rel}\` abgelegt („${f.name}“). Lies sie und sag mir kurz, was drinsteht.`) });
 });
@@ -1761,26 +1769,32 @@ async function backgroundJobs() {
 
   // Plan 81, Schnitt 3: was ein Agent fertig geschrieben hat, landet von selbst in „Meine Dateien“ (Vault-Notizen als
   // Link, Dateien aus dem Arbeitsordner als Kopie); die Workstream-Übersichten der berührten Projekte ziehen nach.
+  let filesTickRunning = false;
   const filesTick = async () => {
+    if (filesTickRunning) return; // ein Lauf zur Zeit — zwei gleichzeitige legten doppelte Einträge an (Review S2)
+    filesTickRunning = true;
     try {
-      const im = await issueMap();
       const touched = new Set<string>();
       for (const person of (await teammates()).filter((x) => allowed(x.email))) {
-        let sessions: any[] = [];
         try {
           const r = await fetch(`${cfg.bridgeUrl}/sessions?user=${encodeURIComponent(person.id)}`, { headers: { 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' }, signal: AbortSignal.timeout(5000) });
-          if (r.ok) sessions = ((await r.json()) as any).sessions ?? [];
-        } catch { continue; }
-        const { changed, projects } = await ingestSessions(person, sessions);
-        if (changed) log('agenten-dateien', { user: person.id, changed });
-        for (const id of projects) touched.add(id);
+          if (!r.ok) continue;
+          const sessions = ((await r.json()) as any).sessions ?? [];
+          const { changed, projects } = await ingestSessions(person, sessions);
+          if (changed) log('agenten-dateien', { user: person.id, changed });
+          for (const id of projects) touched.add(id);
+        } catch (e: any) { log('agenten-dateien', { user: person.id, error: String(e?.message ?? e).slice(0, 200) }); } // nur diese Person
       }
-      for (const id of touched) {
-        const pr: any = await wb().collection('projects').findOne({ _id: id as any });
-        const ws = pr?.workstream ? im.get(pr.workstream) : undefined;
-        if (ws) await syncWorkstreamOverview(ws, im);
+      if (touched.size) {
+        const im = await issueMap();
+        for (const id of touched) {
+          const pr: any = await wb().collection('projects').findOne({ _id: id as any });
+          const ws = pr?.workstream ? im.get(pr.workstream) : undefined;
+          if (ws) await syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 160) }));
+        }
       }
     } catch (e: any) { log('agenten-dateien', { error: String(e?.message ?? e).slice(0, 200) }); }
+    finally { filesTickRunning = false; }
   };
   setTimeout(filesTick, 20_000);
   setInterval(filesTick, 2 * 60_000);

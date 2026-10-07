@@ -112,6 +112,8 @@ export async function deleteFile(u: User, id: string) {
   if (!f) throw Object.assign(new Error('Nur die eigene Datei kann gelöscht werden.'), { status: 403 });
   rmSync(join(filesDir(), id), { recursive: true, force: true });
   await wb().collection('files').deleteOne({ _id: id as any });
+  // Eine von einem Agenten übernommene Datei (oder Vault-Notiz) kommt nach dem Löschen nicht wieder (Plan 81, Review S1).
+  if (f.source?.path) await wb().collection('files_ignored').updateOne({ owner: u.id, sourcePath: f.source.path }, { $set: { owner: u.id, sourcePath: f.source.path, at: new Date() } }, { upsert: true });
   logShare({ actor: u.email, action: 'delete', kind: 'file', resource: id });
 }
 

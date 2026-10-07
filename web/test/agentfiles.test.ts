@@ -2,7 +2,7 @@
 // Kopie mit Ticket und Projekt des Laufs; alles andere bleibt draußen; erneut geschrieben ersetzt die Kopie.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -44,6 +44,20 @@ test('Einordnung: Vault-Notiz, Datei im Arbeitsordner (auch im Chat-Ordner), all
   assert.equal(skip(join(scratch, 'gibtsnicht.txt')), 'gibt es nicht mehr');
 });
 
+test('Einordnung: Symlinks aus dem Arbeitsordner hinaus und der Nachbar-Ordner u10 zählen nicht als eigener Ordner', () => {
+  const secret = put(join(ROOT, 'home', '.ssh', 'id_ed25519.txt'), 'geheim');
+  symlinkSync(secret, join(scratch, 'schluessel.txt'));
+  assert.equal((af.classifyWritten(u, join(scratch, 'schluessel.txt')) as any).why, 'außerhalb des Arbeitsordners', 'Symlink nach außen');
+  symlinkSync(join(ROOT, 'home'), join(scratch, 'heim'));
+  assert.equal((af.classifyWritten(u, join(scratch, 'heim', '.ssh', 'id_ed25519.txt')) as any).why, 'außerhalb des Arbeitsordners', 'Symlink-Ordner nach außen');
+  const other = sharing.scratchDir({ ...u, id: 'u10' });
+  assert.equal((af.classifyWritten(u, put(join(other, 'fremd.md'))) as any).why, 'außerhalb des Arbeitsordners', 'u10 ist nicht u1');
+  // Ein Symlink im Arbeitsordner auf eine Vault-Notiz wird als Vault-Notiz (Link) eingeordnet, nicht kopiert.
+  const note = put(join(VAULT, 'olaf', 'ziel.md'), '# Ziel');
+  symlinkSync(note, join(scratch, 'ziel-link.md'));
+  assert.deepEqual(af.classifyWritten(u, join(scratch, 'ziel-link.md')), { kind: 'vault', vaultPath: 'olaf/ziel.md' });
+});
+
 test('Übernahme: Kopie mit Ticket und Projekt, erneut geschrieben ersetzt, Vault als Link', { skip: !MONGO }, async () => {
   const runs = db!.wb().collection('agent_runs');
   await runs.insertOne({ _id: 'r1' as any, key: 'PM-1', userId: u.id, mode: 'chat', conv: 'c1', projectId: 'p1', startedAt: new Date() } as any);
@@ -67,4 +81,7 @@ test('Übernahme: Kopie mit Ticket und Projekt, erneut geschrieben ersetzt, Vaul
   assert.equal(readFileSync(sharing.filePath(copy), 'utf8'), 'Version 2\n');
   await sharing.deleteFile(u, link._id);
   assert.ok(existsSync(note), 'Löschen des Eintrags löscht die Vault-Notiz nicht');
+  await sharing.deleteFile(u, copy._id);
+  assert.equal((await af.ingestSessions(u, sessions)).changed, 0, 'gelöschte Einträge kommen beim nächsten Takt nicht wieder');
+  assert.equal(await files.countDocuments({ owner: u.id }), 0);
 });
