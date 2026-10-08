@@ -35,10 +35,9 @@ nach dem Ja ausgeführt.
 
 ## Schnitte
 
-1. **Werkbank-Feed für den Snapshot (E3).** Die Werkbank schreibt nach jedem Jira-Abgleich und jedem
-   Agentenlauf `~/.cache/vault-sync/werkbank-feed.md` (Pfad per `WERKBANK_ROADMAP_FEED`): offene PM-Tickets mit
+1. **Werkbank-Feed für den Snapshot (E3).** Die Werkbank schreibt alle 5 Minuten und vor jedem Sync-Start `~/.cache/vault-sync/werkbank-feed.md` (Pfad per `WERKBANK_ROADMAP_FEED`): offene PM-Tickets mit
    Status/Owner/Datum (geändert in den letzten 3 Tagen zuerst), fertige Agentenläufe der letzten 3 Tage (Ticket,
-   Projekt, geschriebene Vault-Notizen, PR-Links aus dem Lauf), Projekte je Workstream. Keine Zugangsdaten,
+   Projekt, geschriebene Vault-Notizen, PR-Links aus diesen Notizen), Projekte je Workstream. Keine Zugangsdaten,
    keine Kundendaten, keine Chat-Inhalte. `vault-sync-snapshot.sh` hängt die Datei an, wenn sie jünger als 24 h ist.
 2. **Gezielter Nachzug nach Agentenlauf (E1).** Ein Karten-Agent mit Ticket ist fertig → Ticket in eine
    Warteschlange; höchstens alle 20 Minuten startet die Werkbank `vault-sync.sh --scope PM-1,PM-2` im Hintergrund
@@ -59,7 +58,7 @@ nach dem Ja ausgeführt.
 5. **Entwurf „Woran wir gerade arbeiten“ (E4).** Der 07:30-Lauf schreibt zusätzlich
    `0-Overview/entwurf-woran-wir-arbeiten.md` (nur aus Snapshot und Feed, jede Zeile mit Quelle). „Übernehmen“
    ersetzt in der Hub-Seite den Block zwischen `<!-- werkbank:woran-wir-arbeiten -->` und
-   `<!-- /werkbank:woran-wir-arbeiten -->` (deterministisch, `spliceBlock`), atomar geschrieben.
+   `<!-- /werkbank:woran-wir-arbeiten -->` (deterministisch, `replaceWorkBlock`; fehlen die Marker oder stehen sie doppelt, wird nichts geschrieben), atomar.
 6. **README und Tests.**
 
 ## Definition of Done
@@ -86,3 +85,16 @@ Gebaut, getestet, reviewt, auf der Werkbank ausgerollt, README nachgezogen, Vaul
 - Freigegebene Punkte sind Text; der Sync führt sie nur im beschriebenen Umfang aus und protokolliert jede Datei.
 - Gleichzeitiges Schreiben Mensch/Sync im Vault: der Sync lässt widersprüchlich wirkende Dateien in Ruhe (Regel
   bleibt).
+- **Fremde Schreiber:** Protokoll und `freigaben.md` sind normale Dateien. Ein Chat-Agent (läuft als derselbe
+  OS-Nutzer) könnte Fragen ins Protokoll schreiben oder per „erledigt: S…“ eine Freigabe abhaken. Der Admin sieht
+  jeden Fragetext vor dem Ja; wer in den Vault schreiben darf, kann ohnehin ändern. Bewusst so gelassen.
+
+## Review (08.10.2026) und Korrekturen
+
+Unabhängiges Review: kein Blocker. Behoben: „erledigt“ in allen Schreibweisen (Backticks, fett) und „nicht erledigt“
+mit Grund; „Nein“ wirkt über Läufe hinweg (Textschlüssel + Abschnitt „Verworfen“ in `freigaben.md`, Prompt
+erweitert); Nachzug-Abschnitte verdrängen die Morgenfragen nicht, „- keine“ ist keine Frage; ein Planer für alle
+Starts mit Sperrprüfung (`flock`), nichts geht verloren; PR-Links aus den geschriebenen Notizen; Live-Ereignis bei
+neuem Protokoll/Entwurf; hängende Freigaben sichtbar mit Zurücknehmen; Werkbank-Läufe schreiben keinen Entwurf
+(`VAULT_SYNC_NO_DRAFT`); „Besprechen“-Läufe und der erste Durchlauf nach dem Start lösen keinen Nachzug aus;
+Knut-Zeilen nur für Admins.

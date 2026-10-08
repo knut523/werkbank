@@ -986,11 +986,27 @@ test('Roadmap-Automatik: „Für mich offen“, Ja/Nein auf Sync-Fragen nur für
   assert.equal((await anna.req('/api/roadmap/question', { body: { id: q2.id, answer: 'nein' } })).status, 200);
   r = await anna.req('/api/roadmap/mine');
   assert.deepEqual(r.j.questions.map((q: any) => [q.id, q.answer]), [[q1.id, 'ja']], 'Nein verschwindet, Ja bleibt als „freigegeben“ stehen');
-  // Der Sync meldet „erledigt“ → Frage weg, Freigabe-Datei leer.
-  writeFileSync(proto, readFileSync(proto, 'utf8') + `\n## 2026-10-08 11:00\n\nerledigt: ${q1.id} (4-review-….md)\n`);
+  assert.match(readFileSync(join(tmp, 'vault-sync', 'freigaben.md'), 'utf8'), /## Verworfen[^\n]*\n\n- \*\*Spec verschieben\*\* nach Live\./, 'Nein steht für den Sync in der Datei');
+  // Der Sync meldet „erledigt“ (Schreibweise mit Backticks) → Frage weg, Freigabe erledigt, Datei ohne Freigaben.
+  writeFileSync(proto, readFileSync(proto, 'utf8') + `\n## 2026-10-08 11:00 · Nachzug PM-1\n\n- **erledigt:** \`${q1.id}\` (4-review-….md)\n`);
   r = await anna.req('/api/roadmap/mine');
-  assert.deepEqual(r.j.questions, []);
-  await anna.req('/api/roadmap/question', { body: { id: q2.id, answer: 'nein' } }).catch(() => {});
+  assert.deepEqual(r.j.questions, []); assert.deepEqual(r.j.pendingApprovals, []);
+  assert.match(readFileSync(join(tmp, 'vault-sync', 'freigaben.md'), 'utf8'), /## Freigegeben\n\n- keine/);
+  assert.equal((await mongo.db(DB).collection('roadmap_answers').findOne({ _id: q1.id as any }) as any).done, true);
+  // Nächster regulärer Lauf schlägt denselben (verworfenen) Text wieder vor → bleibt ausgeblendet; neue Frage erscheint.
+  writeFileSync(proto, readFileSync(proto, 'utf8') + '\n## 2026-10-08 13:30\n\n**Offen/unklar:**\n- (1) **Spec verschieben** nach Live.\n- (2) **Neu:** Rangliste.\n');
+  r = await anna.req('/api/roadmap/mine');
+  assert.deepEqual(r.j.questions.map((q: any) => q.text), ['**Neu:** Rangliste.']);
+  // Freigabe, deren Frage weitergerückt ist → unter „noch nicht erledigt“, mit Widerruf.
+  const q3 = r.j.questions[0];
+  assert.equal((await anna.req('/api/roadmap/question', { body: { id: q3.id, answer: 'ja' } })).status, 200);
+  writeFileSync(proto, readFileSync(proto, 'utf8') + `\n## 2026-10-08 14:00\n\nnicht erledigt: ${q3.id} — Datei gesperrt\n\n**Offen/unklar:**\n- (1) **Anderes.**\n`);
+  r = await anna.req('/api/roadmap/mine');
+  assert.deepEqual(r.j.pendingApprovals.map((a: any) => [a.id, a.failed]), [[q3.id, 'Datei gesperrt']]);
+  assert.equal((await bernd.req('/api/roadmap/question', { body: { id: q3.id, answer: 'widerruf' } })).status, 403);
+  assert.equal((await anna.req('/api/roadmap/question', { body: { id: q3.id, answer: 'widerruf' } })).status, 200);
+  assert.deepEqual((await anna.req('/api/roadmap/mine')).j.pendingApprovals, []);
+  assert.equal((await anna.req('/api/roadmap/question', { body: { id: q3.id, answer: 'widerruf' } })).status, 409, 'nichts mehr zu widerrufen');
   // Entwurf: ohne Marker im Hub nicht übernehmbar; mit Marker ersetzt er genau den Block.
   const hubPath = join(OV, '0-roadmap-produkt-olaf.md');
   const hubBefore = readFileSync(hubPath, 'utf8');

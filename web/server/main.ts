@@ -29,7 +29,7 @@ import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, a
 import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, type JiraAction } from './jirawrite.ts';
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
-import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, startVaultSync, type Approval } from './roadmapauto.ts';
+import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
@@ -930,7 +930,7 @@ const WORK_DRAFT = `${OVERVIEW}/entwurf-woran-wir-arbeiten.md`;
 const HUB = `${OVERVIEW}/0-roadmap-produkt-olaf.md`;
 const roadmapAutosync = () => process.env.WERKBANK_ROADMAP_AUTOSYNC !== '0';
 const roadmapQueue = newQueue();
-let lastManualSync = 0;
+let roadmapPrimed = false;   // erster Durchlauf nach dem Start merkt sich nur den Stand (sonst alle alten Sitzungen auf einmal)
 const firstName = (u: User) => u.name.trim().split(/\s+/)[0] ?? u.name;
 const needAdmin = async (req: IncomingMessage) => {
   const u = await needUser(req);
@@ -949,7 +949,8 @@ async function writeRoadmapFeed() {
   const runs = runsRaw.map((r) => ({
     key: r.key, projectName: r.projectId ? pname.get(String(r.projectId)) ?? null : null, finishedAt: r.finishedAt, startedAt: r.startedAt,
     vaultNotes: (r.written ?? []).filter((f: string) => f.startsWith(vaultPrefix) && f.endsWith('.md')).map((f: string) => f.slice(vaultPrefix.length)),
-    prs: prLinks(String(r.draft ?? '')),
+    // PR-Links aus den Notizen, die der Lauf geschrieben hat (Chat-Läufe haben keinen Antworttext in agent_runs).
+    prs: [...new Set((r.written ?? []).filter((f: string) => f.startsWith(vaultPrefix) && f.endsWith('.md')).flatMap((f: string) => prLinks(readOr(f).slice(0, 200_000))))] as string[],
   }));
   writeAtomic(feedPath(), buildFeed({ now: new Date(), issues, runs, projects: projects.map((p) => ({ name: p.name, workstream: p.workstream ?? null, tickets: p.tickets ?? [] })) }));
 }
@@ -960,19 +961,33 @@ async function noteFinishedRuns(person: User, sessions: Array<{ conv: string; st
     if (s.status !== 'bereit' || !s.lastActivity) continue;
     const run: any = await wb().collection('agent_runs').findOne({ userId: person.id, conv: s.conv, mode: 'chat', key: { $ne: null } }, { sort: { startedAt: -1 } });
     if (!run || (run.roadmapSeenAt && run.roadmapSeenAt >= s.lastActivity)) continue;
-    await wb().collection('agent_runs').updateOne({ _id: run._id }, { $set: { roadmapSeenAt: s.lastActivity, finishedAt: new Date(s.lastActivity), written: s.written ?? run.written ?? [] } });
-    if (roadmapAutosync()) roadmapQueue.pending.add(run.key);
+    // lastActivity ist der Beginn der letzten Runde; „bereit“ heißt, sie ist vorbei.
+    await wb().collection('agent_runs').updateOne({ _id: run._id }, { $set: { roadmapSeenAt: s.lastActivity, finishedAt: roadmapPrimed ? new Date() : new Date(s.lastActivity), written: s.written ?? run.written ?? [] } });
+    // Nur Arbeitsläufe ziehen nach (ein „Besprechen“-Chat ändert nichts); nicht beim ersten Durchlauf nach dem Start.
+    if (roadmapAutosync() && roadmapPrimed && run.kind !== 'discuss') roadmapQueue.pending.add(run.key);
   }
 }
 
-/** Offene Freigaben neu in die Datei schreiben, die der Sync liest. */
+/** Offene Freigaben und verworfene Punkte neu in die Datei schreiben, die der Sync liest. */
 async function writeApprovals() {
   const done = doneIds(readVault(SYNC_PROTOCOL));
   const col = wb().collection('roadmap_answers');
   if (done.size) await col.updateMany({ _id: { $in: [...done] as any[] }, done: { $ne: true } }, { $set: { done: true, doneAt: new Date() } });
   const open = (await col.find({ answer: 'ja', done: { $ne: true } }).sort({ at: 1 }).toArray()) as any[];
-  writeAtomic(approvalsPath(), renderApprovals(open.map((a): Approval => ({ id: String(a._id), text: a.text, at: new Date(a.at).toISOString(), by: a.by }))));
+  const rejected = (await col.find({ answer: 'nein', at: { $gte: new Date(Date.now() - 30 * 86_400_000) } }).sort({ at: 1 }).toArray()) as any[];
+  writeAtomic(approvalsPath(), renderApprovals(open.map((a): Approval => ({ id: String(a._id), text: a.text, at: new Date(a.at).toISOString(), by: a.by })), rejected.map((a) => a.text)));
   return open.length;
+}
+
+/** Startet, was fällig ist (Nachzug-Tickets oder voller Lauf nach „Ja“), wenn kein Sync läuft. */
+async function tryStartSync(): Promise<boolean> {
+  const due = takeDue(roadmapQueue, Date.now(), syncLocked());
+  if (!due) return false;
+  await writeRoadmapFeed().catch((e) => log('roadmap-feed', { error: String(e?.message ?? e).slice(0, 160) }));
+  const ok = startVaultSync(VAULT_SYNC_SCRIPT(), due.scope, log);
+  if (!ok) { if (due.scope) for (const k of due.scope) roadmapQueue.pending.add(k); else roadmapQueue.full = true; }
+  roadmapChanged('nachzug');
+  return ok;
 }
 
 on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
@@ -988,15 +1003,24 @@ on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
     .map((i) => ({ key: i.key, summary: i.summary, duedate: i.duedate, why: i.duedate ? 'überfällig' : 'ohne Datum' }))
     .sort((a, b) => String(a.duedate ?? '9').localeCompare(String(b.duedate ?? '9')));
   const admin = u.role === 'ADMIN';
-  let questions: any[] = [], draft: any = null, section: string | null = null;
+  let questions: any[] = [], draft: any = null, section: string | null = null, pendingApprovals: any[] = [];
   if (admin) {
+    writeApprovals().catch((e) => log('roadmap-freigaben', { error: String(e?.message ?? e).slice(0, 160) }));   // nicht warten: GET bleibt lesend schnell
     const protocol = readVault(SYNC_PROTOCOL);
     const qs = parseSyncQuestions(protocol);
     section = qs[0]?.section ?? null;
-    const answered = new Map(((await wb().collection('roadmap_answers').find({ _id: { $in: qs.map((q) => q.id) as any[] } }).toArray()) as any[]).map((a) => [String(a._id), a]));
+    const col = wb().collection('roadmap_answers');
+    const answered = new Map(((await col.find({ _id: { $in: qs.map((q) => q.id) as any[] } }).toArray()) as any[]).map((a) => [String(a._id), a]));
+    const rejectedKeys = new Set(((await col.find({ answer: 'nein' }, { projection: { key: 1 } }).toArray()) as any[]).map((a) => a.key).filter(Boolean));
     const done = doneIds(protocol);
-    questions = qs.filter((q) => !done.has(q.id)).map((q) => ({ ...q, answer: answered.get(q.id)?.answer ?? null }))
+    const failed = notDone(protocol);
+    questions = qs.filter((q) => !done.has(q.id) && !rejectedKeys.has(q.key)).map((q) => ({ ...q, answer: answered.get(q.id)?.answer ?? null, failed: failed.get(q.id) ?? null }))
       .filter((q) => q.answer !== 'nein');
+    // Freigaben, deren Frage nicht mehr im aktuellen Abschnitt steht und die noch nicht erledigt sind (Review 7).
+    const shown = new Set(questions.map((q) => q.id));
+    pendingApprovals = ((await col.find({ answer: 'ja', done: { $ne: true } }).sort({ at: 1 }).toArray()) as any[])
+      .filter((a) => !shown.has(String(a._id)) && !done.has(String(a._id)))
+      .map((a) => ({ id: String(a._id), text: a.text, at: a.at, by: a.by, failed: failed.get(String(a._id)) ?? null }));
     const text = readVault(WORK_DRAFT);
     if (text.trim()) {
       const hash = hashText(text);
@@ -1004,22 +1028,30 @@ on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
       if (st?.hash !== hash) draft = { hash, body: draftBody(text), path: WORK_DRAFT, hubHasMarkers: replaceWorkBlock(readVault(HUB), 'x') !== null };
     }
   }
-  send(res, 200, { me: firstName(u), admin, prs, tickets, questions, section, draft, autosync: roadmapAutosync(), queued: [...roadmapQueue.pending] });
+  send(res, 200, { me: firstName(u), admin, prs, tickets, questions, pendingApprovals, section, draft, autosync: roadmapAutosync(), queued: [...roadmapQueue.pending], syncRunning: syncLocked() });
 });
 
 on('POST', /^\/api\/roadmap\/question$/, async (req, res) => {
   const u = await needAdmin(req);
   const b = await body(req);
   const id = String(b.id ?? ''); const answer = String(b.answer ?? '');
-  if (!['ja', 'nein'].includes(answer)) throw new HttpError(400, 'Antwort ist ja oder nein.');
-  const q = parseSyncQuestions(readVault(SYNC_PROTOCOL)).find((x) => x.id === id);
-  if (!q) throw new HttpError(409, 'Diese Frage gibt es im letzten Sync-Protokoll nicht mehr — Seite neu laden.');
-  await wb().collection('roadmap_answers').updateOne({ _id: id as any }, { $set: { answer, text: q.text, section: q.section, at: new Date(), by: u.email } }, { upsert: true });
+  if (!['ja', 'nein', 'widerruf'].includes(answer)) throw new HttpError(400, 'Antwort ist ja, nein oder widerruf.');
+  const col = wb().collection('roadmap_answers');
+  if (answer === 'widerruf') {
+    // Eine Freigabe zurücknehmen, auch wenn ihre Frage nicht mehr im aktuellen Abschnitt steht.
+    const r = await col.deleteOne({ _id: id as any, answer: 'ja', done: { $ne: true } });
+    if (!r.deletedCount) throw new HttpError(409, 'Keine offene Freigabe mit dieser Kennung.');
+  } else {
+    const q = parseSyncQuestions(readVault(SYNC_PROTOCOL)).find((x) => x.id === id);
+    if (!q) throw new HttpError(409, 'Diese Frage gibt es im letzten Sync-Protokoll nicht mehr — Seite neu laden.');
+    await col.updateOne({ _id: id as any }, { $set: { answer, text: q.text, key: q.key, section: q.section, at: new Date(), by: u.email } }, { upsert: true });
+  }
   const open = await writeApprovals();
   let started = false;
-  if (answer === 'ja' && Date.now() - lastManualSync > 5 * 60_000) { lastManualSync = Date.now(); await writeRoadmapFeed().catch(() => {}); started = startVaultSync(VAULT_SYNC_SCRIPT(), null, log); }
+  if (answer === 'ja') { roadmapQueue.full = true; started = await tryStartSync(); }
+  if (answer === 'widerruf' && open === 0) roadmapQueue.full = false;   // nichts mehr freigegeben → kein voller Lauf
   roadmapChanged('frage');
-  send(res, 200, { ok: true, open, started });
+  send(res, 200, { ok: true, open, started, queued: !started && answer === 'ja' });
 });
 
 on('POST', /^\/api\/roadmap\/draft$/, async (req, res) => {
@@ -1913,8 +1945,8 @@ async function backgroundJobs() {
         }
       }
       // Gezielter Roadmap-Nachzug nach fertigen Karten-Läufen (höchstens alle 20 min, Plan Roadmap-Automatik S2).
-      const due = takeDue(roadmapQueue, Date.now());
-      if (due) { await writeRoadmapFeed().catch((e) => log('roadmap-feed', { error: String(e?.message ?? e).slice(0, 160) })); startVaultSync(VAULT_SYNC_SCRIPT(), due, log); roadmapChanged('nachzug'); }
+      roadmapPrimed = true;
+      await tryStartSync();
     } catch (e: any) { log('agenten-dateien', { error: String(e?.message ?? e).slice(0, 200) }); }
     finally { filesTickRunning = false; }
   };
@@ -1927,6 +1959,15 @@ async function backgroundJobs() {
   };
   setTimeout(roadmapTick, 30_000);
   setInterval(roadmapTick, 5 * 60_000);
+  // Neues Protokoll (Fragen, „erledigt“) oder neuer Entwurf → offene Roadmap-Seiten laden nach (Review 6); dazu
+  // fällige Starts, die eine Sperre aufgehalten hat.
+  let seen = '';
+  setInterval(() => {
+    const now = `${mtime(join(cfg.vaultDir, SYNC_PROTOCOL))}|${mtime(join(cfg.vaultDir, WORK_DRAFT))}`;
+    if (seen && now !== seen) { roadmapChanged('protokoll'); writeApprovals().catch(() => {}); }
+    seen = now;
+    if (roadmapQueue.full || roadmapQueue.pending.size) tryStartSync().catch(() => {});
+  }, 60_000);
 }
 
 await connect();

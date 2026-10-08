@@ -10,8 +10,8 @@
 // Alles Reine steht oben (testbar), Dateien/Prozesse unten.
 
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -58,72 +58,125 @@ export function buildFeed(p: { now: Date; issues: FeedIssue[]; runs: FeedRun[]; 
   return out.join('\n') + '\n';
 }
 
-// ---------- Nachzug: Warteschlange mit Drossel ----------
+// ---------- Nachzug: ein Planer für alle Sync-Starts ----------
 
-export interface SyncQueue { pending: Set<string>; lastRunAt: number }
-export const newQueue = (): SyncQueue => ({ pending: new Set(), lastRunAt: 0 });
+/**
+ * Ein einziger Zustand für alle Starts (Review 4): Tickets aus Agentenläufen (gedrosselt, Standard 20 min) und ein
+ * voller Lauf nach einem „Ja“ (frühestens 5 min nach dem letzten Start). Nichts geht verloren: was nicht starten
+ * kann (Drossel, Sperre belegt), bleibt liegen und wird beim nächsten Takt erneut versucht.
+ */
+export interface SyncQueue { pending: Set<string>; full: boolean; lastRunAt: number }
+export const newQueue = (): SyncQueue => ({ pending: new Set(), full: false, lastRunAt: 0 });
 
-/** Welche Tickets jetzt laufen dürfen: null = warten (Drossel) oder nichts da. Leert die Warteschlange. */
-export function takeDue(q: SyncQueue, now: number, minGapMs = 20 * 60_000): string[] | null {
-  if (!q.pending.size || now - q.lastRunAt < minGapMs) return null;
-  const keys = [...q.pending].sort();
-  q.pending.clear();
-  q.lastRunAt = now;
-  return keys;
+export type Due = { scope: string[] | null } | null;
+
+/** Was jetzt starten darf. `locked` = ein Sync läuft gerade (flock belegt). Leert nur, was tatsächlich startet. */
+export function takeDue(q: SyncQueue, now: number, locked: boolean, gaps = { tickets: 20 * 60_000, full: 5 * 60_000 }): Due {
+  if (locked) return null;
+  const since = now - q.lastRunAt;
+  if (q.full && since >= gaps.full) {
+    q.full = false; q.pending.clear(); q.lastRunAt = now;   // ein voller Lauf deckt die Tickets mit ab
+    return { scope: null };
+  }
+  if (q.pending.size && since >= gaps.tickets) {
+    const keys = [...q.pending].sort();
+    q.pending.clear(); q.lastRunAt = now;
+    return { scope: keys };
+  }
+  return null;
 }
 
 // ---------- Fragen aus dem Sync-Protokoll ----------
 
-export interface SyncQuestion { id: string; n: string; text: string; section: string }
+export interface SyncQuestion { id: string; n: string; text: string; section: string; key: string }
 
-/**
- * „Offen/unklar“-Punkte des letzten `## <Datum Uhrzeit>`-Abschnitts, der welche hat. Ein Punkt ist eine Zeile `- (n) …` samt
- * eingerückter Fortsetzung. Die Kennung hängt am Abschnitt und am Text, nicht an der Nummer allein — derselbe
- * Text in einem späteren Lauf ist eine neue Frage (der Stand kann sich geändert haben).
- */
-export function parseSyncQuestions(protocol: string): SyncQuestion[] {
-  const heads = [...protocol.matchAll(/^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}).*$/gm)];
-  // Rückwärts: der letzte Abschnitt, der überhaupt „Offen/unklar“ hat (ein gezielter Nachzug ohne offene Punkte
-  // soll die Fragen des Morgenlaufs nicht verschwinden lassen).
-  let section = '', body = '', m: RegExpMatchArray | null = null;
-  for (let i = heads.length - 1; i >= 0 && !m; i--) {
-    const end = i + 1 < heads.length ? heads[i + 1].index! : protocol.length;
-    body = protocol.slice(heads[i].index! + heads[i][0].length, end);
-    m = body.match(/^\*\*Offen\/unklar:?\*\*:?\s*$|^Offen\/unklar:.*$/m);
-    section = heads[i][1];
-  }
+const NONE = /^(keine?|nichts)\b.*$|^(—|-|n\/a)\.?$/i;
+/** Schlüssel nur aus dem Text (für „Nein — nicht wieder vorschlagen“, Review 2). */
+export const textKey = (text: string) => createHash('sha256').update(text.toLowerCase().replace(/[^a-z0-9äöüß]+/g, ' ').trim()).digest('hex').slice(0, 12);
+
+function offenItems(body: string): { n: string; text: string }[] {
+  const m = body.match(/^(\*\*)?Offen\/unklar:?(\*\*)?:?.*$/m);
   if (!m) return [];
-  const lines = body.slice(m.index! + m[0].length).split('\n');
-  const items: { n: string; lines: string[] }[] = [];
-  for (const l of lines) {
-    if (/^(## |\*\*[^*]+:\*\*\s*$)/.test(l)) break;              // nächster Abschnitt oder nächste fette Überschrift
+  const rest = m[0].match(/^(?:\*\*)?Offen\/unklar:?(?:\*\*)?:?\s*(.+)$/);   // Punkt in derselben Zeile („Offen/unklar: keine“)
+  const inline = rest ? rest[1].replace(/^\*+|\*+$/g, '').trim() : '';   // nur „**“ übrig → kein Punkt
+  const items: { n: string; lines: string[] }[] = inline && !NONE.test(inline) ? [{ n: '1', lines: [inline] }] : [];
+  for (const l of body.slice(m.index! + m[0].length).split('\n')) {
+    if (/^(## |\*\*[^*]+:\*\*\s*$)/.test(l)) break;
     const it = l.match(/^- \((\d+)\)\s+(.*)$/) ?? l.match(/^- ()(.*)$/);
     if (it) { items.push({ n: it[1] || String(items.length + 1), lines: [it[2]] }); continue; }
     if (items.length && /^\s+\S/.test(l)) items[items.length - 1].lines.push(l.trim());
   }
-  return items.map((it) => {
-    const text = it.lines.join(' ').replace(/\s+/g, ' ').trim();
-    return { id: 'S' + createHash('sha256').update(section + '|' + text).digest('hex').slice(0, 10), n: it.n, text, section };
-  });
+  return items.map((it) => ({ n: it.n, text: it.lines.join(' ').replace(/\s+/g, ' ').trim() })).filter((x) => x.text && !NONE.test(x.text.replace(/\*/g, '')));
 }
 
-/** Kennungen, die der Sync im Protokoll als erledigt gemeldet hat (`erledigt: S…`). */
+/**
+ * Fragen = „Offen/unklar“ des letzten regulären Laufs (Überschrift ohne „· Nachzug“), dazu die offenen Punkte der
+ * gezielten Nachzüge DANACH (Review 3: ein Nachzug verdrängt die Morgenfragen nicht). Ein Punkt ist `- (n) …` samt
+ * eingerückter Fortsetzung; „keine“ ist keine Frage. Kennung = Abschnitt + Text.
+ */
+export function parseSyncQuestions(protocol: string): SyncQuestion[] {
+  const heads = [...protocol.matchAll(/^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2})(.*)$/gm)];
+  const sec = heads.map((h, i) => ({ when: h[1], nachzug: /Nachzug/i.test(h[2]), body: protocol.slice(h.index! + h[0].length, i + 1 < heads.length ? heads[i + 1].index! : protocol.length) }));
+  // Der letzte reguläre Lauf gilt, auch wenn er nichts Offenes meldet (dann sind die alten Fragen überholt, Review 2/M1).
+  let start = -1;
+  for (let i = sec.length - 1; i >= 0; i--) if (!sec[i].nachzug) { start = i; break; }
+  if (start < 0) start = sec.findIndex((x) => x.nachzug);       // nur Nachzüge im Protokoll
+  if (start < 0) return [];
+  const out: SyncQuestion[] = [];
+  for (const x of sec.slice(start)) {
+    if (x !== sec[start] && !x.nachzug) continue;
+    for (const it of offenItems(x.body)) out.push({ id: 'S' + createHash('sha256').update(x.when + '|' + it.text).digest('hex').slice(0, 10), n: it.n, text: it.text, section: x.when, key: textKey(it.text) });
+  }
+  return out;
+}
+
+// „erledigt“ in den Schreibweisen, die ein Modell wählt: `erledigt: S…`, **erledigt:** `S…`, Erledigt – S…, auch
+// mehrere Kennungen („S…, S…“) und mehrere Meldungen in einer Zeile (Review 1, Review 2/M2).
+const MARK_RE = /(nicht[ \t]*\**[ \t]*)?\berledigt\**[ \t]*[:–-]/gi;
+const ID_RE = /S[0-9a-f]{10}/g;
+
+function doneMarks(protocol: string): { not: boolean; ids: string[]; reason: string }[] {
+  const out: { not: boolean; ids: string[]; reason: string }[] = [];
+  for (const line of protocol.split('\n')) {
+    const marks = [...line.matchAll(MARK_RE)];
+    marks.forEach((m, i) => {
+      const seg = line.slice(m.index! + m[0].length, i + 1 < marks.length ? marks[i + 1].index! : line.length);
+      const ids = seg.match(ID_RE) ?? [];
+      if (!ids.length) return;
+      const after = seg.slice(seg.lastIndexOf(ids[ids.length - 1]) + 11);
+      const reason = (after.match(/^[`*\s]*[—–-]\s*(.*)$/)?.[1] ?? '').replace(/[;,]\s*$/, '').trim();
+      out.push({ not: !!m[1], ids, reason });
+    });
+  }
+  return out;
+}
+
+/** Kennungen, die der Sync als erledigt gemeldet hat. „nicht erledigt“ zählt nicht. */
 export function doneIds(protocol: string): Set<string> {
-  // „nicht erledigt: S…“ zählt nicht — die Frage bleibt dann offen und taucht wieder auf.
-  return new Set([...protocol.matchAll(/(?<!nicht )erledigt:\s*(S[0-9a-f]{10})/gi)].map((m) => m[1]));
+  return new Set(doneMarks(protocol).filter((x) => !x.not).flatMap((x) => x.ids));
+}
+
+/** „nicht erledigt: S… — Grund“ → Grund (letzte Meldung gewinnt). */
+export function notDone(protocol: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const x of doneMarks(protocol)) if (x.not) for (const id of x.ids) out.set(id, x.reason);
+  return out;
 }
 
 export interface Approval { id: string; text: string; at: string; by: string }
 
-/** Inhalt der Freigabe-Datei, die der Sync liest. Nur offene (noch nicht erledigte) Freigaben. */
-export function renderApprovals(list: Approval[]): string {
+/** Inhalt der Freigabe-Datei, die der Sync liest: offene Freigaben und verworfene Punkte (nicht wieder vorschlagen). */
+export function renderApprovals(list: Approval[], rejected: string[] = []): string {
   const out = ['# Freigaben aus der Werkbank', '',
     'Diese Punkte hat ein Admin in der Werkbank mit „Ja“ freigegeben. Führe jeden genau im beschriebenen Umfang aus —',
     'auch Zeilen löschen, Specs verschieben (alte Datei entfernen, neue anlegen) oder überholten Text ersetzen — und',
-    'melde jeden im Protokoll mit „erledigt: <Kennung>“ und den geänderten Dateien. Geht ein Punkt nicht, melde',
-    '„nicht erledigt: <Kennung> — <Grund>“.', '', '## Freigegeben', ''];
+    'melde jeden im Protokoll mit einer eigenen Zeile „erledigt: <Kennung>“ und den geänderten Dateien. Geht ein Punkt',
+    'nicht, melde „nicht erledigt: <Kennung> — <Grund>“.', '', '## Freigegeben', ''];
   if (!list.length) out.push('- keine');
   for (const a of list) out.push(`- ${a.id} (${a.at.slice(0, 10)}, ${a.by}): ${a.text}`);
+  out.push('', '## Verworfen — nicht wieder unter „Offen/unklar“ vorschlagen', '');
+  if (!rejected.length) out.push('- keine');
+  for (const t of rejected) out.push(`- ${t}`);
   return out.join('\n') + '\n';
 }
 
@@ -156,8 +209,16 @@ export const approvalsPath = () => join(syncDir(), 'freigaben.md');
 export function writeAtomic(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp-${process.pid}`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
+  try { writeFileSync(tmp, text); renameSync(tmp, path); }
+  catch (e) { try { unlinkSync(tmp); } catch { /* schon weg */ } throw e; }
+}
+
+/** Läuft gerade ein Vault-Sync? (dieselbe Sperre wie im Skript: flock auf <sync-dir>/.lock) */
+export function syncLocked(dir = syncDir()): boolean {
+  const lock = join(dir, '.lock');
+  if (!existsSync(lock)) return false;
+  const r = spawnSync('flock', ['-n', lock, 'true'], { timeout: 3000 });
+  return r.status !== 0;
 }
 
 export const readOr = (path: string, fallback = '') => { try { return readFileSync(path, 'utf8'); } catch { return fallback; } };
@@ -167,7 +228,8 @@ export const mtime = (path: string) => { try { return statSync(path).mtimeMs; } 
 export function startVaultSync(script: string, scope: string[] | null, log: (m: string, d?: any) => void): boolean {
   if (!existsSync(script)) { log('roadmap-sync: Skript fehlt', { script }); return false; }
   const args = scope?.length ? ['--scope', scope.join(',')] : [];
-  const child = spawn('bash', [script, ...args], { detached: true, stdio: 'ignore' });
+  // Von der Werkbank gestartete Läufe schreiben nie den Morgen-Entwurf neu (sonst kommt ein verworfener wieder).
+  const child = spawn('bash', [script, ...args], { detached: true, stdio: 'ignore', env: { ...process.env, VAULT_SYNC_NO_DRAFT: '1' } });
   child.on('error', (e) => log('roadmap-sync: Start fehlgeschlagen', { error: String(e.message).slice(0, 160) }));
   child.unref();
   log('roadmap-sync gestartet', { scope });

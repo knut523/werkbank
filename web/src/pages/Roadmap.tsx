@@ -409,12 +409,13 @@ function ForMe({ d }: { d: any }) {
   const [err, setErr] = useState<unknown>(null);
   const x: any = m.data;
   if (!x) return m.error ? <Err e={m.error} /> : null;
-  const decisions = (d?.decisions ?? []) as any[];
-  const answer = async (q: any, a: 'ja' | 'nein') => {
+  // „- Knut:“-Zeilen sind Knuts Entscheidungen → nur für Admins (Review-Nit).
+  const decisions = (x.admin ? d?.decisions ?? [] : []) as any[];
+  const answer = async (q: any, a: 'ja' | 'nein' | 'widerruf') => {
     setBusy(q.id); setErr(null);
     try {
       const r: any = await api('/api/roadmap/question', { body: { id: q.id, answer: a } });
-      toast(a === 'ja' ? (r.started ? 'Freigegeben — der Vault-Sync läuft jetzt' : 'Freigegeben — der nächste Vault-Sync führt es aus') : 'Verworfen');
+      toast(a === 'ja' ? (r.started ? 'Freigegeben — der Vault-Sync läuft jetzt' : 'Freigegeben — startet, sobald der laufende Sync fertig ist') : a === 'nein' ? 'Verworfen — wird nicht wieder vorgeschlagen' : 'Freigabe zurückgenommen');
       m.setData(await api('/api/roadmap/mine'));
     } catch (e) { setErr(e); } finally { setBusy(null); }
   };
@@ -424,13 +425,15 @@ function ForMe({ d }: { d: any }) {
     try { await api('/api/roadmap/draft', { body: { action, hash: x.draft.hash } }); toast(action === 'übernehmen' ? 'Im Hub übernommen' : 'Entwurf verworfen'); m.setData(await api('/api/roadmap/mine')); }
     catch (e) { setErr(e); } finally { setBusy(null); }
   };
-  const n = decisions.length + x.prs.length + x.tickets.length + x.questions.length + (x.draft ? 1 : 0);
+  const pend = (x.pendingApprovals ?? []) as any[];
+  const n = decisions.length + x.prs.length + x.tickets.length + x.questions.length + pend.length + (x.draft ? 1 : 0);
   const btn: CSSProperties = { minHeight: 36 };
   return (
     <div className="card" data-testid="for-me" style={{ marginBottom: 14 }}>
       <h3 style={{ marginTop: 0 }}>Für mich offen <span className="chip">{n}</span>
         {x.queued?.length > 0 && <span className="chip warn" title="Roadmap-Nachzug nach Agentenlauf wartet (höchstens alle 20 min)">Nachzug wartet: {x.queued.join(', ')}</span>}
         {!x.autosync && <span className="chip" title="WERKBANK_ROADMAP_AUTOSYNC=0">Nachzug aus</span>}
+        {x.syncRunning && <span className="chip ok">Vault-Sync läuft</span>}
       </h3>
       {err ? <Err e={err} /> : null}
       {n === 0 && <p className="small muted">Nichts — alles erledigt oder bei anderen.</p>}
@@ -439,12 +442,21 @@ function ForMe({ d }: { d: any }) {
         <ul className="small" style={{ paddingLeft: 18 }}>{x.questions.map((q: any) => (
           <li key={q.id} style={{ marginBottom: 8 }} data-testid="sync-question">
             <div>{q.text}</div>
+            {q.failed !== null && q.failed !== undefined && <div className="chip bad">nicht erledigt{q.failed ? `: ${q.failed}` : ''}</div>}
             {q.answer === 'ja'
-              ? <span className="chip ok">freigegeben — wird beim nächsten Sync erledigt</span>
+              ? <span><span className="chip ok">freigegeben — wird beim nächsten Sync erledigt</span>{x.admin && <button className="btn ghost small" style={{ marginLeft: 8 }} disabled={busy === q.id} onClick={() => answer(q, 'widerruf')}>Zurücknehmen</button>}</span>
               : x.admin && <div className="row" style={{ gap: 8, marginTop: 4 }}>
                   <button className="btn small" style={{ ...btn, background: '#FEE600', color: '#2b2d33', borderColor: '#FEE600' }} disabled={busy === q.id} onClick={() => answer(q, 'ja')}>✅ Ja</button>
                   <button className="btn ghost small" style={btn} disabled={busy === q.id} onClick={() => answer(q, 'nein')}>✖️ Nein</button>
                 </div>}
+          </li>))}</ul>
+      </>}
+      {pend.length > 0 && <>
+        <div className="small docs-h">Freigegeben, noch nicht erledigt ({pend.length})</div>
+        <ul className="small" style={{ paddingLeft: 18 }}>{pend.map((a: any) => (
+          <li key={a.id} style={{ marginBottom: 6 }}>{a.text} <span className="tiny">· {a.by}, {String(a.at).slice(0, 10)}</span>
+            {a.failed !== null && <span className="chip bad">nicht erledigt{a.failed ? `: ${a.failed}` : ''}</span>}
+            {x.admin && <button className="btn ghost small" style={{ marginLeft: 8 }} disabled={busy === a.id} onClick={() => answer(a, 'widerruf')}>Zurücknehmen</button>}
           </li>))}</ul>
       </>}
       {x.draft && <>
