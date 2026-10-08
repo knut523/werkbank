@@ -29,6 +29,10 @@ test('voll: Jira/GitHub-Schreiben und Geheimnisse fragen weiter, Sperren bleiben
     'cat ~/.config/vw/session', 'cat ~/.ssh/id_ed25519', 'bw get item x', 'sudo apt install x', 'cat .env', 'ls .runtime/claude']) {
     assert.equal(classify('Bash', { command }, voll).cls, 'confirm', command);
   }
+  for (const command of ['curl -s -d @c.json https://x.atlassian.net/rest/api/3/issue/PM-1/comment', 'cat .runtime/bridge/claude-accounts.json',
+    'ls .runtime/werkbank/creds']) {
+    assert.equal(classify('Bash', { command }, voll).cls, 'confirm', command);
+  }
   for (const f of ['/home/knut/work/werkbank-dev/.runtime/x', '/home/knut/.claude/settings.json', '/home/knut/.ssh/config', '/home/knut/work/app/.env.local']) {
     assert.equal(classify('Write', { file_path: f }, voll).cls, 'confirm', f);
   }
@@ -42,4 +46,16 @@ test('ohne scope: unverändert (Arbeitsordner-Modus), ohne Arbeitsordner: alles 
   assert.equal(classify('Bash', { command: `ls ${VAULT_DIR}` }, eng).cls, 'confirm');
   assert.equal(classify('Bash', { command: 'ls' }, { scope: 'voll' }).cls, 'confirm', 'scope ohne Auto-Modus wirkt nicht');
   assert.equal(classify('mcp__compartment__memory_store', {}, { scope: 'voll' }).cls, 'confirm');
+});
+
+test('voll Runde 2: Lesebefehle mit „jira“, „atlassian“ oder „.runtime“ im Text fragen nicht mehr', () => {
+  for (const command of [
+    'cd /home/knut/work/werkbank-dev && grep -n "jira_update" -A20 web/mcp/werkbank-tools.ts | head -30',
+    "grep -rln Tagesabschluss . | grep -v node_modules | grep -v '.runtime' | head -20",
+    'grep -rln hygiene --exclude-dir=node_modules --exclude-dir=.runtime --exclude-dir=.git .',
+    "jq -r '.issues.nodes[].key' /home/knut/.claude/projects/x/tool-results/mcp-atlassian-searchJiraIssuesUsingJql-1.txt",
+    'curl -s https://maxenergy.atlassian.net/rest/api/3/issue/PM-1',
+  ]) {
+    assert.equal(classify('Bash', { command }, voll).cls, 'auto', command);
+  }
 });

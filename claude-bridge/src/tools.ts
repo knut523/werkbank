@@ -93,10 +93,17 @@ export interface ClassifyContext {
 }
 
 // Voller Auto-Modus: Bash fragt nur noch bei Geheimnissen, fremden Konfigurationen und Jira-Schreiben nach.
+// Runde 2 (Knut, 07.10.2026: „er fragt halt immer noch viel“): nur noch echte Geheimnis-ORTE, nicht jedes Erwähnen —
+// `grep -v '.runtime'` oder `--exclude-dir=.runtime` fragen nicht mehr.
 const BASH_KEEP_CONFIRM_VOLL = [
-  /\.runtime\b/, /\.config\/vw\b/, /\.ssh\b/, /\.credentials/, /(^|[\s;&|(`$])bw\s/, /(^|[\s;&|(`$])sudo\b/, /\.env\b/,
+  /\.runtime\/(claude|werkbank\/creds)\b/, /claude-accounts\.json/, /\.config\/vw\b/, /\.ssh\b/, /\.credentials/,
+  /(^|[\s;&|(`$])bw\s/, /(^|[\s;&|(`$])sudo\b/, /\.env\b/,
 ];
-const bashTouchesJiraWrite = (cmd: string) => /atlassian|jira/i.test(cmd) && !/^\s*\S*jira-read\.sh\s/.test(cmd);
+// Jira-Schreiben per Bash = ein HTTP-Aufruf an Atlassian, der schreibt. Lesen, grep nach „jira“, Dateinamen mit
+// „atlassian“ gehen an den Klassifikator. Jira-Schreiben über den Atlassian-MCP fragt unabhängig davon weiter.
+const ATLASSIAN_HOST = /(atlassian\.net|api\.atlassian\.com)/i;
+const HTTP_WRITE = /(-X\s*(POST|PUT|PATCH|DELETE)\b|--request\s+(POST|PUT|PATCH|DELETE)\b|\s--data(-raw|-binary)?\b|\s-d\s|\s--json\b|\b(http|https)\s+(POST|PUT|PATCH|DELETE)\b)/i;
+const bashTouchesJiraWrite = (cmd: string) => ATLASSIAN_HOST.test(cmd) && HTTP_WRITE.test(cmd);
 
 /** Dateien, die auch der volle Auto-Modus nicht ohne „ja“ ändert: Werkbank-Zustand, Konfigurationen, Geheimnisse. */
 function sensitiveTarget(target: string): boolean {
