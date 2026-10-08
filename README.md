@@ -643,6 +643,26 @@ Knut, 07.10.2026: „werkbank hat nur einen chat pro zeit … gehen auch mehrere
   mehrere Personen den Auto-Modus bekommen.
 - **Not-Aus:** `BRIDGE_MAX_PARALLEL_CHATS=1 scripts/werkbank.sh restart` → wieder ein Chat zur Zeit.
 
+## Roadmap-Automatik (08.10.2026)
+
+Plan: `docs/plan-roadmap-automatik.md`. Vault-Roadmap und Roadmap-Seite ziehen sich selbst nach; was eine Maschine
+nicht allein darf, steht als Frage unter **Roadmap → „Für mich offen“**.
+
+- **Feed:** alle 5 min schreibt die Werkbank `~/.cache/vault-sync/werkbank-feed.md` (Jira-Stand, fertige
+  Karten-Läufe mit Vault-Notizen und PR-Links, Projekte je Workstream; keine Beschreibungen, Chats, Zugangsdaten).
+  `vault-sync-snapshot.sh` hängt ihn an, wenn er jünger als 24 h ist.
+- **Nachzug nach Agentenlauf:** ist ein Karten-Agent mit Ticket fertig (Sitzung „bereit“ mit neuer Aktivität),
+  kommt das Ticket in eine Warteschlange; höchstens alle 20 min startet `vault-sync.sh --scope PM-…`
+  (nur Specs/Übersichten/Register/Timeline dieser Tickets). Aus mit `WERKBANK_ROADMAP_AUTOSYNC=0`.
+- **„Für mich offen“:** offene `- Knut:`-Zeilen, PRs, bei denen ich laut „wer ist dran“ dran bin, eigene Tickets
+  ohne/über Datum; für Admins die **Fragen des Vault-Syncs** („Offen/unklar“ des letzten Protokollabschnitts, der
+  welche hat) mit ✅ Ja / ✖️ Nein und der **Entwurf „Woran wir gerade arbeiten“**.
+- **Ja** schreibt `~/.cache/vault-sync/freigaben.md` und startet einen Sync (höchstens alle 5 min); der Sync führt
+  genau diesen Punkt aus und meldet „erledigt: S…“ im Protokoll, dann verschwindet die Frage. **Nein** blendet sie aus.
+- **Entwurf:** der Morgenlauf (vor 11 Uhr) schreibt `0-Overview/entwurf-woran-wir-arbeiten.md`; „Übernehmen“ ersetzt
+  im Hub nur den Block zwischen `<!-- werkbank:woran-wir-arbeiten -->` und `<!-- /werkbank:woran-wir-arbeiten -->`.
+- Env: `WERKBANK_VAULT_SYNC_DIR`, `WERKBANK_VAULT_SYNC_SCRIPT`, `WERKBANK_ROADMAP_FEED`, `WERKBANK_ROADMAP_AUTOSYNC`.
+
 ## Mehrere Claude-Konten je Person (06.10.2026)
 
 Knut, 06.10.2026: mehrere Claude-Konten je Person mit automatischem Wechsel, „wie `cswap auto`“. Plan:

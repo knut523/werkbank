@@ -28,7 +28,8 @@ import { log } from './log.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, type JiraAction } from './jirawrite.ts';
-import { jiraEventStream, jiraChanged } from './events.ts';
+import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
+import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, startVaultSync, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
@@ -921,6 +922,123 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
   });
 });
 
+// --- Roadmap-Automatik (docs/plan-roadmap-automatik.md) ---
+
+const VAULT_SYNC_SCRIPT = () => process.env.WERKBANK_VAULT_SYNC_SCRIPT || join(cfg.skillsTarget, 'olaf-produkt-roadmap', 'scripts', 'vault-sync.sh');
+const SYNC_PROTOCOL = 'olaf/1-Projects/daily-debrief/vault-sync-protokoll.md';
+const WORK_DRAFT = `${OVERVIEW}/entwurf-woran-wir-arbeiten.md`;
+const HUB = `${OVERVIEW}/0-roadmap-produkt-olaf.md`;
+const roadmapAutosync = () => process.env.WERKBANK_ROADMAP_AUTOSYNC !== '0';
+const roadmapQueue = newQueue();
+let lastManualSync = 0;
+const firstName = (u: User) => u.name.trim().split(/\s+/)[0] ?? u.name;
+const needAdmin = async (req: IncomingMessage) => {
+  const u = await needUser(req);
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
+  return u;
+};
+
+/** Werkbank-Stand für den Vault-Sync-Snapshot schreiben (Jira, Läufe, Projekte). */
+async function writeRoadmapFeed() {
+  const issues = (await wb().collection('jira_issues').find({}, { projection: { _id: 0, key: 1, summary: 1, status: 1, statusCategory: 1, assignee: 1, duedate: 1, updated: 1, type: 1, workstream: 1 } }).toArray()) as any[];
+  const since = new Date(Date.now() - 3 * 86_400_000);
+  const runsRaw = await wb().collection('agent_runs').find({ mode: 'chat', key: { $ne: null }, finishedAt: { $gte: since } }, { projection: { key: 1, projectId: 1, finishedAt: 1, startedAt: 1, written: 1, draft: 1 } }).toArray() as any[];
+  const projects = await wb().collection('projects').find({}, { projection: { name: 1, workstream: 1, tickets: 1 } }).toArray() as any[];
+  const pname = new Map(projects.map((p) => [String(p._id), p.name]));
+  const vaultPrefix = cfg.vaultDir + '/';
+  const runs = runsRaw.map((r) => ({
+    key: r.key, projectName: r.projectId ? pname.get(String(r.projectId)) ?? null : null, finishedAt: r.finishedAt, startedAt: r.startedAt,
+    vaultNotes: (r.written ?? []).filter((f: string) => f.startsWith(vaultPrefix) && f.endsWith('.md')).map((f: string) => f.slice(vaultPrefix.length)),
+    prs: prLinks(String(r.draft ?? '')),
+  }));
+  writeAtomic(feedPath(), buildFeed({ now: new Date(), issues, runs, projects: projects.map((p) => ({ name: p.name, workstream: p.workstream ?? null, tickets: p.tickets ?? [] })) }));
+}
+
+/** Fertige Karten-Läufe dieser Person in die Warteschlange (einmal je neuer Aktivität der Sitzung). */
+async function noteFinishedRuns(person: User, sessions: Array<{ conv: string; status: string; lastActivity?: number | null; written?: string[] }>) {
+  for (const s of sessions) {
+    if (s.status !== 'bereit' || !s.lastActivity) continue;
+    const run: any = await wb().collection('agent_runs').findOne({ userId: person.id, conv: s.conv, mode: 'chat', key: { $ne: null } }, { sort: { startedAt: -1 } });
+    if (!run || (run.roadmapSeenAt && run.roadmapSeenAt >= s.lastActivity)) continue;
+    await wb().collection('agent_runs').updateOne({ _id: run._id }, { $set: { roadmapSeenAt: s.lastActivity, finishedAt: new Date(s.lastActivity), written: s.written ?? run.written ?? [] } });
+    if (roadmapAutosync()) roadmapQueue.pending.add(run.key);
+  }
+}
+
+/** Offene Freigaben neu in die Datei schreiben, die der Sync liest. */
+async function writeApprovals() {
+  const done = doneIds(readVault(SYNC_PROTOCOL));
+  const col = wb().collection('roadmap_answers');
+  if (done.size) await col.updateMany({ _id: { $in: [...done] as any[] }, done: { $ne: true } }, { $set: { done: true, doneAt: new Date() } });
+  const open = (await col.find({ answer: 'ja', done: { $ne: true } }).sort({ at: 1 }).toArray()) as any[];
+  writeAtomic(approvalsPath(), renderApprovals(open.map((a): Approval => ({ id: String(a._id), text: a.text, at: new Date(a.at).toISOString(), by: a.by }))));
+  return open.length;
+}
+
+on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
+  const u = await needUser(req);
+  const me = firstName(u).toLowerCase();
+  const prs = ((await wb().collection('github_prs').find({}, { projection: { _id: 0 } }).toArray()) as any[])
+    .filter((p) => String(p.turn?.who ?? '').toLowerCase().split(/,\s*/).includes(me))
+    .map((p) => ({ pr: p.pr, title: p.title, url: p.url, why: p.turn?.why, role: p.turn?.role }));
+  const today = new Date().toISOString().slice(0, 10);
+  const tickets = ((await wb().collection('jira_issues').find({ type: { $ne: 'Workstream' } }, { projection: { _id: 0, key: 1, summary: 1, status: 1, statusCategory: 1, assignee: 1, duedate: 1 } }).toArray()) as any[])
+    .filter((i) => i.statusCategory !== 'Done' && i.status !== 'Done' && String(i.assignee ?? '').toLowerCase().split(/\s+/)[0] === me)
+    .filter((i) => !i.duedate || i.duedate < today)
+    .map((i) => ({ key: i.key, summary: i.summary, duedate: i.duedate, why: i.duedate ? 'überfällig' : 'ohne Datum' }))
+    .sort((a, b) => String(a.duedate ?? '9').localeCompare(String(b.duedate ?? '9')));
+  const admin = u.role === 'ADMIN';
+  let questions: any[] = [], draft: any = null, section: string | null = null;
+  if (admin) {
+    const protocol = readVault(SYNC_PROTOCOL);
+    const qs = parseSyncQuestions(protocol);
+    section = qs[0]?.section ?? null;
+    const answered = new Map(((await wb().collection('roadmap_answers').find({ _id: { $in: qs.map((q) => q.id) as any[] } }).toArray()) as any[]).map((a) => [String(a._id), a]));
+    const done = doneIds(protocol);
+    questions = qs.filter((q) => !done.has(q.id)).map((q) => ({ ...q, answer: answered.get(q.id)?.answer ?? null }))
+      .filter((q) => q.answer !== 'nein');
+    const text = readVault(WORK_DRAFT);
+    if (text.trim()) {
+      const hash = hashText(text);
+      const st: any = await wb().collection('meta').findOne({ _id: 'roadmap_draft' as any });
+      if (st?.hash !== hash) draft = { hash, body: draftBody(text), path: WORK_DRAFT, hubHasMarkers: replaceWorkBlock(readVault(HUB), 'x') !== null };
+    }
+  }
+  send(res, 200, { me: firstName(u), admin, prs, tickets, questions, section, draft, autosync: roadmapAutosync(), queued: [...roadmapQueue.pending] });
+});
+
+on('POST', /^\/api\/roadmap\/question$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  const id = String(b.id ?? ''); const answer = String(b.answer ?? '');
+  if (!['ja', 'nein'].includes(answer)) throw new HttpError(400, 'Antwort ist ja oder nein.');
+  const q = parseSyncQuestions(readVault(SYNC_PROTOCOL)).find((x) => x.id === id);
+  if (!q) throw new HttpError(409, 'Diese Frage gibt es im letzten Sync-Protokoll nicht mehr — Seite neu laden.');
+  await wb().collection('roadmap_answers').updateOne({ _id: id as any }, { $set: { answer, text: q.text, section: q.section, at: new Date(), by: u.email } }, { upsert: true });
+  const open = await writeApprovals();
+  let started = false;
+  if (answer === 'ja' && Date.now() - lastManualSync > 5 * 60_000) { lastManualSync = Date.now(); await writeRoadmapFeed().catch(() => {}); started = startVaultSync(VAULT_SYNC_SCRIPT(), null, log); }
+  roadmapChanged('frage');
+  send(res, 200, { ok: true, open, started });
+});
+
+on('POST', /^\/api\/roadmap\/draft$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  const text = readVault(WORK_DRAFT);
+  const hash = hashText(text);
+  if (!text.trim() || String(b.hash ?? '') !== hash) throw new HttpError(409, 'Der Entwurf hat sich geändert — Seite neu laden.');
+  if (b.action === 'übernehmen') {
+    const next = replaceWorkBlock(readVault(HUB), draftBody(text));
+    if (next === null) throw new HttpError(409, 'Im Hub fehlen die Marker <!-- werkbank:woran-wir-arbeiten --> … <!-- /werkbank:woran-wir-arbeiten --> (oder sie stehen doppelt). Nichts geschrieben.');
+    writeAtomic(join(cfg.vaultDir, HUB), next);
+    invalidateIndex();
+  } else if (b.action !== 'verwerfen') throw new HttpError(400, 'Aktion ist übernehmen oder verwerfen.');
+  await wb().collection('meta').updateOne({ _id: 'roadmap_draft' as any }, { $set: { hash, action: b.action, at: new Date(), by: u.email } }, { upsert: true });
+  roadmapChanged('entwurf');
+  send(res, 200, { ok: true });
+});
+
 on('POST', /^\/api\/roadmap\/github$/, async (req, res) => {
   await needUser(req);
   const r = await syncGithub(await githubReadToken()).catch((e: any) => { throw new HttpError(502, e.message); });
@@ -1781,6 +1899,7 @@ async function backgroundJobs() {
           if (!r.ok) continue;
           const sessions = ((await r.json()) as any).sessions ?? [];
           const { changed, projects } = await ingestSessions(person, sessions);
+          await noteFinishedRuns(person, sessions);
           if (changed) log('agenten-dateien', { user: person.id, changed });
           for (const id of projects) touched.add(id);
         } catch (e: any) { log('agenten-dateien', { user: person.id, error: String(e?.message ?? e).slice(0, 200) }); } // nur diese Person
@@ -1793,11 +1912,21 @@ async function backgroundJobs() {
           if (ws) await syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 160) }));
         }
       }
+      // Gezielter Roadmap-Nachzug nach fertigen Karten-Läufen (höchstens alle 20 min, Plan Roadmap-Automatik S2).
+      const due = takeDue(roadmapQueue, Date.now());
+      if (due) { await writeRoadmapFeed().catch((e) => log('roadmap-feed', { error: String(e?.message ?? e).slice(0, 160) })); startVaultSync(VAULT_SYNC_SCRIPT(), due, log); roadmapChanged('nachzug'); }
     } catch (e: any) { log('agenten-dateien', { error: String(e?.message ?? e).slice(0, 200) }); }
     finally { filesTickRunning = false; }
   };
   setTimeout(filesTick, 20_000);
   setInterval(filesTick, 2 * 60_000);
+
+  // Werkbank-Feed für den Vault-Sync-Snapshot und Abgleich der Freigaben mit dem Protokoll (alle 5 min).
+  const roadmapTick = async () => {
+    try { await writeRoadmapFeed(); await writeApprovals(); } catch (e: any) { log('roadmap-feed', { error: String(e?.message ?? e).slice(0, 160) }); }
+  };
+  setTimeout(roadmapTick, 30_000);
+  setInterval(roadmapTick, 5 * 60_000);
 }
 
 await connect();

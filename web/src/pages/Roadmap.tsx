@@ -397,6 +397,82 @@ function Check({ d: rd }: { d: any }) {
   );
 }
 
+// „Für mich offen“ (Plan Roadmap-Automatik S3): was gerade auf mich wartet — offene Knut-Zeilen, PRs, bei denen ich
+// dran bin, eigene Tickets ohne/über Datum; für Admins zusätzlich die Fragen des Vault-Syncs (✅ Ja führt der nächste
+// Sync aus) und der Entwurf „Woran wir gerade arbeiten“. Live über dieselben Server-Events wie die Seite.
+function ForMe({ d }: { d: any }) {
+  const m = useLoad(() => api('/api/roadmap/mine'));
+  useJiraLive(() => { api('/api/roadmap/mine').then(m.setData).catch(() => {}); }, 'both');
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  const x: any = m.data;
+  if (!x) return m.error ? <Err e={m.error} /> : null;
+  const decisions = (d?.decisions ?? []) as any[];
+  const answer = async (q: any, a: 'ja' | 'nein') => {
+    setBusy(q.id); setErr(null);
+    try {
+      const r: any = await api('/api/roadmap/question', { body: { id: q.id, answer: a } });
+      toast(a === 'ja' ? (r.started ? 'Freigegeben — der Vault-Sync läuft jetzt' : 'Freigegeben — der nächste Vault-Sync führt es aus') : 'Verworfen');
+      m.setData(await api('/api/roadmap/mine'));
+    } catch (e) { setErr(e); } finally { setBusy(null); }
+  };
+  const draft = async (action: 'übernehmen' | 'verwerfen') => {
+    if (action === 'übernehmen' && !(await confirm({ title: '„Woran wir gerade arbeiten“ ersetzen?', confirmLabel: 'In den Hub schreiben', body: <><p className="small">Der Block zwischen den Werkbank-Markern im Roadmap-Hub wird durch diesen Entwurf ersetzt. Alles andere auf der Seite bleibt.</p><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{x.draft.body}</pre></> }))) return;
+    setBusy('draft'); setErr(null);
+    try { await api('/api/roadmap/draft', { body: { action, hash: x.draft.hash } }); toast(action === 'übernehmen' ? 'Im Hub übernommen' : 'Entwurf verworfen'); m.setData(await api('/api/roadmap/mine')); }
+    catch (e) { setErr(e); } finally { setBusy(null); }
+  };
+  const n = decisions.length + x.prs.length + x.tickets.length + x.questions.length + (x.draft ? 1 : 0);
+  const btn: CSSProperties = { minHeight: 36 };
+  return (
+    <div className="card" data-testid="for-me" style={{ marginBottom: 14 }}>
+      <h3 style={{ marginTop: 0 }}>Für mich offen <span className="chip">{n}</span>
+        {x.queued?.length > 0 && <span className="chip warn" title="Roadmap-Nachzug nach Agentenlauf wartet (höchstens alle 20 min)">Nachzug wartet: {x.queued.join(', ')}</span>}
+        {!x.autosync && <span className="chip" title="WERKBANK_ROADMAP_AUTOSYNC=0">Nachzug aus</span>}
+      </h3>
+      {err ? <Err e={err} /> : null}
+      {n === 0 && <p className="small muted">Nichts — alles erledigt oder bei anderen.</p>}
+      {x.questions.length > 0 && <>
+        <div className="small docs-h">Fragen des Vault-Syncs ({x.section}) — ✅ Ja: der Sync führt genau das aus</div>
+        <ul className="small" style={{ paddingLeft: 18 }}>{x.questions.map((q: any) => (
+          <li key={q.id} style={{ marginBottom: 8 }} data-testid="sync-question">
+            <div>{q.text}</div>
+            {q.answer === 'ja'
+              ? <span className="chip ok">freigegeben — wird beim nächsten Sync erledigt</span>
+              : x.admin && <div className="row" style={{ gap: 8, marginTop: 4 }}>
+                  <button className="btn small" style={{ ...btn, background: '#FEE600', color: '#2b2d33', borderColor: '#FEE600' }} disabled={busy === q.id} onClick={() => answer(q, 'ja')}>✅ Ja</button>
+                  <button className="btn ghost small" style={btn} disabled={busy === q.id} onClick={() => answer(q, 'nein')}>✖️ Nein</button>
+                </div>}
+          </li>))}</ul>
+      </>}
+      {x.draft && <>
+        <div className="small docs-h">Entwurf „Woran wir gerade arbeiten“ (vom Morgenlauf)</div>
+        <details className="small"><summary>ansehen</summary><pre className="small" style={{ whiteSpace: 'pre-wrap' }}>{x.draft.body}</pre></details>
+        {!x.draft.hubHasMarkers && <p className="small warn">Im Hub fehlen die Werkbank-Marker — Übernehmen geht erst, wenn sie da sind.</p>}
+        <div className="row" style={{ gap: 8, marginTop: 4 }}>
+          <button className="btn small" style={btn} disabled={busy === 'draft' || !x.draft.hubHasMarkers} onClick={() => draft('übernehmen')}>Übernehmen</button>
+          <button className="btn ghost small" style={btn} disabled={busy === 'draft'} onClick={() => draft('verwerfen')}>Verwerfen</button>
+        </div>
+      </>}
+      {decisions.length > 0 && <>
+        <div className="small docs-h">Offene Entscheidungen im Vault ({decisions.length}) — <a href="#/roadmap/entscheidungen">beantworten</a></div>
+        <ul className="small" style={{ paddingLeft: 18 }}>{decisions.slice(0, 5).map((q: any) => <li key={q.path + q.line}><a href={note(q.path)}>{q.title ?? q.spec}</a>: {String(q.question ?? '').slice(0, 140)}</li>)}</ul>
+        {decisions.length > 5 && <a className="small" href="#/roadmap/entscheidungen">alle {decisions.length}</a>}
+      </>}
+      {x.prs.length > 0 && <>
+        <div className="small docs-h">PRs, bei denen {x.me} dran ist ({x.prs.length})</div>
+        <ul className="small" style={{ paddingLeft: 18 }}>{x.prs.map((p: any) => <li key={p.pr}><a href={p.url} target="_blank" rel="noreferrer">{p.pr}</a> {p.title} <span className="tiny">· {p.why}</span></li>)}</ul>
+      </>}
+      {x.tickets.length > 0 && <>
+        <div className="small docs-h">Meine Tickets ohne oder über Datum ({x.tickets.length})</div>
+        <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>{x.tickets.slice(0, 12).map((t: any) => <a key={t.key} className={`chip ${t.why === 'überfällig' ? 'bad' : 'warn'}`} href={`#/board?key=${t.key}`} title={t.summary}>{t.key} · {t.why}{t.duedate ? ` (${t.duedate})` : ''}</a>)}</div>
+      </>}
+    </div>
+  );
+}
+
 export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
   const tab = hash.match(/^#\/roadmap\/(\w+)/)?.[1] ?? 'prio';
   const r = useLoad(() => api('/api/roadmap'));
@@ -412,6 +488,7 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
         </div>
         {d && <a className="btn" href={note(d.hub.path)}>Roadmap-Hub öffnen</a>}
       </div>
+      {d && <ForMe d={d} />}
       <div className="tabs" role="tablist">
         {TABS.map(([id, label]) => <a key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} href={`#/roadmap/${id}`}>{label}{d && id === 'entscheidungen' ? ` (${d.decisions.length})` : d && id === 'prs' ? ` (${d.prs.length})` : d && id === 'prio' ? ` (${d.ranking.length})` : ''}</a>)}
       </div>

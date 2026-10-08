@@ -42,6 +42,8 @@ before(async () => {
   writeFileSync(join(tmp, 'vorschlag.json'), JSON.stringify([{ key: 'PM-267', ziel: 'ziel-kr1', begruendung: 'Hardware-Flow trägt den Vertrieb', sicherheit: 0.8 }, { key: 'PM-999', ziel: 'KR1' }, { key: 'PM-322', ziel: 'KR9' }, { key: 'PM-332', ziel: 'GATE-2701' }]));
   // Ziele-Datei nur in der Kopie (andere Tests zählen die Notizen des Fixture-Vaults).
   cpSync(new URL('./fixtures/ziele-olaf.md', import.meta.url).pathname, join(VAULT, 'olaf/1-Projects/ziele-olaf.md'));
+  // Ersatz für vault-sync.sh: schreibt nur seine Argumente mit (Roadmap-Automatik).
+  writeFileSync(join(tmp, 'fake-vault-sync.sh'), `#!/bin/bash\necho "lauf $*" >> ${join(tmp, 'fake-vault-sync.log')}\n`);
   mkdirSync(join(tmp, 'skills-src', 'demo-skill'), { recursive: true });
   writeFileSync(join(tmp, 'skills-src', 'demo-skill', 'SKILL.md'), '---\nname: demo-skill\ndescription: Nur ein Test\n---\n# x\n');
   mongo = await MongoClient.connect(process.env.MONGO_URI_WERKBANK || 'mongodb://127.0.0.1:27017');
@@ -88,6 +90,7 @@ before(async () => {
       CREDS_KEY, CREDS_IV, WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: DATA,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
       WERKBANK_GOAL_PROPOSALS: join(tmp, 'vorschlag.json'), WERKBANK_SPEC_CREATE: 'on', WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
+      WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vault-sync'), WERKBANK_VAULT_SYNC_SCRIPT: join(tmp, 'fake-vault-sync.sh'),
     },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -954,4 +957,55 @@ test('Mehrere Claude-Konten: hinzufügen, maskiert auflisten, umsortieren, teste
   // Höchstens 5 weitere Konten.
   for (let i = 0; i < 4; i++) assert.equal((await anna.req('/api/setup/claude-accounts', { body: { label: `K${i}`, token: 'sk-ant-oat01-' + String(i).repeat(40) } })).status, 200);
   assert.equal((await anna.req('/api/setup/claude-accounts', { body: { label: 'K9', token: 'sk-ant-oat01-' + '9'.repeat(40) } })).status, 400);
+});
+
+test('Roadmap-Automatik: „Für mich offen“, Ja/Nein auf Sync-Fragen nur für Admins, Entwurf ersetzt nur den Markerblock', async () => {
+  const OV = join(VAULT, 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/0-Overview');
+  const proto = join(VAULT, 'olaf/1-Projects/daily-debrief/vault-sync-protokoll.md');
+  mkdirSync(join(VAULT, 'olaf/1-Projects/daily-debrief'), { recursive: true });
+  writeFileSync(proto, '# Protokoll\n\n## 2026-10-08 07:30\n\n**Offen/unklar:**\n- (1) **Zeilen löschen** auf der Review-Seite.\n- (2) **Spec verschieben** nach Live.\n');
+  await anna.login(users.a); await bernd.login(users.b);
+  // Nicht-Admin: sieht keine Fragen, darf nicht antworten.
+  let r = await bernd.req('/api/roadmap/mine');
+  assert.equal(r.status, 200); assert.equal(r.j.admin, false); assert.deepEqual(r.j.questions, []);
+  const qs0 = (await import('../server/roadmapauto.ts')).parseSyncQuestions(readFileSync(proto, 'utf8'));
+  assert.equal((await bernd.req('/api/roadmap/question', { body: { id: qs0[0].id, answer: 'ja' } })).status, 403);
+  // Admin (Rolle aus LibreChat; hier in der Sitzung gesetzt).
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  r = await anna.req('/api/roadmap/mine');
+  assert.equal(r.j.admin, true); assert.equal(r.j.questions.length, 2); assert.equal(r.j.section, '2026-10-08 07:30');
+  const [q1, q2] = r.j.questions;
+  assert.equal((await anna.req('/api/roadmap/question', { body: { id: q1.id, answer: 'vielleicht' } })).status, 400);
+  assert.equal((await anna.req('/api/roadmap/question', { body: { id: 'S0000000000', answer: 'ja' } })).status, 409);
+  r = await anna.req('/api/roadmap/question', { body: { id: q1.id, answer: 'ja' } });
+  assert.equal(r.status, 200); assert.equal(r.j.open, 1); assert.equal(r.j.started, true);
+  const appr = readFileSync(join(tmp, 'vault-sync', 'freigaben.md'), 'utf8');
+  assert.match(appr, new RegExp(`- ${q1.id} \\(\\d{4}-\\d{2}-\\d{2}, ${users.a.email}\\): \\*\\*Zeilen löschen\\*\\*`));
+  for (let i = 0; i < 40 && !existsSync(join(tmp, 'fake-vault-sync.log')); i++) await new Promise((res) => setTimeout(res, 50));
+  assert.match(readFileSync(join(tmp, 'fake-vault-sync.log'), 'utf8'), /^lauf $/m, 'voller Lauf ohne --scope');
+  assert.equal((await anna.req('/api/roadmap/question', { body: { id: q2.id, answer: 'nein' } })).status, 200);
+  r = await anna.req('/api/roadmap/mine');
+  assert.deepEqual(r.j.questions.map((q: any) => [q.id, q.answer]), [[q1.id, 'ja']], 'Nein verschwindet, Ja bleibt als „freigegeben“ stehen');
+  // Der Sync meldet „erledigt“ → Frage weg, Freigabe-Datei leer.
+  writeFileSync(proto, readFileSync(proto, 'utf8') + `\n## 2026-10-08 11:00\n\nerledigt: ${q1.id} (4-review-….md)\n`);
+  r = await anna.req('/api/roadmap/mine');
+  assert.deepEqual(r.j.questions, []);
+  await anna.req('/api/roadmap/question', { body: { id: q2.id, answer: 'nein' } }).catch(() => {});
+  // Entwurf: ohne Marker im Hub nicht übernehmbar; mit Marker ersetzt er genau den Block.
+  const hubPath = join(OV, '0-roadmap-produkt-olaf.md');
+  const hubBefore = readFileSync(hubPath, 'utf8');
+  writeFileSync(join(OV, 'entwurf-woran-wir-arbeiten.md'), '---\nstatus: draft\n---\n\nNeu: #294 offen.\n');
+  r = await anna.req('/api/roadmap/mine');
+  assert.equal(r.j.draft.body, 'Neu: #294 offen.'); assert.equal(r.j.draft.hubHasMarkers, false);
+  assert.equal((await anna.req('/api/roadmap/draft', { body: { action: 'übernehmen', hash: r.j.draft.hash } })).status, 409);
+  assert.equal(readFileSync(hubPath, 'utf8'), hubBefore, 'ohne Marker nichts geschrieben');
+  writeFileSync(hubPath, hubBefore + '\n<!-- werkbank:woran-wir-arbeiten -->\nalt\n<!-- /werkbank:woran-wir-arbeiten -->\n\nDanach bleibt.\n');
+  r = await anna.req('/api/roadmap/mine');
+  assert.equal((await bernd.req('/api/roadmap/draft', { body: { action: 'übernehmen', hash: r.j.draft.hash } })).status, 403);
+  assert.equal((await anna.req('/api/roadmap/draft', { body: { action: 'übernehmen', hash: 'falsch' } })).status, 409);
+  assert.equal((await anna.req('/api/roadmap/draft', { body: { action: 'übernehmen', hash: r.j.draft.hash } })).status, 200);
+  assert.equal(readFileSync(hubPath, 'utf8'), hubBefore + '\n<!-- werkbank:woran-wir-arbeiten -->\nNeu: #294 offen.\n<!-- /werkbank:woran-wir-arbeiten -->\n\nDanach bleibt.\n');
+  assert.equal((await anna.req('/api/roadmap/mine')).j.draft, null, 'übernommener Entwurf erscheint nicht wieder');
+  writeFileSync(hubPath, hubBefore);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
 });
