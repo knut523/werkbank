@@ -9,7 +9,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
-import { handleTurn, stats, scratchFor, safeId, sessionsOf, type Sink } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, type Sink } from './sessions.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
 import { mockQuery } from './mock.ts';
@@ -17,6 +17,7 @@ import { mcpCall, mcpStatus } from './mcpcall.ts';
 import { directCall } from './mcpdirect.ts';
 import { homeFor, ensureHome, atlassianServer, type ClaudeHome } from './claudehome.ts';
 import { log } from './log.ts';
+import { testAccount, markExhausted, exhaustedOf } from './accounts.ts';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -61,6 +62,17 @@ function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome): R
     };
   }
   return { ...servers, ...atlassianServer() };
+}
+
+/** Claude-Konten der Person in Reihenfolge (Werkbank, interner Kanal). chat = der Schlüssel aus der Anfrage. */
+async function claudeAccounts(userId: string): Promise<{ id: string; label: string; token: string | null }[]> {
+  const r = await fetch(`${WEB_URL}/internal/claude-accounts`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL },
+    body: JSON.stringify({ userId }), signal: AbortSignal.timeout(3000),
+  });
+  if (!r.ok) throw new Error(`Werkbank ${r.status}`);
+  const j: any = await r.json();
+  return Array.isArray(j.accounts) ? j.accounts : [];
 }
 
 async function sessionContext(userId: string, convId: string, eod: boolean, skills: unknown): Promise<string> {
@@ -157,6 +169,11 @@ function makeSink(res: ServerResponse, model: string, stream: boolean, includeUs
       if (stream) res.write(chunk({ content: text }));
       else collected += text;
     },
+    reason(text: string) {
+      // Nur im Stream: LibreChat liest `reasoning_content` bei eigenen Endpunkten als Denk-Abschnitt.
+      if (closed || res.writableEnded || !stream) return;
+      res.write(chunk({ reasoning_content: text }));
+    },
     finish(usage) {
       if (closed || res.writableEnded) return;
       if (heartbeat) clearInterval(heartbeat);
@@ -234,9 +251,9 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
   const firstUser = textOf(messages.find((m) => m.role === 'user')?.content);
   const convId = header(req, 'x-librechat-conversation-id') ?? `h-${createHash('sha256').update(firstUser).digest('hex').slice(0, 24)}`;
 
-  // Anhänge ins Arbeitsverzeichnis der Person legen und im Prompt nennen.
+  // Anhänge in den Arbeitsordner dieses Chats legen und im Prompt nennen (relativer Pfad = relativ zu dessen cwd).
   if (atts.length) {
-    const { saved, rejected } = saveAttachments(scratchFor(userId), convId, atts);
+    const { saved, rejected } = saveAttachments(workDirFor(userId, convId), convId, atts);
     log('attachments', { user: userId, saved: saved.length, rejected: rejected.length });
     prompt = (prompt || 'Sieh dir bitte die angehängten Dateien an.') + '\n' + attachmentNote(saved, rejected);
   }
@@ -256,6 +273,8 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
     userId, convId, token, prompt, history, model: MODELS[model], sink, query: query as any, readonly, receivedAt, instructions: instructions || undefined,
     sessionContext: known ? () => sessionContext(userId, convId, /Tagesabschluss/i.test(instructions) || /^\s*tagesabschluss\b/i.test(prompt), skillsFor(STATE_DIR, `${safeId(userId)}:${safeId(convId)}`, instructions, prompt)) : undefined,
     mcpServers: known ? mcpServersFor(userId, token, homeFor(safeId(userId), email)) : undefined,
+    // Mehrere Claude-Konten: bei rate_limit übernimmt das nächste (Liste über den internen Kanal, nie vom Browser).
+    accounts: known && INTERNAL ? () => claudeAccounts(userId) : undefined,
     // Jira im Chat geändert → Werkbank zieht die Tickets sofort nach und schiebt die Änderung an offene Boards.
     onJiraWrite: known && INTERNAL ? (keys, tool) => {
       log('jira im chat geschrieben', { user: userId, keys, tool });
@@ -299,6 +318,26 @@ const server = createServer(async (req, res) => {
       const direct = MOCK || process.env.BRIDGE_MCP_DIRECT === 'off' ? null : await directCall({ home, tool: String(b.tool), input: b.input ?? {} });
       const r = direct ?? await mcpCall(query as any, { token, cwd, home, tool: String(b.tool), input: b.input ?? {} });
       log('mcp call', { user: String(b.userId ?? '?'), tool: b.tool, ok: r.ok, error: r.error, ms: Date.now() - t0, via: direct ? 'direkt' : 'sitzung' });
+      return json(res, 200, r);
+    }
+    // Mehrere Claude-Konten (nur für Werkbank-Web): Zustand je Person (erschöpft bis …) und Test eines Kontos.
+    if (req.method === 'GET' && url.pathname === '/internal/accounts-state') {
+      if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
+      const ex = exhaustedOf(safeId(url.searchParams.get('user') ?? ''));
+      return json(res, 200, { exhausted: Object.fromEntries(Object.entries(ex).map(([id, v]) => [id, v.until])) });
+    }
+    if (req.method === 'POST' && url.pathname === '/internal/account-test') {
+      if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
+      const token = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '').trim();
+      if (!/^sk-ant-oat/.test(token) && !MOCK) return json(res, 400, { ok: false, error: 'auth' });
+      const b = await readBody(req);
+      const uid = String(b.userId ?? 'werkbank');
+      const home = homeFor(safeId(uid), b.email ? String(b.email) : undefined);
+      await ensureHome(home);
+      const r = await testAccount(query as any, { token, cwd: scratchFor(uid), home });
+      const accountId = String(b.accountId ?? '');
+      if (r.error === 'rate_limit' && /^[\w-]{1,40}$/.test(accountId)) markExhausted(safeId(uid), { id: accountId, label: accountId, token }, r.resetsAt);
+      log('kontotest', { user: uid, konto: accountId, ok: r.ok, error: r.error });
       return json(res, 200, r);
     }
     if (req.method === 'GET' && url.pathname === '/v1/models') {

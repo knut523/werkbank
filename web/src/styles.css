@@ -161,12 +161,43 @@ table.t th { font-weight: 600; color: var(--text-secondary); font-size: 12.5px; 
 :root[data-theme='dark'] .diff .add { color: var(--green-500); }
 
 @media (max-width: 1100px) { .wissen { grid-template-columns: 240px 1fr; } .wissen .side-panel { grid-column: 2; position: static; } }
+/* Handy-Menü: nur ≤ 760 px sichtbar */
+.menu-btn, .menu-chat { display: none; }
+.cols { grid-template-columns: repeat(var(--ncol, 5), minmax(180px, 1fr)); }
 @media (max-width: 760px) {
-  .shell { flex-direction: column; } .side { width: auto; flex-direction: row; overflow-x: auto; padding: 6px; }
-  .side .brand span, .side .foot, .side .spacer { display: none; } .nav { display: flex; } .side .nav.col { flex-direction: row; flex-wrap: nowrap; } .side .nav a { white-space: nowrap; }
+  /* Kopfleiste: Logo · Chat · „Board ▾ · 8 weitere“. Aufgeklappt: alle Seiten, darunter Nutzer, Hell/Dunkel, Abmelden. */
+  .shell { flex-direction: column; }
+  .side { width: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-right: none; border-bottom: 1px solid var(--border-light); }
+  .side .brand { padding: 0; } .side .brand span, .side .spacer { display: none; }
+  .menu-chat { display: inline-flex; }
+  .menu-btn { display: inline-flex; margin-left: auto; }
+  .menu-more { color: var(--text-secondary); font-weight: 400; }
+  .side .nav, .side .foot { display: none; }
+  .side.open { max-height: 88vh; overflow-y: auto; }
+  .side.open .nav { display: flex; flex-direction: column; width: 100%; }
+  .side.open .foot { display: flex; width: 100%; }
+  .side.open .foot .row { gap: 8px; }
+  .side .nav a { padding: 10px; }
   .wissen { grid-template-columns: 1fr; } .wtree { position: static; max-height: 260px; }
   .page { padding: 16px; }
   table.t { display: block; overflow-x: auto; max-width: 100%; }
+  /* Sprintziele: Fortschritt in eine eigene Zeile statt einer abgeschnittenen letzten Spalte */
+  table.goals-t, table.goals-t tbody { display: block; }
+  table.goals-t tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; border-bottom: 1px solid var(--border-light); padding: 6px 0; }
+  table.goals-t td { border: none; padding: 2px 0; }
+  table.goals-t td:nth-child(2) { flex: 1 1 50%; min-width: 0; }
+  table.goals-t td:last-child { flex-basis: 100%; }
+  /* Planning-/Review-Tabellen: je Zeile ein Block, Spaltenname vor dem Wert */
+  table.stack-t, table.stack-t tbody { display: block; } table.stack-t thead { display: none; }
+  table.stack-t tr { display: flex; flex-wrap: wrap; gap: 2px 8px; border-bottom: 1px solid var(--border-light); padding: 6px 0; }
+  table.stack-t td { border: none; padding: 2px 0; }
+  table.stack-t td:nth-child(2) { flex: 1 1 70%; }
+  table.stack-t td[data-label] { flex-basis: 100%; }
+  table.stack-t td[data-label]::before { content: attr(data-label) ': '; color: var(--text-secondary); font-weight: 600; }
+  table.stack-t td.rating::before { font-size: 12.5px; vertical-align: middle; }
+  /* Board: jede Bahn wischt für sich, eine Spalte rastet ein; der Rand der nächsten bleibt sichtbar. */
+  .cols { grid-template-columns: repeat(var(--ncol, 5), 84%); overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; padding-bottom: 6px; }
+  .cols > * { scroll-snap-align: start; }
 }
 
 /* Eingebettet in LibreChat (/wb/<seite>): kein eigenes Gerüst, Fläche wie LibreChats Hauptbereich */

@@ -167,7 +167,7 @@ Unter dem „Neuer Chat“-Knopf stehen sieben Symbole: 🚀 Einrichtung · 📖
   **„PM-123 · Titel“** mit dem Ticket als Kontext an — im Namen der Person (kurzlebiger LibreChat-Zugangstoken,
   derselbe Aufruf wie „Senden“), unter ihrem Claude. LibreChat fährt den Zug serverseitig weiter, der Agent
   arbeitet also **auch ohne offenen Tab**; wer den Chat öffnet, sieht den Fortschritt live. Jedes Schreiben
-  (Vault, Dateien, Jira) hält im Chat an und wartet auf **„ja“**; GitHub-Schreiben ist gesperrt. An der Karte:
+  (Vault, Dateien, Jira, GitHub) hält im Chat an und wartet auf **„ja“**; Merge ist gesperrt. An der Karte:
   Status **läuft / wartet auf ja / fertig** (aus der Brücke), „Im Chat öffnen“, welche Dateien der Agent
   geschrieben hat; am Board-Kärtchen „🤖 wartet auf ja“. Ein Agent je Karte und Person; eine offene Rückfrage
   bleibt stehen, auch wenn die Person inzwischen woanders chattet (höchstens 5 wartende je Person).
@@ -298,6 +298,19 @@ angewandt auf die **eigenen** PM-Tickets aus der Jira-Kopie (Zuordnung über `GE
 - **Board:** 🧹-Zähler je Karte, Bahn und Owner, Filter **„Braucht Pflege“**, oben die eigenen Fragen (höchstens 3).
   **Sprint:** Liste aller eigenen Pflegepunkte. Antworten dort: eine Zeile → Vorschlag → Bestätigen → Jira.
 
+## Handy (07.10.2026)
+
+Unter 760 px Breite (Befund `review-pakete/77-werkbank-live-mobile`, Knut 07.10.2026):
+
+- **Kopfleiste statt Seitenleiste:** Logo · „💬 Chat“ · Knopf „<aktuelle Seite> · 8 weitere ▾“. Aufgeklappt stehen alle
+  Seiten untereinander, darunter Name/E-Mail, Demo-Hinweis, **Hell/Dunkel** und **Abmelden** (vorher auf dem Handy
+  nicht erreichbar). Das Menü schließt sich beim Seitenwechsel.
+- **Board:** jede Bahn wischt für sich seitlich, eine Spalte (84 % der Breite) rastet ein (`scroll-snap`); der Rand der
+  nächsten Spalte bleibt als Hinweis sichtbar. Auch der Roadmap-Kanban.
+- **Sprint:** Sprintziele zeigen den Fortschritt in einer eigenen Zeile; Planning- und Review-Tabelle werden je Zeile
+  ein Block mit „DoD: … / Owner: … / Review: …“ statt einer abgeschnittenen letzten Spalte.
+- Ab 760 px bleibt alles wie vorher. Screenshots vorher/nachher: `screens/before|after` im Review-Paket.
+
 ## Was im Chat passiert
 
 - **Eine Claude-Code-Sitzung je Chat.** Die Brücke merkt sich Chat-ID → SDK-Sitzung
@@ -310,20 +323,28 @@ angewandt auf die **eigenen** PM-Tickets aus der Jira-Kopie (Zuordnung über `GE
 - **Schreiben nur nach „ja“.** Lesen, Suchen, Skills und Teilagenten laufen ohne Rückfrage. Vor jedem
   Schreiben/Ändern von Dateien, jedem Bash-Befehl und jedem schreibenden Jira-/MCP-Aufruf hält die
   Sitzung an und fragt; die nächste Nachricht ist die Antwort („ja“ → ausführen, sonst nicht). Offene
-  Rückfragen verfallen nach 30 Minuten.
-- **Gesperrt, auch mit „ja“:** `git push`, `git merge`, `gh pr merge|create|comment|review…`, schreibende
-  GitHub-API-Aufrufe, GitHub-MCP-Schreibwerkzeuge (Hook `PreToolUse` + `canUseTool`).
+  Rückfragen verfallen nach 30 Minuten. **Ausnahme Auto-Modus** (freigeschaltete Konten): Bash/Edits im eigenen
+  Arbeitsordner entscheidet ein Klassifikator, siehe „Auto-Modus“.
+- **GitHub (Knut, 06.10.2026):** Lesen frei (`gh api` ohne Schreib-Optionen, `gh pr view|diff|list`). **Schreiben nur
+  nach „ja“**, auch im Auto-Modus: `git push`, `gh pr create|comment|review|edit…`, `gh issue …`, schreibende
+  GitHub-API-Aufrufe (`-X POST|PATCH|PUT|DELETE`, `-f/-F`, GraphQL-Mutationen). **Gesperrt, auch mit „ja“:** Merge
+  (`git merge`, `gh pr merge`, `…/merge(s)` über die API, GitHub-MCP-Merge), Force-Push und Push auf `main`/`master`/`develop`
+  (Hook `PreToolUse` + `canUseTool`).
 - **Anhänge erreichen die Sitzung:** Dateien, die im Chat mit **„Hochladen zum KI-Anbieter“** angehängt
   werden, legt die Brücke in `anhaenge/<chat>/` im Arbeitsverzeichnis der Person ab (erlaubte Typen,
   20 MB je Datei, Rechte 0600, Namen bereinigt, nie ausführbar) und nennt sie Claude im Prompt.
   („Hochladen als Text“ schickt den Text direkt mit.)
 - **Vorlagen** im Modell-Menü starten einen Chat mit passender Vorgabe (LibreChat `promptPrefix`, von der
-  Brücke beim Sitzungsstart weitergegeben): **Spec schreiben (plan-to-pr)**, **Council**,
+  Brücke beim Sitzungsstart weitergegeben): **Spec schreiben (plan-to-pr)**, **Council**, **Koordinator (Teilagenten)**,
   **Jira-Ticket anlegen (olaf-jira)**, **Sprint-Review**, **Service-Fall**, **Vault aufräumen**.
 - **Chats teilen:** oben rechts „Teilen“ → Link erstellen → Zugriff verwalten → Teammates auswählen.
   Links sind **nur für angemeldete Konten** lesbar (`ALLOW_SHARED_LINKS_PUBLIC=false`,
   `interface.sharedLinks.public: false`, Rolle ohne `SHARE_PUBLIC`); ohne Anmeldung → 401.
 - **Grenzen gegen Missbrauch:** ein laufender Zug je Nutzer, 15 Minuten je Zug, höchstens 40 Schritte.
+  **Ausnahme Board-Agenten (E5, Knut 07.10.2026):** nur lesende Läufe vom Board (`x-werkbank-mode: readonly` **und**
+  SDK-Modus `dontAsk`, also mit `BRIDGE_PERMISSION_MODE=auto`) zählen nicht gegen diese Sperre — „Agent auf Karte“ läuft,
+  während man weiterchattet, und umgekehrt. Dafür gilt eine eigene Obergrenze von **2 Board-Läufen je Person**
+  (`BRIDGE_MAX_BOARD_RUNS`). Ein normaler Chat bleibt einer zur Zeit. Im Not-Aus (`default`) bleibt alles wie vorher.
 - **Titel** erzeugt die Brücke aus der ersten Nachricht, ohne Claude aufzurufen.
 - **Kontext-Paket** für jede **neue** Sitzung (nicht bei Fortsetzung), siehe unten.
 - **MCP-Server: genau diese, sonst keine** (Runde 4, `strictMcpConfig`): `vault-search` (Vault durchsuchen, lesend),
@@ -517,6 +538,160 @@ Unix-Nutzer der VM (Dateirechte, `/vault`); das ändert erst ein eigener Unix-Nu
    → `/mcp` → **atlassian** → **Authenticate** (auch hier: Adresse der Fehlerseite zurückkopieren, wenn der Browser nicht
    auf der VM läuft).
 
+## Auto-Modus (06.10.2026)
+
+Knut, 06.10.2026: „switch it on automatically“ — Plan `docs/plan-auto-modus-und-konten.md` (Quelle: Plan 71 P1).
+
+**Was er tut:** Für freigeschaltete Konten läuft die Sitzung im SDK-Modus `auto`. Bash-Befehle und Datei-Änderungen
+(`Write`/`Edit`/`MultiEdit`/`NotebookEdit`) **im eigenen Arbeitsordner** (`.runtime/bridge/scratch/<person>`) entscheidet
+ein Klassifikator-Modell statt des „ja“ im Chat. Jede automatische Freigabe steht als Statuszeile im Chat
+(**„🤖 automatisch erlaubt: 💻 Befehl: …“**) und im Log (`auto erlaubt`, nur der Werkzeugname). Lehnt der Klassifikator ab:
+**„🛑 Auto-Modus hat abgelehnt: …“**, Log `auto abgelehnt`, und `turn end` führt die abgelehnten Werkzeuge
+(`denials`, aus `result.permission_denials`, ohne Argumente). Ist er unsicher, eskaliert er: dann kommt die gewohnte
+Rückfrage im Chat, eingeleitet mit „Der Auto-Modus fragt nach: <Grund>“.
+
+**Was bleibt wie heute (Knuts Entscheidung E1):**
+
+| | im Auto-Modus |
+|---|---|
+| Lesen, Suchen, Skills, Teilagenten | frei (wie bisher) |
+| Bash/Edit im eigenen Arbeitsordner | **Klassifikator** |
+| Edits außerhalb des Arbeitsordners, unter `/vault` oder über einen Symlink dorthin | Rückfrage („ja“) |
+| Bash, der den Vault, `.runtime`, `.claude`, `.env`, `~/.ssh`, `~/.config/vw`, `bw`, `sudo` oder Jira/Atlassian nennt | Rückfrage („ja“) |
+| Jira-Schreiben (Atlassian-MCP, `jira_update`) | Rückfrage („ja“) |
+| GitHub lesen (`gh api` ohne Schreib-Optionen, `gh pr view/diff`) | Klassifikator |
+| `git push`, PR anlegen/kommentieren, GitHub-API schreiben | Rückfrage („ja“) — nie automatisch |
+| Merge, Force-Push, Push auf `main`/`master`/`develop` | gesperrt, auch mit „ja“ |
+| Board-Agent „nur lesen“ | lehnt alles Schreibende ab (Wächter) — zusätzlich SDK-Modus `dontAsk` |
+
+**Schalter (scripts/start.sh):**
+
+- `BRIDGE_PERMISSION_MODE` — Vorgabe in `start.sh`: **`auto`**. **Not-Aus:** `BRIDGE_PERMISSION_MODE=default
+  scripts/werkbank.sh restart` → exakt das bisherige Verhalten (Modus `default`, keine zusätzlichen Regeln, auch der
+  Board-Agent wie bisher). Im Code ist die Vorgabe `default`: wer die Brücke ohne `start.sh` startet, bekommt nichts Neues.
+- `BRIDGE_AUTO_EMAILS` — wer den Auto-Modus bekommt. Vorgabe in `start.sh`: `knut.peters@maxenergy.at` (E2: nur Knut,
+  solange es keine Unix-Trennung oder Sandbox gibt, E3). Alle anderen bleiben im Modus `default`.
+
+**Leitplanken im Auto-Modus:**
+
+- Der Wächter (PreToolUse-Hook) gibt für die Klasse `auto` **keine Entscheidung** zurück — nur dann kommt der Klassifikator
+  zum Zug. Alle anderen Klassen entscheidet er wie bisher selbst.
+- Deny-Regeln als Flag-Settings je Zug (`AUTO_DENY` in `claude-bridge/src/tools.ts`, plus Lesen von `.credentials.json` und
+  Schreiben unter `.runtime/claude/`): `git merge`, `gh pr merge`, `bw`, `~/.ssh`, `~/.config/vw`,
+  `~/.claude/.credentials.json`, `.env*`, `disableBypassPermissionsMode`. Deny schlägt auch ein „ja“ — deshalb gibt es
+  **keine** Deny-Regel für Vault, Jira, `git push` oder `gh api` — die fragen über den Wächter (GitHub-Schreiben) bzw. sind frei
+  (GitHub-Lesen, Knut 06.10.2026).
+- `templates/claude/settings.json` (wird wie `CLAUDE.md` in jede Konfiguration je Person verlinkt, eine eigene
+  `settings.json` bleibt unangetastet): `autoMode.hard_deny` (Jira/Vault nur über die Rückfrage, fremde Konfigurationen,
+  Vaultwarden, GitHub schreiben), `soft_deny`, `environment`. Außerhalb des Auto-Modus wirkungslos.
+- **Knut läuft mit der geteilten Konfiguration** (`~/.claude`): dort gilt seine eigene `autoMode`-Konfiguration; die
+  Vorlage greift nicht. Vorschlag (nicht angewendet): die `hard_deny`- und `environment`-Zeilen aus
+  `templates/claude/settings.json` in `~/.claude/settings.json` ergänzen.
+
+**Risiken:**
+
+- **Abo/Modell ohne Auto-Modus:** Kann das Konto oder Modell auf der VM keinen Auto-Modus, meldet die CLI einen Fehler
+  oder fragt wieder. **Den ersten echten Zug prüfen:** Log `turn start … "permissionMode":"auto"`, im Chat erscheint bei
+  `ls` „🤖 automatisch erlaubt“. Sonst Not-Aus.
+- Bash-Umgehungen der Regexe (Skript, das pusht; `curl` mit Token) fängt nur der Klassifikator plus Deny/`hard_deny`.
+  Ohne eigenen Unix-Nutzer oder Sandbox läuft Bash mit den Rechten des VM-Nutzers — darum nur Knut.
+- Der Klassifikator ist ein zusätzlicher kleiner Modellaufruf je Bash/Edit auf dem Abo der Person.
+
+## Orchestrator-Chat (07.10.2026)
+
+Knut, 07.10.2026: E4 (2) „P2, dann P3“ — Plan `docs/plan-orchestrator-chat.md` (Quelle: Plan 71 P2).
+
+**Was er tut:** Ein Chat verteilt einen größeren Auftrag auf Teilagenten (Werkzeug `Task`) und führt die Ergebnisse im
+selben Chat zusammen. Vorlage im Modell-Menü: **Koordinator (Teilagenten)**. Die Brücke gibt jeder Sitzung drei feste
+Rollen mit (SDK-Option `agents`, `claude-bridge/src/agents.ts`):
+
+| Rolle | darf | Durchsetzung |
+|---|---|---|
+| `leser` | Vault, Dateien, Suche, Jira lesen | Wächter lehnt alles außer „lesen“ ab (`agent_type` im Hook), auch mit „ja“ nicht |
+| `ticket-pruefer` | wie `leser`, prüft Tickets (Stand, Owner, Fälligkeit, DoD) | wie `leser` |
+| `schreiber` | schreiben | jede Änderung fragt im Chat wie sonst, Rückfrage beginnt mit **„Teilagent „schreiber“ möchte:“** |
+
+- **Im Chat:** „🤖 Teilagent: <Beschreibung>“ beim Start, dann je Werkzeug „↳ Teilagent <Beschreibung> (<Rolle>): 🔎 …“
+  und „↳ Teilagent <Beschreibung> fertig“. Text und Denken der Teilagenten bleiben verborgen; ihr Ergebnis fasst der
+  Chat zusammen.
+- **Rückfragen** aus Teilagenten laufen nacheinander (dieselbe Warteschlange wie im Chat) und nennen die Rolle.
+- **Obergrenze:** höchstens `BRIDGE_MAX_SUBAGENTS` (Vorgabe 4) Teilagenten je Nachricht; weitere lehnt der Wächter ab
+  („⛔ Höchstens 4 Teilagenten …“). Keine verschachtelten Teilagenten.
+- **Log:** `turn end` führt `teilagenten: N` neben den Tokens des Zuges.
+- Eingebaute Agenten (`general-purpose`, `Explore`) bleiben verfügbar und laufen wie bisher über den Wächter.
+- **Abschalten:** `BRIDGE_SUBAGENT_ROLES=off` (keine Rollen, kein Hinweis im System-Prompt; Obergrenze und Zeilen bleiben).
+- Mehrere Chats gleichzeitig: siehe *Parallele Chats* unten.
+- **Ungeprüft mit echtem Claude:** ob das CLI `agent_type` im Hook liefert und die Rollen wählt. Erster echter Test:
+  Vorlage „Koordinator“, „prüfe PM-321, PM-322 und PM-331“; im Log `turn end … "teilagenten":3`. Fehlt `agent_type`,
+  greifen die lesenden Rollen nur über `disallowedTools` (Schreiben fragt dann wie bei jedem Teilagenten).
+
+## Parallele Chats (07.10.2026)
+
+Knut, 07.10.2026: „werkbank hat nur einen chat pro zeit … gehen auch mehrere?“ → „nimm die beste Option“. Plan
+`docs/plan-parallele-chats.md` (P3-light).
+
+- **Bis zu 3 Chats je Person gleichzeitig** (`BRIDGE_MAX_PARALLEL_CHATS`, Vorgabe 3). Der vierte bekommt „Bei dir laufen
+  schon 3 Chats gleichzeitig. Bitte warte, bis einer fertig ist.“ Chats, die auf „ja“ warten, und die lesenden
+  Board-Agenten zählen nicht mit. Derselbe Chat zweimal bleibt gesperrt („arbeitet noch an der vorigen Nachricht“).
+- **Eigener Ordner je neuem Chat:** `.runtime/bridge/scratch/<person>/chats/<chat>` ist das Arbeitsverzeichnis (und im
+  Auto-Modus der Arbeitsordner). Ein Chat, der vor dem 07.10. schon eine Sitzung hatte, arbeitet weiter im
+  Personenordner — Claude Code legt den Verlauf unter dem Arbeitsverzeichnis ab, ein Wechsel verlöre ihn. Die
+  Zuordnung steht in `.runtime/bridge/cwd.json`.
+- Anhänge landen im Ordner ihres Chats; „Im Chat“ und „Als Kopie weiterführen“ nennen die Datei mit absolutem Pfad.
+- **Keine Sandbox:** Alle Chats laufen unter demselben VM-Nutzer. Dateien außerhalb der Chat-Ordner (Vault, Repos)
+  können zwei Chats gleichzeitig ändern, wie zwei Menschen. Echte Trennung (eigene Unix-Nutzer/Sandbox) erst, wenn
+  mehrere Personen den Auto-Modus bekommen.
+- **Not-Aus:** `BRIDGE_MAX_PARALLEL_CHATS=1 scripts/werkbank.sh restart` → wieder ein Chat zur Zeit.
+
+## Roadmap-Automatik (08.10.2026)
+
+Plan: `docs/plan-roadmap-automatik.md`. Vault-Roadmap und Roadmap-Seite ziehen sich selbst nach; was eine Maschine
+nicht allein darf, steht als Frage unter **Roadmap → „Für mich offen“**.
+
+- **Feed:** alle 5 min schreibt die Werkbank `~/.cache/vault-sync/werkbank-feed.md` (Jira-Stand, fertige
+  Karten-Läufe mit Vault-Notizen und PR-Links, Projekte je Workstream; keine Beschreibungen, Chats, Zugangsdaten).
+  `vault-sync-snapshot.sh` hängt ihn an, wenn er jünger als 24 h ist.
+- **Nachzug nach Agentenlauf:** ist ein Karten-Agent mit Ticket fertig (Sitzung „bereit“ mit neuer Aktivität),
+  kommt das Ticket in eine Warteschlange; höchstens alle 20 min startet `vault-sync.sh --scope PM-…`
+  (nur Specs/Übersichten/Register/Timeline dieser Tickets). Aus mit `WERKBANK_ROADMAP_AUTOSYNC=0`.
+- **„Für mich offen“:** offene `- Knut:`-Zeilen, PRs, bei denen ich laut „wer ist dran“ dran bin, eigene Tickets
+  ohne/über Datum; für Admins die **Fragen des Vault-Syncs** („Offen/unklar“ des letzten Protokollabschnitts, der
+  welche hat) mit ✅ Ja / ✖️ Nein und der **Entwurf „Woran wir gerade arbeiten“**.
+- **Ja** schreibt `~/.cache/vault-sync/freigaben.md` und startet einen Sync (höchstens alle 5 min); der Sync führt
+  genau diesen Punkt aus und meldet „erledigt: S…“ im Protokoll, dann verschwindet die Frage. **Nein** blendet sie aus.
+- **Entwurf:** der Morgenlauf (vor 11 Uhr) schreibt `0-Overview/entwurf-woran-wir-arbeiten.md`; „Übernehmen“ ersetzt
+  im Hub nur den Block zwischen `<!-- werkbank:woran-wir-arbeiten -->` und `<!-- /werkbank:woran-wir-arbeiten -->`.
+- Env: `WERKBANK_VAULT_SYNC_DIR`, `WERKBANK_VAULT_SYNC_SCRIPT`, `WERKBANK_ROADMAP_FEED`, `WERKBANK_ROADMAP_AUTOSYNC`.
+
+## Mehrere Claude-Konten je Person (06.10.2026)
+
+Knut, 06.10.2026: mehrere Claude-Konten je Person mit automatischem Wechsel, „wie `cswap auto`“. Plan:
+`docs/plan-auto-modus-und-konten.md`.
+
+- **Einrichtung → Eigenes Claude verbinden → „Weitere Claude-Konten“:** Name (z. B. „Firma“, „Privat“) + Token aus
+  `claude setup-token` hinzufügen, Reihenfolge mit ↑/↓, **Testen** (ein sehr kleiner Modellaufruf auf genau diesem Konto),
+  Entfernen. Der bisherige Schlüssel aus dem Chat-Modellmenü ist das Konto **„Chat-Schlüssel“** und bleibt Pflicht
+  (LibreChat schickt ohne ihn keine Anfrage); ohne weitere Konten ändert sich nichts. Höchstens 5 weitere Konten.
+- **Wechsel:** Meldet Claude `rate_limit` (Kontingent ausgeschöpft), vermerkt die Brücke das Konto bis zum Reset (aus dem
+  `rate_limit_event`, sonst 1 Stunde) und wiederholt **dieselbe Anfrage** mit dem nächsten Konto. Im Chat:
+  **„↻ Konto „Privat“ übernimmt (Kontingent von „Firma“ ausgeschöpft)“**. War schon etwas passiert (Text, Werkzeuge),
+  setzt das nächste Konto die Sitzung mit „mach genau dort weiter“ fort, statt von vorn zu beginnen. Sind alle erschöpft:
+  die bisherige Meldung „Dein Claude-Kontingent ist gerade ausgeschöpft“. Bei `overloaded` wird **nicht** gewechselt
+  (Server-Engpass, ein anderes Konto hilft nicht).
+- **Gemerkt:** Bis zum Reset beginnt jeder neue Zug auf dem ersten Konto, das noch geht (Zustand ohne Geheimnisse in
+  `.runtime/bridge/claude-accounts.json`, übersteht Neustarts; ein ersetzter Token zählt als neues Konto). Die Einrichtung
+  zeigt je Konto „aktiv“ / „bereit“ / „ausgeschöpft bis …“.
+- **Speicher und Weg der Tokens:** weitere Konten in `werkbank.creds` (`claudeAccounts`, AES-256-GCM mit
+  `WERKBANK_CREDS_KEY`, wie der Jira-Token; `claudeOrder`). Der Browser bekommt nur Name und die letzten 4 Zeichen. Die
+  Brücke holt die Liste je Zug über den internen Kanal (`POST /internal/claude-accounts`, `WERKBANK_INTERNAL_TOKEN`, nur
+  127.0.0.1); antwortet die Werkbank nicht, läuft der Zug wie bisher mit dem einen Schlüssel. Tokens stehen nie im Log
+  (die Brücke schwärzt alle Konten-Tokens auch in SDK-Fehlerzeilen).
+- **Eine Konfiguration für alle Konten:** alle Konten einer Person teilen `.runtime/claude/<id>` (Skills, `CLAUDE.md`,
+  Atlassian-Anmeldung, Sitzungsverläufe — nur so kann das nächste Konto eine Sitzung fortsetzen). Es unterscheidet sich nur
+  `CLAUDE_CODE_OAUTH_TOKEN` (auch für `forge-review`).
+- Brücke: `claude-bridge/src/accounts.ts` (Auswahl, Zustand, Kontotest), `/internal/account-test`,
+  `/internal/accounts-state` (beide nur mit internem Token).
+
 ## Board live (Runde 4)
 
 Knut: „auch instant update des board wenn etwas geändert geschrieben wird mit jira“.
@@ -666,6 +841,8 @@ nichts, Agenten/Chats sind aus.
   Alle Verzeichnisse gehören dem Unix-Nutzer der VM; gegeneinander abgeschottet sind sie erst mit eigenen Unix-Nutzern.
 - In Werkbank-Sitzungen laufen keine Hooks der Nutzer-Konfiguration mehr — damit gehen auch keine Werkbank-Verläufe
   mehr über Knuts Stop-Hook an knut-agent-memory (vorher: nach jedem Zug die letzten bis zu 40 Nachrichten).
+- Weitere Claude-Konten: AES-256-GCM in `werkbank.creds`, zum Browser nur Name + letzte 4 Zeichen, zur Brücke nur über
+  den internen Kanal; Zustand der Konten ohne Geheimnisse.
 - Der Live-Strom (`/api/events`) braucht eine Werkbank-Sitzung und trägt nur Ticket-Schlüssel; `/internal/jira-touched`
   nur mit internem Token, nur Schlüssel aus PM, höchstens 10 je Aufruf.
 
@@ -678,16 +855,17 @@ nichts, Agenten/Chats sind aus.
 | `librechat/librechat.yaml` | Endpunkt „Claude Code“, Modell-Specs und Vorlagen, Teilen, Oberfläche, Registrierung |
 | `librechat/.env` | LibreChat-Umgebung **ohne** Geheimnisse (Ports, Login-Schalter, Teilen) |
 | `.env.local` | Geheimnisse + verwalteter URL-Block — erzeugt, gitignored, 600 |
-| `claude-bridge/src/` | Brücke: `server.ts` (HTTP, Anhänge, Vorgaben, Nur-lesen-Modus, MCP-Auswahl), `sessions.ts`, `tools.ts` (auch: welche Atlassian-Aufrufe Jira ändern), `claudehome.ts` (Claude-Konfiguration je Person, strict MCP, Hooks), `attachments.ts`, `mcpcall.ts` (ein bestätigter MCP-Aufruf, MCP-Status), `init-timing.ts`, `mock.ts` |
+| `claude-bridge/src/` | Brücke: `server.ts` (HTTP, Anhänge, Vorgaben, Nur-lesen-Modus, MCP-Auswahl), `sessions.ts` (auch Auto-Modus und Kontowechsel), `accounts.ts` (mehrere Claude-Konten), `tools.ts` (auch: welche Atlassian-Aufrufe Jira ändern), `claudehome.ts` (Claude-Konfiguration je Person, strict MCP, Hooks), `attachments.ts`, `mcpcall.ts` (ein bestätigter MCP-Aufruf, MCP-Status), `init-timing.ts`, `mock.ts` |
 | `web/server/` | Web-App-Server (TypeScript, läuft ohne Build): `main.ts` (Routen), `auth.ts`, `creds.ts`, `crypto.ts`, `vault.ts`, `search.ts`, `jira.ts`, `jirawrite.ts` (Schreiben über MCP), `events.ts` (Live-Strom), `agent.ts` (auch Agent-Chat), `links.ts` (Vault ↔ Tickets), `roadmap.ts`, `sprint.ts`, `syncplan.ts`, `skills.ts`, `sharing.ts` |
 | `web/src/` | Oberfläche (Vite + React), Optik wie LibreChat (Inter, hell/dunkel) |
 | `templates/sprint/` | Vorlagen für neue Sprint-Zyklen (Summary, Review, Planning mit S1–S4) |
 | `templates/claude/CLAUDE.md` | Arbeitsweise für die Claude-Konfiguration je Person (verlinkt, nicht kopiert) |
+| `templates/claude/settings.json` | `autoMode`-Regeln für den Auto-Modus (verlinkt in jede Konfiguration je Person) |
 
 ## Tests
 
 ```bash
-scripts/werkbank.sh test   # Brücke (23) + Web-App (66), ohne echte Konten, ohne /vault zu ändern
+scripts/werkbank.sh test   # Brücke (50) + Web-App (110), ohne echte Konten, ohne /vault zu ändern
 scripts/werkbank.sh e2e    # Playwright, 23 Schritte, ca. 2 Minuten
 scripts/werkbank.sh stream-timing   # Zeitmessung Streaming (Mock), Ergebnis auch in .runtime/e2e/stream-timing.json
 scripts/werkbank.sh init-timing 3   # Start der echten CLI bis „init“ (ohne Modellaufruf), .runtime/e2e/init-timing.json
@@ -726,6 +904,17 @@ scripts/werkbank.sh init-timing 3   # Start der echten CLI bis „init“ (ohne 
   der ganze Weg Chat (Mock-Brücke) → Jira → Kopie → Board-Strom; Einrichtung zeigt Konfiguration, Chat-Anmeldung und
   Terminal-Befehl. Playwright — Karte leuchtet auf und zählt Kommentare hoch ohne Neuladen (anderer Tab; Jira-Schreiben im
   Chat), `hello` des Live-Stroms kommt durch LibreChats `/werkbank`-Proxy sofort an.
+- **Neu (06.10.2026):** Auto-Modus (`claude-bridge/test/auto.test.ts`: Klasse `auto` nur im Arbeitsordner, Symlink auf den
+  Vault, keine Rückfrage bei `ls`/Edit, Vault-Edit und Jira-Kommentar fragen, `git push` gesperrt, Eskalation und Ablehnung
+  des Klassifikators, nur freigeschaltete Personen, Board-readonly, Not-Aus, `settings.json`-Link). Mehrere Konten
+  (`claude-bridge/test/accounts.test.ts`: Wechsel bei `rate_limit`, mitten im Zug fortsetzen, gemerkt, alle erschöpft,
+  einzelner Schlüssel unverändert, Kontotest, keine Tokens im Log; `web/test/api.test.ts`: Einrichtungs-API maskiert,
+  verschlüsselt, Umsortieren, Testen, Entfernen, fremde Konten, interner Kanal).
+- **Neu (07.10.2026):** Live-Anzeige (`bridge.test.ts`, Gedanken/Werkzeugbeginn/Lebenszeichen mit Ankunftszeit) und E5
+  (`auto.test.ts`: Board-Lauf neben Chat und umgekehrt, zweiter Chat weiter gesperrt, höchstens 2 Board-Läufe, andere
+  Person unberührt, Not-Aus unverändert). Orchestrator (`auto.test.ts`: drei Teilagenten in einem Chat, Zeilen je
+  Teilagent, Lese-Rolle schreibt nie, Rückfrage mit Präfix und nach „ja“ die Zusammenfassung, höchstens 4 Teilagenten,
+  `teilagenten` im Log).
 - **Playwright** (`web/e2e/smoke.mjs`): alle Seiten mit zwei Testkonten, dazu echt durch LibreChat:
   **Agent-Chat vom Board** („PM-321 · …“ angelegt, ohne offenen Tab bis „wartet auf ja“, im Chat „ja“, Karte fertig),
   Sub-tasks auf-/zuklappen, kaputter Sub-task, Dokumente + Vorschlag verknüpfen, Roadmap (alle fünf Reiter, Rang-

@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "disableBypassPermissionsMode": "disable"
+  },
+  "autoMode": {
+    "hard_deny": [
+      "$defaults",
+      "Jira-Tickets anlegen, ändern oder kommentieren und Dateien im Vault (/vault) ändern — das geht in der Werkbank nur über die Rückfrage im Chat",
+      "Zugriff auf fremde Claude-Konfigurationen unter .runtime/claude/, auf .credentials.json, ~/.config/vw (Vaultwarden) und ~/.ssh",
+      "GitHub schreiben: push, merge, Pull Requests anlegen oder kommentieren, auch über Skripte, curl oder die GitHub-API"
+    ],
+    "soft_deny": ["$defaults"],
+    "environment": [
+      "Werkbank-Sitzung (OLAF-Werkbank, Chat über LibreChat): Arbeitsordner = .runtime/bridge/scratch/<person>; der Vault /vault ist team-geteilt und enthält Personendaten; GitHub (WirStrom1) nur lesen, nie mergen; keine Sandbox, Bash läuft mit den Rechten des VM-Nutzers"
+    ]
+  }
+}

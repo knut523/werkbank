@@ -1,11 +1,16 @@
 // Werkzeug-Einordnung und lesbare Statuszeilen.
 //
-// Drei Klassen:
+// Vier Klassen:
 //   read    – läuft ohne Rückfrage (Lesen, Suchen, Skills, Teilagenten)
 //   confirm – Schreiben/Ausführen: erst nach "ja" im Chat
 //   blocked – im Pilot nie erlaubt (GitHub-Schreiben, Push, Merge)
+//   auto    – nur im Auto-Modus (mit Arbeitsordner): Bash und Edits im eigenen Arbeitsordner entscheidet der
+//             Klassifikator des SDK (Plan 71 P1, Knut 06.10.2026). Ohne Arbeitsordner gibt es diese Klasse nie.
 
-export type ToolClass = 'read' | 'confirm' | 'blocked';
+import { realpathSync } from 'node:fs';
+import { resolve, dirname, sep } from 'node:path';
+
+export type ToolClass = 'read' | 'confirm' | 'blocked' | 'auto';
 
 export const VAULT_DIR = process.env.BRIDGE_VAULT_DIR || '/vault';
 
@@ -18,23 +23,113 @@ const READ_TOOLS = new Set([
 // Lesende MCP-Werkzeuge erkennt man am Namen (Atlassian: get*/search*/lookup*/fetch …).
 const MCP_READ = /^(get|search|lookup|fetch|list|atlassianUserInfo|memory_(search|get|recent|status|relations|list_namespaces|selftest))/;
 
-// Bash-Befehle, die im Pilot gesperrt sind, auch mit Bestätigung.
+// Bash-Befehle, die immer gesperrt sind, auch mit Bestätigung: Merge, Force-Push, Push auf die geschützten Zweige.
 const BASH_BLOCKED: [RegExp, string][] = [
-  [/\bgit\s+push\b/, 'git push'],
   [/\bgit\s+merge\b/, 'git merge'],
-  [/\bgh\s+pr\s+(merge|create|comment|review|edit|close|reopen|ready)\b/, 'GitHub-PR schreiben'],
-  [/\bgh\s+(issue|release|repo|label|secret|variable|workflow)\s+(create|edit|close|delete|comment|reopen|set|run|enable|disable|fork|rename|archive)\b/, 'GitHub schreiben'],
-  [/\bgh\s+api\b[^|;&]*(-X|--method)\s*(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],
-  [/\bgh\s+api\b[^|;&]*\s(-f|-F|--field|--raw-field|--input)\s/, 'GitHub-API schreiben'],
-  [/api\.github\.com[^|;&]*(-X|--request)\s*(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],
-  [/(-X|--request)\s*(POST|PATCH|PUT|DELETE)[^|;&]*api\.github\.com/i, 'GitHub-API schreiben'],
+  [/\bgh\s+pr\s+merge\b/, 'GitHub-PR mergen'],
+  [/\bgh\s+api\b[^|;&]*\/(merge|merges)\b/, 'Merge über die GitHub-API'],
   [/\/merge\b[^|;&]*github|github[^|;&]*\/merge\b/i, 'Merge über GitHub'],
+  [/\bgit\s+push\b[^|;&]*(\s--force\b|\s--force-with-lease\b|\s-f\b|\s\+\S)/, 'Force-Push'],
+  [/\bgit\s+push\b[^|;&]*[\s:](main|master|develop)\b/, 'Push auf main/master/develop'],
 ];
 
-export function classify(tool: string, input: Record<string, unknown>): { cls: ToolClass; why?: string } {
+// GitHub schreiben (Knut, 06.10.2026: „push only with acceptance or orders“): immer erst nach „ja“ im Chat — auch im
+// Auto-Modus nie dem Klassifikator überlassen. Lesen (gh api ohne Schreib-Optionen, gh pr view/diff/list) bleibt frei.
+const BASH_GITHUB_WRITE: [RegExp, string][] = [
+  [/\bgit\s+push\b/, 'git push'],
+  [/\bgh\s+pr\s+(create|comment|review|edit|close|reopen|ready)\b/, 'GitHub-PR schreiben'],
+  [/\bgh\s+(issue|release|repo|label|secret|variable|workflow|gist)\s+(create|edit|close|delete|comment|reopen|set|run|enable|disable|fork|rename|archive|upload)\b/, 'GitHub schreiben'],
+  [/\bgh\s+api\b[^|;&]*(-X|--method)\s*(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],
+  [/\bgh\s+api\s+(?!graphql\b)[^|;&]*\s(-f|-F|--field|--raw-field|--input)\s/, 'GitHub-API schreiben'],
+  [/\bgh\s+api\s+graphql\b[^|;&]*\bmutation\b/i, 'GitHub-API schreiben (GraphQL-Mutation)'],
+  [/\bgh\s+api\s+graphql\b[^|;&]*\s--input\s/, 'GitHub-API schreiben (GraphQL aus Datei)'],
+  [/api\.github\.com[^|;&]*(-X|--request)\s*(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],
+  [/(-X|--request)\s*(POST|PATCH|PUT|DELETE)[^|;&]*api\.github\.com/i, 'GitHub-API schreiben'],
+];
+
+// Bash im Auto-Modus: was den Vault, Konfigurationen, Geheimnisse oder Jira berührt, bleibt beim „ja“. Heuristik —
+// die eigentliche Grenze ist der Klassifikator mit permissions.deny und autoMode.hard_deny (templates/claude/settings.json).
+const BASH_KEEP_CONFIRM = [
+  /\.runtime\b/, /\.config\/vw\b/, /\.ssh\b/, /\.credentials/, /(^|[\s;&|(`$])bw\s/, /(^|[\s;&|(`$])sudo\b/,
+  /atlassian|jira/i, /\.env\b/, /\.claude\b/,
+];
+
+/**
+ * Deny-Regeln im Auto-Modus (als Flag-Settings je Zug, nur im Auto-Modus — im Not-Aus gilt keine davon). Deny greift vor
+ * dem Klassifikator und auch gegen ein Hook-„allow“; darum hier **keine** Regel für den Vault oder Jira (die bleiben beim
+ * „ja“ im Chat). Absolute Pfade beginnen mit //; die Konfigurationen je Person ergänzt die Brücke (homesRoot).
+ */
+export const AUTO_DENY = [
+  // Kein git push / gh api / gh pr create hier: Deny schlägt auch ein „ja“ im Chat — GitHub-Schreiben fragt stattdessen
+  // (BASH_GITHUB_WRITE), GitHub-Lesen ist frei (Knut, 06.10.2026).
+  'Bash(git merge:*)', 'Bash(gh pr merge:*)', 'Bash(bw:*)',
+  'Read(~/.config/vw/**)', 'Read(~/.ssh/**)', 'Read(~/.claude/.credentials.json)', 'Edit(~/.claude/**)', 'Read(**/.env*)',
+];
+
+const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+
+/** Echter Pfad: realpath des tiefsten vorhandenen Vorfahren + Rest (ein Symlink auf den Vault zählt als Vault). */
+function realish(p: string): string {
+  let cur = p;
+  const rest: string[] = [];
+  for (let i = 0; i < 64; i++) {
+    try { return [realpathSync(cur), ...rest.reverse()].join(sep).replace(/\/+/g, '/'); } catch { /* gibt es noch nicht */ }
+    const up = dirname(cur);
+    if (up === cur) break;
+    rest.push(cur.slice(up.length).replace(/^\/+/, ''));
+    cur = up;
+  }
+  return p;
+}
+
+const within = (p: string, dir: string) => p === dir || p.startsWith(dir.endsWith('/') ? dir : dir + '/');
+
+export interface ClassifyContext {
+  workDir?: string;   // Arbeitsordner der Person — nur im Auto-Modus gesetzt
+  // Reichweite des Auto-Modus (BRIDGE_AUTO_SCOPE). „voll“ (Knut, 07.10.2026: „voll autonom wie hier“): auch Vault,
+  // Repos, Gedächtnis und andere MCP-Werkzeuge entscheidet der Klassifikator. Rückfrage bleibt für Jira- und
+  // GitHub-Schreiben und Geheimnisse; die Sperren bleiben. Ohne Angabe: nur der Arbeitsordner (Stand 06.10.2026).
+  scope?: 'arbeitsordner' | 'voll';
+}
+
+// Voller Auto-Modus: Bash fragt nur noch bei Geheimnissen, fremden Konfigurationen und Jira-Schreiben nach.
+// Runde 2 (Knut, 07.10.2026: „er fragt halt immer noch viel“): nur noch echte Geheimnis-ORTE, nicht jedes Erwähnen —
+// `grep -v '.runtime'` oder `--exclude-dir=.runtime` fragen nicht mehr.
+const BASH_KEEP_CONFIRM_VOLL = [
+  /\.runtime\/(claude|werkbank\/creds)\b/, /claude-accounts\.json/, /\.config\/vw\b/, /\.ssh\b/, /\.credentials/,
+  /(^|[\s;&|(`$])bw\s/, /(^|[\s;&|(`$])sudo\b/, /\.env\b/,
+];
+// Jira-Schreiben per Bash = ein HTTP-Aufruf an Atlassian, der schreibt. Lesen, grep nach „jira“, Dateinamen mit
+// „atlassian“ gehen an den Klassifikator. Jira-Schreiben über den Atlassian-MCP fragt unabhängig davon weiter.
+const ATLASSIAN_HOST = /(atlassian\.net|api\.atlassian\.com)/i;
+const HTTP_WRITE = /(-X\s*(POST|PUT|PATCH|DELETE)\b|--request\s+(POST|PUT|PATCH|DELETE)\b|\s--data(-raw|-binary)?\b|\s-d\s|\s--json\b|\b(http|https)\s+(POST|PUT|PATCH|DELETE)\b)/i;
+const bashTouchesJiraWrite = (cmd: string) => ATLASSIAN_HOST.test(cmd) && HTTP_WRITE.test(cmd);
+
+/** Dateien, die auch der volle Auto-Modus nicht ohne „ja“ ändert: Werkbank-Zustand, Konfigurationen, Geheimnisse. */
+function sensitiveTarget(target: string): boolean {
+  return /(^|\/)(\.runtime|\.claude|\.ssh)(\/|$)|(^|\/)\.config\/vw(\/|$)|(^|\/)\.env[^/]*$/.test(target);
+}
+
+export function classify(tool: string, input: Record<string, unknown>, ctx: ClassifyContext = {}): { cls: ToolClass; why?: string } {
   if (tool === 'Bash') {
     const cmd = String(input.command ?? '');
     for (const [re, why] of BASH_BLOCKED) if (re.test(cmd)) return { cls: 'blocked', why };
+    for (const [re, why] of BASH_GITHUB_WRITE) if (re.test(cmd)) return { cls: 'confirm', why };
+    if (ctx.workDir && ctx.scope === 'voll') {
+      if (BASH_KEEP_CONFIRM_VOLL.some((re) => re.test(cmd)) || bashTouchesJiraWrite(cmd)) return { cls: 'confirm' };
+      return { cls: 'auto' };
+    }
+    if (ctx.workDir && !cmd.includes(VAULT_DIR) && !BASH_KEEP_CONFIRM.some((re) => re.test(cmd))) return { cls: 'auto' };
+    return { cls: 'confirm' };
+  }
+  if (FILE_TOOLS.has(tool) && ctx.workDir) {
+    const f = String(input.file_path ?? input.notebook_path ?? '');
+    if (!f) return { cls: 'confirm' };
+    const work = realish(resolve(ctx.workDir));
+    const target = realish(resolve(work, f));
+    const vault = realish(resolve(VAULT_DIR));
+    if (within(target, work) && !within(target, vault)) return { cls: 'auto' };
+    if (ctx.scope === 'voll' && !sensitiveTarget(target)) return { cls: 'auto' };
     return { cls: 'confirm' };
   }
   if (READ_TOOLS.has(tool)) return { cls: 'read' };
@@ -53,6 +148,8 @@ export function classify(tool: string, input: Record<string, unknown>): { cls: T
     // eigene OAuth-Anmeldung in die eigene Claude-Konfiguration — ohne Rückfrage.
     if (name === 'authenticate' || name === 'complete_authentication') return { cls: 'read' };
     if (MCP_READ.test(name)) return { cls: 'read' };
+    // Voller Auto-Modus: Jira-Schreiben bleibt beim „ja“ (jira_update steht oben), der Rest geht an den Klassifikator.
+    if (ctx.workDir && ctx.scope === 'voll' && server !== 'atlassian') return { cls: 'auto' };
     return { cls: 'confirm' };
   }
   // Write, Edit, MultiEdit, NotebookEdit und alles Unbekannte: nachfragen.
@@ -109,6 +206,49 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
   return `🔧 ${tool}`;
 }
 
+/**
+ * Sofort-Zeile, sobald Claude ANFÄNGT, einen Werkzeugaufruf mit langer Eingabe zu formulieren (Datei, Änderung,
+ * Teilagent, schreibender MCP-Aufruf). Bis die Eingabe fertig ist, vergehen bei großen Dateien leicht 30 s und mehr,
+ * in denen sonst nichts zu sehen ist (Knut, 07.10.2026: „tools appear as he is working, not after“).
+ * Lesende Werkzeuge und Bash haben kurze Eingaben — deren Zeile kommt wie bisher mit dem fertigen Aufruf. null = keine.
+ */
+export function prepLine(tool: string): string | null {
+  switch (tool) {
+    case 'Write': return '✍️ schreibt eine Datei …';
+    case 'Edit': case 'MultiEdit': case 'NotebookEdit': return '✍️ bereitet eine Änderung vor …';
+    case 'Task': case 'Agent': return '✍️ bereitet einen Teilagenten vor …';
+  }
+  if (tool.startsWith('mcp__') && classify(tool, {}).cls === 'confirm') return `✍️ bereitet vor: ${statusLine(tool, {})} …`;
+  return null;
+}
+
+/**
+ * Ja/Nein-Knöpfe unter jeder Rückfrage (docs/plan-ja-nein-knoepfe.md; Knut, 07.10.2026: „gib mir einen Button zum
+ * Klicken oder Tappen“). Der Werkbank-Patch für LibreChat (`librechat/patches/30-client-antwort-knoepfe.patch`) rendert
+ * genau diese zwei Anker als Knöpfe, die „ja“ bzw. „nein“ als Chat-Nachricht senden; ohne Patch bleiben sie harmlose
+ * Anker, und der Satz darunter sagt, was man tippen kann.
+ */
+export const ANSWER_BUTTONS = '[✅ Ja](#werkbank-antwort:ja) [✖️ Nein](#werkbank-antwort:nein)\n\n_oder **ja** / **nein** tippen_';
+
+/** Kern des Knopf-Ankers; steht er im Text des Modells, bricht `neutralizeAnswerAnchors` ihn. */
+export const ANSWER_MARK = 'werkbank-antwort';
+
+/**
+ * Fügt in jedes `werkbank-antwort` in `text` ein Nullbreite-Leerzeichen ein, auch wenn der Anfang schon im zuvor
+ * gesendeten `tail` stand (gestreamte Deltas). Zurück kommt nur der neue Teil — gesendetes lässt sich nicht ändern,
+ * aber der Rest des Ankers liegt immer im neuen Teil.
+ */
+export function neutralizeAnswerAnchors(tail: string, text: string): string {
+  const combined = tail + text;
+  const cuts: number[] = [];
+  for (let i = combined.indexOf(ANSWER_MARK); i !== -1; i = combined.indexOf(ANSWER_MARK, i + 1)) {
+    cuts.push(Math.max(i + 1, tail.length) - tail.length);
+  }
+  let out = text;
+  for (const at of cuts.reverse()) out = out.slice(0, at) + '\u200b' + out.slice(at);
+  return out;
+}
+
 /** Die Rückfrage vor einem Schreibzugriff, auf Deutsch. */
 export function confirmQuestion(tool: string, input: Record<string, unknown>): string {
   let what: string;
@@ -136,7 +276,7 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
           input.due !== undefined && input.due !== null ? `Fällig → **${input.due || 'ohne Datum'}**` : '',
           input.comment ? `Kommentar: „${short(input.comment, 300)}“` : '',
         ].filter(Boolean);
-        return `**Soll ich ${input.key} in Jira nachziehen?** (mit deinem Jira-Zugang)\n\n${parts.map((p) => '- ' + p).join('\n')}\n\nAntworte mit **ja** oder **nein**.`;
+        return `${neutralizeAnswerAnchors('', `**Soll ich ${input.key} in Jira nachziehen?** (mit deinem Jira-Zugang)\n\n${parts.map((p) => '- ' + p).join('\n')}`)}\n\n${ANSWER_BUTTONS}`;
       }
       if (tool.startsWith('mcp__atlassian__')) {
         what = `in Jira **${tool.split('__')[2]}** ausführen`;
@@ -148,7 +288,8 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
       }
       detail = fence(clip(JSON.stringify(input, null, 2), 1500), 'json');
   }
-  return `**Soll ich ${what}?**\n\n${detail}\n\nAntworte mit **ja** oder **nein**.`;
+  // Was aus dem Werkzeugaufruf stammt (Befehl, Beschreibung, Jira-Text), schreibt das Modell: dort keine Knöpfe.
+  return `${neutralizeAnswerAnchors('', `**Soll ich ${what}?**\n\n${detail}`)}\n\n${ANSWER_BUTTONS}`;
 }
 
 const LANGS: Record<string, string> = { md: 'markdown', ts: 'typescript', tsx: 'tsx', js: 'javascript', mjs: 'javascript', py: 'python', json: 'json', sh: 'bash', yaml: 'yaml', yml: 'yaml', sql: 'sql', html: 'html', css: 'css' };

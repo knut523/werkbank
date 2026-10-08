@@ -74,6 +74,39 @@ test('Streaming mit Statuszeile, danach Fortsetzung derselben Sitzung', async ()
   assert.match(b, /Sitzung fortgesetzt/);
 });
 
+test('Live: Gedanken als reasoning_content, Werkzeugbeginn sofort, Lebenszeichen nach 5 s (Knut, 07.10.2026)', async () => {
+  // Jedes SSE-Stück mit Ankunftszeit lesen — „live“ heißt: kommt an, bevor der Zug fertig ist.
+  const t0 = Date.now();
+  const res = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer mock-token', 'content-type': 'application/json', 'x-librechat-user-id': 'u-live', 'x-librechat-conversation-id': 'c-live' },
+    body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: 'live-test' }] }),
+  });
+  const seen: { at: number; content?: string; reasoning?: string }[] = [];
+  const dec = new TextDecoder();
+  let rest = '';
+  for await (const part of res.body as any) {
+    rest += dec.decode(part, { stream: true });
+    const lines = rest.split('\n'); rest = lines.pop() ?? '';
+    for (const l of lines) {
+      if (!l.startsWith('data: {')) continue;
+      const d = JSON.parse(l.slice(6)).choices[0]?.delta ?? {};
+      if (d.content || d.reasoning_content) seen.push({ at: Date.now() - t0, content: d.content, reasoning: d.reasoning_content });
+    }
+  }
+  const text = seen.map((s) => s.content ?? '').join('');
+  const thoughts = seen.map((s) => s.reasoning ?? '').join('');
+  const when = (re: RegExp) => seen.find((s) => re.test(s.content ?? ''))?.at ?? -1;
+  assert.match(text, /thinking-display: summarized/, 'Zusammenfassung des Denkens wird beim CLI angefordert');
+  assert.equal(thoughts, 'Ich überlege, wo das steht.', 'Gedanken getrennt vom Antworttext');
+  assert.doesNotMatch(text, /Ich überlege/);
+  assert.match(text, /💭 denkt nach/);
+  const prep = when(/bereitet einen Teilagenten vor/), done = when(/🤖 Teilagent: Recherche/);
+  assert.ok(prep >= 0 && done >= 0, text);
+  assert.ok(done - prep >= 600, `Werkzeugzeile kommt beim Beginn des Aufrufs, nicht erst mit der fertigen Eingabe (${prep} vs. ${done} ms)`);
+  assert.match(text, /⏳ 🤖 Teilagent läuft seit 5 s/);
+});
+
 test('Schreiben braucht Bestätigung: ja', async () => {
   const q = await send('c2', 'schreib eine Notiz');
   assert.match(q, /Soll ich die Datei \*\*Vault: _werkbank-mock\/notiz.md\*\* schreiben\?/);
@@ -104,9 +137,16 @@ test('Einordnung der Werkzeuge', () => {
   assert.equal(classify('Read', {}).cls, 'read');
   assert.equal(classify('Write', {}).cls, 'confirm');
   assert.equal(classify('Bash', { command: 'ls /vault' }).cls, 'confirm');
-  assert.equal(classify('Bash', { command: 'git push origin dev' }).cls, 'blocked');
-  assert.equal(classify('Bash', { command: 'gh pr merge 12' }).cls, 'blocked');
-  assert.equal(classify('Bash', { command: 'gh api -X PUT repos/a/b/pulls/1/merge' }).cls, 'blocked');
+  // GitHub (Knut, 06.10.2026): Merge, Force-Push und Push auf main/master/develop nie; Schreiben nur nach „ja“; Lesen frei.
+  for (const command of ['gh pr merge 12', 'gh api -X PUT repos/a/b/pulls/1/merge', 'gh api repos/a/b/merges -f base=dev -f head=x', 'git merge origin/develop',
+    'git push --force origin feat/x', 'git push -f origin feat/x', 'git push origin +feat/x', 'git push origin main', 'git push origin HEAD:develop', 'git push origin master']) {
+    assert.equal(classify('Bash', { command }).cls, 'blocked', command);
+  }
+  for (const command of ['git push origin dev', 'git push -u origin feat/auto', 'gh pr create --fill', 'gh pr comment 3 --body x', 'gh pr review 3 --approve',
+    'gh api -X POST repos/a/b/issues/1/comments -f body=x', 'gh api repos/a/b/issues/1/comments -f body=x', 'gh api graphql -f query="mutation { x }"',
+    'curl -X POST https://api.github.com/repos/a/b/issues', 'gh issue create -t x']) {
+    assert.equal(classify('Bash', { command }).cls, 'confirm', command);
+  }
   assert.equal(classify('mcp__atlassian__getJiraIssue', {}).cls, 'read');
   assert.equal(classify('mcp__atlassian__searchJiraIssuesUsingJql', {}).cls, 'read');
   assert.equal(classify('mcp__atlassian__createJiraIssue', {}).cls, 'confirm');
@@ -127,9 +167,9 @@ test('Anhänge landen im Arbeitsverzeichnis der Sitzung', async () => {
   ], { user: 'u6' });
   assert.match(a, /anhaenge\/c6\/Rechnung Mai\.pdf ✓/);
   assert.match(a, /anhaenge\/c6\/anhang-2\.png ✓/);
-  assert.ok(existsSync(join(STATE, 'scratch', 'u6', 'anhaenge', 'c6', 'Rechnung Mai.pdf')));
-  assert.ok(!existsSync(join(STATE, 'scratch', 'u6', 'anhaenge', 'c6', 'boese.sh')), 'nicht erlaubter Typ wird nicht abgelegt');
-  assert.equal(statSync(join(STATE, 'scratch', 'u6', 'anhaenge', 'c6', 'Rechnung Mai.pdf')).mode & 0o777, 0o600);
+  assert.ok(existsSync(join(STATE, 'scratch', 'u6', 'chats', 'c6', 'anhaenge', 'c6', 'Rechnung Mai.pdf')));
+  assert.ok(!existsSync(join(STATE, 'scratch', 'u6', 'chats', 'c6', 'anhaenge', 'c6', 'boese.sh')), 'nicht erlaubter Typ wird nicht abgelegt');
+  assert.equal(statSync(join(STATE, 'scratch', 'u6', 'chats', 'c6', 'anhaenge', 'c6', 'Rechnung Mai.pdf')).mode & 0o777, 0o600);
 });
 
 test('Nur-lesen-Modus (Board-Agent) lehnt Schreiben ohne Rückfrage ab', async () => {

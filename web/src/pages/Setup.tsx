@@ -144,6 +144,76 @@ function McpStep({ claude }: { claude: boolean }) {
   );
 }
 
+/** Mehrere Claude-Konten (Knut, 06.10.2026): ist das Kontingent ausgeschöpft, übernimmt automatisch das nächste. */
+function ClaudeAccounts({ chat }: { chat: boolean }) {
+  const l = useLoad(() => api('/api/setup/claude-accounts'));
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [label, setLabel] = useState('');
+  const [token, setToken] = useState('');
+  const [err, setErr] = useState<unknown>(null);
+  const [busy, setBusy] = useState('');
+  const [tests, setTests] = useState<Record<string, string>>({});
+  const d: any = l.data;
+  if (!d) return l.error ? <Err e={l.error} /> : null;
+  const run = async (what: string, fn: () => Promise<unknown>) => {
+    setBusy(what); setErr(null);
+    try { await fn(); await l.reload(); } catch (e) { setErr(e); } finally { setBusy(''); }
+  };
+  const ids: string[] = d.accounts.map((a: any) => a.id);
+  const move = (i: number, j: number) => run('order', async () => {
+    const next = [...ids]; [next[i], next[j]] = [next[j], next[i]];
+    await api('/api/setup/claude-accounts/order', { method: 'PUT', body: { ids: next } });
+  });
+  const extra = d.accounts.filter((a: any) => a.source === 'werkbank').length;
+  return (
+    <div data-testid="claude-accounts" style={{ marginTop: 16 }}>
+      <h4 style={{ margin: '0 0 4px' }}>Weitere Claude-Konten — automatischer Wechsel</h4>
+      <p className="small" style={{ marginTop: 0 }}>Ist das Kontingent eines Kontos ausgeschöpft, übernimmt das nächste in dieser Reihenfolge <b>dieselbe Anfrage</b> — im Chat steht dann „↻ Konto … übernimmt“. Bis zum Reset des Kontingents beginnt jeder Chat auf dem Konto, das noch geht. Tokens werden verschlüsselt gespeichert und nie wieder angezeigt.</p>
+      {d.accounts.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+        <table className="t small">
+          <thead><tr><th>#</th><th>Konto</th><th>Token</th><th>Zustand</th><th></th></tr></thead>
+          <tbody>{d.accounts.map((a: any, i: number) => (
+            <tr key={a.id}>
+              <td>{i + 1}</td>
+              <td>{a.label}{a.source === 'chat' && <span className="tiny"> (aus dem Chat-Modellmenü)</span>}</td>
+              <td><code>••••{a.last4}</code></td>
+              <td>{a.exhaustedUntil
+                ? <span className="chip warn">ausgeschöpft bis {fmtDateTime(a.exhaustedUntil)}</span>
+                : a.id === d.active ? <span className="chip ok">aktiv</span> : <span className="chip">bereit</span>}
+                {tests[a.id] && <span className="tiny"> · {tests[a.id]}</span>}</td>
+              <td><div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
+                <button className="btn small" aria-label={`${a.label} nach oben`} disabled={i === 0 || !!busy} onClick={() => move(i, i - 1)}>↑</button>
+                <button className="btn small" aria-label={`${a.label} nach unten`} disabled={i === d.accounts.length - 1 || !!busy} onClick={() => move(i, i + 1)}>↓</button>
+                <button className="btn small" disabled={!!busy} onClick={() => run('test-' + a.id, async () => {
+                  setTests((t) => ({ ...t, [a.id]: 'prüfe …' }));
+                  const r: any = await api(`/api/setup/claude-accounts/${a.id}/test`, { method: 'POST' });
+                  setTests((t) => ({ ...t, [a.id]: r.ok ? '✓ funktioniert' : r.error === 'rate_limit' ? `Kontingent ausgeschöpft${r.resetsAt ? ` bis ${fmtDateTime(r.resetsAt)}` : ''}` : r.error === 'auth' ? '✗ Token abgelehnt' : '✗ Fehler' }));
+                })}>{busy === 'test-' + a.id ? 'Teste …' : 'Testen'}</button>
+                {a.source === 'werkbank' && <button className="btn small danger" disabled={!!busy} onClick={async () => {
+                  if (await confirm({ title: `Konto „${a.label}“ entfernen?`, body: <p>Der Token wird gelöscht. Andere Konten bleiben.</p>, danger: true, confirmLabel: 'Entfernen' })) run('rm', () => api(`/api/setup/claude-accounts/${a.id}`, { method: 'DELETE' }));
+                }}>Entfernen</button>}
+              </div></td>
+            </tr>
+          ))}</tbody>
+        </table>
+        </div>
+      )}
+      {!chat && <p className="note small">Der Chat braucht zuerst den Schlüssel oben (LibreChat verlangt ihn) — weitere Konten kommen danach dazu.</p>}
+      {extra < d.max && (
+        <form className="row" style={{ marginTop: 8 }} onSubmit={(e) => { e.preventDefault(); run('add', async () => { await api('/api/setup/claude-accounts', { body: { label, token } }); setLabel(''); setToken(''); toast('Konto hinzugefügt'); }); }}>
+          <input aria-label="Name des Kontos" placeholder="Name, z. B. Privat" value={label} onChange={(e) => setLabel(e.target.value)} maxLength={40} style={{ minWidth: 160 }} />
+          <input type="password" aria-label="Token des weiteren Kontos" placeholder="sk-ant-oat… (claude setup-token)" value={token} onChange={(e) => setToken(e.target.value)} style={{ flex: 1, minWidth: 220 }} autoComplete="off" />
+          <button className="btn" disabled={!label.trim() || !token || busy === 'add'}>Konto hinzufügen</button>
+        </form>
+      )}
+      <p className="tiny">Gewechselt wird nur bei ausgeschöpftem Kontingent, nicht bei „überlastet“. Alle Konten nutzen dieselbe Claude-Konfiguration (Skills, Jira-Anmeldung, Verlauf). Testen kostet einen sehr kleinen Modellaufruf auf dem Konto.</p>
+      <Err e={err} />
+    </div>
+  );
+}
+
 function Wizard({ cfg }: { cfg: Config }) {
   const st = useLoad(() => api('/api/setup/status'));
   const toast = useToast();
@@ -196,6 +266,7 @@ function Wizard({ cfg }: { cfg: Config }) {
                 if (await confirm({ title: 'Claude trennen?', body: <p>Der Token wird gelöscht; Chat und Board-Agent arbeiten dann nicht mehr, bis du einen neuen einträgst.</p>, danger: true, confirmLabel: 'Trennen' })) run('claude', () => api('/api/setup/claude', { method: 'DELETE' }));
               }}>Trennen</button>}
             </form>
+            <ClaudeAccounts chat={s.claude.connected} />
           </div>
         </div>
 

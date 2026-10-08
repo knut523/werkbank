@@ -42,6 +42,8 @@ before(async () => {
   writeFileSync(join(tmp, 'vorschlag.json'), JSON.stringify([{ key: 'PM-267', ziel: 'ziel-kr1', begruendung: 'Hardware-Flow trägt den Vertrieb', sicherheit: 0.8 }, { key: 'PM-999', ziel: 'KR1' }, { key: 'PM-322', ziel: 'KR9' }, { key: 'PM-332', ziel: 'GATE-2701' }]));
   // Ziele-Datei nur in der Kopie (andere Tests zählen die Notizen des Fixture-Vaults).
   cpSync(new URL('./fixtures/ziele-olaf.md', import.meta.url).pathname, join(VAULT, 'olaf/1-Projects/ziele-olaf.md'));
+  // Ersatz für vault-sync.sh: schreibt nur seine Argumente mit (Roadmap-Automatik).
+  writeFileSync(join(tmp, 'fake-vault-sync.sh'), `#!/bin/bash\necho "lauf $*" >> ${join(tmp, 'fake-vault-sync.log')}\n`);
   mkdirSync(join(tmp, 'skills-src', 'demo-skill'), { recursive: true });
   writeFileSync(join(tmp, 'skills-src', 'demo-skill', 'SKILL.md'), '---\nname: demo-skill\ndescription: Nur ein Test\n---\n# x\n');
   mongo = await MongoClient.connect(process.env.MONGO_URI_WERKBANK || 'mongodb://127.0.0.1:27017');
@@ -88,6 +90,7 @@ before(async () => {
       CREDS_KEY, CREDS_IV, WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: DATA,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
       WERKBANK_GOAL_PROPOSALS: join(tmp, 'vorschlag.json'), WERKBANK_SPEC_CREATE: 'on', WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
+      WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vault-sync'), WERKBANK_VAULT_SYNC_SCRIPT: join(tmp, 'fake-vault-sync.sh'),
     },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -292,7 +295,11 @@ test('Agent ansetzen = echter Chat „PM-123 · Titel“: läuft → wartet auf 
   const chat = lcChats.at(-1);
   assert.equal(chat.email, users.a.email, 'im Namen der Person');
   assert.match(chat.body.text, /^PM-322 · /, 'erste Zeile = Titel');
-  assert.match(chat.body.text, /Schreibaktionen .* fragt die Person/);
+  // Plan 81, Schnitt 7: erst plan-to-pr und alle offenen Fragen, dann umsetzen; Schreiben fragt das System im Chat.
+  assert.match(chat.body.text, /Arbeite nach plan-to-pr/);
+  assert.match(chat.body.text, /alle offenen inhaltlichen Entscheidungen auf einmal/);
+  assert.match(chat.body.text, /ruf das Werkzeug direkt auf, das System fragt/);
+  assert.doesNotMatch(chat.body.text, /\{\{NAME\}\}/, 'Platzhalter ersetzt');
   assert.equal(chat.body.spec, 'claude-code-olaf');
   const again = await anna.req('/api/board/issue/PM-322/agent', { body: {} });
   assert.equal(again.status, 409, 'kein zweiter Agent auf derselben Karte');
@@ -890,4 +897,131 @@ test('Runde 7: Board-Filter „nur aktueller Sprint“ und Mein Tag nach lokaler
   assert.equal(h[0].action, 'reset');
   assert.equal(h[0].prev, 'KR1');
   assert.equal((await anna.req('/api/goals/history/%E0%A4%A')).status, 400);
+});
+
+test('Mehrere Claude-Konten: hinzufügen, maskiert auflisten, umsortieren, testen, entfernen — Tokens nie zurück', async () => {
+  const uid = String(users.a._id);
+  const t1 = 'sk-ant-oat01-' + 'f'.repeat(36) + 'FIRM', t2 = 'sk-ant-oat01-' + 'p'.repeat(30) + 'limitPRIV';
+  // Bisherige Nutzerin: genau der Chat-Schlüssel, nichts sonst.
+  const l0 = await anna.req('/api/setup/claude-accounts');
+  assert.equal(l0.status, 200);
+  assert.deepEqual(l0.j.accounts.map((a: any) => [a.id, a.label, a.source, a.last4]), [['chat', 'Chat-Schlüssel', 'chat', 'xxxx']]);
+  assert.deepEqual((await internal('/internal/claude-accounts', { userId: uid })).j.accounts, [{ id: 'chat', label: 'Chat-Schlüssel', token: null }]);
+  // Bernd hat noch gar keinen Schlüssel.
+  assert.deepEqual((await bernd.req('/api/setup/claude-accounts')).j.accounts, []);
+  // Hinzufügen: CSRF, Format, Name.
+  assert.equal((await anna.req('/api/setup/claude-accounts', { body: { label: 'Firma', token: t1 }, csrf: false })).status, 403);
+  assert.match((await anna.req('/api/setup/claude-accounts', { body: { label: 'Firma', token: 'sk-ant-api03-xyz' } })).j.error, /API-Schlüssel/);
+  assert.equal((await anna.req('/api/setup/claude-accounts', { body: { label: '  ', token: t1 } })).status, 400);
+  const a1 = await anna.req('/api/setup/claude-accounts', { body: { label: 'Firma', token: t1 } });
+  assert.equal(a1.status, 200, JSON.stringify(a1.j));
+  assert.equal((await anna.req('/api/setup/claude-accounts', { body: { label: 'Doppelt', token: t1 } })).status, 409, 'derselbe Token nicht zweimal');
+  const a2 = await anna.req('/api/setup/claude-accounts', { body: { label: 'Privat', token: t2 } });
+  assert.equal(a2.status, 200);
+  const l1 = await anna.req('/api/setup/claude-accounts');
+  assert.deepEqual(l1.j.accounts.map((a: any) => [a.label, a.last4]), [['Chat-Schlüssel', 'xxxx'], ['Firma', 'FIRM'], ['Privat', 'PRIV']]);
+  assert.equal(JSON.stringify([a1.j, a2.j, l1.j]).includes('sk-ant'), false, 'Tokens nie an den Browser');
+  const [idF, idP] = [l1.j.accounts[1].id, l1.j.accounts[2].id];
+  // Verschlüsselt gespeichert.
+  const cr = await mongo.db(DB).collection('creds').findOne({ userId: uid });
+  assert.equal(cr!.claudeAccounts.length, 2);
+  assert.equal(JSON.stringify(cr).includes('sk-ant-oat'), false, 'nur verschlüsselt in der DB');
+  // Interner Kanal für die Brücke: nur mit Token, Klartext in Reihenfolge, chat ohne Token.
+  assert.equal((await internal('/internal/claude-accounts', { userId: uid }, 'falsch')).status, 403);
+  assert.deepEqual((await internal('/internal/claude-accounts', { userId: uid })).j.accounts,
+    [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, { id: idF, label: 'Firma', token: t1 }, { id: idP, label: 'Privat', token: t2 }]);
+  // Umsortieren: nur eine vollständige Umordnung der vorhandenen Konten.
+  assert.equal((await anna.req('/api/setup/claude-accounts/order', { method: 'PUT', body: { ids: [idP, 'chat'] } })).status, 400);
+  assert.equal((await anna.req('/api/setup/claude-accounts/order', { method: 'PUT', body: { ids: [idP, 'chat', 'fremd'] } })).status, 400);
+  assert.equal((await anna.req('/api/setup/claude-accounts/order', { method: 'PUT', body: { ids: [idP, 'chat', idF] } })).status, 200);
+  assert.deepEqual((await internal('/internal/claude-accounts', { userId: uid })).j.accounts.map((a: any) => a.id), [idP, 'chat', idF]);
+  // Testen über die Brücke (Mock: Token mit „limit“ ist ausgeschöpft) — danach steht der Zustand in der Liste.
+  const tp = await anna.req(`/api/setup/claude-accounts/${idP}/test`, { method: 'POST' });
+  assert.deepEqual([tp.j.ok, tp.j.error], [false, 'rate_limit']);
+  assert.ok(new Date(tp.j.resetsAt).getTime() > Date.now());
+  assert.equal((await anna.req(`/api/setup/claude-accounts/${idF}/test`, { method: 'POST' })).j.ok, true);
+  assert.equal((await anna.req('/api/setup/claude-accounts/chat/test', { method: 'POST' })).j.ok, true);
+  assert.equal((await anna.req('/api/setup/claude-accounts/gibtsnicht/test', { method: 'POST' })).status, 404);
+  const l2 = await anna.req('/api/setup/claude-accounts');
+  assert.ok(l2.j.accounts.find((a: any) => a.id === idP).exhaustedUntil > Date.now(), 'Zustand aus der Brücke');
+  assert.equal(l2.j.accounts.find((a: any) => a.id === idF).exhaustedUntil, null);
+  assert.equal(JSON.stringify(l2.j).includes('sk-ant'), false);
+  // Bernd sieht Annas Konten nie.
+  assert.equal((await bernd.req(`/api/setup/claude-accounts/${idF}/test`, { method: 'POST' })).status, 404);
+  assert.equal((await bernd.req(`/api/setup/claude-accounts/${idF}`, { method: 'DELETE' })).status, 404);
+  // Entfernen; der Chat-Schlüssel geht nur über „Trennen“.
+  assert.equal((await anna.req('/api/setup/claude-accounts/chat', { method: 'DELETE' })).status, 400);
+  assert.equal((await anna.req(`/api/setup/claude-accounts/${idP}`, { method: 'DELETE' })).status, 200);
+  assert.deepEqual((await internal('/internal/claude-accounts', { userId: uid })).j.accounts.map((a: any) => a.id), ['chat', idF]);
+  assert.deepEqual((await anna.req('/api/setup/claude-accounts')).j.accounts.map((a: any) => a.label), ['Chat-Schlüssel', 'Firma']);
+  // Höchstens 5 weitere Konten.
+  for (let i = 0; i < 4; i++) assert.equal((await anna.req('/api/setup/claude-accounts', { body: { label: `K${i}`, token: 'sk-ant-oat01-' + String(i).repeat(40) } })).status, 200);
+  assert.equal((await anna.req('/api/setup/claude-accounts', { body: { label: 'K9', token: 'sk-ant-oat01-' + '9'.repeat(40) } })).status, 400);
+});
+
+test('Roadmap-Automatik: „Für mich offen“, Ja/Nein auf Sync-Fragen nur für Admins, Entwurf ersetzt nur den Markerblock', async () => {
+  const OV = join(VAULT, 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/0-Overview');
+  const proto = join(VAULT, 'olaf/1-Projects/daily-debrief/vault-sync-protokoll.md');
+  mkdirSync(join(VAULT, 'olaf/1-Projects/daily-debrief'), { recursive: true });
+  writeFileSync(proto, '# Protokoll\n\n## 2026-10-08 07:30\n\n**Offen/unklar:**\n- (1) **Zeilen löschen** auf der Review-Seite.\n- (2) **Spec verschieben** nach Live.\n');
+  await anna.login(users.a); await bernd.login(users.b);
+  // Nicht-Admin: sieht keine Fragen, darf nicht antworten.
+  let r = await bernd.req('/api/roadmap/mine');
+  assert.equal(r.status, 200); assert.equal(r.j.admin, false); assert.deepEqual(r.j.questions, []);
+  const qs0 = (await import('../server/roadmapauto.ts')).parseSyncQuestions(readFileSync(proto, 'utf8'));
+  assert.equal((await bernd.req('/api/roadmap/question', { body: { id: qs0[0].id, answer: 'ja' } })).status, 403);
+  // Admin (Rolle aus LibreChat; hier in der Sitzung gesetzt).
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  r = await anna.req('/api/roadmap/mine');
+  assert.equal(r.j.admin, true); assert.equal(r.j.questions.length, 2); assert.equal(r.j.section, '2026-10-08 07:30');
+  const [q1, q2] = r.j.questions;
+  assert.equal((await anna.req('/api/roadmap/question', { body: { id: q1.id, answer: 'vielleicht' } })).status, 400);
+  assert.equal((await anna.req('/api/roadmap/question', { body: { id: 'S0000000000', answer: 'ja' } })).status, 409);
+  r = await anna.req('/api/roadmap/question', { body: { id: q1.id, answer: 'ja' } });
+  assert.equal(r.status, 200); assert.equal(r.j.open, 1); assert.equal(r.j.started, true);
+  const appr = readFileSync(join(tmp, 'vault-sync', 'freigaben.md'), 'utf8');
+  assert.match(appr, new RegExp(`- ${q1.id} \\(\\d{4}-\\d{2}-\\d{2}, ${users.a.email}\\): \\*\\*Zeilen löschen\\*\\*`));
+  for (let i = 0; i < 40 && !existsSync(join(tmp, 'fake-vault-sync.log')); i++) await new Promise((res) => setTimeout(res, 50));
+  assert.match(readFileSync(join(tmp, 'fake-vault-sync.log'), 'utf8'), /^lauf $/m, 'voller Lauf ohne --scope');
+  assert.equal((await anna.req('/api/roadmap/question', { body: { id: q2.id, answer: 'nein' } })).status, 200);
+  r = await anna.req('/api/roadmap/mine');
+  assert.deepEqual(r.j.questions.map((q: any) => [q.id, q.answer]), [[q1.id, 'ja']], 'Nein verschwindet, Ja bleibt als „freigegeben“ stehen');
+  assert.match(readFileSync(join(tmp, 'vault-sync', 'freigaben.md'), 'utf8'), /## Verworfen[^\n]*\n\n- \*\*Spec verschieben\*\* nach Live\./, 'Nein steht für den Sync in der Datei');
+  // Der Sync meldet „erledigt“ (Schreibweise mit Backticks) → Frage weg, Freigabe erledigt, Datei ohne Freigaben.
+  writeFileSync(proto, readFileSync(proto, 'utf8') + `\n## 2026-10-08 11:00 · Nachzug PM-1\n\n- **erledigt:** \`${q1.id}\` (4-review-….md)\n`);
+  r = await anna.req('/api/roadmap/mine');
+  assert.deepEqual(r.j.questions, []); assert.deepEqual(r.j.pendingApprovals, []);
+  assert.match(readFileSync(join(tmp, 'vault-sync', 'freigaben.md'), 'utf8'), /## Freigegeben\n\n- keine/);
+  assert.equal((await mongo.db(DB).collection('roadmap_answers').findOne({ _id: q1.id as any }) as any).done, true);
+  // Nächster regulärer Lauf schlägt denselben (verworfenen) Text wieder vor → bleibt ausgeblendet; neue Frage erscheint.
+  writeFileSync(proto, readFileSync(proto, 'utf8') + '\n## 2026-10-08 13:30\n\n**Offen/unklar:**\n- (1) **Spec verschieben** nach Live.\n- (2) **Neu:** Rangliste.\n');
+  r = await anna.req('/api/roadmap/mine');
+  assert.deepEqual(r.j.questions.map((q: any) => q.text), ['**Neu:** Rangliste.']);
+  // Freigabe, deren Frage weitergerückt ist → unter „noch nicht erledigt“, mit Widerruf.
+  const q3 = r.j.questions[0];
+  assert.equal((await anna.req('/api/roadmap/question', { body: { id: q3.id, answer: 'ja' } })).status, 200);
+  writeFileSync(proto, readFileSync(proto, 'utf8') + `\n## 2026-10-08 14:00\n\nnicht erledigt: ${q3.id} — Datei gesperrt\n\n**Offen/unklar:**\n- (1) **Anderes.**\n`);
+  r = await anna.req('/api/roadmap/mine');
+  assert.deepEqual(r.j.pendingApprovals.map((a: any) => [a.id, a.failed]), [[q3.id, 'Datei gesperrt']]);
+  assert.equal((await bernd.req('/api/roadmap/question', { body: { id: q3.id, answer: 'widerruf' } })).status, 403);
+  assert.equal((await anna.req('/api/roadmap/question', { body: { id: q3.id, answer: 'widerruf' } })).status, 200);
+  assert.deepEqual((await anna.req('/api/roadmap/mine')).j.pendingApprovals, []);
+  assert.equal((await anna.req('/api/roadmap/question', { body: { id: q3.id, answer: 'widerruf' } })).status, 409, 'nichts mehr zu widerrufen');
+  // Entwurf: ohne Marker im Hub nicht übernehmbar; mit Marker ersetzt er genau den Block.
+  const hubPath = join(OV, '0-roadmap-produkt-olaf.md');
+  const hubBefore = readFileSync(hubPath, 'utf8');
+  writeFileSync(join(OV, 'entwurf-woran-wir-arbeiten.md'), '---\nstatus: draft\n---\n\nNeu: #294 offen.\n');
+  r = await anna.req('/api/roadmap/mine');
+  assert.equal(r.j.draft.body, 'Neu: #294 offen.'); assert.equal(r.j.draft.hubHasMarkers, false);
+  assert.equal((await anna.req('/api/roadmap/draft', { body: { action: 'übernehmen', hash: r.j.draft.hash } })).status, 409);
+  assert.equal(readFileSync(hubPath, 'utf8'), hubBefore, 'ohne Marker nichts geschrieben');
+  writeFileSync(hubPath, hubBefore + '\n<!-- werkbank:woran-wir-arbeiten -->\nalt\n<!-- /werkbank:woran-wir-arbeiten -->\n\nDanach bleibt.\n');
+  r = await anna.req('/api/roadmap/mine');
+  assert.equal((await bernd.req('/api/roadmap/draft', { body: { action: 'übernehmen', hash: r.j.draft.hash } })).status, 403);
+  assert.equal((await anna.req('/api/roadmap/draft', { body: { action: 'übernehmen', hash: 'falsch' } })).status, 409);
+  assert.equal((await anna.req('/api/roadmap/draft', { body: { action: 'übernehmen', hash: r.j.draft.hash } })).status, 200);
+  assert.equal(readFileSync(hubPath, 'utf8'), hubBefore + '\n<!-- werkbank:woran-wir-arbeiten -->\nNeu: #294 offen.\n<!-- /werkbank:woran-wir-arbeiten -->\n\nDanach bleibt.\n');
+  assert.equal((await anna.req('/api/roadmap/mine')).j.draft, null, 'übernommener Entwurf erscheint nicht wieder');
+  writeFileSync(hubPath, hubBefore);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
 });

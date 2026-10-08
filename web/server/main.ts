@@ -12,11 +12,14 @@ import YAML from 'yaml';
 import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl } from './config.ts';
 import { connect, wb } from './db.ts';
 import { librechatLogin, createSession, destroySession, currentUser, allowed, teammates, userById, type User } from './auth.ts';
+import { listClaudeAccounts, addClaudeAccount, removeClaudeAccount, reorderClaudeAccounts, claudeAccountToken, claudeAccountsForBridge } from './creds.ts';
 import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraIdentity, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns } from './agent.ts';
+import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
+import { ingestSessions } from './agentfiles.ts';
 import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles } from './sprint.ts';
 import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
@@ -25,7 +28,8 @@ import { log } from './log.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, type JiraAction } from './jirawrite.ts';
-import { jiraEventStream, jiraChanged } from './events.ts';
+import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
+import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
@@ -108,8 +112,8 @@ async function ticketDocs(u: User, key: string) {
   const notes = refs.map((r) => ({ path: r.path, title: idx.notes.get(r.path)?.title ?? r.path, via: r.via, mtime: idx.notes.get(r.path)?.mtime }))
     .sort((a, b) => (a.via === 'frontmatter' ? -1 : 0) - (b.via === 'frontmatter' ? -1 : 0) || (b.mtime ?? 0) - (a.mtime ?? 0));
   const prs = [...new Set(refs.flatMap((r) => r.prs))];
-  const files = (await wb().collection('files').find({ tickets: key, $or: [{ owner: u.id }, { sharedWith: u.id }] }, { projection: { name: 1, size: 1, ownerName: 1, createdAt: 1 } }).toArray())
-    .map((f: any) => ({ id: f._id, name: f.name, size: f.size, ownerName: f.ownerName, createdAt: f.createdAt }));
+  const files = (await wb().collection('files').find({ tickets: key, $or: [{ owner: u.id }, { sharedWith: u.id }] }, { projection: { name: 1, size: 1, ownerName: 1, createdAt: 1, kind: 1, vaultPath: 1 } }).toArray())
+    .map((f: any) => ({ id: f._id, name: f.name, size: f.size, ownerName: f.ownerName, createdAt: f.createdAt, vaultPath: f.kind === 'vault' ? f.vaultPath : undefined }));
   const sugg = (await suggestions()).get(key) ?? [];
   // Was ein Karten-Agent geschrieben hat (auch ohne Key in der Datei).
   const written = [...new Set((await wb().collection('agent_runs').find({ key, mode: 'chat' }, { projection: { written: 1 } }).toArray()).flatMap((r: any) => r.written ?? []))]
@@ -338,6 +342,63 @@ on('POST', /^\/api\/setup\/claude$/, async (req, res) => {
 });
 
 on('DELETE', /^\/api\/setup\/claude$/, async (req, res) => { const u = await needUser(req); await removeClaudeToken(u); send(res, 200, { ok: true }); });
+
+// --- Mehrere Claude-Konten (Knut, 06.10.2026): bei ausgeschöpftem Kontingent übernimmt das nächste ---
+// Nie Tokens an den Browser oder ins Log: nur Name, die letzten 4 Zeichen, Herkunft und der Zustand aus der Brücke.
+
+const bridgeInternal = { 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' };
+
+async function accountsView(u: User) {
+  const list = await listClaudeAccounts(u);
+  let exhausted: Record<string, number> = {};
+  try {
+    const r = await fetch(`${cfg.bridgeUrl}/internal/accounts-state?user=${encodeURIComponent(u.id)}`, { headers: bridgeInternal, signal: AbortSignal.timeout(1500) });
+    if (r.ok) exhausted = ((await r.json()) as any).exhausted ?? {};
+  } catch { /* Brücke nicht erreichbar: ohne Zustand */ }
+  const now = Date.now();
+  const accounts = list.map((a) => ({ ...a, exhaustedUntil: exhausted[a.id] > now ? exhausted[a.id] : null }));
+  return { accounts, active: accounts.find((a) => !a.exhaustedUntil)?.id ?? null, max: 5 };
+}
+
+on('GET', /^\/api\/setup\/claude-accounts$/, async (req, res) => send(res, 200, await accountsView(await needUser(req))));
+
+on('POST', /^\/api\/setup\/claude-accounts$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const a = await addClaudeAccount(u, String(b.label ?? ''), String(b.token ?? ''));
+  log('claude konto hinzugefügt', { user: u.id, konto: a.id });
+  send(res, 200, { ok: true, account: a, ...(await accountsView(u)) });
+});
+
+on('PUT', /^\/api\/setup\/claude-accounts\/order$/, async (req, res) => {
+  const u = await needUser(req);
+  await reorderClaudeAccounts(u, (await body(req)).ids);
+  send(res, 200, { ok: true, ...(await accountsView(u)) });
+});
+
+on('DELETE', /^\/api\/setup\/claude-accounts\/([\w-]{1,40})$/, async (req, res, m) => {
+  const u = await needUser(req);
+  await removeClaudeAccount(u, m[1]);
+  log('claude konto entfernt', { user: u.id, konto: m[1] });
+  send(res, 200, { ok: true, ...(await accountsView(u)) });
+});
+
+// Ein Konto testen: die Brücke macht einen Minimalzug mit genau diesem Token (ein kleiner Modellaufruf).
+on('POST', /^\/api\/setup\/claude-accounts\/([\w-]{1,40})\/test$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const token = await claudeAccountToken(u, m[1]);
+  if (!token) throw new HttpError(404, 'Konto nicht gefunden.');
+  let r: any;
+  try {
+    const resp = await fetch(`${cfg.bridgeUrl}/internal/account-test`, {
+      method: 'POST', headers: { ...bridgeInternal, 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ userId: u.id, email: u.email, accountId: m[1] }), signal: AbortSignal.timeout(75_000),
+    });
+    r = await resp.json();
+  } catch { throw new HttpError(502, 'Die Brücke antwortet nicht — Test nicht möglich.'); }
+  log('claude konto getestet', { user: u.id, konto: m[1], ok: !!r.ok, error: r.error });
+  send(res, 200, { ok: !!r.ok, error: r.error ?? null, resetsAt: r.resetsAt ? new Date(r.resetsAt).toISOString() : null });
+});
 
 on('POST', /^\/api\/setup\/jira$/, async (req, res) => {
   const u = await needUser(req);
@@ -607,8 +668,20 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res
   if (!token) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen.');
   // Standard: echter Chat („PM-123 · Titel“), der Agent arbeitet mit Rückfrage vor jedem Schreiben.
   // „Nur Entwurf“: wie bisher lesend im Hintergrund, Ergebnis als Kommentarentwurf an der Karte.
+  // Plan 81 (Schnitte 6/7): das Ticket bekommt sein Projekt (zuordnen vor anlegen), der Agent den Bereich seines
+  // Workstreams im Vault für Plan und Notizen. Die Übersicht des Bereichs wird danach nachgezogen.
   if (b.mode !== 'draft') {
-    const r = await startChatAgent(u, i, String(b.note ?? '').slice(0, 2000), 'work');
+    // Erst prüfen, ob schon ein Agent der Person auf der Karte arbeitet — sonst entstünde für einen abgelehnten Start
+    // ein Projekt und ein Vault-Eintrag (Review).
+    if (await wb().collection('agent_runs').findOne({ key: i.key, userId: u.id, mode: 'chat', status: { $in: ['läuft', 'wartet auf ja'] } })) {
+      throw new HttpError(409, 'Auf diesem Ticket arbeitet schon ein Agent von dir — im Chat weitermachen.');
+    }
+    const im = await issueMap();
+    const project = await assignProject(u, i).catch((e) => { log('projekt fehlgeschlagen', { key: i.key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
+    const ws = i.workstream ? im.get(i.workstream) : undefined;
+    const areaDir = ws ? workstreamArea(ws)?.dir ?? null : null;
+    if (ws) syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 120) }));
+    const r = await startChatAgent(u, i, String(b.note ?? '').slice(0, 2000), 'work', { projectName: project?.name ?? null, areaDir, projectId: project?._id ?? null, personName: u.name });
     log('agent chat', { user: u.id, key: i.key, conv: r.conv });
     return send(res, 200, { ...r, mode: 'chat' });
   }
@@ -847,6 +920,155 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
     hub: { path: `${OVERVIEW}/0-roadmap-produkt-olaf.md`, prio: `${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`, register: `${OVERVIEW}/pr-stand-produkt-olaf.md` },
     githubReadOnly: true,
   });
+});
+
+// --- Roadmap-Automatik (docs/plan-roadmap-automatik.md) ---
+
+const VAULT_SYNC_SCRIPT = () => process.env.WERKBANK_VAULT_SYNC_SCRIPT || join(cfg.skillsTarget, 'olaf-produkt-roadmap', 'scripts', 'vault-sync.sh');
+const SYNC_PROTOCOL = 'olaf/1-Projects/daily-debrief/vault-sync-protokoll.md';
+const WORK_DRAFT = `${OVERVIEW}/entwurf-woran-wir-arbeiten.md`;
+const HUB = `${OVERVIEW}/0-roadmap-produkt-olaf.md`;
+const roadmapAutosync = () => process.env.WERKBANK_ROADMAP_AUTOSYNC !== '0';
+const roadmapQueue = newQueue();
+let roadmapPrimed = false;   // erster Durchlauf nach dem Start merkt sich nur den Stand (sonst alle alten Sitzungen auf einmal)
+const firstName = (u: User) => u.name.trim().split(/\s+/)[0] ?? u.name;
+const needAdmin = async (req: IncomingMessage) => {
+  const u = await needUser(req);
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
+  return u;
+};
+
+/** Werkbank-Stand für den Vault-Sync-Snapshot schreiben (Jira, Läufe, Projekte). */
+async function writeRoadmapFeed() {
+  const issues = (await wb().collection('jira_issues').find({}, { projection: { _id: 0, key: 1, summary: 1, status: 1, statusCategory: 1, assignee: 1, duedate: 1, updated: 1, type: 1, workstream: 1 } }).toArray()) as any[];
+  const since = new Date(Date.now() - 3 * 86_400_000);
+  const runsRaw = await wb().collection('agent_runs').find({ mode: 'chat', key: { $ne: null }, finishedAt: { $gte: since } }, { projection: { key: 1, projectId: 1, finishedAt: 1, startedAt: 1, written: 1, draft: 1 } }).toArray() as any[];
+  const projects = await wb().collection('projects').find({}, { projection: { name: 1, workstream: 1, tickets: 1 } }).toArray() as any[];
+  const pname = new Map(projects.map((p) => [String(p._id), p.name]));
+  const vaultPrefix = cfg.vaultDir + '/';
+  const runs = runsRaw.map((r) => ({
+    key: r.key, projectName: r.projectId ? pname.get(String(r.projectId)) ?? null : null, finishedAt: r.finishedAt, startedAt: r.startedAt,
+    vaultNotes: (r.written ?? []).filter((f: string) => f.startsWith(vaultPrefix) && f.endsWith('.md')).map((f: string) => f.slice(vaultPrefix.length)),
+    // PR-Links aus den Notizen, die der Lauf geschrieben hat (Chat-Läufe haben keinen Antworttext in agent_runs).
+    prs: [...new Set((r.written ?? []).filter((f: string) => f.startsWith(vaultPrefix) && f.endsWith('.md')).flatMap((f: string) => prLinks(readOr(f).slice(0, 200_000))))] as string[],
+  }));
+  writeAtomic(feedPath(), buildFeed({ now: new Date(), issues, runs, projects: projects.map((p) => ({ name: p.name, workstream: p.workstream ?? null, tickets: p.tickets ?? [] })) }));
+}
+
+/** Fertige Karten-Läufe dieser Person in die Warteschlange (einmal je neuer Aktivität der Sitzung). */
+async function noteFinishedRuns(person: User, sessions: Array<{ conv: string; status: string; lastActivity?: number | null; written?: string[] }>) {
+  for (const s of sessions) {
+    if (s.status !== 'bereit' || !s.lastActivity) continue;
+    const run: any = await wb().collection('agent_runs').findOne({ userId: person.id, conv: s.conv, mode: 'chat', key: { $ne: null } }, { sort: { startedAt: -1 } });
+    if (!run || (run.roadmapSeenAt && run.roadmapSeenAt >= s.lastActivity)) continue;
+    // lastActivity ist der Beginn der letzten Runde; „bereit“ heißt, sie ist vorbei.
+    await wb().collection('agent_runs').updateOne({ _id: run._id }, { $set: { roadmapSeenAt: s.lastActivity, finishedAt: roadmapPrimed ? new Date() : new Date(s.lastActivity), written: s.written ?? run.written ?? [] } });
+    // Nur Arbeitsläufe ziehen nach (ein „Besprechen“-Chat ändert nichts); nicht beim ersten Durchlauf nach dem Start.
+    if (roadmapAutosync() && roadmapPrimed && run.kind !== 'discuss') roadmapQueue.pending.add(run.key);
+  }
+}
+
+/** Offene Freigaben und verworfene Punkte neu in die Datei schreiben, die der Sync liest. */
+async function writeApprovals() {
+  const done = doneIds(readVault(SYNC_PROTOCOL));
+  const col = wb().collection('roadmap_answers');
+  if (done.size) await col.updateMany({ _id: { $in: [...done] as any[] }, done: { $ne: true } }, { $set: { done: true, doneAt: new Date() } });
+  const open = (await col.find({ answer: 'ja', done: { $ne: true } }).sort({ at: 1 }).toArray()) as any[];
+  const rejected = (await col.find({ answer: 'nein', at: { $gte: new Date(Date.now() - 30 * 86_400_000) } }).sort({ at: 1 }).toArray()) as any[];
+  writeAtomic(approvalsPath(), renderApprovals(open.map((a): Approval => ({ id: String(a._id), text: a.text, at: new Date(a.at).toISOString(), by: a.by })), rejected.map((a) => a.text)));
+  return open.length;
+}
+
+/** Startet, was fällig ist (Nachzug-Tickets oder voller Lauf nach „Ja“), wenn kein Sync läuft. */
+async function tryStartSync(): Promise<boolean> {
+  const due = takeDue(roadmapQueue, Date.now(), syncLocked());
+  if (!due) return false;
+  await writeRoadmapFeed().catch((e) => log('roadmap-feed', { error: String(e?.message ?? e).slice(0, 160) }));
+  const ok = startVaultSync(VAULT_SYNC_SCRIPT(), due.scope, log);
+  if (!ok) { if (due.scope) for (const k of due.scope) roadmapQueue.pending.add(k); else roadmapQueue.full = true; }
+  roadmapChanged('nachzug');
+  return ok;
+}
+
+on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
+  const u = await needUser(req);
+  const me = firstName(u).toLowerCase();
+  const prs = ((await wb().collection('github_prs').find({}, { projection: { _id: 0 } }).toArray()) as any[])
+    .filter((p) => String(p.turn?.who ?? '').toLowerCase().split(/,\s*/).includes(me))
+    .map((p) => ({ pr: p.pr, title: p.title, url: p.url, why: p.turn?.why, role: p.turn?.role }));
+  const today = new Date().toISOString().slice(0, 10);
+  const tickets = ((await wb().collection('jira_issues').find({ type: { $ne: 'Workstream' } }, { projection: { _id: 0, key: 1, summary: 1, status: 1, statusCategory: 1, assignee: 1, duedate: 1 } }).toArray()) as any[])
+    .filter((i) => i.statusCategory !== 'Done' && i.status !== 'Done' && String(i.assignee ?? '').toLowerCase().split(/\s+/)[0] === me)
+    .filter((i) => !i.duedate || i.duedate < today)
+    .map((i) => ({ key: i.key, summary: i.summary, duedate: i.duedate, why: i.duedate ? 'überfällig' : 'ohne Datum' }))
+    .sort((a, b) => String(a.duedate ?? '9').localeCompare(String(b.duedate ?? '9')));
+  const admin = u.role === 'ADMIN';
+  let questions: any[] = [], draft: any = null, section: string | null = null, pendingApprovals: any[] = [];
+  if (admin) {
+    writeApprovals().catch((e) => log('roadmap-freigaben', { error: String(e?.message ?? e).slice(0, 160) }));   // nicht warten: GET bleibt lesend schnell
+    const protocol = readVault(SYNC_PROTOCOL);
+    const qs = parseSyncQuestions(protocol);
+    section = qs[0]?.section ?? null;
+    const col = wb().collection('roadmap_answers');
+    const answered = new Map(((await col.find({ _id: { $in: qs.map((q) => q.id) as any[] } }).toArray()) as any[]).map((a) => [String(a._id), a]));
+    const rejectedKeys = new Set(((await col.find({ answer: 'nein' }, { projection: { key: 1 } }).toArray()) as any[]).map((a) => a.key).filter(Boolean));
+    const done = doneIds(protocol);
+    const failed = notDone(protocol);
+    questions = qs.filter((q) => !done.has(q.id) && !rejectedKeys.has(q.key)).map((q) => ({ ...q, answer: answered.get(q.id)?.answer ?? null, failed: failed.get(q.id) ?? null }))
+      .filter((q) => q.answer !== 'nein');
+    // Freigaben, deren Frage nicht mehr im aktuellen Abschnitt steht und die noch nicht erledigt sind (Review 7).
+    const shown = new Set(questions.map((q) => q.id));
+    pendingApprovals = ((await col.find({ answer: 'ja', done: { $ne: true } }).sort({ at: 1 }).toArray()) as any[])
+      .filter((a) => !shown.has(String(a._id)) && !done.has(String(a._id)))
+      .map((a) => ({ id: String(a._id), text: a.text, at: a.at, by: a.by, failed: failed.get(String(a._id)) ?? null }));
+    const text = readVault(WORK_DRAFT);
+    if (text.trim()) {
+      const hash = hashText(text);
+      const st: any = await wb().collection('meta').findOne({ _id: 'roadmap_draft' as any });
+      if (st?.hash !== hash) draft = { hash, body: draftBody(text), path: WORK_DRAFT, hubHasMarkers: replaceWorkBlock(readVault(HUB), 'x') !== null };
+    }
+  }
+  send(res, 200, { me: firstName(u), admin, prs, tickets, questions, pendingApprovals, section, draft, autosync: roadmapAutosync(), queued: [...roadmapQueue.pending], syncRunning: syncLocked() });
+});
+
+on('POST', /^\/api\/roadmap\/question$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  const id = String(b.id ?? ''); const answer = String(b.answer ?? '');
+  if (!['ja', 'nein', 'widerruf'].includes(answer)) throw new HttpError(400, 'Antwort ist ja, nein oder widerruf.');
+  const col = wb().collection('roadmap_answers');
+  if (answer === 'widerruf') {
+    // Eine Freigabe zurücknehmen, auch wenn ihre Frage nicht mehr im aktuellen Abschnitt steht.
+    const r = await col.deleteOne({ _id: id as any, answer: 'ja', done: { $ne: true } });
+    if (!r.deletedCount) throw new HttpError(409, 'Keine offene Freigabe mit dieser Kennung.');
+  } else {
+    const q = parseSyncQuestions(readVault(SYNC_PROTOCOL)).find((x) => x.id === id);
+    if (!q) throw new HttpError(409, 'Diese Frage gibt es im letzten Sync-Protokoll nicht mehr — Seite neu laden.');
+    await col.updateOne({ _id: id as any }, { $set: { answer, text: q.text, key: q.key, section: q.section, at: new Date(), by: u.email } }, { upsert: true });
+  }
+  const open = await writeApprovals();
+  let started = false;
+  if (answer === 'ja') { roadmapQueue.full = true; started = await tryStartSync(); }
+  if (answer === 'widerruf' && open === 0) roadmapQueue.full = false;   // nichts mehr freigegeben → kein voller Lauf
+  roadmapChanged('frage');
+  send(res, 200, { ok: true, open, started, queued: !started && answer === 'ja' });
+});
+
+on('POST', /^\/api\/roadmap\/draft$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  const text = readVault(WORK_DRAFT);
+  const hash = hashText(text);
+  if (!text.trim() || String(b.hash ?? '') !== hash) throw new HttpError(409, 'Der Entwurf hat sich geändert — Seite neu laden.');
+  if (b.action === 'übernehmen') {
+    const next = replaceWorkBlock(readVault(HUB), draftBody(text));
+    if (next === null) throw new HttpError(409, 'Im Hub fehlen die Marker <!-- werkbank:woran-wir-arbeiten --> … <!-- /werkbank:woran-wir-arbeiten --> (oder sie stehen doppelt). Nichts geschrieben.');
+    writeAtomic(join(cfg.vaultDir, HUB), next);
+    invalidateIndex();
+  } else if (b.action !== 'verwerfen') throw new HttpError(400, 'Aktion ist übernehmen oder verwerfen.');
+  await wb().collection('meta').updateOne({ _id: 'roadmap_draft' as any }, { $set: { hash, action: b.action, at: new Date(), by: u.email } }, { upsert: true });
+  roadmapChanged('entwurf');
+  send(res, 200, { ok: true });
 });
 
 on('POST', /^\/api\/roadmap\/github$/, async (req, res) => {
@@ -1400,9 +1622,12 @@ on('GET', /^\/api\/files$/, async (req, res) => {
   const { mine, shared } = await listFiles(u);
   const people = await teammates();
   const name = (id: string) => people.find((p) => p.id === id)?.name ?? '?';
+  const pids = [...new Set([...mine, ...shared].map((f: any) => f.projectId).filter(Boolean))];
+  const projectNames = new Map((await wb().collection('projects').find({ _id: { $in: pids as any[] } }, { projection: { name: 1 } }).toArray()).map((p: any) => [p._id, p.name]));
+  const shape = (f: any) => ({ ...f, id: f._id, projectName: f.projectId ? projectNames.get(f.projectId) ?? null : null, source: f.source ? { conv: f.source.conv } : undefined });
   send(res, 200, {
-    mine: mine.map((f: any) => ({ ...f, id: f._id, sharedWithNames: f.sharedWith.map(name) })),
-    shared: shared.map((f: any) => ({ ...f, id: f._id, sharedWith: undefined })),
+    mine: mine.map((f: any) => ({ ...shape(f), sharedWithNames: f.sharedWith.map(name) })),
+    shared: shared.map((f: any) => ({ ...shape(f), sharedWith: undefined })),
     maxMb: Math.round(cfg.fileMaxBytes / 1048576),
   });
 });
@@ -1417,12 +1642,14 @@ on('GET', /^\/api\/files\/([0-9a-f-]{36})\/download$/, async (req, res, m) => {
   const u = await needUser(req);
   const f = await fileFor(u, m[1]);
   if (!f) throw new HttpError(404, 'Datei nicht gefunden.');
+  // Eine verschobene Vault-Notiz (oder eine fehlende Kopie) ist ein 404, kein Absturz des Prozesses (Review B2).
+  if (!existsSync(filePath(f))) throw new HttpError(404, f.kind === 'vault' ? 'Die Notiz liegt nicht mehr an dieser Stelle im Vault.' : 'Datei nicht mehr vorhanden.');
   res.writeHead(200, {
     'content-type': 'application/octet-stream', 'x-content-type-options': 'nosniff',
     'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(f.name)}`,
     'content-security-policy': "sandbox; default-src 'none'", 'cache-control': 'no-store',
   });
-  createReadStream(filePath(f)).pipe(res);
+  createReadStream(filePath(f)).on('error', () => res.destroy()).pipe(res);
 });
 
 on('POST', /^\/api\/files\/([0-9a-f-]{36})\/share$/, async (req, res, m) => {
@@ -1440,8 +1667,9 @@ on('POST', /^\/api\/files\/([0-9a-f-]{36})\/chat$/, async (req, res, m) => {
   const u = await needUser(req);
   const f = await fileFor(u, m[1]);
   if (!f) throw new HttpError(404, 'Datei nicht gefunden.');
+  if (!existsSync(filePath(f))) throw new HttpError(404, f.kind === 'vault' ? 'Die Notiz liegt nicht mehr an dieser Stelle im Vault.' : 'Datei nicht mehr vorhanden.');
   const rel = copyToScratch(u, f);
-  send(res, 200, { chatUrl: chatUrl(`Ich habe dir die Datei \`${rel}\` in dein Arbeitsverzeichnis gelegt („${f.name}“). Lies sie und sag mir kurz, was drinsteht.`) });
+  send(res, 200, { chatUrl: chatUrl(`Ich habe dir die Datei \`${rel}\` abgelegt („${f.name}“). Lies sie und sag mir kurz, was drinsteht.`) });
 });
 
 on('GET', /^\/api\/chats\/shared$/, async (req, res) => {
@@ -1452,7 +1680,7 @@ on('GET', /^\/api\/chats\/shared$/, async (req, res) => {
 on('POST', /^\/api\/chats\/([A-Za-z0-9_-]{6,64})\/copy$/, async (req, res, m) => {
   const u = await needUser(req);
   const c = await copySharedChat(u, m[1]);
-  send(res, 200, { ...c, chatUrl: chatUrl(`${c.owner} hat den Chat „${c.title}“ mit mir geteilt. Der Verlauf liegt als \`${c.file}\` in deinem Arbeitsverzeichnis. Lies ihn und mach mit mir dort weiter, wo er aufhört — als neue, eigene Unterhaltung.`) });
+  send(res, 200, { ...c, chatUrl: chatUrl(`${c.owner} hat den Chat „${c.title}“ mit mir geteilt. Der Verlauf liegt unter \`${c.file}\`. Lies ihn und mach mit mir dort weiter, wo er aufhört — als neue, eigene Unterhaltung.`) });
 });
 
 on('GET', /^\/api\/sharelog$/, async (req, res) => {
@@ -1511,6 +1739,12 @@ on('POST', /^\/internal\/session-start$/, async (req, res) => {
   const r = await sessionStart(u, String(b.conv ?? ''), { eod: b.eod === true, skills: b.skills });
   log('kontext', { user: u.id, tokens: r.tokens, cached: r.cached, slot: r.slot, questions: r.questions.length });
   send(res, 200, r);
+});
+
+// Claude-Konten der Person für die Brücke (Klartext nur über diesen Kanal; chat = Schlüssel aus der Anfrage).
+on('POST', /^\/internal\/claude-accounts$/, async (req, res) => {
+  const u = await internalUser(req, await body(req));
+  send(res, 200, { accounts: await claudeAccountsForBridge(u) });
 });
 
 on('POST', /^\/internal\/measure$/, async (req, res) => {
@@ -1682,6 +1916,58 @@ async function backgroundJobs() {
   const shareTick = async () => { try { await watchChatShares(); } catch (e: any) { log('freigaben', { error: String(e.message).slice(0, 200) }); } };
   setTimeout(shareTick, 3000);
   setInterval(shareTick, 60_000);
+
+  // Plan 81, Schnitt 3: was ein Agent fertig geschrieben hat, landet von selbst in „Meine Dateien“ (Vault-Notizen als
+  // Link, Dateien aus dem Arbeitsordner als Kopie); die Workstream-Übersichten der berührten Projekte ziehen nach.
+  let filesTickRunning = false;
+  const filesTick = async () => {
+    if (filesTickRunning) return; // ein Lauf zur Zeit — zwei gleichzeitige legten doppelte Einträge an (Review S2)
+    filesTickRunning = true;
+    try {
+      const touched = new Set<string>();
+      for (const person of (await teammates()).filter((x) => allowed(x.email))) {
+        try {
+          const r = await fetch(`${cfg.bridgeUrl}/sessions?user=${encodeURIComponent(person.id)}`, { headers: { 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' }, signal: AbortSignal.timeout(5000) });
+          if (!r.ok) continue;
+          const sessions = ((await r.json()) as any).sessions ?? [];
+          const { changed, projects } = await ingestSessions(person, sessions);
+          await noteFinishedRuns(person, sessions);
+          if (changed) log('agenten-dateien', { user: person.id, changed });
+          for (const id of projects) touched.add(id);
+        } catch (e: any) { log('agenten-dateien', { user: person.id, error: String(e?.message ?? e).slice(0, 200) }); } // nur diese Person
+      }
+      if (touched.size) {
+        const im = await issueMap();
+        for (const id of touched) {
+          const pr: any = await wb().collection('projects').findOne({ _id: id as any });
+          const ws = pr?.workstream ? im.get(pr.workstream) : undefined;
+          if (ws) await syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 160) }));
+        }
+      }
+      // Gezielter Roadmap-Nachzug nach fertigen Karten-Läufen (höchstens alle 20 min, Plan Roadmap-Automatik S2).
+      roadmapPrimed = true;
+      await tryStartSync();
+    } catch (e: any) { log('agenten-dateien', { error: String(e?.message ?? e).slice(0, 200) }); }
+    finally { filesTickRunning = false; }
+  };
+  setTimeout(filesTick, 20_000);
+  setInterval(filesTick, 2 * 60_000);
+
+  // Werkbank-Feed für den Vault-Sync-Snapshot und Abgleich der Freigaben mit dem Protokoll (alle 5 min).
+  const roadmapTick = async () => {
+    try { await writeRoadmapFeed(); await writeApprovals(); } catch (e: any) { log('roadmap-feed', { error: String(e?.message ?? e).slice(0, 160) }); }
+  };
+  setTimeout(roadmapTick, 30_000);
+  setInterval(roadmapTick, 5 * 60_000);
+  // Neues Protokoll (Fragen, „erledigt“) oder neuer Entwurf → offene Roadmap-Seiten laden nach (Review 6); dazu
+  // fällige Starts, die eine Sperre aufgehalten hat.
+  let seen = '';
+  setInterval(() => {
+    const now = `${mtime(join(cfg.vaultDir, SYNC_PROTOCOL))}|${mtime(join(cfg.vaultDir, WORK_DRAFT))}`;
+    if (seen && now !== seen) { roadmapChanged('protokoll'); writeApprovals().catch(() => {}); }
+    seen = now;
+    if (roadmapQueue.full || roadmapQueue.pending.size) tryStartSync().catch(() => {});
+  }, 60_000);
 }
 
 await connect();

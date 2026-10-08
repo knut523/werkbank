@@ -2,6 +2,9 @@
 // Er liefert dieselben Nachrichtenformen, damit Streaming, Statuszeilen und die
 // Bestätigungs-Rückfrage ohne echten Token durchgetestet werden können.
 // Enthält die Nachricht "schreib", versucht der Mock eine Datei zu schreiben (→ Rückfrage).
+// „mock-tool <Werkzeug> <JSON>“ ruft ein beliebiges Werkzeug auf und spielt dabei den Rechteweg des SDK nach:
+// PreToolUse-Hook → (ohne Entscheidung) Modus → im Auto-Modus ein Nachbau des Klassifikators (RISKANT → nachfragen,
+// VERBOTEN → ablehnen, sonst erlauben) → bei „nachfragen“ canUseTool. $CWD steht für den Arbeitsordner.
 
 import { randomUUID } from 'node:crypto';
 import { VAULT_DIR } from './tools.ts';
@@ -32,6 +35,28 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
 
   async function* run() {
     yield { type: 'system', subtype: 'init', session_id, mcp_servers: mcpList(options) };
+    // Mehrere Claude-Konten: Tokens mit „limit“ sind ausgeschöpft (rate_limit, Reset in 2 h), „midlimit“ erst nach einem
+    // Werkzeug mitten im Zug; „bad-auth“ wird abgelehnt. Tokens mit „acct“ nennen ihre letzten 4 Zeichen.
+    const tok = String(options.env?.CLAUDE_CODE_OAUTH_TOKEN ?? '');
+    const limited = function* () {
+      yield { type: 'rate_limit_event', session_id, rate_limit_info: { status: 'rejected', resetsAt: Math.floor(Date.now() / 1000) + 7200, rateLimitType: 'five_hour' } };
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, error: 'rate_limit', message: { content: [{ type: 'text', text: 'API Error: Rate limit reached' }] } };
+      yield { type: 'result', subtype: 'success', session_id, is_error: true, result: 'Rate limit reached', usage: { input_tokens: 0, output_tokens: 0 } };
+    };
+    if (/bad-auth/.test(tok)) {
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, error: 'authentication_failed', message: { content: [{ type: 'text', text: 'Invalid token' }] } };
+      yield { type: 'result', subtype: 'success', session_id, is_error: true, result: 'auth', usage: { input_tokens: 0, output_tokens: 0 } };
+      return;
+    }
+    if (/midlimit/.test(tok)) {
+      yield toolUse('Grep', { pattern: 'Vorarbeit', path: VAULT_DIR });
+      yield text('(Mock) Erste Schritte erledigt. ');
+      yield* limited();
+      return;
+    }
+    if (/limit/.test(tok)) { yield* limited(); return; }
+    if (/acct/.test(tok)) yield text(`(Mock) Konto: …${tok.slice(-4)}. `);
+    if (prompt === 'Antworte nur mit: ok') { yield text('ok'); yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 1 } }; return; }
     if (prompt.startsWith('WERKBANK-MCP-AUFRUF')) {
       // Ein bestätigter MCP-Aufruf: Werkzeug + Argumente aus dem Prompt, Ergebnis ins Protokoll (für Tests).
       const tool = prompt.match(/`(mcp__[^`]+)`/)?.[1] ?? '';
@@ -81,9 +106,103 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 100, output_tokens: 60 } };
       return;
     }
+    if (/live-test/i.test(last)) {
+      // Live-Anzeige (07.10.2026): Gedanken als Deltas, Werkzeugbeginn vor fertiger Eingabe, Lebenszeichen nach 5 s.
+      // Ereignisformen wie die Anthropic-Streaming-API (content_block_start/-delta), die das SDK als stream_event durchreicht.
+      const ev = (event: Record<string, unknown>) => ({ type: 'stream_event', parent_tool_use_id: null, session_id, event });
+      yield text(`(Mock) thinking-display: ${options.extraArgs?.['thinking-display'] ?? '—'}. `);
+      yield ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } });
+      for (const t of ['Ich überlege, ', 'wo das steht.']) { yield ev({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: t } }); await sleep(30); }
+      const id = randomUUID();
+      yield ev({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id, name: 'Task', input: {} } });
+      for (const part of ['{"description":', '"Recherche",', '"prompt":"…"}']) { yield ev({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: part } }); await sleep(300); }
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, message: { content: [{ type: 'tool_use', id, name: 'Task', input: { description: 'Recherche', prompt: '…' } }] } };
+      yield { type: 'tool_progress', parent_tool_use_id: null, session_id, tool_use_id: id, tool_name: 'Task', elapsed_time_seconds: 6 };
+      yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: 'ok' }] }] } };
+      yield text('(Mock) Fertig.');
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 10, output_tokens: 5 } };
+      return;
+    }
+    const orch = last.match(/^orchestrator-(test|viele)$/i);
+    if (orch && guard) {
+      // Orchestrator (P2): der Haupt-Faden startet Teilagenten (Task), deren Werkzeuge kommen mit parent_tool_use_id und
+      // feuern den Hook mit agent_id/agent_type (wie sdk.d.ts BaseHookInput). Danach die Ergebnisse und die Zusammenfassung.
+      yield text(`(Mock) Rollen: ${Object.keys(options.agents ?? {}).join(',') || '—'}. `);
+      const plan: [string, string][] = orch[1] === 'viele'
+        ? Array.from({ length: 6 }, (_, i) => ['leser', `Recherche ${i + 1}`])
+        : [['ticket-pruefer', 'PM-321 prüfen'], ['ticket-pruefer', 'PM-322 prüfen'], ['schreiber', 'Notiz anlegen']];
+      const started: { id: string; role: string; desc: string; agentId: string }[] = [];
+      for (const [role, desc] of plan) {
+        const id = randomUUID();
+        const input = { description: desc, subagent_type: role, prompt: '…' };
+        yield { type: 'assistant', parent_tool_use_id: null, session_id, message: { content: [{ type: 'tool_use', id, name: 'Task', input }] } };
+        const r = await guard({ hook_event_name: 'PreToolUse', tool_name: 'Task', tool_input: input }, id, { signal });
+        if (r?.hookSpecificOutput?.permissionDecision === 'deny') { yield { type: 'user', session_id, parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: 'abgelehnt' }] } }; continue; }
+        started.push({ id, role, desc, agentId: randomUUID() });
+      }
+      const results: string[] = [];
+      for (const a of started) {
+        const sub = (name: string, input: Record<string, unknown>) => ({ type: 'assistant', parent_tool_use_id: a.id, session_id, message: { content: [{ type: 'tool_use', id: randomUUID(), name, input }] } });
+        const hook = (name: string, input: Record<string, unknown>) => guard({ hook_event_name: 'PreToolUse', tool_name: name, tool_input: input, agent_id: a.agentId, agent_type: a.role }, randomUUID(), { signal });
+        const g = { pattern: a.desc.split(' ')[0], path: VAULT_DIR };
+        yield sub('Grep', g); await hook('Grep', g);
+        if (a.desc === 'PM-322 prüfen') {
+          const w = { file_path: `${VAULT_DIR}/_werkbank-mock/pruefer.md`, content: 'x' };
+          yield sub('Write', w);
+          const r = await hook('Write', w);
+          results.push(`${a.desc}: Schreiben ${r?.hookSpecificOutput?.permissionDecision === 'allow' ? 'erlaubt' : 'abgelehnt'}`);
+        } else if (a.role === 'schreiber') {
+          const w = { file_path: `${VAULT_DIR}/_werkbank-mock/orchestrator.md`, content: '# Ergebnis\n' };
+          yield sub('Write', w);
+          const r = await hook('Write', w);
+          results.push(`${a.desc}: ${r?.hookSpecificOutput?.permissionDecision === 'allow' ? 'geschrieben' : 'nicht geschrieben'}`);
+        } else results.push(`${a.desc}: ok`);
+        yield { type: 'user', session_id, parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: a.id, content: [{ type: 'text', text: results.at(-1) }] }] } };
+      }
+      yield text(`\n\n(Mock) Zusammenfassung von ${started.length} Teilagenten: ${results.join('; ')}.`);
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 300, output_tokens: 90 } };
+      return;
+    }
+    const slow = last.match(/^langsam (\d+)$/);
+    if (slow) {
+      // Ein langer Zug (Sperre je Person, E5): wartet N ms, dann eine Zeile.
+      await sleep(Math.min(Number(slow[1]), 10000));
+      yield text('(Mock) Langsamer Zug fertig.');
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
     if (/skill-test/i.test(last)) yield toolUse('Skill', { skill: 'olaf-jira' });
     if (/konfig-test/i.test(last)) {
       yield text(`(Mock) Konfig: ${options.env?.CLAUDE_CONFIG_DIR ?? 'geteilt'}; strict: ${options.strictMcpConfig === true}; Nutzer-Hooks aus: ${options.settings?.disableAllHooks === true}; MCP: ${Object.keys(options.mcpServers ?? {}).join(',')}. `);
+      yield text(`(Mock) Modus: ${options.permissionMode}; Deny-Regeln: ${options.settings?.permissions?.deny?.length ?? 0}; bypass aus: ${options.settings?.permissions?.disableBypassPermissionsMode === 'disable'}. `);
+    }
+    const mt = last.match(/^mock-tool (\S+) (\{.*\})\s*$/);
+    if (mt) {
+      const name = mt[1];
+      const input = JSON.parse(mt[2].replaceAll('$CWD', String(options.cwd ?? '.')));
+      const denials: any[] = [];
+      yield text(`(Mock) Modus: ${options.permissionMode}. `);
+      const id = randomUUID();
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, message: { content: [{ type: 'tool_use', id, name, input }] } };
+      const r = guard ? await guard({ hook_event_name: 'PreToolUse', tool_name: name, tool_input: input }, id, { signal }) : {};
+      let d: string | undefined = r?.hookSpecificOutput?.permissionDecision;
+      if (!d) {
+        const mode = options.permissionMode ?? 'default';
+        const what = JSON.stringify(input);
+        const v = mode === 'auto' ? (/VERBOTEN/.test(what) ? 'deny' : /RISKANT/.test(what) ? 'ask' : 'allow') : mode === 'dontAsk' ? 'deny' : 'ask';
+        if (v === 'ask') {
+          const c = await options.canUseTool?.(name, input, { signal, toolUseID: id, decisionReason: mode === 'auto' ? '\u001b[1mKlassifikator\u001b[0m: Löschen außerhalb von Build-Artefakten' : undefined });
+          d = c?.behavior === 'allow' ? 'allow' : 'deny';
+        } else if (v === 'deny') {
+          d = 'deny';
+          denials.push({ tool_name: name, tool_use_id: id, tool_input: input });
+          yield { type: 'system', subtype: 'permission_denied', tool_name: name, tool_use_id: id, decision_reason_type: mode === 'auto' ? 'classifier' : 'mode', message: 'abgelehnt', session_id };
+        } else d = 'allow';
+      }
+      yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, ...(d === 'allow' ? { content: [{ type: 'text', text: 'ok' }] } : { is_error: true, content: 'abgelehnt' }) }] } };
+      yield text(d === 'allow' ? `(Mock) ${name} ausgeführt.` : `(Mock) ${name} nicht ausgeführt.`);
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 10, output_tokens: 5 }, permission_denials: denials };
+      return;
     }
     // „jira-kommentar PM-123“: Claude kommentiert im Chat über den Atlassian-MCP (Rückfrage → ja → Ergebnis).
     const jk = last.match(/jira-kommentar ([A-Z][A-Z0-9]+-\d+)/);
