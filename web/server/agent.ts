@@ -127,6 +127,8 @@ export async function createLibreChat(u: User, text: string): Promise<string> {
     signal: AbortSignal.timeout(20_000),
   });
   const j: any = await r.json().catch(() => ({}));
+  if (r.status === 429) throw Object.assign(new Error('LibreChat-Parallelgrenze erreicht (CONCURRENT_MESSAGE_MAX) — gerade laufen zu viele Antworten in diesem Konto. Später noch einmal.'), { status: 429 });
+  if (r.status === 409) throw Object.assign(new Error(String(j?.error ?? 'LibreChat: Konflikt (vorige Antwort wird noch gespeichert).')), { status: 409 });
   if (!r.ok || !j.conversationId) {
     const why = j?.message ?? j?.error ?? `LibreChat antwortet mit ${r.status}`;
     throw Object.assign(new Error(/no_user_key/.test(JSON.stringify(j)) ? 'Im Chat ist noch kein Claude-Token hinterlegt — unter „Einrichtung“ eintragen.' : `Chat konnte nicht angelegt werden: ${String(why).slice(0, 200)}`), { status: 502 });
@@ -134,11 +136,13 @@ export async function createLibreChat(u: User, text: string): Promise<string> {
   return String(j.conversationId);
 }
 
-export interface AgentPlace { projectName?: string | null; areaDir?: string | null; personName?: string | null }
+export interface AgentPlace { projectName?: string | null; areaDir?: string | null; personName?: string | null; specPath?: string | null }
 
 /** Projekt und Workstream-Bereich als Zeile für den Prompt (Plan 81, Schnitte 6/7). */
 export function placeLine(place: AgentPlace = {}): string {
-  const parts = [place.projectName ? `Projekt: ${place.projectName}` : '', place.areaDir ? `Workstream-Bereich im Vault: ${place.areaDir}/ (Plan und neue Notizen dorthin, wenn es keinen besseren Ort gibt)` : ''].filter(Boolean);
+  const parts = [place.projectName ? `Projekt: ${place.projectName}` : '', place.areaDir ? `Workstream-Bereich im Vault: ${place.areaDir}/ (Plan und neue Notizen dorthin, wenn es keinen besseren Ort gibt)` : '',
+    // „Agent ansetzen“ an einer Spec (Bedingung 8): die Spec als Pfad, nicht als Text in der Notiz.
+    place.specPath ? `Spec (Roadmap, Grundlage des Auftrags): ${place.specPath} — lies sie zuerst vollständig; Ziel und Definition of Done gelten wörtlich.` : ''].filter(Boolean);
   return parts.join('\n');
 }
 

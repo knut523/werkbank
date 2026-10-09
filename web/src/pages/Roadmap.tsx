@@ -2,6 +2,7 @@
 // Alles aus dem Vault (lesend); geschrieben wird nur eine Antwort („- Knut:“) oder ein Rang-Vorschlag —
 // jeweils nach Vorschau und Bestätigung. GitHub nur lesend (Links).
 import { useMemo, useState, type CSSProperties } from 'react';
+import { AnsetzenButton } from '../AgentAnsetzen';
 import { api, type Config } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, StateChip, useJiraLive } from '../ui.tsx';
 
@@ -30,7 +31,7 @@ function NextUp({ d }: { d: any }) {
   );
 }
 
-function Prio({ d, reload }: { d: any; reload: () => void }) {
+function Prio({ d, reload, admin }: { d: any; reload: () => void; admin: boolean }) {
   const [order, setOrder] = useState<string[] | null>(null);
   const [why, setWhy] = useState('');
   const [err, setErr] = useState<unknown>(null);
@@ -94,7 +95,7 @@ function Prio({ d, reload }: { d: any; reload: () => void }) {
                   <tr key={r.spec} data-spec={r.spec} className={order && full.rank !== i + 1 ? 'moved' : ''}>
                     <td><span className="chip rank">#{i + 1}</span>{order && full.rank !== i + 1 && <span className="tiny"> (war {full.rank})</span>}</td>
                     <td className="nowrap"><button className="btn ghost small" aria-label={`${r.spec} hoch`} onClick={() => move(r.spec, -1)}>▲</button><button className="btn ghost small" aria-label={`${r.spec} runter`} onClick={() => move(r.spec, 1)}>▼</button></td>
-                    <td>{full.path ? <a href={note(full.path)}>{r.spec}</a> : r.spec}{full.open > 0 && <span className="chip warn" title="offene Knut-Zeilen">❓ {full.open}</span>}{full.why && <details><summary className="tiny">Gründe</summary><span className="tiny">{full.why}</span></details>}</td>
+                    <td>{full.path ? <a href={note(full.path)}>{r.spec}</a> : r.spec}{full.open > 0 && <span className="chip warn" title="offene Knut-Zeilen">❓ {full.open}</span>}{full.path && <> <AnsetzenButton path={full.path} state={full.folderState} open={full.open} admin={admin} /></>}{full.why && <details><summary className="tiny">Gründe</summary><span className="tiny">{full.why}</span></details>}</td>
                     <td className="tiny">{full.state}</td>
                     <td title={`GW ${full.gw} · ZK ${full.zk} · RR ${full.rr} · Größe ${full.size}`}>{Number(full.wsjf ?? 0).toFixed(1)}</td><td>{full.cat}</td>
                     <td className="tiny">{full.blocked}</td><td className="tiny">{full.next}</td>
@@ -505,7 +506,7 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
         {TABS.map(([id, label]) => <a key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} href={`#/roadmap/${id}`}>{label}{d && id === 'entscheidungen' ? ` (${d.decisions.length})` : d && id === 'prs' ? ` (${d.prs.length})` : d && id === 'prio' ? ` (${d.ranking.length})` : ''}</a>)}
       </div>
       {r.error && <Err e={r.error} />}
-      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' ? <Check d={d} /> : <Prio d={d} reload={r.reload} />}
+      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' ? <Check d={d} /> : <Prio d={d} reload={r.reload} admin={cfg.user?.role === 'ADMIN'} />}
     </div>
   );
 }

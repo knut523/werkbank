@@ -70,6 +70,12 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       const { join } = await import('node:path');
       const inp: any = ok.updatedInput;
       appendFileSync(join(process.env.BRIDGE_STATE_DIR ?? '.', 'mock-mcp-calls.jsonl'), JSON.stringify({ tool, input: inp }) + '\n');
+      if (tool.endsWith('createJiraIssue')) {
+        // Anlegen gegen den Jira-Nachbau; die Antwort trägt den Schlüssel wie der echte MCP (JSON mit id/key/self).
+        const created = await replayCreate(inp);
+        yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: !created.ok, content: [{ type: 'text', text: created.text }] }] } };
+        return;
+      }
       const err = await replayJira(tool, inp);
       if (err) { yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: err }] } }; return; }
       yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: 'OK (Mock)' }] }] } };
@@ -243,6 +249,16 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
 /** MCP-Server, wie Claude Code sie in der Init-Nachricht meldet — nur die übergebenen (strictMcpConfig). */
 function mcpList(options: Record<string, any>) {
   return Object.keys(options.mcpServers ?? {}).map((name) => ({ name, status: name === 'atlassian' ? process.env.BRIDGE_MOCK_ATLASSIAN || 'connected' : 'connected' }));
+}
+
+/** createJiraIssue gegen den Jira-Nachbau (POST /issue). Ohne Nachbau: fester Schlüssel PM-9000. */
+async function replayCreate(inp: any): Promise<{ ok: boolean; text: string }> {
+  const base = process.env.BRIDGE_MOCK_JIRA_BASE;
+  if (!base) return { ok: true, text: JSON.stringify({ id: '9000', key: 'PM-9000', self: 'mock' }) };
+  const fields: any = { project: { key: inp.projectKey }, issuetype: { name: inp.issueTypeName }, summary: inp.summary, description: inp.description, ...(inp.parent ? { parent: { key: inp.parent } } : {}), ...(inp.assignee_account_id ? { assignee: { accountId: inp.assignee_account_id } } : {}), ...(inp.additional_fields ?? {}) };
+  const r = await fetch(base + '/issue', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Basic ' + Buffer.from('mcp:mock').toString('base64') }, body: JSON.stringify({ fields }) });
+  const text = await r.text();
+  return r.ok ? { ok: true, text } : { ok: false, text: `Jira ${r.status}: ${text.slice(0, 200)}` };
 }
 
 /** Mit BRIDGE_MOCK_JIRA_BASE spielt der Mock den Atlassian-MCP gegen einen Jira-Nachbau (REST) nach. Fehlertext oder ''. */

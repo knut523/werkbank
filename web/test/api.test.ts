@@ -24,6 +24,7 @@ const DATA = join(tmp, 'data');
 const CREDS_KEY = randomBytes(32).toString('hex'), CREDS_IV = randomBytes(16).toString('hex');
 const INTERNAL = randomBytes(16).toString('hex'), REFRESH_SECRET = randomBytes(16).toString('hex'), JWT_SECRET = randomBytes(16).toString('hex');
 const lcChats: any[] = [];
+let lcBusy = false;   // LibreChat-Parallelgrenze nachstellen (429)
 const users = {
   a: { _id: new ObjectId(), email: 'anna@maxenergy.at', name: 'Anna Test', pw: 'pw-anna' },
   b: { _id: new ObjectId(), email: 'bernd@maxenergy.at', name: 'Bernd Test', pw: 'pw-bernd' },
@@ -54,6 +55,7 @@ before(async () => {
     let b = ''; for await (const c of req) b += c;
     // Nachbau von LibreChats „Nachricht senden“: Zugangstoken prüfen, Unterhaltung anlegen, Zug an die Brücke.
     if (req.url === '/api/agents/chat/Claude%20Code') {
+      if (lcBusy) { res.writeHead(429, { 'content-type': 'application/json' }); res.end('{}'); return; }
       const { verifyJwt } = await import('../server/auth.ts');
       const p = verifyJwt(String(req.headers.authorization ?? '').replace(/^Bearer /, ''), JWT_SECRET);
       if (!p?.id) { res.writeHead(401); res.end('{}'); return; }
@@ -91,6 +93,9 @@ before(async () => {
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
       WERKBANK_GOAL_PROPOSALS: join(tmp, 'vorschlag.json'), WERKBANK_SPEC_CREATE: 'on', WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
       WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vault-sync'), WERKBANK_VAULT_SYNC_SCRIPT: join(tmp, 'fake-vault-sync.sh'),
+      // Abend-Slot nur über den ausdrücklichen Tagesabschluss — sonst hinge der Test an der Uhrzeit (ab 16 Uhr scheiterte er).
+      WERKBANK_EOD_HOUR: '24',
+      WERKBANK_ANSETZEN: 'live',   // echter Weg gegen den Jira-Nachbau (Brücke im Mock-Modus spielt createJiraIssue nach)
     },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -1023,5 +1028,124 @@ test('Roadmap-Automatik: „Für mich offen“, Ja/Nein auf Sync-Fragen nur für
   assert.equal(readFileSync(hubPath, 'utf8'), hubBefore + '\n<!-- werkbank:woran-wir-arbeiten -->\nNeu: #294 offen.\n<!-- /werkbank:woran-wir-arbeiten -->\n\nDanach bleibt.\n');
   assert.equal((await anna.req('/api/roadmap/mine')).j.draft, null, 'übernommener Entwurf erscheint nicht wieder');
   writeFileSync(hubPath, hubBefore);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+});
+
+// --- „Agent ansetzen“ an einer Spec (docs/plan-agent-ansetzen.md, Bedingungen 1–4, 7–10 aus plan-roadmap-zu-agent) ---
+
+test('Agent ansetzen: Vorschau schreibt nichts, Sperren, genau ein Ticket, Zurücklesen, Spec-Link, Agent', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  const RM = 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/Service-View';
+  const creates = () => jira.writes.filter((w) => w.type === 'create').length;
+  const go = (body: any, c = anna) => c.req('/api/roadmap/ansetzen', { body });
+  // Spec in 3-Plan anlegen (Vorlage) und ohne offene Entscheidung füllen.
+  const mkSpec = async (slug: string, title: string, extra = '') => {
+    const r = await anna.req('/api/roadmap/spec-new', { body: { topic: 'Service-View', state: '3-Plan', slug, title, confirm: true } });
+    assert.equal(r.status, 200, JSON.stringify(r.j));
+    writeFileSync(join(VAULT, r.j.path), `---\ntitle: "olaf — Spec: ${title}"\nlifecycle: plan\n---\n\n# ${title}\n\n**Ziel:** Kundinnen bekommen rechtzeitig eine Erinnerung.\n\n## Definition of Done\n\n- Erinnerung geht 3 Tage vorher raus\n- Abmeldelink funktioniert\n\n## Offene Punkte\n\n- Kanal? Empfehlung: Mail\n  - Knut: Mail\n${extra}`);
+    return r.j.path as string;
+  };
+  // Bedingung 1: nur Admins; Bedingung 4: offene Knut-Zeile → kein Ansetzen.
+  const kr = await anna.req('/api/roadmap/spec-new', { body: { topic: 'Service-View', state: '3-Plan', slug: 'offene-frage', title: 'Mit offener Frage', confirm: true } });
+  const kunden = kr.j.path;   // Vorlage: „- Knut:“ noch leer
+  assert.equal((await go({ path: kunden }, bernd)).status, 403);
+  const g = await go({ path: kunden });
+  assert.equal(g.status, 200);
+  assert.equal(g.j.gate.ok, false); assert.match(g.j.gate.why, /offene Entscheidung/);
+  assert.equal((await go({ path: kunden, confirm: true, hash: g.j.hash })).status, 409);
+  const p1 = await mkSpec('zaehler-erinnerung', 'Zählerstand-Erinnerung per Mail');
+  const w0 = jira.writes.length;
+  const pre = await go({ path: p1 });
+  assert.equal(pre.status, 200, JSON.stringify(pre.j));
+  assert.equal(jira.writes.length, w0, 'Vorschau: 0 Schreibvorgänge');
+  assert.equal(pre.j.mode, 'live'); assert.equal(pre.j.gate.ok, true); assert.equal(pre.j.ready, true);
+  assert.equal(pre.j.draft.parent, 'PM-70'); assert.equal(pre.j.draft.assigneeId, 'acc-knutpeters'); assert.equal(pre.j.draft.priority, 'Medium');
+  assert.match(pre.j.draft.description, /^Ziel: Kundinnen bekommen rechtzeitig eine Erinnerung\.\nErgebnis: /);
+  assert.match(pre.j.draft.description, /spec: service-view-spec-zaehler-erinnerung|spec: [a-z]+-spec-zaehler-erinnerung/);
+  assert.match(pre.j.draft.description, /- Erinnerung geht 3 Tage vorher raus/);
+  assert.match(pre.j.draft.duedate, /^\d{4}-\d{2}-\d{2}$/); assert.ok(pre.j.draft.dueHow);
+  assert.deepEqual(pre.j.duplicates, []);
+  // Falscher Hash (Spec seit der Vorschau geändert) → nichts angelegt.
+  assert.equal((await go({ path: p1, confirm: true, hash: 'falsch' })).status, 409);
+  // Ohne Claude-Token: klare Meldung, nichts angelegt (Bernd als Admin, ohne Claude).
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.b.email }, { $set: { role: 'ADMIN' } });
+  const nb = await go({ path: p1, confirm: true, hash: pre.j.hash }, bernd);
+  assert.equal(nb.status, 412); assert.match(nb.j.error, /Nichts angelegt/);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.b.email }, { $set: { role: 'USER' } });
+  assert.equal(creates(), 0);
+
+  // Fehler nach dem POST (Jira legt an, antwortet 500): Ergebnis „unklar“, kein zweites Ticket beim erneuten Klick.
+  jira.faults.createAfter = true;
+  const u1 = await go({ path: p1, confirm: true, hash: pre.j.hash });
+  assert.equal(u1.status, 200, JSON.stringify(u1.j));
+  assert.equal(u1.j.needsChoice, 'unklar');
+  assert.equal(creates(), 1);
+  const made = jira.writes.filter((w) => w.type === 'create').at(-1).key;
+  assert.ok(u1.j.candidates.some((c: any) => c.key === made), 'Kandidat über die Spec-Kennung gefunden');
+  const u2 = await go({ path: p1, confirm: true, hash: pre.j.hash });
+  assert.equal(u2.j.needsChoice, 'unklar'); assert.equal(creates(), 1, 'erneuter Klick = kein zweiter POST');
+  // Knut übernimmt das gefundene Ticket; dabei fehlt Owner/Fälligkeit (Feld beim Anlegen „verloren“) → nachgezogen.
+  const fixedBefore = jira.writes.filter((w) => w.type === 'edit').length;
+  jira.issues.find((i) => i.key === made).fields.duedate = null;
+  // Parallelgrenze voll (429) und Vault-Sync läuft: Ticket ok, Spec-Link und Agent „offen“ — sichtbar, nicht halb.
+  lcBusy = true;
+  mkdirSync(join(tmp, 'vault-sync'), { recursive: true });
+  writeFileSync(join(tmp, 'vault-sync', '.lock'), '');
+  const holder = spawn('flock', [join(tmp, 'vault-sync', '.lock'), 'sleep', '20'], { stdio: 'ignore', detached: true });
+  await new Promise((r) => setTimeout(r, 300));
+  const u3 = await go({ path: p1, confirm: true, hash: pre.j.hash, useKey: made });
+  assert.equal(u3.status, 200, JSON.stringify(u3.j));
+  assert.equal(u3.j.key, made); assert.equal(u3.j.readback.ok, true); assert.deepEqual(u3.j.readback.fixed, ['duedate']);
+  assert.ok(jira.writes.filter((w) => w.type === 'edit').length > fixedBefore, 'Fälligkeit nachgezogen');
+  assert.equal(u3.j.link.state, 'offen'); assert.match(u3.j.link.why, /Vault-Sync/);
+  assert.equal(u3.j.agent.state, 'offen'); assert.match(u3.j.agent.why, /Parallelgrenze/);
+  assert.doesNotMatch(readFileSync(join(VAULT, p1), 'utf8'), new RegExp(made));
+  process.kill(-holder.pid!); lcBusy = false;   // ganze Gruppe (flock + sleep hält die Sperre)
+  await new Promise((r) => setTimeout(r, 200));
+  // Fortsetzen: Link und Agent werden nachgeholt, kein neues Ticket.
+  const n0 = lcChats.length;
+  const u4 = await go({ path: p1, confirm: true, hash: pre.j.hash });
+  assert.equal(u4.status, 200, JSON.stringify(u4.j));
+  assert.equal(creates(), 1);
+  assert.equal(u4.j.link.state, 'ok');
+  assert.match(readFileSync(join(VAULT, p1), 'utf8'), new RegExp(`^jira: ${made}$`, 'm'));
+  assert.equal(u4.j.agent.state, 'gestartet', JSON.stringify(u4.j.agent));
+  assert.equal(lcChats.length, n0 + 1);
+  const text = lcChats.at(-1).body.text;
+  assert.match(text, new RegExp(`^${made} · Zählerstand-Erinnerung per Mail`));
+  assert.ok(text.includes(`Spec (Roadmap, Grundlage des Auftrags): ${p1}`), 'Spec als Pfad im Auftrag (Bedingung 8)');
+  assert.match(text, /Modus BIS REVIEW/);
+  const run: any = await mongo.db(DB).collection('agent_runs').findOne({ key: made, origin: 'ansetzen' });
+  assert.equal(run?.specPath, p1);
+  // Noch ein Klick: nichts Neues (kein Ticket, kein zweiter Agent).
+  const u5 = await go({ path: p1, confirm: true, hash: (await go({ path: p1 })).j.hash });
+  assert.equal(u5.status, 200); assert.equal(creates(), 1); assert.equal(lcChats.length, n0 + 1);
+
+  // Frisch angelegt, Feld beim Anlegen verloren (Priorität) → nach dem Zurücklesen nachgezogen, dann Link + Agent.
+  const p2 = await mkSpec('tarifwechsel-hinweis', 'Tarifwechsel-Hinweis im Kundenportal');
+  const pre2 = await go({ path: p2, mode: 'plan', note: 'Bitte nur planen' });
+  jira.faults.dropFields = ['priority'];
+  const c2 = await go({ path: p2, confirm: true, hash: pre2.j.hash, mode: 'plan', note: 'Bitte nur planen' });
+  assert.equal(c2.status, 200, JSON.stringify(c2.j));
+  assert.equal(creates(), 2);
+  assert.deepEqual(c2.j.readback.fixed, ['priority']);
+  assert.equal(jira.issues.find((i) => i.key === c2.j.key).fields.priority.name, 'Medium');
+  assert.equal(c2.j.link.state, 'ok'); assert.equal(c2.j.agent.state, 'gestartet');
+  assert.match(lcChats.at(-1).body.text, /Modus NUR PLAN[\s\S]*Hinweis von Anna: Bitte nur planen/);
+  const created2 = jira.writes.filter((w) => w.type === 'create').at(-1).fields;
+  assert.equal(created2.parent.key, 'PM-70'); assert.equal(created2.assignee.accountId, 'acc-knutpeters'); assert.match(created2.duedate, /^\d{4}-\d{2}-\d{2}$/);
+
+  // Dublette: gleicher Titel wie ein bestehendes Ticket → Vorschau zeigt es, Anlegen nur nach Wahl.
+  const p3 = await mkSpec('hardware-admin-flow', 'Hardware Admin Flow');
+  const pre3 = await go({ path: p3 });
+  assert.ok(pre3.j.duplicates.some((d: any) => d.key === 'PM-321'), JSON.stringify(pre3.j.duplicates));
+  const d3 = await go({ path: p3, confirm: true, hash: pre3.j.hash });
+  assert.equal(d3.j.needsChoice, 'dublette'); assert.equal(creates(), 2, 'Dublette → kein Anlegen');
+  const a3 = await go({ path: p3, confirm: true, hash: pre3.j.hash, useKey: 'PM-321' });
+  assert.equal(a3.status, 200, JSON.stringify(a3.j));
+  assert.equal(a3.j.key, 'PM-321'); assert.equal(creates(), 2); assert.equal(a3.j.readback.existing, true, 'übernommenes Ticket bleibt, wie es ist');
+  assert.match(readFileSync(join(VAULT, p3), 'utf8'), /^jira: PM-321$/m);
+  assert.equal((await go({ path: p3, confirm: true, hash: (await go({ path: p3 })).j.hash, useKey: 'PM-99999' })).status, 404);
   await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
 });

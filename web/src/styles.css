@@ -310,3 +310,9 @@ tr.proposed td { background: color-mix(in srgb, var(--chip-ok) 45%, transparent)
 .prio-sel { font-size: 11px; padding: 1px 4px; border-radius: 6px; }
 .tb-block .sublink { text-align: left; }
 .spec-goal { font-size: 11px; padding: 1px 4px; margin-left: 4px; max-width: 120px; }
+
+/* Agent ansetzen (docs/plan-agent-ansetzen.md) */
+.btn.wide { width: 100%; justify-content: center; }
+.step .num.bad { background: var(--chip-bad); color: var(--chip-bad-text); }
+.dialog.ansetzen input:not([type=radio]), .dialog.ansetzen select, .dialog.ansetzen textarea { width: 100%; }
+@media (max-width: 520px) { .ansetzen-actions .btn.primary { width: 100%; justify-content: center; } }
