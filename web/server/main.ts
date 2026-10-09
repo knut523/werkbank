@@ -846,7 +846,7 @@ function roadmapSpecs(local?: Map<string, { ziel: string | null }>) {
 }
 
 on('GET', /^\/api\/roadmap$/, async (req, res) => {
-  await needUser(req);
+  const u = await needUser(req);
   const idx = vaultIdx();
   const im = await issueMap();
   const rm = roadmap(idx, ROADMAP_BASE);
@@ -861,7 +861,7 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
         const prs = prRefs(text);
         const n = idx.notes.get(sp.path)!;
         const tickets = n.tickets.map((k) => ({ key: k, status: im.get(k)?.status ?? null, summary: im.get(k)?.summary ?? null }));
-        const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text), jiraKey: n.fm.jira != null && String(n.fm.jira).trim() !== '' && String(n.fm.jira) !== '[]' };
+        const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text), verified: n.fm['last-verified'] ? String(n.fm['last-verified']).slice(0, 10) : null, jiraKey: n.fm.jira != null && String(n.fm.jira).trim() !== '' && String(n.fm.jira) !== '[]' };
         byName.set(n.name, info);
         for (const pr of prs) specPrs.set(pr, [...(specPrs.get(pr) ?? []), n.name]);
         for (const d of ds) if (d.open) decisions.push({ ...d, path: sp.path, spec: n.name, title: sp.title, topic: t.name, state, hash: info.hash });
@@ -913,7 +913,11 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
   const livePr = (pr: string) => { const l = gh.map.get(pr); return l ? { pr, conflict: l.mergeable === 'CONFLICTING', draft: l.isDraft, review: l.reviewDecision, turn: l.turn.who } : { pr, closed: ghOk }; };
   const specList = [...byName.values()].map((x) => ({ ...x, prLive: x.prs.map(livePr) }));
   const insights = roadmapInsights(specList, ranking, { sprintTickets });
+  // Laufende Agenten je Ticket (Überblick: „In Arbeit“).
+  const agents: Record<string, string> = {};
+  for (const r of await wb().collection('agent_runs').find({ status: { $in: ['läuft', 'wartet auf ja'] } }, { projection: { key: 1, status: 1 } }).toArray() as any[]) if (r.key && agents[r.key] !== 'wartet auf ja') agents[r.key] = r.status;
   send(res, 200, {
+    agents, admin: u.role === 'ADMIN',
     ...insights, kanbanStates: KANBAN_STATES, sprint: cur ? { id: cur.id, date: cur.date, tickets: sprintTickets.size } : null,
     base: ROADMAP_BASE, states: rm.states, overview: rm.overview,
     topics: rm.topics.map((t) => ({ name: t.name, overview: t.overview, states: Object.fromEntries(Object.entries(t.states).map(([st, specs]) => [st, specs.map((sp) => byName.get(idx.notes.get(sp.path)!.name))])) })),
@@ -992,7 +996,7 @@ async function tryStartSync(): Promise<boolean> {
 }
 
 /** „Wartet auf dich“ (früher „Für mich offen“ auf der Roadmap, jetzt auf „Heute“): PRs, Sync-Fragen, Entwurf, Tickets. */
-async function mineFor(u: User) {
+async function mineFor(u: User, { write = true } = {}) {
   const me = firstName(u).toLowerCase();
   const prs = ((await wb().collection('github_prs').find({}, { projection: { _id: 0 } }).toArray()) as any[])
     .filter((p) => String(p.turn?.who ?? '').toLowerCase().split(/,\s*/).includes(me))
@@ -1006,7 +1010,7 @@ async function mineFor(u: User) {
   const admin = u.role === 'ADMIN';
   let questions: any[] = [], draft: any = null, section: string | null = null, pendingApprovals: any[] = [];
   if (admin) {
-    writeApprovals().catch((e) => log('roadmap-freigaben', { error: String(e?.message ?? e).slice(0, 160) }));   // nicht warten: GET bleibt lesend schnell
+    if (write) writeApprovals().catch((e) => log('roadmap-freigaben', { error: String(e?.message ?? e).slice(0, 160) }));   // nicht warten: GET bleibt lesend schnell
     const protocol = readVault(SYNC_PROTOCOL);
     const qs = parseSyncQuestions(protocol);
     section = qs[0]?.section ?? null;
@@ -1063,11 +1067,13 @@ async function myQueue(u: User) {
 /** Zähler für die Navigation: alles, was etwas von der Person will (laufende Agenten nicht). */
 async function todayCount(u: User, queue?: any[], mine?: any) {
   const q = queue ?? await myQueue(u);
-  const m = mine ?? await mineFor(u);
+  const m = mine ?? await mineFor(u, { write: false });   // Zähler (alle 60 s): nur lesen, nie freigaben.md schreiben
   const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
   const hyg = h.items.filter((i: any) => !h.snoozed.includes(i.key)).length;
   return q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + hyg;
 }
+
+const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
 on('GET', /^\/api\/today$/, async (req, res) => {
   const u = await needUser(req);
@@ -1075,7 +1081,7 @@ on('GET', /^\/api\/today$/, async (req, res) => {
   const today = vienna().date;
   const im = await issueMap();
   const day = ((await tbCol().find({ userId: u.id, date: today }).sort({ start: 1 }).toArray()) as any[])
-    .map((b) => ({ id: String(b._id), start: b.start, end: b.end, title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: !!b.done }));
+    .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
   send(res, 200, { queue, mine, day, today, count: await todayCount(u, queue, mine), dryRun: dryRun() });
 });
 

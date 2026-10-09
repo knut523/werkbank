@@ -237,7 +237,7 @@ test('Rundenende (Review-Schlange): Schrittlimit, Absturz, offene Rückfrage mit
   assert.equal((await until('c31b', (s) => s.status === 'bereit')).end, 'error');
   await send('c31c', 'schreib eine Notiz', { user: 'u31' });
   const p = await until('c31c', (s) => s.status === 'wartet auf ja');
-  assert.match(p.question, /notiz\.md/, 'Fragetext: was freigegeben wird');
+  assert.match(p.question, /^Soll ich die Datei .*notiz\.md schreiben\?$/, 'Fragetext: was freigegeben wird');
   assert.equal(p.end, null, 'solange sie wartet, kein Ende');
   await send('c31c', 'nein', { user: 'u31' });
   const done = await until('c31c', (s) => s.status === 'bereit');

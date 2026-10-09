@@ -293,6 +293,13 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
   return `${neutralizeAnswerAnchors('', `**Soll ich ${what}?**\n\n${detail}`)}\n\n${ANSWER_BUTTONS}`;
 }
 
+/** Die Rückfrage als ein Satz (ohne Markdown) für die Review-Karte der Werkbank: „Soll ich … ?“, bei Bash mit Befehl. */
+export function questionText(tool: string, input: Record<string, unknown>): string {
+  const m = confirmQuestion(tool, input).match(/\*\*(Soll ich [\s\S]*?\?)\*\*/);
+  const q = (m?.[1] ?? statusLine(tool, input)).replace(/\*\*/g, '').replace(/​/g, '');
+  return tool === 'Bash' ? `${q} ${short(input.command, 200)}` : q;
+}
+
 const LANGS: Record<string, string> = { md: 'markdown', ts: 'typescript', tsx: 'tsx', js: 'javascript', mjs: 'javascript', py: 'python', json: 'json', sh: 'bash', yaml: 'yaml', yml: 'yaml', sql: 'sql', html: 'html', css: 'css' };
 function langOf(p: unknown): string {
   return LANGS[String(p ?? '').split('.').pop()?.toLowerCase() ?? ''] ?? 'text';

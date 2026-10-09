@@ -10,6 +10,8 @@ import { Skills } from './pages/Skills.tsx';
 import { Dateien } from './pages/Dateien.tsx';
 import { Timebox } from './pages/Timebox.tsx';
 import { Ziele } from './pages/Ziele.tsx';
+import { Heute } from './pages/Heute.tsx';
+import { useTodayCount } from './beimir.tsx';
 
 function useHash() {
   const [h, setH] = useState(() => window.location.hash || '#/');
@@ -26,17 +28,30 @@ function useHash() {
   return h;
 }
 
+// Werkzeug statt Seite (Council-Bedingung 11): oben fünf Einträge, der Rest im Fuß. LibreChat-Leiste: dieselben fünf.
 const NAV = [
-  { href: '#/', label: 'Einrichtung', ico: '🚀', match: /^#\/?$/ },
-  { href: '#/wissen', label: 'Wissen', ico: '📚', match: /^#\/wissen/ },
+  { href: '#/', label: 'Heute', ico: '☀️', match: /^#\/?$/ },
+  { href: '#/roadmap', label: 'Roadmap', ico: '🧭', match: /^#\/roadmap/ },
   { href: '#/board', label: 'Board', ico: '🗂️', match: /^#\/board/ },
   { href: '#/sprint', label: 'Sprint', ico: '🔁', match: /^#\/sprint/ },
-  { href: '#/ziele', label: 'Ziele', ico: '🎯', match: /^#\/ziele/ },
+  { href: '#/wissen', label: 'Wissen', ico: '📚', match: /^#\/wissen/ },
+];
+const MORE = [
   { href: '#/timebox', label: 'Mein Tag', ico: '⏱️', match: /^#\/timebox/ },
-  { href: '#/roadmap', label: 'Roadmap', ico: '🧭', match: /^#\/roadmap/ },
+  { href: '#/ziele', label: 'Ziele', ico: '🎯', match: /^#\/ziele/ },
   { href: '#/skills', label: 'Skills', ico: '🧰', match: /^#\/skills/ },
   { href: '#/dateien', label: 'Dateien & Teilen', ico: '📎', match: /^#\/dateien/ },
+  { href: '#/einrichtung', label: 'Einrichtung', ico: '🚀', match: /^#\/einrichtung/ },
 ];
+
+function NavLink({ n, hash, count }: { n: typeof NAV[number]; hash: string; count?: number | null }) {
+  const on = n.match.test(hash);
+  return (
+    <a href={n.href} className={on ? 'active' : ''} aria-current={on ? 'page' : undefined} aria-label={count ? `${n.label}, ${count} offen` : undefined}>
+      <span className="ico">{n.ico}</span>{n.label}{count ? <span className="nav-count" aria-hidden>{count}</span> : null}
+    </a>
+  );
+}
 
 export function App() {
   const hash = useHash();
@@ -45,6 +60,7 @@ export function App() {
   const [theme, setTheme] = useState(document.documentElement.dataset.theme ?? 'light');
   // Handy (≤ 760 px): Navigation und Fuß stecken im Menü oben (Knut, 07.10.2026: Abmelden/Hell-Dunkel fehlten am Handy).
   const [menu, setMenu] = useState(false);
+  const todayN = useTodayCount(hash, !!cfg?.user);
   useEffect(() => setMenu(false), [hash]);
   const load = () => api<Config>('/api/config').then(setCfg, setErr);
   useEffect(() => { load(); }, []);
@@ -73,7 +89,9 @@ export function App() {
   if (embedded && !user) {
     return <div className="page"><h1>Werkbank</h1><p className="muted">Dein Chat-Konto ist für die Werkbank noch nicht freigeschaltet (Pilot) — oder die Anmeldung ist abgelaufen. Seite neu laden; hilft das nicht, frag Knut.</p></div>;
   }
-  const page = !user ? <Setup cfg={cfg} onLogin={load} />
+  // Anmelden über das Einrichtungs-Formular: weiter mit den ersten Schritten (Claude, Jira) auf der Einrichtung.
+  const page = !user ? <Setup cfg={cfg} onLogin={() => { window.location.hash = '#/einrichtung'; load(); }} />
+    : /^#\/einrichtung/.test(hash) ? <Setup cfg={cfg} onLogin={load} />
     : /^#\/wissen/.test(hash) ? <Wissen cfg={cfg} hash={hash} />
     : /^#\/board/.test(hash) ? <Board cfg={cfg} hash={hash} />
     : /^#\/sprint/.test(hash) ? <Sprint cfg={cfg} hash={hash} />
@@ -82,10 +100,15 @@ export function App() {
     : /^#\/roadmap/.test(hash) ? <Roadmap cfg={cfg} hash={hash} />
     : /^#\/skills/.test(hash) ? <Skills cfg={cfg} />
     : /^#\/dateien/.test(hash) ? <Dateien cfg={cfg} />
-    : <Setup cfg={cfg} onLogin={load} />;
+    : <Heute cfg={cfg} />;
 
-  if (embedded) return <div className="embedded">{page}</div>;
-  const current = NAV.find((n) => n.match.test(hash));
+  // Eingebettet (LibreChat-Leiste: fünf Einträge) fehlt der Fuß — die übrigen Seiten als kleine Zeile darunter.
+  if (embedded) return (
+    <div className="embedded">{page}
+      {user && <nav className="more-row small" aria-label="Weitere Seiten">{MORE.map((n) => <a key={n.href} href={n.href} aria-current={n.match.test(hash) ? 'page' : undefined}>{n.ico} {n.label}</a>)}</nav>}
+    </div>
+  );
+  const current = [...NAV, ...MORE].find((n) => n.match.test(hash));
 
   return (
     <div className="shell">
@@ -93,17 +116,19 @@ export function App() {
         <div className="brand"><img src="favicon.svg" alt="" /><span>OLAF-Werkbank</span></div>
         <a href={cfg.librechatUrl} className="menu-chat btn small" title="Zurück zum Chat (LibreChat)">💬 Chat</a>
         <button className="menu-btn btn small" aria-expanded={menu} aria-controls="werkbank-nav" onClick={() => setMenu(!menu)}>
-          {current ? <>{current.ico} {current.label}</> : 'Menü'}{!menu && <span className="menu-more">· {NAV.length - (current ? 1 : 0)} weitere</span>}<span aria-hidden>{menu ? '▴' : '▾'}</span>
+          {current ? <>{current.ico} {current.label}</> : 'Menü'}
+          {/* Auf „Heute“ steht der Zähler am Namen („Heute 10“), sonst als Hinweis daneben („· Heute 10“) — nie beides. */}
+          {current?.href === '#/' && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span>
+            : !menu && <span className="menu-more">· {todayN ? `Heute ${todayN}` : `${NAV.length + MORE.length - (current ? 1 : 0)} weitere`}</span>}<span aria-hidden>{menu ? '▴' : '▾'}</span>
         </button>
         <nav className="nav col" id="werkbank-nav" style={{ gap: 2 }}>
           <a href={cfg.librechatUrl} className="" title="Zurück zum Chat (LibreChat)"><span className="ico">💬</span>Chat</a>
-          {NAV.map((n) => (
-            <a key={n.href} href={n.href} className={n.match.test(hash) ? 'active' : ''} aria-current={n.match.test(hash) ? 'page' : undefined}>
-              <span className="ico">{n.ico}</span>{n.label}
-            </a>
-          ))}
+          {NAV.map((n) => <NavLink key={n.href} n={n} hash={hash} count={n.href === '#/' ? todayN : null} />)}
         </nav>
         <div className="spacer" />
+        <nav className="nav col more" aria-label="Weitere Seiten" style={{ gap: 0 }}>
+          {MORE.map((n) => <NavLink key={n.href} n={n} hash={hash} />)}
+        </nav>
         <div className="foot">
           {cfg.demo && <span className="chip warn">Demo-Modus</span>}
           {user && <div className="small"><b>{user.name}</b><div className="tiny">{user.email}</div></div>}

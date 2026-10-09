@@ -6,7 +6,7 @@ import { Err, useConfirm, useLoad, useToast } from './ui.tsx';
  * Task-Hygiene der eigenen PM-Tickets: je Punkt eine Frage, einzeilige Antwort → vorgeschlagene
  * Jira-Aktion → Bestätigen → mit dem eigenen Jira-Zugang schreiben. "später" = heute nicht mehr fragen.
  */
-export function HygienePanel({ max = 3, title = 'Deine Tickets brauchen Pflege', onChange }: { max?: number; title?: string; onChange?: () => void }) {
+export function HygienePanel({ max = 3, title = 'Deine Tickets brauchen Pflege', onChange, heading }: { max?: number; title?: string; onChange?: () => void; heading?: string }) {
   const h = useLoad(() => api('/api/hygiene'));
   const [all, setAll] = useState(false);
   if (!h.data) return null;
@@ -15,6 +15,8 @@ export function HygienePanel({ max = 3, title = 'Deine Tickets brauchen Pflege',
   if (!d.items.length) return null;
   const shown = all ? open : open.slice(0, max);
   return (
+    <>
+    {heading && <h2>{heading}</h2>}
     <div className="card hyg" style={{ marginBottom: 14 }} data-testid="hygiene">
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <b>🧹 {title} ({open.length}{d.snoozed.length ? ` · ${d.snoozed.length} später` : ''})</b>
@@ -27,6 +29,7 @@ export function HygienePanel({ max = 3, title = 'Deine Tickets brauchen Pflege',
       {shown.map((i: any) => <HygieneItem key={i.key + i.rule} i={i} onDone={() => { h.reload(); onChange?.(); }} />)}
       <p className="tiny" style={{ margin: '6px 0 0' }}>Eine Zeile reicht: „erledigt“, „neues Datum 15.10.“, „läuft, warte auf Rogue“ oder „später“. Geschrieben wird erst nach Bestätigung, mit deinem Jira-Zugang.</p>
     </div>
+    </>
   );
 }
 

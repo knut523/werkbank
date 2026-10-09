@@ -6,7 +6,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { WERKBANK_PAGES } from './WerkbankNav';
 
 export default function WerkbankRoute() {
-  const { page = 'einrichtung' } = useParams();
+  const { page = 'heute' } = useParams();
   const { search } = useLocation();
   const navigate = useNavigate();
   const frame = useRef<HTMLIFrameElement>(null);
@@ -23,7 +23,7 @@ export default function WerkbankRoute() {
       if (e.origin !== window.location.origin || e.source !== frame.current?.contentWindow) return;
       const d = e.data;
       if (d?.type === 'werkbank-route' && typeof d.hash === 'string') {
-        const id = WERKBANK_PAGES.slice().reverse().find((p) => p.hash !== '#/' && d.hash.startsWith(p.hash))?.id ?? 'einrichtung';
+        const id = WERKBANK_PAGES.slice().reverse().find((p) => p.hash !== '#/' && d.hash.startsWith(p.hash))?.id ?? 'heute';
         navigate(`/wb/${id}?h=${encodeURIComponent(d.hash)}`, { replace: id === page });
       }
       if (d?.type === 'werkbank-open' && typeof d.url === 'string' && d.url.startsWith('/')) navigate(d.url);
