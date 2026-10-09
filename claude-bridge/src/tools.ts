@@ -137,7 +137,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     const [, server, name = ''] = tool.split('__');
     // Eigene Werkbank-Werkzeuge: vault-search nur lesend; "später" ändert nur Werkbank-Zustand.
     if (server === 'vault-search') return { cls: 'read' };
-    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list')) return { cls: 'read' };
+    // review_ready ändert nur Werkbank-Zustand (Fertig-Marke am eigenen Lauf) → ohne Rückfrage.
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready')) return { cls: 'read' };
     if (server === 'werkbank' && name === 'jira_update') return { cls: 'confirm' };
     // forge-review (Platzhalter): Review rechnen/lesen frei; nach GitHub posten ist wie alles GitHub-Schreiben
     // im Pilot gesperrt (Ergebnis bleibt Entwurf), mergen nie.
@@ -199,7 +200,7 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
     const [, server, name] = tool.split('__');
     const key = input.issueIdOrKey ?? input.issueKey ?? input.jql ?? input.query ?? input.cql ?? '';
     if (server === 'vault-search') return `📚 Vault-Suche: ${name}${input.query || input.note || input.folder ? ` – ${short(input.query ?? input.note ?? input.folder, 70)}` : ''}`;
-    if (server === 'werkbank') return name === 'jira_update' ? `🎫 Jira nachgezogen: ${input.key}` : name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
+    if (server === 'werkbank') return name === 'jira_update' ? `🎫 Jira nachgezogen: ${input.key}` : name === 'review_ready' ? '📬 Bereit zum Review gemeldet' : name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
     const icon = server === 'atlassian' ? '🎫 Jira' : server === 'compartment' ? '🧠 Gedächtnis' : `🔌 ${server}`;
     return `${icon}: ${name}${key ? ` – ${short(key, 70)}` : ''}`;
   }

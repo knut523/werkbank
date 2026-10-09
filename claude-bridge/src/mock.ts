@@ -222,6 +222,9 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
     }
     yield toolUse('Grep', { pattern: last.slice(0, 40), path: VAULT_DIR });
     await sleep(50);
+    // Rundenende für die Review-Schlange: Schrittlimit bzw. Absturz der Sitzung.
+    if (/maxturns-test/i.test(last)) { yield text('(Mock) Viel zu tun. '); yield { type: 'result', subtype: 'error_max_turns', session_id, is_error: true, usage: { input_tokens: 1, output_tokens: 1 } }; return; }
+    if (/absturz-test/i.test(last)) throw new Error('Mock: Sitzung abgestürzt');
     const words = `(Mock, kein Claude-Aufruf${options.resume ? ', Sitzung fortgesetzt' : ''}) Du hast geschrieben: ${last}`.split(/(?<= )/);
     for (const w of words) {
       if (signal?.aborted) throw new Error('aborted');

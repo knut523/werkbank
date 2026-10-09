@@ -31,7 +31,7 @@ const MCP_DIR = process.env.WERKBANK_MCP_DIR || join(dirname(fileURLToPath(impor
  * Die MCP-Server einer Werkbank-Sitzung — und nur diese (strictMcpConfig): vault-search, werkbank,
  * forge-review (falls eingerichtet), atlassian (Jira, OAuth je Claude-Konfiguration).
  */
-function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome): Record<string, unknown> {
+function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome, convId = ''): Record<string, unknown> {
   const node = process.execPath;
   const servers: Record<string, unknown> = {
     'vault-search': {
@@ -58,7 +58,8 @@ function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome): R
   if (INTERNAL) {
     servers.werkbank = {
       type: 'stdio', command: node, args: [join(MCP_DIR, 'werkbank-tools.ts')],
-      env: { WERKBANK_URL: WEB_URL, WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_USER_ID: userId, PATH: process.env.PATH || '' },
+      // WERKBANK_CONV_ID: review_ready markiert nur den Lauf DIESER Unterhaltung (nie aus den Argumenten des Agenten).
+      env: { WERKBANK_URL: WEB_URL, WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_USER_ID: userId, WERKBANK_CONV_ID: convId, PATH: process.env.PATH || '' },
     };
   }
   return { ...servers, ...atlassianServer() };
@@ -272,7 +273,7 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
   await handleTurn({ email,
     userId, convId, token, prompt, history, model: MODELS[model], sink, query: query as any, readonly, receivedAt, instructions: instructions || undefined,
     sessionContext: known ? () => sessionContext(userId, convId, /Tagesabschluss/i.test(instructions) || /^\s*tagesabschluss\b/i.test(prompt), skillsFor(STATE_DIR, `${safeId(userId)}:${safeId(convId)}`, instructions, prompt)) : undefined,
-    mcpServers: known ? mcpServersFor(userId, token, homeFor(safeId(userId), email)) : undefined,
+    mcpServers: known ? mcpServersFor(userId, token, homeFor(safeId(userId), email), convId) : undefined,
     // Mehrere Claude-Konten: bei rate_limit übernimmt das nächste (Liste über den internen Kanal, nie vom Browser).
     accounts: known && INTERNAL ? () => claudeAccounts(userId) : undefined,
     // Jira im Chat geändert → Werkbank zieht die Tickets sofort nach und schiebt die Änderung an offene Boards.
