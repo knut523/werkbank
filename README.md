@@ -295,6 +295,15 @@ angewandt auf die **eigenen** PM-Tickets aus der Jira-Kopie (Zuordnung über `GE
 - **Im Chat:** Claude fragt kurz, eine Frage nach der anderen; aus der Antwort wird eine Jira-Aktion, die das
   Werkzeug `jira_update` schreibt — **erst nach „ja“** und **mit dem Jira-Zugang der Person** (wie am Board).
   „später“ → `hygiene_snooze`.
+- **Tagesabschluss als Durchgang (Knut, 07.10.2026):** ausdrücklich gestartet (Vorlage / 🌙) geht Claude **alle**
+  eigenen offenen Tickets durch, die überfällig, in ≤ 7 Tagen fällig, ohne Datum oder heute bearbeitet sind
+  (≤ 15 Zeilen je Gruppe), liest sie über Teilagenten `ticket-pruefer` und zeigt je Gruppe eine Tabelle mit
+  Empfehlung. Du antwortest gesammelt; geschrieben wird mit `jira_update_many` — **eine** Rückfrage mit einer Zeile
+  je Ticket (Titel, bisher laut Chat, neu, Grund; Done und „Datum entfernen“ mit ⚠️). Die Werkbank schreibt nur
+  eigene, bekannte Tickets, deren Titel zur Rückfrage passt, der Reihe nach, Fehler je Ticket. Danach
+  „Agent vorlaufen lassen“: `agent_start` startet je Ticket einen eigenen Chat wie „Agent“ am Board (Rückfrage).
+  `WERKBANK_EOD_BATCH=0` schaltet auf Ticket-für-Ticket mit `jira_update` um. Ab 16 Uhr in anderen Chats bleibt
+  es bei höchstens drei Fragen plus Hinweis auf den Durchgang.
 - **Board:** 🧹-Zähler je Karte, Bahn und Owner, Filter **„Braucht Pflege“**, oben die eigenen Fragen (höchstens 3).
   **Sprint:** Liste aller eigenen Pflegepunkte. Antworten dort: eine Zeile → Vorschlag → Bestätigen → Jira.
 
@@ -348,7 +357,7 @@ Unter 760 px Breite (Befund `review-pakete/77-werkbank-live-mobile`, Knut 07.10.
 - **Titel** erzeugt die Brücke aus der ersten Nachricht, ohne Claude aufzurufen.
 - **Kontext-Paket** für jede **neue** Sitzung (nicht bei Fortsetzung), siehe unten.
 - **MCP-Server: genau diese, sonst keine** (Runde 4, `strictMcpConfig`): `vault-search` (Vault durchsuchen, lesend),
-  `werkbank` (`hygiene_list`, `hygiene_snooze`, `skills_list`, `jira_update` mit Rückfrage), `forge-review` (falls
+  `werkbank` (`hygiene_list`, `hygiene_snooze`, `skills_list`, `jira_update`, `jira_update_many`, `agent_start` mit Rückfrage), `forge-review` (falls
   eingerichtet) und `atlassian` (Jira/Confluence, OAuth je Claude-Konfiguration). Nichts aus Nutzer-/Projekt-Konfiguration
   oder Plugins (vorher u. a. `compartment`, PostHog-Plugin).
 - **Jira im Chat geändert → Board zieht nach:** sieht die Brücke einen erfolgreichen schreibenden `mcp__atlassian__*`-Aufruf
@@ -558,7 +567,8 @@ Rückfrage im Chat, eingeleitet mit „Der Auto-Modus fragt nach: <Grund>“.
 | Bash/Edit im eigenen Arbeitsordner | **Klassifikator** |
 | Edits außerhalb des Arbeitsordners, unter `/vault` oder über einen Symlink dorthin | Rückfrage („ja“) |
 | Bash, der den Vault, `.runtime`, `.claude`, `.env`, `~/.ssh`, `~/.config/vw`, `bw`, `sudo` oder Jira/Atlassian nennt | Rückfrage („ja“) |
-| Jira-Schreiben (Atlassian-MCP, `jira_update`) | Rückfrage („ja“) |
+| Jira-Schreiben (Atlassian-MCP, `jira_update`, `jira_update_many`) | Rückfrage („ja“) |
+| Neuer Agent-Chat aus dem Chat (`agent_start`) | Rückfrage („ja“) |
 | GitHub lesen (`gh api` ohne Schreib-Optionen, `gh pr view/diff`) | Klassifikator |
 | `git push`, PR anlegen/kommentieren, GitHub-API schreiben | Rückfrage („ja“) — nie automatisch |
 | Merge, Force-Push, Push auf `main`/`master`/`develop` | gesperrt, auch mit „ja“ |
