@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Orchestrator-CLI: Werkbank-Agenten starten und koordinieren (docs/plan-orchestrator-agents.md).
+# Beispiele und Umgebung: web/server/orch-cli.ts. Gibt nie Geheimnisse aus.
+set -euo pipefail
+WB="$(cd "$(dirname "$0")/.." && pwd)"
+[ -x "$WB/.runtime/node/bin/node" ] && export PATH="$WB/.runtime/node/bin:$PATH"
+exec node "$WB/web/server/orch-cli.ts" "$@"

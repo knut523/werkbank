@@ -47,6 +47,12 @@ export function App() {
   const [menu, setMenu] = useState(false);
   useEffect(() => setMenu(false), [hash]);
   const load = () => api<Config>('/api/config').then(setCfg, setErr);
+  // Offene Rückfragen des Orchestrators als Zähler an „Roadmap“ (dort stehen sie unter „Für mich offen“).
+  const [questions, setQuestions] = useState(0);
+  const loadQuestions = () => api<{ open: number }>('/api/orchestrator/questions?count=1').then((r) => setQuestions(r.open), () => {});
+  useEffect(() => { if (!cfg?.user) return; loadQuestions(); const t = setInterval(loadQuestions, 60_000); return () => clearInterval(t); }, [cfg?.user?.email]);
+  useEffect(() => { if (cfg?.user) loadQuestions(); }, [hash]);
+  useEffect(() => { const f = () => loadQuestions(); window.addEventListener('werkbank-questions', f); return () => window.removeEventListener('werkbank-questions', f); }, []);
   useEffect(() => { load(); }, []);
   const toggleTheme = () => {
     const t = theme === 'dark' ? 'light' : 'dark';
@@ -100,6 +106,7 @@ export function App() {
           {NAV.map((n) => (
             <a key={n.href} href={n.href} className={n.match.test(hash) ? 'active' : ''} aria-current={n.match.test(hash) ? 'page' : undefined}>
               <span className="ico">{n.ico}</span>{n.label}
+              {n.href === '#/roadmap' && questions > 0 && <span className="chip warn" data-testid="nav-questions" title="Offene Rückfragen des Orchestrators" style={{ marginLeft: 6 }}>{questions}</span>}
             </a>
           ))}
         </nav>

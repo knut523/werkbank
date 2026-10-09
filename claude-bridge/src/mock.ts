@@ -163,6 +163,13 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 300, output_tokens: 90 } };
       return;
     }
+    // „mock-antwort <Text>“: genau dieser Text als Antwort (\n = Zeilenumbruch), z. B. für Status-Marken der Orchestrator-Stränge.
+    const ma = last.match(/^mock-antwort (.+)$/);
+    if (ma) {
+      yield text(ma[1].replaceAll('\\n', '\n'));
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
     const slow = last.match(/^langsam (\d+)$/);
     if (slow) {
       // Ein langer Zug (Sperre je Person, E5): wartet N ms, dann eine Zeile.
