@@ -10,6 +10,7 @@ const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'wb-agentfiles-')));
 const VAULT = join(ROOT, 'vault'); const STATE = join(ROOT, 'bridge'); const DATA = join(ROOT, 'data'); const REPO = join(ROOT, 'repo');
 for (const d of [VAULT, STATE, DATA, REPO]) mkdirSync(d, { recursive: true });
 process.env.WERKBANK_VAULT_DIR = VAULT; process.env.BRIDGE_STATE_DIR = STATE; process.env.WERKBANK_DATA_DIR = DATA;
+process.env.WERKBANK_DOCS_DIR = join(ROOT, 'dokumente'); // nie Knuts echte Ablage
 const MONGO = process.env.MONGO_URI_WERKBANK;
 if (MONGO) process.env.WERKBANK_DB = `werkbank_agentfiles_${process.pid}`;
 

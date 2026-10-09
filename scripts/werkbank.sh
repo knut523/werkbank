@@ -69,7 +69,7 @@ doctor() {
   echo "Geheimnisse (.env.local, nur Namen)"
   if [ -f "$WB/.env.local" ]; then
     perm=$(stat -c %a "$WB/.env.local"); [ "$perm" = 600 ] && ok ".env.local (600)" || warn ".env.local hat Rechte $perm (erwartet 600)"
-    for k in CREDS_KEY CREDS_IV JWT_SECRET JWT_REFRESH_SECRET MEILI_MASTER_KEY WERKBANK_CREDS_KEY WERKBANK_INTERNAL_TOKEN; do grep -q "^$k=" "$WB/.env.local" && ok "$k gesetzt" || bad "$k fehlt"; done
+    for k in CREDS_KEY CREDS_IV JWT_SECRET JWT_REFRESH_SECRET MEILI_MASTER_KEY WERKBANK_CREDS_KEY WERKBANK_INTERNAL_TOKEN WERKBANK_BACKUP_KEY; do grep -q "^$k=" "$WB/.env.local" && ok "$k gesetzt" || bad "$k fehlt"; done
     git -C "$WB" check-ignore -q .env.local && ok ".env.local ist gitignored" || bad ".env.local ist NICHT gitignored"
   else bad ".env.local fehlt"; fi
   echo "URLs"

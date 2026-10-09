@@ -10,11 +10,13 @@
 
 import { randomUUID, createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, chmodSync } from 'node:fs';
-import { basename, extname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, relative, resolve, sep } from 'node:path';
 import { cfg } from './config.ts';
 import { wb } from './db.ts';
 import type { User } from './auth.ts';
-import { ALLOWED_EXT, safeName, scratchDir } from './sharing.ts';
+import { ALLOWED_EXT, filePath, safeName, scratchDir } from './sharing.ts';
+import { moveInto } from './ablage.ts';
+import { autoTarget, suggestFor } from './einsortieren.ts';
 
 const within = (p: string, dir: string) => p === dir || p.startsWith(dir.endsWith(sep) ? dir : dir + sep);
 const real = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
@@ -46,8 +48,6 @@ export function classifyWritten(u: User, path: string): Classified {
   if (size > cfg.fileMaxBytes) return { kind: 'skip', why: 'zu groß' };
   return { kind: 'file', abs };
 }
-
-const filesDir = () => join(cfg.dataDir, 'files');
 
 export interface RunContext { conv: string; key?: string | null; projectId?: string | null; runId?: string | null }
 
@@ -86,18 +86,26 @@ export async function ingestOne(u: User, path: string, ctx: RunContext): Promise
     await col.updateOne({ _id: existing._id }, { $set: { 'source.size': st.size, 'source.mtimeMs': st.mtimeMs } });
     return 'unverändert';
   }
-  const id = existing?._id ?? randomUUID();
-  const name = existing?.name ?? safeName(basename(c.abs));
-  const dir = join(filesDir(), id);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  copyFileSync(c.abs, join(dir, name));
-  chmodSync(join(dir, name), 0o600);
   if (existing) {
-    await col.updateOne({ _id: id }, { $set: { size: bytes.length, sha256, updatedAt: now, status: 'fertig', 'source.size': st.size, 'source.mtimeMs': st.mtimeMs, ...(ctx.projectId ? { projectId: ctx.projectId } : {}) }, $addToSet: { tickets: { $each: tickets } } });
+    // Neue Fassung an den Ort, an dem die Datei jetzt liegt (auch nach „Ablegen“/„Verschieben“; Council B1).
+    // Liegt sie dort nicht mehr (von Hand verschoben/gelöscht), entsteht sie an ihrem Ablageort neu.
+    const dest = filePath(existing);
+    mkdirSync(dirname(dest), { recursive: true, mode: 0o700 });
+    copyFileSync(c.abs, dest);
+    chmodSync(dest, 0o600);
+    await col.updateOne({ _id: existing._id }, { $set: { size: bytes.length, sha256, updatedAt: now, status: 'fertig', 'source.size': st.size, 'source.mtimeMs': st.mtimeMs, ...(ctx.projectId ? { projectId: ctx.projectId } : {}) }, $addToSet: { tickets: { $each: tickets } } });
     return 'aktualisiert';
   }
+  // Neu: Vorschlag aus Plan 81 Schnitt 2 direkt anwenden (ohne Klick, Schnitt 3) — sicher → Vorgangsordner mit
+  // Schema-Namen, sonst `_eingang/` („Noch einzusortieren“). Kopie, die Quelle im Arbeitsordner bleibt.
+  const id = randomUUID();
+  const original = safeName(basename(c.abs));
+  const v = await suggestFor({ name: original, tickets, projectId: ctx.projectId });
+  const t = autoTarget(original, v);
+  const placed = moveInto(c.abs, t.relDir, t.name, { copy: true });
+  chmodSync(filePath({ path: placed }), 0o600);
   await col.insertOne({
-    _id: id as any, kind: 'agent', name, size: bytes.length, mime: ALLOWED_EXT[extname(name).toLowerCase()], sha256,
+    _id: id as any, kind: 'agent', name: basename(placed), originalName: original, path: placed, size: bytes.length, mime: ALLOWED_EXT[extname(original).toLowerCase()], sha256,
     owner: u.id, ownerEmail: u.email, ownerName: u.name, sharedWith: [], personal: false, tickets, projectId: ctx.projectId ?? null,
     source: { path: sourcePath, conv: ctx.conv, runId: ctx.runId ?? null, size: st.size, mtimeMs: st.mtimeMs }, status: 'fertig', createdAt: now, updatedAt: now,
   } as any);
@@ -123,7 +131,4 @@ export async function ingestSessions(u: User, sessions: Array<{ conv: string; st
   return { changed, projects };
 }
 
-/** Pfad einer Datei im Speicher bzw. im Vault (für Download und „Im Chat“). */
-export const storedPath = (f: any) => (f.kind === 'vault' ? join(cfg.vaultDir, f.vaultPath) : join(filesDir(), f._id, f.name));
-
-export const exists = (f: any) => existsSync(storedPath(f));
+export const exists = (f: any) => existsSync(filePath(f));
