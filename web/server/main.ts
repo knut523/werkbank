@@ -658,6 +658,25 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/edit$/, async (req, res,
   send(res, 200, { ok: true, preview, done: [...(w?.done ?? []), ...done], dryRun: w?.dryRun ?? false, calls: w?.calls, issue: (await issueMap()).get(i.key) ?? null });
 });
 
+/**
+ * Agent als echter Chat auf einem Ticket — derselbe Weg für „Agent“ am Board, `agent_start` aus dem Chat
+ * (Tagesabschluss) und „Agent ansetzen“ an einer Spec. Plan 81 (Schnitte 6/7): das Ticket bekommt sein Projekt
+ * (zuordnen vor anlegen), der Agent den Bereich seines Workstreams im Vault für Plan und Notizen.
+ */
+async function startTicketAgent(u: User, i: Issue, note: string, place: { specPath?: string | null } = {}) {
+  // Erst prüfen, ob schon ein Agent der Person auf der Karte arbeitet — sonst entstünde für einen abgelehnten Start
+  // ein Projekt und ein Vault-Eintrag (Review).
+  if (await wb().collection('agent_runs').findOne({ key: i.key, userId: u.id, mode: 'chat', status: { $in: ['läuft', 'wartet auf ja'] } })) {
+    throw new HttpError(409, 'Auf diesem Ticket arbeitet schon ein Agent von dir — im Chat weitermachen.');
+  }
+  const im = await issueMap();
+  const project = await assignProject(u, i).catch((e) => { log('projekt fehlgeschlagen', { key: i.key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
+  const ws = i.workstream ? im.get(i.workstream) : undefined;
+  const areaDir = ws ? workstreamArea(ws)?.dir ?? null : null;
+  if (ws) syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 120) }));
+  return startChatAgent(u, i, note, 'work', { projectName: project?.name ?? null, areaDir, projectId: project?._id ?? null, personName: u.name, ...place });
+}
+
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res, m) => {
   const u = await needUser(req);
   if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
@@ -671,17 +690,7 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res
   // Plan 81 (Schnitte 6/7): das Ticket bekommt sein Projekt (zuordnen vor anlegen), der Agent den Bereich seines
   // Workstreams im Vault für Plan und Notizen. Die Übersicht des Bereichs wird danach nachgezogen.
   if (b.mode !== 'draft') {
-    // Erst prüfen, ob schon ein Agent der Person auf der Karte arbeitet — sonst entstünde für einen abgelehnten Start
-    // ein Projekt und ein Vault-Eintrag (Review).
-    if (await wb().collection('agent_runs').findOne({ key: i.key, userId: u.id, mode: 'chat', status: { $in: ['läuft', 'wartet auf ja'] } })) {
-      throw new HttpError(409, 'Auf diesem Ticket arbeitet schon ein Agent von dir — im Chat weitermachen.');
-    }
-    const im = await issueMap();
-    const project = await assignProject(u, i).catch((e) => { log('projekt fehlgeschlagen', { key: i.key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
-    const ws = i.workstream ? im.get(i.workstream) : undefined;
-    const areaDir = ws ? workstreamArea(ws)?.dir ?? null : null;
-    if (ws) syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 120) }));
-    const r = await startChatAgent(u, i, String(b.note ?? '').slice(0, 2000), 'work', { projectName: project?.name ?? null, areaDir, projectId: project?._id ?? null, personName: u.name });
+    const r = await startTicketAgent(u, i, String(b.note ?? '').slice(0, 2000));
     log('agent chat', { user: u.id, key: i.key, conv: r.conv });
     return send(res, 200, { ...r, mode: 'chat' });
   }
@@ -1776,12 +1785,25 @@ on('POST', /^\/internal\/hygiene-snooze$/, async (req, res) => {
   send(res, 200, { ok: true });
 });
 
+/**
+ * Die Rückfrage im Chat zeigt den Ticket-Titel, den das Modell mitgibt (summary). Stimmt er nicht mit der Kopie überein,
+ * hätte die Person etwas anderes bestätigt, als geschrieben würde → ablehnen, nichts schreiben (Council 09.10.2026).
+ */
+const normTitle = (t: unknown) => String(t ?? '').toLowerCase().replace(/[^a-z0-9äöüß]+/g, ' ').trim();
+function titleMismatch(shown: unknown, actual: string): boolean {
+  if (shown === undefined || shown === null || String(shown).trim() === '') return false;
+  const a = normTitle(shown).replace(/…$/, ''), b = normTitle(actual);
+  return !(b === a || (a.length >= 12 && b.startsWith(a)));
+}
+
 on('POST', /^\/internal\/jira-update$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
   const key = String(b.key ?? '');
   if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw new HttpError(400, 'Ungültiger Schlüssel.');
-  if (!(await allIssues()).some((i) => i.key === key)) throw new HttpError(404, 'Ticket nicht in der Jira-Kopie (nur bestehende Tickets, keine neuen).');
+  const cur = (await allIssues()).find((i) => i.key === key);
+  if (!cur) throw new HttpError(404, 'Ticket nicht in der Jira-Kopie (nur bestehende Tickets, keine neuen).');
+  if (titleMismatch(b.summary, cur.summary)) throw new HttpError(409, `${key} heißt „${cur.summary}“, nicht „${String(b.summary).slice(0, 80)}“ — nichts geschrieben. Bitte mit dem richtigen Titel neu fragen.`);
   const actions: any[] = [];
   if (b.comment) actions.push({ type: 'comment', text: String(b.comment) });
   if (b.status) actions.push({ type: 'status', to: String(b.status) });
@@ -1791,6 +1813,64 @@ on('POST', /^\/internal\/jira-update$/, async (req, res) => {
   const done = await jiraWrite(u, () => applyActions(u, key, actions));
   log('jira write (chat)', { user: u.id, key, n: done.length });
   send(res, 200, { ok: true, done });
+});
+
+// Tagesabschluss: mehrere Tickets mit EINER Rückfrage (die Brücke hat schon gefragt). Erst alle Schlüssel prüfen —
+// ein unbekannter → nichts geschrieben. Dann der Reihe nach; ein Fehler bricht nicht ab, er steht je Ticket im Ergebnis.
+on('POST', /^\/internal\/jira-update-many$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const changes: any[] = Array.isArray(b.changes) ? b.changes : [];
+  if (!changes.length) throw new HttpError(400, 'Nichts zu tun.');
+  if (changes.length > 25) throw new HttpError(400, 'Höchstens 25 Tickets auf einmal.');
+  const all = await allIssues();
+  const byKey = new Map(all.map((i) => [i.key, i]));
+  // Nur eigene Tickets (Tagesabschluss = Durchgang über die eigenen): ein fremdes im Stapel → nichts geschrieben.
+  // Schutz gegen Anweisungen aus Ticket-Texten, die das Modell beim Lesen gesehen hat (Council 09.10.2026).
+  const who = resolveIdentity(await jiraIdentity(u), all);
+  const keys = changes.map((c) => String(c?.key ?? ''));
+  const twice = keys.find((k, n) => keys.indexOf(k) !== n);
+  if (twice) throw new HttpError(400, `${twice} steht zweimal im Stapel — je Ticket ein Eintrag; nichts geschrieben.`);
+  const plans = changes.map((c) => {
+    const key = String(c?.key ?? '');
+    if (String(c?.comment ?? '').length > 1500) throw new HttpError(400, `${key}: Kommentar über 1500 Zeichen (die Rückfrage zeigt nur so viel) — nichts geschrieben.`);
+    if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw new HttpError(400, `Ungültiger Schlüssel „${key.slice(0, 20)}“ — nichts geschrieben.`);
+    const cur = byKey.get(key);
+    if (!cur) throw new HttpError(404, `${key} ist nicht in der Jira-Kopie (nur bestehende Tickets) — nichts geschrieben.`);
+    if (!isMine(cur, who)) throw new HttpError(403, `${key} gehört nicht dir (Owner: ${cur.assignee ?? 'niemand'}) — gesammelt nur eigene Tickets; nichts geschrieben.`);
+    if (titleMismatch(c.summary, cur.summary)) throw new HttpError(409, `${key} heißt „${cur.summary}“, nicht „${String(c.summary).slice(0, 80)}“ — nichts geschrieben.`);
+    const actions: any[] = [];
+    if (c.comment) actions.push({ type: 'comment', text: String(c.comment) });
+    if (c.status) actions.push({ type: 'status', to: String(c.status) });
+    if (c.due !== undefined && c.due !== null) actions.push({ type: 'due', date: String(c.due) || null });
+    if (!actions.length) throw new HttpError(400, `${key}: nichts zu tun — nichts geschrieben.`);
+    return { key, actions };
+  });
+  // Frist (Council 09.10.2026): das Werkzeug wartet budgetMs; danach kein neues Ticket mehr anfangen, sondern als
+  // „nicht versucht“ melden — sonst schriebe der Server weiter, während das Modell einen Fehler sieht und wiederholt.
+  const budget = Math.min(Math.max(Number(b.budgetMs) || 300_000, 20_000), 300_000);
+  const t0 = Date.now();
+  const results: { key: string; ok: boolean; done: string[]; error?: string; skipped?: boolean }[] = [];
+  for (const p of plans) {
+    if (Date.now() - t0 >= budget - 20_000) { results.push({ key: p.key, ok: false, done: [], skipped: true, error: 'nicht versucht (Zeit) — erst Stand lesen, dann einzeln' }); continue; }
+    try { results.push({ key: p.key, ok: true, done: await jiraWrite(u, () => applyActions(u, p.key, p.actions)) }); }
+    catch (e: any) { results.push({ key: p.key, ok: false, done: [], error: String(e?.message ?? e).slice(0, 200) }); }
+  }
+  log('jira write (chat, gesammelt)', { user: u.id, n: plans.length, failed: results.filter((r) => !r.ok).length });
+  send(res, 200, { ok: results.every((r) => r.ok), results });
+});
+
+// „Agent vorlaufen lassen“ aus dem Chat: neuer eigener Chat mit Agent auf dem Ticket — wie „Agent“ am Board.
+on('POST', /^\/internal\/agent-start$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
+  const i = (await issueMap()).get(String(b.key ?? ''));
+  if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  if (!(await getClaudeToken(u))) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen.');
+  const r = await startTicketAgent(u, i, String(b.note ?? '').slice(0, 2000));
+  log('agent chat (aus chat)', { user: u.id, key: i.key, conv: r.conv });
+  send(res, 200, r);
 });
 
 // Die Brücke hat im Chat einen schreibenden Atlassian-Aufruf gesehen (Kommentar, Status, Anlegen …): diese Tickets

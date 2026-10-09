@@ -91,6 +91,8 @@ before(async () => {
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
       WERKBANK_GOAL_PROPOSALS: join(tmp, 'vorschlag.json'), WERKBANK_SPEC_CREATE: 'on', WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
       WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vault-sync'), WERKBANK_VAULT_SYNC_SCRIPT: join(tmp, 'fake-vault-sync.sh'),
+      // Abend-Slot nur über den ausdrücklichen Tagesabschluss — sonst hinge der Test an der Uhrzeit (ab 16 Uhr scheiterte er).
+      WERKBANK_EOD_HOUR: '24',
     },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -266,6 +268,19 @@ test('Timebox: Blöcke anlegen/verschieben/erledigen, privat je Person, Übertra
   const week = await anna.req('/api/timebox?from=2026-09-28&days=7');
   assert.equal(week.j.dates.length, 7);
   assert.equal(jira.writes.length, n, 'kein Jira-Schreiben');
+});
+
+test('Agent vorlaufen aus dem Chat (agent_start): neuer Chat wie am Board, gleiche Schranken', async () => {
+  const uid = String(users.a._id);
+  assert.equal((await internal('/internal/agent-start', { userId: String(users.b._id), key: 'PM-321' })).status, 412, 'ohne Claude');
+  assert.equal((await internal('/internal/agent-start', { userId: uid, key: 'PM-99999' })).status, 404);
+  const n = lcChats.length;
+  const st = await internal('/internal/agent-start', { userId: uid, key: 'PM-332', note: 'Timeline entwerfen' });
+  assert.equal(st.status, 200, JSON.stringify(st.j));
+  assert.match(st.j.url, /^https:\/\/chat\.example\/c\/[0-9a-f-]{36}$/);
+  assert.equal(lcChats.length, n + 1);
+  assert.match(lcChats.at(-1).body.text, /^PM-332 · [\s\S]*Hinweis der Person: Timeline entwerfen/);
+  assert.equal((await internal('/internal/agent-start', { userId: uid, key: 'PM-332' })).status, 409, 'kein zweiter Agent auf demselben Ticket');
 });
 
 test('Agent ansetzen: Brücke nur lesend, Ergebnis als Entwurf, gesendet erst nach Klick', async () => {
@@ -609,6 +624,14 @@ test('Interne Schnittstelle nur mit Token; Kontext-Paket klein; Pflegefragen nur
   assert.doesNotMatch(s2.j.text, /Task-Hygiene/);
   const eod = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c3', eod: true });
   assert.equal(eod.j.slot, 'abend');
+  // Ausdrücklicher Tagesabschluss = Durchgang über alle Tickets statt drei Fragen (Knut, 07.10.2026)
+  assert.equal(eod.j.questions.length, 0);
+  assert.match(eod.j.text, /### Tagesabschluss — Durchgang über \d+ Tickets/);
+  assert.match(eod.j.text, /\*\*überfällig\*\* \(1\)\n- PM-900 „Angebot Anna“/);
+  assert.match(eod.j.text, /\*\*ohne Datum\*\* \(1\)\n- PM-901 „Konzept Anna“/);
+  assert.doesNotMatch(eod.j.text.split('### Tagesabschluss')[1], /PM-902/, 'fällig 2099, nicht heute bearbeitet');
+  const after = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c4' });
+  assert.equal(after.j.questions.length, 0, 'nach dem Durchgang fragen andere Chats heute nicht mehr');
   const m = await internal('/internal/measure', { userId: String(users.a._id), conv: 'c1', measured: { total: 23000, tools: 4000, skills: 900, evil: 'x' } });
   assert.equal(m.status, 200);
   const stats = await anna.req('/api/context');
@@ -648,6 +671,43 @@ test('Task-Hygiene: Antwort → Vorschlag → Bestätigung → Jira; später; Bo
   assert.equal(u.status, 200);
   assert.deepEqual(u.j.done, ['Kommentar', 'Fällig → 2026-10-20']);
   assert.equal((await internal('/internal/jira-update', { userId: String(users.a._id), key: 'PM-99999', comment: 'x' })).status, 404, 'keine neuen Tickets');
+  // Ein eigenes Ticket von Anna, das es auch im Jira-Nachbau gibt (gesammelt geht nur auf eigene).
+  const t903 = structuredClone(jira.issues.find((i: any) => i.key === 'PM-322'));
+  t903.key = 'PM-903'; t903.fields.summary = 'Anna Aufgabe'; t903.fields.assignee = { displayName: 'Anna Test', accountId: null };
+  jira.issues.push(t903);
+  await mongo.db(DB).collection('jira_issues').insertOne({ key: 'PM-903', summary: 'Anna Aufgabe', status: 'To Do', statusCategory: 'new', type: 'Task', assignee: 'Anna Test', assigneeId: null, parent: 'PM-70', workstream: 'PM-70', priority: 'Medium', duedate: '2026-11-01', updated: '2026-09-20T10:00:00Z', description: '', comments: 0, lastComment: null, syncedAt: new Date() });
+  // Gesammelt (Tagesabschluss): erst alle Schlüssel prüfen, dann der Reihe nach; Fehler je Ticket, kein Abbruch
+  const uid = String(users.a._id);
+  const w0 = jira.writes.length;
+  const bad = await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', due: '2026-10-21' }, { key: 'PM-99999', comment: 'x' }] });
+  assert.equal(bad.status, 404);
+  assert.equal(jira.writes.length, w0, 'ein unbekanntes Ticket → nichts geschrieben');
+  assert.equal((await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903' }] })).status, 400, 'nichts zu tun');
+  assert.equal((await internal('/internal/jira-update-many', { userId: uid, changes: Array.from({ length: 26 }, () => ({ key: 'PM-903', comment: 'x' })) })).status, 400);
+  const many = await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-900', due: '2026-10-21' }, { key: 'PM-903', comment: 'Stand: gesammelt', due: '2026-10-22' }] });
+  assert.equal(many.status, 200);
+  assert.equal(many.j.ok, false);
+  assert.deepEqual(many.j.results.map((r: any) => [r.key, r.ok]), [['PM-900', false], ['PM-903', true]], 'Fehler bei PM-900 hält PM-322 nicht auf');
+  assert.match(many.j.results[0].error, /404/);
+  assert.deepEqual(many.j.results[1].done, ['Kommentar', 'Fällig → 2026-10-22']);
+  // Council 09.10.2026: nur eigene Tickets, Titel muss stimmen, kein Schlüssel doppelt, Kommentar ≤ 1500 — sonst nichts geschrieben.
+  const w1 = jira.writes.length;
+  const foreign = await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', comment: 'x' }, { key: 'PM-331', comment: 'fremd' }] });
+  assert.equal(foreign.status, 403, JSON.stringify(foreign.j));
+  assert.match(foreign.j.error, /PM-331 gehört nicht dir/);
+  assert.equal((await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', summary: 'Ganz anderer Titel', comment: 'x' }] })).status, 409, 'Titel aus der Rückfrage passt nicht');
+  assert.equal((await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', comment: 'a' }, { key: 'PM-903', comment: 'b' }] })).status, 400, 'doppelt');
+  assert.equal((await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', comment: 'x'.repeat(1501) }] })).status, 400, 'zu lang für die Rückfrage');
+  assert.equal((await internal('/internal/jira-update', { userId: uid, key: 'PM-322', summary: 'Falscher Titel', comment: 'x' })).status, 409);
+  assert.equal(jira.writes.length, w1, 'nichts geschrieben');
+  const ok = await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', summary: 'Anna Aufgabe', comment: 'Titel passt' }] });
+  assert.equal(ok.status, 200, JSON.stringify(ok.j));
+  // Frist: ist sie schon verbraucht, wird kein Ticket mehr angefangen („nicht versucht“), nichts geschrieben.
+  const w2 = jira.writes.length;
+  const late = await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', comment: 'zu spät' }], budgetMs: 1 });
+  assert.equal(late.status, 200);
+  assert.deepEqual(late.j.results.map((r: any) => [r.key, r.skipped]), [['PM-903', true]]);
+  assert.equal(jira.writes.length, w2);
   const b = await anna.req('/api/board?filter=pflege');
   const keys = b.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).map((i: any) => i.key);
   assert.ok(keys.includes('PM-900') && keys.includes('PM-902'));
