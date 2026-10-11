@@ -3,6 +3,7 @@
 #
 #   scripts/isoliert.sh start | stop | status
 #
+# Suche (Meilisearch + LibreChat-Suche) nur mit WB_ISO_SUCHE=1 — spart je Instanz bis zu 2 GB beim Indexieren.
 # Mehrere Testinstanzen nebeneinander: ISO_PORT_BASE=3570 → Web 3570, LibreChat 3580, Brücke 3590, Mongo 27580,
 # Meili 7795; ISO_DIR=<pfad> statt .runtime-iso. ISO_COPY_CLAUDE_ACCOUNTS=1 übernimmt zusätzlich WERKBANK_CREDS_KEY aus der
 # Quell-.env.local, damit kopierte weitere Claude-Konten (werkbank.creds) lesbar bleiben (nichts wird ausgegeben).
@@ -83,10 +84,17 @@ do_start() {
   export MEILI_HOST="http://127.0.0.1:$P_MEILI" CUSTOM_FOOTER="OLAF-Werkbank · ISOLIERTE TESTINSTANZ ($WB)"
   [ -x "$SRC_RT/node/bin/node" ] && export PATH="$SRC_RT/node/bin:$PATH"
   echo "Isolierte Werkbank starten ($WB)"
-  start_one mongodb $P_MONGO "$ISO" "$SRC_RT/bin/mongod" --dbpath "$ISO/data/mongo" --bind_ip 127.0.0.1 --port $P_MONGO --quiet
-  start_one meilisearch $P_MEILI "$ISO/data/meili" "$SRC_RT/bin/meilisearch" --http-addr 127.0.0.1:$P_MEILI \
-    --db-path "$ISO/data/meili/data.ms" --env production --no-analytics \
-    --max-indexing-memory "${ISO_MEILI_MAX_MEM:-256MiB}" --max-indexing-threads 1
+  # RAM (Plan 125): Mongo-Cache und Meili-Indexierung gedeckelt wie in start.sh; ohne WB_ISO_SUCHE=1 keine Suche
+  # (LibreChat SEARCH=false, kein Meilisearch-Prozess) — Vault-Suche/Wissen-Suche gehen dann in der Testinstanz nicht.
+  MONGO_CACHE=(); [ -n "${WB_MONGO_CACHE_GB-0.25}" ] && MONGO_CACHE=(--wiredTigerCacheSizeGB "${WB_MONGO_CACHE_GB-0.25}")
+  MEILI_MEM=(); [ -n "${WB_MEILI_INDEXING_MEMORY-256MiB}" ] && MEILI_MEM=(--max-indexing-memory "${WB_MEILI_INDEXING_MEMORY-256MiB}")
+  start_one mongodb $P_MONGO "$ISO" "$SRC_RT/bin/mongod" --dbpath "$ISO/data/mongo" --bind_ip 127.0.0.1 --port $P_MONGO --quiet "${MONGO_CACHE[@]}"
+  if [ "${WB_ISO_SUCHE:-0}" = 1 ]; then
+    start_one meilisearch $P_MEILI "$ISO/data/meili" "$SRC_RT/bin/meilisearch" --http-addr 127.0.0.1:$P_MEILI \
+      --db-path "$ISO/data/meili/data.ms" --env production --no-analytics "${MEILI_MEM[@]}"
+  else
+    export SEARCH=false; echo "  · Suche aus (WB_ISO_SUCHE=1 schaltet Meilisearch und die LibreChat-Suche ein)"
+  fi
   start_one claude-bridge $P_BRIDGE "$WB/claude-bridge" env BRIDGE_PORT=$P_BRIDGE BRIDGE_HOST=127.0.0.1 \
     BRIDGE_STATE_DIR="$ISO/bridge" BRIDGE_MOCK="${BRIDGE_MOCK:-0}" WERKBANK_URL="http://127.0.0.1:$P_WEB" \
     BRIDGE_ALLOWED_EMAILS="${BRIDGE_ALLOWED_EMAILS-knut.peters@maxenergy.at}" \

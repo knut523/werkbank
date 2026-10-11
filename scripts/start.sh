@@ -34,10 +34,15 @@ start() { # name port dir cmd...
 }
 
 echo "OLAF-Werkbank starten"
-start mongodb 27017 "$RT" "$RT/bin/mongod" --dbpath "$RT/data/mongo" --bind_ip 127.0.0.1 --port 27017 --quiet
+# RAM (Plan 125): ohne Deckel nimmt WiredTiger bis 50 % des cgroup-Limits minus 1 GB (hier ≈ 7,5 GB) und Meilisearch
+# beim Indexieren bis 2/3 (≈ 10,7 GiB, gemessen: Spitzen 0,6–2,1 GB je Instanz). Unsere Daten sind klein.
+# Leer setzen (WB_MONGO_CACHE_GB= / WB_MEILI_INDEXING_MEMORY=) → Vorgabe der Programme.
+MONGO_CACHE=(); [ -n "${WB_MONGO_CACHE_GB-0.25}" ] && MONGO_CACHE=(--wiredTigerCacheSizeGB "${WB_MONGO_CACHE_GB-0.25}")
+MEILI_MEM=(); [ -n "${WB_MEILI_INDEXING_MEMORY-256MiB}" ] && MEILI_MEM=(--max-indexing-memory "${WB_MEILI_INDEXING_MEMORY-256MiB}")
+start mongodb 27017 "$RT" "$RT/bin/mongod" --dbpath "$RT/data/mongo" --bind_ip 127.0.0.1 --port 27017 --quiet "${MONGO_CACHE[@]}"
 # Master-Key über die Umgebung (MEILI_MASTER_KEY), nicht über die Kommandozeile – sonst steht er in `ps`.
 start meilisearch 7700 "$RT/data/meili" "$RT/bin/meilisearch" --http-addr 127.0.0.1:7700 \
-  --db-path "$RT/data/meili/data.ms" --env production --no-analytics
+  --db-path "$RT/data/meili/data.ms" --env production --no-analytics "${MEILI_MEM[@]}"
 start claude-bridge 3090 "$WB/claude-bridge" env BRIDGE_PORT=3090 BRIDGE_HOST=127.0.0.1 \
   BRIDGE_STATE_DIR="$RT/bridge" BRIDGE_MOCK="${BRIDGE_MOCK:-0}" \
   BRIDGE_ALLOWED_EMAILS="${BRIDGE_ALLOWED_EMAILS-knut.peters@maxenergy.at}" \
