@@ -18,7 +18,7 @@ import { mcpCall, mcpStatus } from './mcpcall.ts';
 import { directCall } from './mcpdirect.ts';
 import { homeFor, ensureHome, atlassianServer, type ClaudeHome } from './claudehome.ts';
 import { log } from './log.ts';
-import { testAccount, markExhausted, exhaustedOf } from './accounts.ts';
+import { testAccount, markExhausted, exhaustedOf, balanceStats } from './accounts.ts';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -37,7 +37,11 @@ function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome, co
   const servers: Record<string, unknown> = {
     'vault-search': {
       type: 'stdio', command: node, args: [join(MCP_DIR, 'vault-search.ts')],
-      env: { WERKBANK_VAULT_DIR: process.env.BRIDGE_VAULT_DIR || '/vault', MEILI_HOST: process.env.MEILI_HOST || 'http://127.0.0.1:7700', MEILI_MASTER_KEY: process.env.MEILI_MASTER_KEY || '', PATH: process.env.PATH || '' },
+      env: { WERKBANK_VAULT_DIR: process.env.BRIDGE_VAULT_DIR || '/vault', MEILI_HOST: process.env.MEILI_HOST || 'http://127.0.0.1:7700', MEILI_MASTER_KEY: process.env.MEILI_MASTER_KEY || '', PATH: process.env.PATH || '',
+        // Such-Protokoll (web/mcp/search-log.ts, zwei Wochen): Person und Unterhaltung nur gehasht im Protokoll.
+        WERKBANK_SEARCH_LOG_DIR: process.env.WERKBANK_SEARCH_LOG_DIR || join(STATE_DIR, '..', 'search-log'),
+        WERKBANK_SEARCH_LOG: process.env.WERKBANK_SEARCH_LOG || '', WERKBANK_SEARCH_LOG_UNTIL: process.env.WERKBANK_SEARCH_LOG_UNTIL || '',
+        WERKBANK_USER_ID: userId, WERKBANK_CONV_ID: convId },
     },
   };
   // forge-review (PR-Review als Entwurf, nur lesend gegen GitHub), angebunden über WERKBANK_FORGE_MCP
@@ -302,7 +306,7 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://x');
   try {
-    if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, mock: MOCK, ...stats() });
+    if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, mock: MOCK, ...stats(), konten: balanceStats() });
     // Sitzungen einer Person (nur für Werkbank-Web, mit internem Token; ohne Inhalte außer dem Kurztitel).
     if (req.method === 'GET' && url.pathname === '/sessions') {
       if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });

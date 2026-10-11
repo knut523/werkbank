@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pickAccounts, type Account } from '../src/accounts.ts';
+import { pickAccounts, balance, fp, type Account } from '../src/accounts.ts';
 
 const PORT = 3094;
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-acct-'));
@@ -25,6 +25,9 @@ const ACCOUNTS: Record<string, { id: string; label: string; token: string | null
   u1: [{ id: 'a1', label: 'Firma', token: tok('limit-firma') }, { id: 'chat', label: 'Chat-Schlüssel', token: null }, { id: 'a2', label: 'Privat', token: tok('privat') }],
   u2: [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, { id: 'a1', label: 'Firma', token: tok('limit-firma2') }, { id: 'a2', label: 'Privat', token: tok('limit-privat2') }],
   u3: [{ id: 'a1', label: 'Firma', token: tok('midlimit-firma3') }, { id: 'a2', label: 'Privat', token: tok('privat3') }],
+  // Lastverteilung: zwei freie Konten (Token-Enden AAAA / BBBB, damit der Mock sie unterscheidbar meldet).
+  lb: [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, { id: 'zwei', label: 'Zweites', token: 'sk-ant-oat01-acct-zwei-BBBB' }],
+  lf: [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, { id: 'zwei', label: 'Zweites', token: 'sk-ant-oat01-acct-limit-zwei-CCCC' }],
 };
 
 before(async () => {
@@ -44,7 +47,7 @@ before(async () => {
   proc = spawn(process.execPath, ['src/server.ts'], {
     env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
       WERKBANK_URL: `http://127.0.0.1:${(web.address() as any).port}`, WERKBANK_INTERNAL_TOKEN: 'geheim',
-      BRIDGE_CLAUDE_HOMES: HOMES, WERKBANK_SKILLS_SOURCE: SKILLS, BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: '' },
+      BRIDGE_CLAUDE_HOMES: HOMES, BRIDGE_MAX_PARALLEL_CHATS: '4', WERKBANK_SKILLS_SOURCE: SKILLS, BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.stdout!.on('data', (d) => { out += d; });
@@ -141,4 +144,49 @@ test('Tokens erscheinen nie im Log der Brücke', async () => {
   await new Promise((r) => setTimeout(r, 100));
   assert.match(out, /"konto gewechselt"/);
   assert.equal(/sk-ant-oat/.test(out), false, 'kein Token im Log');
+});
+
+test('Lastverteilung (rein): klebrig vor wenigsten laufenden Zügen vor am längsten nicht gewählt vor Reihenfolge', () => {
+  const acc: Account[] = [{ id: 'a', label: 'A', token: 'ta' }, { id: 'b', label: 'B', token: 'tb' }];
+  const [fa, fb] = [fp('ta'), fp('tb')];
+  const ids = (o: Parameters<typeof balance>[1]) => balance(acc, o).map((a) => a.id);
+  const none = { running: () => 0, last: () => 0 };
+  assert.deepEqual(ids(none), ['a', 'b'], 'nichts los → Reihenfolge der Person');
+  assert.deepEqual(ids({ ...none, running: (k) => (k === fa ? 1 : 0) }), ['b', 'a'], 'a läuft schon → b zuerst');
+  assert.deepEqual(ids({ ...none, last: (k) => (k === fa ? 2 : 1) }), ['b', 'a'], 'a zuletzt gewählt → b zuerst');
+  assert.deepEqual(ids({ sticky: fa, running: (k) => (k === fa ? 3 : 0), last: () => 0 }), ['a', 'b'], 'klebrig schlägt Last');
+  assert.deepEqual(ids({ sticky: fb, ...none }), ['b', 'a']);
+  assert.deepEqual(balance([acc[0]], { sticky: fb, ...none }).map((a) => a.id), ['a'], 'ein Konto bleibt ein Konto');
+});
+
+const konto = (a: string) => a.match(/Konto: …(\w{4})/)?.[1];
+
+test('Lastverteilung: zwei parallele neue Chats laufen auf zwei Konten', async () => {
+  const [a, b] = await Promise.all([send('p1', 'langsam 600', 'lb', 'sk-ant-oat01-acct-chat-AAAA'), send('p2', 'langsam 600', 'lb', 'sk-ant-oat01-acct-chat-AAAA')]);
+  assert.match(a, /Langsamer Zug fertig/);
+  assert.match(b, /Langsamer Zug fertig/);
+  assert.deepEqual(new Set([konto(a), konto(b)]), new Set(['AAAA', 'BBBB']));
+  const h: any = await (await fetch(`http://127.0.0.1:${PORT}/health`)).json();
+  assert.equal(h.konten.verteilung, 'an');
+  assert.ok(h.konten.gewaehlt.chat >= 1 && h.konten.gewaehlt.zwei >= 1, 'beide Konten gewählt');
+  assert.equal(JSON.stringify(h).includes('sk-ant'), false);
+});
+
+test('Lastverteilung: eine laufende Unterhaltung behält ihr Konto (klebrig)', async () => {
+  const first = konto(await send('s1', 'Erster', 'lb', 'sk-ant-oat01-acct-chat-AAAA'));
+  const other = konto(await send('s2', 'Anderer Chat', 'lb', 'sk-ant-oat01-acct-chat-AAAA'));
+  assert.notEqual(first, other, 'neuer Chat → das am längsten nicht gewählte Konto');
+  for (const t of ['Zweiter', 'Dritter']) assert.equal(konto(await send('s1', t, 'lb', 'sk-ant-oat01-acct-chat-AAAA')), first, `${t} Zug im selben Chat`);
+});
+
+test('Lastverteilung + Limit: ist das gewählte Konto erschöpft, übernimmt das andere', async () => {
+  // Zuerst das Chat-Konto beschäftigen, damit der neue Chat das (erschöpfte) zweite Konto wählt.
+  const busy = send('f1', 'langsam 2000', 'lf', 'sk-ant-oat01-acct-chat-DDDD');
+  for (let i = 0; i < 40; i++) { const h: any = await (await fetch(`http://127.0.0.1:${PORT}/health`)).json(); if (h.konten.laufendeZuege) break; await new Promise((r) => setTimeout(r, 50)); }
+  const a = await send('f2', 'Hallo', 'lf', 'sk-ant-oat01-acct-chat-DDDD');
+  assert.match(a, /↻ Konto „Chat-Schlüssel“ übernimmt \(Kontingent von „Zweites“ ausgeschöpft\)/);
+  assert.match(a, /Du hast geschrieben: Hallo/);
+  await busy;
+  const b = await send('f3', 'Danach', 'lf', 'sk-ant-oat01-acct-chat-DDDD');
+  assert.doesNotMatch(b, /übernimmt/, 'erschöpftes Konto wird bis zum Reset nicht mehr gewählt');
 });

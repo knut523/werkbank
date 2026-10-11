@@ -29,7 +29,7 @@ test('Protokoll: initialize, tools/list, unbekanntes Werkzeug', async () => {
   assert.equal(init.result.serverInfo.name, 'vault-search');
   proc.stdin!.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   const list = await rpc('tools/list');
-  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['search', 'outline', 'read_note', 'backlinks', 'links', 'list_folder', 'recent']);
+  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['search', 'outline', 'read_note', 'backlinks', 'links', 'related', 'list_folder', 'recent']);
   assert.ok(list.result.tools.every((t: any) => t.annotations.readOnlyHint));
   const bad = await rpc('tools/call', { name: 'write_note', arguments: {} });
   assert.equal(bad.error.code, -32602);
@@ -46,6 +46,21 @@ test('search: Volltext mit Tippfehler, Filter', async () => {
   assert.match(await call('search', { query: 'Sprint', folder: 'olaf/1-Projects', fields: { status: 'draft' } }), /sprint-2026-09-28-planning\.md/);
   assert.match(await call('search', { query: 'Sprint', type: 'moc' }), /Olaf-Sprint-MOC/);
   assert.match(await call('search', { query: 'Sprint', modified_since: '2999-01-01' }), /Keine Treffer/);
+});
+
+test('search: Füllwörter, Synonyme, Ausschnitt mit Überschriftenpfad', async () => {
+  // „overview“ steht nirgends — die Notiz heißt „Übersicht“; „wo“/„die“ sind Füllwörter.
+  const r = await call('search', { query: 'wo ist die Service View overview' });
+  assert.match(r.split('\n')[1], /0-service-view-uebersicht\.md/);
+  assert.match(await call('search', { query: 'Zauberwort' }), /…§ Service View: Mailprotokoll: Idee: Brevo-Mails je Kunde anzeigen\. Suchwort: Zauberwort-Kundenakte\.…/);
+});
+
+test('related: Nachbarn über Links, Backlinks und gemeinsame Ziele', async () => {
+  const r = await call('related', { note: 'Olaf-Sprint-MOC' });
+  assert.match(r, /verwandte Notizen zu olaf\/MOCs\/Olaf-Sprint-MOC\.md/);
+  assert.match(r, /olaf-Home\.md \(verweist hierher/);
+  const e = await rpc('tools/call', { name: 'related', arguments: { note: 'weg' } });
+  assert.equal(e.result.isError, true);
 });
 
 test('read_note: Frontmatter geparst, Wikilinks aufgelöst', async () => {

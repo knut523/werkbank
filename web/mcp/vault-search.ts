@@ -22,4 +22,9 @@ serve('vault-search', '0.1.0', toolDefs({
   meiliHost: process.env.MEILI_HOST || 'http://127.0.0.1:7700',
   meiliKey: process.env.MEILI_MASTER_KEY || fromEnvLocal('MEILI_MASTER_KEY'),
   meiliIndex: process.env.WERKBANK_MEILI_INDEX || 'werkbank_vault',
+}, {
+  // Such-Protokoll (search-log.ts): nur mit Verzeichnis, also nur aus Werkbank-Sitzungen der Brücke.
+  dir: process.env.WERKBANK_SEARCH_LOG_DIR || '',
+  userId: process.env.WERKBANK_USER_ID, convId: process.env.WERKBANK_CONV_ID,
+  mode: process.env.WERKBANK_SEARCH_LOG, until: process.env.WERKBANK_SEARCH_LOG_UNTIL,
 }));

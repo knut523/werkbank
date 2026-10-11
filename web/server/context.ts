@@ -191,7 +191,7 @@ export function buildPack(inp: PackInput): string {
     [3, prLine(read(src.pr))],
     [3, debriefLine(read(src.debrief), src.debrief)],
     [3, map],
-    [0, 'Details holst du bei Bedarf selbst, statt zu raten: Werkzeug `vault-search` (search → Treffer mit Ausschnitt, outline → Gliederung, read_note mit section → nur ein Abschnitt, backlinks, recent) für den Vault unter /vault, Jira über die Jira-Werkzeuge. Pfade als [[Basename]] sind Vault-Notizen.'],
+    [0, 'Details holst du bei Bedarf selbst, statt zu raten: Werkzeug `vault-search` (search → Treffer mit Überschrift und Fundzeile, bei wenig Treffern andere Formulierung probieren; outline → Gliederung, read_note mit section → nur ein Abschnitt, related/backlinks → Nachbarn im Link-Graphen, recent) für den Vault unter /vault, Jira über die Jira-Werkzeuge. Pfade als [[Basename]] sind Vault-Notizen.'],
   ];
   let lines = parts.filter(([, t]) => t);
   const text = () => lines.map(([, t]) => '- ' + t).join('\n').replace(/^- ## /, '## ');

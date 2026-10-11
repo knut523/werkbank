@@ -68,6 +68,50 @@ export function pickAccounts(accounts: Account[], ex: Exhausted, now = Date.now(
   return [[...accounts].sort((x, y) => ex[x.id].until - ex[y.id].until)[0]];
 }
 
+// Lastverteilung (Knut, 11.10.2026): neue Züge verteilen sich auf die freien Konten, statt das zweite erst zu nehmen, wenn
+// das erste erschöpft ist. Konto = Fingerabdruck des Tokens (über alle Personen: ein Konto, ein Kontingent). Eine
+// laufende Unterhaltung behält ihr Konto (klebrig), solange es frei ist. Nur im Speicher; nach einem Neustart neu verteilt.
+// BRIDGE_ACCOUNT_BALANCE=off → alte Reihenfolge (erstes freies Konto zuerst).
+const running = new Map<string, number>();     // fp → laufende Züge
+const lastPick = new Map<string, number>();    // fp → Zeitpunkt (Zähler) der letzten Wahl
+const picks = new Map<string, number>();       // Konto-ID → gewählte Züge seit Start (für /health, ohne Tokens)
+const stickyMap = new Map<string, string>();   // Unterhaltung → fp
+let pickSeq = 0;
+
+export const balanceOn = () => (process.env.BRIDGE_ACCOUNT_BALANCE ?? 'on') !== 'off';
+
+/**
+ * Reihenfolge der freien Konten für einen neuen Zug: zuerst das Konto der Unterhaltung (falls frei), dann das mit den
+ * wenigsten laufenden Zügen, bei Gleichstand das am längsten nicht gewählte, sonst die Reihenfolge der Person.
+ */
+export function balance(queue: Account[], o: { sticky?: string; running: (fp: string) => number; last: (fp: string) => number }): Account[] {
+  const f = queue.map((a, i) => ({ a, i, fp: fp(a.token) }));
+  f.sort((x, y) => Number(y.fp === o.sticky) - Number(x.fp === o.sticky) || o.running(x.fp) - o.running(y.fp) || o.last(x.fp) - o.last(y.fp) || x.i - y.i);
+  return f.map((x) => x.a);
+}
+
+export function orderForTurn(queue: Account[], conv: string): Account[] {
+  if (!balanceOn() || queue.length < 2) return queue;
+  return balance(queue, { sticky: stickyMap.get(conv), running: (k) => running.get(k) ?? 0, last: (k) => lastPick.get(k) ?? 0 });
+}
+
+/** Zug beginnt auf diesem Konto (auch nach einem Wechsel). Gibt die Freigabe zurück. */
+export function acquire(conv: string, a: Account): () => void {
+  const k = fp(a.token);
+  running.set(k, (running.get(k) ?? 0) + 1);
+  lastPick.set(k, ++pickSeq);
+  picks.set(a.id, (picks.get(a.id) ?? 0) + 1);
+  stickyMap.set(conv, k);
+  if (stickyMap.size > 5000) stickyMap.delete(stickyMap.keys().next().value!);
+  let done = false;
+  return () => { if (done) return; done = true; const n = (running.get(k) ?? 1) - 1; if (n > 0) running.set(k, n); else running.delete(k); };
+}
+
+/** Für /health: laufende Züge je Konto-Fingerabdruck-Anzahl und gewählte Züge je Konto-ID — keine Tokens. */
+export function balanceStats() {
+  return { verteilung: balanceOn() ? 'an' : 'aus', kontenLaufend: running.size, laufendeZuege: [...running.values()].reduce((a, b) => a + b, 0), gewaehlt: Object.fromEntries(picks) };
+}
+
 /** Reset-Zeitpunkt aus rate_limit_info (Sekunden oder Millisekunden seit 1970) → ms. */
 export function resetMs(v: unknown): number | undefined {
   const n = Number(v);

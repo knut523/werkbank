@@ -6,7 +6,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { cfg } from './config.ts';
-import { parseFrontmatter, type VaultIndex } from './vault.ts';
+import { parseFrontmatter, type NoteMeta, type VaultIndex } from './vault.ts';
+import { STOP_WORDS, synonymGroups, loadVaultGlossary, expandText } from './search-lexicon.ts';
 
 /** Domäne/Thema und Zustand aus dem Pfad: 2-Areas/<Domäne>/…, 1-Roadmap/<Thema>/<n-Zustand>/… */
 export function topicState(path: string): { topic: string[]; state: string } {
@@ -45,51 +46,87 @@ async function waitTask(t: any, ms = 60_000) {
   }
 }
 
+const str = (v: unknown) => (typeof v === 'string' ? v : '');
+const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : typeof v === 'string' && v ? [v] : []);
+
+/** Gewicht für die Rangfolge (Gleichstand-Brecher nach Relevanz): Archiv/Rohmitschrift unten, Gültiges oben. */
+export function boostOf(n: Pick<NoteMeta, 'path' | 'fm'>): number {
+  const st = str(n.fm.status).toLowerCase(), lc = str(n.fm.lifecycle).toLowerCase();
+  if (/(^|\/)(archiv|archive|4-archive|_archive)[^/]*\//i.test(n.path) || /\/raw\//.test(n.path) || ['archived', 'superseded', 'deprecated'].includes(st)) return 0;
+  if (st === 'current' || st === 'accepted' || lc === 'live' || lc === 'plan' || lc === 'review') return 2;
+  return 1;
+}
+
+/** Ein Meilisearch-Dokument für eine Notiz. `synonyms`: die Synonyme der Begriffe aus Titel, Aliasen, Dateiname
+ *  und Überschriften (dokumentseitig — im Eval wirksamer als Meilisearchs Anfrage-Synonyme). */
+export function docOf(n: NoteMeta, body: string) {
+  const clean = body.replace(/<!--[\s\S]*?-->/g, '');
+  const headings = [...clean.matchAll(/^#{1,4} +(.+)$/gm)].map((m) => m[1]);
+  const aliases = list(n.fm.aliases);
+  return {
+    id: idOf(n.path), path: n.path, name: n.name, title: n.title, team: n.team || 'wurzel',
+    folder: n.path.split('/').slice(0, 2).join('/'),
+    folders: n.path.split('/').slice(0, -1).map((_, k, a) => a.slice(0, k + 1).join('/')),
+    area: str(n.fm.area),
+    ...topicState(n.path),
+    type: str(n.fm.type), status: str(n.fm.status),
+    tags: list(n.fm.tags), aliases,
+    synonyms: expandText([n.title, n.name.replace(/[-_]/g, ' '), ...aliases, ...headings].join('\n')),
+    boost: boostOf(n),
+    body: clean.slice(0, 60_000), mtime: Math.floor(n.mtime), schema: schemaTag,
+  };
+}
+
+// Reihenfolge = Gewicht. 'attribute' vor 'proximity': ein Treffer im Titel schlägt nah beieinander stehende
+// Wörter im Fließtext (im Eval der größte Einzelgewinn). boost bricht Gleichstände zugunsten gültiger Notizen.
+export const SETTINGS = {
+  searchableAttributes: ['title', 'aliases', 'name', 'synonyms', 'tags', 'path', 'body'],
+  filterableAttributes: ['team', 'type', 'status', 'folder', 'folders', 'tags', 'area', 'topic', 'state', 'mtime'],
+  sortableAttributes: ['mtime'],
+  rankingRules: ['words', 'typo', 'attribute', 'proximity', 'sort', 'exactness', 'boost:desc'],
+  stopWords: STOP_WORDS,
+  displayedAttributes: ['*'],
+};
+
 let known = new Map<string, number>();   // path → mtime im Index
-const SCHEMA = 2;                          // bei neuen Feldern erhöhen → einmal alles neu
+const SCHEMA = 4;                          // bei neuen Feldern erhöhen → einmal alles neu
 let ready = false;
 export const searchState = { lastRun: 0, docs: 0, error: '' as string };
 
 export async function ensureIndex() {
   if (ready) return;
   if (!(await meili('GET', `/indexes/${cfg.meiliIndex}`))) await waitTask(await meili('POST', '/indexes', { uid: cfg.meiliIndex, primaryKey: 'id' }));
-  await meili('PATCH', `/indexes/${cfg.meiliIndex}/settings`, {
-    searchableAttributes: ['title', 'name', 'aliases', 'tags', 'path', 'body'],
-    filterableAttributes: ['team', 'type', 'status', 'folder', 'folders', 'tags', 'area', 'topic', 'state', 'mtime'],
-    sortableAttributes: ['mtime'],
-    displayedAttributes: ['*'],
-  });
+  await meili('PATCH', `/indexes/${cfg.meiliIndex}/settings`, SETTINGS);
   ready = true;
+}
+
+let schemaTag = String(SCHEMA);   // Schema + Wortschatz-Stand: ändert sich ein Glossar, werden alle Notizen neu erweitert
+function syncLexicon(idx: VaultIndex) {
+  loadVaultGlossary(idx);
+  const tag = `${SCHEMA}.${createHash('sha1').update(JSON.stringify(synonymGroups())).digest('hex').slice(0, 8)}`;
+  if (tag !== schemaTag) { schemaTag = tag; for (const p of known.keys()) known.set(p, -1); }   // alle neu, Gelöschte fallen trotzdem raus
 }
 
 export async function reindex(idx: VaultIndex, full = false): Promise<{ added: number; removed: number }> {
   try {
     await ensureIndex();
+    syncLexicon(idx);
     if (full || known.size === 0) {
       // Bestand aus Meilisearch holen, damit ein Neustart nicht alles neu schickt.
       known = new Map();
       for (let offset = 0; ; offset += 1000) {
         const r = await meili('GET', `/indexes/${cfg.meiliIndex}/documents?limit=1000&offset=${offset}&fields=path,mtime,schema`);
-        for (const d of r?.results ?? []) if (d.schema === SCHEMA) known.set(d.path, d.mtime);
+        // Auch Dokumente mit altem Schema merken (mtime -1 = neu schicken), sonst fänden Gelöschte nie in `gone`.
+        for (const d of r?.results ?? []) known.set(d.path, d.schema === schemaTag ? d.mtime : -1);
         if (!r || (r.results ?? []).length < 1000) break;
       }
     }
     const docs = [];
     for (const n of idx.notes.values()) {
-      if (known.get(n.path) === n.mtime) continue;
+      if (known.get(n.path) === Math.floor(n.mtime)) continue;   // ganze ms: Meilisearch rundet Bruchteile
       let body = '';
       try { body = parseFrontmatter(readFileSync(join(idx.root, n.path), 'utf8')).body; } catch { continue; }
-      docs.push({
-        id: idOf(n.path), path: n.path, name: n.name, title: n.title, team: n.team || 'wurzel',
-        folder: n.path.split('/').slice(0, 2).join('/'),
-        folders: n.path.split('/').slice(0, -1).map((_, k, a) => a.slice(0, k + 1).join('/')),
-        area: typeof n.fm.area === 'string' ? n.fm.area : '',
-        ...topicState(n.path),
-        type: typeof n.fm.type === 'string' ? n.fm.type : '', status: typeof n.fm.status === 'string' ? n.fm.status : '',
-        tags: Array.isArray(n.fm.tags) ? n.fm.tags.map(String) : [],
-        aliases: Array.isArray(n.fm.aliases) ? n.fm.aliases.map(String) : [],
-        body: body.replace(/<!--[\s\S]*?-->/g, '').slice(0, 60_000), mtime: n.mtime, schema: SCHEMA,
-      });
+      docs.push(docOf(n, body));
     }
     let last: any;
     for (let i = 0; i < docs.length; i += 200) last = await meili('POST', `/indexes/${cfg.meiliIndex}/documents`, docs.slice(i, i + 200));
@@ -109,7 +146,7 @@ export async function reindex(idx: VaultIndex, full = false): Promise<{ added: n
 export async function search(q: string, opts: { team?: string; limit?: number } = {}) {
   await ensureIndex();
   const r = await meili('POST', `/indexes/${cfg.meiliIndex}/search`, {
-    q, limit: opts.limit ?? 30,
+    q, limit: opts.limit ?? 30, matchingStrategy: 'frequency',   // wie der MCP-Server: seltene Begriffe halten
     filter: opts.team ? `team = "${opts.team.replace(/"/g, '')}"` : undefined,
     attributesToCrop: ['body'], cropLength: 28, attributesToHighlight: ['title', 'body'],
     highlightPreTag: '\u0001', highlightPostTag: '\u0002',
