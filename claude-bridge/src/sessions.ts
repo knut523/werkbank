@@ -6,10 +6,11 @@
 // nächste Nachricht in derselben Unterhaltung kommt ("ja"/"nein"). Dann läuft dieselbe Sitzung
 // weiter und schreibt in die neue Antwort.
 
-import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { classify, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
+import { classify, orchestratorBlock, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
@@ -71,7 +72,12 @@ interface Live {
   subagents: Map<string, string>;
   subagentStarts: number;
   agentTypes: Map<string, string>;
+  // Orchestrator-Strang (docs/plan-orchestrator-agents.md): strengere Sperren, keine Rückfragen, Ausgang des Zuges.
+  orch: boolean;
+  outcome?: TurnOutcome;
 }
+
+export type TurnOutcome = 'ok' | 'limit' | 'timeout' | 'error' | 'rate_limit' | 'busy' | 'aborted';
 
 export type PermissionMode = 'default' | 'auto' | 'dontAsk';
 
@@ -139,8 +145,15 @@ const cwdFile = join(cfg.stateDir, 'cwd.json');
 let cwdMap: Record<string, string> = {};
 try { cwdMap = JSON.parse(readFileSync(cwdFile, 'utf8')); } catch { /* keine */ }
 
+// Orchestrator-Stränge (Knut, 09.10.2026): Unterhaltung → Arbeitsordner, Anmeldezeit und Ausgang des letzten Zuges.
+// Angemeldet über den internen Kanal VOR dem ersten Zug (die Web-App wählt die Unterhaltungs-ID); dauerhaft.
+interface OrchEntry { dir: string; since: number; turn?: { start: number; end: number | null; outcome: TurnOutcome | null } }
+const orchFile = join(cfg.stateDir, 'orch.json');
+let orchMap: Record<string, OrchEntry> = {};
+try { orchMap = JSON.parse(readFileSync(orchFile, 'utf8')); } catch { /* keine */ }
+
 function saveMap() {
-  for (const [f, data] of [[mapFile, sessionMap], [homeFile, homeMap], [cwdFile, cwdMap]] as const) {
+  for (const [f, data] of [[mapFile, sessionMap], [homeFile, homeMap], [cwdFile, cwdMap], [orchFile, orchMap]] as const) {
     const tmp = f + '.tmp';
     writeFileSync(tmp, JSON.stringify(data, null, 1));
     renameSync(tmp, f);
@@ -221,6 +234,71 @@ export function workDirFor(userId: string, convId: string): string {
   return dir;
 }
 
+/**
+ * Meldet eine neue Unterhaltung als Orchestrator-Strang an: Arbeitsordner = dir (vorher geprüft, siehe server.ts),
+ * strengere Sperren. Nur für Unterhaltungen ohne Sitzung und ohne Ordner — eine bestehende wird nie umgebogen.
+ */
+export function registerOrchestration(userId: string, convId: string, dir: string): void {
+  const key = `${safeId(userId)}:${safeId(convId)}`;
+  if (sessionMap[key] || cwdMap[key] || orchMap[key] || lives.has(key)) throw Object.assign(new Error('Unterhaltung gibt es schon.'), { status: 409 });
+  cwdMap[key] = dir;
+  orchMap[key] = { dir, since: Date.now() };
+  saveMap();
+}
+
+export function isOrchestrated(userId: string, convId: string): boolean {
+  return !!orchMap[`${safeId(userId)}:${safeId(convId)}`];
+}
+
+function setTurn(key: string, turn: OrchEntry['turn']) {
+  if (!orchMap[key]) return;
+  orchMap[key].turn = turn;
+  try { saveMap(); } catch (e: any) { log('orch speichern fehlgeschlagen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); }
+}
+
+/** Zustand aller Stränge einer Person: läuft jetzt? letzter Zug (Start/Ende/Ausgang), abgebrochen durch Neustart? */
+export function orchStateOf(userId: string) {
+  const prefix = safeId(userId) + ':';
+  return Object.entries(orchMap).filter(([k]) => k.startsWith(prefix)).map(([k, e]) => {
+    const l = lives.get(k);
+    const seen = lastSeen.get(k);
+    return {
+      conv: k.slice(prefix.length), dir: e.dir, since: e.since, running: !!l, turn: e.turn ?? null,
+      // Start ohne Ende und keine laufende Sitzung: die Brücke wurde mitten im Zug neu gestartet.
+      interrupted: !l && !!e.turn && e.turn.end === null,
+      resumable: !!sessionMap[k], turns: seen?.turns ?? null, written: seen?.written ?? [],
+    };
+  });
+}
+
+// Git ohne Zugangsdaten für Stränge: eigene globale Konfiguration (nur Name/E-Mail), kein Credential-Helfer, Push auf
+// github.com umgeleitet auf eine ungültige Adresse, keine Passwortabfrage. Wer die Umgebung im Befehl ausdrücklich
+// überschreibt, kommt daran vorbei — dann greifen orchestratorBlock und der Klassifikator (ehrlich im Plan).
+let orchGitConfig: string | null = null;
+export function orchGitEnv(env: Record<string, string | undefined>): void {
+  if (!orchGitConfig || !existsSync(orchGitConfig)) {
+    const get = (k: string) => { try { return execFileSync('git', ['config', '--global', '--get', k], { encoding: 'utf8', timeout: 3000 }).trim(); } catch { return ''; } };
+    const name = (get('user.name') || 'Werkbank-Agent').replace(/[\n"\\]/g, '');
+    const email = (get('user.email') || 'werkbank-agent@localhost').replace(/[\n"\\]/g, '');
+    orchGitConfig = join(cfg.stateDir, 'orch-gitconfig');
+    writeFileSync(orchGitConfig, [
+      '# Von der claude-bridge für Orchestrator-Stränge erzeugt: kein Push, keine Zugangsdaten.',
+      '[user]', `\tname = ${name}`, `\temail = ${email}`,
+      '[credential]', '\thelper =',
+      '[url "https://push-gesperrt.invalid/"]', '\tpushInsteadOf = https://github.com/', '\tpushInsteadOf = git@github.com:', '\tpushInsteadOf = ssh://git@github.com/',
+      '',
+    ].join('\n'));
+  }
+  env.GIT_CONFIG_GLOBAL = orchGitConfig;
+  env.GIT_CONFIG_NOSYSTEM = '1';
+  env.GIT_TERMINAL_PROMPT = '0';
+  env.GIT_ASKPASS = '/bin/false';
+  env.SSH_ASKPASS = '/bin/false';
+  env.GCM_INTERACTIVE = 'never';
+}
+
+const ORCH_APPEND = `Dieser Chat ist ein Orchestrator-Strang: Die Haupt-Sitzung hat dich gestartet, Knut liest mit. Hier gibt es KEINE Rückfragen — was im Chat ein „ja“ bräuchte, wird abgelehnt. Schreib solche Punkte stattdessen unter „### Stand“ → „Braucht Knut“. GitHub schreiben (push, PR), Jira/Confluence schreiben, Git-Konfiguration, Git-Hooks, .claude/ und .env sind gesperrt; versuch nicht, das zu umgehen. Lokale Commits im Arbeitsordner sind erlaubt, wenn der Auftrag sie verlangt.`;
+
 export function safeId(s: string): string {
   return /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : createHash('sha256').update(s).digest('hex').slice(0, 24);
 }
@@ -280,6 +358,7 @@ function attach(live: Live, sink: Sink) {
   live.turnTimer = setTimeout(() => {
     log('turn timeout', { conv: live.key });
     markEnd(live, 'timeout');
+    live.outcome ??= 'timeout';
     emitStatus(live, '⏱️ Zeitlimit erreicht — ich breche diesen Schritt ab. Schreib einfach weiter, die Unterhaltung bleibt erhalten.');
     live.abort.abort();
   }, cfg.turnTimeoutMs);
@@ -443,8 +522,8 @@ function handleMessage(live: Live, msg: any) {
       live.usage.output += u.output_tokens ?? 0;
       if (!live.rateLimited) markEnd(live, msg.subtype === 'error_max_turns' ? 'max_turns' : msg.subtype !== 'success' || msg.is_error ? 'error' : 'ok');
       if (live.rateLimited) { /* Meldung bzw. Kontowechsel in handleTurn */ }
-      else if (msg.subtype === 'error_max_turns') emitStatus(live, `⏹️ Maximale Schrittzahl (${cfg.maxTurns}) erreicht. Schreib „weiter“, dann mache ich dort weiter.`);
-      else if (msg.subtype !== 'success' || msg.is_error) emitStatus(live, /authenticat|401|token/i.test(String(msg.result ?? '')) ? `⚠️ ${AUTH_HINTS.authentication_failed}` : '⚠️ Bei der Ausführung ist ein Fehler aufgetreten.');
+      else if (msg.subtype === 'error_max_turns') { live.outcome ??= 'limit'; emitStatus(live, `⏹️ Maximale Schrittzahl (${cfg.maxTurns}) erreicht. Schreib „weiter“, dann mache ich dort weiter.`); }
+      else if (msg.subtype !== 'success' || msg.is_error) { live.outcome ??= 'error'; emitStatus(live, /authenticat|401|token/i.test(String(msg.result ?? '')) ? `⚠️ ${AUTH_HINTS.authentication_failed}` : '⚠️ Bei der Ausführung ist ein Fehler aufgetreten.'); }
       return;
     }
   }
@@ -482,6 +561,13 @@ function makeGuard(live: Live) {
     const decide = (permissionDecision: 'allow' | 'deny', reason: string) => ({
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason },
     });
+    if (live.orch) {
+      const why = orchestratorBlock(tool, toolInput);
+      if (why) {
+        emitStatus(live, `⛔ Orchestrator-Strang: ${why} gesperrt — ${statusLine(tool, toolInput)}`);
+        return decide('deny', `In einem Orchestrator-Strang gesperrt (${why}). Nicht erneut versuchen, nicht umgehen; schreib unter „### Stand“ → „Braucht Knut“, was zu tun wäre.`);
+      }
+    }
     if ((tool === 'Task' || tool === 'Agent') && !agentId) {
       // Obergrenze an Teilagenten je Zug (Kosten).
       if (live.subagentStarts >= maxSubagents()) {
@@ -505,6 +591,11 @@ function makeGuard(live: Live) {
     }
     // Auto-Modus: keine Entscheidung — der Klassifikator des SDK entscheidet; eskaliert er, kommt canUseTool (unten).
     if (cls === 'auto' && live.mode === 'auto' && !escalated) return {};
+    // Orchestrator-Strang: keine Rückfragen (niemand soll „ja“ in Knuts Namen sagen) — ablehnen und aufschreiben lassen.
+    if (live.orch) {
+      emitStatus(live, `🔒 Orchestrator-Strang ohne Rückfragen: ${statusLine(tool, toolInput)} nicht ausgeführt`);
+      return decide('deny', 'In einem Orchestrator-Strang gibt es keine Rückfragen. Nicht ausgeführt. Mach ohne diesen Schritt weiter, so weit es geht, und schreib unter „### Stand“ → „Braucht Knut“, was Knut freigeben oder selbst tun muss.');
+    }
     // confirm: Rückfrage stellen, Antwort schließen, auf die nächste Nachricht warten.
     // Parallele Schreibaufrufe werden nacheinander abgefragt.
     const note = (agentId ? `**Teilagent „${role ?? 'Teilagent'}“ möchte:**\n\n` : '')
@@ -605,6 +696,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const mode = autoFor(req);
   const lock = lockFor(mine, { readonly: !!req.readonly, mode });
   if (lock !== 'ok') {
+    if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'busy' });
     req.sink.write(lock === 'board-full'
       ? `Bei dir laufen schon ${MAX_BOARD_RUNS} Board-Agenten. Bitte warte, bis einer fertig ist.`
       : maxParallelChats() === 1
@@ -630,8 +722,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
     jiraCalls: new Map(), onJiraWrite: req.onJiraWrite, home: '',
     mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
-    subagents: new Map(), subagentStarts: 0, agentTypes: new Map(),
+    subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: !!orchMap[key],
   };
+  if (live.orch) setTurn(key, { start: Date.now(), end: null, outcome: null });
   lives.set(key, live);
   attach(live, req.sink);
   // Sofort ein Lebenszeichen: bis zum ersten Token vergehen mit echtem Claude einige Sekunden
@@ -663,6 +756,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // „auto“ hat im ersten echten Zug nichts zurückgestellt (Werkzeuge 66 805 Tokens, deferred 0) —
   // deshalb „true“: MCP-Schemas immer erst bei Bedarf (kürzerer Prompt, schnellerer erster Token).
   env.ENABLE_TOOL_SEARCH = process.env.BRIDGE_TOOL_SEARCH || 'true';
+  if (live.orch) orchGitEnv(env);
 
   // Kontext-Paket + Hygiene-Fragen nur für neue Sitzungen (nicht bei resume, nicht im Nur-lesen-Lauf).
   // Parallel dazu: die Claude-Konten der Person (ohne Werkbank: nur der Schlüssel aus der Anfrage).
@@ -687,7 +781,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? '' : orchestratorAppend(), extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? '' : orchestratorAppend(), live.orch ? ORCH_APPEND : '', extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim
@@ -736,6 +830,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
           log('kontingent erschöpft', { conv: key, konto: acct.id, konten: accounts.length });
           markEnd(live, 'limit');
           emitStatus(live, `⚠️ ${AUTH_HINTS.rate_limit}`);
+          live.outcome ??= 'rate_limit';
           break;
         }
         log('konto gewechselt', { conv: key, von: acct.id, nach: next.id, mitten: live.progressed });
@@ -749,6 +844,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       }
     } finally {
       mark(live, 'ende');
+      if (live.orch) setTurn(key, { start: orchMap[key]?.turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? (live.abort.signal.aborted ? 'aborted' : 'ok') });
       log('turn end', { conv: key, usage: live.usage, ms: live.times, ...(live.subagentStarts ? { teilagenten: live.subagentStarts } : {}), ...(live.denials.length ? { denials: live.denials } : {}) });
       end(live);
     }
@@ -777,6 +873,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       if (live.rateLimited || isRateLimitText(text)) { live.rateLimited = live.rateLimited ?? { resetsAt: live.rateLimitReset }; return; }
       markEnd(live, 'error');
       const auth = /auth|401|token|login/i.test(text);
+      live.outcome ??= 'error';
       emitStatus(live, auth ? `⚠️ ${AUTH_HINTS.authentication_failed}` : '⚠️ Die Claude-Sitzung ist unerwartet beendet worden. Schreib einfach noch einmal.');
     }
   }

@@ -10,7 +10,7 @@ import { join, extname, resolve, normalize } from 'node:path';
 import { execFile } from 'node:child_process';
 import YAML from 'yaml';
 import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl } from './config.ts';
-import { connect, wb } from './db.ts';
+import { connect, wb, lc } from './db.ts';
 import { librechatLogin, createSession, destroySession, currentUser, allowed, teammates, userById, type User } from './auth.ts';
 import { listClaudeAccounts, addClaudeAccount, removeClaudeAccount, reorderClaudeAccounts, claudeAccountToken, claudeAccountsForBridge } from './creds.ts';
 import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraIdentity, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
@@ -19,6 +19,7 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion } from './orchestrator.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName } from './ablage.ts';
@@ -1083,7 +1084,8 @@ async function todayCount(u: User, queue?: any[], mine?: any) {
   const m = mine ?? await mineFor(u, { write: false });   // Zähler (alle 60 s): nur lesen, nie freigaben.md schreiben
   const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
   const hyg = h.items.filter((i: any) => !h.snoozed.includes(i.key)).length;
-  return q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + hyg;
+  const orch = (await listQuestions(u, { open: true }).catch(() => [])).length;   // Rückfragen des Orchestrators
+  return q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + hyg + orch;
 }
 
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -1095,7 +1097,8 @@ on('GET', /^\/api\/today$/, async (req, res) => {
   const im = await issueMap();
   const day = ((await tbCol().find({ userId: u.id, date: today }).sort({ start: 1 }).toArray()) as any[])
     .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
-  send(res, 200, { queue, mine, day, today, count: await todayCount(u, queue, mine), dryRun: dryRun() });
+  const orchOpen = (await listQuestions(u, { open: true }).catch(() => [])).length;
+  send(res, 200, { queue, mine, day, today, orchOpen, count: await todayCount(u, queue, mine), dryRun: dryRun() });
 });
 
 on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
@@ -1167,6 +1170,22 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
   send(res, 200, { ok: true, key: run.key });
 });
 
+
+// Rückfragen des Orchestrators (Knut antwortet hier; nur die eigenen).
+on('GET', /^\/api\/orchestrator\/questions$/, async (req, res, _m, url) => {
+  const u = await needUser(req);
+  const open = await listQuestions(u, { open: true });
+  send(res, 200, url.searchParams.get('count') ? { open: open.length } : { open, answered: (await listQuestions(u, { limit: 20 })).filter((q) => q.status !== 'offen').slice(0, 10) });
+});
+
+on('POST', /^\/api\/orchestrator\/questions\/([\w-]{1,20})\/answer$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const q = await answerQuestion(u, m[1], { option: b.option ?? null, text: b.text ?? null });
+  log('rückfrage beantwortet', { user: u.id, id: q.id });
+  roadmapChanged('orchestrator-antwort');
+  send(res, 200, q);
+});
 
 on('POST', /^\/api\/roadmap\/question$/, async (req, res) => {
   const u = await needAdmin(req);
@@ -1913,6 +1932,49 @@ async function internalUser(req: IncomingMessage, b: any): Promise<User> {
   if (!u || !allowed(u.email)) throw new HttpError(403, 'Konto nicht freigeschaltet.');
   return u;
 }
+
+// Orchestrator-Stränge (docs/plan-orchestrator-agents.md): nur über den internen Kanal (scripts/orch), nie aus dem Browser.
+// Person: userId oder email (Vorgabe WERKBANK_PILOT_EMAIL = Knut); die Freigabeliste gilt.
+async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
+  if (b.userId) return internalUser(req, b);
+  const email = String(b.email || cfg.pilotEmail).toLowerCase();
+  const d: any = await lc().collection('users').findOne({ email }, { projection: { _id: 1 } });
+  return internalUser(req, { userId: d ? String(d._id) : '' });
+}
+
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review)$/, async (req, res, m) => {
+  const b = await body(req, 1 << 20);
+  const u = await orchPerson(req, b);
+  const id = String(b.id ?? '');
+  switch (m[1]) {
+    case 'start': {
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true });
+      log('strang gestartet', { user: u.id, id: r.id, conv: r.conv });
+      return send(res, 200, r);
+    }
+    case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
+    case 'show': return send(res, 200, await showOrch(u, id));
+    case 'send': return send(res, 200, await sendOrch(u, id, b.text));
+    case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? ''));
+  }
+});
+
+// Rückfragen an Knut: der Orchestrator fragt (intern), Knut antwortet in der Werkbank (unten, /api/orchestrator/…).
+on('POST', /^\/internal\/orchestrator\/questions\/(ask|list|get|withdraw)$/, async (req, res, m) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  switch (m[1]) {
+    case 'ask': {
+      const q = await askKnut(u, { title: b.title, context: b.context, options: b.options, recommendation: b.recommendation, strand: b.strand || null, link: b.link || null, plan: b.plan || null });
+      log('rückfrage an knut', { user: u.id, id: q.id });
+      roadmapChanged('orchestrator-frage');
+      return send(res, 200, q);
+    }
+    case 'list': return send(res, 200, { questions: await listQuestions(u, { open: b.open === true }) });
+    case 'get': return send(res, 200, await getQuestion(u, String(b.id ?? '')));
+    case 'withdraw': { const r = await withdrawQuestion(u, String(b.id ?? '')); roadmapChanged('orchestrator-frage'); return send(res, 200, r); }
+  }
+});
 
 on('POST', /^\/internal\/session-start$/, async (req, res) => {
   const b = await body(req);

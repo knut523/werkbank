@@ -7,7 +7,7 @@
 //   auto    – nur im Auto-Modus (mit Arbeitsordner): Bash und Edits im eigenen Arbeitsordner entscheidet der
 //             Klassifikator des SDK (Plan 71 P1, Knut 06.10.2026). Ohne Arbeitsordner gibt es diese Klasse nie.
 
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { resolve, dirname, sep } from 'node:path';
 
 export type ToolClass = 'read' | 'confirm' | 'blocked' | 'auto';
@@ -156,6 +156,62 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
   }
   // Write, Edit, MultiEdit, NotebookEdit und alles Unbekannte: nachfragen.
   return { cls: 'confirm' };
+}
+
+// ---------- Orchestrator-Stränge (docs/plan-orchestrator-agents.md, Knut 09.10.2026) ----------
+// Ein Strang ist ein Chat, den die Haupt-Sitzung über den internen Kanal gestartet hat. Dort gilt zusätzlich, vor allen
+// Klassen und auch nach einem „ja“: kein GitHub-Schreiben, kein Jira-Schreiben, keine Änderung an Git-Konfiguration,
+// Hooks, Claude-Einstellungen oder .env. Muster sind keine Sandbox (siehe Plan, Council NOTES); die zweite Schicht ist
+// die Git-Umgebung ohne Zugangsdaten (sessions.ts, orchGitEnv).
+const ORCH_BASH_BLOCK: [RegExp, string][] = [
+  [/\bgit(?:\s+-[cC]\s+\S+|\s+--?[\w-]+(?:=\S+)?)*\s+(push|send-pack)\b/, 'git push'],
+  [/\balias\.[\w-]+/, 'Git-Alias (könnte pushen)'],
+  [/\bgit-(send-pack|receive-pack)\b/, 'git push'],
+  [/\bcore\.hooksPath\b|\.git\/(hooks|config)\b/, 'Git-Hooks/-Konfiguration'],
+  [/\bgh\s+(pr|issue|release|repo|label|secret|variable|workflow|gist|api)\b(?!\s+(view|list|diff|status|checks)\b)/, 'GitHub-CLI (nur lesen erlaubt: view/list/diff/status/checks)'],
+  [/api\.github\.com|github\.com\/[^\s]*\.git\b/, 'GitHub direkt ansprechen'],
+  [/(atlassian\.net|api\.atlassian\.com)/i, 'Atlassian/Jira direkt ansprechen'],
+];
+const ORCH_FILE_BLOCK = /(^|\/)(\.git|\.claude)(\/|$)|(^|\/)\.env[^/]*$/;
+
+/** Grund, warum ein Aufruf in einem Orchestrator-Strang gesperrt ist — oder null. */
+export function orchestratorBlock(tool: string, input: Record<string, unknown>): string | null {
+  if (tool === 'Bash') {
+    const cmd = String(input.command ?? '');
+    for (const [re, why] of [...BASH_BLOCKED, ...BASH_GITHUB_WRITE, ...ORCH_BASH_BLOCK]) if (re.test(cmd)) return why;
+    // git config: nur lesen (--get…/--list/-l); jede schreibende Form ist gesperrt.
+    for (const m of cmd.matchAll(/\bgit(?:\s+-[cC]\s+\S+|\s+--?[\w-]+(?:=\S+)?)*\s+config\b([^|;&\n]*)/g)) if (!/\s(--get(-all|-regexp)?|--list|-l)\b/.test(m[1])) return 'Git-Konfiguration ändern';
+    return null;
+  }
+  if (FILE_TOOLS.has(tool)) {
+    const f = String(input.file_path ?? input.notebook_path ?? '');
+    return ORCH_FILE_BLOCK.test(f) ? 'Git-/Claude-Konfiguration oder .env ändern' : null;
+  }
+  if (tool.startsWith('mcp__')) {
+    const [, server, name = ''] = tool.split('__');
+    if (server === 'werkbank' && /^jira_/.test(name)) return 'Jira schreiben';
+    if (server === 'atlassian' && !MCP_READ.test(name) && name !== 'authenticate' && name !== 'complete_authentication') return 'Jira/Confluence schreiben';
+    if (/github/i.test(server) && !MCP_READ.test(name)) return 'GitHub schreiben';
+    if (server === 'forge-review' && /merge|post|publish|submit|comment|approve|request_changes/i.test(name)) return 'GitHub schreiben';
+  }
+  return null;
+}
+
+/** Erlaubte Wurzeln für Arbeitsordner von Strängen (WERKBANK_ORCH_ROOTS, Komma-getrennt; Vorgabe $HOME/work). */
+export const orchRoots = () => (process.env.WERKBANK_ORCH_ROOTS || `${process.env.HOME ?? '/nonexistent'}/work`).split(',').map((x) => x.trim()).filter(Boolean);
+
+/** Prüft einen Arbeitsordner für einen Strang (echter Pfad). Fehlertext oder null; bei Erfolg der echte Pfad in `real`. */
+export function orchDirProblem(dir: string): { problem: string | null; real?: string } {
+  if (!dir || !dir.startsWith('/')) return { problem: 'Arbeitsordner muss ein absoluter Pfad sein.' };
+  let real: string;
+  try { real = realpathSync(dir); } catch { return { problem: 'Arbeitsordner gibt es nicht.' }; }
+  try { if (!statSync(real).isDirectory()) return { problem: 'Arbeitsordner ist kein Verzeichnis.' }; } catch { return { problem: 'Arbeitsordner nicht lesbar.' }; }
+  const roots = orchRoots().map((r) => { try { return realpathSync(r); } catch { return resolve(r); } });
+  if (!roots.some((r) => real !== r && within(real, r))) return { problem: `Arbeitsordner muss unterhalb von ${orchRoots().join(', ')} liegen (nicht die Wurzel selbst).` };
+  let vault = resolve(VAULT_DIR); try { vault = realpathSync(VAULT_DIR); } catch { /* kein Vault */ }
+  if (within(real, vault)) return { problem: 'Der Vault ist kein Arbeitsordner für Stränge.' };
+  if (/(^|\/)(\.runtime[^/]*|\.git|\.claude|\.ssh)(\/|$)/.test(real)) return { problem: 'Arbeitsordner darf nicht in .runtime, .git, .claude oder .ssh liegen.' };
+  return { problem: null, real };
 }
 
 function short(s: unknown, n = 90): string {

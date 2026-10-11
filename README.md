@@ -718,6 +718,45 @@ Knut, 07.10.2026: „werkbank hat nur einen chat pro zeit … gehen auch mehrere
   mehrere Personen den Auto-Modus bekommen.
 - **Not-Aus:** `BRIDGE_MAX_PARALLEL_CHATS=1 scripts/werkbank.sh restart` → wieder ein Chat zur Zeit.
 
+## Orchestrator-Agenten (09.10.2026)
+
+Knut, 09.10.2026: „schau, dass du einzelne Agents auf der Werkbank startest und koordinierst (du bist der
+Orchestrator)“. Plan und Council: `docs/plan-orchestrator-agents.md`. Die Haupt-Sitzung von Claude Code startet je
+Arbeitsstrang einen **normalen Werkbank-Chat in Knuts Konto** — Titel „Orchestrator · …“, Lesezeichen
+**„Orchestrator“** in der LibreChat-Leiste (alle Stränge zusammen), Fortschritt live im Chat.
+
+```bash
+scripts/orch start --title "Flex: Speicher-Pilot" --cwd ~/work/knut/flex-wt --plan ~/work/knut/flex-wt/docs/plan.md \
+  --prompt "Setze Scheibe 2 aus dem Plan um, Tests grün, lokal committen."
+scripts/orch list            # ⏳ running · ✋ waiting · ✅ done · ❌ failed, mit Grund und „### Stand“-Auszug
+scripts/orch show <id>       # letzte Nachricht ganz
+scripts/orch send <id> --text "weiter"      # Folgenachricht in denselben Chat
+scripts/orch review <id>     # geprüft → aus der offenen Liste (list --all zeigt alle)
+scripts/orch ask --title "Flex: Pilot-Region?" --context "…" --option "Nord :: schneller Start" --option "Süd :: größerer Markt" \
+  --recommend "Nord" --strand <id>          # Rückfrage an Knut → Werkbank, Roadmap → „Rückfragen des Orchestrators“
+scripts/orch questions list --open · scripts/orch questions get <id> · scripts/orch questions withdraw <id>
+```
+
+- **Einstieg nur lokal:** CLI → `POST /internal/orchestrator/*` der Web-App (127.0.0.1, Schlüssel
+  `WERKBANK_INTERNAL_TOKEN` aus der `.env.local`, wird nie ausgegeben; nie über den LibreChat-Proxy erreichbar).
+  Ziel: `WERKBANK_URL` (Vorgabe `http://127.0.0.1:3070`), Schlüsseldatei `WERKBANK_ENV_FILE`.
+- **Arbeitsordner:** die Web-App wählt die Unterhaltungs-ID und meldet sie samt Ordner bei der Brücke an, bevor der Chat
+  entsteht (`orch.json`); der Ordner muss unter `WERKBANK_ORCH_ROOTS` liegen (Vorgabe `$HOME/work`), nicht in
+  `.runtime`/`.git`/Vault. Ein offener Strang je Worktree (`--shared` hebt das auf).
+- **Strengere Regeln im Strang:** keine Rückfragen (was ein „ja“ bräuchte, wird abgelehnt und unter „Braucht Knut“
+  notiert); gesperrt auch nach „ja“: `git push` in allen naheliegenden Formen, `gh` schreibend, GitHub-API, Jira/
+  Confluence schreiben, Git-Konfiguration/-Hooks, `.claude/`, `.env*`. Git läuft mit eigener globaler Konfiguration
+  (kein Credential-Helfer, Push auf github.com ins Leere). Keine Sandbox: wer die Umgebung im Befehl bewusst
+  überschreibt, kommt am Git-Teil vorbei — dann bleiben Muster und Klassifikator.
+- **Status** aus dem ausdrücklichen Zustand der Brücke (Zug läuft, Ausgang `ok/limit/timeout/error/busy/…`, Neustart
+  mittendrin) und bei normalem Ende aus der Zeile `Status: fertig | braucht Antwort | blockiert` der Antwort.
+- **Rückfragen an Knut** nur für echte Entscheidungen, immer mit Empfehlung. Knut antwortet unter Roadmap →
+  „Rückfragen des Orchestrators“ (Zähler an „Roadmap“ in der Werkbank-Navigation).
+- **Grenzen:** LibreChat `CONCURRENT_MESSAGE_MAX` (jetzt 5) und Brücke `BRIDGE_MAX_PARALLEL_CHATS` (3) laufende Züge je
+  Konto; ein Zug höchstens 40 Schritte / 15 min, dann `waiting` mit „`send <id> weiter`“.
+- **Zweite Instanz zum Testen:** `scripts/isoliert.sh start|stop|status` (Web 3170, LibreChat 3180, Brücke 3190, Mongo
+  27180, eigenes `.runtime-iso/`), CLI dort mit `WERKBANK_URL=http://127.0.0.1:3170 WERKBANK_ENV_FILE=.runtime-iso/.env.local`.
+
 ## Roadmap-Automatik (08.10.2026)
 
 Plan: `docs/plan-roadmap-automatik.md`. Vault-Roadmap und Roadmap-Seite ziehen sich selbst nach; was eine Maschine

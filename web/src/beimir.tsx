@@ -28,7 +28,8 @@ export function useTodayCount(dep: unknown = null, enabled = true) {
     const load = () => api<{ count: number }>('/api/today/count').then((r) => { if (alive) setN(r.count); }).catch(() => {});
     load();
     const t = setInterval(load, 60_000);
-    return () => { alive = false; clearInterval(t); };
+    window.addEventListener('werkbank-questions', load);   // Rückfrage beantwortet → Zähler sofort neu
+    return () => { alive = false; clearInterval(t); window.removeEventListener('werkbank-questions', load); };
   }, [dep, enabled]);
   return n;
 }

@@ -5,6 +5,7 @@ import { api, chatTarget, fmtDateTime, type Config } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, useJiraLive } from '../ui.tsx';
 import { HygienePanel } from '../components.tsx';
 import { WartetAufDich, Md, mineCount, note } from '../beimir.tsx';
+import { OrchQuestions } from '../orchquestions.tsx';
 
 const BIG: CSSProperties = { minHeight: 44 };
 const STAND: Record<string, [string, string]> = { ja: ['✓', 'ok'], teilweise: ['◐', 'warn'], nein: ['✗', 'bad'] };
@@ -120,7 +121,8 @@ export function Heute({ cfg }: { cfg: Config }) {
   const review = d.queue.filter((x: any) => x.bucket === 'review');
   const waitingRuns = d.queue.filter((x: any) => ['frage', 'haengt', 'still'].includes(x.bucket));
   const running = d.queue.filter((x: any) => x.bucket === 'laeuft');
-  const nMine = waitingRuns.length + mineCount(d.mine, decisions);
+  const orchOpen = d.orchOpen ?? 0;
+  const nMine = waitingRuns.length + mineCount(d.mine, decisions) + orchOpen;
   const reload = () => t.reload();
   const first = cfg.user?.name.split(' ')[0] ?? '';
 
@@ -142,6 +144,7 @@ export function Heute({ cfg }: { cfg: Config }) {
 
       {nMine > 0 && <section data-testid="waiting">
         <h2>Wartet auf dich <span className="chip">{nMine}</span></h2>
+        {orchOpen > 0 && <OrchQuestions onChange={reload} />}
         {waitingRuns.map((it: any) => <RunCard key={it.id} it={it} onDone={reload} />)}
         {mineCount(d.mine, decisions) > 0 && <div className="card"><WartetAufDich x={d.mine} decisions={decisions} onChange={reload} /></div>}
       </section>}

@@ -114,13 +114,14 @@ Schließe mit „### Stand“ (3–5 Zeilen: was erledigt ist, was offen ist, we
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 OLAF-Werkbank';
 
 /** Legt die Unterhaltung an und schickt die erste Nachricht; liefert die LibreChat-Unterhaltungs-ID. */
-export async function createLibreChat(u: User, text: string): Promise<string> {
+export async function createLibreChat(u: User, text: string, opts: { conversationId?: string; parentMessageId?: string } = {}): Promise<string> {
   const token = await librechatAccessToken(u);
   const r = await fetch(`${cfg.librechatUrl}/api/agents/chat/${encodeURIComponent('Claude Code')}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'user-agent': UA },
     body: JSON.stringify({
-      text, sender: 'User', isCreatedByUser: true, parentMessageId: '00000000-0000-0000-0000-000000000000', messageId: randomUUID(),
+      text, sender: 'User', isCreatedByUser: true, parentMessageId: opts.parentMessageId ?? '00000000-0000-0000-0000-000000000000', messageId: randomUUID(),
+      ...(opts.conversationId ? { conversationId: opts.conversationId } : {}),
       clientTimestamp: new Date().toISOString().slice(0, 19), error: false,
       endpoint: 'Claude Code', endpointType: 'custom', model: 'claude-code', modelLabel: 'Claude Code (OLAF)', spec: 'claude-code-olaf',
       key: 'never', modelDisplayLabel: 'Claude Code', isTemporary: false, isRegenerate: false, isContinued: false,
@@ -129,6 +130,8 @@ export async function createLibreChat(u: User, text: string): Promise<string> {
     signal: AbortSignal.timeout(20_000),
   });
   const j: any = await r.json().catch(() => ({}));
+  if (r.status === 429) throw Object.assign(new Error('LibreChat-Parallelgrenze erreicht (CONCURRENT_MESSAGE_MAX) — gerade laufen zu viele Antworten in diesem Konto. Später noch einmal.'), { status: 429 });
+  if (r.status === 409) throw Object.assign(new Error(String(j?.error ?? 'LibreChat: Konflikt (vorige Antwort wird noch gespeichert).')), { status: 409 });
   if (!r.ok || !j.conversationId) {
     const why = j?.message ?? j?.error ?? `LibreChat antwortet mit ${r.status}`;
     throw Object.assign(new Error(/no_user_key/.test(JSON.stringify(j)) ? 'Im Chat ist noch kein Claude-Token hinterlegt — unter „Einrichtung“ eintragen.' : `Chat konnte nicht angelegt werden: ${String(why).slice(0, 200)}`), { status: 502 });
