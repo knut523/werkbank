@@ -3,7 +3,7 @@ titel: Werkbank — Ziele automatisch zuordnen (wenn möglich)
 stand: 11.10.2026
 owner: Knut
 zweig: feat/ziele-auto (Basis release/werkbank-2026-10-11, 31cb95d; nur lokal)
-quelle: Auftrag Knut 11.10.2026 · Nachtrag Council Runde 2 (bindend) · Rückfragen q-4b326d, q-b31180 (q-07faa0 zurückgezogen)
+quelle: Auftrag Knut 11.10.2026 · Nachtrag Council Runde 2 (bindend) · Rückfragen q-4b326d, q-b31180 beantwortet 11.10.2026 (q-07faa0 zurückgezogen)
 bericht: ~/work/knut/review-pakete/127-ziele-auto/bericht.md
 ---
 
@@ -52,13 +52,13 @@ Jira-Spiegel der Werkbank (Mongo `werkbank.jira_issues`: 324 Tickets, 105 offen)
 | Regel | trifft (von 26) | Rückblick (Tickets mit Ziel) | Status nach Council Runde 2 |
 |---|---|---|---|
 | 1 Ticket im Beleg genau eines Ziels | 0 (PM-379 hat schon KR3) | – | **automatisch** (gebaut) |
-| 2 Parent/Workstream/Epic | 0 (kein Workstream hat ein Ziel, keine Tabelle Epic→Ziel) | – | nur Vorschlag; Tabelle fehlt → q-b31180 |
+| 2 Parent/Workstream/Epic | 0 (kein Workstream hat ein Ziel, keine Tabelle Epic→Ziel) | – | entfällt: keine Tabelle (Knut, 11.10.2026, E9) |
 | 3 Spec `ziel:` | 1 (PM-211 → Z-SVC) | 3 von 6 passend | **nur Vorschlag** (gebaut) |
 | W Workstream-Geschwister einstimmig | 10 | 19 von 22 (86 %) | verworfen: neue Zielquelle |
 | W′ Workstream-Mehrheit ≥ 75 % | +6 | 7 von 12 (58 %) | verworfen |
 
 Herkunft der 75 bestehenden Zuordnungen: 69 „Claude – Vorschlag 30.09.“ (Quelle `vorschlag-auto`, teils Sicherheit
-„mittel“), 6 Knut. Ob die 69 nach der neuen Regel weiter zählen → q-4b326d (Bestand bleibt unverändert).
+„mittel“), 6 Knut. Die 69 bleiben gültig und zählen weiter (Knut, 11.10.2026, E8).
 
 ## Entscheidungen
 
@@ -71,8 +71,8 @@ Herkunft der 75 bestehenden Zuordnungen: 69 „Claude – Vorschlag 30.09.“ (Q
 | E5 | „Label gewinnt immer“ | Automatik/Vorschläge fassen Tickets mit irgendeinem `ziel-*`-Label nie an; die Vorrangregel lokal vor Label (Runde 7) bleibt sonst unverändert — es gibt heute 0 Labels | Agent, geflaggt |
 | E6 | Vorschlagsdatei vs. Spec-Vorschlag | Datei gewinnt; nennt die Datei das Ticket, nimmt „übernehmen“ nie still den Spec-Vorschlag | Agent + Council |
 | E7 | Wer bestätigt | wer in der Werkbank „übernehmen“ klickt (Verlauf zeigt Person und Quelle) | Agent, geflaggt |
-| E8 | 69 Claude-Zuordnungen vom 30.09. | offen, Empfehlung: bleiben gültig | Knut (q-4b326d) |
-| E9 | Tabelle Epic→Ziel-ID anlegen | offen, Empfehlung: nein | Knut (q-b31180) |
+| E8 | 69 Claude-Zuordnungen vom 30.09. | bleiben gültig und zählen weiter („lass die zuordnungen stehen“) | Knut, 11.10.2026 (q-4b326d → A) |
+| E9 | Tabelle Epic→Ziel-ID anlegen | nein — Vorschläge nur aus Spec `ziel:` („passt“) | Knut, 11.10.2026 (q-b31180 → A) |
 
 ## Umsetzung
 
@@ -89,7 +89,7 @@ Herkunft der 75 bestehenden Zuordnungen: 69 „Claude – Vorschlag 30.09.“ (Q
    mittel“ und Begründung; Abschnitt „Automatisch zugeordnet“ mit Chip „auto: Regel 1“, Begründung (Zeile in
    ziele-olaf.md) und Auswahl „ändern …“; Kopfzeile erklärt die Automatik.
 
-Nicht gebaut: Workstream-Signal (E2), Tabelle Epic→Ziel (E9), Umbewertung der 69 (E8), Jira-Labels (bleibt aus).
+Nicht gebaut: Workstream-Signal (E2), Tabelle Epic→Ziel (E9, entschieden: keine), Umbewertung der 69 (E8, entschieden: bleiben), Jira-Labels (bleibt aus).
 Infra: keine neue Einstellung.
 
 ## Definition of Done
