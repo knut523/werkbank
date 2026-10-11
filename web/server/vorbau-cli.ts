@@ -4,7 +4,7 @@
 //     → {ergebnis: frei|fortsetzen|treffer|stopp, belege, hinweise, stopp?}. Exit 0 frei/fortsetzen · 10 treffer · 20 stopp · 2 Aufruf.
 //     Repos: --repos, sonst WERKBANK_VORBAU_REPOS (Komma), sonst der aktuelle Ordner. Integrationszweig = origin/HEAD.
 //     Fetch und PR-API nur mit dem Lesetoken (GIT_VW_READ=1 git credential fill); fehlt es → Stopp ohne Knopf.
-//     --ohne-pr = Knopf „ohne PR-Prüfung bauen“ (nur tagsüber 06–22 Uhr, protokolliert).
+//     --ohne-pr = Knopf „ohne PR-Prüfung bauen“ (nur tagsüber 06–22 Uhr, protokolliert). --ohne-fetch: Massenlauf (drift), nach dem ersten Fetch.
 //   vorbau-check bilanz [--tage 28] [--json]        Fehlalarme/Fehltreffer aus dem G0-Protokoll
 //   vorbau-check fehltreffer <slug> --beleg TEXT     später entdeckten Doppelbau eintragen
 //
@@ -16,7 +16,7 @@ const flags: Record<string, string | true> = {};
 const pos: string[] = [];
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
-  if (a.startsWith('--')) { const k = a.slice(2); if (['json', 'ohne-pr'].includes(k)) flags[k] = true; else flags[k] = args[++i] ?? ''; }
+  if (a.startsWith('--')) { const k = a.slice(2); if (['json', 'ohne-pr', 'ohne-fetch'].includes(k)) flags[k] = true; else flags[k] = args[++i] ?? ''; }
   else pos.push(a);
 }
 const str = (k: string) => (typeof flags[k] === 'string' ? flags[k] as string : undefined);
@@ -53,7 +53,7 @@ async function main() {
     protokolliere({ art: 'knopf', slug, knopf: OHNE_PR, durch: 'cli', kriterien: [] });
   }
   const repos = (str('repos') ?? process.env.WERKBANK_VORBAU_REPOS ?? process.cwd()).split(',').map((x) => x.trim()).filter(Boolean);
-  const r = await pruefe({ slug, planDatei: str('plan') ?? null, specDatei: str('spec'), repos, ohnePr: flags['ohne-pr'] === true, aufrufer: str('aufrufer') ?? 'cli' });
+  const r = await pruefe({ slug, planDatei: str('plan') ?? null, specDatei: str('spec'), repos, ohnePr: flags['ohne-pr'] === true, ohneFetch: flags['ohne-fetch'] === true, aufrufer: str('aufrufer') ?? 'cli' });
   if (flags.json) console.log(JSON.stringify(r, null, 1));
   else console.log(`${r.ergebnis.toUpperCase()} · ${slug}\n${g0Text(r)}`);
   process.exit(r.ergebnis === 'treffer' ? 10 : r.ergebnis === 'stopp' ? 20 : 0);

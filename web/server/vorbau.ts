@@ -198,7 +198,7 @@ export const G0_QUERY = `query($owner: String!, $name: String!) {
 const mapPr = (repo: string, n: any): Pr => ({ repo, number: n.number, url: n.url, title: n.title ?? '', body: n.body ?? '', headRefName: n.headRefName ?? '', headRefOid: n.headRefOid ?? '', author: n.author?.login ?? null, files: (n.files?.nodes ?? []).map((x: any) => x.path), mergeCommit: n.mergeCommit?.oid ?? null });
 
 export interface Ziel { dir: string }
-export interface GatherOpts { slug: string; plan?: PlanInfo | null; specDatei?: string | null; repos: string[]; ich?: string[]; ohnePr?: boolean; git?: Git; protokoll?: string }
+export interface GatherOpts { slug: string; plan?: PlanInfo | null; specDatei?: string | null; repos: string[]; ich?: string[]; ohnePr?: boolean; ohneFetch?: boolean; git?: Git; protokoll?: string }
 
 /** Vault-Spec zum Slug (nur lesen): zitierte Pläne und `created:`. */
 export function specLesen(slug: string, root = process.env.VORBAU_VAULT_ROADMAP || '/vault/olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap'): { pfad: string; zitiert: string[]; created: string | null } | null {
@@ -244,7 +244,7 @@ export async function gather(o: GatherOpts): Promise<{ fakten: Fakten } | { stop
     // Lesetoken zuerst: ohne Lesetoken weder Fetch noch PR-API (Stopp ohne Knopf, Nachtbau aus — DoD 17).
     const token = lesetoken(top, or, git);
     if (!token) return { stopp: { grund: 'lesetoken', knopf: null, text: `Kein GitHub-Lesetoken (GIT_VW_READ=1 git credential fill für ${or.owner}/${or.name} liefert nichts) — G0 prüft nicht mit dem Push-Token. Bauen nur über Knuts „trotzdem bauen“.` } };
-    try { git(['fetch', '--quiet', '--prune', 'origin'], top, { timeout: 90_000 }); }
+    if (!o.ohneFetch) try { git(['fetch', '--quiet', '--prune', 'origin'], top, { timeout: 90_000 }); }
     catch (e: any) {
       const msg = scrub(String(e?.stderr || e?.message || e).split('\n').find((l: string) => l.trim()) ?? 'Fehler');
       return { stopp: { grund: /401|403|Authentication|Invalid username|could not read Username/i.test(msg) ? 'lesetoken' : 'fetch', knopf: null, text: `git fetch in ${repo} gescheitert (${msg}) — ohne frischen Stand kein Bau.` } };
