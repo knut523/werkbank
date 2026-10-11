@@ -82,12 +82,13 @@ export function Dateien({ cfg }: { cfg: Config }) {
           <h2>Meine Dateien ({f.mine.length})</h2>
           {f.mine.length === 0 ? <p className="muted small">Noch nichts hochgeladen.</p> : (
             <table className="t small">
-              <thead><tr><th>Datei</th><th>Größe</th><th>Hochgeladen</th><th>Geteilt mit</th><th></th></tr></thead>
+              <thead><tr><th>Datei</th><th>Herkunft</th><th>Größe</th><th>Stand</th><th>Geteilt mit</th><th></th></tr></thead>
               <tbody>{f.mine.map((x: any) => (
                 <tr key={x.id} data-file={x.name}>
-                  <td><a href={`api/files/${x.id}/download`}>{x.name}</a>{x.personal && <span className="chip warn" style={{ marginLeft: 6 }}>Personendaten</span>}</td>
-                  <td>{size(x.size)}</td>
-                  <td>{fmtDateTime(x.createdAt)}</td>
+                  <td><FileLink x={x} />{x.personal && <span className="chip warn" style={{ marginLeft: 6 }}>Personendaten</span>}</td>
+                  <td><Origin x={x} /></td>
+                  <td>{x.kind === 'vault' ? '—' : size(x.size)}</td>
+                  <td>{fmtDateTime(x.updatedAt ?? x.createdAt)}</td>
                   <td>
                     {x.sharedWith.map((id: string, k: number) => (
                       <span key={id} className="chip" style={{ marginRight: 4 }}>{x.sharedWithNames[k]}
@@ -118,8 +119,8 @@ export function Dateien({ cfg }: { cfg: Config }) {
               <thead><tr><th>Datei</th><th>Von</th><th>Größe</th><th></th></tr></thead>
               <tbody>{f.shared.map((x: any) => (
                 <tr key={x.id} data-shared-file={x.name}>
-                  <td><a href={`api/files/${x.id}/download`}>{x.name}</a>{x.personal && <span className="chip warn" style={{ marginLeft: 6 }}>Personendaten</span>}</td>
-                  <td>{x.ownerName}</td><td>{size(x.size)}</td>
+                  <td><FileLink x={x} />{x.personal && <span className="chip warn" style={{ marginLeft: 6 }}>Personendaten</span>}</td>
+                  <td>{x.ownerName}</td><td>{x.kind === 'vault' ? '—' : size(x.size)}</td>
                   <td><button className="btn small" onClick={() => toChat(x.id)}>💬 Im Chat</button></td>
                 </tr>
               ))}</tbody>
@@ -171,6 +172,23 @@ export function Dateien({ cfg }: { cfg: Config }) {
         </>
       ))}
     </div>
+  );
+}
+
+/** Vault-Notiz → Wissen, sonst Download. */
+function FileLink({ x }: { x: any }) {
+  if (x.kind === 'vault') return <a href={`#/wissen/${String(x.vaultPath).split('/').map(encodeURIComponent).join('/')}`} title={x.vaultPath}>{x.name}</a>;
+  return <a href={`api/files/${x.id}/download`}>{x.name}</a>;
+}
+
+/** Woher die Datei kommt: hochgeladen, oder von einem Agenten fertig geschrieben (Plan 81, Schnitt 3). */
+function Origin({ x }: { x: any }) {
+  if (x.kind !== 'agent' && x.kind !== 'vault') return <span className="tiny muted">hochgeladen</span>;
+  return (
+    <span className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
+      <span className="chip ok" title="nach dem Ende des Agenten-Laufs übernommen">{x.kind === 'vault' ? 'Vault-Notiz' : 'vom Agenten'} · {x.status ?? 'fertig'}</span>
+      {x.projectName && <span className="chip" title="Projekt">{x.projectName}</span>}
+    </span>
   );
 }
 

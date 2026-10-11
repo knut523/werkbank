@@ -89,7 +89,8 @@ export async function fileFor(u: User, id: string): Promise<any> {
   return f;
 }
 
-export const filePath = (f: any) => join(filesDir(), f._id, f.name);
+// Vault-Einträge (von Agenten geschriebene Notizen, Plan 81) liegen im Vault, nicht im Speicher.
+export const filePath = (f: any) => (f.kind === 'vault' ? join(cfg.vaultDir, f.vaultPath) : join(filesDir(), f._id, f.name));
 
 export async function listFiles(u: User) {
   const col = wb().collection('files');
@@ -111,6 +112,8 @@ export async function deleteFile(u: User, id: string) {
   if (!f) throw Object.assign(new Error('Nur die eigene Datei kann gelöscht werden.'), { status: 403 });
   rmSync(join(filesDir(), id), { recursive: true, force: true });
   await wb().collection('files').deleteOne({ _id: id as any });
+  // Eine von einem Agenten übernommene Datei (oder Vault-Notiz) kommt nach dem Löschen nicht wieder (Plan 81, Review S1).
+  if (f.source?.path) await wb().collection('files_ignored').updateOne({ owner: u.id, sourcePath: f.source.path }, { $set: { owner: u.id, sourcePath: f.source.path, at: new Date() } }, { upsert: true });
   logShare({ actor: u.email, action: 'delete', kind: 'file', resource: id });
 }
 
@@ -127,7 +130,8 @@ export function copyToScratch(u: User, f: any): string {
   const dest = join(dir, f.name);
   copyFileSync(filePath(f), dest);
   chmodSync(dest, 0o600);
-  return `dateien/${f.name}`;
+  // Absolut: jeder neue Chat arbeitet in seinem eigenen Ordner (parallele Chats), ein relativer Pfad liefe dort ins Leere.
+  return dest;
 }
 
 // ---------- Chats (LibreChat-Links) ----------
@@ -191,7 +195,7 @@ export async function copySharedChat(u: User, shareId: string): Promise<{ file: 
   const file = join(dir, `${shareId.replace(/[^A-Za-z0-9_-]/g, '')}.md`);
   writeFileSync(file, md, { mode: 0o600 });
   logShare({ actor: u.email, action: 'copy', kind: 'chat', resource: shareId });
-  return { file: `geteilt/${shareId.replace(/[^A-Za-z0-9_-]/g, '')}.md`, title: link.title || 'Ohne Titel', owner: owner?.name ?? '?' };
+  return { file, title: link.title || 'Ohne Titel', owner: owner?.name ?? '?' };
 }
 
 /** Protokoll für Chat-Freigaben: LibreChat schreibt sie in aclentries; wir vergleichen periodisch. */

@@ -620,10 +620,48 @@ Rollen mit (SDK-Option `agents`, `claude-bridge/src/agents.ts`):
 - **Log:** `turn end` führt `teilagenten: N` neben den Tokens des Zuges.
 - Eingebaute Agenten (`general-purpose`, `Explore`) bleiben verfügbar und laufen wie bisher über den Wächter.
 - **Abschalten:** `BRIDGE_SUBAGENT_ROLES=off` (keine Rollen, kein Hinweis im System-Prompt; Obergrenze und Zeilen bleiben).
-- Keine Änderung an der Sperre „ein Zug je Person“. Parallele Chats sind P3 (erst nach eigener Sandbox bzw. Unix-Nutzern).
+- Mehrere Chats gleichzeitig: siehe *Parallele Chats* unten.
 - **Ungeprüft mit echtem Claude:** ob das CLI `agent_type` im Hook liefert und die Rollen wählt. Erster echter Test:
   Vorlage „Koordinator“, „prüfe PM-321, PM-322 und PM-331“; im Log `turn end … "teilagenten":3`. Fehlt `agent_type`,
   greifen die lesenden Rollen nur über `disallowedTools` (Schreiben fragt dann wie bei jedem Teilagenten).
+
+## Parallele Chats (07.10.2026)
+
+Knut, 07.10.2026: „werkbank hat nur einen chat pro zeit … gehen auch mehrere?“ → „nimm die beste Option“. Plan
+`docs/plan-parallele-chats.md` (P3-light).
+
+- **Bis zu 3 Chats je Person gleichzeitig** (`BRIDGE_MAX_PARALLEL_CHATS`, Vorgabe 3). Der vierte bekommt „Bei dir laufen
+  schon 3 Chats gleichzeitig. Bitte warte, bis einer fertig ist.“ Chats, die auf „ja“ warten, und die lesenden
+  Board-Agenten zählen nicht mit. Derselbe Chat zweimal bleibt gesperrt („arbeitet noch an der vorigen Nachricht“).
+- **Eigener Ordner je neuem Chat:** `.runtime/bridge/scratch/<person>/chats/<chat>` ist das Arbeitsverzeichnis (und im
+  Auto-Modus der Arbeitsordner). Ein Chat, der vor dem 07.10. schon eine Sitzung hatte, arbeitet weiter im
+  Personenordner — Claude Code legt den Verlauf unter dem Arbeitsverzeichnis ab, ein Wechsel verlöre ihn. Die
+  Zuordnung steht in `.runtime/bridge/cwd.json`.
+- Anhänge landen im Ordner ihres Chats; „Im Chat“ und „Als Kopie weiterführen“ nennen die Datei mit absolutem Pfad.
+- **Keine Sandbox:** Alle Chats laufen unter demselben VM-Nutzer. Dateien außerhalb der Chat-Ordner (Vault, Repos)
+  können zwei Chats gleichzeitig ändern, wie zwei Menschen. Echte Trennung (eigene Unix-Nutzer/Sandbox) erst, wenn
+  mehrere Personen den Auto-Modus bekommen.
+- **Not-Aus:** `BRIDGE_MAX_PARALLEL_CHATS=1 scripts/werkbank.sh restart` → wieder ein Chat zur Zeit.
+
+## Roadmap-Automatik (08.10.2026)
+
+Plan: `docs/plan-roadmap-automatik.md`. Vault-Roadmap und Roadmap-Seite ziehen sich selbst nach; was eine Maschine
+nicht allein darf, steht als Frage unter **Roadmap → „Für mich offen“**.
+
+- **Feed:** alle 5 min schreibt die Werkbank `~/.cache/vault-sync/werkbank-feed.md` (Jira-Stand, fertige
+  Karten-Läufe mit Vault-Notizen und PR-Links, Projekte je Workstream; keine Beschreibungen, Chats, Zugangsdaten).
+  `vault-sync-snapshot.sh` hängt ihn an, wenn er jünger als 24 h ist.
+- **Nachzug nach Agentenlauf:** ist ein Karten-Agent mit Ticket fertig (Sitzung „bereit“ mit neuer Aktivität),
+  kommt das Ticket in eine Warteschlange; höchstens alle 20 min startet `vault-sync.sh --scope PM-…`
+  (nur Specs/Übersichten/Register/Timeline dieser Tickets). Aus mit `WERKBANK_ROADMAP_AUTOSYNC=0`.
+- **„Für mich offen“:** offene `- Knut:`-Zeilen, PRs, bei denen ich laut „wer ist dran“ dran bin, eigene Tickets
+  ohne/über Datum; für Admins die **Fragen des Vault-Syncs** („Offen/unklar“ des letzten Protokollabschnitts, der
+  welche hat) mit ✅ Ja / ✖️ Nein und der **Entwurf „Woran wir gerade arbeiten“**.
+- **Ja** schreibt `~/.cache/vault-sync/freigaben.md` und startet einen Sync (höchstens alle 5 min); der Sync führt
+  genau diesen Punkt aus und meldet „erledigt: S…“ im Protokoll, dann verschwindet die Frage. **Nein** blendet sie aus.
+- **Entwurf:** der Morgenlauf (vor 11 Uhr) schreibt `0-Overview/entwurf-woran-wir-arbeiten.md`; „Übernehmen“ ersetzt
+  im Hub nur den Block zwischen `<!-- werkbank:woran-wir-arbeiten -->` und `<!-- /werkbank:woran-wir-arbeiten -->`.
+- Env: `WERKBANK_VAULT_SYNC_DIR`, `WERKBANK_VAULT_SYNC_SCRIPT`, `WERKBANK_ROADMAP_FEED`, `WERKBANK_ROADMAP_AUTOSYNC`.
 
 ## Mehrere Claude-Konten je Person (06.10.2026)
 

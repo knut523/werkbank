@@ -1,0 +1,23 @@
+diff --git a/client/src/components/Chat/Messages/Content/MarkdownComponents.tsx b/client/src/components/Chat/Messages/Content/MarkdownComponents.tsx
+--- a/client/src/components/Chat/Messages/Content/MarkdownComponents.tsx
++++ b/client/src/components/Chat/Messages/Content/MarkdownComponents.tsx
+@@ -10,6 +10,7 @@
+ import { handleDoubleClick, triggerDownload } from '~/utils';
+ import { useLocalize } from '~/hooks';
+ import store from '~/store';
++import WerkbankAnswerButton, { WERKBANK_ANSWER_PREFIX } from '~/components/Werkbank/AnswerButton';
+ 
+ type TCodeProps = {
+   inline?: boolean;
+@@ -130,6 +131,11 @@
+   const { refetch: downloadFile } = useFileDownload(user?.id ?? '', file_id, { direct: false });
+   const props: { target?: string; onClick?: React.MouseEventHandler } = { target: '_blank' };
+ 
++  // Werkbank: Ja/Nein-Knöpfe unter Rückfragen (librechat/overlay/client/src/components/Werkbank/AnswerButton.tsx).
++  if (typeof href === 'string' && href.startsWith(WERKBANK_ANSWER_PREFIX)) {
++    return <WerkbankAnswerButton href={href}>{children}</WerkbankAnswerButton>;
++  }
++
+   if (!file_id || !filename) {
+     return (
+       <a href={href} {...props}>

@@ -29,6 +29,11 @@ export function githubChanged(n: number) {
   bus.emit('github', { seq: ++seq, n, at: Date.now() });
 }
 
+/** Roadmap-Automatik (Fragen, Entwurf, Feed) hat sich geändert → Roadmap-Seite lädt nach (über den GitHub-Kanal). */
+export function roadmapChanged(why: string) {
+  bus.emit('github', { seq: ++seq, n: 0, roadmap: why, at: Date.now() });
+}
+
 /** SSE-Strom für eine angemeldete Person. Kein Inhalt außer Schlüsseln; die Seite lädt dann selbst nach. */
 export function jiraEventStream(req: IncomingMessage, res: ServerResponse) {
   res.writeHead(200, {

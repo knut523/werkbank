@@ -9,7 +9,7 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { classify, statusLine, prepLine, confirmQuestion, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY } from './tools.ts';
+import { classify, statusLine, prepLine, confirmQuestion, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
@@ -39,6 +39,8 @@ interface Live {
   buffer: string[];
   pending: Pending | null;
   lastKind: 'none' | 'text' | 'status';
+  /** Ende des zuletzt gesendeten Modelltexts, damit ein über zwei Deltas verteilter Knopf-Anker erkannt wird. */
+  modelTail?: string;
   lastStatus: string;
   sawStreamText: boolean;
   usage: { input: number; output: number };
@@ -113,6 +115,8 @@ Du läufst in der OLAF-Werkbank: Die Person schreibt dir über eine Chat-Oberfl�
 - Rückfragen stellst du als normalen Text am Ende deiner Antwort.
 `.trim();
 
+const autoScope = (): 'arbeitsordner' | 'voll' => (process.env.BRIDGE_AUTO_SCOPE === 'voll' ? 'voll' : 'arbeitsordner');
+const AUTO_APPEND_VOLL = 'Auto-Modus (voll) ist an: Bash-Befehle, Datei-Änderungen (auch im Vault und in Repos) und Werkzeuge wie das Gedächtnis laufen ohne Rückfrage, wenn der Sicherheits-Klassifikator zustimmt; jede solche Freigabe sieht die Person als Statuszeile. Jira schreiben, GitHub schreiben und alles mit Zugangsdaten bestätigt die Person weiterhin im Chat. Arbeite selbstständig durch und frag nur, wenn eine Entscheidung wirklich bei der Person liegt.';
 const AUTO_APPEND = 'Auto-Modus ist an: Bash-Befehle und Datei-Änderungen in deinem Arbeitsordner (dem aktuellen Arbeitsverzeichnis) laufen ohne Rückfrage, wenn der Sicherheits-Klassifikator zustimmt; jede solche Freigabe sieht die Person als Statuszeile. Vault, Jira und alles außerhalb des Arbeitsordners bestätigt die Person weiterhin im Chat.';
 
 // ---------- Zuordnung Unterhaltung → SDK-Sitzung (ohne Geheimnisse, als JSON-Datei) ----------
@@ -128,8 +132,14 @@ const homeFile = join(cfg.stateDir, 'session-homes.json');
 let homeMap: Record<string, string> = {};
 try { homeMap = JSON.parse(readFileSync(homeFile, 'utf8')); } catch { /* keine */ }
 
+// In welchem Ordner eine Unterhaltung arbeitet (Plan parallele Chats, Knut 07.10.2026). Claude Code legt den Verlauf
+// unter dem cwd ab, darum bleibt eine Unterhaltung für immer in dem Ordner, in dem sie angefangen hat.
+const cwdFile = join(cfg.stateDir, 'cwd.json');
+let cwdMap: Record<string, string> = {};
+try { cwdMap = JSON.parse(readFileSync(cwdFile, 'utf8')); } catch { /* keine */ }
+
 function saveMap() {
-  for (const [f, data] of [[mapFile, sessionMap], [homeFile, homeMap]] as const) {
+  for (const [f, data] of [[mapFile, sessionMap], [homeFile, homeMap], [cwdFile, cwdMap]] as const) {
     const tmp = f + '.tmp';
     writeFileSync(tmp, JSON.stringify(data, null, 1));
     renameSync(tmp, f);
@@ -147,10 +157,14 @@ export function isBoardRun(l: { readonly: boolean; mode: PermissionMode }): bool
   return l.readonly && l.mode === 'dontAsk';
 }
 
-/** Darf ein neuer Zug starten? Normale Chats: einer zur Zeit je Person; Board-Läufe: bis MAX_BOARD_RUNS daneben. */
+// Parallele Chats (Plan docs/plan-parallele-chats.md, Knut 07.10.2026): so viele Züge je Person gleichzeitig.
+// 1 = das Verhalten vor dem 07.10. (ein Chat zur Zeit). Jeder neue Chat hat seinen eigenen Ordner (workDirFor).
+export const maxParallelChats = () => Math.max(1, Number(process.env.BRIDGE_MAX_PARALLEL_CHATS || 3));
+
+/** Darf ein neuer Zug starten? Chats: bis maxParallelChats() gleichzeitig je Person; Board-Läufe: bis MAX_BOARD_RUNS daneben. */
 export function lockFor(mine: { readonly: boolean; mode: PermissionMode; pending: unknown }[], next: { readonly: boolean; mode: PermissionMode }): 'ok' | 'chat-busy' | 'board-full' {
   if (isBoardRun(next)) return mine.filter(isBoardRun).length >= MAX_BOARD_RUNS ? 'board-full' : 'ok';
-  return mine.some((l) => !isBoardRun(l) && !l.pending) ? 'chat-busy' : 'ok';
+  return mine.filter((l) => !isBoardRun(l) && !l.pending).length >= maxParallelChats() ? 'chat-busy' : 'ok';
 }
 
 // Status je Unterhaltung (Idee: coder/agentapi „running/stable“, CloudCLI Sitzungsliste).
@@ -180,6 +194,22 @@ export function scratchFor(userId: string): string {
   return dir;
 }
 
+/**
+ * Arbeitsordner einer Unterhaltung. Eine, die schon eine Sitzung hat (angefangen vor den parallelen Chats), bleibt im
+ * Ordner der Person — dort liegt ihr Verlauf. Jede neue bekommt `scratch/<person>/chats/<chat>`, damit parallele
+ * Chats sich keine Dateien überschreiben. Die Zuordnung gilt für alle weiteren Züge (cwd.json).
+ */
+export function workDirFor(userId: string, convId: string): string {
+  const key = `${safeId(userId)}:${safeId(convId)}`;
+  const known = cwdMap[key];
+  if (known) { mkdirSync(known, { recursive: true }); return known; }
+  const dir = sessionMap[key] ? scratchFor(userId) : join(scratchFor(userId), 'chats', safeId(convId));
+  mkdirSync(dir, { recursive: true });
+  cwdMap[key] = dir;
+  saveMap();
+  return dir;
+}
+
 export function safeId(s: string): string {
   return /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : createHash('sha256').update(s).digest('hex').slice(0, 24);
 }
@@ -201,6 +231,18 @@ function emitText(live: Live, text: string) {
   if (live.lastKind === 'status') text = '\n' + text.replace(/^\n+/, '');
   live.lastKind = 'text';
   emit(live, text);
+}
+
+/**
+ * Text des Modells: Ja/Nein-Knopf-Anker (`#werkbank-antwort:`) entschärfen. Knöpfe darf nur die Rückfrage der
+ * Brücke selbst tragen — sonst könnte Claude (oder eingeschleuster Text) einen Knopf setzen, der eine wartende
+ * Rückfrage bestätigt (Review Runde 2). Ein Nullbreite-Leerzeichen im Anker bricht den Präfix, sichtbar bleibt alles.
+ */
+function emitModelText(live: Live, text: string) {
+  const tail = live.modelTail ?? '';
+  const out = neutralizeAnswerAnchors(tail, text);
+  live.modelTail = (tail + out).slice(-(ANSWER_MARK.length - 1));
+  emitText(live, out);
 }
 
 function emitStatus(live: Live, line: string) {
@@ -295,7 +337,7 @@ function handleMessage(live: Live, msg: any) {
         mark(live, 'ersterText');
         live.sawStreamText = true;
         live.progressed = true;
-        emitText(live, ev.delta.text);
+        emitModelText(live, ev.delta.text);
       } else if (ev?.type === 'content_block_delta' && ev.delta?.type === 'thinking_delta') {
         // Zusammengefasstes Denken (thinking display „summarized“, s. u.) live als Gedanken.
         emitReason(live, String(ev.delta.thinking ?? ''));
@@ -332,7 +374,7 @@ function handleMessage(live: Live, msg: any) {
       for (const block of msg.message?.content ?? []) {
         if (block.type === 'tool_use') {
           live.progressed = true;
-          const cls = classify(block.name, block.input ?? {}, { workDir: live.workDir }).cls;
+          const cls = classify(block.name, block.input ?? {}, { workDir: live.workDir, scope: autoScope() }).cls;
           if (cls === 'auto' && live.mode === 'auto') live.autoCalls.set(block.id, { name: block.name, input: block.input ?? {}, sub: !!msg.parent_tool_use_id });
           if (live.onJiraWrite && jiraWriteKeys(block.name, block.input ?? {}) !== null) live.jiraCalls.set(block.id, { name: block.name, input: block.input ?? {} });
           // Nutzung je Skill zählen (Knut, 29.09.: Skill-Kern nach einer Woche mit echten Zahlen nachschärfen).
@@ -342,7 +384,7 @@ function handleMessage(live: Live, msg: any) {
           // Schreibende Werkzeuge melden sich erst nach der Bestätigung (siehe Hook).
         } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
           live.progressed = true;
-          emitText(live, block.text);
+          emitModelText(live, block.text);
         }
       }
       return;
@@ -414,7 +456,7 @@ function makeGuard(live: Live) {
   return async (input: any, toolUseId?: unknown, _opts?: unknown, escalated?: { reason?: string }) => {
     const tool: string = input.tool_name;
     const toolInput: Record<string, unknown> = input.tool_input ?? {};
-    const { cls, why } = classify(tool, toolInput, { workDir: live.workDir });
+    const { cls, why } = classify(tool, toolInput, { workDir: live.workDir, scope: autoScope() });
     // Teilagent? Der Hook nennt agent_id/agent_type; canUseTool nur die agent_id (Rolle aus einem früheren Hook-Aufruf).
     const agentId: string | undefined = input.agent_id;
     if (agentId && input.agent_type) live.agentTypes.set(agentId, String(input.agent_type));
@@ -464,7 +506,7 @@ function makeGuard(live: Live) {
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason },
     });
     if (live.abort.signal.aborted) return decide('deny', 'Abgebrochen.');
-    emitText(live, (live.lastKind === 'none' ? '' : '\n\n') + note + confirmQuestion(tool, toolInput));
+    emitText(live, (live.lastKind === 'none' ? '' : '\n\n') + neutralizeAnswerAnchors('', note) + confirmQuestion(tool, toolInput));
     const answer = await new Promise<string>((resolve) => {
       live.pending = {
         resolve,
@@ -541,16 +583,17 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     return;
   }
 
-  // 2) Höchstens ein aktiver Zug je Nutzer. Chats, die nur auf „ja“ warten, zählen nicht — ein vom
-  //    Board angesetzter Agent darf auf die Antwort warten, während die Person woanders weiterchattet.
-  //    Board-Läufe (nur lesend) laufen daneben, höchstens MAX_BOARD_RUNS je Person (E5).
+  // 2) Höchstens maxParallelChats() aktive Züge je Nutzer, jeder Chat in seinem eigenen Ordner. Chats, die nur auf
+  //    „ja“ warten, zählen nicht. Board-Läufe (nur lesend) laufen daneben, höchstens MAX_BOARD_RUNS je Person (E5).
   const mine = [...lives.values()].filter((l) => l.userId === req.userId);
   const mode = autoFor(req);
   const lock = lockFor(mine, { readonly: !!req.readonly, mode });
   if (lock !== 'ok') {
     req.sink.write(lock === 'board-full'
       ? `Bei dir laufen schon ${MAX_BOARD_RUNS} Board-Agenten. Bitte warte, bis einer fertig ist.`
-      : 'Bei dir läuft gerade schon eine Anfrage in einem anderen Chat. Bitte warte, bis sie fertig ist.');
+      : maxParallelChats() === 1
+        ? 'Bei dir läuft gerade schon eine Anfrage in einem anderen Chat. Bitte warte, bis sie fertig ist.'
+        : `Bei dir laufen schon ${maxParallelChats()} Chats gleichzeitig. Bitte warte, bis einer fertig ist.`);
     req.sink.finish();
     return;
   }
@@ -580,7 +623,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   emitStatus(live, '⏳ Claude arbeitet …');
   mark(live, 'arbeitet');
 
-  const scratch = scratchFor(req.userId);
+  const scratch = workDirFor(req.userId, req.convId);
   if (live.mode === 'auto') live.workDir = scratch;
   // Eigene Claude-Konfiguration je Person (oder die geteilte des VM-Nutzers, siehe claudehome.ts).
   const home = homeFor(safeId(req.userId), req.email);
@@ -628,7 +671,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? AUTO_APPEND : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? '' : orchestratorAppend(), extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? '' : orchestratorAppend(), extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim

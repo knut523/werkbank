@@ -212,7 +212,7 @@ function Docs({ k, docs, runs, onChange }: { k: string; docs: any; runs: any[]; 
       {docs.agentFiles?.length > 0 && <><div className="small docs-h">Vom Agenten geschrieben</div><ul className="small">{docs.agentFiles.map((w: any) => <li key={w.file}>{w.path ? <a href={`#/wissen/${w.path.split('/').map(encodeURIComponent).join('/')}`}>{w.path}</a> : <code>{w.file}</code>}</li>)}</ul></>}
       {docs.prs?.length > 0 && <><div className="small docs-h">PRs (aus dem Vault)</div><ul className="small">{docs.prs.map((p: string) => <li key={p}><a href={p} target="_blank" rel="noreferrer">{p.replace('https://github.com/', '')}</a></li>)}</ul></>}
       <div className="small docs-h">Dateien ({docs.files.length})</div>
-      {docs.files.length > 0 && <ul className="small">{docs.files.map((f: any) => <li key={f.id}><a href={`api/files/${f.id}/download`}>{f.name}</a> <span className="tiny">{f.ownerName}</span></li>)}</ul>}
+      {docs.files.length > 0 && <ul className="small">{docs.files.map((f: any) => <li key={f.id}><a href={f.vaultPath ? `#/wissen/${f.vaultPath.split('/').map(encodeURIComponent).join('/')}` : `api/files/${f.id}/download`}>{f.name}</a> <span className="tiny">{f.ownerName}</span></li>)}</ul>}
       {mine.length > 0 && (
         <div className="row small">
           <select aria-label="Datei an Ticket hängen" defaultValue="" onChange={async (e) => {

@@ -36,7 +36,7 @@ function startBridge(port: number, extra: Record<string, string>) {
 let autoBridge: { STATE: string; HOMES: string };
 before(async () => {
   autoBridge = startBridge(AUTO_PORT, { BRIDGE_PERMISSION_MODE: 'auto' });
-  startBridge(OFF_PORT, { BRIDGE_PERMISSION_MODE: 'default' });
+  startBridge(OFF_PORT, { BRIDGE_PERMISSION_MODE: 'default', BRIDGE_MAX_PARALLEL_CHATS: '1' });
   for (const port of [AUTO_PORT, OFF_PORT]) {
     let up = false;
     for (let i = 0; i < 50 && !up; i++) {
@@ -159,7 +159,8 @@ test('Auto-Modus: Klassifikator eskaliert → Rückfrage mit Grund; lehnt ab →
 });
 
 test('Auto-Modus: Symlink im Arbeitsordner auf den Vault fragt nach', async () => {
-  const work = join(autoBridge.STATE, 'scratch', 'ua');
+  // Neue Chats arbeiten in ihrem eigenen Ordner (parallele Chats): der Symlink gehört dorthin.
+  const work = join(autoBridge.STATE, 'scratch', 'ua', 'chats', 'a8');
   mkdirSync(work, { recursive: true });
   try { symlinkSync(VAULT, join(work, 'v')); } catch { /* schon da */ }
   const q = await send(AUTO_PORT, 'a8', tool('Write', { file_path: '$CWD/v/x.md', content: 'x' }));
@@ -241,21 +242,24 @@ test('E5: lesender Board-Lauf läuft neben einem Chat, Chat läuft neben Board-L
   assert.match(await c2, /Langsamer Zug fertig/);
 });
 
-test('E5: normaler Chat bleibt einer zur Zeit; Board-Läufe höchstens 2 je Person', async () => {
+test('Parallele Chats: bis 3 Chats gleichzeitig, der vierte wartet; Board-Läufe höchstens 2 je Person', async () => {
   const ro = { user: 'uf5', headers: { 'x-werkbank-mode': 'readonly' } };
   const c1 = send(AUTO_PORT, 'f5-c1', 'langsam 1500', { user: 'uf5' });
+  const c2 = send(AUTO_PORT, 'f5-c2', 'langsam 1500', { user: 'uf5' });
+  const c3 = send(AUTO_PORT, 'f5-c3', 'langsam 1500', { user: 'uf5' });
   const b1 = send(AUTO_PORT, 'f5-b1', 'langsam 1500', ro);
   const b2 = send(AUTO_PORT, 'f5-b2', 'langsam 1500', ro);
   await new Promise((r) => setTimeout(r, 300));
-  assert.match(await send(AUTO_PORT, 'f5-c2', 'Hallo', { user: 'uf5' }), /läuft gerade schon eine Anfrage in einem anderen Chat/);
+  assert.match(await send(AUTO_PORT, 'f5-c4', 'Hallo', { user: 'uf5' }), /schon 3 Chats gleichzeitig/);
+  assert.match(await send(AUTO_PORT, 'f5-c1', 'Hallo', { user: 'uf5' }), /arbeitet noch an der vorigen Nachricht/, 'derselbe Chat bleibt gesperrt');
   assert.match(await send(AUTO_PORT, 'f5-b3', 'Hallo', ro), /schon 2 Board-Agenten/);
   // Eine andere Person ist davon nicht betroffen.
   assert.match(await send(AUTO_PORT, 'f5-x', 'Hallo', { user: 'uf5-andere', headers: { 'x-werkbank-mode': 'readonly' } }), /Du hast geschrieben/);
-  for (const p of [c1, b1, b2]) assert.match(await p, /Langsamer Zug fertig/);
+  for (const p of [c1, c2, c3, b1, b2]) assert.match(await p, /Langsamer Zug fertig/);
   assert.match(await send(AUTO_PORT, 'f5-b3', 'Hallo', ro), /Du hast geschrieben/, 'nach dem Ende wieder frei');
 });
 
-test('E5: ohne Auto-Modus (readonly, aber kein dontAsk) bleibt die Sperre wie bisher', async () => {
+test('E5 + BRIDGE_MAX_PARALLEL_CHATS=1: ohne Auto-Modus (readonly, aber kein dontAsk) bleibt die Sperre wie bisher', async () => {
   const c1 = send(OFF_PORT, 'g5-c1', 'langsam 1000', { user: 'ug5' });
   await new Promise((r) => setTimeout(r, 200));
   const b = await send(OFF_PORT, 'g5-b1', 'Hallo', { user: 'ug5', headers: { 'x-werkbank-mode': 'readonly' } });
