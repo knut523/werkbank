@@ -192,7 +192,26 @@ async function tickOne(u: User, leit: any, deps: LeitDeps) {
     await events().updateOne({ _id: `${u.id}:${e.key}` as any }, { $setOnInsert: { userId: u.id, leit: leit._id, kind: e.kind, text: e.text, excerpt: e.excerpt ?? '', strand: e.strand ?? null, at: new Date(e.at), createdAt: new Date(now), status: 'offen', retries: 0, urgent } }, { upsert: true });
   };
 
-  // 1) Ereignisse sammeln: Stränge, Knuts Antworten, eigene technische Zugenden.
+  // 1) Vorige Meldung bestätigen oder nach der Frist zurücknehmen (C1/D1) — VOR dem Sammeln, damit der Zähler für „weiter“
+  //    schon stimmt, wenn der bestätigte Zug längst wieder an seiner Grenze geendet hat. In diesem Takt wird dann nichts gesendet.
+  let hold = false;
+  if (leit.wake) {
+    hold = true;
+    if (ls?.turn?.batch === leit.wake.batch) {
+      await events().updateMany({ userId: u.id, status: 'gesendet', batch: leit.wake.batch }, { $set: { status: 'zugestellt', deliveredAt: new Date(now) } });
+      await runs().updateOne({ _id: leit._id, 'wake.batch': leit.wake.batch }, { $set: { wake: null, lastWakeAt: new Date(now) }, $push: { wakes: { $each: [now], $slice: -200 } } as any, ...(leit.wake.weiter ? { $inc: { weiterStreak: 1 } } : {}) });
+      deps.log?.('leitstand zugestellt', { id: leit._id, batch: leit.wake.batch });
+      if (leit.wake.weiter) leit.weiterStreak = (leit.weiterStreak ?? 0) + 1;
+      leit.lastWakeAt = new Date(now);
+    } else if (now - new Date(leit.wake.sentAt).getTime() >= c.retry) {
+      await events().updateMany({ userId: u.id, status: 'gesendet', batch: leit.wake.batch }, { $set: { status: 'offen', batch: null }, $inc: { retries: 1 } });
+      await events().updateMany({ userId: u.id, status: 'offen', retries: { $gte: c.retryMax } }, { $set: { status: 'verworfen' } });
+      await runs().updateOne({ _id: leit._id, 'wake.batch': leit.wake.batch }, { $set: { wake: null } });
+      deps.log?.('leitstand erneut', { id: leit._id, batch: leit.wake.batch });
+    }
+  }
+
+  // 2) Ereignisse sammeln: Stränge, Knuts Antworten, eigene technische Zugenden.
   const strands: any[] = await runs().find({ userId: u.id, ...STRANDS, reviewedAt: null, startError: null, startedAt: { $gt: new Date(now - 14 * 86400_000) } }).toArray();
   for (const d of strands) {
     const s = states.get(d.conv);
@@ -218,22 +237,7 @@ async function tickOne(u: User, leit: any, deps: LeitDeps) {
     await runs().updateOne({ _id: leit._id }, { $set: { weiterStreak: 0 } });
   }
 
-  // 2) Vorige Meldung bestätigen oder nach der Frist zurücknehmen (C1/D1).
-  if (leit.wake) {
-    if (ls?.turn?.batch === leit.wake.batch) {
-      await events().updateMany({ userId: u.id, status: 'gesendet', batch: leit.wake.batch }, { $set: { status: 'zugestellt', deliveredAt: new Date(now) } });
-      const inc = leit.wake.weiter ? { weiterStreak: 1 } : {};
-      await runs().updateOne({ _id: leit._id, 'wake.batch': leit.wake.batch }, { $set: { wake: null, lastWakeAt: new Date(now) }, $push: { wakes: { $each: [now], $slice: -200 } } as any, ...(leit.wake.weiter ? { $inc: inc } : {}) });
-      deps.log?.('leitstand zugestellt', { id: leit._id, batch: leit.wake.batch });
-      return;
-    }
-    if (now - new Date(leit.wake.sentAt).getTime() < c.retry) return;
-    await events().updateMany({ userId: u.id, status: 'gesendet', batch: leit.wake.batch }, { $set: { status: 'offen', batch: null }, $inc: { retries: 1 } });
-    await events().updateMany({ userId: u.id, status: 'offen', retries: { $gte: c.retryMax } }, { $set: { status: 'verworfen' } });
-    await runs().updateOne({ _id: leit._id, 'wake.batch': leit.wake.batch }, { $set: { wake: null } });
-    deps.log?.('leitstand erneut', { id: leit._id, batch: leit.wake.batch });
-    return;
-  }
+  if (hold) return;
 
   // 3) Zustellen?
   const open: any[] = await events().find({ userId: u.id, status: 'offen', createdAt: { $gt: new Date(now - c.stale) } }).sort({ createdAt: 1 }).limit(30).toArray();
