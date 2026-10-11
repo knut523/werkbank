@@ -809,6 +809,12 @@ scripts/orch leitstand start --handover ~/work/knut/leitstand-uebergabe.md   # V
   PostHog: lesen frei, schreiben nach „ja“, löschen gesperrt.
 - **Heute** (Admins): Zeile „🛰️ Leitstand: läuft / wartet auf dich / bereit · öffnen“.
 - Not-Aus fürs Wecken: `LEITSTAND_WAKE=off`.
+- **Eine Oberfläche (Teil B):** Seite **Leitstand** in der Werkbank (nur Admins): alle Stränge je Lauf, zugeklappt
+  („Flex — 3 Stränge · 2 fertig · 1 wartet“), Status läuft / wartet / fertig / gestoppt, Zähler „automatisch fortgesetzt“, Link
+  zum Chat und zum Bericht (`review-pakete/NNN-*/bericht.md`, sicher gelesen, als Text gezeigt). Lauf: `orch start --lauf NAME`
+  (Lesezeichen „Orch · NAME“), sonst der Titelteil vor „:“. Fertige Stränge stehen auf **Heute** in „Wartet auf dein Review“ —
+  „Passt“ (geprüft, ohne Jira) oder „Nacharbeit“ (Nachricht in denselben Chat). Ein eigener Takt (`ORCH_STATUS=off` = aus)
+  schreibt den Stand je Strang fest; „Heute“ fragt nie die Brücke. Der Leitstand kann Stränge nur ablegen, Knuts „Passt“ ersetzt er nicht.
 
 ## Roadmap-Automatik (08.10.2026)
 

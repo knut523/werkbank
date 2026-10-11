@@ -531,3 +531,20 @@ weiterarbeiten), Knut sieht ihn trotzdem. (c) G4 — `seen` + Live-Prüfung schl
 ist Feature `heute` (Team-frei); die Admin-Prüfung im Handler ist nötig und reicht. (e) Rest: `statusTick` ruft je Strang
 `lastMessage` (LibreChat-Mongo, lokal) und einmal je Person die Brücke — 20-s-Takt, ≤ 100 Stränge, vertretbar.
 Bedingung für den Bau: Teil-B-Diff bekommt einen unabhängigen Council (zwei Teilagenten), bevor „fertig“ gemeldet wird.
+
+## B.7 Bau und Council über den Diff (11.10.2026)
+Gebaut auf `feat/leitstand` (lokal): `web/server/bericht.ts` (Bericht finden/sicher lesen), `orchestrator.ts` (Lauf, `knutReviewedAt`/`OPEN`,
+`reviewOrch` mit Absender und erwartetem Stand, `sendOrch` mit `prevReview`, `statusTick`), `leitstand.ts` (Gruppierung, Übersicht,
+Strang-Karten, Weck-Ereignisse „geprüft“/„Nacharbeit“), Routen `/api/leitstand/*` (nur Admin, Feature `leitstand`), Seite
+`#/leitstand`, Strang-Karten in der Review-Schlange auf „Heute“, `orch start --lauf`, `orch_start {lauf}`, `orch_list` gruppiert.
+- **Diff R1 (22ae568): HOLD 0,75 / PASS-WITH-CONCERNS.** Per CLI geprüfte Altdokumente (`reviewedAt` ohne `reviewedBy`) wären nach dem
+  Ausrollen als Karten zurückgekommen; Rennen Status-Takt ↔ Nacharbeit; Zeitfenster bei „Passt“; laufende Karten zählten; Tests für
+  B-21/B-25 fehlten. Behoben in `9d3fb14` (OPEN überall, Takt schreibt nur bei unverändertem `lastSentAt`, `reviewOrch` an den gesehenen
+  Stand gebunden, `running`-Karten gesperrt und nicht gezählt, Tests inkl. „Brücke weg“).
+- **Diff R2 (9d3fb14): PASS 0,8 / PASS-WITH-CONCERNS.** Restpunkte (Übersprung im Takt nur ohne neueren Zug und mit Bericht; 409-Test
+  prüft den Grund; Zähler-Test robust) in `d14d70d` behoben.
+- Beim Bau gefunden: zwei Lesezeichen parallel gesetzt → das erste ging verloren (beide lesen dieselbe leere Liste); jetzt nacheinander.
+- Bewusst offen: B-14 (kein Brückenaufruf aus „Heute“) ist durch Code-Weg + Test „Brücke weg → Karte bleibt“ belegt, nicht durch
+  Zählen der Aufrufe; B-22 (Auto-weiter aus) nur durch Code (eigener Takt), ohne eigenen Test. `orch review` über die CLI zählt immer
+  als Knut — ruft der Leitstand die CLI statt `orch_review`, wäre das Knuts Urteil; die CLI ist in Strängen gesperrt, im Leitstand nicht
+  (E6/E11).
