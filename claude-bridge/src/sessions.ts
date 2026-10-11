@@ -836,8 +836,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   };
   const batch = live.leit ? wakeBatch(req.prompt) : null;
   // Die letzten Kennungen bleiben stehen, auch wenn Knut gleich danach selbst schreibt (Council-Diff R1, B4).
-  if (batch) orchMap[key].batches = [...(orchMap[key].batches ?? []), batch].slice(-5);
-  else if (live.leit) orchMap[key].lastHand = Date.now();   // Knut hat selbst geschrieben (Zähler für „weiter“ beginnt neu)
+  if (batch && orchMap[key]) orchMap[key].batches = [...(orchMap[key].batches ?? []), batch].slice(-5);
+  else if (live.leit && orchMap[key]) orchMap[key].lastHand = Date.now();   // Knut hat selbst geschrieben (Zähler für „weiter“ beginnt neu)
   if (live.orch || live.leit) setTurn(key, { start: Date.now(), end: null, outcome: null, ...(live.leit ? { batch } : {}) });
   lives.set(key, live);
   attach(live, req.sink);

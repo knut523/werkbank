@@ -105,6 +105,10 @@ test('Review B/C (Befund 5): Git-Optionen mit getrenntem Wert und Zweig in Anfü
   const t0 = performance.now();
   assert.equal(leitstandCheck('Bash', { command: long }, { workDir: LEIT })?.cls, 'confirm');
   assert.ok(performance.now() - t0 < 50);
+  // Council-Diff R2: Auffüllen macht aus der Vault-git-Sperre keine Rückfrage; maskierte Anführungszeichen im Wert.
+  assert.equal(leitstandCheck('Bash', { command: `git -C ${VAULT_DIR} commit -am x; ` + '#'.repeat(17_000) }, { workDir: LEIT })?.cls, 'blocked');
+  assert.equal(c('git -C "a\\"b" push origin main'), 'blocked');
+  assert.equal(c('git -C "a\\"b" push origin feat/x'), 'confirm');
   assert.ok(orchestratorBlock('Bash', { command: 'git --git-dir /r/.git push' }));
 });
 

@@ -220,7 +220,10 @@ async function tickOne(u: User, leit: any, deps: LeitDeps) {
 
   // Verwaiste Meldungen (Council-Diff R1): „gesendet“ mit einem Batch, der nicht der laufende dieses Leitstands ist — etwa
   // nach einem Wechsel oder einem Absturz zwischen Anspruch und Markieren — gehen zurück in die Warteschlange.
-  await events().updateMany({ userId: u.id, status: 'gesendet', batch: { $ne: leit.wake?.batch ?? null } }, { $set: { status: 'offen', batch: null } });
+  // Batches ALLER aktiven Leitstände der Person bleiben stehen (Council-Diff R2: kurz nach einem Wechsel sind zwei aktiv).
+  const live: any[] = await runs().find({ userId: u.id, kind: 'leitstand', endedAt: null, 'wake.batch': { $exists: true } }, { projection: { wake: 1 } }).toArray();
+  const keep = [...new Set([leit.wake?.batch, ...live.map((l) => l.wake?.batch)].filter(Boolean))];
+  await events().updateMany({ userId: u.id, status: 'gesendet', batch: { $nin: keep } }, { $set: { status: 'offen', batch: null } });
 
   // 2) Ereignisse sammeln: Stränge, Knuts Antworten, eigene technische Zugenden.
   const strands: any[] = await runs().find({ userId: u.id, ...STRANDS, reviewedAt: null, startError: null, startedAt: { $gt: new Date(now - 14 * 86400_000) } }).toArray();

@@ -373,6 +373,17 @@ test('Council-Diff R1: verwaiste „gesendet“-Meldung wird aufgeräumt und zug
   assert.ok(!(await wakesOf(leit.conv)).some((m) => /\(tot\)/.test(textOf(m))));
 });
 
+test('Council-Diff R2: das Aufräumen schont die unbestätigte Meldung eines zweiten aktiven Leitstands', async () => {
+  await W().collection('orchestrator_runs').insertOne({ _id: 'ls-zweit' as any, kind: 'leitstand', userId: String(knut._id), conv: randomUUID(), url: 'https://chat.example/c/zweit', title: 'Leitstand · Zweit', startedAt: new Date(), lastSentAt: new Date(), reviewedAt: null, endedAt: null, startError: null, wake: { batch: 'efefefefefef', sentAt: new Date(), weiter: false }, wakes: [] });
+  const id = `${knut._id}:test:zweit`;
+  await W().collection('leitstand_events').insertOne({ _id: id as any, userId: String(knut._id), kind: 'fertig', text: 'meldet „fertig“ (zweit)', excerpt: '', strand: null, at: new Date(), createdAt: new Date(), status: 'gesendet', batch: 'efefefefefef', retries: 0 });
+  await pause(1500);
+  assert.equal((await W().collection('leitstand_events').findOne({ _id: id as any }))!.status, 'gesendet', 'gehört einem aktiven Leitstand — bleibt');
+  await W().collection('orchestrator_runs').updateOne({ _id: 'ls-zweit' as any }, { $set: { endedAt: new Date() } });
+  const e = await until(() => W().collection('leitstand_events').findOne({ _id: id as any }), (x: any) => x?.status !== 'gesendet');
+  assert.notEqual(e!.status, 'gesendet', 'nach dem Ende des zweiten: zurück in die Warteschlange');
+});
+
 test('Council-Diff R1: Deckel-Fragen kann niemand zurückziehen außer durch Knuts Antwort; Altdokument ohne kind bleibt ein Strang (DoD 32)', async () => {
   await W().collection('orchestrator_questions').insertOne({ _id: 'q-deckel' as any, userId: String(knut._id), kind: 'leitstand-deckel', title: 'Weckdeckel', context: 'x', options: [], recommendation: 'y', strand: null, createdAt: new Date(), status: 'offen', answer: null });
   assert.match((await orch(['questions', 'withdraw', 'q-deckel'])).err, /409: Diese Rückfrage entscheidet nur Knut/);
