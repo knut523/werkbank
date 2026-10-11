@@ -33,7 +33,7 @@ export const VORBAU_AUS_TEXT = 'G0 (Prüfung vor dem Bau) ist auf dieser Instanz
 
 export type Ergebnis = 'frei' | 'fortsetzen' | 'treffer' | 'stopp';
 /** Woran ein Beleg hängt — „autor“ zählt die Bilanz gesondert (DoD 25). */
-export type Kriterium = 'gebaut' | 'geplant' | 'baut' | 'lokal' | 'eigen' | 'autor';
+export type Kriterium = 'gebaut' | 'geplant' | 'baut' | 'lokal' | 'eigen' | 'autor' | 'plan';
 export interface Beleg { art: Kriterium; text: string; repo?: string; sha?: string; pr?: string; branch?: string; pfad?: string; wirkung: 'treffer' | 'fortsetzen' }
 export interface Stopp { grund: 'lesetoken' | 'fetch' | 'pr-api' | 'eingabe'; text: string; knopf: 'ohne PR-Prüfung bauen' | null }
 export interface VorbauErgebnis { ergebnis: Ergebnis; slug: string; belege: Beleg[]; hinweise: string[]; stopp?: Stopp; kriterien: Kriterium[] }
@@ -114,6 +114,8 @@ const nummern = (plan: PlanInfo | null, zitiert: string[]) => [...new Set([plan?
 const istPlanDatei = (p: string) => /^plans\/\d{3}-[^/]+\.md$|^docs\/plan-[^/]+\.md$/.test(p);
 /** Code-PR = ändert mehr als Plandateien (ein Plan-PR geht vor dem Code auf main und ist kein „schon gebaut“). */
 export const istCodePr = (p: Pr) => p.files.length === 0 || p.files.some((f) => !istPlanDatei(f));
+/** Release-/Sync-PR (develop → main, Bot main → develop, release/*): trägt fremde Arbeit weiter, ist nie selbst „gebaut“ (Probe 11.10.: olaf-admin#276). */
+export const istReleasePr = (p: Pr) => /^(develop|main|master|release\/.+)$/.test(p.headRefName);
 
 /** Worüber ein PR zu derselben Arbeit gehört: Branch, Plandatei, Slug als ganzes Wort, Plannummer. */
 export function treffer(name: string[], nr: string[], own: string | null) {
@@ -138,19 +140,26 @@ export function decide(slug: string, f: Fakten): VorbauErgebnis {
 
   // 1. schon gebaut: gemergter Code-PR mit Head-Branch = branch:/Slug oder der Slug/Plannummer nennt.
   for (const p of f.gemergt) {
-    if (!istCodePr(p)) continue;
+    if (!istCodePr(p) || istReleasePr(p)) continue;
     if (!(t.branch(p.headRefName) || t.nennt(p))) continue;
     belege.push({ art: 'gebaut', wirkung: 'treffer', repo: p.repo, pr: p.url, sha: p.mergeCommit ?? undefined, branch: p.headRefName, text: `schon gebaut: ${p.repo}#${p.number} „${p.title.slice(0, 90)}“ (Branch ${p.headRefName}) gemergt${p.mergeCommit ? ` als ${p.mergeCommit.slice(0, 8)}` : ''}${p.aufInteg === false ? ' — Commit nicht auf dem Integrationszweig gefunden' : ''}` });
   }
-  // 1b. geplant von anderem: Plandatei auf dem Integrationszweig (Pfad, spec: oder branch:).
+  // 1b. geplant von anderem (Paket 135, Probe 11.10.: gemergte Pläne sind meist UNSERE, nur von jemand anderem gemergt).
+  // Treffer nur, wenn der Plan zu einer ANDEREN Spec gehört oder es zu seinem branch: einen fremden Code-PR gibt;
+  // sonst „Plan existiert schon“ → fortsetzen. Der Plan-Autor allein entscheidet nichts mehr.
+  const meineSpecs = new Set([slug, f.plan?.spec, f.plan?.specHeader].filter(Boolean));
+  const fremd = (p: Pr) => !!p.author && !f.ich.some((i) => i.toLowerCase() === p.author!.toLowerCase());
   for (const pl of f.plaeneAufInteg) {
-    const gleich = own !== null && pl.branch === own;
-    if (gleich && (pl.autorIstIch || !f.autorKriterium)) { belege.push({ art: 'eigen', wirkung: 'fortsetzen', repo: pl.repo, pfad: pl.pfad, branch: pl.branch ?? undefined, text: `eigener Plan auf dem Integrationszweig: ${pl.repo}:${pl.pfad} (branch ${pl.branch})` }); continue; }
-    belege.push({ art: gleich ? 'autor' : 'geplant', wirkung: 'treffer', repo: pl.repo, pfad: pl.pfad, branch: pl.branch ?? undefined, text: `geplant von anderem: ${pl.repo}:${pl.pfad} — ${gleich ? `gleicher branch, aber Autor ${pl.autor}` : `branch ${pl.branch ?? 'unbekannt'}${own ? ` statt ${own}` : ''}`}` });
+    if (own !== null && pl.branch === own && pl.autorIstIch) { belege.push({ art: 'eigen', wirkung: 'fortsetzen', repo: pl.repo, pfad: pl.pfad, branch: pl.branch ?? undefined, text: `eigener Plan auf dem Integrationszweig: ${pl.repo}:${pl.pfad} (branch ${pl.branch})` }); continue; }
+    if (pl.spec && !meineSpecs.has(pl.spec)) { belege.push({ art: 'geplant', wirkung: 'treffer', repo: pl.repo, pfad: pl.pfad, branch: pl.branch ?? undefined, text: `geplant von anderem: ${pl.repo}:${pl.pfad} — Plan zur Spec ${pl.spec}` }); continue; }
+    const pr = f.autorKriterium && pl.branch ? [...f.gemergt, ...(f.offen ?? [])].find((p) => p.headRefName === pl.branch && istCodePr(p) && !istReleasePr(p) && fremd(p)) : undefined;
+    if (pr) { belege.push({ art: 'autor', wirkung: 'treffer', repo: pl.repo, pfad: pl.pfad, pr: pr.url, branch: pl.branch ?? undefined, text: `geplant von anderem: ${pl.repo}:${pl.pfad} — zu branch ${pl.branch} gibt es den Code-PR ${pr.repo}#${pr.number} von ${pr.author}` }); continue; }
+    belege.push({ art: 'plan', wirkung: 'fortsetzen', repo: pl.repo, pfad: pl.pfad, branch: pl.branch ?? undefined, text: `Plan existiert schon: ${pl.repo}:${pl.pfad}, auf ihm aufsetzen${pl.branch ? ` (branch ${pl.branch})` : ''}` });
   }
   // 2. baut jemand anderes: offener PR (alle Autoren) mit Branch */<slug>, Plandatei <slug> oder Slug als ganzes Wort.
   if (f.offen === null) hinweise.push('Ohne PR-Prüfung gebaut (Knopf „ohne PR-Prüfung bauen“, protokolliert): offene PRs wurden NICHT geprüft.');
   for (const p of f.offen ?? []) {
+    if (istReleasePr(p)) continue;
     if (!(t.branch(p.headRefName) || t.planDatei(p) || t.nennt(p))) continue;
     const gleich = own !== null && p.headRefName === own;
     const ichBins = !!p.author && f.ich.some((i) => i.toLowerCase() === p.author!.toLowerCase());
