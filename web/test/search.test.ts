@@ -63,3 +63,11 @@ test('lineSnippet: Überschriftenpfad und Fundzeile, Code übersprungen', () => 
   assert.equal(lineSnippet(body, ['abmeldung']), '§ Haupt › Ablauf: Kunde klickt **Opt-out** im Mail');
   assert.equal(lineSnippet(body, ['gibtsnicht']), '');
 });
+
+test('Synonyme nur als ganzes Wort: „eg“ trifft nicht „Strategie“, Getipptes bleibt Teilwort', async () => {
+  const { hasTerm, wordsOf } = await import('../server/search-lexicon.ts');
+  assert.equal(hasTerm('strategie', wordsOf('Strategie'), 'eg', false), false);
+  assert.equal(hasTerm('eine eg gründen', wordsOf('eine EG gründen'), 'eg', false), true);
+  assert.equal(hasTerm('zauberwort-kundenakte', wordsOf('Zauberwort-Kundenakte'), 'zauberwort', true), true);
+  assert.equal(lineSnippet('Der Roboter\nDer Bot antwortet', ['chatbot']), 'Der Bot antwortet');   // nicht „Roboter“
+});

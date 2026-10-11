@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { getIndex, parseFrontmatter, resolveLink, extractWikilinks, type VaultIndex, type NoteMeta } from '../server/vault.ts';
 import { topicState, boostOf } from '../server/search.ts';
-import { STOP_WORDS, alternativesOf, fold, loadVaultGlossary } from '../server/search-lexicon.ts';
+import { STOP_WORDS, alternativesOf, fold, loadVaultGlossary, wordsOf, hasTerm } from '../server/search-lexicon.ts';
 
 export interface SearchArgs {
   query: string; folder?: string; team?: string; topic?: string; state?: string; type?: string; status?: string;
@@ -59,7 +59,7 @@ export function queryTerms(q: string): string[] {
   return kept.length ? kept : all;
 }
 
-const words = new Map<string, { mtime: number; set: Set<string>; text: string; head: string; body: string }>();
+const words = new Map<string, { mtime: number; set: Set<string>; text: string; head: string; textW: string; headW: string; body: string }>();
 function noteText(idx: VaultIndex, n: NoteMeta) {
   const c = words.get(n.path);
   if (c && c.mtime === n.mtime) return c;
@@ -69,14 +69,15 @@ function noteText(idx: VaultIndex, n: NoteMeta) {
   const heads = [...body.matchAll(/^#{1,4} +(.+)$/gm)].map((m) => m[1]).join('\n');
   const head = fold(`${n.title}\n${n.name.replace(/[-_]/g, ' ')}\n${aliases}\n${heads}\n${String(n.fm.domain ?? '')}\n${Array.isArray(n.fm.tags) ? n.fm.tags.join(' ') : ''}`);
   const text = `${head}\n${fold(body)}`;
-  const entry = { mtime: n.mtime, set: new Set(text.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2)), text, head, body };
+  const entry = { mtime: n.mtime, set: new Set(text.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2)), text, head, textW: wordsOf(text), headW: wordsOf(head), body };
   words.set(n.path, entry);
   return entry;
 }
 
 /** Ausschnitt mit Überschriftenpfad: die ersten Zeilen, die einen Suchbegriff (oder ein Synonym) enthalten. */
 export function lineSnippet(body: string, terms: string[], max = 2): string {
-  const alts = terms.flatMap(alternativesOf).filter((t) => t.length > 1);
+  const typed = new Set(terms);
+  const alts = [...new Set(terms.flatMap(alternativesOf))].filter((t) => t.length > 1);
   if (!alts.length) return '';
   const path: string[] = [];
   const out: string[] = [];
@@ -86,8 +87,8 @@ export function lineSnippet(body: string, terms: string[], max = 2): string {
     if (inCode) continue;
     const h = line.match(/^(#{1,6}) +(.+)$/);
     if (h) { path.length = h[1].length - 1; path[h[1].length - 1] = h[2].trim(); }
-    const f = fold(line);
-    if (!line.trim() || !alts.some((a) => f.includes(a))) continue;
+    const f = fold(line), fw = wordsOf(line);
+    if (!line.trim() || !alts.some((a) => hasTerm(f, fw, a, typed.has(a)))) continue;
     const where = path.filter(Boolean).slice(-2).join(' › ');
     const text = (h ? '' : line.replace(/^\s*[-*>|]+\s*/, '').replace(/\s+/g, ' ').trim()).slice(0, 180);
     out.push(where ? `§ ${where}${text ? ': ' + text : ''}` : text);
@@ -98,6 +99,7 @@ export function lineSnippet(body: string, terms: string[], max = 2): string {
 
 export function fsSearch(idx: VaultIndex, a: SearchArgs) {
   const terms = queryTerms(a.query ?? '');
+  const altsOf = new Map(terms.map((t) => [t, alternativesOf(t)]));   // einmal je Anfrage, nicht je Notiz
   const scored: { path: string; score: number; matched: number; snippet: string }[] = [];
   for (const n of idx.notes.values()) {
     if (!matchesFilters(n, a)) continue;
@@ -105,14 +107,14 @@ export function fsSearch(idx: VaultIndex, a: SearchArgs) {
     const t = noteText(idx, n);
     let score = 0, matched = 0;
     for (const term of terms) {
-      const alts = alternativesOf(term);
-      let hit = alts.find((x) => t.text.includes(x));
+      let hit = altsOf.get(term)!.find((x) => hasTerm(t.text, t.textW, x, x === term));
+      let typed = hit === term;
       if (!hit && term.length >= 5) {
-        for (const w of t.set) if (w[0] === term[0] && lev1(w, term)) { hit = w; break; }
+        for (const w of t.set) if (w[0] === term[0] && lev1(w, term)) { hit = w; typed = true; break; }
       }
       if (!hit) continue;
       matched++;
-      score += t.head.includes(hit) ? 5 : 1;
+      score += hasTerm(t.head, t.headW, hit, typed) ? 5 : 1;
     }
     if (matched) scored.push({ path: n.path, score: score + boostOf(n) * 0.1, matched, snippet: '' });
   }
@@ -128,18 +130,18 @@ export function fsSearch(idx: VaultIndex, a: SearchArgs) {
  *  im Eval besser als 'last' (das Wörter vom Ende her streicht). Exportiert für den Eval-Lauf. */
 export const tuning = { strategy: 'frequency' as 'last' | 'all' | 'frequency' };
 
-async function meiliSearch(b: Backend, q: string): Promise<string[] | null> {
+async function meiliSearch(b: Backend, q: string): Promise<{ path: string; crop: string }[] | null> {
   if (!b.meiliHost || !b.meiliKey) return null;
   try {
     const r = await fetch(`${b.meiliHost}/indexes/${b.meiliIndex ?? 'werkbank_vault'}/search`, {
       method: 'POST',
       headers: { authorization: `Bearer ${b.meiliKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ q, limit: 200, attributesToRetrieve: ['path'], matchingStrategy: tuning.strategy }),
+      body: JSON.stringify({ q, limit: 200, attributesToRetrieve: ['path'], attributesToCrop: ['body'], cropLength: 30, matchingStrategy: tuning.strategy }),
       signal: AbortSignal.timeout(4000),
     });
     if (!r.ok) return null;
     const j: any = await r.json();
-    return (j.hits ?? []).map((h: any) => String(h.path));
+    return (j.hits ?? []).map((h: any) => ({ path: String(h.path), crop: String(h._formatted?.body ?? '').replace(/\s+/g, ' ').slice(0, 240) }));
   } catch { return null; }
 }
 
@@ -157,10 +159,13 @@ export async function search(b: Backend, a: SearchArgs): Promise<string> {
   const limit = Math.min(Math.max(a.limit ?? 10, 1), 50);
   loadVaultGlossary(idx);   // Synonyme für Ausschnitte und den Dateisystem-Weg
   if (a.query?.trim()) {
-    const m = (await meiliSearch(b, a.query))?.filter((p) => idx.notes.has(p) && matchesFilters(idx.notes.get(p)!, a));
-    if (m?.length) {
+    const m = await meiliSearch(b, a.query);
+    if (m) {
       const terms = queryTerms(a.query);
-      return fmt(idx, m.slice(0, limit).map((path) => ({ path, snippet: lineSnippet(noteText(idx, idx.notes.get(path)!).body, terms) })), 'Meilisearch');
+      const rows = m.filter((h) => idx.notes.has(h.path) && matchesFilters(idx.notes.get(h.path)!, a)).slice(0, limit)
+        // Fundzeile mit Überschriftenpfad; traf Meilisearch nur über Tippfehler/Präfix, bleibt sein Ausschnitt.
+        .map((h) => ({ path: h.path, snippet: lineSnippet(noteText(idx, idx.notes.get(h.path)!).body, terms) || h.crop }));
+      if (rows.length || !m.length) return fmt(idx, rows, 'Meilisearch');
     }
   }
   return fmt(idx, fsSearch(idx, { ...a, limit }), 'Dateisystem');

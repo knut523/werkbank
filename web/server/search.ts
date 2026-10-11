@@ -104,7 +104,7 @@ let schemaTag = String(SCHEMA);   // Schema + Wortschatz-Stand: ändert sich ein
 function syncLexicon(idx: VaultIndex) {
   loadVaultGlossary(idx);
   const tag = `${SCHEMA}.${createHash('sha1').update(JSON.stringify(synonymGroups())).digest('hex').slice(0, 8)}`;
-  if (tag !== schemaTag) { schemaTag = tag; known = new Map(); }
+  if (tag !== schemaTag) { schemaTag = tag; for (const p of known.keys()) known.set(p, -1); }   // alle neu, Gelöschte fallen trotzdem raus
 }
 
 export async function reindex(idx: VaultIndex, full = false): Promise<{ added: number; removed: number }> {
@@ -116,7 +116,8 @@ export async function reindex(idx: VaultIndex, full = false): Promise<{ added: n
       known = new Map();
       for (let offset = 0; ; offset += 1000) {
         const r = await meili('GET', `/indexes/${cfg.meiliIndex}/documents?limit=1000&offset=${offset}&fields=path,mtime,schema`);
-        for (const d of r?.results ?? []) if (d.schema === schemaTag) known.set(d.path, d.mtime);
+        // Auch Dokumente mit altem Schema merken (mtime -1 = neu schicken), sonst fänden Gelöschte nie in `gone`.
+        for (const d of r?.results ?? []) known.set(d.path, d.schema === schemaTag ? d.mtime : -1);
         if (!r || (r.results ?? []).length < 1000) break;
       }
     }

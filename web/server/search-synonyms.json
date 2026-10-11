@@ -1,5 +1,6 @@
 {
-  "_doc": "Synonymgruppen der Vault-Suche (alle Begriffe einer Gruppe gelten als gleichwertig). Deutsch/Englisch, Abkürzungen, Fachwörter. Zusätzlich liest der Index die Glossar-Tabellen des Vaults (Überschrift Glossar/Begriffe/Abkürzungen, Zeilen | **Begriff (ABK)** | bzw. | **A / B** |). Kurz halten: lieber eine Gruppe zu wenig als eine, die Treffer verwässert.",
+  "_doc": "Synonymgruppen der Vault-Suche (alle Begriffe einer Gruppe gelten als gleichwertig). Deutsch/Englisch, Abkürzungen, Fachwörter. Zusätzlich liest der Index die Glossar-Tabellen des Vaults (Überschrift Glossar/Begriffe/Abkürzungen, Zeilen | **Begriff (ABK)** | bzw. | **A / B** |). Kurz halten: lieber eine Gruppe zu wenig als eine, die Treffer verwässert. notSynonyms: Glossar-Zeilen, die der Parser fälschlich als Synonyme läse.",
+  "notSynonyms": [["hardwareflow", "speicher"], ["max", "maxenergy"]],
   "groups": [
     ["abmeldung", "opt-out", "unsubscribe", "abbestellen"],
     ["erinnerung", "reminder"],

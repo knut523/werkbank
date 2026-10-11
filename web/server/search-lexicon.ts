@@ -17,18 +17,20 @@ export const STOP_WORDS = [
 export const fold = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss');
 
 let curated: string[][] | undefined;
+let blockedPairs: string[][] | undefined;
 let glossary: string[][] = [];
 const norm = (g: string[]) => [...new Set(g.map((w) => w.toLowerCase().replace(/\s+/g, ' ').trim()).filter((w) => w.length > 1 && w.length <= 40))];
 
-function curatedGroups(): string[][] {
-  if (!curated) {
-    try {
-      const j = JSON.parse(readFileSync(new URL('./search-synonyms.json', import.meta.url), 'utf8'));
-      curated = (j.groups as string[][]).map(norm).filter((g) => g.length > 1);
-    } catch { curated = []; }
-  }
-  return curated;
+function loadCurated() {
+  try {
+    const j = JSON.parse(readFileSync(new URL('./search-synonyms.json', import.meta.url), 'utf8'));
+    curated = (j.groups as string[][]).map(norm).filter((g) => g.length > 1);
+    blockedPairs = ((j.notSynonyms ?? []) as string[][]).map(norm);
+  } catch { curated = []; blockedPairs = []; }
 }
+function curatedGroups(): string[][] { if (!curated) loadCurated(); return curated!; }
+/** Glossar-Zeilen, die keine Synonyme sind (z. B. „Hardwareflow / Speicher“): Gruppen mit allen diesen Wörtern fallen weg. */
+function notSynonyms(): string[][] { if (!blockedPairs) loadCurated(); return blockedPairs!; }
 
 /** Synonymgruppen (alle Begriffe einer Gruppe gelten als gleichwertig), klein geschrieben: gepflegt + aus Vault-Glossaren.
  *  Nicht als Meilisearch-`synonyms`: die Anfrage-Synonyme brachten im Eval nichts; der Index trägt sie je Notiz (expandText). */
@@ -65,15 +67,27 @@ const glossCache = new Map<string, { mtime: number; groups: string[][] }>();
 export function loadVaultGlossary(idx: { root: string; notes: Map<string, { path: string; mtime: number }> }): void {
   for (const n of idx.notes.values()) {
     if (glossCache.get(n.path)?.mtime === n.mtime) continue;
-    let groups: string[][] = [];
-    try { const t = readFileSync(join(idx.root, n.path), 'utf8'); if (/glossar|begriffe|abk(ü|ue)rzungen|glossary|abbreviations/i.test(t)) groups = glossaryPairs(t); } catch { /* weg */ }
-    glossCache.set(n.path, { mtime: n.mtime, groups });
+    let t: string;
+    try { t = readFileSync(join(idx.root, n.path), 'utf8'); } catch { continue; }   // nicht lesbar: nicht merken, nächstes Mal neu
+    glossCache.set(n.path, { mtime: n.mtime, groups: /glossar|begriffe|abk(ü|ue)rzungen|glossary|abbreviations/i.test(t) ? glossaryPairs(t) : [] });
   }
   for (const p of glossCache.keys()) if (!idx.notes.has(p)) glossCache.delete(p);
-  glossary = [...glossCache.values()].flatMap((e) => e.groups);
+  const blocked = notSynonyms();
+  glossary = [...glossCache.values()].flatMap((e) => e.groups)
+    .filter((g) => !blocked.some((b) => b.every((w) => g.includes(w))))
+    .map((g) => g.join('\u0000')).sort().filter((g, i, a) => g !== a[i - 1]).map((g) => g.split('\u0000'));   // feste Reihenfolge: stabiler Hash
 }
 
 /** Für den Dateisystem-Weg: Begriff (gefaltet) → Alternativen (gefaltet), inkl. sich selbst. */
+/** Text als Wortfolge mit Leerzeichen-Rand (gefaltet), für Ganzwort-Vergleiche: wordsOf(t).includes(` ${w} `). */
+export const wordsOf = (s: string) => ` ${fold(s).replace(/[^\p{L}\p{N}]+/gu, ' ').trim()} `;
+
+/** Kommt der Begriff im Text vor? Das Getippte als Teilwort (wie bisher), Synonyme nur als ganzes Wort —
+ *  sonst träfe „eg“ (Energiegemeinschaft) jede „Strategie“. */
+export function hasTerm(folded: string, words: string, alt: string, typed: boolean): boolean {
+  return typed ? folded.includes(alt) : words.includes(wordsOf(alt));
+}
+
 export function alternativesOf(term: string): string[] {
   const t = fold(term);
   const alts = new Set([t]);
