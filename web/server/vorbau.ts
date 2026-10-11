@@ -202,13 +202,30 @@ export function lesetoken(repoDir: string, o: { owner: string; name: string }, g
   } catch { return null; }
 }
 
-const PR_FELDER = 'number title body url headRefName headRefOid author { login } files(first: 100) { nodes { path } }';
-export const G0_QUERY = `query($owner: String!, $name: String!) {
+const PR_FELDER = 'number title body url headRefName headRefOid author { login }';
+// Live-Test 11.10.2026: eine Abfrage mit 2×100 PRs samt Body und je 100 Dateien lief bei olaf-admin in GitHubs
+// GraphQL-Timeout (504 / leere Antwort). Deshalb zwei Abfragen, je 50 PRs, Dateilisten nur bei offenen PRs
+// (gemergte Kandidaten holen ihre Dateien über den Git-Pfad), dazu ein Wiederholversuch bei 5xx.
+export const G0_QUERY_OFFEN = `query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
-    offen: pullRequests(states: OPEN, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FELDER} } }
-    gemergt: pullRequests(states: MERGED, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FELDER} mergeCommit { oid } } }
+    offen: pullRequests(states: OPEN, first: 50, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FELDER} files(first: 50) { nodes { path } } } }
   }
 }`;
+export const G0_QUERY_GEMERGT = `query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    gemergt: pullRequests(states: MERGED, first: 50, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FELDER} mergeCommit { oid } } }
+  }
+}`;
+/** GraphQL mit einem Wiederholversuch bei 5xx/Netzfehler (GitHub-Timeouts sind meist vorübergehend). */
+async function graphqlMitWiederholung(token: string, query: string, vars: Record<string, unknown>): Promise<any> {
+  try { return await graphql(token, query, vars); }
+  catch (e: any) {
+    const st = e instanceof GithubError ? e.status : 0;
+    if (st === 401 || st === 403) throw e;
+    await new Promise((ok) => setTimeout(ok, 2000));
+    return graphql(token, query, vars);
+  }
+}
 // ponytail: je Repo die 100 zuletzt geänderten offenen und gemergten PRs. Ältere gemergte findet der Git-Pfad
 // (Merge-Commits „Merge pull request #N from …/<branch>“ und Squash-Titel „… (#N)“ auf origin/HEAD); mehr nur bei Bedarf.
 
@@ -319,7 +336,12 @@ export async function gather(o: GatherOpts): Promise<{ fakten: Fakten } | { stop
     // PR-API (lesend, mit demselben Lesetoken).
     if (!o.ohnePr) {
       let d: any;
-      try { d = await graphql(token, G0_QUERY, { owner: or.owner, name: or.name }); }
+      try {
+        const v = { owner: or.owner, name: or.name };
+        const a = await graphqlMitWiederholung(token, G0_QUERY_OFFEN, v);
+        const b = await graphqlMitWiederholung(token, G0_QUERY_GEMERGT, v);
+        d = a?.repository && b?.repository ? { repository: { ...a.repository, ...b.repository } } : (a ?? b);
+      }
       catch (e: any) {
         const st = e instanceof GithubError ? e.status : 0;
         if (st === 401 || st === 403) return { stopp: { grund: 'lesetoken', knopf: null, text: `GitHub-PR-API lehnt das Lesetoken ab (${st}) — Stopp ohne Knopf, bis ein gültiges Lesetoken da ist.` } };
