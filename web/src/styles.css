@@ -237,7 +237,7 @@ table.t th { font-weight: 600; color: var(--text-secondary); font-size: 12.5px; 
 .sublink:hover .subs { text-decoration: underline; }
 .subk { font-weight: 600; }
 .tiny-chip { font-size: 11px; padding: 0 5px; }
-.subtoggle { white-space: nowrap; }
+.subtoggle { white-space: nowrap; flex-wrap: wrap; row-gap: 2px; }
 .subtoggle .badge-hyg, .sub .badge-hyg { font-size: 11px; padding: 0 5px; line-height: 16px; }
 .docs-h { font-weight: 600; margin-top: 8px; }
 tr.moved td { background: var(--chip-warn); }

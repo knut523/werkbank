@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodS
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { pruefe, decide, parsePlan, ganzesWort, slugProblem, bilanz, protokolliere, g0Optionen, vorbauAus, type Fakten } from '../server/vorbau.ts';
+import { pruefe, decide, parsePlan, ganzesWort, slugProblem, bilanz, protokolliere, g0Optionen, vorbauAus, type Fakten, type Pr } from '../server/vorbau.ts';
 
 const T = mkdtempSync(join(tmpdir(), 'vorbau-'));
 const ME = { GIT_AUTHOR_NAME: 'knut523', GIT_AUTHOR_EMAIL: 'knut.peters@maxenergy.at', GIT_COMMITTER_NAME: 'knut523', GIT_COMMITTER_EMAIL: 'knut.peters@maxenergy.at' };
@@ -234,24 +234,31 @@ test('Fixture E: Vorfall Kohorte mit echten SHAs — Spec-, Plan- und Branch-Slu
   const gebaut = r.belege.find((b) => b.art === 'gebaut' && b.pr?.endsWith('/269'))!;
   assert.equal(gebaut.sha, '3b17596df211a0cdb4b935819d9121e49136322c');
   assert.equal(gebaut.branch, 'feat/kohorte-stand-heute');
-  assert.ok(r.belege.some((b) => b.art === 'geplant' && b.pfad === 'plans/090-cohort-running-month-and-reconstruction.md'));
+  // Paket 135: Plan 090 gehört zur selben Spec, sein branch trägt nur den eigenen PR #269 → „Plan existiert schon“, kein zweiter Treffer.
+  assert.ok(r.belege.some((b) => b.art === 'plan' && b.wirkung === 'fortsetzen' && b.pfad === 'plans/090-cohort-running-month-and-reconstruction.md'), JSON.stringify(r.belege));
   assert.ok(!r.belege.some((b) => b.pr?.endsWith('/49') && b.art === 'gebaut'), 'Plan-PR #49 ist kein „schon gebaut“');
 });
 
-test('Fixture F: eigener gemergter Plan-PR ohne Code → fortsetzen; fremder branch: → treffer (geplant von anderem) (DoD 15)', async () => {
+test('Fixture F: eigener gemergter Plan-PR ohne Code → fortsetzen; fremder Plan zur selben Spec ohne fremden Code-PR → fortsetzen (DoD 15, neu gefasst Paket 135)', async () => {
   const eigen = planDatei('101-hardware-termine.md', '---\nspec: admin-spec-hardware-termine-kalender\nbranch: feat/hardware-termine\n---\n');
   const r = await run('admin-spec-hardware-termine-kalender', [docs], { plan: eigen });
   assert.equal(r.ergebnis, 'fortsetzen', JSON.stringify(r.belege));
   const fremd = planDatei('104-replay.md', '---\nspec: service-spec-replay-spur\nbranch: feat/replay-knut\n---\n');
   const r2 = await run('service-spec-replay-spur', [docs], { plan: fremd });
-  assert.equal(r2.ergebnis, 'treffer');
-  assert.match(r2.belege[0].text, /geplant von anderem: olaf-docs:plans\/102-service-replay-spur\.md/);
+  // Paket 135: anderer branch: und anderer Autor allein sind kein Treffer mehr (Probe 11.10.: fast immer Fehlalarm).
+  assert.equal(r2.ergebnis, 'fortsetzen', JSON.stringify(r2.belege));
+  assert.match(r2.belege[0].text, /^Plan existiert schon: olaf-docs:plans\/102-service-replay-spur\.md, auf ihm aufsetzen \(branch feat\/replay-chris\)/);
 });
 
-test('Fixture F2: fremder Plan mit anderem Dateinamen und passendem spec: → treffer (DoD 20)', async () => {
+test('Fixture F2: fremder Plan mit anderem Dateinamen und passendem spec: wird gefunden → fortsetzen; Plan zu ANDERER Spec → treffer (DoD 20, neu gefasst Paket 135)', async () => {
   const r = await run('cockpit-spec-aussenumsatz', [docs]);
-  assert.equal(r.ergebnis, 'treffer');
+  assert.equal(r.ergebnis, 'fortsetzen', JSON.stringify(r.belege));
   assert.equal(r.belege[0].pfad, 'plans/103-anders-benannt.md');
+  // Derselbe Plan-Slug, aber der gemergte Plan gehört zu einer anderen Spec.
+  const plan = planDatei('130-anders-benannt.md', '---\nspec: cockpit-spec-umsatz-anders\nbranch: feat/umsatz-anders\n---\n');
+  const r2 = await run('cockpit-spec-umsatz-anders', [docs], { plan });
+  assert.equal(r2.ergebnis, 'treffer');
+  assert.match(r2.belege.find((b) => b.pfad === 'plans/103-anders-benannt.md')!.text, /Plan zur Spec cockpit-spec-aussenumsatz/);
 });
 
 test('Fixture G: fremder PR mit gleichem Branch-Namen (anderer Autor, Head-SHA nicht lokal) → treffer (DoD 16)', async () => {
@@ -389,4 +396,72 @@ test('Schalter WERKBANK_VORBAU_CHECK=off: Umgebung, .env.local, CLI „aus“ mi
   const out = await new Promise<{ code: number; out: string }>((res) => execFile(cli, ['bank', '--repos', d, '--json'], { encoding: 'utf8', env: { ...process.env, WERKBANK_VORBAU_CHECK: 'off' } }, (e: any, o) => res({ code: e ? e.code : 0, out: o })));
   assert.equal(out.code, 0); assert.equal(JSON.parse(out.out).ergebnis, 'aus');
   rmSync(d, { recursive: true, force: true });
+});
+
+// ---------- Paket 135: Fehlalarme aus dem ersten echten drift-Lauf (11.10.2026) ----------
+// Fixtures in fixtures/vorbau/probe-2026-10-11/: die Köpfe der echten Plandateien auf olaf-docs origin/main (4555059)
+// und die echten Release-PRs olaf-admin#276 / olaf-tariff-app#191 (per Lesetoken gelesen).
+const PROBE = (f: string) => readFileSync(new URL(`./fixtures/vorbau/probe-2026-10-11/${f}`, import.meta.url), 'utf8');
+const aufInteg = (datei: string, autor: string, autorIstIch: boolean) => {
+  const p = parsePlan(PROBE(datei), `plans/${datei}`);
+  return { repo: 'olaf-docs', pfad: `plans/${datei}`, spec: p.spec ?? p.specHeader, branch: p.branch, autor, autorIstIch };
+};
+const KNUT_PLAN = 'Knut Peters <knut.peters@maxenergy.at>', CHRIS_PLAN = 'bizarrochris <bizarrochris@users.noreply.github.com>';
+
+test('135/F1: gemergter Plan zur selben Spec ohne fremden Code-PR → fortsetzen „Plan existiert schon“ (echte Fälle 027, 064, 024, 068, 018)', () => {
+  const faelle: [string, string, string][] = [
+    ['service-spec-notizen', '027-service-notizen.md', KNUT_PLAN],
+    ['service-spec-replay-spur', '064-service-replay-spur.md', KNUT_PLAN],
+    ['admin-spec-zp-anbieter-dropdown', '024-service-anbieter-auswahl.md', KNUT_PLAN],
+    ['anmeldestrecke-spec-posthog-einwilligung-maskierung', '068-posthog-einwilligung-maskierung.md', KNUT_PLAN],
+    // Plan von bizarrochris ohne spec: und ohne branch: — „anderer Autor“ allein ist kein Treffer mehr.
+    ['admin-spec-verknuepfungen-pruefen-gesamt', '018-matcher-identity-and-link-audit.md', CHRIS_PLAN],
+  ];
+  for (const [slug, datei, autor] of faelle) {
+    const r = decide(slug, leer({ plaeneAufInteg: [aufInteg(datei, autor, false)] }));
+    assert.equal(r.ergebnis, 'fortsetzen', `${slug}: ${JSON.stringify(r.belege)}`);
+    assert.deepEqual(r.belege.map((b) => [b.art, b.wirkung]), [['plan', 'fortsetzen']], slug);
+    assert.match(r.belege[0].text, new RegExp(`^Plan existiert schon: olaf-docs:plans/${datei.replace('.', '\\.')}, auf ihm aufsetzen`));
+  }
+});
+
+test('135/F1: Plan zeigt auf eine ANDERE Spec → treffer „geplant von anderem“', () => {
+  // Echter Kopf von plan 068 (Spec posthog-einwilligung-maskierung), geprüft für eine andere Spec, die ihn zitiert.
+  const r = decide('anmeldestrecke-spec-experiment-grundgeruest', leer({ specZitiertePlaene: ['plans/068-posthog-einwilligung-maskierung'], plaeneAufInteg: [aufInteg('068-posthog-einwilligung-maskierung.md', KNUT_PLAN, true)] }));
+  assert.equal(r.ergebnis, 'treffer');
+  assert.equal(r.belege[0].art, 'geplant');
+  assert.match(r.belege[0].text, /geplant von anderem: olaf-docs:plans\/068-posthog-einwilligung-maskierung\.md — Plan zur Spec anmeldestrecke-spec-posthog-einwilligung-maskierung/);
+  // Gleiche Spec über den eigenen Plan (spec:/**Spec:**) zählt als dieselbe Spec.
+  const eigen = decide('posthog-maskierung', leer({ plan: parsePlan('---\nspec: anmeldestrecke-spec-posthog-einwilligung-maskierung\n---\n', 'plans/130-x.md'), plaeneAufInteg: [aufInteg('068-posthog-einwilligung-maskierung.md', KNUT_PLAN, true)] }));
+  assert.equal(eigen.ergebnis, 'fortsetzen', JSON.stringify(eigen.belege));
+});
+
+test('135/F1: fremder Code-PR zum branch: des Plans → treffer (Kriterium „anderer Autor“, gesondert gezählt, abschaltbar)', () => {
+  // Echter Fall: plan 087 nennt branch `feat/049-ecp-completion`; dort liegt olaf-durable-func#85 von bizarrochris (offen).
+  const pl = aufInteg('087-bev-address-register.md', 'Christoph Bitzner <bizarro@Machine-CB-2.local>', false);
+  assert.equal(pl.branch, 'feat/049-ecp-completion');
+  const pr85: Pr = { repo: 'olaf-durable-func', number: 85, url: 'https://github.com/WirStrom1/olaf-durable-func/pull/85', title: 'feat(workflow): complete the customer in ECP after submit (plan 049)', body: '', headRefName: 'feat/049-ecp-completion', headRefOid: '', author: 'bizarrochris', files: ['src/x.ts'] };
+  const r = decide('anmeldestrecke-spec-bev-adressregister', leer({ plaeneAufInteg: [pl], offen: [pr85] }));
+  const b = r.belege.find((x) => x.pfad === pl.pfad)!;
+  assert.deepEqual([r.ergebnis, b.art, b.wirkung], ['treffer', 'autor', 'treffer']);
+  assert.match(b.text, /olaf-durable-func#85 von bizarrochris/);
+  assert.deepEqual(r.kriterien, ['autor']);
+  // Eigener PR auf dem branch → kein Treffer; Kriterium abgeschaltet (Bilanz) → kein Treffer.
+  assert.equal(decide('anmeldestrecke-spec-bev-adressregister', leer({ plaeneAufInteg: [pl], offen: [{ ...pr85, author: 'knut523' }] })).ergebnis, 'fortsetzen');
+  assert.equal(decide('anmeldestrecke-spec-bev-adressregister', leer({ plaeneAufInteg: [pl], offen: [pr85], autorKriterium: false })).ergebnis, 'fortsetzen');
+  // Gemergter fremder Code-PR zählt genauso; ein reiner Plan-PR nicht.
+  assert.equal(decide('anmeldestrecke-spec-bev-adressregister', leer({ plaeneAufInteg: [pl], gemergt: [{ ...pr85, mergeCommit: 'a'.repeat(40) }] })).belege.find((x) => x.pfad === pl.pfad)!.art, 'autor');
+  assert.equal(decide('anmeldestrecke-spec-bev-adressregister', leer({ plaeneAufInteg: [pl], offen: [{ ...pr85, files: ['plans/087-bev-address-register.md'] }] })).ergebnis, 'fortsetzen');
+});
+
+test('135/F2: Release-/Sync-PRs zählen nie als „schon gebaut“ oder „baut jemand“ (echte PRs olaf-admin#276, olaf-tariff-app#191)', () => {
+  const rel: Pr[] = JSON.parse(PROBE('release-prs.json')).map((n: any) => ({ repo: n.repo, number: n.number, url: `https://github.com/WirStrom1/${n.repo}/pull/${n.number}`, title: n.title, body: n.body, headRefName: n.headRefName, headRefOid: '', author: n.author.login, files: [], mergeCommit: 'b'.repeat(40) }));
+  // Beide nennen „plan 087“ im Body — genau so trafen sie im Probelauf anmeldestrecke-spec-bev-adressregister.
+  const zit = ['plans/087-bev-address-register'];
+  const r = decide('anmeldestrecke-spec-bev-adressregister', leer({ specZitiertePlaene: zit, gemergt: rel }));
+  assert.equal(r.ergebnis, 'frei', JSON.stringify(r.belege));
+  assert.equal(decide('anmeldestrecke-spec-bev-adressregister', leer({ specZitiertePlaene: zit, offen: rel })).ergebnis, 'frei');
+  // Bot-Sync main → develop (Head main) und release/* genauso; ein normaler Feature-PR mit demselben Text trifft weiter.
+  for (const head of ['main', 'master', 'release/v1.5.0']) assert.equal(decide('anmeldestrecke-spec-bev-adressregister', leer({ specZitiertePlaene: zit, gemergt: [{ ...rel[0], headRefName: head }] })).ergebnis, 'frei', head);
+  assert.equal(decide('anmeldestrecke-spec-bev-adressregister', leer({ specZitiertePlaene: zit, gemergt: [{ ...rel[0], headRefName: 'feat/087-bev-addresses' }] })).ergebnis, 'treffer');
 });

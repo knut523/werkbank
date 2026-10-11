@@ -31,12 +31,14 @@ Ein Morgenbericht allein reicht nicht (Council R1): es braucht einen Stopp vor d
 13. Fehlalarme (Rückfrage + gewählter Knopf) und Fehltreffer (nachträglich entdeckter Doppelbau) werden protokolliert; Bilanz nach 4 Wochen.
 14. Fixture E spielt den Vorfall vom 08.10. mit echten SHAs nach (Spec-, Plan- und Branch-Slug verschieden; Treffer über `spec:` bzw. `**Spec:**`) → `treffer`.
 15. Fixture F: eigener gemergter Plan-PR ohne Code → `fortsetzen`; Plandatei mit fremdem `branch:` → `treffer (geplant von anderem)`.
+    **Neu gefasst (Paket 135, 11.10.2026, nach der Probe):** eine gemergte Plandatei ist nur Treffer, wenn ihr `spec:`/`**Spec:**` auf eine **andere** Spec zeigt oder es zu ihrem `branch:` einen offenen/gemergten Code-PR eines fremden Autors gibt (Kriterium „anderer Autor“, zählt nach DoD 25). Sonst `fortsetzen` mit „Plan existiert schon: plans/NNN-…, auf ihm aufsetzen“. Release-/Sync-PRs (Head develop/main/master/release/*) zählen nie als gebaut.
 16. Fixture G: fremder PR mit gleichem Branch-Namen (anderer Autor, Head-SHA nicht lokal) → `treffer`.
 17. Fetch-Pfad nutzt `GIT_VW_READ=1`; ohne Lesetoken → Stopp ohne Knopf, Nachtbau aus; nachts nicht prüfbar → genau ein Morgeneintrag.
 18. drift.py ohne installiertes `vorbau-check` → Abschnitt übersprungen mit Hinweiszeile, kein Fehler.
 19. Pläne ohne `spec:`/`branch:` (Altpläne) → Kopfzeile `**Spec:**` wird gelesen; fehlt auch die → Hinweis „Identität unbekannt“, kein stilles `frei`.
 
 20. Geplant von anderem zählt über `spec:`-Feld **oder** `branch:` **oder** Pfad. Fixture F2: fremder Plan mit abweichendem Dateinamen und passendem `spec:` → `treffer`.
+    **Neu gefasst (Paket 135):** gefunden wird ein Plan weiter über `spec:`, `branch:` oder Pfad; F2 ergibt jetzt `fortsetzen` (selbe Spec, kein fremder Code-PR) — Treffer nur nach der Regel unter DoD 15.
 21. Fetch **und** PR-Abfrage nutzen das Lesetoken (`GIT_VW_READ=1 git credential fill`); Test belegt, dass das Push-Item für beide nie gelesen wird.
 22. Das neue Lesetoken ersetzt das Item „Github wirstrom read only“ (oder `ITEM_READ` wird angepasst): `GIT_VW_READ=1 git ls-remote https://github.com/WirStrom1/olaf-docs` endet mit 0.
 23. `questions/ask` mit `key`: zweiter Aufruf mit offenem oder beantwortetem Schlüssel wird vom Server abgelehnt (API-Test).
