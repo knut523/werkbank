@@ -552,11 +552,12 @@ test('Council-Diff Teil B: läuft ein fertiger Strang wieder, bleibt die Karte s
   assert.equal(c.running, true);
   // Zähler: dieselbe Seite einmal mit laufender Karte, einmal (nach dem Zug) ohne — die laufende zählt nicht.
   const countNow = (await (await fetch(B + '/api/today/count', { headers: { cookie: await cookie(knut) } })).json()).count;
-  const p = await post(`/api/leitstand/strands/${st.id}/passt`, { seen: c.seen });
+  const p = await post(`/api/leitstand/strands/${st.id}/passt`, { seen: c.seen });   // aktueller Stand → der Grund ist „läuft“
   assert.equal(p.status, 409);
+  assert.match((await p.json()).error, /arbeitet gerade/);
   await until(() => cardOf(st.id), (x: any) => x && !x.running, 20_000);
   const countAfter = (await (await fetch(B + '/api/today/count', { headers: { cookie: await cookie(knut) } })).json()).count;
-  assert.equal(countAfter, countNow + 1, 'erst die wieder fertige Karte zählt');
+  assert.ok(countAfter >= countNow + 1, `erst die wieder fertige Karte zählt (${countNow} → ${countAfter}; andere Karten können parallel dazukommen)`);
 });
 
 test('Council-Diff Teil B (B-21/B-25, zuletzt — beendet die Brücke): Brücke weg → Heute zeigt die Karte weiter (nur Mongo), Passt → 503', async () => {

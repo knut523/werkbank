@@ -464,7 +464,9 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
       try { states = await strandStates(u); } catch { continue; }
       for (const d of list) {
         // Schon fertig nach der letzten Nachricht an den Strang: ohne neue Nachricht ändert sich nichts (Last, Council Teil B).
-        if (d.lastStatus === 'done' && d.doneAt && new Date(d.doneAt).getTime() > new Date(d.lastSentAt ?? d.startedAt).getTime() && !states.get(d.conv)?.running) continue;
+        // … aber nur, wenn seitdem kein Zug lief (Knut schreibt direkt im Chat) und der Bericht schon gefunden ist (Council-Diff B R2).
+        const sd = states.get(d.conv);
+        if (d.lastStatus === 'done' && d.doneAt && d.bericht && new Date(d.doneAt).getTime() > new Date(d.lastSentAt ?? d.startedAt).getTime() && !sd?.running && (sd?.turn?.end ?? 0) <= new Date(d.doneAt).getTime()) continue;
         try {
           const s = states.get(d.conv);
           const last = await lastMessage(u, d.conv);
