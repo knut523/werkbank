@@ -109,8 +109,10 @@ export function Heute({ cfg }: { cfg: Config }) {
   const d: any = t.data;
   const admin = cfg.user?.role === 'ADMIN';
   // Offene Entscheidungen sind Knuts Zeilen im Vault („- Knut:“) → nur für Admins, nachgeladen (liest alle Specs).
-  const [decisions, setDecisions] = useState<any[]>([]);
-  useEffect(() => { if (admin) api('/api/roadmap').then((r: any) => setDecisions(r.decisions ?? [])).catch(() => {}); }, [admin]);
+  // Bereinigt (docs/plan-heute-fragen-aktuell.md): ohne Live/Archiv, Überholtes und Dubletten — die stehen unter „Aufräumen“.
+  const [vq, setVq] = useState<{ open: any[]; cleanup: any[]; raw: number; duplicates: number } | null>(null);
+  useEffect(() => { if (admin) api('/api/roadmap/heute').then((r: any) => setVq(r)).catch(() => {}); }, [admin]);
+  const decisions = vq?.open ?? [];
   useJiraLive(() => { api('/api/today').then(t.setData).catch(() => {}); }, 'both');
   // Solange ein Agent arbeitet oder fragt: alle 20 s nachsehen.
   const busy = d?.queue.some((x: any) => x.bucket === 'laeuft' || x.bucket === 'frage');
@@ -122,10 +124,11 @@ export function Heute({ cfg }: { cfg: Config }) {
   const waitingRuns = d.queue.filter((x: any) => ['frage', 'haengt', 'still'].includes(x.bucket));
   const running = d.queue.filter((x: any) => x.bucket === 'laeuft');
   const orchOpen = d.orchOpen ?? 0;
-  // Die Zahl an „Wartet auf dich“ = die Plakette „Heute (n)“: offene Vault-Entscheidungen (oft Hunderte, ein Rückstand)
-  // stehen darunter, zählen aber nicht mit (Release-Audit 11.10.2026: 445 neben einer Plakette 2).
+  // Die Zahl an „Wartet auf dich“ = die Plakette „Heute (n)“: offene Vault-Entscheidungen (auch bereinigt noch Hunderte,
+  // ein Rückstand) stehen darunter mit eigener Zahl — der bereinigten —, zählen aber nicht mit (Release-Audit 11.10.2026:
+  // 445 neben einer Plakette 2; bereinigt 11.10.: 465 Zeilen → 292 offen, docs/plan-heute-fragen-aktuell.md).
   const nMine = waitingRuns.length + mineCount(d.mine, []) + orchOpen;
-  const showWaiting = nMine > 0 || decisions.length > 0;
+  const showWaiting = nMine > 0 || decisions.length > 0 || (vq?.cleanup.length ?? 0) > 0;
   const reload = () => t.reload();
   const first = cfg.user?.name.split(' ')[0] ?? '';
 
@@ -150,7 +153,7 @@ export function Heute({ cfg }: { cfg: Config }) {
         <h2>Wartet auf dich <span className="chip">{nMine}</span></h2>
         {orchOpen > 0 && <OrchQuestions onChange={reload} />}
         {waitingRuns.map((it: any) => <RunCard key={it.id} it={it} onDone={reload} />)}
-        {mineCount(d.mine, decisions) > 0 && <div className="card"><WartetAufDich x={d.mine} decisions={decisions} onChange={reload} /></div>}
+        {mineCount(d.mine, decisions) + (vq?.cleanup.length ?? 0) > 0 && <div className="card"><WartetAufDich x={d.mine} decisions={decisions} today={vq ?? undefined} onChange={reload} /></div>}
       </section>}
 
       <section data-testid="day">

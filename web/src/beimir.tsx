@@ -46,7 +46,27 @@ export function BeiMirLink({ what = 'Pflegepunkte, Rückfragen und Reviews' }: {
   );
 }
 
-export function WartetAufDich({ x, decisions, onChange }: { x: any; decisions: any[]; onChange: () => void }) {
+const STATE: Record<string, string> = { '1-Backlog': 'Backlog', '2-Pre-Plan': 'Pre-Plan', '3-Plan': 'Plan', '4-Review': 'Review', '5-Live': 'Live', '6-Archive': 'Archiv' };
+const dm = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}.`;
+
+const unlink = (t: string) => t.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, a, b) => b ?? a);
+
+/** Eine offene Vault-Frage: Notiz, Frage, Etiketten (Register-Bezug, Zustand, Datum — älter als 14 Tage markiert). */
+function DecisionItem({ q }: { q: any }) {
+  return (
+    <li className="item" data-testid="vault-decision">
+      <a href={note(q.path)}>{String(q.title ?? q.spec).replace(/^olaf — /, '')}</a>: <Md text={unlink(q.head ?? q.question)} max={140} />
+      <span className="tiny"> {(q.register ?? []).map((r: any) => <span key={r.line} className="chip tiny-chip" title={`Steht auch im Register: ${unlink(r.head).replace(/\*\*/g, '')}`}>Register {r.id ?? `Z. ${r.line}`}</span>)}
+        {STATE[q.state] && !q.reason && <span className="chip tiny-chip">{STATE[q.state]}</span>}
+        {q.since && <span className={`chip tiny-chip${q.old ? ' warn' : ''}`} title={q.old ? 'älter als 14 Tage' : undefined}>{q.sinceKind} {dm(q.since)}{q.old ? ` · ${q.age} T.` : ''}</span>}
+        {q.partly && <span className="chip tiny-chip warn">teilweise entschieden</span>}
+        {q.reason && <span className="chip tiny-chip">{q.reason}</span>}
+      </span>
+    </li>
+  );
+}
+
+export function WartetAufDich({ x, decisions, today, onChange }: { x: any; decisions: any[]; today?: { raw: number; cleanup: any[]; duplicates: number }; onChange: () => void }) {
   const confirm = useConfirm();
   const toast = useToast();
   const [busy, setBusy] = useState<string | null>(null);
@@ -105,11 +125,18 @@ export function WartetAufDich({ x, decisions, onChange }: { x: any; decisions: a
           <button className="btn ghost small" style={btn} disabled={busy === 'draft'} onClick={() => draft('verwerfen')}>Verwerfen</button>
         </div>
       </>}
-      {decisions.length > 0 && <>
+      {(decisions.length > 0 || (today?.cleanup.length ?? 0) > 0) && <div data-testid="vault-decisions">
         <div className="small docs-h">Offene Entscheidungen im Vault ({decisions.length}) — <a href="#/roadmap/entscheidungen">beantworten</a></div>
-        <ul className="small plain">{decisions.slice(0, 5).map((q: any) => <li key={q.path + q.line} className="item"><a href={note(q.path)}>{q.title ?? q.spec}</a>: <Md text={q.question} max={140} /></li>)}</ul>
-        {decisions.length > 5 && <a className="small" href="#/roadmap/entscheidungen">alle {decisions.length}</a>}
-      </>}
+        {today && <p className="tiny muted" data-testid="vault-tally">{today.raw} leere „Knut:“-Zeilen im Vault → {decisions.length} offen · {today.cleanup.length} vermutlich überholt · {today.duplicates} doppelt (stehen auch in der Spec). Zuerst: neu im Register oder Spec in Plan/Review.</p>}
+        <ul className="small plain">{decisions.slice(0, 5).map((q) => <DecisionItem key={q.path + q.line} q={q} />)}</ul>
+        {decisions.length > 5 && <details className="small"><summary>weitere {decisions.length - 5} zeigen</summary>
+          <ul className="small plain">{decisions.slice(5).map((q) => <DecisionItem key={q.path + q.line} q={q} />)}</ul>
+        </details>}
+        {(today?.cleanup.length ?? 0) > 0 && <details className="small" data-testid="cleanup"><summary>Aufräumen — überholt? ({today!.cleanup.length})</summary>
+          <p className="tiny muted">Diese Zeilen sind im Vault noch leer, aber vermutlich erledigt. Hier wird nichts gelöscht — aufgeräumt wird in der Notiz.</p>
+          <ul className="small plain">{today!.cleanup.map((q) => <DecisionItem key={q.path + q.line} q={q} />)}</ul>
+        </details>}
+      </div>}
       {x.prs.length > 0 && <>
         <div className="small docs-h">PRs, bei denen {x.me} dran ist ({x.prs.length})</div>
         <ul className="small plain">{x.prs.map((p: any) => <li key={p.pr} className="item"><a href={p.url} target="_blank" rel="noreferrer">{p.pr}</a> {p.title} <span className="tiny">· {p.why}</span></li>)}</ul>
