@@ -9,6 +9,8 @@
 //   orch review <id> [--note TEXT]
 //   orch ask --title T --context TEXT --recommend TEXT [--option "Label :: Folge"]… [--strand <id>] [--link URL] [--plan DATEI]
 //   orch questions list [--open] [--json] · orch questions get <id> [--json] · orch questions withdraw <id>
+//   orch leitstand start --handover DATEI [--json]   Leitstand-Chat (Plan 132, nur Admin): Übergabe aus der Datei (Vorlage
+//     docs/leitstand-uebergabe-vorlage.md), ein vorhandener Leitstand wird beendet. Danach weckt die Werkbank ihn bei Ereignissen.
 //
 // Rückfragen (ask) nur für echte Entscheidungen Knuts — nicht für das, was sich nachlesen, selbst klären oder sicher
 // entscheiden lässt. Immer mit eigener Empfehlung. Antwort: `orch questions get <id>` (status beantwortet + answer).
@@ -155,8 +157,18 @@ async function main() {
       if (sub === 'withdraw') { await call('questions/withdraw', { id: pos[1] }); console.log(`zurückgezogen: ${pos[1]}`); return; }
       die('questions list|get|withdraw');
     }
+    case 'leitstand': {
+      if (pos[0] !== 'start') die('leitstand start --handover DATEI');
+      if (typeof flags.handover !== 'string') die('leitstand start braucht --handover DATEI (Vorlage: docs/leitstand-uebergabe-vorlage.md).');
+      let handoverText = '';
+      try { handoverText = readFileSync(flags.handover, 'utf8'); } catch { die(`Kann ${flags.handover} nicht lesen.`); }
+      const j = await call('leitstand/start', { handoverText });
+      if (flags.json) return console.log(JSON.stringify(j, null, 1));
+      console.log(`Leitstand gestartet: ${j.id}  ${j.url}\nOrdner:    ${j.cwd}${j.ended.length ? `\nBeendet:   ${j.ended.map((e: any) => `${e.id} ${e.url}`).join(', ')}` : ''}`);
+      return;
+    }
     default:
-      console.log(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 14).map((l) => l.slice(3)).join('\n'));
+      console.log(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 16).map((l) => l.slice(3)).join('\n'));
   }
 }
 

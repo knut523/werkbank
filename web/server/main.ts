@@ -20,6 +20,7 @@ import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue,
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion } from './orchestrator.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine } from './leitstand.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName } from './ablage.ts';
@@ -1105,10 +1106,11 @@ on('GET', /^\/api\/today$/, async (req, res) => {
     .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
   const orchOpen = (await listQuestions(u, { open: true }).catch(() => [])).length;
   // Automatisch fortgesetzte Stränge (Plan auto-weiter, DoD 6): nur der Zähler aus Mongo, kein Abruf bei der Brücke.
-  const orchAuto = (await wb().collection('orchestrator_runs').find({ userId: u.id, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
+  const orchAuto = (await wb().collection('orchestrator_runs').find({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
     .map((r: any) => ({ id: String(r._id), title: r.title, url: r.url, n: r.autoTotal, stopped: !!r.autoStopped }));
   const memory = u.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null;   // nur Admins (RAM-Plan 125)
-  send(res, 200, { queue, mine, day, today, orchOpen, orchAuto, memory, count: await todayCount(u, queue, mine), dryRun: dryRun() });
+  const leitstand = await leitstandLine(u).catch(() => null);   // nur Admins (Plan 132)
+  send(res, 200, { queue, mine, day, today, orchOpen, orchAuto, leitstand, memory, count: await todayCount(u, queue, mine), dryRun: dryRun() });
 });
 
 on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
@@ -2052,9 +2054,18 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review)$/, async (r
     }
     case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
     case 'show': return send(res, 200, await showOrch(u, id));
-    case 'send': return send(res, 200, await sendOrch(u, id, b.text));
+    case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand'));
     case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? ''));
   }
+});
+
+// Leitstand (docs/plan-leitstand.md): Start nur über den internen Kanal, nur für Admins (startLeitstand prüft die Rolle).
+on('POST', /^\/internal\/orchestrator\/leitstand\/start$/, async (req, res) => {
+  const b = await body(req, 1 << 20);
+  const u = await orchPerson(req, b);
+  const r = await startLeitstand(u, { handoverText: b.handoverText || null });
+  log('leitstand gestartet', { user: u.id, id: r.id, conv: r.conv, beendet: r.ended.length });
+  return send(res, 200, r);
 });
 
 // Rückfragen an Knut: der Orchestrator fragt (intern), Knut antwortet in der Werkbank (unten, /api/orchestrator/…).
@@ -2401,9 +2412,9 @@ server.listen(cfg.port, cfg.host, () => log('listening', { host: cfg.host, port:
 if (process.env.WERKBANK_NO_JOBS !== '1') backgroundJobs();
 // Orchestrator-Stränge selbst fortsetzen (docs/plan-orchestrator-auto-weiter.md) — eigener Takt, auch ohne Hintergrundjobs.
 // „Konto frei“ nur mit Antwort der Brücke und mindestens zwei Konten (sonst wartet `rate_limit` die 30 min ab).
-startAutoWeiter({
-  userById: async (id) => { const u = await userById(id); return u && allowed(u.email) ? u : null; },
-  accountFree: async (u) => {
+const orchDeps = {
+  userById: async (id: string) => { const u = await userById(id); return u && allowed(u.email) ? u : null; },
+  accountFree: async (u: User) => {
     const list = await listClaudeAccounts(u);
     if (list.length < 2) return false;
     const r = await fetch(`${cfg.bridgeUrl}/internal/accounts-state?user=${encodeURIComponent(u.id)}`, { headers: bridgeInternal, signal: AbortSignal.timeout(1500) });
@@ -2412,5 +2423,8 @@ startAutoWeiter({
     return list.some((a: any) => !(ex[a.id] > Date.now()));
   },
   log,
-});
+};
+startAutoWeiter(orchDeps);
+// Leitstand wecken (Plan 132, S2): eigener Durchgang im selben Takt; LEITSTAND_WAKE=off schaltet ab.
+startLeitstandTick(orchDeps);
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { server.close(); process.exit(0); });

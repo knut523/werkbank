@@ -92,7 +92,7 @@ export function orchStatus(run: { startError?: string | null; startedAt: Date | 
   switch (s.turn.outcome) {
     case 'busy': return { status: 'failed', reason: 'Parallelgrenze der Brücke (BRIDGE_MAX_PARALLEL_CHATS) — später `send <id> weiter`', cause: 'busy' };
     case 'limit': return { status: 'waiting', reason: 'Schrittlimit des Zuges erreicht — `send <id> weiter`', cause: 'limit' };
-    case 'timeout': return { status: 'waiting', reason: 'Zeitlimit des Zuges (15 min) erreicht — `send <id> weiter`', cause: 'timeout' };
+    case 'timeout': return { status: 'waiting', reason: 'Zeitlimit des Zuges erreicht — `send <id> weiter`', cause: 'timeout' };
     case 'rate_limit': return { status: 'failed', reason: 'Claude-Kontingent ausgeschöpft', cause: 'rate_limit' };
     case 'error': return { status: 'failed', reason: 'Fehler in der Claude-Sitzung — Chat ansehen, ggf. `send <id> weiter`' };
     case 'aborted': return { status: 'failed', reason: 'Zug abgebrochen' };
@@ -167,40 +167,44 @@ async function lcFetch(u: User, path: string, init: { method?: string; body?: un
   return { status: r.status, j: await r.json().catch(() => null) };
 }
 
-/** Titel „Orchestrator · …“ und Lesezeichen setzen, sobald LibreChat die Unterhaltung gespeichert hat. Idempotent. */
-export async function decorate(u: User, conv: string, title: string): Promise<{ ok: boolean; why?: string }> {
+// Leitstand (docs/plan-leitstand.md): eigener Titel-Präfix und eigenes Lesezeichen.
+export const LEIT_TAG = 'Leitstand';
+const TAG_TEXT: Record<string, string> = { [ORCH_TAG]: 'Stränge, die die Haupt-Sitzung über die Werkbank gestartet hat', [LEIT_TAG]: 'Knuts Orchestrator-Chat (Leitstand)' };
+
+/** Titel „Orchestrator · …“ (bzw. „Leitstand · …“) und Lesezeichen setzen, sobald LibreChat die Unterhaltung gespeichert hat. Idempotent. */
+export async function decorate(u: User, conv: string, title: string, tag = ORCH_TAG): Promise<{ ok: boolean; why?: string }> {
   const c: any = await lc().collection('conversations').findOne({ conversationId: conv, user: u.id }, { projection: { title: 1, tags: 1 } });
   if (!c) return { ok: false, why: 'Unterhaltung noch nicht gespeichert' };
-  const want = `Orchestrator · ${title}`.slice(0, 200);
+  const want = (tag === LEIT_TAG ? title : `Orchestrator · ${title}`).slice(0, 200);
   if (c.title !== want) {
     const r = await lcFetch(u, '/api/convos/update', { method: 'POST', body: { arg: { conversationId: conv, title: want } } });
     if (r.status >= 300) return { ok: false, why: `Titel: LibreChat ${r.status}` };
   }
   const tags: string[] = Array.isArray(c.tags) ? c.tags : [];
-  if (!tags.includes(ORCH_TAG)) {
+  if (!tags.includes(tag)) {
     const existing = await lcFetch(u, '/api/tags');
-    if (Array.isArray(existing.j) && !existing.j.some((t: any) => t?.tag === ORCH_TAG)) {
-      await lcFetch(u, '/api/tags', { method: 'POST', body: { tag: ORCH_TAG, description: 'Stränge, die die Haupt-Sitzung über die Werkbank gestartet hat' } });
+    if (Array.isArray(existing.j) && !existing.j.some((t: any) => t?.tag === tag)) {
+      await lcFetch(u, '/api/tags', { method: 'POST', body: { tag, description: TAG_TEXT[tag] ?? tag } });
     }
-    const r = await lcFetch(u, `/api/tags/convo/${encodeURIComponent(conv)}`, { method: 'PUT', body: { tags: [...tags, ORCH_TAG] } });
+    const r = await lcFetch(u, `/api/tags/convo/${encodeURIComponent(conv)}`, { method: 'PUT', body: { tags: [...tags, tag] } });
     if (r.status >= 300) return { ok: false, why: `Lesezeichen: LibreChat ${r.status}` };
   }
   return { ok: true };
 }
 
-async function decorateSoon(u: User, conv: string, title: string, tries = 20) {
+export async function decorateSoon(u: User, conv: string, title: string, tries = 20, tag = ORCH_TAG) {
   for (let i = 0; i < tries; i++) {
-    try { if ((await decorate(u, conv, title)).ok) return; } catch { /* weiter versuchen */ }
+    try { if ((await decorate(u, conv, title, tag)).ok) return; } catch { /* weiter versuchen */ }
     await new Promise((r) => setTimeout(r, 1500));
   }
 }
 
-async function lastMessage(u: User, conv: string): Promise<(LastMsg & { id: string }) | null> {
+export async function lastMessage(u: User, conv: string): Promise<(LastMsg & { id: string }) | null> {
   const m: any = await lc().collection('messages').find({ conversationId: conv, user: u.id }).sort({ createdAt: -1 }).limit(1).next();
   return m ? { id: String(m.messageId), fromUser: !!m.isCreatedByUser, text: messageText(m), error: !!m.error, at: new Date(m.createdAt ?? 0).getTime() } : null;
 }
 
-async function strandStates(u: User): Promise<Map<string, StrandState & { dir: string; written: string[] }>> {
+export async function strandStates(u: User): Promise<Map<string, StrandState & { dir: string; written: string[]; kind?: string; waitingAnswer?: boolean }>> {
   const r = await fetch(`${cfg.bridgeUrl}/internal/orch-state?user=${encodeURIComponent(u.id)}`, { headers: internalHeaders(), signal: AbortSignal.timeout(4000) });
   if (!r.ok) throw err(502, `Brücke antwortet mit ${r.status}`);
   const j: any = await r.json();
@@ -211,7 +215,9 @@ async function strandStates(u: User): Promise<Map<string, StrandState & { dir: s
 
 export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean }
 
-const runs = () => wb().collection('orchestrator_runs');
+export const runs = () => wb().collection('orchestrator_runs');
+// Stränge, nicht der Leitstand (Plan 132, C9/D2): `$ne`, damit alte Dokumente ohne kind dabei bleiben.
+export const STRANDS = { kind: { $ne: 'leitstand' } };
 
 async function newId(): Promise<string> {
   for (;;) { const id = randomUUID().slice(0, 8); if (!(await runs().findOne({ _id: id as any }))) return id; }
@@ -259,7 +265,7 @@ export async function startOrch(u: User, inp: StartInput) {
 }
 
 export async function listOrch(u: User, opts: { all?: boolean } = {}) {
-  const docs: any[] = await runs().find({ userId: u.id, ...(opts.all ? {} : { reviewedAt: null }) }).sort({ startedAt: -1 }).limit(100).toArray();
+  const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, ...(opts.all ? {} : { reviewedAt: null }) }).sort({ startedAt: -1 }).limit(100).toArray();
   if (!docs.length) return [];
   let states = new Map<string, any>();
   let bridgeError: string | null = null;
@@ -291,6 +297,7 @@ export function excerpt(text: string, n = 600): string {
 async function ownRun(u: User, id: string) {
   const d: any = await runs().findOne({ _id: id as any, userId: u.id });
   if (!d) throw err(404, `Strang ${id} gibt es nicht.`);
+  if (d.kind === 'leitstand') throw err(409, `${id} ist der Leitstand, kein Strang.`);
   return d;
 }
 
@@ -301,13 +308,19 @@ export async function showOrch(u: User, id: string) {
   return { ...item, conv: d.conv, prompt: d.prompt, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null };
 }
 
-export async function sendOrch(u: User, id: string, text: string) {
+export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 'leitstand' = 'hand') {
   const msg = String(text ?? '').trim();
   if (!msg) throw err(400, 'Nachricht fehlt.');
   const d = await ownRun(u, id);
+  // Leitstand (Plan 132, E3/B3): setzt den Deckel nicht zurück und hebt keinen Stopp auf — das entscheidet nur Knut.
+  if (via === 'leitstand' && d.autoStopped) throw err(409, `Strang ${id} hat seinen Deckel erreicht — Knut entscheidet in „Heute“ (Fortsetzen/Anhalten).`);
   const item = (await listOrch(u, { all: true })).find((r) => r.id === id);
   if (item?.status === 'running') throw err(409, `Strang ${id} arbeitet noch (${item.reason}) — warten, dann senden.`);
   await deliver(u, d.conv, msg);
+  if (via === 'leitstand') {
+    await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date(), reviewedAt: null, reviewReadyAt: null }, $inc: { sends: 1, autoStreak: 1 } });
+    return { id, conv: d.conv, url: d.url };
+  }
   // Handnachricht: der Deckel beginnt neu, Stopp und review_ready sind aufgehoben (Council R1, Bedingung 4).
   await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date(), reviewedAt: null, reviewReadyAt: null, autoStreak: 0, autoStopped: null }, $inc: { sends: 1 } });
   await questions().updateMany({ userId: u.id, kind: 'auto-weiter', 'strand.id': d._id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() } });
@@ -315,7 +328,7 @@ export async function sendOrch(u: User, id: string, text: string) {
 }
 
 /** Nachricht an den Chat hängen (Elternnachricht = letzte gespeicherte); LibreChat 409 = Zug noch nicht abgeschlossen. */
-async function deliver(u: User, conv: string, msg: string) {
+export async function deliver(u: User, conv: string, msg: string) {
   for (let i = 0; ; i++) {
     const last = await lastMessage(u, conv);
     if (!last) throw err(409, 'Im Chat ist noch keine Nachricht gespeichert.');
@@ -338,7 +351,7 @@ export async function autoWeiterTick(deps: AutoDeps) {
   if (ticking) return;
   ticking = true;
   try {
-    const docs: any[] = await runs().find({ reviewedAt: null, reviewReadyAt: null, startError: null, autoStopped: null, startedAt: { $gt: new Date(Date.now() - 14 * 86400_000) } }).toArray();
+    const docs: any[] = await runs().find({ ...STRANDS, reviewedAt: null, reviewReadyAt: null, startError: null, autoStopped: null, startedAt: { $gt: new Date(Date.now() - 14 * 86400_000) } }).toArray();
     const byUser = new Map<string, any[]>();
     for (const d of docs) byUser.set(d.userId, [...(byUser.get(d.userId) ?? []), d]);
     for (const [userId, list] of byUser) {
@@ -412,7 +425,7 @@ export async function reviewOrch(u: User, id: string, note = '') {
 
 export interface AskInput { title: string; context: string; options?: { label: string; consequence?: string }[]; recommendation: string; strand?: string | null; link?: string | null; plan?: string | null }
 
-const questions = () => wb().collection('orchestrator_questions');
+export const questions = () => wb().collection('orchestrator_questions');
 
 export async function askKnut(u: User, inp: AskInput) {
   const title = String(inp.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 140);
@@ -423,7 +436,7 @@ export async function askKnut(u: User, inp: AskInput) {
   if (new Set(options.map((o) => o.label)).size !== options.length) throw err(400, 'Optionen müssen verschieden heißen.');
   let strand: { id: string; title: string; url: string } | null = null;
   if (inp.strand) {
-    const r: any = await runs().findOne({ _id: String(inp.strand) as any, userId: u.id });
+    const r: any = await runs().findOne({ _id: String(inp.strand) as any, userId: u.id, ...STRANDS });
     if (!r) throw err(404, `Strang ${inp.strand} gibt es nicht.`);
     strand = { id: r._id, title: r.title, url: r.url };
   }
@@ -470,6 +483,11 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
       if (option === 'Fortsetzen') { await sendOrch(u, d.strand.id, 'weiter'); action = 'fortgesetzt'; }
       if (option === 'Anhalten') { await reviewOrch(u, d.strand.id, 'angehalten nach dem Deckel der automatischen Fortsetzung'); action = 'angehalten'; }
     } catch (e: any) { action = `nicht ausgeführt: ${String(e.message ?? e).slice(0, 200)}`; }
+  }
+  // Leitstand-Deckel (Plan 132, A4): „Fortsetzen“ zählt ab jetzt neu; die Antwort selbst wird sofort zugestellt (leitstand.ts).
+  if ((d.kind === 'leitstand-deckel' || d.kind === 'leitstand-weiter') && option === 'Fortsetzen') {
+    await runs().updateOne({ userId: u.id, kind: 'leitstand', endedAt: null }, { $set: d.kind === 'leitstand-deckel' ? { capResetAt: new Date() } : { weiterStreak: 0, weiterStopped: null } });
+    action = 'fortgesetzt';
   }
   return { ...publicQuestion({ ...d, status: 'beantwortet', answer }), ...(action ? { action } : {}) };
 }

@@ -15,7 +15,10 @@ export const FEATURES = [
   { id: 'dateien', label: 'Dateien & Teilen' },
   { id: 'orchestrator', label: 'Rückfragen des Orchestrators' },
   { id: 'ansetzen', label: 'Agent ansetzen' },
+  { id: 'leitstand', label: 'Leitstand (Orchestrator-Chat)' },
 ] as const;
+// Nur für Admins, auch nicht über WERKBANK_TEAM_FEATURES freigebbar (Plan 132: der Leitstand arbeitet mit Knuts Rechten).
+const ADMIN_ONLY = new Set<string>(['leitstand']);
 export type FeatureId = typeof FEATURES[number]['id'];
 
 // API-Pfad → Funktion. Nicht aufgeführt (Anmeldung, Einrichtung, Konfiguration, Ereignisse, Einstellungen, Pflege der
@@ -35,7 +38,7 @@ const API: [RegExp, FeatureId][] = [
 ];
 
 export function teamFeatures(env = process.env): Set<string> {
-  const known = new Set<string>(FEATURES.map((f) => f.id));
+  const known = new Set<string>(FEATURES.map((f) => f.id).filter((id) => !ADMIN_ONLY.has(id)));
   return new Set(String(env.WERKBANK_TEAM_FEATURES ?? '').split(',').map((s) => s.trim()).filter((s) => known.has(s)));
 }
 
