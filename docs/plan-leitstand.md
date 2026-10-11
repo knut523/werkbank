@@ -1,6 +1,6 @@
 # Plan 132 — Leitstand-Chat auf der Brücke
 
-**Status:** Entwurf 11.10.2026, Council R1 HOLD (0,7), R2 GO mit Auflagen, **R3 PASS (0,75)** — Bedingungen B1–B14, C1–C9, D1–D4, A1–A5 eingearbeitet; Bau freigegeben. **branch:** feat/leitstand (Basis feat/orch-auto-weiter). Lokal, nicht ausgerollt.
+**Status:** GEBAUT lokal (11.10.2026), Plan-Council R3 PASS (0,75), Diff-Council R2 PASS (0,75) / PASS-WITH-CONCERNS, Auflagen eingearbeitet; nicht ausgerollt. **branch:** feat/leitstand (Basis feat/orch-auto-weiter). Lokal, nicht ausgerollt.
 > Knut, 11.10.2026 („ok go“): Der Orchestrator — heute eine Claude-Code-CLI-Sitzung im Terminal/IDE — wird ein Werkbank-Chat auf
 > der claude-bridge. Grund: zwei Claude-Konten; die Brücke verteilt/failovert schon auf beide, Remote Control ginge nur mit einem.
 
@@ -332,3 +332,22 @@ Bindende Bedingungen (DoD 31–38):
 9. A5 [must-fix] Ziel je Sendung neu, `lastBatch` dauerhaft (DoD 37).
 NOTES: Beifund des Fachprüfers — die Strang-Sperren dürfen reine Suchen (grep nach „environ“) nicht treffen; Muster auf Zugriffe zielen.
 Kosten: 60 Weckungen × 200 Schritte haben kein Token-Budget; Prüfung in Woche 1 (E4).
+
+## 9. Bau, Review-Pässe und Council über den Diff (11.10.2026)
+
+### Review-Pässe (getrennte Durchgänge)
+- **Pass A (Standards + Spec):** keine harten Standard-Verstöße. Spec-Befunde: gesendete Meldungen hingen nach einem Wechsel; „Anhalten“
+  hob den Weckdeckel auf; ein Fehlstart ließ Knut ohne Leitstand; `orch_start` mit relativem Pfad. Alle behoben (`a9e6e00`).
+  Bewusste Abweichungen: `orch_send` aus dem Leitstand an einen Strang mit Deckel → 409 (strenger als „zählt automatisch“, DoD 14);
+  die strikte Antwort nimmt neben „ja/nein“ auch „yes/no“.
+- **Pass B/C (feindlich):** FAIL — **exponentielles Backtracking** im neuen Git-Präfix (eine Zeile mit 40× `--a` hätte die Brücke für
+  alle minutenlang blockiert; die alte Strang-Regel für `git config` hatte dieselbe Form), `/internal/`-Fehltreffer (`./internal/…`),
+  `git --git-dir X push` unerkannt, `weiterStopped` nie zurückgesetzt, Vault-git über `pushd`. Behoben mit roten Tests zuerst (`a9e6e00`).
+### Council über den Diff
+- **R1 (a9e6e00): HOLD 0,75 / FAIL.** Backtracking noch bei Werten in Anführungszeichen (24× `-C "a"` → 3 s), Rennen beim Wechsel,
+  Deckel-Fragen durch den Leitstand zurückziehbar, Bestätigung nur über den letzten Zug, `VAULT_GIT` quadratisch, fehlende Tests
+  (DoD 30/32/36/37, Umgehungsprobe D4). Behoben in `ce14d87`, dazu ein Fuzz-Test über alle Wächter-Regeln (60× je Baustein < 100 ms).
+- **R2 (ce14d87): PASS 0,75 (Fachprüfer) / PASS-WITH-CONCERNS (Gegenstimme).** Restpunkte: Aufräumen muss Meldungen aller aktiven
+  Leitstände schonen; Auffüllen > 16 KB machte aus Vault-git eine Rückfrage; maskierte Anführungszeichen im Git-Wert. Behoben in `5356873`.
+  NOTES: Der interne Hauptschlüssel bleibt für jeden Bash-fähigen Prozess erreichbar (E6); ein Strang könnte über ein eigenes Skript
+  einen Leitstand in Knuts Namen starten — erst ein Schlüssel je Sitzung schließt das.
