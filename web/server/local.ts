@@ -13,7 +13,7 @@ import type { Issue } from './jira.ts';
 import type { User } from './auth.ts';
 
 export type Kind = 'ticket' | 'spec';
-export interface Assignment { key: string; kind: Kind; ziel: string | null; begruendung?: string; by: string; at: Date }
+export interface Assignment { key: string; kind: Kind; ziel: string | null; begruendung?: string; by: string; at: Date; source?: string }
 
 export async function assignments(kind?: Kind): Promise<Map<string, Assignment>> {
   const rows = (await wb().collection('goal_assignments').find(kind ? { kind } : {}, { projection: { _id: 0 } }).toArray()) as unknown as Assignment[];
@@ -40,6 +40,16 @@ export async function setGoal(u: User, key: string, kind: Kind, ziel: string | n
   try { await wb().collection('goal_assignments_log').insertOne({ ...doc, action: 'set', prev: before ? before.ziel : undefined } as any); }
   catch (e) { if (before) await col.replaceOne({ _id: key as any }, before); else await col.deleteOne({ _id: key as any }); throw e; }
   return { prev: before?.ziel };
+}
+
+/** Automatische Zuordnung: nur anlegen, wenn es für das Ticket noch keine gibt (atomar — überschreibt nie eine manuelle,
+ *  KEINS oder „entfernt“, auch nicht im Rennen). true = angelegt. */
+export async function autoSetGoal(key: string, ziel: string, begruendung: string, source: string): Promise<boolean> {
+  const doc = { key, kind: 'ticket' as Kind, ziel, begruendung: begruendung.slice(0, 500), by: 'Werkbank (automatisch)', byId: 'werkbank', at: new Date(), source };
+  try { await wb().collection('goal_assignments').insertOne({ _id: key as any, ...doc }); }
+  catch (e: any) { if (e?.code === 11000) return false; throw e; }
+  await wb().collection('goal_assignments_log').insertOne({ ...doc, action: 'set', prev: undefined } as any);
+  return true;
 }
 
 /** Werkbank-Zuordnung zurücksetzen: Dokument weg, danach gelten wieder Jira-Label bzw. Frontmatter ziel:. */

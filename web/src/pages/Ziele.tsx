@@ -100,8 +100,8 @@ function Assign({ onChange }: { onChange: () => void }) {
   const [why, setWhy] = useState<Record<string, string>>({});
   const [bulk, setBulk] = useState('');
   const [q, setQ] = useState('');
-  // Vorschläge aus der Datei vorausgewählt
-  const init = useMemo(() => { if (!x) return null; const g: Record<string, string> = {}, s: Record<string, boolean> = {}, w: Record<string, string> = {}; for (const t of x.tickets) if (t.proposal) { g[t.key] = t.proposal.ziel; s[t.key] = true; if (t.proposal.ziel === 'KEINS') w[t.key] = t.proposal.begruendung; } return { g, s, w }; }, [x]);
+  // Vorschläge aus der Datei vorausgewählt; Vorschläge aus Specs (abgeleitet, Sicherheit mittel) nicht — nur einzeln per „übernehmen“.
+  const init = useMemo(() => { if (!x) return null; const g: Record<string, string> = {}, s: Record<string, boolean> = {}, w: Record<string, string> = {}; for (const t of x.tickets) if (t.proposal?.quelle === 'datei') { g[t.key] = t.proposal.ziel; s[t.key] = true; if (t.proposal.ziel === 'KEINS') w[t.key] = t.proposal.begruendung; } return { g, s, w }; }, [x]);
   if (!x) return d.error ? <Err e={d.error} /> : <Loading />;
   const G = { ...(init?.g ?? {}), ...goal }, S = { ...(init?.s ?? {}), ...sel }, W = { ...(init?.w ?? {}), ...why };
   const list = x.tickets.filter((t: any) => !q || `${t.key} ${t.summary} ${t.assignee ?? ''} ${t.workstreamName}`.toLowerCase().includes(q.toLowerCase()));
@@ -111,7 +111,7 @@ function Assign({ onChange }: { onChange: () => void }) {
     try {
       const pre: any = await api('/api/goals/import', { body });
       if (!pre.items.length) { toast('Nichts zu übernehmen'); return; }
-      if (!(await confirm({ title, confirmLabel: `${pre.items.length} übernehmen`, body: <><p className="small">Aus <code>{pre.file}</code>, gespeichert in der Werkbank (nicht Jira):</p><pre className="small" style={{ maxHeight: 280, overflow: 'auto' }}>{pre.items.map((i: any) => `${i.key} → ${i.goal}${i.begruendung ? ` — ${i.begruendung}` : ''}`).join('\n')}</pre></> }))) return;
+      if (!(await confirm({ title, confirmLabel: `${pre.items.length} übernehmen`, body: <><p className="small">{pre.items.every((i: any) => i.quelle === 'spec') ? 'Vorschlag aus der verknüpften Spec (ziel:, Sicherheit mittel) — zählt erst nach dieser Bestätigung' : <>Aus <code>{pre.file}</code></>}, gespeichert in der Werkbank (nicht Jira), mit einem Klick wieder änderbar:</p><pre className="small" style={{ maxHeight: 280, overflow: 'auto' }}>{pre.items.map((i: any) => `${i.key} → ${i.goal}${i.begruendung ? ` — ${i.begruendung}` : ''}`).join('\n')}</pre></> }))) return;
       const r: any = await api('/api/goals/import', { body: { ...body, confirm: true } });
       toast(`${r.imported} übernommen`); setSel({}); setGoal({}); setWhy({}); d.reload(); onChange();
     } catch (e) { setErr(e); }
@@ -131,7 +131,7 @@ function Assign({ onChange }: { onChange: () => void }) {
   };
   return (
     <>
-      <p className="small muted">Offene Tickets ohne Ziel (Werkbank-Zuordnung oder Jira-Label, auch nicht vom Parent geerbt). Gespeichert wird <b>in der Werkbank</b>, nicht in Jira. „Bewusst ohne Ziel“ nur mit Begründung. {x.proposals > 0 ? <>Vorausgewählt: <b>{x.proposals}</b> Vorschläge aus <code>{x.proposalFile}</code>.</> : <>Keine Vorschlagsdatei unter <code>{x.proposalFile}</code>.</>}{x.proposalError && <span className="chip bad">{x.proposalError}</span>}</p>
+      <p className="small muted">Offene Tickets ohne Ziel (Werkbank-Zuordnung oder Jira-Label, auch nicht vom Parent geerbt). Gespeichert wird <b>in der Werkbank</b>, nicht in Jira. „Bewusst ohne Ziel“ nur mit Begründung. Automatisch zugeordnet wird nur ein Ticket, das in der Spalte Beleg genau eines Ziels in <code>ziele-olaf.md</code> steht. {x.proposals > 0 ? <>Vorausgewählt: <b>{x.proposals}</b> Vorschläge aus <code>{x.proposalFile}</code>.</> : <>Keine Vorschlagsdatei unter <code>{x.proposalFile}</code>.</>}{x.computed > 0 && <> <b>{x.computed}</b> Vorschläge aus Specs (ziel:, Sicherheit mittel) — nicht vorausgewählt, zählen erst nach „übernehmen“.</>}{x.proposalError && <span className="chip bad">{x.proposalError}</span>}</p>
       <div className="row" style={{ marginBottom: 8 }}>
         <input type="search" placeholder="Suchen …" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tickets filtern" />
         <select value={bulk} onChange={(e) => setBulk(e.target.value)} aria-label="Ziel für Auswahl"><option value="">Ziel für alle gewählten …</option>{x.goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 50)}</option>)}</select>
@@ -144,7 +144,7 @@ function Assign({ onChange }: { onChange: () => void }) {
       <table className="t small" data-testid="assign-table">
         <thead><tr><th></th><th>Ticket</th><th>Workstream</th><th>Owner · Status</th><th>Ziel</th><th>Vorschlag</th></tr></thead>
         <tbody>{list.map((t: any) => (
-          <tr key={t.key} data-ticket={t.key} className={t.proposal ? 'proposed' : ''}>
+          <tr key={t.key} data-ticket={t.key} className={t.proposal?.quelle === 'datei' ? 'proposed' : t.proposal ? 'proposed-spec' : ''}>
             <td><input type="checkbox" aria-label={`${t.key} wählen`} checked={!!S[t.key]} onChange={(e) => setSel({ ...S, [t.key]: e.target.checked })} /></td>
             <td><a href={`#/board?key=${t.key}`}><b>{t.key}</b></a> {t.summary}{t.type === 'Sub-task' && <span className="tiny"> · Sub-task</span>}</td>
             <td className="tiny">{t.workstreamName}</td>
@@ -157,12 +157,47 @@ function Assign({ onChange }: { onChange: () => void }) {
               </select>
               {G[t.key] === 'KEINS' && <input placeholder="Begründung (Pflicht)" value={W[t.key] ?? ''} onChange={(e) => setWhy({ ...W, [t.key]: e.target.value })} aria-label={`Begründung ${t.key}`} style={{ marginTop: 4, width: '100%' }} />}
             </td>
-            <td className="tiny">{t.proposal ? <><button className="btn ghost small" title="diesen Vorschlag einzeln übernehmen" onClick={() => importProp({ mode: 'keys', keys: [t.key] }, `Vorschlag für ${t.key} übernehmen?`)}>übernehmen</button> <b>{t.proposal.ziel}</b>{t.proposal.sicherheit != null && ` · ${typeof t.proposal.sicherheit === 'number' ? `${Math.round(t.proposal.sicherheit <= 1 ? t.proposal.sicherheit * 100 : t.proposal.sicherheit)} %` : `Sicherheit ${t.proposal.sicherheit}`}`}<div>{t.proposal.begruendung}</div></> : '—'}</td>
+            <td className="tiny">{t.proposal ? <><button className="btn ghost small" title="diesen Vorschlag einzeln übernehmen" onClick={() => importProp({ mode: 'keys', keys: [t.key] }, `Vorschlag für ${t.key} übernehmen?`)}>übernehmen</button> <b>{t.proposal.ziel}</b> {String(x.goalIds.find((g: any) => g.id === t.proposal.ziel)?.result ?? '').slice(0, 40)}{t.proposal.quelle === 'spec' && ' · Vorschlag aus Spec'}{t.proposal.sicherheit != null && ` · ${typeof t.proposal.sicherheit === 'number' ? `${Math.round(t.proposal.sicherheit <= 1 ? t.proposal.sicherheit * 100 : t.proposal.sicherheit)} %` : `Sicherheit ${t.proposal.sicherheit}`}`}<div>{t.proposal.begruendung}</div></> : '—'}</td>
           </tr>
         ))}</tbody>
       </table>
       {!list.length && <p className="okbox small">Alle offenen Tickets haben ein Ziel.</p>}
+      {x.auto?.length > 0 && <AutoAssigned rows={x.auto} goalIds={x.goalIds} onChange={() => { d.reload(); onChange(); }} />}
     </>
+  );
+}
+
+/** Automatisch zugeordnet (Regel 1: Ticket steht im Beleg des Ziels) — sichtbar markiert, Ziel mit einer Auswahl ändern. */
+function AutoAssigned({ rows, goalIds, onChange }: { rows: any[]; goalIds: any[]; onChange: () => void }) {
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [err, setErr] = useState<unknown>(null);
+  const change = async (key: string, goal: string) => {
+    setErr(null);
+    const items = [{ key, goal, begruendung: goal === 'KEINS' ? 'automatische Zuordnung abgelehnt' : 'automatische Zuordnung geändert' }];
+    try {
+      const pre: any = await api('/api/goals/assign', { body: { items } });
+      if (!(await confirm({ title: `${key} ändern?`, confirmLabel: 'In der Werkbank speichern', body: <pre className="small">{pre.preview.join('\n')}</pre> }))) return;
+      await api('/api/goals/assign', { body: { items, confirm: true } });
+      toast(`${key} geändert`); onChange();
+    } catch (e) { setErr(e); }
+  };
+  return (
+    <section data-testid="auto-assigned" style={{ marginTop: 16 }}>
+      <h3>Automatisch zugeordnet <span className="tiny muted">(Regel 1: Ticket steht im Beleg des Ziels in ziele-olaf.md)</span></h3>
+      <Err e={err} />
+      <table className="t small"><tbody>{rows.map((r) => (
+        <tr key={r.key} data-auto={r.key}>
+          <td><a href={`#/board?key=${r.key}`}><b>{r.key}</b></a> {r.summary}</td>
+          <td><span className="chip">auto: Regel 1</span> <b>{r.ziel}</b><div className="tiny">{r.begruendung}</div></td>
+          <td><select value="" aria-label={`Ziel für ${r.key} ändern`} onChange={(e) => e.target.value && change(r.key, e.target.value)}>
+            <option value="">ändern …</option>
+            {goalIds.filter((g: any) => g.id !== r.ziel).map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 40)}</option>)}
+            <option value="KEINS">bewusst ohne Ziel</option>
+          </select></td>
+        </tr>
+      ))}</tbody></table>
+    </section>
   );
 }
 
