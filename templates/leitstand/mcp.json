@@ -1,0 +1,15 @@
+{
+  "_kommentar": "Zusatz-MCP-Server nur für den Leitstand (docs/plan-leitstand.md, S5). Wie in Knuts Claude-Code-Konfiguration: compartment aus ~/.claude.json, posthog aus dem Plugin posthog@claude-plugins-official. Keine Geheimnisse — PostHog meldet sich per OAuth an, compartment liest seinen Schlüssel selbst. Andere Datei: LEITSTAND_MCP_FILE.",
+  "mcpServers": {
+    "compartment": {
+      "type": "stdio",
+      "command": "~/.local/share/uv/tools/compartment/bin/compartment",
+      "args": ["--vault", "~/.compartment/memory.vault", "--caller", "claude-code", "serve"]
+    },
+    "posthog": {
+      "type": "http",
+      "url": "https://mcp.posthog.com/mcp",
+      "headers": { "x-posthog-mcp-consumer": "plugin" }
+    }
+  }
+}

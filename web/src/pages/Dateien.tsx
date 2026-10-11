@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react';
-import { api, fmtDateTime, openChat, chatTarget, type Config } from '../api.ts';
+import { useMemo, useRef, useState } from 'react';
+import { api, fmtDate, fmtDateTime, openChat, chatTarget, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useToast, useConfirm } from '../ui.tsx';
 
 const size = (b: number) => (b < 1024 * 1024 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${(b / 1048576).toFixed(1)} MB`);
@@ -32,7 +32,7 @@ export function Dateien({ cfg }: { cfg: Config }) {
   const team = useLoad(() => api('/api/team'));
   const chats = useLoad(() => api('/api/chats/shared'));
   const logs = useLoad(() => api('/api/sharelog'));
-  const [tab, setTab] = useState<'dateien' | 'chats' | 'protokoll'>('dateien');
+  const [tab, setTab] = useState<'dateien' | 'agenten' | 'chats' | 'protokoll'>('dateien');
   const [personal, setPersonal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
@@ -50,11 +50,12 @@ export function Dateien({ cfg }: { cfg: Config }) {
       <div className="head">
         <div>
           <h1>Dateien & Teilen</h1>
-          <p className="muted" style={{ margin: 0 }}>Dateien im Team teilen und geteilte Chats wiederfinden. Alles bleibt in dieser Workspace — keine öffentlichen Links.</p>
+          <p className="muted" style={{ margin: 0 }}>Alle deine Dateien aus der Ablage, was Agenten erarbeitet haben, und was im Team geteilt ist. Alles bleibt in dieser Workspace — keine öffentlichen Links.</p>
         </div>
       </div>
       <div className="tabs">
         <button className={tab === 'dateien' ? 'on' : ''} onClick={() => setTab('dateien')}>Dateien</button>
+        <button className={tab === 'agenten' ? 'on' : ''} onClick={() => setTab('agenten')}>Von Agenten</button>
         <button className={tab === 'chats' ? 'on' : ''} onClick={() => setTab('chats')}>Chats</button>
         <button className={tab === 'protokoll' ? 'on' : ''} onClick={() => setTab('protokoll')}>Protokoll</button>
       </div>
@@ -95,40 +96,8 @@ export function Dateien({ cfg }: { cfg: Config }) {
             );
           })()}
 
-          <h2>Meine Dateien ({f.mine.length})</h2>
-          {f.mine.length === 0 ? <p className="muted small">Noch nichts hochgeladen.</p> : (
-            <table className="t small">
-              <thead><tr><th>Datei</th><th>Herkunft</th><th>Ablage</th><th>Größe</th><th>Stand</th><th>Geteilt mit</th><th></th></tr></thead>
-              <tbody>{f.mine.map((x: any) => (
-                <tr key={x.id} data-file={x.name}>
-                  <td><FileLink x={x} />{x.personal && <span className="chip warn" style={{ marginLeft: 6 }}>Personendaten</span>}</td>
-                  <td><Origin x={x} /></td>
-                  <td><Place x={x} ablage={f.ablage} onDone={reloadAll} /></td>
-                  <td>{x.kind === 'vault' ? '—' : size(x.size)}</td>
-                  <td>{fmtDateTime(x.updatedAt ?? x.createdAt)}</td>
-                  <td>
-                    {x.sharedWith.map((id: string, k: number) => (
-                      <span key={id} className="chip" style={{ marginRight: 4 }}>{x.sharedWithNames[k]}
-                        <button className="btn ghost small" aria-label={`Freigabe für ${x.sharedWithNames[k]} entfernen`} onClick={async () => {
-                          if (!(await confirm({ title: 'Freigabe zurücknehmen?', body: <p>{x.sharedWithNames[k]} sieht „{x.name}“ danach nicht mehr.</p>, confirmLabel: 'Zurücknehmen' }))) return;
-                          try { await api(`/api/files/${x.id}/share`, { body: { userId: id, share: false } }); toast('Freigabe entfernt'); reloadAll(); } catch (e) { setErr(e); }
-                        }}>✕</button>
-                      </span>
-                    ))}
-                    <ShareButton f={x} people={people} onDone={reloadAll} />
-                  </td>
-                  <td className="row">
-                    <button className="btn small" onClick={() => toChat(x.id)} title="Kopie in dein Claude-Arbeitsverzeichnis legen und einen Chat starten">💬 Im Chat</button>
-                    <TicketAttach f={x} onDone={reloadAll} />
-                    <button className="btn small danger" onClick={async () => {
-                      if (!(await confirm({ title: `„${x.name}“ löschen?`, body: <>{x.kind !== 'vault' && x.place && <p>Die Datei wird auch aus der Ablage gelöscht: <code>{x.place}/</code></p>}{x.kind === 'vault' && <p>Nur der Eintrag verschwindet, die Notiz bleibt im Vault.</p>}<p>Auch für alle, mit denen sie geteilt ist.</p></>, danger: true, confirmLabel: 'Löschen' }))) return;
-                      try { await api(`/api/files/${x.id}`, { method: 'DELETE' }); toast('Gelöscht'); reloadAll(); } catch (e) { setErr(e); }
-                    }}>Löschen</button>
-                  </td>
-                </tr>
-              ))}</tbody>
-            </table>
-          )}
+          {f.ablage.unklar && <p className="note small">Der Besitz der Ablage ist unklar (kein oder mehr als ein Admin-Konto). Mit <code>WERKBANK_DOCS_OWNER</code> festlegen, dann erscheinen alle Dateien aus der Ablage hier.</p>}
+          <Ablage f={f} people={people} onDone={reloadAll} toChat={toChat} setErr={setErr} />
 
           <h2>Geteilt mit mir ({f.shared.length})</h2>
           {f.shared.length === 0 ? <p className="muted small">Noch nichts.</p> : (
@@ -147,6 +116,8 @@ export function Dateien({ cfg }: { cfg: Config }) {
           {f.backup && <BackupCard b={f.backup} />}
         </>
       ))}
+
+      {tab === 'agenten' && (!f ? <Loading /> : <VonAgenten mine={f.mine} admin={cfg.user?.role === 'ADMIN'} librechatUrl={cfg.librechatUrl} />)}
 
       {tab === 'chats' && (!chats.data ? <Loading /> : (
         <>
@@ -195,13 +166,14 @@ export function Dateien({ cfg }: { cfg: Config }) {
 }
 
 /** Vault-Notiz → Wissen, sonst Download. */
-function FileLink({ x }: { x: any }) {
-  if (x.kind === 'vault') return <a href={`#/wissen/${String(x.vaultPath).split('/').map(encodeURIComponent).join('/')}`} title={x.vaultPath}>{x.name}</a>;
-  return <a href={`api/files/${x.id}/download`}>{x.name}</a>;
+function FileLink({ x, label }: { x: any; label?: string }) {
+  if (x.kind === 'vault') return <a href={`#/wissen/${String(x.vaultPath).split('/').map(encodeURIComponent).join('/')}`} title={x.vaultPath}>{label ?? x.name}</a>;
+  return <a href={`api/files/${x.id}/download`} title={x.name}>{label ?? x.name}</a>;
 }
 
 /** Woher die Datei kommt: hochgeladen, oder von einem Agenten fertig geschrieben (Plan 81, Schnitt 3). */
 function Origin({ x }: { x: any }) {
+  if (x.kind === 'ablage') return <span className="tiny muted">aus der Ablage</span>;
   if (x.kind !== 'agent' && x.kind !== 'vault') return <span className="tiny muted">hochgeladen</span>;
   return (
     <span className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
@@ -267,7 +239,7 @@ function AblageForm({ x, ablage, onDone, onCancel, label = 'Ablegen' }: { x: any
 /** Eine Zeile in „Noch einzusortieren“: der Vorschlag als Satz, „Ablegen“ übernimmt ihn, „Ändern“ öffnet die Felder. */
 function Einsortieren({ x, ablage, onDone }: { x: any; ablage: any; onDone: () => void }) {
   const v = x.vorschlag;
-  const [open, setOpen] = useState(!v?.sicher);
+  const [open, setOpen] = useState(false); // zu: der Baum darunter soll sichtbar bleiben (Plan dateien-vollständig, UX)
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const toast = useToast();
@@ -287,7 +259,13 @@ function Einsortieren({ x, ablage, onDone }: { x: any; ablage: any; onDone: () =
           <button className="btn small" onClick={() => setOpen(true)}>Ändern</button>
         </div>
       )}
-      {open && <div style={{ marginTop: 6 }}><AblageForm x={x} ablage={ablage} onDone={onDone} onCancel={v?.sicher ? () => setOpen(false) : undefined} /></div>}
+      {!open && !v?.sicher && (
+        <div className="row" style={{ flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+          <span className="small muted">Wohin gehört die Datei?</span>
+          <button className="btn small primary" onClick={() => setOpen(true)}>Einsortieren</button>
+        </div>
+      )}
+      {open && <div style={{ marginTop: 6 }}><AblageForm x={x} ablage={ablage} onDone={onDone} onCancel={() => setOpen(false)} /></div>}
       <Err e={err} />
     </div>
   );
@@ -374,5 +352,259 @@ function TicketAttach({ f, onDone }: { f: any; onDone: () => void }) {
       }}>an Ticket</button>
       <Err e={err} />
     </span>
+  );
+}
+
+// ---------- Ablage als Ordnerbaum (Plan dateien-vollständig, S2) ----------
+
+const byNewest = (a: any, b: any) => String(b.ort?.datum ?? '').localeCompare(String(a.ort?.datum ?? '')) || String(b.updatedAt ?? b.createdAt).localeCompare(String(a.updatedAt ?? a.createdAt));
+const folderOrder = (a: string, b: string) => (a.startsWith('_') === b.startsWith('_') ? a.localeCompare(b, 'de') : a.startsWith('_') ? -1 : 1);
+const OHNE_ORT = 'Ohne Ablageort';
+
+/** Team → Vorgang → (Unterordner) → Dateien. Dateien direkt im Team stehen unter Vorgang „“. */
+function buildTree(files: any[]) {
+  const teams = new Map<string, Map<string, { files: any[]; subs: Map<string, any[]> }>>();
+  for (const x of files) {
+    const team = x.ort?.team || OHNE_ORT, vorgang = x.ort?.vorgang ?? '', sub = x.ort?.sub ?? '';
+    if (!teams.has(team)) teams.set(team, new Map());
+    const vs = teams.get(team)!;
+    if (!vs.has(vorgang)) vs.set(vorgang, { files: [], subs: new Map() });
+    const v = vs.get(vorgang)!;
+    if (sub) v.subs.set(sub, [...(v.subs.get(sub) ?? []), x]); else v.files.push(x);
+  }
+  return teams;
+}
+
+function Ablage({ f, people, onDone, toChat, setErr }: { f: any; people: any[]; onDone: () => void; toChat: (id: string) => void; setErr: (e: unknown) => void }) {
+  const [q, setQ] = useState('');
+  const [art, setArt] = useState('');
+  // `_eingang` steht als eigener Ordner mit im Baum (dort lässt sich auch Unsortiertes teilen); Vault-Notizen unter „Von Agenten“.
+  const all: any[] = useMemo(() => f.mine.filter((x: any) => x.kind !== 'vault'), [f]);
+  const needle = q.trim().toLowerCase();
+  const filtering = !!(needle || art);
+  const shown = all.filter((x) => (!art || (art === '-' ? !x.ort?.art : x.ort?.art === art))
+    && (!needle || [x.name, x.originalName, x.ort?.team, x.ort?.vorgang, x.ort?.sub, x.projectName, ...(x.tickets ?? [])].filter(Boolean).join(' ').toLowerCase().includes(needle)));
+  const tree = buildTree(shown);
+  const recent = [...all].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 8);
+  const row = (x: any, mitOrt = false) => <DateiZeile key={x.id} x={x} f={f} people={people} onDone={onDone} toChat={toChat} setErr={setErr} mitOrt={mitOrt} />;
+  const count = (v: { files: any[]; subs: Map<string, any[]> }) => v.files.length + [...v.subs.values()].reduce((n, l) => n + l.length, 0);
+  return (
+    <>
+      {!filtering && recent.length > 0 && (
+        <>
+          <h2>Zuletzt dazugekommen</h2>
+          <div className="flist" data-zuletzt>{recent.map((x) => row(x, true))}</div>
+        </>
+      )}
+      <h2>Ablage ({all.length})</h2>
+      <div className="row ftools">
+        <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Suchen: Name, Vorgang, Ticket …" aria-label="Ablage durchsuchen" />
+        <select value={art} onChange={(e) => setArt(e.target.value)} aria-label="Nach Art filtern">
+          <option value="">alle Arten</option>
+          {f.ablage.arten.map((a: string) => <option key={a} value={a}>{ARTEN_TEXT[a] ?? a}</option>)}
+          <option value="-">ohne Art</option>
+        </select>
+        {filtering && <span className="tiny muted">{shown.length} {shown.length === 1 ? 'Treffer' : 'Treffer'}</span>}
+      </div>
+      {all.length === 0 ? <p className="muted small">Noch keine Dateien in der Ablage.</p> : shown.length === 0 ? <p className="muted small">Nichts gefunden.</p> : (
+        <div className="ftree" data-ablage-baum>
+          {[...tree.keys()].sort(folderOrder).map((team) => {
+            const vs = tree.get(team)!;
+            const n = [...vs.values()].reduce((s, v) => s + count(v), 0);
+            return (
+              <details key={`${team}-${filtering}`} open data-team={team}>
+                <summary><b>{team}</b> <span className="tiny muted">{n}</span>{team === '_eingang' && <span className="chip warn" style={{ marginLeft: 6 }}>noch einzusortieren</span>}</summary>
+                {[...vs.keys()].sort(folderOrder).map((vorgang) => {
+                  const v = vs.get(vorgang)!;
+                  const inner = (
+                    <>
+                      {[...v.subs.keys()].sort(folderOrder).map((sub) => (
+                        <details key={`${sub}-${filtering}`} open={filtering} data-sub={sub}>
+                          <summary>📁 {sub} <span className="tiny muted">{v.subs.get(sub)!.length}</span></summary>
+                          <div className="flist">{v.subs.get(sub)!.sort(byNewest).map((x) => row(x))}</div>
+                        </details>
+                      ))}
+                      <div className="flist">{v.files.sort(byNewest).map((x) => row(x))}</div>
+                    </>
+                  );
+                  if (!vorgang) return <div key="(direkt)" className="fdirect">{inner}</div>;
+                  return (
+                    <details key={`${vorgang}-${filtering}`} open={filtering} data-vorgang={vorgang}>
+                      <summary>📂 {vorgang} <span className="tiny muted">{count(v)}</span></summary>
+                      {inner}
+                    </details>
+                  );
+                })}
+              </details>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Eine Datei im Baum: Titel, Datum, Art, Herkunft; Aktionen hinter „⋯“. */
+function DateiZeile({ x, f, people, onDone, toChat, setErr, mitOrt }: { x: any; f: any; people: any[]; onDone: () => void; toChat: (id: string) => void; setErr: (e: unknown) => void; mitOrt?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const confirm = useConfirm();
+  const toast = useToast();
+  const o = x.ort ?? {};
+  const titel = o.art ? String(o.slug).replace(/[-_]+/g, ' ') : x.name;
+  const ablage = x.kind === 'ablage';
+  return (
+    <div className="frow" data-file={x.name}>
+      <div className="frow-main">
+        <span className="frow-title"><FileLink x={x} label={titel} /></span>
+        <span className="frow-meta">
+          {o.datum && <span className="tiny muted">{fmtDate(o.datum)}</span>}
+          {o.art && <span className="chip">{ARTEN_TEXT[o.art] ?? o.art}</span>}
+          {o.version && <span className="chip">{o.version}</span>}
+          {extOf(x.name) && <span className="tiny muted">{extOf(x.name).slice(1).toUpperCase()}</span>}
+          {!ablage && <Origin x={x} />}
+          {x.personal && <span className="chip warn">Personendaten</span>}
+          {x.sharedWith.length > 0 && <span className="chip" title={x.sharedWithNames.join(', ')}>geteilt · {x.sharedWith.length}</span>}
+          {x.fehlt && <span className="chip bad">nicht mehr am Ablageort</span>}
+          {mitOrt && x.place && <code className="tiny">{x.place}/</code>}
+        </span>
+        <button className="btn ghost small" aria-expanded={open} aria-label={`Aktionen für ${x.name}`} onClick={() => setOpen(!open)}>⋯</button>
+      </div>
+      {open && (
+        <div className="frow-actions">
+          <span className="tiny muted">{x.name} · {size(x.size)} · Stand {fmtDateTime(x.updatedAt ?? x.createdAt)}{ablage ? ' · aus deiner Ablage' : ''}</span>
+          {x.sharedWith.length > 0 && (
+            <span className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
+              {x.sharedWith.map((id: string, k: number) => (
+                <span key={id} className="chip">{x.sharedWithNames[k]}
+                  <button className="btn ghost small" aria-label={`Freigabe für ${x.sharedWithNames[k]} entfernen`} onClick={async () => {
+                    if (!(await confirm({ title: 'Freigabe zurücknehmen?', body: <p>{x.sharedWithNames[k]} sieht „{x.name}“ danach nicht mehr.</p>, confirmLabel: 'Zurücknehmen' }))) return;
+                    try { await api(`/api/files/${x.id}/share`, { body: { userId: id, share: false } }); toast('Freigabe entfernt'); onDone(); } catch (e) { setErr(e); }
+                  }}>✕</button>
+                </span>
+              ))}
+            </span>
+          )}
+          <ShareButton f={x} people={people} onDone={onDone} />
+          <span className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+            <button className="btn small" onClick={() => toChat(x.id)} title="Kopie in dein Claude-Arbeitsverzeichnis legen und einen Chat starten">💬 Im Chat</button>
+            <TicketAttach f={x} onDone={onDone} />
+          </span>
+          {!(ablage && o.sub) && <Place x={x} ablage={f.ablage} onDone={onDone} />}
+          {!ablage && (
+            <button className="btn small danger" style={{ alignSelf: 'flex-start' }} onClick={async () => {
+              if (!(await confirm({ title: `„${x.name}“ löschen?`, body: <>{x.place && <p>Die Datei wird auch aus der Ablage gelöscht: <code>{x.place}/</code></p>}<p>Auch für alle, mit denen sie geteilt ist.</p></>, danger: true, confirmLabel: 'Löschen' }))) return;
+              try { await api(`/api/files/${x.id}`, { method: 'DELETE' }); toast('Gelöscht'); onDone(); } catch (e) { setErr(e); }
+            }}>Löschen</button>
+          )}
+          {ablage && <span className="tiny muted">Löschen und Umbenennen in deiner Ablage selbst — die Werkbank zieht nach{o.sub ? '; Dateien in Unterordnern bleiben, wo sie sind' : ''}.</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- Von Agenten (Plan dateien-vollständig, S3) ----------
+
+const paketUrl = (p: string, rel: string) => `api/files/agenten/${encodeURIComponent(p)}/${rel.split('/').map(encodeURIComponent).join('/')}`;
+const isBild = (rel: string) => /\.(png|jpe?g|gif|webp)$/i.test(rel);
+const isText = (rel: string) => /\.(md|txt)$/i.test(rel);
+
+function VonAgenten({ mine, admin, librechatUrl }: { mine: any[]; admin: boolean; librechatUrl: string }) {
+  const chats = mine.filter((x) => x.kind === 'agent' || x.kind === 'vault').sort((a, b) => String(b.updatedAt ?? b.createdAt).localeCompare(String(a.updatedAt ?? a.createdAt)));
+  return (
+    <>
+      {admin ? <Pakete /> : <p className="muted small">Review-Pakete der Agenten-Stränge sehen nur Admins.</p>}
+      <h2>Aus Chats ({chats.length})</h2>
+      <p className="tiny muted" style={{ marginTop: 0 }}>Was ein Agent im Werkbank-Chat fertig geschrieben hat — Dateien liegen zusätzlich in der Ablage, Notizen im Vault.</p>
+      {chats.length === 0 ? <p className="muted small">Noch nichts.</p> : (
+        <div className="flist">{chats.map((x) => (
+          <div key={x.id} className="frow" data-agent-file={x.name}>
+            <div className="frow-main">
+              <span className="frow-title"><FileLink x={x} /></span>
+              <span className="frow-meta">
+                <Origin x={x} />
+                <span className="tiny muted">{fmtDateTime(x.updatedAt ?? x.createdAt)}</span>
+                {x.source?.conv && <a className="tiny" href={`${librechatUrl}/c/${x.source.conv}`} target={chatTarget} rel="noreferrer">Chat öffnen</a>}
+              </span>
+            </div>
+          </div>
+        ))}</div>
+      )}
+    </>
+  );
+}
+
+function Pakete() {
+  const d = useLoad(() => api('/api/files/agenten'));
+  const [q, setQ] = useState('');
+  const [n, setN] = useState(30);
+  const [view, setView] = useState<{ paket: string; rel: string } | null>(null);
+  const data: any = d.data;
+  if (d.error) return <Err e={d.error} />;
+  if (!data) return <Loading />;
+  const needle = q.trim().toLowerCase();
+  const list = data.pakete.filter((p: any) => !needle || `${p.name} ${p.title} ${p.strand?.title ?? ''}`.toLowerCase().includes(needle));
+  return (
+    <>
+      <h2>Review-Pakete ({data.pakete.length})</h2>
+      <p className="tiny muted" style={{ marginTop: 0 }}>Berichte, Pläne und Screenshots der Haupt-Sitzung und der Orchestrator-Stränge. Nur lesen — hier wird nichts verschoben.</p>
+      {!data.ordner ? <p className="muted small">Auf diesem Server gibt es keinen Ordner mit Review-Paketen.</p> : (
+        <>
+          <div className="row ftools">
+            <input type="search" value={q} onChange={(e) => { setQ(e.target.value); setN(30); }} placeholder="Suchen: Nummer, Titel, Strang …" aria-label="Review-Pakete durchsuchen" />
+            {needle && <span className="tiny muted">{list.length} Treffer</span>}
+          </div>
+          {list.length === 0 ? <p className="muted small">Nichts gefunden.</p> : (
+            <div className="ftree" data-pakete>
+              {list.slice(0, n).map((p: any) => (
+                <details key={p.name} className="paket" data-paket={p.name}>
+                  <summary>
+                    <span className="chip">{p.nr}</span> <b>{p.title}</b>
+                    <span className="tiny muted"> · {fmtDate(new Date(p.at).toISOString())} · {p.files.length}{p.more ? ` + ${p.more}` : ''} Dateien</span>
+                  </summary>
+                  <div className="col" style={{ gap: 4, padding: '4px 0 8px 8px' }}>
+                    {p.strand && <span className="small">Strang: {p.strand.url ? <a href={p.strand.url} target={chatTarget} rel="noreferrer">{p.strand.title || p.strand.id}</a> : p.strand.title}</span>}
+                    <span className="tiny muted"><code>{p.name}/</code></span>
+                    {p.files.map((x: any) => (
+                      <div key={x.rel} className="frow-main">
+                        <span className="frow-title"><a href={paketUrl(p.name, x.rel)}>{x.rel}</a></span>
+                        <span className="frow-meta"><span className="tiny muted">{size(x.size)}</span></span>
+                        {(isText(x.rel) || isBild(x.rel)) && <button className="btn small" onClick={() => setView({ paket: p.name, rel: x.rel })}>Vorschau</button>}
+                      </div>
+                    ))}
+                    {p.more > 0 && <span className="tiny muted">… und {p.more} weitere Dateien im Ordner.</span>}
+                    {p.files.length === 0 && <span className="tiny muted">Keine lesbaren Ergebnisse (nur Code oder Skripte).</span>}
+                  </div>
+                </details>
+              ))}
+              {list.length > n && <button className="btn small" onClick={() => setN(n + 30)}>Weitere {Math.min(30, list.length - n)} zeigen</button>}
+            </div>
+          )}
+        </>
+      )}
+      {view && <Vorschau {...view} onClose={() => setView(null)} />}
+    </>
+  );
+}
+
+/** Vorschau im Overlay: Markdown gerendert (Bilder im Bericht zeigen auf das Paket), Text, Bilder inline. */
+function Vorschau({ paket, rel, onClose }: { paket: string; rel: string; onClose: () => void }) {
+  const d = useLoad(() => (isText(rel) ? api(`${paketUrl(paket, rel)}?vorschau=1`) : Promise.resolve(null)), [paket, rel]);
+  const data: any = d.data;
+  return (
+    <div className="backdrop" onClick={onClose} onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}>
+      <div className="dialog vorschau" role="dialog" aria-modal="true" aria-label={`Vorschau ${rel}`} onClick={(e) => e.stopPropagation()}>
+        <div className="row" style={{ justifyContent: 'space-between', gap: 8 }}>
+          <b className="small" style={{ overflowWrap: 'anywhere' }}>{paket}/{rel}</b>
+          <span className="row" style={{ gap: 6 }}>
+            <a className="btn small" href={paketUrl(paket, rel)}>Herunterladen</a>
+            <button className="btn small" autoFocus onClick={onClose}>Schließen</button>
+          </span>
+        </div>
+        {isBild(rel) ? <img src={`${paketUrl(paket, rel)}?inline=1`} alt={rel} style={{ maxWidth: '100%', marginTop: 10 }} /> : d.error ? <Err e={d.error} /> : !data ? <Loading /> : data.html
+          ? <div className="note-body" style={{ marginTop: 10 }} dangerouslySetInnerHTML={{ __html: data.html }} />
+          : <pre style={{ whiteSpace: 'pre-wrap', marginTop: 10 }}>{data.text}</pre>}
+      </div>
+    </div>
   );
 }

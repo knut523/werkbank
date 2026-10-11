@@ -376,3 +376,22 @@ td[data-label-inline]::before { content: none; }
 .step .num.bad { background: var(--chip-bad); color: var(--chip-bad-text); }
 .dialog.ansetzen input:not([type=radio]), .dialog.ansetzen select, .dialog.ansetzen textarea { width: 100%; }
 @media (max-width: 520px) { .ansetzen-actions .btn.primary { width: 100%; justify-content: center; } }
+
+/* Dateien: Ablage als Baum, Von Agenten (Plan dateien-vollständig) */
+.ftools { flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.ftools input[type=search] { flex: 1 1 220px; min-width: 0; }
+.ftree details { margin: 2px 0 2px 6px; }
+.ftree > details { margin-left: 0; }
+.ftree summary { cursor: pointer; padding: 4px 6px; border-radius: 6px; overflow-wrap: anywhere; }
+.ftree summary:hover { background: var(--surface-hover); }
+.ftree details > details, .ftree details > .flist, .ftree .fdirect { margin-left: 14px; }
+.flist { display: flex; flex-direction: column; }
+.frow { border-bottom: 1px solid var(--border-light); padding: 4px 6px; }
+.frow-main { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.frow-title { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.frow-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.frow-actions { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 4px 8px; }
+.frow-actions select, .frow-actions input { max-width: 100%; }
+.dialog.vorschau { width: min(900px, 100%); }
+.dialog.vorschau img { height: auto; }
+.frow-main > .btn.ghost:last-child { margin-left: auto; }

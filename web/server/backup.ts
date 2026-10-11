@@ -7,7 +7,8 @@
 // - Personendaten-Dateien (Knut, 09.10.2026: mit hinein, verschlüsselt, nur für Admins): AES-256-GCM mit
 //   `WERKBANK_BACKUP_KEY` als `<name>.enc` (`WBENC1` | IV 12 | Chiffrat | Tag 16). Ohne Schlüssel bleiben sie draußen,
 //   das Manifest sagt es.
-// - Nur Dateien, die die Werkbank kennt (Mongo `files`), nicht Knuts übrige Dokumente im selben Ordner.
+// - Nur Dateien, die über die Werkbank hereinkamen (Mongo `files`), nicht Knuts übrige Dokumente im selben Ordner —
+//   auch nicht die, die der Ablage-Abgleich nur ins Register übernommen hat (`kind: 'ablage'`).
 
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
@@ -129,7 +130,7 @@ export async function writeBackup(out: Writable): Promise<any> {
       await tar.entry(`werkbank/${name}/_indexes.json`, Buffer.from(JSON.stringify(idx, null, 1)));
       manifest.collections[name] = n;
     }
-    for await (const f of db.collection('files').find({ kind: { $ne: 'vault' } }) as any) {
+    for await (const f of db.collection('files').find({ kind: { $nin: ['vault', 'ablage'] } }) as any) {
       const abs = filePath(f);
       let st;
       try { st = lstatSync(abs); } catch { manifest.skipped.push({ id: f._id, why: 'nicht mehr am Ablageort' }); continue; }

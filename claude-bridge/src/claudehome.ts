@@ -13,7 +13,8 @@
 // "atlassian|<sha256({type,url,headers})[:16]>". Weil die Werkbank den Server mit genau Name, Typ und URL der
 // üblichen Nutzer-Registrierung übergibt, findet Claude Code eine vorhandene Anmeldung ohne eigene Registrierung.
 
-import { mkdirSync, existsSync, symlinkSync, lstatSync, chmodSync } from 'node:fs';
+import { mkdirSync, existsSync, symlinkSync, lstatSync, chmodSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -97,4 +98,24 @@ export function applyHome(h: ClaudeHome, env: Record<string, string | undefined>
 /** Atlassian-MCP (HTTP, OAuth je Konfiguration) für Jira — gleicher Name/URL wie `claude mcp add … atlassian`. */
 export function atlassianServer(): Record<string, unknown> {
   return ATLASSIAN_URL && ATLASSIAN_URL !== 'off' ? { atlassian: { type: 'http', url: ATLASSIAN_URL } } : {};
+}
+
+/**
+ * Zusätzliche MCP-Server nur für den Leitstand (Plan 132, S5): compartment (Gedächtnis) und PostHog wie in Knuts Claude-Code-
+ * Konfiguration, aus LEITSTAND_MCP_FILE (Vorgabe templates/leitstand/mcp.json, ohne Geheimnisse). `~` wird aufgelöst; stdio-Server
+ * bekommen PATH/HOME. Fehlt die Datei oder ist sie kaputt: keine Zusatzserver (Log), der Leitstand läuft trotzdem.
+ */
+export function leitstandMcp(file = process.env.LEITSTAND_MCP_FILE || join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'templates', 'leitstand', 'mcp.json')): Record<string, unknown> {
+  let j: any;
+  try { j = JSON.parse(readFileSync(file, 'utf8')); } catch (e: any) { log('leitstand-mcp nicht lesbar', { file, error: String(e?.message ?? e).slice(0, 120) }); return {}; }
+  const home = process.env.HOME || homedir();
+  const tilde = (v: unknown): unknown => (typeof v === 'string' ? v.replace(/^~(?=\/|$)/, home) : Array.isArray(v) ? v.map(tilde) : v);
+  const out: Record<string, unknown> = {};
+  for (const [name, def] of Object.entries<any>(j.mcpServers ?? {})) {
+    if (!/^[\w-]{1,40}$/.test(name) || ['vault-search', 'werkbank', 'forge-review', 'atlassian'].includes(name)) continue;
+    out[name] = def.type === 'stdio' || def.command
+      ? { ...def, command: tilde(def.command), args: tilde(def.args ?? []), env: { PATH: process.env.PATH || '', HOME: home, ...(def.env ?? {}) } }
+      : def;
+  }
+  return out;
 }

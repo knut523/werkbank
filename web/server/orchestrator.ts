@@ -10,6 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { findBericht } from './bericht.ts';
 import { cfg } from './config.ts';
 import { wb, lc } from './db.ts';
 import { librechatAccessToken, type User } from './auth.ts';
@@ -94,7 +95,7 @@ export function orchStatus(run: { startError?: string | null; startedAt: Date | 
   switch (s.turn.outcome) {
     case 'busy': return { status: 'failed', reason: 'Parallelgrenze der Brücke (BRIDGE_MAX_PARALLEL_CHATS) — später `send <id> weiter`', cause: 'busy' };
     case 'limit': return { status: 'waiting', reason: 'Schrittlimit des Zuges erreicht — `send <id> weiter`', cause: 'limit' };
-    case 'timeout': return { status: 'waiting', reason: 'Zeitlimit des Zuges (15 min) erreicht — `send <id> weiter`', cause: 'timeout' };
+    case 'timeout': return { status: 'waiting', reason: 'Zeitlimit des Zuges erreicht — `send <id> weiter`', cause: 'timeout' };
     case 'rate_limit': return { status: 'failed', reason: 'Claude-Kontingent ausgeschöpft', cause: 'rate_limit' };
     case 'error': return { status: 'failed', reason: 'Fehler in der Claude-Sitzung — Chat ansehen, ggf. `send <id> weiter`' };
     case 'aborted': return { status: 'failed', reason: 'Zug abgebrochen' };
@@ -169,40 +170,44 @@ async function lcFetch(u: User, path: string, init: { method?: string; body?: un
   return { status: r.status, j: await r.json().catch(() => null) };
 }
 
-/** Titel „Orchestrator · …“ und Lesezeichen setzen, sobald LibreChat die Unterhaltung gespeichert hat. Idempotent. */
-export async function decorate(u: User, conv: string, title: string): Promise<{ ok: boolean; why?: string }> {
+// Leitstand (docs/plan-leitstand.md): eigener Titel-Präfix und eigenes Lesezeichen.
+export const LEIT_TAG = 'Leitstand';
+const TAG_TEXT: Record<string, string> = { [ORCH_TAG]: 'Stränge, die die Haupt-Sitzung über die Werkbank gestartet hat', [LEIT_TAG]: 'Knuts Orchestrator-Chat (Leitstand)' };
+
+/** Titel „Orchestrator · …“ (bzw. „Leitstand · …“) und Lesezeichen setzen, sobald LibreChat die Unterhaltung gespeichert hat. Idempotent. */
+export async function decorate(u: User, conv: string, title: string, tag = ORCH_TAG): Promise<{ ok: boolean; why?: string }> {
   const c: any = await lc().collection('conversations').findOne({ conversationId: conv, user: u.id }, { projection: { title: 1, tags: 1 } });
   if (!c) return { ok: false, why: 'Unterhaltung noch nicht gespeichert' };
-  const want = `Orchestrator · ${title}`.slice(0, 200);
+  const want = (tag === LEIT_TAG ? title : `Orchestrator · ${title}`).slice(0, 200);
   if (c.title !== want) {
     const r = await lcFetch(u, '/api/convos/update', { method: 'POST', body: { arg: { conversationId: conv, title: want } } });
     if (r.status >= 300) return { ok: false, why: `Titel: LibreChat ${r.status}` };
   }
   const tags: string[] = Array.isArray(c.tags) ? c.tags : [];
-  if (!tags.includes(ORCH_TAG)) {
+  if (!tags.includes(tag)) {
     const existing = await lcFetch(u, '/api/tags');
-    if (Array.isArray(existing.j) && !existing.j.some((t: any) => t?.tag === ORCH_TAG)) {
-      await lcFetch(u, '/api/tags', { method: 'POST', body: { tag: ORCH_TAG, description: 'Stränge, die die Haupt-Sitzung über die Werkbank gestartet hat' } });
+    if (Array.isArray(existing.j) && !existing.j.some((t: any) => t?.tag === tag)) {
+      await lcFetch(u, '/api/tags', { method: 'POST', body: { tag, description: TAG_TEXT[tag] ?? tag } });
     }
-    const r = await lcFetch(u, `/api/tags/convo/${encodeURIComponent(conv)}`, { method: 'PUT', body: { tags: [...tags, ORCH_TAG] } });
+    const r = await lcFetch(u, `/api/tags/convo/${encodeURIComponent(conv)}`, { method: 'PUT', body: { tags: [...tags, tag] } });
     if (r.status >= 300) return { ok: false, why: `Lesezeichen: LibreChat ${r.status}` };
   }
   return { ok: true };
 }
 
-async function decorateSoon(u: User, conv: string, title: string, tries = 20) {
+export async function decorateSoon(u: User, conv: string, title: string, tries = 20, tag = ORCH_TAG) {
   for (let i = 0; i < tries; i++) {
-    try { if ((await decorate(u, conv, title)).ok) return; } catch { /* weiter versuchen */ }
+    try { if ((await decorate(u, conv, title, tag)).ok) return; } catch { /* weiter versuchen */ }
     await new Promise((r) => setTimeout(r, 1500));
   }
 }
 
-async function lastMessage(u: User, conv: string): Promise<(LastMsg & { id: string }) | null> {
+export async function lastMessage(u: User, conv: string): Promise<(LastMsg & { id: string }) | null> {
   const m: any = await lc().collection('messages').find({ conversationId: conv, user: u.id }).sort({ createdAt: -1 }).limit(1).next();
   return m ? { id: String(m.messageId), fromUser: !!m.isCreatedByUser, text: messageText(m), error: !!m.error, at: new Date(m.createdAt ?? 0).getTime() } : null;
 }
 
-async function strandStates(u: User): Promise<Map<string, StrandState & { dir: string; written: string[] }>> {
+export async function strandStates(u: User): Promise<Map<string, StrandState & { dir: string; written: string[]; kind?: string; waitingAnswer?: boolean }>> {
   const r = await fetch(`${cfg.bridgeUrl}/internal/orch-state?user=${encodeURIComponent(u.id)}`, { headers: internalHeaders(), signal: AbortSignal.timeout(4000) });
   if (!r.ok) throw err(502, `Brücke antwortet mit ${r.status}`);
   const j: any = await r.json();
@@ -211,9 +216,24 @@ async function strandStates(u: User): Promise<Map<string, StrandState & { dir: s
 
 // ---------- Öffentliche Schnittstelle ----------
 
-export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null }
+export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null; lauf?: string | null }
 
-const runs = () => wb().collection('orchestrator_runs');
+/** Lauf-Name (Plan 132 Teil B, F8): ausdrücklich angegeben oder der Titelteil vor „:“ bzw. „ · “; gesäubert, ≤ 40 Zeichen. */
+export function laufName(title: string, explicit?: string | null): { lauf: string; explicit: boolean } {
+  const clean = (t: string) => t.replace(/[\u0000-\u001f\u007f·/]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).trim();
+  const e = clean(String(explicit ?? ''));
+  if (e) return { lauf: e, explicit: true };
+  const head = String(title).split(/:| · /)[0];
+  return { lauf: clean(head) || clean(title) || 'ohne Lauf', explicit: false };
+}
+export const laufTag = (lauf: string) => `Orch · ${lauf}`;
+
+export const runs = () => wb().collection('orchestrator_runs');
+// Stränge, nicht der Leitstand (Plan 132, C9/D2): `$ne`, damit alte Dokumente ohne kind dabei bleiben.
+export const STRANDS = { kind: { $ne: 'leitstand' } };
+// Offen = Knut hat ihn nicht geprüft (Teil B, G2); vom Leitstand abgelegte bleiben offen. Alte Dokumente ohne knutReviewedAt,
+// die per CLI geprüft wurden (reviewedAt ohne reviewedBy), gelten als von Knut geprüft.
+export const OPEN = { knutReviewedAt: null, $or: [{ reviewedAt: null }, { reviewedBy: 'leitstand' }] };
 
 async function newId(): Promise<string> {
   for (;;) { const id = randomUUID().slice(0, 8); if (!(await runs().findOne({ _id: id as any }))) return id; }
@@ -253,7 +273,12 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   if (!reg.ok) throw err(reg.status === 400 || reg.status === 409 || reg.status === 403 ? reg.status : 502, rj.error ?? `Brücke antwortet mit ${reg.status}`);
   const stand = [fresh.status, g0 ? g0.text : null].filter(Boolean).join('\n') || null;
   const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand });
-  const doc: any = { _id: id, userId: u.id, conv, url: `${cfg.librechatPublicUrl}/c/${conv}`, title, cwd: rj.dir ?? real, plan, prompt: prompt.slice(0, 500), startedAt: new Date(), lastSentAt: new Date(), sends: 1, reviewedAt: null, mode: rj.mode ?? null, startError: null, slug: g0?.slug ?? null, g0: g0?.public ?? null };
+  const { lauf, explicit } = laufName(title, inp.lauf);
+  // Bericht-Pfad aus dem VOLLEN Auftrag und der Plandatei (F7) — der gespeicherte Auftrag ist gekürzt.
+  let planText = '';
+  if (plan) { try { planText = readFileSync(plan, 'utf8').slice(0, 200_000); } catch { /* egal */ } }
+  const doc: any = { _id: id, userId: u.id, conv, url: `${cfg.librechatPublicUrl}/c/${conv}`, title, cwd: rj.dir ?? real, plan, prompt: prompt.slice(0, 500), startedAt: new Date(), lastSentAt: new Date(), sends: 1, reviewedAt: null, knutReviewedAt: null, mode: rj.mode ?? null, startError: null, slug: g0?.slug ?? null, g0: g0?.public ?? null,
+    lauf, laufExplicit: explicit, bericht: findBericht([prompt, planText]) };
   await runs().insertOne(doc);
   // 2) Chat mit genau dieser ID anlegen; LibreChat fährt den Zug serverseitig.
   try {
@@ -263,12 +288,13 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
     throw err(e.status ?? 502, String(e.message ?? e));
   }
   // 3) Titel + Lesezeichen im Hintergrund (LibreChat speichert die Unterhaltung erst nach ein paar Sekunden).
-  decorateSoon(u, conv, title).catch(() => {});
+  // Nacheinander: beide lesen sonst dieselbe leere Tag-Liste, und der zweite PUT überschreibt den ersten (Test Teil B).
+  decorateSoon(u, conv, title).then(() => (explicit ? decorateSoon(u, conv, title, 20, laufTag(lauf)) : undefined)).catch(() => {});
   return { id, conv, url: doc.url, cwd: doc.cwd, plan, mode: doc.mode, stand, g0: g0?.public ?? null, worktree: fresh.worktree, ...(doc.mode && doc.mode !== 'auto' ? { warning: `Brücke läuft für dieses Konto im Modus „${doc.mode}“ — ohne Auto-Modus darf der Strang nur lesen.` } : {}) };
 }
 
 export async function listOrch(u: User, opts: { all?: boolean } = {}) {
-  const docs: any[] = await runs().find({ userId: u.id, ...(opts.all ? {} : { reviewedAt: null }) }).sort({ startedAt: -1 }).limit(100).toArray();
+  const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, ...(opts.all ? {} : OPEN) }).sort({ startedAt: -1 }).limit(100).toArray();
   if (!docs.length) return [];
   let states = new Map<string, any>();
   let bridgeError: string | null = null;
@@ -286,9 +312,11 @@ export async function listOrch(u: User, opts: { all?: boolean } = {}) {
     if (d.autoStopped && st.status !== 'running') st = { status: 'failed', reason: String(d.autoStopped.reason) };
     // Titel/Lesezeichen nachziehen, falls der Start-Durchlauf es nicht geschafft hat (selbstheilend, idempotent).
     if (!d.decorated && !d.startError) { try { if ((await decorate(u, d.conv, d.title)).ok) await runs().updateOne({ _id: d._id }, { $set: { decorated: true } }); } catch { /* nächstes Mal */ } }
+    if (d.laufExplicit && !d.decoratedLauf && !d.startError) { try { if ((await decorate(u, d.conv, d.title, laufTag(d.lauf))).ok) await runs().updateOne({ _id: d._id }, { $set: { decoratedLauf: true } }); } catch { /* nächstes Mal */ } }
     out.push({
       id: d._id, title: d.title, status: st.status, reason: st.reason, reviewed: !!d.reviewedAt, url: d.url, cwd: d.cwd, plan: d.plan,
       startedAt: d.startedAt, lastSentAt: d.lastSentAt, lastActivity: Math.max(s?.turn?.end ?? 0, s?.turn?.start ?? 0, last?.at ?? 0) || null,
+      lauf: d.lauf ?? laufName(d.title).lauf, laufExplicit: !!d.laufExplicit, reviewedBy: d.reviewedBy ?? null, knutReviewed: !!d.knutReviewedAt, doneAt: d.doneAt ?? null, bericht: !!d.bericht,
       sends: d.sends ?? 1, autoWeiter: d.autoTotal ?? 0, autoLast: d.autoLastAt ? { at: d.autoLastAt, cause: d.autoLastCause ?? null } : null, reviewReady: !!d.reviewReadyAt, excerpt: last && !last.fromUser ? excerpt(last.text) : '', written: s?.written ?? [],
     });
   }
@@ -305,6 +333,7 @@ export function excerpt(text: string, n = 600): string {
 async function ownRun(u: User, id: string) {
   const d: any = await runs().findOne({ _id: id as any, userId: u.id });
   if (!d) throw err(404, `Strang ${id} gibt es nicht.`);
+  if (d.kind === 'leitstand') throw err(409, `${id} ist der Leitstand, kein Strang.`);
   return d;
 }
 
@@ -315,22 +344,32 @@ export async function showOrch(u: User, id: string) {
   return { ...item, conv: d.conv, prompt: d.prompt, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null };
 }
 
-export async function sendOrch(u: User, id: string, text: string) {
+export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 'leitstand' = 'hand') {
   const msg = String(text ?? '').trim();
   if (!msg) throw err(400, 'Nachricht fehlt.');
   const d = await ownRun(u, id);
   if (d.status === 'blocked_g0') throw err(409, `Strang ${id} wurde von G0 vor dem Bau gestoppt — erst die Rückfrage ${d.question ?? ''} in der Werkbank beantworten.`);
+  // Leitstand (Plan 132, E3/B3): setzt den Deckel nicht zurück und hebt keinen Stopp auf — das entscheidet nur Knut.
+  if (via === 'leitstand' && d.autoStopped) throw err(409, `Strang ${id} hat seinen Deckel erreicht — Knut entscheidet in „Heute“ (Fortsetzen/Anhalten).`);
+  if (via === 'leitstand' && d.knutReviewedAt) throw err(409, `Strang ${id} hat Knut geprüft — nicht weiterführen; einen neuen Strang starten oder Knut fragen.`);
   const item = (await listOrch(u, { all: true })).find((r) => r.id === id);
   if (item?.status === 'running') throw err(409, `Strang ${id} arbeitet noch (${item.reason}) — warten, dann senden.`);
   await deliver(u, d.conv, msg);
+  if (via === 'leitstand') {
+    // Teil B, G3: review_ready-Stand wandert nach prevReview (Auto-Fortsetzen und Wecken laufen wieder); Knuts Karte bleibt
+    // (doneAt/knutReviewedAt unberührt); eine Ablage durch den Leitstand selbst hebt er damit auf.
+    await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date(), reviewReadyAt: null, review: null, ...(d.review ? { prevReview: { review: d.review, at: d.reviewReadyAt ?? new Date() } } : {}), ...(d.reviewedBy === 'leitstand' ? { reviewedAt: null, reviewedBy: null } : {}) }, $inc: { sends: 1, autoStreak: 1 } });
+    return { id, conv: d.conv, url: d.url };
+  }
   // Handnachricht: der Deckel beginnt neu, Stopp und review_ready sind aufgehoben (Council R1, Bedingung 4).
-  await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date(), reviewedAt: null, reviewReadyAt: null, autoStreak: 0, autoStopped: null }, $inc: { sends: 1 } });
+  // Teil B, F6: auch Karte, DoD-Tabellen und Knuts Prüfung sind damit weg (nach erneutem „fertig“ keine alte Tabelle).
+  await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date(), reviewedAt: null, reviewedBy: null, knutReviewedAt: null, reviewReadyAt: null, review: null, prevReview: null, doneAt: null, autoStreak: 0, autoStopped: null, ...(/^Nacharbeit nach Review:/.test(msg) ? { reworkAt: new Date(), reworkText: msg.slice(0, 500) } : {}) }, $inc: { sends: 1 } });
   await questions().updateMany({ userId: u.id, kind: 'auto-weiter', 'strand.id': d._id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() } });
   return { id, conv: d.conv, url: d.url };
 }
 
 /** Nachricht an den Chat hängen (Elternnachricht = letzte gespeicherte); LibreChat 409 = Zug noch nicht abgeschlossen. */
-async function deliver(u: User, conv: string, msg: string) {
+export async function deliver(u: User, conv: string, msg: string) {
   for (let i = 0; ; i++) {
     const last = await lastMessage(u, conv);
     if (!last) throw err(409, 'Im Chat ist noch keine Nachricht gespeichert.');
@@ -353,7 +392,7 @@ export async function autoWeiterTick(deps: AutoDeps) {
   if (ticking) return;
   ticking = true;
   try {
-    const docs: any[] = await runs().find({ reviewedAt: null, reviewReadyAt: null, startError: null, autoStopped: null, conv: { $ne: null }, status: { $ne: 'blocked_g0' }, startedAt: { $gt: new Date(Date.now() - 14 * 86400_000) } }).toArray();
+    const docs: any[] = await runs().find({ ...STRANDS, reviewedAt: null, reviewReadyAt: null, startError: null, autoStopped: null, conv: { $ne: null }, status: { $ne: 'blocked_g0' }, startedAt: { $gt: new Date(Date.now() - 14 * 86400_000) } }).toArray();
     const byUser = new Map<string, any[]>();
     for (const d of docs) byUser.set(d.userId, [...(byUser.get(d.userId) ?? []), d]);
     for (const [userId, list] of byUser) {
@@ -411,10 +450,60 @@ export function startAutoWeiter(deps: AutoDeps) {
   return setInterval(() => { autoWeiterTick(deps).catch((e) => deps.log?.('orch-auto-weiter fehler', { error: String(e?.message ?? e).slice(0, 200) })); }, ms);
 }
 
-export async function reviewOrch(u: User, id: string, note = '') {
+/** Geprüft: von Knut (CLI der Hauptsitzung, „Passt“, „Anhalten“) → knutReviewedAt; vom Leitstand → nur abgelegt (Teil B, G2). */
+export async function reviewOrch(u: User, id: string, note = '', by: 'knut' | 'leitstand' = 'knut', expect: Record<string, unknown> = {}) {
   const d = await ownRun(u, id);
-  await runs().updateOne({ _id: d._id }, { $set: { reviewedAt: new Date(), reviewNote: String(note).slice(0, 500) } });
-  return { id, reviewed: true };
+  const now = new Date();
+  // expect: der gesehene Stand („Passt“ auf „Heute“) — hat er sich geändert, nichts tun (Council Teil B, Zeitfenster).
+  const r = await runs().updateOne({ _id: d._id, ...expect }, { $set: { reviewedAt: now, reviewNote: String(note).slice(0, 500), ...(by === 'knut' ? { knutReviewedAt: now, reviewedBy: 'knut' } : { reviewedBy: 'leitstand' }) } });
+  if (!r.matchedCount) throw err(409, 'Der Strang hat sich inzwischen geändert — Seite neu laden.');
+  return { id, reviewed: true, by };
+}
+
+// ---------- Stand je Strang festschreiben (Teil B, G1) ----------
+// „Heute“, der Zähler und die Übersicht lesen nur Mongo; dieser Takt schreibt den Stand aller offenen Stränge (auch abgelegter,
+// review_ready- und gedeckelter), unabhängig vom Auto-Fortsetzen. Brücke oder LibreChat weg → nichts überschreiben.
+
+let statusTicking = false;
+export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now = Date.now()) {
+  if (statusTicking) return;
+  statusTicking = true;
+  try {
+    const docs: any[] = await runs().find({ ...STRANDS, ...OPEN, startError: null, conv: { $ne: null }, status: { $ne: 'blocked_g0' }, startedAt: { $gt: new Date(now - 14 * 86400_000) } }).toArray();
+    const byUser = new Map<string, any[]>();
+    for (const d of docs) byUser.set(d.userId, [...(byUser.get(d.userId) ?? []), d]);
+    for (const [userId, list] of byUser) {
+      const u = await deps.userById(userId).catch(() => null);
+      if (!u) continue;
+      let states: Map<string, any>;
+      try { states = await strandStates(u); } catch { continue; }
+      for (const d of list) {
+        // Schon fertig nach der letzten Nachricht an den Strang: ohne neue Nachricht ändert sich nichts (Last, Council Teil B).
+        // … aber nur, wenn seitdem kein Zug lief (Knut schreibt direkt im Chat) und der Bericht schon gefunden ist (Council-Diff B R2).
+        const sd = states.get(d.conv);
+        if (d.lastStatus === 'done' && d.doneAt && d.bericht && new Date(d.doneAt).getTime() > new Date(d.lastSentAt ?? d.startedAt).getTime() && !sd?.running && (sd?.turn?.end ?? 0) <= new Date(d.doneAt).getTime()) continue;
+        try {
+          const s = states.get(d.conv);
+          const last = await lastMessage(u, d.conv);
+          const st = orchStatus(d, s, last, now);
+          const set: Record<string, unknown> = { lastStatus: st.status, lastReason: st.reason, statusAt: new Date(now),
+            lastActivity: new Date(Math.max(s?.turn?.end ?? 0, s?.turn?.start ?? 0, last?.at ?? 0) || now), lastExcerpt: last && !last.fromUser ? excerpt(last.text, 600) : '' };
+          // „fertig“ zählt nur mit einer Antwort NACH der letzten Nachricht an den Strang (G1: nach Nacharbeit nicht die alte).
+          if (st.status === 'done' && last && last.at > new Date(d.lastSentAt ?? d.startedAt).getTime() && (!d.doneAt || new Date(d.doneAt).getTime() < last.at)) set.doneAt = new Date(last.at);
+          if (!d.bericht) { const b = findBericht([...(d.review?.artefakte ?? []), last && !last.fromUser ? last.text : '']); if (b) set.bericht = b; }
+          // Nur, wenn inzwischen keine neue Nachricht an den Strang ging (sonst käme mit der alten Antwort ein altes doneAt zurück).
+          await runs().updateOne({ _id: d._id, lastSentAt: d.lastSentAt ?? null }, { $set: set });
+        } catch (e: any) { deps.log?.('orch-status fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
+      }
+    }
+  } finally { statusTicking = false; }
+}
+
+/** Takt für statusTick (aus main.ts), unabhängig von ORCH_AUTO_WEITER; ORCH_STATUS=off schaltet ab. */
+export function startStatusTick(deps: Pick<AutoDeps, 'userById' | 'log'>) {
+  if (process.env.ORCH_STATUS === 'off') return null;
+  const ms = Math.max(200, Number(process.env.ORCH_AUTO_WEITER_TICK_MS) || 20_000);
+  return setInterval(() => { statusTick(deps).catch((e) => deps.log?.('orch-status fehler', { error: String(e?.message ?? e).slice(0, 200) })); }, ms);
 }
 
 // ---------- Rückfragen an Knut (Knut, 09.10.2026: „Wenn du Fragen hast, kannst du mir über die Werkbank eine
@@ -434,7 +523,7 @@ export interface AskInput { title: string; context: string; options?: { label: s
 
 export const AUTO_PRO_TAG = 5;
 
-const questions = () => wb().collection('orchestrator_questions');
+export const questions = () => wb().collection('orchestrator_questions');
 
 export async function askKnut(u: User, inp: AskInput) {
   const title = String(inp.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 140);
@@ -445,7 +534,7 @@ export async function askKnut(u: User, inp: AskInput) {
   if (new Set(options.map((o) => o.label)).size !== options.length) throw err(400, 'Optionen müssen verschieden heißen.');
   let strand: { id: string; title: string; url: string } | null = null;
   if (inp.strand) {
-    const r: any = await runs().findOne({ _id: String(inp.strand) as any, userId: u.id });
+    const r: any = await runs().findOne({ _id: String(inp.strand) as any, userId: u.id, ...STRANDS });
     if (!r) throw err(404, `Strang ${inp.strand} gibt es nicht.`);
     strand = { id: r._id, title: r.title, url: r.url };
   }
@@ -508,10 +597,18 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
       if (option === 'Anhalten') { await reviewOrch(u, d.strand.id, 'angehalten nach dem Deckel der automatischen Fortsetzung'); action = 'angehalten'; }
     } catch (e: any) { action = `nicht ausgeführt: ${String(e.message ?? e).slice(0, 200)}`; }
   }
+  // Leitstand-Deckel (Plan 132, A4): „Fortsetzen“ zählt ab jetzt neu; die Antwort selbst wird sofort zugestellt (leitstand.ts).
+  if ((d.kind === 'leitstand-deckel' || d.kind === 'leitstand-weiter') && option === 'Fortsetzen') {
+    await runs().updateOne({ userId: u.id, kind: 'leitstand', endedAt: null }, { $set: d.kind === 'leitstand-deckel' ? { capResetAt: new Date() } : { weiterStreak: 0, weiterStopped: null } });
+    action = 'fortgesetzt';
+  }
   return { ...publicQuestion({ ...d, status: 'beantwortet', answer }), ...(action ? { action } : {}) };
 }
 
 export async function withdrawQuestion(u: User, id: string) {
+  // Deckel-Fragen entscheidet nur Knut (Council-Diff R1): der Leitstand darf sie nicht über orch_questions wegräumen.
+  const q: any = await questions().findOne({ _id: id as any, userId: u.id });
+  if (q && /^(auto-weiter|leitstand-)/.test(String(q.kind ?? ''))) throw err(409, 'Diese Rückfrage entscheidet nur Knut (Deckel) — zurückziehen nicht möglich.');
   const r = await questions().updateOne({ _id: id as any, userId: u.id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() }, $unset: { keyActive: '' } });
   if (!r.matchedCount) throw err(409, 'Keine offene Rückfrage mit dieser Kennung.');
   return { id, status: 'zurückgezogen' };

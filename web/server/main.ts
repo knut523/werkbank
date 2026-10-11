@@ -19,11 +19,15 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, nachtbau, g0Blocked, g0Repos } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards } from './leitstand.ts';
+import { readBericht } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
-import { ARTEN, folders, schemaName } from './ablage.ts';
+import { ARTEN, folders, schemaName, ortAus, vorschlagAusPfad, isEingang } from './ablage.ts';
+import { ablageOwner, syncAblage, lastSyncAt } from './ablagesync.ts';
+import { listPakete, paketFile, renderPaketMd, strandFor, BILD_MIME } from './reviewpakete.ts';
 import { FEATURES, featuresFor, blockedFeature } from './features.ts';
 import { memoryWarning } from './memory.ts';
 import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
@@ -1090,13 +1094,14 @@ async function myQueue(u: User) {
 }
 
 /** Zähler für die Navigation: alles, was etwas von der Person will (laufende Agenten nicht). */
-async function todayCount(u: User, queue?: any[], mine?: any) {
+async function todayCount(u: User, queue?: any[], mine?: any, cards?: any[]) {
   const q = queue ?? await myQueue(u);
   const m = mine ?? await mineFor(u, { write: false });   // Zähler (alle 60 s): nur lesen, nie freigaben.md schreiben
   const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
   const hyg = h.items.filter((i: any) => !h.snoozed.includes(i.key)).length;
   const orch = (await listQuestions(u, { open: true }).catch(() => [])).length;   // Rückfragen des Orchestrators
-  return q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + (m.pendingApprovals?.length ?? 0) + (m.draft ? 1 : 0) + hyg + orch;
+  const strands = (cards ?? await strandCards(u).catch(() => [])).filter((c: any) => !c.running).length;   // fertige Stränge (nur Admins, nur Mongo — Teil B, F1)
+  return strands + q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + (m.pendingApprovals?.length ?? 0) + (m.draft ? 1 : 0) + hyg + orch;
 }
 
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -1110,11 +1115,15 @@ on('GET', /^\/api\/today$/, async (req, res) => {
     .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
   const orchOpen = (await listQuestions(u, { open: true }).catch(() => [])).length;
   // Automatisch fortgesetzte Stränge (Plan auto-weiter, DoD 6): nur der Zähler aus Mongo, kein Abruf bei der Brücke.
-  const orchAuto = (await wb().collection('orchestrator_runs').find({ userId: u.id, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
+  const cards = await strandCards(u).catch(() => []);
+  const carded = new Set(cards.map((c: any) => c.id));
+  const orchAuto = (await wb().collection('orchestrator_runs').find({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
+    .filter((r: any) => !carded.has(String(r._id)))   // keine Doppelung mit der Karte (F5)
     .map((r: any) => ({ id: String(r._id), title: r.title, url: r.url, n: r.autoTotal, stopped: !!r.autoStopped }));
   const g0 = await g0Blocked(u).catch(() => []);   // Nachtbau: von G0 gestoppte Stränge (blocked_g0)
   const memory = u.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null;   // nur Admins (RAM-Plan 125)
-  send(res, 200, { queue, mine, day, today, orchOpen, orchAuto, g0, memory, count: await todayCount(u, queue, mine), dryRun: dryRun() });
+  const leitstand = await leitstandLine(u).catch(() => null);   // nur Admins (Plan 132)
+  send(res, 200, { queue, strands: cards, mine, day, today, orchOpen, orchAuto, g0, leitstand, memory, count: await todayCount(u, queue, mine, cards), dryRun: dryRun() });
 });
 
 on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
@@ -1195,6 +1204,42 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
   send(res, 200, { ok: true, key: run.key });
 });
 
+
+// Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).
+on('GET', /^\/api\/leitstand\/overview$/, async (req, res) => send(res, 200, await overview(await needAdmin(req))));
+
+on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
+  const u = await needAdmin(req);
+  const d: any = await orchRuns().findOne({ _id: String(url.searchParams.get('strand') ?? '') as any, userId: u.id, kind: { $ne: 'leitstand' } });
+  if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
+  const text = readBericht(d.bericht);
+  if (text === null) throw new HttpError(404, 'Kein lesbarer Bericht zu diesem Strang.');
+  send(res, 200, { strand: String(d._id), name: String(d.bericht).split('/').slice(-2).join('/'), text });
+});
+
+on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  const d: any = await orchRuns().findOne({ _id: m[1] as any, userId: u.id, kind: { $ne: 'leitstand' } });
+  if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
+  // Gesehener Stand (F3) und live bei der Brücke (G4): nie auf einen veralteten oder laufenden Strang entscheiden.
+  const seen = String(new Date(d.reviewReadyAt ?? d.doneAt ?? 0).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime());
+  if (String(b.seen ?? '') !== seen) throw new HttpError(409, 'Der Strang hat sich inzwischen geändert — Seite neu laden.');
+  let st: any;
+  try { st = (await strandStates(u)).get(d.conv); } catch { throw new HttpError(503, 'Brücke nicht erreichbar — gleich noch einmal.'); }
+  if (st?.running) throw new HttpError(409, 'Der Strang arbeitet gerade — warte, bis er fertig ist.');
+  if (m[2] === 'passt') {
+    await reviewOrch(u, m[1], String(b.note ?? 'Passt (Heute)'), 'knut', { lastSentAt: d.lastSentAt ?? null, reviewReadyAt: d.reviewReadyAt ?? null, doneAt: d.doneAt ?? null });
+    log('strang geprüft', { user: u.id, id: m[1] });
+    return send(res, 200, { ok: true });
+  }
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
+  const text = String(b.text ?? '').trim().slice(0, 4000);
+  if (b.kind !== 'nacharbeit' || !text) throw new HttpError(400, 'Schreib kurz, was nachzuarbeiten ist.');
+  await sendOrch(u, m[1], `Nacharbeit nach Review: ${text}`);
+  log('strang nacharbeit', { user: u.id, id: m[1] });
+  send(res, 200, { ok: true, url: d.url });
+});
 
 // Rückfragen des Orchestrators (Knut antwortet hier; nur die eigenen).
 on('GET', /^\/api\/orchestrator\/questions$/, async (req, res, _m, url) => {
@@ -1942,6 +1987,13 @@ on('GET', /^\/api\/team$/, async (req, res) => {
 
 on('GET', /^\/api\/files$/, async (req, res) => {
   const u = await needUser(req);
+  // Ablage-Abgleich (Plan dateien-vollständig, S1): lädt der Ablage-Besitzer den Reiter, zieht das Register vorher nach
+  // (höchstens alle 30 s; sonst übernimmt der Takt im Hintergrund).
+  const owner = await ablageOwner().catch(() => null);
+  if (owner?.id === u.id && Date.now() - lastSyncAt() > Number(process.env.WERKBANK_ABLAGE_SYNC_THROTTLE_MS ?? 30_000)) {
+    try { const r = await syncAblage(owner); if (r.neu || r.verschoben || r.geaendert || r.geloescht || r.doppelt || r.schutz || r.skipped) log('ablage-abgleich', r); }
+    catch (e: any) { log('ablage-abgleich', { error: String(e?.message ?? e).slice(0, 200) }); }
+  }
   const { mine, shared } = await listFiles(u);
   const people = await teammates();
   const name = (id: string) => people.find((p) => p.id === id)?.name ?? '?';
@@ -1953,9 +2005,11 @@ on('GET', /^\/api\/files$/, async (req, res) => {
   const mineOut = [];
   for (const f of mine as any[]) {
     const pi = placeInfo(f);
-    // Vorschlag für „Noch einzusortieren“; für abgelegte Dateien die zuletzt gewählten Angaben (für „Verschieben“).
-    const v = f.kind === 'vault' ? null : f.ablage ?? await suggestFor(f, known);
-    mineOut.push({ ...shape(f), sharedWithNames: f.sharedWith.map(name), ...pi, vorschlag: v ? { ...v, name: schemaName(v, extname(f.name)) } : null });
+    // Vorschlag für „Noch einzusortieren“; für abgelegte Dateien die zuletzt gewählten Angaben bzw. die aus Pfad und
+    // Schema-Namen (für „Verschieben“, ohne Mongo-Abfrage je Datei — die Ablage hat Hunderte).
+    const v = f.kind === 'vault' ? null : f.ablage ?? (f.path && !isEingang(f.path) ? vorschlagAusPfad(f.path) : null) ?? await suggestFor(f, known);
+    const ort = f.kind !== 'vault' && f.path ? ortAus(f.path) : null;
+    mineOut.push({ ...shape(f), sharedWithNames: f.sharedWith.map(name), ...pi, ort, vorschlag: v ? { ...v, name: schemaName(v, extname(f.name)) } : null });
   }
   const notice: any = await wb().collection('scratch_notice').findOne({ _id: u.id as any });
   const admin = u.role === 'ADMIN';
@@ -1963,7 +2017,7 @@ on('GET', /^\/api\/files$/, async (req, res) => {
     mine: mineOut,
     shared: shared.map((f: any) => ({ ...shape(f), sharedWith: undefined, fehlt: placeInfo(f).fehlt })),
     maxMb: Math.round(cfg.fileMaxBytes / 1048576),
-    ablage: { teams: [...new Set(known.map((x) => x.team))], folders: known, arten: ARTEN },
+    ablage: { teams: [...new Set(known.map((x) => x.team))], folders: known, arten: ARTEN, besitzer: owner?.id === u.id, unklar: admin && !owner },
     scratch: notice ? { count: notice.count, bytes: notice.bytes, deleteFrom: notice.deleteFrom, files: notice.files, days: cfg.scratchDays } : null,
     backup: admin ? { nightly: listBackups(), keep: cfg.backupKeep, key: !!keyOf(), running: backupRunning() } : null,
   });
@@ -1987,6 +2041,36 @@ on('GET', /^\/api\/files\/([0-9a-f-]{36})\/download$/, async (req, res, m) => {
     'content-security-policy': "sandbox; default-src 'none'", 'cache-control': 'no-store',
   });
   createReadStream(filePath(f)).on('error', () => res.destroy()).pipe(res);
+});
+
+// Agenten-Ergebnisse (Plan dateien-vollständig, S3): Review-Pakete der Haupt-Sitzung und der Stränge — nur Admins, nur lesen.
+on('GET', /^\/api\/files\/agenten$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const runs = await wb().collection('orchestrator_runs').find({ userId: u.id }, { projection: { title: 1, url: 1, prompt: 1, startedAt: 1, 'review.artefakte': 1, 'review.gemacht': 1 } }).sort({ startedAt: -1 }).limit(500).toArray().catch(() => []);
+  const pakete = listPakete(cfg.reviewDir).map((p) => ({ ...p, strand: strandFor(p, runs as any[]) }));
+  send(res, 200, { pakete, ordner: !!pakete.length || existsSync(cfg.reviewDir) });
+});
+
+on('GET', /^\/api\/files\/agenten\/(\d{1,4}-[a-z0-9][a-z0-9-]*)\/(.+)$/, async (req, res, m, url) => {
+  await needAdmin(req);
+  let rel = '';
+  try { rel = m[2].split('/').map(decodeURIComponent).join('/'); } catch { throw new HttpError(400, 'Ungültiger Pfad.'); }
+  const abs = paketFile(cfg.reviewDir, m[1], rel);
+  if (!abs) throw new HttpError(404, 'Datei nicht gefunden.');
+  const ext = extname(abs).toLowerCase();
+  const name = rel.split('/').pop()!;
+  if (url.searchParams.get('vorschau') === '1') {
+    if (ext !== '.md' && ext !== '.txt') throw new HttpError(400, 'Vorschau nur für Markdown und Text.');
+    const text = readFileSync(abs, 'utf8').slice(0, 512 * 1024);
+    return send(res, 200, { name, html: ext === '.md' ? renderPaketMd(text, m[1], rel) : null, text: ext === '.txt' ? text : null });
+  }
+  const inline = url.searchParams.get('inline') === '1' && BILD_MIME[ext];
+  res.writeHead(200, {
+    'content-type': inline ? BILD_MIME[ext] : 'application/octet-stream', 'x-content-type-options': 'nosniff',
+    'content-disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`,
+    'content-security-policy': "sandbox; default-src 'none'", 'cache-control': 'private, max-age=60',
+  });
+  createReadStream(abs).on('error', () => res.destroy()).pipe(res);
 });
 
 // Plan 81, Schnitt 2: „Ablegen“ — Vorschlag bestätigen oder ändern; die Datei zieht in `<team>/<vorgang>/` der Ablage.
@@ -2115,7 +2199,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau)$/,
   const id = String(b.id ?? '');
   switch (m[1]) {
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null });
       return send(res, 200, r);
     }
@@ -2129,9 +2213,18 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau)$/,
     }
     case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
     case 'show': return send(res, 200, await showOrch(u, id));
-    case 'send': return send(res, 200, await sendOrch(u, id, b.text));
-    case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? ''));
+    case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand'));
+    case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? '', b.via === 'leitstand' ? 'leitstand' : 'knut'));
   }
+});
+
+// Leitstand (docs/plan-leitstand.md): Start nur über den internen Kanal, nur für Admins (startLeitstand prüft die Rolle).
+on('POST', /^\/internal\/orchestrator\/leitstand\/start$/, async (req, res) => {
+  const b = await body(req, 1 << 20);
+  const u = await orchPerson(req, b);
+  const r = await startLeitstand(u, { handoverText: b.handoverText || null });
+  log('leitstand gestartet', { user: u.id, id: r.id, conv: r.conv, beendet: r.ended.length });
+  return send(res, 200, r);
 });
 
 // Rückfragen an Knut: der Orchestrator fragt (intern), Knut antwortet in der Werkbank (unten, /api/orchestrator/…).
@@ -2443,6 +2536,18 @@ async function backgroundJobs() {
   setTimeout(filesTick, 20_000);
   setInterval(filesTick, 2 * 60_000);
 
+  // Ablage-Abgleich (Plan dateien-vollständig, S1): das Register folgt der Ablage — neu, verschoben, gelöscht.
+  const ablageTick = async () => {
+    try {
+      const owner = await ablageOwner();
+      if (!owner) return;
+      const r = await syncAblage(owner);
+      if (r.neu || r.verschoben || r.geaendert || r.geloescht || r.doppelt || r.schutz || r.skipped) log('ablage-abgleich', r);
+    } catch (e: any) { log('ablage-abgleich', { error: String(e?.message ?? e).slice(0, 200) }); }
+  };
+  setTimeout(ablageTick, 30_000);
+  setInterval(ablageTick, 5 * 60_000);
+
   // Plan 81, Schnitt 4 und 5: Arbeitsordner aufräumen (Ankündigung, dann löschen) und Nachtarchiv — stündlich geprüft.
   const houseTick = async () => {
     for (const person of (await teammates().catch(() => [])).filter((x) => allowed(x.email))) {
@@ -2479,9 +2584,9 @@ server.listen(cfg.port, cfg.host, () => log('listening', { host: cfg.host, port:
 if (process.env.WERKBANK_NO_JOBS !== '1') backgroundJobs();
 // Orchestrator-Stränge selbst fortsetzen (docs/plan-orchestrator-auto-weiter.md) — eigener Takt, auch ohne Hintergrundjobs.
 // „Konto frei“ nur mit Antwort der Brücke und mindestens zwei Konten (sonst wartet `rate_limit` die 30 min ab).
-startAutoWeiter({
-  userById: async (id) => { const u = await userById(id); return u && allowed(u.email) ? u : null; },
-  accountFree: async (u) => {
+const orchDeps = {
+  userById: async (id: string) => { const u = await userById(id); return u && allowed(u.email) ? u : null; },
+  accountFree: async (u: User) => {
     const list = await listClaudeAccounts(u);
     if (list.length < 2) return false;
     const r = await fetch(`${cfg.bridgeUrl}/internal/accounts-state?user=${encodeURIComponent(u.id)}`, { headers: bridgeInternal, signal: AbortSignal.timeout(1500) });
@@ -2490,5 +2595,10 @@ startAutoWeiter({
     return list.some((a: any) => !(ex[a.id] > Date.now()));
   },
   log,
-});
+};
+startAutoWeiter(orchDeps);
+// Stand je Strang festschreiben (Teil B, G1) — unabhängig vom Auto-Fortsetzen; ORCH_STATUS=off schaltet ab.
+startStatusTick(orchDeps);
+// Leitstand wecken (Plan 132, S2): eigener Durchgang im selben Takt; LEITSTAND_WAKE=off schaltet ab.
+startLeitstandTick(orchDeps);
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { server.close(); process.exit(0); });

@@ -113,8 +113,8 @@ export async function teammates(): Promise<User[]> {
 
 export async function userById(id: string): Promise<User | null> {
   if (!ObjectId.isValid(id)) return null;
-  const u: any = await lc().collection('users').findOne({ _id: new ObjectId(id) }, { projection: { email: 1, name: 1, username: 1 } });
-  return u ? { id, email: String(u.email).toLowerCase(), name: String(u.name || u.username || u.email) } : null;
+  const u: any = await lc().collection('users').findOne({ _id: new ObjectId(id) }, { projection: { email: 1, name: 1, username: 1, role: 1 } });
+  return u ? { id, email: String(u.email).toLowerCase(), name: String(u.name || u.username || u.email), role: u.role } : null;
 }
 
 /** HS256-JWT signieren (Gegenstück zu verifyJwt). */

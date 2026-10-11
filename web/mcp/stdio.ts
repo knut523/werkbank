@@ -26,7 +26,7 @@ export function serve(name: string, version: string, tools: Tool[], opts: { inpu
         case 'initialize':
           return reply({ protocolVersion: m.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: { listChanged: false } }, serverInfo: { name, version } });
         case 'ping': return reply({});
-        case 'tools/list': return reply({ tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema, annotations: { readOnlyHint: !/update|write/.test(name) } })) });
+        case 'tools/list': return reply({ tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema, annotations: { readOnlyHint: !/update|write|orch_(start|send|review|ask)/.test(name) } })) });
         case 'tools/call': {
           const t = tools.find((x) => x.name === m.params?.name);
           if (!t) return fail(-32602, `Unbekanntes Werkzeug: ${m.params?.name}`);

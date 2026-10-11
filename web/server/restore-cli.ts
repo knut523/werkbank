@@ -90,7 +90,7 @@ export async function restore(src: string, opts: { dryRun?: boolean } = {}) {
   }
   // Gegenprobe über die Werkbank-Verbindung: stehen die Dateien aus Mongo wieder an ihrem Ort?
   await connect();
-  const files = await wb().collection('files').find({ kind: { $ne: 'vault' }, path: { $exists: true } }).toArray();
+  const files = await wb().collection('files').find({ kind: { $nin: ['vault', 'ablage'] }, path: { $exists: true } }).toArray();
   report.check = { filesInDb: files.length, presentOnDisk: files.filter((f: any) => existsSync(inDocs(f.path))).length };
   await closeDb();
   return report;

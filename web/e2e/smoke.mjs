@@ -357,11 +357,13 @@ try {
     writeFileSync(f, 'Testinhalt für die Werkbank.\n');
     await a.getByLabel('Datei auswählen').setInputFiles(f);
     await a.getByRole('button', { name: 'Hochladen' }).click();
-    await a.locator('tr[data-file="e2e-notiz.txt"]').waitFor();
+    const row = a.locator('[data-ablage-baum] [data-file="e2e-notiz.txt"]');
+    await row.waitFor();
+    await row.getByRole('button', { name: /Aktionen für/ }).click();
     await a.getByLabel('e2e-notiz.txt teilen mit').selectOption({ label: U2.name });
-    await a.locator('tr[data-file="e2e-notiz.txt"]').getByRole('button', { name: 'Teilen' }).click();
+    await row.getByRole('button', { name: 'Teilen' }).click();
     await confirmDialog(a);
-    await a.locator('tr[data-file="e2e-notiz.txt"]').getByText(U2.name).waitFor();
+    await row.getByText(U2.name).waitFor();
     await shot(a, '15-dateien');
   });
 

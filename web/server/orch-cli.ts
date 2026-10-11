@@ -1,6 +1,6 @@
 // scripts/orch — die Haupt-Sitzung startet und koordiniert Werkbank-Agenten (docs/plan-orchestrator-agents.md).
 //
-//   orch start --title T --cwd DIR [--plan DATEI] [--shared] [--code --slug SPEC-SLUG] (--prompt TEXT | --prompt-file DATEI | Auftrag auf stdin)
+//   orch start --title T --cwd DIR [--plan DATEI] [--lauf NAME] [--shared] [--code --slug SPEC-SLUG] (--prompt TEXT | --prompt-file DATEI | Auftrag auf stdin)
 //     Git-Repo mit origin auf github.com/WirStrom1|knut523: vorher git fetch, „Stand: …“ im Chat; --code = frischer Worktree
 //     <repo>-agent-<id> (Zweig agent/<id>) von origin/develop|dev|main statt des angegebenen Ordners. Nie pushen.
 //     --code prüft vorher G0 (scripts/vorbau-check; Slug aus --slug oder spec: der Plandatei): Treffer/Stopp → kein Start,
@@ -14,6 +14,8 @@
 //   orch ask --title T --context TEXT --recommend TEXT [--option "Label :: Folge"]… [--strand <id>] [--link URL] [--plan DATEI]
 //     [--key <slug>#<id>] [--quelle drift]   Schlüssel offen/beantwortet → Exit 3 (keine zweite Frage); Tageskappe → Exit 4
 //   orch questions list [--open] [--json] · orch questions get <id> [--json] · orch questions withdraw <id>
+//   orch leitstand start --handover DATEI [--json]   Leitstand-Chat (Plan 132, nur Admin): Übergabe aus der Datei (Vorlage
+//     docs/leitstand-uebergabe-vorlage.md), ein vorhandener Leitstand wird beendet. Danach weckt die Werkbank ihn bei Ereignissen.
 //
 // Rückfragen (ask) nur für echte Entscheidungen Knuts — nicht für das, was sich nachlesen, selbst klären oder sicher
 // entscheiden lässt. Immer mit eigener Empfehlung. Antwort: `orch questions get <id>` (status beantwortet + answer).
@@ -94,7 +96,7 @@ async function main() {
     case 'start': {
       const prompt = typeof flags.prompt === 'string' ? flags.prompt : typeof flags['prompt-file'] === 'string' ? readFileSync(flags['prompt-file'], 'utf8') : await stdin();
       if (typeof flags.title !== 'string' || typeof flags.cwd !== 'string') die('start braucht --title und --cwd.');
-      const j = await call('start', { title: flags.title, cwd: flags.cwd, plan: typeof flags.plan === 'string' ? flags.plan : null, shared: flags.shared === true, code: flags.code === true, slug: typeof flags.slug === 'string' ? flags.slug : null, prompt });
+      const j = await call('start', { title: flags.title, cwd: flags.cwd, plan: typeof flags.plan === 'string' ? flags.plan : null, lauf: typeof flags.lauf === 'string' ? flags.lauf : null, shared: flags.shared === true, code: flags.code === true, slug: typeof flags.slug === 'string' ? flags.slug : null, prompt });
       if (flags.json) return console.log(JSON.stringify(j, null, 1));
       console.log(`gestartet: ${j.id}  ${j.url}\nOrdner:    ${j.cwd}${j.worktree ? ' (frischer Worktree)' : ''}${j.stand ? `\n${j.stand}` : ''}${j.plan ? `\nPlan:      ${j.plan}` : ''}${j.warning ? `\nHinweis:   ${j.warning}` : ''}`);
       return;
@@ -179,8 +181,18 @@ async function main() {
       if (sub === 'withdraw') { await call('questions/withdraw', { id: pos[1] }); console.log(`zurückgezogen: ${pos[1]}`); return; }
       die('questions list|get|withdraw');
     }
+    case 'leitstand': {
+      if (pos[0] !== 'start') die('leitstand start --handover DATEI');
+      if (typeof flags.handover !== 'string') die('leitstand start braucht --handover DATEI (Vorlage: docs/leitstand-uebergabe-vorlage.md).');
+      let handoverText = '';
+      try { handoverText = readFileSync(flags.handover, 'utf8'); } catch { die(`Kann ${flags.handover} nicht lesen.`); }
+      const j = await call('leitstand/start', { handoverText });
+      if (flags.json) return console.log(JSON.stringify(j, null, 1));
+      console.log(`Leitstand gestartet: ${j.id}  ${j.url}\nOrdner:    ${j.cwd}${j.ended.length ? `\nBeendet:   ${j.ended.map((e: any) => `${e.id} ${e.url}`).join(', ')}` : ''}`);
+      return;
+    }
     default:
-      console.log(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 22).map((l) => l.slice(3)).join('\n'));
+      console.log(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 21).map((l) => l.slice(3)).join('\n'));
   }
 }
 

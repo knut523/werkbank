@@ -9,14 +9,14 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, autoFor, type Sink } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, type Sink } from './sessions.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
 import { mockQuery } from './mock.ts';
 import { mcpCall, mcpStatus } from './mcpcall.ts';
 import { directCall } from './mcpdirect.ts';
-import { homeFor, ensureHome, atlassianServer, type ClaudeHome } from './claudehome.ts';
+import { homeFor, ensureHome, atlassianServer, leitstandMcp, type ClaudeHome } from './claudehome.ts';
 import { log } from './log.ts';
 import { testAccount, markExhausted, exhaustedOf, balanceStats } from './accounts.ts';
 import { fileURLToPath } from 'node:url';
@@ -33,6 +33,7 @@ const MCP_DIR = process.env.WERKBANK_MCP_DIR || join(dirname(fileURLToPath(impor
  * forge-review (falls eingerichtet), atlassian (Jira, OAuth je Claude-Konfiguration).
  */
 function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome, convId = ''): Record<string, unknown> {
+  const leit = orchKindOf(userId, convId) === 'leitstand';
   const node = process.execPath;
   const servers: Record<string, unknown> = {
     'vault-search': {
@@ -64,10 +65,11 @@ function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome, co
     servers.werkbank = {
       type: 'stdio', command: node, args: [join(MCP_DIR, 'werkbank-tools.ts')],
       // WERKBANK_CONV_ID: review_ready markiert nur den Lauf DIESER Unterhaltung (nie aus den Argumenten des Agenten).
-      env: { WERKBANK_URL: WEB_URL, WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_USER_ID: userId, WERKBANK_CONV_ID: convId, PATH: process.env.PATH || '' },
+      // WERKBANK_LEITSTAND: nur aus der Art in der Brücke (orch.json), nie aus einem Header (Plan 132, S3).
+      env: { WERKBANK_URL: WEB_URL, WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_USER_ID: userId, WERKBANK_CONV_ID: convId, PATH: process.env.PATH || '', ...(leit ? { WERKBANK_LEITSTAND: '1' } : {}) },
     };
   }
-  return { ...servers, ...atlassianServer() };
+  return { ...(leit ? leitstandMcp() : {}), ...servers, ...atlassianServer() };
 }
 
 /** Claude-Konten der Person in Reihenfolge (Werkbank, interner Kanal). chat = der Schlüssel aus der Anfrage. */
@@ -322,9 +324,20 @@ const server = createServer(async (req, res) => {
       if (ALLOWED_EMAILS.length && !ALLOWED_EMAILS.includes(email)) return json(res, 403, { error: 'Konto nicht freigeschaltet.' });
       const { problem, real } = orchDirProblem(String(b.dir ?? ''));
       if (problem) return json(res, 400, { error: problem });
-      try { registerOrchestration(userId, conv, real!); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
-      log('strang angemeldet', { user: userId, conv });
+      // Leitstand (Plan 132, S1): nur für LEITSTAND_EMAILS (Vorgabe: BRIDGE_AUTO_EMAILS), unabhängig von der Freigabeliste.
+      const kind = b.kind === 'leitstand' ? 'leitstand' : 'strand';
+      if (kind === 'leitstand') {
+        const leitEmails = String(process.env.LEITSTAND_EMAILS ?? process.env.BRIDGE_AUTO_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+        if (!email || !leitEmails.includes(email)) return json(res, 403, { error: 'Leitstand nur für freigeschaltete Admins (LEITSTAND_EMAILS).' });
+      }
+      try { registerOrchestration(userId, conv, real!, kind); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
+      log(kind === 'leitstand' ? 'leitstand angemeldet' : 'strang angemeldet', { user: userId, conv });
       return json(res, 200, { ok: true, dir: real, mode: autoFor({ email }) });
+    }
+    if (req.method === 'POST' && url.pathname === '/internal/orchestrate/end') {
+      if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
+      const b = await readBody(req);
+      return json(res, 200, { ok: endLeitstand(String(b.userId ?? ''), String(b.conv ?? '')) });
     }
     if (req.method === 'GET' && url.pathname === '/internal/orch-state') {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
