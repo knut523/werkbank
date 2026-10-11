@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, embedded, type Config } from './api.ts';
+import { api, embedded, openInParent, setChatOrigin, type Config } from './api.ts';
 import { Loading, Err } from './ui.tsx';
 import { Setup } from './pages/Setup.tsx';
 import { Wissen } from './pages/Wissen.tsx';
@@ -27,6 +27,12 @@ function useHash() {
   }, []);
   return h;
 }
+
+// Variablen, die LibreChat und die Werkbank gleich benennen und gleich meinen (LibreChat client/src/style.css).
+// Nur-Werkbank-Variablen (--chip-*, --link, --shadow) und die Flächen-Ausnahmen unter .embedded bleiben in styles.css.
+const SHARED_TOKENS = ['--presentation', '--text-primary', '--text-secondary', '--text-tertiary', '--surface-primary', '--surface-primary-alt',
+  '--surface-secondary', '--surface-tertiary', '--surface-hover', '--surface-submit', '--surface-submit-hover', '--surface-destructive',
+  '--surface-dialog', '--border-light', '--border-medium', '--border-heavy'];
 
 // Werkzeug statt Seite (Council-Bedingung 11): oben fünf Einträge, der Rest im Fuß. LibreChat-Leiste: dieselben fünf.
 const NAV = [
@@ -62,7 +68,7 @@ export function App() {
   const [menu, setMenu] = useState(false);
   const todayN = useTodayCount(hash, !!cfg?.user);
   useEffect(() => setMenu(false), [hash]);
-  const load = () => api<Config>('/api/config').then(setCfg, setErr);
+  const load = () => api<Config>('/api/config').then((c) => { setChatOrigin(c.librechatUrl); setCfg(c); }, setErr);
   useEffect(() => { load(); }, []);
   const toggleTheme = () => {
     const t = theme === 'dark' ? 'light' : 'dark';
@@ -71,16 +77,39 @@ export function App() {
     setTheme(t);
   };
 
-  // Eingebettet folgt Hell/Dunkel dem Chat (LibreChat setzt die Klasse "dark" auf <html>).
+  // Eingebettet folgt Hell/Dunkel dem Chat (LibreChat setzt die Klasse "dark" auf <html>), und die gemeinsamen Farben
+  // kommen aus LibreChats Variablen — eine Quelle; styles.css ist nur noch Rückfall für die direkte Web-App (:3070).
   useEffect(() => {
     if (!embedded) return;
     let root: HTMLElement | null = null;
     try { root = window.parent.document.documentElement; } catch { return; }
-    const apply = () => { const t = root!.classList.contains('dark') ? 'dark' : 'light'; document.documentElement.dataset.theme = t; setTheme(t); };
+    const apply = () => {
+      const t = root!.classList.contains('dark') ? 'dark' : 'light';
+      document.documentElement.dataset.theme = t;
+      const cs = window.parent.getComputedStyle(root!);
+      for (const name of SHARED_TOKENS) {
+        const v = cs.getPropertyValue(name).trim();
+        if (v) document.documentElement.style.setProperty(name, v); else document.documentElement.style.removeProperty(name);
+      }
+      setTheme(t);
+    };
     apply();
     const mo = new MutationObserver(apply);
     mo.observe(root, { attributes: true, attributeFilter: ['class'] });
     return () => mo.disconnect();
+  }, []);
+
+  // Eingebettet: Links zum Chat (target=_top, 14 Stellen) ohne Neuladen über LibreChats Router; Strg/Cmd/Umschalt/Mitte
+  // bleiben beim Browser (neuer Tab), fremde Adressen auch.
+  useEffect(() => {
+    if (!embedded) return;
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as Element | null)?.closest?.('a[target="_top"]') as HTMLAnchorElement | null;
+      if (a?.href && openInParent(a.href)) e.preventDefault();
+    };
+    document.addEventListener('click', onClick);
+    return () => document.removeEventListener('click', onClick);
   }, []);
 
   if (err) return <div className="page"><Err e={err} /></div>;
@@ -102,12 +131,8 @@ export function App() {
     : /^#\/dateien/.test(hash) ? <Dateien cfg={cfg} />
     : <Heute cfg={cfg} />;
 
-  // Eingebettet (LibreChat-Leiste: fünf Einträge) fehlt der Fuß — die übrigen Seiten als kleine Zeile darunter.
-  if (embedded) return (
-    <div className="embedded">{page}
-      {user && <nav className="more-row small" aria-label="Weitere Seiten">{MORE.map((n) => <a key={n.href} href={n.href} aria-current={n.match.test(hash) ? 'page' : undefined}>{n.ico} {n.label}</a>)}</nav>}
-    </div>
-  );
+  // Eingebettet: kein eigenes Gerüst — Navigation ist LibreChats Leiste (fünf Einträge + „Mehr“), Einrichtung im Kontomenü.
+  if (embedded) return <div className="embedded">{page}</div>;
   const current = [...NAV, ...MORE].find((n) => n.match.test(hash));
 
   return (

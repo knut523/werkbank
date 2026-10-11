@@ -37,6 +37,22 @@ export const embedded = (() => { try { return window.self !== window.top || new 
 /** Links zum Chat: eingebettet im selben Fenster (oben), sonst in einem neuen Tab. */
 export const chatTarget = embedded ? '_top' : '_blank';
 export function openChat(url: string) {
+  if (embedded && openInParent(url)) return;
   if (embedded) { try { window.top!.location.href = url; return; } catch { /* fremder Ursprung */ } }
   window.open(url, '_blank', 'noopener');
+}
+let chatOrigin = '';
+/** Öffentliche Chat-Adresse aus /api/config: Links, die der Server damit baut, zählen als derselbe Ursprung. */
+export function setChatOrigin(url?: string) { try { chatOrigin = url ? new URL(url).origin : ''; } catch { chatOrigin = ''; } }
+/** Eingebettet: Adresse im Chat-Fenster ohne Neuladen öffnen (LibreChat-Router, WerkbankRoute „werkbank-open“).
+ *  Nur Adressen desselben Ursprungs wie das Chat-Fenster; sonst false (der Aufrufer lädt dann normal). */
+export function openInParent(url: string): boolean {
+  if (window.parent === window) return false; // ?embed=1 ohne LibreChat drumherum
+  try {
+    const top = window.parent.location;
+    const u = new URL(url, top.href);
+    if (u.origin !== top.origin && u.origin !== chatOrigin) return false;
+    window.parent.postMessage({ type: 'werkbank-open', url: u.pathname + u.search + u.hash }, top.origin);
+    return true;
+  } catch { return false; }
 }

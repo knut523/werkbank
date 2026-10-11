@@ -78,7 +78,8 @@ DOMAIN_CLIENT=$LC_URL
 DOMAIN_SERVER=$LC_URL
 LIBRECHAT_PUBLIC_URL=$LC_URL
 WERKBANK_PUBLIC_URL=$WEB_URL
-CUSTOM_FOOTER="OLAF-Werkbank | [☀️ Heute]($WEB_URL/#/) | [🧭 Roadmap]($WEB_URL/#/roadmap) | [🗂️ Board]($WEB_URL/#/board) | [🔁 Sprint]($WEB_URL/#/sprint) | [📚 Wissen]($WEB_URL/#/wissen) | [🚀 Einrichtung]($WEB_URL/#/einrichtung)"
+# Fußzeile ohne Links: die Werkbank-Seiten stehen in der Leiste (eine Oberfläche); ohne CUSTOM_FOOTER zeigte LibreChat seine eigene.
+CUSTOM_FOOTER="OLAF-Werkbank · Pilot · Claude Code unter deinem eigenen Claude-Konto"
 # <<< werkbank-urls
 EOT
 cat "$tmp" > "$WB/.env.local"; rm -f "$tmp"
