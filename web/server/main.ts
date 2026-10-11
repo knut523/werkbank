@@ -39,7 +39,7 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
-import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira } from './local.ts';
+import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
 import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './timebox.ts';
 import { isMine, resolveIdentity, vienna } from './hygiene.ts';
@@ -48,7 +48,7 @@ import { suggestTickets, addJiraFrontmatter } from './links.ts';
 import { ansetzenMode, specGate, sprintEnd, ticketDraft, localDuplicates, dupJql, simJira, liveJira, runAnsetzen, specTicketState, specSlug, view as ansetzenView, draftHashOf, addSimField, DEFAULT_WORKSTREAM, type AnsetzenJira, type Dup } from './ansetzen.ts';
 import { collectDecisions, todayQuestions, todayPayload } from './fragen.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
-import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, type GoalNode } from './goals.ts';
+import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, rule1Goals, specProposals, autoEligible, type GoalNode } from './goals.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -1596,24 +1596,58 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
 
 on('GET', /^\/api\/goals$/, async (req, res) => {
   await needUser(req);
-  const im = await issueMap();
+  const im = await withAutoGoals();
   const g = goalsAll(im);
   const noGoal = [...im.values()].filter((i) => needsGoal(i, im, knownGoals(g))).length;
   send(res, 200, { file: GOALS_FILE(), missing: g.missing, roots: g.roots.map(stripTree), noGoal, labels: { goalPrefix: labelCfg().goalPrefix, exempt: exemptLabel() } });
 });
 
+// ---------- Automatisch zuordnen (docs/plan-ziele-auto.md, Council Runde 2) ----------
+const AUTO_RULE1 = 'auto: Regel 1';
+
+/** Regel 1 anwenden: Ticket-Key steht im Beleg genau einer Zeile aus ziele-olaf.md → dieses Ziel, als „auto: Regel 1“.
+ *  Läuft beim Laden der Ziele und nach jedem Jira-Abgleich; legt nur an, wo es noch keine Zuordnung und kein Label gibt. */
+async function applyAutoGoals(im: Map<string, Issue>): Promise<string[]> {
+  const text = readVault(GOALS_FILE());
+  if (!text) return [];
+  const known = knownGoals(goalsAll(im));
+  const done: string[] = [];
+  for (const [k, r] of rule1Goals(parseGoalsFile(text).goals)) {
+    const i = im.get(k);
+    if (i && autoEligible(i, im, known) && await autoSetGoal(k, r.ziel, `Steht im Beleg von ${r.ziel} (${GOALS_FILE().split('/').pop()}, Zeile ${r.line}).`, AUTO_RULE1)) done.push(k);
+  }
+  if (done.length) { log('ziele automatisch', { regel: 1, n: done.length }); jiraChanged(done, 'ziel'); }
+  return done;
+}
+const withAutoGoals = async () => { const im = await issueMap(); return (await applyAutoGoals(im)).length ? issueMap() : im; };
+
+/** Vorschlag je Ticket: Datei (bewusst entschieden) gewinnt; sonst Spec ziel: (nur Vorschlag, nur IDs aus ziele-olaf.md,
+ *  mehrdeutig → keiner). Nur für Tickets, die die Werkbank anfassen darf (autoEligible). Anzeige und Übernahme nutzen beide das. */
+async function proposals(im: Map<string, Issue>, known: Set<string>, p: ReturnType<typeof loadProposals>) {
+  const usable = (x: any) => x && (x.ziel === 'KEINS' || (known.has(x.ziel) && goalLevel(x.ziel) !== 'Gate'));
+  const text = readVault(GOALS_FILE());
+  const ids = new Set((text ? parseGoalsFile(text).goals : []).map((r) => r.id));
+  const spec = specProposals(roadmapSpecs(await assignments('spec')), ids);
+  return (k: string) => {
+    const f = p.map.get(k);
+    if (usable(f)) return { ...f!, quelle: 'datei' as const };
+    const i = im.get(k);
+    return i && autoEligible(i, im, known) ? spec.get(k) ?? null : null;
+  };
+}
+
 on('GET', /^\/api\/goals\/assign$/, async (req, res) => {
   await needUser(req);
-  const im = await issueMap();
+  const im = await withAutoGoals();
   const g = goalsAll(im);
   const p = loadProposals();
   const known = knownGoals(g);
-  // Nur Vorschläge auf bestehende, zuordenbare Ziele (kein Gate) oder KEINS vorauswählen.
-  const usable = (x: any) => x && (x.ziel === 'KEINS' || (known.has(x.ziel) && goalLevel(x.ziel) !== 'Gate'));
-  const tickets = [...im.values()].filter((i) => needsGoal(i, im, known)).map((i) => ({ ...richIssue(im, i, known), proposal: usable(p.map.get(i.key)) ? p.map.get(i.key)! : null }))
+  const proposalOf = await proposals(im, known, p);
+  const tickets = [...im.values()].filter((i) => needsGoal(i, im, known)).map((i) => ({ ...richIssue(im, i, known), proposal: proposalOf(i.key) }))
     .sort((a, b) => a.workstreamName.localeCompare(b.workstreamName, 'de') || a.key.localeCompare(b.key, 'de', { numeric: true }));
   send(res, 200, {
-    tickets, proposalFile: p.file, proposalError: p.error, proposals: tickets.filter((t) => t.proposal).length,
+    tickets, proposalFile: p.file, proposalError: p.error, proposals: tickets.filter((t) => t.proposal?.quelle === 'datei').length, computed: tickets.filter((t) => t.proposal?.quelle === 'spec').length,
+    auto: [...(await assignments('ticket')).values()].filter((a) => a.source === AUTO_RULE1 && a.ziel && im.has(a.key)).map((a) => ({ key: a.key, summary: im.get(a.key)!.summary, ziel: a.ziel, begruendung: a.begruendung, at: a.at })),
     goalIds: [...g.byId.values()].filter((n) => n.level !== 'Gate').map((n) => ({ id: n.id, level: n.level, result: valueOf(n.result) ?? n.id })),
     labels: { goalPrefix: labelCfg().goalPrefix, exempt: exemptLabel() }, dryRun: dryRun(),
   });
@@ -1675,9 +1709,14 @@ on('POST', /^\/api\/goals\/import$/, async (req, res) => {
   const high = (x: any) => (typeof x === 'number' ? (x <= 1 ? x >= 0.8 : x >= 80) : /^(hoch|high|sicher)$/i.test(String(x ?? '')));
   const keys = b.mode === 'keys' ? new Set((Array.isArray(b.keys) ? b.keys : []).map(String)) : null;
   const items = [...p.map.entries()].filter(([k, x]) => im.has(k) && needsGoal(im.get(k)!, im, known) && (keys ? keys.has(k) : high(x.sicherheit)) && (x.ziel === 'KEINS' ? x.begruendung.replace(/\s+/g, ' ').trim().length >= 5 : known.has(x.ziel) && goalLevel(x.ziel) !== 'Gate'))
-    .map(([k, x]) => ({ key: k, goal: x.ziel, begruendung: x.begruendung }));
+    .map(([k, x]) => ({ key: k, goal: x.ziel, begruendung: x.begruendung, quelle: 'datei' }));
+  // Vorschläge aus Specs nur einzeln (mode keys), nie mit „alle mit Sicherheit hoch“ — und nur, wo die Datei nichts anzeigt.
+  if (keys) { const prop = await proposals(im, known, p); for (const k of keys) { const x = prop(k); if (x?.quelle === 'spec') items.push({ key: k, goal: x.ziel, begruendung: x.begruendung, quelle: 'spec' }); } }
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, items, file: p.file });
-  const r = await assignGoals(u, items, im, true, 'vorschlag');
+  const fromFile = items.filter((x) => x.quelle === 'datei'), computed = items.filter((x) => x.quelle === 'spec');
+  const r1: any = fromFile.length ? await assignGoals(u, fromFile, im, true, 'vorschlag') : { results: [] };
+  const r2: any = computed.length ? await assignGoals(u, computed, im, true, 'vorschlag-spec') : { results: [] };
+  const r = { ok: true, results: [...r1.results, ...r2.results], toJira: goalsToJira() };
   send(res, 200, { ...r, imported: (r as any).results.filter((x: any) => x.ok).length });
 });
 
@@ -2293,6 +2332,7 @@ async function backgroundJobs() {
       if (!creds) return;
       const r = await syncMirror(creds, 'Intervall');
       log('jira sync', { count: r.count, removed: r.removed });
+      await applyAutoGoals(await issueMap());
     } catch (e: any) { log('jira sync', { error: String(e.message).slice(0, 200) }); }
   };
   setTimeout(jiraTick, 5000);
