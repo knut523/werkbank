@@ -18,25 +18,39 @@ const READ_TOOLS = new Set([
   'Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebSearch', 'WebFetch',
   'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'Skill', 'Task', 'Agent',
   'ToolSearch', 'BashOutput', 'TaskOutput', 'ExitPlanMode', 'ListMcpResourcesTool', 'ReadMcpResourceTool',
+  // Teilagent gibt sein Ergebnis ab (Plan 132, B13: war „unbekannt → Rückfrage“ und in Strängen damit abgelehnt).
+  'SubagentHandback',
 ]);
 
 // Lesende MCP-Werkzeuge erkennt man am Namen (Atlassian: get*/search*/lookup*/fetch …).
 const MCP_READ = /^(get|search|lookup|fetch|list|atlassianUserInfo|memory_(search|get|recent|status|relations|list_namespaces|selftest))/;
 
+// Git mit beliebigen globalen Optionen vor dem Unterbefehl (`git -C "a b" -c k=v --no-pager push`), Plan 132 (C6/A2): ohne
+// das liefen `git -C x push`/`git -C x merge` an den Mustern vorbei. Unterbefehl und Zweig enden mit (?![\w-]), damit
+// `merge-base` oder `main-fix` nicht treffen. Die beiden Options-Formen überlappen nicht (blankes -c/-C nur mit Argument):
+// sonst wächst das Backtracking exponentiell — 60× `-C` hielt den Brücken-Prozess über 2 min fest (Review 11.10.2026).
+// Optionen mit getrenntem Wert (`--git-dir /r`) sind eine eigene Form; die allgemeine Form nimmt sie und blankes -c/-C nicht.
+const GIT_VALUED = String.raw`(?:-[cC]|--(?:git-dir|work-tree|namespace|super-prefix|config-env))`;
+// Der Wert ist eine Folge aus Zitaten und einzelnen Zeichen ohne Leerraum/Anführungszeichen — genau eine Zerlegung
+// (Council-Diff R1: `"a"` passte als Zitat UND als \S+, 24× `-C "a"` brauchten 3 s).
+const GIT = String.raw`\bgit(?:\s+(?:${GIT_VALUED}\s+(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s"'])+|(?!${GIT_VALUED}(?:\s|$))-(?:-[\w-]+|\w[\w-]*)(?:=\S+)?))*\s+`;
+const git = (sub: string, rest = '') => new RegExp(GIT + sub + String.raw`(?![\w-])` + rest);
+const PROTECTED = String.raw`(?:refs\/heads\/)?(?:main|master|develop)(?![\w-])`;
+
 // Bash-Befehle, die immer gesperrt sind, auch mit Bestätigung: Merge, Force-Push, Push auf die geschützten Zweige.
 const BASH_BLOCKED: [RegExp, string][] = [
-  [/\bgit\s+merge\b/, 'git merge'],
+  [git('merge'), 'git merge'],
   [/\bgh\s+pr\s+merge\b/, 'GitHub-PR mergen'],
   [/\bgh\s+api\b[^|;&]*\/(merge|merges)\b/, 'Merge über die GitHub-API'],
   [/\/merge\b[^|;&]*github|github[^|;&]*\/merge\b/i, 'Merge über GitHub'],
-  [/\bgit\s+push\b[^|;&]*(\s--force\b|\s--force-with-lease\b|\s-f\b|\s\+\S)/, 'Force-Push'],
-  [/\bgit\s+push\b[^|;&]*[\s:](main|master|develop)\b/, 'Push auf main/master/develop'],
+  [git('push', String.raw`[^|;&]*(\s--force\b|\s--force-with-lease\b|\s-f\b|\s\+\S)`), 'Force-Push'],
+  [git('push', String.raw`[^|;&]*[\s:'"]` + PROTECTED), 'Push auf main/master/develop'],
 ];
 
 // GitHub schreiben (Knut, 06.10.2026: „push only with acceptance or orders“): immer erst nach „ja“ im Chat — auch im
 // Auto-Modus nie dem Klassifikator überlassen. Lesen (gh api ohne Schreib-Optionen, gh pr view/diff/list) bleibt frei.
 const BASH_GITHUB_WRITE: [RegExp, string][] = [
-  [/\bgit\s+push\b/, 'git push'],
+  [git('push'), 'git push'],
   [/\bgh\s+pr\s+(create|comment|review|edit|close|reopen|ready)\b/, 'GitHub-PR schreiben'],
   [/\bgh\s+(issue|release|repo|label|secret|variable|workflow|gist)\s+(create|edit|close|delete|comment|reopen|set|run|enable|disable|fork|rename|archive|upload)\b/, 'GitHub schreiben'],
   [/\bgh\s+api\b[^|;&]*(-X|--method)\s*(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],
@@ -91,6 +105,7 @@ export interface ClassifyContext {
   // Repos, Gedächtnis und andere MCP-Werkzeuge entscheidet der Klassifikator. Rückfrage bleibt für Jira- und
   // GitHub-Schreiben und Geheimnisse; die Sperren bleiben. Ohne Angabe: nur der Arbeitsordner (Stand 06.10.2026).
   scope?: 'arbeitsordner' | 'voll';
+  leit?: boolean;     // Leitstand-Chat (Plan 132): nur dort gibt es die orch_*-Werkzeuge
 }
 
 // Voller Auto-Modus: Bash fragt nur noch bei Geheimnissen, fremden Konfigurationen und Jira-Schreiben nach.
@@ -210,6 +225,25 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready')) return { cls: 'read' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
     if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
+    // Orchestrator-Werkzeuge (Plan 132, S3): nur im Leitstand. Lesen und Rückfragen an Knut frei; Stränge starten, Nachrichten
+    // schicken und prüfen entscheidet der Klassifikator; ein Strang außerhalb des Leitstand-Ordners braucht ein „ja“.
+    if (server === 'werkbank' && name.startsWith('orch_')) {
+      if (!ctx.leit) return { cls: 'blocked', why: 'Orchestrator-Werkzeuge gibt es nur im Leitstand' };
+      if (/^orch_(list|show|questions|ask)$/.test(name)) return { cls: 'read' };
+      if (name === 'orch_start' && ctx.workDir) {
+        const cwd = realish(resolve(ctx.workDir, String(input.cwd ?? '')));
+        if (!within(cwd, realish(resolve(ctx.workDir)))) return { cls: 'confirm', why: 'Strang außerhalb des Leitstand-Ordners' };
+      }
+      return ctx.workDir && ctx.scope === 'voll' ? { cls: 'auto' } : { cls: 'confirm' };
+    }
+    // PostHog (Plan 132, C5/A3; Namen in kebab-case): Löschen gesperrt, Lesen frei, alles andere — auch der Sammelaufruf
+    // `exec` — erst nach „ja“, nie dem Klassifikator überlassen (Feature-Flags wirken auf Produktion).
+    if (server === 'posthog') {
+      if (/(^|-)(delete|destroy|remove)(-|$)/.test(name)) return { cls: 'blocked', why: 'PostHog löschen' };
+      // „or“ in der Negativliste: `…-get-or-create` schreibt.
+      if (name === 'execute-sql' || (/(^|-)(get|list|retrieve|read|search)(-|$)/.test(name) && !/(^|-)(create|update|delete|set|add|remove|duplicate|rename|or)(-|$)/.test(name))) return { cls: 'read' };
+      return { cls: 'confirm' };
+    }
     // forge-review (Platzhalter): Review rechnen/lesen frei; nach GitHub posten ist wie alles GitHub-Schreiben
     // im Pilot gesperrt (Ergebnis bleibt Entwurf), mergen nie.
     if (server === 'forge-review') return /merge|post|publish|submit|comment|approve|request_changes/i.test(name) ? { cls: 'blocked', why: 'GitHub schreiben (forge-Ergebnis bleibt Entwurf)' } : { cls: 'read' };
@@ -233,15 +267,24 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
 // Hooks, Claude-Einstellungen oder .env. Muster sind keine Sandbox (siehe Plan, Council NOTES); die zweite Schicht ist
 // die Git-Umgebung ohne Zugangsdaten (sessions.ts, orchGitEnv).
 const ORCH_BASH_BLOCK: [RegExp, string][] = [
-  [/\bgit(?:\s+-[cC]\s+\S+|\s+--?[\w-]+(?:=\S+)?)*\s+(push|send-pack)\b/, 'git push'],
+  [git('(?:push|send-pack)'), 'git push'],
   [/\balias\.[\w-]+/, 'Git-Alias (könnte pushen)'],
   [/\bgit-(send-pack|receive-pack)\b/, 'git push'],
   [/\bcore\.hooksPath\b|\.git\/(hooks|config)\b/, 'Git-Hooks/-Konfiguration'],
   [/\bgh\s+(pr|issue|release|repo|label|secret|variable|workflow|gist|api)\b(?!\s+(view|list|diff|status|checks)\b)/, 'GitHub-CLI (nur lesen erlaubt: view/list/diff/status/checks)'],
   [/api\.github\.com|github\.com\/[^\s]*\.git\b/, 'GitHub direkt ansprechen'],
   [/(atlassian\.net|api\.atlassian\.com)/i, 'Atlassian/Jira direkt ansprechen'],
+  // Plan 132 (B7/C8): Wege zum internen Schlüssel der Werkbank — sonst könnte ein Strang Stränge starten oder den Leitstand
+  // ersetzen. Muster zielen auf Zugriffe (Pfade, Header), nicht auf Wörter: `grep environ datei` bleibt frei.
+  // Nur Adressen der lokalen Dienste (Review B/C: `./internal/…` in Go-Repos ist ein normaler Pfad).
+  [/\bscripts\/orch\b|\borch-cli\b|(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?\/(werkbank\/)?internal\/|x-werkbank-internal|WERKBANK_INTERNAL_TOKEN/i, 'interner Kanal der Werkbank'],
+  // `ps` nur als Befehl (nicht `docker ps web`); BSD-Form mit e = Umgebung anzeigen.
+  [/\/proc\/[^\s'"]*\/environ\b|(^|[\s/'"])\.env\.local\b|(^|[;&|(]\s*|\bsudo\s+)ps\s+(-\S+\s+)*[a-zA-Z]*e[a-zA-Z]*(\s|$)/, 'Umgebung/Geheimnisse anderer Prozesse lesen'],
 ];
 const ORCH_FILE_BLOCK = /(^|\/)(\.git|\.claude)(\/|$)|(^|\/)\.env[^/]*$/;
+// Lesen, das in einem Strang gesperrt ist (Plan 132, C8): Umgebung anderer Prozesse, .env-Dateien (außer Beispielen).
+const ORCH_READ_BLOCK = /^\/proc\/.*\/environ$|(^|\/)\.env(\.(?!example$|sample$|template$)[\w.-]+)?$/;
+const READ_PATH_TOOLS: Record<string, string> = { Read: 'file_path', Grep: 'path', Glob: 'path', NotebookRead: 'notebook_path', LS: 'path' };
 
 /** Grund, warum ein Aufruf in einem Orchestrator-Strang gesperrt ist — oder null. */
 export function orchestratorBlock(tool: string, input: Record<string, unknown>): string | null {
@@ -249,19 +292,59 @@ export function orchestratorBlock(tool: string, input: Record<string, unknown>):
     const cmd = String(input.command ?? '');
     for (const [re, why] of [...BASH_BLOCKED, ...BASH_GITHUB_WRITE, ...ORCH_BASH_BLOCK]) if (re.test(cmd)) return why;
     // git config: nur lesen (--get…/--list/-l); jede schreibende Form ist gesperrt.
-    for (const m of cmd.matchAll(/\bgit(?:\s+-[cC]\s+\S+|\s+--?[\w-]+(?:=\S+)?)*\s+config\b([^|;&\n]*)/g)) if (!/\s(--get(-all|-regexp)?|--list|-l)\b/.test(m[1])) return 'Git-Konfiguration ändern';
+    for (const m of cmd.matchAll(new RegExp(GIT + String.raw`config(?![\w-])([^|;&\n]*)`, 'g'))) if (!/\s(--get(-all|-regexp)?|--list|-l)\b/.test(m[1])) return 'Git-Konfiguration ändern';
     return null;
   }
   if (FILE_TOOLS.has(tool)) {
     const f = String(input.file_path ?? input.notebook_path ?? '');
     return ORCH_FILE_BLOCK.test(f) ? 'Git-/Claude-Konfiguration oder .env ändern' : null;
   }
+  if (READ_PATH_TOOLS[tool] && ORCH_READ_BLOCK.test(String(input[READ_PATH_TOOLS[tool]] ?? ''))) return 'Umgebung/Geheimnisse lesen';
   if (tool.startsWith('mcp__')) {
     const [, server, name = ''] = tool.split('__');
-    if (server === 'werkbank' && /^jira_/.test(name)) return 'Jira schreiben';
+    if (server === 'werkbank' && /^(jira_|orch_)/.test(name)) return name.startsWith('orch_') ? 'Orchestrator-Werkzeuge' : 'Jira schreiben';
     if (server === 'atlassian' && !MCP_READ.test(name) && name !== 'authenticate' && name !== 'complete_authentication') return 'Jira/Confluence schreiben';
     if (/github/i.test(server) && !MCP_READ.test(name)) return 'GitHub schreiben';
     if (server === 'forge-review' && /merge|post|publish|submit|comment|approve|request_changes/i.test(name)) return 'GitHub schreiben';
+  }
+  return null;
+}
+
+// ---------- Leitstand (docs/plan-leitstand.md, S4) ----------
+// Knuts Orchestrator-Chat: Auto-Modus „voll“, aber vor allen Klassen (und vor der Arbeitsordner-Regel): Vault-git gesperrt;
+// Live-Instanz, crontab, ~/bin, Git-Hooks/-Konfiguration, .claude/ und .env sowie Dateien außerhalb von Arbeitsordner, eigenem
+// Scratch und Vault brauchen ein „ja“. Muster sind keine Sandbox (Bash-Restrisiko S0, im Plan bewertet).
+const VAULT_GIT = (vault: string) => {
+  const v = vault.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(String.raw`\bgit\s+(?:\S+\s+)*?(?:-C\s+["']?${v}(?:["'/\s]|$)|--git-dir=?\s*["']?${v}|--work-tree=?\s*["']?${v})|GIT_(?:DIR|WORK_TREE)=["']?${v}|\b(?:cd|pushd)\s+["']?${v}(?:["'/\s;&]|$)[^|]*?\bgit\b|${v}\/\.git\b`);
+};
+const LEIT_BASH_CONFIRM: [RegExp, string][] = [
+  [/werkbank-dev\b|\bwerkbank\.sh\b/, 'Live-Instanz der Werkbank'],
+  [/\bcrontab\b/, 'crontab'],
+  [/(~|\$HOME|\/home\/[^/\s]+)\/bin\b/, '~/bin'],
+  [/\bsystemctl\b/, 'systemctl'],
+  [/(^|[\s/'"])\.claude(\/|\b)|(^|[\s/'"])\.env\b|\.git\/(hooks|config)\b|\bcore\.hooksPath\b/, 'Claude-/Git-Konfiguration oder .env'],
+];
+
+/** Leitstand: gesperrt / Rückfrage (mit Grund) / null = normale Einordnung. Läuft vor classify (Plan 132, C7/D4). */
+export function leitstandCheck(tool: string, input: Record<string, unknown>, ctx: { workDir?: string; scratch?: string }): { cls: 'blocked' | 'confirm'; why: string } | null {
+  const vault = realish(resolve(VAULT_DIR));
+  if (tool === 'Bash') {
+    const cmd = String(input.command ?? '');
+    // Sehr lange Befehle prüft niemand mit Mustern (VAULT_GIT wächst quadratisch): immer „ja“ (Council-Diff R1).
+    // Billige Vorprüfung zuerst: Auffüllen macht aus der Vault-git-Sperre keine Rückfrage (Council-Diff R2).
+    if (cmd.length > 16_000) return /\bgit\b/.test(cmd) && (cmd.includes(VAULT_DIR) || cmd.includes(vault)) ? { cls: 'blocked', why: 'git im Vault (langer Befehl)' } : { cls: 'confirm', why: 'sehr langer Befehl' };
+    if (VAULT_GIT(VAULT_DIR).test(cmd) || (vault !== VAULT_DIR && VAULT_GIT(vault).test(cmd))) return { cls: 'blocked', why: 'git im Vault' };
+    for (const [re, why] of LEIT_BASH_CONFIRM) if (re.test(cmd)) return { cls: 'confirm', why };
+    return null;
+  }
+  if (FILE_TOOLS.has(tool)) {
+    const f = String(input.file_path ?? input.notebook_path ?? '');
+    const target = realish(resolve(ctx.workDir ?? '/', f));
+    if (within(target, vault)) return /(^|\/)\.git(\/|$)/.test(target.slice(vault.length)) ? { cls: 'blocked', why: 'git im Vault' } : null;
+    if (ORCH_FILE_BLOCK.test(target)) return { cls: 'confirm', why: 'Git-/Claude-Konfiguration oder .env' };
+    const own = [ctx.workDir, ctx.scratch].filter(Boolean).map((d) => realish(resolve(d!)));
+    if (!own.some((d) => within(target, d))) return { cls: 'confirm', why: 'außerhalb von Leitstand-Ordner, Scratch und Vault' };
   }
   return null;
 }
@@ -460,8 +543,10 @@ function fence(s: string, lang = 'text'): string {
 }
 
 /** "ja" / "nein" / sonstiger Text aus der Antwort des Nutzers. */
-export function parseAnswer(text: string): 'yes' | 'no' | 'other' {
+export function parseAnswer(text: string, strict = false): 'yes' | 'no' | 'other' {
   const t = text.trim().toLowerCase().replace(/[.!\s]+$/, '');
+  // Leitstand (Plan 132, B5): nur das ausdrückliche Wort bzw. der Knopf — ein beiläufiges „ok“ am Handy gibt nichts frei.
+  if (strict) return t === 'ja' || t === 'yes' ? 'yes' : t === 'nein' || t === 'no' ? 'no' : 'other';
   if (/^(ja|j|yes|y|ok|okay|passt|mach|mach das|go|jawohl|klar|ja bitte|bitte)$/.test(t)) return 'yes';
   if (/^(nein|n|no|nö|stopp|stop|abbrechen|lieber nicht|nicht)$/.test(t)) return 'no';
   return 'other';

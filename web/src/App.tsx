@@ -11,6 +11,7 @@ import { Dateien } from './pages/Dateien.tsx';
 import { Timebox } from './pages/Timebox.tsx';
 import { Ziele } from './pages/Ziele.tsx';
 import { Heute } from './pages/Heute.tsx';
+import { Leitstand } from './pages/Leitstand.tsx';
 import { useTodayCount } from './beimir.tsx';
 
 function useHash() {
@@ -41,6 +42,7 @@ const NAV = [
   { href: '#/board', label: 'Board', ico: '🗂️', match: /^#\/board/ , f: 'board' },
   { href: '#/sprint', label: 'Sprint', ico: '🔁', match: /^#\/sprint/ , f: 'sprint' },
   { href: '#/wissen', label: 'Wissen', ico: '📚', match: /^#\/wissen/ , f: 'wissen' },
+  { href: '#/leitstand', label: 'Leitstand', ico: '🛰️', match: /^#\/leitstand/ , f: 'leitstand' },
 ];
 const MORE = [
   { href: '#/timebox', label: 'Mein Tag', ico: '⏱️', match: /^#\/timebox/ , f: 'timebox' },
@@ -135,6 +137,7 @@ export function App() {
     : /^#\/roadmap/.test(hash) ? <Roadmap cfg={cfg} hash={hash} />
     : /^#\/skills/.test(hash) ? <Skills cfg={cfg} />
     : /^#\/dateien/.test(hash) ? <Dateien cfg={cfg} />
+    : /^#\/leitstand/.test(hash) ? <Leitstand cfg={cfg} hash={hash} />
     : <Heute cfg={cfg} />;
 
   // Eingebettet: kein eigenes Gerüst — Navigation ist LibreChats Leiste (fünf Einträge + „Mehr“), Einrichtung im Kontomenü.

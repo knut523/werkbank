@@ -768,8 +768,53 @@ scripts/orch questions list --open · scripts/orch questions get <id> · scripts
   „Wartet auf dich“ (zählt in „Heute (n)“, auch an der Sonne in der LibreChat-Leiste).
 - **Grenzen:** LibreChat `CONCURRENT_MESSAGE_MAX` (jetzt 5) und Brücke `BRIDGE_MAX_PARALLEL_CHATS` (3) laufende Züge je
   Konto; ein Zug höchstens 40 Schritte / 15 min, dann `waiting` mit „`send <id> weiter`“.
+- **Seit Plan 132 (Leitstand)** zusätzlich im Strang gesperrt: Wege zum internen Kanal (`scripts/orch`, `/internal/`,
+  `x-werkbank-internal`, `/proc/…/environ`, `.env.local`, `ps e…`). Für alle Chats erkennen die Push-/Merge-Muster
+  jetzt globale Git-Optionen (`git -C x push`, `-c k=v`, `--git-dir`) und `refs/heads/main`; `git merge-base` wird
+  nicht mehr fälschlich gesperrt. `SubagentHandback` ist lesend (Teilagenten konnten in Strängen ihr Ergebnis nicht abgeben).
 - **Zweite Instanz zum Testen:** `scripts/isoliert.sh start|stop|status` (Web 3170, LibreChat 3180, Brücke 3190, Mongo
   27180, eigenes `.runtime-iso/`), CLI dort mit `WERKBANK_URL=http://127.0.0.1:3170 WERKBANK_ENV_FILE=.runtime-iso/.env.local`.
+
+## Leitstand (11.10.2026)
+
+Knut, 11.10.2026: der Orchestrator wird ein Werkbank-Chat auf der Brücke, damit keine IDE mehr nötig ist und beide
+Claude-Konten genutzt werden. Plan, Proben und Council (R1 HOLD → R3 PASS): `docs/plan-leitstand.md`.
+
+```bash
+scripts/orch leitstand start --handover ~/work/knut/leitstand-uebergabe.md   # Vorlage: docs/leitstand-uebergabe-vorlage.md
+```
+
+- **Ein Chat „Leitstand · TT.MM.“** in Knuts Konto (Lesezeichen „Leitstand“), nur für Admins (`LEITSTAND_EMAILS`, Vorgabe
+  `BRIDGE_AUTO_EMAILS`; in der Werkbank Rolle `ADMIN`; nicht über `WERKBANK_TEAM_FEATURES` freigebbar). Ein neuer Start
+  beendet den alten: die Brücke meldet ihn ab, er nimmt keine Züge mehr an. Arbeitsordner `WERKBANK_LEITSTAND_DIR`
+  (Vorgabe `~/work/knut`).
+- **Werkzeuge statt Bash:** im Leitstand hat der Werkbank-MCP `orch_start`, `orch_list`, `orch_show`, `orch_send`,
+  `orch_review`, `orch_ask`, `orch_questions` (gleiche Routen wie `scripts/orch`). Anderswo gibt es sie nicht, und
+  die Brücke sperrt sie dort. `orch_send` setzt den Deckel eines Strangs nicht zurück — das tut nur Knut.
+- **Wecken:** meldet ein Strang „fertig“, braucht er eine Antwort, ist er blockiert, hat er seinen Deckel erreicht oder
+  review_ready gemeldet, oder beantwortet Knut eine Rückfrage, legt die Werkbank eine Nachricht „🛰️ Leitstand-Meldung
+  (automatisch …)“ in den Leitstand — gebündelt (60 s entprellt), nur wenn er frei ist, mit `#leitstand-<batch>` in der
+  letzten Zeile. Erst wenn die Brücke einen Zug mit dieser Kennung meldet, gilt sie als zugestellt; sonst nach 3 min
+  erneut (höchstens 5 Versuche je Ereignis). Deckel 12 Weckungen/h und 60/Tag, dann eine Rückfrage in „Heute“.
+  Schritt-/Zeitgrenzen des Leitstands selbst → „weiter“ in derselben Meldung, höchstens 3 hintereinander.
+  Auszüge aus Strängen stehen eingezäunt als **Daten** in der Meldung; die Regeln stehen im Systemtext.
+- **Grenzen:** 200 Schritte, 60 min je Zug (`LEITSTAND_MAX_TURNS`, `LEITSTAND_TURN_TIMEOUT_S`); zählt nicht gegen
+  `BRIDGE_MAX_PARALLEL_CHATS`; seine Rückfrage wird weder vom Leerlauf (15 min) noch von fünf anderen offenen
+  Rückfragen beendet. `Monitor` ist gesperrt (hielte den Zug offen), Hintergrund-Bash stirbt mit dem Zug (Probe im Plan).
+- **Rechte (Auto-Modus „voll“ plus):** Merge, Force-Push, Push auf main/master/develop und git im Vault gesperrt; Push,
+  Jira/Confluence, Live-Instanz, crontab, `~/bin`, `systemctl`, `.git/`-Hooks/-Konfiguration, `.claude/`, `.env*` und
+  Dateien außerhalb von Arbeitsordner, Scratch und Vault nur nach **genau „ja“** (ein „ok“ gibt im Leitstand nichts frei).
+  Eine Leitstand-Meldung beantwortet nie eine offene Rückfrage.
+- **Zusatz-MCP:** compartment (Gedächtnis) und PostHog aus `LEITSTAND_MCP_FILE` (Vorgabe `templates/leitstand/mcp.json`).
+  PostHog: lesen frei, schreiben nach „ja“, löschen gesperrt.
+- **Heute** (Admins): Zeile „🛰️ Leitstand: läuft / wartet auf dich / bereit · öffnen“.
+- Not-Aus fürs Wecken: `LEITSTAND_WAKE=off`.
+- **Eine Oberfläche (Teil B):** Seite **Leitstand** in der Werkbank (nur Admins): alle Stränge je Lauf, zugeklappt
+  („Flex — 3 Stränge · 2 fertig · 1 wartet“), Status läuft / wartet / fertig / gestoppt, Zähler „automatisch fortgesetzt“, Link
+  zum Chat und zum Bericht (`review-pakete/NNN-*/bericht.md`, sicher gelesen, als Text gezeigt). Lauf: `orch start --lauf NAME`
+  (Lesezeichen „Orch · NAME“), sonst der Titelteil vor „:“. Fertige Stränge stehen auf **Heute** in „Wartet auf dein Review“ —
+  „Passt“ (geprüft, ohne Jira) oder „Nacharbeit“ (Nachricht in denselben Chat). Ein eigener Takt (`ORCH_STATUS=off` = aus)
+  schreibt den Stand je Strang fest; „Heute“ fragt nie die Brücke. Der Leitstand kann Stränge nur ablegen, Knuts „Passt“ ersetzt er nicht.
 
 ## Roadmap-Automatik (08.10.2026)
 

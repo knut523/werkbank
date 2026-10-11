@@ -172,9 +172,13 @@ before(async () => {
       await L.collection('conversations').updateOne({ conversationId, user: p.id }, { $setOnInsert: { title: 'New Chat', tags: [] } }, { upsert: true });
       await L.collection('messages').insertOne({ messageId: body.messageId, parentMessageId: body.parentMessageId, conversationId, user: p.id, isCreatedByUser: true, text: body.text, createdAt: new Date() });
       json(200, { streamId: conversationId, conversationId, status: 'started' });
+      // Nach dem Testende ist die Brücke weg: kein unbehandelter Fehler aus einem noch laufenden Zug.
       const r = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/chat/completions`, { method: 'POST', headers: { authorization: 'Bearer mock-token', 'content-type': 'application/json', 'x-librechat-user-id': p.id, 'x-librechat-conversation-id': conversationId, 'x-librechat-user-email': p.email },
-        body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: body.text }] }) });
-      const text = (await r.text()).split('\n').filter((l) => l.startsWith('data: {')).map((l) => JSON.parse(l.slice(6)).choices[0]?.delta?.content ?? '').join('');
+        body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: body.text }] }) }).catch(() => null);
+      if (!r) return;
+      const raw = await r.text().catch(() => null);
+      if (raw === null) return;
+      const text = raw.split('\n').filter((l) => l.startsWith('data: {')).map((l) => JSON.parse(l.slice(6)).choices[0]?.delta?.content ?? '').join('');
       await L.collection('messages').insertOne({ messageId: randomUUID(), parentMessageId: body.messageId, conversationId, user: p.id, isCreatedByUser: false, text: '', content: [{ type: 'text', text }], createdAt: new Date() });
       return;
     }
@@ -355,7 +359,9 @@ test('Auto-weiter DoD 1: Strang endet am Schrittlimit → neuer Zug ohne Zutun (
   assert.ok(Date.now() - t0 < 60_000);
   assert.equal(s.autoWeiter, 1, JSON.stringify(s));
   assert.match((await orch(['list'])).out, /automatisch fortgesetzt \(1\)/, 'Zähler in orch list (DoD 6)');
-  const msgs = await msgsOf(j.conv);
+  // Unter Last speichert der Nachbau die letzte Antwort etwas später — kurz darauf warten statt sofort zu zählen.
+  let msgs = await msgsOf(j.conv);
+  for (let i = 0; i < 25 && msgs.length < 4; i++) { await pause(200); msgs = await msgsOf(j.conv); }
   assert.equal(msgs.length, 4, 'Auftrag, Limit-Antwort, „weiter“, Antwort');
   assert.match(textOf(msgs[1]), /Viel zu tun/);
   assert.equal(textOf(msgs[2]), 'weiter (automatisch fortgesetzt: Schrittlimit, 1/2)');
