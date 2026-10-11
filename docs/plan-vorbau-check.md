@@ -1,6 +1,6 @@
 # Plan — G0 Prüfung vor dem Bau + täglicher Abgleich (Plan 127)
 
-**Status:** PLAN ONLY (11.10.2026), noch kein Code. Prozess: `prozess-v3` (Council Runde 3 ausstehend).
+**Status:** PLAN ONLY (11.10.2026), noch kein Code. Prozess: `prozess-v4` (Council Runde 4 ausstehend).
 **Freigabe Knut 11.10.:** Abgleich mit GitHub „passt“; „regelmäßig + Teil von plan-to-pr“.
 **branch:** feat/vorbau-check · **Repos:** knut523/werkbank (Skript + Aufruf beim Bau-Start), olaf-produkt-roadmap-Skill (drift.py-Abschnitt).
 
@@ -16,7 +16,7 @@ Ein Morgenbericht allein reicht nicht (Council R1): es braucht einen Stopp vor d
 5. Erprobung des generischen plan-to-pr-Absatzes „Phase 2.5b“ in der Werkbank-Agentenanweisung und im Skill olaf-produkt-roadmap.
 
 ## Definition of Done (Prüfsätze)
-1. Fixture A: Slug, dessen Plandatei auf `origin/develop` liegt → `treffer` mit SHA.
+1. Fixture A: gemergter fremder Code-PR mit Head-Branch = `branch:` des Plans auf `origin/HEAD` des Repos → `treffer` mit SHA.
 2. Fixture B: Slug als Branch eines offenen fremden PRs → `treffer` mit PR-Link.
 3. Fixture C: frischer Slug → `frei`.
 4. Fixture D: eigener Branch = `branch:` im Plan-Frontmatter mit eigenem PR → `fortsetzen`, kein Treffer.
@@ -28,7 +28,18 @@ Ein Morgenbericht allein reicht nicht (Council R1): es braucht einen Stopp vor d
 10. Zwei drift-Läufe hintereinander legen dieselbe Rückfrage genau einmal an; beantwortete Schlüssel werden nicht neu angelegt; > 5 neue pro Tag werden gekappt.
 11. drift.py liest den Integrationsstand per `git ls-tree origin/<integ>`, nicht den Arbeitsbaum.
 12. Cron steht auf 06:30; drift- und dienste-Bericht landen im selben Morgenort.
-13. Fehlalarme werden protokolliert (Rückfrage + gewählter Knopf).
+13. Fehlalarme (Rückfrage + gewählter Knopf) und Fehltreffer (nachträglich entdeckter Doppelbau) werden protokolliert; Bilanz nach 4 Wochen.
+14. Fixture E spielt den Vorfall vom 08.10. mit echten SHAs nach (Spec-, Plan- und Branch-Slug verschieden; Treffer über `spec:` bzw. `**Spec:**`) → `treffer`.
+15. Fixture F: eigener gemergter Plan-PR ohne Code → `fortsetzen`; Plandatei mit fremdem `branch:` → `treffer (geplant von anderem)`.
+16. Fixture G: fremder PR mit gleichem Branch-Namen (anderer Autor, Head-SHA nicht lokal) → `treffer`.
+17. Fetch-Pfad nutzt `GIT_VW_READ=1`; ohne Lesetoken → Stopp ohne Knopf, Nachtbau aus; nachts nicht prüfbar → genau ein Morgeneintrag.
+18. drift.py ohne installiertes `vorbau-check` → Abschnitt übersprungen mit Hinweiszeile, kein Fehler.
+19. Pläne ohne `spec:`/`branch:` (Altpläne) → Kopfzeile `**Spec:**` wird gelesen; fehlt auch die → Hinweis „Identität unbekannt“, kein stilles `frei`.
+
+## Wer besitzt was
+- `scripts/vorbau-check` + Aufruf beim Bau-Start: `knut523/werkbank` (Knut, privat).
+- drift.py-Abschnitt: Team-Skill olaf-produkt-roadmap (`/vault/_meta/dist-skill/…/plan-vault-drift.py`), ruft vorbau-check nur, wenn vorhanden.
+- Morgenort: drift 06:30 + `~/bin/dienste --bericht` 06:50 schreiben nach `daily-debrief/morgen-<datum>.md`.
 
 ## Vorbedingungen (Knut)
 - Neues GitHub-Lesetoken in Vaultwarden (das bisherige „Github wirstrom read only“ antwortet 401).
