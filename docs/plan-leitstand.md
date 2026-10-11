@@ -1,6 +1,6 @@
 # Plan 132 — Leitstand-Chat auf der Brücke
 
-**Status:** Entwurf 11.10.2026, Council R1 HOLD (0,7), R2 GO mit Auflagen — Bedingungen B1–B14 und C1–C9 eingearbeitet, vor R3. **branch:** feat/leitstand (Basis feat/orch-auto-weiter). Lokal, nicht ausgerollt.
+**Status:** Entwurf 11.10.2026, Council R1 HOLD (0,7), R2 GO mit Auflagen, **R3 PASS (0,75)** — Bedingungen B1–B14, C1–C9, D1–D4, A1–A5 eingearbeitet; Bau freigegeben. **branch:** feat/leitstand (Basis feat/orch-auto-weiter). Lokal, nicht ausgerollt.
 > Knut, 11.10.2026 („ok go“): Der Orchestrator — heute eine Claude-Code-CLI-Sitzung im Terminal/IDE — wird ein Werkbank-Chat auf
 > der claude-bridge. Grund: zwei Claude-Konten; die Brücke verteilt/failovert schon auf beide, Remote Control ginge nur mit einem.
 
@@ -221,6 +221,21 @@ Auto-Modus „voll“ wie Knuts Chats (Klassifikator), dazu fest im Wächter **v
 28. Leitstand-„weiter“: `rate_limit` wartet wie bei Strängen; nach `LEITSTAND_WEITER_MAX` hintereinander eine Rückfrage, kein weiteres „weiter“ (Test, C4).
 29. Wächter-Muster: `git merge-base` und `git push origin main-fix` werden nicht mehr gesperrt; `git -C "a b" push` fragt (Test, C6).
 30. `orchStatus` nennt bei `timeout` kein festes „15 min“ mehr (Test, B12).
+31. Die Batch-Kennung zählt nur in der **letzten Zeile** der Nachricht, als zufällige ID; eine Kennung im Strang-Auszug bestätigt nichts (Test, D1/A5).
+32. Mongo-Filter für Stränge ist `kind ≠ leitstand` (nicht `kind = strand`): ein altes Dokument ohne `kind` erscheint weiter in `listOrch` und
+    `autoWeiterTick` (Test, D2).
+33. Eine Meldung (`#leitstand-…` in der letzten Zeile), die auf eine offene Rückfrage trifft, **löst sie nicht auf**: die Brücke antwortet
+    „wartet auf eine Rückfrage“ ohne Zug, die Rückfrage bleibt offen, das Ereignis geht über den 3-min-Weg erneut (Test, A1).
+34. Push/Merge-Muster erkennen beliebige globale Git-Optionen vor dem Unterbefehl (`-C "a b"`, `-c k=v`, `--git-dir=…`, `--no-pager`) und
+    `env …`/`command git` davor — eine gemeinsame Präfix-Regel für alle Chats und Stränge (Test je Form, A2).
+35. PostHog: Sperre über `(^|-)(delete|destroy|remove)(-|$)` (auch `delete-feature-flag`); frei nur Namen, die mit `(^|-)(get|list|retrieve|read|search)(-|$)`
+    passen **und** kein `create`/`update`/`delete` enthalten, sowie genau `execute-sql`; alles andere Rückfrage (Test mit echten Namen, A3/D4).
+36. Deckel: gezählt werden nur **zugestellte** Weckungen; Neusendungen haben einen eigenen Deckel (`LEITSTAND_WAKE_RETRY_MAX`, 5 je Ereignis, danach
+    verworfen mit Zeile in der nächsten Meldung); Knuts Antwort „Fortsetzen“ auf eine Deckel-Rückfrage setzt den jeweiligen Zähler zurück und wird
+    sofort zugestellt (nicht unter dem Deckel) (Test, A4).
+37. Das Ziel einer Neusendung ist immer der **aktuelle** Leitstand (je Sendung neu bestimmt); `lastBatch` liegt in `orch.json` (überlebt den
+    Neustart der Brücke) (Test, A5).
+38. Leitstand-Prüfungen und PostHog-Regel stehen im Wächter vor der Lese-Freigabe und vor der allgemeinen MCP-Regel; je eine Umgehungsprobe (D4).
 
 ## 5. Einstellungen
 | Name | App | Wert / Vorgabe | wer setzt |
@@ -235,6 +250,7 @@ Auto-Modus „voll“ wie Knuts Chats (Klassifikator), dazu fest im Wächter **v
 | `LEITSTAND_WAKE_MAX_PER_H` / `_PER_DAY` | Web | 12 / 60 | Vorgabe im Code |
 | `LEITSTAND_WAKE_RETRY_MS` | Web | 180000 | Vorgabe im Code (Tests kürzer) |
 | `LEITSTAND_WEITER_MAX` | Web | 3 | Vorgabe im Code |
+| `LEITSTAND_WAKE_RETRY_MAX` | Web | 5 | Vorgabe im Code |
 Kein Infra-Repo: die Werkbank läuft selbst gehostet; Vorgaben im Code. Keine neuen Geheimnisse.
 
 ## 6. Nicht in diesem Schnitt
@@ -297,3 +313,22 @@ Auflagen (eingearbeitet oben):
 7. C7 [must-fix] Reihenfolgetest Leitstand-Prüfung vor Arbeitsordner-Regel (S4, DoD 16).
 8. C8 [must-fix] `Read`/`Grep` auf `/proc/…/environ` und `.env*` sowie `ps e…` im Strang gesperrt (S4, DoD 18).
 9. C9 [must-fix] Alle Mongo-Wege filtern `kind` (S1, DoD 14/22).
+
+### R3 (11.10.2026, Plan mit C1–C9) — PASS (0,75)
+Zwei getrennte Durchgänge (der erste Versuch scheiterte am Kontingent beider Teilagenten, neu gestartet). Fachprüfer: **PASS 0,8**, „nichts
+blockiert den Bau“, C1–C9 baubar und mit DoD-Satz. Gegenstimme: **PASS mit Auflagen**, stärkster Punkt A1 (eine Meldung, die in eine offene
+Rückfrage fällt, landet als „die Person hat geantwortet: … richte dich danach“ im Kontext — spricht also mit Knuts Stimme; `sessions.ts:678`).
+Finalizer: PASS (0,75), weil keine Stimme den Bau blockiert und jede Lücke einen prüfbaren DoD-Satz hat; nicht höher, weil der
+Hauptschlüssel-Weg (E6) und die Kosten ohne Token-Budget bewusst offen bleiben.
+Bindende Bedingungen (DoD 31–38):
+1. D1 [must-fix] Batch-Kennung nur in der letzten Zeile, zufällige ID (DoD 31).
+2. D2 [must-fix] Filter `kind ≠ leitstand`, Altdokumente bleiben sichtbar (DoD 32).
+3. D3 [must-fix] Jede `live.orch`-Stelle (`sessions.ts:95, 604, 635, 740, 768, 801, 826, 892`) im Bericht einzeln entschieden (DoD 3).
+4. D4 [must-fix] Leitstand- und PostHog-Prüfungen vor Lese-Freigabe und allgemeiner MCP-Regel, mit Umgehungsprobe (DoD 38).
+5. A1 [must-fix, Ausrollsperre] Meldung löst keine Rückfrage auf (DoD 33).
+6. A2 [must-fix] Gemeinsame Präfix-Regel für Git-Unterbefehle (DoD 34).
+7. A3 [must-fix] PostHog-Sperre/Lesen über Wortteile, getestet mit echten Namen (DoD 35).
+8. A4 [must-fix] Deckel zählen Zustellungen, Neusendungen eigener Deckel, Freigabe aus „Heute“ wirkt sofort (DoD 36).
+9. A5 [must-fix] Ziel je Sendung neu, `lastBatch` dauerhaft (DoD 37).
+NOTES: Beifund des Fachprüfers — die Strang-Sperren dürfen reine Suchen (grep nach „environ“) nicht treffen; Muster auf Zugriffe zielen.
+Kosten: 60 Weckungen × 200 Schritte haben kein Token-Budget; Prüfung in Woche 1 (E4).
