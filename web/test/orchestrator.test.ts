@@ -333,7 +333,9 @@ test('Auto-weiter DoD 1: Strang endet am Schrittlimit → neuer Zug ohne Zutun (
   assert.ok(Date.now() - t0 < 60_000);
   assert.equal(s.autoWeiter, 1, JSON.stringify(s));
   assert.match((await orch(['list'])).out, /automatisch fortgesetzt \(1\)/, 'Zähler in orch list (DoD 6)');
-  const msgs = await msgsOf(j.conv);
+  // Unter Last speichert der Nachbau die letzte Antwort etwas später — kurz darauf warten statt sofort zu zählen.
+  let msgs = await msgsOf(j.conv);
+  for (let i = 0; i < 25 && msgs.length < 4; i++) { await pause(200); msgs = await msgsOf(j.conv); }
   assert.equal(msgs.length, 4, 'Auftrag, Limit-Antwort, „weiter“, Antwort');
   assert.match(textOf(msgs[1]), /Viel zu tun/);
   assert.equal(textOf(msgs[2]), 'weiter (automatisch fortgesetzt: Schrittlimit, 1/2)');
