@@ -162,7 +162,7 @@ before(async () => {
     CREDS_KEY: randomBytes(32).toString('hex'), CREDS_IV: randomBytes(16).toString('hex'), WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'),
     WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vault-sync'), WERKBANK_MEILI_INDEX: `werkbank_leit_test_${tag}`, WERKBANK_FORGE_MCP: '',
     WERKBANK_LEITSTAND_DIR: LEIT, ORCH_AUTO_WEITER_TICK_MS: '300', ORCH_AUTO_WEITER_MAX: '3',
-    LEITSTAND_WAKE_DEBOUNCE_MS: '600', LEITSTAND_WAKE_RETRY_MS: '2500', LEITSTAND_WEITER_MAX: '2' };
+    LEITSTAND_WAKE_DEBOUNCE_MS: '600', LEITSTAND_WAKE_RETRY_MS: '2500', LEITSTAND_WEITER_MAX: '2', WERKBANK_REVIEW_DIR: join(tmp, 'review-pakete') };
   startWeb();
   await waitFor(`http://127.0.0.1:${BRIDGE_PORT}/health`);
   await waitFor(`${B}/api/health`);
@@ -317,6 +317,7 @@ test('orch-Werkzeuge über den Werkbank-MCP (DoD 15): nur mit WERKBANK_LEITSTAND
   ]);
   const byId = (id: number) => res.find((r) => r.id === id).result.content[0].text;
   assert.match(byId(1), /Fertig-Strang/);
+  assert.match(byId(1), /^## Fertig-Strang — 1 Strang · 1 fertig$/m, 'gruppiert je Lauf (Teil B, B-11)');
   assert.match(byId(2), /^gestartet: [0-9a-f]{8} https:\/\/chat\.example\/c\//);
   assert.match(byId(3), /^Rückfrage angelegt: q-/);
   const id = byId(2).split(' ')[1];
@@ -436,3 +437,93 @@ async function cookie(u: { _id: ObjectId }): Promise<string> {
   await L().collection('sessions').insertOne({ user: u._id, refreshTokenHash: createHash('sha256').update(tok).digest('hex'), expiration: new Date(Date.now() + 3600e3) });
   return `refreshToken=${tok}`;
 }
+
+// ---------- Teil B: Übersicht, Läufe, Strang-Review auf „Heute“ ----------
+
+const today = async (u = knut) => (await fetch(B + '/api/today', { headers: { cookie: await cookie(u) } })).json();
+const cardOf = async (id: string) => ((await today()).strands ?? []).find((c: any) => c.id === id);
+const post = async (path: string, b: unknown, u = knut) => fetch(B + path, { method: 'POST', headers: { cookie: await cookie(u), 'content-type': 'application/json', 'x-werkbank': '1' }, body: JSON.stringify(b) });
+const doneStrand = async (title: string, wt: string, extra: string[] = []) => JSON.parse((await orch(['start', '--title', title, '--cwd', WT(wt), ...extra, '--json'], 'mock-antwort Erledigt.\\n### Stand\\n- Erledigt: alles\\nStatus: fertig')).out);
+
+test('Teil B (B-1/B-6/B-2/B-20): Lauf + Lesezeichen, fertiger Strang als Karte auf Heute mit Bericht; Übersicht gruppiert; Team 403', async () => {
+  mkdirSync(join(tmp, 'review-pakete', '901-teilb'), { recursive: true });
+  writeFileSync(join(tmp, 'review-pakete', '901-teilb', 'bericht.md'), '# Bericht Teil B\n<script>alert(1)</script>\n');
+  const st = JSON.parse((await orch(['start', '--title', 'Teil B: Karte', '--cwd', WT('wt-b1'), '--lauf', 'Teil B', '--json'],
+    'Bericht nach ~/work/knut/review-pakete/901-teilb/bericht.md.\nmock-antwort Fertig.\\n### Stand\\n- Erledigt: Karte\\nStatus: fertig')).out);
+  const d = await W().collection('orchestrator_runs').findOne({ _id: st.id as any });
+  assert.equal(d!.lauf, 'Teil B'); assert.equal(d!.laufExplicit, true);
+  const cv: any = await until(() => L().collection('conversations').findOne({ conversationId: st.conv }), (c: any) => c?.tags?.includes('Orch · Teil B'));
+  assert.ok(cv.tags.includes('Orchestrator'));
+  const card = await until(() => cardOf(st.id), (c: any) => !!c);
+  assert.equal(card.key, 'Strang · Teil B'); assert.equal(card.bericht, true); assert.equal(card.bucket, 'review');
+  assert.match(card.excerpt, /### Stand/);
+  const b = await (await fetch(B + `/api/leitstand/bericht?strand=${st.id}`, { headers: { cookie: await cookie(knut) } })).json();
+  assert.match(b.text, /<script>alert\(1\)<\/script>/, 'als Text geliefert — die Seite zeigt ihn vorformatiert');
+  const ov = await (await fetch(B + '/api/leitstand/overview', { headers: { cookie: await cookie(knut) } })).json();
+  const g = ov.offen.find((x: any) => x.lauf === 'Teil B');
+  assert.equal(g.line, '1 Strang · 1 fertig');
+  assert.equal(g.strands[0].bericht, true);
+  // Team-Konto: keine Übersicht, keine Strang-Karten; Leitstand-ID und fremde ID → 404.
+  assert.equal((await fetch(B + '/api/leitstand/overview', { headers: { cookie: await cookie(team) } })).status, 403);
+  assert.deepEqual((await today(team)).strands, []);
+  assert.equal((await post(`/api/leitstand/strands/${st.id}/passt`, { seen: card.seen }, team)).status, 403);
+  assert.equal((await fetch(B + `/api/leitstand/bericht?strand=${leit.id}`, { headers: { cookie: await cookie(knut) } })).status, 404);
+  assert.equal((await post('/api/leitstand/strands/deadbeef/passt', { seen: 'x' })).status, 404);
+  // Zähler (B-9) und keine Doppelung mit „automatisch fortgesetzt“ (B-15).
+  await W().collection('orchestrator_runs').updateOne({ _id: st.id as any }, { $set: { autoTotal: 2 } });
+  const t = await today();
+  assert.ok(!(t.orchAuto ?? []).some((x: any) => x.id === st.id));
+  const cnt = await (await fetch(B + '/api/today/count', { headers: { cookie: await cookie(knut) } })).json();
+  assert.ok(cnt.count >= t.strands.length);
+});
+
+test('Teil B (B-7/B-18/B-19/B-10): Passt nur auf den gesehenen Stand; danach keine Karte, Leitstand geweckt, orch_send vom Leitstand → 409', async () => {
+  const st = await doneStrand('Teil B: Passt', 'wt-b2');
+  const card = await until(() => cardOf(st.id), (c: any) => !!c);
+  assert.equal((await post(`/api/leitstand/strands/${st.id}/passt`, { seen: 'falsch' })).status, 409);
+  assert.equal((await post(`/api/leitstand/strands/${st.id}/passt`, { seen: card.seen })).status, 200);
+  assert.equal(await cardOf(st.id), undefined);
+  const d = await W().collection('orchestrator_runs').findOne({ _id: st.id as any });
+  assert.ok(d!.knutReviewedAt && d!.reviewedAt);
+  await until(() => wakesOf(leit.conv), (w) => w.some((m) => new RegExp(`Strang \\\`${st.id}\\\`.*Knut hat geprüft`).test(textOf(m))));
+  const r = await fetch(B + '/internal/orchestrator/send', { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ id: st.id, text: 'weiter', via: 'leitstand' }) });
+  assert.equal(r.status, 409);
+  assert.match((await r.json()).error, /hat Knut geprüft/);
+});
+
+test('Teil B (B-7/B-17/B-23): Nacharbeit → Nachricht im Strang, Karte weg; wieder fertig → Karte ohne alte DoD-Tabelle', async () => {
+  const st = await doneStrand('Teil B: Nacharbeit', 'wt-b3');
+  await until(() => cardOf(st.id), (c: any) => !!c);
+  // review_ready mit DoD-Tabelle, dann Nacharbeit.
+  await fetch(B + '/internal/review-ready', { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId: String(knut._id), conv: st.conv, gemacht: 'x', nicht_gemacht: 'nichts', risiko: 'nichts', dod: [{ punkt: 'alt', stand: 'ja' }] }) });
+  const card = await until(() => cardOf(st.id), (c: any) => !!c?.review);
+  const r = await post(`/api/leitstand/strands/${st.id}/reply`, { kind: 'nacharbeit', text: 'Test ergänzen', seen: card.seen });
+  assert.equal(r.status, 200, await r.clone().text());
+  assert.ok((await msgsOf(st.conv)).some((m) => textOf(m) === 'Nacharbeit nach Review: Test ergänzen'));
+  await until(() => wakesOf(leit.conv), (w) => w.some((m) => /Knut hat Nacharbeit geschickt: Test ergänzen/.test(textOf(m))));
+  // Die alte „fertig“-Antwort zählt nicht mehr (doneAt nur nach lastSentAt): solange keine neue kommt, keine Karte.
+  await pause(1500);
+  assert.equal(await cardOf(st.id), undefined);
+  await orch(['send', st.id, '--text', 'mock-antwort Nachgearbeitet.\\n### Stand\\n- Erledigt: Test\\nStatus: fertig']);
+  const again = await until(() => cardOf(st.id), (c: any) => !!c);
+  assert.equal(again.review, null, 'keine alte DoD-Tabelle');
+  assert.match(again.excerpt, /Erledigt: Test/);
+});
+
+test('Teil B (G2/G3, B-19/B-24): Ablage durch den Leitstand lässt die Karte stehen; orch_send vom Leitstand an review_ready → älterer Stand, Auto-weiter frei', async () => {
+  const st = await doneStrand('Teil B: Ablage', 'wt-b4');
+  await until(() => cardOf(st.id), (c: any) => !!c);
+  await fetch(B + '/internal/orchestrator/review', { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ id: st.id, via: 'leitstand' }) });
+  const c1 = await until(() => cardOf(st.id), (c: any) => c?.reviewedBy === 'leitstand');
+  assert.ok(c1, 'Karte bleibt, markiert als vom Leitstand abgelegt');
+  const st2 = await doneStrand('Teil B: Review-ready', 'wt-b5');
+  await until(() => cardOf(st2.id), (c: any) => !!c);
+  await fetch(B + '/internal/review-ready', { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId: String(knut._id), conv: st2.conv, gemacht: 'y', nicht_gemacht: 'nichts', risiko: 'nichts', dod: [{ punkt: 'p', stand: 'ja' }] }) });
+  await until(() => cardOf(st2.id), (c: any) => !!c?.review);
+  const r = await fetch(B + '/internal/orchestrator/send', { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ id: st2.id, text: 'mock-antwort weiter so', via: 'leitstand' }) });
+  assert.equal(r.status, 200);
+  const d = await W().collection('orchestrator_runs').findOne({ _id: st2.id as any });
+  assert.equal(d!.reviewReadyAt, null); assert.ok(d!.prevReview?.review);
+  const c2 = await until(() => cardOf(st2.id), (c: any) => c?.reviewOld === true);
+  assert.equal(c2.review.gemacht, 'y');
+});

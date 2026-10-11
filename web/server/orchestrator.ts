@@ -279,8 +279,8 @@ export async function startOrch(u: User, inp: StartInput) {
     throw err(e.status ?? 502, String(e.message ?? e));
   }
   // 3) Titel + Lesezeichen im Hintergrund (LibreChat speichert die Unterhaltung erst nach ein paar Sekunden).
-  decorateSoon(u, conv, title).catch(() => {});
-  if (explicit) decorateSoon(u, conv, title, 20, laufTag(lauf)).catch(() => {});
+  // Nacheinander: beide lesen sonst dieselbe leere Tag-Liste, und der zweite PUT überschreibt den ersten (Test Teil B).
+  decorateSoon(u, conv, title).then(() => (explicit ? decorateSoon(u, conv, title, 20, laufTag(lauf)) : undefined)).catch(() => {});
   return { id, conv, url: doc.url, cwd: doc.cwd, plan, mode: doc.mode, stand: fresh.status, worktree: fresh.worktree, ...(doc.mode && doc.mode !== 'auto' ? { warning: `Brücke läuft für dieses Konto im Modus „${doc.mode}“ — ohne Auto-Modus darf der Strang nur lesen.` } : {}) };
 }
 
