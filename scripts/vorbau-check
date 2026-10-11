@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# G0 „Prüfung vor dem Bau“ (docs/plan-vorbau-check.md). Hilfe und Umgebung: web/server/vorbau-cli.ts.
+# Nur lesend; Fetch und PR-API ausschließlich mit dem Lesetoken (GIT_VW_READ=1). Gibt nie Geheimnisse aus.
+set -euo pipefail
+WB="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+[ -x "$WB/.runtime/node/bin/node" ] && export PATH="$WB/.runtime/node/bin:$PATH"
+exec node "$WB/web/server/vorbau-cli.ts" "$@"

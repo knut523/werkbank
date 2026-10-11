@@ -13,6 +13,19 @@ in der Kopie. Die Regeln des Vaults (`/vault/CLAUDE.md`) kommen zusätzlich.
 - **Ein Screenshot ist ein Indiz, kein Befund.** Vor dem Melden in der Quelle nachsehen.
 - Schmal lesen: Abschnitte statt ganzer Dateien (`read_note` mit `section`, `outline`).
 
+## Vor dem Bau: schon gebaut? (plan-to-pr Phase 2.5b, Erprobung)
+
+Bevor du für eine Spec einen Branch anlegst oder Code schreibst, und noch einmal vor einem PR (plan-to-pr Phase 5
+Schritt 3): **`scripts/vorbau-check <spec-slug> --plan <plandatei>`** im Werkbank-Repo (Repos: `--repos` oder
+`WERKBANK_VORBAU_REPOS`). Er sucht auf dem Integrationszweig (`origin/HEAD`) und in allen offenen PRs nach Slug,
+`spec:`, Plandatei und Branch — nur mit dem Lesetoken.
+
+- `frei` / `fortsetzen` → bauen; die Belege gehören in deinen Bericht.
+- `treffer` → **nicht bauen.** Belege (SHA, PR-Link) nennen und anhalten; Knut entscheidet in der Werkbank
+  („trotzdem bauen“ · „auf Vorhandenem aufsetzen“ · „Spec nachziehen/abräumen“).
+- `stopp` (kein Lesetoken, Fetch oder PR-API scheitert) → ebenfalls nicht bauen, sondern melden. Nie mit dem
+  Push-Token nachprüfen.
+
 ## Was hier nicht automatisch passiert
 
 - **Keine neuen Jira-Tasks** ohne ausdrücklichen Auftrag (Skill `olaf-jira`: Duplikatsuche, Workstream, Owner).

@@ -109,6 +109,8 @@ before(async () => {
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
       WERKBANK_GOAL_PROPOSALS: join(tmp, 'vorschlag.json'), WERKBANK_SPEC_CREATE: 'on', WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
       WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vault-sync'), WERKBANK_VAULT_SYNC_SCRIPT: join(tmp, 'fake-vault-sync.sh'),
+      // G0: keine Repos im Umfang → Stopp ohne Knopf; das Protokoll nie in die echte Instanz.
+      VORBAU_PROTOKOLL: join(tmp, 'g0.jsonl'), WERKBANK_VORBAU_REPOS: '',
       // Abend-Slot nur über den ausdrücklichen Tagesabschluss — sonst hinge der Test an der Uhrzeit (ab 16 Uhr scheiterte er).
       WERKBANK_EOD_HOUR: '24',
       WERKBANK_ANSETZEN: 'live',   // echter Weg gegen den Jira-Nachbau (Brücke im Mock-Modus spielt createJiraIssue nach)
@@ -1286,7 +1288,8 @@ test('Agent ansetzen: Vorschau schreibt nichts, Sperren, genau ein Ticket, Zurü
   await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
   const RM = 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/Service-View';
   const creates = () => jira.writes.filter((w) => w.type === 'create').length;
-  const go = (body: any, c = anna) => c.req('/api/roadmap/ansetzen', { body });
+  // G0 ist hier ohne Repos (Stopp ohne Knopf): die Bestätigung wählt „trotzdem bauen“, wie Knut im Dialog.
+  const go = (body: any, c = anna) => c.req('/api/roadmap/ansetzen', { body: body.confirm ? { g0Choice: 'trotzdem bauen', ...body } : body });
   // Spec in 3-Plan anlegen (Vorlage) und ohne offene Entscheidung füllen.
   const mkSpec = async (slug: string, title: string, extra = '') => {
     const r = await anna.req('/api/roadmap/spec-new', { body: { topic: 'Service-View', state: '3-Plan', slug, title, confirm: true } });
@@ -1395,5 +1398,20 @@ test('Agent ansetzen: Vorschau schreibt nichts, Sperren, genau ein Ticket, Zurü
   assert.equal(a3.j.key, 'PM-321'); assert.equal(creates(), 2); assert.equal(a3.j.readback.existing, true, 'übernommenes Ticket bleibt, wie es ist');
   assert.match(readFileSync(join(VAULT, p3), 'utf8'), /^jira: PM-321$/m);
   assert.equal((await go({ path: p3, confirm: true, hash: (await go({ path: p3 })).j.hash, useKey: 'PM-99999' })).status, 404);
+
+  // G0 „Prüfung vor dem Bau“ (docs/plan-vorbau-check.md): ohne Repos/Lesetoken Stopp ohne Knopf — Knut muss wählen.
+  const p4 = await mkSpec('g0-erinnerung-zwei', 'G0-Erinnerung zwei');
+  const pre4 = await go({ path: p4 });
+  assert.equal(pre4.j.g0.ergebnis, 'stopp');
+  assert.deepEqual(pre4.j.g0.options.map((o: any) => o.label), ['trotzdem bauen', 'Spec nachziehen/abräumen'], 'kein „ohne PR-Prüfung bauen“');
+  const c0 = creates();
+  const ohne = await anna.req('/api/roadmap/ansetzen', { body: { path: p4, confirm: true, hash: pre4.j.hash } });
+  assert.equal(ohne.status, 409); assert.match(ohne.j.error, /G0 Stopp — erst im Dialog entscheiden/);
+  const weg = await go({ path: p4, confirm: true, hash: pre4.j.hash, g0Choice: 'Spec nachziehen/abräumen' });
+  assert.equal(weg.status, 200); assert.equal(weg.j.g0Abgebrochen, true);
+  assert.equal(creates(), c0, 'nichts angelegt');
+  const proto = readFileSync(join(tmp, 'g0.jsonl'), 'utf8');
+  assert.match(proto, /"art":"knopf","slug":"[a-z-]*g0-erinnerung-zwei","knopf":"Spec nachziehen\/abräumen"/);
+  assert.match(proto, /"knopf":"trotzdem bauen"/, 'die Bestätigungen oben stehen als Knopf im Protokoll');
   await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
 });

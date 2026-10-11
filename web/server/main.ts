@@ -19,7 +19,8 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, nachtbau, g0Blocked, g0Repos } from './orchestrator.ts';
+import { pruefe, protokolliere, g0Text, g0Optionen, type VorbauErgebnis } from './vorbau.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName } from './ablage.ts';
@@ -1108,8 +1109,9 @@ on('GET', /^\/api\/today$/, async (req, res) => {
   const day = ((await tbCol().find({ userId: u.id, date: today }).sort({ start: 1 }).toArray()) as any[])
     .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
   const orchOpen = (await listQuestions(u, { open: true }).catch(() => [])).length;
+  const g0 = await g0Blocked(u).catch(() => []);   // Nachtbau: von G0 gestoppte Stränge (blocked_g0)
   const memory = u.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null;   // nur Admins (RAM-Plan 125)
-  send(res, 200, { queue, mine, day, today, orchOpen, memory, count: await todayCount(u, queue, mine), dryRun: dryRun() });
+  send(res, 200, { queue, mine, day, today, orchOpen, g0, memory, count: await todayCount(u, queue, mine), dryRun: dryRun() });
 });
 
 on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
@@ -1358,6 +1360,16 @@ async function linkSpec(sp: { path: string; text: string }, key: string, field: 
   return 'ok';
 }
 
+// G0 je Spec 3 Minuten zwischenspeichern: Vorschau und Klick sehen dieselben Belege, ohne zweimal zu holen.
+const g0Cache = new Map<string, { at: number; r: VorbauErgebnis }>();
+async function ansetzenG0(slug: string): Promise<VorbauErgebnis> {
+  const c = g0Cache.get(slug);
+  if (c && Date.now() - c.at < 180_000) return c.r;
+  const r = await pruefe({ slug, repos: g0Repos(null), aufrufer: 'ansetzen' });
+  g0Cache.set(slug, { at: Date.now(), r });
+  return r;
+}
+
 on('GET', /^\/api\/roadmap\/ansetzen$/, async (req, res, _m, url) => {
   await needAdmin(req);
   const path = url.searchParams.get('path') ?? '';
@@ -1381,6 +1393,20 @@ on('POST', /^\/api\/roadmap\/ansetzen$/, async (req, res) => {
   if (m.mode === 'aus') {
     if (b.confirm === true) throw new HttpError(403, m.problem ?? '„Agent ansetzen“ ist ausgeschaltet (WERKBANK_ANSETZEN).');
     return send(res, 200, base);
+  }
+  // G0 „Prüfung vor dem Bau“ (docs/plan-vorbau-check.md): Repos aus WERKBANK_VORBAU_REPOS; Treffer/Stopp → Knut wählt
+  // im Dialog einen Knopf (protokolliert). Ohne Lesetoken oder ohne Repos: Stopp ohne Knopf, nur „trotzdem bauen“.
+  if (gate.ok && !state?.key) {
+    const g0 = await ansetzenG0(specSlug(sp.path));
+    base.g0 = { ergebnis: g0.ergebnis, text: g0Text(g0), belege: g0.belege.map((x) => ({ text: x.text, pr: x.pr ?? null, sha: x.sha ?? null, wirkung: x.wirkung })), hinweise: g0.hinweise, stopp: g0.stopp ?? null, options: g0.ergebnis === 'treffer' || g0.ergebnis === 'stopp' ? g0Optionen(g0) : [] };
+    const stop = base.g0.options.length > 0;
+    if (b.confirm === true && stop) {
+      const choice = String(b.g0Choice ?? '');
+      if (!base.g0.options.some((o: any) => o.label === choice)) throw new HttpError(409, `G0 ${g0.ergebnis === 'stopp' ? 'Stopp' : 'Treffer'} — erst im Dialog entscheiden: ${base.g0.options.map((o: any) => `„${o.label}“`).join(', ')}.`);
+      protokolliere({ art: 'knopf', slug: specSlug(sp.path), knopf: choice, kriterien: g0.kriterien, ergebnis: g0.ergebnis, durch: u.email, aufrufer: 'ansetzen' });
+      if (choice === 'Spec nachziehen/abräumen') { g0Cache.delete(specSlug(sp.path)); return send(res, 200, { ...base, g0Abgebrochen: true }); }
+      b.note = `${String(b.note ?? '')}\n\nG0 vor dem Bau: Knut hat „${choice}“ gewählt.\n${base.g0.text}`.trim();
+    }
   }
   let jira: AnsetzenJira | null = null;
   let me: { accountId: string; displayName: string } | null = null;
@@ -2071,15 +2097,23 @@ async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
   return internalUser(req, { userId: d ? String(d._id) : '' });
 }
 
-on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review)$/, async (req, res, m) => {
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau)$/, async (req, res, m) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
   const id = String(b.id ?? '');
   switch (m[1]) {
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true });
-      log('strang gestartet', { user: u.id, id: r.id, conv: r.conv });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null });
+      log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null });
       return send(res, 200, r);
+    }
+    case 'nachtbau': {
+      // Nachtbau (docs/plan-vorbau-check.md): je Item G0; Treffer → blocked_g0, nicht prüfbar → ein Morgeneintrag.
+      const items = Array.isArray(b.items) ? b.items.slice(0, 50) : [];
+      const r = await nachtbau(u, items);
+      log('nachtbau', { user: u.id, items: r.map((x) => `${x.slug}:${x.status}`) });
+      if (r.some((x) => x.status !== 'gestartet')) roadmapChanged('orchestrator-frage');
+      return send(res, 200, { items: r });
     }
     case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
     case 'show': return send(res, 200, await showOrch(u, id));
@@ -2094,8 +2128,8 @@ on('POST', /^\/internal\/orchestrator\/questions\/(ask|list|get|withdraw)$/, asy
   const u = await orchPerson(req, b);
   switch (m[1]) {
     case 'ask': {
-      const q = await askKnut(u, { title: b.title, context: b.context, options: b.options, recommendation: b.recommendation, strand: b.strand || null, link: b.link || null, plan: b.plan || null });
-      log('rückfrage an knut', { user: u.id, id: q.id });
+      const q = await askKnut(u, { title: b.title, context: b.context, options: b.options, recommendation: b.recommendation, strand: b.strand || null, link: b.link || null, plan: b.plan || null, key: b.key || null, quelle: b.quelle || null });
+      log('rückfrage an knut', { user: u.id, id: q.id, key: q.key });
       roadmapChanged('orchestrator-frage');
       return send(res, 200, q);
     }
@@ -2289,7 +2323,7 @@ const server = createServer(async (req, res) => {
     const status = e.status ?? (e instanceof JiraError ? 502 : 500);
     const known = e instanceof JiraError || e instanceof JiraWriteError;
     if (status >= 500) log('fehler', { path: url.pathname, error: String(e.message ?? e).slice(0, 300) });
-    if (!res.headersSent) send(res, status, { error: status >= 500 && !known ? 'Interner Fehler.' : e.message, ...(e instanceof JiraWriteError ? { code: e.code } : {}) });
+    if (!res.headersSent) send(res, status, { error: status >= 500 && !known ? 'Interner Fehler.' : e.message, ...(e instanceof JiraWriteError ? { code: e.code } : {}), ...(e.g0 ? { g0: e.g0 } : {}), ...(e.existing ? { existing: e.existing } : {}) });
     else res.end();
   }
 });
