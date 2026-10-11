@@ -13,6 +13,12 @@
 // Rückfragen (ask) nur für echte Entscheidungen Knuts — nicht für das, was sich nachlesen, selbst klären oder sicher
 // entscheiden lässt. Immer mit eigener Empfehlung. Antwort: `orch questions get <id>` (status beantwortet + answer).
 //
+// Automatisch fortsetzen (docs/plan-orchestrator-auto-weiter.md): die Werkbank schickt selbst „weiter“ nach Schrittlimit,
+// Zeitlimit, Brücken-Neustart, verlorener Nachricht, Parallelgrenze (nach 2 min) und Kontingent (nach 30 min oder bei
+// freiem zweiten Konto) — nicht nach review_ready, bei offener Rückfrage zum Strang oder nach `review`. Deckel
+// ORCH_AUTO_WEITER_MAX (30) seit der letzten Handnachricht, dann `failed` + Rückfrage in „Heute“. `list` zeigt den Zähler.
+// Server: ORCH_AUTO_WEITER=off schaltet ab, ORCH_AUTO_WEITER_TICK_MS (20000); Brücke: ORCH_MAX_TURNS (Vorgabe BRIDGE_MAX_TURNS).
+//
 // Ziel: WERKBANK_URL (Vorgabe http://127.0.0.1:3070). Interner Schlüssel: WERKBANK_INTERNAL_TOKEN aus der Umgebung oder
 // aus der .env.local der Instanz (WERKBANK_ENV_FILE, Vorgabe <checkout>/.env.local) — es wird NUR diese eine Zeile
 // gelesen und nie ausgegeben. Person: WERKBANK_ORCH_EMAIL (Vorgabe: Pilot-Konto der Instanz).
@@ -91,7 +97,7 @@ async function main() {
       if (!j.strands.length) return console.log(flags.all ? 'Keine Stränge.' : 'Keine offenen Stränge (--all zeigt auch geprüfte).');
       for (const s of j.strands) {
         console.log(`${ICON[s.status] ?? '?'} ${s.id}  ${s.status.padEnd(7)} ${s.title}${s.reviewed ? '  [geprüft]' : ''}`);
-        console.log(`   ${s.reason} · gestartet ${t(s.startedAt)} · zuletzt ${t(s.lastActivity)} · ${s.sends} Nachr.`);
+        console.log(`   ${s.reason} · gestartet ${t(s.startedAt)} · zuletzt ${t(s.lastActivity)} · ${s.sends} Nachr.${s.autoWeiter ? ` · automatisch fortgesetzt (${s.autoWeiter})` : ''}${s.reviewReady ? ' · review_ready' : ''}`);
         console.log(`   ${s.cwd}  ${s.url}`);
         if (s.excerpt) console.log(s.excerpt.split('\n').slice(0, 8).map((l: string) => `   │ ${l}`).join('\n'));
       }
