@@ -14,7 +14,7 @@ const nothing = (t?: string) => !t || /^(nichts|keins?|keine|—|-|n\/a|entfäll
 function Head({ it }: { it: any }) {
   return (
     <div className="rq-head">
-      <a href={`#/board?key=${it.key}`} className="rq-key">{it.key}</a>
+      {it.kind === 'strand' ? <a href="#/leitstand" className="rq-key">{it.key}</a> : <a href={`#/board?key=${it.key}`} className="rq-key">{it.key}</a>}
       <span className="rq-title">{it.summary ?? ''}</span>
       <span className="tiny muted">{fmtDateTime(it.reviewReadyAt ?? it.endedAt ?? it.startedAt)}</span>
     </div>
@@ -23,9 +23,11 @@ function Head({ it }: { it: any }) {
 
 function ReviewBody({ it }: { it: any }) {
   const r = it.review;
-  if (!r) return null;
+  // Strang ohne review_ready (Teil B, E10): der „### Stand“-Auszug der letzten Antwort.
+  if (!r) return it.kind === 'strand' && it.excerpt ? <div className="rq-body small" style={{ whiteSpace: 'pre-wrap' }}><Md text={it.excerpt} /></div> : null;
   return (
     <div className="rq-body">
+      {it.reviewOld && <p className="tiny muted">Älterer Stand (vor der letzten Nachricht an den Strang).</p>}
       <p className="small"><b>Gemacht:</b> <Md text={r.gemacht} /></p>
       {!nothing(r.nichtGemacht) && <p className="small rq-warn"><b>Nicht gemacht:</b> <Md text={r.nichtGemacht} /></p>}
       {!nothing(r.risiko) && <p className="small rq-risk"><b>Risiko:</b> <Md text={r.risiko} /></p>}
@@ -49,8 +51,11 @@ function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
   const [rework, setRework] = useState<string | null>(null);
   const [comment, setComment] = useState(false);
   const run = async (fn: () => Promise<void>) => { setBusy(true); setErr(null); try { await fn(); onDone(); } catch (e) { setErr(e); } finally { setBusy(false); } };
+  // Strang-Karten (Teil B, F4): eigener Pfad, gesehener Stand mit, kein Jira.
+  const base = it.kind === 'strand' ? `/api/leitstand/strands/${it.id}` : `/api/runs/${it.id}`;
+  const extra = it.kind === 'strand' ? { seen: it.seen } : {};
   const reply = (kind: 'antwort' | 'nacharbeit' | 'weiter', text = '') => run(async () => {
-    await api(`/api/runs/${it.id}/reply`, { body: { kind, text } });
+    await api(`${base}/reply`, { body: { kind, text, ...extra } });
     toast(kind === 'nacharbeit' ? 'Zurück an den Agenten' : kind === 'weiter' ? 'Agent macht weiter' : 'Antwort im Chat');
     setRework(null);
   });
@@ -59,10 +64,10 @@ function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
       const p: any = await api(`/api/runs/${it.id}/passt`, { body: { comment: true } });
       if (!(await confirm({ title: `Kommentar auf ${it.key} schreiben?`, confirmLabel: 'In Jira schreiben', body: <><p className="small">Der Lauf wird als geprüft markiert, und dieser Kommentar geht mit deinem Jira-Zugang an {it.key}. Den Status setzt du selbst.</p><pre className="small" style={{ whiteSpace: 'pre-wrap' }}>{p.text}</pre></> }))) return;
       await api(`/api/runs/${it.id}/passt`, { body: { comment: true, confirm: true } });
-    } else await api(`/api/runs/${it.id}/passt`, { body: {} });
-    toast(`${it.key} geprüft`);
+    } else await api(`${base}/passt`, { body: { ...extra } });
+    toast(`${it.kind === 'strand' ? it.summary : it.key} geprüft`);
   });
-  const open = it.url && <a className="btn small ghost" style={BIG} href={it.url} target={chatTarget}>Chat öffnen</a>;
+  const open = <>{it.url && <a className="btn small ghost" style={BIG} href={it.url} target={chatTarget}>Chat öffnen</a>}{it.bericht && <a className="btn small ghost" style={BIG} href={`#/leitstand?bericht=${it.id}`}>Bericht</a>}</>;
 
   return (
     <article className={`card rq rq-${it.bucket}`} data-run={it.id} data-bucket={it.bucket}>
@@ -90,7 +95,8 @@ function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
           <button className="btn primary" style={BIG} disabled={busy} onClick={passt}>Passt</button>
           <button className="btn" style={BIG} disabled={busy} aria-expanded={rework !== null} onClick={() => setRework(rework === null ? '' : null)}>Nacharbeit</button>
           {open}
-          <label className="small row" style={{ gap: 6 }}><input type="checkbox" checked={comment} onChange={(e) => setComment(e.target.checked)} /> mit Jira-Kommentar</label>
+          {it.kind !== 'strand' && <label className="small row" style={{ gap: 6 }}><input type="checkbox" checked={comment} onChange={(e) => setComment(e.target.checked)} /> mit Jira-Kommentar</label>}
+          {it.kind === 'strand' && it.reviewedBy === 'leitstand' && <span className="tiny muted">vom Leitstand abgelegt</span>}
         </div>
         {rework !== null && <div className="rq-rework">
           <label className="small" htmlFor={`rw-${it.id}`}>Was soll der Agent nacharbeiten?</label>
@@ -118,7 +124,7 @@ export function Heute({ cfg }: { cfg: Config }) {
   if (t.error) return <div className="page"><Err e={t.error} /></div>;
   if (!d) return <div className="page"><Loading /></div>;
 
-  const review = d.queue.filter((x: any) => x.bucket === 'review');
+  const review = [...(d.strands ?? []), ...d.queue.filter((x: any) => x.bucket === 'review')];
   const waitingRuns = d.queue.filter((x: any) => ['frage', 'haengt', 'still'].includes(x.bucket));
   const running = d.queue.filter((x: any) => x.bucket === 'laeuft');
   const orchOpen = d.orchOpen ?? 0;
@@ -141,7 +147,7 @@ export function Heute({ cfg }: { cfg: Config }) {
       {d.memory && <div className="card soft" role="status" data-testid="memory-warning"><b>⚠️ Speicher knapp:</b> <span className="small">{d.memory}. Neue Chats und Agenten können langsam werden oder abbrechen — Testinstanzen stoppen, wartende Chats beantworten.</span></div>}
       {running.length > 0 && <p className="small muted" data-testid="running">⏳ {running.length === 1 ? 'Ein Agent arbeitet' : `${running.length} Agenten arbeiten`} gerade: {running.map((x: any, i: number) => <span key={x.id}>{i ? ', ' : ''}{x.url ? <a href={x.url} target={chatTarget}>{x.key}</a> : x.key}</span>)}</p>}
 
-      {d.leitstand && <p className="small muted" data-testid="leitstand">🛰️ Leitstand: <b>{d.leitstand.status}</b>{d.leitstand.open > 0 ? ` · ${d.leitstand.open} Meldung${d.leitstand.open === 1 ? '' : 'en'} unterwegs` : ''} · <a href={d.leitstand.url} target={chatTarget}>öffnen</a></p>}
+      {d.leitstand && <p className="small muted" data-testid="leitstand">🛰️ Leitstand: <b>{d.leitstand.status}</b>{d.leitstand.open > 0 ? ` · ${d.leitstand.open} Meldung${d.leitstand.open === 1 ? '' : 'en'} unterwegs` : ''} · <a href={d.leitstand.url} target={chatTarget}>Chat öffnen</a> · <a href="#/leitstand">Übersicht</a></p>}
 
       {(d.orchAuto ?? []).length > 0 && <p className="small muted" data-testid="orch-auto">🔁 Orchestrator, automatisch fortgesetzt: {d.orchAuto.map((x: any, i: number) => <span key={x.id}>{i ? ', ' : ''}<a href={x.url} target={chatTarget}>{x.title}</a> ({x.n}){x.stopped ? ' — angehalten' : ''}</span>)}</p>}
 
