@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { VAULT_DIR } from './tools.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const alwaysLimit = new Set<string>();   // Sitzungen mit „maxturns-immer“
 
 export function mockQuery({ prompt, options }: { prompt: string; options: Record<string, any> }) {
   if (typeof prompt !== 'string') {
@@ -236,6 +237,9 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
     yield toolUse('Grep', { pattern: last.slice(0, 40), path: VAULT_DIR });
     await sleep(50);
     // Rundenende für die Review-Schlange: Schrittlimit bzw. Absturz der Sitzung.
+    // „maxturns-immer“: diese Sitzung endet ab jetzt jeden Zug am Schrittlimit (Deckel der automatischen Fortsetzung).
+    if (/maxturns-immer/i.test(last)) alwaysLimit.add(session_id);
+    if (alwaysLimit.has(session_id)) { yield text('(Mock) Immer noch viel zu tun. '); yield { type: 'result', subtype: 'error_max_turns', session_id, is_error: true, usage: { input_tokens: 1, output_tokens: 1 } }; return; }
     if (/maxturns-test/i.test(last)) { yield text('(Mock) Viel zu tun. '); yield { type: 'result', subtype: 'error_max_turns', session_id, is_error: true, usage: { input_tokens: 1, output_tokens: 1 } }; return; }
     if (/absturz-test/i.test(last)) throw new Error('Mock: Sitzung abgestürzt');
     const words = `(Mock, kein Claude-Aufruf${options.resume ? ', Sitzung fortgesetzt' : ''}) Du hast geschrieben: ${last}`.split(/(?<= )/);

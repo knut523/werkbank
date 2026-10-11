@@ -35,6 +35,8 @@ export async function connect(): Promise<MongoClient> {
       // Orchestrator-Stränge (docs/plan-orchestrator-agents.md)
       db.collection('orchestrator_runs').createIndex({ userId: 1, startedAt: -1 }),
       db.collection('orchestrator_questions').createIndex({ userId: 1, status: 1, createdAt: -1 }),
+      // G0 (docs/plan-vorbau-check.md): ein Schlüssel `<slug>#G0` ist höchstens einmal offen oder beantwortet.
+      db.collection('orchestrator_questions').createIndex({ userId: 1, keyActive: 1 }, { unique: true, partialFilterExpression: { keyActive: { $exists: true } } }),
     ]);
   }
   return client;

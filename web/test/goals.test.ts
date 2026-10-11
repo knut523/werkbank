@@ -136,3 +136,26 @@ test('Runde 7: lokales Ziel ersetzt nur Label-Ziele derselben Ebene', async () =
   assert.deepEqual(ownGoals({ labels: ['ziel-kr1'], localGoal: 'KR2' } as any), ['KR2']);
   assert.deepEqual(ownGoals({ labels: ['ziel-kr1'], localGoal: 'KEINS' } as any), []);
 });
+
+test('Ziele automatisch (Council Runde 2): Regel 1 nur bei genau einer Zeile aus ziele-olaf.md, Spec ziel: nur Vorschlag, mehrdeutig nichts, Label/Werkbank-Zuordnung nie angefasst', async () => {
+  const { rule1Goals, specProposals, autoEligible } = await import('../server/goals.ts');
+  const row = (id: string, tickets: string[], source = 'ziele', line = 1) => ({ id, tickets, evidence: tickets.join(', '), source, line }) as any;
+  const r1 = rule1Goals([row('KR1', ['PM-1', 'PM-2'], 'ziele', 14), row('KR2', ['PM-2']), row('GATE-2701', ['PM-3']), row('S0928-1', ['PM-4'], 'planning'), row('KR3', ['PM-5']), row('KR3', ['PM-5'])]);
+  assert.deepEqual([...r1].sort(), [['PM-1', { ziel: 'KR1', line: 14 }], ['PM-5', { ziel: 'KR3', line: 1 }]], 'PM-2 mehrdeutig, PM-3 nur Gate, PM-4 nur Planning (keine Quelle)');
+  // Nur die Spalte Beleg zählt — ein Ticket, das z. B. im Ergebnis als Blocker steht, ist kein Beleg.
+  const { parseGoalsFile } = await import('../server/goals.ts');
+  const f = parseGoalsFile(`## Ziele\n\n| ID | Ebene | Ergebnis | Messgröße | Baseline | Ziel | Stichtag | Owner | Eltern-ID | Beleg |\n|---|---|---|---|---|---|---|---|---|---|\n| KR1 | KR | Vertrieb, blockiert durch PM-77. | x | – | y | 31.12.2026 | Knut | – | PM-88 |\n`);
+  assert.deepEqual([...rule1Goals(f.goals).keys()], ['PM-88']);
+  const ids = new Set(['GATE-2701', 'KR1', 'KR2', 'Z-SVC']);
+  const sp = specProposals([
+    { name: 'a', goals: ['KR1'], tickets: ['PM-1', 'PM-2'] }, { name: 'b', goals: ['KR2'], tickets: ['PM-2'] },
+    { name: 'c', goals: ['KR1'], tickets: ['PM-1'] }, { name: 'd', goals: ['S0928-1'], tickets: ['PM-3'] }, { name: 'e', goals: ['GATE-2701'], tickets: ['PM-4'] },
+    { name: 'f', goals: [], tickets: ['PM-5'] },
+  ], ids);
+  assert.deepEqual([...sp.keys()], ['PM-1'], 'PM-2 mehrdeutig, PM-3 kein Ziel aus ziele-olaf.md, PM-4 Gate, PM-5 ohne Ziel');
+  assert.deepEqual(sp.get('PM-1'), { ziel: 'KR1', sicherheit: 'mittel', quelle: 'spec', begruendung: 'Verknüpfte Spec „a“, „c“ hat ziel: KR1.' });
+  const T = (key: string, x: any = {}) => ({ key, type: 'Task', status: 'To Do', parent: null, labels: [], ...x });
+  const xs = [T('A'), T('B', { localGoal: 'KEINS' }), T('C', { localGoal: null }), T('D', { localGoal: 'KR1' }), T('E', { labels: ['ziel-kr9'] }), T('F', { labels: ['ziel-kr1'] }), T('G', { status: 'Done' }), T('H', { type: 'Epic' })];
+  const by = new Map(xs.map((x) => [x.key, x]));
+  assert.deepEqual(xs.filter((x) => autoEligible(x as any, by as any, ids)).map((x) => x.key), ['A'], 'nicht: KEINS, lokal entfernt, manuell, irgendein ziel-*-Label (auch unbekanntes), Done, Epic');
+});

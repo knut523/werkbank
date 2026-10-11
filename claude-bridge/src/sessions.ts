@@ -87,9 +87,12 @@ export type PermissionMode = 'default' | 'auto' | 'dontAsk';
 const cfg = {
   stateDir: process.env.BRIDGE_STATE_DIR || join(process.cwd(), '..', '.runtime', 'bridge'),
   maxTurns: Number(process.env.BRIDGE_MAX_TURNS || 40),
+  // Orchestrator-Stränge (docs/plan-orchestrator-auto-weiter.md, Schnitt 5): eigenes Schrittlimit, ohne Variable wie oben.
+  orchMaxTurns: Number(process.env.ORCH_MAX_TURNS || process.env.BRIDGE_MAX_TURNS || 40),
   turnTimeoutMs: Number(process.env.BRIDGE_TURN_TIMEOUT_S || 900) * 1000,
   confirmTimeoutMs: Number(process.env.BRIDGE_CONFIRM_TIMEOUT_S || 1800) * 1000,
 };
+const turnLimit = (live: { orch: boolean }) => (live.orch ? cfg.orchMaxTurns : cfg.maxTurns);
 
 // Leerlauf (RAM, 11.10.2026): eine Claude-Sitzung, die nur auf „ja/nein“ wartet, hält ihren Prozess samt MCP-Servern
 // (gemessen ≈ 420 MB je Chat). Nach BRIDGE_IDLE_REAP_S (Vorgabe 900 s = 15 min, 0 = aus) wird sie beendet; die
@@ -559,7 +562,7 @@ function handleMessage(live: Live, msg: any) {
       live.usage.output += u.output_tokens ?? 0;
       if (!live.rateLimited) markEnd(live, msg.subtype === 'error_max_turns' ? 'max_turns' : msg.subtype !== 'success' || msg.is_error ? 'error' : 'ok');
       if (live.rateLimited) { /* Meldung bzw. Kontowechsel in handleTurn */ }
-      else if (msg.subtype === 'error_max_turns') { live.outcome ??= 'limit'; emitStatus(live, `⏹️ Maximale Schrittzahl (${cfg.maxTurns}) erreicht. Schreib „weiter“, dann mache ich dort weiter.`); }
+      else if (msg.subtype === 'error_max_turns') { live.outcome ??= 'limit'; emitStatus(live, `⏹️ Maximale Schrittzahl (${turnLimit(live)}) erreicht. Schreib „weiter“, dann mache ich dort weiter.`); }
       else if (msg.subtype !== 'success' || msg.is_error) { live.outcome ??= 'error'; emitStatus(live, /authenticat|401|token/i.test(String(msg.result ?? '')) ? `⚠️ ${AUTH_HINTS.authentication_failed}` : '⚠️ Bei der Ausführung ist ein Fehler aufgetreten.'); }
       return;
     }
@@ -839,7 +842,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     ...(process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? {} : { agents: AGENTS }),
     // MCP: nur die Werkbank-Server aus req.mcpServers (vault-search, werkbank, forge-review, atlassian) —
     // strictMcpConfig (applyHome) blendet Nutzer-, Projekt- und Plugin-Server aus. Jira-OAuth je Konfiguration.
-    maxTurns: cfg.maxTurns,
+    maxTurns: turnLimit(live),
     includePartialMessages: true,
     // Gedanken als Zusammenfassung anfordern, damit sie live erscheinen (nur die Anzeige; Denkmodus und -budget bleiben
     // wie in Claude Code eingestellt). BRIDGE_THINKING_DISPLAY=omitted|off schaltet ab.

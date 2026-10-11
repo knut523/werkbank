@@ -19,6 +19,31 @@ export function AnsetzenButton({ path, state, open, admin, wide }: { path: strin
   );
 }
 
+/** G0 „Prüfung vor dem Bau“: Ergebnis mit Belegen; bei Treffer/Stopp eine Wahl (docs/plan-vorbau-check.md). */
+export function G0Box({ g0, choice, onChoice }: { g0: any; choice: string; onChoice: (s: string) => void }) {
+  const head: Record<string, string> = { frei: 'Nichts gefunden — frei.', fortsetzen: 'Eigene Arbeit gefunden — fortsetzen.', treffer: 'Das gibt es vielleicht schon.', stopp: 'Konnte nicht prüfen — kein Bau ohne deine Wahl.' };
+  const stop = g0.options?.length > 0;
+  return (
+    <div className={`card soft${stop ? ' warn' : ''}`} data-testid="g0-box" style={{ marginBottom: 10 }}>
+      <div className="row" style={{ gap: 8, alignItems: 'baseline' }}>
+        <b>Prüfung vor dem Bau</b>
+        <span className={`chip tiny-chip ${g0.ergebnis === 'frei' || g0.ergebnis === 'fortsetzen' ? 'ok' : 'warn'}`}>{g0.ergebnis}</span>
+      </div>
+      <p className="small" style={{ margin: '4px 0' }}>{head[g0.ergebnis] ?? g0.ergebnis}{g0.stopp?.text ? ` ${g0.stopp.text}` : ''}</p>
+      {g0.belege?.length > 0 && <ul className="small" style={{ paddingLeft: 18, margin: '4px 0' }}>{g0.belege.map((b: any, i: number) => <li key={i}>{b.text}{b.pr && <> · <a href={b.pr} target="_blank" rel="noreferrer">PR ansehen</a></>}</li>)}</ul>}
+      {g0.hinweise?.length > 0 && <ul className="tiny" style={{ paddingLeft: 18, margin: '4px 0' }}>{g0.hinweise.map((h: string, i: number) => <li key={i}>{h}</li>)}</ul>}
+      {stop && <fieldset className="small" style={{ border: 0, padding: 0, margin: '6px 0 0' }}>
+        <legend className="small">Wie weiter?</legend>
+        {g0.options.map((o: any) => (
+          <label key={o.label} style={{ display: 'flex', gap: 6, alignItems: 'baseline', cursor: 'pointer' }}>
+            <input type="radio" name="g0-choice" checked={choice === o.label} onChange={() => onChoice(o.label)} />
+            <span><b>{o.label}</b>{o.consequence ? ` — ${o.consequence}` : ''}</span>
+          </label>))}
+      </fieldset>}
+    </div>
+  );
+}
+
 function Step({ n, done, bad, children }: { n: number; done?: boolean; bad?: boolean; children: React.ReactNode }) {
   return (
     <div className={`step${done ? ' done' : ''}`}>
@@ -37,6 +62,7 @@ export function AnsetzenDialog({ path, onClose }: { path: string; onClose: () =>
   const [parent, setParent] = useState('');
   const [mode, setMode] = useState<'review' | 'plan'>('review');
   const [note, setNote] = useState('');
+  const [g0Choice, setG0Choice] = useState('');
   const titleRef = useRef<HTMLInputElement>(null);
 
   const load = async (p = parent, m = mode) => {
@@ -61,7 +87,8 @@ export function AnsetzenDialog({ path, onClose }: { path: string; onClose: () =>
   const go = async (extra: Record<string, unknown> = {}) => {
     setBusy(true); setErr(null);
     try {
-      const r = await api('/api/roadmap/ansetzen', { body: { path, confirm: true, hash: pre.hash, summary, parent, mode, note, ...extra } });
+      const r = await api('/api/roadmap/ansetzen', { body: { path, confirm: true, hash: pre.hash, summary, parent, mode, note, ...(g0Choice ? { g0Choice } : {}), ...extra } });
+      if (r.g0Abgebrochen) { setBusy(false); onClose(); return; }
       setRes(r);
       if (r.link?.state === 'ok') { const fresh = await api('/api/roadmap/ansetzen', { body: { path, parent, mode } }).catch(() => null); if (fresh) setPre(fresh); }
     } catch (e) { setErr(e); }
@@ -74,6 +101,10 @@ export function AnsetzenDialog({ path, onClose }: { path: string; onClose: () =>
   const half = res?.key && (res.readback?.ok === false || (res.link && res.link.state === 'offen') || res.agent?.state === 'offen' || !res.agent);
   const doneAll = res?.key && res.readback?.ok && res.agent?.state === 'gestartet';
   const label = (s: string) => (sim ? `Simulieren: ${s}` : s);
+  // G0: bei Treffer/Stopp erst eine Wahl; „Spec nachziehen/abräumen“ baut nicht (wird nur protokolliert).
+  const g0Stop = !res?.key && (pre?.g0?.options?.length ?? 0) > 0;
+  const g0Wait = g0Stop && !g0Choice;
+  const g0Drop = g0Stop && g0Choice === 'Spec nachziehen/abräumen';
 
   return (
     <div className="backdrop">
@@ -101,6 +132,7 @@ export function AnsetzenDialog({ path, onClose }: { path: string; onClose: () =>
                 <ul className="small" style={{ paddingLeft: 18, margin: '6px 0' }}>{dups.map((d) => <li key={d.key}><span className="chip warn">{d.key}</span> {d.summary} <span className="tiny">{d.status} · {d.why}</span></li>)}</ul>
               </div>
             )}
+            {pre.g0 && !res?.key && <G0Box g0={pre.g0} choice={g0Choice} onChoice={setG0Choice} />}
             {res?.needsChoice === 'unklar' && !dups.length && <div className="err" role="alert">Das letzte Anlegen hatte kein klares Ergebnis, und die Suche findet nichts. Bitte erst in Jira nachsehen; „Trotzdem neues Ticket“ legt bewusst eines an.</div>}
 
             {!res?.key && pre.draft && (
@@ -140,6 +172,8 @@ export function AnsetzenDialog({ path, onClose }: { path: string; onClose: () =>
           <button className="btn" onClick={onClose} disabled={busy}>{doneAll ? 'Schließen' : 'Abbrechen'}</button>
           {pre?.gate?.ok && pre.mode !== 'aus' && !doneAll && (() => {
             if (res?.key) return half ? <button className="btn primary" disabled={busy || pre.dryRun} onClick={() => go()}>{busy ? 'Setze fort …' : label('Fortsetzen')}</button> : null;
+            if (g0Drop) return <button className="btn primary" data-testid="g0-drop" disabled={busy} onClick={() => go()}>{busy ? 'Protokolliere …' : 'Nicht bauen'}</button>;
+            if (g0Wait) return <button className="btn primary" disabled title="Erst oben bei „Prüfung vor dem Bau“ wählen">Erst Prüfung vor dem Bau entscheiden</button>;
             if (firstDup) return <>
               <button className="btn ghost" disabled={busy || !pre.ready && !res?.needsChoice} onClick={() => go({ newTicket: true })}>Trotzdem neues Ticket</button>
               <button className="btn primary" disabled={busy || pre.dryRun} onClick={() => go({ useKey: firstDup.key })}>{busy ? 'Setze an …' : label(`An ${firstDup.key} ansetzen`)}</button>

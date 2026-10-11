@@ -210,6 +210,45 @@ export function needsGoal(i: Min, byKey: Map<string, Min>, known?: Set<string>):
   return !e.goals.length && !e.exempt;
 }
 
+// ---------- Automatisch zuordnen (Plan Ziele automatisch zuordnen, 11.10.2026, Council Runde 2 bindend) ----------
+// Einzige Zielquelle sind die IDs aus ziele-olaf.md. Automatisch gilt nur Regel 1: der Ticket-Key steht im Beleg/Text
+// genau einer Zeile. Abgeleitetes (Spec ziel:) ist nur Vorschlag und zählt erst nach Bestätigung. Mehrdeutig → nichts.
+// Nie angefasst: Tickets mit Werkbank-Zuordnung (auch KEINS/entfernt) oder mit irgendeinem Jira-Label ziel-* (Label gewinnt).
+
+const assignable = (id: string, ids: Set<string>) => ids.has(id) && goalLevel(id) !== 'Gate';
+
+/** Darf die Werkbank für dieses Ticket automatisch zuordnen oder etwas vorschlagen? */
+export function autoEligible(i: Min, byKey: Map<string, Min>, known?: Set<string>): boolean {
+  const p = labelCfg().goalPrefix;
+  return i.localGoal === undefined && !(i.labels ?? []).some((l) => l.toLowerCase().startsWith(p)) && needsGoal(i, byKey, known);
+}
+
+/** Regel 1: Ticket-Key → Ziel, wenn genau eine Zeile aus ziele-olaf.md (kein Gate) das Ticket in der Spalte Beleg nennt. */
+export function rule1Goals(rows: GoalRow[]): Map<string, { ziel: string; line: number }> {
+  const ids = new Set(rows.filter((r) => r.source === 'ziele').map((r) => r.id));
+  const hits = new Map<string, { ziel: string; line: number }[]>();
+  for (const r of rows) if (r.source === 'ziele' && assignable(r.id, ids)) for (const k of new Set(r.evidence.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? [])) if (!GOAL_ID.test(k) && !/^(GATE|KR|Z|M|S)\d*-/.test(k)) hits.set(k, [...(hits.get(k) ?? []), { ziel: r.id, line: r.line }]);
+  return new Map([...hits].filter(([, xs]) => new Set(xs.map((x) => x.ziel)).size === 1).map(([k, xs]) => [k, xs[0]]));
+}
+
+export interface Proposal { ziel: string; begruendung: string; sicherheit: 'mittel'; quelle: 'spec' }
+
+/** Vorschlag (nie automatisch): alle verknüpften Specs mit Ziel nennen genau dasselbe Ziel aus ziele-olaf.md. */
+export function specProposals(specs: { name: string; goals: string[]; tickets: string[] }[], ids: Set<string>): Map<string, Proposal> {
+  const by = new Map<string, { goals: Set<string>; specs: string[] }>();
+  for (const sp of specs) {
+    const gs = sp.goals.filter((g) => assignable(g, ids));
+    if (!gs.length) continue;
+    for (const k of sp.tickets) { const e = by.get(k) ?? { goals: new Set<string>(), specs: [] }; gs.forEach((g) => e.goals.add(g)); e.specs.push(sp.name); by.set(k, e); }
+  }
+  const out = new Map<string, Proposal>();
+  for (const [k, e] of by) if (e.goals.size === 1) {
+    const [ziel] = e.goals;
+    out.set(k, { ziel, sicherheit: 'mittel', quelle: 'spec', begruendung: `Verknüpfte Spec ${e.specs.map((n) => `„${n}“`).join(', ')} hat ziel: ${ziel}.` });
+  }
+  return out;
+}
+
 export function goalLevel(id: string): Level | '?' {
   const x = id.toUpperCase();
   return x.startsWith('GATE-') ? 'Gate' : x.startsWith('Z-') ? 'Ziel' : /^KR\d/.test(x) ? 'KR' : /^M\d{2}-/.test(x) ? 'Monat' : /^S\d{4}-/.test(x) ? 'Sprint' : '?';

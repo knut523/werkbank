@@ -11,6 +11,25 @@ const BIG: CSSProperties = { minHeight: 44 };
 const STAND: Record<string, [string, string]> = { ja: ['✓', 'ok'], teilweise: ['◐', 'warn'], nein: ['✗', 'bad'] };
 const nothing = (t?: string) => !t || /^(nichts|keins?|keine|—|-|n\/a|entfällt)\.?$/i.test(t.trim());
 
+/** Nachtbau: von G0 vor dem Bau gestoppte Stränge (blocked_g0) mit Belegen; entschieden wird in der Rückfrage darunter. */
+function G0Blocked({ items }: { items: any[] }) {
+  return (
+    <div className="card" data-testid="g0-blocked">
+      <h3 style={{ marginTop: 0 }}>Vor dem Bau gestoppt <span className="chip warn">{items.length}</span></h3>
+      <p className="small muted" style={{ marginTop: -6 }}>Der Nachtbau hat diese Aufträge nicht gestartet: die Prüfung vor dem Bau hat vorhandene Arbeit gefunden.</p>
+      {items.map((it) => (
+        <div key={it.id} data-testid="g0-blocked-item" style={{ borderTop: '1px solid var(--line, #ddd)', paddingTop: 8, marginTop: 8 }}>
+          <div><b>{it.title}</b> <span className="chip tiny-chip warn" title="Strang-Zustand blocked_g0: von der Prüfung vor dem Bau (G0) angehalten">angehalten (blocked_g0)</span> <span className="tiny">· {it.slug} · {fmtDateTime(it.startedAt)}</span></div>
+          {it.g0?.belege?.length > 0 && <ul className="small" style={{ paddingLeft: 18, margin: '4px 0' }}>{it.g0.belege.map((b: any, i: number) => <li key={i}>{b.text}{b.pr && <> · <a href={b.pr} target="_blank" rel="noreferrer">PR ansehen</a></>}</li>)}</ul>}
+          <div className="small">{!it.question ? 'Keine Rückfrage angelegt — Orchestrator fragen.'
+            : it.question.status === 'offen' ? <>Entscheidung offen: unten bei den Rückfragen ({it.question.id}).</>
+            : it.question.status === 'beantwortet' ? <>Deine Wahl: <b>{it.question.option ?? 'Antwort als Text'}</b> — gilt ab dem nächsten Nachtbau.</>
+            : 'Rückfrage zurückgezogen.'}</div>
+        </div>))}
+    </div>
+  );
+}
+
 function Head({ it }: { it: any }) {
   return (
     <div className="rq-head">
@@ -109,8 +128,10 @@ export function Heute({ cfg }: { cfg: Config }) {
   const d: any = t.data;
   const admin = cfg.user?.role === 'ADMIN';
   // Offene Entscheidungen sind Knuts Zeilen im Vault („- Knut:“) → nur für Admins, nachgeladen (liest alle Specs).
-  const [decisions, setDecisions] = useState<any[]>([]);
-  useEffect(() => { if (admin) api('/api/roadmap').then((r: any) => setDecisions(r.decisions ?? [])).catch(() => {}); }, [admin]);
+  // Bereinigt (docs/plan-heute-fragen-aktuell.md): ohne Live/Archiv, Überholtes und Dubletten — die stehen unter „Aufräumen“.
+  const [vq, setVq] = useState<{ open: any[]; cleanup: any[]; raw: number; duplicates: number } | null>(null);
+  useEffect(() => { if (admin) api('/api/roadmap/heute').then((r: any) => setVq(r)).catch(() => {}); }, [admin]);
+  const decisions = vq?.open ?? [];
   useJiraLive(() => { api('/api/today').then(t.setData).catch(() => {}); }, 'both');
   // Solange ein Agent arbeitet oder fragt: alle 20 s nachsehen.
   const busy = d?.queue.some((x: any) => x.bucket === 'laeuft' || x.bucket === 'frage');
@@ -122,10 +143,12 @@ export function Heute({ cfg }: { cfg: Config }) {
   const waitingRuns = d.queue.filter((x: any) => ['frage', 'haengt', 'still'].includes(x.bucket));
   const running = d.queue.filter((x: any) => x.bucket === 'laeuft');
   const orchOpen = d.orchOpen ?? 0;
-  // Die Zahl an „Wartet auf dich“ = die Plakette „Heute (n)“: offene Vault-Entscheidungen (oft Hunderte, ein Rückstand)
-  // stehen darunter, zählen aber nicht mit (Release-Audit 11.10.2026: 445 neben einer Plakette 2).
+  // Die Zahl an „Wartet auf dich“ = die Plakette „Heute (n)“: offene Vault-Entscheidungen (auch bereinigt noch Hunderte,
+  // ein Rückstand) stehen darunter mit eigener Zahl — der bereinigten —, zählen aber nicht mit (Release-Audit 11.10.2026:
+  // 445 neben einer Plakette 2; bereinigt 11.10.: 465 Zeilen → 294 offen, docs/plan-heute-fragen-aktuell.md).
   const nMine = waitingRuns.length + mineCount(d.mine, []) + orchOpen;
-  const showWaiting = nMine > 0 || decisions.length > 0;
+  const g0: any[] = d.g0 ?? [];
+  const showWaiting = nMine > 0 || decisions.length > 0 || (vq?.cleanup.length ?? 0) > 0 || g0.length > 0;
   const reload = () => t.reload();
   const first = cfg.user?.name.split(' ')[0] ?? '';
 
@@ -141,6 +164,8 @@ export function Heute({ cfg }: { cfg: Config }) {
       {d.memory && <div className="card soft" role="status" data-testid="memory-warning"><b>⚠️ Speicher knapp:</b> <span className="small">{d.memory}. Neue Chats und Agenten können langsam werden oder abbrechen — Testinstanzen stoppen, wartende Chats beantworten.</span></div>}
       {running.length > 0 && <p className="small muted" data-testid="running">⏳ {running.length === 1 ? 'Ein Agent arbeitet' : `${running.length} Agenten arbeiten`} gerade: {running.map((x: any, i: number) => <span key={x.id}>{i ? ', ' : ''}{x.url ? <a href={x.url} target={chatTarget}>{x.key}</a> : x.key}</span>)}</p>}
 
+      {(d.orchAuto ?? []).length > 0 && <p className="small muted" data-testid="orch-auto">🔁 Orchestrator, automatisch fortgesetzt: {d.orchAuto.map((x: any, i: number) => <span key={x.id}>{i ? ', ' : ''}<a href={x.url} target={chatTarget}>{x.title}</a> ({x.n}){x.stopped ? ' — angehalten' : ''}</span>)}</p>}
+
       {review.length > 0 && <section data-testid="review-queue">
         <h2>Wartet auf dein Review <span className="chip">{review.length}</span></h2>
         {review.map((it: any) => <RunCard key={it.id} it={it} onDone={reload} />)}
@@ -148,9 +173,10 @@ export function Heute({ cfg }: { cfg: Config }) {
 
       {showWaiting && <section data-testid="waiting">
         <h2>Wartet auf dich <span className="chip">{nMine}</span></h2>
+        {g0.length > 0 && <G0Blocked items={g0} />}
         {orchOpen > 0 && <OrchQuestions onChange={reload} />}
         {waitingRuns.map((it: any) => <RunCard key={it.id} it={it} onDone={reload} />)}
-        {mineCount(d.mine, decisions) > 0 && <div className="card"><WartetAufDich x={d.mine} decisions={decisions} onChange={reload} /></div>}
+        {mineCount(d.mine, decisions) + (vq?.cleanup.length ?? 0) > 0 && <div className="card"><WartetAufDich x={d.mine} decisions={decisions} today={vq ?? undefined} onChange={reload} /></div>}
       </section>}
 
       <section data-testid="day">

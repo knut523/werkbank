@@ -109,6 +109,8 @@ before(async () => {
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
       WERKBANK_GOAL_PROPOSALS: join(tmp, 'vorschlag.json'), WERKBANK_SPEC_CREATE: 'on', WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
       WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vault-sync'), WERKBANK_VAULT_SYNC_SCRIPT: join(tmp, 'fake-vault-sync.sh'),
+      // G0: keine Repos im Umfang → Stopp ohne Knopf; das Protokoll nie in die echte Instanz.
+      VORBAU_PROTOKOLL: join(tmp, 'g0.jsonl'), WERKBANK_VORBAU_REPOS: '', WERKBANK_VORBAU_CHECK: 'on',
       // Abend-Slot nur über den ausdrücklichen Tagesabschluss — sonst hinge der Test an der Uhrzeit (ab 16 Uhr scheiterte er).
       WERKBANK_EOD_HOUR: '24',
       WERKBANK_ANSETZEN: 'live',   // echter Weg gegen den Jira-Nachbau (Brücke im Mock-Modus spielt createJiraIssue nach)
@@ -385,6 +387,10 @@ test('Dokumente am Ticket: Vault-Notizen mit Key, Vorschlag bestätigen (jira:-F
 test('Roadmap: Rangliste mit Gründen, Kanban, PRs je Spec, offene Entscheidungen beantworten, Rang-Vorschlag', async () => {
   const r = await anna.req('/api/roadmap');
   assert.equal(r.status, 200);
+  // Heute bekommt die bereinigte Liste (docs/plan-heute-fragen-aktuell.md); die Roadmap-Seite weiter alle Zeilen.
+  const h = await anna.req('/api/roadmap/heute');
+  assert.deepEqual([h.status, h.j.raw, h.j.open.length, h.j.cleanup.length, h.j.duplicates], [200, r.j.decisions.length, 1, 0, 0]);
+  assert.deepEqual([h.j.open[0].spec, h.j.open[0].state, h.j.open[0].sinceKind, h.j.open[0].line], ['service-view-kundenakte', '3-Plan', 'geprüft', r.j.decisions[0].line]);
   assert.deepEqual(r.j.ranking.map((x: any) => [x.rank, x.spec, x.folderState]), [[1, 'service-view-kundenakte', '3-Plan'], [2, 'service-view-mailprotokoll', '1-Backlog']]);
   assert.match(r.j.ranking[0].why, /an einem Ort/);
   assert.deepEqual(r.j.ranking[0].tickets.map((t: any) => t.key), ['PM-321'], 'Spec ↔ Jira');
@@ -862,7 +868,7 @@ test('Jedes Ticket ein Ziel: Liste ohne Ziel mit Vorschlag, Sammelaktion nach Be
   const a = await anna.req('/api/goals/assign');
   assert.equal(a.status, 200, JSON.stringify(a.j));
   assert.ok(a.j.tickets.some((t: any) => t.key === 'PM-324'), 'Sub-task ohne Ziel (Parent hat keins)');
-  assert.deepEqual(a.j.tickets.find((t: any) => t.key === 'PM-267').proposal, { ziel: 'KR1', begruendung: 'Hardware-Flow trägt den Vertrieb', sicherheit: 0.8 });
+  assert.deepEqual(a.j.tickets.find((t: any) => t.key === 'PM-267').proposal, { ziel: 'KR1', begruendung: 'Hardware-Flow trägt den Vertrieb', sicherheit: 0.8, quelle: 'datei' });
   assert.equal(a.j.proposals, 1, 'unbekannte Tickets/Ziele fallen weg');
   assert.ok(a.j.goalIds.some((g: any) => g.id === 'KR1') && !a.j.goalIds.some((g: any) => g.id === 'GATE-2701'));
   const bad = await anna.req('/api/goals/assign', { body: { items: [{ key: 'PM-340', goal: 'keins' }] } });
@@ -999,6 +1005,58 @@ test('Runde 7: Vorschlag übernehmen (Sicherheit hoch), Audit append-only, Spec 
   const cfg = await anna.req('/api/config');
   assert.equal(cfg.j.specCreate, true, 'im Test eingeschaltet (WERKBANK_SPEC_CREATE=on)');
 });
+
+test('Ziele automatisch (Council Runde 2): Regel 1 ordnet beim Laden zu (markiert, änderbar, nie über manuell), Spec ziel: nur Vorschlag per Klick, Datei gewinnt', async () => {
+  writeFileSync(join(tmp, 'vorschlag.json'), '[]');
+  const n = jira.writes.length;
+  const set = (key: string, goal: string) => anna.req('/api/goals/assign', { body: { items: [{ key, goal, begruendung: 'Test' }], confirm: true } });
+  // Regel 1: Beleg von M10-1 nennt zusätzlich PM-267 (offen, ohne Ziel) und PM-340 (bewusst ohne Ziel → bleibt so).
+  const zf = join(VAULT, 'olaf/1-Projects/ziele-olaf.md'), orig = readFileSync(zf, 'utf8');
+  writeFileSync(zf, orig.replace('| PM-331 |', '| PM-331, PM-267, PM-340 |'));
+  await set('PM-267', '');
+  const a = await anna.req('/api/goals/assign');
+  const auto = a.j.auto.find((x: any) => x.key === 'PM-267');
+  assert.equal(auto?.ziel, 'M10-1', JSON.stringify(a.j.auto));
+  assert.match(auto.begruendung, /Beleg von M10-1 \(ziele-olaf\.md, Zeile \d+\)/);
+  assert.ok(!a.j.auto.some((x: any) => x.key === 'PM-340' || x.key === 'PM-331'), 'KEINS und erledigte Tickets nie');
+  const h = (await anna.req('/api/goals/history/PM-267')).j.entries[0];
+  assert.deepEqual([h.ziel, h.source, h.by], ['M10-1', 'auto: Regel 1', 'Werkbank (automatisch)']);
+  assert.ok(!a.j.tickets.some((x: any) => x.key === 'PM-267'), 'hat jetzt ein Ziel');
+  assert.equal((await anna.req('/api/goals/history/PM-340')).j.entries[0].ziel, 'KEINS');
+  // Mit einem Klick geändert → manuell; erneutes Laden überschreibt das nie.
+  assert.equal((await set('PM-267', 'KR1')).status, 200);
+  assert.equal((await anna.req('/api/goals')).status, 200);
+  const h2 = (await anna.req('/api/goals/history/PM-267')).j.entries[0];
+  assert.deepEqual([h2.ziel, h2.source], ['KR1', 'werkbank']);
+  assert.ok(!(await anna.req('/api/goals/assign')).j.auto.some((x: any) => x.key === 'PM-267'));
+  writeFileSync(zf, orig);
+  // Spec ziel: → nur Vorschlag (zählt nicht, bis bestätigt), nie mit „alle hoch“.
+  await set('PM-267', '');
+  const sp = await anna.req('/api/roadmap/spec-new', { body: { topic: 'Service-View', state: '1-Backlog', slug: 'ziel-vorschlag', title: 'Ziel-Vorschlag aus Spec', goal: 'KR1', jira: 'PM-267', confirm: true } });
+  assert.equal(sp.status, 200, JSON.stringify(sp.j));
+  const c = await anna.req('/api/goals/assign');
+  const t = c.j.tickets.find((x: any) => x.key === 'PM-267');
+  assert.ok(t, 'PM-267 bleibt ohne Ziel — der Vorschlag wird nicht gespeichert');
+  assert.deepEqual(t.proposal, { ziel: 'KR1', sicherheit: 'mittel', quelle: 'spec', begruendung: 'Verknüpfte Spec „serviceview-spec-ziel-vorschlag“ hat ziel: KR1.' });
+  assert.equal(c.j.computed, 1);
+  const kr1 = (await anna.req('/api/goals/KR1')).j;
+  assert.ok(!JSON.stringify(kr1.tickets ?? []).includes('"PM-267"'), 'Vorschlag zählt nicht in die KR-Bewertung');
+  assert.deepEqual((await anna.req('/api/goals/import', { body: { mode: 'hoch' } })).j.items, []);
+  const pre = await anna.req('/api/goals/import', { body: { mode: 'keys', keys: ['PM-267'] } });
+  assert.deepEqual(pre.j.items, [{ key: 'PM-267', goal: 'KR1', begruendung: t.proposal.begruendung, quelle: 'spec' }]);
+  assert.equal((await anna.req('/api/goals/import', { body: { mode: 'keys', keys: ['PM-267'], confirm: true } })).j.imported, 1);
+  assert.deepEqual(((await anna.req('/api/goals/history/PM-267')).j.entries[0]).source, 'vorschlag-spec');
+  // Datei gewinnt; nennt die Datei das Ticket (auch unbrauchbar kurz), nimmt „übernehmen“ nicht still den Spec-Vorschlag.
+  await set('PM-267', '');
+  writeFileSync(join(tmp, 'vorschlag.json'), JSON.stringify([{ key: 'PM-267', ziel: 'M10-1', begruendung: 'aus der Datei', sicherheit: 'mittel' }]));
+  assert.deepEqual((await anna.req('/api/goals/assign')).j.tickets.find((x: any) => x.key === 'PM-267').proposal, { ziel: 'M10-1', begruendung: 'aus der Datei', sicherheit: 'mittel', quelle: 'datei' });
+  writeFileSync(join(tmp, 'vorschlag.json'), JSON.stringify([{ key: 'PM-267', ziel: 'KEINS', begruendung: 'x' }]));
+  assert.equal((await anna.req('/api/goals/assign')).j.tickets.find((x: any) => x.key === 'PM-267').proposal.quelle, 'datei');
+  assert.deepEqual((await anna.req('/api/goals/import', { body: { mode: 'keys', keys: ['PM-267'] } })).j.items, []);
+  writeFileSync(join(tmp, 'vorschlag.json'), '[]');
+  assert.equal(jira.writes.length, n, 'nichts nach Jira');
+});
+
 
 test('Runde 7: Board-Filter „nur aktueller Sprint“ und Mein Tag nach lokaler Mitgliedschaft; alter Label-Weg 410; Zurücksetzen lässt Fallback wieder gelten', async () => {
   const cur = (await anna.req('/api/board')).j.sprint.id;   // aktueller Zyklus (im Testlauf ggf. der neu angelegte)
@@ -1230,7 +1288,8 @@ test('Agent ansetzen: Vorschau schreibt nichts, Sperren, genau ein Ticket, Zurü
   await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
   const RM = 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/Service-View';
   const creates = () => jira.writes.filter((w) => w.type === 'create').length;
-  const go = (body: any, c = anna) => c.req('/api/roadmap/ansetzen', { body });
+  // G0 ist hier ohne Repos (Stopp ohne Knopf): die Bestätigung wählt „trotzdem bauen“, wie Knut im Dialog.
+  const go = (body: any, c = anna) => c.req('/api/roadmap/ansetzen', { body: body.confirm ? { g0Choice: 'trotzdem bauen', ...body } : body });
   // Spec in 3-Plan anlegen (Vorlage) und ohne offene Entscheidung füllen.
   const mkSpec = async (slug: string, title: string, extra = '') => {
     const r = await anna.req('/api/roadmap/spec-new', { body: { topic: 'Service-View', state: '3-Plan', slug, title, confirm: true } });
@@ -1339,5 +1398,20 @@ test('Agent ansetzen: Vorschau schreibt nichts, Sperren, genau ein Ticket, Zurü
   assert.equal(a3.j.key, 'PM-321'); assert.equal(creates(), 2); assert.equal(a3.j.readback.existing, true, 'übernommenes Ticket bleibt, wie es ist');
   assert.match(readFileSync(join(VAULT, p3), 'utf8'), /^jira: PM-321$/m);
   assert.equal((await go({ path: p3, confirm: true, hash: (await go({ path: p3 })).j.hash, useKey: 'PM-99999' })).status, 404);
+
+  // G0 „Prüfung vor dem Bau“ (docs/plan-vorbau-check.md): ohne Repos/Lesetoken Stopp ohne Knopf — Knut muss wählen.
+  const p4 = await mkSpec('g0-erinnerung-zwei', 'G0-Erinnerung zwei');
+  const pre4 = await go({ path: p4 });
+  assert.equal(pre4.j.g0.ergebnis, 'stopp');
+  assert.deepEqual(pre4.j.g0.options.map((o: any) => o.label), ['trotzdem bauen', 'Spec nachziehen/abräumen'], 'kein „ohne PR-Prüfung bauen“');
+  const c0 = creates();
+  const ohne = await anna.req('/api/roadmap/ansetzen', { body: { path: p4, confirm: true, hash: pre4.j.hash } });
+  assert.equal(ohne.status, 409); assert.match(ohne.j.error, /G0 Stopp — erst im Dialog entscheiden/);
+  const weg = await go({ path: p4, confirm: true, hash: pre4.j.hash, g0Choice: 'Spec nachziehen/abräumen' });
+  assert.equal(weg.status, 200); assert.equal(weg.j.g0Abgebrochen, true);
+  assert.equal(creates(), c0, 'nichts angelegt');
+  const proto = readFileSync(join(tmp, 'g0.jsonl'), 'utf8');
+  assert.match(proto, /"art":"knopf","slug":"[a-z-]*g0-erinnerung-zwei","knopf":"Spec nachziehen\/abräumen"/);
+  assert.match(proto, /"knopf":"trotzdem bauen"/, 'die Bestätigungen oben stehen als Knopf im Protokoll');
   await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
 });

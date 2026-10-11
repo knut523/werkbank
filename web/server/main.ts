@@ -19,7 +19,8 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, nachtbau, g0Blocked, g0Repos } from './orchestrator.ts';
+import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName } from './ablage.ts';
@@ -39,15 +40,16 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
-import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira } from './local.ts';
+import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
 import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './timebox.ts';
 import { isMine, resolveIdentity, vienna } from './hygiene.ts';
 import { ObjectId } from 'mongodb';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
 import { ansetzenMode, specGate, sprintEnd, ticketDraft, localDuplicates, dupJql, simJira, liveJira, runAnsetzen, specTicketState, specSlug, view as ansetzenView, draftHashOf, addSimField, DEFAULT_WORKSTREAM, type AnsetzenJira, type Dup } from './ansetzen.ts';
+import { collectDecisions, todayQuestions, todayPayload } from './fragen.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
-import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, type GoalNode } from './goals.ts';
+import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, rule1Goals, specProposals, autoEligible, type GoalNode } from './goals.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -865,13 +867,22 @@ function roadmapSpecs(local?: Map<string, { ziel: string | null }>) {
   return out;
 }
 
+// „Wartet auf dich“ (Heute): nur heute offene Vault-Fragen, jede einmal; überholte zum Aufräumen
+// (docs/plan-heute-fragen-aktuell.md). Eigener Endpunkt, damit Heute nicht die ganze Roadmap samt GitHub lädt.
+on('GET', /^\/api\/roadmap\/heute$/, async (req, res) => {
+  await needUser(req);
+  const idx = vaultIdx();
+  const { decisions, texts } = collectDecisions(idx, readVault, ROADMAP_BASE);
+  send(res, 200, todayPayload(todayQuestions(decisions, { texts, fm: (p) => idx.notes.get(p)?.fm, today: vienna().date })));
+});
+
 on('GET', /^\/api\/roadmap$/, async (req, res) => {
   const u = await needUser(req);
   const idx = vaultIdx();
   const im = await issueMap();
   const rm = roadmap(idx, ROADMAP_BASE);
   const byName = new Map<string, any>();
-  const decisions: any[] = [];
+  const { decisions } = collectDecisions(idx, readVault, ROADMAP_BASE);
   const specPrs = new Map<string, string[]>();
   for (const t of rm.topics) {
     for (const [state, specs] of Object.entries(t.states)) {
@@ -884,14 +895,8 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
         const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text), verified: n.fm['last-verified'] ? String(n.fm['last-verified']).slice(0, 10) : null, jiraKey: n.fm.jira != null && String(n.fm.jira).trim() !== '' && String(n.fm.jira) !== '[]' };
         byName.set(n.name, info);
         for (const pr of prs) specPrs.set(pr, [...(specPrs.get(pr) ?? []), n.name]);
-        for (const d of ds) if (d.open) decisions.push({ ...d, path: sp.path, spec: n.name, title: sp.title, topic: t.name, state, hash: info.hash });
       }
     }
-  }
-  // Übersichtsseiten und Register haben auch „- Knut:“-Zeilen.
-  for (const o of [...rm.overview, ...rm.topics.filter((t) => t.overview).map((t) => ({ path: t.overview!, title: idx.notes.get(t.overview!)?.title ?? t.overview! }))]) {
-    const text = readVault(o.path);
-    for (const d of parseDecisions(text)) if (d.open) decisions.push({ ...d, path: o.path, spec: idx.notes.get(o.path)?.name, title: o.title, topic: o.path.includes('/0-Overview/') ? 'Übersicht' : o.path.split('/').at(-2), state: 'Übersicht', hash: hashText(text) });
   }
   const prio = readVault(`${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`);
   const reasons = parseReasons(prio);
@@ -1104,8 +1109,12 @@ on('GET', /^\/api\/today$/, async (req, res) => {
   const day = ((await tbCol().find({ userId: u.id, date: today }).sort({ start: 1 }).toArray()) as any[])
     .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
   const orchOpen = (await listQuestions(u, { open: true }).catch(() => [])).length;
+  // Automatisch fortgesetzte Stränge (Plan auto-weiter, DoD 6): nur der Zähler aus Mongo, kein Abruf bei der Brücke.
+  const orchAuto = (await wb().collection('orchestrator_runs').find({ userId: u.id, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
+    .map((r: any) => ({ id: String(r._id), title: r.title, url: r.url, n: r.autoTotal, stopped: !!r.autoStopped }));
+  const g0 = await g0Blocked(u).catch(() => []);   // Nachtbau: von G0 gestoppte Stränge (blocked_g0)
   const memory = u.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null;   // nur Admins (RAM-Plan 125)
-  send(res, 200, { queue, mine, day, today, orchOpen, memory, count: await todayCount(u, queue, mine), dryRun: dryRun() });
+  send(res, 200, { queue, mine, day, today, orchOpen, orchAuto, g0, memory, count: await todayCount(u, queue, mine), dryRun: dryRun() });
 });
 
 on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
@@ -1168,6 +1177,15 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
   const conv = String(b.conv ?? '');
   if (!conv) throw new HttpError(400, 'Keine Unterhaltung bekannt — review_ready gilt nur in einem Werkbank-Chat.');
   const run: any = await wb().collection('agent_runs').findOne({ userId: u.id, conv, mode: 'chat' }, { sort: { startedAt: -1 } });
+  // Orchestrator-Strang: Fertig-Marke am Strang — er wird danach nie mehr automatisch fortgesetzt (Plan auto-weiter, DoD 4).
+  const strand: any = run ? null : await wb().collection('orchestrator_runs').findOne({ userId: u.id, conv });
+  if (strand) {
+    const p = parseReview(b);
+    if (!p.review) throw new HttpError(400, p.error!);
+    await wb().collection('orchestrator_runs').updateOne({ _id: strand._id }, { $set: { reviewReadyAt: new Date(), review: p.review } });
+    log('review bereit (strang)', { user: u.id, id: strand._id, dod: p.review.dod.length });
+    return send(res, 200, { ok: true, strand: strand._id });
+  }
   if (!run) throw new HttpError(404, 'Kein Werkbank-Agentenlauf zu diesem Chat — nichts gesetzt (die Review-Schlange kennt nur Läufe, die vom Board aus gestartet wurden).');
   const p = parseReview(b);
   if (!p.review) throw new HttpError(400, p.error!);
@@ -1354,6 +1372,16 @@ async function linkSpec(sp: { path: string; text: string }, key: string, field: 
   return 'ok';
 }
 
+// G0 je Spec 3 Minuten zwischenspeichern: Vorschau und Klick sehen dieselben Belege, ohne zweimal zu holen.
+const g0Cache = new Map<string, { at: number; r: VorbauErgebnis }>();
+async function ansetzenG0(slug: string): Promise<VorbauErgebnis> {
+  const c = g0Cache.get(slug);
+  if (c && Date.now() - c.at < 180_000) return c.r;
+  const r = await pruefe({ slug, repos: g0Repos(null), aufrufer: 'ansetzen' });
+  g0Cache.set(slug, { at: Date.now(), r });
+  return r;
+}
+
 on('GET', /^\/api\/roadmap\/ansetzen$/, async (req, res, _m, url) => {
   await needAdmin(req);
   const path = url.searchParams.get('path') ?? '';
@@ -1377,6 +1405,20 @@ on('POST', /^\/api\/roadmap\/ansetzen$/, async (req, res) => {
   if (m.mode === 'aus') {
     if (b.confirm === true) throw new HttpError(403, m.problem ?? '„Agent ansetzen“ ist ausgeschaltet (WERKBANK_ANSETZEN).');
     return send(res, 200, base);
+  }
+  // G0 „Prüfung vor dem Bau“ (docs/plan-vorbau-check.md): Repos aus WERKBANK_VORBAU_REPOS; Treffer/Stopp → Knut wählt
+  // im Dialog einen Knopf (protokolliert). Ohne Lesetoken oder ohne Repos: Stopp ohne Knopf, nur „trotzdem bauen“.
+  if (gate.ok && !state?.key && !vorbauAus()) {   // WERKBANK_VORBAU_CHECK=off → kein G0 im Dialog
+    const g0 = await ansetzenG0(specSlug(sp.path));
+    base.g0 = { ergebnis: g0.ergebnis, text: g0Text(g0), belege: g0.belege.map((x) => ({ text: x.text, pr: x.pr ?? null, sha: x.sha ?? null, wirkung: x.wirkung })), hinweise: g0.hinweise, stopp: g0.stopp ?? null, options: g0.ergebnis === 'treffer' || g0.ergebnis === 'stopp' ? g0Optionen(g0) : [] };
+    const stop = base.g0.options.length > 0;
+    if (b.confirm === true && stop) {
+      const choice = String(b.g0Choice ?? '');
+      if (!base.g0.options.some((o: any) => o.label === choice)) throw new HttpError(409, `G0 ${g0.ergebnis === 'stopp' ? 'Stopp' : 'Treffer'} — erst im Dialog entscheiden: ${base.g0.options.map((o: any) => `„${o.label}“`).join(', ')}.`);
+      protokolliere({ art: 'knopf', slug: specSlug(sp.path), knopf: choice, kriterien: g0.kriterien, ergebnis: g0.ergebnis, durch: u.email, aufrufer: 'ansetzen' });
+      if (choice === 'Spec nachziehen/abräumen') { g0Cache.delete(specSlug(sp.path)); return send(res, 200, { ...base, g0Abgebrochen: true }); }
+      b.note = `${String(b.note ?? '')}\n\nG0 vor dem Bau: Knut hat „${choice}“ gewählt.\n${base.g0.text}`.trim();
+    }
   }
   let jira: AnsetzenJira | null = null;
   let me: { accountId: string; displayName: string } | null = null;
@@ -1592,24 +1634,58 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
 
 on('GET', /^\/api\/goals$/, async (req, res) => {
   await needUser(req);
-  const im = await issueMap();
+  const im = await withAutoGoals();
   const g = goalsAll(im);
   const noGoal = [...im.values()].filter((i) => needsGoal(i, im, knownGoals(g))).length;
   send(res, 200, { file: GOALS_FILE(), missing: g.missing, roots: g.roots.map(stripTree), noGoal, labels: { goalPrefix: labelCfg().goalPrefix, exempt: exemptLabel() } });
 });
 
+// ---------- Automatisch zuordnen (docs/plan-ziele-auto.md, Council Runde 2) ----------
+const AUTO_RULE1 = 'auto: Regel 1';
+
+/** Regel 1 anwenden: Ticket-Key steht im Beleg genau einer Zeile aus ziele-olaf.md → dieses Ziel, als „auto: Regel 1“.
+ *  Läuft beim Laden der Ziele und nach jedem Jira-Abgleich; legt nur an, wo es noch keine Zuordnung und kein Label gibt. */
+async function applyAutoGoals(im: Map<string, Issue>): Promise<string[]> {
+  const text = readVault(GOALS_FILE());
+  if (!text) return [];
+  const known = knownGoals(goalsAll(im));
+  const done: string[] = [];
+  for (const [k, r] of rule1Goals(parseGoalsFile(text).goals)) {
+    const i = im.get(k);
+    if (i && autoEligible(i, im, known) && await autoSetGoal(k, r.ziel, `Steht im Beleg von ${r.ziel} (${GOALS_FILE().split('/').pop()}, Zeile ${r.line}).`, AUTO_RULE1)) done.push(k);
+  }
+  if (done.length) { log('ziele automatisch', { regel: 1, n: done.length }); jiraChanged(done, 'ziel'); }
+  return done;
+}
+const withAutoGoals = async () => { const im = await issueMap(); return (await applyAutoGoals(im)).length ? issueMap() : im; };
+
+/** Vorschlag je Ticket: Datei (bewusst entschieden) gewinnt; sonst Spec ziel: (nur Vorschlag, nur IDs aus ziele-olaf.md,
+ *  mehrdeutig → keiner). Nur für Tickets, die die Werkbank anfassen darf (autoEligible). Anzeige und Übernahme nutzen beide das. */
+async function proposals(im: Map<string, Issue>, known: Set<string>, p: ReturnType<typeof loadProposals>) {
+  const usable = (x: any) => x && (x.ziel === 'KEINS' || (known.has(x.ziel) && goalLevel(x.ziel) !== 'Gate'));
+  const text = readVault(GOALS_FILE());
+  const ids = new Set((text ? parseGoalsFile(text).goals : []).map((r) => r.id));
+  const spec = specProposals(roadmapSpecs(await assignments('spec')), ids);
+  return (k: string) => {
+    const f = p.map.get(k);
+    if (usable(f)) return { ...f!, quelle: 'datei' as const };
+    const i = im.get(k);
+    return i && autoEligible(i, im, known) ? spec.get(k) ?? null : null;
+  };
+}
+
 on('GET', /^\/api\/goals\/assign$/, async (req, res) => {
   await needUser(req);
-  const im = await issueMap();
+  const im = await withAutoGoals();
   const g = goalsAll(im);
   const p = loadProposals();
   const known = knownGoals(g);
-  // Nur Vorschläge auf bestehende, zuordenbare Ziele (kein Gate) oder KEINS vorauswählen.
-  const usable = (x: any) => x && (x.ziel === 'KEINS' || (known.has(x.ziel) && goalLevel(x.ziel) !== 'Gate'));
-  const tickets = [...im.values()].filter((i) => needsGoal(i, im, known)).map((i) => ({ ...richIssue(im, i, known), proposal: usable(p.map.get(i.key)) ? p.map.get(i.key)! : null }))
+  const proposalOf = await proposals(im, known, p);
+  const tickets = [...im.values()].filter((i) => needsGoal(i, im, known)).map((i) => ({ ...richIssue(im, i, known), proposal: proposalOf(i.key) }))
     .sort((a, b) => a.workstreamName.localeCompare(b.workstreamName, 'de') || a.key.localeCompare(b.key, 'de', { numeric: true }));
   send(res, 200, {
-    tickets, proposalFile: p.file, proposalError: p.error, proposals: tickets.filter((t) => t.proposal).length,
+    tickets, proposalFile: p.file, proposalError: p.error, proposals: tickets.filter((t) => t.proposal?.quelle === 'datei').length, computed: tickets.filter((t) => t.proposal?.quelle === 'spec').length,
+    auto: [...(await assignments('ticket')).values()].filter((a) => a.source === AUTO_RULE1 && a.ziel && im.has(a.key)).map((a) => ({ key: a.key, summary: im.get(a.key)!.summary, ziel: a.ziel, begruendung: a.begruendung, at: a.at })),
     goalIds: [...g.byId.values()].filter((n) => n.level !== 'Gate').map((n) => ({ id: n.id, level: n.level, result: valueOf(n.result) ?? n.id })),
     labels: { goalPrefix: labelCfg().goalPrefix, exempt: exemptLabel() }, dryRun: dryRun(),
   });
@@ -1671,9 +1747,14 @@ on('POST', /^\/api\/goals\/import$/, async (req, res) => {
   const high = (x: any) => (typeof x === 'number' ? (x <= 1 ? x >= 0.8 : x >= 80) : /^(hoch|high|sicher)$/i.test(String(x ?? '')));
   const keys = b.mode === 'keys' ? new Set((Array.isArray(b.keys) ? b.keys : []).map(String)) : null;
   const items = [...p.map.entries()].filter(([k, x]) => im.has(k) && needsGoal(im.get(k)!, im, known) && (keys ? keys.has(k) : high(x.sicherheit)) && (x.ziel === 'KEINS' ? x.begruendung.replace(/\s+/g, ' ').trim().length >= 5 : known.has(x.ziel) && goalLevel(x.ziel) !== 'Gate'))
-    .map(([k, x]) => ({ key: k, goal: x.ziel, begruendung: x.begruendung }));
+    .map(([k, x]) => ({ key: k, goal: x.ziel, begruendung: x.begruendung, quelle: 'datei' }));
+  // Vorschläge aus Specs nur einzeln (mode keys), nie mit „alle mit Sicherheit hoch“ — und nur, wo die Datei nichts anzeigt.
+  if (keys) { const prop = await proposals(im, known, p); for (const k of keys) { const x = prop(k); if (x?.quelle === 'spec') items.push({ key: k, goal: x.ziel, begruendung: x.begruendung, quelle: 'spec' }); } }
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, items, file: p.file });
-  const r = await assignGoals(u, items, im, true, 'vorschlag');
+  const fromFile = items.filter((x) => x.quelle === 'datei'), computed = items.filter((x) => x.quelle === 'spec');
+  const r1: any = fromFile.length ? await assignGoals(u, fromFile, im, true, 'vorschlag') : { results: [] };
+  const r2: any = computed.length ? await assignGoals(u, computed, im, true, 'vorschlag-spec') : { results: [] };
+  const r = { ok: true, results: [...r1.results, ...r2.results], toJira: goalsToJira() };
   send(res, 200, { ...r, imported: (r as any).results.filter((x: any) => x.ok).length });
 });
 
@@ -2028,15 +2109,23 @@ async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
   return internalUser(req, { userId: d ? String(d._id) : '' });
 }
 
-on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review)$/, async (req, res, m) => {
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau)$/, async (req, res, m) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
   const id = String(b.id ?? '');
   switch (m[1]) {
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true });
-      log('strang gestartet', { user: u.id, id: r.id, conv: r.conv });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null });
+      log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null });
       return send(res, 200, r);
+    }
+    case 'nachtbau': {
+      // Nachtbau (docs/plan-vorbau-check.md): je Item G0; Treffer → blocked_g0, nicht prüfbar → ein Morgeneintrag.
+      const items = Array.isArray(b.items) ? b.items.slice(0, 50) : [];
+      const r = await nachtbau(u, items);
+      log('nachtbau', { user: u.id, items: r.map((x) => `${x.slug}:${x.status}`) });
+      if (r.some((x) => x.status !== 'gestartet')) roadmapChanged('orchestrator-frage');
+      return send(res, 200, { items: r });
     }
     case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
     case 'show': return send(res, 200, await showOrch(u, id));
@@ -2051,8 +2140,8 @@ on('POST', /^\/internal\/orchestrator\/questions\/(ask|list|get|withdraw)$/, asy
   const u = await orchPerson(req, b);
   switch (m[1]) {
     case 'ask': {
-      const q = await askKnut(u, { title: b.title, context: b.context, options: b.options, recommendation: b.recommendation, strand: b.strand || null, link: b.link || null, plan: b.plan || null });
-      log('rückfrage an knut', { user: u.id, id: q.id });
+      const q = await askKnut(u, { title: b.title, context: b.context, options: b.options, recommendation: b.recommendation, strand: b.strand || null, link: b.link || null, plan: b.plan || null, key: b.key || null, quelle: b.quelle || null });
+      log('rückfrage an knut', { user: u.id, id: q.id, key: q.key });
       roadmapChanged('orchestrator-frage');
       return send(res, 200, q);
     }
@@ -2246,7 +2335,7 @@ const server = createServer(async (req, res) => {
     const status = e.status ?? (e instanceof JiraError ? 502 : 500);
     const known = e instanceof JiraError || e instanceof JiraWriteError;
     if (status >= 500) log('fehler', { path: url.pathname, error: String(e.message ?? e).slice(0, 300) });
-    if (!res.headersSent) send(res, status, { error: status >= 500 && !known ? 'Interner Fehler.' : e.message, ...(e instanceof JiraWriteError ? { code: e.code } : {}) });
+    if (!res.headersSent) send(res, status, { error: status >= 500 && !known ? 'Interner Fehler.' : e.message, ...(e instanceof JiraWriteError ? { code: e.code } : {}), ...(e.g0 ? { g0: e.g0 } : {}), ...(e.existing ? { existing: e.existing } : {}) });
     else res.end();
   }
 });
@@ -2289,6 +2378,7 @@ async function backgroundJobs() {
       if (!creds) return;
       const r = await syncMirror(creds, 'Intervall');
       log('jira sync', { count: r.count, removed: r.removed });
+      await applyAutoGoals(await issueMap());
     } catch (e: any) { log('jira sync', { error: String(e.message).slice(0, 200) }); }
   };
   setTimeout(jiraTick, 5000);
@@ -2387,4 +2477,18 @@ mkdirSync(cfg.dataDir, { recursive: true });
 migrateLegacy(log).catch((e) => log('ablage-umzug', { error: String(e?.message ?? e).slice(0, 200) }));
 server.listen(cfg.port, cfg.host, () => log('listening', { host: cfg.host, port: cfg.port, demo: cfg.demo, vault: cfg.vaultDir }));
 if (process.env.WERKBANK_NO_JOBS !== '1') backgroundJobs();
+// Orchestrator-Stränge selbst fortsetzen (docs/plan-orchestrator-auto-weiter.md) — eigener Takt, auch ohne Hintergrundjobs.
+// „Konto frei“ nur mit Antwort der Brücke und mindestens zwei Konten (sonst wartet `rate_limit` die 30 min ab).
+startAutoWeiter({
+  userById: async (id) => { const u = await userById(id); return u && allowed(u.email) ? u : null; },
+  accountFree: async (u) => {
+    const list = await listClaudeAccounts(u);
+    if (list.length < 2) return false;
+    const r = await fetch(`${cfg.bridgeUrl}/internal/accounts-state?user=${encodeURIComponent(u.id)}`, { headers: bridgeInternal, signal: AbortSignal.timeout(1500) });
+    if (!r.ok) return false;
+    const ex: Record<string, number> = ((await r.json()) as any).exhausted ?? {};
+    return list.some((a: any) => !(ex[a.id] > Date.now()));
+  },
+  log,
+});
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { server.close(); process.exit(0); });
