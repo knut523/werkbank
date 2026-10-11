@@ -553,7 +553,7 @@ on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => 
   const children = [...im.values()].filter((x) => x.parent === i.key).sort((a, b) => a.key.localeCompare(b.key, 'de', { numeric: true }))
     .map((x) => ({ key: x.key, summary: x.summary, status: x.status, statusCategory: x.statusCategory, assignee: x.assignee, duedate: x.duedate, overdue: isOverdue(x), hygiene: hygI.get(x.key) ?? [] }));
   send(res, 200, {
-    issue: i, url: browseUrl(i.key), children, runs,
+    issue: i, url: browseUrl(i.key), children, runs, hygiene: hygI.get(i.key) ?? [],
     parent: i.parent ? { key: i.parent, summary: im.get(i.parent)?.summary ?? i.parentSummary } : null,
     docs: await ticketDocs(u, i.key),
     chatUrl: chatUrl(`${ticketPrompt(i)}\n\nLass uns an diesem Ticket arbeiten. Lies zuerst, was Vault und Jira dazu sagen.`),

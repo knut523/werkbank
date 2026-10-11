@@ -159,14 +159,14 @@ export async function applyActions(u: User, key: string, actions: { type: string
 }
 
 /** Board: welche Karten brauchen Pflege (für alle Owner, je Owner-Identität gerechnet). */
-export function hygieneAll(issues: Issue[]): Map<string, string[]> {
+export function hygieneAll(issues: Issue[]): Map<string, { rule: HygieneItem['rule']; days?: number }[]> {
   const owners = new Map<string, string | null | undefined>();
   for (const i of issues) if (i.assignee) owners.set(i.assignee, i.assigneeId);
-  const out = new Map<string, string[]>();
+  const out = new Map<string, { rule: HygieneItem['rule']; days?: number }[]>();
   for (const [name, id] of owners) {
     for (const h of hygieneFor(issues, { displayName: name, accountId: id ?? null, name }, { staleDays: Number(process.env.WERKBANK_STALE_DAYS || 7) })) {
       if (h.rule === 'ohne Ziel') continue;   // hat eigenen Zähler/Filter „Ohne Ziel“ — nicht die Pflege-Zahl aufblähen
-      out.set(h.key, [...(out.get(h.key) ?? []), h.rule]);
+      out.set(h.key, [...(out.get(h.key) ?? []), h.days === undefined ? { rule: h.rule } : { rule: h.rule, days: h.days }]);
     }
   }
   return out;

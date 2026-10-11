@@ -203,7 +203,7 @@ test('Board: Sync aus Jira (mit Blättern), Bahnen = Workstreams, Filter', async
   assert.equal(orphan.broken, 'Sub-task ohne Parent', 'kaputter Sub-task markiert');
   const hw = b.j.lanes.find((l: any) => l.key === 'PM-70').columns['To Do'].find((i: any) => i.key === 'PM-321');
   assert.equal(hw.subtaskDone, 1);
-  assert.deepEqual(hw.subtasks.map((x: any) => [x.key, x.assignee, x.hygiene]), [['PM-323', 'Knut Peters', []], ['PM-324', null, ['Sub-task ohne Owner']]], 'Pflege je Sub-task');
+  assert.deepEqual(hw.subtasks.map((x: any) => [x.key, x.assignee, x.hygiene]), [['PM-323', 'Knut Peters', []], ['PM-324', null, [{ rule: 'Sub-task ohne Owner' }]]], 'Pflege je Sub-task');
   const prod = b.j.lanes.find((l: any) => l.key === 'PM-70');
   assert.deepEqual(prod.columns['To Do'].map((i: any) => i.key).sort(), ['PM-321', 'PM-322']);
   const pm331 = prod.columns['In Progress'].find((i: any) => i.key === 'PM-331');
@@ -780,6 +780,12 @@ test('Task-Hygiene: Antwort → Vorschlag → Bestätigung → Jira; später; Bo
   const keys = b.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).map((i: any) => i.key);
   assert.ok(keys.includes('PM-900') && keys.includes('PM-902'));
   assert.ok(b.j.hygiene.perOwner['Anna Test'] >= 3);
+  // Pflege in Klartext: Befunde mit Tagen, auch im Ticket-Detail
+  const card = b.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).find((i: any) => i.key === 'PM-900');
+  assert.equal(card.hygiene[0].rule, 'überfällig');
+  assert.ok(card.hygiene[0].days > 0, 'Tage überfällig mitgeliefert');
+  const det = await anna.req('/api/board/issue/PM-900');
+  assert.deepEqual(det.j.hygiene, card.hygiene, 'Detail kennt dieselben Befunde');
 });
 
 test('Board-Agent: Nachfrage setzt dieselbe Sitzung fort; forge-Platzhalter; Sitzungsliste', async () => {
