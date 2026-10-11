@@ -34,6 +34,7 @@ const API: [RegExp, FeatureId][] = [
   [/^\/api\/goals(\/|$)/, 'ziele'],
   [/^\/api\/skills(\/|$)/, 'skills'],
   [/^\/api\/(files|chats|sharelog|scratch)(\/|$)/, 'dateien'],
+  [/^\/api\/leitstand(\/|$)/, 'leitstand'],
   [/^\/api\/orchestrator(\/|$)/, 'orchestrator'],
 ];
 

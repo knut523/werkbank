@@ -46,10 +46,10 @@ const opt = (o: any) => [o.option ? `Option „${o.option}“` : '', o.text].fil
 const ORCH_TOOLS = [
   {
     name: 'orch_start',
-    description: 'Neuen Arbeitsstrang starten: eigener Werkbank-Chat in Knuts Konto mit Auftrag, Arbeitsordner (Worktree unter ~/work/knut) und optional Plandatei. code=true legt einen frischen Worktree vom Integrationszweig an. Liefert ID und Link.',
-    inputSchema: { type: 'object', properties: { title: { type: 'string' }, cwd: { type: 'string' }, prompt: { type: 'string' }, plan: { type: 'string' }, code: { type: 'boolean' }, shared: { type: 'boolean' } }, required: ['title', 'cwd', 'prompt'] },
+    description: 'Neuen Arbeitsstrang starten: eigener Werkbank-Chat in Knuts Konto mit Auftrag, Arbeitsordner (Worktree unter ~/work/knut) und optional Plandatei. lauf = Name des Auftrags, zu dem der Strang gehört (Gruppe + Lesezeichen „Orch · <Lauf>“; alle Stränge eines Auftrags mit demselben lauf). Bericht nach ~/work/knut/review-pakete/NNN-<slug>/bericht.md verlangen, dann verlinkt die Werkbank ihn. code=true legt einen frischen Worktree vom Integrationszweig an. Liefert ID und Link.',
+    inputSchema: { type: 'object', properties: { title: { type: 'string' }, cwd: { type: 'string' }, prompt: { type: 'string' }, plan: { type: 'string' }, lauf: { type: 'string' }, code: { type: 'boolean' }, shared: { type: 'boolean' } }, required: ['title', 'cwd', 'prompt'] },
     run: async (a: any) => {
-      const j = await call('/internal/orchestrator/start', { title: a.title, cwd: a.cwd, prompt: a.prompt, plan: a.plan || null, code: a.code === true, shared: a.shared === true }, 60_000);
+      const j = await call('/internal/orchestrator/start', { title: a.title, cwd: a.cwd, prompt: a.prompt, plan: a.plan || null, lauf: a.lauf || null, code: a.code === true, shared: a.shared === true }, 60_000);
       return `gestartet: ${j.id} ${j.url}\nOrdner: ${j.cwd}${j.worktree ? ' (frischer Worktree)' : ''}${j.stand ? `\n${j.stand}` : ''}${j.warning ? `\nHinweis: ${j.warning}` : ''}`;
     },
   },
@@ -60,12 +60,21 @@ const ORCH_TOOLS = [
     run: async (a: any) => {
       const j = await call('/internal/orchestrator/list', { all: a.all === true });
       if (!j.strands.length) return 'Keine offenen Stränge.';
-      return j.strands.map((s: any) => [
+      // Gruppiert je Lauf (Teil B): Kopfzeile mit Zählern, darunter die Stränge.
+      const byLauf = new Map<string, any[]>();
+      for (const s of j.strands) byLauf.set(s.lauf ?? '—', [...(byLauf.get(s.lauf ?? '—') ?? []), s]);
+      const word: Record<string, string> = { running: 'läuft', waiting: 'wartet', done: 'fertig', failed: 'gestoppt' };
+      return [...byLauf].map(([lauf, list]) => {
+        const n: Record<string, number> = {};
+        for (const s of list) n[word[s.status] ?? s.status] = (n[word[s.status] ?? s.status] ?? 0) + 1;
+        return `## ${lauf} — ${list.length} ${list.length === 1 ? 'Strang' : 'Stränge'}${Object.entries(n).map(([w, c]) => ` · ${c} ${w}`).join('')}\n` + list.map((s: any) => [
         `${ICON[s.status] ?? '?'} ${s.id} ${s.status} „${s.title}“${s.reviewed ? ' [geprüft]' : ''}`,
         `   ${s.reason} · zuletzt ${t(s.lastActivity)} · ${s.sends} Nachr.${s.autoWeiter ? ` · automatisch fortgesetzt (${s.autoWeiter})` : ''}${s.reviewReady ? ' · review_ready' : ''}`,
         `   ${s.cwd}  ${s.url}`,
+        ...(s.reviewedBy === 'leitstand' ? ['   abgelegt (Leitstand) — Knut prüft noch'] : []),
         ...(s.excerpt ? [`   > Daten aus Strang ${s.id}:`, ...s.excerpt.split('\n').slice(0, 8).map((l: string) => `   > ${l}`)] : []),
       ].join('\n')).join('\n');
+      }).join('\n\n');
     },
   },
   {
@@ -86,9 +95,9 @@ const ORCH_TOOLS = [
   },
   {
     name: 'orch_review',
-    description: 'Strang als geprüft markieren (verschwindet aus der offenen Liste, wird nicht mehr fortgesetzt).',
+    description: 'Strang ablegen (wird nicht mehr automatisch fortgesetzt). Ersetzt NICHT Knuts Prüfung: ein fertiger Strang bleibt in Knuts Review-Schlange auf „Heute“, bis Knut „Passt“ klickt.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' }, note: { type: 'string' } }, required: ['id'] },
-    run: async (a: any) => { await call('/internal/orchestrator/review', { id: a.id, note: a.note ?? '' }); return `geprüft: ${a.id}`; },
+    run: async (a: any) => { await call('/internal/orchestrator/review', { id: a.id, note: a.note ?? '', via: 'leitstand' }); return `abgelegt: ${a.id} (Knut prüft auf „Heute“)`; },
   },
   {
     name: 'orch_ask',

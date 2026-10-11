@@ -9,7 +9,8 @@
 // nur bei normalem Ende — aus der Status-Marke der letzten Antwort.
 
 import { randomUUID } from 'node:crypto';
-import { realpathSync, statSync } from 'node:fs';
+import { realpathSync, statSync, readFileSync } from 'node:fs';
+import { findBericht } from './bericht.ts';
 import { cfg } from './config.ts';
 import { wb, lc } from './db.ts';
 import { librechatAccessToken, type User } from './auth.ts';
@@ -213,11 +214,24 @@ export async function strandStates(u: User): Promise<Map<string, StrandState & {
 
 // ---------- Öffentliche Schnittstelle ----------
 
-export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean }
+export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; lauf?: string | null }
+
+/** Lauf-Name (Plan 132 Teil B, F8): ausdrücklich angegeben oder der Titelteil vor „:“ bzw. „ · “; gesäubert, ≤ 40 Zeichen. */
+export function laufName(title: string, explicit?: string | null): { lauf: string; explicit: boolean } {
+  const clean = (t: string) => t.replace(/[\u0000-\u001f\u007f·/]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).trim();
+  const e = clean(String(explicit ?? ''));
+  if (e) return { lauf: e, explicit: true };
+  const head = String(title).split(/:| · /)[0];
+  return { lauf: clean(head) || clean(title) || 'ohne Lauf', explicit: false };
+}
+export const laufTag = (lauf: string) => `Orch · ${lauf}`;
 
 export const runs = () => wb().collection('orchestrator_runs');
 // Stränge, nicht der Leitstand (Plan 132, C9/D2): `$ne`, damit alte Dokumente ohne kind dabei bleiben.
 export const STRANDS = { kind: { $ne: 'leitstand' } };
+// Offen = Knut hat ihn nicht geprüft (Teil B, G2); vom Leitstand abgelegte bleiben offen. Alte Dokumente ohne knutReviewedAt,
+// die per CLI geprüft wurden (reviewedAt ohne reviewedBy), gelten als von Knut geprüft.
+export const OPEN = { knutReviewedAt: null, $or: [{ reviewedAt: null }, { reviewedBy: 'leitstand' }] };
 
 async function newId(): Promise<string> {
   for (;;) { const id = randomUUID().slice(0, 8); if (!(await runs().findOne({ _id: id as any }))) return id; }
@@ -250,7 +264,12 @@ export async function startOrch(u: User, inp: StartInput) {
   const rj: any = await reg.json().catch(() => ({}));
   if (!reg.ok) throw err(reg.status === 400 || reg.status === 409 || reg.status === 403 ? reg.status : 502, rj.error ?? `Brücke antwortet mit ${reg.status}`);
   const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand: fresh.status });
-  const doc: any = { _id: id, userId: u.id, conv, url: `${cfg.librechatPublicUrl}/c/${conv}`, title, cwd: rj.dir ?? real, plan, prompt: prompt.slice(0, 500), startedAt: new Date(), lastSentAt: new Date(), sends: 1, reviewedAt: null, mode: rj.mode ?? null, startError: null };
+  const { lauf, explicit } = laufName(title, inp.lauf);
+  // Bericht-Pfad aus dem VOLLEN Auftrag und der Plandatei (F7) — der gespeicherte Auftrag ist gekürzt.
+  let planText = '';
+  if (plan) { try { planText = readFileSync(plan, 'utf8').slice(0, 200_000); } catch { /* egal */ } }
+  const doc: any = { _id: id, userId: u.id, conv, url: `${cfg.librechatPublicUrl}/c/${conv}`, title, cwd: rj.dir ?? real, plan, prompt: prompt.slice(0, 500), startedAt: new Date(), lastSentAt: new Date(), sends: 1, reviewedAt: null, knutReviewedAt: null, mode: rj.mode ?? null, startError: null,
+    lauf, laufExplicit: explicit, bericht: findBericht([prompt, planText]) };
   await runs().insertOne(doc);
   // 2) Chat mit genau dieser ID anlegen; LibreChat fährt den Zug serverseitig.
   try {
@@ -261,11 +280,12 @@ export async function startOrch(u: User, inp: StartInput) {
   }
   // 3) Titel + Lesezeichen im Hintergrund (LibreChat speichert die Unterhaltung erst nach ein paar Sekunden).
   decorateSoon(u, conv, title).catch(() => {});
+  if (explicit) decorateSoon(u, conv, title, 20, laufTag(lauf)).catch(() => {});
   return { id, conv, url: doc.url, cwd: doc.cwd, plan, mode: doc.mode, stand: fresh.status, worktree: fresh.worktree, ...(doc.mode && doc.mode !== 'auto' ? { warning: `Brücke läuft für dieses Konto im Modus „${doc.mode}“ — ohne Auto-Modus darf der Strang nur lesen.` } : {}) };
 }
 
 export async function listOrch(u: User, opts: { all?: boolean } = {}) {
-  const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, ...(opts.all ? {} : { reviewedAt: null }) }).sort({ startedAt: -1 }).limit(100).toArray();
+  const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, ...(opts.all ? {} : OPEN) }).sort({ startedAt: -1 }).limit(100).toArray();
   if (!docs.length) return [];
   let states = new Map<string, any>();
   let bridgeError: string | null = null;
@@ -278,9 +298,11 @@ export async function listOrch(u: User, opts: { all?: boolean } = {}) {
     if (d.autoStopped && st.status !== 'running') st = { status: 'failed', reason: String(d.autoStopped.reason) };
     // Titel/Lesezeichen nachziehen, falls der Start-Durchlauf es nicht geschafft hat (selbstheilend, idempotent).
     if (!d.decorated && !d.startError) { try { if ((await decorate(u, d.conv, d.title)).ok) await runs().updateOne({ _id: d._id }, { $set: { decorated: true } }); } catch { /* nächstes Mal */ } }
+    if (d.laufExplicit && !d.decoratedLauf && !d.startError) { try { if ((await decorate(u, d.conv, d.title, laufTag(d.lauf))).ok) await runs().updateOne({ _id: d._id }, { $set: { decoratedLauf: true } }); } catch { /* nächstes Mal */ } }
     out.push({
       id: d._id, title: d.title, status: st.status, reason: st.reason, reviewed: !!d.reviewedAt, url: d.url, cwd: d.cwd, plan: d.plan,
       startedAt: d.startedAt, lastSentAt: d.lastSentAt, lastActivity: Math.max(s?.turn?.end ?? 0, s?.turn?.start ?? 0, last?.at ?? 0) || null,
+      lauf: d.lauf ?? laufName(d.title).lauf, laufExplicit: !!d.laufExplicit, reviewedBy: d.reviewedBy ?? null, knutReviewed: !!d.knutReviewedAt, doneAt: d.doneAt ?? null, bericht: !!d.bericht,
       sends: d.sends ?? 1, autoWeiter: d.autoTotal ?? 0, autoLast: d.autoLastAt ? { at: d.autoLastAt, cause: d.autoLastCause ?? null } : null, reviewReady: !!d.reviewReadyAt, excerpt: last && !last.fromUser ? excerpt(last.text) : '', written: s?.written ?? [],
     });
   }
@@ -314,15 +336,19 @@ export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 
   const d = await ownRun(u, id);
   // Leitstand (Plan 132, E3/B3): setzt den Deckel nicht zurück und hebt keinen Stopp auf — das entscheidet nur Knut.
   if (via === 'leitstand' && d.autoStopped) throw err(409, `Strang ${id} hat seinen Deckel erreicht — Knut entscheidet in „Heute“ (Fortsetzen/Anhalten).`);
+  if (via === 'leitstand' && d.knutReviewedAt) throw err(409, `Strang ${id} hat Knut geprüft — nicht weiterführen; einen neuen Strang starten oder Knut fragen.`);
   const item = (await listOrch(u, { all: true })).find((r) => r.id === id);
   if (item?.status === 'running') throw err(409, `Strang ${id} arbeitet noch (${item.reason}) — warten, dann senden.`);
   await deliver(u, d.conv, msg);
   if (via === 'leitstand') {
-    await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date(), reviewedAt: null, reviewReadyAt: null }, $inc: { sends: 1, autoStreak: 1 } });
+    // Teil B, G3: review_ready-Stand wandert nach prevReview (Auto-Fortsetzen und Wecken laufen wieder); Knuts Karte bleibt
+    // (doneAt/knutReviewedAt unberührt); eine Ablage durch den Leitstand selbst hebt er damit auf.
+    await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date(), reviewReadyAt: null, review: null, ...(d.review ? { prevReview: { review: d.review, at: d.reviewReadyAt ?? new Date() } } : {}), ...(d.reviewedBy === 'leitstand' ? { reviewedAt: null, reviewedBy: null } : {}) }, $inc: { sends: 1, autoStreak: 1 } });
     return { id, conv: d.conv, url: d.url };
   }
   // Handnachricht: der Deckel beginnt neu, Stopp und review_ready sind aufgehoben (Council R1, Bedingung 4).
-  await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date(), reviewedAt: null, reviewReadyAt: null, autoStreak: 0, autoStopped: null }, $inc: { sends: 1 } });
+  // Teil B, F6: auch Karte, DoD-Tabellen und Knuts Prüfung sind damit weg (nach erneutem „fertig“ keine alte Tabelle).
+  await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date(), reviewedAt: null, reviewedBy: null, knutReviewedAt: null, reviewReadyAt: null, review: null, prevReview: null, doneAt: null, autoStreak: 0, autoStopped: null, ...(/^Nacharbeit nach Review:/.test(msg) ? { reworkAt: new Date(), reworkText: msg.slice(0, 500) } : {}) }, $inc: { sends: 1 } });
   await questions().updateMany({ userId: u.id, kind: 'auto-weiter', 'strand.id': d._id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() } });
   return { id, conv: d.conv, url: d.url };
 }
@@ -409,10 +435,53 @@ export function startAutoWeiter(deps: AutoDeps) {
   return setInterval(() => { autoWeiterTick(deps).catch((e) => deps.log?.('orch-auto-weiter fehler', { error: String(e?.message ?? e).slice(0, 200) })); }, ms);
 }
 
-export async function reviewOrch(u: User, id: string, note = '') {
+/** Geprüft: von Knut (CLI der Hauptsitzung, „Passt“, „Anhalten“) → knutReviewedAt; vom Leitstand → nur abgelegt (Teil B, G2). */
+export async function reviewOrch(u: User, id: string, note = '', by: 'knut' | 'leitstand' = 'knut') {
   const d = await ownRun(u, id);
-  await runs().updateOne({ _id: d._id }, { $set: { reviewedAt: new Date(), reviewNote: String(note).slice(0, 500) } });
-  return { id, reviewed: true };
+  const now = new Date();
+  await runs().updateOne({ _id: d._id }, { $set: { reviewedAt: now, reviewNote: String(note).slice(0, 500), ...(by === 'knut' ? { knutReviewedAt: now, reviewedBy: 'knut' } : { reviewedBy: 'leitstand' }) } });
+  return { id, reviewed: true, by };
+}
+
+// ---------- Stand je Strang festschreiben (Teil B, G1) ----------
+// „Heute“, der Zähler und die Übersicht lesen nur Mongo; dieser Takt schreibt den Stand aller offenen Stränge (auch abgelegter,
+// review_ready- und gedeckelter), unabhängig vom Auto-Fortsetzen. Brücke oder LibreChat weg → nichts überschreiben.
+
+let statusTicking = false;
+export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now = Date.now()) {
+  if (statusTicking) return;
+  statusTicking = true;
+  try {
+    const docs: any[] = await runs().find({ ...STRANDS, knutReviewedAt: null, startError: null, startedAt: { $gt: new Date(now - 14 * 86400_000) } }).toArray();
+    const byUser = new Map<string, any[]>();
+    for (const d of docs) byUser.set(d.userId, [...(byUser.get(d.userId) ?? []), d]);
+    for (const [userId, list] of byUser) {
+      const u = await deps.userById(userId).catch(() => null);
+      if (!u) continue;
+      let states: Map<string, any>;
+      try { states = await strandStates(u); } catch { continue; }
+      for (const d of list) {
+        try {
+          const s = states.get(d.conv);
+          const last = await lastMessage(u, d.conv);
+          const st = orchStatus(d, s, last, now);
+          const set: Record<string, unknown> = { lastStatus: st.status, lastReason: st.reason, statusAt: new Date(now),
+            lastActivity: new Date(Math.max(s?.turn?.end ?? 0, s?.turn?.start ?? 0, last?.at ?? 0) || now), lastExcerpt: last && !last.fromUser ? excerpt(last.text, 600) : '' };
+          // „fertig“ zählt nur mit einer Antwort NACH der letzten Nachricht an den Strang (G1: nach Nacharbeit nicht die alte).
+          if (st.status === 'done' && last && last.at > new Date(d.lastSentAt ?? d.startedAt).getTime() && (!d.doneAt || new Date(d.doneAt).getTime() < last.at)) set.doneAt = new Date(last.at);
+          if (!d.bericht) { const b = findBericht([...(d.review?.artefakte ?? []), last && !last.fromUser ? last.text : '']); if (b) set.bericht = b; }
+          await runs().updateOne({ _id: d._id }, { $set: set });
+        } catch (e: any) { deps.log?.('orch-status fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
+      }
+    }
+  } finally { statusTicking = false; }
+}
+
+/** Takt für statusTick (aus main.ts), unabhängig von ORCH_AUTO_WEITER; ORCH_STATUS=off schaltet ab. */
+export function startStatusTick(deps: Pick<AutoDeps, 'userById' | 'log'>) {
+  if (process.env.ORCH_STATUS === 'off') return null;
+  const ms = Math.max(200, Number(process.env.ORCH_AUTO_WEITER_TICK_MS) || 20_000);
+  return setInterval(() => { statusTick(deps).catch((e) => deps.log?.('orch-status fehler', { error: String(e?.message ?? e).slice(0, 200) })); }, ms);
 }
 
 // ---------- Rückfragen an Knut (Knut, 09.10.2026: „Wenn du Fragen hast, kannst du mir über die Werkbank eine

@@ -19,8 +19,9 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion } from './orchestrator.ts';
-import { startLeitstand, startLeitstandTick, leitstandLine } from './leitstand.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates } from './orchestrator.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards } from './leitstand.ts';
+import { readBericht } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName } from './ablage.ts';
@@ -1092,7 +1093,8 @@ async function todayCount(u: User, queue?: any[], mine?: any) {
   const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
   const hyg = h.items.filter((i: any) => !h.snoozed.includes(i.key)).length;
   const orch = (await listQuestions(u, { open: true }).catch(() => [])).length;   // Rückfragen des Orchestrators
-  return q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + (m.pendingApprovals?.length ?? 0) + (m.draft ? 1 : 0) + hyg + orch;
+  const strands = (await strandCards(u).catch(() => [])).length;   // fertige Stränge (nur Admins, nur Mongo — Teil B, F1)
+  return strands + q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + (m.pendingApprovals?.length ?? 0) + (m.draft ? 1 : 0) + hyg + orch;
 }
 
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -1106,11 +1108,14 @@ on('GET', /^\/api\/today$/, async (req, res) => {
     .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
   const orchOpen = (await listQuestions(u, { open: true }).catch(() => [])).length;
   // Automatisch fortgesetzte Stränge (Plan auto-weiter, DoD 6): nur der Zähler aus Mongo, kein Abruf bei der Brücke.
+  const cards = await strandCards(u).catch(() => []);
+  const carded = new Set(cards.map((c: any) => c.id));
   const orchAuto = (await wb().collection('orchestrator_runs').find({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
+    .filter((r: any) => !carded.has(String(r._id)))   // keine Doppelung mit der Karte (F5)
     .map((r: any) => ({ id: String(r._id), title: r.title, url: r.url, n: r.autoTotal, stopped: !!r.autoStopped }));
   const memory = u.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null;   // nur Admins (RAM-Plan 125)
   const leitstand = await leitstandLine(u).catch(() => null);   // nur Admins (Plan 132)
-  send(res, 200, { queue, mine, day, today, orchOpen, orchAuto, leitstand, memory, count: await todayCount(u, queue, mine), dryRun: dryRun() });
+  send(res, 200, { queue, strands: cards, mine, day, today, orchOpen, orchAuto, leitstand, memory, count: await todayCount(u, queue, mine), dryRun: dryRun() });
 });
 
 on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
@@ -1191,6 +1196,42 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
   send(res, 200, { ok: true, key: run.key });
 });
 
+
+// Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).
+on('GET', /^\/api\/leitstand\/overview$/, async (req, res) => send(res, 200, await overview(await needAdmin(req))));
+
+on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
+  const u = await needAdmin(req);
+  const d: any = await orchRuns().findOne({ _id: String(url.searchParams.get('strand') ?? '') as any, userId: u.id, kind: { $ne: 'leitstand' } });
+  if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
+  const text = readBericht(d.bericht);
+  if (text === null) throw new HttpError(404, 'Kein lesbarer Bericht zu diesem Strang.');
+  send(res, 200, { strand: String(d._id), name: String(d.bericht).split('/').slice(-2).join('/'), text });
+});
+
+on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  const d: any = await orchRuns().findOne({ _id: m[1] as any, userId: u.id, kind: { $ne: 'leitstand' } });
+  if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
+  // Gesehener Stand (F3) und live bei der Brücke (G4): nie auf einen veralteten oder laufenden Strang entscheiden.
+  const seen = String(new Date(d.reviewReadyAt ?? d.doneAt ?? 0).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime());
+  if (String(b.seen ?? '') !== seen) throw new HttpError(409, 'Der Strang hat sich inzwischen geändert — Seite neu laden.');
+  let st: any;
+  try { st = (await strandStates(u)).get(d.conv); } catch { throw new HttpError(503, 'Brücke nicht erreichbar — gleich noch einmal.'); }
+  if (st?.running) throw new HttpError(409, 'Der Strang arbeitet gerade — warte, bis er fertig ist.');
+  if (m[2] === 'passt') {
+    await reviewOrch(u, m[1], String(b.note ?? 'Passt (Heute)'), 'knut');
+    log('strang geprüft', { user: u.id, id: m[1] });
+    return send(res, 200, { ok: true });
+  }
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
+  const text = String(b.text ?? '').trim().slice(0, 4000);
+  if (b.kind !== 'nacharbeit' || !text) throw new HttpError(400, 'Schreib kurz, was nachzuarbeiten ist.');
+  await sendOrch(u, m[1], `Nacharbeit nach Review: ${text}`);
+  log('strang nacharbeit', { user: u.id, id: m[1] });
+  send(res, 200, { ok: true, url: d.url });
+});
 
 // Rückfragen des Orchestrators (Knut antwortet hier; nur die eigenen).
 on('GET', /^\/api\/orchestrator\/questions$/, async (req, res, _m, url) => {
@@ -2048,14 +2089,14 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review)$/, async (r
   const id = String(b.id ?? '');
   switch (m[1]) {
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, lauf: b.lauf || null });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv });
       return send(res, 200, r);
     }
     case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
     case 'show': return send(res, 200, await showOrch(u, id));
     case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand'));
-    case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? ''));
+    case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? '', b.via === 'leitstand' ? 'leitstand' : 'knut'));
   }
 });
 
@@ -2425,6 +2466,8 @@ const orchDeps = {
   log,
 };
 startAutoWeiter(orchDeps);
+// Stand je Strang festschreiben (Teil B, G1) — unabhängig vom Auto-Fortsetzen; ORCH_STATUS=off schaltet ab.
+startStatusTick(orchDeps);
 // Leitstand wecken (Plan 132, S2): eigener Durchgang im selben Takt; LEITSTAND_WAKE=off schaltet ab.
 startLeitstandTick(orchDeps);
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { server.close(); process.exit(0); });

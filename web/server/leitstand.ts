@@ -16,7 +16,7 @@ import { cfg } from './config.ts';
 import { wb } from './db.ts';
 import type { User } from './auth.ts';
 import { createLibreChat } from './agent.ts';
-import { runs, STRANDS, LEIT_TAG, questions, orchStatus, excerpt, lastMessage, strandStates, deliver, decorateSoon, AUTO_RATE_MS, type LastMsg, type StrandState } from './orchestrator.ts';
+import { runs, STRANDS, OPEN, laufName, LEIT_TAG, questions, orchStatus, excerpt, lastMessage, strandStates, deliver, decorateSoon, AUTO_RATE_MS, type LastMsg, type StrandState } from './orchestrator.ts';
 
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 const internalHeaders = () => ({ 'content-type': 'application/json', 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' });
@@ -37,7 +37,7 @@ export const leitDir = () => process.env.WERKBANK_LEITSTAND_DIR || join(process.
 
 // ---------- Ereignisse (rein, testbar) ----------
 
-export interface LeitEvent { key: string; kind: 'fertig' | 'antwort' | 'blockiert' | 'deckel' | 'review' | 'frage' | 'weiter'; at: number; text: string; excerpt?: string; strand?: { id: string; title: string } }
+export interface LeitEvent { key: string; kind: 'fertig' | 'antwort' | 'blockiert' | 'deckel' | 'review' | 'frage' | 'weiter' | 'geprueft' | 'nacharbeit'; at: number; text: string; excerpt?: string; strand?: { id: string; title: string } }
 
 /**
  * Ereignis eines Strangs aus seinem Zustand — oder null. Technische Zugenden, die Auto-Fortsetzen übernimmt (cause gesetzt), sind
@@ -240,6 +240,13 @@ async function tickOne(u: User, leit: any, deps: LeitDeps) {
     await add({ key: `frage:${q._id}`, kind: 'frage', at: new Date(a.at).getTime(), text: `Knut hat ${q._id} „${q.title}“ beantwortet: ${[a.option ? `Option „${a.option}“` : '', a.text ?? ''].filter(Boolean).join(' — ').slice(0, 600)}` },
       urgentAnswer(q));
   }
+  // Knut hat einen Strang geprüft oder zur Nacharbeit geschickt (Teil B, B4/F3).
+  const judged: any[] = await runs().find({ userId: u.id, ...STRANDS, $or: [{ knutReviewedAt: { $gte: new Date(Math.max(since, now - c.stale)) } }, { reworkAt: { $gte: new Date(Math.max(since, now - c.stale)) } }] }).toArray();
+  for (const d of judged) {
+    const strand = { id: String(d._id), title: String(d.title ?? '') };
+    if (d.knutReviewedAt) await add({ key: `geprueft:${d._id}:${new Date(d.knutReviewedAt).getTime()}`, kind: 'geprueft', at: new Date(d.knutReviewedAt).getTime(), text: 'Knut hat geprüft (Passt) — nicht weiterführen', strand });
+    if (d.reworkAt) await add({ key: `nacharbeit:${d._id}:${new Date(d.reworkAt).getTime()}`, kind: 'nacharbeit', at: new Date(d.reworkAt).getTime(), text: `Knut hat Nacharbeit geschickt: ${String(d.reworkText ?? '').replace(/^Nacharbeit nach Review:\s*/, '').slice(0, 300)}`, strand });
+  }
   const we = weiterEvent(ls, now, ls?.turn?.outcome === 'rate_limit' ? await deps.accountFree(u).catch(() => false) : false);
   if (we && we !== 'wait') {
     if ((leit.weiterStreak ?? 0) >= c.weiterMax) {
@@ -304,4 +311,88 @@ export function startLeitstandTick(deps: LeitDeps) {
   if (process.env.LEITSTAND_WAKE === 'off') return null;
   const ms = Math.max(200, Number(process.env.ORCH_AUTO_WEITER_TICK_MS) || 20_000);
   return setInterval(() => { leitstandTick(deps).catch((e) => deps.log?.('leitstand fehler', { error: String(e?.message ?? e).slice(0, 200) })); }, ms);
+}
+
+// ---------- Übersicht und Review-Karten (Teil B) ----------
+
+export type StatusWord = 'läuft' | 'wartet' | 'fertig' | 'gestoppt';
+
+/** Statuswort aus dem festgeschriebenen Stand (B-3): failed und Deckel → gestoppt; review_ready/fertig → fertig. */
+export function statusWord(d: any): StatusWord {
+  if (d.autoStopped) return 'gestoppt';
+  if (d.reviewReadyAt || (d.doneAt && d.lastStatus !== 'running')) return 'fertig';
+  return d.lastStatus === 'running' ? 'läuft' : d.lastStatus === 'failed' ? 'gestoppt' : d.lastStatus === 'done' ? 'fertig' : 'wartet';
+}
+
+const GAP = 14 * 86400_000;
+const RANK: Record<StatusWord, number> = { wartet: 0, gestoppt: 0, läuft: 1, fertig: 2 };
+
+/**
+ * Stränge je Lauf gruppieren (G6): gleicher Name = eine Gruppe, eine neue erst nach mehr als 14 Tagen ohne Strang dieses Namens.
+ * Ganz von Knut geprüfte Gruppen → „Erledigt“. Reihenfolge: Gruppen mit wartet/gestoppt zuerst, dann läuft, dann fertig.
+ */
+export function groupStrands(docs: any[], now = Date.now()) {
+  const sorted = [...docs].sort((a, b) => +new Date(a.startedAt) - +new Date(b.startedAt));
+  const groups: { key: string; lauf: string; from: number; to: number; items: any[] }[] = [];
+  const lastOf = new Map<string, (typeof groups)[number]>();
+  for (const d of sorted) {
+    const lauf = d.lauf ?? laufName(d.title ?? '').lauf;
+    const t = +new Date(d.startedAt);
+    let g = lastOf.get(lauf);
+    if (!g || t - g.to > GAP) { g = { key: `${lauf}|${t}`, lauf, from: t, to: t, items: [] }; groups.push(g); lastOf.set(lauf, g); }
+    g.to = Math.max(g.to, t);
+    g.items.push(d);
+  }
+  const shaped = groups.map((g) => {
+    const items = g.items.map((d) => ({ d, word: d.knutReviewedAt ? null : statusWord(d) }));
+    const open = items.filter((x) => x.word) as { d: any; word: StatusWord }[];
+    const count = (w: StatusWord) => open.filter((x) => x.word === w).length;
+    return { key: g.key, lauf: g.lauf, from: new Date(g.from), to: new Date(g.to), done: open.length === 0,
+      counts: { läuft: count('läuft'), wartet: count('wartet'), fertig: count('fertig'), gestoppt: count('gestoppt') },
+      rank: open.length ? Math.min(...open.map((x) => RANK[x.word])) : 9,
+      strands: items.sort((a, b) => (a.word ? RANK[a.word] : 9) - (b.word ? RANK[b.word] : 9) || +new Date(b.d.startedAt) - +new Date(a.d.startedAt)) };
+  });
+  const recent = (g: { to: Date }) => now - +g.to < GAP;
+  return {
+    offen: shaped.filter((g) => !g.done).sort((a, b) => a.rank - b.rank || +b.to - +a.to),
+    erledigt: shaped.filter((g) => g.done && recent(g)).sort((a, b) => +b.to - +a.to),
+  };
+}
+
+/** Zusammenfassung einer Gruppe, z. B. „3 Stränge · 2 fertig · 1 wartet“. */
+export function groupLine(g: { strands: unknown[]; counts: Record<string, number> }): string {
+  const n = g.strands.length;
+  return [`${n} ${n === 1 ? 'Strang' : 'Stränge'}`, ...(['wartet', 'gestoppt', 'läuft', 'fertig'] as const).filter((w) => g.counts[w]).map((w) => `${g.counts[w]} ${w}`)].join(' · ');
+}
+
+const publicStrand = (d: any, word: StatusWord | null) => ({
+  id: String(d._id), title: d.title, lauf: d.lauf ?? laufName(d.title ?? '').lauf, status: word ?? 'erledigt', reason: d.lastReason ?? null,
+  url: d.url, bericht: !!d.bericht, autoWeiter: d.autoTotal ?? 0, lastActivity: d.lastActivity ?? d.statusAt ?? d.startedAt,
+  reviewedBy: d.reviewedBy ?? null, knutReviewed: !!d.knutReviewedAt, reviewReady: !!d.reviewReadyAt,
+});
+
+/** Übersicht für die Seite „Leitstand“ (B2) — nur Mongo (F1). */
+export async function overview(u: User) {
+  const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, startError: null, startedAt: { $gt: new Date(Date.now() - 60 * 86400_000) } }).limit(500).toArray();
+  const g = groupStrands(docs);
+  const shape = (x: ReturnType<typeof groupStrands>['offen'][number]) => ({ key: x.key, lauf: x.lauf, from: x.from, to: x.to, line: groupLine(x), counts: x.counts, strands: x.strands.map((s) => publicStrand(s.d, s.word)) });
+  return { leitstand: await leitstandLine(u), offen: g.offen.map(shape), erledigt: g.erledigt.map(shape) };
+}
+
+/** Review-Karten auf „Heute“ (B4): fertig gemeldet oder review_ready, von Knut nicht geprüft — nur Mongo. */
+export async function strandCards(u: User) {
+  if (u.role !== 'ADMIN') return [];
+  const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, knutReviewedAt: null, startError: null, $or: [{ doneAt: { $ne: null } }, { reviewReadyAt: { $ne: null } }] })
+    .sort({ startedAt: -1 }).limit(30).toArray();
+  return docs.filter((d) => d.doneAt || d.reviewReadyAt).map((d) => {
+    const review = d.review ?? d.prevReview?.review ?? null;
+    return {
+      id: String(d._id), kind: 'strand', bucket: 'review', key: `Strang · ${d.lauf ?? laufName(d.title ?? '').lauf}`, summary: d.title, url: d.url,
+      review: review ? { ...review, nichtGemacht: review.nichtGemacht ?? review.nicht_gemacht ?? '', artefakte: review.artefakte ?? [], dod: review.dod ?? [] } : null,
+      reviewOld: !d.review && !!d.prevReview, excerpt: d.lastExcerpt ?? '', bericht: !!d.bericht,
+      reviewReadyAt: d.reviewReadyAt ?? d.doneAt, statusAt: d.statusAt ?? null, status: statusWord(d), reviewedBy: d.reviewedBy ?? null,
+      seen: String(new Date(d.reviewReadyAt ?? d.doneAt).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime()),
+      written: [], startedAt: d.startedAt,
+    };
+  });
 }
