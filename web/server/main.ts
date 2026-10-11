@@ -21,10 +21,14 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
+import { ARTEN, folders, schemaName } from './ablage.ts';
+import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
+import { keep as keepScratch, runScratch } from './scratch.ts';
+import { backupRunning, listBackups, nightly, writeBackup, keyOf } from './backup.ts';
 import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles } from './sprint.ts';
 import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
-import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog } from './sharing.ts';
+import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog, logShare, scratchDir } from './sharing.ts';
 import { log } from './log.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
@@ -1748,11 +1752,25 @@ on('GET', /^\/api\/files$/, async (req, res) => {
   const name = (id: string) => people.find((p) => p.id === id)?.name ?? '?';
   const pids = [...new Set([...mine, ...shared].map((f: any) => f.projectId).filter(Boolean))];
   const projectNames = new Map((await wb().collection('projects').find({ _id: { $in: pids as any[] } }, { projection: { name: 1 } }).toArray()).map((p: any) => [p._id, p.name]));
-  const shape = (f: any) => ({ ...f, id: f._id, projectName: f.projectId ? projectNames.get(f.projectId) ?? null : null, source: f.source ? { conv: f.source.conv } : undefined });
+  // `path` geht nur an die Besitzerin (Ablageort in Knuts Ordner); geteilte sehen den Namen, nicht den Ort.
+  const shape = (f: any) => ({ ...f, id: f._id, path: undefined, ablage: undefined, projectName: f.projectId ? projectNames.get(f.projectId) ?? null : null, source: f.source ? { conv: f.source.conv } : undefined });
+  const known = folders();
+  const mineOut = [];
+  for (const f of mine as any[]) {
+    const pi = placeInfo(f);
+    // Vorschlag für „Noch einzusortieren“; für abgelegte Dateien die zuletzt gewählten Angaben (für „Verschieben“).
+    const v = f.kind === 'vault' ? null : f.ablage ?? await suggestFor(f, known);
+    mineOut.push({ ...shape(f), sharedWithNames: f.sharedWith.map(name), ...pi, vorschlag: v ? { ...v, name: schemaName(v, extname(f.name)) } : null });
+  }
+  const notice: any = await wb().collection('scratch_notice').findOne({ _id: u.id as any });
+  const admin = u.role === 'ADMIN';
   send(res, 200, {
-    mine: mine.map((f: any) => ({ ...shape(f), sharedWithNames: f.sharedWith.map(name) })),
-    shared: shared.map((f: any) => ({ ...shape(f), sharedWith: undefined })),
+    mine: mineOut,
+    shared: shared.map((f: any) => ({ ...shape(f), sharedWith: undefined, fehlt: placeInfo(f).fehlt })),
     maxMb: Math.round(cfg.fileMaxBytes / 1048576),
+    ablage: { teams: [...new Set(known.map((x) => x.team))], folders: known, arten: ARTEN },
+    scratch: notice ? { count: notice.count, bytes: notice.bytes, deleteFrom: notice.deleteFrom, files: notice.files, days: cfg.scratchDays } : null,
+    backup: admin ? { nightly: listBackups(), keep: cfg.backupKeep, key: !!keyOf(), running: backupRunning() } : null,
   });
 });
 
@@ -1774,6 +1792,36 @@ on('GET', /^\/api\/files\/([0-9a-f-]{36})\/download$/, async (req, res, m) => {
     'content-security-policy': "sandbox; default-src 'none'", 'cache-control': 'no-store',
   });
   createReadStream(filePath(f)).on('error', () => res.destroy()).pipe(res);
+});
+
+// Plan 81, Schnitt 2: „Ablegen“ — Vorschlag bestätigen oder ändern; die Datei zieht in `<team>/<vorgang>/` der Ablage.
+on('POST', /^\/api\/files\/([0-9a-f-]{36})\/ablegen$/, async (req, res, m) => {
+  const u = await needUser(req);
+  send(res, 200, { ok: true, ...(await ablegen(u, m[1], await body(req))) });
+});
+
+// Plan 81, Schnitt 4: eine angekündigte Datei im Arbeitsordner behalten (Frist beginnt neu).
+on('POST', /^\/api\/scratch\/keep$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const rels: string[] = Array.isArray(b.rels) ? b.rels.map(String).slice(0, 200) : [String(b.rel ?? '')];
+  const kept = rels.filter((r) => keepScratch(scratchDir(u), r)).length;
+  await runScratch(u);
+  send(res, 200, { ok: true, kept });
+});
+
+// Plan 81, Schnitt 5: Backup als Download, nur Admins. Gestreamt, nichts bleibt liegen.
+on('GET', /^\/api\/backup$/, async (req, res) => {
+  const u = await needAdmin(req);
+  if (backupRunning()) throw new HttpError(409, 'Es läuft schon ein Backup — gleich noch einmal versuchen.');
+  const day = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-');
+  res.writeHead(200, {
+    'content-type': 'application/gzip', 'x-content-type-options': 'nosniff', 'cache-control': 'no-store',
+    'content-disposition': `attachment; filename="werkbank-backup-${day}.tar.gz"`,
+  });
+  logShare({ actor: u.email, action: 'backup', kind: 'backup', resource: day });
+  try { const mf = await writeBackup(res); log('backup', { by: u.email, files: mf.files, encrypted: mf.encrypted, skipped: mf.skipped.length }); }
+  catch (e: any) { log('backup', { error: String(e?.message ?? e).slice(0, 200) }); res.destroy(); }
 });
 
 on('POST', /^\/api\/files\/([0-9a-f-]{36})\/share$/, async (req, res, m) => {
@@ -2077,6 +2125,17 @@ async function backgroundJobs() {
   setTimeout(filesTick, 20_000);
   setInterval(filesTick, 2 * 60_000);
 
+  // Plan 81, Schnitt 4 und 5: Arbeitsordner aufräumen (Ankündigung, dann löschen) und Nachtarchiv — stündlich geprüft.
+  const houseTick = async () => {
+    for (const person of (await teammates().catch(() => [])).filter((x) => allowed(x.email))) {
+      try { const r = await runScratch(person); if (r.removed || r.skipped) log('arbeitsordner', { user: person.id, ...r }); }
+      catch (e: any) { log('arbeitsordner', { user: person.id, error: String(e?.message ?? e).slice(0, 200) }); }
+    }
+    try { const p = await nightly(); if (p) log('backup nachts', { file: p }); } catch (e: any) { log('backup nachts', { error: String(e?.message ?? e).slice(0, 200) }); }
+  };
+  setTimeout(houseTick, 60_000);
+  setInterval(houseTick, 60 * 60_000);
+
   // Werkbank-Feed für den Vault-Sync-Snapshot und Abgleich der Freigaben mit dem Protokoll (alle 5 min).
   const roadmapTick = async () => {
     try { await writeRoadmapFeed(); await writeApprovals(); } catch (e: any) { log('roadmap-feed', { error: String(e?.message ?? e).slice(0, 160) }); }
@@ -2096,6 +2155,8 @@ async function backgroundJobs() {
 
 await connect();
 mkdirSync(cfg.dataDir, { recursive: true });
+// Plan 81, Schnitt 1: alter Speicher → Ablage, einmalig und idempotent (nur Einträge ohne `path`).
+migrateLegacy(log).catch((e) => log('ablage-umzug', { error: String(e?.message ?? e).slice(0, 200) }));
 server.listen(cfg.port, cfg.host, () => log('listening', { host: cfg.host, port: cfg.port, demo: cfg.demo, vault: cfg.vaultDir }));
 if (process.env.WERKBANK_NO_JOBS !== '1') backgroundJobs();
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { server.close(); process.exit(0); });

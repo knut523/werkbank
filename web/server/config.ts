@@ -52,6 +52,12 @@ export const cfg = {
   werkbankKey: env.WERKBANK_CREDS_KEY || '',
   demo: env.WERKBANK_DEMO === '1',
   fileMaxBytes: Number(env.WERKBANK_FILE_MAX_MB || 25) * 1024 * 1024,
+  // Plan 81: eine Ablage (Knuts ~/work/dokumente), Arbeitsordner aufräumen, Backup.
+  docsDir: resolve(env.WERKBANK_DOCS_DIR || join(homedir(), 'work', 'dokumente')),
+  scratchDays: Number(env.WERKBANK_SCRATCH_DAYS ?? 30), // 0 = nie aufräumen
+  backupKey: env.WERKBANK_BACKUP_KEY || '', // 64 Hex-Zeichen; verschlüsselt Personendaten-Dateien im Backup
+  backupKeep: Number(env.WERKBANK_BACKUP_KEEP || 7),
+  backupHour: Number(env.WERKBANK_BACKUP_HOUR ?? 2), // Nachtarchiv ab dieser Stunde; -1 = aus
   secureCookies: env.WERKBANK_INSECURE_COOKIES !== '1',
 };
 

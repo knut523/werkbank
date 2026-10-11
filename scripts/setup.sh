@@ -65,6 +65,7 @@ ensure() { # NAME BYTES
 }
 ensure CREDS_KEY 32; ensure CREDS_IV 16; ensure JWT_SECRET 32; ensure JWT_REFRESH_SECRET 32
 ensure MEILI_MASTER_KEY 24; ensure WERKBANK_CREDS_KEY 32; ensure WERKBANK_INTERNAL_TOKEN 32
+ensure WERKBANK_BACKUP_KEY 32   # Plan 81: verschlüsselt Personendaten-Dateien im Backup — zusätzlich in Vaultwarden ablegen
 chmod 600 "$WB/.env.local"
 
 # 6) URLs dieser Workspace (verwalteter Block, wird bei jedem Lauf neu geschrieben)

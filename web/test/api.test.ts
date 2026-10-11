@@ -3,7 +3,7 @@
 // das echte Jira oder echte Konten.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, cpSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
@@ -21,6 +21,8 @@ const tmp = mkdtempSync(join(tmpdir(), 'werkbank-api-'));
 const VAULT = join(tmp, 'vault');
 const STATE = join(tmp, 'bridge');
 const DATA = join(tmp, 'data');
+const DOCS = join(tmp, 'dokumente');
+const BACKUP_KEY = randomBytes(32).toString('hex');
 const CREDS_KEY = randomBytes(32).toString('hex'), CREDS_IV = randomBytes(16).toString('hex');
 const INTERNAL = randomBytes(16).toString('hex'), REFRESH_SECRET = randomBytes(16).toString('hex'), JWT_SECRET = randomBytes(16).toString('hex');
 const lcChats: any[] = [];
@@ -100,6 +102,7 @@ before(async () => {
       LIBRECHAT_PUBLIC_URL: 'https://chat.example', BRIDGE_URL: `http://127.0.0.1:${BRIDGE_PORT}`, BRIDGE_STATE_DIR: STATE,
       WERKBANK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3`, WERKBANK_ALLOWED_EMAILS: `${users.a.email},${users.b.email}`,
       CREDS_KEY, CREDS_IV, WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: DATA,
+      WERKBANK_DOCS_DIR: DOCS, WERKBANK_BACKUP_KEY: BACKUP_KEY, WERKBANK_BACKUP_HOUR: '-1', // nie Knuts echte Ablage
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
       WERKBANK_GOAL_PROPOSALS: join(tmp, 'vorschlag.json'), WERKBANK_SPEC_CREATE: 'on', WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
       WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vault-sync'), WERKBANK_VAULT_SYNC_SCRIPT: join(tmp, 'fake-vault-sync.sh'),
@@ -531,6 +534,49 @@ test('Dateien: Typ/Größe prüfen, teilen, zurücknehmen, fremder Zugriff verbo
   assert.doesNotMatch(log, /Müller|PDF/, 'kein Dateiname, kein Inhalt im Protokoll');
   const own = await bernd.req('/api/sharelog');
   assert.ok(own.j.entries.every((e: any) => e.actor === users.b.email || e.target === users.b.email));
+});
+
+test('Ablage (Plan 81): Upload → „Noch einzusortieren“ mit Vorschlag → Ablegen; Backup nur für Admins, ohne Zugänge', async () => {
+  mkdirSync(join(DOCS, 'olaf', 'enlion'), { recursive: true });
+  const up = await anna.req('/api/files?name=' + encodeURIComponent('Angebot Enlion 2026-10-02.pdf') + '&personal=1', { method: 'PUT', raw: Buffer.from('%PDF-1.4 enlion') });
+  assert.equal(up.status, 200);
+  assert.ok(existsSync(join(DOCS, '_eingang', 'Angebot Enlion 2026-10-02.pdf')), 'erst in _eingang');
+  const l = await anna.req('/api/files');
+  const f = l.j.mine.find((x: any) => x.id === up.j.id);
+  assert.equal(f.eingang, true);
+  assert.deepEqual([f.vorschlag.team, f.vorschlag.vorgang, f.vorschlag.art, f.vorschlag.datum, f.vorschlag.name], ['olaf', 'enlion', 'angebot', '2026-10-02', '2026-10-02_angebot_enlion.pdf']);
+  assert.ok(l.j.ablage.folders.some((x: any) => x.vorgang === 'enlion'));
+  assert.equal(l.j.backup, null, 'keine Backup-Angaben für Nicht-Admins');
+  assert.equal((await bernd.req(`/api/files/${up.j.id}/ablegen`, { body: f.vorschlag })).status, 403, 'nur die Besitzerin legt ab');
+  assert.equal((await anna.req(`/api/files/${up.j.id}/ablegen`, { body: { ...f.vorschlag, vorgang: '../..' } })).status, 400);
+  const ab = await anna.req(`/api/files/${up.j.id}/ablegen`, { body: f.vorschlag });
+  assert.equal(ab.status, 200);
+  assert.equal(ab.j.path, 'olaf/enlion/2026-10-02_angebot_enlion.pdf');
+  const dl = await anna.req(`/api/files/${up.j.id}/download`);
+  assert.equal(dl.j, '%PDF-1.4 enlion');
+  assert.match(dl.headers.get('content-disposition')!, /2026-10-02_angebot_enlion\.pdf/);
+
+  await mongo.db(DB).collection('creds').insertOne({ userId: 'x', secret: 'GEHEIM-TOKEN' } as any);
+  assert.equal((await anna.req('/api/backup')).status, 403, 'Backup nur für Admins');
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  try {
+    const r = await fetch(`${B}/api/backup`, { headers: { cookie: anna.cookie } });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-type'), 'application/gzip');
+    const archive = join(tmp, 'backup.tar.gz');
+    writeFileSync(archive, Buffer.from(await r.arrayBuffer()));
+    const names = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }).trim().split('\n');
+    assert.ok(names.includes('manifest.json') && names.includes('share-log.jsonl'));
+    assert.ok(names.includes('ablage/olaf/enlion/2026-10-02_angebot_enlion.pdf.enc'), 'Personendaten nur verschlüsselt');
+    assert.ok(names.some((n) => n.startsWith('werkbank/files/')));
+    assert.ok(!names.some((n) => n.startsWith('werkbank/creds/') || n.startsWith('werkbank/sessions/')), 'keine Zugänge, keine Sitzungen');
+    const all = execFileSync('tar', ['-xzOf', archive], { encoding: 'latin1' });
+    assert.doesNotMatch(all, /GEHEIM-TOKEN|%PDF-1\.4 enlion/);
+    const l2 = await anna.req('/api/files');
+    assert.equal(l2.j.backup.key, true);
+  } finally {
+    await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+  }
 });
 
 test('Chats: geteilt mit mir (LibreChat-Freigabe), als Kopie weiterführen, nie fremde', async () => {

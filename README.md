@@ -268,12 +268,75 @@ GitHub-Links und Kurzformen (`admin#175`, `tariff-app #166`) im Spec-Text.
   keine Programme, Skripte, Archive, HTML/SVG), optional „enthält Personendaten“ markieren,
   **mit Teammates teilen** und zurücknehmen, herunterladen (immer als Anhang, `nosniff`), löschen.
   **„Im Chat“** legt eine Kopie ins eigene Claude-Arbeitsverzeichnis (`dateien/…`, 0600) und startet einen Chat.
-  Gespeichert unter `.runtime/werkbank/files/` — nie im Repo, **keine externen Links**.
+  Gespeichert in der **Ablage** (`WERKBANK_DOCS_DIR`, siehe „Ablage & Backup“) — nie im Repo, **keine externen Links**.
 - **Chats**: „Geteilt mit mir“ und „Von mir geteilt“ (aus LibreChat). **Als Kopie weiterführen** legt den
   Verlauf als Markdown ins **eigene** Arbeitsverzeichnis (`geteilt/<id>.md`) und startet einen neuen
   Chat mit dem **eigenen** Claude — nie mit Token oder Sitzung der teilenden Person.
 - **Protokoll**: wer hat was (nur ID) mit wem geteilt, append-only in `.runtime/werkbank/share-log.jsonl`,
   ohne Inhalt und ohne Dateinamen. Jede Person sieht ihre Einträge, Admins alle.
+
+### 🗄️ Ablage & Backup (Plan 81, Schnitte 1, 2, 4, 5)
+
+**Eine Ablage.** Jede Datei der Werkbank liegt in `WERKBANK_DOCS_DIR` (Vorgabe `~/work/dokumente`, dieselbe Ablage wie
+von Hand) unter `<team>/<vorgang>/JJJJ-MM-TT_<art>_<kurzname>[_<version>].<ext>` — mit dem **Dokumentdatum**, ohne
+Datum `undatiert_…`. Arten: `sow avv vertrag angebot rechnung deck daten notiz`. Mongo `files` hält weiter Besitzer,
+Freigaben, Personendaten-Markierung und Tickets, dazu `path` (relativ zur Ablage). Neue Ordner 0700, Dateien 0600; nie
+überschrieben (Kollision → `_2`, `_3`).
+
+- **Noch einzusortieren.** Ein Upload landet zuerst in `_eingang/` und steht oben auf „Dateien & Teilen“ mit einem
+  **Vorschlag** (Team; Vorgang aus vorhandenen Ordnern bzw. Ticket/Projekt; Art und Datum aus dem Namen; Kurzname;
+  Version). „Ablegen“ übernimmt ihn, „Ändern“ öffnet die Felder; ohne Team/Vorgang sind die Felder gleich offen.
+  Abgelegte Dateien lassen sich jederzeit **verschieben**.
+- **Agenten-Dateien** (Schnitt 3) übernehmen den Vorschlag ohne Klick, wenn er sicher ist (Team und Vorgang stehen
+  fest), sonst `_eingang/`. Eine neue Fassung derselben Quelle ersetzt die Datei an ihrem **aktuellen** Ort.
+- **Umzug.** Beim Start zieht die Werkbank einmalig alles aus dem alten Speicher `.runtime/werkbank/files/<id>/` in die
+  Ablage (Uploads nach `_eingang/`, Agenten-Dateien mit sicherem Vorschlag direkt). Kopie mit Prüfsumme → Mongo →
+  Altkopie weg; `_id`, Tickets, Freigaben und Personendaten bleiben. Idempotent.
+- **Löschen** in der Werkbank löscht die Datei auch in der Ablage (der Dialog nennt den Ordner). Von Hand verschobene
+  Dateien erscheinen als „nicht mehr am Ablageort“; Knuts übrige Dateien im Ordner fasst die Werkbank nie an.
+- **Achtung:** die Ablage ist **eine** für alle Konten — Uploads von Teammates (auch mit Personendaten) liegen in
+  `~/work/dokumente`. Wer den Ordner irgendwohin synchronisiert, nimmt sie mit.
+
+**Arbeitsordner aufräumen.** Zwischenstände in `.runtime/bridge/scratch/<person>/` werden nach
+`WERKBANK_SCRATCH_DAYS` (30) Tagen ohne Zugriff gelöscht (`0` = nie). Ab Tag 23 steht ein Hinweis auf „Dateien &
+Teilen“ (Liste, „behalten“ setzt die Frist zurück); gelöscht wird frühestens 7 Tage nach dem Hinweis. Nur Dateien,
+keine Ordner; Symlinks werden nie verfolgt (auch nicht als Ordner unterwegs); `.claude`, `.env*`, `.git` bleiben;
+überschneiden sich Ablage, Vault oder Werkbank-Daten mit dem Arbeitsordner, wird gar nicht aufgeräumt. Stündlich geprüft.
+
+**Backup.** „Backup herunterladen“ (nur Admins, `GET /api/backup`) streamt ein `.tar.gz`, nichts bleibt liegen:
+
+| Im Archiv | Nicht im Archiv |
+|---|---|
+| `werkbank/<sammlung>/NNNN.jsonl` (Canonical EJSON, je 1000) + `_indexes.json` | `creds` (Claude-/Jira-Zugänge), `sessions` (Anmeldungen) |
+| `ablage/<pfad>` — jede Datei, die die Werkbank kennt | Chats (LibreChat-DB), Vault (eigenes Git), Arbeitsordner |
+| `ablage/<pfad>.enc` — Personendaten, AES-256-GCM | Knuts übrige Dateien in `~/work/dokumente` |
+| `share-log.jsonl`, `manifest.json` (Zählungen, Ausgelassenes) | |
+
+Kein `mongodump` nötig (der Treiber schreibt EJSON; `mongodump` ist auf der VM nicht installiert). Personendaten-Dateien
+werden mit `WERKBANK_BACKUP_KEY` verschlüsselt (`setup.sh` erzeugt ihn in `.env.local`); ohne Schlüssel fehlen sie im
+Archiv, das Manifest sagt es. **Den Schlüssel zusätzlich in Vaultwarden ablegen** — ohne ihn sind die
+Personendaten-Dateien eines Archivs nicht wiederherstellbar; auf der VM selbst schützt die Verschlüsselung nichts.
+**Nachtarchiv:** einmal je Tag ab `WERKBANK_BACKUP_HOUR` (2 Uhr, `-1` = aus) nach
+`.runtime/werkbank/backups/werkbank-JJJJ-MM-TT.tar.gz` (0600); die neuesten `WERKBANK_BACKUP_KEEP` (7) bleiben.
+
+**Wiederherstellen:**
+
+```bash
+scripts/restore.sh <archiv.tar.gz> [--dry-run]
+# zum Üben gegen eine eigene Instanz, nie gegen die Live-Mongo:
+MONGO_URI_WERKBANK=mongodb://127.0.0.1:27217 WERKBANK_DB=werkbank_restore WERKBANK_DOCS_DIR=/tmp/ablage-test scripts/restore.sh <archiv>
+```
+
+Nur in eine **leere** Ziel-DB (sonst Abbruch); Dateien werden nie überschrieben (gleiche Prüfsumme → übersprungen,
+abweichend → gemeldet); falscher Schlüssel → Abbruch vor dem Schreiben; `share-log.jsonl` nur, wenn keins da ist.
+Danach Zugänge neu verbinden (Claude, Jira) — die sind absichtlich nicht im Archiv.
+
+**Einmal echt durchgespielt (09.10.2026):** echter Build auf eigener Mongo (27217, Port 3471), drei Altbestand-Dateien
+→ Umzug beim Start (Altspeicher leer, Freigaben/Tickets/Personendaten gleich) → „Ablegen“ im Browser → Nachtarchiv →
+„Backup herunterladen“ (Nicht-Admin 403) → `scripts/restore.sh` in die leere DB `werkbank_restore` und eine leere
+Ablage: 14 Sammlungen eingespielt, **alle Dokumente und Indizes identisch** mit dem Original, `sessions`/`creds`
+ausgelassen, 3/3 Dateien mit gleicher Prüfsumme (die Personendaten-Datei entschlüsselt), zweiter Lauf bricht ab
+(„Ziel-DB ist nicht leer“).
 
 ### 🧹 Task-Hygiene — eigene Tickets sauber halten, sanft
 
@@ -894,7 +957,7 @@ nichts, Agenten/Chats sind aus.
 ## Tests
 
 ```bash
-scripts/werkbank.sh test   # Brücke (50) + Web-App (110), ohne echte Konten, ohne /vault zu ändern
+scripts/werkbank.sh test   # Brücke (61) + Web-App (148), ohne echte Konten, ohne /vault und ~/work/dokumente zu ändern
 scripts/werkbank.sh e2e    # Playwright, 23 Schritte, ca. 2 Minuten
 scripts/werkbank.sh stream-timing   # Zeitmessung Streaming (Mock), Ergebnis auch in .runtime/e2e/stream-timing.json
 scripts/werkbank.sh init-timing 3   # Start der echten CLI bis „init“ (ohne Modellaufruf), .runtime/e2e/init-timing.json
@@ -905,6 +968,11 @@ scripts/werkbank.sh init-timing 3   # Start der echten CLI bis „init“ (ohne 
   nicht), Einfügen von Antworten, Sprint-Ziel/S1–S4/Bewertung, Vorlagen, Sync-Vorschläge, Fälligkeiten.
   Die Sync-Zeilen werden **gegen `jira-sync-plan.sh` verglichen** — auf der Fixture und (nur lesend) auf
   den echten Zyklen 2026-09-14 und 2026-09-28: identisch.
+- **Ablage & Backup** (`ablage.test.ts`, `scratch.test.ts`, `backup.test.ts`, Teil von `api.test.ts`): Vorschlag,
+  Schema-Name, Kollision, Pfadprüfung (`..`, Symlink-Ordner), Umzug, Ablegen, Agenten-Datei am aktuellen Ort;
+  Aufräumen (Ankündigung, Frist, „behalten“, Symlinks/Ablage nie); tar mit Umlauten/langen Namen (System-`tar`),
+  Verschlüsselung, Backup → Restore in eine leere DB, Abbruch bei voller DB und falschem Schlüssel, Nachtarchiv 7×,
+  Backup 403 für Nicht-Admins. Jede Testdatei setzt ihre eigene `WERKBANK_DOCS_DIR` — nie Knuts echte Ablage.
 - **Jira** (`jira.test.ts`, gegen `test/jira-mock.ts`): Blättern, Abbildung, Workstreams, Nur-lesen-Token.
 - **API Ende-zu-Ende** (`api.test.ts`): Login/Freigabe, CSRF, Token-Speicherung, Board-Sync und Filter,
   Bestätigungspfade (Vorschau schreibt nie), Agent-Lauf, Antworten mit Konfliktschutz, Sprint-Sync mit
