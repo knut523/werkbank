@@ -561,3 +561,14 @@ Strang-Karten, Weck-Ereignisse „geprüft“/„Nacharbeit“), Routen `/api/le
   Zählen der Aufrufe; B-22 (Auto-weiter aus) nur durch Code (eigener Takt), ohne eigenen Test. `orch review` über die CLI zählt immer
   als Knut — ruft der Leitstand die CLI statt `orch_review`, wäre das Knuts Urteil; die CLI ist in Strängen gesperrt, im Leitstand nicht
   (E6/E11).
+
+### Diff R3 (11.10.2026, Release 3, über 6840496..f91c9ab plus G0-Merge) — PASS (0,8)
+Drei getrennte Stimmen (Befürworter, Fachprüfer, Gegenstimme; Claude, Teilagenten), Finalisierung in der Release-Sitzung.
+- **≥ 75, behoben:** Gegenstimme 85 — Status-Takt und Leitstand-Ereignisse lasen G0-gestoppte Stränge (`blocked_g0`, `conv: null`)
+  und schrieben einen Schein-Stand („läuft“ → „Nachricht nicht angekommen“). Filter `conv ≠ null`, `status ≠ blocked_g0` in
+  `statusTick` und `tickOne`, Statuswort „gestoppt“. Tests vorher rot (`leitstand.test.ts` „Release 3 …“, `leitstand-b.test.ts`).
+- **50–74, nicht behoben, offen:** veraltetes `doneAt` überdeckt „wartet/gestoppt“ (65); Leitstand-`orch_review` auf ein
+  CLI-geprüftes Altdokument öffnet es wieder (65); Takt-Fenster 14 Tage vs. Übersicht 60 Tage (55–70); abgelegter Strang sperrt
+  seinen Ordner für `orch_start` (60); Passt ↔ Auto-weiter/`orch_send` nicht atomar (60); Passt zieht offene Deckel-Frage nicht
+  zurück (60); erster Bericht-Pfad bleibt, Link vor der Datei (50–70).
+- Live-Daten vor dem Ausrollen gezählt: 12 Stränge, 9 offen (alle < 14 Tage), 3 mit review_ready — keine Kartenflut.
