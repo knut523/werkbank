@@ -3,6 +3,10 @@
 #
 #   scripts/isoliert.sh start | stop | status
 #
+# Mehrere Testinstanzen nebeneinander: ISO_PORT_BASE=3570 → Web 3570, LibreChat 3580, Brücke 3590, Mongo 27580,
+# Meili 7795; ISO_DIR=<pfad> statt .runtime-iso. ISO_COPY_CLAUDE_ACCOUNTS=1 übernimmt zusätzlich WERKBANK_CREDS_KEY aus der
+# Quell-.env.local, damit kopierte weitere Claude-Konten (werkbank.creds) lesbar bleiben (nichts wird ausgegeben).
+#
 # Ports (Web/LibreChat/Brücke = Live + 100): Mongo 27180 · Meili 7790 · Brücke 3190 · LibreChat 3180 · Web 3170. Alles unter .runtime-iso/
 # (eigene Datenbanken, Bridge-Zustand, Logs, PIDs). LibreChat ist eine Hardlink-Kopie der gebauten Installation der
 # Quelle (ISO_SOURCE_RT, Vorgabe: .runtime dieses Checkouts, sonst ~/work/werkbank-dev/.runtime) mit eigenen
@@ -14,11 +18,15 @@
 # stop beendet nur Prozesse aus den eigenen PID-Dateien.
 set -euo pipefail
 WB="$(cd "$(dirname "$0")/.." && pwd)"
-ISO="$WB/.runtime-iso"
+ISO="${ISO_DIR:-$WB/.runtime-iso}"
 SRC_RT="${ISO_SOURCE_RT:-$([ -d "$WB/.runtime/librechat" ] && echo "$WB/.runtime" || echo "$HOME/work/werkbank-dev/.runtime")}"
 SRC_ENV="${ISO_SOURCE_ENV:-$(dirname "$SRC_RT")/.env.local}"
+# Eigene .runtime ohne .env.local (z. B. kopierte LibreChat-Installation): Schlüssel aus der Live-Instanz.
+[ -f "$SRC_ENV" ] || SRC_ENV="$HOME/work/werkbank-dev/.env.local"
 LOGS="$ISO/logs"; PIDS="$ISO/pids"
-P_MONGO=27180 P_MEILI=7790 P_BRIDGE=3190 P_LC=3180 P_WEB=3170
+if [ -n "${ISO_PORT_BASE:-}" ]; then
+  P_WEB=$ISO_PORT_BASE P_LC=$((ISO_PORT_BASE + 10)) P_BRIDGE=$((ISO_PORT_BASE + 20)) P_MONGO=$((ISO_PORT_BASE + 24010)) P_MEILI=$((ISO_PORT_BASE + 4225))
+else P_MONGO=27180 P_MEILI=7790 P_BRIDGE=3190 P_LC=3180 P_WEB=3170; fi
 mkdir -p "$LOGS" "$PIDS" "$ISO/data/mongo" "$ISO/data/meili" "$ISO/bridge" "$ISO/werkbank" "$ISO/vault-sync"
 
 coder_url() {
@@ -56,6 +64,9 @@ prepare() {
   for k in CREDS_KEY CREDS_IV; do
     grep -q "^$k=" "$ISO/.env.local" || { [ -f "$SRC_ENV" ] && grep "^$k=" "$SRC_ENV" >> "$ISO/.env.local" || true; }
   done
+  if [ "${ISO_COPY_CLAUDE_ACCOUNTS:-0}" = 1 ] && [ -f "$SRC_ENV" ] && ! grep -q "^WERKBANK_CREDS_KEY=" "$ISO/.env.local"; then
+    grep "^WERKBANK_CREDS_KEY=" "$SRC_ENV" >> "$ISO/.env.local" || true
+  fi
   ensure CREDS_KEY 32; ensure CREDS_IV 16; ensure JWT_SECRET 32; ensure JWT_REFRESH_SECRET 32
   ensure MEILI_MASTER_KEY 24; ensure WERKBANK_CREDS_KEY 32; ensure WERKBANK_INTERNAL_TOKEN 32
   chmod 600 "$ISO/.env.local"
@@ -74,7 +85,8 @@ do_start() {
   echo "Isolierte Werkbank starten ($WB)"
   start_one mongodb $P_MONGO "$ISO" "$SRC_RT/bin/mongod" --dbpath "$ISO/data/mongo" --bind_ip 127.0.0.1 --port $P_MONGO --quiet
   start_one meilisearch $P_MEILI "$ISO/data/meili" "$SRC_RT/bin/meilisearch" --http-addr 127.0.0.1:$P_MEILI \
-    --db-path "$ISO/data/meili/data.ms" --env production --no-analytics
+    --db-path "$ISO/data/meili/data.ms" --env production --no-analytics \
+    --max-indexing-memory "${ISO_MEILI_MAX_MEM:-256MiB}" --max-indexing-threads 1
   start_one claude-bridge $P_BRIDGE "$WB/claude-bridge" env BRIDGE_PORT=$P_BRIDGE BRIDGE_HOST=127.0.0.1 \
     BRIDGE_STATE_DIR="$ISO/bridge" BRIDGE_MOCK="${BRIDGE_MOCK:-0}" WERKBANK_URL="http://127.0.0.1:$P_WEB" \
     BRIDGE_ALLOWED_EMAILS="${BRIDGE_ALLOWED_EMAILS-knut.peters@maxenergy.at}" \
