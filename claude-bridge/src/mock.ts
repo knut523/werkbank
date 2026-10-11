@@ -177,6 +177,23 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
       return;
     }
+    if (last === 'mock-optionen') {
+      // Für Tests: womit die Sitzung gestartet wurde (ohne Geheimnisse).
+      const append = String(options.systemPrompt?.append ?? '');
+      yield text('OPTIONEN ' + JSON.stringify({ maxTurns: options.maxTurns, disallowed: options.disallowedTools, mcp: Object.keys(options.mcpServers ?? {}).sort(),
+        leitstand: append.includes('Dieser Chat ist der LEITSTAND'), strang: append.includes('Orchestrator-Strang'), werkbankLeit: options.mcpServers?.werkbank?.env?.WERKBANK_LEITSTAND ?? null,
+        gitConfig: !!options.env?.GIT_CONFIG_GLOBAL }));
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
+    if (last === 'mock-verdichten') {
+      // Verdichtung des Kontexts wie das echte CLI (Plan 132): status compacting → compact_boundary → Antwort.
+      yield { type: 'system', subtype: 'status', status: 'compacting', session_id };
+      yield { type: 'system', subtype: 'compact_boundary', session_id, compact_metadata: { trigger: 'auto', pre_tokens: 900000, post_tokens: 20000 } };
+      yield text('(Mock) Verdichtet.');
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
     const slow = last.match(/^langsam (\d+)$/);
     if (slow) {
       // Ein langer Zug (Sperre je Person, E5): wartet N ms, dann eine Zeile.
