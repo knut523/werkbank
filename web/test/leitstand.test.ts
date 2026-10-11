@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { MongoClient, ObjectId } from 'mongodb';
-import { strandEvent, weiterEvent, wakeText, decideWake, wakeCfg } from '../server/leitstand.ts';
+import { strandEvent, weiterEvent, wakeText, decideWake, wakeCfg, urgentAnswer } from '../server/leitstand.ts';
 import { orchStatus, AUTO_RATE_MS } from '../server/orchestrator.ts';
 import { featuresFor, teamFeatures } from '../server/features.ts';
 
@@ -62,13 +62,12 @@ test('Meldungstext (B4/D1, DoD 19): Auszüge eingezäunt als Daten, Anker und Ke
 
 test('Zustellen (DoD 8/9/12/36): entprellen, nur wenn frei und Antwort gespeichert, Deckel je Stunde/Tag nur über Zustellungen, dringende sofort', () => {
   const c = { ...wakeCfg({}), debounce: 60_000 };
-  const base = { now: T0, busy: false, lastIsAnswer: true, pending: false, delivered: [] as number[], capResetAt: 0, c };
+  const base = { now: T0, busy: false, lastIsAnswer: true, delivered: [] as number[], capResetAt: 0, c };
   assert.equal(decideWake([], base).action, 'none');
   assert.equal(decideWake([{ createdAt: T0 - 1000 }], base).action, 'wait', 'entprellen');
   assert.equal(decideWake([{ createdAt: T0 - 61_000 }, { createdAt: T0 - 1000 }], base).action, 'send', 'ältestes zählt');
   assert.equal(decideWake([{ createdAt: T0 - 61_000 }], { ...base, busy: true }).action, 'wait');
   assert.equal(decideWake([{ createdAt: T0 - 61_000 }], { ...base, lastIsAnswer: false }).action, 'wait');
-  assert.equal(decideWake([{ createdAt: T0 - 61_000 }], { ...base, pending: true }).action, 'wait');
   const hour = Array.from({ length: 12 }, (_, i) => T0 - i * 60_000);
   assert.equal(decideWake([{ createdAt: T0 - 61_000 }], { ...base, delivered: hour }).action, 'cap');
   assert.equal(decideWake([{ createdAt: T0 - 61_000 }], { ...base, delivered: hour, capResetAt: T0 - 5.5 * 60_000 }).action, 'send', 'nach „Fortsetzen“ zählt neu');
@@ -76,6 +75,9 @@ test('Zustellen (DoD 8/9/12/36): entprellen, nur wenn frei und Antwort gespeiche
   assert.equal(decideWake([{ createdAt: T0 - 61_000 }], { ...base, delivered: day }).action, 'cap');
   assert.equal(decideWake([{ createdAt: T0 - 1, urgent: true }], { ...base, delivered: hour }).action, 'send', 'Knuts Antwort auf den Deckel: sofort, nicht unter dem Deckel');
   assert.deepEqual([c.perHour, c.perDay, c.retryMax, c.weiterMax], [12, 60, 5, 3]);
+  assert.equal(urgentAnswer({ kind: 'leitstand-deckel', answer: { option: 'Fortsetzen' } }), true);
+  assert.equal(urgentAnswer({ kind: 'leitstand-deckel', answer: { option: 'Anhalten' } }), false, '„Anhalten“ hebt den Deckel nicht auf');
+  assert.equal(urgentAnswer({ kind: 'frage', answer: { option: 'Fortsetzen' } }), false);
 });
 
 test('Freigabe (DoD 2): Leitstand nur für Admins, auch nicht über WERKBANK_TEAM_FEATURES', () => {
@@ -120,6 +122,7 @@ before(async () => {
     const json = (status: number, j: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(j)); };
     if (!p?.id) return json(401, {});
     if (req.url === '/api/agents/chat/Claude%20Code') {
+      if (String(body.text).includes('FEHLSTART')) return json(500, { message: 'Testfehler' });
       const conversationId = body.conversationId && body.conversationId !== 'new' ? body.conversationId : randomUUID();
       await L.collection('conversations').updateOne({ conversationId, user: p.id }, { $setOnInsert: { title: 'New Chat', tags: [] } }, { upsert: true });
       await L.collection('messages').insertOne({ messageId: body.messageId, parentMessageId: body.parentMessageId, conversationId, user: p.id, isCreatedByUser: true, text: body.text, createdAt: new Date() });
@@ -330,6 +333,23 @@ test('Ersetzen (DoD 1/27): zweiter Start beendet den ersten in der Brücke und i
   leit = st;
 });
 
+test('Review A: Fehlstart lässt den alten Leitstand aktiv; unbestätigte Meldung des alten geht beim Wechsel an den neuen', async () => {
+  writeFileSync(join(tmp, 'fehl.md'), 'FEHLSTART\n');
+  const bad = await orch(['leitstand', 'start', '--handover', join(tmp, 'fehl.md')]);
+  assert.notEqual(bad.code, 0);
+  assert.ok(!(await W().collection('orchestrator_runs').findOne({ _id: leit.id as any }))!.endedAt, 'alter bleibt aktiv');
+  const bs: any[] = (await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/internal/orch-state?user=${knut._id}`, { headers: { 'x-werkbank-internal': INTERNAL } })).json()).strands;
+  assert.equal(bs.find((s) => s.conv === leit.conv).kind, 'leitstand');
+  assert.equal(bs.filter((s) => s.kind === 'leitstand').length, 1, 'der fehlgestartete ist abgemeldet');
+  // Eine Meldung ist an den alten „unterwegs“ — nach dem Wechsel kommt sie beim neuen an.
+  const id = `${knut._id}:test:wechsel`;
+  await W().collection('leitstand_events').insertOne({ _id: id as any, userId: String(knut._id), kind: 'fertig', text: 'meldet „fertig“ (unterwegs beim Wechsel)', excerpt: '', strand: { id: 'yy', title: 'Wechsel' }, at: new Date(), createdAt: new Date(), status: 'gesendet', batch: 'cafecafecafe', retries: 0 });
+  await W().collection('orchestrator_runs').updateOne({ _id: leit.id as any }, { $set: { wake: { batch: 'cafecafecafe', sentAt: new Date(), weiter: false } } });
+  const st = JSON.parse((await orch(['leitstand', 'start', '--handover', HANDOVER, '--json'])).out);
+  await until(() => wakesOf(st.conv), (w) => w.some((m) => /unterwegs beim Wechsel/.test(textOf(m))));
+  leit = st;
+});
+
 test('Neustart der Web-App (DoD 11): kein Ereignis doppelt', async () => {
   const before = (await wakesOf(leit.conv)).length;
   const n = await W().collection('leitstand_events').countDocuments();
@@ -358,6 +378,12 @@ test('Leitstand an der eigenen Grenze (DoD 13/28): Schrittlimit → gebündeltes
   const r = await fetch(B + `/api/orchestrator/questions/${q!._id}/answer`, { method: 'POST', headers: { cookie: await cookie(knut), 'content-type': 'application/json', 'x-werkbank': '1' }, body: JSON.stringify({ option: 'Fortsetzen' }) });
   assert.equal((await r.json()).action, 'fortgesetzt');
   await until(() => wakesOf(leit.conv), (w) => w.some((m) => new RegExp(`Knut hat ${q!._id}`).test(textOf(m))));
+  // Review B/C (Befund 4): Knut schreibt selbst → Zähler und Stopp für „weiter“ beginnen neu.
+  await W().collection('orchestrator_runs').updateOne({ _id: leit.id as any }, { $set: { weiterStopped: new Date(), weiterStreak: 2 } });
+  const last2 = await until(async () => (await msgsOf(leit.conv)).at(-1)!, (m) => !m.isCreatedByUser);
+  await fetch(`${webEnv.LIBRECHAT_URL}/api/agents/chat/Claude%20Code`, { method: 'POST', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Hallo, hier Knut', conversationId: leit.conv, parentMessageId: last2.messageId, messageId: randomUUID() }) });
+  const d = await until(() => W().collection('orchestrator_runs').findOne({ _id: leit.id as any }), (x: any) => !x?.weiterStopped);
+  assert.equal(d!.weiterStopped, null); assert.equal(d!.weiterStreak, 0);
 });
 
 async function cookie(u: { _id: ObjectId }): Promise<string> {

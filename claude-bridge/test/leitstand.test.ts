@@ -73,6 +73,40 @@ test('Git-Muster für alle Chats (DoD 29/34): globale Optionen vor dem Unterbefe
   assert.equal(orchestratorBlock('Bash', { command: 'git -C "a b" push' }), 'git push');
 });
 
+test('Git-Präfix ohne katastrophales Backtracking: 60× -C prüft in unter 50 ms (Wächter läuft im Brücken-Prozess)', () => {
+  const command = 'git ' + '-C '.repeat(60) + 'status';
+  const t0 = performance.now();
+  classify('Bash', { command }, { workDir: '/w', scope: 'voll' });
+  orchestratorBlock('Bash', { command });
+  assert.ok(performance.now() - t0 < 50, `${Math.round(performance.now() - t0)} ms`);
+  assert.equal(classify('Bash', { command: 'git -C -C push origin main' }, {}).cls, 'blocked', '-C mit Argument „-C“');
+  // Review B/C, Befund 1: auch lange Optionen (`--a` war als „-“+„-a“ und „--“+„a“ lesbar) und blankes -c.
+  for (const command of ['git' + ' --a'.repeat(60) + ' x', 'git' + ' -c'.repeat(60) + ' x', 'git' + ' --git-dir'.repeat(60) + ' x']) {
+    const t1 = performance.now();
+    classify('Bash', { command }, { workDir: '/w', scope: 'voll' }); orchestratorBlock('Bash', { command });
+    assert.ok(performance.now() - t1 < 50, `${command.slice(0, 20)}…: ${Math.round(performance.now() - t1)} ms`);
+  }
+});
+
+test('Review B/C (Befund 5): Git-Optionen mit getrenntem Wert und Zweig in Anführungszeichen', () => {
+  const c = (command: string) => classify('Bash', { command }, { workDir: '/w', scope: 'voll' }).cls;
+  assert.equal(c('git --git-dir /r/.git push origin feat/x'), 'confirm');
+  assert.equal(c('git --work-tree . push origin feat/x'), 'confirm');
+  assert.equal(c('git --git-dir /r/.git push origin main'), 'blocked');
+  assert.equal(c('git --namespace x merge y'), 'blocked');
+  assert.equal(c('git push origin "main"'), 'blocked');
+  assert.ok(orchestratorBlock('Bash', { command: 'git --git-dir /r/.git push' }));
+});
+
+test('Review B/C (Befund 2): Strang-Sperren treffen keine normalen Pfade und Dienstnamen', () => {
+  for (const command of ['go test ./internal/...', 'ls src/internal/x', 'cat pkg/internal/foo.ts', 'docker ps web', 'docker compose ps redis']) {
+    assert.equal(orchestratorBlock('Bash', { command }), null, command);
+  }
+  for (const command of ['curl -s http://127.0.0.1:3070/internal/orchestrator/list', 'curl localhost:3070/internal/x', 'wget -qO- http://[::1]:3070/internal/x', 'ps eww', 'sudo ps e', 'x; ps axe']) {
+    assert.ok(orchestratorBlock('Bash', { command }), command);
+  }
+});
+
 test('SubagentHandback ist lesend und im Strang nicht gesperrt (DoD 21)', () => {
   assert.equal(classify('SubagentHandback', { message: 'Bericht' }).cls, 'read');
   assert.equal(orchestratorBlock('SubagentHandback', { message: 'Bericht' }), null);
@@ -112,6 +146,8 @@ test('orch-Werkzeuge (DoD 15): nur im Leitstand; lesen frei, starten/senden/prü
   for (const n of ['orch_send', 'orch_review']) assert.equal(classify(`mcp__werkbank__${n}`, { id: 'x' }, l).cls, 'auto', n);
   assert.equal(classify('mcp__werkbank__orch_start', { cwd: join(LEIT, 'wt') }, l).cls, 'auto');
   assert.equal(classify('mcp__werkbank__orch_start', { cwd: '/tmp/x' }, l).cls, 'confirm');
+  assert.equal(classify('mcp__werkbank__orch_start', { cwd: 'wt-relativ' }, l).cls, 'auto', 'relativ zum Leitstand-Ordner (Review A)');
+  assert.equal(classify('mcp__werkbank__orch_start', { cwd: '../../etc' }, l).cls, 'confirm');
 });
 
 test('Leitstand-Wächter S4 (DoD 16/38): Vault-git gesperrt, Live-Instanz/crontab/~/bin/Konfiguration Rückfrage, Ordnergrenzen', () => {
@@ -119,7 +155,7 @@ test('Leitstand-Wächter S4 (DoD 16/38): Vault-git gesperrt, Live-Instanz/cronta
   const ctx = { workDir: LEIT, scratch };
   const b = (command: string) => leitstandCheck('Bash', { command }, ctx)?.cls ?? null;
   for (const cmd of [`git -C ${VAULT_DIR} commit -am x`, `cd ${VAULT_DIR} && git add -A && git commit -m x`, `GIT_DIR=${VAULT_DIR}/.git git log`,
-    `git --git-dir=${VAULT_DIR}/.git status`, `git --work-tree=${VAULT_DIR} add .`, `rm -rf ${VAULT_DIR}/.git`]) assert.equal(b(cmd), 'blocked', cmd);
+    `git --git-dir=${VAULT_DIR}/.git status`, `pushd ${VAULT_DIR}; git commit -am x`, `git --work-tree=${VAULT_DIR} add .`, `rm -rf ${VAULT_DIR}/.git`]) assert.equal(b(cmd), 'blocked', cmd);
   for (const cmd of ['~/work/werkbank-dev/scripts/werkbank.sh restart', 'crontab -e', 'cp x ~/bin/y', 'systemctl --user restart x', 'cat >> ~/.claude/settings.json',
     'echo x > .env', 'echo x > .git/hooks/pre-push', 'git config core.hooksPath /tmp']) assert.equal(b(cmd), 'confirm', cmd);
   for (const cmd of ['npm test', 'git -C ~/work/knut/wt status', `grep -rn x ${VAULT_DIR}/olaf`, 'git commit -m "vault notes"']) assert.equal(b(cmd), null, cmd);

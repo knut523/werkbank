@@ -27,8 +27,11 @@ const MCP_READ = /^(get|search|lookup|fetch|list|atlassianUserInfo|memory_(searc
 
 // Git mit beliebigen globalen Optionen vor dem Unterbefehl (`git -C "a b" -c k=v --no-pager push`), Plan 132 (C6/A2): ohne
 // das liefen `git -C x push`/`git -C x merge` an den Mustern vorbei. Unterbefehl und Zweig enden mit (?![\w-]), damit
-// `merge-base` oder `main-fix` nicht treffen.
-const GIT = String.raw`\bgit(?:\s+(?:-[cC]\s+(?:"[^"]*"|'[^']*'|\S+)|--?[\w-]+(?:=\S+)?))*\s+`;
+// `merge-base` oder `main-fix` nicht treffen. Die beiden Options-Formen überlappen nicht (blankes -c/-C nur mit Argument):
+// sonst wächst das Backtracking exponentiell — 60× `-C` hielt den Brücken-Prozess über 2 min fest (Review 11.10.2026).
+// Optionen mit getrenntem Wert (`--git-dir /r`) sind eine eigene Form; die allgemeine Form nimmt sie und blankes -c/-C nicht.
+const GIT_VALUED = String.raw`(?:-[cC]|--(?:git-dir|work-tree|namespace|super-prefix|config-env))`;
+const GIT = String.raw`\bgit(?:\s+(?:${GIT_VALUED}\s+(?:"[^"]*"|'[^']*'|\S+)|(?!${GIT_VALUED}(?:\s|$))-(?:-[\w-]+|\w[\w-]*)(?:=\S+)?))*\s+`;
 const git = (sub: string, rest = '') => new RegExp(GIT + sub + String.raw`(?![\w-])` + rest);
 const PROTECTED = String.raw`(?:refs\/heads\/)?(?:main|master|develop)(?![\w-])`;
 
@@ -39,7 +42,7 @@ const BASH_BLOCKED: [RegExp, string][] = [
   [/\bgh\s+api\b[^|;&]*\/(merge|merges)\b/, 'Merge über die GitHub-API'],
   [/\/merge\b[^|;&]*github|github[^|;&]*\/merge\b/i, 'Merge über GitHub'],
   [git('push', String.raw`[^|;&]*(\s--force\b|\s--force-with-lease\b|\s-f\b|\s\+\S)`), 'Force-Push'],
-  [git('push', String.raw`[^|;&]*[\s:]` + PROTECTED), 'Push auf main/master/develop'],
+  [git('push', String.raw`[^|;&]*[\s:'"]` + PROTECTED), 'Push auf main/master/develop'],
 ];
 
 // GitHub schreiben (Knut, 06.10.2026: „push only with acceptance or orders“): immer erst nach „ja“ im Chat — auch im
@@ -226,7 +229,7 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
       if (!ctx.leit) return { cls: 'blocked', why: 'Orchestrator-Werkzeuge gibt es nur im Leitstand' };
       if (/^orch_(list|show|questions|ask)$/.test(name)) return { cls: 'read' };
       if (name === 'orch_start' && ctx.workDir) {
-        const cwd = realish(resolve(String(input.cwd ?? '')));
+        const cwd = realish(resolve(ctx.workDir, String(input.cwd ?? '')));
         if (!within(cwd, realish(resolve(ctx.workDir)))) return { cls: 'confirm', why: 'Strang außerhalb des Leitstand-Ordners' };
       }
       return ctx.workDir && ctx.scope === 'voll' ? { cls: 'auto' } : { cls: 'confirm' };
@@ -235,6 +238,7 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // `exec` — erst nach „ja“, nie dem Klassifikator überlassen (Feature-Flags wirken auf Produktion).
     if (server === 'posthog') {
       if (/(^|-)(delete|destroy|remove)(-|$)/.test(name)) return { cls: 'blocked', why: 'PostHog löschen' };
+      // „or“ in der Negativliste: `…-get-or-create` schreibt.
       if (name === 'execute-sql' || (/(^|-)(get|list|retrieve|read|search)(-|$)/.test(name) && !/(^|-)(create|update|delete|set|add|remove|duplicate|rename|or)(-|$)/.test(name))) return { cls: 'read' };
       return { cls: 'confirm' };
     }
@@ -270,8 +274,10 @@ const ORCH_BASH_BLOCK: [RegExp, string][] = [
   [/(atlassian\.net|api\.atlassian\.com)/i, 'Atlassian/Jira direkt ansprechen'],
   // Plan 132 (B7/C8): Wege zum internen Schlüssel der Werkbank — sonst könnte ein Strang Stränge starten oder den Leitstand
   // ersetzen. Muster zielen auf Zugriffe (Pfade, Header), nicht auf Wörter: `grep environ datei` bleibt frei.
-  [/\bscripts\/orch\b|\borch-cli\b|\/internal\/|x-werkbank-internal|WERKBANK_INTERNAL_TOKEN/i, 'interner Kanal der Werkbank'],
-  [/\/proc\/[^\s'"]*\/environ\b|(^|[\s/'"])\.env\.local\b|\bps\s+(-\S+\s+)*[a-zA-Z]*e[a-zA-Z]*(\s|$)/, 'Umgebung/Geheimnisse anderer Prozesse lesen'],
+  // Nur Adressen der lokalen Dienste (Review B/C: `./internal/…` in Go-Repos ist ein normaler Pfad).
+  [/\bscripts\/orch\b|\borch-cli\b|(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?\/(werkbank\/)?internal\/|x-werkbank-internal|WERKBANK_INTERNAL_TOKEN/i, 'interner Kanal der Werkbank'],
+  // `ps` nur als Befehl (nicht `docker ps web`); BSD-Form mit e = Umgebung anzeigen.
+  [/\/proc\/[^\s'"]*\/environ\b|(^|[\s/'"])\.env\.local\b|(^|[;&|(]\s*|\bsudo\s+)ps\s+(-\S+\s+)*[a-zA-Z]*e[a-zA-Z]*(\s|$)/, 'Umgebung/Geheimnisse anderer Prozesse lesen'],
 ];
 const ORCH_FILE_BLOCK = /(^|\/)(\.git|\.claude)(\/|$)|(^|\/)\.env[^/]*$/;
 // Lesen, das in einem Strang gesperrt ist (Plan 132, C8): Umgebung anderer Prozesse, .env-Dateien (außer Beispielen).
@@ -284,7 +290,7 @@ export function orchestratorBlock(tool: string, input: Record<string, unknown>):
     const cmd = String(input.command ?? '');
     for (const [re, why] of [...BASH_BLOCKED, ...BASH_GITHUB_WRITE, ...ORCH_BASH_BLOCK]) if (re.test(cmd)) return why;
     // git config: nur lesen (--get…/--list/-l); jede schreibende Form ist gesperrt.
-    for (const m of cmd.matchAll(/\bgit(?:\s+-[cC]\s+\S+|\s+--?[\w-]+(?:=\S+)?)*\s+config\b([^|;&\n]*)/g)) if (!/\s(--get(-all|-regexp)?|--list|-l)\b/.test(m[1])) return 'Git-Konfiguration ändern';
+    for (const m of cmd.matchAll(new RegExp(GIT + String.raw`config(?![\w-])([^|;&\n]*)`, 'g'))) if (!/\s(--get(-all|-regexp)?|--list|-l)\b/.test(m[1])) return 'Git-Konfiguration ändern';
     return null;
   }
   if (FILE_TOOLS.has(tool)) {
@@ -308,7 +314,7 @@ export function orchestratorBlock(tool: string, input: Record<string, unknown>):
 // Scratch und Vault brauchen ein „ja“. Muster sind keine Sandbox (Bash-Restrisiko S0, im Plan bewertet).
 const VAULT_GIT = (vault: string) => {
   const v = vault.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(String.raw`\bgit\s+(?:\S+\s+)*?(?:-C\s+["']?${v}(?:["'/\s]|$)|--git-dir=?\s*["']?${v}|--work-tree=?\s*["']?${v})|GIT_(?:DIR|WORK_TREE)=["']?${v}|\bcd\s+["']?${v}(?:["'/\s;&]|$)[^|]*?\bgit\b|${v}\/\.git\b`);
+  return new RegExp(String.raw`\bgit\s+(?:\S+\s+)*?(?:-C\s+["']?${v}(?:["'/\s]|$)|--git-dir=?\s*["']?${v}|--work-tree=?\s*["']?${v})|GIT_(?:DIR|WORK_TREE)=["']?${v}|\b(?:cd|pushd)\s+["']?${v}(?:["'/\s;&]|$)[^|]*?\bgit\b|${v}\/\.git\b`);
 };
 const LEIT_BASH_CONFIRM: [RegExp, string][] = [
   [/werkbank-dev\b|\bwerkbank\.sh\b/, 'Live-Instanz der Werkbank'],
@@ -317,7 +323,6 @@ const LEIT_BASH_CONFIRM: [RegExp, string][] = [
   [/\bsystemctl\b/, 'systemctl'],
   [/(^|[\s/'"])\.claude(\/|\b)|(^|[\s/'"])\.env\b|\.git\/(hooks|config)\b|\bcore\.hooksPath\b/, 'Claude-/Git-Konfiguration oder .env'],
 ];
-const LEIT_FILE_CONFIRM = /(^|\/)(\.git|\.claude)(\/|$)|(^|\/)\.env[^/]*$/;
 
 /** Leitstand: gesperrt / Rückfrage (mit Grund) / null = normale Einordnung. Läuft vor classify (Plan 132, C7/D4). */
 export function leitstandCheck(tool: string, input: Record<string, unknown>, ctx: { workDir?: string; scratch?: string }): { cls: 'blocked' | 'confirm'; why: string } | null {
@@ -332,7 +337,7 @@ export function leitstandCheck(tool: string, input: Record<string, unknown>, ctx
     const f = String(input.file_path ?? input.notebook_path ?? '');
     const target = realish(resolve(ctx.workDir ?? '/', f));
     if (within(target, vault)) return /(^|\/)\.git(\/|$)/.test(target.slice(vault.length)) ? { cls: 'blocked', why: 'git im Vault' } : null;
-    if (LEIT_FILE_CONFIRM.test(target)) return { cls: 'confirm', why: 'Git-/Claude-Konfiguration oder .env' };
+    if (ORCH_FILE_BLOCK.test(target)) return { cls: 'confirm', why: 'Git-/Claude-Konfiguration oder .env' };
     const own = [ctx.workDir, ctx.scratch].filter(Boolean).map((d) => realish(resolve(d!)));
     if (!own.some((d) => within(target, d))) return { cls: 'confirm', why: 'außerhalb von Leitstand-Ordner, Scratch und Vault' };
   }
