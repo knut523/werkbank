@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Werkbank-Anpassungen an LibreChat einspielen — idempotent, von setup.sh (werkbank.sh up|update) aufgerufen.
 #   librechat/overlay/**   neue Dateien, werden jedes Mal hineinkopiert
-#   librechat/patches/*.patch   kleine Änderungen an LibreChat-Dateien (git apply); schon angewandte werden erkannt
+#   librechat/patches/*.patch   kleine Änderungen an LibreChat-Dateien (git apply); schon angewandte werden erkannt,
+#                               eine geänderte Fassung ersetzt die alte (Dateien des Patches zurück auf LibreChat, neu angewandt)
 # Ändert sich etwas am Client (Overlay/Patches), wird nur der Client neu gebaut (vite, ~1–2 Minuten).
 # Ein Patch, der auf eine neue LibreChat-Version nicht mehr passt, bricht mit Hinweis ab (nichts halb anwenden).
 set -euo pipefail
@@ -17,6 +18,10 @@ for p in "$WB"/librechat/patches/*.patch; do
     continue                                              # schon drin
   elif git -C "$LC" apply --check "$p" 2>/dev/null; then
     git -C "$LC" apply "$p" && echo "  + Patch $n"
+  elif files=$(sed -n 's#^+++ b/##p' "$p") && git -C "$LC" checkout -- $files 2>/dev/null && git -C "$LC" apply --check "$p" 2>/dev/null; then
+    # Eine ältere Fassung dieses Patches ist drin (Patch im Repo geändert): seine Dateien auf LibreChat zurück, neu einspielen.
+    # Jede LibreChat-Datei gehört genau einem Patch (10: api/server/index.js · 20: Leiste+Route · 30: Markdown · 40: Kontomenü).
+    git -C "$LC" apply "$p" && echo "  ↻ Patch $n erneuert"
   else
     echo "  ✗ Patch $n passt nicht auf LibreChat $LIBRECHAT_TAG — bitte librechat/patches/$n anpassen"; exit 1
   fi

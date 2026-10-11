@@ -316,9 +316,6 @@ tr.proposed td { background: color-mix(in srgb, var(--chip-ok) 45%, transparent)
 .nav.more { margin-bottom: 8px; }
 .nav.more a { padding: 5px 10px; font-weight: 400; font-size: 13px; color: var(--text-secondary); }
 .nav.more a.active { color: var(--text-primary); }
-.more-row { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 10px 24px 18px; border-top: 1px solid var(--border-light); margin-top: 18px; }
-.more-row a { color: var(--text-secondary); }
-.more-row a[aria-current='page'] { color: var(--text-primary); font-weight: 600; }
 .beimir-link { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; padding: 10px 14px; color: var(--text-primary); min-height: 44px; }
 .beimir-link:hover { text-decoration: none; background: var(--surface-hover); }
 ul.plain { list-style: none; margin: 4px 0; padding: 0; }
@@ -367,7 +364,6 @@ td[data-label-inline]::before { content: none; }
   .bucket { border-top: 1px solid var(--border-light); padding-top: 6px; }
   .bucket.wait.has { border-top: none; }
   .rq-actions .btn { flex: 1 1 auto; }
-  .more-row { padding: 10px 16px 18px; }
   /* Rangliste: Rang, Pfeile, Spec in einer Zeile, Zustand · WSJF · Kat darunter, Rest mit Beschriftung */
   table.prio-t td:nth-child(2) { flex: 0 0 auto; }
   table.prio-t td:nth-child(3) { flex: 1 1 55%; }

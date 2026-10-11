@@ -534,7 +534,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
       </div>
       {b.error && <Err e={b.error} />}
       {!data ? <Loading /> : data.lanes.length === 0 ? (
-        <div className="card soft"><p>Keine Tickets in der Kopie{filter || owner || q ? ' für diesen Filter' : ''}.</p>{!data.sync && <p className="small">Noch nie synchronisiert — oben auf „Jetzt synchronisieren“ klicken (braucht deinen Jira-Zugang aus der Einrichtung).</p>}</div>
+        <div className="card soft"><p>Keine Tickets in der Kopie{filter || owner || q ? ' für diesen Filter' : ''}.</p>{!data.sync && <p className="small">Noch nie synchronisiert — oben auf „Jetzt synchronisieren“ klicken (braucht deinen Jira-Zugang aus der <a href="#/einrichtung">Werkbank-Einrichtung</a>).</p>}</div>
       ) : data.lanes.map((lane: any) => (
         <section className="lane" key={lane.key}>
           <h3 className="lane-head">

@@ -44,10 +44,9 @@ next_steps() {
   cat <<EOT
 
 Nächste Schritte
-  1. Werkbank öffnen:  ${WERKBANK_PUBLIC_URL:-http://127.0.0.1:3070}
-     Chat (LibreChat): ${LIBRECHAT_PUBLIC_URL:-http://127.0.0.1:3080}
-  2. Konto anlegen (im Chat „Registrieren“, nur @maxenergy.at / @konekto.energy), in der Werkbank anmelden.
-  3. „Einrichtung“: eigenes Claude verbinden (Terminal: claude setup-token → Token einfügen),
+  1. Werkbank öffnen:  ${LIBRECHAT_PUBLIC_URL:-http://127.0.0.1:3080}/wb/heute   (Chat und Werkbank-Seiten in einem)
+  2. Konto anlegen („Registrieren“, nur @maxenergy.at / @konekto.energy) und anmelden.
+  3. Kontomenü (unten links) → „Werkbank-Einrichtung“: eigenes Claude verbinden (Terminal: claude setup-token → Token einfügen),
      eigenes Jira verbinden (Atlassian-API-Token).
   4. Freigabe im Pilot: nur ${WERKBANK_ALLOWED_EMAILS:-${BRIDGE_ALLOWED_EMAILS:-knut.peters@maxenergy.at}}
      (weitere: BRIDGE_ALLOWED_EMAILS=a@…,b@… scripts/werkbank.sh restart).

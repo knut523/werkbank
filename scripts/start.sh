@@ -50,4 +50,4 @@ start librechat 3080 "$RT/librechat" env CONFIG_PATH="$WB/librechat/librechat.ya
 start werkbank-web 3070 "$WB/web" env WERKBANK_PORT=3070 WERKBANK_HOST=127.0.0.1 BRIDGE_STATE_DIR="$RT/bridge" \
   WERKBANK_ALLOWED_EMAILS="${WERKBANK_ALLOWED_EMAILS-${BRIDGE_ALLOWED_EMAILS-knut.peters@maxenergy.at}}" node server/main.ts
 
-echo "Fertig: Chat ${LIBRECHAT_PUBLIC_URL:-http://127.0.0.1:3080} · Werkbank ${WERKBANK_PUBLIC_URL:-http://127.0.0.1:3070}"
+echo "Fertig: Werkbank ${LIBRECHAT_PUBLIC_URL:-http://127.0.0.1:3080}/wb/heute (Chat und Seiten) · Web-App direkt (Health/Debug) ${WERKBANK_PUBLIC_URL:-http://127.0.0.1:3070}"

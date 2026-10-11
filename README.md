@@ -42,7 +42,7 @@ wiederholbar. Es
 3. erzeugt fehlende **Geheimnisse** in `.env.local` (gitignored, Rechte 600) — vorhandene werden nie
    geändert oder ausgegeben;
 4. schreibt die **URLs dieser Workspace** (aus `CODER_WORKSPACE_*`) als verwalteten Block in `.env.local`
-   (`DOMAIN_CLIENT/SERVER`, `WERKBANK_PUBLIC_URL`, Fußzeilen-Links);
+   (`DOMAIN_CLIENT/SERVER`, `WERKBANK_PUBLIC_URL`, Fußzeile);
 5. installiert Brücke und Web-App (`npm ci` nur wenn nötig) und baut die Oberfläche, wenn sich etwas geändert hat;
 6. richtet die **Team-Skills aus dem Vault** ein (fehlende verlinken, nichts überschreiben, siehe unten);
 7. startet alle Dienste, prüft sie und zeigt die nächsten Schritte mit Links.
@@ -79,7 +79,7 @@ Alles läuft nativ und lauscht nur auf `127.0.0.1`. Erreichbar über die Coder-V
 | Meilisearch v1.35.1 | 7700 | nur intern (Chat-Suche + Vault-Suche) |
 
 Die Werkbank-Seiten sind **Einträge in LibreChats linker Leiste** (siehe „Die Werkbank im Chat“ unten) und öffnen
-im Hauptbereich — mit einer Anmeldung. Die Fußzeilen-Links gibt es weiterhin. „Im Chat öffnen“, „Im Chat
+im Hauptbereich — mit einer Anmeldung. „Im Chat öffnen“, „Im Chat
 besprechen“ usw. starten einen neuen Chat mit vorbereitetem Text im selben Fenster.
 
 ## Erste Schritte im Browser
@@ -106,24 +106,38 @@ Die Web-App führt beim ersten Aufruf durch fünf Schritte (Seite **Einrichtung*
    (Init der Sitzung, kein Modellaufruf).
 5. **Loslegen** — Kacheln zu Chat, Wissen, Board, Sprint, Skills, Dateien; darunter der Zustand der Dienste.
 
-## Die Werkbank im Chat (linke Leiste)
+## Die Werkbank im Chat (eine Oberfläche)
 
-Unter dem „Neuer Chat“-Knopf stehen fünf Symbole, dieselben wie oben in der Werkbank: ☀️ Heute · 🧭 Roadmap ·
-🗂 Board · 🔁 Sprint · 📖 Wissen. Mein Tag, Ziele, Skills, Dateien & Teilen und Einrichtung stehen als Zeile „Weitere
-Seiten“ unter jeder eingebetteten Seite (`/wb/einrichtung` usw. gehen weiter). Ein Klick öffnet die Seite im Hauptbereich von LibreChat (Adresse
-`/wb/<seite>`, Unterseiten stehen als `?h=…` in der Adresszeile und überstehen Neuladen).
+Chat und Werkbank-Seiten sind **eine Oberfläche** (Plan: [`docs/plan-eine-oberflaeche.md`](docs/plan-eine-oberflaeche.md)).
+Unter dem „Neuer Chat“-Knopf stehen fünf Symbole: Heute · Roadmap · Board · Sprint · Wissen, darunter **„⋯ Weitere
+Seiten“** mit Mein Tag, Ziele, Skills, Dateien & Teilen (aktiv markiert, wenn eine davon offen ist). Die
+**Werkbank-Einrichtung** (Claude, Jira) steht im **Kontomenü** unten links direkt über LibreChats „Einstellungen“ — ein
+Ort für alles, was man einstellt. Ein Klick öffnet die Seite im Hauptbereich (Adresse `/wb/<seite>`, Unterseiten als
+`?h=…`, übersteht Neuladen). Einstieg für alle: `<Chat-URL>/wb/heute`.
 
+- **Kein Neuladen:** Alle Werkbank-Seiten laufen in *einem* iframe; ein Wechsel in der Leiste setzt nur dessen Hash
+  (`location.replace`), die Adresszeile folgt mit `replace` — Zurück ist ein Klick. Klick auf die schon offene Seite
+  lädt sie neu. „Chat öffnen“, „Im Chat besprechen“, Tagesabschluss usw. gehen als `werkbank-open` an LibreChats Router
+  (nur eigener Ursprung; Strg/Cmd/Mitte öffnen weiter einen neuen Tab).
+- **Handy:** über jeder Werkbank-Seite LibreChats Knopf „Leiste öffnen“ mit dem Seitentitel; ein Tipp auf eine Seite
+  (Leiste, „Weitere Seiten“, Kontomenü) schließt die Leiste wieder.
 - **Eine Anmeldung:** LibreChat reicht `/werkbank/*` an die Web-App (3070) durch. Dort kommt LibreChats
   Refresh-Cookie mit; die Web-App prüft ihn wie LibreChat selbst (Signatur mit `JWT_REFRESH_SECRET` und
   gültige Sitzung mit diesem Token-Hash in LibreChats DB). Die Freigabeliste gilt weiter. Direkt auf 3070
-  gibt es weiter das eigene Login (für Health/Debug). `/werkbank/internal/*` reicht der Proxy nie durch.
-- **Optik:** gleiche Schrift (Inter), Farben und Abstände wie LibreChat; **Hell/Dunkel folgt dem Chat**
-  (die Seite beobachtet LibreChats `dark`-Klasse), Symbole aus LibreChats Symbolsatz (lucide).
-- **Technik, klein und wiederholbar:** zwei neue Dateien (`librechat/overlay/…`: Proxy, Leiste, Seite) und zwei
-  kleine Patches (`librechat/patches/10-server-werkbank-proxy.patch`: 2 Zeilen in `api/server/index.js`;
-  `20-client-werkbank-nav.patch`: Leiste + Route). `scripts/librechat-patch.sh` spielt sie bei jedem
-  `werkbank.sh up|update` ein (schon angewandte werden erkannt; passt ein Patch nach einem LibreChat-Update
-  nicht mehr, bricht es mit Hinweis ab) und baut nur den Client neu, wenn sich etwas geändert hat.
+  gibt es weiter das eigene Login (nur Health/Debug, wird nirgends mehr verlinkt). `/werkbank/internal/*` reicht der Proxy nie durch.
+- **Eine Optik, eine Sprache:** Inter, **Hell/Dunkel folgt dem Chat**, und die gemeinsamen Farbvariablen (`--text-*`,
+  `--surface-*`, `--border-*`, `--presentation`) übernimmt die Seite zur Laufzeit aus LibreChats `<html>` — LibreChat ist
+  die eine Quelle, `web/src/styles.css` nur Rückfall für die direkte Web-App. LibreChat startet **deutsch**, solange
+  niemand selbst eine Sprache gewählt hat (weder Cookie noch gespeicherte Wahl). Die Fußzeile hat keine Links mehr.
+- **Technik, klein und wiederholbar (Upgrade):** neue Dateien unter `librechat/overlay/…` (Proxy, Leiste, Seite,
+  Kontomenü-Eintrag, Ja/Nein-Knöpfe) und vier kleine Patches, jeder für eigene LibreChat-Dateien:
+  `10-server-werkbank-proxy` (`api/server/index.js`), `20-client-werkbank-nav` (Leiste + Route),
+  `30-client-antwort-knoepfe` (Markdown-Links), `40-client-konto-einrichtung` (2 Zeilen in `Nav/AccountSettings.tsx`).
+  `scripts/librechat-patch.sh` spielt sie bei jedem `werkbank.sh up|update` ein: schon angewandte werden erkannt, eine
+  im Repo geänderte Fassung ersetzt die alte (die Dateien des Patches gehen auf LibreChat zurück, dann neu angewandt);
+  passt ein Patch nach einem LibreChat-Update gar nicht mehr, bricht es mit Hinweis ab. Der Client wird nur neu gebaut,
+  wenn sich Overlay oder Patches geändert haben. Prüfung im Browser: `web/e2e/eine-oberflaeche.mjs` (gegen eine
+  isolierte Instanz, nie gegen Live).
 
 ## Die Seiten
 
