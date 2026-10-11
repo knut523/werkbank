@@ -69,7 +69,6 @@ try {
     }
     if (req.url === '/api/convos/update') { await L.collection('conversations').updateOne({ conversationId: body.arg.conversationId, user: p.id }, { $set: { title: body.arg.title } }); return json(201, {}); }
     if (req.url === '/api/tags' && req.method === 'GET') return json(200, await L.collection('conversationtags').find({ user: p.id }).toArray());
-    if (req.url === '/api/tags' && req.method === 'POST') { await L.collection('conversationtags').insertOne({ user: p.id, tag: body.tag, count: 0 }); return json(200, {}); }
     const m = req.url!.match(/^\/api\/tags\/convo\/(.+)$/);
     if (m && req.method === 'PUT') { await L.collection('conversations').updateOne({ conversationId: decodeURIComponent(m[1]), user: p.id }, { $set: { tags: body.tags } }); return json(200, body.tags); }
     json(404, {});

@@ -119,6 +119,8 @@ async function waitFor(url: string) {
 before(async () => {
   mongo = await MongoClient.connect(TEST_MONGO);
   const L = mongo.db(LCDB);
+  // Wie LibreChat (schema/conversationTag.ts): ein Lesezeichen je (tag, user, tenantId); angelegt wird es von der Werkbank (ensureTag).
+  await L.collection('conversationtags').createIndex({ tag: 1, user: 1, tenantId: 1 }, { unique: true });
   await L.collection('users').insertMany([knut, team]);
   lcFake = createServer(async (req, res) => {
     let raw = ''; for await (const c of req) raw += c;
@@ -145,7 +147,6 @@ before(async () => {
     }
     if (req.url === '/api/convos/update') { await L.collection('conversations').updateOne({ conversationId: body.arg.conversationId, user: p.id }, { $set: { title: body.arg.title } }); return json(201, {}); }
     if (req.url === '/api/tags' && req.method === 'GET') return json(200, await L.collection('conversationtags').find({ user: p.id }).toArray());
-    if (req.url === '/api/tags' && req.method === 'POST') { await L.collection('conversationtags').insertOne({ user: p.id, tag: body.tag, count: 0 }); return json(200, {}); }
     const m = req.url!.match(/^\/api\/tags\/convo\/(.+)$/);
     if (m && req.method === 'PUT') { await L.collection('conversations').updateOne({ conversationId: decodeURIComponent(m[1]), user: p.id }, { $set: { tags: body.tags } }); return json(200, body.tags); }
     json(404, {});
