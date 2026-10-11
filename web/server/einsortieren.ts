@@ -5,7 +5,7 @@ import { existsSync, rmSync } from 'node:fs';
 import { basename, dirname, extname } from 'node:path';
 import { wb } from './db.ts';
 import type { User } from './auth.ts';
-import { checkVorschlag, EINGANG, folders, isEingang, isPlainFile, moveInto, schemaName, sha256File, suggest, type Vorschlag } from './ablage.ts';
+import { checkVorschlag, EINGANG, folders, isEingang, isPlainFile, moveInto, ortAus, schemaName, sha256File, suggest, type Vorschlag } from './ablage.ts';
 import { filePath, legacyPath, logShare } from './sharing.ts';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -32,6 +32,8 @@ export async function ablegen(u: User, id: string, input: any): Promise<{ path: 
   const f: any = await col.findOne({ _id: id as any, owner: u.id });
   if (!f) throw Object.assign(new Error('Nur die eigene Datei kann abgelegt werden.'), { status: 403 });
   if (f.kind === 'vault') throw Object.assign(new Error('Vault-Notizen bleiben im Vault.'), { status: 400 });
+  // Ablage-Datei in einem Unterordner (z. B. eine Website mit fonts/, shots/): nicht herauslösen (Council, Bedingung 1).
+  if (f.kind === 'ablage' && f.path && ortAus(f.path).sub) throw Object.assign(new Error('Die Datei gehört zu einem Unterordner in deiner Ablage — dort verschieben.'), { status: 400 });
   const v = checkVorschlag(input);
   const src = filePath(f);
   if (!isPlainFile(src)) throw Object.assign(new Error('Die Datei liegt nicht mehr an ihrem Ablageort.'), { status: 404 });

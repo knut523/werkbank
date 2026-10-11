@@ -117,6 +117,8 @@ export async function shareFile(u: User, id: string, target: User, share: boolea
 export async function deleteFile(u: User, id: string) {
   const f: any = await wb().collection('files').findOne({ _id: id as any, owner: u.id });
   if (!f) throw Object.assign(new Error('Nur die eigene Datei kann gelöscht werden.'), { status: 403 });
+  // Aus der Ablage übernommen (Plan dateien-vollständig, E2): die echte Datei löscht die Werkbank nicht.
+  if (f.kind === 'ablage') throw Object.assign(new Error('Diese Datei liegt in deiner Ablage — löschen bitte dort, die Werkbank folgt von selbst.'), { status: 403 });
   // Die Datei in der Ablage geht mit (nur die Datei, nie ein Ordner); eine Vault-Notiz bleibt im Vault.
   if (f.kind !== 'vault' && f.path) rmSync(filePath(f), { force: true });
   else if (f.kind !== 'vault') rmSync(join(filesDir(), id), { recursive: true, force: true });

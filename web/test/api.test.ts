@@ -5,7 +5,7 @@ import { TEST_MONGO } from './testmongo.ts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, cpSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
+import { mkdtempSync, cpSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync, utimesSync, renameSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -23,6 +23,7 @@ const VAULT = join(tmp, 'vault');
 const STATE = join(tmp, 'bridge');
 const DATA = join(tmp, 'data');
 const DOCS = join(tmp, 'dokumente');
+const PAKETE = join(tmp, 'review-pakete'); // nie Knuts echte Review-Pakete
 const BACKUP_KEY = randomBytes(32).toString('hex');
 const CREDS_KEY = randomBytes(32).toString('hex'), CREDS_IV = randomBytes(16).toString('hex');
 const INTERNAL = randomBytes(16).toString('hex'), REFRESH_SECRET = randomBytes(16).toString('hex'), JWT_SECRET = randomBytes(16).toString('hex');
@@ -105,7 +106,7 @@ before(async () => {
       LIBRECHAT_PUBLIC_URL: 'https://chat.example', BRIDGE_URL: `http://127.0.0.1:${BRIDGE_PORT}`, BRIDGE_STATE_DIR: STATE,
       WERKBANK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3`, WERKBANK_ALLOWED_EMAILS: `${users.a.email},${users.b.email}`,
       CREDS_KEY, CREDS_IV, WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: DATA,
-      WERKBANK_DOCS_DIR: DOCS, WERKBANK_BACKUP_KEY: BACKUP_KEY, WERKBANK_BACKUP_HOUR: '-1', // nie Knuts echte Ablage
+      WERKBANK_DOCS_DIR: DOCS, WERKBANK_REVIEW_DIR: PAKETE, WERKBANK_ABLAGE_SYNC_THROTTLE_MS: '0',WERKBANK_BACKUP_KEY: BACKUP_KEY, WERKBANK_BACKUP_HOUR: '-1', // nie Knuts echte Ablage
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
       WERKBANK_GOAL_PROPOSALS: join(tmp, 'vorschlag.json'), WERKBANK_SPEC_CREATE: 'on', WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
       WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vault-sync'), WERKBANK_VAULT_SYNC_SCRIPT: join(tmp, 'fake-vault-sync.sh'),
@@ -600,6 +601,75 @@ test('Ablage (Plan 81): Upload → „Noch einzusortieren“ mit Vorschlag → A
     const l2 = await anna.req('/api/files');
     assert.equal(l2.j.backup.key, true);
   } finally {
+    await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+  }
+});
+
+test('Dateien vollständig: Ablage-Abgleich, Ordnerangaben, Teilen, keine Löschung, Agenten-Ergebnisse nur für Admins', async () => {
+  const old = Date.now() / 1000 - 3600;
+  const put = (rel: string, body: string) => { const p = join(DOCS, rel); mkdirSync(join(p, '..'), { recursive: true }); writeFileSync(p, body); utimesSync(p, old, old); };
+  put('olaf/maxenergy/2026-10-06_deck_plattform-stand_v5.pdf', 'deck v5');
+  put('olaf/flexibilitaeten/pilot-seite/fonts/Amalia.ttf', 'font');
+  put('_eingang/notiz-ohne-ort.txt', 'notiz');
+  const pak = join(PAKETE, '134-dateien-vollstaendig');
+  mkdirSync(join(pak, 'screens'), { recursive: true });
+  writeFileSync(join(pak, 'bericht.md'), '# 134 — Dateien vollständig\n\n![Desktop](screens/01.png)\n');
+  writeFileSync(join(pak, 'screens', '01.png'), 'PNG');
+  writeFileSync(join(tmp, 'geheim.txt'), 'geheim');
+  await mongo.db(DB).collection('orchestrator_runs').insertOne({ _id: 'o-134', userId: String(users.a._id), title: 'Dateien vollständig', url: 'http://chat/c/134', prompt: 'Bericht nach ~/work/knut/review-pakete/134-dateien-vollstaendig/bericht.md', startedAt: new Date() } as any);
+
+  // Ohne Ablage-Besitzer (kein Admin in LibreChat) gibt es keinen Abgleich.
+  assert.equal((await anna.req('/api/files')).j.mine.some((x: any) => x.kind === 'ablage'), false);
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  try {
+    const l = await anna.req('/api/files');
+    const deck = l.j.mine.find((x: any) => x.name === '2026-10-06_deck_plattform-stand_v5.pdf');
+    assert.ok(deck, 'übernommen'); assert.equal(deck.kind, 'ablage'); assert.equal(deck.path, undefined, 'Pfad geht nicht hinaus');
+    assert.deepEqual([deck.ort.team, deck.ort.vorgang, deck.ort.sub, deck.ort.datum, deck.ort.art, deck.ort.version], ['olaf', 'maxenergy', '', '2026-10-06', 'deck', 'v5']);
+    assert.equal(deck.vorschlag.vorgang, 'maxenergy');
+    const font = l.j.mine.find((x: any) => x.name === 'Amalia.ttf');
+    assert.equal(font.ort.sub, 'pilot-seite/fonts');
+    assert.equal(l.j.mine.find((x: any) => x.name === 'notiz-ohne-ort.txt')?.eingang, true, '_eingang → Noch einzusortieren');
+    assert.equal(l.j.mine.filter((x: any) => x.name === '2026-10-06_deck_plattform-stand_v5.pdf').length, 1);
+    assert.equal((await anna.req('/api/files')).j.mine.filter((x: any) => x.kind === 'ablage').length, l.j.mine.filter((x: any) => x.kind === 'ablage').length, 'zweiter Abgleich: keine Doppelten');
+
+    // Bernd sieht nichts, bis Anna teilt — dann Download ohne Ablageort.
+    assert.equal((await bernd.req(`/api/files/${deck.id}/download`)).status, 404);
+    assert.equal((await anna.req(`/api/files/${deck.id}/share`, { body: { userId: String(users.b._id) } })).status, 200);
+    const bl = await bernd.req('/api/files');
+    const shared = bl.j.shared.find((x: any) => x.id === deck.id);
+    assert.ok(shared); assert.equal(shared.path, undefined); assert.equal(shared.ort, undefined);
+    assert.equal((await bernd.req(`/api/files/${deck.id}/download`)).j, 'deck v5');
+    // Löschen und Herauslösen aus Unterordnern gibt es für Ablage-Dateien nicht; die Datei bleibt.
+    assert.equal((await anna.req(`/api/files/${deck.id}`, { method: 'DELETE' })).status, 403);
+    assert.ok(existsSync(join(DOCS, 'olaf/maxenergy/2026-10-06_deck_plattform-stand_v5.pdf')));
+    assert.equal((await anna.req(`/api/files/${font.id}/ablegen`, { body: { team: 'olaf', vorgang: 'flexibilitaeten', art: 'notiz', datum: 'undatiert', slug: 'amalia', version: '' } })).status, 400);
+    assert.ok(existsSync(join(DOCS, 'olaf/flexibilitaeten/pilot-seite/fonts/Amalia.ttf')));
+
+    // Agenten-Ergebnisse: Paket mit Titel, Strang, Dateien; Vorschau mit Bildpfad in die Werkbank; Bild inline.
+    const ag = await anna.req('/api/files/agenten');
+    assert.equal(ag.status, 200);
+    const p = ag.j.pakete.find((x: any) => x.name === '134-dateien-vollstaendig');
+    assert.equal(p.title, '134 — Dateien vollständig'); assert.equal(p.strand?.url, 'http://chat/c/134');
+    assert.deepEqual(p.files.map((f: any) => f.rel), ['bericht.md', 'screens/01.png']);
+    const v = await anna.req('/api/files/agenten/134-dateien-vollstaendig/bericht.md?vorschau=1');
+    assert.match(v.j.html, /src="api\/files\/agenten\/134-dateien-vollstaendig\/screens\/01\.png\?inline=1"/);
+    const img = await fetch(`${B}/api/files/agenten/134-dateien-vollstaendig/screens/01.png?inline=1`, { headers: { cookie: anna.cookie } });
+    assert.equal(img.headers.get('content-type'), 'image/png'); assert.match(img.headers.get('content-disposition')!, /^inline/);
+    for (const bad of ['..%2F..%2Fgeheim.txt', '%2E%2E/geheim.txt', 'screens/..%2F..%2F..%2Fgeheim.txt'])
+      assert.equal((await anna.req(`/api/files/agenten/134-dateien-vollstaendig/${bad}`)).status, 404, bad);
+    assert.equal((await bernd.req('/api/files/agenten')).status, 403, 'nur Admins');
+    assert.equal((await bernd.req('/api/files/agenten/134-dateien-vollstaendig/bericht.md')).status, 403);
+
+    // Verschoben in der Ablage → Register folgt (gleiche ID, Freigabe bleibt); gelöscht → Eintrag weg.
+    renameSync(join(DOCS, 'olaf/maxenergy/2026-10-06_deck_plattform-stand_v5.pdf'), join(DOCS, 'olaf/maxenergy/2026-10-06_deck_plattform_v5.pdf'));
+    const moved = (await anna.req('/api/files')).j.mine.find((x: any) => x.id === deck.id);
+    assert.equal(moved.name, '2026-10-06_deck_plattform_v5.pdf'); assert.deepEqual(moved.sharedWith, [String(users.b._id)]);
+    rmSync(join(DOCS, 'olaf/maxenergy/2026-10-06_deck_plattform_v5.pdf'));
+    assert.equal((await anna.req('/api/files')).j.mine.some((x: any) => x.id === deck.id), false);
+  } finally {
+    await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
     await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
   }
 });

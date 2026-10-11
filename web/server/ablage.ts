@@ -111,6 +111,36 @@ export function schemaName(v: Pick<Vorschlag, 'datum' | 'art' | 'slug' | 'versio
   return `${v.datum}_${v.art}_${v.slug}${v.version ? `_${v.version}` : ''}${ext.toLowerCase()}`;
 }
 
+/**
+ * Schema-Name zerlegen (Gegenstück zu `schemaName`): `2026-10-01_vertrag_rahmenvertrag-enlion_v2.pdf` →
+ * Datum, Art, Kurzname, Version. Passt der Name nicht (Art unbekannt, kein Datum), bleibt das jeweilige Feld leer.
+ */
+export function parseSchemaName(name: string): { datum: string | null; art: Art | null; slug: string; version: string } {
+  const stem = basename(name, extname(name));
+  const m = stem.match(/^(\d{4}-\d{2}-\d{2}|undatiert)_([a-z]+)_(.+)$/);
+  if (!m || !ARTEN.includes(m[2] as Art)) return { datum: null, art: null, slug: stem, version: '' };
+  let rest = m[3].replace(/_\d+$/, ''); // freeName-Zähler „_2“
+  const vm = rest.match(/_(v\d+(?:\.\d+)?)$/);
+  if (vm) rest = rest.slice(0, vm.index);
+  return { datum: m[1] === UNDATIERT ? null : m[1], art: m[2] as Art, slug: rest, version: vm?.[1] ?? '' };
+}
+
+/** Ort und Schema-Angaben einer abgelegten Datei aus ihrem Pfad: `olaf/flex/pilot/shots/x.png` → Team, Vorgang, Unterordner. */
+export function ortAus(path: string) {
+  const parts = path.split('/');
+  const inVorgang = parts.length >= 3;
+  return { team: parts.length >= 2 ? parts[0] : '', vorgang: inVorgang ? parts[1] : '', sub: inVorgang ? parts.slice(2, -1).join('/') : '', ...parseSchemaName(parts[parts.length - 1]) };
+}
+
+/** Angaben fürs „Verschieben“ einer abgelegten Datei ohne gespeicherte Wahl — aus Pfad und Namen, ohne Mongo. */
+export function vorschlagAusPfad(path: string): Vorschlag | null {
+  const o = ortAus(path);
+  if (!o.team || !o.vorgang || o.team.startsWith('_')) return null;
+  const name = path.split('/').pop()!;
+  const slug = slugify(o.art ? o.slug : basename(name, extname(name))) || 'dokument';
+  return { team: o.team, vorgang: o.vorgang, art: o.art ?? artAus(name), datum: o.datum ?? UNDATIERT, slug, version: o.version, sicher: true };
+}
+
 const TEAM_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const VORGANG_RE = /^[a-z0-9_][a-z0-9_-]{0,59}$/;
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;

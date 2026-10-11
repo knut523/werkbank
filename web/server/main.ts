@@ -23,7 +23,9 @@ import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, a
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
-import { ARTEN, folders, schemaName } from './ablage.ts';
+import { ARTEN, folders, schemaName, ortAus, vorschlagAusPfad, isEingang } from './ablage.ts';
+import { ablageOwner, syncAblage, lastSyncAt } from './ablagesync.ts';
+import { listPakete, paketFile, renderPaketMd, strandFor, BILD_MIME } from './reviewpakete.ts';
 import { FEATURES, featuresFor, blockedFeature } from './features.ts';
 import { memoryWarning } from './memory.ts';
 import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
@@ -1942,6 +1944,13 @@ on('GET', /^\/api\/team$/, async (req, res) => {
 
 on('GET', /^\/api\/files$/, async (req, res) => {
   const u = await needUser(req);
+  // Ablage-Abgleich (Plan dateien-vollständig, S1): lädt der Ablage-Besitzer den Reiter, zieht das Register vorher nach
+  // (höchstens alle 30 s; sonst übernimmt der Takt im Hintergrund).
+  const owner = await ablageOwner().catch(() => null);
+  if (owner?.id === u.id && Date.now() - lastSyncAt() > Number(process.env.WERKBANK_ABLAGE_SYNC_THROTTLE_MS ?? 30_000)) {
+    try { const r = await syncAblage(owner); if (r.neu || r.verschoben || r.geaendert || r.geloescht || r.doppelt || r.schutz || r.skipped) log('ablage-abgleich', r); }
+    catch (e: any) { log('ablage-abgleich', { error: String(e?.message ?? e).slice(0, 200) }); }
+  }
   const { mine, shared } = await listFiles(u);
   const people = await teammates();
   const name = (id: string) => people.find((p) => p.id === id)?.name ?? '?';
@@ -1953,9 +1962,11 @@ on('GET', /^\/api\/files$/, async (req, res) => {
   const mineOut = [];
   for (const f of mine as any[]) {
     const pi = placeInfo(f);
-    // Vorschlag für „Noch einzusortieren“; für abgelegte Dateien die zuletzt gewählten Angaben (für „Verschieben“).
-    const v = f.kind === 'vault' ? null : f.ablage ?? await suggestFor(f, known);
-    mineOut.push({ ...shape(f), sharedWithNames: f.sharedWith.map(name), ...pi, vorschlag: v ? { ...v, name: schemaName(v, extname(f.name)) } : null });
+    // Vorschlag für „Noch einzusortieren“; für abgelegte Dateien die zuletzt gewählten Angaben bzw. die aus Pfad und
+    // Schema-Namen (für „Verschieben“, ohne Mongo-Abfrage je Datei — die Ablage hat Hunderte).
+    const v = f.kind === 'vault' ? null : f.ablage ?? (f.path && !isEingang(f.path) ? vorschlagAusPfad(f.path) : null) ?? await suggestFor(f, known);
+    const ort = f.kind !== 'vault' && f.path ? ortAus(f.path) : null;
+    mineOut.push({ ...shape(f), sharedWithNames: f.sharedWith.map(name), ...pi, ort, vorschlag: v ? { ...v, name: schemaName(v, extname(f.name)) } : null });
   }
   const notice: any = await wb().collection('scratch_notice').findOne({ _id: u.id as any });
   const admin = u.role === 'ADMIN';
@@ -1963,7 +1974,7 @@ on('GET', /^\/api\/files$/, async (req, res) => {
     mine: mineOut,
     shared: shared.map((f: any) => ({ ...shape(f), sharedWith: undefined, fehlt: placeInfo(f).fehlt })),
     maxMb: Math.round(cfg.fileMaxBytes / 1048576),
-    ablage: { teams: [...new Set(known.map((x) => x.team))], folders: known, arten: ARTEN },
+    ablage: { teams: [...new Set(known.map((x) => x.team))], folders: known, arten: ARTEN, besitzer: owner?.id === u.id, unklar: admin && !owner },
     scratch: notice ? { count: notice.count, bytes: notice.bytes, deleteFrom: notice.deleteFrom, files: notice.files, days: cfg.scratchDays } : null,
     backup: admin ? { nightly: listBackups(), keep: cfg.backupKeep, key: !!keyOf(), running: backupRunning() } : null,
   });
@@ -1987,6 +1998,36 @@ on('GET', /^\/api\/files\/([0-9a-f-]{36})\/download$/, async (req, res, m) => {
     'content-security-policy': "sandbox; default-src 'none'", 'cache-control': 'no-store',
   });
   createReadStream(filePath(f)).on('error', () => res.destroy()).pipe(res);
+});
+
+// Agenten-Ergebnisse (Plan dateien-vollständig, S3): Review-Pakete der Haupt-Sitzung und der Stränge — nur Admins, nur lesen.
+on('GET', /^\/api\/files\/agenten$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const runs = await wb().collection('orchestrator_runs').find({ userId: u.id }, { projection: { title: 1, url: 1, prompt: 1, startedAt: 1, 'review.artefakte': 1, 'review.gemacht': 1 } }).sort({ startedAt: -1 }).limit(500).toArray().catch(() => []);
+  const pakete = listPakete(cfg.reviewDir).map((p) => ({ ...p, strand: strandFor(p, runs as any[]) }));
+  send(res, 200, { pakete, ordner: !!pakete.length || existsSync(cfg.reviewDir) });
+});
+
+on('GET', /^\/api\/files\/agenten\/(\d{1,4}-[a-z0-9][a-z0-9-]*)\/(.+)$/, async (req, res, m, url) => {
+  await needAdmin(req);
+  let rel = '';
+  try { rel = m[2].split('/').map(decodeURIComponent).join('/'); } catch { throw new HttpError(400, 'Ungültiger Pfad.'); }
+  const abs = paketFile(cfg.reviewDir, m[1], rel);
+  if (!abs) throw new HttpError(404, 'Datei nicht gefunden.');
+  const ext = extname(abs).toLowerCase();
+  const name = rel.split('/').pop()!;
+  if (url.searchParams.get('vorschau') === '1') {
+    if (ext !== '.md' && ext !== '.txt') throw new HttpError(400, 'Vorschau nur für Markdown und Text.');
+    const text = readFileSync(abs, 'utf8').slice(0, 512 * 1024);
+    return send(res, 200, { name, html: ext === '.md' ? renderPaketMd(text, m[1], rel) : null, text: ext === '.txt' ? text : null });
+  }
+  const inline = url.searchParams.get('inline') === '1' && BILD_MIME[ext];
+  res.writeHead(200, {
+    'content-type': inline ? BILD_MIME[ext] : 'application/octet-stream', 'x-content-type-options': 'nosniff',
+    'content-disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`,
+    'content-security-policy': "sandbox; default-src 'none'", 'cache-control': 'private, max-age=60',
+  });
+  createReadStream(abs).on('error', () => res.destroy()).pipe(res);
 });
 
 // Plan 81, Schnitt 2: „Ablegen“ — Vorschlag bestätigen oder ändern; die Datei zieht in `<team>/<vorgang>/` der Ablage.
@@ -2442,6 +2483,18 @@ async function backgroundJobs() {
   };
   setTimeout(filesTick, 20_000);
   setInterval(filesTick, 2 * 60_000);
+
+  // Ablage-Abgleich (Plan dateien-vollständig, S1): das Register folgt der Ablage — neu, verschoben, gelöscht.
+  const ablageTick = async () => {
+    try {
+      const owner = await ablageOwner();
+      if (!owner) return;
+      const r = await syncAblage(owner);
+      if (r.neu || r.verschoben || r.geaendert || r.geloescht || r.doppelt || r.schutz || r.skipped) log('ablage-abgleich', r);
+    } catch (e: any) { log('ablage-abgleich', { error: String(e?.message ?? e).slice(0, 200) }); }
+  };
+  setTimeout(ablageTick, 30_000);
+  setInterval(ablageTick, 5 * 60_000);
 
   // Plan 81, Schnitt 4 und 5: Arbeitsordner aufräumen (Ankündigung, dann löschen) und Nachtarchiv — stündlich geprüft.
   const houseTick = async () => {
