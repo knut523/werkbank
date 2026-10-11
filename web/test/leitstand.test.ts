@@ -543,6 +543,18 @@ test('Council-Diff Teil B: per CLI geprüftes Altdokument (reviewedAt ohne revie
   assert.equal((await W().collection('orchestrator_runs').findOne({ _id: 'a1d0c0de' as any }))!.doneAt ?? null, null, 'statusTick fasst ihn nicht an');
 });
 
+test('Release 3 (Council R3, G0-Merge): von G0 gestoppter Strang (conv null, blocked_g0) — Status-Takt fasst ihn nicht an, Übersicht „gestoppt“', async () => {
+  const t = Date.now();
+  await W().collection('orchestrator_runs').insertOne({ _id: 'b10cd0g0' as any, userId: String(knut._id), conv: null, url: null, title: 'G0: gestoppt', cwd: WT('wt-g0'), startedAt: new Date(t - 240_000), lastSentAt: new Date(t - 240_000), sends: 0, reviewedAt: null, knutReviewedAt: null, startError: null, status: 'blocked_g0', slug: 'x', g0: { ergebnis: 'treffer' } });
+  await pause(1500);
+  const d = await W().collection('orchestrator_runs').findOne({ _id: 'b10cd0g0' as any });
+  assert.equal(d!.lastStatus ?? null, null, 'statusTick schreibt keinen Schein-Stand („läuft“/„Nachricht nicht angekommen“)');
+  const ov = await (await fetch(B + '/api/leitstand/overview', { headers: { cookie: await cookie(knut) } })).json();
+  const x = ov.offen.flatMap((g: any) => g.strands).find((s: any) => s.id === 'b10cd0g0');
+  if (x) assert.equal(x.status, 'gestoppt');
+  assert.equal(await cardOf('b10cd0g0'), undefined, 'keine Review-Karte');
+});
+
 test('Council-Diff Teil B: läuft ein fertiger Strang wieder, bleibt die Karte sichtbar, zählt nicht und Passt → 409', async () => {
   const st = await doneStrand('Teil B: läuft wieder', 'wt-b6');
   await until(() => cardOf(st.id), (c: any) => !!c);
