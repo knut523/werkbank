@@ -38,6 +38,12 @@ test('Ereignisse eines Strangs (S2): fertig, braucht Antwort, blockiert, Deckel,
   assert.equal(ev({ ...run, reviewReadyAt: new Date(T0 + 7) }, turn('ok'), ai('x'))!.key, `review:abc12345:${T0 + 7}`);
 });
 
+test('Zeitlimit-Text ohne feste Dauer (DoD 30)', () => {
+  const r = orchStatus(run, turn('timeout'), ai('x'));
+  assert.equal(r.cause, 'timeout');
+  assert.doesNotMatch(r.reason, /15 min/);
+});
+
 test('Leitstand an der eigenen Grenze (C4): limit/timeout/Neustart → weiter; Kontingent wartet 30 min oder freies Konto', () => {
   const s = (o: string | null, end: number | null = T0) => ({ running: false, interrupted: false, turn: { start: T0 - 1000, end, outcome: o } });
   assert.equal((weiterEvent(s('limit'), T0 + 10, false) as any).key, `weiter:${T0 - 1000}`);
@@ -250,8 +256,8 @@ test('Bündeln und nicht während eines Zuges (DoD 8/9): Leitstand arbeitet → 
 test('Erneut zustellen (DoD 10/26): bestätigt die Brücke den Batch nicht, gehen die Ereignisse nach der Frist zurück und kommen wieder', async () => {
   // Eine Meldung „ging raus“, kam aber nie an (Brücke kennt die Kennung nicht).
   const id = `${knut._id}:test:verloren`;
-  await W().collection('leitstand_events').insertOne({ _id: id as any, userId: String(knut._id), kind: 'fertig', text: 'meldet „fertig“ (verloren)', excerpt: '', strand: { id: 'zz', title: 'Verloren' }, at: new Date(), createdAt: new Date(Date.now() - 5000), status: 'gesendet', batch: 'deadbeefdead', retries: 0 });
   await W().collection('orchestrator_runs').updateOne({ _id: leit.id as any }, { $set: { wake: { batch: 'deadbeefdead', sentAt: new Date(), weiter: false } } });
+  await W().collection('leitstand_events').insertOne({ _id: id as any, userId: String(knut._id), kind: 'fertig', text: 'meldet „fertig“ (verloren)', excerpt: '', strand: { id: 'zz', title: 'Verloren' }, at: new Date(), createdAt: new Date(Date.now() - 5000), status: 'gesendet', batch: 'deadbeefdead', retries: 0 });
   await pause(1200);
   assert.equal((await W().collection('leitstand_events').findOne({ _id: id as any }))!.status, 'gesendet', 'vor der Frist: wartet');
   const e = await until(() => W().collection('leitstand_events').findOne({ _id: id as any }), (x: any) => x?.status === 'zugestellt', 15_000);
@@ -343,11 +349,36 @@ test('Review A: Fehlstart lässt den alten Leitstand aktiv; unbestätigte Meldun
   assert.equal(bs.filter((s) => s.kind === 'leitstand').length, 1, 'der fehlgestartete ist abgemeldet');
   // Eine Meldung ist an den alten „unterwegs“ — nach dem Wechsel kommt sie beim neuen an.
   const id = `${knut._id}:test:wechsel`;
-  await W().collection('leitstand_events').insertOne({ _id: id as any, userId: String(knut._id), kind: 'fertig', text: 'meldet „fertig“ (unterwegs beim Wechsel)', excerpt: '', strand: { id: 'yy', title: 'Wechsel' }, at: new Date(), createdAt: new Date(), status: 'gesendet', batch: 'cafecafecafe', retries: 0 });
   await W().collection('orchestrator_runs').updateOne({ _id: leit.id as any }, { $set: { wake: { batch: 'cafecafecafe', sentAt: new Date(), weiter: false } } });
+  await W().collection('leitstand_events').insertOne({ _id: id as any, userId: String(knut._id), kind: 'fertig', text: 'meldet „fertig“ (unterwegs beim Wechsel)', excerpt: '', strand: { id: 'yy', title: 'Wechsel' }, at: new Date(), createdAt: new Date(), status: 'gesendet', batch: 'cafecafecafe', retries: 0 });
   const st = JSON.parse((await orch(['leitstand', 'start', '--handover', HANDOVER, '--json'])).out);
   await until(() => wakesOf(st.conv), (w) => w.some((m) => /unterwegs beim Wechsel/.test(textOf(m))));
   leit = st;
+});
+
+test('Council-Diff R1: verwaiste „gesendet“-Meldung wird aufgeräumt und zugestellt; nach LEITSTAND_WAKE_RETRY_MAX verworfen mit Hinweis (DoD 36)', async () => {
+  const orphan = `${knut._id}:test:verwaist`;
+  await W().collection('leitstand_events').insertOne({ _id: orphan as any, userId: String(knut._id), kind: 'fertig', text: 'meldet „fertig“ (verwaist)', excerpt: '', strand: { id: 'vv', title: 'Verwaist' }, at: new Date(), createdAt: new Date(), status: 'gesendet', batch: 'abababababab', retries: 0 });
+  await until(() => wakesOf(leit.conv), (w) => w.some((m) => /verwaist/.test(textOf(m))));
+  // Ein Ereignis, das schon 5× nicht ankam, wird verworfen; die nächste Meldung sagt es.
+  const dead = `${knut._id}:test:tot`;
+  await W().collection('leitstand_events').insertOne({ _id: dead as any, userId: String(knut._id), kind: 'fertig', text: 'meldet „fertig“ (tot)', excerpt: '', strand: { id: 'tt', title: 'Tot' }, at: new Date(), createdAt: new Date(), status: 'gesendet', batch: 'cdcdcdcdcdcd', retries: 4 });
+  await W().collection('orchestrator_runs').updateOne({ _id: leit.id as any }, { $set: { wake: { batch: 'cdcdcdcdcdcd', sentAt: new Date(Date.now() - 10_000), weiter: false } } });
+  const e = await until(() => W().collection('leitstand_events').findOne({ _id: dead as any }), (x: any) => x?.status === 'verworfen');
+  assert.equal(e!.status, 'verworfen');
+  JSON.parse((await orch(['start', '--title', 'Nach-Verworfen', '--cwd', WT('wt-verw'), '--json'], 'mock-antwort ok\\nStatus: fertig')).out);
+  await until(() => wakesOf(leit.conv), (x) => x.some((m) => /Nach-Verworfen/.test(textOf(m))));
+  // Der Hinweis steht in der ersten Meldung nach dem Verwerfen (welche das ist, hängt vom Takt ab).
+  assert.ok((await wakesOf(leit.conv)).some((m) => /1 ältere Meldung\(en\) nach 5 Zustellversuchen verworfen/.test(textOf(m))));
+  assert.ok(!(await wakesOf(leit.conv)).some((m) => /\(tot\)/.test(textOf(m))));
+});
+
+test('Council-Diff R1: Deckel-Fragen kann niemand zurückziehen außer durch Knuts Antwort; Altdokument ohne kind bleibt ein Strang (DoD 32)', async () => {
+  await W().collection('orchestrator_questions').insertOne({ _id: 'q-deckel' as any, userId: String(knut._id), kind: 'leitstand-deckel', title: 'Weckdeckel', context: 'x', options: [], recommendation: 'y', strand: null, createdAt: new Date(), status: 'offen', answer: null });
+  assert.match((await orch(['questions', 'withdraw', 'q-deckel'])).err, /409: Diese Rückfrage entscheidet nur Knut/);
+  await W().collection('orchestrator_questions').updateOne({ _id: 'q-deckel' as any }, { $set: { status: 'beantwortet' } });
+  await W().collection('orchestrator_runs').insertOne({ _id: 'altalt01' as any, userId: String(knut._id), conv: randomUUID(), url: 'https://chat.example/c/alt', title: 'Alt ohne kind', cwd: WT('wt-alt'), startedAt: new Date(), lastSentAt: new Date(), sends: 1, reviewedAt: null, startError: null });
+  assert.ok(JSON.parse((await orch(['list', '--json'])).out).some((s: any) => s.id === 'altalt01'));
 });
 
 test('Neustart der Web-App (DoD 11): kein Ereignis doppelt', async () => {

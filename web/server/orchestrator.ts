@@ -493,6 +493,9 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
 }
 
 export async function withdrawQuestion(u: User, id: string) {
+  // Deckel-Fragen entscheidet nur Knut (Council-Diff R1): der Leitstand darf sie nicht über orch_questions wegräumen.
+  const q: any = await questions().findOne({ _id: id as any, userId: u.id });
+  if (q && /^(auto-weiter|leitstand-)/.test(String(q.kind ?? ''))) throw err(409, 'Diese Rückfrage entscheidet nur Knut (Deckel) — zurückziehen nicht möglich.');
   const r = await questions().updateOne({ _id: id as any, userId: u.id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() } });
   if (!r.matchedCount) throw err(409, 'Keine offene Rückfrage mit dieser Kennung.');
   return { id, status: 'zurückgezogen' };

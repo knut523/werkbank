@@ -31,7 +31,9 @@ const MCP_READ = /^(get|search|lookup|fetch|list|atlassianUserInfo|memory_(searc
 // sonst wächst das Backtracking exponentiell — 60× `-C` hielt den Brücken-Prozess über 2 min fest (Review 11.10.2026).
 // Optionen mit getrenntem Wert (`--git-dir /r`) sind eine eigene Form; die allgemeine Form nimmt sie und blankes -c/-C nicht.
 const GIT_VALUED = String.raw`(?:-[cC]|--(?:git-dir|work-tree|namespace|super-prefix|config-env))`;
-const GIT = String.raw`\bgit(?:\s+(?:${GIT_VALUED}\s+(?:"[^"]*"|'[^']*'|\S+)|(?!${GIT_VALUED}(?:\s|$))-(?:-[\w-]+|\w[\w-]*)(?:=\S+)?))*\s+`;
+// Der Wert ist eine Folge aus Zitaten und einzelnen Zeichen ohne Leerraum/Anführungszeichen — genau eine Zerlegung
+// (Council-Diff R1: `"a"` passte als Zitat UND als \S+, 24× `-C "a"` brauchten 3 s).
+const GIT = String.raw`\bgit(?:\s+(?:${GIT_VALUED}\s+(?:"[^"]*"|'[^']*'|[^\s"'])+|(?!${GIT_VALUED}(?:\s|$))-(?:-[\w-]+|\w[\w-]*)(?:=\S+)?))*\s+`;
 const git = (sub: string, rest = '') => new RegExp(GIT + sub + String.raw`(?![\w-])` + rest);
 const PROTECTED = String.raw`(?:refs\/heads\/)?(?:main|master|develop)(?![\w-])`;
 
@@ -329,6 +331,8 @@ export function leitstandCheck(tool: string, input: Record<string, unknown>, ctx
   const vault = realish(resolve(VAULT_DIR));
   if (tool === 'Bash') {
     const cmd = String(input.command ?? '');
+    // Sehr lange Befehle prüft niemand mit Mustern (VAULT_GIT wächst quadratisch): immer „ja“ (Council-Diff R1).
+    if (cmd.length > 16_000) return { cls: 'confirm', why: 'sehr langer Befehl' };
     if (VAULT_GIT(VAULT_DIR).test(cmd) || (vault !== VAULT_DIR && VAULT_GIT(vault).test(cmd))) return { cls: 'blocked', why: 'git im Vault' };
     for (const [re, why] of LEIT_BASH_CONFIRM) if (re.test(cmd)) return { cls: 'confirm', why };
     return null;

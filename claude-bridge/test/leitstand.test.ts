@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -26,9 +26,10 @@ writeFileSync(MCPFILE, JSON.stringify({ mcpServers: {
   werkbank: { type: 'stdio', command: '/bin/false' },   // reservierter Name: wird nie überschrieben
 } }));
 let bridge: ChildProcess;
+let STATE = '';
 
 before(async () => {
-  const state = mkdtempSync(join(tmpdir(), 'bridge-leit-'));
+  const state = STATE = mkdtempSync(join(tmpdir(), 'bridge-leit-'));
   bridge = spawn(process.execPath, ['src/server.ts'], {
     env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: state, BRIDGE_SKILLS: '',
       BRIDGE_CLAUDE_HOMES: mkdtempSync(join(tmpdir(), 'homes-leit-')), BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '',
@@ -81,7 +82,9 @@ test('Git-Präfix ohne katastrophales Backtracking: 60× -C prüft in unter 50 m
   assert.ok(performance.now() - t0 < 50, `${Math.round(performance.now() - t0)} ms`);
   assert.equal(classify('Bash', { command: 'git -C -C push origin main' }, {}).cls, 'blocked', '-C mit Argument „-C“');
   // Review B/C, Befund 1: auch lange Optionen (`--a` war als „-“+„-a“ und „--“+„a“ lesbar) und blankes -c.
-  for (const command of ['git' + ' --a'.repeat(60) + ' x', 'git' + ' -c'.repeat(60) + ' x', 'git' + ' --git-dir'.repeat(60) + ' x']) {
+  // Council-Diff R1: auch Werte in Anführungszeichen (`"a"` passte als Zitat UND als \S+).
+  for (const command of ['git' + ' --a'.repeat(60) + ' x', 'git' + ' -c'.repeat(60) + ' x', 'git' + ' --git-dir'.repeat(60) + ' x',
+    'git' + ' -C "a"'.repeat(60) + ' x', 'git' + " -c 'k=v'".repeat(60) + ' x', 'git' + " --git-dir 'a'".repeat(60) + ' x']) {
     const t1 = performance.now();
     classify('Bash', { command }, { workDir: '/w', scope: 'voll' }); orchestratorBlock('Bash', { command });
     assert.ok(performance.now() - t1 < 50, `${command.slice(0, 20)}…: ${Math.round(performance.now() - t1)} ms`);
@@ -95,6 +98,13 @@ test('Review B/C (Befund 5): Git-Optionen mit getrenntem Wert und Zweig in Anfü
   assert.equal(c('git --git-dir /r/.git push origin main'), 'blocked');
   assert.equal(c('git --namespace x merge y'), 'blocked');
   assert.equal(c('git push origin "main"'), 'blocked');
+  assert.equal(c('git -C "a b" -c \'k=v\' push origin main'), 'blocked');
+  assert.equal(c('git -C "a"b push origin feat/x'), 'confirm');
+  // Sehr lange Befehle (Council-Diff R1, VAULT_GIT quadratisch): im Leitstand ab 16 KB immer Rückfrage, schnell.
+  const long = 'git '.repeat(20_000);
+  const t0 = performance.now();
+  assert.equal(leitstandCheck('Bash', { command: long }, { workDir: LEIT })?.cls, 'confirm');
+  assert.ok(performance.now() - t0 < 50);
   assert.ok(orchestratorBlock('Bash', { command: 'git --git-dir /r/.git push' }));
 });
 
@@ -105,6 +115,21 @@ test('Review B/C (Befund 2): Strang-Sperren treffen keine normalen Pfade und Die
   for (const command of ['curl -s http://127.0.0.1:3070/internal/orchestrator/list', 'curl localhost:3070/internal/x', 'wget -qO- http://[::1]:3070/internal/x', 'ps eww', 'sudo ps e', 'x; ps axe']) {
     assert.ok(orchestratorBlock('Bash', { command }), command);
   }
+});
+
+test('Kein katastrophales Backtracking in irgendeiner Wächter-Regel: 60× jeder Baustein, je < 100 ms', () => {
+  const parts = [' -C "a"', " -c 'k=v'", ' --a', ' -c', ' -C', ' --git-dir', ' x', ' "a"b', ' git', ' cd /vault', ` ${VAULT_DIR}`, ' ps -e', ' a=b', ' /proc/1', ' .env', ' push', ' main', ' :', ' refs/heads/x', ' -f', ' --force'];
+  const slow: string[] = [];
+  for (const a of parts) for (const b of ['', ' x', ' push origin main']) {
+    for (const head of ['git', 'cd', 'ps', '']) {
+      const command = head + a.repeat(60) + b;
+      const t0 = performance.now();
+      classify('Bash', { command }, { workDir: LEIT, scope: 'voll' }); orchestratorBlock('Bash', { command }); leitstandCheck('Bash', { command }, { workDir: LEIT });
+      const ms = performance.now() - t0;
+      if (ms > 100) slow.push(`${JSON.stringify(head + a + '…' + b)}: ${Math.round(ms)} ms`);
+    }
+  }
+  assert.deepEqual(slow, []);
 });
 
 test('SubagentHandback ist lesend und im Strang nicht gesperrt (DoD 21)', () => {
@@ -256,6 +281,9 @@ test('Meldung beantwortet keine Rückfrage (DoD 33); Batch-Kennung am Zug (DoD 3
   assert.equal((await state()).find((s) => s.conv === C_LEIT).turn.batch, '0a1b2c3d');
   await send(C_LEIT, 'Hallo vom Handy');
   assert.equal((await state()).find((s) => s.conv === C_LEIT).turn.batch ?? null, null, 'Knuts eigener Zug trägt keine Kennung');
+  assert.deepEqual((await state()).find((s) => s.conv === C_LEIT).batches, ['0a1b2c3d'], 'die Kennung bleibt nach Knuts Zug bestätigbar');
+  // Dauerhaft in orch.json (überlebt den Neustart der Brücke, DoD 37).
+  assert.deepEqual(JSON.parse(readFileSync(join(STATE, 'orch.json'), 'utf8'))[`ul:${C_LEIT}`].batches, ['0a1b2c3d']);
 });
 
 test('Parallelgrenze (DoD 4): ein Leitstand-Zug läuft neben einem vollen Kontingent normaler Chats und blockiert sie nicht', async () => {
@@ -275,6 +303,16 @@ test('Rückfrage des Leitstands wird nicht von MAX_WAITING verdrängt (DoD 4)', 
   for (let i = 0; i < 6; i++) assert.match(await send(randomUUID(), tool('Write', { file_path: `/tmp/leitstand-mw-${i}.md`, content: 'x' })), /Soll ich/);
   assert.equal((await state()).find((s) => s.conv === C_LEIT).waitingAnswer, true);
   await send(C_LEIT, 'nein');
+});
+
+test('Umgehungsprobe über den echten Wächter (D4): Vault-git im Leitstand gesperrt, obwohl der volle Auto-Modus es dem Klassifikator gäbe', async () => {
+  const a = await send(C_LEIT, tool('Bash', { command: `git -C ${VAULT} commit -am x` }));
+  assert.match(a, /Gesperrt im Pilot: git im Vault/);
+  const b = await send(C_LEIT, tool('Write', { file_path: join(LEIT, 'wt', '.git', 'hooks', 'pre-push'), content: 'x' }));
+  assert.match(b, /Soll ich/, 'Git-Hook im Arbeitsordner fragt nach');
+  await send(C_LEIT, 'nein');
+  // Derselbe Befehl in einem normalen Chat geht an den Klassifikator (Mock: erlaubt) — die Sperre gilt nur im Leitstand.
+  assert.doesNotMatch(await send(randomUUID(), tool('Bash', { command: `git -C ${VAULT} log` })), /Gesperrt/);
 });
 
 test('Verdichtung sichtbar (DoD 6)', async () => {

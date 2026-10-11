@@ -173,7 +173,7 @@ try { cwdMap = JSON.parse(readFileSync(cwdFile, 'utf8')); } catch { /* keine */ 
 // kind: Strang (Vorgabe, auch für alte Einträge ohne kind) · Leitstand · beendeter Leitstand (Plan 132). batch: Kennung der
 // Leitstand-Meldung, mit der dieser Zug begann (Zustellbestätigung, C1/D1), dauerhaft (A5).
 type OrchKind = 'strand' | 'leitstand' | 'beendet';
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null } }
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; batches?: string[]; lastHand?: number; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null } }
 const orchFile = join(cfg.stateDir, 'orch.json');
 let orchMap: Record<string, OrchEntry> = {};
 try { orchMap = JSON.parse(readFileSync(orchFile, 'utf8')); } catch { /* keine */ }
@@ -344,7 +344,7 @@ export function orchStateOf(userId: string) {
     const l = lives.get(k);
     const seen = lastSeen.get(k);
     return {
-      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null,
+      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, batches: e.batches ?? [], lastHand: e.lastHand ?? null,
       // Start ohne Ende und keine laufende Sitzung: die Brücke wurde mitten im Zug neu gestartet.
       interrupted: !l && !!e.turn && e.turn.end === null,
       resumable: !!sessionMap[k], turns: seen?.turns ?? null, written: seen?.written ?? [],
@@ -834,7 +834,11 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
     subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: kind === 'strand', leit: kind === 'leitstand',
   };
-  if (live.orch || live.leit) setTurn(key, { start: Date.now(), end: null, outcome: null, ...(live.leit ? { batch: wakeBatch(req.prompt) } : {}) });
+  const batch = live.leit ? wakeBatch(req.prompt) : null;
+  // Die letzten Kennungen bleiben stehen, auch wenn Knut gleich danach selbst schreibt (Council-Diff R1, B4).
+  if (batch) orchMap[key].batches = [...(orchMap[key].batches ?? []), batch].slice(-5);
+  else if (live.leit) orchMap[key].lastHand = Date.now();   // Knut hat selbst geschrieben (Zähler für „weiter“ beginnt neu)
+  if (live.orch || live.leit) setTurn(key, { start: Date.now(), end: null, outcome: null, ...(live.leit ? { batch } : {}) });
   lives.set(key, live);
   attach(live, req.sink);
   // Sofort ein Lebenszeichen: bis zum ersten Token vergehen mit echtem Claude einige Sekunden
