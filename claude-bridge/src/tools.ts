@@ -139,7 +139,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     if (server === 'vault-search') return { cls: 'read' };
     // review_ready ändert nur Werkbank-Zustand (Fertig-Marke am eigenen Lauf) → ohne Rückfrage.
     if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready')) return { cls: 'read' };
-    if (server === 'werkbank' && name === 'jira_update') return { cls: 'confirm' };
+    // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
+    if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
     // forge-review (Platzhalter): Review rechnen/lesen frei; nach GitHub posten ist wie alles GitHub-Schreiben
     // im Pilot gesperrt (Ergebnis bleibt Entwurf), mergen nie.
     if (server === 'forge-review') return /merge|post|publish|submit|comment|approve|request_changes/i.test(name) ? { cls: 'blocked', why: 'GitHub schreiben (forge-Ergebnis bleibt Entwurf)' } : { cls: 'read' };
@@ -160,6 +161,18 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
 function short(s: unknown, n = 90): string {
   const t = String(s ?? '').replace(/\s+/g, ' ').trim();
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
+}
+
+/** Was an einem Ticket geändert wird (Status, Fälligkeit, Kommentar) — für die Rückfrage. */
+// Was geschrieben wird, steht hier vollständig (Kommentar bis 1500 Zeichen, mehr lehnt die Werkbank ab); Done und
+// „Datum entfernen“ sind markiert, weil sie in einer langen Liste leicht durchrutschen (Council 09.10.2026).
+function jiraChangeParts(c: Record<string, unknown>): string[] {
+  const st = String(c.status ?? '');
+  return [
+    st ? `${/^(done|erledigt|closed|geschlossen)$/i.test(st.trim()) ? '⚠️ ' : ''}Status → **${short(st, 60)}**` : '',
+    c.due !== undefined && c.due !== null ? (c.due ? `Fällig → **${short(c.due, 20)}**` : '⚠️ Fällig → **ohne Datum** (Datum entfernen)') : '',
+    c.comment ? `Kommentar: „${short(c.comment, 1500)}“` : '',
+  ].filter(Boolean);
 }
 
 function clip(s: unknown, n: number): string {
@@ -200,7 +213,13 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
     const [, server, name] = tool.split('__');
     const key = input.issueIdOrKey ?? input.issueKey ?? input.jql ?? input.query ?? input.cql ?? '';
     if (server === 'vault-search') return `📚 Vault-Suche: ${name}${input.query || input.note || input.folder ? ` – ${short(input.query ?? input.note ?? input.folder, 70)}` : ''}`;
-    if (server === 'werkbank') return name === 'jira_update' ? `🎫 Jira nachgezogen: ${input.key}` : name === 'review_ready' ? '📬 Bereit zum Review gemeldet' : name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
+    if (server === 'werkbank') {
+      if (name === 'jira_update') return `🎫 Jira nachgezogen: ${input.key}`;
+      if (name === 'jira_update_many') return `🎫 Jira nachgezogen: ${Array.isArray(input.changes) ? input.changes.length : 0} Tickets`;
+      if (name === 'agent_start') return `🤖 Agent-Chat gestartet: ${input.key}`;
+      if (name === 'review_ready') return '📬 Bereit zum Review gemeldet';
+      return name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
+    }
     const icon = server === 'atlassian' ? '🎫 Jira' : server === 'compartment' ? '🧠 Gedächtnis' : `🔌 ${server}`;
     return `${icon}: ${name}${key ? ` – ${short(key, 70)}` : ''}`;
   }
@@ -272,12 +291,17 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
       break;
     default:
       if (tool === 'mcp__werkbank__jira_update') {
-        const parts = [
-          input.status ? `Status → **${short(input.status, 30)}**` : '',
-          input.due !== undefined && input.due !== null ? `Fällig → **${input.due || 'ohne Datum'}**` : '',
-          input.comment ? `Kommentar: „${short(input.comment, 300)}“` : '',
-        ].filter(Boolean);
-        return `${neutralizeAnswerAnchors('', `**Soll ich ${input.key} in Jira nachziehen?** (mit deinem Jira-Zugang)\n\n${parts.map((p) => '- ' + p).join('\n')}`)}\n\n${ANSWER_BUTTONS}`;
+        const head = `**${input.key}**${input.summary ? ` „${short(input.summary, 80)}“` : ''}`;
+        const parts = [...jiraChangeParts(input), input.reason ? `Grund: ${short(input.reason, 200)}` : ''].filter(Boolean);
+        return `${neutralizeAnswerAnchors('', `**Soll ich ${head} in Jira nachziehen?** (mit deinem Jira-Zugang)\n\n${input.was ? `Bisher (laut Chat): ${short(input.was, 120)}\n\n` : ''}${parts.map((p) => '- ' + p).join('\n')}`)}\n\n${ANSWER_BUTTONS}`;
+      }
+      if (tool === 'mcp__werkbank__jira_update_many') {
+        const cs = (Array.isArray(input.changes) ? input.changes : []) as Record<string, unknown>[];
+        const rows = cs.map((c) => `- **${short(c.key, 20)}**${c.summary ? ` „${short(c.summary, 60)}“` : ''}${c.was ? ` (bisher laut Chat: ${short(c.was, 60)})` : ''}: ${jiraChangeParts(c).join(' · ') || '—'}${c.reason ? ` — ${short(c.reason, 120)}` : ''}`);
+        return `${neutralizeAnswerAnchors('', `**Soll ich diese ${cs.length} Tickets in Jira nachziehen?** (mit deinem Jira-Zugang, der Reihe nach)\n\n${rows.join('\n')}`)}\n\n${ANSWER_BUTTONS}`;
+      }
+      if (tool === 'mcp__werkbank__agent_start') {
+        return `${neutralizeAnswerAnchors('', `**Soll ich für ${input.key} einen neuen Chat mit einem Agenten starten?** Er arbeitet das Ticket vor und fragt vor jedem Schreiben nach.${input.note ? `\n\nAuftrag: „${short(input.note, 300)}“` : ''}`)}\n\n${ANSWER_BUTTONS}`;
       }
       if (tool.startsWith('mcp__atlassian__')) {
         what = `in Jira **${tool.split('__')[2]}** ausführen`;

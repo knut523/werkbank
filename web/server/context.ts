@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseFrontmatter, getIndex, extractWikilinks, resolveLink, type VaultIndex } from './vault.ts';
 import { parseGoal, parseOutcomes, listCycles } from './sprint.ts';
-import { isMine, resolveIdentity, vienna, type HygieneItem, type Identity } from './hygiene.ts';
+import { isMine, resolveIdentity, vienna, REVIEW_GROUPS, type HygieneItem, type Identity, type ReviewItem } from './hygiene.ts';
 import { isOverdue, type Issue } from './jira.ts';
 
 export const TOKEN_CAP = 1500;
@@ -103,8 +103,33 @@ export function hygieneBlock(picked: HygieneItem[], total: number, slot: 'morgen
     slot === 'abend'
       ? `### Tagesabschluss (${total} offene Pflegepunkte, jetzt höchstens ${picked.length} fragen)`
       : `### Task-Hygiene zum Tagesbeginn (${total} offene Punkte, heute höchstens ${picked.length} fragen)`,
-    'Frag kurz danach — eine Frage nach der anderen, neben der eigentlichen Anfrage, die immer Vorrang hat. Nach drei Fragen oder bei „später“ nicht weiter nachhaken. Aus der Antwort schlägst du genau eine Jira-Aktion vor (Kommentar, Status, Fälligkeit) und schreibst sie mit dem Werkzeug `jira_update` (die Person bestätigt es mit „ja“); bei „später“ rufst du `hygiene_snooze` auf. Keine neuen Tickets.',
+    'Frag kurz danach — eine Frage nach der anderen, neben der eigentlichen Anfrage, die immer Vorrang hat. Nach drei Fragen oder bei „später“ nicht weiter nachhaken. Lies vor jeder Frage Beschreibung und Kommentare des Tickets — steht der Stand schon dort, frag nicht danach. Aus der Antwort schlägst du genau eine Jira-Aktion vor (Kommentar, Status, Fälligkeit) und schreibst sie mit dem Werkzeug `jira_update` (mit summary, was und reason für die Rückfrage; die Person bestätigt mit „ja“); bei „später“ rufst du `hygiene_snooze` auf. Keine neuen Tickets.',
     ...picked.map((i, n) => `${n + 1}. ${i.question}`),
+    ...(slot === 'abend' ? ['Erwähne am Ende in einem Satz: Den vollen Durchgang über alle Tickets mit Empfehlungen gibt es mit der Vorlage „Tagesabschluss“.'] : []),
+  ].join('\n');
+}
+
+export const REVIEW_GROUP_MAX = 15;
+const dayOf = (s: string) => { const d = new Date(s); return Number.isNaN(+d) ? null : vienna(d).date; };
+const ddmm = (d: string | null) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.` : '—');
+
+/** Tagesabschluss als Durchgang (Knut, 07.10.2026): alle Tickets nach `reviewSet`, Empfehlung je Ticket, gesammelt schreiben. */
+export function reviewBlock(items: ReviewItem[], today: string, batch = true): string {
+  if (!items.length) return '### Tagesabschluss\nKeine eigenen Tickets, die heute zählen (überfällig, ≤ 7 Tage fällig, ohne Datum, heute bearbeitet). Sag das kurz.';
+  const groups = REVIEW_GROUPS.map((g) => [g, items.filter((i) => i.group === g)] as const).filter(([, l]) => l.length);
+  return [
+    `### Tagesabschluss — Durchgang über ${items.length} Tickets (${ddmm(today)})`,
+    'Ablauf (die Person hat den Tagesabschluss ausdrücklich gestartet; das hat Vorrang):',
+    `1. Lies jedes Ticket unten: Beschreibung, Kommentare, Sub-tasks, Parent. Verteil das auf bis zu 4 Teilagenten \`ticket-pruefer\` (je ein Block Tickets); sie liefern je Ticket eine Zeile: Stand laut Jira, Widersprüche, Empfehlung + Grund. Frag nie nach einem Stand, der schon in einem Kommentar steht.`,
+    '2. Zeig je Gruppe eine Tabelle: Ticket · Titel · Stand (Status, fällig, letzte Bewegung) · **Empfehlung** · Grund. Empfehlungen: *bleibt* · *verschieben auf TT.MM.* (realistisch, nicht +1 Tag) · *Done* · *Backlog ohne Datum* · *anschauen* (Frage dazu) · *Agent vorlaufen lassen* (wenn das Ticket bald dran ist und sich vorbereiten lässt — sag, was der Agent tun soll). Darunter oben die 3–5 Punkte, die zuerst Aufmerksamkeit brauchen (z. B. Sprintziel, Blocker, offensichtlich erledigt).',
+    '3. Die Person antwortet gesammelt („alles ok außer …“). Erst wenn alles beantwortet ist, schreibst du nach Jira:',
+    batch
+      ? '   alle Änderungen mit `jira_update_many` (höchstens 25 je Aufruf, sonst in mehreren Aufrufen) (je Eintrag key, summary = Titel genau wie in Jira, was = bisheriger Stand, reason = Grund, dazu status/due/comment). Die Person bestätigt einmal. Meldet das Ergebnis Fehler, nenn sie und biete für diese Tickets `jira_update` einzeln an.'
+      : '   Ticket für Ticket mit `jira_update` (je Aufruf summary, was = bisheriger Stand, reason = Grund); die Person bestätigt jedes.',
+    '4. Danach: für jedes Ticket mit „Agent vorlaufen lassen“, das die Person bestätigt hat, `agent_start` (key, note = konkreter Auftrag) — je Ticket ein neuer eigener Chat; nenn die Links.',
+    '5. Neue Tasks nur, wenn die Person es ausdrücklich verlangt — nach Skill `olaf-jira` (Dublettenprüfung, Workstream, Ziel/Ergebnis, Owner, Datum), über den Atlassian-MCP mit Rückfrage.',
+    // „ohne Datum“ kann ein ganzer Backlog sein: höchstens 15 Zeilen je Gruppe, Rest als Zahl (Council 09.10.2026).
+    ...groups.flatMap(([g, l]) => [`**${g}** (${l.length})`, ...l.slice(0, REVIEW_GROUP_MAX).map((i) => `- ${i.key} „${cut(i.summary, 70)}“ · ${i.status} · fällig ${ddmm(i.duedate)} · zuletzt ${ddmm(dayOf(i.updated))}`), ...(l.length > REVIEW_GROUP_MAX ? [`- … und ${l.length - REVIEW_GROUP_MAX} weitere (heute nicht; auf Wunsch mit \`hygiene_list\` zeigen)`] : [])]),
   ].join('\n');
 }
 
