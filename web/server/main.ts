@@ -20,7 +20,7 @@ import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue,
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, nachtbau, g0Blocked, g0Repos } from './orchestrator.ts';
-import { pruefe, protokolliere, g0Text, g0Optionen, type VorbauErgebnis } from './vorbau.ts';
+import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName } from './ablage.ts';
@@ -1408,7 +1408,7 @@ on('POST', /^\/api\/roadmap\/ansetzen$/, async (req, res) => {
   }
   // G0 „Prüfung vor dem Bau“ (docs/plan-vorbau-check.md): Repos aus WERKBANK_VORBAU_REPOS; Treffer/Stopp → Knut wählt
   // im Dialog einen Knopf (protokolliert). Ohne Lesetoken oder ohne Repos: Stopp ohne Knopf, nur „trotzdem bauen“.
-  if (gate.ok && !state?.key) {
+  if (gate.ok && !state?.key && !vorbauAus()) {   // WERKBANK_VORBAU_CHECK=off → kein G0 im Dialog
     const g0 = await ansetzenG0(specSlug(sp.path));
     base.g0 = { ergebnis: g0.ergebnis, text: g0Text(g0), belege: g0.belege.map((x) => ({ text: x.text, pr: x.pr ?? null, sha: x.sha ?? null, wirkung: x.wirkung })), hinweise: g0.hinweise, stopp: g0.stopp ?? null, options: g0.ergebnis === 'treffer' || g0.ergebnis === 'stopp' ? g0Optionen(g0) : [] };
     const stop = base.g0.options.length > 0;

@@ -15,7 +15,7 @@ import { wb, lc } from './db.ts';
 import { librechatAccessToken, type User } from './auth.ts';
 import { createLibreChat } from './agent.ts';
 import { prepareFresh } from './fresh.ts';
-import { pruefe, parsePlan, protokolliere, g0Text, g0Optionen, OHNE_PR, type VorbauErgebnis } from './vorbau.ts';
+import { pruefe, parsePlan, protokolliere, g0Text, g0Optionen, OHNE_PR, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { vienna } from './hygiene.ts';
 
 export const ORCH_TAG = 'Orchestrator';
@@ -233,7 +233,7 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   }
   // G0 „Prüfung vor dem Bau“ (docs/plan-vorbau-check.md): jeder Code-Auftrag. Treffer/Stopp → kein Start, Rückfrage.
   let g0: G0Tor | null = null;
-  if (inp.code === true) {
+  if (inp.code === true && !vorbauAus()) {   // WERKBANK_VORBAU_CHECK=off → kein G0, nichts blockiert
     g0 = inp.g0 ?? await g0Tor(u, { slug: inp.slug ?? null, plan, cwd: real, aufrufer: inp.aufrufer ?? 'orch start --code', title });
     if (!g0.go) throw Object.assign(err(409, g0.text), { g0: g0.public });
   }
@@ -619,6 +619,7 @@ export interface NachtItem { slug?: string | null; title: string; prompt: string
 export type NachtStatus = 'gestartet' | 'blocked_g0' | 'verworfen' | 'nicht geprüft' | 'fehler';
 
 export async function nachtbau(u: User, items: NachtItem[], datum = vienna().date) {
+  if (vorbauAus()) throw err(409, 'G0 ist abgeschaltet (WERKBANK_VORBAU_CHECK=off) — der Nachtbau baut ohne Prüfung nicht.');
   const out: { slug: string; title: string; status: NachtStatus; id?: string; question?: string | null; text: string }[] = [];
   for (let i = 0; i < items.length; i++) {
     const it = items[i];

@@ -147,7 +147,7 @@ function g0Setup() {
   writeFileSync(join(G0, 'helper.sh'), `#!/usr/bin/env bash\n[ "$1" = get ] || exit 0\ncat >/dev/null\n[ "\${GIT_VW_READ:-}" = 1 ] && [ -f ${G0_TOKEN} ] && { echo username=x-access-token; echo password=ghp_LESETOKENtest; }\nexit 0\n`);
   chmodSync(join(G0, 'helper.sh'), 0o755);
   g0Api.offen.push({ number: 77, title: 'Kohorte doppelt', body: '', url: 'https://github.com/WirStrom1/olaf-admin/pull/77', headRefName: 'feat/kohorte-doppelt', headRefOid: 'a'.repeat(40), author: { login: 'bizarrochris' }, files: { nodes: [{ path: 'src/x.ts' }] } });
-  return { GIT_CONFIG_GLOBAL: join(G0, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1', VORBAU_CRED_HELPER: join(G0, 'helper.sh'), VORBAU_PROTOKOLL: G0_PROTO, VORBAU_ICH: 'knut523', VORBAU_VAULT_ROADMAP: join(G0, 'vault') };
+  return { WERKBANK_VORBAU_CHECK: 'on', GIT_CONFIG_GLOBAL: join(G0, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1', VORBAU_CRED_HELPER: join(G0, 'helper.sh'), VORBAU_PROTOKOLL: G0_PROTO, VORBAU_ICH: 'knut523', VORBAU_VAULT_ROADMAP: join(G0, 'vault') };
 }
 
 before(async () => {

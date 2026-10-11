@@ -2,6 +2,7 @@
 //
 //   vorbau-check <spec-slug> [--plan DATEI] [--spec DATEI] [--repos DIR,DIR] [--ohne-pr] [--aufrufer NAME] [--json]
 //     → {ergebnis: frei|fortsetzen|treffer|stopp, belege, hinweise, stopp?}. Exit 0 frei/fortsetzen · 10 treffer · 20 stopp · 2 Aufruf.
+//     WERKBANK_VORBAU_CHECK=off (Umgebung oder .env.local) → „aus“, Exit 0: G0 abgeschaltet, gilt wie frei.
 //     Repos: --repos, sonst WERKBANK_VORBAU_REPOS (Komma), sonst der aktuelle Ordner. Integrationszweig = origin/HEAD.
 //     Fetch und PR-API nur mit dem Lesetoken (GIT_VW_READ=1 git credential fill); fehlt es → Stopp ohne Knopf.
 //     --ohne-pr = Knopf „ohne PR-Prüfung bauen“ (nur tagsüber 06–22 Uhr, protokolliert). --ohne-fetch: Massenlauf (drift), nach dem ersten Fetch.
@@ -9,7 +10,7 @@
 //   vorbau-check fehltreffer <slug> --beleg TEXT     später entdeckten Doppelbau eintragen
 //
 // Protokoll: VORBAU_PROTOKOLL (Vorgabe <werkbank>/.runtime/g0/protokoll.jsonl).
-import { pruefe, bilanz, protokolliere, g0Text, OHNE_PR } from './vorbau.ts';
+import { pruefe, bilanz, protokolliere, g0Text, OHNE_PR, vorbauAus, VORBAU_AUS_TEXT } from './vorbau.ts';
 
 const args = process.argv.slice(2);
 const flags: Record<string, string | true> = {};
@@ -27,7 +28,7 @@ async function main() {
   const cmd = pos[0];
   if (!cmd || cmd === 'help' || cmd === '--help') {
     const { readFileSync } = await import('node:fs');
-    console.log(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 12).map((l) => l.slice(3)).join('\n'));
+    console.log(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 13).map((l) => l.slice(3)).join('\n'));
     process.exit(cmd ? 0 : 2);
   }
   if (cmd === 'bilanz') {
@@ -47,6 +48,11 @@ async function main() {
     return console.log(`Fehltreffer eingetragen: ${pos[1]}`);
   }
   const slug = cmd;
+  if (vorbauAus()) {   // WERKBANK_VORBAU_CHECK=off: Exit 0, Ergebnis „aus“ (gilt wie frei)
+    if (flags.json) console.log(JSON.stringify({ ergebnis: 'aus', slug, belege: [], hinweise: [VORBAU_AUS_TEXT], kriterien: [] }, null, 1));
+    else console.log(`AUS · ${slug}\n${VORBAU_AUS_TEXT}`);
+    process.exit(0);
+  }
   if (flags['ohne-pr']) {
     const h = wienStunde();
     if (h < 6 || h >= 22) die(`„${OHNE_PR}“ nur tagsüber (06–22 Uhr).`, 20);

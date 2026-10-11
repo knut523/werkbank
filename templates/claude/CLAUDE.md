@@ -23,6 +23,7 @@ Schritt 3): **`scripts/vorbau-check <spec-slug> --plan <plandatei>`** im Werkban
 - `frei` / `fortsetzen` → bauen; die Belege gehören in deinen Bericht.
 - `treffer` → **nicht bauen.** Belege (SHA, PR-Link) nennen und anhalten; Knut entscheidet in der Werkbank
   („trotzdem bauen“ · „auf Vorhandenem aufsetzen“ · „Spec nachziehen/abräumen“).
+- `aus` (G0 auf dieser Instanz abgeschaltet, `WERKBANK_VORBAU_CHECK=off`) → wie `frei`.
 - `stopp` (kein Lesetoken, Fetch oder PR-API scheitert) → ebenfalls nicht bauen, sondern melden. Nie mit dem
   Push-Token nachprüfen.
 

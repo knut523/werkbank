@@ -14,7 +14,22 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statS
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { graphql, GithubError } from './github.ts';
-import { RT } from './config.ts';
+import { RT, WB_ROOT } from './config.ts';
+
+/** Schalter WERKBANK_VORBAU_CHECK=off (Release 2026-10-11b): G0 abgeschaltet, nichts blockiert — solange das Lesetoken
+ *  tot ist (jede Prüfung wäre ein Stopp). Aus der Umgebung, sonst die eine Zeile aus der .env.local der Instanz (für die
+ *  CLI in Agenten-Sitzungen, die die Umgebung der Werkbank nicht erben). */
+export function vorbauAus(env: NodeJS.ProcessEnv = process.env): boolean {
+  let v = env.WERKBANK_VORBAU_CHECK;
+  if (v === undefined) {
+    try {
+      const line = readFileSync(env.WERKBANK_ENV_FILE || join(WB_ROOT, '.env.local'), 'utf8').split('\n').find((l) => l.startsWith('WERKBANK_VORBAU_CHECK='));
+      if (line) v = line.slice('WERKBANK_VORBAU_CHECK='.length).replace(/^["']|["']$/g, '');
+    } catch { /* keine .env.local: an */ }
+  }
+  return /^(off|aus|0|false|no)$/i.test(String(v ?? '').trim());
+}
+export const VORBAU_AUS_TEXT = 'G0 (Prüfung vor dem Bau) ist auf dieser Instanz abgeschaltet (WERKBANK_VORBAU_CHECK=off) — gilt wie „frei“, bauen erlaubt.';
 
 export type Ergebnis = 'frei' | 'fortsetzen' | 'treffer' | 'stopp';
 /** Woran ein Beleg hängt — „autor“ zählt die Bilanz gesondert (DoD 25). */

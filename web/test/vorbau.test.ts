@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodS
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { pruefe, decide, parsePlan, ganzesWort, slugProblem, bilanz, protokolliere, g0Optionen, type Fakten } from '../server/vorbau.ts';
+import { pruefe, decide, parsePlan, ganzesWort, slugProblem, bilanz, protokolliere, g0Optionen, vorbauAus, type Fakten } from '../server/vorbau.ts';
 
 const T = mkdtempSync(join(tmpdir(), 'vorbau-'));
 const ME = { GIT_AUTHOR_NAME: 'knut523', GIT_AUTHOR_EMAIL: 'knut.peters@maxenergy.at', GIT_COMMITTER_NAME: 'knut523', GIT_COMMITTER_EMAIL: 'knut.peters@maxenergy.at' };
@@ -368,10 +368,25 @@ test('Protokoll und Bilanz: Fehlalarme, „anderer Autor“ gesondert, Fehltreff
 test('CLI: Exit-Codes und JSON', async () => {
   const cli = new URL('../../scripts/vorbau-check', import.meta.url).pathname;
   // asynchron: die nachgebaute API läuft im selben Prozess.
-  const call = (a: string[]) => new Promise<{ code: number; out: string }>((res) => execFile(cli, a, { encoding: 'utf8', env: process.env }, (e: any, out) => res({ code: e ? e.code : 0, out })));
+  const call = (a: string[]) => new Promise<{ code: number; out: string }>((res) => execFile(cli, a, { encoding: 'utf8', env: { ...process.env, WERKBANK_VORBAU_CHECK: 'on' } }, (e: any, out) => res({ code: e ? e.code : 0, out })));
   assert.equal((await call(['ganz-neue-sache', '--repos', admin, '--json'])).code, 0);
   const t = await call(['leads-einwilligung-neu', '--repos', admin, '--json']);
   assert.equal(t.code, 10); assert.equal(JSON.parse(t.out).ergebnis, 'treffer');
   assert.equal((await call(['bank', '--repos', admin])).code, 20);
   assert.equal((await call(['fehltreffer', 'a-b', '--beleg', 'x'])).code, 0);
+});
+
+test('Schalter WERKBANK_VORBAU_CHECK=off: Umgebung, .env.local, CLI „aus“ mit Exit 0', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'vorbau-aus-'));
+  const envFile = join(d, '.env.local');
+  assert.equal(vorbauAus({ WERKBANK_VORBAU_CHECK: 'off' }), true);
+  assert.equal(vorbauAus({ WERKBANK_VORBAU_CHECK: 'on' }), false);
+  assert.equal(vorbauAus({ WERKBANK_ENV_FILE: join(d, 'fehlt') }), false);
+  writeFileSync(envFile, 'X=1\nWERKBANK_VORBAU_CHECK=off\n');
+  assert.equal(vorbauAus({ WERKBANK_ENV_FILE: envFile }), true);
+  assert.equal(vorbauAus({ WERKBANK_ENV_FILE: envFile, WERKBANK_VORBAU_CHECK: 'on' }), false);   // Umgebung vor Datei
+  const cli = new URL('../../scripts/vorbau-check', import.meta.url).pathname;
+  const out = await new Promise<{ code: number; out: string }>((res) => execFile(cli, ['bank', '--repos', d, '--json'], { encoding: 'utf8', env: { ...process.env, WERKBANK_VORBAU_CHECK: 'off' } }, (e: any, o) => res({ code: e ? e.code : 0, out: o })));
+  assert.equal(out.code, 0); assert.equal(JSON.parse(out.out).ergebnis, 'aus');
+  rmSync(d, { recursive: true, force: true });
 });
