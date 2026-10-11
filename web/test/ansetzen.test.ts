@@ -1,11 +1,11 @@
 // „Agent ansetzen“: reine Funktionen, Schalter, simuliertes Jira, Sperre gegen Doppelklick (docs/plan-agent-ansetzen.md).
+import { TEST_MONGO } from './testmongo.ts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 
 const DB = `werkbank_ansetzen_${randomBytes(4).toString('hex')}`;
 process.env.WERKBANK_DB = DB;
-process.env.MONGO_URI_WERKBANK ||= 'mongodb://127.0.0.1:27017';
 
 const A = await import('../server/ansetzen.ts');
 const { connect, wb, closeDb } = await import('../server/db.ts');

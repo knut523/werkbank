@@ -2,6 +2,7 @@
 // mit CLI → Web-App (intern) → Brücke (Mock) → nachgebautem LibreChat (speichert Unterhaltung und Nachrichten wie
 // LibreChat v0.8.7: Antworttext in content[], vorgegebene conversationId, Titel/Lesezeichen über die API).
 // Eigene Test-Datenbanken (MONGO_URI_WERKBANK), nichts davon berührt echte Konten, Jira oder den Vault.
+import { TEST_MONGO } from './testmongo.ts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
@@ -77,7 +78,7 @@ async function waitFor(url: string) {
 }
 
 before(async () => {
-  mongo = await MongoClient.connect(process.env.MONGO_URI_WERKBANK || 'mongodb://127.0.0.1:27017');
+  mongo = await MongoClient.connect(TEST_MONGO);
   await mongo.db(LCDB).collection('users').insertOne(knut);
   const L = mongo.db(LCDB);
   lcFake = createServer(async (req, res) => {

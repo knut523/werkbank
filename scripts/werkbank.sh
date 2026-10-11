@@ -120,7 +120,13 @@ case "${1:-}" in
       done
     else node "$WB/web/server/skills-cli.ts" "$@"; fi ;;
   test)
-    (cd "$WB/claude-bridge" && npm test 2>&1 | grep -E '^# (pass|fail)') && (cd "$WB/web" && npm test 2>&1 | grep -E '^# (pass|fail)') ;;
+    # Eigene Wegwerf-Mongo (nie die Live-Instanz auf :27017), Ports der Testserver neben der Live-Instanz.
+    TM=$(mktemp -d); TP=${WERKBANK_TEST_MONGO_PORT:-27999}
+    "$RT/bin/mongod" --dbpath "$TM" --bind_ip 127.0.0.1 --port "$TP" --quiet --wiredTigerCacheSizeGB 0.25 > "$TM.log" 2>&1 &
+    MP=$!; for _ in $(seq 1 60); do (echo > "/dev/tcp/127.0.0.1/$TP") 2>/dev/null && break; sleep 0.5; done
+    (cd "$WB/claude-bridge" && npm test 2>&1 | grep -E '^# (pass|fail)') && (cd "$WB/web" && MONGO_URI_WERKBANK="mongodb://127.0.0.1:$TP" \
+      WERKBANK_TEST_PORT=${WERKBANK_TEST_PORT:-3571} WERKBANK_TEST_BRIDGE_PORT=${WERKBANK_TEST_BRIDGE_PORT:-3596} npm test 2>&1 | grep -E '^# (pass|fail|skipped)'); rc=$?
+    kill "$MP" 2>/dev/null; wait "$MP" 2>/dev/null; rm -rf "$TM" "$TM.log"; exit $rc ;;
   e2e) (cd "$WB/web" && node e2e/smoke.mjs) ;;
   stream-timing) (cd "$WB/web" && node e2e/stream-timing.mjs) ;;
   init-timing) (cd "$WB/claude-bridge" && node src/init-timing.ts "${2:-3}") ;;

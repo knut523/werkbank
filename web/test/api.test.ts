@@ -1,6 +1,7 @@
 // Ende-zu-Ende gegen die Web-App im Demo-Modus: eigene Test-Datenbanken, Kopie des Fixture-Vaults,
 // Jira-Mock, Brücke im Mock-Modus, nachgebauter LibreChat-Login. Nichts davon berührt /vault,
 // das echte Jira oder echte Konten.
+import { TEST_MONGO } from './testmongo.ts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
@@ -50,7 +51,7 @@ before(async () => {
   writeFileSync(join(tmp, 'fake-vault-sync.sh'), `#!/bin/bash\necho "lauf $*" >> ${join(tmp, 'fake-vault-sync.log')}\n`);
   mkdirSync(join(tmp, 'skills-src', 'demo-skill'), { recursive: true });
   writeFileSync(join(tmp, 'skills-src', 'demo-skill', 'SKILL.md'), '---\nname: demo-skill\ndescription: Nur ein Test\n---\n# x\n');
-  mongo = await MongoClient.connect(process.env.MONGO_URI_WERKBANK || 'mongodb://127.0.0.1:27017');
+  mongo = await MongoClient.connect(TEST_MONGO);
   await mongo.db(LCDB).collection('users').insertMany(Object.values(users).map(({ pw, ...u }) => u));
   // Nachgebauter LibreChat-Login (Antwortform wie /api/auth/login).
   lcFake = createServer(async (req, res) => {

@@ -86,6 +86,7 @@ const within = (p: string, dir: string) => p === dir || p.startsWith(dir.endsWit
 
 export interface ClassifyContext {
   workDir?: string;   // Arbeitsordner der Person — nur im Auto-Modus gesetzt
+  guard?: PathGuard;  // S0: Ordnergrenzen je Person (alle Modi), siehe pathGuardProblem
   // Reichweite des Auto-Modus (BRIDGE_AUTO_SCOPE). „voll“ (Knut, 07.10.2026: „voll autonom wie hier“): auch Vault,
   // Repos, Gedächtnis und andere MCP-Werkzeuge entscheidet der Klassifikator. Rückfrage bleibt für Jira- und
   // GitHub-Schreiben und Geheimnisse; die Sperren bleiben. Ohne Angabe: nur der Arbeitsordner (Stand 06.10.2026).
@@ -110,11 +111,77 @@ function sensitiveTarget(target: string): boolean {
   return /(^|\/)(\.runtime|\.claude|\.ssh)(\/|$)|(^|\/)\.config\/vw(\/|$)|(^|\/)\.env[^/]*$/.test(target);
 }
 
+// ---------- S0: Ordnergrenzen für Agenten (Plan 126, Knut 11.10.2026) ----------
+// Bisher galten Zugriffsregeln nur in der Web-Oberfläche: Read/Glob/Grep ohne Pfadprüfung, alles läuft als ein
+// Linux-Nutzer. Jetzt: der Arbeitsordner einer ANDEREN Person, fremde Claude-Konfigurationen und der Dateispeicher der
+// Werkbank brauchen ein „ja“. Personen mit eigener Konfiguration (strict, also alle außer dem Pilotkonto) lesen ohne
+// Rückfrage nur den eigenen Arbeitsordner (scratch, Chat-Ordner) und den Vault. Ehrliche Grenze: Bash kann über Umwege
+// (cd ..; cat *) trotzdem an andere Pfade — das schließt erst eine Betriebssystem-Sandbox (nicht vorhanden).
+export interface PathGuard {
+  scratchRoot: string;     // …/.runtime/bridge/scratch
+  ownScratch: string;      // …/scratch/<person>
+  homesRoot: string;       // …/.runtime/claude (Konfiguration je Person)
+  ownHome: string | null;  // eigene Konfiguration (null = geteilte des VM-Nutzers)
+  store: string;           // …/.runtime/werkbank (Dateien aller Personen)
+  strict: boolean;         // nur eigene Ordner + Vault ohne Rückfrage
+  allowed: string[];       // eigene Ordner (scratch, Arbeitsordner dieses Chats)
+}
+
+const GUARD_PATH_TOOLS: Record<string, string[]> = {
+  Read: ['file_path'], NotebookRead: ['notebook_path'], Glob: ['path'], Grep: ['path'], LS: ['path'],
+  Write: ['file_path'], Edit: ['file_path'], MultiEdit: ['file_path'], NotebookEdit: ['notebook_path'],
+};
+export const OUTSIDE = 'liegt außerhalb deiner Ordner';
+
+function pathProblem(target: string, g: PathGuard): string | null {
+  const t = realish(target);
+  const R = (p: string) => realish(resolve(p));
+  if (within(t, R(g.scratchRoot)) && !within(t, R(g.ownScratch))) return `${OUTSIDE} (Arbeitsordner einer anderen Person)`;
+  if (within(t, R(g.homesRoot)) && !(g.ownHome && within(t, R(g.ownHome)))) return `${OUTSIDE} (Claude-Konfiguration einer anderen Person)`;
+  if (within(t, R(g.store))) return `${OUTSIDE} (Dateispeicher der Werkbank — Dateien aller Personen)`;
+  if (g.strict && ![...g.allowed, g.ownScratch, VAULT_DIR, ...(g.ownHome ? [g.ownHome] : [])].some((a) => within(t, R(a)))) return OUTSIDE;
+  return null;
+}
+
+/** S0-Grenze für Datei-Werkzeuge: Grund für eine Rückfrage oder null. Ohne Pfad (Glob/Grep im Arbeitsordner) frei. */
+export function pathGuardProblem(tool: string, input: Record<string, unknown>, ctx: ClassifyContext): string | null {
+  const g = ctx.guard;
+  if (!g) return null;
+  const keys = GUARD_PATH_TOOLS[tool];
+  if (!keys) return null;
+  const base = ctx.workDir ?? g.allowed[0] ?? g.ownScratch;
+  for (const k of keys) {
+    const v = input[k];
+    if (typeof v !== 'string' || !v) continue;
+    const p = pathProblem(resolve(base, v.replace(/^~(?=\/|$)/, process.env.HOME ?? '~')), g);
+    if (p) return p;
+  }
+  return null;
+}
+
+/** S0 für Bash (nur Muster, keine Sandbox): fremde scratch-Ordner, Dateispeicher; strict zusätzlich absolute Pfade
+ *  unter /home bzw. ~ außerhalb der eigenen Ordner. */
+export function bashGuardProblem(cmd: string, g: PathGuard | undefined): string | null {
+  if (!g) return null;
+  for (const m of cmd.matchAll(/bridge\/scratch\/([\w.-]+)/g)) if (!g.ownScratch.endsWith('/' + m[1])) return `${OUTSIDE} (Arbeitsordner einer anderen Person)`;
+  if (/bridge\/scratch\/(\*|\s|$|["'])/.test(cmd) || /bridge\/scratch\/?\s*$/.test(cmd)) return `${OUTSIDE} (Arbeitsordner aller Personen)`;
+  if (/\.runtime\/werkbank\b/.test(cmd)) return `${OUTSIDE} (Dateispeicher der Werkbank)`;
+  if (g.strict) {
+    for (const m of cmd.matchAll(/(?:^|[\s'"=:(<>])((?:\/home\/|~\/|\$HOME\/)[^\s'";|&)<>]*|~(?=[\s'";|&]|$))/g)) {
+      const raw = m[1].replace(/^(~|\$HOME)(?=\/|$)/, process.env.HOME ?? '/home');
+      if (pathProblem(resolve(raw), g)) return OUTSIDE;
+    }
+  }
+  return null;
+}
+
 export function classify(tool: string, input: Record<string, unknown>, ctx: ClassifyContext = {}): { cls: ToolClass; why?: string } {
   if (tool === 'Bash') {
     const cmd = String(input.command ?? '');
     for (const [re, why] of BASH_BLOCKED) if (re.test(cmd)) return { cls: 'blocked', why };
     for (const [re, why] of BASH_GITHUB_WRITE) if (re.test(cmd)) return { cls: 'confirm', why };
+    const gb = bashGuardProblem(cmd, ctx.guard);
+    if (gb) return { cls: 'confirm', why: gb };
     if (ctx.workDir && ctx.scope === 'voll') {
       if (BASH_KEEP_CONFIRM_VOLL.some((re) => re.test(cmd)) || bashTouchesJiraWrite(cmd)) return { cls: 'confirm' };
       return { cls: 'auto' };
@@ -122,6 +189,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     if (ctx.workDir && !cmd.includes(VAULT_DIR) && !BASH_KEEP_CONFIRM.some((re) => re.test(cmd))) return { cls: 'auto' };
     return { cls: 'confirm' };
   }
+  const gp = pathGuardProblem(tool, input, ctx);
+  if (gp) return { cls: 'confirm', why: gp };
   if (FILE_TOOLS.has(tool) && ctx.workDir) {
     const f = String(input.file_path ?? input.notebook_path ?? '');
     if (!f) return { cls: 'confirm' };

@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { classify, orchestratorBlock, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
+import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
@@ -31,10 +32,12 @@ interface Pending {
   resolve: (answer: string) => void;
   timer: NodeJS.Timeout;
   question?: string;   // was freigegeben werden soll (Statuszeile), für die Review-Karte der Werkbank
+  since?: number;      // seit wann die Sitzung auf die Antwort wartet (Leerlauf, reapIdle)
 }
 
 interface Live {
   key: string;
+  guard?: PathGuard;   // S0-Ordnergrenzen (tools.ts), je Zug gesetzt
   userId: string;
   abort: AbortController;
   sink: Sink | null;
@@ -87,6 +90,17 @@ const cfg = {
   turnTimeoutMs: Number(process.env.BRIDGE_TURN_TIMEOUT_S || 900) * 1000,
   confirmTimeoutMs: Number(process.env.BRIDGE_CONFIRM_TIMEOUT_S || 1800) * 1000,
 };
+
+// Leerlauf (RAM, 11.10.2026): eine Claude-Sitzung, die nur auf „ja/nein“ wartet, hält ihren Prozess samt MCP-Servern
+// (gemessen ≈ 420 MB je Chat). Nach BRIDGE_IDLE_REAP_S (Vorgabe 900 s = 15 min, 0 = aus) wird sie beendet; die
+// Rückfrage gilt als verfallen, die Unterhaltung bleibt fortsetzbar (nächste Nachricht setzt die Sitzung fort).
+export const idleReapMs = () => Math.max(0, Number(process.env.BRIDGE_IDLE_REAP_S ?? 900)) * 1000;
+
+/** Welche wartenden Sitzungen sind länger als ms im Leerlauf? (rein, für Tests) */
+export function idleToReap<T extends { pending: { since?: number } | null }>(list: T[], now: number, ms = idleReapMs()): T[] {
+  if (!ms) return [];
+  return list.filter((l) => l.pending && typeof l.pending.since === 'number' && now - l.pending.since >= ms);
+}
 
 // ---------- Auto-Modus (Plan 71 P1, Knut 06.10.2026) ----------
 // BRIDGE_PERMISSION_MODE=auto (Vorgabe in scripts/start.sh) + E-Mail in BRIDGE_AUTO_EMAILS (Vorgabe: Knut) → der
@@ -208,8 +222,31 @@ export function sessionsOf(userId: string) {
   }).sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0)).slice(0, 30);
 }
 
+/** Beendet Sitzungen im Leerlauf (siehe idleReapMs). Läuft jede Minute; gibt die Anzahl zurück. */
+export function reapIdle(now = Date.now()): number {
+  const victims = idleToReap([...lives.values()], now);
+  for (const l of victims) {
+    log('leerlauf beendet', { conv: l.key, wartete_s: Math.round((now - (l.pending!.since ?? now)) / 1000) });
+    markEnd(l, 'frage_verfallen');
+    l.pending!.resolve('\u0000timeout');
+    l.abort.abort();
+    end(l);
+  }
+  return victims.length;
+}
+setInterval(() => { try { reapIdle(); } catch (e: any) { log('leerlauf-prüfung fehlgeschlagen', { error: String(e?.message ?? e).slice(0, 120) }); } }, 60_000).unref();
+
 export function stats() {
   return { live: lives.size, pending: [...lives.values()].filter(l => l.pending).length, sessions: Object.keys(sessionMap).length };
+}
+
+/** S0 (Plan 126): Ordnergrenzen dieser Person für Datei-Werkzeuge und Bash. BRIDGE_PATH_GUARD=off nur zur Diagnose. */
+export function guardFor(userId: string, cwd: string, ownHome: string | null): PathGuard | undefined {
+  if ((process.env.BRIDGE_PATH_GUARD ?? 'on') === 'off') return undefined;
+  const own = join(cfg.stateDir, 'scratch', safeId(userId));
+  return { scratchRoot: join(cfg.stateDir, 'scratch'), ownScratch: own, homesRoot: homesRoot(), ownHome,
+    store: process.env.WERKBANK_DATA_DIR || join(cfg.stateDir, '..', 'werkbank'),
+    strict: ownHome !== null, allowed: [cwd, own] };
 }
 
 export function scratchFor(userId: string): string {
@@ -465,7 +502,7 @@ function handleMessage(live: Live, msg: any) {
       for (const block of msg.message?.content ?? []) {
         if (block.type === 'tool_use') {
           live.progressed = true;
-          const cls = classify(block.name, block.input ?? {}, { workDir: live.workDir, scope: autoScope() }).cls;
+          const cls = classify(block.name, block.input ?? {}, { workDir: live.workDir, scope: autoScope(), guard: live.guard }).cls;
           if (cls === 'auto' && live.mode === 'auto') live.autoCalls.set(block.id, { name: block.name, input: block.input ?? {}, sub: !!msg.parent_tool_use_id });
           if (live.onJiraWrite && jiraWriteKeys(block.name, block.input ?? {}) !== null) live.jiraCalls.set(block.id, { name: block.name, input: block.input ?? {} });
           // Nutzung je Skill zählen (Knut, 29.09.: Skill-Kern nach einer Woche mit echten Zahlen nachschärfen).
@@ -548,7 +585,7 @@ function makeGuard(live: Live) {
   return async (input: any, toolUseId?: unknown, _opts?: unknown, escalated?: { reason?: string }) => {
     const tool: string = input.tool_name;
     const toolInput: Record<string, unknown> = input.tool_input ?? {};
-    const { cls, why } = classify(tool, toolInput, { workDir: live.workDir, scope: autoScope() });
+    const { cls, why } = classify(tool, toolInput, { workDir: live.workDir, scope: autoScope(), guard: live.guard });
     // Teilagent? Der Hook nennt agent_id/agent_type; canUseTool nur die agent_id (Rolle aus einem früheren Hook-Aufruf).
     const agentId: string | undefined = input.agent_id;
     if (agentId && input.agent_type) live.agentTypes.set(agentId, String(input.agent_type));
@@ -616,6 +653,7 @@ function makeGuard(live: Live) {
         resolve,
         timer: setTimeout(() => resolve('\u0000timeout'), cfg.confirmTimeoutMs),
         question: questionText(tool, toolInput),
+        since: Date.now(),
       };
       detach(live);
     });
@@ -737,6 +775,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Eigene Claude-Konfiguration je Person (oder die geteilte des VM-Nutzers, siehe claudehome.ts).
   const home = homeFor(safeId(req.userId), req.email);
   live.home = home.dir ?? 'shared';
+  live.guard = guardFor(req.userId, scratch, home.dir);
   try { await ensureHome(home); } catch (e: any) { log('konfig fehlgeschlagen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); }
   // Fortsetzen nur in derselben Konfiguration — dort liegt der Verlauf der Sitzung; sonst neu mit dem Verlauf aus LibreChat.
   const resume = sessionMap[key] && (homeMap[key] ?? 'shared') === live.home ? sessionMap[key] : undefined;
