@@ -99,6 +99,7 @@ export function chatUrl(prompt: string, opts: { spec?: string; submit?: boolean 
 // Fortschritt live. Schreiben fragt die Brücke im Chat ab („ja“), GitHub-Schreiben ist gesperrt.
 
 import { librechatAccessToken } from './auth.ts';
+import { lastMessageId } from './review.ts';
 
 export const CHAT_AGENT_INSTRUCTION = `Du bist vom Werkbank-Board auf dieses Ticket angesetzt. Arbeite nach plan-to-pr — auch wenn es keine Coding-Aufgabe ist (Recherche, Dokument, Abstimmung):
 1. Lies zuerst, was Vault-Register und Jira sagen (Vault vor Code, Board-Stand ist nicht Arbeitsstand).
@@ -107,6 +108,7 @@ export const CHAT_AGENT_INSTRUCTION = `Du bist vom Werkbank-Board auf dieses Tic
 4. Setz dann die Schnitte um. GitHub pushen und mergen ist gesperrt.
 5. Neue Vault-Notizen oder Dateien zu diesem Ticket bekommen im Frontmatter \`jira: <Key>\` (dann erscheinen sie an der Karte); Dokumente, die du erstellst, landen nach dem Lauf von selbst unter „Meine Dateien“.
 6. Keine neuen Tickets ohne ausdrücklichen Auftrag.
+7. Code: am Ende ein lokaler Feature-Branch mit Commits. Wenn du fertig bist (oder ohne die Person nicht weiterkommst), ruf das Werkzeug \`review_ready\` (Werkbank) auf: gemacht, nicht_gemacht, risiko (je ein kurzer Text, „nichts“ statt leer) und je DoD-Punkt { punkt, stand: ja|teilweise|nein, beleg }, dazu artefakte (Plan-Notiz, Dateien, Branch). Erst danach, als allerletzten Schritt, den Push des Feature-Branches anstoßen — das System fragt die Person; einen Draft-PR erst nach dem Push.
 Schließe mit „### Stand“ (3–5 Zeilen: was erledigt ist, was offen ist, wer dran ist) und „### Kommentarentwurf“ (höchstens 8 Zeilen für Jira).`;
 
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 OLAF-Werkbank';
@@ -158,14 +160,15 @@ export async function startChatAgent(u: User, issue: Issue, note: string, kind: 
   const conv = await createLibreChat(u, chatAgentPrompt(issue, note, kind, place));
   const id = randomUUID();
   const url = `${cfg.librechatPublicUrl}/c/${conv}`;
-  await runs.insertOne({ _id: id as any, key: issue.key, userId: u.id, userName: u.name, mode: 'chat', kind, status: kind === 'work' ? 'läuft' : 'fertig', conv, url, startedAt: new Date(), note: note.slice(0, 300), written: [], projectId: place.projectId ?? null });
+  await runs.insertOne({ _id: id as any, key: issue.key, userId: u.id, userName: u.name, mode: 'chat', kind, status: kind === 'work' ? 'läuft' : 'fertig', conv, url, startedAt: new Date(), note: note.slice(0, 300), written: [], projectId: place.projectId ?? null, reviewable: kind === 'work' });
   return { id, conv, url };
 }
 
 /** Status der Chat-Läufe aus der Brücke nachziehen (läuft / wartet auf ja / fertig) und geschriebene Dateien merken. */
 export async function refreshChatRuns(filter: Record<string, unknown> = {}): Promise<void> {
   const runs = wb().collection('agent_runs');
-  const open: any[] = await runs.find({ mode: 'chat', status: { $in: ['läuft', 'wartet auf ja'] }, ...filter }).toArray();
+  // Dazu fertige Läufe, die noch in der Review-Schlange stehen: schreibt die Person im Chat weiter, laufen sie wieder.
+  const open: any[] = await runs.find({ mode: 'chat', $or: [{ status: { $in: ['läuft', 'wartet auf ja'] } }, { status: 'fertig', reviewable: true, reviewedAt: null, startedAt: { $gte: new Date(Date.now() - 14 * 864e5) } }], ...filter }).toArray();
   const byUser = new Map<string, any[]>();
   for (const r of open) byUser.set(r.userId, [...(byUser.get(r.userId) ?? []), r]);
   for (const [userId, rs] of byUser) {
@@ -177,11 +180,41 @@ export async function refreshChatRuns(filter: Record<string, unknown> = {}): Pro
     for (const run of rs) {
       const s = sessions.find((x) => x.conv === run.conv);
       // Noch nicht bei der Brücke angekommen: läuft (LibreChat bereitet vor). Nach 10 Minuten ohne Spur: fertig.
-      const status = !s ? (Date.now() - new Date(run.startedAt).getTime() > 600_000 ? 'fertig' : 'läuft') : s.status === 'bereit' ? 'fertig' : s.status;
+      // Ein fertiger Lauf, den die Brücke (z. B. nach einem Neustart) nicht mehr kennt, bleibt fertig.
+      const status = !s ? (run.status === 'fertig' || Date.now() - new Date(run.startedAt).getTime() > 600_000 ? 'fertig' : 'läuft') : s.status === 'bereit' ? 'fertig' : s.status;
       const written = s?.written ?? run.written ?? [];
-      if (status !== run.status || written.length !== (run.written ?? []).length) {
-        await runs.updateOne({ _id: run._id }, { $set: { status, written, ...(status === 'fertig' ? { endedAt: new Date() } : {}) } });
+      // Rundenende, offene Rückfrage und Rundenbeginn aus der Brücke (Review-Schlange: hängt / Frage / Marke gültig).
+      const extra: Record<string, unknown> = s ? { endReason: s.end ?? null, question: s.question ?? null, roundAt: s.roundAt ? new Date(s.roundAt) : null } : {};
+      const changed = status !== run.status || written.length !== (run.written ?? []).length
+        || (s && (extra.endReason !== (run.endReason ?? null) || extra.question !== (run.question ?? null) || +(extra.roundAt as Date ?? 0) !== +(run.roundAt ?? 0)));
+      if (changed) {
+        await runs.updateOne({ _id: run._id }, { $set: { status, written, ...extra, ...(status === 'fertig' && run.status !== 'fertig' ? { endedAt: new Date() } : {}) } });
       }
     }
   }
+}
+
+/**
+ * Text als nächste Nachricht in eine BESTEHENDE LibreChat-Unterhaltung (Antwort auf eine Rückfrage, „Nacharbeit“,
+ * „weiter“) — derselbe Aufruf wie der Senden-Knopf, Eltern = die neueste Nachricht der Unterhaltung.
+ */
+export async function replyInChat(u: User, conv: string, text: string): Promise<void> {
+  const token = await librechatAccessToken(u);
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'user-agent': UA };
+  const m = await fetch(`${cfg.librechatUrl}/api/messages/${encodeURIComponent(conv)}`, { headers, signal: AbortSignal.timeout(10_000) });
+  if (!m.ok) throw Object.assign(new Error(`Chat nicht lesbar (LibreChat ${m.status}) — bitte im Chat antworten.`), { status: 502 });
+  const parent = lastMessageId(await m.json().catch(() => []));
+  if (!parent) throw Object.assign(new Error('Chat ohne Nachrichten — bitte im Chat antworten.'), { status: 502 });
+  const r = await fetch(`${cfg.librechatUrl}/api/agents/chat/${encodeURIComponent('Claude Code')}`, {
+    method: 'POST', headers,
+    body: JSON.stringify({
+      text, sender: 'User', isCreatedByUser: true, conversationId: conv, parentMessageId: parent, messageId: randomUUID(),
+      clientTimestamp: new Date().toISOString().slice(0, 19), error: false,
+      endpoint: 'Claude Code', endpointType: 'custom', model: 'claude-code', modelLabel: 'Claude Code (OLAF)', spec: 'claude-code-olaf',
+      key: 'never', modelDisplayLabel: 'Claude Code', isTemporary: false, isRegenerate: false, isContinued: false,
+      ephemeralAgent: { mcp: [], web_search: false, file_search: false, execute_code: false, artifacts: '' }, timezone: 'Europe/Vienna',
+    }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!r.ok) throw Object.assign(new Error(`Antwort nicht angekommen (LibreChat ${r.status}) — bitte im Chat antworten.`), { status: 502 });
 }

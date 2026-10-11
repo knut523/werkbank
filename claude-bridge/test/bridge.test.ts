@@ -225,6 +225,25 @@ test('Sitzungsstatus je Person nur mit internem Token', async () => {
   assert.equal(c9.turns, 2);
   assert.equal(c9.resumable, true);
   assert.equal(c9.title, 'Guten Morgen');
+  assert.equal(c9.end, 'ok', 'normal beendete Runde');
+});
+
+test('Rundenende (Review-Schlange): Schrittlimit, Absturz, offene Rückfrage mit Fragetext', async () => {
+  const sessions = async () => ((await (await fetch(`http://127.0.0.1:${PORT}/sessions?user=u31`, { headers: { 'x-werkbank-internal': 'geheim' } })).json()) as any).sessions;
+  const until = async (conv: string, ok: (s: any) => boolean) => { for (let i = 0; i < 60; i++) { const s = (await sessions()).find((x: any) => x.conv === conv); if (s && ok(s)) return s; await new Promise((r) => setTimeout(r, 50)); } throw new Error('Zustand nicht erreicht: ' + conv); };
+  await send('c31a', 'maxturns-test', { user: 'u31' });
+  assert.equal((await until('c31a', (s) => s.status === 'bereit')).end, 'max_turns');
+  await send('c31b', 'absturz-test', { user: 'u31' });
+  assert.equal((await until('c31b', (s) => s.status === 'bereit')).end, 'error');
+  await send('c31c', 'schreib eine Notiz', { user: 'u31' });
+  const p = await until('c31c', (s) => s.status === 'wartet auf ja');
+  assert.match(p.question, /^Soll ich die Datei .*notiz\.md schreiben\?$/, 'Fragetext: was freigegeben wird');
+  assert.equal(p.end, null, 'solange sie wartet, kein Ende');
+  await send('c31c', 'nein', { user: 'u31' });
+  const done = await until('c31c', (s) => s.status === 'bereit');
+  assert.equal(done.end, 'ok');
+  assert.equal(done.question, null);
+  assert.equal(done.roundAt, p.roundAt, 'Antwort auf die Rückfrage setzt dieselbe Runde fort');
 });
 
 test('Streaming: „arbeitet …“ sofort, Denken als Fortschrittszeile, Text tokenweise', async () => {

@@ -305,7 +305,7 @@ try {
   });
 
   await step('Roadmap: Priorisierung (verschieben → Vorschlag), Zustände, PR-Review, Entscheidung beantworten, Konsistenz', async () => {
-    await a.goto(W + '/#/roadmap');
+    await a.goto(W + '/#/roadmap/prio');
     await a.getByTestId('rank-table').locator('tr[data-spec="service-view-kundenakte"]').waitFor({ timeout: 15000 });
     await shot(a, '30-roadmap-priorisierung');
     await a.getByRole('button', { name: 'service-view-mailprotokoll hoch' }).click();
@@ -314,13 +314,16 @@ try {
     await confirmDialog(a, '31-roadmap-rang-vorschlag');
     await a.getByText('Vorschlag festgehalten').waitFor();
     assert.match(readFileSync(join(VAULT, 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/0-Overview/priorisierung-roadmap-produkt-olaf.md'), 'utf8'), /Vorschläge aus der Werkbank\n\n- E2E \(\d\d\.\d\d\.\d{4}\): \[\[service-view-mailprotokoll\]\] Rang 2 → 1 — E2E: Kunde fragt/);
-    await a.getByRole('tab', { name: 'Zustände' }).click();
+    await a.goto(W + '/#/roadmap');
+    await a.getByTestId('overview').locator('[data-topic="Service-View"]').waitFor({ timeout: 15000 });
+    await shot(a, '32a-roadmap-ueberblick');
+    await a.getByTestId('overview').locator('[data-topic="Service-View"]').getByRole('button', { name: /Alle Zustände/ }).click();
     await a.locator('a.tcard[data-spec="service-view-kundenakte"]').waitFor();
     await shot(a, '32-roadmap-zustaende');
     await a.getByRole('tab', { name: /PR-Review/ }).click();
     await a.getByTestId('pr-table').locator('tr[data-pr="olaf-admin#175"]').getByText('PM-321').waitFor();
     await shot(a, '33-roadmap-pr-review');
-    await a.getByRole('tab', { name: /Offene Entscheidungen/ }).click();
+    await a.goto(W + '/#/roadmap/entscheidungen');
     const box = a.locator('[data-decisions="service-view-kundenakte"]');
     await box.getByText(/stornierte Verträge/).waitFor();
     await box.getByRole('textbox').first().fill('ja, ausgegraut (E2E)');
@@ -328,7 +331,7 @@ try {
     await confirmDialog(a, '34-roadmap-entscheidung-vorschau');
     await a.getByText('Antwort gespeichert').waitFor();
     assert.match(readFileSync(join(VAULT, 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/Service-View/3-Plan/service-view-kundenakte.md'), 'utf8'), /\n  - Knut: ja, ausgegraut \(E2E\)\n/);
-    await a.getByRole('tab', { name: 'Konsistenz' }).click();
+    await a.getByRole('tab', { name: /Pflege/ }).click();
     await a.getByText(/\d+ Fehler/).first().waitFor({ timeout: 30000 });
     await shot(a, '35-roadmap-konsistenz');
   });
@@ -458,14 +461,18 @@ try {
 
   await step('LibreChat-Leiste: Werkbank-Seiten im Hauptbereich, eine Anmeldung', async () => {
     await a.goto(LC + '/c/new');
-    await a.getByTestId('werkbank-nav-einrichtung').click();
-    await a.waitForURL(/\/wb\/einrichtung/);
+    await a.getByTestId('werkbank-nav-heute').click();
+    await a.waitForURL(/\/wb\/heute/);
+    await a.frameLocator('[data-testid="werkbank-frame"]').getByRole('heading', { name: 'Heute' }).waitFor({ timeout: 20000 });
+    await shot(a, '21-leiste-heute');
+    assert.equal(await a.locator('[data-testid^="werkbank-nav-"]').count(), 5, 'Leiste: Heute · Roadmap · Board · Sprint · Wissen');
+    await a.goto(LC + '/wb/einrichtung');
     const f = a.frameLocator('[data-testid="werkbank-frame"]');
     await f.getByRole('heading', { name: 'Einrichtung' }).waitFor({ timeout: 20000 });
     assert.equal(await f.locator('#pw').count(), 0, 'kein zweites Login');
     await f.getByTestId('context-info').waitFor();
     await shot(a, '22-leiste-einrichtung');
-    for (const [id, text, name] of [['wissen', 'Produkt-OLAF-Roadmap', '23-leiste-wissen'], ['board', 'Board · PM', '24-leiste-board'], ['sprint', 'Sprint-Ziel', '25-leiste-sprint'], ['skills', 'Alle Skills', '26-leiste-skills'], ['dateien', 'Dateien & Teilen', '27-leiste-dateien'], ['roadmap', 'Roadmap · Produkt OLAF', '27b-leiste-roadmap']]) {
+    for (const [id, text, name] of [['wissen', 'Produkt-OLAF-Roadmap', '23-leiste-wissen'], ['board', 'Board · PM', '24-leiste-board'], ['sprint', 'Sprint-Ziel', '25-leiste-sprint'], ['roadmap', 'Roadmap · Produkt OLAF', '27b-leiste-roadmap']]) {
       await a.getByTestId(`werkbank-nav-${id}`).click();
       await a.waitForURL(new RegExp(`/wb/${id}`));
       await a.frameLocator('[data-testid="werkbank-frame"]').getByText(text).first().waitFor({ timeout: 20000 });

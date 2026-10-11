@@ -77,7 +77,7 @@ DOMAIN_CLIENT=$LC_URL
 DOMAIN_SERVER=$LC_URL
 LIBRECHAT_PUBLIC_URL=$LC_URL
 WERKBANK_PUBLIC_URL=$WEB_URL
-CUSTOM_FOOTER="OLAF-Werkbank | [🚀 Einrichtung]($WEB_URL/#/) | [📚 Wissen]($WEB_URL/#/wissen) | [🗂️ Board]($WEB_URL/#/board) | [🔁 Sprint]($WEB_URL/#/sprint) | [🧰 Skills]($WEB_URL/#/skills) | [📎 Dateien]($WEB_URL/#/dateien)"
+CUSTOM_FOOTER="OLAF-Werkbank | [☀️ Heute]($WEB_URL/#/) | [🧭 Roadmap]($WEB_URL/#/roadmap) | [🗂️ Board]($WEB_URL/#/board) | [🔁 Sprint]($WEB_URL/#/sprint) | [📚 Wissen]($WEB_URL/#/wissen) | [🚀 Einrichtung]($WEB_URL/#/einrichtung)"
 # <<< werkbank-urls
 EOT
 cat "$tmp" > "$WB/.env.local"; rm -f "$tmp"

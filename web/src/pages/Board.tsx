@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react';
 import { api, fmtDate, fmtDateTime, today, chatTarget, openChat, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, StateChip, useJiraLive } from '../ui.tsx';
-import { HygienePanel, LinkButton } from '../components.tsx';
+import { LinkButton } from '../components.tsx';
+import { BeiMirLink } from '../beimir.tsx';
 import { NoGoal } from './Sprint.tsx';
 import { moveActions, allowedStatuses, laneAllowed, moveCard, describeMove, type Transition } from '../boardMove.ts';
 
@@ -513,7 +514,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
           try { const r: any = await api('/api/board/sync', { body: { force: true, confirm: true } }); toast(`${r.count} Tickets, ${r.removed} entfernt`); await b.reload(); } catch (e) { setErr(e); } finally { setSyncing(false); }
         }}>Trotzdem abgleichen …</button>}</div>}
       <Err e={err} />
-      <HygienePanel onChange={() => b.reload()} />
+      <BeiMirLink what="Pflegepunkte deiner Tickets, Rückfragen und Reviews" />
       <div className="board-bar">
         <select value={owner} onChange={(e) => setOwner(e.target.value)} aria-label="Owner">
           <option value="">Alle Owner</option>

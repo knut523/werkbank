@@ -3,6 +3,7 @@
 // Werkzeuge:
 //   hygiene_list    eigene Task-Hygiene-Punkte (lesend)
 //   hygiene_snooze  einen Punkt für heute auf "später" setzen (ändert nur Werkbank-Zustand)
+//   review_ready    Fertig-Marke am eigenen Agentenlauf dieser Unterhaltung (ändert nur Werkbank-Zustand)
 //   jira_update     Kommentar / Status / Fälligkeit auf einem eigenen PM-Ticket — die Brücke fragt vorher
 //                   im Chat nach ("ja"); geschrieben wird über den Atlassian-MCP der Person (eigene kurze Claude-Sitzung, nur dieser Aufruf).
 // Umgebung (von der Brücke gesetzt): WERKBANK_URL, WERKBANK_INTERNAL_TOKEN, WERKBANK_USER_ID.
@@ -58,6 +59,24 @@ serve('werkbank', '0.1.0', [
         if (!a.filter || line.toLowerCase().includes(String(a.filter).toLowerCase())) rows.push(line);
       }
       return `${rows.length} Skills (Pfad: ${SKILLS_DIR}/<name>/SKILL.md):\n${rows.join('\n')}`;
+    },
+  },
+  {
+    name: 'review_ready',
+    description: 'Am Ende eines Werkbank-Agentenlaufs: meldet „bereit zum Review“. Pflicht: gemacht, nicht_gemacht, risiko (je kurzer Text, „nichts“ statt leer) und dod (je Punkt der Definition of Done: punkt, stand ja|teilweise|nein, beleg). artefakte: Plan-Notiz, Dateien, Branch, PR-Link. Gilt nur für diese Unterhaltung; die Person sieht es in ihrer Review-Schlange.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        gemacht: { type: 'string' }, nicht_gemacht: { type: 'string' }, risiko: { type: 'string' },
+        dod: { type: 'array', items: { type: 'object', properties: { punkt: { type: 'string' }, stand: { type: 'string', enum: ['ja', 'teilweise', 'nein'] }, beleg: { type: 'string' } }, required: ['punkt', 'stand'] } },
+        artefakte: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['gemacht', 'nicht_gemacht', 'risiko', 'dod'],
+    },
+    run: async (a: any) => {
+      // Nur die bekannten Felder; Person und Unterhaltung kommen aus der Umgebung, nie aus den Argumenten.
+      const j = await call('/internal/review-ready', { gemacht: a.gemacht, nicht_gemacht: a.nicht_gemacht, risiko: a.risiko, dod: a.dod, artefakte: a.artefakte, conv: process.env.WERKBANK_CONV_ID || '' });
+      return `Bereit zum Review gemeldet (${j.key}). Die Person prüft jetzt — nicht weiterarbeiten, außer am Push-Schritt.`;
     },
   },
   {

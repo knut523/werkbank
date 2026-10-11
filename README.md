@@ -2,8 +2,9 @@
 
 Chat-Oberfläche fürs Team (LibreChat), hinter der **Claude Code** arbeitet — mit unseren Skills,
 dem Obsidian-Vault und Jira, **unter dem eigenen Claude-Konto jeder Person, ohne API-Schlüssel** —
-und daneben die **Werkbank-Web-App** mit Einrichtung, Wissen (Vault), Board (Jira-Kopie PM),
-Sprint (Review/Planning), Roadmap, Skills und Dateien & Teilen.
+und daneben die **Werkbank-Web-App**: Startseite **Heute** (was auf mich wartet, Review-Schlange der Agenten),
+Roadmap, Board (Jira-Kopie PM), Sprint (Review/Planning), Wissen (Vault); im Fuß Mein Tag, Ziele, Skills,
+Dateien & Teilen und Einrichtung.
 Plan und Entscheidungen: [`PLAN.md`](PLAN.md).
 
 ```
@@ -16,7 +17,7 @@ Browser ─► LibreChat :3080 ── Endpunkt „Claude Code“ + Vorlagen (Sch
    │       Claude Agent SDK ── eigene Claude-Konfiguration je Person (.runtime/claude/<id>: Skills ← /vault/_meta/dist-skill,
    │                           CLAUDE.md, Atlassian-OAuth), nur Werkbank-MCP (vault-search, werkbank, forge-review, atlassian)
    │
-   └──► Werkbank-Web :3070 ── Einrichtung · Wissen · Board · Sprint · Roadmap · Skills · Dateien & Teilen
+   └──► Werkbank-Web :3070 ── Heute · Roadmap · Board · Sprint · Wissen  (Fuß: Mein Tag · Ziele · Skills · Dateien · Einrichtung)
                 │  Login = LibreChat-Konto · Vault nur lesend (Schreiben nur nach Bestätigung)
                 ├── MongoDB (eigene DB „werkbank“: Jira-Kopie, Sitzungen, verschlüsselte Zugänge, Dateien)
                 ├── Meilisearch (Index „werkbank_vault“: Volltextsuche im Vault)
@@ -107,8 +108,9 @@ Die Web-App führt beim ersten Aufruf durch fünf Schritte (Seite **Einrichtung*
 
 ## Die Werkbank im Chat (linke Leiste)
 
-Unter dem „Neuer Chat“-Knopf stehen sieben Symbole: 🚀 Einrichtung · 📖 Wissen · 🗂 Board · 🔁 Sprint ·
-🧭 Roadmap · 🧩 Skills · 🔗 Dateien & Teilen. Ein Klick öffnet die Seite im Hauptbereich von LibreChat (Adresse
+Unter dem „Neuer Chat“-Knopf stehen fünf Symbole, dieselben wie oben in der Werkbank: ☀️ Heute · 🧭 Roadmap ·
+🗂 Board · 🔁 Sprint · 📖 Wissen. Mein Tag, Ziele, Skills, Dateien & Teilen und Einrichtung stehen als Zeile „Weitere
+Seiten“ unter jeder eingebetteten Seite (`/wb/einrichtung` usw. gehen weiter). Ein Klick öffnet die Seite im Hauptbereich von LibreChat (Adresse
 `/wb/<seite>`, Unterseiten stehen als `?h=…` in der Adresszeile und überstehen Neuladen).
 
 - **Eine Anmeldung:** LibreChat reicht `/werkbank/*` an die Web-App (3070) durch. Dort kommt LibreChats
@@ -646,7 +648,7 @@ Knut, 07.10.2026: „werkbank hat nur einen chat pro zeit … gehen auch mehrere
 ## Roadmap-Automatik (08.10.2026)
 
 Plan: `docs/plan-roadmap-automatik.md`. Vault-Roadmap und Roadmap-Seite ziehen sich selbst nach; was eine Maschine
-nicht allein darf, steht als Frage unter **Roadmap → „Für mich offen“**.
+nicht allein darf, steht als Frage unter **Heute → „Wartet auf dich“** (bis 09.10.2026: Roadmap → „Für mich offen“).
 
 - **Feed:** alle 5 min schreibt die Werkbank `~/.cache/vault-sync/werkbank-feed.md` (Jira-Stand, fertige
   Karten-Läufe mit Vault-Notizen und PR-Links, Projekte je Workstream; keine Beschreibungen, Chats, Zugangsdaten).
@@ -654,14 +656,41 @@ nicht allein darf, steht als Frage unter **Roadmap → „Für mich offen“**.
 - **Nachzug nach Agentenlauf:** ist ein Karten-Agent mit Ticket fertig (Sitzung „bereit“ mit neuer Aktivität),
   kommt das Ticket in eine Warteschlange; höchstens alle 20 min startet `vault-sync.sh --scope PM-…`
   (nur Specs/Übersichten/Register/Timeline dieser Tickets). Aus mit `WERKBANK_ROADMAP_AUTOSYNC=0`.
-- **„Für mich offen“:** offene `- Knut:`-Zeilen, PRs, bei denen ich laut „wer ist dran“ dran bin, eigene Tickets
-  ohne/über Datum; für Admins die **Fragen des Vault-Syncs** („Offen/unklar“ des letzten Protokollabschnitts, der
+- **„Wartet auf dich“** (Heute, früher „Für mich offen“): offene `- Knut:`-Zeilen, PRs, bei denen ich laut „wer ist dran“
+  dran bin (eigene Tickets ohne/über Datum stehen jetzt in „Tickets, die Pflege brauchen“); für Admins die **Fragen des Vault-Syncs** („Offen/unklar“ des letzten Protokollabschnitts, der
   welche hat) mit ✅ Ja / ✖️ Nein und der **Entwurf „Woran wir gerade arbeiten“**.
 - **Ja** schreibt `~/.cache/vault-sync/freigaben.md` und startet einen Sync (höchstens alle 5 min); der Sync führt
   genau diesen Punkt aus und meldet „erledigt: S…“ im Protokoll, dann verschwindet die Frage. **Nein** blendet sie aus.
 - **Entwurf:** der Morgenlauf (vor 11 Uhr) schreibt `0-Overview/entwurf-woran-wir-arbeiten.md`; „Übernehmen“ ersetzt
   im Hub nur den Block zwischen `<!-- werkbank:woran-wir-arbeiten -->` und `<!-- /werkbank:woran-wir-arbeiten -->`.
 - Env: `WERKBANK_VAULT_SYNC_DIR`, `WERKBANK_VAULT_SYNC_SCRIPT`, `WERKBANK_ROADMAP_FEED`, `WERKBANK_ROADMAP_AUTOSYNC`.
+
+## Heute und Review-Schlange (09.10.2026)
+
+Plan: `docs/plan-heute-review-schlange.md` (Schnitt 1 von `docs/plan-roadmap-zu-agent.md`, Council HOLD 0,78, K1–K8).
+
+- **`#/` ist „Heute“**, eine Liste „bei mir“ in fester Reihenfolge: **Wartet auf dein Review** (fertige Agentenläufe
+  mit Gemacht / Nicht gemacht / Risiko, DoD ✓ ◐ ✗ mit Beleg, Artefakte; Passt · Nacharbeit · Chat öffnen) →
+  **Wartet auf dich** (Rückfragen der Agenten mit Fragetext und ✅/✖️, hängende Läufe mit „Weiter“, stille Läufe,
+  Sync-Fragen, Entscheidungen, PRs) → **Dein Tag** (Blöcke aus Mein Tag) → **Tickets, die Pflege brauchen** (Hygiene).
+  Ohne Anmeldung bleibt die Einrichtung die erste Seite; sie steht jetzt unter `#/einrichtung`.
+- Board, Sprint, Mein Tag und Roadmap zeigen statt eigener Listen eine Zeile **„Bei mir: n offen → Heute“**.
+- **Navigation:** Heute (n) · Roadmap · Board · Sprint · Wissen; der Zähler kommt aus `GET /api/today/count`
+  (Seitenwechsel und alle 60 s; liest nur Mongo und zwei Vault-Dateien, fragt die Brücke höchstens alle 30 s).
+- **Fertig-Marke:** Agenten rufen am Ende das Werkbank-MCP-Werkzeug `review_ready` (Klasse `read`) mit Gemacht /
+  Nicht gemacht / Risiko und DoD je Punkt. Die Unterhaltung kommt aus `WERKBANK_CONV_ID` (setzt die Brücke), nie aus
+  den Argumenten. Die Brücke liefert je Unterhaltung das Rundenende (`ok · max_turns · timeout · error · limit ·
+  frage_verfallen`) und den Fragetext einer offenen Rückfrage.
+- **Eimer** (`web/server/review.ts`): läuft > wartet auf ja > Marke > hängt (Rundenende ≠ ok) > still (ohne Marke
+  normal geendet). Nur Läufe mit der neuen Anweisung (`reviewable`) und höchstens 14 Tage alt; geprüfte fallen raus.
+- **Aktionen:** `POST /api/runs/:id/passt` (geprüft; Jira-Kommentar nur nach Vorschau + `confirm`, einmal),
+  `POST /api/runs/:id/reply` (Nacharbeit, ✅/✖️, Weiter → als nächste Nachricht in **denselben** LibreChat-Chat;
+  nur eigene, nicht laufende Läufe; nie im Trockenlauf).
+- **Roadmap:** Standard ist der **Überblick** je Thema (Wartet auf dich → In Arbeit → Als Nächstes → Erledigt mit
+  „geprüft“-Datum), „Alle Zustände ▾“ klappt die Swimlane auf. Tabs Überblick · Rangliste · PR-Review · Pflege ⋯
+  (Konsistenz, Ordnung); alte Adressen (`#/roadmap/kanban|entscheidungen|check|ordnung|prio`) gehen weiter.
+- Sichtprüfung isoliert: `SHOTS_MONGO=mongodb://127.0.0.1:<eigener mongod> node web/e2e/heute-shots.ts <ordner>`
+  (Web 3370, LibreChat-Nachbau 3380, Mock-Brücke 3390).
 
 ## Mehrere Claude-Konten je Person (06.10.2026)
 

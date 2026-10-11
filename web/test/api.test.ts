@@ -24,6 +24,7 @@ const DATA = join(tmp, 'data');
 const CREDS_KEY = randomBytes(32).toString('hex'), CREDS_IV = randomBytes(16).toString('hex');
 const INTERNAL = randomBytes(16).toString('hex'), REFRESH_SECRET = randomBytes(16).toString('hex'), JWT_SECRET = randomBytes(16).toString('hex');
 const lcChats: any[] = [];
+const lcMsgs = new Map<string, any[]>();
 const users = {
   a: { _id: new ObjectId(), email: 'anna@maxenergy.at', name: 'Anna Test', pw: 'pw-anna' },
   b: { _id: new ObjectId(), email: 'bernd@maxenergy.at', name: 'Bernd Test', pw: 'pw-bernd' },
@@ -53,13 +54,24 @@ before(async () => {
     if (req.url === '/health') { res.end('OK'); return; }
     let b = ''; for await (const c of req) b += c;
     // Nachbau von LibreChats „Nachricht senden“: Zugangstoken prüfen, Unterhaltung anlegen, Zug an die Brücke.
+    if (req.url?.startsWith('/api/messages/')) {
+      const { verifyJwt } = await import('../server/auth.ts');
+      const p = verifyJwt(String(req.headers.authorization ?? '').replace(/^Bearer /, ''), JWT_SECRET);
+      if (!p?.id) { res.writeHead(401); res.end('{}'); return; }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify([...(lcMsgs.get(decodeURIComponent(req.url.slice('/api/messages/'.length))) ?? [])].reverse()));
+      return;
+    }
     if (req.url === '/api/agents/chat/Claude%20Code') {
       const { verifyJwt } = await import('../server/auth.ts');
       const p = verifyJwt(String(req.headers.authorization ?? '').replace(/^Bearer /, ''), JWT_SECRET);
       if (!p?.id) { res.writeHead(401); res.end('{}'); return; }
       const body = JSON.parse(b);
-      const conversationId = crypto.randomUUID();
+      // Mit conversationId: Fortsetzung einer bestehenden Unterhaltung (Antwort aus der Werkbank-Review-Karte).
+      const conversationId = body.conversationId ?? crypto.randomUUID();
       lcChats.push({ user: p.id, email: p.email, conversationId, body, ua: req.headers['user-agent'] });
+      const t = Date.now();
+      lcMsgs.set(conversationId, [...(lcMsgs.get(conversationId) ?? []), { messageId: body.messageId, parentMessageId: body.parentMessageId, createdAt: new Date(t).toISOString() }, { messageId: 'antwort-' + body.messageId, parentMessageId: body.messageId, createdAt: new Date(t + 1).toISOString() }]);
       fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/chat/completions`, { method: 'POST', headers: { authorization: 'Bearer mock-token', 'content-type': 'application/json', 'x-librechat-user-id': p.id, 'x-librechat-conversation-id': conversationId, 'x-librechat-user-email': p.email },
         body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: body.text }] }) }).then((r) => r.text()).catch(() => {});
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -1024,4 +1036,79 @@ test('Roadmap-Automatik: „Für mich offen“, Ja/Nein auf Sync-Fragen nur für
   assert.equal((await anna.req('/api/roadmap/mine')).j.draft, null, 'übernommener Entwurf erscheint nicht wieder');
   writeFileSync(hubPath, hubBefore);
   await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+});
+
+test('Heute + Review-Schlange: Rückfrage in der Karte, review_ready, Nacharbeit, Passt mit Kommentar nur nach Bestätigung', async () => {
+  const st = await anna.req('/api/board/issue/PM-340/agent', { body: { note: 'schreib eine Notiz dazu' } });
+  assert.equal(st.status, 200, JSON.stringify(st.j));
+  const conv = lcChats.at(-1).conversationId;
+  const runState = async (want: string) => {
+    for (let i = 0; i < 80; i++) { const r = await anna.req(`/api/board/runs/${st.j.id}`); if (r.j.status === want) return r.j; await new Promise((x) => setTimeout(x, 75)); }
+    throw new Error('Lauf erreicht nicht: ' + want);
+  };
+  await runState('wartet auf ja');
+  let t = await anna.req('/api/today');
+  assert.equal(t.status, 200);
+  let item = t.j.queue.find((x: any) => x.id === st.j.id);
+  assert.equal(item.bucket, 'frage');
+  assert.match(item.question, /notiz\.md/, 'Fragetext an der Karte (K4)');
+  assert.ok(t.j.count >= 1);
+  assert.equal(typeof (await anna.req('/api/today/count')).j.count, 'number');
+
+  // Fremde Läufe: weder antworten noch abhaken (K3).
+  assert.equal((await bernd.req(`/api/runs/${st.j.id}/reply`, { body: { kind: 'antwort', text: 'ja' } })).status, 403);
+  assert.equal((await bernd.req(`/api/runs/${st.j.id}/passt`, { body: {} })).status, 403);
+
+  // ✖️ aus der Karte → in DENSELBEN Chat, Eltern = neueste Nachricht.
+  const n0 = lcChats.length;
+  const rep = await anna.req(`/api/runs/${st.j.id}/reply`, { body: { kind: 'antwort', text: 'nein' } });
+  assert.equal(rep.status, 200, JSON.stringify(rep.j));
+  const sent = lcChats.at(-1);
+  assert.equal(lcChats.length, n0 + 1);
+  assert.equal(sent.body.conversationId, conv);
+  assert.equal(sent.body.text, 'nein');
+  assert.match(sent.body.parentMessageId, /^antwort-/, 'Antwort hängt an der neuesten Nachricht');
+  await runState('fertig');
+  // Normal beendet, ohne Marke → „wartet auf dich“ (still), nicht Review (K1).
+  await anna.req(`/api/board/runs/${st.j.id}`);
+  item = (await anna.req('/api/today')).j.queue.find((x: any) => x.id === st.j.id);
+  assert.equal(item?.bucket, 'still');
+  assert.equal((await anna.req(`/api/runs/${st.j.id}/reply`, { body: { kind: 'antwort', text: 'ja' } })).status, 409, 'Rückfrage nicht mehr offen');
+
+  // review_ready: Pflichtformat, nur eigene Unterhaltung.
+  const full = { gemacht: 'Notiz angelegt', nicht_gemacht: 'nichts', risiko: 'keins', dod: [{ punkt: 'Notiz im Vault', stand: 'ja', beleg: 'olaf/x.md' }, { punkt: 'Jira-Kommentar', stand: 'nein' }], artefakte: ['olaf/x.md'] };
+  assert.equal((await internal('/internal/review-ready', { userId: String(users.a._id), conv, ...full, risiko: '' })).status, 400);
+  assert.equal((await internal('/internal/review-ready', { userId: String(users.a._id), conv, ...full, dod: [] })).status, 400);
+  assert.equal((await internal('/internal/review-ready', { userId: String(users.a._id), conv: 'fremder-chat', ...full })).status, 404);
+  assert.equal((await internal('/internal/review-ready', { userId: String(users.b._id), conv, ...full })).status, 404, 'Bernd hat in Annas Chat keinen Lauf');
+  assert.equal((await internal('/internal/review-ready', { userId: String(users.a._id), conv, ...full }, 'falsch')).status, 403);
+  const ok = await internal('/internal/review-ready', { userId: String(users.a._id), conv, ...full });
+  assert.equal(ok.status, 200, JSON.stringify(ok.j));
+  assert.equal(ok.j.key, 'PM-340');
+  item = (await anna.req('/api/today')).j.queue.find((x: any) => x.id === st.j.id);
+  assert.equal(item.bucket, 'review');
+  assert.deepEqual(item.review.dod.map((d: any) => d.stand), ['ja', 'nein']);
+
+  // Nacharbeit: Notiz in denselben Chat, Lauf raus aus der Review-Schlange, nach neuer Marke wieder drin.
+  const na = await anna.req(`/api/runs/${st.j.id}/reply`, { body: { kind: 'nacharbeit', text: 'bitte noch den Link ergänzen' } });
+  assert.equal(na.status, 200, JSON.stringify(na.j));
+  assert.equal(lcChats.at(-1).body.text, 'Nacharbeit nach Review: bitte noch den Link ergänzen');
+  assert.equal(lcChats.at(-1).body.conversationId, conv);
+  item = (await anna.req('/api/today')).j.queue.find((x: any) => x.id === st.j.id);
+  assert.notEqual(item?.bucket, 'review');
+  await runState('fertig');
+  assert.equal((await internal('/internal/review-ready', { userId: String(users.a._id), conv, ...full })).status, 200);
+
+  // Passt mit Kommentar: Vorschau schreibt nichts, Bestätigen genau einmal (K6), danach raus aus der Schlange.
+  const w0 = jira.writes.length;
+  const pre = await anna.req(`/api/runs/${st.j.id}/passt`, { body: { comment: true } });
+  assert.equal(pre.j.needsConfirm, true);
+  assert.match(pre.j.text, /^Von Anna geprüft/);
+  assert.equal(jira.writes.length, w0, 'Vorschau schreibt nichts');
+  assert.equal((await anna.req(`/api/runs/${st.j.id}/passt`, { body: { comment: true, confirm: true } })).status, 200);
+  assert.equal((await anna.req(`/api/runs/${st.j.id}/passt`, { body: { comment: true, confirm: true } })).status, 200);
+  assert.equal(jira.writes.length, w0 + 1, 'Doppelklick: genau ein Kommentar');
+  assert.equal(jira.writes.at(-1).type, 'comment');
+  assert.equal(jira.writes.at(-1).key, 'PM-340');
+  assert.ok(!(await anna.req('/api/today')).j.queue.some((x: any) => x.id === st.j.id), 'geprüft → raus');
 });

@@ -9,7 +9,7 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { classify, statusLine, prepLine, confirmQuestion, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
+import { classify, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
@@ -29,6 +29,7 @@ type QueryFn = (p: { prompt: string; options: Record<string, any> }) => AsyncIte
 interface Pending {
   resolve: (answer: string) => void;
   timer: NodeJS.Timeout;
+  question?: string;   // was freigegeben werden soll (Statuszeile), für die Review-Karte der Werkbank
 }
 
 interface Live {
@@ -168,7 +169,16 @@ export function lockFor(mine: { readonly: boolean; mode: PermissionMode; pending
 }
 
 // Status je Unterhaltung (Idee: coder/agentapi „running/stable“, CloudCLI Sitzungsliste).
-const lastSeen = new Map<string, { at: number; turns: number; title: string; written?: string[] }>();
+// end: wie die letzte Runde endete (ok · max_turns · timeout · error · limit · frage_verfallen) — die Werkbank zeigt
+// alles außer „ok“ als „hängt“, nie als „bereit zum Review“ (Plan Heute + Review-Schlange, K1).
+// roundAt: Beginn der letzten echten Runde (eine Antwort auf eine Rückfrage setzt dieselbe Runde fort).
+const lastSeen = new Map<string, { at: number; turns: number; title: string; written?: string[]; end?: string; roundAt?: number }>();
+
+/** Rundenende merken; ein „ok“ überschreibt kein früheres Problem derselben Runde (z. B. verfallene Rückfrage). */
+function markEnd(live: { key: string }, end: string) {
+  const s = lastSeen.get(live.key);
+  if (s && (end !== 'ok' || !s.end)) s.end = end;
+}
 
 /** Sitzungen einer Person: läuft / wartet auf „ja“ / bereit — neueste zuerst. */
 export function sessionsOf(userId: string) {
@@ -180,6 +190,7 @@ export function sessionsOf(userId: string) {
     return {
       conv: k.slice(prefix.length), status: l ? (l.pending ? 'wartet auf ja' : 'läuft') : 'bereit',
       lastActivity: seen?.at ?? null, turns: seen?.turns ?? null, title: seen?.title ?? '', resumable: !!sessionMap[k], written: seen?.written ?? [],
+      end: l ? null : seen?.end ?? null, question: l?.pending?.question ?? null, roundAt: seen?.roundAt ?? seen?.at ?? null,
     };
   }).sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0)).slice(0, 30);
 }
@@ -268,6 +279,7 @@ function attach(live: Live, sink: Sink) {
   if (live.turnTimer) clearTimeout(live.turnTimer);
   live.turnTimer = setTimeout(() => {
     log('turn timeout', { conv: live.key });
+    markEnd(live, 'timeout');
     emitStatus(live, '⏱️ Zeitlimit erreicht — ich breche diesen Schritt ab. Schreib einfach weiter, die Unterhaltung bleibt erhalten.');
     live.abort.abort();
   }, cfg.turnTimeoutMs);
@@ -429,6 +441,7 @@ function handleMessage(live: Live, msg: any) {
       const u = msg.usage ?? {};
       live.usage.input += (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
       live.usage.output += u.output_tokens ?? 0;
+      if (!live.rateLimited) markEnd(live, msg.subtype === 'error_max_turns' ? 'max_turns' : msg.subtype !== 'success' || msg.is_error ? 'error' : 'ok');
       if (live.rateLimited) { /* Meldung bzw. Kontowechsel in handleTurn */ }
       else if (msg.subtype === 'error_max_turns') emitStatus(live, `⏹️ Maximale Schrittzahl (${cfg.maxTurns}) erreicht. Schreib „weiter“, dann mache ich dort weiter.`);
       else if (msg.subtype !== 'success' || msg.is_error) emitStatus(live, /authenticat|401|token/i.test(String(msg.result ?? '')) ? `⚠️ ${AUTH_HINTS.authentication_failed}` : '⚠️ Bei der Ausführung ist ein Fehler aufgetreten.');
@@ -511,12 +524,14 @@ function makeGuard(live: Live) {
       live.pending = {
         resolve,
         timer: setTimeout(() => resolve('\u0000timeout'), cfg.confirmTimeoutMs),
+        question: questionText(tool, toolInput),
       };
       detach(live);
     });
     if (live.pending) { clearTimeout(live.pending.timer); live.pending = null; }
     if (answer === '\u0000timeout') {
       log('confirm timeout', { conv: live.key });
+      markEnd(live, 'frage_verfallen');
       return decide('deny', 'Keine Antwort auf die Rückfrage — nicht ausgeführt.');
     }
     const a = parseAnswer(answer);
@@ -567,8 +582,9 @@ const CONTINUE_PROMPT = 'Mach bitte genau dort weiter, wo du unterbrochen wurdes
 export async function handleTurn(req: TurnRequest): Promise<void> {
   const key = `${safeId(req.userId)}:${safeId(req.convId)}`;
   const seen = lastSeen.get(key);
-  lastSeen.set(key, { at: Date.now(), turns: (seen?.turns ?? 0) + 1, title: seen?.title || req.prompt.replace(/\s+/g, ' ').slice(0, 60), written: seen?.written });
   const existing = lives.get(key);
+  const now = Date.now();
+  lastSeen.set(key, { at: now, turns: (seen?.turns ?? 0) + 1, title: seen?.title || req.prompt.replace(/\s+/g, ' ').slice(0, 60), written: seen?.written, roundAt: existing?.pending ? seen?.roundAt ?? now : now });
 
   // 1) Antwort auf eine offene Rückfrage in dieser Unterhaltung.
   if (existing?.pending) {
@@ -718,6 +734,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         const next = queue[i + 1];
         if (!next) {
           log('kontingent erschöpft', { conv: key, konto: acct.id, konten: accounts.length });
+          markEnd(live, 'limit');
           emitStatus(live, `⚠️ ${AUTH_HINTS.rate_limit}`);
           break;
         }
@@ -758,6 +775,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       const text = redact(String(e?.message ?? e));
       log('turn error', { conv: key, error: text.slice(0, 300) });
       if (live.rateLimited || isRateLimitText(text)) { live.rateLimited = live.rateLimited ?? { resetsAt: live.rateLimitReset }; return; }
+      markEnd(live, 'error');
       const auth = /auth|401|token|login/i.test(text);
       emitStatus(live, auth ? `⚠️ ${AUTH_HINTS.authentication_failed}` : '⚠️ Die Claude-Sitzung ist unerwartet beendet worden. Schreib einfach noch einmal.');
     }

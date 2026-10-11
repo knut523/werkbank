@@ -17,7 +17,8 @@ import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCr
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
-import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns } from './agent.ts';
+import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
+import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles } from './sprint.ts';
@@ -845,7 +846,7 @@ function roadmapSpecs(local?: Map<string, { ziel: string | null }>) {
 }
 
 on('GET', /^\/api\/roadmap$/, async (req, res) => {
-  await needUser(req);
+  const u = await needUser(req);
   const idx = vaultIdx();
   const im = await issueMap();
   const rm = roadmap(idx, ROADMAP_BASE);
@@ -860,7 +861,7 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
         const prs = prRefs(text);
         const n = idx.notes.get(sp.path)!;
         const tickets = n.tickets.map((k) => ({ key: k, status: im.get(k)?.status ?? null, summary: im.get(k)?.summary ?? null }));
-        const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text), jiraKey: n.fm.jira != null && String(n.fm.jira).trim() !== '' && String(n.fm.jira) !== '[]' };
+        const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text), verified: n.fm['last-verified'] ? String(n.fm['last-verified']).slice(0, 10) : null, jiraKey: n.fm.jira != null && String(n.fm.jira).trim() !== '' && String(n.fm.jira) !== '[]' };
         byName.set(n.name, info);
         for (const pr of prs) specPrs.set(pr, [...(specPrs.get(pr) ?? []), n.name]);
         for (const d of ds) if (d.open) decisions.push({ ...d, path: sp.path, spec: n.name, title: sp.title, topic: t.name, state, hash: info.hash });
@@ -912,7 +913,11 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
   const livePr = (pr: string) => { const l = gh.map.get(pr); return l ? { pr, conflict: l.mergeable === 'CONFLICTING', draft: l.isDraft, review: l.reviewDecision, turn: l.turn.who } : { pr, closed: ghOk }; };
   const specList = [...byName.values()].map((x) => ({ ...x, prLive: x.prs.map(livePr) }));
   const insights = roadmapInsights(specList, ranking, { sprintTickets });
+  // Laufende Agenten je Ticket (Überblick: „In Arbeit“).
+  const agents: Record<string, string> = {};
+  for (const r of await wb().collection('agent_runs').find({ status: { $in: ['läuft', 'wartet auf ja'] } }, { projection: { key: 1, status: 1 } }).toArray() as any[]) if (r.key && agents[r.key] !== 'wartet auf ja') agents[r.key] = r.status;
   send(res, 200, {
+    agents, admin: u.role === 'ADMIN',
     ...insights, kanbanStates: KANBAN_STATES, sprint: cur ? { id: cur.id, date: cur.date, tickets: sprintTickets.size } : null,
     base: ROADMAP_BASE, states: rm.states, overview: rm.overview,
     topics: rm.topics.map((t) => ({ name: t.name, overview: t.overview, states: Object.fromEntries(Object.entries(t.states).map(([st, specs]) => [st, specs.map((sp) => byName.get(idx.notes.get(sp.path)!.name))])) })),
@@ -990,8 +995,8 @@ async function tryStartSync(): Promise<boolean> {
   return ok;
 }
 
-on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
-  const u = await needUser(req);
+/** „Wartet auf dich“ (früher „Für mich offen“ auf der Roadmap, jetzt auf „Heute“): PRs, Sync-Fragen, Entwurf, Tickets. */
+async function mineFor(u: User, { write = true } = {}) {
   const me = firstName(u).toLowerCase();
   const prs = ((await wb().collection('github_prs').find({}, { projection: { _id: 0 } }).toArray()) as any[])
     .filter((p) => String(p.turn?.who ?? '').toLowerCase().split(/,\s*/).includes(me))
@@ -1005,7 +1010,7 @@ on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
   const admin = u.role === 'ADMIN';
   let questions: any[] = [], draft: any = null, section: string | null = null, pendingApprovals: any[] = [];
   if (admin) {
-    writeApprovals().catch((e) => log('roadmap-freigaben', { error: String(e?.message ?? e).slice(0, 160) }));   // nicht warten: GET bleibt lesend schnell
+    if (write) writeApprovals().catch((e) => log('roadmap-freigaben', { error: String(e?.message ?? e).slice(0, 160) }));   // nicht warten: GET bleibt lesend schnell
     const protocol = readVault(SYNC_PROTOCOL);
     const qs = parseSyncQuestions(protocol);
     section = qs[0]?.section ?? null;
@@ -1028,8 +1033,127 @@ on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
       if (st?.hash !== hash) draft = { hash, body: draftBody(text), path: WORK_DRAFT, hubHasMarkers: replaceWorkBlock(readVault(HUB), 'x') !== null };
     }
   }
-  send(res, 200, { me: firstName(u), admin, prs, tickets, questions, pendingApprovals, section, draft, autosync: roadmapAutosync(), queued: [...roadmapQueue.pending], syncRunning: syncLocked() });
+  return { me: firstName(u), admin, prs, tickets, questions, pendingApprovals, section, draft, autosync: roadmapAutosync(), queued: [...roadmapQueue.pending], syncRunning: syncLocked() };
+}
+
+on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => send(res, 200, await mineFor(await needUser(req))));
+
+// --- „Heute“ und Review-Schlange (docs/plan-heute-review-schlange.md) ---
+
+// Brücke höchstens alle 30 s je Person fragen (K8): Zähler und Seite dürfen oft laden.
+const runsRefreshedAt = new Map<string, number>();
+async function refreshMine(u: User, force = false) {
+  if (!force && Date.now() - (runsRefreshedAt.get(u.id) ?? 0) < 30_000) return;
+  runsRefreshedAt.set(u.id, Date.now());
+  await refreshChatRuns({ userId: u.id }).catch((e) => log('läufe nachziehen', { error: String(e?.message ?? e).slice(0, 120) }));
+}
+
+async function myQueue(u: User) {
+  await refreshMine(u);
+  const runs = await wb().collection('agent_runs').find({ userId: u.id, mode: 'chat', startedAt: { $gte: new Date(Date.now() - 30 * 864e5) } }).sort({ startedAt: -1 }).limit(200).toArray();
+  const im = await issueMap();
+  const vaultPrefix = cfg.vaultDir + '/';
+  return reviewQueue(runs).map(({ r, bucket }) => ({
+    id: String(r._id), key: r.key, summary: im.get(r.key)?.summary ?? null, bucket, url: r.url ?? null,
+    review: markValid(r) ? r.review ?? null : null, reviewReadyAt: markValid(r) ? r.reviewReadyAt : null,
+    question: r.status === 'wartet auf ja' ? r.question ?? null : null,
+    end: r.endReason ?? null, endText: r.endReason ? END_TEXT[r.endReason] ?? r.endReason : null,
+    startedAt: r.startedAt, endedAt: r.endedAt ?? null, rework: r.rework ?? null, commentedAt: r.commentedAt ?? null,
+    // Geschriebene Dateien: Vault-Notizen als Pfad im Vault (Link ins Wissen), sonst nur der Dateiname.
+    written: (r.written ?? []).slice(-8).map((f: string) => f.startsWith(vaultPrefix) ? { vault: f.slice(vaultPrefix.length) } : { name: f.split('/').pop() }),
+  }));
+}
+
+/** Zähler für die Navigation: alles, was etwas von der Person will (laufende Agenten nicht). */
+async function todayCount(u: User, queue?: any[], mine?: any) {
+  const q = queue ?? await myQueue(u);
+  const m = mine ?? await mineFor(u, { write: false });   // Zähler (alle 60 s): nur lesen, nie freigaben.md schreiben
+  const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
+  const hyg = h.items.filter((i: any) => !h.snoozed.includes(i.key)).length;
+  return q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + hyg;
+}
+
+const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+on('GET', /^\/api\/today$/, async (req, res) => {
+  const u = await needUser(req);
+  const [queue, mine] = await Promise.all([myQueue(u), mineFor(u)]);
+  const today = vienna().date;
+  const im = await issueMap();
+  const day = ((await tbCol().find({ userId: u.id, date: today }).sort({ start: 1 }).toArray()) as any[])
+    .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
+  send(res, 200, { queue, mine, day, today, count: await todayCount(u, queue, mine), dryRun: dryRun() });
 });
+
+on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
+
+async function ownRun(u: User, id: string) {
+  const run: any = await wb().collection('agent_runs').findOne({ _id: id as any });
+  if (!run) throw new HttpError(404, 'Lauf nicht gefunden.');
+  if (run.userId !== u.id) throw new HttpError(403, 'Das ist nicht dein Agentenlauf.');
+  return run;
+}
+
+// „Passt“: als geprüft markieren; mit comment erst Vorschau, nach confirm genau ein Jira-Kommentar (E2: nie den Status).
+on('POST', /^\/api\/runs\/([0-9a-f-]{36})\/passt$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const run = await ownRun(u, m[1]);
+  const runs = wb().collection('agent_runs');
+  if (b.comment === true) {
+    const text = reviewComment(firstName(u), run.review);
+    if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: `Kommentar auf ${run.key}: „${text}“`, text });
+    // Idempotent (K6): ein zweiter Klick schreibt keinen zweiten Kommentar.
+    const claim = await runs.updateOne({ _id: run._id, commentedAt: null }, { $set: { commentedAt: new Date() } });
+    if (claim.modifiedCount) {
+      try { await jiraWrite(u, () => writeJira(u, run.key, [{ type: 'comment', text }])); }
+      catch (e) { await runs.updateOne({ _id: run._id }, { $set: { commentedAt: null } }); throw e; }
+      log('review passt + kommentar', { user: u.id, key: run.key });
+    }
+  }
+  await runs.updateOne({ _id: run._id }, { $set: { reviewedAt: new Date(), reviewedBy: u.email } });
+  send(res, 200, { ok: true, commented: b.comment === true });
+});
+
+// Antwort in DENSELBEN Chat: Nacharbeit (Notiz, Lauf zurück), Antwort auf eine Rückfrage (ja/nein), „weiter“ nach „hängt“.
+on('POST', /^\/api\/runs\/([0-9a-f-]{36})\/reply$/, async (req, res, m) => {
+  const u = await needUser(req);
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
+  const b = await body(req);
+  await ownRun(u, m[1]);
+  const kind = String(b.kind ?? '');
+  if (!['nacharbeit', 'antwort', 'weiter'].includes(kind)) throw new HttpError(400, 'kind ist nacharbeit, antwort oder weiter.');
+  const text = kind === 'weiter' ? 'weiter' : String(b.text ?? '').trim().slice(0, 4000);
+  if (!text) throw new HttpError(400, kind === 'nacharbeit' ? 'Schreib kurz, was nachzuarbeiten ist.' : 'Leere Antwort.');
+  await refreshChatRuns({ _id: m[1] });
+  const run: any = await wb().collection('agent_runs').findOne({ _id: m[1] as any });
+  if (run.status === 'läuft') throw new HttpError(409, 'Der Agent arbeitet gerade — warte, bis er fertig ist oder fragt.');
+  if (kind === 'antwort' && run.status !== 'wartet auf ja') throw new HttpError(409, 'Die Rückfrage ist nicht mehr offen — Seite neu laden.');
+  await replyInChat(u, run.conv, kind === 'nacharbeit' ? `Nacharbeit nach Review: ${text}` : text);
+  await wb().collection('agent_runs').updateOne({ _id: run._id }, {
+    $set: { status: 'läuft', question: null, endReason: null, ...(kind === 'nacharbeit' ? { reviewReadyAt: null, rework: { text: text.slice(0, 500), at: new Date() } } : {}) },
+  });
+  runsRefreshedAt.delete(u.id);
+  log('review antwort', { user: u.id, key: run.key, kind });
+  send(res, 200, { ok: true, url: run.url ?? null });
+});
+
+// review_ready (Werkbank-MCP): Fertig-Marke am neuesten Chat-Lauf der Person in DIESER Unterhaltung (Bedingung 5).
+on('POST', /^\/internal\/review-ready$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const conv = String(b.conv ?? '');
+  if (!conv) throw new HttpError(400, 'Keine Unterhaltung bekannt — review_ready gilt nur in einem Werkbank-Chat.');
+  const run: any = await wb().collection('agent_runs').findOne({ userId: u.id, conv, mode: 'chat' }, { sort: { startedAt: -1 } });
+  if (!run) throw new HttpError(404, 'Kein Werkbank-Agentenlauf zu diesem Chat — nichts gesetzt (die Review-Schlange kennt nur Läufe, die vom Board aus gestartet wurden).');
+  const p = parseReview(b);
+  if (!p.review) throw new HttpError(400, p.error!);
+  await wb().collection('agent_runs').updateOne({ _id: run._id }, { $set: { reviewReadyAt: new Date(), review: p.review, reviewedAt: null } });
+  runsRefreshedAt.delete(u.id);
+  log('review bereit', { user: u.id, key: run.key, dod: p.review.dod.length });
+  send(res, 200, { ok: true, key: run.key });
+});
+
 
 on('POST', /^\/api\/roadmap\/question$/, async (req, res) => {
   const u = await needAdmin(req);
