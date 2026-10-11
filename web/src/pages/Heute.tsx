@@ -126,7 +126,7 @@ export function Heute({ cfg }: { cfg: Config }) {
   const orchOpen = d.orchOpen ?? 0;
   // Die Zahl an „Wartet auf dich“ = die Plakette „Heute (n)“: offene Vault-Entscheidungen (auch bereinigt noch Hunderte,
   // ein Rückstand) stehen darunter mit eigener Zahl — der bereinigten —, zählen aber nicht mit (Release-Audit 11.10.2026:
-  // 445 neben einer Plakette 2; bereinigt 11.10.: 465 Zeilen → 292 offen, docs/plan-heute-fragen-aktuell.md).
+  // 445 neben einer Plakette 2; bereinigt 11.10.: 465 Zeilen → 294 offen, docs/plan-heute-fragen-aktuell.md).
   const nMine = waitingRuns.length + mineCount(d.mine, []) + orchOpen;
   const showWaiting = nMine > 0 || decisions.length > 0 || (vq?.cleanup.length ?? 0) > 0;
   const reload = () => t.reload();
