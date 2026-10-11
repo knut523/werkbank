@@ -385,6 +385,10 @@ test('Dokumente am Ticket: Vault-Notizen mit Key, Vorschlag bestätigen (jira:-F
 test('Roadmap: Rangliste mit Gründen, Kanban, PRs je Spec, offene Entscheidungen beantworten, Rang-Vorschlag', async () => {
   const r = await anna.req('/api/roadmap');
   assert.equal(r.status, 200);
+  // Heute bekommt die bereinigte Liste (docs/plan-heute-fragen-aktuell.md); die Roadmap-Seite weiter alle Zeilen.
+  const h = await anna.req('/api/roadmap/heute');
+  assert.deepEqual([h.status, h.j.raw, h.j.open.length, h.j.cleanup.length, h.j.duplicates], [200, r.j.decisions.length, 1, 0, 0]);
+  assert.deepEqual([h.j.open[0].spec, h.j.open[0].state, h.j.open[0].sinceKind, h.j.open[0].line], ['service-view-kundenakte', '3-Plan', 'geprüft', r.j.decisions[0].line]);
   assert.deepEqual(r.j.ranking.map((x: any) => [x.rank, x.spec, x.folderState]), [[1, 'service-view-kundenakte', '3-Plan'], [2, 'service-view-mailprotokoll', '1-Backlog']]);
   assert.match(r.j.ranking[0].why, /an einem Ort/);
   assert.deepEqual(r.j.ranking[0].tickets.map((t: any) => t.key), ['PM-321'], 'Spec ↔ Jira');

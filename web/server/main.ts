@@ -46,6 +46,7 @@ import { isMine, resolveIdentity, vienna } from './hygiene.ts';
 import { ObjectId } from 'mongodb';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
 import { ansetzenMode, specGate, sprintEnd, ticketDraft, localDuplicates, dupJql, simJira, liveJira, runAnsetzen, specTicketState, specSlug, view as ansetzenView, draftHashOf, addSimField, DEFAULT_WORKSTREAM, type AnsetzenJira, type Dup } from './ansetzen.ts';
+import { collectDecisions, todayQuestions, todayPayload } from './fragen.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, type GoalNode } from './goals.ts';
 
@@ -865,13 +866,22 @@ function roadmapSpecs(local?: Map<string, { ziel: string | null }>) {
   return out;
 }
 
+// „Wartet auf dich“ (Heute): nur heute offene Vault-Fragen, jede einmal; überholte zum Aufräumen
+// (docs/plan-heute-fragen-aktuell.md). Eigener Endpunkt, damit Heute nicht die ganze Roadmap samt GitHub lädt.
+on('GET', /^\/api\/roadmap\/heute$/, async (req, res) => {
+  await needUser(req);
+  const idx = vaultIdx();
+  const { decisions, texts } = collectDecisions(idx, readVault, ROADMAP_BASE);
+  send(res, 200, todayPayload(todayQuestions(decisions, { texts, fm: (p) => idx.notes.get(p)?.fm, today: vienna().date })));
+});
+
 on('GET', /^\/api\/roadmap$/, async (req, res) => {
   const u = await needUser(req);
   const idx = vaultIdx();
   const im = await issueMap();
   const rm = roadmap(idx, ROADMAP_BASE);
   const byName = new Map<string, any>();
-  const decisions: any[] = [];
+  const { decisions } = collectDecisions(idx, readVault, ROADMAP_BASE);
   const specPrs = new Map<string, string[]>();
   for (const t of rm.topics) {
     for (const [state, specs] of Object.entries(t.states)) {
@@ -884,14 +894,8 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
         const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text), verified: n.fm['last-verified'] ? String(n.fm['last-verified']).slice(0, 10) : null, jiraKey: n.fm.jira != null && String(n.fm.jira).trim() !== '' && String(n.fm.jira) !== '[]' };
         byName.set(n.name, info);
         for (const pr of prs) specPrs.set(pr, [...(specPrs.get(pr) ?? []), n.name]);
-        for (const d of ds) if (d.open) decisions.push({ ...d, path: sp.path, spec: n.name, title: sp.title, topic: t.name, state, hash: info.hash });
       }
     }
-  }
-  // Übersichtsseiten und Register haben auch „- Knut:“-Zeilen.
-  for (const o of [...rm.overview, ...rm.topics.filter((t) => t.overview).map((t) => ({ path: t.overview!, title: idx.notes.get(t.overview!)?.title ?? t.overview! }))]) {
-    const text = readVault(o.path);
-    for (const d of parseDecisions(text)) if (d.open) decisions.push({ ...d, path: o.path, spec: idx.notes.get(o.path)?.name, title: o.title, topic: o.path.includes('/0-Overview/') ? 'Übersicht' : o.path.split('/').at(-2), state: 'Übersicht', hash: hashText(text) });
   }
   const prio = readVault(`${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`);
   const reasons = parseReasons(prio);

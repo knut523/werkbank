@@ -34,7 +34,8 @@ async function waitFor(url: string) {
 
 const mongo = await MongoClient.connect(process.env.SHOTS_MONGO || 'mongodb://127.0.0.1:27017');
 try {
-  cpSync(new URL('../test/fixtures/vault', import.meta.url).pathname, VAULT, { recursive: true });
+  // SHOTS_VAULT=<Ordner>: eine Kopie dieses Vaults statt des Fixture-Vaults (die Instanz arbeitet nur auf der Kopie).
+  cpSync(process.env.SHOTS_VAULT || new URL('../test/fixtures/vault', import.meta.url).pathname, VAULT, { recursive: true, filter: (src) => !/\/\.git(\/|$)/.test(src) });
   await mongo.db(LCDB).collection('users').insertOne(knut);
   const msgs = new Map<string, any[]>();
   lc = createServer(async (req, res) => {
@@ -104,6 +105,14 @@ try {
     await p.getByTestId('review-queue').waitFor();
     await p.waitForTimeout(600);
     await shot('01-heute');
+    // Offene Vault-Entscheidungen (docs/plan-heute-fragen-aktuell.md): Block, dann „Aufräumen“ aufgeklappt.
+    const vd = p.getByTestId('vault-decisions');
+    if (await vd.count()) {
+      await vd.scrollIntoViewIfNeeded();
+      await vd.screenshot({ path: join(OUT, `${name}-09-vault-fragen.png`) });
+      const cl = vd.getByTestId('cleanup');
+      if (await cl.count()) { await cl.locator('summary').click(); await cl.screenshot({ path: join(OUT, `${name}-10-aufraeumen-offen.png`) }); }
+    }
     if (name === 'handy') { await p.getByRole('button', { name: /Heute/ }).first().click(); await shot('02-menue', false); await p.keyboard.press('Escape'); await p.goto(B + '/#/'); }
     await p.getByTestId('review-queue').getByRole('button', { name: 'Nacharbeit' }).click();
     await shot('03-nacharbeit-offen', false);
