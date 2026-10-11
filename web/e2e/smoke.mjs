@@ -20,13 +20,19 @@ import { startJiraMock } from '../test/jira-mock.ts';
 
 const WEB = new URL('..', import.meta.url).pathname;
 const WB = join(WEB, '..');
-const RT = join(WB, '.runtime');
+const RT = process.env.E2E_RT || join(WB, '.runtime');   // LibreChat-Installation (bcrypt) und Bridge-Zustand
+// Gegen eine isolierte Instanz (E2E_ISO=1): E2E_LC, E2E_MONGO, E2E_BRIDGE, E2E_MEILI, E2E_ENV_FILE, E2E_WEB_PORT,
+// E2E_JIRA_PORT. Die Instanz muss schon mit BRIDGE_MOCK=1, BRIDGE_MOCK_JIRA_BASE=http://127.0.0.1:<E2E_JIRA_PORT>/rest/api/3
+// und den Testkonten in BRIDGE_ALLOWED_EMAILS laufen; dann startet das Skript nichts neu. Ohne E2E_ISO: wie bisher Live.
 const OUT = join(RT, 'e2e', 'web');
 mkdirSync(OUT, { recursive: true });
-const LC = 'http://127.0.0.1:3080';
-const PORT = 3072;
+const ISO = process.env.E2E_ISO === '1';
+const LC = process.env.E2E_LC || 'http://127.0.0.1:3080';
+const BRIDGE = process.env.E2E_BRIDGE || 'http://127.0.0.1:3090';
+const MEILI = process.env.E2E_MEILI || 'http://127.0.0.1:7700';
+const PORT = Number(process.env.E2E_WEB_PORT || 3072);
 const W = `http://127.0.0.1:${PORT}`;
-const env = Object.fromEntries(readFileSync(join(WB, '.env.local'), 'utf8').split('\n').filter((l) => /^[A-Z_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).replace(/^"|"$/g, '')]));
+const env = Object.fromEntries(readFileSync(process.env.E2E_ENV_FILE || join(WB, '.env.local'), 'utf8').split('\n').filter((l) => /^[A-Z_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).replace(/^"|"$/g, '')]));
 const tag = randomBytes(3).toString('hex');
 // Eigene Test-Adresse je Lauf für LibreChats Anmelde-Limit (TRUST_PROXY=1 wertet X-Forwarded-For aus).
 const XFF = { 'x-forwarded-for': `10.99.${randomBytes(1)[0]}.${randomBytes(1)[0]}` };
@@ -68,7 +74,7 @@ async function lcToken(u) {
   return (await r.json());
 }
 
-const mongo = await MongoClient.connect('mongodb://127.0.0.1:27017');
+const mongo = await MongoClient.connect(process.env.E2E_MONGO || 'mongodb://127.0.0.1:27017');
 const lcdb = mongo.db('LibreChat');
 
 async function cleanupUsers() {
@@ -97,17 +103,19 @@ try {
   await registerOrKeep(U1); await registerOrKeep(U2);
   const t1 = await lcToken(U1), t2 = await lcToken(U2);
   const id1 = t1.user._id ?? t1.user.id, id2 = t2.user._id ?? t2.user.id;
-  jira = await startJiraMock(0);
+  jira = await startJiraMock(Number(process.env.E2E_JIRA_PORT || 0));
   log('Werkbank-Web (3070) vorübergehend auch für die Testkonten freigeben');
-  execFileSync(join(WB, 'scripts/werkbank.sh'), ['restart-web'], { env: { ...process.env, WERKBANK_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}` }, stdio: 'ignore' });
+  if (!ISO) execFileSync(join(WB, 'scripts/werkbank.sh'), ['restart-web'], { env: { ...process.env, WERKBANK_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}` }, stdio: 'ignore' });
   log('Brücke → Mock-Modus');
   // Der Mock spielt den Atlassian-MCP gegen den Jira-Nachbau nach (Schreiben vom Board geht über den MCP).
-  execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'on'], { env: { ...process.env, BRIDGE_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}`, BRIDGE_MOCK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3` }, stdio: 'ignore' });
+  if (!ISO) execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'on'], { env: { ...process.env, BRIDGE_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}`, BRIDGE_MOCK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3` }, stdio: 'ignore' });
   web = spawn(process.execPath, ['server/main.ts'], {
     cwd: WEB,
     env: {
       ...process.env, WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_INSECURE_COOKIES: '1', WERKBANK_VAULT_DIR: VAULT,
-      WERKBANK_DB: `werkbank_e2e_${tag}`, LIBRECHAT_URL: LC, LIBRECHAT_PUBLIC_URL: LC, BRIDGE_URL: 'http://127.0.0.1:3090',
+      MONGO_URI_WERKBANK: process.env.E2E_MONGO || 'mongodb://127.0.0.1:27017', MEILI_HOST: MEILI,
+      WERKBANK_TEAM_FEATURES: 'heute,roadmap,board,sprint,wissen,timebox,ziele,skills,dateien,orchestrator,ansetzen',   // Funktion prüfen, nicht die Freigabe
+      WERKBANK_DB: `werkbank_e2e_${tag}`, LIBRECHAT_URL: LC, LIBRECHAT_PUBLIC_URL: LC, BRIDGE_URL: BRIDGE,
       BRIDGE_STATE_DIR: join(RT, 'bridge'), WERKBANK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3`,
       WERKBANK_ALLOWED_EMAILS: `${U1.email},${U2.email}`, CREDS_KEY: env.CREDS_KEY, CREDS_IV: env.CREDS_IV,
       WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), MEILI_MASTER_KEY: env.MEILI_MASTER_KEY, WERKBANK_MEILI_INDEX: `werkbank_e2e_${tag}`,
@@ -395,8 +403,9 @@ try {
     await shot(a, '16-chat-anhang');
     convId = a.url().match(/\/c\/([0-9a-f-]{36})/)?.[1] ?? '';
     assert.ok(convId, 'Chat-ID aus der URL');
-    const dir = join(RT, 'bridge', 'scratch', String(id1), 'anhaenge', convId);
-    assert.ok(existsSync(dir) && readdirSync(dir).some((n) => n.endsWith('.png')), 'Datei liegt im Arbeitsverzeichnis');
+    // Seit den parallelen Chats hat jeder neue Chat seinen eigenen Ordner (scratch/<person>/chats/<chat>).
+    const dirs = [join(RT, 'bridge', 'scratch', String(id1), 'chats', convId, 'anhaenge', convId), join(RT, 'bridge', 'scratch', String(id1), 'anhaenge', convId)];
+    assert.ok(dirs.some((dir) => existsSync(dir) && readdirSync(dir).some((n) => n.endsWith('.png'))), 'Datei liegt im Arbeitsverzeichnis');
   });
 
   await step('Chat: Skill-Vorlage gibt ihre Vorgabe an die Sitzung', async () => {
@@ -515,12 +524,12 @@ try {
   web?.kill();
   await jira?.close();
   log('Werkbank-Web → Freigabeliste wie vorher');
-  try { execFileSync(join(WB, 'scripts/werkbank.sh'), ['restart-web'], { stdio: 'ignore' }); } catch { console.error('Web-App konnte nicht neu gestartet werden: scripts/werkbank.sh restart-web'); }
+  if (!ISO) try { execFileSync(join(WB, 'scripts/werkbank.sh'), ['restart-web'], { stdio: 'ignore' }); } catch { console.error('Web-App konnte nicht neu gestartet werden: scripts/werkbank.sh restart-web'); }
   log('Brücke → wieder echt');
-  try { execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'off'], { stdio: 'ignore' }); } catch (e) { console.error('Brücke konnte nicht zurückgeschaltet werden: scripts/werkbank.sh bridge-mock off'); }
+  if (!ISO) try { execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'off'], { stdio: 'ignore' }); } catch (e) { console.error('Brücke konnte nicht zurückgeschaltet werden: scripts/werkbank.sh bridge-mock off'); }
   if (!process.env.E2E_KEEP) await cleanupUsers();
   await mongo.db(`werkbank_e2e_${tag}`).dropDatabase();
-  try { await fetch(`http://127.0.0.1:7700/indexes/werkbank_e2e_${tag}`, { method: 'DELETE', headers: { authorization: `Bearer ${env.MEILI_MASTER_KEY}` } }); } catch {}
+  try { await fetch(`${MEILI}/indexes/werkbank_e2e_${tag}`, { method: 'DELETE', headers: { authorization: `Bearer ${env.MEILI_MASTER_KEY}` } }); } catch {}
   await mongo.close();
   rmSync(tmp, { recursive: true, force: true });
   console.log('\nErgebnis');

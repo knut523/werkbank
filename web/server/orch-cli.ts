@@ -124,7 +124,7 @@ async function main() {
       const opts = options.map((o) => { const [label, ...rest] = o.split('::'); return { label: label.trim(), consequence: rest.join('::').trim() }; });
       const j = await call('questions/ask', { title: str('title'), context: str('context'), recommendation: str('recommend'), options: opts, strand: str('strand') ?? null, link: str('link') ?? null, plan: str('plan') ?? null });
       if (flags.json) return console.log(JSON.stringify(j, null, 1));
-      console.log(`Rückfrage angelegt: ${j.id} — erscheint in der Werkbank unter Roadmap → „Für mich offen“. Antwort: orch questions get ${j.id}`);
+      console.log(`Rückfrage angelegt: ${j.id} — erscheint in der Werkbank unter Heute → „Wartet auf dich“ und zählt in „Heute (n)“. Antwort: orch questions get ${j.id}`);
       return;
     }
     case 'questions': {

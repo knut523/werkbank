@@ -122,7 +122,10 @@ export function Heute({ cfg }: { cfg: Config }) {
   const waitingRuns = d.queue.filter((x: any) => ['frage', 'haengt', 'still'].includes(x.bucket));
   const running = d.queue.filter((x: any) => x.bucket === 'laeuft');
   const orchOpen = d.orchOpen ?? 0;
-  const nMine = waitingRuns.length + mineCount(d.mine, decisions) + orchOpen;
+  // Die Zahl an „Wartet auf dich“ = die Plakette „Heute (n)“: offene Vault-Entscheidungen (oft Hunderte, ein Rückstand)
+  // stehen darunter, zählen aber nicht mit (Release-Audit 11.10.2026: 445 neben einer Plakette 2).
+  const nMine = waitingRuns.length + mineCount(d.mine, []) + orchOpen;
+  const showWaiting = nMine > 0 || decisions.length > 0;
   const reload = () => t.reload();
   const first = cfg.user?.name.split(' ')[0] ?? '';
 
@@ -143,7 +146,7 @@ export function Heute({ cfg }: { cfg: Config }) {
         {review.map((it: any) => <RunCard key={it.id} it={it} onDone={reload} />)}
       </section>}
 
-      {nMine > 0 && <section data-testid="waiting">
+      {showWaiting && <section data-testid="waiting">
         <h2>Wartet auf dich <span className="chip">{nMine}</span></h2>
         {orchOpen > 0 && <OrchQuestions onChange={reload} />}
         {waitingRuns.map((it: any) => <RunCard key={it.id} it={it} onDone={reload} />)}

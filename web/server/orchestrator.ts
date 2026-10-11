@@ -285,7 +285,7 @@ export async function reviewOrch(u: User, id: string, note = '') {
 // Notification senden — für alle Dinge, wo du wirklich Input brauchst“) ----------
 //
 // Der Orchestrator legt eine Entscheidungsfrage an (Titel, Kontext, Optionen mit Folgen, Empfehlung, Bezug zu Strang/
-// Plan). Sie erscheint in der Werkbank unter „Für mich offen“ (Roadmap) mit Zähler in der Navigation; Knut antwortet
+// Plan). Sie erscheint in der Werkbank unter Heute → „Wartet auf dich“ und zählt in „Heute (n)“; Knut antwortet
 // dort (Option und/oder Freitext); der Orchestrator liest die Antwort über die CLI. Regel: nur, was wirklich Knuts
 // Entscheidung ist — nichts, was der Orchestrator selbst klären, nachlesen oder sicher entscheiden kann.
 

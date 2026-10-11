@@ -1091,7 +1091,7 @@ async function todayCount(u: User, queue?: any[], mine?: any) {
   const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
   const hyg = h.items.filter((i: any) => !h.snoozed.includes(i.key)).length;
   const orch = (await listQuestions(u, { open: true }).catch(() => [])).length;   // Rückfragen des Orchestrators
-  return q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + hyg + orch;
+  return q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + (m.pendingApprovals?.length ?? 0) + (m.draft ? 1 : 0) + hyg + orch;
 }
 
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;

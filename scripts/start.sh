@@ -8,6 +8,8 @@
 # Auto-Modus (Knut, 06.10.2026): für die Konten in BRIDGE_AUTO_EMAILS (Vorgabe: Knut) entscheidet ein Klassifikator über
 # Bash/Edits im eigenen Arbeitsordner; Vault/Jira bleiben „ja“, GitHub gesperrt. Not-Aus:
 # BRIDGE_PERMISSION_MODE=default scripts/werkbank.sh restart → exakt das bisherige Verhalten.
+# Parallel (Release 11.10.2026, gemessen ≈ 420 MB je laufendem Chat, 16 GiB Workspace): 4 Züge je Person; LibreChat
+# CONCURRENT_MESSAGE_MAX=5 (librechat/.env) bleibt eins darüber. Wartende Rückfragen enden nach BRIDGE_IDLE_REAP_S (900).
 set -euo pipefail
 source "$(dirname "$0")/env.sh"
 
@@ -49,7 +51,8 @@ start claude-bridge 3090 "$WB/claude-bridge" env BRIDGE_PORT=3090 BRIDGE_HOST=12
   BRIDGE_CLAUDE_CONFIG_SHARED="${BRIDGE_CLAUDE_CONFIG_SHARED-knut.peters@maxenergy.at}" \
   BRIDGE_PERMISSION_MODE="${BRIDGE_PERMISSION_MODE-auto}" \
   BRIDGE_AUTO_SCOPE="${BRIDGE_AUTO_SCOPE-voll}" \
-  BRIDGE_AUTO_EMAILS="${BRIDGE_AUTO_EMAILS-knut.peters@maxenergy.at}" node src/server.ts
+  BRIDGE_AUTO_EMAILS="${BRIDGE_AUTO_EMAILS-knut.peters@maxenergy.at}" \
+  BRIDGE_MAX_PARALLEL_CHATS="${BRIDGE_MAX_PARALLEL_CHATS-4}" node src/server.ts
 start librechat 3080 "$RT/librechat" env CONFIG_PATH="$WB/librechat/librechat.yaml" node api/server/index.js
 # Freigabe wie bei der Brücke: dieselbe Liste, solange die Sitzungen als VM-Nutzer laufen.
 start werkbank-web 3070 "$WB/web" env WERKBANK_PORT=3070 WERKBANK_HOST=127.0.0.1 BRIDGE_STATE_DIR="$RT/bridge" \

@@ -74,7 +74,10 @@ function useWerkbankState(dep: string) {
     return () => { alive = false; clearInterval(t); window.removeEventListener('werkbank-questions', load); };
   }, [features, dep]);
   const show = (id: string) => !!features && features[id] !== false && (id in features || id === 'einrichtung');
-  return { show, count };
+  // Neu im Team (noch nichts freigegeben): die Einrichtung als einziger Eintrag in der Leiste, sonst findet man sie nur
+  // im Kontomenü und der erste Chat endet mit „Kein API-Key gefunden“ (Release-Audit 11.10.2026).
+  const onlySetup = !!features && !Object.values(features).some(Boolean);
+  return { show, count, onlySetup };
 }
 
 function WerkbankNav() {
@@ -83,7 +86,7 @@ function WerkbankNav() {
   const closeOnMobile = useCloseSidebarOnMobile();
   useGermanByDefault();
   const current = pathname.startsWith('/wb/') ? pathname.split('/')[2] : '';
-  const { show, count } = useWerkbankState(pathname);
+  const { show, count, onlySetup } = useWerkbankState(pathname);
   const more = MORE.filter((p) => show(p.id));
   const go = (id: string) => {
     // Klick auf die offene Seite = neu laden (wie früher, als jeder Klick den iframe neu lud).
@@ -97,7 +100,7 @@ function WerkbankNav() {
     <>
       <div className="mx-2 border-b border-border-light" />
       <div className="flex flex-col gap-1" role="group" aria-label="Werkbank">
-        {WERKBANK_PAGES.filter((p) => p.nav && show(p.id)).map((p) => (
+        {WERKBANK_PAGES.filter((p) => (p.nav && show(p.id)) || (onlySetup && p.id === 'einrichtung')).map((p) => (
           <TooltipAnchor
             key={p.id}
             description={p.label}
@@ -114,7 +117,7 @@ function WerkbankNav() {
               >
                 <p.icon className="h-5 w-5" aria-hidden="true" />
                 {p.id === 'heute' && count > 0 && (
-                  <span data-testid="werkbank-nav-heute-count" aria-hidden="true" className="absolute -right-0.5 -top-0.5 min-w-[16px] rounded-full bg-yellow-400 px-1 text-[10px] font-bold leading-4 text-gray-900">{count > 99 ? '99+' : count}</span>
+                  <span data-testid="werkbank-heute-count" aria-hidden="true" className="absolute -right-0.5 -top-0.5 min-w-[16px] rounded-full bg-yellow-400 px-1 text-[10px] font-bold leading-4 text-gray-900">{count > 99 ? '99+' : count}</span>
                 )}
               </Button>
             }

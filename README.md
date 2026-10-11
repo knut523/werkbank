@@ -747,7 +747,7 @@ scripts/orch show <id>       # letzte Nachricht ganz
 scripts/orch send <id> --text "weiter"      # Folgenachricht in denselben Chat
 scripts/orch review <id>     # geprüft → aus der offenen Liste (list --all zeigt alle)
 scripts/orch ask --title "Flex: Pilot-Region?" --context "…" --option "Nord :: schneller Start" --option "Süd :: größerer Markt" \
-  --recommend "Nord" --strand <id>          # Rückfrage an Knut → Werkbank, Roadmap → „Rückfragen des Orchestrators“
+  --recommend "Nord" --strand <id>          # Rückfrage an Knut → Werkbank, Heute → „Wartet auf dich“
 scripts/orch questions list --open · scripts/orch questions get <id> · scripts/orch questions withdraw <id>
 ```
 
@@ -764,8 +764,8 @@ scripts/orch questions list --open · scripts/orch questions get <id> · scripts
   überschreibt, kommt am Git-Teil vorbei — dann bleiben Muster und Klassifikator.
 - **Status** aus dem ausdrücklichen Zustand der Brücke (Zug läuft, Ausgang `ok/limit/timeout/error/busy/…`, Neustart
   mittendrin) und bei normalem Ende aus der Zeile `Status: fertig | braucht Antwort | blockiert` der Antwort.
-- **Rückfragen an Knut** nur für echte Entscheidungen, immer mit Empfehlung. Knut antwortet unter Roadmap →
-  „Rückfragen des Orchestrators“ (Zähler an „Roadmap“ in der Werkbank-Navigation).
+- **Rückfragen an Knut** nur für echte Entscheidungen, immer mit Empfehlung. Knut antwortet unter Heute →
+  „Wartet auf dich“ (zählt in „Heute (n)“, auch an der Sonne in der LibreChat-Leiste).
 - **Grenzen:** LibreChat `CONCURRENT_MESSAGE_MAX` (jetzt 5) und Brücke `BRIDGE_MAX_PARALLEL_CHATS` (3) laufende Züge je
   Konto; ein Zug höchstens 40 Schritte / 15 min, dann `waiting` mit „`send <id> weiter`“.
 - **Zweite Instanz zum Testen:** `scripts/isoliert.sh start|stop|status` (Web 3170, LibreChat 3180, Brücke 3190, Mongo

@@ -12,7 +12,7 @@ registration:
 
 interface:
   customWelcome: |
-    Willkommen in der OLAF-Werkbank – hier arbeitet Claude Code mit unseren Skills, dem Vault und Jira, unter deinem eigenen Claude-Konto.
+    Willkommen in der OLAF-Werkbank – hier arbeitet Claude Code mit unseren Skills, dem Vault und Jira, unter deinem eigenen Claude-Konto. Neu hier? Zuerst links 🚀 „Werkbank-Einrichtung“: Claude einmal verbinden.
     Zum Verbinden einmal im Terminal `claude setup-token` ausführen und den Token in der Werkbank unter „Einrichtung“ eintragen (Link unten) — oder oben im Modell-Menü bei „Claude Code“ über das Zahnrad (Ablauf: „nie“).
     Wissen, Board, Sprint, Skills und Dateien: Links unten in der Fußzeile. Vorlagen für Skills (Spec schreiben, Council, Koordinator, Jira-Ticket, Sprint-Review, Service-Fall, Vault aufräumen) im Modell-Menü.
   modelSelect: true
