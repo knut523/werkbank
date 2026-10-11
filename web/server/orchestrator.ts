@@ -309,7 +309,7 @@ export interface AskInput { title: string; context: string; options?: { label: s
   key?: string | null;
   /** Herkunft; für Automaten (`drift`) höchstens AUTO_PRO_TAG neue Fragen je Tag (429). */
   quelle?: string | null;
-  g0?: { kriterien: string[]; ergebnis: string } | null }
+  g0?: { kriterien: string[]; ergebnis: string; belege?: string[] } | null }
 
 export const AUTO_PRO_TAG = 5;
 
@@ -406,6 +406,11 @@ export function g0Repos(cwd: string | null, env = process.env): string[] {
   return [...out];
 }
 
+/** Kennungen der Treffer-Belege (PR-Link, sonst SHA, sonst Repo:Pfad) — woran eine Antwort gebunden ist. */
+export const belegIds = (r: VorbauErgebnis) => r.belege.filter((b) => b.wirkung === 'treffer').map((b) => b.pr ?? b.sha ?? `${b.repo}:${b.pfad ?? b.branch ?? b.text}`);
+/** Dasselbe aus einem Fragetext (Rückfragen von drift über `orch ask`, ohne strukturierte Belege). */
+export const belegIdsAusText = (t: string) => [...t.matchAll(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+|\b[0-9a-f]{40}\b|[\w.-]+:(?:plans|docs)\/[\w.-]+\.md/g)].map((m) => m[0]);
+
 /** Slug aus --slug oder dem Plan (`spec:`, sonst **Spec:**, sonst Plan-Slug). */
 export function g0Slug(slug: string | null | undefined, plan: string | null | undefined): string {
   if (slug && String(slug).trim()) return String(slug).trim();
@@ -422,11 +427,21 @@ export async function g0Tor(u: User, o: { slug: string | null; plan: string | nu
   const mk = (go: boolean, text: string, q: string | null): G0Tor => ({ go, slug, text, ergebnis: r, question: q, public: { ergebnis: r.ergebnis, text: g0Text(r), belege: r.belege.map((b) => ({ text: b.text, pr: b.pr, sha: b.sha })), kriterien: r.kriterien, stopp: r.stopp?.grund ?? null, question: q } });
   if (r.ergebnis === 'frei' || r.ergebnis === 'fortsetzen') return mk(true, g0Text(r), null);
   if (o.nachts && r.ergebnis === 'stopp') return mk(false, `G0 nachts nicht prüfbar (${r.stopp!.grund}) — Nachtbau aus. ${r.stopp!.text}`, null);
-  const da: any = await questions().findOne({ userId: u.id, keyActive: key });
+  let da: any = await questions().findOne({ userId: u.id, keyActive: key });
+  // Eine Antwort gilt nur für die Belege, die Knut gesehen hat: neue Treffer-Belege → die alte Frage ist überholt,
+  // es gibt eine neue (sonst würde ein altes „trotzdem bauen“ einen später aufgetauchten fremden PR durchwinken).
+  if (da?.status === 'beantwortet' && r.ergebnis === 'treffer') {
+    const gesehen = new Set<string>(da.g0?.belege ?? belegIdsAusText(String(da.context ?? '')));
+    if (belegIds(r).some((x) => !gesehen.has(x))) {
+      await questions().updateOne({ _id: da._id, keyActive: key }, { $unset: { keyActive: '' }, $set: { ueberholtAt: new Date() } });
+      da = null;
+    }
+  }
   if (da?.status === 'beantwortet') {
     const opt = da.answer?.option ?? '';
     const qid = String(da._id);
-    if (opt === OHNE_PR && r.stopp?.grund === 'pr-api' && !o.nachts) {
+    const h = vienna().hour;
+    if (opt === OHNE_PR && r.stopp?.grund === 'pr-api' && !o.nachts && h >= 6 && h < 22) {   // nur tagsüber
       r = await pruefe({ slug, planDatei: o.plan, repos, aufrufer: o.aufrufer, ohnePr: true });
       if (r.ergebnis === 'frei' || r.ergebnis === 'fortsetzen') { protokolliere({ art: 'override', slug, knopf: opt, aufrufer: o.aufrufer, frage: qid }); return mk(true, `${g0Text(r)}\nKnut hat „${OHNE_PR}“ gewählt (Rückfrage ${qid}, protokolliert).`, qid); }
       return mk(false, `G0: auch ohne PR-Prüfung ein Treffer, Rückfrage ${qid} ist aber schon beantwortet — kein Bau.\n${g0Text(r)}`, qid);
@@ -447,7 +462,7 @@ export async function g0Tor(u: User, o: { slug: string | null; plan: string | nu
     recommendation: treffer
       ? (r.belege.some((b) => b.wirkung === 'treffer' && (b.art === 'baut' || b.art === 'autor')) ? 'auf Vorhandenem aufsetzen — erst mit dem anderen PR abstimmen' : 'Spec nachziehen/abräumen — die Arbeit liegt schon vor')
       : r.stopp!.knopf ? `${OHNE_PR}, wenn es eilt — sonst warten, bis die PR-API wieder antwortet` : 'warten, bis das neue Lesetoken da ist; „trotzdem bauen“ nur, wenn es eilt',
-    g0: { kriterien: r.kriterien, ergebnis: r.ergebnis },
+    g0: { kriterien: r.kriterien, ergebnis: r.ergebnis, belege: belegIds(r) },
   }).catch((e: any) => { if (e.status === 409) return null; throw e; });
   return mk(false, `G0 ${treffer ? 'Treffer' : 'Stopp'} — kein Bau. Rückfrage ${q?.id ?? key} in der Werkbank (Heute → Wartet auf dich).\n${g0Text(r)}`, q?.id ?? null);
 }

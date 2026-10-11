@@ -351,6 +351,13 @@ test('orch start --code: ohne Slug 400; G0-Treffer → kein Start, eine Rückfra
   assert.ok(p.some((e) => e.art === 'knopf' && e.slug === 'kohorte-doppelt' && e.knopf === 'trotzdem bauen'));
   assert.ok(p.some((e) => e.art === 'override' && e.slug === 'kohorte-doppelt'));
   await until(s.id, ['done', 'waiting', 'failed']);
+  // Die Antwort gilt nur für die gesehenen Belege: ein später aufgetauchter fremder PR → neue Rückfrage, kein Start.
+  g0Api.offen.push({ number: 79, title: 'kohorte-doppelt zweiter Versuch', body: '', url: 'https://github.com/WirStrom1/olaf-admin/pull/79', headRefName: 'feat/kohorte-zwei', headRefOid: 'c'.repeat(40), author: { login: 'Kurama07a' }, files: { nodes: [] } });
+  const neu = await orch(['start', '--title', 'Kohorte bauen', '--cwd', join(ROOT, 'admin-b'), '--code', '--shared', '--slug', 'kohorte-doppelt', '--prompt', 'bauen']);
+  assert.match(neu.err, /G0 Treffer — kein Bau/); assert.match(neu.err, /pull\/79/);
+  const alle = JSON.parse((await orch(['questions', 'list', '--json'])).out).filter((q: any) => q.key === 'kohorte-doppelt#G0');
+  assert.deepEqual(alle.map((q: any) => q.status).sort(), ['beantwortet', 'offen']);
+  g0Api.offen.pop();
 });
 
 test('orch start --code mit freiem Slug startet; der Chat trägt „G0: frei.“', async () => {

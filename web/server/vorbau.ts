@@ -195,6 +195,8 @@ export const G0_QUERY = `query($owner: String!, $name: String!) {
 // ponytail: je Repo die 100 zuletzt geänderten offenen und gemergten PRs. Ältere gemergte findet der Git-Pfad
 // (Merge-Commits „Merge pull request #N from …/<branch>“ und Squash-Titel „… (#N)“ auf origin/HEAD); mehr nur bei Bedarf.
 
+/** Nur echte SHAs gehen als git-Argument hinein (Werte aus der API). */
+const SHA = /^[0-9a-f]{40}$/;
 const mapPr = (repo: string, n: any): Pr => ({ repo, number: n.number, url: n.url, title: n.title ?? '', body: n.body ?? '', headRefName: n.headRefName ?? '', headRefOid: n.headRefOid ?? '', author: n.author?.login ?? null, files: (n.files?.nodes ?? []).map((x: any) => x.path), mergeCommit: n.mergeCommit?.oid ?? null });
 
 export interface Ziel { dir: string }
@@ -307,13 +309,13 @@ export async function gather(o: GatherOpts): Promise<{ fakten: Fakten } | { stop
       if (!r) return { stopp: { grund: 'pr-api', knopf: OHNE_PR, text: `GitHub kennt ${or.owner}/${or.name} nicht (oder das Lesetoken sieht es nicht).` } };
       for (const n of r.gemergt?.nodes ?? []) {
         const p = mapPr(repo, n);
-        p.aufInteg = !!p.mergeCommit && q(['merge-base', '--is-ancestor', p.mergeCommit, integ], top) !== null;
+        p.aufInteg = SHA.test(p.mergeCommit ?? '') && q(['merge-base', '--is-ancestor', p.mergeCommit, integ], top) !== null;
         f.gemergt = f.gemergt.filter((x) => !(x.repo === repo && x.number === p.number));
         f.gemergt.push(p);
       }
       for (const n of r.offen?.nodes ?? []) {
         const p = mapPr(repo, n);
-        p.headLokal = !!plan?.branch && p.headRefName === plan.branch && !!p.headRefOid && q(['merge-base', '--is-ancestor', p.headRefOid, `refs/heads/${plan.branch}`], top) !== null;
+        p.headLokal = !!plan?.branch && p.headRefName === plan.branch && SHA.test(p.headRefOid) && q(['merge-base', '--is-ancestor', p.headRefOid, `refs/heads/${plan.branch}`], top) !== null;
         f.offen!.push(p);
       }
     }

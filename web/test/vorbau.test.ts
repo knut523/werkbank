@@ -5,7 +5,7 @@
 // olaf-docs #49 = 578e8433).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, execFile } from 'node:child_process';
+import { execFileSync, execFile, spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
@@ -271,6 +271,24 @@ test('Nur Lesetoken: Fetch und PR-API über GIT_VW_READ=1, geerbter Helper und G
   assert.ok(log.every((l) => l === 'READ=1 ITEM='), log.join('|'));
   assert.ok(!existsSync(PUSH_LOG), 'Push-Helper wurde nie gefragt');
   assert.ok(apiAuth.length > 0 && apiAuth.every((a) => a === 'bearer ghp_LESETOKENtest'));
+});
+
+test('Fetch-Pfad: verlangt der Server eine Anmeldung, fragt git nur den Lese-Helper (GIT_VW_READ=1); 401 → Stopp ohne Knopf (DoD 17, 21)', async () => {
+  // Smart-HTTP-Nachbau, der immer 401 verlangt — in eigenem Prozess, weil G0 git synchron aufruft.
+  const auth = spawn(process.execPath, ['-e', "const s=require('http').createServer((q,r)=>{r.writeHead(401,{'www-authenticate':'Basic realm=\"gh\"'});r.end()});s.listen(0,'127.0.0.1',()=>console.log(s.address().port))"], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const port = await new Promise<string>((r) => auth.stdout!.once('data', (d) => r(String(d).trim())));
+  const dir = join(T, 'work', 'http-fetch');
+  git(T, ['clone', '-q', join(T, 'gh', 'WirStrom1', 'olaf-docs.git'), dir]);
+  git(dir, ['remote', 'set-url', 'origin', `http://127.0.0.1:${port}/WirStrom1/olaf-docs.git`]);
+  writeFileSync(HELPER_LOG, ''); rmSync(PUSH_LOG, { force: true });
+  try {
+    const r = await run('ganz-neue-sache', [dir]);
+    assert.equal(r.ergebnis, 'stopp'); assert.equal(r.stopp.grund, 'lesetoken'); assert.equal(r.stopp.knopf, null);
+    const log = readFileSync(HELPER_LOG, 'utf8').trim().split('\n');
+    assert.ok(log.length >= 2, `credential fill + fetch fragen den Helper: ${log.join('|')}`);
+    assert.ok(log.every((l) => l === 'READ=1 ITEM='), log.join('|'));
+    assert.ok(!existsSync(PUSH_LOG), 'geerbter Push-Helper nie gefragt');
+  } finally { auth.kill(); }
 });
 
 test('Echter git-credential-vaultwarden: G0 fragt nur das Lese-Item, nie das Push-Item (DoD 8, 21)', { skip: !existsSync(join(homedir(), 'bin', 'git-credential-vaultwarden')) && 'Helper nicht installiert' }, () => {
