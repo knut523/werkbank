@@ -86,6 +86,22 @@ test('verschoben und umbenannt: gleiche ID, Freigaben bleiben; geändert: Prüfs
   assert.equal(((await files().findOne({ _id: v._id })) as any).sha256, createHash('sha256').update('vertrag geändert').digest('hex'));
 });
 
+test('Kopie statt mv (neue Datei noch jung): Eintrag wartet, im nächsten Lauf Umzug mit Freigaben', async () => {
+  put('intern/c/kopie.txt', 'kopiert');
+  await sync();
+  const d = await byPath('intern/c/kopie.txt');
+  await files().updateOne({ _id: d._id }, { $set: { sharedWith: ['bernd'] } });
+  rmSync(join(DOCS, 'intern/c/kopie.txt'));
+  put('intern/d/kopie.txt', 'kopiert', false); // gerade kopiert: jünger als 2 min
+  const r = await sync();
+  assert.equal(r.geloescht, 0, 'nicht gelöscht, solange die junge Kopie wartet');
+  utimesSync(join(DOCS, 'intern/d/kopie.txt'), OLD, OLD);
+  const r2 = await sync();
+  assert.equal(r2.verschoben, 1);
+  const m: any = await files().findOne({ _id: d._id });
+  assert.equal(m.path, 'intern/d/kopie.txt'); assert.deepEqual(m.sharedWith, ['bernd']);
+});
+
 test('mehrdeutiger Umzug (zwei gleiche Dateien) → neu + gelöscht statt raten', async () => {
   put('intern/a/zwilling.txt', 'gleich');
   await sync();

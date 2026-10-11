@@ -633,6 +633,8 @@ test('Dateien vollständig: Ablage-Abgleich, Ordnerangaben, Teilen, keine Lösch
     assert.equal(l.j.mine.find((x: any) => x.name === 'notiz-ohne-ort.txt')?.eingang, true, '_eingang → Noch einzusortieren');
     assert.equal(l.j.mine.filter((x: any) => x.name === '2026-10-06_deck_plattform-stand_v5.pdf').length, 1);
     assert.equal((await anna.req('/api/files')).j.mine.filter((x: any) => x.kind === 'ablage').length, l.j.mine.filter((x: any) => x.kind === 'ablage').length, 'zweiter Abgleich: keine Doppelten');
+    // Die oben hochgeladene und abgelegte Datei (Plan 81) bekommt keinen zweiten Eintrag.
+    assert.equal(await mongo.db(DB).collection('files').countDocuments({ path: 'olaf/enlion/2026-10-02_angebot_enlion.pdf' }), 1);
 
     // Bernd sieht nichts, bis Anna teilt — dann Download ohne Ablageort.
     assert.equal((await bernd.req(`/api/files/${deck.id}/download`)).status, 404);

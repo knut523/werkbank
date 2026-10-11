@@ -89,7 +89,8 @@ async function doSync(owner: User, opts: { now?: number; root?: string }): Promi
     const other = list.find((d) => d.kind !== 'ablage');
     if (!other) continue;
     for (const d of list.filter((x) => x.kind === 'ablage')) {
-      await col.updateOne({ _id: other._id }, { $addToSet: { sharedWith: { $each: d.sharedWith ?? [] }, tickets: { $each: d.tickets ?? [] } } } as any);
+      const share = (d.sharedWith ?? []).filter((id: string) => id !== other.owner); // nie „mit sich selbst geteilt“
+      await col.updateOne({ _id: other._id }, { $addToSet: { sharedWith: { $each: share }, tickets: { $each: d.tickets ?? [] } } } as any);
       await col.deleteOne({ _id: d._id, kind: 'ablage' });
       gone.add(d._id); r.doppelt++;
     }
@@ -98,6 +99,9 @@ async function doSync(owner: User, opts: { now?: number; root?: string }): Promi
   const known = new Set(live.map((d) => d.path));
   const missing = live.filter((d) => !disk.has(d.path));
   const fresh = [...disk.entries()].filter(([p, st]) => !known.has(p) && now - st.mtimeMs >= SYNC_MIN_AGE_MS);
+  // Noch zu junge, unbekannte Dateien (Kopie statt `mv`): ein fehlender Eintrag gleicher Größe wartet auf den nächsten Lauf,
+  // statt mitsamt Freigaben gelöscht zu werden.
+  const youngSizes = new Set([...disk.entries()].filter(([p, st]) => !known.has(p) && now - st.mtimeMs < SYNC_MIN_AGE_MS).map(([, st]) => st.size));
 
   // Umzug: eine neue Datei mit gleicher Größe und Prüfsumme wie genau ein fehlender Eintrag (und umgekehrt).
   const moved = new Set<string>();
@@ -149,7 +153,7 @@ async function doSync(owner: User, opts: { now?: number; root?: string }): Promi
 
   // Gelöscht (nur Herkunft Ablage). Schutz: fehlt mehr als die Hälfte (und mehr als 20), ist eher die Ablage weg
   // (Mount, Rechte) als alles gelöscht — dann bleibt das Register, wie es ist.
-  const lost = missing.filter((d) => d.kind === 'ablage' && !moved.has(d._id));
+  const lost = missing.filter((d) => d.kind === 'ablage' && !moved.has(d._id) && !youngSizes.has(d.size));
   const total = live.filter((d) => d.kind === 'ablage').length;
   if (lost.length > 20 && lost.length * 2 > total) r.schutz = true;
   else for (const d of lost) { await col.deleteOne({ _id: d._id, kind: 'ablage', path: d.path }); r.geloescht++; }

@@ -189,3 +189,27 @@ Bindende Bedingungen:
 5. [verify] Screenshots Desktop + 390 px ohne waagrechtes Scrollen (Playwright misst `scrollWidth <= innerWidth`).
 6. [doc] Bericht nennt Restore-Hinweis (2), Löschschutz-Grenzfall (3) und die Strang-Trefferquote als ungemessen,
    solange die Live-Daten nicht lesbar sind.
+
+### Runde 2 (gebauter Stand) — PASS (0.75)
+
+Bedingungen 1–6 geprüft:
+1. `ablegen()` antwortet für Ablage-Dateien in Unterordnern mit 400, und die Oberfläche zeigt dort kein „Verschieben“
+   (API-Test).
+2. Löschen antwortet mit 403, es gibt keinen Knopf (API-Test).
+3. Der API-Test „Dateien vollständig“ ist grün.
+4. Die UX-Punkte sind umgesetzt (Bilder in `review-pakete/134-dateien-vollstaendig/screens/`).
+5. Die Screenshots zeigen auf Desktop und Handy nirgends waagrechtes Scrollen.
+6. Restore, Löschschutz und Strang-Trefferquote stehen im Bericht. Die Quote ist gemessen: 8 von 9 Strängen nennen ihr
+   Paket im Auftrag.
+
+Neue Funde aus dem Review-Pass, gleich behoben:
+- (a) Kopie statt `mv`: Die junge Kopie liegt im 2-min-Fenster, deshalb wurde der alte Eintrag mitsamt Freigaben
+  gelöscht. Jetzt wartet ein fehlender Eintrag, solange eine junge unbekannte Datei gleicher Größe existiert (Test
+  „Kopie statt mv“).
+- (b) Beim Zusammenführen von Doppelten wird niemand mehr mit sich selbst geteilt.
+- (c) In „Noch einzusortieren“ ließ sich nichts teilen. `_eingang` steht jetzt als eigener Ordner mit im Baum.
+
+Bleibt sichtbar (nicht blockierend):
+- Der Smoke-Test (`e2e/smoke.mjs`) ist auf die neue Ansicht umgestellt, aber nicht gelaufen, weil er ein laufendes
+  LibreChat braucht.
+- Der erste Live-Abgleich hasht einmal 275 MB.
