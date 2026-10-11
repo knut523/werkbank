@@ -311,7 +311,7 @@ test('Echter git-credential-vaultwarden: G0 fragt nur das Lese-Item, nie das Pus
   });
   assert.equal(out, 'ghp_READONLYfake');
   const items = readFileSync(bwLog, 'utf8').trim().split('\n');
-  assert.deepEqual([...new Set(items)], ['Github wirstrom read only']);
+  assert.deepEqual([...new Set(items)], ['View only github API']);
 });
 
 test('Ohne Lesetoken → Stopp ohne Knopf (DoD 17); Fetch scheitert → Stopp (DoD 7)', async () => {
