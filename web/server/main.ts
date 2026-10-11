@@ -19,7 +19,8 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, nachtbau, g0Blocked } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, nachtbau, g0Blocked, g0Repos } from './orchestrator.ts';
+import { pruefe, protokolliere, g0Text, g0Optionen, type VorbauErgebnis } from './vorbau.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName } from './ablage.ts';
@@ -1355,6 +1356,16 @@ async function linkSpec(sp: { path: string; text: string }, key: string, field: 
   return 'ok';
 }
 
+// G0 je Spec 3 Minuten zwischenspeichern: Vorschau und Klick sehen dieselben Belege, ohne zweimal zu holen.
+const g0Cache = new Map<string, { at: number; r: VorbauErgebnis }>();
+async function ansetzenG0(slug: string): Promise<VorbauErgebnis> {
+  const c = g0Cache.get(slug);
+  if (c && Date.now() - c.at < 180_000) return c.r;
+  const r = await pruefe({ slug, repos: g0Repos(null), aufrufer: 'ansetzen' });
+  g0Cache.set(slug, { at: Date.now(), r });
+  return r;
+}
+
 on('GET', /^\/api\/roadmap\/ansetzen$/, async (req, res, _m, url) => {
   await needAdmin(req);
   const path = url.searchParams.get('path') ?? '';
@@ -1378,6 +1389,20 @@ on('POST', /^\/api\/roadmap\/ansetzen$/, async (req, res) => {
   if (m.mode === 'aus') {
     if (b.confirm === true) throw new HttpError(403, m.problem ?? '„Agent ansetzen“ ist ausgeschaltet (WERKBANK_ANSETZEN).');
     return send(res, 200, base);
+  }
+  // G0 „Prüfung vor dem Bau“ (docs/plan-vorbau-check.md): Repos aus WERKBANK_VORBAU_REPOS; Treffer/Stopp → Knut wählt
+  // im Dialog einen Knopf (protokolliert). Ohne Lesetoken oder ohne Repos: Stopp ohne Knopf, nur „trotzdem bauen“.
+  if (gate.ok && !state?.key) {
+    const g0 = await ansetzenG0(specSlug(sp.path));
+    base.g0 = { ergebnis: g0.ergebnis, text: g0Text(g0), belege: g0.belege.map((x) => ({ text: x.text, pr: x.pr ?? null, sha: x.sha ?? null, wirkung: x.wirkung })), hinweise: g0.hinweise, stopp: g0.stopp ?? null, options: g0.ergebnis === 'treffer' || g0.ergebnis === 'stopp' ? g0Optionen(g0) : [] };
+    const stop = base.g0.options.length > 0;
+    if (b.confirm === true && stop) {
+      const choice = String(b.g0Choice ?? '');
+      if (!base.g0.options.some((o: any) => o.label === choice)) throw new HttpError(409, `G0 ${g0.ergebnis === 'stopp' ? 'Stopp' : 'Treffer'} — erst im Dialog entscheiden: ${base.g0.options.map((o: any) => `„${o.label}“`).join(', ')}.`);
+      protokolliere({ art: 'knopf', slug: specSlug(sp.path), knopf: choice, kriterien: g0.kriterien, ergebnis: g0.ergebnis, durch: u.email, aufrufer: 'ansetzen' });
+      if (choice === 'Spec nachziehen/abräumen') { g0Cache.delete(specSlug(sp.path)); return send(res, 200, { ...base, g0Abgebrochen: true }); }
+      b.note = `${String(b.note ?? '')}\n\nG0 vor dem Bau: Knut hat „${choice}“ gewählt.\n${base.g0.text}`.trim();
+    }
   }
   let jira: AnsetzenJira | null = null;
   let me: { accountId: string; displayName: string } | null = null;

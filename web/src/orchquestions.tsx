@@ -35,7 +35,7 @@ export function OrchQuestions({ onChange }: { onChange?: () => void }) {
       {!open.length && <p className="small muted">Keine offenen Rückfragen.</p>}
       {open.map((it) => (
         <div key={it.id} data-testid="orch-question" style={{ borderTop: '1px solid var(--line, #ddd)', paddingTop: 8, marginTop: 8 }}>
-          <div><b>{it.title}</b> <span className="tiny">· {String(it.createdAt).slice(0, 16).replace('T', ' ')} · {it.id}</span></div>
+          <div><b>{it.title}</b> {it.key && <span className="chip tiny-chip" title="Stabiler Schlüssel: diese Frage entsteht nur einmal">{/#G0$/.test(it.key) ? 'Prüfung vor dem Bau' : it.key}</span>} <span className="tiny">· {String(it.createdAt).slice(0, 16).replace('T', ' ')} · {it.id}</span></div>
           <p className="small" style={{ whiteSpace: 'pre-wrap', margin: '4px 0' }}>{it.context}</p>
           {(it.strand || it.link || it.plan) && <div className="small row" style={{ gap: 8, flexWrap: 'wrap' }}>
             {it.strand && <a href={it.strand.url} target="_top">💬 Strang: {it.strand.title}</a>}
