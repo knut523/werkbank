@@ -351,3 +351,102 @@ Kosten: 60 Weckungen × 200 Schritte haben kein Token-Budget; Prüfung in Woche 
   Leitstände schonen; Auffüllen > 16 KB machte aus Vault-git eine Rückfrage; maskierte Anführungszeichen im Git-Wert. Behoben in `5356873`.
   NOTES: Der interne Hauptschlüssel bleibt für jeden Bash-fähigen Prozess erreichbar (E6); ein Strang könnte über ein eigenes Skript
   einen Leitstand in Knuts Namen starten — erst ein Schlüssel je Sitzung schließt das.
+
+---
+
+# Teil B — Leitstand als die eine Oberfläche (Nachtrag Knut, 11.10.2026)
+
+> Knut, 11.10.2026 („ok“): „Der Leitstand soll die eine Oberfläche für den Orchestrator werden. (1) Übersicht aller
+> Orchestrator-Stränge mit Status (läuft/wartet/fertig/gestoppt), Zähler „automatisch fortgesetzt“, Link zum Chat und zum
+> Bericht (review-pakete/NNN-*/bericht.md); (2) Gruppierung je Lauf/Auftrag nach docs/plan-orchestrator-gruppen.md
+> (Lesezeichen „Orch · <Lauf>“ + zugeklappte Gruppe „3 Stränge · 2 fertig · 1 wartet“); (3) Stränge, die „fertig“ melden,
+> landen in der Review-Schlange auf „Heute“ — mit Bericht-Link, Freigabe/Nacharbeit wie bei Board-Läufen.“
+> Gleiche Regeln: lokal, kein Push, Council bis PASS. Ersetzt Plan 128 (Entwurf, `docs/plan-orchestrator-gruppen.md`) in dessen Schnitt 1–3.
+
+## B.0 Befund
+- Status je Strang gibt es schon: `listOrch` (`web/server/orchestrator.ts`) liefert `running | waiting | done | failed` mit Grund,
+  `autoWeiter` (Zähler), `url`, `reviewReady`, `excerpt`. Sichtbar nur in der CLI und (seit Teil A) über `orch_list` im Leitstand.
+- „Heute“ zeigt für Stränge nur die Zeile „automatisch fortgesetzt“ und Rückfragen; die Review-Schlange (`myQueue`, `main.ts`)
+  liest **nur** `agent_runs` (Board-Läufe). `review_ready` aus einem Strang setzt schon `reviewReadyAt` + `review` am Strang
+  (`/internal/review-ready`), aber niemand zeigt es an. „Passt“/„Nacharbeit“ gibt es nur für Board-Läufe
+  (`/api/runs/:uuid/passt|reply`, `RunCard` in `Heute.tsx`).
+- Berichte liegen nach Konvention unter `~/work/knut/review-pakete/NNN-<slug>/bericht.md`; ein Strang nennt den Pfad im Auftrag,
+  in `review_ready.artefakte` oder in seiner letzten Antwort. Die Werkbank kann ihn heute nicht anzeigen.
+- Lesezeichen: jeder Strang bekommt `Orchestrator` (`decorate`), keine Gruppe.
+
+## B.1 Schnitt
+**B1 — Lauf (Gruppe) je Strang.** `orch start --lauf NAME` / `orch_start {lauf}`; gespeichert als `orchestrator_runs.lauf`. Ohne
+Angabe: der Teil des Titels vor dem ersten „:“ bzw. „ · “ (z. B. „Flex: Speicher-Pilot“ → „Flex“), sonst der ganze Titel (E8).
+Jeder Strang bekommt zusätzlich das Lesezeichen `Orch · <Lauf>` (LibreChat-Filter wie ein Ordner); `Orchestrator` bleibt.
+Name: höchstens 40 Zeichen, keine Steuerzeichen.
+
+**B2 — Übersicht (eine Seite „Leitstand“ in der Werkbank, nur Admin; Feature `leitstand`).** Neue Seite `#/leitstand`, verlinkt
+aus der Heute-Zeile „🛰️ Leitstand“ und in der Navigation (nur Admin). Inhalt:
+- Kopf: Link „Leitstand-Chat öffnen“, Zustand (läuft / wartet auf dich / bereit), offene Meldungen.
+- Je Lauf eine **zugeklappte Gruppe** „Flex — 3 Stränge · 2 fertig · 1 wartet“ (aufklappbar; Gruppen mit „wartet“/„gestoppt“
+  zuerst, dann „läuft“, dann „fertig“). Darin je Strang: Status-Symbol + Wort (läuft · wartet · fertig · gestoppt), Grund,
+  „automatisch fortgesetzt (n)“, Link „Chat“, Link „Bericht“ (wenn gefunden), Zeit der letzten Aktivität.
+- Statuswörter: `running` → läuft · `waiting` → wartet · `done` → fertig · `failed` und `autoStopped` → gestoppt (mit Grund).
+- Geprüfte Stränge (`reviewedAt`) stehen in einer zugeklappten Gruppe „Erledigt“ (letzte 14 Tage); ein Lauf, dessen Stränge alle
+  geprüft sind, wandert ganz dorthin.
+- Daten: `GET /api/leitstand/overview` (needAdmin) = `listOrch(all)` gruppiert, plus Bericht-Pfade. Kein neues Polling der Brücke
+  über das hinaus, was `listOrch` schon tut (höchstens alle 20 s beim Neuladen der Seite).
+- Im Leitstand-Chat: `orch_list` gibt dieselbe Gruppierung als Text aus (Kopfzeile je Lauf mit Zählern).
+
+**B3 — Bericht finden und zeigen.** Je Strang der Pfad, in dieser Reihenfolge: `review.artefakte` → Plan-/Auftragstext (`prompt`) →
+letzte Antwort; Muster `review-pakete/<NNN>-<slug>/bericht.md` (auch mit `~/work/knut/` oder absolut). Nur Pfade, die real
+unter `WERKBANK_REVIEW_DIR` (Vorgabe `~/work/knut/review-pakete`) liegen, `.md` sind und existieren (realpath, kein `..`).
+Anzeige: `GET /api/leitstand/bericht?strand=<id>` (needAdmin) liefert den Text (höchstens 200 KB); die Seite zeigt ihn als Markdown
+im selben Fenster („Bericht“ klappt auf). Kein freier Pfad aus der Anfrage — nur über die Strang-ID.
+
+**B4 — Stränge in der Review-Schlange auf „Heute“.** Ein Strang kommt in die Schlange „Wartet auf dein Review“, wenn er
+`review_ready` gemeldet hat **oder** sein Status `done` ist („Status: fertig“), und noch nicht geprüft ist. Karte wie bei
+Board-Läufen (gleiche `RunCard`, Kennzeichen „Strang · <Lauf>“ statt Ticket): DoD-Tabelle aus `review_ready` (falls vorhanden),
+sonst der „### Stand“-Auszug; Links Chat und Bericht.
+- **Passt / Erledigt** → `reviewOrch` (Strang geprüft; kein Jira — Stränge haben kein Ticket, der Haken „Kommentar in Jira“ fehlt).
+- **Nacharbeit** → Nachricht „Nacharbeit nach Review: …“ in den Strang (`sendOrch`, Handnachricht: Deckel neu, `reviewReadyAt` weg).
+- Routen: `POST /api/orchestrator/strands/:id/passt|reply` (needUser + Feature `orchestrator`, nur eigene Stränge); der Leitstand
+  selbst erscheint nie in der Schlange.
+- Zähler „Heute (n)“ zählt diese Karten mit.
+- Weckt den Leitstand: ein von Knut geprüfter oder zur Nacharbeit geschickter Strang ist ein Ereignis „Knut hat <Strang> geprüft /
+  Nacharbeit: …“ (gleicher Takt, gleiche Deckel).
+
+**B5 — Aufräumen.** Ein Lauf, dessen Stränge alle geprüft sind, steht nur noch in „Erledigt“; das Lesezeichen bleibt.
+
+## B.2 Definition of Done (Prüfsätze)
+B-1. `orch start --lauf Flex …` speichert `lauf: "Flex"`; ohne `--lauf` gilt der Titelteil vor „:“; der Strang hat die Lesezeichen
+     `Orchestrator` und `Orch · Flex` (Mock-Ende-zu-Ende). `orch_start {lauf}` ebenso.
+B-2. `GET /api/leitstand/overview` gruppiert nach Lauf mit Zählern je Status; Team-Konto 403 (Test).
+B-3. Statuswörter: running→läuft, waiting→wartet, done→fertig, failed/autoStopped→gestoppt (reiner Test).
+B-4. Gruppen-Reihenfolge: wartet/gestoppt vor läuft vor fertig; ganz geprüfte Läufe nur in „Erledigt“ (reiner Test).
+B-5. Bericht-Pfad wird aus artefakte, Auftrag oder letzter Antwort gefunden; Pfade außerhalb `WERKBANK_REVIEW_DIR`, mit `..`, Symlinks
+     nach außen, Nicht-`.md` oder nicht vorhandene werden ignoriert (Tests); `/api/leitstand/bericht` nimmt nur eine Strang-ID.
+B-6. Ein Strang mit `review_ready` **oder** „Status: fertig“ erscheint in „Heute“ unter „Wartet auf dein Review“ mit Chat- und
+     Bericht-Link; der Leitstand nie; ein geprüfter nicht mehr (Ende-zu-Ende).
+B-7. „Passt“ setzt den Strang geprüft (kein Jira-Aufruf); „Nacharbeit“ legt „Nacharbeit nach Review: …“ in denselben Chat, setzt
+     `reviewReadyAt` zurück, und der Strang verschwindet aus der Schlange, bis er wieder fertig ist (Ende-zu-Ende).
+B-8. Fremde Stränge: 404/403 auf passt/reply (Test).
+B-9. „Heute (n)“ zählt Strang-Karten mit (Test).
+B-10. Prüfen/Nacharbeit wecken den Leitstand mit einer Zeile (Ende-zu-Ende).
+B-11. `orch_list` im Leitstand gibt die Gruppierung aus (Test über den MCP).
+B-12. Screenshots: Leitstand-Seite (Desktop, Handy, Gruppe zu/auf, Bericht offen), „Heute“ mit Strang-Karte; kein waagrechtes Rollen.
+B-13. Alle Tests beider Pakete und der Build grün; normale Board-Karten unverändert (bestehende Tests).
+
+## B.3 Einstellungen
+| Name | App | Wert / Vorgabe | wer setzt |
+|---|---|---|---|
+| `WERKBANK_REVIEW_DIR` | Web | `$HOME/work/knut/review-pakete` | Vorgabe im Code |
+
+## B.4 Nicht in diesem Schnitt
+- Chat-Ordner in LibreChat (Patch) — Lesezeichen genügen (Plan 128, offener Punkt 1, Empfehlung dort).
+- Lauf an ein Werkbank-Projekt hängen (Plan 128, Schnitt 4).
+- Bericht bearbeiten oder kommentieren in der Werkbank; Berichte außerhalb `review-pakete/`.
+- Stränge anderer Personen.
+
+## B.5 Entscheidungen für Knut (Empfehlung gilt bis zur Antwort)
+- **E8 Lauf ohne Angabe:** Titelteil vor „:“ (Flex: … → Flex) oder jeder Strang sein eigener Lauf, bis der Leitstand einen nennt.
+  Empfehlung: Titelteil — die Titel heißen heute schon „Thema: Scheibe“.
+- **E9 Wo die Übersicht steht:** eigene Seite „Leitstand“ (Admin) oder als Abschnitt auf „Heute“. Empfehlung: eigene Seite, Heute
+  behält nur die eine Zeile mit Link (Heute ist für „was will etwas von mir“).
+- **E10 „fertig“ ohne review_ready in die Schlange:** ja (so wörtlich der Auftrag) oder nur mit review_ready (dann hat jede Karte eine
+  DoD-Tabelle). Empfehlung: ja — viele Stränge melden nur „Status: fertig“.
