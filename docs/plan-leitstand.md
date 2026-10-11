@@ -275,6 +275,19 @@ Kein Infra-Repo: die Werkbank läuft selbst gehostet; Vorgaben im Code. Keine ne
 - **E7 Push aus dem Leitstand**: nach „ja“ möglich (Git mit Knuts Zugangsdaten) oder wie in Strängen technisch unmöglich (Push nur über die
   Hauptsitzung/CLI). Empfehlung: nach „ja“ möglich — sonst braucht Knut für jeden Push wieder ein Terminal.
 
+### Entscheidung Knut 11.10.2026
+Knut, 11.10.2026: „Empfehlungen passen — lass uns die anderen Sachen auf der Werkbank live bringen.“ Damit gilt:
+- **E1** Vault-Dateien im Leitstand **ohne Rückfrage** (Klassifikator); git im Vault bleibt gesperrt. — so gebaut.
+- **E2** Leitstand zählt **nicht** gegen die Parallelgrenze. — so gebaut.
+- **E3** `orch_send` aus dem Leitstand setzt den Deckel **nicht** zurück (409 bei erreichtem Deckel, Knut entscheidet in „Heute“). — so gebaut.
+- **E4** Weckdeckel **12/h und 60/Tag, Entprellen 60 s**; nach einer Woche nachschärfen. — so gebaut.
+- **E5** Gedächtnis schreiben (`memory_store*`) im Leitstand **per Klassifikator**, keine Rückfrage. — so gebaut.
+- **E6** Schlüssel je Sitzung: **eigener Plan danach**, nicht Teil von Release 3. Bis dahin bleibt das Restrisiko aus S0/E11
+  (Hauptschlüssel per Bash lesbar; der Systemtext sagt „nicht über scripts/orch“).
+- **E7** Push aus dem Leitstand **nach genau „ja“** möglich (Git mit Knuts Zugangsdaten); Merge, Force-Push und Push auf
+  main/master/develop bleiben gesperrt. — so gebaut.
+- Teil B (E8–E12): es gelten die Empfehlungen (so gebaut).
+
 ## 8. Council
 ### R1 (11.10.2026, Plan vor dem Bau) — HOLD (0,7)
 Drei getrennte Stimmen (Befürworter, Fachprüfer gegen den Code, Advocatus Diaboli), Finalizer in der Strangsitzung. Stärkster Punkt: ein
