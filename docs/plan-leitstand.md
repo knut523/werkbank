@@ -450,3 +450,43 @@ B-13. Alle Tests beider Pakete und der Build grün; normale Board-Karten unverä
   behält nur die eine Zeile mit Link (Heute ist für „was will etwas von mir“).
 - **E10 „fertig“ ohne review_ready in die Schlange:** ja (so wörtlich der Auftrag) oder nur mit review_ready (dann hat jede Karte eine
   DoD-Tabelle). Empfehlung: ja — viele Stränge melden nur „Status: fertig“.
+
+## B.6 Council Teil B
+### R1 (11.10.2026) — HOLD (Fachprüfer 0,8 · Gegenstimme HOLD)
+Stärkste Punkte: (1) „Heute“ und der Zähler (alle 60 s) würden über `listOrch` je Strang Brücke und LibreChat abfragen und sogar
+`decorate` schreiben — gegen die Regel „Heute liest nur Mongo“ (`main.ts:1108`); (2) der Leitstand könnte Knuts Urteil überschreiben
+(`orch_send` setzt `reviewedAt`/`reviewReadyAt` zurück; `orch_review` legt einen Strang ab, bevor Knut ihn sieht); (3) Karten flackern
+bei Brückenfehlern. Bindende Bedingungen (gelten vor B.1, wo sie abweichen):
+1. **F1 [must-fix] Stand im Takt festschreiben.** `autoWeiterTick` (läuft immer, auch ohne Leitstand) schreibt je offenem Strang
+   `lastStatus`, `lastReason`, `lastActivity` und — beim ersten „done“ — `doneAt` in `orchestrator_runs`. „Heute“, der Zähler und die
+   Übersicht lesen **nur Mongo**; die Übersicht darf beim Öffnen einmal `listOrch` rufen, „Heute“ nie. Test: `todayCount`/`/api/today`
+   rufen weder Brücke noch LibreChat (Zählung der Aufrufe im Nachbau).
+2. **F2 [must-fix] Karte bleibt stehen.** Ein Strang mit `doneAt` oder `reviewReadyAt` und ohne `knutReviewedAt` bleibt in der Schlange,
+   bis Knut entscheidet; Fehler der Brücke ändern nichts (`lastStatus` wird bei nicht erreichbarer Brücke nicht überschrieben).
+3. **F3 [must-fix] Knuts Urteil zählt.**
+   - `orch_send` aus dem Leitstand setzt `reviewedAt`, `knutReviewedAt`, `reviewReadyAt`, `doneAt` **nicht** zurück; an einen von Knut
+     geprüften Strang → 409.
+   - `orch_review` aus dem Leitstand setzt nur `reviewedAt` + `reviewedBy: 'leitstand'`; die Karte bleibt in Knuts Schlange, bis
+     Knut „Passt“ klickt (`knutReviewedAt`).
+   - „Passt“/„Nacharbeit“ schicken den gesehenen Stand mit (`seen` = `doneAt|reviewReadyAt|lastSentAt`); hat er sich geändert oder
+     läuft der Strang → 409 „Strang hat sich inzwischen geändert — neu laden“.
+   - Weck-Ereignisse `geprüft:<id>:<knutReviewedAt>` und `nacharbeit:<id>:<zeit>`.
+4. **F4 [must-fix] Karte.** `RunCard` bekommt den Pfad als Eigenschaft; der Jira-Haken nur bei Board-Läufen; `review` darf fehlen
+   (dann „### Stand“-Auszug). Routen `/api/leitstand/strands/([0-9a-f]{8})/(passt|reply)`.
+5. **F5 [must-fix] Keine Doppelung.** Die Zeile „automatisch fortgesetzt“ blendet Stränge mit Karte aus (Test).
+6. **F6 [must-fix] Nacharbeit** löscht `review` (DoD-Tabelle), `doneAt`, `reviewReadyAt`, `knutReviewedAt` — nach erneutem „fertig“
+   keine alte Tabelle (Test).
+7. **F7 [must-fix] Bericht sicher.** Pfad beim Start aus dem **vollen** Auftrag und der Plandatei ermitteln und speichern (`bericht`),
+   später aus `review.artefakte` und der letzten Antwort (Takt) ergänzen. Lesen nur mit `O_NOFOLLOW` → `fstat` (Datei, ≤ 200 KB) →
+   `realpath` des offenen Deskriptors (`/proc/self/fd/N`) liegt unter `WERKBANK_REVIEW_DIR` → lesen über denselben Deskriptor.
+   Anzeige als **Text ohne HTML** (vorformatiert), nie `dangerouslySetInnerHTML`. Tests: Symlink nach außen, `..`, > 200 KB, `<script>`.
+8. **F8 [must-fix] Lauf.** Lesezeichen „Orch · <Lauf>“ **nur bei ausdrücklichem `lauf`**; ohne Angabe gruppiert die Übersicht nach dem
+   Titelteil vor „:“ (E8), ohne Lesezeichen. Gruppenschlüssel = Lauf + Kalenderwoche des Starts (Juni-„Flex“ ≠ Oktober-„Flex“).
+   Eigenes Flag `decoratedLauf`. Name säubern: Steuerzeichen, „·“, „/“ → Leerzeichen, trimmen, ≤ 40 Zeichen, leer → abgeleitet.
+9. **F9 [must-fix] Rechte.** Alle neuen Routen unter `/api/leitstand/` → Feature `leitstand` (nur Admin, Regel vor `orchestrator`).
+   Strang-Karten auf „Heute“ nur für Admins. Leitstand-ID oder fremder Strang → 404 (Tests).
+10. **F10 [doc]** Lesezeichen „Orch · …“ bleiben in LibreChat stehen (wachsen mit der Zahl ausdrücklicher Läufe).
+Zusätzliche Prüfsätze: B-14 kein Brücken-/LibreChat-Aufruf aus `todayCount` · B-15 keine Doppelung mit „automatisch fortgesetzt“ ·
+B-16 Bericht: Symlink nach außen, `..`, zu groß, HTML → nicht geladen bzw. als Text · B-17 nach Nacharbeit keine alte DoD-Tabelle ·
+B-18 Passt bei laufendem oder geändertem Strang → 409 · B-19 Leitstand kann Knuts Urteil nicht überschreiben (send → 409 nach
+Knuts Passt; orch_review lässt die Karte stehen) · B-20 Team-Konto 403, Leitstand-ID 404 · B-21 Karte bleibt bei Brückenfehler.
