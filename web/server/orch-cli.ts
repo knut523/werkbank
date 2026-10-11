@@ -1,6 +1,8 @@
 // scripts/orch — die Haupt-Sitzung startet und koordiniert Werkbank-Agenten (docs/plan-orchestrator-agents.md).
 //
-//   orch start --title T --cwd DIR [--plan DATEI] [--shared] (--prompt TEXT | --prompt-file DATEI | Auftrag auf stdin)
+//   orch start --title T --cwd DIR [--plan DATEI] [--shared] [--code] (--prompt TEXT | --prompt-file DATEI | Auftrag auf stdin)
+//     Git-Repo mit origin auf github.com/WirStrom1|knut523: vorher git fetch, „Stand: …“ im Chat; --code = frischer Worktree
+//     <repo>-agent-<id> (Zweig agent/<id>) von origin/develop|dev|main statt des angegebenen Ordners. Nie pushen.
 //   orch list [--all] [--json]
 //   orch show <id> [--json]
 //   orch send <id> (--text TEXT | Text auf stdin)
@@ -28,7 +30,7 @@ for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a.startsWith('--')) {
     const k = a.slice(2);
-    if (['all', 'json', 'shared', 'open'].includes(k)) flags[k] = true;
+    if (['all', 'json', 'shared', 'open', 'code'].includes(k)) flags[k] = true;
     else if (k === 'option') options.push(args[++i] ?? '');
     else flags[k] = args[++i] ?? '';
   } else pos.push(a);
@@ -78,9 +80,9 @@ async function main() {
     case 'start': {
       const prompt = typeof flags.prompt === 'string' ? flags.prompt : typeof flags['prompt-file'] === 'string' ? readFileSync(flags['prompt-file'], 'utf8') : await stdin();
       if (typeof flags.title !== 'string' || typeof flags.cwd !== 'string') die('start braucht --title und --cwd.');
-      const j = await call('start', { title: flags.title, cwd: flags.cwd, plan: typeof flags.plan === 'string' ? flags.plan : null, shared: flags.shared === true, prompt });
+      const j = await call('start', { title: flags.title, cwd: flags.cwd, plan: typeof flags.plan === 'string' ? flags.plan : null, shared: flags.shared === true, code: flags.code === true, prompt });
       if (flags.json) return console.log(JSON.stringify(j, null, 1));
-      console.log(`gestartet: ${j.id}  ${j.url}\nOrdner:    ${j.cwd}${j.plan ? `\nPlan:      ${j.plan}` : ''}${j.warning ? `\nHinweis:   ${j.warning}` : ''}`);
+      console.log(`gestartet: ${j.id}  ${j.url}\nOrdner:    ${j.cwd}${j.worktree ? ' (frischer Worktree)' : ''}${j.stand ? `\n${j.stand}` : ''}${j.plan ? `\nPlan:      ${j.plan}` : ''}${j.warning ? `\nHinweis:   ${j.warning}` : ''}`);
       return;
     }
     case 'list': {

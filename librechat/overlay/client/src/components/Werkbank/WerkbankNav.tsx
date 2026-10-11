@@ -1,5 +1,5 @@
 // OLAF-Werkbank: Einträge in LibreChats linker Leiste (aus dem Werkbank-Repo, librechat/overlay).
-import { memo, useEffect } from 'react';
+import { memo, useEffect, useState } from 'react';
 import Cookies from 'js-cookie';
 import { useSetRecoilState } from 'recoil';
 import * as Menu from '@ariakit/react/menu';
@@ -54,12 +54,37 @@ function useGermanByDefault() {
   }, [setLang]);
 }
 
+/** Freigaben je Funktion und Zähler „Heute (n)“ aus der Werkbank (gleicher Ursprung, /werkbank). Admins sehen alles,
+ *  das Team nur Freigegebenes (WERKBANK_TEAM_FEATURES); bis die Antwort da ist, keine Einträge (kein Aufblitzen). */
+function useWerkbankState(dep: string) {
+  const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    fetch('/werkbank/api/config', { credentials: 'same-origin' }).then((r) => r.json()).then((c) => { if (alive) setFeatures(c?.user ? c.features ?? {} : {}); }).catch(() => { if (alive) setFeatures({}); });
+    return () => { alive = false; };
+  }, []);
+  useEffect(() => {
+    if (!features || features.heute === false) return;
+    let alive = true;
+    const load = () => fetch('/werkbank/api/today/count', { credentials: 'same-origin' }).then((r) => (r.ok ? r.json() : null)).then((j) => { if (alive && j) setCount(Number(j.count) || 0); }).catch(() => {});
+    load();
+    const t = setInterval(load, 60_000);
+    window.addEventListener('werkbank-questions', load);
+    return () => { alive = false; clearInterval(t); window.removeEventListener('werkbank-questions', load); };
+  }, [features, dep]);
+  const show = (id: string) => !!features && features[id] !== false && (id in features || id === 'einrichtung');
+  return { show, count };
+}
+
 function WerkbankNav() {
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
   const closeOnMobile = useCloseSidebarOnMobile();
   useGermanByDefault();
   const current = pathname.startsWith('/wb/') ? pathname.split('/')[2] : '';
+  const { show, count } = useWerkbankState(pathname);
+  const more = MORE.filter((p) => show(p.id));
   const go = (id: string) => {
     // Klick auf die offene Seite = neu laden (wie früher, als jeder Klick den iframe neu lud).
     const h = new URLSearchParams(search).get('h');
@@ -67,12 +92,12 @@ function WerkbankNav() {
     else navigate(`/wb/${id}`);
     closeOnMobile();
   };
-  const moreActive = MORE.some((p) => p.id === current);
+  const moreActive = more.some((p) => p.id === current);
   return (
     <>
       <div className="mx-2 border-b border-border-light" />
       <div className="flex flex-col gap-1" role="group" aria-label="Werkbank">
-        {WERKBANK_PAGES.filter((p) => p.nav).map((p) => (
+        {WERKBANK_PAGES.filter((p) => p.nav && show(p.id)).map((p) => (
           <TooltipAnchor
             key={p.id}
             description={p.label}
@@ -81,18 +106,21 @@ function WerkbankNav() {
               <Button
                 size="icon"
                 variant="ghost"
-                aria-label={p.label}
+                aria-label={p.id === 'heute' && count ? `${p.label}, ${count} offen` : p.label}
                 aria-pressed={current === p.id}
                 data-testid={`werkbank-nav-${p.id}`}
-                className={cn('h-9 w-9 rounded-lg', current === p.id ? 'bg-surface-active-alt text-text-primary' : 'text-text-secondary')}
+                className={cn('relative h-9 w-9 rounded-lg', current === p.id ? 'bg-surface-active-alt text-text-primary' : 'text-text-secondary')}
                 onClick={() => go(p.id)}
               >
                 <p.icon className="h-5 w-5" aria-hidden="true" />
+                {p.id === 'heute' && count > 0 && (
+                  <span data-testid="werkbank-nav-heute-count" aria-hidden="true" className="absolute -right-0.5 -top-0.5 min-w-[16px] rounded-full bg-yellow-400 px-1 text-[10px] font-bold leading-4 text-gray-900">{count > 99 ? '99+' : count}</span>
+                )}
               </Button>
             }
           />
         ))}
-        <Menu.MenuProvider placement="right-start">
+        {more.length > 0 && <Menu.MenuProvider placement="right-start">
           <TooltipAnchor
             description="Weitere Seiten"
             side="right"
@@ -110,7 +138,7 @@ function WerkbankNav() {
             }
           />
           <Menu.Menu portal gutter={4} className="popover-ui z-[125] w-[220px] rounded-lg" data-testid="werkbank-mehr-menu">
-            {MORE.map((p) => (
+            {more.map((p) => (
               <Menu.MenuItem
                 key={p.id}
                 onClick={() => go(p.id)}
@@ -123,7 +151,7 @@ function WerkbankNav() {
               </Menu.MenuItem>
             ))}
           </Menu.Menu>
-        </Menu.MenuProvider>
+        </Menu.MenuProvider>}
       </div>
     </>
   );

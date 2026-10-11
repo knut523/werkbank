@@ -23,6 +23,8 @@ import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, askKnut, listQuest
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName } from './ablage.ts';
+import { FEATURES, featuresFor, blockedFeature } from './features.ts';
+import { memoryWarning } from './memory.ts';
 import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
 import { keep as keepScratch, runScratch } from './scratch.ts';
 import { backupRunning, listBackups, nightly, writeBackup, keyOf } from './backup.ts';
@@ -77,6 +79,9 @@ async function needUser(req: IncomingMessage): Promise<User> {
   const u = await currentUser(req);
   if (!u) throw new HttpError(401, 'Bitte anmelden.');
   if (isMutation(req) && req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Werkbank-Header.');
+  // Freigabe je Funktion fürs Team (features.ts): Admins alles, sonst WERKBANK_TEAM_FEATURES.
+  const f = blockedFeature(u, String(req.url ?? '').split('?')[0]);
+  if (f) throw new HttpError(403, `„${FEATURES.find((x) => x.id === f)!.label}“ ist für das Team noch nicht freigegeben.`);
   return u;
 }
 
@@ -305,7 +310,7 @@ on('GET', /^\/api\/config$/, async (req, res) => {
   send(res, 200, {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: !!process.env.WERKBANK_FORGE_MCP,
     jiraSite: cfg.jiraSite, project: cfg.jiraProject, vault: cfg.vaultDir,
-    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(),
+    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u),
   });
 });
 
@@ -1099,7 +1104,8 @@ on('GET', /^\/api\/today$/, async (req, res) => {
   const day = ((await tbCol().find({ userId: u.id, date: today }).sort({ start: 1 }).toArray()) as any[])
     .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
   const orchOpen = (await listQuestions(u, { open: true }).catch(() => [])).length;
-  send(res, 200, { queue, mine, day, today, orchOpen, count: await todayCount(u, queue, mine), dryRun: dryRun() });
+  const memory = u.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null;   // nur Admins (RAM-Plan 125)
+  send(res, 200, { queue, mine, day, today, orchOpen, memory, count: await todayCount(u, queue, mine), dryRun: dryRun() });
 });
 
 on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
@@ -2028,7 +2034,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review)$/, async (r
   const id = String(b.id ?? '');
   switch (m[1]) {
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv });
       return send(res, 200, r);
     }

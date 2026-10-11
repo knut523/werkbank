@@ -135,6 +135,7 @@ export function Heute({ cfg }: { cfg: Config }) {
         </div>
       </div>
       {d.dryRun && <p className="chip warn">Vorschau (Trockenlauf): Antworten an Agenten sind aus.</p>}
+      {d.memory && <div className="card soft" role="status" data-testid="memory-warning"><b>⚠️ Speicher knapp:</b> <span className="small">{d.memory}. Neue Chats und Agenten können langsam werden oder abbrechen — Testinstanzen stoppen, wartende Chats beantworten.</span></div>}
       {running.length > 0 && <p className="small muted" data-testid="running">⏳ {running.length === 1 ? 'Ein Agent arbeitet' : `${running.length} Agenten arbeiten`} gerade: {running.map((x: any, i: number) => <span key={x.id}>{i ? ', ' : ''}{x.url ? <a href={x.url} target={chatTarget}>{x.key}</a> : x.key}</span>)}</p>}
 
       {review.length > 0 && <section data-testid="review-queue">

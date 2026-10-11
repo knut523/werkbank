@@ -14,6 +14,7 @@ import { cfg } from './config.ts';
 import { wb, lc } from './db.ts';
 import { librechatAccessToken, type User } from './auth.ts';
 import { createLibreChat } from './agent.ts';
+import { prepareFresh } from './fresh.ts';
 
 export const ORCH_TAG = 'Orchestrator';
 export type OrchStatus = 'running' | 'waiting' | 'done' | 'failed';
@@ -22,13 +23,14 @@ const internalHeaders = () => ({ 'content-type': 'application/json', 'x-werkbank
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 OLAF-Werkbank';
 
-export interface BriefInput { title: string; prompt: string; cwd: string; plan?: string | null; person?: string }
+export interface BriefInput { title: string; prompt: string; cwd: string; plan?: string | null; person?: string; stand?: string | null }
 
 /** Erster Text des Strangs. Erste Zeile = Titel; der Auftrag steht am Ende. */
 export function orchBrief(b: BriefInput): string {
   const first = (b.person || 'Knut').split(/\s+/)[0];
   return [
     `Orchestrator · ${b.title}`,
+    ...(b.stand ? [b.stand] : []),
     `Du bist ein Werkbank-Agent für einen Arbeitsstrang. Die Haupt-Sitzung (Orchestrator) hat dich gestartet und koordiniert mehrere Stränge; ${first} liest im Chat mit und kann jederzeit selbst schreiben.`,
     [
       'Regeln:',
@@ -161,7 +163,7 @@ async function strandStates(u: User): Promise<Map<string, StrandState & { dir: s
 
 // ---------- Öffentliche Schnittstelle ----------
 
-export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean }
+export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean }
 
 const runs = () => wb().collection('orchestrator_runs');
 
@@ -181,6 +183,10 @@ export async function startOrch(u: User, inp: StartInput) {
   if (inp.plan) {
     try { plan = realpathSync(String(inp.plan)); if (!statSync(plan).isFile()) throw new Error(); } catch { throw err(400, 'Plandatei gibt es nicht.'); }
   }
+  // Neuester Code (Knut 11.10.2026, fresh.ts): git fetch; Code-Auftrag → frischer Worktree vom Integrationszweig.
+  const id = await newId();
+  const fresh = prepareFresh(real, id, inp.code === true);
+  real = fresh.cwd;
   // Ein Worktree, ein offener Strang (Council, Bedingung 8).
   if (!inp.shared) {
     const open = (await listOrch(u, { all: false })).filter((r) => r.cwd === real && (r.status === 'running' || r.status === 'waiting'));
@@ -191,8 +197,7 @@ export async function startOrch(u: User, inp: StartInput) {
   const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real }), signal: AbortSignal.timeout(5000) });
   const rj: any = await reg.json().catch(() => ({}));
   if (!reg.ok) throw err(reg.status === 400 || reg.status === 409 || reg.status === 403 ? reg.status : 502, rj.error ?? `Brücke antwortet mit ${reg.status}`);
-  const id = await newId();
-  const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name });
+  const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand: fresh.status });
   const doc: any = { _id: id, userId: u.id, conv, url: `${cfg.librechatPublicUrl}/c/${conv}`, title, cwd: rj.dir ?? real, plan, prompt: prompt.slice(0, 500), startedAt: new Date(), lastSentAt: new Date(), sends: 1, reviewedAt: null, mode: rj.mode ?? null, startError: null };
   await runs().insertOne(doc);
   // 2) Chat mit genau dieser ID anlegen; LibreChat fährt den Zug serverseitig.
@@ -204,7 +209,7 @@ export async function startOrch(u: User, inp: StartInput) {
   }
   // 3) Titel + Lesezeichen im Hintergrund (LibreChat speichert die Unterhaltung erst nach ein paar Sekunden).
   decorateSoon(u, conv, title).catch(() => {});
-  return { id, conv, url: doc.url, cwd: doc.cwd, plan, mode: doc.mode, ...(doc.mode && doc.mode !== 'auto' ? { warning: `Brücke läuft für dieses Konto im Modus „${doc.mode}“ — ohne Auto-Modus darf der Strang nur lesen.` } : {}) };
+  return { id, conv, url: doc.url, cwd: doc.cwd, plan, mode: doc.mode, stand: fresh.status, worktree: fresh.worktree, ...(doc.mode && doc.mode !== 'auto' ? { warning: `Brücke läuft für dieses Konto im Modus „${doc.mode}“ — ohne Auto-Modus darf der Strang nur lesen.` } : {}) };
 }
 
 export async function listOrch(u: User, opts: { all?: boolean } = {}) {
