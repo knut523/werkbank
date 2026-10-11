@@ -9,6 +9,7 @@ import { join, basename } from 'node:path';
 import { getIndex, parseFrontmatter, resolveLink, extractWikilinks, type VaultIndex, type NoteMeta } from '../server/vault.ts';
 import { topicState, boostOf } from '../server/search.ts';
 import { STOP_WORDS, alternativesOf, fold, loadVaultGlossary, wordsOf, hasTerm } from '../server/search-lexicon.ts';
+import { logSearch, type LogCtx } from './search-log.ts';
 
 export interface SearchArgs {
   query: string; folder?: string; team?: string; topic?: string; state?: string; type?: string; status?: string;
@@ -154,7 +155,9 @@ const fmt = (idx: VaultIndex, rows: { path: string; snippet: string }[], via: st
   })].join('\n');
 };
 
-export async function search(b: Backend, a: SearchArgs): Promise<string> {
+type Report = (paths: string[], via: string) => void;
+
+export async function search(b: Backend, a: SearchArgs, report?: Report): Promise<string> {
   const idx = getIndex(b.vaultDir);
   const limit = Math.min(Math.max(a.limit ?? 10, 1), 50);
   loadVaultGlossary(idx);   // Synonyme für Ausschnitte und den Dateisystem-Weg
@@ -165,10 +168,12 @@ export async function search(b: Backend, a: SearchArgs): Promise<string> {
       const rows = m.filter((h) => idx.notes.has(h.path) && matchesFilters(idx.notes.get(h.path)!, a)).slice(0, limit)
         // Fundzeile mit Überschriftenpfad; traf Meilisearch nur über Tippfehler/Präfix, bleibt sein Ausschnitt.
         .map((h) => ({ path: h.path, snippet: lineSnippet(noteText(idx, idx.notes.get(h.path)!).body, terms) || h.crop }));
-      if (rows.length || !m.length) return fmt(idx, rows, 'Meilisearch');
+      if (rows.length || !m.length) { report?.(rows.map((r) => r.path), 'meili'); return fmt(idx, rows, 'Meilisearch'); }
     }
   }
-  return fmt(idx, fsSearch(idx, { ...a, limit }), 'Dateisystem');
+  const rows = fsSearch(idx, { ...a, limit });
+  report?.(rows.map((r) => r.path), 'fs');
+  return fmt(idx, rows, 'Dateisystem');
 }
 
 export function findNote(idx: VaultIndex, note: string): NoteMeta {
@@ -235,7 +240,7 @@ export function links(b: Backend, note: string): string {
 }
 
 /** Verwandte Notizen über den Link-Graphen: direkte Links/Backlinks, dann gemeinsame Linkziele und gemeinsame Verweiser. */
-export function related(b: Backend, note: string, limit = 15): string {
+export function related(b: Backend, note: string, limit = 15, report?: Report): string {
   const idx = getIndex(b.vaultDir);
   const n = findNote(idx, note);
   const out = new Set(n.links), inn = idx.backlinks.get(n.path) ?? new Set<string>();
@@ -251,6 +256,7 @@ export function related(b: Backend, note: string, limit = 15): string {
   for (const t of out) { const bl = idx.backlinks.get(t) ?? new Set<string>(); if (bl.size <= 40) for (const p of bl) add(p, 1 / Math.sqrt(bl.size), 'gleiches Linkziel'); }
   for (const s of inn) { const ln = idx.notes.get(s)?.links ?? []; if (ln.length <= 40) for (const p of ln) add(p, 1 / Math.sqrt(ln.length), 'gemeinsamer Verweiser'); }
   const rows = [...score.entries()].sort((x, y) => y[1].s - x[1].s || boostOf(idx.notes.get(y[0])!) - boostOf(idx.notes.get(x[0])!)).slice(0, Math.min(limit, 50));
+  report?.(rows.map(([p]) => p), n.path);
   if (!rows.length) return `Keine verwandten Notizen zu ${n.path} (keine Links, keine Backlinks).`;
   return [`${rows.length} verwandte Notizen zu ${n.path}:`, ...rows.map(([p, e]) => `- ${idx.notes.get(p)!.title} — ${p} (${[...e.why].join(', ')})`)].join('\n');
 }
@@ -280,7 +286,12 @@ export function recent(b: Backend, days = 7, folder?: string, limit = 20): strin
   return rows.length ? [`${rows.length} Notizen geändert in den letzten ${days} Tagen:`, ...rows.map((n) => `- ${new Date(n.mtime).toISOString().slice(0, 16).replace('T', ' ')} ${n.title} — ${n.path}`)].join('\n') : `Nichts geändert in den letzten ${days} Tagen.`;
 }
 
-export function toolDefs(b: Backend) {
+/** Pfad einer angefragten Notiz fürs Protokoll (ohne Fehler, falls sie nicht existiert). */
+const pathOf = (b: Backend, note: string) => { try { return findNote(getIndex(b.vaultDir), String(note ?? '')).path; } catch { return `?${String(note ?? '').slice(0, 120)}`; } };
+
+/** Werkzeuge; mit `lg` protokolliert search/related/read_note/outline (search-log.ts, ohne Inhalte). */
+export function toolDefs(b: Backend, lg?: LogCtx) {
+  const L = (e: Parameters<typeof logSearch>[1]) => { if (lg) logSearch(lg, e); };
   const note = { type: 'string', description: 'Pfad relativ zum Vault (z. B. olaf/MOCs/Olaf-MOC.md) oder Basename (Olaf-MOC)' };
   return [
     {
@@ -291,13 +302,13 @@ export function toolDefs(b: Backend) {
         type: { type: 'string' }, status: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
         fields: { type: 'object', additionalProperties: { type: 'string' } }, modified_since: { type: 'string' }, limit: { type: 'number' },
       }, required: ['query'] },
-      run: (a: SearchArgs) => search(b, a),
+      run: (a: SearchArgs) => search(b, a, lg && ((results, via) => L({ tool: 'search', terms: queryTerms(a.query ?? ''), results, via }))),
     },
-    { name: 'outline', description: 'Gliederung einer Notiz (Frontmatter, Überschriften mit Länge) — erst das, dann gezielt read_note mit section.', inputSchema: { type: 'object', properties: { note }, required: ['note'] }, run: (a: any) => outline(b, a.note) },
-    { name: 'read_note', description: 'Eine Notiz lesen: Frontmatter (geparst), aufgelöste Wikilinks, Inhalt. section = nur dieser Abschnitt; max_chars (Vorgabe 12000).', inputSchema: { type: 'object', properties: { note, section: { type: 'string' }, max_chars: { type: 'number' } }, required: ['note'] }, run: (a: any) => readNote(b, a.note, a.max_chars, a.section) },
+    { name: 'outline', description: 'Gliederung einer Notiz (Frontmatter, Überschriften mit Länge) — erst das, dann gezielt read_note mit section.', inputSchema: { type: 'object', properties: { note }, required: ['note'] }, run: (a: any) => { L({ tool: 'outline', note: pathOf(b, a.note) }); return outline(b, a.note); } },
+    { name: 'read_note', description: 'Eine Notiz lesen: Frontmatter (geparst), aufgelöste Wikilinks, Inhalt. section = nur dieser Abschnitt; max_chars (Vorgabe 12000).', inputSchema: { type: 'object', properties: { note, section: { type: 'string' }, max_chars: { type: 'number' } }, required: ['note'] }, run: (a: any) => { L({ tool: 'read_note', note: pathOf(b, a.note) }); return readNote(b, a.note, a.max_chars, a.section); } },
     { name: 'backlinks', description: 'Welche Notizen verlinken auf diese Notiz?', inputSchema: { type: 'object', properties: { note }, required: ['note'] }, run: (a: any) => backlinks(b, a.note) },
     { name: 'links', description: 'Auf welche Notizen verweist diese Notiz?', inputSchema: { type: 'object', properties: { note }, required: ['note'] }, run: (a: any) => links(b, a.note) },
-    { name: 'related', description: 'Verwandte Notizen über den Link-Graphen (Links, Backlinks, gemeinsame Linkziele/Verweiser) — wenn die Suche die richtige Notiz nur streift.', inputSchema: { type: 'object', properties: { note, limit: { type: 'number' } }, required: ['note'] }, run: (a: any) => related(b, a.note, a.limit ?? 15) },
+    { name: 'related', description: 'Verwandte Notizen über den Link-Graphen (Links, Backlinks, gemeinsame Linkziele/Verweiser) — wenn die Suche die richtige Notiz nur streift.', inputSchema: { type: 'object', properties: { note, limit: { type: 'number' } }, required: ['note'] }, run: (a: any) => related(b, a.note, a.limit ?? 15, lg && ((results, from) => L({ tool: 'related', note: from, results }))) },
     { name: 'list_folder', description: 'Ordner und Notizen eines Vault-Ordners (leer = Wurzel).', inputSchema: { type: 'object', properties: { folder: { type: 'string' } } }, run: (a: any) => listFolder(b, a.folder ?? '') },
     { name: 'recent', description: 'Zuletzt geänderte Notizen.', inputSchema: { type: 'object', properties: { days: { type: 'number' }, folder: { type: 'string' }, limit: { type: 'number' } } }, run: (a: any) => recent(b, a.days ?? 7, a.folder, a.limit ?? 20) },
   ];
