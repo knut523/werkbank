@@ -456,8 +456,8 @@ export async function g0Tor(u: User, o: { slug: string | null; plan: string | nu
   const treffer = r.ergebnis === 'treffer';
   const q = await askKnut(u, {
     key, quelle: o.aufrufer.split(' ')[0], strand: o.strand ?? null, plan: o.plan,
-    title: treffer ? `G0: ${slug} — schon gebaut oder in Arbeit?` : `G0: ${slug} — vor dem Bau nicht prüfbar`,
-    context: `${o.title ? `Auftrag: ${o.title}\n` : ''}${g0Text(r)}`,
+    title: treffer ? `Schon gebaut oder in Arbeit? „${o.title || slug}“` : `Vor dem Bau nicht prüfbar: „${o.title || slug}“`,
+    context: `${o.title ? `Auftrag: ${o.title}\n` : ''}Spec: ${slug}\n${g0Text(r)}`,
     options: g0Optionen(r, o.nachts),
     recommendation: treffer
       ? (r.belege.some((b) => b.wirkung === 'treffer' && (b.art === 'baut' || b.art === 'autor')) ? 'auf Vorhandenem aufsetzen — erst mit dem anderen PR abstimmen' : 'Spec nachziehen/abräumen — die Arbeit liegt schon vor')
