@@ -7,7 +7,8 @@
 import { readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { getIndex, parseFrontmatter, resolveLink, extractWikilinks, type VaultIndex, type NoteMeta } from '../server/vault.ts';
-import { topicState } from '../server/search.ts';
+import { topicState, boostOf } from '../server/search.ts';
+import { STOP_WORDS, alternativesOf, fold, loadVaultGlossary } from '../server/search-lexicon.ts';
 
 export interface SearchArgs {
   query: string; folder?: string; team?: string; topic?: string; state?: string; type?: string; status?: string;
@@ -16,7 +17,6 @@ export interface SearchArgs {
 
 export interface Backend { meiliHost?: string; meiliKey?: string; meiliIndex?: string; vaultDir: string }
 
-const fold = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss');
 
 function lev1(a: string, b: string): boolean {   // Abstand ≤ 1
   if (Math.abs(a.length - b.length) > 1) return false;
@@ -51,59 +51,95 @@ export function matchesFilters(n: NoteMeta, a: SearchArgs): boolean {
   return true;
 }
 
-const words = new Map<string, { mtime: number; set: Set<string>; text: string }>();
+const STOP = new Set(STOP_WORDS.map(fold));
+/** Suchbegriffe einer Anfrage: gefaltet, ohne Füllwörter (bleibt nichts übrig, alle). */
+export function queryTerms(q: string): string[] {
+  const all = fold(q).split(/[^\p{L}\p{N}]+/u).filter((t) => t.length > 1);
+  const kept = all.filter((t) => !STOP.has(t));
+  return kept.length ? kept : all;
+}
+
+const words = new Map<string, { mtime: number; set: Set<string>; text: string; head: string; body: string }>();
 function noteText(idx: VaultIndex, n: NoteMeta) {
   const c = words.get(n.path);
   if (c && c.mtime === n.mtime) return c;
   let body = '';
   try { body = parseFrontmatter(readFileSync(join(idx.root, n.path), 'utf8')).body; } catch { /* weg */ }
-  const text = fold(`${n.title}\n${n.name}\n${body}`);
-  const entry = { mtime: n.mtime, set: new Set(text.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2)), text };
+  const aliases = Array.isArray(n.fm.aliases) ? n.fm.aliases.join(' ') : '';
+  const heads = [...body.matchAll(/^#{1,4} +(.+)$/gm)].map((m) => m[1]).join('\n');
+  const head = fold(`${n.title}\n${n.name.replace(/[-_]/g, ' ')}\n${aliases}\n${heads}\n${String(n.fm.domain ?? '')}\n${Array.isArray(n.fm.tags) ? n.fm.tags.join(' ') : ''}`);
+  const text = `${head}\n${fold(body)}`;
+  const entry = { mtime: n.mtime, set: new Set(text.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2)), text, head, body };
   words.set(n.path, entry);
   return entry;
 }
 
-function snippet(text: string, term: string) {
-  const i = text.indexOf(term);
-  const s = text.slice(Math.max(0, i - 80), i + 160).replace(/\s+/g, ' ').trim();
-  return i < 0 ? '' : s;
+/** Ausschnitt mit Überschriftenpfad: die ersten Zeilen, die einen Suchbegriff (oder ein Synonym) enthalten. */
+export function lineSnippet(body: string, terms: string[], max = 2): string {
+  const alts = terms.flatMap(alternativesOf).filter((t) => t.length > 1);
+  if (!alts.length) return '';
+  const path: string[] = [];
+  const out: string[] = [];
+  let inCode = false;
+  for (const line of body.split('\n')) {
+    if (/^(```|~~~)/.test(line)) { inCode = !inCode; continue; }
+    if (inCode) continue;
+    const h = line.match(/^(#{1,6}) +(.+)$/);
+    if (h) { path.length = h[1].length - 1; path[h[1].length - 1] = h[2].trim(); }
+    const f = fold(line);
+    if (!line.trim() || !alts.some((a) => f.includes(a))) continue;
+    const where = path.filter(Boolean).slice(-2).join(' › ');
+    const text = (h ? '' : line.replace(/^\s*[-*>|]+\s*/, '').replace(/\s+/g, ' ').trim()).slice(0, 180);
+    out.push(where ? `§ ${where}${text ? ': ' + text : ''}` : text);
+    if (out.length >= max) break;
+  }
+  return out.join(' ⏐ ');
 }
 
 export function fsSearch(idx: VaultIndex, a: SearchArgs) {
-  const terms = fold(a.query).split(/\s+/).filter((t) => t.length > 1);
-  const hits: { path: string; score: number; snippet: string }[] = [];
+  const terms = queryTerms(a.query ?? '');
+  const scored: { path: string; score: number; matched: number; snippet: string }[] = [];
   for (const n of idx.notes.values()) {
     if (!matchesFilters(n, a)) continue;
-    if (!terms.length) { hits.push({ path: n.path, score: n.mtime, snippet: '' }); continue; }
+    if (!terms.length) { scored.push({ path: n.path, score: n.mtime, matched: 0, snippet: '' }); continue; }
     const t = noteText(idx, n);
-    let score = 0, first = '';
+    let score = 0, matched = 0;
     for (const term of terms) {
-      let hit = t.text.includes(term);
-      let found = term;
+      const alts = alternativesOf(term);
+      let hit = alts.find((x) => t.text.includes(x));
       if (!hit && term.length >= 5) {
-        for (const w of t.set) if (w[0] === term[0] && lev1(w, term)) { hit = true; found = w; break; }
+        for (const w of t.set) if (w[0] === term[0] && lev1(w, term)) { hit = w; break; }
       }
-      if (!hit) { score = 0; break; }
-      score += (fold(n.title).includes(term) ? 5 : 1);
-      if (!first) first = snippet(t.text, found);
+      if (!hit) continue;
+      matched++;
+      score += t.head.includes(hit) ? 5 : 1;
     }
-    if (score) hits.push({ path: n.path, score, snippet: first });
+    if (matched) scored.push({ path: n.path, score: score + boostOf(n) * 0.1, matched, snippet: '' });
   }
-  return hits.sort((x, y) => y.score - x.score).slice(0, a.limit ?? 10);
+  // Wie Meilisearch: erst Notizen mit allen Begriffen; nur wenn es die nicht gibt, die mit den meisten.
+  const most = Math.max(0, ...scored.map((h) => h.matched));
+  const hits = scored.filter((h) => !terms.length || h.matched === most)
+    .sort((x, y) => y.score - x.score).slice(0, a.limit ?? 10);
+  for (const h of hits) h.snippet = terms.length ? lineSnippet(noteText(idx, idx.notes.get(h.path)!).body, terms) : '';
+  return hits;
 }
 
-async function meiliSearch(b: Backend, a: SearchArgs): Promise<{ path: string; snippet: string }[] | null> {
+/** Wie Meilisearch fehlende Wörter fallen lässt: 'frequency' hält die seltenen (aussagekräftigen) Begriffe —
+ *  im Eval besser als 'last' (das Wörter vom Ende her streicht). Exportiert für den Eval-Lauf. */
+export const tuning = { strategy: 'frequency' as 'last' | 'all' | 'frequency' };
+
+async function meiliSearch(b: Backend, q: string): Promise<string[] | null> {
   if (!b.meiliHost || !b.meiliKey) return null;
   try {
     const r = await fetch(`${b.meiliHost}/indexes/${b.meiliIndex ?? 'werkbank_vault'}/search`, {
       method: 'POST',
       headers: { authorization: `Bearer ${b.meiliKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ q: a.query, limit: 200, attributesToRetrieve: ['path'], attributesToCrop: ['body'], cropLength: 30 }),
+      body: JSON.stringify({ q, limit: 200, attributesToRetrieve: ['path'], matchingStrategy: tuning.strategy }),
       signal: AbortSignal.timeout(4000),
     });
     if (!r.ok) return null;
     const j: any = await r.json();
-    return (j.hits ?? []).map((h: any) => ({ path: h.path, snippet: String(h._formatted?.body ?? '').replace(/\s+/g, ' ').slice(0, 240) }));
+    return (j.hits ?? []).map((h: any) => String(h.path));
   } catch { return null; }
 }
 
@@ -119,11 +155,12 @@ const fmt = (idx: VaultIndex, rows: { path: string; snippet: string }[], via: st
 export async function search(b: Backend, a: SearchArgs): Promise<string> {
   const idx = getIndex(b.vaultDir);
   const limit = Math.min(Math.max(a.limit ?? 10, 1), 50);
+  loadVaultGlossary(idx);   // Synonyme für Ausschnitte und den Dateisystem-Weg
   if (a.query?.trim()) {
-    const m = await meiliSearch(b, a);
-    if (m) {
-      const rows = m.filter((h) => idx.notes.has(h.path) && matchesFilters(idx.notes.get(h.path)!, a)).slice(0, limit);
-      if (rows.length || !m.length) return fmt(idx, rows, 'Meilisearch');
+    const m = (await meiliSearch(b, a.query))?.filter((p) => idx.notes.has(p) && matchesFilters(idx.notes.get(p)!, a));
+    if (m?.length) {
+      const terms = queryTerms(a.query);
+      return fmt(idx, m.slice(0, limit).map((path) => ({ path, snippet: lineSnippet(noteText(idx, idx.notes.get(path)!).body, terms) })), 'Meilisearch');
     }
   }
   return fmt(idx, fsSearch(idx, { ...a, limit }), 'Dateisystem');
@@ -192,6 +229,27 @@ export function links(b: Backend, note: string): string {
   return [`${n.links.length} Links aus ${n.path}:`, ...n.links.map((p) => `- ${idx.notes.get(p)?.title} — ${p}`), ...(n.unresolved.length ? [`Nicht aufgelöst: ${n.unresolved.join(', ')}`] : [])].join('\n');
 }
 
+/** Verwandte Notizen über den Link-Graphen: direkte Links/Backlinks, dann gemeinsame Linkziele und gemeinsame Verweiser. */
+export function related(b: Backend, note: string, limit = 15): string {
+  const idx = getIndex(b.vaultDir);
+  const n = findNote(idx, note);
+  const out = new Set(n.links), inn = idx.backlinks.get(n.path) ?? new Set<string>();
+  const score = new Map<string, { s: number; why: Set<string> }>();
+  const add = (p: string, s: number, why: string) => {
+    if (p === n.path || !idx.notes.has(p)) return;
+    const e = score.get(p) ?? { s: 0, why: new Set<string>() };
+    e.s += s; e.why.add(why); score.set(p, e);
+  };
+  for (const p of out) add(p, 3, 'verlinkt');
+  for (const p of inn) add(p, 3, 'verweist hierher');
+  // Hub-Notizen (MOCs, Übersichten mit sehr vielen Links) tragen wenig: Gewicht 1/Anzahl.
+  for (const t of out) { const bl = idx.backlinks.get(t) ?? new Set<string>(); if (bl.size <= 40) for (const p of bl) add(p, 1 / Math.sqrt(bl.size), 'gleiches Linkziel'); }
+  for (const s of inn) { const ln = idx.notes.get(s)?.links ?? []; if (ln.length <= 40) for (const p of ln) add(p, 1 / Math.sqrt(ln.length), 'gemeinsamer Verweiser'); }
+  const rows = [...score.entries()].sort((x, y) => y[1].s - x[1].s || boostOf(idx.notes.get(y[0])!) - boostOf(idx.notes.get(x[0])!)).slice(0, Math.min(limit, 50));
+  if (!rows.length) return `Keine verwandten Notizen zu ${n.path} (keine Links, keine Backlinks).`;
+  return [`${rows.length} verwandte Notizen zu ${n.path}:`, ...rows.map(([p, e]) => `- ${idx.notes.get(p)!.title} — ${p} (${[...e.why].join(', ')})`)].join('\n');
+}
+
 export function listFolder(b: Backend, folder = ''): string {
   const idx = getIndex(b.vaultDir);
   const f = folder.replace(/^\/+|\/+$/g, '');
@@ -234,6 +292,7 @@ export function toolDefs(b: Backend) {
     { name: 'read_note', description: 'Eine Notiz lesen: Frontmatter (geparst), aufgelöste Wikilinks, Inhalt. section = nur dieser Abschnitt; max_chars (Vorgabe 12000).', inputSchema: { type: 'object', properties: { note, section: { type: 'string' }, max_chars: { type: 'number' } }, required: ['note'] }, run: (a: any) => readNote(b, a.note, a.max_chars, a.section) },
     { name: 'backlinks', description: 'Welche Notizen verlinken auf diese Notiz?', inputSchema: { type: 'object', properties: { note }, required: ['note'] }, run: (a: any) => backlinks(b, a.note) },
     { name: 'links', description: 'Auf welche Notizen verweist diese Notiz?', inputSchema: { type: 'object', properties: { note }, required: ['note'] }, run: (a: any) => links(b, a.note) },
+    { name: 'related', description: 'Verwandte Notizen über den Link-Graphen (Links, Backlinks, gemeinsame Linkziele/Verweiser) — wenn die Suche die richtige Notiz nur streift.', inputSchema: { type: 'object', properties: { note, limit: { type: 'number' } }, required: ['note'] }, run: (a: any) => related(b, a.note, a.limit ?? 15) },
     { name: 'list_folder', description: 'Ordner und Notizen eines Vault-Ordners (leer = Wurzel).', inputSchema: { type: 'object', properties: { folder: { type: 'string' } } }, run: (a: any) => listFolder(b, a.folder ?? '') },
     { name: 'recent', description: 'Zuletzt geänderte Notizen.', inputSchema: { type: 'object', properties: { days: { type: 'number' }, folder: { type: 'string' }, limit: { type: 'number' } } }, run: (a: any) => recent(b, a.days ?? 7, a.folder, a.limit ?? 20) },
   ];
