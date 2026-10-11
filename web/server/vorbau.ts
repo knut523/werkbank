@@ -359,7 +359,7 @@ export function protokolliere(e: Record<string, unknown>, pfad?: string) {
 
 export interface Bilanz { tage: number; pruefungen: number; rueckfragen: number; knoepfe: Record<string, number>; fehlalarme: number; fehlalarmeAutor: number; fehltreffer: { slug: string; beleg: string; at: string }[]; autorKriteriumAktiv: boolean; nachschaerfen: boolean }
 
-/** Fehlalarm = Rückfrage, auf die Knut „trotzdem bauen“ (oder „ohne PR-Prüfung bauen“) gewählt hat. */
+/** Fehlalarm = Treffer, auf den Knut „trotzdem bauen“ gewählt hat (nicht nach einem Stopp ohne Prüfung). */
 export function bilanz(pfad?: string, tage = 28, now = Date.now()): Bilanz {
   const p = protokollPfad(pfad);
   const ab = now - tage * 86_400_000, woche = now - 7 * 86_400_000;
@@ -372,7 +372,8 @@ export function bilanz(pfad?: string, tage = 28, now = Date.now()): Bilanz {
     if (e.art === 'pruefung') { b.pruefungen++; if (e.ergebnis === 'treffer' || e.ergebnis === 'stopp') b.rueckfragen++; if (t >= woche && e.ergebnis === 'treffer') wocheFragen++; }
     if (e.art === 'knopf') {
       b.knoepfe[e.knopf] = (b.knoepfe[e.knopf] ?? 0) + 1;
-      if (e.knopf === 'trotzdem bauen' || e.knopf === OHNE_PR) {
+      // Nur nach einem Treffer ist „trotzdem bauen“ ein Fehlalarm; nach einem Stopp (Token/API) war nichts zu finden.
+      if (e.knopf === 'trotzdem bauen' && e.ergebnis !== 'stopp') {
         b.fehlalarme++;
         if (t >= woche && e.knopf === 'trotzdem bauen') wocheTrotzdem++;
         // Nur-Autor-Treffer bei eigenem branch: gesondert (DoD 25).
@@ -398,7 +399,7 @@ export function g0Text(r: VorbauErgebnis): string {
 /** Knöpfe der Rückfrage: drei bei Treffer; beim Stopp nur „trotzdem bauen“ (+ „ohne PR-Prüfung bauen“, wenn nur die PR-API fehlt und tagsüber). */
 export function g0Optionen(r: VorbauErgebnis, nachts = false): { label: string; consequence: string }[] {
   const folge: Record<string, string> = {
-    'trotzdem bauen': 'Bau startet trotz Treffer; im G0-Protokoll als Fehlalarm gezählt.',
+    'trotzdem bauen': r.ergebnis === 'treffer' ? 'Bau startet trotz Treffer; im G0-Protokoll als Fehlalarm gezählt.' : 'Bau startet ohne Prüfung; im G0-Protokoll vermerkt.',
     'auf Vorhandenem aufsetzen': 'Bau startet, der Agent baut auf dem gefundenen Branch/PR auf statt neu.',
     'Spec nachziehen/abräumen': 'Kein Bau; Spec bzw. Register werden nachgezogen.',
     [OHNE_PR]: 'Bau startet ohne Prüfung offener PRs (nur tagsüber), protokolliert.',

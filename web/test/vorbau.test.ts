@@ -323,6 +323,10 @@ test('Protokoll und Bilanz: Fehlalarme, „anderer Autor“ gesondert, Fehltreff
   protokolliere({ art: 'fehltreffer', slug: 'c-d', beleg: 'olaf-admin#400 doppelt' }, p);
   let b = bilanz(p);
   assert.deepEqual([b.fehlalarme, b.fehlalarmeAutor, b.fehltreffer.length, b.autorKriteriumAktiv], [1, 1, 1, true]);
+  // Nach einem Stopp (kein Lesetoken) ist „trotzdem bauen“ kein Fehlalarm; „ohne PR-Prüfung bauen“ auch nicht.
+  protokolliere({ art: 'knopf', slug: 'g-h', knopf: 'trotzdem bauen', ergebnis: 'stopp', kriterien: [] }, p);
+  protokolliere({ art: 'knopf', slug: 'g-h', knopf: 'ohne PR-Prüfung bauen', kriterien: [] }, p);
+  assert.equal(bilanz(p).fehlalarme, 1);
   protokolliere({ art: 'knopf', slug: 'e-f', knopf: 'trotzdem bauen', kriterien: ['autor'] }, p);
   b = bilanz(p);
   assert.equal(b.autorKriteriumAktiv, false);
