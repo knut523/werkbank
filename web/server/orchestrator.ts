@@ -436,10 +436,12 @@ export function startAutoWeiter(deps: AutoDeps) {
 }
 
 /** Geprüft: von Knut (CLI der Hauptsitzung, „Passt“, „Anhalten“) → knutReviewedAt; vom Leitstand → nur abgelegt (Teil B, G2). */
-export async function reviewOrch(u: User, id: string, note = '', by: 'knut' | 'leitstand' = 'knut') {
+export async function reviewOrch(u: User, id: string, note = '', by: 'knut' | 'leitstand' = 'knut', expect: Record<string, unknown> = {}) {
   const d = await ownRun(u, id);
   const now = new Date();
-  await runs().updateOne({ _id: d._id }, { $set: { reviewedAt: now, reviewNote: String(note).slice(0, 500), ...(by === 'knut' ? { knutReviewedAt: now, reviewedBy: 'knut' } : { reviewedBy: 'leitstand' }) } });
+  // expect: der gesehene Stand („Passt“ auf „Heute“) — hat er sich geändert, nichts tun (Council Teil B, Zeitfenster).
+  const r = await runs().updateOne({ _id: d._id, ...expect }, { $set: { reviewedAt: now, reviewNote: String(note).slice(0, 500), ...(by === 'knut' ? { knutReviewedAt: now, reviewedBy: 'knut' } : { reviewedBy: 'leitstand' }) } });
+  if (!r.matchedCount) throw err(409, 'Der Strang hat sich inzwischen geändert — Seite neu laden.');
   return { id, reviewed: true, by };
 }
 
@@ -452,7 +454,7 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
   if (statusTicking) return;
   statusTicking = true;
   try {
-    const docs: any[] = await runs().find({ ...STRANDS, knutReviewedAt: null, startError: null, startedAt: { $gt: new Date(now - 14 * 86400_000) } }).toArray();
+    const docs: any[] = await runs().find({ ...STRANDS, ...OPEN, startError: null, startedAt: { $gt: new Date(now - 14 * 86400_000) } }).toArray();
     const byUser = new Map<string, any[]>();
     for (const d of docs) byUser.set(d.userId, [...(byUser.get(d.userId) ?? []), d]);
     for (const [userId, list] of byUser) {
@@ -461,6 +463,8 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
       let states: Map<string, any>;
       try { states = await strandStates(u); } catch { continue; }
       for (const d of list) {
+        // Schon fertig nach der letzten Nachricht an den Strang: ohne neue Nachricht ändert sich nichts (Last, Council Teil B).
+        if (d.lastStatus === 'done' && d.doneAt && new Date(d.doneAt).getTime() > new Date(d.lastSentAt ?? d.startedAt).getTime() && !states.get(d.conv)?.running) continue;
         try {
           const s = states.get(d.conv);
           const last = await lastMessage(u, d.conv);
@@ -470,7 +474,8 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
           // „fertig“ zählt nur mit einer Antwort NACH der letzten Nachricht an den Strang (G1: nach Nacharbeit nicht die alte).
           if (st.status === 'done' && last && last.at > new Date(d.lastSentAt ?? d.startedAt).getTime() && (!d.doneAt || new Date(d.doneAt).getTime() < last.at)) set.doneAt = new Date(last.at);
           if (!d.bericht) { const b = findBericht([...(d.review?.artefakte ?? []), last && !last.fromUser ? last.text : '']); if (b) set.bericht = b; }
-          await runs().updateOne({ _id: d._id }, { $set: set });
+          // Nur, wenn inzwischen keine neue Nachricht an den Strang ging (sonst käme mit der alten Antwort ein altes doneAt zurück).
+          await runs().updateOne({ _id: d._id, lastSentAt: d.lastSentAt ?? null }, { $set: set });
         } catch (e: any) { deps.log?.('orch-status fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
       }
     }

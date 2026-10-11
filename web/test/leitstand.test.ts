@@ -133,9 +133,13 @@ before(async () => {
       await L.collection('conversations').updateOne({ conversationId, user: p.id }, { $setOnInsert: { title: 'New Chat', tags: [] } }, { upsert: true });
       await L.collection('messages').insertOne({ messageId: body.messageId, parentMessageId: body.parentMessageId, conversationId, user: p.id, isCreatedByUser: true, text: body.text, createdAt: new Date() });
       json(200, { streamId: conversationId, conversationId, status: 'started' });
+      // Nach dem Testende ist die Brücke weg: kein unbehandelter Fehler aus einem noch laufenden Zug.
       const r = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/chat/completions`, { method: 'POST', headers: { authorization: 'Bearer mock-token', 'content-type': 'application/json', 'x-librechat-user-id': p.id, 'x-librechat-conversation-id': conversationId, 'x-librechat-user-email': p.email },
-        body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: body.text }] }) });
-      const text = (await r.text()).split('\n').filter((l) => l.startsWith('data: {')).map((l) => JSON.parse(l.slice(6)).choices[0]?.delta?.content ?? '').join('');
+        body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: body.text }] }) }).catch(() => null);
+      if (!r) return;
+      const raw = await r.text().catch(() => null);
+      if (raw === null) return;
+      const text = raw.split('\n').filter((l) => l.startsWith('data: {')).map((l) => JSON.parse(l.slice(6)).choices[0]?.delta?.content ?? '').join('');
       await L.collection('messages').insertOne({ messageId: randomUUID(), parentMessageId: body.messageId, conversationId, user: p.id, isCreatedByUser: false, text: '', content: [{ type: 'text', text }], createdAt: new Date() });
       return;
     }
@@ -526,4 +530,42 @@ test('Teil B (G2/G3, B-19/B-24): Ablage durch den Leitstand lässt die Karte ste
   assert.equal(d!.reviewReadyAt, null); assert.ok(d!.prevReview?.review);
   const c2 = await until(() => cardOf(st2.id), (c: any) => c?.reviewOld === true);
   assert.equal(c2.review.gemacht, 'y');
+});
+
+test('Council-Diff Teil B: per CLI geprüftes Altdokument (reviewedAt ohne reviewedBy) kommt nicht als Karte zurück und ist nicht offen', async () => {
+  const conv = randomUUID(), t = Date.now();
+  await L().collection('messages').insertOne({ messageId: randomUUID(), conversationId: conv, user: String(knut._id), isCreatedByUser: false, text: '', content: [{ type: 'text', text: 'Alt.\nStatus: fertig' }], createdAt: new Date(t) });
+  await W().collection('orchestrator_runs').insertOne({ _id: 'a1d0c0de' as any, userId: String(knut._id), conv, url: 'https://chat.example/c/alt', title: 'Alt: geprüft', cwd: WT('wt-altg'), startedAt: new Date(t - 60_000), lastSentAt: new Date(t - 60_000), sends: 1, reviewedAt: new Date(t - 1000), startError: null });
+  await pause(1500);
+  assert.equal(await cardOf('a1d0c0de'), undefined);
+  const ov = await (await fetch(B + '/api/leitstand/overview', { headers: { cookie: await cookie(knut) } })).json();
+  assert.ok(!ov.offen.some((g: any) => g.strands.some((x: any) => x.id === 'a1d0c0de')));
+  assert.equal((await W().collection('orchestrator_runs').findOne({ _id: 'a1d0c0de' as any }))!.doneAt ?? null, null, 'statusTick fasst ihn nicht an');
+});
+
+test('Council-Diff Teil B: läuft ein fertiger Strang wieder, bleibt die Karte sichtbar, zählt nicht und Passt → 409', async () => {
+  const st = await doneStrand('Teil B: läuft wieder', 'wt-b6');
+  await until(() => cardOf(st.id), (c: any) => !!c);
+  const r = await fetch(B + '/internal/orchestrator/send', { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ id: st.id, text: 'langsam 4000', via: 'leitstand' }) });
+  assert.equal(r.status, 200);
+  const c = await until(() => cardOf(st.id), (x: any) => x?.running === true);
+  assert.equal(c.running, true);
+  // Zähler: dieselbe Seite einmal mit laufender Karte, einmal (nach dem Zug) ohne — die laufende zählt nicht.
+  const countNow = (await (await fetch(B + '/api/today/count', { headers: { cookie: await cookie(knut) } })).json()).count;
+  const p = await post(`/api/leitstand/strands/${st.id}/passt`, { seen: c.seen });
+  assert.equal(p.status, 409);
+  await until(() => cardOf(st.id), (x: any) => x && !x.running, 20_000);
+  const countAfter = (await (await fetch(B + '/api/today/count', { headers: { cookie: await cookie(knut) } })).json()).count;
+  assert.equal(countAfter, countNow + 1, 'erst die wieder fertige Karte zählt');
+});
+
+test('Council-Diff Teil B (B-21/B-25, zuletzt — beendet die Brücke): Brücke weg → Heute zeigt die Karte weiter (nur Mongo), Passt → 503', async () => {
+  const st = await doneStrand('Teil B: Brücke weg', 'wt-b7');
+  const card = await until(() => cardOf(st.id), (c: any) => !!c);
+  const exited = new Promise((r) => bridge.once('exit', r));
+  bridge.kill(); await exited;
+  await pause(1500);
+  const t = await today();
+  assert.ok(t.strands.some((c: any) => c.id === st.id), 'Karte bleibt (Stand aus Mongo, Takt überschreibt bei Brückenfehler nichts)');
+  assert.equal((await post(`/api/leitstand/strands/${st.id}/passt`, { seen: card.seen })).status, 503);
 });

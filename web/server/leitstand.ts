@@ -317,6 +317,9 @@ export function startLeitstandTick(deps: LeitDeps) {
 
 export type StatusWord = 'läuft' | 'wartet' | 'fertig' | 'gestoppt';
 
+/** Von Knut geprüft — auch alte Dokumente, die per CLI geprüft wurden (reviewedAt ohne reviewedBy), wie OPEN (Council Teil B). */
+export const knutDone = (d: any) => !!d.knutReviewedAt || (!!d.reviewedAt && !d.reviewedBy);
+
 /** Statuswort aus dem festgeschriebenen Stand (B-3): failed und Deckel → gestoppt; review_ready/fertig → fertig. */
 export function statusWord(d: any): StatusWord {
   if (d.autoStopped) return 'gestoppt';
@@ -344,7 +347,7 @@ export function groupStrands(docs: any[], now = Date.now()) {
     g.items.push(d);
   }
   const shaped = groups.map((g) => {
-    const items = g.items.map((d) => ({ d, word: d.knutReviewedAt ? null : statusWord(d) }));
+    const items = g.items.map((d) => ({ d, word: knutDone(d) ? null : statusWord(d) }));
     const open = items.filter((x) => x.word) as { d: any; word: StatusWord }[];
     const count = (w: StatusWord) => open.filter((x) => x.word === w).length;
     return { key: g.key, lauf: g.lauf, from: new Date(g.from), to: new Date(g.to), done: open.length === 0,
@@ -382,7 +385,7 @@ export async function overview(u: User) {
 /** Review-Karten auf „Heute“ (B4): fertig gemeldet oder review_ready, von Knut nicht geprüft — nur Mongo. */
 export async function strandCards(u: User) {
   if (u.role !== 'ADMIN') return [];
-  const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, knutReviewedAt: null, startError: null, $or: [{ doneAt: { $ne: null } }, { reviewReadyAt: { $ne: null } }] })
+  const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, ...OPEN, startError: null, $and: [{ $or: [{ doneAt: { $ne: null } }, { reviewReadyAt: { $ne: null } }] }] })
     .sort({ startedAt: -1 }).limit(30).toArray();
   return docs.filter((d) => d.doneAt || d.reviewReadyAt).map((d) => {
     const review = d.review ?? d.prevReview?.review ?? null;
@@ -391,6 +394,7 @@ export async function strandCards(u: User) {
       review: review ? { ...review, nichtGemacht: review.nichtGemacht ?? review.nicht_gemacht ?? '', artefakte: review.artefakte ?? [], dod: review.dod ?? [] } : null,
       reviewOld: !d.review && !!d.prevReview, excerpt: d.lastExcerpt ?? '', bericht: !!d.bericht,
       reviewReadyAt: d.reviewReadyAt ?? d.doneAt, statusAt: d.statusAt ?? null, status: statusWord(d), reviewedBy: d.reviewedBy ?? null,
+      running: d.lastStatus === 'running',   // läuft wieder (Leitstand hat weitergeschickt): sichtbar, aber Passt/Nacharbeit erst danach
       seen: String(new Date(d.reviewReadyAt ?? d.doneAt).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime()),
       written: [], startedAt: d.startedAt,
     };

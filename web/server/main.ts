@@ -1087,13 +1087,13 @@ async function myQueue(u: User) {
 }
 
 /** Zähler für die Navigation: alles, was etwas von der Person will (laufende Agenten nicht). */
-async function todayCount(u: User, queue?: any[], mine?: any) {
+async function todayCount(u: User, queue?: any[], mine?: any, cards?: any[]) {
   const q = queue ?? await myQueue(u);
   const m = mine ?? await mineFor(u, { write: false });   // Zähler (alle 60 s): nur lesen, nie freigaben.md schreiben
   const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
   const hyg = h.items.filter((i: any) => !h.snoozed.includes(i.key)).length;
   const orch = (await listQuestions(u, { open: true }).catch(() => [])).length;   // Rückfragen des Orchestrators
-  const strands = (await strandCards(u).catch(() => [])).length;   // fertige Stränge (nur Admins, nur Mongo — Teil B, F1)
+  const strands = (cards ?? await strandCards(u).catch(() => [])).filter((c: any) => !c.running).length;   // fertige Stränge (nur Admins, nur Mongo — Teil B, F1)
   return strands + q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + (m.pendingApprovals?.length ?? 0) + (m.draft ? 1 : 0) + hyg + orch;
 }
 
@@ -1115,7 +1115,7 @@ on('GET', /^\/api\/today$/, async (req, res) => {
     .map((r: any) => ({ id: String(r._id), title: r.title, url: r.url, n: r.autoTotal, stopped: !!r.autoStopped }));
   const memory = u.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null;   // nur Admins (RAM-Plan 125)
   const leitstand = await leitstandLine(u).catch(() => null);   // nur Admins (Plan 132)
-  send(res, 200, { queue, strands: cards, mine, day, today, orchOpen, orchAuto, leitstand, memory, count: await todayCount(u, queue, mine), dryRun: dryRun() });
+  send(res, 200, { queue, strands: cards, mine, day, today, orchOpen, orchAuto, leitstand, memory, count: await todayCount(u, queue, mine, cards), dryRun: dryRun() });
 });
 
 on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
@@ -1221,7 +1221,7 @@ on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (r
   try { st = (await strandStates(u)).get(d.conv); } catch { throw new HttpError(503, 'Brücke nicht erreichbar — gleich noch einmal.'); }
   if (st?.running) throw new HttpError(409, 'Der Strang arbeitet gerade — warte, bis er fertig ist.');
   if (m[2] === 'passt') {
-    await reviewOrch(u, m[1], String(b.note ?? 'Passt (Heute)'), 'knut');
+    await reviewOrch(u, m[1], String(b.note ?? 'Passt (Heute)'), 'knut', { lastSentAt: d.lastSentAt ?? null, reviewReadyAt: d.reviewReadyAt ?? null, doneAt: d.doneAt ?? null });
     log('strang geprüft', { user: u.id, id: m[1] });
     return send(res, 200, { ok: true });
   }

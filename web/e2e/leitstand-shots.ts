@@ -21,7 +21,8 @@ const tag = randomBytes(4).toString('hex');
 const DB = `werkbank_lshots_${tag}`, LCDB = `librechat_lshots_${tag}`;
 const tmp = mkdtempSync(join(tmpdir(), 'werkbank-lshots-'));
 const ROOT = join(tmp, 'work'), LEIT = join(ROOT, 'knut');
-for (const d of [LEIT, join(LEIT, 'wt-flex'), join(LEIT, 'wt-bot'), join(tmp, 'vault')]) mkdirSync(d, { recursive: true });
+for (const d of [LEIT, join(LEIT, 'wt-flex'), join(LEIT, 'wt-flex2'), join(LEIT, 'wt-bot'), join(LEIT, 'wt-alt'), join(tmp, 'vault'), join(tmp, 'review-pakete', '140-flex-speicher')]) mkdirSync(d, { recursive: true });
+writeFileSync(join(tmp, 'review-pakete', '140-flex-speicher', 'bericht.md'), '# Flex: Speicher-Pilot — Bericht\n\n## DoD\n| # | Punkt | Stand |\n|---|---|---|\n| 1 | Scheibe 2 gebaut | ja |\n| 2 | Tests grün | ja |\n\n## Für Knut zur Nachprüfung\n- Ladekurve am echten Speicher ansehen.\n');
 const INTERNAL = randomBytes(16).toString('hex'), JWT_SECRET = randomBytes(16).toString('hex'), REFRESH = randomBytes(16).toString('hex');
 const knut = { _id: new ObjectId(), email: 'knut@maxenergy.at', name: 'Knut Peters', role: 'ADMIN' };
 const team = { _id: new ObjectId(), email: 'team@maxenergy.at', name: 'Team Kollegin', role: 'USER' };
@@ -82,13 +83,16 @@ try {
       WERKBANK_ALLOWED_EMAILS: `${knut.email},${team.email}`, WERKBANK_PILOT_EMAIL: knut.email, WERKBANK_TEAM_FEATURES: 'heute,orchestrator', CREDS_KEY: randomBytes(32).toString('hex'), CREDS_IV: randomBytes(16).toString('hex'),
       WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: join(tmp, 'data'), WERKBANK_MEILI_INDEX: `werkbank_lshots_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_SECRET, JWT_REFRESH_SECRET: REFRESH,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'), WERKBANK_FORGE_MCP: '', WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vs'), WERKBANK_VAULT_SYNC_SCRIPT: '/bin/true',
-      WERKBANK_LEITSTAND_DIR: LEIT, ORCH_AUTO_WEITER_TICK_MS: '300', LEITSTAND_WAKE_DEBOUNCE_MS: '500' } }));
+      WERKBANK_LEITSTAND_DIR: LEIT, ORCH_AUTO_WEITER_TICK_MS: '300', LEITSTAND_WAKE_DEBOUNCE_MS: '500', WERKBANK_REVIEW_DIR: join(tmp, 'review-pakete') } }));
   await waitFor(`http://127.0.0.1:${BRIDGE_PORT}/health`);
   await waitFor(`${B}/api/health`);
 
   const internal = (path: string, b: unknown) => fetch(B + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify(b) }).then((r) => r.json());
   const ls: any = await internal('/internal/orchestrator/leitstand/start', { handoverText: '# Übergabe\n\n## Offene Stränge\n- Flex: Speicher-Pilot (wartet)\n- Bot: Antworten (läuft)\n' });
-  await internal('/internal/orchestrator/start', { title: 'Flex: Speicher-Pilot', cwd: join(LEIT, 'wt-flex'), prompt: 'mock-antwort Scheibe 2 gebaut, Tests grün.\\n### Stand\\n- Erledigt: Scheibe 2\\n- Offen: nichts\\n- Braucht Knut: nichts\\nStatus: fertig' });
+  await internal('/internal/orchestrator/start', { title: 'Flex: Speicher-Pilot', lauf: 'Flex', cwd: join(LEIT, 'wt-flex'), prompt: 'Bericht nach ~/work/knut/review-pakete/140-flex-speicher/bericht.md\nmock-antwort Scheibe 2 gebaut, Tests grün.\\n### Stand\\n- Erledigt: Scheibe 2\\n- Offen: nichts\\n- Braucht Knut: nichts\\nStatus: fertig' });
+  await internal('/internal/orchestrator/start', { title: 'Flex: Abrechnung', lauf: 'Flex', cwd: join(LEIT, 'wt-flex2'), prompt: 'langsam 10000' });
+  const alt: any = await internal('/internal/orchestrator/start', { title: 'Vorbau: Check', cwd: join(LEIT, 'wt-alt'), prompt: 'mock-antwort ok\\nStatus: fertig' });
+  await internal('/internal/orchestrator/review', { id: alt.id });
   await internal('/internal/orchestrator/start', { title: 'Bot: Antworten', cwd: join(LEIT, 'wt-bot'), prompt: 'mock-antwort Frage zur Tonalität.\\n### Stand\\n- Offen: Ton der Antworten\\n- Braucht Knut: Du oder Sie?\\nStatus: braucht Antwort' });
   let wake: any = null;
   for (let i = 0; i < 80 && !wake; i++) { await pause(250); wake = await L.collection('messages').findOne({ conversationId: ls.conv, isCreatedByUser: true, text: /^🛰️/ }); }
@@ -121,6 +125,36 @@ try {
       if (line) await p.getByTestId('leitstand').screenshot({ path: join(OUT, `${who}-${name}-leitstand-zeile.png`) });
       await ctx.close();
     }
+  }
+  // Teil B: Seite „Leitstand“ (Gruppen zu/auf, Bericht offen) und die Strang-Karte auf „Heute“.
+  for (let i = 0; i < 40; i++) { const t: any = await (await fetch(B + '/api/leitstand/overview', { headers: { cookie: await login(knut) } })).json(); if (t.offen?.some((g: any) => g.lauf === 'Flex' && g.counts.fertig)) break; await pause(300); }
+  for (const [name, vp] of [['desktop', { width: 1440, height: 900 }], ['handy', { width: 390, height: 844 }]] as const) {
+    const cookie = await login(knut);
+    const ctx = await browser.newContext({ viewport: vp, locale: 'de-DE', deviceScaleFactor: name === 'handy' ? 2 : 1 });
+    await ctx.addCookies([{ name: cookie.split('=')[0], value: cookie.split('=')[1], url: B }]);
+    const p = await ctx.newPage();
+    const shot = async (n: string, full = false) => {
+      const wide = await p.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+      console.log(`leitstand-${name}-${n}: waagrechtes Rollen ${wide ? 'JA' : 'nein'}`);
+      await p.screenshot({ path: join(OUT, `b-${name}-${n}.png`), fullPage: full });
+    };
+    await p.goto(B + '/#/leitstand');
+    await p.getByTestId('leitstand-seite').waitFor();
+    await pause(500);
+    await shot('01-uebersicht-zu');
+    await p.locator('details.leit-gruppe[data-lauf="Flex"] > summary').click();
+    await p.locator('details.leit-erledigt > summary').click();
+    await pause(300);
+    await shot('02-gruppe-auf', true);
+    await p.locator('details.leit-gruppe[data-lauf="Flex"] a', { hasText: 'Bericht' }).first().click();
+    await p.getByTestId('bericht').waitFor();
+    await pause(400);
+    await shot('03-bericht-offen');
+    await p.goto(B + '/#/');
+    await p.getByTestId('review-queue').waitFor();
+    await pause(500);
+    await shot('04-heute-strang-karte', true);
+    await ctx.close();
   }
   // Die Meldung im Leitstand als gerendertes Markdown (so, wie LibreChat sie als Nutzernachricht zeigt — Nachbau).
   const p = await (await browser.newContext({ viewport: { width: 900, height: 700 } })).newPage();

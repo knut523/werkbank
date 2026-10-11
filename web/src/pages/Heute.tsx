@@ -16,7 +16,7 @@ function Head({ it }: { it: any }) {
     <div className="rq-head">
       {it.kind === 'strand' ? <a href="#/leitstand" className="rq-key">{it.key}</a> : <a href={`#/board?key=${it.key}`} className="rq-key">{it.key}</a>}
       <span className="rq-title">{it.summary ?? ''}</span>
-      <span className="tiny muted">{fmtDateTime(it.reviewReadyAt ?? it.endedAt ?? it.startedAt)}</span>
+      <span className="tiny muted">{it.kind === 'strand' && it.running ? <span className="chip">läuft wieder</span> : null} {fmtDateTime(it.reviewReadyAt ?? it.endedAt ?? it.startedAt)}{it.kind === 'strand' && it.statusAt ? ` · Stand ${fmtDateTime(it.statusAt)}` : ''}</span>
     </div>
   );
 }
@@ -92,8 +92,8 @@ function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
       <ReviewBody it={it} />
       {it.bucket === 'review' && <>
         <div className="row rq-actions">
-          <button className="btn primary" style={BIG} disabled={busy} onClick={passt}>Passt</button>
-          <button className="btn" style={BIG} disabled={busy} aria-expanded={rework !== null} onClick={() => setRework(rework === null ? '' : null)}>Nacharbeit</button>
+          <button className="btn primary" style={BIG} disabled={busy || it.running} onClick={passt}>Passt</button>
+          <button className="btn" style={BIG} disabled={busy || it.running} aria-expanded={rework !== null} onClick={() => setRework(rework === null ? '' : null)}>Nacharbeit</button>
           {open}
           {it.kind !== 'strand' && <label className="small row" style={{ gap: 6 }}><input type="checkbox" checked={comment} onChange={(e) => setComment(e.target.checked)} /> mit Jira-Kommentar</label>}
           {it.kind === 'strand' && it.reviewedBy === 'leitstand' && <span className="tiny muted">vom Leitstand abgelegt</span>}
