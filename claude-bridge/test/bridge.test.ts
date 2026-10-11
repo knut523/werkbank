@@ -6,7 +6,7 @@ import { mkdtempSync, existsSync, statSync, mkdirSync, writeFileSync } from 'nod
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { classify, parseAnswer, jiraWriteKeys } from '../src/tools.ts';
+import { classify, parseAnswer, jiraWriteKeys, confirmQuestion, statusLine } from '../src/tools.ts';
 
 const PORT = 3098;
 let proc: ChildProcess;
@@ -213,6 +213,13 @@ test('Einordnung der Werkbank-Werkzeuge', () => {
   assert.equal(classify('mcp__vault-search__read_note', {}).cls, 'read');
   assert.equal(classify('mcp__werkbank__hygiene_snooze', {}).cls, 'read');
   assert.equal(classify('mcp__werkbank__jira_update', {}).cls, 'confirm');
+  assert.equal(classify('mcp__werkbank__jira_update_many', {}).cls, 'confirm');
+  assert.equal(classify('mcp__werkbank__agent_start', {}).cls, 'confirm');
+  // Auch im Auto-Modus (Arbeitsordner und „voll“): gesammelt schreiben und Agent-Chats starten fragen immer.
+  for (const ctx of [{ workDir: '/tmp' }, { workDir: '/tmp', scope: 'voll' as const }]) {
+    assert.equal(classify('mcp__werkbank__jira_update_many', { changes: [] }, ctx).cls, 'confirm');
+    assert.equal(classify('mcp__werkbank__agent_start', { key: 'PM-1' }, ctx).cls, 'confirm');
+  }
   assert.equal(classify('mcp__forge-review__review_pr', {}).cls, 'read');
   assert.equal(classify('mcp__forge-review__post_review', {}).cls, 'blocked');
 });
@@ -225,6 +232,25 @@ test('Sitzungsstatus je Person nur mit internem Token', async () => {
   assert.equal(c9.turns, 2);
   assert.equal(c9.resumable, true);
   assert.equal(c9.title, 'Guten Morgen');
+  assert.equal(c9.end, 'ok', 'normal beendete Runde');
+});
+
+test('Rundenende (Review-Schlange): Schrittlimit, Absturz, offene Rückfrage mit Fragetext', async () => {
+  const sessions = async () => ((await (await fetch(`http://127.0.0.1:${PORT}/sessions?user=u31`, { headers: { 'x-werkbank-internal': 'geheim' } })).json()) as any).sessions;
+  const until = async (conv: string, ok: (s: any) => boolean) => { for (let i = 0; i < 60; i++) { const s = (await sessions()).find((x: any) => x.conv === conv); if (s && ok(s)) return s; await new Promise((r) => setTimeout(r, 50)); } throw new Error('Zustand nicht erreicht: ' + conv); };
+  await send('c31a', 'maxturns-test', { user: 'u31' });
+  assert.equal((await until('c31a', (s) => s.status === 'bereit')).end, 'max_turns');
+  await send('c31b', 'absturz-test', { user: 'u31' });
+  assert.equal((await until('c31b', (s) => s.status === 'bereit')).end, 'error');
+  await send('c31c', 'schreib eine Notiz', { user: 'u31' });
+  const p = await until('c31c', (s) => s.status === 'wartet auf ja');
+  assert.match(p.question, /^Soll ich die Datei .*notiz\.md schreiben\?$/, 'Fragetext: was freigegeben wird');
+  assert.equal(p.end, null, 'solange sie wartet, kein Ende');
+  await send('c31c', 'nein', { user: 'u31' });
+  const done = await until('c31c', (s) => s.status === 'bereit');
+  assert.equal(done.end, 'ok');
+  assert.equal(done.question, null);
+  assert.equal(done.roundAt, p.roundAt, 'Antwort auf die Rückfrage setzt dieselbe Runde fort');
 });
 
 test('Streaming: „arbeitet …“ sofort, Denken als Fortschrittszeile, Text tokenweise', async () => {
@@ -350,4 +376,28 @@ test('Skill-Aufrufe werden gezählt (nur Name, an die Werkbank)', async () => {
   await send('c60', 'bitte Skill-Test', { user: 'u60' });
   await new Promise((r) => setTimeout(r, 200));
   assert.deepEqual(skillUses.at(-1), { userId: 'u60', skill: 'olaf-jira' });
+});
+
+test('Rückfrage vor Jira zeigt Titel, bisher, neu und Grund — einzeln und gesammelt (Knut, 07.10.)', () => {
+  const one = confirmQuestion('mcp__werkbank__jira_update', { key: 'PM-386', summary: 'Testumfang und Testkosten', was: 'To Do, fällig 16.10.', reason: 'Arbeit hat begonnen', status: 'In Progress' });
+  assert.match(one, /\*\*PM-386\*\* „Testumfang und Testkosten“/);
+  assert.match(one, /Bisher \(laut Chat\): To Do, fällig 16\.10\./);
+  assert.match(one, /Status → \*\*In Progress\*\*/);
+  assert.match(one, /Grund: Arbeit hat begonnen/);
+  const bare = confirmQuestion('mcp__werkbank__jira_update', { key: 'PM-1', due: '' });
+  assert.match(bare, /Soll ich \*\*PM-1\*\* in Jira nachziehen/);
+  assert.match(bare, /⚠️ Fällig → \*\*ohne Datum\*\* \(Datum entfernen\)/);
+  assert.doesNotMatch(bare, /Bisher|Grund/);
+  const many = confirmQuestion('mcp__werkbank__jira_update_many', { changes: [
+    { key: 'PM-380', summary: 'Abstimmung Enlion', was: 'To Do, fällig 01.10.', status: 'Done', reason: 'Termin war am 01.10.' },
+    { key: 'PM-339', due: '', reason: 'nicht im Q4' },
+  ] });
+  assert.match(many, /diese 2 Tickets/);
+  assert.match(many, /- \*\*PM-380\*\* „Abstimmung Enlion“ \(bisher laut Chat: To Do, fällig 01\.10\.\): ⚠️ Status → \*\*Done\*\* — Termin war am 01\.10\./);
+  assert.match(many, /- \*\*PM-339\*\*: ⚠️ Fällig → \*\*ohne Datum\*\* \(Datum entfernen\) — nicht im Q4/);
+  const long = 'Langer Kommentar. '.repeat(40);
+  assert.ok(confirmQuestion('mcp__werkbank__jira_update', { key: 'PM-1', comment: long }).includes(long.trim()), 'Kommentar vollständig in der Rückfrage');
+  assert.match(confirmQuestion('mcp__werkbank__agent_start', { key: 'PM-381', note: 'Timeline entwerfen' }), /für PM-381 einen neuen Chat[\s\S]*Auftrag: „Timeline entwerfen“/);
+  assert.equal(statusLine('mcp__werkbank__jira_update_many', { changes: [{}, {}, {}] }), '🎫 Jira nachgezogen: 3 Tickets');
+  assert.equal(statusLine('mcp__werkbank__agent_start', { key: 'PM-381' }), '🤖 Agent-Chat gestartet: PM-381');
 });

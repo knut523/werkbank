@@ -65,6 +65,7 @@ ensure() { # NAME BYTES
 }
 ensure CREDS_KEY 32; ensure CREDS_IV 16; ensure JWT_SECRET 32; ensure JWT_REFRESH_SECRET 32
 ensure MEILI_MASTER_KEY 24; ensure WERKBANK_CREDS_KEY 32; ensure WERKBANK_INTERNAL_TOKEN 32
+ensure WERKBANK_BACKUP_KEY 32   # Plan 81: verschlüsselt Personendaten-Dateien im Backup — zusätzlich in Vaultwarden ablegen
 chmod 600 "$WB/.env.local"
 
 # 6) URLs dieser Workspace (verwalteter Block, wird bei jedem Lauf neu geschrieben)
@@ -77,7 +78,8 @@ DOMAIN_CLIENT=$LC_URL
 DOMAIN_SERVER=$LC_URL
 LIBRECHAT_PUBLIC_URL=$LC_URL
 WERKBANK_PUBLIC_URL=$WEB_URL
-CUSTOM_FOOTER="OLAF-Werkbank | [🚀 Einrichtung]($WEB_URL/#/) | [📚 Wissen]($WEB_URL/#/wissen) | [🗂️ Board]($WEB_URL/#/board) | [🔁 Sprint]($WEB_URL/#/sprint) | [🧰 Skills]($WEB_URL/#/skills) | [📎 Dateien]($WEB_URL/#/dateien)"
+# Fußzeile ohne Links: die Werkbank-Seiten stehen in der Leiste (eine Oberfläche); ohne CUSTOM_FOOTER zeigte LibreChat seine eigene.
+CUSTOM_FOOTER="OLAF-Werkbank · Pilot · Claude Code unter deinem eigenen Claude-Konto"
 # <<< werkbank-urls
 EOT
 cat "$tmp" > "$WB/.env.local"; rm -f "$tmp"

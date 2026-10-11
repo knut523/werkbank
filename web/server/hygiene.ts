@@ -142,6 +142,37 @@ export function touchedToday(all: Issue[], who: Identity, today: string): Hygien
     }));
 }
 
+/** Gruppen des Tagesabschluss-Durchgangs, in dieser Reihenfolge; ein Ticket steht nur in der ersten passenden. */
+export const REVIEW_GROUPS = ['überfällig', 'heute fällig', 'nächste 7 Tage', 'ohne Datum', 'heute bearbeitet'] as const;
+export type ReviewGroup = typeof REVIEW_GROUPS[number];
+export interface ReviewItem { key: string; summary: string; status: string; duedate: string | null; updated: string; group: ReviewGroup }
+
+/**
+ * Tagesabschluss als Durchgang (Knut, 07.10.2026, Entscheidung 1): eigene offene Tickets, die überfällig sind,
+ * heute oder in den nächsten 7 Tagen fällig, ohne Datum, oder heute bearbeitet wurden.
+ */
+export function reviewSet(all: Issue[], who: Identity, today: string): ReviewItem[] {
+  who = resolveIdentity(who, all);
+  const week = new Date(Date.parse(today + 'T00:00:00Z') + 7 * DAY).toISOString().slice(0, 10);
+  const groupOf = (i: Issue): ReviewGroup | null => {
+    if (i.duedate && i.duedate < today) return 'überfällig';
+    if (i.duedate === today) return 'heute fällig';
+    if (i.duedate && i.duedate <= week) return 'nächste 7 Tage';
+    if (!i.duedate) return 'ohne Datum';
+    const d = new Date(i.updated);
+    if (!Number.isNaN(+d) && vienna(d).date === today) return 'heute bearbeitet';
+    return null;
+  };
+  const out: ReviewItem[] = [];
+  for (const i of all) {
+    if (i.type === 'Workstream' || isDone(i) || !isMine(i, who)) continue;
+    const group = groupOf(i);
+    if (group) out.push({ key: i.key, summary: i.summary, status: i.status, duedate: i.duedate ?? null, updated: i.updated, group });
+  }
+  const rank = (g: ReviewGroup) => REVIEW_GROUPS.indexOf(g);
+  return out.sort((a, b) => rank(a.group) - rank(b.group) || (a.duedate ?? '').localeCompare(b.duedate ?? '') || a.key.localeCompare(b.key, undefined, { numeric: true }));
+}
+
 /**
  * Fragen für eine Sitzung: gleiche Sitzung → gleiche Antwort; ohne Anlass → keine; sonst höchstens
  * drei, je Ticket eine, ohne „später“ und ohne heute schon Gefragtes.

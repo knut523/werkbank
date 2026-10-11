@@ -237,6 +237,7 @@ function Wizard({ cfg }: { cfg: Config }) {
         <div>
           <h1>Einrichtung</h1>
           <p className="muted" style={{ margin: 0 }}>Einmal durchklicken, dann arbeitet Claude Code im Chat, am Board und im Sprint mit deinen eigenen Zugängen.</p>
+          {embedded && <p className="small muted" style={{ margin: '4px 0 0' }}>Design, Sprache und Chat-Verhalten: Kontomenü (unten links) → Einstellungen.</p>}
         </div>
         {!embedded && <a className="btn primary" href={cfg.librechatUrl}>💬 Zum Chat</a>}
       </div>

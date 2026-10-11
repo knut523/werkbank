@@ -23,7 +23,7 @@ function baseEnv() {
   const env: Record<string, string | undefined> = { ...process.env };
   for (const k of Object.keys(env)) if (/KEY|SECRET|TOKEN|PASSWORD|CREDS|_IV$|MONGO_URI/i.test(k)) delete env[k];
   for (const k of ['ANTHROPIC_BASE_URL', 'BW_SESSION', 'CLAUDE_CONFIG_DIR']) delete env[k];
-  env.CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat01-werkbank-init-messung-absichtlich-ungueltig';
+  env.CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat01-PLACEHOLDER';
   env.ENABLE_TOOL_SEARCH = 'true';
   return env;
 }

@@ -1,9 +1,10 @@
 // Ende-zu-Ende gegen die Web-App im Demo-Modus: eigene Test-Datenbanken, Kopie des Fixture-Vaults,
 // Jira-Mock, Brücke im Mock-Modus, nachgebauter LibreChat-Login. Nichts davon berührt /vault,
 // das echte Jira oder echte Konten.
+import { TEST_MONGO } from './testmongo.ts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, cpSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
@@ -21,9 +22,13 @@ const tmp = mkdtempSync(join(tmpdir(), 'werkbank-api-'));
 const VAULT = join(tmp, 'vault');
 const STATE = join(tmp, 'bridge');
 const DATA = join(tmp, 'data');
+const DOCS = join(tmp, 'dokumente');
+const BACKUP_KEY = randomBytes(32).toString('hex');
 const CREDS_KEY = randomBytes(32).toString('hex'), CREDS_IV = randomBytes(16).toString('hex');
 const INTERNAL = randomBytes(16).toString('hex'), REFRESH_SECRET = randomBytes(16).toString('hex'), JWT_SECRET = randomBytes(16).toString('hex');
 const lcChats: any[] = [];
+const lcMsgs = new Map<string, any[]>();
+let lcBusy = false;   // LibreChat-Parallelgrenze nachstellen (429)
 const users = {
   a: { _id: new ObjectId(), email: 'anna@maxenergy.at', name: 'Anna Test', pw: 'pw-anna' },
   b: { _id: new ObjectId(), email: 'bernd@maxenergy.at', name: 'Bernd Test', pw: 'pw-bernd' },
@@ -46,20 +51,32 @@ before(async () => {
   writeFileSync(join(tmp, 'fake-vault-sync.sh'), `#!/bin/bash\necho "lauf $*" >> ${join(tmp, 'fake-vault-sync.log')}\n`);
   mkdirSync(join(tmp, 'skills-src', 'demo-skill'), { recursive: true });
   writeFileSync(join(tmp, 'skills-src', 'demo-skill', 'SKILL.md'), '---\nname: demo-skill\ndescription: Nur ein Test\n---\n# x\n');
-  mongo = await MongoClient.connect(process.env.MONGO_URI_WERKBANK || 'mongodb://127.0.0.1:27017');
+  mongo = await MongoClient.connect(TEST_MONGO);
   await mongo.db(LCDB).collection('users').insertMany(Object.values(users).map(({ pw, ...u }) => u));
   // Nachgebauter LibreChat-Login (Antwortform wie /api/auth/login).
   lcFake = createServer(async (req, res) => {
     if (req.url === '/health') { res.end('OK'); return; }
     let b = ''; for await (const c of req) b += c;
     // Nachbau von LibreChats „Nachricht senden“: Zugangstoken prüfen, Unterhaltung anlegen, Zug an die Brücke.
+    if (req.url?.startsWith('/api/messages/')) {
+      const { verifyJwt } = await import('../server/auth.ts');
+      const p = verifyJwt(String(req.headers.authorization ?? '').replace(/^Bearer /, ''), JWT_SECRET);
+      if (!p?.id) { res.writeHead(401); res.end('{}'); return; }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify([...(lcMsgs.get(decodeURIComponent(req.url.slice('/api/messages/'.length))) ?? [])].reverse()));
+      return;
+    }
     if (req.url === '/api/agents/chat/Claude%20Code') {
+      if (lcBusy) { res.writeHead(429, { 'content-type': 'application/json' }); res.end('{}'); return; }
       const { verifyJwt } = await import('../server/auth.ts');
       const p = verifyJwt(String(req.headers.authorization ?? '').replace(/^Bearer /, ''), JWT_SECRET);
       if (!p?.id) { res.writeHead(401); res.end('{}'); return; }
       const body = JSON.parse(b);
-      const conversationId = crypto.randomUUID();
+      // Mit conversationId: Fortsetzung einer bestehenden Unterhaltung (Antwort aus der Werkbank-Review-Karte).
+      const conversationId = body.conversationId ?? crypto.randomUUID();
       lcChats.push({ user: p.id, email: p.email, conversationId, body, ua: req.headers['user-agent'] });
+      const t = Date.now();
+      lcMsgs.set(conversationId, [...(lcMsgs.get(conversationId) ?? []), { messageId: body.messageId, parentMessageId: body.parentMessageId, createdAt: new Date(t).toISOString() }, { messageId: 'antwort-' + body.messageId, parentMessageId: body.messageId, createdAt: new Date(t + 1).toISOString() }]);
       fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/chat/completions`, { method: 'POST', headers: { authorization: 'Bearer mock-token', 'content-type': 'application/json', 'x-librechat-user-id': p.id, 'x-librechat-conversation-id': conversationId, 'x-librechat-user-email': p.email },
         body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: body.text }] }) }).then((r) => r.text()).catch(() => {});
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -83,14 +100,18 @@ before(async () => {
   web = spawn(process.execPath, ['server/main.ts'], {
     cwd: WEB,
     env: {
-      ...process.env, WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_NO_JOBS: '1', WERKBANK_INSECURE_COOKIES: '1',
+      ...process.env, WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_TEAM_FEATURES: 'heute,roadmap,board,sprint,wissen,timebox,ziele,skills,dateien,orchestrator,ansetzen', WERKBANK_NO_JOBS: '1', WERKBANK_INSECURE_COOKIES: '1',
       WERKBANK_VAULT_DIR: VAULT, WERKBANK_DB: DB, LIBRECHAT_DB: LCDB, LIBRECHAT_URL: `http://127.0.0.1:${(lcFake.address() as any).port}`,
       LIBRECHAT_PUBLIC_URL: 'https://chat.example', BRIDGE_URL: `http://127.0.0.1:${BRIDGE_PORT}`, BRIDGE_STATE_DIR: STATE,
       WERKBANK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3`, WERKBANK_ALLOWED_EMAILS: `${users.a.email},${users.b.email}`,
       CREDS_KEY, CREDS_IV, WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: DATA,
+      WERKBANK_DOCS_DIR: DOCS, WERKBANK_BACKUP_KEY: BACKUP_KEY, WERKBANK_BACKUP_HOUR: '-1', // nie Knuts echte Ablage
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills-src'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'),
       WERKBANK_GOAL_PROPOSALS: join(tmp, 'vorschlag.json'), WERKBANK_SPEC_CREATE: 'on', WERKBANK_MEILI_INDEX: `werkbank_test_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_REFRESH_SECRET: REFRESH_SECRET, JWT_SECRET, WERKBANK_FORGE_MCP: '',
       WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vault-sync'), WERKBANK_VAULT_SYNC_SCRIPT: join(tmp, 'fake-vault-sync.sh'),
+      // Abend-Slot nur über den ausdrücklichen Tagesabschluss — sonst hinge der Test an der Uhrzeit (ab 16 Uhr scheiterte er).
+      WERKBANK_EOD_HOUR: '24',
+      WERKBANK_ANSETZEN: 'live',   // echter Weg gegen den Jira-Nachbau (Brücke im Mock-Modus spielt createJiraIssue nach)
     },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -266,6 +287,19 @@ test('Timebox: Blöcke anlegen/verschieben/erledigen, privat je Person, Übertra
   const week = await anna.req('/api/timebox?from=2026-09-28&days=7');
   assert.equal(week.j.dates.length, 7);
   assert.equal(jira.writes.length, n, 'kein Jira-Schreiben');
+});
+
+test('Agent vorlaufen aus dem Chat (agent_start): neuer Chat wie am Board, gleiche Schranken', async () => {
+  const uid = String(users.a._id);
+  assert.equal((await internal('/internal/agent-start', { userId: String(users.b._id), key: 'PM-321' })).status, 412, 'ohne Claude');
+  assert.equal((await internal('/internal/agent-start', { userId: uid, key: 'PM-99999' })).status, 404);
+  const n = lcChats.length;
+  const st = await internal('/internal/agent-start', { userId: uid, key: 'PM-332', note: 'Timeline entwerfen' });
+  assert.equal(st.status, 200, JSON.stringify(st.j));
+  assert.match(st.j.url, /^https:\/\/chat\.example\/c\/[0-9a-f-]{36}$/);
+  assert.equal(lcChats.length, n + 1);
+  assert.match(lcChats.at(-1).body.text, /^PM-332 · [\s\S]*Hinweis der Person: Timeline entwerfen/);
+  assert.equal((await internal('/internal/agent-start', { userId: uid, key: 'PM-332' })).status, 409, 'kein zweiter Agent auf demselben Ticket');
 });
 
 test('Agent ansetzen: Brücke nur lesend, Ergebnis als Entwurf, gesendet erst nach Klick', async () => {
@@ -521,6 +555,49 @@ test('Dateien: Typ/Größe prüfen, teilen, zurücknehmen, fremder Zugriff verbo
   assert.ok(own.j.entries.every((e: any) => e.actor === users.b.email || e.target === users.b.email));
 });
 
+test('Ablage (Plan 81): Upload → „Noch einzusortieren“ mit Vorschlag → Ablegen; Backup nur für Admins, ohne Zugänge', async () => {
+  mkdirSync(join(DOCS, 'olaf', 'enlion'), { recursive: true });
+  const up = await anna.req('/api/files?name=' + encodeURIComponent('Angebot Enlion 2026-10-02.pdf') + '&personal=1', { method: 'PUT', raw: Buffer.from('%PDF-1.4 enlion') });
+  assert.equal(up.status, 200);
+  assert.ok(existsSync(join(DOCS, '_eingang', 'Angebot Enlion 2026-10-02.pdf')), 'erst in _eingang');
+  const l = await anna.req('/api/files');
+  const f = l.j.mine.find((x: any) => x.id === up.j.id);
+  assert.equal(f.eingang, true);
+  assert.deepEqual([f.vorschlag.team, f.vorschlag.vorgang, f.vorschlag.art, f.vorschlag.datum, f.vorschlag.name], ['olaf', 'enlion', 'angebot', '2026-10-02', '2026-10-02_angebot_enlion.pdf']);
+  assert.ok(l.j.ablage.folders.some((x: any) => x.vorgang === 'enlion'));
+  assert.equal(l.j.backup, null, 'keine Backup-Angaben für Nicht-Admins');
+  assert.equal((await bernd.req(`/api/files/${up.j.id}/ablegen`, { body: f.vorschlag })).status, 403, 'nur die Besitzerin legt ab');
+  assert.equal((await anna.req(`/api/files/${up.j.id}/ablegen`, { body: { ...f.vorschlag, vorgang: '../..' } })).status, 400);
+  const ab = await anna.req(`/api/files/${up.j.id}/ablegen`, { body: f.vorschlag });
+  assert.equal(ab.status, 200);
+  assert.equal(ab.j.path, 'olaf/enlion/2026-10-02_angebot_enlion.pdf');
+  const dl = await anna.req(`/api/files/${up.j.id}/download`);
+  assert.equal(dl.j, '%PDF-1.4 enlion');
+  assert.match(dl.headers.get('content-disposition')!, /2026-10-02_angebot_enlion\.pdf/);
+
+  await mongo.db(DB).collection('creds').insertOne({ userId: 'x', secret: 'GEHEIM-TOKEN' } as any);
+  assert.equal((await anna.req('/api/backup')).status, 403, 'Backup nur für Admins');
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  try {
+    const r = await fetch(`${B}/api/backup`, { headers: { cookie: anna.cookie } });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-type'), 'application/gzip');
+    const archive = join(tmp, 'backup.tar.gz');
+    writeFileSync(archive, Buffer.from(await r.arrayBuffer()));
+    const names = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }).trim().split('\n');
+    assert.ok(names.includes('manifest.json') && names.includes('share-log.jsonl'));
+    assert.ok(names.includes('ablage/olaf/enlion/2026-10-02_angebot_enlion.pdf.enc'), 'Personendaten nur verschlüsselt');
+    assert.ok(names.some((n) => n.startsWith('werkbank/files/')));
+    assert.ok(!names.some((n) => n.startsWith('werkbank/creds/') || n.startsWith('werkbank/sessions/')), 'keine Zugänge, keine Sitzungen');
+    const all = execFileSync('tar', ['-xzOf', archive], { encoding: 'latin1' });
+    assert.doesNotMatch(all, /GEHEIM-TOKEN|%PDF-1\.4 enlion/);
+    const l2 = await anna.req('/api/files');
+    assert.equal(l2.j.backup.key, true);
+  } finally {
+    await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+  }
+});
+
 test('Chats: geteilt mit mir (LibreChat-Freigabe), als Kopie weiterführen, nie fremde', async () => {
   const lc = mongo.db(LCDB);
   const msgs = await lc.collection('messages').insertMany([
@@ -609,6 +686,14 @@ test('Interne Schnittstelle nur mit Token; Kontext-Paket klein; Pflegefragen nur
   assert.doesNotMatch(s2.j.text, /Task-Hygiene/);
   const eod = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c3', eod: true });
   assert.equal(eod.j.slot, 'abend');
+  // Ausdrücklicher Tagesabschluss = Durchgang über alle Tickets statt drei Fragen (Knut, 07.10.2026)
+  assert.equal(eod.j.questions.length, 0);
+  assert.match(eod.j.text, /### Tagesabschluss — Durchgang über \d+ Tickets/);
+  assert.match(eod.j.text, /\*\*überfällig\*\* \(1\)\n- PM-900 „Angebot Anna“/);
+  assert.match(eod.j.text, /\*\*ohne Datum\*\* \(1\)\n- PM-901 „Konzept Anna“/);
+  assert.doesNotMatch(eod.j.text.split('### Tagesabschluss')[1], /PM-902/, 'fällig 2099, nicht heute bearbeitet');
+  const after = await internal('/internal/session-start', { userId: String(users.a._id), conv: 'c4' });
+  assert.equal(after.j.questions.length, 0, 'nach dem Durchgang fragen andere Chats heute nicht mehr');
   const m = await internal('/internal/measure', { userId: String(users.a._id), conv: 'c1', measured: { total: 23000, tools: 4000, skills: 900, evil: 'x' } });
   assert.equal(m.status, 200);
   const stats = await anna.req('/api/context');
@@ -648,6 +733,43 @@ test('Task-Hygiene: Antwort → Vorschlag → Bestätigung → Jira; später; Bo
   assert.equal(u.status, 200);
   assert.deepEqual(u.j.done, ['Kommentar', 'Fällig → 2026-10-20']);
   assert.equal((await internal('/internal/jira-update', { userId: String(users.a._id), key: 'PM-99999', comment: 'x' })).status, 404, 'keine neuen Tickets');
+  // Ein eigenes Ticket von Anna, das es auch im Jira-Nachbau gibt (gesammelt geht nur auf eigene).
+  const t903 = structuredClone(jira.issues.find((i: any) => i.key === 'PM-322'));
+  t903.key = 'PM-903'; t903.fields.summary = 'Anna Aufgabe'; t903.fields.assignee = { displayName: 'Anna Test', accountId: null };
+  jira.issues.push(t903);
+  await mongo.db(DB).collection('jira_issues').insertOne({ key: 'PM-903', summary: 'Anna Aufgabe', status: 'To Do', statusCategory: 'new', type: 'Task', assignee: 'Anna Test', assigneeId: null, parent: 'PM-70', workstream: 'PM-70', priority: 'Medium', duedate: '2026-11-01', updated: '2026-09-20T10:00:00Z', description: '', comments: 0, lastComment: null, syncedAt: new Date() });
+  // Gesammelt (Tagesabschluss): erst alle Schlüssel prüfen, dann der Reihe nach; Fehler je Ticket, kein Abbruch
+  const uid = String(users.a._id);
+  const w0 = jira.writes.length;
+  const bad = await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', due: '2026-10-21' }, { key: 'PM-99999', comment: 'x' }] });
+  assert.equal(bad.status, 404);
+  assert.equal(jira.writes.length, w0, 'ein unbekanntes Ticket → nichts geschrieben');
+  assert.equal((await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903' }] })).status, 400, 'nichts zu tun');
+  assert.equal((await internal('/internal/jira-update-many', { userId: uid, changes: Array.from({ length: 26 }, () => ({ key: 'PM-903', comment: 'x' })) })).status, 400);
+  const many = await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-900', due: '2026-10-21' }, { key: 'PM-903', comment: 'Stand: gesammelt', due: '2026-10-22' }] });
+  assert.equal(many.status, 200);
+  assert.equal(many.j.ok, false);
+  assert.deepEqual(many.j.results.map((r: any) => [r.key, r.ok]), [['PM-900', false], ['PM-903', true]], 'Fehler bei PM-900 hält PM-322 nicht auf');
+  assert.match(many.j.results[0].error, /404/);
+  assert.deepEqual(many.j.results[1].done, ['Kommentar', 'Fällig → 2026-10-22']);
+  // Council 09.10.2026: nur eigene Tickets, Titel muss stimmen, kein Schlüssel doppelt, Kommentar ≤ 1500 — sonst nichts geschrieben.
+  const w1 = jira.writes.length;
+  const foreign = await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', comment: 'x' }, { key: 'PM-331', comment: 'fremd' }] });
+  assert.equal(foreign.status, 403, JSON.stringify(foreign.j));
+  assert.match(foreign.j.error, /PM-331 gehört nicht dir/);
+  assert.equal((await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', summary: 'Ganz anderer Titel', comment: 'x' }] })).status, 409, 'Titel aus der Rückfrage passt nicht');
+  assert.equal((await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', comment: 'a' }, { key: 'PM-903', comment: 'b' }] })).status, 400, 'doppelt');
+  assert.equal((await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', comment: 'x'.repeat(1501) }] })).status, 400, 'zu lang für die Rückfrage');
+  assert.equal((await internal('/internal/jira-update', { userId: uid, key: 'PM-322', summary: 'Falscher Titel', comment: 'x' })).status, 409);
+  assert.equal(jira.writes.length, w1, 'nichts geschrieben');
+  const ok = await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', summary: 'Anna Aufgabe', comment: 'Titel passt' }] });
+  assert.equal(ok.status, 200, JSON.stringify(ok.j));
+  // Frist: ist sie schon verbraucht, wird kein Ticket mehr angefangen („nicht versucht“), nichts geschrieben.
+  const w2 = jira.writes.length;
+  const late = await internal('/internal/jira-update-many', { userId: uid, changes: [{ key: 'PM-903', comment: 'zu spät' }], budgetMs: 1 });
+  assert.equal(late.status, 200);
+  assert.deepEqual(late.j.results.map((r: any) => [r.key, r.skipped]), [['PM-903', true]]);
+  assert.equal(jira.writes.length, w2);
   const b = await anna.req('/api/board?filter=pflege');
   const keys = b.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).map((i: any) => i.key);
   assert.ok(keys.includes('PM-900') && keys.includes('PM-902'));
@@ -1023,5 +1145,199 @@ test('Roadmap-Automatik: „Für mich offen“, Ja/Nein auf Sync-Fragen nur für
   assert.equal(readFileSync(hubPath, 'utf8'), hubBefore + '\n<!-- werkbank:woran-wir-arbeiten -->\nNeu: #294 offen.\n<!-- /werkbank:woran-wir-arbeiten -->\n\nDanach bleibt.\n');
   assert.equal((await anna.req('/api/roadmap/mine')).j.draft, null, 'übernommener Entwurf erscheint nicht wieder');
   writeFileSync(hubPath, hubBefore);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+});
+
+test('Heute + Review-Schlange: Rückfrage in der Karte, review_ready, Nacharbeit, Passt mit Kommentar nur nach Bestätigung', async () => {
+  const st = await anna.req('/api/board/issue/PM-340/agent', { body: { note: 'schreib eine Notiz dazu' } });
+  assert.equal(st.status, 200, JSON.stringify(st.j));
+  const conv = lcChats.at(-1).conversationId;
+  const runState = async (want: string) => {
+    for (let i = 0; i < 80; i++) { const r = await anna.req(`/api/board/runs/${st.j.id}`); if (r.j.status === want) return r.j; await new Promise((x) => setTimeout(x, 75)); }
+    throw new Error('Lauf erreicht nicht: ' + want);
+  };
+  await runState('wartet auf ja');
+  let t = await anna.req('/api/today');
+  assert.equal(t.status, 200);
+  let item = t.j.queue.find((x: any) => x.id === st.j.id);
+  assert.equal(item.bucket, 'frage');
+  assert.match(item.question, /notiz\.md/, 'Fragetext an der Karte (K4)');
+  assert.ok(t.j.count >= 1);
+  assert.equal(typeof (await anna.req('/api/today/count')).j.count, 'number');
+
+  // Fremde Läufe: weder antworten noch abhaken (K3).
+  assert.equal((await bernd.req(`/api/runs/${st.j.id}/reply`, { body: { kind: 'antwort', text: 'ja' } })).status, 403);
+  assert.equal((await bernd.req(`/api/runs/${st.j.id}/passt`, { body: {} })).status, 403);
+
+  // ✖️ aus der Karte → in DENSELBEN Chat, Eltern = neueste Nachricht.
+  const n0 = lcChats.length;
+  const rep = await anna.req(`/api/runs/${st.j.id}/reply`, { body: { kind: 'antwort', text: 'nein' } });
+  assert.equal(rep.status, 200, JSON.stringify(rep.j));
+  const sent = lcChats.at(-1);
+  assert.equal(lcChats.length, n0 + 1);
+  assert.equal(sent.body.conversationId, conv);
+  assert.equal(sent.body.text, 'nein');
+  assert.match(sent.body.parentMessageId, /^antwort-/, 'Antwort hängt an der neuesten Nachricht');
+  await runState('fertig');
+  // Normal beendet, ohne Marke → „wartet auf dich“ (still), nicht Review (K1).
+  await anna.req(`/api/board/runs/${st.j.id}`);
+  item = (await anna.req('/api/today')).j.queue.find((x: any) => x.id === st.j.id);
+  assert.equal(item?.bucket, 'still');
+  assert.equal((await anna.req(`/api/runs/${st.j.id}/reply`, { body: { kind: 'antwort', text: 'ja' } })).status, 409, 'Rückfrage nicht mehr offen');
+
+  // review_ready: Pflichtformat, nur eigene Unterhaltung.
+  const full = { gemacht: 'Notiz angelegt', nicht_gemacht: 'nichts', risiko: 'keins', dod: [{ punkt: 'Notiz im Vault', stand: 'ja', beleg: 'olaf/x.md' }, { punkt: 'Jira-Kommentar', stand: 'nein' }], artefakte: ['olaf/x.md'] };
+  assert.equal((await internal('/internal/review-ready', { userId: String(users.a._id), conv, ...full, risiko: '' })).status, 400);
+  assert.equal((await internal('/internal/review-ready', { userId: String(users.a._id), conv, ...full, dod: [] })).status, 400);
+  assert.equal((await internal('/internal/review-ready', { userId: String(users.a._id), conv: 'fremder-chat', ...full })).status, 404);
+  assert.equal((await internal('/internal/review-ready', { userId: String(users.b._id), conv, ...full })).status, 404, 'Bernd hat in Annas Chat keinen Lauf');
+  assert.equal((await internal('/internal/review-ready', { userId: String(users.a._id), conv, ...full }, 'falsch')).status, 403);
+  const ok = await internal('/internal/review-ready', { userId: String(users.a._id), conv, ...full });
+  assert.equal(ok.status, 200, JSON.stringify(ok.j));
+  assert.equal(ok.j.key, 'PM-340');
+  item = (await anna.req('/api/today')).j.queue.find((x: any) => x.id === st.j.id);
+  assert.equal(item.bucket, 'review');
+  assert.deepEqual(item.review.dod.map((d: any) => d.stand), ['ja', 'nein']);
+
+  // Nacharbeit: Notiz in denselben Chat, Lauf raus aus der Review-Schlange, nach neuer Marke wieder drin.
+  const na = await anna.req(`/api/runs/${st.j.id}/reply`, { body: { kind: 'nacharbeit', text: 'bitte noch den Link ergänzen' } });
+  assert.equal(na.status, 200, JSON.stringify(na.j));
+  assert.equal(lcChats.at(-1).body.text, 'Nacharbeit nach Review: bitte noch den Link ergänzen');
+  assert.equal(lcChats.at(-1).body.conversationId, conv);
+  item = (await anna.req('/api/today')).j.queue.find((x: any) => x.id === st.j.id);
+  assert.notEqual(item?.bucket, 'review');
+  await runState('fertig');
+  assert.equal((await internal('/internal/review-ready', { userId: String(users.a._id), conv, ...full })).status, 200);
+
+  // Passt mit Kommentar: Vorschau schreibt nichts, Bestätigen genau einmal (K6), danach raus aus der Schlange.
+  const w0 = jira.writes.length;
+  const pre = await anna.req(`/api/runs/${st.j.id}/passt`, { body: { comment: true } });
+  assert.equal(pre.j.needsConfirm, true);
+  assert.match(pre.j.text, /^Von Anna geprüft/);
+  assert.equal(jira.writes.length, w0, 'Vorschau schreibt nichts');
+  assert.equal((await anna.req(`/api/runs/${st.j.id}/passt`, { body: { comment: true, confirm: true } })).status, 200);
+  assert.equal((await anna.req(`/api/runs/${st.j.id}/passt`, { body: { comment: true, confirm: true } })).status, 200);
+  assert.equal(jira.writes.length, w0 + 1, 'Doppelklick: genau ein Kommentar');
+  assert.equal(jira.writes.at(-1).type, 'comment');
+  assert.equal(jira.writes.at(-1).key, 'PM-340');
+  assert.ok(!(await anna.req('/api/today')).j.queue.some((x: any) => x.id === st.j.id), 'geprüft → raus');
+});
+
+// --- „Agent ansetzen“ an einer Spec (docs/plan-agent-ansetzen.md, Bedingungen 1–4, 7–10 aus plan-roadmap-zu-agent) ---
+
+test('Agent ansetzen: Vorschau schreibt nichts, Sperren, genau ein Ticket, Zurücklesen, Spec-Link, Agent', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  const RM = 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/Service-View';
+  const creates = () => jira.writes.filter((w) => w.type === 'create').length;
+  const go = (body: any, c = anna) => c.req('/api/roadmap/ansetzen', { body });
+  // Spec in 3-Plan anlegen (Vorlage) und ohne offene Entscheidung füllen.
+  const mkSpec = async (slug: string, title: string, extra = '') => {
+    const r = await anna.req('/api/roadmap/spec-new', { body: { topic: 'Service-View', state: '3-Plan', slug, title, confirm: true } });
+    assert.equal(r.status, 200, JSON.stringify(r.j));
+    writeFileSync(join(VAULT, r.j.path), `---\ntitle: "olaf — Spec: ${title}"\nlifecycle: plan\n---\n\n# ${title}\n\n**Ziel:** Kundinnen bekommen rechtzeitig eine Erinnerung.\n\n## Definition of Done\n\n- Erinnerung geht 3 Tage vorher raus\n- Abmeldelink funktioniert\n\n## Offene Punkte\n\n- Kanal? Empfehlung: Mail\n  - Knut: Mail\n${extra}`);
+    return r.j.path as string;
+  };
+  // Bedingung 1: nur Admins; Bedingung 4: offene Knut-Zeile → kein Ansetzen.
+  const kr = await anna.req('/api/roadmap/spec-new', { body: { topic: 'Service-View', state: '3-Plan', slug: 'offene-frage', title: 'Mit offener Frage', confirm: true } });
+  const kunden = kr.j.path;   // Vorlage: „- Knut:“ noch leer
+  assert.equal((await go({ path: kunden }, bernd)).status, 403);
+  const g = await go({ path: kunden });
+  assert.equal(g.status, 200);
+  assert.equal(g.j.gate.ok, false); assert.match(g.j.gate.why, /offene Entscheidung/);
+  assert.equal((await go({ path: kunden, confirm: true, hash: g.j.hash })).status, 409);
+  const p1 = await mkSpec('zaehler-erinnerung', 'Zählerstand-Erinnerung per Mail');
+  const w0 = jira.writes.length;
+  const pre = await go({ path: p1 });
+  assert.equal(pre.status, 200, JSON.stringify(pre.j));
+  assert.equal(jira.writes.length, w0, 'Vorschau: 0 Schreibvorgänge');
+  assert.equal(pre.j.mode, 'live'); assert.equal(pre.j.gate.ok, true); assert.equal(pre.j.ready, true);
+  assert.equal(pre.j.draft.parent, 'PM-70'); assert.equal(pre.j.draft.assigneeId, 'acc-knutpeters'); assert.equal(pre.j.draft.priority, 'Medium');
+  assert.match(pre.j.draft.description, /^Ziel: Kundinnen bekommen rechtzeitig eine Erinnerung\.\nErgebnis: /);
+  assert.match(pre.j.draft.description, /spec: service-view-spec-zaehler-erinnerung|spec: [a-z]+-spec-zaehler-erinnerung/);
+  assert.match(pre.j.draft.description, /- Erinnerung geht 3 Tage vorher raus/);
+  assert.match(pre.j.draft.duedate, /^\d{4}-\d{2}-\d{2}$/); assert.ok(pre.j.draft.dueHow);
+  assert.deepEqual(pre.j.duplicates, []);
+  // Falscher Hash (Spec seit der Vorschau geändert) → nichts angelegt.
+  assert.equal((await go({ path: p1, confirm: true, hash: 'falsch' })).status, 409);
+  // Ohne Claude-Token: klare Meldung, nichts angelegt (Bernd als Admin, ohne Claude).
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.b.email }, { $set: { role: 'ADMIN' } });
+  const nb = await go({ path: p1, confirm: true, hash: pre.j.hash }, bernd);
+  assert.equal(nb.status, 412); assert.match(nb.j.error, /Nichts angelegt/);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.b.email }, { $set: { role: 'USER' } });
+  assert.equal(creates(), 0);
+
+  // Fehler nach dem POST (Jira legt an, antwortet 500): Ergebnis „unklar“, kein zweites Ticket beim erneuten Klick.
+  jira.faults.createAfter = true;
+  const u1 = await go({ path: p1, confirm: true, hash: pre.j.hash });
+  assert.equal(u1.status, 200, JSON.stringify(u1.j));
+  assert.equal(u1.j.needsChoice, 'unklar');
+  assert.equal(creates(), 1);
+  const made = jira.writes.filter((w) => w.type === 'create').at(-1).key;
+  assert.ok(u1.j.candidates.some((c: any) => c.key === made), 'Kandidat über die Spec-Kennung gefunden');
+  const u2 = await go({ path: p1, confirm: true, hash: pre.j.hash });
+  assert.equal(u2.j.needsChoice, 'unklar'); assert.equal(creates(), 1, 'erneuter Klick = kein zweiter POST');
+  // Knut übernimmt das gefundene Ticket; dabei fehlt Owner/Fälligkeit (Feld beim Anlegen „verloren“) → nachgezogen.
+  const fixedBefore = jira.writes.filter((w) => w.type === 'edit').length;
+  jira.issues.find((i) => i.key === made).fields.duedate = null;
+  // Parallelgrenze voll (429) und Vault-Sync läuft: Ticket ok, Spec-Link und Agent „offen“ — sichtbar, nicht halb.
+  lcBusy = true;
+  mkdirSync(join(tmp, 'vault-sync'), { recursive: true });
+  writeFileSync(join(tmp, 'vault-sync', '.lock'), '');
+  const holder = spawn('flock', [join(tmp, 'vault-sync', '.lock'), 'sleep', '20'], { stdio: 'ignore', detached: true });
+  await new Promise((r) => setTimeout(r, 300));
+  const u3 = await go({ path: p1, confirm: true, hash: pre.j.hash, useKey: made });
+  assert.equal(u3.status, 200, JSON.stringify(u3.j));
+  assert.equal(u3.j.key, made); assert.equal(u3.j.readback.ok, true); assert.deepEqual(u3.j.readback.fixed, ['duedate']);
+  assert.ok(jira.writes.filter((w) => w.type === 'edit').length > fixedBefore, 'Fälligkeit nachgezogen');
+  assert.equal(u3.j.link.state, 'offen'); assert.match(u3.j.link.why, /Vault-Sync/);
+  assert.equal(u3.j.agent.state, 'offen'); assert.match(u3.j.agent.why, /Parallelgrenze/);
+  assert.doesNotMatch(readFileSync(join(VAULT, p1), 'utf8'), new RegExp(made));
+  process.kill(-holder.pid!); lcBusy = false;   // ganze Gruppe (flock + sleep hält die Sperre)
+  await new Promise((r) => setTimeout(r, 200));
+  // Fortsetzen: Link und Agent werden nachgeholt, kein neues Ticket.
+  const n0 = lcChats.length;
+  const u4 = await go({ path: p1, confirm: true, hash: pre.j.hash });
+  assert.equal(u4.status, 200, JSON.stringify(u4.j));
+  assert.equal(creates(), 1);
+  assert.equal(u4.j.link.state, 'ok');
+  assert.match(readFileSync(join(VAULT, p1), 'utf8'), new RegExp(`^jira: ${made}$`, 'm'));
+  assert.equal(u4.j.agent.state, 'gestartet', JSON.stringify(u4.j.agent));
+  assert.equal(lcChats.length, n0 + 1);
+  const text = lcChats.at(-1).body.text;
+  assert.match(text, new RegExp(`^${made} · Zählerstand-Erinnerung per Mail`));
+  assert.ok(text.includes(`Spec (Roadmap, Grundlage des Auftrags): ${p1}`), 'Spec als Pfad im Auftrag (Bedingung 8)');
+  assert.match(text, /Modus BIS REVIEW/);
+  const run: any = await mongo.db(DB).collection('agent_runs').findOne({ key: made, origin: 'ansetzen' });
+  assert.equal(run?.specPath, p1);
+  // Noch ein Klick: nichts Neues (kein Ticket, kein zweiter Agent).
+  const u5 = await go({ path: p1, confirm: true, hash: (await go({ path: p1 })).j.hash });
+  assert.equal(u5.status, 200); assert.equal(creates(), 1); assert.equal(lcChats.length, n0 + 1);
+
+  // Frisch angelegt, Feld beim Anlegen verloren (Priorität) → nach dem Zurücklesen nachgezogen, dann Link + Agent.
+  const p2 = await mkSpec('tarifwechsel-hinweis', 'Tarifwechsel-Hinweis im Kundenportal');
+  const pre2 = await go({ path: p2, mode: 'plan', note: 'Bitte nur planen' });
+  jira.faults.dropFields = ['priority'];
+  const c2 = await go({ path: p2, confirm: true, hash: pre2.j.hash, mode: 'plan', note: 'Bitte nur planen' });
+  assert.equal(c2.status, 200, JSON.stringify(c2.j));
+  assert.equal(creates(), 2);
+  assert.deepEqual(c2.j.readback.fixed, ['priority']);
+  assert.equal(jira.issues.find((i) => i.key === c2.j.key).fields.priority.name, 'Medium');
+  assert.equal(c2.j.link.state, 'ok'); assert.equal(c2.j.agent.state, 'gestartet');
+  assert.match(lcChats.at(-1).body.text, /Modus NUR PLAN[\s\S]*Hinweis von Anna: Bitte nur planen/);
+  const created2 = jira.writes.filter((w) => w.type === 'create').at(-1).fields;
+  assert.equal(created2.parent.key, 'PM-70'); assert.equal(created2.assignee.accountId, 'acc-knutpeters'); assert.match(created2.duedate, /^\d{4}-\d{2}-\d{2}$/);
+
+  // Dublette: gleicher Titel wie ein bestehendes Ticket → Vorschau zeigt es, Anlegen nur nach Wahl.
+  const p3 = await mkSpec('hardware-admin-flow', 'Hardware Admin Flow');
+  const pre3 = await go({ path: p3 });
+  assert.ok(pre3.j.duplicates.some((d: any) => d.key === 'PM-321'), JSON.stringify(pre3.j.duplicates));
+  const d3 = await go({ path: p3, confirm: true, hash: pre3.j.hash });
+  assert.equal(d3.j.needsChoice, 'dublette'); assert.equal(creates(), 2, 'Dublette → kein Anlegen');
+  const a3 = await go({ path: p3, confirm: true, hash: pre3.j.hash, useKey: 'PM-321' });
+  assert.equal(a3.status, 200, JSON.stringify(a3.j));
+  assert.equal(a3.j.key, 'PM-321'); assert.equal(creates(), 2); assert.equal(a3.j.readback.existing, true, 'übernommenes Ticket bleibt, wie es ist');
+  assert.match(readFileSync(join(VAULT, p3), 'utf8'), /^jira: PM-321$/m);
+  assert.equal((await go({ path: p3, confirm: true, hash: (await go({ path: p3 })).j.hash, useKey: 'PM-99999' })).status, 404);
   await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
 });

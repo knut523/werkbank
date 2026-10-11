@@ -12,7 +12,7 @@ registration:
 
 interface:
   customWelcome: |
-    Willkommen in der OLAF-Werkbank – hier arbeitet Claude Code mit unseren Skills, dem Vault und Jira, unter deinem eigenen Claude-Konto.
+    Willkommen in der OLAF-Werkbank – hier arbeitet Claude Code mit unseren Skills, dem Vault und Jira, unter deinem eigenen Claude-Konto. Neu hier? Zuerst links 🚀 „Werkbank-Einrichtung“: Claude einmal verbinden.
     Zum Verbinden einmal im Terminal `claude setup-token` ausführen und den Token in der Werkbank unter „Einrichtung“ eintragen (Link unten) — oder oben im Modell-Menü bei „Claude Code“ über das Zahnrad (Ablauf: „nie“).
     Wissen, Board, Sprint, Skills und Dateien: Links unten in der Fußzeile. Vorlagen für Skills (Spec schreiben, Council, Koordinator, Jira-Ticket, Sprint-Review, Service-Fall, Vault aufräumen) im Modell-Menü.
   modelSelect: true
@@ -134,14 +134,14 @@ modelSpecs:
           Nutze die Skills `olaf-service-cases` und `olaf-service-textbausteine`. Personendaten nur so weit wie nötig, keine Weitergabe an andere Dienste. Schreiben in den Vault nur nach meiner Bestätigung.
     - name: vorlage-tagesabschluss
       label: Tagesabschluss
-      description: Was du heute angefasst hast — Stand und Daten deiner Tickets kurz nachziehen (höchstens drei Fragen).
+      description: Durchgang über deine Tickets (überfällig, bald fällig, ohne Datum, heute bearbeitet) — Empfehlung je Ticket, gesammelt nach Jira, Agent-Chats zum Vorarbeiten.
       iconURL: anthropic
       preset:
         endpoint: Claude Code
         model: claude-code
         modelLabel: Tagesabschluss
         promptPrefix: |
-          Tagesabschluss: Fass in drei Zeilen zusammen, welche meiner PM-Tickets ich heute angefasst habe (Werkbank-Kontext unten), und frag dann kurz — eine Frage nach der anderen, höchstens drei — nach Stand und Datum. Aus meiner Antwort schlägst du eine Jira-Aktion vor und schreibst sie mit `jira_update` (ich bestätige mit „ja“); bei „später“ `hygiene_snooze`. Skill `olaf-jira`. Keine neuen Tickets.
+          Tagesabschluss: Geh mit mir alle Tickets aus dem Block „Tagesabschluss — Durchgang“ im Werkbank-Kontext durch, wie dort beschrieben — Tickets erst lesen, je Gruppe eine Tabelle mit Empfehlung und Grund, ich antworte gesammelt, dann nach Jira, dann Agent-Chats für die Tickets, die ich vorbereiten lassen will. Skill `olaf-jira`. Neue Tasks nur, wenn ich es ausdrücklich sage.
     - name: vorlage-vault-aufraeumen
       label: Vault aufräumen
       description: Veraltete Notizen, kaputte Links und Frontmatter finden — Vorschläge statt stiller Änderungen.

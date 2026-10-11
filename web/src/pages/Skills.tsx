@@ -28,7 +28,7 @@ export function Skills({ cfg }: { cfg: Config }) {
       <div className="head">
         <div>
           <h1>Skills</h1>
-          <p className="muted" style={{ margin: 0 }}>Was Claude in der Werkbank kann: {d.skills.length} Skills. Team-Skills kommen aus <code>{d.source}</code>, Claude liest sie aus <code>{d.target}</code>.</p>
+          <p className="muted" style={{ margin: 0 }}>Was Claude in der Werkbank kann: {d.skills.length} Skills. {cfg.user?.role === 'ADMIN' ? <> Team-Skills kommen aus <code>{d.source}</code>, Claude liest sie aus <code>{d.target}</code>.</> : ' Team-Skills aus dem Vault.'}</p>
         </div>
         <button className="btn" disabled={!missing.length} onClick={async () => {
           const ok = await confirm({ title: `${missing.length} Skills einrichten?`, body: <><p>Diese Vault-Skills werden als Link eingerichtet (nichts wird überschrieben):</p><p className="small">{missing.map((m: any) => m.name).join(', ')}</p></>, confirmLabel: 'Einrichten' });

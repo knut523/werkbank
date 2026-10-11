@@ -1,0 +1,20 @@
+diff --git a/client/src/components/Nav/AccountSettings.tsx b/client/src/components/Nav/AccountSettings.tsx
+index d5c3765..d974078 100644
+--- a/client/src/components/Nav/AccountSettings.tsx
++++ b/client/src/components/Nav/AccountSettings.tsx
+@@ -20,6 +20,7 @@ import { useAuthContext } from '~/hooks/AuthContext';
+ import { useLocalize } from '~/hooks';
+ import Settings from './Settings';
+ import store from '~/store';
++import WerkbankSetupItem from '~/components/Werkbank/WerkbankSetupItem'; // OLAF-Werkbank
+ 
+ function HelpSubmenu({
+   helpAndFaqURL,
+@@ -168,6 +169,7 @@ function AccountSettings({ collapsed = false }: { collapsed?: boolean }) {
+           <Archive className="icon-md" aria-hidden="true" />
+           {localize('com_nav_archived_chats')}
+         </Menu.MenuItem>
++        <WerkbankSetupItem />
+         <Menu.MenuItem
+           onClick={() => setShowSettings(true)}
+           className="select-item text-sm"

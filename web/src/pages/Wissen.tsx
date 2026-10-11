@@ -1,4 +1,5 @@
 import { LinkButton } from '../components.tsx';
+import { AnsetzenButton } from '../AgentAnsetzen';
 import { useEffect, useMemo, useState } from 'react';
 import { api, fmtDateTime, chatTarget, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useToast } from '../ui.tsx';
@@ -50,7 +51,7 @@ function MiniGraph({ center, links, backlinks }: { center: string; links: any[];
   );
 }
 
-function NoteView({ path }: { path: string }) {
+function NoteView({ path, admin = false }: { path: string; admin?: boolean }) {
   const n = useLoad(() => api('/api/vault/note?path=' + encodeURIComponent(path)), [path]);
   useEffect(() => { document.querySelector('.main')?.scrollTo(0, 0); }, [path]);
   if (n.loading && !n.data) return <Loading what="Lade Notiz" />;
@@ -71,6 +72,7 @@ function NoteView({ path }: { path: string }) {
       </article>
       <aside className="side-panel">
         <a className="btn primary" href={d.chatUrl} target={chatTarget} rel="noreferrer" style={{ width: '100%', justifyContent: 'center' }}>💬 Im Chat öffnen</a>
+        {/\/1-Roadmap\/[^/]+\/3-Plan\//.test(path) && admin && <div style={{ marginTop: 8 }}><AnsetzenButton path={path} state="3-Plan" admin={admin} wide /></div>}
         <p className="tiny" style={{ marginTop: 6 }}>Startet einen neuen Chat mit dieser Notiz als Kontext. Hier wird nur gelesen; Änderungen macht Claude im Chat nach deinem „ja“.</p>
         <div data-testid="note-tickets" style={{ margin: '10px 0' }}>
           <b>Verknüpfte Tickets ({d.tickets.length})</b>
@@ -167,7 +169,7 @@ function SearchResults({ q }: { q: string }) {
   );
 }
 
-export function Wissen({ hash }: { cfg: Config; hash: string }) {
+export function Wissen({ cfg, hash }: { cfg: Config; hash: string }) {
   const { path, params } = parseHash(hash);
   const ov = useLoad(() => api('/api/vault/overview'));
   const [q, setQ] = useState(params.get('q') ?? '');
@@ -197,7 +199,7 @@ export function Wissen({ hash }: { cfg: Config; hash: string }) {
           </div>
           {!sub ? <Loading /> : sub.children!.map((c) => <Tree key={c.path} node={c} current={path} depth={1} />)}
         </nav>
-        {view === 'note' ? <NoteView path={path} />
+        {view === 'note' ? <NoteView path={path} admin={cfg?.user?.role === 'ADMIN'} />
           : view === 'search' ? <div style={{ gridColumn: 'span 2' }}><SearchResults q={params.get('q')!} /></div>
           : view === 'missing' ? <div><h1>Notiz nicht gefunden</h1><p className="muted">Der Link „{params.get('fehlt')}“ zeigt auf keine Notiz im Vault.</p></div>
           : !ov.data ? <Loading />

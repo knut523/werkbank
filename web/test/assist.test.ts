@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, cpSync, writeFileSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { hygieneFor, resolveIdentity, pickQuestions, freshState, snooze, slotFor, touchedToday, vienna, MAX_PER_SESSION } from '../server/hygiene.ts';
-import { buildPack, approxTokens, inputsHash, TOKEN_CAP, hygieneBlock, roadmapLine, questionsLine, prLine, vaultMap } from '../server/context.ts';
+import { hygieneFor, resolveIdentity, pickQuestions, freshState, snooze, slotFor, touchedToday, reviewSet, vienna, MAX_PER_SESSION } from '../server/hygiene.ts';
+import { buildPack, approxTokens, inputsHash, TOKEN_CAP, hygieneBlock, reviewBlock, roadmapLine, questionsLine, prLine, vaultMap } from '../server/context.ts';
 import { buildIndex } from '../server/vault.ts';
 import { actionsFromText } from '../server/syncplan.ts';
 import type { Issue } from '../server/jira.ts';
@@ -161,4 +161,39 @@ test('Pflege-Regel „ohne Ziel“: offene eigene Tickets ohne Ziel-Label (auch 
   const noGoal = h.filter((x) => x.rule === 'ohne Ziel').map((x) => x.key);
   assert.ok(noGoal.includes('PM-1') && !noGoal.includes('PM-20') && !noGoal.includes('PM-21') && !noGoal.includes('PM-22'));
   assert.match(h.find((x) => x.rule === 'ohne Ziel')!.question, /ohne Ziel/);
+});
+
+test('Tagesabschluss-Durchgang: Gruppen, Grenzen, je Ticket nur einmal (Knut, 07.10.)', () => {
+  const T = '2026-09-28';
+  const all = [
+    I('PM-70', { type: 'Workstream', parent: null, duedate: null }),
+    I('PM-20', { duedate: '2026-09-27' }),                                   // überfällig
+    I('PM-21', { duedate: T, updated: '2026-09-28T09:00:00Z' }),            // heute fällig (und heute bearbeitet → nur einmal)
+    I('PM-22', { duedate: '2026-10-05' }),                                   // +7 → dabei
+    I('PM-23', { duedate: '2026-10-06' }),                                   // +8 → nicht dabei
+    I('PM-24', { duedate: null, status: 'Backlog' }),                        // ohne Datum
+    I('PM-25', { duedate: '2026-12-01', updated: '2026-09-28T08:00:00Z' }), // später fällig, heute bearbeitet
+    I('PM-26', { duedate: '2026-09-01', status: 'Done', statusCategory: 'done' }),
+    I('PM-27', { duedate: '2026-09-01', assignee: 'Lisa Probe', assigneeId: 'acc-lisa' }),
+  ];
+  const r = reviewSet(all, { accountId: 'acc-knut' }, T);
+  assert.deepEqual(r.map((i) => `${i.key}:${i.group}`), ['PM-20:überfällig', 'PM-21:heute fällig', 'PM-22:nächste 7 Tage', 'PM-24:ohne Datum', 'PM-25:heute bearbeitet']);
+  const b = reviewBlock(r, T);
+  assert.match(b, /^### Tagesabschluss — Durchgang über 5 Tickets \(28\.09\.\)/);
+  assert.match(b, /\*\*überfällig\*\* \(1\)\n- PM-20 „Aufgabe PM-20“ · To Do · fällig 27\.09\. · zuletzt 27\.09\./);
+  assert.match(b, /ticket-pruefer/);
+  assert.match(b, /jira_update_many/);
+  assert.match(b, /agent_start/);
+  assert.doesNotMatch(reviewBlock(r, T, false), /jira_update_many/, 'Ausweichweg: einzeln');
+  assert.match(reviewBlock(r, T, false), /Ticket für Ticket mit `jira_update`/);
+  assert.match(reviewBlock([], T), /Keine eigenen Tickets/);
+  const many = Array.from({ length: 20 }, (_, n) => ({ key: `PM-${100 + n}`, summary: 'x', status: 'To Do', duedate: null, updated: 'kaputt', group: 'ohne Datum' as const }));
+  const mb = reviewBlock(many, T);
+  assert.equal((mb.match(/^- PM-1\d\d/gm) ?? []).length, 15, 'höchstens 15 Zeilen je Gruppe');
+  assert.match(mb, /und 5 weitere/);
+  assert.match(mb, /zuletzt —/, 'ungültiges Datum bricht nicht');
+  assert.deepEqual(reviewSet([I('PM-30', { duedate: '2030-01-01', updated: 'kaputt' })], { accountId: 'acc-knut' }, T), []);
+  const q = [{ key: 'PM-1', summary: 'x', rule: 'überfällig' as const, detail: '', question: 'Frage?', priority: 1 }];
+  assert.match(hygieneBlock(q, 1, 'abend'), /Vorlage „Tagesabschluss“/);
+  assert.doesNotMatch(hygieneBlock(q, 1, 'morgen'), /Vorlage „Tagesabschluss“/);
 });

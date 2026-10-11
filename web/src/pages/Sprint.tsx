@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, fmtDate, fmtDateTime, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, useJiraLive } from '../ui.tsx';
-import { HygienePanel } from '../components.tsx';
+import { BeiMirLink } from '../beimir.tsx';
 
 const noteHref = (p: string) => '#/wissen/' + p.split('/').map(encodeURIComponent).join('/');
 const FILE_LABEL: Record<string, string> = { summary: 'Summary', review: 'Review', planning: 'Planning' };
@@ -403,7 +403,7 @@ export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
           <SyncPlan cycle={id} onDone={() => { v.reload(); toast('Sprint-Sync ausgeführt'); }} />
 
           <h2>Deine offenen Pflegepunkte</h2>
-          <HygienePanel max={50} title="Eigene PM-Tickets" />
+          <BeiMirLink what="Deine Pflegepunkte (mit Antwortfeld je Ticket)" />
           <h2>Tickets ohne Termin-Klarheit</h2>
           <p className="small muted">Aus der Jira-Kopie{d.jiraSync ? ` (Stand ${fmtDateTime(d.jiraSync.at)})` : ' — noch nicht synchronisiert'}. Offenes Ticket heißt nicht unerledigte Arbeit — als Frage in die Runde.</p>
           <div className="grid2">

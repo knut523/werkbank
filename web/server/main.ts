@@ -10,24 +10,32 @@ import { join, extname, resolve, normalize } from 'node:path';
 import { execFile } from 'node:child_process';
 import YAML from 'yaml';
 import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl } from './config.ts';
-import { connect, wb } from './db.ts';
+import { connect, wb, lc } from './db.ts';
 import { librechatLogin, createSession, destroySession, currentUser, allowed, teammates, userById, type User } from './auth.ts';
 import { listClaudeAccounts, addClaudeAccount, removeClaudeAccount, reorderClaudeAccounts, claudeAccountToken, claudeAccountsForBridge } from './creds.ts';
 import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraIdentity, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
-import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns } from './agent.ts';
+import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
+import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion } from './orchestrator.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
+import { ARTEN, folders, schemaName } from './ablage.ts';
+import { FEATURES, featuresFor, blockedFeature } from './features.ts';
+import { memoryWarning } from './memory.ts';
+import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
+import { keep as keepScratch, runScratch } from './scratch.ts';
+import { backupRunning, listBackups, nightly, writeBackup, keyOf } from './backup.ts';
 import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles } from './sprint.ts';
 import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
-import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog } from './sharing.ts';
+import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog, logShare, scratchDir } from './sharing.ts';
 import { log } from './log.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
-import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, type JiraAction } from './jirawrite.ts';
+import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, type JiraAction } from './jirawrite.ts';
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
@@ -37,6 +45,7 @@ import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './tim
 import { isMine, resolveIdentity, vienna } from './hygiene.ts';
 import { ObjectId } from 'mongodb';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
+import { ansetzenMode, specGate, sprintEnd, ticketDraft, localDuplicates, dupJql, simJira, liveJira, runAnsetzen, specTicketState, specSlug, view as ansetzenView, draftHashOf, addSimField, DEFAULT_WORKSTREAM, type AnsetzenJira, type Dup } from './ansetzen.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, type GoalNode } from './goals.ts';
 
@@ -70,6 +79,9 @@ async function needUser(req: IncomingMessage): Promise<User> {
   const u = await currentUser(req);
   if (!u) throw new HttpError(401, 'Bitte anmelden.');
   if (isMutation(req) && req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Werkbank-Header.');
+  // Freigabe je Funktion fürs Team (features.ts): Admins alles, sonst WERKBANK_TEAM_FEATURES.
+  const f = blockedFeature(u, String(req.url ?? '').split('?')[0]);
+  if (f) throw new HttpError(403, `„${FEATURES.find((x) => x.id === f)!.label}“ ist für das Team noch nicht freigegeben.`);
   return u;
 }
 
@@ -298,7 +310,7 @@ on('GET', /^\/api\/config$/, async (req, res) => {
   send(res, 200, {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: !!process.env.WERKBANK_FORGE_MCP,
     jiraSite: cfg.jiraSite, project: cfg.jiraProject, vault: cfg.vaultDir,
-    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(),
+    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u),
   });
 });
 
@@ -658,6 +670,25 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/edit$/, async (req, res,
   send(res, 200, { ok: true, preview, done: [...(w?.done ?? []), ...done], dryRun: w?.dryRun ?? false, calls: w?.calls, issue: (await issueMap()).get(i.key) ?? null });
 });
 
+/**
+ * Agent als echter Chat auf einem Ticket — derselbe Weg für „Agent“ am Board, `agent_start` aus dem Chat
+ * (Tagesabschluss) und „Agent ansetzen“ an einer Spec. Plan 81 (Schnitte 6/7): das Ticket bekommt sein Projekt
+ * (zuordnen vor anlegen), der Agent den Bereich seines Workstreams im Vault für Plan und Notizen.
+ */
+async function startTicketAgent(u: User, i: Issue, note: string, place: { specPath?: string | null } = {}) {
+  // Erst prüfen, ob schon ein Agent der Person auf der Karte arbeitet — sonst entstünde für einen abgelehnten Start
+  // ein Projekt und ein Vault-Eintrag (Review).
+  if (await wb().collection('agent_runs').findOne({ key: i.key, userId: u.id, mode: 'chat', status: { $in: ['läuft', 'wartet auf ja'] } })) {
+    throw new HttpError(409, 'Auf diesem Ticket arbeitet schon ein Agent von dir — im Chat weitermachen.');
+  }
+  const im = await issueMap();
+  const project = await assignProject(u, i).catch((e) => { log('projekt fehlgeschlagen', { key: i.key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
+  const ws = i.workstream ? im.get(i.workstream) : undefined;
+  const areaDir = ws ? workstreamArea(ws)?.dir ?? null : null;
+  if (ws) syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 120) }));
+  return startChatAgent(u, i, note, 'work', { projectName: project?.name ?? null, areaDir, projectId: project?._id ?? null, personName: u.name, ...place });
+}
+
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res, m) => {
   const u = await needUser(req);
   if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
@@ -671,17 +702,7 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res
   // Plan 81 (Schnitte 6/7): das Ticket bekommt sein Projekt (zuordnen vor anlegen), der Agent den Bereich seines
   // Workstreams im Vault für Plan und Notizen. Die Übersicht des Bereichs wird danach nachgezogen.
   if (b.mode !== 'draft') {
-    // Erst prüfen, ob schon ein Agent der Person auf der Karte arbeitet — sonst entstünde für einen abgelehnten Start
-    // ein Projekt und ein Vault-Eintrag (Review).
-    if (await wb().collection('agent_runs').findOne({ key: i.key, userId: u.id, mode: 'chat', status: { $in: ['läuft', 'wartet auf ja'] } })) {
-      throw new HttpError(409, 'Auf diesem Ticket arbeitet schon ein Agent von dir — im Chat weitermachen.');
-    }
-    const im = await issueMap();
-    const project = await assignProject(u, i).catch((e) => { log('projekt fehlgeschlagen', { key: i.key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
-    const ws = i.workstream ? im.get(i.workstream) : undefined;
-    const areaDir = ws ? workstreamArea(ws)?.dir ?? null : null;
-    if (ws) syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 120) }));
-    const r = await startChatAgent(u, i, String(b.note ?? '').slice(0, 2000), 'work', { projectName: project?.name ?? null, areaDir, projectId: project?._id ?? null, personName: u.name });
+    const r = await startTicketAgent(u, i, String(b.note ?? '').slice(0, 2000));
     log('agent chat', { user: u.id, key: i.key, conv: r.conv });
     return send(res, 200, { ...r, mode: 'chat' });
   }
@@ -845,7 +866,7 @@ function roadmapSpecs(local?: Map<string, { ziel: string | null }>) {
 }
 
 on('GET', /^\/api\/roadmap$/, async (req, res) => {
-  await needUser(req);
+  const u = await needUser(req);
   const idx = vaultIdx();
   const im = await issueMap();
   const rm = roadmap(idx, ROADMAP_BASE);
@@ -860,7 +881,7 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
         const prs = prRefs(text);
         const n = idx.notes.get(sp.path)!;
         const tickets = n.tickets.map((k) => ({ key: k, status: im.get(k)?.status ?? null, summary: im.get(k)?.summary ?? null }));
-        const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text), jiraKey: n.fm.jira != null && String(n.fm.jira).trim() !== '' && String(n.fm.jira) !== '[]' };
+        const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text), verified: n.fm['last-verified'] ? String(n.fm['last-verified']).slice(0, 10) : null, jiraKey: n.fm.jira != null && String(n.fm.jira).trim() !== '' && String(n.fm.jira) !== '[]' };
         byName.set(n.name, info);
         for (const pr of prs) specPrs.set(pr, [...(specPrs.get(pr) ?? []), n.name]);
         for (const d of ds) if (d.open) decisions.push({ ...d, path: sp.path, spec: n.name, title: sp.title, topic: t.name, state, hash: info.hash });
@@ -912,7 +933,11 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
   const livePr = (pr: string) => { const l = gh.map.get(pr); return l ? { pr, conflict: l.mergeable === 'CONFLICTING', draft: l.isDraft, review: l.reviewDecision, turn: l.turn.who } : { pr, closed: ghOk }; };
   const specList = [...byName.values()].map((x) => ({ ...x, prLive: x.prs.map(livePr) }));
   const insights = roadmapInsights(specList, ranking, { sprintTickets });
+  // Laufende Agenten je Ticket (Überblick: „In Arbeit“).
+  const agents: Record<string, string> = {};
+  for (const r of await wb().collection('agent_runs').find({ status: { $in: ['läuft', 'wartet auf ja'] } }, { projection: { key: 1, status: 1 } }).toArray() as any[]) if (r.key && agents[r.key] !== 'wartet auf ja') agents[r.key] = r.status;
   send(res, 200, {
+    agents, admin: u.role === 'ADMIN',
     ...insights, kanbanStates: KANBAN_STATES, sprint: cur ? { id: cur.id, date: cur.date, tickets: sprintTickets.size } : null,
     base: ROADMAP_BASE, states: rm.states, overview: rm.overview,
     topics: rm.topics.map((t) => ({ name: t.name, overview: t.overview, states: Object.fromEntries(Object.entries(t.states).map(([st, specs]) => [st, specs.map((sp) => byName.get(idx.notes.get(sp.path)!.name))])) })),
@@ -990,8 +1015,8 @@ async function tryStartSync(): Promise<boolean> {
   return ok;
 }
 
-on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
-  const u = await needUser(req);
+/** „Wartet auf dich“ (früher „Für mich offen“ auf der Roadmap, jetzt auf „Heute“): PRs, Sync-Fragen, Entwurf, Tickets. */
+async function mineFor(u: User, { write = true } = {}) {
   const me = firstName(u).toLowerCase();
   const prs = ((await wb().collection('github_prs').find({}, { projection: { _id: 0 } }).toArray()) as any[])
     .filter((p) => String(p.turn?.who ?? '').toLowerCase().split(/,\s*/).includes(me))
@@ -1005,7 +1030,7 @@ on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
   const admin = u.role === 'ADMIN';
   let questions: any[] = [], draft: any = null, section: string | null = null, pendingApprovals: any[] = [];
   if (admin) {
-    writeApprovals().catch((e) => log('roadmap-freigaben', { error: String(e?.message ?? e).slice(0, 160) }));   // nicht warten: GET bleibt lesend schnell
+    if (write) writeApprovals().catch((e) => log('roadmap-freigaben', { error: String(e?.message ?? e).slice(0, 160) }));   // nicht warten: GET bleibt lesend schnell
     const protocol = readVault(SYNC_PROTOCOL);
     const qs = parseSyncQuestions(protocol);
     section = qs[0]?.section ?? null;
@@ -1028,7 +1053,145 @@ on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
       if (st?.hash !== hash) draft = { hash, body: draftBody(text), path: WORK_DRAFT, hubHasMarkers: replaceWorkBlock(readVault(HUB), 'x') !== null };
     }
   }
-  send(res, 200, { me: firstName(u), admin, prs, tickets, questions, pendingApprovals, section, draft, autosync: roadmapAutosync(), queued: [...roadmapQueue.pending], syncRunning: syncLocked() });
+  return { me: firstName(u), admin, prs, tickets, questions, pendingApprovals, section, draft, autosync: roadmapAutosync(), queued: [...roadmapQueue.pending], syncRunning: syncLocked() };
+}
+
+on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => send(res, 200, await mineFor(await needUser(req))));
+
+// --- „Heute“ und Review-Schlange (docs/plan-heute-review-schlange.md) ---
+
+// Brücke höchstens alle 30 s je Person fragen (K8): Zähler und Seite dürfen oft laden.
+const runsRefreshedAt = new Map<string, number>();
+async function refreshMine(u: User, force = false) {
+  if (!force && Date.now() - (runsRefreshedAt.get(u.id) ?? 0) < 30_000) return;
+  runsRefreshedAt.set(u.id, Date.now());
+  await refreshChatRuns({ userId: u.id }).catch((e) => log('läufe nachziehen', { error: String(e?.message ?? e).slice(0, 120) }));
+}
+
+async function myQueue(u: User) {
+  await refreshMine(u);
+  const runs = await wb().collection('agent_runs').find({ userId: u.id, mode: 'chat', startedAt: { $gte: new Date(Date.now() - 30 * 864e5) } }).sort({ startedAt: -1 }).limit(200).toArray();
+  const im = await issueMap();
+  const vaultPrefix = cfg.vaultDir + '/';
+  return reviewQueue(runs).map(({ r, bucket }) => ({
+    id: String(r._id), key: r.key, summary: im.get(r.key)?.summary ?? null, bucket, url: r.url ?? null,
+    review: markValid(r) ? r.review ?? null : null, reviewReadyAt: markValid(r) ? r.reviewReadyAt : null,
+    question: r.status === 'wartet auf ja' ? r.question ?? null : null,
+    end: r.endReason ?? null, endText: r.endReason ? END_TEXT[r.endReason] ?? r.endReason : null,
+    startedAt: r.startedAt, endedAt: r.endedAt ?? null, rework: r.rework ?? null, commentedAt: r.commentedAt ?? null,
+    // Geschriebene Dateien: Vault-Notizen als Pfad im Vault (Link ins Wissen), sonst nur der Dateiname.
+    written: (r.written ?? []).slice(-8).map((f: string) => f.startsWith(vaultPrefix) ? { vault: f.slice(vaultPrefix.length) } : { name: f.split('/').pop() }),
+  }));
+}
+
+/** Zähler für die Navigation: alles, was etwas von der Person will (laufende Agenten nicht). */
+async function todayCount(u: User, queue?: any[], mine?: any) {
+  const q = queue ?? await myQueue(u);
+  const m = mine ?? await mineFor(u, { write: false });   // Zähler (alle 60 s): nur lesen, nie freigaben.md schreiben
+  const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
+  const hyg = h.items.filter((i: any) => !h.snoozed.includes(i.key)).length;
+  const orch = (await listQuestions(u, { open: true }).catch(() => [])).length;   // Rückfragen des Orchestrators
+  return q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + (m.pendingApprovals?.length ?? 0) + (m.draft ? 1 : 0) + hyg + orch;
+}
+
+const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+on('GET', /^\/api\/today$/, async (req, res) => {
+  const u = await needUser(req);
+  const [queue, mine] = await Promise.all([myQueue(u), mineFor(u)]);
+  const today = vienna().date;
+  const im = await issueMap();
+  const day = ((await tbCol().find({ userId: u.id, date: today }).sort({ start: 1 }).toArray()) as any[])
+    .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
+  const orchOpen = (await listQuestions(u, { open: true }).catch(() => [])).length;
+  const memory = u.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null;   // nur Admins (RAM-Plan 125)
+  send(res, 200, { queue, mine, day, today, orchOpen, memory, count: await todayCount(u, queue, mine), dryRun: dryRun() });
+});
+
+on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
+
+async function ownRun(u: User, id: string) {
+  const run: any = await wb().collection('agent_runs').findOne({ _id: id as any });
+  if (!run) throw new HttpError(404, 'Lauf nicht gefunden.');
+  if (run.userId !== u.id) throw new HttpError(403, 'Das ist nicht dein Agentenlauf.');
+  return run;
+}
+
+// „Passt“: als geprüft markieren; mit comment erst Vorschau, nach confirm genau ein Jira-Kommentar (E2: nie den Status).
+on('POST', /^\/api\/runs\/([0-9a-f-]{36})\/passt$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const run = await ownRun(u, m[1]);
+  const runs = wb().collection('agent_runs');
+  if (b.comment === true) {
+    const text = reviewComment(firstName(u), run.review);
+    if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: `Kommentar auf ${run.key}: „${text}“`, text });
+    // Idempotent (K6): ein zweiter Klick schreibt keinen zweiten Kommentar.
+    const claim = await runs.updateOne({ _id: run._id, commentedAt: null }, { $set: { commentedAt: new Date() } });
+    if (claim.modifiedCount) {
+      try { await jiraWrite(u, () => writeJira(u, run.key, [{ type: 'comment', text }])); }
+      catch (e) { await runs.updateOne({ _id: run._id }, { $set: { commentedAt: null } }); throw e; }
+      log('review passt + kommentar', { user: u.id, key: run.key });
+    }
+  }
+  await runs.updateOne({ _id: run._id }, { $set: { reviewedAt: new Date(), reviewedBy: u.email } });
+  send(res, 200, { ok: true, commented: b.comment === true });
+});
+
+// Antwort in DENSELBEN Chat: Nacharbeit (Notiz, Lauf zurück), Antwort auf eine Rückfrage (ja/nein), „weiter“ nach „hängt“.
+on('POST', /^\/api\/runs\/([0-9a-f-]{36})\/reply$/, async (req, res, m) => {
+  const u = await needUser(req);
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
+  const b = await body(req);
+  await ownRun(u, m[1]);
+  const kind = String(b.kind ?? '');
+  if (!['nacharbeit', 'antwort', 'weiter'].includes(kind)) throw new HttpError(400, 'kind ist nacharbeit, antwort oder weiter.');
+  const text = kind === 'weiter' ? 'weiter' : String(b.text ?? '').trim().slice(0, 4000);
+  if (!text) throw new HttpError(400, kind === 'nacharbeit' ? 'Schreib kurz, was nachzuarbeiten ist.' : 'Leere Antwort.');
+  await refreshChatRuns({ _id: m[1] });
+  const run: any = await wb().collection('agent_runs').findOne({ _id: m[1] as any });
+  if (run.status === 'läuft') throw new HttpError(409, 'Der Agent arbeitet gerade — warte, bis er fertig ist oder fragt.');
+  if (kind === 'antwort' && run.status !== 'wartet auf ja') throw new HttpError(409, 'Die Rückfrage ist nicht mehr offen — Seite neu laden.');
+  await replyInChat(u, run.conv, kind === 'nacharbeit' ? `Nacharbeit nach Review: ${text}` : text);
+  await wb().collection('agent_runs').updateOne({ _id: run._id }, {
+    $set: { status: 'läuft', question: null, endReason: null, ...(kind === 'nacharbeit' ? { reviewReadyAt: null, rework: { text: text.slice(0, 500), at: new Date() } } : {}) },
+  });
+  runsRefreshedAt.delete(u.id);
+  log('review antwort', { user: u.id, key: run.key, kind });
+  send(res, 200, { ok: true, url: run.url ?? null });
+});
+
+// review_ready (Werkbank-MCP): Fertig-Marke am neuesten Chat-Lauf der Person in DIESER Unterhaltung (Bedingung 5).
+on('POST', /^\/internal\/review-ready$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const conv = String(b.conv ?? '');
+  if (!conv) throw new HttpError(400, 'Keine Unterhaltung bekannt — review_ready gilt nur in einem Werkbank-Chat.');
+  const run: any = await wb().collection('agent_runs').findOne({ userId: u.id, conv, mode: 'chat' }, { sort: { startedAt: -1 } });
+  if (!run) throw new HttpError(404, 'Kein Werkbank-Agentenlauf zu diesem Chat — nichts gesetzt (die Review-Schlange kennt nur Läufe, die vom Board aus gestartet wurden).');
+  const p = parseReview(b);
+  if (!p.review) throw new HttpError(400, p.error!);
+  await wb().collection('agent_runs').updateOne({ _id: run._id }, { $set: { reviewReadyAt: new Date(), review: p.review, reviewedAt: null } });
+  runsRefreshedAt.delete(u.id);
+  log('review bereit', { user: u.id, key: run.key, dod: p.review.dod.length });
+  send(res, 200, { ok: true, key: run.key });
+});
+
+
+// Rückfragen des Orchestrators (Knut antwortet hier; nur die eigenen).
+on('GET', /^\/api\/orchestrator\/questions$/, async (req, res, _m, url) => {
+  const u = await needUser(req);
+  const open = await listQuestions(u, { open: true });
+  send(res, 200, url.searchParams.get('count') ? { open: open.length } : { open, answered: (await listQuestions(u, { limit: 20 })).filter((q) => q.status !== 'offen').slice(0, 10) });
+});
+
+on('POST', /^\/api\/orchestrator\/questions\/([\w-]{1,20})\/answer$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const q = await answerQuestion(u, m[1], { option: b.option ?? null, text: b.text ?? null });
+  log('rückfrage beantwortet', { user: u.id, id: q.id });
+  roadmapChanged('orchestrator-antwort');
+  send(res, 200, q);
 });
 
 on('POST', /^\/api\/roadmap\/question$/, async (req, res) => {
@@ -1173,6 +1336,85 @@ on('POST', /^\/api\/roadmap\/spec-new$/, async (req, res) => {
   invalidateIndex(); checkCache = null;
   log('spec neu', { user: u.id, path: rel });
   send(res, 200, { ok: true, path: rel, follow });
+});
+
+// --- „Agent ansetzen“ an einer Spec (docs/plan-agent-ansetzen.md): Vorschau → ein Klick → Ticket, Spec-Link, Agent ---
+
+/** `jira:` (bzw. `sim-jira:`) in die Spec — nur ohne laufenden Vault-Sync, mit Hash direkt vor dem Schreiben (Bedingung 7). */
+async function linkSpec(sp: { path: string; text: string }, key: string, field: 'jira' | 'sim-jira'): Promise<string> {
+  if (vaultDry()) return 'trocken';
+  const abs = vaultPath(sp.path);
+  const cur = readFileSync(abs, 'utf8');
+  if (hashText(cur) !== hashText(sp.text)) return 'offen:Spec hat sich seit dem Lesen geändert — beim nächsten Klick';
+  const next = field === 'jira' ? addJiraFrontmatter(cur, key) : addSimField(cur, key);
+  if (next === null) return 'schon';
+  if (syncLocked()) return 'offen:Vault-Sync läuft gerade — beim nächsten Klick';
+  writeAtomic(abs, next);
+  invalidateIndex(); suggestCache = null;
+  return 'ok';
+}
+
+on('GET', /^\/api\/roadmap\/ansetzen$/, async (req, res, _m, url) => {
+  await needAdmin(req);
+  const path = url.searchParams.get('path') ?? '';
+  send(res, 200, { mode: ansetzenMode().mode, state: ansetzenView(await specTicketState(specSlug(path))) });
+});
+
+on('POST', /^\/api\/roadmap\/ansetzen$/, async (req, res) => {
+  const u = await needAdmin(req);   // Bedingung 1: nur Admins (aus der Sitzung)
+  const b = await body(req);
+  const m = ansetzenMode();
+  const sp = roadmapSpecs().find((x) => x.path === String(b.path ?? ''));
+  if (!sp) throw new HttpError(404, 'Spec nicht gefunden.');
+  const gate = specGate(sp);
+  const im = await issueMap();
+  const workstreams = [...im.values()].filter((i) => i.type === 'Workstream' && i.statusCategory !== 'done').map((i) => ({ key: i.key, summary: i.summary })).sort((a, c) => a.key.localeCompare(c.key, undefined, { numeric: true }));
+  const mode = b.mode === 'plan' ? 'plan' as const : 'review' as const;
+  const parent = String(b.parent || DEFAULT_WORKSTREAM);
+  if (!/^[A-Z][A-Z0-9]+-\d+$/.test(parent) || (m.mode === 'live' && !workstreams.some((w) => w.key === parent))) throw new HttpError(400, `${parent.slice(0, 20)} ist kein Workstream in der Jira-Kopie.`);
+  const state = ansetzenView(await specTicketState(specSlug(sp.path)));
+  const base: any = { mode: m.mode, problem: m.problem, gate: { ok: gate.ok, why: gate.why, open: gate.open.map((d) => d.question).slice(0, 5) }, state, workstreams, hash: draftHashOf(sp.text), spec: { path: sp.path, title: sp.title, topic: sp.topic, state: sp.state }, dryRun: dryRun() };
+  if (m.mode === 'aus') {
+    if (b.confirm === true) throw new HttpError(403, m.problem ?? '„Agent ansetzen“ ist ausgeschaltet (WERKBANK_ANSETZEN).');
+    return send(res, 200, base);
+  }
+  let jira: AnsetzenJira | null = null;
+  let me: { accountId: string; displayName: string } | null = null;
+  try { jira = m.mode === 'sim' ? simJira(u) : await liveJira(u); me = await jira.me(); }
+  catch (e: any) { if (b.confirm === true) throw e; base.jiraProblem = String(e?.message ?? e).slice(0, 300); }
+  const due = sprintEnd(listCycles(sprintRoot()).map((c) => c.date), vienna().date);
+  const draft = me ? ticketDraft(sp, { parent, summary: b.summary, mode, accountId: me.accountId, ownerName: me.displayName, due }) : null;
+  if (b.confirm !== true) {
+    // Vorschau: schreibt nichts (Bedingung 1). Dubletten lokal + live (Bedingung 3).
+    let duplicates: Dup[] = m.mode === 'sim' ? [] : localDuplicates(sp, [...im.values()]);
+    if (jira) {
+      try { duplicates = [...new Map([...(await jira.search(dupJql(sp), sp)), ...duplicates].map((d) => [d.key, d])).values()]; }
+      catch (e: any) { base.liveProblem = `Jira-Suche nicht möglich: ${String(e?.message ?? e).slice(0, 160)}`; }
+    }
+    return send(res, 200, { ...base, draft, duplicates, ready: gate.ok && !!draft && !base.liveProblem && !base.dryRun });
+  }
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): hier wird nichts angelegt.');
+  if (!gate.ok) throw new HttpError(409, gate.why!);
+  if (String(b.hash ?? '') !== base.hash) throw new HttpError(409, 'Die Spec hat sich seit der Vorschau geändert — bitte neu laden.');
+  // Bedingung „nichts halb angelegt“: Claude-Token und Jira-Schreibweg vor dem ersten Schreiben.
+  if (!(await getClaudeToken(u))) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen. Nichts angelegt.');
+  if (m.mode === 'live' && !(await canWriteJira(u))) throw new HttpError(412, 'Jira-Schreiben ist für dich nicht verbunden (Atlassian-MCP) — unter „Einrichtung“ anmelden. Nichts angelegt.');
+  let useKey: string | undefined;
+  if (b.useKey) {
+    useKey = String(b.useKey).toUpperCase();
+    const known = m.mode === 'sim' ? /^SIM-\d+$/.test(useKey) && !!(await jira!.get(useKey)) : /^[A-Z][A-Z0-9]+-\d+$/.test(useKey) && (im.has(useKey) || !!(await jira!.get(useKey)));
+    if (!known) throw new HttpError(404, `${useKey.slice(0, 20)} ist nicht bekannt.`);
+  }
+  const r = await runAnsetzen(u, sp, { mode, note: String(b.note ?? '').slice(0, 2000), useKey, newTicket: b.newTicket === true, draft: draft! }, {
+    jira: jira!, mirror: issueMap, linkSpec,
+    startAgent: async (issue, note, specPath) => {
+      const a = await startTicketAgent(u, issue, note, { specPath });
+      await wb().collection('agent_runs').updateOne({ _id: a.id as any }, { $set: { specPath, origin: 'ansetzen' } });
+      return a;
+    },
+  });
+  log('agent ansetzen', { user: u.id, spec: sp.name, key: r?.key ?? null, choice: r?.needsChoice ?? null, mode: m.mode });
+  send(res, 200, r);
 });
 
 on('GET', /^\/api\/roadmap\/check$/, async (req, res) => { await needUser(req); send(res, 200, await runRoadmapCheck()); });
@@ -1624,11 +1866,25 @@ on('GET', /^\/api\/files$/, async (req, res) => {
   const name = (id: string) => people.find((p) => p.id === id)?.name ?? '?';
   const pids = [...new Set([...mine, ...shared].map((f: any) => f.projectId).filter(Boolean))];
   const projectNames = new Map((await wb().collection('projects').find({ _id: { $in: pids as any[] } }, { projection: { name: 1 } }).toArray()).map((p: any) => [p._id, p.name]));
-  const shape = (f: any) => ({ ...f, id: f._id, projectName: f.projectId ? projectNames.get(f.projectId) ?? null : null, source: f.source ? { conv: f.source.conv } : undefined });
+  // `path` geht nur an die Besitzerin (Ablageort in Knuts Ordner); geteilte sehen den Namen, nicht den Ort.
+  const shape = (f: any) => ({ ...f, id: f._id, path: undefined, ablage: undefined, projectName: f.projectId ? projectNames.get(f.projectId) ?? null : null, source: f.source ? { conv: f.source.conv } : undefined });
+  const known = folders();
+  const mineOut = [];
+  for (const f of mine as any[]) {
+    const pi = placeInfo(f);
+    // Vorschlag für „Noch einzusortieren“; für abgelegte Dateien die zuletzt gewählten Angaben (für „Verschieben“).
+    const v = f.kind === 'vault' ? null : f.ablage ?? await suggestFor(f, known);
+    mineOut.push({ ...shape(f), sharedWithNames: f.sharedWith.map(name), ...pi, vorschlag: v ? { ...v, name: schemaName(v, extname(f.name)) } : null });
+  }
+  const notice: any = await wb().collection('scratch_notice').findOne({ _id: u.id as any });
+  const admin = u.role === 'ADMIN';
   send(res, 200, {
-    mine: mine.map((f: any) => ({ ...shape(f), sharedWithNames: f.sharedWith.map(name) })),
-    shared: shared.map((f: any) => ({ ...shape(f), sharedWith: undefined })),
+    mine: mineOut,
+    shared: shared.map((f: any) => ({ ...shape(f), sharedWith: undefined, fehlt: placeInfo(f).fehlt })),
     maxMb: Math.round(cfg.fileMaxBytes / 1048576),
+    ablage: { teams: [...new Set(known.map((x) => x.team))], folders: known, arten: ARTEN },
+    scratch: notice ? { count: notice.count, bytes: notice.bytes, deleteFrom: notice.deleteFrom, files: notice.files, days: cfg.scratchDays } : null,
+    backup: admin ? { nightly: listBackups(), keep: cfg.backupKeep, key: !!keyOf(), running: backupRunning() } : null,
   });
 });
 
@@ -1650,6 +1906,36 @@ on('GET', /^\/api\/files\/([0-9a-f-]{36})\/download$/, async (req, res, m) => {
     'content-security-policy': "sandbox; default-src 'none'", 'cache-control': 'no-store',
   });
   createReadStream(filePath(f)).on('error', () => res.destroy()).pipe(res);
+});
+
+// Plan 81, Schnitt 2: „Ablegen“ — Vorschlag bestätigen oder ändern; die Datei zieht in `<team>/<vorgang>/` der Ablage.
+on('POST', /^\/api\/files\/([0-9a-f-]{36})\/ablegen$/, async (req, res, m) => {
+  const u = await needUser(req);
+  send(res, 200, { ok: true, ...(await ablegen(u, m[1], await body(req))) });
+});
+
+// Plan 81, Schnitt 4: eine angekündigte Datei im Arbeitsordner behalten (Frist beginnt neu).
+on('POST', /^\/api\/scratch\/keep$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const rels: string[] = Array.isArray(b.rels) ? b.rels.map(String).slice(0, 200) : [String(b.rel ?? '')];
+  const kept = rels.filter((r) => keepScratch(scratchDir(u), r)).length;
+  await runScratch(u);
+  send(res, 200, { ok: true, kept });
+});
+
+// Plan 81, Schnitt 5: Backup als Download, nur Admins. Gestreamt, nichts bleibt liegen.
+on('GET', /^\/api\/backup$/, async (req, res) => {
+  const u = await needAdmin(req);
+  if (backupRunning()) throw new HttpError(409, 'Es läuft schon ein Backup — gleich noch einmal versuchen.');
+  const day = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-');
+  res.writeHead(200, {
+    'content-type': 'application/gzip', 'x-content-type-options': 'nosniff', 'cache-control': 'no-store',
+    'content-disposition': `attachment; filename="werkbank-backup-${day}.tar.gz"`,
+  });
+  logShare({ actor: u.email, action: 'backup', kind: 'backup', resource: day });
+  try { const mf = await writeBackup(res); log('backup', { by: u.email, files: mf.files, encrypted: mf.encrypted, skipped: mf.skipped.length }); }
+  catch (e: any) { log('backup', { error: String(e?.message ?? e).slice(0, 200) }); res.destroy(); }
 });
 
 on('POST', /^\/api\/files\/([0-9a-f-]{36})\/share$/, async (req, res, m) => {
@@ -1733,6 +2019,49 @@ async function internalUser(req: IncomingMessage, b: any): Promise<User> {
   return u;
 }
 
+// Orchestrator-Stränge (docs/plan-orchestrator-agents.md): nur über den internen Kanal (scripts/orch), nie aus dem Browser.
+// Person: userId oder email (Vorgabe WERKBANK_PILOT_EMAIL = Knut); die Freigabeliste gilt.
+async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
+  if (b.userId) return internalUser(req, b);
+  const email = String(b.email || cfg.pilotEmail).toLowerCase();
+  const d: any = await lc().collection('users').findOne({ email }, { projection: { _id: 1 } });
+  return internalUser(req, { userId: d ? String(d._id) : '' });
+}
+
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review)$/, async (req, res, m) => {
+  const b = await body(req, 1 << 20);
+  const u = await orchPerson(req, b);
+  const id = String(b.id ?? '');
+  switch (m[1]) {
+    case 'start': {
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true });
+      log('strang gestartet', { user: u.id, id: r.id, conv: r.conv });
+      return send(res, 200, r);
+    }
+    case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
+    case 'show': return send(res, 200, await showOrch(u, id));
+    case 'send': return send(res, 200, await sendOrch(u, id, b.text));
+    case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? ''));
+  }
+});
+
+// Rückfragen an Knut: der Orchestrator fragt (intern), Knut antwortet in der Werkbank (unten, /api/orchestrator/…).
+on('POST', /^\/internal\/orchestrator\/questions\/(ask|list|get|withdraw)$/, async (req, res, m) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  switch (m[1]) {
+    case 'ask': {
+      const q = await askKnut(u, { title: b.title, context: b.context, options: b.options, recommendation: b.recommendation, strand: b.strand || null, link: b.link || null, plan: b.plan || null });
+      log('rückfrage an knut', { user: u.id, id: q.id });
+      roadmapChanged('orchestrator-frage');
+      return send(res, 200, q);
+    }
+    case 'list': return send(res, 200, { questions: await listQuestions(u, { open: b.open === true }) });
+    case 'get': return send(res, 200, await getQuestion(u, String(b.id ?? '')));
+    case 'withdraw': { const r = await withdrawQuestion(u, String(b.id ?? '')); roadmapChanged('orchestrator-frage'); return send(res, 200, r); }
+  }
+});
+
 on('POST', /^\/internal\/session-start$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
@@ -1776,12 +2105,25 @@ on('POST', /^\/internal\/hygiene-snooze$/, async (req, res) => {
   send(res, 200, { ok: true });
 });
 
+/**
+ * Die Rückfrage im Chat zeigt den Ticket-Titel, den das Modell mitgibt (summary). Stimmt er nicht mit der Kopie überein,
+ * hätte die Person etwas anderes bestätigt, als geschrieben würde → ablehnen, nichts schreiben (Council 09.10.2026).
+ */
+const normTitle = (t: unknown) => String(t ?? '').toLowerCase().replace(/[^a-z0-9äöüß]+/g, ' ').trim();
+function titleMismatch(shown: unknown, actual: string): boolean {
+  if (shown === undefined || shown === null || String(shown).trim() === '') return false;
+  const a = normTitle(shown).replace(/…$/, ''), b = normTitle(actual);
+  return !(b === a || (a.length >= 12 && b.startsWith(a)));
+}
+
 on('POST', /^\/internal\/jira-update$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
   const key = String(b.key ?? '');
   if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw new HttpError(400, 'Ungültiger Schlüssel.');
-  if (!(await allIssues()).some((i) => i.key === key)) throw new HttpError(404, 'Ticket nicht in der Jira-Kopie (nur bestehende Tickets, keine neuen).');
+  const cur = (await allIssues()).find((i) => i.key === key);
+  if (!cur) throw new HttpError(404, 'Ticket nicht in der Jira-Kopie (nur bestehende Tickets, keine neuen).');
+  if (titleMismatch(b.summary, cur.summary)) throw new HttpError(409, `${key} heißt „${cur.summary}“, nicht „${String(b.summary).slice(0, 80)}“ — nichts geschrieben. Bitte mit dem richtigen Titel neu fragen.`);
   const actions: any[] = [];
   if (b.comment) actions.push({ type: 'comment', text: String(b.comment) });
   if (b.status) actions.push({ type: 'status', to: String(b.status) });
@@ -1791,6 +2133,64 @@ on('POST', /^\/internal\/jira-update$/, async (req, res) => {
   const done = await jiraWrite(u, () => applyActions(u, key, actions));
   log('jira write (chat)', { user: u.id, key, n: done.length });
   send(res, 200, { ok: true, done });
+});
+
+// Tagesabschluss: mehrere Tickets mit EINER Rückfrage (die Brücke hat schon gefragt). Erst alle Schlüssel prüfen —
+// ein unbekannter → nichts geschrieben. Dann der Reihe nach; ein Fehler bricht nicht ab, er steht je Ticket im Ergebnis.
+on('POST', /^\/internal\/jira-update-many$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const changes: any[] = Array.isArray(b.changes) ? b.changes : [];
+  if (!changes.length) throw new HttpError(400, 'Nichts zu tun.');
+  if (changes.length > 25) throw new HttpError(400, 'Höchstens 25 Tickets auf einmal.');
+  const all = await allIssues();
+  const byKey = new Map(all.map((i) => [i.key, i]));
+  // Nur eigene Tickets (Tagesabschluss = Durchgang über die eigenen): ein fremdes im Stapel → nichts geschrieben.
+  // Schutz gegen Anweisungen aus Ticket-Texten, die das Modell beim Lesen gesehen hat (Council 09.10.2026).
+  const who = resolveIdentity(await jiraIdentity(u), all);
+  const keys = changes.map((c) => String(c?.key ?? ''));
+  const twice = keys.find((k, n) => keys.indexOf(k) !== n);
+  if (twice) throw new HttpError(400, `${twice} steht zweimal im Stapel — je Ticket ein Eintrag; nichts geschrieben.`);
+  const plans = changes.map((c) => {
+    const key = String(c?.key ?? '');
+    if (String(c?.comment ?? '').length > 1500) throw new HttpError(400, `${key}: Kommentar über 1500 Zeichen (die Rückfrage zeigt nur so viel) — nichts geschrieben.`);
+    if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw new HttpError(400, `Ungültiger Schlüssel „${key.slice(0, 20)}“ — nichts geschrieben.`);
+    const cur = byKey.get(key);
+    if (!cur) throw new HttpError(404, `${key} ist nicht in der Jira-Kopie (nur bestehende Tickets) — nichts geschrieben.`);
+    if (!isMine(cur, who)) throw new HttpError(403, `${key} gehört nicht dir (Owner: ${cur.assignee ?? 'niemand'}) — gesammelt nur eigene Tickets; nichts geschrieben.`);
+    if (titleMismatch(c.summary, cur.summary)) throw new HttpError(409, `${key} heißt „${cur.summary}“, nicht „${String(c.summary).slice(0, 80)}“ — nichts geschrieben.`);
+    const actions: any[] = [];
+    if (c.comment) actions.push({ type: 'comment', text: String(c.comment) });
+    if (c.status) actions.push({ type: 'status', to: String(c.status) });
+    if (c.due !== undefined && c.due !== null) actions.push({ type: 'due', date: String(c.due) || null });
+    if (!actions.length) throw new HttpError(400, `${key}: nichts zu tun — nichts geschrieben.`);
+    return { key, actions };
+  });
+  // Frist (Council 09.10.2026): das Werkzeug wartet budgetMs; danach kein neues Ticket mehr anfangen, sondern als
+  // „nicht versucht“ melden — sonst schriebe der Server weiter, während das Modell einen Fehler sieht und wiederholt.
+  const budget = Math.min(Math.max(Number(b.budgetMs) || 300_000, 20_000), 300_000);
+  const t0 = Date.now();
+  const results: { key: string; ok: boolean; done: string[]; error?: string; skipped?: boolean }[] = [];
+  for (const p of plans) {
+    if (Date.now() - t0 >= budget - 20_000) { results.push({ key: p.key, ok: false, done: [], skipped: true, error: 'nicht versucht (Zeit) — erst Stand lesen, dann einzeln' }); continue; }
+    try { results.push({ key: p.key, ok: true, done: await jiraWrite(u, () => applyActions(u, p.key, p.actions)) }); }
+    catch (e: any) { results.push({ key: p.key, ok: false, done: [], error: String(e?.message ?? e).slice(0, 200) }); }
+  }
+  log('jira write (chat, gesammelt)', { user: u.id, n: plans.length, failed: results.filter((r) => !r.ok).length });
+  send(res, 200, { ok: results.every((r) => r.ok), results });
+});
+
+// „Agent vorlaufen lassen“ aus dem Chat: neuer eigener Chat mit Agent auf dem Ticket — wie „Agent“ am Board.
+on('POST', /^\/internal\/agent-start$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
+  const i = (await issueMap()).get(String(b.key ?? ''));
+  if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  if (!(await getClaudeToken(u))) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen.');
+  const r = await startTicketAgent(u, i, String(b.note ?? '').slice(0, 2000));
+  log('agent chat (aus chat)', { user: u.id, key: i.key, conv: r.conv });
+  send(res, 200, r);
 });
 
 // Die Brücke hat im Chat einen schreibenden Atlassian-Aufruf gesehen (Kommentar, Status, Anlegen …): diese Tickets
@@ -1953,6 +2353,17 @@ async function backgroundJobs() {
   setTimeout(filesTick, 20_000);
   setInterval(filesTick, 2 * 60_000);
 
+  // Plan 81, Schnitt 4 und 5: Arbeitsordner aufräumen (Ankündigung, dann löschen) und Nachtarchiv — stündlich geprüft.
+  const houseTick = async () => {
+    for (const person of (await teammates().catch(() => [])).filter((x) => allowed(x.email))) {
+      try { const r = await runScratch(person); if (r.removed || r.skipped) log('arbeitsordner', { user: person.id, ...r }); }
+      catch (e: any) { log('arbeitsordner', { user: person.id, error: String(e?.message ?? e).slice(0, 200) }); }
+    }
+    try { const p = await nightly(); if (p) log('backup nachts', { file: p }); } catch (e: any) { log('backup nachts', { error: String(e?.message ?? e).slice(0, 200) }); }
+  };
+  setTimeout(houseTick, 60_000);
+  setInterval(houseTick, 60 * 60_000);
+
   // Werkbank-Feed für den Vault-Sync-Snapshot und Abgleich der Freigaben mit dem Protokoll (alle 5 min).
   const roadmapTick = async () => {
     try { await writeRoadmapFeed(); await writeApprovals(); } catch (e: any) { log('roadmap-feed', { error: String(e?.message ?? e).slice(0, 160) }); }
@@ -1972,6 +2383,8 @@ async function backgroundJobs() {
 
 await connect();
 mkdirSync(cfg.dataDir, { recursive: true });
+// Plan 81, Schnitt 1: alter Speicher → Ablage, einmalig und idempotent (nur Einträge ohne `path`).
+migrateLegacy(log).catch((e) => log('ablage-umzug', { error: String(e?.message ?? e).slice(0, 200) }));
 server.listen(cfg.port, cfg.host, () => log('listening', { host: cfg.host, port: cfg.port, demo: cfg.demo, vault: cfg.vaultDir }));
 if (process.env.WERKBANK_NO_JOBS !== '1') backgroundJobs();
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { server.close(); process.exit(0); });
