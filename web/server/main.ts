@@ -33,7 +33,7 @@ import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyTo
 import { log } from './log.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
-import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, type JiraAction } from './jirawrite.ts';
+import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, type JiraAction } from './jirawrite.ts';
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
@@ -43,6 +43,7 @@ import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './tim
 import { isMine, resolveIdentity, vienna } from './hygiene.ts';
 import { ObjectId } from 'mongodb';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
+import { ansetzenMode, specGate, sprintEnd, ticketDraft, localDuplicates, dupJql, simJira, liveJira, runAnsetzen, specTicketState, specSlug, view as ansetzenView, draftHashOf, addSimField, DEFAULT_WORKSTREAM, type AnsetzenJira, type Dup } from './ansetzen.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, type GoalNode } from './goals.ts';
 
@@ -1329,6 +1330,85 @@ on('POST', /^\/api\/roadmap\/spec-new$/, async (req, res) => {
   invalidateIndex(); checkCache = null;
   log('spec neu', { user: u.id, path: rel });
   send(res, 200, { ok: true, path: rel, follow });
+});
+
+// --- „Agent ansetzen“ an einer Spec (docs/plan-agent-ansetzen.md): Vorschau → ein Klick → Ticket, Spec-Link, Agent ---
+
+/** `jira:` (bzw. `sim-jira:`) in die Spec — nur ohne laufenden Vault-Sync, mit Hash direkt vor dem Schreiben (Bedingung 7). */
+async function linkSpec(sp: { path: string; text: string }, key: string, field: 'jira' | 'sim-jira'): Promise<string> {
+  if (vaultDry()) return 'trocken';
+  const abs = vaultPath(sp.path);
+  const cur = readFileSync(abs, 'utf8');
+  if (hashText(cur) !== hashText(sp.text)) return 'offen:Spec hat sich seit dem Lesen geändert — beim nächsten Klick';
+  const next = field === 'jira' ? addJiraFrontmatter(cur, key) : addSimField(cur, key);
+  if (next === null) return 'schon';
+  if (syncLocked()) return 'offen:Vault-Sync läuft gerade — beim nächsten Klick';
+  writeAtomic(abs, next);
+  invalidateIndex(); suggestCache = null;
+  return 'ok';
+}
+
+on('GET', /^\/api\/roadmap\/ansetzen$/, async (req, res, _m, url) => {
+  await needAdmin(req);
+  const path = url.searchParams.get('path') ?? '';
+  send(res, 200, { mode: ansetzenMode().mode, state: ansetzenView(await specTicketState(specSlug(path))) });
+});
+
+on('POST', /^\/api\/roadmap\/ansetzen$/, async (req, res) => {
+  const u = await needAdmin(req);   // Bedingung 1: nur Admins (aus der Sitzung)
+  const b = await body(req);
+  const m = ansetzenMode();
+  const sp = roadmapSpecs().find((x) => x.path === String(b.path ?? ''));
+  if (!sp) throw new HttpError(404, 'Spec nicht gefunden.');
+  const gate = specGate(sp);
+  const im = await issueMap();
+  const workstreams = [...im.values()].filter((i) => i.type === 'Workstream' && i.statusCategory !== 'done').map((i) => ({ key: i.key, summary: i.summary })).sort((a, c) => a.key.localeCompare(c.key, undefined, { numeric: true }));
+  const mode = b.mode === 'plan' ? 'plan' as const : 'review' as const;
+  const parent = String(b.parent || DEFAULT_WORKSTREAM);
+  if (!/^[A-Z][A-Z0-9]+-\d+$/.test(parent) || (m.mode === 'live' && !workstreams.some((w) => w.key === parent))) throw new HttpError(400, `${parent.slice(0, 20)} ist kein Workstream in der Jira-Kopie.`);
+  const state = ansetzenView(await specTicketState(specSlug(sp.path)));
+  const base: any = { mode: m.mode, problem: m.problem, gate: { ok: gate.ok, why: gate.why, open: gate.open.map((d) => d.question).slice(0, 5) }, state, workstreams, hash: draftHashOf(sp.text), spec: { path: sp.path, title: sp.title, topic: sp.topic, state: sp.state }, dryRun: dryRun() };
+  if (m.mode === 'aus') {
+    if (b.confirm === true) throw new HttpError(403, m.problem ?? '„Agent ansetzen“ ist ausgeschaltet (WERKBANK_ANSETZEN).');
+    return send(res, 200, base);
+  }
+  let jira: AnsetzenJira | null = null;
+  let me: { accountId: string; displayName: string } | null = null;
+  try { jira = m.mode === 'sim' ? simJira(u) : await liveJira(u); me = await jira.me(); }
+  catch (e: any) { if (b.confirm === true) throw e; base.jiraProblem = String(e?.message ?? e).slice(0, 300); }
+  const due = sprintEnd(listCycles(sprintRoot()).map((c) => c.date), vienna().date);
+  const draft = me ? ticketDraft(sp, { parent, summary: b.summary, mode, accountId: me.accountId, ownerName: me.displayName, due }) : null;
+  if (b.confirm !== true) {
+    // Vorschau: schreibt nichts (Bedingung 1). Dubletten lokal + live (Bedingung 3).
+    let duplicates: Dup[] = m.mode === 'sim' ? [] : localDuplicates(sp, [...im.values()]);
+    if (jira) {
+      try { duplicates = [...new Map([...(await jira.search(dupJql(sp), sp)), ...duplicates].map((d) => [d.key, d])).values()]; }
+      catch (e: any) { base.liveProblem = `Jira-Suche nicht möglich: ${String(e?.message ?? e).slice(0, 160)}`; }
+    }
+    return send(res, 200, { ...base, draft, duplicates, ready: gate.ok && !!draft && !base.liveProblem && !base.dryRun });
+  }
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): hier wird nichts angelegt.');
+  if (!gate.ok) throw new HttpError(409, gate.why!);
+  if (String(b.hash ?? '') !== base.hash) throw new HttpError(409, 'Die Spec hat sich seit der Vorschau geändert — bitte neu laden.');
+  // Bedingung „nichts halb angelegt“: Claude-Token und Jira-Schreibweg vor dem ersten Schreiben.
+  if (!(await getClaudeToken(u))) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen. Nichts angelegt.');
+  if (m.mode === 'live' && !(await canWriteJira(u))) throw new HttpError(412, 'Jira-Schreiben ist für dich nicht verbunden (Atlassian-MCP) — unter „Einrichtung“ anmelden. Nichts angelegt.');
+  let useKey: string | undefined;
+  if (b.useKey) {
+    useKey = String(b.useKey).toUpperCase();
+    const known = m.mode === 'sim' ? /^SIM-\d+$/.test(useKey) && !!(await jira!.get(useKey)) : /^[A-Z][A-Z0-9]+-\d+$/.test(useKey) && (im.has(useKey) || !!(await jira!.get(useKey)));
+    if (!known) throw new HttpError(404, `${useKey.slice(0, 20)} ist nicht bekannt.`);
+  }
+  const r = await runAnsetzen(u, sp, { mode, note: String(b.note ?? '').slice(0, 2000), useKey, newTicket: b.newTicket === true, draft: draft! }, {
+    jira: jira!, mirror: issueMap, linkSpec,
+    startAgent: async (issue, note, specPath) => {
+      const a = await startTicketAgent(u, issue, note, { specPath });
+      await wb().collection('agent_runs').updateOne({ _id: a.id as any }, { $set: { specPath, origin: 'ansetzen' } });
+      return a;
+    },
+  });
+  log('agent ansetzen', { user: u.id, spec: sp.name, key: r?.key ?? null, choice: r?.needsChoice ?? null, mode: m.mode });
+  send(res, 200, r);
 });
 
 on('GET', /^\/api\/roadmap\/check$/, async (req, res) => { await needUser(req); send(res, 200, await runRoadmapCheck()); });

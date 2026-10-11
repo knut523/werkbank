@@ -139,11 +139,13 @@ export async function createLibreChat(u: User, text: string, opts: { conversatio
   return String(j.conversationId);
 }
 
-export interface AgentPlace { projectName?: string | null; areaDir?: string | null; personName?: string | null }
+export interface AgentPlace { projectName?: string | null; areaDir?: string | null; personName?: string | null; specPath?: string | null }
 
 /** Projekt und Workstream-Bereich als Zeile für den Prompt (Plan 81, Schnitte 6/7). */
 export function placeLine(place: AgentPlace = {}): string {
-  const parts = [place.projectName ? `Projekt: ${place.projectName}` : '', place.areaDir ? `Workstream-Bereich im Vault: ${place.areaDir}/ (Plan und neue Notizen dorthin, wenn es keinen besseren Ort gibt)` : ''].filter(Boolean);
+  const parts = [place.projectName ? `Projekt: ${place.projectName}` : '', place.areaDir ? `Workstream-Bereich im Vault: ${place.areaDir}/ (Plan und neue Notizen dorthin, wenn es keinen besseren Ort gibt)` : '',
+    // „Agent ansetzen“ an einer Spec (Bedingung 8): die Spec als Pfad, nicht als Text in der Notiz.
+    place.specPath ? `Spec (Roadmap, Grundlage des Auftrags): ${place.specPath} — lies sie zuerst vollständig; Ziel und Definition of Done gelten wörtlich.` : ''].filter(Boolean);
   return parts.join('\n');
 }
 

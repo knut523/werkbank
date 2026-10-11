@@ -2,6 +2,7 @@
 // Alles aus dem Vault (lesend); geschrieben wird nur eine Antwort („- Knut:“) oder ein Rang-Vorschlag —
 // jeweils nach Vorschau und Bestätigung. GitHub nur lesend (Links).
 import { useMemo, useState, type CSSProperties } from 'react';
+import { AnsetzenButton } from '../AgentAnsetzen';
 import { api, type Config } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, StateChip, useJiraLive } from '../ui.tsx';
 import { BeiMirLink, Md, note } from '../beimir.tsx';
@@ -34,7 +35,7 @@ function NextUp({ d }: { d: any }) {
   );
 }
 
-function Prio({ d, reload }: { d: any; reload: () => void }) {
+function Prio({ d, reload, admin }: { d: any; reload: () => void; admin: boolean }) {
   const [order, setOrder] = useState<string[] | null>(null);
   const [why, setWhy] = useState('');
   const [err, setErr] = useState<unknown>(null);
@@ -98,7 +99,7 @@ function Prio({ d, reload }: { d: any; reload: () => void }) {
                   <tr key={r.spec} data-spec={r.spec} className={order && full.rank !== i + 1 ? 'moved' : ''}>
                     <td><span className="chip rank">#{i + 1}</span>{order && full.rank !== i + 1 && <span className="tiny"> (war {full.rank})</span>}</td>
                     <td className="nowrap"><button className="btn ghost small" aria-label={`${r.spec} hoch`} onClick={() => move(r.spec, -1)}>▲</button><button className="btn ghost small" aria-label={`${r.spec} runter`} onClick={() => move(r.spec, 1)}>▼</button></td>
-                    <td>{full.path ? <a href={note(full.path)}>{r.spec}</a> : r.spec}{full.open > 0 && <span className="chip warn" title="offene Knut-Zeilen">❓ {full.open}</span>}{full.why && <details><summary className="tiny">Gründe</summary><span className="tiny">{full.why}</span></details>}</td>
+                    <td>{full.path ? <a href={note(full.path)}>{r.spec}</a> : r.spec}{full.open > 0 && <span className="chip warn" title="offene Knut-Zeilen">❓ {full.open}</span>}{full.path && <> <AnsetzenButton path={full.path} state={full.folderState} open={full.open} admin={admin} /></>}{full.why && <details><summary className="tiny">Gründe</summary><span className="tiny">{full.why}</span></details>}</td>
                     <td className="tiny" data-label-inline="Zustand">{full.state}</td>
                     <td title={`GW ${full.gw} · ZK ${full.zk} · RR ${full.rr} · Größe ${full.size}`} data-label-inline="WSJF">{Number(full.wsjf ?? 0).toFixed(1)}</td><td data-label-inline="Kat">{full.cat}</td>
                     <td className="tiny" data-label={full.blocked ? 'blockiert durch' : undefined}>{full.blocked}</td><td className="tiny" data-label={full.next ? 'nächster Schritt' : undefined}>{full.next}</td>
@@ -434,7 +435,7 @@ function Overview({ d }: { d: any }) {
               </div>
               <div className="bucket">
                 <div className="bucket-label">Als Nächstes <span className="chip tiny-chip">{t.next.count}</span></div>
-                {t.next.count ? <ul className="plain">{t.next.items.map((s: any) => <li key={s.path}>{s.rank ? <span className="chip tiny-chip rank">#{s.rank}</span> : null} {specLink(s)}{s.open > 0 && <span className="chip tiny-chip warn" title="erst entscheiden">❓ {s.open}</span>}</li>)}</ul> : empty}
+                {t.next.count ? <ul className="plain">{t.next.items.map((s: any) => <li key={s.path}>{s.rank ? <span className="chip tiny-chip rank">#{s.rank}</span> : null} {specLink(s)}{s.open > 0 && <span className="chip tiny-chip warn" title="erst entscheiden">❓ {s.open}</span>}{s.state === '3-Plan' && !s.open && <> <AnsetzenButton path={s.path} state={s.state} open={s.open} admin={!!d.admin} /></>}</li>)}</ul> : empty}
               </div>
               <div className="bucket">
                 <div className="bucket-label">Erledigt <span className="chip tiny-chip">{t.done.count}</span></div>
@@ -480,7 +481,7 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
         {[['check', 'Konsistenz'], ['ordnung', 'Ordnung']].map(([id, label]) => { const on = (tab === 'pflege' ? 'check' : tab) === id; return <a key={id} role="tab" aria-selected={on} className={on ? 'active' : ''} href={`#/roadmap/${id}`}>{label}</a>; })}
       </div>}
       {r.error && <Err e={r.error} />}
-      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' || tab === 'pflege' ? <Check d={d} /> : tab === 'prio' ? <Prio d={d} reload={r.reload} /> : <Overview d={d} />}
+      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' || tab === 'pflege' ? <Check d={d} /> : tab === 'prio' ? <Prio d={d} reload={r.reload} admin={cfg.user?.role === 'ADMIN'} /> : <Overview d={d} />}
     </div>
   );
 }

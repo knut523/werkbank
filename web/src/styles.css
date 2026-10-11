@@ -374,3 +374,8 @@ td[data-label-inline]::before { content: none; }
   table.prio-t td[data-label-inline]::before { content: attr(data-label-inline) ' '; color: var(--text-secondary); }
 }
 .menu-btn .nav-count { margin-left: 6px; }
+/* Agent ansetzen (docs/plan-agent-ansetzen.md) */
+.btn.wide { width: 100%; justify-content: center; }
+.step .num.bad { background: var(--chip-bad); color: var(--chip-bad-text); }
+.dialog.ansetzen input:not([type=radio]), .dialog.ansetzen select, .dialog.ansetzen textarea { width: 100%; }
+@media (max-width: 520px) { .ansetzen-actions .btn.primary { width: 100%; justify-content: center; } }

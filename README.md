@@ -1215,3 +1215,17 @@ Siehe „Claude-Konfiguration je Person → Einmalig je Person“: eigener `clau
 3. **Antworten auf Knut-Zeilen durch andere.** Die Roadmap-Seite schreibt immer `- Knut:`. *Empfehlung:* nur Knut
    darf dort antworten, alle anderen bekommen eine eigene Zeile `- <Name>:` darunter.
    - Knut:
+
+### „Agent ansetzen“ an einer Spec (docs/plan-agent-ansetzen.md)
+
+Admins sehen in der Rangliste und in der Spec-Ansicht (Wissen) an Specs in `3-Plan` den Knopf **🤖 Agent ansetzen**
+(bei offenen „- Knut:“-Zeilen stattdessen **Entscheiden**). Der Dialog zeigt das Ticket nach OLAF-Konvention (Task unter
+Workstream, Standard PM-70; Owner = du; Priorität Medium; fällig Sprintende), Dubletten (Jira-Kopie + Jira-Suche nach
+Titel und Spec-Kennung) und den Auftrag (bis Review / nur Plan). Ein Klick: anlegen → zurücklesen und Felder nachziehen
+→ `jira:` in die Spec (nur ohne laufenden Vault-Sync) → Agent wie „Agent“ am Board, mit der Spec als Pfad. Halbe
+Stände (Sync läuft, Parallelgrenze voll, Ergebnis unklar) stehen sichtbar im Dialog und werden mit „Fortsetzen“
+nachgeholt; ein zweites Ticket entsteht nie ohne ausdrückliches „Trotzdem neues Ticket“.
+
+Schalter `WERKBANK_ANSETZEN`: leer/`aus` (Vorgabe, Knopf meldet „ausgeschaltet“) · `sim` (simuliertes Jira `SIM-n`,
+nur mit `WERKBANK_VAULT_IS_COPY=1`, schreibt `sim-jira:`) · `live` (echt, über den Jira-Schreibweg). `live` erst nach
+dem Test gegen echtes Jira und mit der Review-Schlange (Schnitt 1) einschalten.
