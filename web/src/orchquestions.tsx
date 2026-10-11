@@ -38,7 +38,7 @@ export function OrchQuestions({ onChange }: { onChange?: () => void }) {
           <div><b>{it.title}</b> {it.key && <span className="chip tiny-chip" title="Stabiler Schlüssel: diese Frage entsteht nur einmal">{/#G0$/.test(it.key) ? 'Prüfung vor dem Bau' : it.key}</span>} <span className="tiny">· {String(it.createdAt).slice(0, 16).replace('T', ' ')} · {it.id}</span></div>
           <p className="small" style={{ whiteSpace: 'pre-wrap', margin: '4px 0' }}>{it.context}</p>
           {(it.strand || it.link || it.plan) && <div className="small row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            {it.strand && <a href={it.strand.url} target="_top">💬 Strang: {it.strand.title}</a>}
+            {it.strand && (it.strand.url ? <a href={it.strand.url} target="_top">💬 Strang: {it.strand.title}</a> : <span>💬 Strang: {it.strand.title} (noch kein Chat)</span>)}
             {it.link && <a href={it.link} target="_blank" rel="noreferrer">🔗 Link</a>}
             {it.plan && <code className="tiny">{it.plan}</code>}
           </div>}
