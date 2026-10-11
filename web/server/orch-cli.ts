@@ -1,13 +1,18 @@
 // scripts/orch — die Haupt-Sitzung startet und koordiniert Werkbank-Agenten (docs/plan-orchestrator-agents.md).
 //
-//   orch start --title T --cwd DIR [--plan DATEI] [--shared] [--code] (--prompt TEXT | --prompt-file DATEI | Auftrag auf stdin)
+//   orch start --title T --cwd DIR [--plan DATEI] [--shared] [--code --slug SPEC-SLUG] (--prompt TEXT | --prompt-file DATEI | Auftrag auf stdin)
 //     Git-Repo mit origin auf github.com/WirStrom1|knut523: vorher git fetch, „Stand: …“ im Chat; --code = frischer Worktree
 //     <repo>-agent-<id> (Zweig agent/<id>) von origin/develop|dev|main statt des angegebenen Ordners. Nie pushen.
+//     --code prüft vorher G0 (scripts/vorbau-check; Slug aus --slug oder spec: der Plandatei): Treffer/Stopp → kein Start,
+//     Rückfrage <slug>#G0 in der Werkbank; gebaut wird dann nur nach Knuts Antwort dort.
+//   orch nachtbau --queue DATEI [--json]   freigegebene Items (JSONL: slug,title,cwd,plan,prompt) mit G0 starten;
+//     gestartete/verworfene Items verlassen die Datei, blockierte (blocked_g0) und ungeprüfte bleiben.
 //   orch list [--all] [--json]
 //   orch show <id> [--json]
 //   orch send <id> (--text TEXT | Text auf stdin)
 //   orch review <id> [--note TEXT]
 //   orch ask --title T --context TEXT --recommend TEXT [--option "Label :: Folge"]… [--strand <id>] [--link URL] [--plan DATEI]
+//     [--key <slug>#<id>] [--quelle drift]   Schlüssel offen/beantwortet → Exit 3 (keine zweite Frage); Tageskappe → Exit 4
 //   orch questions list [--open] [--json] · orch questions get <id> [--json] · orch questions withdraw <id>
 //
 // Rückfragen (ask) nur für echte Entscheidungen Knuts — nicht für das, was sich nachlesen, selbst klären oder sicher
@@ -17,7 +22,7 @@
 // aus der .env.local der Instanz (WERKBANK_ENV_FILE, Vorgabe <checkout>/.env.local) — es wird NUR diese eine Zeile
 // gelesen und nie ausgegeben. Person: WERKBANK_ORCH_EMAIL (Vorgabe: Pilot-Konto der Instanz).
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { WB_ROOT } from './config.ts';
 
@@ -47,7 +52,7 @@ function token(): string {
   return v!;
 }
 
-function die(msg: string): never { process.stderr.write(`orch: ${msg}\n`); process.exit(1); }
+function die(msg: string, code = 1): never { process.stderr.write(`orch: ${msg}\n`); process.exit(code); }
 
 async function stdin(): Promise<string> {
   if (process.stdin.isTTY) return '';
@@ -68,11 +73,14 @@ async function call(path: string, b: Record<string, unknown>): Promise<any> {
     });
   } catch (e: any) { die(`Werkbank unter ${base} nicht erreichbar (${e.message}).`); }
   const j: any = await r.json().catch(() => ({}));
-  if (!r.ok) die(`${r.status}: ${j.error ?? 'Fehler'}`);
+  if (!r.ok) {
+    if (r.status === 409 && j.g0) process.stderr.write(`${JSON.stringify({ g0: j.g0 })}\n`);
+    die(`${r.status}: ${j.error ?? 'Fehler'}`, r.status === 409 && path === 'questions/ask' ? 3 : r.status === 429 ? 4 : 1);
+  }
   return j;
 }
 
-const ICON: Record<string, string> = { running: '⏳', waiting: '✋', done: '✅', failed: '❌' };
+const ICON: Record<string, string> = { running: '⏳', waiting: '✋', done: '✅', failed: '❌', blocked_g0: '⛔' };
 const t = (d: any) => (d ? new Date(d).toLocaleString('de-AT', { timeZone: 'Europe/Vienna', dateStyle: 'short', timeStyle: 'short' }) : '—');
 
 async function main() {
@@ -80,9 +88,25 @@ async function main() {
     case 'start': {
       const prompt = typeof flags.prompt === 'string' ? flags.prompt : typeof flags['prompt-file'] === 'string' ? readFileSync(flags['prompt-file'], 'utf8') : await stdin();
       if (typeof flags.title !== 'string' || typeof flags.cwd !== 'string') die('start braucht --title und --cwd.');
-      const j = await call('start', { title: flags.title, cwd: flags.cwd, plan: typeof flags.plan === 'string' ? flags.plan : null, shared: flags.shared === true, code: flags.code === true, prompt });
+      const j = await call('start', { title: flags.title, cwd: flags.cwd, plan: typeof flags.plan === 'string' ? flags.plan : null, shared: flags.shared === true, code: flags.code === true, slug: typeof flags.slug === 'string' ? flags.slug : null, prompt });
       if (flags.json) return console.log(JSON.stringify(j, null, 1));
       console.log(`gestartet: ${j.id}  ${j.url}\nOrdner:    ${j.cwd}${j.worktree ? ' (frischer Worktree)' : ''}${j.stand ? `\n${j.stand}` : ''}${j.plan ? `\nPlan:      ${j.plan}` : ''}${j.warning ? `\nHinweis:   ${j.warning}` : ''}`);
+      return;
+    }
+    case 'nachtbau': {
+      if (typeof flags.queue !== 'string') die('nachtbau braucht --queue DATEI (JSONL: slug,title,cwd,plan,prompt).');
+      const file = flags.queue as string;
+      let lines: string[] = [];
+      try { lines = readFileSync(file, 'utf8').split('\n').filter((l) => l.trim()); } catch { return console.log(`Keine Warteschlange (${file}) — nichts zu bauen.`); }
+      const items = lines.map((l, i) => { try { return JSON.parse(l); } catch { die(`${file}:${i + 1}: kein JSON.`); } });
+      if (!items.length) return console.log('Warteschlange leer.');
+      const j = await call('nachtbau', { items });
+      // Gestartete und verworfene Items verlassen die Warteschlange; blockierte und ungeprüfte bleiben für die nächste Nacht.
+      const bleibt = lines.filter((_, i) => !['gestartet', 'verworfen'].includes(j.items[i]?.status));
+      writeFileSync(`${file}.tmp`, bleibt.map((l) => l + '\n').join(''));
+      renameSync(`${file}.tmp`, file);
+      if (flags.json) return console.log(JSON.stringify(j.items, null, 1));
+      for (const x of j.items) console.log(`${x.status.padEnd(13)} ${x.slug}  ${x.title}${x.id ? `  [${x.id}]` : ''}${x.question ? `  Rückfrage ${x.question}` : ''}`);
       return;
     }
     case 'list': {
@@ -122,7 +146,7 @@ async function main() {
       const str = (k: string) => (typeof flags[k] === 'string' ? flags[k] as string : undefined);
       if (!str('title') || !str('context') || !str('recommend')) die('ask braucht --title, --context und --recommend (nur echte Entscheidungen, mit Empfehlung).');
       const opts = options.map((o) => { const [label, ...rest] = o.split('::'); return { label: label.trim(), consequence: rest.join('::').trim() }; });
-      const j = await call('questions/ask', { title: str('title'), context: str('context'), recommendation: str('recommend'), options: opts, strand: str('strand') ?? null, link: str('link') ?? null, plan: str('plan') ?? null });
+      const j = await call('questions/ask', { title: str('title'), context: str('context'), recommendation: str('recommend'), options: opts, strand: str('strand') ?? null, link: str('link') ?? null, plan: str('plan') ?? null, key: str('key') ?? null, quelle: str('quelle') ?? null });
       if (flags.json) return console.log(JSON.stringify(j, null, 1));
       console.log(`Rückfrage angelegt: ${j.id} — erscheint in der Werkbank unter Heute → „Wartet auf dich“ und zählt in „Heute (n)“. Antwort: orch questions get ${j.id}`);
       return;
@@ -150,7 +174,7 @@ async function main() {
       die('questions list|get|withdraw');
     }
     default:
-      console.log(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 14).map((l) => l.slice(3)).join('\n'));
+      console.log(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 22).map((l) => l.slice(3)).join('\n'));
   }
 }
 
