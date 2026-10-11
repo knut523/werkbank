@@ -1,6 +1,6 @@
 # Plan — G0 Prüfung vor dem Bau + täglicher Abgleich (Plan 127)
 
-**Status:** PLAN ONLY (11.10.2026), noch kein Code. Prozess v4 — Council Runde 4: **PASS (0,75)**, 11.10.2026; Bedingungen = DoD 20–26.
+**Status:** GEBAUT, lokal (11.10.2026, `feat/vorbau-check`, nicht gepusht) — 23 von 26 DoD erfüllt, 12/22/26 warten auf Knut (Crontab, Lesetoken); Bericht und Patches: `~/work/knut/review-pakete/129-vorbau-check/`. Diff-Council: HOLD → PASS nach drei Fixes. Nachtbau-Aufrufer: `scripts/orch nachtbau --queue <jsonl>`. Prozess v4 — Council Runde 4: **PASS (0,75)**, 11.10.2026; Bedingungen = DoD 20–26.
 **Freigabe Knut 11.10.:** Abgleich mit GitHub „passt“; „regelmäßig + Teil von plan-to-pr“.
 **branch:** feat/vorbau-check · **Repos/Orte:** knut523/werkbank (Skript + Aufruf beim Bau-Start + Nachtbau), Vault-Team-Skill olaf-produkt-roadmap (`/vault/_meta/dist-skill/…/plan-vault-drift.py`, Cron 06:45 → 06:30), `~/bin/dienste` (Ziel `daily-debrief/morgen-<datum>.md`), `~/bin/git-credential-vaultwarden` (`ITEM_READ`).
 
