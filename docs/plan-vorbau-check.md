@@ -1,8 +1,8 @@
 # Plan — G0 Prüfung vor dem Bau + täglicher Abgleich (Plan 127)
 
-**Status:** PLAN ONLY (11.10.2026), noch kein Code. Prozess: `prozess-v4` (Council Runde 4 ausstehend).
+**Status:** PLAN ONLY (11.10.2026), noch kein Code. Prozess v4 — Council Runde 4: **PASS (0,75)**, 11.10.2026; Bedingungen = DoD 20–26.
 **Freigabe Knut 11.10.:** Abgleich mit GitHub „passt“; „regelmäßig + Teil von plan-to-pr“.
-**branch:** feat/vorbau-check · **Repos:** knut523/werkbank (Skript + Aufruf beim Bau-Start), olaf-produkt-roadmap-Skill (drift.py-Abschnitt).
+**branch:** feat/vorbau-check · **Repos/Orte:** knut523/werkbank (Skript + Aufruf beim Bau-Start + Nachtbau), Vault-Team-Skill olaf-produkt-roadmap (`/vault/_meta/dist-skill/…/plan-vault-drift.py`, Cron 06:45 → 06:30), `~/bin/dienste` (Ziel `daily-debrief/morgen-<datum>.md`), `~/bin/git-credential-vaultwarden` (`ITEM_READ`).
 
 ## Warum
 08.10.: Gebautes wurde neu gebaut, weil niemand vor dem Bau prüfte, ob die Spec schon auf develop oder in einem fremden PR liegt.
@@ -10,9 +10,9 @@ Ein Morgenbericht allein reicht nicht (Council R1): es braucht einen Stopp vor d
 
 ## Schnitt
 1. `scripts/vorbau-check <slug> [--plan DATEI] [--repos …]` → JSON `{ergebnis: frei|fortsetzen|treffer, belege:[…], hinweise:[…]}`.
-2. Aufruf beim Werkbank-Bau-Start (`orch start --code`, Karten-Agent „Agent ansetzen“, Nachtbau). Treffer → kein Start, Rückfrage.
+2. Aufruf beim Werkbank-Bau-Start (`orch start --code`, Karten-Agent „Agent ansetzen“) und im Nachtbau (Aufrufer: der Nachtlauf, der approved Items startet — im Bau benennen; neuer Strang-Zustand `blocked_g0`). Treffer → kein Start, Rückfrage.
 3. Abschnitt „Schon gebaut / baut jemand / nur lokal“ in `plan-vault-drift.py`, Cron 06:30, über alle Specs in 3-Plan/4-Review.
-4. Kanal drift.py → Werkbank `questions/ask` mit Schlüssel `<slug>#G0` (+ Warteschlangendatei, max. 5/Tag).
+4. Kanal drift.py → Werkbank `questions/ask` mit neuem Feld `key` (`<slug>#G0`); Server lehnt offene oder beantwortete Schlüssel ab (+ Warteschlangendatei, max. 5/Tag).
 5. Erprobung des generischen plan-to-pr-Absatzes „Phase 2.5b“ in der Werkbank-Agentenanweisung und im Skill olaf-produkt-roadmap.
 
 ## Definition of Done (Prüfsätze)
@@ -35,6 +35,14 @@ Ein Morgenbericht allein reicht nicht (Council R1): es braucht einen Stopp vor d
 17. Fetch-Pfad nutzt `GIT_VW_READ=1`; ohne Lesetoken → Stopp ohne Knopf, Nachtbau aus; nachts nicht prüfbar → genau ein Morgeneintrag.
 18. drift.py ohne installiertes `vorbau-check` → Abschnitt übersprungen mit Hinweiszeile, kein Fehler.
 19. Pläne ohne `spec:`/`branch:` (Altpläne) → Kopfzeile `**Spec:**` wird gelesen; fehlt auch die → Hinweis „Identität unbekannt“, kein stilles `frei`.
+
+20. Geplant von anderem zählt über `spec:`-Feld **oder** `branch:` **oder** Pfad. Fixture F2: fremder Plan mit abweichendem Dateinamen und passendem `spec:` → `treffer`.
+21. Fetch **und** PR-Abfrage nutzen das Lesetoken (`GIT_VW_READ=1 git credential fill`); Test belegt, dass das Push-Item für beide nie gelesen wird.
+22. Das neue Lesetoken ersetzt das Item „Github wirstrom read only“ (oder `ITEM_READ` wird angepasst): `GIT_VW_READ=1 git ls-remote https://github.com/WirStrom1/olaf-docs` endet mit 0.
+23. `questions/ask` mit `key`: zweiter Aufruf mit offenem oder beantwortetem Schlüssel wird vom Server abgelehnt (API-Test).
+24. Nachtbau-Aufrufer benannt, `blocked_g0` als Strang-Zustand sichtbar in „Heute“.
+25. Fehlalarme durch das Kriterium „anderer Autor“ werden gesondert gezählt; > 1 bei eigenem `branch:` in 4 Wochen → Kriterium entfällt.
+26. Cron drift 06:30 und `dienste --bericht` nach `daily-debrief/morgen-<datum>.md` sind umgestellt (`crontab -l` belegt).
 
 ## Wer besitzt was
 - `scripts/vorbau-check` + Aufruf beim Bau-Start: `knut523/werkbank` (Knut, privat).
