@@ -288,7 +288,15 @@ test('Fetch-Pfad: verlangt der Server eine Anmeldung, fragt git nur den Lese-Hel
     assert.ok(log.length >= 2, `credential fill + fetch fragen den Helper: ${log.join('|')}`);
     assert.ok(log.every((l) => l === 'READ=1 ITEM='), log.join('|'));
     assert.ok(!existsSync(PUSH_LOG), 'geerbter Push-Helper nie gefragt');
-  } finally { auth.kill(); }
+    // origin per SSH: kein SSH (Schlüssel hätte Schreibrechte) — geholt wird über https, wieder nur mit dem Lese-Helper.
+    git(dir, ['remote', 'set-url', 'origin', 'git@github.com:WirStrom1/olaf-docs.git']);
+    writeFileSync(HELPER_LOG, '');
+    process.env.VORBAU_GITHUB_HTTPS = `http://127.0.0.1:${port}`;
+    const s = await run('ganz-neue-sache', [dir]);
+    assert.equal(s.ergebnis, 'stopp'); assert.equal(s.stopp!.grund, 'lesetoken', s.stopp!.text);
+    assert.ok(readFileSync(HELPER_LOG, 'utf8').trim().split('\n').length >= 2, 'Fetch lief über https und fragte den Lese-Helper');
+    assert.ok(!existsSync(PUSH_LOG));
+  } finally { auth.kill(); delete process.env.VORBAU_GITHUB_HTTPS; }
 });
 
 test('Echter git-credential-vaultwarden: G0 fragt nur das Lese-Item, nie das Push-Item (DoD 8, 21)', { skip: !existsSync(join(homedir(), 'bin', 'git-credential-vaultwarden')) && 'Helper nicht installiert' }, () => {

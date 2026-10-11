@@ -160,7 +160,9 @@ export function credHelper(env = process.env): string { return env.VORBAU_CRED_H
 
 /** Umgebung für jeden git-Aufruf von G0: Lesetoken erzwungen, Item-Wahl entfernt, nie fragen. */
 export function g0Env(env = process.env): NodeJS.ProcessEnv {
-  const e: NodeJS.ProcessEnv = { ...env, GIT_VW_READ: '1', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false', SSH_ASKPASS: '/bin/false', GCM_INTERACTIVE: 'never' };
+  // GIT_SSH_COMMAND=false: kein SSH-Schlüssel (der hätte Schreibrechte) — G0 holt nur über https mit dem Lesetoken.
+  const e: NodeJS.ProcessEnv = { ...env, GIT_VW_READ: '1', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false', SSH_ASKPASS: '/bin/false', GCM_INTERACTIVE: 'never', GIT_SSH_COMMAND: 'false' };
+  delete e.GIT_SSH;
   delete e.GIT_VW_ITEM;
   return e;
 }
@@ -246,7 +248,10 @@ export async function gather(o: GatherOpts): Promise<{ fakten: Fakten } | { stop
     // Lesetoken zuerst: ohne Lesetoken weder Fetch noch PR-API (Stopp ohne Knopf, Nachtbau aus — DoD 17).
     const token = lesetoken(top, or, git);
     if (!token) return { stopp: { grund: 'lesetoken', knopf: null, text: `Kein GitHub-Lesetoken (GIT_VW_READ=1 git credential fill für ${or.owner}/${or.name} liefert nichts) — G0 prüft nicht mit dem Push-Token. Bauen nur über Knuts „trotzdem bauen“.` } };
-    if (!o.ohneFetch) try { git(['fetch', '--quiet', '--prune', 'origin'], top, { timeout: 90_000 }); }
+    // origin per SSH → stattdessen dieselben Refs über https holen (Lesetoken über den Helper), nie über den SSH-Schlüssel.
+    const ssh = /^(git@|ssh:\/\/)/.test(url);
+    const quelle = ssh ? `${(process.env.VORBAU_GITHUB_HTTPS || 'https://github.com').replace(/\/$/, '')}/${or.owner}/${or.name}.git` : 'origin';
+    if (!o.ohneFetch) try { git(['fetch', '--quiet', '--prune', quelle, ...(ssh ? ['+refs/heads/*:refs/remotes/origin/*'] : [])], top, { timeout: 90_000 }); }
     catch (e: any) {
       const msg = scrub(String(e?.stderr || e?.message || e).split('\n').find((l: string) => l.trim()) ?? 'Fehler');
       return { stopp: { grund: /401|403|Authentication|Invalid username|could not read Username/i.test(msg) ? 'lesetoken' : 'fetch', knopf: null, text: `git fetch in ${repo} gescheitert (${msg}) — ohne frischen Stand kein Bau.` } };
