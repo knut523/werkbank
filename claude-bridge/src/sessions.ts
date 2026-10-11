@@ -16,7 +16,7 @@ import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
-import { pickAccounts, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, type Account } from './accounts.ts';
+import { pickAccounts, orderForTurn, acquire, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, type Account } from './accounts.ts';
 
 export interface Sink {
   write(text: string): void;
@@ -807,7 +807,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   }
   const user = safeId(req.userId);
   const accounts = await accountsP;
-  const queue = pickAccounts(accounts, exhaustedOf(user));
+  const queue = orderForTurn(pickAccounts(accounts, exhaustedOf(user)), key);
   const tokens = accounts.map((a) => a.token);
   const redact = (t: string) => tokens.reduce((x, tok) => x.replaceAll(tok, '***'), t);
   let acct: Account = queue[0];
@@ -853,6 +853,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   if (resume) options.resume = resume;
   if (req.model) options.model = req.model;
 
+  let release = acquire(key, acct);   // ab hier läuft der Zug auf diesem Konto (Lastverteilung); frei im finally
   log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers), permissionMode: live.mode, ...(accounts.length > 1 ? { konto: acct.id, konten: accounts.length } : {}) });
 
   // Die Sitzung läuft unabhängig von der HTTP-Antwort weiter (Rückfragen!).
@@ -875,6 +876,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         log('konto gewechselt', { conv: key, von: acct.id, nach: next.id, mitten: live.progressed });
         emitStatus(live, `↻ Konto „${next.label}“ übernimmt (Kontingent von „${acct.label}“ ausgeschöpft)`);
         acct = next;
+        release(); release = acquire(key, acct);
         env.CLAUDE_CODE_OAUTH_TOKEN = acct.token;
         options.mcpServers = withToken(req.mcpServers ?? {}, acct.token);
         // Noch nichts passiert → dieselbe Anfrage von vorn (gleiche Ausgangslage). Schon mitten im Zug → die Sitzung
@@ -882,6 +884,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         if (live.progressed && sessionMap[key]) { options.resume = sessionMap[key]; prompt = CONTINUE_PROMPT; }
       }
     } finally {
+      release();
       mark(live, 'ende');
       if (live.orch) setTurn(key, { start: orchMap[key]?.turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? (live.abort.signal.aborted ? 'aborted' : 'ok') });
       log('turn end', { conv: key, usage: live.usage, ms: live.times, ...(live.subagentStarts ? { teilagenten: live.subagentStarts } : {}), ...(live.denials.length ? { denials: live.denials } : {}) });
