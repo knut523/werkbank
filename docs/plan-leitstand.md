@@ -490,3 +490,44 @@ Zusätzliche Prüfsätze: B-14 kein Brücken-/LibreChat-Aufruf aus `todayCount` 
 B-16 Bericht: Symlink nach außen, `..`, zu groß, HTML → nicht geladen bzw. als Text · B-17 nach Nacharbeit keine alte DoD-Tabelle ·
 B-18 Passt bei laufendem oder geändertem Strang → 409 · B-19 Leitstand kann Knuts Urteil nicht überschreiben (send → 409 nach
 Knuts Passt; orch_review lässt die Karte stehen) · B-20 Team-Konto 403, Leitstand-ID 404 · B-21 Karte bleibt bei Brückenfehler.
+
+### R2 (11.10.2026) — HOLD (Fachprüfer 0,75 · Gegenstimme HOLD)
+Beide: F1–F10 baubar, aber drei Rettungen widersprechen dem Code. `autoWeiterTick` liest nur Stränge **ohne** `reviewReadyAt`,
+`autoStopped`, `reviewedAt`, bricht vor jedem Schreiben ab und läuft bei `ORCH_AUTO_WEITER=off` gar nicht — der Stand würde für genau
+die Karten-Stränge nie geschrieben. `orch_send` mit stehenbleibendem `reviewReadyAt` sperrt Auto-Fortsetzen und Wecken (Sackgasse).
+Bindende Bedingungen (ersetzen F1–F3, F7–F9, wo sie abweichen):
+1. **G1 [must-fix] Eigene Status-Schleife** `statusTick` (eigener Takt, unabhängig von `ORCH_AUTO_WEITER`, aus nur mit
+   `ORCH_STATUS=off`): alle Stränge mit `knutReviewedAt: null` der letzten 14 Tage, je Strang eigenes `try`; schreibt `lastStatus`,
+   `lastReason`, `lastActivity`, `statusAt`. Brücke oder LibreChat nicht erreichbar → **nichts** überschreiben. `doneAt` nur, wenn die
+   Antwort mit „Status: fertig“ **nach** `lastSentAt` liegt (nach Nacharbeit zählt die alte Antwort nicht). Test: Takt für Auto-weiter
+   aus, Strang „fertig“, gleich danach `orch_review` vom Leitstand → Karte erscheint trotzdem.
+2. **G2 [must-fix] `knutReviewedAt` ist das Erledigt-Kriterium.** Knuts „Passt“ setzt `knutReviewedAt` **und** `reviewedAt`; „Anhalten“
+   auf eine Deckel-Rückfrage ebenso (das ist Knut). `orch_review` aus dem Leitstand setzt nur `reviewedAt` + `reviewedBy: 'leitstand'`.
+   Gruppe „Erledigt“, Schlange und `listOrch`-Vorgabe (offen) filtern auf `knutReviewedAt`; ein vom Leitstand abgelegter Strang steht
+   weiter in `orch_list` mit Marke „abgelegt (Leitstand)“.
+3. **G3 [must-fix] `orch_send` aus dem Leitstand** verschiebt `review`/`reviewReadyAt` nach `prevReview {review, at}` (Auto-Fortsetzen
+   und Wecken laufen wieder), lässt `doneAt`, `reviewedAt`, `knutReviewedAt` stehen; an einen von Knut geprüften Strang → 409. Die Karte
+   zeigt `review` oder sonst `prevReview` (mit Vermerk „älterer Stand“).
+4. **G4 [must-fix] Passt/Nacharbeit prüfen live:** einmal `strandStates` (Brücke) — nicht erreichbar → 503, läuft → 409; dazu der
+   `seen`-Stand (F3). Nur diese POSTs fragen die Brücke, nie „Heute“.
+5. **G5 [must-fix] Bericht:** `WERKBANK_REVIEW_DIR` selbst per `realpath`; Präfix mit Trennzeichen; `open` mit `O_NOFOLLOW|O_NONBLOCK`
+   (FIFO hängt nicht). Tests: FIFO, Nachbarordner `review-pakete-x`, Symlink, `..`, > 200 KB, HTML als Text.
+6. **G6 [must-fix] Gruppen:** gleicher Lauf-Name = eine Gruppe, eine neue erst nach > 14 Tagen ohne Strang dieses Namens; Gruppentitel
+   nennt den Zeitraum. (Ersetzt die Kalenderwoche aus F8.)
+7. **G7 [must-fix] Rechte:** `features.ts` bekommt `[/^\/api\/leitstand(\/|$)/, 'leitstand']` vor der Regel für `orchestrator`;
+   jede `/api/leitstand/*`-Route zusätzlich `needAdmin`. Strang-Karten in `/api/today` und im Zähler nur für `role === 'ADMIN'`.
+   B4/B-8 lauten damit: Routen `/api/leitstand/strands/:id/passt|reply`, Team-Konto 403, Leitstand-ID und fremde ID 404.
+8. **G8 [should]** Karte zeigt die Zeit des Stands (`statusAt`/`doneAt`).
+Neue Prüfsätze: B-22 Takt für Auto-weiter aus → Stand wird trotzdem geschrieben · B-23 nach Nacharbeit setzt die alte Antwort kein
+`doneAt` · B-24 `orch_send` vom Leitstand an einen review_ready-Strang → Auto-weiter läuft wieder, Karte zeigt „älterer Stand“ ·
+B-25 Passt bei nicht erreichbarer Brücke → 503 · B-26 Bericht: FIFO und Nachbarordner abgewiesen · B-27 Gruppe über 14 Tage Pause.
+
+### R3 (11.10.2026, Ein-Modell-Durchgang in der Strangsitzung) — PASS (0,7)
+Die Teilagenten-Grenze dieser Nachricht (4) war mit R1/R2 erreicht; R3 lief als ausdrücklich feindlicher Durchgang in der
+Strangsitzung, gegen den Code. Geprüft: (a) G1 + G3 zusammen — nach `orch_send` vom Leitstand ist `reviewReadyAt` leer, `statusTick`
+sieht „läuft“, danach „fertig“ nach `lastSentAt` → `doneAt` neu, die Karte bleibt mit neuem Stand; keine Sackgasse. (b) G2 — Auto-weiter
+filtert auf `reviewedAt` (vom Leitstand gesetzt) und setzt einen abgelegten Strang nicht fort; das ist gewollt (abgelegt = nicht
+weiterarbeiten), Knut sieht ihn trotzdem. (c) G4 — `seen` + Live-Prüfung schließen „Passt auf veralteten Stand“. (d) G7 — `/api/today`
+ist Feature `heute` (Team-frei); die Admin-Prüfung im Handler ist nötig und reicht. (e) Rest: `statusTick` ruft je Strang
+`lastMessage` (LibreChat-Mongo, lokal) und einmal je Person die Brücke — 20-s-Takt, ≤ 100 Stränge, vertretbar.
+Bedingung für den Bau: Teil-B-Diff bekommt einen unabhängigen Council (zwei Teilagenten), bevor „fertig“ gemeldet wird.
