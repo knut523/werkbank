@@ -437,9 +437,9 @@ test('135/F1: Plan zeigt auf eine ANDERE Spec → treffer „geplant von anderem
 });
 
 test('135/F1: fremder Code-PR zum branch: des Plans → treffer (Kriterium „anderer Autor“, gesondert gezählt, abschaltbar)', () => {
-  // Echter Fall: plan 087 nennt branch `feat/049-ecp-completion`; dort liegt olaf-durable-func#85 von bizarrochris (offen).
-  const pl = aufInteg('087-bev-address-register.md', 'Christoph Bitzner <bizarro@Machine-CB-2.local>', false);
-  assert.equal(pl.branch, 'feat/049-ecp-completion');
+  // Plan 087 nennt `feat/049-ecp-completion` nur im Fließtext — seit E2 kein Branch mehr (eigener Test unten). Für die
+  // Kriterium-Logik derselbe Plan, als stünde der Branch in einer Kopfzeile; dort liegt olaf-durable-func#85 von bizarrochris.
+  const pl = { ...aufInteg('087-bev-address-register.md', 'Christoph Bitzner <bizarro@Machine-CB-2.local>', false), branch: 'feat/049-ecp-completion' };
   const pr85: Pr = { repo: 'olaf-durable-func', number: 85, url: 'https://github.com/WirStrom1/olaf-durable-func/pull/85', title: 'feat(workflow): complete the customer in ECP after submit (plan 049)', body: '', headRefName: 'feat/049-ecp-completion', headRefOid: '', author: 'bizarrochris', files: ['src/x.ts'] };
   const r = decide('anmeldestrecke-spec-bev-adressregister', leer({ plaeneAufInteg: [pl], offen: [pr85] }));
   const b = r.belege.find((x) => x.pfad === pl.pfad)!;
@@ -464,4 +464,39 @@ test('135/F2: Release-/Sync-PRs zählen nie als „schon gebaut“ oder „baut 
   // Bot-Sync main → develop (Head main) und release/* genauso; ein normaler Feature-PR mit demselben Text trifft weiter.
   for (const head of ['main', 'master', 'release/v1.5.0']) assert.equal(decide('anmeldestrecke-spec-bev-adressregister', leer({ specZitiertePlaene: zit, gemergt: [{ ...rel[0], headRefName: head }] })).ergebnis, 'frei', head);
   assert.equal(decide('anmeldestrecke-spec-bev-adressregister', leer({ specZitiertePlaene: zit, gemergt: [{ ...rel[0], headRefName: 'feat/087-bev-addresses' }] })).ergebnis, 'treffer');
+});
+
+test('135/E2: Branch nur aus Frontmatter oder Kopfzeile, nie aus dem Fließtext (echter plan 087 → kein „autor“-Treffer)', () => {
+  const p087 = parsePlan(PROBE('087-bev-address-register.md'), 'plans/087-bev-address-register.md');
+  assert.equal(p087.branch, null);
+  const pl = aufInteg('087-bev-address-register.md', 'Christoph Bitzner <bizarro@Machine-CB-2.local>', false);
+  const pr85: Pr = { repo: 'olaf-durable-func', number: 85, url: 'https://github.com/WirStrom1/olaf-durable-func/pull/85', title: 'feat(workflow): complete the customer in ECP after submit (plan 049)', body: '', headRefName: 'feat/049-ecp-completion', headRefOid: '', author: 'bizarrochris', files: ['src/x.ts'] };
+  const r = decide('anmeldestrecke-spec-bev-adressregister', leer({ plaeneAufInteg: [pl], offen: [pr85] }));
+  assert.equal(r.ergebnis, 'fortsetzen', JSON.stringify(r.belege));
+  assert.ok(!r.kriterien?.includes('autor'));
+  // Kopfzeilen zählen weiter: **Branch:** und **Repo:** … Branch `x` (090/091); Erwähnungen mitten im Text nicht, auch klein.
+  assert.equal(parsePlan('# x\n\n**Branch:** `feat/a-b`\n').branch, 'feat/a-b');
+  assert.equal(parsePlan('# x\n\n**Repo:** olaf-admin. Branch `feat/kundenakte-ordnung`, cut from y.\n').branch, 'feat/kundenakte-ordnung');
+  assert.equal(parsePlan('# x\n\n**olaf-durable-func (branch `feat/049-ecp-completion`):** z\n').branch, null);
+  assert.equal(parsePlan('# x\n\nBranch `feat/brevo-events` · Review vom 22.09.2026\n').branch, null);
+  // Ohne Branch bleibt der Hinweis „Branch unbekannt“.
+  assert.ok(decide('x-y', leer({ plan: p087 })).hinweise.some((h) => /Branch unbekannt/.test(h)));
+});
+
+test('135/E1: Plannummer zählt nur, wenn genau diese Plandatei auf dem Integrationszweig liegt (lokale 093 ≠ main-093 → admin#273)', () => {
+  const pr273: Pr = { repo: 'olaf-admin', number: 273, url: 'https://github.com/WirStrom1/olaf-admin/pull/273', title: 'fix: retry from corrected Anmeldung (plan 093)', body: 'Implements plans/093-retry-from-corrected-anmeldung.', headRefName: 'fix/093-retry', headRefOid: '', author: 'bizarrochris', files: ['src/x.ts'] };
+  const zit = ['plans/093-phone-length-on-step-1'];
+  // Planbaum im Umfang, die zitierte 093 liegt dort nicht → Nummer zählt nicht.
+  assert.equal(decide('anmeldestrecke-spec-telefon-pruefung-schritt-1', leer({ specZitiertePlaene: zit, offen: [pr273], nummernBelegt: [] })).ergebnis, 'frei');
+  // Liegt sie dort → Nummer zählt (Treffer wie bisher).
+  assert.equal(decide('anmeldestrecke-spec-telefon-pruefung-schritt-1', leer({ specZitiertePlaene: zit, offen: [pr273], nummernBelegt: ['093'] })).ergebnis, 'treffer');
+  // Kein Planbaum im Umfang (olaf-docs nicht geprüft) → altes Verhalten.
+  assert.equal(decide('anmeldestrecke-spec-telefon-pruefung-schritt-1', leer({ specZitiertePlaene: zit, offen: [pr273] })).ergebnis, 'treffer');
+});
+
+test('135/E3: offener PR eines eigenen Logins ohne Plan → Treffer mit eigenerPr (drift führt ihn gesondert); fremder ohne', () => {
+  const pr: Pr = { repo: 'olaf-tariff-app', number: 180, url: 'https://github.com/WirStrom1/olaf-tariff-app/pull/180', title: 'Einwilligungstexte aus einer Quelle', body: '', headRefName: 'feat/einwilligungstexte-eine-quelle', headRefOid: '', author: 'knut523', files: ['src/x.ts'] };
+  const r = decide('einwilligungstexte-eine-quelle', leer({ offen: [pr] }));
+  assert.deepEqual([r.ergebnis, r.belege[0].art, r.belege[0].eigenerPr], ['treffer', 'baut', true]);
+  assert.equal(decide('einwilligungstexte-eine-quelle', leer({ offen: [{ ...pr, author: 'bizarrochris' }] })).belege[0].eigenerPr, undefined);
 });
