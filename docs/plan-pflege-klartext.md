@@ -76,8 +76,13 @@ im Detail-Kasten und im `HygienePanel`: Pflege, still, Widerspruch, ohne Workstr
 
 ## Entscheidungen
 
-Siehe Bericht (`review-pakete/136-pflege-klartext/bericht.md`, „Für Knut“): E1 Dedupe statt Doppel-Chips,
-E2 Handlung im Detail statt direkt auf der Karte, E3 Snooze nicht auf dem Board, E4 kein „+n“.
+Entschieden von Knut, 11.10.2026: E1–E4 „passt“ (wie gebaut). Kontext und Optionen im Bericht
+(`review-pakete/136-pflege-klartext/bericht.md`).
+
+- **E1** Keine doppelten Chips: der vorhandene Datum-/Owner-Chip spricht Klartext, eigene Pflege-Chips nur für still und Widerspruch. — Entscheidung Knut, 11.10.2026
+- **E2** Knöpfe im Ticket-Detail („Was fehlt“), nicht auf der Karte. — Entscheidung Knut, 11.10.2026
+- **E3** Kein Snooze („später“) am Board; bleibt auf „Heute“. — Entscheidung Knut, 11.10.2026
+- **E4** Kein „+n“ (nach E1 höchstens zwei Pflege-Chips). — Entscheidung Knut, 11.10.2026
 
 ## Council (11.10.2026)
 
