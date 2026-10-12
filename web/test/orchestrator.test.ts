@@ -458,6 +458,9 @@ test('Plan 154 (G13): Nachricht an einen laufenden Strang wird nachgereicht — 
   const show = JSON.parse((await orch(['show', j.id, '--json'])).out);
   assert.match(show.lastMessage.text, /📨 Nachgereicht, gelesen: „Bitte auch Tests“/);
   assert.ok(show.lastMessage.text.indexOf('Nachgereicht') < show.lastMessage.text.indexOf('Langer Zug fertig'), 'im laufenden Zug');
+  // Themen-Gruppe von Hand (S2) über die CLI.
+  assert.match((await orch(['thema', j.id, 'Neues', 'Thema'])).out, /→ Neues Thema \(von Hand\)/);
+  assert.match((await orch(['thema', j.id, 'auto'])).out, /\(automatisch\)/);
   await orch(['review', j.id]);
 });
 

@@ -1,5 +1,6 @@
 // OLAF Workspace: Abschnitt „Hauptchat“ ganz oben in LibreChats Chat-Seitenleiste (docs/plan-hauptchat-workspace.md, S1).
-// Oben der eine Hauptchat der Person (Admins), darunter eingerückt die offenen Unter-Chats je Lauf, mit Status.
+// Oben der eine Hauptchat der Person (Admins), darunter eingerückt die offenen Unter-Chats je Thema (Plan 154, S2: automatisch
+// aus Titel/Paket/Ordner, von Hand über `orch thema`), jede Gruppe auf-/zuklappbar, mit Status.
 // Daten: /werkbank/api/leitstand/overview (gleicher Ursprung, nur Admins; 403 → Abschnitt fehlt, keine weiteren Abrufe).
 // Eingesetzt per librechat/patches/50-client-hauptchat.patch in UnifiedSidebar/ConversationsSection.tsx.
 import { memo, useCallback, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -9,9 +10,10 @@ import { ChevronDown, Ellipsis, FileCheck, FileText, Satellite } from 'lucide-re
 import { cn } from '~/utils';
 
 type Status = 'läuft' | 'wartet' | 'fertig' | 'gestoppt' | 'erledigt';
-type Strand = { id: string; title: string; lauf: string; status: Status; url: string; auftrag?: boolean; bericht?: boolean };
+type Strand = { id: string; title: string; lauf: string; thema?: string; status: Status; url: string; auftrag?: boolean; bericht?: boolean };
 type Group = { key: string; lauf: string; counts: Record<string, number>; strands: Strand[] };
-type Overview = { leitstand: { conv: string; title: string; status: string; url: string } | null; offen: Group[] };
+type Thema = { thema: string; counts: Record<string, number>; strands: Strand[] };
+type Overview = { leitstand: { conv: string; title: string; status: string; url: string } | null; offen: Group[]; themen?: Thema[] };
 
 // ---------- gemeinsamer Stand (Abschnitt + Symbol im Icon-Streifen), ein Abruf für beide ----------
 type Snap = { state: 'laden' | 'ok' | 'kein-zugriff' | 'fehler'; data: Overview | null };
@@ -68,11 +70,16 @@ const DOT: Record<string, string> = { läuft: 'bg-blue-500', wartet: 'bg-amber-5
 const HEAD_DOT: Record<string, string> = { läuft: 'bg-blue-500', 'wartet auf dich': 'bg-amber-500', bereit: 'bg-green-600' };
 const chatPath = (url: string) => { const m = /\/c\/([^/?#]+)/.exec(url ?? ''); return m ? `/c/${m[1]}` : null; };
 const KEY = 'olaf-hauptchat-auf';
-type Auf = { alle?: boolean; lauf?: Record<string, boolean> };
+type Auf = { alle?: boolean; lauf?: Record<string, boolean>; thema?: Record<string, boolean> };
 const readAuf = (): Auf => { try { return JSON.parse(localStorage.getItem(KEY) || '{}') as Auf; } catch { return {}; } };
 const writeAuf = (a: Auf) => { try { localStorage.setItem(KEY, JSON.stringify(a)); } catch { /* privat */ } };
 const shortTitle = (s: Strand) => {
   const t = s.title.replace(new RegExp(`^${s.lauf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*(:|·)\\s*`), '');
+  return t || s.title;
+};
+// Im Thema „Rechner“ heißt „Rechner b: Feedback …“ nur „b: Feedback …“ nicht — nur ein führendes Thema-Wort samt „:“/„·“ fällt weg.
+const themaTitle = (s: Strand, thema: string) => {
+  const t = s.title.replace(new RegExp(`^${thema.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*(:|·)\\s*`, 'i'), '');
   return t || s.title;
 };
 
@@ -123,10 +130,14 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
   if (state === 'kein-zugriff' || !data) return null;
   const h = data?.leitstand ?? null;
   const groups = data?.offen ?? [];
-  const n = groups.reduce((a, g) => a + g.strands.length, 0);
+  // Plan 154: Themen-Gruppen, wenn der Server sie liefert (ältere Server: Läufe wie bisher).
+  const themen = data?.themen ?? null;
+  const n = themen ? themen.reduce((a, g) => a + g.strands.length, 0) : groups.reduce((a, g) => a + g.strands.length, 0);
   const alleAuf = auf.alle !== false;
   const hPath = h ? chatPath(h.url) ?? `/c/${h.conv}` : null;
   const laufAuf = (g: Group) => auf.lauf?.[g.lauf] ?? !!(g.counts.wartet || g.counts.gestoppt);
+  // Vorgabe: offen, wenn dort etwas auf Knut wartet oder gestoppt ist — oder wenn es nur ein Thema gibt.
+  const themaAuf = (g: Thema) => auf.thema?.[g.thema] ?? !!(g.counts.wartet || g.counts.gestoppt || (themen?.length ?? 0) === 1);
 
   // Je Unter-Chat drei Links (Knut 12.10.): die Zeile selbst = Chat, rechts Auftrag und Bericht (review-pakete/NNN-*/…),
   // gelesen auf der Workspace-Seite „Hauptchat & Unter-Chats“. Fehlt eine Datei, bleibt das Symbol blass und ohne Link.
@@ -227,7 +238,32 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
           )}
           {state === 'ok' && n === 0 && <p className="px-2 py-1 pl-8 text-xs text-text-secondary">Noch keine Unter-Chats — der Hauptchat startet sie.</p>}
           <ul className="flex flex-col" aria-label="Unter-Chats">
-            {groups.map((g, gi) => {
+            {themen && themen.map((g, gi) => {
+              const o = themaAuf(g);
+              const gid = `${listId}-thema-${gi}`.replace(/[^A-Za-z0-9_-]/g, '_');
+              const parts = (['wartet', 'gestoppt', 'läuft', 'fertig'] as const).filter((w) => g.counts[w]).map((w) => `${g.counts[w]} ${WORD[w]}`);
+              const first = (['wartet', 'gestoppt', 'läuft', 'fertig'] as const).find((w) => g.counts[w]);
+              return (
+                <li key={g.thema} data-testid="hauptchat-thema-gruppe">
+                  <button
+                    type="button"
+                    data-testid="hauptchat-thema"
+                    aria-expanded={o}
+                    aria-controls={o ? gid : undefined}
+                    onClick={() => save({ ...auf, thema: { ...(auf.thema ?? {}), [g.thema]: !o } })}
+                    className={cn(ROW, 'pl-3 hover:bg-surface-active-alt')}
+                    title={`${g.thema}: ${g.strands.length} Unter-Chat${g.strands.length === 1 ? '' : 's'}${parts.length ? ' · ' + parts.join(' · ') : ''}`}
+                  >
+                    <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform duration-200', o ? '' : '-rotate-90')} aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate text-left font-medium">{g.thema}</span>
+                    {first && <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[first])} aria-hidden="true" />}
+                    <span className="shrink-0 text-xs text-text-secondary">{g.strands.length}{parts.length && !o ? ` · ${parts[0]}` : ''}</span>
+                  </button>
+                  {o && <ul id={gid} className="flex flex-col">{g.strands.map((s) => strandRow(s, 'pl-8', themaTitle(s, g.thema)))}</ul>}
+                </li>
+              );
+            })}
+            {!themen && groups.map((g, gi) => {
               if (g.strands.length === 1) return strandRow(g.strands[0], 'pl-6', g.strands[0].title);
               const o = laufAuf(g);
               const gid = `${listId}-lauf-${gi}`.replace(/[^A-Za-z0-9_-]/g, '_');

@@ -94,6 +94,12 @@ const ORCH_TOOLS = [
     run: async (a: any) => { const j = await call('/internal/orchestrator/send', { id: a.id, text: a.text, via: 'leitstand' }); return j.injected ? `nachgereicht (Strang arbeitet, sieht es beim nächsten Schritt): ${j.id} ${j.url}` : `gesendet: ${j.id} ${j.url}`; },
   },
   {
+    name: 'orch_thema',
+    description: 'Themen-Gruppe eines Unter-Chats in der Chat-Seitenleiste setzen (z. B. Rechner, Flex, Cockpit, Admin, Bot, Workspace, Sprint, Roadmap oder ein neues Thema); thema="auto" stellt die automatische Zuordnung wieder her. Nur auf Knuts Wunsch oder bei klarer Fehlzuordnung.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, thema: { type: 'string' } }, required: ['id', 'thema'] },
+    run: async (a: any) => { const j = await call('/internal/orchestrator/thema', { id: a.id, thema: a.thema }); return `Thema: ${j.id} → ${j.thema}${j.hand ? ' (von Hand)' : ' (automatisch)'}`; },
+  },
+  {
     name: 'orch_review',
     description: 'Strang ablegen (wird nicht mehr automatisch fortgesetzt). Ersetzt NICHT Knuts Prüfung: ein fertiger Strang bleibt in Knuts Review-Schlange auf „Heute“, bis Knut „Passt“ klickt.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' }, note: { type: 'string' } }, required: ['id'] },

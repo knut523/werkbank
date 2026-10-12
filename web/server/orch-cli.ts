@@ -11,6 +11,7 @@
 //   orch show <id> [--json]
 //   orch send <id> (TEXT … | --text TEXT | Text auf stdin)   läuft der Strang, wird die Nachricht in den laufenden Zug nachgereicht
 //   orch review <id> [--note TEXT]
+//   orch thema <id> <Thema|auto>   Themen-Gruppe in der Chat-Seitenleiste von Hand (auto = wieder automatisch)
 //   orch ask --title T --context TEXT --recommend TEXT [--option "Label :: Folge"]… [--strand <id>] [--link URL] [--plan DATEI]
 //     [--key <slug>#<id>] [--quelle drift]   Schlüssel offen/beantwortet → Exit 3 (keine zweite Frage); Tageskappe → Exit 4
 //   orch questions list [--open] [--json] · orch questions get <id> [--json] · orch questions withdraw <id>
@@ -170,6 +171,12 @@ async function main() {
       if (!pos[0]) die('review <id>');
       await call('review', { id: pos[0], note: typeof flags.note === 'string' ? flags.note : '' });
       console.log(`geprüft: ${pos[0]}`);
+      return;
+    }
+    case 'thema': {
+      if (!pos[0] || !pos[1]) die('thema <id> <Thema|auto>');
+      const j = await call('thema', { id: pos[0], thema: pos.slice(1).join(' ') });
+      console.log(`Thema: ${j.id} → ${j.thema}${j.hand ? ' (von Hand)' : ' (automatisch)'}`);
       return;
     }
     case 'ask': {

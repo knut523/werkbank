@@ -16,6 +16,7 @@ import { worumGeht, wasTun, type TodoStep } from './heutekarte.ts';
 import { liveIndex, strandStand, realGit, type LiveIndex } from './releasestand.ts';
 import type { Stand } from './heutekarte.ts';
 import { join } from 'node:path';
+import { groupThemen, themaOf } from './themen.ts';
 import { homedir } from 'node:os';
 import { cfg } from './config.ts';
 import { wb } from './db.ts';
@@ -452,7 +453,7 @@ export function groupLine(g: { strands: unknown[]; counts: Record<string, number
 }
 
 const publicStrand = (d: any, word: StatusWord | null) => ({
-  id: String(d._id), title: d.title, lauf: d.lauf ?? laufName(d.title ?? '').lauf, status: word ?? 'erledigt', reason: d.lastReason ?? null,
+  id: String(d._id), title: d.title, lauf: d.lauf ?? laufName(d.title ?? '').lauf, thema: themaOf(d), themaHand: !!d.thema, status: word ?? 'erledigt', reason: d.lastReason ?? null,
   url: d.url, auftrag: lesbar(paketDatei(d, 'auftrag')), bericht: lesbar(paketDatei(d, 'bericht')), autoWeiter: d.autoTotal ?? 0, lastActivity: d.lastActivity ?? d.statusAt ?? d.startedAt,
   reviewedBy: d.reviewedBy ?? null, knutReviewed: !!d.knutReviewedAt, reviewReady: !!d.reviewReadyAt,
 });
@@ -462,7 +463,10 @@ export async function overview(u: User) {
   const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, startError: null, startedAt: { $gt: new Date(Date.now() - 60 * 86400_000) } }).limit(500).toArray();
   const g = groupStrands(docs);
   const shape = (x: ReturnType<typeof groupStrands>['offen'][number]) => ({ key: x.key, lauf: x.lauf, from: x.from, to: x.to, line: groupLine(x), counts: x.counts, strands: x.strands.map((s) => publicStrand(s.d, s.word)) });
-  return { leitstand: await leitstandLine(u), offen: g.offen.map(shape), erledigt: g.erledigt.map(shape) };
+  // Themen-Gruppen für die Chat-Seitenleiste (Plan 154, S2) — nur offene Unter-Chats; die Seite „Leitstand“ bleibt bei Läufen.
+  const themen = groupThemen(docs.map((d) => ({ d, word: knutDone(d) ? null : statusWord(d) })))
+    .map((t) => ({ thema: t.thema, counts: t.counts, strands: t.items.map((x) => publicStrand(x.d, x.word)) }));
+  return { leitstand: await leitstandLine(u), offen: g.offen.map(shape), erledigt: g.erledigt.map(shape), themen };
 }
 
 /** Review-Karten auf „Heute“ (B4): fertig gemeldet oder review_ready, von Knut nicht geprüft — nur Mongo. */

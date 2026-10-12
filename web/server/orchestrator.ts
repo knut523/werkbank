@@ -18,6 +18,7 @@ import { createLibreChat } from './agent.ts';
 import { prepareFresh } from './fresh.ts';
 import { pruefe, parsePlan, protokolliere, g0Text, g0Optionen, OHNE_PR, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { vienna } from './hygiene.ts';
+import { cleanThema, themaOf } from './themen.ts';
 
 export const ORCH_TAG = 'Orchestrator';
 export type OrchStatus = 'running' | 'waiting' | 'done' | 'failed' | 'blocked_g0';
@@ -518,6 +519,14 @@ export function startAutoWeiter(deps: AutoDeps) {
   if (process.env.ORCH_AUTO_WEITER === 'off') return null;
   const ms = Math.max(200, Number(process.env.ORCH_AUTO_WEITER_TICK_MS) || 20_000);
   return setInterval(() => { autoWeiterTick(deps).catch((e) => deps.log?.('orch-auto-weiter fehler', { error: String(e?.message ?? e).slice(0, 200) })); }, ms);
+}
+
+/** Themen-Gruppe in der Seitenleiste von Hand setzen (Plan 154, S2); „auto“/leer = wieder automatisch. */
+export async function setThema(u: User, id: string, thema: unknown) {
+  const d = await ownRun(u, id);
+  const t = cleanThema(thema);
+  await runs().updateOne({ _id: d._id }, { $set: { thema: t } });
+  return { id, thema: themaOf({ ...d, thema: t }), hand: !!t };
 }
 
 /** Geprüft: von Knut (CLI der Hauptsitzung, „Passt“, „Anhalten“) → knutReviewedAt; vom Leitstand → nur abgelegt (Teil B, G2). */

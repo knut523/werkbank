@@ -506,6 +506,17 @@ test('Teil B (B-1/B-6/B-2/B-20): Lauf + Lesezeichen, fertiger Strang als Karte a
   const g = ov.offen.find((x: any) => x.lauf === 'Teil B');
   assert.equal(g.line, '1 Unter-Chat · 1 zu prüfen');
   assert.equal(g.strands[0].bericht, true);
+  // Plan 154 (S2): dieselben Stränge als Themen-Gruppen; von Hand umhängen und zurück zur Automatik (nur Admin, CSRF-Header).
+  const inThema = (o: any, id: string) => o.themen.find((t: any) => t.strands.some((s: any) => s.id === id));
+  const auto = inThema(ov, st.id).thema;
+  assert.equal((await post('/api/leitstand/thema', { id: st.id, thema: 'Cockpit' })).status, 200);
+  const ov2 = await (await fetch(B + '/api/leitstand/overview', { headers: { cookie: await cookie(knut) } })).json();
+  assert.equal(inThema(ov2, st.id).thema, 'Cockpit');
+  assert.equal(inThema(ov2, st.id).strands.find((s: any) => s.id === st.id).themaHand, true);
+  assert.equal((await post('/api/leitstand/thema', { id: st.id, thema: 'Cockpit' }, team)).status, 403);
+  assert.equal((await fetch(B + '/api/leitstand/thema', { method: 'POST', headers: { cookie: await cookie(knut), 'content-type': 'application/json' }, body: JSON.stringify({ id: st.id, thema: 'X' }) })).status, 403, 'ohne Workspace-Header');
+  assert.equal((await post('/api/leitstand/thema', { id: st.id, thema: 'auto' })).status, 200);
+  assert.equal(inThema(await (await fetch(B + '/api/leitstand/overview', { headers: { cookie: await cookie(knut) } })).json(), st.id).thema, auto);
   // Team-Konto: keine Übersicht, keine Strang-Karten; Leitstand-ID und fremde ID → 404.
   assert.equal((await fetch(B + '/api/leitstand/overview', { headers: { cookie: await cookie(team) } })).status, 403);
   assert.deepEqual((await today(team)).strands, []);

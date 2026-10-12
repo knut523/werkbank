@@ -19,7 +19,7 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft } from './leitstand.ts';
 import { readBericht, paketDatei } from './bericht.ts';
@@ -1260,6 +1260,12 @@ on('GET', /^\/api\/chat\/nachreichen\/([0-9a-f-]{36})$/, async (req, res, m) => 
 
 // Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).
 on('GET', /^\/api\/leitstand\/overview$/, async (req, res) => send(res, 200, await overview(await needAdmin(req))));
+// Themen-Gruppe eines Unter-Chats von Hand (Plan 154, S2): Admin, CSRF-Header; thema „auto“/leer = zurück zur Automatik.
+on('POST', /^\/api\/leitstand\/thema$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  send(res, 200, await setThema(u, String(b.id ?? ''), b.thema));
+});
 
 // Hauptchat starten aus der Oberfläche (Plan 144, S2): dieselbe Funktion wie der interne Kanal der CLI — Admin, CSRF-Header
 // (needUser), 40 000 Zeichen, Brücke prüft LEITSTAND_EMAILS. Der Entwurf enthält keine Strang-Auszüge (Council B1).
@@ -2336,7 +2342,7 @@ async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
   return internalUser(req, { userId: d ? String(d._id) : '' });
 }
 
-on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau)$/, async (req, res, m) => {
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema)$/, async (req, res, m) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
   const id = String(b.id ?? '');
@@ -2358,6 +2364,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau)$/,
     case 'show': return send(res, 200, await showOrch(u, id));
     case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand'));
     case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? '', b.via === 'leitstand' ? 'leitstand' : 'knut'));
+    case 'thema': return send(res, 200, await setThema(u, id, b.thema));   // Plan 154, S2: Themen-Gruppe von Hand
   }
 });
 
