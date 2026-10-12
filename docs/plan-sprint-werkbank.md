@@ -5,7 +5,7 @@ durchdenken und auch auf die Werkbank bringen“. Teil 1 ist dieser Plan (Counci
 Bau dessen, was der Council freigibt. Basis: `release/werkbank-2026-10-11d`, Branch
 `feat/sprint-werkbank`.
 
-Status: **v3 — Council Runde 2: PASS (0,78) mit P1–P5; danach Rückmeldung Knut 12.10. (bindend, §2a) eingearbeitet.** Verlauf in §6.
+Status: **v4 — entschieden.** Council Runde 2 PASS (0,78) mit P1–P5; Rückmeldung Knut 12.10. (bindend, §2a) eingearbeitet; **E1–E7 von Knut am 12.10. wie empfohlen entschieden** (q-2af8e1, „ok passt alles“). Verlauf in §6.
 
 ## 1. IST (12.10.2026, gelesen, nicht vermutet)
 
@@ -149,37 +149,42 @@ setzen, Write-back freigeben, Tickets anlegen, Mitnahme-Abschnitt schreiben (Cha
 (Workstream-Sicht) bleiben. Optionen: (a) Summary = Kopf (Monatsziele, Ziel, S1–S4 mit Bewertung,
 Blocker, Links); (b) Paket-Tabelle bleibt, später aus dem Review generiert; (c) wie heute.
 *Empfehlung:* (a). In diesem Paket wird dafür nichts gebaut, nur der Skill-Patch vorbereitet (E4).
-  - Knut:
+  - Knut: wie empfohlen: (a) Summary = Kopf (Monatsziele, Ziel, S1–S4 mit Bewertung, Blocker, Links), keine Paket-Tabelle (12.10., q-2af8e1)
 
 **E2 — Pakete vom Vorzyklus übernehmen statt neu ableiten?** *Empfehlung:* ja; neue oder
 zusammengelegte Pakete macht die Runde bzw. der Agent im Chat, verwaiste Tickets stehen in
 Auffälligkeiten.
-  - Knut:
+  - Knut: wie empfohlen: ja, Pakete vom Vorzyklus übernehmen (12.10., q-2af8e1)
 
 **E3 — Zeitpunkt.** *Empfehlung:* Entwurf am Freitag vor dem Montags-Termin, Antworten bis Montag 09:00;
 kein Reminder-Bau (Skill: Reminder gehören nach Jira).
-  - Knut:
+  - Knut: wie empfohlen: Entwurf Freitag vor dem Termin, Antworten bis Montag 09:00, kein Reminder-Bau (12.10., q-2af8e1)
 
 **E4 — Skill-Patch** (Werkbank als Weg für Schritt 1–5, Fallback ohne S-Zeilen, Vorlage ohne
 vorausgefüllte Bewertung, Summary nach E1) unter `review-pakete/143-sprint-werkbank/patches/`.
 *Empfehlung:* ja; Hauptsitzung spielt nach E1 ein.
-  - Knut:
+  - Knut: wie empfohlen: ja — die Hauptsitzung spielt den Skill-Patch v1.7 in den Vault ein (12.10., q-2af8e1)
 
 **E5 — Sprint-Seite fürs Team freischalten** (`WERKBANK_TEAM_FEATURES=…,sprint`)? Ohne das bleibt
 Schritt 2 für das Team in Obsidian; die Werkbank zählt es trotzdem. *Empfehlung:* erst nach einem
 Zyklus mit Knut allein; bis dahin Obsidian.
-  - Knut:
+  - Knut: wie empfohlen: erst ein Zyklus mit Knut allein, bis dahin Obsidian (12.10., q-2af8e1)
 
 **E6 — Wer schreibt die Prosa?** (a) weiter ein Agent im Chat, jetzt auf dem Gerüst; (b) jede:r selbst.
 *Empfehlung:* (a) auf dem Gerüst — der Agent soll Pakete und Anker übernehmen statt neu zu erfinden.
-  - Knut:
+  - Knut: wie empfohlen: (a) Agent im Chat schreibt die Prosa auf dem Gerüst (12.10., q-2af8e1)
 
 **E7 — Mitnahme ohne Backlog/Ongoing?** Seit To Do/Backlog/Ongoing getrennt stehen, nimmt die Mitnahme
 (Gleichlauf mit `jira-sprint-carry.sh`: jedes offene Ticket, das der Review nennt) auch Backlog-Tickets mit „nein“,
 Daueraufgaben und Waisen mit. Optionen: (a) Mitnahme = nur To Do + „ja“ aus dem Backlog + `→ mitnehmen`,
 Skript und Werkbank gleich anpassen; (b) wie heute (alles Offene). *Empfehlung:* (a) — sonst ist die Mitnahme
 wieder das halbe Board; braucht eine Änderung an `jira-sprint-carry.sh` (Skill-Skript, nicht in diesem Paket).
-  - Knut:
+  - Knut: wie empfohlen: (a) Mitnahme = To Do + „ja“ aus dem Backlog + `→ mitnehmen`; Skript-Änderung als eigenes kleines Paket (12.10., q-2af8e1)
+
+**Folgen der Entscheidungen (nicht in diesem Paket):** E1 → Summary-Vorlage und Skill-Abschnitt „Summary“
+umbauen (eigenes Paket, zusammen mit dem Summary-Teil des Skills); E4 → Hauptsitzung spielt
+`patches/01-skill-olaf-sprint-planning-v1.7-werkbank.patch` ein; E5 → `WERKBANK_TEAM_FEATURES` bleibt ohne
+`sprint`; E7 → eigenes kleines Paket für `jira-sprint-carry.sh` und `carryList` (Gleichlauf bleibt Pflicht).
 
 ## 4. Nicht in diesem Paket
 
