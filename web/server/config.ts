@@ -29,6 +29,9 @@ export const cfg = {
   meiliKey: env.MEILI_MASTER_KEY || '',
   meiliIndex: env.WERKBANK_MEILI_INDEX || 'werkbank_vault',
   vaultDir: resolve(env.WERKBANK_VAULT_DIR || '/vault'),
+  // „Heute“: Release-Stand der Stränge (Paket 141) — Live-Log der Instanz und Quell-Repo mit den release/*-Zweigen, nur lesen.
+  liveRoot: env.WERKBANK_LIVE_ROOT || WB_ROOT,
+  sourceRepo: env.WERKBANK_SOURCE_REPO || join(homedir(), 'work', 'knut', 'werkbank-gh'),
   sprintRoot: env.WERKBANK_SPRINT_ROOT || '', // leer = <vault>/olaf/1-Projects
   allowedEmails: list(env.WERKBANK_ALLOWED_EMAILS ?? env.BRIDGE_ALLOWED_EMAILS ?? 'knut.peters@maxenergy.at'),
   // Konto, dessen Jira-Zugang aus dem Vaultwarden der VM kommen darf (nur Pilot, nur dieser Nutzer).

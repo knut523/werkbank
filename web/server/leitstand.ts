@@ -9,7 +9,12 @@
 //   Sonst nach LEITSTAND_WAKE_RETRY_MS erneut. Nur dieser Takt schreibt in den Leitstand (Auto-Fortsetzen lässt ihn aus).
 
 import { randomBytes, randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { realpathSync, readdirSync } from 'node:fs';
+import { readBericht, readPlan, reviewDir, findPaket } from './bericht.ts';
+import { PAKET_RE, paketFile } from './reviewpakete.ts';
+import { worumGeht, wasTun, type TodoStep } from './heutekarte.ts';
+import { liveIndex, strandStand, realGit, type LiveIndex } from './releasestand.ts';
+import type { Stand } from './heutekarte.ts';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { cfg } from './config.ts';
@@ -383,11 +388,12 @@ export async function overview(u: User) {
 }
 
 /** Review-Karten auf „Heute“ (B4): fertig gemeldet oder review_ready, von Knut nicht geprüft — nur Mongo. */
-export async function strandCards(u: User) {
+export async function strandCards(u: User, opts: { detail?: boolean; fresh?: boolean } = {}) {
   if (u.role !== 'ADMIN') return [];
   const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, ...OPEN, startError: null, $and: [{ $or: [{ doneAt: { $ne: null } }, { reviewReadyAt: { $ne: null } }] }] })
     .sort({ startedAt: -1 }).limit(30).toArray();
-  return docs.filter((d) => d.doneAt || d.reviewReadyAt).map((d) => {
+  const open = docs.filter((d) => d.doneAt || d.reviewReadyAt);
+  const cards = open.map((d) => {
     const review = d.review ?? d.prevReview?.review ?? null;
     return {
       id: String(d._id), kind: 'strand', bucket: 'review', key: `Strang · ${d.lauf ?? laufName(d.title ?? '').lauf}`, summary: d.title, url: d.url,
@@ -399,4 +405,55 @@ export async function strandCards(u: User) {
       written: [], startedAt: d.startedAt,
     };
   });
+  if (!opts.detail) return cards;   // Zähler: nur Mongo (F1)
+  const idx = await liveIndex(cfg.liveRoot, cfg.sourceRepo, { fresh: opts.fresh });
+  const nrs = paketNummern();
+  const out: any[] = [];
+  for (let i = 0; i < cards.length; i += 5)   // höchstens 5 Stränge gleichzeitig (git-Aufrufe je Strang, Stand 60 s gemerkt)
+    // Eine kaputte Karte (Parser, Datei) darf die anderen nicht mitreißen: dann eben ohne Zusatzangaben.
+    out.push(...await Promise.all(cards.slice(i, i + 5).map(async (c, j) => ({ ...c, ...(await strandDetail(open[i + j], c, idx, nrs, !!opts.fresh).catch(() => ({}))) }))));
+  return out;
+}
+
+// ---------- „Heute“ verständlich (docs/plan-heute-verstaendlich.md, Paket 141) ----------
+
+/** Paketnummer → Anzahl Ordner (140 gibt es zweimal: dann nie über die Nummer zuordnen). Ein readdir, kein Cache. */
+function paketNummern(): Map<number, number> {
+  const m = new Map<number, number>();
+  try { for (const n of readdirSync(reviewDir())) if (PAKET_RE.test(n)) { const k = Number(n.split('-')[0]); m.set(k, (m.get(k) ?? 0) + 1); } } catch { /* kein Ordner */ }
+  return m;
+}
+
+const textCache = new Map<string, { at: number; v: { worum: string; todo: TodoStep[]; todoMore: number } }>();
+
+/** Worum es geht, was zu tun ist (aus Plan/Bericht/Auftrag/Stand-Auszug) und der Release-Stand einer Strang-Karte. */
+const standCache = new Map<string, { at: number; v: Stand | null }>();
+
+export async function strandDetail(d: any, c: { running: boolean; excerpt: string }, idx: LiveIndex | null, nrs: Map<number, number>, fresh = false) {
+  // Paketordner: beim Start gemerkt, sonst aus Bericht-Pfad, Auftrag, review_ready-Artefakten oder Stand-Auszug.
+  const paket = [d.paket, d.bericht ? String(d.bericht).split('/').slice(-2)[0] : null, findPaket([d.prompt, ...(d.review?.artefakte ?? []), c.excerpt])]
+    .find((x) => x && PAKET_RE.test(x)) ?? null;   // erster GÜLTIGER Kandidat (Review Nachtrag, Befund 2)
+  // Auftrag und Bericht direkt auf der Karte (Knut 12.10.): nur, was wirklich lesbar im Paket liegt.
+  const docs = { auftrag: !!(paket && paketFile(cfg.reviewDir, paket, 'auftrag.md')), bericht: !!(paket && paketFile(cfg.reviewDir, paket, 'bericht.md')) };
+  const key = `${d._id}:${+new Date(d.reviewReadyAt ?? 0)}:${+new Date(d.statusAt ?? 0)}:${c.excerpt.length}`;
+  let t = textCache.get(key);
+  if (!t || Date.now() - t.at > 60_000) {
+    // Bericht immer aus DEMSELBEN Paket wie die Knöpfe (Review Nachtrag, Befund 1: ein fremder Bericht im Auftrag als Kontext).
+    const berichtText = readBericht(paket ? (docs.bericht ? join(reviewDir(), paket, 'bericht.md') : null) : d.bericht);
+    const w = wasTun({ berichtText, excerpt: c.excerpt, paket });
+    t = { at: Date.now(), v: { worum: worumGeht({ title: d.title, prompt: [d.zielLine, d.prompt].filter(Boolean).join('\n'), planText: readPlan(d.plan), berichtText }), todo: w.steps, todoMore: w.more } };
+    if (textCache.size > 200) textCache.clear();
+    textCache.set(key, t);
+  }
+  const nr = paket ? Number(paket.split('-')[0]) : null;
+  // Stand je Strang 60 s gemerkt (Review-Fix 5: /api/today läuft alle 20 s); das Sammel-Abhaken rechnet frisch.
+  const sk = `${d._id}:${idx?.liveSha ?? '-'}:${c.running}:${+new Date(d.reviewReadyAt ?? 0)}:${+new Date(d.statusAt ?? 0)}:${+new Date(d.lastSentAt ?? 0)}`;
+  let st = fresh ? undefined : standCache.get(sk);
+  if (!st || Date.now() - st.at > 60_000) {
+    st = { at: Date.now(), v: await strandStand(realGit, idx, { running: c.running, cwd: d.cwd ?? null, own: d.ownWorktree === true, since: +new Date(d.lastSentAt ?? d.startedAt ?? 0), paket, paketUnique: nr !== null && nrs.get(nr) === 1 }).catch(() => null) };
+    if (standCache.size > 200) standCache.clear();
+    standCache.set(sk, st);
+  }
+  const stand = st.v;
+  return { ...t.v, stand, paket, docs };
 }

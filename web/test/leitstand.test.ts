@@ -5,7 +5,7 @@
 import { TEST_MONGO } from './testmongo.ts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, execFile, type ChildProcess } from 'node:child_process';
+import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
@@ -102,6 +102,22 @@ const DB = `werkbank_leit_test_${tag}`, LCDB = `librechat_leit_test_${tag}`;
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'werkbank-leit-')));
 const ROOT = join(tmp, 'work'), LEIT = join(ROOT, 'knut');
 const WT = (n: string) => { const d = join(LEIT, n); mkdirSync(d, { recursive: true }); return d; };
+// Paket 141: Release-Stand — Quell-Repo mit release/r1 (Paket 960 live, Paket 961 erst nach dem Live-Gang gemergt) und Live-Log.
+const GSRC = join(tmp, 'git-src'), GLIVE = join(tmp, 'git-live');
+{
+  const g = (cwd: string, ...a: string[]) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'init.defaultBranch=dev', ...a], { cwd, encoding: 'utf8' }).trim();
+  mkdirSync(GSRC); mkdirSync(GLIVE);
+  g(GSRC, 'init', '-q'); g(GSRC, 'commit', '-q', '--allow-empty', '-m', 'basis');
+  g(GSRC, 'checkout', '-q', '-b', 'release/r1');
+  g(GSRC, 'commit', '-q', '--allow-empty', '-m', 'x'); g(GSRC, 'checkout', '-q', 'dev');
+  g(GSRC, 'merge', '-q', '--no-ff', '-m', 'Merge feat/a (Paket 960): A', 'release/r1');   // nur der Betreff zählt hier
+  g(GSRC, 'checkout', '-q', 'release/r1'); g(GSRC, 'merge', '-q', '--ff-only', 'dev');
+  const live = g(GSRC, 'rev-parse', 'HEAD');
+  g(GSRC, 'checkout', '-q', '-b', 'feat/b', 'dev'); g(GSRC, 'commit', '-q', '--allow-empty', '-m', 'b');
+  g(GSRC, 'checkout', '-q', 'release/r1'); g(GSRC, 'merge', '-q', '--no-ff', '-m', 'Merge feat/b (Paket 961): B', 'feat/b');
+  g(GSRC, 'checkout', '-q', 'dev');
+  g(GLIVE, 'init', '-q'); g(GLIVE, 'commit', '-q', '--allow-empty', '-m', `Live = release/r1 (werkbank-gh ${live.slice(0, 7)}): A`);
+}
 mkdirSync(LEIT, { recursive: true }); mkdirSync(join(tmp, 'vault'));
 const INTERNAL = randomBytes(16).toString('hex'), JWT_SECRET = randomBytes(16).toString('hex'), REFRESH_SECRET = randomBytes(16).toString('hex');
 const knut = { _id: new ObjectId(), email: 'knut@maxenergy.at', name: 'Knut Test', role: 'ADMIN' };
@@ -167,7 +183,8 @@ before(async () => {
     CREDS_KEY: randomBytes(32).toString('hex'), CREDS_IV: randomBytes(16).toString('hex'), WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'),
     WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vault-sync'), WERKBANK_MEILI_INDEX: `werkbank_leit_test_${tag}`, WERKBANK_FORGE_MCP: '',
     WERKBANK_LEITSTAND_DIR: LEIT, ORCH_AUTO_WEITER_TICK_MS: '300', ORCH_AUTO_WEITER_MAX: '3',
-    LEITSTAND_WAKE_DEBOUNCE_MS: '600', LEITSTAND_WAKE_RETRY_MS: '2500', LEITSTAND_WEITER_MAX: '2', WERKBANK_REVIEW_DIR: join(tmp, 'review-pakete') };
+    LEITSTAND_WAKE_DEBOUNCE_MS: '600', LEITSTAND_WAKE_RETRY_MS: '2500', LEITSTAND_WEITER_MAX: '2', WERKBANK_REVIEW_DIR: join(tmp, 'review-pakete'),
+    WERKBANK_LIVE_ROOT: GLIVE, WERKBANK_SOURCE_REPO: GSRC };
   startWeb();
   await waitFor(`http://127.0.0.1:${BRIDGE_PORT}/health`);
   await waitFor(`${B}/api/health`);
@@ -573,6 +590,63 @@ test('Council-Diff Teil B: läuft ein fertiger Strang wieder, bleibt die Karte s
   assert.ok(countAfter >= countNow + 1, `erst die wieder fertige Karte zählt (${countNow} → ${countAfter}; andere Karten können parallel dazukommen)`);
 });
 
+test('Paket 141 (DoD 5/6/12–15): Karte mit Worum/Was tun/Stand; passt-live hakt nur wirklich Live-Stränge ab; Team 403', async () => {
+  const pak = (n: string, body: string) => { mkdirSync(join(tmp, 'review-pakete', n), { recursive: true }); writeFileSync(join(tmp, 'review-pakete', n, 'bericht.md'), body); };
+  pak('960-live-a', '# Paket 960 — A\n\n## Ziel\n\nA macht Heute klarer. Mehr.\n\n## Für Knut zur Nachprüfung\n\n1. [Screenshot](bilder/a.png) ansehen.\n2. Zweiter Schritt.\n');
+  pak('961-spaet-b', '# Paket 961 — B\n');
+  const start = (title: string, wt: string, paket: string, stand = '- Braucht Knut: nichts') => orch(['start', '--title', title, '--cwd', WT(wt), '--json'],
+    `Auftrag (Knut 12.10.2026): „${title} bauen.“ Bericht nach ~/work/knut/review-pakete/${paket}/bericht.md.\nmock-antwort Fertig.\\n### Stand\\n- Erledigt: x\\n${stand}\\nStatus: fertig`).then((r) => JSON.parse(r.out));
+  const a = await start('P141 Live A', 'wt-p141a', '960-live-a');
+  const b = await start('P141 Spät B', 'wt-p141b', '961-spaet-b', '- Braucht Knut: Token freigeben');
+  // Wie in echt: die Stränge waren VOR dem Merge fertig (B2 — ein Merge vor der letzten Anweisung belegt nichts).
+  await W().collection('orchestrator_runs').updateMany({ _id: { $in: [a.id, b.id] } as any }, { $set: { lastSentAt: new Date(Date.now() - 86400_000) } });
+  const ca = await until(() => cardOf(a.id), (c: any) => !!c);
+  const cb = await until(() => cardOf(b.id), (c: any) => !!c);
+  assert.equal(ca.worum, 'A macht Heute klarer.');
+  assert.equal(ca.todo.length, 2);
+  assert.match(ca.todo[0].text, /api\/files\/agenten\/960-live-a\/bilder\/a\.png/);
+  assert.deepEqual(ca.stand, { kind: 'live', release: 1, branch: 'release/r1', text: 'live seit Release 1' });
+  assert.equal(cb.worum, 'P141 Spät B bauen.', 'erster Satz des Auftrags ohne Vorspann');
+  assert.deepEqual(cb.todo, [{ text: 'Token freigeben' }]);
+  assert.equal(cb.stand.text, 'in Release 1, noch nicht live');
+  assert.equal(ca.cwd, undefined, 'kein Arbeitsordner an den Browser');
+  // Nachtrag 12.10. (DoD 18–19): Auftrag · Bericht je Karte — nur, was im Paket liegt; Paket auch nur aus dem Auftrags-Pfad.
+  assert.deepEqual([ca.paket, ca.docs], ['960-live-a', { auftrag: false, bericht: true }]);
+  pak('962-nur-auftrag', '# Auftrag 962\n\nZiel: Nur ein Auftrag liegt da. Mehr.\n');
+  writeFileSync(join(tmp, 'review-pakete', '962-nur-auftrag', 'auftrag.md'), '# Auftrag 962\n\nZiel: Nur ein Auftrag liegt da.\n');
+  const { rmSync } = await import('node:fs'); rmSync(join(tmp, 'review-pakete', '962-nur-auftrag', 'bericht.md'));
+  const n = JSON.parse((await orch(['start', '--title', 'P141 Nur Auftrag', '--cwd', WT('wt-p141n'), '--json'],
+    `Lies zuerst ~/work/knut/review-pakete/962-nur-auftrag/auftrag.md.\nmock-antwort Fertig.\\n### Stand\\n- Braucht Knut: nichts\\nStatus: fertig`)).out);
+  const cn = await until(() => cardOf(n.id), (x: any) => !!x);
+  assert.deepEqual([cn.paket, cn.docs], ['962-nur-auftrag', { auftrag: true, bericht: false }]);
+  const v = await (await fetch(B + '/api/files/agenten/962-nur-auftrag/auftrag.md?vorschau=1', { headers: { cookie: await cookie(knut) } })).json();
+  assert.match(v.html, /<h1>Auftrag 962<\/h1>/);
+  // Review Nachtrag, Befund 1: nennt der Auftrag ein fremdes bericht.md als Kontext, kommen Schritte UND Knöpfe aus dem eigenen Paket.
+  pak('963-eigen', '# B963\n\n## Für Knut zur Nachprüfung\n\n1. Eigener Schritt.\n');
+  writeFileSync(join(tmp, 'review-pakete', '963-eigen', 'auftrag.md'), '# A963\n');
+  const e = JSON.parse((await orch(['start', '--title', 'P141 Eigenes Paket', '--cwd', WT('wt-p141e'), '--json'],
+    `Auftrag: ~/work/knut/review-pakete/963-eigen/auftrag.md. Kontext: ~/work/knut/review-pakete/960-live-a/bericht.md.\nmock-antwort Fertig.\\n### Stand\\n- Braucht Knut: nichts\\nStatus: fertig`)).out);
+  const ce = await until(() => cardOf(e.id), (x: any) => !!x);
+  assert.equal(ce.paket, '963-eigen');
+  assert.deepEqual(ce.todo, [{ text: 'Eigener Schritt.' }], 'Schritte aus dem eigenen Bericht, nicht aus 960');
+  // Ziel-Zeile hinter Zeichen 500 (gespeicherter Auftrag ist gekürzt): kommt trotzdem an.
+  const c = JSON.parse((await orch(['start', '--title', 'P141 Langer Auftrag', '--cwd', WT('wt-p141c'), '--json'],
+    `Auftrag (Knut): ${'Vorgeschichte. '.repeat(40)}\nZiel: Weit hinten steht das Ziel. Mehr dazu.\nmock-antwort Fertig.\\n### Stand\\n- Braucht Knut: nichts\\nStatus: fertig`)).out);
+  assert.equal((await until(() => cardOf(c.id), (x: any) => !!x)).worum, 'Weit hinten steht das Ziel.');
+  // Team: 403. Leere Liste: 400. B (vom Browser als „live“ geschickt) wird nicht abgehakt, A mit falschem Stand auch nicht.
+  assert.equal((await post('/api/leitstand/strands/passt-live', { items: [{ id: a.id, seen: ca.seen }] }, team)).status, 403);
+  assert.equal((await post('/api/leitstand/strands/passt-live', { items: [] })).status, 400);
+  let r = await (await post('/api/leitstand/strands/passt-live', { items: [{ id: a.id, seen: 'falsch' }, { id: b.id, seen: cb.seen }] })).json();
+  assert.deepEqual(r, { done: [], skipped: [{ id: a.id, why: 'hat sich geändert' }, { id: b.id, why: 'nicht live' }] });
+  r = await (await post('/api/leitstand/strands/passt-live', { items: [{ id: a.id, seen: ca.seen }, { id: b.id, seen: cb.seen }] })).json();
+  assert.deepEqual(r.done, [a.id]);
+  assert.equal(await cardOf(a.id), undefined);
+  assert.ok(await cardOf(b.id), 'B bleibt');
+  const d = await W().collection('orchestrator_runs').findOne({ _id: a.id as any });
+  assert.ok(d!.knutReviewedAt);
+  assert.match(d!.reviewNote, /live seit Release 1 \(gesammelt abgehakt\)/);
+});
+
 test('Council-Diff Teil B (B-21/B-25, zuletzt — beendet die Brücke): Brücke weg → Heute zeigt die Karte weiter (nur Mongo), Passt → 503', async () => {
   const st = await doneStrand('Teil B: Brücke weg', 'wt-b7');
   const card = await until(() => cardOf(st.id), (c: any) => !!c);
@@ -582,4 +656,8 @@ test('Council-Diff Teil B (B-21/B-25, zuletzt — beendet die Brücke): Brücke 
   const t = await today();
   assert.ok(t.strands.some((c: any) => c.id === st.id), 'Karte bleibt (Stand aus Mongo, Takt überschreibt bei Brückenfehler nichts)');
   assert.equal((await post(`/api/leitstand/strands/${st.id}/passt`, { seen: card.seen })).status, 503);
+  // passt-live (Paket 141, Bedingung 6): Brücke weg → nichts abgehakt, Antwort mit Gründen statt 503.
+  const r = await post('/api/leitstand/strands/passt-live', { items: [{ id: st.id, seen: card.seen }] });
+  assert.equal(r.status, 200);
+  assert.deepEqual((await r.json()).done, []);
 });
