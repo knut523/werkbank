@@ -91,7 +91,11 @@ const cfg = {
   maxTurns: Number(process.env.BRIDGE_MAX_TURNS || 40),
   // Orchestrator-Stränge (docs/plan-orchestrator-auto-weiter.md, Schnitt 5): eigenes Schrittlimit, ohne Variable wie oben.
   orchMaxTurns: Number(process.env.ORCH_MAX_TURNS || process.env.BRIDGE_MAX_TURNS || 40),
-  turnTimeoutMs: Number(process.env.BRIDGE_TURN_TIMEOUT_S || 900) * 1000,
+  // Leerlauf statt Gesamtdauer (Knut 12.10.2026: Stränge brachen mitten in Build/Tests nach 15 Minuten ab): ein Zug
+  // endet erst, wenn so lange keine Nachricht vom SDK kam; BRIDGE_TURN_TIMEOUT_S bleibt als alter Name gültig.
+  turnTimeoutMs: Number(process.env.BRIDGE_TURN_IDLE_S || process.env.BRIDGE_TURN_TIMEOUT_S || 900) * 1000,
+  // Harte Obergrenze je Zug, auch wenn er die ganze Zeit Nachrichten liefert.
+  turnMaxMs: Number(process.env.BRIDGE_TURN_MAX_S || 10800) * 1000,
   confirmTimeoutMs: Number(process.env.BRIDGE_CONFIRM_TIMEOUT_S || 1800) * 1000,
 };
 // Leitstand (Plan 132, S1): mehr Schritte und Zeit je Zug.
@@ -438,18 +442,33 @@ function detach(live: Live) {
   if (s && !s.closed) s.finish(live.usage);
 }
 
+/** Wann der Zug-Wächter das nächste Mal prüft und warum: nach `idleMs` ohne Nachricht, spätestens an der Obergrenze. */
+export function turnDeadline(now: number, start: number, idleMs: number, maxMs: number): { delay: number; kind: 'idle' | 'max' } {
+  const toMax = Math.max(0, start + maxMs - now);
+  return toMax <= idleMs ? { delay: toMax, kind: 'max' } : { delay: idleMs, kind: 'idle' };
+}
+
+/** (Neu) gestellt bei jedem Anhängen und bei jeder SDK-Nachricht: ein arbeitender Zug läuft weiter. */
+function armTurnTimer(live: Live) {
+  if (live.turnTimer) clearTimeout(live.turnTimer);
+  const idle = live.leit ? leitTimeoutMs() : cfg.turnTimeoutMs;
+  const d = turnDeadline(Date.now(), live.t0, idle, Math.max(cfg.turnMaxMs, idle));
+  live.turnTimer = setTimeout(() => {
+    log('turn timeout', { conv: live.key, kind: d.kind });
+    markEnd(live, 'timeout');
+    live.outcome ??= 'timeout';
+    emitStatus(live, d.kind === 'idle'
+      ? `⏱️ Seit ${Math.round(idle / 60000)} Minuten keine Aktivität — ich breche diesen Schritt ab. Schreib einfach weiter, die Unterhaltung bleibt erhalten.`
+      : `⏱️ Dieser Schritt läuft seit ${Math.round(cfg.turnMaxMs / 3600000)} Stunden — ich breche ihn ab. Schreib einfach weiter, die Unterhaltung bleibt erhalten.`);
+    live.abort.abort();
+  }, d.delay);
+}
+
 function attach(live: Live, sink: Sink) {
   live.sink = sink;
   live.lastKind = 'none';
   for (const t of live.buffer.splice(0)) sink.write(t);
-  if (live.turnTimer) clearTimeout(live.turnTimer);
-  live.turnTimer = setTimeout(() => {
-    log('turn timeout', { conv: live.key });
-    markEnd(live, 'timeout');
-    live.outcome ??= 'timeout';
-    emitStatus(live, '⏱️ Zeitlimit erreicht — ich breche diesen Schritt ab. Schreib einfach weiter, die Unterhaltung bleibt erhalten.');
-    live.abort.abort();
-  }, live.leit ? leitTimeoutMs() : cfg.turnTimeoutMs);
+  armTurnTimer(live);
 }
 
 function end(live: Live) {
@@ -487,6 +506,7 @@ function subPrefix(live: Live, parent: string | null | undefined): string {
 }
 
 function handleMessage(live: Live, msg: any) {
+  if (live.turnTimer) armTurnTimer(live);
   if (msg.type !== 'system' && msg.type !== 'rate_limit_event') mark(live, 'ersteNachricht');
   switch (msg.type) {
     case 'rate_limit_event':
