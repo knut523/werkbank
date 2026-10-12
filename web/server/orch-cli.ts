@@ -9,7 +9,7 @@
 //     gestartete/verworfene Items verlassen die Datei, blockierte (blocked_g0) und ungeprüfte bleiben.
 //   orch list [--all] [--json]
 //   orch show <id> [--json]
-//   orch send <id> (--text TEXT | Text auf stdin)
+//   orch send <id> (TEXT … | --text TEXT | Text auf stdin)   läuft der Strang, wird die Nachricht in den laufenden Zug nachgereicht
 //   orch review <id> [--note TEXT]
 //   orch ask --title T --context TEXT --recommend TEXT [--option "Label :: Folge"]… [--strand <id>] [--link URL] [--plan DATEI]
 //     [--key <slug>#<id>] [--quelle drift]   Schlüssel offen/beantwortet → Exit 3 (keine zweite Frage); Tageskappe → Exit 4
@@ -30,7 +30,7 @@
 // aus der .env.local der Instanz (WERKBANK_ENV_FILE, Vorgabe <checkout>/.env.local) — es wird NUR diese eine Zeile
 // gelesen und nie ausgegeben. Person: WERKBANK_ORCH_EMAIL (Vorgabe: Pilot-Konto der Instanz).
 
-import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { WB_ROOT } from './config.ts';
 
@@ -69,6 +69,22 @@ async function stdin(): Promise<string> {
   return s;
 }
 
+// Zeitlimit je Aufruf (Plan 154, G12): start/nachtbau laufen mit G0 (git fetch, Prüfungen) länger als eine Minute — bricht die
+// CLI vorher ab, legt der Server den Strang trotzdem an, und ein zweiter Versuch startet doppelt. ORCH_CLI_TIMEOUT_S überschreibt.
+export function callTimeoutMs(path: string, env = process.env): number {
+  const s = Number(env.ORCH_CLI_TIMEOUT_S);
+  if (s > 0) return s * 1000;
+  return path === 'start' || path === 'nachtbau' ? 15 * 60_000 : 60_000;
+}
+
+/** Text für `send`: Positionsargumente nach der ID oder --text, nicht beides (G11). null = von stdin lesen. */
+export function sendText(pos: string[], text: string | true | undefined): string | null {
+  const p = pos.slice(1).join(' ').trim();
+  if (p && typeof text === 'string') throw new Error('send: Text entweder als Argument oder mit --text, nicht beides.');
+  if (typeof text === 'string') return text;
+  return p || null;
+}
+
 async function call(path: string, b: Record<string, unknown>): Promise<any> {
   const base = (process.env.WERKBANK_URL || 'http://127.0.0.1:3070').replace(/\/$/, '');
   if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(base)) die('WERKBANK_URL muss lokal sein (http://127.0.0.1:<port>).');
@@ -77,9 +93,12 @@ async function call(path: string, b: Record<string, unknown>): Promise<any> {
   try {
     r = await fetch(`${base}/internal/orchestrator/${path}`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': token() },
-      body: JSON.stringify({ ...(email ? { email } : {}), ...b }), signal: AbortSignal.timeout(60_000),
+      body: JSON.stringify({ ...(email ? { email } : {}), ...b }), signal: AbortSignal.timeout(callTimeoutMs(path)),
     });
-  } catch (e: any) { die(`OLAF Workspace (Web) unter ${base} nicht erreichbar (${e.message}).`); }
+  } catch (e: any) {
+    if (e?.name === 'TimeoutError') die(`Keine Antwort nach ${Math.round(callTimeoutMs(path) / 1000)} s — der Server arbeitet evtl. weiter. Vor einem erneuten Versuch \`orch list\` prüfen (sonst doppelter Start).`);
+    die(`OLAF Workspace (Web) unter ${base} nicht erreichbar (${e.message}).`);
+  }
   const j: any = await r.json().catch(() => ({}));
   if (!r.ok) {
     if (r.status === 409 && j.g0) process.stderr.write(`${JSON.stringify({ g0: j.g0 })}\n`);
@@ -138,10 +157,13 @@ async function main() {
       return;
     }
     case 'send': {
-      if (!pos[0]) die('send <id> --text …');
-      const text = typeof flags.text === 'string' ? flags.text : await stdin();
+      if (!pos[0]) die('send <id> TEXT (oder --text TEXT, oder Text auf stdin)');
+      let given: string | null = null;
+      try { given = sendText(pos, flags.text); } catch (e: any) { die(e.message); }
+      if (given === null && process.stdin.isTTY) die('send: Text fehlt — `orch send <id> TEXT`, --text TEXT oder Text auf stdin.');
+      const text = given ?? await stdin();
       const j = await call('send', { id: pos[0], text });
-      console.log(`gesendet: ${j.id}  ${j.url}`);
+      console.log(j.injected ? `nachgereicht (Strang arbeitet, der Agent sieht es beim nächsten Schritt): ${j.id}  ${j.url}` : `gesendet: ${j.id}  ${j.url}`);
       return;
     }
     case 'review': {
@@ -196,4 +218,5 @@ async function main() {
   }
 }
 
-main();
+// Nur als Programm ausführen — Tests importieren die reinen Helfer (callTimeoutMs, sendText).
+if (!process.argv[1] || realpathSync(process.argv[1]) === import.meta.filename) main();

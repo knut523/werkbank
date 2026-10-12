@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { MongoClient, ObjectId } from 'mongodb';
-import { strandEvent, weiterEvent, wakeText, decideWake, wakeCfg, urgentAnswer } from '../server/leitstand.ts';
+import { strandEvent, hangMs, weiterEvent, wakeText, decideWake, wakeCfg, urgentAnswer } from '../server/leitstand.ts';
 import { orchStatus, AUTO_RATE_MS } from '../server/orchestrator.ts';
 import { featuresFor, teamFeatures } from '../server/features.ts';
 
@@ -24,7 +24,7 @@ const T0 = 1_700_000_000_000;
 const run = { _id: 'abc12345', title: 'Flex', startedAt: T0, lastSentAt: T0, startError: null };
 const turn = (outcome: string | null, end: number | null = T0 + 60_000) => ({ running: false, interrupted: false, turn: { start: T0 + 1000, end, outcome } });
 const ai = (text: string) => ({ fromUser: false, text, error: false, at: T0 + 61_000 });
-const ev = (r: any, s: any, last: any) => strandEvent(r, orchStatus(r, s, last, T0 + 70_000), s, last);
+const ev = (r: any, s: any, last: any, now = T0 + 70_000) => strandEvent(r, orchStatus(r, s, last, now), s, last, now);
 
 test('Ereignisse eines Strangs (S2): fertig, braucht Antwort, blockiert, Deckel, review_ready; technische Zugenden nicht', () => {
   const done = ev(run, turn('ok'), ai('…\n### Stand\n- Erledigt: x\nStatus: fertig'))!;
@@ -36,6 +36,25 @@ test('Ereignisse eines Strangs (S2): fertig, braucht Antwort, blockiert, Deckel,
   assert.equal(ev(run, { running: true, interrupted: false, turn: null }, null), null);
   assert.equal(ev({ ...run, autoStopped: { at: new Date(T0 + 5), reason: '30× automatisch fortgesetzt' } }, turn('limit'), ai('x'))!.kind, 'deckel');
   assert.equal(ev({ ...run, reviewReadyAt: new Date(T0 + 7) }, turn('ok'), ai('x'))!.key, `review:abc12345:${T0 + 7}`);
+});
+
+test('Plan 154 (DoD 7): technisches Zugende, das nach 5 min nicht fortgesetzt ist → einmal „hängt“ mit Grund', () => {
+  const late = T0 + 60_000 + hangMs();
+  for (const o of ['limit', 'timeout', 'busy', 'rate_limit']) assert.equal(ev(run, turn(o), ai('x'), late - 1), null, `${o}: noch im Fenster des Auto-Fortsetzens`);
+  // Kontingent/Parallelgrenze: erst nach der gewollten Wartezeit des Auto-weiter.
+  assert.equal(ev(run, turn('rate_limit'), ai('x'), late + AUTO_RATE_MS - 1), null);
+  assert.equal(ev(run, turn('rate_limit'), ai('x'), late + AUTO_RATE_MS)!.kind, 'haengt');
+  assert.equal(ev(run, turn('busy'), ai('x'), late + 2 * 60_000 - 1), null);
+  // Grund nur, wenn er zu diesem Zug gehört.
+  assert.doesNotMatch(ev({ ...run, autoHold: { why: 'alt', turn: T0 - 5 } }, turn('timeout'), ai('x'), late)!.text, /alt/);
+  const h = ev({ ...run, autoHold: { why: 'Deckel erreicht', turn: T0 + 1000 } }, turn('timeout'), ai('x'), late)!;
+  assert.equal(h.kind, 'haengt'); assert.equal(h.key, `haengt:abc12345:${T0 + 1000}`, 'je Zug ein Schlüssel');
+  assert.match(h.text, /hängt seit 5 min: Zeitlimit.*nicht automatisch fortgesetzt: Deckel erreicht/);
+  // Neustart der Brücke: Zug ohne Ende — gemessen ab dem Zugbeginn.
+  const intr = { running: false, interrupted: true, turn: { start: T0 + 1000, end: null, outcome: null } };
+  assert.equal(ev(run, intr, null, T0 + 1000 + hangMs() - 1), null);
+  assert.equal(ev(run, intr, null, T0 + 1000 + hangMs())!.kind, 'haengt');
+  assert.equal(hangMs({ LEITSTAND_HANG_MS: '1000' } as any), 1000);
 });
 
 test('Zeitlimit-Text ohne feste Dauer (DoD 30)', () => {

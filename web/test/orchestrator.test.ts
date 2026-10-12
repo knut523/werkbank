@@ -25,7 +25,7 @@ test('Status: Reihenfolge Startfehler → läuft → Neustart → unterwegs → 
   assert.equal(orchStatus({ ...run, startError: 'LibreChat 429' }, null, null).status, 'failed');
   assert.equal(orchStatus(run, { running: true, interrupted: false, turn: null }, null).status, 'running');
   const intr = orchStatus(run, { running: false, interrupted: true, turn: { start: T0 + 1000, end: null, outcome: null } }, null);
-  assert.equal(intr.status, 'failed'); assert.match(intr.reason, /neu gestartet/);
+  assert.equal(intr.status, 'waiting', 'Plan 154 G10: kein Fehler, das Auto-weiter übernimmt'); assert.match(intr.reason, /neu gestartet.*automatisch fortgesetzt/);
   assert.equal(orchStatus(run, null, null, T0 + 60_000).status, 'running', 'kurz nach dem Start: unterwegs');
   assert.equal(orchStatus(run, null, null, T0 + 400_000).status, 'failed', 'nach 3 min ohne Spur: fehlgeschlagen');
   assert.equal(orchStatus(run, null, { fromUser: false, text: 'Fehler', error: true, at: T0 + 2000 }, T0 + 5000).status, 'failed', 'LibreChat-Fehler');
@@ -102,6 +102,19 @@ test('Auto-weiter (DoD 3/4): Deckel, geprüft, review_ready, Rückfrage, schon f
   assert.equal(decide('limit', {}, { now: T0 + 60_000 + AUTO_STALE_MS + 1 }).action, 'none');
   assert.equal(decide('limit', {}, { now: T0 + 60_000 + AUTO_STALE_MS - 1 }).action, 'send');
   assert.equal(autoMax(), 30);
+});
+
+test('Plan 154 (DoD 8): CLI — Positionstext für send, nicht zusammen mit --text; Zeitlimit start/nachtbau 15 min, sonst 60 s', async () => {
+  const { sendText, callTimeoutMs } = await import('../server/orch-cli.ts');
+  assert.equal(sendText(['abc', 'weiter'], undefined), 'weiter');
+  assert.equal(sendText(['abc', 'mach', 'bitte', 'weiter'], undefined), 'mach bitte weiter');
+  assert.equal(sendText(['abc'], 'per Flag'), 'per Flag');
+  assert.equal(sendText(['abc'], undefined), null, 'dann stdin');
+  assert.throws(() => sendText(['abc', 'x'], 'y'), /nicht beides/);
+  assert.equal(callTimeoutMs('start', {} as any), 15 * 60_000);
+  assert.equal(callTimeoutMs('nachtbau', {} as any), 15 * 60_000);
+  assert.equal(callTimeoutMs('send', {} as any), 60_000);
+  assert.equal(callTimeoutMs('send', { ORCH_CLI_TIMEOUT_S: '5' } as any), 5000);
 });
 
 // ---------- Ende-zu-Ende ----------
@@ -410,21 +423,16 @@ test('Auto-weiter DoD 3/6: nach ORCH_AUTO_WEITER_MAX → failed mit Grund + Eint
   assert.ok((await listJson()).find((x: any) => x.id === j.id).reviewed);
 });
 
-test('Auto-weiter DoD 4: offene Rückfrage zum Strang blockiert; review_ready am Strang gesetzt', async () => {
+test('Plan 154 (Regression 12.10. 16:40): offene Sammel-Rückfrage des Hauptchats zum Strang sperrt das Auto-weiter NICHT; review_ready am Strang gesetzt', async () => {
   const st = await orch(['start', '--title', 'Frage-Strang', '--cwd', WT5, '--json'], 'mock-antwort ok\\nStatus: braucht Antwort');
   const j = JSON.parse(st.out);
   await until(j.id, ['waiting']);
-  const q = JSON.parse((await orch(['ask', '--title', 'Strang wartet', '--context', 'x', '--recommend', 'y', '--strand', j.id, '--json'])).out);
-  assert.equal((await orch(['send', j.id, '--text', 'maxturns-test bitte'])).code, 0);
-  await until(j.id, ['waiting']);
-  await pause(2000);
-  let s = (await listJson()).find((x: any) => x.id === j.id);
-  assert.match(s.reason, /Schrittlimit/);
-  assert.equal(s.autoWeiter, 0, 'wartet auf Rückfrage → nicht fortgesetzt');
-  // Rückfrage weg → wird fortgesetzt (der Block lag an der Rückfrage).
-  assert.equal((await orch(['questions', 'withdraw', q.id])).code, 0);
-  s = await untilAuto(j.id, 1);
-  assert.equal(s.autoWeiter, 1);
+  // Wie am 12.10.: der Hauptchat legt eine Sammel-Rückfrage zum Strang an, der Strang arbeitet weiter und läuft an seine Grenze.
+  const q = JSON.parse((await orch(['ask', '--title', 'Rechner b (147): Plannummern, Event-Name', '--context', 'x', '--recommend', 'y', '--strand', j.id, '--json'])).out);
+  assert.equal((await orch(['send', j.id, 'maxturns-test', 'bitte'])).code, 0, 'Positionstext (G11)');
+  let s = await untilAuto(j.id, 1);
+  assert.equal(s.autoWeiter, 1, 'trotz offener Rückfrage fortgesetzt');
+  assert.equal((await orch(['questions', 'get', q.id, '--json'])).out.includes('"offen"'), true, 'die Rückfrage bleibt offen');
   // review_ready aus dem Strang (Werkbank-MCP über den internen Kanal) markiert den Strang.
   const rr = await internal('/internal/review-ready', { userId: String(knut._id), conv: j.conv, gemacht: 'x', nicht_gemacht: 'nichts', risiko: 'nichts', dod: [{ punkt: '1', stand: 'ja', beleg: 'Test' }] });
   assert.equal(rr.status, 200, await rr.clone().text());

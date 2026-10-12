@@ -85,7 +85,8 @@ export type AutoCause = 'limit' | 'timeout' | 'interrupted' | 'lost' | 'busy' | 
 export function orchStatus(run: { startError?: string | null; startedAt: Date | number; lastSentAt?: Date | number | null }, s: StrandState | null | undefined, last: LastMsg | null, now = Date.now()): { status: OrchStatus; reason: string; cause?: AutoCause } {
   if (run.startError) return { status: 'failed', reason: `Start fehlgeschlagen: ${run.startError}` };
   if (s?.running) return { status: 'running', reason: 'Zug läuft' };
-  if (s?.interrupted) return { status: 'failed', reason: 'Zug abgebrochen (Brücke neu gestartet) — mit `send <id> weiter` fortsetzen', cause: 'interrupted' };
+  // Kein Fehler: das automatische „weiter“ übernimmt; greift es nicht, meldet der Hauptchat „hängt“ (Plan 154, G10).
+  if (s?.interrupted) return { status: 'waiting', reason: 'Zug abgebrochen (Brücke neu gestartet) — wird automatisch fortgesetzt, sonst `send <id> weiter`', cause: 'interrupted' };
   const sent = new Date(run.lastSentAt ?? run.startedAt).getTime();
   if (!s?.turn || s.turn.start < sent - 5000) {
     if (last?.error && last.at >= sent - 5000) return { status: 'failed', reason: `LibreChat meldet einen Fehler: ${last.text.slice(0, 160)}` };
@@ -430,7 +431,9 @@ async function autoOne(u: User, d: any, s: any, deps: AutoDeps) {
   const last = await lastMessage(u, d.conv);
   const st = orchStatus(d, s, last);
   if (!st.cause) return;
-  const openQuestion = (await questions().countDocuments({ userId: u.id, 'strand.id': d._id, status: 'offen' })) > 0;
+  // Nur die Deckel-Frage hält an (Plan 154, G8). Sammel-Rückfragen des Hauptchats zum Strang nicht: ein technisches Zugende
+  // heißt „mitten in der Arbeit“, Stränge warten nie auf eine Rückfrage (am 12.10. standen so vier Stränge still).
+  const openQuestion = (await questions().countDocuments({ userId: u.id, 'strand.id': d._id, kind: 'auto-weiter', status: 'offen' })) > 0;
   const accountFree = st.cause === 'rate_limit' ? await deps.accountFree(u).catch(() => false) : false;
   const max = autoMax();
   const dec = autoWeiter(d, st, s, last, { now: Date.now(), openQuestion, accountFree, max });
@@ -451,10 +454,17 @@ async function autoOne(u: User, d: any, s: any, deps: AutoDeps) {
     deps.log?.('orch-auto-weiter deckel', { id: d._id, max });
     return;
   }
+  // Nicht fortgesetzt trotz technischem Zugende: Grund am Strang festhalten (einmal je Zug + Grund) — der Hauptchat liest
+  // ihn in der Meldung „hängt“ (Plan 154, S3). Vorher blieb so ein Halt ohne jede Spur.
+  if (dec.action === 'none' && (d.autoHold?.why !== dec.why || d.autoHold?.turn !== (s?.turn?.start ?? null))) {
+    await runs().updateOne({ _id: d._id }, { $set: { autoHold: { why: dec.why, cause: st.cause, at: new Date(), turn: s?.turn?.start ?? null } } });
+    deps.log?.('orch-auto-weiter halt', { id: d._id, cause: st.cause, why: dec.why });
+  }
   if (dec.action !== 'send') return;
   // Anspruch (atomar, überlebt den Neustart) — mit lastSentAt: kommt die Nachricht nie an, greift nach 3 min „lost“ (Bedingung 2).
   const n = (d.autoStreak ?? 0) + 1;
-  const r = await runs().updateOne({ _id: d._id, autoFor: d.autoFor ?? null, autoStopped: null },
+  // lastSentAt unverändert (Council 154, Bedingung 5): hat inzwischen der Hauptchat oder Knut geschrieben, kein zweites „weiter“.
+  const r = await runs().updateOne({ _id: d._id, autoFor: d.autoFor ?? null, autoStopped: null, lastSentAt: d.lastSentAt ?? null },
     { $set: { autoFor: dec.key, lastSentAt: new Date(), autoLastAt: new Date(), autoLastCause: st.cause }, $inc: { autoTotal: 1, autoStreak: 1, sends: 1 } });
   if (!r.modifiedCount) return;
   deps.log?.('orch-auto-weiter', { id: d._id, cause: st.cause, n });
