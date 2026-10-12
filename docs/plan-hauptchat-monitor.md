@@ -2,7 +2,7 @@
 title: "Plan — Workspace: schreiben während der Arbeit, Themen-Gruppen, Hauptchat überwacht die Unter-Chats"
 nummer: offen
 paket: 154-workspace-hauptchat-monitor
-status: in-arbeit
+status: gebaut-lokal
 branch: feat/hauptchat-monitor
 basis: fix/bridge-idle-timeout (678ab86 = Live release/werkbank-2026-10-12 + Leerlauf-Zeitlimit)
 created: 2026-10-12
@@ -136,12 +136,21 @@ Der Strang darf keine Rückfragen stellen. Darum ist jede Frage hier mit der Emp
 7. Technisches Zugende, das nach 5 min nicht fortgesetzt ist → genau eine Meldung `hängt` an den Hauptchat. (Test)
 8. `orch send <id> weiter` sendet „weiter“, `--text` + Positionstext → Fehler, `start` wartet bis 15 min. (Test)
 9. Brücken- und Web-Tests grün (bekannter Umgebungsfehler „Eigene Claude-Konfiguration je Person“ ausgenommen), Client baut.
+10. (Zusatz A/B) Push: Unter-Chat meldet Blocker/Risiko gedeckelt und eingezäunt; Pull: strang-leser + orch_show mit Verlauf;
+    Seitenleiste offen/fertig, „wartet auf dich“ hervorgehoben. (Tests, Browser)
+11. (Zusatz C) Review-Ansicht je Strang mit geprüften Vorschau-Links (nur Register), Entscheidungen mit Antwortfeld
+    (Nacharbeit, Bericht-Hash), Freigabe je Repo an Kopf + Patch (sauber, gesehen), Prüfweg + pre-push-Hook-Vorlage, kein
+    interner Anlegeweg, git gehärtet. (freigabe.test, gitsafe.test, leitstand.test, Browser)
 
 ## 5. Rückweg
 - Brücke: `BRIDGE_NACHREICHEN=off` (Neustart der Brücke) → String-Prompt wie vorher. Web/Client: Release-Zweig zurück auf
   `fix/bridge-idle-timeout` und `scripts/werkbank.sh update` (der Client-Stempel erkennt den alten Patch-Stand und baut neu).
 - Themen: rein additiv (`themen` in der Übersicht); ein alter Client ignoriert das Feld.
 - Auto-weiter: Rücknahme = Commit S3 zurücknehmen; `ORCH_AUTO_WEITER=off` schaltet ganz ab.
+- Push/Pull: `hauptchat_melden` verschwindet mit dem Brücken-Rückweg (WERKBANK_STRANG); Meldungen sind additive Ereignisse.
+- Review/Freigabe: rein additiv (Sammlung `freigaben`, Routen `/api/review/*`). Ein eingebauter pre-push-Hook muss beim
+  Rückweg ebenfalls aus dem Repo entfernt werden, sonst sperrt er ohne Prüfweg jeden Push.
+- Härtung git (`gitsafe.ts`) nicht zurücknehmen — sie schließt eine Lücke.
 
 ## 7. Council Runde 1 (12.10.2026) — HOLD 0,74
 
