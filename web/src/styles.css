@@ -410,7 +410,11 @@ td[data-label-inline]::before { content: none; }
 .now { margin-bottom: 18px; }
 .now h2 { margin-top: 0; }
 .pkg { margin: 6px 0; }
-.pkg > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.pkg > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; list-style: none; }
+.pkg > summary::-webkit-details-marker { display: none; }
+.pkg-arrow::before { content: '▸'; display: inline-block; width: 1em; color: var(--text-secondary); }
+.pkg[open] > summary .pkg-arrow::before { content: '▾'; }
+.now textarea { width: 100%; box-sizing: border-box; font: inherit; }
 .ans-form { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 .ans-form textarea { width: 100%; box-sizing: border-box; font: inherit; }
 .rating-w { white-space: nowrap; }
@@ -428,4 +432,7 @@ td[data-label-inline]::before { content: none; }
   .ans-form textarea, .ans-form input { font-size: 16px; }
   .ans-form .btn, .now .btn.primary { min-height: 44px; }
   .now .row .btn.primary { width: 100%; justify-content: center; }
+  .ans-form .row .btn { flex: 1; justify-content: center; }
+  .now table.stack-t td { flex: 1 1 100%; }
+  .now table.stack-t td:nth-child(-n+2) { flex: 0 0 auto; }
 }

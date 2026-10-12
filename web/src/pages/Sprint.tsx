@@ -202,7 +202,7 @@ function Question({ q, file, hash, cycle, me, onSaved }: { q: any; file: string;
           <label htmlFor={fid} className="tiny">{open.length ? 'Antwort' : 'Weitere Antwort'} zu {q.ticket ?? q.key}</label>
           <textarea id={fid} rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Stand, nächster Schritt — oder status:Done, → mitnehmen: …" onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && text.trim()) save(); }} />
           <div className="row">
-            <label className="tiny" htmlFor={`${fid}-n`}>als</label>
+            <label className="tiny" htmlFor={`${fid}-n`}>Antwort als</label>
             <input id={`${fid}-n`} value={name} onChange={(e) => setName(e.target.value)} style={{ width: 110 }} />
             <button className="btn small" disabled={!text.trim()} onClick={save}>Antworten</button>
           </div>
@@ -235,14 +235,14 @@ function SyncPlan({ cycle, onDone }: { cycle: string; onDone: () => void }) {
   return (
     <div className="card">
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <div><h3 style={{ margin: 0 }}>Write-back vorbereiten <span className="chip">Trockenlauf — noch nichts in Jira</span></h3><p className="small muted" style={{ margin: 0 }}>Liest die Antwortzeilen aus Review und Planning (<code>jira-sync-plan.sh --sprint</code>) und zeigt die geplanten Jira-Aktionen. Geschrieben wird erst nach deiner Freigabe im Dialog (wie bei <code>/sprint-sync</code>); danach werden die Zeilen mit ✓ markiert.</p></div>
+        <div><h2 style={{ margin: 0 }}>Write-back vorbereiten <span className="chip">Trockenlauf — noch nichts in Jira</span></h2><p className="small muted" style={{ margin: 0 }}>Liest die Antwortzeilen aus Review und Planning (<code>jira-sync-plan.sh --sprint</code>) und zeigt die geplanten Jira-Aktionen. Geschrieben wird erst nach deiner Freigabe im Dialog (wie bei <code>/sprint-sync</code>); danach werden die Zeilen mit ✓ markiert.</p></div>
         <button className={plan ? 'btn' : 'btn primary'} onClick={prepare} disabled={busy}>{busy ? 'Erstelle …' : plan ? '↻ Trockenlauf neu' : 'Trockenlauf erstellen'}</button>
       </div>
       <Err e={err} />
       {plan && plan.length === 0 && <p className="okbox small" style={{ marginTop: 8 }}>Keine offenen Notizen — nichts nach Jira zu schreiben.</p>}
       {plan && plan.length > 0 && (
         <>
-          <table className="t small" style={{ marginTop: 10 }}>
+          <table className="t small stack-t" style={{ marginTop: 10 }}>
             <thead><tr><th></th><th>Ticket</th><th>Notiz</th><th>Aktion(en)</th><th>Hinweis</th></tr></thead>
             <tbody>
               {plan.map((p) => (
@@ -346,7 +346,7 @@ function stepState(d: any) {
     { done: !!pk.length && withAnswer === pk.length, text: pk.length ? `${withAnswer} von ${pk.length} Paketen mit Antwort` : 'keine Pakete' },
     { done: !!rows.length && rated === rows.length, text: rows.length ? `${rated} von ${rows.length} bewertet` : (d?.previous?.goal ? 'Ziel-Satz bewerten' : 'keine S-Zeilen') },
     { done: !!review && anyNote && openNotes === 0, text: openNotes ? `${openNotes} offene Notiz${openNotes === 1 ? '' : 'en'}` : anyNote ? 'alles übertragen' : 'noch keine Notizen' },
-    { done: false, text: openNotes ? 'erst Write-back' : 'bereit' },
+    { done: false, text: openNotes ? 'erst Write-back' : (!!review && anyNote) ? 'bereit' : 'nach dem Write-back' },
   ];
 }
 
@@ -467,6 +467,7 @@ function StepPackages({ d, id, me, reload }: { d: any; id: string; me: string; r
               return (
                 <details key={p.line} className="pkg card soft" data-pkg={p.name}>
                   <summary>
+                    <span className="pkg-arrow" aria-hidden="true" />
                     <b>{p.name}</b>
                     <span className="row" style={{ gap: 4 }}>
                       <span className="chip tiny-chip">{p.tickets.length} Ticket{p.tickets.length === 1 ? '' : 's'}</span>
@@ -509,12 +510,13 @@ function StepRating({ d }: { d: any }) {
           })}</tbody>
         </table>
       )}
-      {review && <p className="small"><a href={noteHref(review.path)}>Review-Notiz öffnen</a></p>}
+      {review && <p className="small"><a href={noteHref(review.path)}>Review-Notiz öffnen</a> · <a href={`#/sprint/${d.cycle.id}/4`}>Weiter zu Schritt 4</a></p>}
     </div>
   );
 }
 
 function StepCarry({ d, id, onCandidates }: { d: any; id: string; onCandidates: () => void }) {
+  const toast = useToast();
   const [r, setR] = useState<any>(null);
   const [err, setErr] = useState<unknown>(null);
   const openNotes = (d.files.review?.openNotes ?? 0) + (d.files.planning?.openNotes ?? 0);
@@ -523,7 +525,7 @@ function StepCarry({ d, id, onCandidates }: { d: any; id: string; onCandidates: 
     <div className="card now" data-testid="step-5">
       <h2>Mitnahme → Planning</h2>
       <p className="small muted">Alles, was der Review berührt und nach dem Write-back noch offen ist — gerechnet aus der Jira-Kopie, wie <code>jira-sprint-carry.sh</code>. Nur lesend: in die Notiz schreibt den Abschnitt <code>/sprint-sync</code> im Chat. Ins Planning kommt es über die Kandidaten („in Sprint nehmen“).</p>
-      {openNotes > 0 && <p className="note small">Erst der Write-back: {openNotes} Notiz{openNotes === 1 ? '' : 'en'} noch nicht in Jira (Schritt 4). Sonst stünden Tickets in der Mitnahme, die gleich auf Done gehen.</p>}
+      {openNotes > 0 && <p className="note small">Erst der Write-back: {openNotes} Notiz{openNotes === 1 ? '' : 'en'} noch nicht in Jira. Sonst stünden Tickets in der Mitnahme, die gleich auf Done gehen. <a href={`#/sprint/${id}/4`}>Zu Schritt 4</a></p>}
       <div className="row">
         <button className="btn primary" disabled={openNotes > 0} onClick={async () => { setErr(null); try { setR(await api(`/api/sprint/${id}/carry`)); } catch (e) { setErr(e); } }}>Mitnahme berechnen</button>
         <button className="btn" onClick={onCandidates}>Zu den Kandidaten</button>
@@ -532,7 +534,7 @@ function StepCarry({ d, id, onCandidates }: { d: any; id: string; onCandidates: 
       {r && (
         <>
           <p className="small">{r.keys} Tickets im Review erwähnt, <b>{r.open} offen</b> ({r.groups.overdue.length} überfällig, {r.groups.dated.length} mit Datum, {r.groups.undated.length} ohne) · {r.carry} „→ mitnehmen“ · Stand der Jira-Kopie {r.jiraSync ? fmtDateTime(r.jiraSync.at) : 'unbekannt'}{r.missing.length ? ` · ${r.missing.length} nicht in der Kopie` : ''}</p>
-          <div className="row"><button className="btn" onClick={() => download(`${id}-mitnahme.md`, r.markdown)}>Als Markdown herunterladen</button><button className="btn" onClick={() => navigator.clipboard?.writeText(r.markdown)}>Kopieren</button></div>
+          <div className="row"><button className="btn" onClick={() => download(`${id}-mitnahme.md`, r.markdown)}>Als Markdown herunterladen</button><button className="btn" onClick={() => navigator.clipboard?.writeText(r.markdown).then(() => toast('Kopiert'), () => toast('Kopieren nicht möglich — bitte herunterladen'))}>Kopieren</button></div>
           <pre className="md-pre">{r.markdown}</pre>
         </>
       )}
