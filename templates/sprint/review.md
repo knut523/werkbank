@@ -13,38 +13,35 @@ related: ["[[sprint-{{DATUM}}-summary]]", "[[sprint-{{DATUM}}-planning]]", "[[{{
 
 # Sprint {{DATUM}} — Review
 
-Review des Zyklus vom {{VORZYKLUS_DATUM}}. Quellenlage: …
+Review des Zyklus vom {{VORZYKLUS_DATUM}}, gemessen an dessen Sprint-Ziel: je Arbeitspaket, wo es steht, was
+offen ist, wo es hängt.
+
+**Zur Quellenlage dieser Fassung.** {{QUELLENLAGE}}
 
 > [!tip] Diese Notiz ist ein Arbeitsdokument, kein Protokoll
-> Antworten direkt unter die Frage oder Ticketzeile schreiben: `  - Name: Text`. Ein Text wird zum
-> Jira-Kommentar, `status:Done` zur Statusänderung, `→ mitnehmen: …` zur Mitnahme (nie nach Jira).
+> Antworten direkt unter die Ticketzeile schreiben: `  - Name: Text` (in der aufklappbaren Liste mit `>   - Name: Text`).
+> Ein Text wird zum Jira-Kommentar, `status:Done` zur Statusänderung, `→ mitnehmen: …` zur Mitnahme (nie nach Jira).
+> Freier Text ohne Antwortzeile geht nicht nach Jira. Jedes Ticket steht genau einmal, in seinem Paket.
 
 ## Soll-Ist zum Sprint-Ziel vom {{VORZYKLUS_DATUM}}
 
-Bewertet werden die Ergebnisse S1–S4 aus dem Planning des Vorzyklus.
-
-| # | Ergebnis | Bewertung | Beleg | Warum / was ändern wir |
-|---|---|---|---|---|
-| S1 | … | 🟡 | … | … |
-| S2 | … | 🟡 | … | … |
-| S3 | … | 🟡 | … | … |
-| S4 | … | 🟡 | … | … |
+{{SOLL_IST}}
 
 ### Monatsziele — Halbzeitstand
 
+…
+
 ## Mitnahme aus dem letzten Sprint
+
+{{MITNAHME_ALT}}
 
 ## Die Updates
 
-### Product
-
-### Operations
-
-### Governance & Verträge
-
-### Marketing
+{{UPDATES}}
 
 ## Auffälligkeiten
+
+{{AUFFAELLIG}}
 
 ## Unklar geblieben
 

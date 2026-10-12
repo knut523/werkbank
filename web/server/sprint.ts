@@ -11,6 +11,8 @@ import { readdirSync, existsSync, readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseFrontmatter } from './vault.ts';
+import { browseUrl } from './config.ts';
+import type { Issue } from './jira.ts';
 
 export const hashText = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 16);
 
@@ -298,7 +300,7 @@ export function fillTemplate(tpl: string, vars: Record<string, string>): string 
 
 const de = (iso: string) => { const [y, m, d] = iso.split('-'); return `${d}.${m}.${y}`; };
 
-export function newCycleFiles(templateDir: string, date: string, previous?: string): { name: string; content: string }[] {
+export function newCycleFiles(templateDir: string, date: string, previous?: string, extra: Record<string, string> = {}): { name: string; content: string }[] {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Datum im Format JJJJ-MM-TT angeben.');
   const end = new Date(date + 'T12:00:00Z');
   end.setUTCDate(end.getUTCDate() + 14);
@@ -307,6 +309,7 @@ export function newCycleFiles(templateDir: string, date: string, previous?: stri
   const vars = {
     DATUM: date, DATUM_DE: de(date), ENDE: endIso, ENDE_DE: de(endIso), HEUTE: today,
     VORZYKLUS: previous ?? '', VORZYKLUS_DATUM: previous ? de(previous.replace('sprint-', '')) : '—',
+    ...reviewDefaults(previous), ...extra,
   };
   return ['summary', 'review', 'planning'].map((k) => ({
     name: `sprint-${date}-${k}.md`,
@@ -315,3 +318,221 @@ export function newCycleFiles(templateDir: string, date: string, previous?: stri
 }
 
 export const cycleIdOf = (file: string) => basename(file).replace(/-(summary|review|planning)\.md$/, '');
+
+// ---------- Arbeitspakete des Reviews (Domäne → #### Paket → Tickets) ----------
+
+export const DOMAINS = ['Product', 'Operations', 'Governance & Verträge', 'Marketing'] as const;
+
+export interface Pkg {
+  domain: string;             // ### unter „## Die Updates“
+  name: string;               // #### Paketname
+  line: number;
+  end: number;                // letzte Zeile des Pakets (vor der nächsten Überschrift ##–####)
+  tickets: string[];          // Anker-Tickets in Reihenfolge, je Ticket einmal (ZIEL:… zählt nicht)
+  freeText: string[];         // Text unter dem Paket ohne Antwortzeile (erreicht den Sync nicht)
+}
+
+/** Pakete aus „## Die Updates“: jedes #### unter einer ### Domäne, mit den Ticket-Ankern darunter. */
+export function parsePackages(text: string): Pkg[] {
+  const lines = text.split('\n');
+  const out: Pkg[] = [];
+  let inUpdates = false, domain = '', cur: Pkg | null = null, inFence = false, afterCallout = false;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^\s*(```|~~~)/.test(l)) { inFence = !inFence; continue; }
+    if (inFence) continue;
+    const h = l.match(/^(#{2,4}) (.+?)\s*$/);
+    if (h) {
+      const lvl = h[1].length;
+      if (cur) cur.end = i;
+      if (lvl === 2) { inUpdates = /^Die Updates/i.test(h[2]); cur = null; continue; }
+      if (!inUpdates) continue;
+      if (lvl === 3) { domain = h[2]; cur = null; continue; }
+      cur = { domain, name: h[2], line: i + 1, end: lines.length, tickets: [], freeText: [] };
+      afterCallout = false;
+      out.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    const a = stripCallout(l).match(/<!--k:([^>]+)-->/);
+    if (a) {
+      const before = stripCallout(l).slice(0, a.index);
+      const k = a[1].trim();
+      if ((before.match(/`/g)?.length ?? 0) % 2 === 0 && /^[A-Z][A-Z0-9]+-\d+$/.test(k) && !cur.tickets.includes(k)) cur.tickets.push(k);
+    }
+    if (/^>/.test(l)) { afterCallout = true; continue; }
+    // Freier Text nach dem Ticket-Callout: wurde in der Runde dazugeschrieben, hat aber keinen Anker.
+    if (afterCallout && l.trim() && !/^\s*- /.test(l)) cur.freeText.push(l.trim());
+  }
+  return out;
+}
+
+// ---------- Review-Entwurf (Schritt 1, docs/plan-sprint-werkbank.md) ----------
+// Gerüst, keine Prosa und keine Bewertung: S-Zeilen des Vorzyklus wörtlich, Pakete des Vorzyklus-Reviews mit
+// frischen Ticketzeilen aus der Jira-Kopie, ohne alte Antworten. Alles Automatische ist Board-Stand.
+
+const link = (k: string) => `[${k}](${browseUrl(k)})`;
+const ddmm = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.`;
+export const isDone = (i: Pick<Issue, 'status' | 'statusCategory'>) => i.statusCategory === 'done' || i.status === 'Done';
+const firstName = (n?: string | null) => (n ?? '').trim().split(/\s+/)[0] ?? '';
+const safe = (s: string) => s.replace(/<!--/g, '').replace(/\s+/g, ' ').trim();
+const cell = (s: string) => s.replace(/\|/g, '\\|');
+const SOLL_HEAD = '| # | Ergebnis | Bewertung | Beleg | Warum / was ändern wir |\n|---|---|---|---|---|';
+
+/** Platzhalter der Review-Vorlage, wenn es keine Daten gibt (neuer Zyklus ohne Entwurf). */
+export function reviewDefaults(previous?: string): Record<string, string> {
+  return {
+    QUELLENLAGE: '…',
+    SOLL_IST: `Bewertet werden die Ergebnisse S1–S4 aus dem Planning des Vorzyklus — wörtlich übernommen.\n\n${SOLL_HEAD}\n| S1 | … | … | … | … |`,
+    MITNAHME_ALT: previous ? `Die Mitnahme steht in [[${previous}-review]] (Abschnitt „Mitnahme in den nächsten Sprint“); ihre Tickets stehen unten in ihren Paketen.` : '…',
+    UPDATES: DOMAINS.map((d) => `### ${d}`).join('\n\n'),
+    AUFFAELLIG: '…',
+  };
+}
+
+function ticketLine(k: string, i: Issue | undefined, today: string, since: string): string | null {
+  if (!i) return `- ${link(k)} · nicht in der Jira-Kopie <!--k:${k}-->`;
+  const who = firstName(i.assignee) || '—';
+  let tail: string;
+  if (isDone(i)) {
+    const at = (i.statusSince ?? '').slice(0, 10);
+    if (!at || at < since) return null;                       // vor dem Zyklus erledigt → fällt raus
+    tail = `Board: Done seit ${ddmm(at)}`;
+  } else if (i.duedate && i.duedate < today) {
+    tail = `**${Math.round((Date.parse(today) - Date.parse(i.duedate)) / 864e5)} Tage über**`;
+  } else tail = i.duedate ? `fällig ${ddmm(i.duedate)}` : 'kein Datum';
+  return `- ${link(k)} ${safe(i.summary)} · **${who}** · \`${i.status}\` · ${tail} <!--k:${k}-->`;
+}
+
+export interface DraftInput {
+  date: string;                        // neuer Zyklus JJJJ-MM-TT
+  prevId?: string;                     // sprint-JJJJ-MM-TT
+  prevReview?: string;                 // Text der Vorzyklus-Review (Paketquelle)
+  prevPlanning?: string;               // Text des Vorzyklus-Plannings (S-Zeilen, Ziel)
+  issues: Map<string, Issue>;
+  today: string;
+  syncedAt?: string | null;            // Stand der Jira-Kopie
+}
+
+export interface DraftStats { packages: number; tickets: number; orphans: number; outcomes: number; fallback: boolean }
+
+export function reviewDraftVars(inp: DraftInput): { vars: Record<string, string>; stats: DraftStats } {
+  const prevDate = inp.prevId?.replace('sprint-', '') ?? '';
+  const since = prevDate || inp.date;
+  const prevDe = prevDate ? ddmm(prevDate) : '—';
+  // Soll-Ist: S-Zeilen wörtlich, sonst der Ziel-Satz (Vorzyklus ohne S1–S4, z. B. 28.09.).
+  const outs = inp.prevPlanning ? parseOutcomes(inp.prevPlanning) : [];
+  let soll: string;
+  if (outs.length) {
+    soll = `Bewertet werden die Ergebnisse aus dem Planning vom ${prevDe} — wörtlich übernommen. Bewertung, Beleg und Warum setzt die Runde (kein ✅ ohne Beleg; Board-Stand belegt nicht „fachlich fertig“).\n\n${SOLL_HEAD}\n`
+      + outs.map((o) => `| ${o.id} | ${cell(o.title)} | … | … | … |`).join('\n');
+  } else {
+    const goal = inp.prevPlanning ? parseGoal(inp.prevPlanning).goal : undefined;
+    soll = goal
+      ? `Das Planning vom ${prevDe} hat keine Ergebniszeilen S1–S4. Bewertet wird der Ziel-Satz; S-Zeilen beginnen mit diesem Planning (nicht rückwirkend erfunden).\n\n${SOLL_HEAD}\n| Ziel | ${cell(goal)} | … | … | … |`
+      : 'Kein Planning mit Sprint-Ziel oder S-Zeilen im Vorzyklus gefunden — nichts zu bewerten. S-Zeilen beginnen mit diesem Planning.';
+  }
+  // Pakete des Vorzyklus, nur die Ankerzeilen neu aufgebaut.
+  const pkgs = inp.prevReview ? parsePackages(inp.prevReview) : [];
+  const inPkg = new Set<string>();
+  const byDomain = new Map<string, string[]>(DOMAINS.map((d) => [d, []]));
+  let nTickets = 0;
+  for (const p of pkgs) {
+    const rows: string[] = [];
+    const owners = new Set<string>();
+    let open = 0, over = 0, done = 0;
+    for (const k of p.tickets) {
+      if (inPkg.has(k)) continue;                              // genau einmal in „Die Updates“
+      inPkg.add(k);
+      const i = inp.issues.get(k);
+      const line = ticketLine(k, i, inp.today, since);
+      if (!line) continue;
+      rows.push(`> ${line}`);
+      nTickets++;
+      if (i && isDone(i)) { done++; continue; }
+      open++;
+      if (i?.duedate && i.duedate < inp.today) over++;
+      // Je Owner eine leere Antwortzeile unter seinem ersten offenen Ticket (Vorname: splitSpeaker nimmt ≤ 2 Wörter).
+      const who = firstName(i?.assignee);
+      if (who && !owners.has(who)) { owners.add(who); rows.push(`>   - ${who}:`); }
+    }
+    let body: string;
+    if (!p.tickets.length) body = '… (Stand, offen, nächster Schritt — zwei, drei Sätze)\n\nKein Ticket.';
+    else if (!rows.length) body = '…\n\nBoard: keine offenen und keine im Zyklus erledigten Tickets mehr — Paket abschließen oder neu schneiden?';
+    else {
+      const n = rows.filter((r) => r.includes('<!--k:')).length;
+      const meta = [`${n} Ticket${n === 1 ? '' : 's'}`, owners.size ? [...owners].join(', ') : (open ? 'ohne Owner' : ''), over ? `${over} überfällig` : ''].filter(Boolean).join(' · ');
+      body = `… (Stand, offen, nächster Schritt — zwei, drei Sätze)${!open && done ? '\n\nBoard: alle Tickets Done — stimmt das fachlich?' : ''}\n\n> [!note]- ${meta} — hier kommentieren\n${rows.join('\n')}`;
+    }
+    if (!byDomain.has(p.domain)) byDomain.set(p.domain, []);
+    byDomain.get(p.domain)!.push(`#### ${p.name}\n\n${body}`);
+  }
+  const updates = [...byDomain].map(([d, b]) => [`### ${d}`, ...b].join('\n\n')).join('\n\n');
+  // Auffälligkeiten: im Zyklus angelegt oder Status gewechselt, in keinem Paket (created/statusSince, nicht updated).
+  const day = (s?: string | null) => (s ?? '').slice(0, 10);
+  const orphans = [...inp.issues.values()].filter((i) => i.type !== 'Workstream' && !inPkg.has(i.key)
+    && (day(i.created) >= since || day(i.statusSince) >= since)
+    && (!isDone(i) || day(i.statusSince) >= since))
+    .sort((a, b) => Number(a.key.split('-')[1]) - Number(b.key.split('-')[1]));
+  const auff = orphans.length
+    ? `- **Keinem Paket zugeordnet** — im Zyklus angelegt oder Status gewechselt (${orphans.length}, Board-Stand). In der Runde einsortieren oder als neues Paket aufnehmen:\n`
+      + orphans.map((i) => `  - ${link(i.key)} ${safe(i.summary)} · ${firstName(i.assignee) || '—'} · \`${i.status}\``).join('\n')
+    : '- Keine Tickets außerhalb der Pakete (im Zyklus angelegt oder bewegt).';
+  const quellen = `Entwurf aus der Werkbank vom ${ddmm(inp.today)}: Pakete aus ${inp.prevId ? `[[${inp.prevId}-review]]` : '— (kein Vorzyklus)'}, Ticketzeilen aus der Jira-Kopie${inp.syncedAt ? ` (Stand ${inp.syncedAt.slice(0, 16).replace('T', ' ')})` : ''}. **Das ist Board-Stand, nicht Arbeitsstand**, und noch nicht in der Runde korrigiert: wo das Board „offen“ oder „Done“ sagt, ist das eine Frage an die Runde, kein Befund. Prosa und Bewertung fehlen bewusst (\`…\`). Quellen für die Prosa: [[pr-stand-produkt-olaf]], [[0-roadmap-produkt-olaf]], die Daily Debriefs unter \`olaf/1-Projects/daily-debrief/\`.`;
+  return {
+    vars: { QUELLENLAGE: quellen, SOLL_IST: soll, UPDATES: updates, AUFFAELLIG: auff },
+    stats: { packages: pkgs.length, tickets: nTickets, orphans: orphans.length, outcomes: outs.length, fallback: !outs.length },
+  };
+}
+
+// ---------- Mitnahme (Schritt 5) — Gleichlauf mit jira-sprint-carry.sh, aber aus der Jira-Kopie, nur lesend ----------
+
+export function carryList(review: string, reviewName: string, issues: Map<string, Issue>, today: string, project = 'PM') {
+  // Den eigenen Mitnahme-Abschnitt abschneiden (bis zur nächsten ##-Überschrift, die nicht mit M beginnt) — wie das Skript.
+  const scope: string[] = [];
+  let cut = false;
+  for (const l of review.split('\n')) {
+    if (/^## Mitnahme in den nächsten Sprint/.test(l)) { cut = true; continue; }
+    if (cut && /^## [^M]/.test(l)) cut = false;
+    if (!cut) scope.push(l);
+  }
+  const re = new RegExp(`\\b${project}-\\d+\\b`, 'g');
+  const keys = [...new Set(scope.join('\n').match(re) ?? [])].sort((a, b) => Number(a.split('-')[1]) - Number(b.split('-')[1]));
+  const missing = keys.filter((k) => !issues.has(k));
+  const open = keys.map((k) => issues.get(k)).filter((i): i is Issue => !!i && !isDone(i) && i.type !== 'Workstream');
+  const groups = {
+    overdue: open.filter((i) => i.duedate && i.duedate < today),
+    dated: open.filter((i) => i.duedate && i.duedate >= today),
+    undated: open.filter((i) => !i.duedate),
+  };
+  type G = keyof typeof groups;
+  const row = (i: Issue, g: G) => {
+    const base = `- ${link(i.key)} **${safe(i.summary)}** · ${i.assignee ?? '—'} · \`${i.status}\``;
+    if (g === 'overdue') return `${base} · **${Math.round((Date.parse(today) - Date.parse(i.duedate!)) / 864e5)} Tage über** (${i.duedate})`;
+    return g === 'dated' ? `${base} · fällig ${i.duedate}` : `${base} · **kein Datum**`;
+  };
+  // Gestempelte Mitnahme-Zeilen („✓ … → Planning:“) bleiben drin — der Abschnitt wird jedes Mal ganz neu erzeugt.
+  const carry = syncPlanRows(parseQuestions(review.replace(/- ✓ [0-9-]+ → Planning: /g, '- '))).filter((r) => r.kind === 'carry');
+  const boardOpen = [...issues.values()].filter((i) => !isDone(i)).length;
+  const out: string[] = ['## Mitnahme in den nächsten Sprint', '',
+    `_Erzeugt ${today} aus ${reviewName} — alles, was der Review berührt und was nach dem Write-back`,
+    `noch offen ist. ${keys.length} Tickets im Review erwähnt, ${open.length} davon offen._`];
+  const titles: [G, string][] = [['overdue', 'Überfällig'], ['dated', 'Offen mit Datum'], ['undated', 'Offen ohne Fälligkeitsdatum']];
+  for (const [g, t] of titles) if (groups[g].length) out.push('', `### ${t} (${groups[g].length})`, '', ...groups[g].map((i) => row(i, g)));
+  if (carry.length) out.push('', '### Entscheidungen und neue Ziele (aus dem Review getaggt)', '',
+    ...carry.map((c) => `- ${c.payload} — ${link(c.key.replace(/^ZIEL:/, ''))}${c.speaker !== '-' ? ` (${c.speaker})` : ''}`));
+  if (missing.length) out.push('', `_Nicht in der Jira-Kopie (${missing.length}): ${missing.join(', ')} — erst abgleichen._`);
+  if (boardOpen > 0) out.push('', `_Board: ${boardOpen} Tickets offen, davon ${open.length} in dieser Liste — ${boardOpen - open.length} offene Tickets kommen im Review nicht vor._`);
+  return {
+    markdown: out.join('\n') + '\n', keys: keys.length, open: open.length, carry: carry.length, missing,
+    groups: Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, v.map((i) => i.key)])) as Record<G, string[]>,
+  };
+}
+
+// ---------- Aktueller Zyklus ----------
+
+/** Neuester nicht archivierter Zyklus mit Startdatum ≤ heute (ein vorab angelegter Ordner zählt noch nicht). */
+export function currentCycle<T extends Pick<Cycle, 'date' | 'archived'>>(cs: T[], today = new Date().toISOString().slice(0, 10)): T | undefined {
+  const live = cs.filter((c) => !c.archived);
+  return live.find((c) => c.date <= today) ?? live[live.length - 1];
+}

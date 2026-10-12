@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { parseFrontmatter, extractWikilinks, buildIndex, renderNote, roadmap, teams, tree } from '../server/vault.ts';
-import { parseQuestions, syncPlanRows, applyAnswer, hashText, parseGoal, parseOutcomes, splitSpeaker, newCycleFiles, listCycles } from '../server/sprint.ts';
+import { parseQuestions, syncPlanRows, applyAnswer, hashText, parseGoal, parseOutcomes, splitSpeaker, newCycleFiles, listCycles, parsePackages, reviewDraftVars, carryList, currentCycle } from '../server/sprint.ts';
 import { parseDue, proposalsFor, parseTsv } from '../server/syncplan.ts';
 
 const FIX = new URL('./fixtures/vault', import.meta.url).pathname;
@@ -216,4 +216,104 @@ test('Fixture bleibt unverändert (Parser schreiben nie)', () => {
   writeFileSync(join(tmp, 'x.md'), REVIEW);
   parseQuestions(readFileSync(join(tmp, 'x.md'), 'utf8'));
   assert.equal(readFileSync(join(tmp, 'x.md'), 'utf8'), REVIEW);
+});
+
+// ---------- Paket 143: Review-Entwurf, Mitnahme, aktueller Zyklus (docs/plan-sprint-werkbank.md, DoD D1–D3, D7, D10) ----------
+
+const iss = (key: string, o: Partial<Record<string, any>> = {}) => ({
+  key, summary: `Titel ${key}`, status: 'To Do', statusCategory: 'new', type: 'Task', assignee: 'Knut Peters', parent: null,
+  duedate: null, priority: null, updated: '2026-10-01', created: '2026-09-01', description: '', comments: 0, statusSince: '2026-09-01', ...o,
+}) as any;
+const TPL = new URL('../../templates/sprint', import.meta.url).pathname;
+
+test('Pakete der Review-Notiz: Domäne → Paket → Anker, freier Text ohne Antwortzeile', () => {
+  const p = parsePackages(REVIEW);
+  assert.deepEqual(p.map((x) => [x.domain, x.name, x.tickets]), [['Product', 'Hardware-Flow', ['PM-321', 'PM-322']]]);
+  assert.ok(p[0].end > p[0].line);
+  const t = parsePackages('## Die Updates\n\n### Marketing\n\n#### Preisblatt\n\n> - [PM-1](x) A <!--k:PM-1-->\n\nOCR ist done, Robert noch\n\n## Auffälligkeiten\n- PM-9 <!--k:PM-9-->');
+  assert.deepEqual(t[0].freeText, ['OCR ist done, Robert noch']);
+  assert.deepEqual(t[0].tickets, ['PM-1'], 'Anker außerhalb von „Die Updates“ zählen nicht');
+});
+
+test('Review-Entwurf: S-Zeilen wörtlich ohne Bewertung, nur Ankerzeilen, Antwortfeld je Owner, kein Sync-Eintrag (D1–D3)', () => {
+  const issues = new Map([
+    ['PM-321', iss('PM-321', { duedate: '2026-10-01' })],
+    ['PM-322', iss('PM-322', { status: 'Done', statusCategory: 'done', statusSince: '2026-10-03' })],
+    ['PM-500', iss('PM-500', { created: '2026-10-02', assignee: 'Daniela Martinez Alfaro' })],
+    ['PM-501', iss('PM-501', { status: 'Done', statusCategory: 'done', statusSince: '2026-09-02' })],
+    ['PM-70', iss('PM-70', { type: 'Workstream', created: '2026-10-01' })],
+  ]);
+  const { vars, stats } = reviewDraftVars({ date: '2026-10-12', prevId: 'sprint-2026-09-28', prevReview: REVIEW, prevPlanning: PLANNING, issues, today: '2026-10-12' });
+  const draft = newCycleFiles(TPL, '2026-10-12', 'sprint-2026-09-28', vars)[1].content;
+  assert.doesNotMatch(draft, /\{\{/);
+  // D1: S-Zeilen wörtlich, keine Bewertung
+  const o = parseOutcomes(draft);
+  assert.deepEqual(o.map((x) => [x.id, x.title, x.rating]), parseOutcomes(PLANNING).map((x) => [x.id, x.title, undefined]));
+  assert.equal(stats.fallback, false);
+  // D2: Paket übernommen, keine alten Antworten/Mitnahmen/✓, Done im Zyklus als Board-Stand, Waise in Auffälligkeiten
+  assert.deepEqual(parsePackages(draft).map((p) => [p.name, p.tickets]), [['Hardware-Flow', ['PM-321', 'PM-322']]]);
+  assert.doesNotMatch(draft, /ist durch|bereit für Prod|✓ 2026/);
+  assert.match(draft, /PM-321\) Titel PM-321 · \*\*Knut\*\* · `To Do` · \*\*11 Tage über\*\* <!--k:PM-321-->\n>   - Knut:\n/);
+  assert.match(draft, /PM-322\) Titel PM-322 · \*\*Knut\*\* · `Done` · Board: Done seit 03\.10\. <!--k:PM-322-->/);
+  assert.match(draft, /> \[!note\]- 2 Tickets · Knut · 1 überfällig — hier kommentieren/);
+  const auff = draft.slice(draft.indexOf('## Auffälligkeiten'), draft.indexOf('## Unklar geblieben'));
+  assert.match(auff, /Keinem Paket zugeordnet.*\(1, Board-Stand\)/);
+  assert.match(auff, /PM-500\) Titel PM-500 · Daniela/);
+  assert.doesNotMatch(auff, /PM-501|PM-70\b/, 'vorher erledigt und Workstreams nicht');
+  assert.match(draft, /Board-Stand, nicht Arbeitsstand/);
+  // D3: nichts geht ungewollt nach Jira, das Antwortfeld wird als solches erkannt
+  assert.equal(syncPlanRows(parseQuestions(draft)).length, 0);
+  const q = parseQuestions(draft).find((x) => x.key === 'PM-321')!;
+  assert.deepEqual(q.answers.map((a) => [a.speaker, a.kind]), [['Knut', 'empty']]);
+  const filled = applyAnswer(draft, q.line, 'Knut', 'läuft');
+  assert.deepEqual(syncPlanRows(parseQuestions(filled.text)).map((r) => [r.key, r.speaker, r.payload]), [['PM-321', 'Knut', 'läuft']]);
+});
+
+test('Review-Entwurf ohne S-Zeilen im Vorzyklus: eine Zeile „Ziel“ mit dem Ziel-Satz (D1, echte Notiz 28.09. falls vorhanden)', () => {
+  const noS = PLANNING.replace(/## Ergebnisse[\s\S]*?(?=## 7)/, '');
+  const { vars, stats } = reviewDraftVars({ date: '2026-10-12', prevId: 'sprint-2026-09-28', prevPlanning: noS, issues: new Map(), today: '2026-10-12' });
+  assert.equal(stats.fallback, true);
+  assert.match(vars.SOLL_IST, /keine Ergebniszeilen S1–S4/);
+  assert.match(vars.SOLL_IST, /\| Ziel \| Die Sicherheitsfixes laufen auf Prod und sind nachgeprüft, und das Vertragspaket ist unterschrieben\. \| … \|/);
+  assert.match(reviewDraftVars({ date: '2026-10-12', issues: new Map(), today: '2026-10-12' }).vars.SOLL_IST, /nichts zu bewerten/);
+  const real = '/vault/olaf/1-Projects/sprint-2026-09-28';
+  if (existsSync(real)) {
+    const r = reviewDraftVars({ date: '2026-10-12', prevId: 'sprint-2026-09-28', prevReview: readFileSync(`${real}/sprint-2026-09-28-review.md`, 'utf8'), prevPlanning: readFileSync(`${real}/sprint-2026-09-28-planning.md`, 'utf8'), issues: new Map(), today: '2026-10-12' });
+    assert.equal(r.stats.fallback, true);
+    assert.ok(r.stats.packages >= 20);
+    const d = newCycleFiles(TPL, '2026-10-12', 'sprint-2026-09-28', r.vars)[1].content;
+    assert.equal(syncPlanRows(parseQuestions(d)).length, 0, 'echter Entwurf erzeugt keinen Jira-Eintrag');
+    const upd = d.slice(d.indexOf('## Die Updates'), d.indexOf('## Auffälligkeiten'));
+    const keys = [...upd.matchAll(/<!--k:([^>]+)-->/g)].map((m) => m[1]);
+    assert.equal(keys.length, new Set(keys).size, 'jedes Ticket genau einmal in „Die Updates“');
+  }
+});
+
+test('Mitnahme aus der Kopie: Gleichlauf mit jira-sprint-carry.sh (D10)', () => {
+  const text = REVIEW.replace('## Pointers', '## Mitnahme in den nächsten Sprint\n\n- [PM-777](x) alt\n\n## Pointers')
+    .replace('Fertig und getestet.', 'Fertig und getestet, siehe [PM-400](x).')
+    .replace('  - → mitnehmen: Status', '  - ✓ 2026-09-29 → Planning: → mitnehmen: Status');
+  const issues = new Map([
+    ['PM-321', iss('PM-321', { duedate: '2026-10-01' })],
+    ['PM-322', iss('PM-322', { status: 'Done', statusCategory: 'done' })],
+    ['PM-400', iss('PM-400', { duedate: '2026-10-20' })],
+    ['PM-777', iss('PM-777')],
+    ['PM-900', iss('PM-900')],
+  ]);
+  const r = carryList(text, 'sprint-2026-09-28-review.md', issues, '2026-10-12');
+  assert.deepEqual(r.groups, { overdue: ['PM-321'], dated: ['PM-400'], undated: [] }, 'Prosa-Link zählt, Done nicht, eigener Abschnitt nicht');
+  assert.deepEqual(r.missing, ['PM-1', 'PM-331'], 'nicht in der Kopie wird genannt, nicht verschluckt (wie das Skript: jeder PM-Key im Text)');
+  assert.equal(r.carry, 1, 'gestempelte Mitnahme-Zeile bleibt');
+  assert.match(r.markdown, /^## Mitnahme in den nächsten Sprint\n/);
+  assert.match(r.markdown, /### Überfällig \(1\)\n\n- \[PM-321\]\(.*\) \*\*Titel PM-321\*\* · Knut Peters · `To Do` · \*\*11 Tage über\*\* \(2026-10-01\)/);
+  assert.match(r.markdown, /Status „bereit für Prod“ entscheiden — \[PM-322\]/);
+  assert.match(r.markdown, /Board: 4 Tickets offen, davon 2 in dieser Liste/);
+});
+
+test('Aktueller Zyklus: neuester mit Datum ≤ heute, ein vorab angelegter Ordner zählt noch nicht (D7)', () => {
+  const cs = [{ id: 'c', date: '2026-10-26', archived: false }, { id: 'b', date: '2026-10-12', archived: false }, { id: 'a', date: '2026-09-28', archived: true }];
+  assert.equal(currentCycle(cs, '2026-10-24')!.id, 'b');
+  assert.equal(currentCycle(cs, '2026-10-26')!.id, 'c');
+  assert.equal(currentCycle([{ id: 'z', date: '2099-01-01', archived: false }], '2026-10-12')!.id, 'z', 'nur zukünftige → der nächste');
+  assert.equal(currentCycle([], '2026-10-12'), undefined);
 });

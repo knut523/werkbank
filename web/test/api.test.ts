@@ -497,6 +497,42 @@ test('Ziele & Sprint: Zielbaum aus ziele-olaf.md, S1–S4 → S0928-n, in Sprint
   assert.equal(jira.writes.length, n0);
 });
 
+test('Sprint Schritt 1 + 5: Review-Entwurf nur nach Bestätigung, nur fehlende Dateien; Mitnahme nur lesend (Paket 143)', async () => {
+  const dir = join(VAULT, 'olaf/1-Projects/sprint-2026-10-05');
+  const n0 = jira.writes.length;
+  const pre = await anna.req('/api/sprint/draft', { body: { date: '2026-10-05' } });
+  assert.equal(pre.status, 200, JSON.stringify(pre.j));
+  assert.equal(pre.j.needsConfirm, true);
+  assert.equal(pre.j.preview.previous, 'sprint-2026-09-28');
+  assert.deepEqual(pre.j.preview.files.map((f: any) => f.exists), [false, false, false]);
+  const review = pre.j.preview.files.find((f: any) => f.name.endsWith('-review.md')).content;
+  assert.match(review, /\| S1 \| Sicherheitsfixes auf Prod \| … \| … \| … \|/);
+  assert.match(review, /#### Hardware-Flow/);
+  assert.doesNotMatch(review, /ist durch/, 'keine alten Antworten');
+  assert.ok(!existsSync(dir), 'Vorschau schreibt nicht');
+  const ok = await anna.req('/api/sprint/draft', { body: { date: '2026-10-05', confirm: true } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.j));
+  assert.equal(ok.j.written.length, 3);
+  // Vorhandene Dateien werden nie überschrieben; fehlende werden ergänzt.
+  const rf = join(dir, 'sprint-2026-10-05-review.md');
+  writeFileSync(rf, 'von Hand');
+  assert.equal((await anna.req('/api/sprint/draft', { body: { date: '2026-10-05', confirm: true } })).status, 409);
+  rmSync(join(dir, 'sprint-2026-10-05-planning.md'));
+  const fill = await anna.req('/api/sprint/draft', { body: { date: '2026-10-05', confirm: true } });
+  assert.deepEqual(fill.j.written, ['sprint-2026-10-05-planning.md']);
+  assert.equal(readFileSync(rf, 'utf8'), 'von Hand');
+  // Schritt 5: Mitnahme aus der Kopie, kein Jira-Schreibaufruf.
+  const c = await anna.req('/api/sprint/sprint-2026-09-28/carry');
+  assert.equal(c.status, 200, JSON.stringify(c.j));
+  assert.match(c.j.markdown, /^## Mitnahme in den nächsten Sprint/);
+  assert.equal(c.j.carry, 1);
+  assert.equal(typeof c.j.openNotes, 'number');
+  const v = await anna.req('/api/sprint/sprint-2026-09-28');
+  assert.deepEqual(v.j.files.review.packages.map((p: any) => [p.domain, p.name, p.tickets.map((t: any) => t.key)]), [['Product', 'Hardware-Flow', ['PM-321', 'PM-322']]]);
+  assert.equal(jira.writes.length, n0, 'nichts nach Jira');
+  rmSync(dir, { recursive: true });
+});
+
 test('Sprint: neuen Zyklus anlegen nur nach Bestätigung', async () => {
   const pre = await anna.req('/api/sprint/new', { body: { date: '2026-10-12' } });
   assert.equal(pre.j.needsConfirm, true);

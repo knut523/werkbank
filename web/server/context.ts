@@ -8,7 +8,7 @@ import { readFileSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseFrontmatter, getIndex, extractWikilinks, resolveLink, type VaultIndex } from './vault.ts';
-import { parseGoal, parseOutcomes, listCycles } from './sprint.ts';
+import { parseGoal, parseOutcomes, listCycles, currentCycle } from './sprint.ts';
 import { isMine, resolveIdentity, vienna, REVIEW_GROUPS, type HygieneItem, type Identity, type ReviewItem } from './hygiene.ts';
 import { isOverdue, type Issue } from './jira.ts';
 
@@ -64,7 +64,7 @@ export function questionsLine(text: string): string {
 }
 
 export function sprintLines(projectsDir: string, who: Identity): string[] {
-  const c = listCycles(projectsDir).find((x) => !x.archived);
+  const c = currentCycle(listCycles(projectsDir));
   if (!c) return [];
   const planning = c.files.planning ? read(c.files.planning) : '';
   const goal = parseGoal(planning).goal ?? (c.files.summary ? parseGoal(read(c.files.summary)).goal : undefined);
@@ -175,7 +175,7 @@ export function buildPack(inp: PackInput): string {
   const now = inp.now ?? new Date();
   const today = vienna(now).date;
   const src = sourcesOf(inp.vaultDir, today);
-  const cycle = listCycles(inp.projectsDir).find((x) => !x.archived);
+  const cycle = currentCycle(listCycles(inp.projectsDir), today);
   let map = '';
   try {
     const idx = getIndex(inp.vaultDir);
@@ -207,7 +207,7 @@ export function inputsHash(inp: PackInput): string {
   const today = vienna(inp.now ?? new Date()).date;
   const h = createHash('sha256').update(`${inp.who.accountId ?? ''}|${inp.who.name ?? ''}|${today}`);
   for (const i of [...inp.issues].sort((a, b) => a.key.localeCompare(b.key))) h.update(`|${i.key}:${i.updated}:${i.status}:${i.duedate ?? ''}:${i.assigneeId ?? i.assignee ?? ''}:${(i.labels ?? []).join(',')}`);
-  const cycle = listCycles(inp.projectsDir).find((x) => !x.archived);
+  const cycle = currentCycle(listCycles(inp.projectsDir), today);
   for (const f of [...Object.values(sourcesOf(inp.vaultDir, today)), cycle?.files.planning, cycle?.files.summary]) {
     if (!f) continue;
     try { const s = statSync(f); h.update(`${f}:${s.mtimeMs}:${s.size}`); } catch { h.update(`${f}:-`); }

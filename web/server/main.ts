@@ -6,7 +6,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch } from 'node:fs';
-import { join, extname, resolve, normalize } from 'node:path';
+import { join, extname, resolve, normalize, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import YAML from 'yaml';
 import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl } from './config.ts';
@@ -33,7 +33,7 @@ import { memoryWarning } from './memory.ts';
 import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
 import { keep as keepScratch, runScratch } from './scratch.ts';
 import { backupRunning, listBackups, nightly, writeBackup, keyOf } from './backup.ts';
-import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles } from './sprint.ts';
+import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles, parsePackages, reviewDraftVars, carryList, currentCycle, isDone, syncPlanRows } from './sprint.ts';
 import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
 import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog, logShare, scratchDir } from './sharing.ts';
@@ -180,6 +180,36 @@ function cycleById(id: string) {
   return c;
 }
 
+/** Vorzyklus = neuester Zyklus mit früherem Startdatum (auch archiviert). */
+function previousCycle(date: string) {
+  return cycles().filter((x) => x.date < date).sort((a, b) => b.date.localeCompare(a.date))[0];
+}
+
+/** Arbeitspakete der Review-Notiz mit Ticketstand aus der Kopie (Schritt 2: Updates je Paket). */
+function packagesOf(text: string, im: Map<string, Issue>) {
+  const today = new Date().toISOString().slice(0, 10);
+  return parsePackages(text).map((p) => ({
+    ...p,
+    tickets: p.tickets.map((k) => {
+      const i = im.get(k);
+      return i ? { key: k, summary: i.summary, status: i.status, done: isDone(i), owner: (i.assignee ?? '').split(' ')[0] || null, overdue: !isDone(i) && !!i.duedate && i.duedate < today } : { key: k, missing: true };
+    }),
+  }));
+}
+
+/** Review-Entwurf + Vorlagen für einen Zyklus (Schritt 1). Schreibt nichts. */
+async function prepareCycle(date: string) {
+  const prev = previousCycle(date);
+  const im = await issueMap();
+  const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+  const rd = (f?: string) => (f ? readFileSync(f, 'utf8') : undefined);
+  const { vars, stats } = im.size
+    ? reviewDraftVars({ date, prevId: prev?.id, prevReview: rd(prev?.files.review), prevPlanning: rd(prev?.files.planning), issues: im, today: new Date().toISOString().slice(0, 10), syncedAt: sync?.at ? new Date(sync.at).toISOString() : null })
+    : { vars: {}, stats: null };
+  const files = newCycleFiles(TEMPLATES, date, prev?.id, vars);
+  return { prev, files, stats, empty: !im.size };
+}
+
 async function sprintView(id: string) {
   const c = cycleById(id);
   const im = await issueMap();
@@ -196,13 +226,18 @@ async function sprintView(id: string) {
     files[k] = {
       path: f.slice(cfg.vaultDir.length + 1), hash: hashText(text), title: fm.title ?? k, status: fm.status ?? null,
       goal: parseGoal(text), outcomes: parseOutcomes(text), questions: qs,
+      // Offene Notizen für den Write-back (wie jira-sync-plan.sh): Schritt 4/5 der Schrittleiste.
+      openNotes: syncPlanRows(qs).filter((r) => r.kind !== 'carry').length,
+      ...(k === 'review' ? { packages: packagesOf(text, im) } : {}),
     };
   }
   const today = new Date().toISOString().slice(0, 10);
   const open = [...im.values()].filter((i) => i.type !== 'Workstream' && i.status !== 'Done');
   const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+  const prev = previousCycle(c.date);
   return {
-    cycle: { id: c.id, date: c.date, archived: c.archived },
+    cycle: { id: c.id, date: c.date, archived: c.archived, current: currentCycle(cycles())?.id === c.id },
+    previous: prev ? { id: prev.id, outcomes: prev.files.planning ? parseOutcomes(readFileSync(prev.files.planning, 'utf8')) : [], goal: prev.files.planning ? parseGoal(readFileSync(prev.files.planning, 'utf8')).goal ?? null : null } : null,
     ...goalsView(c, files, im),
     files,
     overdue: open.filter((i) => isOverdue(i, today)).sort((a, b) => a.duedate!.localeCompare(b.duedate!)),
@@ -269,7 +304,7 @@ function goalsView(c: { id: string; date: string }, files: Record<string, any>, 
 function goalsAll(im: Map<string, Issue>) {
   const text = readVault(GOALS_FILE());
   const parsed = text ? parseGoalsFile(text) : { goals: [], ratings: [] };
-  const cur = cycles().find((c) => !c.archived);
+  const cur = currentCycle(cycles());
   let sprintRows: ReturnType<typeof sprintGoalsFromOutcomes> = [];
   if (cur?.files.planning) { try { sprintRows = sprintGoalsFromOutcomes(parseOutcomes(readFileSync(cur.files.planning, 'utf8')), cur.date); } catch { /* ohne */ } }
   const t = goalTree([...parsed.goals, ...sprintRows], parsed.ratings, [...im.values()]);
@@ -508,7 +543,7 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
     if (running.get(r.key) !== 'wartet auf ja') running.set(r.key, r.status);
   }
   const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [], agent: running.get(i.key) ?? null, goals: ownGoals(i) }));
-  const curCycle = cycles().find((c) => !c.archived);
+  const curCycle = currentCycle(cycles());
   const sprintOnly = url.searchParams.get('sprint') === '1' && curCycle ? new Set(all.filter((i) => inSprint(i, curCycle.date)).map((i) => i.key)) : undefined;
   const filter = url.searchParams.get('filter') || undefined;
   const issues = annotated;
@@ -937,7 +972,7 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
   }).sort((a, b) => (a.live ? 0 : 1) - (b.live ? 0 : 1) || a.pr.localeCompare(b.pr, 'de', { numeric: true }));
   const github = { at: gh.sync?.at ?? null, error: gh.sync?.error ?? null, count: gh.map.size, org: GH_ORG };
   // Thema → Rang, Swimlanes, „Als Nächstes“ (Sprint-Zuordnung über Ticket-Labels), Konsistenz Spec ↔ Ticket.
-  const cur = cycles().find((c) => !c.archived);
+  const cur = currentCycle(cycles());
   const sprintTickets = new Set(cur ? [...im.values()].filter((i) => inSprint(i, cur.date)).map((i) => i.key) : []);
   const livePr = (pr: string) => { const l = gh.map.get(pr); return l ? { pr, conflict: l.mergeable === 'CONFLICTING', draft: l.isDraft, review: l.reviewDecision, turn: l.turn.who } : { pr, closed: ghOk }; };
   const specList = [...byName.values()].map((x) => ({ ...x, prLive: x.prs.map(livePr) }));
@@ -1660,9 +1695,8 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
   const b = await body(req);
   const date = String(b.date ?? '');
   const id = `sprint-${date}`;
-  const prev = cycles().filter((c) => !c.archived)[0]?.id;
   let files;
-  try { files = newCycleFiles(TEMPLATES, date, prev); } catch (e: any) { throw new HttpError(400, e.message); }
+  try { files = (await prepareCycle(date)).files; } catch (e: any) { throw new HttpError(400, e.message); }
   const dir = join(sprintRoot(), id);
   if (existsSync(dir)) throw new HttpError(409, `${id} gibt es schon.`);
   const rel = dir.slice(cfg.vaultDir.length + 1);
@@ -1673,6 +1707,53 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
   invalidateIndex();
   log('sprint neu', { user: u.id, cycle: id });
   send(res, 200, { ok: true, id, dir: rel });
+});
+
+// Schritt 1 „Review vorbereiten“: Entwurf aus Vorlage + Daten. Vorschau liefert den ganzen Review (Download);
+// geschrieben werden nur nach Bestätigung und nur FEHLENDE Dateien (wx) — ein vorhandener Review bleibt unangetastet.
+on('POST', /^\/api\/sprint\/draft$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const date = String(b.date ?? '');
+  let r;
+  try { r = await prepareCycle(date); } catch (e: any) { throw new HttpError(400, e.message); }
+  if (r.empty) throw new HttpError(409, 'Die Jira-Kopie ist leer — erst abgleichen (Board → Abgleich), sonst stünde jedes Ticket als „nicht in der Kopie“ da.');
+  const id = `sprint-${date}`;
+  const dir = join(sprintRoot(), id);
+  const rel = dir.slice(cfg.vaultDir.length + 1);
+  const files = r.files.map((f) => ({ ...f, exists: existsSync(join(dir, f.name)) }));
+  const missing = files.filter((f) => !f.exists);
+  const preview = {
+    dir: rel, id, previous: r.prev?.id ?? null, stats: r.stats,
+    files: files.map((f) => ({ name: f.name, exists: f.exists, lines: f.content.split('\n').length, content: f.name.endsWith('-review.md') ? f.content : f.content.slice(0, 1200) })),
+  };
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: missing.length > 0, preview, dryRun: vaultDry() });
+  if (!missing.length) throw new HttpError(409, `${id}: alle drei Notizen gibt es schon — der Entwurf ist nur als Download da.`);
+  if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: missing.map((f) => `${rel}/${f.name}`), id });
+  if (!existsSync(dir)) mkdirSync(dir);
+  const written: string[] = [];
+  for (const f of missing) {
+    try { writeFileSync(join(dir, f.name), f.content, { flag: 'wx' }); written.push(f.name); }
+    catch (e: any) { if (e.code !== 'EEXIST') throw e; }        // inzwischen angelegt (Obsidian, Agent) → nicht anfassen
+  }
+  invalidateIndex();
+  log('sprint entwurf', { user: u.id, cycle: id, written });
+  send(res, 200, { ok: true, id, dir: rel, written });
+});
+
+// Schritt 5 „Mitnahme“: aus der Jira-Kopie gerechnet (Gleichlauf mit jira-sprint-carry.sh), nur lesend, als Markdown.
+// In die Notiz schreibt den Abschnitt weiterhin /sprint-sync im Chat.
+on('GET', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/carry$/, async (req, res, m) => {
+  await needUser(req);
+  const c = cycleById(m[1]);
+  if (!c.files.review) throw new HttpError(404, 'Keine Review-Notiz in diesem Zyklus.');
+  const text = readFileSync(c.files.review, 'utf8');
+  const im = await issueMap();
+  const qs = [c.files.review, c.files.planning].filter(Boolean).flatMap((f) => parseQuestions(readFileSync(f!, 'utf8'), f));
+  const openNotes = syncPlanRows(qs).filter((r) => r.kind !== 'carry').length;
+  const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+  const r = carryList(text, basename(c.files.review), im, new Date().toISOString().slice(0, 10), cfg.jiraProject);
+  send(res, 200, { ...r, openNotes, jiraSync: sync ? { at: sync.at } : null });
 });
 
 // --- Ziele (Runde 6) ---
@@ -1883,7 +1964,7 @@ on('GET', /^\/api\/timebox$/, async (req, res, _m, url) => {
   while (dates.length < days) dates.push(nextDay(dates.at(-1)!));
   const blocks = (await tbCol().find({ userId: u.id, date: { $in: dates } }).sort({ date: 1, start: 1 }).toArray()) as any[];
   const im = await issueMap();
-  const cur = cycles().find((c) => !c.archived);
+  const cur = currentCycle(cycles());
   const sl = cur ? sprintLabel(cur.date) : null;
   const who = resolveIdentity(await jiraIdentity(u), [...im.values()]);
   // Tagespriorität des ersten Tages: je Ticket gesetzt (timebox_prio) oder die höchste seiner Blöcke an diesem Tag.
