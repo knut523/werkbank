@@ -70,6 +70,8 @@ export function proposalsFor(rows: PlanRow[], issues: Map<string, Issue>, sprint
     const ticket = row.key.match(/PM-\d+/)?.[0] ?? null;          // ZIEL:PM-70 → PM-70
     const p: Proposal = { id: `${n}-${row.line}`, row, ticket, actions: [] };
     if (row.kind === 'carry') { p.carry = true; return p; }
+    // Backlog „nein“ (nicht mitnehmen): keine Jira-Aktion, kein Kommentar (Code-Review Paket 143, H4).
+    if (/^nein\b/i.test(row.payload.trim())) { p.conflict = '„nein“ — bleibt im Backlog, nichts nach Jira.'; return p; }
     if (!ticket) { p.question = `Kein Ticket zum Anker „${row.key}“ — nicht nach Jira.`; return p; }
     const cur = issues.get(ticket);
     const text = row.payload;

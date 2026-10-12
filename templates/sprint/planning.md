@@ -13,31 +13,52 @@ related: ["[[sprint-{{DATUM}}-review]]", "[[sprint-{{DATUM}}-summary]]", "[[Olaf
 
 # Sprint {{DATUM}} — Planning
 
-**{{DATUM_DE}} – {{ENDE_DE}}** · Review dazu: [[sprint-{{DATUM}}-review]] · `status: draft` — Vorlage für die Runde, noch nicht bestätigt.
+**{{DATUM_DE}} – {{ENDE_DE}}** · Rückblick dazu: [[sprint-{{DATUM}}-review]] · Entwurf für die Runde, noch nicht bestätigt.
+
+So einfach wie möglich: ein Ziel, höchstens vier Ergebnisse, wer macht was bis wann. Fachwörter nur, wenn sie
+alle kennen.
 
 ## Sprint-Ziel
 
-> …ein Satz, der den Zyklus zusammenhält…
+> …ein Satz, der die zwei Wochen zusammenhält…
 
 ## Ergebnisse
 
-Jedes Ergebnis ist ein Zustand, kein Ticket. Der Review bewertet genau diese Zeilen (✅/🟡/❌).
+Was am Ende der zwei Wochen anders ist — ein Zustand, kein Ticket. Im nächsten Rückblick bewerten wir genau diese
+Zeilen (✅ erreicht · 🟡 teilweise · ❌ nicht erreicht). Fertig heißt: getestet, auf Dev, dann auf Prod.
 
-| # | Ergebnis | DoD | Owner | Datum |
+| # | Ergebnis | Woran wir es sehen (DoD) | Owner | Datum |
 |---|---|---|---|---|
 | S1 | … | … | … | … |
 | S2 | … | … | … | … |
 | S3 | … | … | … | … |
 | S4 | … | … | … | … |
 
-## Sprint-Umfang nach Workstream
+## Was wir machen
 
-### Produkt OLAF
+Je Domäne die Pakete, die auf ein Ergebnis einzahlen. Was aus dem Backlog mitgenommen wurde, steht hier mit Datum.
 
-| Paket | Dient | Owner | Fällig | Ticket |
+### Product
+
+| Paket | Für Ergebnis | Owner | Bis | Ticket |
 |---|---|---|---|---|
 
-### Bewusst nicht in diesem Sprint
+### Operations
+
+| Paket | Für Ergebnis | Owner | Bis | Ticket |
+|---|---|---|---|---|
+
+### Governance & Verträge
+
+| Paket | Für Ergebnis | Owner | Bis | Ticket |
+|---|---|---|---|---|
+
+### Marketing
+
+| Paket | Für Ergebnis | Owner | Bis | Ticket |
+|---|---|---|---|---|
+
+## Bewusst nicht in diesem Sprint
 
 - …
 
@@ -46,14 +67,14 @@ Jedes Ergebnis ist ein Zustand, kein Ticket. Der Review bewertet genau diese Zei
 | Datum | Was |
 |---|---|
 
-## Impediments
+## Was uns blockiert
 
 - …
 
 ## Zu entscheiden
 
 1. **…?**
-   *Empfehlung:* … <!--k:ZIEL:PM-70-->
+   *Empfehlung:* … <!--k:ENTSCHEIDUNG-1-->
    - Knut:
 
 ## Noch nicht in Jira
