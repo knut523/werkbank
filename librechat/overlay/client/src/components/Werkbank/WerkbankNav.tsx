@@ -1,13 +1,14 @@
-// OLAF-Werkbank: Einträge in LibreChats linker Leiste (aus dem Werkbank-Repo, librechat/overlay).
+// OLAF Workspace (früher OLAF-Werkbank): Einträge in LibreChats linker Leiste (aus dem Werkbank-Repo, librechat/overlay).
 import { memo, useEffect, useState } from 'react';
 import Cookies from 'js-cookie';
 import { useSetRecoilState } from 'recoil';
 import * as Menu from '@ariakit/react/menu';
 import { useLocation, useNavigate, type NavigateFunction } from 'react-router-dom';
-import { Rocket, BookOpen, SquareKanban, RefreshCw, Blocks, Share2, Compass, Sun, Timer, Target, Ellipsis } from 'lucide-react';
+import { Rocket, BookOpen, SquareKanban, RefreshCw, Blocks, Share2, Compass, Sun, Timer, Target, Ellipsis, Satellite } from 'lucide-react';
 import { Button, TooltipAnchor, useMediaQuery } from '@librechat/client';
 import { cn } from '~/utils';
 import store from '~/store';
+import { useHauptchat } from './HauptchatSection';
 
 // Leiste = dieselben fünf wie oben in der Werkbank (Council-Bedingung 11): Heute · Roadmap · Board · Sprint · Wissen.
 // Die übrigen vier unter „Mehr“; die Einrichtung steht im Kontomenü bei LibreChats Einstellungen (WerkbankSetupItem).
@@ -21,7 +22,8 @@ export const WERKBANK_PAGES = [
   { id: 'ziele', hash: '#/ziele', label: 'Ziele', icon: Target, nav: false },
   { id: 'skills', hash: '#/skills', label: 'Skills', icon: Blocks, nav: false },
   { id: 'dateien', hash: '#/dateien', label: 'Dateien & Teilen', icon: Share2, nav: false },
-  { id: 'einrichtung', hash: '#/einrichtung', label: 'Werkbank-Einrichtung', icon: Rocket, nav: false, menu: false },
+  { id: 'leitstand', hash: '#/leitstand', label: 'Hauptchat & Unter-Chats', icon: Satellite, nav: false },
+  { id: 'einrichtung', hash: '#/einrichtung', label: 'Workspace-Einrichtung', icon: Rocket, nav: false, menu: false },
 ];
 const MORE = WERKBANK_PAGES.filter((p) => !p.nav && p.menu !== false);
 
@@ -96,10 +98,32 @@ function WerkbankNav() {
     closeOnMobile();
   };
   const moreActive = more.some((p) => p.id === current);
+  const haupt = useHauptchat();
+  const hauptPath = haupt.data?.leitstand ? `/c/${haupt.data.leitstand.conv}` : null;
   return (
     <>
       <div className="mx-2 border-b border-border-light" />
-      <div className="flex flex-col gap-1" role="group" aria-label="Werkbank">
+      <div className="flex flex-col gap-1" role="group" aria-label="OLAF Workspace">
+        {hauptPath && (
+          // Hauptchat mit einem Klick, auch bei eingeklappter Leiste (Plan 144, Council B6) — nur Admins mit aktivem Hauptchat.
+          <TooltipAnchor
+            description="Hauptchat"
+            side="right"
+            render={
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Hauptchat öffnen"
+                aria-current={pathname === hauptPath ? 'page' : undefined}
+                data-testid="werkbank-nav-hauptchat"
+                className={cn('relative h-9 w-9 rounded-lg', pathname === hauptPath ? 'bg-surface-active-alt text-text-primary' : 'text-text-secondary')}
+                onClick={() => { navigate(hauptPath, { state: { focusChat: true } }); closeOnMobile(); }}
+              >
+                <Satellite className="h-5 w-5" aria-hidden="true" />
+              </Button>
+            }
+          />
+        )}
         {WERKBANK_PAGES.filter((p) => (p.nav && show(p.id)) || (onlySetup && p.id === 'einrichtung')).map((p) => (
           <TooltipAnchor
             key={p.id}

@@ -100,6 +100,22 @@ und nutzt die schon gebaute Gruppierung je Lauf.
 - Hinweistext in `librechat.yaml` (interface) erwähnt „Koordinator“ nicht mehr.
 - Im Abschnitt S1 Untertitel „führt die Unter-Chats“; in normalen Chats ändert sich nichts (keine `orch_*`-Werkzeuge, wie heute).
 
+### S5 Nachtrag Knut 12.10.: je Unter-Chat Chat · Auftrag · Bericht
+> „In der Übersicht der Unter-Chats (Stränge) unter dem Hauptchat je Strang drei Links: Chat · Auftrag
+> (review-pakete/NNN-*/auftrag.md — ab sofort legt die Hauptsitzung dort jeden Auftrag ab) · Bericht (bericht.md). Keine
+> separate Übersichtsseite außerhalb des OLAF Workspace — alles an dieser einen Stelle (und in Dateien → Von Agenten).“
+- Paketordner je Strang: beim Start aus dem ersten Pfad auf `review-pakete/NNN-…/bericht.md` oder `…/auftrag.md` (neu
+  `paket`), bei alten Strängen aus dem Ordner des gefundenen Berichts bzw. dem gespeicherten Auftragstext (`paketDatei`).
+- Lesen nur über den vorhandenen sicheren Leser (`bericht.ts`: kein Symlink, nur unter `WERKBANK_REVIEW_DIR`, ≤ 200 KB);
+  Übersicht meldet je Strang `auftrag`/`bericht` = lesbar vorhanden (`lesbar`, ohne Inhalt).
+- Seitenleiste: Zeile = Chat (zweizeilig: Titel, Status), rechts zwei Symbole Auftrag/Bericht (32 px), fehlt die Datei → blass,
+  ohne Link. Ziel jeweils die Workspace-Seite `#/leitstand?auftrag=<id>` bzw. `?bericht=<id>`.
+- Workspace-Seite und Heute-Karte: Links „Chat · Auftrag · Bericht“ (fehlend: „kein Auftrag“ / „noch kein Bericht“).
+- „Dateien → Von Agenten“ listet `auftrag.md` schon (alle Markdown-Dateien des Pakets) — keine Änderung.
+- DoD 27: Übersicht liefert `auftrag: true` nur, wenn `auftrag.md` lesbar im Paket liegt; Symlink/außerhalb → false (Test).
+- DoD 28: `GET /api/leitstand/bericht?strand=…&art=auftrag` liefert den Auftrag, Team-Konto 403, fehlender Bericht 404 (Test).
+- DoD 29: In der Seitenleiste führt das Auftrag-Symbol eines Unter-Chats auf die Workspace-Seite mit dem Auftrag (e2e).
+
 ### Nicht in diesem Schnitt
 - Hauptchat und Stränge aus der normalen Chatliste ausblenden (bräuchte einen zweiten Patch in `Conversations.tsx`) → K3.
 - Strang ↔ Hauptchat-Verknüpfung in der Datenbank (alle offenen Stränge der Person hängen unter dem einen Hauptchat).
@@ -212,3 +228,15 @@ Stärkster Einwand (bleibt sichtbar): Hauptchat und Unter-Chats stehen weiterhin
 Die Bedingungen 1–10 stehen jetzt im Schnitt (S1/S2) und gelten zusätzlich als DoD 17–26 (in dieser Reihenfolge). Offen
 bleiben nur Knuts Entscheidungen K1–K5; gebaut wird mit den Empfehlungen, jede ist mit einer Zeile rückbaubar. Rest-Einwand:
 K3 (Doppelte Einträge) — bewusst vertagt.
+
+### Review-Pass über den Diff (12.10.2026)
+
+Ein eigener Lese-Agent hat den Diff durchgesehen: **kein Must-fix**. Die fünf Should-Punkte sind behoben:
+- S1: Bei einem Ausfall erscheint der Abschnitt für Team-Konten nicht.
+- S2: Nur ein 403 sperrt die Abfragen endgültig, ein 401 nicht.
+- S3: Der Auftrag kommt aus dem Ordner des Berichts.
+- S4: Die e2e-Zählung im Menü „Mehr“ ist angepasst.
+- S5: Es gibt einen Start-Riegel je Person, und nach dem Start wird der Hash bereinigt.
+
+Behobene Nits: Der Zaun bricht jedes `>>>`/`<<<` (nach NFC). Ein Body `null` ergibt 400. `aria-controls`.
+Offen bleiben die `nlink`-Prüfung (wie bisher) und „Zurück“ nach dem Start (Formular offen, kein Doppelstart möglich).

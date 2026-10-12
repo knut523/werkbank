@@ -1,6 +1,6 @@
 // Ziele (Runde 6): Zielbaum als Übersicht, Deep-Dive je Ziel (#/ziele/KR1 — teilbar) und Zuordnung „ohne Ziel“.
 import { useMemo, useState } from 'react';
-import { api, fmtDate, type Config } from '../api.ts';
+import { api, fmtDate, type Config, viaLabel } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, useJiraLive } from '../ui.tsx';
 import { Gap, Bar, GoalNodeView } from './Sprint.tsx';
 
@@ -14,7 +14,7 @@ function TicketLine({ t }: { t: any }) {
     <li className="trow" data-ticket={t.key}>
       <a href={`#/board?key=${t.key}`}><b>{t.key}</b></a> <span className="trow-s">{t.summary}</span>
       <span className="row" style={{ gap: 3 }}>
-        {t.via && <span className="chip tiny-chip goal-id" title="zugeordnet über">{t.via}</span>}
+        {t.via && <span className="chip tiny-chip goal-id" title="zugeordnet über">{viaLabel(t.via)}</span>}
         <span className={`chip tiny-chip ${t.assignee ? '' : 'warn'}`}>{t.assignee ?? 'ohne Owner'}</span>
         {t.duedate ? <span className={`chip tiny-chip ${t.overdue ? 'bad' : ''}`}>{t.overdue ? 'über ' : ''}{fmtDate(t.duedate)}</span> : !t.recurring && t.status !== 'Done' && <span className="chip tiny-chip warn">ohne Datum</span>}
         {t.blockedBy?.length > 0 && <span className="chip tiny-chip bad">⛔ {t.blockedBy.join(', ')}</span>}
@@ -81,9 +81,9 @@ function Detail({ id }: { id: string }) {
         {!x.tickets.length && <p className="tiny">Keine Tickets — über „Ziele zuordnen“.</p>}
       </div>
       <div className="card" style={{ marginTop: 10 }}><b>Specs und PRs ({x.specs.length})</b>
-        <ul className="tlist">{x.specs.map((sp: any) => <li key={sp.path} className="trow"><a href={note(sp.path)}>{sp.title}</a> <span className="tiny">{sp.topic} · {sp.state.replace(/^\d-/, '')} · über {sp.via}</span>
+        <ul className="tlist">{x.specs.map((sp: any) => <li key={sp.path} className="trow"><a href={note(sp.path)}>{sp.title}</a> <span className="tiny">{sp.topic} · {sp.state.replace(/^\d-/, '')} · über {viaLabel(sp.via)}</span>
           <span className="row" style={{ gap: 3 }}>{sp.prs.map((p: any) => <a key={p.pr} href={p.url} target="_blank" rel="noreferrer" className={`chip tiny-chip ${p.live?.conflict ? 'bad' : p.live?.review === 'APPROVED' ? 'ok' : p.live ? 'warn' : ''}`}>{p.pr.replace('olaf-', '')}{p.live ? (p.live.conflict ? ' ⚠ Konflikt' : ` · ${p.live.turn}`) : ' · zu'}</a>)}</span></li>)}</ul>
-        {!x.specs.length && <p className="tiny">Keine Spec diesem Ziel zugeordnet (Werkbank, Frontmatter <code>ziel:</code> oder über Tickets).</p>}
+        {!x.specs.length && <p className="tiny">Keine Spec diesem Ziel zugeordnet (OLAF Workspace, Frontmatter <code>ziel:</code> oder über Tickets).</p>}
       </div>
     </div>
   );
@@ -111,7 +111,7 @@ function Assign({ onChange }: { onChange: () => void }) {
     try {
       const pre: any = await api('/api/goals/import', { body });
       if (!pre.items.length) { toast('Nichts zu übernehmen'); return; }
-      if (!(await confirm({ title, confirmLabel: `${pre.items.length} übernehmen`, body: <><p className="small">{pre.items.every((i: any) => i.quelle === 'spec') ? 'Vorschlag aus der verknüpften Spec (ziel:, Sicherheit mittel) — zählt erst nach dieser Bestätigung' : <>Aus <code>{pre.file}</code></>}, gespeichert in der Werkbank (nicht Jira), mit einem Klick wieder änderbar:</p><pre className="small" style={{ maxHeight: 280, overflow: 'auto' }}>{pre.items.map((i: any) => `${i.key} → ${i.goal}${i.begruendung ? ` — ${i.begruendung}` : ''}`).join('\n')}</pre></> }))) return;
+      if (!(await confirm({ title, confirmLabel: `${pre.items.length} übernehmen`, body: <><p className="small">{pre.items.every((i: any) => i.quelle === 'spec') ? 'Vorschlag aus der verknüpften Spec (ziel:, Sicherheit mittel) — zählt erst nach dieser Bestätigung' : <>Aus <code>{pre.file}</code></>}, gespeichert im OLAF Workspace (nicht Jira), mit einem Klick wieder änderbar:</p><pre className="small" style={{ maxHeight: 280, overflow: 'auto' }}>{pre.items.map((i: any) => `${i.key} → ${i.goal}${i.begruendung ? ` — ${i.begruendung}` : ''}`).join('\n')}</pre></> }))) return;
       const r: any = await api('/api/goals/import', { body: { ...body, confirm: true } });
       toast(`${r.imported} übernommen`); setSel({}); setGoal({}); setWhy({}); d.reload(); onChange();
     } catch (e) { setErr(e); }
@@ -121,17 +121,17 @@ function Assign({ onChange }: { onChange: () => void }) {
     const items = chosen.map((t: any) => ({ key: t.key, goal: G[t.key], begruendung: W[t.key] }));
     try {
       const pre: any = await api('/api/goals/assign', { body: { items } });
-      if (!(await confirm({ title: `${items.length} Tickets Zielen zuordnen?`, confirmLabel: 'In der Werkbank speichern', body: <><p className="small">Die Zuordnung wird <b>in der Werkbank</b> gespeichert (mit Verlauf), nicht in Jira{pre.toJira ? ' — zusätzlich Jira-Labels (WERKBANK_GOALS_TO_JIRA=labels)' : ''}:</p><pre className="small" style={{ maxHeight: 280, overflow: 'auto' }}>{pre.preview.join('\n')}</pre></> }))) return;
+      if (!(await confirm({ title: `${items.length} Tickets Zielen zuordnen?`, confirmLabel: 'Im OLAF Workspace speichern', body: <><p className="small">Die Zuordnung wird <b>im OLAF Workspace</b> gespeichert (mit Verlauf), nicht in Jira{pre.toJira ? ' — zusätzlich Jira-Labels (WERKBANK_GOALS_TO_JIRA=labels)' : ''}:</p><pre className="small" style={{ maxHeight: 280, overflow: 'auto' }}>{pre.preview.join('\n')}</pre></> }))) return;
       const r: any = await api('/api/goals/assign', { body: { items, confirm: true } });
       const bad = r.results.filter((y: any) => !y.ok);
-      toast(`${r.results.length - bad.length} zugeordnet (Werkbank)${bad.length ? `, ${bad.length} Fehler` : ''}`);
+      toast(`${r.results.length - bad.length} zugeordnet (OLAF Workspace)${bad.length ? `, ${bad.length} Fehler` : ''}`);
       if (bad.length) setErr(new Error(bad.map((y: any) => `${y.key}: ${y.error}`).join(' · ')));
       setSel({}); setGoal({}); setWhy({}); d.reload(); onChange();
     } catch (e) { setErr(e); }
   };
   return (
     <>
-      <p className="small muted">Offene Tickets ohne Ziel (Werkbank-Zuordnung oder Jira-Label, auch nicht vom Parent geerbt). Gespeichert wird <b>in der Werkbank</b>, nicht in Jira. „Bewusst ohne Ziel“ nur mit Begründung. Automatisch zugeordnet wird nur ein Ticket, das in der Spalte Beleg genau eines Ziels in <code>ziele-olaf.md</code> steht. {x.proposals > 0 ? <>Vorausgewählt: <b>{x.proposals}</b> Vorschläge aus <code>{x.proposalFile}</code>.</> : <>Keine Vorschlagsdatei unter <code>{x.proposalFile}</code>.</>}{x.computed > 0 && <> <b>{x.computed}</b> Vorschläge aus Specs (ziel:, Sicherheit mittel) — nicht vorausgewählt, zählen erst nach „übernehmen“.</>}{x.proposalError && <span className="chip bad">{x.proposalError}</span>}</p>
+      <p className="small muted">Offene Tickets ohne Ziel (Workspace-Zuordnung oder Jira-Label, auch nicht vom Parent geerbt). Gespeichert wird <b>im OLAF Workspace</b>, nicht in Jira. „Bewusst ohne Ziel“ nur mit Begründung. Automatisch zugeordnet wird nur ein Ticket, das in der Spalte Beleg genau eines Ziels in <code>ziele-olaf.md</code> steht. {x.proposals > 0 ? <>Vorausgewählt: <b>{x.proposals}</b> Vorschläge aus <code>{x.proposalFile}</code>.</> : <>Keine Vorschlagsdatei unter <code>{x.proposalFile}</code>.</>}{x.computed > 0 && <> <b>{x.computed}</b> Vorschläge aus Specs (ziel:, Sicherheit mittel) — nicht vorausgewählt, zählen erst nach „übernehmen“.</>}{x.proposalError && <span className="chip bad">{x.proposalError}</span>}</p>
       <div className="row" style={{ marginBottom: 8 }}>
         <input type="search" placeholder="Suchen …" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tickets filtern" />
         <select value={bulk} onChange={(e) => setBulk(e.target.value)} aria-label="Ziel für Auswahl"><option value="">Ziel für alle gewählten …</option>{x.goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 50)}</option>)}</select>
@@ -177,7 +177,7 @@ function AutoAssigned({ rows, goalIds, onChange }: { rows: any[]; goalIds: any[]
     const items = [{ key, goal, begruendung: goal === 'KEINS' ? 'automatische Zuordnung abgelehnt' : 'automatische Zuordnung geändert' }];
     try {
       const pre: any = await api('/api/goals/assign', { body: { items } });
-      if (!(await confirm({ title: `${key} ändern?`, confirmLabel: 'In der Werkbank speichern', body: <pre className="small">{pre.preview.join('\n')}</pre> }))) return;
+      if (!(await confirm({ title: `${key} ändern?`, confirmLabel: 'Im OLAF Workspace speichern', body: <pre className="small">{pre.preview.join('\n')}</pre> }))) return;
       await api('/api/goals/assign', { body: { items, confirm: true } });
       toast(`${key} geändert`); onChange();
     } catch (e) { setErr(e); }

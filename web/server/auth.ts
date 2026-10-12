@@ -35,7 +35,7 @@ export async function librechatLogin(email: string, password: string, clientIp?:
     body: JSON.stringify({ email, password }),
   });
   if (r.status === 429) throw Object.assign(new Error('Zu viele Anmeldeversuche. Bitte ein paar Minuten warten.'), { status: 429 });
-  if (!r.ok) throw Object.assign(new Error('E-Mail oder Passwort stimmt nicht (es gilt das Werkbank-/LibreChat-Konto).'), { status: 401 });
+  if (!r.ok) throw Object.assign(new Error('E-Mail oder Passwort stimmt nicht (es gilt das Workspace-/LibreChat-Konto).'), { status: 401 });
   const j: any = await r.json();
   const u = j.user ?? {};
   const id = String(u._id ?? u.id ?? '');
@@ -133,7 +133,7 @@ export function signJwt(payload: Record<string, unknown>, secret: string, ttlSec
  */
 export async function librechatAccessToken(u: User): Promise<string> {
   const secret = process.env.JWT_SECRET ?? '';
-  if (!secret) throw Object.assign(new Error('JWT_SECRET fehlt (Werkbank-Konfiguration).'), { status: 500 });
+  if (!secret) throw Object.assign(new Error('JWT_SECRET fehlt (Workspace-Konfiguration).'), { status: 500 });
   const d: any = await lc().collection('users').findOne({ _id: new ObjectId(u.id) }, { projection: { username: 1, provider: 1, email: 1 } });
   if (!d) throw Object.assign(new Error('Konto nicht gefunden.'), { status: 404 });
   return signJwt({ id: String(d._id), username: d.username ?? '', provider: d.provider ?? 'local', email: d.email }, secret, 300);

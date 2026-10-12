@@ -28,7 +28,7 @@ function Md({ text }: { text: string }) {
 /** Zelle mit Lücken „‹… fehlt – Quelle: …›“: Lücken grau/kursiv, zählen nicht als Wert. */
 /** Hinweis „ohne Ziel – genauer anschauen“ (Board, Sprint, Mein Tag). */
 export function NoGoal({ small = true }: { small?: boolean }) {
-  return <a className={`chip ${small ? 'tiny-chip' : ''} bad nogoal`} href="#/ziele/zuordnen" title="Kein Ziel (Werkbank-Zuordnung oder Jira-Label), auch nicht vom Parent geerbt — einem Ziel zuordnen oder bewusst ohne Ziel (mit Grund)" onClick={(e) => e.stopPropagation()}>ohne Ziel – genauer anschauen</a>;
+  return <a className={`chip ${small ? 'tiny-chip' : ''} bad nogoal`} href="#/ziele/zuordnen" title="Kein Ziel (Workspace-Zuordnung oder Jira-Label), auch nicht vom Parent geerbt — einem Ziel zuordnen oder bewusst ohne Ziel (mit Grund)" onClick={(e) => e.stopPropagation()}>ohne Ziel – genauer anschauen</a>;
 }
 
 export function Gap({ text }: { text?: string | null }) {
@@ -66,7 +66,7 @@ function GoalTree({ g }: { g: any }) {
   if (g.missing) return <div className="card soft" data-testid="goal-tree"><b>Stage Gate nicht definiert</b><p className="small muted" style={{ margin: 0 }}>Die Zieldatei <code>{g.file}</code> fehlt. Format: Tabelle unter <code>## Ziele</code> mit ID | Ebene | Ergebnis | Messgröße | Baseline | Ziel | Stichtag | Owner | Eltern-ID | Beleg (siehe README).</p></div>;
   return (
     <details className="card" open data-testid="goal-tree">
-      <summary><b>Zielbaum</b> <span className="tiny">Gate → Ziel → KR → Monat → Sprint · aus <a href={noteHref(g.file)}>{g.file.split('/').pop()}</a> · Fortschritt = erledigte / zugeordnete Tickets (Zuordnung in der Werkbank, sonst Jira-Label, oder in der Zeile genannt)</span></summary>
+      <summary><b>Zielbaum</b> <span className="tiny">Gate → Ziel → KR → Monat → Sprint · aus <a href={noteHref(g.file)}>{g.file.split('/').pop()}</a> · Fortschritt = erledigte / zugeordnete Tickets (Zuordnung im OLAF Workspace, sonst Jira-Label, oder in der Zeile genannt)</span></summary>
       {!g.gate.length && <p className="note small">Stage Gate nicht definiert (keine Zeile mit Ebene „Gate“).</p>}
       <ul className="goal-tree root">{g.roots.map((n: any) => <GoalNodeView key={n.id} n={n} />)}</ul>
       {!g.monthGoals.length && <p className="tiny">Monatsziele für diesen Sprint noch nicht gesetzt (Ebene „Monat“, ID M&lt;MM&gt;-&lt;n&gt;).</p>}
@@ -84,9 +84,9 @@ function useLocalChange(cycle: string, reload: () => void) {
     try {
       const pre: any = await api(url, { body });
       const text = Array.isArray(pre.preview) ? pre.preview.join('\n') : pre.preview;
-      if (!(await confirm({ title, confirmLabel: 'Speichern', body: <><pre className="small">{text}</pre><p className="tiny">Gespeichert in der Werkbank (mit Verlauf) — nichts wird nach Jira geschrieben.</p></> }))) return;
+      if (!(await confirm({ title, confirmLabel: 'Speichern', body: <><pre className="small">{text}</pre><p className="tiny">Gespeichert im OLAF Workspace (mit Verlauf) — nichts wird nach Jira geschrieben.</p></> }))) return;
       await api(url, { body: { ...body, confirm: true } });
-      toast('Gespeichert (Werkbank)');
+      toast('Gespeichert (OLAF Workspace)');
       reload();
     } catch (e) { setErr(e); }
   };
@@ -107,7 +107,7 @@ function TicketRow({ t, children }: { t: any; children?: ReactNode }) {
         {t.duedate && <span className={`chip tiny-chip ${t.overdue ? 'bad' : ''}`}>{fmtDate(t.duedate)}</span>}
         {t.goals?.map((g: string) => <a key={g} className="chip tiny-chip goal-id" href={`#/ziele/${g}`}>{g}</a>)}
         {t.noGoal && <NoGoal />}
-        {t.exempt && <span className="chip tiny-chip" title="bewusst ohne Ziel (Werkbank, mit Begründung)">bewusst ohne Ziel</span>}
+        {t.exempt && <span className="chip tiny-chip" title="bewusst ohne Ziel (OLAF Workspace, mit Begründung)">bewusst ohne Ziel</span>}
         {t.why?.map((w: string) => <span key={w} className="chip tiny-chip warn">{w}</span>)}
         {children}
       </span>
@@ -124,7 +124,7 @@ function SprintPlan({ d, cycle, reload }: { d: any; cycle: string; reload: () =>
     <select aria-label={`Ziel für ${t.key}`} value="" onChange={(e) => { if (e.target.value !== '') assign(t, e.target.value === '-' ? '' : e.target.value); }}>
       <option value="">Ziel zuordnen …</option>
       {g.goalIds.map((x: any) => <option key={x.id} value={x.id}>{x.id} · {String(x.result).slice(0, 40)}</option>)}
-      {t.goals?.length > 0 && <option value="-">— Werkbank-Zuordnung zurücksetzen</option>}
+      {t.goals?.length > 0 && <option value="-">— Workspace-Zuordnung zurücksetzen</option>}
     </select>
   );
   const inRow = (t: any) => <TicketRow key={t.key} t={t}><GoalSelect t={t} /><button className="btn small" onClick={() => lc.member(t.key, false)}>rausnehmen</button></TicketRow>;
@@ -133,7 +133,7 @@ function SprintPlan({ d, cycle, reload }: { d: any; cycle: string; reload: () =>
 
       <Err e={err} />
       <div className="card" data-testid="sprint-goals">
-        <h3 style={{ marginTop: 0 }}>Sprintziele <span className="tiny">Sprint und Ziel werden in der Werkbank gespeichert (nicht in Jira); vorhandene Jira-Labels gelten als Fallback.</span></h3>
+        <h3 style={{ marginTop: 0 }}>Sprintziele <span className="tiny">Sprint und Ziel werden im OLAF Workspace gespeichert (nicht in Jira); vorhandene Jira-Labels gelten als Fallback.</span></h3>
         {g.sprintGoals.length ? <table className="t small goals-t"><tbody>{g.sprintGoals.map((x: any) => (
           <tr key={x.id} data-goal={x.id}><td><span className="chip goal-id">{x.id}</span></td><td><Gap text={x.result} />{x.parent && <div className="tiny">zahlt ein auf {x.parent}</div>}</td><td className="tiny">{x.owner || '—'}</td><td className="tiny">{x.due || '—'}</td><td><Bar p={x.progress} /></td></tr>
         ))}</tbody></table> : <p className="small muted">Keine Sprintziele im Planning (S1–S4 oder S&lt;MMTT&gt;-&lt;n&gt;).</p>}
@@ -371,7 +371,7 @@ export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
                 return <tr key={o.id}><td><b>{o.id}</b></td><td>{o.title}</td><td data-label="DoD">{o.dod ?? '—'}</td><td data-label="Owner">{o.owner ?? '—'}</td><td data-label="Datum">{o.date ?? '—'}</td><td data-label="Review">{r?.rating ? <span className="rating" title={r.evidence}>{r.rating}</span> : '—'}</td></tr>;
               })}</tbody>
             </table>
-          ) : <p className="small muted">Die Planning-Notiz hat noch keine Ergebniszeilen S1–S4 (Sprint-Ziel + Ergebnisse mit DoD/Owner/Datum). Neue Zyklen aus der Werkbank bringen die Tabelle mit.</p>}
+          ) : <p className="small muted">Die Planning-Notiz hat noch keine Ergebniszeilen S1–S4 (Sprint-Ziel + Ergebnisse mit DoD/Owner/Datum). Neue Zyklen aus dem OLAF Workspace bringen die Tabelle mit.</p>}
           {review?.outcomes.length > 0 && (
             <>
               <h3>Review-Bewertung (Soll-Ist)</h3>

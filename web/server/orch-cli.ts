@@ -79,7 +79,7 @@ async function call(path: string, b: Record<string, unknown>): Promise<any> {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': token() },
       body: JSON.stringify({ ...(email ? { email } : {}), ...b }), signal: AbortSignal.timeout(60_000),
     });
-  } catch (e: any) { die(`Werkbank unter ${base} nicht erreichbar (${e.message}).`); }
+  } catch (e: any) { die(`OLAF Workspace (Web) unter ${base} nicht erreichbar (${e.message}).`); }
   const j: any = await r.json().catch(() => ({}));
   if (!r.ok) {
     if (r.status === 409 && j.g0) process.stderr.write(`${JSON.stringify({ g0: j.g0 })}\n`);
@@ -156,7 +156,7 @@ async function main() {
       const opts = options.map((o) => { const [label, ...rest] = o.split('::'); return { label: label.trim(), consequence: rest.join('::').trim() }; });
       const j = await call('questions/ask', { title: str('title'), context: str('context'), recommendation: str('recommend'), options: opts, strand: str('strand') ?? null, link: str('link') ?? null, plan: str('plan') ?? null, key: str('key') ?? null, quelle: str('quelle') ?? null });
       if (flags.json) return console.log(JSON.stringify(j, null, 1));
-      console.log(`Rückfrage angelegt: ${j.id} — erscheint in der Werkbank unter Heute → „Wartet auf dich“ und zählt in „Heute (n)“. Antwort: orch questions get ${j.id}`);
+      console.log(`Rückfrage angelegt: ${j.id} — erscheint im OLAF Workspace unter Heute → „Wartet auf dich“ und zählt in „Heute (n)“. Antwort: orch questions get ${j.id}`);
       return;
     }
     case 'questions': {
@@ -188,7 +188,7 @@ async function main() {
       try { handoverText = readFileSync(flags.handover, 'utf8'); } catch { die(`Kann ${flags.handover} nicht lesen.`); }
       const j = await call('leitstand/start', { handoverText });
       if (flags.json) return console.log(JSON.stringify(j, null, 1));
-      console.log(`Leitstand gestartet: ${j.id}  ${j.url}\nOrdner:    ${j.cwd}${j.ended.length ? `\nBeendet:   ${j.ended.map((e: any) => `${e.id} ${e.url}`).join(', ')}` : ''}`);
+      console.log(`Hauptchat gestartet: ${j.id}  ${j.url}\nOrdner:    ${j.cwd}${j.ended.length ? `\nBeendet:   ${j.ended.map((e: any) => `${e.id} ${e.url}`).join(', ')}` : ''}`);
       return;
     }
     default:

@@ -11,7 +11,7 @@ const base = realpathSync(mkdtempSync(join(tmpdir(), 'review-b-')));
 const DIR = join(base, 'review-pakete');
 mkdirSync(join(DIR, '132-leitstand'), { recursive: true });
 process.env.WERKBANK_REVIEW_DIR = DIR;
-const { findBericht, readBericht } = await import('../server/bericht.ts');
+const { findBericht, readBericht, findPaket, paketDatei, lesbar } = await import('../server/bericht.ts');
 const { laufName } = await import('../server/orchestrator.ts');
 const { groupStrands, statusWord, groupLine } = await import('../server/leitstand.ts');
 
@@ -20,6 +20,25 @@ test('Bericht finden (B3): aus Texten in Reihenfolge, nur review-pakete/NNN-slug
   assert.equal(findBericht(['/home/knut/work/knut/review-pakete/07-x/bericht.md']), join(DIR, '07-x', 'bericht.md'), 'absolut → immer unter WERKBANK_REVIEW_DIR');
   assert.equal(findBericht(['review-pakete/1-zu-kurz/bericht.md', 'review-pakete/12-..x/bericht.md']), null, 'zu kurze Nummer und .. im Namen');
   assert.equal(findBericht(['../../etc/passwd', 'review-pakete/132-a/notiz.md']), null);
+});
+
+test('Plan 144: Auftrag neben dem Bericht — Paket aus bericht.md oder auftrag.md, sonst aus dem Bericht-Ordner; lesbar prüft wie readBericht', () => {
+  assert.equal(findPaket(['Auftrag: ~/work/knut/review-pakete/144-hauptchat-workspace/auftrag.md']), join(DIR, '144-hauptchat-workspace'));
+  assert.equal(findPaket(['Bericht ~/work/knut/review-pakete/144-x/bericht.md']), join(DIR, '144-x'));
+  assert.equal(findPaket(['review-pakete/12-..x/auftrag.md', 'review-pakete/144-x/notiz.md']), null);
+  assert.equal(paketDatei({ paket: join(DIR, '145-a') }, 'auftrag'), join(DIR, '145-a', 'auftrag.md'));
+  assert.equal(paketDatei({ bericht: join(DIR, '146-b', 'bericht.md') }, 'auftrag'), join(DIR, '146-b', 'auftrag.md'), 'alter Strang ohne paket: Ordner des Berichts');
+  assert.equal(paketDatei({ prompt: 'siehe review-pakete/147-c/auftrag.md' }, 'bericht'), join(DIR, '147-c', 'bericht.md'), 'sonst aus dem gespeicherten Auftrag');
+  assert.equal(paketDatei({}, 'auftrag'), null);
+  assert.equal(paketDatei({ paket: join(DIR, '130-vorarbeit'), bericht: join(DIR, '148-d', 'bericht.md') }, 'auftrag'), join(DIR, '148-d', 'auftrag.md'), 'Bericht-Ordner hat Vorrang vor einem zuerst genannten fremden Paket');
+  mkdirSync(join(DIR, '145-a'));
+  assert.equal(lesbar(join(DIR, '145-a', 'auftrag.md')), false, 'fehlt');
+  writeFileSync(join(DIR, '145-a', 'auftrag.md'), '# Auftrag\n');
+  assert.equal(lesbar(join(DIR, '145-a', 'auftrag.md')), true);
+  writeFileSync(join(base, 'fremd.md'), 'x');
+  symlinkSync(join(base, 'fremd.md'), join(DIR, '145-a', 'bericht.md'));
+  assert.equal(lesbar(join(DIR, '145-a', 'bericht.md')), false, 'Symlink');
+  assert.equal(lesbar(join(base, 'fremd.md')), false, 'außerhalb');
 });
 
 test('Bericht sicher lesen (F7/G5, B-16/B-26): Symlink, Nachbarordner, zu groß, FIFO, fehlt → null; HTML bleibt Text', () => {
@@ -80,8 +99,8 @@ test('Gruppierung (G6, B-4, B-27): gleicher Name = eine Gruppe, neue nach > 14 T
     s({ id: 'e', lauf: 'Alt', day: 29, knutReviewedAt: new Date() }),
   ], T0 + 32 * D);
   assert.deepEqual(g.offen.map((x) => `${x.lauf}:${x.strands.length}`), ['Flex:2', 'Flex:1', 'Bot:1'], 'wartet zuerst, dann läuft, dann fertig');
-  assert.equal(groupLine(g.offen[0]), '2 Stränge · 1 wartet · 1 fertig');
-  assert.equal(groupLine(g.offen[2]), '1 Strang · 1 fertig');
+  assert.equal(groupLine(g.offen[0]), '2 Unter-Chats · 1 wartet auf dich · 1 zu prüfen');
+  assert.equal(groupLine(g.offen[2]), '1 Unter-Chat · 1 zu prüfen');
   assert.deepEqual(g.erledigt.map((x) => x.lauf), ['Alt']);
   assert.deepEqual(groupStrands([s({ id: 'z', lauf: 'Uralt', day: 0, knutReviewedAt: new Date() })], T0 + 40 * D).erledigt, [], 'Erledigt nur 14 Tage');
 });

@@ -141,7 +141,7 @@ try {
   // ---------- Werkbank ----------
   await step('Einrichtung: Anmelden mit dem Chat-Konto', async () => {
     await a.goto(W + '/');
-    await a.getByText('Willkommen in der OLAF-Werkbank').waitFor();
+    await a.getByText('Willkommen im OLAF Workspace').waitFor();
     await shot(a, '01-anmelden');
     await a.fill('#email', U1.email); await a.fill('#pw', PW);
     await a.getByRole('button', { name: 'Anmelden' }).click();

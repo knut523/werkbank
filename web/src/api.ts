@@ -56,3 +56,6 @@ export function openInParent(url: string): boolean {
     return true;
   } catch { return false; }
 }
+
+/** Gespeicherter Wert `via: 'Werkbank'` (Ziel-Zuordnung) bleibt in den Daten; angezeigt wird der heutige Name (Plan 144). */
+export const viaLabel = (v: unknown) => (v === 'Werkbank' ? 'OLAF Workspace' : String(v ?? ''));
