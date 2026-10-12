@@ -9,7 +9,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, type Sink } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, type Sink } from './sessions.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -338,6 +338,22 @@ const server = createServer(async (req, res) => {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
       const b = await readBody(req);
       return json(res, 200, { ok: endLeitstand(String(b.userId ?? ''), String(b.conv ?? '')) });
+    }
+    // Nachreichen während des Zugs (docs/plan-hauptchat-monitor.md, S1): nur für Werkbank-Web; der Schlüssel person:chat
+    // beschränkt jede Nachricht auf die eigenen Unterhaltungen der Person.
+    if (req.method === 'POST' && url.pathname === '/internal/inject') {
+      if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
+      const b = await readBody(req);
+      const userId = String(b.userId ?? ''), conv = String(b.conv ?? '');
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId) || !/^[0-9a-f-]{36}$/.test(conv)) return json(res, 400, { error: 'Ungültige Person oder Unterhaltung.' });
+      const r = injectMessage(userId, conv, String(b.text ?? ''));
+      return r.ok ? json(res, 200, { id: r.id, state: 'zugestellt' }) : json(res, r.status, { error: r.error });
+    }
+    const inj = req.method === 'GET' ? url.pathname.match(/^\/internal\/inject\/([0-9a-f-]{36})$/) : null;
+    if (inj) {
+      if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
+      const st = injectState(url.searchParams.get('user') ?? '', inj[1]);
+      return st ? json(res, 200, { id: inj[1], ...st }) : json(res, 404, { error: 'unbekannt' });
     }
     if (req.method === 'GET' && url.pathname === '/internal/orch-state') {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });

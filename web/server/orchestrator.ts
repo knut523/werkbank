@@ -372,7 +372,14 @@ export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 
   if (via === 'leitstand' && d.autoStopped) throw err(409, `Strang ${id} hat seinen Deckel erreicht — Knut entscheidet in „Heute“ (Fortsetzen/Anhalten).`);
   if (via === 'leitstand' && d.knutReviewedAt) throw err(409, `Strang ${id} hat Knut geprüft — nicht weiterführen; einen neuen Strang starten oder Knut fragen.`);
   const item = (await listOrch(u, { all: true })).find((r) => r.id === id);
-  if (item?.status === 'running') throw err(409, `Strang ${id} arbeitet noch (${item.reason}) — warten, dann senden.`);
+  if (item?.status === 'running') {
+    // Plan 154 (G13): in den laufenden Zug nachreichen — der Agent sieht es beim nächsten Schritt. Kein lastSentAt (sonst gälte
+    // der Zug nach seinem Ende als „Nachricht nicht angekommen“), zählt nicht gegen den Deckel (Council R1, Bedingung 5).
+    const r = await injectBridge(u, d.conv, msg);
+    if (!r.ok) throw err(409, `Strang ${id} arbeitet noch (${item.reason}) und nimmt gerade nichts an (${r.error}) — gleich noch einmal.`);
+    await runs().updateOne({ _id: d._id }, { $set: { lastInject: { id: r.id, text: msg.slice(0, 20_000), at: new Date(), via, done: false } }, $inc: { injects: 1 } });
+    return { id, conv: d.conv, url: d.url, injected: true };
+  }
   await deliver(u, d.conv, msg);
   if (via === 'leitstand') {
     // Teil B, G3: review_ready-Stand wandert nach prevReview (Auto-Fortsetzen und Wecken laufen wieder); Knuts Karte bleibt
@@ -385,6 +392,41 @@ export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 
   await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date(), reviewedAt: null, reviewedBy: null, knutReviewedAt: null, reviewReadyAt: null, review: null, prevReview: null, doneAt: null, autoStreak: 0, autoStopped: null, ...(/^Nacharbeit nach Review:/.test(msg) ? { reworkAt: new Date(), reworkText: msg.slice(0, 500) } : {}) }, $inc: { sends: 1 } });
   await questions().updateMany({ userId: u.id, kind: 'auto-weiter', 'strand.id': d._id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() } });
   return { id, conv: d.conv, url: d.url };
+}
+
+// ---------- Nachreichen (docs/plan-hauptchat-monitor.md, S1) ----------
+
+/** Nachricht an den laufenden Zug einer eigenen Unterhaltung nachreichen (Brücke, person:chat). */
+export async function injectBridge(u: User, conv: string, text: string): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> {
+  const r = await fetch(`${cfg.bridgeUrl}/internal/inject`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, conv, text }), signal: AbortSignal.timeout(5000) });
+  const j: any = await r.json().catch(() => ({}));
+  return r.ok ? { ok: true, id: String(j.id) } : { ok: false, status: r.status, error: String(j.error ?? `Brücke antwortet mit ${r.status}`) };
+}
+
+/** Stand einer nachgereichten Nachricht: zugestellt | gelesen | ungelesen, null = unbekannt (z. B. nach einem Neustart der Brücke). */
+export async function injectStateBridge(u: User, id: string): Promise<{ state: string; conv: string } | null> {
+  const r = await fetch(`${cfg.bridgeUrl}/internal/inject/${encodeURIComponent(id)}?user=${encodeURIComponent(u.id)}`, { headers: internalHeaders(), signal: AbortSignal.timeout(4000) });
+  if (r.status === 404) return null;
+  if (!r.ok) throw err(502, `Brücke antwortet mit ${r.status}`);
+  return (await r.json()) as any;
+}
+
+/**
+ * Nachgereichte Nachricht an einen Strang, die der Zug nicht mehr gelesen hat (Abbruch, Zeitlimit, Frist): als normale Nachricht
+ * nachsenden, sobald der Strang frei ist — genau einmal (Anspruch über lastInject.done). true = gesendet (dann kein „weiter“).
+ */
+async function nachzuegler(u: User, d: any, s: any, deps: AutoDeps): Promise<boolean> {
+  const li = d.lastInject;
+  if (!li || li.done || s?.running) return false;
+  const st = await injectStateBridge(u, li.id).catch(() => undefined);
+  if (st === undefined || st?.state === 'zugestellt') return false;   // Brücke weg bzw. noch offen: nächster Takt
+  const r = await runs().updateOne({ _id: d._id, 'lastInject.id': li.id, 'lastInject.done': false }, { $set: { 'lastInject.done': true, 'lastInject.state': st?.state ?? 'unbekannt' } });
+  // Gelesen — oder unbekannt (Brücke neu gestartet: lieber nicht doppelt; der Hauptchat sieht den Strang dann als „hängt“).
+  if (!r.modifiedCount || st?.state !== 'ungelesen') return false;
+  await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date() }, $inc: { sends: 1 } });
+  deps.log?.('orch nachgereicht ungelesen → nachgesendet', { id: d._id });
+  await deliver(u, d.conv, li.text);
+  return true;
 }
 
 /** Nachricht an den Chat hängen (Elternnachricht = letzte gespeicherte); LibreChat 409 = Zug noch nicht abgeschlossen. */
@@ -420,7 +462,7 @@ export async function autoWeiterTick(deps: AutoDeps) {
       let states: Map<string, any>;
       try { states = await strandStates(u); } catch { continue; }   // Brücke weg: nichts entscheiden
       for (const d of list) {
-        try { await autoOne(u, d, states.get(d.conv), deps); } catch (e: any) { deps.log?.('orch-auto-weiter fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 200) }); }
+        try { if (!(await nachzuegler(u, d, states.get(d.conv), deps))) await autoOne(u, d, states.get(d.conv), deps); } catch (e: any) { deps.log?.('orch-auto-weiter fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 200) }); }
       }
     }
   } finally { ticking = false; }

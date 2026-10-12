@@ -19,7 +19,7 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft } from './leitstand.ts';
 import { readBericht, paketDatei } from './bericht.ts';
@@ -1239,6 +1239,24 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
   send(res, 200, { ok: true, key: run.key });
 });
 
+
+// Nachreichen während des Zugs (docs/plan-hauptchat-monitor.md, S1): aus dem LibreChat-Eingabefeld (gleicher Ursprung über
+// /werkbank, CSRF-Header über needUser). Die Brücke nimmt nur Nachrichten an die eigenen Unterhaltungen der Person an.
+on('POST', /^\/api\/chat\/nachreichen$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req, 64 << 10);
+  const conv = String(b.conv ?? '');
+  if (!/^[0-9a-f-]{36}$/.test(conv)) throw new HttpError(400, 'Ungültige Unterhaltung.');
+  const r = await injectBridge(u, conv, String(b.text ?? ''));
+  if (!r.ok) throw new HttpError(r.status === 400 ? 400 : 409, r.error);
+  log('nachgereicht', { user: u.id });
+  send(res, 200, { id: r.id, state: 'zugestellt' });
+});
+on('GET', /^\/api\/chat\/nachreichen\/([0-9a-f-]{36})$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const st = await injectStateBridge(u, m[1]);
+  send(res, 200, { id: m[1], state: st?.state ?? 'unbekannt' });
+});
 
 // Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).
 on('GET', /^\/api\/leitstand\/overview$/, async (req, res) => send(res, 200, await overview(await needAdmin(req))));

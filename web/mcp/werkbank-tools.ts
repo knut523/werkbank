@@ -89,9 +89,9 @@ const ORCH_TOOLS = [
   },
   {
     name: 'orch_send',
-    description: 'Nachricht an einen Strang schicken (Antwort, nächster Auftrag, „weiter“). Setzt den Deckel der automatischen Fortsetzung NICHT zurück; hat ein Strang seinen Deckel erreicht, entscheidet Knut in „Heute“.',
+    description: 'Nachricht an einen Strang schicken (Antwort, nächster Auftrag, „weiter“). Arbeitet der Strang gerade, wird sie in den laufenden Zug nachgereicht — er sieht sie beim nächsten Schritt. Setzt den Deckel der automatischen Fortsetzung NICHT zurück; hat ein Strang seinen Deckel erreicht, entscheidet Knut in „Heute“.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string' } }, required: ['id', 'text'] },
-    run: async (a: any) => { const j = await call('/internal/orchestrator/send', { id: a.id, text: a.text, via: 'leitstand' }); return `gesendet: ${j.id} ${j.url}`; },
+    run: async (a: any) => { const j = await call('/internal/orchestrator/send', { id: a.id, text: a.text, via: 'leitstand' }); return j.injected ? `nachgereicht (Strang arbeitet, sieht es beim nächsten Schritt): ${j.id} ${j.url}` : `gesendet: ${j.id} ${j.url}`; },
   },
   {
     name: 'orch_review',

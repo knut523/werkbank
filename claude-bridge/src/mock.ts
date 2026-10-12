@@ -12,7 +12,62 @@ import { VAULT_DIR } from './tools.ts';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const alwaysLimit = new Set<string>();   // Sitzungen mit „maxturns-immer“
 
-export function mockQuery({ prompt, options }: { prompt: string; options: Record<string, any> }) {
+const textOf = (m: any) => (typeof m?.message?.content === 'string' ? m.message.content : (m?.message?.content ?? []).map((b: any) => b?.text ?? '').join(''));
+
+/**
+ * Streaming-Input wie das CLI (Plan 154, S1): erste Nachricht = Szenario; nachgereichte Nachrichten werden nach dem nächsten
+ * Werkzeugaufruf eingefaltet (Echo mit uuid, wie --replay-user-messages), nach dem Ergebnis als Folgezug. Die Eingabe bleibt
+ * nach dem Ergebnis offen, bis die Brücke sie schließt — wie beim CLI, damit Tests ein Hängen finden würden.
+ */
+function mockStreamed(prompt: AsyncIterable<any>, options: Record<string, any>) {
+  const signal: AbortSignal = options.abortController?.signal;
+  async function* run() {
+    const it = prompt[Symbol.asyncIterator]();
+    const first = await it.next();
+    if (first.done) return;
+    const inbox: any[] = [];
+    let closed = false;
+    let wake: (() => void) | null = null;
+    (async () => {
+      for (;;) {
+        const n = await it.next();
+        if (n.done) { closed = true; wake?.(); return; }
+        inbox.push(n.value); wake?.();
+      }
+    })();
+    let sid = options.resume ?? '';
+    const fold = function* () {
+      while (inbox.length) {
+        const m = inbox.shift();
+        yield { type: 'user', isReplay: true, uuid: m.uuid, session_id: sid, parent_tool_use_id: null, message: m.message };
+        yield { type: 'stream_event', parent_tool_use_id: null, session_id: sid, event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `(Mock) Nachgereicht gelesen: ${textOf(m)} ` } } };
+      }
+    };
+    let afterTool = false;
+    for await (const m of mockQuery({ prompt: textOf(first.value), options })) {
+      sid = m.session_id ?? sid;
+      if (afterTool) { afterTool = false; yield* fold(); }
+      yield m;
+      if (m.type === 'assistant' && (m.message?.content ?? []).some((b: any) => b?.type === 'tool_use')) afterTool = true;
+    }
+    // Nach dem Ergebnis: Folgezug für jede weitere Nachricht, bis die Eingabe geschlossen wird.
+    for (;;) {
+      if (signal?.aborted) return;
+      if (inbox.length) {
+        yield* fold();
+        yield { type: 'result', subtype: 'success', session_id: sid, is_error: false, usage: { input_tokens: 1, output_tokens: 1 } };
+        continue;
+      }
+      if (closed) return;
+      await new Promise<void>((r) => { wake = r; signal?.addEventListener('abort', () => r(), { once: true }); });
+      wake = null;
+    }
+  }
+  return run();
+}
+
+export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<any>; options: Record<string, any> }): any {
+  if (typeof prompt !== 'string' && options.extraArgs && 'replay-user-messages' in options.extraArgs) return mockStreamed(prompt, options);
   if (typeof prompt !== 'string') {
     // Streaming-Eingabe ohne Nachricht (MCP-Status): nur Steuerabfragen, keine Modellantwort.
     const signal: AbortSignal = options.abortController?.signal;
@@ -249,6 +304,22 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
         yield text(err ? '(Mock) Jira hat abgelehnt.' : `(Mock) Kommentar auf ${jk[1]} geschrieben.`);
       } else yield text('(Mock) Kein Jira-Kommentar.');
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 10, output_tokens: 5 } };
+      return;
+    }
+    // „langsam-test [n]“: ein langer Zug mit n Werkzeugschritten (Plan 154: schreiben während der Arbeit, Bilder/Video).
+    const lang = last.match(/langsam-test(?:\s+(\d+))?/i);
+    if (lang) {
+      const n = Math.min(60, Number(lang[1] || 6));
+      const ms = Number(process.env.BRIDGE_MOCK_SLOW_MS || 1500);
+      for (let i = 1; i <= n; i++) {
+        if (signal?.aborted) throw new Error('aborted');
+        yield toolUse('Bash', { command: `sleep 1 # Schritt ${i} von ${n}`, description: `Schritt ${i} von ${n}` });
+        await sleep(ms);
+        yield { type: 'user', session_id, parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'x', content: 'ok' }] } };
+        yield text(`Schritt ${i} erledigt. `);
+      }
+      yield text('(Mock) Langer Zug fertig.');
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 10, output_tokens: 10 } };
       return;
     }
     yield toolUse('Grep', { pattern: last.slice(0, 40), path: VAULT_DIR });

@@ -442,6 +442,25 @@ test('Plan 154 (Regression 12.10. 16:40): offene Sammel-Rückfrage des Hauptchat
   assert.match((await orch(['list'])).out, /review_ready/);
 });
 
+test('Plan 154 (G13): Nachricht an einen laufenden Strang wird nachgereicht — kein 409, kein lastSentAt, eingefaltet und gelesen', async () => {
+  const j = JSON.parse((await orch(['start', '--title', 'Langer Strang', '--cwd', WT, '--shared', '--json'], 'langsam-test 4')).out);
+  await until(j.id, ['running']);
+  // Warten, bis die Brücke den Zug wirklich fährt (nicht nur „unterwegs“).
+  let sent: any = null;
+  for (let i = 0; i < 40 && !sent; i++) { const r = await orch(['send', j.id, 'Bitte', 'auch', 'Tests']); if (r.code === 0) sent = r; else await pause(250); }
+  assert.ok(sent, 'nachgereicht');
+  assert.match(sent.out, /^nachgereicht/);
+  const doc: any = await mongo.db(DB).collection('orchestrator_runs').findOne({ _id: j.id });
+  assert.equal(doc.sends, 1, 'zählt nicht als neue Nachricht');
+  assert.equal(doc.injects, 1);
+  assert.equal(+doc.lastSentAt, +doc.startedAt, 'lastSentAt bleibt (sonst „nicht angekommen“ nach dem Zug)');
+  await until(j.id, ['done', 'waiting'], 30_000);
+  const show = JSON.parse((await orch(['show', j.id, '--json'])).out);
+  assert.match(show.lastMessage.text, /📨 Nachgereicht, gelesen: „Bitte auch Tests“/);
+  assert.ok(show.lastMessage.text.indexOf('Nachgereicht') < show.lastMessage.text.indexOf('Langer Zug fertig'), 'im laufenden Zug');
+  await orch(['review', j.id]);
+});
+
 test('Auto-weiter DoD 5: normaler Chat (kein Strang) mit Schrittlimit bleibt unberührt', async () => {
   const conv = randomUUID();
   const r = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/v1/chat/completions`, { method: 'POST', headers: { authorization: 'Bearer mock-token', 'content-type': 'application/json', 'x-librechat-user-id': String(knut._id), 'x-librechat-conversation-id': conv, 'x-librechat-user-email': knut.email },
