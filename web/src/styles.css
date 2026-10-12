@@ -395,3 +395,19 @@ td[data-label-inline]::before { content: none; }
 .dialog.vorschau { width: min(900px, 100%); }
 .dialog.vorschau img { height: auto; }
 .frow-main > .btn.ghost:last-child { margin-left: auto; }
+/* Heute verständlich (Paket 141): worum es geht, was zu tun ist, Details eingeklappt, Live-Gruppe */
+.rq-klar { margin: 6px 0; }
+.rq-klar p, .rq-todo { margin: 4px 0; }
+.rq-todo ol { margin: 4px 0 0; padding-left: 22px; }
+.rq-todo li { margin: 2px 0; overflow-wrap: anywhere; }
+.rq-details summary { cursor: pointer; padding: 6px 0; min-height: 24px; }
+.rq-risk-line { margin: 8px 0 0; }
+.rq-hint { margin: 6px 0 0; }
+.rq-check { min-height: 44px; align-items: center; cursor: pointer; }
+.rq-live { border-left-color: var(--green-600); }
+.rq-live summary { cursor: pointer; min-height: 44px; padding: 10px 0; }
+.rq-label { font-weight: 700; }
+.rq-link { display: inline-block; min-height: 24px; padding: 2px 4px; }
+.rq-live-list li { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; padding: 4px 0; border-top: 1px solid var(--border-light); }
+.rq-more { margin: 2px 0 0 22px; }
+.rq-jump { gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0 0; } .rq-jump .btn { min-height: 44px; }

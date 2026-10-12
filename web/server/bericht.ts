@@ -22,9 +22,20 @@ export function findBericht(texts: (string | null | undefined)[]): string | null
 
 /** Bericht lesen — oder null, wenn der Pfad nicht sicher ist (Symlink, außerhalb, FIFO, zu groß, fehlt). */
 export function readBericht(path: string | null | undefined): string | null {
+  return readUnder(path, reviewDir());
+}
+
+/** Plandatei eines Strangs (Paket 141, Council Bedingung 4): derselbe sichere Leser, nur unter ~/work. */
+export const planDir = () => join(process.env.HOME || homedir(), 'work');
+export function readPlan(path: string | null | undefined): string | null {
+  return readUnder(path, planDir());
+}
+
+/** Markdown-Datei unter rootDir lesen: kein Symlink am Ende, keine FIFO, höchstens 200 KB, über denselben Deskriptor. */
+function readUnder(path: string | null | undefined, rootDir: string): string | null {
   if (!path || !path.endsWith('.md')) return null;
   let root: string;
-  try { root = realpathSync(reviewDir()); } catch { return null; }
+  try { root = realpathSync(rootDir); } catch { return null; }
   let fd: number | null = null;
   try {
     fd = openSync(resolve(path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);

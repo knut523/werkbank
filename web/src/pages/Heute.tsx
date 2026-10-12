@@ -9,7 +9,8 @@ import { OrchQuestions } from '../orchquestions.tsx';
 
 const BIG: CSSProperties = { minHeight: 44 };
 const STAND: Record<string, [string, string]> = { ja: ['✓', 'ok'], teilweise: ['◐', 'warn'], nein: ['✗', 'bad'] };
-const nothing = (t?: string) => !t || /^(nichts|keins?|keine|—|-|n\/a|entfällt)\.?$/i.test(t.trim());
+// Dieselbe Lesart wie web/server/heutekarte.ts (`nothing`): „nichts …“, „keine (…)“, „—“, auch in **Fett**.
+const nothing = (t?: string | null) => !t || /^(nichts\b|keins?\s*([.(]|$)|keine\s*([.(]|$)|[—–-]+\s*$|n\/a\b|entfällt\b)/i.test(t.trim().replace(/^\*+|\*+$/g, ''));
 
 /** Nachtbau: von G0 vor dem Bau gestoppte Stränge (blocked_g0) mit Belegen; entschieden wird in der Rückfrage darunter. */
 function G0Blocked({ items }: { items: any[] }) {
@@ -35,30 +36,72 @@ function Head({ it }: { it: any }) {
     <div className="rq-head">
       {it.kind === 'strand' ? <a href="#/leitstand" className="rq-key">{it.key}</a> : <a href={`#/board?key=${it.key}`} className="rq-key">{it.key}</a>}
       <span className="rq-title">{it.summary ?? ''}</span>
+      <StandChip s={it.stand} />
       <span className="tiny muted">{it.kind === 'strand' && it.running ? <span className="chip">läuft wieder</span> : null} {fmtDateTime(it.reviewReadyAt ?? it.endedAt ?? it.startedAt)}{it.kind === 'strand' && it.statusAt ? ` · Stand ${fmtDateTime(it.statusAt)}` : ''}</span>
+    </div>
+  );
+}
+
+const STAND_CLS: Record<string, string> = { live: 'ok', teilweise: 'warn', release: '', lokal: '', laeuft: '' };
+/** Stand im Kartenkopf (Paket 141): Bedeutung im Text, die Farbe nur zusätzlich. */
+function StandChip({ s }: { s?: { kind: string; text: string; branch?: string } | null }) {
+  if (!s) return null;
+  return <span className={`chip tiny-chip ${STAND_CLS[s.kind] ?? ''}`} data-testid="stand" title={s.branch ? `Zweig ${s.branch}` : undefined}>{s.text}</span>;
+}
+
+const SAFE_URL = /^(https?:\/\/|api\/files\/agenten\/|#\/)/i;
+/** Text mit Markdown-Links: nur http(s), Werkbank-Paketdateien und interne Seiten werden Links; Bilder als „Bild ansehen“. */
+function LinkMd({ text }: { text: string }) {
+  const parts = text.split(/(!?\[[^\]]*\]\([^)\s]+\))/);
+  return <>{parts.map((p, i) => {
+    const m = p.match(/^(!?)\[([^\]]*)\]\(([^)\s]+)\)$/);
+    if (!m) return <Md key={i} text={p} />;
+    const [, img, label, url] = m;
+    const raw = url.split('/').pop()?.split('?')[0] ?? '';
+    let name = raw;
+    try { name = decodeURIComponent(raw); } catch { /* kaputtes % — Rohtext zeigen statt die Seite abstürzen zu lassen */ }
+    const shown = img ? `Bild ansehen${label || name ? ` (${label || name})` : ''}` : label || url;
+    return SAFE_URL.test(url) ? <a key={i} href={url} target={url.startsWith('#') ? undefined : '_blank'} rel="noreferrer">{shown}</a> : <span key={i}>{shown}</span>;
+  })}</>;
+}
+
+/** Worum es geht · Was du jetzt tun sollst (Paket 141) — ohne Aufklappen. */
+function Klar({ it }: { it: any }) {
+  const r = it.review;
+  const worum = it.kind === 'strand' ? it.worum || it.summary : `${it.key}${it.summary ? ` — ${it.summary}` : ''}`;
+  let todo: string[] = it.kind === 'strand' ? (it.todo ?? []).map((t: any) => t.text) : [];
+  if (it.kind !== 'strand' && it.bucket === 'review') todo = ['Ergebnis im Chat ansehen, dann „Passt“ oder „Nacharbeit“.', ...(r && !nothing(r.nichtGemacht) ? [`Offen geblieben: ${r.nichtGemacht}`] : [])];
+  return (
+    <div className="rq-klar">
+      {worum && <p className="small rq-worum"><strong className="rq-label">Worum es geht:</strong> <Md text={worum} /></p>}
+      <div className="small rq-todo">
+        <strong className="rq-label">Was du jetzt tun sollst:</strong>
+        {it.running ? <span> Agent arbeitet noch — später wiederkommen.</span>
+          : todo.length ? <><ol>{todo.map((t, i) => <li key={i}><LinkMd text={t} /></li>)}</ol>{it.todoMore > 0 && <p className="tiny muted rq-more">+ {it.todoMore} {it.todoMore === 1 ? 'weiterer Punkt' : 'weitere Punkte'} im {it.bericht ? <a href={`#/leitstand?bericht=${it.id}`}>Bericht</a> : 'Bericht'}</p>}</>
+          : <span> Nichts zu tun außer lesen — dann „Passt“.</span>}
+      </div>
     </div>
   );
 }
 
 function ReviewBody({ it }: { it: any }) {
   const r = it.review;
-  // Strang ohne review_ready (Teil B, E10): der „### Stand“-Auszug der letzten Antwort.
-  if (!r) return it.kind === 'strand' && it.excerpt ? <div className="rq-body small" style={{ whiteSpace: 'pre-wrap' }}><Md text={it.excerpt} /></div> : null;
+  // Strang ohne review_ready (Teil B, E10): der „### Stand“-Auszug der letzten Antwort — jetzt unter „Details“.
+  if (!r) return it.kind === 'strand' && it.excerpt ? <details className="rq-body small rq-details"><summary>Letzter Stand des Strangs</summary><div style={{ whiteSpace: 'pre-wrap' }}><Md text={it.excerpt} /></div></details> : null;
+  const risk = !nothing(r.risiko);
   return (
-    <div className="rq-body">
+    <details className="rq-body rq-details" data-testid="details">
+      <summary className="small">Was gemacht wurde · DoD {r.dod.filter((d: any) => d.stand === 'ja').length} von {r.dod.length}{!nothing(r.nichtGemacht) ? ' · etwas offen' : ''}{risk ? ' · ⚠ Risiko genannt' : ''}</summary>
       {it.reviewOld && <p className="tiny muted">Älterer Stand (vor der letzten Nachricht an den Strang).</p>}
       <p className="small"><b>Gemacht:</b> <Md text={r.gemacht} /></p>
       {!nothing(r.nichtGemacht) && <p className="small rq-warn"><b>Nicht gemacht:</b> <Md text={r.nichtGemacht} /></p>}
-      {!nothing(r.risiko) && <p className="small rq-risk"><b>Risiko:</b> <Md text={r.risiko} /></p>}
-      <details open={r.dod.length <= 4} className="small">
-        <summary>DoD: {r.dod.filter((d: any) => d.stand === 'ja').length} von {r.dod.length} erfüllt</summary>
-        <ul className="plain dod">{r.dod.map((d: any, i: number) => <li key={i}><span className={`chip tiny-chip ${STAND[d.stand][1]}`} aria-label={d.stand}>{STAND[d.stand][0]}</span><span className="dod-text"><Md text={d.punkt} />{d.beleg && <span className="tiny muted dod-beleg"> · <Md text={d.beleg} /></span>}</span></li>)}</ul>
-      </details>
+      <p className="small" style={{ marginBottom: 0 }}><b>DoD: {r.dod.filter((d: any) => d.stand === 'ja').length} von {r.dod.length} erfüllt</b></p>
+      <ul className="plain dod small">{r.dod.map((d: any, i: number) => <li key={i}><span className={`chip tiny-chip ${STAND[d.stand][1]}`} aria-label={d.stand}>{STAND[d.stand][0]}</span><span className="dod-text"><Md text={d.punkt} />{d.beleg && <span className="tiny muted dod-beleg"> · <Md text={d.beleg} /></span>}</span></li>)}</ul>
       {(r.artefakte.length > 0 || it.written.length > 0) && <div className="tiny rq-files">
         {r.artefakte.map((a: string) => <span key={a} className="chip tiny-chip">{a}</span>)}
         {it.written.filter((w: any) => w.vault).map((w: any) => <a key={w.vault} className="chip tiny-chip" href={note(w.vault)}>📄 {w.vault.split('/').pop()}</a>)}
       </div>}
-    </div>
+    </details>
   );
 }
 
@@ -108,15 +151,21 @@ function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
           <button className="btn small ghost" style={BIG} disabled={busy} onClick={() => run(async () => { await api(`/api/runs/${it.id}/passt`, { body: {} }); toast('Ausgeblendet'); })}>Erledigt</button>
         </div>
       </div>}
+      {it.bucket === 'review' && <Klar it={it} />}
       <ReviewBody it={it} />
       {it.bucket === 'review' && <>
+        {it.review && !nothing(it.review.risiko) && <p className="small rq-risk rq-risk-line" data-testid="risk-line"><b>⚠ Risiko:</b> <Md text={it.review.risiko} max={200} /></p>}
         <div className="row rq-actions">
-          <button className="btn primary" style={BIG} disabled={busy || it.running} onClick={passt}>Passt</button>
-          <button className="btn" style={BIG} disabled={busy || it.running} aria-expanded={rework !== null} onClick={() => setRework(rework === null ? '' : null)}>Nacharbeit</button>
+          <button className="btn primary" style={BIG} disabled={busy || it.running} onClick={passt} aria-describedby={`hint-${it.id}`}>Passt</button>
+          <button className="btn" style={BIG} disabled={busy || it.running} aria-expanded={rework !== null} onClick={() => setRework(rework === null ? '' : null)} aria-describedby={`hint-${it.id}`}>Nacharbeit</button>
           {open}
-          {it.kind !== 'strand' && <label className="small row" style={{ gap: 6 }}><input type="checkbox" checked={comment} onChange={(e) => setComment(e.target.checked)} /> mit Jira-Kommentar</label>}
+          {it.kind !== 'strand' && <label className="small row rq-check" style={{ gap: 6 }}><input type="checkbox" checked={comment} onChange={(e) => setComment(e.target.checked)} /> mit Jira-Kommentar</label>}
           {it.kind === 'strand' && it.reviewedBy === 'leitstand' && <span className="tiny muted">vom Leitstand abgelegt</span>}
         </div>
+        <p className="tiny muted rq-hint" id={`hint-${it.id}`} data-testid="passt-hint">{comment
+          ? <><b>Passt</b> = geprüft, und nach deiner Bestätigung ein Kommentar in {it.key} (Jira).</>
+          : <><b>Passt</b> = nur als geprüft markieren, nichts wird geschrieben{it.kind === 'strand' ? ', der Strang ruht' : ''}.</>}
+          {' '}<b>Nacharbeit</b> = dein Text geht an den Agenten, er macht weiter.</p>
         {rework !== null && <div className="rq-rework">
           <label className="small" htmlFor={`rw-${it.id}`}>Was soll der Agent nacharbeiten?</label>
           <textarea id={`rw-${it.id}`} rows={3} value={rework} onChange={(e) => setRework(e.target.value)} placeholder="z. B. Test für den Fehlerfall ergänzen" />
@@ -126,6 +175,45 @@ function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
       {it.rework && it.bucket !== 'review' && <p className="tiny muted">Nacharbeit {fmtDateTime(it.rework.at)}: {it.rework.text}</p>}
       <Err e={err} />
     </article>
+  );
+}
+
+/** Schon live gegangene Stränge (Paket 141): eingeklappt, je Strang eine Zeile, gesammelt abhaken mit Bestätigung. */
+function LiveGroup({ items, onDone }: { items: any[]; onDone: () => void }) {
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const [skipped, setSkipped] = useState<Record<string, string>>({});
+  const all = async () => {
+    const n = items.length;
+    if (!(await confirm({ title: `${n} live gegangene ${n === 1 ? 'Strang' : 'Stränge'} abhaken?`, confirmLabel: `${n} abhaken`,
+      body: <><p className="small">Sie werden als geprüft markiert. Nichts wird geschrieben, gepusht oder gemergt. Die Werkbank prüft vorher noch einmal, ob jeder wirklich live ist.</p><ul className="small">{items.map((x) => <li key={x.id}>{x.summary} · {x.stand.text}</li>)}</ul></> }))) return;
+    setBusy(true); setErr(null);
+    try {
+      const r: any = await api('/api/leitstand/strands/passt-live', { body: { items: items.map((x) => ({ id: x.id, seen: x.seen })) } });
+      setSkipped(Object.fromEntries(r.skipped.map((x: any) => [x.id, x.why])));
+      const title = (id: string) => items.find((x) => x.id === id)?.summary ?? id;
+      toast(`${r.done.length} abgehakt${r.skipped.length ? ` · übersprungen: ${r.skipped.map((x: any) => `${title(x.id)} (${x.why})`).join(', ')}` : ''}`);
+      onDone();
+    } catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  return (
+    <div className="card rq rq-live" data-testid="live-group">
+      <details>
+        <summary><b>Schon live — nur noch abhaken ({items.length})</b> <span className="small muted">· Liste zeigen</span></summary>
+        <p className="small muted">Diese Stränge sind auf der Werkbank live. Zu prüfen gibt es nichts mehr — abhaken räumt sie von hier weg.</p>
+        <ul className="plain rq-live-list">{items.map((x) => <li key={x.id} data-testid="live-item">
+          <span className="rq-title">{x.summary}</span> <StandChip s={x.stand} />
+          {x.bericht && <a className="small rq-link" href={`#/leitstand?bericht=${x.id}`}>Bericht</a>}
+          {skipped[x.id] && <span className="tiny rq-warn">übersprungen: {skipped[x.id]}</span>}
+        </li>)}</ul>
+      </details>
+      <div className="row rq-actions">
+        <button className="btn primary" style={BIG} disabled={busy} onClick={all} data-testid="passt-live">Alle {items.length} als geprüft markieren</button>
+      </div>
+      <Err e={err} />
+    </div>
   );
 }
 
@@ -145,7 +233,13 @@ export function Heute({ cfg }: { cfg: Config }) {
   if (t.error) return <div className="page"><Err e={t.error} /></div>;
   if (!d) return <div className="page"><Loading /></div>;
 
-  const review = [...(d.strands ?? []), ...d.queue.filter((x: any) => x.bucket === 'review')];
+  const allReview = [...(d.strands ?? []), ...d.queue.filter((x: any) => x.bucket === 'review')];
+  // Schon live (Paket 141): eigene, eingeklappte Gruppe am Ende; die Zahl am Abschnitt zählt nur, was zu prüfen ist.
+  const isLive = (x: any) => x.kind === 'strand' && x.stand?.kind === 'live' && !x.running;
+  const liveDone = allReview.filter(isLive);
+  // Karten mit Aufgaben für dich zuerst (stabil: sonst bleibt die Reihenfolge der Schlange).
+  const hasTodo = (x: any) => x.kind !== 'strand' || (x.todo ?? []).length > 0 || (x.review && !nothing(x.review.risiko));
+  const review = allReview.filter((x) => !isLive(x)).sort((a, b) => Number(hasTodo(b)) - Number(hasTodo(a)));
   const waitingRuns = d.queue.filter((x: any) => ['frage', 'haengt', 'still'].includes(x.bucket));
   const running = d.queue.filter((x: any) => x.bucket === 'laeuft');
   const orchOpen = d.orchOpen ?? 0;
@@ -167,6 +261,10 @@ export function Heute({ cfg }: { cfg: Config }) {
         </div>
       </div>
       {d.dryRun && <p className="chip warn">Vorschau (Trockenlauf): Antworten an Agenten sind aus.</p>}
+      {allReview.length > 0 && showWaiting && <p className="row small rq-jump" data-testid="jump">Springen zu:
+        <button className="btn ghost small" onClick={() => document.querySelector('[data-testid="review-queue"]')?.scrollIntoView()}>Zu prüfen ({review.length})</button>
+        <button className="btn ghost small" onClick={() => document.querySelector('[data-testid="waiting"]')?.scrollIntoView()}>Wartet auf dich ({nMine})</button>
+      </p>}
       {d.memory && <div className="card soft" role="status" data-testid="memory-warning"><b>⚠️ Speicher knapp:</b> <span className="small">{d.memory}. Neue Chats und Agenten können langsam werden oder abbrechen — Testinstanzen stoppen, wartende Chats beantworten.</span></div>}
       {running.length > 0 && <p className="small muted" data-testid="running">⏳ {running.length === 1 ? 'Ein Agent arbeitet' : `${running.length} Agenten arbeiten`} gerade: {running.map((x: any, i: number) => <span key={x.id}>{i ? ', ' : ''}{x.url ? <a href={x.url} target={chatTarget}>{x.key}</a> : x.key}</span>)}</p>}
 
@@ -174,9 +272,10 @@ export function Heute({ cfg }: { cfg: Config }) {
 
       {(d.orchAuto ?? []).length > 0 && <p className="small muted" data-testid="orch-auto">🔁 Orchestrator, automatisch fortgesetzt: {d.orchAuto.map((x: any, i: number) => <span key={x.id}>{i ? ', ' : ''}<a href={x.url} target={chatTarget}>{x.title}</a> ({x.n}){x.stopped ? ' — angehalten' : ''}</span>)}</p>}
 
-      {review.length > 0 && <section data-testid="review-queue">
-        <h2>Wartet auf dein Review <span className="chip">{review.length}</span></h2>
+      {allReview.length > 0 && <section data-testid="review-queue">
+        <h2>Wartet auf dein Review {review.length > 0 ? <span className="chip">{review.length}</span> : <span className="small muted">— nichts zu prüfen</span>}</h2>
         {review.map((it: any) => <RunCard key={it.id} it={it} onDone={reload} />)}
+        {liveDone.length > 0 && <LiveGroup items={liveDone} onDone={reload} />}
       </section>}
 
       {showWaiting && <section data-testid="waiting">
@@ -199,7 +298,7 @@ export function Heute({ cfg }: { cfg: Config }) {
         <HygienePanel max={5} title="Deine Tickets" heading="Tickets, die Pflege brauchen" onChange={reload} />
       </section>
 
-      {review.length === 0 && nMine === 0 && <div className="card soft empty" data-testid="today-empty">
+      {allReview.length === 0 && nMine === 0 && <div className="card soft empty" data-testid="today-empty">
         <p><b>Nichts wartet auf dein Review.</b></p>
         <p className="small muted">Neue Arbeit findest du auf der <a href="#/roadmap">Roadmap</a> (Als Nächstes) oder am <a href="#/board">Board</a>.</p>
       </div>}

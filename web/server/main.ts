@@ -1115,7 +1115,7 @@ on('GET', /^\/api\/today$/, async (req, res) => {
     .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
   const orchOpen = (await listQuestions(u, { open: true }).catch(() => [])).length;
   // Automatisch fortgesetzte Stränge (Plan auto-weiter, DoD 6): nur der Zähler aus Mongo, kein Abruf bei der Brücke.
-  const cards = await strandCards(u).catch(() => []);
+  const cards = await strandCards(u, { detail: true }).catch(() => []);
   const carded = new Set(cards.map((c: any) => c.id));
   const orchAuto = (await wb().collection('orchestrator_runs').find({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
     .filter((r: any) => !carded.has(String(r._id)))   // keine Doppelung mit der Karte (F5)
@@ -1217,19 +1217,48 @@ on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
   send(res, 200, { strand: String(d._id), name: String(d.bericht).split('/').slice(-2).join('/'), text });
 });
 
+/** Strang zum Review prüfen (Einzel- und Sammel-„Passt“, Council Bedingung 7): eigen, gesehener Stand (F3), nicht laufend (G4). */
+async function strandForReview(u: User, id: string, seenIn: unknown, states: Map<string, any> | null) {
+  const d: any = await orchRuns().findOne({ _id: id as any, userId: u.id, kind: { $ne: 'leitstand' } });
+  if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
+  const seen = String(new Date(d.reviewReadyAt ?? d.doneAt ?? 0).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime());
+  if (String(seenIn ?? '') !== seen) throw new HttpError(409, 'Der Strang hat sich inzwischen geändert — Seite neu laden.');
+  if (!states) throw new HttpError(503, 'Brücke nicht erreichbar — gleich noch einmal.');
+  if (states.get(d.conv)?.running) throw new HttpError(409, 'Der Strang arbeitet gerade — warte, bis er fertig ist.');
+  return d;
+}
+const expectOf = (d: any) => ({ lastSentAt: d.lastSentAt ?? null, reviewReadyAt: d.reviewReadyAt ?? null, doneAt: d.doneAt ?? null });
+
+// Alle live gegangenen Stränge abhaken (Paket 141, S2): der Stand wird hier frisch neu gerechnet — der Browser zählt nicht.
+on('POST', /^\/api\/leitstand\/strands\/passt-live$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  const items: any[] = Array.isArray(b.items) ? b.items.slice(0, 30) : [];
+  if (!items.length) throw new HttpError(400, 'Keine Stränge angegeben.');
+  const states = await strandStates(u).catch(() => null);
+  const cards = new Map((await strandCards(u, { detail: true, fresh: true })).map((c: any) => [c.id, c]));
+  const done: string[] = [], skipped: { id: string; why: string }[] = [];
+  for (const it of items) {
+    const id = String(it?.id ?? '');
+    const c: any = cards.get(id);
+    if (!c) { skipped.push({ id, why: 'nicht mehr offen' }); continue; }
+    if (c.stand?.kind !== 'live') { skipped.push({ id, why: 'nicht live' }); continue; }
+    try {
+      const d = await strandForReview(u, id, it?.seen, states);
+      await reviewOrch(u, id, `live seit Release ${c.stand.release} (gesammelt abgehakt)`, 'knut', expectOf(d));
+      done.push(id);
+    } catch (e: any) { skipped.push({ id, why: e?.status === 503 ? 'Brücke nicht erreichbar' : /arbeitet/.test(e?.message) ? 'Agent arbeitet gerade' : 'hat sich geändert' }); }
+  }
+  log('stränge gesammelt geprüft', { user: u.id, done: done.length, skipped: skipped.length });
+  send(res, 200, { done, skipped });
+});
+
 on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (req, res, m) => {
   const u = await needAdmin(req);
   const b = await body(req);
-  const d: any = await orchRuns().findOne({ _id: m[1] as any, userId: u.id, kind: { $ne: 'leitstand' } });
-  if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
-  // Gesehener Stand (F3) und live bei der Brücke (G4): nie auf einen veralteten oder laufenden Strang entscheiden.
-  const seen = String(new Date(d.reviewReadyAt ?? d.doneAt ?? 0).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime());
-  if (String(b.seen ?? '') !== seen) throw new HttpError(409, 'Der Strang hat sich inzwischen geändert — Seite neu laden.');
-  let st: any;
-  try { st = (await strandStates(u)).get(d.conv); } catch { throw new HttpError(503, 'Brücke nicht erreichbar — gleich noch einmal.'); }
-  if (st?.running) throw new HttpError(409, 'Der Strang arbeitet gerade — warte, bis er fertig ist.');
+  const d = await strandForReview(u, m[1], b.seen, await strandStates(u).catch(() => null));
   if (m[2] === 'passt') {
-    await reviewOrch(u, m[1], String(b.note ?? 'Passt (Heute)'), 'knut', { lastSentAt: d.lastSentAt ?? null, reviewReadyAt: d.reviewReadyAt ?? null, doneAt: d.doneAt ?? null });
+    await reviewOrch(u, m[1], String(b.note ?? 'Passt (Heute)'), 'knut', expectOf(d));
     log('strang geprüft', { user: u.id, id: m[1] });
     return send(res, 200, { ok: true });
   }
