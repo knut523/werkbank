@@ -10,7 +10,7 @@
 
 import { randomBytes, randomUUID } from 'node:crypto';
 import { realpathSync, readdirSync } from 'node:fs';
-import { readBericht, readPlan, reviewDir, findPaket } from './bericht.ts';
+import { readBericht, readPlan, reviewDir, findPaket, lesbar, paketDatei } from './bericht.ts';
 import { PAKET_RE, paketFile } from './reviewpakete.ts';
 import { worumGeht, wasTun, type TodoStep } from './heutekarte.ts';
 import { liveIndex, strandStand, realGit, type LiveIndex } from './releasestand.ts';
@@ -66,18 +66,21 @@ export function strandEvent(run: any, st: { status: string; reason: string; caus
 export function weiterEvent(s: (StrandState & { kind?: string }) | null | undefined, now: number, accountFree: boolean): LeitEvent | null | 'wait' {
   if (!s || s.running) return null;
   const t = s.turn;
-  if (s.interrupted && t) return { key: `weiter:${t.start}`, kind: 'weiter', at: t.start, text: 'Leitstand: Zug abgebrochen (Brücke neu gestartet) — weiter' };
+  if (s.interrupted && t) return { key: `weiter:${t.start}`, kind: 'weiter', at: t.start, text: 'Hauptchat: Zug abgebrochen (Brücke neu gestartet) — weiter' };
   if (!t || !t.end || !['limit', 'timeout', 'rate_limit'].includes(String(t.outcome))) return null;
   if (t.outcome === 'rate_limit' && now - t.end < AUTO_RATE_MS && !accountFree) return 'wait';
   const why = t.outcome === 'limit' ? 'Schrittlimit' : t.outcome === 'timeout' ? 'Zeitlimit' : 'Kontingent';
-  return { key: `weiter:${t.start}`, kind: 'weiter', at: t.end, text: `Leitstand: ${why} des Zuges erreicht — weiter, wo du warst` };
+  return { key: `weiter:${t.start}`, kind: 'weiter', at: t.end, text: `Hauptchat: ${why} des Zuges erreicht — weiter, wo du warst` };
 }
 
-const neutral = (t: string) => t.replace(/werkbank-antwort/g, 'werkbank​-antwort').replace(/#leitstand-/g, '#leitstand​-');
+// Auch den Zaun der Übergabe brechen (Plan 144, Council B1): Titel und Rückfragen in der automatischen Übergabe schreiben Agenten.
+// Jedes `>>>`/`<<<` wird gebrochen (nach NFC), nicht nur die genaue Schreibweise des Zauns (Review: „ÜBERGABE >>>“, NFD-Ü …).
+export const neutral = (t: string) => t.normalize('NFC').replace(/werkbank-antwort/g, 'werkbank​-antwort').replace(/#leitstand-/g, '#leitstand​-')
+  .replace(/>>>/g, '>​>>').replace(/<<</g, '<​<<');
 
 /** Text der Meldung. Auszüge eingezäunt als Daten, Anker entschärft; Kennung allein in der letzten Zeile (B4, D1). */
 export function wakeText(list: { kind: string; text: string; excerpt?: string; strand?: { id: string; title: string } | null }[], batch: string, note = ''): string {
-  const lines = [`🛰️ Leitstand-Meldung (automatisch, ${list.length} ${list.length === 1 ? 'Ereignis' : 'Ereignisse'})`];
+  const lines = [`🛰️ Hauptchat-Meldung (automatisch, ${list.length} ${list.length === 1 ? 'Ereignis' : 'Ereignisse'})`];
   for (const e of list) {
     lines.push(`- ${e.strand ? `Strang \`${e.strand.id}\` „${neutral(e.strand.title)}“: ` : ''}${neutral(e.text)}`);
     if (e.excerpt) {
@@ -100,7 +103,7 @@ export function decideWake(open: { createdAt: number; urgent?: boolean }[], ctx:
   if (!open.length) return { action: 'none', why: 'keine Ereignisse' };
   const oldest = Math.min(...open.map((e) => e.createdAt));
   if (!open.some((e) => e.urgent) && ctx.now - oldest < ctx.c.debounce) return { action: 'wait', why: 'entprellen' };
-  if (ctx.busy) return { action: 'wait', why: 'Leitstand arbeitet' };
+  if (ctx.busy) return { action: 'wait', why: 'Hauptchat arbeitet' };
   if (!ctx.lastIsAnswer) return { action: 'wait', why: 'letzte Nachricht ist keine gespeicherte Antwort' };
   if (!open.some((e) => e.urgent)) {
     const counted = ctx.delivered.filter((t) => t > ctx.capResetAt);
@@ -117,16 +120,24 @@ export async function activeLeitstand(u: User) {
 }
 
 const HANDOVER_MAX = 40_000;
+// Ein Start je Person zur selben Zeit (Review Plan 144: zwei Tabs → sonst zwei aktive Hauptchats).
+const starting = new Set<string>();
 
 /** Neuen Leitstand starten (Plan 132, S1/S6). Nur Admins. Ein vorhandener wird in der Brücke abgemeldet und beendet. */
 export async function startLeitstand(u: User, inp: { handoverText?: string | null }) {
-  if (u.role !== 'ADMIN') throw err(403, 'Den Leitstand dürfen nur Admins starten.');
+  if (u.role !== 'ADMIN') throw err(403, 'Den Hauptchat dürfen nur Admins starten.');
+  if (starting.has(u.id)) throw err(409, 'Ein Hauptchat wird gerade schon gestartet.');
+  starting.add(u.id);
+  try { return await startLeitstandOnce(u, inp); } finally { starting.delete(u.id); }
+}
+
+async function startLeitstandOnce(u: User, inp: { handoverText?: string | null }) {
   // Den Text liest die CLI aus der Übergabedatei; der Server liest keine Pfade aus Anfragen.
   const text = String(inp.handoverText ?? '').trim();
-  if (!text) throw err(400, 'Übergabe fehlt (--handover DATEI).');
+  if (!text) throw err(400, 'Übergabe fehlt (Textfeld oder --handover DATEI).');
   if (text.length > HANDOVER_MAX) throw err(400, `Übergabe zu lang (höchstens ${HANDOVER_MAX} Zeichen).`);
   let dir: string;
-  try { dir = realpathSync(leitDir()); } catch { throw err(400, `Leitstand-Ordner ${leitDir()} gibt es nicht (WERKBANK_LEITSTAND_DIR).`); }
+  try { dir = realpathSync(leitDir()); } catch { throw err(400, `Hauptchat-Ordner ${leitDir()} gibt es nicht (WERKBANK_LEITSTAND_DIR).`); }
   const conv = randomUUID();
   const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir, kind: 'leitstand' }), signal: AbortSignal.timeout(5000) });
   const rj: any = await reg.json().catch(() => ({}));
@@ -134,7 +145,7 @@ export async function startLeitstand(u: User, inp: { handoverText?: string | nul
   const old: any[] = await runs().find({ userId: u.id, kind: 'leitstand', endedAt: null }).toArray();
   const id = 'ls-' + randomBytes(3).toString('hex');
   const date = new Date().toLocaleDateString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' });
-  const title = `Leitstand · ${date}`;
+  const title = `Hauptchat · ${date}`;
   const doc: any = { _id: id, kind: 'leitstand', userId: u.id, conv, url: `${cfg.librechatPublicUrl}/c/${conv}`, title, cwd: rj.dir ?? dir, plan: null, prompt: '', startedAt: new Date(), lastSentAt: new Date(), sends: 1, reviewedAt: null, endedAt: null, startError: null, wake: null, wakes: [], weiterStreak: 0 };
   const first = [
     title,
@@ -162,14 +173,63 @@ export async function startLeitstand(u: User, inp: { handoverText?: string | nul
 const endInBridge = (u: User, conv: string) => fetch(`${cfg.bridgeUrl}/internal/orchestrate/end`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, conv }), signal: AbortSignal.timeout(5000) }).catch(() => null);
 
 /** Zeile für „Heute“ (nur Admins): Link und Zustand des aktiven Leitstands. */
-export async function leitstandLine(u: User): Promise<{ url: string; status: string; open: number } | null> {
+export async function leitstandLine(u: User): Promise<{ id: string; conv: string; title: string; startedAt: Date; url: string; status: string; open: number } | null> {
   if (u.role !== 'ADMIN') return null;
   const d = await activeLeitstand(u).catch(() => null);
   if (!d) return null;
   let status = 'bereit';
   try { const s: any = (await strandStates(u)).get(d.conv); status = s?.waitingAnswer ? 'wartet auf dich' : s?.running ? 'läuft' : 'bereit'; } catch { status = 'Brücke nicht erreichbar'; }
   const open = await events().countDocuments({ userId: u.id, status: { $in: ['offen', 'gesendet'] } }).catch(() => 0);
-  return { url: d.url, status, open };
+  return { id: String(d._id), conv: d.conv, title: d.title, startedAt: d.startedAt, url: d.url, status, open };
+}
+
+const VORLAGE_REGISTER = `## Register (erst dort lesen, dann im Code prüfen)
+- Roadmap: \`/vault/olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/0-Overview/0-roadmap-produkt-olaf.md\`
+- PR-Stand: \`/vault/olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/0-Overview/pr-stand-produkt-olaf.md\`
+- Bau-Stand je Thema: \`/vault/olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/<Thema>/0-<thema>-uebersicht.md\`
+- Offene Fragen: \`/vault/olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/0-Overview/offene-fragen-roadmap-produkt-olaf.md\`
+- Pläne des OLAF Workspace: \`~/work/knut/<worktree>/docs/plan-*.md\`
+
+## Regeln (aus \`~/.claude/CLAUDE.md\`, gekürzt)
+- Erst nachsehen, dann herleiten: Register vor Code; gegen den echten HEAD prüfen, nicht gegen den lokalen Klon.
+- Schmal lesen, breit ablegen; große Zwischenergebnisse in eine Datei, nur die Auswertung in den Chat.
+- Subagenten nur für Fan-out-Lesen; Schreibendes bleibt hier.
+- Keine Jira-Tasks ohne ausdrücklichen Auftrag. **Nie mergen. Pushen nur auf ausdrückliches Ok.**
+- Hochgeladene Dateien immer einsortieren (\`~/work/dokumente/<team>/<vorgang>/JJJJ-MM-TT_<art>_<slug>.<ext>\`).
+- Gedächtnis: compartment (\`memory_search\` vor dem Antworten, \`memory_store\` für neue Fakten).`;
+
+const cell = (t: unknown) => String(t ?? '').replace(/[\u0000-\u001f\u007f|]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+
+/**
+ * Automatische Übergabe für den Start in der Oberfläche (Plan 144, S2) im Aufbau von docs/leitstand-uebergabe-vorlage.md.
+ * Nur festgeschriebener Stand aus Mongo; KEINE Strang-Auszüge (Council B1) — Titel und Rückfragen kommen trotzdem von Agenten,
+ * deshalb einzeilig, gekürzt und beim Start zusätzlich entschärft (neutral).
+ */
+export async function handoverDraft(u: User, now = new Date()) {
+  const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, ...OPEN, startError: null }).sort({ startedAt: -1 }).limit(60).toArray();
+  const qs: any[] = await questions().find({ userId: u.id, status: 'offen' }).sort({ createdAt: -1 }).limit(30).toArray();
+  const when = now.toLocaleString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const word = (d: any) => UI_WORD[statusWord(d)] ?? statusWord(d);
+  const lines = [
+    `## Stand (${when}, automatisch erzeugt)`,
+    '- Woran wir gerade arbeiten (ein bis drei Sätze): ',
+    '- Was zuletzt entschieden wurde (mit Quelle): ',
+    '',
+    '## Offene Unter-Chats',
+  ];
+  if (!docs.length) lines.push('Keine offenen Unter-Chats.');
+  else {
+    lines.push('| ID | Lauf | Titel | Status | Arbeitsordner |', '|---|---|---|---|---|');
+    for (const d of docs) lines.push(`| ${cell(d._id)} | ${cell(d.lauf ?? laufName(d.title ?? '').lauf)} | ${cell(d.title)} | ${word(d)} | \`${cell(d.cwd)}\` |`);
+  }
+  lines.push('', '## Offene Rückfragen an Knut');
+  if (!qs.length) lines.push('Keine offenen Rückfragen.');
+  for (const q of qs) {
+    const since = new Date(q.createdAt).toLocaleDateString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' });
+    lines.push(`- \`${cell(q._id)}\` — ${cell(q.title)} — seit ${since}${q.strand ? ` — Unter-Chat \`${cell(q.strand.id ?? q.strand)}\`` : ''} — Empfehlung: ${cell(q.recommendation)}`);
+  }
+  lines.push('', VORLAGE_REGISTER, '', '## Was als Nächstes ansteht', '1. ');
+  return { text: lines.join('\n'), strands: docs.length, questions: qs.length, max: HANDOVER_MAX };
 }
 
 // ---------- Takt ----------
@@ -255,7 +315,7 @@ async function tickOne(u: User, leit: any, deps: LeitDeps) {
   const we = weiterEvent(ls, now, ls?.turn?.outcome === 'rate_limit' ? await deps.accountFree(u).catch(() => false) : false);
   if (we && we !== 'wait') {
     if ((leit.weiterStreak ?? 0) >= c.weiterMax) {
-      if (!leit.weiterStopped) await capQuestion(u, leit, 'leitstand-weiter', `Leitstand hält an: ${c.weiterMax}× hintereinander automatisch fortgesetzt`, 'weiterStopped', now, deps.log);
+      if (!leit.weiterStopped) await capQuestion(u, leit, 'leitstand-weiter', `Hauptchat hält an: ${c.weiterMax}× hintereinander automatisch fortgesetzt`, 'weiterStopped', now, deps.log);
     } else await add(we);
   }
   // Knut hat selbst geschrieben (die Brücke merkt sich den Beginn seines letzten eigenen Zuges) → „weiter“ zählt neu.
@@ -302,10 +362,10 @@ async function capQuestion(u: User, leit: any, kind: 'leitstand-deckel' | 'leits
   await questions().insertOne({
     _id: qid, userId: u.id, kind, title: why.slice(0, 140),
     context: kind === 'leitstand-deckel'
-      ? 'Der Leitstand wurde in kurzer Zeit oft geweckt; weitere Meldungen sammeln sich, bis du entscheidest. Möglicherweise drehen sich Leitstand und Stränge im Kreis.'
-      : 'Der Leitstand ist mehrmals hintereinander an Schritt- oder Zeitgrenzen gestoßen und wurde jedes Mal automatisch fortgesetzt.',
-    options: [{ label: 'Fortsetzen', consequence: 'Zähler beginnt neu; gesammelte Meldungen gehen sofort raus.' }, { label: 'Anhalten', consequence: 'Nichts weiter; du schaust selbst in den Leitstand.' }],
-    recommendation: 'Leitstand-Chat ansehen: kommt er voran, „Fortsetzen“; sonst „Anhalten“ und ihm schreiben.',
+      ? 'Der Hauptchat wurde in kurzer Zeit oft geweckt; weitere Meldungen sammeln sich, bis du entscheidest. Möglicherweise drehen sich Hauptchat und Unter-Chats im Kreis.'
+      : 'Der Hauptchat ist mehrmals hintereinander an Schritt- oder Zeitgrenzen gestoßen und wurde jedes Mal automatisch fortgesetzt.',
+    options: [{ label: 'Fortsetzen', consequence: 'Zähler beginnt neu; gesammelte Meldungen gehen sofort raus.' }, { label: 'Anhalten', consequence: 'Nichts weiter; du schaust selbst in den Hauptchat.' }],
+    recommendation: 'Hauptchat ansehen: kommt er voran, „Fortsetzen“; sonst „Anhalten“ und ihm schreiben.',
     strand: null, link: leit.url, plan: null, createdAt: new Date(now), status: 'offen', answer: null,
   } as any);
   log?.('leitstand deckel', { id: leit._id, kind });
@@ -367,15 +427,18 @@ export function groupStrands(docs: any[], now = Date.now()) {
   };
 }
 
-/** Zusammenfassung einer Gruppe, z. B. „3 Stränge · 2 fertig · 1 wartet“. */
+// Dieselben Wörter wie in der Chat-Seitenleiste (Plan 144): „wartet auf dich“, „zu prüfen“.
+const UI_WORD: Record<StatusWord, string> = { läuft: 'läuft', wartet: 'wartet auf dich', fertig: 'zu prüfen', gestoppt: 'gestoppt' };
+
+/** Zusammenfassung einer Gruppe, z. B. „3 Unter-Chats · 1 wartet auf dich · 2 zu prüfen“. */
 export function groupLine(g: { strands: unknown[]; counts: Record<string, number> }): string {
   const n = g.strands.length;
-  return [`${n} ${n === 1 ? 'Strang' : 'Stränge'}`, ...(['wartet', 'gestoppt', 'läuft', 'fertig'] as const).filter((w) => g.counts[w]).map((w) => `${g.counts[w]} ${w}`)].join(' · ');
+  return [`${n} ${n === 1 ? 'Unter-Chat' : 'Unter-Chats'}`, ...(['wartet', 'gestoppt', 'läuft', 'fertig'] as const).filter((w) => g.counts[w]).map((w) => `${g.counts[w]} ${UI_WORD[w]}`)].join(' · ');
 }
 
 const publicStrand = (d: any, word: StatusWord | null) => ({
   id: String(d._id), title: d.title, lauf: d.lauf ?? laufName(d.title ?? '').lauf, status: word ?? 'erledigt', reason: d.lastReason ?? null,
-  url: d.url, bericht: !!d.bericht, autoWeiter: d.autoTotal ?? 0, lastActivity: d.lastActivity ?? d.statusAt ?? d.startedAt,
+  url: d.url, auftrag: lesbar(paketDatei(d, 'auftrag')), bericht: lesbar(paketDatei(d, 'bericht')), autoWeiter: d.autoTotal ?? 0, lastActivity: d.lastActivity ?? d.statusAt ?? d.startedAt,
   reviewedBy: d.reviewedBy ?? null, knutReviewed: !!d.knutReviewedAt, reviewReady: !!d.reviewReadyAt,
 });
 
@@ -396,9 +459,9 @@ export async function strandCards(u: User, opts: { detail?: boolean; fresh?: boo
   const cards = open.map((d) => {
     const review = d.review ?? d.prevReview?.review ?? null;
     return {
-      id: String(d._id), kind: 'strand', bucket: 'review', key: `Strang · ${d.lauf ?? laufName(d.title ?? '').lauf}`, summary: d.title, url: d.url,
+      id: String(d._id), kind: 'strand', bucket: 'review', key: `Unter-Chat · ${d.lauf ?? laufName(d.title ?? '').lauf}`, summary: d.title, url: d.url,
       review: review ? { ...review, nichtGemacht: review.nichtGemacht ?? review.nicht_gemacht ?? '', artefakte: review.artefakte ?? [], dod: review.dod ?? [] } : null,
-      reviewOld: !d.review && !!d.prevReview, excerpt: d.lastExcerpt ?? '', bericht: !!d.bericht,
+      reviewOld: !d.review && !!d.prevReview, excerpt: d.lastExcerpt ?? '', auftrag: lesbar(paketDatei(d, 'auftrag')), bericht: lesbar(paketDatei(d, 'bericht')),
       reviewReadyAt: d.reviewReadyAt ?? d.doneAt, statusAt: d.statusAt ?? null, status: statusWord(d), reviewedBy: d.reviewedBy ?? null,
       running: d.lastStatus === 'running',   // läuft wieder (Leitstand hat weitergeschickt): sichtbar, aber Passt/Nacharbeit erst danach
       seen: String(new Date(d.reviewReadyAt ?? d.doneAt).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime()),

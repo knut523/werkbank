@@ -3,7 +3,7 @@
 // jeweils nach Vorschau und Bestätigung. GitHub nur lesend (Links).
 import { useMemo, useState, type CSSProperties } from 'react';
 import { AnsetzenButton } from '../AgentAnsetzen';
-import { api, type Config } from '../api.ts';
+import { api, type Config, viaLabel } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, StateChip, useJiraLive } from '../ui.tsx';
 import { BeiMirLink, Md, note } from '../beimir.tsx';
 import { topicBuckets } from '../buckets.ts';
@@ -223,7 +223,7 @@ function Order() {
     setErr(null);
     try {
       const r: any = await api('/api/roadmap/spec-move', { body: { path: x.path, to } });
-      await confirm({ title: `${x.name}: ${x.state} → ${to}`, confirmLabel: 'Text kopieren', body: <><p className="small">Ein Zustandswechsel betrifft nach dem Skill mehrere Seiten (Zustandsseiten, Hub-Zahlen und Prosa, Themen-Übersicht, rank.py). Dafür gibt es keinen sauberen automatischen Schreibweg — die Werkbank schreibt hier <b>nicht</b>, sondern gibt dir die Änderung als Text:</p><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{r.copy}</pre></> }).then((ok) => { if (ok) { try { navigator.clipboard.writeText(r.copy); toast('Kopiert'); } catch { toast('Kopieren nicht möglich — Text markieren'); } } });
+      await confirm({ title: `${x.name}: ${x.state} → ${to}`, confirmLabel: 'Text kopieren', body: <><p className="small">Ein Zustandswechsel betrifft nach dem Skill mehrere Seiten (Zustandsseiten, Hub-Zahlen und Prosa, Themen-Übersicht, rank.py). Dafür gibt es keinen sauberen automatischen Schreibweg — der OLAF Workspace schreibt hier <b>nicht</b>, sondern gibt dir die Änderung als Text:</p><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{r.copy}</pre></> }).then((ok) => { if (ok) { try { navigator.clipboard.writeText(r.copy); toast('Kopiert'); } catch { toast('Kopieren nicht möglich — Text markieren'); } } });
     } catch (e) { setErr(e); }
   };
   const assignSpec = async (x: any, goal: string) => {
@@ -231,9 +231,9 @@ function Order() {
     const g = goal === '-' ? '' : goal;
     try {
       const pre: any = await api('/api/goals/assign-spec', { body: { path: x.path, goal: g } });
-      if (!(await confirm({ title: 'Spec einem Ziel zuordnen?', confirmLabel: 'In der Werkbank speichern', body: <><pre className="small">{pre.preview}</pre><p className="tiny">Gespeichert in der Werkbank (mit Verlauf) — das Frontmatter der Spec bleibt unverändert.</p></> }))) return;
+      if (!(await confirm({ title: 'Spec einem Ziel zuordnen?', confirmLabel: 'Im OLAF Workspace speichern', body: <><pre className="small">{pre.preview}</pre><p className="tiny">Gespeichert im OLAF Workspace (mit Verlauf) — das Frontmatter der Spec bleibt unverändert.</p></> }))) return;
       await api('/api/goals/assign-spec', { body: { path: x.path, goal: g, confirm: true } });
-      toast('Gespeichert (Werkbank)'); o.reload();
+      toast('Gespeichert (OLAF Workspace)'); o.reload();
     } catch (e) { setErr(e); }
   };
   const create = async () => {
@@ -282,8 +282,8 @@ function Order() {
               <td><a href={note(x.path)}>{x.title}</a><div className="tiny">{x.name}</div></td>
               <td className="tiny">{x.topic} · {x.state.replace(/^\d-/, '')}</td>
               <td>{c.rank ? <span className="chip rank">#{c.rank}</span> : <span className="chip tiny-chip warn">ohne</span>}</td>
-              <td>{c.goal.ok ? c.goal.ids.map((g: string) => <a key={g} className="chip tiny-chip goal-id" href={`#/ziele/${g}`} title={`über ${c.goal.via}`}>{g}</a>) : <span className="chip tiny-chip bad">ohne Ziel – genauer anschauen</span>}
-                <select className="spec-goal" aria-label={`Ziel für ${x.name}`} value="" onChange={(e) => e.target.value && assignSpec(x, e.target.value)}><option value="">{c.goal.via === 'Werkbank' ? 'ändern …' : 'zuordnen …'}</option>{goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 36)}</option>)}{c.goal.via === 'Werkbank' && <option value="-">— Werkbank-Zuordnung zurücksetzen —</option>}</select></td>
+              <td>{c.goal.ok ? c.goal.ids.map((g: string) => <a key={g} className="chip tiny-chip goal-id" href={`#/ziele/${g}`} title={`über ${viaLabel(c.goal.via)}`}>{g}</a>) : <span className="chip tiny-chip bad">ohne Ziel – genauer anschauen</span>}
+                <select className="spec-goal" aria-label={`Ziel für ${x.name}`} value="" onChange={(e) => e.target.value && assignSpec(x, e.target.value)}><option value="">{c.goal.via === 'Werkbank' ? 'ändern …' : 'zuordnen …'}</option>{goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 36)}</option>)}{c.goal.via === 'Werkbank' && <option value="-">— Workspace-Zuordnung zurücksetzen —</option>}</select></td>
               <td><Tickets ts={x.tickets} /> {x.prs.map((p: any) => <span key={p.pr} className={`chip tiny-chip ${p.conflict ? 'bad' : p.open ? 'warn' : ''}`}>{p.pr.replace('olaf-', '')}{p.conflict ? ' ⚠' : p.open ? '' : ' · zu'}</span>)}</td>
               <td>{c.openDecisions > 0 ? <span className="chip tiny-chip warn">{c.openDecisions}</span> : '—'}</td>
               <td className="tiny">{c.age != null ? `${c.age} T.` : '—'}</td>

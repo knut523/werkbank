@@ -18,7 +18,7 @@ function ShareButton({ f, people, onDone }: { f: any; people: any[]; onDone: () 
       </select>
       <button className="btn small" disabled={!to} onClick={async () => {
         const p = people.find((x) => x.id === to);
-        const ok = await confirm({ title: `„${f.name}“ mit ${p.name} teilen?`, body: <>{f.personal && <p className="note small">Als personenbezogen markiert: bleibt in der Werkbank, kein externer Link.</p>}<p className="small">{p.name} kann die Datei lesen und herunterladen. Du kannst das jederzeit zurücknehmen. Das Teilen wird protokolliert (ohne Inhalt).</p></>, confirmLabel: 'Teilen' });
+        const ok = await confirm({ title: `„${f.name}“ mit ${p.name} teilen?`, body: <>{f.personal && <p className="note small">Als personenbezogen markiert: bleibt im OLAF Workspace, kein externer Link.</p>}<p className="small">{p.name} kann die Datei lesen und herunterladen. Du kannst das jederzeit zurücknehmen. Das Teilen wird protokolliert (ohne Inhalt).</p></>, confirmLabel: 'Teilen' });
         if (!ok) return;
         try { await api(`/api/files/${f.id}/share`, { body: { userId: to, share: true } }); toast('Geteilt'); setTo(''); onDone(); } catch (e) { setErr(e); }
       }}>Teilen</button>
@@ -122,7 +122,7 @@ export function Dateien({ cfg }: { cfg: Config }) {
       {tab === 'chats' && (!chats.data ? <Loading /> : (
         <>
           <div className="card soft small">
-            <b>Einen Chat teilen:</b> im Chat oben rechts „Teilen“ → Link erstellen → <i>Zugriff verwalten</i> → Teammates auswählen. Links sind nur für angemeldete Werkbank-Konten sichtbar, öffentliche Links sind aus.
+            <b>Einen Chat teilen:</b> im Chat oben rechts „Teilen“ → Link erstellen → <i>Zugriff verwalten</i> → Teammates auswählen. Links sind nur für angemeldete Workspace-Konten sichtbar, öffentliche Links sind aus.
             Die Person sieht eine Momentaufnahme; sie kann sie <b>als Kopie weiterführen</b> — dann mit ihrem eigenen Claude, nie mit deiner Sitzung.
           </div>
           <h2>Geteilt mit mir ({(chats.data as any).withMe.length})</h2>
@@ -279,7 +279,7 @@ function Place({ x, ablage, onDone }: { x: any; ablage: any; onDone: () => void 
     <span className="col" style={{ gap: 4 }}>
       <span className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
         {x.eingang ? <span className="chip warn">noch einzusortieren</span> : <code className="tiny" title="Ordner in der Ablage">{x.place}/</code>}
-        {x.fehlt && <span className="chip bad" title="Die Datei wurde außerhalb der Werkbank verschoben oder gelöscht.">nicht mehr am Ablageort</span>}
+        {x.fehlt && <span className="chip bad" title="Die Datei wurde außerhalb des OLAF Workspace verschoben oder gelöscht.">nicht mehr am Ablageort</span>}
         {!x.eingang && !x.fehlt && <button className="btn ghost small" onClick={() => setOpen(!open)}>{open ? 'Schließen' : 'Verschieben'}</button>}
       </span>
       {open && <AblageForm x={x} ablage={ablage} label="Verschieben" onDone={() => { setOpen(false); onDone(); }} onCancel={() => setOpen(false)} />}
@@ -329,7 +329,7 @@ function BackupCard({ b }: { b: any }) {
           <span className="tiny">{last ? <>Letzte Nachtsicherung: {fmtDateTime(last.at)} · {size(last.size)} · {b.nightly.length} von {b.keep} aufbewahrt</> : 'Noch keine Nachtsicherung auf der VM.'}</span>
         </div>
         <p className="tiny" style={{ margin: '6px 0 0' }}>
-          Drin: die Datenbank der Werkbank (Tickets-Kopie, Dateien-Einträge, Projekte, Freigaben …), alle Dateien der Ablage, das Freigabe-Protokoll.
+          Drin: die Datenbank des OLAF Workspace (Tickets-Kopie, Dateien-Einträge, Projekte, Freigaben …), alle Dateien der Ablage, das Freigabe-Protokoll.
           Nicht drin: Zugänge (Claude, Jira) und Anmeldungen, Chats (LibreChat), der Vault (eigenes Git), Arbeitsordner.
           {b.key ? ' Dateien mit Personendaten sind verschlüsselt — den Schlüssel (WERKBANK_BACKUP_KEY) brauchst du zum Wiederherstellen.' : ' Achtung: kein WERKBANK_BACKUP_KEY gesetzt — Dateien mit Personendaten fehlen im Archiv.'}
         </p>
@@ -496,7 +496,7 @@ function DateiZeile({ x, f, people, onDone, toChat, setErr, mitOrt }: { x: any; 
               try { await api(`/api/files/${x.id}`, { method: 'DELETE' }); toast('Gelöscht'); onDone(); } catch (e) { setErr(e); }
             }}>Löschen</button>
           )}
-          {ablage && <span className="tiny muted">Löschen und Umbenennen in deiner Ablage selbst — die Werkbank zieht nach{o.sub ? '; Dateien in Unterordnern bleiben, wo sie sind' : ''}.</span>}
+          {ablage && <span className="tiny muted">Löschen und Umbenennen in deiner Ablage selbst — der OLAF Workspace zieht nach{o.sub ? '; Dateien in Unterordnern bleiben, wo sie sind' : ''}.</span>}
         </div>
       )}
     </div>
@@ -515,7 +515,7 @@ function VonAgenten({ mine, admin, librechatUrl }: { mine: any[]; admin: boolean
     <>
       {admin ? <Pakete /> : <p className="muted small">Review-Pakete der Agenten-Stränge sehen nur Admins.</p>}
       <h2>Aus Chats ({chats.length})</h2>
-      <p className="tiny muted" style={{ marginTop: 0 }}>Was ein Agent im Werkbank-Chat fertig geschrieben hat — Dateien liegen zusätzlich in der Ablage, Notizen im Vault.</p>
+      <p className="tiny muted" style={{ marginTop: 0 }}>Was ein Agent im Workspace-Chat fertig geschrieben hat — Dateien liegen zusätzlich in der Ablage, Notizen im Vault.</p>
       {chats.length === 0 ? <p className="muted small">Noch nichts.</p> : (
         <div className="flist">{chats.map((x) => (
           <div key={x.id} className="frow" data-agent-file={x.name}>

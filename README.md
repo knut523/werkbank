@@ -1,4 +1,8 @@
-# OLAF-Werkbank
+# OLAF Workspace (früher: OLAF-Werkbank)
+
+> **Name (Knut, 12.10.2026):** In der Oberfläche heißt das hier **OLAF Workspace**, der Orchestrator-Chat **Hauptchat**
+> (früher „Leitstand“), seine Stränge **Unter-Chats**. Repo-, Ordner- und Dienstnamen (`werkbank`, `werkbank-web`),
+> Pfade (`/werkbank/`, `/wb/`), Env-Variablen (`WERKBANK_*`, `LEITSTAND_*`) und interne Kennungen bleiben unverändert.
 
 Chat-Oberfläche fürs Team (LibreChat), hinter der **Claude Code** arbeitet — mit unseren Skills,
 dem Obsidian-Vault und Jira, **unter dem eigenen Claude-Konto jeder Person, ohne API-Schlüssel** —
@@ -774,6 +778,24 @@ scripts/orch questions list --open · scripts/orch questions get <id> · scripts
   nicht mehr fälschlich gesperrt. `SubagentHandback` ist lesend (Teilagenten konnten in Strängen ihr Ergebnis nicht abgeben).
 - **Zweite Instanz zum Testen:** `scripts/isoliert.sh start|stop|status` (Web 3170, LibreChat 3180, Brücke 3190, Mongo
   27180, eigenes `.runtime-iso/`), CLI dort mit `WERKBANK_URL=http://127.0.0.1:3170 WERKBANK_ENV_FILE=.runtime-iso/.env.local`.
+
+## Hauptchat oben, Unter-Chats darunter (12.10.2026)
+
+Plan 144, [`docs/plan-hauptchat-workspace.md`](docs/plan-hauptchat-workspace.md).
+
+- **Chat-Seitenleiste:** Für Admins steht über der Chatliste der Abschnitt **Hauptchat**, immer an derselben Stelle
+  (Overlay `HauptchatSection.tsx`, Patch `50-client-hauptchat.patch`). Darunter stehen eingerückt die offenen Unter-Chats,
+  je Lauf zuklappbar, mit Status *läuft · wartet auf dich · zu prüfen · gestoppt*. Ein Klick öffnet den Chat. Auf/Zu
+  merkt sich der Browser. Bei eingeklappter Leiste öffnet das 🛰️-Symbol im Icon-Streifen den Hauptchat.
+- **Start/Neustart in der Oberfläche:** „⋯ → Hauptchat (neu) starten …“ führt zur Seite **Hauptchat & Unter-Chats**
+  (`#/leitstand`). Die Übergabe ist dort aus den offenen Unter-Chats und Rückfragen vorbefüllt und lässt sich bearbeiten.
+  - API: `GET /api/leitstand/handover` und `POST /api/leitstand/start` — nur Admins, mit CSRF-Header.
+  - Die Übergabe enthält keine Strang-Auszüge. Ihr Zaun wird entschärft.
+  - Die CLI `orch leitstand start --handover` bleibt.
+- **Nur der Hauptchat führt:** Die Vorlage „Koordinator“ heißt jetzt **„Teilagenten in diesem Chat“**. Sie verteilt nur
+  Teilagenten im eigenen Chat; normale Chats haben weiter keine `orch_*`-Werkzeuge.
+- Neue Hauptchats heißen „Hauptchat · TT.MM.“ und tragen das Lesezeichen `Hauptchat`. Alte behalten ihr Lesezeichen
+  „Leitstand“; erkannt wird der Hauptchat über `kind: 'leitstand'`.
 
 ## Leitstand (11.10.2026)
 

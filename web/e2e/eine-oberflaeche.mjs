@@ -69,7 +69,8 @@ try {
 
   // DoD 4: „Mehr“ — vier Seiten, aktiv markiert, Tastatur/Escape; keine Zeile „Weitere Seiten“.
   await p.locator('[data-testid=werkbank-mehr]').click();
-  const items = await p.locator('[data-testid^=werkbank-mehr-]:not([data-testid=werkbank-mehr-menu])').allTextContents();
+  // Plan 144: Admins sehen dort zusätzlich „Hauptchat & Unter-Chats“ — nicht mitzählen.
+  const items = await p.locator('[data-testid^=werkbank-mehr-]:not([data-testid=werkbank-mehr-menu]):not([data-testid=werkbank-mehr-leitstand])').allTextContents();
   check('Mehr: Mein Tag, Ziele, Skills, Dateien', items.length === 4, items.join(', '));
   await p.waitForTimeout(400); await shot(p, 'mehr-menue');
   await p.keyboard.press('Escape');
@@ -80,7 +81,7 @@ try {
   await heading(p).filter({ hasText: 'Skills' }).waitFor();
   check('Mehr ist aktiv auf Skills', /offen: Skills/.test((await p.locator('[data-testid=werkbank-mehr]').getAttribute('aria-label')) ?? ''));
   check('keine Zeile „Weitere Seiten“ im iframe', (await frame(p).locator('nav[aria-label="Weitere Seiten"]').count()) === 0);
-  check('Leiste hat weiter genau fünf Werkbank-Einträge', (await p.locator('[data-testid^=werkbank-nav-]').count()) === 5);
+  check('Leiste hat weiter genau fünf Werkbank-Einträge', (await p.locator('[data-testid^=werkbank-nav-]:not([data-testid=werkbank-nav-hauptchat])').count()) === 5);
 
   // DoD 5: Kontomenü → Werkbank-Einrichtung, ohne Neuladen.
   main.n = 0;

@@ -153,7 +153,7 @@ function pathProblem(target: string, g: PathGuard): string | null {
   const R = (p: string) => realish(resolve(p));
   if (within(t, R(g.scratchRoot)) && !within(t, R(g.ownScratch))) return `${OUTSIDE} (Arbeitsordner einer anderen Person)`;
   if (within(t, R(g.homesRoot)) && !(g.ownHome && within(t, R(g.ownHome)))) return `${OUTSIDE} (Claude-Konfiguration einer anderen Person)`;
-  if (within(t, R(g.store))) return `${OUTSIDE} (Dateispeicher der Werkbank — Dateien aller Personen)`;
+  if (within(t, R(g.store))) return `${OUTSIDE} (Dateispeicher des OLAF Workspace — Dateien aller Personen)`;
   if (g.strict && ![...g.allowed, g.ownScratch, VAULT_DIR, ...(g.ownHome ? [g.ownHome] : [])].some((a) => within(t, R(a)))) return OUTSIDE;
   return null;
 }
@@ -180,7 +180,7 @@ export function bashGuardProblem(cmd: string, g: PathGuard | undefined): string 
   if (!g) return null;
   for (const m of cmd.matchAll(/bridge\/scratch\/([\w.-]+)/g)) if (!g.ownScratch.endsWith('/' + m[1])) return `${OUTSIDE} (Arbeitsordner einer anderen Person)`;
   if (/bridge\/scratch\/(\*|\s|$|["'])/.test(cmd) || /bridge\/scratch\/?\s*$/.test(cmd)) return `${OUTSIDE} (Arbeitsordner aller Personen)`;
-  if (/\.runtime\/werkbank\b/.test(cmd)) return `${OUTSIDE} (Dateispeicher der Werkbank)`;
+  if (/\.runtime\/werkbank\b/.test(cmd)) return `${OUTSIDE} (Dateispeicher des OLAF Workspace)`;
   if (g.strict) {
     for (const m of cmd.matchAll(/(?:^|[\s'"=:(<>])((?:\/home\/|~\/|\$HOME\/)[^\s'";|&)<>]*|~(?=[\s'";|&]|$))/g)) {
       const raw = m[1].replace(/^(~|\$HOME)(?=\/|$)/, process.env.HOME ?? '/home');
@@ -228,11 +228,11 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // Orchestrator-Werkzeuge (Plan 132, S3): nur im Leitstand. Lesen und Rückfragen an Knut frei; Stränge starten, Nachrichten
     // schicken und prüfen entscheidet der Klassifikator; ein Strang außerhalb des Leitstand-Ordners braucht ein „ja“.
     if (server === 'werkbank' && name.startsWith('orch_')) {
-      if (!ctx.leit) return { cls: 'blocked', why: 'Orchestrator-Werkzeuge gibt es nur im Leitstand' };
+      if (!ctx.leit) return { cls: 'blocked', why: 'Orchestrator-Werkzeuge gibt es nur im Hauptchat' };
       if (/^orch_(list|show|questions|ask)$/.test(name)) return { cls: 'read' };
       if (name === 'orch_start' && ctx.workDir) {
         const cwd = realish(resolve(ctx.workDir, String(input.cwd ?? '')));
-        if (!within(cwd, realish(resolve(ctx.workDir)))) return { cls: 'confirm', why: 'Strang außerhalb des Leitstand-Ordners' };
+        if (!within(cwd, realish(resolve(ctx.workDir)))) return { cls: 'confirm', why: 'Unter-Chat außerhalb des Hauptchat-Ordners' };
       }
       return ctx.workDir && ctx.scope === 'voll' ? { cls: 'auto' } : { cls: 'confirm' };
     }
@@ -277,7 +277,7 @@ const ORCH_BASH_BLOCK: [RegExp, string][] = [
   // Plan 132 (B7/C8): Wege zum internen Schlüssel der Werkbank — sonst könnte ein Strang Stränge starten oder den Leitstand
   // ersetzen. Muster zielen auf Zugriffe (Pfade, Header), nicht auf Wörter: `grep environ datei` bleibt frei.
   // Nur Adressen der lokalen Dienste (Review B/C: `./internal/…` in Go-Repos ist ein normaler Pfad).
-  [/\bscripts\/orch\b|\borch-cli\b|(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?\/(werkbank\/)?internal\/|x-werkbank-internal|WERKBANK_INTERNAL_TOKEN/i, 'interner Kanal der Werkbank'],
+  [/\bscripts\/orch\b|\borch-cli\b|(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?\/(werkbank\/)?internal\/|x-werkbank-internal|WERKBANK_INTERNAL_TOKEN/i, 'interner Kanal des OLAF Workspace'],
   // `ps` nur als Befehl (nicht `docker ps web`); BSD-Form mit e = Umgebung anzeigen.
   [/\/proc\/[^\s'"]*\/environ\b|(^|[\s/'"])\.env\.local\b|(^|[;&|(]\s*|\bsudo\s+)ps\s+(-\S+\s+)*[a-zA-Z]*e[a-zA-Z]*(\s|$)/, 'Umgebung/Geheimnisse anderer Prozesse lesen'],
 ];
@@ -319,7 +319,7 @@ const VAULT_GIT = (vault: string) => {
   return new RegExp(String.raw`\bgit\s+(?:\S+\s+)*?(?:-C\s+["']?${v}(?:["'/\s]|$)|--git-dir=?\s*["']?${v}|--work-tree=?\s*["']?${v})|GIT_(?:DIR|WORK_TREE)=["']?${v}|\b(?:cd|pushd)\s+["']?${v}(?:["'/\s;&]|$)[^|]*?\bgit\b|${v}\/\.git\b`);
 };
 const LEIT_BASH_CONFIRM: [RegExp, string][] = [
-  [/werkbank-dev\b|\bwerkbank\.sh\b/, 'Live-Instanz der Werkbank'],
+  [/werkbank-dev\b|\bwerkbank\.sh\b/, 'Live-Instanz des OLAF Workspace'],
   [/\bcrontab\b/, 'crontab'],
   [/(~|\$HOME|\/home\/[^/\s]+)\/bin\b/, '~/bin'],
   [/\bsystemctl\b/, 'systemctl'],
@@ -344,7 +344,7 @@ export function leitstandCheck(tool: string, input: Record<string, unknown>, ctx
     if (within(target, vault)) return /(^|\/)\.git(\/|$)/.test(target.slice(vault.length)) ? { cls: 'blocked', why: 'git im Vault' } : null;
     if (ORCH_FILE_BLOCK.test(target)) return { cls: 'confirm', why: 'Git-/Claude-Konfiguration oder .env' };
     const own = [ctx.workDir, ctx.scratch].filter(Boolean).map((d) => realish(resolve(d!)));
-    if (!own.some((d) => within(target, d))) return { cls: 'confirm', why: 'außerhalb von Leitstand-Ordner, Scratch und Vault' };
+    if (!own.some((d) => within(target, d))) return { cls: 'confirm', why: 'außerhalb von Hauptchat-Ordner, Scratch und Vault' };
   }
   return null;
 }

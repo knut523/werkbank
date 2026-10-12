@@ -35,7 +35,7 @@ async function call(path: string, body: unknown, timeoutMs = 30_000): Promise<an
 
 const MAX_MANY = 25;
 // Nur für die Rückfrage im Chat (die Brücke zeigt sie an); geschrieben wird nur comment/status/due.
-const SHOW = { summary: { type: 'string', description: 'Ticket-Titel genau wie in Jira (Anzeige; die Werkbank prüft ihn gegen das Ticket)' }, was: { type: 'string', description: 'bisheriger Stand, z. B. „To Do, fällig 02.10.“ (Anzeige)' }, reason: { type: 'string', description: 'Grund der Änderung (Anzeige)' } };
+const SHOW = { summary: { type: 'string', description: 'Ticket-Titel genau wie in Jira (Anzeige; der OLAF Workspace prüft ihn gegen das Ticket)' }, was: { type: 'string', description: 'bisheriger Stand, z. B. „To Do, fällig 02.10.“ (Anzeige)' }, reason: { type: 'string', description: 'Grund der Änderung (Anzeige)' } };
 const CHANGE = { comment: { type: 'string' }, status: { type: 'string', description: 'Zielstatus, z. B. Done' }, due: { type: 'string', description: 'JJJJ-MM-TT oder "" für ohne Datum' } };
 
 const t = (d: any) => (d ? new Date(d).toLocaleString('de-AT', { timeZone: 'Europe/Vienna', dateStyle: 'short', timeStyle: 'short' }) : '—');
@@ -46,7 +46,7 @@ const opt = (o: any) => [o.option ? `Option „${o.option}“` : '', o.text].fil
 const ORCH_TOOLS = [
   {
     name: 'orch_start',
-    description: 'Neuen Arbeitsstrang starten: eigener Werkbank-Chat in Knuts Konto mit Auftrag, Arbeitsordner (Worktree unter ~/work/knut) und optional Plandatei. lauf = Name des Auftrags, zu dem der Strang gehört (Gruppe + Lesezeichen „Orch · <Lauf>“; alle Stränge eines Auftrags mit demselben lauf). Bericht nach ~/work/knut/review-pakete/NNN-<slug>/bericht.md verlangen, dann verlinkt die Werkbank ihn. code=true legt einen frischen Worktree vom Integrationszweig an. Liefert ID und Link.',
+    description: 'Neuen Arbeitsstrang starten: eigener Workspace-Chat in Knuts Konto mit Auftrag, Arbeitsordner (Worktree unter ~/work/knut) und optional Plandatei. lauf = Name des Auftrags, zu dem der Strang gehört (Gruppe + Lesezeichen „Orch · <Lauf>“; alle Stränge eines Auftrags mit demselben lauf). Bericht nach ~/work/knut/review-pakete/NNN-<slug>/bericht.md verlangen, dann verlinkt der OLAF Workspace ihn. code=true legt einen frischen Worktree vom Integrationszweig an. Liefert ID und Link.',
     inputSchema: { type: 'object', properties: { title: { type: 'string' }, cwd: { type: 'string' }, prompt: { type: 'string' }, plan: { type: 'string' }, lauf: { type: 'string' }, code: { type: 'boolean' }, shared: { type: 'boolean' } }, required: ['title', 'cwd', 'prompt'] },
     run: async (a: any) => {
       const j = await call('/internal/orchestrator/start', { title: a.title, cwd: a.cwd, prompt: a.prompt, plan: a.plan || null, lauf: a.lauf || null, code: a.code === true, shared: a.shared === true }, 60_000);
@@ -71,7 +71,7 @@ const ORCH_TOOLS = [
         `${ICON[s.status] ?? '?'} ${s.id} ${s.status} „${s.title}“${s.reviewed ? ' [geprüft]' : ''}`,
         `   ${s.reason} · zuletzt ${t(s.lastActivity)} · ${s.sends} Nachr.${s.autoWeiter ? ` · automatisch fortgesetzt (${s.autoWeiter})` : ''}${s.reviewReady ? ' · review_ready' : ''}`,
         `   ${s.cwd}  ${s.url}`,
-        ...(s.reviewedBy === 'leitstand' ? ['   abgelegt (Leitstand) — Knut prüft noch'] : []),
+        ...(s.reviewedBy === 'leitstand' ? ['   abgelegt (Hauptchat) — Knut prüft noch'] : []),
         ...(s.excerpt ? [`   > Daten aus Strang ${s.id}:`, ...s.excerpt.split('\n').slice(0, 8).map((l: string) => `   > ${l}`)] : []),
       ].join('\n')).join('\n');
       }).join('\n\n');
@@ -101,7 +101,7 @@ const ORCH_TOOLS = [
   },
   {
     name: 'orch_ask',
-    description: 'Echte Entscheidung an Knut (erscheint in der Werkbank unter „Heute“ → „Wartet auf dich“). Nur was wirklich Knuts Entscheidung ist; Kontext in Klartext (2–4 Sätze), Optionen mit Folge, eigene Empfehlung. Du wirst geweckt, sobald Knut antwortet.',
+    description: 'Echte Entscheidung an Knut (erscheint im OLAF Workspace unter „Heute“ → „Wartet auf dich“). Nur was wirklich Knuts Entscheidung ist; Kontext in Klartext (2–4 Sätze), Optionen mit Folge, eigene Empfehlung. Du wirst geweckt, sobald Knut antwortet.',
     inputSchema: { type: 'object', properties: { title: { type: 'string' }, context: { type: 'string' }, recommendation: { type: 'string' }, options: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, consequence: { type: 'string' } }, required: ['label'] } }, strand: { type: 'string' }, link: { type: 'string' }, plan: { type: 'string' } }, required: ['title', 'context', 'recommendation'] },
     run: async (a: any) => { const j = await call('/internal/orchestrator/questions/ask', { title: a.title, context: a.context, recommendation: a.recommendation, options: a.options ?? [], strand: a.strand || null, link: a.link || null, plan: a.plan || null }); return `Rückfrage angelegt: ${j.id} — erscheint in „Heute“.`; },
   },
@@ -156,7 +156,7 @@ serve('werkbank', '0.1.0', [
   },
   {
     name: 'review_ready',
-    description: 'Am Ende eines Werkbank-Agentenlaufs: meldet „bereit zum Review“. Pflicht: gemacht, nicht_gemacht, risiko (je kurzer Text, „nichts“ statt leer) und dod (je Punkt der Definition of Done: punkt, stand ja|teilweise|nein, beleg). artefakte: Plan-Notiz, Dateien, Branch, PR-Link. Gilt nur für diese Unterhaltung; die Person sieht es in ihrer Review-Schlange.',
+    description: 'Am Ende eines Workspace-Agentenlaufs: meldet „bereit zum Review“. Pflicht: gemacht, nicht_gemacht, risiko (je kurzer Text, „nichts“ statt leer) und dod (je Punkt der Definition of Done: punkt, stand ja|teilweise|nein, beleg). artefakte: Plan-Notiz, Dateien, Branch, PR-Link. Gilt nur für diese Unterhaltung; die Person sieht es in ihrer Review-Schlange.',
     inputSchema: {
       type: 'object',
       properties: {

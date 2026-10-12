@@ -86,7 +86,7 @@ export function encrypt(data: Buffer, key: Buffer): Buffer {
   return Buffer.concat([MAGIC, iv, body, c.getAuthTag()]);
 }
 export function decrypt(blob: Buffer, key: Buffer): Buffer {
-  if (!blob.subarray(0, 6).equals(MAGIC)) throw new Error('Kein verschlüsselter Werkbank-Eintrag.');
+  if (!blob.subarray(0, 6).equals(MAGIC)) throw new Error('Kein verschlüsselter Workspace-Eintrag.');
   const d = createDecipheriv('aes-256-gcm', key, blob.subarray(6, 18));
   d.setAuthTag(blob.subarray(blob.length - 16));
   return Buffer.concat([d.update(blob.subarray(18, blob.length - 16)), d.final()]);

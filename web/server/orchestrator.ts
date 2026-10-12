@@ -34,7 +34,7 @@ export function orchBrief(b: BriefInput): string {
   return [
     `Orchestrator · ${b.title}`,
     ...(b.stand ? [b.stand] : []),
-    `Du bist ein Werkbank-Agent für einen Arbeitsstrang. Die Haupt-Sitzung (Orchestrator) hat dich gestartet und koordiniert mehrere Stränge; ${first} liest im Chat mit und kann jederzeit selbst schreiben.`,
+    `Du bist ein Agent im OLAF Workspace für einen Arbeitsstrang (Unter-Chat). Die Haupt-Sitzung (Orchestrator) hat dich gestartet und koordiniert mehrere Stränge; ${first} liest im Chat mit und kann jederzeit selbst schreiben.`,
     [
       'Regeln:',
       `- Arbeitsordner: \`${b.cwd}\` (dein aktuelles Verzeichnis). Arbeite dort; andere Repos und den Vault nur lesen, außer der Auftrag sagt ausdrücklich etwas anderes.`,
@@ -171,8 +171,9 @@ async function lcFetch(u: User, path: string, init: { method?: string; body?: un
 }
 
 // Leitstand (docs/plan-leitstand.md): eigener Titel-Präfix und eigenes Lesezeichen.
-export const LEIT_TAG = 'Leitstand';
-const TAG_TEXT: Record<string, string> = { [ORCH_TAG]: 'Stränge, die die Haupt-Sitzung über die Werkbank gestartet hat', [LEIT_TAG]: 'Knuts Orchestrator-Chat (Leitstand)' };
+// Plan 144: neue Hauptchats bekommen „Hauptchat“; alte Chats behalten ihr Lesezeichen „Leitstand“ (erkannt wird über kind).
+export const LEIT_TAG = 'Hauptchat';
+const TAG_TEXT: Record<string, string> = { [ORCH_TAG]: 'Unter-Chats, die der Hauptchat (oder die CLI) im OLAF Workspace gestartet hat', [LEIT_TAG]: 'Der Hauptchat: führt die Unter-Chats' };
 
 /**
  * Lesezeichen in LibreChats `conversationtags` atomar anlegen (Release 4, Offen 4). Nicht über POST /api/tags: LibreChat
@@ -319,7 +320,7 @@ export async function listOrch(u: User, opts: { all?: boolean } = {}) {
   const out = [];
   for (const d of docs) {
     if (d.status === 'blocked_g0') {
-      out.push({ id: d._id, title: d.title, status: 'blocked_g0' as OrchStatus, reason: `G0 ${d.g0?.ergebnis === 'stopp' ? 'nicht prüfbar' : 'Treffer'} — Rückfrage ${d.question ?? '?'} in der Werkbank (Heute)`, reviewed: !!d.reviewedAt, url: null, cwd: d.cwd, plan: d.plan,
+      out.push({ id: d._id, title: d.title, status: 'blocked_g0' as OrchStatus, reason: `G0 ${d.g0?.ergebnis === 'stopp' ? 'nicht prüfbar' : 'Treffer'} — Rückfrage ${d.question ?? '?'} im OLAF Workspace (Heute)`, reviewed: !!d.reviewedAt, url: null, cwd: d.cwd, plan: d.plan,
         startedAt: d.startedAt, lastSentAt: d.startedAt, lastActivity: new Date(d.startedAt).getTime(), sends: 0, excerpt: d.g0?.text ?? '', written: [], slug: d.slug, g0: d.g0 ?? null, question: d.question ?? null });
       continue;
     }
@@ -350,7 +351,7 @@ export function excerpt(text: string, n = 600): string {
 async function ownRun(u: User, id: string) {
   const d: any = await runs().findOne({ _id: id as any, userId: u.id });
   if (!d) throw err(404, `Strang ${id} gibt es nicht.`);
-  if (d.kind === 'leitstand') throw err(409, `${id} ist der Leitstand, kein Strang.`);
+  if (d.kind === 'leitstand') throw err(409, `${id} ist der Hauptchat, kein Unter-Chat.`);
   return d;
 }
 
@@ -365,7 +366,7 @@ export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 
   const msg = String(text ?? '').trim();
   if (!msg) throw err(400, 'Nachricht fehlt.');
   const d = await ownRun(u, id);
-  if (d.status === 'blocked_g0') throw err(409, `Strang ${id} wurde von G0 vor dem Bau gestoppt — erst die Rückfrage ${d.question ?? ''} in der Werkbank beantworten.`);
+  if (d.status === 'blocked_g0') throw err(409, `Strang ${id} wurde von G0 vor dem Bau gestoppt — erst die Rückfrage ${d.question ?? ''} im OLAF Workspace beantworten.`);
   // Leitstand (Plan 132, E3/B3): setzt den Deckel nicht zurück und hebt keinen Stopp auf — das entscheidet nur Knut.
   if (via === 'leitstand' && d.autoStopped) throw err(409, `Strang ${id} hat seinen Deckel erreicht — Knut entscheidet in „Heute“ (Fortsetzen/Anhalten).`);
   if (via === 'leitstand' && d.knutReviewedAt) throw err(409, `Strang ${id} hat Knut geprüft — nicht weiterführen; einen neuen Strang starten oder Knut fragen.`);
@@ -707,7 +708,7 @@ export async function g0Tor(u: User, o: { slug: string | null; plan: string | nu
       : r.stopp!.knopf ? `${OHNE_PR}, wenn es eilt — sonst warten, bis die PR-API wieder antwortet` : 'warten, bis das neue Lesetoken da ist; „trotzdem bauen“ nur, wenn es eilt',
     g0: { kriterien: r.kriterien, ergebnis: r.ergebnis, belege: belegIds(r) },
   }).catch((e: any) => { if (e.status === 409) return null; throw e; });
-  return mk(false, `G0 ${treffer ? 'Treffer' : 'Stopp'} — kein Bau. Rückfrage ${q?.id ?? key} in der Werkbank (Heute → Wartet auf dich).\n${g0Text(r)}`, q?.id ?? null);
+  return mk(false, `G0 ${treffer ? 'Treffer' : 'Stopp'} — kein Bau. Rückfrage ${q?.id ?? key} im OLAF Workspace (Heute → Wartet auf dich).\n${g0Text(r)}`, q?.id ?? null);
 }
 
 // ---------- Nachtbau (DoD 9, 17, 24) ----------

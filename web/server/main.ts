@@ -21,8 +21,8 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
-import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards } from './leitstand.ts';
-import { readBericht } from './bericht.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft } from './leitstand.ts';
+import { readBericht, paketDatei } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName, ortAus, vorschlagAusPfad, isEingang } from './ablage.ts';
@@ -84,7 +84,7 @@ const isMutation = (req: IncomingMessage) => req.method !== 'GET' && req.method 
 async function needUser(req: IncomingMessage): Promise<User> {
   const u = await currentUser(req);
   if (!u) throw new HttpError(401, 'Bitte anmelden.');
-  if (isMutation(req) && req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Werkbank-Header.');
+  if (isMutation(req) && req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Workspace-Header.');
   // Freigabe je Funktion fürs Team (features.ts): Admins alles, sonst WERKBANK_TEAM_FEATURES.
   const f = blockedFeature(u, String(req.url ?? '').split('?')[0]);
   if (f) throw new HttpError(403, `„${FEATURES.find((x) => x.id === f)!.label}“ ist für das Team noch nicht freigegeben.`);
@@ -356,13 +356,13 @@ on('GET', /^\/api\/config$/, async (req, res) => {
 });
 
 on('POST', /^\/api\/login$/, async (req, res) => {
-  if (req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Werkbank-Header.');
+  if (req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Workspace-Header.');
   const { email, password } = await body(req);
   if (!email || !password) throw new HttpError(400, 'E-Mail und Passwort angeben.');
   // Letzter Eintrag = vom Coder-Proxy angehängt (der erste ist vom Client frei wählbar).
   const ip = String(req.headers['x-forwarded-for'] ?? '').split(',').pop()!.trim() || req.socket.remoteAddress || undefined;
   const u = await librechatLogin(String(email), String(password), ip);
-  if (!allowed(u.email)) throw new HttpError(403, 'Dein Konto ist für die Werkbank noch nicht freigeschaltet (Pilot). Frag Knut.');
+  if (!allowed(u.email)) throw new HttpError(403, 'Dein Konto ist für den OLAF Workspace noch nicht freigeschaltet (Pilot). Frag Knut.');
   await createSession(res, u);
   log('login', { user: u.id });
   send(res, 200, { user: u });
@@ -699,13 +699,13 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/edit$/, async (req, res,
     if (!g.byId.has(goal) || goalLevel(goal) === 'Gate') throw new HttpError(400, `Unbekanntes Ziel ${goal}.`);
   }
   if (!actions.length && !goal) return send(res, 200, { ok: true, nothing: true });
-  const preview = `${i.key}: ${[...actions.map(describe), ...(goal ? [`Ziel → ${goal} (Werkbank)`] : [])].join(' · ')}`;
+  const preview = `${i.key}: ${[...actions.map(describe), ...(goal ? [`Ziel → ${goal} (OLAF Workspace)`] : [])].join(' · ')}`;
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview, dryRun: dryRun() && actions.length > 0 });
   const done: string[] = [];
   if (goal) {
     const r: any = await assignGoals(u, [{ key: i.key, goal }], im, true);
     if (!r.results?.[0]?.ok) throw new HttpError(500, `Ziel nicht gespeichert: ${r.results?.[0]?.error ?? 'unbekannt'}`);
-    done.push(`Ziel → ${goal} (Werkbank)`);
+    done.push(`Ziel → ${goal} (OLAF Workspace)`);
   }
   const w = actions.length ? await jiraWrite(u, () => writeJira(u, i.key, actions)) : null;
   send(res, 200, { ok: true, preview, done: [...(w?.done ?? []), ...done], dryRun: w?.dryRun ?? false, calls: w?.calls, issue: (await issueMap()).get(i.key) ?? null });
@@ -1219,7 +1219,7 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
   const conv = String(b.conv ?? '');
-  if (!conv) throw new HttpError(400, 'Keine Unterhaltung bekannt — review_ready gilt nur in einem Werkbank-Chat.');
+  if (!conv) throw new HttpError(400, 'Keine Unterhaltung bekannt — review_ready gilt nur in einem Workspace-Chat.');
   const run: any = await wb().collection('agent_runs').findOne({ userId: u.id, conv, mode: 'chat' }, { sort: { startedAt: -1 } });
   // Orchestrator-Strang: Fertig-Marke am Strang — er wird danach nie mehr automatisch fortgesetzt (Plan auto-weiter, DoD 4).
   const strand: any = run ? null : await wb().collection('orchestrator_runs').findOne({ userId: u.id, conv });
@@ -1230,7 +1230,7 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
     log('review bereit (strang)', { user: u.id, id: strand._id, dod: p.review.dod.length });
     return send(res, 200, { ok: true, strand: strand._id });
   }
-  if (!run) throw new HttpError(404, 'Kein Werkbank-Agentenlauf zu diesem Chat — nichts gesetzt (die Review-Schlange kennt nur Läufe, die vom Board aus gestartet wurden).');
+  if (!run) throw new HttpError(404, 'Kein Workspace-Agentenlauf zu diesem Chat — nichts gesetzt (die Review-Schlange kennt nur Läufe, die vom Board aus gestartet wurden).');
   const p = parseReview(b);
   if (!p.review) throw new HttpError(400, p.error!);
   await wb().collection('agent_runs').updateOne({ _id: run._id }, { $set: { reviewReadyAt: new Date(), review: p.review, reviewedAt: null } });
@@ -1243,13 +1243,27 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
 // Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).
 on('GET', /^\/api\/leitstand\/overview$/, async (req, res) => send(res, 200, await overview(await needAdmin(req))));
 
+// Hauptchat starten aus der Oberfläche (Plan 144, S2): dieselbe Funktion wie der interne Kanal der CLI — Admin, CSRF-Header
+// (needUser), 40 000 Zeichen, Brücke prüft LEITSTAND_EMAILS. Der Entwurf enthält keine Strang-Auszüge (Council B1).
+on('GET', /^\/api\/leitstand\/handover$/, async (req, res) => send(res, 200, await handoverDraft(await needAdmin(req))));
+on('POST', /^\/api\/leitstand\/start$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req, 1 << 20);
+  const r = await startLeitstand(u, { handoverText: typeof b?.handoverText === 'string' ? b.handoverText : null });
+  log('hauptchat gestartet (Oberfläche)', { user: u.id, id: r.id, conv: r.conv, beendet: r.ended.length });
+  return send(res, 200, r);
+});
+
 on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
   const u = await needAdmin(req);
   const d: any = await orchRuns().findOne({ _id: String(url.searchParams.get('strand') ?? '') as any, userId: u.id, kind: { $ne: 'leitstand' } });
   if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
-  const text = readBericht(d.bericht);
-  if (text === null) throw new HttpError(404, 'Kein lesbarer Bericht zu diesem Strang.');
-  send(res, 200, { strand: String(d._id), name: String(d.bericht).split('/').slice(-2).join('/'), text });
+  // Plan 144: auch den Auftrag (auftrag.md im selben review-pakete-Ordner) — gleiche Leseprüfung wie beim Bericht.
+  const art = url.searchParams.get('art') === 'auftrag' ? 'auftrag' : 'bericht';
+  const path = paketDatei(d, art);
+  const text = readBericht(path);
+  if (text === null) throw new HttpError(404, art === 'auftrag' ? 'Kein lesbarer Auftrag zu diesem Unter-Chat.' : 'Kein lesbarer Bericht zu diesem Unter-Chat.');
+  send(res, 200, { strand: String(d._id), art, name: String(path).split('/').slice(-2).join('/'), text });
 });
 
 /** Strang zum Review prüfen (Einzel- und Sammel-„Passt“, Council Bedingung 7): eigen, gesehener Stand (F3), nicht laufend (G4). */
@@ -1696,7 +1710,7 @@ on('POST', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/member$/, async (req, re
 // Alter Label-Weg nach Jira: nur mit WERKBANK_GOALS_TO_JIRA=labels.
 on('POST', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/labels$/, async (req, res, m) => {
   const u = await needUser(req);
-  if (!goalsToJira()) throw new HttpError(410, 'Sprint und Ziel werden in der Werkbank gespeichert, nicht als Jira-Label (WERKBANK_GOALS_TO_JIRA=labels schaltet den alten Weg ein).');
+  if (!goalsToJira()) throw new HttpError(410, 'Sprint und Ziel werden im OLAF Workspace gespeichert, nicht als Jira-Label (WERKBANK_GOALS_TO_JIRA=labels schaltet den alten Weg ein).');
   const b = await body(req);
   const c = cycleById(m[1]);
   const key = String(b.key ?? '');
@@ -1865,7 +1879,7 @@ async function assignGoals(u: User, items: any[], im: Map<string, Issue>, confir
       plan.push({ key, goal: 'KEINS', why, text: `${key} → bewusst ohne Ziel („${why.slice(0, 80)}“)`, actions: [{ type: 'comment', text: `Bewusst ohne Ziel (${exemptLabel()}): ${why}` }, { type: 'labels', add: [exemptLabel()], remove: [] }] });
       continue;
     }
-    if (raw === '') { plan.push({ key, goal: null, why, text: `${key} → Werkbank-Zuordnung zurücksetzen (Jira-Label gilt wieder)`, actions: [] }); continue; }
+    if (raw === '') { plan.push({ key, goal: null, why, text: `${key} → Workspace-Zuordnung zurücksetzen (Jira-Label gilt wieder)`, actions: [] }); continue; }
     if (!g.byId.has(raw) || goalLevel(raw) === 'Gate') throw new HttpError(400, `${key}: unbekanntes Ziel ${raw}.`);
     plan.push({ key, goal: raw, why, text: `${key} → ${raw}${why ? ` („${why.slice(0, 60)}“)` : ''}`, actions: [{ type: 'labels', add: [goalLabel(raw)], remove: sameLevelRemovals(i.labels ?? [], raw), replaceLevelOf: raw }] });
   }
@@ -1930,7 +1944,7 @@ on('POST', /^\/api\/goals\/assign-spec$/, async (req, res) => {
   const goal = String(b.goal ?? '').toUpperCase();
   const g = goalsAll(await issueMap());
   if (goal && (!g.byId.has(goal) || goalLevel(goal) === 'Gate')) throw new HttpError(400, `Unbekanntes Ziel ${goal}.`);
-  const preview = `${sp.name} → ${goal || 'Werkbank-Zuordnung zurücksetzen (Frontmatter ziel: gilt wieder)'}`;
+  const preview = `${sp.name} → ${goal || 'Workspace-Zuordnung zurücksetzen (Frontmatter ziel: gilt wieder)'}`;
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview });
   if (goal) await setGoal(u, sp.path, 'spec', goal, String(b.begruendung ?? '')); else await resetGoal(u, sp.path, 'spec');
   send(res, 200, { ok: true, preview });

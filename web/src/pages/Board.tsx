@@ -80,7 +80,7 @@ function Card({ i, onOpen, expanded, onToggle, fresh, mover }: { i: any; onOpen:
         {i.agent && <span className={`chip ${i.agent === 'wartet auf ja' ? 'bad' : 'warn'}`} title="Ein Agent arbeitet an dieser Karte (Chat)">🤖 {i.agent}</span>}
         <Since i={i} />
         <Blocked i={i} />
-        {i.goals?.map((g: string) => <a key={g} className="chip goal-id" href={`#/ziele/${g}`} onClick={(e) => e.stopPropagation()} title="Ziel (Werkbank-Zuordnung, sonst Jira-Label)">🎯 {g}</a>)}
+        {i.goals?.map((g: string) => <a key={g} className="chip goal-id" href={`#/ziele/${g}`} onClick={(e) => e.stopPropagation()} title="Ziel (Workspace-Zuordnung, sonst Jira-Label)">🎯 {g}</a>)}
         {i.noGoal && <NoGoal small={false} />}
       </div>
       {subs.length > 0 && (
@@ -280,7 +280,7 @@ function EditFields({ i, onDone }: { i: any; onDone: () => void }) {
       const pre: any = await api(`/api/board/issue/${i.key}/edit`, { body });
       if (pre.nothing) return;
       const onlyGoal = body.goal !== undefined && body.priority === undefined && body.assignee === undefined;
-      if (!(await confirm({ title, confirmLabel: onlyGoal ? 'In der Werkbank speichern' : pre.dryRun ? 'Trockenlauf ausführen' : 'In Jira schreiben', body: <><pre className="small">{pre.preview}</pre>{pre.dryRun && <p className="note small">Vorschau: <b>Trockenlauf</b> — nichts wird geschrieben.</p>}</> }))) return;
+      if (!(await confirm({ title, confirmLabel: onlyGoal ? 'Im OLAF Workspace speichern' : pre.dryRun ? 'Trockenlauf ausführen' : 'In Jira schreiben', body: <><pre className="small">{pre.preview}</pre>{pre.dryRun && <p className="note small">Vorschau: <b>Trockenlauf</b> — nichts wird geschrieben.</p>}</> }))) return;
       const r: any = await api(`/api/board/issue/${i.key}/edit`, { body: { ...body, confirm: true } });
       toast(r.dryRun ? `Trockenlauf: würde schreiben — ${r.done.join(' · ')}` : onlyGoal ? `Gespeichert: ${r.done.join(' · ')}` : `In Jira: ${r.done.join(' · ')}`);
       onDone();
@@ -291,7 +291,7 @@ function EditFields({ i, onDone }: { i: any; onDone: () => void }) {
     <div className="row" style={{ marginTop: 10, gap: 10 }} data-testid="edit-fields">
       <label className="small">Priorität <select aria-label="Jira-Priorität" value={i.priority ?? ''} onChange={(e) => e.target.value && edit({ priority: e.target.value }, `Priorität von ${i.key} ändern?`)}>{!i.priority && <option value="">— keine —</option>}{m.priorities.map((p: string) => <option key={p} value={p}>{p}</option>)}</select></label>
       <label className="small">Owner <select aria-label="Owner" value={i.assigneeId ?? ''} onChange={(e) => edit({ assignee: e.target.value || null }, `Owner von ${i.key} ändern?`)}><option value="">— niemand —</option>{m.people.map((p: any) => <option key={p.accountId} value={p.accountId}>{p.name}</option>)}</select></label>
-      <label className="small">Ziel <select aria-label="Ziel zuordnen" value="" onChange={(e) => e.target.value && edit({ goal: e.target.value }, `${i.key} dem Ziel ${e.target.value} zuordnen (Werkbank)?`)}><option value="">{i.localGoal === 'KEINS' ? 'bewusst ohne' : i.localGoal || (i.labels ?? []).filter((l: string) => l.toLowerCase().startsWith(m.goalPrefix)).join(', ') || 'ohne Ziel'} → …</option>{m.goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 40)}</option>)}</select></label>
+      <label className="small">Ziel <select aria-label="Ziel zuordnen" value="" onChange={(e) => e.target.value && edit({ goal: e.target.value }, `${i.key} dem Ziel ${e.target.value} zuordnen (OLAF Workspace)?`)}><option value="">{i.localGoal === 'KEINS' ? 'bewusst ohne' : i.localGoal || (i.labels ?? []).filter((l: string) => l.toLowerCase().startsWith(m.goalPrefix)).join(', ') || 'ohne Ziel'} → …</option>{m.goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 40)}</option>)}</select></label>
       <Err e={err} />
     </div>
   );
@@ -409,7 +409,7 @@ export function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: s
           <ChatAgents issueKey={k} runs={(d.data as any).runs} onChange={d.reload} />
           <AgentPanel issueKey={k} runs={(d.data as any).runs} onChange={() => d.reload()} />
           <ForgePanel issueKey={k} enabled={!!forge} onStarted={() => d.reload()} />
-          <p className="tiny" style={{ marginTop: 12 }}>Neue Tickets legt die Werkbank bewusst nicht an (olaf-jira: nur auf ausdrücklichen Auftrag, mit Duplikatsuche und Workstream) — dafür den Chat nutzen.</p>
+          <p className="tiny" style={{ marginTop: 12 }}>Neue Tickets legt der OLAF Workspace bewusst nicht an (olaf-jira: nur auf ausdrücklichen Auftrag, mit Duplikatsuche und Workstream) — dafür den Chat nutzen.</p>
         </>
       )}
     </div>
@@ -579,7 +579,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
             <button key={v} className={`btn small ${filter === v ? 'primary' : ''}`} onClick={() => setFilter(v)}>{l}</button>
           ))}
         </div>
-        {data?.sprint && <button className={`btn small ${sprint ? 'primary' : ''}`} onClick={() => setSprint(!sprint)} title="Nur Tickets im aktuellen Sprint (Werkbank-Zuordnung)" aria-pressed={sprint}>🎯 nur aktueller Sprint ({data.sprint.count})</button>}
+        {data?.sprint && <button className={`btn small ${sprint ? 'primary' : ''}`} onClick={() => setSprint(!sprint)} title="Nur Tickets im aktuellen Sprint (Workspace-Zuordnung)" aria-pressed={sprint}>🎯 nur aktueller Sprint ({data.sprint.count})</button>}
         <input type="search" placeholder="Suchen (Key, Titel, Owner)" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tickets suchen" />
         <label className="row small"><input type="checkbox" checked={done} onChange={(e) => setDone(e.target.checked)} /> ältere erledigte zeigen</label>
         <label className="row small" title="Beim Ziehen einer Karte erst bestätigen (Einstellung je Person)"><input type="checkbox" checked={confirmMove} onChange={async (e) => { await api('/api/prefs', { body: { confirmMove: e.target.checked } }); prefs.reload(); }} /> Verschieben bestätigen</label>
@@ -589,7 +589,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
       {b.error && <Err e={b.error} />}
       {data && filter === 'pflege' && <PflegeSumme lanes={data.lanes} />}
       {!data ? <Loading /> : data.lanes.length === 0 ? (
-        <div className="card soft"><p>Keine Tickets in der Kopie{filter || owner || q ? ' für diesen Filter' : ''}.</p>{!data.sync && <p className="small">Noch nie synchronisiert — oben auf „Jetzt synchronisieren“ klicken (braucht deinen Jira-Zugang aus der <a href="#/einrichtung">Werkbank-Einrichtung</a>).</p>}</div>
+        <div className="card soft"><p>Keine Tickets in der Kopie{filter || owner || q ? ' für diesen Filter' : ''}.</p>{!data.sync && <p className="small">Noch nie synchronisiert — oben auf „Jetzt synchronisieren“ klicken (braucht deinen Jira-Zugang aus der <a href="#/einrichtung">Workspace-Einrichtung</a>).</p>}</div>
       ) : data.lanes.map((lane: any) => (
         <section className="lane" key={lane.key}>
           <h3 className="lane-head">

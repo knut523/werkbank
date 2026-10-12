@@ -1,0 +1,21 @@
+diff --git a/client/src/components/UnifiedSidebar/ConversationsSection.tsx b/client/src/components/UnifiedSidebar/ConversationsSection.tsx
+index 74d4ed8..bc7d237 100644
+--- a/client/src/components/UnifiedSidebar/ConversationsSection.tsx
++++ b/client/src/components/UnifiedSidebar/ConversationsSection.tsx
+@@ -18,6 +18,7 @@ import ProjectsSection from '~/components/Conversations/ProjectsSection';
+ import FavoritesList from '~/components/Nav/Favorites/FavoritesList';
+ import SearchBar from '~/components/Nav/SearchBar';
+ import store from '~/store';
++import HauptchatSection from '~/components/Werkbank/HauptchatSection'; // OLAF Workspace
+ 
+ const BookmarkNav = lazy(() => import('~/components/Nav/Bookmarks/BookmarkNav'));
+ 
+@@ -118,6 +119,8 @@ const ConversationsSection = memo(() => {
+         )}
+         {search.enabled && <SearchBar isSmallScreen={isSmallScreen} />}
+       </div>
++      {/* OLAF Workspace: Hauptchat oben, Unter-Chats darunter (Plan 144) */}
++      {!search.query && <HauptchatSection toggleNav={toggleNav} />}
+       {!search.query && (
+         <div className="px-3">
+           <FavoritesList isSmallScreen={isSmallScreen} toggleNav={toggleNav} />

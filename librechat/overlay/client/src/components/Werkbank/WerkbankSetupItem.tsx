@@ -1,4 +1,4 @@
-// OLAF-Werkbank: Eintrag „Werkbank-Einrichtung“ im Kontomenü, direkt über LibreChats „Einstellungen“
+// OLAF Workspace: Eintrag „Workspace-Einrichtung“ im Kontomenü, direkt über LibreChats „Einstellungen“
 // (Patch 40-client-konto-einrichtung) — ein Ort für alles, was man einstellt (docs/plan-eine-oberflaeche.md, E3).
 import * as Menu from '@ariakit/react/menu';
 import { useNavigate } from 'react-router-dom';
@@ -15,7 +15,7 @@ export default function WerkbankSetupItem() {
       data-testid="nav-werkbank-einrichtung"
     >
       <Rocket className="icon-md" aria-hidden="true" />
-      Werkbank-Einrichtung
+      Workspace-Einrichtung
     </Menu.MenuItem>
   );
 }

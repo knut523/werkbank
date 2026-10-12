@@ -20,7 +20,7 @@ export function ticketPrompt(i: Issue, extra = ''): string {
   ].filter(Boolean).join('\n\n');
 }
 
-export const AGENT_INSTRUCTION = `Du arbeitest vom Werkbank-Board aus an diesem Ticket, im Modus NUR LESEN: Lies Vault, Skills (olaf-jira, olaf-sprint-planning) und Jira, aber ändere nichts — Schreibaktionen werden hier automatisch abgelehnt.
+export const AGENT_INSTRUCTION = `Du arbeitest vom Board des OLAF Workspace aus an diesem Ticket, im Modus NUR LESEN: Lies Vault, Skills (olaf-jira, olaf-sprint-planning) und Jira, aber ändere nichts — Schreibaktionen werden hier automatisch abgelehnt.
 Aufgabe: Finde heraus, wo das Ticket wirklich steht (Vault-Register vor Code, Board-Stand ist nicht Arbeitsstand), was als Nächstes zu tun ist und was fehlt.
 Schließe mit einem Abschnitt, der genau mit der Zeile "### Kommentarentwurf" beginnt: ein kurzer, sachlicher Jira-Kommentar auf Deutsch (höchstens 8 Zeilen), den die Person prüfen und dann selbst senden kann. Keine neuen Tickets vorschlagen, ohne dass es ausdrücklich gewünscht ist.`;
 
@@ -101,14 +101,14 @@ export function chatUrl(prompt: string, opts: { spec?: string; submit?: boolean 
 import { librechatAccessToken } from './auth.ts';
 import { lastMessageId } from './review.ts';
 
-export const CHAT_AGENT_INSTRUCTION = `Du bist vom Werkbank-Board auf dieses Ticket angesetzt. Arbeite nach plan-to-pr — auch wenn es keine Coding-Aufgabe ist (Recherche, Dokument, Abstimmung):
+export const CHAT_AGENT_INSTRUCTION = `Du bist vom Board des OLAF Workspace auf dieses Ticket angesetzt. Arbeite nach plan-to-pr — auch wenn es keine Coding-Aufgabe ist (Recherche, Dokument, Abstimmung):
 1. Lies zuerst, was Vault-Register und Jira sagen (Vault vor Code, Board-Stand ist nicht Arbeitsstand).
 2. Schreib dann einen kurzen Plan (Skill plan-to-pr bzw. grilling): Ziel, Ergebnis (was am Ende übergeben wird und wo es liegt), Stand heute, Schnitte, Definition of Done. Leg ihn als Vault-Notiz ab — im Workstream-Bereich unten, wenn einer genannt ist, sonst neben die passende Area-Notiz —, mit \`jira: <Key>\` und \`projekt: <Projekt>\` im Frontmatter.
 3. Stell danach alle offenen inhaltlichen Entscheidungen auf einmal, als Text am Ende deiner Antwort (je Kontext · Optionen · Empfehlung · leere Zeile „  - {{NAME}}:“), und setz erst nach den Antworten um. Gibt es keine, sag das und mach weiter. Ob du eine Datei schreiben oder einen Befehl ausführen darfst, fragst du nicht selbst — ruf das Werkzeug direkt auf, das System fragt, wo nötig.
 4. Setz dann die Schnitte um. GitHub pushen und mergen ist gesperrt.
 5. Neue Vault-Notizen oder Dateien zu diesem Ticket bekommen im Frontmatter \`jira: <Key>\` (dann erscheinen sie an der Karte); Dokumente, die du erstellst, landen nach dem Lauf von selbst unter „Meine Dateien“.
 6. Keine neuen Tickets ohne ausdrücklichen Auftrag.
-7. Code: nie im vorhandenen, womöglich veralteten Klon arbeiten — zuerst im Repo \`git fetch\` (scheitert er, schreib das in den Stand), dann einen frischen Worktree vom Integrationszweig anlegen (\`git worktree add -b <branch> ../<repo>-<key> origin/develop\`, sonst origin/dev bzw. origin/main) und nur dort arbeiten. Am Ende ein lokaler Feature-Branch mit Commits. Wenn du fertig bist (oder ohne die Person nicht weiterkommst), ruf das Werkzeug \`review_ready\` (Werkbank) auf: gemacht, nicht_gemacht, risiko (je ein kurzer Text, „nichts“ statt leer) und je DoD-Punkt { punkt, stand: ja|teilweise|nein, beleg }, dazu artefakte (Plan-Notiz, Dateien, Branch). Erst danach, als allerletzten Schritt, den Push des Feature-Branches anstoßen — das System fragt die Person; einen Draft-PR erst nach dem Push.
+7. Code: nie im vorhandenen, womöglich veralteten Klon arbeiten — zuerst im Repo \`git fetch\` (scheitert er, schreib das in den Stand), dann einen frischen Worktree vom Integrationszweig anlegen (\`git worktree add -b <branch> ../<repo>-<key> origin/develop\`, sonst origin/dev bzw. origin/main) und nur dort arbeiten. Am Ende ein lokaler Feature-Branch mit Commits. Wenn du fertig bist (oder ohne die Person nicht weiterkommst), ruf das Werkzeug \`review_ready\` (MCP-Server \`werkbank\`) auf: gemacht, nicht_gemacht, risiko (je ein kurzer Text, „nichts“ statt leer) und je DoD-Punkt { punkt, stand: ja|teilweise|nein, beleg }, dazu artefakte (Plan-Notiz, Dateien, Branch). Erst danach, als allerletzten Schritt, den Push des Feature-Branches anstoßen — das System fragt die Person; einen Draft-PR erst nach dem Push.
 Schließe mit „### Stand“ (3–5 Zeilen: was erledigt ist, was offen ist, wer dran ist) und „### Kommentarentwurf“ (höchstens 8 Zeilen für Jira).`;
 
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 OLAF-Werkbank';
