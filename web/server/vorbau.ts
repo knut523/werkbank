@@ -34,7 +34,7 @@ export const VORBAU_AUS_TEXT = 'G0 (Prüfung vor dem Bau) ist auf dieser Instanz
 export type Ergebnis = 'frei' | 'fortsetzen' | 'treffer' | 'stopp';
 /** Woran ein Beleg hängt — „autor“ zählt die Bilanz gesondert (DoD 25). */
 export type Kriterium = 'gebaut' | 'geplant' | 'baut' | 'lokal' | 'eigen' | 'autor' | 'plan';
-export interface Beleg { art: Kriterium; text: string; repo?: string; sha?: string; pr?: string; branch?: string; pfad?: string; wirkung: 'treffer' | 'fortsetzen' }
+export interface Beleg { art: Kriterium; text: string; repo?: string; sha?: string; pr?: string; branch?: string; pfad?: string; wirkung: 'treffer' | 'fortsetzen'; eigenerPr?: boolean }
 export interface Stopp { grund: 'lesetoken' | 'fetch' | 'pr-api' | 'eingabe'; text: string; knopf: 'ohne PR-Prüfung bauen' | null }
 export interface VorbauErgebnis { ergebnis: Ergebnis; slug: string; belege: Beleg[]; hinweise: string[]; stopp?: Stopp; kriterien: Kriterium[] }
 
@@ -59,7 +59,9 @@ const frontmatter = (text: string): Record<string, string> => {
   return out;
 };
 
-/** Identität eines Plans: Frontmatter `spec:`/`branch:`; Altpläne: Kopfzeile `**Spec:**` und Branch aus dem Fließtext. */
+/** Identität eines Plans: Frontmatter `spec:`/`branch:`; Altpläne: Kopfzeilen `**Spec:**`, `**Branch:**` bzw. `**Repo(s):** … Branch \`x\``
+ *  (auch `**Repo:** olaf-admin · **Branch:** \`x\``, plan 024). Nur in Backticks — „**Branch:** eigener, auf …“ (027) ist kein Name.
+ *  Ein im Fließtext nur erwähnter Branch zählt nie (Paket 135/E2: plan 087 nennt Chris' `feat/049-ecp-completion`). */
 export function parsePlan(text: string, path = ''): PlanInfo {
   const fm = frontmatter(text);
   const clean = (v: string | undefined) => { const s = (v ?? '').replace(/^\[\[|\]\]$/g, '').split('|')[0].trim(); return s || null; };
@@ -67,7 +69,7 @@ export function parsePlan(text: string, path = ''): PlanInfo {
   const sh = /^\*\*Spec:\*\*\s*(.+)$/im.exec(text);
   if (sh) { const w = /\[\[([^\]|#]+)/.exec(sh[1])?.[1] ?? /`([^`]+)`/.exec(sh[1])?.[1] ?? SLUGISH.exec(sh[1])?.[0] ?? null; specHeader = w && !/^no\b/i.test(sh[1].trim()) ? w.split('/').pop()!.replace(/\.md$/, '') : null; }
   let branch = clean(fm.branch)?.replace(/^`|`$/g, '') ?? null;
-  if (!branch) { const b = /\*\*branch:\*\*\s*`?([\w./-]+)`?|\bBranch\s+`([\w./-]+)`/i.exec(text); branch = b ? (b[1] ?? b[2]) : null; }
+  if (!branch) { const b = /^\*\*branch:\*\*\s*`([\w./-]+)`|^\*\*Repos?:\*\*[^\n]*?\bBranch(?::\*\*)?\s+`([\w./-]+)`/im.exec(text); branch = b ? (b[1] ?? b[2]) : null; }
   const base = path.split('/').pop() ?? '';
   const nm = /^(\d{3})-(.+)\.md$/.exec(base) ?? /^plan-(.+)\.md$/.exec(base);
   const nummer = nm && nm.length === 3 ? nm[1] : null;
@@ -97,6 +99,10 @@ export interface Fakten {
   lokal: { repo: string; ref: string }[];
   fremdeAenderung: { repo: string; geaendert: number; von: number } | null;
   autorKriterium: boolean;             // false, wenn die Bilanz es abgeschaltet hat (DoD 25)
+  /** Plannummern, deren zitierte Plandatei (Nummer + Slug) auf dem Integrationszweig liegt; undefined = kein Planbaum im Umfang. */
+  nummernBelegt?: string[];
+  /** Nur drift (Aufrufer ohne Plan, Paket 135/E3 a): offene PRs eigener Logins sind fortsetzen statt „baut jemand“. */
+  eigeneFortsetzen?: boolean;
 }
 
 /** Die Namen, unter denen dieselbe Arbeit auftauchen kann: Spec-Slug, `spec:`/**Spec:**, Plan-Slug, Branch-Ende. */
@@ -131,11 +137,15 @@ export function decide(slug: string, f: Fakten): VorbauErgebnis {
   const belege: Beleg[] = [];
   const hinweise: string[] = [];
   const name = namen(slug, f.plan, f.specZitiertePlaene);
-  const nr = nummern(f.plan, f.specZitiertePlaene);
+  // Eine Plannummer zählt nur, wenn genau diese Plandatei auf dem Integrationszweig liegt — sonst ist es eine lokal
+  // vergebene Nummer, die auf main einem anderen Plan gehört (Paket 135/E1: „plan 093“ → admin#273).
+  const alleNr = nummern(f.plan, f.specZitiertePlaene);
+  const nr = alleNr.filter((n) => !f.nummernBelegt || f.nummernBelegt.includes(n));
   const own = f.plan?.branch ?? null;
   const t = treffer(name, nr, own);
 
   if (f.plan && !f.plan.spec && !f.plan.specHeader) hinweise.push('Identität unbekannt: der Plan hat weder `spec:` noch eine Kopfzeile `**Spec:**` — geprüft wurde nur über Slug, Plan-Slug und Branch. Bitte `spec:` und `branch:` ins Frontmatter.');
+  for (const n of alleNr.filter((x) => !nr.includes(x))) hinweise.push(`Plannummer ${n} nicht gezählt: die zitierte Plandatei plans/${n}-… liegt so nicht auf dem Integrationszweig (plan ${n} gehört dort einem anderen Plan oder fehlt) — Treffer nur über Slug/Branch.`);
   if (f.plan && !own) hinweise.push('Branch unbekannt: der Plan nennt kein `branch:` — ein eigener PR lässt sich nicht von einem fremden unterscheiden.');
 
   // 1. schon gebaut: gemergter Code-PR mit Head-Branch = branch:/Slug oder der Slug/Plannummer nennt.
@@ -156,6 +166,8 @@ export function decide(slug: string, f: Fakten): VorbauErgebnis {
     if (pr) { belege.push({ art: 'autor', wirkung: 'treffer', repo: pl.repo, pfad: pl.pfad, pr: pr.url, branch: pl.branch ?? undefined, text: `geplant von anderem: ${pl.repo}:${pl.pfad} — zu branch ${pl.branch} gibt es den Code-PR ${pr.repo}#${pr.number} von ${pr.author}` }); continue; }
     belege.push({ art: 'plan', wirkung: 'fortsetzen', repo: pl.repo, pfad: pl.pfad, branch: pl.branch ?? undefined, text: `Plan existiert schon: ${pl.repo}:${pl.pfad}, auf ihm aufsetzen${pl.branch ? ` (branch ${pl.branch})` : ''}` });
   }
+  // Trefferweg für eigene PRs im drift: ein PR, der die Spec nur über „plan NNN“ erwähnt, ist meist fachfremd (Löschlauf ← #268).
+  const weg = (p: Pr) => t.branch(p.headRefName) ? 'über Branch' : t.planDatei(p) ? 'über Plandatei' : name.some((n) => ganzesWort(`${p.title}\n${p.body}`, n)) ? 'über Slug im Text' : `nur über Plannummer ${nr.find((n) => new RegExp(`\\bplans?[ /(]*${n}\\b`, 'i').test(`${p.title}\n${p.body}`)) ?? '?'}`;
   // 2. baut jemand anderes: offener PR (alle Autoren) mit Branch */<slug>, Plandatei <slug> oder Slug als ganzes Wort.
   if (f.offen === null) hinweise.push('Ohne PR-Prüfung gebaut (Knopf „ohne PR-Prüfung bauen“, protokolliert): offene PRs wurden NICHT geprüft.');
   for (const p of f.offen ?? []) {
@@ -163,6 +175,9 @@ export function decide(slug: string, f: Fakten): VorbauErgebnis {
     if (!(t.branch(p.headRefName) || t.planDatei(p) || t.nennt(p))) continue;
     const gleich = own !== null && p.headRefName === own;
     const ichBins = !!p.author && f.ich.some((i) => i.toLowerCase() === p.author!.toLowerCase());
+    // drift (ohne Plan): ein offener PR eines eigenen Logins ist eigene Arbeit zum Fortsetzen (Paket 135/E3 a). Nur drift —
+    // Nachtbau, `orch start --slug` und Ansetzen starten bei fortsetzen ohne Rückfrage, dort bleibt es ein Treffer.
+    if (!f.plan && f.eigeneFortsetzen && ichBins) { belege.push({ art: 'eigen', wirkung: 'fortsetzen', eigenerPr: true, repo: p.repo, pr: p.url, branch: p.headRefName, text: `eigener offener PR: ${p.repo}#${p.number} „${p.title.slice(0, 90)}“ (Branch ${p.headRefName}, Autor ${p.author}; ${weg(p)})` }); continue; }
     if (gleich && (ichBins || p.headLokal || !f.autorKriterium)) { belege.push({ art: 'eigen', wirkung: 'fortsetzen', repo: p.repo, pr: p.url, branch: p.headRefName, text: `eigener PR: ${p.repo}#${p.number} (Branch ${p.headRefName}${ichBins ? `, Autor ${p.author}` : ', Head-SHA lokal enthalten'})` }); continue; }
     belege.push({ art: gleich ? 'autor' : 'baut', wirkung: 'treffer', repo: p.repo, pr: p.url, sha: p.headRefOid || undefined, branch: p.headRefName, text: `baut jemand: ${p.repo}#${p.number} „${p.title.slice(0, 90)}“ von ${p.author ?? '?'} (Branch ${p.headRefName}${gleich ? ', gleicher Name, aber anderer Autor und Head-SHA nicht lokal' : ''})` });
   }
@@ -304,7 +319,9 @@ export async function gather(o: GatherOpts): Promise<{ fakten: Fakten } | { stop
 
     // Plandateien auf dem Integrationszweig: exakter Pfad, spec: oder branch: (DoD 20).
     const baum = (q(['ls-tree', '-r', '--name-only', integ], top) ?? '').split('\n').filter(Boolean);
+    const belegbar = new Set([...zitiert, ...(plan?.nummer && plan.planSlug ? [`plans/${plan.nummer}-${plan.planSlug}`] : [])]);
     for (const pfad of baum.filter(istPlanDatei)) {
+      if (pfad.startsWith('plans/')) { f.nummernBelegt ??= []; if (belegbar.has(pfad.replace(/\.md$/, ''))) f.nummernBelegt.push(pfad.slice(6, 9)); }
       const nm = pfad.replace(/^plans\/\d{3}-|^docs\/plan-/, '').replace(/\.md$/, '');
       const pfadTrifft = name.includes(nm) || zitiert.includes(pfad.replace(/\.md$/, ''));
       const text = q(['show', `${integ}:${pfad}`], top) ?? '';
@@ -395,7 +412,7 @@ export async function pruefe(o: PruefOpts): Promise<VorbauErgebnis> {
   else if (o.planDatei && planText === null) r = stoppErgebnis(o.slug, { grund: 'eingabe', knopf: null, text: `Plandatei ${o.planDatei} nicht lesbar.` });
   else {
     const g = await gather({ ...o, plan });
-    r = 'stopp' in g ? stoppErgebnis(o.slug, g.stopp) : decide(o.slug, g.fakten);
+    r = 'stopp' in g ? stoppErgebnis(o.slug, g.stopp) : decide(o.slug, { ...g.fakten, eigeneFortsetzen: o.aufrufer === 'drift' });
   }
   protokolliere({ art: 'pruefung', slug: o.slug, aufrufer: o.aufrufer, ergebnis: r.ergebnis, kriterien: r.kriterien, stopp: r.stopp?.grund ?? null, ohnePr: !!o.ohnePr, belege: r.belege.length }, o.protokoll);
   return r;
