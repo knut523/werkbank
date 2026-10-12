@@ -91,7 +91,7 @@ sich gesammelt abhaken.
 ## Nicht in diesem Schnitt
 
 - Kein Schreiben in Vault, Jira, GitHub; Live-Instanz unverändert.
-- Keine Änderung am Zähler „Heute (n)“ (siehe Entscheidung E1 im Bericht).
+- Keine Änderung am Zähler „Heute (n)“ (E1, entschieden 12.10.: zählen mit).
 - Keine Zusammenfassung durch ein Sprachmodell — nur Text aus Plan/Bericht/Auftrag.
 
 ## Council (Runde 1, 12.10.2026)
@@ -154,3 +154,10 @@ DoD-Zusatz:
     `docs = { auftrag: true, bericht: false }` — Test (`leitstand.test.ts`, `heutekarte.test.ts`).
 19. Die Vorschau des Auftrags liefert gerendertes HTML — Test.
 20. Auf „Heute“ klappt „Auftrag“ in der Karte auf, die Adresse bleibt `#/` — Screenshot + Assertion im Shots-Skript.
+
+## Entscheidungen Knut (12.10.2026, Haupt-Chat: „ok passt alles“)
+
+- **E1 (q-2ef649) — zählen live gegangene Stränge in „Heute (n)“ mit?** → **(a) ja, wie gebaut.** Der Zähler bleibt
+  Mongo-only; „Alle n als geprüft markieren“ räumt sie weg.
+- **E2 (q-1a0551) — zeigt die Live-Gruppe noch Nachprüf-Schritte?** → **(a) nein, wie gebaut.** Titel, Stand-Chip,
+  Auftrag · Bericht · Chat je Zeile.
