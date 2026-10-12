@@ -46,7 +46,7 @@ export const leitDir = () => process.env.WERKBANK_LEITSTAND_DIR || join(process.
 /** Ab wann ein nicht fortgesetztes technisches Zugende als „hängt“ gemeldet wird (Plan 154, G9). */
 export const hangMs = (env = process.env) => num(env.LEITSTAND_HANG_MS, 5 * 60_000);
 
-export interface LeitEvent { key: string; kind: 'fertig' | 'antwort' | 'blockiert' | 'deckel' | 'review' | 'frage' | 'weiter' | 'geprueft' | 'nacharbeit' | 'haengt' | 'meldung'; at: number; text: string; excerpt?: string; strand?: { id: string; title: string } }
+export interface LeitEvent { key: string; kind: 'fertig' | 'antwort' | 'blockiert' | 'deckel' | 'review' | 'frage' | 'weiter' | 'geprueft' | 'nacharbeit' | 'haengt' | 'meldung' | 'freigabe'; at: number; text: string; excerpt?: string; strand?: { id: string; title: string } }
 
 /**
  * Ereignis eines Strangs aus seinem Zustand — oder null. Technische Zugenden (cause gesetzt) übernimmt das Auto-Fortsetzen
@@ -159,6 +159,21 @@ export async function meldeHauptchat(u: User, conv: string, art: string, text: s
       excerpt: t, strand: { id: String(d._id), title: String(d.title ?? '') }, at, createdAt: at, status: 'offen', retries: 0, urgent: false } }, { upsert: true });
   }
   return { ok: true, id: String(d._id), art, hauptchat: !!leit };
+}
+
+/**
+ * Hinweis an den Hauptchat nach Knuts Freigabe (Plan 154, Council R3, Bedingung 4): ein Zustand, KEIN Auftrag — die Zeile sagt
+ * das ausdrücklich. Gepusht wird nur von der Hauptsitzung nach der Push-Checkliste; der pre-push-Hook prüft die Freigabe.
+ */
+export async function hinweisFreigabe(u: User, f: { id: string; branch: string; head: string; repo: string }, d: any, zurueck = false) {
+  const leit = await activeLeitstand(u);
+  if (!leit) return;
+  const at = new Date();
+  const key = `${zurueck ? 'freigabe-zurueck' : 'freigabe'}:${f.id}`;
+  const text = zurueck
+    ? `Knut hat die Freigabe ${f.id} (${f.branch}@${f.head.slice(0, 7)}) zurückgezogen — nicht pushen.`
+    : `Knut hat ${f.branch}@${f.head.slice(0, 7)} (${f.repo.split('/').pop()}) zum Push freigegeben (${f.id}). Hinweis, kein Auftrag: gepusht wird nur von der Hauptsitzung nach der Push-Checkliste; der pre-push-Hook prüft die Freigabe. Nie mergen.`;
+  await events().updateOne({ _id: `${u.id}:${key}` as any }, { $setOnInsert: { userId: u.id, leit: leit._id, kind: 'freigabe', text, excerpt: '', strand: { id: String(d._id), title: String(d.title ?? '') }, at, createdAt: at, status: 'offen', retries: 0, urgent: false } }, { upsert: true });
 }
 
 // ---------- Start ----------

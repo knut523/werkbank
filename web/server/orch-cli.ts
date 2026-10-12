@@ -12,6 +12,10 @@
 //   orch send <id> (TEXT … | --text TEXT | Text auf stdin)   läuft der Strang, wird die Nachricht in den laufenden Zug nachgereicht
 //   orch review <id> [--note TEXT]
 //   orch thema <id> <Thema|auto>   Themen-Gruppe in der Chat-Seitenleiste von Hand (auto = wieder automatisch)
+//   orch freigaben [--alle] [--json]   Knuts Freigaben zum Push (Review-Ansicht im OLAF Workspace); anlegen nur dort
+//   orch freigabe-pruefen <repo-ordner> <sha>   Exit 0 nur bei aktiver Freigabe dieses Stands (oder desselben Patches nach Rebase);
+//     der pre-push-Hook templates/git-hooks/pre-push ruft das auf
+//   orch freigabe-gepusht <freigabe-id> [--pr URL]   nach dem Push: Freigabe als gepusht markieren (nicht mehr zurückziehbar)
 //   orch ask --title T --context TEXT --recommend TEXT [--option "Label :: Folge"]… [--strand <id>] [--link URL] [--plan DATEI]
 //     [--key <slug>#<id>] [--quelle drift]   Schlüssel offen/beantwortet → Exit 3 (keine zweite Frage); Tageskappe → Exit 4
 //   orch questions list [--open] [--json] · orch questions get <id> [--json] · orch questions withdraw <id>
@@ -44,7 +48,7 @@ for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a.startsWith('--')) {
     const k = a.slice(2);
-    if (['all', 'json', 'shared', 'open', 'code'].includes(k)) flags[k] = true;
+    if (['all', 'alle', 'json', 'shared', 'open', 'code'].includes(k)) flags[k] = true;
     else if (k === 'option') options.push(args[++i] ?? '');
     else flags[k] = args[++i] ?? '';
   } else pos.push(a);
@@ -171,6 +175,26 @@ async function main() {
       if (!pos[0]) die('review <id>');
       await call('review', { id: pos[0], note: typeof flags.note === 'string' ? flags.note : '' });
       console.log(`geprüft: ${pos[0]}`);
+      return;
+    }
+    case 'freigaben': {
+      const j = await call('freigaben', { alle: flags.alle === true });
+      if (flags.json) return console.log(JSON.stringify(j.freigaben, null, 1));
+      if (!j.freigaben.length) return console.log('Keine offenen Freigaben (Knut gibt im OLAF Workspace frei: Hauptchat → Unter-Chat → Review).');
+      for (const f of j.freigaben) console.log(`${f.pushedAt ? '🚀' : f.revokedAt ? '↩️' : '✅'} ${f.id}  ${f.branch}@${String(f.head).slice(0, 12)}  ${f.key}\n   Strang ${f.strand} „${f.title}“ · ${t(f.at)} von ${f.by}${f.pr ? ` · ${f.pr}` : ''}\n   Ordner ${f.repo}`);
+      return;
+    }
+    case 'freigabe-pruefen': {
+      if (!pos[0] || !pos[1]) die('freigabe-pruefen <repo-ordner> <sha>');
+      const j = await call('freigabe-pruefen', { repo: pos[0], sha: pos[1] });
+      if (j.ok) { console.log(`ok: ${j.grund}`); return; }
+      process.stderr.write(`orch: NICHT freigegeben — ${j.grund}\n`);
+      process.exit(2);
+    }
+    case 'freigabe-gepusht': {
+      if (!pos[0]) die('freigabe-gepusht <freigabe-id> [--pr URL]');
+      const j = await call('freigabe-gepusht', { id: pos[0], pr: typeof flags.pr === 'string' ? flags.pr : null });
+      console.log(`gepusht vermerkt: ${j.id}${j.pr ? ` ${j.pr}` : ''}`);
       return;
     }
     case 'thema': {

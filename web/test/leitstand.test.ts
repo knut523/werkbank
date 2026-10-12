@@ -563,6 +563,46 @@ test('Teil B (B-1/B-6/B-2/B-20): Lauf + Lesezeichen, fertiger Strang als Karte a
   assert.ok(cnt.count >= t.strands.length);
 });
 
+test('Plan 154 §9 (Council R3): Review-Ansicht — Entscheidungen aus dem Bericht, Antworten als Nacharbeit (Bericht-Hash), Rechte, kein interner Weg legt Freigaben an', async () => {
+  mkdirSync(join(tmp, 'review-pakete', '954-review'), { recursive: true });
+  const bericht = '# Bericht\n\n## Offene Entscheidungen\n\n**D1 — Tabelle umbenennen?**\n- a) ja\n- b) nein\n- Empfehlung: a\n  - Knut:\n\n**D2 — Schon entschieden**\n  - Knut: b\n';
+  writeFileSync(join(tmp, 'review-pakete', '954-review', 'bericht.md'), bericht);
+  writeFileSync(join(tmp, 'review-pakete', '954-review', 'pr-admin.md'), '## PR\n[klick](https://evil.example)\n');
+  const st = JSON.parse((await orch(['start', '--title', 'Review-Strang', '--cwd', WT('wt-review'), '--json'],
+    'Bericht nach ~/work/knut/review-pakete/954-review/bericht.md.\nmock-antwort Fertig.\\n### Stand\\n- Erledigt: x\\nStatus: fertig')).out);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status === 'done');
+  await until(() => W().collection('orchestrator_runs').findOne({ _id: st.id as any }), (x: any) => x?.lastStatus === 'done');
+  const get = async (usr = knut) => fetch(B + `/api/review/${st.id}`, { headers: { cookie: await cookie(usr) } });
+  const r = await (await get()).json();
+  assert.deepEqual(r.entscheidungen.map((e: any) => [e.id, e.knut]), [['D1', ''], ['D2', 'b']]);
+  assert.equal(r.prTexte[0].name, 'pr-admin.md');
+  assert.match(r.prTexte[0].text, /evil\.example/, 'als Text geliefert — die Ansicht macht daraus keinen Link');
+  assert.ok(r.repo.fehler, 'Arbeitsordner außerhalb von ~/work bzw. ohne Repo → keine Freigabe möglich');
+  assert.equal((await get(team)).status, 403);
+  // Freigeben ohne Repo → 409; ohne Workspace-Header → 403; Team → 403.
+  assert.equal((await post(`/api/review/${st.id}/freigabe`, { head: 'a'.repeat(40), patchId: 'x' })).status, 409);
+  assert.equal((await fetch(B + `/api/review/${st.id}/freigabe`, { method: 'POST', headers: { cookie: await cookie(knut), 'content-type': 'application/json' }, body: '{}' })).status, 403);
+  assert.equal((await post(`/api/review/${st.id}/freigabe`, { head: 'a'.repeat(40) }, team)).status, 403);
+  // Kein interner Weg legt an oder zieht zurück (Bedingung 4); lesen geht.
+  const ip = (path: string, b: unknown) => fetch(B + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId: String(knut._id), ...(b as object) }) });
+  assert.equal((await ip('/internal/orchestrator/freigabe', { strand: st.id })).status, 404);
+  assert.equal((await ip('/internal/orchestrator/freigabe-zurueck', { id: 'f-00000000' })).status, 404);
+  assert.deepEqual((await (await ip('/internal/orchestrator/freigaben', {})).json()).freigaben, []);
+  assert.equal((await (await ip('/internal/orchestrator/freigabe-pruefen', { repo: WT('wt-review'), sha: 'a'.repeat(40) })).json()).ok, false);
+  // Antworten: falscher Hash → 409; richtig → Nacharbeit an den Strang, nur bekannte IDs.
+  assert.equal((await post(`/api/review/${st.id}/entscheidungen`, { berichtHash: 'alt', antworten: [{ id: 'D1', text: 'a' }] })).status, 409);
+  const ok = await post(`/api/review/${st.id}/entscheidungen`, { berichtHash: r.berichtHash, antworten: [{ id: 'D1', text: 'a, aber mit Übergangsview' }, { id: 'X9', text: 'erfunden' }] });
+  assert.equal(ok.status, 200, await ok.clone().text());
+  assert.equal((await ok.json()).gesendet, 1);
+  const msgs = await msgsOf(st.conv);
+  const nach = msgs.filter((m) => m.isCreatedByUser).map(textOf).at(-1)!;
+  assert.match(nach, /^Nacharbeit nach Review: Entscheidungen von Knut/);
+  assert.match(nach, /- D1 \(Tabelle umbenennen\?\): a, aber mit Übergangsview/);
+  assert.doesNotMatch(nach, /X9/);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  await orch(['review', st.id]);
+});
+
 test('Teil B (B-7/B-18/B-19/B-10): Passt nur auf den gesehenen Stand; danach keine Karte, Leitstand geweckt, orch_send vom Leitstand → 409', async () => {
   const st = await doneStrand('Teil B: Passt', 'wt-b2');
   const card = await until(() => cardOf(st.id), (c: any) => !!c);

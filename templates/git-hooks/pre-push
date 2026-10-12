@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# OLAF Workspace — Push nur mit Knuts Freigabe (docs/plan-hauptchat-monitor.md §9, Council R3, Bedingung 3).
+#
+# Einbau (Knut, je Repo einmal; gilt für alle Worktrees des Repos):
+#   cp ~/work/werkbank-dev/templates/git-hooks/pre-push <repo>/.git/hooks/pre-push && chmod +x <repo>/.git/hooks/pre-push
+# Prüft je gepushtem Stand: aktive Freigabe im OLAF Workspace für genau diesen SHA — oder, nach einem Rebase vor dem Push,
+# für denselben Patch gegen dieselbe Basis. Löschen (Branch entfernen) und Tags sind nicht betroffen.
+# Notausgang (bewusst, mit Spur): WERKBANK_PUSH_OHNE_FREIGABE=1 git push … — schreibt eine Zeile nach ~/.local/state/werkbank-push-ohne-freigabe.log.
+# Werkbank: WERKBANK_ORCH (Vorgabe ~/work/werkbank-dev/scripts/orch).
+set -uo pipefail
+ORCH="${WERKBANK_ORCH:-$HOME/work/werkbank-dev/scripts/orch}"
+top="$(git rev-parse --show-toplevel)"
+if [ "${WERKBANK_PUSH_OHNE_FREIGABE:-}" = 1 ]; then
+  mkdir -p "$HOME/.local/state"
+  echo "$(date -Is) $top $* ohne Freigabe" >> "$HOME/.local/state/werkbank-push-ohne-freigabe.log"
+  echo "pre-push: OHNE Freigabe (Notausgang, protokolliert)." >&2
+  exit 0
+fi
+[ -x "$ORCH" ] || { echo "pre-push: $ORCH fehlt — ohne Prüfung kein Push (WERKBANK_ORCH setzen)." >&2; exit 1; }
+rc=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "${local_sha:-}" ] && continue
+  case "$local_sha" in 0000000000000000000000000000000000000000) continue ;; esac   # Branch löschen
+  case "$remote_ref" in refs/tags/*) continue ;; esac
+  if ! "$ORCH" freigabe-pruefen "$top" "$local_sha"; then
+    echo "pre-push: $local_ref ($local_sha) → $remote_ref ist nicht freigegeben. Erst im OLAF Workspace reviewen und freigeben." >&2
+    rc=1
+  fi
+done
+exit $rc
