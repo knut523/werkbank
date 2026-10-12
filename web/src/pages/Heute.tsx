@@ -235,8 +235,8 @@ function LiveGroup({ items, onDone }: { items: any[]; onDone: () => void }) {
   const [skipped, setSkipped] = useState<Record<string, string>>({});
   const all = async () => {
     const n = items.length;
-    if (!(await confirm({ title: `${n} live gegangene ${n === 1 ? 'Strang' : 'Stränge'} abhaken?`, confirmLabel: `${n} abhaken`,
-      body: <><p className="small">Sie werden als geprüft markiert. Nichts wird geschrieben, gepusht oder gemergt. Die Werkbank prüft vorher noch einmal, ob jeder wirklich live ist.</p><ul className="small">{items.map((x) => <li key={x.id}>{x.summary} · {x.stand.text}</li>)}</ul></> }))) return;
+    if (!(await confirm({ title: `${n} live gegangene ${n === 1 ? 'Unter-Chat' : 'Unter-Chats'} abhaken?`, confirmLabel: `${n} abhaken`,
+      body: <><p className="small">Sie werden als geprüft markiert. Nichts wird geschrieben, gepusht oder gemergt. Der OLAF Workspace prüft vorher noch einmal, ob jeder wirklich live ist.</p><ul className="small">{items.map((x) => <li key={x.id}>{x.summary} · {x.stand.text}</li>)}</ul></> }))) return;
     setBusy(true); setErr(null);
     try {
       const r: any = await api('/api/leitstand/strands/passt-live', { body: { items: items.map((x) => ({ id: x.id, seen: x.seen })) } });
@@ -250,7 +250,7 @@ function LiveGroup({ items, onDone }: { items: any[]; onDone: () => void }) {
     <div className="card rq rq-live" data-testid="live-group">
       <details>
         <summary><b>Schon live — nur noch abhaken ({items.length})</b> <span className="small muted">· Liste zeigen</span></summary>
-        <p className="small muted">Diese Stränge sind auf der Werkbank live. Zu prüfen gibt es nichts mehr — abhaken räumt sie von hier weg.</p>
+        <p className="small muted">Diese Unter-Chats sind im OLAF Workspace live. Zu prüfen gibt es nichts mehr — abhaken räumt sie von hier weg.</p>
         <ul className="plain rq-live-list">{items.map((x) => <LiveRow key={x.id} x={x} why={skipped[x.id]} />)}</ul>
       </details>
       <div className="row rq-actions">
