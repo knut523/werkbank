@@ -20,6 +20,14 @@ export function findBericht(texts: (string | null | undefined)[]): string | null
   return null;
 }
 
+const PAKET_PFAD = /(?:(?:~|\/home\/[^/\s`'"]+)\/work\/knut\/)?review-pakete\/(\d{2,4}-[a-z0-9][a-z0-9-]*)\/(?:auftrag|bericht)\.md/g;
+
+/** Paketordner eines Strangs (Knut 12.10.: Heute verlinkt Auftrag + Bericht): erster Pfad auf auftrag.md/bericht.md in den Texten. */
+export function findPaket(texts: (string | null | undefined)[]): string | null {
+  for (const t of texts) for (const m of String(t ?? '').matchAll(PAKET_PFAD)) return m[1];
+  return null;
+}
+
 /** Bericht lesen — oder null, wenn der Pfad nicht sicher ist (Symlink, außerhalb, FIFO, zu groß, fehlt). */
 export function readBericht(path: string | null | undefined): string | null {
   return readUnder(path, reviewDir());

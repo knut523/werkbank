@@ -61,6 +61,7 @@ g(join(LEIT, 'wt-heute'), 'commit', '-q', '--allow-empty', '-m', 'heute');
 const pak = (n: string, body: string) => { mkdirSync(join(REV, n, 'bilder'), { recursive: true }); writeFileSync(join(REV, n, 'bericht.md'), body); };
 pak('941-heute-verstaendlich', `# Paket 941 — Heute verständlich\n\n## Ziel\n\nJede Karte auf „Heute“ sagt ohne Aufklappen, worum es geht und was du tun sollst. Mehr.\n\n## Für Knut zur Nachprüfung\n\n1. „Heute“ öffnen: Steht auf jeder Karte, worum es geht und was zu tun ist?\n2. [Screenshot Handy](bilder/handy.png) ansehen: Ist „Wartet auf dich“ ohne langes Scrollen erreichbar?\n3. Die Entscheidungen E1–E2 im [Bericht](bericht.md).\n4. Den Sammelknopf „Alle … als geprüft markieren“ einmal ausprobieren.\n`);
 writeFileSync(join(REV, '941-heute-verstaendlich', 'bilder', 'handy.png'), '');
+writeFileSync(join(REV, '941-heute-verstaendlich', 'auftrag.md'), `# Auftrag 141 — Heute verständlich\n\nKnut, 12.10.2026: „Heute — bin mir nicht sicher, was ich wirklich machen muss … da steht nur gemacht / nicht gemacht und Risiko, aber ich weiß nicht, worum es geht.“\n\n## Ziel\n\nJede Karte beantwortet ohne Aufklappen: worum es geht, was zu tun ist, Stand, was „Passt“ bewirkt.\n\n## Regeln\n\n- nur lokal committen\n- Screenshots desktop + handy\n`);
 pak('935-vorbau-fehlalarme', `# Paket 935 — Vorbau-Fehlalarme\n\n## Ziel\n\nDie Prüfung vor dem Bau meldet keine Fehlalarme mehr für längst gemergte Arbeit.\n\n## Für Knut zur Nachprüfung\n\n1. Nichts — wird mit dem nächsten Release live.\n`);
 const LIVE_TITEL: Record<number, [string, string]> = {
   926: ['Heute: Fragen aktuell', 'Wartet auf dich zeigt nur noch heute offene Vault-Fragen.'],
@@ -169,6 +170,15 @@ try {
     await p.locator('[data-run="' + h.id + '"]').screenshot({ path: join(OUT, `${name}-03-karte-heute-verstaendlich.png`) });
     await p.locator('[data-run="' + h.id + '"] [data-testid="details"] summary').click();
     await p.locator('[data-run="' + h.id + '"]').screenshot({ path: join(OUT, `${name}-04-karte-details-auf.png`) });
+    await p.locator('[data-run="' + h.id + '"] [data-testid="details"] summary').click();   // wieder zu
+    // Nachtrag 12.10.: Auftrag · Bericht klappen in der Karte auf (keine andere Seite).
+    await p.locator('[data-run="' + h.id + '"] [data-testid="btn-auftrag"]').click();
+    await p.locator('[data-run="' + h.id + '"] [data-testid="doc-auftrag"] .note-body h1').waitFor();
+    await p.locator('[data-run="' + h.id + '"]').screenshot({ path: join(OUT, `${name}-04b-karte-auftrag-auf.png`) });
+    await p.locator('[data-run="' + h.id + '"] [data-testid="btn-auftrag"]').click();
+    const docsOk = await p.locator('[data-run="' + h.id + '"] [data-testid="btn-bericht"]').count();
+    console.log(`${name}: Auftrag aufgeklappt in der Karte ja · Bericht-Knopf ${docsOk ? 'ja' : 'NEIN'} · URL ${new URL(p.url()).hash}`);
+    if (!docsOk || new URL(p.url()).hash !== '#/') throw new Error('Nachtrag: Auftrag/Bericht sollen in der Karte aufgehen, ohne Seitenwechsel.');
     await p.getByTestId('live-group').locator('summary').click();
     await p.getByTestId('live-group').screenshot({ path: join(OUT, `${name}-05-live-gruppe-auf.png`) });
     if (name === 'desktop') {

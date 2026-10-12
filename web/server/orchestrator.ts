@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
-import { findBericht } from './bericht.ts';
+import { findBericht, findPaket } from './bericht.ts';
 import { cfg } from './config.ts';
 import { wb, lc } from './db.ts';
 import { librechatAccessToken, type User } from './auth.ts';
@@ -279,8 +279,9 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   if (plan) { try { planText = readFileSync(plan, 'utf8').slice(0, 200_000); } catch { /* egal */ } }
   const doc: any = { _id: id, userId: u.id, conv, url: `${cfg.librechatPublicUrl}/c/${conv}`, title, cwd: rj.dir ?? real, plan, prompt: prompt.slice(0, 500), startedAt: new Date(), lastSentAt: new Date(), sends: 1, reviewedAt: null, knutReviewedAt: null, mode: rj.mode ?? null, startError: null, slug: g0?.slug ?? null, g0: g0?.public ?? null,
     lauf, laufExplicit: explicit, bericht: findBericht([prompt, planText]),
-    // „Worum es geht“ auf Heute (Paket 141): die Ziel-Zeile aus dem VOLLEN Auftrag — der gespeicherte ist auf 500 Zeichen gekürzt.
     ownWorktree: fresh.worktree,   // Heute/Release-Stand (Paket 141): nur ein eigener Worktree belegt den Stand des Strangs
+    paket: findPaket([prompt, planText]),   // review-pakete/NNN-slug — Heute verlinkt daraus Auftrag und Bericht
+    // „Worum es geht“ auf Heute (Paket 141): die Ziel-Zeile aus dem VOLLEN Auftrag — der gespeicherte ist auf 500 Zeichen gekürzt.
     zielLine: prompt.match(/^\s*(?:[-*]\s*)?\**Ziel:?\**:?\s+.+$/im)?.[0].trim().slice(0, 600) ?? null };
   await runs().insertOne(doc);
   // 2) Chat mit genau dieser ID anlegen; LibreChat fährt den Zug serverseitig.

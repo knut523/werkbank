@@ -195,3 +195,11 @@ test('Review-Runde 2: git status scheitert → nie „live“ (B1); fremder Work
   symlinkSync(base, join(WA, 'node_modules'));   // wie in den Werkbank-Worktrees: node_modules als Symlink
   assert.equal((await strandStand(realGit, idx, { cwd: WA, own: true }))!.kind, 'live', 'node_modules zählt nicht als Änderung');
 });
+
+test('Nachtrag 12.10. (DoD 18): Paketordner aus Pfaden auf auftrag.md/bericht.md; erster Treffer; nichts Fremdes', async () => {
+  const { findPaket } = await import('../server/bericht.ts');
+  assert.equal(findPaket(['Auftrag steht in ~/work/knut/review-pakete/142-knut-ids/auftrag.md, Bericht dorthin.']), '142-knut-ids');
+  assert.equal(findPaket([null, 'Bericht nach /home/knut/work/knut/review-pakete/141-heute-verstaendlich/bericht.md']), '141-heute-verstaendlich');
+  assert.equal(findPaket(['review-pakete/9-zu-kurz/auftrag.md', 'review-pakete/../etc/auftrag.md', 'review-pakete/143-x/plan.md']), null);
+  assert.equal(findPaket(['a review-pakete/140-vorbau-e1-e3/auftrag.md', 'b review-pakete/141-y/bericht.md']), '140-vorbau-e1-e3');
+});

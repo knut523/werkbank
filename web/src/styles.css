@@ -411,3 +411,10 @@ td[data-label-inline]::before { content: none; }
 .rq-live-list li { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; padding: 4px 0; border-top: 1px solid var(--border-light); }
 .rq-more { margin: 2px 0 0 22px; }
 .rq-jump { gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0 0; } .rq-jump .btn { min-height: 44px; }
+/* Auftrag · Bericht in der Karte (Knut 12.10.: Heute ist die Übersicht) */
+.rq-doc { margin-top: 10px; border-top: 1px solid var(--border-light); padding-top: 8px; }
+.rq-doc-head { gap: 8px; align-items: center; flex-wrap: wrap; }
+.rq-doc .note-body { max-height: 60vh; overflow: auto; overflow-wrap: anywhere; }
+.rq-live-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; }
+.rq-live-list li { display: block; }
+.linklike { background: none; border: 0; padding: 0; color: var(--link, #1a56db); text-decoration: underline; cursor: pointer; font: inherit; }

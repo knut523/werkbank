@@ -1,6 +1,6 @@
 // Startseite „Heute“ (Council-Bedingung 11, docs/plan-heute-review-schlange.md): Review-Schlange → Wartet auf dich →
 // Dein Tag → Tickets, die Pflege brauchen. Eine Liste „bei mir“ statt vier verstreuter.
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { api, chatTarget, fmtDateTime, type Config } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, useJiraLive } from '../ui.tsx';
 import { HygienePanel } from '../components.tsx';
@@ -66,7 +66,7 @@ function LinkMd({ text }: { text: string }) {
 }
 
 /** Worum es geht · Was du jetzt tun sollst (Paket 141) — ohne Aufklappen. */
-function Klar({ it }: { it: any }) {
+function Klar({ it, openBericht, berichtOpen }: { it: any; openBericht?: () => void; berichtOpen?: boolean }) {
   const r = it.review;
   const worum = it.kind === 'strand' ? it.worum || it.summary : `${it.key}${it.summary ? ` — ${it.summary}` : ''}`;
   let todo: string[] = it.kind === 'strand' ? (it.todo ?? []).map((t: any) => t.text) : [];
@@ -77,7 +77,7 @@ function Klar({ it }: { it: any }) {
       <div className="small rq-todo">
         <strong className="rq-label">Was du jetzt tun sollst:</strong>
         {it.running ? <span> Agent arbeitet noch — später wiederkommen.</span>
-          : todo.length ? <><ol>{todo.map((t, i) => <li key={i}><LinkMd text={t} /></li>)}</ol>{it.todoMore > 0 && <p className="tiny muted rq-more">+ {it.todoMore} {it.todoMore === 1 ? 'weiterer Punkt' : 'weitere Punkte'} im {it.bericht ? <a href={`#/leitstand?bericht=${it.id}`}>Bericht</a> : 'Bericht'}</p>}</>
+          : todo.length ? <><ol>{todo.map((t, i) => <li key={i}><LinkMd text={t} /></li>)}</ol>{it.todoMore > 0 && <p className="tiny muted rq-more">+ {it.todoMore} {it.todoMore === 1 ? 'weiterer Punkt' : 'weitere Punkte'} im {it.docs?.bericht && openBericht ? <button className="linklike" aria-expanded={!!berichtOpen} onClick={openBericht}>Bericht</button> : it.bericht ? <a href={`#/leitstand?bericht=${it.id}`}>Bericht</a> : 'Bericht'}</p>}</>
           : <span> Nichts zu tun außer lesen — dann „Passt“.</span>}
       </div>
     </div>
@@ -105,6 +105,35 @@ function ReviewBody({ it }: { it: any }) {
   );
 }
 
+type Doc = 'auftrag' | 'bericht';
+/** Zuklappen: Fokus zurück auf den Knopf, der geöffnet hat (Review Nachtrag 3). */
+const closeDoc = (id: string, doc: Doc, setDoc: (d: Doc | null) => void) => { setDoc(null); setTimeout(() => document.getElementById(`doc-btn-${id}-${doc}`)?.focus(), 0); };
+const paketDoc = (paket: string, doc: Doc) => `api/files/agenten/${encodeURIComponent(paket)}/${doc}.md`;
+
+/** Auftrag oder Bericht des Pakets direkt in der Karte (Knut 12.10.: „Heute“ ist DIE Übersicht — keine andere Seite). */
+function DocView({ paket, doc, onClose }: { paket: string; doc: Doc; onClose: () => void }) {
+  const d = useLoad(() => api(`${paketDoc(paket, doc)}?vorschau=1`), [paket, doc]);
+  const data: any = d.data;
+  // Aufgeklappt → ins Bild rücken und Fokus hinein (sonst passiert auf dem Handy sichtbar nichts, Review Nachtrag 3).
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { ref.current?.scrollIntoView({ block: 'nearest' }); ref.current?.focus({ preventScroll: true }); }, [paket, doc]);
+  return (
+    <div className="rq-doc" ref={ref} tabIndex={-1} data-testid={`doc-${doc}`} role="region" aria-label={doc === 'auftrag' ? 'Auftrag' : 'Bericht'}>
+      <div className="row rq-doc-head"><b>{doc === 'auftrag' ? 'Auftrag' : 'Bericht'}</b> <span className="tiny muted">{paket}/{doc}.md</span>
+        <a className="tiny" href={paketDoc(paket, doc)} target="_blank" rel="noreferrer">Datei</a>
+        <button className="btn ghost small" onClick={onClose}>Zuklappen</button></div>
+      {d.error ? <Err e={d.error} /> : !data ? <Loading /> : <div className="note-body" dangerouslySetInnerHTML={{ __html: data.html ?? '' }} />}
+    </div>
+  );
+}
+
+/** Knöpfe Auftrag · Bericht (klappen in der Karte auf) — nur, wenn die Datei im Paket liegt. */
+function DocButtons({ it, doc, setDoc, small }: { it: any; doc: Doc | null; setDoc: (d: Doc | null) => void; small?: boolean }) {
+  if (!it.paket) return null;
+  const b = (k: Doc, label: string) => it.docs?.[k] && <button key={k} className={`btn ghost small${small ? ' rq-link' : ''}`} style={small ? undefined : BIG} aria-expanded={doc === k} id={`doc-btn-${it.id}-${k}`} data-testid={`btn-${k}`} onClick={() => setDoc(doc === k ? null : k)}>{label}{doc === k ? ' ▴' : ' ▾'}</button>;
+  return <>{b('auftrag', 'Auftrag')}{b('bericht', 'Bericht')}</>;
+}
+
 function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
   const confirm = useConfirm();
   const toast = useToast();
@@ -129,7 +158,9 @@ function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
     } else await api(`${base}/passt`, { body: { ...extra } });
     toast(`${it.kind === 'strand' ? it.summary : it.key} geprüft`);
   });
-  const open = <>{it.url && <a className="btn small ghost" style={BIG} href={it.url} target={chatTarget}>Chat öffnen</a>}{it.bericht && <a className="btn small ghost" style={BIG} href={`#/leitstand?bericht=${it.id}`}>Bericht</a>}</>;
+  const [doc, setDoc] = useState<Doc | null>(null);
+  // Auftrag · Bericht · Chat (Knut 12.10.): Strang-Karten öffnen Auftrag und Bericht in der Karte, nicht auf einer anderen Seite.
+  const open = <><DocButtons it={it} doc={doc} setDoc={setDoc} />{it.url && <a className="btn small ghost" style={BIG} href={it.url} target={chatTarget}>Chat öffnen</a>}{!it.paket && it.bericht && <a className="btn small ghost" style={BIG} href={`#/leitstand?bericht=${it.id}`}>Bericht</a>}</>;
 
   return (
     <article className={`card rq rq-${it.bucket}`} data-run={it.id} data-bucket={it.bucket}>
@@ -151,7 +182,7 @@ function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
           <button className="btn small ghost" style={BIG} disabled={busy} onClick={() => run(async () => { await api(`/api/runs/${it.id}/passt`, { body: {} }); toast('Ausgeblendet'); })}>Erledigt</button>
         </div>
       </div>}
-      {it.bucket === 'review' && <Klar it={it} />}
+      {it.bucket === 'review' && <Klar it={it} berichtOpen={doc === 'bericht'} openBericht={() => setDoc(doc === 'bericht' ? null : 'bericht')} />}
       <ReviewBody it={it} />
       {it.bucket === 'review' && <>
         {it.review && !nothing(it.review.risiko) && <p className="small rq-risk rq-risk-line" data-testid="risk-line"><b>⚠ Risiko:</b> <Md text={it.review.risiko} max={200} /></p>}
@@ -173,8 +204,25 @@ function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
         </div>}
       </>}
       {it.rework && it.bucket !== 'review' && <p className="tiny muted">Nacharbeit {fmtDateTime(it.rework.at)}: {it.rework.text}</p>}
+      {doc && it.paket && <DocView paket={it.paket} doc={doc} onClose={() => closeDoc(it.id, doc, setDoc)} />}
       <Err e={err} />
     </article>
+  );
+}
+
+/** Eine Zeile der Live-Gruppe: Titel, Stand, Auftrag · Bericht (klappen auf) · Chat. */
+function LiveRow({ x, why }: { x: any; why?: string }) {
+  const [doc, setDoc] = useState<Doc | null>(null);
+  return (
+    <li data-testid="live-item">
+      <div className="rq-live-row">
+        <span className="rq-title">{x.summary}</span> <StandChip s={x.stand} />
+        <DocButtons it={x} doc={doc} setDoc={setDoc} small />
+        {x.url && <a className="small rq-link" href={x.url} target={chatTarget}>Chat</a>}
+        {why && <span className="tiny rq-warn">übersprungen: {why}</span>}
+      </div>
+      {doc && x.paket && <DocView paket={x.paket} doc={doc} onClose={() => closeDoc(x.id, doc, setDoc)} />}
+    </li>
   );
 }
 
@@ -203,11 +251,7 @@ function LiveGroup({ items, onDone }: { items: any[]; onDone: () => void }) {
       <details>
         <summary><b>Schon live — nur noch abhaken ({items.length})</b> <span className="small muted">· Liste zeigen</span></summary>
         <p className="small muted">Diese Stränge sind auf der Werkbank live. Zu prüfen gibt es nichts mehr — abhaken räumt sie von hier weg.</p>
-        <ul className="plain rq-live-list">{items.map((x) => <li key={x.id} data-testid="live-item">
-          <span className="rq-title">{x.summary}</span> <StandChip s={x.stand} />
-          {x.bericht && <a className="small rq-link" href={`#/leitstand?bericht=${x.id}`}>Bericht</a>}
-          {skipped[x.id] && <span className="tiny rq-warn">übersprungen: {skipped[x.id]}</span>}
-        </li>)}</ul>
+        <ul className="plain rq-live-list">{items.map((x) => <LiveRow key={x.id} x={x} why={skipped[x.id]} />)}</ul>
       </details>
       <div className="row rq-actions">
         <button className="btn primary" style={BIG} disabled={busy} onClick={all} data-testid="passt-live">Alle {items.length} als geprüft markieren</button>

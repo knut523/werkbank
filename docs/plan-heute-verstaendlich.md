@@ -136,3 +136,21 @@ Notiz (Devil's Advocate, nicht blockierend): Release-Nummern sind Anzeige; der Z
   geschrieben“ verstecken).
 - Nicht umgesetzt, an Knut: git-Aufrufe in Strang-Ordnern zusätzlich mit abgeschalteten fsmonitor- und Hook-Einstellungen
   (per `-c`) härten — im Orchestrator-Strang gesperrt.
+
+## Nachtrag Knut (12.10.2026): Auftrag · Bericht · Chat auf jeder Karte
+
+„‚Heute‘ ist DIE Übersicht, was Knut tun muss — nicht Dateien & Teilen und keine separate Seite. Jede Strang-/Review-Karte
+verlinkt direkt: Auftrag (review-pakete/NNN-*/auftrag.md, ab sofort immer vorhanden) · Bericht (bericht.md) · Chat.“
+
+- Paketordner je Strang: beim Start aus dem vollen Auftrag/Plan gemerkt (`paket`, `findPaket`: Pfad auf `auftrag.md`
+  oder `bericht.md`), für ältere Stränge aus Bericht-Pfad, Auftrag, `review_ready`-Artefakten oder Stand-Auszug.
+- Karte: Knöpfe **Auftrag · Bericht · Chat öffnen**. Auftrag und Bericht klappen **in der Karte** auf (vorhandene
+  Vorschau `api/files/agenten/<paket>/<datei>?vorschau=1`, markdown-it ohne rohes HTML), kein Seitenwechsel. Nur Dateien,
+  die im Paket wirklich lesbar liegen (`paketFile`). „+ n weitere im Bericht“ klappt den Bericht auf. Live-Zeilen ebenso.
+- „Dateien → Von Agenten“ bleibt unverändert als Archiv.
+
+DoD-Zusatz:
+18. Ein Strang, dessen Auftrag nur `review-pakete/NNN-x/auftrag.md` nennt, hat `paket = NNN-x` und
+    `docs = { auftrag: true, bericht: false }` — Test (`leitstand.test.ts`, `heutekarte.test.ts`).
+19. Die Vorschau des Auftrags liefert gerendertes HTML — Test.
+20. Auf „Heute“ klappt „Auftrag“ in der Karte auf, die Adresse bleibt `#/` — Screenshot + Assertion im Shots-Skript.

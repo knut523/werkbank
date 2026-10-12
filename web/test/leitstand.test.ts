@@ -609,6 +609,25 @@ test('Paket 141 (DoD 5/6/12–15): Karte mit Worum/Was tun/Stand; passt-live hak
   assert.deepEqual(cb.todo, [{ text: 'Token freigeben' }]);
   assert.equal(cb.stand.text, 'in Release 1, noch nicht live');
   assert.equal(ca.cwd, undefined, 'kein Arbeitsordner an den Browser');
+  // Nachtrag 12.10. (DoD 18–19): Auftrag · Bericht je Karte — nur, was im Paket liegt; Paket auch nur aus dem Auftrags-Pfad.
+  assert.deepEqual([ca.paket, ca.docs], ['960-live-a', { auftrag: false, bericht: true }]);
+  pak('962-nur-auftrag', '# Auftrag 962\n\nZiel: Nur ein Auftrag liegt da. Mehr.\n');
+  writeFileSync(join(tmp, 'review-pakete', '962-nur-auftrag', 'auftrag.md'), '# Auftrag 962\n\nZiel: Nur ein Auftrag liegt da.\n');
+  const { rmSync } = await import('node:fs'); rmSync(join(tmp, 'review-pakete', '962-nur-auftrag', 'bericht.md'));
+  const n = JSON.parse((await orch(['start', '--title', 'P141 Nur Auftrag', '--cwd', WT('wt-p141n'), '--json'],
+    `Lies zuerst ~/work/knut/review-pakete/962-nur-auftrag/auftrag.md.\nmock-antwort Fertig.\\n### Stand\\n- Braucht Knut: nichts\\nStatus: fertig`)).out);
+  const cn = await until(() => cardOf(n.id), (x: any) => !!x);
+  assert.deepEqual([cn.paket, cn.docs], ['962-nur-auftrag', { auftrag: true, bericht: false }]);
+  const v = await (await fetch(B + '/api/files/agenten/962-nur-auftrag/auftrag.md?vorschau=1', { headers: { cookie: await cookie(knut) } })).json();
+  assert.match(v.html, /<h1>Auftrag 962<\/h1>/);
+  // Review Nachtrag, Befund 1: nennt der Auftrag ein fremdes bericht.md als Kontext, kommen Schritte UND Knöpfe aus dem eigenen Paket.
+  pak('963-eigen', '# B963\n\n## Für Knut zur Nachprüfung\n\n1. Eigener Schritt.\n');
+  writeFileSync(join(tmp, 'review-pakete', '963-eigen', 'auftrag.md'), '# A963\n');
+  const e = JSON.parse((await orch(['start', '--title', 'P141 Eigenes Paket', '--cwd', WT('wt-p141e'), '--json'],
+    `Auftrag: ~/work/knut/review-pakete/963-eigen/auftrag.md. Kontext: ~/work/knut/review-pakete/960-live-a/bericht.md.\nmock-antwort Fertig.\\n### Stand\\n- Braucht Knut: nichts\\nStatus: fertig`)).out);
+  const ce = await until(() => cardOf(e.id), (x: any) => !!x);
+  assert.equal(ce.paket, '963-eigen');
+  assert.deepEqual(ce.todo, [{ text: 'Eigener Schritt.' }], 'Schritte aus dem eigenen Bericht, nicht aus 960');
   // Ziel-Zeile hinter Zeichen 500 (gespeicherter Auftrag ist gekürzt): kommt trotzdem an.
   const c = JSON.parse((await orch(['start', '--title', 'P141 Langer Auftrag', '--cwd', WT('wt-p141c'), '--json'],
     `Auftrag (Knut): ${'Vorgeschichte. '.repeat(40)}\nZiel: Weit hinten steht das Ziel. Mehr dazu.\nmock-antwort Fertig.\\n### Stand\\n- Braucht Knut: nichts\\nStatus: fertig`)).out);

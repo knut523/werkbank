@@ -10,8 +10,8 @@
 
 import { randomBytes, randomUUID } from 'node:crypto';
 import { realpathSync, readdirSync } from 'node:fs';
-import { readBericht, readPlan, reviewDir } from './bericht.ts';
-import { PAKET_RE } from './reviewpakete.ts';
+import { readBericht, readPlan, reviewDir, findPaket } from './bericht.ts';
+import { PAKET_RE, paketFile } from './reviewpakete.ts';
 import { worumGeht, wasTun, type TodoStep } from './heutekarte.ts';
 import { liveIndex, strandStand, realGit, type LiveIndex } from './releasestand.ts';
 import type { Stand } from './heutekarte.ts';
@@ -430,12 +430,17 @@ const textCache = new Map<string, { at: number; v: { worum: string; todo: TodoSt
 const standCache = new Map<string, { at: number; v: Stand | null }>();
 
 export async function strandDetail(d: any, c: { running: boolean; excerpt: string }, idx: LiveIndex | null, nrs: Map<number, number>, fresh = false) {
-  const paket = d.bericht ? String(d.bericht).split('/').slice(-2)[0] : null;
+  // Paketordner: beim Start gemerkt, sonst aus Bericht-Pfad, Auftrag, review_ready-Artefakten oder Stand-Auszug.
+  const paket = [d.paket, d.bericht ? String(d.bericht).split('/').slice(-2)[0] : null, findPaket([d.prompt, ...(d.review?.artefakte ?? []), c.excerpt])]
+    .find((x) => x && PAKET_RE.test(x)) ?? null;   // erster GÜLTIGER Kandidat (Review Nachtrag, Befund 2)
+  // Auftrag und Bericht direkt auf der Karte (Knut 12.10.): nur, was wirklich lesbar im Paket liegt.
+  const docs = { auftrag: !!(paket && paketFile(cfg.reviewDir, paket, 'auftrag.md')), bericht: !!(paket && paketFile(cfg.reviewDir, paket, 'bericht.md')) };
   const key = `${d._id}:${+new Date(d.reviewReadyAt ?? 0)}:${+new Date(d.statusAt ?? 0)}:${c.excerpt.length}`;
   let t = textCache.get(key);
   if (!t || Date.now() - t.at > 60_000) {
-    const berichtText = readBericht(d.bericht);
-    const w = wasTun({ berichtText, excerpt: c.excerpt, paket: paket && PAKET_RE.test(paket) ? paket : null });
+    // Bericht immer aus DEMSELBEN Paket wie die Knöpfe (Review Nachtrag, Befund 1: ein fremder Bericht im Auftrag als Kontext).
+    const berichtText = readBericht(paket ? (docs.bericht ? join(reviewDir(), paket, 'bericht.md') : null) : d.bericht);
+    const w = wasTun({ berichtText, excerpt: c.excerpt, paket });
     t = { at: Date.now(), v: { worum: worumGeht({ title: d.title, prompt: [d.zielLine, d.prompt].filter(Boolean).join('\n'), planText: readPlan(d.plan), berichtText }), todo: w.steps, todoMore: w.more } };
     if (textCache.size > 200) textCache.clear();
     textCache.set(key, t);
@@ -450,5 +455,5 @@ export async function strandDetail(d: any, c: { running: boolean; excerpt: strin
     standCache.set(sk, st);
   }
   const stand = st.v;
-  return { ...t.v, stand, paket };
+  return { ...t.v, stand, paket, docs };
 }
