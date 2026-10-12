@@ -373,9 +373,12 @@ export function parsePackages(text: string): Pkg[] {
 
 const link = (k: string) => `[${k}](${browseUrl(k)})`;
 const ddmm = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.`;
+/** Heute in Wien (Zyklustag zwischen 00 und 02 Uhr nicht in UTC rechnen). */
+export const viennaToday = (now = new Date()) => now.toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' });
 export const isDone = (i: Pick<Issue, 'status' | 'statusCategory'>) => i.statusCategory === 'done' || i.status === 'Done';
 const firstName = (n?: string | null) => (n ?? '').trim().split(/\s+/)[0] ?? '';
-const safe = (s: string) => s.replace(/<!--/g, '').replace(/\s+/g, ' ').trim();
+// Backtick würde den Anker dahinter zum Code-Span machen (dann kein Antwortfeld, kein Sync).
+const safe = (s: string) => s.replace(/<!--/g, '').replace(/`/g, "'").replace(/\s+/g, ' ').trim();
 const cell = (s: string) => s.replace(/\|/g, '\\|');
 const SOLL_HEAD = '| # | Ergebnis | Bewertung | Beleg | Warum / was ändern wir |\n|---|---|---|---|---|';
 
@@ -420,8 +423,10 @@ export interface DraftStats { packages: number; tickets: number; backlog: number
 // Knut, 12.10.2026 (bindend): Sprint-Notizen nennen nie die Werkbank oder lokale Agentenarbeit — lokal Gebautes zählt
 // erst nach Test → dev → prod. Solche Pakete des Vorzyklus übernimmt der Entwurf nicht.
 export const LOCAL_WORK = /werkbank|lokale?n? (stränge|arbeit|bau)|nicht auf github|agenten?-?(arbeit|stränge)/i;
-const BACKLOG_PKG = /^Backlog\b/i;
+const BACKLOG_PKG = /^(Backlog\b|Aus dem Backlog übernommen)/i;
 const ONGOING_SEC = /^Laufende Aufgaben|Ongoing/i;
+/** Antwort „nein“ (Backlog: nicht mitnehmen) — keine Jira-Aktion, zählt nicht als offene Notiz. */
+export const isNoop = (payload: string) => /^nein\b/i.test(payload.trim());
 export const isOngoing = (i: Pick<Issue, 'status'>) => /^ongoing$/i.test(i.status);
 
 /** To Do (Knut 12.10.): in Arbeit, fällig bis Sprintende oder überfällig. Sonst Backlog. Ongoing extra. */
@@ -451,6 +456,9 @@ function domainsOf(review: string, pkgs: Pkg[]): Map<string, string> {
   return m;
 }
 
+/** S-Zeilen ohne Platzhalter „…“ aus der Vorlage; S-Zeilen mit lokaler Arbeit nennt der Entwurf nicht (Knut 12.10.). */
+export const realOutcomes = (os: Outcome[]) => os.filter((o) => o.title && !o.title.startsWith('…') && !LOCAL_WORK.test(o.title));
+
 export function reviewDraftVars(inp: DraftInput): { vars: Record<string, string>; stats: DraftStats } {
   const prevDate = inp.prevId?.replace('sprint-', '') ?? '';
   const since = prevDate || inp.date;
@@ -459,13 +467,14 @@ export function reviewDraftVars(inp: DraftInput): { vars: Record<string, string>
   const sprintEnd = endD.toISOString().slice(0, 10);
   const decider = inp.decider ?? 'Knut';
   // Soll-Ist: S-Zeilen wörtlich, sonst der Ziel-Satz (Vorzyklus ohne S1–S4, z. B. 28.09.).
-  const outs = inp.prevPlanning ? parseOutcomes(inp.prevPlanning) : [];
+  const outs = inp.prevPlanning ? realOutcomes(parseOutcomes(inp.prevPlanning)) : [];
   let soll: string;
   if (outs.length) {
     soll = `Bewertet werden die Ergebnisse aus dem Planning vom ${prevDe} — wörtlich übernommen. Bewertung, Beleg und Warum setzt die Runde (kein ✅ ohne Beleg; Board-Stand belegt nicht „fachlich fertig“).\n\n${SOLL_HEAD}\n`
       + outs.map((o) => `| ${o.id} | ${cell(o.title)} | … | … | … |`).join('\n');
   } else {
-    const goal = inp.prevPlanning ? parseGoal(inp.prevPlanning).goal : undefined;
+    const g0 = inp.prevPlanning ? parseGoal(inp.prevPlanning).goal : undefined;
+    const goal = g0 && !g0.startsWith('…') ? g0 : undefined;
     soll = goal
       ? `Das Planning vom ${prevDe} hat keine Ergebniszeilen S1–S4. Bewertet wird der Ziel-Satz; S-Zeilen beginnen mit diesem Planning (nicht rückwirkend erfunden).\n\n${SOLL_HEAD}\n| Ziel | ${cell(goal)} | … | … | … |`
       : 'Kein Planning mit Sprint-Ziel oder S-Zeilen im Vorzyklus gefunden — nichts zu bewerten. S-Zeilen beginnen mit diesem Planning.';
@@ -476,7 +485,10 @@ export function reviewDraftVars(inp: DraftInput): { vars: Record<string, string>
   const pkgs = allPkgs.filter((p) => !LOCAL_WORK.test(p.name));
   const dom = inp.prevReview ? domainsOf(inp.prevReview, pkgs) : new Map<string, string>();
   // Tickets ausgelassener Pakete auch nicht als „keinem Paket zugeordnet“ wieder hereinholen.
-  const seen = new Set<string>(allPkgs.filter((p) => LOCAL_WORK.test(p.name)).flatMap((p) => p.tickets));
+  const inReal = new Set(pkgs.flatMap((p) => p.tickets));
+  const local = (k: string) => (!inReal.has(k) && allPkgs.some((p) => LOCAL_WORK.test(p.name) && p.tickets.includes(k))) || LOCAL_WORK.test(inp.issues.get(k)?.summary ?? '');
+  const localSet = new Set<string>([...inp.issues.keys(), ...allPkgs.flatMap((p) => p.tickets)].filter(local));
+  const seen = new Set<string>(localSet);
   const byDomain = new Map<string, string[]>(DOMAINS.map((d) => [d, []]));
   const backlog = new Map<string, string[]>();     // Domäne → Zeilen
   const fromBacklog = new Map<string, string[]>(); // Domäne → To-Do-Zeilen aus einem früheren Backlog-Block
@@ -492,7 +504,7 @@ export function reviewDraftVars(inp: DraftInput): { vars: Record<string, string>
     const owners = new Set<string>();
     let open = 0, over = 0, done = 0;
     for (const k of p.tickets) {
-      if (seen.has(k)) continue;                               // genau einmal in „Die Updates“
+      if (seen.has(k)) continue;                               // schon in einem Paket oder lokale Arbeit                               // genau einmal in „Die Updates“
       seen.add(k);
       const i = inp.issues.get(k);
       const b = i ? bucketOf(i, sprintEnd) : 'todo';
@@ -530,7 +542,7 @@ export function reviewDraftVars(inp: DraftInput): { vars: Record<string, string>
     push(byDomain, p.domain, `#### ${p.name}\n\n${body}`);
   }
   // Ongoing: alle offenen Daueraufgaben im Board (nicht nur die des Reviews), nach Domäne, sonst „Weitere“.
-  const ong = [...inp.issues.values()].filter((i) => i.type !== 'Workstream' && isOngoing(i) && !isDone(i))
+  const ong = [...inp.issues.values()].filter((i) => i.type !== 'Workstream' && isOngoing(i) && !isDone(i) && !localSet.has(i.key))
     .sort((a, b) => Number(a.key.split('-')[1]) - Number(b.key.split('-')[1]));
   for (const i of ong) {
     seen.add(i.key);
@@ -619,7 +631,7 @@ export function carryList(review: string, reviewName: string, issues: Map<string
 // ---------- Aktueller Zyklus ----------
 
 /** Neuester nicht archivierter Zyklus mit Startdatum ≤ heute (ein vorab angelegter Ordner zählt noch nicht). */
-export function currentCycle<T extends Pick<Cycle, 'date' | 'archived'>>(cs: T[], today = new Date().toISOString().slice(0, 10)): T | undefined {
+export function currentCycle<T extends Pick<Cycle, 'date' | 'archived'>>(cs: T[], today = viennaToday()): T | undefined {
   const live = cs.filter((c) => !c.archived);
   return live.find((c) => c.date <= today) ?? live[live.length - 1];
 }

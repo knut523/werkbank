@@ -331,8 +331,9 @@ const answered = (q: any) => !!q.inline || q.answers.some((a: any) => a.kind !==
 
 function stepState(d: any) {
   const review = d?.files.review;
-  const pk: any[] = review?.packages ?? [];
   const qs: any[] = review?.questions ?? [];
+  // Gezählt werden Pakete, die ein Antwortfeld haben können; Backlog-Blöcke haben ihre eigene Frage je Ticket.
+  const pk: any[] = (review?.packages ?? []).filter((p: any) => !/^Backlog\b/i.test(p.name) && qs.some((q) => q.line > p.line && q.line <= p.end));
   const withAnswer = pk.filter((p) => qs.some((q) => q.line > p.line && q.line <= p.end && answered(q))).length;
   // Soll = S-Zeilen des Vorzyklus-Plannings; ohne sie zählen die Zeilen der Review-Notiz.
   const soll: any[] = d?.previous?.outcomes ?? [];
@@ -441,13 +442,14 @@ function StepPackages({ d, id, me, reload }: { d: any; id: string; me: string; r
   const isMine = (p: any) => p.tickets.some((t: any) => (t.owner ?? '').toLowerCase() === lo) || qsOf(p).some((q: any) => q.answers.some((a: any) => a.speaker.toLowerCase() === lo));
   const shown = pk.filter((p) => (!mine || isMine(p)) && (!empty || qsOf(p).some((q: any) => q.answers.some((a: any) => a.kind === 'empty'))));
   const domains = [...new Set(pk.map((p) => p.domain))];
-  const withAnswer = pk.filter((p) => qsOf(p).some(answered)).length;
+  const counted = pk.filter((p) => !/^Backlog\b/i.test(p.name) && qsOf(p).length);
+  const withAnswer = counted.filter((p) => qsOf(p).some(answered)).length;
   return (
     <div className="card now" data-testid="step-2">
       <h2>Updates sammeln</h2>
       <p className="small muted">Je Arbeitspaket eine Antwort unter das passende Ticket — hier oder direkt in Obsidian, gezählt wird beides. Ein Text wird beim Write-back zum Jira-Kommentar, <code>status:Done</code> zur Statusänderung, <code>→ mitnehmen: …</code> nie nach Jira.</p>
       <div className="row">
-        <span className="chip">{withAnswer} von {pk.length} Paketen mit Antwort</span>
+        <span className="chip">{withAnswer} von {counted.length} Paketen mit Antwort</span>{(mine || empty) && <span className="tiny">{shown.length} von {pk.length} angezeigt</span>}
         <label className="row small"><input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} /> nur meine{me ? ` (${me})` : ''}</label>
         <label className="row small"><input type="checkbox" checked={empty} onChange={(e) => setEmpty(e.target.checked)} /> nur mit leerem Antwortfeld</label>
       </div>
@@ -584,7 +586,7 @@ export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
           <div className="row small">
             {d && Object.entries(d.files).map(([k, f]: any) => <a key={k} className="chip" href={noteHref(f.path)}>{FILE_LABEL[k]}{f.status ? ` · ${f.status}` : ''}</a>)}
             {d?.cycle.archived && <span className="chip warn">archiviert</span>}
-            {d && !d.cycle.archived && d.cycle.date > new Date().toISOString().slice(0, 10) && <span className="chip" title="Board, Roadmap und Chat-Kontext zeigen noch den laufenden Zyklus">beginnt erst {fmtDate(d.cycle.date)}</span>}
+            {d && !d.cycle.archived && d.cycle.date > new Date().toLocaleDateString('sv-SE') && <span className="chip" title="Board, Roadmap und Chat-Kontext zeigen noch den laufenden Zyklus">beginnt erst {fmtDate(d.cycle.date)}</span>}
           </div>
         </div>
         <select value={id} onChange={(e) => { window.location.hash = '#/sprint/' + e.target.value; }} aria-label="Zyklus wählen">
@@ -597,7 +599,7 @@ export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
           <p className="sprint-goal"><span className="tiny">Sprint-Ziel</span> {goal ?? <span className="muted">— noch kein Sprint-Ziel in der Planning-Notiz —</span>}</p>
           <Steps st={st} cur={step} id={id} />
 
-          {step === 0 && <StepDraft d={d} id={id} suggest={suggest} onCreated={created} />}
+          {step === 0 && <StepDraft key={id} d={d} id={id} suggest={suggest} onCreated={created} />}
           {step === 1 && <StepPackages d={d} id={id} me={me} reload={() => v.reload()} />}
           {step === 2 && <StepRating d={d} />}
           {step === 3 && <div className="now" data-testid="step-4"><SyncPlan cycle={id} onDone={() => { v.reload(); toast('Write-back ausgeführt'); }} /></div>}

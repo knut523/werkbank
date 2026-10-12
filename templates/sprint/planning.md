@@ -74,7 +74,7 @@ Je Domäne die Pakete, die auf ein Ergebnis einzahlen. Was aus dem Backlog mitge
 ## Zu entscheiden
 
 1. **…?**
-   *Empfehlung:* … <!--k:ZIEL:PM-70-->
+   *Empfehlung:* … <!--k:ENTSCHEIDUNG-1-->
    - Knut:
 
 ## Noch nicht in Jira

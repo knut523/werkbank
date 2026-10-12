@@ -33,7 +33,7 @@ import { memoryWarning } from './memory.ts';
 import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
 import { keep as keepScratch, runScratch } from './scratch.ts';
 import { backupRunning, listBackups, nightly, writeBackup, keyOf } from './backup.ts';
-import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles, parsePackages, reviewDraftVars, carryList, currentCycle, isDone, syncPlanRows } from './sprint.ts';
+import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles, parsePackages, reviewDraftVars, carryList, currentCycle, isDone, syncPlanRows, isNoop, realOutcomes, viennaToday } from './sprint.ts';
 import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
 import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog, logShare, scratchDir } from './sharing.ts';
@@ -187,7 +187,7 @@ function previousCycle(date: string) {
 
 /** Arbeitspakete der Review-Notiz mit Ticketstand aus der Kopie (Schritt 2: Updates je Paket). */
 function packagesOf(text: string, im: Map<string, Issue>) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = viennaToday();
   return parsePackages(text).map((p) => ({
     ...p,
     tickets: p.tickets.map((k) => {
@@ -204,7 +204,7 @@ async function prepareCycle(date: string) {
   const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
   const rd = (f?: string) => (f ? readFileSync(f, 'utf8') : undefined);
   const { vars, stats } = im.size
-    ? reviewDraftVars({ date, prevId: prev?.id, prevReview: rd(prev?.files.review), prevPlanning: rd(prev?.files.planning), issues: im, today: new Date().toISOString().slice(0, 10), syncedAt: sync?.at ? new Date(sync.at).toISOString() : null })
+    ? reviewDraftVars({ date, prevId: prev?.id, prevReview: rd(prev?.files.review), prevPlanning: rd(prev?.files.planning), issues: im, today: viennaToday(), syncedAt: sync?.at ? new Date(sync.at).toISOString() : null })
     : { vars: {}, stats: null };
   const files = newCycleFiles(TEMPLATES, date, prev?.id, vars);
   return { prev, files, stats, empty: !im.size };
@@ -227,7 +227,7 @@ async function sprintView(id: string) {
       path: f.slice(cfg.vaultDir.length + 1), hash: hashText(text), title: fm.title ?? k, status: fm.status ?? null,
       goal: parseGoal(text), outcomes: parseOutcomes(text), questions: qs,
       // Offene Notizen für den Write-back (wie jira-sync-plan.sh): Schritt 4/5 der Schrittleiste.
-      openNotes: syncPlanRows(qs).filter((r) => r.kind !== 'carry').length,
+      openNotes: syncPlanRows(qs).filter((r) => r.kind !== 'carry' && !isNoop(r.payload)).length,
       ...(k === 'review' ? { packages: packagesOf(text, im) } : {}),
     };
   }
@@ -237,7 +237,7 @@ async function sprintView(id: string) {
   const prev = previousCycle(c.date);
   return {
     cycle: { id: c.id, date: c.date, archived: c.archived, current: currentCycle(cycles())?.id === c.id },
-    previous: prev ? { id: prev.id, outcomes: prev.files.planning ? parseOutcomes(readFileSync(prev.files.planning, 'utf8')) : [], goal: prev.files.planning ? parseGoal(readFileSync(prev.files.planning, 'utf8')).goal ?? null : null } : null,
+    previous: prev ? { id: prev.id, outcomes: prev.files.planning ? realOutcomes(parseOutcomes(readFileSync(prev.files.planning, 'utf8'))) : [], goal: prev.files.planning ? parseGoal(readFileSync(prev.files.planning, 'utf8')).goal ?? null : null } : null,
     ...goalsView(c, files, im),
     files,
     overdue: open.filter((i) => isOverdue(i, today)).sort((a, b) => a.duedate!.localeCompare(b.duedate!)),
@@ -1698,7 +1698,7 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
   let files;
   try { files = (await prepareCycle(date)).files; } catch (e: any) { throw new HttpError(400, e.message); }
   const dir = join(sprintRoot(), id);
-  if (existsSync(dir)) throw new HttpError(409, `${id} gibt es schon.`);
+  if (existsSync(dir) || cycles().some((x) => x.id === id)) throw new HttpError(409, `${id} gibt es schon.`);
   const rel = dir.slice(cfg.vaultDir.length + 1);
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: { dir: rel, files: files.map((f) => ({ name: f.name, lines: f.content.split('\n').length, head: f.content.slice(0, 1200) })) } });
   if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: rel, id, dir: rel });
@@ -1721,6 +1721,7 @@ on('POST', /^\/api\/sprint\/draft$/, async (req, res) => {
   const id = `sprint-${date}`;
   const dir = join(sprintRoot(), id);
   const rel = dir.slice(cfg.vaultDir.length + 1);
+  if (cycles().some((x) => x.id === id && x.archived)) throw new HttpError(409, `${id} liegt schon im Archiv — kein zweiter Ordner mit gleichem Namen.`);
   const files = r.files.map((f) => ({ ...f, exists: existsSync(join(dir, f.name)) }));
   const missing = files.filter((f) => !f.exists);
   const preview = {
@@ -1750,9 +1751,9 @@ on('GET', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/carry$/, async (req, res,
   const text = readFileSync(c.files.review, 'utf8');
   const im = await issueMap();
   const qs = [c.files.review, c.files.planning].filter(Boolean).flatMap((f) => parseQuestions(readFileSync(f!, 'utf8'), f));
-  const openNotes = syncPlanRows(qs).filter((r) => r.kind !== 'carry').length;
+  const openNotes = syncPlanRows(qs).filter((r) => r.kind !== 'carry' && !isNoop(r.payload)).length;
   const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
-  const r = carryList(text, basename(c.files.review), im, new Date().toISOString().slice(0, 10), cfg.jiraProject);
+  const r = carryList(text, basename(c.files.review), im, viennaToday(), cfg.jiraProject);
   send(res, 200, { ...r, openNotes, jiraSync: sync ? { at: sync.at } : null });
 });
 

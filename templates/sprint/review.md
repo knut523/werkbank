@@ -28,7 +28,7 @@ Arbeit, fällig bis zum Ende des neuen Sprints ({{ENDE_DE}}) oder schon überfä
 > [!tip] Diese Notiz ist ein Arbeitsdokument, kein Protokoll
 > Antworten direkt unter die Ticketzeile schreiben: `  - Name: Text` (in der aufklappbaren Liste mit `>   - Name: Text`).
 > Ein Text wird zum Jira-Kommentar, `status:Done` zur Statusänderung, `→ mitnehmen: …` zur Mitnahme (nie nach Jira).
-> Beim Backlog genügt `ja, fällig TT.MM.` oder `nein`. Freier Text ohne Antwortzeile geht nicht nach Jira.
+> Beim Backlog genügt `ja, fällig TT.MM.` oder `nein` (bleibt im Backlog, nichts nach Jira). Freier Text ohne Antwortzeile geht nicht nach Jira.
 > Jedes Ticket steht genau einmal, in seinem Paket.
 
 ## Soll-Ist zum Sprint-Ziel vom {{VORZYKLUS_DATUM}}

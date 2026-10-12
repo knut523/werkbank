@@ -364,3 +364,40 @@ test('Review-Entwurf nach Knuts Rückmeldung 12.10.: To Do / Backlog mit Mitnahm
   assert.deepEqual(rows.map((r) => [r.key, r.payload]), [['PM-3', 'ja, fällig 23.10.']]);
   assert.equal(syncPlanRows(parseQuestions(d)).length, 0);
 });
+
+test('Code-Review Paket 143: Backtick/Werkbank im Titel, Rundlauf ohne Doppel-Paket, „nein“ ohne Jira-Aktion, Vorlagen-Platzhalter', () => {
+  const prev = ['## Die Updates', '', '### Product', '', '#### Rechner', '',
+    '> - [PM-1](x) a <!--k:PM-1-->', '> - [PM-2](x) b <!--k:PM-2-->', '> - [PM-8](x) w <!--k:PM-8-->', '',
+    '#### Backlog Product: in diesen Sprint mitnehmen?', '', '- [PM-5](x) e <!--k:PM-5-->', '', '## Auffälligkeiten', ''].join('\n');
+  const issues = new Map([
+    ['PM-1', iss('PM-1', { summary: 'Fix `foo im Rechner', status: 'In Progress', statusCategory: 'indeterminate' })],
+    ['PM-2', iss('PM-2', { duedate: '2026-12-01' })],
+    ['PM-5', iss('PM-5', { duedate: '2026-10-20' })],
+    ['PM-8', iss('PM-8', { summary: 'Werkbank: Sprint-Seite', status: 'In Progress', statusCategory: 'indeterminate' })],
+  ]);
+  const one = newCycleFiles(TPL, '2026-10-12', 'sprint-2026-09-28', reviewDraftVars({ date: '2026-10-12', prevId: 'sprint-2026-09-28', prevReview: prev, issues, today: '2026-10-12' }).vars)[1].content;
+  // H1: Backtick im Titel macht den Anker nicht unsichtbar
+  assert.ok(parseQuestions(one).some((q) => q.key === 'PM-1'), 'Anker hinter Titel mit Backtick bleibt erkannt');
+  // H3: Ticket-Titel mit „Werkbank“ kommt nicht in die Notiz
+  assert.doesNotMatch(one, /werkbank/i);
+  // H2: Rundlauf — der Entwurf als Vorzyklus erzeugt „Aus dem Backlog übernommen“ nicht doppelt
+  const two = newCycleFiles(TPL, '2026-10-26', 'sprint-2026-10-12', reviewDraftVars({ date: '2026-10-26', prevId: 'sprint-2026-10-12', prevReview: one, issues, today: '2026-10-20' }).vars)[1].content;
+  const names = parsePackages(two).map((p) => p.name);
+  assert.equal(names.filter((n) => n === 'Aus dem Backlog übernommen').length, 1, names.join(' | '));
+  const keys = [...two.slice(two.indexOf('## Die Updates'), two.indexOf('## Auffälligkeiten')).matchAll(/<!--k:([^>]+)-->/g)].map((m) => m[1]);
+  assert.equal(keys.length, new Set(keys).size, 'jedes Ticket genau einmal, auch im zweiten Zyklus');
+  // H4: „nein“ → keine Aktion; „ja, fällig 23.10.“ → nur Fälligkeit
+  const pr = proposalsFor([
+    { kind: 'note', key: 'PM-2', speaker: 'Knut', payload: 'nein', line: 1, file: 'r' },
+    { kind: 'note', key: 'PM-2', speaker: 'Knut', payload: 'ja, fällig 23.10.', line: 2, file: 'r' },
+  ], issues as any, '2026-10-12');
+  assert.deepEqual(pr[0].actions, []);
+  assert.match(pr[0].conflict!, /nichts nach Jira/);
+  assert.deepEqual(pr[1].actions.map((a: any) => [a.type, a.date]), [['due', '2026-10-23']]);
+  // M2/M3: Platzhalter der Planning-Vorlage zählen nicht als S-Zeilen oder Ziel; kein echter Ticket-Anker in der Vorlage
+  const tplPlanning = newCycleFiles(TPL, '2026-10-12', 'sprint-2026-09-28')[2].content;
+  const r = reviewDraftVars({ date: '2026-10-26', prevId: 'sprint-2026-10-12', prevPlanning: tplPlanning, issues: new Map(), today: '2026-10-20' });
+  assert.equal(r.stats.outcomes, 0);
+  assert.match(r.vars.SOLL_IST, /nichts zu bewerten/);
+  assert.doesNotMatch(tplPlanning, /<!--k:[^>]*PM-\d+/);
+});

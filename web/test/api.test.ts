@@ -531,6 +531,14 @@ test('Sprint Schritt 1 + 5: Review-Entwurf nur nach Bestätigung, nur fehlende D
   assert.deepEqual(v.j.files.review.packages.map((p: any) => [p.domain, p.name, p.tickets.map((t: any) => t.key)]), [['Product', 'Hardware-Flow', ['PM-321', 'PM-322']]]);
   assert.equal(jira.writes.length, n0, 'nichts nach Jira');
   rmSync(dir, { recursive: true });
+  // Kein zweiter Ordner neben einem archivierten Zyklus gleichen Namens.
+  const arch = join(VAULT, 'olaf/4-Archive/sprint-2026-09-14');
+  mkdirSync(arch, { recursive: true });
+  writeFileSync(join(arch, 'sprint-2026-09-14-review.md'), '# alt');
+  assert.equal((await anna.req('/api/sprint/draft', { body: { date: '2026-09-14', confirm: true } })).status, 409);
+  assert.equal((await anna.req('/api/sprint/new', { body: { date: '2026-09-14', confirm: true } })).status, 409);
+  assert.ok(!existsSync(join(VAULT, 'olaf/1-Projects/sprint-2026-09-14')));
+  rmSync(arch, { recursive: true });
 });
 
 test('Sprint: neuen Zyklus anlegen nur nach Bestätigung', async () => {

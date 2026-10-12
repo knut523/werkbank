@@ -93,8 +93,9 @@ die Werkbank liest die Datei. Ob das Team die Sprint-Seite selbst bekommt, ist *
    ohne den Mitnahme-Abschnitt; bei `→ mitnehmen` wird der Stempel `✓ … → Planning:` abgestreift; dazu
    die Hinweiszeile „Board: n offen, davon m in dieser Liste“. Mit Stand der Jira-Kopie (P5).
    Tickets, die nicht in der Kopie sind, bleiben mit „nicht in der Kopie“ stehen (P2) —
-   **nur lesend**, Download als Markdown im Format des Abschnitts. Die Kopie wird vorher für genau
-   diese Tickets nachgeladen (bestehender Abgleich), damit eben geschlossene herausfallen. Ins
+   **nur lesend**, Download als Markdown im Format des Abschnitts. Nach einem Write-back aus der Werkbank
+   ist die Kopie für die geschriebenen Tickets schon frisch (`writeJira` lädt nach); nach einem Write-back
+   im Chat zeigt Schritt 5 den Stand der Kopie (P5) — ein gezieltes Nachladen ist **nicht** gebaut. Ins
    Planning kommt sie über die vorhandenen „Kandidaten“ + „in Sprint nehmen“. In die Notiz schreibt
    den Abschnitt weiterhin `/sprint-sync` im Chat (kein Abschnitt-Ersetzen aus der Werkbank).
 
@@ -173,6 +174,13 @@ Zyklus mit Knut allein; bis dahin Obsidian.
 *Empfehlung:* (a) auf dem Gerüst — der Agent soll Pakete und Anker übernehmen statt neu zu erfinden.
   - Knut:
 
+**E7 — Mitnahme ohne Backlog/Ongoing?** Seit To Do/Backlog/Ongoing getrennt stehen, nimmt die Mitnahme
+(Gleichlauf mit `jira-sprint-carry.sh`: jedes offene Ticket, das der Review nennt) auch Backlog-Tickets mit „nein“,
+Daueraufgaben und Waisen mit. Optionen: (a) Mitnahme = nur To Do + „ja“ aus dem Backlog + `→ mitnehmen`,
+Skript und Werkbank gleich anpassen; (b) wie heute (alles Offene). *Empfehlung:* (a) — sonst ist die Mitnahme
+wieder das halbe Board; braucht eine Änderung an `jira-sprint-carry.sh` (Skill-Skript, nicht in diesem Paket).
+  - Knut:
+
 ## 4. Nicht in diesem Paket
 
 Tickets anlegen · Archivieren · LLM-Prosa in der Werkbank · Reminder · Änderungen an `jira-*.sh` ·
@@ -225,3 +233,12 @@ weglassen, leere Kopie → 409 · P3 Sprint-Seite zeigt weiter den neuesten Ordn
 aktuellen ≤ heute · P4 Schrittstatus nur aus Dateien · P5 Stand der Kopie in Schritt 5 anzeigen.
 Restpunkt, nicht blockierend: Antworten behalten den Bestätigungsdialog je Antwort (Vault-Regel); am Handy
 lästig, wird mit E5 neu bewertet.
+
+**Review-Pässe nach dem Bau (12.10.):** UX-Review (eigener Agent, ux-expert) **PASS**, mittlere Befunde behoben.
+Feindlicher Code-Review (eigener Agent): kein Jira-Schreibweg, keine Pfad-Injektion; behoben H1 (Backtick im
+Titel versteckt den Anker), H2 („Aus dem Backlog übernommen“ doppelt im Rundlauf), H3 („Werkbank“ in
+Ticket-Titeln/S-Zeilen, ausgelassene Pakete schluckten Tickets echter Pakete), H4 („nein“ wurde Jira-Kommentar),
+H5 (Schritt 2 nie erledigt), M2 (Vorlagen-Platzhalter als S-Zeilen/Ziel), M3 (echter Anker PM-70 in der
+Planning-Vorlage), M4 (zweiter Ordner neben dem Archiv), Zyklustag in Wiener Zeit, Datum in Schritt 1 beim
+Zykluswechsel. **Offen für Knut (E7):** M1 — die Mitnahme enthält im Gleichlauf mit dem Skript alles, was der
+Review nennt, also auch Backlog („nein“), Ongoing und Waisen.
