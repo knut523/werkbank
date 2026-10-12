@@ -395,3 +395,37 @@ td[data-label-inline]::before { content: none; }
 .dialog.vorschau { width: min(900px, 100%); }
 .dialog.vorschau img { height: auto; }
 .frow-main > .btn.ghost:last-child { margin-left: auto; }
+
+/* Sprint-Zyklus in fünf Schritten (Paket 143) */
+.sprint-goal { font-size: 15px; font-weight: 600; margin: 4px 0 12px; }
+.sprint-goal .tiny { display: block; font-weight: 400; }
+.cycle-steps { list-style: none; padding: 0; margin: 0 0 14px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.cycle-steps a { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border-light); border-radius: 10px; color: var(--text-primary); text-decoration: none; height: 100%; box-sizing: border-box; }
+.cycle-steps a:hover { background: var(--surface-hover); }
+.cycle-steps a:focus-visible { outline: 2px solid var(--green-600); outline-offset: 2px; }
+.cycle-steps a > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.cycle-steps .n { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; background: var(--surface-tertiary); }
+.cycle-steps li.done .n { background: var(--chip-ok); color: var(--chip-ok-text); }
+.cycle-steps li.on a { border-color: var(--green-600); box-shadow: inset 0 0 0 1px var(--green-600); }
+.now { margin-bottom: 18px; }
+.now h2 { margin-top: 0; }
+.pkg { margin: 6px 0; }
+.pkg > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.ans-form { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.ans-form textarea { width: 100%; box-sizing: border-box; font: inherit; }
+.rating-w { white-space: nowrap; }
+.md-pre { white-space: pre-wrap; font-size: 11.5px; max-height: 420px; overflow: auto; background: var(--surface-secondary); padding: 8px; border-radius: 8px; }
+.ctx { margin-bottom: 8px; }
+.ctx > summary { cursor: pointer; }
+.ctx-h { margin-top: 22px; }
+@media (max-width: 760px) {
+  /* Handy: eine Zeile — nur der aktuelle Schritt mit Text, die anderen als Nummer. */
+  .cycle-steps { display: flex; flex-direction: row; gap: 4px; }
+  .cycle-steps li:not(.on) a > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .cycle-steps li:not(.on) a { padding: 8px; min-width: 44px; min-height: 44px; justify-content: center; align-items: center; }
+  .cycle-steps li.on { flex: 1; min-width: 0; }
+  .cycle-steps a { padding: 6px 10px; }
+  .ans-form textarea, .ans-form input { font-size: 16px; }
+  .ans-form .btn, .now .btn.primary { min-height: 44px; }
+  .now .row .btn.primary { width: 100%; justify-content: center; }
+}
