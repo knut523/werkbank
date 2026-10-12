@@ -390,8 +390,8 @@ export function reviewDefaults(previous?: string): Record<string, string> {
   };
 }
 
-function ticketLine(k: string, i: Issue | undefined, today: string, since: string): string | null {
-  if (!i) return `- ${link(k)} · nicht in der Jira-Kopie <!--k:${k}-->`;
+function ticketLine(k: string, i: Issue | undefined, today: string, since: string, ask?: string): string | null {
+  if (!i) return `- ${link(k)} · nicht in Jira gefunden <!--k:${k}-->`;
   const who = firstName(i.assignee) || '—';
   let tail: string;
   if (isDone(i)) {
@@ -401,7 +401,7 @@ function ticketLine(k: string, i: Issue | undefined, today: string, since: strin
   } else if (i.duedate && i.duedate < today) {
     tail = `**${Math.round((Date.parse(today) - Date.parse(i.duedate)) / 864e5)} Tage über**`;
   } else tail = i.duedate ? `fällig ${ddmm(i.duedate)}` : 'kein Datum';
-  return `- ${link(k)} ${safe(i.summary)} · **${who}** · \`${i.status}\` · ${tail} <!--k:${k}-->`;
+  return `- ${link(k)} ${safe(i.summary)} · **${who}** · \`${i.status}\` · ${tail}${ask ? ` — ❓ *${ask}*` : ''} <!--k:${k}-->`;
 }
 
 export interface DraftInput {
@@ -412,14 +412,52 @@ export interface DraftInput {
   issues: Map<string, Issue>;
   today: string;
   syncedAt?: string | null;            // Stand der Jira-Kopie
+  decider?: string;                    // wer über Backlog-Mitnahme entscheidet (Antwortzeile), Vorgabe Knut
 }
 
-export interface DraftStats { packages: number; tickets: number; orphans: number; outcomes: number; fallback: boolean }
+export interface DraftStats { packages: number; tickets: number; backlog: number; ongoing: number; orphans: number; outcomes: number; fallback: boolean; skipped: string[] }
+
+// Knut, 12.10.2026 (bindend): Sprint-Notizen nennen nie die Werkbank oder lokale Agentenarbeit — lokal Gebautes zählt
+// erst nach Test → dev → prod. Solche Pakete des Vorzyklus übernimmt der Entwurf nicht.
+export const LOCAL_WORK = /werkbank|lokale?n? (stränge|arbeit|bau)|nicht auf github|agenten?-?(arbeit|stränge)/i;
+const BACKLOG_PKG = /^Backlog\b/i;
+const ONGOING_SEC = /^Laufende Aufgaben|Ongoing/i;
+export const isOngoing = (i: Pick<Issue, 'status'>) => /^ongoing$/i.test(i.status);
+
+/** To Do (Knut 12.10.): in Arbeit, fällig bis Sprintende oder überfällig. Sonst Backlog. Ongoing extra. */
+export function bucketOf(i: Issue, sprintEnd: string): 'done' | 'ongoing' | 'todo' | 'backlog' {
+  if (isDone(i)) return 'done';
+  if (isOngoing(i)) return 'ongoing';
+  if (i.statusCategory === 'indeterminate' || /in progress|in arbeit|review|testing/i.test(i.status)) return 'todo';
+  if (i.duedate && i.duedate <= sprintEnd) return 'todo';
+  return 'backlog';
+}
+
+/** Domäne je Ticket aus der Vorzyklus-Review: Pakete, Backlog-Blöcke und der Ongoing-Abschnitt (**Domäne**-Zeilen). */
+function domainsOf(review: string, pkgs: Pkg[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const p of pkgs) for (const k of p.tickets) if (!m.has(k)) m.set(k, p.domain);
+  let inOng = false, dom = '';
+  for (const raw of review.split('\n')) {
+    const h = raw.match(/^(#{2,3}) (.+)$/);
+    if (h) { inOng = h[1] === '###' && ONGOING_SEC.test(h[2]); continue; }
+    if (!inOng) continue;
+    const l = stripCallout(raw);
+    const d = l.match(/^\s*\*\*([^*]+)\*\*\s*$/);
+    if (d) { dom = d[1].trim(); continue; }
+    const a = l.match(/<!--k:([A-Z][A-Z0-9]+-\d+)-->/);
+    if (a && !m.has(a[1])) m.set(a[1], dom || 'Weitere');
+  }
+  return m;
+}
 
 export function reviewDraftVars(inp: DraftInput): { vars: Record<string, string>; stats: DraftStats } {
   const prevDate = inp.prevId?.replace('sprint-', '') ?? '';
   const since = prevDate || inp.date;
   const prevDe = prevDate ? ddmm(prevDate) : '—';
+  const endD = new Date(inp.date + 'T12:00:00Z'); endD.setUTCDate(endD.getUTCDate() + 14);
+  const sprintEnd = endD.toISOString().slice(0, 10);
+  const decider = inp.decider ?? 'Knut';
   // Soll-Ist: S-Zeilen wörtlich, sonst der Ziel-Satz (Vorzyklus ohne S1–S4, z. B. 28.09.).
   const outs = inp.prevPlanning ? parseOutcomes(inp.prevPlanning) : [];
   let soll: string;
@@ -432,45 +470,94 @@ export function reviewDraftVars(inp: DraftInput): { vars: Record<string, string>
       ? `Das Planning vom ${prevDe} hat keine Ergebniszeilen S1–S4. Bewertet wird der Ziel-Satz; S-Zeilen beginnen mit diesem Planning (nicht rückwirkend erfunden).\n\n${SOLL_HEAD}\n| Ziel | ${cell(goal)} | … | … | … |`
       : 'Kein Planning mit Sprint-Ziel oder S-Zeilen im Vorzyklus gefunden — nichts zu bewerten. S-Zeilen beginnen mit diesem Planning.';
   }
-  // Pakete des Vorzyklus, nur die Ankerzeilen neu aufgebaut.
-  const pkgs = inp.prevReview ? parsePackages(inp.prevReview) : [];
-  const inPkg = new Set<string>();
+  // Pakete des Vorzyklus (ohne lokale Arbeit), nur die Ankerzeilen neu aufgebaut; Backlog und Ongoing getrennt.
+  const allPkgs = inp.prevReview ? parsePackages(inp.prevReview) : [];
+  const skipped = allPkgs.filter((p) => LOCAL_WORK.test(p.name)).map((p) => p.name);
+  const pkgs = allPkgs.filter((p) => !LOCAL_WORK.test(p.name));
+  const dom = inp.prevReview ? domainsOf(inp.prevReview, pkgs) : new Map<string, string>();
+  // Tickets ausgelassener Pakete auch nicht als „keinem Paket zugeordnet“ wieder hereinholen.
+  const seen = new Set<string>(allPkgs.filter((p) => LOCAL_WORK.test(p.name)).flatMap((p) => p.tickets));
   const byDomain = new Map<string, string[]>(DOMAINS.map((d) => [d, []]));
-  let nTickets = 0;
+  const backlog = new Map<string, string[]>();     // Domäne → Zeilen
+  const fromBacklog = new Map<string, string[]>(); // Domäne → To-Do-Zeilen aus einem früheren Backlog-Block
+  const ongoing = new Map<string, string[]>();
+  let nTickets = 0, nBacklog = 0;
+  const push = (m: Map<string, string[]>, d: string, ...l: string[]) => { if (!m.has(d)) m.set(d, []); m.get(d)!.push(...l); };
+  const ownerLine = (rows: string[], owners: Set<string>, i: Issue | undefined, prefix: string) => {
+    const who = firstName(i?.assignee);
+    if (who && !owners.has(who)) { owners.add(who); rows.push(`${prefix}  - ${who}:`); }
+  };
   for (const p of pkgs) {
     const rows: string[] = [];
     const owners = new Set<string>();
     let open = 0, over = 0, done = 0;
     for (const k of p.tickets) {
-      if (inPkg.has(k)) continue;                              // genau einmal in „Die Updates“
-      inPkg.add(k);
+      if (seen.has(k)) continue;                               // genau einmal in „Die Updates“
+      seen.add(k);
       const i = inp.issues.get(k);
+      const b = i ? bucketOf(i, sprintEnd) : 'todo';
+      if (b === 'ongoing') continue;                           // gesammelt unten
+      if (b === 'backlog') {
+        const ask = `In diesen Sprint mitnehmen?${i!.assignee ? '' : ' Ohne Owner.'}`;
+        push(backlog, p.domain, ticketLine(k, i, inp.today, since, ask)!, `  - ${decider}:`);
+        nBacklog++;
+        continue;
+      }
       const line = ticketLine(k, i, inp.today, since);
       if (!line) continue;
-      rows.push(`> ${line}`);
       nTickets++;
+      if (BACKLOG_PKG.test(p.name)) {                          // aus dem Backlog in den Sprint gekommen
+        const r: string[] = [`> ${line}`]; ownerLine(r, new Set(), i, '> ');
+        push(fromBacklog, p.domain, ...r);
+        continue;
+      }
+      rows.push(`> ${line}`);
       if (i && isDone(i)) { done++; continue; }
       open++;
       if (i?.duedate && i.duedate < inp.today) over++;
       // Je Owner eine leere Antwortzeile unter seinem ersten offenen Ticket (Vorname: splitSpeaker nimmt ≤ 2 Wörter).
-      const who = firstName(i?.assignee);
-      if (who && !owners.has(who)) { owners.add(who); rows.push(`>   - ${who}:`); }
+      ownerLine(rows, owners, i, '> ');
     }
+    if (BACKLOG_PKG.test(p.name)) continue;                    // Backlog-Blöcke werden je Domäne neu gebaut
     let body: string;
     if (!p.tickets.length) body = '… (Stand, offen, nächster Schritt — zwei, drei Sätze)\n\nKein Ticket.';
-    else if (!rows.length) body = '…\n\nBoard: keine offenen und keine im Zyklus erledigten Tickets mehr — Paket abschließen oder neu schneiden?';
+    else if (!rows.length) body = '…\n\nKeine To-Do-Tickets in diesem Sprint — offene ohne Termin stehen im Backlog der Domäne. Paket abschließen oder neu schneiden?';
     else {
       const n = rows.filter((r) => r.includes('<!--k:')).length;
       const meta = [`${n} Ticket${n === 1 ? '' : 's'}`, owners.size ? [...owners].join(', ') : (open ? 'ohne Owner' : ''), over ? `${over} überfällig` : ''].filter(Boolean).join(' · ');
       body = `… (Stand, offen, nächster Schritt — zwei, drei Sätze)${!open && done ? '\n\nBoard: alle Tickets Done — stimmt das fachlich?' : ''}\n\n> [!note]- ${meta} — hier kommentieren\n${rows.join('\n')}`;
     }
-    if (!byDomain.has(p.domain)) byDomain.set(p.domain, []);
-    byDomain.get(p.domain)!.push(`#### ${p.name}\n\n${body}`);
+    push(byDomain, p.domain, `#### ${p.name}\n\n${body}`);
   }
-  const updates = [...byDomain].map(([d, b]) => [`### ${d}`, ...b].join('\n\n')).join('\n\n');
+  // Ongoing: alle offenen Daueraufgaben im Board (nicht nur die des Reviews), nach Domäne, sonst „Weitere“.
+  const ong = [...inp.issues.values()].filter((i) => i.type !== 'Workstream' && isOngoing(i) && !isDone(i))
+    .sort((a, b) => Number(a.key.split('-')[1]) - Number(b.key.split('-')[1]));
+  for (const i of ong) {
+    seen.add(i.key);
+    const ask = i.duedate ? `Status \`Ongoing\`, aber mit Datum ${ddmm(i.duedate)}. Wirklich eine Daueraufgabe?` : undefined;
+    const r = [`> ${ticketLine(i.key, i, inp.today, since, ask)}`];
+    if (ask) ownerLine(r, new Set(), i, '> ');
+    push(ongoing, dom.get(i.key) ?? 'Weitere', ...r);
+  }
+  const domOrder = [...new Set([...DOMAINS, ...byDomain.keys(), ...backlog.keys(), ...fromBacklog.keys()])];
+  const parts: string[] = [];
+  for (const d of domOrder) {
+    const b = byDomain.get(d) ?? [];
+    const fb = fromBacklog.get(d);
+    if (fb?.length) b.push(`#### Aus dem Backlog übernommen\n\n…\n\n> [!note]- ${fb.filter((r) => r.includes('<!--k:')).length} Tickets — hier kommentieren\n${fb.join('\n')}`);
+    const bl = backlog.get(d);
+    if (bl?.length) b.push(`#### Backlog ${d}: in diesen Sprint mitnehmen?\n\nKein Datum in diesem Sprint und nicht in Arbeit. Je Ticket bitte kurz: ja (mit Datum) oder nein.\n\n${bl.join('\n')}`);
+    parts.push([`### ${d}`, ...b].join('\n\n'));
+  }
+  if (ong.length) {
+    const who = [...new Set(ong.map((i) => firstName(i.assignee)).filter(Boolean))];
+    const inner = [...ongoing].flatMap(([d, rows]) => [`> **${d}**`, ...rows]);
+    parts.push(`### Laufende Aufgaben (Ongoing)\n\nDaueraufgaben ohne Ende, im Board mit Status \`Ongoing\`. Sie gehören nicht in To Do oder Backlog. Frage je Aufgabe: läuft sie noch, und wer trägt sie?\n\n> [!note] ${ong.length} Aufgabe${ong.length === 1 ? '' : 'n'}${who.length ? ` · ${who.join(', ')}` : ''} — hier kommentieren\n${inner.join('\n')}`);
+  }
+  const updates = parts.join('\n\n');
   // Auffälligkeiten: im Zyklus angelegt oder Status gewechselt, in keinem Paket (created/statusSince, nicht updated).
   const day = (s?: string | null) => (s ?? '').slice(0, 10);
-  const orphans = [...inp.issues.values()].filter((i) => i.type !== 'Workstream' && !inPkg.has(i.key)
+  const orphans = [...inp.issues.values()].filter((i) => i.type !== 'Workstream' && !seen.has(i.key)
     && (day(i.created) >= since || day(i.statusSince) >= since)
     && (!isDone(i) || day(i.statusSince) >= since))
     .sort((a, b) => Number(a.key.split('-')[1]) - Number(b.key.split('-')[1]));
@@ -478,10 +565,10 @@ export function reviewDraftVars(inp: DraftInput): { vars: Record<string, string>
     ? `- **Keinem Paket zugeordnet** — im Zyklus angelegt oder Status gewechselt (${orphans.length}, Board-Stand). In der Runde einsortieren oder als neues Paket aufnehmen:\n`
       + orphans.map((i) => `  - ${link(i.key)} ${safe(i.summary)} · ${firstName(i.assignee) || '—'} · \`${i.status}\``).join('\n')
     : '- Keine Tickets außerhalb der Pakete (im Zyklus angelegt oder bewegt).';
-  const quellen = `Entwurf aus der Werkbank vom ${ddmm(inp.today)}: Pakete aus ${inp.prevId ? `[[${inp.prevId}-review]]` : '— (kein Vorzyklus)'}, Ticketzeilen aus der Jira-Kopie${inp.syncedAt ? ` (Stand ${inp.syncedAt.slice(0, 16).replace('T', ' ')})` : ''}. **Das ist Board-Stand, nicht Arbeitsstand**, und noch nicht in der Runde korrigiert: wo das Board „offen“ oder „Done“ sagt, ist das eine Frage an die Runde, kein Befund. Prosa und Bewertung fehlen bewusst (\`…\`). Quellen für die Prosa: [[pr-stand-produkt-olaf]], [[0-roadmap-produkt-olaf]], die Daily Debriefs unter \`olaf/1-Projects/daily-debrief/\`.`;
+  const quellen = `Vorbereitet am ${ddmm(inp.today)} aus Jira${inp.syncedAt ? ` (Stand ${inp.syncedAt.slice(8, 10)}.${inp.syncedAt.slice(5, 7)}., ${inp.syncedAt.slice(11, 16)})` : ''} und den Arbeitspaketen aus ${inp.prevId ? `[[${inp.prevId}-review]]` : '— (kein Vorzyklus)'}. **Noch nicht in der Runde korrigiert.** Was im Board steht, ist Board-Stand, nicht Arbeitsstand: wo das Board „offen“ oder „Done“ sagt, ist das eine Frage an die Runde, kein Befund. Prosa und Bewertung fehlen bewusst (\`…\`). Weitere Quellen: [[pr-stand-produkt-olaf]], [[0-roadmap-produkt-olaf]], die Daily Debriefs unter \`olaf/1-Projects/daily-debrief/\`.`;
   return {
     vars: { QUELLENLAGE: quellen, SOLL_IST: soll, UPDATES: updates, AUFFAELLIG: auff },
-    stats: { packages: pkgs.length, tickets: nTickets, orphans: orphans.length, outcomes: outs.length, fallback: !outs.length },
+    stats: { packages: pkgs.length, tickets: nTickets, backlog: nBacklog, ongoing: ong.length, orphans: orphans.length, outcomes: outs.length, fallback: !outs.length, skipped },
   };
 }
 

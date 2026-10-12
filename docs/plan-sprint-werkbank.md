@@ -5,7 +5,7 @@ durchdenken und auch auf die Werkbank bringen“. Teil 1 ist dieser Plan (Counci
 Bau dessen, was der Council freigibt. Basis: `release/werkbank-2026-10-11d`, Branch
 `feat/sprint-werkbank`.
 
-Status: **v2 — Council Runde 2: PASS (0,78) mit Bedingungen P1–P5, eingearbeitet.** Verlauf in §6.
+Status: **v3 — Council Runde 2: PASS (0,78) mit P1–P5; danach Rückmeldung Knut 12.10. (bindend, §2a) eingearbeitet.** Verlauf in §6.
 
 ## 1. IST (12.10.2026, gelesen, nicht vermutet)
 
@@ -121,6 +121,26 @@ Kandidaten“). Konflikt-Fehler: „Notiz wurde geändert — neu laden, dein Te
 Was **Mensch bleibt:** Prosa, jede Bewertung, Paketschnitt (neue/zusammengelegte Pakete), S1–S4
 setzen, Write-back freigeben, Tickets anlegen, Mitnahme-Abschnitt schreiben (Chat), Archivieren.
 
+## 2a. Rückmeldung Knut, 12.10.2026 (bindend für Plan, Vorlagen und Sprint-Seite)
+
+1. **Sprint-Notizen nennen nie die Werkbank** und keine eigene/lokale Agentenarbeit. Regel: lokal Gebautes
+   zählt erst nach **Test → Dev → Prod**. → Der Entwurf übernimmt Pakete mit lokaler Arbeit nicht
+   (`LOCAL_WORK`, auch ihre Tickets nicht als Waisen); Quellenlage heißt „Vorbereitet am … aus Jira“; die
+   Vorlagen sagen „Fertig heißt: getestet, auf Dev, dann auf Prod“.
+2. **Review segmentiert in To Do und Backlog.** To Do = in Arbeit, fällig bis Sprintende oder überfällig;
+   alles andere Offene ist Backlog. Je Domäne nach den Paketen ein Block `#### Backlog <Domäne>: in diesen
+   Sprint mitnehmen?`, jede Zeile mit `❓ *In diesen Sprint mitnehmen?*` und leerer Antwortzeile
+   (`- Knut:`). `ja, fällig TT.MM.` wird beim Write-back zur Fälligkeit. Ein im Vorzyklus aus dem Backlog
+   mitgenommenes Ticket landet unter „Aus dem Backlog übernommen“.
+3. **Laufende Aufgaben** (Status `Ongoing`) in eigenem Abschnitt `### Laufende Aufgaben (Ongoing)` — alle
+   offenen Daueraufgaben des Boards, nach Domäne (aus dem Vorzyklus), mit Frage, wenn eine
+   Daueraufgabe ein Datum trägt.
+4. **Wichtige Themen dürfen eigene, größere Abschnitte bekommen**, auch ohne Sub-tasks, Prioritäten nach
+   oben. → Vorlage: Callout „Zuerst ansehen“ oben in „Die Updates“; Paketreihenfolge des Vorzyklus bleibt;
+   größere Abschnitte schreibt die Runde/der Agent (Prosa bleibt Mensch).
+5. **Planning einfacher.** → Vorlage `planning.md` in Alltagssprache: „Was wir machen“, „Was uns
+   blockiert“, DoD-Spalte „Woran wir es sehen“, Domänen wie im Review.
+
 ## 3. Entscheidungen für Knut
 
 **E1 — Summary ohne Paket-Tabelle?** Heute dritte Kopie des Paketstands. Folgen: Skill-Abschnitt
@@ -182,6 +202,8 @@ Summary-Generator (E1) · Schreiben des Mitnahme-Abschnitts aus der Werkbank · 
   „nur meine“ wirkt, Bewertung mit Wort (Screenshots desktop 1440 und Handy 390, e2e gegen Test-Server).
 - D10 Mitnahme-Gleichlauf: Prosa-Links zählen mit, der eigene Mitnahme-Abschnitt nicht, gestempelte
   `→ mitnehmen`-Zeilen bleiben drin (Test, P1).
+- D11 Knut 12.10.: Entwurf enthält nie „Werkbank“, keine Pakete/Tickets lokaler Arbeit; Backlog je Domäne mit
+  Frage + Antwortzeile; Ongoing gesammelt; „ja, fällig TT.MM.“ geht als Fälligkeit in den Sync (Test).
 - D9 `node --test` der Web-App ohne neue Fehler gegenüber der Basis (Basis: 2 bekannte rote Tests in
   `api.test.ts:1220` und `orchestrator.test.ts:244`, nicht sprintbezogen), `vite build` grün.
 

@@ -391,7 +391,7 @@ function StepDraft({ d, id, suggest, onCreated }: { d: any; id: string; suggest:
   return (
     <div className="card now" data-testid="step-1">
       <h2>Review vorbereiten</h2>
-      <p className="small muted">Entwurf aus der Vorlage und den Daten: S-Zeilen des Vorzyklus wörtlich (ohne Bewertung), seine Arbeitspakete mit dem Ticketstand aus der Jira-Kopie und je Owner einem leeren Antwortfeld, Tickets ohne Paket unter „Auffälligkeiten“. Keine Prosa — das bleibt bei dir oder beim Agenten im Chat. Alles Automatische ist <b>Board-Stand, nicht Arbeitsstand</b>.</p>
+      <p className="small muted">Entwurf aus der Vorlage und den Daten: S-Zeilen des Vorzyklus wörtlich (ohne Bewertung), seine Arbeitspakete mit den To-Do-Tickets aus der Jira-Kopie und je Owner einem leeren Antwortfeld, je Domäne der Backlog mit „In diesen Sprint mitnehmen?“, laufende Aufgaben gesammelt, Tickets ohne Paket unter „Auffälligkeiten“. Die Notiz nennt die Werkbank nicht. Keine Prosa — das bleibt bei dir oder beim Agenten im Chat. Alles Automatische ist <b>Board-Stand, nicht Arbeitsstand</b>.</p>
       {has && <p className="okbox small">Dieser Zyklus hat schon eine Review-Notiz (<a href={noteHref(d.files.review.path)}>{d.files.review.path.split('/').pop()}</a>) — sie wird nie überschrieben. Ein Entwurf für den nächsten Zyklus geht unten.</p>}
       <div className="row">
         <label className="small" htmlFor="draft-date">Zyklus ab</label>
@@ -403,7 +403,8 @@ function StepDraft({ d, id, suggest, onCreated }: { d: any; id: string; suggest:
         <div className="draft-pre">
           <p className="small">
             <b>sprint-{date}</b> · Vorzyklus {pre.preview.previous ?? '—'}
-            {pre.preview.stats && <> · {pre.preview.stats.packages} Pakete, {pre.preview.stats.tickets} Ticketzeilen, {pre.preview.stats.orphans} ohne Paket · {pre.preview.stats.fallback ? 'Vorzyklus ohne S-Zeilen → Ziel-Satz' : `${pre.preview.stats.outcomes} S-Zeilen`}</>}
+            {pre.preview.stats && <> · {pre.preview.stats.packages} Pakete, {pre.preview.stats.tickets} To-Do-Zeilen, {pre.preview.stats.backlog} im Backlog (mit Frage „mitnehmen?“), {pre.preview.stats.ongoing} laufend, {pre.preview.stats.orphans} ohne Paket · {pre.preview.stats.fallback ? 'Vorzyklus ohne S-Zeilen → Ziel-Satz' : `${pre.preview.stats.outcomes} S-Zeilen`}</>}
+            {pre.preview.stats?.skipped?.length > 0 && <span className="tiny"> · nicht übernommen (lokale Arbeit zählt erst nach Test → Dev → Prod): {pre.preview.stats.skipped.join(', ')}</span>}
           </p>
           <ul className="small">{pre.preview.files.map((f: any) => <li key={f.name}><code>{f.name}</code> — {f.exists ? 'gibt es schon, bleibt unverändert' : `neu (${f.lines} Zeilen)`}</li>)}</ul>
           <div className="row">

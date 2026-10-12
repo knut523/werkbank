@@ -317,3 +317,50 @@ test('Aktueller Zyklus: neuester mit Datum ≤ heute, ein vorab angelegter Ordne
   assert.equal(currentCycle([{ id: 'z', date: '2099-01-01', archived: false }], '2026-10-12')!.id, 'z', 'nur zukünftige → der nächste');
   assert.equal(currentCycle([], '2026-10-12'), undefined);
 });
+
+test('Review-Entwurf nach Knuts Rückmeldung 12.10.: To Do / Backlog mit Mitnahme-Frage / Ongoing getrennt, keine lokale Arbeit, keine Werkbank', () => {
+  const prev = [
+    '## Die Updates', '', '### Product', '',
+    '#### Rechner', '', '> - [PM-1](x) a <!--k:PM-1-->', '> - [PM-2](x) b <!--k:PM-2-->', '> - [PM-3](x) c <!--k:PM-3-->', '> - [PM-4](x) d <!--k:PM-4-->', '',
+    '#### Werkbank & lokale Stränge (nicht auf GitHub)', '', '> - [PM-9](x) lokal <!--k:PM-9-->', '',
+    '#### Backlog Product: in diesen Sprint mitnehmen?', '', '- [PM-5](x) e <!--k:PM-5-->', '  - Knut: ja, fällig 20.10.', '',
+    '### Laufende Aufgaben (Ongoing)', '', '> [!note] 1 Aufgabe', '> **Operations**', '> - [PM-6](x) f <!--k:PM-6-->', '',
+    '## Auffälligkeiten', '',
+  ].join('\n');
+  const issues = new Map([
+    ['PM-1', iss('PM-1', { status: 'In Progress', statusCategory: 'indeterminate' })],
+    ['PM-2', iss('PM-2', { duedate: '2026-10-20' })],                              // fällig im Sprint → To Do
+    ['PM-3', iss('PM-3', { status: 'Backlog', duedate: '2026-11-30' })],            // nach Sprintende → Backlog
+    ['PM-4', iss('PM-4', { assignee: null })],                                    // ohne Datum, ohne Owner → Backlog
+    ['PM-5', iss('PM-5', { duedate: '2026-10-20' })],                              // aus dem Backlog übernommen
+    ['PM-6', iss('PM-6', { status: 'Ongoing', statusCategory: 'indeterminate', assignee: 'Daniela Martinez Alfaro' })],
+    ['PM-7', iss('PM-7', { status: 'Ongoing', statusCategory: 'indeterminate', duedate: '2026-10-10' })],
+    ['PM-9', iss('PM-9', { status: 'In Progress', statusCategory: 'indeterminate', created: '2026-10-01' })],
+  ]);
+  const { vars, stats } = reviewDraftVars({ date: '2026-10-12', prevId: 'sprint-2026-09-28', prevReview: prev, issues, today: '2026-10-12' });
+  const d = newCycleFiles(TPL, '2026-10-12', 'sprint-2026-09-28', vars)[1].content;
+  assert.doesNotMatch(d, /werkbank/i, 'Sprint-Notizen nennen die Werkbank nie');
+  assert.doesNotMatch(d, /PM-9\b/, 'lokale Arbeit wird nicht übernommen, auch nicht als Waise');
+  assert.deepEqual(stats.skipped, ['Werkbank & lokale Stränge (nicht auf GitHub)']);
+  assert.match(d, /To Do heißt: in\nArbeit, fällig bis zum Ende des neuen Sprints \(26\.10\.2026\)/);
+  assert.match(d, /Fertig heißt: getestet, auf Dev, dann auf Prod/);
+  const pk = parsePackages(d);
+  assert.deepEqual(pk.map((p) => [p.name, p.tickets]), [
+    ['Rechner', ['PM-1', 'PM-2']],
+    ['Aus dem Backlog übernommen', ['PM-5']],
+    ['Backlog Product: in diesen Sprint mitnehmen?', ['PM-3', 'PM-4']],
+  ]);
+  assert.match(d, /PM-3\) Titel PM-3 · \*\*Knut\*\* · `Backlog` · fällig 30\.11\. — ❓ \*In diesen Sprint mitnehmen\?\* <!--k:PM-3-->\n  - Knut:\n/);
+  assert.match(d, /PM-4\) Titel PM-4 · \*\*—\*\* · `To Do` · kein Datum — ❓ \*In diesen Sprint mitnehmen\? Ohne Owner\.\* <!--k:PM-4-->\n  - Knut:/);
+  assert.doesNotMatch(d, /ja, fällig 20\.10\./, 'alte Antworten wandern nicht mit');
+  const ong = d.slice(d.indexOf('### Laufende Aufgaben (Ongoing)'), d.indexOf('## Auffälligkeiten'));
+  assert.match(ong, /> \[!note\] 2 Aufgaben · Daniela, Knut — hier kommentieren/);
+  assert.match(ong, /> \*\*Operations\*\*\n> - \[PM-6\]/, 'Domäne aus dem Ongoing-Abschnitt des Vorzyklus');
+  assert.match(ong, /> \*\*Weitere\*\*\n> - \[PM-7\].*Wirklich eine Daueraufgabe\?\* <!--k:PM-7-->\n>   - Knut:/);
+  assert.equal(stats.backlog, 2); assert.equal(stats.ongoing, 2);
+  // Backlog-Antwort „ja, fällig 23.10.“ wird beim Write-back zur Fälligkeit, nicht zum Kommentar.
+  const q = parseQuestions(d).find((x) => x.key === 'PM-3')!;
+  const rows = syncPlanRows(parseQuestions(applyAnswer(d, q.line, 'Knut', 'ja, fällig 23.10.').text));
+  assert.deepEqual(rows.map((r) => [r.key, r.payload]), [['PM-3', 'ja, fällig 23.10.']]);
+  assert.equal(syncPlanRows(parseQuestions(d)).length, 0);
+});
