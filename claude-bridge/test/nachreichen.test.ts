@@ -164,6 +164,75 @@ test('Council 1: Kontingent mitten im Zug → das nächste Konto bekommt die ung
   assert.match(s.out, /Konto „[AB]“ übernimmt/);
 });
 
+test('Review A 2: Fehler-Ergebnis schließt, das CLI liest die schon gelieferte Nachricht trotzdem im Folgezug → „gelesen“, kein Doppel', async () => {
+  const conv = randomUUID();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const q = ({ prompt }: any) => (async function* () {
+    const it = prompt[Symbol.asyncIterator]();
+    await it.next();
+    yield { type: 'stream_event', session_id: 's', parent_tool_use_id: null, event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Teil 1. ' } } };
+    const n = await it.next();   // Nachricht ist schon beim CLI
+    await gate;
+    yield { type: 'result', subtype: 'error_during_execution', session_id: 's', is_error: true, usage: {} };
+    // Das CLI holt den Folgezug mit der schon empfangenen Nachricht nach.
+    yield { type: 'user', isReplay: true, uuid: n.value.uuid, session_id: 's', parent_tool_use_id: null, message: n.value.message };
+    yield { type: 'result', subtype: 'success', session_id: 's', is_error: false, usage: {} };
+  })();
+  const { s, p } = turn(conv, 'los', q);
+  await until(() => /Teil 1/.test(s.out));
+  const r = mod.injectMessage('u1', conv, 'spät gelesen') as any;
+  release();
+  await p;
+  assert.equal(mod.injectState('u1', r.id)!.state, 'gelesen', 'der Client sendet nicht noch einmal');
+  assert.match(s.out, /📨 Nachgereicht, gelesen: „spät gelesen“/);
+});
+
+test('Review A 3: früh gelesen, dann Kontingent ohne Fortschritt → das nächste Konto fängt von vorn an und bekommt die Nachricht erneut', async () => {
+  const conv = randomUUID();
+  let attempt = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const got: string[] = [];
+  const q = ({ prompt }: any) => (async function* () {
+    const it = prompt[Symbol.asyncIterator]();
+    await it.next();
+    attempt++;
+    if (attempt === 1) {
+      await gate;
+      const n = await it.next();
+      yield { type: 'user', isReplay: true, uuid: n.value.uuid, session_id: 's', parent_tool_use_id: null, message: n.value.message };
+      yield { type: 'rate_limit_event', session_id: 's', rate_limit_info: { status: 'rejected', resetsAt: Math.floor(Date.now() / 1000) + 3600 } };
+      yield { type: 'assistant', parent_tool_use_id: null, session_id: 's', error: 'rate_limit', message: { content: [{ type: 'text', text: 'Rate limit' }] } };
+      yield { type: 'result', subtype: 'success', session_id: 's', is_error: true, result: 'Rate limit reached', usage: {} };
+      return;
+    }
+    const n = await it.next();
+    got.push(n.value.message.content);
+    yield { type: 'user', isReplay: true, uuid: n.value.uuid, session_id: 's', parent_tool_use_id: null, message: n.value.message };
+    yield { type: 'result', subtype: 'success', session_id: 's', is_error: false, usage: {} };
+  })();
+  const { p } = turn(conv, 'los', q, { accounts: async () => [{ id: 'a', label: 'A', token: 'tok-c' }, { id: 'b', label: 'B', token: 'tok-d' }] });
+  await until(() => mod.injectMessage('u1', conv, 'früh').ok === true || false, 3000).catch(() => {});
+  release();
+  await p;
+  assert.deepEqual(got, ['früh'], 'zweites Konto hat die Nachricht');
+});
+
+test('Bild-Prüfung: Nachreichen schon während Kontext-Paket/Konten laden → kommt mit in den Zug', async () => {
+  const conv = randomUUID();
+  let ctxDone!: () => void;
+  const ctxGate = new Promise<void>((r) => { ctxDone = r; });
+  const { s, p } = turn(conv, 'langsam-test 2', mock.mockQuery, { sessionContext: async () => { await ctxGate; return ''; } });
+  await sleep(50);
+  const r = mod.injectMessage('u1', conv, 'ganz früh') as any;
+  assert.ok(r.ok, JSON.stringify(r));
+  ctxDone();
+  await p;
+  assert.equal(mod.injectState('u1', r.id)!.state, 'gelesen');
+  assert.match(s.out, /Nachgereicht gelesen: ganz früh/);
+});
+
 test('Council 7: Sperren — kein Zug, leer, Hauptchat-Kennung; BRIDGE_NACHREICHEN=off = String-Prompt wie vorher', async () => {
   assert.deepEqual(mod.injectMessage('u1', randomUUID(), 'x'), { ok: false, status: 409, error: 'In diesem Chat läuft gerade kein Zug.' });
   assert.equal((mod.injectMessage('u1', randomUUID(), '  ') as any).status, 400);

@@ -84,36 +84,45 @@ function Nachreichen({ conversationId, isSubmitting, methods, submitMessage, tex
     return () => clearInterval(t);
   }, [items]);
 
-  // Zugende: Ungelesenes als nächste Nachricht senden (nach „Stopp“ bzw. bei „unbekannt“ zurück ins Feld).
+  // Zugende: Ungelesenes als nächste Nachricht senden (nach „Stopp“ bzw. bei „unbekannt“ zurück ins Feld). Nur der Wechsel
+  // läuft → fertig zählt; Formular und Senden über Refs, damit ein neues submitMessage den Ablauf weder neu startet noch abbricht.
   const was = useRef(isSubmitting);
+  const methodsRef = useRef(methods);
+  methodsRef.current = methods;
+  const submitRef = useRef(submitMessage);
+  submitRef.current = submitMessage;
   useEffect(() => {
-    const ended = was.current && !isSubmitting;
+    const prev = was.current;
     was.current = isSubmitting;
-    if (isSubmitting) { stopped.current = false; return; }
-    if (!ended || !itemsRef.current.length) return;
-    let cancelled = false;
-    (async () => {
-      // Die Brücke setzt „ungelesen“ erst am Zugende — kurz nachfragen, bis nichts mehr „zugestellt“ ist.
+    if (isSubmitting) { if (!prev) stopped.current = false; return; }
+    if (!prev || !itemsRef.current.length) return;
+    void (async () => {
+      // Die Brücke setzt „ungelesen“ erst am Zugende — kurz nachfragen, bis nichts mehr „zugestellt“ oder „sende“ ist.
       let xs = itemsRef.current;
-      for (let i = 0; i < 6 && xs.some((x) => x.state === 'zugestellt' || x.state === 'sende'); i++) {
+      for (let i = 0; i < 8 && xs.some((x) => x.state === 'zugestellt' || x.state === 'sende'); i++) {
         await new Promise((r) => setTimeout(r, 700));
-        xs = await Promise.all(xs.map(async (x) => (x.state === 'zugestellt' && x.id ? { ...x, state: await stand(x.id) } : x)));
+        xs = await Promise.all(itemsRef.current.map(async (x) => (x.state === 'zugestellt' && x.id ? { ...x, state: await stand(x.id) } : x)));
       }
-      if (cancelled) return;
       const offen = xs.filter((x) => x.state !== 'gelesen').map((x) => x.text);
       setItems([]);
       if (!offen.length) return;
       const zusammen = offen.join('\n\n');
+      const m = methodsRef.current;
       if (stopped.current || xs.some((x) => x.state === 'unbekannt' || x.state === 'zugestellt' || x.state === 'sende')) {
-        const vorhanden = String(methods.getValues('text') ?? '').trim();
-        methods.setValue('text', [zusammen, vorhanden].filter(Boolean).join('\n\n'), { shouldValidate: true });
+        const vorhanden = String(m.getValues('text') ?? '').trim();
+        m.setValue('text', [zusammen, vorhanden].filter(Boolean).join('\n\n'), { shouldValidate: true });
         setHinweis(stopped.current ? 'Gestoppt — deine Nachricht steht wieder im Eingabefeld.' : 'Nicht sicher angekommen — deine Nachricht steht wieder im Eingabefeld.');
         return;
       }
-      submitMessage({ text: zusammen });
+      submitRef.current({ text: zusammen });
     })();
-    return () => { cancelled = true; };
-  }, [isSubmitting, methods, submitMessage]);
+  }, [isSubmitting]);
+
+  useEffect(() => {
+    if (!hinweis) return;
+    const t = setTimeout(() => setHinweis(''), 8000);
+    return () => clearTimeout(t);
+  }, [hinweis]);
 
   useEffect(() => {
     if (!items.length || items.some((x) => x.state !== 'gelesen')) return;

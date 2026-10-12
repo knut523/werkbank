@@ -257,7 +257,8 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
                     <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform duration-200', o ? '' : '-rotate-90')} aria-hidden="true" />
                     <span className="min-w-0 flex-1 truncate text-left font-medium">{g.thema}</span>
                     {first && <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[first])} aria-hidden="true" />}
-                    <span className="shrink-0 text-xs text-text-secondary">{g.strands.length}{parts.length && !o ? ` · ${parts[0]}` : ''}</span>
+                    {/* zu: was dort los ist („2 zu prüfen · 1 läuft“); auf: nur die Zahl, die Zeilen zeigen den Stand */}
+                    <span className="min-w-0 shrink truncate text-xs text-text-secondary">{!o && parts.length ? parts.join(' · ') : g.strands.length}</span>
                   </button>
                   {o && <ul id={gid} className="flex flex-col">{g.strands.map((s) => strandRow(s, 'pl-8', themaTitle(s, g.thema)))}</ul>}
                 </li>

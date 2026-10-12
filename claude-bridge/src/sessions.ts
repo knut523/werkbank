@@ -210,12 +210,13 @@ const graceMs = () => Math.max(1, Number(process.env.BRIDGE_NACHREICHEN_GRACE_S 
 export type InjectState = 'zugestellt' | 'gelesen' | 'ungelesen';
 // Stand je Nachricht, unabhängig vom Live (das nach dem Zug verschwindet), eine Stunde lang (Bedingung 2).
 const injects = new Map<string, { key: string; text: string; state: InjectState; at: number }>();
-interface Inbox { queue: any[]; wake: (() => void) | null; open: boolean; unread: Set<string>; grace: NodeJS.Timeout | null; resultSeen: boolean }
+// sent: schon an das CLI gegeben (ein Echo dazu zählt auch nach dem Schließen); read: in diesem Versuch gelesen (Review A).
+interface Inbox { queue: any[]; wake: (() => void) | null; open: boolean; unread: Set<string>; sent: Set<string>; read: string[]; grace: NodeJS.Timeout | null; resultSeen: boolean }
 
 const userMsg = (text: string, uuid?: string) => ({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, ...(uuid ? { uuid, priority: 'next' } : {}) });
 
 function newInbox(carry: string[]): Inbox {
-  const inbox: Inbox = { queue: [], wake: null, open: true, unread: new Set(), grace: null, resultSeen: false };
+  const inbox: Inbox = { queue: [], wake: null, open: true, unread: new Set(), sent: new Set(), read: [], grace: null, resultSeen: false };
   for (const id of carry) { const m = injects.get(id); if (m) { inbox.unread.add(id); inbox.queue.push(userMsg(m.text, id)); } }
   return inbox;
 }
@@ -223,7 +224,7 @@ function newInbox(carry: string[]): Inbox {
 async function* inputStream(first: string, inbox: Inbox) {
   yield userMsg(first);
   for (;;) {
-    while (inbox.queue.length) yield inbox.queue.shift();
+    while (inbox.queue.length) { const m = inbox.queue.shift(); if (m.uuid) inbox.sent.add(m.uuid); yield m; }
     if (!inbox.open) return;
     await new Promise<void>((r) => { inbox.wake = r; });
     inbox.wake = null;
@@ -281,8 +282,12 @@ export function injectState(userId: string, id: string): { state: InjectState; c
 /** Echo einer nachgereichten Nachricht: gelesen. Nach einem Ergebnis beginnt damit ein Folgezug (Bedingung 3). */
 function onReplay(live: Live, inbox: Inbox, msg: any) {
   const id = String(msg.uuid ?? '');
-  if (!inbox.unread.has(id)) return;
+  // Auch nach dem Schließen: was das CLI schon hatte, kann es noch im Folgezug lesen — dann gilt es als gelesen (Review A, 2).
+  if (!inbox.unread.has(id) && !inbox.sent.has(id)) return;
+  if (inbox.read.includes(id)) return;
   inbox.unread.delete(id);
+  inbox.read.push(id);
+  live.carry = (live.carry ?? []).filter((x) => x !== id);
   const m = injects.get(id);
   if (m) m.state = 'gelesen';
   if (inbox.resultSeen) {
@@ -299,8 +304,9 @@ function onReplay(live: Live, inbox: Inbox, msg: any) {
 /** Nach einem Ergebnis: schließen, wenn nichts mehr ungelesen ist (oder Kontingent/Fehler); sonst Frist für den Folgezug. */
 function afterResult(live: Live, inbox: Inbox, msg: any) {
   inbox.resultSeen = true;
+  if (!inbox.open) return;   // schon geschlossen (z. B. zweites Ergebnis eines Folgezugs nach Kontingent, Review A, 1)
   const failed = msg.is_error && msg.subtype !== 'error_max_turns';
-  if (live.rateLimited || failed) { live.carry = closeInbox(inbox, !live.rateLimited); return; }
+  if (live.rateLimited || failed) { live.carry = [...(live.carry ?? []), ...closeInbox(inbox, !live.rateLimited)]; return; }
   if (!inbox.unread.size) { closeInbox(inbox); return; }
   if (!inbox.grace) inbox.grace = setTimeout(() => { log('nachgereicht ungelesen', { conv: live.key }); closeInbox(inbox); }, graceMs());
 }
@@ -966,6 +972,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     jiraCalls: new Map(), onJiraWrite: req.onJiraWrite, home: '',
     mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
     subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: kind === 'strand', leit: kind === 'leitstand',
+    // Posteingang ab Zugbeginn: Nachreichen geht auch, während Kontext-Paket und Konten noch laden (Bild-Prüfung Plan 154).
+    inbox: nachreichenOn() ? newInbox([]) : null,
   };
   const batch = live.leit ? wakeBatch(req.prompt) : null;
   // Die letzten Kennungen bleiben stehen, auch wenn Knut gleich danach selbst schreibt (Council-Diff R1, B4).
@@ -1070,9 +1078,10 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   (async () => {
     try {
       // Ein Versuch je Konto: meldet einer rate_limit, übernimmt das nächste dieselbe Anfrage.
+      let lastRead: string[] = [];
       for (let i = 0; ; i++) {
         live.rateLimited = null; live.rateLimitReset = undefined; live.progressed = false;
-        await attempt(prompt);
+        lastRead = (await attempt(prompt)) ?? [];
         if (!live.rateLimited || live.abort.signal.aborted) break;
         markExhausted(user, acct, live.rateLimited.resetsAt);
         const next = queue[i + 1];
@@ -1094,12 +1103,15 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         // Noch nichts passiert → dieselbe Anfrage von vorn (gleiche Ausgangslage). Schon mitten im Zug → die Sitzung
         // fortsetzen (alle Konten teilen die Konfiguration und damit den Verlauf), ohne Schritte doppelt zu machen.
         if (live.progressed && sessionMap[key]) { options.resume = sessionMap[key]; prompt = CONTINUE_PROMPT; }
+        // Von vorn (ohne Fortsetzen): was das CLI dieses Versuchs schon gelesen hatte, geht mit (Review A, 3).
+        else for (const id of lastRead) { const m = injects.get(id); if (m) { m.state = 'zugestellt'; if (!live.carry?.includes(id)) live.carry = [...(live.carry ?? []), id]; } }
       }
     } finally {
       release();
       // Zug zu Ende: was noch für einen weiteren Versuch zurückgelegt war, ist ungelesen (der Client sendet es neu).
       for (const id of live.carry ?? []) { const m = injects.get(id); if (m && m.state === 'zugestellt') m.state = 'ungelesen'; }
       live.carry = [];
+      if (live.inbox?.open) closeInbox(live.inbox);
       mark(live, 'ende');
       if ((live.orch || live.leit) && orchMap[key]?.kind !== 'beendet') setTurn(key, { ...orchMap[key]?.turn, start: orchMap[key]?.turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? (live.abort.signal.aborted ? 'aborted' : 'ok') });
       log('turn end', { conv: key, usage: live.usage, ms: live.times, ...(live.subagentStarts ? { teilagenten: live.subagentStarts } : {}), ...(live.denials.length ? { denials: live.denials } : {}) });
@@ -1107,9 +1119,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     }
   })();
 
-  async function attempt(p: string) {
+  async function attempt(p: string): Promise<string[] | void> {
     // Je Versuch ein neuer Posteingang; ungelesene Nachrichten eines Versuchs mit Kontingent kommen mit (Bedingung 1).
-    const inbox = nachreichenOn() ? newInbox(live.carry ?? []) : null;
+    const inbox = !nachreichenOn() ? null : live.inbox?.open && !live.carry?.length ? live.inbox : newInbox(live.carry ?? []);
     live.carry = [];
     live.inbox = inbox;
     if (inbox) options.extraArgs = { ...(options.extraArgs ?? {}), 'replay-user-messages': null };
@@ -1144,6 +1156,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       if (inbox && inbox.open) live.carry = [...(live.carry ?? []), ...closeInbox(inbox, !(live.rateLimited && !live.abort.signal.aborted))];
       live.inbox = null;
     }
+    return inbox?.read ?? [];
   }
 
   return waitClosed(req.sink, live);
