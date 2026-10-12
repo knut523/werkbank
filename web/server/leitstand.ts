@@ -46,7 +46,7 @@ export const leitDir = () => process.env.WERKBANK_LEITSTAND_DIR || join(process.
 /** Ab wann ein nicht fortgesetztes technisches Zugende als „hängt“ gemeldet wird (Plan 154, G9). */
 export const hangMs = (env = process.env) => num(env.LEITSTAND_HANG_MS, 5 * 60_000);
 
-export interface LeitEvent { key: string; kind: 'fertig' | 'antwort' | 'blockiert' | 'deckel' | 'review' | 'frage' | 'weiter' | 'geprueft' | 'nacharbeit' | 'haengt'; at: number; text: string; excerpt?: string; strand?: { id: string; title: string } }
+export interface LeitEvent { key: string; kind: 'fertig' | 'antwort' | 'blockiert' | 'deckel' | 'review' | 'frage' | 'weiter' | 'geprueft' | 'nacharbeit' | 'haengt' | 'meldung'; at: number; text: string; excerpt?: string; strand?: { id: string; title: string } }
 
 /**
  * Ereignis eines Strangs aus seinem Zustand — oder null. Technische Zugenden (cause gesetzt) übernimmt das Auto-Fortsetzen
@@ -127,6 +127,38 @@ export function decideWake(open: { createdAt: number; urgent?: boolean }[], ctx:
     if (counted.filter((t) => ctx.now - t < 86_400_000).length >= ctx.c.perDay) return { action: 'cap', why: `Weckdeckel ${ctx.c.perDay}/Tag erreicht` };
   }
   return { action: 'send', why: 'zustellen' };
+}
+
+// ---------- Push: ein Unter-Chat meldet sich selbst (Plan 154, S4) ----------
+// Gedeckelt in der Werkbank (Council R2, Bedingung 1): je Unter-Chat eine Meldung je ORCH_MELDUNG_ABSTAND_MIN (10) Minuten,
+// höchstens ORCH_MELDUNG_PRO_TAG (6) in 24 h. Der Text stammt vom Agenten → nur als eingezäunter Auszug in die Meldung
+// (Bedingung 2). Sie geht sofort in die Warteschlange des Hauptchats, auch während der Unter-Chat noch arbeitet (Bedingung 3).
+
+export const meldungCfg = (env = process.env) => ({ abstand: num(env.ORCH_MELDUNG_ABSTAND_MIN, 10) * 60_000, proTag: num(env.ORCH_MELDUNG_PRO_TAG, 6) });
+
+export async function meldeHauptchat(u: User, conv: string, art: string, text: string, now = Date.now()) {
+  if (art !== 'blocker' && art !== 'risiko') throw err(400, 'art ist blocker oder risiko.');
+  const t = String(text ?? '').trim();
+  if (!t) throw err(400, 'Text fehlt — kurz, mit Empfehlung.');
+  if (t.length > 500) throw err(400, 'Höchstens 500 Zeichen — Details in den Bericht oder den Abschnitt „### Stand“.');
+  const d: any = conv ? await runs().findOne({ userId: u.id, conv, ...STRANDS }) : null;
+  if (!d) throw err(409, 'hauptchat_melden gibt es nur in Unter-Chats des Hauptchats.');
+  const c = meldungCfg();
+  const prev: number[] = (d.meldungen ?? []).map((m: any) => new Date(m.at).getTime());
+  const letzte = Math.max(0, ...prev);
+  if (now - letzte < c.abstand) throw err(429, `Schon vor ${Math.round((now - letzte) / 60_000)} min gemeldet — höchstens eine Meldung je ${Math.round(c.abstand / 60_000)} Minuten. Schreib es in „### Stand“ und arbeite weiter.`);
+  if (prev.filter((x) => now - x < 86_400_000).length >= c.proTag) throw err(429, `Tageskappe: schon ${c.proTag} Meldungen in 24 h. Schreib es in „### Stand“ und arbeite weiter.`);
+  const at = new Date(now);
+  const r = await runs().updateOne({ _id: d._id, 'meldungen.at': { $ne: at } }, { $push: { meldungen: { $each: [{ at, art, text: t }], $slice: -20 } } as any });
+  if (!r.modifiedCount) throw err(429, 'Gerade eben schon gemeldet.');
+  const leit = await activeLeitstand(u);
+  if (leit) {
+    const key = `meldung:${d._id}:${now}`;
+    await events().updateOne({ _id: `${u.id}:${key}` as any }, { $setOnInsert: {
+      userId: u.id, leit: leit._id, kind: 'meldung', text: art === 'blocker' ? 'meldet einen Blocker (braucht eine Entscheidung)' : 'meldet ein Risiko / eine Planänderung',
+      excerpt: t, strand: { id: String(d._id), title: String(d.title ?? '') }, at, createdAt: at, status: 'offen', retries: 0, urgent: false } }, { upsert: true });
+  }
+  return { ok: true, id: String(d._id), art, hauptchat: !!leit };
 }
 
 // ---------- Start ----------

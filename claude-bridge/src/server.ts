@@ -34,6 +34,7 @@ const MCP_DIR = process.env.WERKBANK_MCP_DIR || join(dirname(fileURLToPath(impor
  */
 function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome, convId = ''): Record<string, unknown> {
   const leit = orchKindOf(userId, convId) === 'leitstand';
+  const strang = orchKindOf(userId, convId) === 'strand';   // Plan 154, S4: hauptchat_melden nur in Unter-Chats
   const node = process.execPath;
   const servers: Record<string, unknown> = {
     'vault-search': {
@@ -66,7 +67,7 @@ function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome, co
       type: 'stdio', command: node, args: [join(MCP_DIR, 'werkbank-tools.ts')],
       // WERKBANK_CONV_ID: review_ready markiert nur den Lauf DIESER Unterhaltung (nie aus den Argumenten des Agenten).
       // WERKBANK_LEITSTAND: nur aus der Art in der Brücke (orch.json), nie aus einem Header (Plan 132, S3).
-      env: { WERKBANK_URL: WEB_URL, WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_USER_ID: userId, WERKBANK_CONV_ID: convId, PATH: process.env.PATH || '', ...(leit ? { WERKBANK_LEITSTAND: '1' } : {}) },
+      env: { WERKBANK_URL: WEB_URL, WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_USER_ID: userId, WERKBANK_CONV_ID: convId, PATH: process.env.PATH || '', ...(leit ? { WERKBANK_LEITSTAND: '1' } : {}), ...(strang ? { WERKBANK_STRANG: '1' } : {}) },
     };
   }
   return { ...(leit ? leitstandMcp() : {}), ...servers, ...atlassianServer() };

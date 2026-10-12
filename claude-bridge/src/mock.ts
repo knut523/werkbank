@@ -236,7 +236,7 @@ export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<
       // Für Tests: womit die Sitzung gestartet wurde (ohne Geheimnisse).
       const append = String(options.systemPrompt?.append ?? '');
       yield text('OPTIONEN ' + JSON.stringify({ maxTurns: options.maxTurns, disallowed: options.disallowedTools, mcp: Object.keys(options.mcpServers ?? {}).sort(),
-        leitstand: append.includes('Dieser Chat ist der HAUPTCHAT') || append.includes('Dieser Chat ist der LEITSTAND'), strang: append.includes('Orchestrator-Strang'), werkbankLeit: options.mcpServers?.werkbank?.env?.WERKBANK_LEITSTAND ?? null,
+        leitstand: append.includes('Dieser Chat ist der HAUPTCHAT') || append.includes('Dieser Chat ist der LEITSTAND'), strang: append.includes('Orchestrator-Strang'), werkbankLeit: options.mcpServers?.werkbank?.env?.WERKBANK_LEITSTAND ?? null, werkbankStrang: options.mcpServers?.werkbank?.env?.WERKBANK_STRANG ?? null,
         gitConfig: !!options.env?.GIT_CONFIG_GLOBAL }));
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
       return;

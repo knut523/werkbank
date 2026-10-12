@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { classify, orchestratorBlock, leitstandCheck, parseAnswer, VAULT_DIR } from '../src/tools.ts';
 import { wakeBatch, idleToReap } from '../src/sessions.ts';
 import { leitstandMcp } from '../src/claudehome.ts';
+import { AGENTS, READONLY_ROLES } from '../src/agents.ts';
 
 const PORT = 3294;
 const MAIL = 'leit@maxenergy.at', OTHER = 'team@maxenergy.at';
@@ -177,6 +178,10 @@ test('orch-Werkzeuge (DoD 15): nur im Leitstand; lesen frei, starten/senden/prü
   assert.equal(classify('mcp__werkbank__orch_start', { cwd: '/tmp/x' }, l).cls, 'confirm');
   assert.equal(classify('mcp__werkbank__orch_start', { cwd: 'wt-relativ' }, l).cls, 'auto', 'relativ zum Leitstand-Ordner (Review A)');
   assert.equal(classify('mcp__werkbank__orch_start', { cwd: '../../etc' }, l).cls, 'confirm');
+  // Plan 154 (Council R2, Bedingung 4): Meldung an den Hauptchat ändert nur Werkbank-Zustand; strang-leser schreibt nie.
+  assert.equal(classify('mcp__werkbank__hauptchat_melden', { art: 'blocker', text: 'x' }, ctx).cls, 'read');
+  assert.ok(READONLY_ROLES.has('strang-leser'));
+  assert.ok((AGENTS as any)['strang-leser'].disallowedTools.includes('Bash'));
 });
 
 test('Leitstand-Wächter S4 (DoD 16/38): Vault-git gesperrt, Live-Instanz/crontab/~/bin/Konfiguration Rückfrage, Ordnergrenzen', () => {
@@ -256,8 +261,11 @@ test('Leitstand ist kein Strang (DoD 3/4/5/20): Grenzen, Systemtext, Monitor ges
   assert.ok(!s.disallowed.includes('Monitor'));
   assert.ok(!s.mcp.includes('compartment') && !s.mcp.includes('posthog'));
   assert.equal(s.werkbankLeit, null);
+  assert.equal(s.werkbankStrang, '1', 'Plan 154: hauptchat_melden nur in Unter-Chats');
+  assert.equal(o.werkbankStrang, null);
   const n = await opts(C_NORMAL);
   assert.equal(n.leitstand, false); assert.equal(n.maxTurns, 40);
+  assert.equal(n.werkbankStrang, null);
   assert.ok(!n.mcp.includes('compartment'));
 });
 

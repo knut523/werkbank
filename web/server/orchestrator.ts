@@ -357,11 +357,27 @@ async function ownRun(u: User, id: string) {
   return d;
 }
 
-export async function showOrch(u: User, id: string) {
+export async function showOrch(u: User, id: string, verlauf = 0) {
   const d = await ownRun(u, id);
   const item = (await listOrch(u, { all: true })).find((r) => r.id === id);
   const last = d.conv ? await lastMessage(u, d.conv) : null;
-  return { ...item, conv: d.conv, prompt: d.prompt, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null };
+  // Pull (Plan 154, S4): die letzten n Nachrichten (1–10, je ≤ 4 000 Zeichen vom Ende, zusammen ≤ 20 000), älteste zuerst.
+  const n = Math.max(0, Math.min(10, Math.floor(verlauf)));
+  let hist: { fromUser: boolean; at: Date; text: string }[] | undefined;
+  if (n && d.conv) {
+    const ms: any[] = await lc().collection('messages').find({ conversationId: d.conv, user: u.id }).sort({ createdAt: -1 }).limit(n).toArray();
+    let budget = 20_000;
+    hist = [];
+    for (const m of ms) {
+      const t = messageText(m);
+      const cut = t.length > 4000 ? '…' + t.slice(-3999) : t;
+      if (budget - cut.length < 0) break;
+      budget -= cut.length;
+      hist.push({ fromUser: !!m.isCreatedByUser, at: new Date(m.createdAt ?? 0), text: cut });
+    }
+    hist.reverse();
+  }
+  return { ...item, conv: d.conv, prompt: d.prompt, bericht: d.bericht ?? null, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null, ...(hist ? { verlauf: hist } : {}) };
 }
 
 export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 'leitstand' = 'hand') {

@@ -21,7 +21,7 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
-import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft } from './leitstand.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat } from './leitstand.ts';
 import { readBericht, paketDatei } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
@@ -1215,6 +1215,15 @@ on('POST', /^\/api\/runs\/([0-9a-f-]{36})\/reply$/, async (req, res, m) => {
 });
 
 // review_ready (Werkbank-MCP): Fertig-Marke am neuesten Chat-Lauf der Person in DIESER Unterhaltung (Bedingung 5).
+// Push (Plan 154, S4): ein Unter-Chat meldet dem Hauptchat einen Blocker oder ein Risiko (Werkzeug hauptchat_melden).
+on('POST', /^\/internal\/hauptchat-meldung$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const r = await meldeHauptchat(u, String(b.conv ?? ''), String(b.art ?? ''), String(b.text ?? ''));
+  log('hauptchat-meldung', { user: u.id, id: r.id, art: r.art, hauptchat: r.hauptchat });
+  send(res, 200, r);
+});
+
 on('POST', /^\/internal\/review-ready$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
@@ -2361,7 +2370,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
       return send(res, 200, { items: r });
     }
     case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
-    case 'show': return send(res, 200, await showOrch(u, id));
+    case 'show': return send(res, 200, await showOrch(u, id, Number(b.verlauf) || 0));
     case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand'));
     case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? '', b.via === 'leitstand' ? 'leitstand' : 'knut'));
     case 'thema': return send(res, 200, await setThema(u, id, b.thema));   // Plan 154, S2: Themen-Gruppe von Hand

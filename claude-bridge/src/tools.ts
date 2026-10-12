@@ -222,7 +222,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // Eigene Werkbank-Werkzeuge: vault-search nur lesend; "später" ändert nur Werkbank-Zustand.
     if (server === 'vault-search') return { cls: 'read' };
     // review_ready ändert nur Werkbank-Zustand (Fertig-Marke am eigenen Lauf) → ohne Rückfrage.
-    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready')) return { cls: 'read' };
+    // hauptchat_melden (Plan 154, S4): Meldung an den Hauptchat — ändert nur Werkbank-Zustand, gedeckelt in der Werkbank.
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden')) return { cls: 'read' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
     if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
     // Orchestrator-Werkzeuge (Plan 132, S3): nur im Leitstand. Lesen und Rückfragen an Knut frei; Stränge starten, Nachrichten
@@ -426,6 +427,7 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
       if (name === 'jira_update_many') return `🎫 Jira nachgezogen: ${Array.isArray(input.changes) ? input.changes.length : 0} Tickets`;
       if (name === 'agent_start') return `🤖 Agent-Chat gestartet: ${input.key}`;
       if (name === 'review_ready') return '📬 Bereit zum Review gemeldet';
+      if (name === 'hauptchat_melden') return `🛰️ An den Hauptchat gemeldet: ${short(input.text ?? '', 70)}`;
       return name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
     }
     const icon = server === 'atlassian' ? '🎫 Jira' : server === 'compartment' ? '🧠 Gedächtnis' : `🔌 ${server}`;
