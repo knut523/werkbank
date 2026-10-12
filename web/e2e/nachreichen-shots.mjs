@@ -46,6 +46,9 @@ await R.insertMany([
   strand('Hardware: Liste links einklappbar wie Kundenakte + PR fertig', '/w/olaf-admin-hardware', '152-hardware-liste', 'done', 25, { doneAt: new Date(), reviewReadyAt: new Date() }),
   strand('Doppelversand Folge-PRs: Admin-Retry-Panel + Rest auf #99', '/w/olaf-durable-func-agent', '153-doppelversand-folge-prs', 'done', 20, { doneAt: new Date(), reviewReadyAt: new Date() }),
   strand('Workspace: schreiben während Arbeit, Themen-Gruppen, Hauptchat überwacht Unter-Chats', '/w/werkbank-idle-timeout', '154-workspace-hauptchat-monitor', 'running', 10),
+  // Zusatz Knut (Z9): ein heute von Knut geprüfter und ein zweiter wartender Cockpit-Strang.
+  strand('Cockpit: Kohorte laufender Monat', '/w/olaf-admin-kohorte', '139-kohorte', 'done', 300, { doneAt: new Date(), knutReviewedAt: new Date(), reviewedAt: new Date(), reviewedBy: 'knut' }),
+  strand('Cockpit: Filter-Text kürzen', '/w/olaf-admin-ck-filter', '150-cockpit-feedback-12-10', 'waiting', 15),
 ]);
 if (!(await R.findOne({ userId: uid, kind: 'leitstand', endedAt: null }))) {
   const conv = randomUUID();
@@ -96,7 +99,19 @@ try {
   check('DoD 4: Zustand übersteht Neuladen', (await section(p).locator('[data-testid=hauptchat-thema]').filter({ hasText: 'Rechner' }).first().getAttribute('aria-expanded')) !== vor);
   await shot(p, '1440-2-themen-umgeschaltet');
   await section(p).locator('[data-testid=hauptchat-thema]').filter({ hasText: 'Admin' }).first().click(); await p.waitForTimeout(300);
-  await shot(p, '1440-3-admin-zu');
+  await shot(p, '1440-3-admin-auf');
+  // Zusatz Knut (Z9): offen zuerst, „Fertig (n)“ eingeklappt darunter; „wartet auf dich“ hervorgehoben.
+  const ckGroup = section(p).locator('[data-testid=hauptchat-thema-gruppe]').filter({ has: p.locator('[data-testid=hauptchat-thema]', { hasText: 'Cockpit' }) }).first();
+  check('Z9: „wartet auf dich“ im Kopf des Themas', /2 wartet auf dich/.test(await ckGroup.locator('[data-testid=hauptchat-thema-wartet]').innerText().catch(() => '')));
+  check('Z9: wartende Zeilen hervorgehoben', (await ckGroup.locator('li[data-status=wartet] [data-testid=unterchat]').first().getAttribute('class') ?? '').includes('bg-amber'));
+  const fertigBtn = ckGroup.locator('[data-testid=hauptchat-fertig]');
+  check('Z9: „Fertig (n)“ eingeklappt unter den offenen', (await fertigBtn.getAttribute('aria-expanded')) === 'false' && /Fertig \(1\)/.test(await fertigBtn.innerText()) && (await ckGroup.locator('li[data-status=erledigt]').count()) === 0);
+  const adminGroup = section(p).locator('[data-testid=hauptchat-thema-gruppe]').filter({ has: p.locator('[data-testid=hauptchat-thema]', { hasText: 'Admin' }) }).first();
+  const adminFertig = adminGroup.locator('[data-testid=hauptchat-fertig]');
+  check('Z9: Admin — 1 offen, „Fertig (2) · 2 zu prüfen“', (await adminGroup.locator('li[data-status=läuft]').count()) === 1 && /Fertig \(2\) · 2 zu prüfen/.test(await adminFertig.innerText()));
+  await adminFertig.click(); await fertigBtn.click(); await p.waitForTimeout(300);
+  check('Z9: „Fertig“ aufklappbar', (await ckGroup.locator('li[data-status=erledigt]').count()) === 1 && (await adminGroup.locator('li[data-status=fertig]').count()) === 2);
+  await shot(p, '1440-4-offen-fertig');
   await ctx.close();
 
   // ---------- Handy ----------

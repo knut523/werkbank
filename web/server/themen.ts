@@ -47,11 +47,12 @@ export function cleanThema(v: unknown): string | null {
   return t;
 }
 
-type Word = 'läuft' | 'wartet' | 'fertig' | 'gestoppt';
-const RANK: Record<Word, number> = { wartet: 0, gestoppt: 0, läuft: 1, fertig: 2 };
+// erledigt = von Knut geprüft (die Seitenleiste zeigt sie eingeklappt unter „Fertig“, Zusatz Knut 12.10., Z9).
+type Word = 'läuft' | 'wartet' | 'fertig' | 'gestoppt' | 'erledigt';
+const RANK: Record<Word, number> = { wartet: 0, gestoppt: 0, läuft: 1, fertig: 2, erledigt: 3 };
 
 /**
- * Offene Unter-Chats je Thema (rein, testbar). items: Strang + Statuswort (null = von Knut geprüft → nicht mehr offen).
+ * Unter-Chats je Thema (rein, testbar). items: Strang + Statuswort (null = fällt heraus, z. B. vor mehr als 7 Tagen geprüft).
  * Reihenfolge: Themen mit „wartet“/„gestoppt“ zuerst, dann „läuft“, dann „fertig“, sonst alphabetisch; „Sonstiges“ zuletzt.
  */
 export function groupThemen<T extends { d: any; word: Word | null }>(items: T[]) {
@@ -65,7 +66,7 @@ export function groupThemen<T extends { d: any; word: Word | null }>(items: T[])
     const count = (w: Word) => xs.filter((x) => x.word === w).length;
     return {
       thema,
-      counts: { läuft: count('läuft'), wartet: count('wartet'), fertig: count('fertig'), gestoppt: count('gestoppt') },
+      counts: { läuft: count('läuft'), wartet: count('wartet'), fertig: count('fertig'), gestoppt: count('gestoppt'), erledigt: count('erledigt') },
       rank: Math.min(...xs.map((x) => RANK[x.word as Word])),
       items: xs.sort((a, b) => RANK[a.word as Word] - RANK[b.word as Word] || +new Date(b.d.startedAt) - +new Date(a.d.startedAt)),
     };

@@ -70,7 +70,7 @@ const DOT: Record<string, string> = { läuft: 'bg-blue-500', wartet: 'bg-amber-5
 const HEAD_DOT: Record<string, string> = { läuft: 'bg-blue-500', 'wartet auf dich': 'bg-amber-500', bereit: 'bg-green-600' };
 const chatPath = (url: string) => { const m = /\/c\/([^/?#]+)/.exec(url ?? ''); return m ? `/c/${m[1]}` : null; };
 const KEY = 'olaf-hauptchat-auf';
-type Auf = { alle?: boolean; lauf?: Record<string, boolean>; thema?: Record<string, boolean> };
+type Auf = { alle?: boolean; lauf?: Record<string, boolean>; thema?: Record<string, boolean>; fertig?: Record<string, boolean> };
 const readAuf = (): Auf => { try { return JSON.parse(localStorage.getItem(KEY) || '{}') as Auf; } catch { return {}; } };
 const writeAuf = (a: Auf) => { try { localStorage.setItem(KEY, JSON.stringify(a)); } catch { /* privat */ } };
 const shortTitle = (s: Strand) => {
@@ -132,12 +132,12 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
   const groups = data?.offen ?? [];
   // Plan 154: Themen-Gruppen, wenn der Server sie liefert (ältere Server: Läufe wie bisher).
   const themen = data?.themen ?? null;
-  const n = themen ? themen.reduce((a, g) => a + g.strands.length, 0) : groups.reduce((a, g) => a + g.strands.length, 0);
+  const n = themen ? themen.reduce((a, g) => a + g.strands.filter((x) => x.status !== 'erledigt').length, 0) : groups.reduce((a, g) => a + g.strands.length, 0);
   const alleAuf = auf.alle !== false;
   const hPath = h ? chatPath(h.url) ?? `/c/${h.conv}` : null;
   const laufAuf = (g: Group) => auf.lauf?.[g.lauf] ?? !!(g.counts.wartet || g.counts.gestoppt);
   // Vorgabe: offen, wenn dort etwas auf Knut wartet oder gestoppt ist — oder wenn es nur ein Thema gibt.
-  const themaAuf = (g: Thema) => auf.thema?.[g.thema] ?? !!(g.counts.wartet || g.counts.gestoppt || (themen?.length ?? 0) === 1);
+  const themaAuf = (g: Thema) => auf.thema?.[g.thema] ?? !!(g.counts.wartet || g.counts.gestoppt || ((themen?.length ?? 0) === 1 && (g.counts.läuft || g.counts.fertig)));
 
   // Je Unter-Chat drei Links (Knut 12.10.): die Zeile selbst = Chat, rechts Auftrag und Bericht (review-pakete/NNN-*/…),
   // gelesen auf der Workspace-Seite „Hauptchat & Unter-Chats“. Fehlt eine Datei, bleibt das Symbol blass und ohne Link.
@@ -164,8 +164,9 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
     const p = chatPath(s.url);
     if (!p) return null;
     return (
-      <li key={s.id} className="relative">
-        <ChatLink path={p} active={pathname === p} onOpen={open} testid="unterchat" label={`Chat: ${s.title} — ${WORD[s.status] ?? s.status}`} className={cn(indent, 'h-auto min-h-[48px] py-1 pr-[72px] md:h-auto md:min-h-[44px]')}>
+      <li key={s.id} className="relative" data-status={s.status}>
+        <ChatLink path={p} active={pathname === p} onOpen={open} testid="unterchat" label={`Chat: ${s.title} — ${WORD[s.status] ?? s.status}`}
+          className={cn(indent, 'h-auto min-h-[48px] py-1 pr-[72px] md:h-auto md:min-h-[44px]', s.status === 'wartet' && pathname !== p && 'bg-amber-500/10 font-medium hover:bg-amber-500/20')}>
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="truncate">{label}</span>
             <StatusWort status={s.status} />
@@ -241,8 +242,13 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
             {themen && themen.map((g, gi) => {
               const o = themaAuf(g);
               const gid = `${listId}-thema-${gi}`.replace(/[^A-Za-z0-9_-]/g, '_');
+              // Zusatz Knut (Z9): zuerst offen (läuft / wartet auf dich / gestoppt), darunter eingeklappt „Fertig (n)“.
+              const offen = g.strands.filter((x) => x.status === 'läuft' || x.status === 'wartet' || x.status === 'gestoppt');
+              const fertig = g.strands.filter((x) => x.status === 'fertig' || x.status === 'erledigt');
               const parts = (['wartet', 'gestoppt', 'läuft', 'fertig'] as const).filter((w) => g.counts[w]).map((w) => `${g.counts[w]} ${WORD[w]}`);
               const first = (['wartet', 'gestoppt', 'läuft', 'fertig'] as const).find((w) => g.counts[w]);
+              const fAuf = auf.fertig?.[g.thema] ?? false;
+              const fid = `${gid}-fertig`;
               return (
                 <li key={g.thema} data-testid="hauptchat-thema-gruppe">
                   <button
@@ -256,11 +262,35 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
                   >
                     <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform duration-200', o ? '' : '-rotate-90')} aria-hidden="true" />
                     <span className="min-w-0 flex-1 truncate text-left font-medium">{g.thema}</span>
-                    {first && <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[first])} aria-hidden="true" />}
-                    {/* zu: was dort los ist („2 zu prüfen · 1 läuft“); auf: nur die Zahl, die Zeilen zeigen den Stand */}
-                    <span className="min-w-0 shrink truncate text-xs text-text-secondary">{!o && parts.length ? parts.join(' · ') : g.strands.length}</span>
+                    {g.counts.wartet ? (
+                      <span data-testid="hauptchat-thema-wartet" className="shrink-0 rounded-full bg-amber-500/15 px-1.5 text-xs font-medium text-amber-700 dark:text-amber-300">{g.counts.wartet} wartet auf dich</span>
+                    ) : first ? <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[first])} aria-hidden="true" /> : null}
+                    {/* zu: was sonst los ist; auf: nur die Zahl der offenen, die Zeilen zeigen den Stand */}
+                    <span className="min-w-0 shrink truncate text-xs text-text-secondary">
+                      {!o ? parts.filter((x) => !x.endsWith(WORD.wartet)).join(' · ') || (g.counts.erledigt ? `${g.counts.erledigt} erledigt` : '') : offen.length || ''}
+                    </span>
                   </button>
-                  {o && <ul id={gid} className="flex flex-col">{g.strands.map((s) => strandRow(s, 'pl-8', themaTitle(s, g.thema)))}</ul>}
+                  {o && (
+                    <ul id={gid} className="flex flex-col">
+                      {offen.map((x) => strandRow(x, 'pl-8', themaTitle(x, g.thema)))}
+                      {fertig.length > 0 && (
+                        <li>
+                          <button
+                            type="button"
+                            data-testid="hauptchat-fertig"
+                            aria-expanded={fAuf}
+                            aria-controls={fAuf ? fid : undefined}
+                            onClick={() => save({ ...auf, fertig: { ...(auf.fertig ?? {}), [g.thema]: !fAuf } })}
+                            className={cn(ROW, 'h-8 pl-8 text-xs text-text-secondary hover:bg-surface-active-alt md:h-8')}
+                          >
+                            <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform duration-200', fAuf ? '' : '-rotate-90')} aria-hidden="true" />
+                            <span className="min-w-0 flex-1 truncate text-left">Fertig ({fertig.length}){g.counts.fertig ? ` · ${g.counts.fertig} zu prüfen` : ''}</span>
+                          </button>
+                          {fAuf && <ul id={fid} className="flex flex-col">{fertig.map((x) => strandRow(x, 'pl-12', themaTitle(x, g.thema)))}</ul>}
+                        </li>
+                      )}
+                    </ul>
+                  )}
                 </li>
               );
             })}

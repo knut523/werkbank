@@ -45,6 +45,19 @@ test('Gruppen: nur offene, „wartet/gestoppt“ zuerst, „Sonstiges“ zuletzt
   ]);
   assert.deepEqual(g.map((x) => x.thema), ['Cockpit', 'Bot', 'Flex', 'Sonstiges']);
   assert.deepEqual(g[0].items.map((x) => x.d.title), ['Cockpit: c', 'Cockpit: d']);
-  assert.deepEqual(g[0].counts, { läuft: 1, wartet: 1, fertig: 0, gestoppt: 0 });
-  assert.equal(g.find((x) => x.thema === 'Flex')!.items.length, 1, 'von Knut geprüft fällt raus');
+  assert.deepEqual(g[0].counts, { läuft: 1, wartet: 1, fertig: 0, gestoppt: 0, erledigt: 0 });
+  assert.equal(g.find((x) => x.thema === 'Flex')!.items.length, 1, 'ohne Statuswort (älter als 7 Tage geprüft) fällt raus');
+});
+
+test('Zusatz Knut (Z9): „erledigt“ zählt mit, steht im Thema hinter allem Offenen; Thema nur mit Erledigtem hinten', () => {
+  const d = (title: string, startedAt: number) => ({ title, startedAt: new Date(startedAt) });
+  const g = groupThemen([
+    { d: d('Flex: alt geprüft', 1), word: 'erledigt' as const },
+    { d: d('Flex: läuft', 2), word: 'läuft' as const },
+    { d: d('Bot: nur geprüft', 3), word: 'erledigt' as const },
+    { d: d('Cockpit: zu prüfen', 4), word: 'fertig' as const },
+  ]);
+  assert.deepEqual(g.map((x) => x.thema), ['Flex', 'Cockpit', 'Bot']);
+  assert.deepEqual(g[0].items.map((x) => x.word), ['läuft', 'erledigt']);
+  assert.equal(g[0].counts.erledigt, 1);
 });

@@ -495,8 +495,10 @@ export async function overview(u: User) {
   const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, startError: null, startedAt: { $gt: new Date(Date.now() - 60 * 86400_000) } }).limit(500).toArray();
   const g = groupStrands(docs);
   const shape = (x: ReturnType<typeof groupStrands>['offen'][number]) => ({ key: x.key, lauf: x.lauf, from: x.from, to: x.to, line: groupLine(x), counts: x.counts, strands: x.strands.map((s) => publicStrand(s.d, s.word)) });
-  // Themen-Gruppen für die Chat-Seitenleiste (Plan 154, S2) — nur offene Unter-Chats; die Seite „Leitstand“ bleibt bei Läufen.
-  const themen = groupThemen(docs.map((d) => ({ d, word: knutDone(d) ? null : statusWord(d) })))
+  // Themen-Gruppen für die Chat-Seitenleiste (Plan 154, S2) — offene und (eingeklappt) fertige Unter-Chats; die Seite „Leitstand“ bleibt bei Läufen.
+  // Zusatz Knut (Z9): von Knut Geprüftes der letzten 7 Tage bleibt als „erledigt“ unter „Fertig“ sichtbar.
+  const recent = (d: any) => Date.now() - +new Date(d.knutReviewedAt ?? d.reviewedAt ?? 0) < 7 * 86400_000;
+  const themen = groupThemen(docs.map((d) => ({ d, word: knutDone(d) ? (recent(d) ? 'erledigt' as const : null) : statusWord(d) })))
     .map((t) => ({ thema: t.thema, counts: t.counts, strands: t.items.map((x) => publicStrand(x.d, x.word)) }));
   return { leitstand: await leitstandLine(u), offen: g.offen.map(shape), erledigt: g.erledigt.map(shape), themen };
 }
