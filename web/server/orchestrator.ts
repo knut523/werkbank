@@ -174,6 +174,22 @@ async function lcFetch(u: User, path: string, init: { method?: string; body?: un
 export const LEIT_TAG = 'Leitstand';
 const TAG_TEXT: Record<string, string> = { [ORCH_TAG]: 'Stränge, die die Haupt-Sitzung über die Werkbank gestartet hat', [LEIT_TAG]: 'Knuts Orchestrator-Chat (Leitstand)' };
 
+/**
+ * Lesezeichen in LibreChats `conversationtags` atomar anlegen (Release 4, Offen 4). Nicht über POST /api/tags: LibreChat
+ * prüft dort erst mit findOne und schreibt dann per Upsert `count: 0` — legen zwei Stränge desselben Laufs gleichzeitig
+ * an, setzt die spätere Anlage die Zählung der früheren zurück. `$setOnInsert` fasst ein vorhandenes Lesezeichen nie an;
+ * die Zählung erhöht danach LibreChat selbst (PUT /api/tags/convo, `$inc`). Den eindeutigen Index (tag, user, tenantId)
+ * legt LibreChat an; verliert unser Upsert den Wettlauf, ist das 11000 — dann gibt es das Lesezeichen schon.
+ */
+async function ensureTag(u: User, tag: string) {
+  const T = lc().collection('conversationtags');
+  const last: any = await T.find({ user: u.id }, { projection: { position: 1 } }).sort({ position: -1 }).limit(1).next();
+  const now = new Date();
+  try {
+    await T.updateOne({ user: u.id, tag }, { $setOnInsert: { description: TAG_TEXT[tag] ?? tag, count: 0, position: (last?.position || 0) + 1, createdAt: now, updatedAt: now } }, { upsert: true });
+  } catch (e: any) { if (e?.code !== 11000) throw e; }
+}
+
 /** Titel „Orchestrator · …“ (bzw. „Leitstand · …“) und Lesezeichen setzen, sobald LibreChat die Unterhaltung gespeichert hat. Idempotent. */
 export async function decorate(u: User, conv: string, title: string, tag = ORCH_TAG): Promise<{ ok: boolean; why?: string }> {
   const c: any = await lc().collection('conversations').findOne({ conversationId: conv, user: u.id }, { projection: { title: 1, tags: 1 } });
@@ -185,10 +201,7 @@ export async function decorate(u: User, conv: string, title: string, tag = ORCH_
   }
   const tags: string[] = Array.isArray(c.tags) ? c.tags : [];
   if (!tags.includes(tag)) {
-    const existing = await lcFetch(u, '/api/tags');
-    if (Array.isArray(existing.j) && !existing.j.some((t: any) => t?.tag === tag)) {
-      await lcFetch(u, '/api/tags', { method: 'POST', body: { tag, description: TAG_TEXT[tag] ?? tag } });
-    }
+    await ensureTag(u, tag);
     const r = await lcFetch(u, `/api/tags/convo/${encodeURIComponent(conv)}`, { method: 'PUT', body: { tags: [...tags, tag] } });
     if (r.status >= 300) return { ok: false, why: `Lesezeichen: LibreChat ${r.status}` };
   }
