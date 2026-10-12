@@ -1,4 +1,4 @@
-# Plan: Stabile Kennungen für Knut-Zeilen (`- Knut (<spec-slug>#E<n>):`)
+# Plan: Stabile Kennungen für Knut-Zeilen (`- Knut (<spec-slug>#K<n>):`)
 
 Auftrag Knut, 12.10.2026 (ID-Migration „passt so wie du meinst“). Prozess v4, Abschnitt „Inbox — ein Antwortort“
 (`~/work/knut/review-pakete/128-prozess-github/prozess-v4.md`): Antworten aus der Werkbank sollen später sicher in
@@ -31,16 +31,21 @@ als Entscheidung und dürfen es auch nachher nicht.
 - **P1 Beantwortete Zeilen** behalten ihr Format (keine Kennung). Die Kennung braucht nur, wer eine Antwort
   zurückschreiben will; beantwortete Zeilen sind erledigt, und menschlich geschriebene Zeilen umzuschreiben ist
   vermeidbares Risiko. Wird eine Zeile über die Werkbank beantwortet, bleibt ihre Kennung stehen.
-- **P2 Kennung** = Datei-Basename (vault-weit eindeutig, `vault_check.py`) + `#E<n>`. Strikte Form
+- **P2 Kennung** = Datei-Basename (vault-weit eindeutig, `vault_check.py`) + `#K<n>` (Präfix K: Knut, 12.10.2026 — siehe P5). Strikte Form
   `[a-z0-9][a-z0-9-]*#[A-Z]\d+` — nur so wird `- Knut (…):` als Entscheidung erkannt; `(29.09.)`/`(E9)` bleiben,
   was sie sind. Dateien, deren Name nicht in diese Form passt, überspringt das Skript mit Warnung (heute keine).
-  Die Parser akzeptieren jeden Großbuchstaben als Präfix (offene Frage K1 im Bericht).
-- **P3 Nummerierung** je Datei E1…En in Dateireihenfolge beim ersten Lauf; danach max+1, wobei „max“ der höchste je
+  Die Parser lesen jeden Großbuchstaben als Präfix; das Skript vergibt nur K und warnt bei anderem Präfix in
+  der Datei (dann bricht `--apply` ab).
+- **P3 Nummerierung** je Datei K1…Kn in Dateireihenfolge beim ersten Lauf; danach max+1, wobei „max“ der höchste je
   vergebene Wert ist (Höchststand je Datei in `~/.cache/vault-sync/knut-ids-stand.json`) — eine gelöschte oder
   umgehängte Kennung wird nie neu vergeben. Nie umnummerieren; idempotent. Code-Blöcke werden übersprungen.
 - **P4 Register** (`offene-fragen-*`) bekommt **keine** Kennungen (Prozess v4 Z. 55: nur Anzeige). Seine 175
-  Antwortzeilen in die Spec umzuhängen oder in Verweise umzuschreiben ist ein eigener Schritt mit Knuts Ja
-  (Bericht, „Braucht Knut“) — das ist keine mechanische Umformung. Das Skript zeigt nur die Zahl.
+  Antwortzeilen in die Spec umzuhängen oder in Verweise umzuschreiben ist ein eigener Schritt — das ist keine
+  mechanische Umformung. Das Skript zeigt nur die Zahl. **Knut, 12.10.2026 (q-0052d5 → a):** nach dem `--apply`
+  schlägt ein Agent je Register-Eintrag „in Spec umhängen“ oder „Verweis → `<slug>#K<n>`“ vor; Knut gibt den
+  Stapel frei, erst dann wird geschrieben.
+- **P5 Präfix K** statt E — **Knut, 12.10.2026 (q-a7ddeb → b).** 14 Specs mit offenen Zeilen nummerieren ihre
+  Entscheidungen schon selbst mit „E1…“; `…#E3` hätte dort nicht „E3“ im Text bedeutet.
 
 ## Schnitt
 
@@ -69,13 +74,15 @@ Deshalb keine Screenshots und keine UX-Rolle im Council.
 
 ## Definition of Done (Prüfsätze)
 
+(Die Parser-Prüfsätze 1–3 nutzen bewusst `#E…`: der Parser liest jedes Präfix; das Skript vergibt K.)
+
 1. `parseDecisions` liefert für `- Knut (x-spec#E3):` eine offene Entscheidung mit `knutId = 'x-spec#E3'`, für
    `- Knut (x-spec#E3): ja` eine beantwortete mit `answer = 'ja'`. (`roadmap.test.ts`)
 2. `- Knut (29.09.): …` und `- Knut (E9):` werden nicht als Entscheidung erkannt (wie heute). (`roadmap.test.ts`)
 3. `fillDecision` auf eine Zeile mit Kennung ergibt `- Knut (x-spec#E3): <Antwort>` (Kennung und Callout-Präfix bleiben). (`roadmap.test.ts`)
 4. „Heute“ (`todayQuestions`) liefert mit Kennungen dieselbe bereinigte Liste wie ohne; die Register-ID bleibt in `id`. (`fragen.test.ts`)
 5. `--dry-run` (und ohne Schalter) schreibt nichts (Inhalt und mtime unverändert, kein Höchststand) und gibt je Datei Anzahl und Diff aus. (`knut-ids.test.ts`)
-6. `--apply` ändert nur leere `- Knut:`-Zeilen in Spec-Dateien der Zustände 1–4, nummeriert E1…En in Dateireihenfolge,
+6. `--apply` ändert nur leere `- Knut:`-Zeilen in Spec-Dateien der Zustände 1–4, nummeriert K1…Kn in Dateireihenfolge,
    legt vorher eine Sicherungskopie an, und ein zweiter Lauf ändert nichts. (`knut-ids.test.ts`)
 7. Neue leere Zeile → max+1; nach Löschen der höchsten Kennung wird diese nicht neu vergeben. (`knut-ids.test.ts`)
 8. Register, 5-Live, Themen-Übersichten, Priorisierung, Sprint-Notizen und Code-Blöcke bleiben unberührt. (`knut-ids.test.ts`)

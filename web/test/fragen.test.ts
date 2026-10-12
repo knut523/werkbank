@@ -160,14 +160,14 @@ test('Register-Kopfzeile statt Empfehlungszeile als Anzeigetext', () => {
   assert.match(at(r.open, reg, 'A1 ·').head, /^\*\*A1 · Prod-DB/);
 });
 
-test('Kennungen (docs/plan-knut-ids.md): mit `- Knut (<slug>#E<n>):` dieselbe bereinigte Liste wie ohne', () => {
-  // jede leere Knut-Zeile bekommt <Basename>#E1…En — hier auch im Register (das Skript lässt es aus), um den Parser
+test('Kennungen (docs/plan-knut-ids.md): mit `- Knut (<slug>#K<n>):` dieselbe bereinigte Liste wie ohne', () => {
+  // jede leere Knut-Zeile bekommt <Basename>#K1…Kn — hier auch im Register (das Skript lässt es aus), um den Parser
   // überall zu prüfen
-  const ids = (p: string, t: string) => { let n = 0; const slug = p.split('/').at(-1)!.replace(/\.md$/, ''); return t.replace(/^((?:> ?)*\s*[-*]) Knut:[ \t]*$/gm, (_m, a) => `${a} Knut (${slug}#E${++n}):`); };
+  const ids = (p: string, t: string) => { let n = 0; const slug = p.split('/').at(-1)!.replace(/\.md$/, ''); return t.replace(/^((?:> ?)*\s*[-*]) Knut:[ \t]*$/gm, (_m, a) => `${a} Knut (${slug}#K${++n}):`); };
   const w = vault(ids);
-  assert.ok(w.decisions.every((d) => d.knutId && d.knutId.startsWith(d.spec + '#E')), 'jede Zeile trägt ihre Kennung');
+  assert.ok(w.decisions.every((d) => d.knutId && d.knutId.startsWith(d.spec + '#K')), 'jede Zeile trägt ihre Kennung');
   const key = (x: any) => [x.spec, x.line, x.head, x.question, x.reason ?? '', x.id ?? '', x.partly, x.register.map((y: any) => y.id).join()].join('|');
   for (const k of ['open', 'cleanup', 'duplicates'] as const) assert.deepEqual(w.r[k].map(key), r[k].map(key), k);
-  assert.equal(at(w.r.open, 'spec-plan', 'Dankeschön').knutId, 'spec-plan#E1');
+  assert.equal(at(w.r.open, 'spec-plan', 'Dankeschön').knutId, 'spec-plan#K1');
   assert.equal(at(w.r.open, reg, 'F2 ').id, 'F2', 'Register-ID bleibt in `id`, die Kennung steht in `knutId`');
 });

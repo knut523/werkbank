@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Stabile Kennungen für leere Knut-Zeilen in den Roadmap-Specs (docs/plan-knut-ids.md, Knut 12.10.2026).
 
-    - Knut:                          →   - Knut (<datei-basename>#E<n>):
+    - Knut:                          →   - Knut (<datei-basename>#K<n>):
 
 Nur leere Zeilen, die exakt `- Knut:` sind (Einrückung und Callout-Präfix `> ` bleiben); beantwortete Zeilen,
-`- Knut (29.09.): …` und alles in Code-Blöcken bleibt unberührt. Je Datei E1…En in Dateireihenfolge; danach geht es
+`- Knut (29.09.): …` und alles in Code-Blöcken bleibt unberührt. Je Datei K1…Kn in Dateireihenfolge; danach geht es
 bei max+1 weiter — auch über gelöschte Zeilen hinweg (Höchststand je Datei in --stand), damit eine Kennung nie zweimal
 vergeben wird. Ein zweiter Lauf ändert nichts.
 
@@ -26,7 +26,7 @@ from pathlib import Path
 
 BASE = 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap'
 STATES = ('1-Backlog', '2-Pre-Plan', '3-Plan', '4-Review')
-PREFIX = 'E'
+PREFIX = 'K'   # Knut 12.10.2026: K statt E — viele Specs nummerieren ihre Entscheidungen selbst mit E1…
 EMPTY = re.compile(r'^((?:> ?)*)(\s*)([-*])\s+Knut:[ \t]*$')
 # dieselbe strikte Form wie KNUT in web/server/roadmap.ts
 SLUG = re.compile(r'^[a-z0-9][a-z0-9-]*$')
@@ -76,7 +76,9 @@ def migrate(text: str, slug: str, floor: int = 0):
             continue
         if m[1] != slug:
             warn.append(f'Z. {i + 1}: Kennung {m[1]}#{m[2]}{m[3]} gehört nicht zu dieser Datei ({slug})')
-        elif m[2] == PREFIX:
+        elif m[2] != PREFIX:
+            warn.append(f'Z. {i + 1}: Kennung {slug}#{m[2]}{m[3]} mit anderem Präfix als {PREFIX}')
+        else:
             n = int(m[3])
             if n in used:
                 warn.append(f'Z. {i + 1}: Kennung {slug}#{PREFIX}{n} doppelt (auch Z. {used[n]})')
@@ -152,7 +154,7 @@ def main(argv=None):
               for f in sorted((root / BASE / '0-Overview').glob('offene-fragen-*.md')))
     print(f'\n{total} Kennung(en) in {len(plan)} Datei(en), {warns} Warnung(en) — {"wird geschrieben" if a.apply else "Probelauf, nichts geschrieben"}')
     if reg:
-        print(f'Register offene-fragen-*: {reg} leere Knut-Zeile(n), nicht migriert (Prozess v4: nur Anzeige — in die Spec umhängen oder Verweis, Knut entscheidet)')
+        print(f'Register offene-fragen-*: {reg} leere Knut-Zeile(n), nicht migriert (Prozess v4: nur Anzeige — nach --apply Vorschlagsstapel „in Spec umhängen“/„Verweis“, Knut gibt frei)')
     if not a.apply:
         return 0
 

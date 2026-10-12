@@ -1,5 +1,5 @@
 // Migrationsskript scripts/knut-ids-migration.py (docs/plan-knut-ids.md): Probelauf schreibt nichts, --apply nur im
-// Zielbereich und erst nach der Vorprüfung, E1…En je Datei, idempotent, max+1 auch über gelöschte Zeilen hinweg,
+// Zielbereich und erst nach der Vorprüfung, K1…Kn je Datei, idempotent, max+1 auch über gelöschte Zeilen hinweg,
 // Gleichlauf mit parseDecisions.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -73,7 +73,7 @@ test('Probelauf: Anzahl und Diff je Datei, Register nur als Zahl, schreibt nicht
   const r = run(root, '--dry-run');
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /^\s+3 {2}olaf\/.*admin-spec-a\.md$/m);
-  assert.match(r.out, /^\+ {2}- Knut \(admin-spec-a#E1\):$/m);
+  assert.match(r.out, /^\+ {2}- Knut \(admin-spec-a#K1\):$/m);
   assert.match(r.out, /4 Kennung\(en\) in 2 Datei\(en\).*Probelauf, nichts geschrieben/);
   assert.match(r.out, /Register offene-fragen-\*: 2 leere Knut-Zeile\(n\), nicht migriert/);
   assert.doesNotMatch(r.out, /offene-fragen-roadmap-produkt-olaf#E/);
@@ -82,20 +82,20 @@ test('Probelauf: Anzahl und Diff je Datei, Register nur als Zahl, schreibt nicht
   assert.deepEqual(run(root).out, r.out, 'ohne Schalter = Probelauf');
 });
 
-test('--apply: nur leere Zeilen im Zielbereich, E1…En, Callout/Einrückung bleiben, Sicherungskopie, idempotent', () => {
+test('--apply: nur leere Zeilen im Zielbereich, K1…Kn, Callout/Einrückung bleiben, Sicherungskopie, idempotent', () => {
   const root = mk();
   const bak = join(root, '_bak');
   const r = run(root, '--apply', '--backup', bak, '--no-diff');
   assert.equal(r.code, 0, r.out);
   const a = read(root, `${B}/Admin/2-Pre-Plan/admin-spec-a.md`);
   assert.deepEqual(a.split('\n').filter((l) => /Knut/.test(l)), [
-    '  - Knut (admin-spec-a#E1):',
+    '  - Knut (admin-spec-a#K1):',
     '  - Knut: nein',
     '  - Knut (29.09.): passt',
     '  - Knut (E9):',
-    '>   - Knut (admin-spec-a#E2):',
+    '>   - Knut (admin-spec-a#K2):',
     '  - Knut:',                        // im Code-Block
-    '   * Knut (admin-spec-a#E3):',
+    '   * Knut (admin-spec-a#K3):',
   ]);
   for (const p of Object.keys(files).filter((p) => /offene-fragen|5-Live|uebersicht|priorisierung|1-Projects/.test(p))) assert.equal(read(root, p), files[p], p);
   assert.equal(readFileSync(join(bak, `${B}/Admin/2-Pre-Plan/admin-spec-a.md`), 'utf8'), SPEC, 'Sicherungskopie = vorher');
@@ -105,7 +105,7 @@ test('--apply: nur leere Zeilen im Zielbereich, E1…En, Callout/Einrückung ble
   // Gleichlauf: dieselben Entscheidungen, jetzt mit Kennung
   const was = parseDecisions(SPEC), jetzt = parseDecisions(a);
   assert.deepEqual(jetzt.map((d) => [d.line, d.question, d.open, d.answer]), was.map((d) => [d.line, d.question, d.open, d.answer]));
-  assert.deepEqual(jetzt.filter((d) => d.open).map((d) => d.knutId), ['admin-spec-a#E1', 'admin-spec-a#E2', 'admin-spec-a#E3']);
+  assert.deepEqual(jetzt.filter((d) => d.open).map((d) => d.knutId), ['admin-spec-a#K1', 'admin-spec-a#K2', 'admin-spec-a#K3']);
   // zweiter Lauf ändert nichts
   const s = snap(root);
   const r2 = run(root, '--apply', '--backup', join(root, '_bak2'));
@@ -119,28 +119,29 @@ test('neue leere Zeile → max+1; eine gelöschte Kennung wird nie neu vergeben 
   const root = mk();
   run(root, '--apply', '--backup', join(root, '_bak'));
   const p = `${B}/Admin/2-Pre-Plan/admin-spec-a.md`;
-  // E3 (höchste) wird gelöscht, E1 beantwortet, eine neue Frage kommt oben dazu
-  const t = read(root, p).replace('   * Knut (admin-spec-a#E3):', '   * gestrichen').replace('  - Knut (admin-spec-a#E1):', '  - Knut (admin-spec-a#E1): ja').replace('## Offene Punkte\n', '## Offene Punkte\n\n- Neue Frage?\n  - Knut:\n');
+  // K3 (höchste) wird gelöscht, K1 beantwortet, eine neue Frage kommt oben dazu
+  const t = read(root, p).replace('   * Knut (admin-spec-a#K3):', '   * gestrichen').replace('  - Knut (admin-spec-a#K1):', '  - Knut (admin-spec-a#K1): ja').replace('## Offene Punkte\n', '## Offene Punkte\n\n- Neue Frage?\n  - Knut:\n');
   writeFileSync(join(root, p), t);
   const r = run(root, '--apply', '--backup', join(root, '_bak2'));
   assert.equal(r.code, 0, r.out);
-  assert.match(read(root, p), /Neue Frage\?\n {2}- Knut \(admin-spec-a#E4\):/, 'E4, nicht E3');
-  assert.match(read(root, p), /- Knut \(admin-spec-a#E1\): ja/);
+  assert.match(read(root, p), /Neue Frage\?\n {2}- Knut \(admin-spec-a#K4\):/, 'K4, nicht K3');
+  assert.match(read(root, p), /- Knut \(admin-spec-a#K1\): ja/);
   assert.equal(JSON.parse(read(root, 'stand.json'))['admin-spec-a'], 4);
 });
 
 test('Warnungen (fremde/doppelte Kennung, ungeeigneter Dateiname) melden — und --apply bricht dann ab', () => {
   const root = mk();
   const p = `${B}/Admin/4-Review/admin-spec-b.md`;
-  writeFileSync(join(root, p), '# b\n\n- Frage?\n  - Knut (admin-spec-b#E1):\n- kopiert\n  - Knut (admin-spec-a#E7):\n- doppelt\n  - Knut (admin-spec-b#E1): ja\n- neu\n  - Knut:\n');
+  writeFileSync(join(root, p), '# b\n\n- Frage?\n  - Knut (admin-spec-b#K1):\n- kopiert\n  - Knut (admin-spec-a#K7):\n- doppelt\n  - Knut (admin-spec-b#K1): ja\n- neu\n  - Knut:\n- alter Präfix\n  - Knut (admin-spec-b#E2):\n');
   mkdirSync(join(root, `${B}/Admin/3-Plan`));
   writeFileSync(join(root, `${B}/Admin/3-Plan/Admin_Spec_Gross.md`),'# g\n\n- Frage?\n  - Knut:\n');
   const before = snap(root);
   const d = run(root);
-  assert.match(d.out, /WARN .*admin-spec-b\.md: Z\. 6: Kennung admin-spec-a#E7 gehört nicht zu dieser Datei/);
-  assert.match(d.out, /WARN .*admin-spec-b\.md: Z\. 8: Kennung admin-spec-b#E1 doppelt \(auch Z\. 4\)/);
+  assert.match(d.out, /WARN .*admin-spec-b\.md: Z\. 6: Kennung admin-spec-a#K7 gehört nicht zu dieser Datei/);
+  assert.match(d.out, /WARN .*admin-spec-b\.md: Z\. 8: Kennung admin-spec-b#K1 doppelt \(auch Z\. 4\)/);
   assert.match(d.out, /WARN .*Admin_Spec_Gross\.md: Dateiname taugt nicht als Kennung/);
-  assert.doesNotMatch(d.out, /Admin_Spec_Gross#E/);
+  assert.match(d.out, /WARN .*admin-spec-b\.md: Z\. 12: Kennung admin-spec-b#E2 mit anderem Präfix als K/);
+  assert.doesNotMatch(d.out, /Admin_Spec_Gross#K/);
   const r = run(root, '--apply', '--backup', join(root, '_bak'));
   assert.equal(r.code, 4, r.out);
   assert.match(r.out, /Abbruch: erst die Warnungen klären/);
@@ -169,7 +170,7 @@ test('Höchststand: ein höherer Stand eines anderen Laufs wird nicht zurückges
   writeFileSync(join(root, 'stand.json'), JSON.stringify({ 'admin-spec-a': 9, 'andere-spec': 4 }));
   const r = run(root, '--apply', '--backup', join(root, '_bak'));
   assert.equal(r.code, 0, r.out);
-  assert.match(read(root, `${B}/Admin/2-Pre-Plan/admin-spec-a.md`), /- Knut \(admin-spec-a#E10\):/, 'beginnt über dem Stand');
+  assert.match(read(root, `${B}/Admin/2-Pre-Plan/admin-spec-a.md`), /- Knut \(admin-spec-a#K10\):/, 'beginnt über dem Stand');
   assert.deepEqual(JSON.parse(read(root, 'stand.json')), { 'admin-spec-a': 12, 'admin-spec-b': 1, 'andere-spec': 4 });
 
   const r2 = mk();

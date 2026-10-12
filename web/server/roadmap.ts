@@ -13,7 +13,8 @@ import { hashText } from './sprint.ts';
 
 export interface Decision { line: number; question: string; section: string; open: boolean; answer: string; knutId: string | null }
 
-// `- Knut:` oder mit stabiler Kennung `- Knut (<spec-slug>#E<n>):` (docs/plan-knut-ids.md). Nur diese strikte Form —
+// `- Knut:` oder mit stabiler Kennung `- Knut (<spec-slug>#K<n>):` (docs/plan-knut-ids.md; jeder Großbuchstabe als
+// Präfix wird gelesen, vergeben wird K). Nur diese strikte Form —
 // `- Knut (29.09.): …` oder `- Knut (E9):` sind keine Entscheidungszeilen (waren es nie).
 export const KNUT = /^((?:> ?)*)(\s*)[-*]\s+Knut(?: \(([a-z0-9][a-z0-9-]*#[A-Z]\d+)\))?:\s*(.*)$/;
 
