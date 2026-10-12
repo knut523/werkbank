@@ -327,7 +327,7 @@ test('Abmelden (DoD 1/27): beendeter Leitstand startet keinen Zug mehr, Zustand 
   assert.equal((await (await internal('/internal/orchestrate/end', { userId: 'ul', conv: C_STRAND })).json()).ok, false, 'nur Leitstände');
   assert.equal((await (await internal('/internal/orchestrate/end', { userId: 'ul', conv: C_LEIT })).json()).ok, true);
   const before = (await state()).find((s) => s.conv === C_LEIT).turn;
-  assert.match(await send(C_LEIT, 'mock-optionen'), /Leitstand ist beendet/);
+  assert.match(await send(C_LEIT, 'mock-optionen'), /Hauptchat ist beendet/);
   const st = (await state()).find((s) => s.conv === C_LEIT);
   assert.equal(st.kind, 'beendet');
   assert.deepEqual(st.turn, before, 'kein neuer Zug');

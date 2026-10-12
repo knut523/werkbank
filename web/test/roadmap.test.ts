@@ -48,6 +48,34 @@ test('Entscheidung beantworten: füllt genau die leere Zeile, Konfliktschutz', (
   assert.throws(() => fillDecision(SPEC, d[1].line, 'x', hashText(SPEC)), /schon beantwortet/);
 });
 
+// Kennungen (docs/plan-knut-ids.md): `- Knut (<slug>#E<n>):` gilt wie `- Knut:`, die Antwort bleibt der Text danach.
+const SPEC_IDS = SPEC
+  .replace('ein Sonderfall bekommt eine eigene Gruppe.\n  - Knut:', 'ein Sonderfall bekommt eine eigene Gruppe.\n  - Knut (admin-spec-rechte-gruppen#E1):')
+  .replace('  - Knut: ja, nur Erlauben', '  - Knut (admin-spec-rechte-gruppen#E2): ja, nur Erlauben')
+  .replace('>   - Knut:', '>   - Knut (admin-spec-rechte-gruppen#E3):')
+  + '\n## Notizen\n\n- Datiert, keine Entscheidung\n  - Knut (29.09.): passt so\n- Freier Verweis\n  - Knut (E9):\n';
+
+test('Kennungen: Zeilen mit `- Knut (<id>):` wie ohne, datierte/freie Klammern zählen nicht', () => {
+  const a = parseDecisions(SPEC), b = parseDecisions(SPEC_IDS);
+  assert.equal(b.length, 3, 'nur die drei echten Entscheidungszeilen');
+  assert.deepEqual(b.map((d) => [d.question, d.open, d.answer]), a.map((d) => [d.question, d.open, d.answer]), 'Frage/Antwort unverändert');
+  assert.deepEqual(b.map((d) => d.knutId), ['admin-spec-rechte-gruppen#E1', 'admin-spec-rechte-gruppen#E2', 'admin-spec-rechte-gruppen#E3']);
+  assert.deepEqual(a.map((d) => d.knutId), [null, null, null]);
+  assert.equal(b[1].answer, 'ja, nur Erlauben');
+});
+
+test('Kennungen: Beantworten behält Kennung und Callout-Präfix', () => {
+  const d = parseDecisions(SPEC_IDS);
+  const r = fillDecision(SPEC_IDS, d[0].line, 'nein', hashText(SPEC_IDS));
+  assert.equal(r.after, '  - Knut (admin-spec-rechte-gruppen#E1): nein');
+  const c = fillDecision(SPEC_IDS, d[2].line, 'nur admin', hashText(SPEC_IDS));
+  assert.equal(c.after, '>   - Knut (admin-spec-rechte-gruppen#E3): nur admin');
+  assert.throws(() => fillDecision(SPEC_IDS, d[1].line, 'x', hashText(SPEC_IDS)), /schon beantwortet/);
+  const again = parseDecisions(r.text)[0];
+  assert.equal(again.knutId, 'admin-spec-rechte-gruppen#E1');
+  assert.equal(again.answer, 'nein');
+});
+
 const PRIO = `# Priorisierung
 
 ## 2 · Rangliste über alle offenen Specs

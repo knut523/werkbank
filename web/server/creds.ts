@@ -24,7 +24,7 @@ export const CLAUDE_ENDPOINT = 'Claude Code';
 
 export function checkClaudeToken(t: string): string | null {
   if (!t) return 'Bitte den Token einfügen.';
-  if (/^sk-ant-api/.test(t)) return 'Das ist ein API-Schlüssel. Die Werkbank arbeitet ohne API-Schlüssel — bitte den Token aus `claude setup-token` (beginnt mit sk-ant-oat).';
+  if (/^sk-ant-api/.test(t)) return 'Das ist ein API-Schlüssel. Der OLAF Workspace arbeitet ohne API-Schlüssel — bitte den Token aus `claude setup-token` (beginnt mit sk-ant-oat).';
   if (!/^sk-ant-oat[0-9A-Za-z_-]{20,}$/.test(t)) return 'Das sieht nicht wie ein Token aus `claude setup-token` aus (beginnt mit sk-ant-oat…).';
   return null;
 }

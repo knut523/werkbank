@@ -15,7 +15,7 @@ export const FEATURES = [
   { id: 'dateien', label: 'Dateien & Teilen' },
   { id: 'orchestrator', label: 'Rückfragen des Orchestrators' },
   { id: 'ansetzen', label: 'Agent ansetzen' },
-  { id: 'leitstand', label: 'Leitstand (Orchestrator-Chat)' },
+  { id: 'leitstand', label: 'Hauptchat (führt die Unter-Chats)' },
 ] as const;
 // Nur für Admins, auch nicht über WERKBANK_TEAM_FEATURES freigebbar (Plan 132: der Leitstand arbeitet mit Knuts Rechten).
 const ADMIN_ONLY = new Set<string>(['leitstand']);

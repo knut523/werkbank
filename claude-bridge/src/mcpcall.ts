@@ -87,7 +87,7 @@ export async function mcpCall(query: QueryFn, p: { token: string; cwd: string; h
     return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: r.behavior, permissionDecisionReason: r.message ?? 'bestätigt', ...(r.behavior === 'allow' ? { updatedInput: r.updatedInput } : {}) } };
   };
   const prompt = [
-    'WERKBANK-MCP-AUFRUF (von der Person im Werkbank-Board bereits bestätigt).',
+    'WERKBANK-MCP-AUFRUF (von der Person im Board des OLAF Workspace bereits bestätigt).',
     `Rufe genau einmal das Werkzeug \`${p.tool}\` mit genau diesen Argumenten auf (falls nötig, lade es zuerst mit ToolSearch):`,
     '```json', JSON.stringify(p.input), '```',
     'Rufe kein anderes Werkzeug auf. Antworte danach nur mit „OK“ oder der Fehlermeldung.',

@@ -238,7 +238,7 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
     return sink.finish();
   }
   if (/^sk-ant-api/.test(token)) {
-    sink.write('Das ist ein API-Schlüssel. Die Werkbank arbeitet ohne API-Schlüssel — bitte den Token aus `claude setup-token` eintragen (beginnt mit `sk-ant-oat`).');
+    sink.write('Das ist ein API-Schlüssel. Der OLAF Workspace arbeitet ohne API-Schlüssel — bitte den Token aus `claude setup-token` eintragen (beginnt mit `sk-ant-oat`).');
     return sink.finish();
   }
   if (!(model in MODELS)) {
@@ -250,7 +250,7 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
     const email = (header(req, 'x-librechat-user-email') ?? '').toLowerCase();
     if (!ALLOWED_EMAILS.includes(email)) {
       log('not allowed', { user: header(req, 'x-librechat-user-id') ?? '?' });
-      sink.write('Der Pilot der Werkbank ist noch nicht für dein Konto freigeschaltet: Claude Code läuft hier vorerst unter dem Nutzer der VM (mit dessen Dateien und Jira-Zugang). Der Team-Zugang kommt mit dem eigenen Team-Workspace.');
+      sink.write('Der Pilot des OLAF Workspace ist noch nicht für dein Konto freigeschaltet: Claude Code läuft hier vorerst unter dem Nutzer der VM (mit dessen Dateien und Jira-Zugang). Der Team-Zugang kommt mit dem eigenen Team-Workspace.');
       return sink.finish();
     }
   }
@@ -328,7 +328,7 @@ const server = createServer(async (req, res) => {
       const kind = b.kind === 'leitstand' ? 'leitstand' : 'strand';
       if (kind === 'leitstand') {
         const leitEmails = String(process.env.LEITSTAND_EMAILS ?? process.env.BRIDGE_AUTO_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-        if (!email || !leitEmails.includes(email)) return json(res, 403, { error: 'Leitstand nur für freigeschaltete Admins (LEITSTAND_EMAILS).' });
+        if (!email || !leitEmails.includes(email)) return json(res, 403, { error: 'Hauptchat nur für freigeschaltete Admins (LEITSTAND_EMAILS).' });
       }
       try { registerOrchestration(userId, conv, real!, kind); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
       log(kind === 'leitstand' ? 'leitstand angemeldet' : 'strang angemeldet', { user: userId, conv });

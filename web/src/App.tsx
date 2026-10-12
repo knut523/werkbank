@@ -42,7 +42,7 @@ const NAV = [
   { href: '#/board', label: 'Board', ico: '🗂️', match: /^#\/board/ , f: 'board' },
   { href: '#/sprint', label: 'Sprint', ico: '🔁', match: /^#\/sprint/ , f: 'sprint' },
   { href: '#/wissen', label: 'Wissen', ico: '📚', match: /^#\/wissen/ , f: 'wissen' },
-  { href: '#/leitstand', label: 'Leitstand', ico: '🛰️', match: /^#\/leitstand/ , f: 'leitstand' },
+  { href: '#/leitstand', label: 'Hauptchat', ico: '🛰️', match: /^#\/leitstand/ , f: 'leitstand' },
 ];
 const MORE = [
   { href: '#/timebox', label: 'Mein Tag', ico: '⏱️', match: /^#\/timebox/ , f: 'timebox' },
@@ -118,7 +118,7 @@ export function App() {
   if (!cfg) return <div className="page"><Loading /></div>;
   const user = cfg.user;
   if (embedded && !user) {
-    return <div className="page"><h1>Werkbank</h1><p className="muted">Dein Chat-Konto ist für die Werkbank noch nicht freigeschaltet (Pilot) — oder die Anmeldung ist abgelaufen. Seite neu laden; hilft das nicht, frag Knut.</p></div>;
+    return <div className="page"><h1>OLAF Workspace</h1><p className="muted">Dein Chat-Konto ist für den OLAF Workspace noch nicht freigeschaltet (Pilot) — oder die Anmeldung ist abgelaufen. Seite neu laden; hilft das nicht, frag Knut.</p></div>;
   }
   // Freigabe je Funktion (web/server/features.ts): Admins alles, das Team nur, was Knut freigegeben hat.
   const vis = (n: { f: string }) => !n.f || cfg.features?.[n.f] !== false;
@@ -128,7 +128,7 @@ export function App() {
   // Anmelden über das Einrichtungs-Formular: weiter mit den ersten Schritten (Claude, Jira) auf der Einrichtung.
   const page = !user ? <Setup cfg={cfg} onLogin={() => { window.location.hash = '#/einrichtung'; load(); }} />
     : /^#\/einrichtung/.test(hash) || heuteHidden ? <Setup cfg={cfg} onLogin={load} />
-    : hidden ? <div className="page" data-testid="not-released"><h1>{hidden.label}</h1><div className="card soft empty"><p><b>Noch nicht für das Team freigegeben.</b></p><p className="small muted">Knut gibt die Werkbank-Funktionen nach und nach frei. Bis dahin: Chat und <a href="#/einrichtung">Einrichtung</a>.</p></div></div>
+    : hidden ? <div className="page" data-testid="not-released"><h1>{hidden.label}</h1><div className="card soft empty"><p><b>Noch nicht für das Team freigegeben.</b></p><p className="small muted">Knut gibt die Funktionen des OLAF Workspace nach und nach frei. Bis dahin: Chat und <a href="#/einrichtung">Einrichtung</a>.</p></div></div>
     : /^#\/wissen/.test(hash) ? <Wissen cfg={cfg} hash={hash} />
     : /^#\/board/.test(hash) ? <Board cfg={cfg} hash={hash} />
     : /^#\/sprint/.test(hash) ? <Sprint cfg={cfg} hash={hash} />
@@ -147,7 +147,7 @@ export function App() {
   return (
     <div className="shell">
       <aside className={`side${menu ? ' open' : ''}`} aria-label="Navigation">
-        <div className="brand"><img src="favicon.svg" alt="" /><span>OLAF-Werkbank</span></div>
+        <div className="brand"><img src="favicon.svg" alt="" /><span>OLAF Workspace</span></div>
         <a href={cfg.librechatUrl} className="menu-chat btn small" title="Zurück zum Chat (LibreChat)">💬 Chat</a>
         <button className="menu-btn btn small" aria-expanded={menu} aria-controls="werkbank-nav" onClick={() => setMenu(!menu)}>
           {current ? <>{current.ico} {current.label}</> : 'Menü'}

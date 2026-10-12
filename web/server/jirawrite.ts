@@ -57,7 +57,7 @@ export const MCP_HELP = 'Einmalig anmelden: unter „Einrichtung“ → „Im Ch
 
 const MESSAGES: Record<string, string> = {
   mcp_auth: `Jira-Schreiben über den Atlassian-MCP ist nicht angemeldet (401 / Anmeldung abgelaufen). ${MCP_HELP}`,
-  mcp_missing: 'Der Atlassian-MCP ist in der Werkbank abgeschaltet (BRIDGE_ATLASSIAN_MCP_URL=off) — Jira-Schreiben geht so nicht.',
+  mcp_missing: 'Der Atlassian-MCP ist im OLAF Workspace abgeschaltet (BRIDGE_ATLASSIAN_MCP_URL=off) — Jira-Schreiben geht so nicht.',
   claude_auth: 'Dein Claude-Token wurde abgelehnt — unter „Einrichtung“ einen neuen aus `claude setup-token` eintragen.',
   not_called: 'Claude hat den Jira-Aufruf nicht ausgeführt. Bitte noch einmal versuchen.',
 };
@@ -133,7 +133,7 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
     // Ohne frische Liste wird nicht geschrieben (die Kopie kann 15 min alt sein → Labels würden überschrieben).
     const currentLabels = async (): Promise<string[]> => {
       if (!read && dry) { const d: any = await wb().collection('jira_issues').findOne({ key }); return d?.labels ?? []; }   // nur Anzeige
-      if (!read) throw new JiraWriteError(412, 'jira_missing', 'Für Label-Änderungen braucht die Werkbank den Jira-Lesezugang (aktuelle Labels lesen).');
+      if (!read) throw new JiraWriteError(412, 'jira_missing', 'Für Label-Änderungen braucht der OLAF Workspace den Jira-Lesezugang (aktuelle Labels lesen).');
       try { const r = await jiraFetch(read, 'GET', `/issue/${encodeURIComponent(key)}?fields=labels`); return r?.fields?.labels ?? []; }
       catch (e: any) { throw new JiraWriteError(502, 'labels_read', `Aktuelle Labels von ${key} nicht lesbar — nichts geschrieben (${String(e.message).slice(0, 120)}).`); }
     };
@@ -165,7 +165,7 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
     } else {
       if (a.type === 'comment') await mcpWrite(u, 'mcp__atlassian__addCommentToJiraIssue', { ...base, commentBody: a.text.trim(), contentFormat: 'markdown' });
       if (a.type === 'status') {
-        if (!read) throw new JiraWriteError(412, 'jira_missing', 'Für die Übergänge braucht die Werkbank den Jira-Lesezugang (Einrichtung).');
+        if (!read) throw new JiraWriteError(412, 'jira_missing', 'Für die Übergänge braucht der OLAF Workspace den Jira-Lesezugang (Einrichtung).');
         const ts = await transitions(read, key);
         const t = ts.find((x) => x.to.toLowerCase() === a.to.toLowerCase()) ?? ts.find((x) => x.name.toLowerCase() === a.to.toLowerCase());
         if (!t) throw new JiraWriteError(400, 'no_transition', `Von hier aus gibt es keinen Übergang nach „${a.to}“ (möglich: ${ts.map((x) => x.to).join(', ') || '—'}).`);

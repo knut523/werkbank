@@ -82,9 +82,9 @@ const files: Record<string, string> = {
   [`${B}/X/6-Archive/spec-alt.md`]: fm('Spec Alt', '2026-08-01') + '## Offene Punkte\n\n- Archivfrage?\n  - Knut:\n',
 };
 
-function vault() {
+function vault(tf = (_p: string, t: string) => t) {
   const root = mkdtempSync(join(tmpdir(), 'fragen-'));
-  for (const [p, t] of Object.entries(files)) { mkdirSync(dirname(join(root, p)), { recursive: true }); writeFileSync(join(root, p), t); }
+  for (const [p, t] of Object.entries(files)) { mkdirSync(dirname(join(root, p)), { recursive: true }); writeFileSync(join(root, p), tf(p, t)); }
   const idx = buildIndex(root);
   const { decisions, texts } = collectDecisions(idx, (p) => readFileSync(join(root, p), 'utf8'), B);
   return { decisions, r: todayQuestions(decisions, { texts, fm: (p) => idx.notes.get(p)?.fm, today: '2026-10-11' }) };
@@ -158,4 +158,16 @@ test('Sortierung: „Neu am …“ und Plan/Review zuerst, darin jüngere zuerst
 
 test('Register-Kopfzeile statt Empfehlungszeile als Anzeigetext', () => {
   assert.match(at(r.open, reg, 'A1 ·').head, /^\*\*A1 · Prod-DB/);
+});
+
+test('Kennungen (docs/plan-knut-ids.md): mit `- Knut (<slug>#K<n>):` dieselbe bereinigte Liste wie ohne', () => {
+  // jede leere Knut-Zeile bekommt <Basename>#K1…Kn — hier auch im Register (das Skript lässt es aus), um den Parser
+  // überall zu prüfen
+  const ids = (p: string, t: string) => { let n = 0; const slug = p.split('/').at(-1)!.replace(/\.md$/, ''); return t.replace(/^((?:> ?)*\s*[-*]) Knut:[ \t]*$/gm, (_m, a) => `${a} Knut (${slug}#K${++n}):`); };
+  const w = vault(ids);
+  assert.ok(w.decisions.every((d) => d.knutId && d.knutId.startsWith(d.spec + '#K')), 'jede Zeile trägt ihre Kennung');
+  const key = (x: any) => [x.spec, x.line, x.head, x.question, x.reason ?? '', x.id ?? '', x.partly, x.register.map((y: any) => y.id).join()].join('|');
+  for (const k of ['open', 'cleanup', 'duplicates'] as const) assert.deepEqual(w.r[k].map(key), r[k].map(key), k);
+  assert.equal(at(w.r.open, 'spec-plan', 'Dankeschön').knutId, 'spec-plan#K1');
+  assert.equal(at(w.r.open, reg, 'F2 ').id, 'F2', 'Register-ID bleibt in `id`, die Kennung steht in `knutId`');
 });

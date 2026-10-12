@@ -35,7 +35,7 @@ start() { # name port dir cmd...
   wait_port "$name" "$port"
 }
 
-echo "OLAF-Werkbank starten"
+echo "OLAF Workspace starten"
 # RAM (Plan 125): ohne Deckel nimmt WiredTiger bis 50 % des cgroup-Limits minus 1 GB (hier ≈ 7,5 GB) und Meilisearch
 # beim Indexieren bis 2/3 (≈ 10,7 GiB, gemessen: Spitzen 0,6–2,1 GB je Instanz). Unsere Daten sind klein.
 # Leer setzen (WB_MONGO_CACHE_GB= / WB_MEILI_INDEXING_MEMORY=) → Vorgabe der Programme.
@@ -58,4 +58,4 @@ start librechat 3080 "$RT/librechat" env CONFIG_PATH="$WB/librechat/librechat.ya
 start werkbank-web 3070 "$WB/web" env WERKBANK_PORT=3070 WERKBANK_HOST=127.0.0.1 BRIDGE_STATE_DIR="$RT/bridge" \
   WERKBANK_ALLOWED_EMAILS="${WERKBANK_ALLOWED_EMAILS-${BRIDGE_ALLOWED_EMAILS-knut.peters@maxenergy.at}}" node server/main.ts
 
-echo "Fertig: Werkbank ${LIBRECHAT_PUBLIC_URL:-http://127.0.0.1:3080}/wb/heute (Chat und Seiten) · Web-App direkt (Health/Debug) ${WERKBANK_PUBLIC_URL:-http://127.0.0.1:3070}"
+echo "Fertig: OLAF Workspace ${LIBRECHAT_PUBLIC_URL:-http://127.0.0.1:3080}/wb/heute (Chat und Seiten) · Web-App direkt (Health/Debug) ${WERKBANK_PUBLIC_URL:-http://127.0.0.1:3070}"

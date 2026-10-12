@@ -6,7 +6,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch } from 'node:fs';
-import { join, extname, resolve, normalize } from 'node:path';
+import { join, extname, resolve, normalize, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import YAML from 'yaml';
 import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl } from './config.ts';
@@ -21,8 +21,8 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
-import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards } from './leitstand.ts';
-import { readBericht } from './bericht.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft } from './leitstand.ts';
+import { readBericht, paketDatei } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName, ortAus, vorschlagAusPfad, isEingang } from './ablage.ts';
@@ -33,7 +33,7 @@ import { memoryWarning } from './memory.ts';
 import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
 import { keep as keepScratch, runScratch } from './scratch.ts';
 import { backupRunning, listBackups, nightly, writeBackup, keyOf } from './backup.ts';
-import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles } from './sprint.ts';
+import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles, parsePackages, reviewDraftVars, carryList, currentCycle, isDone, syncPlanRows, isNoop, realOutcomes, viennaToday } from './sprint.ts';
 import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
 import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog, logShare, scratchDir } from './sharing.ts';
@@ -84,7 +84,7 @@ const isMutation = (req: IncomingMessage) => req.method !== 'GET' && req.method 
 async function needUser(req: IncomingMessage): Promise<User> {
   const u = await currentUser(req);
   if (!u) throw new HttpError(401, 'Bitte anmelden.');
-  if (isMutation(req) && req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Werkbank-Header.');
+  if (isMutation(req) && req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Workspace-Header.');
   // Freigabe je Funktion fürs Team (features.ts): Admins alles, sonst WERKBANK_TEAM_FEATURES.
   const f = blockedFeature(u, String(req.url ?? '').split('?')[0]);
   if (f) throw new HttpError(403, `„${FEATURES.find((x) => x.id === f)!.label}“ ist für das Team noch nicht freigegeben.`);
@@ -180,6 +180,36 @@ function cycleById(id: string) {
   return c;
 }
 
+/** Vorzyklus = neuester Zyklus mit früherem Startdatum (auch archiviert). */
+function previousCycle(date: string) {
+  return cycles().filter((x) => x.date < date).sort((a, b) => b.date.localeCompare(a.date))[0];
+}
+
+/** Arbeitspakete der Review-Notiz mit Ticketstand aus der Kopie (Schritt 2: Updates je Paket). */
+function packagesOf(text: string, im: Map<string, Issue>) {
+  const today = viennaToday();
+  return parsePackages(text).map((p) => ({
+    ...p,
+    tickets: p.tickets.map((k) => {
+      const i = im.get(k);
+      return i ? { key: k, summary: i.summary, status: i.status, done: isDone(i), owner: (i.assignee ?? '').split(' ')[0] || null, overdue: !isDone(i) && !!i.duedate && i.duedate < today } : { key: k, missing: true };
+    }),
+  }));
+}
+
+/** Review-Entwurf + Vorlagen für einen Zyklus (Schritt 1). Schreibt nichts. */
+async function prepareCycle(date: string) {
+  const prev = previousCycle(date);
+  const im = await issueMap();
+  const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+  const rd = (f?: string) => (f ? readFileSync(f, 'utf8') : undefined);
+  const { vars, stats } = im.size
+    ? reviewDraftVars({ date, prevId: prev?.id, prevReview: rd(prev?.files.review), prevPlanning: rd(prev?.files.planning), issues: im, today: viennaToday(), syncedAt: sync?.at ? new Date(sync.at).toISOString() : null })
+    : { vars: {}, stats: null };
+  const files = newCycleFiles(TEMPLATES, date, prev?.id, vars);
+  return { prev, files, stats, empty: !im.size };
+}
+
 async function sprintView(id: string) {
   const c = cycleById(id);
   const im = await issueMap();
@@ -196,13 +226,18 @@ async function sprintView(id: string) {
     files[k] = {
       path: f.slice(cfg.vaultDir.length + 1), hash: hashText(text), title: fm.title ?? k, status: fm.status ?? null,
       goal: parseGoal(text), outcomes: parseOutcomes(text), questions: qs,
+      // Offene Notizen für den Write-back (wie jira-sync-plan.sh): Schritt 4/5 der Schrittleiste.
+      openNotes: syncPlanRows(qs).filter((r) => r.kind !== 'carry' && !isNoop(r.payload)).length,
+      ...(k === 'review' ? { packages: packagesOf(text, im) } : {}),
     };
   }
   const today = new Date().toISOString().slice(0, 10);
   const open = [...im.values()].filter((i) => i.type !== 'Workstream' && i.status !== 'Done');
   const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+  const prev = previousCycle(c.date);
   return {
-    cycle: { id: c.id, date: c.date, archived: c.archived },
+    cycle: { id: c.id, date: c.date, archived: c.archived, current: currentCycle(cycles())?.id === c.id },
+    previous: prev ? { id: prev.id, outcomes: prev.files.planning ? realOutcomes(parseOutcomes(readFileSync(prev.files.planning, 'utf8'))) : [], goal: prev.files.planning ? parseGoal(readFileSync(prev.files.planning, 'utf8')).goal ?? null : null } : null,
     ...goalsView(c, files, im),
     files,
     overdue: open.filter((i) => isOverdue(i, today)).sort((a, b) => a.duedate!.localeCompare(b.duedate!)),
@@ -269,7 +304,7 @@ function goalsView(c: { id: string; date: string }, files: Record<string, any>, 
 function goalsAll(im: Map<string, Issue>) {
   const text = readVault(GOALS_FILE());
   const parsed = text ? parseGoalsFile(text) : { goals: [], ratings: [] };
-  const cur = cycles().find((c) => !c.archived);
+  const cur = currentCycle(cycles());
   let sprintRows: ReturnType<typeof sprintGoalsFromOutcomes> = [];
   if (cur?.files.planning) { try { sprintRows = sprintGoalsFromOutcomes(parseOutcomes(readFileSync(cur.files.planning, 'utf8')), cur.date); } catch { /* ohne */ } }
   const t = goalTree([...parsed.goals, ...sprintRows], parsed.ratings, [...im.values()]);
@@ -321,13 +356,13 @@ on('GET', /^\/api\/config$/, async (req, res) => {
 });
 
 on('POST', /^\/api\/login$/, async (req, res) => {
-  if (req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Werkbank-Header.');
+  if (req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Workspace-Header.');
   const { email, password } = await body(req);
   if (!email || !password) throw new HttpError(400, 'E-Mail und Passwort angeben.');
   // Letzter Eintrag = vom Coder-Proxy angehängt (der erste ist vom Client frei wählbar).
   const ip = String(req.headers['x-forwarded-for'] ?? '').split(',').pop()!.trim() || req.socket.remoteAddress || undefined;
   const u = await librechatLogin(String(email), String(password), ip);
-  if (!allowed(u.email)) throw new HttpError(403, 'Dein Konto ist für die Werkbank noch nicht freigeschaltet (Pilot). Frag Knut.');
+  if (!allowed(u.email)) throw new HttpError(403, 'Dein Konto ist für den OLAF Workspace noch nicht freigeschaltet (Pilot). Frag Knut.');
   await createSession(res, u);
   log('login', { user: u.id });
   send(res, 200, { user: u });
@@ -508,7 +543,7 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
     if (running.get(r.key) !== 'wartet auf ja') running.set(r.key, r.status);
   }
   const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [], agent: running.get(i.key) ?? null, goals: ownGoals(i) }));
-  const curCycle = cycles().find((c) => !c.archived);
+  const curCycle = currentCycle(cycles());
   const sprintOnly = url.searchParams.get('sprint') === '1' && curCycle ? new Set(all.filter((i) => inSprint(i, curCycle.date)).map((i) => i.key)) : undefined;
   const filter = url.searchParams.get('filter') || undefined;
   const issues = annotated;
@@ -664,13 +699,13 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/edit$/, async (req, res,
     if (!g.byId.has(goal) || goalLevel(goal) === 'Gate') throw new HttpError(400, `Unbekanntes Ziel ${goal}.`);
   }
   if (!actions.length && !goal) return send(res, 200, { ok: true, nothing: true });
-  const preview = `${i.key}: ${[...actions.map(describe), ...(goal ? [`Ziel → ${goal} (Werkbank)`] : [])].join(' · ')}`;
+  const preview = `${i.key}: ${[...actions.map(describe), ...(goal ? [`Ziel → ${goal} (OLAF Workspace)`] : [])].join(' · ')}`;
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview, dryRun: dryRun() && actions.length > 0 });
   const done: string[] = [];
   if (goal) {
     const r: any = await assignGoals(u, [{ key: i.key, goal }], im, true);
     if (!r.results?.[0]?.ok) throw new HttpError(500, `Ziel nicht gespeichert: ${r.results?.[0]?.error ?? 'unbekannt'}`);
-    done.push(`Ziel → ${goal} (Werkbank)`);
+    done.push(`Ziel → ${goal} (OLAF Workspace)`);
   }
   const w = actions.length ? await jiraWrite(u, () => writeJira(u, i.key, actions)) : null;
   send(res, 200, { ok: true, preview, done: [...(w?.done ?? []), ...done], dryRun: w?.dryRun ?? false, calls: w?.calls, issue: (await issueMap()).get(i.key) ?? null });
@@ -937,7 +972,7 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
   }).sort((a, b) => (a.live ? 0 : 1) - (b.live ? 0 : 1) || a.pr.localeCompare(b.pr, 'de', { numeric: true }));
   const github = { at: gh.sync?.at ?? null, error: gh.sync?.error ?? null, count: gh.map.size, org: GH_ORG };
   // Thema → Rang, Swimlanes, „Als Nächstes“ (Sprint-Zuordnung über Ticket-Labels), Konsistenz Spec ↔ Ticket.
-  const cur = cycles().find((c) => !c.archived);
+  const cur = currentCycle(cycles());
   const sprintTickets = new Set(cur ? [...im.values()].filter((i) => inSprint(i, cur.date)).map((i) => i.key) : []);
   const livePr = (pr: string) => { const l = gh.map.get(pr); return l ? { pr, conflict: l.mergeable === 'CONFLICTING', draft: l.isDraft, review: l.reviewDecision, turn: l.turn.who } : { pr, closed: ghOk }; };
   const specList = [...byName.values()].map((x) => ({ ...x, prLive: x.prs.map(livePr) }));
@@ -1115,7 +1150,7 @@ on('GET', /^\/api\/today$/, async (req, res) => {
     .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
   const orchOpen = (await listQuestions(u, { open: true }).catch(() => [])).length;
   // Automatisch fortgesetzte Stränge (Plan auto-weiter, DoD 6): nur der Zähler aus Mongo, kein Abruf bei der Brücke.
-  const cards = await strandCards(u).catch(() => []);
+  const cards = await strandCards(u, { detail: true }).catch(() => []);
   const carded = new Set(cards.map((c: any) => c.id));
   const orchAuto = (await wb().collection('orchestrator_runs').find({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
     .filter((r: any) => !carded.has(String(r._id)))   // keine Doppelung mit der Karte (F5)
@@ -1184,7 +1219,7 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
   const conv = String(b.conv ?? '');
-  if (!conv) throw new HttpError(400, 'Keine Unterhaltung bekannt — review_ready gilt nur in einem Werkbank-Chat.');
+  if (!conv) throw new HttpError(400, 'Keine Unterhaltung bekannt — review_ready gilt nur in einem Workspace-Chat.');
   const run: any = await wb().collection('agent_runs').findOne({ userId: u.id, conv, mode: 'chat' }, { sort: { startedAt: -1 } });
   // Orchestrator-Strang: Fertig-Marke am Strang — er wird danach nie mehr automatisch fortgesetzt (Plan auto-weiter, DoD 4).
   const strand: any = run ? null : await wb().collection('orchestrator_runs').findOne({ userId: u.id, conv });
@@ -1195,7 +1230,7 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
     log('review bereit (strang)', { user: u.id, id: strand._id, dod: p.review.dod.length });
     return send(res, 200, { ok: true, strand: strand._id });
   }
-  if (!run) throw new HttpError(404, 'Kein Werkbank-Agentenlauf zu diesem Chat — nichts gesetzt (die Review-Schlange kennt nur Läufe, die vom Board aus gestartet wurden).');
+  if (!run) throw new HttpError(404, 'Kein Workspace-Agentenlauf zu diesem Chat — nichts gesetzt (die Review-Schlange kennt nur Läufe, die vom Board aus gestartet wurden).');
   const p = parseReview(b);
   if (!p.review) throw new HttpError(400, p.error!);
   await wb().collection('agent_runs').updateOne({ _id: run._id }, { $set: { reviewReadyAt: new Date(), review: p.review, reviewedAt: null } });
@@ -1208,28 +1243,71 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
 // Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).
 on('GET', /^\/api\/leitstand\/overview$/, async (req, res) => send(res, 200, await overview(await needAdmin(req))));
 
+// Hauptchat starten aus der Oberfläche (Plan 144, S2): dieselbe Funktion wie der interne Kanal der CLI — Admin, CSRF-Header
+// (needUser), 40 000 Zeichen, Brücke prüft LEITSTAND_EMAILS. Der Entwurf enthält keine Strang-Auszüge (Council B1).
+on('GET', /^\/api\/leitstand\/handover$/, async (req, res) => send(res, 200, await handoverDraft(await needAdmin(req))));
+on('POST', /^\/api\/leitstand\/start$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req, 1 << 20);
+  const r = await startLeitstand(u, { handoverText: typeof b?.handoverText === 'string' ? b.handoverText : null });
+  log('hauptchat gestartet (Oberfläche)', { user: u.id, id: r.id, conv: r.conv, beendet: r.ended.length });
+  return send(res, 200, r);
+});
+
 on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
   const u = await needAdmin(req);
   const d: any = await orchRuns().findOne({ _id: String(url.searchParams.get('strand') ?? '') as any, userId: u.id, kind: { $ne: 'leitstand' } });
   if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
-  const text = readBericht(d.bericht);
-  if (text === null) throw new HttpError(404, 'Kein lesbarer Bericht zu diesem Strang.');
-  send(res, 200, { strand: String(d._id), name: String(d.bericht).split('/').slice(-2).join('/'), text });
+  // Plan 144: auch den Auftrag (auftrag.md im selben review-pakete-Ordner) — gleiche Leseprüfung wie beim Bericht.
+  const art = url.searchParams.get('art') === 'auftrag' ? 'auftrag' : 'bericht';
+  const path = paketDatei(d, art);
+  const text = readBericht(path);
+  if (text === null) throw new HttpError(404, art === 'auftrag' ? 'Kein lesbarer Auftrag zu diesem Unter-Chat.' : 'Kein lesbarer Bericht zu diesem Unter-Chat.');
+  send(res, 200, { strand: String(d._id), art, name: String(path).split('/').slice(-2).join('/'), text });
+});
+
+/** Strang zum Review prüfen (Einzel- und Sammel-„Passt“, Council Bedingung 7): eigen, gesehener Stand (F3), nicht laufend (G4). */
+async function strandForReview(u: User, id: string, seenIn: unknown, states: Map<string, any> | null) {
+  const d: any = await orchRuns().findOne({ _id: id as any, userId: u.id, kind: { $ne: 'leitstand' } });
+  if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
+  const seen = String(new Date(d.reviewReadyAt ?? d.doneAt ?? 0).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime());
+  if (String(seenIn ?? '') !== seen) throw new HttpError(409, 'Der Strang hat sich inzwischen geändert — Seite neu laden.');
+  if (!states) throw new HttpError(503, 'Brücke nicht erreichbar — gleich noch einmal.');
+  if (states.get(d.conv)?.running) throw new HttpError(409, 'Der Strang arbeitet gerade — warte, bis er fertig ist.');
+  return d;
+}
+const expectOf = (d: any) => ({ lastSentAt: d.lastSentAt ?? null, reviewReadyAt: d.reviewReadyAt ?? null, doneAt: d.doneAt ?? null });
+
+// Alle live gegangenen Stränge abhaken (Paket 141, S2): der Stand wird hier frisch neu gerechnet — der Browser zählt nicht.
+on('POST', /^\/api\/leitstand\/strands\/passt-live$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  const items: any[] = Array.isArray(b.items) ? b.items.slice(0, 30) : [];
+  if (!items.length) throw new HttpError(400, 'Keine Stränge angegeben.');
+  const states = await strandStates(u).catch(() => null);
+  const cards = new Map((await strandCards(u, { detail: true, fresh: true })).map((c: any) => [c.id, c]));
+  const done: string[] = [], skipped: { id: string; why: string }[] = [];
+  for (const it of items) {
+    const id = String(it?.id ?? '');
+    const c: any = cards.get(id);
+    if (!c) { skipped.push({ id, why: 'nicht mehr offen' }); continue; }
+    if (c.stand?.kind !== 'live') { skipped.push({ id, why: 'nicht live' }); continue; }
+    try {
+      const d = await strandForReview(u, id, it?.seen, states);
+      await reviewOrch(u, id, `live seit Release ${c.stand.release} (gesammelt abgehakt)`, 'knut', expectOf(d));
+      done.push(id);
+    } catch (e: any) { skipped.push({ id, why: e?.status === 503 ? 'Brücke nicht erreichbar' : /arbeitet/.test(e?.message) ? 'Agent arbeitet gerade' : 'hat sich geändert' }); }
+  }
+  log('stränge gesammelt geprüft', { user: u.id, done: done.length, skipped: skipped.length });
+  send(res, 200, { done, skipped });
 });
 
 on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (req, res, m) => {
   const u = await needAdmin(req);
   const b = await body(req);
-  const d: any = await orchRuns().findOne({ _id: m[1] as any, userId: u.id, kind: { $ne: 'leitstand' } });
-  if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
-  // Gesehener Stand (F3) und live bei der Brücke (G4): nie auf einen veralteten oder laufenden Strang entscheiden.
-  const seen = String(new Date(d.reviewReadyAt ?? d.doneAt ?? 0).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime());
-  if (String(b.seen ?? '') !== seen) throw new HttpError(409, 'Der Strang hat sich inzwischen geändert — Seite neu laden.');
-  let st: any;
-  try { st = (await strandStates(u)).get(d.conv); } catch { throw new HttpError(503, 'Brücke nicht erreichbar — gleich noch einmal.'); }
-  if (st?.running) throw new HttpError(409, 'Der Strang arbeitet gerade — warte, bis er fertig ist.');
+  const d = await strandForReview(u, m[1], b.seen, await strandStates(u).catch(() => null));
   if (m[2] === 'passt') {
-    await reviewOrch(u, m[1], String(b.note ?? 'Passt (Heute)'), 'knut', { lastSentAt: d.lastSentAt ?? null, reviewReadyAt: d.reviewReadyAt ?? null, doneAt: d.doneAt ?? null });
+    await reviewOrch(u, m[1], String(b.note ?? 'Passt (Heute)'), 'knut', expectOf(d));
     log('strang geprüft', { user: u.id, id: m[1] });
     return send(res, 200, { ok: true });
   }
@@ -1632,7 +1710,7 @@ on('POST', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/member$/, async (req, re
 // Alter Label-Weg nach Jira: nur mit WERKBANK_GOALS_TO_JIRA=labels.
 on('POST', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/labels$/, async (req, res, m) => {
   const u = await needUser(req);
-  if (!goalsToJira()) throw new HttpError(410, 'Sprint und Ziel werden in der Werkbank gespeichert, nicht als Jira-Label (WERKBANK_GOALS_TO_JIRA=labels schaltet den alten Weg ein).');
+  if (!goalsToJira()) throw new HttpError(410, 'Sprint und Ziel werden im OLAF Workspace gespeichert, nicht als Jira-Label (WERKBANK_GOALS_TO_JIRA=labels schaltet den alten Weg ein).');
   const b = await body(req);
   const c = cycleById(m[1]);
   const key = String(b.key ?? '');
@@ -1660,11 +1738,10 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
   const b = await body(req);
   const date = String(b.date ?? '');
   const id = `sprint-${date}`;
-  const prev = cycles().filter((c) => !c.archived)[0]?.id;
   let files;
-  try { files = newCycleFiles(TEMPLATES, date, prev); } catch (e: any) { throw new HttpError(400, e.message); }
+  try { files = (await prepareCycle(date)).files; } catch (e: any) { throw new HttpError(400, e.message); }
   const dir = join(sprintRoot(), id);
-  if (existsSync(dir)) throw new HttpError(409, `${id} gibt es schon.`);
+  if (existsSync(dir) || cycles().some((x) => x.id === id)) throw new HttpError(409, `${id} gibt es schon.`);
   const rel = dir.slice(cfg.vaultDir.length + 1);
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: { dir: rel, files: files.map((f) => ({ name: f.name, lines: f.content.split('\n').length, head: f.content.slice(0, 1200) })) } });
   if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: rel, id, dir: rel });
@@ -1673,6 +1750,54 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
   invalidateIndex();
   log('sprint neu', { user: u.id, cycle: id });
   send(res, 200, { ok: true, id, dir: rel });
+});
+
+// Schritt 1 „Review vorbereiten“: Entwurf aus Vorlage + Daten. Vorschau liefert den ganzen Review (Download);
+// geschrieben werden nur nach Bestätigung und nur FEHLENDE Dateien (wx) — ein vorhandener Review bleibt unangetastet.
+on('POST', /^\/api\/sprint\/draft$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const date = String(b.date ?? '');
+  let r;
+  try { r = await prepareCycle(date); } catch (e: any) { throw new HttpError(400, e.message); }
+  if (r.empty) throw new HttpError(409, 'Die Jira-Kopie ist leer — erst abgleichen (Board → Abgleich), sonst stünde jedes Ticket als „nicht in der Kopie“ da.');
+  const id = `sprint-${date}`;
+  const dir = join(sprintRoot(), id);
+  const rel = dir.slice(cfg.vaultDir.length + 1);
+  if (cycles().some((x) => x.id === id && x.archived)) throw new HttpError(409, `${id} liegt schon im Archiv — kein zweiter Ordner mit gleichem Namen.`);
+  const files = r.files.map((f) => ({ ...f, exists: existsSync(join(dir, f.name)) }));
+  const missing = files.filter((f) => !f.exists);
+  const preview = {
+    dir: rel, id, previous: r.prev?.id ?? null, stats: r.stats,
+    files: files.map((f) => ({ name: f.name, exists: f.exists, lines: f.content.split('\n').length, content: f.name.endsWith('-review.md') ? f.content : f.content.slice(0, 1200) })),
+  };
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: missing.length > 0, preview, dryRun: vaultDry() });
+  if (!missing.length) throw new HttpError(409, `${id}: alle drei Notizen gibt es schon — der Entwurf ist nur als Download da.`);
+  if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: missing.map((f) => `${rel}/${f.name}`), id });
+  if (!existsSync(dir)) mkdirSync(dir);
+  const written: string[] = [];
+  for (const f of missing) {
+    try { writeFileSync(join(dir, f.name), f.content, { flag: 'wx' }); written.push(f.name); }
+    catch (e: any) { if (e.code !== 'EEXIST') throw e; }        // inzwischen angelegt (Obsidian, Agent) → nicht anfassen
+  }
+  invalidateIndex();
+  log('sprint entwurf', { user: u.id, cycle: id, written });
+  send(res, 200, { ok: true, id, dir: rel, written });
+});
+
+// Schritt 5 „Mitnahme“: aus der Jira-Kopie gerechnet (Gleichlauf mit jira-sprint-carry.sh), nur lesend, als Markdown.
+// In die Notiz schreibt den Abschnitt weiterhin /sprint-sync im Chat.
+on('GET', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/carry$/, async (req, res, m) => {
+  await needUser(req);
+  const c = cycleById(m[1]);
+  if (!c.files.review) throw new HttpError(404, 'Keine Review-Notiz in diesem Zyklus.');
+  const text = readFileSync(c.files.review, 'utf8');
+  const im = await issueMap();
+  const qs = [c.files.review, c.files.planning].filter(Boolean).flatMap((f) => parseQuestions(readFileSync(f!, 'utf8'), f));
+  const openNotes = syncPlanRows(qs).filter((r) => r.kind !== 'carry' && !isNoop(r.payload)).length;
+  const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+  const r = carryList(text, basename(c.files.review), im, viennaToday(), cfg.jiraProject);
+  send(res, 200, { ...r, openNotes, jiraSync: sync ? { at: sync.at } : null });
 });
 
 // --- Ziele (Runde 6) ---
@@ -1754,7 +1879,7 @@ async function assignGoals(u: User, items: any[], im: Map<string, Issue>, confir
       plan.push({ key, goal: 'KEINS', why, text: `${key} → bewusst ohne Ziel („${why.slice(0, 80)}“)`, actions: [{ type: 'comment', text: `Bewusst ohne Ziel (${exemptLabel()}): ${why}` }, { type: 'labels', add: [exemptLabel()], remove: [] }] });
       continue;
     }
-    if (raw === '') { plan.push({ key, goal: null, why, text: `${key} → Werkbank-Zuordnung zurücksetzen (Jira-Label gilt wieder)`, actions: [] }); continue; }
+    if (raw === '') { plan.push({ key, goal: null, why, text: `${key} → Workspace-Zuordnung zurücksetzen (Jira-Label gilt wieder)`, actions: [] }); continue; }
     if (!g.byId.has(raw) || goalLevel(raw) === 'Gate') throw new HttpError(400, `${key}: unbekanntes Ziel ${raw}.`);
     plan.push({ key, goal: raw, why, text: `${key} → ${raw}${why ? ` („${why.slice(0, 60)}“)` : ''}`, actions: [{ type: 'labels', add: [goalLabel(raw)], remove: sameLevelRemovals(i.labels ?? [], raw), replaceLevelOf: raw }] });
   }
@@ -1819,7 +1944,7 @@ on('POST', /^\/api\/goals\/assign-spec$/, async (req, res) => {
   const goal = String(b.goal ?? '').toUpperCase();
   const g = goalsAll(await issueMap());
   if (goal && (!g.byId.has(goal) || goalLevel(goal) === 'Gate')) throw new HttpError(400, `Unbekanntes Ziel ${goal}.`);
-  const preview = `${sp.name} → ${goal || 'Werkbank-Zuordnung zurücksetzen (Frontmatter ziel: gilt wieder)'}`;
+  const preview = `${sp.name} → ${goal || 'Workspace-Zuordnung zurücksetzen (Frontmatter ziel: gilt wieder)'}`;
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview });
   if (goal) await setGoal(u, sp.path, 'spec', goal, String(b.begruendung ?? '')); else await resetGoal(u, sp.path, 'spec');
   send(res, 200, { ok: true, preview });
@@ -1883,7 +2008,7 @@ on('GET', /^\/api\/timebox$/, async (req, res, _m, url) => {
   while (dates.length < days) dates.push(nextDay(dates.at(-1)!));
   const blocks = (await tbCol().find({ userId: u.id, date: { $in: dates } }).sort({ date: 1, start: 1 }).toArray()) as any[];
   const im = await issueMap();
-  const cur = cycles().find((c) => !c.archived);
+  const cur = currentCycle(cycles());
   const sl = cur ? sprintLabel(cur.date) : null;
   const who = resolveIdentity(await jiraIdentity(u), [...im.values()]);
   // Tagespriorität des ersten Tages: je Ticket gesetzt (timebox_prio) oder die höchste seiner Blöcke an diesem Tag.

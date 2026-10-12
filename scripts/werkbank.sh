@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OLAF-Werkbank — ein Einstieg für alles. Jeder Befehl darf beliebig oft laufen.
+# OLAF Workspace (früher OLAF-Werkbank) — ein Einstieg für alles. Jeder Befehl darf beliebig oft laufen.
 #
 #   scripts/werkbank.sh up        einrichten (falls nötig), starten, prüfen, nächste Schritte zeigen
 #   scripts/werkbank.sh down      alles stoppen
@@ -44,9 +44,9 @@ next_steps() {
   cat <<EOT
 
 Nächste Schritte
-  1. Werkbank öffnen:  ${LIBRECHAT_PUBLIC_URL:-http://127.0.0.1:3080}/wb/heute   (Chat und Werkbank-Seiten in einem)
+  1. OLAF Workspace öffnen:  ${LIBRECHAT_PUBLIC_URL:-http://127.0.0.1:3080}/wb/heute   (Chat und Workspace-Seiten in einem)
   2. Konto anlegen („Registrieren“, nur @maxenergy.at / @konekto.energy) und anmelden.
-  3. Kontomenü (unten links) → „Werkbank-Einrichtung“: eigenes Claude verbinden (Terminal: claude setup-token → Token einfügen),
+  3. Kontomenü (unten links) → „Workspace-Einrichtung“: eigenes Claude verbinden (Terminal: claude setup-token → Token einfügen),
      eigenes Jira verbinden (Atlassian-API-Token).
   4. Freigabe im Pilot: nur ${WERKBANK_ALLOWED_EMAILS:-${BRIDGE_ALLOWED_EMAILS:-knut.peters@maxenergy.at}}
      (weitere: BRIDGE_ALLOWED_EMAILS=a@…,b@… scripts/werkbank.sh restart).
@@ -91,7 +91,7 @@ doctor() {
 
 case "${1:-}" in
   up)
-    echo "OLAF-Werkbank: einrichten und starten"
+    echo "OLAF Workspace: einrichten und starten"
     "$HERE/setup.sh" || exit 1
     "$HERE/start.sh" || exit 1
     (load_env; cd "$WB/web" && node server/reindex-cli.ts)
@@ -102,7 +102,7 @@ case "${1:-}" in
   restart) "$HERE/stop.sh"; "$HERE/start.sh" && health ;;
   status) "$HERE/status.sh" ;;
   update)
-    echo "OLAF-Werkbank: auffrischen"
+    echo "OLAF Workspace: auffrischen"
     rm -f "$WB/web/dist/index.html"   # erzwingt den Neubau der Oberfläche
     "$HERE/setup.sh" || exit 1
     "$HERE/stop.sh"; "$HERE/start.sh" || exit 1

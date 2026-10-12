@@ -22,7 +22,7 @@ module.exports = function werkbankProxy(req, res) {
     r.pipe(res);
   });
   up.on('error', () => {
-    if (!res.headersSent) res.status(502).json({ error: 'Die Werkbank-Seiten laufen gerade nicht (Dienst werkbank-web). Bitte scripts/werkbank.sh status prüfen.' });
+    if (!res.headersSent) res.status(502).json({ error: 'Die Seiten des OLAF Workspace laufen gerade nicht (Dienst werkbank-web). Bitte scripts/werkbank.sh status prüfen.' });
     else res.end();
   });
   req.pipe(up);

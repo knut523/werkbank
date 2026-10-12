@@ -1,4 +1,4 @@
-// OLAF-Werkbank: eine Werkbank-Seite im Hauptbereich von LibreChat (aus dem Werkbank-Repo).
+// OLAF Workspace: eine Workspace-Seite im Hauptbereich von LibreChat (aus dem Werkbank-Repo).
 // Die Seiten kommen von /werkbank/ (gleicher Ursprung → gleiche Anmeldung, gleiches Hell/Dunkel).
 // Die Unterseite (#/wissen/…) steht in der Adresszeile als /wb/<seite>?h=<hash>, damit Neuladen und Links gehen.
 //
@@ -29,9 +29,9 @@ export default function WerkbankRoute() {
   const wanted = hashFor(page, search);
   // Einmal gesetzt, nie geändert: ein neues src würde den iframe neu laden.
   const [src] = useState(() => `/werkbank/?embed=1${wanted}`);
-  const label = WERKBANK_PAGES.find((p) => p.id === page)?.label ?? 'Werkbank';
+  const label = WERKBANK_PAGES.find((p) => p.id === page)?.label ?? 'OLAF Workspace';
 
-  useEffect(() => { document.title = `${label} · OLAF-Werkbank`; }, [label]);
+  useEffect(() => { document.title = `${label} · OLAF Workspace`; }, [label]);
 
   // Adresszeile → iframe (Leiste, Zurück/Vor): nur wenn der Hash im iframe ein anderer ist (verhindert Schleifen).
   useEffect(() => {

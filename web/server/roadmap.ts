@@ -11,9 +11,12 @@ import { hashText } from './sprint.ts';
 
 // ---------- offene Entscheidungen ----------
 
-export interface Decision { line: number; question: string; section: string; open: boolean; answer: string }
+export interface Decision { line: number; question: string; section: string; open: boolean; answer: string; knutId: string | null }
 
-const KNUT = /^((?:> ?)*)(\s*)[-*]\s+Knut:\s*(.*)$/;
+// `- Knut:` oder mit stabiler Kennung `- Knut (<spec-slug>#K<n>):` (docs/plan-knut-ids.md; jeder Großbuchstabe als
+// Präfix wird gelesen, vergeben wird K). Nur diese strikte Form —
+// `- Knut (29.09.): …` oder `- Knut (E9):` sind keine Entscheidungszeilen (waren es nie).
+export const KNUT = /^((?:> ?)*)(\s*)[-*]\s+Knut(?: \(([a-z0-9][a-z0-9-]*#[A-Z]\d+)\))?:\s*(.*)$/;
 
 export function parseDecisions(text: string): Decision[] {
   const lines = text.split('\n');
@@ -42,7 +45,7 @@ export function parseDecisions(text: string): Decision[] {
       if (!/^\s/.test(raw) && !/^\s*([-*]|\d+\.)\s/.test(raw)) break;   // Absatzanfang
     }
     const question = q.join(' ').replace(/^([-*]|\d+\.)\s+/, '').replace(/\s+/g, ' ').trim();
-    out.push({ line: i + 1, question, section, open: !m[3].trim(), answer: m[3].trim() });
+    out.push({ line: i + 1, question, section, open: !m[4].trim(), answer: m[4].trim(), knutId: m[3] ?? null });
     void prefix;
   }
   return out;
@@ -55,9 +58,9 @@ export function fillDecision(text: string, line: number, answer: string, expectH
   const lines = text.split('\n');
   const m = lines[line - 1]?.match(KNUT);
   if (!m) throw new Error('Zeile nicht gefunden — die Notiz hat sich geändert.');
-  if (m[3].trim()) throw new Error('Diese Entscheidung ist schon beantwortet.');
+  if (m[4].trim()) throw new Error('Diese Entscheidung ist schon beantwortet.');
   const before = lines[line - 1];
-  const after = `${m[1]}${m[2]}- Knut: ${clean}`;
+  const after = `${m[1]}${m[2]}- Knut${m[3] ? ` (${m[3]})` : ''}: ${clean}`;
   lines[line - 1] = after;
   return { text: lines.join('\n'), before, after, line };
 }

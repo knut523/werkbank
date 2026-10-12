@@ -7,4 +7,4 @@ for name in $SERVICES; do
 done
 echo "LibreChat  http://127.0.0.1:3080  → $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3080/)"
 echo "Brücke     http://127.0.0.1:3090  → $(curl -s http://127.0.0.1:3090/health)"
-echo "Werkbank   http://127.0.0.1:3070  → $(curl -s http://127.0.0.1:3070/api/health)"
+echo "Workspace  http://127.0.0.1:3070  → $(curl -s http://127.0.0.1:3070/api/health)"

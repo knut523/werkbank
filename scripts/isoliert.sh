@@ -81,9 +81,9 @@ do_start() {
   local LC_URL WEB_URL; LC_URL="$(coder_url $P_LC)"; WEB_URL="$(coder_url $P_WEB)"
   set -a; source "$WB/librechat/.env"; source "$ISO/.env.local"; set +a
   export DOMAIN_CLIENT="$LC_URL" DOMAIN_SERVER="$LC_URL" LIBRECHAT_PUBLIC_URL="$LC_URL" WERKBANK_PUBLIC_URL="$WEB_URL"
-  export MEILI_HOST="http://127.0.0.1:$P_MEILI" CUSTOM_FOOTER="OLAF-Werkbank · ISOLIERTE TESTINSTANZ ($WB)"
+  export MEILI_HOST="http://127.0.0.1:$P_MEILI" CUSTOM_FOOTER="OLAF Workspace · ISOLIERTE TESTINSTANZ ($WB)"
   [ -x "$SRC_RT/node/bin/node" ] && export PATH="$SRC_RT/node/bin:$PATH"
-  echo "Isolierte Werkbank starten ($WB)"
+  echo "Isolierten OLAF Workspace starten ($WB)"
   # RAM (Plan 125): Mongo-Cache und Meili-Indexierung gedeckelt wie in start.sh; ohne WB_ISO_SUCHE=1 keine Suche
   # (LibreChat SEARCH=false, kein Meilisearch-Prozess) — Vault-Suche/Wissen-Suche gehen dann in der Testinstanz nicht.
   MONGO_CACHE=(); [ -n "${WB_MONGO_CACHE_GB-0.25}" ] && MONGO_CACHE=(--wiredTigerCacheSizeGB "${WB_MONGO_CACHE_GB-0.25}")
