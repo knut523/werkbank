@@ -3,13 +3,14 @@
 // und Vorfahrschaft im Quell-Repo. Live heißt: der HEAD des Strang-Ordners ist im SHA des NEUESTEN Live-Commits enthalten.
 // git läuft asynchron ohne Shell mit Timeout; Argumente sind nur geprüfte SHAs, Zweignamen aus git selbst und Ordnerpfade.
 import { execFile } from 'node:child_process';
+import { GIT_SAFE } from './gitsafe.ts';
 import { existsSync } from 'node:fs';
 import { parseLiveLog, releaseNumbers, paketInSubject, branchOfMerge, standFrom, type LiveEntry, type Stand, type StandFacts } from './heutekarte.ts';
 
 export type Git = (args: string[], cwd: string) => Promise<string>;
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' };
 export const realGit: Git = (args, cwd) => new Promise((res, rej) => {
-  execFile('git', args, { cwd, env: GIT_ENV, timeout: 3000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' }, (e, out) => (e ? rej(e) : res(String(out).trim())));
+  execFile('git', [...GIT_SAFE, ...args], { cwd, env: GIT_ENV, timeout: 3000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' }, (e, out) => (e ? rej(e) : res(String(out).trim())));
 });
 
 const SHA = /^[0-9a-f]{7,40}$/;

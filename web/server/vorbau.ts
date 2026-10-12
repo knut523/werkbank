@@ -9,6 +9,7 @@
 // GIT_VW_READ=1, ohne GIT_VW_ITEM und mit genau EINEM Credential-Helper (die geerbten werden geleert) — so kann der
 // Push-Token weder über einen anderen Helper noch über die Item-Wahl hereinkommen. Kein Lesetoken → Stopp ohne Knopf.
 // Die Entscheidung (decide) ist rein und getestet; git und GitHub laufen nur in gather().
+import { GIT_SAFE } from './gitsafe.ts';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -209,7 +210,7 @@ export function g0Env(env = process.env): NodeJS.ProcessEnv {
 export const g0GitArgs = (env = process.env) => ['-c', 'credential.helper=', '-c', `credential.helper=${credHelper(env)}`, '-c', 'credential.useHttpPath=true', '-c', 'credential.interactive=never'];
 
 type Git = (args: string[], cwd: string, opts?: { input?: string; timeout?: number }) => string;
-export const realGit: Git = (args, cwd, opts = {}) => execFileSync('git', [...g0GitArgs(), ...args], { cwd, env: g0Env(), input: opts.input, timeout: opts.timeout ?? 20_000, stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 << 20 }).trim();
+export const realGit: Git = (args, cwd, opts = {}) => execFileSync('git', [...GIT_SAFE, ...g0GitArgs(), ...args], { cwd, env: g0Env(), input: opts.input, timeout: opts.timeout ?? 20_000, stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 << 20 }).trim();
 const scrub = (s: string) => s.replace(/(https?:\/\/)[^@\s/]+@/g, '$1').replace(/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '***').replace(/\s+/g, ' ').trim().slice(0, 200);
 
 /** owner/name aus der origin-URL (https, ssh oder lokaler Pfad …/<owner>/<name>.git). */

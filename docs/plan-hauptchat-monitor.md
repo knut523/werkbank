@@ -230,6 +230,101 @@ Die vier Rollen liefen nacheinander im selben Modell. Das ist schwächer als Run
   5. [verify] `orch_show` mit Verlauf liefert die letzten n Nachrichten in Reihenfolge, gekürzt; Test.
   6. [must-fix] Seitenleiste: „Fertig (n)“ eingeklappt, Zahl sichtbar; „wartet auf dich“ hervorgehoben; Bild.
 
+## 9. Zusatz C (Knut 12.10.2026 abends): Review → Freigabe → Push im Workspace
+
+> Knut: „gib mir nochmal die Links, lass mich reviewen und dann freigeben — den Prozess sollten wir auch im Workspace mitdenken“
+
+### 9.1 Befund (belegt, Bestandsaufnahme 12.10.)
+- **Review heute:** Karten auf „Heute“ für fertige/review_ready-Stränge (`leitstand.ts` `strandCards`/`strandDetail`):
+  Worum/Was tun/Stand, Bericht und Auftrag aus dem Review-Paket (`bericht.ts`, sicher unter `review-pakete`, ≤ 200 KB),
+  „Passt“/„Nacharbeit“. `review_ready` (`review.ts`) kennt gemacht/nicht_gemacht/risiko/dod/artefakte — **keine Felder für
+  Vorschau, PR-Texte oder Repos**.
+- **Vorschau-Links** stehen frei im Bericht (`## Vorschau`, `https://<port>--main--dev--knut.ws.konekto.energy/…`; Admin
+  Next 313x, Login-Proxy 413x, Tarif-App 31xx). Register: `review-pakete/00-dienste.yaml` (port, was, strang, paket, link,
+  start, bis, …) + `~/bin/dienste`; **keine Prüfung, ob ein Link antwortet**.
+- **PR-Texte**: freie Dateinamen im Paket (`pr.md`, `pr-<repo>.md`, `pr-plan.md`, `<repo>.md`), im Bericht in der
+  Push-Checkliste genannt. **Offene Entscheidungen**: Blöcke `**D1 — …**` / `**E-147-1 · …**` mit Optionen und leerer Zeile
+  `  - Knut:`; Parser/Schreiber für `- Knut:` gibt es für Vault-Specs (`roadmap.ts` `parseDecisions`/`fillDecision`), nicht
+  für Pakete.
+- **Push-Checkliste** (plan-to-pr Phase 5 + Berichte 147/151/152/153): Lesetoken-Fetch, Basis-SHA prüfen/rebasen,
+  Plannummer vergeben, Plan-PR zuerst, umbrella, Code-PRs gestapelt, Review-Kommentar, CI abwarten, nie mergen. Kein
+  allgemeines Skript. In Strängen ist Push technisch gesperrt (`tools.ts` ORCH_BASH_BLOCK, `orchGitEnv`), auch der
+  Lesetoken-Fetch.
+- **Vorschau-Datenbanken**: Jede Vorschau hat schon eine **eigene** Postgres-DB (lokal :55433, z. B. `olaf_umfragen`,
+  `olaf_hardware`). Die Flex-Admin-Vorschau scheitert nicht an einer gemeinsamen DB, sondern daran, dass
+  `prisma migrate deploy` DB-Zugangsdaten aus `.env` braucht, die Stränge nicht lesen dürfen (148/bericht.md). Dasselbe bei
+  152 (drei develop-Migrationen auf `olaf_hardware` ungeprüft).
+
+### 9.2 Grilling (Empfehlung = gebaut, außer wo „nicht gebaut“ steht)
+
+| # | Frage | Optionen | Empfehlung |
+|---|---|---|---|
+| C1 | Wo erscheint die Review-Ansicht? | a) eigene Workspace-Seite je Strang (`#/review?strand=<id>`), verlinkt aus der Karte auf „Heute“ · b) alles in der Karte | **a** |
+| C2 | Woher Vorschau-Links und PR-Texte? | a) `review_ready` bekommt optionale Felder `vorschau[]` und `repos[]` (Pfad, Branch, PR-Text-Datei); Rückfall: Vorschau-Links aus dem Bericht, PR-Texte `pr*.md` im Paket · b) neues Register | **a** |
+| C3 | „Antwortet die Vorschau?“ | Server prüft nur Coder-Vorschau-URLs (`https://<port>--…`) → GET `127.0.0.1:<port>`, 3 s, ohne Weiterleitungen; zeigt Status und den Eintrag aus `00-dienste.yaml` | **so** — keine beliebigen URLs (SSRF) |
+| C4 | Antwortfeld für offene Entscheidungen | a) Entscheidungsblöcke aus dem Bericht lesen, Antwort in Mongo am Strang + als Ereignis an den Hauptchat · b) Antwort in die Datei schreiben | **a** — Berichte schreibt der Strang; die Werkbank schreibt nicht in fremde Pakete |
+| C5 | „Freigeben zum Push“ je Repo | Freigabe-Datensatz (Repo-Pfad, Branch, **Commit-SHA wie gesehen**, wer, wann); Server prüft beim Klick, dass der Branch-Kopf noch dieser SHA ist (sonst 409 „neu laden“); Ereignis „freigabe“ an den Hauptchat; zurückziehbar | **so** |
+| C6 | Wer pusht? | a) die Hauptsitzung nach der Push-Checkliste, nur mit Freigabe (`orch freigaben` listet, Push-Ergebnis zurückmelden) · b) ein Push-Agent mit Push-Recht · c) der Web-Server | **a jetzt** — Push-Rechte für Agenten sind eine eigene Entscheidung (Zugangsdaten, Sperren); b als Folgeplan |
+| C7 | Merge | nie — kein Knopf | **so** |
+| C8 | Vorschau-DB mit Migrationen aus mehreren Branches | a) je Vorschau eine eigene Kopie aus einer Vorlage (`createdb -T`), Migrationen beim Start durch den Starter (der die Zugangsdaten hat), Kopie beim Stopp weg, im Register vermerkt · b) gemeinsame DB | **a — nicht in diesem Repo gebaut**: Starter/Skripte liegen außerhalb der Werkbank und brauchen Zugangsdaten; Vorschlag + Ablauf im Bericht, Bau als eigener Strang mit Knuts Freigabe |
+
+### 9.3 Council Runde 3 (Zusatz C) — HOLD 0,72, gebaut unter diesen Bedingungen
+
+Stimmen: Proponent, Spezialist (gegen den Code) und Advocatus diaboli (anderes Modell) liefen als drei unabhängige
+Teilagenten. Den Finalizer hat dieser Strang geschrieben.
+
+- **Proponent:** kleinster Schnitt, keine neuen Schreib- oder Zugangsrechte. Freigabe als prüfbarer Datensatz statt
+  Bericht-Konvention.
+- **Spezialist:** Weg zu Branch/SHA gibt es (`strandStand`). **Bestehende Lücke:** `git status` im Web-Server führt
+  `core.fsmonitor` aus der Repo-Config aus. Ein Strang kann die setzen, und der Code liefe dann mit der Umgebung des
+  Web-Servers (Geheimnisse). Außerdem:
+  - Vorschau ≠ Commit, also nur mit sauberem Worktree freigeben.
+  - Port nur aus `00-dienste.yaml`, Infrastruktur-Ports gesperrt.
+  - `redirect: manual`, Körper nicht lesen.
+  - Entscheidungen mit Bericht-Hash.
+  - Freigaben nie löschen, nur zurückziehen.
+  - Kein interner Weg legt Freigaben an.
+- **Advocatus:** (1) Ohne Durchsetzung ist die Freigabe nur ein Protokoll: Die Hauptsitzung kann ohnehin pushen. (2) Der
+  Rebase in der Push-Checkliste ändert den SHA, die Freigabe ist dann wertlos oder wird umgangen. (3) Ein Ereignis
+  „freigabe“ wird als Befehl gelesen. (4) Injection über Bericht- und PR-Texte. (5) Gummistempel ohne Diff, zwei
+  Wahrheiten bei Entscheidungen. (6) Die Vorschau-Prüfung wird zum Port-Scanner. (7) DB-Kopien veralten.
+
+**Finalizer: HOLD 0,72. Richtung richtig, aber nur mit Durchsetzung und Bindung an den Inhalt. Bindende Bedingungen:**
+1. [must-fix, vorgezogen] Git-Aufrufe der Werkbank gehärtet: `-c core.fsmonitor=false -c core.hooksPath=/dev/null`
+   (Release-Stand, frischer Worktree, G0). Restrisiko (Filter/Textconv aus der Repo-Config bei `status`) steht im Bericht.
+2. [must-fix] Die Freigabe bindet **Repo (realpath des eigenen Worktrees aus dem Strang, nie aus der Anfrage), Branch
+   (aus git), Kopf-SHA, Basis (merge-base mit `origin/develop|dev|main`) und `git patch-id --stable` des Diffs Basis..Kopf**.
+   Nur mit sauberem Worktree (sonst 409 „ungespeicherte Änderungen — Vorschau ≠ Commit“) und nur, wenn der Kopf noch der
+   gesehene SHA ist.
+3. [must-fix] **Durchsetzung:** Ein Prüfweg `orch freigabe-pruefen <repo> <sha>` (Exit 0 nur bei aktiver Freigabe für genau
+   diesen SHA oder — nach Rebase — denselben Patch) und ein `pre-push`-Hook als Vorlage, der ihn aufruft. Einbauen in die
+   Repos muss Knut (Git-Hooks sind in Strängen gesperrt) → „Braucht Knut“. Ohne Hook bleibt es eine Regel, und der Bericht
+   sagt das deutlich.
+4. [must-fix] Freigabe ist ein **Zustand, kein Auftrag:** kein Ereignis, das zum Push auffordert. Der Hauptchat bekommt nur
+   den Hinweis „Knut hat X freigegeben — pushen nur die Hauptsitzung nach der Checkliste“. Kein `/internal/`-Weg legt
+   Freigaben an oder zieht sie zurück. Intern: lesen, prüfen, „gepusht“ melden.
+5. [must-fix] Freigaben nie löschen: `revokedAt`; nach `pushedAt` nicht mehr zurückziehbar. Eigene Sammlung
+   `freigaben`, Protokoll je Schritt.
+6. [must-fix] Ansicht zeigt, **was** freigegeben wird: Commits Basis..Kopf (≤ 30), Diff-Statistik, sauber ja/nein.
+   Bericht, PR-Texte und Entscheidungen erscheinen **als Text**, ohne HTML und ohne klickbare Links aus Agententext. Klickbar
+   sind nur Vorschau-Links aus dem Register.
+7. [must-fix] Vorschau-Prüfung nur für Ports aus `00-dienste.yaml` (Eintrag zum Paket/Strang), Infrastruktur-Ports
+   gesperrt, `GET /` auf `127.0.0.1:<port>`, `redirect: manual`, Körper nie lesen, 3 s, 30 s Zwischenspeicher, nur beim
+   Öffnen/auf Knopfdruck. 502/504 heißt „Proxy läuft, Ziel antwortet nicht“.
+8. [must-fix] Entscheidungen: Blöcke `**D1 — …**` / `**E-147-1 · …**` zeilengenau, nicht in Codezäunen. Antworten gehen
+   mit Bericht-Hash an den Server (Bericht geändert → 409) und **als eine Nachricht an den Strang** („Nacharbeit nach Review:
+   Entscheidungen …“). Der Strang trägt sie in seinen Bericht ein, damit eine Wahrheit bleibt. Nicht, solange er läuft.
+9. [verify] Tests: Port-Sperre, Weiterleitung ohne Körper, SHA-Wechsel → 409, unsauber → 409, Rebase mit gleichem Patch →
+   Prüfung ok, anderer Patch → nein, Zurückziehen, Bericht-Hash → 409, kein interner Weg legt an, Härtung (fsmonitor läuft
+   nicht).
+
+**Bewusst nicht in diesem Schnitt (Folgepläne, Knuts Entscheidung):**
+- Mehrere Repos je Strang (olaf-docs-Plan-PR, umbrella, gestapelte PRs). Ein Strang kennt heute nur seinen Worktree.
+- Ein Push-Agent mit Push-Recht.
+- Vorschau-DB-Kopien je Vorschau (C8).
+- Die Plannummer vor dem Review vergeben, damit die Checkliste die Freigabe nicht ändert.
+
 ## 6. Verlauf
 - 12.10.2026 abends: Befund, Plan v1, Council R1 (HOLD), Bau S3 → S1 → S2, Review-Pässe A/B, Bilder/Video.
 - 12.10.2026 abends: Zusatz Knut (Push/Pull, offen/fertig) → §8, Council R2, Bau S4 (Push/Pull) und S5 (Seitenleiste).
+- 12.10.2026 abends: Zusatz C (Review → Freigabe → Push) → §9, Council R3 (drei Teilagenten) HOLD 0,72, Bau S6 (Härtung git, Review-Ansicht, Freigabe, Prüfweg + Hook-Vorlage).

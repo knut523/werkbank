@@ -4,6 +4,7 @@
 //   2. Code-Auftrag → frischer Worktree von origin/develop (sonst origin/dev, origin/main) statt des alten Klons,
 //   3. sonst „Stand: N Commits hinter origin/<zweig>“ in der ersten Zeile des Chats.
 // Nie pushen. Die Entscheidung ist rein (decideFresh) und getestet; git läuft nur in gatherFacts/createWorktree.
+import { GIT_SAFE } from './gitsafe.ts';
 import { execFileSync } from 'node:child_process';
 import { basename, dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -35,7 +36,7 @@ export function decideFresh(f: RepoFacts, code: boolean): FreshDecision {
 
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false', SSH_ASKPASS: '/bin/false', GCM_INTERACTIVE: 'never' };
 type Run = (args: string[], cwd: string, timeoutMs?: number) => string;
-const realRun: Run = (args, cwd, timeoutMs = 10_000) => execFileSync('git', ['-c', 'credential.interactive=never', ...args], { cwd, env: GIT_ENV, timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' }).trim();
+const realRun: Run = (args, cwd, timeoutMs = 10_000) => execFileSync('git', [...GIT_SAFE, '-c', 'credential.interactive=never', ...args], { cwd, env: GIT_ENV, timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' }).trim();
 /** Zugangsdaten aus URLs und Fehlertexten entfernen, nie ausgeben. */
 export const scrub = (s: string) => s.replace(/(https?:\/\/)[^@\s/]+@/g, '$1').replace(/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '***').replace(/\s+/g, ' ').trim().slice(0, 160);
 
