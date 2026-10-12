@@ -96,7 +96,7 @@ test('Lauf-Lesezeichen: zwei Stränge gleichzeitig → genau ein Lesezeichen, Z�
   // Ein zweites Lesezeichen bekommt den nächsten Platz und die Beschreibung aus TAG_TEXT.
   await o.decorate(u, 'conv-a', 'Teil 0', o.ORCH_TAG);
   const orchTag: any = await L.collection('conversationtags').findOne({ user: uid, tag: o.ORCH_TAG });
-  assert.equal(orchTag.position, 2); assert.equal(orchTag.count, 1); assert.match(orchTag.description, /Haupt-Sitzung/);
+  assert.equal(orchTag.position, 2); assert.equal(orchTag.count, 1); assert.match(orchTag.description, /Unter-Chats, die der Hauptchat/);
 });
 
 test('Lauf-Lesezeichen unter Last: acht Stränge gleichzeitig → ein Lesezeichen, Zählung 8', async () => {
