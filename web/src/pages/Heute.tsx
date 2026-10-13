@@ -160,7 +160,7 @@ function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
   });
   const [doc, setDoc] = useState<Doc | null>(null);
   // Auftrag · Bericht · Chat (Knut 12.10.): Strang-Karten öffnen Auftrag und Bericht in der Karte, nicht auf einer anderen Seite.
-  const open = <><DocButtons it={it} doc={doc} setDoc={setDoc} />{it.url && <a className="btn small ghost" style={BIG} href={it.url} target={chatTarget}>Chat öffnen</a>}{!it.paket && it.auftrag && <a className="btn small ghost" style={BIG} href={`#/leitstand?auftrag=${it.id}`}>Auftrag</a>}{!it.paket && it.bericht && <a className="btn small ghost" style={BIG} href={`#/leitstand?bericht=${it.id}`}>Bericht</a>}</>;
+  const open = <><DocButtons it={it} doc={doc} setDoc={setDoc} />{it.url && <a className="btn small ghost" style={BIG} href={it.url} target={chatTarget}>Chat öffnen</a>}{!it.paket && it.auftrag && <a className="btn small ghost" style={BIG} href={`#/leitstand?auftrag=${it.id}`}>Auftrag</a>}{!it.paket && it.bericht && <a className="btn small ghost" style={BIG} href={`#/leitstand?bericht=${it.id}`}>Bericht</a>}{it.kind === 'strand' && <a className="btn small" style={BIG} href={`#/leitstand?review=${it.id}`} data-testid="review-freigabe">Review &amp; Freigabe</a>}</>;
 
   return (
     <article className={`card rq rq-${it.bucket}`} data-run={it.id} data-bucket={it.bucket}>

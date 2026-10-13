@@ -27,6 +27,8 @@ export async function connect(): Promise<MongoClient> {
       db.collection('sprint_members_log').createIndex({ key: 1, at: -1 }),
       db.collection('timebox_prio').createIndex({ userId: 1, date: 1 }),
       db.collection('github_prs').createIndex({ pr: 1 }, { unique: true }),
+      // Plan 154 §9: eine aktive Freigabe je Strang/Repo/Branch/Kopf
+      db.collection('freigaben').createIndex({ strand: 1, key: 1, branch: 1, head: 1 }, { unique: true, partialFilterExpression: { aktiv: true } }),
       // Plan 81: Projekte je Workstream, Agenten-Dateien je Lauf
       db.collection('projects').createIndex({ tickets: 1 }),
       db.collection('projects').createIndex({ workstream: 1, updatedAt: -1 }),

@@ -16,12 +16,13 @@ import { worumGeht, wasTun, type TodoStep } from './heutekarte.ts';
 import { liveIndex, strandStand, realGit, type LiveIndex } from './releasestand.ts';
 import type { Stand } from './heutekarte.ts';
 import { join } from 'node:path';
+import { groupThemen, themaOf } from './themen.ts';
 import { homedir } from 'node:os';
 import { cfg } from './config.ts';
 import { wb } from './db.ts';
 import type { User } from './auth.ts';
 import { createLibreChat } from './agent.ts';
-import { runs, STRANDS, OPEN, laufName, LEIT_TAG, questions, orchStatus, excerpt, lastMessage, strandStates, deliver, decorateSoon, AUTO_RATE_MS, type LastMsg, type StrandState } from './orchestrator.ts';
+import { runs, STRANDS, OPEN, laufName, LEIT_TAG, questions, orchStatus, excerpt, lastMessage, strandStates, deliver, decorateSoon, AUTO_RATE_MS, AUTO_BUSY_MS, type LastMsg, type StrandState } from './orchestrator.ts';
 
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 const internalHeaders = () => ({ 'content-type': 'application/json', 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' });
@@ -42,20 +43,35 @@ export const leitDir = () => process.env.WERKBANK_LEITSTAND_DIR || join(process.
 
 // ---------- Ereignisse (rein, testbar) ----------
 
-export interface LeitEvent { key: string; kind: 'fertig' | 'antwort' | 'blockiert' | 'deckel' | 'review' | 'frage' | 'weiter' | 'geprueft' | 'nacharbeit'; at: number; text: string; excerpt?: string; strand?: { id: string; title: string } }
+/** Ab wann ein nicht fortgesetztes technisches Zugende als „hängt“ gemeldet wird (Plan 154, G9). */
+export const hangMs = (env = process.env) => num(env.LEITSTAND_HANG_MS, 5 * 60_000);
+
+export interface LeitEvent { key: string; kind: 'fertig' | 'antwort' | 'blockiert' | 'deckel' | 'review' | 'frage' | 'weiter' | 'geprueft' | 'nacharbeit' | 'haengt' | 'meldung' | 'freigabe'; at: number; text: string; excerpt?: string; strand?: { id: string; title: string } }
 
 /**
- * Ereignis eines Strangs aus seinem Zustand — oder null. Technische Zugenden, die Auto-Fortsetzen übernimmt (cause gesetzt), sind
- * keins (Plan 132, S2). Der Schlüssel macht dasselbe Ereignis einmalig: Strang + Zug + Zustand.
+ * Ereignis eines Strangs aus seinem Zustand — oder null. Technische Zugenden (cause gesetzt) übernimmt das Auto-Fortsetzen
+ * (Plan 132, S2); stehen sie nach hangMs() noch, meldet der Strang „hängt“ (Plan 154). Der Schlüssel macht dasselbe Ereignis
+ * einmalig: Strang + Zug + Zustand.
  */
-export function strandEvent(run: any, st: { status: string; reason: string; cause?: string }, s: StrandState | null | undefined, last: LastMsg | null): LeitEvent | null {
+export function strandEvent(run: any, st: { status: string; reason: string; cause?: string }, s: StrandState | null | undefined, last: LastMsg | null, now = Date.now()): LeitEvent | null {
   const strand = { id: String(run._id), title: String(run.title ?? '') };
   const turnKey = s?.turn?.start ?? new Date(run.lastSentAt ?? run.startedAt).getTime();
   const ex = last && !last.fromUser ? excerpt(last.text, 400) : '';
   if (run.autoStopped) return { key: `deckel:${strand.id}:${new Date(run.autoStopped.at).getTime()}`, kind: 'deckel', at: new Date(run.autoStopped.at).getTime(), text: String(run.autoStopped.reason ?? 'Deckel erreicht'), strand };
   if (run.reviewReadyAt) return { key: `review:${strand.id}:${new Date(run.reviewReadyAt).getTime()}`, kind: 'review', at: new Date(run.reviewReadyAt).getTime(), text: 'meldet review_ready', excerpt: ex, strand };
-  if (st.status === 'running' || st.cause) return null;
-  const at = s?.turn?.end ?? last?.at ?? turnKey;
+  if (st.status === 'running') return null;
+  // Sicherheitsnetz (Plan 154, G9): normal setzt das automatische „weiter“ binnen 20–40 s fort. Steht der Strang nach hangMs()
+  // noch an der Grenze, meldet er „hängt“ — einmal je Zug — mit dem Grund, warum nicht fortgesetzt wurde (autoHold).
+  if (st.cause) {
+    const endAt = s?.turn?.end ?? s?.turn?.start ?? new Date(run.lastSentAt ?? run.startedAt).getTime();
+    // Gewollte Wartezeiten des Auto-weiter zuerst abwarten (Council R1, Bedingung 6): Parallelgrenze 2 min, Kontingent 30 min.
+    const grace = st.cause === 'busy' ? AUTO_BUSY_MS : st.cause === 'rate_limit' ? AUTO_RATE_MS : 0;
+    if (now - endAt < grace + hangMs()) return null;
+    const hold = run.autoHold && (run.autoHold.turn ?? null) === (s?.turn?.start ?? null) ? run.autoHold.why : null;
+    const why = hold ? ` — nicht automatisch fortgesetzt: ${hold}` : '';
+    return { key: `haengt:${strand.id}:${turnKey}`, kind: 'haengt', at: endAt, text: `hängt seit ${Math.round((now - endAt) / 60_000)} min: ${st.reason}${why}`, excerpt: ex, strand };
+  }
+  const at =s?.turn?.end ?? last?.at ?? turnKey;
   if (st.status === 'done') return { key: `fertig:${strand.id}:${turnKey}`, kind: 'fertig', at, text: 'meldet „fertig“', excerpt: ex, strand };
   if (st.status === 'waiting') return { key: `antwort:${strand.id}:${turnKey}`, kind: 'antwort', at, text: `wartet: ${st.reason}`, excerpt: ex, strand };
   if (st.status === 'failed') return { key: `blockiert:${strand.id}:${turnKey}`, kind: 'blockiert', at, text: st.reason, excerpt: ex, strand };
@@ -111,6 +127,53 @@ export function decideWake(open: { createdAt: number; urgent?: boolean }[], ctx:
     if (counted.filter((t) => ctx.now - t < 86_400_000).length >= ctx.c.perDay) return { action: 'cap', why: `Weckdeckel ${ctx.c.perDay}/Tag erreicht` };
   }
   return { action: 'send', why: 'zustellen' };
+}
+
+// ---------- Push: ein Unter-Chat meldet sich selbst (Plan 154, S4) ----------
+// Gedeckelt in der Werkbank (Council R2, Bedingung 1): je Unter-Chat eine Meldung je ORCH_MELDUNG_ABSTAND_MIN (10) Minuten,
+// höchstens ORCH_MELDUNG_PRO_TAG (6) in 24 h. Der Text stammt vom Agenten → nur als eingezäunter Auszug in die Meldung
+// (Bedingung 2). Sie geht sofort in die Warteschlange des Hauptchats, auch während der Unter-Chat noch arbeitet (Bedingung 3).
+
+export const meldungCfg = (env = process.env) => ({ abstand: num(env.ORCH_MELDUNG_ABSTAND_MIN, 10) * 60_000, proTag: num(env.ORCH_MELDUNG_PRO_TAG, 6) });
+
+export async function meldeHauptchat(u: User, conv: string, art: string, text: string, now = Date.now()) {
+  if (art !== 'blocker' && art !== 'risiko') throw err(400, 'art ist blocker oder risiko.');
+  const t = String(text ?? '').trim();
+  if (!t) throw err(400, 'Text fehlt — kurz, mit Empfehlung.');
+  if (t.length > 500) throw err(400, 'Höchstens 500 Zeichen — Details in den Bericht oder den Abschnitt „### Stand“.');
+  const d: any = conv ? await runs().findOne({ userId: u.id, conv, ...STRANDS }) : null;
+  if (!d) throw err(409, 'hauptchat_melden gibt es nur in Unter-Chats des Hauptchats.');
+  const c = meldungCfg();
+  const prev: number[] = (d.meldungen ?? []).map((m: any) => new Date(m.at).getTime());
+  const letzte = Math.max(0, ...prev);
+  if (now - letzte < c.abstand) throw err(429, `Schon vor ${Math.round((now - letzte) / 60_000)} min gemeldet — höchstens eine Meldung je ${Math.round(c.abstand / 60_000)} Minuten. Schreib es in „### Stand“ und arbeite weiter.`);
+  if (prev.filter((x) => now - x < 86_400_000).length >= c.proTag) throw err(429, `Tageskappe: schon ${c.proTag} Meldungen in 24 h. Schreib es in „### Stand“ und arbeite weiter.`);
+  const at = new Date(now);
+  const r = await runs().updateOne({ _id: d._id, 'meldungen.at': { $ne: at } }, { $push: { meldungen: { $each: [{ at, art, text: t }], $slice: -20 } } as any });
+  if (!r.modifiedCount) throw err(429, 'Gerade eben schon gemeldet.');
+  const leit = await activeLeitstand(u);
+  if (leit) {
+    const key = `meldung:${d._id}:${now}`;
+    await events().updateOne({ _id: `${u.id}:${key}` as any }, { $setOnInsert: {
+      userId: u.id, leit: leit._id, kind: 'meldung', text: art === 'blocker' ? 'meldet einen Blocker (braucht eine Entscheidung)' : 'meldet ein Risiko / eine Planänderung',
+      excerpt: t, strand: { id: String(d._id), title: String(d.title ?? '') }, at, createdAt: at, status: 'offen', retries: 0, urgent: false } }, { upsert: true });
+  }
+  return { ok: true, id: String(d._id), art, hauptchat: !!leit };
+}
+
+/**
+ * Hinweis an den Hauptchat nach Knuts Freigabe (Plan 154, Council R3, Bedingung 4): ein Zustand, KEIN Auftrag — die Zeile sagt
+ * das ausdrücklich. Gepusht wird nur von der Hauptsitzung nach der Push-Checkliste; der pre-push-Hook prüft die Freigabe.
+ */
+export async function hinweisFreigabe(u: User, f: { id: string; branch: string; head: string; repo: string }, d: any, zurueck = false) {
+  const leit = await activeLeitstand(u);
+  if (!leit) return;
+  const at = new Date();
+  const key = `${zurueck ? 'freigabe-zurueck' : 'freigabe'}:${f.id}`;
+  const text = zurueck
+    ? `Knut hat die Freigabe ${f.id} (${f.branch}@${f.head.slice(0, 7)}) zurückgezogen — nicht pushen.`
+    : `Knut hat ${f.branch}@${f.head.slice(0, 7)} (${f.repo.split('/').pop()}) zum Push freigegeben (${f.id}). Hinweis, kein Auftrag: gepusht wird nur von der Hauptsitzung nach der Push-Checkliste; der pre-push-Hook prüft die Freigabe. Nie mergen.`;
+  await events().updateOne({ _id: `${u.id}:${key}` as any }, { $setOnInsert: { userId: u.id, leit: leit._id, kind: 'freigabe', text, excerpt: '', strand: { id: String(d._id), title: String(d.title ?? '') }, at, createdAt: at, status: 'offen', retries: 0, urgent: false } }, { upsert: true });
 }
 
 // ---------- Start ----------
@@ -296,7 +359,7 @@ async function tickOne(u: User, leit: any, deps: LeitDeps) {
     const s = states.get(d.conv);
     if (s?.running) continue;
     const last = await lastMessage(u, d.conv);
-    const e = strandEvent(d, orchStatus(d, s, last, now), s, last);
+    const e = strandEvent(d, orchStatus(d, s, last, now), s, last, now);
     if (e) await add(e);
   }
   const answered: any[] = await questions().find({ userId: u.id, status: 'beantwortet', 'answer.at': { $gte: new Date(Math.max(since, now - c.stale)) } }).toArray();
@@ -437,7 +500,7 @@ export function groupLine(g: { strands: unknown[]; counts: Record<string, number
 }
 
 const publicStrand = (d: any, word: StatusWord | null) => ({
-  id: String(d._id), title: d.title, lauf: d.lauf ?? laufName(d.title ?? '').lauf, status: word ?? 'erledigt', reason: d.lastReason ?? null,
+  id: String(d._id), title: d.title, lauf: d.lauf ?? laufName(d.title ?? '').lauf, thema: themaOf(d), themaHand: !!d.thema, status: word ?? 'erledigt', reason: d.lastReason ?? null,
   url: d.url, auftrag: lesbar(paketDatei(d, 'auftrag')), bericht: lesbar(paketDatei(d, 'bericht')), autoWeiter: d.autoTotal ?? 0, lastActivity: d.lastActivity ?? d.statusAt ?? d.startedAt,
   reviewedBy: d.reviewedBy ?? null, knutReviewed: !!d.knutReviewedAt, reviewReady: !!d.reviewReadyAt,
 });
@@ -447,7 +510,12 @@ export async function overview(u: User) {
   const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, startError: null, startedAt: { $gt: new Date(Date.now() - 60 * 86400_000) } }).limit(500).toArray();
   const g = groupStrands(docs);
   const shape = (x: ReturnType<typeof groupStrands>['offen'][number]) => ({ key: x.key, lauf: x.lauf, from: x.from, to: x.to, line: groupLine(x), counts: x.counts, strands: x.strands.map((s) => publicStrand(s.d, s.word)) });
-  return { leitstand: await leitstandLine(u), offen: g.offen.map(shape), erledigt: g.erledigt.map(shape) };
+  // Themen-Gruppen für die Chat-Seitenleiste (Plan 154, S2) — offene und (eingeklappt) fertige Unter-Chats; die Seite „Leitstand“ bleibt bei Läufen.
+  // Zusatz Knut (Z9): von Knut Geprüftes der letzten 7 Tage bleibt als „erledigt“ unter „Fertig“ sichtbar.
+  const recent = (d: any) => Date.now() - +new Date(d.knutReviewedAt ?? d.reviewedAt ?? 0) < 7 * 86400_000;
+  const themen = groupThemen(docs.map((d) => ({ d, word: knutDone(d) ? (recent(d) ? 'erledigt' as const : null) : statusWord(d) })))
+    .map((t) => ({ thema: t.thema, counts: t.counts, strands: t.items.map((x) => publicStrand(x.d, x.word)) }));
+  return { leitstand: await leitstandLine(u), offen: g.offen.map(shape), erledigt: g.erledigt.map(shape), themen };
 }
 
 /** Review-Karten auf „Heute“ (B4): fertig gemeldet oder review_ready, von Knut nicht geprüft — nur Mongo. */

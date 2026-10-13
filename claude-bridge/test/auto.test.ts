@@ -271,7 +271,7 @@ test('E5 + BRIDGE_MAX_PARALLEL_CHATS=1: ohne Auto-Modus (readonly, aber kein don
 
 test('P2: drei Teilagenten in einem Chat — Zeilen je Teilagent, Lese-Rolle schreibt nie, Rückfrage mit Präfix', async () => {
   const a = await send(OFF_PORT, 'p2-1', 'orchestrator-test', { user: 'up2' });
-  assert.match(a, /Rollen: leser,ticket-pruefer,schreiber/);
+  assert.match(a, /Rollen: leser,ticket-pruefer,strang-leser,schreiber/);
   assert.match(a, /↳ Teilagent PM-321 prüfen \(ticket-pruefer\): 🔎/);
   assert.match(a, /↳ Teilagent PM-321 prüfen \(ticket-pruefer\) fertig/);
   assert.match(a, /🔒 Teilagent „ticket-pruefer“ ist nur lesend/);

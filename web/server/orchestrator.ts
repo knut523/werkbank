@@ -18,6 +18,7 @@ import { createLibreChat } from './agent.ts';
 import { prepareFresh } from './fresh.ts';
 import { pruefe, parsePlan, protokolliere, g0Text, g0Optionen, OHNE_PR, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { vienna } from './hygiene.ts';
+import { cleanThema, themaOf } from './themen.ts';
 
 export const ORCH_TAG = 'Orchestrator';
 export type OrchStatus = 'running' | 'waiting' | 'done' | 'failed' | 'blocked_g0';
@@ -43,6 +44,8 @@ export function orchBrief(b: BriefInput): string {
       '- Es gibt keine Rückfragen im Chat: was eine Freigabe bräuchte, wird abgelehnt. Mach ohne diesen Schritt weiter, so weit es geht, und schreib es unter „Braucht Knut“ auf.',
       '- Offene inhaltliche Entscheidungen sammelst du und stellst sie am Ende gesammelt (je Kontext · Optionen · Empfehlung). Nichts still annehmen, was wirklich Knuts Entscheidung ist.',
       '- Tests und Prüfungen des Repos laufen lassen, bevor du „fertig“ meldest.',
+      // Knut 13.10.2026: PR- und Plan-Texte gehen auf GitHub — dort gibt es weder die lokalen Ordner noch Zweige/PRs, die erst entstehen.
+      '- PR- und Plan-Texte verweisen nie auf PRs oder Branches, die es noch nicht gibt, und nie auf lokale Pfade (`~/…`, `/home/…`, Review-Paket-Ordner). Belege als Commit-SHA, Dateipfad im Repo oder bestehender PR-Link.',
     ].join('\n'),
     [
       'Schließe JEDE Antwort mit diesem Abschnitt (die Haupt-Sitzung liest ihn maschinell; nach „Status:“ genau eines der drei Wörter — „fertig“ nur, wenn der Auftrag erledigt und geprüft ist):',
@@ -85,7 +88,8 @@ export type AutoCause = 'limit' | 'timeout' | 'interrupted' | 'lost' | 'busy' | 
 export function orchStatus(run: { startError?: string | null; startedAt: Date | number; lastSentAt?: Date | number | null }, s: StrandState | null | undefined, last: LastMsg | null, now = Date.now()): { status: OrchStatus; reason: string; cause?: AutoCause } {
   if (run.startError) return { status: 'failed', reason: `Start fehlgeschlagen: ${run.startError}` };
   if (s?.running) return { status: 'running', reason: 'Zug läuft' };
-  if (s?.interrupted) return { status: 'failed', reason: 'Zug abgebrochen (Brücke neu gestartet) — mit `send <id> weiter` fortsetzen', cause: 'interrupted' };
+  // Kein Fehler: das automatische „weiter“ übernimmt; greift es nicht, meldet der Hauptchat „hängt“ (Plan 154, G10).
+  if (s?.interrupted) return { status: 'waiting', reason: 'Zug abgebrochen (Brücke neu gestartet) — wird automatisch fortgesetzt, sonst `send <id> weiter`', cause: 'interrupted' };
   const sent = new Date(run.lastSentAt ?? run.startedAt).getTime();
   if (!s?.turn || s.turn.start < sent - 5000) {
     if (last?.error && last.at >= sent - 5000) return { status: 'failed', reason: `LibreChat meldet einen Fehler: ${last.text.slice(0, 160)}` };
@@ -355,11 +359,27 @@ async function ownRun(u: User, id: string) {
   return d;
 }
 
-export async function showOrch(u: User, id: string) {
+export async function showOrch(u: User, id: string, verlauf = 0) {
   const d = await ownRun(u, id);
   const item = (await listOrch(u, { all: true })).find((r) => r.id === id);
   const last = d.conv ? await lastMessage(u, d.conv) : null;
-  return { ...item, conv: d.conv, prompt: d.prompt, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null };
+  // Pull (Plan 154, S4): die letzten n Nachrichten (1–10, je ≤ 4 000 Zeichen vom Ende, zusammen ≤ 20 000), älteste zuerst.
+  const n = Math.max(0, Math.min(10, Math.floor(verlauf)));
+  let hist: { fromUser: boolean; at: Date; text: string }[] | undefined;
+  if (n && d.conv) {
+    const ms: any[] = await lc().collection('messages').find({ conversationId: d.conv, user: u.id }).sort({ createdAt: -1 }).limit(n).toArray();
+    let budget = 20_000;
+    hist = [];
+    for (const m of ms) {
+      const t = messageText(m);
+      const cut = t.length > 4000 ? '…' + t.slice(-3999) : t;
+      if (budget - cut.length < 0) break;
+      budget -= cut.length;
+      hist.push({ fromUser: !!m.isCreatedByUser, at: new Date(m.createdAt ?? 0), text: cut });
+    }
+    hist.reverse();
+  }
+  return { ...item, conv: d.conv, prompt: d.prompt, bericht: d.bericht ?? null, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null, ...(hist ? { verlauf: hist } : {}) };
 }
 
 export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 'leitstand' = 'hand') {
@@ -371,7 +391,14 @@ export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 
   if (via === 'leitstand' && d.autoStopped) throw err(409, `Strang ${id} hat seinen Deckel erreicht — Knut entscheidet in „Heute“ (Fortsetzen/Anhalten).`);
   if (via === 'leitstand' && d.knutReviewedAt) throw err(409, `Strang ${id} hat Knut geprüft — nicht weiterführen; einen neuen Strang starten oder Knut fragen.`);
   const item = (await listOrch(u, { all: true })).find((r) => r.id === id);
-  if (item?.status === 'running') throw err(409, `Strang ${id} arbeitet noch (${item.reason}) — warten, dann senden.`);
+  if (item?.status === 'running') {
+    // Plan 154 (G13): in den laufenden Zug nachreichen — der Agent sieht es beim nächsten Schritt. Kein lastSentAt (sonst gälte
+    // der Zug nach seinem Ende als „Nachricht nicht angekommen“), zählt nicht gegen den Deckel (Council R1, Bedingung 5).
+    const r = await injectBridge(u, d.conv, msg);
+    if (!r.ok) throw err(409, `Strang ${id} arbeitet noch (${item.reason}) und nimmt gerade nichts an (${r.error}) — gleich noch einmal.`);
+    await runs().updateOne({ _id: d._id }, { $set: { lastInject: { id: r.id, text: msg.slice(0, 20_000), at: new Date(), via, done: false } }, $inc: { injects: 1 } });
+    return { id, conv: d.conv, url: d.url, injected: true };
+  }
   await deliver(u, d.conv, msg);
   if (via === 'leitstand') {
     // Teil B, G3: review_ready-Stand wandert nach prevReview (Auto-Fortsetzen und Wecken laufen wieder); Knuts Karte bleibt
@@ -384,6 +411,41 @@ export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 
   await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date(), reviewedAt: null, reviewedBy: null, knutReviewedAt: null, reviewReadyAt: null, review: null, prevReview: null, doneAt: null, autoStreak: 0, autoStopped: null, ...(/^Nacharbeit nach Review:/.test(msg) ? { reworkAt: new Date(), reworkText: msg.slice(0, 500) } : {}) }, $inc: { sends: 1 } });
   await questions().updateMany({ userId: u.id, kind: 'auto-weiter', 'strand.id': d._id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() } });
   return { id, conv: d.conv, url: d.url };
+}
+
+// ---------- Nachreichen (docs/plan-hauptchat-monitor.md, S1) ----------
+
+/** Nachricht an den laufenden Zug einer eigenen Unterhaltung nachreichen (Brücke, person:chat). */
+export async function injectBridge(u: User, conv: string, text: string): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> {
+  const r = await fetch(`${cfg.bridgeUrl}/internal/inject`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, conv, text }), signal: AbortSignal.timeout(5000) });
+  const j: any = await r.json().catch(() => ({}));
+  return r.ok ? { ok: true, id: String(j.id) } : { ok: false, status: r.status, error: String(j.error ?? `Brücke antwortet mit ${r.status}`) };
+}
+
+/** Stand einer nachgereichten Nachricht: zugestellt | gelesen | ungelesen, null = unbekannt (z. B. nach einem Neustart der Brücke). */
+export async function injectStateBridge(u: User, id: string): Promise<{ state: string; conv: string } | null> {
+  const r = await fetch(`${cfg.bridgeUrl}/internal/inject/${encodeURIComponent(id)}?user=${encodeURIComponent(u.id)}`, { headers: internalHeaders(), signal: AbortSignal.timeout(4000) });
+  if (r.status === 404) return null;
+  if (!r.ok) throw err(502, `Brücke antwortet mit ${r.status}`);
+  return (await r.json()) as any;
+}
+
+/**
+ * Nachgereichte Nachricht an einen Strang, die der Zug nicht mehr gelesen hat (Abbruch, Zeitlimit, Frist): als normale Nachricht
+ * nachsenden, sobald der Strang frei ist — genau einmal (Anspruch über lastInject.done). true = gesendet (dann kein „weiter“).
+ */
+async function nachzuegler(u: User, d: any, s: any, deps: AutoDeps): Promise<boolean> {
+  const li = d.lastInject;
+  if (!li || li.done || s?.running) return false;
+  const st = await injectStateBridge(u, li.id).catch(() => undefined);
+  if (st === undefined || st?.state === 'zugestellt') return false;   // Brücke weg bzw. noch offen: nächster Takt
+  const r = await runs().updateOne({ _id: d._id, 'lastInject.id': li.id, 'lastInject.done': false }, { $set: { 'lastInject.done': true, 'lastInject.state': st?.state ?? 'unbekannt' } });
+  // Gelesen — oder unbekannt (Brücke neu gestartet: lieber nicht doppelt; der Hauptchat sieht den Strang dann als „hängt“).
+  if (!r.modifiedCount || st?.state !== 'ungelesen') return false;
+  await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: new Date() }, $inc: { sends: 1 } });
+  deps.log?.('orch nachgereicht ungelesen → nachgesendet', { id: d._id });
+  await deliver(u, d.conv, li.text);
+  return true;
 }
 
 /** Nachricht an den Chat hängen (Elternnachricht = letzte gespeicherte); LibreChat 409 = Zug noch nicht abgeschlossen. */
@@ -419,7 +481,7 @@ export async function autoWeiterTick(deps: AutoDeps) {
       let states: Map<string, any>;
       try { states = await strandStates(u); } catch { continue; }   // Brücke weg: nichts entscheiden
       for (const d of list) {
-        try { await autoOne(u, d, states.get(d.conv), deps); } catch (e: any) { deps.log?.('orch-auto-weiter fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 200) }); }
+        try { if (!(await nachzuegler(u, d, states.get(d.conv), deps))) await autoOne(u, d, states.get(d.conv), deps); } catch (e: any) { deps.log?.('orch-auto-weiter fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 200) }); }
       }
     }
   } finally { ticking = false; }
@@ -430,7 +492,9 @@ async function autoOne(u: User, d: any, s: any, deps: AutoDeps) {
   const last = await lastMessage(u, d.conv);
   const st = orchStatus(d, s, last);
   if (!st.cause) return;
-  const openQuestion = (await questions().countDocuments({ userId: u.id, 'strand.id': d._id, status: 'offen' })) > 0;
+  // Nur die Deckel-Frage hält an (Plan 154, G8). Sammel-Rückfragen des Hauptchats zum Strang nicht: ein technisches Zugende
+  // heißt „mitten in der Arbeit“, Stränge warten nie auf eine Rückfrage (am 12.10. standen so vier Stränge still).
+  const openQuestion = (await questions().countDocuments({ userId: u.id, 'strand.id': d._id, kind: 'auto-weiter', status: 'offen' })) > 0;
   const accountFree = st.cause === 'rate_limit' ? await deps.accountFree(u).catch(() => false) : false;
   const max = autoMax();
   const dec = autoWeiter(d, st, s, last, { now: Date.now(), openQuestion, accountFree, max });
@@ -451,10 +515,17 @@ async function autoOne(u: User, d: any, s: any, deps: AutoDeps) {
     deps.log?.('orch-auto-weiter deckel', { id: d._id, max });
     return;
   }
+  // Nicht fortgesetzt trotz technischem Zugende: Grund am Strang festhalten (einmal je Zug + Grund) — der Hauptchat liest
+  // ihn in der Meldung „hängt“ (Plan 154, S3). Vorher blieb so ein Halt ohne jede Spur.
+  if (dec.action === 'none' && (d.autoHold?.why !== dec.why || d.autoHold?.turn !== (s?.turn?.start ?? null))) {
+    await runs().updateOne({ _id: d._id }, { $set: { autoHold: { why: dec.why, cause: st.cause, at: new Date(), turn: s?.turn?.start ?? null } } });
+    deps.log?.('orch-auto-weiter halt', { id: d._id, cause: st.cause, why: dec.why });
+  }
   if (dec.action !== 'send') return;
   // Anspruch (atomar, überlebt den Neustart) — mit lastSentAt: kommt die Nachricht nie an, greift nach 3 min „lost“ (Bedingung 2).
   const n = (d.autoStreak ?? 0) + 1;
-  const r = await runs().updateOne({ _id: d._id, autoFor: d.autoFor ?? null, autoStopped: null },
+  // lastSentAt unverändert (Council 154, Bedingung 5): hat inzwischen der Hauptchat oder Knut geschrieben, kein zweites „weiter“.
+  const r = await runs().updateOne({ _id: d._id, autoFor: d.autoFor ?? null, autoStopped: null, lastSentAt: d.lastSentAt ?? null },
     { $set: { autoFor: dec.key, lastSentAt: new Date(), autoLastAt: new Date(), autoLastCause: st.cause }, $inc: { autoTotal: 1, autoStreak: 1, sends: 1 } });
   if (!r.modifiedCount) return;
   deps.log?.('orch-auto-weiter', { id: d._id, cause: st.cause, n });
@@ -466,6 +537,14 @@ export function startAutoWeiter(deps: AutoDeps) {
   if (process.env.ORCH_AUTO_WEITER === 'off') return null;
   const ms = Math.max(200, Number(process.env.ORCH_AUTO_WEITER_TICK_MS) || 20_000);
   return setInterval(() => { autoWeiterTick(deps).catch((e) => deps.log?.('orch-auto-weiter fehler', { error: String(e?.message ?? e).slice(0, 200) })); }, ms);
+}
+
+/** Themen-Gruppe in der Seitenleiste von Hand setzen (Plan 154, S2); „auto“/leer = wieder automatisch. */
+export async function setThema(u: User, id: string, thema: unknown) {
+  const d = await ownRun(u, id);
+  const t = cleanThema(thema);
+  await runs().updateOne({ _id: d._id }, { $set: { thema: t } });
+  return { id, thema: themaOf({ ...d, thema: t }), hand: !!t };
 }
 
 /** Geprüft: von Knut (CLI der Hauptsitzung, „Passt“, „Anhalten“) → knutReviewedAt; vom Leitstand → nur abgelegt (Teil B, G2). */

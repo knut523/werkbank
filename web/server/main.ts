@@ -19,9 +19,11 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
-import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft } from './leitstand.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe } from './leitstand.ts';
+import { reviewDetail, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen } from './freigabe.ts';
+import { readBericht as readBerichtDatei } from './bericht.ts';
 import { readBericht, paketDatei } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
@@ -1215,6 +1217,15 @@ on('POST', /^\/api\/runs\/([0-9a-f-]{36})\/reply$/, async (req, res, m) => {
 });
 
 // review_ready (Werkbank-MCP): Fertig-Marke am neuesten Chat-Lauf der Person in DIESER Unterhaltung (Bedingung 5).
+// Push (Plan 154, S4): ein Unter-Chat meldet dem Hauptchat einen Blocker oder ein Risiko (Werkzeug hauptchat_melden).
+on('POST', /^\/internal\/hauptchat-meldung$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const r = await meldeHauptchat(u, String(b.conv ?? ''), String(b.art ?? ''), String(b.text ?? ''));
+  log('hauptchat-meldung', { user: u.id, id: r.id, art: r.art, hauptchat: r.hauptchat });
+  send(res, 200, r);
+});
+
 on('POST', /^\/internal\/review-ready$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
@@ -1240,8 +1251,79 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
 });
 
 
+// Nachreichen während des Zugs (docs/plan-hauptchat-monitor.md, S1): aus dem LibreChat-Eingabefeld (gleicher Ursprung über
+// /werkbank, CSRF-Header über needUser). Die Brücke nimmt nur Nachrichten an die eigenen Unterhaltungen der Person an.
+on('POST', /^\/api\/chat\/nachreichen$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req, 64 << 10);
+  const conv = String(b.conv ?? '');
+  if (!/^[0-9a-f-]{36}$/.test(conv)) throw new HttpError(400, 'Ungültige Unterhaltung.');
+  const r = await injectBridge(u, conv, String(b.text ?? ''));
+  if (!r.ok) throw new HttpError(r.status === 400 ? 400 : 409, r.error);
+  log('nachgereicht', { user: u.id });
+  send(res, 200, { id: r.id, state: 'zugestellt' });
+});
+on('GET', /^\/api\/chat\/nachreichen\/([0-9a-f-]{36})$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const st = await injectStateBridge(u, m[1]);
+  send(res, 200, { id: m[1], state: st?.state ?? 'unbekannt' });
+});
+
+// Review → Freigabe → Push (docs/plan-hauptchat-monitor.md §9, Council R3): Ansicht je Strang, Freigabe je Repo (nur hier, nur
+// Admin, CSRF-Header über needAdmin/needUser), Antworten auf Entscheidungen als Nacharbeit an den Strang. Push gibt es hier nicht.
+const reviewStrand = async (u: User, id: string) => {
+  const d: any = await orchRuns().findOne({ _id: id as any, userId: u.id, kind: { $ne: 'leitstand' } });
+  if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
+  return d;
+};
+on('GET', /^\/api\/review\/([\w-]{1,40})$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  send(res, 200, await reviewDetail(await reviewStrand(u, m[1])));
+});
+on('POST', /^\/api\/review\/([\w-]{1,40})\/freigabe$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const d = await reviewStrand(u, m[1]);
+  const b = await body(req);
+  const f = await freigeben(u, d, { head: b.head, patchId: b.patchId ?? null }, undefined, log);
+  await hinweisFreigabe(u, f, d).catch(() => {});
+  send(res, 200, f);
+});
+on('POST', /^\/api\/review\/([\w-]{1,40})\/freigabe\/(f-[0-9a-f]{8})\/zurueck$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const d = await reviewStrand(u, m[1]);
+  const r = await zurueckziehen(u, String(d._id), m[2], log);
+  const f: any = await (await import('./freigabe.ts')).freigaben().findOne({ _id: m[2] as any });
+  if (f) await hinweisFreigabe(u, { id: m[2], branch: f.branch, head: f.head, repo: f.repo }, d, true).catch(() => {});
+  send(res, 200, r);
+});
+on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const d = await reviewStrand(u, m[1]);
+  const b = await body(req);
+  if (d.lastStatus === 'running') throw new HttpError(409, 'Der Unter-Chat arbeitet gerade — Antworten gehen, sobald er fertig ist.');
+  const { paketDatei } = await import('./bericht.ts');
+  const text = readBerichtDatei(paketDatei(d, 'bericht'));
+  if (!text || String(b.berichtHash ?? '') !== berichtHash(text)) throw new HttpError(409, 'Der Bericht hat sich inzwischen geändert — Seite neu laden.');
+  const bekannt = new Map(leseEntscheidungen(text).map((e) => [e.id, e]));
+  const antworten = (Array.isArray(b.antworten) ? b.antworten : []).map((a: any) => ({ id: String(a?.id ?? ''), text: String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000) }))
+    .filter((a: any) => a.text && bekannt.has(a.id));
+  if (!antworten.length) throw new HttpError(400, 'Keine Antwort auf eine bekannte Entscheidung.');
+  // Eine Wahrheit (Bedingung 8): der Strang trägt die Antworten in seinen Bericht ein — als Nacharbeit nach Review.
+  const msg = `Nacharbeit nach Review: Entscheidungen von Knut — bitte in den Bericht (Zeile „- Knut:“) eintragen und danach weiterarbeiten.\n${antworten.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}`;
+  await sendOrch(u, String(d._id), msg, 'hand');
+  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten } } });
+  log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length });
+  send(res, 200, { ok: true, gesendet: antworten.length });
+});
+
 // Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).
 on('GET', /^\/api\/leitstand\/overview$/, async (req, res) => send(res, 200, await overview(await needAdmin(req))));
+// Themen-Gruppe eines Unter-Chats von Hand (Plan 154, S2): Admin, CSRF-Header; thema „auto“/leer = zurück zur Automatik.
+on('POST', /^\/api\/leitstand\/thema$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  send(res, 200, await setThema(u, String(b.id ?? ''), b.thema));
+});
 
 // Hauptchat starten aus der Oberfläche (Plan 144, S2): dieselbe Funktion wie der interne Kanal der CLI — Admin, CSRF-Header
 // (needUser), 40 000 Zeichen, Brücke prüft LEITSTAND_EMAILS. Der Entwurf enthält keine Strang-Auszüge (Council B1).
@@ -2318,7 +2400,7 @@ async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
   return internalUser(req, { userId: d ? String(d._id) : '' });
 }
 
-on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau)$/, async (req, res, m) => {
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema)$/, async (req, res, m) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
   const id = String(b.id ?? '');
@@ -2337,13 +2419,26 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau)$/,
       return send(res, 200, { items: r });
     }
     case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
-    case 'show': return send(res, 200, await showOrch(u, id));
+    case 'show': return send(res, 200, await showOrch(u, id, Number(b.verlauf) || 0));
     case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand'));
     case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? '', b.via === 'leitstand' ? 'leitstand' : 'knut'));
+    case 'thema': return send(res, 200, await setThema(u, id, b.thema));   // Plan 154, S2: Themen-Gruppe von Hand
   }
 });
 
 // Leitstand (docs/plan-leitstand.md): Start nur über den internen Kanal, nur für Admins (startLeitstand prüft die Rolle).
+// Freigaben für die Hauptsitzung (Plan 154 §9): lesen, prüfen (pre-push-Hook), „gepusht“ melden. Anlegen/Zurückziehen gibt es
+// hier bewusst NICHT (Council R3, Bedingung 4) — das macht nur Knut in der Review-Ansicht.
+on('POST', /^\/internal\/orchestrator\/(freigaben|freigabe-pruefen|freigabe-gepusht)$/, async (req, res, m) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  if (m[1] === 'freigaben') return send(res, 200, { freigaben: await listeFreigaben(u, { alle: b.alle === true }) });
+  if (m[1] === 'freigabe-pruefen') return send(res, 200, await pruefeFreigabe(u, String(b.repo ?? ''), String(b.sha ?? '')));
+  const r = await gepusht(u, String(b.id ?? ''), b.pr ? String(b.pr) : null);
+  log('freigabe gepusht', { user: u.id, id: r.id, pr: r.pr });
+  return send(res, 200, r);
+});
+
 on('POST', /^\/internal\/orchestrator\/leitstand\/start$/, async (req, res) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
