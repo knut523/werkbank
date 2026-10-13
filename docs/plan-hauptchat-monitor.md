@@ -1,10 +1,8 @@
 ---
 title: "Plan — Workspace: schreiben während der Arbeit, Themen-Gruppen, Hauptchat überwacht die Unter-Chats"
 nummer: offen
-paket: 154-workspace-hauptchat-monitor
 status: gebaut-lokal
-branch: feat/hauptchat-monitor
-basis: fix/bridge-idle-timeout (678ab86 = Live release/werkbank-2026-10-12 + Leerlauf-Zeitlimit)
+basis: 678ab86 (Live-Stand vom 12.10.2026 + Leerlauf-Zeitlimit)
 created: 2026-10-12
 owner: Knut
 ---
@@ -144,7 +142,7 @@ Der Strang darf keine Rückfragen stellen. Darum ist jede Frage hier mit der Emp
 
 ## 5. Rückweg
 - Brücke: `BRIDGE_NACHREICHEN=off` (Neustart der Brücke) → String-Prompt wie vorher. Web/Client: Release-Zweig zurück auf
-  `fix/bridge-idle-timeout` und `scripts/werkbank.sh update` (der Client-Stempel erkennt den alten Patch-Stand und baut neu).
+  den vorigen Release-Stand (Commit `678ab86`) und `scripts/werkbank.sh update` (der Client-Stempel erkennt den alten Patch-Stand und baut neu).
 - Themen: rein additiv (`themen` in der Übersicht); ein alter Client ignoriert das Feld.
 - Auto-weiter: Rücknahme = Commit S3 zurücknehmen; `ORCH_AUTO_WEITER=off` schaltet ganz ab.
 - Push/Pull: `hauptchat_melden` verschwindet mit dem Brücken-Rückweg (WERKBANK_STRANG); Meldungen sind additive Ereignisse.
@@ -185,7 +183,7 @@ Notizen (nicht bindend, sichtbar gehalten):
 - Patch 60 greift in LibreChat-Interna (`useTextarea`, `ChatForm`). `librechat-patch.sh` bricht beim Update laut ab, statt
   halb anzuwenden.
 
-## 8. Zusatz Knut (12.10.2026 abends, `auftrag-zusatz.md`): Push und Pull, offen/fertig in der Seitenleiste
+## 8. Zusatz Knut (12.10.2026 abends): Push und Pull, offen/fertig in der Seitenleiste
 
 ### 8.1 Befund
 - **Push gibt es schon zum großen Teil** (Leitstand-Meldungen, Plan 132): `fertig`, `wartet` (braucht Antwort), `blockiert`,
@@ -245,12 +243,12 @@ Die vier Rollen liefen nacheinander im selben Modell. Das ist schwächer als Run
 
 ### 9.1 Befund (belegt, Bestandsaufnahme 12.10.)
 - **Review heute:** Karten auf „Heute“ für fertige/review_ready-Stränge (`leitstand.ts` `strandCards`/`strandDetail`):
-  Worum/Was tun/Stand, Bericht und Auftrag aus dem Review-Paket (`bericht.ts`, sicher unter `review-pakete`, ≤ 200 KB),
+  Worum/Was tun/Stand, Bericht und Auftrag aus dem Review-Paket (`bericht.ts`, sicher im Ordner der Review-Pakete `WERKBANK_REVIEW_DIR`, ≤ 200 KB),
   „Passt“/„Nacharbeit“. `review_ready` (`review.ts`) kennt gemacht/nicht_gemacht/risiko/dod/artefakte — **keine Felder für
   Vorschau, PR-Texte oder Repos**.
 - **Vorschau-Links** stehen frei im Bericht (`## Vorschau`, `https://<port>--main--dev--knut.ws.konekto.energy/…`; Admin
-  Next 313x, Login-Proxy 413x, Tarif-App 31xx). Register: `review-pakete/00-dienste.yaml` (port, was, strang, paket, link,
-  start, bis, …) + `~/bin/dienste`; **keine Prüfung, ob ein Link antwortet**.
+  Next 313x, Login-Proxy 413x, Tarif-App 31xx). Register: das Dienste-Register der Workspace (YAML; port, was, strang, paket, link,
+  start, bis, …; in der Werkbank `WERKBANK_DIENSTE_FILE`); **keine Prüfung, ob ein Link antwortet**.
 - **PR-Texte**: freie Dateinamen im Paket (`pr.md`, `pr-<repo>.md`, `pr-plan.md`, `<repo>.md`), im Bericht in der
   Push-Checkliste genannt. **Offene Entscheidungen**: Blöcke `**D1 — …**` / `**E-147-1 · …**` mit Optionen und leerer Zeile
   `  - Knut:`; Parser/Schreiber für `- Knut:` gibt es für Vault-Specs (`roadmap.ts` `parseDecisions`/`fillDecision`), nicht
@@ -261,7 +259,7 @@ Die vier Rollen liefen nacheinander im selben Modell. Das ist schwächer als Run
   Lesetoken-Fetch.
 - **Vorschau-Datenbanken**: Jede Vorschau hat schon eine **eigene** Postgres-DB (lokal :55433, z. B. `olaf_umfragen`,
   `olaf_hardware`). Die Flex-Admin-Vorschau scheitert nicht an einer gemeinsamen DB, sondern daran, dass
-  `prisma migrate deploy` DB-Zugangsdaten aus `.env` braucht, die Stränge nicht lesen dürfen (148/bericht.md). Dasselbe bei
+  `prisma migrate deploy` DB-Zugangsdaten aus `.env` braucht, die Stränge nicht lesen dürfen (Bericht des Flex-Strangs vom 12.10.). Dasselbe bei
   152 (drei develop-Migrationen auf `olaf_hardware` ungeprüft).
 
 ### 9.2 Grilling (Empfehlung = gebaut, außer wo „nicht gebaut“ steht)
@@ -270,7 +268,7 @@ Die vier Rollen liefen nacheinander im selben Modell. Das ist schwächer als Run
 |---|---|---|---|
 | C1 | Wo erscheint die Review-Ansicht? | a) eigene Workspace-Seite je Strang (`#/review?strand=<id>`), verlinkt aus der Karte auf „Heute“ · b) alles in der Karte | **a** |
 | C2 | Woher Vorschau-Links und PR-Texte? | a) `review_ready` bekommt optionale Felder `vorschau[]` und `repos[]` (Pfad, Branch, PR-Text-Datei); Rückfall: Vorschau-Links aus dem Bericht, PR-Texte `pr*.md` im Paket · b) neues Register | **a** |
-| C3 | „Antwortet die Vorschau?“ | Server prüft nur Coder-Vorschau-URLs (`https://<port>--…`) → GET `127.0.0.1:<port>`, 3 s, ohne Weiterleitungen; zeigt Status und den Eintrag aus `00-dienste.yaml` | **so** — keine beliebigen URLs (SSRF) |
+| C3 | „Antwortet die Vorschau?“ | Server prüft nur Coder-Vorschau-URLs (`https://<port>--…`) → GET `127.0.0.1:<port>`, 3 s, ohne Weiterleitungen; zeigt Status und den Eintrag aus dem Dienste-Register | **so** — keine beliebigen URLs (SSRF) |
 | C4 | Antwortfeld für offene Entscheidungen | a) Entscheidungsblöcke aus dem Bericht lesen, Antwort in Mongo am Strang + als Ereignis an den Hauptchat · b) Antwort in die Datei schreiben | **a** — Berichte schreibt der Strang; die Werkbank schreibt nicht in fremde Pakete |
 | C5 | „Freigeben zum Push“ je Repo | Freigabe-Datensatz (Repo-Pfad, Branch, **Commit-SHA wie gesehen**, wer, wann); Server prüft beim Klick, dass der Branch-Kopf noch dieser SHA ist (sonst 409 „neu laden“); Ereignis „freigabe“ an den Hauptchat; zurückziehbar | **so** |
 | C6 | Wer pusht? | a) die Hauptsitzung nach der Push-Checkliste, nur mit Freigabe (`orch freigaben` listet, Push-Ergebnis zurückmelden) · b) ein Push-Agent mit Push-Recht · c) der Web-Server | **a jetzt** — Push-Rechte für Agenten sind eine eigene Entscheidung (Zugangsdaten, Sperren); b als Folgeplan |
@@ -288,7 +286,7 @@ Teilagenten. Den Finalizer hat dieser Strang geschrieben.
   `core.fsmonitor` aus der Repo-Config aus. Ein Strang kann die setzen, und der Code liefe dann mit der Umgebung des
   Web-Servers (Geheimnisse). Außerdem:
   - Vorschau ≠ Commit, also nur mit sauberem Worktree freigeben.
-  - Port nur aus `00-dienste.yaml`, Infrastruktur-Ports gesperrt.
+  - Port nur aus dem Dienste-Register, Infrastruktur-Ports gesperrt.
   - `redirect: manual`, Körper nicht lesen.
   - Entscheidungen mit Bericht-Hash.
   - Freigaben nie löschen, nur zurückziehen.
@@ -317,7 +315,7 @@ Teilagenten. Den Finalizer hat dieser Strang geschrieben.
 6. [must-fix] Ansicht zeigt, **was** freigegeben wird: Commits Basis..Kopf (≤ 30), Diff-Statistik, sauber ja/nein.
    Bericht, PR-Texte und Entscheidungen erscheinen **als Text**, ohne HTML und ohne klickbare Links aus Agententext. Klickbar
    sind nur Vorschau-Links aus dem Register.
-7. [must-fix] Vorschau-Prüfung nur für Ports aus `00-dienste.yaml` (Eintrag zum Paket/Strang), Infrastruktur-Ports
+7. [must-fix] Vorschau-Prüfung nur für Ports aus dem Dienste-Register (Eintrag zum Paket/Strang), Infrastruktur-Ports
    gesperrt, `GET /` auf `127.0.0.1:<port>`, `redirect: manual`, Körper nie lesen, 3 s, 30 s Zwischenspeicher, nur beim
    Öffnen/auf Knopfdruck. 502/504 heißt „Proxy läuft, Ziel antwortet nicht“.
 8. [must-fix] Entscheidungen: Blöcke `**D1 — …**` / `**E-147-1 · …**` zeilengenau, nicht in Codezäunen. Antworten gehen
@@ -336,4 +334,5 @@ Teilagenten. Den Finalizer hat dieser Strang geschrieben.
 ## 6. Verlauf
 - 12.10.2026 abends: Befund, Plan v1, Council R1 (HOLD), Bau S3 → S1 → S2, Review-Pässe A/B, Bilder/Video.
 - 12.10.2026 abends: Zusatz Knut (Push/Pull, offen/fertig) → §8, Council R2, Bau S4 (Push/Pull) und S5 (Seitenleiste).
+- 13.10.2026: Plantext ohne lokale Pfade und ohne Verweise auf Branches/PRs, die es noch nicht gibt (Knut 13.10.); dieselbe Regel im Auftrag an Unter-Chats.
 - 12.10.2026 abends: Zusatz C (Review → Freigabe → Push) → §9, Council R3 (drei Teilagenten) HOLD 0,72, Bau S6 (Härtung git, Review-Ansicht, Freigabe, Prüfweg + Hook-Vorlage).

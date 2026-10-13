@@ -2,11 +2,11 @@
 # OLAF Workspace — Push nur mit Knuts Freigabe (docs/plan-hauptchat-monitor.md §9, Council R3, Bedingung 3).
 #
 # Einbau (Knut, je Repo einmal; gilt für alle Worktrees des Repos):
-#   cp ~/work/werkbank-dev/templates/git-hooks/pre-push <repo>/.git/hooks/pre-push && chmod +x <repo>/.git/hooks/pre-push
+#   cp <werkbank>/templates/git-hooks/pre-push <repo>/.git/hooks/pre-push && chmod +x <repo>/.git/hooks/pre-push
 # Prüft je gepushtem Stand: aktive Freigabe im OLAF Workspace für genau diesen SHA — oder, nach einem Rebase vor dem Push,
 # für denselben Patch gegen dieselbe Basis. Löschen (Branch entfernen) und Tags sind nicht betroffen.
 # Notausgang (bewusst, mit Spur): WERKBANK_PUSH_OHNE_FREIGABE=1 git push … — schreibt eine Zeile nach ~/.local/state/werkbank-push-ohne-freigabe.log.
-# Werkbank: WERKBANK_ORCH (Vorgabe ~/work/werkbank-dev/scripts/orch).
+# Werkbank: WERKBANK_ORCH (Pfad zu scripts/orch der laufenden Instanz; Vorgabe siehe unten).
 set -uo pipefail
 ORCH="${WERKBANK_ORCH:-$HOME/work/werkbank-dev/scripts/orch}"
 top="$(git rev-parse --show-toplevel)"

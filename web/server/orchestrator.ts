@@ -44,6 +44,8 @@ export function orchBrief(b: BriefInput): string {
       '- Es gibt keine Rückfragen im Chat: was eine Freigabe bräuchte, wird abgelehnt. Mach ohne diesen Schritt weiter, so weit es geht, und schreib es unter „Braucht Knut“ auf.',
       '- Offene inhaltliche Entscheidungen sammelst du und stellst sie am Ende gesammelt (je Kontext · Optionen · Empfehlung). Nichts still annehmen, was wirklich Knuts Entscheidung ist.',
       '- Tests und Prüfungen des Repos laufen lassen, bevor du „fertig“ meldest.',
+      // Knut 13.10.2026: PR- und Plan-Texte gehen auf GitHub — dort gibt es weder die lokalen Ordner noch Zweige/PRs, die erst entstehen.
+      '- PR- und Plan-Texte verweisen nie auf PRs oder Branches, die es noch nicht gibt, und nie auf lokale Pfade (`~/…`, `/home/…`, Review-Paket-Ordner). Belege als Commit-SHA, Dateipfad im Repo oder bestehender PR-Link.',
     ].join('\n'),
     [
       'Schließe JEDE Antwort mit diesem Abschnitt (die Haupt-Sitzung liest ihn maschinell; nach „Status:“ genau eines der drei Wörter — „fertig“ nur, wenn der Auftrag erledigt und geprüft ist):',

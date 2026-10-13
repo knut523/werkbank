@@ -53,6 +53,7 @@ test('Marke, Nachrichtentext, Auszug, Auftrag', () => {
   assert.match(b, /^Orchestrator · Flex\n/);
   assert.match(b, /Plandatei: `\/w\/flex\/docs\/plan\.md`/);
   assert.match(b, /Nie pushen/);
+  assert.match(b, /nie auf PRs oder Branches, die es noch nicht gibt, und nie auf lokale Pfade/, 'Knut 13.10.');
   assert.match(b, /Auftrag:\nBaue X$/, 'Auftrag steht am Ende');
 });
 
