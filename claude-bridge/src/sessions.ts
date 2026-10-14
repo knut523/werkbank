@@ -16,7 +16,7 @@ import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
-import { pickAccounts, orderForTurn, acquire, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, type Account } from './accounts.ts';
+import { acquire, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, nextBerlinMonth, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler } from './accounts.ts';
 
 export interface Sink {
   write(text: string): void;
@@ -83,6 +83,8 @@ interface Live {
   // Nachreichen (Plan 154, S1): Posteingang des laufenden Versuchs, ungelesene Nachrichten für den nächsten Versuch.
   inbox?: Inbox | null;
   carry?: string[];
+  // Melious (Plan 162): Versuch auf dem Melious-Konto — Rest bis zum Deckel, usage je API-Antwort (Schätzung), Ergebnis-usage.
+  melious?: { rest: number; calls: Map<string, MeliousUsage>; result: MeliousUsage | null; cut: boolean; fehler?: MeliousFehler };
 }
 
 export type TurnOutcome = 'ok' | 'limit' | 'timeout' | 'error' | 'rate_limit' | 'busy' | 'aborted';
@@ -598,6 +600,60 @@ function end(live: Live) {
 
 // ---------- Übersetzung der SDK-Nachrichten ----------
 
+const msgText = (msg: any) => (msg.message?.content ?? []).map((b: any) => (b?.type === 'text' ? b.text : '')).join(' ').slice(0, 500);
+
+export const MELIOUS_MSGS = {
+  guthaben: 'Melious-Guthaben leer (Melious meldet „Insufficient credits“) — Melious ist bis zum Monatswechsel aus dem Wechsel genommen. Nach dem Aufladen in der Einrichtung unter „Melious“ zurücksetzen.',
+  schluessel: 'Melious lehnt den Schlüssel ab — Melious ist für eine Stunde aus dem Wechsel genommen. Schlüssel in der Einrichtung unter „Melious“ prüfen.',
+  limit: 'Melious-Rate-Limit erreicht — Melious ist für eine Stunde aus dem Wechsel genommen.',
+  cut: 'Melious-Deckel erreicht: dieser Zug ist angehalten, Melious ist bis zum Ende des Zeitraums gesperrt. Die Grenzen stehen in der Einrichtung unter „Melious“.',
+};
+
+/** Melious-Fehler dieses Versuchs: Art merken (Meldung), „Guthaben leer“ gilt bis zum Monatswechsel, sonst die Vorgabe (1 h). */
+function meliousFail(live: Live, kind: MeliousFehler) {
+  live.melious!.fehler = kind;
+  live.rateLimited = { resetsAt: kind === 'guthaben' ? nextBerlinMonth() : live.rateLimitReset };
+  log('melious fehler', { conv: live.key, art: kind });
+}
+
+// Laufende Melious-Versuche je Person (Unterhaltung → geschätzte Tokens): der Rest bis zum Deckel gilt für alle zusammen, nicht
+// je Chat (zwei Chats mit `/melious an` gleichzeitig dürfen den Deckel nicht doppelt ausschöpfen).
+const meliousInflight = new Map<string, Map<string, number>>();
+export const meliousDone = (live: Live) => { meliousInflight.get(live.userId)?.delete(live.key); };
+
+const addUsage = (a: MeliousUsage, b: MeliousUsage): MeliousUsage => ({ input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite });
+const ZERO: MeliousUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+/** usage je API-Antwort eines Melious-Versuchs (Schätzung für den Deckel; gezählt wird danach die Ergebnis-usage). */
+function meliousCall(live: Live, msg: any) {
+  const m = live.melious!;
+  const id = msg.message?.id;
+  if (!id || !msg.message?.usage) return;
+  m.calls.set(id, usageOf(msg.message.usage));
+  const est = [...m.calls.values()].reduce((a, u) => a + usageTotal(u), 0);
+  const mine = meliousInflight.get(live.userId) ?? new Map<string, number>();
+  mine.set(live.key, est);
+  meliousInflight.set(live.userId, mine);
+  const others = [...mine].reduce((a, [k, v]) => a + (k === live.key ? 0 : v), 0);
+  if (m.cut || est + others < m.rest) return;
+  m.cut = true;
+  log('melious deckel', { conv: live.key, geschaetzt: est, andere: others, rest: m.rest });
+  markEnd(live, 'limit');
+  // Wie ein ausgeschöpftes Kontingent, nicht wie ein Schrittlimit: ein Strang setzt sich danach nicht selbst fort.
+  live.outcome ??= 'rate_limit';
+  emitStatus(live, `⛔ ${MELIOUS_MSGS.cut}`);
+  live.abort.abort();
+}
+
+/**
+ * Verbrauch eines Melious-Versuchs: das größte Ergebnis (mit Nachreichen kann ein Versuch mehrere haben) oder die Summe der
+ * Einzelantworten — je nachdem, was mehr ist (abgebrochener Zug, Teilagenten). Lieber etwas zu viel als zu wenig zählen.
+ */
+export function meliousSpent(m: NonNullable<Live['melious']>): MeliousUsage {
+  const calls = [...m.calls.values()].reduce(addUsage, ZERO);
+  return m.result && usageTotal(m.result) >= usageTotal(calls) ? m.result : calls;
+}
+
 const AUTH_HINTS: Record<string, string> = {
   authentication_failed: 'Dein Claude-Token wurde abgelehnt. Erzeuge im Terminal mit `claude setup-token` einen neuen und trag ihn im Modell-Menü bei „Claude Code“ über das Zahnrad ein.',
   oauth_org_not_allowed: 'Dein Claude-Konto darf hier nicht verwendet werden (Organisation nicht zugelassen).',
@@ -685,7 +741,11 @@ function handleMessage(live: Live, msg: any) {
       return;
     }
     case 'assistant': {
-      if (msg.error === 'rate_limit') {
+      if (live.melious) meliousCall(live, msg);
+      if (live.melious && msg.error && meliousExhaustedError(msg.error, msgText(msg))) {
+        // Melious: Guthaben, Schlüssel oder Rate-Limit → wie ein erschöpftes Claude-Konto (Wechsel bzw. Meldung in handleTurn).
+        meliousFail(live, meliousErrorKind(msg.error, msgText(msg))!);
+      } else if (msg.error === 'rate_limit') {
         // Kontingent ausgeschöpft: die Meldung kommt erst, wenn kein weiteres Konto übernehmen kann (handleTurn).
         live.rateLimited = { resetsAt: live.rateLimitReset };
       } else if (msg.error) {
@@ -747,6 +807,8 @@ function handleMessage(live: Live, msg: any) {
     case 'result': {
       for (const d of msg.permission_denials ?? []) if (!live.denials.includes(String(d?.tool_name))) live.denials.push(String(d?.tool_name ?? '?'));
       const u = msg.usage ?? {};
+      // Größtes Ergebnis des Versuchs (die SDK-usage kann laufend summiert sein); meliousSpent nimmt das Maximum mit den Einzelantworten.
+      if (live.melious && (!live.melious.result || usageTotal(usageOf(u)) > usageTotal(live.melious.result))) live.melious.result = usageOf(u);
       live.usage.input += (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
       live.usage.output += u.output_tokens ?? 0;
       if (!live.rateLimited) markEnd(live, msg.subtype === 'error_max_turns' ? 'max_turns' : msg.subtype !== 'success' || msg.is_error ? 'error' : 'ok');
@@ -893,6 +955,50 @@ export interface TurnRequest {
   onJiraWrite?: (keys: string[], tool: string) => void;   // erfolgreicher schreibender Jira-Aufruf im Chat
   // Weitere Claude-Konten der Person in Reihenfolge (über den internen Kanal von der Werkbank; chat = req.token).
   accounts?: () => Promise<{ id: string; label: string; token: string | null }[]>;
+  onMeliousUsage?: (u: MeliousUsage) => void;   // Verbrauch eines Melious-Versuchs (Werkbank zählt Tag/Monat, Deckel)
+}
+
+const MELIOUS_CMD = /^\s*\/melious(?:\s+(an|aus|status|modelle|modell)(?:\s+(\S{1,80}))?)?\s*$/i;
+
+/**
+ * `/melious an [modell] | aus | modell <name|standard> | modelle | status` — Schalter „mit Melious testen“ je Chat (Standard aus)
+ * und Modell je Chat. Kein Modellaufruf; `modelle` liest nur die Modellliste bei Melious (GET /v1/models, kostet keine Tokens).
+ */
+async function meliousCommand(req: TurnRequest, key: string, arg: string, name?: string) {
+  let mel: Account | undefined;
+  try { mel = normalizeAccounts(req.accounts ? await req.accounts() : [], req.token).find(isMelious); } catch { /* Werkbank nicht erreichbar */ }
+  const lines: string[] = [];
+  if (name && !MELIOUS_MODEL.test(name)) lines.push('⚠️ Modellname: Buchstaben, Ziffern, . : / - _ (höchstens 80 Zeichen).');
+  else if (arg === 'an') setMeliousChat(key, true, name);
+  else if (arg === 'aus') setMeliousChat(key, false);
+  else if (arg === 'modell') {
+    if (!meliousChatOn(key)) lines.push('Melious ist für diesen Chat noch aus — erst `/melious an` (oder gleich `/melious an <modell>`).');
+    else setMeliousChat(key, true, !name || /^standard$/i.test(name) ? null : name);
+  } else if (arg === 'modelle') {
+    lines.push(mel ? await meliousModels(mel) : 'Melious ist in der Einrichtung nicht erlaubt oder es ist kein Schlüssel hinterlegt.');
+  }
+  const on = meliousChatOn(key);
+  const model = meliousChatModel(key) ?? mel?.model;
+  if (arg !== 'modelle') {
+    lines.unshift(on ? `🧪 **Melious ist für diesen Chat an** — neue Züge laufen zuerst über Melious (${MELIOUS_HINT}). Modell: ${model ? `„${model}“${meliousChatModel(key) ? ' (für diesen Chat)' : ' (aus der Einrichtung)'}` : 'Claude-Namen, Melious bildet sie ab'}.` : 'Melious ist für diesen Chat **aus** — die Züge laufen über die Claude-Konten.');
+    if (!mel) lines.push(on ? 'Achtung: Melious ist in der Einrichtung nicht erlaubt oder es ist kein Schlüssel hinterlegt — bis dahin läuft auch dieser Chat über Claude.' : '');
+    else if (!meliousUsable(mel, exhaustedOf(safeId(req.userId)))) lines.push(`Melious ist gerade gesperrt${mel.sperre ? ` (${mel.sperre})` : ' (Konto als erschöpft vermerkt)'} — bis dahin über Claude.`);
+    else lines.push(`Rest bis zum Deckel: ${mel.rest!.toLocaleString('de-DE')} Tokens.`);
+    lines.push('Befehle: `/melious an [modell]` · `/melious modell <name|standard>` · `/melious modelle` (Liste) · `/melious aus`.');
+  }
+  log('melious schalter', { conv: key, befehl: arg, an: on, modell: meliousChatModel(key) ?? null, erlaubt: !!mel });
+  req.sink.write(lines.filter(Boolean).join('\n\n'));
+  req.sink.finish();
+}
+
+/** Modellliste bei Melious (ohne Inhalte, ohne Tokenverbrauch). Der Schlüssel geht nur an die Basis-URL. */
+async function meliousModels(mel: Account): Promise<string> {
+  try {
+    const r = await fetch(`${meliousBaseUrl()}/v1/models`, { headers: { 'x-api-key': mel.token, 'anthropic-version': '2023-06-01' }, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return `⚠️ Melious antwortet mit ${r.status} auf die Modellliste.`;
+    const ids = ((await r.json() as any).data ?? []).map((m: any) => String(m?.id ?? '')).filter((id: string) => MELIOUS_MODEL.test(id)).sort();
+    return ids.length ? `Modelle bei Melious (${ids.length}):\n\n${ids.slice(0, 80).map((id: string) => `- \`${id}\``).join('\n')}` : 'Melious meldet keine Modelle.';
+  } catch (e: any) { return `⚠️ Modellliste nicht erreichbar (${String(e?.message ?? e).replaceAll(mel.token, '***').slice(0, 80)}).`; }
 }
 
 function thinkingDisplay(): string | null {
@@ -900,7 +1006,12 @@ function thinkingDisplay(): string | null {
   return v === 'off' || v === '' ? null : v;
 }
 
-const CONTINUE_PROMPT = 'Mach bitte genau dort weiter, wo du unterbrochen wurdest — das Claude-Konto wurde gewechselt, weil das Kontingent ausgeschöpft war. Wiederhole keine Schritte, die schon erledigt sind.';
+// Melious (Plan 162): welcher Anbieter zuletzt die Sitzung einer Unterhaltung geschrieben hat (nur im Speicher).
+const providerMap = new Map<string, 'melious' | 'claude'>();
+const providerOf = (a: Account) => (isMelious(a) ? 'melious' : 'claude') as 'melious' | 'claude';
+const SWITCH_NOTE = 'Hinweis: Ein vorheriger Versuch für diese Nachricht lief über ein anderes Modell und wurde mittendrin abgebrochen (Konto gewechselt). Prüfe zuerst den Stand im Arbeitsordner und wiederhole keine Schritte, die dort schon erledigt sind.\n\n';
+
+const CONTINUE_PROMPT ='Mach bitte genau dort weiter, wo du unterbrochen wurdest — das Claude-Konto wurde gewechselt, weil das Kontingent ausgeschöpft war. Wiederhole keine Schritte, die schon erledigt sind.';
 
 /** Führt eine Nachricht aus. Kehrt zurück, sobald die HTTP-Antwort geschlossen werden kann. */
 export async function handleTurn(req: TurnRequest): Promise<void> {
@@ -917,6 +1028,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     req.sink.finish();
     return;
   }
+
+  const cmd = !existing ? req.prompt.match(MELIOUS_CMD) : null;
+  if (cmd && !req.readonly) return meliousCommand(req, key, (cmd[1] ?? 'status').toLowerCase(), cmd[2]);
 
   // 1) Antwort auf eine offene Rückfrage in dieser Unterhaltung.
   // Leitstand-Meldung der Werkbank (Kennung in der letzten Zeile) beantwortet nie eine Rückfrage (Plan 132, A1): sie wäre sonst
@@ -996,10 +1110,14 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   try { await ensureHome(home); } catch (e: any) { log('konfig fehlgeschlagen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); }
   // Fortsetzen nur in derselben Konfiguration — dort liegt der Verlauf der Sitzung; sonst neu mit dem Verlauf aus LibreChat.
   const resume = sessionMap[key] && (homeMap[key] ?? 'shared') === live.home ? sessionMap[key] : undefined;
-  let prompt = !resume && req.history
-    ? `Bisheriger Verlauf dieser Unterhaltung (aus der Chat-Oberfläche, zur Orientierung):\n\n${req.history}\n\n---\n\nNeue Nachricht:\n${req.prompt}`
-    : req.prompt;
-  if (!resume && req.instructions) prompt = `Vorgabe für diesen Chat (aus der gewählten Vorlage):\n${req.instructions}\n\n---\n\n${prompt}`;
+  // Neue Sitzung: Verlauf aus LibreChat und Vorgabe der Vorlage vor die Nachricht (auch nach einem Anbieterwechsel, s. u.).
+  const freshPrompt = (note = '') => {
+    const p = req.history
+      ? `Bisheriger Verlauf dieser Unterhaltung (aus der Chat-Oberfläche, zur Orientierung):\n\n${req.history}\n\n---\n\n${note}Neue Nachricht:\n${req.prompt}`
+      : `${note}${req.prompt}`;
+    return req.instructions ? `Vorgabe für diesen Chat (aus der gewählten Vorlage):\n${req.instructions}\n\n---\n\n${p}` : p;
+  };
+  let prompt = resume ? req.prompt : freshPrompt();
 
   // Die Sitzung (und ihre Bash-Befehle) bekommt keine Geheimnisse der Werkbank mit.
   const env: Record<string, string | undefined> = { ...process.env };
@@ -1024,11 +1142,16 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   }
   const user = safeId(req.userId);
   const accounts = await accountsP;
-  const queue = orderForTurn(pickAccounts(accounts, exhaustedOf(user)), key);
+  const chatOn = meliousChatOn(key);
+  const queue = planQueue(accounts, exhaustedOf(user), { conv: key, chatOn });
   const tokens = accounts.map((a) => a.token);
   const redact = (t: string) => tokens.reduce((x, tok) => x.replaceAll(tok, '***'), t);
   let acct: Account = queue[0];
-  env.CLAUDE_CODE_OAUTH_TOKEN = acct.token;
+  accountEnv(env, acct);
+  if (chatOn && !isMelious(acct)) {
+    const mel = accounts.find(isMelious);
+    emitStatus(live, `ℹ️ Melious ist für diesen Chat an, aber gerade nicht verfügbar (${!mel ? 'in der Einrichtung nicht erlaubt' : mel.sperre ?? 'als erschöpft vermerkt'}) — dieser Zug läuft über Claude.`);
+  }
   mark(live, 'kontext');
   const guard = makeGuard(live);
   const options: Record<string, any> = {
@@ -1038,7 +1161,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
     systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? '' : orchestratorAppend(), live.orch ? ORCH_APPEND : '', live.leit ? LEITSTAND_APPEND : '', extra].filter(Boolean).join('\n\n') },
-    mcpServers: withToken(req.mcpServers ?? {}, acct.token),
+    mcpServers: withToken(req.mcpServers ?? {}, isMelious(acct) ? req.token : acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim
     // Rechte-Dialog landet.
@@ -1069,10 +1192,27 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   if (live.mode === 'auto') options.settings = autoSettings();
   applyHome(home, env, options);
   if (resume) options.resume = resume;
+  // Anbieter seit dem letzten Zug gewechselt (Melious ↔ Claude): nicht fortsetzen. Melious liefert thinking-Blöcke ohne
+  // Anthropic-Signatur (echter Test 14.10.), die Claude beim Fortsetzen ablehnen kann — und umgekehrt. Neu mit dem Verlauf.
+  if (resume && providerMap.get(key) && providerMap.get(key) !== providerOf(acct)) {
+    delete options.resume;
+    prompt = freshPrompt();
+    log('anbieter gewechselt', { conv: key, von: providerMap.get(key), nach: providerOf(acct), neu: true });
+  }
   if (req.model) options.model = req.model;
+  // Melious: eigener Modellname (falls gesetzt), Rest bis zum Deckel; zurück auf Claude: Modell und Token wie bestellt.
+  const onAccount = (a: Account) => {
+    const mm = isMelious(a) ? meliousChatModel(key) ?? a.model : undefined;
+    accountEnv(env, a, mm);
+    options.mcpServers = withToken(req.mcpServers ?? {}, isMelious(a) ? req.token : a.token);
+    if (mm) options.model = mm; else if (req.model) options.model = req.model; else delete options.model;
+    live.melious = isMelious(a) ? { rest: a.rest ?? 0, calls: new Map(), result: null, cut: false } : undefined;
+  };
+  onAccount(acct);
+  if (isMelious(acct)) emitStatus(live, `🧪 Dieser Zug läuft über „Melious“${options.model ? ` · Modell ${options.model}` : ''} (${MELIOUS_HINT})`);
 
   let release = acquire(key, acct);   // ab hier läuft der Zug auf diesem Konto (Lastverteilung); frei im finally
-  log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers), permissionMode: live.mode, ...(accounts.length > 1 ? { konto: acct.id, konten: accounts.length } : {}) });
+  log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers), permissionMode: live.mode, ...(accounts.length > 1 ? { konto: acct.id, konten: accounts.length } : {}), ...(isMelious(acct) ? { melious: true, rest: acct.rest } : {}) });
 
   // Die Sitzung läuft unabhängig von der HTTP-Antwort weiter (Rückfragen!).
   (async () => {
@@ -1081,7 +1221,17 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       let lastRead: string[] = [];
       for (let i = 0; ; i++) {
         live.rateLimited = null; live.rateLimitReset = undefined; live.progressed = false;
+        providerMap.set(key, providerOf(acct));
+        if (providerMap.size > 5000) providerMap.delete(providerMap.keys().next().value!);
         lastRead = (await attempt(prompt)) ?? [];
+        if (live.melious) {
+          // Melious-Verbrauch je Versuch (auch abgebrochen): /health und Werkbank (Tag/Monat, Deckel) — ohne Schlüssel.
+          const spent = meliousSpent(live.melious);
+          countMelious(spent);
+          log('melious verbrauch', { conv: key, ...spent, deckel: live.melious.cut });
+          try { req.onMeliousUsage?.(spent); } catch { /* egal */ }
+          meliousDone(live);
+        }
         if (!live.rateLimited || live.abort.signal.aborted) break;
         markExhausted(user, acct, live.rateLimited.resetsAt);
         const next = queue[i + 1];
@@ -1090,21 +1240,27 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
           live.carry = [];
           log('kontingent erschöpft', { conv: key, konto: acct.id, konten: accounts.length });
           markEnd(live, 'limit');
-          emitStatus(live, `⚠️ ${AUTH_HINTS.rate_limit}`);
+          emitStatus(live, `⚠️ ${isMelious(acct) ? MELIOUS_MSGS[live.melious?.fehler ?? (live.melious?.cut ? 'cut' : 'limit')] : AUTH_HINTS.rate_limit}`);
           live.outcome ??= 'rate_limit';
           break;
         }
         log('konto gewechselt', { conv: key, von: acct.id, nach: next.id, mitten: live.progressed });
-        emitStatus(live, `↻ Konto „${next.label}“ übernimmt (Kontingent von „${acct.label}“ ausgeschöpft)`);
+        emitStatus(live, isMelious(next)
+          ? `↻ Konto „${next.label}“ übernimmt (Kontingent von „${acct.label}“ ausgeschöpft) — ${MELIOUS_HINT}`
+          : isMelious(acct) ? `↻ Konto „${next.label}“ übernimmt (${MELIOUS_MSGS[live.melious?.fehler ?? 'limit']})` : `↻ Konto „${next.label}“ übernimmt (Kontingent von „${acct.label}“ ausgeschöpft)`);
+        const switched = providerOf(acct) !== providerOf(next);
         acct = next;
         release(); release = acquire(key, acct);
-        env.CLAUDE_CODE_OAUTH_TOKEN = acct.token;
-        options.mcpServers = withToken(req.mcpServers ?? {}, acct.token);
+        onAccount(acct);
         // Noch nichts passiert → dieselbe Anfrage von vorn (gleiche Ausgangslage). Schon mitten im Zug → die Sitzung
         // fortsetzen (alle Konten teilen die Konfiguration und damit den Verlauf), ohne Schritte doppelt zu machen.
-        if (live.progressed && sessionMap[key]) { options.resume = sessionMap[key]; prompt = CONTINUE_PROMPT; }
-        // Von vorn (ohne Fortsetzen): was das CLI dieses Versuchs schon gelesen hatte, geht mit (Review A, 3).
-        else for (const id of lastRead) { const m = injects.get(id); if (m) { m.state = 'zugestellt'; if (!live.carry?.includes(id)) live.carry = [...(live.carry ?? []), id]; } }
+        // Anderer Anbieter (Melious ↔ Claude): nie fortsetzen (thinking-Signaturen), neu mit Verlauf — mitten im Zug mit Hinweis.
+        if (live.progressed && sessionMap[key] && !switched) { options.resume = sessionMap[key]; prompt = CONTINUE_PROMPT; }
+        else {
+          if (switched) { delete options.resume; prompt = freshPrompt(live.progressed ? SWITCH_NOTE : ''); }
+          // Von vorn (ohne Fortsetzen): was das CLI dieses Versuchs schon gelesen hatte, geht mit (Review A, 3).
+          for (const id of lastRead) { const m = injects.get(id); if (m) { m.state = 'zugestellt'; if (!live.carry?.includes(id)) live.carry = [...(live.carry ?? []), id]; } }
+        }
       }
     } finally {
       release();
@@ -1146,6 +1302,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       if (live.abort.signal.aborted) { log('turn aborted', { conv: key }); return; }
       const text = redact(String(e?.message ?? e));
       log('turn error', { conv: key, error: text.slice(0, 300) });
+      if (live.melious && !live.rateLimited && meliousExhaustedError(null, text)) { meliousFail(live, meliousErrorKind(null, text)!); return; }
       if (live.rateLimited || isRateLimitText(text)) { live.rateLimited = live.rateLimited ?? { resetsAt: live.rateLimitReset }; return; }
       markEnd(live, 'error');
       const auth = /auth|401|token|login/i.test(text);

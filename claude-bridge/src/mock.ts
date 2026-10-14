@@ -99,6 +99,34 @@ export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<
       yield { type: 'assistant', parent_tool_use_id: null, session_id, error: 'rate_limit', message: { content: [{ type: 'text', text: 'API Error: Rate limit reached' }] } };
       yield { type: 'result', subtype: 'success', session_id, is_error: true, result: 'Rate limit reached', usage: { input_tokens: 0, output_tokens: 0 } };
     };
+    // Melious (Plan 162): Schlüssel in ANTHROPIC_API_KEY, Basis-URL gesetzt, kein OAuth-Token. „mel-pleite“ = Budget aus
+    // (billing_error), „mel-viel“ = drei Antworten mit je 40 000 Tokens (Deckel), sonst eine kurze Antwort mit usage.
+    const mel = String(options.env?.ANTHROPIC_API_KEY ?? '');
+    if (mel) {
+      yield text(`(Mock) Melious über ${options.env?.ANTHROPIC_BASE_URL}; OAuth: ${options.env?.CLAUDE_CODE_OAUTH_TOKEN ? 'ja' : 'nein'}; Betas aus: ${options.env?.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS ?? '-'}; Modell: ${options.model ?? 'Standard'}. `);
+      if (/leer/.test(mel)) {
+        // Echter Befund 14.10.2026: Melious ohne Guthaben, so wie Claude Code es meldet.
+        yield { type: 'assistant', parent_tool_use_id: null, session_id, error: 'authentication_failed', message: { content: [{ type: 'text', text: 'Failed to authenticate. API Error: 403 {"type":"error","error":{"type":"permission_error","message":"Insufficient credits…"}}' }] } };
+        yield { type: 'result', subtype: 'success', session_id, is_error: true, result: 'Failed to authenticate. API Error: 403 Insufficient credits', usage: { input_tokens: 0, output_tokens: 0 } };
+        return;
+      }
+      if (/pleite/.test(mel)) {
+        yield { type: 'assistant', parent_tool_use_id: null, session_id, error: 'billing_error', message: { content: [{ type: 'text', text: 'API Error: 402 {"error":{"code":"BILLING_2003","message":"Out of credits"}}' }] } };
+        yield { type: 'result', subtype: 'success', session_id, is_error: true, result: '402', usage: { input_tokens: 0, output_tokens: 0 } };
+        return;
+      }
+      if (/viel/.test(mel)) {
+        for (let i = 0; i < 3; i++) {
+          if (options.abortController?.signal.aborted) throw new Error('aborted');
+          yield { type: 'assistant', parent_tool_use_id: null, session_id, message: { id: `msg_${i}`, usage: { input_tokens: 30000, cache_read_input_tokens: 8000, output_tokens: 2000 }, content: [{ type: 'tool_use', id: randomUUID(), name: 'Read', input: { file_path: '/tmp/x' } }] } };
+          await new Promise((r) => setTimeout(r, 30));
+        }
+      }
+      yield { type: 'assistant', parent_tool_use_id: null, session_id, message: { id: 'msg_end', usage: { input_tokens: 1200, cache_read_input_tokens: 300, output_tokens: 40 }, content: [] } };
+      yield text('OK');
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 1200, cache_read_input_tokens: 300, cache_creation_input_tokens: 0, output_tokens: 40 } };
+      return;
+    }
     if (/bad-auth/.test(tok)) {
       yield { type: 'assistant', parent_tool_use_id: null, session_id, error: 'authentication_failed', message: { content: [{ type: 'text', text: 'Invalid token' }] } };
       yield { type: 'result', subtype: 'success', session_id, is_error: true, result: 'auth', usage: { input_tokens: 0, output_tokens: 0 } };

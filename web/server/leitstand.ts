@@ -46,7 +46,7 @@ export const leitDir = () => process.env.WERKBANK_LEITSTAND_DIR || join(process.
 /** Ab wann ein nicht fortgesetztes technisches Zugende als „hängt“ gemeldet wird (Plan 154, G9). */
 export const hangMs = (env = process.env) => num(env.LEITSTAND_HANG_MS, 5 * 60_000);
 
-export interface LeitEvent { key: string; kind: 'fertig' | 'antwort' | 'blockiert' | 'deckel' | 'review' | 'frage' | 'weiter' | 'geprueft' | 'nacharbeit' | 'haengt' | 'meldung' | 'freigabe'; at: number; text: string; excerpt?: string; strand?: { id: string; title: string } }
+export interface LeitEvent { key: string; kind: 'fertig' | 'antwort' | 'blockiert' | 'deckel' | 'review' | 'frage' | 'weiter' | 'geprueft' | 'nacharbeit' | 'haengt' | 'meldung' | 'freigabe' | 'melious'; at: number; text: string; excerpt?: string; strand?: { id: string; title: string } }
 
 /**
  * Ereignis eines Strangs aus seinem Zustand — oder null. Technische Zugenden (cause gesetzt) übernimmt das Auto-Fortsetzen
@@ -174,6 +174,15 @@ export async function hinweisFreigabe(u: User, f: { id: string; branch: string; 
     ? `Knut hat die Freigabe ${f.id} (${f.branch}@${f.head.slice(0, 7)}) zurückgezogen — nicht pushen.`
     : `Knut hat ${f.branch}@${f.head.slice(0, 7)} (${f.repo.split('/').pop()}) zum Push freigegeben (${f.id}). Hinweis, kein Auftrag: gepusht wird nur von der Hauptsitzung nach der Push-Checkliste; der pre-push-Hook prüft die Freigabe. Nie mergen.`;
   await events().updateOne({ _id: `${u.id}:${key}` as any }, { $setOnInsert: { userId: u.id, leit: leit._id, kind: 'freigabe', text, excerpt: '', strand: { id: String(d._id), title: String(d.title ?? '') }, at, createdAt: at, status: 'offen', retries: 0, urgent: false } }, { upsert: true });
+}
+
+/** Melious-Verbrauch (Plan 162): 80 %/100 % eines Deckels als Hinweis an den Hauptchat — je Schwelle und Zeitraum einmal. */
+export async function hinweisMelious(u: User, key: string, text: string) {
+  const leit = await activeLeitstand(u);
+  if (!leit) return false;
+  const at = new Date();
+  await events().updateOne({ _id: `${u.id}:melious:${key}` as any }, { $setOnInsert: { userId: u.id, leit: leit._id, kind: 'melious', text, excerpt: '', strand: null, at, createdAt: at, status: 'offen', retries: 0, urgent: false } }, { upsert: true });
+  return true;
 }
 
 // ---------- Start ----------

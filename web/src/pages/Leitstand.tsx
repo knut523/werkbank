@@ -190,6 +190,23 @@ function StartHauptchat({ aktiv, onClose, onStarted }: { aktiv: boolean; onClose
   );
 }
 
+/** Kachel „Melious heute / Monat“ (Plan 162): nur, wenn ein Melious-Schlüssel hinterlegt ist; eigene Zählung, kein Schlüssel. */
+function MeliousKachel() {
+  const t = useLoad(() => api('/api/melious/usage'));
+  const d: any = t.data;
+  if (!d || d.configured === false) return null;
+  const z = (n: number) => (n >= 1e6 ? `${(n / 1e6).toLocaleString('de-DE', { maximumFractionDigits: 1 })} Mio` : n >= 10_000 ? `${Math.round(n / 1000).toLocaleString('de-DE')}k` : n.toLocaleString('de-DE'));
+  const cls = (p: number) => (p >= 100 ? 'bad' : p >= 80 ? 'warn' : '');
+  return (
+    <a className="card soft small" href="#/einrichtung" data-testid="melious-kachel" title={`Quelle: ${d.quelle}`} style={{ padding: '6px 10px', textDecoration: 'none', color: 'inherit' }}>
+      🧪 <b>Melious</b> {!d.enabled ? <span className="chip">aus</span> : d.sperre ? <span className="chip bad">gesperrt</span> : null}
+      {' '}heute <span className={`chip ${cls(d.heute.pct)}`}>{z(d.heute.total)} / {z(d.heute.limit)}</span>
+      {' '}Monat <span className={`chip ${cls(d.monat.pct)}`}>{z(d.monat.total)} / {z(d.monat.limit)}</span>
+      <span className="tiny muted"> · {d.heute.turns} Züge heute</span>
+    </a>
+  );
+}
+
 export function Leitstand({ hash }: { cfg: Config; hash: string }) {
   const t = useLoad(() => api('/api/leitstand/overview'));
   const d: any = t.data;
@@ -222,6 +239,7 @@ export function Leitstand({ hash }: { cfg: Config; hash: string }) {
           <span className="small">Noch kein Hauptchat aktiv.</span>
           {!starten && <button className="btn small primary" onClick={() => setStarten(true)} data-testid="neu-starten">Hauptchat starten</button>}
         </>}
+        <MeliousKachel />
       </div>
       {starten && <StartHauptchat aktiv={!!d.leitstand} onStarted={() => { setStarten(false); t.reload(); if (wantStart) history.replaceState(null, '', location.pathname + location.search + '#/leitstand'); }} onClose={() => { setStarten(false); if (wantStart) window.location.hash = '#/leitstand'; }} />}
       {reviewId && <Review id={reviewId} onClose={() => { window.location.hash = '#/leitstand'; }} />}

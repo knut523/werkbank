@@ -214,6 +214,78 @@ function ClaudeAccounts({ chat }: { chat: boolean }) {
   );
 }
 
+const z = (n: number) => Number(n ?? 0).toLocaleString('de-DE');
+
+/** Melious als Test-Konto (Plan 162): Standard aus, Verbrauch und Deckel sichtbar, Schlüssel nie wieder angezeigt. */
+function MeliousAccount() {
+  const l = useLoad(() => api('/api/setup/melious'));
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [key, setKey] = useState('');
+  const [form, setForm] = useState<Record<string, string> | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  const [busy, setBusy] = useState('');
+  const [test, setTest] = useState('');
+  const d: any = l.data;
+  if (!d) return l.error ? <Err e={l.error} /> : null;
+  const run = async (what: string, fn: () => Promise<unknown>) => {
+    setBusy(what); setErr(null);
+    try { await fn(); await l.reload(); } catch (e) { setErr(e); } finally { setBusy(''); }
+  };
+  const put = (body: Record<string, unknown>) => api('/api/setup/melious', { method: 'PUT', body });
+  const f = form ?? { model: d.model ?? '', dayLimit: String(d.dayLimit), monthLimit: String(d.monthLimit) };
+  const u = d.usage;
+  return (
+    <div data-testid="melious-account" style={{ marginTop: 16 }}>
+      <h4 style={{ margin: '0 0 4px' }}>Melious (Test) — Open-Weight-Modelle aus der EU</h4>
+      <p className="small" style={{ marginTop: 0 }}>Zusätzliches Konto über die Anthropic-kompatible API von Melious. <b>Standard aus:</b> genommen wird es nur, wenn es hier erlaubt ist, und dann nur in Chats mit <code>/melious an</code> — oder, wenn du es extra einschaltest, als letzter Ausweg, wenn alle Claude-Konten erschöpft sind. Nie in der Lastverteilung. Ergebnisse von Open-Weight-Modellen bitte prüfen.</p>
+      {d.configured ? (
+        <>
+          <div className="row small" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <span>Schlüssel <code>••••{d.last4}</code></span>
+            {d.exhaustedUntil && <span className="chip warn">aus dem Wechsel bis {fmtDateTime(d.exhaustedUntil)}</span>}
+            {d.exhaustedUntil && <button className="btn small" data-testid="melious-reset" disabled={!!busy} onClick={() => run('reset', async () => { await api('/api/setup/melious/reset', { method: 'POST' }); toast('Melious ist wieder im Wechsel'); })}>Vermerk zurücksetzen</button>}
+            {u.sperre ? <span className="chip warn">gesperrt: {u.sperre}</span> : d.enabled ? <span className="chip ok">erlaubt</span> : <span className="chip">aus</span>}
+            {test && <span className="tiny">{test}</span>}
+          </div>
+          <div className="row small" style={{ gap: 16, marginTop: 6 }}>
+            <label><input type="checkbox" aria-label="Melious erlauben" checked={d.enabled} disabled={!!busy} onChange={(e) => run('enabled', () => put({ enabled: e.target.checked }))} /> Melious erlauben (Chats mit <code>/melious an</code>)</label>
+            <label><input type="checkbox" aria-label="Melious als letzter Ausweg" checked={d.fallback} disabled={!!busy || !d.enabled} onChange={(e) => run('fallback', () => put({ fallback: e.target.checked }))} /> auch als letzter Ausweg, wenn alle Claude-Konten erschöpft sind</label>
+          </div>
+          <table className="t small" style={{ marginTop: 8 }} data-testid="melious-usage">
+            <thead><tr><th>Verbrauch</th><th>Input</th><th>Output</th><th>Cache-Read</th><th>Summe / Deckel</th></tr></thead>
+            <tbody>{[['heute', u.heute], ['Monat', u.monat]].map(([n, p]: any) => (
+              <tr key={n}><td>{n} ({z(p.turns)} Züge)</td><td>{z(p.input)}</td><td>{z(p.output)}</td><td>{z(p.cacheRead)}</td><td><b>{z(p.total)}</b> / {z(p.limit)} ({p.pct} %)</td></tr>
+            ))}</tbody>
+          </table>
+          <p className="tiny">Quelle: {u.quelle}. Summe = Input + Output + Cache-Read + Cache-Write. Bei 80 % kommt ein Hinweis in den Hauptchat, bei 100 % ist Melious bis zum Ende des Zeitraums gesperrt.</p>
+          <form className="row small" style={{ marginTop: 4 }} onSubmit={(e) => { e.preventDefault(); run('limits', async () => { await put({ model: f.model, dayLimit: f.dayLimit, monthLimit: f.monthLimit }); setForm(null); toast('Melious-Einstellungen gespeichert'); }); }}>
+            <label>Tagesdeckel <input aria-label="Tagesdeckel in Tokens" inputMode="numeric" value={f.dayLimit} onChange={(e) => setForm({ ...f, dayLimit: e.target.value })} style={{ width: 110 }} /></label>
+            <label>Monatsdeckel <input aria-label="Monatsdeckel in Tokens" inputMode="numeric" value={f.monthLimit} onChange={(e) => setForm({ ...f, monthLimit: e.target.value })} style={{ width: 120 }} /></label>
+            <label>Modell <input aria-label="Melious-Modell" placeholder="leer = Claude-Namen abbilden" value={f.model} onChange={(e) => setForm({ ...f, model: e.target.value })} style={{ width: 200 }} /></label>
+            <button className="btn small" disabled={!form || busy === 'limits'}>Speichern</button>
+          </form>
+          <div className="row" style={{ gap: 6, marginTop: 6 }}>
+            <button className="btn small" disabled={!!busy || !!u.sperre} onClick={() => run('test', async () => {
+              setTest('prüfe …');
+              const r: any = await api('/api/setup/melious/test', { method: 'POST' });
+              setTest(r.ok ? '✓ funktioniert' : r.error === 'rate_limit' ? 'Rate-Limit erreicht' : r.error === 'guthaben' ? '✗ Melious-Guthaben leer (Insufficient credits) — nach dem Aufladen erneut testen' : r.error === 'auth' ? '✗ Schlüssel abgelehnt' : '✗ Fehler');
+            })}>{busy === 'test' ? 'Teste …' : 'Testen'}</button>
+            <button className="btn small danger" disabled={!!busy} onClick={async () => {
+              if (await confirm({ title: 'Melious entfernen?', body: <p>Der Schlüssel wird gelöscht; der Verbrauch bleibt gezählt.</p>, danger: true, confirmLabel: 'Entfernen' })) run('rm', () => api('/api/setup/melious', { method: 'DELETE' }));
+            }}>Entfernen</button>
+          </div>
+        </>
+      ) : <p className="small muted">Kein Schlüssel hinterlegt.</p>}
+      <form className="row" style={{ marginTop: 8 }} onSubmit={(e) => { e.preventDefault(); run('key', async () => { await put({ token: key }); setKey(''); toast('Melious-Schlüssel gespeichert (noch aus)'); }); }}>
+        <input type="password" aria-label="Melious-Schlüssel" placeholder="sk-mel-… (melious.ai → Account → API Keys)" value={key} onChange={(e) => setKey(e.target.value)} style={{ flex: 1, minWidth: 260 }} autoComplete="off" />
+        <button className="btn" disabled={!key || busy === 'key'}>{d.configured ? 'Schlüssel ersetzen' : 'Schlüssel speichern'}</button>
+      </form>
+      <Err e={err} />
+    </div>
+  );
+}
+
 function Wizard({ cfg }: { cfg: Config }) {
   const st = useLoad(() => api('/api/setup/status'));
   const toast = useToast();
@@ -268,6 +340,7 @@ function Wizard({ cfg }: { cfg: Config }) {
               }}>Trennen</button>}
             </form>
             <ClaudeAccounts chat={s.claude.connected} />
+            <MeliousAccount />
           </div>
         </div>
 

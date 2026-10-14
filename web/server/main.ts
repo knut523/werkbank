@@ -21,7 +21,8 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
-import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe } from './leitstand.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious } from './leitstand.ts';
+import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, MELIOUS_ID } from './melious.ts';
 import { reviewDetail, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen } from './freigabe.ts';
 import { readBericht as readBerichtDatei } from './bericht.ts';
 import { readBericht, paketDatei } from './bericht.ts';
@@ -454,6 +455,82 @@ on('POST', /^\/api\/setup\/claude-accounts\/([\w-]{1,40})\/test$/, async (req, r
   log('claude konto getestet', { user: u.id, konto: m[1], ok: !!r.ok, error: r.error });
   send(res, 200, { ok: !!r.ok, error: r.error ?? null, resetsAt: r.resetsAt ? new Date(r.resetsAt).toISOString() : null });
 });
+
+// --- Melious als Test-Konto (Plan 162): Standard aus, Verbrauch und Deckel in der Werkbank. Nie der Schlüssel an den Browser. ---
+
+async function meliousView(u: User) {
+  const [settings, usage] = await Promise.all([meliousSettings(u), meliousUsage(u)]);
+  let exhaustedUntil: number | null = null;
+  try {
+    const r = await fetch(`${cfg.bridgeUrl}/internal/accounts-state?user=${encodeURIComponent(u.id)}`, { headers: bridgeInternal, signal: AbortSignal.timeout(1500) });
+    if (r.ok) { const v = ((await r.json()) as any).exhausted?.[MELIOUS_ID]; exhaustedUntil = v > Date.now() ? v : null; }
+  } catch { /* Brücke nicht erreichbar: ohne Zustand */ }
+  return { ...settings, usage, exhaustedUntil };
+}
+
+on('GET', /^\/api\/setup\/melious$/, async (req, res) => send(res, 200, await meliousView(await needUser(req))));
+
+on('PUT', /^\/api\/setup\/melious$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const s = await setMelious(u, b);
+  log('melious gesetzt', { user: u.id, schluessel: b.token !== undefined, erlaubt: s.enabled, ausweg: s.fallback, tag: s.dayLimit, monat: s.monthLimit });
+  send(res, 200, { ok: true, ...(await meliousView(u)) });
+});
+
+on('DELETE', /^\/api\/setup\/melious$/, async (req, res) => {
+  const u = await needUser(req);
+  await removeMelious(u);
+  log('melious entfernt', { user: u.id });
+  send(res, 200, { ok: true, ...(await meliousView(u)) });
+});
+
+// Test: ein Minimalzug über Melious (zählt zum Verbrauch).
+on('POST', /^\/api\/setup\/melious\/test$/, async (req, res) => {
+  const u = await needUser(req);
+  const token = await meliousKey(u);
+  if (!token) throw new HttpError(404, 'Kein Melious-Schlüssel hinterlegt.');
+  const use = await meliousUsage(u);
+  if (use.sperre) throw new HttpError(409, `Melious ist gesperrt: ${use.sperre}.`);
+  let r: any;
+  try {
+    const resp = await fetch(`${cfg.bridgeUrl}/internal/account-test`, {
+      method: 'POST', headers: { ...bridgeInternal, 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ userId: u.id, email: u.email, kind: 'melious', model: (await meliousSettings(u)).model }), signal: AbortSignal.timeout(75_000),
+    });
+    r = await resp.json();
+  } catch { throw new HttpError(502, 'Die Brücke antwortet nicht — Test nicht möglich.'); }
+  if (r.usage) await meliousBooking(u, r.usage);
+  log('melious getestet', { user: u.id, ok: !!r.ok, error: r.error });
+  send(res, 200, { ok: !!r.ok, error: r.error ?? null, ...(await meliousView(u)) });
+});
+
+// Vermerk „erschöpft“ aufheben (z. B. „Guthaben leer“ nach dem Aufladen bei Melious) — Melious ist wieder im Wechsel.
+on('POST', /^\/api\/setup\/melious\/reset$/, async (req, res) => {
+  const u = await needUser(req);
+  try {
+    const r = await fetch(`${cfg.bridgeUrl}/internal/accounts-reset`, { method: 'POST', headers: { ...bridgeInternal, 'content-type': 'application/json' }, body: JSON.stringify({ userId: u.id, accountId: MELIOUS_ID }), signal: AbortSignal.timeout(3000) });
+    if (!r.ok) throw new Error(String(r.status));
+  } catch { throw new HttpError(502, 'Die Brücke antwortet nicht — Zurücksetzen nicht möglich.'); }
+  log('melious zurückgesetzt', { user: u.id });
+  send(res, 200, { ok: true, ...(await meliousView(u)) });
+});
+
+// Kachel „Melious heute / Monat“ (Hauptchat-Seite): nur Zahlen, null wenn nichts eingerichtet ist.
+on('GET', /^\/api\/melious\/usage$/, async (req, res) => {
+  const u = await needUser(req);
+  const s = await meliousSettings(u);
+  send(res, 200, s.configured ? { enabled: s.enabled, fallback: s.fallback, ...(await meliousUsage(u)) } : { configured: false });
+});
+
+async function meliousBooking(u: User, usage: unknown) {
+  const r = await recordMeliousUsage(u, usage);
+  for (const c of r.crossed) {
+    const sent = await hinweisMelious(u, `${c.period === 'tag' ? r.usage.day : r.usage.month}:${c.at}`, schwelleText(c, r.usage)).catch(() => false);
+    log('melious schwelle', { user: u.id, zeitraum: c.period, prozent: c.at, hauptchat: sent });
+  }
+  return r;
+}
 
 on('POST', /^\/api\/setup\/jira$/, async (req, res) => {
   const u = await needUser(req);
@@ -2476,6 +2553,15 @@ on('POST', /^\/internal\/session-start$/, async (req, res) => {
 on('POST', /^\/internal\/claude-accounts$/, async (req, res) => {
   const u = await internalUser(req, await body(req));
   send(res, 200, { accounts: await claudeAccountsForBridge(u) });
+});
+
+// Melious-Verbrauch eines Versuchs aus der Brücke (Plan 162): buchen, 80/100 % an den Hauptchat.
+on('POST', /^\/internal\/melious-usage$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const r = await meliousBooking(u, b.usage);
+  log('melious verbrauch', { user: u.id, heute: r.usage.heute.total, monat: r.usage.monat.total });
+  send(res, 200, { ok: true, rest: r.usage.rest, sperre: r.usage.sperre });
 });
 
 on('POST', /^\/internal\/measure$/, async (req, res) => {
