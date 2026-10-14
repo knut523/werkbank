@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { api, chatTarget, fmtDateTime, openChat, type Config } from '../api.ts';
 import { Err, Loading, useLoad } from '../ui.tsx';
+import { PrTicker, PrReviewAbschnitt } from '../prticker.tsx';
 
 const ICON: Record<string, string> = { läuft: '⏳', wartet: '✋', fertig: '✅', gestoppt: '⛔', erledigt: '✔️' };
 const CHIP: Record<string, string> = { läuft: '', wartet: 'warn', fertig: 'ok', gestoppt: 'bad', erledigt: '' };
@@ -61,6 +62,7 @@ function Review({ id, onClose }: { id: string; onClose: () => void }) {
         <button className="btn small ghost" onClick={onClose}>Schließen</button>
       </div>
       {msg && <p className={`small ${msg.ok ? '' : 'err'}`} role="status" data-testid="review-msg">{msg.text}</p>}
+      {d.prReview && <PrReviewAbschnitt id={id} pr={d.prReview} onDone={t.reload} />}
 
       <h3>Vorschau</h3>
       {d.vorschau.length === 0 ? <p className="small muted">Keine Vorschau im Dienste-Register zu diesem Paket (review-pakete/00-dienste.yaml).</p> :
@@ -224,6 +226,7 @@ export function Leitstand({ hash }: { cfg: Config; hash: string }) {
         </>}
       </div>
       {starten && <StartHauptchat aktiv={!!d.leitstand} onStarted={() => { setStarten(false); t.reload(); if (wantStart) history.replaceState(null, '', location.pathname + location.search + '#/leitstand'); }} onClose={() => { setStarten(false); if (wantStart) window.location.hash = '#/leitstand'; }} />}
+      <PrTicker />
       {reviewId && <Review id={reviewId} onClose={() => { window.location.hash = '#/leitstand'; }} />}
       {bericht && <Bericht id={bericht.id} art={bericht.art} onClose={() => { setBericht(null); if (fromHash) window.location.hash = '#/leitstand'; }} />}
       {d.offen.length === 0 && <div className="card soft empty"><p><b>Keine offenen Unter-Chats.</b></p></div>}
