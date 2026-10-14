@@ -738,3 +738,17 @@ nur Rebases nach der Freigabe; der bestehende Test „Rebase gleiche patch-id �
 laufendem Strang schon nach (`injectBridge`), der Endpunkt muss nur die 409-Sperre lockern. H2: Kopf-Auswertung vor dem `continue` liest
 die Datei nur bei geänderter Zeit (fstat), Last vernachlässigbar. Bedingung: unabhängiges Council über den Diff vor „fertig“.
 E13 (Knut): mermaid 10.9.8 statt 10.9.1 — gleiche Reihe, Lücken geschlossen. Empfehlung: so lassen.
+
+## C.6 Bau und Prüfung (14.10.2026)
+Gebaut auf `feat/bericht-review` (Basis `0dfc538` = Live): `web/server/berichtkopf.ts` (Kopf, Spalte, offene Fragen, Commit-Abgleich),
+`web/server/berichtstand.ts` (Kopf-Pflege im Status-Takt, vor dem Übersprung), `freigabe.ts` (nur exakter SHA, `vorschauAusLink`,
+`berichtHtml`), `reviewpakete.ts` (Mermaid nur als Text, DoD-Häkchen), `leitstand.ts` (`kopfFelder`), Routen (Kopf-Fragen, Nachreichen
+statt 409, `vorschau-tot`, Bericht mit HTML), `orchestrator.ts` (`BERICHT_PFLICHT` im Brief), `web/src/mermaid.tsx` (mermaid 10.9.8, nur
+bei Bedarf), „Heute“ in drei Spalten mit Teil-C-Karte, Leitstand/Review-Ansicht formatiert; Vorlagen `docs/bericht-vorlage.md`,
+`docs/bericht-folien-vorlage.html`.
+- Tests: `web/test/bericht-review.test.ts` (6), Ende-zu-Ende in `web/test/leitstand.test.ts` (Antwort → Strang-Chat, tote Vorschau,
+  Diagramm), `web/test/freigabe.test.ts` (Rebase → rot). Web 368/368, Build grün.
+- Brücken-Suite: unverändert in Teil C; auf diesem Rechner 24 Fehler — **gleich auf dem unveränderten Release** — weil verwaiste
+  Test-Brücken eines anderen Strangs (`werkbank-pr-ticker`) die festen Testports 3098/3194/3197 belegen.
+- Kein unabhängiges Diff-Council (Teilagenten-Grenze der Nachricht erreicht); eigener Gegenpass ohne blockierenden Befund. Bekannte
+  Grenzen: Element-Screenshot der Handy-Karte hat unten Leerraum (Aufnahme, nicht Ansicht); Kopf ist Selbstauskunft (H1 mildert).
