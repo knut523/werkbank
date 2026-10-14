@@ -572,3 +572,128 @@ Drei getrennte Stimmen (Befürworter, Fachprüfer, Gegenstimme; Claude, Teilagen
   seinen Ordner für `orch_start` (60); Passt ↔ Auto-weiter/`orch_send` nicht atomar (60); Passt zieht offene Deckel-Frage nicht
   zurück (60); erster Bericht-Pfad bleibt, Link vor der Datei (50–70).
 - Live-Daten vor dem Ausrollen gezählt: 12 Stränge, 9 offen (alle < 14 Tage), 3 mit review_ready — keine Kartenflut.
+
+---
+
+# Teil C — Bericht + „Heute“ als ein Review-Ablauf (Knut, 14.10.2026)
+
+> Knut, 14.10.2026: „ich kann easy auf Bericht gehen … hier wirklich nur der Bericht zum Chat und visualisieren wenn möglich, sagen
+> ob und was noch offen ist, wo reviewed werden kann oder ob alles passt und wir es auf GitHub packen können … denke den Workflow
+> zusammen mit Heute.“ — „für alle Sachen im Workspace im Bericht diese visuellen Elemente adden, neben Screenshots“.
+> Entscheidungen (Knut bestätigt): D1 YAML-Kopf im bericht.md · D2 „Push freigeben“ auf der Karte, nur für genau den gesehenen Stand ·
+> D3 Fragen auf der Karte beantworten → Strang-Chat · D4 Aufbau auf den Review-Karten und der Berichtsanzeige.
+> **Basis:** `release/werkbank-2026-10-13` (`0dfc538`, = Live), Zweig `feat/bericht-review` — NICHT der alte `feat/leitstand`.
+
+## C.0 Befund (Release-Stand, gelesen 14.10.)
+- **Freigabe gibt es** (Plan 154 §9, `web/server/freigabe.ts`): gebunden an origin-URL, Branch, Kopf-SHA, Basis, git patch-id; grün nur
+  bei genau diesem SHA oder nach Rebase mit gleicher patch-id (`pruefeFreigabe`); Push macht die Hauptsitzung, `orch freigabe-gepusht
+  <id> --pr URL` schreibt die PR-URL zurück; pre-push-Hook-Vorlage `templates/git-hooks/pre-push`. Knöpfe nur in der Review-Ansicht
+  (`#/leitstand?review=<id>`), nicht auf der Karte.
+- **Antworten aus der Werkbank** gibt es: `POST /api/review/:id/entscheidungen` prüft den Bericht-Hash und schickt die Antworten als
+  „Nacharbeit nach Review“ in den Unter-Chat (`sendOrch`, läuft er gerade → nachreichen). Entscheidungen kommen aus Fettzeilen
+  `**D1 — …**` im Bericht (`entscheidungen()`).
+- **Bericht-Anzeige:** auf „Heute“ gerendert (`renderPaketMd`, markdown-it `html:false`, Frontmatter wird weggeschnitten); auf der
+  Leitstand-Seite und in der Review-Ansicht als Rohtext (`<pre>`). Kein Mermaid, kein Bericht-Kopf.
+- **Vorschau-Prüfung** gibt es (`pruefeVorschau`: GET 127.0.0.1:<port>, 3 s, 30 s Cache; Ergebnis läuft / läuft (Anmeldung) / Proxy
+  läuft, Ziel antwortet nicht / antwortet nicht / Fehler), aber nur in der Review-Ansicht.
+- **Strang-Vorgabe** (`orchBrief`): nur „### Stand … Status: fertig | braucht Antwort | blockiert“; nichts zu Bericht, Kopf, Diagramm.
+
+## C.1 Schnitt
+**C1 — Bericht-Kopf (D1).** YAML-Frontmatter oben im `bericht.md`, einziges Format für Strang, Leitstand und „Heute“ (keine status.json):
+```yaml
+---
+status: wartet_auf_knut        # bereit_fuer_github | wartet_auf_knut | blockiert
+offen:                          # höchstens 5 Zeilen
+  - Vorlage 85 in Brevo umbauen
+review:                         # wo reviewen
+  - titel: Admin-Vorschau
+    url: https://3064--main--dev--knut.ws.konekto.energy/hardware
+    login: https://3064--main--dev--knut.ws.konekto.energy/login?next=/hardware
+  - screenshot: screenshots/mail-nachher-800.png
+  - pr_text: pr.md
+fragen:
+  - id: D1
+    frage: Vorlage in Brevo jetzt umbauen?
+    empfehlung: ja, heute
+    antwort: ""
+github:
+  - repo: WirStrom1/olaf-admin
+    zweig: feat/leasing-mail-bearbeiter
+    commit: e05ea35c
+    pr_text: pr.md
+    pr: https://github.com/WirStrom1/olaf-admin/pull/337
+---
+```
+Parser `berichtKopf(text)` (rein): `yaml`-Paket, nur diese Schlüssel, Typen geprüft, Längen begrenzt (offen ≤ 5 × 200, fragen ≤ 10,
+review ≤ 12, github ≤ 6), Links nur `https?://`, Bildpfade nur relativ im Paket. Unlesbar → `{ fehler }`, die Karte zeigt „Bericht-Kopf
+unlesbar“ statt zu raten. Ohne Kopf: altes Verhalten (Abschnitt „### Stand“).
+
+**C2 — Diagramme (Pflicht im Bericht).** Mindestens ein ```` ```mermaid ```` „wie es jetzt funktioniert“; bei mehreren PRs/Repos zusätzlich
+„Ausroll-Reihenfolge“. Gerendert in der Berichtsanzeige (Heute, Leitstand, Review-Ansicht) und auf der Karte (erstes Diagramm): Server
+gibt den Block als `<pre class="mermaid-src">` (Text, markdown-it-escaped) aus; der Client lädt `mermaid@10.9.1` erst bei Bedarf
+(eigenes Bundle-Stück), `securityLevel: 'strict'`, `startOnLoad: false`, rendert per `mermaid.render` in ein SVG; schmaler als 600 px:
+`flowchart LR`/`graph LR` → `TD`. Fehler beim Rendern → der Quelltext bleibt sichtbar mit Hinweis.
+
+**C3 — Bericht formatiert.** Leitstand-Seite und Review-Ansicht nutzen dieselbe gerenderte Anzeige wie „Heute“ (`renderPaketMd`, kein Rohtext
+mehr). DoD-Tabellen: Zellen „ja/teilweise/nein“ werden zu ✓/◐/✗ (nach dem Rendern, nur in Tabellen). Screenshots aus dem Kopf als
+Vorschaubilder (Link aufs Original).
+
+**C4 — „Heute“: drei Spalten** für Strang-Karten (Board-Läufe bleiben in „Ansehen“):
+- **Entscheiden** — Kopf `status: wartet_auf_knut` mit offenen `fragen` (Antwort leer) oder `status: blockiert`; Fragen mit Empfehlung
+  und Antwortfeld direkt auf der Karte (D3).
+- **Ansehen** — `wartet_auf_knut` ohne offene Fragen, Stränge ohne Kopf, Board-Läufe; Review-Links (Login-Link zuerst), Screenshots,
+  erstes Diagramm, Passt/Nacharbeit, „Push freigeben“.
+- **Auf GitHub** — `bereit_fuer_github` oder aktive Freigabe/gepusht; zeigt je Repo Zweig, Commit, Freigabe-Stand, PR-Link.
+Handy: die Spalten untereinander, Überschrift mit Zahl.
+
+**C5 — Push freigeben auf der Karte (D2).** Knopf öffnet eine Rückfrage, die **live** den Repo-Stand holt (`GET /api/review/:id`, wie die
+Review-Ansicht) und genau diesen Stand (Kopf-SHA + patch-id) freigibt (`POST /api/review/:id/freigabe`, unverändert). Die Karte zeigt
+die Freigabe aus Mongo: „freigegeben für `abc1234` · wartet auf Push“ / „gepusht · PR #337“ (aus `pr`-URL). **Verfall:** weicht der
+Commit im Bericht-Kopf (`github[].commit`) oder der beim Öffnen gelesene Kopf vom freigegebenen ab und ist die patch-id eine andere,
+zeigt die Karte „Freigabe gilt für einen älteren Stand“ und bietet neu freigeben an; der Push-Hook ist ohnehin nur für den freigegebenen
+Stand grün. Nie mergen; gepusht wird weiter von der Hauptsitzung.
+
+**C6 — Login-Links prüfen.** `statusTick` prüft je Strang mit Kopf die `review[].url`/`login` des Coder-Musters über `pruefeVorschau`
+(höchstens alle 5 min je Port, nur das Muster `<port>--<WERKBANK_VORSCHAU_HOST>`), speichert das Ergebnis am Strang. „antwortet nicht“ /
+„Proxy läuft, Ziel antwortet nicht“ / „Fehler“ → auf „Heute“ eine **Warnung** statt der Karte („Vorschau tot: <titel> — Unter-Chat
+benachrichtigen“, Knopf schickt „Die Vorschau <url> antwortet nicht — bitte neu starten und den Bericht-Kopf aktualisieren.“).
+„Heute“ selbst prüft nie live.
+
+**C7 — Kopf im Stand festschreiben.** `statusTick` liest den Bericht nur bei geänderter Größe/Zeit, parst Kopf und erstes Diagramm und
+speichert `berichtKopf`, `berichtDiagramm`, `berichtHash`, `berichtAt` am Strang (Mongo). „Heute“ bleibt Mongo-only.
+
+**C8 — Vorlage für alle Stränge.** `orchBrief` bekommt die Pflicht: Bericht unter `review-pakete/NNN-<slug>/bericht.md` mit YAML-Kopf
+(Schema kurz + Verweis auf `docs/bericht-vorlage.md`), mindestens ein Mermaid-Diagramm „wie es jetzt funktioniert“, bei mehreren
+PRs/Repos „Ausroll-Reihenfolge“, Screenshots bei sichtbaren Änderungen, optional HTML-Folien nach `docs/bericht-folien-vorlage.html`
+(Folie 1 Status/offen/reviewen/GitHub, dann Ablauf, Ausrollen, Screenshots, Prüfungen, Entscheidungen). Fragen im Kopf mit `id` = die
+Kennung im Text (`D1`), damit `entscheidungen` und Kopf zusammenpassen.
+
+**C9 — Bestehende Berichte.** Paket 155 bekommt einen Kopf + Diagramm (Inhalt unverändert darunter); Paket 132 wird im neuen Format mit
+eigenem Diagramm neu geschrieben.
+
+## C.2 DoD (Prüfsätze)
+C-1. `berichtKopf` liest das Schema, begrenzt, lehnt Fremdes ab (unbekannter Status, `javascript:`-Link, Bild außerhalb des Pakets) (rein).
+C-2. `orchBrief` enthält Kopf- und Diagramm-Pflicht und den Verweis auf die Vorlagen (Test); `docs/bericht-vorlage.md` und
+     `docs/bericht-folien-vorlage.html` existieren.
+C-3. Mermaid-Blöcke kommen als `mermaid-src` aus dem Server, nie als ausführbares HTML; `<script>` im Diagrammtext bleibt Text (Test).
+C-4. Leitstand-Seite und Review-Ansicht zeigen den Bericht gerendert, DoD-Zellen als ✓/◐/✗ (Test auf das HTML).
+C-5. Karte: Spalte nach Kopf — `wartet_auf_knut`+offene Frage → Entscheiden; ohne → Ansehen; `bereit_fuer_github`/Freigabe → Auf GitHub (rein).
+C-6. Antwort auf der Karte landet als Nachricht im Strang-Chat (Ende-zu-Ende).
+C-7. Push-Freigabe verfällt nachweislich bei geändertem Commit: freigeben, neuer Commit mit anderem Inhalt → Karte „älterer Stand“ und
+     `pruefeFreigabe` rot; gleicher Inhalt nach Rebase bleibt gültig (Test).
+C-8. Toter Login-Link → Warnung statt Karte; lebender → Karte (Test mit Port ohne Dienst / mit Dienst).
+C-9. Paket 155 im neuen Format erscheint auf „Heute“ in „Entscheiden“ bzw. „Ansehen“ als „wartet auf dich“ mit gerendertem Diagramm
+     (Screenshot Desktop + Handy).
+C-10. Bericht 132 im neuen Format mit eigenem Mermaid-Diagramm.
+C-11. Alle Tests und Build grün; keine Regression der bisherigen Karten (bestehende Tests).
+
+## C.3 Einstellungen
+| Name | App | Vorgabe | wer |
+|---|---|---|---|
+| (keine neue) | — | `WERKBANK_VORSCHAU_HOST` (vorhanden) bestimmt das Link-Muster | — |
+Neue Abhängigkeit: `mermaid` 10.9.1 (web, Client, nur bei Bedarf geladen).
+
+## C.4 Nicht in diesem Schnitt
+- Mergen; Pushen durch die Werkbank; Login-Links mit echter Anmeldung prüfen (nur „antwortet / Anmeldung nötig / tot“).
+- HTML-Folien automatisch erzeugen (Vorlage ja, Generator nein).
+- Kopf-Migration aller alten Berichte (nur 155 und 132).
