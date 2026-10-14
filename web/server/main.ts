@@ -1360,7 +1360,9 @@ on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
   const path = paketDatei(d, art);
   const text = readBericht(path);
   if (text === null) throw new HttpError(404, art === 'auftrag' ? 'Kein lesbarer Auftrag zu diesem Unter-Chat.' : 'Kein lesbarer Bericht zu diesem Unter-Chat.');
-  send(res, 200, { strand: String(d._id), art, name: String(path).split('/').slice(-2).join('/'), text });
+  // Teil C (C3): formatiert wie auf „Heute“ (markdown-it ohne HTML, Diagramme als Text, DoD-Häkchen) — Rohtext bleibt für „Datei“.
+  const name = String(path).split('/').slice(-2).join('/');
+  send(res, 200, { strand: String(d._id), art, name, text, html: renderPaketMd(text, name.split('/')[0], `${art}.md`) });
 });
 
 /** Strang zum Review prüfen (Einzel- und Sammel-„Passt“, Council Bedingung 7): eigen, gesehener Stand (F3), nicht laufend (G4). */

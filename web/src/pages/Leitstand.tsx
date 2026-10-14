@@ -2,8 +2,17 @@
 // alle Unter-Chats (Orchestrator-Stränge) je Lauf, zugeklappt („Flex — 3 Unter-Chats · 2 fertig · 1 wartet“), mit Status,
 // Zähler „automatisch fortgesetzt“, Chat- und Bericht-Link; oben der Hauptchat mit Start/Neustart (Übergabe vorbefüllt).
 // Nur für Admins (Feature leitstand). Liest nur festgeschriebenen Stand (kein Abruf bei der Brücke).
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, chatTarget, fmtDateTime, openChat, type Config } from '../api.ts';
+import { useMermaidIn } from '../mermaid.tsx';
+
+/** Bericht formatiert (Teil C, C3): Server-HTML ohne rohes HTML, Diagramme gezeichnet; ohne HTML (alter Server) der Rohtext. */
+function BerichtHtml({ html, text }: { html?: string | null; text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useMermaidIn(ref, html);
+  if (!html) return <pre className="small" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '70vh', overflow: 'auto' }}>{text}</pre>;
+  return <div className="note-body" ref={ref} data-testid="bericht-html" dangerouslySetInnerHTML={{ __html: html }} />;
+}
 import { Err, Loading, useLoad } from '../ui.tsx';
 
 const ICON: Record<string, string> = { läuft: '⏳', wartet: '✋', fertig: '✅', gestoppt: '⛔', erledigt: '✔️' };
@@ -25,7 +34,7 @@ function Bericht({ id, art, onClose }: { id: string; art: 'auftrag' | 'bericht';
         <h2 style={{ margin: 0 }}>{art === 'auftrag' ? 'Auftrag' : 'Bericht'} {d ? <span className="tiny muted mono">{d.name}</span> : null}</h2>
         <button className="btn small ghost" onClick={onClose}>Schließen</button>
       </div>
-      {t.error ? <Err e={t.error} /> : !d ? <Loading /> : <pre className="small" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '70vh', overflow: 'auto' }}>{d.text}</pre>}
+      {t.error ? <Err e={t.error} /> : !d ? <Loading /> : <BerichtHtml html={d.html} text={d.text} />}
     </section>
   );
 }
@@ -107,7 +116,7 @@ function Review({ id, onClose }: { id: string; onClose: () => void }) {
 
       {d.prTexte.length > 0 && <><h3>PR-Texte</h3>{d.prTexte.map((p: any) => <details key={p.name}><summary className="small mono">{p.name}</summary><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: '50vh', overflow: 'auto' }}>{p.text}</pre></details>)}</>}
       <h3>Bericht</h3>
-      {d.bericht ? <details><summary className="small">Bericht lesen</summary><pre className="small" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '70vh', overflow: 'auto' }}>{d.bericht}</pre></details> : <p className="small muted">Noch kein Bericht.</p>}
+      {d.bericht ? <details open><summary className="small">Bericht</summary><BerichtHtml html={d.berichtHtml} text={d.bericht} /></details> : <p className="small muted">Noch kein Bericht.</p>}
     </section>
   );
 }

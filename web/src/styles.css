@@ -459,3 +459,23 @@ td[data-label-inline]::before { content: none; }
   .now table.stack-t td { flex: 1 1 100%; }
   .now table.stack-t td:nth-child(-n+2) { flex: 0 0 auto; }
 }
+
+/* Teil C (docs/plan-leitstand.md): Heute in drei Spalten, Bericht-Kopf auf der Karte, Diagramme, DoD-Häkchen. */
+.rq-spalten { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.rq-spalte > h3 { margin: 4px 0 8px; font-size: 15px; }
+.rq-spalte > .card { margin-bottom: 12px; }
+.rq-spalten-jump { display: none; }
+@media (max-width: 1100px) { .rq-spalten { grid-template-columns: 1fr; } .rq-spalten-jump { display: flex; flex-wrap: wrap; gap: 6px; } }
+.rq-kopf { border-top: 1px solid var(--line, #ddd); margin-top: 8px; padding-top: 8px; display: grid; gap: 6px; }
+.rq-kopf p { margin: 0; }
+.rq-offen { margin: 0; padding-left: 18px; }
+.rq-tot { color: var(--bad, #a33a2a); }
+.rq-shots { display: flex; gap: 8px; overflow-x: auto; }
+.rq-shots img { height: 84px; width: auto; border: 1px solid var(--line, #ddd); border-radius: 6px; display: block; }
+.rq-frage textarea { width: 100%; }
+.rq-github { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mmd { overflow-x: auto; text-align: center; background: var(--card, #fff); padding: 6px 0; }
+.mmd svg { max-width: 100%; height: auto; }
+pre.mermaid-src { white-space: pre-wrap; font-size: 12px; opacity: .8; }
+td.dod { white-space: nowrap; font-weight: 600; }
+td.dod-ja { color: var(--ok, #2f7d3a); } td.dod-teilweise { color: var(--warn, #9a6a00); } td.dod-nein { color: var(--bad, #a33a2a); }

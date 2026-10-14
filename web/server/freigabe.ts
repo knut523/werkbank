@@ -20,7 +20,7 @@ import { wb } from './db.ts';
 import type { User } from './auth.ts';
 import { GIT_SAFE } from './gitsafe.ts';
 import { readBericht, paketDatei, reviewDir, findPaket } from './bericht.ts';
-import { paketFile, PAKET_RE } from './reviewpakete.ts';
+import { paketFile, PAKET_RE, renderPaketMd } from './reviewpakete.ts';
 
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 export const freigaben = () => wb().collection('freigaben');
@@ -190,7 +190,7 @@ export async function reviewDetail(d: any, opts: { pruefen?: boolean; g?: GitFn;
   const fg = await freigaben().find({ strand: String(d._id) }).sort({ at: -1 }).limit(20).toArray();
   return {
     id: String(d._id), title: d.title, url: d.url, paket, status: d.lastStatus ?? null, running: d.lastStatus === 'running',
-    bericht: bericht ?? null, berichtHash: berichtHash(bericht), prTexte, entscheidungen: bericht ? entscheidungen(bericht) : [],
+    bericht: bericht ?? null, berichtHtml: bericht && paket ? renderPaketMd(bericht, paket, 'bericht.md') : null, berichtHash: berichtHash(bericht), prTexte, entscheidungen: bericht ? entscheidungen(bericht) : [],
     beantwortet: d.entscheidungenAntwort ?? null, vorschau, repo, freigaben: fg.map(publicFreigabe),
   };
 }
