@@ -22,6 +22,7 @@ import { cfg } from './config.ts';
 import { wb } from './db.ts';
 import type { User } from './auth.ts';
 import { createLibreChat } from './agent.ts';
+import { parseKommentar } from './prreview.ts';
 import { runs, STRANDS, OPEN, laufName, LEIT_TAG, questions, orchStatus, excerpt, lastMessage, strandStates, deliver, decorateSoon, AUTO_RATE_MS, AUTO_BUSY_MS, type LastMsg, type StrandState } from './orchestrator.ts';
 
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
@@ -53,12 +54,19 @@ export interface LeitEvent { key: string; kind: 'fertig' | 'antwort' | 'blockier
  * (Plan 132, S2); stehen sie nach hangMs() noch, meldet der Strang „hängt“ (Plan 154). Der Schlüssel macht dasselbe Ereignis
  * einmalig: Strang + Zug + Zustand.
  */
+/** Plan 157: Auto-Review fertig → „Neues Review fertig: repo#n — Empfehlung …“ (Empfehlung aus kommentar.md im Paket). */
+export function prReviewText(p: { repo: string; number: number; paket?: string }, read: (path: string) => string | null = (x) => readBericht(x)): string {
+  const k = p.paket ? parseKommentar(read(join(reviewDir(), p.paket, 'kommentar.md'))) : null;
+  const e: Record<string, string> = { approve: 'freigeben', 'request-changes': 'Änderungen verlangen', comment: 'nur kommentieren' };
+  return `Neues Review fertig: ${p.repo.split('/')[1] ?? p.repo}#${p.number} — Empfehlung: ${k ? e[k.empfehlung] : 'kein Entwurf (Review-Ansicht prüfen)'}`;
+}
+
 export function strandEvent(run: any, st: { status: string; reason: string; cause?: string }, s: StrandState | null | undefined, last: LastMsg | null, now = Date.now()): LeitEvent | null {
   const strand = { id: String(run._id), title: String(run.title ?? '') };
   const turnKey = s?.turn?.start ?? new Date(run.lastSentAt ?? run.startedAt).getTime();
   const ex = last && !last.fromUser ? excerpt(last.text, 400) : '';
   if (run.autoStopped) return { key: `deckel:${strand.id}:${new Date(run.autoStopped.at).getTime()}`, kind: 'deckel', at: new Date(run.autoStopped.at).getTime(), text: String(run.autoStopped.reason ?? 'Deckel erreicht'), strand };
-  if (run.reviewReadyAt) return { key: `review:${strand.id}:${new Date(run.reviewReadyAt).getTime()}`, kind: 'review', at: new Date(run.reviewReadyAt).getTime(), text: 'meldet review_ready', excerpt: ex, strand };
+  if (run.reviewReadyAt) return { key: `review:${strand.id}:${new Date(run.reviewReadyAt).getTime()}`, kind: 'review', at: new Date(run.reviewReadyAt).getTime(), text: run.prReview ? prReviewText(run.prReview) : 'meldet review_ready', excerpt: ex, strand };
   if (st.status === 'running') return null;
   // Sicherheitsnetz (Plan 154, G9): normal setzt das automatische „weiter“ binnen 20–40 s fort. Steht der Strang nach hangMs()
   // noch an der Grenze, meldet er „hängt“ — einmal je Zug — mit dem Grund, warum nicht fortgesetzt wurde (autoHold).

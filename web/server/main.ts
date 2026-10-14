@@ -2775,6 +2775,7 @@ async function backgroundJobs() {
       const r = await reviewTick({
         userById: async (id) => { const u = await userById(id); return u && allowed(u.email) && u.role === 'ADMIN' ? u : null; },
         startOrch, strandDoc: (id) => orchRuns().findOne({ _id: id as any }),
+        markStrand: (id, prReview) => orchRuns().updateOne({ _id: id as any }, { $set: { prReview } }),
         prNow: async (repo, n) => { const t = await githubReadToken(); return t ? prNowVia(t, repo, n) : null; },
         post: (r, text, event) => postReview(r, text, event), log,
       });

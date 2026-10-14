@@ -77,6 +77,8 @@ export interface ReviewDeps {
   userById: (id: string) => Promise<any>;
   startOrch: (u: any, inp: any) => Promise<{ id: string }>;
   strandDoc: (id: string) => Promise<any>;
+  /** Am Strang vermerken, dass er ein PR-Review ist (Hauptchat-Meldung mit Empfehlung, leitstand.ts). */
+  markStrand?: (id: string, prReview: { repo: string; number: number; paket: string }) => Promise<unknown>;
   git?: GitRun;
   post?: (r: any, body: string, event: 'COMMENT') => Promise<{ url: string | null }>;
   prNow?: (repo: string, n: number) => Promise<{ state: string; head: string } | null>;
@@ -159,6 +161,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       writeFileSync(join(reviewDir(), paket, 'auftrag.md'), prompt + '\n');
       const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}`, prompt, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker' });
       await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt } });
+      await deps.markStrand?.(st.id, { repo: r.repo, number: r.number, paket });
       deps.log?.('pr-review gestartet', { pr: `${r.repo}#${r.number}`, strand: st.id });
       started++;
     } catch (e: any) {

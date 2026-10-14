@@ -230,3 +230,9 @@ test('Aufgezeichnete echte GitHub-Antworten (falls vorhanden) lassen sich ableit
     assert.ok(events.every((e) => e.actor !== 'knut523' || e.kind === 'tag' || e.kind === 'neu'), f);
   }
 });
+
+test('Hauptchat-Meldung: „Neues Review fertig: repo#n — Empfehlung …“', async () => {
+  const { prReviewText } = await import('../server/leitstand.ts');
+  assert.equal(prReviewText({ repo: 'WirStrom1/olaf-admin', number: 5, paket: '157-x' }, () => 'Empfehlung: approve\nPasst.'), 'Neues Review fertig: olaf-admin#5 — Empfehlung: freigeben');
+  assert.match(prReviewText({ repo: 'WirStrom1/olaf-admin', number: 5, paket: '157-x' }, () => null), /kein Entwurf/);
+});
