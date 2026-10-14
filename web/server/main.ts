@@ -5,7 +5,7 @@
 // Bestätigungsdialog setzt. Ohne confirm liefern sie nur die Vorschau.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch } from 'node:fs';
+import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch, realpathSync } from 'node:fs';
 import { join, extname, resolve, normalize, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import YAML from 'yaml';
@@ -21,8 +21,8 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
-import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe } from './leitstand.ts';
-import { reviewDetail, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen } from './freigabe.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, meldeLeitstand } from './leitstand.ts';
+import { reviewDetail, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
 import { readBericht as readBerichtDatei, reviewDir } from './bericht.ts';
 import { readBericht, paketDatei } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
@@ -1355,18 +1355,39 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const b = await body(req);
   if (d.lastStatus === 'running') throw new HttpError(409, 'Der Unter-Chat arbeitet gerade — Antworten gehen, sobald er fertig ist.');
   const { paketDatei } = await import('./bericht.ts');
-  const text = readBerichtDatei(paketDatei(d, 'bericht'));
+  const pfad = paketDatei(d, 'bericht');
+  const text = readBerichtDatei(pfad);
   if (!text || String(b.berichtHash ?? '') !== berichtHash(text)) throw new HttpError(409, 'Der Bericht hat sich inzwischen geändert — Seite neu laden.');
   const bekannt = new Map(leseEntscheidungen(text).map((e) => [e.id, e]));
-  const antworten = (Array.isArray(b.antworten) ? b.antworten : []).map((a: any) => ({ id: String(a?.id ?? ''), text: String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000) }))
-    .filter((a: any) => a.text && bekannt.has(a.id));
-  if (!antworten.length) throw new HttpError(400, 'Keine Antwort auf eine bekannte Entscheidung.');
-  // Eine Wahrheit (Bedingung 8): der Strang trägt die Antworten in seinen Bericht ein — als Nacharbeit nach Review.
-  const msg = `Nacharbeit nach Review: Entscheidungen von Knut — bitte in den Bericht (Zeile „- Knut:“) eintragen und danach weiterarbeiten.\n${antworten.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}`;
-  await sendOrch(u, String(d._id), msg, 'hand');
-  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten } } });
-  log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length });
-  send(res, 200, { ok: true, gesendet: antworten.length });
+  // Plan 157, Ergänzung B: „Empfehlung akzeptieren“ / eigene Antwort / „nachprüfen“ (alte Form ohne art = eigene Antwort).
+  const antworten = (Array.isArray(b.antworten) ? b.antworten : []).map((a: any) => {
+    const id = String(a?.id ?? ''), e = bekannt.get(id);
+    const art = a?.art === 'akzeptiert' || a?.art === 'nachpruefen' ? a.art : 'eigene';
+    const frei = String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+    const t = art === 'akzeptiert' ? `akzeptiert${e?.empfehlung ? ` (Empfehlung: ${e.empfehlung.slice(0, 200)})` : ''}` : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}` : frei;
+    return { id, art, text: t };
+  }).filter((a: any) => a.text && bekannt.has(a.id) && !bekannt.get(a.id)!.knut);
+  if (!antworten.length) throw new HttpError(400, 'Keine Antwort auf eine offene Entscheidung.');
+  // Eine Wahrheit: die Antworten stehen im Bericht („- Knut: …“). Der Server trägt sie ein (Pfad nur unter den Review-Paketen).
+  const real = (() => { try { return realpathSync(String(pfad)); } catch { return ''; } })();
+  if (!real || !real.startsWith(realpathSync(reviewDir()) + '/')) throw new HttpError(409, 'Bericht liegt nicht im Ordner der Review-Pakete.');
+  const datum = new Intl.DateTimeFormat('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' }).format(new Date());
+  const neu = trageEin(text, antworten, datum);
+  writeFileSync(real, neu);
+  const offen = leseEntscheidungen(neu).filter((e) => !e.knut);
+  const arbeit = antworten.filter((a: any) => a.art !== 'akzeptiert');
+  let weiter = false;
+  if (arbeit.length) {
+    // Abweichung oder Nachprüfen → der Strang arbeitet weiter (sendOrch startet den Zug).
+    const msg = `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen, Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}${antworten.length > arbeit.length ? `\nAkzeptiert (nichts zu tun): ${antworten.filter((a: any) => a.art === 'akzeptiert').map((a: any) => a.id).join(', ')}` : ''}`;
+    await sendOrch(u, String(d._id), msg, 'hand');
+    weiter = true;
+  } else if (!offen.length) {
+    await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
+  }
+  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten }, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
+  log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length, arbeit: arbeit.length, offen: offen.length });
+  send(res, 200, { ok: true, gesendet: antworten.length, weiter, offen: offen.length });
 });
 
 // Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).
@@ -1398,7 +1419,8 @@ on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
   const path = paketDatei(d, art);
   const text = readBericht(path);
   if (text === null) throw new HttpError(404, art === 'auftrag' ? 'Kein lesbarer Auftrag zu diesem Unter-Chat.' : 'Kein lesbarer Bericht zu diesem Unter-Chat.');
-  send(res, 200, { strand: String(d._id), art, name: String(path).split('/').slice(-2).join('/'), text });
+  // Plan 157, B: Entscheidungen auch auf der Berichtsseite beantworten.
+  send(res, 200, { strand: String(d._id), art, name: String(path).split('/').slice(-2).join('/'), text, ...(art === 'bericht' ? { entscheidungen: leseEntscheidungen(text), berichtHash: berichtHash(text), running: d.lastStatus === 'running' } : {}) });
 });
 
 /** Strang zum Review prüfen (Einzel- und Sammel-„Passt“, Council Bedingung 7): eigen, gesehener Stand (F3), nicht laufend (G4). */

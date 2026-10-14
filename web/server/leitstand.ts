@@ -23,6 +23,7 @@ import { wb } from './db.ts';
 import type { User } from './auth.ts';
 import { createLibreChat } from './agent.ts';
 import { parseKommentar } from './prreview.ts';
+import { entscheidungen } from './freigabe.ts';
 import { runs, STRANDS, OPEN, laufName, LEIT_TAG, questions, orchStatus, excerpt, lastMessage, strandStates, deliver, decorateSoon, AUTO_RATE_MS, AUTO_BUSY_MS, type LastMsg, type StrandState } from './orchestrator.ts';
 
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
@@ -66,7 +67,7 @@ export function strandEvent(run: any, st: { status: string; reason: string; caus
   const turnKey = s?.turn?.start ?? new Date(run.lastSentAt ?? run.startedAt).getTime();
   const ex = last && !last.fromUser ? excerpt(last.text, 400) : '';
   if (run.autoStopped) return { key: `deckel:${strand.id}:${new Date(run.autoStopped.at).getTime()}`, kind: 'deckel', at: new Date(run.autoStopped.at).getTime(), text: String(run.autoStopped.reason ?? 'Deckel erreicht'), strand };
-  if (run.reviewReadyAt) return { key: `review:${strand.id}:${new Date(run.reviewReadyAt).getTime()}`, kind: 'review', at: new Date(run.reviewReadyAt).getTime(), text: run.prReview ? prReviewText(run.prReview) : 'meldet review_ready', excerpt: ex, strand };
+  if (run.reviewReadyAt) return { key: `review:${strand.id}:${new Date(run.reviewReadyAt).getTime()}`, kind: 'review', at: new Date(run.reviewReadyAt).getTime(), text: (run.prReview ? prReviewText(run.prReview) : 'meldet review_ready') + offeneEntscheidungenText(run), excerpt: ex, strand };
   if (st.status === 'running') return null;
   // Sicherheitsnetz (Plan 154, G9): normal setzt das automatische „weiter“ binnen 20–40 s fort. Steht der Strang nach hangMs()
   // noch an der Grenze, meldet er „hängt“ — einmal je Zug — mit dem Grund, warum nicht fortgesetzt wurde (autoHold).
@@ -80,7 +81,7 @@ export function strandEvent(run: any, st: { status: string; reason: string; caus
     return { key: `haengt:${strand.id}:${turnKey}`, kind: 'haengt', at: endAt, text: `hängt seit ${Math.round((now - endAt) / 60_000)} min: ${st.reason}${why}`, excerpt: ex, strand };
   }
   const at =s?.turn?.end ?? last?.at ?? turnKey;
-  if (st.status === 'done') return { key: `fertig:${strand.id}:${turnKey}`, kind: 'fertig', at, text: 'meldet „fertig“', excerpt: ex, strand };
+  if (st.status === 'done') return { key: `fertig:${strand.id}:${turnKey}`, kind: 'fertig', at, text: 'meldet „fertig“' + offeneEntscheidungenText(run), excerpt: ex, strand };
   if (st.status === 'waiting') return { key: `antwort:${strand.id}:${turnKey}`, kind: 'antwort', at, text: `wartet: ${st.reason}`, excerpt: ex, strand };
   if (st.status === 'failed') return { key: `blockiert:${strand.id}:${turnKey}`, kind: 'blockiert', at, text: st.reason, excerpt: ex, strand };
   return null;
@@ -173,6 +174,27 @@ export async function meldeHauptchat(u: User, conv: string, art: string, text: s
  * Hinweis an den Hauptchat nach Knuts Freigabe (Plan 154, Council R3, Bedingung 4): ein Zustand, KEIN Auftrag — die Zeile sagt
  * das ausdrücklich. Gepusht wird nur von der Hauptsitzung nach der Push-Checkliste; der pre-push-Hook prüft die Freigabe.
  */
+/** Werkbank-eigene Meldung zu einem Strang an den Hauptchat (Plan 157, B: „alle Entscheidungen beantwortet“). Kein Agententext. */
+export async function meldeLeitstand(u: User, d: any, text: string, now = Date.now()) {
+  const leit = await activeLeitstand(u);
+  if (!leit) return false;
+  const key = `meldung:${d._id}:entscheidungen:${now}`;
+  const at = new Date(now);
+  await events().updateOne({ _id: `${u.id}:${key}` as any }, { $setOnInsert: {
+    userId: u.id, leit: leit._id, kind: 'meldung', text, strand: { id: String(d._id), title: String(d.title ?? '') }, at, createdAt: at, status: 'offen', retries: 0, urgent: false } }, { upsert: true });
+  return true;
+}
+
+/** Offene Entscheidungen (D1…/E…) aus dem Bericht eines Strangs als Zeilen für die Hauptchat-Meldung — höchstens 6. */
+export function offeneEntscheidungenText(run: any, read: (p: string | null) => string | null = (p) => readBericht(p)): string {
+  let md: string | null = null;
+  try { md = read(paketDatei(run, 'bericht')); } catch { md = null; }
+  if (!md) return '';
+  const offen = entscheidungen(md).filter((e) => !e.knut);
+  if (!offen.length) return '';
+  return ` · ${offen.length} offene Entscheidung${offen.length === 1 ? '' : 'en'}: ` + offen.slice(0, 6).map((e) => `${e.id} ${e.titel.slice(0, 60)}${e.empfehlung ? ` (Empfehlung: ${e.empfehlung.slice(0, 60)})` : ''}`).join('; ') + (offen.length > 6 ? ' …' : '') + ' — beantworten auf der Berichtsseite';
+}
+
 export async function hinweisFreigabe(u: User, f: { id: string; branch: string; head: string; repo: string }, d: any, zurueck = false) {
   const leit = await activeLeitstand(u);
   if (!leit) return;
