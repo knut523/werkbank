@@ -1,7 +1,7 @@
 ---
 title: "Plan — Workspace: PR-Ticker und automatisches Deep-Review bei @review, schaltbar"
 nummer: 157
-status: in-arbeit
+status: gebaut-lokal
 basis: release/werkbank-2026-10-13 (0dfc538, Live seit 13.10.2026)
 created: 2026-10-13
 owner: Knut
@@ -45,11 +45,27 @@ Der Strang darf keine Rückfragen stellen. Jede Frage ist mit der Empfehlung umg
 | T5 | Was passiert mit Altem beim Einschalten? | a) erster Lauf merkt sich den Stand und meldet nichts · b) letzte 24 h nachholen | **a**. Ein Auto-Review gibt es nur für `@review` nach dem Einschalten (sonst startet beim ersten Lauf eine Lawine). |
 | T6 | Wie kommt der Strang an den Code? | a) Server holt `pull/N/head` mit dem Lesetoken in einen eigenen Klon und legt einen frischen Worktree an, der Strang arbeitet offline · b) Strang holt selbst | **a**. b geht nicht (Befund) und hieße, einem Strang Zugangsdaten zu geben. |
 | T7 | Was liefert der Strang? | `kommentar.md` im Review-Paket: erste Zeile `Empfehlung: approve | request-changes | comment`, darunter der Kommentar-Entwurf; `bericht.md` mit Pre-Checks, Pass A/B/C und Tests; `review_ready` | **so** |
-| T8 | „Kommentar posten“: wie kommt der Text auf GitHub? | a) Knopf postet über einen eng begrenzten Schreibweg (nur `POST …/issues/{n}/comments` auf genau diesen PR, Text an den gezeigten Entwurf gebunden, nur Admin), mit dem Schreibtoken aus Vaultwarden, nur wenn `WERKBANK_GITHUB_KOMMENTAR=on` · b) nur „Text kopieren + PR öffnen“, Knut postet selbst | **a gebaut, aber aus**. Damit bekommt der Web-Server zum ersten Mal ein Schreibrecht auf GitHub. Bis Knut das bestätigt, gilt b. Approve/Request-Changes gibt es nie automatisch, nur als Text-Empfehlung. |
+| T8 | Posten auf GitHub | — | **Entschieden von Knut (13.10., Ergänzung A):** Ist ein Auto-Review fertig, geht der Entwurf automatisch als Review mit `event: COMMENT` an den PR. Bedingungen: Schalter „Kommentare automatisch posten“ (Standard an, wenn Auto-Review an), PR offen, Kopf unverändert, Textregeln (kein lokaler Pfad, kein Verweis auf eine fremde `#N`) und Hinweis „Automatisches Review (OLAF Workspace)“. Freigeben/Änderungen verlangen gibt es nur über Knuts Klick in der Review-Ansicht. Token: Push-Token über den Credential-Helper, nur im Speicher des Aufrufs. Not-Aus: `WERKBANK_GITHUB_KOMMENTAR=off`. |
 | T9 | Deckel | max. 5 automatische Reviews je Tag (Wiener Datum), max. 2 gleichzeitig; darüber: Eintrag „wartet (Deckel)“, startet am nächsten Tag nicht von selbst | **so**, beides in den Einstellungen. Was liegen bleibt, startet Knut mit „Jetzt reviewen“. |
 | T10 | Gleicher PR noch einmal getaggt | a) neues Review nur, wenn sich der Kopf-SHA geändert hat · b) immer | **a**. Sonst steht „schon reviewt für diesen Stand“ im Ticker. |
 | T11 | PR geschlossen/gemergt oder neuer Stand, während das Review läuft | Review läuft zu Ende. Die Review-Ansicht zeigt den Hinweis, und Posten ist gesperrt, solange der Kopf-SHA nicht mehr dem reviewten entspricht oder der PR zu ist. | **so** |
 | T12 | Wem gehört der Auto-Review-Strang? | der Person, die das Auto-Review eingeschaltet hat (Admin) | **so**. Der Schaltvorgang wird mit Person und Zeit protokolliert. |
+
+
+## 2a. Ergänzung B (Knut 13.10.): Entscheidungen auf der Berichtsseite (alle Stränge)
+
+- **Format** (maschinenlesbar, wie in Bericht 154): `**D1 — Titel**`, darunter Optionen, `- Empfehlung: …` und
+  `  - Knut:` (leer = offen). Auch `**E-147-1 · …**` gilt. Parser: `freigabe.ts` `entscheidungen()` (liefert jetzt auch `empfehlung`).
+- **Oberfläche:** Berichtsseite (`#/leitstand?bericht=<id>`) und Review-Ansicht zeigen je offene Entscheidung „Empfehlung
+  akzeptieren“ / „nachprüfen“ / eigene Antwort und dazu „Alle Empfehlungen wählen“ (`src/entscheidungen.tsx`).
+- **Nach dem Absenden:** Der Server trägt jede Antwort als `- Knut: <Antwort> (TT.MM.)` in den Bericht ein (`trageEin`,
+  nur unter dem Ordner der Review-Pakete, gebunden an den Bericht-Hash). Weicht eine Antwort von der Empfehlung ab
+  (eigene Antwort oder „nachprüfen“), geht vorher eine Nachricht an den Strang, und er arbeitet weiter. Scheitert die
+  Zustellung, bleibt der Bericht unverändert. Sind alle akzeptiert und ist nichts mehr offen, gibt es keinen Zug: Der Strang
+  bekommt `entscheidungenErledigtAt`, und an den Hauptchat geht die Meldung „alle Entscheidungen beantwortet — fertig“.
+- **Hauptchat:** Die Meldungen „fertig“ und „review_ready“ nennen die offenen Entscheidungen samt Empfehlung (höchstens 6)
+  und verweisen auf die Berichtsseite.
+- **Testfall:** echter Auszug aus Bericht 154 (D1–D11) unter `web/test/fixtures/bericht-154-entscheidungen.md`.
 
 ## 3. Architektur
 
@@ -85,5 +101,8 @@ Der Strang darf keine Rückfragen stellen. Jede Frage ist mit der Empfehlung umg
   bleiben, ein alter Stand liest sie nicht.
 
 ## 6. Verlauf
+
+- 13.10.2026 abends: Ergänzungen A (automatisch posten als COMMENT) und B (Entscheidungen) von Knut aufgenommen.
+- 14.10.2026: gebaut (Commits auf dem Arbeitszweig), Tests + 11 Browser-Prüfungen (`web/e2e/ticker-shots.mjs`), Review-Pass.
 
 - 13.10.2026: Plan, Grilling T1–T12 mit Empfehlung (gebaut ist die Empfehlung).
