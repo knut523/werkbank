@@ -37,19 +37,28 @@ nav button{font:inherit;padding:8px 16px;border-radius:8px;border:1px solid var(
 </style>
 </head>
 <body>
-<!-- Vorlage (docs/plan-leitstand.md, Teil C): Folie 1 = Status + offen + wo reviewen + GitHub, dann Ablauf, Ausrollen, Screenshots,
+<!-- Vorlage (docs/plan-leitstand.md, Teil C, C.7): Folie 1 = Exec Summary (worum, was anders, was du tun musst, PR-Tabelle), dann Ablauf, Ausrollen, Screenshots,
      Prüfungen, Entscheidungen. Alles in GROSSBUCHSTABEN ersetzen; nicht Benötigtes löschen. Mermaid 10.9.8 (10.9.1 hat bekannte Lücken). -->
 <div class="deck">
 
 <section class="slide on">
-  <p class="k">Bericht · Strang „STRANG“ · TT.MM.JJJJ</p>
+  <p class="k">Exec Summary · Strang „STRANG“ · TT.MM.JJJJ</p>
   <h1>EIN SATZ: WAS JETZT GEHT</h1>
   <p><span class="pill warn">🟡 wartet auf dich</span> &nbsp; <!-- oder: <span class="pill ok">🟢 bereit für GitHub</span> / <span class="pill bad">🔴 blockiert</span> --> KURZ WARUM.</p>
-  <div class="grid" style="margin-top:22px">
-    <div class="box"><h3>Was offen ist</h3><ul style="margin:0;padding-left:18px"><li>OFFEN 1</li><li>OFFEN 2</li></ul></div>
-    <div class="box"><h3>Wo reviewen</h3><ul style="margin:0;padding-left:18px"><li><a href="https://PORT--main--dev--knut.ws.konekto.energy/login">Vorschau (mit Login)</a></li><li><a href="pr.md">PR-Text</a></li></ul></div>
-    <div class="box"><h3>GitHub</h3><p style="margin:0">REPO · ZWEIG · COMMIT. <b>Nicht gemergt.</b></p></div>
+  <div class="grid" style="margin-top:18px">
+    <div class="box"><h3>Worum es geht</h3><p style="margin:0">2–3 SÄTZE FÜR JEMANDEN, DER DEN CHAT NICHT KENNT: AUSGANGSLAGE, PROBLEM, ZIEL.</p></div>
+    <div class="box"><h3>Was jetzt anders ist</h3><ul style="margin:0;padding-left:18px"><li>PUNKT 1</li><li>PUNKT 2</li><!-- höchstens 4 --></ul></div>
+    <div class="box"><h3>Was du tun musst</h3><ul style="margin:0;padding-left:18px"><li>AUFGABE 1 (<a href="https://PORT--main--dev--knut.ws.konekto.energy/login">Vorschau mit Login</a>)</li><li>FRAGEN D1, D2 beantworten</li></ul></div>
   </div>
+  <h3 style="margin:22px 0 8px;font-size:15px">Pull Requests</h3>
+  <!-- Nur PRs, die es auf GitHub wirklich gibt, mit Link. Nicht gepushte Zweige ohne Link als „lokal, nicht auf GitHub“.
+       Den Stand zeigt der Leitstand live von GitHub; hier den Stand beim Schreiben (offen/gemergt). -->
+  <div class="tw"><table>
+    <tr><th>PR</th><th>Was</th><th>Stand</th></tr>
+    <tr><td><a href="https://github.com/ORG/REPO/pull/NR">REPO#NR</a></td><td>INHALT</td><td><span class="pill warn">offen</span></td></tr>
+    <tr><td>REPO · <code>ZWEIG</code></td><td>INHALT</td><td><span class="pill">lokal, nicht auf GitHub</span></td></tr>
+  </table></div>
+  <p class="k" style="margin-top:10px">REVIEWER · nicht gemergt · Screenshots auf Folie N</p>
 </section>
 
 <section class="slide">

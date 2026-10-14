@@ -12,7 +12,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { realpathSync, readdirSync } from 'node:fs';
 import { readBericht, readPlan, reviewDir, findPaket, lesbar, paketDatei } from './bericht.ts';
 import { PAKET_RE, paketFile } from './reviewpakete.ts';
-import { offeneFragen, spalte, commitPasst } from './berichtkopf.ts';
+import { offeneFragen, spalte, commitPasst, execSummary } from './berichtkopf.ts';
 import { freigaben } from './freigabe.ts';
 import { worumGeht, wasTun, type TodoStep } from './heutekarte.ts';
 import { liveIndex, strandStand, realGit, type LiveIndex } from './releasestand.ts';
@@ -610,10 +610,11 @@ export function kopfFelder(d: any, fgs: any[]) {
   const commitWarnung = kopfCommit && d.repoHead && commitPasst(kopfCommit, d.repoHead) === false
     ? `Bericht nennt ${kopfCommit.slice(0, 7)}, der Zweig steht auf ${String(d.repoHead).slice(0, 7)}` : null;
   const paket = (() => { const p = paketDatei(d, 'bericht'); return p ? p.split('/').slice(-2)[0] : null; })();
+  const summary = execSummary(d, f);
   return {
-    kopf: kopf ? { status: kopf.status, offen: kopf.offen, review: kopf.review, github: kopf.github } : null,
+    kopf: summary.kopf, prs: summary.prs, prsAt: summary.prsAt, maengel: summary.maengel,
     kopfFehler: raw?.fehler ?? null, fragen, berichtHash: d.berichtHash ?? null, paket,
-    spalte: spalte(kopf, { offeneFragen: fragen.length, freigabe: !!freigabe && !freigabe.veraltet, pr: !!kopf?.github?.[0]?.pr }),
+    spalte: spalte(kopf, { offeneFragen: fragen.length, freigabe: !!freigabe && !freigabe.veraltet, pr: summary.prs.some((z) => z.stand === 'offen' || z.stand === 'gemergt') }),
     diagramm: d.berichtDiagramm ?? null, linkWarnungen: (d.linkCheck ?? []).filter((l: any) => l.tot), commitWarnung, freigabe,
     weitereRepos: (kopf?.github ?? []).slice(1).map((g: any) => g.repo),
   };

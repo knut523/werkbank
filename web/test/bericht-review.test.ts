@@ -10,7 +10,7 @@ const base = realpathSync(mkdtempSync(join(tmpdir(), 'bericht-c-')));
 const DIR = join(base, 'review-pakete');
 mkdirSync(join(DIR, '901-teil-c'), { recursive: true });
 process.env.WERKBANK_REVIEW_DIR = DIR;
-const { berichtKopf, ersterMermaid, spalte, offeneFragen, commitPasst } = await import('../server/berichtkopf.ts');
+const { berichtKopf, ersterMermaid, spalte, offeneFragen, commitPasst, kopfMaengel, prTabelle, execSummary } = await import('../server/berichtkopf.ts');
 const { renderPaketMd } = await import('../server/reviewpakete.ts');
 const { orchBrief, BERICHT_PFLICHT } = await import('../server/orchestrator.ts');
 const { kopfFelder } = await import('../server/leitstand.ts');
@@ -128,7 +128,7 @@ test('C-12/C-8/H2/H5: Kopf-Pflege liest nur bei Änderung, auch fertige Stränge
   writeFileSync(p, KOPF);
   const d: any = { _id: 's1', bericht: p, paket: '901-teil-c', lastStatus: 'done', doneAt: new Date() };
   const calls: number[] = [];
-  const deps = { pruefe: async (v: any) => { calls.push(v.port); return { ...v, status: null, ergebnis: 'antwortet nicht' as const, at: 0 }; }, repo: () => ({ head: 'e05ea35c' + '0'.repeat(32) }) };
+  const deps = { pruefe: async (v: any) => { calls.push(v.port); return { ...v, status: null, ergebnis: 'antwortet nicht' as const, at: 0 }; }, repo: () => ({ head: 'e05ea35c' + '0'.repeat(32) }), freigabePrs: async () => [] };
   const s1: any = await kopfPflege(d, 1_000_000, deps);
   assert.equal(s1.berichtKopf.status, 'wartet_auf_knut');
   assert.equal(s1.berichtDiagramm, 'flowchart LR\n  A --> B');
@@ -149,4 +149,114 @@ test('C-12/C-8/H2/H5: Kopf-Pflege liest nur bei Änderung, auch fertige Stränge
   assert.equal((live as any).linkCheck.every((l: any) => !l.tot), true);
   // Kein Bericht → nichts.
   assert.deepEqual(await kopfPflege({ _id: 's2' }, 0, deps), {});
+});
+
+// ── C.7 Exec Summary (Nachtrag Knut 14.10.) ──────────────────────────────────────────────────────────────────────────────────
+const EXEC = `---
+status: wartet_auf_knut
+titel: Die Leasing-Mail trägt jetzt Text und Ansprechperson
+worum: Bisher kam bei der Leasing-Abteilung nur das nackte Angebot an. Jetzt mit Erklärung und Person.
+anders: [Standardtext, Nachricht je Versand, Ansprechperson, mehrere Adressen, fünfter Punkt fliegt raus]
+offen: [Vorlage 85 in Brevo umbauen]
+github:
+  - repo: WirStrom1/olaf-admin
+    zweig: feat/leasing
+    commit: e5e29fb5
+    was: "Code: Einstellungen, Versand, Mail"
+    pr: https://github.com/WirStrom1/olaf-admin/pull/337
+    stand: gemergt
+  - repo: WirStrom1/olaf-docs
+    zweig: docs/118
+    was: Plan 118
+    pr: https://github.com/WirStrom1/olaf-docs/pull/9999
+  - repo: knut523/werkbank
+    zweig: feat/lokal
+    was: nur lokal
+---
+# Bericht
+`;
+
+test('S-1/S-2: Exec Summary im Kopf — titel, worum, anders (≤ 4), was je PR; Mängel als Hinweis', () => {
+  const k: any = berichtKopf(EXEC);
+  assert.equal(k.titel, 'Die Leasing-Mail trägt jetzt Text und Ansprechperson');
+  assert.match(k.worum, /^Bisher kam/);
+  assert.equal(k.anders.length, 4);
+  assert.equal(k.github[0].was, 'Code: Einstellungen, Versand, Mail');
+  assert.equal('stand' in k.github[0], false, 'Stand aus dem Bericht wird nicht übernommen');
+  assert.deepEqual(kopfMaengel(k, 'flowchart LR\n A-->B'), []);
+  assert.deepEqual(kopfMaengel(berichtKopf('---\nstatus: blockiert\ngithub:\n  - repo: a/b\n    zweig: x\n---\n') as any, null), ['titel', 'worum', 'anders', 'github.was', 'Mermaid-Diagramm']);
+  assert.deepEqual(kopfMaengel(null, null), [], 'ohne Kopf keine Mängel-Zeile');
+});
+
+test('S-4/B2/B3: PR-Tabelle und Spalte nur aus dem GitHub-Stand — fehlt ohne Link, lokal ohne Link, ungeprüft = unbekannt', () => {
+  const k: any = berichtKopf(EXEC);
+  const checks = [
+    { url: 'https://github.com/WirStrom1/olaf-admin/pull/337', stand: 'offen' as const },
+    { url: 'https://github.com/WirStrom1/olaf-docs/pull/9999', stand: 'fehlt' as const },
+  ];
+  const z = prTabelle(k, checks);
+  assert.deepEqual(z.map((x) => [x.label, x.url !== null, x.stand]), [['olaf-admin#337', true, 'offen'], ['olaf-docs#9999', false, 'fehlt'], ['werkbank · feat/lokal', false, 'lokal']]);
+  assert.equal(z[0].text, 'offen', 'GitHub sagt offen — der Bericht sagte „gemergt“');
+  assert.match(z[1].text, /gibt es auf GitHub nicht/);
+  assert.equal(z[2].text, 'lokal, nicht auf GitHub');
+  assert.equal(prTabelle(k, [])[0].stand, 'unbekannt');
+  // Freigabe-PR zählt für die erste Zeile, wenn der Bericht keinen nennt.
+  const ohnePr: any = { ...k, github: [{ ...k.github[2] }] };
+  assert.equal(prTabelle(ohnePr, [{ url: 'https://github.com/knut523/werkbank/pull/5', stand: 'gemergt' }], 'https://github.com/knut523/werkbank/pull/5')[0].stand, 'gemergt');
+  // Spalte: ohne Fragen; PR-Link im Bericht allein (ungeprüft oder fehlt) → Ansehen, offen/gemergt → Auf GitHub.
+  const base = { _id: 's9', berichtKopf: k, berichtHash: 'h', berichtDiagramm: 'flowchart LR' };
+  assert.equal(kopfFelder({ ...base, prCheck: [] }, []).spalte, 'ansehen');
+  assert.equal(kopfFelder({ ...base, prCheck: [{ ...checks[0], stand: 'fehlt' }] }, []).spalte, 'ansehen');
+  assert.equal(kopfFelder({ ...base, prCheck: checks }, []).spalte, 'github');
+  const s = execSummary({ ...base, prCheck: checks });
+  assert.equal(s.kopf!.titel, k.titel); assert.equal(s.prs.length, 3); assert.deepEqual(s.maengel, []);
+});
+
+test('S-3/B1: PR-Prüfung gegen GitHub-Nachbau — offen, gemergt, geschlossen, fehlt; Variablen statt Text; Fehler → unbekannt', async () => {
+  const { createServer } = await import('node:http');
+  const seen: any[] = [];
+  let mode = 'ok';
+  const srv = createServer(async (req, res) => {
+    let b = ''; for await (const c of req) b += c;
+    const j = JSON.parse(b); seen.push(j);
+    if (mode === 'kaputt') { res.writeHead(502); return res.end('x'); }
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({
+      data: { p0: { pullRequest: { state: 'OPEN', merged: false, title: 'Leasing' } }, p1: { pullRequest: { state: 'MERGED', merged: true, title: 'Doku' } }, p2: { pullRequest: { state: 'CLOSED', merged: false, title: 'Alt' } }, p3: { pullRequest: null }, p4: null },
+      errors: [{ type: 'NOT_FOUND', message: 'Could not resolve to a PullRequest' }, { type: 'NOT_FOUND', message: 'Could not resolve to a Repository' }],
+    }));
+  });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+  const alt = process.env.WERKBANK_GITHUB_API;
+  process.env.WERKBANK_GITHUB_API = `http://127.0.0.1:${(srv.address() as any).port}`;
+  try {
+    const { prStaende } = await import('../server/github.ts');
+    const urls = [337, 80, 12, 9999].map((n) => `https://github.com/WirStrom1/olaf-admin/pull/${n}`).concat('https://github.com/x/y"){ evil }/pull/1', 'https://github.com/fremd/repo/pull/3');
+    const r = await prStaende('t', urls);
+    assert.deepEqual(r.map((x) => x.stand), ['offen', 'gemergt', 'geschlossen', 'fehlt', 'fehlt']);
+    assert.equal(r.length, 5, 'ungültige URL gar nicht abgefragt');
+    assert.doesNotMatch(seen[0].query, /mutation|olaf-admin|337/, 'Besitzer, Repo, Nummer nur als Variablen');
+    assert.deepEqual([seen[0].variables.o0, seen[0].variables.r0, seen[0].variables.n0], ['WirStrom1', 'olaf-admin', 337]);
+    mode = 'kaputt';
+    await assert.rejects(prStaende('t', urls.slice(0, 1)));
+    // Kopf-Pflege: alle PR-Links (Kopf + Freigabe) gefragt; innerhalb von 10 min nicht erneut.
+    const p = join(DIR, '901-teil-c', 'bericht.md');
+    writeFileSync(p, EXEC);
+    const s: any = await kopfPflege({ _id: 's7', bericht: p, paket: '901-teil-c' }, 5_000_000, { pruefe: async (v: any) => ({ ...v, status: 200, ergebnis: 'läuft' as const, at: 0 }), repo: () => ({ head: 'e5e29fb5' }), freigabePrs: async () => ['https://github.com/knut523/werkbank/pull/5'], prs: async (u: string[]) => u.map((url) => ({ url, stand: 'unbekannt' as const })) });
+    assert.deepEqual(s.prCheck.map((c: any) => c.url.split('/').slice(-3).join('/')), ['olaf-admin/pull/337', 'olaf-docs/pull/9999', 'werkbank/pull/5']);
+    const s2: any = await kopfPflege({ _id: 's7', bericht: p, paket: '901-teil-c', ...s }, 5_000_000 + 5 * 60_000, { freigabePrs: async () => [], prs: async () => { throw new Error('nicht nochmal'); } });
+    assert.equal('prCheck' in s2, false, 'innerhalb von 10 min nicht erneut gefragt');
+  } finally {
+    if (alt === undefined) delete process.env.WERKBANK_GITHUB_API; else process.env.WERKBANK_GITHUB_API = alt;
+    srv.close();
+  }
+});
+
+test('S-6: Vorlage verlangt die Exec Summary und erklärt die PR-Regel', () => {
+  for (const w of ['Exec Summary', 'titel:', 'worum:', 'anders:', 'was:', 'lokal, nicht auf GitHub', 'holt der Leitstand selbst von GitHub']) assert.ok(BERICHT_PFLICHT.includes(w), w);
+  const v = readFileSync(new URL('../../docs/bericht-vorlage.md', import.meta.url), 'utf8');
+  const k: any = berichtKopf(v);
+  assert.ok(k.titel && k.worum && k.anders.length && k.github.every((g: any) => g.was));
+  const f = readFileSync(new URL('../../docs/bericht-folien-vorlage.html', import.meta.url), 'utf8');
+  for (const w of ['Exec Summary', 'Worum es geht', 'Was jetzt anders ist', 'Was du tun musst', 'Pull Requests', 'lokal, nicht auf GitHub']) assert.ok(f.includes(w), w);
 });

@@ -22,8 +22,8 @@ import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe } from './leitstand.ts';
-import { reviewDetail, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen } from './freigabe.ts';
-import { berichtKopf } from './berichtkopf.ts';
+import { reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen } from './freigabe.ts';
+import { berichtKopf, execSummary } from './berichtkopf.ts';
 import { readBericht as readBerichtDatei } from './bericht.ts';
 import { readBericht, paketDatei } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
@@ -1362,7 +1362,9 @@ on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
   if (text === null) throw new HttpError(404, art === 'auftrag' ? 'Kein lesbarer Auftrag zu diesem Unter-Chat.' : 'Kein lesbarer Bericht zu diesem Unter-Chat.');
   // Teil C (C3): formatiert wie auf „Heute“ (markdown-it ohne HTML, Diagramme als Text, DoD-Häkchen) — Rohtext bleibt für „Datei“.
   const name = String(path).split('/').slice(-2).join('/');
-  send(res, 200, { strand: String(d._id), art, name, text, html: renderPaketMd(text, name.split('/')[0], `${art}.md`) });
+  // C.7: Exec Summary über dem Bericht (GitHub-Stand aus dem Status-Takt).
+  const fg: any = art === 'bericht' ? await freigaben().findOne({ strand: String(d._id), pr: { $type: 'string' } }, { sort: { at: -1 } }) : null;
+  send(res, 200, { strand: String(d._id), art, name, text, html: renderPaketMd(text, name.split('/')[0], `${art}.md`), summary: art === 'bericht' ? execSummary(d, fg) : null });
 });
 
 /** Strang zum Review prüfen (Einzel- und Sammel-„Passt“, Council Bedingung 7): eigen, gesehener Stand (F3), nicht laufend (G4). */

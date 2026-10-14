@@ -1,5 +1,14 @@
 ---
 status: wartet_auf_knut
+titel: Die Leasing-Mail trägt jetzt Text, Nachricht und Ansprechperson und geht an mehrere Adressen
+worum: >-
+  Bei einer Hardware-Anfrage mit Finanzierung geht das Angebot an die Leasing-Abteilung. Bisher kam dort nur das nackte
+  Angebot an, ohne Erklärung und ohne Person zum Zurückschreiben, und nur an eine Adresse.
+anders:
+  - Standardtext aus den Einstellungen
+  - optionale Nachricht je Versand
+  - Ansprechperson + Antwort-an-Adresse
+  - mehrere Leasing-Adressen, je eine Mail
 offen:
   - Vorlage in Brevo umbauen (Knut)
   - Review durch Christoph
@@ -19,12 +28,20 @@ github:
   - repo: WirStrom1/olaf-admin
     zweig: feat/beispiel
     commit: 0123abcd
+    was: "Code: Einstellungen, Versand, Mail, Migration"
+    pr: https://github.com/WirStrom1/olaf-admin/pull/337
     pr_text: pr.md
+  - repo: WirStrom1/olaf-docs
+    zweig: docs/beispiel
+    was: Plan mit Entscheidungen
 ---
 
 # Titel des Strangs — Bericht
 
-<!-- Vorlage (docs/plan-leitstand.md, Teil C). Der Kopf oben ist Pflicht und muss zum Text passen:
+<!-- Vorlage (docs/plan-leitstand.md, Teil C, C.7) — diesen Kommentar im echten Bericht löschen (er erscheint sonst als Text). Der Kopf oben ist Pflicht, ist die Exec Summary und muss zum Text passen:
+     titel: ein Satz, was jetzt geht. worum: 2–3 Sätze für jemanden, der den Chat nicht kennt. anders: höchstens 4 Punkte.
+     offen: was Knut tun muss. github: je Repo/PR eine Zeile mit was (Inhalt); pr: nur, wenn es den PR auf GitHub gibt — sonst
+     weglassen, dann steht „lokal, nicht auf GitHub“. Den Stand (offen/gemergt) holt der Leitstand selbst von GitHub.
      status: bereit_fuer_github nur, wenn Tests grün, Review-Pässe durch und nichts offen; wartet_auf_knut, wenn Knut etwas
      ansehen oder entscheiden soll; blockiert, wenn es ohne Hilfe nicht weitergeht. offen höchstens 5 Zeilen.
      review: Coder-Vorschau mit Login-Link (die Werkbank prüft, ob sie antwortet), Screenshots (relativ im Paket), PR-Text.

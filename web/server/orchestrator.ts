@@ -33,11 +33,15 @@ export interface BriefInput { title: string; prompt: string; cwd: string; plan?:
 // Berichtsvorlage für jeden Strang (docs/plan-leitstand.md, Teil C, C8; Knut 14.10.2026): fester Kopf, den „Heute“ liest, und
 // Pflicht-Visualisierung neben Screenshots. Vollständiges Muster: docs/bericht-vorlage.md, Folien: docs/bericht-folien-vorlage.html.
 export const BERICHT_PFLICHT = [
-  'Bericht (Pflicht, sobald du etwas gebaut oder geprüft hast): `~/work/knut/review-pakete/NNN-<slug>/bericht.md` (das Paket nennt der Auftrag). Er beginnt mit diesem YAML-Kopf — „Heute“ liest ihn und zeigt danach, was Knut tun muss:',
+  'Bericht (Pflicht, sobald du etwas gebaut oder geprüft hast): `~/work/knut/review-pakete/NNN-<slug>/bericht.md` (das Paket nennt der Auftrag). Er beginnt mit diesem YAML-Kopf. Der Kopf ist die **Exec Summary** — „Heute“ und die Berichtsanzeige zeigen ihn oben als erstes:',
   '```yaml',
   '---',
   'status: wartet_auf_knut      # bereit_fuer_github | wartet_auf_knut | blockiert',
-  'offen:                        # höchstens 5 kurze Zeilen; leer = nichts offen',
+  'titel: …                     # ein Satz: was jetzt geht (Überschrift der Exec Summary)',
+  'worum: …                     # 2–3 Sätze für jemanden, der den Chat nicht kennt: Ausgangslage, Problem, Ziel',
+  'anders:                       # was jetzt anders ist, höchstens 4 kurze Punkte',
+  '  - …',
+  'offen:                        # was Knut tun muss, höchstens 5 kurze Zeilen; leer = nichts',
   '  - …',
   'review:                       # wo Knut reviewt (Coder-Vorschau mit Login-Link, Screenshots, PR-Text)',
   '  - titel: Admin-Vorschau',
@@ -50,16 +54,19 @@ export const BERICHT_PFLICHT = [
   '    frage: …',
   '    empfehlung: …',
   '    antwort: ""',
-  'github:                       # je Repo; commit = voller oder ≥ 7-stelliger SHA des Stands, den Knut freigeben soll',
+  'github:                       # je Repo/PR eine Zeile (wird die PR-Tabelle); commit = ≥ 7-stelliger SHA des Stands, den Knut freigeben soll',
   '  - repo: <org>/<repo>',
   '    zweig: <branch>',
   '    commit: <sha>',
+  '    was: …                     # Inhalt in wenigen Worten',
+  '    pr: https://github.com/<org>/<repo>/pull/<n>   # nur wenn der PR auf GitHub existiert; sonst weglassen (= lokal)',
   '    pr_text: pr.md',
   '---',
   '```',
   '- `status`: `bereit_fuer_github` nur, wenn Tests grün, Review-Pässe durch und nichts offen; sonst `wartet_auf_knut` (Review/Fragen) oder `blockiert`. Der Kopf muss zum Text passen; ändert sich etwas, Kopf mit ändern (auch `commit`).',
   '- Darunter mindestens ein Mermaid-Diagramm (```` ```mermaid ````) „Wie es jetzt funktioniert“ (Ablauf/Datenfluss des Gebauten, `flowchart LR`); bei mehreren PRs oder Repos zusätzlich „Ausroll-Reihenfolge“. Dazu Screenshots bei allem Sichtbaren.',
-  '- Optional HTML-Folien nach `docs/bericht-folien-vorlage.html` im Werkbank-Repo (Folie 1: Status, offen, wo reviewen, GitHub; dann Ablauf, Ausrollen, Screenshots, Prüfungen, Entscheidungen).',
+  '- PR-Tabelle: nur PRs, die es auf GitHub wirklich gibt, mit `pr:`-Link; nicht gepushte Zweige ohne `pr:` (erscheinen als „lokal, nicht auf GitHub“). Einen Stand (offen/gemergt) schreibst du nicht hin — den holt der Leitstand selbst von GitHub.',
+  '- Optional HTML-Folien nach `docs/bericht-folien-vorlage.html` im Werkbank-Repo. Folie 1 ist die Exec Summary (Titel, Status, Worum es geht · Was jetzt anders ist · Was du tun musst, PR-Tabelle); dann Ablauf, Ausrollen, Screenshots, Prüfungen, Entscheidungen.',
   '- Fragen im Kopf tragen dieselbe Kennung wie im Text (`D1`). Antworten Knuts kommen als „Nacharbeit nach Review“; trag sie dann in `antwort:` ein.',
 ].join('\n');
 
@@ -407,7 +414,8 @@ export async function showOrch(u: User, id: string, verlauf = 0) {
     hist = [];
     for (const m of ms) {
       const t = messageText(m);
-      const cut = t.length > 4000 ? '…' + t.slice(-3999) : t;
+      // Lange Nachrichten: erste Zeile (beim Brief der Titel „Orchestrator · …“) + Ende (dort steht der Auftrag).
+      const cut = t.length > 4000 ? t.split('\n')[0].slice(0, 200) + '\n…' + t.slice(-3790) : t;
       if (budget - cut.length < 0) break;
       budget -= cut.length;
       hist.push({ fromUser: !!m.isCreatedByUser, at: new Date(m.createdAt ?? 0), text: cut });

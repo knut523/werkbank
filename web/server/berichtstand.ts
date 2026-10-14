@@ -4,12 +4,25 @@
 import { statSync } from 'node:fs';
 import { paketDatei, readBericht } from './bericht.ts';
 import { berichtKopf, ersterMermaid } from './berichtkopf.ts';
-import { berichtHash, pruefeVorschau, repoFakten, strandRepo, vorschauAusLink } from './freigabe.ts';
+import { berichtHash, freigaben, pruefeVorschau, repoFakten, strandRepo, vorschauAusLink } from './freigabe.ts';
+import { prStaende } from './github.ts';
+import { githubReadToken } from './creds.ts';
+import type { PrCheck } from './berichtkopf.ts';
 
 const ALLE_5_MIN = 5 * 60_000;
+const ALLE_10_MIN = 10 * 60_000;
 const TOT = new Set(['antwortet nicht', 'Proxy läuft, Ziel antwortet nicht', 'Fehler']);
 
-export interface KopfDeps { pruefe?: typeof pruefeVorschau; repo?: (d: any) => { head: string } }
+export interface KopfDeps { pruefe?: typeof pruefeVorschau; repo?: (d: any) => { head: string }; prs?: (urls: string[]) => Promise<PrCheck[]>; freigabePrs?: (d: any) => Promise<string[]> }
+
+/** C.7: PR-Stand von GitHub (Lesetoken der Werkbank). Kein Token oder Fehler → „unbekannt“ (nie „fehlt“). */
+async function prsVonGithub(urls: string[]): Promise<PrCheck[]> {
+  const unbekannt = () => urls.map((url) => ({ url, stand: 'unbekannt' as const }));
+  const token = await githubReadToken().catch(() => null);
+  if (!token) return unbekannt();
+  try { return await prStaende(token, urls); } catch { return unbekannt(); }
+}
+const freigabePrsAusDb = async (d: any) => (await freigaben().find({ strand: String(d._id), pr: { $type: 'string' } }, { projection: { pr: 1 } }).limit(6).toArray()).map((f: any) => String(f.pr));
 
 /** Felder zum $set am Strang (leer = nichts geändert). Fehler beim Lesen ändern nichts. */
 export async function kopfPflege(d: any, now = Date.now(), deps: KopfDeps = {}): Promise<Record<string, unknown>> {
@@ -44,6 +57,12 @@ export async function kopfPflege(d: any, now = Date.now(), deps: KopfDeps = {}):
       }
     }
     Object.assign(set, { linkCheck: out.slice(0, 12), linksAt: new Date(now) });
+  }
+  // C.7: PR-Links (Kopf + gepushte Freigaben) gegen GitHub — der Stand im Bericht zählt nicht.
+  if (ok && (neu || now - new Date(d.prsAt ?? 0).getTime() > ALLE_10_MIN)) {
+    let urls = (kopf.github ?? []).map((g: any) => g.pr).filter(Boolean) as string[];
+    try { urls = [...new Set([...urls, ...await (deps.freigabePrs ?? freigabePrsAusDb)(d)])]; } catch { /* nur Kopf */ }
+    Object.assign(set, { prCheck: urls.length ? (await (deps.prs ?? prsVonGithub)(urls)).slice(0, 12) : [], prsAt: new Date(now) });
   }
   return set;
 }

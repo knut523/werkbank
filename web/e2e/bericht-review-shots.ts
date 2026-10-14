@@ -22,9 +22,21 @@ const ROOT = join(tmp, 'work'), LEIT = join(ROOT, 'knut');
 for (const d of [LEIT, join(LEIT, 'wt-155'), join(LEIT, 'wt-bereit'), join(LEIT, 'wt-tot'), join(tmp, 'vault'), join(tmp, 'review-pakete', '960-bereit'), join(tmp, 'review-pakete', '961-vorschau')]) mkdirSync(d, { recursive: true });
 // Paket 155 (echter Bericht im neuen Format) als Kopie; dazu zwei kleine Beispiel-Pakete für die anderen Spalten/Zustände.
 cpSync(process.env.SHOTS_PAKET155 || join(process.env.HOME ?? '', 'work/knut/review-pakete/155-finanzierungsmail-bearbeiter'), join(tmp, 'review-pakete', '155-finanzierungsmail-bearbeiter'), { recursive: true });
-writeFileSync(join(tmp, 'review-pakete', '960-bereit', 'bericht.md'), ['---', 'status: bereit_fuer_github', 'offen: []', 'github:', '  - repo: knut523/werkbank', '    zweig: feat/beispiel', '    commit: 1234abcd', '    pr: https://github.com/knut523/werkbank/pull/42', '---',
+writeFileSync(join(tmp, 'review-pakete', '960-bereit', 'bericht.md'), ['---', 'status: bereit_fuer_github', 'titel: Beispiel — der PR ist schon gemergt', 'worum: Ein kleines Beispiel für die Spalte „Auf GitHub“. Der Stand kommt von GitHub, nicht aus dem Bericht.', 'anders: [Beispiel-Änderung]', 'offen: []', 'github:', '  - repo: knut523/werkbank', '    zweig: feat/beispiel', '    commit: 1234abcd', '    was: Beispiel-Code', '    pr: https://github.com/knut523/werkbank/pull/42', '---',
   '# Beispiel: schon auf GitHub', '', '```mermaid', 'flowchart LR', '  A["Plan"] --> B["Bau"] --> C["PR #42"]', '```', '', '| # | Punkt | Stand |', '|---|---|---|', '| 1 | Tests | ja |', '| 2 | Screenshots | teilweise |', ''].join('\n'));
-writeFileSync(join(tmp, 'review-pakete', '961-vorschau', 'bericht.md'), ['---', 'status: wartet_auf_knut', 'offen:', '  - Vorschau ansehen', 'review:', '  - titel: Admin-Vorschau', '    login: https://3999--main--dev--knut.ws.konekto.energy/login', '---', '# Beispiel: Vorschau tot', ''].join('\n'));
+writeFileSync(join(tmp, 'review-pakete', '961-vorschau', 'bericht.md'), ['---', 'status: wartet_auf_knut', 'offen:', '  - Vorschau ansehen', 'review:', '  - titel: Admin-Vorschau', '    login: https://3999--main--dev--knut.ws.konekto.energy/login', 'github:', '  - repo: WirStrom1/olaf-admin', '    zweig: feat/tippfehler', '    was: PR-Link mit Tippfehler', '    pr: https://github.com/WirStrom1/olaf-admin/pull/9999', '  - repo: WirStrom1/olaf-docs', '    zweig: docs/beispiel', '    was: Doku, noch nicht gepusht', '---', '# Beispiel: Vorschau tot', ''].join('\n'));
+// GitHub-Nachbau (C.7): beantwortet nur die PR-Prüfung — 155: offen, 960: gemergt, alles andere: gibt es nicht.
+const GH_STAND: Record<string, string> = { 'olaf-admin#337': 'OPEN', 'olaf-umbrella#73': 'OPEN', 'olaf-docs#80': 'OPEN', 'werkbank#42': 'MERGED' };
+const gh = createServer(async (req, res) => {
+  let raw = ''; for await (const c of req) raw += c;
+  const { query, variables: v = {} } = JSON.parse(raw || '{}');
+  const data: Record<string, unknown> = {};
+  if (/organization/.test(query)) data.organization = { repositories: { pageInfo: { hasNextPage: false }, nodes: [] } };
+  for (let i = 0; `o${i}` in v; i++) { const s = GH_STAND[`${v[`r${i}`]}#${v[`n${i}`]}`]; data[`p${i}`] = { pullRequest: s ? { state: s, merged: s === 'MERGED', title: 'Beispiel' } : null }; }
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ data, errors: Object.values(data).some((x: any) => x?.pullRequest === null) ? [{ type: 'NOT_FOUND', message: 'nicht gefunden' }] : undefined }));
+});
+await new Promise<void>((r) => gh.listen(0, '127.0.0.1', () => r()));
 const INTERNAL = randomBytes(16).toString('hex'), JWT_SECRET = randomBytes(16).toString('hex'), REFRESH = randomBytes(16).toString('hex');
 const knut = { _id: new ObjectId(), email: 'knut@maxenergy.at', name: 'Knut Peters', role: 'ADMIN' };
 const team = { _id: new ObjectId(), email: 'team@maxenergy.at', name: 'Team Kollegin', role: 'USER' };
@@ -86,7 +98,7 @@ try {
       WERKBANK_ALLOWED_EMAILS: `${knut.email},${team.email}`, WERKBANK_PILOT_EMAIL: knut.email, WERKBANK_TEAM_FEATURES: 'heute,orchestrator', CREDS_KEY: randomBytes(32).toString('hex'), CREDS_IV: randomBytes(16).toString('hex'),
       WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: join(tmp, 'data'), WERKBANK_MEILI_INDEX: `werkbank_lshots_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_SECRET, JWT_REFRESH_SECRET: REFRESH,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'), WERKBANK_FORGE_MCP: '', WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vs'), WERKBANK_VAULT_SYNC_SCRIPT: '/bin/true',
-      WERKBANK_LEITSTAND_DIR: LEIT, ORCH_AUTO_WEITER_TICK_MS: '300', LEITSTAND_WAKE_DEBOUNCE_MS: '500', WERKBANK_REVIEW_DIR: join(tmp, 'review-pakete') } }));
+      WERKBANK_LEITSTAND_DIR: LEIT, ORCH_AUTO_WEITER_TICK_MS: '300', LEITSTAND_WAKE_DEBOUNCE_MS: '500', WERKBANK_REVIEW_DIR: join(tmp, 'review-pakete'), WERKBANK_GITHUB_API: `http://127.0.0.1:${(gh.address() as any).port}` } }));
   await waitFor(`http://127.0.0.1:${BRIDGE_PORT}/health`);
   await waitFor(`${B}/api/health`);
 
@@ -108,9 +120,10 @@ try {
   const cookie = await login(knut);
   // Warten, bis der Status-Takt die Köpfe geschrieben hat (drei Karten mit Kopf, eine mit toter Vorschau).
   let t: any = null;
-  for (let i = 0; i < 120; i++) { t = await (await fetch(B + '/api/today', { headers: { cookie } })).json(); const s = t.strands ?? []; if (s.filter((c: any) => c.kopf).length >= 3 && s.some((c: any) => (c.linkWarnungen ?? []).length)) break; await pause(300); }
+  for (let i = 0; i < 120; i++) { t = await (await fetch(B + '/api/today', { headers: { cookie } })).json(); const s = t.strands ?? []; if (s.filter((c: any) => c.kopf).length >= 3 && s.some((c: any) => (c.linkWarnungen ?? []).length) && s.every((c: any) => !(c.prs ?? []).some((z: any) => z.stand === 'unbekannt'))) break; await pause(300); }
   const s155 = (t.strands ?? []).find((c: any) => /Finanzierungsmail/.test(c.summary));
   console.log('155:', s155?.spalte, s155?.kopf?.status, 'Fragen', (s155?.fragen ?? []).map((f: any) => f.id).join(','), 'Diagramm', !!s155?.diagramm);
+  console.log('PRs:', (t.strands ?? []).flatMap((c: any) => (c.prs ?? []).map((z: any) => `${z.label}=${z.stand}${z.url ? '' : ' (ohne Link)'}`)).join(' | '), '· Mängel:', (t.strands ?? []).map((c: any) => (c.maengel ?? []).join(',')).join(' | '));
   console.log('Spalten:', (t.strands ?? []).map((c: any) => `${c.summary} → ${c.spalte}`).join(' | '));
   for (const [name, vp] of [['desktop', { width: 1440, height: 1000 }], ['handy', { width: 390, height: 844 }]] as const) {
     const ctx = await browser.newContext({ viewport: vp, locale: 'de-DE', deviceScaleFactor: name === 'handy' ? 2 : 1 });
@@ -136,19 +149,26 @@ try {
     await card.getByTestId('doc-bericht').waitFor({ timeout: 10_000 }).catch(() => {});
     await p.waitForTimeout(1500);
     await shot('03-karte-155-bericht', false, card);
-    // Leitstand-Seite: Bericht des Beispiel-Strangs gerendert.
-    const bereit = (t.strands ?? []).find((c: any) => /auf GitHub/.test(c.summary));
-    await p.goto(B + `/#/leitstand?bericht=${bereit.id}`);
-    await p.getByTestId('bericht-html').waitFor({ timeout: 10_000 });
+    // Leitstand-Seite: Bericht 155 mit Exec Summary oben, darunter formatiert.
+    await p.goto(B + `/#/leitstand?bericht=${s155.id}`);
+    await p.getByTestId('exec-summary').waitFor({ timeout: 10_000 });
     await p.getByTestId('mermaid').first().waitFor({ timeout: 20_000 });
     await pause(400);
     await shot('04-leitstand-bericht-formatiert');
+    // C.7: Karte mit PR, den es nicht gibt, und lokalem Zweig; Karte „Auf GitHub“ (gemergt).
+    await p.goto(B + '/#/');
+    await p.getByTestId('review-queue').waitFor();
+    await pause(600);
+    const tot = (t.strands ?? []).find((c: any) => /Vorschau tot/.test(c.summary));
+    await shot('05-karte-pr-fehlt-lokal', false, p.locator(`[data-run="${tot.id}"]`));
+    const bereit = (t.strands ?? []).find((c: any) => /auf GitHub/.test(c.summary));
+    await shot('06-karte-gemergt', false, p.locator(`[data-run="${bereit.id}"]`));
     await ctx.close();
   }
   await browser.close();
 } finally {
   for (const p of procs) p.kill();
-  lc?.close();
+  lc?.close(); gh.close();
   await mongo.db(DB).dropDatabase().catch(() => {}); await mongo.db(LCDB).dropDatabase().catch(() => {});
   await mongo.close();
 }

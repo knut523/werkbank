@@ -7,6 +7,7 @@ import { HygienePanel } from '../components.tsx';
 import { WartetAufDich, Md, mineCount, note } from '../beimir.tsx';
 import { OrchQuestions } from '../orchquestions.tsx';
 import { Mermaid, useMermaidIn } from '../mermaid.tsx';
+import { ExecSummary } from '../execsummary.tsx';
 
 const BIG: CSSProperties = { minHeight: 44 };
 const STAND: Record<string, [string, string]> = { ja: ['✓', 'ok'], teilweise: ['◐', 'warn'], nein: ['✗', 'bad'] };
@@ -139,7 +140,6 @@ function DocButtons({ it, doc, setDoc, small }: { it: any; doc: Doc | null; setD
 
 // ---------- Teil C: Bericht-Kopf auf der Karte (docs/plan-leitstand.md, C4/C5/D2/D3/H1/H3/H5) ----------
 
-const STATUS_TEXT: Record<string, [string, string]> = { wartet_auf_knut: ['wartet auf dich', 'warn'], bereit_fuer_github: ['Strang meldet: bereit für GitHub', 'ok'], blockiert: ['blockiert', 'bad'] };
 const fileUrl = (paket: string, rel: string, inline = false) => `api/files/agenten/${encodeURIComponent(paket)}/${rel.split('/').map(encodeURIComponent).join('/')}${inline ? '?inline=1' : ''}`;
 
 function KopfTeil({ it, onDone }: { it: any; onDone: () => void }) {
@@ -154,6 +154,8 @@ function KopfTeil({ it, onDone }: { it: any; onDone: () => void }) {
   const fg = it.freigabe;
   const reviewLinks = (k?.review ?? []).filter((r: any) => r.url || r.login);
   const shots = (k?.review ?? []).filter((r: any) => r.screenshot);
+  // C.7: Stand von GitHub (Server-Prüfung) — ein PR-Link im Bericht allein ersetzt keine Freigabe.
+  const aufGithub = (it.prs ?? [])[0]?.stand === 'offen' || (it.prs ?? [])[0]?.stand === 'gemergt';
   const senden = () => run(async () => {
     const antworten = (it.fragen ?? []).map((f: any) => ({ id: f.id, text: (antwort[f.id] ?? '').trim() })).filter((a: any) => a.text);
     await api(`/api/review/${it.id}/entscheidungen`, { body: { berichtHash: it.berichtHash, antworten } });
@@ -180,9 +182,7 @@ function KopfTeil({ it, onDone }: { it: any; onDone: () => void }) {
   return (
     <div className="rq-kopf" data-testid="kopf" data-spalte={it.spalte}>
       {it.kopfFehler && <p className="small rq-warn" data-testid="kopf-fehler">⚠ Bericht-Kopf unlesbar: {it.kopfFehler}</p>}
-      {k && <p className="small"><span className={`chip ${STATUS_TEXT[k.status]?.[1] ?? ''}`} data-testid="kopf-status">{STATUS_TEXT[k.status]?.[0] ?? k.status}</span>
-        {k.offen.length > 0 ? <> · offen: {k.offen.length}</> : <> · nichts offen</>}</p>}
-      {k?.offen.length > 0 && <ul className="small rq-offen">{k.offen.map((o: string, i: number) => <li key={i}>{o}</li>)}</ul>}
+      <ExecSummary s={{ kopf: k, prs: it.prs ?? [], maengel: it.maengel ?? [] }} fragen={(it.fragen ?? []).length} />
       {(it.linkWarnungen ?? []).map((l: any) => <p key={l.url} className="small rq-tot" data-testid="link-tot">🔴 Vorschau „{l.titel}“ {l.ergebnis} — <a href={l.url} target="_blank" rel="noreferrer">Link</a> <button className="btn ghost small" disabled={busy} onClick={() => tot(l.url)}>Unter-Chat benachrichtigen</button></p>)}
       {it.commitWarnung && <p className="small rq-warn" data-testid="commit-warnung">⚠ {it.commitWarnung}</p>}
       {reviewLinks.length > 0 && <p className="small row rq-links" style={{ gap: 10, flexWrap: 'wrap' }}>Ansehen: {reviewLinks.map((r: any, i: number) => <a key={i} className="btn small ghost" style={BIG} href={r.login ?? r.url} target="_blank" rel="noreferrer">{r.titel || 'Vorschau'}{r.login ? ' (Login)' : ''}</a>)}</p>}
@@ -205,8 +205,7 @@ function KopfTeil({ it, onDone }: { it: any; onDone: () => void }) {
         {fg && !fg.pushedAt && !fg.veraltet && <span className="chip ok" data-testid="freigabe">freigegeben für {fg.head.slice(0, 7)} · wartet auf Push</span>}
         {fg && fg.veraltet && <span className="chip warn" data-testid="freigabe-veraltet">Freigabe gilt für einen älteren Stand ({fg.head.slice(0, 7)})</span>}
         {fg?.pushedAt && <span className="chip ok" data-testid="gepusht">gepusht{fg.pr ? <> · <a href={fg.pr} target="_blank" rel="noreferrer">PR #{fg.prNr ?? '?'}</a></> : ''}</span>}
-        {!fg && k?.github?.[0]?.pr && <span className="chip ok" data-testid="pr-offen"><a href={k.github[0].pr} target="_blank" rel="noreferrer">PR #{/\/pull\/(\d+)$/.exec(k.github[0].pr)?.[1]}</a> offen</span>}
-        {(fg?.veraltet || (!fg && !k?.github?.[0]?.pr)) && <button className="btn small" style={BIG} disabled={busy || it.running} onClick={freigeben} data-testid="push-freigeben">{fg?.veraltet ? 'Neu freigeben' : 'Push freigeben'}</button>}
+        {(fg?.veraltet || (!fg && !aufGithub)) && <button className="btn small" style={BIG} disabled={busy || it.running} onClick={freigeben} data-testid="push-freigeben">{fg?.veraltet ? 'Neu freigeben' : 'Push freigeben'}</button>}
         {(it.weitereRepos ?? []).length > 0 && <p className="tiny muted">Weitere Repos ({it.weitereRepos.join(', ')}) sind nicht über die Werkbank freigegeben — die Hauptsitzung fragt dich dazu.</p>}
       </div>}
       <Err e={err} />
@@ -263,7 +262,8 @@ function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
         </div>
       </div>}
       {it.bucket === 'review' && it.kind === 'strand' && <KopfTeil it={it} onDone={onDone} />}
-      {it.bucket === 'review' && <Klar it={it} berichtOpen={doc === 'bericht'} openBericht={() => setDoc(doc === 'bericht' ? null : 'bericht')} />}
+      {/* C.7: Mit Exec Summary (Bericht-Kopf) ersetzt diese das abgeleitete „Worum es geht / Was du jetzt tun sollst“. */}
+      {it.bucket === 'review' && !(it.kind === 'strand' && it.kopf) && <Klar it={it} berichtOpen={doc === 'bericht'} openBericht={() => setDoc(doc === 'bericht' ? null : 'bericht')} />}
       <ReviewBody it={it} />
       {it.bucket === 'review' && <>
         {it.review && !nothing(it.review.risiko) && <p className="small rq-risk rq-risk-line" data-testid="risk-line"><b>⚠ Risiko:</b> <Md text={it.review.risiko} max={200} /></p>}

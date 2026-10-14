@@ -752,3 +752,42 @@ bei Bedarf), „Heute“ in drei Spalten mit Teil-C-Karte, Leitstand/Review-Ansi
   Test-Brücken eines anderen Strangs (`werkbank-pr-ticker`) die festen Testports 3098/3194/3197 belegen.
 - Kein unabhängiges Diff-Council (Teilagenten-Grenze der Nachricht erreicht); eigener Gegenpass ohne blockierenden Befund. Bekannte
   Grenzen: Element-Screenshot der Handy-Karte hat unten Leerraum (Aufnahme, nicht Ansicht); Kopf ist Selbstauskunft (H1 mildert).
+
+## C.7 Nachtrag Knut (14.10.): Exec Summary oben in jedem Bericht
+
+**Auftrag:** Folie 1 bzw. der Kopf jedes Berichts ist eine Exec Summary: (1) worum es geht, 2–3 Sätze für jemanden ohne den
+Chat; (2) was jetzt anders ist, höchstens 4 Punkte; (3) was Knut tun muss; (4) Tabelle der PRs mit Link, Inhalt, Stand. Nur PRs,
+die es auf GitHub gibt; nicht gepushte Zweige als „lokal, nicht auf GitHub“ ohne Link. Darstellung auf „Heute“ und in der
+Berichtsanzeige, Pflicht in der Vorlage. Der Leitstand prüft die PR-Links (existiert, offen/gemergt) und zeigt den Stand **von
+GitHub**, nicht den aus dem Bericht. Vorbild: `~/work/knut/downloads/2026-10-14_bericht_leasing-mail.html` (Folie 1).
+
+**Schnitt (klein, auf Teil C aufsetzend):**
+- Kopf: neue Felder `titel` (ein Satz), `worum` (≤ 600 Zeichen), `anders` (≤ 4 × 200); je `github`-Eintrag `was` (Inhalt, ≤ 160).
+  „Was du tun musst“ = das bestehende `offen` (kein zweites Feld); offene Fragen zählen mit. Fehlt etwas davon oder das Diagramm,
+  zeigt die Karte „Exec Summary unvollständig: …“ — kein harter Fehler (alte Berichte bleiben lesbar).
+- PR-Prüfung (`github.ts`, nur lesend über das bestehende `graphql()` mit dem Lesetoken der Werkbank): eine Abfrage je Takt für
+  alle PR-Links eines Berichts, `repository(owner,name){ pullRequest(number){ state merged title } }` mit Variablen. Ergebnis je Link:
+  `offen` · `gemergt` · `geschlossen` · `fehlt` (GitHub kennt ihn nicht / kein Lesezugriff) · `unbekannt` (kein Token, Fehler).
+  Im Status-Takt (`kopfPflege`) bei neuem Bericht oder spätestens alle 10 min, nach Mongo (`prCheck`, `prsAt`); „Heute“ bleibt nur Mongo.
+- PR-Tabelle (rein, testbar): je `github`-Eintrag eine Zeile. Mit PR-Link und Stand `offen`/`gemergt`/`geschlossen` → Link +
+  GitHub-Stand. `fehlt` → kein Link, rot „PR gibt es auf GitHub nicht“. `unbekannt` → Link, „Stand nicht geprüft“. Ohne PR →
+  „lokal, nicht auf GitHub“ (gepushte Werkbank-Freigabe mit PR-URL zählt als PR). Spalte „Auf GitHub“ nur bei Stand offen/gemergt
+  oder Freigabe — ein PR-Link aus dem Bericht allein reicht nicht mehr.
+- Anzeige: eine Komponente `ExecSummary` (Titel, Status, drei Kästen, PR-Tabelle) oben in der Karte auf „Heute“ und über dem
+  Bericht in der Leitstand-Berichts- und Review-Ansicht.
+- Vorlage: `BERICHT_PFLICHT`, `docs/bericht-vorlage.md`, Folie 1 in `docs/bericht-folien-vorlage.html` wie das Vorbild.
+- Berichte 155 und 132 nachziehen.
+
+**DoD C.7:** S-1 Kopf liest die neuen Felder mit Grenzen · S-2 Mängel sichtbar · S-3 PR-Prüfung gegen GitHub-Nachbau (offen,
+gemergt, fehlt, Fehler → unbekannt; keine Mutation) · S-4 Tabelle/Spalte aus GitHub-Stand, nicht aus dem Bericht · S-5 Anzeige auf
+„Heute“ und in der Berichtsanzeige (Screenshots Desktop + Handy) · S-6 Vorlage + Folie 1 · S-7 Berichte 155/132 · S-8 Tests + Build.
+
+**Gegenpass (ein Modell, kurz):**
+- *Kosten/Rate:* je Strang höchstens eine GraphQL-Abfrage alle 10 min, nur wenn PR-Links im Kopf → unkritisch (5000/h).
+- *Falsch-„fehlt“ bei fremden Orgs:* Der Token liest nur WirStrom1; für andere Besitzer heißt `fehlt` „nicht gefunden oder kein
+  Lesezugriff“ — so steht es auch auf der Karte, kein Link.
+- *Bericht lügt über den Stand:* Der Stand im Bericht wird nicht gelesen (es gibt kein Feld dafür); angezeigt wird nur `prCheck`.
+- *Token-Leck:* Abfrage nur serverseitig über `graphql()`; Ergebnis enthält nur Stand/Titel.
+- *Spaltenwechsel 155:* Ohne Token (Tests) wird 155 nicht mehr „Auf GitHub“ — gewollt, sie steht ohnehin in „Entscheiden“.
+Urteil: PASS mit Bedingungen B1 (Mutation unmöglich: `graphql()`-Schranke bleibt), B2 (`fehlt` nie als Link), B3 (Test, dass der
+Bericht-Stand ignoriert wird).

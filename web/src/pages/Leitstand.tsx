@@ -14,6 +14,7 @@ function BerichtHtml({ html, text }: { html?: string | null; text: string }) {
   return <div className="note-body" ref={ref} data-testid="bericht-html" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 import { Err, Loading, useLoad } from '../ui.tsx';
+import { ExecSummary } from '../execsummary.tsx';
 
 const ICON: Record<string, string> = { läuft: '⏳', wartet: '✋', fertig: '✅', gestoppt: '⛔', erledigt: '✔️' };
 const CHIP: Record<string, string> = { läuft: '', wartet: 'warn', fertig: 'ok', gestoppt: 'bad', erledigt: '' };
@@ -34,7 +35,7 @@ function Bericht({ id, art, onClose }: { id: string; art: 'auftrag' | 'bericht';
         <h2 style={{ margin: 0 }}>{art === 'auftrag' ? 'Auftrag' : 'Bericht'} {d ? <span className="tiny muted mono">{d.name}</span> : null}</h2>
         <button className="btn small ghost" onClick={onClose}>Schließen</button>
       </div>
-      {t.error ? <Err e={t.error} /> : !d ? <Loading /> : <BerichtHtml html={d.html} text={d.text} />}
+      {t.error ? <Err e={t.error} /> : !d ? <Loading /> : <><ExecSummary s={d.summary} /><BerichtHtml html={d.html} text={d.text} /></>}
     </section>
   );
 }
@@ -116,7 +117,7 @@ function Review({ id, onClose }: { id: string; onClose: () => void }) {
 
       {d.prTexte.length > 0 && <><h3>PR-Texte</h3>{d.prTexte.map((p: any) => <details key={p.name}><summary className="small mono">{p.name}</summary><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: '50vh', overflow: 'auto' }}>{p.text}</pre></details>)}</>}
       <h3>Bericht</h3>
-      {d.bericht ? <details open><summary className="small">Bericht</summary><BerichtHtml html={d.berichtHtml} text={d.bericht} /></details> : <p className="small muted">Noch kein Bericht.</p>}
+      {d.bericht ? <details open><summary className="small">Bericht</summary><ExecSummary s={d.summary} /><BerichtHtml html={d.berichtHtml} text={d.bericht} /></details> : <p className="small muted">Noch kein Bericht.</p>}
     </section>
   );
 }
