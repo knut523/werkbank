@@ -12,6 +12,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { realpathSync, readdirSync } from 'node:fs';
 import { readBericht, readPlan, reviewDir, findPaket, lesbar, paketDatei } from './bericht.ts';
 import { PAKET_RE, paketFile } from './reviewpakete.ts';
+import { offeneFragen, spalte, commitPasst } from './berichtkopf.ts';
+import { freigaben } from './freigabe.ts';
 import { worumGeht, wasTun, type TodoStep } from './heutekarte.ts';
 import { liveIndex, strandStand, realGit, type LiveIndex } from './releasestand.ts';
 import type { Stand } from './heutekarte.ts';
@@ -524,8 +526,11 @@ export async function strandCards(u: User, opts: { detail?: boolean; fresh?: boo
   const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, ...OPEN, startError: null, $and: [{ $or: [{ doneAt: { $ne: null } }, { reviewReadyAt: { $ne: null } }] }] })
     .sort({ startedAt: -1 }).limit(30).toArray();
   const open = docs.filter((d) => d.doneAt || d.reviewReadyAt);
+  // Teil C: Freigaben der Karten-Stränge (Mongo, ein Abruf) — „Auf GitHub“ zählt nur mit Freigabe (H1).
+  const fgs: any[] = open.length ? await freigaben().find({ strand: { $in: open.map((d) => String(d._id)) }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
   const cards = open.map((d) => {
     const review = d.review ?? d.prevReview?.review ?? null;
+    const teilC = kopfFelder(d, fgs.filter((f) => f.strand === String(d._id)));
     return {
       id: String(d._id), kind: 'strand', bucket: 'review', key: `Unter-Chat · ${d.lauf ?? laufName(d.title ?? '').lauf}`, summary: d.title, url: d.url,
       review: review ? { ...review, nichtGemacht: review.nichtGemacht ?? review.nicht_gemacht ?? '', artefakte: review.artefakte ?? [], dod: review.dod ?? [] } : null,
@@ -533,7 +538,7 @@ export async function strandCards(u: User, opts: { detail?: boolean; fresh?: boo
       reviewReadyAt: d.reviewReadyAt ?? d.doneAt, statusAt: d.statusAt ?? null, status: statusWord(d), reviewedBy: d.reviewedBy ?? null,
       running: d.lastStatus === 'running',   // läuft wieder (Leitstand hat weitergeschickt): sichtbar, aber Passt/Nacharbeit erst danach
       seen: String(new Date(d.reviewReadyAt ?? d.doneAt).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime()),
-      written: [], startedAt: d.startedAt,
+      written: [], startedAt: d.startedAt, ...teilC,
     };
   });
   if (!opts.detail) return cards;   // Zähler: nur Mongo (F1)
@@ -587,4 +592,29 @@ export async function strandDetail(d: any, c: { running: boolean; excerpt: strin
   }
   const stand = st.v;
   return { ...t.v, stand, paket, docs };
+}
+
+// ---------- Teil C: Bericht-Kopf auf der Karte (docs/plan-leitstand.md, C4/C5/H1/H3/H5) — nur Mongo ----------
+
+/** Felder einer Strang-Karte aus dem festgeschriebenen Kopf und den Freigaben des Strangs (rein bis auf die Eingaben). */
+export function kopfFelder(d: any, fgs: any[]) {
+  const raw = d.berichtKopf ?? null;
+  const kopf = raw && 'status' in raw ? raw : null;
+  const fragen = offeneFragen(kopf, d.entscheidungenAntwort ?? null, d.berichtHash ?? null);
+  const kopfCommit: string = kopf?.github?.[0]?.commit ?? '';
+  const f = fgs.find((x) => !x.pushedAt) ?? fgs.find((x) => x.pushedAt) ?? null;
+  // Freigabe verfällt sichtbar (C5/H4): Kopf nennt einen anderen Commit oder der Zweig steht inzwischen woanders.
+  const veraltet = !!f && !f.pushedAt && ((kopfCommit && commitPasst(kopfCommit, f.head) === false) || (d.repoHead && d.repoHead !== f.head));
+  const freigabe = f ? { id: String(f._id), branch: f.branch, head: String(f.head).slice(0, 12), at: f.at, pushedAt: f.pushedAt ?? null, pr: f.pr ?? null,
+    prNr: f.pr ? Number(/\/pull\/(\d+)$/.exec(f.pr)?.[1]) || null : null, veraltet } : null;
+  const commitWarnung = kopfCommit && d.repoHead && commitPasst(kopfCommit, d.repoHead) === false
+    ? `Bericht nennt ${kopfCommit.slice(0, 7)}, der Zweig steht auf ${String(d.repoHead).slice(0, 7)}` : null;
+  const paket = (() => { const p = paketDatei(d, 'bericht'); return p ? p.split('/').slice(-2)[0] : null; })();
+  return {
+    kopf: kopf ? { status: kopf.status, offen: kopf.offen, review: kopf.review, github: kopf.github } : null,
+    kopfFehler: raw?.fehler ?? null, fragen, berichtHash: d.berichtHash ?? null, paket,
+    spalte: spalte(kopf, { offeneFragen: fragen.length, freigabe: !!freigabe && !freigabe.veraltet }),
+    diagramm: d.berichtDiagramm ?? null, linkWarnungen: (d.linkCheck ?? []).filter((l: any) => l.tot), commitWarnung, freigabe,
+    weitereRepos: (kopf?.github ?? []).slice(1).map((g: any) => g.repo),
+  };
 }

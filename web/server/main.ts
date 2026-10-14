@@ -23,6 +23,7 @@ import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, s
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe } from './leitstand.ts';
 import { reviewDetail, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen } from './freigabe.ts';
+import { berichtKopf } from './berichtkopf.ts';
 import { readBericht as readBerichtDatei } from './bericht.ts';
 import { readBericht, paketDatei } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
@@ -1300,20 +1301,34 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const u = await needAdmin(req);
   const d = await reviewStrand(u, m[1]);
   const b = await body(req);
-  if (d.lastStatus === 'running') throw new HttpError(409, 'Der Unter-Chat arbeitet gerade — Antworten gehen, sobald er fertig ist.');
+  // Teil C (H3): läuft der Unter-Chat, reicht sendOrch die Antwort nach — kein 409 mehr.
   const { paketDatei } = await import('./bericht.ts');
   const text = readBerichtDatei(paketDatei(d, 'bericht'));
   if (!text || String(b.berichtHash ?? '') !== berichtHash(text)) throw new HttpError(409, 'Der Bericht hat sich inzwischen geändert — Seite neu laden.');
-  const bekannt = new Map(leseEntscheidungen(text).map((e) => [e.id, e]));
+  const bekannt = new Map<string, { titel: string }>(leseEntscheidungen(text).map((e) => [e.id, e]));
+  // Teil C (D3): auch Fragen aus dem Bericht-Kopf (fragen[].id).
+  const kopf = berichtKopf(text);
+  if (kopf && 'status' in kopf) for (const f of kopf.fragen) if (!bekannt.has(f.id)) bekannt.set(f.id, { titel: f.frage.slice(0, 120) });
   const antworten = (Array.isArray(b.antworten) ? b.antworten : []).map((a: any) => ({ id: String(a?.id ?? ''), text: String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000) }))
     .filter((a: any) => a.text && bekannt.has(a.id));
   if (!antworten.length) throw new HttpError(400, 'Keine Antwort auf eine bekannte Entscheidung.');
   // Eine Wahrheit (Bedingung 8): der Strang trägt die Antworten in seinen Bericht ein — als Nacharbeit nach Review.
-  const msg = `Nacharbeit nach Review: Entscheidungen von Knut — bitte in den Bericht (Zeile „- Knut:“) eintragen und danach weiterarbeiten.\n${antworten.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}`;
+  const msg = `Nacharbeit nach Review: Entscheidungen von Knut — bitte in den Bericht eintragen (Kopf: \`antwort:\` der Frage; Text: Zeile „- Knut:“) und danach weiterarbeiten.\n${antworten.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}`;
   await sendOrch(u, String(d._id), msg, 'hand');
-  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten } } });
+  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten, ids: antworten.map((a: any) => a.id) } } });
   log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length });
   send(res, 200, { ok: true, gesendet: antworten.length });
+});
+// Teil C (H5): tote Vorschau aus dem Bericht-Kopf → kurze Nachricht an den Unter-Chat (nur ein bekannter, als tot geprüfter Link).
+on('POST', /^\/api\/review\/([\w-]{1,40})\/vorschau-tot$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const d = await reviewStrand(u, m[1]);
+  const b = await body(req);
+  const hit = (d.linkCheck ?? []).find((l: any) => l.url === String(b.url ?? '') && l.tot);
+  if (!hit) throw new HttpError(409, 'Dieser Link ist nicht (mehr) als tot gemeldet — Seite neu laden.');
+  await sendOrch(u, String(d._id), `Die Vorschau „${hit.titel}“ (${hit.url}) antwortet nicht (${hit.ergebnis}) — bitte neu starten und den Bericht-Kopf aktualisieren.`, 'hand');
+  log('vorschau tot gemeldet', { user: u.id, id: d._id });
+  send(res, 200, { ok: true });
 });
 
 // Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).

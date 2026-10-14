@@ -30,6 +30,39 @@ const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Geck
 
 export interface BriefInput { title: string; prompt: string; cwd: string; plan?: string | null; person?: string; stand?: string | null }
 
+// Berichtsvorlage für jeden Strang (docs/plan-leitstand.md, Teil C, C8; Knut 14.10.2026): fester Kopf, den „Heute“ liest, und
+// Pflicht-Visualisierung neben Screenshots. Vollständiges Muster: docs/bericht-vorlage.md, Folien: docs/bericht-folien-vorlage.html.
+export const BERICHT_PFLICHT = [
+  'Bericht (Pflicht, sobald du etwas gebaut oder geprüft hast): `~/work/knut/review-pakete/NNN-<slug>/bericht.md` (das Paket nennt der Auftrag). Er beginnt mit diesem YAML-Kopf — „Heute“ liest ihn und zeigt danach, was Knut tun muss:',
+  '```yaml',
+  '---',
+  'status: wartet_auf_knut      # bereit_fuer_github | wartet_auf_knut | blockiert',
+  'offen:                        # höchstens 5 kurze Zeilen; leer = nichts offen',
+  '  - …',
+  'review:                       # wo Knut reviewt (Coder-Vorschau mit Login-Link, Screenshots, PR-Text)',
+  '  - titel: Admin-Vorschau',
+  '    url: https://<port>--main--dev--knut.ws.konekto.energy/<seite>',
+  '    login: https://<port>--main--dev--knut.ws.konekto.energy/login?next=/<seite>',
+  '  - screenshot: screenshots/<name>.png',
+  '  - pr_text: pr.md',
+  'fragen:                       # nur echte Entscheidungen Knuts, je mit Empfehlung; antwort bleibt leer',
+  '  - id: D1',
+  '    frage: …',
+  '    empfehlung: …',
+  '    antwort: ""',
+  'github:                       # je Repo; commit = voller oder ≥ 7-stelliger SHA des Stands, den Knut freigeben soll',
+  '  - repo: <org>/<repo>',
+  '    zweig: <branch>',
+  '    commit: <sha>',
+  '    pr_text: pr.md',
+  '---',
+  '```',
+  '- `status`: `bereit_fuer_github` nur, wenn Tests grün, Review-Pässe durch und nichts offen; sonst `wartet_auf_knut` (Review/Fragen) oder `blockiert`. Der Kopf muss zum Text passen; ändert sich etwas, Kopf mit ändern (auch `commit`).',
+  '- Darunter mindestens ein Mermaid-Diagramm (```` ```mermaid ````) „Wie es jetzt funktioniert“ (Ablauf/Datenfluss des Gebauten, `flowchart LR`); bei mehreren PRs oder Repos zusätzlich „Ausroll-Reihenfolge“. Dazu Screenshots bei allem Sichtbaren.',
+  '- Optional HTML-Folien nach `docs/bericht-folien-vorlage.html` im Werkbank-Repo (Folie 1: Status, offen, wo reviewen, GitHub; dann Ablauf, Ausrollen, Screenshots, Prüfungen, Entscheidungen).',
+  '- Fragen im Kopf tragen dieselbe Kennung wie im Text (`D1`). Antworten Knuts kommen als „Nacharbeit nach Review“; trag sie dann in `antwort:` ein.',
+].join('\n');
+
 /** Erster Text des Strangs. Erste Zeile = Titel; der Auftrag steht am Ende. */
 export function orchBrief(b: BriefInput): string {
   const first = (b.person || 'Knut').split(/\s+/)[0];
@@ -59,6 +92,7 @@ export function orchBrief(b: BriefInput): string {
       '```',
       'Schreib den Abschnitt selbst als normales Markdown, nicht als Codeblock.',
     ].join('\n'),
+    BERICHT_PFLICHT,
     `---\n\nAuftrag:\n${b.prompt.trim()}`,
   ].join('\n\n');
 }
