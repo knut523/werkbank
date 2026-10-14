@@ -73,6 +73,8 @@ test('C-5/H1/H3: Spalte nach Kopf — offene Frage/blockiert → Entscheiden; Fr
   assert.equal(spalte(bereit, { offeneFragen: 0, freigabe: true }), 'github');
   assert.equal(spalte({ ...k, status: 'blockiert' }, { offeneFragen: 0, freigabe: true }), 'entscheiden');
   assert.equal(spalte(null, { offeneFragen: 0, freigabe: false }), 'ansehen', 'ohne Kopf');
+  assert.equal(spalte(k, { offeneFragen: 0, freigabe: false, pr: true }), 'github', 'schon als PR auf GitHub');
+  assert.equal(spalte(k, { offeneFragen: 1, freigabe: false, pr: true }), 'entscheiden', 'offene Frage geht vor');
   assert.equal(commitPasst('e05ea35', 'e05ea35c' + '0'.repeat(32)), true);
   assert.equal(commitPasst('e05ea35', 'abcdef0' + '0'.repeat(33)), false);
   assert.equal(commitPasst('e05', 'e05ea35c'), null, 'zu kurz: nichts zu vergleichen');

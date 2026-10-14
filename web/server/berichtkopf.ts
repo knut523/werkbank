@@ -63,9 +63,10 @@ export type Spalte = 'entscheiden' | 'ansehen' | 'github';
  * Spalte einer Karte auf „Heute“ (C4, H1/H3): offene Fragen oder blockiert → Entscheiden; aktive oder gepushte Freigabe → Auf GitHub;
  * sonst Ansehen (auch `bereit_fuer_github` ohne Freigabe — Selbstauskunft allein reicht nicht).
  */
-export function spalte(kopf: Kopf | { fehler: string } | null | undefined, opts: { offeneFragen: number; freigabe: boolean }): Spalte {
+export function spalte(kopf: Kopf | { fehler: string } | null | undefined, opts: { offeneFragen: number; freigabe: boolean; pr?: boolean }): Spalte {
   if (kopf && 'status' in kopf && (kopf.status === 'blockiert' || opts.offeneFragen > 0)) return 'entscheiden';
-  if (opts.freigabe) return 'github';
+  // Schon als PR auf GitHub (vor der Freigabe-Pflicht gepusht, PR-Link im Kopf) zählt ebenfalls.
+  if (opts.freigabe || opts.pr) return 'github';
   return 'ansehen';
 }
 

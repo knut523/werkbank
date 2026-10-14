@@ -613,7 +613,7 @@ export function kopfFelder(d: any, fgs: any[]) {
   return {
     kopf: kopf ? { status: kopf.status, offen: kopf.offen, review: kopf.review, github: kopf.github } : null,
     kopfFehler: raw?.fehler ?? null, fragen, berichtHash: d.berichtHash ?? null, paket,
-    spalte: spalte(kopf, { offeneFragen: fragen.length, freigabe: !!freigabe && !freigabe.veraltet }),
+    spalte: spalte(kopf, { offeneFragen: fragen.length, freigabe: !!freigabe && !freigabe.veraltet, pr: !!kopf?.github?.[0]?.pr }),
     diagramm: d.berichtDiagramm ?? null, linkWarnungen: (d.linkCheck ?? []).filter((l: any) => l.tot), commitWarnung, freigabe,
     weitereRepos: (kopf?.github ?? []).slice(1).map((g: any) => g.repo),
   };

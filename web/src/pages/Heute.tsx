@@ -205,7 +205,8 @@ function KopfTeil({ it, onDone }: { it: any; onDone: () => void }) {
         {fg && !fg.pushedAt && !fg.veraltet && <span className="chip ok" data-testid="freigabe">freigegeben für {fg.head.slice(0, 7)} · wartet auf Push</span>}
         {fg && fg.veraltet && <span className="chip warn" data-testid="freigabe-veraltet">Freigabe gilt für einen älteren Stand ({fg.head.slice(0, 7)})</span>}
         {fg?.pushedAt && <span className="chip ok" data-testid="gepusht">gepusht{fg.pr ? <> · <a href={fg.pr} target="_blank" rel="noreferrer">PR #{fg.prNr ?? '?'}</a></> : ''}</span>}
-        {(!fg || fg.veraltet) && <button className="btn small" style={BIG} disabled={busy || it.running} onClick={freigeben} data-testid="push-freigeben">{fg?.veraltet ? 'Neu freigeben' : 'Push freigeben'}</button>}
+        {!fg && k?.github?.[0]?.pr && <span className="chip ok" data-testid="pr-offen"><a href={k.github[0].pr} target="_blank" rel="noreferrer">PR #{/\/pull\/(\d+)$/.exec(k.github[0].pr)?.[1]}</a> offen</span>}
+        {(fg?.veraltet || (!fg && !k?.github?.[0]?.pr)) && <button className="btn small" style={BIG} disabled={busy || it.running} onClick={freigeben} data-testid="push-freigeben">{fg?.veraltet ? 'Neu freigeben' : 'Push freigeben'}</button>}
         {(it.weitereRepos ?? []).length > 0 && <p className="tiny muted">Weitere Repos ({it.weitereRepos.join(', ')}) sind nicht über die Werkbank freigegeben — die Hauptsitzung fragt dich dazu.</p>}
       </div>}
       <Err e={err} />
