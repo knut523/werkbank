@@ -18,7 +18,7 @@ export function Entscheidungen({ id, liste, berichtHash, running, onDone }: { id
     setBusy(true); setMsg(null);
     try {
       const r: any = await api(`/api/review/${id}/entscheidungen`, { body: { berichtHash, antworten: gewaehlt.map(([k, v]) => ({ id: k, art: v.art, text: v.text })) } });
-      setMsg({ ok: true, text: r.weiter ? 'Im Bericht eingetragen — der Unter-Chat arbeitet die Abweichungen ab.' : r.offen ? `Im Bericht eingetragen — noch ${r.offen} offen.` : 'Alle Entscheidungen beantwortet — fertig, der Hauptchat ist informiert.' });
+      setMsg({ ok: true, text: r.weiter ? 'Im Bericht eingetragen — der Unter-Chat arbeitet die Abweichungen ab.' : r.offen ? `Im Bericht eingetragen — noch ${r.offen} offen.` : `Alle Entscheidungen beantwortet — fertig${r.hauptchat ? ', der Hauptchat ist informiert' : ' (kein Hauptchat aktiv)'}.` });
       setW({}); onDone();
     } catch (e: any) { setMsg({ ok: false, text: String(e?.message ?? e) }); } finally { setBusy(false); }
   };

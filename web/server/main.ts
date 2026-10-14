@@ -1373,21 +1373,22 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   if (!real || !real.startsWith(realpathSync(reviewDir()) + '/')) throw new HttpError(409, 'Bericht liegt nicht im Ordner der Review-Pakete.');
   const datum = new Intl.DateTimeFormat('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' }).format(new Date());
   const neu = trageEin(text, antworten, datum);
-  writeFileSync(real, neu);
   const offen = leseEntscheidungen(neu).filter((e) => !e.knut);
   const arbeit = antworten.filter((a: any) => a.art !== 'akzeptiert');
   let weiter = false;
+  // Erst zustellen, dann eintragen: scheitert die Nachricht an den Strang, bleibt der Bericht unverändert (Knut kann neu senden).
   if (arbeit.length) {
     // Abweichung oder Nachprüfen → der Strang arbeitet weiter (sendOrch startet den Zug).
     const msg = `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen, Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}${antworten.length > arbeit.length ? `\nAkzeptiert (nichts zu tun): ${antworten.filter((a: any) => a.art === 'akzeptiert').map((a: any) => a.id).join(', ')}` : ''}`;
     await sendOrch(u, String(d._id), msg, 'hand');
     weiter = true;
-  } else if (!offen.length) {
-    await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
   }
+  writeFileSync(real, neu);
+  let hauptchat = false;
+  if (!arbeit.length && !offen.length) hauptchat = await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
   await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten }, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
   log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length, arbeit: arbeit.length, offen: offen.length });
-  send(res, 200, { ok: true, gesendet: antworten.length, weiter, offen: offen.length });
+  send(res, 200, { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat });
 });
 
 // Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).

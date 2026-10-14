@@ -609,7 +609,8 @@ test('Plan 154 §9 (Council R3): Review-Ansicht — Entscheidungen aus dem Beric
   const vorher = (await msgsOf(st.conv)).length;
   const ok3 = await post(`/api/review/${st.id}/entscheidungen`, { berichtHash: r3.berichtHash, antworten: [{ id: 'D3', art: 'akzeptiert' }] });
   assert.equal(ok3.status, 200, await ok3.clone().text());
-  assert.deepEqual(await ok3.json(), { ok: true, gesendet: 1, weiter: false, offen: 0 });
+  const j3 = await ok3.json();
+  assert.deepEqual({ ...j3, hauptchat: undefined }, { ok: true, gesendet: 1, weiter: false, offen: 0, hauptchat: undefined });
   assert.match(readFileSync(join(tmp, 'review-pakete', '954-review', 'bericht.md'), 'utf8'), /- Knut: akzeptiert \(Empfehlung: b, weil einfacher\) \(\d\d\.\d\d\.\)/);
   assert.equal((await msgsOf(st.conv)).length, vorher, 'keine Nachricht an den Strang');
   assert.ok(((await W().collection('orchestrator_runs').findOne({ _id: st.id as any })) as any).entscheidungenErledigtAt);

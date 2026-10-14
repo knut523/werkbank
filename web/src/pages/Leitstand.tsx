@@ -66,6 +66,7 @@ function Review({ id, onClose }: { id: string; onClose: () => void }) {
       {msg && <p className={`small ${msg.ok ? '' : 'err'}`} role="status" data-testid="review-msg">{msg.text}</p>}
       {d.prReview && <PrReviewAbschnitt id={id} pr={d.prReview} onDone={t.reload} />}
 
+      {!d.prReview && <>{/* Plan 157: ein PR-Review hat nichts freizugeben — Push-Freigabe nur für eigene Stränge */}
       <h3>Vorschau</h3>
       {d.vorschau.length === 0 ? <p className="small muted">Keine Vorschau im Dienste-Register zu diesem Paket (review-pakete/00-dienste.yaml).</p> :
         <ul className="plain" data-testid="review-vorschau">{d.vorschau.map((v: any) => (
@@ -96,6 +97,7 @@ function Review({ id, onClose }: { id: string; onClose: () => void }) {
           {f.aktiv && !f.pushedAt && <button className="btn small ghost" disabled={!!busy} data-testid="zurueckziehen" onClick={() => run('z', () => api(`/api/review/${id}/freigabe/${f.id}/zurueck`, { body: {} }), 'Freigabe zurückgezogen.')}>Zurückziehen</button>}
         </li>))}</ul>}
 
+      </>}
       <Entscheidungen id={id} liste={d.entscheidungen ?? []} berichtHash={d.berichtHash} running={!!d.running} onDone={t.reload} />
 
       {d.prTexte.length > 0 && <><h3>PR-Texte</h3>{d.prTexte.map((p: any) => <details key={p.name}><summary className="small mono">{p.name}</summary><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: '50vh', overflow: 'auto' }}>{p.text}</pre></details>)}</>}
