@@ -9,7 +9,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, type Sink } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, type Sink } from './sessions.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -301,8 +301,8 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
       fetch(`${WEB_URL}/internal/skill-used`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, skill: name }) }).catch(() => {});
     } : undefined,
     // Melious (Plan 162): Verbrauch je Versuch an die Werkbank (zählt Tag/Monat, warnt bei 80 %, sperrt bei 100 %).
-    onMeliousUsage: known && INTERNAL ? (u) => {
-      fetch(`${WEB_URL}/internal/melious-usage`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, conv: convId, usage: u }) }).catch(() => {});
+    onMeliousUsage: known && INTERNAL ? (u, model) => {
+      fetch(`${WEB_URL}/internal/melious-usage`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, conv: convId, usage: u, model }) }).catch(() => {});
     } : undefined,
     onMeasure: known && INTERNAL ? (m) => {
       log('kontext gemessen', { user: userId, ...m });
@@ -336,7 +336,12 @@ const server = createServer(async (req, res) => {
         const leitEmails = String(process.env.LEITSTAND_EMAILS ?? process.env.BRIDGE_AUTO_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
         if (!email || !leitEmails.includes(email)) return json(res, 403, { error: 'Hauptchat nur für freigeschaltete Admins (LEITSTAND_EMAILS).' });
       }
-      try { registerOrchestration(userId, conv, real!, kind); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
+      // Modell und Risikostufe des Strangs (Plan 162, S2) — nur bei der Anmeldung, kein Wechsel mitten im Strang.
+      // Der Hauptchat läuft nie auf Melious und hat keine Risikostufe (Review 2, Befund 2): nur für Stränge.
+      const modell = kind === 'strand' && typeof b.modell === 'string' && b.modell ? b.modell : undefined;
+      if (modell && !STRAND_MODEL.test(modell)) return json(res, 400, { error: 'Modell: claude:opus|sonnet|haiku oder melious:<modell>.' });
+      const risiko = kind !== 'strand' ? undefined : b.risiko === 'niedrig' || b.risiko === 'mittel' || b.risiko === 'hoch' ? b.risiko : undefined;
+      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
       log(kind === 'leitstand' ? 'leitstand angemeldet' : 'strang angemeldet', { user: userId, conv });
       return json(res, 200, { ok: true, dir: real, mode: autoFor({ email }) });
     }

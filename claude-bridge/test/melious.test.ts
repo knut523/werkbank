@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, realpathSync, mkdirSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,7 @@ const PORT = 3394;
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-mel-'));
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-mel-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-mel-'));
+const ORCH = realpathSync(mkdtempSync(join(tmpdir(), 'orch-mel-')));
 let proc: ChildProcess;
 let web: Server;
 let out = '';
@@ -25,6 +26,8 @@ const MEL = (o: Record<string, unknown> = {}) => ({ id: 'melious', label: 'Melio
 const ACCOUNTS: Record<string, unknown[]> = {
   aus: [{ id: 'chat', label: 'Chat-Schlüssel', token: null }],
   an: [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL()],
+  avv: [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ token: key('avv'), avv: true, model: 'glm-5.3' })],
+  limitstrang: [{ id: 'a1', label: 'Firma', token: tok('limit-strang') }, { id: 'chat', label: 'Chat-Schlüssel', token: tok('limit-strangchat') }, MEL({ token: key('strang'), fallback: true, model: 'glm-5.3', overflowModel: 'glm-5.3-flash' })],
   modell: [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ model: 'mistral-large', token: key('modell') })],
   limitausweg: [{ id: 'a1', label: 'Firma', token: tok('limit-firma') }, { id: 'chat', label: 'Chat-Schlüssel', token: tok('limit-chat') }, MEL({ fallback: true, token: key('ausweg') })],
   limitohne: [{ id: 'a1', label: 'Firma', token: tok('limit-firma4') }, { id: 'chat', label: 'Chat-Schlüssel', token: tok('limit-chat4') }, MEL({ token: key('ohne') })],
@@ -53,7 +56,7 @@ before(async () => {
     env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
       WERKBANK_URL: `http://127.0.0.1:${(web.address() as any).port}`, WERKBANK_INTERNAL_TOKEN: 'geheim',
       MELIOUS_BASE_URL: `http://127.0.0.1:${(web.address() as any).port}`,
-      BRIDGE_CLAUDE_HOMES: HOMES, BRIDGE_MAX_PARALLEL_CHATS: '4', WERKBANK_SKILLS_SOURCE: SKILLS, BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: '' },
+      BRIDGE_CLAUDE_HOMES: HOMES, BRIDGE_MAX_PARALLEL_CHATS: '4', WERKBANK_ORCH_ROOTS: ORCH, WERKBANK_SKILLS_SOURCE: SKILLS, BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.stdout!.on('data', (d) => { out += d; });
@@ -66,10 +69,10 @@ before(async () => {
 });
 after(() => { proc.kill(); web.close(); });
 
-async function send(conv: string, content: string, user: string) {
-  const res = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
+async function send(conv: string, content: string, user: string, port = PORT, email?: string) {
+  const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${tok('chat-' + user)}`, 'content-type': 'application/json', 'x-librechat-user-id': user, 'x-librechat-conversation-id': conv },
+    headers: { authorization: `Bearer ${tok('chat-' + user)}`, 'content-type': 'application/json', 'x-librechat-user-id': user, 'x-librechat-conversation-id': conv, ...(email ? { 'x-librechat-user-email': email } : {}) },
     body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content }] }),
   });
   const raw = await res.text();
@@ -127,10 +130,11 @@ test('/melious an → nächster Zug über Melious (Env, Hinweis), Verbrauch an d
   assert.match(a, /Rest bis zum Deckel: 200\.000 Tokens/);
   const n = usage.length;
   const t = await send(conv(2), 'Antworte mit OK', 'an');
-  assert.match(t, /🧪 Dieser Zug läuft über „Melious“ \(Open-Weight-Modell, Ergebnisse prüfen\)/);
-  assert.match(t, /\(Mock\) Melious über http:\/\/127\.0\.0\.1:\d+; OAuth: nein; Betas aus: 1; Modell: Standard\./);
+  assert.match(t, /🧪 Dieser Zug läuft über „Melious“ · Abbildung von „Standardmodell“ \(tatsächliches Modell meldet Melious nicht/);
+  assert.match(t, /Datenregel: keine Kundendaten, keine Schlüssel/);
+  assert.match(t, /\(Mock\) Melious über http:\/\/127\.0\.0\.1:\d+; OAuth: nein; Betas aus: 1; Modell: Standard; Teilagenten: -; MCP: [^;]*; Datenregel: ja; Push gesperrt: ja; Jira gesperrt: ja; Modus: default\./);
   await waitUsage(n + 1);
-  assert.deepEqual(usage.at(-1), { userId: 'an', conv: conv(2), usage: { input: 1200, output: 40, cacheRead: 300, cacheWrite: 0 } });
+  assert.deepEqual(usage.at(-1), { userId: 'an', conv: conv(2), usage: { input: 1200, output: 40, cacheRead: 300, cacheWrite: 0 }, model: null });
   // Anderer Chat derselben Person: Schalter gilt nur je Chat.
   assert.doesNotMatch(await send(conv(3), 'Hallo', 'an'), /Melious/);
   assert.match(await send(conv(2), '/melious aus', 'an'), /für diesen Chat \*\*aus\*\*/);
@@ -141,13 +145,13 @@ test('Modell: Einrichtung als Vorgabe, je Chat überschreibbar (/melious an <mod
   await send(conv(4), '/melious an', 'modell');
   const t = await send(conv(4), 'Hallo', 'modell');
   assert.match(t, /🧪 Dieser Zug läuft über „Melious“ · Modell mistral-large/);
-  assert.match(t, /Modell: mistral-large\./);
+  assert.match(t, /Modell: mistral-large; Teilagenten: mistral-large;/);
   assert.match(await send(conv(4), '/melious modell glm-5.3-flash', 'modell'), /Modell: „glm-5\.3-flash“ \(für diesen Chat\)/);
-  assert.match(await send(conv(4), 'Hallo', 'modell'), /Modell: glm-5\.3-flash\./);
+  assert.match(await send(conv(4), 'Hallo', 'modell'), /Modell: glm-5\.3-flash;/);
   assert.match(await send(conv(4), '/melious modell standard', 'modell'), /Modell: „mistral-large“ \(aus der Einrichtung\)/);
   // Gleich beim Einschalten mit Modell (Knut: Modell je Zug wählen); ungültiger Name wird abgelehnt.
   assert.match(await send(conv(10), '/melious an deepseek-v4.1-flash', 'an'), /Modell: „deepseek-v4\.1-flash“ \(für diesen Chat\)/);
-  assert.match(await send(conv(10), 'Hallo', 'an'), /Modell: deepseek-v4\.1-flash\./);
+  assert.match(await send(conv(10), 'Hallo', 'an'), /Modell: deepseek-v4\.1-flash;/);
   const l = await send(conv(10), '/melious modelle', 'an');
   assert.match(l, /Modelle bei Melious \(3\):/);
   assert.match(l, /`glm-5\.3-flash`/);
@@ -244,6 +248,60 @@ test('Anbieterwechsel zwischen zwei Zügen (Melious → Claude → Melious): kei
   await new Promise((r) => setTimeout(r, 100));
   const lines = out.split('\n').filter((l) => l.includes('"event":"anbieter gewechselt"') && l.includes(c));
   assert.deepEqual(lines.map((l) => JSON.parse(l)).map((j) => `${j.von}>${j.nach}`), ['melious>claude', 'claude>melious']);
+});
+
+test('Datenregel bis AVV: ohne AVV keine Kunden-Werkzeuge, Regel im Systemtext, Push gesperrt; mit AVV wie Claude', async () => {
+  await send(conv(15), '/melious an', 'an');
+  const ohne = await send(conv(15), 'Hallo', 'an');
+  assert.match(ohne, /Datenregel: ja; Push gesperrt: ja; Jira gesperrt: ja;/);
+  assert.doesNotMatch(ohne.match(/MCP: ([^;]*);/)?.[1] ?? '', /atlassian|forge-review/);
+  assert.match(await send(conv(15), '/melious status', 'an'), /⚖️ Datenregel \(dieser Zug läuft über Melious/);
+  await send(conv(16), '/melious an', 'avv');
+  const mit = await send(conv(16), 'Hallo', 'avv');
+  assert.match(mit, /Datenregel: nein; Push gesperrt: nein; Jira gesperrt: nein;/);
+  assert.match(mit, /🧪 Dieser Zug läuft über „Melious“ · Modell glm-5\.3 \(Open-Weight-Modell, Ergebnisse prüfen\)/);
+});
+
+const register = (userId: string, conv: string, extra: Record<string, unknown>) => {
+  const dir = join(ORCH, conv.slice(-4)); mkdirSync(dir, { recursive: true });
+  return fetch(`http://127.0.0.1:${PORT}/internal/orchestrate`, { method: 'POST', headers: { 'x-werkbank-internal': 'geheim', 'content-type': 'application/json' }, body: JSON.stringify({ userId, conv, dir, email: 'knut@x', ...extra }) });
+};
+const orchState = async (user: string) => ((await (await fetch(`http://127.0.0.1:${PORT}/internal/orch-state?user=${user}`, { headers: { 'x-werkbank-internal': 'geheim' } })).json()) as any).strands;
+
+test('Strang mit Modell melious:<id> (S2): läuft ohne Chat-Schalter auf Melious, Modell im Strang-Zustand (S4); ungültiges Modell → 400', async () => {
+  assert.equal((await register('an', conv(17), { modell: 'melious:böse modell' })).status, 400);
+  assert.equal((await register('an', conv(17), { modell: 'melious:glm-5.3-flash', risiko: 'niedrig' })).status, 200);
+  const t = await send(conv(17), 'Hallo', 'an');
+  assert.match(t, /Modell: glm-5\.3-flash; Teilagenten: glm-5\.3-flash;/);
+  assert.match(await send(conv(17), '/melious', 'an'), /Dieser Strang läuft fest auf Melious „glm-5\.3-flash“/);
+  const s = (await orchState('an')).find((x: any) => x.conv === conv(17));
+  assert.deepEqual([s.modell, s.risiko, s.turn.modell], ['melious:glm-5.3-flash', 'niedrig', 'Melious glm-5.3-flash']);
+});
+
+test('Überlauf nach Risiko (S2): Strang „niedrig“ läuft über auf das Überlauf-Modell, „mittel“/ohne Stufe wartet', async () => {
+  await register('limitstrang', conv(18), { risiko: 'niedrig' });
+  const niedrig = await send(conv(18), 'Hallo', 'limitstrang');
+  assert.match(niedrig, /↻ Konto „Melious“ übernimmt/);
+  assert.match(niedrig, /Modell: glm-5\.3-flash;/);   // Überlauf-Modell, nicht das Standardmodell glm-5.3
+  await register('limitstrang', conv(19), {});
+  const mittel = await send(conv(19), 'Hallo', 'limitstrang');
+  assert.doesNotMatch(mittel, /Melious/);
+  assert.match(mittel, /Claude-Kontingent ist gerade ausgeschöpft/);
+});
+
+test('Auto-Modus: Melious-Züge laufen ohne den Klassifikator des SDK (normaler Modus, Hinweis im Systemtext)', async () => {
+  const AUTO = 3393;
+  const p = spawn(process.execPath, ['src/server.ts'], {
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_PORT: String(AUTO), BRIDGE_STATE_DIR: mkdtempSync(join(tmpdir(), 'bridge-mel-auto-')), BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
+      WERKBANK_URL: `http://127.0.0.1:${(web.address() as any).port}`, WERKBANK_INTERNAL_TOKEN: 'geheim', MELIOUS_BASE_URL: `http://127.0.0.1:${(web.address() as any).port}`,
+      BRIDGE_CLAUDE_HOMES: HOMES, WERKBANK_SKILLS_SOURCE: SKILLS, BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: 'auto', BRIDGE_AUTO_EMAILS: 'knut@x' },
+    stdio: 'ignore',
+  });
+  try {
+    for (let i = 0; i < 50; i++) { try { if ((await fetch(`http://127.0.0.1:${AUTO}/health`)).ok) break; } catch {} await new Promise((r) => setTimeout(r, 100)); }
+    await send(conv(20), '/melious an', 'an', AUTO, 'knut@x');
+    assert.match(await send(conv(20), 'Hallo', 'an', AUTO, 'knut@x'), /Modus: default \(Auto aus\)\./);
+  } finally { p.kill(); }
 });
 
 test('/health zählt Melious-Züge ohne Schlüssel; kein Melious-Schlüssel im Log', async () => {

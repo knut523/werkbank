@@ -1,6 +1,6 @@
 # Plan 162 — Melious AI als Test-Konto im Kontowechsel
 
-Stand: gebaut-lokal (14.10.2026). Auftrag Knut 14.10.: Melious (EU, Open-Weight-Modelle, Anthropic-kompatible API) testweise in den
+Stand: gebaut-lokal, offizieller Einbau (14.10.2026). Auftrag Knut 14.10.: Melious (EU, Open-Weight-Modelle, Anthropic-kompatible API) testweise in den
 automatischen Kontowechsel der Werkbank; Zusatz am selben Tag: vorsichtig, Verbrauch messen, Deckel, Standard aus.
 
 ## Ziel
@@ -22,6 +22,41 @@ ausdrücklich einschaltet, und dann sichtbar, gezählt und gedeckelt.
   `assistant`-usages, gezählt wird danach die tatsächliche Summe).
 - Melious hat laut Doku **keine** Verbrauchs-/Kontostand-Schnittstelle (nur `X-RateLimit-*`-Header und `billing_cost` im
   Antwortkörper, die Claude Code nicht weiterreicht) → nur eigene Zählung.
+
+## Offizieller Einbau (Knut 14.10.: „ok passt … lass es uns in den Workspace so offiziell einbauen“)
+Melious wird regulärer Bestandteil, nicht nur Test-Konto. Bindend aus der Modellwahl v2 (Betriebsregeln 1, 3, 4): kein
+Modellwechsel mitten im Strang, Hauptstrang-Modell als Parameter der Brücke je Strang, Anzeige des **tatsächlich** gelaufenen
+Modells, Melious nur mit Datenregel. Die smarte Auswahl selbst (Risikostufe aus Auftrag/Plan) baut Paket 163; hier wird sie
+**vorbereitet**: Schnittstelle, Speicherung, Anwendung in der Brücke.
+
+Schnitte (zusätzlich zu S1 = Commit 9d8eb74):
+- **S2 Modell je Strang/Rolle.** `orch start` und `/internal/orchestrate` nehmen `modell` (`claude:opus|sonnet|haiku` oder
+  `melious:<id>`) und `risiko` (`niedrig|mittel|hoch`) an; die Brücke merkt beides je Strang (orch.json) und wendet es auf jeden
+  Zug an (Melious-Modell = wie `/melious an <id>`, Claude-Modell = Modell der Anfrage). Überlauf auf Melious (letzter Ausweg)
+  nur für Chats und Stränge mit Risiko „niedrig“, mit dem Überlauf-Modell aus der Einrichtung; „hoch“ wartet immer.
+  Einrichtung: Rollen-Tabelle Melious (Standardmodell, Überlauf, Berichte/Texte, Massenarbeit) — Vorgaben nach dem
+  Blindvergleich. Teilagenten laufen beim Anbieter des Hauptzugs (ein Claude-Code-Prozess, eine Basis-URL).
+- **S3 Datenregel bis AVV.** Einstellung „AVV mit Melious liegt vor“ (aus). Solange aus, laufen Melious-Züge ohne die
+  Atlassian- und forge-review-Werkzeuge, mit einem festen Satz im Systemtext (keine Kundendaten, keine Schlüssel, keine Logs mit
+  Personenbezug, keine Push-Vorbereitung). `git push` ist gesperrt, und `/melious an` zeigt die Regel. Schlüssel gehen auch nach
+  dem AVV nie an Melious (die Sitzungsumgebung bleibt geschrubbt).
+- **S4 Tatsächliches Modell.** Offiziell immer mit festem Modellnamen (Vorgabe aus der Einrichtung; ohne Namen zeigt die
+  Statuszeile „Abbildung von <Claude-Name>, tatsächliches Modell nicht gemeldet“). Das Modell steht in der Statuszeile, im Zustand
+  des Strangs (Kopf auf der Hauptchat-Seite) und im Verbrauch (je Tag und Modell).
+- **S5 Blindvergleich.** Der Orchestrator fährt ihn (8 Aufgaben × Haiku/Sonnet/GLM 5.3 Flash/GLM 5.3/DeepSeek V4.1 Flash) und
+  liefert das Ergebnis als Datei. Danach: Vorgaben der Rollen-Tabelle, Bericht mit fairer Einordnung nach Klassen.
+
+Entscheidungen dazu (Bericht, „- Knut:“): Vorgabe-Modelle je Rolle nach dem Vergleich; ob Stränge ohne Risikostufe als
+„mittel“ gelten (kein Überlauf).
+
+Nachgezogen beim Bau:
+- Vorgabe-Modell `glm-5.3-flash` (Blindvergleich: gleichauf mit Haiku, GLM 5.3 deutlich langsamer), per `MELIOUS_MODELL`.
+- **Kein Auto-Modus-Klassifikator über Melious:** Claude Code meldet über das Gateway, dass die neue Klassifikator-Version nicht
+  unterstützt wird; er liefe sonst über das Open-Weight-Modell. Melious-Züge laufen im normalen Modus (Rückfrage im Chat, im
+  Strang abgelehnt). Eine Lockerung (Datei-Änderungen ohne Rückfrage) ist eine Entscheidung für Knut.
+- Datenregel sperrt zusätzlich die Jira-Werkzeuge des Werkbank-MCP (`jira_update*`, `hygiene_*`); der Hauptchat nimmt kein
+  `modell`/`risiko` an (Review 2).
+- Fehlerart „Guthaben leer“ (echter Test: 403 `permission_error` „Insufficient credits“) bis Monatswechsel, zurücksetzbar.
 
 ## Zusatz 2 (Knut 14.10.: PRO-Plan mit GLM 5.3, GLM 5.3 Flash, DeepSeek V4.1 Flash, DeepSeek V4 Flash)
 - Modell je Chat statt nur der opus/sonnet/haiku-Abbildung: `/melious an <modell>`, `/melious modell <name|standard>`,

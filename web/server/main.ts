@@ -523,8 +523,8 @@ on('GET', /^\/api\/melious\/usage$/, async (req, res) => {
   send(res, 200, s.configured ? { enabled: s.enabled, fallback: s.fallback, ...(await meliousUsage(u)) } : { configured: false });
 });
 
-async function meliousBooking(u: User, usage: unknown) {
-  const r = await recordMeliousUsage(u, usage);
+async function meliousBooking(u: User, usage: unknown, model?: unknown) {
+  const r = await recordMeliousUsage(u, usage, Date.now(), model);
   for (const c of r.crossed) {
     const sent = await hinweisMelious(u, `${c.period === 'tag' ? r.usage.day : r.usage.month}:${c.at}`, schwelleText(c, r.usage)).catch(() => false);
     log('melious schwelle', { user: u.id, zeitraum: c.period, prozent: c.at, hauptchat: sent });
@@ -2483,7 +2483,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
   const id = String(b.id ?? '');
   switch (m[1]) {
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null });
       return send(res, 200, r);
     }
@@ -2559,7 +2559,7 @@ on('POST', /^\/internal\/claude-accounts$/, async (req, res) => {
 on('POST', /^\/internal\/melious-usage$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
-  const r = await meliousBooking(u, b.usage);
+  const r = await meliousBooking(u, b.usage, b.model);
   log('melious verbrauch', { user: u.id, heute: r.usage.heute.total, monat: r.usage.monat.total });
   send(res, 200, { ok: true, rest: r.usage.rest, sperre: r.usage.sperre });
 });

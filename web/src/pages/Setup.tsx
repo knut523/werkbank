@@ -233,11 +233,11 @@ function MeliousAccount() {
     try { await fn(); await l.reload(); } catch (e) { setErr(e); } finally { setBusy(''); }
   };
   const put = (body: Record<string, unknown>) => api('/api/setup/melious', { method: 'PUT', body });
-  const f = form ?? { model: d.model ?? '', dayLimit: String(d.dayLimit), monthLimit: String(d.monthLimit) };
+  const f = form ?? { model: d.model ?? '', overflowModel: d.overflowModel ?? '', dayLimit: String(d.dayLimit), monthLimit: String(d.monthLimit) };
   const u = d.usage;
   return (
     <div data-testid="melious-account" style={{ marginTop: 16 }}>
-      <h4 style={{ margin: '0 0 4px' }}>Melious (Test) — Open-Weight-Modelle aus der EU</h4>
+      <h4 style={{ margin: '0 0 4px' }}>Melious — Open-Weight-Modelle aus der EU</h4>
       <p className="small" style={{ marginTop: 0 }}>Zusätzliches Konto über die Anthropic-kompatible API von Melious. <b>Standard aus:</b> genommen wird es nur, wenn es hier erlaubt ist, und dann nur in Chats mit <code>/melious an</code> — oder, wenn du es extra einschaltest, als letzter Ausweg, wenn alle Claude-Konten erschöpft sind. Nie in der Lastverteilung. Ergebnisse von Open-Weight-Modellen bitte prüfen.</p>
       {d.configured ? (
         <>
@@ -250,7 +250,7 @@ function MeliousAccount() {
           </div>
           <div className="row small" style={{ gap: 16, marginTop: 6 }}>
             <label><input type="checkbox" aria-label="Melious erlauben" checked={d.enabled} disabled={!!busy} onChange={(e) => run('enabled', () => put({ enabled: e.target.checked }))} /> Melious erlauben (Chats mit <code>/melious an</code>)</label>
-            <label><input type="checkbox" aria-label="Melious als letzter Ausweg" checked={d.fallback} disabled={!!busy || !d.enabled} onChange={(e) => run('fallback', () => put({ fallback: e.target.checked }))} /> auch als letzter Ausweg, wenn alle Claude-Konten erschöpft sind</label>
+            <label><input type="checkbox" aria-label="Melious als letzter Ausweg" checked={d.fallback} disabled={!!busy || !d.enabled} onChange={(e) => run('fallback', () => put({ fallback: e.target.checked }))} /> auch als letzter Ausweg, wenn alle Claude-Konten erschöpft sind (nur Chats und Stränge mit Risiko „niedrig“, nie der Hauptchat)</label>
           </div>
           <table className="t small" style={{ marginTop: 8 }} data-testid="melious-usage">
             <thead><tr><th>Verbrauch</th><th>Input</th><th>Output</th><th>Cache-Read</th><th>Summe / Deckel</th></tr></thead>
@@ -258,11 +258,20 @@ function MeliousAccount() {
               <tr key={n}><td>{n} ({z(p.turns)} Züge)</td><td>{z(p.input)}</td><td>{z(p.output)}</td><td>{z(p.cacheRead)}</td><td><b>{z(p.total)}</b> / {z(p.limit)} ({p.pct} %)</td></tr>
             ))}</tbody>
           </table>
+          {u.modelle?.length > 0 && <p className="small" data-testid="melious-modelle" style={{ margin: '4px 0' }}>Monat je Modell: {u.modelle.map((m: any) => `${m.model === 'abbildung' ? 'Abbildung (ohne festes Modell)' : m.model} ${z(m.total)} (${z(m.turns)} Züge)`).join(' · ')}</p>}
+          <label className="small" style={{ display: 'block', marginTop: 6 }}>
+            <input type="checkbox" aria-label="AVV mit Melious liegt vor" data-testid="melious-avv" checked={d.avv} disabled={!!busy} onChange={async (e) => {
+              const on = e.target.checked;
+              if (on && !(await confirm({ title: 'AVV mit Melious liegt vor?', body: <p>Nur anhaken, wenn der Auftragsverarbeitungsvertrag mit Melious unterschrieben ist. Dann fällt die Datenregel weg (Jira-/Review-Werkzeuge in Melious-Zügen, kein Hinweis). Schlüssel und Zugangsdaten gehen auch dann nie an Melious.</p>, confirmLabel: 'AVV liegt vor' }))) return;
+              run('avv', () => put({ avv: on }));
+            }} /> AVV mit Melious liegt vor{!d.avv && <span className="tiny muted"> — bis dahin gilt in Melious-Zügen die Datenregel: keine Kundendaten, keine Schlüssel, keine Jira-/Review-Werkzeuge, kein Push</span>}
+          </label>
           <p className="tiny">Quelle: {u.quelle}. Summe = Input + Output + Cache-Read + Cache-Write. Bei 80 % kommt ein Hinweis in den Hauptchat, bei 100 % ist Melious bis zum Ende des Zeitraums gesperrt.</p>
-          <form className="row small" style={{ marginTop: 4 }} onSubmit={(e) => { e.preventDefault(); run('limits', async () => { await put({ model: f.model, dayLimit: f.dayLimit, monthLimit: f.monthLimit }); setForm(null); toast('Melious-Einstellungen gespeichert'); }); }}>
+          <form className="row small" style={{ marginTop: 4 }} onSubmit={(e) => { e.preventDefault(); run('limits', async () => { await put({ model: f.model, overflowModel: f.overflowModel, dayLimit: f.dayLimit, monthLimit: f.monthLimit }); setForm(null); toast('Melious-Einstellungen gespeichert'); }); }}>
             <label>Tagesdeckel <input aria-label="Tagesdeckel in Tokens" inputMode="numeric" value={f.dayLimit} onChange={(e) => setForm({ ...f, dayLimit: e.target.value })} style={{ width: 110 }} /></label>
             <label>Monatsdeckel <input aria-label="Monatsdeckel in Tokens" inputMode="numeric" value={f.monthLimit} onChange={(e) => setForm({ ...f, monthLimit: e.target.value })} style={{ width: 120 }} /></label>
-            <label>Modell <input aria-label="Melious-Modell" placeholder="leer = Claude-Namen abbilden" value={f.model} onChange={(e) => setForm({ ...f, model: e.target.value })} style={{ width: 200 }} /></label>
+            <label>Modell <input aria-label="Melious-Modell" placeholder="z. B. glm-5.3-flash" value={f.model} onChange={(e) => setForm({ ...f, model: e.target.value })} style={{ width: 160 }} /></label>
+            <label>Überlauf <input aria-label="Melious-Überlauf-Modell" placeholder="leer = Modell" value={f.overflowModel} onChange={(e) => setForm({ ...f, overflowModel: e.target.value })} style={{ width: 160 }} /></label>
             <button className="btn small" disabled={!form || busy === 'limits'}>Speichern</button>
           </form>
           <div className="row" style={{ gap: 6, marginTop: 6 }}>

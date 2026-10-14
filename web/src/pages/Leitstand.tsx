@@ -124,6 +124,8 @@ function Strand({ s }: { s: any }) {
         {s.reason ? <>{s.reason} · </> : null}
         {s.autoWeiter > 0 && <>automatisch fortgesetzt ({s.autoWeiter}) · </>}
         {s.reviewedBy === 'leitstand' && !s.knutReviewed && <>vom Hauptchat abgelegt · </>}
+        {/* Plan 162, S4: tatsächlich gelaufenes Modell des letzten Zugs (sonst das beim Start gesetzte). */}
+        {(s.modell || s.modellPlan) && <span data-testid="strand-modell">{s.modell ? `Modell ${s.modell}` : `Modell ${s.modellPlan} (geplant)`} · </span>}
         zuletzt {fmtDateTime(s.lastActivity)}
       </div>
       {/* Plan 144 (Knut 12.10.): je Unter-Chat drei Links — Chat · Auftrag · Bericht; fehlt eine Datei, steht das da. */}

@@ -22,6 +22,8 @@ export interface Account {
   rest?: number;           // Melious: verbleibende Tokens bis zum Tages-/Monatsdeckel (Werkbank)
   fallback?: boolean;      // Melious: auch als letzter Ausweg, wenn alle Claude-Konten erschöpft sind
   sperre?: string;         // Melious: warum gesperrt (Deckel), für die Meldung
+  overflowModel?: string;  // Melious: Modell für den Überlauf (letzter Ausweg); leer = model
+  avv?: boolean;           // Melious: AVV liegt vor — ohne ihn gilt die Datenregel (keine Kunden-Werkzeuge, kein Push)
 }
 export type Exhausted = Record<string, { until: number; fp?: string }>;
 
@@ -128,7 +130,7 @@ export function resetMs(v: unknown): number | undefined {
 }
 
 /** Konten in Reihenfolge, ohne Doppelte; `chat` (token null) = der Schlüssel aus der Anfrage. Immer mindestens dieser. */
-export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?: unknown; kind?: unknown; model?: unknown; rest?: unknown; fallback?: unknown; sperre?: unknown }[] | null | undefined, chatToken: string): Account[] {
+export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?: unknown; kind?: unknown; model?: unknown; overflowModel?: unknown; avv?: unknown; rest?: unknown; fallback?: unknown; sperre?: unknown }[] | null | undefined, chatToken: string): Account[] {
   const out: Account[] = [];
   const seen = new Set<string>();
   for (const a of list ?? []) {
@@ -137,8 +139,8 @@ export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?:
       const token = typeof a.token === 'string' ? a.token : '';
       if (id !== MELIOUS_ID || !MELIOUS_KEY.test(token) || seen.has(token) || out.some(isMelious)) continue;
       seen.add(token);
-      const model = typeof a.model === 'string' && /^[\w.:/-]{1,80}$/.test(a.model) ? a.model : undefined;
-      out.push({ id, label: MELIOUS_LABEL, token, kind: 'melious', model, rest: Math.max(0, Number(a.rest) || 0), fallback: a.fallback === true, sperre: typeof a.sperre === 'string' ? a.sperre.slice(0, 160) : undefined });
+      const name = (v: unknown) => (typeof v === 'string' && /^[\w.:/-]{1,80}$/.test(v) ? v : undefined);
+      out.push({ id, label: MELIOUS_LABEL, token, kind: 'melious', model: name(a.model), overflowModel: name(a.overflowModel), avv: a.avv === true, rest: Math.max(0, Number(a.rest) || 0), fallback: a.fallback === true, sperre: typeof a.sperre === 'string' ? a.sperre.slice(0, 160) : undefined });
       continue;
     }
     const token = id === 'chat' ? chatToken : typeof a?.token === 'string' ? a.token : '';
@@ -165,15 +167,15 @@ export const isMelious = (a?: Account | null) => a?.kind === 'melious';
 
 /**
  * Warteschlange eines Zugs: Claude-Konten wie bisher (frei, verteilt), dazu Melious — vorne mit Chat-Schalter, hinten als
- * letzter Ausweg (nur mit `fallback`). Erschöpft oder Deckel erreicht → nicht dabei.
+ * letzter Ausweg (nur mit `fallback` und wenn der Zug überlaufen darf: Risiko „niedrig“). Erschöpft oder Deckel erreicht → nie.
  */
-export function planQueue(accounts: Account[], ex: Exhausted, o: { conv: string; chatOn: boolean; now?: number }): Account[] {
+export function planQueue(accounts: Account[], ex: Exhausted, o: { conv: string; chatOn: boolean; overflow?: boolean; now?: number }): Account[] {
   const now = o.now ?? Date.now();
   const mel = accounts.find(isMelious);
   const queue = orderForTurn(pickAccounts(accounts.filter((a) => !isMelious(a)), ex, now), o.conv);
   if (!mel || !meliousUsable(mel, ex, now)) return queue;
   if (o.chatOn) return [mel, ...queue];
-  return mel.fallback ? [...queue, mel] : queue;
+  return mel.fallback && o.overflow !== false ? [...queue, mel] : queue;
 }
 
 export function meliousUsable(mel: Account, ex: Exhausted, now = Date.now()): boolean {
