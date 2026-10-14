@@ -51,12 +51,12 @@ try {
   await say('/melious an');
   await p.getByText(/Melious ist für diesen Chat an/).first().waitFor({ timeout: 30000 });
   check('/melious an → Bestätigung mit Rest bis zum Deckel', await p.getByText(/Rest bis zum Deckel: 200\.000 Tokens/).first().isVisible());
-  check('/melious an → Datenregel bis AVV sichtbar, Vorgabe-Modell glm-5.3-flash', await p.getByText(/Datenregel \(dieser Zug läuft über Melious/).first().isVisible() && await p.getByText(/Modell: „glm-5\.3-flash“ \(aus der Einrichtung\)/).first().isVisible());
+  check('/melious an → Lastverteilung über die Modelle der Rolle, keine Datenregel', await p.getByText(/verteilt über glm-5\.3-flash, glm-5\.3, deepseek-v4\.1-flash/).first().isVisible() && !(await p.getByText(/Datenregel/).count()));
   await p.waitForTimeout(1500);
   await say('Antworte mit OK');
   await p.getByText(/Dieser Zug läuft über „Melious“/).first().waitFor({ timeout: 60000 });
   await p.getByText('OK', { exact: true }).first().waitFor({ timeout: 60000 });
-  check('Kurzer Zug über Melious, sichtbar als „🧪 … · Modell glm-5.3-flash (Open-Weight-Modell, Ergebnisse prüfen; Datenregel …)“', await p.getByText(/Dieser Zug läuft über „Melious“ · Modell glm-5\.3-flash \(Open-Weight-Modell, Ergebnisse prüfen; Datenregel/).first().isVisible());
+  check('Kurzer Zug über Melious, verteiltes Modell sichtbar: „🧪 … · Modell glm-5.3-flash (Open-Weight-Modell, Ergebnisse prüfen)“', await p.getByText(/Dieser Zug läuft über „Melious“ · Modell glm-5\.3-flash \(Open-Weight-Modell, Ergebnisse prüfen\)/).first().isVisible());
   await p.waitForTimeout(1500);
   await say('Lies bitte die Datei Home.md im Vault');
   await p.getByText(/Datei gelesen \(Stub\)/).first().waitFor({ timeout: 90000 });
@@ -72,7 +72,8 @@ try {
   await p.waitForTimeout(800);
   const usage = await f.locator('[data-testid=melious-usage]').innerText();
   check('Verbrauch heute gezählt (eigene Zählung, Züge > 0)', /heute \([1-9]\d* Züge\)/.test(usage), usage.replace(/\s+/g, ' ').slice(0, 160));
-  check('AVV-Schalter (aus) und Verbrauch je Modell', !(await f.locator('[data-testid=melious-avv]').isChecked()) && /glm-5\.3-flash/.test(await f.locator('[data-testid=melious-modelle]').innerText()));
+  const kont = await f.locator('[data-testid=melious-modelle]').innerText();
+  check('Melious-Kontingent je Modell (verbraucht / Kontingent / frei / Rollen), kein AVV-Schalter', /glm-5\.3-flash/.test(kont) && /25 Mrd\./.test(kont) && /2,5 Mrd\./.test(kont) && !(await f.locator('[data-testid=melious-avv]').count()), kont.replace(/\s+/g, ' ').slice(0, 200));
   await f.locator('[data-testid=melious-account]').screenshot({ path: join(OUT, '1440-einrichtung-melious.png') });
 
   // Hauptchat-Seite: Kachel „Melious heute / Monat“.

@@ -22,8 +22,9 @@ export interface Account {
   rest?: number;           // Melious: verbleibende Tokens bis zum Tages-/Monatsdeckel (Werkbank)
   fallback?: boolean;      // Melious: auch als letzter Ausweg, wenn alle Claude-Konten erschöpft sind
   sperre?: string;         // Melious: warum gesperrt (Deckel), für die Meldung
-  overflowModel?: string;  // Melious: Modell für den Überlauf (letzter Ausweg); leer = model
-  avv?: boolean;           // Melious: AVV liegt vor — ohne ihn gilt die Datenregel (keine Kunden-Werkzeuge, kein Push)
+  // Melious-Lastverteilung (S7): Modelle mit freiem Monatsanteil (0..1, absteigend, Werkbank) und zulässige Modelle je Rolle.
+  pool?: { model: string; frei: number }[];
+  rollen?: Record<string, string[]>;
 }
 export type Exhausted = Record<string, { until: number; fp?: string }>;
 
@@ -129,8 +130,17 @@ export function resetMs(v: unknown): number | undefined {
   return n < 1e12 ? n * 1000 : n;
 }
 
+const MODEL_NAME = /^[\w.:/-]{1,80}$/;
+/** Pool der Lastverteilung aus der Werkbank: gültige Namen, frei in [0,1], absteigend nach frei. */
+const poolOf = (v: unknown) => (Array.isArray(v) ? v : [])
+  .filter((p: any) => typeof p?.model === 'string' && MODEL_NAME.test(p.model) && Number.isFinite(Number(p.frei)))
+  .map((p: any) => ({ model: p.model as string, frei: Math.max(0, Math.min(1, Number(p.frei))) }))
+  .sort((x, y) => y.frei - x.frei).slice(0, 20);
+const rollenOf = (v: unknown): Record<string, string[]> => Object.fromEntries(Object.entries(v && typeof v === 'object' ? v : {})
+  .filter(([k, l]) => /^[a-z]{1,20}$/.test(k) && Array.isArray(l)).map(([k, l]) => [k, (l as unknown[]).filter((m): m is string => typeof m === 'string' && MODEL_NAME.test(m)).slice(0, 20)]));
+
 /** Konten in Reihenfolge, ohne Doppelte; `chat` (token null) = der Schlüssel aus der Anfrage. Immer mindestens dieser. */
-export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?: unknown; kind?: unknown; model?: unknown; overflowModel?: unknown; avv?: unknown; rest?: unknown; fallback?: unknown; sperre?: unknown }[] | null | undefined, chatToken: string): Account[] {
+export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?: unknown; kind?: unknown; model?: unknown; pool?: unknown; rollen?: unknown; rest?: unknown; fallback?: unknown; sperre?: unknown }[] | null | undefined, chatToken: string): Account[] {
   const out: Account[] = [];
   const seen = new Set<string>();
   for (const a of list ?? []) {
@@ -140,7 +150,7 @@ export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?:
       if (id !== MELIOUS_ID || !MELIOUS_KEY.test(token) || seen.has(token) || out.some(isMelious)) continue;
       seen.add(token);
       const name = (v: unknown) => (typeof v === 'string' && /^[\w.:/-]{1,80}$/.test(v) ? v : undefined);
-      out.push({ id, label: MELIOUS_LABEL, token, kind: 'melious', model: name(a.model), overflowModel: name(a.overflowModel), avv: a.avv === true, rest: Math.max(0, Number(a.rest) || 0), fallback: a.fallback === true, sperre: typeof a.sperre === 'string' ? a.sperre.slice(0, 160) : undefined });
+      out.push({ id, label: MELIOUS_LABEL, token, kind: 'melious', model: name(a.model), pool: poolOf(a.pool), rollen: rollenOf(a.rollen), rest: Math.max(0, Number(a.rest) || 0), fallback: a.fallback === true, sperre: typeof a.sperre === 'string' ? a.sperre.slice(0, 160) : undefined });
       continue;
     }
     const token = id === 'chat' ? chatToken : typeof a?.token === 'string' ? a.token : '';

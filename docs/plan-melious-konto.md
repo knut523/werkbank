@@ -67,6 +67,29 @@ Nachgezogen beim Bau:
   - Geprüft mit echtem Claude Code gegen den Stub: 8,2 KB statt 89 KB je Anfrage. Der PreToolUse-Wächter der Brücke läuft
     auch unter `--bare` (Lesen in fremden Arbeitsordnern abgelehnt).
   - Lesende Bash-Befehle bleiben „Rückfrage“ (keine neue Ausnahme), darum ist Code-Suche Sache des Profils `bauer`.
+## Nacharbeit nach Knuts Review (14.10.)
+- **Keine Sperren mehr** („Datenregel passt schon, bitte nicht blocken. Melious darf alles, was Claude auch darf“): Melious-Züge
+  mit denselben MCP-Servern, Werkzeugen und demselben Rechte-Modus wie Claude; Sperr-Satz, AVV-Schalter und Push-Sperre entfallen.
+- **Auto-Modus wie bei Claude (Variante c).** Geprüft mit echtem Claude Code gegen einen Stub (14.10.):
+  - Für riskante Befehle schickt Claude Code den Klassifikator („security monitor“, Modell `claude-sonnet-5`) an die
+    Basis-URL; dort bildet Melious den Namen ab.
+  - Ist die Antwort unverständlich, sperrt der Klassifikator den Befehl.
+  - Harmlose Befehle laufen ohne Klassifikator — wie bei Claude.
+- **S7 Lastverteilung** („Last auf alle Melious-Modelle verteilen, um alle Token zu nutzen“): Kontingent je Modell (PRO:
+  GLM 5.3 2,5 Mrd., GLM 5.3 Flash / DeepSeek V4.1 Flash / DeepSeek V4 Flash je 25 Mrd. je Monat; Einstellungen) und zulässige
+  Modelle je Rolle (`leser`, `niedrig`; Vorgabe GLM 5.3 Flash, GLM 5.3, DeepSeek V4.1 Flash — V4 Flash erst nach dem Test).
+  - Die Brücke wählt beim ersten Melious-Zug eines Strangs bzw. Chats das zulässige Modell mit dem größten freien Monatsanteil.
+    Bei Gleichstand nimmt sie das größere Kontingent.
+  - Danach behält der Strang bzw. Chat sein Modell (Cache), solange es frei ist.
+  - Ein festes Modell (Einrichtung, `/melious an <modell>`, `--modell melious:<id>`) überstimmt die Verteilung;
+    `--modell melious:auto` = Verteilung.
+  - Anzeige: „Melious-Kontingent je Modell“ in der Einrichtung und als Kurzzeile in der Kachel.
+- **Mehr Tests vor den endgültigen Listen** (läuft beim Orchestrator, Schlüssel nur dort):
+  - zehn Aufgaben direkt mit `claude -p` für alle vier PRO-Modelle plus Haiku/Sonnet, blind bewertet;
+  - ein echter kleiner Schnitt (Mini-Spec über drei Module plus Tests) je Modell mit versteckten Tests und blindem Opus-Review.
+
+  Die Skripte liegen im Review-Paket.
+
 - Korrektur zur Token-Aussage: Melious meldet alle Eingaben als Cache-Treffer; der Mehrverbrauch kommt von mehr Zügen, nicht
   von fehlendem Caching.
 

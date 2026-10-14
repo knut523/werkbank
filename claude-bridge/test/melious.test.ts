@@ -26,8 +26,7 @@ const MEL = (o: Record<string, unknown> = {}) => ({ id: 'melious', label: 'Melio
 const ACCOUNTS: Record<string, unknown[]> = {
   aus: [{ id: 'chat', label: 'Chat-Schlüssel', token: null }],
   an: [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL()],
-  avv: [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ token: key('avv'), avv: true, model: 'glm-5.3' })],
-  limitstrang: [{ id: 'a1', label: 'Firma', token: tok('limit-strang') }, { id: 'chat', label: 'Chat-Schlüssel', token: tok('limit-strangchat') }, MEL({ token: key('strang'), fallback: true, model: 'glm-5.3', overflowModel: 'glm-5.3-flash' })],
+  limitstrang: [{ id: 'a1', label: 'Firma', token: tok('limit-strang') }, { id: 'chat', label: 'Chat-Schlüssel', token: tok('limit-strangchat') }, MEL({ token: key('strang'), fallback: true, pool: [{ model: 'glm-5.3-flash', frei: 0.8 }, { model: 'glm-5.3', frei: 0.9 }], rollen: { niedrig: ['glm-5.3-flash'] } })],
   modell: [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ model: 'mistral-large', token: key('modell') })],
   limitausweg: [{ id: 'a1', label: 'Firma', token: tok('limit-firma') }, { id: 'chat', label: 'Chat-Schlüssel', token: tok('limit-chat') }, MEL({ fallback: true, token: key('ausweg') })],
   limitohne: [{ id: 'a1', label: 'Firma', token: tok('limit-firma4') }, { id: 'chat', label: 'Chat-Schlüssel', token: tok('limit-chat4') }, MEL({ token: key('ohne') })],
@@ -131,8 +130,7 @@ test('/melious an → nächster Zug über Melious (Env, Hinweis), Verbrauch an d
   const n = usage.length;
   const t = await send(conv(2), 'Antworte mit OK', 'an');
   assert.match(t, /🧪 Dieser Zug läuft über „Melious“ · Abbildung von „Standardmodell“ \(tatsächliches Modell meldet Melious nicht/);
-  assert.match(t, /Datenregel: keine Kundendaten, keine Schlüssel/);
-  assert.match(t, /\(Mock\) Melious über http:\/\/127\.0\.0\.1:\d+; OAuth: nein; Betas aus: 1; Modell: Standard; Teilagenten: -; MCP: [^;]*; Datenregel: ja; Push gesperrt: ja; Jira gesperrt: ja; Modus: default\./);
+  assert.match(t, /\(Mock\) Melious über http:\/\/127\.0\.0\.1:\d+; OAuth: nein; Betas aus: 1; Modell: Standard; Teilagenten: -; MCP: [^;]*; Datenregel: nein; Push gesperrt: nein; Jira gesperrt: nein; Modus: default\./);
   await waitUsage(n + 1);
   assert.deepEqual(usage.at(-1), { userId: 'an', conv: conv(2), usage: { input: 1200, output: 40, cacheRead: 300, cacheWrite: 0 }, model: null });
   // Anderer Chat derselben Person: Schalter gilt nur je Chat.
@@ -250,16 +248,33 @@ test('Anbieterwechsel zwischen zwei Zügen (Melious → Claude → Melious): kei
   assert.deepEqual(lines.map((l) => JSON.parse(l)).map((j) => `${j.von}>${j.nach}`), ['melious>claude', 'claude>melious']);
 });
 
-test('Datenregel bis AVV: ohne AVV keine Kunden-Werkzeuge, Regel im Systemtext, Push gesperrt; mit AVV wie Claude', async () => {
+test('Melious darf, was Claude darf (Knut 14.10.): gleiche MCP-Server und Werkzeuge, kein Sperr-Satz, kein Push-Verbot', async () => {
   await send(conv(15), '/melious an', 'an');
-  const ohne = await send(conv(15), 'Hallo', 'an');
-  assert.match(ohne, /Datenregel: ja; Push gesperrt: ja; Jira gesperrt: ja;/);
-  assert.doesNotMatch(ohne.match(/MCP: ([^;]*);/)?.[1] ?? '', /atlassian|forge-review/);
-  assert.match(await send(conv(15), '/melious status', 'an'), /⚖️ Datenregel \(dieser Zug läuft über Melious/);
-  await send(conv(16), '/melious an', 'avv');
-  const mit = await send(conv(16), 'Hallo', 'avv');
-  assert.match(mit, /Datenregel: nein; Push gesperrt: nein; Jira gesperrt: nein;/);
-  assert.match(mit, /🧪 Dieser Zug läuft über „Melious“ · Modell glm-5\.3 \(Open-Weight-Modell, Ergebnisse prüfen\)/);
+  const mel = await send(conv(15), 'Hallo', 'an');
+  assert.match(mel, /Datenregel: nein; Push gesperrt: nein; Jira gesperrt: nein;/);
+  assert.doesNotMatch(await send(conv(15), '/melious status', 'an'), /Datenregel/);
+  const claude = await send(conv(21), 'Hallo', 'an');   // derselbe Mensch, Chat ohne Melious
+  assert.doesNotMatch(claude, /Melious über/);
+});
+
+test('Lastverteilung (S7): Modell der Rolle mit dem größten freien Anteil, danach fest für den Chat; Strang melious:auto mit Rolle „leser“', async () => {
+  const base = { token: key('pool'), rollen: { niedrig: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'glm-5.3'], leser: ['glm-5.3'] } };
+  ACCOUNTS.pool = [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ ...base, pool: [{ model: 'deepseek-v4-flash-0731', frei: 1 }, { model: 'deepseek-v4.1-flash', frei: 0.9 }, { model: 'glm-5.3-flash', frei: 0.5 }, { model: 'glm-5.3', frei: 0.2 }] })];
+  assert.match(await send(conv(22), '/melious an', 'pool'), /verteilt über glm-5\.3-flash, deepseek-v4\.1-flash, glm-5\.3/);
+  assert.match(await send(conv(22), 'Hallo', 'pool'), /Modell: deepseek-v4\.1-flash;/);   // V4 Flash ist nicht in der Rolle
+  // Andere Lage beim nächsten Zug: der Chat behält sein Modell (Cache), ein neuer Chat bekommt das jetzt freieste.
+  ACCOUNTS.pool[1] = MEL({ ...base, pool: [{ model: 'glm-5.3-flash', frei: 0.95 }, { model: 'deepseek-v4.1-flash', frei: 0.6 }] });
+  assert.match(await send(conv(22), 'Noch einmal', 'pool'), /Modell: deepseek-v4\.1-flash;/);
+  await send(conv(23), '/melious an', 'pool');
+  assert.match(await send(conv(23), 'Hallo', 'pool'), /Modell: glm-5\.3-flash;/);
+  // Modell aufgebraucht (nicht mehr im Pool) → der Chat wechselt auf das nächste freie.
+  ACCOUNTS.pool[1] = MEL({ ...base, pool: [{ model: 'glm-5.3', frei: 0.4 }] });
+  assert.match(await send(conv(22), 'Und jetzt', 'pool'), /Modell: glm-5\.3;/);
+  // Strang mit Modell melious:auto und Profil leser: Liste der Rolle „leser“.
+  ACCOUNTS.pool[1] = MEL({ ...base, pool: [{ model: 'glm-5.3-flash', frei: 1 }, { model: 'glm-5.3', frei: 0.3 }] });
+  assert.equal((await register('pool', conv(24), { modell: 'melious:auto', profil: 'leser' })).status, 200);
+  assert.match(await send(conv(24), 'PROFIL?', 'pool'), /Melious ja\./);
+  assert.match(await send(conv(24), 'Hallo', 'pool'), /Modell: glm-5\.3;/);
 });
 
 const register = (userId: string, conv: string, extra: Record<string, unknown>) => {
@@ -278,18 +293,18 @@ test('Strang mit Modell melious:<id> (S2): läuft ohne Chat-Schalter auf Melious
   assert.deepEqual([s.modell, s.risiko, s.turn.modell], ['melious:glm-5.3-flash', 'niedrig', 'Melious glm-5.3-flash']);
 });
 
-test('Überlauf nach Risiko (S2): Strang „niedrig“ läuft über auf das Überlauf-Modell, „mittel“/ohne Stufe wartet', async () => {
+test('Überlauf nach Risiko (S2): Strang „niedrig“ läuft über (Modell aus der Verteilung der Rolle), „mittel“/ohne Stufe wartet', async () => {
   await register('limitstrang', conv(18), { risiko: 'niedrig' });
   const niedrig = await send(conv(18), 'Hallo', 'limitstrang');
   assert.match(niedrig, /↻ Konto „Melious“ übernimmt/);
-  assert.match(niedrig, /Modell: glm-5\.3-flash;/);   // Überlauf-Modell, nicht das Standardmodell glm-5.3
+  assert.match(niedrig, /Modell: glm-5\.3-flash;/);   // aus der Rolle „niedrig“, nicht das freiere glm-5.3 (nicht zulässig)
   await register('limitstrang', conv(19), {});
   const mittel = await send(conv(19), 'Hallo', 'limitstrang');
   assert.doesNotMatch(mittel, /Melious/);
   assert.match(mittel, /Claude-Kontingent ist gerade ausgeschöpft/);
 });
 
-test('Auto-Modus: Melious-Züge laufen ohne den Klassifikator des SDK (normaler Modus, Hinweis im Systemtext)', async () => {
+test('Auto-Modus: Melious-Züge laufen wie Claude-Züge im Auto-Modus (Klassifikator über das Gateway, geprüft mit echtem Claude Code)', async () => {
   const AUTO = 3393;
   const p = spawn(process.execPath, ['src/server.ts'], {
     env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_PORT: String(AUTO), BRIDGE_STATE_DIR: mkdtempSync(join(tmpdir(), 'bridge-mel-auto-')), BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
@@ -300,7 +315,7 @@ test('Auto-Modus: Melious-Züge laufen ohne den Klassifikator des SDK (normaler 
   try {
     for (let i = 0; i < 50; i++) { try { if ((await fetch(`http://127.0.0.1:${AUTO}/health`)).ok) break; } catch {} await new Promise((r) => setTimeout(r, 100)); }
     await send(conv(20), '/melious an', 'an', AUTO, 'knut@x');
-    assert.match(await send(conv(20), 'Hallo', 'an', AUTO, 'knut@x'), /Modus: default \(Auto aus\)\./);
+    assert.match(await send(conv(20), 'Hallo', 'an', AUTO, 'knut@x'), /Modus: auto\./);
   } finally { p.kill(); }
 });
 

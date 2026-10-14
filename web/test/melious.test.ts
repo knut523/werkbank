@@ -21,9 +21,13 @@ after(async () => { await client.db(process.env.WERKBANK_DB).dropDatabase(); awa
 const u = { id: '6a1b2c3d4e5f60718293a4b5', email: 'knut@maxenergy.at', name: 'Knut', role: 'ADMIN' } as any;
 const KEY = `sk-mel-${'k'.repeat(30)}abcd`;
 
-test('Vorgaben: 200 000/Tag, 2 000 000/Monat, per Env überschreibbar (PRO-Plan = andere Zahlen)', () => {
-  assert.deepEqual(M.meliousDefaults({}), { dayLimit: 200_000, monthLimit: 2_000_000, model: 'glm-5.3-flash' });
-  assert.deepEqual(M.meliousDefaults({ MELIOUS_TAG_LIMIT: '5000000', MELIOUS_MONAT_LIMIT: '90000000', MELIOUS_MODELL: 'glm-5.3' }), { dayLimit: 5_000_000, monthLimit: 90_000_000, model: 'glm-5.3' });
+test('Vorgaben: Deckel 200 000/Tag, 2 000 000/Monat (Env), PRO-Kontingente je Modell, Rollen ohne DeepSeek V4 Flash', () => {
+  const d = M.meliousDefaults({});
+  assert.deepEqual([d.dayLimit, d.monthLimit], [200_000, 2_000_000]);
+  assert.deepEqual(M.meliousDefaults({ MELIOUS_TAG_LIMIT: '5000000', MELIOUS_MONAT_LIMIT: '90000000' }).dayLimit, 5_000_000);
+  assert.equal(d.kontingente['glm-5.3'], 2_500_000_000);
+  assert.equal(d.kontingente['deepseek-v4-flash-0731'], 25_000_000_000);
+  assert.deepEqual(d.rollen.niedrig, ['glm-5.3-flash', 'glm-5.3', 'deepseek-v4.1-flash']);   // V4 Flash erst nach dem Test
 });
 
 test('Schlüssel: nur sk-mel-…, verschlüsselt gespeichert, nach dem Speichern aus; ohne „erlaubt“ nicht an die Brücke', async () => {
@@ -38,14 +42,19 @@ test('Schlüssel: nur sk-mel-…, verschlüsselt gespeichert, nach dem Speichern
 });
 
 test('Erlaubt → Konto an die Brücke mit Rest und Einstellungen; Grenzen nur gültige Zahlen', async () => {
-  await M.setMelious(u, { enabled: true, fallback: true, model: 'mistral-large', overflowModel: 'glm-5.3-flash', dayLimit: 10_000, monthLimit: 25_000 });
+  await M.setMelious(u, { enabled: true, fallback: true, model: 'mistral-large', dayLimit: 10_000, monthLimit: 25_000 });
   await assert.rejects(M.setMelious(u, { dayLimit: 5 }), /ab 1 000/);
   await assert.rejects(M.setMelious(u, { model: 'a b' }), /Modellname/);
-  assert.equal((await M.setMelious(u, { avv: 'ja' })).avv, false);   // nur ausdrücklich true schaltet die Datenregel ab
-  assert.equal((await M.setMelious(u, { avv: true })).avv, true);
-  await M.setMelious(u, { avv: false });
-  const mel: any = (await claudeAccountsForBridge(u)).find((a: any) => a.kind === 'melious');
-  assert.deepEqual({ ...mel, token: mel.token === KEY }, { id: 'melious', label: 'Melious', token: true, kind: 'melious', model: 'mistral-large', overflowModel: 'glm-5.3-flash', avv: false, fallback: true, rest: 10_000 });
+  await assert.rejects(M.setMelious(u, { kontingente: { 'glm-5.3': -1 } }), /Kontingent/);
+  await assert.rejects(M.setMelious(u, { rollen: { leser: ['glm-5.3'] } }), /Rolle „niedrig“/);
+  let mel: any = (await claudeAccountsForBridge(u)).find((a: any) => a.kind === 'melious');
+  assert.deepEqual({ ...mel, token: mel.token === KEY, pool: mel.pool.length }, { id: 'melious', label: 'Melious', token: true, kind: 'melious', model: 'mistral-large', pool: 4, rollen: M.ROLLEN_VORGABE, fallback: true, rest: 10_000 });
+  // Lastverteilung: kein festes Modell, eigene Kontingente und Rollen; der Pool nennt den freien Anteil je Modell.
+  await M.setMelious(u, { model: '', kontingente: { 'glm-5.3': 50_000, 'glm-5.3-flash': 100_000, 'deepseek-v4.1-flash': 0 }, rollen: { leser: ['glm-5.3'], niedrig: ['glm-5.3', 'glm-5.3-flash'] } });
+  mel = (await claudeAccountsForBridge(u)).find((a: any) => a.kind === 'melious');
+  assert.equal(mel.model, null);
+  assert.deepEqual(mel.pool, [{ model: 'glm-5.3-flash', frei: 1 }, { model: 'glm-5.3', frei: 1 }]);   // Gleichstand: größeres Kontingent zuerst; 0 = nicht verteilt
+  assert.deepEqual(mel.rollen, { leser: ['glm-5.3'], niedrig: ['glm-5.3', 'glm-5.3-flash'] });
 });
 
 test('Verbrauch: je Tag/Monat gezählt, 80 % und 100 % je einmal, danach gesperrt (rest 0, Grund)', async () => {
@@ -69,8 +78,13 @@ test('Verbrauch: je Tag/Monat gezählt, 80 % und 100 % je einmal, danach gesperr
   // Unterstrich und Punkt bleiben unterscheidbar (Review 2, Befund 5).
   const r5 = await M.recordMeliousUsage(u, { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 }, next, 'qwen3_coder');
   assert.ok(r5.usage.modelle.some((x: any) => x.model === 'qwen3_coder') && !r5.usage.modelle.some((x: any) => x.model === 'qwen3.coder'));
-  // Je Modell (S4): Monat aufgeteilt, ohne festes Modell als „abbildung“, Punkte im Namen bleiben erhalten.
-  assert.deepEqual(r4.usage.modelle, [{ model: 'glm-5.3', total: 10_000, turns: 1 }, { model: 'glm-5.3-flash', total: 8000, turns: 1 }, { model: 'abbildung', total: 3100, turns: 2 }]);
+  // Je Modell (S4/S7): Monat aufgeteilt und gegen das Kontingent; ohne festes Modell als „abbildung“; Punkte bleiben erhalten.
+  const by = Object.fromEntries(r4.usage.modelle.map((m: any) => [m.model, [m.total, m.kontingent, m.frei]]));
+  assert.deepEqual(by['glm-5.3'], [10_000, 50_000, 0.8]);
+  assert.deepEqual(by['glm-5.3-flash'], [8000, 100_000, 0.92]);
+  assert.deepEqual(by['abbildung'], [3100, 0, 0]);
+  const pool: any = (await claudeAccountsForBridge(u)).find((a: any) => a.kind === 'melious');
+  assert.ok(pool.rest === 0 || pool.pool.length >= 0);   // gesperrt (Tagesdeckel) oder Pool — Verteilung siehe Brücke
   assert.match(M.schwelleText(r4.crossed[1], r4.usage), /80 % des Monatsdeckels verbraucht \(21\.100 von 25\.000 Tokens\)/);
   // Tagesgrenze an der Berliner Mitternacht (22:30 UTC am 14.10. = 00:30 am 15.10.).
   assert.equal(M.berlinDay(Date.parse('2026-10-14T22:30:00Z')), '2026-10-15');

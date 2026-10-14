@@ -200,7 +200,7 @@ const LESER_TOOLS = ['Read', 'Grep', 'Glob'];
 const BAUER_MCP = ['vault-search', 'werkbank'];
 const LESER_MCP = ['vault-search', 'werkbank'];   // Suche im Vault (Lesen); review_ready / hauptchat_melden für Stränge
 export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte auf Deutsch, knapp und in Markdown. Du kannst nur lesen (Read, Grep, Glob) — schreibe und ändere nichts. Belege jede Aussage mit Datei:Zeile. Was du nicht findest, sagst du offen, statt zu raten.';
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string } }
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; meliousModell?: string; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string } }
 const orchFile = join(cfg.stateDir, 'orch.json');
 let orchMap: Record<string, OrchEntry> = {};
 try { orchMap = JSON.parse(readFileSync(orchFile, 'utf8')); } catch { /* keine */ }
@@ -642,19 +642,15 @@ export const meliousDone = (live: Live) => { meliousInflight.get(live.userId)?.d
 const addUsage = (a: MeliousUsage, b: MeliousUsage): MeliousUsage => ({ input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite });
 const ZERO: MeliousUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
-// Datenregel bis zum AVV mit Melious (Modellwahl v2, Betriebsregel 4): fester Satz im Systemtext; die Werkzeuge mit Kunden-
-// bzw. Vorgangsdaten (Atlassian, forge-review) fehlen in Melious-Zügen, `git push` ist gesperrt.
-export const MELIOUS_DATENREGEL = 'Datenregel (dieser Zug läuft über Melious, Open-Weight-Modell, noch ohne AVV): Verarbeite keine Kundendaten (Namen, Adressen, Verträge, Zählerstände, IBAN), keine Schlüssel oder Zugangsdaten und keine Logs mit Personenbezug, und bereite keinen Push vor. Braucht die Aufgabe so etwas, sag das und hör an dieser Stelle auf.';
-export const MELIOUS_OHNE_AUTO = 'Hinweis für diesen Zug: Über Melious gilt der Auto-Modus nicht. Datei-Änderungen und Befehle bestätigt die Person im Chat; in Orchestrator-Strängen werden sie abgelehnt — schreib dann auf, was zu tun wäre.';
-const CUSTOMER_TOOLS = /^(atlassian|forge-review)$/;
-// Auch die Jira-Werkzeuge des Werkbank-MCP (der bleibt: Stränge brauchen review_ready und hauptchat_melden). Review 2, Befund 1.
-const REGEL_DISALLOWED = ['Bash(git push:*)', 'mcp__werkbank__jira_update', 'mcp__werkbank__jira_update_many', 'mcp__werkbank__hygiene_list', 'mcp__werkbank__hygiene_snooze'];
-const withoutCustomerTools = (s: Record<string, unknown>) => Object.fromEntries(Object.entries(s).filter(([k]) => !CUSTOMER_TOOLS.test(k)));
+// Melious-Züge dürfen alles, was Claude-Züge dürfen (Knut 14.10.: „Datenregel passt schon, bitte nicht blocken“): gleiche
+// Werkzeuge, gleiche MCP-Server, gleicher Rechte-Modus. Der Auto-Modus-Klassifikator läuft dabei über das Gateway (geprüft
+// 14.10. mit echtem Claude Code: Anfragen „security monitor“ mit Modell claude-sonnet-5 an die Basis-URL; unverständliche
+// Antwort → Befehl gesperrt; harmlose Befehle ohne Klassifikator).
 
 /** Statuszeile eines Melious-Zugs: welches Modell wirklich läuft (fester Name) bzw. dass Melious nur abbildet. */
-export function meliousLine(model: string | undefined, asked: string | undefined, regel: boolean): string {
+export function meliousLine(model: string | undefined, asked: string | undefined): string {
   const m = model && !/^(opus|sonnet|haiku)$/.test(model) ? ` · Modell ${model}` : ` · Abbildung von „${model ?? asked ?? 'Standardmodell'}“ (tatsächliches Modell meldet Melious nicht — in der Einrichtung ein festes Modell wählen)`;
-  return `🧪 Dieser Zug läuft über „Melious“${m} (${MELIOUS_HINT}${regel ? '; Datenregel: keine Kundendaten, keine Schlüssel' : ''})`;
+  return `🧪 Dieser Zug läuft über „Melious“${m} (${MELIOUS_HINT})`;
 }
 
 /** usage je API-Antwort eines Melious-Versuchs (Schätzung für den Deckel; gezählt wird danach die Ergebnis-usage). */
@@ -883,7 +879,7 @@ function makeGuard(live: Live) {
     const role = agentId ? (input.agent_type ? String(input.agent_type) : live.agentTypes.get(agentId)) : undefined;
     // Der Hook ist maßgeblich dafür, was als „automatisch erlaubt“ gemeldet wird (nicht die Einordnung beim Streamen).
     if (typeof toolUseId === 'string') {
-      if (cls === 'auto' && live.mode === 'auto' && !escalated && !live.melious) live.autoCalls.set(toolUseId, live.autoCalls.get(toolUseId) ?? { name: tool, input: toolInput, sub: false });
+      if (cls === 'auto' && live.mode === 'auto' && !escalated) live.autoCalls.set(toolUseId, live.autoCalls.get(toolUseId) ?? { name: tool, input: toolInput, sub: false });
       else live.autoCalls.delete(toolUseId);
     }
     const decide = (permissionDecision: 'allow' | 'deny', reason: string) => ({
@@ -918,9 +914,7 @@ function makeGuard(live: Live) {
       return decide('deny', 'Dieser Lauf ist nur lesend (vom Board des OLAF Workspace gestartet). Nichts schreiben; schreib stattdessen auf, was zu tun wäre.');
     }
     // Auto-Modus: keine Entscheidung — der Klassifikator des SDK entscheidet; eskaliert er, kommt canUseTool (unten).
-    // Nicht in Melious-Zügen (Plan 162): der Klassifikator liefe dort über das Open-Weight-Modell beim Gateway (Claude Code meldet
-    // dort auch „neue Klassifikator-Abrechnung nicht unterstützt“). Dann wie ohne Auto-Modus — Rückfrage im Chat, im Strang abgelehnt.
-    if (cls === 'auto' && live.mode === 'auto' && !escalated && !live.melious) return {};
+    if (cls === 'auto' && live.mode === 'auto' && !escalated) return {};
     // Orchestrator-Strang: keine Rückfragen (niemand soll „ja“ in Knuts Namen sagen) — ablehnen und aufschreiben lassen.
     if (live.orch) {
       emitStatus(live, `🔒 Orchestrator-Strang ohne Rückfragen: ${statusLine(tool, toolInput)} nicht ausgeführt`);
@@ -1015,11 +1009,11 @@ async function meliousCommand(req: TurnRequest, key: string, arg: string, name?:
   }
   const strandMel = orchMap[key]?.modell?.startsWith('melious:') ? orchMap[key].modell!.slice(8) : undefined;
   const on = meliousChatOn(key) || !!strandMel;
-  const model = meliousChatModel(key) ?? strandMel ?? mel?.model;
-  if (strandMel) lines.push(`Dieser Strang läuft fest auf Melious „${strandMel}“ (Modell des Strangs, gesetzt beim Start) — \`/melious aus\` ändert das nicht.`);
-  if (on && mel && !mel.avv) lines.push(`⚖️ ${MELIOUS_DATENREGEL}`);
+  const fixed = meliousChatModel(key) ?? (strandMel && strandMel !== 'auto' ? strandMel : undefined) ?? mel?.model;
+  const verteilt = mel?.rollen?.niedrig?.length ? `verteilt über ${mel.rollen.niedrig.join(', ')} (größter freier Monatsanteil, danach fest für diesen Chat)` : 'Claude-Namen, Melious bildet sie ab';
+  if (strandMel) lines.push(`Dieser Strang läuft fest auf Melious${strandMel === 'auto' ? ' (Lastverteilung)' : ` „${strandMel}“`} (Modell des Strangs, gesetzt beim Start) — \`/melious aus\` ändert das nicht.`);
   if (arg !== 'modelle') {
-    lines.unshift(on ? `🧪 **Melious ist für diesen Chat an** — neue Züge laufen zuerst über Melious (${MELIOUS_HINT}). Modell: ${model ? `„${model}“${meliousChatModel(key) ? ' (für diesen Chat)' : ' (aus der Einrichtung)'}` : 'Claude-Namen, Melious bildet sie ab'}.` : 'Melious ist für diesen Chat **aus** — die Züge laufen über die Claude-Konten.');
+    lines.unshift(on ? `🧪 **Melious ist für diesen Chat an** — neue Züge laufen zuerst über Melious (${MELIOUS_HINT}). Modell: ${fixed ? `„${fixed}“${meliousChatModel(key) ? ' (für diesen Chat)' : strandMel ? ' (des Strangs)' : ' (aus der Einrichtung)'}` : verteilt}.` : 'Melious ist für diesen Chat **aus** — die Züge laufen über die Claude-Konten.');
     if (!mel) lines.push(on ? 'Achtung: Melious ist in der Einrichtung nicht erlaubt oder es ist kein Schlüssel hinterlegt — bis dahin läuft auch dieser Chat über Claude.' : '');
     else if (!meliousUsable(mel, exhaustedOf(safeId(req.userId)))) lines.push(`Melious ist gerade gesperrt${mel.sperre ? ` (${mel.sperre})` : ' (Konto als erschöpft vermerkt)'} — bis dahin über Claude.`);
     else lines.push(`Rest bis zum Deckel: ${mel.rest!.toLocaleString('de-DE')} Tokens.`);
@@ -1047,6 +1041,7 @@ function thinkingDisplay(): string | null {
 
 // Melious (Plan 162): welcher Anbieter zuletzt die Sitzung einer Unterhaltung geschrieben hat (nur im Speicher).
 const providerMap = new Map<string, 'melious' | 'claude'>();
+const poolSticky = new Map<string, string>();   // Chat → verteiltes Melious-Modell (S7; Stränge: orch.json)
 const providerOf = (a: Account) => (isMelious(a) ? 'melious' : 'claude') as 'melious' | 'claude';
 const SWITCH_NOTE = 'Hinweis: Ein vorheriger Versuch für diese Nachricht lief über ein anderes Modell und wurde mittendrin abgebrochen (Konto gewechselt). Prüfe zuerst den Stand im Arbeitsordner und wiederhole keine Schritte, die dort schon erledigt sind.\n\n';
 
@@ -1259,24 +1254,35 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const baseDisallowed: string[] = options.disallowedTools;
   const baseExtra: Record<string, unknown> = { ...(options.extraArgs ?? {}) };
   const profileServers = (s: Record<string, unknown>) => (profil === 'voll' ? s : Object.fromEntries(Object.entries(s).filter(([k]) => (profil === 'bauer' ? BAUER_MCP : LESER_MCP).includes(k))));
-  // Je Konto: Env, Werkzeuge, Modell. Melious: Modell aus Chat → Strang → (Überlauf-Modell) → Einrichtung; ohne AVV die
-  // Datenregel (S3). Zurück auf Claude: Modell der Anfrage bzw. des Strangs, Token, Werkzeuge und Systemtext wie bestellt.
+  // Lastverteilung über die Melious-Modelle (S7, Knut 14.10.: „Last auf alle Melious-Modelle verteilen, um alle Token zu nutzen“):
+  // aus der Liste der Rolle das Modell mit dem größten freien Monatsanteil (Werkbank: Verbrauch je Modell gegen dessen
+  // Kontingent). Einmal gewählt, behält ein Strang (orch.json) bzw. Chat (Speicher) sein Modell, solange es zulässig und frei ist.
+  const poolModel = (a: Account, role: 'leser' | 'niedrig'): string | undefined => {
+    const allowed = a.rollen?.[role] ?? [];
+    const free = (m?: string) => !!m && allowed.includes(m) && (a.pool ?? []).some((p) => p.model === m && p.frei > 0);
+    const sticky = live.orch ? orchMap[key]?.meliousModell : poolSticky.get(key);
+    if (free(sticky)) return sticky;
+    const pick = (a.pool ?? []).find((p) => allowed.includes(p.model) && p.frei > 0)?.model;
+    if (!pick) return undefined;
+    if (live.orch && orchMap[key]) { orchMap[key].meliousModell = pick; saveMap(); } else { poolSticky.set(key, pick); if (poolSticky.size > 5000) poolSticky.delete(poolSticky.keys().next().value!); }
+    log('melious modell verteilt', { conv: key, rolle: role, modell: pick, frei: a.pool!.find((p) => p.model === pick)!.frei });
+    return pick;
+  };
+  // Je Konto: Env, Werkzeuge, Modell. Melious: Modell aus Chat → Strang → festem Modell der Einrichtung → Lastverteilung (S7).
+  // Werkzeuge, MCP-Server und Rechte-Modus wie bei Claude. Zurück auf Claude: Modell der Anfrage bzw. des Strangs, Token.
   const onAccount = (a: Account) => {
     const mel = isMelious(a);
-    const mm = mel ? meliousChatModel(key) ?? strandMel ?? (chatOn ? undefined : a.overflowModel) ?? a.model : undefined;
+    const mm = mel ? meliousChatModel(key) ?? (strandMel && strandMel !== 'auto' ? strandMel : undefined) ?? a.model ?? poolModel(a, profil === 'leser' ? 'leser' : 'niedrig') : undefined;
     accountEnv(env, a, mm);
-    const regel = mel && !a.avv;
-    options.mcpServers = profileServers(withToken(regel ? withoutCustomerTools(req.mcpServers ?? {}) : req.mcpServers ?? {}, mel ? req.token : a.token));
-    options.systemPrompt = { ...basePrompt, append: regel ? `${baseAppend}\n\n${MELIOUS_DATENREGEL}` : baseAppend };
+    options.mcpServers = profileServers(withToken(req.mcpServers ?? {}, mel ? req.token : a.token));
+    options.systemPrompt = { ...basePrompt, append: baseAppend };
     options.extraArgs = { ...baseExtra };
-    options.disallowedTools = regel ? [...baseDisallowed, ...REGEL_DISALLOWED] : baseDisallowed;
-    // Kein Auto-Modus-Klassifikator über Melious (siehe makeGuard): der Zug läuft im normalen Modus mit Rückfragen.
-    options.permissionMode = mel ? 'default' : live.mode;
-    if (mel && live.mode === 'auto') options.systemPrompt = { ...options.systemPrompt, append: `${options.systemPrompt.append}\n\n${MELIOUS_OHNE_AUTO}` };
-    // Leser über Melious: `--bare` mit eigenem kurzem Systemprompt (−99 % Grundlast laut Messung). Nicht bei Claude (OAuth).
+    options.disallowedTools = baseDisallowed;
+    options.permissionMode = live.mode;
+    // Leser über Melious: `--bare` mit eigenem kurzem Systemprompt (−91 % je Anfrage gemessen). Nicht bei Claude (OAuth).
     if (profil === 'leser' && mel) {
       options.extraArgs = { ...baseExtra, bare: null };
-      options.systemPrompt = [LESER_SYSTEM, live.orch ? ORCH_APPEND : '', regel ? MELIOUS_DATENREGEL : ''].filter(Boolean).join('\n\n');
+      options.systemPrompt = [LESER_SYSTEM, live.orch ? ORCH_APPEND : ''].filter(Boolean).join('\n\n');
     }
     // Modell des Strangs vor dem der Anfrage: beim Start festgelegt, nicht durch die Auswahl im Chat überstimmt (Review 2, 3).
     const model = mm ?? (mel ? undefined : strandClaude) ?? req.model;
@@ -1285,7 +1291,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     live.modelSeen = undefined;
   };
   onAccount(acct);
-  if (isMelious(acct)) emitStatus(live, meliousLine(options.model, req.model, !acct.avv));
+  if (isMelious(acct)) emitStatus(live, meliousLine(options.model, req.model));
 
   let release = acquire(key, acct);   // ab hier läuft der Zug auf diesem Konto (Lastverteilung); frei im finally
   log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers), permissionMode: live.mode, ...(accounts.length > 1 ? { konto: acct.id, konten: accounts.length } : {}), ...(isMelious(acct) ? { melious: true, rest: acct.rest } : {}) });
@@ -1331,7 +1337,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         acct = next;
         release(); release = acquire(key, acct);
         onAccount(acct);
-        if (isMelious(acct)) emitStatus(live, meliousLine(options.model, req.model, !acct.avv));
+        if (isMelious(acct)) emitStatus(live, meliousLine(options.model, req.model));
         // Noch nichts passiert → dieselbe Anfrage von vorn (gleiche Ausgangslage). Schon mitten im Zug → die Sitzung
         // fortsetzen (alle Konten teilen die Konfiguration und damit den Verlauf), ohne Schritte doppelt zu machen.
         // Anderer Anbieter (Melious ↔ Claude): nie fortsetzen (thinking-Signaturen), neu mit Verlauf — mitten im Zug mit Hinweis.

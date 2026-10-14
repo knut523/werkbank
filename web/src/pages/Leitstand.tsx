@@ -205,6 +205,9 @@ function MeliousKachel() {
       {' '}heute <span className={`chip ${cls(d.heute.pct)}`}>{z(d.heute.total)} / {z(d.heute.limit)}</span>
       {' '}Monat <span className={`chip ${cls(d.monat.pct)}`}>{z(d.monat.total)} / {z(d.monat.limit)}</span>
       <span className="tiny muted"> · {d.heute.turns} Züge heute</span>
+      {(d.modelle ?? []).some((m: any) => m.kontingent) && (
+        <span className="tiny muted" data-testid="melious-kachel-modelle"> · frei: {(d.modelle ?? []).filter((m: any) => m.kontingent).map((m: any) => `${m.model} ${Math.round(m.frei * 100)} %`).join(' · ')}</span>
+      )}
     </a>
   );
 }

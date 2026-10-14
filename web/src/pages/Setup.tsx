@@ -233,12 +233,16 @@ function MeliousAccount() {
     try { await fn(); await l.reload(); } catch (e) { setErr(e); } finally { setBusy(''); }
   };
   const put = (body: Record<string, unknown>) => api('/api/setup/melious', { method: 'PUT', body });
-  const f = form ?? { model: d.model ?? '', overflowModel: d.overflowModel ?? '', dayLimit: String(d.dayLimit), monthLimit: String(d.monthLimit) };
+  const f = form ?? { model: d.model ?? '', dayLimit: String(d.dayLimit), monthLimit: String(d.monthLimit),
+    leser: (d.rollen?.leser ?? []).join(', '), niedrig: (d.rollen?.niedrig ?? []).join(', '),
+    kontingente: Object.entries(d.kontingente ?? {}).map(([m, n]: any) => `${m}=${n}`).join(', ') };
+  const liste = (s: string) => s.split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
+  const mio = (n: number) => (n >= 1e9 ? `${(n / 1e9).toLocaleString('de-DE', { maximumFractionDigits: 1 })} Mrd.` : n >= 1e6 ? `${(n / 1e6).toLocaleString('de-DE', { maximumFractionDigits: 1 })} Mio.` : z(n));
   const u = d.usage;
   return (
     <div data-testid="melious-account" style={{ marginTop: 16 }}>
       <h4 style={{ margin: '0 0 4px' }}>Melious — Open-Weight-Modelle aus der EU</h4>
-      <p className="small" style={{ marginTop: 0 }}>Zusätzliches Konto über die Anthropic-kompatible API von Melious. <b>Standard aus:</b> genommen wird es nur, wenn es hier erlaubt ist, und dann nur in Chats mit <code>/melious an</code> — oder, wenn du es extra einschaltest, als letzter Ausweg, wenn alle Claude-Konten erschöpft sind. Nie in der Lastverteilung. Ergebnisse von Open-Weight-Modellen bitte prüfen.</p>
+      <p className="small" style={{ marginTop: 0 }}>Zusätzliches Konto über die Anthropic-kompatible API von Melious. <b>Standard aus:</b> genommen wird es nur, wenn es hier erlaubt ist, und dann nur in Chats mit <code>/melious an</code> — oder, wenn du es extra einschaltest, als letzter Ausweg, wenn alle Claude-Konten erschöpft sind. Nie in der Lastverteilung der Claude-Konten. Melious-Züge dürfen dasselbe wie Claude-Züge. Ohne festes Modell verteilt die Werkbank die Last über die Melious-Modelle der Rolle (größter freier Monatsanteil; ein Chat bzw. Strang behält sein Modell). Ergebnisse von Open-Weight-Modellen bitte prüfen.</p>
       {d.configured ? (
         <>
           <div className="row small" style={{ gap: 12, flexWrap: 'wrap' }}>
@@ -258,20 +262,30 @@ function MeliousAccount() {
               <tr key={n}><td>{n} ({z(p.turns)} Züge)</td><td>{z(p.input)}</td><td>{z(p.output)}</td><td>{z(p.cacheRead)}</td><td><b>{z(p.total)}</b> / {z(p.limit)} ({p.pct} %)</td></tr>
             ))}</tbody>
           </table>
-          {u.modelle?.length > 0 && <p className="small" data-testid="melious-modelle" style={{ margin: '4px 0' }}>Monat je Modell: {u.modelle.map((m: any) => `${m.model === 'abbildung' ? 'Abbildung (ohne festes Modell)' : m.model} ${z(m.total)} (${z(m.turns)} Züge)`).join(' · ')}</p>}
-          <label className="small" style={{ display: 'block', marginTop: 6 }}>
-            <input type="checkbox" aria-label="AVV mit Melious liegt vor" data-testid="melious-avv" checked={d.avv} disabled={!!busy} onChange={async (e) => {
-              const on = e.target.checked;
-              if (on && !(await confirm({ title: 'AVV mit Melious liegt vor?', body: <p>Nur anhaken, wenn der Auftragsverarbeitungsvertrag mit Melious unterschrieben ist. Dann fällt die Datenregel weg (Jira-/Review-Werkzeuge in Melious-Zügen, kein Hinweis). Schlüssel und Zugangsdaten gehen auch dann nie an Melious.</p>, confirmLabel: 'AVV liegt vor' }))) return;
-              run('avv', () => put({ avv: on }));
-            }} /> AVV mit Melious liegt vor{!d.avv && <span className="tiny muted"> — bis dahin gilt in Melious-Zügen die Datenregel: keine Kundendaten, keine Schlüssel, keine Jira-/Review-Werkzeuge, kein Push</span>}
-          </label>
+          {u.modelle?.length > 0 && (
+            <table className="t small" style={{ marginTop: 6 }} data-testid="melious-modelle">
+              <thead><tr><th>Melious-Kontingent je Modell (Monat)</th><th>verbraucht</th><th>Kontingent</th><th>frei</th><th>Rollen</th></tr></thead>
+              <tbody>{u.modelle.map((m: any) => (
+                <tr key={m.model}>
+                  <td><code>{m.model === 'abbildung' ? 'ohne festes Modell' : m.model}</code> <span className="tiny muted">{z(m.turns)} Züge</span></td>
+                  <td>{mio(m.total)}</td>
+                  <td>{m.kontingent ? mio(m.kontingent) : '–'}</td>
+                  <td>{m.kontingent ? <span className={`chip ${m.frei < 0.2 ? 'warn' : ''}`}>{Math.round(m.frei * 100)} %</span> : '–'}</td>
+                  <td className="tiny">{Object.entries(d.rollen ?? {}).filter(([, l]: any) => l.includes(m.model)).map(([r]) => r).join(', ') || '–'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
           <p className="tiny">Quelle: {u.quelle}. Summe = Input + Output + Cache-Read + Cache-Write. Bei 80 % kommt ein Hinweis in den Hauptchat, bei 100 % ist Melious bis zum Ende des Zeitraums gesperrt.</p>
-          <form className="row small" style={{ marginTop: 4 }} onSubmit={(e) => { e.preventDefault(); run('limits', async () => { await put({ model: f.model, overflowModel: f.overflowModel, dayLimit: f.dayLimit, monthLimit: f.monthLimit }); setForm(null); toast('Melious-Einstellungen gespeichert'); }); }}>
+          <form className="row small" style={{ marginTop: 4 }} onSubmit={(e) => { e.preventDefault(); run('limits', async () => { await put({ model: f.model, dayLimit: f.dayLimit, monthLimit: f.monthLimit,
+            rollen: { leser: liste(f.leser), niedrig: liste(f.niedrig) },
+            kontingente: Object.fromEntries(liste(f.kontingente).map((x) => x.split('=')).map(([m, n]) => [m, Number(n)])) }); setForm(null); toast('Melious-Einstellungen gespeichert'); }); }}>
             <label>Tagesdeckel <input aria-label="Tagesdeckel in Tokens" inputMode="numeric" value={f.dayLimit} onChange={(e) => setForm({ ...f, dayLimit: e.target.value })} style={{ width: 110 }} /></label>
             <label>Monatsdeckel <input aria-label="Monatsdeckel in Tokens" inputMode="numeric" value={f.monthLimit} onChange={(e) => setForm({ ...f, monthLimit: e.target.value })} style={{ width: 120 }} /></label>
-            <label>Modell <input aria-label="Melious-Modell" placeholder="z. B. glm-5.3-flash" value={f.model} onChange={(e) => setForm({ ...f, model: e.target.value })} style={{ width: 160 }} /></label>
-            <label>Überlauf <input aria-label="Melious-Überlauf-Modell" placeholder="leer = Modell" value={f.overflowModel} onChange={(e) => setForm({ ...f, overflowModel: e.target.value })} style={{ width: 160 }} /></label>
+            <label>Festes Modell <input aria-label="Melious-Modell" placeholder="leer = Lastverteilung" value={f.model} onChange={(e) => setForm({ ...f, model: e.target.value })} style={{ width: 160 }} /></label>
+            <label style={{ flexBasis: '100%' }}>Rolle „leser“ <input aria-label="Melious-Modelle Rolle leser" value={f.leser} onChange={(e) => setForm({ ...f, leser: e.target.value })} style={{ width: '100%' }} /></label>
+            <label style={{ flexBasis: '100%' }}>Risiko „niedrig“ (Chats, Überlauf) <input aria-label="Melious-Modelle Risiko niedrig" value={f.niedrig} onChange={(e) => setForm({ ...f, niedrig: e.target.value })} style={{ width: '100%' }} /></label>
+            <label style={{ flexBasis: '100%' }}>Kontingente (modell=Tokens je Monat) <input aria-label="Melious-Kontingente" value={f.kontingente} onChange={(e) => setForm({ ...f, kontingente: e.target.value })} style={{ width: '100%' }} /></label>
             <button className="btn small" disabled={!form || busy === 'limits'}>Speichern</button>
           </form>
           <div className="row" style={{ gap: 6, marginTop: 6 }}>
