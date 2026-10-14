@@ -23,7 +23,7 @@ import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, s
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe } from './leitstand.ts';
 import { reviewDetail, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen } from './freigabe.ts';
-import { readBericht as readBerichtDatei } from './bericht.ts';
+import { readBericht as readBerichtDatei, reviewDir } from './bericht.ts';
 import { readBericht, paketDatei } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
@@ -46,6 +46,9 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
+import { tickerTick, tickerOverview, setTickerSettings, reviewsCol } from './prticker.ts';
+import { reviewTick, prNowVia, parseKommentar, fussnote } from './prreview.ts';
+import { postReview, schreibenAus, type ReviewEvent } from './githubwrite.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
 import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './timebox.ts';
@@ -1278,7 +1281,57 @@ const reviewStrand = async (u: User, id: string) => {
 };
 on('GET', /^\/api\/review\/([\w-]{1,40})$/, async (req, res, m) => {
   const u = await needAdmin(req);
-  send(res, 200, await reviewDetail(await reviewStrand(u, m[1])));
+  const d = await reviewStrand(u, m[1]);
+  send(res, 200, { ...(await reviewDetail(d)), prReview: await prReviewOf(String(d._id)) });
+});
+
+// ---------- PR-Ticker und Auto-Review (Plan 157) ----------
+async function prReviewOf(strand: string) {
+  const r: any = await reviewsCol().findOne({ strand });
+  if (!r) return null;
+  const k = parseKommentar(readBerichtDatei(join(reviewDir(), r.paket ?? '_', 'kommentar.md')));
+  return { id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, status: r.status, empfehlung: k?.empfehlung ?? r.empfehlung ?? null,
+    text: k?.text ?? null, posted: r.posted ?? null, note: r.note ?? null, schreibenAus: schreibenAus() };
+}
+on('GET', /^\/api\/leitstand\/ticker$/, async (req, res) => { await needAdmin(req); send(res, 200, await tickerOverview()); });
+on('POST', /^\/api\/leitstand\/ticker\/einstellungen$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const s = await setTickerSettings(await body(req), { id: u.id, name: u.name });
+  log('pr-ticker einstellungen', { user: u.id, ticker: s.ticker, autoReview: s.autoReview, autoPost: s.autoPost });
+  send(res, 200, { ok: true, settings: s });
+});
+on('POST', /^\/api\/leitstand\/ticker\/jetzt$/, async (req, res) => {
+  await needAdmin(req);
+  const r = await tickerTick(githubReadToken).catch((e: any) => { throw new HttpError(502, e.message); });
+  send(res, 200, r);
+});
+// Eintrag mit Deckel/Fehler von Hand wieder in die Warteschlange (Deckel des Tages gilt weiter).
+on('POST', /^\/api\/leitstand\/ticker\/review$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  const r = await reviewsCol().updateOne({ _id: String(b.id ?? '') as any, status: { $in: ['deckel', 'fehler', 'übersprungen'] } }, { $set: { status: 'wartet', note: `von ${u.name} erneut angestoßen`, ownerId: u.id } });
+  if (!r.modifiedCount) throw new HttpError(409, 'Eintrag nicht gefunden oder läuft schon.');
+  send(res, 200, { ok: true });
+});
+// Knuts Klick: Kommentar / Freigabe / Änderungen verlangen — gebunden an den reviewten Kopf und den gezeigten Text.
+on('POST', /^\/api\/review\/([\w-]{1,40})\/github$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const d = await reviewStrand(u, m[1]);
+  const pr = await prReviewOf(String(d._id));
+  if (!pr || !pr.text) throw new HttpError(404, 'Kein Kommentar-Entwurf zu diesem Unter-Chat.');
+  const b = await body(req);
+  const event = String(b.event ?? '') as ReviewEvent;
+  if (!['COMMENT', 'APPROVE', 'REQUEST_CHANGES'].includes(event)) throw new HttpError(400, 'Art: COMMENT, APPROVE oder REQUEST_CHANGES.');
+  if (String(b.text ?? '') !== pr.text) throw new HttpError(409, 'Der Entwurf hat sich geändert — Seite neu laden.');
+  const token = await githubReadToken();
+  const now = token ? await prNowVia(token, pr.repo, pr.number).catch(() => null) : null;
+  if (!now) throw new HttpError(502, 'PR-Stand nicht lesbar (Lesetoken).');
+  if (now.state !== 'OPEN') throw new HttpError(409, `PR ist ${now.state === 'MERGED' ? 'gemergt' : 'geschlossen'}.`);
+  if (now.head !== pr.head) throw new HttpError(409, `Neuer Stand ${now.head.slice(0, 7)} seit dem Review — erst neu reviewen.`);
+  const r = await postReview(pr, pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automatisches Review', 'Review'), event).catch((e: any) => { throw new HttpError(502, e.message); });
+  await reviewsCol().updateOne({ _id: pr.id as any }, { $push: { postings: { at: new Date(), url: r.url, event, by: u.name } } as any, ...(event === 'COMMENT' && !pr.posted ? { $set: { posted: { at: new Date(), url: r.url, event, by: u.name } } } : {}) });
+  log('pr-review github', { user: u.id, pr: `${pr.repo}#${pr.number}`, event });
+  send(res, 200, { ok: true, url: r.url });
 });
 on('POST', /^\/api\/review\/([\w-]{1,40})\/freigabe$/, async (req, res, m) => {
   const u = await needAdmin(req);
@@ -2714,6 +2767,22 @@ async function backgroundJobs() {
     catch (e: any) { log('github', { error: String(e.message).slice(0, 200) }); }
   };
   setTimeout(ghTick, 8000);
+  // PR-Ticker + Auto-Review (Plan 157): jede Minute nachsehen; der Ticker selbst hält seinen Takt (Einstellung „minutes“).
+  const prTick = async () => {
+    try { const r = await tickerTick(githubReadToken); if (r.events || r.reviews) log('pr-ticker', { ...r }); }
+    catch (e: any) { log('pr-ticker', { error: String(e.message).slice(0, 200) }); }
+    try {
+      const r = await reviewTick({
+        userById: async (id) => { const u = await userById(id); return u && allowed(u.email) && u.role === 'ADMIN' ? u : null; },
+        startOrch, strandDoc: (id) => orchRuns().findOne({ _id: id as any }),
+        prNow: async (repo, n) => { const t = await githubReadToken(); return t ? prNowVia(t, repo, n) : null; },
+        post: (r, text, event) => postReview(r, text, event), log,
+      });
+      if (r.started || r.done) log('pr-review', r);
+    } catch (e: any) { log('pr-review', { error: String(e.message).slice(0, 200) }); }
+  };
+  setTimeout(prTick, 20_000);
+  setInterval(prTick, 60_000);
   setInterval(ghTick, Number(process.env.WERKBANK_GITHUB_MIN || 5) * 60_000);
 
   const shareTick = async () => { try { await watchChatShares(); } catch (e: any) { log('freigaben', { error: String(e.message).slice(0, 200) }); } };
