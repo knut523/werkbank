@@ -697,3 +697,44 @@ Neue Abhängigkeit: `mermaid` 10.9.1 (web, Client, nur bei Bedarf geladen).
 - Mergen; Pushen durch die Werkbank; Login-Links mit echter Anmeldung prüfen (nur „antwortet / Anmeldung nötig / tot“).
 - HTML-Folien automatisch erzeugen (Vorlage ja, Generator nein).
 - Kopf-Migration aller alten Berichte (nur 155 und 132).
+
+## C.5 Council Teil C
+### R1 (14.10.2026) — HOLD (Fachprüfer 0,75 · Gegenstimme HOLD)
+Stärkste Punkte: der Kopf ist Selbstauskunft des Strangs; der Status-Takt überspringt genau die fertigen Stränge (Kopf bliebe leer);
+Kopf-Fragen kennt der Antwort-Endpunkt nicht (nur Fettzeilen), und bei laufendem Strang lehnt er ab; Freigabe nur für ein Repo, nach
+Rebase mit gleicher patch-id weiter gültig — widerspricht D2; „Warnung statt Karte“ blendet offene Fragen aus; mermaid 10.9.1 hat
+bekannte Lücken (per `npm audit` belegt: XSS in Sequenz-Labels, HTML-/CSS-Injection über classDef, Prototype Pollution — behoben in
+10.9.8); 155 gehört einem anderen Strang; Handy-Last.
+Bindende Bedingungen (gelten vor C.1, wo sie abweichen):
+1. **H1 Kopf ist Auskunft, nicht Wahrheit.** „Auf GitHub“ nur mit aktiver Freigabe oder gepusht (Mongo). `bereit_fuer_github` ohne
+   Freigabe → „Ansehen“ mit Marke „Strang meldet bereit“. Der Takt vergleicht `github[].commit` (Präfix ≥ 7) mit dem echten Kopf des
+   Strang-Repos; Abweichung → Hinweis auf der Karte „Kopf nennt abc1234, Zweig steht auf def5678“.
+2. **H2 Kopf auch für fertige Stränge.** Die Kopf-Auswertung (Lesen nur bei geänderter Größe/Zeit) läuft im Takt **vor** dem Übersprung.
+   `berichtHash` über den vollen Dateitext (wie der Endpunkt). Test: fertiger Strang, Bericht geändert → Kopf aktualisiert.
+3. **H3 Antworten (D3).** Der Entscheidungs-Endpunkt nimmt Kopf-`fragen[].id` und Fettzeilen-IDs an; läuft der Strang, wird nachgereicht
+   (wie `sendOrch`), nicht abgelehnt. Gesendete Antworten werden am Strang gemerkt (`antworten: { berichtHash, ids, at }`); eine Frage
+   gilt als offen, wenn ihr `antwort` im Kopf leer ist **und** sie für den aktuellen Bericht-Hash nicht beantwortet wurde. Karte nach
+   der Antwort → „Ansehen“ (bis der Strang den Bericht erneuert).
+4. **H4 Freigabe nur für genau den gesehenen Stand (D2, Knut).** `pruefeFreigabe` ist grün **nur** beim exakten Kopf-SHA; die
+   Rebase-Toleranz über patch-id aus Plan 154 entfällt (Knut 14.10.: „ändert sich ein Commit, verfällt die Freigabe“). Die Rückfrage
+   „Push freigeben“ zeigt Zweig, Kopf, Basis, Commits und Diff-Statistik (live) und verlinkt die Review-Ansicht. Freigabe gilt nur für
+   das Repo des Strangs (Worktree); weitere Repos im Kopf stehen auf der Karte ausdrücklich als „nicht über die Werkbank freigegeben“.
+5. **H5 Warnung in der Karte.** Ein toter Review-/Login-Link ist eine rote Zeile **auf** der Karte (mit Knopf „Unter-Chat
+   benachrichtigen“), nie an ihrer Stelle; offene Fragen bleiben. Linkprüfung über `vorschauEintraege`-Muster, `GESPERRT`, Port > 1024,
+   höchstens alle 5 min je Port, nur ein Takt zur Zeit.
+6. **H6 Mermaid sicher und leicht.** `mermaid@10.9.8` (statt 10.9.1, wegen der Lücken — E13), dynamischer Import in einem eigenen
+   Stück, `securityLevel: 'strict'`, `maxTextSize: 20000`, Server liefert nur Text (`<pre class="mermaid-src">`). Auf der Karte nur
+   „Diagramm ansehen“ (rendert erst beim Aufklappen); Mermaid wird nicht beim Laden von „Heute“ geholt. Test: `click`/`javascript:`/
+   `<script>` im Diagrammtext bleibt wirkungslos (Server-Seite) — Client-Nachweis per Screenshot.
+7. **H7 Handy.** Sprungleiste „Entscheiden (n) · Ansehen (n) · Auf GitHub (n)“; „Entscheiden“ zuerst.
+8. **H8 Paket 155.** Kopf nur davorsetzen, wenn der Bericht seit > 1 h unverändert ist; Sicherung `bericht.vor-kopf.md`; Inhalt darunter
+   unverändert. Im Bericht vermerkt.
+DoD-Ergänzungen: C-5 „Antwort gesendet → Ansehen“; C-7 Kurz-SHA, exakter SHA (Rebase → rot), Mehr-Repo-Anzeige; C-8 „Warnung auf der
+Karte, Fragen bleiben“; C-12 fertiger Strang aktualisiert seinen Kopf; C-13 Mermaid wird auf „Heute“ ohne Aufklappen nicht geladen.
+
+### R2 (14.10.2026, Ein-Modell-Durchgang — Teilagenten-Grenze dieser Nachricht erreicht) — PASS (0,7)
+Geprüft gegen den Code: H4 ändert `pruefeFreigabe` für alle Freigaben (auch die der Review-Ansicht) — das ist Knuts D2 und betrifft
+nur Rebases nach der Freigabe; der bestehende Test „Rebase gleiche patch-id → grün“ wird zum Gegentest. H3: `sendOrch` reicht bei
+laufendem Strang schon nach (`injectBridge`), der Endpunkt muss nur die 409-Sperre lockern. H2: Kopf-Auswertung vor dem `continue` liest
+die Datei nur bei geänderter Zeit (fstat), Last vernachlässigbar. Bedingung: unabhängiges Council über den Diff vor „fertig“.
+E13 (Knut): mermaid 10.9.8 statt 10.9.1 — gleiche Reihe, Lücken geschlossen. Empfehlung: so lassen.

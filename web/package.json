@@ -11,9 +11,12 @@
     "test": "node --test test/*.test.ts",
     "e2e": "node e2e/smoke.mjs"
   },
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "markdown-it": "14.1.0",
+    "mermaid": "10.9.8",
     "mongodb": "6.20.0",
     "yaml": "2.8.1"
   },
