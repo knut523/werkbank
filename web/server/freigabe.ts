@@ -108,6 +108,15 @@ export function vorschauEintraege(yamlText: string, paketNr: number | null, link
   return out.slice(0, 12);
 }
 
+/** Ein einzelner Link aus dem Bericht-Kopf (Teil C, H5): nur das Coder-Muster, Port > 1024, nicht gesperrt — sonst null. */
+export function vorschauAusLink(link: string, titel = '', env = process.env): { port: number; link: string; was: string } | null {
+  const re = new RegExp(`^https://(\\d{2,5})--${HOST(env).replace(/\./g, '\\.')}(/[^\\s)>\\]"']*)?$`);
+  const m = re.exec(link);
+  if (!m) return null;
+  const port = Number(m[1]);
+  return port > 1024 && port < 65536 && !GESPERRT.has(port) ? { port, link, was: titel.slice(0, 160) } : null;
+}
+
 const cache = new Map<number, Vorschau>();
 /** GET / auf 127.0.0.1:<port>, keine Weiterleitung, Körper nie gelesen, 3 s; Ergebnis 30 s gemerkt. */
 export async function pruefeVorschau(v: { port: number; link: string; was: string }, force = false, now = Date.now()): Promise<Vorschau> {
@@ -220,7 +229,8 @@ export async function zurueckziehen(u: User, strand: string, id: string, log?: (
 
 /**
  * Darf <sha> aus dem Repo in <dir> gepusht werden? Ja nur bei einer aktiven, nicht gepushten Freigabe desselben Repos
- * (origin-URL) mit genau diesem SHA — oder mit derselben Patch-ID gegen dieselbe Basis (Rebase vor dem Push).
+ * (origin-URL) mit genau diesem SHA. Knut, 14.10.2026 (Plan Leitstand Teil C, D2/H4): „gilt nur für genau den gesehenen Stand —
+ * ändert sich ein Commit, verfällt die Freigabe“; die Rebase-Toleranz über die patch-id (Plan 154) entfällt.
  */
 export async function pruefeFreigabe(u: User, dir: string, sha: string, g: GitFn = git): Promise<{ ok: boolean; grund: string; freigabe?: ReturnType<typeof publicFreigabe> }> {
   if (!/^[0-9a-f]{40}$/.test(sha)) return { ok: false, grund: 'SHA ungültig (40 Hex-Zeichen).' };
@@ -233,12 +243,8 @@ export async function pruefeFreigabe(u: User, dir: string, sha: string, g: GitFn
   if (!list.length) return { ok: false, grund: `Keine aktive Freigabe für ${key} — erst im OLAF Workspace reviewen und freigeben.` };
   const exakt = list.find((f) => f.head === sha);
   if (exakt) return { ok: true, grund: `freigegeben (${exakt._id}, ${exakt.branch}, genau dieser Stand)`, freigabe: publicFreigabe(exakt) };
-  for (const f of list) {
-    if (!f.baseRef) continue;
-    const mb = tryGit(g, ['merge-base', sha, f.baseRef], real);
-    if (mb && patchId(g, real, mb, sha) === f.patchId) return { ok: true, grund: `freigegeben (${f._id}, ${f.branch}) — nach Rebase, derselbe Patch`, freigabe: publicFreigabe(f) };
-  }
-  return { ok: false, grund: `Dieser Stand (${sha.slice(0, 12)}) ist nicht freigegeben — Inhalt anders als bei der Freigabe. Neu reviewen und freigeben.` };
+  const alt = list[0];
+  return { ok: false, grund: `Dieser Stand (${sha.slice(0, 12)}) ist nicht freigegeben — freigegeben ist ${alt.branch} @ ${String(alt.head).slice(0, 12)}. Jeder neue Commit (auch ein Rebase) braucht eine neue Freigabe im OLAF Workspace.` };
 }
 
 export async function gepusht(u: User, id: string, pr: string | null) {

@@ -111,7 +111,7 @@ function setup() {
   return { origin, seed, wt };
 }
 
-test('Freigabe: sauber + gesehener Stand; unsauber/anderer Stand → 409; zweimal = eine; Prüfweg nach Rebase mit gleichem Patch ok, anderer Patch nein; zurückziehen; gepusht', async () => {
+test('Freigabe: sauber + gesehener Stand; unsauber/anderer Stand → 409; zweimal = eine; nur genau dieser SHA — auch ein Rebase mit gleichem Patch verfällt (Teil C, D2/C-7); zurückziehen; gepusht', async () => {
   const { seed, wt } = setup();
   const d = { _id: 'st1', title: 'Strang', cwd: wt, lastStatus: 'done' };
   const f = F.repoFakten(F.strandRepo(d));
@@ -127,13 +127,14 @@ test('Freigabe: sauber + gesehener Stand; unsauber/anderer Stand → 409; zweima
   assert.equal((await F.freigeben(u, d, { head: f.head, patchId: f.patchId })).id, fg.id, 'zweimal = dieselbe Freigabe');
   // Prüfweg: genau dieser Stand.
   assert.equal((await F.pruefeFreigabe(u, wt, f.head)).ok, true);
-  // develop geht weiter (anderes File), der Strang rebased: neuer SHA, derselbe Patch → ok.
+  // develop geht weiter (anderes File), der Strang rebased: neuer SHA, derselbe Patch → verfällt (Knut 14.10.: nur genau der gesehene Stand).
   writeFileSync(join(seed, 'd.txt'), 'd\n'); sh(seed, 'add', '.'); sh(seed, 'commit', '-q', '-m', 'develop weiter'); sh(seed, 'push', '-q', 'origin', 'HEAD:develop');
   sh(wt, 'fetch', '-q', 'origin'); sh(wt, 'rebase', '-q', 'origin/develop');
   const neu = sh(wt, 'rev-parse', 'HEAD');
   assert.notEqual(neu, f.head);
   const p = await F.pruefeFreigabe(u, wt, neu);
-  assert.equal(p.ok, true, p.grund); assert.match(p.grund, /nach Rebase, derselbe Patch/);
+  assert.equal(p.ok, false, p.grund); assert.match(p.grund, /neue Freigabe/);
+  assert.equal((await F.pruefeFreigabe(u, wt, f.head)).ok, true, 'der freigegebene Stand selbst bleibt grün');
   // Inhalt geändert → nicht freigegeben.
   writeFileSync(join(wt, 'b.txt'), 'b geändert\n'); sh(wt, 'commit', '-qam', 'heimlich');
   const anders = sh(wt, 'rev-parse', 'HEAD');
