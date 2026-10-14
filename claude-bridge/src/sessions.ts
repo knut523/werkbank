@@ -187,7 +187,20 @@ type OrchKind = 'strand' | 'leitstand' | 'beendet';
 // Risikostufe — vorbereitet für die smarte Auswahl (Modellwahl v2). Kein Wechsel mitten im Strang: nur bei der Anmeldung gesetzt.
 export type Risiko = 'niedrig' | 'mittel' | 'hoch';
 export const STRAND_MODEL = /^(claude:(opus|sonnet|haiku)|melious:[\w.:/-]{1,80})$/;
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string } }
+// Rollen-Profile (Plan 162, S6; Messung Paket 163: Grundlast 24–34 k Eingabe-Tokens je Zug). Je Strang beim Start fest, nie je Zug
+// wechselnd (stabiler Cache-Präfix). voll = wie bisher (Orchestrator/Hauptchat); bauer = voller Systemprompt, nur die nötigen
+// MCP-Server (vault-search, werkbank); leser = nur Read/Grep/Glob, keine Skills, keine CLAUDE.md, ohne dynamische
+// Systemprompt-Abschnitte — über Melious zusätzlich `--bare` mit eigenem kurzem Systemprompt (bei Claude nicht: --bare
+// überspringt die OAuth-Anmeldung).
+export type Profil = 'voll' | 'bauer' | 'leser';
+export const PROFILE: Profil[] = ['voll', 'bauer', 'leser'];
+// Grep/Glob gibt es in der aktuellen Claude-Code-Version nicht mehr (Suche läuft dort über Bash, und Bash fragt im Wächter immer
+// nach — im Strang abgelehnt). Für den Leser bleiben Read und vault-search; Code-Suche = Profil „bauer“.
+const LESER_TOOLS = ['Read', 'Grep', 'Glob'];
+const BAUER_MCP = ['vault-search', 'werkbank'];
+const LESER_MCP = ['vault-search', 'werkbank'];   // Suche im Vault (Lesen); review_ready / hauptchat_melden für Stränge
+export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte auf Deutsch, knapp und in Markdown. Du kannst nur lesen (Read, Grep, Glob) — schreibe und ändere nichts. Belege jede Aussage mit Datei:Zeile. Was du nicht findest, sagst du offen, statt zu raten.';
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string } }
 const orchFile = join(cfg.stateDir, 'orch.json');
 let orchMap: Record<string, OrchEntry> = {};
 try { orchMap = JSON.parse(readFileSync(orchFile, 'utf8')); } catch { /* keine */ }
@@ -417,11 +430,11 @@ export function workDirFor(userId: string, convId: string): string {
  * Meldet eine neue Unterhaltung als Orchestrator-Strang an: Arbeitsordner = dir (vorher geprüft, siehe server.ts),
  * strengere Sperren. Nur für Unterhaltungen ohne Sitzung und ohne Ordner — eine bestehende wird nie umgebogen.
  */
-export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko } = {}): void {
+export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil } = {}): void {
   const key = `${safeId(userId)}:${safeId(convId)}`;
   if (sessionMap[key] || cwdMap[key] || orchMap[key] || lives.has(key)) throw Object.assign(new Error('Unterhaltung gibt es schon.'), { status: 409 });
   cwdMap[key] = dir;
-  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}) };
+  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}) };
   saveMap();
 }
 
@@ -474,7 +487,7 @@ export function orchStateOf(userId: string) {
     const l = lives.get(k);
     const seen = lastSeen.get(k);
     return {
-      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, batches: e.batches ?? [], lastHand: e.lastHand ?? null,
+      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, batches: e.batches ?? [], lastHand: e.lastHand ?? null,
       // Start ohne Ende und keine laufende Sitzung: die Brücke wurde mitten im Zug neu gestartet.
       interrupted: !l && !!e.turn && e.turn.end === null,
       resumable: !!sessionMap[k], turns: seen?.turns ?? null, written: seen?.written ?? [],
@@ -1232,8 +1245,20 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     log('anbieter gewechselt', { conv: key, von: providerMap.get(key), nach: providerOf(acct), neu: true });
   }
   if (req.model) options.model = req.model;
-  const baseAppend: string = options.systemPrompt.append;
+  // Rollen-Profil des Strangs (S6): fest für alle Züge; was nicht vom Konto abhängt, gleich hier.
+  const profil: Profil = live.orch ? orchMap[key]?.profil ?? 'voll' : 'voll';
+  if (profil === 'leser') {
+    options.tools = LESER_TOOLS;
+    options.skills = [];
+    options.settingSources = [];
+    delete options.agents;
+    options.extraArgs = { ...(options.extraArgs ?? {}), 'exclude-dynamic-system-prompt-sections': null };
+  }
+  const basePrompt = options.systemPrompt;
+  const baseAppend: string = basePrompt.append;
   const baseDisallowed: string[] = options.disallowedTools;
+  const baseExtra: Record<string, unknown> = { ...(options.extraArgs ?? {}) };
+  const profileServers = (s: Record<string, unknown>) => (profil === 'voll' ? s : Object.fromEntries(Object.entries(s).filter(([k]) => (profil === 'bauer' ? BAUER_MCP : LESER_MCP).includes(k))));
   // Je Konto: Env, Werkzeuge, Modell. Melious: Modell aus Chat → Strang → (Überlauf-Modell) → Einrichtung; ohne AVV die
   // Datenregel (S3). Zurück auf Claude: Modell der Anfrage bzw. des Strangs, Token, Werkzeuge und Systemtext wie bestellt.
   const onAccount = (a: Account) => {
@@ -1241,12 +1266,18 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const mm = mel ? meliousChatModel(key) ?? strandMel ?? (chatOn ? undefined : a.overflowModel) ?? a.model : undefined;
     accountEnv(env, a, mm);
     const regel = mel && !a.avv;
-    options.mcpServers = withToken(regel ? withoutCustomerTools(req.mcpServers ?? {}) : req.mcpServers ?? {}, mel ? req.token : a.token);
-    options.systemPrompt = { ...options.systemPrompt, append: regel ? `${baseAppend}\n\n${MELIOUS_DATENREGEL}` : baseAppend };
+    options.mcpServers = profileServers(withToken(regel ? withoutCustomerTools(req.mcpServers ?? {}) : req.mcpServers ?? {}, mel ? req.token : a.token));
+    options.systemPrompt = { ...basePrompt, append: regel ? `${baseAppend}\n\n${MELIOUS_DATENREGEL}` : baseAppend };
+    options.extraArgs = { ...baseExtra };
     options.disallowedTools = regel ? [...baseDisallowed, ...REGEL_DISALLOWED] : baseDisallowed;
     // Kein Auto-Modus-Klassifikator über Melious (siehe makeGuard): der Zug läuft im normalen Modus mit Rückfragen.
     options.permissionMode = mel ? 'default' : live.mode;
     if (mel && live.mode === 'auto') options.systemPrompt = { ...options.systemPrompt, append: `${options.systemPrompt.append}\n\n${MELIOUS_OHNE_AUTO}` };
+    // Leser über Melious: `--bare` mit eigenem kurzem Systemprompt (−99 % Grundlast laut Messung). Nicht bei Claude (OAuth).
+    if (profil === 'leser' && mel) {
+      options.extraArgs = { ...baseExtra, bare: null };
+      options.systemPrompt = [LESER_SYSTEM, live.orch ? ORCH_APPEND : '', regel ? MELIOUS_DATENREGEL : ''].filter(Boolean).join('\n\n');
+    }
     // Modell des Strangs vor dem der Anfrage: beim Start festgelegt, nicht durch die Auswahl im Chat überstimmt (Review 2, 3).
     const model = mm ?? (mel ? undefined : strandClaude) ?? req.model;
     if (model) options.model = model; else delete options.model;

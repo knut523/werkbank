@@ -3,6 +3,8 @@
 //   orch start --title T --cwd DIR [--plan DATEI] [--lauf NAME] [--shared] [--code --slug SPEC-SLUG] (--prompt TEXT | --prompt-file DATEI | Auftrag auf stdin)
 //     [--modell claude:opus|sonnet|haiku|melious:<id>] [--risiko niedrig|mittel|hoch]   Hauptmodell und Risikostufe des Strangs
 //     (Plan 162); nur beim Start, kein Wechsel mitten im Strang. Überlauf auf Melious nur bei „niedrig“.
+//     [--profil voll|bauer|leser]   Rollen-Profil (Grundlast je Zug): bauer = nur vault-search/werkbank-MCP; leser = nur
+//     Read/Grep/Glob, ohne Skills/CLAUDE.md, über Melious mit --bare und kurzem Systemprompt.
 //     Git-Repo mit origin auf github.com/WirStrom1|knut523: vorher git fetch, „Stand: …“ im Chat; --code = frischer Worktree
 //     <repo>-agent-<id> (Zweig agent/<id>) von origin/develop|dev|main statt des angegebenen Ordners. Nie pushen.
 //     --code prüft vorher G0 (scripts/vorbau-check; Slug aus --slug oder spec: der Plandatei): Treffer/Stopp → kein Start,
@@ -123,7 +125,7 @@ async function main() {
       const prompt = typeof flags.prompt === 'string' ? flags.prompt : typeof flags['prompt-file'] === 'string' ? readFileSync(flags['prompt-file'], 'utf8') : await stdin();
       if (typeof flags.title !== 'string' || typeof flags.cwd !== 'string') die('start braucht --title und --cwd.');
       const j = await call('start', { title: flags.title, cwd: flags.cwd, plan: typeof flags.plan === 'string' ? flags.plan : null, lauf: typeof flags.lauf === 'string' ? flags.lauf : null, shared: flags.shared === true, code: flags.code === true, slug: typeof flags.slug === 'string' ? flags.slug : null, prompt,
-        ...(typeof flags.modell === 'string' ? { modell: flags.modell } : {}), ...(typeof flags.risiko === 'string' ? { risiko: flags.risiko } : {}) });
+        ...(typeof flags.modell === 'string' ? { modell: flags.modell } : {}), ...(typeof flags.risiko === 'string' ? { risiko: flags.risiko } : {}), ...(typeof flags.profil === 'string' ? { profil: flags.profil } : {}) });
       if (flags.json) return console.log(JSON.stringify(j, null, 1));
       console.log(`gestartet: ${j.id}  ${j.url}\nOrdner:    ${j.cwd}${j.worktree ? ' (frischer Worktree)' : ''}${j.stand ? `\n${j.stand}` : ''}${j.plan ? `\nPlan:      ${j.plan}` : ''}${j.warning ? `\nHinweis:   ${j.warning}` : ''}`);
       return;

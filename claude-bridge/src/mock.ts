@@ -102,6 +102,13 @@ export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<
     // Melious (Plan 162): Schlüssel in ANTHROPIC_API_KEY, Basis-URL gesetzt, kein OAuth-Token. „mel-pleite“ = Budget aus
     // (billing_error), „mel-viel“ = drei Antworten mit je 40 000 Tokens (Deckel), sonst eine kurze Antwort mit usage.
     const mel = String(options.env?.ANTHROPIC_API_KEY ?? '');
+    // Rollen-Profile (Plan 162, S6): was die Brücke für diesen Zug einstellt.
+    if (prompt.includes('PROFIL?')) {
+      const ea = options.extraArgs ?? {};
+      yield text(`(Mock) Profil: Werkzeuge ${options.tools ? options.tools.join(',') : 'alle'}; MCP ${Object.keys(options.mcpServers ?? {}).sort().join(',') || '-'}; Skills ${Array.isArray(options.skills) ? options.skills.length : '?'}; Einstellungen ${(options.settingSources ?? []).join(',') || '-'}; bare ${'bare' in ea ? 'ja' : 'nein'}; dynamisch aus ${'exclude-dynamic-system-prompt-sections' in ea ? 'ja' : 'nein'}; Systemprompt ${typeof options.systemPrompt === 'string' ? 'eigen' : 'Claude Code'}; Melious ${mel ? 'ja' : 'nein'}. `);
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
     if (mel) {
       yield text(`(Mock) Melious über ${options.env?.ANTHROPIC_BASE_URL}; OAuth: ${options.env?.CLAUDE_CODE_OAUTH_TOKEN ? 'ja' : 'nein'}; Betas aus: ${options.env?.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS ?? '-'}; Modell: ${options.model ?? 'Standard'}; Teilagenten: ${options.env?.ANTHROPIC_DEFAULT_SONNET_MODEL ?? '-'}; MCP: ${Object.keys(options.mcpServers ?? {}).join(',') || '-'}; Datenregel: ${String(options.systemPrompt?.append ?? '').includes('Datenregel (dieser Zug') ? 'ja' : 'nein'}; Push gesperrt: ${(options.disallowedTools ?? []).includes('Bash(git push:*)') ? 'ja' : 'nein'}; Jira gesperrt: ${(options.disallowedTools ?? []).includes('mcp__werkbank__jira_update') ? 'ja' : 'nein'}; Modus: ${options.permissionMode}${String(options.systemPrompt?.append ?? '').includes('Über Melious gilt der Auto-Modus nicht') ? ' (Auto aus)' : ''}. `);
       if (/leer/.test(mel)) {

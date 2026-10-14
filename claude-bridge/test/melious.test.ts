@@ -304,6 +304,27 @@ test('Auto-Modus: Melious-Züge laufen ohne den Klassifikator des SDK (normaler 
   } finally { p.kill(); }
 });
 
+test('Rollen-Profile (S6): voll wie bisher; bauer nur vault-search/werkbank; leser schlank, --bare nur über Melious; Hauptchat/ungültig abgelehnt', async () => {
+  const ask = (c: string, user = 'an') => send(c, 'PROFIL?', user);
+  // Normaler Chat (kein Strang) und Strang ohne Profil: alles wie bisher.
+  assert.match(await ask(conv(30)), /Werkzeuge alle; .*bare nein; dynamisch aus nein; Systemprompt Claude Code/);
+  assert.equal((await register('an', conv(31), { profil: 'schlank' })).status, 400);
+  assert.equal((await register('an', conv(31), { profil: 'bauer' })).status, 200);
+  const bauer = await ask(conv(31));
+  assert.match(bauer, /Werkzeuge alle; MCP [^;]*;/);
+  assert.doesNotMatch(bauer.match(/MCP ([^;]*);/)?.[1] ?? '', /atlassian|forge-review/);
+  assert.match(bauer, /bare nein; dynamisch aus nein; Systemprompt Claude Code/);
+  // Leser auf Claude: schlank, aber ohne --bare (OAuth) und mit dem Systemprompt von Claude Code.
+  await register('an', conv(32), { profil: 'leser' });
+  assert.match(await ask(conv(32)), /Werkzeuge Read,Grep,Glob; MCP [^;]*; Skills 0; Einstellungen -; bare nein; dynamisch aus ja; Systemprompt Claude Code; Melious nein\./);
+  // Leser über Melious (Strang-Modell): --bare mit eigenem kurzem Systemprompt.
+  await register('an', conv(33), { profil: 'leser', modell: 'melious:glm-5.3-flash' });
+  assert.match(await ask(conv(33)), /Werkzeuge Read,Grep,Glob; .*Skills 0; Einstellungen -; bare ja; dynamisch aus ja; Systemprompt eigen; Melious ja\./);
+  const s = (await orchState('an')).find((x: any) => x.conv === conv(33));
+  assert.equal(s.profil, 'leser');
+  assert.equal((await orchState('an')).find((x: any) => x.conv === conv(17)).profil, 'voll');
+});
+
 test('/health zählt Melious-Züge ohne Schlüssel; kein Melious-Schlüssel im Log', async () => {
   const h: any = await (await fetch(`http://127.0.0.1:${PORT}/health`)).json();
   assert.ok(h.konten.melious.zuege >= 4, JSON.stringify(h.konten.melious));

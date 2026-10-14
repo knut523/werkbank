@@ -341,7 +341,10 @@ const server = createServer(async (req, res) => {
       const modell = kind === 'strand' && typeof b.modell === 'string' && b.modell ? b.modell : undefined;
       if (modell && !STRAND_MODEL.test(modell)) return json(res, 400, { error: 'Modell: claude:opus|sonnet|haiku oder melious:<modell>.' });
       const risiko = kind !== 'strand' ? undefined : b.risiko === 'niedrig' || b.risiko === 'mittel' || b.risiko === 'hoch' ? b.risiko : undefined;
-      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
+      // Rollen-Profil (Plan 162, S6): nur Stränge, nur beim Start.
+      const profil = kind === 'strand' && (b.profil === 'bauer' || b.profil === 'leser') ? b.profil : undefined;
+      if (kind === 'strand' && b.profil && !['voll', 'bauer', 'leser'].includes(String(b.profil))) return json(res, 400, { error: 'Profil: voll, bauer oder leser.' });
+      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
       log(kind === 'leitstand' ? 'leitstand angemeldet' : 'strang angemeldet', { user: userId, conv });
       return json(res, 200, { ok: true, dir: real, mode: autoFor({ email }) });
     }

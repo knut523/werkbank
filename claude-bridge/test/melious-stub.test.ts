@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -12,6 +12,9 @@ import { createRequire } from 'node:module';
 
 const PORT = 3395;
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-melstub-'));
+const ORCH = realpathSync(mkdtempSync(join(tmpdir(), 'orch-melstub-')));
+mkdirSync(join(STATE, 'scratch', 'fremd'), { recursive: true });
+writeFileSync(join(STATE, 'scratch', 'fremd', 'geheim.txt'), 'GEHEIMNIS-4711\n');
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-melstub-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-melstub-'));
 const VAULT = mkdtempSync(join(tmpdir(), 'vault-melstub-'));
@@ -27,7 +30,7 @@ const cliThere = (() => { try { return existsSync(dirname(req.resolve('@anthropi
 
 let proc: ChildProcess, web: Server, stub: Server;
 let out = '';
-const seen: { path: string; key: string; auth: string; beta: string; model: string; tools: number; hasToolResult: boolean; stream: boolean }[] = [];
+const seen: { path: string; key: string; auth: string; beta: string; model: string; tools: number; hasToolResult: boolean; stream: boolean; sys: number; toolNames: string[]; conv: string; bytes: number }[] = [];
 const usage: any[] = [];
 
 function sse(res: any, model: string, blocks: any[], stop: string) {
@@ -60,9 +63,11 @@ before(async () => {
     if (rq.method !== 'POST' || path !== '/v1/messages') { res.statusCode = 404; res.end('{"error":{"code":"VALIDATION_4000","message":"nicht da"}}'); return; }
     const msgs = JSON.stringify(j.messages ?? []);
     const hasToolResult = msgs.includes('"tool_result"');
-    seen.push({ path, key: String(rq.headers['x-api-key'] ?? ''), auth: String(rq.headers.authorization ?? ''), beta: String(rq.headers['anthropic-beta'] ?? ''), model: String(j.model ?? ''), tools: (j.tools ?? []).length, hasToolResult, stream: !!j.stream });
+    seen.push({ path, key: String(rq.headers['x-api-key'] ?? ''), auth: String(rq.headers.authorization ?? ''), beta: String(rq.headers['anthropic-beta'] ?? ''), model: String(j.model ?? ''), tools: (j.tools ?? []).length, hasToolResult, stream: !!j.stream, sys: JSON.stringify(j.system ?? '').length, toolNames: (j.tools ?? []).map((t: any) => t.name), conv: msgs.includes('FREMD') ? 'fremd' : '', bytes: b.length });
     if (!j.stream) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ id: 'msg_x', type: 'message', role: 'assistant', model: j.model, content: [{ type: 'text', text: 'Titel' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 10, output_tokens: 2 } })); return; }
+    if (msgs.includes('FREMD') && hasToolResult) return sse(res, j.model, [{ type: 'text', text: msgs.includes('GEHEIMNIS-4711') ? 'LECK: fremde Datei gelesen' : 'Zugriff wurde abgelehnt' }], 'end_turn');
     if (hasToolResult) return sse(res, j.model, [{ type: 'text', text: msgs.includes('Zitronenfalter') ? 'Gelesen: Zitronenfalter 42' : 'Datei nicht gelesen' }], 'end_turn');
+    if (msgs.includes('FREMD')) return sse(res, j.model, [{ type: 'tool_use', id: 'toolu_01fremd', name: 'Read', input: { file_path: join(STATE, 'scratch', 'fremd', 'geheim.txt') } }], 'tool_use');
     if (msgs.includes('Lies die Probe')) return sse(res, j.model, [{ type: 'tool_use', id: 'toolu_01probe', name: 'Read', input: { file_path: join(VAULT, 'notiz', 'probe.md') } }], 'tool_use');
     return sse(res, j.model, [{ type: 'text', text: 'OK' }], 'end_turn');
   });
@@ -82,7 +87,7 @@ before(async () => {
       MELIOUS_BASE_URL: `http://127.0.0.1:${(stub.address() as any).port}`, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       // Kein Weg nach draußen: der Rückfall auf Claude (Platzhalter-Token) soll nie api.anthropic.com erreichen.
       HTTPS_PROXY: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost',
-      BRIDGE_CLAUDE_HOMES: HOMES, BRIDGE_MAX_PARALLEL_CHATS: '2', WERKBANK_SKILLS_SOURCE: SKILLS, BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: '', BRIDGE_TURN_TIMEOUT_MS: '90000' },
+      BRIDGE_CLAUDE_HOMES: HOMES, BRIDGE_MAX_PARALLEL_CHATS: '2', WERKBANK_ORCH_ROOTS: ORCH, WERKBANK_SKILLS_SOURCE: SKILLS, BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: '', BRIDGE_TURN_TIMEOUT_MS: '90000' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.stdout!.on('data', (d) => { out += d; });
@@ -149,4 +154,30 @@ test('Echtes Claude Code, Melious ohne Guthaben (403 permission_error „Insuffi
   assert.match(out, /"event":"melious fehler","conv":"stubleer:[^"]+","art":"guthaben"/);
   const st: any = await (await fetch(`http://127.0.0.1:${PORT}/internal/accounts-state?user=stubleer`, { headers: { 'x-werkbank-internal': 'geheim' } })).json();
   assert.ok(st.exhausted.melious > Date.now() + 3600_000, JSON.stringify(st));
+});
+
+test('Profil „leser“ über Melious (--bare): kleiner Systemprompt, nur Read/Grep/Glob — und der Wächter sperrt fremde Ordner weiter', { skip: !cliThere && 'Claude-Code-CLI nicht installiert', timeout: 120_000 }, async () => {
+  const conv = '00000000-0000-4000-8000-0000000000cc';
+  const dir = join(ORCH, 'leser'); mkdirSync(dir, { recursive: true });
+  const reg = await fetch(`http://127.0.0.1:${PORT}/internal/orchestrate`, { method: 'POST', headers: { 'x-werkbank-internal': 'geheim', 'content-type': 'application/json' },
+    body: JSON.stringify({ userId: 'stub', conv, dir, email: 'knut@x', modell: 'melious:glm-5.3-flash', profil: 'leser' }) });
+  assert.equal(reg.status, 200, await reg.text());
+  const voll = seen.filter((s) => s.stream && !s.conv).map((s) => s.sys);   // normale Züge aus den Tests davor
+  const t = await send(conv, 'Lies FREMD und sag mir, was drinsteht');
+  assert.doesNotMatch(t, /LECK/, t + '\n' + out.slice(-2000));
+  assert.match(t, /Zugriff wurde abgelehnt/, t + '\n' + out.slice(-2000));
+  assert.match(t, /🔒 Orchestrator-Strang ohne Rückfragen/);   // die Ablehnung kam vom Wächter der Brücke
+  const mine = seen.filter((s) => s.conv === 'fremd' && s.stream);
+  assert.ok(mine.length >= 2);
+  // Nur Lesen (Read/Grep/Glob, soweit die CLI sie unter --bare anbietet) und die Werkbank-Werkzeuge des Strangs — nichts Schreibendes.
+  const normal = seen.find((s) => s.stream && !s.conv)?.toolNames ?? [];
+  console.log(`# Werkzeuge beim Anbieter: leser+bare ${JSON.stringify(mine[0].toolNames)} · normal ${normal.length} (${normal.filter((n) => !n.startsWith('mcp__')).join(',')})`);
+  for (const s of mine) {
+    assert.ok(s.toolNames.includes('Read'));
+    assert.deepEqual(s.toolNames.filter((n) => !['Read', 'Grep', 'Glob'].includes(n) && !/^mcp__(werkbank|vault-search)__/.test(n)), []);
+  }
+  // Ganze Anfrage (Systemprompt + Werkzeug-Beschreibungen + Nachrichten), erste Anfrage des Zugs.
+  const vollBytes = seen.filter((s) => s.stream && !s.conv && !s.hasToolResult).map((s) => s.bytes);
+  console.log(`# Anfrage beim Anbieter: leser+bare ${mine[0].bytes} Bytes (Systemprompt ${mine[0].sys}), normal ${Math.min(...vollBytes)} Bytes (Systemprompt ${Math.min(...voll)})`);
+  assert.ok(mine[0].bytes * 3 < Math.min(...vollBytes), `leser ${mine[0].bytes} vs. normal ${Math.min(...vollBytes)}`);
 });

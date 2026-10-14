@@ -58,6 +58,18 @@ Nachgezogen beim Bau:
   `modell`/`risiko` an (Review 2).
 - Fehlerart „Guthaben leer“ (echter Test: 403 `permission_error` „Insufficient credits“) bis Monatswechsel, zurücksetzbar.
 
+- **S6 Rollen-Profile** (Messung Paket 163: Grundlast 24–34 k Eingabe-Tokens je Zug). `orch start --profil voll|bauer|leser`,
+  je Strang beim Start fest (stabiler Cache-Präfix), Vorgabe `voll` = wie bisher:
+  - `bauer`: voller Claude-Code-Systemprompt, nur die MCP-Server vault-search und werkbank.
+  - `leser`: nur Read (Grep/Glob gibt es in der aktuellen CLI nicht mehr), vault-search und werkbank; keine Skills, keine
+    CLAUDE.md, keine Teilagenten, ohne dynamische Systemprompt-Abschnitte. Über Melious zusätzlich `--bare` mit eigenem
+    kurzem Systemprompt; bei Claude nicht (überspringt OAuth).
+  - Geprüft mit echtem Claude Code gegen den Stub: 8,2 KB statt 89 KB je Anfrage. Der PreToolUse-Wächter der Brücke läuft
+    auch unter `--bare` (Lesen in fremden Arbeitsordnern abgelehnt).
+  - Lesende Bash-Befehle bleiben „Rückfrage“ (keine neue Ausnahme), darum ist Code-Suche Sache des Profils `bauer`.
+- Korrektur zur Token-Aussage: Melious meldet alle Eingaben als Cache-Treffer; der Mehrverbrauch kommt von mehr Zügen, nicht
+  von fehlendem Caching.
+
 ## Zusatz 2 (Knut 14.10.: PRO-Plan mit GLM 5.3, GLM 5.3 Flash, DeepSeek V4.1 Flash, DeepSeek V4 Flash)
 - Modell je Chat statt nur der opus/sonnet/haiku-Abbildung: `/melious an <modell>`, `/melious modell <name|standard>`,
   `/melious modelle` (Liste live über `GET /v1/models`, ohne Tokens). Reihenfolge: Chat-Modell → Modell aus der Einrichtung →
