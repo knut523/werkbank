@@ -24,7 +24,8 @@ export const DEFAULTS: TickerSettings = {
   ownerId: null, autoReviewSince: null, log: [],
 };
 
-const meta = () => wb().collection('meta');
+export const wbMeta = () => wb().collection('meta');
+const meta = wbMeta;
 export const tickerCol = () => wb().collection('pr_ticker');
 export const prState = () => wb().collection('pr_ticker_prs');
 export const reviewsCol = () => wb().collection('pr_reviews');
