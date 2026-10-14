@@ -118,7 +118,7 @@ test('Lauf: aus → keine Abfrage; an → Ereignisse einmal (Dedupe), Tag nach d
     { id: 'T0', author: { login: 'knut523' }, body: '@review', createdAt: earlier, url: 'u0' }] } })];
   const r = await P.tickerTick(async () => 'read-tok');
   assert.equal(seen.at(-1).auth, 'bearer read-tok');
-  assert.match(seen.at(-1).variables.q0, /^is:pr org:WirStrom1 updated:>=\S+Z sort:updated-desc$/);
+  assert.match(seen.at(-1).variables.q0, /^is:pr org:WirStrom1 updated:>=\S+Z sort:updated-asc$/);
   assert.equal(r.reviews, 1);
   const q = await P.reviewsCol().find({}).toArray();
   assert.equal(q.length, 1); assert.equal(q[0]._id, `WirStrom1/olaf-admin#5@${SHA1}`); assert.equal(q[0].status, 'wartet');
@@ -235,4 +235,25 @@ test('Hauptchat-Meldung: „Neues Review fertig: repo#n — Empfehlung …“', 
   const { prReviewText } = await import('../server/leitstand.ts');
   assert.equal(prReviewText({ repo: 'WirStrom1/olaf-admin', number: 5, paket: '157-x' }, () => 'Empfehlung: approve\nPasst.'), 'Neues Review fertig: olaf-admin#5 — Empfehlung: freigeben');
   assert.match(prReviewText({ repo: 'WirStrom1/olaf-admin', number: 5, paket: '157-x' }, () => null), /kein Entwurf/);
+});
+
+test('Review-Befunde: neuer Stand seit dem Tag → übersprungen; Geheimnis im Text → nicht posten; hängender Start → fehler', async () => {
+  const R = await import('../server/prreview.ts');
+  const P = await import('../server/prticker.ts');
+  const git = async (args: string[]) => (args[0] === 'rev-parse' ? SHA2 : '');
+  await assert.rejects(R.prepareWorktree('a/b', 1, SHA1, git, join(TMP, 'pr2')), (e: any) => e.skip === true && /neuer Stand bbbbbbb/.test(e.message));
+  assert.match(R.textRegeln('Token: ghp_abcdefghijklmnopqrstuvwxyz0123', { repo: 'a/b', number: 1 }).join(), /Geheimnis/);
+  assert.match(R.textRegeln('password = hunter2hunter2', { repo: 'a/b', number: 1 }).join(), /Geheimnis/);
+  assert.deepEqual(R.textRegeln('Die Prüfung auf `token` fehlt in `auth.ts:3`.', { repo: 'a/b', number: 1 }), []);
+  await P.setTickerSettings({ autoReview: false }, by);
+  await P.reviewsCol().insertOne({ _id: 'h/h#1@' + SHA1, status: 'startet', startedAt: new Date(Date.now() - 20 * 60_000), startDay: 'x' } as any);
+  await R.reviewTick({ userById: async () => null, startOrch: async () => ({ id: 'x' }), strandDoc: async () => null });
+  assert.equal(((await P.reviewsCol().findOne({ _id: 'h/h#1@' + SHA1 as any })) as any).status, 'fehler');
+});
+
+test('Review-Anfrage löst nur aus, wenn der PR-Autor auf der Liste steht', async () => {
+  const P = await import('../server/prticker.ts');
+  const s = { ...P.DEFAULTS, autoReview: true, onRequest: true, ownerId: 'u1', autoReviewSince: '2000-01-01T00:00:00Z' };
+  const e = (actor: string, n: number) => ({ _id: `anfrage:x/y#${n}:${SHA1}`, kind: 'anfrage' as const, repo: 'x/y', number: n, title: 't', url: 'u', prUrl: 'u', actor, text: '', at: '2026-10-13T10:00:00Z', head: SHA1 });
+  assert.equal(await P.queueReviews([e('fremder', 71), e('bizarrochris', 72)], s), 1);
 });

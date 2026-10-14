@@ -199,3 +199,11 @@ test('Plan 157 B: Entscheidungen aus dem echten Bericht 154 (D1–D11) mit Empfe
   const ohne = '**D1 — X**\n- a) eins\n- Empfehlung: a\n\n**D2 — Y**\n- b\n';
   assert.equal(trageEin(ohne, [{ id: 'D1', text: 'ok' }, { id: 'D2', text: 'nein' }], '14.10.'), '**D1 — X**\n- a) eins\n- Empfehlung: a\n  - Knut: ok (14.10.)\n\n**D2 — Y**\n- b\n  - Knut: nein (14.10.)\n');
 });
+
+test('Plan 157 B (Review): doppelte Kennung nur im ersten Block; Einrückung der Empfehlung, mehrzeilige Empfehlung bleibt ganz', async () => {
+  const { trageEin } = await import('../server/freigabe.ts');
+  const md = '**D1 — A**\n- Empfehlung: a\n\n**D1 — A nochmal**\n- Empfehlung: b\n';
+  assert.equal(trageEin(md, [{ id: 'D1', text: 'ok' }], '14.10.'), '**D1 — A**\n- Empfehlung: a\n  - Knut: ok (14.10.)\n\n**D1 — A nochmal**\n- Empfehlung: b\n');
+  const lang = '**D2 — B**\n  - Empfehlung: a, weil\n    das einfacher ist\n';
+  assert.equal(trageEin(lang, [{ id: 'D2', text: 'ok' }], '14.10.'), '**D2 — B**\n  - Empfehlung: a, weil\n    das einfacher ist\n    - Knut: ok (14.10.)\n');
+});

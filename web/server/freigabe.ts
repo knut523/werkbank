@@ -162,26 +162,31 @@ export function trageEin(md: string, antworten: { id: string; text: string }[], 
   const want = new Map(antworten.map((a) => [a.id, a.text.replace(/\s+/g, ' ').trim()]));
   const lines = md.split('\n');
   const out: string[] = [];
-  let cur: string | null = null, done = false, empfAt = -1, fence = false;
+  let cur: string | null = null, done = false, empfAt = -1, empfIndent = '', fence = false;
+  const filled = new Set<string>();   // doppelte Kennung: nur der erste Block zählt (wie entscheidungen())
   const flush = () => {
-    if (cur && want.has(cur) && !done) {
-      const line = `  - Knut: ${want.get(cur)} (${datum})`;
+    if (cur && want.has(cur) && !done && !filled.has(cur)) {
+      filled.add(cur);
+      const line = `${empfIndent}  - Knut: ${want.get(cur)} (${datum})`;
       if (empfAt >= 0) out.splice(empfAt + 1, 0, line);
       else { let i = out.length; while (i > 0 && !out[i - 1].trim()) i--; out.splice(i, 0, line); }
     }
-    cur = null; done = false; empfAt = -1;
+    cur = null; done = false; empfAt = -1; empfIndent = '';
   };
   for (const line of lines) {
     if (/^\s*```/.test(line)) fence = !fence;
     if (!fence) {
       const h = /^\s*(?:[-*]\s+)?\*\*(D\d{1,3}|E-\d{1,4}-\d{1,3})\s*[—·–:-]\s*(.+?)\*\*/.exec(line);
-      if (h) { flush(); cur = h[1]; out.push(line); continue; }
+      if (h) { flush(); cur = filled.has(h[1]) ? null : h[1]; out.push(line); continue; }
       if (/^#{1,3}\s/.test(line)) { flush(); out.push(line); continue; }
       if (cur && want.has(cur) && !done) {
         const k = /^(\s*-\s*Knut:)\s*(.*)$/.exec(line);
-        if (k && !k[2].trim()) { out.push(`${k[1]} ${want.get(cur)} (${datum})`); done = true; continue; }
-        if (k) done = true;   // schon beantwortet: nicht überschreiben
-        if (/^\s*[-*]\s*\**Empfehlung/i.test(line)) empfAt = out.length;
+        if (k && !k[2].trim()) { out.push(`${k[1]} ${want.get(cur)} (${datum})`); done = true; filled.add(cur); continue; }
+        if (k) { done = true; filled.add(cur); }   // schon beantwortet: nicht überschreiben
+        const em = /^(\s*)[-*]\s*\**Empfehlung/i.exec(line);
+        if (em) { empfAt = out.length; empfIndent = em[1]; }
+        // Folgezeilen einer mehrzeiligen Empfehlung (tiefer eingerückt, kein neuer Punkt) gehören noch dazu (Review A10).
+        else if (empfAt === out.length - 1 && line.trim() && /^\s+/.test(line) && (line.match(/^\s*/)![0].length > empfIndent.length + 1) && !/^\s*[-*]\s/.test(line)) empfAt = out.length;
       }
     }
     out.push(line);

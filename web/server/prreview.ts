@@ -5,8 +5,10 @@
 // (erste Zeile „Empfehlung: …“). Ist der Strang fertig und „Kommentare automatisch posten“ an (Knut, 13.10.2026,
 // Ergänzung A), geht der Entwurf als Review mit event COMMENT an den PR — nie APPROVE/REQUEST_CHANGES automatisch.
 
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { g0Env, g0GitArgs } from './vorbau.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { GIT_SAFE } from './gitsafe.ts';
@@ -19,25 +21,34 @@ export const prReviewDir = (env = process.env) => env.WERKBANK_PR_REVIEW_DIR || 
 const REPO_RE = /^[\w.-]{1,100}\/[\w.-]{1,100}$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
 
-export type GitRun = (args: string[], cwd: string, timeoutMs?: number) => string;
-const GIT_ENV = () => ({ ...process.env, GIT_VW_READ: '1', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false', SSH_ASKPASS: '/bin/false', GCM_INTERACTIVE: 'never' });
-export const realGit: GitRun = (args, cwd, timeoutMs = 120_000) => execFileSync('git', [...GIT_SAFE, '-c', 'credential.interactive=never', '-c', 'credential.useHttpPath=true', ...args], { cwd, env: GIT_ENV(), timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 16 << 20 }).trim();
+export type GitRun = (args: string[], cwd: string, timeoutMs?: number) => Promise<string> | string;
+// Asynchron (Review: execFileSync hielte den ganzen Web-Server an). Zugangsdaten wie G0 (vorbau.ts): geerbte Helper
+// zurückgesetzt, nur der Vaultwarden-Helper mit GIT_VW_READ=1 (Lesetoken), kein SSH, GIT_VW_ITEM entfernt.
+const run = promisify(execFile);
+export const realGit: GitRun = async (args, cwd, timeoutMs = 120_000) => (await run('git', [...GIT_SAFE, ...g0GitArgs(), ...args], { cwd, env: g0Env(), timeout: timeoutMs, encoding: 'utf8', maxBuffer: 16 << 20 })).stdout.trim();
 /** Zugangsdaten aus Fehlertexten entfernen. */
-export const scrub = (t: string) => String(t).replace(/(https?:\/\/)[^@\s/]+@/g, '$1').replace(/(ghp_|github_pat_|gho_)[A-Za-z0-9_]+/g, '***').slice(0, 300);
+export const scrub = (t: string) => String(t).replace(/(https?:\/\/)[^@\s/]+@/g, '$1').replace(/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '***').slice(0, 300);
 
 /** Eigener Klon je Repo (ohne Checkout), dann `pull/N/head` holen und einen frischen Worktree am reviewten Kopf anlegen. */
-export function prepareWorktree(repo: string, n: number, head: string, g: GitRun = realGit, base = prReviewDir()): string {
+export async function prepareWorktree(repo: string, n: number, head: string, g: GitRun = realGit, base = prReviewDir()): Promise<string> {
   if (!REPO_RE.test(repo) || !Number.isInteger(n) || n < 1 || !SHA_RE.test(head)) throw new Error('PR-Angaben ungültig.');
   const klon = join(base, '_klone', repo.replace('/', '__'));
   mkdirSync(join(base, '_klone'), { recursive: true });
+  let got: string;
   try {
-    if (!existsSync(join(klon, '.git')) && !existsSync(join(klon, 'HEAD'))) g(['clone', '--no-checkout', '--filter=blob:none', `https://github.com/${repo}.git`, klon], base, 600_000);
-    g(['fetch', '--no-tags', 'origin', `+refs/pull/${n}/head:refs/remotes/pr/${n}`], klon);
-    const got = g(['rev-parse', `refs/remotes/pr/${n}`], klon);
-    const wt = join(base, `${repo.split('/')[1]}-${n}-${head.slice(0, 7)}`);
-    if (!existsSync(wt)) g(['worktree', 'add', '--detach', wt, got === head ? head : got], klon);
-    return wt;
+    if (!existsSync(join(klon, '.git')) && !existsSync(join(klon, 'HEAD'))) await g(['clone', '--no-checkout', '--filter=blob:none', `https://github.com/${repo}.git`, klon], base, 600_000);
+    await g(['fetch', '--no-tags', 'origin', `+refs/pull/${n}/head:refs/remotes/pr/${n}`], klon);
+    got = String(await g(['rev-parse', `refs/remotes/pr/${n}`], klon)).trim();
   } catch (e: any) { throw new Error(`PR-Stand nicht geholt: ${scrub(e.stderr?.toString() || e.message)}`); }
+  // Review prüft genau den getaggten Stand; ist der PR weiter, neu taggen (Review A6).
+  if (got !== head) throw Object.assign(new Error(`neuer Stand ${got.slice(0, 7)} seit dem Tag — für den neuen Stand neu taggen`), { skip: true });
+  const wt = join(base, `${repo.replace('/', '__')}-${n}-${head.slice(0, 7)}`);
+  try {
+    // Nie einen alten Worktree (mit Änderungen eines früheren Strangs) wiederverwenden (Review A14).
+    if (existsSync(wt)) await g(['worktree', 'remove', '--force', wt], klon);
+    await g(['worktree', 'add', '--detach', wt, head], klon);
+  } catch (e: any) { throw new Error(`Worktree nicht angelegt: ${scrub(e.stderr?.toString() || e.message)}`); }
+  return wt;
 }
 
 /** Nächste freie Paketnummer im Ordner der Review-Pakete → `NNN-review-<repo>-<n>`. */
@@ -108,9 +119,12 @@ export function textRegeln(text: string, r: { repo: string; number: number }): s
   if (/(^|[\s(`'"])(~\/|\/home\/|\/root\/|\/tmp\/)|review-pakete\/|pr-reviews\//.test(text)) out.push('enthält einen lokalen Pfad');
   const fremd = [...text.matchAll(/(?:^|[\s(])#(\d{1,6})\b/g)].map((m) => Number(m[1])).filter((x) => x !== r.number);
   if (fremd.length) out.push(`verweist auf #${fremd.join(', #')} (nicht geprüft)`);
+  if (GEHEIM.test(text)) out.push('sieht nach einem Geheimnis aus (Token/Schlüssel/Passwort)');
   if (text.length > 60_000) out.push('zu lang');
   return out;
 }
+
+const GEHEIM = /\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY|\bAKIA[0-9A-Z]{16}\b|\b(password|passwort|secret|token|api[_-]?key)\s*[=:]\s*\S{6,}|mongodb(\+srv)?:\/\/[^\s:]+:[^\s@]+@|\bsk-[A-Za-z0-9_-]{20,}/i;
 
 export const fussnote = (head: string, empf: string) => `\n\n---\n_Automatisches Review (OLAF Workspace) · Stand \`${head.slice(0, 7)}\` · Empfehlung: ${empf}. Freigabe oder Änderungswunsch entscheidet Knut._`;
 
@@ -120,17 +134,23 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
   const s = await tickerSettings();
   const now = deps.now?.() ?? new Date();
   let done = 0;
+  // 0) hängengebliebene Starts (Server-Neustart zwischen Claim und Start, Review A5)
+  await reviewsCol().updateMany({ status: 'startet', startedAt: { $lt: new Date(now.getTime() - 15 * 60_000) } }, { $set: { status: 'fehler', note: 'Start abgebrochen (Neustart?) — „Jetzt reviewen“', startDay: null } });
   // 1) laufende
   for (const r of (await reviewsCol().find({ status: 'läuft' }).toArray()) as any[]) {
     const d = await deps.strandDoc(r.strand);
     if (!d) { await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'fehler', note: 'Strang nicht mehr da', doneAt: now } }); continue; }
     const fertig = d.reviewReadyAt || d.knutReviewedAt || d.reviewedAt || d.lastStatus === 'done';
-    const kaputt = d.lastStatus === 'failed' || d.autoStopped;
+    // Vorübergehende Zugenden (Kontingent, Parallelgrenze, …) setzt das automatische „weiter“ fort — nur Deckel/Stopp oder
+    // ein Review, das nach 6 h noch nicht fertig ist, gilt als abgebrochen (Review A4); sonst blockiert es den Parallel-Deckel.
+    const kaputt = !!d.autoStopped || now.getTime() - new Date(r.startedAt ?? now).getTime() > 6 * 3600_000;
     if (!fertig && !kaputt) continue;
     const k = parseKommentar(readBericht(join(reviewDir(), r.paket, 'kommentar.md')));
     const set: any = { status: k ? 'fertig' : 'fehler', doneAt: now, empfehlung: k?.empfehlung ?? null };
     if (!k) set.note = kaputt ? 'Strang abgebrochen, kein Kommentar-Entwurf' : 'kein kommentar.md mit „Empfehlung: …“';
-    await reviewsCol().updateOne({ _id: r._id }, { $set: set });
+    // Nur wer den Eintrag von „läuft“ wegschaltet, postet (zwei überlappende Takte posten nicht doppelt, Review A8).
+    const claim = await reviewsCol().updateOne({ _id: r._id, status: 'läuft' }, { $set: set });
+    if (!claim.modifiedCount) continue;
     done++;
     if (k && s.autoPost && deps.post) await autoPost({ ...r, ...set }, k, deps, now);
   }
@@ -154,7 +174,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       if (pr && pr.state !== 'OPEN') { await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'übersprungen', note: `PR ${pr.state === 'MERGED' ? 'gemergt' : 'geschlossen'}`, startDay: null } }); continue; }
       const u = await deps.userById(r.ownerId);
       if (!u) throw new Error('Besitzer des Auto-Reviews nicht gefunden');
-      const wt = prepareWorktree(r.repo, r.number, r.head, deps.git);
+      const wt = await prepareWorktree(r.repo, r.number, r.head, deps.git);
       const paket = nextPaket(r.repo, r.number);
       mkdirSync(join(reviewDir(), paket), { recursive: true });
       const prompt = reviewPrompt(r, wt, paket);
@@ -165,7 +185,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       deps.log?.('pr-review gestartet', { pr: `${r.repo}#${r.number}`, strand: st.id });
       started++;
     } catch (e: any) {
-      await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'fehler', note: scrub(e.message ?? e), doneAt: now } });
+      await reviewsCol().updateOne({ _id: r._id }, { $set: { status: e?.skip ? 'übersprungen' : 'fehler', note: scrub(e.message ?? e), doneAt: now, ...(e?.skip ? { startDay: null } : {}) } });
       deps.log?.('pr-review fehler', { pr: `${r.repo}#${r.number}`, error: scrub(e.message ?? e) });
     }
   }

@@ -88,14 +88,22 @@ export function tickerQuery(n: number): string {
 /** GitHub-Suche will Sekunden ohne Bruchteil: 2026-10-13T10:00:00Z. */
 export const ghTime = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 
-export async function fetchTicker(token: string, since: Date, env = process.env): Promise<{ prs: any[]; rate: any; counts: Record<string, number> }> {
+export async function fetchTicker(token: string, since: Date, env = process.env): Promise<{ prs: any[]; rate: any; counts: Record<string, number>; truncatedAt: string | null }> {
   const sc = scopes(env);
-  const vars = Object.fromEntries(sc.map((s, i) => [`q${i}`, `is:pr ${s} updated:>=${ghTime(since)} sort:updated-desc`]));
+  const vars = Object.fromEntries(sc.map((s, i) => [`q${i}`, `is:pr ${s} updated:>=${ghTime(since)} sort:updated-asc`]));
   const d = await graphql(token, tickerQuery(sc.length), vars);
   const prs: any[] = [];
   const counts: Record<string, number> = {};
-  sc.forEach((s, i) => { const nodes = (d?.[`s${i}`]?.nodes ?? []).filter((x: any) => x?.number); counts[s] = nodes.length; prs.push(...nodes); });
-  return { prs, rate: d?.rateLimit ?? null, counts };
+  // Aufsteigend sortiert: ist eine Suche abgeschnitten (> 50), rückt der nächste Lauf nur bis zum jüngsten gelieferten
+  // Stand vor — es geht nichts verloren (Review A11).
+  let truncatedAt: string | null = null;
+  sc.forEach((s, i) => {
+    const r = d?.[`s${i}`];
+    const nodes = (r?.nodes ?? []).filter((x: any) => x?.number);
+    counts[s] = nodes.length; prs.push(...nodes);
+    if ((r?.issueCount ?? 0) > nodes.length && nodes.length) { const last = nodes.at(-1).updatedAt; if (!truncatedAt || last < truncatedAt) truncatedAt = last; }
+  });
+  return { prs, rate: d?.rateLimit ?? null, counts, truncatedAt };
 }
 
 // ---------- Ereignisse (rein) ----------
@@ -149,6 +157,7 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
       else if (ours && who && who !== ME && r.state !== 'PENDING') ev(`r:${r.id}`, 'review', r.submittedAt, who, `Review von ${who}: ${REVIEW_STATE[r.state] ?? r.state}${r.body ? ` — ${kurz(r.body, 100)}` : ''}`, r.url);
     }
     const asked = (p.reviewRequests?.nodes ?? []).some((x: any) => (x.requestedReviewer?.login ?? '').toLowerCase() === ME);
+    // Nur Anfragen, die eine Person von der Liste gestellt hat, können ein Auto-Review auslösen (queueReviews prüft die Liste).
     if (asked && state === 'OPEN' && author !== ME) ev(`anfrage:${key}:${head}`, 'anfrage', p.updatedAt, author, 'Review von dir angefragt');
   }
   return { events, mem };
@@ -164,14 +173,14 @@ export interface TickResult { events: number; reviews: number; prs: number; skip
  * Ein Durchgang: Abruf ab dem letzten erfolgreichen Lauf (2 min Überlappung), Ereignisse speichern, Auslöser in die
  * Review-Warteschlange. Erster Lauf: ab jetzt − 1 h; PRs, die er nur kennenlernt, melden nichts (T5).
  */
-export async function tickerTick(getToken: () => Promise<string | null>, now = new Date()): Promise<TickResult> {
+export async function tickerTick(getToken: () => Promise<string | null>, now = new Date(), opts: { force?: boolean } = {}): Promise<TickResult> {
   if (tickerAus()) return { events: 0, reviews: 0, prs: 0, skipped: 'WERKBANK_PR_TICKER=off' };
   const s = await tickerSettings();
   if (!s.ticker) return { events: 0, reviews: 0, prs: 0, skipped: 'aus' };
   if (running) return running;
   running = (async () => {
     const st: any = (await meta().findOne({ _id: 'pr_ticker' as any })) ?? {};
-    if (st.lastAttempt && now.getTime() - new Date(st.lastAttempt).getTime() < s.minutes * 60_000 - 5000) return { events: 0, reviews: 0, prs: 0, skipped: 'zu früh' };
+    if (!opts.force && st.lastAttempt && now.getTime() - new Date(st.lastAttempt).getTime() < s.minutes * 60_000 - 5000) return { events: 0, reviews: 0, prs: 0, skipped: 'zu früh' };
     await meta().updateOne({ _id: 'pr_ticker' as any }, { $set: { lastAttempt: now } }, { upsert: true });
     const token = await getToken();
     if (!token) {
@@ -197,7 +206,7 @@ export async function tickerTick(getToken: () => Promise<string | null>, now = n
     }
     if (mem.length) await prState().bulkWrite(mem.map((m) => ({ replaceOne: { filter: { _id: m._id as any }, replacement: { ...m, at: now }, upsert: true } })));
     const reviews = await queueReviews(fresh, s, now);
-    await meta().updateOne({ _id: 'pr_ticker' as any }, { $set: { at: now, error: null, rate: got.rate, counts: got.counts, prs: got.prs.length } }, { upsert: true });
+    await meta().updateOne({ _id: 'pr_ticker' as any }, { $set: { at: got.truncatedAt ? new Date(got.truncatedAt) : now, error: null, rate: got.rate, counts: got.counts, prs: got.prs.length, truncated: !!got.truncatedAt } }, { upsert: true });
     return { events: fresh.length, reviews, prs: got.prs.length };
   })();
   try { return await running; } finally { running = null; }
@@ -208,7 +217,8 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
   if (!s.autoReview || !s.ownerId || !s.autoReviewSince) return 0;
   let n = 0;
   for (const e of fresh) {
-    const trigger = e.kind === 'tag' || (e.kind === 'anfrage' && s.onRequest);
+    // Review-Anfrage nur, wenn der PR-Autor auf der Liste steht: das Review führt die Tests des PRs aus (Review A2).
+    const trigger = e.kind === 'tag' || (e.kind === 'anfrage' && s.onRequest && !!e.actor && s.allow.includes(e.actor));
     if (!trigger || e.at < s.autoReviewSince || !e.head) continue;
     const id = `${prKey(e.repo, e.number)}@${e.head}`;
     try {
