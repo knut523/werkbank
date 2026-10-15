@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync } from '
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { classify, orchestratorBlock, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
+import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
@@ -86,6 +86,7 @@ interface Live {
   // Melious (Plan 162): Versuch auf dem Melious-Konto — Rest bis zum Deckel, usage je API-Antwort (Schätzung), Ergebnis-usage.
   melious?: { rest: number; calls: Map<string, MeliousUsage>; result: MeliousUsage | null; cut: boolean; fehler?: MeliousFehler; model?: string; faktoren?: Record<string, Faktor>; taktS?: number };
   modelSeen?: string;   // Modell laut erster Antwort des Hauptzugs (bei Claude das tatsächliche, bei Melious mit festem Namen ebenso)
+  profil?: Profil;      // Rollen-Profil des Strangs (Wächter: lesende Bash-Befehle für Leser, D7 b)
 }
 
 export type TurnOutcome = 'ok' | 'limit' | 'timeout' | 'error' | 'rate_limit' | 'busy' | 'aborted';
@@ -192,8 +193,8 @@ export const STRAND_MODEL = /^(claude:(opus|sonnet|haiku)|melious:[\w.:/-]{1,80}
 // MCP-Server (vault-search, werkbank); leser = nur Read/Grep/Glob, keine Skills, keine CLAUDE.md, ohne dynamische
 // Systemprompt-Abschnitte — über Melious zusätzlich `--bare` mit eigenem kurzem Systemprompt (bei Claude nicht: --bare
 // überspringt die OAuth-Anmeldung).
-export type Profil = 'voll' | 'bauer' | 'leser';
-export const PROFILE: Profil[] = ['voll', 'bauer', 'leser'];
+export type Profil = 'voll' | 'bauer' | 'leser' | 'schreiber';
+export const PROFILE: Profil[] = ['voll', 'bauer', 'leser', 'schreiber'];   // schreiber = wie bauer, zuerst Melious
 // Grep/Glob gibt es in der aktuellen Claude-Code-Version nicht mehr (Suche läuft dort über Bash, und Bash fragt im Wächter immer
 // nach — im Strang abgelehnt). Für den Leser bleiben Read und vault-search; Code-Suche = Profil „bauer“.
 const LESER_TOOLS = ['Read', 'Grep', 'Glob'];
@@ -643,6 +644,9 @@ export const meliousDone = (live: Live) => { meliousInflight.get(live.userId)?.d
 const addUsage = (a: MeliousUsage, b: MeliousUsage): MeliousUsage => ({ input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite });
 const ZERO: MeliousUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
+// Gegenprüfer (Knut 15.10.): der Lead kann Diffs, Pläne und Council-Entscheidungen zusätzlich von GLM 5.3 prüfen lassen.
+export const CHALLENGE_HINT = 'Gegenprüfung: Für Diff-Reviews, Plan-Challenges und den Advocatus im Council kannst du zusätzlich zur eigenen Prüfung das Werkzeug `challenge` (GLM 5.3 über Melious, art=diff|plan|council) nutzen. Es ersetzt deine Prüfung nicht; übernimm nur Befunde, die du selbst nachprüfst, und nenne im Bericht, was die Gegenprüfung fand.';
+
 // Melious-Züge dürfen alles, was Claude-Züge dürfen (Knut 14.10.: „Datenregel passt schon, bitte nicht blocken“): gleiche
 // Werkzeuge, gleiche MCP-Server, gleicher Rechte-Modus. Der Auto-Modus-Klassifikator läuft dabei über das Gateway (geprüft
 // 14.10. mit echtem Claude Code: Anfragen „security monitor“ mit Modell claude-sonnet-5 an die Basis-URL; unverständliche
@@ -910,6 +914,11 @@ function makeGuard(live: Live) {
     if (cls === 'blocked') {
       emitStatus(live, `⛔ Gesperrt im Pilot: ${why}`);
       return decide('deny', `Im OLAF-Workspace-Pilot gesperrt (${why}). Nicht erneut versuchen; sag der Person, dass sie das selbst im Terminal tun muss.`);
+    }
+    // D7 b (Knut 15.10.): im Profil „leser“ sind rein lesende Bash-Befehle frei (Suche im Code: rg, grep, ls, cat, git log …) —
+    // strenge Positivliste ohne Umleitung/Befehlsersetzung, Ordnergrenzen (bashGuardProblem) gelten weiter.
+    if (live.profil === 'leser' && tool === 'Bash' && readOnlyBash(String(toolInput.command ?? '')) && !bashGuardProblem(String(toolInput.command ?? ''), live.guard)) {
+      return decide('allow', 'Leser: rein lesender Befehl.');
     }
     if (live.readonly) {
       emitStatus(live, `🔒 Nur lesen (Board-Agent): ${statusLine(tool, toolInput)} nicht ausgeführt`);
@@ -1182,10 +1191,18 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const strandModel = orchMap[key]?.modell;
   const strandMel = strandModel?.startsWith('melious:') ? strandModel.slice(8) : undefined;
   const strandClaude = strandModel?.startsWith('claude:') ? strandModel.slice(7) : undefined;
-  const chatOn = meliousChatOn(key) || !!strandMel;
+  // Rollen-Profil des Strangs (S6): fest für alle Züge. Leser und Schreiber laufen zuerst über Melious (Knut 15.10.: Standard,
+  // nicht nur Überlauf), verteilt über die Modelle ihrer Rolle.
+  const profil: Profil = live.orch ? orchMap[key]?.profil ?? 'voll' : 'voll';
+  const melAcc = accounts.find(isMelious);
   // Überlauf auf Melious nur bei niedrigem Risiko (Modellwahl v2): Hauptchat nie, Stränge nur mit Risiko „niedrig“, Chats ja.
   const risiko: Risiko = live.leit ? 'hoch' : orchMap[key]?.risiko ?? (live.orch ? 'mittel' : 'niedrig');
-  const queue = planQueue(accounts, exhaustedOf(user), { conv: key, chatOn, overflow: risiko === 'niedrig' });
+  // Energietopf nahe der Obergrenze (vorrang, Werkbank): niedrig-riskante Arbeit zuerst auf Melious, damit nichts verfällt.
+  const chatOn = meliousChatOn(key) || !!strandMel || profil === 'leser' || profil === 'schreiber' || (!!melAcc?.vorrang && risiko === 'niedrig');
+  // Ersatzkette für Hauptchat und Strang-Leads (Knut 15.10.: „keine Limitations“): Opus → Sonnet → Melious, ohne Warten.
+  const kette = !!melAcc?.kette && (live.leit || (live.orch && profil !== 'leser' && profil !== 'schreiber'));
+  const bestellt = strandClaude ?? req.model;
+  const queue = planQueue(accounts, exhaustedOf(user), { conv: key, chatOn, overflow: risiko === 'niedrig', kette, sonnetStufe: !/^(sonnet|haiku)$/.test(String(bestellt ?? '')) });
   const tokens = accounts.map((a) => a.token);
   const redact = (t: string) => tokens.reduce((x, tok) => x.replaceAll(tok, '***'), t);
   let acct: Account = queue[0];
@@ -1202,7 +1219,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? '' : orchestratorAppend(), live.orch ? ORCH_APPEND : '', live.leit ? LEITSTAND_APPEND : '', extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? '' : orchestratorAppend(), live.orch ? ORCH_APPEND : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && melAcc && profil !== 'leser' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, isMelious(acct) ? req.token : acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim
@@ -1242,10 +1259,10 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     log('anbieter gewechselt', { conv: key, von: providerMap.get(key), nach: providerOf(acct), neu: true });
   }
   if (req.model) options.model = req.model;
-  // Rollen-Profil des Strangs (S6): fest für alle Züge; was nicht vom Konto abhängt, gleich hier.
-  const profil: Profil = live.orch ? orchMap[key]?.profil ?? 'voll' : 'voll';
+  // Rollen-Profil: was nicht vom Konto abhängt, gleich hier.
+  live.profil = profil;
   if (profil === 'leser') {
-    options.tools = LESER_TOOLS;
+    options.tools = [...LESER_TOOLS, 'Bash'];   // D7 b (Knut 15.10.): lesende Bash-Befehle, der Wächter erlaubt nur Lesendes
     options.skills = [];
     options.settingSources = [];
     delete options.agents;
@@ -1255,11 +1272,11 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const baseAppend: string = basePrompt.append;
   const baseDisallowed: string[] = options.disallowedTools;
   const baseExtra: Record<string, unknown> = { ...(options.extraArgs ?? {}) };
-  const profileServers = (s: Record<string, unknown>) => (profil === 'voll' ? s : Object.fromEntries(Object.entries(s).filter(([k]) => (profil === 'bauer' ? BAUER_MCP : LESER_MCP).includes(k))));
+  const profileServers = (s: Record<string, unknown>) => (profil === 'voll' ? s : Object.fromEntries(Object.entries(s).filter(([k]) => (profil === 'leser' ? LESER_MCP : BAUER_MCP).includes(k))));
   // Lastverteilung über die Melious-Modelle (S7, Knut 14.10.: „Last auf alle Melious-Modelle verteilen, um alle Token zu nutzen“):
   // aus der Liste der Rolle das Modell mit dem größten freien Monatsanteil (Werkbank: Verbrauch je Modell gegen dessen
   // Kontingent). Einmal gewählt, behält ein Strang (orch.json) bzw. Chat (Speicher) sein Modell, solange es zulässig und frei ist.
-  const poolModel = (a: Account, role: 'leser' | 'niedrig'): string | undefined => {
+  const poolModel = (a: Account, role: 'leser' | 'schreiber' | 'niedrig'): string | undefined => {
     const allowed = a.rollen?.[role] ?? [];
     const free = (m?: string) => !!m && allowed.includes(m) && (a.pool ?? []).some((p) => p.model === m && p.frei > 0);
     const sticky = live.orch ? orchMap[key]?.meliousModell : poolSticky.get(key);
@@ -1275,7 +1292,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Werkzeuge, MCP-Server und Rechte-Modus wie bei Claude. Zurück auf Claude: Modell der Anfrage bzw. des Strangs, Token.
   const onAccount = (a: Account) => {
     const mel = isMelious(a);
-    const base = mel ? meliousChatModel(key) ?? (strandMel && strandMel !== 'auto' ? strandMel : undefined) ?? a.model ?? poolModel(a, profil === 'leser' ? 'leser' : 'niedrig') : undefined;
+    const base = mel ? a.chainModel ?? meliousChatModel(key) ?? (strandMel && strandMel !== 'auto' ? strandMel : undefined) ?? a.model ?? poolModel(a, profil === 'leser' || profil === 'schreiber' ? profil : 'niedrig') : undefined;
     // „:eco“-Routing (S8, Einstellung): Melious leitet auf das sparsamste Rechenzentrum; gezählt wird wie das Modell.
     const mm = base && a.eco && !base.endsWith(':eco') ? `${base}:eco` : base;
     accountEnv(env, a, mm);
@@ -1290,7 +1307,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       options.systemPrompt = [LESER_SYSTEM, live.orch ? ORCH_APPEND : ''].filter(Boolean).join('\n\n');
     }
     // Modell des Strangs vor dem der Anfrage: beim Start festgelegt, nicht durch die Auswahl im Chat überstimmt (Review 2, 3).
-    const model = mm ?? (mel ? undefined : strandClaude) ?? req.model;
+    const model = mm ?? (mel ? undefined : a.chainModel ?? strandClaude) ?? req.model;
     if (model) options.model = model; else delete options.model;
     live.melious = mel ? { rest: a.rest ?? 0, calls: new Map(), result: null, cut: false, model: options.model, faktoren: a.faktoren && Object.keys(a.faktoren).length ? a.faktoren : undefined, taktS: a.taktS } : undefined;
     live.modelSeen = undefined;
@@ -1334,8 +1351,10 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
           live.outcome ??= 'rate_limit';
           break;
         }
-        log('konto gewechselt', { conv: key, von: acct.id, nach: next.id, mitten: live.progressed });
-        emitStatus(live, isMelious(next)
+        log('konto gewechselt', { conv: key, von: acct.id, nach: next.id, mitten: live.progressed, ...(next.chainModel ? { kette: next.chainModel } : {}) });
+        emitStatus(live, next.chainModel
+          ? `↻ Ersatzkette: ${isMelious(next) ? `Melious ${next.chainModel}` : `Claude ${next.chainModel === 'sonnet' ? 'Sonnet' : next.chainModel} („${next.label}“)`} übernimmt (${isMelious(acct) ? MELIOUS_MSGS[live.melious?.fehler ?? 'limit'] : `Kontingent von „${acct.label}“${acct.chainModel ? ` mit ${acct.chainModel}` : ''} ausgeschöpft`})${isMelious(next) ? ` — ${MELIOUS_HINT}` : ''}`
+          : isMelious(next)
           ? `↻ Konto „${next.label}“ übernimmt (Kontingent von „${acct.label}“ ausgeschöpft) — ${MELIOUS_HINT}`
           : isMelious(acct) ? `↻ Konto „${next.label}“ übernimmt (${MELIOUS_MSGS[live.melious?.fehler ?? 'limit']})` : `↻ Konto „${next.label}“ übernimmt (Kontingent von „${acct.label}“ ausgeschöpft)`);
         const switched = providerOf(acct) !== providerOf(next);

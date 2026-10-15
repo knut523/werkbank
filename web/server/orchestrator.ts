@@ -234,7 +234,7 @@ export async function strandStates(u: User): Promise<Map<string, StrandState & {
 
 // ---------- Öffentliche Schnittstelle ----------
 
-export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null; lauf?: string | null; modell?: string | null; risiko?: 'niedrig' | 'mittel' | 'hoch' | null; profil?: 'voll' | 'bauer' | 'leser' | null }
+export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null; lauf?: string | null; modell?: string | null; risiko?: 'niedrig' | 'mittel' | 'hoch' | null; profil?: 'voll' | 'bauer' | 'leser' | 'schreiber' | null }
 
 // Plan 162, S2: Hauptmodell und Risikostufe eines Strangs (vorbereitet für die smarte Modellwahl, Paket 163). Nur beim Start.
 const STRAND_MODEL = /^(claude:(opus|sonnet|haiku)|melious:[\w.:/-]{1,80})$/;
@@ -292,7 +292,7 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   const modell = inp.modell ? String(inp.modell) : null;
   if (modell && !STRAND_MODEL.test(modell)) throw err(400, 'Modell: claude:opus|sonnet|haiku oder melious:<modell>.');
   const risiko = inp.risiko && RISIKO.includes(inp.risiko) ? inp.risiko : null;
-  if (inp.profil && !['voll', 'bauer', 'leser'].includes(inp.profil)) throw err(400, 'Profil: voll, bauer oder leser.');
+  if (inp.profil && !['voll', 'bauer', 'leser', 'schreiber'].includes(inp.profil)) throw err(400, 'Profil: voll, bauer, leser oder schreiber.');
   const profil = inp.profil && inp.profil !== 'voll' ? inp.profil : null;
   // 1) Bei der Brücke anmelden (prüft den Ordner selbst). Ohne Anmeldung kein Chat (fail closed).
   const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}) }), signal: AbortSignal.timeout(5000) });

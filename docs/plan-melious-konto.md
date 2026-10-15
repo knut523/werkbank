@@ -111,6 +111,30 @@ Energie-Einheit entspricht dem Verbrauchspreis × 10.000 (1 Einheit = 0,0001 €
   Betrieb gesetzt) → `/v1/billing/balance` bzw. `/v1/auth/session/me`. Fehlt die Kopfzeile, ist der Abgleich aus.
 - **`:eco`-Routing** als Einstellung; gezählt wird wie das Modell.
 
+## S9 Knuts Setup und Ausrollen (15.10.: „voll Melious aktivieren … das Kontingent wirklich nutzen“)
+- **Preisliste festgezogen** auf die echten Felder (`input_cost_per_million_eur`, `output_cost_per_million_eur`,
+  `cache_read_cost_per_million_eur`, `currency` EUR). Testdatei: `web/test/fixtures/melious-pricing-2026-10-15.json`.
+- **Vorgaben = Knuts Setup:**
+  - Melious erlaubt, Überlauf an, Ersatzkette an, `:eco` aus (`MELIOUS_STANDARD=aus` schaltet alles für neue Schlüssel ab).
+  - Nachfüllung 8.000 je Takt (Dashboard: 256.000 je Tag, bis 4 Tage), also Obergrenze 1.024.000.
+  - Deckel als Notbremse: Tag 1,5 × 256.000 = 384.000, Monat 31 × 256.000 = 7.936.000.
+- **Ersatzkette** für Hauptchat und Strang-Leads: Opus → Sonnet (alle Claude-Konten) → Melious GLM 5.3. Ohne Warte-Sperren;
+  Push, PR und Council laufen weiter, das Modell steht im Protokoll.
+- **Leser/Schreiber zuerst Melious** (Profile `leser`, `schreiber`): Verteilung über alle vier PRO-Modelle je Rolle.
+- **D7 b:** Leser dürfen rein lesende Bash-Befehle (Positivliste, keine Umleitung oder Befehlsersetzung, Ordnergrenzen wie
+  bisher).
+- **Kontingent nutzen:**
+  - Geschätzter Topfstand (Annahme: vor 4 Tagen voll, dann Nachfüllung − Verbrauch) bzw. echter Stand.
+  - Ab 75 % Vorrang: niedrig-riskante Arbeit (Chats, Stränge mit Risiko „niedrig“) zuerst auf Melious, Qualitäts-Reihenfolge.
+  - Ab 90 % zeigt die Kachel „Energie verfällt bald“.
+- **Guthaben statt Energie:** Ist die Energie leer, zahlt das Guthaben weiter (402 erst, wenn auch das leer ist).
+  - Erkannt über `billing_cost.paid_with` einer Mini-Anfrage im OpenAI-Format (höchstens alle 15 min, ≈ 0,03 Energie) oder über
+    einen geschätzten Stand ≤ 0.
+  - Ergebnis nur als Hinweis, keine Sperre.
+- **Gegenprüfer GLM 5.3:** Werkbank-MCP-Werkzeug `challenge` (`art=diff|plan|council`), zusätzlich zur Prüfung des Leads.
+  - Läuft über `/v1/chat/completions` mit Energie- und Umweltwerten; der Verbrauch wird gebucht.
+  - Hauptchat und Strang-Leads bekommen einen Hinweis im Systemtext.
+
 - Korrektur zur Token-Aussage: Melious meldet alle Eingaben als Cache-Treffer; der Mehrverbrauch kommt von mehr Zügen, nicht
   von fehlendem Caching.
 

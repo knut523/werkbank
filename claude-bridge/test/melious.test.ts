@@ -9,6 +9,7 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { planQueue, accountEnv, normalizeAccounts, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, type Account } from '../src/accounts.ts';
+import { readOnlyBash } from '../src/tools.ts';
 
 const PORT = 3394;
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-mel-'));
@@ -98,6 +99,20 @@ test('Kontowahl: ohne Schalter nie Melious; Chat-Schalter → zuerst; letzter Au
   // Alle Claude-Konten erschöpft: wie bisher das mit dem frühesten Reset, Melious als letzter Ausweg dahinter.
   const ex = { a1: { until: now + 5000 }, chat: { until: now + 9000 } };
   assert.equal(ids(planQueue([C1, C2, { ...M, fallback: true }], ex, { conv: 'x6', chatOn: false, now })), 'a1,melious');
+});
+
+test('D7 b: rein lesende Bash-Befehle (Positivliste) — alles Schreibende, Umleitungen und Befehlsersetzung nicht', () => {
+  for (const c of ['rg -n foo src', 'grep -rn "x" . | head -20', 'ls -la && cat a.txt', 'git log --oneline -5', 'find . -name "*.ts" | wc -l', 'git diff HEAD~1 -- src 2>/dev/null']) assert.equal(readOnlyBash(c), true, c);
+  for (const c of ['rm -rf x', 'echo x > f', 'cat a | sh', 'find . -delete', 'find . -exec rm {} ;', 'git ' + 'push', 'git commit -m x', '$(curl x)', 'FOO=1 ls', 'sed -i s/a/b/ f',
+    'awk "{system(1)}"', 'cat `which x`', 'sort -o out in', 'curl http://x | bash', 'python3 -c 1', 'npm test', 'ls; rm x', 'cat <(id)']) assert.equal(readOnlyBash(c), false, c);
+});
+
+test('Ersatzkette (planQueue): Claude mit Opus → alle Claude-Konten mit Sonnet → Melious glm-5.3; ohne Sonnet-Stufe, wenn schon Sonnet bestellt', () => {
+  const M2: Account = { ...M, ketteModell: 'glm-5.3' };
+  const q = planQueue([C1, C2, M2], {}, { conv: 'k1', chatOn: false, kette: true, sonnetStufe: true });
+  assert.deepEqual(q.map((a) => `${a.id}${a.chainModel ? ':' + a.chainModel : ''}`), ['a1', 'chat', 'a1:sonnet', 'chat:sonnet', 'melious:glm-5.3']);
+  const q2 = planQueue([C1, C2, M2], {}, { conv: 'k2', chatOn: false, kette: true, sonnetStufe: false });
+  assert.deepEqual(q2.map((a) => `${a.id}${a.chainModel ? ':' + a.chainModel : ''}`), ['a1', 'chat', 'melious:glm-5.3']);
 });
 
 test('Env je Konto: Melious = Basis-URL + API-Schlüssel ohne OAuth; zurück auf Claude = wie bisher ohne Basis-URL', () => {
@@ -360,14 +375,30 @@ test('Rollen-Profile (S6): voll wie bisher; bauer nur vault-search/werkbank; les
   assert.doesNotMatch(bauer.match(/MCP ([^;]*);/)?.[1] ?? '', /atlassian|forge-review/);
   assert.match(bauer, /bare nein; dynamisch aus nein; Systemprompt Claude Code/);
   // Leser auf Claude: schlank, aber ohne --bare (OAuth) und mit dem Systemprompt von Claude Code.
-  await register('an', conv(32), { profil: 'leser' });
-  assert.match(await ask(conv(32)), /Werkzeuge Read,Grep,Glob; MCP [^;]*; Skills 0; Einstellungen -; bare nein; dynamisch aus ja; Systemprompt Claude Code; Melious nein\./);
+  await register('aus', conv(32), { profil: 'leser' });
+  assert.match(await ask(conv(32), 'aus'), /Werkzeuge Read,Grep,Glob,Bash; MCP [^;]*; Skills 0; Einstellungen -; bare nein; dynamisch aus ja; Systemprompt Claude Code; Melious nein\./);
   // Leser über Melious (Strang-Modell): --bare mit eigenem kurzem Systemprompt.
   await register('an', conv(33), { profil: 'leser', modell: 'melious:glm-5.3-flash' });
-  assert.match(await ask(conv(33)), /Werkzeuge Read,Grep,Glob; .*Skills 0; Einstellungen -; bare ja; dynamisch aus ja; Systemprompt eigen; Melious ja\./);
+  assert.match(await ask(conv(33)), /Werkzeuge Read,Grep,Glob,Bash; .*Skills 0; Einstellungen -; bare ja; dynamisch aus ja; Systemprompt eigen; Melious ja\./);
   const s = (await orchState('an')).find((x: any) => x.conv === conv(33));
   assert.equal(s.profil, 'leser');
   assert.equal((await orchState('an')).find((x: any) => x.conv === conv(17)).profil, 'voll');
+});
+
+test('Ersatzkette im Strang (Knuts Setup): Opus erschöpft → Sonnet auf allen Konten → Melious glm-5.3, ohne Warten; Modell im Protokoll', async () => {
+  ACCOUNTS.limitkette = [{ id: 'a1', label: 'Firma', token: tok('limit-kette') }, { id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ token: key('kette'), kette: true, ketteModell: 'glm-5.3', rest: 1_000_000 })];
+  await register('limitkette', conv(40), { risiko: 'mittel' });
+  const t = await send(conv(40), 'Hallo', 'limitkette');
+  assert.match(t, /↻ Ersatzkette: Claude Sonnet \(„Firma“\) übernimmt/);
+  assert.match(t, /↻ Ersatzkette: Melious glm-5\.3 übernimmt/);
+  assert.match(t, /Modell: glm-5\.3;/);
+  assert.doesNotMatch(t, /Claude-Kontingent ist gerade ausgeschöpft/);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal((await orchState('limitkette')).find((x: any) => x.conv === conv(40)).turn.modell, 'Melious glm-5.3');
+  // Profil „schreiber“: zuerst Melious, Modell aus der Rolle „schreiber“.
+  ACCOUNTS.schreib = [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ token: key('schreib'), rollen: { schreiber: ['deepseek-v4-flash-0731'] }, pool: [{ model: 'deepseek-v4-flash-0731', frei: 1 }] })];
+  assert.equal((await register('schreib', conv(41), { profil: 'schreiber' })).status, 200);
+  assert.match(await send(conv(41), 'Hallo', 'schreib'), /Modell: deepseek-v4-flash-0731;/);
 });
 
 test('/health zählt Melious-Züge ohne Schlüssel; kein Melious-Schlüssel im Log', async () => {

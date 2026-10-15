@@ -3,8 +3,8 @@
 //   orch start --title T --cwd DIR [--plan DATEI] [--lauf NAME] [--shared] [--code --slug SPEC-SLUG] (--prompt TEXT | --prompt-file DATEI | Auftrag auf stdin)
 //     [--modell claude:opus|sonnet|haiku|melious:<id>] [--risiko niedrig|mittel|hoch]   Hauptmodell und Risikostufe des Strangs
 //     (Plan 162); nur beim Start, kein Wechsel mitten im Strang. Überlauf auf Melious nur bei „niedrig“.
-//     [--profil voll|bauer|leser]   Rollen-Profil (Grundlast je Zug): bauer = nur vault-search/werkbank-MCP; leser = nur
-//     Read/Grep/Glob, ohne Skills/CLAUDE.md, über Melious mit --bare und kurzem Systemprompt.
+//     [--profil voll|bauer|leser|schreiber]   Rollen-Profil (Grundlast je Zug): bauer = nur vault-search/werkbank-MCP; leser =
+//     Lesen + lesende Bash-Befehle, ohne Skills/CLAUDE.md, zuerst Melious (mit --bare); schreiber = wie bauer, zuerst Melious.
 //     Git-Repo mit origin auf github.com/WirStrom1|knut523: vorher git fetch, „Stand: …“ im Chat; --code = frischer Worktree
 //     <repo>-agent-<id> (Zweig agent/<id>) von origin/develop|dev|main statt des angegebenen Ordners. Nie pushen.
 //     --code prüft vorher G0 (scripts/vorbau-check; Slug aus --slug oder spec: der Plandatei): Treffer/Stopp → kein Start,

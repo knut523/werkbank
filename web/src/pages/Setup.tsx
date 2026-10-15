@@ -256,6 +256,7 @@ function MeliousAccount() {
           <div className="row small" style={{ gap: 16, marginTop: 6 }}>
             <label><input type="checkbox" aria-label="Melious erlauben" checked={d.enabled} disabled={!!busy} onChange={(e) => run('enabled', () => put({ enabled: e.target.checked }))} /> Melious erlauben (Chats mit <code>/melious an</code>)</label>
             <label><input type="checkbox" aria-label="Melious als letzter Ausweg" checked={d.fallback} disabled={!!busy || !d.enabled} onChange={(e) => run('fallback', () => put({ fallback: e.target.checked }))} /> auch als letzter Ausweg, wenn alle Claude-Konten erschöpft sind (nur Chats und Stränge mit Risiko „niedrig“, nie der Hauptchat)</label>
+            <label><input type="checkbox" aria-label="Melious Ersatzkette" data-testid="melious-kette" checked={d.kette} disabled={!!busy || !d.enabled} onChange={(e) => run('kette', () => put({ kette: e.target.checked }))} /> Ersatzkette für Hauptchat und Strang-Leads: Opus → Sonnet → {d.ketteModell} (ohne Warten; das Modell steht im Protokoll)</label>
             <label><input type="checkbox" aria-label="Melious eco" data-testid="melious-eco" checked={d.eco} disabled={!!busy} onChange={(e) => run('eco', () => put({ eco: e.target.checked }))} /> <code>:eco</code>-Routing (Melious wählt das sparsamste Rechenzentrum; Umweltwerte siehe Bericht)</label>
           </div>
           <div className="small" data-testid="melious-energie" style={{ marginTop: 8 }}>
@@ -264,6 +265,8 @@ function MeliousAccount() {
             {u.energie.nachfuellungTag ? <> · Nachfüllung je Tag {ez(u.energie.nachfuellungTag)} · Tempo <span className={`chip ${u.energie.tempo > 1 ? 'warn' : 'ok'}`}>{Math.round((u.energie.tempo ?? 0) * 100)} %</span> {u.energie.modus === 'sparen' ? '→ sparsame Modelle zuerst' : '→ Reihenfolge der Rolle (Energie bleibt sonst liegen)'}</>
               : <> · <span className="chip warn">Energie je Nachfüll-Takt eintragen</span> (aus dem Dashboard), dann steuert die Werkbank das Tempo</>}
             {' '}· <a href={u.energie.dashboard} target="_blank" rel="noreferrer">echter Stand im Melious-Dashboard</a>
+            {u.energie.stand != null && u.energie.topfMax && <> · Topf {u.energie.geschaetzt ? '≈ ' : ''}{z(u.energie.stand)} / {z(u.energie.topfMax)} ({Math.round((u.energie.fuell ?? 0) * 100)} %)</>}
+            {(u.energie.hinweise ?? []).map((h: string) => <div key={h} className="note small" data-testid="melious-hinweis" style={{ margin: '4px 0' }}>{h}</div>)}
             <span className="tiny muted"> · Faktoren: {u.energie.faktorQuelle} (1 Einheit = 0,0001 €; Annahme: Cache-Treffer zum Cache-Preis){u.energie.echt ? '' : ' · Abgleich mit dem Dashboard aus'}</span>
           </div>
           <table className="t small" style={{ marginTop: 6 }} data-testid="melious-usage">

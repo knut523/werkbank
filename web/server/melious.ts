@@ -34,17 +34,31 @@ export const ENERGIE_JE_EURO = 10_000;
 export const FAKTOREN_VORGABE: Record<string, Faktor> = {
   'glm-5.3': { in: 10_000, out: 30_000 }, 'glm-5.3-flash': { in: 1000, out: 4000 }, 'deepseek-v4.1-flash': { in: 2000, out: 10_000 }, 'deepseek-v4-flash-0731': { in: 1000, out: 2500 },
 };
-// Rollen in Wunsch-Reihenfolge (Qualität zuerst). DeepSeek V4 Flash erst nach dem großen Test.
-export const ROLLEN_VORGABE: Record<string, string[]> = { leser: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'glm-5.3'], niedrig: ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash'] };
-export const ROLLEN = ['leser', 'niedrig'];
+// Rollen in Wunsch-Reihenfolge, Verteilung über alle vier PRO-Modelle (Knut 15.10.: „das Kontingent wirklich nutzen“).
+export const ROLLEN_VORGABE: Record<string, string[]> = {
+  leser: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731', 'glm-5.3'],
+  schreiber: ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'],
+  niedrig: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731', 'glm-5.3'],
+};
+export const ROLLEN = ['leser', 'schreiber', 'niedrig'];
 export const TAKT_S = 2700;
 const TAG_S = 86_400;
+export const TOPF_TAGE = 4;   // Obergrenze des Energietopfs (Melious-Dashboard: „bis zu 4 Tage ansparbar“)
 
-export const meliousDefaults = (env = process.env) => ({
-  dayLimit: num(env.MELIOUS_TAG_LIMIT, 5000), monthLimit: num(env.MELIOUS_MONAT_LIMIT, 100_000),   // Energie (Notbremse)
-  proTakt: Number(env.MELIOUS_ENERGIE_PRO_TAKT) > 0 ? Number(env.MELIOUS_ENERGIE_PRO_TAKT) : null,   // aus dem Dashboard
-  taktS: num(env.MELIOUS_TAKT_S, TAKT_S), faktoren: FAKTOREN_VORGABE, rollen: ROLLEN_VORGABE, eco: false,
-});
+// Knuts Setup (15.10., Dashboard: „erneuert sich alle 45 Minuten um 256.000 pro Tag, bis zu 4 Tage ansparbar“): 8.000 je Takt;
+// Melious erlaubt, Überlauf an, Ersatzkette Opus → Sonnet → GLM 5.3 an, :eco aus. MELIOUS_STANDARD=aus schaltet die drei
+// Schalter für neue Schlüssel aus (z. B. für ein Team-Workspace). Deckel nur als Notbremse: Tag 1,5 × Nachfüllung, Monat 31 ×.
+export const meliousDefaults = (env = process.env) => {
+  const proTakt = Number(env.MELIOUS_ENERGIE_PRO_TAKT) > 0 ? Number(env.MELIOUS_ENERGIE_PRO_TAKT) : env.MELIOUS_ENERGIE_PRO_TAKT === '' ? null : 8000;
+  const taktS = num(env.MELIOUS_TAKT_S, TAKT_S);
+  const tag = proTakt ? proTakt * (TAG_S / taktS) : null;
+  const an = (env.MELIOUS_STANDARD ?? 'an') !== 'aus';
+  return {
+    dayLimit: num(env.MELIOUS_TAG_LIMIT, tag ? Math.round(tag * 1.5) : 5000), monthLimit: num(env.MELIOUS_MONAT_LIMIT, tag ? Math.round(tag * 31) : 100_000),
+    proTakt, taktS, faktoren: FAKTOREN_VORGABE, rollen: ROLLEN_VORGABE, eco: false,
+    enabled: an, fallback: an, kette: an, ketteModell: 'glm-5.3',
+  };
+};
 
 type HttpErr = Error & { status: number };
 const httpErr = (status: number, msg: string): HttpErr => Object.assign(new Error(msg), { status });
@@ -54,6 +68,7 @@ interface Stored {
   dayLimit?: number | null; monthLimit?: number | null; proTakt?: number | null; taktS?: number | null;
   faktoren?: Record<string, Faktor> | null; kalibriert?: string | null; rollen?: Record<string, string[]> | null; eco?: boolean;
   preise?: { stand: Date; faktoren: Record<string, Faktor> } | null;   // aus der Preisliste von Melious (täglich)
+  kette?: boolean; ketteModell?: string | null;
 }
 
 async function stored(u: User): Promise<Stored | null> {
@@ -68,8 +83,10 @@ export async function meliousSettings(u: User) {
   return {
     configured: !!s, last4: s?.last4 ?? null, addedAt: s?.addedAt ?? null,
     // model: festes Modell für alles (überstimmt die Verteilung); leer = Lastverteilung nach Rolle und Energie.
-    enabled: !!s?.enabled, fallback: !!s?.fallback, model: s?.model ?? null, eco: s?.eco ?? d.eco,
-    dayLimit: s?.dayLimit ?? d.dayLimit, monthLimit: s?.monthLimit ?? d.monthLimit,
+    enabled: s?.enabled ?? d.enabled, fallback: s?.fallback ?? d.fallback, kette: s?.kette ?? d.kette, ketteModell: s?.ketteModell ?? d.ketteModell, model: s?.model ?? null, eco: s?.eco ?? d.eco,
+    // Deckel: gesetzt, sonst Notbremse aus der Nachfüllung (Tag 1,5 ×, Monat 31 ×), sonst die Vorgabe.
+    dayLimit: s?.dayLimit ?? (s?.proTakt ? Math.round(s.proTakt * (TAG_S / (s?.taktS ?? d.taktS)) * 1.5) : d.dayLimit),
+    monthLimit: s?.monthLimit ?? (s?.proTakt ? Math.round(s.proTakt * (TAG_S / (s?.taktS ?? d.taktS)) * 31) : d.monthLimit),
     proTakt: s?.proTakt ?? d.proTakt, taktS: s?.taktS ?? d.taktS,
     // Faktoren: von Hand gesetzt > Preisliste von Melious > Vorgabe (Kalibrierung 15.10.).
     faktoren: s?.faktoren ?? s?.preise?.faktoren ?? d.faktoren,
@@ -85,25 +102,75 @@ export const meliousBaseUrl = () => process.env.MELIOUS_BASE_URL || 'https://api
 const first = (o: any, keys: string[]) => { for (const k of keys) { const v = Number(o?.[k]); if (Number.isFinite(v) && v >= 0) return v; } return undefined; };
 
 /**
- * Faktoren aus /v1/models?include_meta=true: `_meta.pricing` je Modell (€ je Mio. Tokens) × 10.000. Die Feldnamen sind in der Doku
- * nicht festgelegt — gelesen werden die üblichen (input/prompt, output/completion, cached_input/cache_read); Preise unter 0,01
- * gelten als „je Token“ und werden auf je Mio. umgerechnet.
+ * Faktoren aus /v1/models?include_meta=true: `_meta.pricing` je Modell × 10.000. Echte Felder (Abruf 15.10.2026, siehe
+ * test/fixtures/melious-pricing-2026-10-15.json): `input_cost_per_million_eur`, `output_cost_per_million_eur`,
+ * `cache_read_cost_per_million_eur`, `currency` = "EUR". Nur EUR-Preise zählen (die Energie-Einheit ist 0,0001 €); fehlt ein
+ * Preis, wird das Modell übersprungen und die bisherigen Faktoren bleiben.
  */
 export function faktorenAusPreisliste(data: any[]): Record<string, Faktor> {
   const out: Record<string, Faktor> = {};
   for (const m of Array.isArray(data) ? data : []) {
     const id = String(m?.id ?? '');
-    const p = m?._meta?.pricing ?? m?.pricing;
+    const p = m?._meta?.pricing;
     if (!MODEL.test(id) || !p || typeof p !== 'object') continue;
-    const src = p.per_million ?? p.eur ?? p;
-    const i = first(src, ['input', 'prompt', 'input_tokens', 'prompt_tokens', 'input_per_million', 'input_price']);
-    const o = first(src, ['output', 'completion', 'output_tokens', 'completion_tokens', 'output_per_million', 'output_price']);
-    const c = first(src, ['cached_input', 'cache_read', 'input_cached', 'cached_prompt', 'cache_read_input', 'cache']);
+    if (p.currency !== undefined && String(p.currency).toUpperCase() !== 'EUR') continue;
+    const i = first(p, ['input_cost_per_million_eur']);
+    const o = first(p, ['output_cost_per_million_eur']);
+    const c = first(p, ['cache_read_cost_per_million_eur']);
     if (i === undefined || o === undefined) continue;
-    const scale = Math.max(i, o) > 0 && Math.max(i, o) < 0.01 ? 1e6 : 1;
-    out[id.replace(/:eco$/, '')] = { in: i * scale * ENERGIE_JE_EURO, out: o * scale * ENERGIE_JE_EURO, ...(c !== undefined ? { cache: c * scale * ENERGIE_JE_EURO } : {}) };
+    out[id.replace(/:eco$/, '')] = { in: i * ENERGIE_JE_EURO, out: o * ENERGIE_JE_EURO, ...(c !== undefined ? { cache: c * ENERGIE_JE_EURO } : {}) };
   }
   return out;
+}
+
+/** Ein Aufruf im OpenAI-Format (nur dort meldet Melious billing_cost und environment_impact). Schlüssel nie im Ergebnis/Log. */
+async function chatCompletion(u: User, body: Record<string, unknown>, timeoutMs: number): Promise<any | null> {
+  const key = await meliousKey(u);
+  if (!key) return null;
+  try {
+    const r = await fetch(`${meliousBaseUrl()}/v1/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+    const j: any = await r.json().catch(() => ({}));
+    return r.ok ? j : { error: j?.error?.code ?? `HTTP ${r.status}`, status: r.status };
+  } catch { return null; }
+}
+
+/**
+ * Zahlt Melious gerade mit Energie oder schon mit Guthaben? (Dashboard 15.10.: „Ist deine Energie aufgebraucht, übernimmt dein
+ * Guthaben“, 402 erst, wenn auch das leer ist.) Nur über eine Mini-Anfrage im OpenAI-Format erkennbar (`billing_cost.paid_with`,
+ * ≈ 0,03 Energie) — höchstens alle 15 Minuten, je Person zwischengespeichert. Ergebnis nur als Hinweis, nie als Sperre.
+ */
+const bezahltCache = new Map<string, { at: number; v: 'energy' | 'credits' | null }>();
+export async function bezahltMit(u: User, now = Date.now()): Promise<'energy' | 'credits' | null> {
+  if (process.env.MELIOUS_BEZAHLT_PROBE === 'off') return null;
+  const c = bezahltCache.get(u.id);
+  if (c && now - c.at < 15 * 60_000) return c.v;
+  const j = await chatCompletion(u, { model: 'glm-5.3-flash', max_tokens: 1, messages: [{ role: 'user', content: 'ok' }] }, 8000);
+  const p = String(j?.billing_cost?.paid_with ?? '');
+  const v = p === 'energy' ? 'energy' : p === 'credits' || p === 'credit' ? 'credits' : null;
+  bezahltCache.set(u.id, { at: now, v });
+  return v;
+}
+
+// Gegenprüfung durch GLM 5.3 (Knut 15.10.: „Lead kann jeweils sowieso challengen mit GLM 5.3“) — zusätzlich zur Prüfung
+// durch den Lead, nicht statt ihr. Diff-Review, Plan-Challenge, Advocatus im Council.
+const CHALLENGE: Record<string, string> = {
+  diff: 'Du bist ein strenger, unabhängiger Code-Reviewer. Prüfe den Diff auf echte Fehler: Korrektheit, Sicherheit, Datenverlust, Rennen, fehlende Tests, Abweichung von der Aufgabe. Keine Stilfragen. Je Befund: Datei:Zeile, Schwere (hoch/mittel/niedrig), konkretes Fehlerszenario, kleinster Fix. Wenn nichts Ernstes: sag das ausdrücklich.',
+  plan: 'Du bist Advocatus Diaboli für einen Umsetzungsplan. Suche die schwächsten Annahmen, fehlende Fälle, Reihenfolge- und Rückweg-Probleme, Risiken für Betrieb und Daten. Je Punkt: was genau, warum es schiefgeht, was man im Plan ändern sollte. Kurz, auf Deutsch.',
+  council: 'Du bist der Advocatus Diaboli in einem Council. Vertritt die stärkste Gegenposition zur vorgeschlagenen Entscheidung, mit Begründung, und nenne Bedingungen, unter denen du zustimmen würdest. Kurz, auf Deutsch.',
+};
+export async function meliousChallenge(u: User, art: string, text: string, frage = ''): Promise<{ ok: boolean; text?: string; energie?: number; bezahlt?: string | null; umwelt?: unknown; error?: string }> {
+  const s = await meliousSettings(u);
+  if (!s.configured) return { ok: false, error: 'Kein Melious-Schlüssel hinterlegt.' };
+  if (!CHALLENGE[art]) return { ok: false, error: 'art: diff, plan oder council.' };
+  const t = String(text ?? '').slice(0, 200_000);
+  if (!t.trim()) return { ok: false, error: 'Text fehlt.' };
+  const model = s.ketteModell || 'glm-5.3';
+  const j = await chatCompletion(u, { model, max_tokens: 4000, messages: [{ role: 'system', content: CHALLENGE[art] }, { role: 'user', content: `${frage ? `Frage des Leads: ${String(frage).slice(0, 2000)}\n\n` : ''}${t}` }] }, 180_000);
+  if (!j || j.error) return { ok: false, error: `Melious antwortet nicht${j?.error ? ` (${j.error})` : ''}.` };
+  const usage = { input: Number(j.usage?.prompt_tokens) || 0, output: Number(j.usage?.completion_tokens) || 0, cacheRead: Number(j.usage?.prompt_tokens_details?.cached_tokens) || 0, cacheWrite: 0 };
+  usage.input = Math.max(0, usage.input - usage.cacheRead);
+  const booked = await recordMeliousUsage(u, usage, Date.now(), model);
+  return { ok: true, text: String(j.choices?.[0]?.message?.content ?? '').trim(), energie: Number(j.billing_cost?.energy) || r2(booked.energie), bezahlt: j.billing_cost?.paid_with ?? null, umwelt: j.environment_impact ?? null };
 }
 
 /** Preisliste höchstens einmal am Tag holen (kostet keine Energie) und speichern. Fehler: alte Faktoren bleiben. */
@@ -165,10 +232,12 @@ export async function setMelious(u: User, b: Record<string, unknown>) {
     if (!MELIOUS_KEY.test(t)) throw httpErr(400, 'Das sieht nicht wie ein Melious-Schlüssel aus (beginnt mit sk-mel-…).');
     const prev: any = await stored(u);
     const { token: _t, last4: _l, addedAt: _a, enabled: _e, ...rest } = prev ?? {};
-    set.melious = { ...rest, token: seal(t), last4: t.slice(-4), addedAt: new Date(), enabled: false };
+    // Neuer Schlüssel: Schalter wie bisher gesetzt, sonst die Vorgabe (Knuts Setup: an; MELIOUS_STANDARD=aus: aus).
+    set.melious = { ...rest, token: seal(t), last4: t.slice(-4), addedAt: new Date() };
   } else if (!(await stored(u))) throw httpErr(400, 'Zuerst einen Melious-Schlüssel hinterlegen.');
   const f = (k: string, v: unknown) => { if (set.melious) (set.melious as any)[k] = v; else set[`melious.${k}`] = v; };
-  for (const k of ['enabled', 'fallback', 'eco'] as const) if (b[k] !== undefined) f(k, b[k] === true);
+  for (const k of ['enabled', 'fallback', 'eco', 'kette'] as const) if (b[k] !== undefined) f(k, b[k] === true);
+  if (b.ketteModell !== undefined) { const m = String(b.ketteModell ?? '').trim(); if (m && !MODEL.test(m)) throw httpErr(400, 'Ketten-Modell: gültiger Modellname.'); f('ketteModell', m || null); }
   if (b.model !== undefined) {
     const m = String(b.model ?? '').trim();
     if (m && !MODEL.test(m)) throw httpErr(400, 'Modellname: Buchstaben, Ziffern, . : / - _ (höchstens 80 Zeichen) — oder leer lassen.');
@@ -268,11 +337,31 @@ export async function meliousUsage(u: User, now = Date.now()) {
   const nachfuellungTag = proTakt ? proTakt * (TAG_S / s.taktS) : null;
   const sollBisJetzt = nachfuellungTag ? nachfuellungTag * Math.max(berlinDayFraction(now), 1 / 48) : null;
   const tempo = sollBisJetzt ? Math.round((heuteS.energie / sollBisJetzt) * 100) / 100 : null;
-  const fuell = echt?.energyMax ? echt.energy / echt.energyMax : null;
+  // Füllstand: echt aus dem Dashboard, sonst geschätzt — Annahme „vor 4 Tagen voll“, danach je Tag + Nachfüllung (gedeckelt
+  // bei 4 Tagen) − geschätzter Verbrauch; heute anteilig. Nähert sich der Topf der Obergrenze, verfällt Nachfüllung.
+  const topfMax = echt?.energyMax ?? (nachfuellungTag ? nachfuellungTag * TOPF_TAGE : null);
+  let stand: number | null = echt?.energy ?? null;
+  if (stand === null && nachfuellungTag && topfMax) {
+    const tage = Array.from({ length: TOPF_TAGE }, (_, i) => berlinDay(now - (TOPF_TAGE - 1 - i) * TAG_S * 1000));
+    const recent: any[] = await usageCol().find({ userId: u.id, day: { $in: tage } }, { projection: { day: 1, energie: 1 } }).toArray();
+    const je = Object.fromEntries(recent.map((d) => [d.day, d.energie ?? 0]));
+    stand = topfMax;
+    for (const t of tage) stand = Math.min(topfMax, stand + nachfuellungTag * (t === day ? berlinDayFraction(now) : 1)) - (je[t] ?? 0);
+    stand = Math.round(stand);
+  }
+  const fuell = stand !== null && topfMax ? Math.max(0, stand / topfMax) : null;
+  // Nahe der Obergrenze → Qualität und Vorrang (mehr niedrig-riskante Arbeit auf Melious); fast leer → sparen; sonst nach Tempo.
   const modus: 'qualitaet' | 'sparen' = fuell !== null && fuell >= 0.75 ? 'qualitaet' : fuell !== null && fuell <= 0.25 ? 'sparen' : tempo !== null && tempo > 1 ? 'sparen' : 'qualitaet';
+  const vorrang = fuell !== null && fuell >= 0.75;
+  const bezahlt = s.enabled ? await bezahltMit(u, now) : null;
+  const hinweise = [
+    ...(fuell !== null && fuell >= 0.9 ? [`Energie verfällt bald: Topf ${echt ? '' : 'geschätzt '}zu ${Math.round(fuell * 100)} % voll — mehr Arbeit auf Melious legen.`] : []),
+    ...(bezahlt === 'credits' || (fuell !== null && stand !== null && stand <= 0) ? ['Melious zahlt gerade mit Guthaben statt Energie (Energie leer) — läuft weiter, kostet aber Guthaben.'] : []),
+    ...(!proTakt ? ['Nachfüllmenge je Takt fehlt (Einrichtung) — Tempo-Steuerung aus, nur Schätzung.'] : []),
+  ];
   return {
     day, month, heute: h, monat: m, modelle, rest: Math.max(0, r2(Math.min(h.limit - h.energie, m.limit - m.energie))), sperre,
-    energie: { geschaetzt: !echt, echt, fuell: fuell === null ? null : Math.round(fuell * 100) / 100, faktorQuelle: s.faktorQuelle, nachfuellungTag, topfMax: echt?.energyMax ?? (nachfuellungTag ? nachfuellungTag * 4 : null), tempo, modus, taktS: s.taktS, dashboard: MELIOUS_DASHBOARD },
+    energie: { geschaetzt: !echt, echt, stand, fuell: fuell === null ? null : Math.round(fuell * 100) / 100, faktorQuelle: s.faktorQuelle, nachfuellungTag, topfMax, tempo, modus, vorrang, bezahlt, hinweise, taktS: s.taktS, dashboard: MELIOUS_DASHBOARD },
     quelle: echt ? `Verbrauch je Zug geschätzt (Preisliste × 10.000); Stand abgeglichen mit dem Melious-Dashboard (${echt.at.slice(11, 16)} UTC)` : 'geschätzt aus Tokens × Preisliste × 10.000 (echter Stand nur im Melious-Dashboard; Abgleich aus)',
   };
 }
@@ -318,7 +407,7 @@ export async function meliousForBridge(u: User) {
   const heute = Object.fromEntries(use.modelle.map((m) => [m.model, m.heute]));
   const rollen = Object.fromEntries(Object.entries(s.rollen).map(([r, l]) => [r, ordneRolle(l, { modus: use.energie.modus, faktoren: s.faktoren, heute })]));
   const pool = Object.keys(s.faktoren).map((model) => ({ model, frei: 1 }));
-  return { id: MELIOUS_ID, label: 'Melious', token, kind: 'melious' as const, model: s.model, pool, rollen, faktoren: s.faktoren, taktS: s.taktS, eco: s.eco,
+  return { id: MELIOUS_ID, label: 'Melious', token, kind: 'melious' as const, model: s.model, pool, rollen, faktoren: s.faktoren, taktS: s.taktS, eco: s.eco, kette: s.kette, ketteModell: s.ketteModell, vorrang: use.energie.vorrang,
     fallback: s.fallback, rest: use.sperre ? 0 : use.rest, ...(use.sperre ? { sperre: use.sperre } : {}) };
 }
 

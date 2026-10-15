@@ -22,7 +22,7 @@ import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious } from './leitstand.ts';
-import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, MELIOUS_ID } from './melious.ts';
+import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
 import { reviewDetail, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen } from './freigabe.ts';
 import { readBericht as readBerichtDatei } from './bericht.ts';
 import { readBericht, paketDatei } from './bericht.ts';
@@ -2563,6 +2563,15 @@ on('POST', /^\/internal\/melious-usage$/, async (req, res) => {
   const r = await meliousBooking(u, b.usage, b.model);
   log('melious verbrauch', { user: u.id, energie: Math.round(r.energie * 100) / 100, heuteEnergie: r.usage.heute.energie, tempo: r.usage.energie.tempo });
   send(res, 200, { ok: true, rest: r.usage.rest, sperre: r.usage.sperre });
+});
+
+// Gegenprüfung durch GLM 5.3 (Werkbank-MCP „challenge“): Diff, Plan oder Council-Entscheidung, über den Melious-Schlüssel der Person.
+on('POST', /^\/internal\/melious-challenge$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const r = await meliousChallenge(u, String(b.art ?? ''), String(b.text ?? ''), String(b.frage ?? ''));
+  log('melious challenge', { user: u.id, art: String(b.art ?? ''), ok: r.ok, energie: r.energie ?? null, error: r.error ?? null });
+  send(res, 200, r);
 });
 
 on('POST', /^\/internal\/measure$/, async (req, res) => {

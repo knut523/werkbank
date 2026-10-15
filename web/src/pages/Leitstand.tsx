@@ -204,7 +204,8 @@ function MeliousKachel() {
       🧪 <b>Melious</b> {!d.enabled ? <span className="chip">aus</span> : d.sperre ? <span className="chip bad">gesperrt</span> : null}
       {' '}⚡ heute <span className={`chip ${cls(d.heute.pct)}`}>≈ {z(Math.round(d.heute.energie))} / {z(d.heute.limit)}</span>
       {' '}Monat <span className={`chip ${cls(d.monat.pct)}`}>≈ {z(Math.round(d.monat.energie))} / {z(d.monat.limit)}</span>
-      <span className="tiny muted" data-testid="melious-kachel-energie"> · Energie geschätzt · {d.heute.turns} Züge heute{d.energie?.tempo != null ? ` · Tempo ${Math.round(d.energie.tempo * 100)} %` : ''}</span>
+      <span className="tiny muted" data-testid="melious-kachel-energie"> · Energie {d.energie?.geschaetzt === false ? 'echt' : 'geschätzt'} · {d.heute.turns} Züge heute{d.energie?.tempo != null ? ` · Tempo ${Math.round(d.energie.tempo * 100)} %` : ''}{d.energie?.fuell != null ? ` · Topf ${Math.round(d.energie.fuell * 100)} %` : ''}</span>
+      {(d.energie?.hinweise ?? []).map((h: string) => <span key={h} className="chip warn" data-testid="melious-kachel-hinweis" style={{ marginLeft: 6 }}>{h}</span>)}
     </a>
   );
 }
