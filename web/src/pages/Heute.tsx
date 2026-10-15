@@ -8,6 +8,7 @@ import { WartetAufDich, Md, mineCount, note } from '../beimir.tsx';
 import { OrchQuestions } from '../orchquestions.tsx';
 import { Mermaid, useMermaidIn } from '../mermaid.tsx';
 import { ExecSummary } from '../execsummary.tsx';
+import { usePushFreigeben } from '../freigabe.tsx';
 
 const BIG: CSSProperties = { minHeight: 44 };
 const STAND: Record<string, [string, string]> = { ja: ['✓', 'ok'], teilweise: ['◐', 'warn'], nein: ['✗', 'bad'] };
@@ -143,7 +144,7 @@ function DocButtons({ it, doc, setDoc, small }: { it: any; doc: Doc | null; setD
 const fileUrl = (paket: string, rel: string, inline = false) => `api/files/agenten/${encodeURIComponent(paket)}/${rel.split('/').map(encodeURIComponent).join('/')}${inline ? '?inline=1' : ''}`;
 
 function KopfTeil({ it, onDone }: { it: any; onDone: () => void }) {
-  const confirm = useConfirm();
+  const pushFreigeben = usePushFreigeben();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
@@ -162,21 +163,8 @@ function KopfTeil({ it, onDone }: { it: any; onDone: () => void }) {
     toast(`${antworten.length === 1 ? 'Antwort' : 'Antworten'} an den Unter-Chat geschickt`);
     setAntwort({});
   });
-  // D2: genau den gesehenen Stand freigeben — Stand live holen, zeigen, bestätigen lassen.
-  const freigeben = () => run(async () => {
-    const r: any = await api(`/api/review/${it.id}`);
-    const repo = r.repo ?? {};
-    if (repo.fehler) throw new Error(repo.fehler);
-    const ok = await confirm({ title: 'Push freigeben?', confirmLabel: 'Genau diesen Stand freigeben', body: <>
-      <p className="small">Freigegeben wird <b>nur dieser Stand</b>. Ändert sich danach ein Commit (auch ein Rebase), verfällt die Freigabe. Pushen macht die Hauptsitzung nach ihrer Prüfung; gemergt wird nie.</p>
-      <ul className="small plain"><li>Zweig <code>{repo.branch}</code></li><li>Kopf <code>{String(repo.head ?? '').slice(0, 12)}</code> · Basis <code>{repo.baseRef}</code></li><li>{(repo.commits ?? []).length} Commit(s){repo.clean ? '' : ' — ⚠ ungespeicherte Änderungen'}</li></ul>
-      {(repo.commits ?? []).length > 0 && <pre className="tiny" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{(repo.commits ?? []).map((c: any) => (typeof c === 'string' ? c : `${String(c.sha ?? '').slice(0, 8)} ${c.subject ?? ''}`)).join('\n')}</pre>}
-      {repo.stat && <pre className="tiny" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{repo.stat}</pre>}
-      <p className="tiny"><a href={`#/leitstand?review=${it.id}`}>Ganzen Diff und Review-Ansicht öffnen</a></p></> });
-    if (!ok) return;
-    await api(`/api/review/${it.id}/freigabe`, { body: { head: repo.head, patchId: repo.patchId ?? null } });
-    toast('Freigegeben — die Hauptsitzung pusht nach ihrer Prüfung');
-  });
+  // D2: genau den gesehenen Stand freigeben — gemeinsam mit der Übersicht (src/freigabe.tsx).
+  const freigeben = () => run(async () => { if (await pushFreigeben(it.id)) toast('Freigegeben — die Hauptsitzung pusht nach ihrer Prüfung'); });
   const tot = (url: string) => run(async () => { await api(`/api/review/${it.id}/vorschau-tot`, { body: { url } }); toast('Unter-Chat benachrichtigt'); });
   if (!k && !it.kopfFehler) return null;
   return (

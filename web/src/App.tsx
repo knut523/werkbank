@@ -11,6 +11,7 @@ import { Dateien } from './pages/Dateien.tsx';
 import { Timebox } from './pages/Timebox.tsx';
 import { Ziele } from './pages/Ziele.tsx';
 import { Heute } from './pages/Heute.tsx';
+import { Uebersicht } from './pages/Uebersicht.tsx';
 import { Leitstand } from './pages/Leitstand.tsx';
 import { useTodayCount } from './beimir.tsx';
 
@@ -42,6 +43,7 @@ const NAV = [
   { href: '#/board', label: 'Board', ico: '🗂️', match: /^#\/board/ , f: 'board' },
   { href: '#/sprint', label: 'Sprint', ico: '🔁', match: /^#\/sprint/ , f: 'sprint' },
   { href: '#/wissen', label: 'Wissen', ico: '📚', match: /^#\/wissen/ , f: 'wissen' },
+  { href: '#/uebersicht', label: 'Übersicht', ico: '📋', match: /^#\/uebersicht/ , f: 'uebersicht' },
   { href: '#/leitstand', label: 'Hauptchat', ico: '🛰️', match: /^#\/leitstand/ , f: 'leitstand' },
 ];
 const MORE = [
@@ -138,6 +140,7 @@ export function App() {
     : /^#\/skills/.test(hash) ? <Skills cfg={cfg} />
     : /^#\/dateien/.test(hash) ? <Dateien cfg={cfg} />
     : /^#\/leitstand/.test(hash) ? <Leitstand cfg={cfg} hash={hash} />
+    : /^#\/uebersicht/.test(hash) ? <Uebersicht cfg={cfg} />
     : <Heute cfg={cfg} />;
 
   // Eingebettet: kein eigenes Gerüst — Navigation ist LibreChats Leiste (fünf Einträge + „Mehr“), Einrichtung im Kontomenü.

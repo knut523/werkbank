@@ -492,3 +492,43 @@ td[data-label-inline]::before { content: none; }
 pre.mermaid-src { white-space: pre-wrap; font-size: 12px; opacity: .8; }
 td.dod { white-space: nowrap; font-weight: 600; }
 td.dod-ja { color: var(--ok, #2f7d3a); } td.dod-teilweise { color: var(--warn, #9a6a00); } td.dod-nein { color: var(--bad, #a33a2a); }
+
+/* Übersicht „Was fertig ist“ (docs/plan-uebersicht-handeln.md, Paket 184) — Aufbau und Dichte wie die Morgen-Seite. */
+.ub { display: grid; gap: 14px; }
+.ub-head h1 { margin: 0; }
+.ub-head p { margin: 2px 0 0; }
+.ub-exec { border-left: 5px solid var(--brand, #ec6726); }
+.ub-exec h2, .ub-lose h2 { font-size: 1.05rem; margin: 0 0 4px; }
+.ub-thema > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 2px; font-size: 1.05rem; list-style: none; }
+.ub-thema > summary::-webkit-details-marker { display: none; }
+.ub-thema > summary::before { content: '▸'; color: var(--text-secondary); width: 1em; }
+.ub-thema[open] > summary::before { content: '▾'; }
+.ub-thema-name { font-weight: 700; }
+.ub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 12px; margin: 6px 0 10px; }
+.ub-karte { display: grid; gap: 8px; align-content: start; min-width: 0; border-left: 4px solid var(--border-medium); }
+.ub-karte.ub-push { border-left-color: var(--chip-ok-text); }
+.ub-karte.ub-review { border-left-color: var(--chip-warn-text); }
+.ub-karte.ub-blockiert { border-left-color: var(--chip-bad-text); }
+.ub-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+.ub-top h3 { margin: 0; font-size: 1rem; line-height: 1.35; overflow-wrap: anywhere; flex: 1 1 200px; }
+.ub-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.ub-ampel { font-weight: 700; }
+.ub-kurz { margin: 0; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.ub-gh { margin: 0; overflow-wrap: anywhere; }
+.ub-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.ub-links a { font-size: 13px; text-decoration: none; color: var(--text-primary); background: var(--surface-tertiary); border: 1px solid var(--border-light); border-radius: 6px; padding: 4px 9px; min-height: 32px; display: inline-flex; align-items: center; }
+.ub-von { margin: 0; border-top: 1px dashed var(--border-light); padding-top: 8px; font-size: 14px; overflow-wrap: anywhere; }
+.ub-von b { color: var(--brand, #ec6726); }
+.ub-aktionen { gap: 6px; flex-wrap: wrap; }
+.ub-aktionen .btn { min-height: 40px; }
+.ub-panel { display: grid; gap: 8px; border-top: 1px solid var(--border-light); padding-top: 8px; }
+.ub-panel textarea { width: 100%; }
+.ub-frage { display: grid; gap: 4px; }
+.ub-frage p { margin: 0; overflow-wrap: anywhere; }
+.ub-lose .ub-frage + .ub-frage { border-top: 1px solid var(--border-light); padding-top: 8px; margin-top: 8px; }
+.ub-wahl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ub-wahl select { min-height: 40px; max-width: 100%; }
+.ub-wahl .input { flex: 1 1 200px; min-width: 0; min-height: 40px; }
+.ub-row { gap: 8px; flex-wrap: wrap; align-items: center; }
+.ub-pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0; }
+@media (max-width: 760px) { .ub-aktionen .btn, .ub-row .btn, .ub-wahl select, .ub-wahl .input { min-height: 44px; } .ub-links a { min-height: 40px; } }
