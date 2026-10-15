@@ -2,11 +2,16 @@
 // Alles aus dem Vault (lesend); geschrieben wird nur eine Antwort („- Knut:“) oder ein Rang-Vorschlag —
 // jeweils nach Vorschau und Bestätigung. GitHub nur lesend (Links).
 import { useMemo, useState, type CSSProperties } from 'react';
-import { api, type Config } from '../api.ts';
+import { AnsetzenButton } from '../AgentAnsetzen';
+import { api, type Config, viaLabel } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, StateChip, useJiraLive } from '../ui.tsx';
+import { BeiMirLink, Md, note } from '../beimir.tsx';
+import { topicBuckets } from '../buckets.ts';
 
-const note = (p: string) => '#/wissen/' + p.split('/').map(encodeURIComponent).join('/');
-const TABS = [['prio', 'Priorisierung'], ['kanban', 'Zustände'], ['ordnung', 'Ordnung'], ['prs', 'PR-Review'], ['entscheidungen', 'Offene Entscheidungen'], ['check', 'Konsistenz']] as const;
+// Tabs (Council-Bedingung 11): Überblick · Rangliste · PR-Review · Pflege ⋯ (Konsistenz, Ordnung). Die alten Adressen
+// (#/roadmap/kanban, /entscheidungen, /check, /ordnung) gehen weiter; „Für mich offen“ steht jetzt unter „Heute“.
+const TABS = [['ueberblick', 'Überblick'], ['prio', 'Rangliste'], ['prs', 'PR-Review'], ['pflege', 'Pflege ⋯']] as const;
+const TAB_OF: Record<string, string> = { kanban: 'ueberblick', entscheidungen: 'ueberblick', check: 'pflege', ordnung: 'pflege' };
 
 function Tickets({ ts }: { ts: any[] }) {
   if (!ts?.length) return null;
@@ -30,7 +35,7 @@ function NextUp({ d }: { d: any }) {
   );
 }
 
-function Prio({ d, reload }: { d: any; reload: () => void }) {
+function Prio({ d, reload, admin }: { d: any; reload: () => void; admin: boolean }) {
   const [order, setOrder] = useState<string[] | null>(null);
   const [why, setWhy] = useState('');
   const [err, setErr] = useState<unknown>(null);
@@ -85,7 +90,7 @@ function Prio({ d, reload }: { d: any; reload: () => void }) {
         return (
           <section key={t.topic} className="card topic-block" data-topic={t.topic}>
             <h3 style={{ marginTop: 0 }}>{t.topic} <span className="chip">{t.ranked.length} priorisiert</span>{t.unranked.length > 0 && <span className="chip warn">{t.unranked.length} ohne Rang</span>}</h3>
-            {rows.length > 0 && <table className="t small">
+            {rows.length > 0 && <table className="t small stack-t prio-t">
               <thead><tr><th>Rang</th><th></th><th>Spec</th><th>Zustand</th><th title="(GW+ZK+RR)/Größe">WSJF</th><th>Kat</th><th>blockiert durch</th><th>nächster Schritt</th><th>Jira · PR</th></tr></thead>
               <tbody>{rows.map((r: any) => {
                 const full = byRow.get(r.spec) ?? r;
@@ -94,10 +99,10 @@ function Prio({ d, reload }: { d: any; reload: () => void }) {
                   <tr key={r.spec} data-spec={r.spec} className={order && full.rank !== i + 1 ? 'moved' : ''}>
                     <td><span className="chip rank">#{i + 1}</span>{order && full.rank !== i + 1 && <span className="tiny"> (war {full.rank})</span>}</td>
                     <td className="nowrap"><button className="btn ghost small" aria-label={`${r.spec} hoch`} onClick={() => move(r.spec, -1)}>▲</button><button className="btn ghost small" aria-label={`${r.spec} runter`} onClick={() => move(r.spec, 1)}>▼</button></td>
-                    <td>{full.path ? <a href={note(full.path)}>{r.spec}</a> : r.spec}{full.open > 0 && <span className="chip warn" title="offene Knut-Zeilen">❓ {full.open}</span>}{full.why && <details><summary className="tiny">Gründe</summary><span className="tiny">{full.why}</span></details>}</td>
-                    <td className="tiny">{full.state}</td>
-                    <td title={`GW ${full.gw} · ZK ${full.zk} · RR ${full.rr} · Größe ${full.size}`}>{Number(full.wsjf ?? 0).toFixed(1)}</td><td>{full.cat}</td>
-                    <td className="tiny">{full.blocked}</td><td className="tiny">{full.next}</td>
+                    <td>{full.path ? <a href={note(full.path)}>{r.spec}</a> : r.spec}{full.open > 0 && <span className="chip warn" title="offene Knut-Zeilen">❓ {full.open}</span>}{full.path && <> <AnsetzenButton path={full.path} state={full.folderState} open={full.open} admin={admin} /></>}{full.why && <details><summary className="tiny">Gründe</summary><span className="tiny">{full.why}</span></details>}</td>
+                    <td className="tiny" data-label-inline="Zustand">{full.state}</td>
+                    <td title={`GW ${full.gw} · ZK ${full.zk} · RR ${full.rr} · Größe ${full.size}`} data-label-inline="WSJF">{Number(full.wsjf ?? 0).toFixed(1)}</td><td data-label-inline="Kat">{full.cat}</td>
+                    <td className="tiny" data-label={full.blocked ? 'blockiert durch' : undefined}>{full.blocked}</td><td className="tiny" data-label={full.next ? 'nächster Schritt' : undefined}>{full.next}</td>
                     <td><Tickets ts={full.tickets} /> <Prs prs={full.prs} /></td>
                   </tr>
                 );
@@ -218,7 +223,7 @@ function Order() {
     setErr(null);
     try {
       const r: any = await api('/api/roadmap/spec-move', { body: { path: x.path, to } });
-      await confirm({ title: `${x.name}: ${x.state} → ${to}`, confirmLabel: 'Text kopieren', body: <><p className="small">Ein Zustandswechsel betrifft nach dem Skill mehrere Seiten (Zustandsseiten, Hub-Zahlen und Prosa, Themen-Übersicht, rank.py). Dafür gibt es keinen sauberen automatischen Schreibweg — die Werkbank schreibt hier <b>nicht</b>, sondern gibt dir die Änderung als Text:</p><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{r.copy}</pre></> }).then((ok) => { if (ok) { try { navigator.clipboard.writeText(r.copy); toast('Kopiert'); } catch { toast('Kopieren nicht möglich — Text markieren'); } } });
+      await confirm({ title: `${x.name}: ${x.state} → ${to}`, confirmLabel: 'Text kopieren', body: <><p className="small">Ein Zustandswechsel betrifft nach dem Skill mehrere Seiten (Zustandsseiten, Hub-Zahlen und Prosa, Themen-Übersicht, rank.py). Dafür gibt es keinen sauberen automatischen Schreibweg — der OLAF Workspace schreibt hier <b>nicht</b>, sondern gibt dir die Änderung als Text:</p><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{r.copy}</pre></> }).then((ok) => { if (ok) { try { navigator.clipboard.writeText(r.copy); toast('Kopiert'); } catch { toast('Kopieren nicht möglich — Text markieren'); } } });
     } catch (e) { setErr(e); }
   };
   const assignSpec = async (x: any, goal: string) => {
@@ -226,9 +231,9 @@ function Order() {
     const g = goal === '-' ? '' : goal;
     try {
       const pre: any = await api('/api/goals/assign-spec', { body: { path: x.path, goal: g } });
-      if (!(await confirm({ title: 'Spec einem Ziel zuordnen?', confirmLabel: 'In der Werkbank speichern', body: <><pre className="small">{pre.preview}</pre><p className="tiny">Gespeichert in der Werkbank (mit Verlauf) — das Frontmatter der Spec bleibt unverändert.</p></> }))) return;
+      if (!(await confirm({ title: 'Spec einem Ziel zuordnen?', confirmLabel: 'Im OLAF Workspace speichern', body: <><pre className="small">{pre.preview}</pre><p className="tiny">Gespeichert im OLAF Workspace (mit Verlauf) — das Frontmatter der Spec bleibt unverändert.</p></> }))) return;
       await api('/api/goals/assign-spec', { body: { path: x.path, goal: g, confirm: true } });
-      toast('Gespeichert (Werkbank)'); o.reload();
+      toast('Gespeichert (OLAF Workspace)'); o.reload();
     } catch (e) { setErr(e); }
   };
   const create = async () => {
@@ -277,8 +282,8 @@ function Order() {
               <td><a href={note(x.path)}>{x.title}</a><div className="tiny">{x.name}</div></td>
               <td className="tiny">{x.topic} · {x.state.replace(/^\d-/, '')}</td>
               <td>{c.rank ? <span className="chip rank">#{c.rank}</span> : <span className="chip tiny-chip warn">ohne</span>}</td>
-              <td>{c.goal.ok ? c.goal.ids.map((g: string) => <a key={g} className="chip tiny-chip goal-id" href={`#/ziele/${g}`} title={`über ${c.goal.via}`}>{g}</a>) : <span className="chip tiny-chip bad">ohne Ziel – genauer anschauen</span>}
-                <select className="spec-goal" aria-label={`Ziel für ${x.name}`} value="" onChange={(e) => e.target.value && assignSpec(x, e.target.value)}><option value="">{c.goal.via === 'Werkbank' ? 'ändern …' : 'zuordnen …'}</option>{goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 36)}</option>)}{c.goal.via === 'Werkbank' && <option value="-">— Werkbank-Zuordnung zurücksetzen —</option>}</select></td>
+              <td>{c.goal.ok ? c.goal.ids.map((g: string) => <a key={g} className="chip tiny-chip goal-id" href={`#/ziele/${g}`} title={`über ${viaLabel(c.goal.via)}`}>{g}</a>) : <span className="chip tiny-chip bad">ohne Ziel – genauer anschauen</span>}
+                <select className="spec-goal" aria-label={`Ziel für ${x.name}`} value="" onChange={(e) => e.target.value && assignSpec(x, e.target.value)}><option value="">{c.goal.via === 'Werkbank' ? 'ändern …' : 'zuordnen …'}</option>{goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 36)}</option>)}{c.goal.via === 'Werkbank' && <option value="-">— Workspace-Zuordnung zurücksetzen —</option>}</select></td>
               <td><Tickets ts={x.tickets} /> {x.prs.map((p: any) => <span key={p.pr} className={`chip tiny-chip ${p.conflict ? 'bad' : p.open ? 'warn' : ''}`}>{p.pr.replace('olaf-', '')}{p.conflict ? ' ⚠' : p.open ? '' : ' · zu'}</span>)}</td>
               <td>{c.openDecisions > 0 ? <span className="chip tiny-chip warn">{c.openDecisions}</span> : '—'}</td>
               <td className="tiny">{c.age != null ? `${c.age} T.` : '—'}</td>
@@ -340,7 +345,7 @@ function Decisions({ d, reload, user }: { d: any; reload: () => void; user: stri
             const id = `${path}:${x.line}`;
             return (
               <div key={id} className="q" style={{ marginTop: 8 }}>
-                <div className="small">{x.section && <span className="tiny">{x.section} · </span>}{x.question || <i>(Frage ohne Text, Zeile {x.line})</i>}</div>
+                <div className="small">{x.section && <span className="tiny">{x.section} · </span>}{x.question ? <Md text={x.question} /> : <i>(Frage ohne Text, Zeile {x.line})</i>}</div>
                 <div className="row" style={{ marginTop: 4 }}>
                   <span className="tiny">Knut:</span>
                   <input aria-label={`Antwort ${x.spec} Zeile ${x.line}`} value={answers[id] ?? ''} onChange={(e) => setAnswers({ ...answers, [id]: e.target.value })} style={{ flex: 1, minWidth: 200 }} />
@@ -397,96 +402,64 @@ function Check({ d: rd }: { d: any }) {
   );
 }
 
-// „Für mich offen“ (Plan Roadmap-Automatik S3): was gerade auf mich wartet — offene Knut-Zeilen, PRs, bei denen ich
-// dran bin, eigene Tickets ohne/über Datum; für Admins zusätzlich die Fragen des Vault-Syncs (✅ Ja führt der nächste
-// Sync aus) und der Entwurf „Woran wir gerade arbeiten“. Live über dieselben Server-Events wie die Seite.
-function ForMe({ d }: { d: any }) {
-  const m = useLoad(() => api('/api/roadmap/mine'));
-  useJiraLive(() => { api('/api/roadmap/mine').then(m.setData).catch(() => {}); }, 'both');
-  const confirm = useConfirm();
-  const toast = useToast();
-  const [busy, setBusy] = useState<string | null>(null);
-  const [err, setErr] = useState<unknown>(null);
-  const x: any = m.data;
-  if (!x) return m.error ? <Err e={m.error} /> : null;
-  // „- Knut:“-Zeilen sind Knuts Entscheidungen → nur für Admins (Review-Nit).
-  const decisions = (x.admin ? d?.decisions ?? [] : []) as any[];
-  const answer = async (q: any, a: 'ja' | 'nein' | 'widerruf') => {
-    setBusy(q.id); setErr(null);
-    try {
-      const r: any = await api('/api/roadmap/question', { body: { id: q.id, answer: a } });
-      toast(a === 'ja' ? (r.started ? 'Freigegeben — der Vault-Sync läuft jetzt' : 'Freigegeben — startet, sobald der laufende Sync fertig ist') : a === 'nein' ? 'Verworfen — wird nicht wieder vorgeschlagen' : 'Freigabe zurückgenommen');
-      m.setData(await api('/api/roadmap/mine'));
-    } catch (e) { setErr(e); } finally { setBusy(null); }
-  };
-  const draft = async (action: 'übernehmen' | 'verwerfen') => {
-    if (action === 'übernehmen' && !(await confirm({ title: '„Woran wir gerade arbeiten“ ersetzen?', confirmLabel: 'In den Hub schreiben', body: <><p className="small">Der Block zwischen den Werkbank-Markern im Roadmap-Hub wird durch diesen Entwurf ersetzt. Alles andere auf der Seite bleibt.</p><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{x.draft.body}</pre></> }))) return;
-    setBusy('draft'); setErr(null);
-    try { await api('/api/roadmap/draft', { body: { action, hash: x.draft.hash } }); toast(action === 'übernehmen' ? 'Im Hub übernommen' : 'Entwurf verworfen'); m.setData(await api('/api/roadmap/mine')); }
-    catch (e) { setErr(e); } finally { setBusy(null); }
-  };
-  const pend = (x.pendingApprovals ?? []) as any[];
-  const n = decisions.length + x.prs.length + x.tickets.length + x.questions.length + pend.length + (x.draft ? 1 : 0);
-  const btn: CSSProperties = { minHeight: 36 };
+// Überblick (Standard): je Thema eine Zeile mit vier Feldern — Wartet auf dich → In Arbeit → Als Nächstes → Erledigt;
+// Themen mit offenen Entscheidungen zuerst. „Alle Zustände ▾“ klappt die volle Swimlane des Themas auf.
+function Overview({ d }: { d: any }) {
+  const [openLane, setOpenLane] = useState<string | null>(null);
+  const rows = useMemo(() => topicBuckets(d.lanes.map((l: any) => ({ name: l.topic, states: l.states })), d.admin ? d.decisions : [], d.agents ?? {}), [d]);
+  const waitLabel = d.admin ? 'Wartet auf dich' : 'Wartet auf Entscheidung';
+  const specLink = (s: any) => <a href={note(s.path)}>{s.title}</a>;
+  const empty = <span className="muted">—</span>;
   return (
-    <div className="card" data-testid="for-me" style={{ marginBottom: 14 }}>
-      <h3 style={{ marginTop: 0 }}>Für mich offen <span className="chip">{n}</span>
-        {x.queued?.length > 0 && <span className="chip warn" title="Roadmap-Nachzug nach Agentenlauf wartet (höchstens alle 20 min)">Nachzug wartet: {x.queued.join(', ')}</span>}
-        {!x.autosync && <span className="chip" title="WERKBANK_ROADMAP_AUTOSYNC=0">Nachzug aus</span>}
-        {x.syncRunning && <span className="chip ok">Vault-Sync läuft</span>}
-      </h3>
-      {err ? <Err e={err} /> : null}
-      {n === 0 && <p className="small muted">Nichts — alles erledigt oder bei anderen.</p>}
-      {x.questions.length > 0 && <>
-        <div className="small docs-h">Fragen des Vault-Syncs ({x.section}) — ✅ Ja: der Sync führt genau das aus</div>
-        <ul className="small" style={{ paddingLeft: 18 }}>{x.questions.map((q: any) => (
-          <li key={q.id} style={{ marginBottom: 8 }} data-testid="sync-question">
-            <div>{q.text}</div>
-            {q.failed !== null && q.failed !== undefined && <div className="chip bad">nicht erledigt{q.failed ? `: ${q.failed}` : ''}</div>}
-            {q.answer === 'ja'
-              ? <span><span className="chip ok">freigegeben — wird beim nächsten Sync erledigt</span>{x.admin && <button className="btn ghost small" style={{ marginLeft: 8 }} disabled={busy === q.id} onClick={() => answer(q, 'widerruf')}>Zurücknehmen</button>}</span>
-              : x.admin && <div className="row" style={{ gap: 8, marginTop: 4 }}>
-                  <button className="btn small" style={{ ...btn, background: '#FEE600', color: '#2b2d33', borderColor: '#FEE600' }} disabled={busy === q.id} onClick={() => answer(q, 'ja')}>✅ Ja</button>
-                  <button className="btn ghost small" style={btn} disabled={busy === q.id} onClick={() => answer(q, 'nein')}>✖️ Nein</button>
-                </div>}
-          </li>))}</ul>
-      </>}
-      {pend.length > 0 && <>
-        <div className="small docs-h">Freigegeben, noch nicht erledigt ({pend.length})</div>
-        <ul className="small" style={{ paddingLeft: 18 }}>{pend.map((a: any) => (
-          <li key={a.id} style={{ marginBottom: 6 }}>{a.text} <span className="tiny">· {a.by}, {String(a.at).slice(0, 10)}</span>
-            {a.failed !== null && <span className="chip bad">nicht erledigt{a.failed ? `: ${a.failed}` : ''}</span>}
-            {x.admin && <button className="btn ghost small" style={{ marginLeft: 8 }} disabled={busy === a.id} onClick={() => answer(a, 'widerruf')}>Zurücknehmen</button>}
-          </li>))}</ul>
-      </>}
-      {x.draft && <>
-        <div className="small docs-h">Entwurf „Woran wir gerade arbeiten“ (vom Morgenlauf)</div>
-        <details className="small"><summary>ansehen</summary><pre className="small" style={{ whiteSpace: 'pre-wrap' }}>{x.draft.body}</pre></details>
-        {!x.draft.hubHasMarkers && <p className="small warn">Im Hub fehlen die Werkbank-Marker — Übernehmen geht erst, wenn sie da sind.</p>}
-        <div className="row" style={{ gap: 8, marginTop: 4 }}>
-          <button className="btn small" style={btn} disabled={busy === 'draft' || !x.draft.hubHasMarkers} onClick={() => draft('übernehmen')}>Übernehmen</button>
-          <button className="btn ghost small" style={btn} disabled={busy === 'draft'} onClick={() => draft('verwerfen')}>Verwerfen</button>
-        </div>
-      </>}
-      {decisions.length > 0 && <>
-        <div className="small docs-h">Offene Entscheidungen im Vault ({decisions.length}) — <a href="#/roadmap/entscheidungen">beantworten</a></div>
-        <ul className="small" style={{ paddingLeft: 18 }}>{decisions.slice(0, 5).map((q: any) => <li key={q.path + q.line}><a href={note(q.path)}>{q.title ?? q.spec}</a>: {String(q.question ?? '').slice(0, 140)}</li>)}</ul>
-        {decisions.length > 5 && <a className="small" href="#/roadmap/entscheidungen">alle {decisions.length}</a>}
-      </>}
-      {x.prs.length > 0 && <>
-        <div className="small docs-h">PRs, bei denen {x.me} dran ist ({x.prs.length})</div>
-        <ul className="small" style={{ paddingLeft: 18 }}>{x.prs.map((p: any) => <li key={p.pr}><a href={p.url} target="_blank" rel="noreferrer">{p.pr}</a> {p.title} <span className="tiny">· {p.why}</span></li>)}</ul>
-      </>}
-      {x.tickets.length > 0 && <>
-        <div className="small docs-h">Meine Tickets ohne oder über Datum ({x.tickets.length})</div>
-        <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>{x.tickets.slice(0, 12).map((t: any) => <a key={t.key} className={`chip ${t.why === 'überfällig' ? 'bad' : 'warn'}`} href={`#/board?key=${t.key}`} title={t.summary}>{t.key} · {t.why}{t.duedate ? ` (${t.duedate})` : ''}</a>)}</div>
-      </>}
+    <div data-testid="overview">
+      {rows.map((t) => {
+        const lane = d.lanes.find((l: any) => l.topic === t.topic);
+        const open = openLane === t.topic;
+        return (
+          <section key={t.topic} className="card bucket-row" data-topic={t.topic}>
+            <div className="bucket-head">
+              <h3>{t.topic}</h3>
+              {lane && <button className="btn ghost small" aria-expanded={open} aria-controls={`lane-${t.topic}`} onClick={() => setOpenLane(open ? null : t.topic)}>Alle Zustände {open ? '▴' : '▾'}</button>}
+            </div>
+            <div className="buckets">
+              <div className={`bucket wait${t.waiting.count ? ' has' : ''}`}>
+                <div className="bucket-label">{waitLabel} <span className="chip tiny-chip">{t.waiting.count}</span></div>
+                {t.waiting.count ? <ul className="plain">{t.waiting.items.map((q: any) => <li key={q.path + q.line}><a href={note(q.path)}>{q.title ?? q.spec}</a>{q.question ? <span className="tiny muted">: <Md text={q.question} max={80} /></span> : null}</li>)}
+                  {t.waiting.count > t.waiting.items.length && <li><a className="tiny" href="#/roadmap/entscheidungen">alle {t.waiting.count}</a></li>}</ul> : empty}
+              </div>
+              <div className="bucket">
+                <div className="bucket-label">In Arbeit <span className="chip tiny-chip">{t.inWork.count}</span></div>
+                {t.inWork.count ? <ul className="plain">{t.inWork.items.map((s: any) => <li key={s.path}>{specLink(s)}
+                  {s.agent && <span className={`chip tiny-chip ${s.agent === 'wartet auf ja' ? 'warn' : 'ok'}`}>{s.agent === 'wartet auf ja' ? 'Agent fragt' : 'Agent läuft'}</span>}
+                  {(s.prLive ?? []).slice(0, 2).map((p: any) => <span key={p.pr} className={`chip tiny-chip ${p.conflict ? 'bad' : p.review === 'APPROVED' ? 'ok' : ''}`}>{p.pr.replace('olaf-', '')}{p.conflict ? ' ⚠' : p.review === 'APPROVED' ? ' ✓' : p.turn ? ` · ${p.turn}` : ''}</span>)}</li>)}</ul> : empty}
+              </div>
+              <div className="bucket">
+                <div className="bucket-label">Als Nächstes <span className="chip tiny-chip">{t.next.count}</span></div>
+                {t.next.count ? <ul className="plain">{t.next.items.map((s: any) => <li key={s.path}>{s.rank ? <span className="chip tiny-chip rank">#{s.rank}</span> : null} {specLink(s)}{s.open > 0 && <span className="chip tiny-chip warn" title="erst entscheiden">❓ {s.open}</span>}{s.state === '3-Plan' && !s.open && <> <AnsetzenButton path={s.path} state={s.state} open={s.open} admin={!!d.admin} /></>}</li>)}</ul> : empty}
+              </div>
+              <div className="bucket">
+                <div className="bucket-label">Erledigt <span className="chip tiny-chip">{t.done.count}</span></div>
+                {t.done.count ? <ul className="plain">{t.done.items.map((s: any) => <li key={s.path}>{specLink(s)}{s.verified && <span className="tiny muted"> · geprüft {s.verified.slice(8, 10)}.{s.verified.slice(5, 7)}.</span>}</li>)}</ul> : empty}
+              </div>
+            </div>
+            {open && lane && <div id={`lane-${t.topic}`} className="cols" style={{ '--ncol': d.kanbanStates.length, marginTop: 10 } as CSSProperties}>
+              {d.kanbanStates.map((st: string) => (
+                <div key={st}>
+                  <div className="colhead">{st.replace(/^\d-/, '')} · {lane.states[st].length}</div>
+                  <div className="col-cards">{lane.states[st].map((sp: any) => <SpecCard key={sp.path} sp={sp} />)}</div>
+                </div>
+              ))}
+            </div>}
+          </section>
+        );
+      })}
     </div>
   );
 }
 
 export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
-  const tab = hash.match(/^#\/roadmap\/(\w+)/)?.[1] ?? 'prio';
+  const tab = hash.match(/^#\/roadmap\/(\w+)/)?.[1] ?? 'ueberblick';
+  const activeTab = TAB_OF[tab] ?? tab;
   const r = useLoad(() => api('/api/roadmap'));
   const d: any = r.data;
   // Live: neuer GitHub-Stand (alle 5 min) oder Jira-Änderung → still nachladen.
@@ -496,16 +469,19 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
       <div className="head">
         <div>
           <h1>Roadmap · Produkt OLAF</h1>
-          <p className="muted" style={{ margin: 0 }}>Priorisierung, Zustände je Thema, PR-Review, offene Entscheidungen und Konsistenz — aus dem Vault (<code>{d?.base ?? '…'}</code>). Verknüpft: Spec ↔ Jira ↔ PR.</p>
+          <p className="muted" style={{ margin: 0 }}>Je Thema: was auf dich wartet, was läuft, was als Nächstes kommt, was erledigt ist — aus dem Vault (<code>{d?.base ?? '…'}</code>). Verknüpft: Spec ↔ Jira ↔ PR.</p>
         </div>
         {d && <a className="btn" href={note(d.hub.path)}>Roadmap-Hub öffnen</a>}
       </div>
-      {d && <ForMe d={d} />}
+      <BeiMirLink what="Offene Entscheidungen, Sync-Fragen und Reviews" />
       <div className="tabs" role="tablist">
-        {TABS.map(([id, label]) => <a key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} href={`#/roadmap/${id}`}>{label}{d && id === 'entscheidungen' ? ` (${d.decisions.length})` : d && id === 'prs' ? ` (${d.prs.length})` : d && id === 'prio' ? ` (${d.ranking.length})` : ''}</a>)}
+        {TABS.map(([id, label]) => <a key={id} role="tab" aria-selected={activeTab === id} className={activeTab === id ? 'active' : ''} href={`#/roadmap/${id}`}>{label}{d && id === 'prs' ? ` (${d.prs.length})` : d && id === 'prio' ? ` (${d.ranking.length})` : ''}</a>)}
       </div>
+      {activeTab === 'pflege' && <div className="subtabs small" role="tablist" aria-label="Pflege">
+        {[['check', 'Konsistenz'], ['ordnung', 'Ordnung']].map(([id, label]) => { const on = (tab === 'pflege' ? 'check' : tab) === id; return <a key={id} role="tab" aria-selected={on} className={on ? 'active' : ''} href={`#/roadmap/${id}`}>{label}</a>; })}
+      </div>}
       {r.error && <Err e={r.error} />}
-      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' ? <Check d={d} /> : <Prio d={d} reload={r.reload} />}
+      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' || tab === 'pflege' ? <Check d={d} /> : tab === 'prio' ? <Prio d={d} reload={r.reload} admin={cfg.user?.role === 'ADMIN'} /> : <Overview d={d} />}
     </div>
   );
 }

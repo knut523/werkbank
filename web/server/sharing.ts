@@ -11,11 +11,12 @@ import { ObjectId } from 'mongodb';
 import { cfg } from './config.ts';
 import { wb, lc } from './db.ts';
 import type { User } from './auth.ts';
+import { docsDir, EINGANG, inDocs, moveInto } from './ablage.ts';
 
 const filesDir = () => join(cfg.dataDir, 'files');
 const logFile = () => join(cfg.dataDir, 'share-log.jsonl');
 
-export function logShare(e: { actor: string; action: 'share' | 'unshare' | 'upload' | 'delete' | 'copy'; kind: 'file' | 'chat'; resource: string; target?: string }) {
+export function logShare(e: { actor: string; action: 'share' | 'unshare' | 'upload' | 'delete' | 'copy' | 'ablegen' | 'backup'; kind: 'file' | 'chat' | 'backup'; resource: string; target?: string }) {
   mkdirSync(cfg.dataDir, { recursive: true });
   appendFileSync(logFile(), JSON.stringify({ ts: new Date().toISOString(), ...e }) + '\n', { mode: 0o600 });
 }
@@ -57,13 +58,15 @@ export async function saveUpload(u: User, req: IncomingMessage, rawName: string,
   const err = checkUpload(name, declared || 1);
   if (err) throw Object.assign(new Error(err), { status: 400 });
   const id = randomUUID();
-  const dir = join(filesDir(), id);
+  // Plan 81, Schnitt 1/2: ein Upload landet zuerst in `_eingang/` der Ablage und steht in „Noch einzusortieren“,
+  // bis der Vorschlag bestätigt ist. Geschrieben wird in eine versteckte Teildatei, erst fertig bekommt sie ihren Namen.
+  const dir = inDocs(EINGANG);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const dest = join(dir, name);
+  const part = join(dir, `.upload-${id}`);
   const h = createHash('sha256');
   let size = 0;
   await new Promise<void>((resolve, reject) => {
-    const ws = createWriteStream(dest, { mode: 0o600 });
+    const ws = createWriteStream(part, { mode: 0o600 });
     req.on('data', (c: Buffer) => {
       size += c.length;
       if (size > cfg.fileMaxBytes) { req.destroy(); ws.destroy(); reject(Object.assign(new Error('Datei zu groß.'), { status: 413 })); return; }
@@ -72,11 +75,13 @@ export async function saveUpload(u: User, req: IncomingMessage, rawName: string,
     });
     req.on('end', () => ws.end(resolve));
     req.on('error', reject);
-  }).catch((e) => { rmSync(dir, { recursive: true, force: true }); throw e; });
-  if (!size) { rmSync(dir, { recursive: true, force: true }); throw Object.assign(new Error('Leere Datei.'), { status: 400 }); }
+  }).catch((e) => { rmSync(part, { force: true }); throw e; });
+  if (!size) { rmSync(part, { force: true }); throw Object.assign(new Error('Leere Datei.'), { status: 400 }); }
+  const path = moveInto(part, EINGANG, name);
   const doc = {
     _id: id as any, name, size, mime: ALLOWED_EXT[extname(name).toLowerCase()], sha256: h.digest('hex'),
     owner: u.id, ownerEmail: u.email, ownerName: u.name, sharedWith: [] as string[], personal, createdAt: new Date(),
+    path, // in `_eingang/` = noch einzusortieren
   };
   await wb().collection('files').insertOne(doc);
   logShare({ actor: u.email, action: 'upload', kind: 'file', resource: id });
@@ -89,8 +94,10 @@ export async function fileFor(u: User, id: string): Promise<any> {
   return f;
 }
 
-// Vault-Einträge (von Agenten geschriebene Notizen, Plan 81) liegen im Vault, nicht im Speicher.
-export const filePath = (f: any) => (f.kind === 'vault' ? join(cfg.vaultDir, f.vaultPath) : join(filesDir(), f._id, f.name));
+// Vault-Einträge (von Agenten geschriebene Notizen, Plan 81) liegen im Vault, nicht im Speicher; Dateien mit `path` in der
+// Ablage (`WERKBANK_DOCS_DIR`); ohne `path` noch im alten Speicher `files/<id>/<name>` (bis zum Umzug beim Start).
+export const filePath = (f: any) => (f.kind === 'vault' ? join(cfg.vaultDir, f.vaultPath) : f.path ? join(docsDir(), f.path) : legacyPath(f));
+export const legacyPath = (f: any) => join(filesDir(), f._id, f.name);
 
 export async function listFiles(u: User) {
   const col = wb().collection('files');
@@ -110,7 +117,11 @@ export async function shareFile(u: User, id: string, target: User, share: boolea
 export async function deleteFile(u: User, id: string) {
   const f: any = await wb().collection('files').findOne({ _id: id as any, owner: u.id });
   if (!f) throw Object.assign(new Error('Nur die eigene Datei kann gelöscht werden.'), { status: 403 });
-  rmSync(join(filesDir(), id), { recursive: true, force: true });
+  // Aus der Ablage übernommen (Plan dateien-vollständig, E2): die echte Datei löscht die Werkbank nicht.
+  if (f.kind === 'ablage') throw Object.assign(new Error('Diese Datei liegt in deiner Ablage — löschen bitte dort, der OLAF Workspace folgt von selbst.'), { status: 403 });
+  // Die Datei in der Ablage geht mit (nur die Datei, nie ein Ordner); eine Vault-Notiz bleibt im Vault.
+  if (f.kind !== 'vault' && f.path) rmSync(filePath(f), { force: true });
+  else if (f.kind !== 'vault') rmSync(join(filesDir(), id), { recursive: true, force: true });
   await wb().collection('files').deleteOne({ _id: id as any });
   // Eine von einem Agenten übernommene Datei (oder Vault-Notiz) kommt nach dem Löschen nicht wieder (Plan 81, Review S1).
   if (f.source?.path) await wb().collection('files_ignored').updateOne({ owner: u.id, sourcePath: f.source.path }, { $set: { owner: u.id, sourcePath: f.source.path, at: new Date() } }, { upsert: true });

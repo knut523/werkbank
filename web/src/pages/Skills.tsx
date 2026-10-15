@@ -28,7 +28,7 @@ export function Skills({ cfg }: { cfg: Config }) {
       <div className="head">
         <div>
           <h1>Skills</h1>
-          <p className="muted" style={{ margin: 0 }}>Was Claude in der Werkbank kann: {d.skills.length} Skills. Team-Skills kommen aus <code>{d.source}</code>, Claude liest sie aus <code>{d.target}</code>.</p>
+          <p className="muted" style={{ margin: 0 }}>Was Claude im OLAF Workspace kann: {d.skills.length} Skills. {cfg.user?.role === 'ADMIN' ? <> Team-Skills kommen aus <code>{d.source}</code>, Claude liest sie aus <code>{d.target}</code>.</> : ' Team-Skills aus dem Vault.'}</p>
         </div>
         <button className="btn" disabled={!missing.length} onClick={async () => {
           const ok = await confirm({ title: `${missing.length} Skills einrichten?`, body: <><p>Diese Vault-Skills werden als Link eingerichtet (nichts wird überschrieben):</p><p className="small">{missing.map((m: any) => m.name).join(', ')}</p></>, confirmLabel: 'Einrichten' });
@@ -51,7 +51,7 @@ export function Skills({ cfg }: { cfg: Config }) {
       <h2>Alle Skills</h2>
       <input type="search" placeholder="Skills filtern …" aria-label="Skills filtern" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 10, width: 320 }} />
       <table className="t small">
-        <thead><tr><th>Name</th><th>Was er kann</th><th>Stand</th><th title="Aufrufe über das Skill-Werkzeug in Werkbank-Sitzungen">Nutzung</th><th>Quelle</th><th>Version</th></tr></thead>
+        <thead><tr><th>Name</th><th>Was er kann</th><th>Stand</th><th title="Aufrufe über das Skill-Werkzeug in Workspace-Sitzungen">Nutzung</th><th>Quelle</th><th>Version</th></tr></thead>
         <tbody>
           {list.map((x: any) => (
             <tr key={x.name} data-skill={x.name}>

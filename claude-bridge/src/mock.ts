@@ -10,8 +10,64 @@ import { randomUUID } from 'node:crypto';
 import { VAULT_DIR } from './tools.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const alwaysLimit = new Set<string>();   // Sitzungen mit „maxturns-immer“
 
-export function mockQuery({ prompt, options }: { prompt: string; options: Record<string, any> }) {
+const textOf = (m: any) => (typeof m?.message?.content === 'string' ? m.message.content : (m?.message?.content ?? []).map((b: any) => b?.text ?? '').join(''));
+
+/**
+ * Streaming-Input wie das CLI (Plan 154, S1): erste Nachricht = Szenario; nachgereichte Nachrichten werden nach dem nächsten
+ * Werkzeugaufruf eingefaltet (Echo mit uuid, wie --replay-user-messages), nach dem Ergebnis als Folgezug. Die Eingabe bleibt
+ * nach dem Ergebnis offen, bis die Brücke sie schließt — wie beim CLI, damit Tests ein Hängen finden würden.
+ */
+function mockStreamed(prompt: AsyncIterable<any>, options: Record<string, any>) {
+  const signal: AbortSignal = options.abortController?.signal;
+  async function* run() {
+    const it = prompt[Symbol.asyncIterator]();
+    const first = await it.next();
+    if (first.done) return;
+    const inbox: any[] = [];
+    let closed = false;
+    let wake: (() => void) | null = null;
+    (async () => {
+      for (;;) {
+        const n = await it.next();
+        if (n.done) { closed = true; wake?.(); return; }
+        inbox.push(n.value); wake?.();
+      }
+    })();
+    let sid = options.resume ?? '';
+    const fold = function* () {
+      while (inbox.length) {
+        const m = inbox.shift();
+        yield { type: 'user', isReplay: true, uuid: m.uuid, session_id: sid, parent_tool_use_id: null, message: m.message };
+        yield { type: 'stream_event', parent_tool_use_id: null, session_id: sid, event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `(Mock) Nachgereicht gelesen: ${textOf(m)} ` } } };
+      }
+    };
+    let afterTool = false;
+    for await (const m of mockQuery({ prompt: textOf(first.value), options })) {
+      sid = m.session_id ?? sid;
+      if (afterTool) { afterTool = false; yield* fold(); }
+      yield m;
+      if (m.type === 'assistant' && (m.message?.content ?? []).some((b: any) => b?.type === 'tool_use')) afterTool = true;
+    }
+    // Nach dem Ergebnis: Folgezug für jede weitere Nachricht, bis die Eingabe geschlossen wird.
+    for (;;) {
+      if (signal?.aborted) return;
+      if (inbox.length) {
+        yield* fold();
+        yield { type: 'result', subtype: 'success', session_id: sid, is_error: false, usage: { input_tokens: 1, output_tokens: 1 } };
+        continue;
+      }
+      if (closed) return;
+      await new Promise<void>((r) => { wake = r; signal?.addEventListener('abort', () => r(), { once: true }); });
+      wake = null;
+    }
+  }
+  return run();
+}
+
+export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<any>; options: Record<string, any> }): any {
+  if (typeof prompt !== 'string' && options.extraArgs && 'replay-user-messages' in options.extraArgs) return mockStreamed(prompt, options);
   if (typeof prompt !== 'string') {
     // Streaming-Eingabe ohne Nachricht (MCP-Status): nur Steuerabfragen, keine Modellantwort.
     const signal: AbortSignal = options.abortController?.signal;
@@ -70,6 +126,12 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       const { join } = await import('node:path');
       const inp: any = ok.updatedInput;
       appendFileSync(join(process.env.BRIDGE_STATE_DIR ?? '.', 'mock-mcp-calls.jsonl'), JSON.stringify({ tool, input: inp }) + '\n');
+      if (tool.endsWith('createJiraIssue')) {
+        // Anlegen gegen den Jira-Nachbau; die Antwort trägt den Schlüssel wie der echte MCP (JSON mit id/key/self).
+        const created = await replayCreate(inp);
+        yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: !created.ok, content: [{ type: 'text', text: created.text }] }] } };
+        return;
+      }
       const err = await replayJira(tool, inp);
       if (err) { yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: err }] } }; return; }
       yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: 'OK (Mock)' }] }] } };
@@ -163,6 +225,30 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 300, output_tokens: 90 } };
       return;
     }
+    // „mock-antwort <Text>“: genau dieser Text als Antwort (\n = Zeilenumbruch), z. B. für Status-Marken der Orchestrator-Stränge.
+    const ma = last.match(/^mock-antwort (.+)$/);
+    if (ma) {
+      yield text(ma[1].replaceAll('\\n', '\n'));
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
+    if (last === 'mock-optionen') {
+      // Für Tests: womit die Sitzung gestartet wurde (ohne Geheimnisse).
+      const append = String(options.systemPrompt?.append ?? '');
+      yield text('OPTIONEN ' + JSON.stringify({ maxTurns: options.maxTurns, disallowed: options.disallowedTools, mcp: Object.keys(options.mcpServers ?? {}).sort(),
+        leitstand: append.includes('Dieser Chat ist der HAUPTCHAT') || append.includes('Dieser Chat ist der LEITSTAND'), strang: append.includes('Orchestrator-Strang'), werkbankLeit: options.mcpServers?.werkbank?.env?.WERKBANK_LEITSTAND ?? null, werkbankStrang: options.mcpServers?.werkbank?.env?.WERKBANK_STRANG ?? null,
+        gitConfig: !!options.env?.GIT_CONFIG_GLOBAL }));
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
+    if (last === 'mock-verdichten') {
+      // Verdichtung des Kontexts wie das echte CLI (Plan 132): status compacting → compact_boundary → Antwort.
+      yield { type: 'system', subtype: 'status', status: 'compacting', session_id };
+      yield { type: 'system', subtype: 'compact_boundary', session_id, compact_metadata: { trigger: 'auto', pre_tokens: 900000, post_tokens: 20000 } };
+      yield text('(Mock) Verdichtet.');
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
     const slow = last.match(/^langsam (\d+)$/);
     if (slow) {
       // Ein langer Zug (Sperre je Person, E5): wartet N ms, dann eine Zeile.
@@ -220,8 +306,30 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 10, output_tokens: 5 } };
       return;
     }
+    // „langsam-test [n]“: ein langer Zug mit n Werkzeugschritten (Plan 154: schreiben während der Arbeit, Bilder/Video).
+    const lang = last.match(/langsam-test(?:\s+(\d+))?/i);
+    if (lang) {
+      const n = Math.min(60, Number(lang[1] || 6));
+      const ms = Number(process.env.BRIDGE_MOCK_SLOW_MS || 1500);
+      for (let i = 1; i <= n; i++) {
+        if (signal?.aborted) throw new Error('aborted');
+        yield toolUse('Bash', { command: `sleep 1 # Schritt ${i} von ${n}`, description: `Schritt ${i} von ${n}` });
+        await sleep(ms);
+        yield { type: 'user', session_id, parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'x', content: 'ok' }] } };
+        yield text(`Schritt ${i} erledigt. `);
+      }
+      yield text('(Mock) Langer Zug fertig.');
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 10, output_tokens: 10 } };
+      return;
+    }
     yield toolUse('Grep', { pattern: last.slice(0, 40), path: VAULT_DIR });
     await sleep(50);
+    // Rundenende für die Review-Schlange: Schrittlimit bzw. Absturz der Sitzung.
+    // „maxturns-immer“: diese Sitzung endet ab jetzt jeden Zug am Schrittlimit (Deckel der automatischen Fortsetzung).
+    if (/maxturns-immer/i.test(last)) alwaysLimit.add(session_id);
+    if (alwaysLimit.has(session_id)) { yield text('(Mock) Immer noch viel zu tun. '); yield { type: 'result', subtype: 'error_max_turns', session_id, is_error: true, usage: { input_tokens: 1, output_tokens: 1 } }; return; }
+    if (/maxturns-test/i.test(last)) { yield text('(Mock) Viel zu tun. '); yield { type: 'result', subtype: 'error_max_turns', session_id, is_error: true, usage: { input_tokens: 1, output_tokens: 1 } }; return; }
+    if (/absturz-test/i.test(last)) throw new Error('Mock: Sitzung abgestürzt');
     const words = `(Mock, kein Claude-Aufruf${options.resume ? ', Sitzung fortgesetzt' : ''}) Du hast geschrieben: ${last}`.split(/(?<= )/);
     for (const w of words) {
       if (signal?.aborted) throw new Error('aborted');
@@ -243,6 +351,16 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
 /** MCP-Server, wie Claude Code sie in der Init-Nachricht meldet — nur die übergebenen (strictMcpConfig). */
 function mcpList(options: Record<string, any>) {
   return Object.keys(options.mcpServers ?? {}).map((name) => ({ name, status: name === 'atlassian' ? process.env.BRIDGE_MOCK_ATLASSIAN || 'connected' : 'connected' }));
+}
+
+/** createJiraIssue gegen den Jira-Nachbau (POST /issue). Ohne Nachbau: fester Schlüssel PM-9000. */
+async function replayCreate(inp: any): Promise<{ ok: boolean; text: string }> {
+  const base = process.env.BRIDGE_MOCK_JIRA_BASE;
+  if (!base) return { ok: true, text: JSON.stringify({ id: '9000', key: 'PM-9000', self: 'mock' }) };
+  const fields: any = { project: { key: inp.projectKey }, issuetype: { name: inp.issueTypeName }, summary: inp.summary, description: inp.description, ...(inp.parent ? { parent: { key: inp.parent } } : {}), ...(inp.assignee_account_id ? { assignee: { accountId: inp.assignee_account_id } } : {}), ...(inp.additional_fields ?? {}) };
+  const r = await fetch(base + '/issue', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Basic ' + Buffer.from('mcp:mock').toString('base64') }, body: JSON.stringify({ fields }) });
+  const text = await r.text();
+  return r.ok ? { ok: true, text } : { ok: false, text: `Jira ${r.status}: ${text.slice(0, 200)}` };
 }
 
 /** Mit BRIDGE_MOCK_JIRA_BASE spielt der Mock den Atlassian-MCP gegen einen Jira-Nachbau (REST) nach. Fehlertext oder ''. */

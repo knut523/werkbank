@@ -39,11 +39,18 @@ export function demoIssues() {
   ];
 }
 
-export interface JiraMock { server: Server; port: number; writes: any[]; issues: any[]; close: () => Promise<void> }
+export interface JiraMock { server: Server; port: number; writes: any[]; issues: any[]; close: () => Promise<void>; faults: MockFaults }
+/** Fehlereinspeisung für „Agent ansetzen“: createAfter = angelegt, aber 500 · createBefore = 500 ohne Anlegen ·
+ *  dropFields = diese Felder beim Anlegen „verlieren“ (Zurücklesen muss sie nachziehen) · staleSearch = Textsuche
+ *  findet frisch angelegte Tickets noch nicht (Jira-Index hinkt). Jeweils für den nächsten Aufruf. */
+export interface MockFaults { createAfter?: boolean; createBefore?: boolean; dropFields?: string[]; staleSearch?: boolean }
 
 export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: boolean } = {}): Promise<JiraMock> {
   const issues = demoIssues();
   const writes: any[] = [];
+  const faults: MockFaults = {};
+  const fresh = new Set<string>();   // frisch angelegt (staleSearch)
+  let nextKey = 1000;
   const TRANS: Record<string, string[]> = { 'Backlog': ['To Do', 'In Progress'], 'To Do': ['In Progress', 'Done', 'Backlog'], 'In Progress': ['Done', 'To Do', 'Ongoing'], 'Ongoing': ['Done', 'In Progress'], 'Done': ['To Do'] };
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
@@ -60,13 +67,38 @@ export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: b
     if (req.method === 'POST' && p === '/search/jql') {
       // „updated >= -Nm“: nur Tickets, deren updated in den letzten N Minuten liegt (inkrementeller Abgleich).
       const inc = String(body.jql ?? '').match(/updated >= -(\d+)m/);
-      const pool = inc ? issues.filter((i) => Date.parse(i.fields.updated) >= Date.now() - Number(inc[1]) * 60_000) : issues;
+      let pool = inc ? issues.filter((i) => Date.parse(i.fields.updated) >= Date.now() - Number(inc[1]) * 60_000) : issues;
+      // „text ~ "x"“ / „summary ~ "x"“ (einfach: Teilwort, ohne Groß/klein); staleSearch: frisch Angelegtes fehlt noch.
+      const txt = [...String(body.jql ?? '').matchAll(/\b(text|summary) ~ "([^"]*)"/g)];
+      if (txt.length) {
+        const plain = (v: any): string => typeof v === 'string' ? v : JSON.stringify(v ?? '');
+        pool = pool.filter((i) => txt.some(([, f, q]) => (f === 'summary' ? i.fields.summary : `${i.fields.summary} ${plain(i.fields.description)}`).toLowerCase().includes(q.toLowerCase())));
+        if (faults.staleSearch) { faults.staleSearch = false; pool = pool.filter((i) => !fresh.has(i.key)); }
+      }
       const start = Number(body.nextPageToken ?? 0);
       if (opts.truncate && start > 0) return send(200, { issues: [], nextPageToken: String(start) });   // kaputte Seite
       const page = pool.slice(start, start + 4);   // kleine Seiten, damit das Blättern getestet wird
       return send(200, { issues: page, ...(start + 4 < pool.length ? { nextPageToken: String(start + 4) } : {}) });
     }
     if (req.method === 'POST' && p === '/search/approximate-count') return send(200, { count: issues.length });
+    if (req.method === 'GET' && p === '/myself') return send(200, { accountId: 'acc-knutpeters', displayName: 'Knut Peters', emailAddress: 'knut@example.test' });
+    if (req.method === 'POST' && p === '/issue') {
+      if (faults.createBefore) { faults.createBefore = false; return send(500, { errorMessages: ['Mock: Fehler vor dem Anlegen'] }); }
+      const f = body?.fields ?? {};
+      const key = `PM-${nextKey++}`;
+      const drop = new Set(faults.dropFields ?? []); faults.dropFields = undefined;
+      const issue = { key, fields: {
+        summary: f.summary, status: status('To Do'), issuetype: { name: f.issuetype?.name ?? 'Task' },
+        assignee: !drop.has('assignee') && f.assignee?.accountId ? { displayName: f.assignee.accountId === 'acc-knutpeters' ? 'Knut Peters' : f.assignee.accountId, accountId: f.assignee.accountId } : null,
+        parent: !drop.has('parent') && f.parent?.key ? { key: f.parent.key, fields: { summary: 'x' } } : null,
+        duedate: drop.has('duedate') ? null : f.duedate ?? null, priority: drop.has('priority') ? { name: 'Low' } : f.priority ?? { name: 'Medium' },
+        updated: new Date().toISOString(), created: new Date().toISOString(), description: f.description ?? null,
+        comment: { total: 0, comments: [] }, labels: f.labels ?? [], statuscategorychangedate: new Date().toISOString(), issuelinks: [],
+      } };
+      issues.push(issue); writes.push({ type: 'create', key, fields: f }); fresh.add(key);
+      if (faults.createAfter) { faults.createAfter = false; return send(500, { errorMessages: ['Mock: Fehler nach dem Anlegen'] }); }
+      return send(201, { id: String(nextKey), key, self: `http://mock/rest/api/3/issue/${key}` });
+    }
     if ((m = p.match(/^\/issue\/([A-Z]+-\d+)$/))) {
       const i = find(m[1]); if (!i) return send(404, { errorMessages: ['Issue does not exist'] });
       if (req.method === 'GET') return send(200, i);
@@ -93,7 +125,7 @@ export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: b
   });
   return new Promise((resolve) => server.listen(port, '127.0.0.1', () => {
     const a = server.address() as any;
-    resolve({ server, port: a.port, writes, issues, close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections(); }) });
+    resolve({ server, port: a.port, writes, issues, faults, close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections(); }) });
   }));
 }
 

@@ -11,16 +11,29 @@ LC="$RT/librechat"
 
 cp -r "$WB/librechat/overlay/." "$LC/"
 
-for p in "$WB"/librechat/patches/*.patch; do
-  n=$(basename "$p")
-  if git -C "$LC" apply --reverse --check "$p" 2>/dev/null; then
-    continue                                              # schon drin
-  elif git -C "$LC" apply --check "$p" 2>/dev/null; then
-    git -C "$LC" apply "$p" && echo "  + Patch $n"
-  else
-    echo "  ✗ Patch $n passt nicht auf LibreChat $LIBRECHAT_TAG — bitte librechat/patches/$n anpassen"; exit 1
-  fi
-done
+# Ein geänderter Patch (neue Werkbank-Fassung, alte schon eingespielt) passt weder vorwärts noch rückwärts: dann die
+# betroffenen LibreChat-Dateien auf den Stand des Tags zurücksetzen und alle Patches erneut prüfen (zweiter Durchgang).
+# Nur Dateien, die LibreChat selbst versioniert; scheitert der zweite Durchgang, bricht das Skript ab.
+apply_all() { # pass
+  for p in "$WB"/librechat/patches/*.patch; do
+    n=$(basename "$p")
+    if git -C "$LC" apply --reverse --check "$p" 2>/dev/null; then
+      continue                                              # schon drin
+    elif git -C "$LC" apply --check "$p" 2>/dev/null; then
+      git -C "$LC" apply "$p" && echo "  + Patch $n"
+    elif [ "$1" = 1 ]; then
+      files=$(sed -n 's#^+++ b/##p' "$p")
+      for f in $files; do git -C "$LC" ls-files --error-unmatch "$f" >/dev/null 2>&1 || { echo "  ✗ $f ist keine LibreChat-Datei"; exit 1; }; done
+      # shellcheck disable=SC2086
+      git -C "$LC" checkout -q HEAD -- $files && echo "  ↺ Patch $n geändert — $(echo $files | wc -w) Datei(en) auf $LIBRECHAT_TAG zurückgesetzt"
+      AGAIN=1
+    else
+      echo "  ✗ Patch $n passt nicht auf LibreChat $LIBRECHAT_TAG — bitte librechat/patches/$n anpassen"; exit 1
+    fi
+  done
+}
+AGAIN=0; apply_all 1
+[ "$AGAIN" = 1 ] && apply_all 2
 
 # Client neu bauen, wenn sich Overlay/Patches geändert haben (Stempel = Hash über beide + Tag).
 stamp="$LC/.werkbank-client-stamp"

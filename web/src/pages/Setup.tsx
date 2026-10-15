@@ -9,14 +9,14 @@ function Login({ cfg, onLogin }: { cfg: Config; onLogin: () => void }) {
   const [busy, setBusy] = useState(false);
   return (
     <div className="page" style={{ maxWidth: 760 }}>
-      <h1>Willkommen in der OLAF-Werkbank</h1>
+      <h1>Willkommen im OLAF Workspace</h1>
       <p className="muted">Chat mit Claude Code — mit unseren Skills, dem Vault und Jira, unter deinem eigenen Claude-Konto. Dazu Wissen, Board, Sprint und Dateien an einem Ort.</p>
       <div className="steps" style={{ marginTop: 20 }}>
         <div className="step">
           <div className="num">1</div>
           <div className="card">
             <h3 style={{ marginTop: 0 }}>Konto anlegen</h3>
-            <p>Die Werkbank nutzt dasselbe Konto wie der Chat. Noch keins? <a href={cfg.librechatUrl + '/register'} target="_blank" rel="noreferrer">Im Chat registrieren</a> — nur mit einer Adresse <code>@maxenergy.at</code> oder <code>@konekto.energy</code>. Danach hier anmelden.</p>
+            <p>Der OLAF Workspace nutzt dasselbe Konto wie der Chat. Noch keins? <a href={cfg.librechatUrl + '/register'} target="_blank" rel="noreferrer">Im Chat registrieren</a> — nur mit einer Adresse <code>@maxenergy.at</code> oder <code>@konekto.energy</code>. Danach hier anmelden.</p>
             <form className="col" style={{ maxWidth: 360 }} onSubmit={async (e) => {
               e.preventDefault(); setBusy(true); setErr(null);
               try { await api('/api/login', { body: { email, password: pw } }); onLogin(); } catch (x) { setErr(x); } finally { setBusy(false); }
@@ -115,7 +115,7 @@ function McpStep({ claude }: { claude: boolean }) {
       <div className="num">{ok ? '✓' : '4'}</div>
       <div className="card">
         <h3 style={{ marginTop: 0 }}>Jira schreiben (Atlassian-MCP)</h3>
-        <p className="small" style={{ marginTop: 0 }}>Kommentare, Statuswechsel und Fälligkeiten vom Board, aus dem Sprint und aus den Pflegefragen schreibt die Werkbank <b>über den Atlassian-MCP in deiner eigenen Claude-Sitzung</b> — unter deinem Atlassian-Konto, jeweils erst nach deiner Bestätigung. Gelesen wird weiter mit dem Lesezugang oben.</p>
+        <p className="small" style={{ marginTop: 0 }}>Kommentare, Statuswechsel und Fälligkeiten vom Board, aus dem Sprint und aus den Pflegefragen schreibt der OLAF Workspace <b>über den Atlassian-MCP in deiner eigenen Claude-Sitzung</b> — unter deinem Atlassian-Konto, jeweils erst nach deiner Bestätigung. Gelesen wird weiter mit dem Lesezugang oben.</p>
         {d && (ok
           ? <p className="okbox">Verbunden (geprüft {fmtDateTime(d.checkedAt)}).</p>
           : d.status || d.problem
@@ -237,6 +237,7 @@ function Wizard({ cfg }: { cfg: Config }) {
         <div>
           <h1>Einrichtung</h1>
           <p className="muted" style={{ margin: 0 }}>Einmal durchklicken, dann arbeitet Claude Code im Chat, am Board und im Sprint mit deinen eigenen Zugängen.</p>
+          {embedded && <p className="small muted" style={{ margin: '4px 0 0' }}>Design, Sprache und Chat-Verhalten: Kontomenü (unten links) → Einstellungen.</p>}
         </div>
         {!embedded && <a className="btn primary" href={cfg.librechatUrl}>💬 Zum Chat</a>}
       </div>
@@ -253,7 +254,7 @@ function Wizard({ cfg }: { cfg: Config }) {
             <h3 style={{ marginTop: 0 }}>Eigenes Claude verbinden</h3>
             {s.claude.connected
               ? <p className="okbox">Verbunden{s.claude.expiresAt ? `, gültig bis ${fmtDateTime(s.claude.expiresAt)}` : ' (läuft nicht ab)'}. Der Token liegt verschlüsselt im Chat-Schlüsselspeicher und gilt dort genauso.</p>
-              : <p>Die Werkbank arbeitet ohne API-Schlüssel — mit <b>deinem</b> Claude-Abo.</p>}
+              : <p>Der OLAF Workspace arbeitet ohne API-Schlüssel — mit <b>deinem</b> Claude-Abo.</p>}
             <ol className="small">
               <li>Im Terminal (auf deinem Rechner oder in der Coder-Workspace) mit deinem Claude-Konto angemeldet: <code>claude setup-token</code></li>
               <li>Den ausgegebenen Token kopieren (beginnt mit <code>sk-ant-oat</code>). Er gilt ein Jahr.</li>

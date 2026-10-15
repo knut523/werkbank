@@ -280,14 +280,14 @@ export function isOverdue(i: Pick<Issue, 'duedate' | 'statusCategory' | 'status'
   return !!i.duedate && i.duedate < today && i.statusCategory !== 'done' && i.status !== 'Done' && !isRecurring(i);
 }
 
-export function boardModel(issues: (Issue & { hygiene?: string[] })[], opts: { owner?: string; filter?: string; q?: string; showDone?: boolean; label?: string; keys?: Set<string>; knownGoals?: Set<string> } = {}) {
+export function boardModel(issues: (Issue & { hygiene?: unknown[] })[], opts: { owner?: string; filter?: string; q?: string; showDone?: boolean; label?: string; keys?: Set<string>; knownGoals?: Set<string> } = {}) {
   const ws = issues.filter((i) => i.type === 'Workstream');
   const names = new Map(ws.map((w) => [w.key, w.summary]));
   const today = new Date().toISOString().slice(0, 10);
   const byKey = new Map(issues.map((i) => [i.key, i]));
   const isDoneI = (i: Issue) => i.status === 'Done' || i.statusCategory === 'done';
   const oldDone = (i: Issue) => isDoneI(i) && (i.updated ?? '') < new Date(Date.now() - 14 * 864e5).toISOString();
-  const matches = (i: Issue & { hygiene?: string[] }) => {
+  const matches = (i: Issue & { hygiene?: unknown[] }) => {
     if (opts.owner && (i.assignee ?? '—') !== opts.owner) return false;
     if (opts.filter === 'overdue' && !isOverdue(i, today)) return false;
     if (opts.filter === 'undated' && (i.duedate || isDoneI(i) || isRecurring(i))) return false;

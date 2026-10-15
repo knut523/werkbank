@@ -20,13 +20,19 @@ import { startJiraMock } from '../test/jira-mock.ts';
 
 const WEB = new URL('..', import.meta.url).pathname;
 const WB = join(WEB, '..');
-const RT = join(WB, '.runtime');
+const RT = process.env.E2E_RT || join(WB, '.runtime');   // LibreChat-Installation (bcrypt) und Bridge-Zustand
+// Gegen eine isolierte Instanz (E2E_ISO=1): E2E_LC, E2E_MONGO, E2E_BRIDGE, E2E_MEILI, E2E_ENV_FILE, E2E_WEB_PORT,
+// E2E_JIRA_PORT. Die Instanz muss schon mit BRIDGE_MOCK=1, BRIDGE_MOCK_JIRA_BASE=http://127.0.0.1:<E2E_JIRA_PORT>/rest/api/3
+// und den Testkonten in BRIDGE_ALLOWED_EMAILS laufen; dann startet das Skript nichts neu. Ohne E2E_ISO: wie bisher Live.
 const OUT = join(RT, 'e2e', 'web');
 mkdirSync(OUT, { recursive: true });
-const LC = 'http://127.0.0.1:3080';
-const PORT = 3072;
+const ISO = process.env.E2E_ISO === '1';
+const LC = process.env.E2E_LC || 'http://127.0.0.1:3080';
+const BRIDGE = process.env.E2E_BRIDGE || 'http://127.0.0.1:3090';
+const MEILI = process.env.E2E_MEILI || 'http://127.0.0.1:7700';
+const PORT = Number(process.env.E2E_WEB_PORT || 3072);
 const W = `http://127.0.0.1:${PORT}`;
-const env = Object.fromEntries(readFileSync(join(WB, '.env.local'), 'utf8').split('\n').filter((l) => /^[A-Z_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).replace(/^"|"$/g, '')]));
+const env = Object.fromEntries(readFileSync(process.env.E2E_ENV_FILE || join(WB, '.env.local'), 'utf8').split('\n').filter((l) => /^[A-Z_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).replace(/^"|"$/g, '')]));
 const tag = randomBytes(3).toString('hex');
 // Eigene Test-Adresse je Lauf für LibreChats Anmelde-Limit (TRUST_PROXY=1 wertet X-Forwarded-For aus).
 const XFF = { 'x-forwarded-for': `10.99.${randomBytes(1)[0]}.${randomBytes(1)[0]}` };
@@ -68,7 +74,7 @@ async function lcToken(u) {
   return (await r.json());
 }
 
-const mongo = await MongoClient.connect('mongodb://127.0.0.1:27017');
+const mongo = await MongoClient.connect(process.env.E2E_MONGO || 'mongodb://127.0.0.1:27017');
 const lcdb = mongo.db('LibreChat');
 
 async function cleanupUsers() {
@@ -97,17 +103,19 @@ try {
   await registerOrKeep(U1); await registerOrKeep(U2);
   const t1 = await lcToken(U1), t2 = await lcToken(U2);
   const id1 = t1.user._id ?? t1.user.id, id2 = t2.user._id ?? t2.user.id;
-  jira = await startJiraMock(0);
+  jira = await startJiraMock(Number(process.env.E2E_JIRA_PORT || 0));
   log('Werkbank-Web (3070) vorübergehend auch für die Testkonten freigeben');
-  execFileSync(join(WB, 'scripts/werkbank.sh'), ['restart-web'], { env: { ...process.env, WERKBANK_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}` }, stdio: 'ignore' });
+  if (!ISO) execFileSync(join(WB, 'scripts/werkbank.sh'), ['restart-web'], { env: { ...process.env, WERKBANK_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}` }, stdio: 'ignore' });
   log('Brücke → Mock-Modus');
   // Der Mock spielt den Atlassian-MCP gegen den Jira-Nachbau nach (Schreiben vom Board geht über den MCP).
-  execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'on'], { env: { ...process.env, BRIDGE_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}`, BRIDGE_MOCK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3` }, stdio: 'ignore' });
+  if (!ISO) execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'on'], { env: { ...process.env, BRIDGE_ALLOWED_EMAILS: `knut.peters@maxenergy.at,${U1.email},${U2.email}`, BRIDGE_MOCK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3` }, stdio: 'ignore' });
   web = spawn(process.execPath, ['server/main.ts'], {
     cwd: WEB,
     env: {
       ...process.env, WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_INSECURE_COOKIES: '1', WERKBANK_VAULT_DIR: VAULT,
-      WERKBANK_DB: `werkbank_e2e_${tag}`, LIBRECHAT_URL: LC, LIBRECHAT_PUBLIC_URL: LC, BRIDGE_URL: 'http://127.0.0.1:3090',
+      MONGO_URI_WERKBANK: process.env.E2E_MONGO || 'mongodb://127.0.0.1:27017', MEILI_HOST: MEILI,
+      WERKBANK_TEAM_FEATURES: 'heute,roadmap,board,sprint,wissen,timebox,ziele,skills,dateien,orchestrator,ansetzen',   // Funktion prüfen, nicht die Freigabe
+      WERKBANK_DB: `werkbank_e2e_${tag}`, LIBRECHAT_URL: LC, LIBRECHAT_PUBLIC_URL: LC, BRIDGE_URL: BRIDGE,
       BRIDGE_STATE_DIR: join(RT, 'bridge'), WERKBANK_JIRA_BASE: `http://127.0.0.1:${jira.port}/rest/api/3`,
       WERKBANK_ALLOWED_EMAILS: `${U1.email},${U2.email}`, CREDS_KEY: env.CREDS_KEY, CREDS_IV: env.CREDS_IV,
       WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), MEILI_MASTER_KEY: env.MEILI_MASTER_KEY, WERKBANK_MEILI_INDEX: `werkbank_e2e_${tag}`,
@@ -133,7 +141,7 @@ try {
   // ---------- Werkbank ----------
   await step('Einrichtung: Anmelden mit dem Chat-Konto', async () => {
     await a.goto(W + '/');
-    await a.getByText('Willkommen in der OLAF-Werkbank').waitFor();
+    await a.getByText('Willkommen im OLAF Workspace').waitFor();
     await shot(a, '01-anmelden');
     await a.fill('#email', U1.email); await a.fill('#pw', PW);
     await a.getByRole('button', { name: 'Anmelden' }).click();
@@ -305,7 +313,7 @@ try {
   });
 
   await step('Roadmap: Priorisierung (verschieben → Vorschlag), Zustände, PR-Review, Entscheidung beantworten, Konsistenz', async () => {
-    await a.goto(W + '/#/roadmap');
+    await a.goto(W + '/#/roadmap/prio');
     await a.getByTestId('rank-table').locator('tr[data-spec="service-view-kundenakte"]').waitFor({ timeout: 15000 });
     await shot(a, '30-roadmap-priorisierung');
     await a.getByRole('button', { name: 'service-view-mailprotokoll hoch' }).click();
@@ -314,13 +322,16 @@ try {
     await confirmDialog(a, '31-roadmap-rang-vorschlag');
     await a.getByText('Vorschlag festgehalten').waitFor();
     assert.match(readFileSync(join(VAULT, 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/0-Overview/priorisierung-roadmap-produkt-olaf.md'), 'utf8'), /Vorschläge aus der Werkbank\n\n- E2E \(\d\d\.\d\d\.\d{4}\): \[\[service-view-mailprotokoll\]\] Rang 2 → 1 — E2E: Kunde fragt/);
-    await a.getByRole('tab', { name: 'Zustände' }).click();
+    await a.goto(W + '/#/roadmap');
+    await a.getByTestId('overview').locator('[data-topic="Service-View"]').waitFor({ timeout: 15000 });
+    await shot(a, '32a-roadmap-ueberblick');
+    await a.getByTestId('overview').locator('[data-topic="Service-View"]').getByRole('button', { name: /Alle Zustände/ }).click();
     await a.locator('a.tcard[data-spec="service-view-kundenakte"]').waitFor();
     await shot(a, '32-roadmap-zustaende');
     await a.getByRole('tab', { name: /PR-Review/ }).click();
     await a.getByTestId('pr-table').locator('tr[data-pr="olaf-admin#175"]').getByText('PM-321').waitFor();
     await shot(a, '33-roadmap-pr-review');
-    await a.getByRole('tab', { name: /Offene Entscheidungen/ }).click();
+    await a.goto(W + '/#/roadmap/entscheidungen');
     const box = a.locator('[data-decisions="service-view-kundenakte"]');
     await box.getByText(/stornierte Verträge/).waitFor();
     await box.getByRole('textbox').first().fill('ja, ausgegraut (E2E)');
@@ -328,7 +339,7 @@ try {
     await confirmDialog(a, '34-roadmap-entscheidung-vorschau');
     await a.getByText('Antwort gespeichert').waitFor();
     assert.match(readFileSync(join(VAULT, 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/Service-View/3-Plan/service-view-kundenakte.md'), 'utf8'), /\n  - Knut: ja, ausgegraut \(E2E\)\n/);
-    await a.getByRole('tab', { name: 'Konsistenz' }).click();
+    await a.getByRole('tab', { name: /Pflege/ }).click();
     await a.getByText(/\d+ Fehler/).first().waitFor({ timeout: 30000 });
     await shot(a, '35-roadmap-konsistenz');
   });
@@ -346,11 +357,13 @@ try {
     writeFileSync(f, 'Testinhalt für die Werkbank.\n');
     await a.getByLabel('Datei auswählen').setInputFiles(f);
     await a.getByRole('button', { name: 'Hochladen' }).click();
-    await a.locator('tr[data-file="e2e-notiz.txt"]').waitFor();
+    const row = a.locator('[data-ablage-baum] [data-file="e2e-notiz.txt"]');
+    await row.waitFor();
+    await row.getByRole('button', { name: /Aktionen für/ }).click();
     await a.getByLabel('e2e-notiz.txt teilen mit').selectOption({ label: U2.name });
-    await a.locator('tr[data-file="e2e-notiz.txt"]').getByRole('button', { name: 'Teilen' }).click();
+    await row.getByRole('button', { name: 'Teilen' }).click();
     await confirmDialog(a);
-    await a.locator('tr[data-file="e2e-notiz.txt"]').getByText(U2.name).waitFor();
+    await row.getByText(U2.name).waitFor();
     await shot(a, '15-dateien');
   });
 
@@ -392,8 +405,9 @@ try {
     await shot(a, '16-chat-anhang');
     convId = a.url().match(/\/c\/([0-9a-f-]{36})/)?.[1] ?? '';
     assert.ok(convId, 'Chat-ID aus der URL');
-    const dir = join(RT, 'bridge', 'scratch', String(id1), 'anhaenge', convId);
-    assert.ok(existsSync(dir) && readdirSync(dir).some((n) => n.endsWith('.png')), 'Datei liegt im Arbeitsverzeichnis');
+    // Seit den parallelen Chats hat jeder neue Chat seinen eigenen Ordner (scratch/<person>/chats/<chat>).
+    const dirs = [join(RT, 'bridge', 'scratch', String(id1), 'chats', convId, 'anhaenge', convId), join(RT, 'bridge', 'scratch', String(id1), 'anhaenge', convId)];
+    assert.ok(dirs.some((dir) => existsSync(dir) && readdirSync(dir).some((n) => n.endsWith('.png'))), 'Datei liegt im Arbeitsverzeichnis');
   });
 
   await step('Chat: Skill-Vorlage gibt ihre Vorgabe an die Sitzung', async () => {
@@ -458,14 +472,18 @@ try {
 
   await step('LibreChat-Leiste: Werkbank-Seiten im Hauptbereich, eine Anmeldung', async () => {
     await a.goto(LC + '/c/new');
-    await a.getByTestId('werkbank-nav-einrichtung').click();
-    await a.waitForURL(/\/wb\/einrichtung/);
+    await a.getByTestId('werkbank-nav-heute').click();
+    await a.waitForURL(/\/wb\/heute/);
+    await a.frameLocator('[data-testid="werkbank-frame"]').getByRole('heading', { name: 'Heute' }).waitFor({ timeout: 20000 });
+    await shot(a, '21-leiste-heute');
+    assert.equal(await a.locator('[data-testid^="werkbank-nav-"]').count(), 5, 'Leiste: Heute · Roadmap · Board · Sprint · Wissen');
+    await a.goto(LC + '/wb/einrichtung');
     const f = a.frameLocator('[data-testid="werkbank-frame"]');
     await f.getByRole('heading', { name: 'Einrichtung' }).waitFor({ timeout: 20000 });
     assert.equal(await f.locator('#pw').count(), 0, 'kein zweites Login');
     await f.getByTestId('context-info').waitFor();
     await shot(a, '22-leiste-einrichtung');
-    for (const [id, text, name] of [['wissen', 'Produkt-OLAF-Roadmap', '23-leiste-wissen'], ['board', 'Board · PM', '24-leiste-board'], ['sprint', 'Sprint-Ziel', '25-leiste-sprint'], ['skills', 'Alle Skills', '26-leiste-skills'], ['dateien', 'Dateien & Teilen', '27-leiste-dateien'], ['roadmap', 'Roadmap · Produkt OLAF', '27b-leiste-roadmap']]) {
+    for (const [id, text, name] of [['wissen', 'Produkt-OLAF-Roadmap', '23-leiste-wissen'], ['board', 'Board · PM', '24-leiste-board'], ['sprint', 'Sprint-Ziel', '25-leiste-sprint'], ['roadmap', 'Roadmap · Produkt OLAF', '27b-leiste-roadmap']]) {
       await a.getByTestId(`werkbank-nav-${id}`).click();
       await a.waitForURL(new RegExp(`/wb/${id}`));
       await a.frameLocator('[data-testid="werkbank-frame"]').getByText(text).first().waitFor({ timeout: 20000 });
@@ -508,12 +526,12 @@ try {
   web?.kill();
   await jira?.close();
   log('Werkbank-Web → Freigabeliste wie vorher');
-  try { execFileSync(join(WB, 'scripts/werkbank.sh'), ['restart-web'], { stdio: 'ignore' }); } catch { console.error('Web-App konnte nicht neu gestartet werden: scripts/werkbank.sh restart-web'); }
+  if (!ISO) try { execFileSync(join(WB, 'scripts/werkbank.sh'), ['restart-web'], { stdio: 'ignore' }); } catch { console.error('Web-App konnte nicht neu gestartet werden: scripts/werkbank.sh restart-web'); }
   log('Brücke → wieder echt');
-  try { execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'off'], { stdio: 'ignore' }); } catch (e) { console.error('Brücke konnte nicht zurückgeschaltet werden: scripts/werkbank.sh bridge-mock off'); }
+  if (!ISO) try { execFileSync(join(WB, 'scripts/werkbank.sh'), ['bridge-mock', 'off'], { stdio: 'ignore' }); } catch (e) { console.error('Brücke konnte nicht zurückgeschaltet werden: scripts/werkbank.sh bridge-mock off'); }
   if (!process.env.E2E_KEEP) await cleanupUsers();
   await mongo.db(`werkbank_e2e_${tag}`).dropDatabase();
-  try { await fetch(`http://127.0.0.1:7700/indexes/werkbank_e2e_${tag}`, { method: 'DELETE', headers: { authorization: `Bearer ${env.MEILI_MASTER_KEY}` } }); } catch {}
+  try { await fetch(`${MEILI}/indexes/werkbank_e2e_${tag}`, { method: 'DELETE', headers: { authorization: `Bearer ${env.MEILI_MASTER_KEY}` } }); } catch {}
   await mongo.close();
   rmSync(tmp, { recursive: true, force: true });
   console.log('\nErgebnis');

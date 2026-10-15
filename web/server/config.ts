@@ -29,6 +29,9 @@ export const cfg = {
   meiliKey: env.MEILI_MASTER_KEY || '',
   meiliIndex: env.WERKBANK_MEILI_INDEX || 'werkbank_vault',
   vaultDir: resolve(env.WERKBANK_VAULT_DIR || '/vault'),
+  // „Heute“: Release-Stand der Stränge (Paket 141) — Live-Log der Instanz und Quell-Repo mit den release/*-Zweigen, nur lesen.
+  liveRoot: env.WERKBANK_LIVE_ROOT || WB_ROOT,
+  sourceRepo: env.WERKBANK_SOURCE_REPO || join(homedir(), 'work', 'knut', 'werkbank-gh'),
   sprintRoot: env.WERKBANK_SPRINT_ROOT || '', // leer = <vault>/olaf/1-Projects
   allowedEmails: list(env.WERKBANK_ALLOWED_EMAILS ?? env.BRIDGE_ALLOWED_EMAILS ?? 'knut.peters@maxenergy.at'),
   // Konto, dessen Jira-Zugang aus dem Vaultwarden der VM kommen darf (nur Pilot, nur dieser Nutzer).
@@ -52,6 +55,14 @@ export const cfg = {
   werkbankKey: env.WERKBANK_CREDS_KEY || '',
   demo: env.WERKBANK_DEMO === '1',
   fileMaxBytes: Number(env.WERKBANK_FILE_MAX_MB || 25) * 1024 * 1024,
+  // Plan 81: eine Ablage (Knuts ~/work/dokumente), Arbeitsordner aufräumen, Backup.
+  docsDir: resolve(env.WERKBANK_DOCS_DIR || join(homedir(), 'work', 'dokumente')),
+  // Agenten-Ergebnisse (docs/plan-dateien-vollstaendig.md, S3): Review-Pakete der Haupt-Sitzung und der Stränge, nur lesen.
+  reviewDir: resolve(env.WERKBANK_REVIEW_DIR || join(homedir(), 'work', 'knut', 'review-pakete')),
+  scratchDays: Number(env.WERKBANK_SCRATCH_DAYS ?? 30), // 0 = nie aufräumen
+  backupKey: env.WERKBANK_BACKUP_KEY || '', // 64 Hex-Zeichen; verschlüsselt Personendaten-Dateien im Backup
+  backupKeep: Number(env.WERKBANK_BACKUP_KEEP || 7),
+  backupHour: Number(env.WERKBANK_BACKUP_HOUR ?? 2), // Nachtarchiv ab dieser Stunde; -1 = aus
   secureCookies: env.WERKBANK_INSECURE_COOKIES !== '1',
 };
 

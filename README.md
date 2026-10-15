@@ -1,9 +1,14 @@
-# OLAF-Werkbank
+# OLAF Workspace (früher: OLAF-Werkbank)
+
+> **Name (Knut, 12.10.2026):** In der Oberfläche heißt das hier **OLAF Workspace**, der Orchestrator-Chat **Hauptchat**
+> (früher „Leitstand“), seine Stränge **Unter-Chats**. Repo-, Ordner- und Dienstnamen (`werkbank`, `werkbank-web`),
+> Pfade (`/werkbank/`, `/wb/`), Env-Variablen (`WERKBANK_*`, `LEITSTAND_*`) und interne Kennungen bleiben unverändert.
 
 Chat-Oberfläche fürs Team (LibreChat), hinter der **Claude Code** arbeitet — mit unseren Skills,
 dem Obsidian-Vault und Jira, **unter dem eigenen Claude-Konto jeder Person, ohne API-Schlüssel** —
-und daneben die **Werkbank-Web-App** mit Einrichtung, Wissen (Vault), Board (Jira-Kopie PM),
-Sprint (Review/Planning), Roadmap, Skills und Dateien & Teilen.
+und daneben die **Werkbank-Web-App**: Startseite **Heute** (was auf mich wartet, Review-Schlange der Agenten),
+Roadmap, Board (Jira-Kopie PM), Sprint (Review/Planning), Wissen (Vault); im Fuß Mein Tag, Ziele, Skills,
+Dateien & Teilen und Einrichtung.
 Plan und Entscheidungen: [`PLAN.md`](PLAN.md).
 
 ```
@@ -16,7 +21,7 @@ Browser ─► LibreChat :3080 ── Endpunkt „Claude Code“ + Vorlagen (Sch
    │       Claude Agent SDK ── eigene Claude-Konfiguration je Person (.runtime/claude/<id>: Skills ← /vault/_meta/dist-skill,
    │                           CLAUDE.md, Atlassian-OAuth), nur Werkbank-MCP (vault-search, werkbank, forge-review, atlassian)
    │
-   └──► Werkbank-Web :3070 ── Einrichtung · Wissen · Board · Sprint · Roadmap · Skills · Dateien & Teilen
+   └──► Werkbank-Web :3070 ── Heute · Roadmap · Board · Sprint · Wissen  (Fuß: Mein Tag · Ziele · Skills · Dateien · Einrichtung)
                 │  Login = LibreChat-Konto · Vault nur lesend (Schreiben nur nach Bestätigung)
                 ├── MongoDB (eigene DB „werkbank“: Jira-Kopie, Sitzungen, verschlüsselte Zugänge, Dateien)
                 ├── Meilisearch (Index „werkbank_vault“: Volltextsuche im Vault)
@@ -41,7 +46,7 @@ wiederholbar. Es
 3. erzeugt fehlende **Geheimnisse** in `.env.local` (gitignored, Rechte 600) — vorhandene werden nie
    geändert oder ausgegeben;
 4. schreibt die **URLs dieser Workspace** (aus `CODER_WORKSPACE_*`) als verwalteten Block in `.env.local`
-   (`DOMAIN_CLIENT/SERVER`, `WERKBANK_PUBLIC_URL`, Fußzeilen-Links);
+   (`DOMAIN_CLIENT/SERVER`, `WERKBANK_PUBLIC_URL`, Fußzeile);
 5. installiert Brücke und Web-App (`npm ci` nur wenn nötig) und baut die Oberfläche, wenn sich etwas geändert hat;
 6. richtet die **Team-Skills aus dem Vault** ein (fehlende verlinken, nichts überschreiben, siehe unten);
 7. startet alle Dienste, prüft sie und zeigt die nächsten Schritte mit Links.
@@ -78,7 +83,7 @@ Alles läuft nativ und lauscht nur auf `127.0.0.1`. Erreichbar über die Coder-V
 | Meilisearch v1.35.1 | 7700 | nur intern (Chat-Suche + Vault-Suche) |
 
 Die Werkbank-Seiten sind **Einträge in LibreChats linker Leiste** (siehe „Die Werkbank im Chat“ unten) und öffnen
-im Hauptbereich — mit einer Anmeldung. Die Fußzeilen-Links gibt es weiterhin. „Im Chat öffnen“, „Im Chat
+im Hauptbereich — mit einer Anmeldung. „Im Chat öffnen“, „Im Chat
 besprechen“ usw. starten einen neuen Chat mit vorbereitetem Text im selben Fenster.
 
 ## Erste Schritte im Browser
@@ -105,23 +110,38 @@ Die Web-App führt beim ersten Aufruf durch fünf Schritte (Seite **Einrichtung*
    (Init der Sitzung, kein Modellaufruf).
 5. **Loslegen** — Kacheln zu Chat, Wissen, Board, Sprint, Skills, Dateien; darunter der Zustand der Dienste.
 
-## Die Werkbank im Chat (linke Leiste)
+## Die Werkbank im Chat (eine Oberfläche)
 
-Unter dem „Neuer Chat“-Knopf stehen sieben Symbole: 🚀 Einrichtung · 📖 Wissen · 🗂 Board · 🔁 Sprint ·
-🧭 Roadmap · 🧩 Skills · 🔗 Dateien & Teilen. Ein Klick öffnet die Seite im Hauptbereich von LibreChat (Adresse
-`/wb/<seite>`, Unterseiten stehen als `?h=…` in der Adresszeile und überstehen Neuladen).
+Chat und Werkbank-Seiten sind **eine Oberfläche** (Plan: [`docs/plan-eine-oberflaeche.md`](docs/plan-eine-oberflaeche.md)).
+Unter dem „Neuer Chat“-Knopf stehen fünf Symbole: Heute · Roadmap · Board · Sprint · Wissen, darunter **„⋯ Weitere
+Seiten“** mit Mein Tag, Ziele, Skills, Dateien & Teilen (aktiv markiert, wenn eine davon offen ist). Die
+**Werkbank-Einrichtung** (Claude, Jira) steht im **Kontomenü** unten links direkt über LibreChats „Einstellungen“ — ein
+Ort für alles, was man einstellt. Ein Klick öffnet die Seite im Hauptbereich (Adresse `/wb/<seite>`, Unterseiten als
+`?h=…`, übersteht Neuladen). Einstieg für alle: `<Chat-URL>/wb/heute`.
 
+- **Kein Neuladen:** Alle Werkbank-Seiten laufen in *einem* iframe; ein Wechsel in der Leiste setzt nur dessen Hash
+  (`location.replace`), die Adresszeile folgt mit `replace` — Zurück ist ein Klick. Klick auf die schon offene Seite
+  lädt sie neu. „Chat öffnen“, „Im Chat besprechen“, Tagesabschluss usw. gehen als `werkbank-open` an LibreChats Router
+  (nur eigener Ursprung; Strg/Cmd/Mitte öffnen weiter einen neuen Tab).
+- **Handy:** über jeder Werkbank-Seite LibreChats Knopf „Leiste öffnen“ mit dem Seitentitel; ein Tipp auf eine Seite
+  (Leiste, „Weitere Seiten“, Kontomenü) schließt die Leiste wieder.
 - **Eine Anmeldung:** LibreChat reicht `/werkbank/*` an die Web-App (3070) durch. Dort kommt LibreChats
   Refresh-Cookie mit; die Web-App prüft ihn wie LibreChat selbst (Signatur mit `JWT_REFRESH_SECRET` und
   gültige Sitzung mit diesem Token-Hash in LibreChats DB). Die Freigabeliste gilt weiter. Direkt auf 3070
-  gibt es weiter das eigene Login (für Health/Debug). `/werkbank/internal/*` reicht der Proxy nie durch.
-- **Optik:** gleiche Schrift (Inter), Farben und Abstände wie LibreChat; **Hell/Dunkel folgt dem Chat**
-  (die Seite beobachtet LibreChats `dark`-Klasse), Symbole aus LibreChats Symbolsatz (lucide).
-- **Technik, klein und wiederholbar:** zwei neue Dateien (`librechat/overlay/…`: Proxy, Leiste, Seite) und zwei
-  kleine Patches (`librechat/patches/10-server-werkbank-proxy.patch`: 2 Zeilen in `api/server/index.js`;
-  `20-client-werkbank-nav.patch`: Leiste + Route). `scripts/librechat-patch.sh` spielt sie bei jedem
-  `werkbank.sh up|update` ein (schon angewandte werden erkannt; passt ein Patch nach einem LibreChat-Update
-  nicht mehr, bricht es mit Hinweis ab) und baut nur den Client neu, wenn sich etwas geändert hat.
+  gibt es weiter das eigene Login (nur Health/Debug, wird nirgends mehr verlinkt). `/werkbank/internal/*` reicht der Proxy nie durch.
+- **Eine Optik, eine Sprache:** Inter, **Hell/Dunkel folgt dem Chat**, und die gemeinsamen Farbvariablen (`--text-*`,
+  `--surface-*`, `--border-*`, `--presentation`) übernimmt die Seite zur Laufzeit aus LibreChats `<html>` — LibreChat ist
+  die eine Quelle, `web/src/styles.css` nur Rückfall für die direkte Web-App. LibreChat startet **deutsch**, solange
+  niemand selbst eine Sprache gewählt hat (weder Cookie noch gespeicherte Wahl). Die Fußzeile hat keine Links mehr.
+- **Technik, klein und wiederholbar (Upgrade):** neue Dateien unter `librechat/overlay/…` (Proxy, Leiste, Seite,
+  Kontomenü-Eintrag, Ja/Nein-Knöpfe) und vier kleine Patches, jeder für eigene LibreChat-Dateien:
+  `10-server-werkbank-proxy` (`api/server/index.js`), `20-client-werkbank-nav` (Leiste + Route),
+  `30-client-antwort-knoepfe` (Markdown-Links), `40-client-konto-einrichtung` (2 Zeilen in `Nav/AccountSettings.tsx`).
+  `scripts/librechat-patch.sh` spielt sie bei jedem `werkbank.sh up|update` ein: schon angewandte werden erkannt, eine
+  im Repo geänderte Fassung ersetzt die alte (die Dateien des Patches gehen auf LibreChat zurück, dann neu angewandt);
+  passt ein Patch nach einem LibreChat-Update gar nicht mehr, bricht es mit Hinweis ab. Der Client wird nur neu gebaut,
+  wenn sich Overlay oder Patches geändert haben. Prüfung im Browser: `web/e2e/eine-oberflaeche.mjs` (gegen eine
+  isolierte Instanz, nie gegen Live).
 
 ## Die Seiten
 
@@ -266,12 +286,75 @@ GitHub-Links und Kurzformen (`admin#175`, `tariff-app #166`) im Spec-Text.
   keine Programme, Skripte, Archive, HTML/SVG), optional „enthält Personendaten“ markieren,
   **mit Teammates teilen** und zurücknehmen, herunterladen (immer als Anhang, `nosniff`), löschen.
   **„Im Chat“** legt eine Kopie ins eigene Claude-Arbeitsverzeichnis (`dateien/…`, 0600) und startet einen Chat.
-  Gespeichert unter `.runtime/werkbank/files/` — nie im Repo, **keine externen Links**.
+  Gespeichert in der **Ablage** (`WERKBANK_DOCS_DIR`, siehe „Ablage & Backup“) — nie im Repo, **keine externen Links**.
 - **Chats**: „Geteilt mit mir“ und „Von mir geteilt“ (aus LibreChat). **Als Kopie weiterführen** legt den
   Verlauf als Markdown ins **eigene** Arbeitsverzeichnis (`geteilt/<id>.md`) und startet einen neuen
   Chat mit dem **eigenen** Claude — nie mit Token oder Sitzung der teilenden Person.
 - **Protokoll**: wer hat was (nur ID) mit wem geteilt, append-only in `.runtime/werkbank/share-log.jsonl`,
   ohne Inhalt und ohne Dateinamen. Jede Person sieht ihre Einträge, Admins alle.
+
+### 🗄️ Ablage & Backup (Plan 81, Schnitte 1, 2, 4, 5)
+
+**Eine Ablage.** Jede Datei der Werkbank liegt in `WERKBANK_DOCS_DIR` (Vorgabe `~/work/dokumente`, dieselbe Ablage wie
+von Hand) unter `<team>/<vorgang>/JJJJ-MM-TT_<art>_<kurzname>[_<version>].<ext>` — mit dem **Dokumentdatum**, ohne
+Datum `undatiert_…`. Arten: `sow avv vertrag angebot rechnung deck daten notiz`. Mongo `files` hält weiter Besitzer,
+Freigaben, Personendaten-Markierung und Tickets, dazu `path` (relativ zur Ablage). Neue Ordner 0700, Dateien 0600; nie
+überschrieben (Kollision → `_2`, `_3`).
+
+- **Noch einzusortieren.** Ein Upload landet zuerst in `_eingang/` und steht oben auf „Dateien & Teilen“ mit einem
+  **Vorschlag** (Team; Vorgang aus vorhandenen Ordnern bzw. Ticket/Projekt; Art und Datum aus dem Namen; Kurzname;
+  Version). „Ablegen“ übernimmt ihn, „Ändern“ öffnet die Felder; ohne Team/Vorgang sind die Felder gleich offen.
+  Abgelegte Dateien lassen sich jederzeit **verschieben**.
+- **Agenten-Dateien** (Schnitt 3) übernehmen den Vorschlag ohne Klick, wenn er sicher ist (Team und Vorgang stehen
+  fest), sonst `_eingang/`. Eine neue Fassung derselben Quelle ersetzt die Datei an ihrem **aktuellen** Ort.
+- **Umzug.** Beim Start zieht die Werkbank einmalig alles aus dem alten Speicher `.runtime/werkbank/files/<id>/` in die
+  Ablage (Uploads nach `_eingang/`, Agenten-Dateien mit sicherem Vorschlag direkt). Kopie mit Prüfsumme → Mongo →
+  Altkopie weg; `_id`, Tickets, Freigaben und Personendaten bleiben. Idempotent.
+- **Löschen** in der Werkbank löscht die Datei auch in der Ablage (der Dialog nennt den Ordner). Von Hand verschobene
+  Dateien erscheinen als „nicht mehr am Ablageort“; Knuts übrige Dateien im Ordner fasst die Werkbank nie an.
+- **Achtung:** die Ablage ist **eine** für alle Konten — Uploads von Teammates (auch mit Personendaten) liegen in
+  `~/work/dokumente`. Wer den Ordner irgendwohin synchronisiert, nimmt sie mit.
+
+**Arbeitsordner aufräumen.** Zwischenstände in `.runtime/bridge/scratch/<person>/` werden nach
+`WERKBANK_SCRATCH_DAYS` (30) Tagen ohne Zugriff gelöscht (`0` = nie). Ab Tag 23 steht ein Hinweis auf „Dateien &
+Teilen“ (Liste, „behalten“ setzt die Frist zurück); gelöscht wird frühestens 7 Tage nach dem Hinweis. Nur Dateien,
+keine Ordner; Symlinks werden nie verfolgt (auch nicht als Ordner unterwegs); `.claude`, `.env*`, `.git` bleiben;
+überschneiden sich Ablage, Vault oder Werkbank-Daten mit dem Arbeitsordner, wird gar nicht aufgeräumt. Stündlich geprüft.
+
+**Backup.** „Backup herunterladen“ (nur Admins, `GET /api/backup`) streamt ein `.tar.gz`, nichts bleibt liegen:
+
+| Im Archiv | Nicht im Archiv |
+|---|---|
+| `werkbank/<sammlung>/NNNN.jsonl` (Canonical EJSON, je 1000) + `_indexes.json` | `creds` (Claude-/Jira-Zugänge), `sessions` (Anmeldungen) |
+| `ablage/<pfad>` — jede Datei, die die Werkbank kennt | Chats (LibreChat-DB), Vault (eigenes Git), Arbeitsordner |
+| `ablage/<pfad>.enc` — Personendaten, AES-256-GCM | Knuts übrige Dateien in `~/work/dokumente` |
+| `share-log.jsonl`, `manifest.json` (Zählungen, Ausgelassenes) | |
+
+Kein `mongodump` nötig (der Treiber schreibt EJSON; `mongodump` ist auf der VM nicht installiert). Personendaten-Dateien
+werden mit `WERKBANK_BACKUP_KEY` verschlüsselt (`setup.sh` erzeugt ihn in `.env.local`); ohne Schlüssel fehlen sie im
+Archiv, das Manifest sagt es. **Den Schlüssel zusätzlich in Vaultwarden ablegen** — ohne ihn sind die
+Personendaten-Dateien eines Archivs nicht wiederherstellbar; auf der VM selbst schützt die Verschlüsselung nichts.
+**Nachtarchiv:** einmal je Tag ab `WERKBANK_BACKUP_HOUR` (2 Uhr, `-1` = aus) nach
+`.runtime/werkbank/backups/werkbank-JJJJ-MM-TT.tar.gz` (0600); die neuesten `WERKBANK_BACKUP_KEEP` (7) bleiben.
+
+**Wiederherstellen:**
+
+```bash
+scripts/restore.sh <archiv.tar.gz> [--dry-run]
+# zum Üben gegen eine eigene Instanz, nie gegen die Live-Mongo:
+MONGO_URI_WERKBANK=mongodb://127.0.0.1:27217 WERKBANK_DB=werkbank_restore WERKBANK_DOCS_DIR=/tmp/ablage-test scripts/restore.sh <archiv>
+```
+
+Nur in eine **leere** Ziel-DB (sonst Abbruch); Dateien werden nie überschrieben (gleiche Prüfsumme → übersprungen,
+abweichend → gemeldet); falscher Schlüssel → Abbruch vor dem Schreiben; `share-log.jsonl` nur, wenn keins da ist.
+Danach Zugänge neu verbinden (Claude, Jira) — die sind absichtlich nicht im Archiv.
+
+**Einmal echt durchgespielt (09.10.2026):** echter Build auf eigener Mongo (27217, Port 3471), drei Altbestand-Dateien
+→ Umzug beim Start (Altspeicher leer, Freigaben/Tickets/Personendaten gleich) → „Ablegen“ im Browser → Nachtarchiv →
+„Backup herunterladen“ (Nicht-Admin 403) → `scripts/restore.sh` in die leere DB `werkbank_restore` und eine leere
+Ablage: 14 Sammlungen eingespielt, **alle Dokumente und Indizes identisch** mit dem Original, `sessions`/`creds`
+ausgelassen, 3/3 Dateien mit gleicher Prüfsumme (die Personendaten-Datei entschlüsselt), zweiter Lauf bricht ab
+(„Ziel-DB ist nicht leer“).
 
 ### 🧹 Task-Hygiene — eigene Tickets sauber halten, sanft
 
@@ -295,6 +378,15 @@ angewandt auf die **eigenen** PM-Tickets aus der Jira-Kopie (Zuordnung über `GE
 - **Im Chat:** Claude fragt kurz, eine Frage nach der anderen; aus der Antwort wird eine Jira-Aktion, die das
   Werkzeug `jira_update` schreibt — **erst nach „ja“** und **mit dem Jira-Zugang der Person** (wie am Board).
   „später“ → `hygiene_snooze`.
+- **Tagesabschluss als Durchgang (Knut, 07.10.2026):** ausdrücklich gestartet (Vorlage / 🌙) geht Claude **alle**
+  eigenen offenen Tickets durch, die überfällig, in ≤ 7 Tagen fällig, ohne Datum oder heute bearbeitet sind
+  (≤ 15 Zeilen je Gruppe), liest sie über Teilagenten `ticket-pruefer` und zeigt je Gruppe eine Tabelle mit
+  Empfehlung. Du antwortest gesammelt; geschrieben wird mit `jira_update_many` — **eine** Rückfrage mit einer Zeile
+  je Ticket (Titel, bisher laut Chat, neu, Grund; Done und „Datum entfernen“ mit ⚠️). Die Werkbank schreibt nur
+  eigene, bekannte Tickets, deren Titel zur Rückfrage passt, der Reihe nach, Fehler je Ticket. Danach
+  „Agent vorlaufen lassen“: `agent_start` startet je Ticket einen eigenen Chat wie „Agent“ am Board (Rückfrage).
+  `WERKBANK_EOD_BATCH=0` schaltet auf Ticket-für-Ticket mit `jira_update` um. Ab 16 Uhr in anderen Chats bleibt
+  es bei höchstens drei Fragen plus Hinweis auf den Durchgang.
 - **Board:** 🧹-Zähler je Karte, Bahn und Owner, Filter **„Braucht Pflege“**, oben die eigenen Fragen (höchstens 3).
   **Sprint:** Liste aller eigenen Pflegepunkte. Antworten dort: eine Zeile → Vorschlag → Bestätigen → Jira.
 
@@ -348,7 +440,7 @@ Unter 760 px Breite (Befund `review-pakete/77-werkbank-live-mobile`, Knut 07.10.
 - **Titel** erzeugt die Brücke aus der ersten Nachricht, ohne Claude aufzurufen.
 - **Kontext-Paket** für jede **neue** Sitzung (nicht bei Fortsetzung), siehe unten.
 - **MCP-Server: genau diese, sonst keine** (Runde 4, `strictMcpConfig`): `vault-search` (Vault durchsuchen, lesend),
-  `werkbank` (`hygiene_list`, `hygiene_snooze`, `skills_list`, `jira_update` mit Rückfrage), `forge-review` (falls
+  `werkbank` (`hygiene_list`, `hygiene_snooze`, `skills_list`, `jira_update`, `jira_update_many`, `agent_start` mit Rückfrage), `forge-review` (falls
   eingerichtet) und `atlassian` (Jira/Confluence, OAuth je Claude-Konfiguration). Nichts aus Nutzer-/Projekt-Konfiguration
   oder Plugins (vorher u. a. `compartment`, PostHog-Plugin).
 - **Jira im Chat geändert → Board zieht nach:** sieht die Brücke einen erfolgreichen schreibenden `mcp__atlassian__*`-Aufruf
@@ -558,7 +650,8 @@ Rückfrage im Chat, eingeleitet mit „Der Auto-Modus fragt nach: <Grund>“.
 | Bash/Edit im eigenen Arbeitsordner | **Klassifikator** |
 | Edits außerhalb des Arbeitsordners, unter `/vault` oder über einen Symlink dorthin | Rückfrage („ja“) |
 | Bash, der den Vault, `.runtime`, `.claude`, `.env`, `~/.ssh`, `~/.config/vw`, `bw`, `sudo` oder Jira/Atlassian nennt | Rückfrage („ja“) |
-| Jira-Schreiben (Atlassian-MCP, `jira_update`) | Rückfrage („ja“) |
+| Jira-Schreiben (Atlassian-MCP, `jira_update`, `jira_update_many`) | Rückfrage („ja“) |
+| Neuer Agent-Chat aus dem Chat (`agent_start`) | Rückfrage („ja“) |
 | GitHub lesen (`gh api` ohne Schreib-Optionen, `gh pr view/diff`) | Klassifikator |
 | `git push`, PR anlegen/kommentieren, GitHub-API schreiben | Rückfrage („ja“) — nie automatisch |
 | Merge, Force-Push, Push auf `main`/`master`/`develop` | gesperrt, auch mit „ja“ |
@@ -643,10 +736,112 @@ Knut, 07.10.2026: „werkbank hat nur einen chat pro zeit … gehen auch mehrere
   mehrere Personen den Auto-Modus bekommen.
 - **Not-Aus:** `BRIDGE_MAX_PARALLEL_CHATS=1 scripts/werkbank.sh restart` → wieder ein Chat zur Zeit.
 
+## Orchestrator-Agenten (09.10.2026)
+
+Knut, 09.10.2026: „schau, dass du einzelne Agents auf der Werkbank startest und koordinierst (du bist der
+Orchestrator)“. Plan und Council: `docs/plan-orchestrator-agents.md`. Die Haupt-Sitzung von Claude Code startet je
+Arbeitsstrang einen **normalen Werkbank-Chat in Knuts Konto** — Titel „Orchestrator · …“, Lesezeichen
+**„Orchestrator“** in der LibreChat-Leiste (alle Stränge zusammen), Fortschritt live im Chat.
+
+```bash
+scripts/orch start --title "Flex: Speicher-Pilot" --cwd ~/work/knut/flex-wt --plan ~/work/knut/flex-wt/docs/plan.md \
+  --prompt "Setze Scheibe 2 aus dem Plan um, Tests grün, lokal committen."
+scripts/orch list            # ⏳ running · ✋ waiting · ✅ done · ❌ failed, mit Grund und „### Stand“-Auszug
+scripts/orch show <id>       # letzte Nachricht ganz
+scripts/orch send <id> --text "weiter"      # Folgenachricht in denselben Chat
+scripts/orch review <id>     # geprüft → aus der offenen Liste (list --all zeigt alle)
+scripts/orch ask --title "Flex: Pilot-Region?" --context "…" --option "Nord :: schneller Start" --option "Süd :: größerer Markt" \
+  --recommend "Nord" --strand <id>          # Rückfrage an Knut → Werkbank, Heute → „Wartet auf dich“
+scripts/orch questions list --open · scripts/orch questions get <id> · scripts/orch questions withdraw <id>
+```
+
+- **Einstieg nur lokal:** CLI → `POST /internal/orchestrator/*` der Web-App (127.0.0.1, Schlüssel
+  `WERKBANK_INTERNAL_TOKEN` aus der `.env.local`, wird nie ausgegeben; nie über den LibreChat-Proxy erreichbar).
+  Ziel: `WERKBANK_URL` (Vorgabe `http://127.0.0.1:3070`), Schlüsseldatei `WERKBANK_ENV_FILE`.
+- **Arbeitsordner:** die Web-App wählt die Unterhaltungs-ID und meldet sie samt Ordner bei der Brücke an, bevor der Chat
+  entsteht (`orch.json`); der Ordner muss unter `WERKBANK_ORCH_ROOTS` liegen (Vorgabe `$HOME/work`), nicht in
+  `.runtime`/`.git`/Vault. Ein offener Strang je Worktree (`--shared` hebt das auf).
+- **Strengere Regeln im Strang:** keine Rückfragen (was ein „ja“ bräuchte, wird abgelehnt und unter „Braucht Knut“
+  notiert); gesperrt auch nach „ja“: `git push` in allen naheliegenden Formen, `gh` schreibend, GitHub-API, Jira/
+  Confluence schreiben, Git-Konfiguration/-Hooks, `.claude/`, `.env*`. Git läuft mit eigener globaler Konfiguration
+  (kein Credential-Helfer, Push auf github.com ins Leere). Keine Sandbox: wer die Umgebung im Befehl bewusst
+  überschreibt, kommt am Git-Teil vorbei — dann bleiben Muster und Klassifikator.
+- **Status** aus dem ausdrücklichen Zustand der Brücke (Zug läuft, Ausgang `ok/limit/timeout/error/busy/…`, Neustart
+  mittendrin) und bei normalem Ende aus der Zeile `Status: fertig | braucht Antwort | blockiert` der Antwort.
+- **Rückfragen an Knut** nur für echte Entscheidungen, immer mit Empfehlung. Knut antwortet unter Heute →
+  „Wartet auf dich“ (zählt in „Heute (n)“, auch an der Sonne in der LibreChat-Leiste).
+- **Grenzen:** LibreChat `CONCURRENT_MESSAGE_MAX` (jetzt 5) und Brücke `BRIDGE_MAX_PARALLEL_CHATS` (3) laufende Züge je
+  Konto; ein Zug höchstens 40 Schritte / 15 min, dann `waiting` mit „`send <id> weiter`“.
+- **Seit Plan 132 (Leitstand)** zusätzlich im Strang gesperrt: Wege zum internen Kanal (`scripts/orch`, `/internal/`,
+  `x-werkbank-internal`, `/proc/…/environ`, `.env.local`, `ps e…`). Für alle Chats erkennen die Push-/Merge-Muster
+  jetzt globale Git-Optionen (`git -C x push`, `-c k=v`, `--git-dir`) und `refs/heads/main`; `git merge-base` wird
+  nicht mehr fälschlich gesperrt. `SubagentHandback` ist lesend (Teilagenten konnten in Strängen ihr Ergebnis nicht abgeben).
+- **Zweite Instanz zum Testen:** `scripts/isoliert.sh start|stop|status` (Web 3170, LibreChat 3180, Brücke 3190, Mongo
+  27180, eigenes `.runtime-iso/`), CLI dort mit `WERKBANK_URL=http://127.0.0.1:3170 WERKBANK_ENV_FILE=.runtime-iso/.env.local`.
+
+## Hauptchat oben, Unter-Chats darunter (12.10.2026)
+
+Plan 144, [`docs/plan-hauptchat-workspace.md`](docs/plan-hauptchat-workspace.md).
+
+- **Chat-Seitenleiste:** Für Admins steht über der Chatliste der Abschnitt **Hauptchat**, immer an derselben Stelle
+  (Overlay `HauptchatSection.tsx`, Patch `50-client-hauptchat.patch`). Darunter stehen eingerückt die offenen Unter-Chats,
+  je Lauf zuklappbar, mit Status *läuft · wartet auf dich · zu prüfen · gestoppt*. Ein Klick öffnet den Chat. Auf/Zu
+  merkt sich der Browser. Bei eingeklappter Leiste öffnet das 🛰️-Symbol im Icon-Streifen den Hauptchat.
+- **Start/Neustart in der Oberfläche:** „⋯ → Hauptchat (neu) starten …“ führt zur Seite **Hauptchat & Unter-Chats**
+  (`#/leitstand`). Die Übergabe ist dort aus den offenen Unter-Chats und Rückfragen vorbefüllt und lässt sich bearbeiten.
+  - API: `GET /api/leitstand/handover` und `POST /api/leitstand/start` — nur Admins, mit CSRF-Header.
+  - Die Übergabe enthält keine Strang-Auszüge. Ihr Zaun wird entschärft.
+  - Die CLI `orch leitstand start --handover` bleibt.
+- **Nur der Hauptchat führt:** Die Vorlage „Koordinator“ heißt jetzt **„Teilagenten in diesem Chat“**. Sie verteilt nur
+  Teilagenten im eigenen Chat; normale Chats haben weiter keine `orch_*`-Werkzeuge.
+- Neue Hauptchats heißen „Hauptchat · TT.MM.“ und tragen das Lesezeichen `Hauptchat`. Alte behalten ihr Lesezeichen
+  „Leitstand“; erkannt wird der Hauptchat über `kind: 'leitstand'`.
+
+## Leitstand (11.10.2026)
+
+Knut, 11.10.2026: der Orchestrator wird ein Werkbank-Chat auf der Brücke, damit keine IDE mehr nötig ist und beide
+Claude-Konten genutzt werden. Plan, Proben und Council (R1 HOLD → R3 PASS): `docs/plan-leitstand.md`.
+
+```bash
+scripts/orch leitstand start --handover ~/work/knut/leitstand-uebergabe.md   # Vorlage: docs/leitstand-uebergabe-vorlage.md
+```
+
+- **Ein Chat „Leitstand · TT.MM.“** in Knuts Konto (Lesezeichen „Leitstand“), nur für Admins (`LEITSTAND_EMAILS`, Vorgabe
+  `BRIDGE_AUTO_EMAILS`; in der Werkbank Rolle `ADMIN`; nicht über `WERKBANK_TEAM_FEATURES` freigebbar). Ein neuer Start
+  beendet den alten: die Brücke meldet ihn ab, er nimmt keine Züge mehr an. Arbeitsordner `WERKBANK_LEITSTAND_DIR`
+  (Vorgabe `~/work/knut`).
+- **Werkzeuge statt Bash:** im Leitstand hat der Werkbank-MCP `orch_start`, `orch_list`, `orch_show`, `orch_send`,
+  `orch_review`, `orch_ask`, `orch_questions` (gleiche Routen wie `scripts/orch`). Anderswo gibt es sie nicht, und
+  die Brücke sperrt sie dort. `orch_send` setzt den Deckel eines Strangs nicht zurück — das tut nur Knut.
+- **Wecken:** meldet ein Strang „fertig“, braucht er eine Antwort, ist er blockiert, hat er seinen Deckel erreicht oder
+  review_ready gemeldet, oder beantwortet Knut eine Rückfrage, legt die Werkbank eine Nachricht „🛰️ Leitstand-Meldung
+  (automatisch …)“ in den Leitstand — gebündelt (60 s entprellt), nur wenn er frei ist, mit `#leitstand-<batch>` in der
+  letzten Zeile. Erst wenn die Brücke einen Zug mit dieser Kennung meldet, gilt sie als zugestellt; sonst nach 3 min
+  erneut (höchstens 5 Versuche je Ereignis). Deckel 12 Weckungen/h und 60/Tag, dann eine Rückfrage in „Heute“.
+  Schritt-/Zeitgrenzen des Leitstands selbst → „weiter“ in derselben Meldung, höchstens 3 hintereinander.
+  Auszüge aus Strängen stehen eingezäunt als **Daten** in der Meldung; die Regeln stehen im Systemtext.
+- **Grenzen:** 200 Schritte, 60 min je Zug (`LEITSTAND_MAX_TURNS`, `LEITSTAND_TURN_TIMEOUT_S`); zählt nicht gegen
+  `BRIDGE_MAX_PARALLEL_CHATS`; seine Rückfrage wird weder vom Leerlauf (15 min) noch von fünf anderen offenen
+  Rückfragen beendet. `Monitor` ist gesperrt (hielte den Zug offen), Hintergrund-Bash stirbt mit dem Zug (Probe im Plan).
+- **Rechte (Auto-Modus „voll“ plus):** Merge, Force-Push, Push auf main/master/develop und git im Vault gesperrt; Push,
+  Jira/Confluence, Live-Instanz, crontab, `~/bin`, `systemctl`, `.git/`-Hooks/-Konfiguration, `.claude/`, `.env*` und
+  Dateien außerhalb von Arbeitsordner, Scratch und Vault nur nach **genau „ja“** (ein „ok“ gibt im Leitstand nichts frei).
+  Eine Leitstand-Meldung beantwortet nie eine offene Rückfrage.
+- **Zusatz-MCP:** compartment (Gedächtnis) und PostHog aus `LEITSTAND_MCP_FILE` (Vorgabe `templates/leitstand/mcp.json`).
+  PostHog: lesen frei, schreiben nach „ja“, löschen gesperrt.
+- **Heute** (Admins): Zeile „🛰️ Leitstand: läuft / wartet auf dich / bereit · öffnen“.
+- Not-Aus fürs Wecken: `LEITSTAND_WAKE=off`.
+- **Eine Oberfläche (Teil B):** Seite **Leitstand** in der Werkbank (nur Admins): alle Stränge je Lauf, zugeklappt
+  („Flex — 3 Stränge · 2 fertig · 1 wartet“), Status läuft / wartet / fertig / gestoppt, Zähler „automatisch fortgesetzt“, Link
+  zum Chat und zum Bericht (`review-pakete/NNN-*/bericht.md`, sicher gelesen, als Text gezeigt). Lauf: `orch start --lauf NAME`
+  (Lesezeichen „Orch · NAME“), sonst der Titelteil vor „:“. Fertige Stränge stehen auf **Heute** in „Wartet auf dein Review“ —
+  „Passt“ (geprüft, ohne Jira) oder „Nacharbeit“ (Nachricht in denselben Chat). Ein eigener Takt (`ORCH_STATUS=off` = aus)
+  schreibt den Stand je Strang fest; „Heute“ fragt nie die Brücke. Der Leitstand kann Stränge nur ablegen, Knuts „Passt“ ersetzt er nicht.
+
 ## Roadmap-Automatik (08.10.2026)
 
 Plan: `docs/plan-roadmap-automatik.md`. Vault-Roadmap und Roadmap-Seite ziehen sich selbst nach; was eine Maschine
-nicht allein darf, steht als Frage unter **Roadmap → „Für mich offen“**.
+nicht allein darf, steht als Frage unter **Heute → „Wartet auf dich“** (bis 09.10.2026: Roadmap → „Für mich offen“).
 
 - **Feed:** alle 5 min schreibt die Werkbank `~/.cache/vault-sync/werkbank-feed.md` (Jira-Stand, fertige
   Karten-Läufe mit Vault-Notizen und PR-Links, Projekte je Workstream; keine Beschreibungen, Chats, Zugangsdaten).
@@ -654,14 +849,41 @@ nicht allein darf, steht als Frage unter **Roadmap → „Für mich offen“**.
 - **Nachzug nach Agentenlauf:** ist ein Karten-Agent mit Ticket fertig (Sitzung „bereit“ mit neuer Aktivität),
   kommt das Ticket in eine Warteschlange; höchstens alle 20 min startet `vault-sync.sh --scope PM-…`
   (nur Specs/Übersichten/Register/Timeline dieser Tickets). Aus mit `WERKBANK_ROADMAP_AUTOSYNC=0`.
-- **„Für mich offen“:** offene `- Knut:`-Zeilen, PRs, bei denen ich laut „wer ist dran“ dran bin, eigene Tickets
-  ohne/über Datum; für Admins die **Fragen des Vault-Syncs** („Offen/unklar“ des letzten Protokollabschnitts, der
+- **„Wartet auf dich“** (Heute, früher „Für mich offen“): offene `- Knut:`-Zeilen, PRs, bei denen ich laut „wer ist dran“
+  dran bin (eigene Tickets ohne/über Datum stehen jetzt in „Tickets, die Pflege brauchen“); für Admins die **Fragen des Vault-Syncs** („Offen/unklar“ des letzten Protokollabschnitts, der
   welche hat) mit ✅ Ja / ✖️ Nein und der **Entwurf „Woran wir gerade arbeiten“**.
 - **Ja** schreibt `~/.cache/vault-sync/freigaben.md` und startet einen Sync (höchstens alle 5 min); der Sync führt
   genau diesen Punkt aus und meldet „erledigt: S…“ im Protokoll, dann verschwindet die Frage. **Nein** blendet sie aus.
 - **Entwurf:** der Morgenlauf (vor 11 Uhr) schreibt `0-Overview/entwurf-woran-wir-arbeiten.md`; „Übernehmen“ ersetzt
   im Hub nur den Block zwischen `<!-- werkbank:woran-wir-arbeiten -->` und `<!-- /werkbank:woran-wir-arbeiten -->`.
 - Env: `WERKBANK_VAULT_SYNC_DIR`, `WERKBANK_VAULT_SYNC_SCRIPT`, `WERKBANK_ROADMAP_FEED`, `WERKBANK_ROADMAP_AUTOSYNC`.
+
+## Heute und Review-Schlange (09.10.2026)
+
+Plan: `docs/plan-heute-review-schlange.md` (Schnitt 1 von `docs/plan-roadmap-zu-agent.md`, Council HOLD 0,78, K1–K8).
+
+- **`#/` ist „Heute“**, eine Liste „bei mir“ in fester Reihenfolge: **Wartet auf dein Review** (fertige Agentenläufe
+  mit Gemacht / Nicht gemacht / Risiko, DoD ✓ ◐ ✗ mit Beleg, Artefakte; Passt · Nacharbeit · Chat öffnen) →
+  **Wartet auf dich** (Rückfragen der Agenten mit Fragetext und ✅/✖️, hängende Läufe mit „Weiter“, stille Läufe,
+  Sync-Fragen, Entscheidungen, PRs) → **Dein Tag** (Blöcke aus Mein Tag) → **Tickets, die Pflege brauchen** (Hygiene).
+  Ohne Anmeldung bleibt die Einrichtung die erste Seite; sie steht jetzt unter `#/einrichtung`.
+- Board, Sprint, Mein Tag und Roadmap zeigen statt eigener Listen eine Zeile **„Bei mir: n offen → Heute“**.
+- **Navigation:** Heute (n) · Roadmap · Board · Sprint · Wissen; der Zähler kommt aus `GET /api/today/count`
+  (Seitenwechsel und alle 60 s; liest nur Mongo und zwei Vault-Dateien, fragt die Brücke höchstens alle 30 s).
+- **Fertig-Marke:** Agenten rufen am Ende das Werkbank-MCP-Werkzeug `review_ready` (Klasse `read`) mit Gemacht /
+  Nicht gemacht / Risiko und DoD je Punkt. Die Unterhaltung kommt aus `WERKBANK_CONV_ID` (setzt die Brücke), nie aus
+  den Argumenten. Die Brücke liefert je Unterhaltung das Rundenende (`ok · max_turns · timeout · error · limit ·
+  frage_verfallen`) und den Fragetext einer offenen Rückfrage.
+- **Eimer** (`web/server/review.ts`): läuft > wartet auf ja > Marke > hängt (Rundenende ≠ ok) > still (ohne Marke
+  normal geendet). Nur Läufe mit der neuen Anweisung (`reviewable`) und höchstens 14 Tage alt; geprüfte fallen raus.
+- **Aktionen:** `POST /api/runs/:id/passt` (geprüft; Jira-Kommentar nur nach Vorschau + `confirm`, einmal),
+  `POST /api/runs/:id/reply` (Nacharbeit, ✅/✖️, Weiter → als nächste Nachricht in **denselben** LibreChat-Chat;
+  nur eigene, nicht laufende Läufe; nie im Trockenlauf).
+- **Roadmap:** Standard ist der **Überblick** je Thema (Wartet auf dich → In Arbeit → Als Nächstes → Erledigt mit
+  „geprüft“-Datum), „Alle Zustände ▾“ klappt die Swimlane auf. Tabs Überblick · Rangliste · PR-Review · Pflege ⋯
+  (Konsistenz, Ordnung); alte Adressen (`#/roadmap/kanban|entscheidungen|check|ordnung|prio`) gehen weiter.
+- Sichtprüfung isoliert: `SHOTS_MONGO=mongodb://127.0.0.1:<eigener mongod> node web/e2e/heute-shots.ts <ordner>`
+  (Web 3370, LibreChat-Nachbau 3380, Mock-Brücke 3390).
 
 ## Mehrere Claude-Konten je Person (06.10.2026)
 
@@ -865,7 +1087,7 @@ nichts, Agenten/Chats sind aus.
 ## Tests
 
 ```bash
-scripts/werkbank.sh test   # Brücke (50) + Web-App (110), ohne echte Konten, ohne /vault zu ändern
+scripts/werkbank.sh test   # Brücke (61) + Web-App (148), ohne echte Konten, ohne /vault und ~/work/dokumente zu ändern
 scripts/werkbank.sh e2e    # Playwright, 23 Schritte, ca. 2 Minuten
 scripts/werkbank.sh stream-timing   # Zeitmessung Streaming (Mock), Ergebnis auch in .runtime/e2e/stream-timing.json
 scripts/werkbank.sh init-timing 3   # Start der echten CLI bis „init“ (ohne Modellaufruf), .runtime/e2e/init-timing.json
@@ -876,6 +1098,11 @@ scripts/werkbank.sh init-timing 3   # Start der echten CLI bis „init“ (ohne 
   nicht), Einfügen von Antworten, Sprint-Ziel/S1–S4/Bewertung, Vorlagen, Sync-Vorschläge, Fälligkeiten.
   Die Sync-Zeilen werden **gegen `jira-sync-plan.sh` verglichen** — auf der Fixture und (nur lesend) auf
   den echten Zyklen 2026-09-14 und 2026-09-28: identisch.
+- **Ablage & Backup** (`ablage.test.ts`, `scratch.test.ts`, `backup.test.ts`, Teil von `api.test.ts`): Vorschlag,
+  Schema-Name, Kollision, Pfadprüfung (`..`, Symlink-Ordner), Umzug, Ablegen, Agenten-Datei am aktuellen Ort;
+  Aufräumen (Ankündigung, Frist, „behalten“, Symlinks/Ablage nie); tar mit Umlauten/langen Namen (System-`tar`),
+  Verschlüsselung, Backup → Restore in eine leere DB, Abbruch bei voller DB und falschem Schlüssel, Nachtarchiv 7×,
+  Backup 403 für Nicht-Admins. Jede Testdatei setzt ihre eigene `WERKBANK_DOCS_DIR` — nie Knuts echte Ablage.
 - **Jira** (`jira.test.ts`, gegen `test/jira-mock.ts`): Blättern, Abbildung, Workstreams, Nur-lesen-Token.
 - **API Ende-zu-Ende** (`api.test.ts`): Login/Freigabe, CSRF, Token-Speicherung, Board-Sync und Filter,
   Bestätigungspfade (Vorschau schreibt nie), Agent-Lauf, Antworten mit Konfliktschutz, Sprint-Sync mit
@@ -1069,3 +1296,17 @@ Siehe „Claude-Konfiguration je Person → Einmalig je Person“: eigener `clau
 3. **Antworten auf Knut-Zeilen durch andere.** Die Roadmap-Seite schreibt immer `- Knut:`. *Empfehlung:* nur Knut
    darf dort antworten, alle anderen bekommen eine eigene Zeile `- <Name>:` darunter.
    - Knut:
+
+### „Agent ansetzen“ an einer Spec (docs/plan-agent-ansetzen.md)
+
+Admins sehen in der Rangliste und in der Spec-Ansicht (Wissen) an Specs in `3-Plan` den Knopf **🤖 Agent ansetzen**
+(bei offenen „- Knut:“-Zeilen stattdessen **Entscheiden**). Der Dialog zeigt das Ticket nach OLAF-Konvention (Task unter
+Workstream, Standard PM-70; Owner = du; Priorität Medium; fällig Sprintende), Dubletten (Jira-Kopie + Jira-Suche nach
+Titel und Spec-Kennung) und den Auftrag (bis Review / nur Plan). Ein Klick: anlegen → zurücklesen und Felder nachziehen
+→ `jira:` in die Spec (nur ohne laufenden Vault-Sync) → Agent wie „Agent“ am Board, mit der Spec als Pfad. Halbe
+Stände (Sync läuft, Parallelgrenze voll, Ergebnis unklar) stehen sichtbar im Dialog und werden mit „Fortsetzen“
+nachgeholt; ein zweites Ticket entsteht nie ohne ausdrückliches „Trotzdem neues Ticket“.
+
+Schalter `WERKBANK_ANSETZEN`: leer/`aus` (Vorgabe, Knopf meldet „ausgeschaltet“) · `sim` (simuliertes Jira `SIM-n`,
+nur mit `WERKBANK_VAULT_IS_COPY=1`, schreibt `sim-jira:`) · `live` (echt, über den Jira-Schreibweg). `live` erst nach
+dem Test gegen echtes Jira und mit der Review-Schlange (Schnitt 1) einschalten.
