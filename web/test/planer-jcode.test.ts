@@ -1,7 +1,7 @@
 // realJcode (Plan 183): Aufruf von jcode mit Profil, Modell und Werkzeugen; Verbrauch ohne Sitzungsdatei aus der Ausgabe.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { realJcode } from '../server/planer.ts';
@@ -31,6 +31,20 @@ test('R4/R6: Worker-Umgebung ohne Git-/GitHub-Zugang aus HOME; hängender jcode 
   try {
     const r = await realJcode({ cwd: dir, prompt: 'P', model: 'm', key: 'test', tools: 'read', timeoutS: 30 });
     assert.equal(r.text, '/dev/null|1|0|/nonexistent|/bin/false|-');
+    // Runde 3: eigenes Wegwerf-HOME mit nur dem Melious-Profil, MCP aus Claude-Konfiguration aus; danach weg.
+    writeFileSync(bin, '#!/usr/bin/env node\nconst e = process.env, fs = require("node:fs"); process.stdout.write(JSON.stringify({ text: JSON.stringify({ home: e.HOME, jhome: e.JCODE_HOME, mcp: e.JCODE_DISABLE_CLAUDE_MCP, cfg: fs.readFileSync(e.JCODE_HOME + "/config.toml", "utf8"), cwd: process.cwd() }) }));\n', { mode: 0o755 });
+    const iso = JSON.parse((await realJcode({ cwd: dir, prompt: 'P', model: 'm', key: 'test', tools: 'read', timeoutS: 30 })).text);
+    assert.notEqual(iso.home, process.env.HOME);
+    assert.equal(iso.jhome, join(iso.home, '.jcode'));
+    assert.equal(iso.mcp, '1');
+    assert.match(iso.cfg, /^\[providers\.melious\]\ntype = "open-ai-compatible"\n/);
+    assert.ok(!/mcp|memory/i.test(iso.cfg), 'nur das Profil');
+    assert.equal(existsSync(iso.home), false, 'Wegwerf-HOME entfernt');
+    // Arbeitsordner mit Agent-/MCP-Konfiguration wird abgelehnt, jcode startet gar nicht.
+    writeFileSync(join(dir, '.mcp.json'), '{"mcpServers":{}}');
+    const nein = await realJcode({ cwd: dir, prompt: 'P', model: 'm', key: 'test', tools: 'read', timeoutS: 30 });
+    assert.equal(nein.code, -1); assert.match(nein.stderr, /nicht neutral \(\.mcp\.json\)/);
+    rmSync(join(dir, '.mcp.json'));
     writeFileSync(bin, '#!/usr/bin/env node\nprocess.on("SIGTERM", () => {}); setInterval(() => {}, 1000);\n', { mode: 0o755 });
     const t0 = Date.now();
     const h = await realJcode({ cwd: dir, prompt: 'P', model: 'm', key: 'test', tools: 'read', timeoutS: 1, killNachMs: 300 });

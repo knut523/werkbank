@@ -10,7 +10,8 @@
 // Fallstricke: der Startwert stammt aus #343 selbst — für den PR, aus dem ein Fallstrick stammt, wird er NICHT mitgegeben
 // (sonst misst der Lauf nur, ob der Planer die Lösung abschreibt).
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import {
@@ -43,7 +44,7 @@ const chat: ChatFn = async (body) => {
 const git = (dir: string, a: string[]) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', maxBuffer: 64 << 20 });
 
 // Beide Flash-Arme ohne Shell (wie der Schattenweg, WORKER_TOOLS) — Kalibrierung 178 lief noch mit bash, die Zahlen sind nicht 1:1 vergleichbar.
-const EINFACH = (diffDatei: string) => `Code-Review eines PRs. Der Arbeitsordner ist der PR-Stand, der Diff gegen die Basis liegt in \`${diffDatei}\` (mit read lesen; nur read/agentgrep, nichts ändern). Prüfe Korrektheit, Annahmen über Daten anderer Apps/Repos, Randfälle, Tests. `
+const EINFACH = (diffDatei: string, prDir: string) => `Code-Review eines PRs. Der PR-Stand liegt in \`${prDir}\` (absolute Pfade), der Diff gegen die Basis in \`${diffDatei}\` (nur read/agentgrep, nichts ändern). Prüfe Korrektheit, Annahmen über Daten anderer Apps/Repos, Randfälle, Tests. `
   + 'Erste Zeile genau `Empfehlung: approve|request-changes|comment`, dann die Befunde mit Schwere (hoch/mittel/niedrig), Datei:Zeile, Fehlerszenario, Fix. Deutsch, max. 450 Wörter.';
 const empfehlungAus = (t: string) => /Empfehlung:\s*\**\s*(approve|request[- ]changes|comment)/i.exec(t)?.[1].toLowerCase().replace(' ', '-') ?? null;
 
@@ -61,9 +62,12 @@ async function armLauf(pr: RegPr, arm: string, n: number): Promise<Lauf> {
   if (kopf !== pr.head) return { pr: pr.id, arm, lauf: n, empfehlung: null, text: '', energie: 0, aufrufe: 0, ms: 0, fehler: `Worktree steht auf ${kopf.slice(0, 7)}, nicht ${pr.head.slice(0, 7)}` };
   const basis = git(dir, ['merge-base', 'HEAD', pr.basis_ref]).trim();
   if (arm === 'flash-ohne') {
-    const diffDatei = join(out, `${pr.id}-pr.diff`);
+    // Neutraler Arbeitsordner wie im Schattenweg (nie der PR-Stand: jcode lüde dort eine `.mcp.json`).
+    const neutral = mkdtempSync(join(tmpdir(), 'planer-eval-'));
+    const diffDatei = join(neutral, 'pr.diff');
     writeFileSync(diffDatei, git(dir, ['diff', `${basis}...HEAD`]));
-    const w = await realJcode({ cwd: dir, prompt: EINFACH(diffDatei), model: WORKER_MODELL, key, tools: WORKER_TOOLS, timeoutS: 1500 });
+    const w = await realJcode({ cwd: neutral, prompt: EINFACH(diffDatei, dir), model: WORKER_MODELL, key, tools: WORKER_TOOLS, timeoutS: 1500 });
+    rmSync(neutral, { recursive: true, force: true });
     return { pr: pr.id, arm, lauf: n, empfehlung: empfehlungAus(w.text), text: w.text, energie: energieOf(w.usage, WORKER_MODELL, faktoren), aufrufe: w.aufrufe, ms: Date.now() - t0, ...(w.code !== 0 ? { fehler: `Exit ${w.code} ${w.stderr}` } : {}) };
   }
   const diff = git(dir, ['diff', `${basis}...HEAD`]);

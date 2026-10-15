@@ -199,7 +199,9 @@ test('Pipeline: Auftrag → Worker → Zitate → Prüfung → Urteil, je Stufe 
   let prompt = '';
   let diffDatei = '';
   const jcode: JcodeFn = async (o) => { prompt = o.prompt; assert.equal(o.model, 'glm-5.3-flash'); assert.equal(o.tools, 'read,agentgrep', 'keine Shell');
-    diffDatei = /liegt in `([^`]+)`/.exec(o.prompt)![1]; assert.match(readFileSync(diffDatei, 'utf8'), /^Basis: origin\/develop\n\n1 file\n\ndiff --git/);
+    diffDatei = /Basis liegt in `([^`]+)`/.exec(o.prompt)![1];
+    assert.notEqual(o.cwd, PR, 'Arbeitsordner nie der PR-Stand'); assert.equal(join(o.cwd, 'pr.diff'), diffDatei);
+    assert.ok(o.prompt.includes(`PR-Stand liegt in \`${PR}\``)); assert.match(readFileSync(diffDatei, 'utf8'), /^Basis: origin\/develop\n\n1 file\n\ndiff --git/);
     return { code: 0, text: 'Befund …\n```json\n' + JSON.stringify({ empfehlung: 'approve', antworten: [{ id: 'F1', status: 'befund', beleg: 'src/route.ts:3', zitat: 'length(p.nr) = 33' }, { id: 'F2', status: 'kein_befund', beleg: 'olaf-tariff-app/src/hook.ts:2', zitat: 'raw.slice(0, 31)' }, { id: 'F3', status: 'kein_befund', beleg: 'src/route.ts:1', zitat: 'a\nb' }] }) + '\n```', usage: { input: 1000, output: 1000, cacheRead: 9000, cacheWrite: 0 }, aufrufe: 7, ms: 5000, stderr: '' }; };
   const r = await planerReview({ chat, jcode, key: 'sk-mel-test', faktoren: FAKT }, { dir: PR, basis: 'origin/develop', diff: 'diff --git a/src/route.ts b/src/route.ts\n+x', diffStat: '1 file', ziel: 'Review', nachbarn: [{ name: 'olaf-tariff-app', dir: NB, ref: 'origin/develop', fetchAlterH: null }] });
   assert.equal(r.status, 'fertig');

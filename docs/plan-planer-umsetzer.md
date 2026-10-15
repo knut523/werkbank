@@ -55,7 +55,7 @@ selbst ab); Alarm für „ausgefallen“ (im Pilot reicht der Chip im Ticker; ei
 ## Wie die Bedingungen umgesetzt werden
 | # | Umsetzung | Ort |
 |---|---|---|
-| P1 | `planeAuftrag(chat, art, {ziel, diffStat, diffAuszug, prText, fallstricke, nachbarn})` → glm-5.3, `response_format` JSON, 16 000 Tokens (GLM denkt zuerst). `checkAuftrag` prüft Felder, 3–8 Fragen, eindeutige Kennungen, Schwere hoch/mittel/niedrig und höchstens 2 500 Zeichen. Ist der Auftrag ungültig oder leer, ist das ein Fehler (Kalibrierung #345: der Auftrag kam leer und der Worker prüfte ohne ihn). Diff-Ausschnitt bis 12 000 Zeichen, Nachbar-Repos als Name + lokaler Klon | `web/server/planer.ts` (ohne Datenbank, damit das Evaluations-Skript ihn nutzen kann); Aufruf über `meliousChat` in `web/server/melious.ts` |
+| P1 | `planeAuftrag(chat, art, {ziel, diffStat, diffAuszug, prText, fallstricke, nachbarn})` → glm-5.3, Antwort NUR als JSON (aus dem Text gelesen, ohne `response_format`, weil Melious das nicht für jedes Modell zusagt), 16 000 Tokens (GLM denkt zuerst). `checkAuftrag` prüft Felder, 3–8 Fragen, eindeutige Kennungen, Schwere hoch/mittel/niedrig und höchstens 2 500 Zeichen. Ist der Auftrag ungültig oder leer, ist das ein Fehler (Kalibrierung #345: der Auftrag kam leer und der Worker prüfte ohne ihn). Diff-Ausschnitt bis 12 000 Zeichen, Nachbar-Repos als Name + lokaler Klon | `web/server/planer.ts` (ohne Datenbank, damit das Evaluations-Skript ihn nutzen kann); Aufruf über `meliousChat` in `web/server/melious.ts` |
 | P2 | Mongo-Sammlung `planer_fallstricke` {text, repos[], stichworte[]}; Startwert: Zählpunkt Tarif-App 31 Zeichen ohne AT, Admin/Durable 33 mit AT. Ein Fallstrick passt, wenn das Repo dazu gehört oder ein Stichwort im Diff steht. Neue Fallstricke legt Knut in der Schatten-Ansicht an, mit dem Knopf „als Fallstrick merken“ an einem bestätigten Befund | `web/server/planer.ts`, `web/server/main.ts`, `web/src/prticker.tsx` |
 | P3 | Der Worker liefert als letzten Block JSON `{empfehlung, antworten[{id, status, beleg, zitat}], befunde[{titel, schwere, beleg, zitat, szenario, fix}]}`. Fehlt die Antwort zu einer Frage, gilt sie als `unklar` („keine Antwort“). `pruefeZitate` sucht das Zitat (ohne Leerraum-Unterschiede) in Datei:Zeile ± 3, im PR-Worktree oder in einem Nachbar-Repo (Datei auf der Platte, sonst `git show origin/develop|dev|main:pfad`) | `web/server/planer.ts` |
 | P4 | Danach sieht glm-5.3 nur die Antworten, die geprüft werden müssen (Befund hoch/mittel, kein_befund zu Hoch-Fragen), mit dem Ergebnis der Zitatprüfung, und urteilt je Antwort: bestaetigt, verworfen oder strittig. `urteilAbleiten` ist deterministisch: Ein bestätigter Befund „hoch“ ergibt request-changes, „mittel“ ergibt comment. `unklar`, ein fehlendes Zitat oder ein strittiges Urteil sperren approve und kommen in die Liste „strittig“ für Opus/Knut. Weicht die Empfehlung vom bestehenden Review ab, wird das markiert. Der Schattenweg hat keine Posten-Funktion | `web/server/planer.ts`, `web/server/schatten.ts` |
@@ -71,7 +71,8 @@ selbst ab); Alarm für „ausgefallen“ (im Pilot reicht der Chip im Ticker; ei
 3. Ein eigener Worktree `…-schatten` wird angelegt, damit sich der Lauf nicht mit dem Review-Strang ins Gehege kommt. Die
    Basis-Ref wird geholt (`baseRefName` aus GraphQL), der Diff wird erzeugt, dann kommt die P5-Prüfung.
 4. Die Pipeline in `planerReview` läuft ohne Datenbank, damit das Evaluations-Skript dieselbe nutzen kann: Fallstricke →
-   planeAuftrag → jcode (`read,bash,agentgrep`, nur lesen) → parseBericht → pruefeZitate → planerPruefung → urteilAbleiten.
+   planeAuftrag → jcode (`read,agentgrep`, **keine Shell**; der Diff liegt als Datei bereit) → parseBericht → pruefeZitate →
+   planerPruefung → urteilAbleiten.
 5. Das Ergebnis geht an `pr_reviews.schatten` und als `schatten.md` ins Review-Paket. In der Review-Ansicht steht der Abschnitt
    „Schatten-Review (Pilot)“ unter dem bestehenden Review, im Ticker ein Chip.
 
@@ -97,6 +98,30 @@ Keine Infra-Änderung (die Werkbank läuft lokal, nichts in Bicep).
   Standard werden soll.
 - Automatisch posten, die Rückfrage an deepseek bei Widerspruch und die Abbruchregel (Überstimmung > 30 %): erst nach dem Pilot.
 - Das volle Evaluationsset (25 PRs + 10 Recherche): Es läuft erst, wenn Knut es freigibt.
+
+## Review (Phase 4) — was die Pässe fanden und wie es geändert wurde
+Pass B lief als Claude-Prüfer (fünf Blickwinkel), Pass C als Gegenprüfung mit glm-5.3. Es gab drei Runden; nach jedem Fix liefen
+alle Pässe erneut auf dem neuen Stand.
+- **Runde 1 (FAIL):** Ein kein_befund zu einer Hoch-Frage, das der Planer verwarf, ergab approve (der #343-Fall). Die Zitatprüfung
+  ließ sich trivial erfüllen (beliebig großer Bereich, Zitat aus 4 Zeichen). Ein Symlink konnte aus der Wurzel herausführen. Der
+  Eval-Recall wurde über den Auftragstext verzerrt. Es fehlte ein SIGKILL. Git-Läufe im gemeinsamen Klon kamen sich in die Quere.
+  Der Schalter hielt die Warteschlange nicht an. Die P5-Muster waren zu eng. → Alles behoben, je mit Regressionstest R1–R11.
+- **Runde 2 (FAIL):** Umgebungsvariablen sind keine Sperre. Eine Shell unter Knuts Nutzer erreicht die Vaultwarden-Sitzung (und
+  über `bw` und `curl` GitHub) und die gemeinsame Klon-Konfiguration (Codeausführung beim nächsten Fetch des Servers). → Der
+  Schatten-Worker läuft **ohne Shell** (`read,agentgrep`) und bekommt den Diff als Datei. Kindprozesse werden über die
+  Prozessgruppe beendet. Ein Zitat braucht ein zusammenhängendes Stück von mindestens 12 Zeichen. Fragen-Kennungen `B<n>` sind
+  verboten (sie kollidierten mit den Befunden).
+- **Runde 3:** siehe Bericht.
+- **Derselbe Befund gilt für den Brücken-Worker aus Release 16b** (`BRIDGE_WORKER_JCODE=on`, mit bash/write/edit). Das wurde dem
+  Hauptchat als Risiko gemeldet; die Entscheidung liegt bei Knut (D2).
+
+## Entscheidungen offen (Knut)
+- D1 Schalter „Schatten-Review“ einschalten — Empfehlung: erst nach den Testläufen mit dem Skript, vorher einzelne PRs von Hand.
+- D2 Sandbox für Worker mit Shell (bubblewrap, braucht sudo) — betrifft auch den Brücken-Worker 16b. Empfehlung: installieren;
+  bis dahin Schatten-Worker ohne Shell und `BRIDGE_WORKER_JCODE` aus.
+- D3 P5 im Schattenbetrieb: überspringen (Vorgabe) oder messen — Empfehlung: Vorgabe; `messen` nur für das Evaluationsset.
+- D4 Die drei echten Testläufe (#343, je Arm einmal) startet Knut selbst, mit dem Melious-Schlüssel aus Vaultwarden (Befehl im Bericht).
+- D5 Fallstrick-Liste in Mongo statt im Vault — Empfehlung: Mongo für den Pilot, Export in den Vault, wenn das Muster Standard wird.
 
 ## Rückweg
 Schalter `schatten` aus. Der Schattenweg schreibt nur `pr_reviews.schatten`, `planer_fallstricke`, `zug_log` und `schatten.md`.
