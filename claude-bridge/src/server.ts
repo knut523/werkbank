@@ -18,7 +18,7 @@ import { mcpCall, mcpStatus } from './mcpcall.ts';
 import { directCall } from './mcpdirect.ts';
 import { homeFor, ensureHome, atlassianServer, leitstandMcp, type ClaudeHome } from './claudehome.ts';
 import { log } from './log.ts';
-import { testAccount, markExhausted, exhaustedOf, balanceStats, clearExhausted, MELIOUS_KEY, MELIOUS_ID, MELIOUS_MODEL } from './accounts.ts';
+import { testAccount, loadAccounts, markExhausted, exhaustedOf, balanceStats, clearExhausted, MELIOUS_KEY, MELIOUS_ID, MELIOUS_MODEL } from './accounts.ts';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -74,14 +74,17 @@ function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome, co
 }
 
 /** Claude-Konten der Person in Reihenfolge (Werkbank, interner Kanal). chat = der Schlüssel aus der Anfrage. */
+// 10 s und ein Wiederholversuch, sonst die letzte geladene Liste der Person (Hotfix 15b: 3 s reichten bei fünf Zügen nicht).
 async function claudeAccounts(userId: string): Promise<{ id: string; label: string; token: string | null }[]> {
-  const r = await fetch(`${WEB_URL}/internal/claude-accounts`, {
-    method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL },
-    body: JSON.stringify({ userId }), signal: AbortSignal.timeout(3000),
-  });
-  if (!r.ok) throw new Error(`Werkbank ${r.status}`);
-  const j: any = await r.json();
-  return Array.isArray(j.accounts) ? j.accounts : [];
+  return loadAccounts(userId, async () => {
+    const r = await fetch(`${WEB_URL}/internal/claude-accounts`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL },
+      body: JSON.stringify({ userId }), signal: AbortSignal.timeout(10_000),
+    });
+    if (!r.ok) throw new Error(`Werkbank ${r.status}`);
+    const j: any = await r.json();
+    return Array.isArray(j.accounts) ? j.accounts : [];
+  }) as Promise<{ id: string; label: string; token: string | null }[]>;
 }
 
 async function sessionContext(userId: string, convId: string, eod: boolean, skills: unknown): Promise<string> {

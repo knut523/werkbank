@@ -176,8 +176,8 @@ test('Letzter Ausweg (eingeschaltet): alle Claude-Konten erschöpft → Melious 
   assert.match(t, /↻ Konto „Melious“ übernimmt \(Kontingent von „Chat-Schlüssel“ ausgeschöpft\) — Open-Weight-Modell, Ergebnisse prüfen/);
   assert.match(t, /Melious über/);
   const o = await send(conv(6), 'Hallo', 'limitohne');
-  assert.doesNotMatch(o, /Melious/);
-  assert.match(o, /Claude-Kontingent ist gerade ausgeschöpft/);
+  assert.doesNotMatch(o, /Melious übernimmt|Konto „Melious“/);
+  assert.match(o, /Claude-Kontingent ausgeschöpft — „Firma“ \(Reset [^)]+\) und „Chat-Schlüssel“ \(Reset [^)]+\); Melious: frei \(≈ [\d.]+ (Energie geschätzt|Tokens)\), als letzter Ausweg in der Einrichtung aus/);
 });
 
 test('Melious-Budget aus (402 BILLING_2003) → „Guthaben leer“ vermerkt, Claude übernimmt mit deutscher Meldung; nächster Zug gleich auf Claude', async () => {
@@ -345,8 +345,8 @@ test('Überlauf nach Risiko (S2): Strang „niedrig“ läuft über (Modell aus 
   assert.match(niedrig, /Modell: glm-5\.3-flash;/);   // aus der Rolle „niedrig“, nicht das freiere glm-5.3 (nicht zulässig)
   await register('limitstrang', conv(19), {});
   const mittel = await send(conv(19), 'Hallo', 'limitstrang');
-  assert.doesNotMatch(mittel, /Melious/);
-  assert.match(mittel, /Claude-Kontingent ist gerade ausgeschöpft/);
+  assert.doesNotMatch(mittel, /Melious übernimmt|Konto „Melious“/);
+  assert.match(mittel, /Claude-Kontingent ausgeschöpft — .*; Melious: frei \(≈ [\d.]+ (Energie geschätzt|Tokens)\), für diesen Zug aber nicht freigegeben/);
 });
 
 test('Auto-Modus: Melious-Züge laufen wie Claude-Züge im Auto-Modus (Klassifikator über das Gateway, geprüft mit echtem Claude Code)', async () => {
