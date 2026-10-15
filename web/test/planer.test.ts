@@ -274,6 +274,7 @@ test('Runden 4/5: Lese-Gurt fail-closed — fremdes Werkzeug, „..“, Symlink 
   execFileSync('ln', ['-sfn', 'route.ts', join(PR, 'src', 'innen.ts')]);
   assert.deepEqual(ausserhalb([`${PR}/src/harmlos.ts`], PR, erlaubt), [`${PR}/src/harmlos.ts`]);
   assert.deepEqual(symlinksNachDraussen(PR), ['src/harmlos.ts'], 'innen.ts zeigt nach innen und ist erlaubt');
+  assert.match(symlinksNachDraussen(PR, 2).at(-1)!, /abgebrochen/, 'abgebrochene Suche ist kein „sauber“');
   const chat: ChatFn = async (b: any) => antwort(b.messages[0].content.includes('PRÜFAUFTRAG') ? JSON.stringify(AUFTRAG) : '{"urteile":[]}');
   const mit = (pfade: string[] | null): JcodeFn => async () => ({ code: 0, text: '```json\n{"antworten":[]}\n```', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, aufrufe: 1, ms: 1, stderr: '', pfade });
   const inp = { dir: PR, basis: 'b', diff: 'diff --git a/x b/x\n+x', diffStat: '', ziel: 'z', nachbarn: [{ name: 'olaf-tariff-app', dir: NB, ref: 'origin/develop', fetchAlterH: null }] };
