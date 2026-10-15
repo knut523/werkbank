@@ -50,6 +50,7 @@ export function PrTicker() {
         <Schalter label="Auto-Review bei @review" an={s.autoReview} disabled={busy || !s.ticker} testid="schalter-autoreview" onChange={(v) => set({ autoReview: v }, v ? 'Auto-Review an — zählt @review ab jetzt.' : 'Auto-Review aus.')} hint="startet je getaggtem PR einen Review-Unter-Chat" />
         <Schalter label="Kommentare automatisch posten" an={s.autoPost} disabled={busy || !s.autoReview} testid="schalter-autopost" onChange={(v) => set({ autoPost: v })} hint="nur als Kommentar (COMMENT); Freigeben/Änderungen verlangen bleibt dein Klick" />
         <Schalter label="auch bei Review-Anfrage an mich" an={s.onRequest} disabled={busy || !s.autoReview} testid="schalter-anfrage" onChange={(v) => set({ onRequest: v })} />
+        <Schalter label="Schatten-Review (Pilot)" an={!!s.schatten} disabled={busy || !s.autoReview} testid="schalter-schatten" onChange={(v) => set({ schatten: v }, v ? 'Schatten-Review an — glm-5.3 plant, Flash prüft, nie gepostet.' : 'Schatten-Review aus.')} hint="Plan 183: neben jedem Auto-Review ein zweiter Weg (glm-5.3 Prüfauftrag → jcode + Flash → Zitatprüfung); Ergebnis nur in der Review-Ansicht" />
       </div>
       <details className="small" style={{ marginBottom: 8 }}>
         <summary>Deckel und Liste · {s.maxPerDay}/Tag · {s.maxParallel} gleichzeitig · heute {d.heute} gestartet · Auto-Review und Posten nur für {(d.reviewOrgs ?? []).join(', ')} · PR-Tests werden nicht ausgeführt</summary>
@@ -73,6 +74,7 @@ export function PrTicker() {
               {r.posted && <> · <a href={r.posted.url ?? r.url} target="_blank" rel="noreferrer">gepostet</a></>}
               {r.strand && <> · <a href={`#/leitstand?review=${r.strand}`}>Review-Ansicht</a></>}
               {['deckel', 'fehler', 'übersprungen'].includes(r.status) && <> · <button className="btn tiny ghost" onClick={async () => { await api('/api/leitstand/ticker/review', { body: { id: r.id } }); t.reload(); }}>Jetzt reviewen</button></>}
+              {r.schatten && <> · <span className={`chip ${r.schatten.abweichung ? 'warn' : ''}`} data-testid="schatten-chip" title="Schatten-Review (Planer + Flash, Pilot)">Schatten: {r.schatten.status}{r.schatten.empfehlung ? ` · ${EMPF[r.schatten.empfehlung]?.t ?? r.schatten.empfehlung}` : ''}{r.schatten.abweichung ? ' · weicht ab' : ''}{r.schatten.strittig ? ` · ${r.schatten.strittig} strittig` : ''}</span></>}
               {r.note && <span className="tiny muted"> · {r.note}</span>}
             </li>))}
         </ul>
@@ -118,6 +120,63 @@ export function PrReviewAbschnitt({ id, pr, onDone }: { id: string; pr: any; onD
         <button className="btn small ghost" onClick={() => navigator.clipboard?.writeText(pr.text).then(() => setMsg({ ok: true, text: 'Text kopiert.' }))}>Text kopieren</button>
         {pr.schreibenAus && <span className="tiny muted">GitHub-Schreiben ist aus (WERKBANK_GITHUB_KOMMENTAR=off).</span>}
       </div>}
+      {msg && <p className={`small ${msg.ok ? '' : 'err'}`} role="status">{msg.text}</p>}
+      <SchattenAbschnitt pr={pr} onDone={onDone} />
+    </div>
+  );
+}
+
+const URTEIL: Record<string, string> = { bestaetigt: 'ok', verworfen: '', strittig: 'warn' };
+const ZITAT: Record<string, string> = { ok: '✓ Zitat', nicht_gefunden: '✗ Zitat nicht gefunden', ohne_beleg: '✗ ohne Beleg' };
+
+/** Plan 183: Ergebnis des Schatten-Reviews (Planer + Flash) neben dem bestehenden — nie gepostet. */
+export function SchattenAbschnitt({ pr, onDone }: { pr: any; onDone: () => void }) {
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const s = pr.schatten;
+  const anstossen = async () => {
+    setMsg(null);
+    try { await api('/api/leitstand/ticker/schatten', { body: { id: pr.id } }); setMsg({ ok: true, text: 'Schatten-Review angestoßen — startet im nächsten Takt (≤ 1 min).' }); onDone(); }
+    catch (e: any) { setMsg({ ok: false, text: String(e?.message ?? e) }); }
+  };
+  const merken = async (p: any) => {
+    const text = prompt('Fallstrick (wird passenden Prüfaufträgen mitgegeben):', `${p.frage ?? ''} — ${p.grund ?? ''}`.trim());
+    if (!text) return;
+    const stichworte = prompt('Stichwörter im Diff, bei denen er passt (mit Komma):', '') ?? '';
+    try { await api('/api/leitstand/fallstricke', { body: { text, repos: [pr.repo], stichworte, quelle: `${pr.repo}#${pr.number} ${p.key}` } }); setMsg({ ok: true, text: 'Als Fallstrick gemerkt.' }); }
+    catch (e: any) { setMsg({ ok: false, text: String(e?.message ?? e) }); }
+  };
+  const laufend = s && ['wartet', 'läuft'].includes(s.status);
+  return (
+    <div data-testid="schatten" style={{ marginTop: 14, borderTop: '1px dashed var(--border-light, #ddd)', paddingTop: 8 }}>
+      <h3 style={{ marginBottom: 4 }}>Schatten-Review (Pilot: glm-5.3 plant, Flash prüft) <span className="tiny muted">— nie gepostet, nur zum Vergleich</span></h3>
+      {!s ? <p className="small muted">Noch kein Schatten-Review für diesen Stand.</p> : <>
+        <p className="small">
+          <span className="chip">{s.status}</span>
+          {s.empfehlung && <> <span className={`chip ${EMPF[s.empfehlung]?.c ?? ''}`} data-testid="schatten-empfehlung">Empfehlung: {EMPF[s.empfehlung]?.t ?? s.empfehlung}</span></>}
+          {s.abweichung === true && <> <span className="chip warn" data-testid="schatten-abweichung">weicht vom Review ab</span></>}
+          {s.abweichung === false && <> <span className="chip ok">gleich wie das Review</span></>}
+          {s.workerEmpfehlung && <span className="tiny muted"> · Flash allein: {s.workerEmpfehlung}</span>}
+          {s.energie != null && <span className="tiny muted"> · ≈ {s.energie} Energie</span>}
+          {s.p5 && <span className="tiny muted"> · {s.p5} (nur gemessen)</span>}
+        </p>
+        {s.fehler && <p className="small err">{s.fehler}</p>}
+        {s.strittig?.length > 0 && <><p className="small" style={{ margin: '6px 0 2px' }}><b>Strittig — an Opus/Knut</b> (sperrt „freigeben“):</p>
+          <ul className="small" style={{ margin: 0 }} data-testid="schatten-strittig">{s.strittig.map((x: string, i: number) => <li key={i}>{x}</li>)}</ul></>}
+        {s.punkte?.length > 0 && <table className="small" style={{ marginTop: 6 }} data-testid="schatten-punkte"><thead><tr><th>Punkt</th><th>Schwere</th><th>Status</th><th>Beleg</th><th>Planer</th><th></th></tr></thead><tbody>
+          {s.punkte.map((p: any) => <tr key={p.key}>
+            <td><b>{p.key}</b> {p.frage}</td><td>{p.schwere}</td><td>{p.status}</td>
+            <td className="mono tiny">{p.beleg} <span className={p.zitatPruefung === 'ok' ? '' : 'err'}>{ZITAT[p.zitatPruefung] ?? p.zitatPruefung}</span></td>
+            <td><span className={`chip ${URTEIL[p.urteil] ?? ''}`} title={p.grund}>{p.urteil ?? '—'}</span></td>
+            <td>{p.urteil === 'bestaetigt' && p.status === 'befund' && <button className="btn tiny ghost" onClick={() => merken(p)} data-testid="fallstrick-merken">als Fallstrick merken</button>}</td>
+          </tr>)}</tbody></table>}
+        {s.blind?.length > 0 && <details className="tiny muted" style={{ marginTop: 4 }}><summary>Nicht nachgeprüft ({s.blind.length})</summary><ul>{s.blind.map((x: string, i: number) => <li key={i}>{x}</li>)}</ul></details>}
+        {s.stufen?.length > 0 && <details className="tiny" style={{ marginTop: 4 }} data-testid="schatten-stufen"><summary>Messung je Stufe</summary>
+          <table><thead><tr><th>Stufe</th><th>Modell</th><th>Energie</th><th>Aufrufe</th><th>Cache</th><th>s</th><th>Urteil</th></tr></thead><tbody>
+            {s.stufen.map((x: any, i: number) => <tr key={i}><td>{x.stufe}</td><td>{x.modell}</td><td>{x.energie}</td><td>{x.aufrufe}</td><td>{x.input ? Math.round((100 * x.cache) / x.input) : 0} %</td><td>{Math.round(x.ms / 1000)}</td><td>{x.urteil}</td></tr>)}
+          </tbody></table></details>}
+        {s.auftrag && <details className="tiny" style={{ marginTop: 4 }}><summary>Prüfauftrag ({s.auftrag.pruef_fragen?.length} Fragen)</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(s.auftrag, null, 1)}</pre></details>}
+      </>}
+      {!laufend && <button className="btn small ghost" onClick={anstossen} data-testid="schatten-starten" style={{ marginTop: 6 }}>{s ? 'Schatten-Review neu' : 'Schatten-Review starten'}</button>}
       {msg && <p className={`small ${msg.ok ? '' : 'err'}`} role="status">{msg.text}</p>}
     </div>
   );

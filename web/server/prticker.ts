@@ -13,13 +13,15 @@ export const ME = (process.env.WERKBANK_GITHUB_LOGIN || 'knut523').toLowerCase()
 
 export interface TickerSettings {
   ticker: boolean; autoReview: boolean; autoPost: boolean; onRequest: boolean;
+  /** Plan 183: Schatten-Review (Planer + Flash) neben jedem Auto-Review — nie gepostet. */
+  schatten: boolean;
   allow: string[]; maxPerDay: number; maxParallel: number; minutes: number;
   ownerId: string | null; autoReviewSince: string | null;
   log: { at: string; by: string; was: string }[];
 }
 
 export const DEFAULTS: TickerSettings = {
-  ticker: false, autoReview: false, autoPost: true, onRequest: false,
+  ticker: false, autoReview: false, autoPost: true, onRequest: false, schatten: false,
   allow: ['knut523', 'bizarrochris'], maxPerDay: 5, maxParallel: 2, minutes: 5,
   ownerId: null, autoReviewSince: null, log: [],
 };
@@ -46,7 +48,7 @@ const clampInt = (v: unknown, lo: number, hi: number, dflt: number) => { const n
 export function mergeSettings(cur: TickerSettings, inp: any, by: { id: string; name: string }, now = new Date()): TickerSettings {
   const next: TickerSettings = { ...cur, log: [...cur.log] };
   const was: string[] = [];
-  for (const k of ['ticker', 'autoReview', 'autoPost', 'onRequest'] as const) {
+  for (const k of ['ticker', 'autoReview', 'autoPost', 'onRequest', 'schatten'] as const) {
     if (typeof inp?.[k] === 'boolean' && inp[k] !== cur[k]) { next[k] = inp[k]; was.push(`${k} ${inp[k] ? 'an' : 'aus'}`); }
   }
   if (Array.isArray(inp?.allow)) {
@@ -238,6 +240,9 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
 }
 
 /** Für die Oberfläche: Einstellungen, letzter Lauf, letzte Ereignisse, Review-Warteschlange. */
+/** Plan 183: weicht das Schatten-Review vom bestehenden Review ab? null, solange eines von beiden fehlt. */
+export const abweichung = (haupt: string | null | undefined, schatten: string | null | undefined): boolean | null => (haupt && schatten ? haupt !== schatten : null);
+
 export async function tickerOverview(limit = 40) {
   const [settings, st, items, reviews] = await Promise.all([
     tickerSettings(),
@@ -253,7 +258,8 @@ export async function tickerOverview(limit = 40) {
     scopes: scopes(),
     reviewOrgs: reviewOrgs(),
     items: items.map(({ seenAt, ...e }: any) => e),
-    reviews: reviews.map((r: any) => ({ id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, trigger: r.trigger, by: r.by, status: r.status, strand: r.strand ?? null, empfehlung: r.empfehlung ?? null, posted: r.posted ?? null, note: r.note ?? null, createdAt: r.createdAt })),
+    reviews: reviews.map((r: any) => ({ id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, trigger: r.trigger, by: r.by, status: r.status, strand: r.strand ?? null, empfehlung: r.empfehlung ?? null, posted: r.posted ?? null, note: r.note ?? null, createdAt: r.createdAt,
+      schatten: r.schatten ? { status: r.schatten.status, empfehlung: r.schatten.empfehlung ?? null, strittig: r.schatten.strittig?.length ?? 0, abweichung: abweichung(r.empfehlung, r.schatten.empfehlung) } : null })),
     heute: reviews.filter((r: any) => r.startedAt && vienna(new Date(r.startedAt)).date === heute).length,
   };
 }

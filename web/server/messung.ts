@@ -33,6 +33,8 @@ export async function recordZug(u: User, raw: any, now = Date.now()): Promise<vo
     phase: str(raw.phase, 20), konto: str(raw.konto, 60), anbieter: raw.anbieter === 'melious' ? 'melious' : 'claude', modell: str(raw.modell, 80) ?? '?',
     input: num(raw.input), output: num(raw.output), energie: num(raw.energie), outcome: str(raw.outcome, 20), ms: num(raw.ms),
     delegation: str(raw.delegation, 12), parent: str(raw.parent, 140), kette: raw.kette === true,
+    // Plan 183 (P7): Messung je Stufe des Planer–Umsetzer-Wegs — Aufrufe, Cache-Anteil, Urteil der Stufe.
+    ...(raw.aufrufe !== undefined ? { aufrufe: num(raw.aufrufe), cache: num(raw.cache), urteil: str(raw.urteil, 120) } : {}),
   } as any);
 }
 

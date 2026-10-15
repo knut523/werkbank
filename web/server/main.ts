@@ -22,7 +22,8 @@ import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
-import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
+import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, meliousChat, MELIOUS_ID } from './melious.ts';
+import { schattenTick, schattenAnstossen, schattenAnsicht, fallstrickMerken, ladeFallstricke } from './schatten.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
 import { reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
 import { berichtKopf, execSummary } from './berichtkopf.ts';
@@ -50,7 +51,7 @@ import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { tickerTick, tickerOverview, setTickerSettings, reviewsCol, reviewErlaubt } from './prticker.ts';
-import { reviewTick, prNowVia, parseKommentar, fussnote } from './prreview.ts';
+import { reviewTick, prNowVia, prInfoVia, parseKommentar, fussnote } from './prreview.ts';
 import { postReview, schreibenAus, type ReviewEvent } from './githubwrite.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
@@ -1371,8 +1372,23 @@ async function prReviewOf(strand: string) {
   if (!r) return null;
   const k = parseKommentar(readBerichtDatei(join(reviewDir(), r.paket ?? '_', 'kommentar.md')));
   return { id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, status: r.status, empfehlung: k?.empfehlung ?? r.empfehlung ?? null,
-    text: k?.text ?? null, posted: r.posted ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus() };
+    text: k?.text ?? null, posted: r.posted ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus(),
+    schatten: schattenAnsicht(r.schatten, k?.empfehlung ?? r.empfehlung ?? null) };
 }
+// Plan 183: Schatten-Review (Planer + Flash) von Hand anstoßen; Fallstricke (P2) lesen und aus einem bestätigten Befund anlegen.
+on('POST', /^\/api\/leitstand\/ticker\/schatten$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  if (!(await schattenAnstossen(String(b.id ?? ''), u.name))) throw new HttpError(409, 'Eintrag nicht gefunden oder Schatten-Review läuft schon.');
+  send(res, 200, { ok: true });
+});
+on('GET', /^\/api\/leitstand\/fallstricke$/, async (req, res) => { await needAdmin(req); send(res, 200, { fallstricke: await ladeFallstricke() }); });
+on('POST', /^\/api\/leitstand\/fallstricke$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const r = await fallstrickMerken({ id: u.id, name: u.name }, await body(req)).catch((e: any) => { throw new HttpError(e.status ?? 500, e.message); });
+  log('fallstrick gemerkt', { user: u.id, id: r.id });
+  send(res, 200, { ok: true, ...r });
+});
 on('GET', /^\/api\/leitstand\/ticker$/, async (req, res) => { await needAdmin(req); send(res, 200, await tickerOverview()); });
 on('POST', /^\/api\/leitstand\/ticker\/einstellungen$/, async (req, res) => {
   const u = await needAdmin(req);
@@ -2948,6 +2964,16 @@ async function backgroundJobs() {
       });
       if (r.started || r.done) log('pr-review', r);
     } catch (e: any) { log('pr-review', { error: String(e.message).slice(0, 200) }); }
+    // Plan 183: Schatten-Review (Planer + Flash), höchstens einer zur Zeit, im Hintergrund; nie gepostet.
+    try {
+      const r = await schattenTick({
+        userById: async (id) => { const u = await userById(id); return u && allowed(u.email) && u.role === 'ADMIN' ? u : null; },
+        chatFor: (u) => meliousChat(u), keyFor: (u) => meliousKey(u), faktorenFor: async (u) => (await meliousSettings(u)).faktoren,
+        prInfo: async (repo, n) => { const t = await githubReadToken(); return t ? prInfoVia(t, repo, n) : null; },
+        recordZug: (u, raw) => recordZug(u, raw), log,
+      });
+      if (r.started) log('schatten', r);
+    } catch (e: any) { log('schatten', { error: String(e.message).slice(0, 200) }); }
   };
   setTimeout(prTick, 20_000);
   setInterval(prTick, 60_000);

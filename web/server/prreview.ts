@@ -29,10 +29,12 @@ export const realGit: GitRun = async (args, cwd, timeoutMs = 120_000) => (await 
 /** Zugangsdaten aus Fehlertexten entfernen. */
 export const scrub = (t: string) => String(t).replace(/(https?:\/\/)[^@\s/]+@/g, '$1').replace(/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '***').slice(0, 300);
 
-/** Eigener Klon je Repo (ohne Checkout), dann `pull/N/head` holen und einen frischen Worktree am reviewten Kopf anlegen. */
-export async function prepareWorktree(repo: string, n: number, head: string, g: GitRun = realGit, base = prReviewDir()): Promise<string> {
+export const klonDir = (repo: string, base = prReviewDir()) => join(base, '_klone', repo.replace('/', '__'));
+/** Eigener Klon je Repo (ohne Checkout), dann `pull/N/head` holen und einen frischen Worktree am reviewten Kopf anlegen.
+ *  `suffix` (Plan 183): der Schatten-Review bekommt einen eigenen Worktree neben dem des Review-Strangs. */
+export async function prepareWorktree(repo: string, n: number, head: string, g: GitRun = realGit, base = prReviewDir(), suffix = ''): Promise<string> {
   if (!REPO_RE.test(repo) || !Number.isInteger(n) || n < 1 || !SHA_RE.test(head)) throw new Error('PR-Angaben ungültig.');
-  const klon = join(base, '_klone', repo.replace('/', '__'));
+  const klon = klonDir(repo, base);
   mkdirSync(join(base, '_klone'), { recursive: true });
   let got: string;
   try {
@@ -42,7 +44,7 @@ export async function prepareWorktree(repo: string, n: number, head: string, g: 
   } catch (e: any) { throw new Error(`PR-Stand nicht geholt: ${scrub(e.stderr?.toString() || e.message)}`); }
   // Review prüft genau den getaggten Stand; ist der PR weiter, neu taggen (Review A6).
   if (got !== head) throw Object.assign(new Error(`neuer Stand ${got.slice(0, 7)} seit dem Tag — für den neuen Stand neu taggen`), { skip: true });
-  const wt = join(base, `${repo.replace('/', '__')}-${n}-${head.slice(0, 7)}`);
+  const wt = join(base, `${repo.replace('/', '__')}-${n}-${head.slice(0, 7)}${suffix}`);
   try {
     // Nie einen alten Worktree (mit Änderungen eines früheren Strangs) wiederverwenden (Review A14).
     if (existsSync(wt)) await g(['worktree', 'remove', '--force', wt], klon);
@@ -182,7 +184,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       const prompt = reviewPrompt(r, wt, paket);
       writeFileSync(join(reviewDir(), paket, 'auftrag.md'), prompt + '\n');
       const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}`, prompt, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker' });
-      await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt } });
+      await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt, ...(s.schatten && !r.schatten ? { schatten: { status: 'wartet', at: now } } : {}) } });
       await deps.markStrand?.(st.id, { repo: r.repo, number: r.number, paket });
       deps.log?.('pr-review gestartet', { pr: `${r.repo}#${r.number}`, strand: st.id });
       started++;
@@ -218,4 +220,12 @@ export async function prNowVia(token: string, repo: string, n: number): Promise<
   const d = await graphql(token, 'query($o: String!, $r: String!, $n: Int!) { repository(owner: $o, name: $r) { pullRequest(number: $n) { state merged headRefOid } } }', { o: owner, r: name, n });
   const p = d?.repository?.pullRequest;
   return p ? { state: p.merged ? 'MERGED' : p.state, head: p.headRefOid } : null;
+}
+
+/** Plan 183: PR-Stand mit Basis-Branch und Beschreibung (für den Schatten-Review). */
+export async function prInfoVia(token: string, repo: string, n: number): Promise<{ state: string; head: string; base: string; body: string } | null> {
+  const [owner, name] = repo.split('/');
+  const d = await graphql(token, 'query($o: String!, $r: String!, $n: Int!) { repository(owner: $o, name: $r) { pullRequest(number: $n) { state merged headRefOid baseRefName body } } }', { o: owner, r: name, n });
+  const p = d?.repository?.pullRequest;
+  return p ? { state: p.merged ? 'MERGED' : p.state, head: p.headRefOid, base: p.baseRefName, body: String(p.body ?? '').slice(0, 6000) } : null;
 }
