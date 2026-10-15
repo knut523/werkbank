@@ -1,0 +1,2373 @@
+{
+ "recordedAt": "2026-10-15T06:37:20.310Z",
+ "scopes": [
+  "org:WirStrom1",
+  "repo:knut523/werkbank"
+ ],
+ "variables": {
+  "q0": "is:pr org:WirStrom1 updated:>=2026-10-12T06:37:16Z sort:updated-desc",
+  "q1": "is:pr repo:knut523/werkbank updated:>=2026-10-12T06:37:16Z sort:updated-desc"
+ },
+ "data": {
+  "s0": {
+   "issueCount": 81,
+   "nodes": [
+    {
+     "number": 324,
+     "title": "feat(users): Benutzer-Konzept — roles in the database, Zusatzrechte, audited user management (plan 110)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/324",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-12T16:51:03Z",
+     "updatedAt": "2026-10-15T06:30:11Z",
+     "headRefOid": "b51696b0f0534f193431519cbf1e73f72e357e60",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": [
+       {
+        "requestedReviewer": {
+         "login": "Kurama07a"
+        }
+       }
+      ]
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABbhiNjQ",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Thanks — all six points addressed; point 2 with a follow-up commit after Knut's decision. Commits on top of `19725c8e`:\n\n| # | Finding | Fix | Commit |\n|---|---|---|---|\n| 1 | „Benutzer anlegen“ committed the user via `auth.api.createUser`, then roles + audit in a second transaction; a crash or a fa…",
+        "createdAt": "2026-10-13T09:01:31Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/324#issuecomment-6142070157"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABb3ZoAA",
+        "author": {
+         "login": "Kurama07a"
+        },
+        "body": "@knut523 @bizarrochris — taking #324 to merge-ready, as asked on OLAF-339. Pushed on top of `fdb9f63d`: develop merged (#326, #334, two hotfixes), then 23 commits (`bb899728..247660b3`). Christoph, your approval predates them, so I'm re-requesting your review.\n\n**Security issues found and fixed**\n- …",
+        "createdAt": "2026-10-14T09:15:06Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/324#issuecomment-6164998144"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABcCt95Q",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "**Decisions on the open questions** (@Kurama07a @knut523)\n\n1. **Demote keeps earlier roles/Zusatzrechte:** fine as is. Demoting isn't a real use case, and the rights can be adjusted afterwards.\n2. **Zusatzrecht picker and `requires`:** done in `4510e9f1`. Granting `coupons.modify`, `tariff.modify` o…",
+        "createdAt": "2026-10-14T19:44:09Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/324#issuecomment-6176865765"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABcDFKoA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Follow-up to the decisions above, in `b51696b0`:\n\n- **Decision 4 is built now.** `requireSuperadmin` refuses a session unless `twoFactorEnabled === true`. Enrolment stays on `/api/better-auth/two-factor/*`, so a Superadmin without 2FA can still set it up. The test fixtures set the flag on their Supe…",
+        "createdAt": "2026-10-14T20:04:34Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/324#issuecomment-6177245856"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOShiJmM8AAAABR9dqIg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "**Requests**\n1. `user-admin-ops.ts:252-286`: \"Benutzer anlegen\" commits the user via `auth.api.createUser`, then roles + audit in a second transaction. A crash between the two, or a failed compensating delete (only `console.error`), leaves a live user, possibly a Superadmin, with no audit row. AGENT…",
+        "state": "CHANGES_REQUESTED",
+        "submittedAt": "2026-10-13T07:39:57Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/324#pullrequestreview-5500267042"
+       },
+       {
+        "id": "PRR_kwDOShiJmM8AAAABR9l4PA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Scope of this pass: the better-auth integration only (`auth.ts`, `user-admin-ops.ts`, `effective-permissions.ts`, `auth-client.ts`), checked against the installed better-auth 1.7.2 source. Migration, routes and UI not reviewed yet.\n\nThe extension points are the intended ones: `customSession` replace…",
+        "state": "COMMENTED",
+        "submittedAt": "2026-10-13T07:52:46Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/324#pullrequestreview-5500401724"
+       },
+       {
+        "id": "PRR_kwDOShiJmM8AAAABSBGH9Q",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Re-review on `fdb9f63d` (new commits since `19725c8e`), plus the first full pass over the migration, routes, `user-admin-ops.ts` and UI. Earlier requests 1–6 are resolved; the one-transaction create matches better-auth 1.7.2's own `createUser` (issuer, hash, `z.email()`).\n\n1. `user-admin-ops.ts:297/…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-13T13:14:49Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/324#pullrequestreview-5504075765"
+       },
+       {
+        "id": "PRR_kwDOShiJmM8AAAABSMavfg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Re-review of `bb899728..247660b3` (Kurama07a's commits on top of my approval on `fdb9f63d`; the develop merge itself not re-reviewed).\n\nEarlier points: 1 (unconditional `assertNotLastSuperadmin` on deactivate) fixed; 2 (catalog guard covers every helper) fixed; better-auth pass 1/3/4 (AGENTS.md line…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-14T09:39:21Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/324#pullrequestreview-5515947902"
+       },
+       {
+        "id": "PRR_kwDOShiJmM8AAAABSY7Ujg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Re-review of `247660b3..b51696b0` (decisions 2 and 4). Earlier point 3 (screenshots linked by SHA in the description) is still open.\n\nVerified against the code: `requireSuperadmin` refuses unless `twoFactorEnabled === true`, and `customSession` passes `twoFactorEnabled` through, so the flag is the l…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-15T06:30:11Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/324#pullrequestreview-5529064590"
+       }
+      ]
+     }
+    },
+    {
+     "number": 345,
+     "title": "feat(service): Zählpunkt nachmelden without a stored run, from the Kundenakte (plan 116 Part B)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/345",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-14T20:24:57Z",
+     "updatedAt": "2026-10-14T20:25:33Z",
+     "headRefOid": "66545e956aaedbf75215c03c861388409083b392",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABcDftnA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review done: code-review (three passes plus an independent verify), an adversarial challenge on a second model, and a council on the findings — HOLD, conditions met in this commit. Fixed in the pass: nm- runs now resolve their contract, points that certainly did not start are taken back, seeded…",
+        "createdAt": "2026-10-14T20:25:33Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/345#issuecomment-6177680796"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 71,
+     "title": "feat(infra): PII keys for olaf-admin plan 114 — unwrapKey policy, settings, /health warm-up, runbook (OLAF-344)",
+     "url": "https://github.com/WirStrom1/olaf-umbrella/pull/71",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-13T09:34:20Z",
+     "updatedAt": "2026-10-14T20:16:05Z",
+     "headRefOid": "e4b8f4f045da1fe0cc0729df646455e7d81e28b7",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-umbrella"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": [
+       {
+        "requestedReviewer": {
+         "login": "knut523"
+        }
+       }
+      ]
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOS06CXc8AAAABbiEu7w",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review done: olaf-code-review (second model, 8 findings → da6721d) and council with a devil's advocate (4 conditions → 1a623cc, one in olaf-admin 5d233970). Left open on purpose: the key-change alert's KQL is unverified against a live workspace — check that it fires during the Dev ceremony. Adm…",
+        "createdAt": "2026-10-13T09:34:46Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/71#issuecomment-6142635759"
+       },
+       {
+        "id": "IC_kwDOS06CXc8AAAABbiWgFg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "R2 is WirStrom1/olaf-admin#330 (sealing on write + backfill). It deploys per environment only after steps 0–5 of the README section and after the durable retry (D7).",
+        "createdAt": "2026-10-13T09:52:03Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/71#issuecomment-6142926870"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 330,
+     "title": "feat(pii): seal on write and backfill the existing rows (plan 114 R2, OLAF-344)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/330",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-13T09:51:49Z",
+     "updatedAt": "2026-10-14T20:15:41Z",
+     "headRefOid": "d8ad02b71714ac5f22735588f384b946a2b71828",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": [
+       {
+        "requestedReviewer": {
+         "login": "knut523"
+        }
+       }
+      ]
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABbiWebg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review done (olaf-code-review with an independent second model, then council with a devil's advocate on a second model).\n\n- Review: 8 findings, fixed in 5e22c027 (upper-case contract id binding, C14 arming, per-key backfill step, sentinel sampling, non-plain objects).\n- Council: HOLD with 6 con…",
+        "createdAt": "2026-10-13T09:52:02Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/330#issuecomment-6142926446"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 329,
+     "title": "feat(pii): read sealed PII at rest — cipher, keys, dual-read, /health (plan 114 R1, OLAF-344)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/329",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-13T09:21:43Z",
+     "updatedAt": "2026-10-14T20:15:25Z",
+     "headRefOid": "1c9d791f2fc4717690a855c2ff70e77a8aca5b3a",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": [
+       {
+        "requestedReviewer": {
+         "login": "knut523"
+        }
+       }
+      ]
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABbh3jPg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review done (olaf-code-review with an independent second model, then council with a devil's advocate on a second model, re-run after fixes).\n\n- Review: 9 findings, fixed in 00914153 (orphan poison pill, cleared DOB after a rollback, loader log redaction, generation race, 503 mapping on Kundenak…",
+        "createdAt": "2026-10-13T09:22:00Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/329#issuecomment-6142419774"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbiEtCQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Infra companion: WirStrom1/olaf-umbrella#71 (key policy, settings, `/health` warm-up switch, ceremony and drill runbook). 5d233970 since the self-review: the drill tool's `open` now counts only a real token (council finding on #71).",
+        "createdAt": "2026-10-13T09:34:44Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/329#issuecomment-6142635273"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbiWhsg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "R2 (sealing + backfill) is #330, stacked on this one.",
+        "createdAt": "2026-10-13T09:52:05Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/329#issuecomment-6142927282"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 333,
+     "title": "release: develop into main (v1.6.0)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/333",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": true,
+     "createdAt": "2026-10-13T11:09:05Z",
+     "updatedAt": "2026-10-14T20:02:47Z",
+     "headRefOid": "5de421363dd77193a9fcaf40a4bfbc750684e4b2",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 344,
+     "title": "feat(service): OTP leads hidden in the list, kept in the search; filters narrow the search",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/344",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-14T19:58:11Z",
+     "updatedAt": "2026-10-14T20:02:45Z",
+     "headRefOid": "fa25689939cde8c9fb43af31dc9cc68189f144de",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABcC-Yxg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review done. Two points for review:\n- **Scope of \"OTP-Leads\":** only people with a requested code and no Anmeldung (Stand \"Code angefordert, nicht abgeschickt\"). Bank, EG and hardware-only leads stay in the search unless a filter is active, because they are not OTP leads.\n- **Cost:** a search w…",
+        "createdAt": "2026-10-14T19:58:40Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/344#issuecomment-6177134790"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 51,
+     "title": "feat(infra): ECP settings for olaf-admin, off by default (plans 049, 076)",
+     "url": "https://github.com/WirStrom1/olaf-umbrella/pull/51",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": true,
+     "createdAt": "2026-09-30T22:02:43Z",
+     "updatedAt": "2026-10-14T19:53:15Z",
+     "headRefOid": "afd45c5e473a89d56fd7d2d7dbb3970ae4744582",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-umbrella"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOS06CXc8AAAABZpRsJg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "`90ad52b`: `STATEMENT_ENABLED` (olaf-admin#243), raised by @knut523 on #56. It is declared with the ECP settings from `${STATEMENT=disabled}` and renders `'true'` only with `STATEMENT=enabled`, so ECP for the registration can go live before the combined statement does. The README rollout step is upd…",
+        "createdAt": "2026-10-06T12:12:45Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/51#issuecomment-6015970342"
+       },
+       {
+        "id": "IC_kwDOS06CXc8AAAABZpvbEA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "`STATEMENT_ENABLED` was reverted in `2661ec1` and restored in `85f8ae6` — it stays in this PR. Its only reader is olaf-admin#243 (still a draft), and this PR is merged only after the ECP app PRs (#240, #243), so the switch is in place exactly when the statement route needs it. The same holds for `EC…",
+        "createdAt": "2026-10-06T12:40:08Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/51#issuecomment-6016457488"
+       },
+       {
+        "id": "IC_kwDOS06CXc8AAAABbPxhYg",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Thanks Chris, this is small and clean. Every setting the ECP PRs read is declared, the gate is off by default, and the secrets are Key Vault references.\n\n**Should fix**\n\n1. `infra/main.bicep:58`: the `ecpOperatorId` description says \"Empty: every community counts, which is only right on a single-ope…",
+        "createdAt": "2026-10-12T11:34:36Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/51#issuecomment-6123446626"
+       },
+       {
+        "id": "IC_kwDOS06CXc8AAAABbP3NAQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 thanks.\n\n1. **`ecpOperatorId` description**: fixed in 57f1d81. It now reads \"Empty or not a GUID: the combined statement stays off (503 statement_not_configured), so set it before STATEMENT.\", matching olaf-admin#243 and the README, which already said it right.\n2. **\"Before use\" box for `${…",
+        "createdAt": "2026-10-12T11:40:52Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/51#issuecomment-6123539713"
+       },
+       {
+        "id": "IC_kwDOS06CXc8AAAABbljd9A",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 added in `072c18f`: one sentence in the README rollout paragraph that the staging slot runs the session warmer too, and that on Production its `LOGIN` attempt/result pairs land in the same `ecp_action_log`, about doubling the logins in the stakeholder export. Checked against olaf-admin#240:…",
+        "createdAt": "2026-10-13T13:09:17Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/51#issuecomment-6146285044"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOS06CXc8AAAABR9rhlw",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Danke Chris, beide Punkte aus meiner letzten Runde sind sauber erledigt. Von meiner Seite ist der PR fertig.\n\n**Was ich geprüft habe:** den vollen Diff auf `57f1d81` gegen die merge-base mit `main` (4 Dateien, +102/−2), den Fix-Commit `57f1d81` einzeln, `git merge-tree` gegen das aktuelle `origin/ma…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-13T08:01:22Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/51#pullrequestreview-5500494231"
+       }
+      ]
+     }
+    },
+    {
+     "number": 69,
+     "title": "feat(infra): Sammelanmeldung settings and Vollmacht storage, Dev only (plan 088)",
+     "url": "https://github.com/WirStrom1/olaf-umbrella/pull/69",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-13T07:56:29Z",
+     "updatedAt": "2026-10-14T19:51:04Z",
+     "headRefOid": "6470b8a12308616156a8a0b8f2a89c9f1e122657",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-umbrella"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOS06CXc8AAAABbghqYQ",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Sammelanmeldung (plan 088) — all parts: plan WirStrom1/olaf-docs#78 · admin WirStrom1/olaf-admin#325 · tariff app WirStrom1/olaf-tariff-app#204 · infra WirStrom1/olaf-umbrella#69.",
+        "createdAt": "2026-10-13T07:57:04Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/69#issuecomment-6141012577"
+       },
+       {
+        "id": "IC_kwDOS06CXc8AAAABbjADfA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Taken over for plan 088 (re-cut, 13.10.2026). `6470b8a`: `REGISTRATION_FLOW_LEGAL_PUBLISH` removed (Bicep, README, release note) — it is a plan 092 setting, and the Sammelanmeldung no longer builds on plan 092. The admin side is now WirStrom1/olaf-admin#331 (replaces #325). `az bicep build` passes.",
+        "createdAt": "2026-10-13T10:32:32Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/69#issuecomment-6143607676"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOS06CXc8AAAABR9zlbw",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Plan 092 hold applies (the plan builds on it), so this is a comment rather than an approval. No blockers in the infra itself.\n\n- `BULK_POA_CONTAINER_URL` is only declared with `BULK_REGISTRATION_POA=enabled` (`main.bicep:539`). A Dev provision before README step 4 drops it, and `poa-store.ts:44` the…",
+        "state": "COMMENTED",
+        "submittedAt": "2026-10-13T08:13:19Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/69#pullrequestreview-5500626287"
+       },
+       {
+        "id": "PRR_kwDOS06CXc8AAAABSBA6cQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Re-review of `6470b8a`. The plan 092 hold no longer applies (plan 088 re-cut), and nothing here blocks, so approving.\n\n- `REGISTRATION_FLOW_LEGAL_PUBLISH` is gone from Bicep, README and release note; it is not on `main` either, so dropping it changes nothing a provision did before. Neither #331 nor …",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-13T13:08:19Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/69#pullrequestreview-5503990385"
+       }
+      ]
+     }
+    },
+    {
+     "number": 74,
+     "title": "feat(infra): explicit Brevo template ids, hardware offer on template 82",
+     "url": "https://github.com/WirStrom1/olaf-umbrella/pull/74",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-14T13:00:36Z",
+     "updatedAt": "2026-10-14T19:50:07Z",
+     "headRefOid": "bc2a4185695597a647b119c16e0146397be72854",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-umbrella"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOS06CXc8AAAABb7KA0w",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review: bicep builds. Of the six settings only BREVO_TPL_OFFER_CUSTOMER changes what a customer receives; the other five pin today's effective defaults. Both admin blocks (app, staging slot) carry the same values, non-sticky, so a swap changes nothing.",
+        "createdAt": "2026-10-14T13:00:51Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/74#issuecomment-6168936659"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 343,
+     "title": "feat(follow-up): skip the OTP reminder when the person registered under another address (plan 119)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/343",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-14T19:49:24Z",
+     "updatedAt": "2026-10-14T19:49:58Z",
+     "headRefOid": "eb7a3059bd71c94f9b068264226c9380e62ecf8a",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABcC0nqA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review done. One query change in `withContract` plus DB tests; the two new tests fail against develop's route and pass with the change. Edge cases covered: whitespace/case in the Zählpunkt, previous-tenant contracts, malformed progress (no query failure), SUBMITTED progress, NULL `otp_requested…",
+        "createdAt": "2026-10-14T19:49:58Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/343#issuecomment-6176974760"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 74,
+     "title": "plans(109): Hardware-Anfrage in the Kundenakte's layout, list as a rail",
+     "url": "https://github.com/WirStrom1/olaf-docs/pull/74",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-12T16:37:55Z",
+     "updatedAt": "2026-10-14T19:49:44Z",
+     "headRefOid": "401f28149a8f485d0c2e0807918e8b9651596b46",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-docs"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShgpzM8AAAABbUl3Iw",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Code PR: WirStrom1/olaf-admin#323",
+        "createdAt": "2026-10-12T16:38:28Z",
+        "url": "https://github.com/WirStrom1/olaf-docs/pull/74#issuecomment-6128498467"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOShgpzM8AAAABR9b0vQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "1. S1 names `src/components/service/AkteRahmen.tsx`; the file is `src/components/ui/AkteRahmen.tsx`.\n2. DoD 9/10 use 390×844 and 1440×900; AGENTS.md wants 1440 / 880 / 375. DoD 10's screenshots aren't on olaf-admin#323 yet, but the status says BUILT. Please annotate the line or deliver the shots.\n3.…",
+        "state": "CHANGES_REQUESTED",
+        "submittedAt": "2026-10-13T07:36:54Z",
+        "url": "https://github.com/WirStrom1/olaf-docs/pull/74#pullrequestreview-5500236989"
+       },
+       {
+        "id": "PRR_kwDOShgpzM8AAAABSBC80g",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "All five points are fixed in `401f281`, and the plan matches olaf-admin#323 at `38aaefaa`: the `ui/AkteRahmen.tsx` path, the rail rows (`displayName(b, b.email || b.phone || 'ohne Namen')`), §6 including the dropped S/M/L `size`, and no \"plan 124\" in the code.\n\n- DoD 10 still asks for screenshots \"b…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-13T13:10:55Z",
+        "url": "https://github.com/WirStrom1/olaf-docs/pull/74#pullrequestreview-5504023762"
+       }
+      ]
+     }
+    },
+    {
+     "number": 79,
+     "title": "plans(019): §9 — duplicate MAXENERGY clients and the confirmed relink",
+     "url": "https://github.com/WirStrom1/olaf-docs/pull/79",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-13T22:20:42Z",
+     "updatedAt": "2026-10-14T19:44:57Z",
+     "headRefOid": "4b1f60d7ea2925b8bd10d85616a760633ade02ea",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-docs"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 80,
+     "title": "plans(118): the financing mail — standard text, one-off message, contact, several addresses",
+     "url": "https://github.com/WirStrom1/olaf-docs/pull/80",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-14T08:06:47Z",
+     "updatedAt": "2026-10-14T19:44:46Z",
+     "headRefOid": "ca19bd475df9d8c345ee1024d7cdf7fd306aff98",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-docs"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShgpzM8AAAABb2UYGg",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Code: WirStrom1/olaf-admin#337 · Infra: WirStrom1/olaf-umbrella#73 (dev = Brevo template 85). Deploy order: admin (with its migration) first, then the umbrella setting on dev.",
+        "createdAt": "2026-10-14T08:08:11Z",
+        "url": "https://github.com/WirStrom1/olaf-docs/pull/80#issuecomment-6163863578"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOShgpzM8AAAABSLd8jQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "No blocking findings. Plan matches the code in olaf-admin#337; number 118 is free on main and on every open branch.\n\n- DoD 2 says the message is cleared after a send that reached the leasing step; the code clears it only when every leasing address got it (§3 and the PR say so). Please align DoD 2's …",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-14T08:14:16Z",
+        "url": "https://github.com/WirStrom1/olaf-docs/pull/80#pullrequestreview-5514951821"
+       }
+      ]
+     }
+    },
+    {
+     "number": 81,
+     "title": "plan 119: OTP reminders — recognise a registration under another e-mail address",
+     "url": "https://github.com/WirStrom1/olaf-docs/pull/81",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-14T11:35:18Z",
+     "updatedAt": "2026-10-14T19:44:32Z",
+     "headRefOid": "62f7c652f53a652fe9d100378ac8fcf348846f4e",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-docs"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 342,
+     "title": "fix(data-sync): check the fresh MAX status before relinking a duplicate",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/342",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-14T19:38:00Z",
+     "updatedAt": "2026-10-14T19:43:27Z",
+     "headRefOid": "787e4ad94de7b507ceb7cf0771dc056664a1a90c",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABcCm5Kw",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review: diff is limited to the relink path. The fresh status takes precedence; the payload is used only when `/service/status` returns neither code nor name. A fetch error is not caught, so the relink fails closed (same as a failed record fetch). The \"not straight back after a relink\" guard sti…",
+        "createdAt": "2026-10-14T19:38:07Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/342#issuecomment-6176749867"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 82,
+     "title": "agents: plans no longer depend on the roadmap vault",
+     "url": "https://github.com/WirStrom1/olaf-docs/pull/82",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-14T19:39:26Z",
+     "updatedAt": "2026-10-14T19:42:00Z",
+     "headRefOid": "2def6eb12bbdf18a3589b8e16845e29cbcece0f4",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-docs"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 328,
+     "title": "fix(audit): seal bank data and dates of birth in submission_audit_log, revealable like the IBAN (plan 114 D4)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/328",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-13T08:40:21Z",
+     "updatedAt": "2026-10-14T19:36:33Z",
+     "headRefOid": "64e85d8e0a75140826bfbed6b7e127b7c73ebf1b",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": [
+       {
+        "requestedReviewer": {
+         "login": "knut523"
+        }
+       }
+      ]
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABbhMwVQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review (code-review with an independent verifier, then council): no blocking findings.\n- Guard regex widened to schema-qualified raw SQL and `createManyAndReturn` (in c1920354). It stays a grep: a delegate held in a variable gets through.\n- Left open, flagged in the description: a DOB change no…",
+        "createdAt": "2026-10-13T08:40:58Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/328#issuecomment-6141718613"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbjSm7w",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Reworked per Christoph's answer: the trail now **seals** IBAN/Kontoinhaber and dates of birth (#329's crypto, bound to the audit row) instead of masking them for good; without keys it masks, never plaintext.\n- Reveal via `POST /api/admin/service/iban` with `auditId` (same gate, log and no-store); \"A…",
+        "createdAt": "2026-10-13T10:51:05Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/328#issuecomment-6143911663"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 241,
+     "title": "feat(joules): capture MAXENERGY's rate and bonus in the scheduled sync (plan 076)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/241",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": true,
+     "createdAt": "2026-09-30T22:02:51Z",
+     "updatedAt": "2026-10-14T19:29:34Z",
+     "headRefOid": "adfe4a0e1eabc4a5a64996d51765eddce1f762d0",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABabf0Jw",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Merged develop in `4efd8332`. Two changes go beyond resolving text conflicts:\n\n- **The tariff sync now runs at night, like the status sync.** Develop restricted the status sync to 01:00–04:59 Vienna (once per night) inside `tick`. This branch's loop calls `tickJobs`, which would have skipped that re…",
+        "createdAt": "2026-10-08T20:39:35Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/241#issuecomment-6068630567"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbPxMKg",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Hi Chris, thanks, this is a careful piece of work. The tariff kind sits cleanly next to `status` (plan 076 §10 cond. 5), the sync only reads from MAXENERGY (`fetchClientRecord` → `axios.get /clients?hash_id=`; the only POST is our own trigger route), the planner never blanks a known price on an empt…",
+        "createdAt": "2026-10-12T11:34:14Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/241#issuecomment-6123441194"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbP6vdw",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 addressed in acb5194c.\n\n1. **DB suite in CI.** The Postgres `db` job now runs `npm run tariff-sync:test` with `JOULES_TEST_DATABASE_URL` on `olaf_ci` (\"Tariff sync DB tests\"), so `recentRuns` is exercised on every run. `joules:lease-check` runs there as well (\"Joules scheduler lease check\")…",
+        "createdAt": "2026-10-12T11:44:44Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/241#issuecomment-6123597687"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbllKtw",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 Nit 1 is done in #243: `41c2d62a` merges this branch at `a566be23` (old migration gone), checks there on `57dadb4c`.\n\n_🤖 Addressed by [Claude Code](https://claude.com/claude-code)_",
+        "createdAt": "2026-10-13T13:10:47Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/241#issuecomment-6146312887"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOShiJmM8AAAABR9rm2A",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Hi Chris, danke für die schnelle Runde in `acb5194c`. Ich habe den aktuellen HEAD (`a566be23`) noch einmal komplett gelesen, nicht nur den Fix-Commit. Alle fünf Punkte aus meinem Review vom 12.10. sind erledigt, und ich habe nichts Neues gefunden, das blockiert. **Von meiner Seite approve-fähig.** D…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-13T08:01:30Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/241#pullrequestreview-5500495576"
+       }
+      ]
+     }
+    },
+    {
+     "number": 336,
+     "title": "feat(data-sync): recognise MAXENERGY duplicates and relink to the client that went through",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/336",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-13T22:20:27Z",
+     "updatedAt": "2026-10-14T19:26:58Z",
+     "headRefOid": "5a4e409d2cf8979208e66bdbf511bca55f01ae12",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABcCaNhQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review before merge. Read: `relink-duplicate.ts`, the route's `relink` branch, and the status-sync hash guard.\n\n- **Write path is tight.** It claims the orphan first (`status='new'` + reason). The body-supplied row has to prove itself against the Zählpunkt MAXENERGY reports now. The UPDATE is C…",
+        "createdAt": "2026-10-14T19:26:55Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/336#issuecomment-6176542085"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 341,
+     "title": "feat(offer): responsible-staff offer mail on Brevo template 84",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/341",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-14T13:39:36Z",
+     "updatedAt": "2026-10-14T19:16:36Z",
+     "headRefOid": "af211c39c8d107fe8f0ef31247008e6634da0333",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABb75c8Q",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review: the default and one data field only; the inline fallback, the preview and the customer/leasing paths are untouched. `positions` carries the same net unit price the inline table shows, so 84 and the fallback agree.",
+        "createdAt": "2026-10-14T13:39:49Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/341#issuecomment-6169713905"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 337,
+     "title": "feat(hardware): the leasing mail carries a standard text, a one-off message and the contact to answer to, and goes to several addresses",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/337",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-14T08:07:16Z",
+     "updatedAt": "2026-10-14T13:39:00Z",
+     "headRefOid": "9df01d3ecd640d2c43c97109d519ca67e2c31e76",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABb7axQA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Heads-up on the leasing mail and template 85 (Christoph asked me to coordinate):\n\n- **Shared layout.** Today the customer mails in Brevo moved to one shared layout: yellow header image with the logo on the left, Off-Black text, Warm Grey surfaces, Outlook- and Gmail-safe. That covers 87, 93, 73, 95,…",
+        "createdAt": "2026-10-14T13:14:26Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/337#issuecomment-6169211200"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABb7uElg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Merged develop into this branch (9df01d3e) to resolve the conflicts with #340. `leasingEmailHtml` now uses the shared layout from `src/lib/mail-layout.ts`, keeping your three blocks in the same places: the standard text after the heading, the message boxed above the financing data, and the contact s…",
+        "createdAt": "2026-10-14T13:30:44Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/337#issuecomment-6169527446"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOShiJmM8AAAABSLd4gw",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "No blocking findings. Checked: send path per leasing address (guard per recipient, `results.leasing` has no reader besides the drawer; `mail_log` is append-only, nothing parses it), Reply-To/name sanitising, escaping in `leasingEmailHtml`, settings PUT keeping `leasing_text` when absent, preview wit…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-14T08:14:12Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/337#pullrequestreview-5514950787"
+       },
+       {
+        "id": "PRR_kwDOShiJmM8AAAABSPJ3bQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Re-review of the merge 9df01d3e only. Conflict resolution in `offer-email.ts` / `hardware-recipients.ts` is correct: `leasingEmailHtml` keeps standard text and message above \"Finanzierung\" and the contact sentence before the closing line on the new `mail-layout` helpers; free text still goes through…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-14T13:39:00Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/337#pullrequestreview-5518817133"
+       }
+      ]
+     }
+    },
+    {
+     "number": 340,
+     "title": "feat(mail): Brevo-style layout for offer, Storno and Cockpit report mails",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/340",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-14T13:02:21Z",
+     "updatedAt": "2026-10-14T13:26:50Z",
+     "headRefOid": "a1fb4ba615538c8cfd6427fd94dcb0e33d48e7fe",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABb7MOSQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review: diff read against develop; no defect found in the changed code.\n\n- Customer offer wording and the terminConfirmed gate are unchanged (offer-email-termin tests green); only the shell moved to `mail-layout.ts`.\n- Storno partner mail is byte-for-byte as before; only the customer confirmati…",
+        "createdAt": "2026-10-14T13:02:28Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/340#issuecomment-6168972873"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABb7gC0Q",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Ported the Outlook/Gmail hardening of the Brevo layout (a970e98a):\n\n- `<html>` with xhtml/VML/Office namespaces; mso-only OfficeDocumentSettings (PNG, 96 dpi) and an Arial override.\n- Media query and `:root` color-scheme in separate `<style>` blocks (Gmail drops a whole block it does not understand)…",
+        "createdAt": "2026-10-14T13:18:52Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/340#issuecomment-6169297617"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABb7l2bg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Preheader no longer hides text by colour or font size (SpamAssassin FONT_INVIS_MSGID / HTML_FONT_LOW_CONTRAST): it is now `display:none;max-height:0;max-width:0;overflow:hidden;mso-hide:all;` only, pinned in `tools/mail-layout.test.ts`. No other mail in this PR hides text that way (the `font-size:0`…",
+        "createdAt": "2026-10-14T13:23:50Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/340#issuecomment-6169392750"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 323,
+     "title": "feat(hardware): the Hardware-Anfrage in the Kundenakte's layout, with the list as a rail beside it",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/323",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-12T16:38:16Z",
+     "updatedAt": "2026-10-14T13:05:59Z",
+     "headRefOid": "38aaefaa555c51b2d8e0e757260777fb6f1ddd30",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABbhiHNw",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Thanks, Christoph — all points addressed in `491461f7`, plus two small commits from our own re-review of the fixes\n(`3e77c61e`, `38aaefaa`, see the end of the table). One regression test per finding where the logic allows it\n(`tools/hardware-akte-render.test.tsx`, tests named \"#323: …\"; all eight fa…",
+        "createdAt": "2026-10-13T09:01:25Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/323#issuecomment-6142068535"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOShiJmM8AAAABR9Y7Fw",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Approving: no blockers. Should-fix, in order:\n\n- `HardwareAkte.tsx:162-177`: `loadDetail` runs unawaited from four actions with no sequence check, and it now also sets `b` and re-seeds the editor. If an older reload answers last (a comment save, then \"Übernehmen & als Version sichern\"), the page sho…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-13T07:32:02Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/323#pullrequestreview-5500189463"
+       },
+       {
+        "id": "PRR_kwDOShiJmM8AAAABR9bzyg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "**Blocker**\n1. No screenshots: the page moves from a drawer to a full page with a rail, so AGENTS.md (Verification) wants 1440 / 880 / 375 px shots on `pr-assets/pr-323`, linked in the description. `pr-assets/pr-323` doesn't exist yet.\n\n**Non-blocking**\n2. The new comments cite \"plan 124\" (19 places…",
+        "state": "CHANGES_REQUESTED",
+        "submittedAt": "2026-10-13T07:36:52Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/323#pullrequestreview-5500236746"
+       },
+       {
+        "id": "PRR_kwDOShiJmM8AAAABSBC7CA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "The earlier points are fixed in `491461f7` / `3e77c61e` / `38aaefaa`; I checked each in the code: the reload counter (the status change included), `nachErfolg` on every write, `istUngesichert` and the comment box behind `hardware.modify`, `linkAbbrechen` on the thrown path and after a row was opened…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-13T13:10:53Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/323#pullrequestreview-5504023304"
+       }
+      ]
+     }
+    },
+    {
+     "number": 339,
+     "title": "Sync main → develop after release v1.5.7",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/339",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-14T12:50:32Z",
+     "updatedAt": "2026-10-14T12:51:20Z",
+     "headRefOid": "3fd99e812a463562f1cac4521639dfa4ae078c5e",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "github-actions"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 338,
+     "title": "fix(hardware): send the reworked confirmation template 95 by default",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/338",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-14T12:40:47Z",
+     "updatedAt": "2026-10-14T12:43:37Z",
+     "headRefOid": "ada55f42acf367f735938268c5dd87d8ab57b069",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABb6zmFQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review: one default and its fallback change; the override and the NaN guard are untouched. The other edits are comments and the test. No new params reach Brevo, and 95 reads only the ones hardware-submit already sends.",
+        "createdAt": "2026-10-14T12:40:55Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/338#issuecomment-6168569365"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 208,
+     "title": "fix(opt-out): \"Schon angemeldet?\" variant of the reminder opt-out page",
+     "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/208",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-14T11:33:40Z",
+     "updatedAt": "2026-10-14T11:33:46Z",
+     "headRefOid": "9cfa810ac0eadc93fedb2105471f8aff6d7aab91",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-tariff-app"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiK088AAAABb5rKJA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review: copy-only switch on a fragment parameter; the token handling, verify-before-revoke and the BFF calls are untouched. `grund` is read from the fragment like the token, so it never reaches a server either.",
+        "createdAt": "2026-10-14T11:33:46Z",
+        "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/208#issuecomment-6167382564"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 73,
+     "title": "feat(infra): declare BREVO_TPL_OFFER_LEASING for the admin's financing mail (dev = template 85)",
+     "url": "https://github.com/WirStrom1/olaf-umbrella/pull/73",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-14T08:07:54Z",
+     "updatedAt": "2026-10-14T08:14:15Z",
+     "headRefOid": "d7ad6cd1560124a0a0c285671df5a54db87cdfa7",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-umbrella"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOS06CXc8AAAABSLd6zA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "No findings. The setting sits on the app and the staging slot, dev `85`, uat/prod empty, which olaf-admin's `intEnv` reads as unset (inline HTML). Deploy order as described: olaf-admin#337 first.\n\nChecks: `az bicep build infra/main.bicep` clean; warnings identical to main. `azd provision --preview` …",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-14T08:14:15Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/73#pullrequestreview-5514951372"
+       }
+      ]
+     }
+    },
+    {
+     "number": 1,
+     "title": "test: PR-flow verification (adds THIS_IS_A_PR.txt)",
+     "url": "https://github.com/WirStrom1/Calc-vibe-coded-/pull/1",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-07-16T12:02:37Z",
+     "updatedAt": "2026-10-14T06:07:40Z",
+     "headRefOid": "7c029a585f31e06f1f27d78f49e9e8b412221012",
+     "repository": {
+      "nameWithOwner": "WirStrom1/Calc-vibe-coded-"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOSbftfs8AAAABSKTpOA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "The PR flow it set out to verify worked: a branch was pushed and a PR was opened against `develop`. The file itself shouldn't land, though. `THIS_IS_A_PR.txt` is a test marker with no purpose on `develop`. Please close this PR and delete `pr-test-textfile` instead of merging.\n\nChecks: read the diff …",
+        "state": "CHANGES_REQUESTED",
+        "submittedAt": "2026-10-14T06:07:40Z",
+        "url": "https://github.com/WirStrom1/Calc-vibe-coded-/pull/1#pullrequestreview-5513734456"
+       }
+      ]
+     }
+    },
+    {
+     "number": 2,
+     "title": "test(suite): add cases (0-ZP+feed-in, HW-Angebot, HW-Konfig, coupons)…",
+     "url": "https://github.com/WirStrom1/wirstrom-flowtest/pull/2",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-08-05T06:36:48Z",
+     "updatedAt": "2026-10-14T06:07:39Z",
+     "headRefOid": "e20f7ec4d95516e383ea70c6f7a7af5a7656d6cb",
+     "repository": {
+      "nameWithOwner": "WirStrom1/wirstrom-flowtest"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOTAGjmc8AAAABNUEkWQ",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "@ubermensch04 I updated the suite a bit (this is non breaking - since not an official olaf app...) ",
+        "createdAt": "2026-08-05T06:38:08Z",
+        "url": "https://github.com/WirStrom1/wirstrom-flowtest/pull/2#issuecomment-5188428889"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOTAGjmc8AAAABSKTohg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "No blockers. Every new case key is handled by its runner: `meter_later`/`einspeisung` in `flowrunner.py`, and `mode: angebot` and `linear` in `flowrunner_hw.py`, which `flowdash_server.py` dispatches to for `flow: hardware`. Coupon-body parsing and the Joules `couponData` lookup fail soft inside `tr…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-14T06:07:39Z",
+        "url": "https://github.com/WirStrom1/wirstrom-flowtest/pull/2#pullrequestreview-5513734278"
+       }
+      ]
+     }
+    },
+    {
+     "number": 332,
+     "title": "feat(service): admins may re-send a confirmed Anmeldung from the Kundenakte (plan 115)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/332",
+     "state": "CLOSED",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-13T10:53:02Z",
+     "updatedAt": "2026-10-13T21:55:27Z",
+     "headRefOid": "d758246282f75739c12dc79d79426a046a93eec8",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": [
+       {
+        "requestedReviewer": {
+         "login": "knut523"
+        }
+       }
+      ]
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABbjVEXw",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review (code-review + council) done.\n\n- **Council on the plan:** HOLD, with 7 conditions. All are in `d7582462`. The main one is the sticky gate: if MAXENERGY rejects a re-send, a non-admin could otherwise send the point again.\n- **Review of the diff:** nothing ship-blocking. Fixed before this …",
+        "createdAt": "2026-10-13T10:53:30Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/332#issuecomment-6143951967"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbu1yoA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Closed: Christoph, 13.10.2026, an admin re-sends a confirmed Anmeldung from Verarbeitungen, which already allows it. The warning moves there: WirStrom1/olaf-admin#335. Writing the re-send's ids back gets its own plan (olaf-docs plans/117). Plan 115 §11 records the decisions.",
+        "createdAt": "2026-10-13T21:55:24Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/332#issuecomment-6156022432"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 335,
+     "title": "feat(executions): warn before re-sending a slot MAXENERGY already accepted (plan 115)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/335",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-13T21:55:22Z",
+     "updatedAt": "2026-10-13T21:55:22Z",
+     "headRefOid": "253901f9abbaa6e6f95bb9b924a9e059f55051a9",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 334,
+     "title": "feat(data-sync): make the MAXENERGY Probelauf reviewable before an Echtlauf",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/334",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-13T11:14:07Z",
+     "updatedAt": "2026-10-13T20:49:03Z",
+     "headRefOid": "9304a9f9bbe0d36f436952d47ef4aa9eab530761",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABbjqcag",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review done (olaf-code-review + council).\n\n- Fixed: the truncation notice counted rows, but the cap is per decision. It now says Zählpunkte (9304a9f9).\n- Solid: only presentation changed. Each route adds one read-only field (`contractId`). Tests, tsc and lint are clean, and the panel was checke…",
+        "createdAt": "2026-10-13T11:14:41Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/334#issuecomment-6144302186"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 325,
+     "title": "feat(sammelanmeldung): one Vorgang, many Zählpunkte — admin side (plan 088)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/325",
+     "state": "CLOSED",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-13T07:56:13Z",
+     "updatedAt": "2026-10-13T18:48:23Z",
+     "headRefOid": "134db77716ab527c12460cf6f981409df68984ab",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABbghepQ",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Sammelanmeldung (plan 088) — all parts: plan WirStrom1/olaf-docs#78 · admin WirStrom1/olaf-admin#325 · tariff app WirStrom1/olaf-tariff-app#204 · infra WirStrom1/olaf-umbrella#69.",
+        "createdAt": "2026-10-13T07:56:52Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/325#issuecomment-6141009573"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbi_U5w",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Superseded by WirStrom1/olaf-admin#331: the same work rebuilt on `develop` without the Strecken-Konfigurator, plus IBAN per Zählpunkt (plan 088 re-cut, Christoph 13.10.2026). Closing this one.",
+        "createdAt": "2026-10-13T10:31:48Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/325#issuecomment-6143595751"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbrtg3A",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "## Sammelanmeldung (plan 088) — handover notes\n\n@bizarrochris — handover notes for the Sammelanmeldung. Knut asked me (13.10.2026) to get it ready including one IBAN per Zählpunkt. Meanwhile you re-cut it as WirStrom1/olaf-admin#331 and WirStrom1/olaf-tariff-app#207. So this is not a parallel build.…",
+        "createdAt": "2026-10-13T18:48:23Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/325#issuecomment-6152741084"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOShiJmM8AAAABR9ziwg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Plan 092 hold applies (stacked on #268), so no approval yet regardless of the points below.\n\n- **Personal data stores not named, no deletion:** the PR body names none of them (only `migration.sql:3-9` does). Please list `bulk_registrations.customer` (IBAN), rows (Netzkunde, `mieter_name`/`mieter_ema…",
+        "state": "CHANGES_REQUESTED",
+        "submittedAt": "2026-10-13T08:13:16Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/325#pullrequestreview-5500625602"
+       }
+      ]
+     }
+    },
+    {
+     "number": 176,
+     "title": "feat(registration): ECP portal access for new members, ECP prefill for known ones (plan 049)",
+     "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/176",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": true,
+     "createdAt": "2026-09-30T22:03:01Z",
+     "updatedAt": "2026-10-13T13:46:17Z",
+     "headRefOid": "5c0d8c811bc1bbbec18d7ab9e79ab626b3eb482e",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-tariff-app"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiK088AAAABbPxeIQ",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Thanks Chris, this is a careful piece of work. The password stays in component state only, it is sent once and never through `withRetry`, the catch-all opens exactly `POST ecp/person`, and the flag-off path is unchanged. I found no blocker. One contract gap with olaf-admin#240 is worth closing befor…",
+        "createdAt": "2026-10-12T11:34:33Z",
+        "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/176#issuecomment-6123445793"
+       },
+       {
+        "id": "IC_kwDOShiK088AAAABbP_Tew",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 thanks. Addressed in 867c013.\n\n**1. A second password after a lost `/ecp/person` answer: fixed in the tariff app; no admin change needed.**\n- The outcome is now stored as `offen` (tab-scoped, no password) **before** the request leaves. The definite answer replaces it.\n- With `offen`, the pa…",
+        "createdAt": "2026-10-12T11:49:44Z",
+        "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/176#issuecomment-6123672443"
+       },
+       {
+        "id": "IC_kwDOShiK088AAAABbmO7HA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 thanks. Should-fix 1 is in `5c0d8c8`: `'unbekannt'` now needs `needsEgOnboarding(formData)`, so a registration that joins nothing sends no `EcpAnlage`. New test in `useRegistration.ecp.test.tsx` (an eg member with ECP unreachable who adds no new point); it was red before the fix.\n\nScope not…",
+        "createdAt": "2026-10-13T13:46:17Z",
+        "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/176#issuecomment-6146997020"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOShiK088AAAABR9rZqQ",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Danke Chris, alle drei Punkte aus meiner letzten Runde sind gut gelöst. Die `offen`-Lösung ist eleganter als mein `reused`-Vorschlag, weil sie ohne Änderung in olaf-admin auskommt. Einen kleinen Befund würde ich vor dem Einschalten von ECP noch gern geschlossen sehen. Der Rest ist optionale Härtung.…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-13T08:01:09Z",
+        "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/176#pullrequestreview-5500492201"
+       }
+      ]
+     }
+    },
+    {
+     "number": 85,
+     "title": "feat(workflow): complete the customer in ECP after submit (plan 049)",
+     "url": "https://github.com/WirStrom1/olaf-durable-func/pull/85",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": true,
+     "createdAt": "2026-09-30T22:02:56Z",
+     "updatedAt": "2026-10-13T13:28:58Z",
+     "headRefOid": "42e59b4103b8cd2268f21a4bc4494e25cb3721b2",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-durable-func"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOS2RHBM8AAAABZ9Yw6A",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 most points are addressed in `3d0b30c` and olaf-docs `175933e`.\n\n- **Should-fix 1:** done. The deviation from condition 12 is now written into plan 049 §11, and the comment at `mainWorkflow.ts:241` says the tariff app's prefill decides.\n- **Should-fix 4:** done. The test header now says `de…",
+        "createdAt": "2026-10-07T11:35:04Z",
+        "url": "https://github.com/WirStrom1/olaf-durable-func/pull/85#issuecomment-6037057768"
+       },
+       {
+        "id": "IC_kwDOS2RHBM8AAAABZ93PeA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 #90 is merged into this PR (`bc26b20`):\n- Merge gate 1: no customer address goes to Nominatim any more. The coordinate comes from olaf-admin's `/api/address/locate`, and only a coordinate goes on to EVN.\n- Should-fix 3: Nominatim is gone, so the `unbekannt`/`fehlgeschlagen` lookups no longe…",
+        "createdAt": "2026-10-07T12:07:09Z",
+        "url": "https://github.com/WirStrom1/olaf-durable-func/pull/85#issuecomment-6037557112"
+       },
+       {
+        "id": "IC_kwDOS2RHBM8AAAABZ95XGg",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 should-fix 2 is done in `9fb5969` (develop merge with #96):\n- The retry's MAXENERGY tasks stay in the step 1 `Task.all` next to ECP and carry #96's `retry: true` and `recordedCoupon`.\n- The schedule test now also has develop's retry schedule, plus a case where a recorded tariff travels next…",
+        "createdAt": "2026-10-07T12:09:19Z",
+        "url": "https://github.com/WirStrom1/olaf-durable-func/pull/85#issuecomment-6037591834"
+       },
+       {
+        "id": "IC_kwDOS2RHBM8AAAABaFPxNw",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 thanks. No code change for the two nits:\n- **A2 (12 + \"B\" → 12b):** known and deliberate, marked at `ecpCustomer.ts:116`. The upgrade is to hold such cases back as ambiguous, once S0 step 3 shows how often a single-letter Zusatz means \"Haus B\". If the register has no 12b, locate answers not…",
+        "createdAt": "2026-10-07T19:30:56Z",
+        "url": "https://github.com/WirStrom1/olaf-durable-func/pull/85#issuecomment-6045298999"
+       },
+       {
+        "id": "IC_kwDOS2RHBM8AAAABbPxacg",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Thanks Chris, the head is unchanged since my last pass (`9fb5969`), so this round was mostly about the contract with olaf-admin#240 and today's hotfix #99 on main. No blockers.\n\n**Should fix**\n\n1. **Conflict with #99 once main comes back into develop** (`package.json:12`). #99 (merged to main today)…",
+        "createdAt": "2026-10-12T11:34:29Z",
+        "url": "https://github.com/WirStrom1/olaf-durable-func/pull/85#issuecomment-6123444850"
+       },
+       {
+        "id": "IC_kwDOS2RHBM8AAAABbP42bA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 thanks, addressed in `4d2a51d`:\n\n1. **#99 / `package.json` test script:** #99 isn't in `develop` yet (no `src/activities/maxEnergyPostNoRetry.test.ts` on `origin/develop`), and this PR's base is `develop`, so I didn't pull `main` in here. Whoever lands second (this PR or the main→develop ba…",
+        "createdAt": "2026-10-12T11:42:38Z",
+        "url": "https://github.com/WirStrom1/olaf-durable-func/pull/85#issuecomment-6123566700"
+       },
+       {
+        "id": "IC_kwDOS2RHBM8AAAABbloqZQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 per point:\n\n1. ECP blocking PDF / confirmation mail: Christoph decides before `ECP_ENABLED`; will follow.\n2. Late short attempt: fixed in `42e59b4`. An attempt starts only with admin's 75 s (`CUSTOMER_BUDGET.budgetMs`, lock wait included) + 5 s left. Test at the 79 s / 80 s boundary, which …",
+        "createdAt": "2026-10-13T13:13:48Z",
+        "url": "https://github.com/WirStrom1/olaf-durable-func/pull/85#issuecomment-6146370149"
+       },
+       {
+        "id": "IC_kwDOS2RHBM8AAAABbl6aPw",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 on point 1 (ECP holding back PDF and confirmation mail), Christoph's decision (2026-10-13): once the ECP integration is done, the confirmation e-mail is no longer needed. ECP replaces that step. So the wait on ECP is accepted here and doesn't need to be decoupled. Removing the e-mail step c…",
+        "createdAt": "2026-10-13T13:28:58Z",
+        "url": "https://github.com/WirStrom1/olaf-durable-func/pull/85#issuecomment-6146660927"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOS2RHBM8AAAABRFjoqA",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Looked at `119cbdbb` (today's change is the develop merge with #94; your code is unchanged since 30.09). No code defects found — gates green: `npm ci`, tsc, build, tests 153/153, `npm run check` 8/8, merge-tree with develop clean. Replay safety, ECP errors kept out of the rest of the submission, tim…",
+        "state": "COMMENTED",
+        "submittedAt": "2026-10-07T11:32:29Z",
+        "url": "https://github.com/WirStrom1/olaf-durable-func/pull/85#pullrequestreview-5441644712"
+       },
+       {
+        "id": "PRR_kwDOS2RHBM8AAAABRGK6XQ",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Re-reviewed `9fb5969` (with #90 in `bc26b20` and the #96 merge). The code is ready from my side; only your merge gate 2 is open (draft, DSGVO box, olaf-admin#240 first).\n\n- **Gate 1 closed:** no Nominatim or other geocoder left on the head. What still leaves our systems is a house-precise coordinate…",
+        "state": "COMMENTED",
+        "submittedAt": "2026-10-07T12:30:50Z",
+        "url": "https://github.com/WirStrom1/olaf-durable-func/pull/85#pullrequestreview-5442288221"
+       },
+       {
+        "id": "PRR_kwDOS2RHBM8AAAABR9rdpw",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Danke Chris, beide offenen Punkte aus meiner Runde vom 12.10. sind erledigt. Der Code ist von meiner Seite mergebar. Eine Design-Frage würde ich vor dem Einschalten von ECP bewusst entscheiden, dazu unten mehr.\n\n**Was ich geprüft habe:** den Fix-Commit `4d2a51d` einzeln, den Merge `b09b591` per `--r…",
+        "state": "APPROVED",
+        "submittedAt": "2026-10-13T08:01:16Z",
+        "url": "https://github.com/WirStrom1/olaf-durable-func/pull/85#pullrequestreview-5500493223"
+       }
+      ]
+     }
+    },
+    {
+     "number": 75,
+     "title": "plans(110): Benutzer-Konzept — roles in the database, Zusatzrechte, audited user management",
+     "url": "https://github.com/WirStrom1/olaf-docs/pull/75",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-12T16:50:41Z",
+     "updatedAt": "2026-10-13T13:14:50Z",
+     "headRefOid": "90c0d315edd16a56be85d8ffcd695c45d6725cd6",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-docs"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShgpzM8AAAABbUxyJw",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Code PR: WirStrom1/olaf-admin#324",
+        "createdAt": "2026-10-12T16:51:23Z",
+        "url": "https://github.com/WirStrom1/olaf-docs/pull/75#issuecomment-6128693799"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOShgpzM8AAAABR9drLQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "1. §7: please name a retention period for the new staff-data tables, even a proposed one. The shared rule wants one per store before the deletion job exists; \"keep everything for now\" isn't one.\n2. §7 DSGVO list: add `admin_roles.created_by`, `admin_user_roles.assigned_by`, `admin_user_grants.grante…",
+        "state": "CHANGES_REQUESTED",
+        "submittedAt": "2026-10-13T07:39:58Z",
+        "url": "https://github.com/WirStrom1/olaf-docs/pull/75#pullrequestreview-5500267309"
+       },
+       {
+        "id": "PRR_kwDOShgpzM8AAAABSBGJEQ",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Re-review on `90c0d315`. Earlier points 2–5 are fixed.\n\n1. §7 retention (earlier 1): \"as long as their Benutzer exists\" never ends, because no Benutzer is ever deleted (E6, deactivation only), so it is not a period yet. Please tie it to something that happens, e.g. N months after deactivation, or st…",
+        "state": "CHANGES_REQUESTED",
+        "submittedAt": "2026-10-13T13:14:50Z",
+        "url": "https://github.com/WirStrom1/olaf-docs/pull/75#pullrequestreview-5504076049"
+       }
+      ]
+     }
+    },
+    {
+     "number": 243,
+     "title": "feat(ecp): the combined statement route (plan 076)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/243",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": true,
+     "createdAt": "2026-09-30T22:21:45Z",
+     "updatedAt": "2026-10-13T13:10:44Z",
+     "headRefOid": "57dadb4cf2face657aad9a0898ea02ef73b44253",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABbPxNxQ",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Hi Chris, I read only the statement part, as you asked; #240 and #241 get their own reviews. In short: the contract is tight, and I found no IDOR. The route answers 503 before any work unless `STATEMENT_ENABLED === 'true'`. It needs a valid Bearer and refuses privileged `admin_submit` tokens (§10 co…",
+        "createdAt": "2026-10-12T11:34:16Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/243#issuecomment-6123441605"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbP5tyA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 thanks — addressed in ca9ab709:\n\n1. **Fan-out / per caller** — fixed. `billing()` now runs at most 3 of one statement's ECP reads at once (a per-call queue, below the process-wide 4 in `audit.ts`), so a registration request queues behind at most 3 statement reads instead of ~100. `cachedBil…",
+        "createdAt": "2026-10-12T11:43:35Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/243#issuecomment-6123580872"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbg3z4g",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Review of 13.10. — `2c88fb39`:\n\n- 3: a gated month of the export window without a billed row is an included period with no figures (page: \"liegt noch nicht vor\"). Test: billed March and May, April awaiting, months before onboarding not added, foreign community never.\n- 3b: `/Eeg/List` first, `billin…",
+        "createdAt": "2026-10-13T08:20:02Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/243#issuecomment-6141375458"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbhDvJw",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Points 1 and 2, decided today (plan 076 §16), in `48ccad29` (+ tariff-app#177 `275f1f0`):\n\n1. `send-otp` / `verify-otp` take `purpose: 'statement'`: mail logged as `otp_statement` (limit counts both kinds, on `MIT_ANMELDELINK`), no consent hint or enrolment; `verify-otp` creates no `form_users` row …",
+        "createdAt": "2026-10-13T08:32:02Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/243#issuecomment-6141570855"
+       },
+       {
+        "id": "IC_kwDOShiJmM8AAAABbllH0w",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "@knut523 on your two notes from #241's review:\n\n- Stale #241 copy: already merged in `41c2d62a` (#241 head `a566be23`). Only `20261012100000_meter_points_max_energy_rate` is left, nothing references the old name; feed-in gate, `failRun` summary and both CI steps are in.\n- `rate_gp = 0`: a real bug, …",
+        "createdAt": "2026-10-13T13:10:44Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/243#issuecomment-6146312147"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOShiJmM8AAAABR9rsmw",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Hi Chris, danke für `ca9ab709`. Ich habe diesmal den ganzen Statement-Teil auf dem aktuellen HEAD (`242083d5`, Diff `pr/240...pr/243`) gelesen und nicht nur die Fix-Commits. Dazu habe ich den Rechenweg stichprobenartig über die echten Funktionen nachgerechnet. Meine fünf Punkte vom 12.10. sind erled…",
+        "state": "COMMENTED",
+        "submittedAt": "2026-10-13T08:01:37Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/243#pullrequestreview-5500497051"
+       }
+      ]
+     }
+    },
+    {
+     "number": 70,
+     "title": "feat(admin): ADMIN_DB_USER picks Admin's request-path role (plan 113, OLAF-345)",
+     "url": "https://github.com/WirStrom1/olaf-umbrella/pull/70",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-13T08:21:20Z",
+     "updatedAt": "2026-10-13T13:07:44Z",
+     "headRefOid": "ff6689719e86497860a3d4d3b45ec00de4c7afee",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-umbrella"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": [
+       {
+        "requestedReviewer": {
+         "login": "caschberg"
+        }
+       }
+      ]
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 72,
+     "title": "docs(infra): runbook for Admin's Postgres TLS emergency switch (OLAF-347)",
+     "url": "https://github.com/WirStrom1/olaf-umbrella/pull/72",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-13T12:21:08Z",
+     "updatedAt": "2026-10-13T12:29:31Z",
+     "headRefOid": "be072caa1df7bc5de58a45a667511fe7b1295919",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-umbrella"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOS06CXc8AAAABbkukzA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review: docs only, one new section at the end of `infra/README.md`. Commands and log lines match olaf-admin develop (`src/lib/postgres-connection.ts`, `migrate-runner/migrate.sh`) and the Dev rehearsal. The staging-slot note is reasoned from the swap flow, not rehearsed on production.",
+        "createdAt": "2026-10-13T12:21:15Z",
+        "url": "https://github.com/WirStrom1/olaf-umbrella/pull/72#issuecomment-6145418444"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 206,
+     "title": "release: develop into main (v1.6.0)",
+     "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/206",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": true,
+     "createdAt": "2026-10-13T10:38:18Z",
+     "updatedAt": "2026-10-13T12:22:07Z",
+     "headRefOid": "3304d3dd44f0be0abf2b532e9a2b30e1bf229c1f",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-tariff-app"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 66,
+     "title": "release: develop into main (v1.6.0)",
+     "url": "https://github.com/WirStrom1/olaf-calc-api/pull/66",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": true,
+     "createdAt": "2026-10-13T12:21:54Z",
+     "updatedAt": "2026-10-13T12:21:54Z",
+     "headRefOid": "a3d88d2ef69afbb783de2b007b6e074dc41fe466",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-calc-api"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 102,
+     "title": "release: develop into main (v1.6.0)",
+     "url": "https://github.com/WirStrom1/olaf-durable-func/pull/102",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": true,
+     "createdAt": "2026-10-13T12:21:52Z",
+     "updatedAt": "2026-10-13T12:21:52Z",
+     "headRefOid": "fec3ea1d36e290e482979e302396e307cbde4cce",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-durable-func"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 207,
+     "title": "feat(sammelanmeldung): customer route on develop, IBAN per Zählpunkt (plan 088)",
+     "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/207",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-13T10:40:18Z",
+     "updatedAt": "2026-10-13T11:10:49Z",
+     "headRefOid": "44bb1321599aa9b478a60a4c2a7c3c4b0a01e856",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-tariff-app"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 331,
+     "title": "feat(bulk-registration): Sammelanmeldung on develop, IBAN per Zählpunkt (plan 088)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/331",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-13T10:31:43Z",
+     "updatedAt": "2026-10-13T11:08:02Z",
+     "headRefOid": "05be48ad1f502fba21657b0190b2b12e570268bd",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABbjH9VA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Tariff side: WirStrom1/olaf-tariff-app#207 (replaces #204). Infra: WirStrom1/olaf-umbrella#69, now without `REGISTRATION_FLOW_LEGAL_PUBLISH`.",
+        "createdAt": "2026-10-13T10:40:28Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/331#issuecomment-6143737172"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 326,
+     "title": "fix(db): verify the Postgres server certificate on every connection (OLAF-347)",
+     "url": "https://github.com/WirStrom1/olaf-admin/pull/326",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-13T08:02:37Z",
+     "updatedAt": "2026-10-13T11:06:07Z",
+     "headRefOid": "0f33aca8d62b99154bbba16bbc75a23ea9ce5dad",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-admin"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": [
+       {
+        "requestedReviewer": {
+         "login": "knut523"
+        }
+       }
+      ]
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiJmM8AAAABbgnEEA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review (olaf-code-review, verified by a second model, plus council): nothing blocking.\n- Fixed in baad81fb: a repeated `sslmode` now takes the last value (libpq), `verify-ca` without `sslrootcert` warns, runbook says the escape hatch is exactly `true`. 0f33aca8: hatch is set per slot.\n- Council…",
+        "createdAt": "2026-10-13T08:02:45Z",
+        "url": "https://github.com/WirStrom1/olaf-admin/pull/326#issuecomment-6141101072"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 78,
+     "title": "plans(088): Sammelanmeldung — many Zählpunkte in one Vorgang, admin and tariff app",
+     "url": "https://github.com/WirStrom1/olaf-docs/pull/78",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-13T07:55:25Z",
+     "updatedAt": "2026-10-13T10:44:46Z",
+     "headRefOid": "1f799a51d7533a58dedb2dd8a11e8ac408eb0fa5",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-docs"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShgpzM8AAAABbghYxA",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Sammelanmeldung (plan 088) — all parts: plan WirStrom1/olaf-docs#78 · admin WirStrom1/olaf-admin#325 · tariff app WirStrom1/olaf-tariff-app#204 · infra WirStrom1/olaf-umbrella#69.",
+        "createdAt": "2026-10-13T07:56:46Z",
+        "url": "https://github.com/WirStrom1/olaf-docs/pull/78#issuecomment-6141008068"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOShgpzM8AAAABR9zm0Q",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Plan 092 hold applies, so no approval yet regardless of the points below.\n\n- **Missing sections required by AGENTS.md:** there's no \"What gets written back\" section and no `**Spec:**` header line (say so explicitly if no vault spec exists).\n- **Retention:** only Vollmachten and confirmations have on…",
+        "state": "CHANGES_REQUESTED",
+        "submittedAt": "2026-10-13T08:13:20Z",
+        "url": "https://github.com/WirStrom1/olaf-docs/pull/78#pullrequestreview-5500626641"
+       }
+      ]
+     }
+    },
+    {
+     "number": 204,
+     "title": "feat(sammelanmeldung): customer route for many Zählpunkte (plan 088)",
+     "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/204",
+     "state": "CLOSED",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-13T07:56:21Z",
+     "updatedAt": "2026-10-13T10:40:26Z",
+     "headRefOid": "b505af938bf255b0ac9d60ff9f4dc370a6f7bdc5",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-tariff-app"
+     },
+     "author": {
+      "login": "knut523"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOShiK088AAAABbghkUg",
+        "author": {
+         "login": "knut523"
+        },
+        "body": "Sammelanmeldung (plan 088) — all parts: plan WirStrom1/olaf-docs#78 · admin WirStrom1/olaf-admin#325 · tariff app WirStrom1/olaf-tariff-app#204 · infra WirStrom1/olaf-umbrella#69.",
+        "createdAt": "2026-10-13T07:56:58Z",
+        "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/204#issuecomment-6141011026"
+       },
+       {
+        "id": "IC_kwDOShiK088AAAABbjH5uA",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Superseded by WirStrom1/olaf-tariff-app#207: the same route rebuilt on `develop` without the Strecken-Konfigurator, plus IBAN per Zählpunkt (plan 088 re-cut, Christoph 13.10.2026). Closing this one.",
+        "createdAt": "2026-10-13T10:40:24Z",
+        "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/204#issuecomment-6143736248"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": [
+       {
+        "id": "PRR_kwDOShiK088AAAABR9zj-w",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Plan 092 hold applies (stacked on #193), so no approval yet regardless of the points below.\n\n- **Hidden tenant fields still sent** (`sammel.ts:65` `toTyped`): a flat switched back from \"vermietet\" to \"leer\" keeps `mieter_*`. The admin flags `mieter_bei_leerstand` on `mieter_email`, which `RowEditor`…",
+        "state": "CHANGES_REQUESTED",
+        "submittedAt": "2026-10-13T08:13:18Z",
+        "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/204#pullrequestreview-5500625915"
+       }
+      ]
+     }
+    },
+    {
+     "number": 101,
+     "title": "fix(submitToAdmin): retry a save the admin provably did not make (plan 114 D7)",
+     "url": "https://github.com/WirStrom1/olaf-durable-func/pull/101",
+     "state": "OPEN",
+     "merged": false,
+     "isDraft": false,
+     "createdAt": "2026-10-13T10:38:59Z",
+     "updatedAt": "2026-10-13T10:39:09Z",
+     "headRefOid": "ba6b1b5f24d034ebf89fd18be55350b9ff7f39ba",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-durable-func"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": [
+       {
+        "requestedReviewer": {
+         "login": "knut523"
+        }
+       }
+      ]
+     },
+     "comments": {
+      "nodes": [
+       {
+        "id": "IC_kwDOS2RHBM8AAAABbjGpgw",
+        "author": {
+         "login": "bizarrochris"
+        },
+        "body": "Self-review done (code-review pass, then council with a second model as devil's advocate).\n\n- Retry set checked against Node 26's real fetch errors: connect-phase codes only; `UND_ERR_SOCKET` and every 500/502/504 stay plain failures.\n- Replay: a run started before this deploy has no `retryable` in …",
+        "createdAt": "2026-10-13T10:39:09Z",
+        "url": "https://github.com/WirStrom1/olaf-durable-func/pull/101#issuecomment-6143715715"
+       }
+      ]
+     },
+     "reviews": {
+      "nodes": []
+     }
+    },
+    {
+     "number": 205,
+     "title": "fix(copy): no first-name greeting on the confirmation pages",
+     "url": "https://github.com/WirStrom1/olaf-tariff-app/pull/205",
+     "state": "MERGED",
+     "merged": true,
+     "isDraft": false,
+     "createdAt": "2026-10-13T10:31:10Z",
+     "updatedAt": "2026-10-13T10:37:33Z",
+     "headRefOid": "be386da49c4786b242f44b56efe8df54aa6cb792",
+     "repository": {
+      "nameWithOwner": "WirStrom1/olaf-tariff-app"
+     },
+     "author": {
+      "login": "bizarrochris"
+     },
+     "reviewRequests": {
+      "nodes": []
+     },
+     "comments": {
+      "nodes": []
+     },
+     "reviews": {
+      "nodes": []
+     }
+    }
+   ]
+  },
+  "s1": {
+   "issueCount": 0,
+   "nodes": []
+  },
+  "rateLimit": {
+   "remaining": 4845,
+   "resetAt": "2026-10-15T07:31:19Z"
+  }
+ }
+}
