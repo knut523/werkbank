@@ -16,7 +16,7 @@ import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
-import { acquire, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
+import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 
 export interface Sink {
   write(text: string): void;
@@ -1184,8 +1184,11 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
 
   // Kontext-Paket + Hygiene-Fragen nur für neue Sitzungen (nicht bei resume, nicht im Nur-lesen-Lauf).
   // Parallel dazu: die Claude-Konten der Person (ohne Werkbank: nur der Schlüssel aus der Anfrage).
-  const accountsP = (req.accounts ? req.accounts().catch((e: any) => { log('konten nicht geladen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); return null; }) : Promise.resolve(null))
-    .then((list) => normalizeAccounts(list, req.token));
+  // kontenFehlen: die Liste kam nicht (nur „chat“) — dann vor jeder „ausgeschöpft“-Meldung neu laden (Hotfix 15b).
+  let kontenFehlen = false;
+  const ladeKonten = () => req.accounts!().catch((e: any) => { log('konten nicht geladen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
+  const accountsP = (req.accounts ? ladeKonten() : Promise.resolve(null))
+    .then((list) => { kontenFehlen = !!req.accounts && list === null; return normalizeAccounts(list, req.token); });
   let extra = '';
   if (!resume && !req.readonly && req.sessionContext) {
     try { extra = await req.sessionContext(); } catch (e: any) { log('kontext fehlgeschlagen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); }
@@ -1205,9 +1208,10 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Energietopf nahe der Obergrenze (vorrang, Werkbank): niedrig-riskante Arbeit zuerst auf Melious, damit nichts verfällt.
   const chatOn = meliousChatOn(key) || !!strandMel || profil === 'leser' || profil === 'schreiber' || (!!melAcc?.vorrang && risiko === 'niedrig');
   // Ersatzkette für Hauptchat und Strang-Leads (Knut 15.10.: „keine Limitations“): Opus → Sonnet → Melious, ohne Warten.
-  const kette = !!melAcc?.kette && (live.leit || (live.orch && profil !== 'leser' && profil !== 'schreiber'));
+  const ketteMit = (m?: Account) => !!m?.kette && (live.leit || (live.orch && profil !== 'leser' && profil !== 'schreiber'));
   const bestellt = strandClaude ?? req.model;
-  const queue = planQueue(accounts, exhaustedOf(user), { conv: key, chatOn, overflow: risiko === 'niedrig', kette, sonnetStufe: !/^(sonnet|haiku)$/.test(String(bestellt ?? '')) });
+  const plan = (kette: boolean) => planQueue(accounts, exhaustedOf(user), { conv: key, chatOn, overflow: risiko === 'niedrig', kette, sonnetStufe: !/^(sonnet|haiku)$/.test(String(bestellt ?? '')) });
+  const queue = plan(ketteMit(melAcc));
   const tokens = accounts.map((a) => a.token);
   const redact = (t: string) => tokens.reduce((x, tok) => x.replaceAll(tok, '***'), t);
   let acct: Account = queue[0];
@@ -1346,13 +1350,27 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         }
         if (!live.rateLimited || live.abort.signal.aborted) break;
         markExhausted(user, acct, live.rateLimited.resetsAt);
+        if (!queue[i + 1] && kontenFehlen) {
+          // Liste fehlte: nicht „ausgeschöpft“ melden, sondern nachladen und mit der vollen Kette weitermachen (ohne schon Versuchtes).
+          const list = await ladeKonten();
+          if (list) {
+            kontenFehlen = false;
+            const tried = new Set(queue.slice(0, i + 1).map((a) => `${fp(a.token)}:${a.chainModel ?? ''}`));
+            accounts.splice(0, accounts.length, ...normalizeAccounts(list, req.token));
+            tokens.splice(0, tokens.length, ...accounts.map((a) => a.token));
+            const rest = plan(ketteMit(accounts.find(isMelious))).filter((a) => !tried.has(`${fp(a.token)}:${a.chainModel ?? ''}`));
+            queue.push(...rest);
+            log('konten nachgeladen', { conv: key, konten: accounts.length, neu: rest.length });
+          }
+        }
         const next = queue[i + 1];
         if (!next) {
           for (const id of live.carry ?? []) { const m = injects.get(id); if (m && m.state === 'zugestellt') m.state = 'ungelesen'; }
           live.carry = [];
           log('kontingent erschöpft', { conv: key, konto: acct.id, konten: accounts.length });
           markEnd(live, 'limit');
-          emitStatus(live, `⚠️ ${isMelious(acct) ? MELIOUS_MSGS[live.melious?.fehler ?? (live.melious?.cut ? 'cut' : 'limit')] : AUTH_HINTS.rate_limit}`);
+          // Jedes Glied nennen (Claude-Konten mit Reset, Melious-Stand) — nie nur der Claude-Text (Hotfix 15b).
+          emitStatus(live, `⚠️ ${isMelious(acct) ? `${MELIOUS_MSGS[live.melious?.fehler ?? (live.melious?.cut ? 'cut' : 'limit')]} ` : ''}${erschoepftMeldung(accounts, exhaustedOf(user), Date.now(), kontenFehlen)}`);
           live.outcome ??= 'rate_limit';
           break;
         }

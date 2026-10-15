@@ -97,10 +97,10 @@ test('Das aktive Konto wird gemerkt: der nächste Zug beginnt auf dem funktionie
   assert.equal(JSON.stringify(state).includes('sk-ant'), false, 'keine Tokens im Zustand');
 });
 
-test('Alle Konten erschöpft → die bisherige rate_limit-Meldung', async () => {
+test('Alle Konten erschöpft → Meldung mit jedem Konto (Reset) und dem Melious-Stand (Hotfix 15b)', async () => {
   const a = await send('c3', 'Geht nicht', 'u2', tok('limit-chat2'));
   assert.match(a, /↻ Konto „Privat“ übernimmt/);
-  assert.match(a, /Dein Claude-Kontingent ist gerade ausgeschöpft/);
+  assert.match(a, /⚠️ Claude-Kontingent ausgeschöpft — „Chat-Schlüssel“ \(Reset [^)]+\), „Firma“ \(Reset [^)]+\) und „Privat“ \(Reset [^)]+\); Melious: in der Einrichtung nicht erlaubt\./);
   assert.doesNotMatch(a, /Du hast geschrieben/);
 });
 
@@ -116,7 +116,7 @@ test('Einzelner Schlüssel (bisherige Nutzer): unverändert, auch wenn die Werkb
   assert.match(a, /Du hast geschrieben: Nur ein Konto/);
   assert.doesNotMatch(a, /übernimmt/);
   const l = await send('c6', 'Ausgeschöpft', 'u10', tok('limit-solo'));
-  assert.match(l, /Dein Claude-Kontingent ist gerade ausgeschöpft/);
+  assert.match(l, /Claude-Kontingent ausgeschöpft — „Chat-Schlüssel“ \(Reset [^)]+\); Melious: in der Einrichtung nicht erlaubt/);
   assert.doesNotMatch(l, /übernimmt/);
   const k = await send('c7', 'Werkbank kaputt', 'kaputt');
   assert.match(k, /Du hast geschrieben: Werkbank kaputt/);

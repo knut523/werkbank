@@ -178,6 +178,48 @@ export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?:
   return out;
 }
 
+type RawAccounts = Parameters<typeof normalizeAccounts>[0] & unknown[];
+// Letzte erfolgreich geladene Kontenliste je Person — nur im Speicher (enthält Tokens), nie auf Platte.
+const lastAccounts = new Map<string, RawAccounts>();
+
+/**
+ * Kontenliste der Werkbank mit einem Wiederholversuch (Hotfix 15b: fünf Züge gleichzeitig → Abbruch nach 3 s → nur „chat“ →
+ * falsches „ausgeschöpft“). Scheitern beide, gilt die letzte erfolgreich geladene Liste der Person; ohne sie der Fehler.
+ */
+export async function loadAccounts(userId: string, fetcher: () => Promise<RawAccounts>): Promise<RawAccounts> {
+  let err: unknown;
+  for (let i = 0; i < 2; i++) {
+    try { const list = await fetcher(); lastAccounts.set(userId, list); return list; } catch (e) { err = e; }
+  }
+  const last = lastAccounts.get(userId);
+  if (last) { log('konten aus dem speicher', { error: String((err as any)?.message ?? err).slice(0, 120) }); return last; }
+  throw err;
+}
+
+/** Zeitpunkt für Meldungen, Europe/Berlin: „heute 15:00“ bzw. „Sa 18.10., 09:00“. */
+export function wann(t: number, now = Date.now()): string {
+  const f = (o: Intl.DateTimeFormatOptions, x: number) => new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', ...o }).format(x);
+  const zeit = f({ hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }, t);
+  if (f({ dateStyle: 'short' }, t) === f({ dateStyle: 'short' }, now)) return `heute ${zeit}`;
+  return `${f({ weekday: 'short' }, t).replace('.', '')} ${f({ day: '2-digit', month: '2-digit' }, t)}, ${zeit}`;
+}
+
+/** Meldung, wenn kein Weg mehr frei ist: jedes Claude-Konto mit Reset und der Melious-Stand — nie nur der Claude-Text. */
+export function erschoepftMeldung(accounts: Account[], ex: Exhausted, now = Date.now(), ungeladen = false): string {
+  const claude = accounts.filter((a) => !isMelious(a)).filter((a, i, all) => all.findIndex((b) => b.id === a.id) === i);
+  const konten = claude.map((a) => `„${a.label}“${ex[a.id]?.until > now ? ` (Reset ${wann(ex[a.id].until, now)})` : ''}`);
+  const liste = konten.length > 1 ? `${konten.slice(0, -1).join(', ')} und ${konten.at(-1)}` : konten[0];
+  const mel = accounts.find(isMelious);
+  const v = mel && ex[mel.id];
+  if (ungeladen) return `Claude-Kontingent von ${liste} ausgeschöpft. Die Kontenliste der Werkbank war nicht zu laden — ob weitere Claude-Konten oder Melious frei sind, ist unbekannt. Bitte gleich noch einmal.`;
+  const melious = !mel ? 'in der Einrichtung nicht erlaubt'
+    : mel.sperre ? `gesperrt (${mel.sperre})`
+    : v && v.until > now && (!v.fp || v.fp === fp(mel.token)) ? `gesperrt bis ${wann(v.until, now)}`
+    : (mel.rest ?? 0) <= 0 ? 'Energie bis zum Deckel aufgebraucht'
+    : `frei (≈ ${Math.round(mel.rest!).toLocaleString('de-DE')} ${mel.faktoren && Object.keys(mel.faktoren).length ? 'Energie geschätzt' : 'Tokens'}), ${mel.fallback || mel.kette ? 'für diesen Zug aber nicht freigegeben (nur Chats, Stränge mit Risiko „niedrig“ oder Ersatzkette)' : 'als letzter Ausweg in der Einrichtung aus'}`;
+  return `Claude-Kontingent ausgeschöpft — ${liste}; Melious: ${melious}. Bitte später noch einmal.`;
+}
+
 // ---------- Melious (Plan 162, Knut 14.10.2026: testweise, vorsichtig, Verbrauch im Blick) ----------
 // Standard aus: die Werkbank liefert das Konto nur, wenn Melious in der Einrichtung erlaubt ist. Genommen wird es dann nur
 // (a) in Chats mit `/melious an` — dort zuerst — oder (b) mit „letzter Ausweg“, wenn kein Claude-Konto frei ist. Nie in der

@@ -239,7 +239,7 @@ serve('werkbank', '0.1.0', [
     description: 'Zweite Meinung von GLM 5.3 (Melious, Open-Weight) — ZUSÄTZLICH zu deiner eigenen Prüfung, nie statt ihr. art=diff: Code-Review eines Diffs (Befunde mit Datei:Zeile, Schwere, Fix); art=plan: Plan-Challenge (schwächste Annahmen, fehlende Fälle, Rückweg); art=council: Advocatus Diaboli zu einer Entscheidung. text: Diff/Plan/Entscheidung (bis 200 000 Zeichen), frage: optional, worauf besonders achten. Bewerte die Antwort selbst; übernimm nur, was du nachprüfen kannst. Kostet Melious-Energie, keine Claude-Tokens.',
     inputSchema: { type: 'object', properties: { art: { type: 'string', enum: ['diff', 'plan', 'council'] }, text: { type: 'string' }, frage: { type: 'string' } }, required: ['art', 'text'] },
     run: async (a: any) => {
-      const j = await call('/internal/melious-challenge', { art: a.art, text: a.text, frage: a.frage ?? '' });
+      const j = await call('/internal/melious-challenge', { art: a.art, text: a.text, frage: a.frage ?? '' }, 200_000);
       if (!j.ok) return `Gegenprüfung nicht möglich: ${j.error ?? 'unbekannter Fehler'}`;
       return `Gegenprüfung GLM 5.3 (Melious, Open-Weight — Ergebnis prüfen; ≈ ${j.energie ?? '?'} Energie${j.bezahlt === 'credits' ? ', bezahlt mit Guthaben' : ''}):\n\n${j.text}`;
     },

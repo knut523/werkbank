@@ -1293,6 +1293,8 @@ test('Roadmap-Automatik: „Für mich offen“, Ja/Nein auf Sync-Fragen nur für
   writeFileSync(proto, readFileSync(proto, 'utf8') + `\n## 2026-10-08 11:00 · Nachzug PM-1\n\n- **erledigt:** \`${q1.id}\` (4-review-….md)\n`);
   r = await anna.req('/api/roadmap/mine');
   assert.deepEqual(r.j.questions, []); assert.deepEqual(r.j.pendingApprovals, []);
+  // GET schreibt die Datei im Hintergrund (writeApprovals ohne await) — warten statt sofort lesen.
+  for (let i = 0; i < 40 && !/## Freigegeben\n\n- keine/.test(readFileSync(join(tmp, 'vault-sync', 'freigaben.md'), 'utf8')); i++) await new Promise((res) => setTimeout(res, 50));
   assert.match(readFileSync(join(tmp, 'vault-sync', 'freigaben.md'), 'utf8'), /## Freigegeben\n\n- keine/);
   assert.equal((await mongo.db(DB).collection('roadmap_answers').findOne({ _id: q1.id as any }) as any).done, true);
   // Nächster regulärer Lauf schlägt denselben (verworfenen) Text wieder vor → bleibt ausgeblendet; neue Frage erscheint.
