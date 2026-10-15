@@ -70,6 +70,10 @@ export async function setTickerSettings(inp: any, by: { id: string; name: string
 
 // ---------- Abfrage ----------
 
+/** Knut 15.10. (D2/D3): Auto-Review und automatisches Posten nur für Repos dieser Organisationen (Ticker sieht mehr). */
+export const reviewOrgs = (env = process.env) => String(env.WERKBANK_PR_REVIEW_ORGS || 'WirStrom1').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+export const reviewErlaubt = (repo: string, env = process.env) => reviewOrgs(env).includes(String(repo).split('/')[0].toLowerCase());
+
 export const scopes = (env = process.env) => String(env.WERKBANK_TICKER_SCOPE || 'org:WirStrom1,repo:knut523/werkbank')
   .split(',').map((s) => s.trim()).filter((s) => /^(org|repo|user):[\w.\/-]+$/.test(s)).slice(0, 4);
 
@@ -220,6 +224,7 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
     // Review-Anfrage nur, wenn der PR-Autor auf der Liste steht: das Review führt die Tests des PRs aus (Review A2).
     const trigger = e.kind === 'tag' || (e.kind === 'anfrage' && s.onRequest && !!e.actor && s.allow.includes(e.actor));
     if (!trigger || e.at < s.autoReviewSince || !e.head) continue;
+    if (!reviewErlaubt(e.repo)) { await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: 'kein Auto-Review für dieses Repo' } }); continue; }
     const id = `${prKey(e.repo, e.number)}@${e.head}`;
     try {
       await reviewsCol().insertOne({ _id: id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, head: e.head, trigger: e.kind, by: e.actor, event: e._id, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date });
@@ -246,6 +251,7 @@ export async function tickerOverview(limit = 40) {
     aus: tickerAus(),
     lauf: st ? { at: (st as any).at ?? null, error: (st as any).error ?? null, errorAt: (st as any).errorAt ?? null, counts: (st as any).counts ?? null, rate: (st as any).rate ?? null } : null,
     scopes: scopes(),
+    reviewOrgs: reviewOrgs(),
     items: items.map(({ seenAt, ...e }: any) => e),
     reviews: reviews.map((r: any) => ({ id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, trigger: r.trigger, by: r.by, status: r.status, strand: r.strand ?? null, empfehlung: r.empfehlung ?? null, posted: r.posted ?? null, note: r.note ?? null, createdAt: r.createdAt })),
     heute: reviews.filter((r: any) => r.startedAt && vienna(new Date(r.startedAt)).date === heute).length,

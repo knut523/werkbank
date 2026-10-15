@@ -19,7 +19,7 @@ import { graphql } from "./server/github.ts";
 import { tickerQuery, scopes, ghTime } from "./server/prticker.ts";
 const sc = scopes();
 const since = new Date(Date.now() - Number(process.env.TAGE) * 86400_000);
-const vars = Object.fromEntries(sc.map((s, i) => [`q${i}`, `is:pr ${s} updated:>=${ghTime(since)} sort:updated-desc`]));
+const vars = Object.fromEntries(sc.map((s, i) => [`q${i}`, `is:pr ${s} updated:>=${ghTime(since)} sort:updated-asc`]));
 const data = await graphql(process.env.WERKBANK_GITHUB_TOKEN, tickerQuery(sc.length), vars);
 const cut = (t) => (typeof t === "string" && t.length > 300 ? t.slice(0, 300) + "…" : t);
 for (const k of Object.keys(data)) for (const p of data[k]?.nodes ?? []) {

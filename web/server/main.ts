@@ -46,7 +46,7 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
-import { tickerTick, tickerOverview, setTickerSettings, reviewsCol } from './prticker.ts';
+import { tickerTick, tickerOverview, setTickerSettings, reviewsCol, reviewErlaubt } from './prticker.ts';
 import { reviewTick, prNowVia, parseKommentar, fussnote } from './prreview.ts';
 import { postReview, schreibenAus, type ReviewEvent } from './githubwrite.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
@@ -1309,6 +1309,7 @@ on('POST', /^\/api\/leitstand\/ticker\/jetzt$/, async (req, res) => {
 on('POST', /^\/api\/leitstand\/ticker\/review$/, async (req, res) => {
   const u = await needAdmin(req);
   const b = await body(req);
+  if (!reviewErlaubt(String(b.id ?? '').split('#')[0])) throw new HttpError(409, 'Für dieses Repo gibt es kein Auto-Review (WERKBANK_PR_REVIEW_ORGS).');
   const r = await reviewsCol().updateOne({ _id: String(b.id ?? '') as any, status: { $in: ['deckel', 'fehler', 'übersprungen', 'startet'] } }, { $set: { status: 'wartet', note: `von ${u.name} erneut angestoßen`, ownerId: u.id } });
   if (!r.modifiedCount) throw new HttpError(409, 'Eintrag nicht gefunden oder läuft schon.');
   send(res, 200, { ok: true });

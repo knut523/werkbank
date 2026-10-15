@@ -52,7 +52,7 @@ export function PrTicker() {
         <Schalter label="auch bei Review-Anfrage an mich" an={s.onRequest} disabled={busy || !s.autoReview} testid="schalter-anfrage" onChange={(v) => set({ onRequest: v })} />
       </div>
       <details className="small" style={{ marginBottom: 8 }}>
-        <summary>Deckel und Liste · {s.maxPerDay}/Tag · {s.maxParallel} gleichzeitig · heute {d.heute} gestartet</summary>
+        <summary>Deckel und Liste · {s.maxPerDay}/Tag · {s.maxParallel} gleichzeitig · heute {d.heute} gestartet · Auto-Review und Posten nur für {(d.reviewOrgs ?? []).join(', ')} · PR-Tests werden nicht ausgeführt</summary>
         <div className="row" style={{ gap: 10, flexWrap: 'wrap', margin: '6px 0' }}>
           <label>max. je Tag <input className="input" type="number" min={0} max={50} defaultValue={s.maxPerDay} style={{ width: 60 }} onBlur={(e) => Number(e.target.value) !== s.maxPerDay && set({ maxPerDay: Number(e.target.value) })} data-testid="deckel-tag" /></label>
           <label>gleichzeitig <input className="input" type="number" min={1} max={5} defaultValue={s.maxParallel} style={{ width: 50 }} onBlur={(e) => Number(e.target.value) !== s.maxParallel && set({ maxParallel: Number(e.target.value) })} /></label>
