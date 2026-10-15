@@ -23,6 +23,7 @@ import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, s
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
+import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
 import { reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
 import { berichtKopf, execSummary } from './berichtkopf.ts';
 import { readBericht as readBerichtDatei, reviewDir } from './bericht.ts';
@@ -525,7 +526,7 @@ on('POST', /^\/api\/setup\/melious\/reset$/, async (req, res) => {
 on('GET', /^\/api\/melious\/usage$/, async (req, res) => {
   const u = await needUser(req);
   const s = await meliousSettings(u);
-  send(res, 200, s.configured ? { enabled: s.enabled, fallback: s.fallback, ...(await meliousUsage(u)) } : { configured: false });
+  send(res, 200, s.configured ? { enabled: s.enabled, fallback: s.fallback, ...(await meliousUsage(u)), messung: await messungView(u) } : { configured: false, messung: await messungView(u) });
 });
 
 async function meliousBooking(u: User, usage: unknown, model?: unknown) {
@@ -2678,7 +2679,23 @@ on('POST', /^\/internal\/melious-challenge$/, async (req, res) => {
   const u = await internalUser(req, b);
   const r = await meliousChallenge(u, String(b.art ?? ''), String(b.text ?? ''), String(b.frage ?? ''));
   log('melious challenge', { user: u.id, art: String(b.art ?? ''), ok: r.ok, energie: r.energie ?? null, error: r.error ?? null });
+  await recordChallenge(u, b.conv, b.art, r.ok).catch(() => {});
   send(res, 200, r);
+});
+
+// Messung je Zug und je Delegation aus der Brücke (Plan 165, S8) — für die Melious-Kachel.
+on('POST', /^\/internal\/zug-log$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  await recordZug(u, b.zug);
+  send(res, 200, { ok: true });
+});
+on('POST', /^\/internal\/delegation-log$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  await recordDelegation(u, b.delegation);
+  log('delegation', { user: u.id, id: String(b.delegation?.id ?? ''), rolle: String(b.delegation?.rolle ?? ''), status: String(b.delegation?.status ?? ''), urteil: b.delegation?.urteil ?? null });
+  send(res, 200, { ok: true });
 });
 
 on('POST', /^\/internal\/measure$/, async (req, res) => {
