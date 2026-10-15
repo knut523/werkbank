@@ -156,6 +156,18 @@ Worker haben diese Werkzeuge nicht (keine Verschachtelung), auch kein `hauptchat
   Prüfer-Urteil, Prüfurteil des Leads → `werkbank.delegationen`.
 - Kachel: letzte 24 h je Phase × Modell (Züge, Tokens, Energie), Anteil Melious, letzte Delegationen.
 
+## Review (15.10.2026)
+- Pass A (Standards + Spec): 7 Ermessensbefunde, 14 Spec-Befunde. Pass B (fünf Winkel): FAIL mit 14 Befunden, darunter zwei schwere
+  (Prüfer-Hinweis ging verloren; ein Worker hätte die Referenz des Integrationszweigs umbiegen und so die Prüfbefehle bestimmen
+  können). Pass C: `challenge` (GLM 5.3) brach live jedes Mal nach 30 s ab (Fix in diesem Paket) — stattdessen eigener feindseliger
+  Durchgang und ein Gegner auf Sonnet. Fix-Runde 1 behebt alle Befunde ≥ 50 bis auf die unten genannten Abweichungen.
+- Prüfbefehle lesen jetzt aus dem beim Anlegen des Unter-Worktrees festgehaltenen Commit des Integrationszweigs; `git update-ref`,
+  `symbolic-ref`, `replace` und erzwungene Zweig-Befehle sind in Strängen gesperrt; Prüfläufe bekommen ein leeres HOME.
+- Abweichungen vom Plan: Die Lage (Melious-Rest, Claude-Konten) steht in `delegation_stand`, nicht zusätzlich in der Kachel (die
+  zeigt den Melious-Stand wie bisher). Phasen-Modelle gelten nur für Stränge mit Profil voll/bauer; Leser-/Schreiber-Stränge bleiben
+  bei „zuerst Melious“. Zurückgestellt (Ermessen): Ablauf aus sessions.ts in eine eigene Datei verschieben; gemeinsame Konstante für
+  den Geheimnis-Filter auch in mcpcall.ts/init-timing.ts.
+
 ## Nicht in diesem Paket
 GLM-5.3 als regulärer Ersatz-Lead über die Kette hinaus (Stufe 5), Entscheidungspunkt Woche 1 (C3), Checkpoint mitten in der Phase
 (C5: die Sitzung setzt beim Kontowechsel wie gebaut fort).
