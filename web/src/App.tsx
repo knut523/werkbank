@@ -84,6 +84,8 @@ export function App() {
   const [menu, setMenu] = useState(false);
   const todayN = useTodayCount(hash, !!cfg?.user && cfg?.features?.heute !== false);
   useEffect(() => setMenu(false), [hash]);
+  // Die Roadmap-Tabelle in Wissen ist entfallen (Paket 187, S6): die alte Adresse führt zur Roadmap.
+  useEffect(() => { if (/^#\/wissen\/~roadmap/.test(hash)) window.location.replace('#/roadmap'); }, [hash]);
   // Bereich merkt sich den zuletzt benutzten Reiter (die LibreChat-Leiste liest denselben Schlüssel).
   useEffect(() => { for (const b of BEREICHE) { const r = b.reiter.find((x) => x.match.test(hash)); if (r) try { localStorage.setItem(merkKey(b.id), r.href); } catch { /* privat */ } } }, [hash]);
   const load = () => api<Config>('/api/config').then((c) => { setChatOrigin(c.librechatUrl); setCfg(c); }, setErr);

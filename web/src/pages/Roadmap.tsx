@@ -5,7 +5,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { AnsetzenButton } from '../AgentAnsetzen';
 import { api, type Config, viaLabel } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, StateChip, useJiraLive } from '../ui.tsx';
-import { BeiMirLink, Md, note } from '../beimir.tsx';
+import { Md, note } from '../beimir.tsx';
 import { PrTickerMeldungen } from '../prticker.tsx';
 import { topicBuckets } from '../buckets.ts';
 
@@ -475,7 +475,6 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
         </div>
         {d && <a className="btn" href={note(d.hub.path)}>Roadmap-Hub öffnen</a>}
       </div>
-      <BeiMirLink what="Offene Entscheidungen, Sync-Fragen und Reviews" />
       <div className="tabs" role="tablist">
         {TABS.map(([id, label]) => <a key={id} role="tab" aria-selected={activeTab === id} className={activeTab === id ? 'active' : ''} href={`#/roadmap/${id}`}>{label}{d && id === 'prs' ? ` (${d.prs.length})` : d && id === 'prio' ? ` (${d.ranking.length})` : ''}</a>)}
       </div>
