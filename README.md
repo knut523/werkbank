@@ -8,7 +8,9 @@ Chat-Oberfläche fürs Team (LibreChat), hinter der **Claude Code** arbeitet —
 dem Obsidian-Vault und Jira, **unter dem eigenen Claude-Konto jeder Person, ohne API-Schlüssel** —
 und daneben die **Werkbank-Web-App**: Startseite **Heute** (was auf mich wartet, Review-Schlange der Agenten),
 Roadmap, Board (Jira-Kopie PM), Sprint (Review/Planning), Wissen (Vault); im Fuß Mein Tag, Ziele, Skills,
-Dateien & Teilen und Einrichtung.
+Dateien & Teilen und Einrichtung. Für Admins zusätzlich **Übersicht** (`#/uebersicht`): je offenem Unter-Chat eine Karte
+nach Thema (Ampel, Kurzfassung, Bericht/Folien/Bilder/Vorschau) mit direktem Handeln — Push freigeben, Entscheidungen
+per Auswahl, Rückfragen beantworten, Nacharbeit, Passt ([`docs/plan-uebersicht-handeln.md`](docs/plan-uebersicht-handeln.md)).
 Plan und Entscheidungen: [`PLAN.md`](PLAN.md).
 
 ```
