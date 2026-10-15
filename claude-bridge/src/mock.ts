@@ -11,6 +11,7 @@ import { VAULT_DIR } from './tools.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const alwaysLimit = new Set<string>();   // Sitzungen mit „maxturns-immer“
+const workerSessions = new Map<string, { rolle: string; prompt: string }>();   // Plan 165: Worker-Sitzung → Rolle und Auftrag (Reparaturrunde)
 
 const textOf = (m: any) => (typeof m?.message?.content === 'string' ? m.message.content : (m?.message?.content ?? []).map((b: any) => b?.text ?? '').join(''));
 
@@ -107,6 +108,62 @@ export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<
       const ea = options.extraArgs ?? {};
       yield text(`(Mock) Profil: Werkzeuge ${options.tools ? options.tools.join(',') : 'alle'}; MCP ${Object.keys(options.mcpServers ?? {}).sort().join(',') || '-'}; Skills ${Array.isArray(options.skills) ? options.skills.length : '?'}; Einstellungen ${(options.settingSources ?? []).join(',') || '-'}; bare ${'bare' in ea ? 'ja' : 'nein'}; dynamisch aus ${'exclude-dynamic-system-prompt-sections' in ea ? 'ja' : 'nein'}; Systemprompt ${typeof options.systemPrompt === 'string' ? 'eigen' : 'Claude Code'}; Melious ${mel ? 'ja' : 'nein'}. `);
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
+    // Plan 165: Lead, der die Werkzeuge delegieren/delegation_*/phase_wechseln über die Brücke aufruft wie der Werkbank-MCP
+    // (Person/Strang/Adresse aus dessen Umgebung). „MOCK-LEAD {json}“ mit schritte: [{ tool, args }].
+    const leadM = prompt.match(/MOCK-LEAD (\{.*\})/);
+    if (!mel && /limit/.test(tok) && (leadM || prompt.startsWith('Neue Phase „') || prompt.startsWith('Auftrag vom Strang-Lead'))) { yield* limited(); return; }
+    if (leadM && !prompt.startsWith('Neue Phase „')) {
+      const wenv = options.mcpServers?.werkbank?.env ?? {};
+      yield text(`(Mock-Lead) Modell ${options.model ?? 'Standard'}; Melious ${mel ? 'ja' : 'nein'}; Werkzeuge ${wenv.WERKBANK_BRIDGE_URL ? 'ja' : 'nein'}; Kompakt ${options.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE ?? '-'}. `);
+      const plan = JSON.parse(leadM[1]);
+      for (const s of plan.schritte ?? []) {
+        if (s.warte) { await sleep(s.warte); continue; }
+        const path = ({ delegieren: '/internal/delegate', delegation_stand: '/internal/delegate-stand', delegation_urteil: '/internal/delegate-urteil', phase_wechseln: '/internal/phase' } as Record<string, string>)[s.tool];
+        const r = await fetch(`${wenv.WERKBANK_BRIDGE_URL}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': wenv.WERKBANK_INTERNAL_TOKEN }, body: JSON.stringify({ userId: wenv.WERKBANK_USER_ID, conv: wenv.WERKBANK_CONV_ID, ...s.args }) });
+        const j: any = await r.json().catch(() => ({}));
+        yield text(`\n[${s.tool}] ${r.ok ? j.text : `FEHLER ${r.status}: ${j.error}`}\n`);
+      }
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 50, output_tokens: 20 } };
+      return;
+    }
+    // Neue Phase (Plan 165, S3): zeigt, womit die Folgesitzung startet.
+    if (prompt.startsWith('Neue Phase „')) {
+      yield text(`(Mock-Phase) ${prompt.match(/^Neue Phase „([^“]+)“/)?.[1]}: Modell ${options.model ?? 'Standard'}; Melious ${mel ? 'ja' : 'nein'}; fortgesetzt ${options.resume ? 'ja' : 'nein'}; Verlauf ${prompt.includes('Bisheriger Verlauf') ? 'ja' : 'nein'}; Auftrag ${prompt.includes('MOCK-LEAD') ? 'ja' : 'nein'}; Übergabe ${prompt.includes('## Offene Widersprüche') ? 'ja' : 'nein'}; Brücken-Prüfung ${prompt.includes('## Prüfausgaben der Brücke') ? 'ja' : 'nein'}. `);
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 30, output_tokens: 10 } };
+      return;
+    }
+    // Worker (Plan 165, S2): Verhalten aus Stichwörtern im Auftrag. MOCK-DATEI name=inhalt (schreiben + committen),
+    // MOCK-LUEGE (meldet eine andere Datei), MOCK-OHNE-BLOCK (kein Abschluss-Block), MOCK-REPARIERBAR (liefert ihn nachgefordert),
+    // MOCK-UNCOMMITTET (schreibt ohne Commit), MOCK-MAENGEL (Prüfer-Urteil maengel), MOCK-LANG ms (arbeitet so lange).
+    const wm = prompt.match(/^Auftrag vom Strang-Lead \(Rolle (\w+), Risiko (\w+), Delegation (d-\w+)\)/);
+    const repair = prompt.startsWith('Dein Abschluss-Block fehlt');
+    if (wm || repair) {
+      const rolle = wm?.[1] ?? workerSessions.get(String(options.resume))?.rolle ?? 'leser';
+      const flags = wm ? prompt : workerSessions.get(String(options.resume))?.prompt ?? '';
+      workerSessions.set(session_id, { rolle, prompt: flags });
+      const cwd = String(options.cwd ?? '.');
+      yield text(`(Mock-Worker) Rolle ${rolle}; Modell ${options.model ?? 'Standard'}; Melious ${mel ? 'ja' : 'nein'}; Profil-Werkzeuge ${options.tools ? options.tools.join(',') : 'alle'}; MCP ${Object.keys(options.mcpServers ?? {}).sort().join(',') || '-'}; Strang-Werkzeuge ${options.mcpServers?.werkbank?.env?.WERKBANK_BRIDGE_URL ? 'ja' : 'nein'}; Kompakt ${options.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW ?? '-'}/${options.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE ?? '-'}; Schritte ${options.maxTurns}; cwd ${cwd}. `);
+      const lang = Number(flags.match(/MOCK-LANG (\d+)/)?.[1] ?? 0);
+      for (let t = 0; t < lang && !signal?.aborted; t += 100) await sleep(100);
+      if (signal?.aborted) throw new Error('aborted');
+      const files: string[] = [];
+      if (!repair && (rolle === 'bauer' || rolle === 'schreiber')) {
+        const { writeFileSync } = await import('node:fs');
+        const { execFileSync } = await import('node:child_process');
+        for (const m of flags.matchAll(/MOCK-DATEI ([\w./-]+)=(\S+)/g)) { writeFileSync(`${cwd}/${m[1]}`, m[2] + '\n'); files.push(m[1]); }
+        if (files.length && !flags.includes('MOCK-UNCOMMITTET')) {
+          const genv = { ...process.env, ...options.env } as NodeJS.ProcessEnv;
+          execFileSync('git', ['-C', cwd, 'add', ...files], { env: genv });
+          execFileSync('git', ['-C', cwd, 'commit', '-q', '-m', 'mock: Worker-Änderung'], { env: genv });
+        }
+      }
+      const block = { abschluss: { ziel: true, dateien: flags.includes('MOCK-LUEGE') ? ['anders.txt'] : files, pruefungen: [{ befehl: 'npm test', ausgabe: 'ok (Mock)' }], annahmen: ['keine'], widersprueche: [],
+        ...(rolle === 'pruefer' ? { urteil: flags.includes('MOCK-MAENGEL') ? 'maengel' : 'ok', befunde: flags.includes('MOCK-MAENGEL') ? ['a.txt:1 — Mangel (Mock)'] : [] } : {}) } };
+      const ohne = flags.includes('MOCK-OHNE-BLOCK') && !(repair && flags.includes('MOCK-REPARIERBAR'));
+      yield text(`Erledigt (Mock).${ohne ? '' : `\n\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\``}`);
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 400, output_tokens: 80 } };
       return;
     }
     if (mel) {

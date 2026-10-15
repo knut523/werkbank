@@ -242,7 +242,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     if (server === 'vault-search') return { cls: 'read' };
     // review_ready ändert nur Werkbank-Zustand (Fertig-Marke am eigenen Lauf) → ohne Rückfrage.
     // hauptchat_melden (Plan 154, S4): Meldung an den Hauptchat — ändert nur Werkbank-Zustand, gedeckelt in der Werkbank.
-    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge')) return { cls: 'read' };
+    // delegieren/delegation_*/phase_wechseln (Plan 165): Steuerung durch die Brücke; Worker arbeiten unter ihrem eigenen Wächter.
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
     if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
     // Orchestrator-Werkzeuge (Plan 132, S3): nur im Leitstand. Lesen und Rückfragen an Knut frei; Stränge starten, Nachrichten
@@ -447,6 +448,11 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
       if (name === 'agent_start') return `🤖 Agent-Chat gestartet: ${input.key}`;
       if (name === 'review_ready') return '📬 Bereit zum Review gemeldet';
       if (name === 'hauptchat_melden') return `🛰️ An den Hauptchat gemeldet: ${short(input.text ?? '', 70)}`;
+      if (name === 'delegieren') return `🧑‍🔧 Delegiert (${input.rolle ?? '?'}): ${short(input.aufgabe ?? input.pruefe ?? '', 60)}`;
+      if (name === 'delegation_stand') return '🧑‍🔧 Stand der Delegationen';
+      if (name === 'delegation_urteil') return `🧑‍🔧 Urteil ${input.id ?? ''}: ${input.urteil ?? ''}`;
+      if (name === 'phase_wechseln') return `🔀 Phase → ${input.phase ?? '?'}`;
+      if (name === 'challenge') return `🔍 Gegenprüfung GLM 5.3 (${input.art ?? ''})`;
       return name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
     }
     const icon = server === 'atlassian' ? '🎫 Jira' : server === 'compartment' ? '🧠 Gedächtnis' : `🔌 ${server}`;

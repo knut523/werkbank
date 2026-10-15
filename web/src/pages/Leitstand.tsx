@@ -132,6 +132,8 @@ function Strand({ s }: { s: any }) {
         {s.reviewedBy === 'leitstand' && !s.knutReviewed && <>vom Hauptchat abgelegt · </>}
         {/* Plan 162, S4: tatsächlich gelaufenes Modell des letzten Zugs (sonst das beim Start gesetzte). */}
         {(s.modell || s.modellPlan) && <span data-testid="strand-modell">{s.modell ? `Modell ${s.modell}` : `Modell ${s.modellPlan} (geplant)`} · </span>}
+        {/* Plan 165, S4: Gegenprüfung (challenge, GLM 5.3) — bei „fertig“ sichtbar, auch wenn sie fehlt. */}
+        {(s.gegenpruefung > 0 || s.reviewReady) && <span data-testid="strand-gegenpruefung">{s.gegenpruefung > 0 ? `Gegenprüfung ${s.gegenpruefung}×` : '⚠️ ohne Gegenprüfung'} · </span>}
         zuletzt {fmtDateTime(s.lastActivity)}
       </div>
       {/* Plan 144 (Knut 12.10.): je Unter-Chat drei Links — Chat · Auftrag · Bericht; fehlt eine Datei, steht das da. */}
@@ -205,14 +207,38 @@ function MeliousKachel() {
   if (!d || d.configured === false) return null;
   const z = (n: number) => (n >= 1e6 ? `${(n / 1e6).toLocaleString('de-DE', { maximumFractionDigits: 1 })} Mio` : n >= 10_000 ? `${Math.round(n / 1000).toLocaleString('de-DE')}k` : n.toLocaleString('de-DE'));
   const cls = (p: number) => (p >= 100 ? 'bad' : p >= 80 ? 'warn' : '');
+  const m = d.messung;
   return (
-    <a className="card soft small" href="#/einrichtung" data-testid="melious-kachel" title={`Quelle: ${d.quelle}`} style={{ padding: '6px 10px', textDecoration: 'none', color: 'inherit' }}>
-      🧪 <b>Melious</b> {!d.enabled ? <span className="chip">aus</span> : d.sperre ? <span className="chip bad">gesperrt</span> : null}
-      {' '}⚡ heute <span className={`chip ${cls(d.heute.pct)}`}>≈ {z(Math.round(d.heute.energie))} / {z(d.heute.limit)}</span>
-      {' '}Monat <span className={`chip ${cls(d.monat.pct)}`}>≈ {z(Math.round(d.monat.energie))} / {z(d.monat.limit)}</span>
-      <span className="tiny muted" data-testid="melious-kachel-energie"> · Energie {d.energie?.geschaetzt === false ? 'echt' : 'geschätzt'} · {d.heute.turns} Züge heute{d.energie?.tempo != null ? ` · Tempo ${Math.round(d.energie.tempo * 100)} %` : ''}{d.energie?.fuell != null ? ` · Topf ${Math.round(d.energie.fuell * 100)} %` : ''}</span>
-      {(d.energie?.hinweise ?? []).map((h: string) => <span key={h} className="chip warn" data-testid="melious-kachel-hinweis" style={{ marginLeft: 6 }}>{h}</span>)}
-    </a>
+    <div className="card soft small" data-testid="melious-kachel" style={{ padding: '6px 10px' }}>
+      <a href="#/einrichtung" title={`Quelle: ${d.quelle}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+        🧪 <b>Melious</b> {!d.enabled ? <span className="chip">aus</span> : d.sperre ? <span className="chip bad">gesperrt</span> : null}
+        {' '}⚡ heute <span className={`chip ${cls(d.heute.pct)}`}>≈ {z(Math.round(d.heute.energie))} / {z(d.heute.limit)}</span>
+        {' '}Monat <span className={`chip ${cls(d.monat.pct)}`}>≈ {z(Math.round(d.monat.energie))} / {z(d.monat.limit)}</span>
+        <span className="tiny muted" data-testid="melious-kachel-energie"> · Energie {d.energie?.geschaetzt === false ? 'echt' : 'geschätzt'} · {d.heute.turns} Züge heute{d.energie?.tempo != null ? ` · Tempo ${Math.round(d.energie.tempo * 100)} %` : ''}{d.energie?.fuell != null ? ` · Topf ${Math.round(d.energie.fuell * 100)} %` : ''}</span>
+        {(d.energie?.hinweise ?? []).map((h: string) => <span key={h} className="chip warn" data-testid="melious-kachel-hinweis" style={{ marginLeft: 6 }}>{h}</span>)}
+      </a>
+      {m && m.summe.zuege > 0 && <MessungDetails m={m} z={z} />}
+    </div>
+  );
+}
+
+/** Messung je Zug und Delegation (Plan 165, S8): letzte 24 h je Art/Phase × Modell, letzte Delegationen, Quoten je Modell. */
+function MessungDetails({ m, z }: { m: any; z: (n: number) => string }) {
+  const urteil = (x: any) => x.urteil ?? (x.status === 'laeuft' ? 'läuft' : x.status === 'fertig' ? 'offen' : x.status);
+  return (
+    <details data-testid="messung" style={{ marginTop: 4 }}>
+      <summary className="tiny">📊 24 h: {m.summe.zuege} Züge · {z(m.summe.tokens)} Tokens · Melious-Anteil {m.summe.anteilMelious} % · Worker {z(m.summe.workerTokens)} / Leads {z(m.summe.leadTokens)} Tokens</summary>
+      <table className="tiny" data-testid="messung-zuege" style={{ marginTop: 4 }}>
+        <thead><tr><th>Art</th><th>Phase/Rolle</th><th>Modell</th><th>Züge</th><th>Tokens</th><th>Energie</th></tr></thead>
+        <tbody>{m.zuege.map((g: any) => <tr key={`${g.art}|${g.phase}|${g.modell}`}><td>{g.art}</td><td>{g.phase ?? '—'}</td><td>{g.modell}{g.kette ? ` (Kette ${g.kette}×)` : ''}</td><td>{g.zuege}</td><td>{z(g.tokens)}</td><td>{g.energie ? `≈ ${z(g.energie)}` : '—'}</td></tr>)}</tbody>
+      </table>
+      {m.delegationen.length > 0 && <table className="tiny" data-testid="messung-delegationen" style={{ marginTop: 6 }}>
+        <thead><tr><th>Delegation</th><th>Rolle/Risiko</th><th>Modell</th><th>Prüfungen</th><th>Prüfer</th><th>Lead</th></tr></thead>
+        <tbody>{m.delegationen.map((x: any) => <tr key={x.id} title={x.aufgabe}><td>{x.id}{x.dauerMin ? ` · ${x.dauerMin} min` : ''}</td><td>{x.rolle} · {x.risiko}</td><td>{x.modell ?? '—'}{x.energie ? ` · ≈ ${z(x.energie)}` : ''}</td>
+          <td>{x.pruefungen.length ? x.pruefungen.map((p: any) => `${p.ok ? '✅' : '❌'} ${p.name}`).join(' ') : '—'}{x.abweichungen ? ` · ⚠️ ${x.abweichungen}` : ''}</td><td>{x.prueferUrteil ?? '—'}</td><td>{urteil(x)}</td></tr>)}</tbody>
+      </table>}
+      {m.quoten.length > 0 && <div className="tiny muted" data-testid="messung-quoten" style={{ marginTop: 4 }}>30 Tage: {m.quoten.map((q: any) => `${q.modell} als ${q.rolle}: ${q.n}× (fehlgeschlagen ${q.fehlgeschlagen}, verworfen ${q.verworfen}, Abweichung ${q.abweichung})`).join(' · ')}</div>}
+    </details>
   );
 }
 

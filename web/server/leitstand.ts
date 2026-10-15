@@ -544,6 +544,7 @@ const publicStrand = (d: any, word: StatusWord | null) => ({
   id: String(d._id), title: d.title, lauf: d.lauf ?? laufName(d.title ?? '').lauf, thema: themaOf(d), themaHand: !!d.thema, status: word ?? 'erledigt', reason: d.lastReason ?? null,
   url: d.url, auftrag: lesbar(paketDatei(d, 'auftrag')), bericht: lesbar(paketDatei(d, 'bericht')), autoWeiter: d.autoTotal ?? 0, lastActivity: d.lastActivity ?? d.statusAt ?? d.startedAt,
   reviewedBy: d.reviewedBy ?? null, knutReviewed: !!d.knutReviewedAt, reviewReady: !!d.reviewReadyAt, modell: d.lastModell ?? null, modellPlan: d.modell ?? null,
+  gegenpruefung: d.gegenpruefung?.n ?? 0,   // Plan 165, S4: challenge-Aufrufe im Strang (Pass C, Council-Advocatus)
 });
 
 /** Übersicht für die Seite „Leitstand“ (B2) — nur Mongo (F1). */

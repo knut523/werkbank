@@ -12,6 +12,9 @@ import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
+import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationRef, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
+import { realpathSync } from 'node:fs';
+import { relative as relPath, isAbsolute } from 'node:path';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
@@ -87,6 +90,11 @@ interface Live {
   melious?: { rest: number; calls: Map<string, MeliousUsage>; result: MeliousUsage | null; cut: boolean; fehler?: MeliousFehler; model?: string; faktoren?: Record<string, Faktor>; taktS?: number };
   modelSeen?: string;   // Modell laut erster Antwort des Hauptzugs (bei Claude das tatsächliche, bei Melious mit festem Namen ebenso)
   profil?: Profil;      // Rollen-Profil des Strangs (Wächter: lesende Bash-Befehle für Leser, D7 b)
+  // Plan 165: Worker (verdeckte Unterhaltung eines Strang-Leads) bzw. die Anfrage des laufenden Lead-Zugs (Zugang, Konten, MCP
+  // für die Worker — sie leben höchstens so lange wie dieser Zug).
+  worker?: boolean;
+  onClaude?: boolean;   // Worker läuft gerade auf einem Claude-Konto (Worker-Deckel C7)
+  req?: TurnRequest;
 }
 
 export type TurnOutcome = 'ok' | 'limit' | 'timeout' | 'error' | 'rate_limit' | 'busy' | 'aborted';
@@ -108,7 +116,7 @@ const cfg = {
 // Leitstand (Plan 132, S1): mehr Schritte und Zeit je Zug.
 const leitMaxTurns = () => Number(process.env.LEITSTAND_MAX_TURNS || 200);
 const leitTimeoutMs = () => Number(process.env.LEITSTAND_TURN_TIMEOUT_S || 3600) * 1000;
-const turnLimit = (live: { orch: boolean; leit?: boolean }) => (live.leit ? leitMaxTurns() : live.orch ? cfg.orchMaxTurns : cfg.maxTurns);
+const turnLimit = (live: { key: string; orch: boolean; leit?: boolean; worker?: boolean }) => (live.leit ? leitMaxTurns() : live.worker ? KAPPUNG.schritte[orchMap[live.key]?.rolle ?? 'leser'] : live.orch ? cfg.orchMaxTurns : cfg.maxTurns);
 
 // Leerlauf (RAM, 11.10.2026): eine Claude-Sitzung, die nur auf „ja/nein“ wartet, hält ihren Prozess samt MCP-Servern
 // (gemessen ≈ 420 MB je Chat). Nach BRIDGE_IDLE_REAP_S (Vorgabe 900 s = 15 min, 0 = aus) wird sie beendet; die
@@ -183,7 +191,7 @@ try { cwdMap = JSON.parse(readFileSync(cwdFile, 'utf8')); } catch { /* keine */ 
 // Angemeldet über den internen Kanal VOR dem ersten Zug (die Web-App wählt die Unterhaltungs-ID); dauerhaft.
 // kind: Strang (Vorgabe, auch für alte Einträge ohne kind) · Leitstand · beendeter Leitstand (Plan 132). batch: Kennung der
 // Leitstand-Meldung, mit der dieser Zug begann (Zustellbestätigung, C1/D1), dauerhaft (A5).
-type OrchKind = 'strand' | 'leitstand' | 'beendet';
+type OrchKind = 'strand' | 'leitstand' | 'beendet' | 'worker';
 // modell/risiko (Plan 162, S2): Hauptmodell des Strangs als Parameter der Brücke (`claude:opus|sonnet|haiku`, `melious:<id>`) und
 // Risikostufe — vorbereitet für die smarte Auswahl (Modellwahl v2). Kein Wechsel mitten im Strang: nur bei der Anmeldung gesetzt.
 export type Risiko = 'niedrig' | 'mittel' | 'hoch';
@@ -201,10 +209,18 @@ const LESER_TOOLS = ['Read', 'Grep', 'Glob'];
 const BAUER_MCP = ['vault-search', 'werkbank'];
 const LESER_MCP = ['vault-search', 'werkbank'];   // Suche im Vault (Lesen); review_ready / hauptchat_melden für Stränge
 export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte auf Deutsch, knapp und in Markdown. Du kannst nur lesen (Read, Grep, Glob) — schreibe und ändere nichts. Belege jede Aussage mit Datei:Zeile. Was du nicht findest, sagst du offen, statt zu raten.';
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; meliousModell?: string; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string } }
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; meliousModell?: string; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string };
+  // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
+  // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
+  auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[];
+  parent?: string; rolle?: Rolle; workerClaude?: 'haiku' | 'sonnet'; wantMel?: boolean; noClaude?: boolean; delegation?: string }
 const orchFile = join(cfg.stateDir, 'orch.json');
 let orchMap: Record<string, OrchEntry> = {};
 try { orchMap = JSON.parse(readFileSync(orchFile, 'utf8')); } catch { /* keine */ }
+// Worker überleben keinen Neustart (sie leben höchstens so lange wie der Lead-Zug, Plan 165): alte Einträge weg.
+const staleWorkers = Object.entries(orchMap).filter(([, e]) => e.kind === 'worker');
+for (const [k] of staleWorkers) delete orchMap[k];
+const isWorkerKey = (k: string) => orchMap[k]?.kind === 'worker';
 
 function saveMap() {
   for (const [f, data] of [[mapFile, sessionMap], [homeFile, homeMap], [cwdFile, cwdMap], [orchFile, orchMap]] as const) {
@@ -366,7 +382,7 @@ function markEnd(live: { key: string }, end: string) {
 /** Sitzungen einer Person: läuft / wartet auf „ja“ / bereit — neueste zuerst. */
 export function sessionsOf(userId: string) {
   const prefix = safeId(userId) + ':';
-  const keys = new Set([...Object.keys(sessionMap), ...lastSeen.keys()].filter((k) => k.startsWith(prefix)));
+  const keys = new Set([...Object.keys(sessionMap), ...lastSeen.keys()].filter((k) => k.startsWith(prefix) && !isWorkerKey(k)));
   return [...keys].map((k) => {
     const l = lives.get(k);
     const seen = lastSeen.get(k);
@@ -484,11 +500,11 @@ function setTurn(key: string, turn: OrchEntry['turn']) {
 /** Zustand aller Stränge einer Person: läuft jetzt? letzter Zug (Start/Ende/Ausgang), abgebrochen durch Neustart? */
 export function orchStateOf(userId: string) {
   const prefix = safeId(userId) + ':';
-  return Object.entries(orchMap).filter(([k]) => k.startsWith(prefix)).map(([k, e]) => {
+  return Object.entries(orchMap).filter(([k, e]) => k.startsWith(prefix) && e.kind !== 'worker').map(([k, e]) => {
     const l = lives.get(k);
     const seen = lastSeen.get(k);
     return {
-      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, batches: e.batches ?? [], lastHand: e.lastHand ?? null,
+      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', phase: e.phase ?? null, running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, batches: e.batches ?? [], lastHand: e.lastHand ?? null,
       // Start ohne Ende und keine laufende Sitzung: die Brücke wurde mitten im Zug neu gestartet.
       interrupted: !l && !!e.turn && e.turn.end === null,
       resumable: !!sessionMap[k], turns: seen?.turns ?? null, written: seen?.written ?? [],
@@ -645,7 +661,9 @@ const addUsage = (a: MeliousUsage, b: MeliousUsage): MeliousUsage => ({ input: a
 const ZERO: MeliousUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 // Gegenprüfer (Knut 15.10.): der Lead kann Diffs, Pläne und Council-Entscheidungen zusätzlich von GLM 5.3 prüfen lassen.
-export const CHALLENGE_HINT = 'Gegenprüfung: Für Diff-Reviews, Plan-Challenges und den Advocatus im Council kannst du zusätzlich zur eigenen Prüfung das Werkzeug `challenge` (GLM 5.3 über Melious, art=diff|plan|council) nutzen. Es ersetzt deine Prüfung nicht; übernimm nur Befunde, die du selbst nachprüfst, und nenne im Bericht, was die Gegenprüfung fand.';
+// Plan 165, S4: in plan-to-pr standardmäßig — Pass C (art=diff) und der Advocatus im Council (art=council) rufen challenge
+// zusätzlich; der Skill selbst bleibt modellneutral. Die Werkbank zählt die Aufrufe je Strang („Gegenprüfung n×“ an der Karte).
+export const CHALLENGE_HINT = 'Gegenprüfung: In plan-to-pr rufen Pass C (`art=diff`, der Diff gegen die Basis) und der Advocatus Diaboli im Council (`art=council`) STANDARDMÄSSIG zusätzlich das Werkzeug `challenge` (GLM 5.3 über Melious) — als zweites, unabhängiges Modell. Für Plan-Challenges geht `art=plan`. Es ersetzt deine Prüfung nicht; übernimm nur Befunde, die du selbst nachprüfst, und nenne im Bericht, was die Gegenprüfung fand (oder warum sie nicht lief).';
 
 // Melious-Züge dürfen alles, was Claude-Züge dürfen (Knut 14.10.: „Datenregel passt schon, bitte nicht blocken“): gleiche
 // Werkzeuge, gleiche MCP-Server, gleicher Rechte-Modus. Der Auto-Modus-Klassifikator läuft dabei über das Gateway (geprüft
@@ -999,7 +1017,14 @@ export interface TurnRequest {
   // Weitere Claude-Konten der Person in Reihenfolge (über den internen Kanal von der Werkbank; chat = req.token).
   accounts?: () => Promise<{ id: string; label: string; token: string | null }[]>;
   onMeliousUsage?: (u: MeliousUsage, model: string | null) => void;   // Verbrauch eines Melious-Versuchs (Werkbank zählt Tag/Monat/Modell, Deckel)
+  // Plan 165: MCP-Server für eine andere Unterhaltung (Worker), Protokoll je Zug und je Delegation (Werkbank, Melious-Kachel).
+  mcpFor?: (convId: string) => Record<string, unknown>;
+  onTurnLog?: (z: ZugLog) => void;
+  onDelegation?: (d: DelegationLog) => void;
 }
+
+export interface ZugLog { conv: string; art: 'hauptchat' | 'strang' | 'worker'; phase: string | null; konto: string; anbieter: 'claude' | 'melious'; modell: string; input: number; output: number; energie: number; outcome: string; ms: number; delegation?: string; parent?: string; kette?: boolean }
+export interface DelegationLog { id: string; conv: string; rolle: Rolle; risiko: Risiko; status: string; modell: string | null; anbieter: string | null; start: number; ende: number | null; input: number; output: number; energie: number; abweichungen: string[]; pruefungen: { name: string; ok: boolean }[]; prueferUrteil: string | null; urteil: string | null; aufgabe: string }
 
 const MELIOUS_CMD = /^\s*\/melious(?:\s+(an|aus|status|modelle|modell)(?:\s+(\S{1,80}))?)?\s*$/i;
 
@@ -1105,9 +1130,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // 2) Höchstens maxParallelChats() aktive Züge je Nutzer, jeder Chat in seinem eigenen Ordner. Chats, die nur auf
   //    „ja“ warten, zählen nicht. Board-Läufe (nur lesend) laufen daneben, höchstens MAX_BOARD_RUNS je Person (E5).
   // Der Leitstand zählt nicht und wird nicht gezählt (Plan 132, E2/B9): er koordiniert die Chats, die er sonst blockieren würde.
-  const mine = [...lives.values()].filter((l) => l.userId === req.userId && !l.leit);
+  const mine = [...lives.values()].filter((l) => l.userId === req.userId && !l.leit && !l.worker);
   const mode = autoFor(req);
-  const lock = kind === 'leitstand' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode });
+  const lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode });
   if (lock !== 'ok') {
     if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'busy' });
     req.sink.write(lock === 'board-full'
@@ -1119,7 +1144,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     return;
   }
   const waiting = mine.filter((l) => l.pending && !isBoardRun(l));
-  if (kind !== 'leitstand' && waiting.length >= MAX_WAITING) {
+  if (kind !== 'leitstand' && kind !== 'worker' && waiting.length >= MAX_WAITING) {
     // Die älteste offene Rückfrage verfällt; dort bleibt die Sitzung fortsetzbar.
     const oldest = waiting[0];
     log('abandon pending', { conv: oldest.key });
@@ -1135,7 +1160,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
     jiraCalls: new Map(), onJiraWrite: req.onJiraWrite, home: '',
     mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
-    subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: kind === 'strand', leit: kind === 'leitstand',
+    subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: kind === 'strand' || kind === 'worker', leit: kind === 'leitstand', worker: kind === 'worker', ...(kind === 'strand' ? { req } : {}),
     // Posteingang ab Zugbeginn: Nachreichen geht auch, während Kontext-Paket und Konten noch laden (Bild-Prüfung Plan 154).
     inbox: nachreichenOn() ? newInbox([]) : null,
   };
@@ -1160,8 +1185,17 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   try { await ensureHome(home); } catch (e: any) { log('konfig fehlgeschlagen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); }
   // Fortsetzen nur in derselben Konfiguration — dort liegt der Verlauf der Sitzung; sonst neu mit dem Verlauf aus LibreChat.
   const resume = sessionMap[key] && (homeMap[key] ?? 'shared') === live.home ? sessionMap[key] : undefined;
+  // Strang-Auftrag für neue Phasen (Plan 165, S3): die erste Nachricht des Strangs; ältere Stränge: erste Nachricht im Verlauf.
+  if (live.orch && !live.worker && orchMap[key] && !orchMap[key].auftrag) {
+    orchMap[key].auftrag = (resume ? req.history.match(/^Nutzer: ([\s\S]*?)(?:\n\nClaude: |$)/)?.[1] ?? '' : req.prompt).slice(0, KAPPUNG.auftrag) || undefined;
+    if (orchMap[key].auftrag) saveMap();
+  }
   // Neue Sitzung: Verlauf aus LibreChat und Vorgabe der Vorlage vor die Nachricht (auch nach einem Anbieterwechsel, s. u.).
+  // Nach einem Phasenwechsel in diesem Zug (Plan 165) beginnt jede neue Sitzung — auch nach Konto-/Anbieterwechsel — mit
+  // Auftrag + Übergabe, nie mit dem Chatverlauf.
+  let phaseFresh: string | null = null;
   const freshPrompt = (note = '') => {
+    if (phaseFresh) return `${note}${phaseFresh}`;
     const p = req.history
       ? `Bisheriger Verlauf dieser Unterhaltung (aus der Chat-Oberfläche, zur Orientierung):\n\n${req.history}\n\n---\n\n${note}Neue Nachricht:\n${req.prompt}`
       : `${note}${req.prompt}`;
@@ -1181,6 +1215,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // deshalb „true“: MCP-Schemas immer erst bei Bedarf (kürzerer Prompt, schnellerer erster Token).
   env.ENABLE_TOOL_SEARCH = process.env.BRIDGE_TOOL_SEARCH || 'true';
   if (live.orch) orchGitEnv(env);
+  // C8 (Plan 165): Kompaktierung als Zahlen — Worker kleines Fenster, Strang-Leads etwas früher als die Vorgabe des CLI.
+  if (live.worker) { env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(KAPPUNG.workerFenster); env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(KAPPUNG.workerKompakt); }
+  else if (live.orch) env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(KAPPUNG.leadKompakt);
 
   // Kontext-Paket + Hygiene-Fragen nur für neue Sitzungen (nicht bei resume, nicht im Nur-lesen-Lauf).
   // Parallel dazu: die Claude-Konten der Person (ohne Werkbank: nur der Schlüssel aus der Anfrage).
@@ -1198,7 +1235,13 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Modell des Strangs (Plan 162, S2): `melious:<id>` wirkt wie `/melious an <id>`, `claude:<x>` wie das Modell der Anfrage.
   const strandModel = orchMap[key]?.modell;
   const strandMel = strandModel?.startsWith('melious:') ? strandModel.slice(8) : undefined;
-  const strandClaude = strandModel?.startsWith('claude:') ? strandModel.slice(7) : undefined;
+  // Phasen-Lead (Plan 165, S3): ohne ausdrückliches Strang-Modell bestimmt die Phase das Claude-Modell (Opus entscheidet, Sonnet
+  // baut; C2: Übergabe mit Rückwirkung → Opus). Strang ohne Phase: wie bisher.
+  const phaseClaude = (): string | undefined => {
+    const e = orchMap[key];
+    return live.orch && !live.worker && e?.phase && !strandModel ? (e.phaseC2 ? 'opus' : phaseModell(e.phase).modell) : undefined;
+  };
+  let strandClaude = (strandModel?.startsWith('claude:') ? strandModel.slice(7) : undefined) ?? phaseClaude();
   // Rollen-Profil des Strangs (S6): fest für alle Züge. Leser und Schreiber laufen zuerst über Melious (Knut 15.10.: Standard,
   // nicht nur Überlauf), verteilt über die Modelle ihrer Rolle.
   const profil: Profil = live.orch ? orchMap[key]?.profil ?? 'voll' : 'voll';
@@ -1212,12 +1255,35 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const chatOn = meliousChatOn(key) || !!strandMel || profilMel || (!!melAcc?.vorrang && risiko === 'niedrig' && !strandClaude);
   // Ersatzkette für Hauptchat und Strang-Leads (Knut 15.10.: „keine Limitations“): Opus → Sonnet → Melious, ohne Warten.
   const ketteMit = (m?: Account) => !!m?.kette && (live.leit || (live.orch && !profilMel));
-  const bestellt = strandClaude ?? req.model;
-  const plan = (kette: boolean) => planQueue(accounts, exhaustedOf(user), { conv: key, chatOn, overflow: risiko === 'niedrig', kette, sonnetStufe: !/^(sonnet|haiku)$/.test(String(bestellt ?? '')) });
-  const queue = plan(ketteMit(melAcc));
+  // strandClaude kann sich im Zug ändern (Phasenwechsel, Plan 165) — deshalb bei jedem Aufruf neu gelesen.
+  const plan = (kette: boolean) => planQueue(accounts, exhaustedOf(user), { conv: key, chatOn, overflow: risiko === 'niedrig', kette, sonnetStufe: !/^(sonnet|haiku)$/.test(String(strandClaude ?? req.model ?? '')) });
+  const leadQueue = () => plan(ketteMit(accounts.find(isMelious)));
+  // Worker (Plan 165, C7): zuerst Melious, solange der Rest über der Reserve für die Lead-Ersatzkette liegt; Claude nur Haiku/Sonnet,
+  // höchstens workerClaudeMax() gleichzeitig je Person und gar nicht, sobald ein Claude-Konto erschöpft ist. Keine Ersatzkette.
+  const workerQueue = (): Account[] => {
+    const e = orchMap[key]!;
+    const ex = exhaustedOf(user);
+    const now = Date.now();
+    const claudeAll = accounts.filter((a) => !isMelious(a));
+    const claudeTight = claudeAll.some((a) => (ex[a.id]?.until ?? 0) > now);
+    const melOk = !!melAcc && e.wantMel !== false && meliousUsable(melAcc, ex, now) && (melAcc.rest ?? 0) > workerMeliousReserve();
+    const claudeOk = !e.noClaude && !claudeTight && workerClaudeBusy(req.userId, key) < workerClaudeMax();
+    const cq = claudeOk ? planQueue(claudeAll, ex, { conv: key, chatOn: false, overflow: false }).map((a) => ({ ...a, chainModel: e.workerClaude ?? 'haiku' })) : [];
+    return [...(melOk ? [melAcc!] : []), ...cq];
+  };
+  let queue = live.worker ? workerQueue() : leadQueue();
   const tokens = accounts.map((a) => a.token);
   const redact = (t: string) => tokens.reduce((x, tok) => x.replaceAll(tok, '***'), t);
+  if (!queue.length) {
+    // Nur Worker: kein Konto frei (C7) — sofort zurück an den Lead, kein Warten.
+    emitStatus(live, '⚠️ Für diesen Worker ist gerade kein Konto frei (Melious unter der Reserve oder aus, Claude-Deckel für Worker erreicht oder ein Claude-Konto erschöpft) — der Lead macht es selbst.');
+    live.outcome = 'rate_limit';
+    setTurn(key, { start: live.t0, end: Date.now(), outcome: 'rate_limit' });
+    end(live);
+    return;
+  }
   let acct: Account = queue[0];
+  live.onClaude = live.worker && !isMelious(acct);
   accountEnv(env, acct);
   if (chatOn && !isMelious(acct)) {
     const mel = accounts.find(isMelious);
@@ -1231,7 +1297,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' ? '' : orchestratorAppend(), live.orch ? ORCH_APPEND : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && melAcc && profil !== 'leser' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, isMelious(acct) ? req.token : acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim
@@ -1294,7 +1360,10 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const sticky = live.orch ? orchMap[key]?.meliousModell : poolSticky.get(key);
     if (free(sticky)) return sticky;
     // Reihenfolge der Rolle (die Werkbank ordnet sie nach Energie-Lage und Qualität, S8); erstes freies Modell gewinnt.
-    const pick = allowed.find((m) => (a.pool ?? []).some((p) => p.model === m && p.frei > 0));
+    // Worker (Plan 165): Modelle laufender Geschwister überspringen, damit sich parallele Worker über alle Abo-Modelle verteilen.
+    const busy = live.worker ? siblingModels(key) : new Set<string>();
+    const isFree = (m: string) => (a.pool ?? []).some((p) => p.model === m && p.frei > 0);
+    const pick = allowed.find((m) => isFree(m) && !busy.has(m)) ?? allowed.find(isFree);
     if (!pick) return undefined;
     if (live.orch && orchMap[key]) { orchMap[key].meliousModell = pick; saveMap(); } else { poolSticky.set(key, pick); if (poolSticky.size > 5000) poolSticky.delete(poolSticky.keys().next().value!); }
     log('melious modell verteilt', { conv: key, rolle: role, modell: pick, frei: a.pool!.find((p) => p.model === pick)!.frei });
@@ -1316,11 +1385,12 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     // Leser über Melious: `--bare` mit eigenem kurzem Systemprompt (−91 % je Anfrage gemessen). Nicht bei Claude (OAuth).
     if (profil === 'leser' && mel) {
       options.extraArgs = { ...baseExtra, bare: null };
-      options.systemPrompt = [LESER_SYSTEM, live.orch ? ORCH_APPEND : ''].filter(Boolean).join('\n\n');
+      options.systemPrompt = [LESER_SYSTEM, live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? ORCH_APPEND : ''].filter(Boolean).join('\n\n');
     }
     // Modell des Strangs vor dem der Anfrage: beim Start festgelegt, nicht durch die Auswahl im Chat überstimmt (Review 2, 3).
     const model = mm ?? (mel ? undefined : a.chainModel ?? strandClaude) ?? req.model;
     if (model) options.model = model; else delete options.model;
+    live.onClaude = live.worker && !mel;
     live.melious = mel ? { rest: a.rest ?? 0, calls: new Map(), result: null, cut: false, model: options.model, faktoren: a.faktoren && Object.keys(a.faktoren).length ? a.faktoren : undefined, taktS: a.taktS } : undefined;
     live.modelSeen = undefined;
   };
@@ -1335,25 +1405,63 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     try {
       // Ein Versuch je Konto: meldet einer rate_limit, übernimmt das nächste dieselbe Anfrage.
       let lastRead: string[] = [];
+      let phaseSwitches = 0;
       for (let i = 0; ; i++) {
         live.rateLimited = null; live.rateLimitReset = undefined; live.progressed = false;
         providerMap.set(key, providerOf(acct));
         if (providerMap.size > 5000) providerMap.delete(providerMap.keys().next().value!);
+        const u0 = { ...live.usage }, a0 = Date.now();
         lastRead = (await attempt(prompt)) ?? [];
         // Tatsächlich gelaufenes Modell (S4): aus der ersten Antwort, sonst das bestellte; im Zustand des Strangs für den Kopf.
         const modell = `${isMelious(acct) ? 'Melious' : 'Claude'} ${live.modelSeen ?? options.model ?? 'Standard'}`;
         if ((live.orch || live.leit) && orchMap[key]?.turn) setTurn(key, { ...orchMap[key].turn!, modell });
+        let energie = 0;
         if (live.melious) {
           // Melious-Verbrauch je Versuch (auch abgebrochen): /health und Werkbank (Tag/Monat/Modell, Deckel) — ohne Schlüssel.
           const spent = meliousSpent(live.melious);
           countMelious(spent);
+          energie = energieOf(spent, live.modelSeen ?? options.model, live.melious.faktoren);
           log('melious verbrauch', { conv: key, modell, ...spent, deckel: live.melious.cut });
           try { req.onMeliousUsage?.(spent, live.modelSeen ?? options.model ?? null); } catch { /* egal */ }
           meliousDone(live);
         }
+        // Messung je Zug (Plan 165, S8): ein Eintrag je Versuch (Konto/Modell), für Hauptchat, Stränge und Worker.
+        if (live.orch || live.leit) {
+          const e = orchMap[key];
+          if (live.orch && !live.worker && e) { e.phaseModelle = [...new Set([...(e.phaseModelle ?? []), modell])].slice(-8); }
+          try {
+            req.onTurnLog?.({ conv: req.convId, art: live.leit ? 'hauptchat' : live.worker ? 'worker' : 'strang', phase: live.worker ? e?.rolle ?? null : e?.phase ?? null, konto: acct.label, anbieter: providerOf(acct), modell,
+              input: live.usage.input - u0.input, output: live.usage.output - u0.output, energie: Math.round(energie), outcome: live.rateLimited ? 'rate_limit' : live.outcome ?? (live.abort.signal.aborted ? 'aborted' : 'ok'), ms: Date.now() - a0,
+              ...(live.worker && e?.delegation ? { delegation: e.delegation, parent: e.parent } : {}), ...(acct.chainModel ? { kette: true } : {}) });
+          } catch { /* Messung ist optional */ }
+        }
+        // Phasenwechsel im selben Zug (Plan 165, S3 / Council 1): gültig angemeldet → neue Sitzung mit dem Modell der Phase,
+        // Kontext nur Strang-Auftrag + Übergabe (kein Chatverlauf). Höchstens 8 Wechsel je Zug.
+        const pn = live.orch && !live.worker ? orchMap[key]?.phaseNeu : undefined;
+        if (pn && !live.abort.signal.aborted && !live.rateLimited && phaseSwitches < 8) {
+          phaseSwitches++;
+          const e = orchMap[key]!;
+          const von = e.phase ?? null;
+          e.phase = pn.phase; e.phaseC2 = pn.c2; e.phaseModelle = []; delete e.phaseNeu;
+          delete sessionMap[key];
+          saveMap();
+          strandClaude = (strandModel?.startsWith('claude:') ? strandModel.slice(7) : undefined) ?? phaseClaude();
+          queue = leadQueue();
+          i = -1;
+          acct = queue[0];
+          release(); release = acquire(key, acct);
+          onAccount(acct);
+          delete options.resume;
+          phaseFresh = phasePrompt(e.auftrag ?? '', pn.text, pn.phase);
+          prompt = phaseFresh;
+          log('phase gewechselt', { conv: key, von, nach: pn.phase, c2: pn.c2, konto: acct.id, modell: options.model ?? 'Standard' });
+          emitStatus(live, `🔀 Phase „${pn.phase}“ — neue Sitzung mit ${isMelious(acct) ? `Melious ${options.model}` : `Claude ${options.model ?? 'Standard'}`}${pn.c2 ? ' (Opus bevorzugt: Eingriff mit Rückwirkung)' : ''}; Kontext: Auftrag + Übergabe`);
+          if (isMelious(acct)) emitStatus(live, meliousLine(options.model, req.model, acct.abo));
+          continue;
+        }
         if (!live.rateLimited || live.abort.signal.aborted) break;
         markExhausted(user, acct, live.rateLimited.resetsAt);
-        if (!queue[i + 1] && kontenFehlen) {
+        if (!queue[i + 1] && kontenFehlen && !live.worker) {
           // Liste fehlte: nicht „ausgeschöpft“ melden, sondern nachladen und mit der vollen Kette weitermachen (ohne schon Versuchtes).
           const list = await ladeKonten();
           if (list) {
@@ -1407,6 +1515,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       mark(live, 'ende');
       if ((live.orch || live.leit) && orchMap[key]?.kind !== 'beendet') setTurn(key, { ...orchMap[key]?.turn, start: orchMap[key]?.turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? (live.abort.signal.aborted ? 'aborted' : 'ok') });
       log('turn end', { conv: key, usage: live.usage, ms: live.times, ...(live.subagentStarts ? { teilagenten: live.subagentStarts } : {}), ...(live.denials.length ? { denials: live.denials } : {}) });
+      // Worker leben höchstens so lange wie der Lead-Zug (Council 165, 3).
+      if (live.req) abortWorkersOf(key);
       end(live);
     }
   })();
@@ -1474,4 +1584,328 @@ function waitClosed(sink: Sink & { onClose?: (fn: () => void) => void }, live: L
       resolve();
     });
   });
+}
+
+// ---------- Delegieren und Phasen-Lead (Plan 165, docs/plan-melious-delegieren.md) ----------
+//
+// Ein Worker ist eine verdeckte Unterhaltung der Art „worker“ unter dem Strang (orch.json), die durch denselben Zugablauf läuft
+// (Konten, Melious-Energie-Deckel, Wächter, Verbrauch) — mit festem Profil, Strang-Regeln und ohne Rückfragen. Er lebt höchstens
+// so lange wie der Lead-Zug, der ihn gestartet hat (dessen Zugang, Konten und MCP-Server er nutzt). Danach prüft die Brücke
+// selbst: Abschluss-Block, geänderte Dateien gegen Git, Prüfbefehle des Repositorys (C6); bei Risiko „hoch“ startet sie einen
+// Prüfer anderen Modells mindestens der Autor-Klasse.
+
+const DELEG_HINT = `Delegieren (Werkbank-MCP, Plan 165): Große, abgegrenzte Teilaufgaben (du müsstest sonst mehr als ${KAPPUNG.auftrag / 1000}k Tokens selbst lesen oder schreiben) gibst du gebündelt mit \`delegieren(rolle, aufgabe, risiko)\` ab — rolle leser (liest/sucht, Ergebnis mit Belegen), schreiber (Text/Dateien im eigenen Worktree), bauer (Code im eigenen Unter-Worktree vom Strang-Kopf, liefert einen Commit) oder pruefer (begutachtet eine Bauer-/Schreiber-Delegation, pruefe=<Kennung>). Worker laufen zuerst über Melious; höchstens ${KAPPUNG.maxWorker} gleichzeitig; sie enden mit deinem Zug — warte mit \`delegation_stand\` auf sie, bevor du den Zug beendest. Prüf jedes Ergebnis nach der Prüfpflicht im Ergebnis (niedrig: Brücken-Prüfungen + Stichprobe; mittel: Diff lesen; hoch: zusätzlich Prüfer der Brücke), übernimm Commits mit \`git cherry-pick\` und vermerk dein Urteil mit \`delegation_urteil\`. Phasen (plan-to-pr): an jeder Phasengrenze (plan, council, bau, recherche, review, pass-c, bericht, push) schreibst du eine Übergabedatei mit den Abschnitten „## Ziel“, „## Stand“, „## Annahmen“, „## Offene Widersprüche“, „## Prüfausgaben“ (höchstens ${KAPPUNG.uebergabe} Zeichen) und rufst \`phase_wechseln(phase, uebergabe)\` — danach beendest du den Zug mit einem Satz; die Brücke setzt sofort in einer neuen Sitzung mit dem Modell der Phase fort (Opus für plan/council/pass-c/push, Sonnet für bau/recherche/review/bericht).`;
+
+function workerAppend(rolle: Rolle): string {
+  return `Du bist ein Worker (Rolle „${rolle}“) eines Strang-Leads im OLAF Workspace. Der Lead liest deine Antwort, nicht Knut. Keine Rückfragen — was unklar ist, nimmst du begründet an und schreibst es unter „annahmen“. Arbeite nur im Arbeitsordner; GitHub schreiben, pushen, Jira/Confluence, Git-Konfiguration, Git-Hooks und die Ordner .claude/ sind gesperrt.${rolle === 'leser' || rolle === 'pruefer' ? ' Du liest nur; Schreiben wird abgelehnt.' : ' Committe deine Änderungen im Arbeitsordner, bevor du fertig bist (git add + git commit).'} Antworte knapp auf Deutsch, Belege als Datei:Zeile. ${ABSCHLUSS_PFLICHT(rolle)}`;
+}
+
+export const workerClaudeMax = () => Math.max(0, Math.floor(Number(process.env.BRIDGE_WORKER_CLAUDE_MAX ?? 1)) || 0);
+export const workerMeliousReserve = () => Math.max(0, Number(process.env.BRIDGE_WORKER_MELIOUS_RESERVE ?? 16_000) || 0);
+export const maxWorkers = () => Math.max(1, Math.floor(Number(process.env.BRIDGE_MAX_WORKERS || 6)) || 6);
+
+function workerClaudeBusy(userId: string, self: string): number {
+  return [...lives.values()].filter((l) => l.worker && l.userId === userId && l.onClaude && l.key !== self).length;
+}
+function siblingModels(key: string): Set<string> {
+  const p = orchMap[key]?.parent;
+  return new Set(Object.entries(orchMap).filter(([k, e]) => k !== key && e.kind === 'worker' && e.parent === p && lives.has(k) && e.meliousModell).map(([, e]) => e.meliousModell!));
+}
+
+function phasePrompt(auftrag: string, uebergabe: string, phase: Phase): string {
+  return `Neue Phase „${phase}“ dieses Strangs (neue Sitzung; der bisherige Chatverlauf ist absichtlich nicht dabei — Kontextkappung, Plan 165). Arbeite auf Grundlage von Auftrag und Übergabe ohne Rückfragen weiter; lies Dateien, die unter „Stand“ genannt sind, selbst nach.\n\n## Auftrag des Strangs (erste Nachricht)\n\n${auftrag || '(nicht gespeichert — siehe Übergabe)'}\n\n## Übergabe der vorigen Phase\n\n${uebergabe}`;
+}
+
+/** Umgebung für Prüfbefehle der Brücke: ohne Geheimnisse (wie die Sitzung), Git ohne Zugangsdaten. */
+function checkEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env };
+  for (const k of Object.keys(env)) if (/KEY|SECRET|TOKEN|PASSWORD|CREDS|_IV$|MONGO_URI/i.test(k)) delete env[k];
+  for (const k of ['ANTHROPIC_BASE_URL', 'BW_SESSION', 'NODE_OPTIONS']) delete env[k];
+  orchGitEnv(env);
+  env.CI = '1';
+  return env;
+}
+
+type DStatus = 'laeuft' | 'fertig' | 'fehlgeschlagen' | 'abgebrochen';
+interface Deleg {
+  id: string; userId: string; parent: string; parentConv: string; workerConv: string; workerKey: string; rolle: Rolle; risiko: Risiko;
+  aufgabe: string; cwd: string; wt?: { dir: string; branch: string; base: string }; pruefe?: string; status: DStatus; start: number; ende: number | null;
+  text: string; abschluss?: Abschluss; abschlussFehler?: string; reparatur?: boolean; git?: GitStand; pruef?: { eingerichtet: boolean; ref: string | null; ergebnisse: PruefErgebnis[] };
+  abweichungen: string[]; pruefer?: string; modell: string | null; anbieter: string | null; input: number; output: number; energie: number;
+  urteil?: string; notiz?: string; aborted?: boolean; hinweis?: string; done: Promise<void>; req: TurnRequest;
+}
+const delegs = new Map<string, Deleg>();
+
+function abortWorkersOf(parent: string) {
+  for (const d of delegs.values()) {
+    if (d.parent !== parent || d.status !== 'laeuft') continue;
+    d.aborted = true;
+    lives.get(d.workerKey)?.abort.abort();
+    log('worker abgebrochen (Lead-Zug zu Ende)', { id: d.id, parent });
+  }
+}
+
+const runningOf = (parent: string) => [...delegs.values()].filter((d) => d.parent === parent && d.status === 'laeuft');
+
+function delegLog(d: Deleg): DelegationLog {
+  const pr = d.pruefer ? delegs.get(d.pruefer) : undefined;
+  return { id: d.id, conv: d.parentConv, rolle: d.rolle, risiko: d.risiko, status: d.status, modell: d.modell, anbieter: d.anbieter, start: d.start, ende: d.ende,
+    input: d.input, output: d.output, energie: Math.round(d.energie), abweichungen: d.abweichungen.slice(0, 12), pruefungen: (d.pruef?.ergebnisse ?? []).map((p) => ({ name: p.name, ok: p.ok })),
+    prueferUrteil: pr ? pr.abschluss?.urteil ?? pr.status : d.hinweis ? 'ungeprueft' : null, urteil: d.urteil ?? null, aufgabe: d.aufgabe.replace(/\s+/g, ' ').slice(0, 200) };
+}
+function report(d: Deleg) { try { d.req.onDelegation?.(delegLog(d)); } catch { /* Messung ist optional */ } }
+
+/** Worker-Zug über den normalen Zugablauf; die Senke sammelt den Text. */
+async function runWorker(d: Deleg, prompt: string): Promise<string> {
+  const chunks: string[] = [];
+  let closed = false;
+  const fns: (() => void)[] = [];
+  const sink: Sink & { onClose: (fn: () => void) => void } = {
+    get closed() { return closed; },
+    onClose(fn) { if (closed) fn(); else fns.push(fn); },
+    write(t) { chunks.push(t); },
+    reason() { /* Denken nicht ins Ergebnis */ },
+    finish(u) { if (u) { d.input += u.input; d.output += u.output; } closed = true; for (const f of fns.splice(0)) f(); },
+  };
+  const base = d.req;
+  await handleTurn({
+    ...base, convId: d.workerConv, prompt, history: '', sink, instructions: undefined, sessionContext: undefined, model: undefined, readonly: false,
+    mcpServers: base.mcpFor?.(d.workerConv), onMeasure: undefined, onJiraWrite: undefined, onDelegation: undefined,
+    onTurnLog: (z) => { d.energie += z.energie; d.modell = z.modell; d.anbieter = z.anbieter; base.onTurnLog?.(z); },
+  });
+  await new Promise<void>((r) => sink.onClose(r));
+  return chunks.join('');
+}
+
+function registerWorker(d: Deleg, o: { profil: Profil; modell: string; workerClaude?: 'haiku' | 'sonnet'; wantMel?: boolean; noClaude?: boolean }) {
+  cwdMap[d.workerKey] = d.cwd;
+  orchMap[d.workerKey] = { dir: d.cwd, since: Date.now(), kind: 'worker', modell: o.modell, risiko: d.risiko, profil: o.profil, parent: d.parent, rolle: d.rolle, delegation: d.id,
+    ...(o.noClaude ? { noClaude: true } : { workerClaude: o.workerClaude }), ...(o.wantMel === false ? { wantMel: false } : {}) };
+  saveMap();
+}
+function unregisterWorker(d: Deleg) {
+  delete orchMap[d.workerKey]; delete cwdMap[d.workerKey]; delete sessionMap[d.workerKey]; delete homeMap[d.workerKey]; lastSeen.delete(d.workerKey);
+  try { saveMap(); } catch { /* egal */ }
+}
+
+function workerPrompt(d: Deleg): string {
+  const pr = d.pruefe ? delegs.get(d.pruefe) : undefined;
+  const ort = d.wt ? `Arbeitsordner: \`${d.cwd}\` — dein eigener Git-Worktree (Zweig \`${d.wt.branch}\`, abgezweigt vom Strang-Kopf ${d.wt.base.slice(0, 10)}). Committe deine Änderungen hier, bevor du fertig bist.` : `Arbeitsordner: \`${d.cwd}\` (nur lesen).`;
+  const pruef = pr?.wt && pr.git ? `\n\nZu prüfen: Delegation ${pr.id} (Rolle ${pr.rolle}, Modell ${pr.modell ?? '?'}). Diff: \`git -C ${pr.wt.dir} diff ${pr.wt.base}..${pr.git.kopf}\`. Prüfungen der Brücke: ${(pr.pruef?.ergebnisse ?? []).map((p) => `${p.name} ${p.ok ? 'grün' : 'ROT'}`).join(', ') || 'keine'}. Gemeldete Abweichungen: ${pr.abweichungen.join('; ') || 'keine'}.\nAuftrag des Geprüften:\n${pr.aufgabe}` : '';
+  return `Auftrag vom Strang-Lead (Rolle ${d.rolle}, Risiko ${d.risiko}, Delegation ${d.id}). ${ort}${pruef}\n\n${d.aufgabe}\n\n${ABSCHLUSS_PFLICHT(d.rolle)}`;
+}
+
+async function delegationLauf(d: Deleg): Promise<void> {
+  try {
+    let text = await runWorker(d, workerPrompt(d));
+    let p = parseAbschluss(text, d.rolle);
+    // Reparaturrunde (Council 165, 7): einmal nachfordern, in derselben Sitzung.
+    if (!p.ok && !d.aborted && sessionMap[d.workerKey]) {
+      d.reparatur = true;
+      text += '\n\n' + await runWorker(d, `Dein Abschluss-Block fehlt oder ist ungültig (${p.why}). Gib jetzt NUR den Abschluss-Block aus — als letzten \`json\`-Codeblock, sonst nichts.\n\n${ABSCHLUSS_PFLICHT(d.rolle)}`);
+      p = parseAbschluss(text, d.rolle);
+    }
+    d.text = text;
+    if (p.ok) d.abschluss = p.a; else d.abschlussFehler = p.why;
+    if (d.wt && !d.aborted) {
+      d.git = await gitStand(d.wt.dir, d.wt.base);
+      if (d.git.commits || d.git.dirty.length) d.pruef = await pruefen(d.wt.dir, d.wt.base, checkEnv());
+      if (heikleDateien(d.git.dateien).length) d.risiko = 'hoch';
+    }
+    d.abweichungen = abweichungen(d.abschluss ?? null, d.git ?? null, d.pruef?.ergebnisse ?? null);
+    if (d.abschlussFehler) d.abweichungen.unshift(`Abschluss-Block: ${d.abschlussFehler}${d.reparatur ? ' (auch nach Nachfordern)' : ''}`);
+    if (!d.modell && /kein Konto frei/.test(text)) d.abweichungen.unshift('kein Konto für Worker frei (C7) — der Lead macht es selbst');
+    d.status = d.aborted ? 'abgebrochen' : d.abschluss ? 'fertig' : 'fehlgeschlagen';
+    // Risiko „hoch“: Prüfer der Brücke (anderes Modell, mindestens Autor-Klasse).
+    if (d.status === 'fertig' && d.risiko === 'hoch' && (d.rolle === 'bauer' || d.rolle === 'schreiber')) {
+      const pr = startPruefer(d);
+      if (pr) await pr.done;
+    }
+  } catch (e: any) {
+    d.status = 'fehlgeschlagen';
+    d.abweichungen.push(`Fehler in der Brücke: ${String(e?.message ?? e).slice(0, 200)}`);
+    log('delegation fehler', { id: d.id, error: String(e?.message ?? e).slice(0, 200) });
+  } finally {
+    d.ende = Date.now();
+    unregisterWorker(d);
+    log('delegation fertig', { id: d.id, rolle: d.rolle, status: d.status, modell: d.modell, abweichungen: d.abweichungen.length, ms: d.ende - d.start });
+    report(d);
+  }
+}
+
+function newDeleg(userId: string, parent: string, parentConv: string, rolle: Rolle, risiko: Risiko, aufgabe: string, cwd: string, req: TurnRequest): Deleg {
+  let id: string;
+  do { id = 'd-' + randomUUID().replace(/-/g, '').slice(0, 6); } while (delegs.has(id));
+  const workerConv = `w-${id}`;
+  const d: Deleg = { id, userId, parent, parentConv, workerConv, workerKey: `${safeId(userId)}:${safeId(workerConv)}`, rolle, risiko, aufgabe, cwd, status: 'laeuft', start: Date.now(), ende: null,
+    text: '', abweichungen: [], modell: null, anbieter: null, input: 0, output: 0, energie: 0, done: Promise.resolve(), req };
+  delegs.set(id, d);
+  if (delegs.size > 300) for (const [k, v] of delegs) { if (v.status !== 'laeuft') { delegs.delete(k); if (delegs.size <= 250) break; } }
+  return d;
+}
+
+/** Prüfer für eine fertige Bauer-/Schreiber-Delegation: Modell ≠ Autor, Klasse ≥ Autor; keiner frei → „ungeprüft“ (kein stiller Ersatz). */
+function startPruefer(of: Deleg, risiko: Risiko = 'hoch'): Deleg | null {
+  const autor = of.modell ?? '';
+  const cand = pickPruefer(autor, { melious: true, claude: workerClaudeMax() > 0 });
+  if (!cand) {
+    of.hinweis = `ungeprüft (kein Prüfer ≥ Autor-Klasse ${klasse(autor)} frei) — Lead prüft selbst; \`challenge\` ist kein Ersatz, wenn der Autor GLM 5.3 ist`;
+    of.abweichungen.push(of.hinweis);
+    return null;
+  }
+  const d = newDeleg(of.userId, of.parent, of.parentConv, 'pruefer', risiko, `Prüfe die Arbeit der Delegation ${of.id} gegen ihren Auftrag: Korrektheit, Randfälle, entfernte Invarianten, Sicherheit. Ändere nichts.`, of.wt?.dir ?? of.cwd, of.req);
+  d.pruefe = of.id;
+  of.pruefer = d.id;
+  // Claude-Rückfall nur, wenn Sonnet selbst die Bedingung erfüllt (≠ Autor, Klasse ≥ Autor).
+  const sonnetOk = klasse('sonnet') >= klasse(autor) && !/sonnet/i.test(autor);
+  registerWorker(d, cand.anbieter === 'melious' ? { profil: 'leser', modell: `melious:${cand.modell}`, workerClaude: 'sonnet', noClaude: !sonnetOk } : { profil: 'leser', modell: 'melious:auto', workerClaude: 'sonnet', wantMel: false });
+  d.done = delegationLauf(d);
+  return d;
+}
+
+const ROLLEN_SETUP: Record<Exclude<Rolle, 'pruefer'>, { profil: Profil; modell: string; workerClaude: 'haiku' | 'sonnet' }> = {
+  leser: { profil: 'leser', modell: 'melious:auto', workerClaude: 'haiku' },
+  schreiber: { profil: 'schreiber', modell: 'melious:auto', workerClaude: 'sonnet' },
+  bauer: { profil: 'bauer', modell: 'melious:glm-5.3', workerClaude: 'sonnet' },
+};
+
+type Res = { ok: true; text: string; id?: string } | { ok: false; status: number; error: string };
+
+/** delegieren (Werkbank-MCP): Worker starten, sofort mit der Kennung antworten. */
+export async function startDelegation(userId: string, convId: string, b: { rolle?: unknown; aufgabe?: unknown; risiko?: unknown; pruefe?: unknown }): Promise<Res> {
+  const parent = `${safeId(userId)}:${safeId(convId)}`;
+  const e = orchMap[parent];
+  if (!e || (e.kind ?? 'strand') !== 'strand') return { ok: false, status: 403, error: 'delegieren gibt es nur in Strängen.' };
+  const lead = lives.get(parent);
+  if (!lead?.req) return { ok: false, status: 409, error: 'delegieren geht nur während eines laufenden Strang-Zugs.' };
+  const rolle = String(b.rolle ?? '') as Rolle;
+  if (!ROLLEN.includes(rolle)) return { ok: false, status: 400, error: 'rolle: leser, schreiber, bauer oder pruefer.' };
+  const aufgabe = String(b.aufgabe ?? '').trim();
+  if (!aufgabe && rolle !== 'pruefer') return { ok: false, status: 400, error: 'aufgabe fehlt.' };
+  if (aufgabe.length > KAPPUNG.auftrag) return { ok: false, status: 400, error: `aufgabe ist ${aufgabe.length} Zeichen lang, höchstens ${KAPPUNG.auftrag} (C8) — kürzen oder auf mehrere Worker verteilen.` };
+  if (runningOf(parent).length >= KAPPUNG.maxWorker) return { ok: false, status: 429, error: `Schon ${KAPPUNG.maxWorker} Worker laufen in diesem Strang — erst delegation_stand abwarten.` };
+  if ([...delegs.values()].filter((d) => d.status === 'laeuft').length >= maxWorkers()) return { ok: false, status: 429, error: `Gerade laufen ${maxWorkers()} Worker auf der Maschine (Arbeitsspeicher) — erst delegation_stand abwarten oder selbst machen.` };
+  const risiko = risikoMin(b.risiko, e.risiko ?? 'mittel') as Risiko;
+  if (rolle === 'pruefer') {
+    const of = delegs.get(String(b.pruefe ?? ''));
+    if (!of || of.parent !== parent) return { ok: false, status: 404, error: 'pruefe: Kennung einer Delegation dieses Strangs.' };
+    if (of.status === 'laeuft') return { ok: false, status: 409, error: `Delegation ${of.id} läuft noch — erst delegation_stand.` };
+    const pr = startPruefer(of, risiko);
+    if (!pr) return { ok: true, text: `Kein Prüfer gestartet: ${of.hinweis}` };
+    if (aufgabe) pr.aufgabe = `${pr.aufgabe}\n\nHinweis des Leads: ${aufgabe}`;
+    return { ok: true, id: pr.id, text: `Prüfer ${pr.id} für ${of.id} gestartet (Modell ≠ Autor, Klasse ≥ Autor). Ergebnis mit delegation_stand.` };
+  }
+  const git = rolle === 'bauer' || rolle === 'schreiber';
+  if (git && !(await isGitDir(e.dir))) return { ok: false, status: 400, error: `${rolle} braucht einen Git-Arbeitsordner (eigener Unter-Worktree) — hier nicht; leser nehmen oder selbst machen.` };
+  const d = newDeleg(userId, parent, convId, rolle, risiko, aufgabe, e.dir, lead.req);
+  if (git) {
+    const w = await subWorktree(e.dir, d.id);
+    if ('error' in w) { delegs.delete(d.id); return { ok: false, status: 500, error: `Unter-Worktree nicht angelegt: ${w.error}` }; }
+    d.wt = w; d.cwd = w.dir;
+  }
+  registerWorker(d, ROLLEN_SETUP[rolle]);
+  d.done = delegationLauf(d);
+  log('delegation gestartet', { id: d.id, parent, rolle, risiko, cwd: d.cwd });
+  return { ok: true, id: d.id, text: `Delegation ${d.id} gestartet (${rolle}, Risiko ${risiko}${d.wt ? `, Unter-Worktree ${d.wt.dir}, Zweig ${d.wt.branch}` : ''}). Ergebnis mit delegation_stand — der Worker endet spätestens mit deinem Zug.` };
+}
+
+const fmtN = (n: number) => n.toLocaleString('de-DE');
+
+function formatDeleg(d: Deleg): string {
+  const head = `### ${d.id} · ${d.rolle} · Risiko ${d.risiko} · ${d.status === 'laeuft' ? `läuft (seit ${Math.round((Date.now() - d.start) / 60000)} min)` : d.status}`;
+  const lines = [head, `Modell: ${d.modell ?? '—'} · Tokens ${fmtN(d.input)} ein / ${fmtN(d.output)} aus · Energie ≈ ${fmtN(Math.round(d.energie))}${d.ende ? ` · ${Math.max(1, Math.round((d.ende - d.start) / 60000))} min` : ''}`];
+  if (d.status === 'laeuft') return lines.join('\n');
+  const a = d.abschluss;
+  if (a) lines.push(`Abschluss: Ziel ${a.ziel ? 'ja' : 'NEIN'} · Dateien: ${a.dateien.join(', ') || 'keine'} · Annahmen: ${a.annahmen.join('; ') || 'keine'} · Widersprüche: ${a.widersprueche.join('; ') || 'keine'}${a.urteil ? ` · Urteil: ${a.urteil}${a.befunde?.length ? ` — ${a.befunde.join('; ')}` : ''}` : ''}`);
+  if (d.pruef) lines.push(`Brücken-Prüfungen${d.pruef.ref ? ` (Befehle aus ${d.pruef.ref})` : ''}${d.pruef.eingerichtet ? '' : ' — keine eingerichtet (.werkbank/pruefungen.json fehlt), nur diff-check'}: ${d.pruef.ergebnisse.map((p) => `${p.ok ? '✅' : '❌'} ${p.name}${p.ok ? '' : ` (Code ${p.code}): ${p.ausgabe.slice(-500)}`}`).join(' · ')}`);
+  if (d.abweichungen.length) lines.push(`⚠️ Abweichungen: ${d.abweichungen.join(' · ')}`);
+  if (d.git && d.wt) {
+    lines.push(`Diff (${d.git.commits} Commit(s), Kopf ${d.git.kopf.slice(0, 10)}):\n${d.git.stat}`);
+    const pr = d.pruefer ? delegs.get(d.pruefer) : undefined;
+    const pruefpflicht = d.risiko === 'niedrig' && d.pruef?.eingerichtet ? 'niedrig → Brücken-Prüfungen oben + Stichprobe unten' : d.risiko === 'hoch' ? `hoch → Diff lesen + Prüfer der Brücke${pr ? ` (${pr.id}: ${pr.abschluss?.urteil ?? pr.status})` : ''}` : 'mittel (bzw. keine Prüfungen eingerichtet) → Diff lesen';
+    lines.push(`Prüfpflicht: ${pruefpflicht}. Diff: \`git -C ${d.wt.dir} diff ${d.wt.base.slice(0, 12)}..${d.git.kopf.slice(0, 12)}\`. Übernahme nach Prüfung (im Strang-Ordner): \`git cherry-pick ${d.wt.base.slice(0, 12)}..${d.git.kopf.slice(0, 12)}\`, danach delegation_urteil.`);
+    if (d.git.hunk && d.risiko === 'niedrig') lines.push(`Stichprobe (größter Hunk):\n\`\`\`diff\n${d.git.hunk}\n\`\`\``);
+  }
+  const used = lines.join('\n').length;
+  const body = d.text.replace(/```(?:json)?\s*\n[\s\S]*?"abschluss"[\s\S]*?```/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  const room = Math.max(400, KAPPUNG.ergebnis - used);
+  lines.push(`Antwort des Workers${body.length > room ? ` (gekürzt auf ${room} von ${body.length} Zeichen)` : ''}:\n${body.slice(0, room)}`);
+  return lines.join('\n');
+}
+
+function ressourcenLage(userId: string): string {
+  const mineL = [...lives.values()].filter((l) => l.userId === userId);
+  const now = Date.now();
+  const erschoepft = Object.entries(exhaustedOf(safeId(userId))).filter(([, v]) => v.until > now).map(([k]) => k);
+  return `${mineL.filter((l) => !l.worker).length} Lead-/Chat-Züge, ${mineL.filter((l) => l.worker).length} Worker (${mineL.filter((l) => l.worker && l.onClaude).length} auf Claude, Deckel ${workerClaudeMax()}); erschöpft vermerkt: ${erschoepft.join(', ') || 'nichts'}.`;
+}
+
+/** delegation_stand: wartet höchstens warten_s auf die genannten (sonst alle) Delegationen dieses Strangs. */
+export async function delegationStand(userId: string, convId: string, b: { ids?: unknown; warten_s?: unknown }): Promise<Res> {
+  const parent = `${safeId(userId)}:${safeId(convId)}`;
+  const want = Array.isArray(b.ids) ? b.ids.map(String) : [];
+  const mine = [...delegs.values()].filter((d) => d.parent === parent && (!want.length || want.includes(d.id)));
+  if (!mine.length) return { ok: true, text: want.length ? `Keine Delegation ${want.join(', ')} in diesem Strang (nach einem Neustart der Brücke sind sie weg).` : 'Keine Delegationen in diesem Strang.' };
+  const ms = Math.min(KAPPUNG.wartenS, Math.max(0, Number(b.warten_s ?? KAPPUNG.wartenS) || 0)) * 1000;
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([Promise.all(mine.map((d) => d.done)), new Promise<void>((r) => { timer = setTimeout(r, ms); })]);
+  clearTimeout(timer);
+  return { ok: true, text: [...mine.map(formatDeleg), `Lage: ${ressourcenLage(userId)}`].join('\n\n') };
+}
+
+/** delegation_urteil: Prüfurteil des Leads protokollieren, Unter-Worktree abräumen (der Zweig bleibt). */
+export async function delegationUrteil(userId: string, convId: string, b: { id?: unknown; urteil?: unknown; notiz?: unknown }): Promise<Res> {
+  const parent = `${safeId(userId)}:${safeId(convId)}`;
+  const d = delegs.get(String(b.id ?? ''));
+  if (!d || d.parent !== parent) return { ok: false, status: 404, error: 'Keine Delegation dieses Strangs mit dieser Kennung.' };
+  const urteil = String(b.urteil ?? '');
+  if (!['uebernommen', 'nachgebessert', 'verworfen'].includes(urteil)) return { ok: false, status: 400, error: 'urteil: uebernommen, nachgebessert oder verworfen.' };
+  if (d.status === 'laeuft') return { ok: false, status: 409, error: 'Die Delegation läuft noch.' };
+  d.urteil = urteil;
+  d.notiz = String(b.notiz ?? '').slice(0, 500);
+  let weg = '';
+  if (d.wt && existsSync(d.wt.dir)) { await removeWorktree(d.wt.dir); weg = ` Unter-Worktree entfernt, Zweig ${d.wt.branch} bleibt.`; }
+  report(d);
+  log('delegation urteil', { id: d.id, urteil });
+  return { ok: true, text: `Urteil „${urteil}“ für ${d.id} vermerkt.${weg}` };
+}
+
+/** phase_wechseln: Übergabedatei prüfen (C1), Wechsel für das Ende dieses Versuchs anmelden (gilt im selben Zug). */
+export async function phaseWechseln(userId: string, convId: string, b: { phase?: unknown; uebergabe?: unknown }): Promise<Res> {
+  const key = `${safeId(userId)}:${safeId(convId)}`;
+  const e = orchMap[key];
+  if (!e || (e.kind ?? 'strand') !== 'strand') return { ok: false, status: 403, error: 'phase_wechseln gibt es nur in Strängen.' };
+  if (!lives.get(key)?.req) return { ok: false, status: 409, error: 'phase_wechseln geht nur während eines laufenden Strang-Zugs.' };
+  const phase = String(b.phase ?? '') as Phase;
+  if (!PHASEN.includes(phase)) return { ok: false, status: 400, error: `phase: ${PHASEN.join(', ')}.` };
+  const raw = String(b.uebergabe ?? '');
+  if (!raw) return { ok: false, status: 400, error: 'uebergabe: Pfad der Übergabedatei im Arbeitsordner.' };
+  let file: string;
+  try {
+    file = realpathSync(isAbsolute(raw) ? raw : join(e.dir, raw));
+    const rel = relPath(realpathSync(e.dir), file);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) return { ok: false, status: 400, error: 'Die Übergabedatei muss im Arbeitsordner des Strangs liegen.' };
+  } catch { return { ok: false, status: 400, error: `Übergabedatei ${raw} gibt es nicht.` }; }
+  let text = readFileSync(file, 'utf8');
+  const c = checkUebergabe(text);
+  if (!c.ok) return { ok: false, status: 400, error: `Übergabe ungültig (C1): ${c.why}. Kein Wechsel — Datei ergänzen und noch einmal.` };
+  const { modell, c2 } = phaseModell(phase, c.ziel);
+  // C6 für Ersatz-Leads (Council 165, 8): lief ein Zug dieser Phase auf einem Glied der Ersatzkette, prüft die Brücke den Stand.
+  const vorher = e.phase ? phaseModell(e.phase).modell : null;
+  const ersatz = (e.phaseModelle ?? []).filter((m) => /^Melious /.test(m) || (vorher === 'opus' && /sonnet/i.test(m)));
+  let pruefText = '';
+  if (ersatz.length && await isGitDir(e.dir)) {
+    const ref = await integrationRef(e.dir);
+    const mb = ref ? (await runCmd('git', ['-C', e.dir, 'merge-base', 'HEAD', ref], { cwd: e.dir })).out.trim() : '';
+    if (mb) {
+      const r = await pruefen(e.dir, mb, checkEnv());
+      pruefText = `\n\n## Prüfausgaben der Brücke (Ersatz-Lead ${ersatz.join(', ')})\n\n${r.ergebnisse.map((p) => `- ${p.ok ? 'grün' : 'ROT'} ${p.name} (\`${p.befehl}\`)${p.ok ? '' : `: ${p.ausgabe.slice(-400)}`}`).join('\n')}${r.eingerichtet ? '' : '\n- keine Prüfbefehle eingerichtet (.werkbank/pruefungen.json)'}`;
+      text += pruefText;
+    }
+  }
+  e.phaseNeu = { phase, text, c2, at: Date.now() };
+  saveMap();
+  log('phase angemeldet', { conv: key, von: e.phase ?? null, nach: phase, c2, ersatz: ersatz.length });
+  const ziel = e.modell ? `Modell bleibt ${e.modell} (beim Start gesetzt)` : `Claude ${modell === 'opus' ? 'Opus' : 'Sonnet'}${c2 ? ' (Opus bevorzugt: Eingriff mit Rückwirkung, C2)' : ''}`;
+  return { ok: true, text: `Phase „${phase}“ angemeldet (Übergabe geprüft). Beende jetzt deinen Zug mit einem kurzen Satz und ohne weitere Werkzeuge — die Brücke setzt sofort in einer neuen Sitzung fort: ${ziel}, Kontext nur Auftrag + Übergabe.${pruefText ? ` Die Brücke hat den Stand geprüft (Ersatz-Lead): ${pruefText.includes('ROT') ? 'ROTE Prüfungen — stehen in der Übergabe.' : 'alles grün.'}` : ''}` };
 }

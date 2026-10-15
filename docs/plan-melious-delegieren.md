@@ -1,6 +1,6 @@
 # Plan 165 — Delegieren, Phasen-Lead und Gegenprüfung (Modellwahl v2, Stufe 3+4)
 
-Stand: Plan (15.10.2026). Auftrag Knut 15.10.: „nutze melious so wie wir es besprochen haben … insbesondere auf dem Workspace“.
+Stand: Plan nach Council (15.10.2026). Auftrag Knut 15.10.: „nutze melious so wie wir es besprochen haben … insbesondere auf dem Workspace“.
 Befund dazu: Ersatzkette, „Leser/Schreiber zuerst Melious“ und `challenge` sind live, greifen aber kaum — alle Stränge laufen als
 Bauer/Voll, und Claude hat Kontingent. Grundlage: Konzept v2 der smarten Modellwahl mit Council-Urteil Runde 2 und Knuts
 Entscheidung danach („Push, PR, Council sollten nicht per Default auf Opus warten … keine Limitations hier einbauen“).
@@ -20,6 +20,44 @@ in der Melious-Kachel zu sehen.
 - C4/C5 wie von Knut geändert: Priorität Hauptchat vor Strängen bleibt wie gebaut (der Hauptchat geht nie freiwillig auf Melious),
   kein Anhalten von Eingriffen; Ersatz-Lead arbeitet weiter, mit C6-Prüfungen und Prüfer mindestens der Autor-Klasse.
 - Strang ohne Phasenangabe = Verhalten wie heute (kein Modellwechsel). Der Phasen-Lead greift erst ab dem ersten `phase_wechseln`.
+
+## Council zum Plan (15.10.2026) — GO mit Bedingungen, eingearbeitet
+Stimmen: Fachprüfer (Code gelesen) → GO mit Bedingungen; Advocatus Diaboli → GO mit Bedingungen. Die GLM-5.3-Gegenprüfung brach
+zweimal nach 30 s ab (Werkzeug-Zeitlimit; Fix in diesem Paket, eigener Commit) — der Advocatus lief deshalb auf Sonnet.
+Änderungen am Plan (gelten vor den Schnitten oben):
+1. **Phasenwechsel im selben Zug** (statt Zustellung über „weiter“): nach dem Versuch, in dem `phase_wechseln` gültig war, startet die
+   Brücke sofort einen neuen Versuch ohne Fortsetzen, mit dem Modell der Phase. Kontext = Strang-Auftrag (erste Nachricht, in
+   orch.json gemerkt) + Übergabe, kein Chatverlauf. Keine Änderung am Auto-Fortsetzen, keine Doppelzustellung.
+2. **C1 messbar:** jeder Abschnitt der Übergabe mindestens 20 Zeichen (Annahmen/Widersprüche dürfen „keine“ sein), Pfad nur im
+   Arbeitsordner (realpath). Stichprobe gilt als bestanden, wenn die erste Antwort der Folgesitzung keine Rückfrage und keine
+   Marke „braucht Antwort“ enthält und mindestens ein Werkzeugaufruf eine Datei aus `## Stand` liest.
+3. **Worker leben höchstens so lange wie der Lead-Zug:** `delegieren` geht nur in einem laufenden Strang-Zug (dessen Zugang und
+   Konten nutzt der Worker); am Zugende werden offene Worker abgebrochen („abgebrochen“). Beim Start der Brücke: `git worktree
+   prune`. Worker zählen nicht in Parallelgrenze/Rückfragen, laufen mit Strang-Regeln (keine Rückfragen) und erscheinen nicht in
+   `/sessions` und im Strang-Zustand. Global höchstens `BRIDGE_MAX_WORKERS` (Vorgabe 6, Arbeitsspeicher ≈ 420 MB je Worker).
+4. **Unter-Worktree:** `<repo>.deleg/<id>` neben dem Repository; `node_modules` verlinkt und in `info/exclude` eingetragen (kein
+   falsches „nicht committet“). Schreiben über den Link verhindert der Wächter (realpath, nur der eigene Ordner). Schreiber nur in
+   Git-Ordnern.
+5. **Prüfbefehle (C6) sicherer:** `.werkbank/pruefungen.json` aus dem **Integrationszweig** (erste vorhandene Referenz aus
+   `BRIDGE_PRUEF_REF`, Vorgabe `origin/dev, origin/develop, origin/main, dev, main`), nicht aus dem Strang; Befehl als Argument-Liste
+   ohne Shell; Umgebung ohne Geheimnisse plus Git ohne Zugangsdaten; Zeitlimit beendet die ganze Prozessgruppe. Restrisiko (offen
+   im Bericht): Tests führen vom Worker geschriebenen Code aus, ohne Sandbox (auf der VM gibt es weder bwrap noch unprivilegierte
+   Namespaces) — gleichwertig mit `npm test` im Worker selbst.
+6. **Heikle Pfade:** Ein Diff, der `.werkbank/`, `.claude/`, `.github/`, `.husky/`, `.gitattributes`, `.gitmodules` oder `package.json`
+   berührt, hebt das Risiko auf „hoch“ (eigener Prüfer) und steht als Abweichung im Ergebnis.
+7. **Reparaturrunde:** fehlt der Abschluss-Block, fordert die Brücke ihn einmal in derselben Worker-Sitzung nach; erst danach
+   „fehlgeschlagen“.
+8. **C6 für Ersatz-Leads:** lief ein Zug der Phase auf einem Glied der Ersatzkette, führt die Brücke beim nächsten `phase_wechseln`
+   die Prüfbefehle auf dem Strang-Stand aus; rote Prüfungen gehen in die Übergabe der Folgesitzung. Fehlt ein Prüfer der
+   Autor-Klasse, steht im Ergebnis „ungeprüft (kein Prüfer ≥ Autor)“ — `challenge` gilt nicht als Ersatz, wenn der Autor GLM 5.3 ist.
+9. **C7 auch für Melious:** Worker auf Melious nur, solange der Melious-Rest über `BRIDGE_WORKER_MELIOUS_RESERVE` (Vorgabe 16 000
+   Energie = zwei Takte) liegt — der Rest gehört dem letzten Glied der Lead-Ersatzkette.
+10. **Messung des Nutzens:** Kachel zeigt je Modell und Rolle Delegationen, Fehlschlag- und Verwerfquote sowie Worker-Tokens gegen
+    Lead-Tokens im selben Strang. Eine automatische Zurückstellung schwacher Modelle (Advocatus: ab 40 % Verwerfquote) ist eine
+    Entscheidung für Knut, nicht gebaut.
+11. **C8 Kompaktierung:** Worker bekommen `CLAUDE_CODE_AUTO_COMPACT_WINDOW=120000` und `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70`, Strang-
+    Leads `…PCT_OVERRIDE=80` (Variablen des CLI; im Stub-Test belegt, dass sie gesetzt sind — die Wirkung beim CLI ist nicht getestet).
+12. `challenge` schickt die Kennung der Unterhaltung mit (Zählung „Gegenprüfung n×“ an der Review-Karte).
 
 ## Schnitte
 

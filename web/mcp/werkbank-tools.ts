@@ -42,6 +42,43 @@ const t = (d: any) => (d ? new Date(d).toLocaleString('de-AT', { timeZone: 'Euro
 const ICON: Record<string, string> = { running: '⏳', waiting: '✋', done: '✅', failed: '❌' };
 const opt = (o: any) => [o.option ? `Option „${o.option}“` : '', o.text].filter(Boolean).join(' — ');
 
+// Delegieren und Phasen-Lead (Plan 165) — direkt an die Brücke (dort laufen Worker und Phasenwechsel).
+async function bridge(path: string, body: unknown, timeoutMs: number): Promise<string> {
+  const r = await fetch(String(process.env.WERKBANK_BRIDGE_URL) + path, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': TOKEN },
+    body: JSON.stringify({ userId: USER, conv: process.env.WERKBANK_CONV_ID || '', ...(body as object) }), signal: AbortSignal.timeout(timeoutMs),
+  });
+  const j: any = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error ?? `Brücke antwortet mit ${r.status}`);
+  return String(j.text ?? '');
+}
+const DELEG_TOOLS = [
+  {
+    name: 'delegieren',
+    description: 'Teilaufgabe an einen Worker abgeben (zuerst Melious; Claude Haiku/Sonnet nur unter Deckel). Nur für große, abgegrenzte Aufgaben (du müsstest sonst > 20k Tokens selbst lesen/schreiben), gebündelt; höchstens 3 gleichzeitig. rolle: leser (liest/sucht, Belege), schreiber (Texte/Dateien im eigenen Worktree), bauer (Code im eigenen Unter-Worktree vom Strang-Kopf, liefert Commit), pruefer (begutachtet eine Delegation: pruefe=<Kennung>). aufgabe: vollständiger Auftrag (höchstens 20 000 Zeichen; der Worker kennt deinen Chat nicht). risiko: niedrig|mittel|hoch (nie unter dem des Strangs). Antwortet sofort mit der Kennung; Ergebnis mit delegation_stand. Worker enden mit deinem Zug.',
+    inputSchema: { type: 'object', properties: { rolle: { type: 'string', enum: ['leser', 'schreiber', 'bauer', 'pruefer'] }, aufgabe: { type: 'string' }, risiko: { type: 'string', enum: ['niedrig', 'mittel', 'hoch'] }, pruefe: { type: 'string' } }, required: ['rolle'] },
+    run: (a: any) => bridge('/internal/delegate', { rolle: a.rolle, aufgabe: a.aufgabe ?? '', risiko: a.risiko, pruefe: a.pruefe }, 120_000),
+  },
+  {
+    name: 'delegation_stand',
+    description: 'Wartet höchstens warten_s Sekunden (Vorgabe und Obergrenze 240) auf die genannten Delegationen (ids leer = alle dieses Strangs) und liefert je Delegation: Status, Modell, Abschluss-Block, Prüfungen der Brücke mit Ausgabe, Abweichungen, Diff-Stat, Prüfpflicht, Übernahme-Befehl. Läuft noch etwas, einfach noch einmal aufrufen.',
+    inputSchema: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' } }, warten_s: { type: 'number' } } },
+    run: (a: any) => bridge('/internal/delegate-stand', { ids: a.ids ?? [], warten_s: a.warten_s }, 260_000),
+  },
+  {
+    name: 'delegation_urteil',
+    description: 'Dein Prüfurteil zu einer fertigen Delegation: uebernommen (Commit per git cherry-pick übernommen), nachgebessert (übernommen und selbst korrigiert) oder verworfen. Räumt den Unter-Worktree ab (der Zweig bleibt) und geht in die Messung.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, urteil: { type: 'string', enum: ['uebernommen', 'nachgebessert', 'verworfen'] }, notiz: { type: 'string' } }, required: ['id', 'urteil'] },
+    run: (a: any) => bridge('/internal/delegate-urteil', { id: a.id, urteil: a.urteil, notiz: a.notiz ?? '' }, 60_000),
+  },
+  {
+    name: 'phase_wechseln',
+    description: 'Phasengrenze (plan-to-pr): phase = plan|council|pass-c|push (Opus) oder bau|recherche|review|bericht (Sonnet). uebergabe = Pfad einer Datei im Arbeitsordner mit den Abschnitten „## Ziel“, „## Stand“, „## Annahmen“, „## Offene Widersprüche“, „## Prüfausgaben“ (je mindestens 20 Zeichen oder „keine“, zusammen höchstens 8 000 Zeichen). Ist sie gültig, beendest du den Zug mit einem Satz; die Brücke setzt sofort in einer neuen Sitzung mit dem Modell der Phase fort, Kontext nur Auftrag + Übergabe.',
+    inputSchema: { type: 'object', properties: { phase: { type: 'string', enum: ['plan', 'council', 'pass-c', 'push', 'bau', 'recherche', 'review', 'bericht'] }, uebergabe: { type: 'string' } }, required: ['phase', 'uebergabe'] },
+    run: (a: any) => bridge('/internal/phase', { phase: a.phase, uebergabe: a.uebergabe }, 1_900_000),
+  },
+];
+
 // Orchestrator-Werkzeuge für den Leitstand: dieselben internen Routen wie scripts/orch, Person aus der Umgebung.
 const ORCH_TOOLS = [
   {
@@ -233,13 +270,15 @@ serve('werkbank', '0.1.0', [
       return j.hauptchat ? 'Gemeldet — der Hauptchat bekommt es mit der nächsten Meldung. Arbeite weiter, soweit es geht.' : 'Gespeichert — gerade ist kein Hauptchat aktiv; Knut sieht es in der Übersicht. Arbeite weiter, soweit es geht.';
     },
   }] : []),
+  // Delegieren und Phasen-Lead (Plan 165): nur in Strängen; die Brücke kennt Person und Strang aus dieser Umgebung.
+  ...(process.env.WERKBANK_STRANG === '1' && process.env.WERKBANK_BRIDGE_URL ? DELEG_TOOLS : []),
   // Gegenprüfung durch GLM 5.3 über Melious (Plan 162; Knut 15.10.: „Lead kann jeweils sowieso challengen mit GLM 5.3“).
   {
     name: 'challenge',
     description: 'Zweite Meinung von GLM 5.3 (Melious, Open-Weight) — ZUSÄTZLICH zu deiner eigenen Prüfung, nie statt ihr. art=diff: Code-Review eines Diffs (Befunde mit Datei:Zeile, Schwere, Fix); art=plan: Plan-Challenge (schwächste Annahmen, fehlende Fälle, Rückweg); art=council: Advocatus Diaboli zu einer Entscheidung. text: Diff/Plan/Entscheidung (bis 200 000 Zeichen), frage: optional, worauf besonders achten. Bewerte die Antwort selbst; übernimm nur, was du nachprüfen kannst. Kostet Melious-Energie, keine Claude-Tokens.',
     inputSchema: { type: 'object', properties: { art: { type: 'string', enum: ['diff', 'plan', 'council'] }, text: { type: 'string' }, frage: { type: 'string' } }, required: ['art', 'text'] },
     run: async (a: any) => {
-      const j = await call('/internal/melious-challenge', { art: a.art, text: a.text, frage: a.frage ?? '' }, 200_000);
+      const j = await call('/internal/melious-challenge', { art: a.art, text: a.text, frage: a.frage ?? '', conv: process.env.WERKBANK_CONV_ID || '' }, 200_000);
       if (!j.ok) return `Gegenprüfung nicht möglich: ${j.error ?? 'unbekannter Fehler'}`;
       return `Gegenprüfung GLM 5.3 (Melious, Open-Weight — Ergebnis prüfen; ≈ ${j.energie ?? '?'} Energie${j.bezahlt === 'credits' ? ', bezahlt mit Guthaben' : ''}):\n\n${j.text}`;
     },
