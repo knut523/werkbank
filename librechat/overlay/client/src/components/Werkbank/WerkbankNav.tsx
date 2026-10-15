@@ -13,7 +13,7 @@ import { useHauptchat } from './HauptchatSection';
 // Leiste = dieselben fünf wie oben in der Werkbank (Council-Bedingung 11): Heute · Roadmap · Board · Sprint · Wissen.
 // Die übrigen vier unter „Mehr“; die Einrichtung steht im Kontomenü bei LibreChats Einstellungen (WerkbankSetupItem).
 export const WERKBANK_PAGES = [
-  { id: 'heute', hash: '#/', label: 'Heute', icon: Sun, nav: true },
+  { id: 'heute', hash: '#/', label: 'Übersicht', icon: Sun, nav: true },   // Plan 184, Teil B: Startseite heißt Übersicht (Adresse /wb/heute bleibt)
   { id: 'roadmap', hash: '#/roadmap', label: 'Roadmap', icon: Compass, nav: true },
   { id: 'board', hash: '#/board', label: 'Board (Jira PM)', icon: SquareKanban, nav: true },
   { id: 'sprint', hash: '#/sprint', label: 'Sprint', icon: RefreshCw, nav: true },

@@ -87,7 +87,7 @@ export function vonDir(o: { ampel: Ampel; freigabeOffen: boolean; kannFreigeben:
   if (o.ampel === 'push' && o.kannFreigeben && !o.freigabeOffen) teile.push('Push-Go');
   if (o.entscheidungen.length) teile.push(`${o.entscheidungen.length === 1 ? 'Entscheidung' : 'Entscheidungen'} ${kennungen(o.entscheidungen)}`);
   if (o.rueckfragen) teile.push(o.rueckfragen === 1 ? 'eine Rückfrage' : `${o.rueckfragen} Rückfragen`);
-  if (o.braucht && !o.entscheidungen.length && !o.rueckfragen) teile.push(`Antwort: ${o.braucht.length > 160 ? o.braucht.slice(0, 157) + '…' : o.braucht}`);
+  if (o.braucht && !o.entscheidungen.length && !o.rueckfragen) teile.push('Antwort auf die Rückfrage');   // die Frage steht darunter auf der Karte
   if (!teile.length) return o.ampel === 'blockiert' ? 'Blocker ansehen (Bericht/Chat)' : o.gepusht ? 'nichts — gepusht, PR-Review auf GitHub' : o.ampel === 'push' && o.freigabeOffen ? 'nichts — freigegeben, der Hauptchat pusht' : 'Review';
   return teile.join(' und ');
 }
@@ -159,7 +159,7 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null) {
     entscheidungen: offen, berichtHash: text ? berichtHash(text) : null, rueckfragen: qs, braucht,
     kannFreigeben, freigabe: fg, weitereRepos: felder.weitereRepos ?? [], commitWarnung: felder.commitWarnung ?? null,
     kopfFehler: kopf ? null : felder.kopfFehler ?? (roh && 'fehler' in roh ? roh.fehler : null),   // wie Heute: unlesbaren Kopf zeigen
-    running, wartet: statusWord(d) === 'wartet', seen, chat: sicher(d.url) ? d.url : null, statusAt: d.statusAt ?? d.lastActivity ?? d.startedAt,
+    running, wartet: statusWord(d) === 'wartet', seen, paket, chat: sicher(d.url) ? d.url : null, statusAt: d.statusAt ?? d.lastActivity ?? d.startedAt,
   };
 }
 export type Karte = ReturnType<typeof karte>;

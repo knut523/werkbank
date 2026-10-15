@@ -474,7 +474,7 @@ try {
     await a.goto(LC + '/c/new');
     await a.getByTestId('werkbank-nav-heute').click();
     await a.waitForURL(/\/wb\/heute/);
-    await a.frameLocator('[data-testid="werkbank-frame"]').getByRole('heading', { name: 'Heute' }).waitFor({ timeout: 20000 });
+    await a.frameLocator('[data-testid="werkbank-frame"]').getByRole('heading', { name: 'Übersicht', exact: true }).waitFor({ timeout: 20000 });
     await shot(a, '21-leiste-heute');
     assert.equal(await a.locator('[data-testid^="werkbank-nav-"]').count(), 5, 'Leiste: Heute · Roadmap · Board · Sprint · Wissen');
     await a.goto(LC + '/wb/einrichtung');

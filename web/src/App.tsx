@@ -10,7 +10,6 @@ import { Skills } from './pages/Skills.tsx';
 import { Dateien } from './pages/Dateien.tsx';
 import { Timebox } from './pages/Timebox.tsx';
 import { Ziele } from './pages/Ziele.tsx';
-import { Heute } from './pages/Heute.tsx';
 import { Uebersicht } from './pages/Uebersicht.tsx';
 import { Leitstand } from './pages/Leitstand.tsx';
 import { useTodayCount } from './beimir.tsx';
@@ -38,7 +37,8 @@ const SHARED_TOKENS = ['--presentation', '--text-primary', '--text-secondary', '
 
 // Werkzeug statt Seite (Council-Bedingung 11): oben fünf Einträge, der Rest im Fuß. LibreChat-Leiste: dieselben fünf.
 const NAV = [
-  { href: '#/', label: 'Heute', ico: '☀️', match: /^#\/?$/, f: 'heute' },
+  // Plan 184, Teil B: die Übersicht ist die Startseite; #/heute und #/uebersicht führen ebenfalls dorthin (alte Adressen, 185-B3).
+  { href: '#/', label: 'Übersicht', ico: '📋', match: /^#\/?$|^#\/(heute|uebersicht)(\?|$)/, f: 'heute' },
   { href: '#/roadmap', label: 'Roadmap', ico: '🧭', match: /^#\/roadmap/ , f: 'roadmap' },
   { href: '#/board', label: 'Board', ico: '🗂️', match: /^#\/board/ , f: 'board' },
   { href: '#/sprint', label: 'Sprint', ico: '🔁', match: /^#\/sprint/ , f: 'sprint' },
@@ -125,7 +125,7 @@ export function App() {
   const vis = (n: { f: string }) => !n.f || cfg.features?.[n.f] !== false;
   const nav = NAV.filter(vis), more = MORE.filter(vis);
   const hidden = user && [...NAV, ...MORE].find((n) => n.f && n.match.test(hash) && !vis(n));
-  const heuteHidden = user && cfg.features?.heute === false && /^#\/?$/.test(hash);
+  const heuteHidden = user && cfg.features?.heute === false && /^#\/?$|^#\/(heute|uebersicht)(\?|$)/.test(hash);
   // Anmelden über das Einrichtungs-Formular: weiter mit den ersten Schritten (Claude, Jira) auf der Einrichtung.
   const page = !user ? <Setup cfg={cfg} onLogin={() => { window.location.hash = '#/einrichtung'; load(); }} />
     : /^#\/einrichtung/.test(hash) || heuteHidden ? <Setup cfg={cfg} onLogin={load} />
@@ -139,8 +139,7 @@ export function App() {
     : /^#\/skills/.test(hash) ? <Skills cfg={cfg} />
     : /^#\/dateien/.test(hash) ? <Dateien cfg={cfg} />
     : /^#\/leitstand/.test(hash) ? <Leitstand cfg={cfg} hash={hash} />
-    : /^#\/uebersicht/.test(hash) ? <Uebersicht cfg={cfg} />
-    : <Heute cfg={cfg} />;
+    : <Uebersicht cfg={cfg} />;
 
   // Eingebettet: kein eigenes Gerüst — Navigation ist LibreChats Leiste (fünf Einträge + „Mehr“), Einrichtung im Kontomenü.
   if (embedded) return <div className="embedded">{page}</div>;
@@ -153,9 +152,9 @@ export function App() {
         <a href={cfg.librechatUrl} className="menu-chat btn small" title="Zurück zum Chat (LibreChat)">💬 Chat</a>
         <button className="menu-btn btn small" aria-expanded={menu} aria-controls="werkbank-nav" onClick={() => setMenu(!menu)}>
           {current ? <>{current.ico} {current.label}</> : 'Menü'}
-          {/* Auf „Heute“ steht der Zähler am Namen („Heute 10“), sonst als Hinweis daneben („· Heute 10“) — nie beides. */}
+          {/* Auf der Übersicht steht der Zähler am Namen („Übersicht 10“), sonst als Hinweis daneben („· Übersicht 10“) — nie beides. */}
           {current?.href === '#/' && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span>
-            : !menu && <span className="menu-more">· {todayN ? `Heute ${todayN}` : `${nav.length + more.length - (current ? 1 : 0)} weitere`}</span>}<span aria-hidden>{menu ? '▴' : '▾'}</span>
+            : !menu && <span className="menu-more">· {todayN ? `Übersicht ${todayN}` : `${nav.length + more.length - (current ? 1 : 0)} weitere`}</span>}<span aria-hidden>{menu ? '▴' : '▾'}</span>
         </button>
         <nav className="nav col" id="werkbank-nav" style={{ gap: 2 }}>
           <a href={cfg.librechatUrl} className="" title="Zurück zum Chat (LibreChat)"><span className="ico">💬</span>Chat</a>

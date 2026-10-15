@@ -1,13 +1,19 @@
-// Übersicht „Was fertig ist“ mit direktem Handeln (docs/plan-uebersicht-handeln.md, Paket 184). Aufbau wie die Morgen-Seite
-// des Orchestrators: eine Karte je Strang (Titel, Ampel, 2–3 Sätze, Links, „Von dir“), gruppiert nach Thema wie die
-// Chat-Seitenleiste. Gehandelt wird über die vorhandenen Routen: Freigabe, Entscheidungen, Rückfragen, Antwort/Nacharbeit, Passt.
-// Entwürfe und auf/zu liegen im localStorage — Neuladen verliert nichts (Council 3).
-import { useEffect, useState } from 'react';
+// Übersicht — die Startseite (docs/plan-uebersicht-handeln.md, Paket 184, Teil B; Struktur und Bildsprache aus den Mockups von
+// Paket 185). Eine Karte je Unter-Chat, nach Thema wie die Chat-Seitenleiste: Ampel, 2–3 Sätze, Links, „Von dir“ — und direkt
+// handeln: Push freigeben, Entscheidungen und Rückfragen mit Ja / Nein / Anders …, Nacharbeit, Abhaken. Alles über die
+// vorhandenen Routen. Was früher nur auf „Heute“ stand (Board-Agentenläufe, Vault-Sync-Fragen, G0-Stopps, Pflege, Mein Tag),
+// steht hier weiter (185-Council B2/B8). Entwürfe und auf/zu liegen im localStorage — Neuladen verliert nichts.
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, chatTarget, fmtDateTime, type Config } from '../api.ts';
-import { Err, Loading, useLoad, useToast } from '../ui.tsx';
+import { Err, Loading, useJiraLive, useLoad, useToast } from '../ui.tsx';
 import { usePushFreigeben } from '../freigabe.tsx';
+import { useMermaidIn } from '../mermaid.tsx';
+import { WartetAufDich, mineCount } from '../beimir.tsx';
+import { OrchQuestions } from '../orchquestions.tsx';
+import { HygienePanel } from '../components.tsx';
+import { G0Blocked, LiveGroup, RunCard } from './Heute.tsx';
 
-const AMPEL_CLS: Record<string, string> = { push: 'ok', review: 'warn', laeuft: '', blockiert: 'bad' };
+const AMP: Record<string, string> = { push: 'u-push', review: 'u-dich', laeuft: 'u-run', blockiert: 'u-bad' };
 const PREFIX = 'wb-uebersicht:';
 
 /** Zustand im localStorage (je Schlüssel); `leer` wird nicht gespeichert, sondern gelöscht. */
@@ -20,220 +26,359 @@ function useStored<T>(key: string, leer: T): [T, (v: T) => void] {
   return [v, set];
 }
 
-const is409 = (e: any) => e?.status === 409;   // Stand veraltet / Strang arbeitet → neu laden, Entwurf bleibt (Pass C, 11)
+const is409 = (e: any) => e?.status === 409;   // Stand veraltet / Unter-Chat arbeitet → neu laden, Entwurf bleibt
+const kurzText = (t: string, n = 140) => (t.length > n ? t.slice(0, n - 1) + '…' : t);
 
-type Wahl = { art: '' | 'akzeptiert' | 'eigene' | 'nachpruefen'; text: string };
+type Art = 'ja' | 'nein' | 'anders';
 
-/** Entscheidungen (D-/E-Kennungen): je Frage eine Auswahl + Text; vorhandene Route /api/review/:id/entscheidungen. */
-function Entscheiden({ k, onDone }: { k: any; onDone: (reload?: boolean) => void }) {
-  const toast = useToast();
-  const [w, setW] = useStored<Record<string, Wahl>>(`${k.id}:entscheidungen`, {});
+/** Eine Frage, eine Antwort: Ja (= Empfehlung) · Nein · Anders … (Textfeld). Ja/Nein gehen mit einem Klick ab. */
+function JaNeinAnders({ k, empfehlung, disabled, onSend, extra }: { k: string; empfehlung?: string | null; disabled?: boolean; onSend: (art: Art, text: string) => Promise<void>; extra?: ReactNode }) {
+  const [anders, setAnders] = useStored<string | null>(`${k}:anders`, null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
+  const go = async (art: Art, text = '') => {
+    setBusy(true); setErr(null);
+    try { await onSend(art, text); if (art === 'anders') setAnders(null); } catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  return (
+    <div className="ub-jna" data-testid="ub-jna">
+      <div className="ub-row">
+        <button className="ub-btn pri sm" disabled={busy || disabled} title={empfehlung ? `Empfehlung übernehmen: ${empfehlung}` : 'Ja'} onClick={() => go('ja')} data-testid="ub-ja">Ja</button>
+        <button className="ub-btn sm" disabled={busy || disabled} onClick={() => go('nein')} data-testid="ub-nein">Nein</button>
+        <button className="ub-btn ghost sm" aria-expanded={anders !== null} disabled={disabled} onClick={() => setAnders(anders === null ? '' : null)} data-testid="ub-anders">Anders …</button>
+      </div>
+      {anders !== null && <div className="ub-anders">
+        {extra}
+        <textarea rows={2} value={anders} placeholder="Deine Antwort" aria-label="Deine Antwort" onChange={(e) => setAnders(e.target.value)} data-testid="ub-anders-text" />
+        <div className="ub-row"><button className="ub-btn pri sm" disabled={busy || disabled || !anders.trim()} onClick={() => go('anders', anders)} data-testid="ub-anders-senden">Senden</button>
+          <button className="ub-btn ghost sm" onClick={() => setAnders(null)}>Abbrechen</button></div>
+      </div>}
+      <Err e={err} />
+    </div>
+  );
+}
+
+/** Entscheidungen (D-/E-Kennungen) aus Bericht-Kopf und Textblöcken — vorhandene Route, die Antwort landet an der Quelle. */
+function Entscheiden({ k, onDone }: { k: any; onDone: () => void }) {
+  const toast = useToast();
   const liste: any[] = k.entscheidungen;
-  // Nur Entwürfe zu Fragen, die noch offen sind (beantwortete fallen beim Neuladen heraus).
-  const gewaehlt = liste.map((e) => [e.id, w[e.id]] as const).filter(([, v]) => v && (v.art === 'akzeptiert' || v.art === 'nachpruefen' || (v.art === 'eigene' && v.text.trim())));
-  const set = (id: string, v: Partial<Wahl>) => setW({ ...w, [id]: { art: '', text: '', ...w[id], ...v } });
-  const senden = async () => {
-    setBusy(true); setErr(null);
-    try {
-      const r: any = await api(`/api/review/${k.id}/entscheidungen`, { body: { berichtHash: k.berichtHash, antworten: gewaehlt.map(([id, v]) => ({ id, art: v!.art, text: v!.text })) } });
-      toast(r.weiter ? 'Eingetragen — der Unter-Chat arbeitet die Abweichungen ab' : r.offen ? `Eingetragen — noch ${r.offen} offen` : 'Alle Entscheidungen beantwortet');
-      const rest = { ...w }; for (const [id] of gewaehlt) delete rest[id];
-      setW(rest);
-      onDone();
-    } catch (e) { setErr(e); if (is409(e)) onDone(true); } finally { setBusy(false); }
-  };
-  return (
-    <div className="ub-panel" data-testid="ub-entscheidungen">
-      {liste.map((e) => {
-        const v = w[e.id] ?? { art: '', text: '' };
-        return (
-          <div key={e.id} className="ub-frage" data-testid="ub-entscheidung">
-            <p className="small"><b>{e.id}</b> {e.frage}</p>
-            {e.empfehlung && <p className="tiny muted">Empfehlung: {e.empfehlung}</p>}
-            {e.optionen && <details className="tiny"><summary>Optionen aus dem Bericht</summary><pre className="small ub-pre">{e.optionen}</pre></details>}
-            <div className="ub-wahl">
-              <select aria-label={`Antwort auf ${e.id}`} value={v.art} onChange={(ev) => set(e.id, { art: ev.target.value as Wahl['art'] })} data-testid={`ub-wahl-${e.id}`}>
-                <option value="">— wählen —</option>
-                {e.empfehlung && <option value="akzeptiert">Empfehlung übernehmen</option>}
-                <option value="eigene">Eigene Antwort</option>
-                <option value="nachpruefen">Nachprüfen lassen</option>
-              </select>
-              {(v.art === 'eigene' || v.art === 'nachpruefen') && <input className="input" value={v.text} placeholder={v.art === 'eigene' ? 'Deine Antwort' : 'Was nachprüfen? (optional)'} aria-label={`Text zu ${e.id}`} onChange={(ev) => set(e.id, { text: ev.target.value })} data-testid={`ub-text-${e.id}`} />}
-            </div>
-          </div>);
-      })}
-      <div className="row ub-row">
-        <button className="btn primary small" disabled={busy || !gewaehlt.length} onClick={senden} data-testid="ub-entscheidungen-senden">Antworten senden ({gewaehlt.length})</button>
-        {liste.some((e) => e.empfehlung) && <button className="btn ghost small" disabled={busy} onClick={() => setW({ ...w, ...Object.fromEntries(liste.filter((e) => e.empfehlung).map((e) => [e.id, { art: 'akzeptiert', text: '' }])) })}>Alle Empfehlungen wählen</button>}
-      </div>
-      <p className="tiny muted">Übernommene Empfehlungen trägt der Workspace in den Bericht ein; eigene Antworten und „nachprüfen“ gehen an den Unter-Chat.{k.running ? ' Er arbeitet gerade — die Antwort wird nachgereicht.' : ''}</p>
-      <Err e={err} />
-    </div>
-  );
-}
-
-/** Rückfrage des Orchestrators (q-…): Auswahl der Optionen + Text; vorhandene Route. */
-function Rueckfrage({ q, onDone }: { q: any; onDone: (reload?: boolean) => void }) {
-  const toast = useToast();
-  const [e, setE] = useStored<{ option: string; text: string }>(`q:${q.id}`, { option: '', text: '' });
+  const [einzeln, setEinzeln] = useStored<boolean>(`${k.id}:einzeln`, false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
-  const senden = async () => {
-    setBusy(true); setErr(null);
+  const send = async (antworten: any[]) => {
     try {
-      await api(`/api/orchestrator/questions/${q.id}/answer`, { body: { option: e.option || null, text: e.text || '' } });
-      toast('Antwort gespeichert — der Orchestrator liest sie beim nächsten Abruf');
-      setE({ option: '', text: '' });
-      window.dispatchEvent(new Event('werkbank-questions'));
+      const r: any = await api(`/api/review/${k.id}/entscheidungen`, { body: { berichtHash: k.berichtHash, weiter: true, antworten } });
+      toast(`${antworten.map((a) => a.id).join(', ')} beantwortet — im Bericht eingetragen${r.weiter ? ', der Unter-Chat macht weiter' : ''}`);
       onDone();
-    } catch (x) { setErr(x); } finally { setBusy(false); }
+    } catch (e) { if (is409(e)) onDone(); throw e; }
   };
-  return (
-    <div className="ub-frage" data-testid="ub-rueckfrage">
-      <p className="small"><b>{q.title}</b> <span className="tiny muted">· {q.id} · {fmtDateTime(q.createdAt)}</span></p>
-      {q.context && <details className="tiny"><summary>Kontext</summary><p className="small ub-pre">{q.context}</p></details>}
-      {q.recommendation && <p className="tiny muted">Empfehlung: {q.recommendation}</p>}
-      <div className="ub-wahl">
-        {q.options?.length > 0 && <select aria-label={`Option für ${q.title}`} value={e.option} onChange={(ev) => setE({ ...e, option: ev.target.value })}>
-          <option value="">— Option wählen —</option>
-          {q.options.map((o: any) => <option key={o.label} value={o.label}>{o.label}{o.consequence ? ` — ${o.consequence}` : ''}</option>)}
-        </select>}
-        <input className="input" value={e.text} placeholder={q.options?.length ? 'Ergänzung (optional)' : 'Deine Antwort'} aria-label={`Antwort auf ${q.title}`} onChange={(ev) => setE({ ...e, text: ev.target.value })} />
-        <button className="btn small primary" disabled={busy || (!e.option && !e.text.trim())} onClick={senden}>Antworten</button>
-      </div>
-      <Err e={err} />
-    </div>
-  );
-}
-
-/** Freitext an den Strang: Antwort auf „Braucht Knut“ oder Nacharbeit — vorhandene Route /api/leitstand/strands/:id/reply. */
-function AnStrang({ k, kind, onDone }: { k: any; kind: 'antwort' | 'nacharbeit'; onDone: (reload?: boolean) => void }) {
-  const toast = useToast();
-  const [t, setT] = useStored<string>(`${k.id}:${kind}`, '');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<unknown>(null);
-  const senden = async () => {
+  const antwort = (e: any, art: Art, text: string) => art === 'ja' ? (e.empfehlung ? { id: e.id, art: 'akzeptiert' } : { id: e.id, art: 'eigene', text: 'Ja' })
+    : art === 'nein' ? { id: e.id, art: 'abgelehnt' } : { id: e.id, art: 'eigene', text };
+  const alle = async () => {
     setBusy(true); setErr(null);
-    try {
-      await api(`/api/leitstand/strands/${k.id}/reply`, { body: { kind, text: t, seen: k.seen } });
-      toast(kind === 'antwort' ? 'Antwort an den Unter-Chat geschickt' : 'Zurück an den Unter-Chat');
-      setT('');
-      onDone(true);
-    } catch (e) { setErr(e); if (is409(e)) onDone(true); } finally { setBusy(false); }
+    try { await send(liste.filter((e) => e.empfehlung).map((e) => ({ id: e.id, art: 'akzeptiert' }))); } catch (e) { setErr(e); } finally { setBusy(false); }
   };
+  const frage = (e: any) => (
+    <div key={e.id} className="ub-frage" data-testid="ub-entscheidung" data-id={e.id}>
+      <p className="small"><b>{e.id}</b> {e.frage}</p>
+      {e.empfehlung && <p className="tiny mut">Empfehlung: {e.empfehlung}</p>}
+      {e.optionen && <details className="tiny"><summary className="mut">Optionen aus dem Bericht</summary><pre className="ub-pre">{e.optionen}</pre></details>}
+      <JaNeinAnders k={`${k.id}:${e.id}`} empfehlung={e.empfehlung} onSend={(art, text) => send([antwort(e, art, text)])} />
+    </div>
+  );
+  if (liste.length === 1) return <div className="ub-dec">{frage(liste[0])}</div>;
   return (
-    <div className="ub-panel">
-      {kind === 'antwort' && k.braucht && <p className="small"><b>Der Unter-Chat braucht:</b> {k.braucht}</p>}
-      <textarea rows={3} value={t} aria-label={kind === 'antwort' ? 'Antwort an den Unter-Chat' : 'Was nacharbeiten?'} placeholder={kind === 'antwort' ? 'Deine Antwort' : 'z. B. Test für den Fehlerfall ergänzen'} onChange={(e) => setT(e.target.value)} data-testid={`ub-${kind}-text`} />
-      <div className="row ub-row">
-        <button className="btn primary small" disabled={busy || k.running || !t.trim()} onClick={senden} data-testid={`ub-${kind}-senden`}>{kind === 'antwort' ? 'Antwort senden' : 'Nacharbeit senden'}</button>
-        {k.running && <span className="tiny muted">Der Unter-Chat arbeitet gerade — dein Text bleibt hier stehen, bis er fertig ist.</span>}
+    <div className="ub-dec" data-testid="ub-entscheidungen">
+      <div className="ub-row">
+        {liste.some((e) => e.empfehlung) && <button className="ub-btn sm" disabled={busy} onClick={alle} data-testid="ub-alle">Alle Empfehlungen übernehmen</button>}
+        <button className="ub-btn ghost sm" aria-expanded={einzeln} onClick={() => setEinzeln(!einzeln)} data-testid="ub-einzeln">Einzeln entscheiden {einzeln ? '▴' : '▾'}</button>
       </div>
+      {einzeln && <div className="ub-dec-liste">{liste.map(frage)}</div>}
       <Err e={err} />
     </div>
   );
 }
 
-type Panel = '' | 'entscheiden' | 'fragen' | 'antwort' | 'nacharbeit';
+/** Rückfrage des Orchestrators (q-…): Ja = empfohlene Option, Nein, Anders = andere Option und/oder Text. */
+function Rueckfrage({ q, onDone, ohneTitel }: { q: any; onDone: () => void; ohneTitel?: boolean }) {
+  const toast = useToast();
+  const opts: any[] = q.options ?? [];
+  const rec = opts.find((o) => o.label === q.recommendation) ?? opts.find((o) => String(q.recommendation ?? '').startsWith(o.label));
+  const [wahl, setWahl] = useStored<string>(`q:${q.id}:option`, '');
+  const send = async (art: Art, text: string) => {
+    const body = art === 'ja' ? (rec ? { option: rec.label, text: '' } : { option: null, text: `Ja${q.recommendation ? ` (wie empfohlen: ${q.recommendation})` : ''}` })
+      : art === 'nein' ? { option: null, text: `Nein${q.recommendation ? ` (Empfehlung „${q.recommendation}“ abgelehnt)` : ''}` } : { option: wahl || null, text };
+    await api(`/api/orchestrator/questions/${q.id}/answer`, { body });
+    setWahl('');
+    toast('Antwort gespeichert — der Hauptchat liest sie beim nächsten Abruf');
+    window.dispatchEvent(new Event('werkbank-questions'));
+    onDone();
+  };
+  return (
+    <div className="ub-frage" data-testid="ub-rueckfrage" data-q={q.id}>
+      {!ohneTitel && <p className="small"><b>{q.title}</b></p>}
+      {q.context && <details className="tiny"><summary className="mut">Kontext</summary><p className="small ub-pre">{q.context}</p></details>}
+      {q.recommendation && <p className="tiny mut">Empfehlung: {rec ? <b>{rec.label}</b> : q.recommendation}{rec && q.recommendation !== rec.label ? ` — ${q.recommendation}` : ''}</p>}
+      <JaNeinAnders k={`q:${q.id}`} empfehlung={rec?.label ?? q.recommendation} onSend={send}
+        extra={opts.length > 0 && <div className="ub-qopt">{opts.map((o) => <label key={o.label} className={o === rec ? 'rec' : ''}>
+          <input type="radio" name={`q-${q.id}`} checked={wahl === o.label} onChange={() => setWahl(o.label)} />{o.label}{o === rec ? ' ⭐' : ''}{o.consequence ? <span className="tiny mut"> — {o.consequence}</span> : null}</label>)}</div>} />
+    </div>
+  );
+}
 
-function Karte({ k, onDone }: { k: any; onDone: (reload?: boolean) => void }) {
+/** „Braucht Knut“ aus dem Stand des Unter-Chats: Ja / Nein / Anders als Antwort in denselben Chat. */
+function Braucht({ k, onDone }: { k: any; onDone: () => void }) {
+  const toast = useToast();
+  const send = async (art: Art, text: string) => {
+    try {
+      await api(`/api/leitstand/strands/${k.id}/reply`, { body: { kind: 'antwort', text: art === 'ja' ? 'Ja.' : art === 'nein' ? 'Nein.' : text, seen: k.seen } });
+      toast('Antwort an den Unter-Chat — er macht weiter');
+      onDone();
+    } catch (e) { if (is409(e)) onDone(); throw e; }
+  };
+  return (
+    <div className="ub-frage" data-testid="ub-braucht">
+      <p className="small">{k.braucht}</p>
+      <JaNeinAnders k={`${k.id}:braucht`} onSend={send} disabled={k.running} />
+    </div>
+  );
+}
+
+type Tab = 'bericht' | 'auftrag' | 'aenderungen';
+
+/** Schublade statt Unterseite (Mockup 185): Bericht · Auftrag · Änderungen, Push freigeben auch hier. */
+function Schublade({ k, tab, setTab, onClose, onDone }: { k: any; tab: Tab; setTab: (t: Tab) => void; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const pushFreigeben = usePushFreigeben();
-  const [panel, setPanel] = useStored<Panel>(`${k.id}:panel`, '');
+  const datei = useLoad(() => (tab === 'aenderungen' || !k.paket ? Promise.resolve(null) : api(`api/files/agenten/${encodeURIComponent(k.paket)}/${tab}.md?vorschau=1`)), [k.id, tab]);
+  const rev = useLoad(() => (tab === 'aenderungen' ? api(`/api/review/${k.id}`) : Promise.resolve(null)), [k.id, tab]);
+  const ref = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  useMermaidIn(body, datei.data);
+  useEffect(() => {
+    ref.current?.focus();
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  }, []);
+  const [err, setErr] = useState<unknown>(null);
+  const freigeben = async () => { setErr(null); try { if (await pushFreigeben(k.id)) { toast('Freigegeben — der Hauptchat pusht nach seiner Prüfung'); onDone(); onClose(); } } catch (e) { setErr(e); } };
+  const r: any = rev.data;
+  const d: any = datei.data;
+  return (
+    <div className="ub-drawer" data-testid="ub-schublade">
+      <div className="ub-scrim" onClick={onClose} />
+      <div className="ub-sheet" role="dialog" aria-modal="true" aria-label={`${k.titel}: Bericht und Freigabe`} tabIndex={-1} ref={ref}>
+        <div className="ub-row ub-sheet-head"><h2>{k.titel}</h2><span className="sp" /><button className="ub-btn sm" onClick={onClose}>Schließen</button></div>
+        <div className="ub-tabs" role="tablist">
+          {(['bericht', 'auftrag', 'aenderungen'] as Tab[]).map((t) => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>{t === 'bericht' ? 'Bericht' : t === 'auftrag' ? 'Auftrag' : 'Änderungen'}</button>)}
+        </div>
+        {tab !== 'aenderungen' && (!k.paket ? <p className="small mut">Kein Review-Paket zu diesem Unter-Chat.</p>
+          : datei.error ? <p className="small mut">{tab === 'auftrag' ? 'Kein Auftrag im Paket.' : 'Kein Bericht im Paket.'}</p>
+          : !d ? <Loading /> : <div className="note-body ub-doc" ref={body} dangerouslySetInnerHTML={{ __html: d.html ?? '' }} />)}
+        {tab === 'aenderungen' && (rev.error ? <Err e={rev.error} /> : !r ? <Loading /> : <div className="ub-card" data-testid="ub-aenderungen">
+          <h3>Was du freigibst</h3>
+          {r.repo?.fehler ? <p className="small mut">{r.repo.fehler}</p> : <>
+            <table className="ub-table"><thead><tr><th>Repo</th><th>Zweig</th><th>Stand</th></tr></thead>
+              <tbody><tr><td>{String(r.repo?.key ?? '').replace(/^https:\/\/github\.com\//, '')}</td><td><code>{r.repo?.branch}</code></td><td><code>{String(r.repo?.head ?? '').slice(0, 7)}</code> · {(r.repo?.commits ?? []).length} Commits · {r.repo?.clean ? 'sauber' : 'ungespeicherte Änderungen'}</td></tr></tbody></table>
+            <p className="tiny mut">Der Hauptchat pusht genau diesen Stand und öffnet die PRs. Gemergt wird nie.</p>
+            <div className="ub-row">{k.kannFreigeben && <button className="ub-btn pri" onClick={freigeben} data-testid="ub-push-schublade">Push freigeben</button>}</div>
+            <details className="small"><summary className="mut">Technische Details ▾</summary>
+              <pre className="ub-pre tiny">{(r.repo?.commits ?? []).map((c: any) => `${String(c.sha ?? '').slice(0, 8)} ${c.subject ?? ''}`).join('\n')}{r.repo?.stat ? `\n\n${r.repo.stat}` : ''}</pre></details>
+          </>}
+          <Err e={err} />
+        </div>)}
+      </div>
+    </div>
+  );
+}
+
+function Karte({ k, onDone, oeffne }: { k: any; onDone: () => void; oeffne: (k: any, t: Tab) => void }) {
+  const toast = useToast();
+  const pushFreigeben = usePushFreigeben();
+  const [nacharbeit, setNacharbeit] = useStored<string | null>(`${k.id}:nacharbeit`, null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
-  const tun = async (fn: () => Promise<void>) => { setBusy(true); setErr(null); try { await fn(); } catch (e) { setErr(e); if (is409(e)) onDone(true); } finally { setBusy(false); } };
-  const freigeben = () => tun(async () => { if (await pushFreigeben(k.id)) { toast('Freigegeben — die Hauptsitzung pusht nach ihrer Prüfung'); onDone(true); } });
-  const passt = () => tun(async () => { await api(`/api/leitstand/strands/${k.id}/passt`, { body: { seen: k.seen, note: 'Passt (Übersicht)' } }); toast(`${k.titel} abgelegt`); onDone(true); });
-  const toggle = (p: Panel) => setPanel(panel === p ? '' : p);
-  const nE = k.entscheidungen.length, nQ = k.rueckfragen.length;
+  const tun = async (fn: () => Promise<void>) => { setBusy(true); setErr(null); try { await fn(); } catch (e) { setErr(e); if (is409(e)) onDone(); } finally { setBusy(false); } };
+  const freigeben = () => tun(async () => { if (await pushFreigeben(k.id)) { toast('Freigegeben — der Hauptchat pusht nach seiner Prüfung'); onDone(); } });
+  const abhaken = () => tun(async () => { await api(`/api/leitstand/strands/${k.id}/passt`, { body: { seen: k.seen, note: 'Abgehakt (Übersicht)' } }); toast(`${k.titel} abgehakt`); onDone(); });
+  const zurueck = () => tun(async () => { await api(`/api/leitstand/strands/${k.id}/reply`, { body: { kind: 'nacharbeit', text: nacharbeit, seen: k.seen } }); toast('Nacharbeit an den Unter-Chat'); setNacharbeit(null); onDone(); });
+  const g = k.github?.[0];
   return (
-    <article className={`card ub-karte ub-${k.ampel}`} data-testid="ub-karte" data-ampel={k.ampel} data-strang={k.id}>
-      <div className="ub-top">
-        <h3>{k.titel}</h3>
-        <span className="ub-chips"><span className={`chip ub-ampel ${AMPEL_CLS[k.ampel]}`} data-testid="ub-ampel">{k.ampelText}</span>{k.zusatz && <span className="chip tiny-chip" data-testid="ub-zusatz">{k.zusatz}</span>}</span>
-      </div>
+    <article className={`ub-card ub-karte a-${k.ampel}`} data-testid="ub-karte" data-ampel={k.ampel} data-strang={k.id}>
+      <div className="ub-top"><h3>{k.titel}</h3><span className={`ub-amp ${AMP[k.ampel]}`} data-testid="ub-ampel">{k.ampelText}</span></div>
       {k.kurz && <p className="ub-kurz">{k.kurz}</p>}
-      {k.github.length > 0 && <p className="tiny muted ub-gh">{k.github.map((g: any, i: number) => <span key={i}>{i ? ' · ' : ''}{g.repo} <code>{g.zweig}</code>{g.commit ? <> → <code>{g.commit}</code></> : null}{g.pr ? <> · <a href={g.pr} target="_blank" rel="noreferrer">PR</a></> : null}</span>)}</p>}
-      {k.commitWarnung && <p className="tiny rq-warn">⚠ {k.commitWarnung}</p>}
-      {k.kopfFehler && <p className="tiny rq-warn" data-testid="ub-kopf-fehler">⚠ Bericht-Kopf unlesbar: {k.kopfFehler}</p>}
-      {k.links.length > 0 && <div className="ub-links">{k.links.map((l: any) => <a key={l.url} href={l.url} target={l.url.startsWith('#') ? undefined : l.art === 'chat' ? chatTarget : '_blank'} rel="noreferrer" data-art={l.art}>{l.label}</a>)}</div>}
-      <p className="ub-von" data-testid="ub-von"><b>Von dir:</b> {k.vonDir}</p>
-      <div className="row ub-aktionen">
-        {k.kannFreigeben && <button className={`btn small${k.ampel === 'push' ? ' primary' : ''}`} disabled={busy || k.running} onClick={freigeben} data-testid="ub-push">{k.freigabe?.veraltet ? 'Neu freigeben' : 'Push freigeben'}</button>}
-        {nE > 0 && <button className="btn small" aria-expanded={panel === 'entscheiden'} onClick={() => toggle('entscheiden')} data-testid="ub-btn-entscheiden">Entscheiden ({nE}) {panel === 'entscheiden' ? '▴' : '▾'}</button>}
-        {nQ > 0 && <button className="btn small" aria-expanded={panel === 'fragen'} onClick={() => toggle('fragen')}>Rückfragen ({nQ}) {panel === 'fragen' ? '▴' : '▾'}</button>}
-        {k.braucht && <button className="btn small" aria-expanded={panel === 'antwort'} onClick={() => toggle('antwort')} data-testid="ub-btn-antwort">Antworten {panel === 'antwort' ? '▴' : '▾'}</button>}
-        {k.ampel !== 'laeuft' && <button className="btn ghost small" aria-expanded={panel === 'nacharbeit'} onClick={() => toggle('nacharbeit')}>Nacharbeit {panel === 'nacharbeit' ? '▴' : '▾'}</button>}
-        {k.ampel !== 'laeuft' && <button className="btn ghost small" disabled={busy} onClick={passt} title="Als von dir geprüft ablegen — nichts wird geschrieben oder gepusht" data-testid="ub-passt">Passt, ablegen</button>}
+      <div className="ub-chips">
+        {k.links.map((l: any) => l.art === 'bericht'
+          ? <button key="bericht" className="ub-chip" onClick={() => oeffne(k, 'bericht')} data-testid="ub-bericht">Bericht</button>
+          : <a key={l.url} className="ub-chip" href={l.url} target={l.art === 'chat' ? chatTarget : '_blank'} rel="noreferrer" data-art={l.art}>{l.label}{l.art === 'vorschau' ? ' ↗' : ''}</a>)}
+        {k.github?.length > 0 && <button className="ub-chip" onClick={() => oeffne(k, 'aenderungen')}>Änderungen</button>}
       </div>
-      {panel === 'entscheiden' && nE > 0 && <Entscheiden k={k} onDone={onDone} />}
-      {panel === 'fragen' && nQ > 0 && <div className="ub-panel">{k.rueckfragen.map((q: any) => <Rueckfrage key={q.id} q={q} onDone={onDone} />)}</div>}
-      {panel === 'antwort' && k.braucht && <AnStrang k={k} kind="antwort" onDone={onDone} />}
-      {panel === 'nacharbeit' && <AnStrang k={k} kind="nacharbeit" onDone={onDone} />}
+      {k.commitWarnung && <p className="tiny ub-warn">⚠ {k.commitWarnung}</p>}
+      {k.kopfFehler && <p className="tiny ub-warn" data-testid="ub-kopf-fehler">⚠ Bericht-Kopf unlesbar: {k.kopfFehler}</p>}
+      <div className="ub-von">
+        <span className="ub-lab">Von dir</span>
+        <p className="small" data-testid="ub-von">{k.vonDir}</p>
+        {k.entscheidungen.length > 0 && <Entscheiden k={k} onDone={onDone} />}
+        {k.rueckfragen.map((q: any) => <Rueckfrage key={q.id} q={q} onDone={onDone} />)}
+        {k.braucht && k.entscheidungen.length === 0 && k.rueckfragen.length === 0 && <Braucht k={k} onDone={onDone} />}
+        <div className="ub-row">
+          {k.kannFreigeben && <button className={`ub-btn${k.ampel === 'push' ? ' pri big' : ''}`} disabled={busy || k.running} onClick={freigeben} data-testid="ub-push">{k.freigabe?.veraltet ? 'Neu freigeben' : 'Push freigeben'}</button>}
+          {k.ampel !== 'laeuft' && <button className="ub-btn ghost sm" aria-expanded={nacharbeit !== null} onClick={() => setNacharbeit(nacharbeit === null ? '' : null)} data-testid="ub-nacharbeit">Nacharbeit …</button>}
+          {k.ampel !== 'laeuft' && <button className="ub-btn ghost sm" disabled={busy} onClick={abhaken} title="Als von dir geprüft ablegen — nichts wird geschrieben oder gepusht" data-testid="ub-abhaken">Abhaken</button>}
+        </div>
+        {nacharbeit !== null && <div className="ub-anders">
+          <textarea rows={3} value={nacharbeit} aria-label="Was nacharbeiten?" placeholder="z. B. Test für den Fehlerfall ergänzen" onChange={(e) => setNacharbeit(e.target.value)} data-testid="ub-nacharbeit-text" />
+          <div className="ub-row"><button className="ub-btn pri sm" disabled={busy || k.running || !nacharbeit.trim()} onClick={zurueck}>Zurück an den Unter-Chat</button>
+            {k.running && <span className="tiny mut">Arbeitet gerade — dein Text bleibt hier stehen.</span>}</div>
+        </div>}
+      </div>
+      {(g || k.zusatz) && <p className="ub-gh">{g && <>{g.repo.split('/').pop()} <code>{g.zweig}</code>{g.commit && <> · <code>{g.commit}</code></>}</>}{k.zusatz && <span className="ub-zusatz" data-testid="ub-zusatz">{k.zusatz}</span>}</p>}
       <Err e={err} />
     </article>
   );
 }
 
-const ZAHL: [string, string, string][] = [['review', 'Review', 'warn'], ['blockiert', 'blockiert', 'bad'], ['push', 'bereit', 'ok'], ['laeuft', 'läuft', '']];
+const PILLE: [string, string, string][] = [['dich', 'u-dich', 'braucht dich|brauchen dich'], ['push', 'u-push', 'bereit zum Push|bereit zum Push'], ['laeuft', 'u-run', 'läuft|laufen'], ['blockiert', 'u-bad', 'blockiert|blockiert']];
+const pille = (n: number, w: string) => `${n} ${w.split('|')[n === 1 ? 0 : 1]}`;
 
-function Thema({ t, onDone }: { t: any; onDone: (reload?: boolean) => void }) {
-  const offenVorgabe = t.zahlen.review + t.zahlen.blockiert + t.zahlen.push > 0;
-  const [zu, setZu] = useStored<boolean | null>(`thema:${t.thema}`, null);
-  const open = zu === null ? offenVorgabe : !zu;
+function Thema({ t, onDone, oeffne }: { t: any; onDone: () => void; oeffne: (k: any, tab: Tab) => void }) {
+  const [zu, setZu] = useStored<boolean>(`thema:${t.thema}`, false);
+  const z = t.zahlen;
+  const dich = t.karten.filter((k: any) => k.ampel === 'review').length;
   return (
-    <details className={`ub-thema${t.karten.length > 1 ? ' ub-breit' : ''}`} open={open} onToggle={(e) => { const o = (e.target as HTMLDetailsElement).open; if (o !== open) setZu(o === offenVorgabe ? null : !o); }} data-testid="ub-thema" data-thema={t.thema}>
-      <summary><span className="ub-thema-name">{t.thema}</span> <span className="chip">{t.karten.length}</span>
-        {ZAHL.filter(([z]) => t.zahlen[z]).map(([z, label, cls]) => <span key={z} className={`chip tiny-chip ${cls}`}>{t.zahlen[z]} {label}</span>)}</summary>
-      <div className="ub-grid">{t.karten.map((k: any) => <Karte key={k.id} k={k} onDone={onDone} />)}</div>
+    <details className={`ub-thema${t.karten.filter((k: any) => k.ampel !== 'laeuft').length > 1 ? ' ub-breit' : ''}`} open={!zu} onToggle={(e) => { const o = (e.target as HTMLDetailsElement).open; if (o === zu) setZu(!o); }} data-testid="ub-thema" data-thema={t.thema}>
+      <summary><h2>{t.thema}</h2>
+        {dich > 0 && <span className="ub-amp u-dich">{pille(dich, 'braucht dich|brauchen dich')}</span>}
+        {z.push > 0 && <span className="ub-amp u-push">{z.push} bereit</span>}
+        {z.blockiert > 0 && <span className="ub-amp u-bad">{z.blockiert} blockiert</span>}
+        {z.laeuft > 0 && <span className="tiny mut">· {z.laeuft} läuft</span>}</summary>
+      <div className="ub-grid">{t.karten.filter((k: any) => k.ampel !== 'laeuft').map((k: any) => <Karte key={k.id} k={k} onDone={onDone} oeffne={oeffne} />)}</div>
     </details>
   );
 }
 
-/** Inhalt der Übersicht — eigenständig (#/uebersicht) oder eingebettet als Review-Teil von Heute (Plan 184, D1). */
-export function UebersichtInhalt({ eingebettet = false, onChange }: { eingebettet?: boolean; onChange?: () => void }) {
-  const d = useLoad(() => api('/api/uebersicht'));
-  const x: any = d.data;
-  const neu = () => api('/api/uebersicht').then(d.setData).catch(() => {});
-  // Sichtbarer Stand (Council 7): alle 60 s und beim Zurückkehren in den Tab neu laden — Entwürfe bleiben im localStorage.
+/** Die Startseite. Admins sehen die Unter-Chats; alle sehen ihre Board-Agentenläufe, Fragen und Pflegepunkte. */
+export function Uebersicht({ cfg }: { cfg: Config }) {
+  const admin = cfg.user?.role === 'ADMIN';
+  const u = useLoad(() => (admin ? api('/api/uebersicht') : Promise.resolve(null)), [admin]);
+  const t = useLoad(() => api('/api/today'));
+  const [vq, setVq] = useState<{ open: any[]; cleanup: any[]; raw: number; duplicates: number } | null>(null);
+  const [pflege, setPflege] = useState<number | null>(null);
+  const [planen, setPlanen] = useStored<'' | 'vault' | 'pflege'>('planen', '');
+  const [schublade, setSchublade] = useState<{ id: string; tab: Tab } | null>(null);
+  const neu = () => { if (admin) api('/api/uebersicht').then(u.setData).catch(() => {}); api('/api/today').then(t.setData).catch(() => {}); };
+  useEffect(() => { if (admin) api('/api/roadmap/heute').then((r: any) => setVq(r)).catch(() => {}); }, [admin]);
+  useEffect(() => { api('/api/hygiene').then((h: any) => setPflege(h.items.filter((i: any) => !h.snoozed.includes(i.key)).length)).catch(() => setPflege(null)); }, []);
+  useJiraLive(() => { api('/api/today').then(t.setData).catch(() => {}); }, 'both');
+  // Sichtbarer Stand: alle 60 s (20 s, solange ein Board-Agent arbeitet oder fragt) und beim Zurückkehren in den Tab.
+  const d: any = t.data;
+  const x: any = u.data;
+  const eilig = d?.queue?.some((q: any) => q.bucket === 'laeuft' || q.bucket === 'frage');
   useEffect(() => {
-    const id = setInterval(() => { if (document.visibilityState === 'visible') neu(); }, 60_000);
+    const id = setInterval(() => { if (document.visibilityState === 'visible') neu(); }, eilig ? 20_000 : 60_000);
     const vis = () => { if (document.visibilityState === 'visible') neu(); };
     document.addEventListener('visibilitychange', vis);
     return () => { clearInterval(id); document.removeEventListener('visibilitychange', vis); };
-  }, []);
-  if (d.error) return <Err e={d.error} />;
-  if (!x) return <Loading />;
-  const onDone = () => { neu(); onChange?.(); };
-  const n = x.themen.reduce((s: number, t: any) => s + t.karten.length, 0);
-  const stand = <>Stand {fmtDateTime(x.at)} · {n} {n === 1 ? 'Unter-Chat' : 'Unter-Chats'} · <b>Von dir: {x.vonDir}</b> · <button className="linklike" onClick={neu}>neu laden</button></>;
+  }, [eilig, admin]);
+  if (t.error) return <div className="page"><Err e={t.error} /></div>;
+  if (!d || (admin && !x && !u.error)) return <div className="page"><Loading /></div>;
+
+  // Schon live (Paket 141): in der eigenen Gruppe „nur noch abhaken“, nicht noch einmal als Karte.
+  const live = (d.strands ?? []).filter((s: any) => s.stand?.kind === 'live' && !s.running);
+  const liveIds = new Set(live.map((s: any) => s.id));
+  const themen = (x?.themen ?? []).map((th: any) => ({ ...th, karten: th.karten.filter((k: any) => !liveIds.has(k.id)) })).filter((th: any) => th.karten.some((k: any) => k.ampel !== 'laeuft'));
+  const karten: any[] = (x?.themen ?? []).flatMap((th: any) => th.karten).filter((k: any) => !liveIds.has(k.id));   // auch Themen nur mit laufenden
+  const lose: any[] = x?.lose ?? [];
+  const board = d.queue.filter((q: any) => ['review', 'frage', 'haengt', 'still'].includes(q.bucket));
+  const laufen = [...karten.filter((k) => k.ampel === 'laeuft').map((k) => ({ id: k.id, thema: k.thema, titel: k.titel, at: k.statusAt, chat: k.chat })),
+    ...d.queue.filter((q: any) => q.bucket === 'laeuft').map((q: any) => ({ id: q.id, thema: 'Board', titel: `${q.key}${q.summary ? ` — ${q.summary}` : ''}`, at: q.startedAt, chat: q.url }))];
+  const mine = mineCount(d.mine, []);
+  const zahl = {
+    dich: karten.filter((k) => k.ampel === 'review' && !String(k.vonDir).startsWith('nichts')).length + lose.length + board.length + mine + (d.g0?.length ?? 0),
+    push: karten.filter((k) => k.ampel === 'push' && k.kannFreigeben).length,
+    laeuft: laufen.length,
+    blockiert: karten.filter((k) => k.ampel === 'blockiert').length,
+  };
+  const springe = (w: string) => {
+    const sel = w === 'laeuft' ? '[data-testid="ub-laeuft"]' : w === 'dich' ? '[data-ampel="review"], [data-testid="ub-lose"], [data-testid="ub-board"]' : `[data-ampel="${w}"]`;
+    document.querySelector(sel)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+  const offen = schublade ? karten.find((k) => k.id === schublade.id) : null;
+  const hc = x?.hauptchat;
+  const hcFarbe = !hc ? 'bad' : hc.status === 'bereit' ? 'ok' : hc.status === 'läuft' ? 'run' : hc.status === 'wartet auf dich' ? 'dich' : 'bad';
+  const heute = new Intl.DateTimeFormat('de-AT', { weekday: 'long', day: '2-digit', month: '2-digit' }).format(new Date());
+  const nVault = vq?.open.length ?? 0;
+
   return (
-    <div className="ub" data-testid="uebersicht">
-      {eingebettet
-        ? <header className="ub-head"><h2>Wartet auf dein Review <span className="chip">{x.vonDir}</span></h2><p className="muted small">{stand}</p></header>
-        : <header className="ub-head"><h1>Übersicht: Was fertig ist</h1><p className="muted small">{stand}</p></header>}
-      {x.fragenFehler && <p className="chip bad" role="alert">Rückfragen gerade nicht lesbar — hier fehlen evtl. offene Fragen. Später neu laden.</p>}
-      {x.dryRun && <p className="chip warn">Vorschau (Trockenlauf): Antworten an Unter-Chats sind aus.</p>}
-      <section className="card ub-exec">
-        <h2>So bringst du es auf GitHub</h2>
-        <p className="small">„Push freigeben“ gibt genau den gezeigten Stand frei. Gepusht wird danach von der Hauptsitzung (Fast-Forward oder neuer Zweig mit PR), <b>nie gemergt</b>. Entscheidungen und Antworten gehen direkt an den Unter-Chat; was du anfängst, bleibt beim Neuladen stehen.</p>
-        {!x.paketDienst && <p className="tiny muted">Folien- und Bilder-Links fehlen: der Review-Pakete-Dienst ist nicht eingetragen (WERKBANK_PAKETE_URL oder Dienste-Register).</p>}
-      </section>
-      {x.lose.length > 0 && <section className="card ub-lose" data-testid="ub-lose">
-        <h2>Rückfragen an dich <span className="chip warn">{x.lose.length}</span></h2>
-        {x.lose.map((q: any) => <Rueckfrage key={q.id} q={q} onDone={onDone} />)}
+    <div className="page ub" data-testid="uebersicht">
+      <div className="ub-head">
+        <div><h1>Übersicht</h1><p className="small mut">{heute} · was fertig ist, was dich braucht, was läuft{x ? <> · Stand {fmtDateTime(x.at)} · <button className="linklike" onClick={neu}>neu laden</button></> : null}</p></div>
+        <div className="ub-sum" role="group" aria-label="Springen zu">
+          {PILLE.map(([w, cls, text]) => (zahl as any)[w] > 0 && <button key={w} className={`ub-amp ${cls}`} onClick={() => springe(w)} data-testid={`ub-pille-${w}`}>{pille((zahl as any)[w], text)}</button>)}
+        </div>
+      </div>
+      {d.memory && <div className="ub-card soft" role="status" data-testid="memory-warning"><b>⚠️ Speicher knapp:</b> <span className="small">{d.memory}. Neue Chats und Agenten können langsam werden oder abbrechen — Testinstanzen stoppen, wartende Chats beantworten.</span></div>}
+      {d.dryRun && <p className="ub-amp u-dich">Vorschau (Trockenlauf): Antworten an Agenten sind aus.</p>}
+      {x?.fragenFehler && <p className="ub-amp u-bad" role="alert">Rückfragen gerade nicht lesbar — hier fehlen evtl. offene Fragen. Später neu laden.</p>}
+      {u.error ? <Err e={u.error} /> : null}
+
+      {admin && <div className="ub-card soft ub-hc" data-testid="ub-hauptchat">
+        <span className={`ub-dot d-${hcFarbe}`} aria-hidden /><b>Hauptchat</b>
+        <span className="small mut">{hc ? `${hc.status}${hc.open > 0 ? ` · ${hc.open} Meldung${hc.open === 1 ? '' : 'en'} unterwegs` : ''} · pusht, was du hier freigibst — nie mergen` : 'kein Hauptchat aktiv'}</span>
+        <span className="sp" />
+        {hc ? <a className="ub-btn sm" href={hc.url} target={chatTarget}>Hauptchat öffnen</a> : <a className="ub-btn sm" href="#/leitstand">Hauptchat starten</a>}
+      </div>}
+      {(d.orchAuto ?? []).length > 0 && <p className="small mut" data-testid="orch-auto">🔁 Automatisch fortgesetzt: {d.orchAuto.map((a: any, i: number) => <span key={a.id}>{i ? ', ' : ''}<a href={a.url} target={chatTarget}>{a.title}</a> ({a.n}){a.stopped ? ' — angehalten' : ''}</span>)}</p>}
+
+      <div className="ub-themen">
+      {lose.length > 0 && <section className={`ub-thema-flach${lose.length > 1 ? ' ub-breit' : ''}`} data-testid="ub-lose">
+        <h2 className="ub-h">Rückfragen an dich <span className="ub-amp u-dich">{lose.length}</span></h2>
+        <div className="ub-grid">{lose.map((q) => <article key={q.id} className="ub-card a-review" data-ampel="review">
+          <div className="ub-top"><h3>{q.title}</h3><span className="ub-amp u-dich">ja / nein</span></div>
+          <div className="ub-von"><span className="ub-lab">Von dir</span><Rueckfrage q={q} onDone={neu} ohneTitel /></div>
+        </article>)}</div>
       </section>}
-      <div className="ub-themen">{x.themen.map((t: any) => <Thema key={t.thema} t={t} onDone={onDone} />)}</div>
-      {!n && !x.lose.length && <div className="card soft empty"><p><b>Nichts offen.</b></p><p className="small muted">Neue Unter-Chats startet der Hauptchat.</p></div>}
+
+      {themen.map((th: any) => <Thema key={th.thema} t={th} onDone={neu} oeffne={(k, tab) => setSchublade({ id: k.id, tab })} />)}
+      </div>
+
+      {(board.length > 0 || mine > 0 || (d.g0 ?? []).length > 0 || (!admin && (d.orchOpen ?? 0) > 0)) && <section data-testid="ub-board">
+        <h2 className="ub-h">Agentenläufe und Fragen {board.length + mine > 0 && <span className="ub-amp u-dich">{board.length + mine}</span>}</h2>
+        {(d.g0 ?? []).length > 0 && <G0Blocked items={d.g0} />}
+        {!admin && (d.orchOpen ?? 0) > 0 && <OrchQuestions onChange={neu} />}
+        {board.map((it: any) => <RunCard key={it.id} it={it} onDone={neu} />)}
+        {mine > 0 && <div className="ub-card"><WartetAufDich x={d.mine} decisions={[]} onChange={neu} /></div>}
+      </section>}
+
+      {laufen.length > 0 && <section className="ub-card" data-testid="ub-laeuft" id="lauf">
+        <div className="ub-row"><h2>Läuft</h2><span className="ub-amp u-run">{laufen.length}</span><span className="sp" /><span className="tiny mut">steuern im jeweiligen Chat</span></div>
+        <div className="ub-runs">{laufen.map((r) => <div key={r.id} className="ub-runrow"><span className="ub-amp u-run">{r.thema}</span><span className="t">{r.titel}</span>
+          <span className="tiny mut">seit {fmtDateTime(r.at)}</span>{r.chat && <a className="ub-btn sm" href={r.chat} target={chatTarget}>Chat</a>}</div>)}</div>
+      </section>}
+
+      {live.length > 0 && <LiveGroup items={live} onDone={neu} />}
+
+      {(x?.erledigt ?? []).length > 0 && <details className="ub-card" data-testid="ub-erledigt">
+        <summary className="ub-row"><h2>Erledigt diese Woche</h2><span className="ub-amp u-done">{x.erledigt.length}</span><span className="sp" /><span className="tiny mut">aufklappen</span></summary>
+        <div className="ub-runs">{x.erledigt.map((r: any) => <div key={r.id} className="ub-runrow"><span className="ub-amp u-done">{r.thema}</span><span className="t">{r.titel}</span>
+          <span className="tiny mut">{fmtDateTime(r.at)}</span>{r.chat && <a className="ub-btn sm" href={r.chat} target={chatTarget}>Chat</a>}</div>)}</div>
+      </details>}
+
+      {!karten.length && !lose.length && !board.length && !mine && !laufen.length && <div className="ub-card soft" data-testid="today-empty">
+        <p><b>Nichts wartet auf dich.</b></p><p className="small mut">Neue Arbeit findest du auf der <a href="#/roadmap">Roadmap</a> (Als Nächstes) oder am <a href="#/board">Board</a>.</p></div>}
+
+      <section className="ub-card soft" data-testid="ub-planen">
+        <div className="ub-row ub-planen"><span className="small">Außerdem in <b>Planen</b>:</span>
+          {admin && <button className="ub-chip" aria-expanded={planen === 'vault'} onClick={() => setPlanen(planen === 'vault' ? '' : 'vault')} data-testid="ub-planen-vault">{vq ? `${nVault} offene Entscheidungen im Vault` : 'Entscheidungen im Vault …'}</button>}
+          <button className="ub-chip" aria-expanded={planen === 'pflege'} onClick={() => setPlanen(planen === 'pflege' ? '' : 'pflege')} data-testid="ub-planen-pflege">{pflege === null ? 'Tickets, die Pflege brauchen' : `${pflege} Tickets brauchen Pflege`}</button>
+          <a className="ub-chip" href="#/timebox">Mein Tag: {d.day.length} {d.day.length === 1 ? 'Block' : 'Blöcke'}</a>
+        </div>
+        {planen === 'vault' && vq && <WartetAufDich x={{ questions: [], prs: [], pendingApprovals: [], draft: null }} decisions={vq.open} today={vq} onChange={neu} />}
+        {planen === 'pflege' && <HygienePanel max={5} title="Deine Tickets" onChange={neu} />}
+      </section>
+
+      {offen && schublade && <Schublade k={offen} tab={schublade.tab} setTab={(tab) => setSchublade({ id: offen.id, tab })} onClose={() => setSchublade(null)} onDone={neu} />}
     </div>
   );
-}
-
-/** Eigene Seite #/uebersicht (ohne Navigationseintrag, bis Knut D1 entschieden hat). */
-export function Uebersicht({ cfg }: { cfg: Config }) {
-  if (cfg.user?.role !== 'ADMIN') return <div className="page"><p className="muted">Nur für Admins.</p></div>;
-  return <div className="page"><UebersichtInhalt /></div>;
 }

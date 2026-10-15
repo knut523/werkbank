@@ -67,7 +67,7 @@ test('Von dir: Push-Go, Kennungen, Rückfragen, Antwort; läuft → nichts', () 
   assert.equal(vonDir(base), 'Push-Go');
   assert.equal(vonDir({ ...base, freigabeOffen: true }), 'nichts — freigegeben, der Hauptchat pusht');
   assert.equal(vonDir({ ...base, ampel: 'review', entscheidungen: ['D1', 'D2', 'D3'], rueckfragen: 1 }), 'Entscheidungen D1–D3 und eine Rückfrage');
-  assert.equal(vonDir({ ...base, ampel: 'review', braucht: 'Freigabe für X' }), 'Antwort: Freigabe für X');
+  assert.equal(vonDir({ ...base, ampel: 'review', braucht: 'Freigabe für X' }), 'Antwort auf die Rückfrage');
   assert.equal(vonDir({ ...base, ampel: 'review' }), 'Review');
   assert.equal(vonDir({ ...base, kannFreigeben: false, gepusht: true }), 'nichts — gepusht, PR-Review auf GitHub');
   assert.equal(vonDir({ ...base, kannFreigeben: false }), 'Review', 'bereit, aber nichts freizugeben (kein Repo im Kopf) → ansehen');

@@ -52,6 +52,7 @@ const GH = createServer((_q, res) => { res.writeHead(200, { 'content-type': 'app
 await new Promise<void>((r) => GH.listen(0, '127.0.0.1', () => r()));
 const INTERNAL = randomBytes(16).toString('hex'), JWT_SECRET = randomBytes(16).toString('hex'), REFRESH = randomBytes(16).toString('hex');
 const knut = { _id: new ObjectId(), email: 'knut@maxenergy.at', name: 'Knut Peters', role: 'ADMIN' };
+const team = { _id: new ObjectId(), email: 'team@maxenergy.at', name: 'Team Kollegin', role: 'USER' };
 const procs: ChildProcess[] = [];
 let lc: Server;
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -65,7 +66,7 @@ const pruef = (ok: boolean, was: string) => { console.log(`${ok ? 'ok  ' : 'FEHL
 const mongo = await MongoClient.connect(process.env.SHOTS_MONGO || 'mongodb://127.0.0.1:27017');
 try {
   const L = mongo.db(LCDB);
-  await L.collection('users').insertOne(knut);
+  await L.collection('users').insertMany([knut, team]);
   const { verifyJwt } = await import('../server/auth.ts');
   lc = createServer(async (req, res) => {
     let raw = ''; for await (const c of req) raw += c;
@@ -100,10 +101,10 @@ try {
   procs.push(spawn(process.execPath, ['server/main.ts'], { cwd: WEB, stdio: ['ignore', 'ignore', 'inherit'],
     env: { ...env, HOME: tmp, MONGO_URI_WERKBANK: process.env.SHOTS_MONGO || 'mongodb://127.0.0.1:27017', WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_NO_JOBS: '1', WERKBANK_INSECURE_COOKIES: '1', WERKBANK_VAULT_DIR: join(tmp, 'vault'), WERKBANK_DB: DB, LIBRECHAT_DB: LCDB,
       LIBRECHAT_URL: `http://127.0.0.1:${(lc.address() as any).port}`, LIBRECHAT_PUBLIC_URL: 'https://chat.example', BRIDGE_URL: `http://127.0.0.1:${BRIDGE_PORT}`, BRIDGE_STATE_DIR: join(tmp, 'bridge'),
-      WERKBANK_ALLOWED_EMAILS: knut.email, WERKBANK_PILOT_EMAIL: knut.email, CREDS_KEY: randomBytes(32).toString('hex'), CREDS_IV: randomBytes(16).toString('hex'),
+      WERKBANK_ALLOWED_EMAILS: `${knut.email},${team.email}`, WERKBANK_PILOT_EMAIL: knut.email, WERKBANK_TEAM_FEATURES: 'heute,orchestrator', CREDS_KEY: randomBytes(32).toString('hex'), CREDS_IV: randomBytes(16).toString('hex'),
       WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: join(tmp, 'data'), WERKBANK_MEILI_INDEX: `werkbank_ushots_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_SECRET, JWT_REFRESH_SECRET: REFRESH,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'), WERKBANK_FORGE_MCP: '', WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vs'), WERKBANK_VAULT_SYNC_SCRIPT: '/bin/true',
-      WERKBANK_LEITSTAND_DIR: LEIT, ORCH_AUTO_WEITER_TICK_MS: '300', WERKBANK_REVIEW_DIR: RP, WERKBANK_PAKETE_URL: PAKETE_URL, WERKBANK_HEUTE_UEBERSICHT: 'on', WERKBANK_GITHUB_API: `http://127.0.0.1:${(GH.address() as any).port}` } }));
+      WERKBANK_LEITSTAND_DIR: LEIT, ORCH_AUTO_WEITER_TICK_MS: '300', WERKBANK_REVIEW_DIR: RP, WERKBANK_PAKETE_URL: PAKETE_URL, WERKBANK_GITHUB_API: `http://127.0.0.1:${(GH.address() as any).port}` } }));
   await waitFor(`http://127.0.0.1:${BRIDGE_PORT}/health`);
   await waitFor(`${B}/api/health`);
 
@@ -118,12 +119,12 @@ try {
   await internal('/internal/orchestrator/questions/ask', { title: 'Cockpit: Videos ins Review-Paket oder nur Screenshots?', context: 'Zwei Videos à 40 MB.', options: [{ label: 'Videos mit', consequence: 'Paket größer' }, { label: 'Nur Screenshots' }], recommendation: 'Videos mit', strand: cockpit.id });
   await internal('/internal/orchestrator/questions/ask', { title: 'Nachtbau heute: Bot-Eval mitlaufen lassen?', context: 'Kostet ca. 40 Minuten.', options: [{ label: 'Ja' }, { label: 'Nein' }], recommendation: 'Ja' });
 
-  const login = async () => {
+  const login = async (wer: typeof knut = knut) => {
     const { createHmac, createHash } = await import('node:crypto');
     const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
-    const h = b64({ alg: 'HS256', typ: 'JWT' }) + '.' + b64({ id: String(knut._id), exp: Math.floor(Date.now() / 1000) + 3600 });
+    const h = b64({ alg: 'HS256', typ: 'JWT' }) + '.' + b64({ id: String(wer._id), exp: Math.floor(Date.now() / 1000) + 3600 });
     const tok = h + '.' + createHmac('sha256', REFRESH).update(h).digest('base64url');
-    await L.collection('sessions').insertOne({ user: knut._id, refreshTokenHash: createHash('sha256').update(tok).digest('hex'), expiration: new Date(Date.now() + 3600e3) });
+    await L.collection('sessions').insertOne({ user: wer._id, refreshTokenHash: createHash('sha256').update(tok).digest('hex'), expiration: new Date(Date.now() + 3600e3) });
     return `refreshToken=${tok}`;
   };
   const cookie = await login();
@@ -153,9 +154,9 @@ try {
   pruef(nonAdmin.status === 401 || nonAdmin.status === 403, `ohne Anmeldung kein Zugriff (${nonAdmin.status})`);
 
   const browser = await chromium.launch();
-  const ctxFor = async (vp: { width: number; height: number }, dark: boolean, video = false) => {
+  const ctxFor = async (vp: { width: number; height: number }, dark: boolean, video = false, ck = cookie) => {
     const ctx = await browser.newContext({ viewport: vp, locale: 'de-DE', colorScheme: dark ? 'dark' : 'light', deviceScaleFactor: vp.width < 500 ? 2 : 1, ...(video ? { recordVideo: { dir: join(tmp, 'video'), size: vp } } : {}) });
-    await ctx.addCookies([{ name: cookie.split('=')[0], value: cookie.split('=')[1], url: B }]);
+    await ctx.addCookies([{ name: ck.split('=')[0], value: ck.split('=')[1], url: B }]);
     await ctx.addInitScript((t) => { try { localStorage.setItem('werkbank-theme', t); } catch { /* */ } }, dark ? 'dark' : 'light');
     return ctx;
   };
@@ -164,94 +165,148 @@ try {
     pruef(!wide, `${n}: kein waagrechtes Rollen`);
     await p.screenshot({ path: join(OUT, `${n}.png`), fullPage: full });
   };
+  // Nach einer Antwort arbeitet der Unter-Chat kurz (Mock) — warten, bis seine Karte wieder zum Handeln dasteht.
+  const antwortenVon = async (id: string) => { const r: any = await mongo.db(DB).collection('orchestrator_runs').findOne({ _id: id as any }); return L.collection('messages').countDocuments({ conversationId: r?.conv, isCreatedByUser: false }); };
+  const idle = async (id: string, vorher?: number) => {
+    if (vorher !== undefined) for (let i = 0; i < 80 && (await antwortenVon(id)) <= vorher; i++) await pause(250);   // erst die Antwort des Unter-Chats
+    for (let i = 0; i < 120; i++) {
+      const x: any = await (await fetch(B + '/api/uebersicht', { headers: { cookie } })).json().catch(() => null);
+      const k = (x?.themen ?? []).flatMap((t: any) => t.karten).find((c: any) => c.id === id);
+      if (k && k.ampel !== 'laeuft') return k;
+      await pause(300);
+    }
+    console.log('Karte kommt nicht zurück:', id);
+  };
+  const bericht = () => readFileSync(join(RP, '972-cockpit-layouts', 'bericht.md'), 'utf8');
+
+  // Startseite: #/, #/heute und #/uebersicht zeigen die Übersicht; die Navigation hat keinen Eintrag „Heute“ mehr und keinen zusätzlichen.
   for (const [name, vp] of [['1440', { width: 1440, height: 1000 }], ['390', { width: 390, height: 844 }]] as const) {
     for (const dark of [false, true]) {
       const ctx = await ctxFor(vp, dark);
       const p = await ctx.newPage();
-      await p.goto(B + '/#/uebersicht');
+      await p.goto(B + '/#/');
       await p.getByTestId('uebersicht').waitFor();
-      await pause(500);
-      await shot(p, `${name}-${dark ? 'dunkel' : 'hell'}-01-uebersicht`);
-      if (!dark) {
-        // D1 vorbereitet: mit WERKBANK_HEUTE_UEBERSICHT=on ersetzt die Übersicht den Review-Teil von Heute; kein Navigationseintrag.
-        pruef(await p.locator('a[href="#/uebersicht"]').count() === 0, `${name}: kein Navigationseintrag „Übersicht“ (D1 offen)`);
-        await p.goto(B + '/#/');
-        await p.getByTestId('heute-uebersicht').waitFor();
-        await pause(600);
-        pruef(await p.getByTestId('orch-questions').count() === 0, `${name}: Rückfragen auf Heute nicht doppelt`);
-        await shot(p, `${name}-hell-08-heute-mit-uebersicht`);
+      await p.getByTestId('ub-planen').waitFor();
+      await pause(700);
+      await shot(p, `${name}-${dark ? 'dunkel' : 'hell'}-01-start`);
+      if (!dark && name === '1440') {
+        const nav = await p.locator('#werkbank-nav a').allTextContents();
+        pruef(nav.some((t) => /Übersicht/.test(t)) && !nav.some((t) => /Heute/.test(t)) && !nav.some((t) => /Übersicht.*Übersicht/.test(t)), `Navigation: „Übersicht“ statt „Heute“, keine weitere Seite (${nav.length} Einträge)`);
+        for (const alt of ['#/heute', '#/uebersicht']) {
+          await p.goto(B + '/' + alt); await p.getByTestId('uebersicht').waitFor({ timeout: 5000 }).catch(() => {});
+          pruef(await p.getByTestId('uebersicht').count() === 1, `alte Adresse ${alt} zeigt die Übersicht`);
+        }
       }
       await ctx.close();
     }
   }
 
-  // Ablauf (Aufnahme, 1440 hell): Entscheidungen wählen → Neuladen behält sie → senden; Bot antworten; Rückfrage; Push freigeben.
+  // Ablauf (Aufnahme, 1440 hell): Ja / Nein / Anders an der Quelle, Rückfragen, Schublade, Push freigeben.
   const ctx = await ctxFor({ width: 1440, height: 1000 }, false, true);
   const p = await ctx.newPage();
-  await p.goto(B + '/#/uebersicht');
+  await p.goto(B + '/#/');
   await p.getByTestId('uebersicht').waitFor();
-  await pause(800);
-  const ck = p.locator(`[data-strang="${cockpit.id}"]`);
-  await ck.scrollIntoViewIfNeeded();
-  await ck.getByTestId('ub-btn-entscheiden').click(); await pause(600);
-  await ck.getByTestId('ub-wahl-D1').selectOption('akzeptiert'); await pause(500);
-  await ck.getByTestId('ub-wahl-D2').selectOption('eigene'); await pause(300);
-  await ck.getByTestId('ub-text-D2').pressSequentially('Namen, aber ohne Tooltip', { delay: 30 }); await pause(400);
-  await ck.getByTestId('ub-wahl-D3').selectOption('nachpruefen'); await pause(500);
-  await ck.screenshot({ path: join(OUT, '1440-hell-02-entscheiden.png') });
+  await pause(900);
+  const ck = () => p.locator(`[data-strang="${cockpit.id}"]`);
+  await ck().scrollIntoViewIfNeeded();
+  await ck().getByTestId('ub-einzeln').click(); await pause(700);
+  await ck().screenshot({ path: join(OUT, '1440-hell-02-entscheiden.png') });
+  // D1 (Textblock): Ja → „- Knut: akzeptiert“ im Bericht.
+  let n0 = await antwortenVon(cockpit.id);
+  await ck().locator('[data-id="D1"]').getByTestId('ub-ja').click();
+  await p.waitForFunction((id) => !document.querySelector(`[data-strang="${id}"] [data-id="D1"]`), cockpit.id, { timeout: 15_000 }).catch(() => {});
+  await idle(cockpit.id, n0); await pause(600);
+  pruef(/^\s*- Knut: akzeptiert \(Empfehlung: \(a\) gleich für alle\)/m.test(bericht()), 'Ja: Textblock D1 bekommt „- Knut: akzeptiert“');
+  // D2: Anders … → Text → Neuladen → Text noch da → Senden.
   await p.reload(); await p.getByTestId('uebersicht').waitFor(); await pause(800);
-  const ck2 = p.locator(`[data-strang="${cockpit.id}"]`);
-  pruef(await ck2.getByTestId('ub-wahl-D1').inputValue().catch(() => '') === 'akzeptiert' && await ck2.getByTestId('ub-text-D2').inputValue().catch(() => '') === 'Namen, aber ohne Tooltip', 'DoD 4: Entwurf überlebt Neuladen');
-  await ck2.scrollIntoViewIfNeeded();
-  await ck2.screenshot({ path: join(OUT, '1440-hell-03-nach-neuladen.png') });
-  await ck2.getByTestId('ub-entscheidungen-senden').click();
-  await p.waitForFunction((id) => !document.querySelector(`[data-strang="${id}"] [data-testid="ub-btn-entscheiden"]`), cockpit.id, { timeout: 15_000 }).catch(() => {});
-  await pause(1200);
-  const nachher = readFileSync(join(RP, '972-cockpit-layouts', 'bericht.md'), 'utf8');
-  console.log('Bericht nach dem Senden (Auszug):', nachher.split('\n').filter((l) => /Knut:|antwort:/.test(l)).join(' | '));
-  const strangMsgs = await L.collection('messages').find({ isCreatedByUser: true, text: /Entscheidungen von Knut|Knut hat entschieden/ }).toArray();
-  pruef(strangMsgs.length >= 1, 'Entscheidungen erreichen den Unter-Chat (Nacharbeit nach Review)');
-  await shot(p, '1440-hell-04-nach-senden', false);
+  await ck().scrollIntoViewIfNeeded();
+  await ck().locator('[data-id="D2"]').getByTestId('ub-anders').click();
+  await ck().locator('[data-id="D2"]').getByTestId('ub-anders-text').pressSequentially('Namen, aber ohne Tooltip', { delay: 30 }); await pause(400);
+  await p.reload(); await p.getByTestId('uebersicht').waitFor(); await pause(900);
+  const d2 = ck().locator('[data-id="D2"]');
+  pruef(await d2.getByTestId('ub-anders-text').inputValue().catch(() => '') === 'Namen, aber ohne Tooltip', 'DoD 4: Entwurf „Anders“ und „Einzeln“ überleben Neuladen');
+  await ck().scrollIntoViewIfNeeded();
+  await ck().screenshot({ path: join(OUT, '1440-hell-03-anders-nach-neuladen.png') });
+  n0 = await antwortenVon(cockpit.id);
+  await d2.getByTestId('ub-anders-senden').click();
+  await p.waitForFunction((id) => !document.querySelector(`[data-strang="${id}"] [data-id="D2"]`), cockpit.id, { timeout: 15_000 }).catch(() => {});
+  await idle(cockpit.id, n0); await pause(600);
+  pruef(/^\s*- Knut: Namen, aber ohne Tooltip/m.test(bericht()), 'Anders: Textblock D2 bekommt den eigenen Text');
+  // D3 (Kopf): Nein → antwort: im Kopf.
+  await p.reload(); await p.getByTestId('uebersicht').waitFor(); await pause(800);
+  await ck().scrollIntoViewIfNeeded();
+  n0 = await antwortenVon(cockpit.id);
+  await ck().locator('[data-id="D3"]').getByTestId('ub-nein').click();
+  await p.waitForFunction((id) => !document.querySelector(`[data-strang="${id}"] [data-id="D3"]`), cockpit.id, { timeout: 15_000 }).catch(() => {});
+  await idle(cockpit.id, n0); await pause(600);
+  pruef(/^    antwort: "nein — Empfehlung abgelehnt \(ja, mit Hinweis im Dialog\)"$/m.test(bericht()), 'Nein: Kopf-Frage D3 bekommt antwort: im Bericht-Kopf');
+  const fort = await L.collection('messages').countDocuments({ isCreatedByUser: true, text: /Knut hat entschieden/ });
+  pruef(fort >= 3, `jede Antwort setzt den Unter-Chat fort (${fort} Nachrichten)`);
+  // Rückfrage am Strang (q, Optionen): Ja = empfohlene Option.
+  await p.reload(); await p.getByTestId('uebersicht').waitFor(); await pause(800);
+  await ck().scrollIntoViewIfNeeded();
+  await ck().getByTestId('ub-rueckfrage').getByTestId('ub-ja').click(); await pause(1200);
+  const qc: any = await mongo.db(DB).collection('orchestrator_questions').findOne({ title: /Videos ins Review-Paket/ });
+  pruef(qc?.status === 'beantwortet' && qc?.answer?.option === 'Videos mit', `Rückfrage am Strang: Ja = empfohlene Option (${qc?.answer?.option})`);
+  await shot(p, '1440-hell-04-nach-entscheiden', false);
 
+  // „Braucht Knut“ (Bot): Anders … → Text → in denselben Chat.
   const bk = p.locator(`[data-strang="${bot.id}"]`);
   await bk.scrollIntoViewIfNeeded();
-  await bk.getByTestId('ub-btn-antwort').click(); await pause(400);
-  await bk.getByTestId('ub-antwort-text').pressSequentially('Ja, Netzbetreiber nennen und auf die Störungsseite verlinken.', { delay: 25 }); await pause(300);
-  await bk.screenshot({ path: join(OUT, '1440-hell-05-bot-antworten.png') });
-  await bk.getByTestId('ub-antwort-senden').click(); await pause(2000);
-  const antwort = await L.collection('messages').findOne({ isCreatedByUser: true, text: /^Antwort von Knut auf deine Rückfrage: Ja, Netzbetreiber/ });
-  pruef(!!antwort, 'Antwort geht in denselben Unter-Chat');
+  await bk.getByTestId('ub-anders').click(); await pause(300);
+  await bk.getByTestId('ub-anders-text').pressSequentially('Ja, Netzbetreiber nennen und auf die Störungsseite verlinken.', { delay: 25 }); await pause(300);
+  await bk.screenshot({ path: join(OUT, '1440-hell-05-braucht-anders.png') });
+  await bk.getByTestId('ub-anders-senden').click(); await pause(2000);
+  pruef(!!(await L.collection('messages').findOne({ isCreatedByUser: true, text: /^Antwort von Knut auf deine Rückfrage: Ja, Netzbetreiber/ })), 'Braucht Knut: Antwort geht in denselben Unter-Chat');
 
+  // Rückfrage ohne Unter-Chat: Ja.
   const lose = p.getByTestId('ub-lose');
   await lose.scrollIntoViewIfNeeded();
-  await lose.locator('select').first().selectOption('Ja'); await pause(300);
-  await lose.getByRole('button', { name: 'Antworten' }).click(); await pause(1200);
-  const q = await mongo.db(DB).collection('orchestrator_questions').findOne({ title: /Bot-Eval/ }).catch(() => null);
-  pruef(!q || q.status === 'beantwortet', 'Rückfrage ohne Strang beantwortet');
+  await lose.getByTestId('ub-ja').first().click(); await pause(1200);
+  const q = await mongo.db(DB).collection('orchestrator_questions').findOne({ title: /Bot-Eval/ });
+  pruef(q?.status === 'beantwortet' && q?.answer?.option === 'Ja', 'Rückfrage ohne Unter-Chat: Ja = empfohlene Option');
 
+  // Schublade: Bericht und Änderungen, dann Push freigeben auf der Karte.
   const fk = p.locator(`[data-strang="${flex.id}"]`);
   await fk.scrollIntoViewIfNeeded();
+  await fk.getByTestId('ub-bericht').click();
+  await p.getByTestId('ub-schublade').waitFor(); await pause(900);
+  await p.screenshot({ path: join(OUT, '1440-hell-06-schublade-bericht.png') });
+  await p.getByRole('tab', { name: 'Änderungen' }).click();
+  await p.getByTestId('ub-aenderungen').waitFor({ timeout: 10_000 }); await pause(600);
+  await p.screenshot({ path: join(OUT, '1440-hell-07-schublade-aenderungen.png') });
+  await p.keyboard.press('Escape'); await pause(400);
+  pruef(await p.getByTestId('ub-schublade').count() === 0, 'Schublade schließt mit Escape');
   await fk.getByTestId('ub-push').click();
   await p.getByRole('dialog').waitFor({ timeout: 10_000 }); await pause(800);
-  await p.screenshot({ path: join(OUT, '1440-hell-06-push-freigeben-dialog.png') });
+  await p.screenshot({ path: join(OUT, '1440-hell-08-push-freigeben-dialog.png') });
   await p.getByRole('button', { name: 'Genau diesen Stand freigeben' }).click(); await pause(1500);
   const fg = await mongo.db(DB).collection('freigaben').findOne({ strand: flex.id });
   pruef(fg?.head === HEAD && !fg?.pushedAt, 'Freigabe genau für den gezeigten Kopf, nichts gepusht');
-  await fk.screenshot({ path: join(OUT, '1440-hell-07-freigegeben.png') });
+  await fk.scrollIntoViewIfNeeded();
+  await fk.screenshot({ path: join(OUT, '1440-hell-09-freigegeben.png') });
   await pause(800);
   await ctx.close();
   const vids = readdirSync(join(tmp, 'video'));
   if (vids[0]) copyFileSync(join(tmp, 'video', vids[0]), join(OUT, 'ablauf-uebersicht.webm'));
 
-  // Handy: Karte mit offenem Entscheiden-Feld.
+  // Handy: Karte mit offenem „Anders …“ und Nacharbeit.
   const hc = await ctxFor({ width: 390, height: 844 }, false);
   const hp = await hc.newPage();
-  await hp.goto(B + '/#/uebersicht'); await hp.getByTestId('uebersicht').waitFor(); await pause(500);
-  const bk2 = hp.locator(`[data-strang="${bot.id}"]`);
-  await bk2.scrollIntoViewIfNeeded();
-  await bk2.getByRole('button', { name: /Nacharbeit/ }).click(); await pause(300);
-  await shot(hp, '390-hell-02-karte-handeln');
+  await hp.goto(B + '/#/'); await hp.getByTestId('uebersicht').waitFor(); await pause(600);
+  const rk = hp.locator('[data-ampel="blockiert"]').first();
+  await rk.scrollIntoViewIfNeeded();
+  await rk.getByTestId('ub-nacharbeit').click(); await pause(300);
+  await rk.screenshot({ path: join(OUT, '390-hell-02-karte-handeln.png') });
   await hc.close();
+
+  // Team-Konto (185-B2): Startseite ohne Unter-Chats, ohne Fehler, mit Planen-Zeile.
+  const tc = await ctxFor({ width: 1440, height: 1000 }, false, false, await login(team));
+  const tp = await tc.newPage();
+  await tp.goto(B + '/#/'); await tp.getByTestId('uebersicht').waitFor(); await tp.getByTestId('ub-planen').waitFor(); await pause(600);
+  pruef(await tp.getByTestId('ub-karte').count() === 0 && await tp.getByTestId('ub-hauptchat').count() === 0 && await tp.locator('[role=alert]').count() === 0, 'Team-Konto: Startseite ohne Unter-Chats und ohne Fehler');
+  await shot(tp, '1440-hell-10-team');
+  await tc.close();
   await browser.close();
 } finally {
   for (const p of procs) p.kill();

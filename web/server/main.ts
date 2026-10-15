@@ -21,6 +21,7 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
+import { themaOf } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
@@ -361,8 +362,6 @@ on('GET', /^\/api\/config$/, async (req, res) => {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: !!process.env.WERKBANK_FORGE_MCP,
     jiraSite: cfg.jiraSite, project: cfg.jiraProject, vault: cfg.vaultDir,
     dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u),
-    // Plan 184, D1: Übersicht ersetzt den Review-Teil von Heute (nur Admins) — Schalter, bis Knut entschieden hat (Vorgabe aus).
-    heuteUebersicht: u?.role === 'ADMIN' && process.env.WERKBANK_HEUTE_UEBERSICHT === 'on',
   });
 });
 
@@ -1616,7 +1615,13 @@ on('GET', /^\/api\/uebersicht$/, async (req, res) => {
   }).filter(Boolean) as any[];
   const imStrang = new Set(karten.map((k) => k.id));
   const lose = qs.filter((q: any) => !q.strand || !imStrang.has(String(q.strand.id)));
-  send(res, 200, { ...gruppieren(karten, lose), at: new Date(), dryRun: dryRun(), paketDienst: !!basis, fragenFehler });
+  // Teil B (Mockup 185): Hauptchat-Zeile und „Erledigt diese Woche“ (von Knut geprüft, 7 Tage) — nur Mongo.
+  const hauptchat = await leitstandLine(u).catch(() => null);
+  const seit = new Date(Date.now() - 7 * 86400_000);
+  const erledigt = ((await orchRuns().find({ userId: u.id, kind: { $ne: 'leitstand' }, $or: [{ knutReviewedAt: { $gte: seit } }, { reviewedAt: { $gte: seit }, reviewedBy: null }] },
+    { projection: { title: 1, thema: 1, paket: 1, cwd: 1, lauf: 1, url: 1, knutReviewedAt: 1, reviewedAt: 1 } }).sort({ knutReviewedAt: -1, reviewedAt: -1 }).limit(40).toArray().catch(() => [])) as any[])
+    .map((d) => ({ id: String(d._id), titel: d.title ?? '', thema: themaOf(d), at: d.knutReviewedAt ?? d.reviewedAt, chat: /^https?:\/\//.test(String(d.url ?? '')) ? d.url : null }));
+  send(res, 200, { ...gruppieren(karten, lose), at: new Date(), dryRun: dryRun(), paketDienst: !!basis, fragenFehler, hauptchat, erledigt });
 });
 
 // Rückfragen des Orchestrators (Knut antwortet hier; nur die eigenen).

@@ -1,15 +1,13 @@
-// Startseite „Heute“ (Council-Bedingung 11, docs/plan-heute-review-schlange.md): Review-Schlange → Wartet auf dich →
-// Dein Tag → Tickets, die Pflege brauchen. Eine Liste „bei mir“ statt vier verstreuter.
+// Bausteine der früheren Startseite „Heute“ (Council-Bedingung 11, docs/plan-heute-review-schlange.md). Seit Plan 184, Teil B
+// ist die Übersicht die Startseite (src/pages/Uebersicht.tsx); sie nutzt von hier die Karte der Board-Agentenläufe (RunCard),
+// die Nachtbau-Stopps (G0Blocked) und die Gruppe „Schon live — nur noch abhaken“ (LiveGroup).
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { api, chatTarget, fmtDateTime, type Config } from '../api.ts';
-import { Err, Loading, useConfirm, useLoad, useToast, useJiraLive } from '../ui.tsx';
-import { HygienePanel } from '../components.tsx';
-import { WartetAufDich, Md, mineCount, note } from '../beimir.tsx';
-import { OrchQuestions } from '../orchquestions.tsx';
+import { api, chatTarget, fmtDateTime } from '../api.ts';
+import { Err, Loading, useConfirm, useLoad, useToast } from '../ui.tsx';
+import { Md, note } from '../beimir.tsx';
 import { Mermaid, useMermaidIn } from '../mermaid.tsx';
 import { ExecSummary } from '../execsummary.tsx';
 import { usePushFreigeben } from '../freigabe.tsx';
-import { UebersichtInhalt } from './Uebersicht.tsx';
 
 const BIG: CSSProperties = { minHeight: 44 };
 const STAND: Record<string, [string, string]> = { ja: ['✓', 'ok'], teilweise: ['◐', 'warn'], nein: ['✗', 'bad'] };
@@ -17,7 +15,7 @@ const STAND: Record<string, [string, string]> = { ja: ['✓', 'ok'], teilweise: 
 const nothing = (t?: string | null) => !t || /^(nichts\b|keins?\s*([.(]|$)|keine\s*([.(]|$)|[—–-]+\s*$|n\/a\b|entfällt\b)/i.test(t.trim().replace(/^\*+|\*+$/g, ''));
 
 /** Nachtbau: von G0 vor dem Bau gestoppte Stränge (blocked_g0) mit Belegen; entschieden wird in der Rückfrage darunter. */
-function G0Blocked({ items }: { items: any[] }) {
+export function G0Blocked({ items }: { items: any[] }) {
   return (
     <div className="card" data-testid="g0-blocked">
       <h3 style={{ marginTop: 0 }}>Vor dem Bau gestoppt <span className="chip warn">{items.length}</span></h3>
@@ -202,7 +200,7 @@ function KopfTeil({ it, onDone }: { it: any; onDone: () => void }) {
   );
 }
 
-function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
+export function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
   const confirm = useConfirm();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
@@ -297,7 +295,7 @@ function LiveRow({ x, why }: { x: any; why?: string }) {
 }
 
 /** Schon live gegangene Stränge (Paket 141): eingeklappt, je Strang eine Zeile, gesammelt abhaken mit Bestätigung. */
-function LiveGroup({ items, onDone }: { items: any[]; onDone: () => void }) {
+export function LiveGroup({ items, onDone }: { items: any[]; onDone: () => void }) {
   const confirm = useConfirm();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
@@ -327,111 +325,6 @@ function LiveGroup({ items, onDone }: { items: any[]; onDone: () => void }) {
         <button className="btn primary" style={BIG} disabled={busy} onClick={all} data-testid="passt-live">Alle {items.length} als geprüft markieren</button>
       </div>
       <Err e={err} />
-    </div>
-  );
-}
-
-const SPALTEN: [string, string, string][] = [['entscheiden', 'Entscheiden', 'Keine offene Frage.'], ['ansehen', 'Ansehen', 'Nichts anzusehen.'], ['github', 'Auf GitHub', 'Nichts freigegeben.']];
-
-export function Heute({ cfg }: { cfg: Config }) {
-  const t = useLoad(() => api('/api/today'));
-  const d: any = t.data;
-  const admin = cfg.user?.role === 'ADMIN';
-  // Offene Entscheidungen sind Knuts Zeilen im Vault („- Knut:“) → nur für Admins, nachgeladen (liest alle Specs).
-  // Bereinigt (docs/plan-heute-fragen-aktuell.md): ohne Live/Archiv, Überholtes und Dubletten — die stehen unter „Aufräumen“.
-  const [vq, setVq] = useState<{ open: any[]; cleanup: any[]; raw: number; duplicates: number } | null>(null);
-  useEffect(() => { if (admin) api('/api/roadmap/heute').then((r: any) => setVq(r)).catch(() => {}); }, [admin]);
-  const decisions = vq?.open ?? [];
-  useJiraLive(() => { api('/api/today').then(t.setData).catch(() => {}); }, 'both');
-  // Solange ein Agent arbeitet oder fragt: alle 20 s nachsehen.
-  const busy = d?.queue.some((x: any) => x.bucket === 'laeuft' || x.bucket === 'frage');
-  useEffect(() => { if (!busy) return; const id = setInterval(() => api('/api/today').then(t.setData).catch(() => {}), 20_000); return () => clearInterval(id); }, [busy]);
-  if (t.error) return <div className="page"><Err e={t.error} /></div>;
-  if (!d) return <div className="page"><Loading /></div>;
-
-  // Plan 184, D1: mit Schalter ersetzt die Übersicht (Themen, direktes Handeln) die Strang-Karten und die Rückfragen hier;
-  // Board-Läufe (agent_runs) bleiben als Karten darunter.
-  const ub = admin && !!cfg.heuteUebersicht;
-  const allReview = [...(ub ? [] : d.strands ?? []), ...d.queue.filter((x: any) => x.bucket === 'review')];
-  // Schon live (Paket 141): eigene, eingeklappte Gruppe am Ende; die Zahl am Abschnitt zählt nur, was zu prüfen ist.
-  const isLive = (x: any) => x.kind === 'strand' && x.stand?.kind === 'live' && !x.running;
-  const liveDone = allReview.filter(isLive);
-  // Karten mit Aufgaben für dich zuerst (stabil: sonst bleibt die Reihenfolge der Schlange).
-  const hasTodo = (x: any) => x.kind !== 'strand' || (x.todo ?? []).length > 0 || (x.review && !nothing(x.review.risiko));
-  const review = allReview.filter((x) => !isLive(x)).sort((a, b) => Number(hasTodo(b)) - Number(hasTodo(a)));
-  const waitingRuns = d.queue.filter((x: any) => ['frage', 'haengt', 'still'].includes(x.bucket));
-  const running = d.queue.filter((x: any) => x.bucket === 'laeuft');
-  const orchOpen = ub ? 0 : d.orchOpen ?? 0;   // mit Übersicht stehen die Rückfragen dort (nicht doppelt)
-  // Die Zahl an „Wartet auf dich“ = die Plakette „Heute (n)“: offene Vault-Entscheidungen (auch bereinigt noch Hunderte,
-  // ein Rückstand) stehen darunter mit eigener Zahl — der bereinigten —, zählen aber nicht mit (Release-Audit 11.10.2026:
-  // 445 neben einer Plakette 2; bereinigt 11.10.: 465 Zeilen → 294 offen, docs/plan-heute-fragen-aktuell.md).
-  const nMine = waitingRuns.length + mineCount(d.mine, []) + orchOpen;
-  const g0: any[] = d.g0 ?? [];
-  const showWaiting = nMine > 0 || decisions.length > 0 || (vq?.cleanup.length ?? 0) > 0 || g0.length > 0;
-  const reload = () => t.reload();
-  const first = cfg.user?.name.split(' ')[0] ?? '';
-
-  return (
-    <div className="page heute">
-      <div className="head">
-        <div>
-          <h1>Heute</h1>
-          <p className="muted small" style={{ margin: 0 }}>{first ? `${first}, das` : 'Das'} wartet auf dich — zuerst fertige Agenten, dann Fragen, dann dein Tag.</p>
-        </div>
-      </div>
-      {d.dryRun && <p className="chip warn">Vorschau (Trockenlauf): Antworten an Agenten sind aus.</p>}
-      {allReview.length > 0 && showWaiting && <p className="row small rq-jump" data-testid="jump">Springen zu:
-        <button className="btn ghost small" onClick={() => document.querySelector('[data-testid="review-queue"]')?.scrollIntoView()}>Zu prüfen ({review.length})</button>
-        <button className="btn ghost small" onClick={() => document.querySelector('[data-testid="waiting"]')?.scrollIntoView()}>Wartet auf dich ({nMine})</button>
-      </p>}
-      {d.memory && <div className="card soft" role="status" data-testid="memory-warning"><b>⚠️ Speicher knapp:</b> <span className="small">{d.memory}. Neue Chats und Agenten können langsam werden oder abbrechen — Testinstanzen stoppen, wartende Chats beantworten.</span></div>}
-      {running.length > 0 && <p className="small muted" data-testid="running">⏳ {running.length === 1 ? 'Ein Agent arbeitet' : `${running.length} Agenten arbeiten`} gerade: {running.map((x: any, i: number) => <span key={x.id}>{i ? ', ' : ''}{x.url ? <a href={x.url} target={chatTarget}>{x.key}</a> : x.key}</span>)}</p>}
-
-      {d.leitstand && <p className="small muted" data-testid="leitstand">🛰️ Hauptchat: <b>{d.leitstand.status}</b>{d.leitstand.open > 0 ? ` · ${d.leitstand.open} Meldung${d.leitstand.open === 1 ? '' : 'en'} unterwegs` : ''} · <a href={d.leitstand.url} target={chatTarget}>Chat öffnen</a> · <a href="#/leitstand">Unter-Chats</a></p>}
-
-      {(d.orchAuto ?? []).length > 0 && <p className="small muted" data-testid="orch-auto">🔁 Orchestrator, automatisch fortgesetzt: {d.orchAuto.map((x: any, i: number) => <span key={x.id}>{i ? ', ' : ''}<a href={x.url} target={chatTarget}>{x.title}</a> ({x.n}){x.stopped ? ' — angehalten' : ''}</span>)}</p>}
-
-      {ub && <section data-testid="heute-uebersicht"><UebersichtInhalt eingebettet onChange={reload} /></section>}
-
-      {allReview.length > 0 && <section data-testid="review-queue">
-        <h2>{ub ? 'Agentenläufe am Board' : 'Wartet auf dein Review'} {review.length > 0 ? <span className="chip">{review.length}</span> : <span className="small muted">— nichts zu prüfen</span>}
-          {admin && !ub && <a className="small" style={{ marginLeft: 10, fontWeight: 400 }} href="#/uebersicht" data-testid="link-uebersicht">nach Themen, mit direktem Handeln →</a>}</h2>
-        {/* Teil C (C4): drei Spalten — Entscheiden · Ansehen · Auf GitHub; Board-Läufe stehen in „Ansehen“. */}
-        {review.length > 0 && <p className="row small rq-jump rq-spalten-jump" data-testid="spalten-jump">{SPALTEN.map(([k, label]) => <button key={k} className="btn ghost small" onClick={() => document.getElementById(`spalte-${k}`)?.scrollIntoView()}>{label} ({review.filter((x) => (x.spalte ?? 'ansehen') === k).length})</button>)}</p>}
-        <div className="rq-spalten">{SPALTEN.map(([k, label, hint]) => {
-          const xs = review.filter((x) => (x.spalte ?? 'ansehen') === k);
-          return <div key={k} className={`rq-spalte rq-spalte-${k}`} id={`spalte-${k}`} data-testid={`spalte-${k}`}>
-            <h3>{label} <span className="chip">{xs.length}</span></h3>
-            {xs.length ? xs.map((it: any) => <RunCard key={it.id} it={it} onDone={reload} />) : <p className="tiny muted">{hint}</p>}
-          </div>;
-        })}</div>
-        {liveDone.length > 0 && <LiveGroup items={liveDone} onDone={reload} />}
-      </section>}
-
-      {showWaiting && <section data-testid="waiting">
-        <h2>Wartet auf dich <span className="chip">{nMine}</span></h2>
-        {g0.length > 0 && <G0Blocked items={g0} />}
-        {orchOpen > 0 && <OrchQuestions onChange={reload} />}
-        {waitingRuns.map((it: any) => <RunCard key={it.id} it={it} onDone={reload} />)}
-        {mineCount(d.mine, decisions) + (vq?.cleanup.length ?? 0) > 0 && <div className="card"><WartetAufDich x={d.mine} decisions={decisions} today={vq ?? undefined} onChange={reload} /></div>}
-      </section>}
-
-      <section data-testid="day">
-        <h2>Dein Tag</h2>
-        {d.day.length
-          ? <ul className="plain card day-list">{d.day.map((b: any) => <li key={b.id} className={b.done ? 'done' : ''}><span className="tiny mono">{b.start}–{b.end}</span> {b.key ? <a href={`#/board?key=${b.key}`}>{b.key}</a> : null} {b.title ?? b.summary ?? ''}</li>)}</ul>
-          : <p className="small muted">Noch nichts geplant.</p>}
-        <a className="small" href="#/timebox">Mein Tag öffnen →</a>
-      </section>
-
-      <section data-testid="tickets">
-        <HygienePanel max={5} title="Deine Tickets" heading="Tickets, die Pflege brauchen" onChange={reload} />
-      </section>
-
-      {!ub && allReview.length === 0 && nMine === 0 && <div className="card soft empty" data-testid="today-empty">
-        <p><b>Nichts wartet auf dein Review.</b></p>
-        <p className="small muted">Neue Arbeit findest du auf der <a href="#/roadmap">Roadmap</a> (Als Nächstes) oder am <a href="#/board">Board</a>.</p>
-      </div>}
     </div>
   );
 }

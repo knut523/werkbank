@@ -48,15 +48,15 @@ try {
 
   const main = countDocs(p), sub = countFrameDocs(p);
   await p.locator('[data-testid=werkbank-nav-heute]').click();
-  await heading(p).filter({ hasText: 'Heute' }).waitFor();
+  await heading(p).filter({ hasText: 'Übersicht' }).waitFor();
   sub.n = 0; main.n = 0;
   await p.locator('[data-testid=werkbank-nav-board]').click();
   await heading(p).filter({ hasText: 'Board' }).waitFor();
   check('Leiste Heute → Board ohne Neuladen', main.n === 0 && sub.n === 0, `Dokumente: Fenster ${main.n}, iframe ${sub.n}`);
   check('Adresse folgt', /\/wb\/board/.test(p.url()), p.url());
   // DoD 7 + gemischte Folge: Link in der Seite (iframe-Verlauf), dann Leiste, dann zweimal Zurück.
-  await p.goBack(); await heading(p).filter({ hasText: 'Heute' }).waitFor({ timeout: 5000 }).catch(() => {});
-  check('Zurück: Board → Heute mit einem Klick', /\/wb\/heute/.test(p.url()) && (await heading(p).textContent())?.includes('Heute'), p.url());
+  await p.goBack(); await heading(p).filter({ hasText: 'Übersicht' }).waitFor({ timeout: 5000 }).catch(() => {});
+  check('Zurück: Board → Heute mit einem Klick', /\/wb\/heute/.test(p.url()) && (await heading(p).textContent())?.includes('Übersicht'), p.url());
   await frame(p).locator('a[href="#/roadmap"]').first().click();
   await heading(p).filter({ hasText: 'Roadmap' }).waitFor();
   await p.locator('[data-testid=werkbank-nav-wissen]').click();
@@ -143,7 +143,7 @@ try {
   await q.locator('[data-testid=werkbank-mobile-header] [data-testid=open-sidebar-button]').click();
   await q.waitForTimeout(500);
   await q.locator('[data-testid=werkbank-nav-heute]').click();
-  await heading(q).filter({ hasText: 'Heute' }).waitFor();
+  await heading(q).filter({ hasText: 'Übersicht' }).waitFor();
   await q.waitForTimeout(500);
   check('Handy: Tipp auf Heute schließt die Leiste', (await q.locator('[data-testid=werkbank-mobile-header]').count()) === 1);
   await q.locator('[data-testid=werkbank-mobile-header] [data-testid=open-sidebar-button]').click();
