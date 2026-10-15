@@ -156,7 +156,7 @@ test('Echtes Claude Code, Melious ohne Guthaben (403 permission_error „Insuffi
   assert.ok(st.exhausted.melious > Date.now() + 3600_000, JSON.stringify(st));
 });
 
-test('Profil „leser“ über Melious (--bare): kleiner Systemprompt, nur Read/Grep/Glob — und der Wächter sperrt fremde Ordner weiter', { skip: !cliThere && 'Claude-Code-CLI nicht installiert', timeout: 120_000 }, async () => {
+test('Profil „leser“ über Melious (--bare): kleiner Systemprompt, nur Lesen (+ lesendes Bash) — und der Wächter sperrt fremde Ordner weiter', { skip: !cliThere && 'Claude-Code-CLI nicht installiert', timeout: 120_000 }, async () => {
   const conv = '00000000-0000-4000-8000-0000000000cc';
   const dir = join(ORCH, 'leser'); mkdirSync(dir, { recursive: true });
   const reg = await fetch(`http://127.0.0.1:${PORT}/internal/orchestrate`, { method: 'POST', headers: { 'x-werkbank-internal': 'geheim', 'content-type': 'application/json' },
@@ -174,7 +174,7 @@ test('Profil „leser“ über Melious (--bare): kleiner Systemprompt, nur Read/
   console.log(`# Werkzeuge beim Anbieter: leser+bare ${JSON.stringify(mine[0].toolNames)} · normal ${normal.length} (${normal.filter((n) => !n.startsWith('mcp__')).join(',')})`);
   for (const s of mine) {
     assert.ok(s.toolNames.includes('Read'));
-    assert.deepEqual(s.toolNames.filter((n) => !['Read', 'Grep', 'Glob'].includes(n) && !/^mcp__(werkbank|vault-search)__/.test(n)), []);
+    assert.deepEqual(s.toolNames.filter((n) => !['Read', 'Grep', 'Glob', 'Bash'].includes(n) && !/^mcp__(werkbank|vault-search)__/.test(n)), []);   // Bash: D7 b, der Wächter lässt nur Lesendes durch
   }
   // Ganze Anfrage (Systemprompt + Werkzeug-Beschreibungen + Nachrichten), erste Anfrage des Zugs.
   const vollBytes = seen.filter((s) => s.stream && !s.conv && !s.hasToolResult).map((s) => s.bytes);
