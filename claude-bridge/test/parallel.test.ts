@@ -56,3 +56,25 @@ test('Ordner: Chat-Kennung aus fremden Zeichen bleibt im Personenordner', () => 
   const d = mod.workDirFor('u2', '../../etc');
   assert.ok(d.startsWith(join(person, 'chats') + '/'), d);
 });
+
+test('Leerlauf: wartende Sitzungen nach BRIDGE_IDLE_REAP_S (Vorgabe 15 min) beenden, laufende nie; 0 = aus', () => {
+  delete process.env.BRIDGE_IDLE_REAP_S;
+  assert.equal(mod.idleReapMs(), 900_000);
+  const now = 10_000_000;
+  const a = { pending: { since: now - 900_000 } }, b = { pending: { since: now - 60_000 } }, c = { pending: null }, d = { pending: {} };
+  assert.deepEqual(mod.idleToReap([a, b, c, d], now), [a], 'nur die seit ≥ 15 min wartende; laufende und ohne Zeitstempel nicht');
+  process.env.BRIDGE_IDLE_REAP_S = '0';
+  try { assert.deepEqual(mod.idleToReap([a, b], now), [], '0 = aus'); } finally { delete process.env.BRIDGE_IDLE_REAP_S; }
+  process.env.BRIDGE_IDLE_REAP_S = '30';
+  try { assert.deepEqual(mod.idleToReap([a, b], now), [a, b]); } finally { delete process.env.BRIDGE_IDLE_REAP_S; }
+  assert.equal(mod.reapIdle(now), 0, 'ohne Sitzungen nichts zu tun');
+});
+
+test('S0: guardFor — Pilot (geteilte Konfiguration) nicht strict, eigene Konfiguration strict; BRIDGE_PATH_GUARD=off', () => {
+  const g = mod.guardFor('u1', '/tmp/x', null)!;
+  assert.equal(g.strict, false);
+  assert.ok(g.ownScratch.endsWith('/scratch/u1'));
+  assert.equal(mod.guardFor('u2', '/tmp/x', '/h/u2')!.strict, true);
+  process.env.BRIDGE_PATH_GUARD = 'off';
+  try { assert.equal(mod.guardFor('u1', '/tmp/x', null), undefined); } finally { delete process.env.BRIDGE_PATH_GUARD; }
+});

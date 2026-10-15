@@ -8,8 +8,8 @@ import { join } from 'node:path';
 import { wb } from './db.ts';
 import { jiraIdentity, jiraCreds } from './creds.ts';
 import { attachLocal } from './local.ts';
-import { buildPack, inputsHash, approxTokens, hygieneBlock } from './context.ts';
-import { hygieneFor, freshState, pickQuestions, snooze, slotFor, touchedToday, vienna, type HygieneItem, type HygieneState } from './hygiene.ts';
+import { buildPack, inputsHash, approxTokens, hygieneBlock, reviewBlock } from './context.ts';
+import { hygieneFor, freshState, pickQuestions, snooze, slotFor, touchedToday, reviewSet, vienna, type HygieneItem, type HygieneState } from './hygiene.ts';
 import { actionsFromText } from './syncplan.ts';
 import { addComment, transitionTo, setDueDate, refreshIssue, type Issue } from './jira.ts';
 import type { User } from './auth.ts';
@@ -85,20 +85,36 @@ export async function sessionStart(u: User, conv: string, opts: { eod?: boolean;
   const { items } = await hygieneOf(u);
   const st = await loadState(u);
   const slot = st.sessions[conv] ? null : slotFor(st, vienna().hour, !!opts.eod);
+  // Knut, 29.09. (Entscheidung 12): Pflegefragen nur mit verbundenem Jira-MCP — sonst nur Badges und
+  // ein einmaliger Hinweis, dass die Fragen ausfallen und wie man den MCP verbindet.
+  const writable = await canWriteJira(u);
+  // Ausdrücklich gestarteter Tagesabschluss (Vorlage / „Tagesabschluss“): Durchgang über alle Tickets statt drei
+  // Fragen (Knut, 07.10.2026). Der Abend-Slot gilt damit als genommen — andere Chats fragen heute abends nicht mehr.
+  if (opts.eod && writable) {
+    const [issues, who] = await Promise.all([allIssues(), jiraIdentity(u)]);
+    const block = reviewBlock(reviewSet(issues, who, today()), today(), process.env.WERKBANK_EOD_BATCH !== '0');
+    await saveState(u, { ...st, sessions: { ...st.sessions, [conv]: [] }, slots: { ...(st.slots ?? {}), abend: conv } });
+    const text = [pack, block].join('\n\n');
+    const tokens = approxTokens(text);
+    await wb().collection('context_log').insertOne({
+      userId: u.id, conv: conv.slice(0, 64), at: new Date(), tokens, packTokens: approxTokens(pack), questions: 0, slot: 'abend', review: true, cached,
+      ...skillEstimate(opts.skills), ownToolsTokens: toolsEstimate(),
+    });
+    return { text, tokens, cached, slot: 'abend' as const, questions: [] };
+  }
   let pool = items;
   if (slot === 'abend' || (st.sessions[conv] && st.slots?.abend === conv)) {
     const [issues, who] = await Promise.all([allIssues(), jiraIdentity(u)]);
     pool = [...touchedToday(issues, who, today()), ...items];
   }
-  // Knut, 29.09. (Entscheidung 12): Pflegefragen nur mit verbundenem Jira-MCP — sonst nur Badges und
-  // ein einmaliger Hinweis, dass die Fragen ausfallen und wie man den MCP verbindet.
-  const writable = await canWriteJira(u);
   const r = pickQuestions(pool, st, conv, writable ? slot : null);
   await saveState(u, r.state);
   const hint = !writable && slot && items.length && await takeMcpHint(u)
     ? `### Hinweis an die Person (einmalig, kurz am Ende deiner ersten Antwort)\nDu hast ${items.length} offene Pflegepunkte an deinen Tickets (Board: 🧹). Ich frage dazu nicht nach, solange dein Jira-MCP nicht verbunden ist — ${MCP_HELP}`
     : '';
-  const text = [pack, hygieneBlock(r.picked, items.length, r.slot), hint].filter(Boolean).join('\n\n');
+  // Tagesabschluss ausdrücklich gestartet, aber Jira nicht schreibbar: sagen, warum es keinen Durchgang gibt.
+  const eodHint = opts.eod && !writable ? `### Tagesabschluss nicht möglich\nSag der Person zuerst in einem Satz: Der Durchgang über die Tickets braucht einen verbundenen Jira-MCP (schreibend) — ${MCP_HELP}` : '';
+  const text = [pack, hygieneBlock(r.picked, items.length, r.slot), hint, eodHint].filter(Boolean).join('\n\n');
   const tokens = approxTokens(text);
   await wb().collection('context_log').insertOne({
     userId: u.id, conv: conv.slice(0, 64), at: new Date(), tokens, packTokens: approxTokens(pack), questions: r.picked.length, slot: r.slot, cached,
@@ -143,14 +159,14 @@ export async function applyActions(u: User, key: string, actions: { type: string
 }
 
 /** Board: welche Karten brauchen Pflege (für alle Owner, je Owner-Identität gerechnet). */
-export function hygieneAll(issues: Issue[]): Map<string, string[]> {
+export function hygieneAll(issues: Issue[]): Map<string, { rule: HygieneItem['rule']; days?: number }[]> {
   const owners = new Map<string, string | null | undefined>();
   for (const i of issues) if (i.assignee) owners.set(i.assignee, i.assigneeId);
-  const out = new Map<string, string[]>();
+  const out = new Map<string, { rule: HygieneItem['rule']; days?: number }[]>();
   for (const [name, id] of owners) {
     for (const h of hygieneFor(issues, { displayName: name, accountId: id ?? null, name }, { staleDays: Number(process.env.WERKBANK_STALE_DAYS || 7) })) {
       if (h.rule === 'ohne Ziel') continue;   // hat eigenen Zähler/Filter „Ohne Ziel“ — nicht die Pflege-Zahl aufblähen
-      out.set(h.key, [...(out.get(h.key) ?? []), h.rule]);
+      out.set(h.key, [...(out.get(h.key) ?? []), h.days === undefined ? { rule: h.rule } : { rule: h.rule, days: h.days }]);
     }
   }
   return out;

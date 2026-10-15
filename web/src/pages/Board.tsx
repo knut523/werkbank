@@ -1,19 +1,34 @@
 import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react';
 import { api, fmtDate, fmtDateTime, today, chatTarget, openChat, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, StateChip, useJiraLive } from '../ui.tsx';
-import { HygienePanel, LinkButton } from '../components.tsx';
+import { LinkButton, PflegeGlossar } from '../components.tsx';
+import { PFLEGE, befundText, zusammenfassung, type Befund, type Act } from '../pflege.ts';
+import { BeiMirLink } from '../beimir.tsx';
 import { NoGoal } from './Sprint.tsx';
 import { moveActions, allowedStatuses, laneAllowed, moveCard, describeMove, type Transition } from '../boardMove.ts';
 
 const overdue = (i: any) => i.duedate && i.duedate < today() && i.status !== 'Done' && i.status !== 'Ongoing';
-/** Datums-Chip: überfällig / Datum / „wiederkehrend“ (Ongoing) / „ohne Datum“. */
+const hasRule = (i: any, r: Befund['rule']) => (i.hygiene ?? []).some((b: Befund) => b.rule === r);
+/** Datums-Chip in Klartext: „26 Tage überfällig · 15.09.2026“ / Datum / „wiederkehrend“ (Ongoing) / „Datum fehlt“ (Pflege-Befund) bzw. „ohne Datum“. */
 function DueChip({ i, small }: { i: any; small?: boolean }) {
   const c = small ? 'chip tiny-chip' : 'chip';
   if (i.status === 'Ongoing') return <span className={c} title="Ongoing = wiederkehrende Arbeit, braucht kein Enddatum">↻ wiederkehrend</span>;
-  if (i.duedate) return <span className={`${c} ${overdue(i) ? 'bad' : ''}`}>{overdue(i) ? 'über ' : ''}{fmtDate(i.duedate)}</span>;
+  if (i.duedate && overdue(i)) {
+    const days = (i.hygiene ?? []).find((b: Befund) => b.rule === 'überfällig')?.days ?? daysSince(i.duedate + 'T00:00:00Z') ?? 0;
+    return <span className={`${c} bad`}>{befundText({ rule: 'überfällig', days })} · {fmtDate(i.duedate)}</span>;
+  }
+  if (i.duedate) return <span className={c}>{fmtDate(i.duedate)}</span>;
   if (i.status === 'Done' || i.statusCategory === 'done') return null;
-  return <span className={`${c} warn`}>ohne Datum</span>;
+  return <span className={`${c} warn`}>{hasRule(i, 'ohne Datum') ? befundText({ rule: 'ohne Datum' }) : 'ohne Datum'}</span>;
 }
+const ownerText = (i: any) => i.assignee ?? (hasRule(i, 'Sub-task ohne Owner') ? befundText({ rule: 'Sub-task ohne Owner' }) : 'ohne Owner');
+// Befunde, die schon ein eigener Chip zeigt (Datum, Owner, Banner „kaputt/ohne Parent“) — kein zweiter Pflege-Chip.
+const SHOWN_ELSEWHERE = new Set<string>(['überfällig', 'ohne Datum', 'Sub-task ohne Owner', 'ohne Workstream', 'Sub-task ohne Parent']);
+/** Übrige Pflege-Befunde (still, Widerspruch) als Klartext-Chips. Nach SHOWN_ELSEWHERE bleiben höchstens zwei — kein „+n“ nötig. */
+function PflegeChips({ i, small }: { i: any; small?: boolean }) {
+  return <>{(i.hygiene ?? []).filter((b: Befund) => !SHOWN_ELSEWHERE.has(b.rule)).map((b: Befund) => <span key={b.rule} className={`chip warn ${small ? 'tiny-chip' : ''}`} data-pflege={b.rule}>{befundText(b)}</span>)}</>;
+}
+const brauchen = (n: number) => `${n} ${n === 1 ? 'braucht' : 'brauchen'} Pflege`;
 const daysSince = (s?: string | null) => (s ? Math.max(0, Math.floor((Date.now() - new Date(s).getTime()) / 864e5)) : null);
 /** „seit X Tagen in Status“ — aus statuscategorychangedate (Kategoriewechsel). */
 function Since({ i }: { i: any }) {
@@ -35,10 +50,10 @@ function SubRow({ s, onOpen }: { s: any; onOpen: (k: string) => void }) {
       </button>
       <span className="row" style={{ gap: 3 }}>
         <span className="chip tiny-chip">{s.status}</span>
-        <span className={`chip tiny-chip ${s.assignee ? '' : 'warn'}`}>{s.assignee ?? 'ohne Owner'}</span>
+        <span className={`chip tiny-chip ${s.assignee ? '' : 'warn'}`}>{ownerText(s)}</span>
         <DueChip i={s} small />
         {s.noGoal && <NoGoal />}
-        {s.hygiene?.length > 0 && <span className="badge-hyg" title={'Braucht Pflege: ' + s.hygiene.join(', ')}>🧹 {s.hygiene.length}</span>}
+        <PflegeChips i={s} small />
       </span>
     </li>
   );
@@ -58,10 +73,10 @@ function Card({ i, onOpen, expanded, onToggle, fresh, mover }: { i: any; onOpen:
         ? <div className="chip bad" style={{ marginBottom: 4 }} title="Sub-task ohne Parent-Ticket — in Jira einem Ticket zuordnen oder in einen Task umwandeln">⚠ kaputt: {i.broken}</div>
         : <div className="chip bad" style={{ marginBottom: 4 }} title="Jedes Ticket hängt an einem Workstream (olaf-jira). In Jira den Parent auf den passenden Workstream setzen — oder im Chat fragen, wohin es gehört.">⚠ {i.broken} — in Jira Parent setzen</div>)}
       <div className="row" style={{ gap: 4 }}>
-        <span className="chip">{i.assignee ?? 'ohne Owner'}</span>
+        <span className={`chip ${hasRule(i, 'Sub-task ohne Owner') ? 'warn' : ''}`}>{ownerText(i)}</span>
         <DueChip i={i} />
+        <PflegeChips i={i} />
         {i.comments > 0 && <span className="chip">💬 {i.comments}</span>}
-        {i.hygiene?.length > 0 && <span className="badge-hyg" title={i.hygiene.join(', ')}>🧹 {i.hygiene.length}</span>}
         {i.agent && <span className={`chip ${i.agent === 'wartet auf ja' ? 'bad' : 'warn'}`} title="Ein Agent arbeitet an dieser Karte (Chat)">🤖 {i.agent}</span>}
         <Since i={i} />
         <Blocked i={i} />
@@ -73,7 +88,7 @@ function Card({ i, onOpen, expanded, onToggle, fresh, mover }: { i: any; onOpen:
           <button className="subtoggle" aria-expanded={expanded} onClick={(e) => { e.stopPropagation(); onToggle(); }} data-testid={`subtoggle-${i.key}`}>
             {expanded ? '▾' : '▸'} Sub-tasks <b>{i.subtaskDone}/{subs.length}</b> erledigt
             <span className="subbar"><span style={{ width: `${Math.round((i.subtaskDone / subs.length) * 100)}%` }} /></span>
-            {subHyg > 0 && <span className="badge-hyg" title="Sub-tasks, die Pflege brauchen">🧹 {subHyg}</span>}
+            {subHyg > 0 && <span className="badge-hyg">{brauchen(subHyg)}</span>}
           </button>
           {expanded && <ul className="sublist">{subs.map((s) => <SubRow key={s.key} s={s} onOpen={onOpen} />)}</ul>}
         </div>
@@ -282,6 +297,45 @@ function EditFields({ i, onDone }: { i: any; onDone: () => void }) {
   );
 }
 
+/** Filter „Braucht Pflege“: was fehlt, nach Art gezählt — über die sichtbaren Karten und Sub-tasks. */
+function PflegeSumme({ lanes }: { lanes: any[] }) {
+  const items = lanes.flatMap((l) => Object.values(l.columns).flat().flatMap((c: any) => [c, ...(c.subtasks ?? [])])).filter((x: any) => x.hygiene?.length);
+  const befunde: Befund[] = items.flatMap((x: any) => x.hygiene);
+  if (!items.length) return null;
+  return (
+    <div className="card soft small" style={{ marginBottom: 10 }} data-testid="pflege-summe">
+      <b>Was fehlt:</b> {items.length} {items.length === 1 ? 'Ticket' : 'Tickets'} · {befunde.length} {befunde.length === 1 ? 'Befund' : 'Befunde'} — {zusammenfassung(befunde)}.{' '}
+      <span className="muted">Karte öffnen: oben steht, was zu tun ist.</span>
+      <PflegeGlossar />
+    </div>
+  );
+}
+
+// Wohin „Datum setzen“ & Co. im Detail springen; fehlt das Feld noch (lädt), dann zu „Aktionen“.
+const ZIEL: Record<Exclude<Act, 'jira'>, string> = { due: '#due', owner: '[aria-label="Owner"]', goal: '[aria-label="Ziel zuordnen"]', status: '[data-testid="status-row"]', comment: '[aria-label="Kommentar"]' };
+function springe(act: Exclude<Act, 'jira'>) {
+  const el = (document.querySelector(`.drawer ${ZIEL[act]}`) ?? document.querySelector('.drawer #aktionen')) as HTMLElement | null;
+  el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  el?.focus?.({ preventScroll: true });
+}
+
+/** Ticket-Detail: was fehlt und was zu tun ist. Die Knöpfe springen nur zum Feld — geschrieben wird dort, mit Bestätigung. */
+function WasFehlt({ hyg, href }: { hyg: Befund[]; href: string }) {
+  if (!hyg.length) return null;
+  return (
+    <div className="card soft pflege-box" style={{ marginTop: 8 }} data-testid="was-fehlt">
+      <b className="small">Was fehlt</b>
+      <ul className="small" style={{ margin: '4px 0 0', paddingLeft: 18 }}>{hyg.map((b) => { const t = PFLEGE[b.rule]; return (
+        <li key={b.rule} style={{ marginBottom: 4 }}><span className={`chip ${b.rule === 'überfällig' ? 'bad' : 'warn'}`}>{befundText(b)}</span> {t?.tun}{' '}
+          {t && (t.act === 'jira'
+            ? <a className="btn small" href={href} target="_blank" rel="noreferrer">{t.knopf} ↗</a>
+            : <button className="btn small" onClick={() => springe(t.act as Exclude<Act, 'jira'>)}>{t.knopf}</button>)}
+        </li>); })}</ul>
+      <PflegeGlossar />
+    </div>
+  );
+}
+
 export function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: string; onClose: () => void; onChanged: () => void; site: string; forge?: boolean; onOpenKey: (k: string) => void }) {
   const d = useLoad(() => api('/api/board/issue/' + k), [k]);
   // Jira-Änderung an genau diesem Ticket (z. B. aus einem Chat) → Details still nachladen.
@@ -317,6 +371,7 @@ export function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: s
           </div>
           {(d.data as any).parent && <p className="small">Übergeordnet: <b>{(d.data as any).parent.key}</b> {(d.data as any).parent.summary}</p>}
           <div className="row small"><Since i={i} /><Blocked i={i} /></div>
+          <WasFehlt hyg={(d.data as any).hygiene ?? []} href={`${site}/browse/${k}`} />
           {i.links?.length > 0 && <ul className="small" data-testid="detail-links">{i.links.map((l: any) => <li key={l.type + l.key}>{l.label} <button className="sublink" onClick={() => onOpenKey(l.key)}><b>{l.key}</b></button> {l.summary} {l.status && <span className={`chip tiny-chip ${l.done ? 'ok' : l.blocks === 'blocked-by' ? 'bad' : ''}`}>{l.status}</span>}</li>)}</ul>}
           {i.description && <div className="card soft small" style={{ whiteSpace: 'pre-wrap' }}>{i.description}</div>}
           {i.lastComment && <p className="small"><b>Letzter Kommentar</b> ({i.lastComment.author}, {fmtDate(i.lastComment.created)}): {i.lastComment.text}</p>}
@@ -333,12 +388,12 @@ export function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: s
           }}>💬 Im Chat besprechen</button></div>
           <Err e={err} />
 
-          <h3>Aktionen <span className="tiny">(je mit Bestätigung — geschrieben über den Atlassian-MCP, schneller Weg ohne Modell)</span></h3>
+          <h3 id="aktionen">Aktionen <span className="tiny">(je mit Bestätigung — geschrieben über den Atlassian-MCP, schneller Weg ohne Modell)</span></h3>
           <div className="col">
             <textarea rows={3} placeholder="Kommentar …" value={comment} onChange={(e) => setComment(e.target.value)} aria-label="Kommentar" />
             <div><button className="btn" disabled={!comment.trim()} onClick={async () => { if (await write('comment', { text: comment }, `Kommentar an ${k}?`, <pre style={{ whiteSpace: 'pre-wrap' }}>{comment}</pre>)) setComment(''); }}>Kommentar senden</button></div>
           </div>
-          <div className="row" style={{ marginTop: 10 }}>
+          <div className="row" style={{ marginTop: 10 }} data-testid="status-row" tabIndex={-1}>
             <label>Status</label>
             {trans === null
               ? <button className="btn small" onClick={async () => { try { setTrans(((await api(`/api/board/issue/${k}/transitions`)) as any).transitions); } catch (e) { setErr(e); } }}>Übergänge laden</button>
@@ -513,11 +568,11 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
           try { const r: any = await api('/api/board/sync', { body: { force: true, confirm: true } }); toast(`${r.count} Tickets, ${r.removed} entfernt`); await b.reload(); } catch (e) { setErr(e); } finally { setSyncing(false); }
         }}>Trotzdem abgleichen …</button>}</div>}
       <Err e={err} />
-      <HygienePanel onChange={() => b.reload()} />
+      <BeiMirLink what="Pflegepunkte deiner Tickets, Rückfragen und Reviews" />
       <div className="board-bar">
         <select value={owner} onChange={(e) => setOwner(e.target.value)} aria-label="Owner">
           <option value="">Alle Owner</option>
-          {data?.owners.map((o: string) => <option key={o} value={o}>{o}{data.hygiene.perOwner[o] ? ` · 🧹 ${data.hygiene.perOwner[o]}` : ''}</option>)}
+          {data?.owners.map((o: string) => <option key={o} value={o}>{o}{data.hygiene.perOwner[o] ? ` · ${data.hygiene.perOwner[o]} Pflege` : ''}</option>)}
         </select>
         <div className="row" role="group" aria-label="Filter">
           {[['', 'Alle'], ['overdue', `Überfällig${data ? ` (${data.totals.overdue})` : ''}`], ['undated', `Ohne Datum${data ? ` (${data.totals.undated})` : ''}`], ['pflege', `Braucht Pflege${data ? ` (${data.hygiene.total})` : ''}`], ['ohneziel', `Ohne Ziel${data ? ` (${data.totals.noGoal})` : ''}`]].map(([v, l]) => (
@@ -532,13 +587,14 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
         {data && <span className="tiny">{data.totals.cards} Karten · {data.totals.subtasks} Sub-tasks{data.totals.broken ? <> · <span className="chip bad">⚠ {data.totals.broken} kaputt</span></> : null}{data.totals.orphans ? <> · <span className="chip bad" title="Tickets ohne Parent (kein Workstream)">⚠ {data.totals.orphans} ohne Parent</span></> : null}</span>}
       </div>
       {b.error && <Err e={b.error} />}
+      {data && filter === 'pflege' && <PflegeSumme lanes={data.lanes} />}
       {!data ? <Loading /> : data.lanes.length === 0 ? (
-        <div className="card soft"><p>Keine Tickets in der Kopie{filter || owner || q ? ' für diesen Filter' : ''}.</p>{!data.sync && <p className="small">Noch nie synchronisiert — oben auf „Jetzt synchronisieren“ klicken (braucht deinen Jira-Zugang aus der Einrichtung).</p>}</div>
+        <div className="card soft"><p>Keine Tickets in der Kopie{filter || owner || q ? ' für diesen Filter' : ''}.</p>{!data.sync && <p className="small">Noch nie synchronisiert — oben auf „Jetzt synchronisieren“ klicken (braucht deinen Jira-Zugang aus der <a href="#/einrichtung">Werkbank-Einrichtung</a>).</p>}</div>
       ) : data.lanes.map((lane: any) => (
         <section className="lane" key={lane.key}>
           <h3 className="lane-head">
             {lane.workstream ? <button className="sublink" onClick={() => setOpen(lane.key)} title="Workstream öffnen"><b>{lane.name}</b></button> : lane.name} <span className="chip">{lane.count}</span>
-            {lane.hygiene > 0 && <span className="badge-hyg" title="Karten, die Pflege brauchen">🧹 {lane.hygiene}</span>}
+            {lane.hygiene > 0 && <span className="badge-hyg">{brauchen(lane.hygiene)}</span>}
             {lane.head && <>
               <span className="tiny">{lane.key}</span>
               <StateChip state={lane.head.status} />

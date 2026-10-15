@@ -44,10 +44,9 @@ next_steps() {
   cat <<EOT
 
 Nächste Schritte
-  1. Werkbank öffnen:  ${WERKBANK_PUBLIC_URL:-http://127.0.0.1:3070}
-     Chat (LibreChat): ${LIBRECHAT_PUBLIC_URL:-http://127.0.0.1:3080}
-  2. Konto anlegen (im Chat „Registrieren“, nur @maxenergy.at / @konekto.energy), in der Werkbank anmelden.
-  3. „Einrichtung“: eigenes Claude verbinden (Terminal: claude setup-token → Token einfügen),
+  1. Werkbank öffnen:  ${LIBRECHAT_PUBLIC_URL:-http://127.0.0.1:3080}/wb/heute   (Chat und Werkbank-Seiten in einem)
+  2. Konto anlegen („Registrieren“, nur @maxenergy.at / @konekto.energy) und anmelden.
+  3. Kontomenü (unten links) → „Werkbank-Einrichtung“: eigenes Claude verbinden (Terminal: claude setup-token → Token einfügen),
      eigenes Jira verbinden (Atlassian-API-Token).
   4. Freigabe im Pilot: nur ${WERKBANK_ALLOWED_EMAILS:-${BRIDGE_ALLOWED_EMAILS:-knut.peters@maxenergy.at}}
      (weitere: BRIDGE_ALLOWED_EMAILS=a@…,b@… scripts/werkbank.sh restart).
@@ -69,7 +68,7 @@ doctor() {
   echo "Geheimnisse (.env.local, nur Namen)"
   if [ -f "$WB/.env.local" ]; then
     perm=$(stat -c %a "$WB/.env.local"); [ "$perm" = 600 ] && ok ".env.local (600)" || warn ".env.local hat Rechte $perm (erwartet 600)"
-    for k in CREDS_KEY CREDS_IV JWT_SECRET JWT_REFRESH_SECRET MEILI_MASTER_KEY WERKBANK_CREDS_KEY WERKBANK_INTERNAL_TOKEN; do grep -q "^$k=" "$WB/.env.local" && ok "$k gesetzt" || bad "$k fehlt"; done
+    for k in CREDS_KEY CREDS_IV JWT_SECRET JWT_REFRESH_SECRET MEILI_MASTER_KEY WERKBANK_CREDS_KEY WERKBANK_INTERNAL_TOKEN WERKBANK_BACKUP_KEY; do grep -q "^$k=" "$WB/.env.local" && ok "$k gesetzt" || bad "$k fehlt"; done
     git -C "$WB" check-ignore -q .env.local && ok ".env.local ist gitignored" || bad ".env.local ist NICHT gitignored"
   else bad ".env.local fehlt"; fi
   echo "URLs"
@@ -120,7 +119,13 @@ case "${1:-}" in
       done
     else node "$WB/web/server/skills-cli.ts" "$@"; fi ;;
   test)
-    (cd "$WB/claude-bridge" && npm test 2>&1 | grep -E '^# (pass|fail)') && (cd "$WB/web" && npm test 2>&1 | grep -E '^# (pass|fail)') ;;
+    # Eigene Wegwerf-Mongo (nie die Live-Instanz auf :27017), Ports der Testserver neben der Live-Instanz.
+    TM=$(mktemp -d); TP=${WERKBANK_TEST_MONGO_PORT:-27999}
+    "$RT/bin/mongod" --dbpath "$TM" --bind_ip 127.0.0.1 --port "$TP" --quiet --wiredTigerCacheSizeGB 0.25 > "$TM.log" 2>&1 &
+    MP=$!; for _ in $(seq 1 60); do (echo > "/dev/tcp/127.0.0.1/$TP") 2>/dev/null && break; sleep 0.5; done
+    (cd "$WB/claude-bridge" && npm test 2>&1 | grep -E '^# (pass|fail)') && (cd "$WB/web" && MONGO_URI_WERKBANK="mongodb://127.0.0.1:$TP" \
+      WERKBANK_TEST_PORT=${WERKBANK_TEST_PORT:-3571} WERKBANK_TEST_BRIDGE_PORT=${WERKBANK_TEST_BRIDGE_PORT:-3596} npm test 2>&1 | grep -E '^# (pass|fail|skipped)'); rc=$?
+    kill "$MP" 2>/dev/null; wait "$MP" 2>/dev/null; rm -rf "$TM" "$TM.log"; exit $rc ;;
   e2e) (cd "$WB/web" && node e2e/smoke.mjs) ;;
   stream-timing) (cd "$WB/web" && node e2e/stream-timing.mjs) ;;
   init-timing) (cd "$WB/claude-bridge" && node src/init-timing.ts "${2:-3}") ;;

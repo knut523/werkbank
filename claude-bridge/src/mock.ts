@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { VAULT_DIR } from './tools.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const alwaysLimit = new Set<string>();   // Sitzungen mit „maxturns-immer“
 
 export function mockQuery({ prompt, options }: { prompt: string; options: Record<string, any> }) {
   if (typeof prompt !== 'string') {
@@ -70,6 +71,12 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       const { join } = await import('node:path');
       const inp: any = ok.updatedInput;
       appendFileSync(join(process.env.BRIDGE_STATE_DIR ?? '.', 'mock-mcp-calls.jsonl'), JSON.stringify({ tool, input: inp }) + '\n');
+      if (tool.endsWith('createJiraIssue')) {
+        // Anlegen gegen den Jira-Nachbau; die Antwort trägt den Schlüssel wie der echte MCP (JSON mit id/key/self).
+        const created = await replayCreate(inp);
+        yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: !created.ok, content: [{ type: 'text', text: created.text }] }] } };
+        return;
+      }
       const err = await replayJira(tool, inp);
       if (err) { yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: err }] } }; return; }
       yield { type: 'user', session_id, message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: 'OK (Mock)' }] }] } };
@@ -163,6 +170,30 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 300, output_tokens: 90 } };
       return;
     }
+    // „mock-antwort <Text>“: genau dieser Text als Antwort (\n = Zeilenumbruch), z. B. für Status-Marken der Orchestrator-Stränge.
+    const ma = last.match(/^mock-antwort (.+)$/);
+    if (ma) {
+      yield text(ma[1].replaceAll('\\n', '\n'));
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
+    if (last === 'mock-optionen') {
+      // Für Tests: womit die Sitzung gestartet wurde (ohne Geheimnisse).
+      const append = String(options.systemPrompt?.append ?? '');
+      yield text('OPTIONEN ' + JSON.stringify({ maxTurns: options.maxTurns, disallowed: options.disallowedTools, mcp: Object.keys(options.mcpServers ?? {}).sort(),
+        leitstand: append.includes('Dieser Chat ist der LEITSTAND'), strang: append.includes('Orchestrator-Strang'), werkbankLeit: options.mcpServers?.werkbank?.env?.WERKBANK_LEITSTAND ?? null,
+        gitConfig: !!options.env?.GIT_CONFIG_GLOBAL }));
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
+    if (last === 'mock-verdichten') {
+      // Verdichtung des Kontexts wie das echte CLI (Plan 132): status compacting → compact_boundary → Antwort.
+      yield { type: 'system', subtype: 'status', status: 'compacting', session_id };
+      yield { type: 'system', subtype: 'compact_boundary', session_id, compact_metadata: { trigger: 'auto', pre_tokens: 900000, post_tokens: 20000 } };
+      yield text('(Mock) Verdichtet.');
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
+      return;
+    }
     const slow = last.match(/^langsam (\d+)$/);
     if (slow) {
       // Ein langer Zug (Sperre je Person, E5): wartet N ms, dann eine Zeile.
@@ -222,6 +253,12 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
     }
     yield toolUse('Grep', { pattern: last.slice(0, 40), path: VAULT_DIR });
     await sleep(50);
+    // Rundenende für die Review-Schlange: Schrittlimit bzw. Absturz der Sitzung.
+    // „maxturns-immer“: diese Sitzung endet ab jetzt jeden Zug am Schrittlimit (Deckel der automatischen Fortsetzung).
+    if (/maxturns-immer/i.test(last)) alwaysLimit.add(session_id);
+    if (alwaysLimit.has(session_id)) { yield text('(Mock) Immer noch viel zu tun. '); yield { type: 'result', subtype: 'error_max_turns', session_id, is_error: true, usage: { input_tokens: 1, output_tokens: 1 } }; return; }
+    if (/maxturns-test/i.test(last)) { yield text('(Mock) Viel zu tun. '); yield { type: 'result', subtype: 'error_max_turns', session_id, is_error: true, usage: { input_tokens: 1, output_tokens: 1 } }; return; }
+    if (/absturz-test/i.test(last)) throw new Error('Mock: Sitzung abgestürzt');
     const words = `(Mock, kein Claude-Aufruf${options.resume ? ', Sitzung fortgesetzt' : ''}) Du hast geschrieben: ${last}`.split(/(?<= )/);
     for (const w of words) {
       if (signal?.aborted) throw new Error('aborted');
@@ -243,6 +280,16 @@ export function mockQuery({ prompt, options }: { prompt: string; options: Record
 /** MCP-Server, wie Claude Code sie in der Init-Nachricht meldet — nur die übergebenen (strictMcpConfig). */
 function mcpList(options: Record<string, any>) {
   return Object.keys(options.mcpServers ?? {}).map((name) => ({ name, status: name === 'atlassian' ? process.env.BRIDGE_MOCK_ATLASSIAN || 'connected' : 'connected' }));
+}
+
+/** createJiraIssue gegen den Jira-Nachbau (POST /issue). Ohne Nachbau: fester Schlüssel PM-9000. */
+async function replayCreate(inp: any): Promise<{ ok: boolean; text: string }> {
+  const base = process.env.BRIDGE_MOCK_JIRA_BASE;
+  if (!base) return { ok: true, text: JSON.stringify({ id: '9000', key: 'PM-9000', self: 'mock' }) };
+  const fields: any = { project: { key: inp.projectKey }, issuetype: { name: inp.issueTypeName }, summary: inp.summary, description: inp.description, ...(inp.parent ? { parent: { key: inp.parent } } : {}), ...(inp.assignee_account_id ? { assignee: { accountId: inp.assignee_account_id } } : {}), ...(inp.additional_fields ?? {}) };
+  const r = await fetch(base + '/issue', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Basic ' + Buffer.from('mcp:mock').toString('base64') }, body: JSON.stringify({ fields }) });
+  const text = await r.text();
+  return r.ok ? { ok: true, text } : { ok: false, text: `Jira ${r.status}: ${text.slice(0, 200)}` };
 }
 
 /** Mit BRIDGE_MOCK_JIRA_BASE spielt der Mock den Atlassian-MCP gegen einen Jira-Nachbau (REST) nach. Fehlertext oder ''. */

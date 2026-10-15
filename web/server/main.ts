@@ -6,39 +6,54 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch } from 'node:fs';
-import { join, extname, resolve, normalize } from 'node:path';
+import { join, extname, resolve, normalize, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import YAML from 'yaml';
 import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl } from './config.ts';
-import { connect, wb } from './db.ts';
+import { connect, wb, lc } from './db.ts';
 import { librechatLogin, createSession, destroySession, currentUser, allowed, teammates, userById, type User } from './auth.ts';
 import { listClaudeAccounts, addClaudeAccount, removeClaudeAccount, reorderClaudeAccounts, claudeAccountToken, claudeAccountsForBridge } from './creds.ts';
 import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraIdentity, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
-import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns } from './agent.ts';
+import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
+import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos } from './orchestrator.ts';
+import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards } from './leitstand.ts';
+import { readBericht } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
-import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles } from './sprint.ts';
+import { ARTEN, folders, schemaName, ortAus, vorschlagAusPfad, isEingang } from './ablage.ts';
+import { ablageOwner, syncAblage, lastSyncAt } from './ablagesync.ts';
+import { listPakete, paketFile, renderPaketMd, strandFor, BILD_MIME } from './reviewpakete.ts';
+import { FEATURES, featuresFor, blockedFeature } from './features.ts';
+import { memoryWarning } from './memory.ts';
+import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
+import { keep as keepScratch, runScratch } from './scratch.ts';
+import { backupRunning, listBackups, nightly, writeBackup, keyOf } from './backup.ts';
+import { listCycles, parseQuestions, parseGoal, parseOutcomes, applyAnswer, hashText, newCycleFiles, parsePackages, reviewDraftVars, carryList, currentCycle, isDone, syncPlanRows, isNoop, realOutcomes, viennaToday } from './sprint.ts';
 import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
-import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog } from './sharing.ts';
+import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog, logShare, scratchDir } from './sharing.ts';
 import { log } from './log.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
-import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, type JiraAction } from './jirawrite.ts';
+import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, type JiraAction } from './jirawrite.ts';
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
-import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira } from './local.ts';
+import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
 import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './timebox.ts';
 import { isMine, resolveIdentity, vienna } from './hygiene.ts';
 import { ObjectId } from 'mongodb';
 import { suggestTickets, addJiraFrontmatter } from './links.ts';
+import { ansetzenMode, specGate, sprintEnd, ticketDraft, localDuplicates, dupJql, simJira, liveJira, runAnsetzen, specTicketState, specSlug, view as ansetzenView, draftHashOf, addSimField, DEFAULT_WORKSTREAM, type AnsetzenJira, type Dup } from './ansetzen.ts';
+import { collectDecisions, todayQuestions, todayPayload } from './fragen.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
-import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, type GoalNode } from './goals.ts';
+import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, rule1Goals, specProposals, autoEligible, type GoalNode } from './goals.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -70,6 +85,9 @@ async function needUser(req: IncomingMessage): Promise<User> {
   const u = await currentUser(req);
   if (!u) throw new HttpError(401, 'Bitte anmelden.');
   if (isMutation(req) && req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Werkbank-Header.');
+  // Freigabe je Funktion fürs Team (features.ts): Admins alles, sonst WERKBANK_TEAM_FEATURES.
+  const f = blockedFeature(u, String(req.url ?? '').split('?')[0]);
+  if (f) throw new HttpError(403, `„${FEATURES.find((x) => x.id === f)!.label}“ ist für das Team noch nicht freigegeben.`);
   return u;
 }
 
@@ -162,6 +180,36 @@ function cycleById(id: string) {
   return c;
 }
 
+/** Vorzyklus = neuester Zyklus mit früherem Startdatum (auch archiviert). */
+function previousCycle(date: string) {
+  return cycles().filter((x) => x.date < date).sort((a, b) => b.date.localeCompare(a.date))[0];
+}
+
+/** Arbeitspakete der Review-Notiz mit Ticketstand aus der Kopie (Schritt 2: Updates je Paket). */
+function packagesOf(text: string, im: Map<string, Issue>) {
+  const today = viennaToday();
+  return parsePackages(text).map((p) => ({
+    ...p,
+    tickets: p.tickets.map((k) => {
+      const i = im.get(k);
+      return i ? { key: k, summary: i.summary, status: i.status, done: isDone(i), owner: (i.assignee ?? '').split(' ')[0] || null, overdue: !isDone(i) && !!i.duedate && i.duedate < today } : { key: k, missing: true };
+    }),
+  }));
+}
+
+/** Review-Entwurf + Vorlagen für einen Zyklus (Schritt 1). Schreibt nichts. */
+async function prepareCycle(date: string) {
+  const prev = previousCycle(date);
+  const im = await issueMap();
+  const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+  const rd = (f?: string) => (f ? readFileSync(f, 'utf8') : undefined);
+  const { vars, stats } = im.size
+    ? reviewDraftVars({ date, prevId: prev?.id, prevReview: rd(prev?.files.review), prevPlanning: rd(prev?.files.planning), issues: im, today: viennaToday(), syncedAt: sync?.at ? new Date(sync.at).toISOString() : null })
+    : { vars: {}, stats: null };
+  const files = newCycleFiles(TEMPLATES, date, prev?.id, vars);
+  return { prev, files, stats, empty: !im.size };
+}
+
 async function sprintView(id: string) {
   const c = cycleById(id);
   const im = await issueMap();
@@ -178,13 +226,18 @@ async function sprintView(id: string) {
     files[k] = {
       path: f.slice(cfg.vaultDir.length + 1), hash: hashText(text), title: fm.title ?? k, status: fm.status ?? null,
       goal: parseGoal(text), outcomes: parseOutcomes(text), questions: qs,
+      // Offene Notizen für den Write-back (wie jira-sync-plan.sh): Schritt 4/5 der Schrittleiste.
+      openNotes: syncPlanRows(qs).filter((r) => r.kind !== 'carry' && !isNoop(r.payload)).length,
+      ...(k === 'review' ? { packages: packagesOf(text, im) } : {}),
     };
   }
   const today = new Date().toISOString().slice(0, 10);
   const open = [...im.values()].filter((i) => i.type !== 'Workstream' && i.status !== 'Done');
   const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+  const prev = previousCycle(c.date);
   return {
-    cycle: { id: c.id, date: c.date, archived: c.archived },
+    cycle: { id: c.id, date: c.date, archived: c.archived, current: currentCycle(cycles())?.id === c.id },
+    previous: prev ? { id: prev.id, outcomes: prev.files.planning ? realOutcomes(parseOutcomes(readFileSync(prev.files.planning, 'utf8'))) : [], goal: prev.files.planning ? parseGoal(readFileSync(prev.files.planning, 'utf8')).goal ?? null : null } : null,
     ...goalsView(c, files, im),
     files,
     overdue: open.filter((i) => isOverdue(i, today)).sort((a, b) => a.duedate!.localeCompare(b.duedate!)),
@@ -251,7 +304,7 @@ function goalsView(c: { id: string; date: string }, files: Record<string, any>, 
 function goalsAll(im: Map<string, Issue>) {
   const text = readVault(GOALS_FILE());
   const parsed = text ? parseGoalsFile(text) : { goals: [], ratings: [] };
-  const cur = cycles().find((c) => !c.archived);
+  const cur = currentCycle(cycles());
   let sprintRows: ReturnType<typeof sprintGoalsFromOutcomes> = [];
   if (cur?.files.planning) { try { sprintRows = sprintGoalsFromOutcomes(parseOutcomes(readFileSync(cur.files.planning, 'utf8')), cur.date); } catch { /* ohne */ } }
   const t = goalTree([...parsed.goals, ...sprintRows], parsed.ratings, [...im.values()]);
@@ -298,7 +351,7 @@ on('GET', /^\/api\/config$/, async (req, res) => {
   send(res, 200, {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: !!process.env.WERKBANK_FORGE_MCP,
     jiraSite: cfg.jiraSite, project: cfg.jiraProject, vault: cfg.vaultDir,
-    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(),
+    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u),
   });
 });
 
@@ -490,7 +543,7 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
     if (running.get(r.key) !== 'wartet auf ja') running.set(r.key, r.status);
   }
   const annotated = all.map((i) => ({ ...i, hygiene: hyg.get(i.key) ?? [], agent: running.get(i.key) ?? null, goals: ownGoals(i) }));
-  const curCycle = cycles().find((c) => !c.archived);
+  const curCycle = currentCycle(cycles());
   const sprintOnly = url.searchParams.get('sprint') === '1' && curCycle ? new Set(all.filter((i) => inSprint(i, curCycle.date)).map((i) => i.key)) : undefined;
   const filter = url.searchParams.get('filter') || undefined;
   const issues = annotated;
@@ -539,7 +592,7 @@ on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => 
   const children = [...im.values()].filter((x) => x.parent === i.key).sort((a, b) => a.key.localeCompare(b.key, 'de', { numeric: true }))
     .map((x) => ({ key: x.key, summary: x.summary, status: x.status, statusCategory: x.statusCategory, assignee: x.assignee, duedate: x.duedate, overdue: isOverdue(x), hygiene: hygI.get(x.key) ?? [] }));
   send(res, 200, {
-    issue: i, url: browseUrl(i.key), children, runs,
+    issue: i, url: browseUrl(i.key), children, runs, hygiene: hygI.get(i.key) ?? [],
     parent: i.parent ? { key: i.parent, summary: im.get(i.parent)?.summary ?? i.parentSummary } : null,
     docs: await ticketDocs(u, i.key),
     chatUrl: chatUrl(`${ticketPrompt(i)}\n\nLass uns an diesem Ticket arbeiten. Lies zuerst, was Vault und Jira dazu sagen.`),
@@ -658,6 +711,25 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/edit$/, async (req, res,
   send(res, 200, { ok: true, preview, done: [...(w?.done ?? []), ...done], dryRun: w?.dryRun ?? false, calls: w?.calls, issue: (await issueMap()).get(i.key) ?? null });
 });
 
+/**
+ * Agent als echter Chat auf einem Ticket — derselbe Weg für „Agent“ am Board, `agent_start` aus dem Chat
+ * (Tagesabschluss) und „Agent ansetzen“ an einer Spec. Plan 81 (Schnitte 6/7): das Ticket bekommt sein Projekt
+ * (zuordnen vor anlegen), der Agent den Bereich seines Workstreams im Vault für Plan und Notizen.
+ */
+async function startTicketAgent(u: User, i: Issue, note: string, place: { specPath?: string | null } = {}) {
+  // Erst prüfen, ob schon ein Agent der Person auf der Karte arbeitet — sonst entstünde für einen abgelehnten Start
+  // ein Projekt und ein Vault-Eintrag (Review).
+  if (await wb().collection('agent_runs').findOne({ key: i.key, userId: u.id, mode: 'chat', status: { $in: ['läuft', 'wartet auf ja'] } })) {
+    throw new HttpError(409, 'Auf diesem Ticket arbeitet schon ein Agent von dir — im Chat weitermachen.');
+  }
+  const im = await issueMap();
+  const project = await assignProject(u, i).catch((e) => { log('projekt fehlgeschlagen', { key: i.key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
+  const ws = i.workstream ? im.get(i.workstream) : undefined;
+  const areaDir = ws ? workstreamArea(ws)?.dir ?? null : null;
+  if (ws) syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 120) }));
+  return startChatAgent(u, i, note, 'work', { projectName: project?.name ?? null, areaDir, projectId: project?._id ?? null, personName: u.name, ...place });
+}
+
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res, m) => {
   const u = await needUser(req);
   if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
@@ -671,17 +743,7 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res
   // Plan 81 (Schnitte 6/7): das Ticket bekommt sein Projekt (zuordnen vor anlegen), der Agent den Bereich seines
   // Workstreams im Vault für Plan und Notizen. Die Übersicht des Bereichs wird danach nachgezogen.
   if (b.mode !== 'draft') {
-    // Erst prüfen, ob schon ein Agent der Person auf der Karte arbeitet — sonst entstünde für einen abgelehnten Start
-    // ein Projekt und ein Vault-Eintrag (Review).
-    if (await wb().collection('agent_runs').findOne({ key: i.key, userId: u.id, mode: 'chat', status: { $in: ['läuft', 'wartet auf ja'] } })) {
-      throw new HttpError(409, 'Auf diesem Ticket arbeitet schon ein Agent von dir — im Chat weitermachen.');
-    }
-    const im = await issueMap();
-    const project = await assignProject(u, i).catch((e) => { log('projekt fehlgeschlagen', { key: i.key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
-    const ws = i.workstream ? im.get(i.workstream) : undefined;
-    const areaDir = ws ? workstreamArea(ws)?.dir ?? null : null;
-    if (ws) syncWorkstreamOverview(ws, im).catch((e) => log('workstream-übersicht fehlgeschlagen', { ws: ws.key, error: String(e?.message ?? e).slice(0, 120) }));
-    const r = await startChatAgent(u, i, String(b.note ?? '').slice(0, 2000), 'work', { projectName: project?.name ?? null, areaDir, projectId: project?._id ?? null, personName: u.name });
+    const r = await startTicketAgent(u, i, String(b.note ?? '').slice(0, 2000));
     log('agent chat', { user: u.id, key: i.key, conv: r.conv });
     return send(res, 200, { ...r, mode: 'chat' });
   }
@@ -844,13 +906,22 @@ function roadmapSpecs(local?: Map<string, { ziel: string | null }>) {
   return out;
 }
 
-on('GET', /^\/api\/roadmap$/, async (req, res) => {
+// „Wartet auf dich“ (Heute): nur heute offene Vault-Fragen, jede einmal; überholte zum Aufräumen
+// (docs/plan-heute-fragen-aktuell.md). Eigener Endpunkt, damit Heute nicht die ganze Roadmap samt GitHub lädt.
+on('GET', /^\/api\/roadmap\/heute$/, async (req, res) => {
   await needUser(req);
+  const idx = vaultIdx();
+  const { decisions, texts } = collectDecisions(idx, readVault, ROADMAP_BASE);
+  send(res, 200, todayPayload(todayQuestions(decisions, { texts, fm: (p) => idx.notes.get(p)?.fm, today: vienna().date })));
+});
+
+on('GET', /^\/api\/roadmap$/, async (req, res) => {
+  const u = await needUser(req);
   const idx = vaultIdx();
   const im = await issueMap();
   const rm = roadmap(idx, ROADMAP_BASE);
   const byName = new Map<string, any>();
-  const decisions: any[] = [];
+  const { decisions } = collectDecisions(idx, readVault, ROADMAP_BASE);
   const specPrs = new Map<string, string[]>();
   for (const t of rm.topics) {
     for (const [state, specs] of Object.entries(t.states)) {
@@ -860,17 +931,11 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
         const prs = prRefs(text);
         const n = idx.notes.get(sp.path)!;
         const tickets = n.tickets.map((k) => ({ key: k, status: im.get(k)?.status ?? null, summary: im.get(k)?.summary ?? null }));
-        const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text), jiraKey: n.fm.jira != null && String(n.fm.jira).trim() !== '' && String(n.fm.jira) !== '[]' };
+        const info = { path: sp.path, name: n.name, title: sp.title, topic: t.name, state, status: sp.status ?? null, open: ds.filter((d) => d.open).length, prs, tickets, hash: hashText(text), verified: n.fm['last-verified'] ? String(n.fm['last-verified']).slice(0, 10) : null, jiraKey: n.fm.jira != null && String(n.fm.jira).trim() !== '' && String(n.fm.jira) !== '[]' };
         byName.set(n.name, info);
         for (const pr of prs) specPrs.set(pr, [...(specPrs.get(pr) ?? []), n.name]);
-        for (const d of ds) if (d.open) decisions.push({ ...d, path: sp.path, spec: n.name, title: sp.title, topic: t.name, state, hash: info.hash });
       }
     }
-  }
-  // Übersichtsseiten und Register haben auch „- Knut:“-Zeilen.
-  for (const o of [...rm.overview, ...rm.topics.filter((t) => t.overview).map((t) => ({ path: t.overview!, title: idx.notes.get(t.overview!)?.title ?? t.overview! }))]) {
-    const text = readVault(o.path);
-    for (const d of parseDecisions(text)) if (d.open) decisions.push({ ...d, path: o.path, spec: idx.notes.get(o.path)?.name, title: o.title, topic: o.path.includes('/0-Overview/') ? 'Übersicht' : o.path.split('/').at(-2), state: 'Übersicht', hash: hashText(text) });
   }
   const prio = readVault(`${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`);
   const reasons = parseReasons(prio);
@@ -907,12 +972,16 @@ on('GET', /^\/api\/roadmap$/, async (req, res) => {
   }).sort((a, b) => (a.live ? 0 : 1) - (b.live ? 0 : 1) || a.pr.localeCompare(b.pr, 'de', { numeric: true }));
   const github = { at: gh.sync?.at ?? null, error: gh.sync?.error ?? null, count: gh.map.size, org: GH_ORG };
   // Thema → Rang, Swimlanes, „Als Nächstes“ (Sprint-Zuordnung über Ticket-Labels), Konsistenz Spec ↔ Ticket.
-  const cur = cycles().find((c) => !c.archived);
+  const cur = currentCycle(cycles());
   const sprintTickets = new Set(cur ? [...im.values()].filter((i) => inSprint(i, cur.date)).map((i) => i.key) : []);
   const livePr = (pr: string) => { const l = gh.map.get(pr); return l ? { pr, conflict: l.mergeable === 'CONFLICTING', draft: l.isDraft, review: l.reviewDecision, turn: l.turn.who } : { pr, closed: ghOk }; };
   const specList = [...byName.values()].map((x) => ({ ...x, prLive: x.prs.map(livePr) }));
   const insights = roadmapInsights(specList, ranking, { sprintTickets });
+  // Laufende Agenten je Ticket (Überblick: „In Arbeit“).
+  const agents: Record<string, string> = {};
+  for (const r of await wb().collection('agent_runs').find({ status: { $in: ['läuft', 'wartet auf ja'] } }, { projection: { key: 1, status: 1 } }).toArray() as any[]) if (r.key && agents[r.key] !== 'wartet auf ja') agents[r.key] = r.status;
   send(res, 200, {
+    agents, admin: u.role === 'ADMIN',
     ...insights, kanbanStates: KANBAN_STATES, sprint: cur ? { id: cur.id, date: cur.date, tickets: sprintTickets.size } : null,
     base: ROADMAP_BASE, states: rm.states, overview: rm.overview,
     topics: rm.topics.map((t) => ({ name: t.name, overview: t.overview, states: Object.fromEntries(Object.entries(t.states).map(([st, specs]) => [st, specs.map((sp) => byName.get(idx.notes.get(sp.path)!.name))])) })),
@@ -990,8 +1059,8 @@ async function tryStartSync(): Promise<boolean> {
   return ok;
 }
 
-on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
-  const u = await needUser(req);
+/** „Wartet auf dich“ (früher „Für mich offen“ auf der Roadmap, jetzt auf „Heute“): PRs, Sync-Fragen, Entwurf, Tickets. */
+async function mineFor(u: User, { write = true } = {}) {
   const me = firstName(u).toLowerCase();
   const prs = ((await wb().collection('github_prs').find({}, { projection: { _id: 0 } }).toArray()) as any[])
     .filter((p) => String(p.turn?.who ?? '').toLowerCase().split(/,\s*/).includes(me))
@@ -1005,7 +1074,7 @@ on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
   const admin = u.role === 'ADMIN';
   let questions: any[] = [], draft: any = null, section: string | null = null, pendingApprovals: any[] = [];
   if (admin) {
-    writeApprovals().catch((e) => log('roadmap-freigaben', { error: String(e?.message ?? e).slice(0, 160) }));   // nicht warten: GET bleibt lesend schnell
+    if (write) writeApprovals().catch((e) => log('roadmap-freigaben', { error: String(e?.message ?? e).slice(0, 160) }));   // nicht warten: GET bleibt lesend schnell
     const protocol = readVault(SYNC_PROTOCOL);
     const qs = parseSyncQuestions(protocol);
     section = qs[0]?.section ?? null;
@@ -1028,7 +1097,199 @@ on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => {
       if (st?.hash !== hash) draft = { hash, body: draftBody(text), path: WORK_DRAFT, hubHasMarkers: replaceWorkBlock(readVault(HUB), 'x') !== null };
     }
   }
-  send(res, 200, { me: firstName(u), admin, prs, tickets, questions, pendingApprovals, section, draft, autosync: roadmapAutosync(), queued: [...roadmapQueue.pending], syncRunning: syncLocked() });
+  return { me: firstName(u), admin, prs, tickets, questions, pendingApprovals, section, draft, autosync: roadmapAutosync(), queued: [...roadmapQueue.pending], syncRunning: syncLocked() };
+}
+
+on('GET', /^\/api\/roadmap\/mine$/, async (req, res) => send(res, 200, await mineFor(await needUser(req))));
+
+// --- „Heute“ und Review-Schlange (docs/plan-heute-review-schlange.md) ---
+
+// Brücke höchstens alle 30 s je Person fragen (K8): Zähler und Seite dürfen oft laden.
+const runsRefreshedAt = new Map<string, number>();
+async function refreshMine(u: User, force = false) {
+  if (!force && Date.now() - (runsRefreshedAt.get(u.id) ?? 0) < 30_000) return;
+  runsRefreshedAt.set(u.id, Date.now());
+  await refreshChatRuns({ userId: u.id }).catch((e) => log('läufe nachziehen', { error: String(e?.message ?? e).slice(0, 120) }));
+}
+
+async function myQueue(u: User) {
+  await refreshMine(u);
+  const runs = await wb().collection('agent_runs').find({ userId: u.id, mode: 'chat', startedAt: { $gte: new Date(Date.now() - 30 * 864e5) } }).sort({ startedAt: -1 }).limit(200).toArray();
+  const im = await issueMap();
+  const vaultPrefix = cfg.vaultDir + '/';
+  return reviewQueue(runs).map(({ r, bucket }) => ({
+    id: String(r._id), key: r.key, summary: im.get(r.key)?.summary ?? null, bucket, url: r.url ?? null,
+    review: markValid(r) ? r.review ?? null : null, reviewReadyAt: markValid(r) ? r.reviewReadyAt : null,
+    question: r.status === 'wartet auf ja' ? r.question ?? null : null,
+    end: r.endReason ?? null, endText: r.endReason ? END_TEXT[r.endReason] ?? r.endReason : null,
+    startedAt: r.startedAt, endedAt: r.endedAt ?? null, rework: r.rework ?? null, commentedAt: r.commentedAt ?? null,
+    // Geschriebene Dateien: Vault-Notizen als Pfad im Vault (Link ins Wissen), sonst nur der Dateiname.
+    written: (r.written ?? []).slice(-8).map((f: string) => f.startsWith(vaultPrefix) ? { vault: f.slice(vaultPrefix.length) } : { name: f.split('/').pop() }),
+  }));
+}
+
+/** Zähler für die Navigation: alles, was etwas von der Person will (laufende Agenten nicht). */
+async function todayCount(u: User, queue?: any[], mine?: any, cards?: any[]) {
+  const q = queue ?? await myQueue(u);
+  const m = mine ?? await mineFor(u, { write: false });   // Zähler (alle 60 s): nur lesen, nie freigaben.md schreiben
+  const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
+  const hyg = h.items.filter((i: any) => !h.snoozed.includes(i.key)).length;
+  const orch = (await listQuestions(u, { open: true }).catch(() => [])).length;   // Rückfragen des Orchestrators
+  const strands = (cards ?? await strandCards(u).catch(() => [])).filter((c: any) => !c.running).length;   // fertige Stränge (nur Admins, nur Mongo — Teil B, F1)
+  return strands + q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + (m.pendingApprovals?.length ?? 0) + (m.draft ? 1 : 0) + hyg + orch;
+}
+
+const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+on('GET', /^\/api\/today$/, async (req, res) => {
+  const u = await needUser(req);
+  const [queue, mine] = await Promise.all([myQueue(u), mineFor(u)]);
+  const today = vienna().date;
+  const im = await issueMap();
+  const day = ((await tbCol().find({ userId: u.id, date: today }).sort({ start: 1 }).toArray()) as any[])
+    .map((b) => ({ id: String(b._id), start: hhmm(b.start), end: hhmm(b.start + b.dur), title: b.title ?? null, key: b.key ?? null, summary: b.key ? im.get(b.key)?.summary ?? null : null, done: b.state === 'erledigt' }));
+  const orchOpen = (await listQuestions(u, { open: true }).catch(() => [])).length;
+  // Automatisch fortgesetzte Stränge (Plan auto-weiter, DoD 6): nur der Zähler aus Mongo, kein Abruf bei der Brücke.
+  const cards = await strandCards(u).catch(() => []);
+  const carded = new Set(cards.map((c: any) => c.id));
+  const orchAuto = (await wb().collection('orchestrator_runs').find({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
+    .filter((r: any) => !carded.has(String(r._id)))   // keine Doppelung mit der Karte (F5)
+    .map((r: any) => ({ id: String(r._id), title: r.title, url: r.url, n: r.autoTotal, stopped: !!r.autoStopped }));
+  const g0 = await g0Blocked(u).catch(() => []);   // Nachtbau: von G0 gestoppte Stränge (blocked_g0)
+  const memory = u.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null;   // nur Admins (RAM-Plan 125)
+  const leitstand = await leitstandLine(u).catch(() => null);   // nur Admins (Plan 132)
+  send(res, 200, { queue, strands: cards, mine, day, today, orchOpen, orchAuto, g0, leitstand, memory, count: await todayCount(u, queue, mine, cards), dryRun: dryRun() });
+});
+
+on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
+
+async function ownRun(u: User, id: string) {
+  const run: any = await wb().collection('agent_runs').findOne({ _id: id as any });
+  if (!run) throw new HttpError(404, 'Lauf nicht gefunden.');
+  if (run.userId !== u.id) throw new HttpError(403, 'Das ist nicht dein Agentenlauf.');
+  return run;
+}
+
+// „Passt“: als geprüft markieren; mit comment erst Vorschau, nach confirm genau ein Jira-Kommentar (E2: nie den Status).
+on('POST', /^\/api\/runs\/([0-9a-f-]{36})\/passt$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const run = await ownRun(u, m[1]);
+  const runs = wb().collection('agent_runs');
+  if (b.comment === true) {
+    const text = reviewComment(firstName(u), run.review);
+    if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: `Kommentar auf ${run.key}: „${text}“`, text });
+    // Idempotent (K6): ein zweiter Klick schreibt keinen zweiten Kommentar.
+    const claim = await runs.updateOne({ _id: run._id, commentedAt: null }, { $set: { commentedAt: new Date() } });
+    if (claim.modifiedCount) {
+      try { await jiraWrite(u, () => writeJira(u, run.key, [{ type: 'comment', text }])); }
+      catch (e) { await runs.updateOne({ _id: run._id }, { $set: { commentedAt: null } }); throw e; }
+      log('review passt + kommentar', { user: u.id, key: run.key });
+    }
+  }
+  await runs.updateOne({ _id: run._id }, { $set: { reviewedAt: new Date(), reviewedBy: u.email } });
+  send(res, 200, { ok: true, commented: b.comment === true });
+});
+
+// Antwort in DENSELBEN Chat: Nacharbeit (Notiz, Lauf zurück), Antwort auf eine Rückfrage (ja/nein), „weiter“ nach „hängt“.
+on('POST', /^\/api\/runs\/([0-9a-f-]{36})\/reply$/, async (req, res, m) => {
+  const u = await needUser(req);
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
+  const b = await body(req);
+  await ownRun(u, m[1]);
+  const kind = String(b.kind ?? '');
+  if (!['nacharbeit', 'antwort', 'weiter'].includes(kind)) throw new HttpError(400, 'kind ist nacharbeit, antwort oder weiter.');
+  const text = kind === 'weiter' ? 'weiter' : String(b.text ?? '').trim().slice(0, 4000);
+  if (!text) throw new HttpError(400, kind === 'nacharbeit' ? 'Schreib kurz, was nachzuarbeiten ist.' : 'Leere Antwort.');
+  await refreshChatRuns({ _id: m[1] });
+  const run: any = await wb().collection('agent_runs').findOne({ _id: m[1] as any });
+  if (run.status === 'läuft') throw new HttpError(409, 'Der Agent arbeitet gerade — warte, bis er fertig ist oder fragt.');
+  if (kind === 'antwort' && run.status !== 'wartet auf ja') throw new HttpError(409, 'Die Rückfrage ist nicht mehr offen — Seite neu laden.');
+  await replyInChat(u, run.conv, kind === 'nacharbeit' ? `Nacharbeit nach Review: ${text}` : text);
+  await wb().collection('agent_runs').updateOne({ _id: run._id }, {
+    $set: { status: 'läuft', question: null, endReason: null, ...(kind === 'nacharbeit' ? { reviewReadyAt: null, rework: { text: text.slice(0, 500), at: new Date() } } : {}) },
+  });
+  runsRefreshedAt.delete(u.id);
+  log('review antwort', { user: u.id, key: run.key, kind });
+  send(res, 200, { ok: true, url: run.url ?? null });
+});
+
+// review_ready (Werkbank-MCP): Fertig-Marke am neuesten Chat-Lauf der Person in DIESER Unterhaltung (Bedingung 5).
+on('POST', /^\/internal\/review-ready$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const conv = String(b.conv ?? '');
+  if (!conv) throw new HttpError(400, 'Keine Unterhaltung bekannt — review_ready gilt nur in einem Werkbank-Chat.');
+  const run: any = await wb().collection('agent_runs').findOne({ userId: u.id, conv, mode: 'chat' }, { sort: { startedAt: -1 } });
+  // Orchestrator-Strang: Fertig-Marke am Strang — er wird danach nie mehr automatisch fortgesetzt (Plan auto-weiter, DoD 4).
+  const strand: any = run ? null : await wb().collection('orchestrator_runs').findOne({ userId: u.id, conv });
+  if (strand) {
+    const p = parseReview(b);
+    if (!p.review) throw new HttpError(400, p.error!);
+    await wb().collection('orchestrator_runs').updateOne({ _id: strand._id }, { $set: { reviewReadyAt: new Date(), review: p.review } });
+    log('review bereit (strang)', { user: u.id, id: strand._id, dod: p.review.dod.length });
+    return send(res, 200, { ok: true, strand: strand._id });
+  }
+  if (!run) throw new HttpError(404, 'Kein Werkbank-Agentenlauf zu diesem Chat — nichts gesetzt (die Review-Schlange kennt nur Läufe, die vom Board aus gestartet wurden).');
+  const p = parseReview(b);
+  if (!p.review) throw new HttpError(400, p.error!);
+  await wb().collection('agent_runs').updateOne({ _id: run._id }, { $set: { reviewReadyAt: new Date(), review: p.review, reviewedAt: null } });
+  runsRefreshedAt.delete(u.id);
+  log('review bereit', { user: u.id, key: run.key, dod: p.review.dod.length });
+  send(res, 200, { ok: true, key: run.key });
+});
+
+
+// Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).
+on('GET', /^\/api\/leitstand\/overview$/, async (req, res) => send(res, 200, await overview(await needAdmin(req))));
+
+on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
+  const u = await needAdmin(req);
+  const d: any = await orchRuns().findOne({ _id: String(url.searchParams.get('strand') ?? '') as any, userId: u.id, kind: { $ne: 'leitstand' } });
+  if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
+  const text = readBericht(d.bericht);
+  if (text === null) throw new HttpError(404, 'Kein lesbarer Bericht zu diesem Strang.');
+  send(res, 200, { strand: String(d._id), name: String(d.bericht).split('/').slice(-2).join('/'), text });
+});
+
+on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  const d: any = await orchRuns().findOne({ _id: m[1] as any, userId: u.id, kind: { $ne: 'leitstand' } });
+  if (!d) throw new HttpError(404, 'Strang nicht gefunden.');
+  // Gesehener Stand (F3) und live bei der Brücke (G4): nie auf einen veralteten oder laufenden Strang entscheiden.
+  const seen = String(new Date(d.reviewReadyAt ?? d.doneAt ?? 0).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime());
+  if (String(b.seen ?? '') !== seen) throw new HttpError(409, 'Der Strang hat sich inzwischen geändert — Seite neu laden.');
+  let st: any;
+  try { st = (await strandStates(u)).get(d.conv); } catch { throw new HttpError(503, 'Brücke nicht erreichbar — gleich noch einmal.'); }
+  if (st?.running) throw new HttpError(409, 'Der Strang arbeitet gerade — warte, bis er fertig ist.');
+  if (m[2] === 'passt') {
+    await reviewOrch(u, m[1], String(b.note ?? 'Passt (Heute)'), 'knut', { lastSentAt: d.lastSentAt ?? null, reviewReadyAt: d.reviewReadyAt ?? null, doneAt: d.doneAt ?? null });
+    log('strang geprüft', { user: u.id, id: m[1] });
+    return send(res, 200, { ok: true });
+  }
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
+  const text = String(b.text ?? '').trim().slice(0, 4000);
+  if (b.kind !== 'nacharbeit' || !text) throw new HttpError(400, 'Schreib kurz, was nachzuarbeiten ist.');
+  await sendOrch(u, m[1], `Nacharbeit nach Review: ${text}`);
+  log('strang nacharbeit', { user: u.id, id: m[1] });
+  send(res, 200, { ok: true, url: d.url });
+});
+
+// Rückfragen des Orchestrators (Knut antwortet hier; nur die eigenen).
+on('GET', /^\/api\/orchestrator\/questions$/, async (req, res, _m, url) => {
+  const u = await needUser(req);
+  const open = await listQuestions(u, { open: true });
+  send(res, 200, url.searchParams.get('count') ? { open: open.length } : { open, answered: (await listQuestions(u, { limit: 20 })).filter((q) => q.status !== 'offen').slice(0, 10) });
+});
+
+on('POST', /^\/api\/orchestrator\/questions\/([\w-]{1,20})\/answer$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const q = await answerQuestion(u, m[1], { option: b.option ?? null, text: b.text ?? null });
+  log('rückfrage beantwortet', { user: u.id, id: q.id });
+  roadmapChanged('orchestrator-antwort');
+  send(res, 200, q);
 });
 
 on('POST', /^\/api\/roadmap\/question$/, async (req, res) => {
@@ -1173,6 +1434,109 @@ on('POST', /^\/api\/roadmap\/spec-new$/, async (req, res) => {
   invalidateIndex(); checkCache = null;
   log('spec neu', { user: u.id, path: rel });
   send(res, 200, { ok: true, path: rel, follow });
+});
+
+// --- „Agent ansetzen“ an einer Spec (docs/plan-agent-ansetzen.md): Vorschau → ein Klick → Ticket, Spec-Link, Agent ---
+
+/** `jira:` (bzw. `sim-jira:`) in die Spec — nur ohne laufenden Vault-Sync, mit Hash direkt vor dem Schreiben (Bedingung 7). */
+async function linkSpec(sp: { path: string; text: string }, key: string, field: 'jira' | 'sim-jira'): Promise<string> {
+  if (vaultDry()) return 'trocken';
+  const abs = vaultPath(sp.path);
+  const cur = readFileSync(abs, 'utf8');
+  if (hashText(cur) !== hashText(sp.text)) return 'offen:Spec hat sich seit dem Lesen geändert — beim nächsten Klick';
+  const next = field === 'jira' ? addJiraFrontmatter(cur, key) : addSimField(cur, key);
+  if (next === null) return 'schon';
+  if (syncLocked()) return 'offen:Vault-Sync läuft gerade — beim nächsten Klick';
+  writeAtomic(abs, next);
+  invalidateIndex(); suggestCache = null;
+  return 'ok';
+}
+
+// G0 je Spec 3 Minuten zwischenspeichern: Vorschau und Klick sehen dieselben Belege, ohne zweimal zu holen.
+const g0Cache = new Map<string, { at: number; r: VorbauErgebnis }>();
+async function ansetzenG0(slug: string): Promise<VorbauErgebnis> {
+  const c = g0Cache.get(slug);
+  if (c && Date.now() - c.at < 180_000) return c.r;
+  const r = await pruefe({ slug, repos: g0Repos(null), aufrufer: 'ansetzen' });
+  g0Cache.set(slug, { at: Date.now(), r });
+  return r;
+}
+
+on('GET', /^\/api\/roadmap\/ansetzen$/, async (req, res, _m, url) => {
+  await needAdmin(req);
+  const path = url.searchParams.get('path') ?? '';
+  send(res, 200, { mode: ansetzenMode().mode, state: ansetzenView(await specTicketState(specSlug(path))) });
+});
+
+on('POST', /^\/api\/roadmap\/ansetzen$/, async (req, res) => {
+  const u = await needAdmin(req);   // Bedingung 1: nur Admins (aus der Sitzung)
+  const b = await body(req);
+  const m = ansetzenMode();
+  const sp = roadmapSpecs().find((x) => x.path === String(b.path ?? ''));
+  if (!sp) throw new HttpError(404, 'Spec nicht gefunden.');
+  const gate = specGate(sp);
+  const im = await issueMap();
+  const workstreams = [...im.values()].filter((i) => i.type === 'Workstream' && i.statusCategory !== 'done').map((i) => ({ key: i.key, summary: i.summary })).sort((a, c) => a.key.localeCompare(c.key, undefined, { numeric: true }));
+  const mode = b.mode === 'plan' ? 'plan' as const : 'review' as const;
+  const parent = String(b.parent || DEFAULT_WORKSTREAM);
+  if (!/^[A-Z][A-Z0-9]+-\d+$/.test(parent) || (m.mode === 'live' && !workstreams.some((w) => w.key === parent))) throw new HttpError(400, `${parent.slice(0, 20)} ist kein Workstream in der Jira-Kopie.`);
+  const state = ansetzenView(await specTicketState(specSlug(sp.path)));
+  const base: any = { mode: m.mode, problem: m.problem, gate: { ok: gate.ok, why: gate.why, open: gate.open.map((d) => d.question).slice(0, 5) }, state, workstreams, hash: draftHashOf(sp.text), spec: { path: sp.path, title: sp.title, topic: sp.topic, state: sp.state }, dryRun: dryRun() };
+  if (m.mode === 'aus') {
+    if (b.confirm === true) throw new HttpError(403, m.problem ?? '„Agent ansetzen“ ist ausgeschaltet (WERKBANK_ANSETZEN).');
+    return send(res, 200, base);
+  }
+  // G0 „Prüfung vor dem Bau“ (docs/plan-vorbau-check.md): Repos aus WERKBANK_VORBAU_REPOS; Treffer/Stopp → Knut wählt
+  // im Dialog einen Knopf (protokolliert). Ohne Lesetoken oder ohne Repos: Stopp ohne Knopf, nur „trotzdem bauen“.
+  if (gate.ok && !state?.key && !vorbauAus()) {   // WERKBANK_VORBAU_CHECK=off → kein G0 im Dialog
+    const g0 = await ansetzenG0(specSlug(sp.path));
+    base.g0 = { ergebnis: g0.ergebnis, text: g0Text(g0), belege: g0.belege.map((x) => ({ text: x.text, pr: x.pr ?? null, sha: x.sha ?? null, wirkung: x.wirkung })), hinweise: g0.hinweise, stopp: g0.stopp ?? null, options: g0.ergebnis === 'treffer' || g0.ergebnis === 'stopp' ? g0Optionen(g0) : [] };
+    const stop = base.g0.options.length > 0;
+    if (b.confirm === true && stop) {
+      const choice = String(b.g0Choice ?? '');
+      if (!base.g0.options.some((o: any) => o.label === choice)) throw new HttpError(409, `G0 ${g0.ergebnis === 'stopp' ? 'Stopp' : 'Treffer'} — erst im Dialog entscheiden: ${base.g0.options.map((o: any) => `„${o.label}“`).join(', ')}.`);
+      protokolliere({ art: 'knopf', slug: specSlug(sp.path), knopf: choice, kriterien: g0.kriterien, ergebnis: g0.ergebnis, durch: u.email, aufrufer: 'ansetzen' });
+      if (choice === 'Spec nachziehen/abräumen') { g0Cache.delete(specSlug(sp.path)); return send(res, 200, { ...base, g0Abgebrochen: true }); }
+      b.note = `${String(b.note ?? '')}\n\nG0 vor dem Bau: Knut hat „${choice}“ gewählt.\n${base.g0.text}`.trim();
+    }
+  }
+  let jira: AnsetzenJira | null = null;
+  let me: { accountId: string; displayName: string } | null = null;
+  try { jira = m.mode === 'sim' ? simJira(u) : await liveJira(u); me = await jira.me(); }
+  catch (e: any) { if (b.confirm === true) throw e; base.jiraProblem = String(e?.message ?? e).slice(0, 300); }
+  const due = sprintEnd(listCycles(sprintRoot()).map((c) => c.date), vienna().date);
+  const draft = me ? ticketDraft(sp, { parent, summary: b.summary, mode, accountId: me.accountId, ownerName: me.displayName, due }) : null;
+  if (b.confirm !== true) {
+    // Vorschau: schreibt nichts (Bedingung 1). Dubletten lokal + live (Bedingung 3).
+    let duplicates: Dup[] = m.mode === 'sim' ? [] : localDuplicates(sp, [...im.values()]);
+    if (jira) {
+      try { duplicates = [...new Map([...(await jira.search(dupJql(sp), sp)), ...duplicates].map((d) => [d.key, d])).values()]; }
+      catch (e: any) { base.liveProblem = `Jira-Suche nicht möglich: ${String(e?.message ?? e).slice(0, 160)}`; }
+    }
+    return send(res, 200, { ...base, draft, duplicates, ready: gate.ok && !!draft && !base.liveProblem && !base.dryRun });
+  }
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): hier wird nichts angelegt.');
+  if (!gate.ok) throw new HttpError(409, gate.why!);
+  if (String(b.hash ?? '') !== base.hash) throw new HttpError(409, 'Die Spec hat sich seit der Vorschau geändert — bitte neu laden.');
+  // Bedingung „nichts halb angelegt“: Claude-Token und Jira-Schreibweg vor dem ersten Schreiben.
+  if (!(await getClaudeToken(u))) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen. Nichts angelegt.');
+  if (m.mode === 'live' && !(await canWriteJira(u))) throw new HttpError(412, 'Jira-Schreiben ist für dich nicht verbunden (Atlassian-MCP) — unter „Einrichtung“ anmelden. Nichts angelegt.');
+  let useKey: string | undefined;
+  if (b.useKey) {
+    useKey = String(b.useKey).toUpperCase();
+    const known = m.mode === 'sim' ? /^SIM-\d+$/.test(useKey) && !!(await jira!.get(useKey)) : /^[A-Z][A-Z0-9]+-\d+$/.test(useKey) && (im.has(useKey) || !!(await jira!.get(useKey)));
+    if (!known) throw new HttpError(404, `${useKey.slice(0, 20)} ist nicht bekannt.`);
+  }
+  const r = await runAnsetzen(u, sp, { mode, note: String(b.note ?? '').slice(0, 2000), useKey, newTicket: b.newTicket === true, draft: draft! }, {
+    jira: jira!, mirror: issueMap, linkSpec,
+    startAgent: async (issue, note, specPath) => {
+      const a = await startTicketAgent(u, issue, note, { specPath });
+      await wb().collection('agent_runs').updateOne({ _id: a.id as any }, { $set: { specPath, origin: 'ansetzen' } });
+      return a;
+    },
+  });
+  log('agent ansetzen', { user: u.id, spec: sp.name, key: r?.key ?? null, choice: r?.needsChoice ?? null, mode: m.mode });
+  send(res, 200, r);
 });
 
 on('GET', /^\/api\/roadmap\/check$/, async (req, res) => { await needUser(req); send(res, 200, await runRoadmapCheck()); });
@@ -1331,11 +1695,10 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
   const b = await body(req);
   const date = String(b.date ?? '');
   const id = `sprint-${date}`;
-  const prev = cycles().filter((c) => !c.archived)[0]?.id;
   let files;
-  try { files = newCycleFiles(TEMPLATES, date, prev); } catch (e: any) { throw new HttpError(400, e.message); }
+  try { files = (await prepareCycle(date)).files; } catch (e: any) { throw new HttpError(400, e.message); }
   const dir = join(sprintRoot(), id);
-  if (existsSync(dir)) throw new HttpError(409, `${id} gibt es schon.`);
+  if (existsSync(dir) || cycles().some((x) => x.id === id)) throw new HttpError(409, `${id} gibt es schon.`);
   const rel = dir.slice(cfg.vaultDir.length + 1);
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, preview: { dir: rel, files: files.map((f) => ({ name: f.name, lines: f.content.split('\n').length, head: f.content.slice(0, 1200) })) } });
   if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: rel, id, dir: rel });
@@ -1346,28 +1709,110 @@ on('POST', /^\/api\/sprint\/new$/, async (req, res) => {
   send(res, 200, { ok: true, id, dir: rel });
 });
 
+// Schritt 1 „Review vorbereiten“: Entwurf aus Vorlage + Daten. Vorschau liefert den ganzen Review (Download);
+// geschrieben werden nur nach Bestätigung und nur FEHLENDE Dateien (wx) — ein vorhandener Review bleibt unangetastet.
+on('POST', /^\/api\/sprint\/draft$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const date = String(b.date ?? '');
+  let r;
+  try { r = await prepareCycle(date); } catch (e: any) { throw new HttpError(400, e.message); }
+  if (r.empty) throw new HttpError(409, 'Die Jira-Kopie ist leer — erst abgleichen (Board → Abgleich), sonst stünde jedes Ticket als „nicht in der Kopie“ da.');
+  const id = `sprint-${date}`;
+  const dir = join(sprintRoot(), id);
+  const rel = dir.slice(cfg.vaultDir.length + 1);
+  if (cycles().some((x) => x.id === id && x.archived)) throw new HttpError(409, `${id} liegt schon im Archiv — kein zweiter Ordner mit gleichem Namen.`);
+  const files = r.files.map((f) => ({ ...f, exists: existsSync(join(dir, f.name)) }));
+  const missing = files.filter((f) => !f.exists);
+  const preview = {
+    dir: rel, id, previous: r.prev?.id ?? null, stats: r.stats,
+    files: files.map((f) => ({ name: f.name, exists: f.exists, lines: f.content.split('\n').length, content: f.name.endsWith('-review.md') ? f.content : f.content.slice(0, 1200) })),
+  };
+  if (b.confirm !== true) return send(res, 200, { needsConfirm: missing.length > 0, preview, dryRun: vaultDry() });
+  if (!missing.length) throw new HttpError(409, `${id}: alle drei Notizen gibt es schon — der Entwurf ist nur als Download da.`);
+  if (vaultDry()) return send(res, 200, { ok: true, dryRun: true, wouldWrite: missing.map((f) => `${rel}/${f.name}`), id });
+  if (!existsSync(dir)) mkdirSync(dir);
+  const written: string[] = [];
+  for (const f of missing) {
+    try { writeFileSync(join(dir, f.name), f.content, { flag: 'wx' }); written.push(f.name); }
+    catch (e: any) { if (e.code !== 'EEXIST') throw e; }        // inzwischen angelegt (Obsidian, Agent) → nicht anfassen
+  }
+  invalidateIndex();
+  log('sprint entwurf', { user: u.id, cycle: id, written });
+  send(res, 200, { ok: true, id, dir: rel, written });
+});
+
+// Schritt 5 „Mitnahme“: aus der Jira-Kopie gerechnet (Gleichlauf mit jira-sprint-carry.sh), nur lesend, als Markdown.
+// In die Notiz schreibt den Abschnitt weiterhin /sprint-sync im Chat.
+on('GET', /^\/api\/sprint\/(sprint-\d{4}-\d{2}-\d{2})\/carry$/, async (req, res, m) => {
+  await needUser(req);
+  const c = cycleById(m[1]);
+  if (!c.files.review) throw new HttpError(404, 'Keine Review-Notiz in diesem Zyklus.');
+  const text = readFileSync(c.files.review, 'utf8');
+  const im = await issueMap();
+  const qs = [c.files.review, c.files.planning].filter(Boolean).flatMap((f) => parseQuestions(readFileSync(f!, 'utf8'), f));
+  const openNotes = syncPlanRows(qs).filter((r) => r.kind !== 'carry' && !isNoop(r.payload)).length;
+  const sync: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+  const r = carryList(text, basename(c.files.review), im, viennaToday(), cfg.jiraProject);
+  send(res, 200, { ...r, openNotes, jiraSync: sync ? { at: sync.at } : null });
+});
+
 // --- Ziele (Runde 6) ---
 
 on('GET', /^\/api\/goals$/, async (req, res) => {
   await needUser(req);
-  const im = await issueMap();
+  const im = await withAutoGoals();
   const g = goalsAll(im);
   const noGoal = [...im.values()].filter((i) => needsGoal(i, im, knownGoals(g))).length;
   send(res, 200, { file: GOALS_FILE(), missing: g.missing, roots: g.roots.map(stripTree), noGoal, labels: { goalPrefix: labelCfg().goalPrefix, exempt: exemptLabel() } });
 });
 
+// ---------- Automatisch zuordnen (docs/plan-ziele-auto.md, Council Runde 2) ----------
+const AUTO_RULE1 = 'auto: Regel 1';
+
+/** Regel 1 anwenden: Ticket-Key steht im Beleg genau einer Zeile aus ziele-olaf.md → dieses Ziel, als „auto: Regel 1“.
+ *  Läuft beim Laden der Ziele und nach jedem Jira-Abgleich; legt nur an, wo es noch keine Zuordnung und kein Label gibt. */
+async function applyAutoGoals(im: Map<string, Issue>): Promise<string[]> {
+  const text = readVault(GOALS_FILE());
+  if (!text) return [];
+  const known = knownGoals(goalsAll(im));
+  const done: string[] = [];
+  for (const [k, r] of rule1Goals(parseGoalsFile(text).goals)) {
+    const i = im.get(k);
+    if (i && autoEligible(i, im, known) && await autoSetGoal(k, r.ziel, `Steht im Beleg von ${r.ziel} (${GOALS_FILE().split('/').pop()}, Zeile ${r.line}).`, AUTO_RULE1)) done.push(k);
+  }
+  if (done.length) { log('ziele automatisch', { regel: 1, n: done.length }); jiraChanged(done, 'ziel'); }
+  return done;
+}
+const withAutoGoals = async () => { const im = await issueMap(); return (await applyAutoGoals(im)).length ? issueMap() : im; };
+
+/** Vorschlag je Ticket: Datei (bewusst entschieden) gewinnt; sonst Spec ziel: (nur Vorschlag, nur IDs aus ziele-olaf.md,
+ *  mehrdeutig → keiner). Nur für Tickets, die die Werkbank anfassen darf (autoEligible). Anzeige und Übernahme nutzen beide das. */
+async function proposals(im: Map<string, Issue>, known: Set<string>, p: ReturnType<typeof loadProposals>) {
+  const usable = (x: any) => x && (x.ziel === 'KEINS' || (known.has(x.ziel) && goalLevel(x.ziel) !== 'Gate'));
+  const text = readVault(GOALS_FILE());
+  const ids = new Set((text ? parseGoalsFile(text).goals : []).map((r) => r.id));
+  const spec = specProposals(roadmapSpecs(await assignments('spec')), ids);
+  return (k: string) => {
+    const f = p.map.get(k);
+    if (usable(f)) return { ...f!, quelle: 'datei' as const };
+    const i = im.get(k);
+    return i && autoEligible(i, im, known) ? spec.get(k) ?? null : null;
+  };
+}
+
 on('GET', /^\/api\/goals\/assign$/, async (req, res) => {
   await needUser(req);
-  const im = await issueMap();
+  const im = await withAutoGoals();
   const g = goalsAll(im);
   const p = loadProposals();
   const known = knownGoals(g);
-  // Nur Vorschläge auf bestehende, zuordenbare Ziele (kein Gate) oder KEINS vorauswählen.
-  const usable = (x: any) => x && (x.ziel === 'KEINS' || (known.has(x.ziel) && goalLevel(x.ziel) !== 'Gate'));
-  const tickets = [...im.values()].filter((i) => needsGoal(i, im, known)).map((i) => ({ ...richIssue(im, i, known), proposal: usable(p.map.get(i.key)) ? p.map.get(i.key)! : null }))
+  const proposalOf = await proposals(im, known, p);
+  const tickets = [...im.values()].filter((i) => needsGoal(i, im, known)).map((i) => ({ ...richIssue(im, i, known), proposal: proposalOf(i.key) }))
     .sort((a, b) => a.workstreamName.localeCompare(b.workstreamName, 'de') || a.key.localeCompare(b.key, 'de', { numeric: true }));
   send(res, 200, {
-    tickets, proposalFile: p.file, proposalError: p.error, proposals: tickets.filter((t) => t.proposal).length,
+    tickets, proposalFile: p.file, proposalError: p.error, proposals: tickets.filter((t) => t.proposal?.quelle === 'datei').length, computed: tickets.filter((t) => t.proposal?.quelle === 'spec').length,
+    auto: [...(await assignments('ticket')).values()].filter((a) => a.source === AUTO_RULE1 && a.ziel && im.has(a.key)).map((a) => ({ key: a.key, summary: im.get(a.key)!.summary, ziel: a.ziel, begruendung: a.begruendung, at: a.at })),
     goalIds: [...g.byId.values()].filter((n) => n.level !== 'Gate').map((n) => ({ id: n.id, level: n.level, result: valueOf(n.result) ?? n.id })),
     labels: { goalPrefix: labelCfg().goalPrefix, exempt: exemptLabel() }, dryRun: dryRun(),
   });
@@ -1429,9 +1874,14 @@ on('POST', /^\/api\/goals\/import$/, async (req, res) => {
   const high = (x: any) => (typeof x === 'number' ? (x <= 1 ? x >= 0.8 : x >= 80) : /^(hoch|high|sicher)$/i.test(String(x ?? '')));
   const keys = b.mode === 'keys' ? new Set((Array.isArray(b.keys) ? b.keys : []).map(String)) : null;
   const items = [...p.map.entries()].filter(([k, x]) => im.has(k) && needsGoal(im.get(k)!, im, known) && (keys ? keys.has(k) : high(x.sicherheit)) && (x.ziel === 'KEINS' ? x.begruendung.replace(/\s+/g, ' ').trim().length >= 5 : known.has(x.ziel) && goalLevel(x.ziel) !== 'Gate'))
-    .map(([k, x]) => ({ key: k, goal: x.ziel, begruendung: x.begruendung }));
+    .map(([k, x]) => ({ key: k, goal: x.ziel, begruendung: x.begruendung, quelle: 'datei' }));
+  // Vorschläge aus Specs nur einzeln (mode keys), nie mit „alle mit Sicherheit hoch“ — und nur, wo die Datei nichts anzeigt.
+  if (keys) { const prop = await proposals(im, known, p); for (const k of keys) { const x = prop(k); if (x?.quelle === 'spec') items.push({ key: k, goal: x.ziel, begruendung: x.begruendung, quelle: 'spec' }); } }
   if (b.confirm !== true) return send(res, 200, { needsConfirm: true, items, file: p.file });
-  const r = await assignGoals(u, items, im, true, 'vorschlag');
+  const fromFile = items.filter((x) => x.quelle === 'datei'), computed = items.filter((x) => x.quelle === 'spec');
+  const r1: any = fromFile.length ? await assignGoals(u, fromFile, im, true, 'vorschlag') : { results: [] };
+  const r2: any = computed.length ? await assignGoals(u, computed, im, true, 'vorschlag-spec') : { results: [] };
+  const r = { ok: true, results: [...r1.results, ...r2.results], toJira: goalsToJira() };
   send(res, 200, { ...r, imported: (r as any).results.filter((x: any) => x.ok).length });
 });
 
@@ -1515,7 +1965,7 @@ on('GET', /^\/api\/timebox$/, async (req, res, _m, url) => {
   while (dates.length < days) dates.push(nextDay(dates.at(-1)!));
   const blocks = (await tbCol().find({ userId: u.id, date: { $in: dates } }).sort({ date: 1, start: 1 }).toArray()) as any[];
   const im = await issueMap();
-  const cur = cycles().find((c) => !c.archived);
+  const cur = currentCycle(cycles());
   const sl = cur ? sprintLabel(cur.date) : null;
   const who = resolveIdentity(await jiraIdentity(u), [...im.values()]);
   // Tagespriorität des ersten Tages: je Ticket gesetzt (timebox_prio) oder die höchste seiner Blöcke an diesem Tag.
@@ -1619,16 +2069,39 @@ on('GET', /^\/api\/team$/, async (req, res) => {
 
 on('GET', /^\/api\/files$/, async (req, res) => {
   const u = await needUser(req);
+  // Ablage-Abgleich (Plan dateien-vollständig, S1): lädt der Ablage-Besitzer den Reiter, zieht das Register vorher nach
+  // (höchstens alle 30 s; sonst übernimmt der Takt im Hintergrund).
+  const owner = await ablageOwner().catch(() => null);
+  if (owner?.id === u.id && Date.now() - lastSyncAt() > Number(process.env.WERKBANK_ABLAGE_SYNC_THROTTLE_MS ?? 30_000)) {
+    try { const r = await syncAblage(owner); if (r.neu || r.verschoben || r.geaendert || r.geloescht || r.doppelt || r.schutz || r.skipped) log('ablage-abgleich', r); }
+    catch (e: any) { log('ablage-abgleich', { error: String(e?.message ?? e).slice(0, 200) }); }
+  }
   const { mine, shared } = await listFiles(u);
   const people = await teammates();
   const name = (id: string) => people.find((p) => p.id === id)?.name ?? '?';
   const pids = [...new Set([...mine, ...shared].map((f: any) => f.projectId).filter(Boolean))];
   const projectNames = new Map((await wb().collection('projects').find({ _id: { $in: pids as any[] } }, { projection: { name: 1 } }).toArray()).map((p: any) => [p._id, p.name]));
-  const shape = (f: any) => ({ ...f, id: f._id, projectName: f.projectId ? projectNames.get(f.projectId) ?? null : null, source: f.source ? { conv: f.source.conv } : undefined });
+  // `path` geht nur an die Besitzerin (Ablageort in Knuts Ordner); geteilte sehen den Namen, nicht den Ort.
+  const shape = (f: any) => ({ ...f, id: f._id, path: undefined, ablage: undefined, projectName: f.projectId ? projectNames.get(f.projectId) ?? null : null, source: f.source ? { conv: f.source.conv } : undefined });
+  const known = folders();
+  const mineOut = [];
+  for (const f of mine as any[]) {
+    const pi = placeInfo(f);
+    // Vorschlag für „Noch einzusortieren“; für abgelegte Dateien die zuletzt gewählten Angaben bzw. die aus Pfad und
+    // Schema-Namen (für „Verschieben“, ohne Mongo-Abfrage je Datei — die Ablage hat Hunderte).
+    const v = f.kind === 'vault' ? null : f.ablage ?? (f.path && !isEingang(f.path) ? vorschlagAusPfad(f.path) : null) ?? await suggestFor(f, known);
+    const ort = f.kind !== 'vault' && f.path ? ortAus(f.path) : null;
+    mineOut.push({ ...shape(f), sharedWithNames: f.sharedWith.map(name), ...pi, ort, vorschlag: v ? { ...v, name: schemaName(v, extname(f.name)) } : null });
+  }
+  const notice: any = await wb().collection('scratch_notice').findOne({ _id: u.id as any });
+  const admin = u.role === 'ADMIN';
   send(res, 200, {
-    mine: mine.map((f: any) => ({ ...shape(f), sharedWithNames: f.sharedWith.map(name) })),
-    shared: shared.map((f: any) => ({ ...shape(f), sharedWith: undefined })),
+    mine: mineOut,
+    shared: shared.map((f: any) => ({ ...shape(f), sharedWith: undefined, fehlt: placeInfo(f).fehlt })),
     maxMb: Math.round(cfg.fileMaxBytes / 1048576),
+    ablage: { teams: [...new Set(known.map((x) => x.team))], folders: known, arten: ARTEN, besitzer: owner?.id === u.id, unklar: admin && !owner },
+    scratch: notice ? { count: notice.count, bytes: notice.bytes, deleteFrom: notice.deleteFrom, files: notice.files, days: cfg.scratchDays } : null,
+    backup: admin ? { nightly: listBackups(), keep: cfg.backupKeep, key: !!keyOf(), running: backupRunning() } : null,
   });
 });
 
@@ -1650,6 +2123,66 @@ on('GET', /^\/api\/files\/([0-9a-f-]{36})\/download$/, async (req, res, m) => {
     'content-security-policy': "sandbox; default-src 'none'", 'cache-control': 'no-store',
   });
   createReadStream(filePath(f)).on('error', () => res.destroy()).pipe(res);
+});
+
+// Agenten-Ergebnisse (Plan dateien-vollständig, S3): Review-Pakete der Haupt-Sitzung und der Stränge — nur Admins, nur lesen.
+on('GET', /^\/api\/files\/agenten$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const runs = await wb().collection('orchestrator_runs').find({ userId: u.id }, { projection: { title: 1, url: 1, prompt: 1, startedAt: 1, 'review.artefakte': 1, 'review.gemacht': 1 } }).sort({ startedAt: -1 }).limit(500).toArray().catch(() => []);
+  const pakete = listPakete(cfg.reviewDir).map((p) => ({ ...p, strand: strandFor(p, runs as any[]) }));
+  send(res, 200, { pakete, ordner: !!pakete.length || existsSync(cfg.reviewDir) });
+});
+
+on('GET', /^\/api\/files\/agenten\/(\d{1,4}-[a-z0-9][a-z0-9-]*)\/(.+)$/, async (req, res, m, url) => {
+  await needAdmin(req);
+  let rel = '';
+  try { rel = m[2].split('/').map(decodeURIComponent).join('/'); } catch { throw new HttpError(400, 'Ungültiger Pfad.'); }
+  const abs = paketFile(cfg.reviewDir, m[1], rel);
+  if (!abs) throw new HttpError(404, 'Datei nicht gefunden.');
+  const ext = extname(abs).toLowerCase();
+  const name = rel.split('/').pop()!;
+  if (url.searchParams.get('vorschau') === '1') {
+    if (ext !== '.md' && ext !== '.txt') throw new HttpError(400, 'Vorschau nur für Markdown und Text.');
+    const text = readFileSync(abs, 'utf8').slice(0, 512 * 1024);
+    return send(res, 200, { name, html: ext === '.md' ? renderPaketMd(text, m[1], rel) : null, text: ext === '.txt' ? text : null });
+  }
+  const inline = url.searchParams.get('inline') === '1' && BILD_MIME[ext];
+  res.writeHead(200, {
+    'content-type': inline ? BILD_MIME[ext] : 'application/octet-stream', 'x-content-type-options': 'nosniff',
+    'content-disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`,
+    'content-security-policy': "sandbox; default-src 'none'", 'cache-control': 'private, max-age=60',
+  });
+  createReadStream(abs).on('error', () => res.destroy()).pipe(res);
+});
+
+// Plan 81, Schnitt 2: „Ablegen“ — Vorschlag bestätigen oder ändern; die Datei zieht in `<team>/<vorgang>/` der Ablage.
+on('POST', /^\/api\/files\/([0-9a-f-]{36})\/ablegen$/, async (req, res, m) => {
+  const u = await needUser(req);
+  send(res, 200, { ok: true, ...(await ablegen(u, m[1], await body(req))) });
+});
+
+// Plan 81, Schnitt 4: eine angekündigte Datei im Arbeitsordner behalten (Frist beginnt neu).
+on('POST', /^\/api\/scratch\/keep$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const rels: string[] = Array.isArray(b.rels) ? b.rels.map(String).slice(0, 200) : [String(b.rel ?? '')];
+  const kept = rels.filter((r) => keepScratch(scratchDir(u), r)).length;
+  await runScratch(u);
+  send(res, 200, { ok: true, kept });
+});
+
+// Plan 81, Schnitt 5: Backup als Download, nur Admins. Gestreamt, nichts bleibt liegen.
+on('GET', /^\/api\/backup$/, async (req, res) => {
+  const u = await needAdmin(req);
+  if (backupRunning()) throw new HttpError(409, 'Es läuft schon ein Backup — gleich noch einmal versuchen.');
+  const day = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-');
+  res.writeHead(200, {
+    'content-type': 'application/gzip', 'x-content-type-options': 'nosniff', 'cache-control': 'no-store',
+    'content-disposition': `attachment; filename="werkbank-backup-${day}.tar.gz"`,
+  });
+  logShare({ actor: u.email, action: 'backup', kind: 'backup', resource: day });
+  try { const mf = await writeBackup(res); log('backup', { by: u.email, files: mf.files, encrypted: mf.encrypted, skipped: mf.skipped.length }); }
+  catch (e: any) { log('backup', { error: String(e?.message ?? e).slice(0, 200) }); res.destroy(); }
 });
 
 on('POST', /^\/api\/files\/([0-9a-f-]{36})\/share$/, async (req, res, m) => {
@@ -1733,6 +2266,66 @@ async function internalUser(req: IncomingMessage, b: any): Promise<User> {
   return u;
 }
 
+// Orchestrator-Stränge (docs/plan-orchestrator-agents.md): nur über den internen Kanal (scripts/orch), nie aus dem Browser.
+// Person: userId oder email (Vorgabe WERKBANK_PILOT_EMAIL = Knut); die Freigabeliste gilt.
+async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
+  if (b.userId) return internalUser(req, b);
+  const email = String(b.email || cfg.pilotEmail).toLowerCase();
+  const d: any = await lc().collection('users').findOne({ email }, { projection: { _id: 1 } });
+  return internalUser(req, { userId: d ? String(d._id) : '' });
+}
+
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau)$/, async (req, res, m) => {
+  const b = await body(req, 1 << 20);
+  const u = await orchPerson(req, b);
+  const id = String(b.id ?? '');
+  switch (m[1]) {
+    case 'start': {
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null });
+      log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null });
+      return send(res, 200, r);
+    }
+    case 'nachtbau': {
+      // Nachtbau (docs/plan-vorbau-check.md): je Item G0; Treffer → blocked_g0, nicht prüfbar → ein Morgeneintrag.
+      const items = Array.isArray(b.items) ? b.items.slice(0, 50) : [];
+      const r = await nachtbau(u, items);
+      log('nachtbau', { user: u.id, items: r.map((x) => `${x.slug}:${x.status}`) });
+      if (r.some((x) => x.status !== 'gestartet')) roadmapChanged('orchestrator-frage');
+      return send(res, 200, { items: r });
+    }
+    case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
+    case 'show': return send(res, 200, await showOrch(u, id));
+    case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand'));
+    case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? '', b.via === 'leitstand' ? 'leitstand' : 'knut'));
+  }
+});
+
+// Leitstand (docs/plan-leitstand.md): Start nur über den internen Kanal, nur für Admins (startLeitstand prüft die Rolle).
+on('POST', /^\/internal\/orchestrator\/leitstand\/start$/, async (req, res) => {
+  const b = await body(req, 1 << 20);
+  const u = await orchPerson(req, b);
+  const r = await startLeitstand(u, { handoverText: b.handoverText || null });
+  log('leitstand gestartet', { user: u.id, id: r.id, conv: r.conv, beendet: r.ended.length });
+  return send(res, 200, r);
+});
+
+// Rückfragen an Knut: der Orchestrator fragt (intern), Knut antwortet in der Werkbank (unten, /api/orchestrator/…).
+on('POST', /^\/internal\/orchestrator\/questions\/(ask|list|get|withdraw)$/, async (req, res, m) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  switch (m[1]) {
+    case 'ask': {
+      const q = await askKnut(u, { title: b.title, context: b.context, options: b.options, recommendation: b.recommendation, strand: b.strand || null, link: b.link || null, plan: b.plan || null, key: b.key || null, quelle: b.quelle || null });
+      log('rückfrage an knut', { user: u.id, id: q.id, key: q.key });
+      roadmapChanged('orchestrator-frage');
+      return send(res, 200, q);
+    }
+    case 'list': return send(res, 200, { questions: await listQuestions(u, { open: b.open === true }) });
+    case 'get': return send(res, 200, await getQuestion(u, String(b.id ?? '')));
+    case 'withdraw': { const r = await withdrawQuestion(u, String(b.id ?? '')); roadmapChanged('orchestrator-frage'); return send(res, 200, r); }
+  }
+});
+
 on('POST', /^\/internal\/session-start$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
@@ -1776,12 +2369,25 @@ on('POST', /^\/internal\/hygiene-snooze$/, async (req, res) => {
   send(res, 200, { ok: true });
 });
 
+/**
+ * Die Rückfrage im Chat zeigt den Ticket-Titel, den das Modell mitgibt (summary). Stimmt er nicht mit der Kopie überein,
+ * hätte die Person etwas anderes bestätigt, als geschrieben würde → ablehnen, nichts schreiben (Council 09.10.2026).
+ */
+const normTitle = (t: unknown) => String(t ?? '').toLowerCase().replace(/[^a-z0-9äöüß]+/g, ' ').trim();
+function titleMismatch(shown: unknown, actual: string): boolean {
+  if (shown === undefined || shown === null || String(shown).trim() === '') return false;
+  const a = normTitle(shown).replace(/…$/, ''), b = normTitle(actual);
+  return !(b === a || (a.length >= 12 && b.startsWith(a)));
+}
+
 on('POST', /^\/internal\/jira-update$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
   const key = String(b.key ?? '');
   if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw new HttpError(400, 'Ungültiger Schlüssel.');
-  if (!(await allIssues()).some((i) => i.key === key)) throw new HttpError(404, 'Ticket nicht in der Jira-Kopie (nur bestehende Tickets, keine neuen).');
+  const cur = (await allIssues()).find((i) => i.key === key);
+  if (!cur) throw new HttpError(404, 'Ticket nicht in der Jira-Kopie (nur bestehende Tickets, keine neuen).');
+  if (titleMismatch(b.summary, cur.summary)) throw new HttpError(409, `${key} heißt „${cur.summary}“, nicht „${String(b.summary).slice(0, 80)}“ — nichts geschrieben. Bitte mit dem richtigen Titel neu fragen.`);
   const actions: any[] = [];
   if (b.comment) actions.push({ type: 'comment', text: String(b.comment) });
   if (b.status) actions.push({ type: 'status', to: String(b.status) });
@@ -1791,6 +2397,64 @@ on('POST', /^\/internal\/jira-update$/, async (req, res) => {
   const done = await jiraWrite(u, () => applyActions(u, key, actions));
   log('jira write (chat)', { user: u.id, key, n: done.length });
   send(res, 200, { ok: true, done });
+});
+
+// Tagesabschluss: mehrere Tickets mit EINER Rückfrage (die Brücke hat schon gefragt). Erst alle Schlüssel prüfen —
+// ein unbekannter → nichts geschrieben. Dann der Reihe nach; ein Fehler bricht nicht ab, er steht je Ticket im Ergebnis.
+on('POST', /^\/internal\/jira-update-many$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const changes: any[] = Array.isArray(b.changes) ? b.changes : [];
+  if (!changes.length) throw new HttpError(400, 'Nichts zu tun.');
+  if (changes.length > 25) throw new HttpError(400, 'Höchstens 25 Tickets auf einmal.');
+  const all = await allIssues();
+  const byKey = new Map(all.map((i) => [i.key, i]));
+  // Nur eigene Tickets (Tagesabschluss = Durchgang über die eigenen): ein fremdes im Stapel → nichts geschrieben.
+  // Schutz gegen Anweisungen aus Ticket-Texten, die das Modell beim Lesen gesehen hat (Council 09.10.2026).
+  const who = resolveIdentity(await jiraIdentity(u), all);
+  const keys = changes.map((c) => String(c?.key ?? ''));
+  const twice = keys.find((k, n) => keys.indexOf(k) !== n);
+  if (twice) throw new HttpError(400, `${twice} steht zweimal im Stapel — je Ticket ein Eintrag; nichts geschrieben.`);
+  const plans = changes.map((c) => {
+    const key = String(c?.key ?? '');
+    if (String(c?.comment ?? '').length > 1500) throw new HttpError(400, `${key}: Kommentar über 1500 Zeichen (die Rückfrage zeigt nur so viel) — nichts geschrieben.`);
+    if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw new HttpError(400, `Ungültiger Schlüssel „${key.slice(0, 20)}“ — nichts geschrieben.`);
+    const cur = byKey.get(key);
+    if (!cur) throw new HttpError(404, `${key} ist nicht in der Jira-Kopie (nur bestehende Tickets) — nichts geschrieben.`);
+    if (!isMine(cur, who)) throw new HttpError(403, `${key} gehört nicht dir (Owner: ${cur.assignee ?? 'niemand'}) — gesammelt nur eigene Tickets; nichts geschrieben.`);
+    if (titleMismatch(c.summary, cur.summary)) throw new HttpError(409, `${key} heißt „${cur.summary}“, nicht „${String(c.summary).slice(0, 80)}“ — nichts geschrieben.`);
+    const actions: any[] = [];
+    if (c.comment) actions.push({ type: 'comment', text: String(c.comment) });
+    if (c.status) actions.push({ type: 'status', to: String(c.status) });
+    if (c.due !== undefined && c.due !== null) actions.push({ type: 'due', date: String(c.due) || null });
+    if (!actions.length) throw new HttpError(400, `${key}: nichts zu tun — nichts geschrieben.`);
+    return { key, actions };
+  });
+  // Frist (Council 09.10.2026): das Werkzeug wartet budgetMs; danach kein neues Ticket mehr anfangen, sondern als
+  // „nicht versucht“ melden — sonst schriebe der Server weiter, während das Modell einen Fehler sieht und wiederholt.
+  const budget = Math.min(Math.max(Number(b.budgetMs) || 300_000, 20_000), 300_000);
+  const t0 = Date.now();
+  const results: { key: string; ok: boolean; done: string[]; error?: string; skipped?: boolean }[] = [];
+  for (const p of plans) {
+    if (Date.now() - t0 >= budget - 20_000) { results.push({ key: p.key, ok: false, done: [], skipped: true, error: 'nicht versucht (Zeit) — erst Stand lesen, dann einzeln' }); continue; }
+    try { results.push({ key: p.key, ok: true, done: await jiraWrite(u, () => applyActions(u, p.key, p.actions)) }); }
+    catch (e: any) { results.push({ key: p.key, ok: false, done: [], error: String(e?.message ?? e).slice(0, 200) }); }
+  }
+  log('jira write (chat, gesammelt)', { user: u.id, n: plans.length, failed: results.filter((r) => !r.ok).length });
+  send(res, 200, { ok: results.every((r) => r.ok), results });
+});
+
+// „Agent vorlaufen lassen“ aus dem Chat: neuer eigener Chat mit Agent auf dem Ticket — wie „Agent“ am Board.
+on('POST', /^\/internal\/agent-start$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
+  const i = (await issueMap()).get(String(b.key ?? ''));
+  if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  if (!(await getClaudeToken(u))) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen.');
+  const r = await startTicketAgent(u, i, String(b.note ?? '').slice(0, 2000));
+  log('agent chat (aus chat)', { user: u.id, key: i.key, conv: r.conv });
+  send(res, 200, r);
 });
 
 // Die Brücke hat im Chat einen schreibenden Atlassian-Aufruf gesehen (Kommentar, Status, Anlegen …): diese Tickets
@@ -1846,7 +2510,7 @@ const server = createServer(async (req, res) => {
     const status = e.status ?? (e instanceof JiraError ? 502 : 500);
     const known = e instanceof JiraError || e instanceof JiraWriteError;
     if (status >= 500) log('fehler', { path: url.pathname, error: String(e.message ?? e).slice(0, 300) });
-    if (!res.headersSent) send(res, status, { error: status >= 500 && !known ? 'Interner Fehler.' : e.message, ...(e instanceof JiraWriteError ? { code: e.code } : {}) });
+    if (!res.headersSent) send(res, status, { error: status >= 500 && !known ? 'Interner Fehler.' : e.message, ...(e instanceof JiraWriteError ? { code: e.code } : {}), ...(e.g0 ? { g0: e.g0 } : {}), ...(e.existing ? { existing: e.existing } : {}) });
     else res.end();
   }
 });
@@ -1889,6 +2553,7 @@ async function backgroundJobs() {
       if (!creds) return;
       const r = await syncMirror(creds, 'Intervall');
       log('jira sync', { count: r.count, removed: r.removed });
+      await applyAutoGoals(await issueMap());
     } catch (e: any) { log('jira sync', { error: String(e.message).slice(0, 200) }); }
   };
   setTimeout(jiraTick, 5000);
@@ -1953,6 +2618,29 @@ async function backgroundJobs() {
   setTimeout(filesTick, 20_000);
   setInterval(filesTick, 2 * 60_000);
 
+  // Ablage-Abgleich (Plan dateien-vollständig, S1): das Register folgt der Ablage — neu, verschoben, gelöscht.
+  const ablageTick = async () => {
+    try {
+      const owner = await ablageOwner();
+      if (!owner) return;
+      const r = await syncAblage(owner);
+      if (r.neu || r.verschoben || r.geaendert || r.geloescht || r.doppelt || r.schutz || r.skipped) log('ablage-abgleich', r);
+    } catch (e: any) { log('ablage-abgleich', { error: String(e?.message ?? e).slice(0, 200) }); }
+  };
+  setTimeout(ablageTick, 30_000);
+  setInterval(ablageTick, 5 * 60_000);
+
+  // Plan 81, Schnitt 4 und 5: Arbeitsordner aufräumen (Ankündigung, dann löschen) und Nachtarchiv — stündlich geprüft.
+  const houseTick = async () => {
+    for (const person of (await teammates().catch(() => [])).filter((x) => allowed(x.email))) {
+      try { const r = await runScratch(person); if (r.removed || r.skipped) log('arbeitsordner', { user: person.id, ...r }); }
+      catch (e: any) { log('arbeitsordner', { user: person.id, error: String(e?.message ?? e).slice(0, 200) }); }
+    }
+    try { const p = await nightly(); if (p) log('backup nachts', { file: p }); } catch (e: any) { log('backup nachts', { error: String(e?.message ?? e).slice(0, 200) }); }
+  };
+  setTimeout(houseTick, 60_000);
+  setInterval(houseTick, 60 * 60_000);
+
   // Werkbank-Feed für den Vault-Sync-Snapshot und Abgleich der Freigaben mit dem Protokoll (alle 5 min).
   const roadmapTick = async () => {
     try { await writeRoadmapFeed(); await writeApprovals(); } catch (e: any) { log('roadmap-feed', { error: String(e?.message ?? e).slice(0, 160) }); }
@@ -1972,6 +2660,27 @@ async function backgroundJobs() {
 
 await connect();
 mkdirSync(cfg.dataDir, { recursive: true });
+// Plan 81, Schnitt 1: alter Speicher → Ablage, einmalig und idempotent (nur Einträge ohne `path`).
+migrateLegacy(log).catch((e) => log('ablage-umzug', { error: String(e?.message ?? e).slice(0, 200) }));
 server.listen(cfg.port, cfg.host, () => log('listening', { host: cfg.host, port: cfg.port, demo: cfg.demo, vault: cfg.vaultDir }));
 if (process.env.WERKBANK_NO_JOBS !== '1') backgroundJobs();
+// Orchestrator-Stränge selbst fortsetzen (docs/plan-orchestrator-auto-weiter.md) — eigener Takt, auch ohne Hintergrundjobs.
+// „Konto frei“ nur mit Antwort der Brücke und mindestens zwei Konten (sonst wartet `rate_limit` die 30 min ab).
+const orchDeps = {
+  userById: async (id: string) => { const u = await userById(id); return u && allowed(u.email) ? u : null; },
+  accountFree: async (u: User) => {
+    const list = await listClaudeAccounts(u);
+    if (list.length < 2) return false;
+    const r = await fetch(`${cfg.bridgeUrl}/internal/accounts-state?user=${encodeURIComponent(u.id)}`, { headers: bridgeInternal, signal: AbortSignal.timeout(1500) });
+    if (!r.ok) return false;
+    const ex: Record<string, number> = ((await r.json()) as any).exhausted ?? {};
+    return list.some((a: any) => !(ex[a.id] > Date.now()));
+  },
+  log,
+};
+startAutoWeiter(orchDeps);
+// Stand je Strang festschreiben (Teil B, G1) — unabhängig vom Auto-Fortsetzen; ORCH_STATUS=off schaltet ab.
+startStatusTick(orchDeps);
+// Leitstand wecken (Plan 132, S2): eigener Durchgang im selben Takt; LEITSTAND_WAKE=off schaltet ab.
+startLeitstandTick(orchDeps);
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { server.close(); process.exit(0); });

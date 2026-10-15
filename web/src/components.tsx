@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { api, fmtDate, chatTarget } from './api.ts';
 import { Err, useConfirm, useLoad, useToast } from './ui.tsx';
+import { befundText, GLOSSAR } from './pflege.ts';
 
 /**
  * Task-Hygiene der eigenen PM-Tickets: je Punkt eine Frage, einzeilige Antwort → vorgeschlagene
  * Jira-Aktion → Bestätigen → mit dem eigenen Jira-Zugang schreiben. "später" = heute nicht mehr fragen.
  */
-export function HygienePanel({ max = 3, title = 'Deine Tickets brauchen Pflege', onChange }: { max?: number; title?: string; onChange?: () => void }) {
+export function HygienePanel({ max = 3, title = 'Deine Tickets brauchen Pflege', onChange, heading }: { max?: number; title?: string; onChange?: () => void; heading?: string }) {
   const h = useLoad(() => api('/api/hygiene'));
   const [all, setAll] = useState(false);
   if (!h.data) return null;
@@ -15,6 +16,8 @@ export function HygienePanel({ max = 3, title = 'Deine Tickets brauchen Pflege',
   if (!d.items.length) return null;
   const shown = all ? open : open.slice(0, max);
   return (
+    <>
+    {heading && <h2>{heading}</h2>}
     <div className="card hyg" style={{ marginBottom: 14 }} data-testid="hygiene">
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <b>🧹 {title} ({open.length}{d.snoozed.length ? ` · ${d.snoozed.length} später` : ''})</b>
@@ -26,7 +29,19 @@ export function HygienePanel({ max = 3, title = 'Deine Tickets brauchen Pflege',
       {!open.length && <p className="small muted">Für heute alles auf „später“. </p>}
       {shown.map((i: any) => <HygieneItem key={i.key + i.rule} i={i} onDone={() => { h.reload(); onChange?.(); }} />)}
       <p className="tiny" style={{ margin: '6px 0 0' }}>Eine Zeile reicht: „erledigt“, „neues Datum 15.10.“, „läuft, warte auf Rogue“ oder „später“. Geschrieben wird erst nach Bestätigung, mit deinem Jira-Zugang.</p>
+      <PflegeGlossar />
     </div>
+    </>
+  );
+}
+
+/** „Was heißt …?“ — die Pflege-Begriffe in einem Satz (Board, Ticket-Detail, Heute). */
+export function PflegeGlossar() {
+  return (
+    <details className="tiny pflege-glossar" style={{ marginTop: 6 }} onClick={(e) => e.stopPropagation()}>
+      <summary>Was heißt …?</summary>
+      <dl style={{ margin: '4px 0 0' }}>{GLOSSAR.map(([w, t]) => <div key={w}><dt style={{ display: 'inline', fontWeight: 600 }}>{w}:</dt> <dd style={{ display: 'inline', margin: 0 }}>{t}</dd></div>)}</dl>
+    </details>
   );
 }
 
@@ -54,7 +69,7 @@ function HygieneItem({ i, onDone }: { i: any; onDone: () => void }) {
   };
   return (
     <div className="item" data-hygiene={i.key}>
-      <div className="small"><span className="chip warn">{i.rule}</span> {i.question}</div>
+      <div className="small"><span className={`chip ${i.rule === 'überfällig' ? 'bad' : 'warn'}`}>{befundText(i)}</span> {i.question}</div>
       <div className="row" style={{ marginTop: 4 }}>
         <input aria-label={`Antwort zu ${i.key}`} placeholder="Antwort …" value={text} onChange={(e) => setText(e.target.value)} style={{ flex: 1, minWidth: 200 }} onKeyDown={(e) => { if (e.key === 'Enter' && text.trim()) send(text); }} />
         <button className="btn small primary" disabled={!text.trim()} onClick={() => send(text)}>Vorschlagen</button>

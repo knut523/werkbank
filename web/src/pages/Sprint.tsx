@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, fmtDate, fmtDateTime, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, useJiraLive } from '../ui.tsx';
-import { HygienePanel } from '../components.tsx';
+import { BeiMirLink } from '../beimir.tsx';
 
 const noteHref = (p: string) => '#/wissen/' + p.split('/').map(encodeURIComponent).join('/');
 const FILE_LABEL: Record<string, string> = { summary: 'Summary', review: 'Review', planning: 'Planning' };
@@ -147,7 +147,7 @@ function SprintPlan({ d, cycle, reload }: { d: any; cycle: string; reload: () =>
       {s.noGoal.length > 0 && <div className="card warnbox" style={{ marginBottom: 8 }}><b>⚠ Ohne Ziel</b> <span className="tiny">im Sprint, aber keinem Ziel zugeordnet</span><ul className="tlist">{s.noGoal.map(inRow)}</ul></div>}
       <h2>Kandidaten – nicht im Sprint <span className="chip">{d.candidates.length}</span></h2>
       <p className="small muted">Mitnahme aus Review/Planning, Tickets der Sprint- und Monatsziele, überfällige und Tickets der Top-10-Specs der Rangliste.</p>
-      <ul className="tlist card">{d.candidates.map((t: any) => <TicketRow key={t.key} t={t}><button className="btn small primary" onClick={() => lc.member(t.key, true)}>in Sprint nehmen</button></TicketRow>)}</ul>
+      <ul className="tlist card">{d.candidates.map((t: any) => <TicketRow key={t.key} t={t}><button className="btn small" onClick={() => lc.member(t.key, true)}>in Sprint nehmen</button></TicketRow>)}</ul>
     </>
   );
 }
@@ -174,9 +174,12 @@ function Question({ q, file, hash, cycle, me, onSaved }: { q: any; file: string;
       if (!ok) return;
       await api(`/api/sprint/${cycle}/answer`, { body: { file, line: q.line, speaker: name, text, hash, confirm: true } });
       toast('Antwort gespeichert'); setText(''); onSaved();
-    } catch (e) { setErr(e); }
+    } catch (e: any) { setErr(/geändert/.test(String(e?.message)) ? new Error(`${e.message} Dein Text bleibt im Feld stehen.`) : e); }
   };
   const open = q.answers.filter((a: any) => a.kind === 'empty');
+  const fid = `ans-${file}-${q.line}`;
+  // Ohne vorgesehenes Antwortfeld ist das Eingabefeld eingeklappt (große Pakete bleiben lesbar).
+  const [show, setShow] = useState(open.length > 0);
   return (
     <div className="q" data-line={q.line}>
       {q.context.length > 0 && <div className="small muted">{q.context.map((c: string, i: number) => <div key={i}><Md text={c.replace(/^\s*([-*]|\d+\.)\s+/, '')} /></div>)}</div>}
@@ -194,11 +197,16 @@ function Question({ q, file, hash, cycle, me, onSaved }: { q: any; file: string;
               : <span>{a.speaker && <b>{a.speaker}: </b>}{a.kind === 'status' ? `status:${a.text}` : a.text}</span>}
           </div>
         ))}
-        <div className="row" style={{ marginTop: 6 }}>
-          <input aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 110 }} />
-          <input aria-label="Antwort" placeholder={open.length ? 'Antwort …' : 'Weitere Antwort …'} value={text} onChange={(e) => setText(e.target.value)} style={{ flex: 1, minWidth: 220 }} onKeyDown={(e) => { if (e.key === 'Enter' && text.trim()) save(); }} />
-          <button className="btn small primary" disabled={!text.trim()} onClick={save}>Antworten</button>
-        </div>
+        {!show && <button className="btn small ghost" onClick={() => setShow(true)} aria-label={`Antwort zu ${q.ticket ?? q.key} ergänzen`}>+ Antwort</button>}
+        {show && <div className="ans-form">
+          <label htmlFor={fid} className="tiny">{open.length ? 'Antwort' : 'Weitere Antwort'} zu {q.ticket ?? q.key}</label>
+          <textarea id={fid} rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Stand, nächster Schritt — oder status:Done, → mitnehmen: …" onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && text.trim()) save(); }} />
+          <div className="row">
+            <label className="tiny" htmlFor={`${fid}-n`}>Antwort als</label>
+            <input id={`${fid}-n`} value={name} onChange={(e) => setName(e.target.value)} style={{ width: 110 }} />
+            <button className="btn small" disabled={!text.trim()} onClick={save}>Antworten</button>
+          </div>
+        </div>}
         <Err e={err} />
       </div>
     </div>
@@ -227,14 +235,14 @@ function SyncPlan({ cycle, onDone }: { cycle: string; onDone: () => void }) {
   return (
     <div className="card">
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <div><h3 style={{ margin: 0 }}>Sprint-Sync vorbereiten</h3><p className="small muted" style={{ margin: 0 }}>Liest die Antwortzeilen aus Review und Planning (<code>jira-sync-plan.sh --sprint</code>) und schlägt Jira-Aktionen vor. Geschrieben wird erst nach deiner Freigabe; danach werden die Zeilen mit ✓ markiert.</p></div>
-        <button className="btn" onClick={prepare} disabled={busy}>{busy ? 'Bereite vor …' : plan ? '↻ Neu vorbereiten' : 'Vorbereiten'}</button>
+        <div><h2 style={{ margin: 0 }}>Write-back vorbereiten <span className="chip">Trockenlauf — noch nichts in Jira</span></h2><p className="small muted" style={{ margin: 0 }}>Liest die Antwortzeilen aus Review und Planning (<code>jira-sync-plan.sh --sprint</code>) und zeigt die geplanten Jira-Aktionen. Geschrieben wird erst nach deiner Freigabe im Dialog (wie bei <code>/sprint-sync</code>); danach werden die Zeilen mit ✓ markiert.</p></div>
+        <button className={plan ? 'btn' : 'btn primary'} onClick={prepare} disabled={busy}>{busy ? 'Erstelle …' : plan ? '↻ Trockenlauf neu' : 'Trockenlauf erstellen'}</button>
       </div>
       <Err e={err} />
       {plan && plan.length === 0 && <p className="okbox small" style={{ marginTop: 8 }}>Keine offenen Notizen — nichts nach Jira zu schreiben.</p>}
       {plan && plan.length > 0 && (
         <>
-          <table className="t small" style={{ marginTop: 10 }}>
+          <table className="t small stack-t" style={{ marginTop: 10 }}>
             <thead><tr><th></th><th>Ticket</th><th>Notiz</th><th>Aktion(en)</th><th>Hinweis</th></tr></thead>
             <tbody>
               {plan.map((p) => (
@@ -312,16 +320,243 @@ function NewCycle({ onCreated, suggest }: { onCreated: (id: string) => void; sug
   );
 }
 
+// ---------- Der Zyklus in fünf Schritten (docs/plan-sprint-werkbank.md) ----------
+// Status je Schritt nur aus den Dateien abgeleitet (P4), kein gespeicherter Zustand.
+
+const RATING_WORD: Record<string, string> = { '✅': 'erreicht', '🟡': 'teilweise', '❌': 'nicht erreicht' };
+const Rating = ({ r }: { r?: string | null }) => r ? <span className="rating-w"><span aria-hidden="true">{r}</span> {RATING_WORD[r] ?? r}</span> : <span className="muted">noch nicht bewertet</span>;
+const STEP_TITLES = ['Review vorbereiten', 'Updates sammeln', 'S1–S4 bewerten', 'Write-back vorbereiten', 'Mitnahme → Planning'];
+
+const answered = (q: any) => !!q.inline || q.answers.some((a: any) => a.kind !== 'empty');
+
+function stepState(d: any) {
+  const review = d?.files.review;
+  const qs: any[] = review?.questions ?? [];
+  // Gezählt werden Pakete, die ein Antwortfeld haben können; Backlog-Blöcke haben ihre eigene Frage je Ticket.
+  const pk: any[] = (review?.packages ?? []).filter((p: any) => !/^Backlog\b/i.test(p.name) && qs.some((q) => q.line > p.line && q.line <= p.end));
+  const withAnswer = pk.filter((p) => qs.some((q) => q.line > p.line && q.line <= p.end && answered(q))).length;
+  // Soll = S-Zeilen des Vorzyklus-Plannings; ohne sie zählen die Zeilen der Review-Notiz.
+  const soll: any[] = d?.previous?.outcomes ?? [];
+  const ist: any[] = review?.outcomes ?? [];
+  const rows = soll.length ? soll.map((o) => ist.find((x) => x.id === o.id)) : ist;
+  const rated = rows.filter((o) => o?.rating).length;
+  const openNotes = (review?.openNotes ?? 0) + (d?.files.planning?.openNotes ?? 0);
+  const anyNote = [review, d?.files.planning].some((f) => f?.questions.some(answered));
+  return [
+    { done: !!review, text: review ? 'Review da' : 'Review fehlt' },
+    { done: !!pk.length && withAnswer === pk.length, text: pk.length ? `${withAnswer} von ${pk.length} Paketen mit Antwort` : 'keine Pakete' },
+    { done: !!rows.length && rated === rows.length, text: rows.length ? `${rated} von ${rows.length} bewertet` : (d?.previous?.goal ? 'Ziel-Satz bewerten' : 'keine S-Zeilen') },
+    { done: !!review && anyNote && openNotes === 0, text: openNotes ? `${openNotes} offene Notiz${openNotes === 1 ? '' : 'en'}` : anyNote ? 'alles übertragen' : 'noch keine Notizen' },
+    { done: false, text: openNotes ? 'erst Write-back' : (!!review && anyNote) ? 'bereit' : 'nach dem Write-back' },
+  ];
+}
+
+function Steps({ st, cur, id }: { st: { done: boolean; text: string }[]; cur: number; id: string }) {
+  return (
+    <nav aria-label="Sprint-Zyklus">
+      <ol className="cycle-steps">
+        {STEP_TITLES.map((t, i) => (
+          <li key={t} className={`${i === cur ? 'on' : ''} ${st[i].done ? 'done' : ''}`}>
+            <a href={`#/sprint/${id}/${i + 1}`} aria-current={i === cur ? 'step' : undefined}>
+              <span className="n">{st[i].done ? '✓' : i + 1}</span>
+              <span><b>{t}</b><span className="tiny">{st[i].done ? 'erledigt · ' : ''}{st[i].text}</span></span>
+            </a>
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
+function download(name: string, text: string) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function StepDraft({ d, id, suggest, onCreated }: { d: any; id: string; suggest: string; onCreated: (id: string) => void }) {
+  const has = !!d.files.review;
+  const [date, setDate] = useState(has ? suggest : id.replace('sprint-', ''));
+  const [pre, setPre] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const confirm = useConfirm();
+  const toast = useToast();
+  const prepare = async () => {
+    setBusy(true); setErr(null); setPre(null);
+    try { setPre(await api('/api/sprint/draft', { body: { date } })); } catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  const missing = pre?.preview.files.filter((f: any) => !f.exists) ?? [];
+  const review = pre?.preview.files.find((f: any) => f.name.endsWith('-review.md'));
+  return (
+    <div className="card now" data-testid="step-1">
+      <h2>Review vorbereiten</h2>
+      <p className="small muted">Entwurf aus der Vorlage und den Daten: S-Zeilen des Vorzyklus wörtlich (ohne Bewertung), seine Arbeitspakete mit den To-Do-Tickets aus der Jira-Kopie und je Owner einem leeren Antwortfeld, je Domäne der Backlog mit „In diesen Sprint mitnehmen?“, laufende Aufgaben gesammelt, Tickets ohne Paket unter „Auffälligkeiten“. Die Notiz nennt die Werkbank nicht. Keine Prosa — das bleibt bei dir oder beim Agenten im Chat. Alles Automatische ist <b>Board-Stand, nicht Arbeitsstand</b>.</p>
+      {has && <p className="okbox small">Dieser Zyklus hat schon eine Review-Notiz (<a href={noteHref(d.files.review.path)}>{d.files.review.path.split('/').pop()}</a>) — sie wird nie überschrieben. Ein Entwurf für den nächsten Zyklus geht unten.</p>}
+      <div className="row">
+        <label className="small" htmlFor="draft-date">Zyklus ab</label>
+        <input id="draft-date" type="date" value={date} onChange={(e) => { setDate(e.target.value); setPre(null); }} />
+        <button className={has ? 'btn' : 'btn primary'} disabled={!date || busy} onClick={prepare}>{busy ? 'Erzeuge …' : 'Review-Entwurf erzeugen'}</button>
+      </div>
+      <Err e={err} />
+      {pre && (
+        <div className="draft-pre">
+          <p className="small">
+            <b>sprint-{date}</b> · Vorzyklus {pre.preview.previous ?? '—'}
+            {pre.preview.stats && <> · {pre.preview.stats.packages} Pakete, {pre.preview.stats.tickets} To-Do-Zeilen, {pre.preview.stats.backlog} im Backlog (mit Frage „mitnehmen?“), {pre.preview.stats.ongoing} laufend, {pre.preview.stats.orphans} ohne Paket · {pre.preview.stats.fallback ? 'Vorzyklus ohne S-Zeilen → Ziel-Satz' : `${pre.preview.stats.outcomes} S-Zeilen`}</>}
+            {pre.preview.stats?.skipped?.length > 0 && <span className="tiny"> · nicht übernommen (lokale Arbeit zählt erst nach Test → Dev → Prod): {pre.preview.stats.skipped.join(', ')}</span>}
+          </p>
+          <ul className="small">{pre.preview.files.map((f: any) => <li key={f.name}><code>{f.name}</code> — {f.exists ? 'gibt es schon, bleibt unverändert' : `neu (${f.lines} Zeilen)`}</li>)}</ul>
+          <div className="row">
+            {review && <button className="btn" onClick={() => download(review.name, review.content)}>Review-Entwurf herunterladen</button>}
+            {missing.length > 0 && <button className="btn primary" onClick={async () => {
+              const ok = await confirm({
+                title: `${missing.length} Notiz${missing.length === 1 ? '' : 'en'} im Vault anlegen?`,
+                body: <><p className="small">In <code>{pre.preview.dir}</code>:</p><ul className="small">{missing.map((f: any) => <li key={f.name}>{f.name}</li>)}</ul><p className="tiny">Nur neue Dateien; vorhandene werden nicht angefasst. Danach in Obsidian oder hier weiterschreiben.</p></>,
+                confirmLabel: 'Anlegen',
+              });
+              if (!ok) return;
+              try {
+                const r: any = await api('/api/sprint/draft', { body: { date, confirm: true } });
+                toast(r.dryRun ? 'Trockenlauf — nichts geschrieben' : `${r.written.length} angelegt`);
+                if (!r.dryRun) onCreated(r.id);
+              } catch (e) { setErr(e); }
+            }}>Fehlende anlegen ({missing.length})</button>}
+          </div>
+          {review && <details><summary className="small">Review-Entwurf ansehen</summary><pre className="md-pre">{review.content}</pre></details>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StepPackages({ d, id, me, reload }: { d: any; id: string; me: string; reload: () => void }) {
+  const [mine, setMine] = useState(false);
+  const [empty, setEmpty] = useState(false);
+  const review = d.files.review;
+  if (!review) return <div className="card now"><h2>Updates sammeln</h2><p className="small muted">Erst eine Review-Notiz anlegen (Schritt 1).</p></div>;
+  const pk: any[] = review.packages ?? [];
+  const lo = me.toLowerCase();
+  const qsOf = (p: any) => review.questions.filter((q: any) => q.line > p.line && q.line <= p.end);
+  const isMine = (p: any) => p.tickets.some((t: any) => (t.owner ?? '').toLowerCase() === lo) || qsOf(p).some((q: any) => q.answers.some((a: any) => a.speaker.toLowerCase() === lo));
+  const shown = pk.filter((p) => (!mine || isMine(p)) && (!empty || qsOf(p).some((q: any) => q.answers.some((a: any) => a.kind === 'empty'))));
+  const domains = [...new Set(pk.map((p) => p.domain))];
+  const counted = pk.filter((p) => !/^Backlog\b/i.test(p.name) && qsOf(p).length);
+  const withAnswer = counted.filter((p) => qsOf(p).some(answered)).length;
+  return (
+    <div className="card now" data-testid="step-2">
+      <h2>Updates sammeln</h2>
+      <p className="small muted">Je Arbeitspaket eine Antwort unter das passende Ticket — hier oder direkt in Obsidian, gezählt wird beides. Ein Text wird beim Write-back zum Jira-Kommentar, <code>status:Done</code> zur Statusänderung, <code>→ mitnehmen: …</code> nie nach Jira.</p>
+      <div className="row">
+        <span className="chip">{withAnswer} von {counted.length} Paketen mit Antwort</span>{(mine || empty) && <span className="tiny">{shown.length} von {pk.length} angezeigt</span>}
+        <label className="row small"><input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} /> nur meine{me ? ` (${me})` : ''}</label>
+        <label className="row small"><input type="checkbox" checked={empty} onChange={(e) => setEmpty(e.target.checked)} /> nur mit leerem Antwortfeld</label>
+      </div>
+      {!pk.length && <p className="small muted">Die Review-Notiz hat unter „## Die Updates“ keine Pakete (<code>####</code>).</p>}
+      {pk.length > 0 && !shown.length && <p className="okbox small">Nichts offen in dieser Auswahl.</p>}
+      {domains.map((dom) => {
+        const ps = shown.filter((p) => p.domain === dom);
+        if (!ps.length) return null;
+        return (
+          <section key={dom}>
+            <h3>{dom}</h3>
+            {ps.map((p) => {
+              const qs = qsOf(p);
+              const open = p.tickets.filter((t: any) => !t.done && !t.missing);
+              const owners = [...new Set(open.map((t: any) => t.owner).filter(Boolean))];
+              const over = open.filter((t: any) => t.overdue).length;
+              const any = qs.some(answered);
+              return (
+                <details key={p.line} className="pkg card soft" data-pkg={p.name}>
+                  <summary>
+                    <span className="pkg-arrow" aria-hidden="true" />
+                    <b>{p.name}</b>
+                    <span className="row" style={{ gap: 4 }}>
+                      <span className="chip tiny-chip">{p.tickets.length} Ticket{p.tickets.length === 1 ? '' : 's'}</span>
+                      {owners.length > 0 && <span className="chip tiny-chip">{owners.join(', ')}</span>}
+                      {over > 0 && <span className="chip tiny-chip bad">{over} überfällig</span>}
+                      <span className={`chip tiny-chip ${any ? 'ok' : ''}`}>{any ? 'mit Antwort' : 'noch keine Antwort'}</span>
+                    </span>
+                  </summary>
+                  {p.freeText.length > 0 && <p className="note small">Text ohne Antwortzeile — geht nicht nach Jira: „{p.freeText.join(' ').slice(0, 200)}“</p>}
+                  {!qs.length && <p className="small muted">Keine Ticketzeile mit Anker in diesem Paket.</p>}
+                  {qs.map((q: any) => <Question key={q.line} q={q} file="review" hash={review.hash} cycle={id} me={me} onSaved={reload} />)}
+                </details>
+              );
+            })}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function StepRating({ d }: { d: any }) {
+  const review = d.files.review;
+  const soll: any[] = d.previous?.outcomes ?? [];
+  const ist: any[] = review?.outcomes ?? [];
+  const rows = soll.length ? soll.map((o) => ({ id: o.id, title: o.title, dod: o.dod, ist: ist.find((x) => x.id === o.id) })) : ist.map((x) => ({ id: x.id, title: x.title, dod: undefined, ist: x }));
+  return (
+    <div className="card now" data-testid="step-3">
+      <h2>S1–S4 bewerten</h2>
+      <p className="small muted">Soll aus dem Planning des Vorzyklus, Ist aus der Review-Notiz. Bewertet wird in der Runde, in der Notiz — kein ✅ ohne Beleg, Board-Stand belegt nicht „fachlich fertig“.</p>
+      {!rows.length && (d.previous?.goal
+        ? <p className="small">Der Vorzyklus hatte keine S-Zeilen. Bewertet wird der Ziel-Satz: <i>„{d.previous.goal}“</i> — die S-Zeilen beginnen mit diesem Planning.</p>
+        : <p className="small muted">Keine S-Zeilen im Vorzyklus und keine in der Review-Notiz.</p>)}
+      {rows.length > 0 && (
+        <table className="t small stack-t">
+          <thead><tr><th>#</th><th>Ergebnis (Soll)</th><th>Bewertung</th><th>Beleg</th><th>Warum / was ändern wir</th></tr></thead>
+          <tbody>{rows.map((r) => {
+            const hint = r.ist?.rating === '✅' && !(r.ist?.evidence && r.ist.evidence !== '…') ? '✅ ohne Beleg' : (r.ist?.rating === '🟡' || r.ist?.rating === '❌') && !(r.ist?.why && r.ist.why !== '…' && r.ist.why !== '—') ? 'Warum fehlt' : !r.ist ? 'fehlt in der Review-Notiz' : '';
+            return <tr key={r.id}><td><b>{r.id}</b></td><td>{r.title}{r.dod && <div className="tiny">DoD: {r.dod}</div>}</td><td data-label="Bewertung"><Rating r={r.ist?.rating} />{hint && <div><span className="chip tiny-chip warn">{hint}</span></div>}</td><td data-label="Beleg">{r.ist?.evidence ?? '—'}</td><td data-label="Warum">{r.ist?.why ?? '—'}</td></tr>;
+          })}</tbody>
+        </table>
+      )}
+      {review && <p className="small"><a href={noteHref(review.path)}>Review-Notiz öffnen</a> · <a href={`#/sprint/${d.cycle.id}/4`}>Weiter zu Schritt 4</a></p>}
+    </div>
+  );
+}
+
+function StepCarry({ d, id, onCandidates }: { d: any; id: string; onCandidates: () => void }) {
+  const toast = useToast();
+  const [r, setR] = useState<any>(null);
+  const [err, setErr] = useState<unknown>(null);
+  const openNotes = (d.files.review?.openNotes ?? 0) + (d.files.planning?.openNotes ?? 0);
+  if (!d.files.review) return <div className="card now"><h2>Mitnahme → Planning</h2><p className="small muted">Erst eine Review-Notiz anlegen (Schritt 1).</p></div>;
+  return (
+    <div className="card now" data-testid="step-5">
+      <h2>Mitnahme → Planning</h2>
+      <p className="small muted">Alles, was der Review berührt und nach dem Write-back noch offen ist — gerechnet aus der Jira-Kopie, wie <code>jira-sprint-carry.sh</code>. Nur lesend: in die Notiz schreibt den Abschnitt <code>/sprint-sync</code> im Chat. Ins Planning kommt es über die Kandidaten („in Sprint nehmen“).</p>
+      {openNotes > 0 && <p className="note small">Erst der Write-back: {openNotes} Notiz{openNotes === 1 ? '' : 'en'} noch nicht in Jira. Sonst stünden Tickets in der Mitnahme, die gleich auf Done gehen. <a href={`#/sprint/${id}/4`}>Zu Schritt 4</a></p>}
+      <div className="row">
+        <button className="btn primary" disabled={openNotes > 0} onClick={async () => { setErr(null); try { setR(await api(`/api/sprint/${id}/carry`)); } catch (e) { setErr(e); } }}>Mitnahme berechnen</button>
+        <button className="btn" onClick={onCandidates}>Zu den Kandidaten</button>
+      </div>
+      <Err e={err} />
+      {r && (
+        <>
+          <p className="small">{r.keys} Tickets im Review erwähnt, <b>{r.open} offen</b> ({r.groups.overdue.length} überfällig, {r.groups.dated.length} mit Datum, {r.groups.undated.length} ohne) · {r.carry} „→ mitnehmen“ · Stand der Jira-Kopie {r.jiraSync ? fmtDateTime(r.jiraSync.at) : 'unbekannt'}{r.missing.length ? ` · ${r.missing.length} nicht in der Kopie` : ''}</p>
+          <div className="row"><button className="btn" onClick={() => download(`${id}-mitnahme.md`, r.markdown)}>Als Markdown herunterladen</button><button className="btn" onClick={() => navigator.clipboard?.writeText(r.markdown).then(() => toast('Kopiert'), () => toast('Kopieren nicht möglich — bitte herunterladen'))}>Kopieren</button></div>
+          <pre className="md-pre">{r.markdown}</pre>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
   const cyc = useLoad(() => api('/api/sprint/cycles'));
-  const want = hash.match(/^#\/sprint\/(sprint-\d{4}-\d{2}-\d{2})/)?.[1];
+  const hm = hash.match(/^#\/sprint\/(sprint-\d{4}-\d{2}-\d{2})(?:\/([1-5]))?/);
+  const want = hm?.[1];
   const cycles: any[] = (cyc.data as any)?.cycles ?? [];
   const id = want ?? cycles.find((c) => !c.archived)?.id ?? cycles[0]?.id;
   const v = useLoad(() => (id ? api('/api/sprint/' + id) : Promise.resolve(null)), [id]);
   // Jira-Status der Tickets live nachziehen (Schreiben am Board, im Chat, Sprint-Sync, Abgleich).
   useJiraLive(() => { if (id) api('/api/sprint/' + id).then(v.setData).catch(() => {}); });
-  const [tab, setTab] = useState<string>('review');
+  const [tab, setTab] = useState<string>('planning');
   const [onlyOpen, setOnlyOpen] = useState(false);
+  const [ctxOpen, setCtxOpen] = useState(false);
   const toast = useToast();
   const me = (cfg.user?.name ?? '').split(' ')[0];
   const d: any = v.data;
@@ -332,19 +567,26 @@ export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
   }, [cycles]);
   if (cyc.error) return <div className="page"><Err e={cyc.error} /></div>;
   if (!cyc.data) return <div className="page"><Loading /></div>;
+  const created = (nid: string) => { cyc.reload(); window.location.hash = `#/sprint/${nid}/2`; if (nid === id) v.reload(); };
   if (!id) return <div className="page"><h1>Sprint</h1><p className="muted">Kein Zyklus unter <code>{(cyc.data as any).root}</code>.</p><NewCycle suggest={suggest} onCreated={(nid) => { window.location.hash = '#/sprint/' + nid; cyc.reload(); }} /></div>;
-  const planning = d?.files.planning, review = d?.files.review, summary = d?.files.summary;
-  const goal = planning?.goal?.goal ?? summary?.goal?.goal;
+  const planning = d?.files.planning, summary = d?.files.summary;
+  const real = (g?: string) => (g && !g.startsWith('…') ? g : undefined);   // Platzhalter der Vorlage zählt nicht
+  const goal = real(planning?.goal?.goal) ?? real(summary?.goal?.goal);
+  const st = d ? stepState(d) : [];
+  const first = st.findIndex((s) => !s.done);
+  const step = hm?.[2] ? Number(hm[2]) - 1 : (first < 0 ? 4 : first);
   const cur = d?.files[tab];
   const sections = cur ? [...new Set<string>(cur.questions.map((q: any) => q.section))] : [];
+  const showCandidates = () => { setCtxOpen(true); setTimeout(() => document.querySelector('[data-testid="ctx-plan"]')?.scrollIntoView({ behavior: 'smooth' }), 50); };
   return (
-    <div className="page">
+    <div className="page sprint-page">
       <div className="head">
         <div>
           <h1>Sprint {id.replace('sprint-', '')}</h1>
           <div className="row small">
             {d && Object.entries(d.files).map(([k, f]: any) => <a key={k} className="chip" href={noteHref(f.path)}>{FILE_LABEL[k]}{f.status ? ` · ${f.status}` : ''}</a>)}
             {d?.cycle.archived && <span className="chip warn">archiviert</span>}
+            {d && !d.cycle.archived && d.cycle.date > new Date().toLocaleDateString('sv-SE') && <span className="chip" title="Board, Roadmap und Chat-Kontext zeigen noch den laufenden Zyklus">beginnt erst {fmtDate(d.cycle.date)}</span>}
           </div>
         </div>
         <select value={id} onChange={(e) => { window.location.hash = '#/sprint/' + e.target.value; }} aria-label="Zyklus wählen">
@@ -354,65 +596,51 @@ export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
       {v.error && <Err e={v.error} />}
       {!d ? <Loading /> : (
         <>
-          <div className="card">
-            <div className="tiny">Sprint-Ziel</div>
-            <div style={{ fontSize: 16, fontWeight: 600 }}>{goal ?? <span className="muted">— noch kein Sprint-Ziel in der Planning-Notiz —</span>}</div>
-          </div>
+          <p className="sprint-goal"><span className="tiny">Sprint-Ziel</span> {goal ?? <span className="muted">— noch kein Sprint-Ziel in der Planning-Notiz —</span>}</p>
+          <Steps st={st} cur={step} id={id} />
 
-          {d.goals && <GoalTree g={d.goals} />}
-          {d.goals && <SprintPlan d={d} cycle={id} reload={() => v.reload()} />}
+          {step === 0 && <StepDraft key={id} d={d} id={id} suggest={suggest} onCreated={created} />}
+          {step === 1 && <StepPackages d={d} id={id} me={me} reload={() => v.reload()} />}
+          {step === 2 && <StepRating d={d} />}
+          {step === 3 && <div className="now" data-testid="step-4"><SyncPlan cycle={id} onDone={() => { v.reload(); toast('Write-back ausgeführt'); }} /></div>}
+          {step === 4 && <StepCarry d={d} id={id} onCandidates={showCandidates} />}
 
-          <h2>Ergebnisse (Planning-Tabelle)</h2>
-          {planning?.outcomes.length ? (
-            <table className="t small stack-t">
-              <thead><tr><th>#</th><th>Ergebnis</th><th>DoD</th><th>Owner</th><th>Datum</th><th>Review</th></tr></thead>
-              <tbody>{planning.outcomes.map((o: any) => {
-                const r = review?.outcomes.find((x: any) => x.id === o.id);
-                return <tr key={o.id}><td><b>{o.id}</b></td><td>{o.title}</td><td data-label="DoD">{o.dod ?? '—'}</td><td data-label="Owner">{o.owner ?? '—'}</td><td data-label="Datum">{o.date ?? '—'}</td><td data-label="Review">{r?.rating ? <span className="rating" title={r.evidence}>{r.rating}</span> : '—'}</td></tr>;
-              })}</tbody>
-            </table>
-          ) : <p className="small muted">Die Planning-Notiz hat noch keine Ergebniszeilen S1–S4 (Sprint-Ziel + Ergebnisse mit DoD/Owner/Datum). Neue Zyklen aus der Werkbank bringen die Tabelle mit.</p>}
-          {review?.outcomes.length > 0 && (
-            <>
-              <h3>Review-Bewertung (Soll-Ist)</h3>
-              <table className="t small stack-t">
-                <thead><tr><th>#</th><th>Ergebnis</th><th>Bewertung</th><th>Beleg</th><th>Warum / was ändern wir</th></tr></thead>
-                <tbody>{review.outcomes.map((o: any) => <tr key={o.id}><td><b>{o.id}</b></td><td>{o.title}</td><td className="rating" data-label="Bewertung">{o.rating ?? '—'}</td><td data-label="Beleg">{o.evidence ?? '—'}</td><td data-label="Warum">{o.why ?? '—'}</td></tr>)}</tbody>
-              </table>
-            </>
-          )}
-
-          <h2>Fragen und Antwortzeilen</h2>
-          <div className="tabs">
-            {Object.keys(d.files).map((k) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{FILE_LABEL[k]} ({d.files[k].questions.length})</button>)}
-            <label className="row small" style={{ marginLeft: 'auto' }}><input type="checkbox" checked={onlyOpen} onChange={(e) => setOnlyOpen(e.target.checked)} /> nur mit leerem Antwortfeld</label>
-          </div>
-          {cur && cur.questions.length === 0 && <p className="muted small">Keine Anker <code>{'<!--k:…-->'}</code> in dieser Notiz.</p>}
-          {cur && sections.map((sec) => {
-            const qs = cur.questions.filter((q: any) => q.section === sec && (!onlyOpen || q.answers.some((a: any) => a.kind === 'empty')));
-            if (!qs.length) return null;
-            return (
-              <details key={sec} open={sections.length < 6 || /Unklar|entscheiden/i.test(sec)} className="card" style={{ marginBottom: 8 }}>
-                <summary><b>{sec}</b> <span className="tiny">{qs.length}</span></summary>
-                {qs.map((q: any) => <Question key={q.line} q={q} file={tab} hash={cur.hash} cycle={id} me={me} onSaved={() => v.reload()} />)}
-              </details>
-            );
-          })}
-
-          <h2>Sprint-Sync</h2>
-          <SyncPlan cycle={id} onDone={() => { v.reload(); toast('Sprint-Sync ausgeführt'); }} />
-
-          <h2>Deine offenen Pflegepunkte</h2>
-          <HygienePanel max={50} title="Eigene PM-Tickets" />
-          <h2>Tickets ohne Termin-Klarheit</h2>
-          <p className="small muted">Aus der Jira-Kopie{d.jiraSync ? ` (Stand ${fmtDateTime(d.jiraSync.at)})` : ' — noch nicht synchronisiert'}. Offenes Ticket heißt nicht unerledigte Arbeit — als Frage in die Runde.</p>
-          <div className="grid2">
-            <div className="card"><b>Überfällig ({d.overdue.length})</b><ul className="small">{d.overdue.slice(0, 40).map((i: any) => <li key={i.key}><a href={`#/board?key=${i.key}`}>{i.key}</a> {i.summary} · {i.assignee ?? '—'} · <span className="chip bad">{fmtDate(i.duedate)}</span></li>)}</ul></div>
-            <div className="card"><b>Ohne Datum ({d.undated.length})</b><ul className="small">{d.undated.slice(0, 40).map((i: any) => <li key={i.key}><a href={`#/board?key=${i.key}`}>{i.key}</a> {i.summary} · {i.assignee ?? '—'}</li>)}</ul></div>
-          </div>
-
-          <h2>Nächster Zyklus</h2>
-          <NewCycle suggest={suggest} onCreated={(nid) => { toast(`${nid} angelegt`); cyc.reload(); window.location.hash = '#/sprint/' + nid; }} />
+          <h2 className="ctx-h">Kontext</h2>
+          <details className="card ctx" data-testid="ctx-plan" open={ctxOpen} onToggle={(e) => setCtxOpen((e.target as HTMLDetailsElement).open)}>
+            <summary><b>Sprintziele, im Sprint, Kandidaten</b> <span className="tiny">{d.inSprint?.count ?? 0} im Sprint · {d.candidates?.length ?? 0} Kandidaten</span></summary>
+            {d.goals && <SprintPlan d={d} cycle={id} reload={() => v.reload()} />}
+          </details>
+          {d.goals && <details className="card ctx"><summary><b>Zielbaum</b> <span className="tiny">Gate → Ziel → KR → Monat → Sprint</span></summary><GoalTree g={d.goals} /></details>}
+          <details className="card ctx">
+            <summary><b>Alle Fragen und Antwortzeilen</b> <span className="tiny">{Object.values(d.files).reduce((n: number, f: any) => n + f.questions.length, 0)} in Summary, Review, Planning</span></summary>
+            <div className="tabs" role="tablist">
+              {Object.keys(d.files).map((k) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{FILE_LABEL[k]} ({d.files[k].questions.length})</button>)}
+              <label className="row small" style={{ marginLeft: 'auto' }}><input type="checkbox" checked={onlyOpen} onChange={(e) => setOnlyOpen(e.target.checked)} /> nur mit leerem Antwortfeld</label>
+            </div>
+            {cur && cur.questions.length === 0 && <p className="muted small">Keine Anker <code>{'<!--k:…-->'}</code> in dieser Notiz.</p>}
+            {cur && sections.map((sec) => {
+              const qs = cur.questions.filter((q: any) => q.section === sec && (!onlyOpen || q.answers.some((a: any) => a.kind === 'empty')));
+              if (!qs.length) return null;
+              return (
+                <details key={sec} open={/Unklar|entscheiden/i.test(sec)} className="card soft" style={{ marginBottom: 8 }}>
+                  <summary><b>{sec}</b> <span className="tiny">{qs.length}</span></summary>
+                  {qs.map((q: any) => <Question key={q.line} q={q} file={tab} hash={cur.hash} cycle={id} me={me} onSaved={() => v.reload()} />)}
+                </details>
+              );
+            })}
+          </details>
+          <details className="card ctx"><summary><b>Deine offenen Pflegepunkte</b></summary><BeiMirLink what="Deine Pflegepunkte (mit Antwortfeld je Ticket)" /></details>
+          <details className="card ctx">
+            <summary><b>Tickets ohne Termin-Klarheit</b> <span className="tiny">{d.overdue.length} überfällig · {d.undated.length} ohne Datum</span></summary>
+            <p className="small muted">Aus der Jira-Kopie{d.jiraSync ? ` (Stand ${fmtDateTime(d.jiraSync.at)})` : ' — noch nicht synchronisiert'}. Offenes Ticket heißt nicht unerledigte Arbeit — als Frage in die Runde.</p>
+            <div className="grid2">
+              <div className="card"><b>Überfällig ({d.overdue.length})</b>{d.overdue.length ? <ul className="small">{d.overdue.slice(0, 40).map((i: any) => <li key={i.key}><a href={`#/board?key=${i.key}`}>{i.key}</a> {i.summary} · {i.assignee ?? '—'} · <span className="chip bad">überfällig {fmtDate(i.duedate)}</span></li>)}</ul> : <p className="small muted">Keine.</p>}</div>
+              <div className="card"><b>Ohne Datum ({d.undated.length})</b>{d.undated.length ? <ul className="small">{d.undated.slice(0, 40).map((i: any) => <li key={i.key}><a href={`#/board?key=${i.key}`}>{i.key}</a> {i.summary} · {i.assignee ?? '—'}</li>)}</ul> : <p className="small muted">Keine.</p>}</div>
+            </div>
+          </details>
+          <details className="card ctx"><summary><b>Neuen Zyklus anlegen</b> <span className="tiny">alle drei Notizen auf einmal — sonst Schritt 1 „Review vorbereiten“</span></summary>
+            <NewCycle suggest={suggest} onCreated={(nid) => { toast(`${nid} angelegt`); cyc.reload(); window.location.hash = '#/sprint/' + nid; }} />
+          </details>
         </>
       )}
     </div>
