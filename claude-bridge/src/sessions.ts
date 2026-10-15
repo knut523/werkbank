@@ -7,8 +7,8 @@
 // weiter und schreibt in die neue Antwort.
 
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, realpathSync, statSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { tmpdir, homedir } from 'node:os';
+import { execFileSync, spawn } from 'node:child_process';
 import { join, resolve, relative as relPath, isAbsolute } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
@@ -1731,7 +1731,67 @@ function delegLog(d: Deleg): DelegationLog {
 function report(d: Deleg) { try { d.req.onDelegation?.(delegLog(d)); } catch { /* Messung ist optional */ } }
 
 /** Worker-Zug über den normalen Zugablauf; die Senke sammelt den Text. */
+// Melious-Worker über jcode statt Claude Code (Knut 15.10. abends: „lass uns das jetzt einfach mal mit jcode machen“). Grund, gemessen:
+// Claude Code über Melious (Anthropic-Format) meldet die Eingabe mit 0 und trifft den Melious-Cache nicht → ~34 000 Energie je
+// Strang-Stunde; jcode (OpenAI-Format) auf derselben Aufgabe: 26 Aufrufe, 95 % Cache, ≈ 255 Energie. Prüfer bleiben Claude
+// (Prüfer mindestens Autor-Klasse). Einschalten mit BRIDGE_WORKER_JCODE=on; jcode braucht das Profil [providers.melious].
+export const JCODE_BIN = () => process.env.BRIDGE_JCODE_BIN || join(homedir(), '.local', 'bin', 'jcode');
+export const jcodeAn = () => process.env.BRIDGE_WORKER_JCODE === 'on' && existsSync(JCODE_BIN());
+/** Summe der token_usage aller Aufrufe einer jcode-Sitzung (input enthält den Cache-Anteil). */
+export function jcodeUsage(sessionJson: any): MeliousUsage {
+  const u: MeliousUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  for (const m of sessionJson?.messages ?? []) {
+    let t: any = m?.token_usage;
+    if (!t) continue;
+    if (typeof t === 'string') { try { t = JSON.parse(t.replace(/'/g, '"').replace(/\bNone\b/g, 'null')); } catch { continue; } }
+    const cache = Number(t.cache_read_input_tokens) || 0;
+    u.input += Math.max(0, (Number(t.input_tokens) || 0) - cache); u.cacheRead += cache; u.output += Number(t.output_tokens) || 0;
+  }
+  return u;
+}
+async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> {
+  if (!jcodeAn() || d.rolle === 'pruefer') return null;
+  const e = orchMap[d.workerKey];
+  if (e?.wantMel === false) return null;
+  let mel: Account | undefined;
+  try { mel = normalizeAccounts(d.req.accounts ? await d.req.accounts() : [], d.req.token).find(isMelious); } catch { return null; }
+  const now = Date.now();
+  if (!mel || !meliousUsable(mel, exhaustedOf(safeId(d.userId)), now) || (mel.rest ?? 0) <= workerMeliousReserve()) return null;
+  const fest = typeof e?.modell === 'string' && e.modell.startsWith('melious:') ? e.modell.slice(8) : null;
+  const model = fest ?? mel.rollen?.[d.rolle === 'leser' ? 'leser' : 'schreiber']?.[0] ?? 'glm-5.3-flash';
+  const tools = d.rolle === 'leser' ? 'read,bash,agentgrep' : 'read,bash,write,edit,agentgrep';
+  const t0 = Date.now();
+  const env: Record<string, string> = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: mel.token };
+  const out = await new Promise<{ code: number | null; stdout: string; stderr: string }>((res) => {
+    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', '--model', model, '--tools', tools, 'run', '--json', prompt], { cwd: d.cwd, env });
+    let so = '', se = '';
+    c.stdout.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
+    c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
+    const timer = setTimeout(() => c.kill('SIGTERM'), envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60) * 1000);
+    const stopper = setInterval(() => { if (d.aborted) c.kill('SIGTERM'); }, 2000);
+    c.on('close', (code) => { clearTimeout(timer); clearInterval(stopper); res({ code, stdout: so, stderr: se }); });
+    c.on('error', () => { clearTimeout(timer); clearInterval(stopper); res({ code: -1, stdout: so, stderr: se }); });
+  });
+  let j: any = null; try { j = JSON.parse(out.stdout); } catch { /* unten */ }
+  let usage: MeliousUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  if (j?.session_id && /^[\w.-]{1,120}$/.test(j.session_id)) {
+    try { usage = jcodeUsage(JSON.parse(readFileSync(join(homedir(), '.jcode', 'sessions', `${j.session_id}.json`), 'utf8'))); } catch { /* ohne Sitzungsdatei */ }
+  }
+  if (!usageTotal(usage) && j?.usage) usage = { input: Math.max(0, (j.usage.input_tokens || 0) - (j.usage.cache_read_input_tokens || 0)), output: j.usage.output_tokens || 0, cacheRead: j.usage.cache_read_input_tokens || 0, cacheWrite: 0 };
+  const energie = mel.faktoren ? energieOf(usage, model, mel.faktoren) : 0;
+  d.input += usage.input + usage.cacheRead; d.output += usage.output; d.energie += energie;
+  d.modell = `Melious ${model} (jcode)`; d.konto = mel.id; d.anbieter = 'melious';
+  try { d.req.onMeliousUsage?.(usage, model); } catch { /* egal */ }
+  try { d.req.onTurnLog?.({ conv: d.workerConv, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${model} (jcode)`, input: usage.input + usage.cacheRead, output: usage.output, energie, outcome: out.code === 0 ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: d.id, parent: d.parent }); } catch { /* egal */ }
+  log('worker jcode', { delegation: d.id, modell: model, exit: out.code, ms: Date.now() - t0, ...usage, energie: Math.round(energie) });
+  if (out.code !== 0 || !j) return `jcode-Lauf fehlgeschlagen (Exit ${out.code}). ${String(out.stderr).split('\n').filter(Boolean).slice(-3).join(' · ').slice(0, 600)}`;
+  return String(j.text ?? '');
+}
+
 async function runWorker(d: Deleg, prompt: string): Promise<string> {
+  // jcode zuerst (Melious-Worker); null = nicht zuständig → wie bisher über Claude Code.
+  const jc = await runWorkerJcode(d, prompt);
+  if (jc !== null) return jc;
   const chunks: string[] = [];
   let closed = false;
   const fns: (() => void)[] = [];

@@ -291,3 +291,20 @@ test('Phasenwechsel nach Ersatz-Lead (C6): Brücke prüft den Strang-Stand und h
   assert.match(t2, /Brücken-Prüfung ja/);
   void out;
 });
+
+test('jcode-Worker (15.10.): Verbrauch aus der jcode-Sitzung summiert (Cache getrennt), Weg standardmäßig aus', async () => {
+  const S = await import('../src/sessions.ts');
+  const u = S.jcodeUsage({ messages: [
+    { role: 'user' },
+    { role: 'assistant', token_usage: { input_tokens: 20000, output_tokens: 100, cache_read_input_tokens: 0 } },
+    { role: 'assistant', token_usage: "{'prompt_tokens': 45492, 'input_tokens': 45492, 'output_tokens': 215, 'cache_read_input_tokens': 43776, 'cache_creation_input_tokens': None}" },
+  ] });
+  assert.deepEqual(u, { input: 20000 + (45492 - 43776), output: 315, cacheRead: 43776, cacheWrite: 0 });
+  const vorher = process.env.BRIDGE_WORKER_JCODE;
+  delete process.env.BRIDGE_WORKER_JCODE;
+  assert.equal(S.jcodeAn(), false, 'ohne BRIDGE_WORKER_JCODE=on nie jcode');
+  process.env.BRIDGE_WORKER_JCODE = 'on'; process.env.BRIDGE_JCODE_BIN = '/gibt/es/nicht';
+  assert.equal(S.jcodeAn(), false, 'ohne Programm nie jcode');
+  if (vorher === undefined) delete process.env.BRIDGE_WORKER_JCODE; else process.env.BRIDGE_WORKER_JCODE = vorher;
+  delete process.env.BRIDGE_JCODE_BIN;
+});
