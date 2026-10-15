@@ -21,6 +21,7 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
+import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
@@ -1581,10 +1582,28 @@ on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (r
   }
   if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
   const text = String(b.text ?? '').trim().slice(0, 4000);
-  if (b.kind !== 'nacharbeit' || !text) throw new HttpError(400, 'Schreib kurz, was nachzuarbeiten ist.');
-  await sendOrch(u, m[1], `Nacharbeit nach Review: ${text}`);
-  log('strang nacharbeit', { user: u.id, id: m[1] });
+  // Übersicht (Plan 184, S2): „antwort“ beantwortet die Rückfrage aus „Braucht Knut“ — derselbe Weg wie die Nacharbeit.
+  if ((b.kind !== 'nacharbeit' && b.kind !== 'antwort') || !text) throw new HttpError(400, b.kind === 'antwort' ? 'Schreib kurz deine Antwort.' : 'Schreib kurz, was nachzuarbeiten ist.');
+  await sendOrch(u, m[1], replyText(b.kind, text));
+  log(b.kind === 'antwort' ? 'strang antwort' : 'strang nacharbeit', { user: u.id, id: m[1] });
   send(res, 200, { ok: true, url: d.url });
+});
+
+// Übersicht „Was fertig ist“ (docs/plan-uebersicht-handeln.md, Paket 184): je offenem Strang eine Karte, nach Thema. Nur lesen.
+on('GET', /^\/api\/uebersicht$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(60).toArray()) as any[]).filter(offenFuerKnut);
+  const ids = docs.map((d) => String(d._id));
+  const fgs: any[] = ids.length ? await (await import('./freigabe.ts')).freigaben().find({ strand: { $in: ids }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
+  const qs = await listQuestions(u, { open: true }).catch(() => []);
+  const basis = paketBasis();
+  const karten = docs.map((d) => {
+    try { return uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), qs.filter((q: any) => q.strand && String(q.strand.id) === String(d._id)), basis); }
+    catch (e: any) { log('uebersicht karte', { id: d._id, err: String(e?.message ?? e) }); return null; }   // eine kaputte Karte reißt die anderen nicht mit
+  }).filter(Boolean) as any[];
+  const imStrang = new Set(karten.map((k) => k.id));
+  const lose = qs.filter((q: any) => !q.strand || !imStrang.has(String(q.strand.id)));
+  send(res, 200, { ...gruppieren(karten, lose), at: new Date(), dryRun: dryRun(), paketDienst: !!basis });
 });
 
 // Rückfragen des Orchestrators (Knut antwortet hier; nur die eigenen).
