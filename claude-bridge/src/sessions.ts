@@ -1018,7 +1018,7 @@ async function meliousCommand(req: TurnRequest, key: string, arg: string, name?:
     lines.unshift(on ? `🧪 **Melious ist für diesen Chat an** — neue Züge laufen zuerst über Melious (${MELIOUS_HINT}). Modell: ${fixed ? `„${fixed}“${meliousChatModel(key) ? ' (für diesen Chat)' : strandMel ? ' (des Strangs)' : ' (aus der Einrichtung)'}` : verteilt}.` : 'Melious ist für diesen Chat **aus** — die Züge laufen über die Claude-Konten.');
     if (!mel) lines.push(on ? 'Achtung: Melious ist in der Einrichtung nicht erlaubt oder es ist kein Schlüssel hinterlegt — bis dahin läuft auch dieser Chat über Claude.' : '');
     else if (!meliousUsable(mel, exhaustedOf(safeId(req.userId)))) lines.push(`Melious ist gerade gesperrt${mel.sperre ? ` (${mel.sperre})` : ' (Konto als erschöpft vermerkt)'} — bis dahin über Claude.`);
-    else lines.push(`Rest bis zum Deckel: ${mel.rest!.toLocaleString('de-DE')} Tokens.`);
+    else lines.push(mel.faktoren && Object.keys(mel.faktoren).length ? `Rest bis zum Deckel: ≈ ${Math.round(mel.rest!).toLocaleString('de-DE')} Energie (geschätzt; echter Stand im Melious-Dashboard).` : `Rest bis zum Deckel: ${mel.rest!.toLocaleString('de-DE')} Tokens.`);
     lines.push('Befehle: `/melious an [modell]` · `/melious modell <name|standard>` · `/melious modelle` (Liste) · `/melious aus`.');
   }
   log('melious schalter', { conv: key, befehl: arg, an: on, modell: meliousChatModel(key) ?? null, erlaubt: !!mel });

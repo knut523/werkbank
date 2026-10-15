@@ -43,20 +43,20 @@ try {
   let s = await api('GET', '/api/setup/melious');
   check('Neuer Schlüssel: gespeichert, aber aus (Standard aus)', s.configured && !s.enabled && s.last4 === 'demo');
   s = await api('PUT', '/api/setup/melious', { enabled: true });
-  check('Erlaubt; Deckel-Vorgaben 200 000 / 2 000 000', s.enabled && s.dayLimit === 200000 && s.monthLimit === 2000000, `${s.dayLimit}/${s.monthLimit}`);
+  check('Erlaubt; Energie-Deckel-Vorgaben 5 000 / 100 000', s.enabled && s.dayLimit === 5000 && s.monthLimit === 100000, `${s.dayLimit}/${s.monthLimit}`);
 
   // Chat: /melious an, kurzer Zug, Werkzeug-Zug.
   await p.goto(LC + '/c/new');
   const say = async (t) => { await p.locator('#prompt-textarea').fill(t); await p.getByRole('button', { name: 'Nachricht senden' }).click(); };
   await say('/melious an');
   await p.getByText(/Melious ist für diesen Chat an/).first().waitFor({ timeout: 30000 });
-  check('/melious an → Bestätigung mit Rest bis zum Deckel', await p.getByText(/Rest bis zum Deckel: 200\.000 Tokens/).first().isVisible());
-  check('/melious an → Lastverteilung über die Modelle der Rolle, keine Datenregel', await p.getByText(/verteilt über glm-5\.3-flash, glm-5\.3, deepseek-v4\.1-flash/).first().isVisible() && !(await p.getByText(/Datenregel/).count()));
+  check('/melious an → Bestätigung mit Rest bis zum Deckel in Energie (geschätzt)', await p.getByText(/Rest bis zum Deckel: ≈ 5\.000 Energie \(geschätzt/).first().isVisible());
+  check('/melious an → Lastverteilung über die Modelle der Rolle, keine Datenregel', await p.getByText(/verteilt über glm-5\.3, glm-5\.3-flash, deepseek-v4\.1-flash/).first().isVisible() && !(await p.getByText(/Datenregel/).count()));
   await p.waitForTimeout(1500);
   await say('Antworte mit OK');
   await p.getByText(/Dieser Zug läuft über „Melious“/).first().waitFor({ timeout: 60000 });
   await p.getByText('OK', { exact: true }).first().waitFor({ timeout: 60000 });
-  check('Kurzer Zug über Melious, verteiltes Modell sichtbar: „🧪 … · Modell glm-5.3-flash (Open-Weight-Modell, Ergebnisse prüfen)“', await p.getByText(/Dieser Zug läuft über „Melious“ · Modell glm-5\.3-flash \(Open-Weight-Modell, Ergebnisse prüfen\)/).first().isVisible());
+  check('Kurzer Zug über Melious, verteiltes Modell sichtbar: „🧪 … · Modell glm-5.3 (erstes der Rolle; Open-Weight-Modell, Ergebnisse prüfen)“', await p.getByText(/Dieser Zug läuft über „Melious“ · Modell glm-5\.3 \(Open-Weight-Modell, Ergebnisse prüfen\)/).first().isVisible());
   await p.waitForTimeout(1500);
   await say('Lies bitte die Datei Home.md im Vault');
   await p.getByText(/Datei gelesen \(Stub\)/).first().waitFor({ timeout: 90000 });
