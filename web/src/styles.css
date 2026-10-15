@@ -499,6 +499,9 @@ td.dod-ja { color: var(--ok, #2f7d3a); } td.dod-teilweise { color: var(--warn, #
 .ub-head p { margin: 2px 0 0; }
 .ub-exec { border-left: 5px solid var(--brand, #ec6726); }
 .ub-exec h2, .ub-lose h2 { font-size: 1.05rem; margin: 0 0 4px; }
+.ub-themen { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 4px 14px; align-items: start; }
+.ub-thema.ub-breit { grid-column: 1 / -1; }
+.ub-thema:not(.ub-breit) .ub-grid { grid-template-columns: minmax(0, 1fr); }
 .ub-thema > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 2px; font-size: 1.05rem; list-style: none; }
 .ub-thema > summary::-webkit-details-marker { display: none; }
 .ub-thema > summary::before { content: '▸'; color: var(--text-secondary); width: 1em; }

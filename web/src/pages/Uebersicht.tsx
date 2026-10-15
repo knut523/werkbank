@@ -184,7 +184,7 @@ function Thema({ t, onDone }: { t: any; onDone: (reload?: boolean) => void }) {
   const [zu, setZu] = useStored<boolean | null>(`thema:${t.thema}`, null);
   const open = zu === null ? offenVorgabe : !zu;
   return (
-    <details className="ub-thema" open={open} onToggle={(e) => { const o = (e.target as HTMLDetailsElement).open; if (o !== open) setZu(o === offenVorgabe ? null : !o); }} data-testid="ub-thema" data-thema={t.thema}>
+    <details className={`ub-thema${t.karten.length > 1 ? ' ub-breit' : ''}`} open={open} onToggle={(e) => { const o = (e.target as HTMLDetailsElement).open; if (o !== open) setZu(o === offenVorgabe ? null : !o); }} data-testid="ub-thema" data-thema={t.thema}>
       <summary><span className="ub-thema-name">{t.thema}</span> <span className="chip">{t.karten.length}</span>
         {ZAHL.filter(([z]) => t.zahlen[z]).map(([z, label, cls]) => <span key={z} className={`chip tiny-chip ${cls}`}>{t.zahlen[z]} {label}</span>)}</summary>
       <div className="ub-grid">{t.karten.map((k: any) => <Karte key={k.id} k={k} onDone={onDone} />)}</div>
@@ -224,7 +224,7 @@ export function Uebersicht({ cfg }: { cfg: Config }) {
         <h2>Rückfragen an dich <span className="chip warn">{x.lose.length}</span></h2>
         {x.lose.map((q: any) => <Rueckfrage key={q.id} q={q} onDone={onDone} />)}
       </section>}
-      {x.themen.map((t: any) => <Thema key={t.thema} t={t} onDone={onDone} />)}
+      <div className="ub-themen">{x.themen.map((t: any) => <Thema key={t.thema} t={t} onDone={onDone} />)}</div>
       {!n && !x.lose.length && <div className="card soft empty"><p><b>Nichts offen.</b></p><p className="small muted">Neue Unter-Chats startet der Hauptchat.</p></div>}
     </div>
   );

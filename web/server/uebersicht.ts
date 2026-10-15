@@ -131,10 +131,12 @@ export function kartenLinks(o: { id: string; bericht: boolean; paket: string | n
 /** Karte eines Strangs (rein bis auf das Lesen von Bericht, Plan und Paketliste). */
 export function karte(d: any, fgs: any[], qs: any[], basis: string | null) {
   const felder: any = kopfFelder(d, fgs);
-  const kopf: Kopf | null = felder.kopf ?? null;
   const running = d.lastStatus === 'running';
   const pfad = paketDatei(d, 'bericht');
   const text = readBericht(pfad);
+  // Der Status-Takt schreibt den Kopf nur für fertig gemeldete Stränge fest; sonst (blockiert, braucht Antwort) direkt aus dem Bericht.
+  const roh = felder.kopf ? null : berichtKopf(text);
+  const kopf: Kopf | null = felder.kopf ?? (roh && 'status' in roh ? roh : null);
   const offen = offeneEntscheidungen(text, d.entscheidungenAntwort ?? null);
   const fg = felder.freigabe;
   const aufGithub = (felder.prs ?? []).some((z: any) => z.stand === 'offen' || z.stand === 'gemergt');
