@@ -70,9 +70,14 @@ selbst ab); Alarm für „ausgefallen“ (im Pilot reicht der Chip im Ticker; ei
    wartet nicht. Ein Lauf, der nach 45 Minuten noch auf `läuft` steht, wird zu `fehler`.
 3. Ein eigener Worktree `…-schatten` wird angelegt, damit sich der Lauf nicht mit dem Review-Strang ins Gehege kommt. Die
    Basis-Ref wird geholt (`baseRefName` aus GraphQL), der Diff wird erzeugt, dann kommt die P5-Prüfung.
-4. Die Pipeline in `planerReview` läuft ohne Datenbank, damit das Evaluations-Skript dieselbe nutzen kann: Fallstricke →
-   planeAuftrag → jcode (`read,agentgrep`, **keine Shell**; der Diff liegt als Datei bereit) → parseBericht → pruefeZitate →
-   planerPruefung → urteilAbleiten.
+4. Die Pipeline in `planerReview` läuft ohne Datenbank, damit das Evaluations-Skript dieselbe nutzen kann: Symlink-Prüfung des
+   PR-Stands (führt ein Symlink hinaus, startet nichts) → Fallstricke → planeAuftrag → jcode → Lese-Gurt → parseBericht →
+   pruefeZitate → planerPruefung → urteilAbleiten.
+   Der Worker (jcode, glm-5.3-flash) läuft **ohne Shell** (`read,agentgrep`), in einem eigenen Wegwerf-HOME mit nur dem
+   Melious-Profil (keine MCP-Server, kein Gedächtnis, keine Anmeldedateien, `--no-update`, keine Telemetrie) und in einem neutralen
+   tmp-Ordner als Arbeitsordner. Dort liegt der Diff als Datei; den PR-Stand liest er über den absoluten Pfad. Der **Lese-Gurt**
+   prüft danach alle read-/agentgrep-Pfade aus der Sitzungsdatei gegen PR-Stand, tmp und Nachbar-Repos. Ein Pfad außerhalb, ein `..`,
+   ein fremdes Werkzeug, eine fehlende Sitzung oder eine Sitzung ohne Lese-Aufruf heißt: Das Ergebnis wird verworfen (fail-closed).
 5. Das Ergebnis geht an `pr_reviews.schatten` und als `schatten.md` ins Review-Paket. In der Review-Ansicht steht der Abschnitt
    „Schatten-Review (Pilot)“ unter dem bestehenden Review, im Ticker ein Chip.
 
@@ -100,7 +105,7 @@ Keine Infra-Änderung (die Werkbank läuft lokal, nichts in Bicep).
 - Das volle Evaluationsset (25 PRs + 10 Recherche): Es läuft erst, wenn Knut es freigibt.
 
 ## Review (Phase 4) — was die Pässe fanden und wie es geändert wurde
-Pass B lief als Claude-Prüfer (fünf Blickwinkel), Pass C als Gegenprüfung mit glm-5.3. Es gab drei Runden; nach jedem Fix liefen
+Pass B lief als Claude-Prüfer (fünf Blickwinkel), Pass C als Gegenprüfung mit glm-5.3. Es gab sechs Runden; nach jedem Fix liefen
 alle Pässe erneut auf dem neuen Stand.
 - **Runde 1 (FAIL):** Ein kein_befund zu einer Hoch-Frage, das der Planer verwarf, ergab approve (der #343-Fall). Die Zitatprüfung
   ließ sich trivial erfüllen (beliebig großer Bereich, Zitat aus 4 Zeichen). Ein Symlink konnte aus der Wurzel herausführen. Der
@@ -111,7 +116,22 @@ alle Pässe erneut auf dem neuen Stand.
   Schatten-Worker läuft **ohne Shell** (`read,agentgrep`) und bekommt den Diff als Datei. Kindprozesse werden über die
   Prozessgruppe beendet. Ein Zitat braucht ein zusammenhängendes Stück von mindestens 12 Zeichen. Fragen-Kennungen `B<n>` sind
   verboten (sie kollidierten mit den Befunden).
-- **Runde 3:** siehe Bericht.
+- **Runde 3 (FAIL):** jcode lädt MCP-Server aus Knuts `~/.claude.json` (atlassian, compartment) und **projektlokal aus dem
+  Arbeitsordner** (`.mcp.json` im PR-Worktree → ein PR hätte einen Befehl starten können). Belegt mit `jcode mcp list`. → Eigenes
+  Wegwerf-HOME/JCODE_HOME, `JCODE_DISABLE_CLAUDE_MCP=1`, neutraler Arbeitsordner, und ein Wächter lehnt Arbeitsordner mit
+  `.mcp.json`/`.jcode`/`.claude` ab. In Eltern-Ordnern sucht jcode nicht (geprüft).
+- **Runde 4 (PASS-WITH-CONCERNS):** `read` liest beliebige absolute Pfade (Abfluss an Melious/Mongo). → Lese-Gurt über die
+  Sitzungsdatei, `--no-update`, keine Telemetrie, Kill der Prozessgruppe auch bei `error`, Aufräumen bei frühem Fehler, Ctrl-C im
+  Eval-Skript.
+- **Runde 5 (Gurt umgehbar):** Symlink + `..` und `**`-Globs durch Symlinks; fail-open bei fehlender Sitzung. → `..` ist immer ein
+  Verstoß, fremde Werkzeuge auch, fehlende oder leere Sitzung heißt verwerfen; Symlinks nach außen im PR-Stand verhindern den Lauf;
+  die Prüfung läuft, bevor tmp gelöscht wird; der Eval-Arm hat denselben Gurt.
+- **Runde 6 (Bestätigung):** Befunde aus Runde 5 sind geschlossen. Restrisiken: siehe unten.
+
+### Restrisiken bis zur Sandbox (D2)
+- `read` kann vor dem Gurt alles lesen, was Knuts Nutzer lesen darf. Was der Worker liest, sieht Melious (Dritter), auch wenn das
+  Ergebnis danach verworfen wird.
+- Globs in Nachbar-Repos (Knuts eigene Klone, nicht PR-Inhalt) folgen dort vorhandenen Symlinks; die Nachbarn werden nicht gescannt.
 - **Derselbe Befund gilt für den Brücken-Worker aus Release 16b** (`BRIDGE_WORKER_JCODE=on`, mit bash/write/edit). Das wurde dem
   Hauptchat als Risiko gemeldet; die Entscheidung liegt bei Knut (D2).
 
