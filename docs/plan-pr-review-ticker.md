@@ -67,6 +67,16 @@ Der Strang darf keine Rückfragen stellen. Jede Frage ist mit der Empfehlung umg
   und verweisen auf die Berichtsseite.
 - **Testfall:** echter Auszug aus Bericht 154 (D1–D11) unter `web/test/fixtures/bericht-154-entscheidungen.md`.
 
+## 2b. Knuts Entscheidungen (15.10.2026)
+
+- D1 Ticker oben auf der Hauptchat-Seite, nur Admins. D6 Kommentare unter dem Konto des Push-Tokens (knut523).
+- D2 Automatisch posten standardmäßig an — nur Kommentare, nur Repos aus `WERKBANK_PR_REVIEW_ORGS` (Standard `WirStrom1`);
+  in der ersten Woche liest der Orchestrator mit.
+- D3 Kein Auto-Review für `knut523/werkbank` (nur Ticker).
+- D4 Echte Aufzeichnung (`web/test/fixtures/github/2026-10-15.json`) ist der Replay-Test.
+- D5 Der Review-Strang führt keinen PR-Code aus (kein install/test/build), bis ein geführter Lauf mit Knut entschieden hat,
+  ob Tests laufen — Empfehlung dann: nur im Container ohne Netz und ohne Home.
+
 ## 3. Architektur
 
 - **`web/server/prticker.ts`** (neu):
@@ -103,6 +113,7 @@ Der Strang darf keine Rückfragen stellen. Jede Frage ist mit der Empfehlung umg
 ## 6. Verlauf
 
 - 13.10.2026 abends: Ergänzungen A (automatisch posten als COMMENT) und B (Entscheidungen) von Knut aufgenommen.
+- 15.10.2026: Knuts Entscheidungen D1–D6 umgesetzt (Abschnitt 2b).
 - 14.10.2026: gebaut (Commits auf dem Arbeitszweig), Tests + 11 Browser-Prüfungen (`web/e2e/ticker-shots.mjs`), Review-Pass.
 
 - 13.10.2026: Plan, Grilling T1–T12 mit Empfehlung (gebaut ist die Empfehlung).
