@@ -216,3 +216,24 @@ test('Pipeline: Ausfall benannt — Melious weg oder jcode-Fehler → ausgefalle
   assert.equal(jc.status, 'ausgefallen'); assert.match(jc.fehler!, /Exit 1\) kaputt/);
   assert.equal(jc.stufen.length, 2);
 });
+
+test('P6: Bewertung — Kernbefund nur, wenn alle Muster passen (mit Fundstelle); Falsch-Approve im Blocker-Set; Freigabe-Prüfung', async () => {
+  const { bewerte, zusammenfassen, evalMarkdown, fundstelle } = await import('../server/planereval.ts');
+  const reg = JSON.parse((await import('node:fs')).readFileSync(new URL('../../docs/planer-eval/regression.json', import.meta.url), 'utf8'));
+  const p343 = reg.prs.find((p: any) => p.id === '343'), p335 = reg.prs.find((p: any) => p.id === '335');
+  assert.equal(p343.opus.blocker, true); assert.equal(p343.fallstrick_aus_diesem_pr, FALLSTRICKE_START[0].id);
+  const gut = 'F1 befund: Der Zählpunkt kommt aus der Tarif-App mit 31 Zeichen ohne AT, die Abfrage prüft length = 33.';
+  assert.match(fundstelle(gut, p343.kern_befunde[0])!, /31 Zeichen/);
+  assert.equal(fundstelle('Zählpunkt passt, Länge 33', p343.kern_befunde[0]), null, '31 fehlt');
+  assert.equal(fundstelle(['Zählpunkt ok', ...Array(10).fill('…'), 'Seite 31', 'AT-Präfix'].join('\n'), p343.kern_befunde[0]), null, 'verstreut über Abschnitte zählt nicht');
+  const l = (arm: string, empfehlung: string, text: string, energie = 100) => ({ pr: '343', arm, lauf: 1, empfehlung, text, energie, aufrufe: 3, ms: 1000 });
+  const bs = [bewerte(p343, l('flash-ohne', 'approve', 'alles gut')), bewerte(p343, l('flash-mit', 'request-changes', gut)), bewerte(p335, { ...l('flash-mit', 'approve', ''), pr: '335' })];
+  assert.equal(bs[0].falschApprove, true); assert.equal(bs[1].falschApprove, false); assert.equal(bs[2].falschApprove, false, '335 ist kein Blocker');
+  const sum = zusammenfassen(bs, [p343, p335]);
+  const ohne = sum.find((s) => s.arm === 'flash-ohne')!, mit = sum.find((s) => s.arm === 'flash-mit')!;
+  assert.equal(ohne.falschApprove, 1); assert.equal(ohne.recall, 0); assert.equal(mit.recall, 1);
+  assert.match(mit.freigabe, /^nein: .*Energie Opus-Weg nicht gemessen.*nur 2 Läufe/);
+  const md = evalMarkdown(bs, sum, 'Test');
+  assert.match(md, /\| #343 \| flash-ohne \| 1 \| approve ⚠ Falsch-Approve/);
+  assert.match(md, /zaehlpunkt-31-33: „F1 befund/);
+});

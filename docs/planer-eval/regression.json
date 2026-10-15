@@ -1,0 +1,30 @@
+{
+  "beschreibung": "Regressionssatz für das Evaluations-Skript (Plan 183, P6). Referenz = Opus-Review aus dem PR-Review-Durchgang vom 15.10.2026 (Review-Paket 170). kern_befunde = die Befunde, die das Opus-Urteil tragen (hoch, oder der Grund für request-changes); muster = alle Regex müssen im selben Abschnitt (8 Zeilen) des Ergebnisses vorkommen (ohne Groß-/Kleinschreibung). Jeder Treffer steht mit Fundstelle im Ergebnis — Mensch liest gegen.",
+  "prs": [
+    {
+      "id": "343", "repo": "WirStrom1/olaf-admin", "number": 343, "head": "eb7a3059bd71c94f9b068264226c9380e62ecf8a", "basis_ref": "origin/develop",
+      "titel": "follow-up claims: skip the OTP reminder when the person registered under another address (plan 119)",
+      "opus": { "empfehlung": "request-changes", "blocker": true },
+      "kern_befunde": [
+        { "id": "zaehlpunkt-31-33", "schwere": "hoch", "text": "Zählpunkt-Regel greift nie: Tarif-App speichert 31 Zeichen ohne AT, Abfrage erwartet 33 mit AT",
+          "muster": ["z(ä|ae)hlpunkt|meter.?number", "\\b31\\b", "\\b33\\b|\\bAT\\b"] }
+      ],
+      "fallstrick_aus_diesem_pr": "start-zaehlpunkt"
+    },
+    {
+      "id": "345", "repo": "WirStrom1/olaf-admin", "number": 345, "head": "66545e956aaedbf75215c03c861388409083b392", "basis_ref": "origin/develop",
+      "titel": "service: Zählpunkt nachmelden without a stored run, from the Kundenakte (plan 116 §14)",
+      "opus": { "empfehlung": "request-changes", "blocker": true },
+      "kern_befunde": [
+        { "id": "vergangener-termin-zweite-nachmeldung", "schwere": "mittel", "text": "Zweite Nachmeldung (nachmeldelauf) schickt vergangenen Wechseltermin statt ehestmöglich an MAXENERGY",
+          "muster": ["wechseltermin|change.?date|requested_change_date", "nachmeldelauf|zweite[nrs]? nachmeldung|second nachmeldung", "vergangen|past|ehestm(ö|oe)glich"] }
+      ]
+    },
+    {
+      "id": "335", "repo": "WirStrom1/olaf-admin", "number": 335, "head": "253901f9abbaa6e6f95bb9b924a9e059f55051a9", "basis_ref": "origin/develop",
+      "titel": "executions: warn before re-sending a slot MAXENERGY already accepted (plan 115)",
+      "opus": { "empfehlung": "approve", "blocker": false },
+      "kern_befunde": []
+    }
+  ]
+}

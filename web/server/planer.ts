@@ -139,8 +139,9 @@ export async function planeAuftrag(chat: ChatFn, art: 'review' | 'recherche', in
 
 // ---------- P2: Fallstricke ----------
 
-export interface Fallstrick { text: string; repos: string[]; stichworte: string[] }
+export interface Fallstrick { text: string; repos: string[]; stichworte: string[]; id?: string }
 export const FALLSTRICKE_START: Fallstrick[] = [{
+  id: 'start-zaehlpunkt',
   text: 'Zählpunkt-Format über die App-Grenze: die Tarif-App hält den Zählpunkt im Formular/Fortschritt als 31 Zeichen OHNE „AT“ (in Vierergruppen mit Leerzeichen); erst beim Absenden wird „AT“ vorangestellt. Admin und Durable speichern 33 Zeichen MIT „AT“ (meter_points.meter_number). Vergleiche über die Grenze müssen beide Formen normalisieren.',
   repos: ['olaf-admin', 'olaf-tariff-app', 'olaf-durable-func'],
   stichworte: ['meterNumber', 'meter_number', 'zählpunkt', 'zaehlpunkt', 'meterPoint'],

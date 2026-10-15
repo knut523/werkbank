@@ -20,7 +20,7 @@ export const fallstrickeCol = () => wb().collection('planer_fallstricke');
 
 /** P2: Fallstrick-Liste; beim ersten Lesen mit dem Startwert (Zählpunkt 31/33) gefüllt. */
 export async function ladeFallstricke(): Promise<Fallstrick[]> {
-  await fallstrickeCol().updateOne({ _id: 'start-zaehlpunkt' as any }, { $setOnInsert: { ...FALLSTRICKE_START[0], quelle: 'olaf-admin#343 (Opus-Review, Kalibrierung 178)', at: new Date(0) } }, { upsert: true });
+  await fallstrickeCol().updateOne({ _id: 'start-zaehlpunkt' as any }, { $setOnInsert: { text: FALLSTRICKE_START[0].text, repos: FALLSTRICKE_START[0].repos, stichworte: FALLSTRICKE_START[0].stichworte, quelle: 'olaf-admin#343 (Opus-Review, Kalibrierung 178)', at: new Date(0) } }, { upsert: true });
   return (await fallstrickeCol().find({}).sort({ at: 1 }).limit(200).toArray()).map((f: any) => ({ text: String(f.text), repos: f.repos ?? [], stichworte: f.stichworte ?? [] }));
 }
 
