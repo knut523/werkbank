@@ -30,7 +30,8 @@ const fake: Server = createServer((rq, res) => {
     let b = ''; rq.on('data', (c) => { b += c; }); rq.on('end', () => {
       const j = JSON.parse(b);
       chatAufrufe.push({ model: j.model, max: j.max_tokens, system: j.messages?.[0]?.role === 'system' ? String(j.messages[0].content).slice(0, 40) : '' });
-      res.end(JSON.stringify({ choices: [{ message: { content: j.max_tokens === 1 ? 'o' : 'Befund: a.ts:3 hoch — Off-by-one.' } }], usage: { prompt_tokens: 1200, completion_tokens: 300, prompt_tokens_details: { cached_tokens: 200 } },
+      const leer = String(j.messages?.at(-1)?.content ?? '').includes('LEER-TEST');
+      res.end(JSON.stringify({ choices: [{ message: { content: j.max_tokens === 1 ? 'o' : leer ? '' : 'Befund: a.ts:3 hoch — Off-by-one.' }, finish_reason: leer ? 'length' : 'stop' }], usage: { prompt_tokens: 1200, completion_tokens: 300, prompt_tokens_details: { cached_tokens: 200 } },
         billing_cost: { energy: '19.400', credits: '0.00194', paid_with: BEZAHLT }, environment_impact: { energy_kwh: 0.0026, co2_g: 0.51, renewable: 1 } }));
     });
     return;
@@ -63,8 +64,9 @@ test('Vorgaben = Knuts Setup (15.10.): 8 000 je Takt (256 000/Tag), Deckel 1,5×
   assert.equal(M.meliousDefaults({ MELIOUS_ENERGIE_PRO_TAKT: '1200' }).proTakt, 1200);
   assert.deepEqual(d.faktoren['glm-5.3'], { in: 10_000, out: 30_000 });
   // Verteilung über alle vier PRO-Modelle je Rolle.
-  for (const r of ['leser', 'schreiber', 'niedrig']) assert.equal(d.rollen[r].length, 4, r);
-  assert.equal(d.rollen.schreiber[0], 'glm-5.3');
+  // Seit 15.10. abends (Knut: „per default flash“): nur die drei kleinen Modelle, glm-5.3 in keiner Worker-Rolle.
+  for (const r of ['leser', 'schreiber', 'niedrig']) { assert.equal(d.rollen[r].length, 3, r); assert.ok(!d.rollen[r].includes('glm-5.3'), r); }
+  assert.equal(d.rollen.schreiber[0], 'glm-5.3-flash');
 });
 
 test('Echte Preisliste (15.10.) → Faktoren: € je Mio. × 10.000 inkl. Cache-Preis; passt zur Kalibrierung; Nicht-EUR/ohne Preis übersprungen', () => {
@@ -140,7 +142,7 @@ test('Erlaubt → Konto an die Brücke: Rest in Energie, Faktoren, Takt, eco, Ro
   assert.deepEqual(mel.pool.map((p: any) => p.model).sort(), ['deepseek-v4-flash-0731', 'deepseek-v4.1-flash', 'glm-5.3', 'glm-5.3-flash']);
   // Topf (geschätzt, ohne Verbrauch) voll → Vorrang und Qualitäts-Reihenfolge, Hinweis „Energie verfällt bald“.
   assert.equal(mel.vorrang, true);
-  assert.deepEqual(mel.rollen.niedrig, ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731', 'glm-5.3']);
+  assert.deepEqual(mel.rollen.niedrig, ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731']);   // seit 15.10. abends ohne glm-5.3
   const use = await M.meliousUsage(u);
   assert.equal(use.energie.topfMax, 1_024_000);
   assert.ok(use.energie.hinweise.some((h: string) => /Energie verfällt bald/.test(h)));
@@ -154,9 +156,9 @@ test('Gegenprüfer GLM 5.3 (challenge): Diff an glm-5.3 mit Review-Auftrag, Antw
   assert.equal(r.energie, 19.4);
   assert.deepEqual(r.umwelt, { energy_kwh: 0.0026, co2_g: 0.51, renewable: 1 });
   const c = chatAufrufe.filter((x) => x.max !== 1).at(-1)!;   // ohne die Mini-Abfrage „bezahlt mit“
-  assert.deepEqual([c.model, c.system.slice(0, 26)], ['glm-5.3', 'Du bist ein strenger, unab']);
+  assert.deepEqual([c.model, c.max, c.system.slice(0, 26)], ['glm-5.3-flash', M.CHALLENGE_MAX_TOKENS, 'Du bist ein strenger, unab']);   // Fix 15.10.: Flash als Vorgabe, kein 4000er-Limit
   const use = await M.meliousUsage(u);
-  assert.ok(use.modelle.find((m: any) => m.model === 'glm-5.3')!.turns >= 1);
+  assert.ok(use.modelle.find((m: any) => m.model === 'glm-5.3-flash')!.turns >= 1);
 });
 
 test('Hotfix 15.10.: Abo-Liste (Vorgabe die vier PRO-Modelle) an die Brücke; Modelle außerhalb → Warnung „läuft auf Guthaben“, keine Sperre', async () => {
@@ -196,7 +198,7 @@ test('Verbrauch in Energie: geschätzt je Zug und Modell, 80 % / 100 % des Energ
   assert.deepEqual(r3.crossed, [{ period: 'tag', at: 100 }]);   // Monat: 1 230 von 2 000 = 61,5 %
   assert.match(r3.usage.sperre, /Tagesdeckel \(Energie\)/);
   const by = Object.fromEntries(r3.usage.modelle.map((m: any) => [m.model, Math.round(m.energie)]));
-  assert.equal(by['glm-5.3-flash'], 300);
+  assert.ok(by['glm-5.3-flash'] >= 300 && by['glm-5.3-flash'] < 310, String(by['glm-5.3-flash']));   // + Gegenprüfung (seit Fix 15.10. auf Flash)
   assert.ok(by['glm-5.3'] >= 930 && by['glm-5.3'] < 960, String(by['glm-5.3']));   // :eco zählt wie das Modell; + Gegenprüfung aus dem Test davor (Monat)
   assert.equal(r3.usage.energie.geschaetzt, true);
   assert.match(r3.usage.quelle, /Abgleich aus/);
@@ -226,6 +228,29 @@ test('Abgleich mit dem Dashboard: ohne Anmeldung aus („geschätzt“); mit Anm
   assert.equal(use.energie.modus, 'qualitaet');   // 90 % voll: Energie würde verfallen
   assert.match(use.quelle, /abgeglichen mit dem Melious-Dashboard/);
   delete process.env.MELIOUS_DASHBOARD_AUTH;
+});
+
+test('Fix 15.10. challenge: council/hoch → glm-5.3; große Diffs in Stücken an Dateigrenzen, parallel; leere Antwort ist kein ok', async () => {
+  const vor = chatAufrufe.length;
+  assert.equal((await M.meliousChallenge(u, 'council', 'Sollen wir X tun?')).modell, 'glm-5.3');
+  assert.equal((await M.meliousChallenge(u, 'diff', '--- a/a.ts\n+++ b/a.ts\n@@ x', '', true)).modell, 'glm-5.3');
+  // Stücke: drei Dateien à ~12 000 Zeichen → bei 20 000 je Stück drei Teile, nie mitten in einer Datei geschnitten.
+  const datei = (n: number) => `diff --git a/f${n}.ts b/f${n}.ts\n` + `+zeile ${n}\n`.repeat(1200);
+  const gross = [1, 2, 3].map(datei).join('');
+  const teile = M.teileText(gross);
+  assert.equal(teile.length, 3);
+  assert.ok(teile.every((t: string) => t.startsWith('diff --git ') && t.length <= M.CHALLENGE_STUECK));
+  assert.equal(teile.join(''), gross);
+  const r = await M.meliousChallenge(u, 'diff', gross);
+  assert.equal(r.ok, true); assert.equal(r.teile, 3); assert.equal(r.leer, 0);
+  assert.match(r.text!, /### Teil 3 von 3/);
+  assert.ok(r.energie! >= 3 * 19.4 - 0.01, 'Energie aller Stücke summiert');
+  // Eine Datei länger als ein Stück → an Zeilen geteilt.
+  assert.ok(M.teileText('x\n'.repeat(30_000)).every((t: string) => t.length <= M.CHALLENGE_STUECK));
+  // Leer + abgeschnitten (Denkbudget) → ok:false mit Grund, Energie trotzdem gemeldet.
+  const l = await M.meliousChallenge(u, 'diff', 'LEER-TEST diff');
+  assert.equal(l.ok, false); assert.match(l.error!, /keine Antwort.*abgeschnitten/); assert.ok(l.energie! > 0);
+  assert.ok(chatAufrufe.slice(vor).filter((x) => x.max !== 1).every((x) => x.max === M.CHALLENGE_MAX_TOKENS));
 });
 
 test('Entfernen → kein Konto mehr', async () => {

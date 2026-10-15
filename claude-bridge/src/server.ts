@@ -9,7 +9,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, type Sink } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, startDelegation, delegationStand, delegationUrteil, phaseWechseln, type Sink } from './sessions.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -67,7 +67,8 @@ function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome, co
       type: 'stdio', command: node, args: [join(MCP_DIR, 'werkbank-tools.ts')],
       // WERKBANK_CONV_ID: review_ready markiert nur den Lauf DIESER Unterhaltung (nie aus den Argumenten des Agenten).
       // WERKBANK_LEITSTAND: nur aus der Art in der Brücke (orch.json), nie aus einem Header (Plan 132, S3).
-      env: { WERKBANK_URL: WEB_URL, WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_USER_ID: userId, WERKBANK_CONV_ID: convId, PATH: process.env.PATH || '', ...(leit ? { WERKBANK_LEITSTAND: '1' } : {}), ...(strang ? { WERKBANK_STRANG: '1' } : {}) },
+      // WERKBANK_BRIDGE_URL (Plan 165): delegieren/delegation_*/phase_wechseln rufen die Brücke direkt (nur in Strängen).
+      env: { WERKBANK_URL: WEB_URL, WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_USER_ID: userId, WERKBANK_CONV_ID: convId, PATH: process.env.PATH || '', ...(leit ? { WERKBANK_LEITSTAND: '1' } : {}), ...(strang ? { WERKBANK_STRANG: '1', WERKBANK_BRIDGE_URL: `http://127.0.0.1:${PORT}` } : {}) },
     };
   }
   return { ...(leit ? leitstandMcp() : {}), ...servers, ...atlassianServer() };
@@ -292,6 +293,14 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
     userId, convId, token, prompt, history, model: MODELS[model], sink, query: query as any, readonly, receivedAt, instructions: instructions || undefined,
     sessionContext: known ? () => sessionContext(userId, convId, /Tagesabschluss/i.test(instructions) || /^\s*tagesabschluss\b/i.test(prompt), skillsFor(STATE_DIR, `${safeId(userId)}:${safeId(convId)}`, instructions, prompt)) : undefined,
     mcpServers: known ? mcpServersFor(userId, token, homeFor(safeId(userId), email), convId) : undefined,
+    // Plan 165: Worker bekommen die MCP-Server ihrer eigenen (verdeckten) Unterhaltung; Protokoll je Zug und Delegation.
+    mcpFor: known ? (c) => mcpServersFor(userId, token, homeFor(safeId(userId), email), c) : undefined,
+    onTurnLog: known && INTERNAL ? (z) => {
+      fetch(`${WEB_URL}/internal/zug-log`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, zug: z }) }).catch(() => {});
+    } : undefined,
+    onDelegation: known && INTERNAL ? (d) => {
+      fetch(`${WEB_URL}/internal/delegation-log`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, delegation: d }) }).catch(() => {});
+    } : undefined,
     // Mehrere Claude-Konten: bei rate_limit übernimmt das nächste (Liste über den internen Kanal, nie vom Browser).
     accounts: known && INTERNAL ? () => claudeAccounts(userId) : undefined,
     // Jira im Chat geändert → Werkbank zieht die Tickets sofort nach und schiebt die Änderung an offene Boards.
@@ -371,6 +380,17 @@ const server = createServer(async (req, res) => {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
       const st = injectState(url.searchParams.get('user') ?? '', inj[1]);
       return st ? json(res, 200, { id: inj[1], ...st }) : json(res, 404, { error: 'unbekannt' });
+    }
+    // Plan 165: Werkzeuge der Strang-Leads (Werkbank-MCP mit Person und Unterhaltung aus seiner Umgebung, nie aus Argumenten).
+    const deleg = req.method === 'POST' ? url.pathname.match(/^\/internal\/(delegate|delegate-stand|delegate-urteil|phase)$/) : null;
+    if (deleg) {
+      if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
+      const b = await readBody(req);
+      const userId = String(b.userId ?? ''), conv = String(b.conv ?? '');
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId) || !/^[A-Za-z0-9_-]{1,64}$/.test(conv)) return json(res, 400, { error: 'Ungültige Person oder Unterhaltung.' });
+      const fn = { delegate: startDelegation, 'delegate-stand': delegationStand, 'delegate-urteil': delegationUrteil, phase: phaseWechseln }[deleg[1] as 'delegate'];
+      const r = await fn(userId, conv, b);
+      return r.ok ? json(res, 200, r) : json(res, r.status, { error: r.error });
     }
     if (req.method === 'GET' && url.pathname === '/internal/orch-state') {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });

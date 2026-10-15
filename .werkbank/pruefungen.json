@@ -1,0 +1,7 @@
+{
+  "_hinweis": "Prüfbefehle, die die claude-bridge nach einer Bauer-/Schreiber-Delegation selbst ausführt (Plan 165, C6). Gelesen wird diese Datei aus dem Integrationszweig, nicht aus dem Zweig des Workers. Befehl = Argument-Liste, keine Shell. Nur schnelle Prüfungen ohne feste Ports.",
+  "pruefungen": [
+    { "name": "bruecke-delegation", "befehl": ["node", "--test", "test/delegation-rein.test.ts"], "ordner": "claude-bridge", "zeitS": 300 },
+    { "name": "web-build", "befehl": ["npx", "vite", "build", "--logLevel", "error", "--outDir", "../.runtime-pruef/dist", "--emptyOutDir"], "ordner": "web", "zeitS": 600 }
+  ]
+}

@@ -236,7 +236,7 @@ export const isMelious = (a?: Account | null) => a?.kind === 'melious';
  * Warteschlange eines Zugs: Claude-Konten wie bisher (frei, verteilt), dazu Melious — vorne mit Chat-Schalter, hinten als
  * letzter Ausweg (nur mit `fallback` und wenn der Zug überlaufen darf: Risiko „niedrig“). Erschöpft oder Deckel erreicht → nie.
  */
-export function planQueue(accounts: Account[], ex: Exhausted, o: { conv: string; chatOn: boolean; overflow?: boolean; kette?: boolean; sonnetStufe?: boolean; now?: number }): Account[] {
+export function planQueue(accounts: Account[], ex: Exhausted, o: { conv: string; chatOn: boolean; overflow?: boolean; kette?: boolean; sonnetStufe?: boolean; ketteModell?: string; now?: number }): Account[] {
   const now = o.now ?? Date.now();
   const mel = accounts.find(isMelious);
   const claude = accounts.filter((a) => !isMelious(a));
@@ -246,7 +246,7 @@ export function planQueue(accounts: Account[], ex: Exhausted, o: { conv: string;
   // (Opus), dann alle Claude-Konten mit Sonnet (eigenes Kontingent), dann Melious mit dem Ketten-Modell (Vorgabe glm-5.3).
   if (o.kette) {
     const sonnet = o.sonnetStufe ? claude.map((a) => ({ ...a, chainModel: 'sonnet' })) : [];
-    return [...(o.chatOn && melOk ? [mel!] : []), ...queue, ...sonnet, ...(melOk && !o.chatOn ? [{ ...mel!, chainModel: mel!.ketteModell ?? 'glm-5.3' }] : [])];
+    return [...(o.chatOn && melOk ? [mel!] : []), ...queue, ...sonnet, ...(melOk && !o.chatOn ? [{ ...mel!, chainModel: o.ketteModell ?? mel!.ketteModell ?? 'glm-5.3' }] : [])];
   }
   if (!melOk) return queue;
   if (o.chatOn) return [mel!, ...queue];
