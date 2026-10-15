@@ -406,7 +406,7 @@ export function symlinksNachDraussen(dir: string, max = 50_000): string[] {
     }
   }
   // Nicht fertig durchsucht → nicht als sauber werten (fail-closed).
-  if (n > max) out.push(`(Suche nach ${max} Einträgen abgebrochen)`);
+  if (n > max || stapel.length) out.push(`(Suche nach ${max} Einträgen abgebrochen)`);
   return out;
 }
 
