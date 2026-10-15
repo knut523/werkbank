@@ -284,7 +284,7 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
   const [starten, setStarten] = useState(wantStart);
   const zurueck = () => { if (hash.includes('?')) window.location.hash = '#/'; };
   const hq = `${aus('review') ?? ''}|${aus('bericht') ?? ''}|${aus('auftrag') ?? ''}`;
-  useEffect(() => { if (wantStart) setStarten(true); }, [wantStart]);
+  useEffect(() => { setStarten(wantStart); }, [wantStart]);   // Dialog folgt der Adresse (auch beim Verlassen); der Knopf öffnet ihn ohne Adresse
   useEffect(() => { const b = aus('bericht'), a = aus('auftrag'); setAnsicht(b ? { id: b, art: 'bericht' } : a ? { id: a, art: 'auftrag' } : null); }, [hq]);
   const neu = () => { if (admin) api('/api/uebersicht').then(u.setData).catch(() => {}); api('/api/today').then(t.setData).catch(() => {}); };
   useEffect(() => { if (admin) api('/api/roadmap/heute').then((r: any) => setVq(r)).catch(() => {}); }, [admin]);
