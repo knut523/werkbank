@@ -65,9 +65,11 @@ async function armLauf(pr: RegPr, arm: string, n: number): Promise<Lauf> {
     // Neutraler Arbeitsordner wie im Schattenweg (nie der PR-Stand: jcode lüde dort eine `.mcp.json`).
     const neutral = mkdtempSync(join(tmpdir(), 'planer-eval-'));
     const diffDatei = join(neutral, 'pr.diff');
-    writeFileSync(diffDatei, git(dir, ['diff', `${basis}...HEAD`]));
-    const w = await realJcode({ cwd: neutral, prompt: EINFACH(diffDatei, dir), model: WORKER_MODELL, key, tools: WORKER_TOOLS, timeoutS: 1500 });
-    rmSync(neutral, { recursive: true, force: true });
+    let w;
+    try {
+      writeFileSync(diffDatei, git(dir, ['diff', `${basis}...HEAD`]));
+      w = await realJcode({ cwd: neutral, prompt: EINFACH(diffDatei, dir), model: WORKER_MODELL, key, tools: WORKER_TOOLS, timeoutS: 1500 });
+    } finally { rmSync(neutral, { recursive: true, force: true }); }
     return { pr: pr.id, arm, lauf: n, empfehlung: empfehlungAus(w.text), text: w.text, energie: energieOf(w.usage, WORKER_MODELL, faktoren), aufrufe: w.aufrufe, ms: Date.now() - t0, ...(w.code !== 0 ? { fehler: `Exit ${w.code} ${w.stderr}` } : {}) };
   }
   const diff = git(dir, ['diff', `${basis}...HEAD`]);

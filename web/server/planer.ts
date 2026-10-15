@@ -385,14 +385,16 @@ export const realJcode: JcodeFn = (o) => new Promise((res) => {
   if (fremd.length) return leer(-1, `Arbeitsordner nicht neutral (${fremd.join(', ')}) — jcode würde dort Konfiguration/MCP laden`);
   const home = mkdtempSync(join(tmpdir(), 'jcode-home-'));
   const jhome = join(home, '.jcode');
-  mkdirSync(jhome, { recursive: true });
-  writeFileSync(join(jhome, 'config.toml'), jcodeKonfig());
+  try { mkdirSync(jhome, { recursive: true }); writeFileSync(join(jhome, 'config.toml'), jcodeKonfig()); }
+  catch (e: any) { rmSync(home, { recursive: true, force: true }); return leer(-1, `Wegwerf-HOME nicht angelegt: ${e?.message ?? e}`); }
   // Zusätzlich (keine Sperre, nur ein Gurt): keine Git-Konfiguration, keine Abfrage, kein gh-Login.
   const env: Record<string, string> = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, JCODE_HOME: jhome, XDG_CONFIG_HOME: join(home, '.config'), JCODE_DISABLE_CLAUDE_MCP: '1',
     LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key,
     GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false', SSH_ASKPASS: '/bin/false', GIT_SSH_COMMAND: '/bin/false', GH_CONFIG_DIR: '/nonexistent' };
   // Eigene Prozessgruppe: beim Abbruch die ganze Gruppe beenden — Kindprozesse hielten sonst stdout offen und `close` käme nie (Review R6′).
-  const c = spawn(jcodeBin(), ['--provider-profile', 'melious', '--model', o.model, '--tools', o.tools, 'run', '--json', o.prompt], { cwd: o.cwd, env, detached: true });
+  let c: ReturnType<typeof spawn>;
+  try { c = spawn(jcodeBin(), ['--provider-profile', 'melious', '--model', o.model, '--tools', o.tools, 'run', '--json', o.prompt], { cwd: o.cwd, env, detached: true }); }
+  catch (e: any) { rmSync(home, { recursive: true, force: true }); return leer(-1, `jcode nicht gestartet: ${e?.message ?? e}`); }
   if (c.pid) laufendeGruppen.add(c.pid);
   const kill = (sig: NodeJS.Signals) => { try { process.kill(-c.pid!, sig); } catch { try { c.kill(sig); } catch { /* schon weg */ } } };
   let so = '', se = '';
