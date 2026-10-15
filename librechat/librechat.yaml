@@ -16,11 +16,13 @@ interface:
     Neu hier? Im Kontomenü unter „Einrichtung“ verbindest du Claude einmal mit deinem Konto.
   modelSelect: true
   parameters: false
-  presets: true
-  prompts: true
+  presets: false
+  prompts: false
+  # bookmarks bleibt true: sonst sperrt LibreChat die Tags-API, über die der Hauptchat seine Lesezeichen setzt.
+  # Die Oberfläche dazu (Panel, Kopf-Knopf, Filter) blendet librechat/patches/70-client-entruempeln.patch aus.
   bookmarks: true
   multiConvo: false
-  temporaryChat: true
+  temporaryChat: false
   memories: false
   agents: false
   marketplace:
