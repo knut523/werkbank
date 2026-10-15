@@ -18,13 +18,13 @@ const nothing = (t?: string | null) => !t || /^(nichts\b|keins?\s*([.(]|$)|keine
 export function G0Blocked({ items }: { items: any[] }) {
   return (
     <div className="card" data-testid="g0-blocked">
-      <h3 style={{ marginTop: 0 }}>Vor dem Bau gestoppt <span className="chip warn">{items.length}</span></h3>
+      <h3 style={{ marginTop: 0 }}>Vor dem Bau blockiert <span className="chip warn">{items.length}</span></h3>
       <p className="small muted" style={{ marginTop: -6 }}>Der Nachtbau hat diese Aufträge nicht gestartet: die Prüfung vor dem Bau hat vorhandene Arbeit gefunden.</p>
       {items.map((it) => (
         <div key={it.id} data-testid="g0-blocked-item" style={{ borderTop: '1px solid var(--line, #ddd)', paddingTop: 8, marginTop: 8 }}>
-          <div><b>{it.title}</b> <span className="chip tiny-chip warn" title="Strang-Zustand blocked_g0: von der Prüfung vor dem Bau (G0) angehalten">angehalten (blocked_g0)</span> <span className="tiny">· {it.slug} · {fmtDateTime(it.startedAt)}</span></div>
+          <div><b>{it.title}</b> <span className="chip tiny-chip warn" title="Unter-Chat-Zustand: von der Prüfung vor dem Bau blockiert">blockiert</span> <span className="tiny">· {it.slug} · {fmtDateTime(it.startedAt)}</span></div>
           {it.g0?.belege?.length > 0 && <ul className="small" style={{ paddingLeft: 18, margin: '4px 0' }}>{it.g0.belege.map((b: any, i: number) => <li key={i}>{b.text}{b.pr && <> · <a href={b.pr} target="_blank" rel="noreferrer">PR ansehen</a></>}</li>)}</ul>}
-          <div className="small">{!it.question ? 'Keine Rückfrage angelegt — Orchestrator fragen.'
+          <div className="small">{!it.question ? 'Keine Rückfrage angelegt — Hauptchat fragen.'
             : it.question.status === 'offen' ? <>Entscheidung offen: unten bei den Rückfragen ({it.question.id}).</>
             : it.question.status === 'beantwortet' ? <>Deine Wahl: <b>{it.question.option ?? 'Antwort als Text'}</b> — gilt ab dem nächsten Nachtbau.</>
             : 'Rückfrage zurückgezogen.'}</div>
@@ -72,15 +72,15 @@ function Klar({ it, openBericht, berichtOpen }: { it: any; openBericht?: () => v
   const r = it.review;
   const worum = it.kind === 'strand' ? it.worum || it.summary : `${it.key}${it.summary ? ` — ${it.summary}` : ''}`;
   let todo: string[] = it.kind === 'strand' ? (it.todo ?? []).map((t: any) => t.text) : [];
-  if (it.kind !== 'strand' && it.bucket === 'review') todo = ['Ergebnis im Chat ansehen, dann „Passt“ oder „Nacharbeit“.', ...(r && !nothing(r.nichtGemacht) ? [`Offen geblieben: ${r.nichtGemacht}`] : [])];
+  if (it.kind !== 'strand' && it.bucket === 'review') todo = ['Ergebnis im Chat ansehen, dann „Abhaken“ oder „Nacharbeit“.', ...(r && !nothing(r.nichtGemacht) ? [`Offen geblieben: ${r.nichtGemacht}`] : [])];
   return (
     <div className="rq-klar">
       {worum && <p className="small rq-worum"><strong className="rq-label">Worum es geht:</strong> <Md text={worum} /></p>}
       <div className="small rq-todo">
         <strong className="rq-label">Was du jetzt tun sollst:</strong>
-        {it.running ? <span> Agent arbeitet noch — später wiederkommen.</span>
+        {it.running ? <span> Unter-Chat arbeitet noch — später wiederkommen.</span>
           : todo.length ? <><ol>{todo.map((t, i) => <li key={i}><LinkMd text={t} /></li>)}</ol>{it.todoMore > 0 && <p className="tiny muted rq-more">+ {it.todoMore} {it.todoMore === 1 ? 'weiterer Punkt' : 'weitere Punkte'} im {it.docs?.bericht && openBericht ? <button className="linklike" aria-expanded={!!berichtOpen} onClick={openBericht}>Bericht</button> : it.bericht ? <a href={`#/leitstand?bericht=${it.id}`}>Bericht</a> : 'Bericht'}</p>}</>
-          : <span> Nichts zu tun außer lesen — dann „Passt“.</span>}
+          : <span> Nichts zu tun außer lesen — dann „Abhaken“.</span>}
       </div>
     </div>
   );
@@ -89,12 +89,12 @@ function Klar({ it, openBericht, berichtOpen }: { it: any; openBericht?: () => v
 function ReviewBody({ it }: { it: any }) {
   const r = it.review;
   // Strang ohne review_ready (Teil B, E10): der „### Stand“-Auszug der letzten Antwort — jetzt unter „Details“.
-  if (!r) return it.kind === 'strand' && it.excerpt ? <details className="rq-body small rq-details"><summary>Letzter Stand des Strangs</summary><div style={{ whiteSpace: 'pre-wrap' }}><Md text={it.excerpt} /></div></details> : null;
+  if (!r) return it.kind === 'strand' && it.excerpt ? <details className="rq-body small rq-details"><summary>Letzter Stand des Unter-Chats</summary><div style={{ whiteSpace: 'pre-wrap' }}><Md text={it.excerpt} /></div></details> : null;
   const risk = !nothing(r.risiko);
   return (
     <details className="rq-body rq-details" data-testid="details">
       <summary className="small">Was gemacht wurde · DoD {r.dod.filter((d: any) => d.stand === 'ja').length} von {r.dod.length}{!nothing(r.nichtGemacht) ? ' · etwas offen' : ''}{risk ? ' · ⚠ Risiko genannt' : ''}</summary>
-      {it.reviewOld && <p className="tiny muted">Älterer Stand (vor der letzten Nachricht an den Strang).</p>}
+      {it.reviewOld && <p className="tiny muted">Älterer Stand (vor der letzten Nachricht an den Unter-Chat).</p>}
       <p className="small"><b>Gemacht:</b> <Md text={r.gemacht} /></p>
       {!nothing(r.nichtGemacht) && <p className="small rq-warn"><b>Nicht gemacht:</b> <Md text={r.nichtGemacht} /></p>}
       <p className="small" style={{ marginBottom: 0 }}><b>DoD: {r.dod.filter((d: any) => d.stand === 'ja').length} von {r.dod.length} erfüllt</b></p>
@@ -163,7 +163,7 @@ function KopfTeil({ it, onDone }: { it: any; onDone: () => void }) {
     setAntwort({});
   });
   // D2: genau den gesehenen Stand freigeben — gemeinsam mit der Übersicht (src/freigabe.tsx).
-  const freigeben = () => run(async () => { if (await pushFreigeben(it.id)) toast('Freigegeben — die Hauptsitzung pusht nach ihrer Prüfung'); });
+  const freigeben = () => run(async () => { if (await pushFreigeben(it.id)) toast('Freigegeben — der Hauptchat pusht nach ihrer Prüfung'); });
   const tot = (url: string) => run(async () => { await api(`/api/review/${it.id}/vorschau-tot`, { body: { url } }); toast('Unter-Chat benachrichtigt'); });
   if (!k && !it.kopfFehler) return null;
   return (
@@ -193,7 +193,7 @@ function KopfTeil({ it, onDone }: { it: any; onDone: () => void }) {
         {fg && fg.veraltet && <span className="chip warn" data-testid="freigabe-veraltet">Freigabe gilt für einen älteren Stand ({fg.head.slice(0, 7)})</span>}
         {fg?.pushedAt && <span className="chip ok" data-testid="gepusht">gepusht{fg.pr ? <> · <a href={fg.pr} target="_blank" rel="noreferrer">PR #{fg.prNr ?? '?'}</a></> : ''}</span>}
         {(fg?.veraltet || (!fg && !aufGithub)) && <button className="btn small" style={BIG} disabled={busy || it.running} onClick={freigeben} data-testid="push-freigeben">{fg?.veraltet ? 'Neu freigeben' : 'Push freigeben'}</button>}
-        {(it.weitereRepos ?? []).length > 0 && <p className="tiny muted">Weitere Repos ({it.weitereRepos.join(', ')}) sind nicht über die Werkbank freigegeben — die Hauptsitzung fragt dich dazu.</p>}
+        {(it.weitereRepos ?? []).length > 0 && <p className="tiny muted">Weitere Repos ({it.weitereRepos.join(', ')}) sind nicht über den OLAF Workspace freigegeben — der Hauptchat fragt dich dazu.</p>}
       </div>}
       <Err e={err} />
     </div>
@@ -213,13 +213,13 @@ export function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
   const extra = it.kind === 'strand' ? { seen: it.seen } : {};
   const reply = (kind: 'antwort' | 'nacharbeit' | 'weiter', text = '') => run(async () => {
     await api(`${base}/reply`, { body: { kind, text, ...extra } });
-    toast(kind === 'nacharbeit' ? 'Zurück an den Agenten' : kind === 'weiter' ? 'Agent macht weiter' : 'Antwort im Chat');
+    toast(kind === 'nacharbeit' ? 'Nacharbeit' : kind === 'weiter' ? 'Unter-Chat macht weiter' : 'Antwort im Chat');
     setRework(null);
   });
   const passt = () => run(async () => {
     if (comment) {
       const p: any = await api(`/api/runs/${it.id}/passt`, { body: { comment: true } });
-      if (!(await confirm({ title: `Kommentar auf ${it.key} schreiben?`, confirmLabel: 'In Jira schreiben', body: <><p className="small">Der Lauf wird als geprüft markiert, und dieser Kommentar geht mit deinem Jira-Zugang an {it.key}. Den Status setzt du selbst.</p><pre className="small" style={{ whiteSpace: 'pre-wrap' }}>{p.text}</pre></> }))) return;
+      if (!(await confirm({ title: `Kommentar auf ${it.key} schreiben?`, confirmLabel: 'In Jira schreiben', body: <><p className="small">Der Unter-Chat wird abgehakt, und dieser Kommentar geht mit deinem Jira-Zugang an {it.key}. Den Status setzt du selbst.</p><pre className="small" style={{ whiteSpace: 'pre-wrap' }}>{p.text}</pre></> }))) return;
       await api(`/api/runs/${it.id}/passt`, { body: { comment: true, confirm: true } });
     } else await api(`${base}/passt`, { body: { ...extra } });
     toast(`${it.kind === 'strand' ? it.summary : it.key} geprüft`);
@@ -232,7 +232,7 @@ export function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
     <article className={`card rq rq-${it.bucket}`} data-run={it.id} data-bucket={it.bucket}>
       <Head it={it} />
       {it.bucket === 'frage' && <div className="rq-q">
-        <p className="small"><b>Der Agent fragt:</b> {it.question ?? 'Freigabe im Chat (Text dort)'}</p>
+        <p className="small"><b>Der Unter-Chat fragt:</b> {it.question ?? 'Freigabe im Chat (Text dort)'}</p>
         <div className="row rq-actions">
           <button className="btn small yes" style={BIG} disabled={busy} onClick={() => reply('antwort', 'ja')}>✅ Ja</button>
           <button className="btn small ghost" style={BIG} disabled={busy} onClick={() => reply('antwort', 'nein')}>✖️ Nein</button>
@@ -241,11 +241,11 @@ export function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
         <p className="tiny muted">Die Antwort geht in denselben Chat. Ist er gerade in einem Tab offen, dort neu laden.</p>
       </div>}
       {(it.bucket === 'haengt' || it.bucket === 'still') && <div className="rq-q">
-        <p className="small">{it.bucket === 'haengt' ? <><span className="chip bad">hängt</span> {it.endText}.</> : <>Hat ohne „bereit zum Review“ aufgehört — meist steht eine Frage im Chat.</>}</p>
+        <p className="small">{it.bucket === 'haengt' ? <><span className="chip bad">blockiert</span> {it.endText}.</> : <>Hat ohne „bereit zum Review“ aufgehört — meist steht eine Frage im Chat.</>}</p>
         <div className="row rq-actions">
           {open}
           {it.bucket === 'haengt' && <button className="btn small" style={BIG} disabled={busy} onClick={() => reply('weiter')}>Weiter</button>}
-          <button className="btn small ghost" style={BIG} disabled={busy} onClick={() => run(async () => { await api(`/api/runs/${it.id}/passt`, { body: {} }); toast('Ausgeblendet'); })}>Erledigt</button>
+          <button className="btn small ghost" style={BIG} disabled={busy} onClick={() => run(async () => { await api(`/api/runs/${it.id}/passt`, { body: {} }); toast('Ausgeblendet'); })}>Abhaken</button>
         </div>
       </div>}
       {it.bucket === 'review' && it.kind === 'strand' && <KopfTeil it={it} onDone={onDone} />}
@@ -255,20 +255,20 @@ export function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
       {it.bucket === 'review' && <>
         {it.review && !nothing(it.review.risiko) && <p className="small rq-risk rq-risk-line" data-testid="risk-line"><b>⚠ Risiko:</b> <Md text={it.review.risiko} max={200} /></p>}
         <div className="row rq-actions">
-          <button className="btn primary" style={BIG} disabled={busy || it.running} onClick={passt} aria-describedby={`hint-${it.id}`}>Passt</button>
+          <button className="btn primary" style={BIG} disabled={busy || it.running} onClick={passt} aria-describedby={`hint-${it.id}`}>Abhaken</button>
           <button className="btn" style={BIG} disabled={busy || it.running} aria-expanded={rework !== null} onClick={() => setRework(rework === null ? '' : null)} aria-describedby={`hint-${it.id}`}>Nacharbeit</button>
           {open}
           {it.kind !== 'strand' && <label className="small row rq-check" style={{ gap: 6 }}><input type="checkbox" checked={comment} onChange={(e) => setComment(e.target.checked)} /> mit Jira-Kommentar</label>}
           {it.kind === 'strand' && it.reviewedBy === 'leitstand' && <span className="tiny muted">vom Hauptchat abgelegt</span>}
         </div>
         <p className="tiny muted rq-hint" id={`hint-${it.id}`} data-testid="passt-hint">{comment
-          ? <><b>Passt</b> = geprüft, und nach deiner Bestätigung ein Kommentar in {it.key} (Jira).</>
-          : <><b>Passt</b> = nur als geprüft markieren, nichts wird geschrieben{it.kind === 'strand' ? ', der Strang ruht' : ''}.</>}
-          {' '}<b>Nacharbeit</b> = dein Text geht an den Agenten, er macht weiter.</p>
+          ? <><b>Abhaken</b> = geprüft, und nach deiner Bestätigung ein Kommentar in {it.key} (Jira).</>
+          : <><b>Abhaken</b> = geprüft markieren, nichts wird geschrieben{it.kind === 'strand' ? ', der Unter-Chat ruht' : ''}.</>}
+          {' '}<b>Nacharbeit</b> = dein Text geht an den Unter-Chat, er macht weiter.</p>
         {rework !== null && <div className="rq-rework">
-          <label className="small" htmlFor={`rw-${it.id}`}>Was soll der Agent nacharbeiten?</label>
+          <label className="small" htmlFor={`rw-${it.id}`}>Was soll der Unter-Chat nacharbeiten?</label>
           <textarea id={`rw-${it.id}`} rows={3} value={rework} onChange={(e) => setRework(e.target.value)} placeholder="z. B. Test für den Fehlerfall ergänzen" />
-          <div className="row"><button className="btn primary small" style={BIG} disabled={busy || !rework.trim()} onClick={() => reply('nacharbeit', rework)}>Zurück an den Agenten</button><button className="btn ghost small" style={BIG} onClick={() => setRework(null)}>Abbrechen</button></div>
+          <div className="row"><button className="btn primary small" style={BIG} disabled={busy || !rework.trim()} onClick={() => reply('nacharbeit', rework)}>Nacharbeit</button><button className="btn ghost small" style={BIG} onClick={() => setRework(null)}>Abbrechen</button></div>
         </div>}
       </>}
       {it.rework && it.bucket !== 'review' && <p className="tiny muted">Nacharbeit {fmtDateTime(it.rework.at)}: {it.rework.text}</p>}
@@ -304,7 +304,7 @@ export function LiveGroup({ items, onDone }: { items: any[]; onDone: () => void 
   const all = async () => {
     const n = items.length;
     if (!(await confirm({ title: `${n} live gegangene ${n === 1 ? 'Unter-Chat' : 'Unter-Chats'} abhaken?`, confirmLabel: `${n} abhaken`,
-      body: <><p className="small">Sie werden als geprüft markiert. Nichts wird geschrieben, gepusht oder gemergt. Der OLAF Workspace prüft vorher noch einmal, ob jeder wirklich live ist.</p><ul className="small">{items.map((x) => <li key={x.id}>{x.summary} · {x.stand.text}</li>)}</ul></> }))) return;
+      body: <><p className="small">Sie werden abgehakt. Nichts wird geschrieben, gepusht oder gemergt. Der OLAF Workspace prüft vorher noch einmal, ob jeder wirklich live ist.</p><ul className="small">{items.map((x) => <li key={x.id}>{x.summary} · {x.stand.text}</li>)}</ul></> }))) return;
     setBusy(true); setErr(null);
     try {
       const r: any = await api('/api/leitstand/strands/passt-live', { body: { items: items.map((x) => ({ id: x.id, seen: x.seen })) } });
@@ -322,7 +322,7 @@ export function LiveGroup({ items, onDone }: { items: any[]; onDone: () => void 
         <ul className="plain rq-live-list">{items.map((x) => <LiveRow key={x.id} x={x} why={skipped[x.id]} />)}</ul>
       </details>
       <div className="row rq-actions">
-        <button className="btn primary" style={BIG} disabled={busy} onClick={all} data-testid="passt-live">Alle {items.length} als geprüft markieren</button>
+        <button className="btn primary" style={BIG} disabled={busy} onClick={all} data-testid="passt-live">Alle {items.length} abhaken</button>
       </div>
       <Err e={err} />
     </div>

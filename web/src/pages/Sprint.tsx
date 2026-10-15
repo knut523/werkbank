@@ -167,7 +167,7 @@ function Question({ q, file, hash, cycle, me, onSaved }: { q: any; file: string;
         body: <>
           <p className="small"><code>{pre.preview.file}</code>, Zeile {pre.preview.line} ({pre.preview.mode === 'filled' ? 'leeres Antwortfeld wird gefüllt' : 'neue Zeile'})</p>
           <div className="diff card soft">{pre.preview.before !== null && <div className="del">- {pre.preview.before}</div>}<div className="add">+ {pre.preview.after}</div></div>
-          <p className="tiny">Ein Text wird beim nächsten Sprint-Sync zum Jira-Kommentar (erst nach Freigabe); „→ mitnehmen: …“ nie.</p>
+          <p className="tiny">Ein Text wird beim nächsten Sprint-Sync zum Jira-Kommentar (erst nach deiner Zustimmung); „→ mitnehmen: …“ nie.</p>
         </>,
         confirmLabel: 'Schreiben',
       });
@@ -247,7 +247,7 @@ function SyncPlan({ cycle, onDone }: { cycle: string; onDone: () => void }) {
             <tbody>
               {plan.map((p) => (
                 <tr key={p.id}>
-                  <td><input type="checkbox" aria-label={`Vorschlag ${p.id} freigeben`} disabled={p.carry || !p.actions.length} checked={!!sel[p.id]} onChange={(e) => setSel({ ...sel, [p.id]: e.target.checked })} /></td>
+                  <td><input type="checkbox" aria-label={`Vorschlag ${p.id} übernehmen`} disabled={p.carry || !p.actions.length} checked={!!sel[p.id]} onChange={(e) => setSel({ ...sel, [p.id]: e.target.checked })} /></td>
                   <td>{p.ticket ?? p.row.key}</td>
                   <td>{p.row.speaker !== '-' && <b>{p.row.speaker}: </b>}{p.row.payload}<div className="tiny">{p.row.file.split('/').pop()}:{p.row.line}</div></td>
                   <td>{p.carry ? <span className="chip">→ Mitnahme, nie Jira</span> : p.actions.map((a: any, k: number) => (
@@ -267,7 +267,7 @@ function SyncPlan({ cycle, onDone }: { cycle: string; onDone: () => void }) {
               const ok = await confirm({
                 title: `${approved.length} Vorschläge in Jira ausführen?`,
                 body: <><p>Unter deinem Jira-Konto, genau diese Liste:</p><ul className="small">{approved.map((p) => <li key={p.id}><b>{p.ticket}</b>: {actionsOf(p).map((a: any) => a.type === 'comment' ? `Kommentar „${a.text.slice(0, 80)}…“` : a.type === 'status' ? `Status → ${a.to}` : `Fällig → ${a.date ?? 'ohne'}`).join(' · ')}</li>)}</ul><p className="tiny">Danach werden die umgesetzten Zeilen in der Notiz mit „✓ Datum → Jira“ markiert (jira-sync-mark.sh).</p></>,
-                confirmLabel: 'Freigeben und ausführen',
+                confirmLabel: 'Zustimmen und ausführen',
               });
               if (!ok) return;
               setBusy(true); setErr(null);

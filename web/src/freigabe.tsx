@@ -12,10 +12,12 @@ export function usePushFreigeben() {
     const repo = r.repo ?? {};
     if (repo.fehler) throw new Error(repo.fehler);
     const ok = await confirm({ title: 'Push freigeben?', confirmLabel: 'Genau diesen Stand freigeben', body: <>
-      <p className="small">Freigegeben wird <b>nur dieser Stand</b>. Ändert sich danach ein Commit (auch ein Rebase), verfällt die Freigabe. Pushen macht die Hauptsitzung nach ihrer Prüfung; gemergt wird nie.</p>
-      <ul className="small plain"><li>Zweig <code>{repo.branch}</code></li><li>Kopf <code>{String(repo.head ?? '').slice(0, 12)}</code> · Basis <code>{repo.baseRef}</code></li><li>{(repo.commits ?? []).length} Commit(s){repo.clean ? '' : ' — ⚠ ungespeicherte Änderungen'}</li></ul>
-      {(repo.commits ?? []).length > 0 && <pre className="tiny" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{(repo.commits ?? []).map((c: any) => (typeof c === 'string' ? c : `${String(c.sha ?? '').slice(0, 8)} ${c.subject ?? ''}`)).join('\n')}</pre>}
-      {repo.stat && <pre className="tiny" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{repo.stat}</pre>}
+      <p className="small">Freigegeben wird <b>nur dieser Stand</b>. Ändert sich danach ein Commit (auch ein Rebase), verfällt die Freigabe. Pushen macht der Hauptchat nach seiner Prüfung; gemergt wird nie.</p>
+      <ul className="small plain"><li>Zweig <code>{repo.branch}</code></li><li>{(repo.commits ?? []).length} Commit(s){repo.clean ? '' : ' — ⚠ ungespeicherte Änderungen'}</li></ul>
+      <details className="tiny"><summary>Technische Details</summary>
+        <p>Kopf <code>{String(repo.head ?? '').slice(0, 12)}</code> · Basis <code>{repo.baseRef}</code></p>
+        {(repo.commits ?? []).length > 0 && <pre className="tiny" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{(repo.commits ?? []).map((c: any) => (typeof c === 'string' ? c : `${String(c.sha ?? '').slice(0, 8)} ${c.subject ?? ''}`)).join('\n')}</pre>}
+        {repo.stat && <pre className="tiny" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{repo.stat}</pre>}</details>
       <p className="tiny"><a href={`#/leitstand?review=${id}`}>Ganzen Diff und Review-Ansicht öffnen</a></p></> });
     if (!ok) return false;
     await api(`/api/review/${id}/freigabe`, { body: { head: repo.head, patchId: repo.patchId ?? null } });

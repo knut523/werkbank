@@ -20,8 +20,8 @@ import { ExecSummary } from '../execsummary.tsx';
 
 const ICON: Record<string, string> = { läuft: '⏳', wartet: '✋', fertig: '✅', gestoppt: '⛔', erledigt: '✔️' };
 const CHIP: Record<string, string> = { läuft: '', wartet: 'warn', fertig: 'ok', gestoppt: 'bad', erledigt: '' };
-// Wörter wie in der Chat-Seitenleiste (Plan 144): „wartet auf dich“, „zu prüfen“.
-const WORD: Record<string, string> = { läuft: 'läuft', wartet: 'wartet auf dich', fertig: 'zu prüfen', gestoppt: 'gestoppt', erledigt: 'erledigt' };
+// Wörter wie in der Chat-Seitenleiste (Glossar): läuft · braucht dich · bereit · blockiert · erledigt.
+const WORD: Record<string, string> = { läuft: 'läuft', wartet: 'braucht dich', fertig: 'bereit', gestoppt: 'blockiert', erledigt: 'erledigt' };
 const span = (from: string, to: string) => {
   const a = fmtDateTime(from).split(',')[0], b = fmtDateTime(to).split(',')[0];
   return a === b ? a : `${a} – ${b}`;
@@ -51,7 +51,7 @@ function Bericht({ id, art, onClose }: { id: string; art: 'auftrag' | 'bericht';
  * Review → Freigabe (docs/plan-hauptchat-monitor.md §9, Council R3). Zeigt, WAS freigegeben wird (Branch, Kopf, Basis, Commits,
  * Diff-Statistik, sauber?), Vorschau-Links aus dem Dienste-Register (geprüft), Entscheidungen mit Antwortfeld, PR-Texte und
  * Bericht — Agententext immer als Text, klickbar sind nur Register-Links. „Freigeben zum Push“ ist die einzige Freigabe;
- * gepusht wird danach von der Hauptsitzung nach der Checkliste (pre-push-Hook prüft). Merge gibt es nicht.
+ * gepusht wird danach vom Hauptchat nach der Checkliste (pre-push-Hook prüft). Merge gibt es nicht.
  */
 const VS: Record<string, string> = { 'läuft': 'ok', 'läuft (Anmeldung)': 'ok', 'Proxy läuft, Ziel antwortet nicht': 'warn', 'antwortet nicht': 'bad', 'Fehler': 'bad' };
 function Review({ id, onClose }: { id: string; onClose: () => void }) {
@@ -71,7 +71,7 @@ function Review({ id, onClose }: { id: string; onClose: () => void }) {
   return (
     <section className="card review" data-testid="review">
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <h2 style={{ margin: 0 }}>Review &amp; Freigabe: {d.title} <span className="tiny muted mono">{d.id}{d.paket ? ` · ${d.paket}` : ''}</span></h2>
+        <h2 style={{ margin: 0 }}>Review &amp; Freigabe: {d.title}</h2>
         <button className="btn small ghost" onClick={onClose}>Schließen</button>
       </div>
       {msg && <p className={`small ${msg.ok ? '' : 'err'}`} role="status" data-testid="review-msg">{msg.text}</p>}
@@ -90,14 +90,14 @@ function Review({ id, onClose }: { id: string; onClose: () => void }) {
 
       <h3>Was freigegeben wird</h3>
       {r.fehler ? <p className="small err">{r.fehler}</p> : <div data-testid="review-repo">
-        <p className="small"><span className="mono">{r.key ?? r.dir}</span><br />Branch <b className="mono">{r.branch ?? '— (kein Branch)'}</b> · Kopf <span className="mono">{String(r.head).slice(0, 12)}</span> · Basis <span className="mono">{r.baseRef ?? '—'}</span>{r.mergeBase ? <> (<span className="mono">{String(r.mergeBase).slice(0, 12)}</span>)</> : null}</p>
+        <p className="small"><span className="mono">{r.key ?? r.dir}</span><br />Branch <b className="mono">{r.branch ?? '— (kein Branch)'}</b> <details className="tiny" style={{ display: 'inline' }}><summary style={{ display: 'inline', cursor: 'pointer' }}>Technische Details</summary> Kopf <span className="mono">{String(r.head).slice(0, 12)}</span> · Basis <span className="mono">{r.baseRef ?? '—'}</span>{r.mergeBase ? <> (<span className="mono">{String(r.mergeBase).slice(0, 12)}</span>)</> : null} · Kennung <span className="mono">{d.id}{d.paket ? ` · ${d.paket}` : ''}</span></details></p>
         <p className="small">{r.clean ? <span className="chip ok">sauber</span> : <span className="chip bad" data-testid="review-unsauber">ungespeicherte Änderungen ({r.dirty.length}) — Vorschau ≠ Commit</span>} {d.running && <span className="chip warn">arbeitet gerade</span>}</p>
         <details><summary className="small">{r.commits.length}{r.more ? `+${r.more}` : ''} Commits</summary><ul className="plain small mono">{r.commits.map((c: any) => <li key={c.sha}>{c.sha.slice(0, 10)} {c.subject}</li>)}</ul></details>
         {r.stat && <details><summary className="small">Diff-Statistik</summary><pre className="small" style={{ whiteSpace: 'pre-wrap' }}>{r.stat}</pre></details>}
         <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
           <button className="btn primary" data-testid="freigeben" disabled={!!busy || !r.clean || !r.branch || !r.patchId || d.running || schonFrei}
-            title="Gibt genau diesen Stand (Kopf + Patch) zum Push frei. Gepusht wird von der Hauptsitzung nach der Checkliste; nie gemergt."
-            onClick={() => { if (confirm(`${r.branch}@${String(r.head).slice(0, 12)} zum Push freigeben?\nNur dieser Stand (nach Rebase: derselbe Patch). Merge nie.`)) run('f', () => api(`/api/review/${id}/freigabe`, { body: { head: r.head, patchId: r.patchId } }), 'Freigegeben — die Hauptsitzung pusht nach der Checkliste.'); }}>
+            title="Gibt genau diesen Stand (Kopf + Patch) zum Push frei. Gepusht wird vom Hauptchat nach der Checkliste; nie gemergt."
+            onClick={() => { if (confirm(`${r.branch}@${String(r.head).slice(0, 12)} zum Push freigeben?\nNur dieser Stand (nach Rebase: derselbe Patch). Merge nie.`)) run('f', () => api(`/api/review/${id}/freigabe`, { body: { head: r.head, patchId: r.patchId } }), 'Freigegeben — der Hauptchat pusht nach der Checkliste.'); }}>
             {schonFrei ? 'Freigegeben ✓' : 'Freigeben zum Push'}
           </button>
           <span className="tiny muted">Merge gibt es hier nicht.</span>
@@ -227,7 +227,7 @@ function MessungDetails({ m, z }: { m: any; z: (n: number) => string }) {
   const urteil = (x: any) => x.urteil ?? (x.status === 'laeuft' ? 'läuft' : x.status === 'fertig' ? 'offen' : x.status);
   return (
     <details data-testid="messung" style={{ marginTop: 4 }}>
-      <summary className="tiny">📊 24 h: {m.summe.zuege} Züge · {z(m.summe.tokens)} Tokens · Melious-Anteil {m.summe.anteilMelious} % · Worker {z(m.summe.workerTokens)} / Leads {z(m.summe.leadTokens)} Tokens</summary>
+      <summary className="tiny">Technische Details · 📊 24 h: {m.summe.zuege} Züge · {z(m.summe.tokens)} Tokens · Melious-Anteil {m.summe.anteilMelious} % · Worker {z(m.summe.workerTokens)} / Leads {z(m.summe.leadTokens)} Tokens</summary>
       <table className="tiny" data-testid="messung-zuege" style={{ marginTop: 4 }}>
         <thead><tr><th>Art</th><th>Phase/Rolle</th><th>Modell</th><th>Züge</th><th>Tokens</th><th>Energie</th></tr></thead>
         <tbody>{m.zuege.map((g: any) => <tr key={`${g.art}|${g.phase}|${g.modell}`}><td>{g.art}</td><td>{g.phase ?? '—'}</td><td>{g.modell}{g.kette ? ` (Kette ${g.kette}×)` : ''}</td><td>{g.zuege}</td><td>{z(g.tokens)}</td><td>{g.energie ? `≈ ${z(g.energie)}` : '—'}</td></tr>)}</tbody>
@@ -237,7 +237,7 @@ function MessungDetails({ m, z }: { m: any; z: (n: number) => string }) {
         <tbody>{m.delegationen.map((x: any) => <tr key={x.id} title={x.aufgabe}><td>{x.id}{x.dauerMin ? ` · ${x.dauerMin} min` : ''}</td><td>{x.rolle} · {x.risiko}</td><td>{x.modell ?? '—'}{x.energie ? ` · ≈ ${z(x.energie)}` : ''}</td>
           <td>{x.pruefungen.length ? x.pruefungen.map((p: any) => `${p.ok ? '✅' : '❌'} ${p.name}`).join(' ') : '—'}{x.abweichungen ? ` · ⚠️ ${x.abweichungen}` : ''}</td><td>{x.prueferUrteil ?? '—'}</td><td>{urteil(x)}</td></tr>)}</tbody>
       </table>}
-      {(m.straenge ?? []).length > 0 && <div className="tiny muted" data-testid="messung-straenge" style={{ marginTop: 4 }}>Je Strang (24 h, Lead / Worker): {m.straenge.map((s: any) => `${s.conv.slice(0, 8)}… ${z(s.lead)} / ${z(s.worker)}`).join(' · ')}</div>}
+      {(m.straenge ?? []).length > 0 && <div className="tiny muted" data-testid="messung-straenge" style={{ marginTop: 4 }}>Je Unter-Chat (24 h): {m.straenge.map((s: any) => `${s.conv.slice(0, 8)}… ${z(s.lead)} / ${z(s.worker)}`).join(' · ')}</div>}
       {m.quoten.length > 0 && <div className="tiny muted" data-testid="messung-quoten" style={{ marginTop: 4 }}>30 Tage: {m.quoten.map((q: any) => `${q.modell} als ${q.rolle}: ${q.n}× (fehlgeschlagen ${q.fehlPct} %, verworfen ${q.verwPct} %, mit Abweichung ${q.abweichung})`).join(' · ')}</div>}
     </details>
   );

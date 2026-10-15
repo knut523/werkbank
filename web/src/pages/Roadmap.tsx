@@ -63,7 +63,7 @@ function Prio({ d, reload, admin }: { d: any; reload: () => void; admin: boolean
   return (
     <>
       <NextUp d={d} />
-      <p className="small muted">Nach Thema gruppiert, innerhalb nach Rang aus <a href={note(d.hub.prio)}>der Priorisierungsseite</a> (WSJF-leicht: (GW+ZK+RR)/Größe, gerechnet von <code>rank.py</code>). „Noch nicht priorisiert“ = Specs ohne Zeile in der Rangtabelle. Verschieben erzeugt einen <b>Vorschlag</b> — nach Bestätigung als Zeile auf der Priorisierungsseite; neu gerechnet wird in der Hauptsitzung.</p>
+      <p className="small muted">Nach Thema gruppiert, innerhalb nach Rang aus <a href={note(d.hub.prio)}>der Priorisierungsseite</a> (WSJF-leicht: (GW+ZK+RR)/Größe, gerechnet von <code>rank.py</code>). „Noch nicht priorisiert“ = Specs ohne Zeile in der Rangtabelle. Verschieben erzeugt einen <b>Vorschlag</b> — nach Bestätigung als Zeile auf der Priorisierungsseite; neu gerechnet wird im Hauptchat.</p>
       <div className="row" style={{ marginBottom: 8 }}>
         <input type="search" placeholder="Spec, Thema, Zustand …" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Rangliste filtern" />
         {order && <>
@@ -73,7 +73,7 @@ function Prio({ d, reload, admin }: { d: any; reload: () => void; admin: boolean
             try {
               const top = moved.sort((a, b) => Math.abs(b.r.rank - b.to) - Math.abs(a.r.rank - a.to))[0];
               const p: any = await api('/api/roadmap/rank-proposal', { body: { spec: top.r.spec, from: top.r.rank, to: top.to, why } });
-              if (!(await confirm({ title: 'Rang-Vorschlag festhalten?', confirmLabel: 'In den Vault schreiben', body: <><p className="small">Diese Zeile kommt unter „Vorschläge aus der Werkbank“ auf <code>{p.preview.path.split('/').pop()}</code>:</p><pre className="small">{p.preview.add}</pre></> }))) return;
+              if (!(await confirm({ title: 'Rang-Vorschlag festhalten?', confirmLabel: 'In den Vault schreiben', body: <><p className="small">Diese Zeile kommt unter „Vorschläge aus dem OLAF Workspace“ auf <code>{p.preview.path.split('/').pop()}</code>:</p><pre className="small">{p.preview.add}</pre></> }))) return;
               await api('/api/roadmap/rank-proposal', { body: { spec: top.r.spec, from: top.r.rank, to: top.to, why, confirm: true, hash: p.hash } });
               toast('Vorschlag festgehalten'); setOrder(null); setWhy(''); reload();
             } catch (e) { setErr(e); }
@@ -402,12 +402,12 @@ function Check({ d: rd }: { d: any }) {
   );
 }
 
-// Überblick (Standard): je Thema eine Zeile mit vier Feldern — Wartet auf dich → In Arbeit → Als Nächstes → Erledigt;
+// Überblick (Standard): je Thema eine Zeile mit vier Feldern — Braucht dich → In Arbeit → Als Nächstes → Erledigt;
 // Themen mit offenen Entscheidungen zuerst. „Alle Zustände ▾“ klappt die volle Swimlane des Themas auf.
 function Overview({ d }: { d: any }) {
   const [openLane, setOpenLane] = useState<string | null>(null);
   const rows = useMemo(() => topicBuckets(d.lanes.map((l: any) => ({ name: l.topic, states: l.states })), d.admin ? d.decisions : [], d.agents ?? {}), [d]);
-  const waitLabel = d.admin ? 'Wartet auf dich' : 'Wartet auf Entscheidung';
+  const waitLabel = d.admin ? 'Braucht dich' : 'Braucht eine Entscheidung';
   const specLink = (s: any) => <a href={note(s.path)}>{s.title}</a>;
   const empty = <span className="muted">—</span>;
   return (

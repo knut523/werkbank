@@ -1,11 +1,11 @@
-// Rückfragen des Orchestrators (docs/plan-orchestrator-agents.md). Stehen auf „Heute“ unter „Wartet auf dich“ und zählen
+// Rückfragen des Hauptchats (docs/plan-orchestrator-agents.md). Stehen auf „Heute“ unter „Wartet auf dich“ und zählen
 // in „Heute (n)“ mit (Release 11.10.2026: der frühere Roadmap-Kasten „Für mich offen“ ist mit der Heute-Seite entfallen).
 import { useState } from 'react';
 import { api } from './api.ts';
 import { Err, useLoad, useToast, useJiraLive } from './ui.tsx';
 
-// Rückfragen des Orchestrators (docs/plan-orchestrator-agents.md): die Haupt-Sitzung fragt nur, wo Knuts Entscheidung
-// wirklich nötig ist; Antwort = Option und/oder Freitext, der Orchestrator liest sie über `orch questions get`.
+// Rückfragen des Hauptchats (docs/plan-orchestrator-agents.md): die Haupt-Sitzung fragt nur, wo Knuts Entscheidung
+// wirklich nötig ist; Antwort = Option und/oder Freitext, der Hauptchat liest sie über `orch questions get`.
 export function OrchQuestions({ onChange }: { onChange?: () => void }) {
   const q = useLoad(() => api('/api/orchestrator/questions'));
   const reload = () => api('/api/orchestrator/questions').then(q.setData).catch(() => {});
@@ -22,7 +22,7 @@ export function OrchQuestions({ onChange }: { onChange?: () => void }) {
     setBusy(it.id); setErr(null);
     try {
       await api(`/api/orchestrator/questions/${it.id}/answer`, { body: { option: pick[it.id] || null, text: text[it.id] || '' } });
-      toast('Antwort gespeichert — der Orchestrator liest sie beim nächsten Abruf');
+      toast('Antwort gespeichert — der Hauptchat liest sie beim nächsten Abruf');
       window.dispatchEvent(new Event('werkbank-questions'));
       await reload();
       onChange?.();
@@ -30,7 +30,7 @@ export function OrchQuestions({ onChange }: { onChange?: () => void }) {
   };
   return (
     <div className="card" data-testid="orch-questions">
-      <h3 style={{ marginTop: 0 }}>Rückfragen des Orchestrators <span className={`chip${open.length ? ' warn' : ''}`}>{open.length}</span></h3>
+      <h3 style={{ marginTop: 0 }}>Rückfragen des Hauptchats <span className={`chip${open.length ? ' warn' : ''}`}>{open.length}</span></h3>
       {err ? <Err e={err} /> : null}
       {!open.length && <p className="small muted">Keine offenen Rückfragen.</p>}
       {open.map((it) => (
@@ -38,7 +38,7 @@ export function OrchQuestions({ onChange }: { onChange?: () => void }) {
           <div><b>{it.title}</b> {it.key && <span className="chip tiny-chip" title="Stabiler Schlüssel: diese Frage entsteht nur einmal">{/#G0$/.test(it.key) ? 'Prüfung vor dem Bau' : it.key}</span>} <span className="tiny">· {String(it.createdAt).slice(0, 16).replace('T', ' ')} · {it.id}</span></div>
           <p className="small" style={{ whiteSpace: 'pre-wrap', margin: '4px 0' }}>{it.context}</p>
           {(it.strand || it.link || it.plan) && <div className="small row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            {it.strand && (it.strand.url ? <a href={it.strand.url} target="_top">💬 Strang: {it.strand.title}</a> : <span>💬 Strang: {it.strand.title} (noch kein Chat)</span>)}
+            {it.strand && (it.strand.url ? <a href={it.strand.url} target="_top">💬 Unter-Chat: {it.strand.title}</a> : <span>💬 Unter-Chat: {it.strand.title} (noch kein Chat)</span>)}
             {it.link && <a href={it.link} target="_blank" rel="noreferrer">🔗 Link</a>}
             {it.plan && <code className="tiny">{it.plan}</code>}
           </div>}

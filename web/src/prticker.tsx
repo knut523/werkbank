@@ -7,7 +7,7 @@ import { Err, Loading, useLoad } from './ui.tsx';
 
 const KIND: Record<string, string> = { neu: '🆕', stand: '⬆️', zu: '🏁', kommentar: '💬', review: '🔎', anfrage: '🙋', tag: '🏷️' };
 const STATUS_CHIP: Record<string, string> = { wartet: '', startet: '', läuft: '', fertig: 'ok', deckel: 'warn', fehler: 'bad', übersprungen: '' };
-const EMPF: Record<string, { t: string; c: string }> = { approve: { t: 'freigeben', c: 'ok' }, 'request-changes': { t: 'Änderungen verlangen', c: 'bad' }, comment: { t: 'nur kommentieren', c: 'warn' } };
+const EMPF: Record<string, { t: string; c: string }> = { approve: { t: 'approven', c: 'ok' }, 'request-changes': { t: 'Änderungen verlangen', c: 'bad' }, comment: { t: 'nur kommentieren', c: 'warn' } };
 const short = (repo: string) => repo.split('/')[1] ?? repo;
 
 function Schalter({ label, an, onChange, testid, hint, disabled }: { label: string; an: boolean; onChange: (v: boolean) => void; testid: string; hint?: string; disabled?: boolean }) {
@@ -40,7 +40,7 @@ export function PrTicker() {
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
         <h2 style={{ margin: 0 }}>PR-Ticker</h2>
         <span className="tiny muted">
-          {d.aus ? 'per WERKBANK_PR_TICKER=off abgeschaltet' : d.lauf?.at ? `zuletzt ${fmtDateTime(d.lauf.at)} · ${d.scopes.join(' + ')}` : 'noch kein Lauf'}
+          {d.aus ? <>abgeschaltet · <details className="tiny" style={{ display: 'inline' }}><summary style={{ display: 'inline', cursor: 'pointer' }}>Technische Details</summary> Schalter WERKBANK_PR_TICKER=off</details></> : d.lauf?.at ? `zuletzt ${fmtDateTime(d.lauf.at)} · ${d.scopes.join(' + ')}` : 'noch keine Prüfung'}
           {d.lauf?.rate ? ` · GitHub-Kontingent ${d.lauf.rate.remaining}` : ''}
         </span>
       </div>
@@ -48,7 +48,7 @@ export function PrTicker() {
       <div className="row" style={{ gap: 16, flexWrap: 'wrap', margin: '8px 0' }} data-testid="ticker-schalter">
         <Schalter label="Ticker" an={s.ticker} disabled={busy} testid="schalter-ticker" onChange={(v) => set({ ticker: v }, v ? 'Ticker an — erster Abruf in spätestens einer Minute.' : 'Ticker aus.')} hint={`alle ${s.minutes} min neue PRs, Stände, Reviews und Kommentare`} />
         <Schalter label="Auto-Review bei @review" an={s.autoReview} disabled={busy || !s.ticker} testid="schalter-autoreview" onChange={(v) => set({ autoReview: v }, v ? 'Auto-Review an — zählt @review ab jetzt.' : 'Auto-Review aus.')} hint="startet je getaggtem PR einen Review-Unter-Chat" />
-        <Schalter label="Kommentare automatisch posten" an={s.autoPost} disabled={busy || !s.autoReview} testid="schalter-autopost" onChange={(v) => set({ autoPost: v })} hint="nur als Kommentar (COMMENT); Freigeben/Änderungen verlangen bleibt dein Klick" />
+        <Schalter label="Kommentare automatisch posten" an={s.autoPost} disabled={busy || !s.autoReview} testid="schalter-autopost" onChange={(v) => set({ autoPost: v })} hint="nur als Kommentar (COMMENT); Approve/Änderungen verlangen bleibt dein Klick" />
         <Schalter label="auch bei Review-Anfrage an mich" an={s.onRequest} disabled={busy || !s.autoReview} testid="schalter-anfrage" onChange={(v) => set({ onRequest: v })} />
       </div>
       <details className="small" style={{ marginBottom: 8 }}>
@@ -113,10 +113,10 @@ export function PrReviewAbschnitt({ id, pr, onDone }: { id: string; pr: any; onD
       {pr.text ? <pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: '50vh', overflow: 'auto' }} data-testid="kommentar-entwurf">{pr.text}</pre> : <p className="small muted">Noch kein Kommentar-Entwurf (kommentar.md).</p>}
       {pr.text && <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
         {!pr.posted && <button className="btn small primary" disabled={!!busy || pr.schreibenAus} onClick={() => go('COMMENT', 'Kommentar')} data-testid="kommentar-posten">Kommentar posten</button>}
-        <button className="btn small" disabled={!!busy || pr.schreibenAus} onClick={() => go('APPROVE', 'Freigeben (Approve)')} data-testid="approve">Freigeben</button>
+        <button className="btn small" disabled={!!busy || pr.schreibenAus} onClick={() => go('APPROVE', 'Approve')} data-testid="approve">Approve</button>
         <button className="btn small" disabled={!!busy || pr.schreibenAus} onClick={() => go('REQUEST_CHANGES', 'Änderungen verlangen')} data-testid="request-changes">Änderungen verlangen</button>
         <button className="btn small ghost" onClick={() => navigator.clipboard?.writeText(pr.text).then(() => setMsg({ ok: true, text: 'Text kopiert.' }))}>Text kopieren</button>
-        {pr.schreibenAus && <span className="tiny muted">GitHub-Schreiben ist aus (WERKBANK_GITHUB_KOMMENTAR=off).</span>}
+        {pr.schreibenAus && <span className="tiny muted">Schreiben auf GitHub ist aus. <details className="tiny" style={{ display: 'inline' }}><summary style={{ display: 'inline', cursor: 'pointer' }}>Technische Details</summary> Schalter WERKBANK_GITHUB_KOMMENTAR=off</details></span>}
       </div>}
       {msg && <p className={`small ${msg.ok ? '' : 'err'}`} role="status">{msg.text}</p>}
     </div>

@@ -182,11 +182,11 @@ function Schublade({ k, tab, setTab, onClose, onDone }: { k: any; tab: Tab; setT
           <h3>Was du freigibst</h3>
           {r.repo?.fehler ? <p className="small mut">{r.repo.fehler}</p> : <>
             <table className="ub-table"><thead><tr><th>Repo</th><th>Zweig</th><th>Stand</th></tr></thead>
-              <tbody><tr><td>{String(r.repo?.key ?? '').replace(/^https:\/\/github\.com\//, '')}</td><td><code>{r.repo?.branch}</code></td><td><code>{String(r.repo?.head ?? '').slice(0, 7)}</code> · {(r.repo?.commits ?? []).length} Commits · {r.repo?.clean ? 'sauber' : 'ungespeicherte Änderungen'}</td></tr></tbody></table>
+              <tbody><tr><td>{String(r.repo?.key ?? '').replace(/^https:\/\/github\.com\//, '')}</td><td><code>{r.repo?.branch}</code></td><td>{(r.repo?.commits ?? []).length} Commits · {r.repo?.clean ? 'sauber' : 'ungespeicherte Änderungen'}</td></tr></tbody></table>
             <p className="tiny mut">Der Hauptchat pusht genau diesen Stand und öffnet die PRs. Gemergt wird nie.</p>
             <div className="ub-row">{k.kannFreigeben && <button className="ub-btn pri" onClick={freigeben} data-testid="ub-push-schublade">Push freigeben</button>}</div>
             <details className="small"><summary className="mut">Technische Details ▾</summary>
-              <pre className="ub-pre tiny">{(r.repo?.commits ?? []).map((c: any) => `${String(c.sha ?? '').slice(0, 8)} ${c.subject ?? ''}`).join('\n')}{r.repo?.stat ? `\n\n${r.repo.stat}` : ''}</pre></details>
+              <pre className="ub-pre tiny">Kopf {String(r.repo?.head ?? '').slice(0, 12)}\n{(r.repo?.commits ?? []).map((c: any) => `${String(c.sha ?? '').slice(0, 8)} ${c.subject ?? ''}`).join('\n')}{r.repo?.stat ? `\n\n${r.repo.stat}` : ''}</pre></details>
           </>}
           <Err e={err} />
         </div>)}
@@ -231,7 +231,7 @@ function Karte({ k, onDone, oeffne }: { k: any; onDone: () => void; oeffne: (k: 
         </div>
         {nacharbeit !== null && <div className="ub-anders">
           <textarea rows={3} value={nacharbeit} aria-label="Was nacharbeiten?" placeholder="z. B. Test für den Fehlerfall ergänzen" onChange={(e) => setNacharbeit(e.target.value)} data-testid="ub-nacharbeit-text" />
-          <div className="ub-row"><button className="ub-btn pri sm" disabled={busy || k.running || !nacharbeit.trim()} onClick={zurueck}>Zurück an den Unter-Chat</button>
+          <div className="ub-row"><button className="ub-btn pri sm" disabled={busy || k.running || !nacharbeit.trim()} onClick={zurueck}>Nacharbeit</button>
             {k.running && <span className="tiny mut">Arbeitet gerade — dein Text bleibt hier stehen.</span>}</div>
         </div>}
       </div>
@@ -368,7 +368,7 @@ export function Uebersicht({ cfg }: { cfg: Config }) {
       </details>}
 
       {!karten.length && !lose.length && !board.length && !mine && !laufen.length && <div className="ub-card soft" data-testid="today-empty">
-        <p><b>Nichts wartet auf dich.</b></p><p className="small mut">Neue Arbeit findest du auf der <a href="#/roadmap">Roadmap</a> (Als Nächstes) oder am <a href="#/board">Board</a>.</p></div>}
+        <p><b>Nichts braucht dich.</b></p><p className="small mut">Neue Arbeit findest du auf der <a href="#/roadmap">Roadmap</a> (Als Nächstes) oder am <a href="#/board">Board</a>.</p></div>}
 
       <section className="ub-card soft" data-testid="ub-planen">
         <div className="ub-row ub-planen"><span className="small">Außerdem in <b>Planen</b>:</span>

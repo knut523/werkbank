@@ -96,7 +96,7 @@ export function Dateien({ cfg }: { cfg: Config }) {
             );
           })()}
 
-          {f.ablage.unklar && <p className="note small">Der Besitz der Ablage ist unklar (kein oder mehr als ein Admin-Konto). Mit <code>WERKBANK_DOCS_OWNER</code> festlegen, dann erscheinen alle Dateien aus der Ablage hier.</p>}
+          {f.ablage.unklar && <p className="note small">Der Besitz der Ablage ist unklar (kein oder mehr als ein Admin-Konto). Ein Admin legt den Besitz fest, dann erscheinen alle Dateien aus der Ablage hier. <details className="tiny" style={{ display: 'inline' }}><summary style={{ display: 'inline', cursor: 'pointer' }}>Technische Details</summary> Einstellung WERKBANK_DOCS_OWNER</details></p>}
           <Ablage f={f} people={people} onDone={reloadAll} toChat={toChat} setErr={setErr} />
 
           <h2>Geteilt mit mir ({f.shared.length})</h2>
@@ -331,7 +331,7 @@ function BackupCard({ b }: { b: any }) {
         <p className="tiny" style={{ margin: '6px 0 0' }}>
           Drin: die Datenbank des OLAF Workspace (Tickets-Kopie, Dateien-Einträge, Projekte, Freigaben …), alle Dateien der Ablage, das Freigabe-Protokoll.
           Nicht drin: Zugänge (Claude, Jira) und Anmeldungen, Chats (LibreChat), der Vault (eigenes Git), Arbeitsordner.
-          {b.key ? ' Dateien mit Personendaten sind verschlüsselt — den Schlüssel (WERKBANK_BACKUP_KEY) brauchst du zum Wiederherstellen.' : ' Achtung: kein WERKBANK_BACKUP_KEY gesetzt — Dateien mit Personendaten fehlen im Archiv.'}
+          {b.key ? ' Dateien mit Personendaten sind verschlüsselt — den Schlüssel brauchst du zum Wiederherstellen.' : ' Achtung: kein Archiv-Schlüssel gesetzt — Dateien mit Personendaten fehlen im Archiv.'}<details className="tiny" style={{ display: 'inline' }}><summary style={{ display: 'inline', cursor: 'pointer' }}>Technische Details</summary> Schlüssel WERKBANK_BACKUP_KEY</details>
         </p>
       </div>
     </>
@@ -513,7 +513,7 @@ function VonAgenten({ mine, admin, librechatUrl }: { mine: any[]; admin: boolean
   const chats = mine.filter((x) => x.kind === 'agent' || x.kind === 'vault').sort((a, b) => String(b.updatedAt ?? b.createdAt).localeCompare(String(a.updatedAt ?? a.createdAt)));
   return (
     <>
-      {admin ? <Pakete /> : <p className="muted small">Review-Pakete der Agenten-Stränge sehen nur Admins.</p>}
+      {admin ? <Pakete /> : <p className="muted small">Ergebnisse der Unter-Chats sehen nur Admins.</p>}
       <h2>Aus Chats ({chats.length})</h2>
       <p className="tiny muted" style={{ marginTop: 0 }}>Was ein Agent im Workspace-Chat fertig geschrieben hat — Dateien liegen zusätzlich in der Ablage, Notizen im Vault.</p>
       {chats.length === 0 ? <p className="muted small">Noch nichts.</p> : (
@@ -546,12 +546,12 @@ function Pakete() {
   const list = data.pakete.filter((p: any) => !needle || `${p.name} ${p.title} ${p.strand?.title ?? ''}`.toLowerCase().includes(needle));
   return (
     <>
-      <h2>Review-Pakete ({data.pakete.length})</h2>
-      <p className="tiny muted" style={{ marginTop: 0 }}>Berichte, Pläne und Screenshots der Haupt-Sitzung und der Orchestrator-Stränge. Nur lesen — hier wird nichts verschoben.</p>
-      {!data.ordner ? <p className="muted small">Auf diesem Server gibt es keinen Ordner mit Review-Paketen.</p> : (
+      <h2>Ergebnisse ({data.pakete.length})</h2>
+      <p className="tiny muted" style={{ marginTop: 0 }}>Berichte, Pläne und Screenshots des Hauptchats und der Unter-Chats. Nur lesen — hier wird nichts verschoben.</p>
+      {!data.ordner ? <p className="muted small">Auf diesem Server gibt es keinen Ordner mit Ergebnissen.</p> : (
         <>
           <div className="row ftools">
-            <input type="search" value={q} onChange={(e) => { setQ(e.target.value); setN(30); }} placeholder="Suchen: Nummer, Titel, Strang …" aria-label="Review-Pakete durchsuchen" />
+            <input type="search" value={q} onChange={(e) => { setQ(e.target.value); setN(30); }} placeholder="Suchen: Nummer, Titel, Unter-Chat …" aria-label="Ergebnisse durchsuchen" />
             {needle && <span className="tiny muted">{list.length} Treffer</span>}
           </div>
           {list.length === 0 ? <p className="muted small">Nichts gefunden.</p> : (
@@ -563,7 +563,7 @@ function Pakete() {
                     <span className="tiny muted"> · {fmtDate(new Date(p.at).toISOString())} · {p.files.length}{p.more ? ` + ${p.more}` : ''} Dateien</span>
                   </summary>
                   <div className="col" style={{ gap: 4, padding: '4px 0 8px 8px' }}>
-                    {p.strand && <span className="small">Strang: {p.strand.url ? <a href={p.strand.url} target={chatTarget} rel="noreferrer">{p.strand.title || p.strand.id}</a> : p.strand.title}</span>}
+                    {p.strand && <span className="small">Unter-Chat: {p.strand.url ? <a href={p.strand.url} target={chatTarget} rel="noreferrer">{p.strand.title || p.strand.id}</a> : p.strand.title}</span>}
                     <span className="tiny muted"><code>{p.name}/</code></span>
                     {p.files.map((x: any) => (
                       <div key={x.rel} className="frow-main">
