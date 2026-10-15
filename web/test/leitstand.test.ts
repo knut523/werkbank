@@ -6,7 +6,7 @@ import { TEST_MONGO } from './testmongo.ts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -596,10 +596,28 @@ test('Plan 154 §9 (Council R3): Review-Ansicht — Entscheidungen aus dem Beric
   assert.equal((await ok.json()).gesendet, 1);
   const msgs = await msgsOf(st.conv);
   const nach = msgs.filter((m) => m.isCreatedByUser).map(textOf).at(-1)!;
-  assert.match(nach, /^Nacharbeit nach Review: Entscheidungen von Knut/);
+  assert.match(nach, /^Nacharbeit nach Review: Knut hat entschieden/);
   assert.match(nach, /- D1 \(Tabelle umbenennen\?\): a, aber mit Übergangsview/);
   assert.doesNotMatch(nach, /X9/);
+  // Plan 157 B: der Server hat die Antwort in den Bericht eingetragen
+  assert.match(readFileSync(join(tmp, 'review-pakete', '954-review', 'bericht.md'), 'utf8'), /- Empfehlung: a\n {2}- Knut: a, aber mit Übergangsview \(\d\d\.\d\d\.\)\n/);
   await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  await until(() => W().collection('orchestrator_runs').findOne({ _id: st.id as any }), (x: any) => x?.lastStatus !== 'running');
+  // Nur „Empfehlung akzeptieren“ und danach nichts mehr offen → kein Zug, Strang gilt als erledigt
+  writeFileSync(join(tmp, 'review-pakete', '954-review', 'bericht.md'), '# Bericht\n\n**D3 — Noch eine**\n- Empfehlung: b, weil einfacher\n  - Knut:\n');
+  const r3 = await (await get()).json();
+  const vorher = (await msgsOf(st.conv)).length;
+  const ok3 = await post(`/api/review/${st.id}/entscheidungen`, { berichtHash: r3.berichtHash, antworten: [{ id: 'D3', art: 'akzeptiert' }] });
+  assert.equal(ok3.status, 200, await ok3.clone().text());
+  const j3 = await ok3.json();
+  assert.deepEqual({ ...j3, hauptchat: undefined }, { ok: true, gesendet: 1, weiter: false, offen: 0, hauptchat: undefined });
+  assert.match(readFileSync(join(tmp, 'review-pakete', '954-review', 'bericht.md'), 'utf8'), /- Knut: akzeptiert \(Empfehlung: b, weil einfacher\) \(\d\d\.\d\d\.\)/);
+  assert.equal((await msgsOf(st.conv)).length, vorher, 'keine Nachricht an den Strang');
+  assert.ok(((await W().collection('orchestrator_runs').findOne({ _id: st.id as any })) as any).entscheidungenErledigtAt);
+  // Berichtsseite liefert die Entscheidungen mit
+  const bs = await (await fetch(B + `/api/leitstand/bericht?strand=${st.id}&art=bericht`, { headers: { cookie: await cookie(knut) } })).json();
+  assert.equal(bs.entscheidungen[0].empfehlung, 'b, weil einfacher');
+  assert.ok(bs.berichtHash);
   await orch(['review', st.id]);
 });
 

@@ -5,7 +5,7 @@
 // Bestätigungsdialog setzt. Ohne confirm liefern sie nur die Vorschau.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch } from 'node:fs';
+import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch, realpathSync } from 'node:fs';
 import { join, extname, resolve, normalize, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import YAML from 'yaml';
@@ -21,10 +21,10 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
-import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious } from './leitstand.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
-import { reviewDetail, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen } from './freigabe.ts';
-import { readBericht as readBerichtDatei } from './bericht.ts';
+import { reviewDetail, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
+import { readBericht as readBerichtDatei, reviewDir } from './bericht.ts';
 import { readBericht, paketDatei } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
@@ -47,6 +47,9 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
+import { tickerTick, tickerOverview, setTickerSettings, reviewsCol, reviewErlaubt } from './prticker.ts';
+import { reviewTick, prNowVia, parseKommentar, fussnote } from './prreview.ts';
+import { postReview, schreibenAus, type ReviewEvent } from './githubwrite.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
 import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './timebox.ts';
@@ -1356,7 +1359,61 @@ const reviewStrand = async (u: User, id: string) => {
 };
 on('GET', /^\/api\/review\/([\w-]{1,40})$/, async (req, res, m) => {
   const u = await needAdmin(req);
-  send(res, 200, await reviewDetail(await reviewStrand(u, m[1])));
+  const d = await reviewStrand(u, m[1]);
+  send(res, 200, { ...(await reviewDetail(d)), prReview: await prReviewOf(String(d._id)) });
+});
+
+// ---------- PR-Ticker und Auto-Review (Plan 157) ----------
+async function prReviewOf(strand: string) {
+  const r: any = await reviewsCol().findOne({ strand });
+  if (!r) return null;
+  const k = parseKommentar(readBerichtDatei(join(reviewDir(), r.paket ?? '_', 'kommentar.md')));
+  return { id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, status: r.status, empfehlung: k?.empfehlung ?? r.empfehlung ?? null,
+    text: k?.text ?? null, posted: r.posted ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus() };
+}
+on('GET', /^\/api\/leitstand\/ticker$/, async (req, res) => { await needAdmin(req); send(res, 200, await tickerOverview()); });
+on('POST', /^\/api\/leitstand\/ticker\/einstellungen$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const s = await setTickerSettings(await body(req), { id: u.id, name: u.name });
+  log('pr-ticker einstellungen', { user: u.id, ticker: s.ticker, autoReview: s.autoReview, autoPost: s.autoPost });
+  send(res, 200, { ok: true, settings: s });
+});
+on('POST', /^\/api\/leitstand\/ticker\/jetzt$/, async (req, res) => {
+  await needAdmin(req);
+  const r = await tickerTick(githubReadToken, new Date(), { force: true }).catch((e: any) => { throw new HttpError(502, e.message); });
+  send(res, 200, r);
+});
+// Eintrag mit Deckel/Fehler von Hand wieder in die Warteschlange (Deckel des Tages gilt weiter).
+on('POST', /^\/api\/leitstand\/ticker\/review$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  if (!reviewErlaubt(String(b.id ?? '').split('#')[0])) throw new HttpError(409, 'Für dieses Repo gibt es kein Auto-Review (WERKBANK_PR_REVIEW_ORGS).');
+  const r = await reviewsCol().updateOne({ _id: String(b.id ?? '') as any, status: { $in: ['deckel', 'fehler', 'übersprungen', 'startet'] } }, { $set: { status: 'wartet', note: `von ${u.name} erneut angestoßen`, ownerId: u.id } });
+  if (!r.modifiedCount) throw new HttpError(409, 'Eintrag nicht gefunden oder läuft schon.');
+  send(res, 200, { ok: true });
+});
+// Knuts Klick: Kommentar / Freigabe / Änderungen verlangen — gebunden an den reviewten Kopf und den gezeigten Text.
+on('POST', /^\/api\/review\/([\w-]{1,40})\/github$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const d = await reviewStrand(u, m[1]);
+  const pr = await prReviewOf(String(d._id));
+  if (!pr || !pr.text) throw new HttpError(404, 'Kein Kommentar-Entwurf zu diesem Unter-Chat.');
+  if (pr.status !== 'fertig') throw new HttpError(409, 'Das Review läuft noch — erst posten, wenn es fertig ist.');
+  const b = await body(req);
+  const event = String(b.event ?? '') as ReviewEvent;
+  if (!['COMMENT', 'APPROVE', 'REQUEST_CHANGES'].includes(event)) throw new HttpError(400, 'Art: COMMENT, APPROVE oder REQUEST_CHANGES.');
+  if (String(b.text ?? '') !== pr.text) throw new HttpError(409, 'Der Entwurf hat sich geändert — Seite neu laden.');
+  const token = await githubReadToken();
+  const now = token ? await prNowVia(token, pr.repo, pr.number).catch(() => null) : null;
+  if (!now) throw new HttpError(502, 'PR-Stand nicht lesbar (Lesetoken).');
+  if (now.state !== 'OPEN') throw new HttpError(409, `PR ist ${now.state === 'MERGED' ? 'gemergt' : 'geschlossen'}.`);
+  if (now.head !== pr.head) throw new HttpError(409, `Neuer Stand ${now.head.slice(0, 7)} seit dem Review — erst neu reviewen.`);
+  if (event === 'COMMENT' && pr.posted) throw new HttpError(409, 'Der Kommentar ist schon gepostet.');
+  if (event !== 'COMMENT' && (pr.postings ?? []).some((x: any) => x.event === event)) throw new HttpError(409, 'Für diesen Stand schon abgeschickt.');
+  const r = await postReview(pr, pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automatisches Review', 'Review'), event).catch((e: any) => { throw new HttpError(502, e.message); });
+  await reviewsCol().updateOne({ _id: pr.id as any }, { $push: { postings: { at: new Date(), url: r.url, event, by: u.name } } as any, ...(event === 'COMMENT' && !pr.posted ? { $set: { posted: { at: new Date(), url: r.url, event, by: u.name } } } : {}) });
+  log('pr-review github', { user: u.id, pr: `${pr.repo}#${pr.number}`, event });
+  send(res, 200, { ok: true, url: r.url });
 });
 on('POST', /^\/api\/review\/([\w-]{1,40})\/freigabe$/, async (req, res, m) => {
   const u = await needAdmin(req);
@@ -1380,18 +1437,40 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const b = await body(req);
   if (d.lastStatus === 'running') throw new HttpError(409, 'Der Unter-Chat arbeitet gerade — Antworten gehen, sobald er fertig ist.');
   const { paketDatei } = await import('./bericht.ts');
-  const text = readBerichtDatei(paketDatei(d, 'bericht'));
+  const pfad = paketDatei(d, 'bericht');
+  const text = readBerichtDatei(pfad);
   if (!text || String(b.berichtHash ?? '') !== berichtHash(text)) throw new HttpError(409, 'Der Bericht hat sich inzwischen geändert — Seite neu laden.');
   const bekannt = new Map(leseEntscheidungen(text).map((e) => [e.id, e]));
-  const antworten = (Array.isArray(b.antworten) ? b.antworten : []).map((a: any) => ({ id: String(a?.id ?? ''), text: String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000) }))
-    .filter((a: any) => a.text && bekannt.has(a.id));
-  if (!antworten.length) throw new HttpError(400, 'Keine Antwort auf eine bekannte Entscheidung.');
-  // Eine Wahrheit (Bedingung 8): der Strang trägt die Antworten in seinen Bericht ein — als Nacharbeit nach Review.
-  const msg = `Nacharbeit nach Review: Entscheidungen von Knut — bitte in den Bericht (Zeile „- Knut:“) eintragen und danach weiterarbeiten.\n${antworten.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}`;
-  await sendOrch(u, String(d._id), msg, 'hand');
-  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten } } });
-  log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length });
-  send(res, 200, { ok: true, gesendet: antworten.length });
+  // Plan 157, Ergänzung B: „Empfehlung akzeptieren“ / eigene Antwort / „nachprüfen“ (alte Form ohne art = eigene Antwort).
+  const antworten = (Array.isArray(b.antworten) ? b.antworten : []).map((a: any) => {
+    const id = String(a?.id ?? ''), e = bekannt.get(id);
+    const art = a?.art === 'akzeptiert' || a?.art === 'nachpruefen' ? a.art : 'eigene';
+    const frei = String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+    const t = art === 'akzeptiert' ? `akzeptiert${e?.empfehlung ? ` (Empfehlung: ${e.empfehlung.slice(0, 200)})` : ''}` : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}` : frei;
+    return { id, art, text: t };
+  }).filter((a: any) => a.text && bekannt.has(a.id) && !bekannt.get(a.id)!.knut);
+  if (!antworten.length) throw new HttpError(400, 'Keine Antwort auf eine offene Entscheidung.');
+  // Eine Wahrheit: die Antworten stehen im Bericht („- Knut: …“). Der Server trägt sie ein (Pfad nur unter den Review-Paketen).
+  const real = (() => { try { return realpathSync(String(pfad)); } catch { return ''; } })();
+  if (!real || !real.startsWith(realpathSync(reviewDir()) + '/')) throw new HttpError(409, 'Bericht liegt nicht im Ordner der Review-Pakete.');
+  const datum = new Intl.DateTimeFormat('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' }).format(new Date());
+  const neu = trageEin(text, antworten, datum);
+  const offen = leseEntscheidungen(neu).filter((e) => !e.knut);
+  const arbeit = antworten.filter((a: any) => a.art !== 'akzeptiert');
+  let weiter = false;
+  // Erst zustellen, dann eintragen: scheitert die Nachricht an den Strang, bleibt der Bericht unverändert (Knut kann neu senden).
+  if (arbeit.length) {
+    // Abweichung oder Nachprüfen → der Strang arbeitet weiter (sendOrch startet den Zug).
+    const msg = `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen, Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}${antworten.length > arbeit.length ? `\nAkzeptiert (nichts zu tun): ${antworten.filter((a: any) => a.art === 'akzeptiert').map((a: any) => a.id).join(', ')}` : ''}`;
+    await sendOrch(u, String(d._id), msg, 'hand');
+    weiter = true;
+  }
+  writeFileSync(real, neu);
+  let hauptchat = false;
+  if (!arbeit.length && !offen.length) hauptchat = await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
+  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten }, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
+  log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length, arbeit: arbeit.length, offen: offen.length });
+  send(res, 200, { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat });
 });
 
 // Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).
@@ -1423,7 +1502,8 @@ on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
   const path = paketDatei(d, art);
   const text = readBericht(path);
   if (text === null) throw new HttpError(404, art === 'auftrag' ? 'Kein lesbarer Auftrag zu diesem Unter-Chat.' : 'Kein lesbarer Bericht zu diesem Unter-Chat.');
-  send(res, 200, { strand: String(d._id), art, name: String(path).split('/').slice(-2).join('/'), text });
+  // Plan 157, B: Entscheidungen auch auf der Berichtsseite beantworten.
+  send(res, 200, { strand: String(d._id), art, name: String(path).split('/').slice(-2).join('/'), text, ...(art === 'bericht' ? { entscheidungen: leseEntscheidungen(text), berichtHash: berichtHash(text), running: d.lastStatus === 'running' } : {}) });
 });
 
 /** Strang zum Review prüfen (Einzel- und Sammel-„Passt“, Council Bedingung 7): eigen, gesehener Stand (F3), nicht laufend (G4). */
@@ -2810,6 +2890,23 @@ async function backgroundJobs() {
     catch (e: any) { log('github', { error: String(e.message).slice(0, 200) }); }
   };
   setTimeout(ghTick, 8000);
+  // PR-Ticker + Auto-Review (Plan 157): jede Minute nachsehen; der Ticker selbst hält seinen Takt (Einstellung „minutes“).
+  const prTick = async () => {
+    try { const r = await tickerTick(githubReadToken); if (r.events || r.reviews) log('pr-ticker', { ...r }); }
+    catch (e: any) { log('pr-ticker', { error: String(e.message).slice(0, 200) }); }
+    try {
+      const r = await reviewTick({
+        userById: async (id) => { const u = await userById(id); return u && allowed(u.email) && u.role === 'ADMIN' ? u : null; },
+        startOrch, strandDoc: (id) => orchRuns().findOne({ _id: id as any }),
+        markStrand: (id, prReview) => orchRuns().updateOne({ _id: id as any }, { $set: { prReview } }),
+        prNow: async (repo, n) => { const t = await githubReadToken(); return t ? prNowVia(t, repo, n) : null; },
+        post: (r, text, event) => postReview(r, text, event), log,
+      });
+      if (r.started || r.done) log('pr-review', r);
+    } catch (e: any) { log('pr-review', { error: String(e.message).slice(0, 200) }); }
+  };
+  setTimeout(prTick, 20_000);
+  setInterval(prTick, 60_000);
   setInterval(ghTick, Number(process.env.WERKBANK_GITHUB_MIN || 5) * 60_000);
 
   const shareTick = async () => { try { await watchChatShares(); } catch (e: any) { log('freigaben', { error: String(e.message).slice(0, 200) }); } };

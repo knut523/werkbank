@@ -178,3 +178,32 @@ test('Arbeitsordner außerhalb von ~/work oder ohne Repo → kein Freigeben', as
   const leer = mkdtempSync(join(HOME, 'work', 'knut', 'leer-'));
   assert.throws(() => F.repoFakten(leer), /kein git-Repo/);
 });
+
+test('Plan 157 B: Entscheidungen aus dem echten Bericht 154 (D1–D11) mit Empfehlung; Antworten eintragen', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { entscheidungen, trageEin } = await import('../server/freigabe.ts');
+  const md = readFileSync(new URL('./fixtures/bericht-154-entscheidungen.md', import.meta.url), 'utf8');
+  const e = entscheidungen(md);
+  assert.deepEqual(e.map((x) => x.id), ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9', 'D10', 'D11']);
+  assert.ok(e.every((x) => x.empfehlung && !x.knut));
+  assert.equal(e[1].empfehlung, 'a. Nach einer Woche den Verbrauch im Brücken-Log (`teilagenten`) ansehen.');
+  const neu = trageEin(md, [{ id: 'D1', text: 'akzeptiert (Empfehlung: a)' }, { id: 'D6', text: 'nachprüfen: Hook erst in olaf-admin' }], '14.10.');
+  const e2 = entscheidungen(neu);
+  assert.equal(e2[0].knut, 'akzeptiert (Empfehlung: a) (14.10.)');
+  assert.equal(e2[5].knut, 'nachprüfen: Hook erst in olaf-admin (14.10.)');
+  assert.equal(e2.filter((x) => x.knut).length, 2);
+  assert.match(neu, /\n- Empfehlung: a\n {2}- Knut: akzeptiert \(Empfehlung: a\) \(14\.10\.\)\n/);
+  assert.equal(neu.split('\n').length, md.split('\n').length, 'keine Zeilen dazu, wo „- Knut:“ schon steht');
+  // Schon beantwortet bleibt; fehlt die Knut-Zeile, kommt sie nach der Empfehlung
+  assert.equal(trageEin(neu, [{ id: 'D1', text: 'anders' }], '15.10.'), neu);
+  const ohne = '**D1 — X**\n- a) eins\n- Empfehlung: a\n\n**D2 — Y**\n- b\n';
+  assert.equal(trageEin(ohne, [{ id: 'D1', text: 'ok' }, { id: 'D2', text: 'nein' }], '14.10.'), '**D1 — X**\n- a) eins\n- Empfehlung: a\n  - Knut: ok (14.10.)\n\n**D2 — Y**\n- b\n  - Knut: nein (14.10.)\n');
+});
+
+test('Plan 157 B (Review): doppelte Kennung nur im ersten Block; Einrückung der Empfehlung, mehrzeilige Empfehlung bleibt ganz', async () => {
+  const { trageEin } = await import('../server/freigabe.ts');
+  const md = '**D1 — A**\n- Empfehlung: a\n\n**D1 — A nochmal**\n- Empfehlung: b\n';
+  assert.equal(trageEin(md, [{ id: 'D1', text: 'ok' }], '14.10.'), '**D1 — A**\n- Empfehlung: a\n  - Knut: ok (14.10.)\n\n**D1 — A nochmal**\n- Empfehlung: b\n');
+  const lang = '**D2 — B**\n  - Empfehlung: a, weil\n    das einfacher ist\n';
+  assert.equal(trageEin(lang, [{ id: 'D2', text: 'ok' }], '14.10.'), '**D2 — B**\n  - Empfehlung: a, weil\n    das einfacher ist\n    - Knut: ok (14.10.)\n');
+});
