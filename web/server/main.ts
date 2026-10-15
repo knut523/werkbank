@@ -21,7 +21,7 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
-import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
+import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
@@ -1448,20 +1448,25 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const bekannt = new Map<string, { titel: string; empfehlung?: string; knut?: string; kopf?: boolean }>(leseEntscheidungen(text).map((e) => [e.id, e]));
   // Teil C (D3): auch Fragen aus dem Bericht-Kopf (fragen[].id) gelten als bekannt.
   const kopf = berichtKopf(text);
-  if (kopf && 'status' in kopf) for (const f of kopf.fragen) if (!bekannt.has(f.id)) bekannt.set(f.id, { titel: f.frage.slice(0, 120), kopf: true });
+  if (kopf && 'status' in kopf) for (const f of kopf.fragen) if (!bekannt.has(f.id)) bekannt.set(f.id, { titel: f.frage.slice(0, 120), empfehlung: f.empfehlung, knut: f.antwort, kopf: true });
   // Plan 157, Ergänzung B: „Empfehlung akzeptieren“ / eigene Antwort / „nachprüfen“ (alte Form ohne art = eigene Antwort).
   const antworten = (Array.isArray(b.antworten) ? b.antworten : []).map((a: any) => {
     const id = String(a?.id ?? ''), e = bekannt.get(id);
-    const art = a?.art === 'akzeptiert' || a?.art === 'nachpruefen' ? a.art : 'eigene';
+    // Plan 184, Teil B: „abgelehnt“ = Nein auf der Übersicht (die Empfehlung gilt nicht).
+    const art = a?.art === 'akzeptiert' || a?.art === 'nachpruefen' || a?.art === 'abgelehnt' ? a.art : 'eigene';
     const frei = String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000);
-    const t = art === 'akzeptiert' ? `akzeptiert${e?.empfehlung ? ` (Empfehlung: ${e.empfehlung.slice(0, 200)})` : ''}` : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}` : frei;
+    const t = art === 'akzeptiert' ? `akzeptiert${e?.empfehlung ? ` (Empfehlung: ${e.empfehlung.slice(0, 200)})` : ''}` : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}`
+      : art === 'abgelehnt' ? `nein — Empfehlung abgelehnt${e?.empfehlung ? ` (${e.empfehlung.slice(0, 200)})` : ''}${frei ? `: ${frei}` : ''}` : frei;
     return { id, art, text: t };
   }).filter((a: any) => a.text && bekannt.has(a.id) && !bekannt.get(a.id)!.knut);
   if (!antworten.length) throw new HttpError(400, 'Keine Antwort auf eine offene Entscheidung.');
   const ids = antworten.map((a: any) => a.id);
-  // Release 15b: läuft der Strang oder gilt eine Antwort einer Kopf-Frage, trägt der Server NICHT selbst ein (sonst schreiben
-  // Server und Strang gleichzeitig in den Bericht) — dann nur sendOrch an den Strang (Teil C, H3: kein 409).
-  if (d.lastStatus === 'running' || antworten.some((a: any) => bekannt.get(a.id)!.kopf)) {
+  const imKopf = antworten.filter((a: any) => bekannt.get(a.id)!.kopf);
+  // Release 15b: läuft der Strang, trägt der Server NICHT selbst ein (sonst schreiben Server und Strang gleichzeitig in den
+  // Bericht) — dann nur sendOrch an den Strang (Teil C, H3: kein 409). Plan 184, Teil B: Kopf-Fragen trägt der Server jetzt selbst
+  // als `antwort:` ein; lässt sich der Kopf nicht sicher ändern, geht es wie bisher nur an den Strang.
+  const kopfNeu = d.lastStatus === 'running' || !imKopf.length ? null : kopfAntwortEintragen(text, imKopf);
+  if (d.lastStatus === 'running' || (imKopf.length && !kopfNeu)) {
     const msg = `Nacharbeit nach Review: Entscheidungen von Knut — bitte in den Bericht eintragen (Kopf: \`antwort:\` der Frage; Text: Zeile „- Knut:“) und danach weiterarbeiten.\n${antworten.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}`;
     await sendOrch(u, String(d._id), msg, 'hand');
     await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten, ids } } });
@@ -1472,20 +1477,25 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const real = (() => { try { return realpathSync(String(pfad)); } catch { return ''; } })();
   if (!real || !real.startsWith(realpathSync(reviewDir()) + '/')) throw new HttpError(409, 'Bericht liegt nicht im Ordner der Review-Pakete.');
   const datum = new Intl.DateTimeFormat('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' }).format(new Date());
-  const neu = trageEin(text, antworten, datum);
-  const offen = leseEntscheidungen(neu).filter((e) => !e.knut);
+  const neu = trageEin(kopfNeu ?? text, antworten.filter((a: any) => !bekannt.get(a.id)!.kopf), datum);
+  const offen = [...leseEntscheidungen(neu).filter((e) => !e.knut), ...(() => { const k = berichtKopf(neu); return k && 'status' in k ? k.fragen.filter((f) => !f.antwort && !leseEntscheidungen(neu).some((e) => e.id === f.id)) : []; })()];
   const arbeit = antworten.filter((a: any) => a.art !== 'akzeptiert');
+  // Übersicht (Plan 184, Teil B): mit `weiter` arbeitet der Unter-Chat in jedem Fall mit den Antworten weiter; Kopf-Fragen auch.
+  const fortsetzen = arbeit.length > 0 || imKopf.length > 0 || b.weiter === true;
   let weiter = false;
   // Erst zustellen, dann eintragen: scheitert die Nachricht an den Strang, bleibt der Bericht unverändert (Knut kann neu senden).
-  if (arbeit.length) {
-    // Abweichung oder Nachprüfen → der Strang arbeitet weiter (sendOrch startet den Zug).
-    const msg = `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen, Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}${antworten.length > arbeit.length ? `\nAkzeptiert (nichts zu tun): ${antworten.filter((a: any) => a.art === 'akzeptiert').map((a: any) => a.id).join(', ')}` : ''}`;
+  if (fortsetzen) {
+    // Abweichung, Nachprüfen oder Fortsetzen gewünscht → der Strang arbeitet weiter (sendOrch startet den Zug).
+    const rest = antworten.filter((a: any) => a.art === 'akzeptiert');
+    const msg = arbeit.length
+      ? `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}${rest.length ? `\nAkzeptiert (wie empfohlen): ${rest.map((a: any) => a.id).join(', ')}` : ''}`
+      : `Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“): ${rest.map((a: any) => `${a.id} wie empfohlen`).join(', ')}. Mach damit weiter${offen.length ? ` (noch offen: ${offen.map((e: any) => e.id).join(', ')})` : ''} und aktualisiere danach den Bericht.`;
     await sendOrch(u, String(d._id), msg, 'hand');
     weiter = true;
   }
   writeFileSync(real, neu);
   let hauptchat = false;
-  if (!arbeit.length && !offen.length) hauptchat = await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
+  if (!fortsetzen && !offen.length) hauptchat = await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
   await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten, ids }, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
   log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length, arbeit: arbeit.length, offen: offen.length });
   send(res, 200, { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat });

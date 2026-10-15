@@ -133,3 +133,23 @@ test('S2: Antwort und Nacharbeit gehen mit eigenem Vorspann in denselben Strang'
   assert.equal(replyText('antwort', 'ja, D1 wie empfohlen'), 'Antwort von Knut auf deine Rückfrage: ja, D1 wie empfohlen');
   assert.equal(replyText('nacharbeit', 'Test ergänzen'), 'Nacharbeit nach Review: Test ergänzen');
 });
+
+test('Teil B: Antwort landet im Bericht-Kopf (antwort:), andere Fragen und der Text bleiben unverändert', async () => {
+  const { kopfAntwortEintragen } = await import('../server/uebersicht.ts');
+  const { berichtKopf } = await import('../server/berichtkopf.ts');
+  const neu = kopfAntwortEintragen(BERICHT, [{ id: 'D3', text: 'nein — Empfehlung abgelehnt: "C" passt nicht' }])!;
+  assert.ok(neu);
+  const k: any = berichtKopf(neu);
+  assert.equal(k.fragen.find((f: any) => f.id === 'D3').antwort, 'nein — Empfehlung abgelehnt: "C" passt nicht');
+  assert.equal(k.fragen.find((f: any) => f.id === 'D1').antwort, '');
+  assert.equal(k.fragen.find((f: any) => f.id === 'D2').antwort, 'erledigt');
+  assert.equal(neu.split('---').slice(2).join('---'), BERICHT.split('---').slice(2).join('---'), 'Text unter dem Kopf unverändert');
+  // Fehlt die Zeile antwort:, wird sie ans Ende des Eintrags gesetzt.
+  const ohne = BERICHT.replace('    empfehlung: C\n    antwort: ""\n', '    empfehlung: C\n');
+  assert.equal((berichtKopf(kopfAntwortEintragen(ohne, [{ id: 'D3', text: 'ja' }])) as any).fragen.find((f: any) => f.id === 'D3').antwort, 'ja');
+  // Unbekannte Kennung oder kein Kopf → null (nichts schreiben).
+  assert.equal(kopfAntwortEintragen(BERICHT, [{ id: 'D9', text: 'x' }]), null);
+  assert.equal(kopfAntwortEintragen('# kein Kopf', [{ id: 'D1', text: 'x' }]), null);
+  // offeneEntscheidungen sieht D3 danach als beantwortet.
+  assert.deepEqual(offeneEntscheidungen(neu, null).map((e) => e.id), ['D1']);
+});

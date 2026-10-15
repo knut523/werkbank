@@ -183,3 +183,41 @@ export const offenFuerKnut = (d: any) => !knutDone(d);
 
 /** Text an den Strang (S2): „antwort“ auf eine Rückfrage aus „Braucht Knut“, sonst Nacharbeit nach Review (wie bisher). */
 export const replyText = (kind: unknown, text: string) => kind === 'antwort' ? `Antwort von Knut auf deine Rückfrage: ${text}` : `Nacharbeit nach Review: ${text}`;
+
+/**
+ * Antworten auf Kopf-Fragen in den YAML-Kopf schreiben (Teil B, S2): je `- id: D1` unter `fragen:` die Zeile `antwort:` setzen
+ * (fehlt sie, kommt sie ans Ende des Eintrags). Wert als JSON-String (gültiges YAML in doppelten Anführungszeichen).
+ * Ergebnis wird neu gelesen; stimmt eine Antwort danach nicht oder ist der Kopf unlesbar → null (dann nichts schreiben).
+ */
+export function kopfAntwortEintragen(md: string, antworten: { id: string; text: string }[]): string | null {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(md);
+  if (!m || !antworten.length) return null;
+  const nl = m[1].includes('\r\n') ? '\r\n' : '\n';
+  const lines = m[1].split(/\r?\n/);
+  const start = lines.findIndex((l) => /^fragen:\s*$/.test(l));
+  if (start < 0) return null;
+  let end = start + 1;
+  while (end < lines.length && (lines[end].trim() === '' || /^\s/.test(lines[end]))) end++;   // Block bis zum nächsten Schlüssel ohne Einrückung
+  for (const a of antworten) {
+    let item = -1, dash = 0;
+    for (let i = start + 1; i < end; i++) {
+      const h = /^(\s*)-\s+id:\s*["']?([\w-]+)["']?\s*$/.exec(lines[i]);
+      if (h && h[2] === a.id) { item = i; dash = h[1].length; break; }
+    }
+    if (item < 0) return null;
+    let stop = item + 1;
+    while (stop < end && !new RegExp(`^\\s{${dash}}-\\s`).test(lines[stop]) && (lines[stop].trim() === '' || lines[stop].search(/\S/) > dash)) stop++;
+    const zeile = `${' '.repeat(dash + 2)}antwort: ${JSON.stringify(a.text.replace(/\s+/g, ' ').trim().slice(0, 600))}`;
+    const hit = lines.slice(item + 1, stop).findIndex((l) => new RegExp(`^\\s{${dash + 2}}antwort:`).test(l));
+    if (hit >= 0) lines[item + 1 + hit] = zeile;
+    else { lines.splice(stop, 0, zeile); end++; }
+  }
+  const neu = md.slice(0, m.index) + `---${nl}${lines.join(nl)}${nl}---` + md.slice(m.index + m[0].length);
+  const k = berichtKopf(neu);
+  if (!k || !('status' in k)) return null;
+  for (const a of antworten) if (!k.fragen.find((f) => f.id === a.id)?.antwort) return null;
+  return neu;
+}
+
+/** Text einer Ja/Nein-Antwort auf eine Rückfrage ohne feste Optionen (q-… ohne Optionen, „Braucht Knut“). */
+export const janein = (art: 'ja' | 'nein', empfehlung?: string | null) => art === 'ja' ? `Ja${empfehlung ? ` (wie empfohlen: ${empfehlung.slice(0, 300)})` : ''}.` : `Nein${empfehlung ? ` (Empfehlung „${empfehlung.slice(0, 200)}“ abgelehnt)` : ''}.`;

@@ -844,12 +844,34 @@ test('Teil C (C-6/C-8/H5): Bericht mit Kopf → Karte in „Entscheiden“ mit D
   const r = await post(`/api/review/${st.id}/entscheidungen`, { berichtHash: card.berichtHash, antworten: [{ id: 'D1', text: 'Wie empfohlen: ja' }] });
   assert.equal(r.status, 200, await r.clone().text());
   const nach = (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser).map(textOf).at(-1)!;
-  assert.match(nach, /^Nacharbeit nach Review: Entscheidungen von Knut/);
+  // Plan 184, Teil B: der Server trägt die Kopf-Antwort selbst als `antwort:` ein und setzt den Strang fort.
+  assert.match(nach, /^Nacharbeit nach Review: Knut hat entschieden \(schon im Bericht eingetragen: Kopf `antwort:`/);
   assert.match(nach, /- D1 \(Jetzt umbauen\?\): Wie empfohlen: ja/);
-  assert.match(nach, /Kopf: `antwort:`/);
+  assert.match(readFileSync(join(tmp, 'review-pakete', '955-teil-c', 'bericht.md'), 'utf8'), /^    antwort: "Wie empfohlen: ja"$/m);
   // Tote Vorschau melden → kurze Nachricht an den Unter-Chat; ein nicht gemeldeter Link → 409.
   await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
   assert.equal((await post(`/api/review/${st.id}/vorschau-tot`, { url: 'https://evil.example/' })).status, 409);
+  await orch(['review', st.id]);
+});
+
+test('Plan 184, Teil B: Ja (Textblock) und Nein (Kopf-Frage) landen an der Quelle, mit weiter setzt der Unter-Chat fort', async () => {
+  mkdirSync(join(tmp, 'review-pakete', '956-ja-nein'), { recursive: true });
+  const datei = join(tmp, 'review-pakete', '956-ja-nein', 'bericht.md');
+  writeFileSync(datei, ['---', 'status: wartet_auf_knut', 'fragen:', '  - id: D2', '    frage: Tooltip zeigen?', '    empfehlung: ja', '    antwort: ""', '---', '# Bericht', '',
+    '**D1 — KPI-Kacheln gleich?**', '- Empfehlung: gleich für alle', ''].join('\n'));
+  const st = JSON.parse((await orch(['start', '--title', 'Teil B: Ja/Nein', '--cwd', WT('wt-jn'), '--json'],
+    'Bericht nach ~/work/knut/review-pakete/956-ja-nein/bericht.md.\nmock-antwort Fertig.\\n### Stand\\n- Erledigt: x\\nStatus: fertig')).out);
+  const card = await until(() => cardOf(st.id), (c: any) => c?.kopf && c.berichtHash, 20_000);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  const r = await post(`/api/review/${st.id}/entscheidungen`, { berichtHash: card.berichtHash, weiter: true, antworten: [{ id: 'D1', art: 'akzeptiert' }, { id: 'D2', art: 'abgelehnt' }] });
+  assert.equal(r.status, 200, await r.clone().text());
+  const md = readFileSync(datei, 'utf8');
+  assert.match(md, /^\s*- Knut: akzeptiert \(Empfehlung: gleich für alle\)/m, 'Textblock: Zeile „- Knut:“');
+  assert.match(md, /^    antwort: "nein — Empfehlung abgelehnt \(ja\)"$/m, 'Kopf: antwort:');
+  const nach = (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser).map(textOf).at(-1)!;
+  assert.match(nach, /D2 \(Tooltip zeigen\?\): nein — Empfehlung abgelehnt/);
+  assert.match(nach, /Akzeptiert \(wie empfohlen\): D1/);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
   await orch(['review', st.id]);
 });
 

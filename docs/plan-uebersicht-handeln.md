@@ -106,3 +106,30 @@ Befürworter, Spezialist und UX in der Hauptsitzung, Advocatus Diaboli zusätzli
 Nicht übernommen: serverseitige Sperren je Strang (die vorhandenen Routen prüfen `seen`/`berichtHash` und „läuft“; neue
 Sperren wären eine Änderung an Release-15b-Routen, nicht Teil dieses Auftrags) und Einschränkungen am Paketdienst (der
 läuft schon, nur hinter der Coder-Anmeldung, und wird hier nicht verändert) — beides als Risiko im Bericht.
+
+## Teil B — Übersicht wird Startseite in der Bildsprache von Paket 185 (Knut, 15.10. abends)
+
+Vorgaben: (1) Jede Entscheidung auf der Übersicht ist mit **Ja / Nein / Anders …** beantwortbar. „Ja“ übernimmt die
+Empfehlung, „Nein“ lehnt sie ab, „Anders“ öffnet ein Textfeld. Die Antwort landet dort, wo die Frage herkommt
+(Bericht-Kopf `antwort:` bzw. Textblock `- Knut:` bzw. orch-ask), und der Unter-Chat wird damit fortgesetzt. (2) Die Übersicht
+in Struktur und Bildsprache der Mockups aus Paket 185 (Abschnitt 7, D1 b) als Startseite, die Heute ersetzt — keine siebte
+Seite, alte Adressen bleiben gültig (185-Council B1, B3). Damit ist D1 dieses Plans überholt.
+
+**B-S1 Startseite.** `#/` zeigt die Übersicht; `#/heute` und `#/uebersicht` sind Aliasse. Der Navigationseintrag „Heute“ heißt
+„Übersicht“ (Feature-Freigabe `heute` gilt weiter, auch in der LibreChat-Leiste: nur der Text ändert sich). Aufbau wie das
+Mockup: Kopf mit Datum und Zähler-Pillen (brauchen dich · bereit zum Push · laufen · blockiert) → Hauptchat-Zeile → Rückfragen
+ohne Unter-Chat → Themen mit Karten (laufende Unter-Chats nicht als Karte) → Agentenläufe am Board und „Wartet auf dich“ aus
+Heute (Team-Nutzer verlieren nichts, B2) → „Läuft“ als Liste → „Erledigt diese Woche“ (eingeklappt) → Zeile „Außerdem in
+Planen“ (offene Vault-Entscheidungen, Tickets mit Pflegebedarf, Mein Tag — je Zahl und Link; die Listen selbst stehen auf
+ihren Seiten, wie 185-D8 empfiehlt). Bericht, Auftrag und Änderungen öffnen in einer **Schublade** statt einer Unterseite.
+
+**B-S2 Ja / Nein / Anders.** Entscheidungen (D-/E-Kennungen) und Rückfragen (q-…, „Braucht Knut“) einheitlich. Eine einzelne
+Frage geht mit einem Klick ab; bei mehreren Entscheidungen einer Karte wird gewählt und gesammelt gesendet, dazu „Alle
+Empfehlungen übernehmen“. Server: `POST /api/review/:id/entscheidungen` nimmt `art: 'abgelehnt'` und `weiter: true`; Antworten auf
+Kopf-Fragen trägt der Server jetzt selbst als `antwort:` in den Kopf ein (nur wenn der Unter-Chat nicht läuft; sonst wie bisher
+nur an den Unter-Chat), geprüft durch erneutes Lesen des Kopfs. Mit `weiter: true` bekommt der Unter-Chat die Antworten
+immer als Nachricht und arbeitet weiter.
+
+**DoD Teil B:** `#/`, `#/heute`, `#/uebersicht` zeigen die Übersicht; keine weitere Seite in der Navigation; Ja/Nein/Anders schreibt
+an die Quelle (Test für `antwort:` im Kopf, Textblock, orch-ask) und setzt den Unter-Chat fort (Ablauf-Test); Board-Läufe und
+„Wartet auf dich“ stehen weiter auf der Startseite; 1440/390, hell/dunkel ohne waagrechtes Rollen.
