@@ -204,9 +204,10 @@ test('Pass A/B: Prüfer-Hinweis kommt an; Prüfer nur auf Bauer/Schreiber; Leser
   assert.match(t2, new RegExp(`FEHLER 400: pruefe: nur Bauer- oder Schreiber-Delegationen \\(${l} ist leser\\)`));
   const pr = t2.match(/Prüfer (d-[0-9a-f]{6}) für d-[0-9a-f]{6} gestartet/)?.[1];
   assert.ok(pr, t2);
-  assert.doesNotMatch(t2, new RegExp(`### ${pr}`));   // Prüfer stehen nicht in der Standard-Liste
   const t3 = await send(conv(10), lead([{ tool: 'delegation_stand', args: { ids: [pr], warten_s: 30 } }]));
   assert.match(t3, /Hinweis des Leads gesehen: achte auf Zeile 1/);
+  // Fertige Prüfer stehen nicht in der Standard-Liste (laufende schon).
+  assert.doesNotMatch(await send(conv(10), lead([{ tool: 'delegation_stand', args: { warten_s: 0 } }])), new RegExp(`### ${pr}`));
   assert.match(await send(conv(10), lead([{ tool: 'delegieren', args: { rolle: 'pruefer', pruefe: b } }])), new RegExp(`FEHLER 409: ${b} hat schon den Prüfer ${pr}`));
   // Ohne Commit fehlgeschlagen → Unter-Worktree und Zweig sind weg; der fertige Bauer behält beides.
   assert.match(t, new RegExp(`### ${leer} · bauer · Risiko niedrig · fehlgeschlagen`));

@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join, resolve, relative as relPath, isAbsolute } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
+import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
@@ -921,7 +921,7 @@ function makeGuard(live: Live) {
     });
     if (live.orch) {
       // Worker (Plan 165, Pass C 9): keine Paket-Installation — node_modules im Unter-Worktree ist ein Link auf die des Strangs.
-      const why = orchestratorBlock(tool, toolInput) ?? (live.worker && tool === 'Bash' && /\b(npm|pnpm|yarn|bun)\s+(i|install|ci|add|update|up|remove|rm|uninstall|link)\b/.test(String(toolInput.command ?? '')) ? 'Pakete installieren/ändern (Worker)' : null);
+      const why = orchestratorBlock(tool, toolInput) ?? (live.worker && tool === 'Bash' && WORKER_PAKETE.test(String(toolInput.command ?? '')) ? 'Pakete installieren/ändern (Worker)' : null);
       if (why) {
         emitStatus(live, `⛔ Orchestrator-Strang: ${why} gesperrt — ${statusLine(tool, toolInput)}`);
         return decide('deny', `In einem Orchestrator-Strang gesperrt (${why}). Nicht erneut versuchen, nicht umgehen; schreib unter „### Stand“ → „Braucht Knut“, was zu tun wäre.`);
@@ -1689,9 +1689,10 @@ async function workerLage(req: TurnRequest, userId: string, self = ''): Promise<
 async function strangFest(key: string, dir: string): Promise<{ ref: string; sha: string } | null> {
   const e = orchMap[key];
   if (!e) return null;
-  if (e.pruefFest) return e.pruefFest;
+  // Auch „kein Integrationszweig“ wird gemerkt (leere Kennung) — sonst könnte ein Worker später einen anlegen (Re-Review F2).
+  if (e.pruefFest) return e.pruefFest.sha ? e.pruefFest : null;
   const f = await integrationSha(dir);
-  if (f && orchMap[key]) { orchMap[key].pruefFest = f; saveMap(); }
+  if (orchMap[key]) { orchMap[key].pruefFest = f ?? { ref: '', sha: '' }; saveMap(); }
   return f;
 }
 
@@ -1800,7 +1801,8 @@ async function delegationLauf(d: Deleg): Promise<void> {
       const pr = await startPruefer(d);
       if (pr) await pr.done;
     }
-    d.status = d.aborted ? 'abgebrochen' : st;
+    // Der Worker war fertig — ein Zugende während des Prüfers bricht nur den Prüfer ab, nicht dieses Ergebnis (Re-Review F1).
+    d.status = st;
   } catch (e: any) {
     d.status = 'fehlgeschlagen';
     d.abweichungen.push(`Fehler in der Brücke: ${String(e?.message ?? e).slice(0, 200)}`);
@@ -1823,7 +1825,7 @@ function newDeleg(userId: string, parent: string, parentConv: string, rolle: Rol
   const d: Deleg = { id, userId, parent, parentConv, workerConv, workerKey: `${safeId(userId)}:${safeId(workerConv)}`, rolle, risiko, aufgabe, cwd, status: 'laeuft', start: Date.now(), ende: null,
     text: '', abweichungen: [], modell: null, konto: null, anbieter: null, input: 0, output: 0, energie: 0, done: Promise.resolve(), req };
   delegs.set(id, d);
-  if (delegs.size > 300) for (const [k, v] of delegs) { if (v.status !== 'laeuft' && (v.urteil || !v.wt)) { delegs.delete(k); if (delegs.size <= 250) break; } }
+  if (delegs.size > 300) for (const [k, v] of delegs) { if (v.status !== 'laeuft' && (v.urteil || !v.wt || !existsSync(v.wt.dir))) { delegs.delete(k); if (delegs.size <= 250) break; } }
   return d;
 }
 
@@ -1839,6 +1841,7 @@ async function startPruefer(of: Deleg, risiko: Risiko = 'hoch', hinweis = ''): P
   const cand = pickPruefer(autor, lage);
   if (!cand) return kein(`ungeprüft (kein Prüfer ≥ Autor-Klasse ${klasse(autor)} frei) — Lead prüft selbst; \`challenge\` ist kein Ersatz, wenn der Autor GLM 5.3 ist`);
   if (voll()) return kein(`Prüfer nicht gestartet (Worker-Grenze erreicht) — Lead prüft selbst`);   // nach dem await erneut (kein Wettlauf)
+  if (!lives.get(of.parent)?.req) return kein('Prüfer nicht gestartet (Lead-Zug zu Ende) — Lead prüft selbst');   // Re-Review F4
   const d = newDeleg(of.userId, of.parent, of.parentConv, 'pruefer', risiko, `Prüfe die Arbeit der Delegation ${of.id} gegen ihren Auftrag: Korrektheit, Randfälle, entfernte Invarianten, Sicherheit. Ändere nichts.${hinweis ? `\n\nHinweis des Leads: ${hinweis}` : ''}`, of.wt?.dir ?? of.cwd, of.req);
   d.pruefe = of.id;
   of.pruefer = d.id;
@@ -1900,7 +1903,7 @@ export async function startDelegation(userId: string, convId: string, b: { rolle
     d.sub = d.cwd === w.dir ? '' : sub;
   }
   // Lead-Zug inzwischen zu Ende (Re-Review N7 / Pass C 3): nicht mehr starten, Angelegtes wegräumen.
-  if (d.aborted || lives.get(parent) !== lead) { d.status = 'abgebrochen'; d.ende = Date.now(); await dropWorktree(d).catch(() => {}); return { ok: false, status: 409, error: 'Der Zug ist inzwischen zu Ende — nichts gestartet.' }; }
+  if (d.aborted || lives.get(parent) !== lead) { d.status = 'abgebrochen'; d.ende = Date.now(); await dropWorktree(d).catch(() => {}); delegs.delete(d.id); return { ok: false, status: 409, error: 'Der Zug ist inzwischen zu Ende — nichts gestartet.' }; }
   registerWorker(d, ROLLEN_SETUP[rolle]);
   d.done = delegationLauf(d);
   log('delegation gestartet', { id: d.id, parent, rolle, risiko, cwd: d.cwd });
@@ -1928,6 +1931,7 @@ function formatDeleg(d: Deleg): string {
   const a = d.abschluss;
   if (a) daten.push(`Dateien: ${z(a.dateien.join(', '), 600) || 'keine'}`, `Annahmen: ${z(a.annahmen.join('; '), 700) || 'keine'}`, `Widersprüche: ${z(a.widersprueche.join('; '), 700) || 'keine'}`, ...(a.befunde?.length ? [`Befunde: ${z(a.befunde.join('; '), 900)}`] : []));
   if (d.abweichungen.length) daten.push(`Abweichungen: ${z(d.abweichungen.join(' · '), 900)}`);
+  if (pr?.abschluss?.befunde?.length) daten.push(`Befunde Prüfer ${pr.id}: ${z(pr.abschluss.befunde.join('; '), 900)}`);   // Re-Review F5
   for (const p of d.pruef?.ergebnisse ?? []) if (!p.ok) daten.push(`Ausgabe ${p.name}: ${z(p.ausgabe.slice(-400), 400)}`);
   if (d.git?.stat) daten.push('Diff-Stat:', ...d.git.stat.split('\n').slice(-12));
   if (d.git?.hunk && d.risiko === 'niedrig') daten.push('Stichprobe (größter Hunk):', ...d.git.hunk.split('\n').slice(0, 30));
@@ -1945,7 +1949,7 @@ export async function delegationStand(userId: string, convId: string, b: { ids?:
   const want = Array.isArray(b.ids) ? b.ids.map(String) : [];
   // Ohne ids: nur laufende und noch nicht beurteilte (Pass B, 9 — sonst wächst die Antwort mit jedem Urteil).
   // Prüfer stehen bei ihrem Geprüften; Fehlschläge/Abbrüche nur bis zur ersten Meldung (Re-Review h / Pass C 8).
-  const mine = [...delegs.values()].filter((d) => d.parent === parent && (want.length ? want.includes(d.id) : d.status === 'laeuft' || (d.rolle !== 'pruefer' && (d.status === 'fertig' ? !d.urteil : !d.gemeldet))));
+  const mine = [...delegs.values()].filter((d) => d.parent === parent && (want.length ? want.includes(d.id) : d.status === 'laeuft' || (d.rolle !== 'pruefer' && (d.status === 'fertig' || (d.wt && existsSync(d.wt.dir)) ? !d.urteil : !d.gemeldet))));
   if (!mine.length) return { ok: true, text: want.length ? `Keine Delegation ${want.join(', ')} in diesem Strang (nach einem Neustart der Brücke sind sie weg).` : 'Keine offenen Delegationen in diesem Strang.' };
   const ms = Math.min(KAPPUNG.wartenS, Math.max(0, Number(b.warten_s ?? KAPPUNG.wartenS) || 0)) * 1000;
   let timer: NodeJS.Timeout | undefined;
@@ -1963,7 +1967,7 @@ export async function delegationStand(userId: string, convId: string, b: { ids?:
   return { ok: true, text: teile.join('\n\n') };
 }
 
-/** delegation_urteil: Prüfurteil des Leads protokollieren, Unter-Worktree abräumen (der Zweig bleibt). */
+/** delegation_urteil: Prüfurteil des Leads protokollieren, Unter-Worktree und Zweig abräumen. */
 export async function delegationUrteil(userId: string, convId: string, b: { id?: unknown; urteil?: unknown; notiz?: unknown }): Promise<Res> {
   const parent = `${safeId(userId)}:${safeId(convId)}`;
   const d = delegs.get(String(b.id ?? ''));
@@ -1978,7 +1982,7 @@ export async function delegationUrteil(userId: string, convId: string, b: { id?:
   let weg = '';
   // Worktree und Zweig weg (der Lead hat übernommen oder verworfen; Zweige löschen dürfen Sitzungen nicht mehr — Re-Review N4).
   if (d.wt && existsSync(d.wt.dir)) await removeWorktree(d.wt.dir);
-  if (d.wt) { await runCmd('git', ['-C', d.wt.top, 'branch', '-D', d.wt.branch], { cwd: d.wt.top }); weg = ` Unter-Worktree und Zweig ${d.wt.branch} entfernt.`; }
+  if (d.wt) { const r = await runCmd('git', ['-C', d.wt.top, 'branch', '-D', d.wt.branch], { cwd: d.wt.top }); weg = r.code === 0 ? ` Unter-Worktree und Zweig ${d.wt.branch} entfernt.` : ` Unter-Worktree entfernt; Zweig ${d.wt.branch} ließ sich nicht löschen (${r.out.trim().slice(0, 120)}).`; }
   report(d);
   log('delegation urteil', { id: d.id, urteil });
   return { ok: true, text: `Urteil „${urteil}“ für ${d.id} vermerkt.${weg}` };

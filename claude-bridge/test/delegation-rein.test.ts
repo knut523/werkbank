@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseAbschluss, checkUebergabe, phaseModell, klasse, pickPruefer, risikoMin, abweichungen, heikleDateien, subWorktree, gitStand, pruefen, run, KAPPUNG } from '../src/delegation.ts';
 import { g, block, UEB, repo } from './delegation-hilfe.ts';
-import { orchestratorBlock } from '../src/tools.ts';
+import { orchestratorBlock, WORKER_PAKETE } from '../src/tools.ts';
 
 
 test('Abschluss-Block: gültig, fehlt, kein JSON, falsche Typen, Prüfer braucht Urteil', () => {
@@ -67,6 +67,17 @@ test('Wächter im Strang (Pass B, 2): Referenzen umbiegen und Zweige erzwingen g
     assert.ok(orchestratorBlock('Bash', { command: c }), c);
   for (const c of ['git fetch origin', 'git fetch origin dev', 'git commit -m x', 'git branch', 'git branch --show-current', 'git checkout -b neu', 'git log --oneline -3'])
     assert.equal(orchestratorBlock('Bash', { command: c }), null, c);
+});
+
+test('Re-Review F3 + Pass C 9: fetch mit Refspec (auch Glob/Anführungszeichen) und Remotes gesperrt; Worker-Pakete ohne Fehlalarm', () => {
+  for (const c of [`git fetch . '+refs/heads/x/*:refs/remotes/origin/*'`, `git fetch . HEAD:'refs/remotes/origin/dev'`, 'git remote set-url origin /tmp/x', 'git remote add evil /tmp/x'])
+    assert.ok(orchestratorBlock('Bash', { command: c }), c);
+  for (const c of ['git fetch https://example.org/x/y.git', 'git fetch --all', 'git remote -v'])
+    assert.equal(orchestratorBlock('Bash', { command: c }), null, c);
+  for (const c of ['npm install', 'npm i lodash', 'npm --prefix web install', 'cd web && npm ci', 'yarn', 'pnpm add x', 'bun add x'])
+    assert.ok(WORKER_PAKETE.test(c), c);
+  for (const c of ['npm test', 'npm run build', 'npx vite build', 'git commit -m "npm install entfernt"', 'grep -r "npm ci" .', 'node --test test/x.test.ts'])
+    assert.equal(WORKER_PAKETE.test(c), false, c);
 });
 
 test('Abweichungen und heikle Pfade', () => {

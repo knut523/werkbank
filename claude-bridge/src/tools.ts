@@ -291,7 +291,9 @@ const ORCH_BASH_BLOCK: [RegExp, string][] = [
   [git('(?:push|send-pack)'), 'git push'],
   // Plan 165 (Pass B, 2): Referenzen direkt umbiegen (Integrationszweig, aus dem die Brücke Prüfbefehle liest) — nie nötig.
   [git('(?:update-ref|symbolic-ref|replace)'), 'Git-Referenzen direkt ändern'],
-  [new RegExp(GIT + String.raw`fetch(?![\w-])[^|;&\n]*\s\+?[^\s:]*:(?:refs/)?(?:remotes/|heads/)?(?:origin/)?(?:dev|develop|main|master)\b`), 'Integrationszweig per fetch umbiegen'],
+  // fetch mit Refspec (Ziel nach dem Doppelpunkt) schreibt lokale Referenzen — in Strängen nie nötig; URLs (://) bleiben erlaubt.
+  [new RegExp(GIT + String.raw`fetch(?![\w-])[^|;&\n]*\s['"]?\+?[^\s:'"]*:(?!//)`), 'Referenzen per fetch schreiben'],
+  [git(String.raw`remote\s+(?:add|set-url|rename)`), 'Git-Remotes ändern'],
   [new RegExp(GIT + String.raw`branch(?![\w-])[^|;&\n]*\s(?:-[a-zA-Z]*[fDMC][a-zA-Z]*|--force|--delete|--move|--copy)\b`), 'Zweige erzwingen/löschen/umbenennen'],
   [/\balias\.[\w-]+/, 'Git-Alias (könnte pushen)'],
   [/\bgit-(send-pack|receive-pack)\b/, 'git push'],
@@ -312,6 +314,9 @@ const ORCH_READ_BLOCK = /^\/proc\/.*\/environ$|(^|\/)\.env(\.(?!example$|sample$
 const READ_PATH_TOOLS: Record<string, string> = { Read: 'file_path', Grep: 'path', Glob: 'path', NotebookRead: 'notebook_path', LS: 'path' };
 
 /** Grund, warum ein Aufruf in einem Orchestrator-Strang gesperrt ist — oder null. */
+/** Worker (Plan 165): Paket-Installation/-Änderung als eigener Befehl (nicht in Commit-Texten o. ä.) — node_modules ist verlinkt. */
+export const WORKER_PAKETE = /(?:^|[;&|(]\s*)(?:npm|pnpm|yarn|bun)\b(?:[^|;&\n]*\s(?:i|install|ci|add|update|up|remove|rm|uninstall|link)(?=\s|$|[;&|)])|\s*(?=$|[;&|)]))/;
+
 export function orchestratorBlock(tool: string, input: Record<string, unknown>): string | null {
   if (tool === 'Bash') {
     const cmd = String(input.command ?? '');
