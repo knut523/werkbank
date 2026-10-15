@@ -14,7 +14,7 @@ test('realJcode: Argumente wie die Brücke; ohne Sitzungsdatei zählt usage aus 
   try {
     const r = await realJcode({ cwd: dir, prompt: 'P', model: 'glm-5.3-flash', key: 'test', tools: 'read', timeoutS: 30 });
     assert.equal(r.code, 0);
-    assert.equal(r.text, '--provider-profile melious --model glm-5.3-flash --tools read run --json P');
+    assert.equal(r.text, '--no-update --provider-profile melious --model glm-5.3-flash --tools read run --json P');
     assert.deepEqual([r.usage, r.aufrufe], [{ input: 20, output: 7, cacheRead: 80, cacheWrite: 0 }, 1]);
     writeFileSync(bin, '#!/usr/bin/env node\nprocess.stdout.write("kein json"); process.exit(0);\n', { mode: 0o755 });
     const kaputt = await realJcode({ cwd: dir, prompt: 'P', model: 'm', key: 'test', tools: 'read', timeoutS: 30 });

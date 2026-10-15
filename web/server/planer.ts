@@ -344,11 +344,33 @@ export function urteilAbleiten(a: Auftrag, b: Bericht, punkte: Pruefpunkt[]): { 
 
 // ---------- Worker (jcode) ----------
 
-export interface JcodeOut { code: number | null; text: string; usage: Usage; aufrufe: number; ms: number; stderr: string }
+/** `pfade`: was der Worker mit read/agentgrep angefasst hat (aus der Sitzungsdatei); null = nicht prüfbar (keine Sitzungsdatei). */
+export interface JcodeOut { code: number | null; text: string; usage: Usage; aufrufe: number; ms: number; stderr: string; pfade?: string[] | null }
 export type JcodeFn = (o: { cwd: string; prompt: string; model: string; key: string; tools: string; timeoutS: number; killNachMs?: number }) => Promise<JcodeOut>;
 export const jcodeBin = (env = process.env) => env.WERKBANK_JCODE_BIN || join(env.HOME || homedir(), '.local', 'bin', 'jcode');
 
 /** Summe der token_usage einer jcode-Sitzung (wie die Brücke, sessions.ts jcodeUsage) + Zahl der Aufrufe. */
+/** Pfade aus den read-/agentgrep-Aufrufen einer jcode-Sitzung (file_path, file, path, glob). */
+export function sessionPfade(s: any): string[] {
+  const out: string[] = [];
+  for (const m of s?.messages ?? []) for (const b of Array.isArray(m?.content) ? m.content : []) {
+    if (b?.type !== 'tool_use' || !['read', 'agentgrep'].includes(b?.name)) continue;
+    for (const k of ['file_path', 'file', 'path', 'glob']) if (typeof b.input?.[k] === 'string' && b.input[k]) out.push(b.input[k]);
+  }
+  return out;
+}
+
+/** Lese-Gurt (Review Runde 4): welche Pfade liegen — nach Auflösen von Symlinks — außerhalb der erlaubten Ordner? Ein Glob zählt bis
+ *  zum ersten Platzhalter. Fängt auch einen Symlink im PR, der auf eine Datei in HOME zeigt. */
+export function ausserhalb(pfade: string[], cwd: string, erlaubt: string[]): string[] {
+  const echt = (x: string) => { try { return realpathSync(x); } catch { return resolve(x); } };
+  const wurzeln = erlaubt.map(echt);
+  return pfade.filter((p) => {
+    const abs = echt(resolve(cwd, p.replace(/[*?[{].*$/, '') || '.'));
+    return !wurzeln.some((w) => abs === w || abs.startsWith(w.endsWith(sep) ? w : w + sep));
+  });
+}
+
 export function jcodeUsage(s: any): { usage: Usage; aufrufe: number } {
   const u: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   let n = 0;
@@ -388,12 +410,12 @@ export const realJcode: JcodeFn = (o) => new Promise((res) => {
   try { mkdirSync(jhome, { recursive: true }); writeFileSync(join(jhome, 'config.toml'), jcodeKonfig()); }
   catch (e: any) { rmSync(home, { recursive: true, force: true }); return leer(-1, `Wegwerf-HOME nicht angelegt: ${e?.message ?? e}`); }
   // Zusätzlich (keine Sperre, nur ein Gurt): keine Git-Konfiguration, keine Abfrage, kein gh-Login.
-  const env: Record<string, string> = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, JCODE_HOME: jhome, XDG_CONFIG_HOME: join(home, '.config'), JCODE_DISABLE_CLAUDE_MCP: '1',
+  const env: Record<string, string> = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, JCODE_HOME: jhome, XDG_CONFIG_HOME: join(home, '.config'), JCODE_DISABLE_CLAUDE_MCP: '1', JCODE_NO_TELEMETRY: '1', DO_NOT_TRACK: '1',
     LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key,
     GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false', SSH_ASKPASS: '/bin/false', GIT_SSH_COMMAND: '/bin/false', GH_CONFIG_DIR: '/nonexistent' };
   // Eigene Prozessgruppe: beim Abbruch die ganze Gruppe beenden — Kindprozesse hielten sonst stdout offen und `close` käme nie (Review R6′).
   let c: ReturnType<typeof spawn>;
-  try { c = spawn(jcodeBin(), ['--provider-profile', 'melious', '--model', o.model, '--tools', o.tools, 'run', '--json', o.prompt], { cwd: o.cwd, env, detached: true }); }
+  try { c = spawn(jcodeBin(), ['--no-update', '--provider-profile', 'melious', '--model', o.model, '--tools', o.tools, 'run', '--json', o.prompt], { cwd: o.cwd, env, detached: true }); }
   catch (e: any) { rmSync(home, { recursive: true, force: true }); return leer(-1, `jcode nicht gestartet: ${e?.message ?? e}`); }
   if (c.pid) laufendeGruppen.add(c.pid);
   const kill = (sig: NodeJS.Signals) => { try { process.kill(-c.pid!, sig); } catch { try { c.kill(sig); } catch { /* schon weg */ } } };
@@ -411,16 +433,17 @@ export const realJcode: JcodeFn = (o) => new Promise((res) => {
     if (c.pid) laufendeGruppen.delete(c.pid);
     let j: any = null; try { j = JSON.parse(so); } catch { /* unten */ }
     let m = { usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as Usage, aufrufe: 0 };
+    let pfade: string[] | null = null;
     if (j?.session_id && /^[\w.-]{1,120}$/.test(j.session_id)) {
-      try { m = jcodeUsage(JSON.parse(readFileSync(join(jhome, 'sessions', `${j.session_id}.json`), 'utf8'))); } catch { /* ohne Sitzungsdatei */ }
+      try { const sj = JSON.parse(readFileSync(join(jhome, 'sessions', `${j.session_id}.json`), 'utf8')); m = jcodeUsage(sj); pfade = sessionPfade(sj); } catch { /* ohne Sitzungsdatei */ }
     }
     rmSync(home, { recursive: true, force: true });
     // Ohne Sitzungsdatei: die Summe aus der Ausgabe (wie die Brücke), als ein Aufruf gezählt.
     if (!m.aufrufe && j?.usage) { const c = Number(j.usage.cache_read_input_tokens) || 0; m = { usage: { input: Math.max(0, (Number(j.usage.input_tokens) || 0) - c), output: Number(j.usage.output_tokens) || 0, cacheRead: c, cacheWrite: 0 }, aufrufe: 1 }; }
-    res({ code: j ? code : code || -1, text: String(j?.text ?? ''), ...m, ms: Date.now() - t0, stderr: se.split('\n').filter(Boolean).slice(-3).join(' · ').slice(0, 600) });
+    res({ code: j ? code : code || -1, text: String(j?.text ?? ''), ...m, pfade, ms: Date.now() - t0, stderr: se.split('\n').filter(Boolean).slice(-3).join(' · ').slice(0, 600) });
   };
   c.on('close', fertig);
-  c.on('error', () => fertig(-1));
+  c.on('error', () => { kill('SIGKILL'); fertig(-1); });
 });
 
 export function workerPrompt(a: Auftrag, diffDatei: string, prDir: string, nachbarn: Nachbar[] = []): string {
@@ -470,6 +493,11 @@ export async function planerReview(d: PlanerDeps, i: PlanerInput): Promise<Plane
   let bericht = parseBericht(w.text, a);
   stufen.push(stufe('worker', { energie: we, usage: w.usage, modell: `${WORKER_MODELL} (jcode)`, ms: w.ms, aufrufe: w.aufrufe }, w.code === 0 ? (bericht.fehler ? 'ohne Block' : `Worker: ${bericht.empfehlung ?? '?'}`) : `Exit ${w.code}`));
   if (w.code !== 0) return { status: 'ausgefallen', fehler: `jcode-Lauf fehlgeschlagen (Exit ${w.code}) ${w.stderr} · ${AUSFALLPFAD}`, auftrag: a, stufen };
+  // Lese-Gurt: hat der Worker außerhalb von PR-Stand, Diff-Ordner und Nachbar-Repos gelesen, wird sein Ergebnis verworfen — Melious hat
+  // es dann schon gesehen, aber in Mongo und im Review-Paket landet es nicht (Review Runde 4, Restrisiko bis zur Sandbox, D2).
+  const draussen = w.pfade ? ausserhalb(w.pfade, tmp, [i.dir, tmp, ...(i.nachbarn ?? []).map((n) => n.dir)]) : [];
+  if (draussen.length) return { status: 'fehler', fehler: `Worker las außerhalb der erlaubten Ordner (${draussen.length} Pfad${draussen.length > 1 ? 'e' : ''}) — Ergebnis verworfen`, auftrag: a, stufen };
+  if (w.pfade === null) stufen[stufen.length - 1].urteil += ' · Lesepfade nicht prüfbar';
   const wurzeln: Wurzel[] = [{ name: null, dir: i.dir }, ...(i.nachbarn ?? []).map((n) => ({ name: n.name, dir: n.dir, ref: n.ref }))];
   bericht = pruefeZitate(bericht, wurzeln);
   const pr = await planerPruefung(d.chat, a, pruefpflichtig(a, bericht));

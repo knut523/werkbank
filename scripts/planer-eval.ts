@@ -82,6 +82,9 @@ async function armLauf(pr: RegPr, arm: string, n: number): Promise<Lauf> {
   return { pr: pr.id, arm, lauf: n, empfehlung: r.empfehlung ?? null, text, energie: r.stufen.reduce((a, s) => a + s.energie, 0), aufrufe: r.stufen.reduce((a, s) => a + s.aufrufe, 0), ms: Date.now() - t0, ...(r.status !== 'fertig' ? { fehler: r.fehler ?? r.status } : {}) };
 }
 
+// Ctrl-C: über process.exit beenden, damit die laufenden jcode-Gruppen mit beendet werden (planer.ts, exit-Handler).
+process.on('SIGINT', () => process.exit(130));
+process.on('SIGTERM', () => process.exit(143));
 mkdirSync(out, { recursive: true });
 const prs = set.prs.filter((p) => !nur.length || nur.includes(p.id));
 const bewertungen = [];

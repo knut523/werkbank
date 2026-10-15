@@ -255,6 +255,28 @@ test('R5 (P6): bewertet wird nur, was der Worker fand und der Planer bestätigte
   assert.ok(t.includes('F2') && !t.includes('F1') && !t.includes('F3'));
 });
 
+test('Runde 4: Lese-Gurt — Pfade aus der Sitzung, Symlink nach draußen erkannt, Ergebnis verworfen; ohne Sitzung vermerkt', async () => {
+  const { sessionPfade, ausserhalb } = await import('../server/planer.ts');
+  const s = { messages: [{ content: [{ type: 'tool_use', name: 'read', input: { file_path: `${PR}/src/route.ts` } }, { type: 'tool_use', name: 'agentgrep', input: { query: 'x', path: NB, glob: `${NB}/src/**/*.ts` } }, { type: 'tool_use', name: 'bash', input: { command: 'cat /etc/x' } }] }, { content: 'text' }] };
+  assert.deepEqual(sessionPfade(s), [`${PR}/src/route.ts`, NB, `${NB}/src/**/*.ts`]);
+  const erlaubt = [PR, NB];
+  assert.deepEqual(ausserhalb(sessionPfade(s), PR, erlaubt), []);
+  assert.deepEqual(ausserhalb(['/etc/hostname', 'src/route.ts', `${TMP}/draussen.txt`, '/home/**'], PR, erlaubt), ['/etc/hostname', `${TMP}/draussen.txt`, '/home/**']);
+  writeFileSync(join(TMP, 'geheim-ziel.txt'), 'x');
+  execFileSync('ln', ['-sfn', join(TMP, 'geheim-ziel.txt'), join(PR, 'src', 'harmlos.ts')]);
+  assert.deepEqual(ausserhalb([`${PR}/src/harmlos.ts`], PR, erlaubt), [`${PR}/src/harmlos.ts`], 'Symlink im PR nach draußen');
+  const chat: ChatFn = async (b: any) => antwort(b.messages[0].content.includes('PRÜFAUFTRAG') ? JSON.stringify(AUFTRAG) : '{"urteile":[]}');
+  const mit = (pfade: string[] | null): JcodeFn => async () => ({ code: 0, text: '```json\n{"antworten":[]}\n```', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, aufrufe: 1, ms: 1, stderr: '', pfade });
+  const inp = { dir: PR, basis: 'b', diff: 'diff --git a/x b/x\n+x', diffStat: '', ziel: 'z', nachbarn: [{ name: 'olaf-tariff-app', dir: NB, ref: 'origin/develop', fetchAlterH: null }] };
+  const raus = await planerReview({ chat, jcode: mit(['/etc/hostname']), key: 'k', faktoren: {} }, inp);
+  assert.equal(raus.status, 'fehler'); assert.match(raus.fehler!, /außerhalb der erlaubten Ordner \(1 Pfad\) — Ergebnis verworfen/);
+  assert.equal(raus.workerText, undefined); assert.equal(raus.bericht, undefined);
+  const ok = await planerReview({ chat, jcode: mit([`${PR}/src/route.ts`, `${NB}/src/hook.ts`]), key: 'k', faktoren: {} }, inp);
+  assert.equal(ok.status, 'fertig');
+  const ohne = await planerReview({ chat, jcode: mit(null), key: 'k', faktoren: {} }, inp);
+  assert.match(ohne.stufen[1].urteil, /Lesepfade nicht prüfbar/);
+});
+
 // ---------- Regressionen aus Review-Runde 1 (Pass B + Pass C) ----------
 const LANG = 'const ok = length(p.nr) = 33;';
 test('R1 (P4): kein_befund zu Hoch-Frage, vom Planer verworfen → strittig, nie approve; fehlendes Urteil → strittig', () => {
