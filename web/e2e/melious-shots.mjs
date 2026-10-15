@@ -41,22 +41,22 @@ try {
   await api('POST', '/api/setup/claude', { token: 'sk-ant-oat01-platzhalter-nur-fuer-den-melious-test-xxxxxxxx' });
   await api('PUT', '/api/setup/melious', { token: 'sk-mel-stub-vorfuehrung-0000000000000000demo' });
   let s = await api('GET', '/api/setup/melious');
-  check('Neuer Schlüssel: gespeichert, aber aus (Standard aus)', s.configured && !s.enabled && s.last4 === 'demo');
+  check('Neuer Schlüssel: gespeichert und gleich erlaubt, Überlauf + Ersatzkette an (Knuts Setup)', s.configured && s.enabled && s.fallback && s.kette && s.last4 === 'demo');
   s = await api('PUT', '/api/setup/melious', { enabled: true });
-  check('Erlaubt; Energie-Deckel-Vorgaben 5 000 / 100 000', s.enabled && s.dayLimit === 5000 && s.monthLimit === 100000, `${s.dayLimit}/${s.monthLimit}`);
+  check('Energie-Deckel als Notbremse 384 000 / 7 936 000 (1,5× / 31× von 256 000), 8 000 je Takt', s.enabled && s.dayLimit === 384000 && s.monthLimit === 7936000 && s.proTakt === 8000, `${s.dayLimit}/${s.monthLimit}/${s.proTakt}`);
 
   // Chat: /melious an, kurzer Zug, Werkzeug-Zug.
   await p.goto(LC + '/c/new');
   const say = async (t) => { await p.locator('#prompt-textarea').fill(t); await p.getByRole('button', { name: 'Nachricht senden' }).click(); };
   await say('/melious an');
   await p.getByText(/Melious ist für diesen Chat an/).first().waitFor({ timeout: 30000 });
-  check('/melious an → Bestätigung mit Rest bis zum Deckel in Energie (geschätzt)', await p.getByText(/Rest bis zum Deckel: ≈ 5\.000 Energie \(geschätzt/).first().isVisible());
-  check('/melious an → Lastverteilung über die Modelle der Rolle, keine Datenregel', await p.getByText(/verteilt über glm-5\.3, glm-5\.3-flash, deepseek-v4\.1-flash/).first().isVisible() && !(await p.getByText(/Datenregel/).count()));
+  check('/melious an → Bestätigung mit Rest bis zum Deckel in Energie (geschätzt)', await p.getByText(/Rest bis zum Deckel: ≈ 384\.000 Energie \(geschätzt/).first().isVisible());
+  check('/melious an → Lastverteilung über die Modelle der Rolle, keine Datenregel', await p.getByText(/verteilt über glm-5\.3-flash, deepseek-v4\.1-flash, deepseek-v4-flash-0731, glm-5\.3/).first().isVisible() && !(await p.getByText(/Datenregel/).count()));
   await p.waitForTimeout(1500);
   await say('Antworte mit OK');
   await p.getByText(/Dieser Zug läuft über „Melious“/).first().waitFor({ timeout: 60000 });
   await p.getByText('OK', { exact: true }).first().waitFor({ timeout: 60000 });
-  check('Kurzer Zug über Melious, verteiltes Modell sichtbar: „🧪 … · Modell glm-5.3 (erstes der Rolle; Open-Weight-Modell, Ergebnisse prüfen)“', await p.getByText(/Dieser Zug läuft über „Melious“ · Modell glm-5\.3 \(Open-Weight-Modell, Ergebnisse prüfen\)/).first().isVisible());
+  check('Kurzer Zug über Melious, verteiltes Modell sichtbar: „🧪 … · Modell glm-5.3-flash (erstes der Rolle; Open-Weight-Modell, Ergebnisse prüfen)“', await p.getByText(/Dieser Zug läuft über „Melious“ · Modell glm-5\.3-flash \(Open-Weight-Modell, Ergebnisse prüfen\)/).first().isVisible());
   await p.waitForTimeout(1500);
   await say('Lies bitte die Datei Home.md im Vault');
   await p.getByText(/Datei gelesen \(Stub\)/).first().waitFor({ timeout: 90000 });
@@ -81,6 +81,7 @@ try {
   await p.goto(LC + '/wb/leitstand');
   await f.locator('[data-testid=melious-kachel]').waitFor({ timeout: 30000 });
   check('Kachel „Melious heute / Monat“ auf der Hauptchat-Seite', /heute .* Monat/.test(await f.locator('[data-testid=melious-kachel]').innerText()));
+  check('Kachel: Hinweis „Energie verfällt bald“ (geschätzter Topf voll)', /Energie verfällt bald/.test(await f.locator('[data-testid=melious-kachel]').innerText()));
   await shot(p, '1440-hauptchat-kachel');
   const h = await (await fetch(LC.replace(/:\d+$/, ':' + (process.env.E2E_BRIDGE_PORT || '3990')) + '/health')).json().catch(() => ({}));
   check('/health zählt Melious-Züge ohne Schlüssel', (h.konten?.melious?.zuege ?? 0) >= 2 && !JSON.stringify(h).includes('sk-mel-'), JSON.stringify(h.konten?.melious ?? {}));
