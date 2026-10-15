@@ -1,0 +1,46 @@
+--- a/client/src/components/UnifiedSidebar/ConversationsSection.tsx
++++ b/client/src/components/UnifiedSidebar/ConversationsSection.tsx
+@@ -29,6 +29,9 @@
+   useTitleGeneration(isAuthenticated);
+ 
+   const [isChatsExpanded, setIsChatsExpanded] = useLocalStorage('chatsExpanded', true);
++  // OLAF Workspace: Unter-Chats („Orchestrator · …“) stehen im Hauptchat-Abschnitt und fehlen hier, außer der Schalter dort
++  // ist an; die Suche zeigt immer alle (B5).
++  const [unterchatsInListe] = useLocalStorage('werkbank-unterchats-in-liste', false);
+   const [showLoading, setShowLoading] = useState(false);
+   const [tags, setTags] = useState<string[]>([]);
+ 
+@@ -73,9 +76,15 @@
+     isFetchingNext: isFetchingNextPage,
+   });
+ 
++  const filtern = !unterchatsInListe && !search.query;
+   const conversations = useMemo(() => {
+-    return data ? data.pages.flatMap((page) => page.conversations) : [];
+-  }, [data]);
++    const alle = data ? data.pages.flatMap((page) => page.conversations) : [];
++    if (!filtern) {
++      return alle;
++    }
++    // Tags stehen nicht im Listen-Payload — der Titel-Präfix, den web/server/orchestrator.ts (decorate) setzt, ist das Merkmal.
++    return alle.filter((c) => !(c?.title ?? '').startsWith('Orchestrator · '));
++  }, [data, filtern]);
+ 
+   const toggleNav = useCallback(() => {
+     if (isSmallScreen) {
+@@ -90,6 +99,15 @@
+     fetchNextPage();
+   }, [isFetchingNextPage, computedHasNextPage, fetchNextPage]);
+ 
++  // Eine Seite voller Unter-Chats ließe die Liste leer (ohne Scrollen kein Nachladen): nachladen, bis genug sichtbar sind
++  // (höchstens 5 Seiten).
++  const pageCount = data?.pages.length ?? 0;
++  useEffect(() => {
++    if (filtern && computedHasNextPage && !isFetchingNextPage && conversations.length < 15 && pageCount < 5) {
++      fetchNextPage();
++    }
++  }, [filtern, computedHasNextPage, isFetchingNextPage, conversations.length, pageCount, fetchNextPage]);
++
+   const [isSearchLoading, setIsSearchLoading] = useState(
+     !!search.query && (search.isTyping || isLoading || isFetching),
+   );

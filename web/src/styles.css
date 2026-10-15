@@ -589,3 +589,8 @@ details.ub-card > summary::-webkit-details-marker { display: none; }
   .ub-sheet { padding: 16px 14px 40px; }
   .ub-runrow { flex-wrap: wrap; } .ub-runrow .t { flex-basis: 100%; order: 2; white-space: normal; }
 }
+
+/* Paket 187, S5: Reiter-Leiste der Bereiche Planen und Wissen (über der jeweiligen Seite) */
+.bereich-bar.page { padding-top: 14px; padding-bottom: 0; }
+.bereich-bar .tabs { margin-bottom: 0; }
+.embedded .bereich-bar.page { padding-top: 14px; }

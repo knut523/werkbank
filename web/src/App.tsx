@@ -34,25 +34,39 @@ const SHARED_TOKENS = ['--presentation', '--text-primary', '--text-secondary', '
   '--surface-secondary', '--surface-tertiary', '--surface-hover', '--surface-submit', '--surface-submit-hover', '--surface-destructive',
   '--surface-dialog', '--border-light', '--border-medium', '--border-heavy'];
 
-// Werkzeug statt Seite (Council-Bedingung 11): oben fünf Einträge, der Rest im Fuß. LibreChat-Leiste: dieselben fünf.
-const NAV = [
-  // Plan 184, Teil B: die Übersicht ist die Startseite; #/heute und #/uebersicht führen ebenfalls dorthin (alte Adressen, 185-B3).
-  // `#/leitstand…` (früher die Seite „Hauptchat & Unter-Chats“, Paket 187 S4) zeigt ebenfalls die Übersicht: alte Adressen bleiben gültig (185-B3).
-  { href: '#/', label: 'Übersicht', ico: '📋', match: /^#\/?(\?|$)|^#\/(heute|uebersicht|leitstand)(\?|$)/, f: 'heute' },
-  { href: '#/roadmap', label: 'Roadmap', ico: '🧭', match: /^#\/roadmap/ , f: 'roadmap' },
-  { href: '#/board', label: 'Board', ico: '🗂️', match: /^#\/board/ , f: 'board' },
-  { href: '#/sprint', label: 'Sprint', ico: '🔁', match: /^#\/sprint/ , f: 'sprint' },
-  { href: '#/wissen', label: 'Wissen', ico: '📚', match: /^#\/wissen/ , f: 'wissen' },
+// Vier Bereiche (Paket 185/187, S5): Chats (= LibreChat) · Übersicht · Planen · Wissen. Planen und Wissen sind Reiter-Hüllen um die
+// bisherigen Seiten — die Adressen (#/roadmap, #/board, #/wissen …) bleiben, der Bereich merkt sich den zuletzt benutzten Reiter
+// (localStorage `wb-bereich:<id>`, gleicher Ursprung wie LibreChats Leiste). Ein Reiter erscheint nur mit Funktionsfreigabe.
+type Reiter = { href: string; label: string; match: RegExp; f: string; wide?: boolean };
+type Nav = { href: string; label: string; ico: string; match: RegExp; f: string };
+const UEBERSICHT: Nav = {
+  // Plan 184, Teil B: die Übersicht ist die Startseite; `#/heute`, `#/uebersicht` und `#/leitstand…` (früher die Seite
+  // „Hauptchat & Unter-Chats“, S4) führen ebenfalls dorthin — alte Adressen bleiben gültig (185-B3).
+  href: '#/', label: 'Übersicht', ico: '📋', match: /^#\/?(\?|$)|^#\/(heute|uebersicht|leitstand)(\?|$)/, f: 'heute',
+};
+const BEREICHE: { id: string; label: string; ico: string; reiter: Reiter[] }[] = [
+  { id: 'planen', label: 'Planen', ico: '🧭', reiter: [
+    { href: '#/roadmap', label: 'Roadmap', match: /^#\/roadmap/, f: 'roadmap', wide: true },
+    { href: '#/sprint', label: 'Sprint', match: /^#\/sprint/, f: 'sprint' },
+    { href: '#/board', label: 'Board', match: /^#\/board/, f: 'board', wide: true },
+    { href: '#/ziele', label: 'Ziele', match: /^#\/ziele/, f: 'ziele', wide: true },
+    { href: '#/timebox', label: 'Mein Tag', match: /^#\/timebox/, f: 'timebox', wide: true },
+  ] },
+  { id: 'wissen', label: 'Wissen', ico: '📚', reiter: [
+    { href: '#/wissen', label: 'Vault', match: /^#\/wissen/, f: 'wissen', wide: true },
+    { href: '#/dateien', label: 'Dateien', match: /^#\/dateien/, f: 'dateien' },
+    { href: '#/skills', label: 'Skills', match: /^#\/skills/, f: 'skills' },
+  ] },
 ];
-const MORE = [
-  { href: '#/timebox', label: 'Mein Tag', ico: '⏱️', match: /^#\/timebox/ , f: 'timebox' },
-  { href: '#/ziele', label: 'Ziele', ico: '🎯', match: /^#\/ziele/ , f: 'ziele' },
-  { href: '#/skills', label: 'Skills', ico: '🧰', match: /^#\/skills/ , f: 'skills' },
-  { href: '#/dateien', label: 'Dateien & Teilen', ico: '📎', match: /^#\/dateien/ , f: 'dateien' },
-  { href: '#/einrichtung', label: 'Einrichtung', ico: '🚀', match: /^#\/einrichtung/, f: '' },
-];
+const EINRICHTUNG: Nav = { href: '#/einrichtung', label: 'Einrichtung', ico: '🚀', match: /^#\/einrichtung/, f: '' };
+const merkKey = (id: string) => `wb-bereich:${id}`;
+/** Zuletzt benutzter Reiter des Bereichs (nur freigegebene), sonst der erste freigegebene. */
+function letzterReiter(b: { id: string; reiter: Reiter[] }): string {
+  try { const h = localStorage.getItem(merkKey(b.id)); if (h && b.reiter.some((r) => r.href === h)) return h; } catch { /* privat */ }
+  return b.reiter[0].href;
+}
 
-function NavLink({ n, hash, count }: { n: typeof NAV[number]; hash: string; count?: number | null }) {
+function NavLink({ n, hash, count }: { n: Nav; hash: string; count?: number | null }) {
   const on = n.match.test(hash);
   return (
     <a href={n.href} className={on ? 'active' : ''} aria-current={on ? 'page' : undefined} aria-label={count ? `${n.label}, ${count} offen` : undefined}>
@@ -70,6 +84,8 @@ export function App() {
   const [menu, setMenu] = useState(false);
   const todayN = useTodayCount(hash, !!cfg?.user && cfg?.features?.heute !== false);
   useEffect(() => setMenu(false), [hash]);
+  // Bereich merkt sich den zuletzt benutzten Reiter (die LibreChat-Leiste liest denselben Schlüssel).
+  useEffect(() => { for (const b of BEREICHE) { const r = b.reiter.find((x) => x.match.test(hash)); if (r) try { localStorage.setItem(merkKey(b.id), r.href); } catch { /* privat */ } } }, [hash]);
   const load = () => api<Config>('/api/config').then((c) => { setChatOrigin(c.librechatUrl); setCfg(c); }, setErr);
   useEffect(() => { load(); }, []);
   const toggleTheme = () => {
@@ -122,8 +138,18 @@ export function App() {
   }
   // Freigabe je Funktion (web/server/features.ts): Admins alles, das Team nur, was Knut freigegeben hat.
   const vis = (n: { f: string }) => !n.f || cfg.features?.[n.f] !== false;
-  const nav = NAV.filter(vis), more = MORE.filter(vis);
-  const hidden = user && [...NAV, ...MORE].find((n) => n.f && n.match.test(hash) && !vis(n));
+  // Bereiche mit ihren freigegebenen Reitern; ein Bereich ohne freigegebenen Reiter fehlt ganz.
+  const bereiche = BEREICHE.map((b) => ({ ...b, reiter: b.reiter.filter(vis) })).filter((b) => b.reiter.length > 0);
+  const nav: Nav[] = [UEBERSICHT, ...bereiche.map((b) => ({ href: letzterReiter(b), label: b.label, ico: b.ico, match: new RegExp(b.reiter.map((r) => r.match.source).join('|')), f: '' }))].filter(vis);
+  const more: Nav[] = [EINRICHTUNG];
+  const alle = [UEBERSICHT, ...BEREICHE.flatMap((b) => b.reiter)];
+  const hidden = user && alle.find((n) => n.f && n.match.test(hash) && !vis(n));
+  const bereich = bereiche.find((b) => b.reiter.some((r) => r.match.test(hash)));
+  const reiterLeiste = bereich && <div className={`page bereich-bar${bereich.reiter.find((r) => r.match.test(hash))?.wide ? ' wide' : ''}`} data-testid={`bereich-${bereich.id}`}>
+    <nav className="tabs" role="tablist" aria-label={bereich.label}>
+      {bereich.reiter.map((r) => { const on = r.match.test(hash); return <a key={r.href} role="tab" aria-selected={on} className={on ? 'active' : ''} href={r.href}>{r.label}</a>; })}
+    </nav>
+  </div>;
   const heuteHidden = user && cfg.features?.heute === false && /^#\/?(\?|$)|^#\/(heute|uebersicht|leitstand)(\?|$)/.test(hash);
   // Anmelden über das Einrichtungs-Formular: weiter mit den ersten Schritten (Claude, Jira) auf der Einrichtung.
   const page = !user ? <Setup cfg={cfg} onLogin={() => { window.location.hash = '#/einrichtung'; load(); }} />
@@ -139,8 +165,8 @@ export function App() {
     : /^#\/dateien/.test(hash) ? <Dateien cfg={cfg} />
     : <Uebersicht cfg={cfg} hash={hash} />;
 
-  // Eingebettet: kein eigenes Gerüst — Navigation ist LibreChats Leiste (fünf Einträge + „Mehr“), Einrichtung im Kontomenü.
-  if (embedded) return <div className="embedded">{page}</div>;
+  // Eingebettet: kein eigenes Gerüst — Navigation ist LibreChats Leiste (Chats · Übersicht · Planen · Wissen), Einrichtung im Kontomenü.
+  if (embedded) return <div className="embedded">{reiterLeiste}{page}</div>;
   const current = [...nav, ...more].find((n) => n.match.test(hash));
 
   return (
@@ -171,7 +197,7 @@ export function App() {
           </div>
         </div>
       </aside>
-      <main className="main">{page}</main>
+      <main className="main">{reiterLeiste}{page}</main>
     </div>
   );
 }

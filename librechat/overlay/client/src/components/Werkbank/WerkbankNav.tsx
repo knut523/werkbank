@@ -2,30 +2,42 @@
 import { memo, useEffect, useState } from 'react';
 import Cookies from 'js-cookie';
 import { useSetRecoilState } from 'recoil';
-import * as Menu from '@ariakit/react/menu';
 import { useLocation, useNavigate, type NavigateFunction } from 'react-router-dom';
-import { Rocket, BookOpen, SquareKanban, RefreshCw, Blocks, Share2, Compass, Sun, Timer, Target, Ellipsis, Satellite } from 'lucide-react';
+import { Rocket, BookOpen, SquareKanban, RefreshCw, Blocks, Share2, Compass, Sun, Timer, Target, Satellite } from 'lucide-react';
 import { Button, TooltipAnchor, useMediaQuery } from '@librechat/client';
 import { cn } from '~/utils';
 import store from '~/store';
-import { useHauptchat } from './HauptchatSection';
 
-// Leiste = dieselben fünf wie oben in der Werkbank (Council-Bedingung 11): Heute · Roadmap · Board · Sprint · Wissen.
-// Die übrigen vier unter „Mehr“; die Einrichtung steht im Kontomenü bei LibreChats Einstellungen (WerkbankSetupItem).
+// Leiste (Paket 185/187, S5): vier Bereiche — Chats (LibreChats Chatverlauf) · Übersicht · Planen · Wissen. Planen und Wissen sind
+// Reiter-Hüllen um die bisherigen Seiten (die Reiter stehen in der Seite selbst); die Einträge darunter bleiben als Adressen
+// gültig (/wb/<seite>), stehen aber nicht mehr in der Leiste. Das Hauptchat-Symbol und „Mehr“ entfallen (Hauptchat: Abschnitt oben
+// in Chats). Die Einrichtung steht im Kontomenü bei LibreChats Einstellungen (WerkbankSetupItem).
+// `bereich`/`reiter`: Funktionsfreigaben, bei denen der Bereich erscheint (mindestens eine). Alle alten IDs bleiben — WerkbankRoute
+// ordnet damit Adressen zu.
 export const WERKBANK_PAGES = [
   { id: 'heute', hash: '#/', label: 'Übersicht', icon: Sun, nav: true },   // Plan 184, Teil B: Startseite heißt Übersicht (Adresse /wb/heute bleibt)
-  { id: 'roadmap', hash: '#/roadmap', label: 'Roadmap', icon: Compass, nav: true },
-  { id: 'board', hash: '#/board', label: 'Board (Jira PM)', icon: SquareKanban, nav: true },
-  { id: 'sprint', hash: '#/sprint', label: 'Sprint', icon: RefreshCw, nav: true },
-  { id: 'wissen', hash: '#/wissen', label: 'Wissen (Vault)', icon: BookOpen, nav: true },
-  { id: 'timebox', hash: '#/timebox', label: 'Mein Tag', icon: Timer, nav: false },
-  { id: 'ziele', hash: '#/ziele', label: 'Ziele', icon: Target, nav: false },
-  { id: 'skills', hash: '#/skills', label: 'Skills', icon: Blocks, nav: false },
-  { id: 'dateien', hash: '#/dateien', label: 'Dateien & Teilen', icon: Share2, nav: false },
-  { id: 'leitstand', hash: '#/leitstand', label: 'Übersicht', icon: Satellite, nav: false, menu: false },   // Paket 187 S4: Alias — die Seite ist in der Übersicht aufgegangen
+  { id: 'planen', hash: '#/roadmap', label: 'Planen', icon: Compass, nav: true, bereich: 'planen', reiter: ['roadmap', 'sprint', 'board', 'ziele', 'timebox'] },
+  { id: 'wissen', hash: '#/wissen', label: 'Wissen', icon: BookOpen, nav: true, bereich: 'wissen', reiter: ['wissen', 'dateien', 'skills'] },
+  { id: 'roadmap', hash: '#/roadmap', label: 'Roadmap', icon: Compass, nav: false, menu: false, bereich: 'planen' },
+  { id: 'board', hash: '#/board', label: 'Board (Jira PM)', icon: SquareKanban, nav: false, menu: false, bereich: 'planen' },
+  { id: 'sprint', hash: '#/sprint', label: 'Sprint', icon: RefreshCw, nav: false, menu: false, bereich: 'planen' },
+  { id: 'timebox', hash: '#/timebox', label: 'Mein Tag', icon: Timer, nav: false, menu: false, bereich: 'planen' },
+  { id: 'ziele', hash: '#/ziele', label: 'Ziele', icon: Target, nav: false, menu: false, bereich: 'planen' },
+  { id: 'skills', hash: '#/skills', label: 'Skills', icon: Blocks, nav: false, menu: false, bereich: 'wissen' },
+  { id: 'dateien', hash: '#/dateien', label: 'Dateien & Teilen', icon: Share2, nav: false, menu: false, bereich: 'wissen' },
+  { id: 'leitstand', hash: '#/leitstand', label: 'Übersicht', icon: Satellite, nav: false, menu: false },   // Alias: die Seite „Hauptchat & Unter-Chats“ ist in der Übersicht aufgegangen (S4)
   { id: 'einrichtung', hash: '#/einrichtung', label: 'Workspace-Einrichtung', icon: Rocket, nav: false, menu: false },
-];
-const MORE = WERKBANK_PAGES.filter((p) => !p.nav && p.menu !== false);
+] as { id: string; hash: string; label: string; icon: any; nav: boolean; menu?: boolean; bereich?: string; reiter?: string[] }[];
+
+/** Adresse einer Seite in der Leiste; Planen/Wissen öffnen den zuletzt benutzten Reiter (die Seite schreibt `wb-bereich:<id>`). */
+export function pageHash(p: { id: string; hash: string; bereich?: string; reiter?: string[] }): string {
+  if (!p.reiter) return p.hash;
+  try {
+    const h = localStorage.getItem(`wb-bereich:${p.id}`);
+    if (h && WERKBANK_PAGES.some((x) => x.bereich === p.id && x.hash === h)) return h;
+  } catch { /* privat */ }
+  return p.hash;
+}
 
 /** Ein Link aus der Werkbank (Chat öffnen, Kontomenü …) im selben Fenster: nur eigener Ursprung; /c/ und /wb/ über den
  *  Router (kein Neuladen), anderes vom eigenen Ursprung normal geladen, Fremdes nie. */
@@ -89,42 +101,22 @@ function WerkbankNav() {
   useGermanByDefault();
   const current = pathname.startsWith('/wb/') ? pathname.split('/')[2] : '';
   const { show, count, onlySetup } = useWerkbankState(pathname);
-  const more = MORE.filter((p) => show(p.id));
-  const go = (id: string) => {
+  // Ein Bereich erscheint, wenn mindestens einer seiner Reiter freigegeben ist.
+  const showPage = (p: (typeof WERKBANK_PAGES)[number]) => (p.reiter ? p.reiter.some(show) : show(p.id));
+  const bereichOf = (id: string) => WERKBANK_PAGES.find((p) => p.id === id)?.bereich;
+  const isActive = (p: (typeof WERKBANK_PAGES)[number]) => current === p.id || (!!p.bereich && bereichOf(current) === p.bereich);
+  const go = (p: (typeof WERKBANK_PAGES)[number]) => {
     // Klick auf die offene Seite = neu laden (wie früher, als jeder Klick den iframe neu lud).
     const h = new URLSearchParams(search).get('h');
-    if (id === current && (!h || h === WERKBANK_PAGES.find((p) => p.id === id)?.hash)) window.dispatchEvent(new Event('werkbank-reload'));
-    else navigate(`/wb/${id}`);
+    if (p.id === current && (!h || h === pageHash(p))) window.dispatchEvent(new Event('werkbank-reload'));
+    else navigate(`/wb/${p.id}`);
     closeOnMobile();
   };
-  const moreActive = more.some((p) => p.id === current);
-  const haupt = useHauptchat();
-  const hauptPath = haupt.data?.leitstand ? `/c/${haupt.data.leitstand.conv}` : null;
   return (
     <>
       <div className="mx-2 border-b border-border-light" />
       <div className="flex flex-col gap-1" role="group" aria-label="OLAF Workspace">
-        {hauptPath && (
-          // Hauptchat mit einem Klick, auch bei eingeklappter Leiste (Plan 144, Council B6) — nur Admins mit aktivem Hauptchat.
-          <TooltipAnchor
-            description="Hauptchat"
-            side="right"
-            render={
-              <Button
-                size="icon"
-                variant="ghost"
-                aria-label="Hauptchat öffnen"
-                aria-current={pathname === hauptPath ? 'page' : undefined}
-                data-testid="werkbank-nav-hauptchat"
-                className={cn('relative h-9 w-9 rounded-lg', pathname === hauptPath ? 'bg-surface-active-alt text-text-primary' : 'text-text-secondary')}
-                onClick={() => { navigate(hauptPath, { state: { focusChat: true } }); closeOnMobile(); }}
-              >
-                <Satellite className="h-5 w-5" aria-hidden="true" />
-              </Button>
-            }
-          />
-        )}
-        {WERKBANK_PAGES.filter((p) => (p.nav && show(p.id)) || (onlySetup && p.id === 'einrichtung')).map((p) => (
+        {WERKBANK_PAGES.filter((p) => (p.nav && showPage(p)) || (onlySetup && p.id === 'einrichtung')).map((p) => (
           <TooltipAnchor
             key={p.id}
             description={p.label}
@@ -134,10 +126,10 @@ function WerkbankNav() {
                 size="icon"
                 variant="ghost"
                 aria-label={p.id === 'heute' && count ? `${p.label}, ${count} offen` : p.label}
-                aria-pressed={current === p.id}
+                aria-pressed={isActive(p)}
                 data-testid={`werkbank-nav-${p.id}`}
-                className={cn('relative h-9 w-9 rounded-lg', current === p.id ? 'bg-surface-active-alt text-text-primary' : 'text-text-secondary')}
-                onClick={() => go(p.id)}
+                className={cn('relative h-9 w-9 rounded-lg', isActive(p) ? 'bg-surface-active-alt text-text-primary' : 'text-text-secondary')}
+                onClick={() => go(p)}
               >
                 <p.icon className="h-5 w-5" aria-hidden="true" />
                 {p.id === 'heute' && count > 0 && (
@@ -147,38 +139,6 @@ function WerkbankNav() {
             }
           />
         ))}
-        {more.length > 0 && <Menu.MenuProvider placement="right-start">
-          <TooltipAnchor
-            description="Weitere Seiten"
-            side="right"
-            render={
-              <Menu.MenuButton
-                aria-label={moreActive ? `Weitere Seiten (offen: ${MORE.find((p) => p.id === current)?.label})` : 'Weitere Seiten'}
-                data-testid="werkbank-mehr"
-                className={cn(
-                  'flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-surface-active-alt aria-[expanded=true]:bg-surface-active-alt',
-                  moreActive ? 'bg-surface-active-alt text-text-primary' : 'text-text-secondary',
-                )}
-              >
-                <Ellipsis className="h-5 w-5" aria-hidden="true" />
-              </Menu.MenuButton>
-            }
-          />
-          <Menu.Menu portal gutter={4} className="popover-ui z-[125] w-[220px] rounded-lg" data-testid="werkbank-mehr-menu">
-            {more.map((p) => (
-              <Menu.MenuItem
-                key={p.id}
-                onClick={() => go(p.id)}
-                className={cn('select-item text-sm', current === p.id && 'font-semibold')}
-                aria-current={current === p.id ? 'page' : undefined}
-                data-testid={`werkbank-mehr-${p.id}`}
-              >
-                <p.icon className="icon-md" aria-hidden="true" />
-                {p.label}
-              </Menu.MenuItem>
-            ))}
-          </Menu.Menu>
-        </Menu.MenuProvider>}
       </div>
     </>
   );

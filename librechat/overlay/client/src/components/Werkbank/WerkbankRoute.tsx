@@ -10,12 +10,13 @@ import { useRecoilValue } from 'recoil';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMediaQuery } from '@librechat/client';
 import OpenSidebar from '~/components/Chat/Menus/OpenSidebar';
-import { WERKBANK_PAGES, openInApp } from './WerkbankNav';
+import { WERKBANK_PAGES, openInApp, pageHash } from './WerkbankNav';
 import store from '~/store';
 
 const hashFor = (page: string, search: string) => {
   const h = new URLSearchParams(search).get('h');
-  return h && h.startsWith('#/') ? h : (WERKBANK_PAGES.find((p) => p.id === page)?.hash ?? '#/');
+  const p = WERKBANK_PAGES.find((x) => x.id === page);
+  return h && h.startsWith('#/') ? h : p ? pageHash(p) : '#/';
 };
 
 export default function WerkbankRoute() {

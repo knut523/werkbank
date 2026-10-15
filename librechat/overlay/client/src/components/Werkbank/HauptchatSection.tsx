@@ -8,6 +8,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import * as Menu from '@ariakit/react/menu';
 import { ChevronDown, Ellipsis, FileCheck, FileText, Satellite } from 'lucide-react';
 import { cn } from '~/utils';
+import { useLocalStorage } from '~/hooks';
 
 type Status = 'läuft' | 'wartet' | 'fertig' | 'gestoppt' | 'erledigt';
 type Strand = { id: string; title: string; lauf: string; thema?: string; status: Status; url: string; auftrag?: boolean; bericht?: boolean };
@@ -123,6 +124,9 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const listId = useId();
+  // Paket 187 (S5/D5): Unter-Chats stehen nur hier; der Schalter blendet sie zusätzlich in der normalen Chatliste ein
+  // (patches/75-client-unterchats-liste.patch liest denselben Schlüssel; die Suche zeigt immer alle).
+  const [inListe, setInListe] = useLocalStorage('werkbank-unterchats-in-liste', false);
   const [auf, setAuf] = useState<Auf>(readAuf);
   const save = useCallback((a: Auf) => { setAuf(a); writeAuf(a); }, []);
   const open = useCallback((p: string) => { navigate(p, { state: { focusChat: true } }); toggleNav?.(); }, [navigate, toggleNav]);
@@ -322,6 +326,12 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
             })}
           </ul>
         </div>
+      )}
+      {groups.length > 0 && (
+        <label className="flex items-center gap-2 px-2 py-1 text-xs text-text-secondary" title="Sonst stehen Unter-Chats nur in diesem Abschnitt; die Suche findet sie immer.">
+          <input type="checkbox" data-testid="unterchats-in-liste" checked={!!inListe} onChange={(e) => setInListe(e.target.checked)} />
+          Unter-Chats auch in der Liste zeigen
+        </label>
       )}
       <div className="mx-1 mt-1 border-b border-border-light" />
     </section>
