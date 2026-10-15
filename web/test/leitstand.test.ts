@@ -827,6 +827,32 @@ test('Plan 144: Hauptchat aus der Oberfläche — Entwurf ohne Auszüge, Zaun en
   await W().collection('orchestrator_runs').updateOne({ _id: 'p144evil' as any }, { $set: { knutReviewedAt: new Date() } });
 });
 
+test('Teil C (C-6/C-8/H5): Bericht mit Kopf → Karte in „Entscheiden“ mit Diagramm und toter Vorschau als Warnung; Antwort auf der Karte landet im Strang-Chat', async () => {
+  mkdirSync(join(tmp, 'review-pakete', '955-teil-c'), { recursive: true });
+  writeFileSync(join(tmp, 'review-pakete', '955-teil-c', 'bericht.md'), [
+    '---', 'status: wartet_auf_knut', 'offen:', '  - Vorlage umbauen', 'review:', '  - titel: Admin', '    login: https://3999--main--dev--knut.ws.konekto.energy/login',
+    'fragen:', '  - id: D1', '    frage: Jetzt umbauen?', '    empfehlung: ja', '    antwort: ""', '---', '# Bericht', '', '```mermaid', 'flowchart LR', '  A --> B', '```', ''].join('\n'));
+  const st = JSON.parse((await orch(['start', '--title', 'Teil C: Kopf', '--cwd', WT('wt-c1'), '--json'],
+    'Bericht nach ~/work/knut/review-pakete/955-teil-c/bericht.md.\nmock-antwort Fertig.\\n### Stand\\n- Erledigt: x\\nStatus: fertig')).out);
+  const card = await until(() => cardOf(st.id), (c: any) => c?.kopf && (c.linkWarnungen ?? []).length > 0, 20_000);
+  assert.equal(card.spalte, 'entscheiden');
+  assert.deepEqual(card.fragen.map((f: any) => [f.id, f.empfehlung]), [['D1', 'ja']]);
+  assert.equal(card.diagramm, 'flowchart LR\n  A --> B');
+  assert.equal(card.linkWarnungen[0].ergebnis, 'antwortet nicht', 'tote Vorschau als Warnung auf der Karte (H5)');
+  assert.deepEqual(card.kopf.offen, ['Vorlage umbauen']);
+  // D3: Antwort auf der Karte (nur Kopf-Frage, keine Fettzeile im Text) → Nachricht im Strang-Chat.
+  const r = await post(`/api/review/${st.id}/entscheidungen`, { berichtHash: card.berichtHash, antworten: [{ id: 'D1', text: 'Wie empfohlen: ja' }] });
+  assert.equal(r.status, 200, await r.clone().text());
+  const nach = (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser).map(textOf).at(-1)!;
+  assert.match(nach, /^Nacharbeit nach Review: Entscheidungen von Knut/);
+  assert.match(nach, /- D1 \(Jetzt umbauen\?\): Wie empfohlen: ja/);
+  assert.match(nach, /Kopf: `antwort:`/);
+  // Tote Vorschau melden → kurze Nachricht an den Unter-Chat; ein nicht gemeldeter Link → 409.
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  assert.equal((await post(`/api/review/${st.id}/vorschau-tot`, { url: 'https://evil.example/' })).status, 409);
+  await orch(['review', st.id]);
+});
+
 test('Council-Diff Teil B (B-21/B-25, zuletzt — beendet die Brücke): Brücke weg → Heute zeigt die Karte weiter (nur Mongo), Passt → 503', async () => {
   const st = await doneStrand('Teil B: Brücke weg', 'wt-b7');
   const card = await until(() => cardOf(st.id), (c: any) => !!c);

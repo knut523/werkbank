@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { findBericht, findPaket } from './bericht.ts';
+import { kopfPflege } from './berichtstand.ts';
 import { cfg } from './config.ts';
 import { wb, lc } from './db.ts';
 import { librechatAccessToken, type User } from './auth.ts';
@@ -29,6 +30,46 @@ const err = (status: number, msg: string) => Object.assign(new Error(msg), { sta
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 OLAF-Werkbank';
 
 export interface BriefInput { title: string; prompt: string; cwd: string; plan?: string | null; person?: string; stand?: string | null }
+
+// Berichtsvorlage für jeden Strang (docs/plan-leitstand.md, Teil C, C8; Knut 14.10.2026): fester Kopf, den „Heute“ liest, und
+// Pflicht-Visualisierung neben Screenshots. Vollständiges Muster: docs/bericht-vorlage.md, Folien: docs/bericht-folien-vorlage.html.
+export const BERICHT_PFLICHT = [
+  'Bericht (Pflicht, sobald du etwas gebaut oder geprüft hast): `~/work/knut/review-pakete/NNN-<slug>/bericht.md` (das Paket nennt der Auftrag). Er beginnt mit diesem YAML-Kopf. Der Kopf ist die **Exec Summary** — „Heute“ und die Berichtsanzeige zeigen ihn oben als erstes:',
+  '```yaml',
+  '---',
+  'status: wartet_auf_knut      # bereit_fuer_github | wartet_auf_knut | blockiert',
+  'titel: …                     # ein Satz: was jetzt geht (Überschrift der Exec Summary)',
+  'worum: …                     # 2–3 Sätze für jemanden, der den Chat nicht kennt: Ausgangslage, Problem, Ziel',
+  'anders:                       # was jetzt anders ist, höchstens 4 kurze Punkte',
+  '  - …',
+  'offen:                        # was Knut tun muss, höchstens 5 kurze Zeilen; leer = nichts',
+  '  - …',
+  'review:                       # wo Knut reviewt (Coder-Vorschau mit Login-Link, Screenshots, PR-Text)',
+  '  - titel: Admin-Vorschau',
+  '    url: https://<port>--main--dev--knut.ws.konekto.energy/<seite>',
+  '    login: https://<port>--main--dev--knut.ws.konekto.energy/login?next=/<seite>',
+  '  - screenshot: screenshots/<name>.png',
+  '  - pr_text: pr.md',
+  'fragen:                       # nur echte Entscheidungen Knuts, je mit Empfehlung; antwort bleibt leer',
+  '  - id: D1',
+  '    frage: …',
+  '    empfehlung: …',
+  '    antwort: ""',
+  'github:                       # je Repo/PR eine Zeile (wird die PR-Tabelle); commit = ≥ 7-stelliger SHA des Stands, den Knut freigeben soll',
+  '  - repo: <org>/<repo>',
+  '    zweig: <branch>',
+  '    commit: <sha>',
+  '    was: …                     # Inhalt in wenigen Worten',
+  '    pr: https://github.com/<org>/<repo>/pull/<n>   # nur wenn der PR auf GitHub existiert; sonst weglassen (= lokal)',
+  '    pr_text: pr.md',
+  '---',
+  '```',
+  '- `status`: `bereit_fuer_github` nur, wenn Tests grün, Review-Pässe durch und nichts offen; sonst `wartet_auf_knut` (Review/Fragen) oder `blockiert`. Der Kopf muss zum Text passen; ändert sich etwas, Kopf mit ändern (auch `commit`).',
+  '- Darunter mindestens ein Mermaid-Diagramm (```` ```mermaid ````) „Wie es jetzt funktioniert“ (Ablauf/Datenfluss des Gebauten, `flowchart LR`); bei mehreren PRs oder Repos zusätzlich „Ausroll-Reihenfolge“. Dazu Screenshots bei allem Sichtbaren.',
+  '- PR-Tabelle: nur PRs, die es auf GitHub wirklich gibt, mit `pr:`-Link; nicht gepushte Zweige ohne `pr:` (erscheinen als „lokal, nicht auf GitHub“). Einen Stand (offen/gemergt) schreibst du nicht hin — den holt der Leitstand selbst von GitHub.',
+  '- Optional HTML-Folien nach `docs/bericht-folien-vorlage.html` im Werkbank-Repo. Folie 1 ist die Exec Summary (Titel, Status, Worum es geht · Was jetzt anders ist · Was du tun musst, PR-Tabelle); dann Ablauf, Ausrollen, Screenshots, Prüfungen, Entscheidungen.',
+  '- Fragen im Kopf tragen dieselbe Kennung wie im Text (`D1`). Antworten Knuts kommen als „Nacharbeit nach Review“; trag sie dann in `antwort:` ein.',
+].join('\n');
 
 /** Erster Text des Strangs. Erste Zeile = Titel; der Auftrag steht am Ende. */
 export function orchBrief(b: BriefInput): string {
@@ -59,6 +100,7 @@ export function orchBrief(b: BriefInput): string {
       '```',
       'Schreib den Abschnitt selbst als normales Markdown, nicht als Codeblock.',
     ].join('\n'),
+    BERICHT_PFLICHT,
     `---\n\nAuftrag:\n${b.prompt.trim()}`,
   ].join('\n\n');
 }
@@ -385,7 +427,8 @@ export async function showOrch(u: User, id: string, verlauf = 0) {
     hist = [];
     for (const m of ms) {
       const t = messageText(m);
-      const cut = t.length > 4000 ? '…' + t.slice(-3999) : t;
+      // Lange Nachrichten: erste Zeile (beim Brief der Titel „Orchestrator · …“) + Ende (dort steht der Auftrag).
+      const cut = t.length > 4000 ? t.split('\n')[0].slice(0, 200) + '\n…' + t.slice(-3790) : t;
       if (budget - cut.length < 0) break;
       budget -= cut.length;
       hist.push({ fromUser: !!m.isCreatedByUser, at: new Date(m.createdAt ?? 0), text: cut });
@@ -590,6 +633,9 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
       for (const d of list) {
         // Schon fertig nach der letzten Nachricht an den Strang: ohne neue Nachricht ändert sich nichts (Last, Council Teil B).
         // … aber nur, wenn seitdem kein Zug lief (Knut schreibt direkt im Chat) und der Bericht schon gefunden ist (Council-Diff B R2).
+        // Teil C (H2): Bericht-Kopf, Diagramm, Commit-Abgleich und Vorschau-Links — auch für fertige Stränge, vor dem Übersprung.
+        try { const ks = await kopfPflege(d, now); if (Object.keys(ks).length) { await runs().updateOne({ _id: d._id }, { $set: ks }); Object.assign(d, ks); } }
+        catch (e: any) { deps.log?.('bericht-kopf fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
         const sd = states.get(d.conv);
         if (d.lastStatus === 'done' && d.doneAt && d.bericht && new Date(d.doneAt).getTime() > new Date(d.lastSentAt ?? d.startedAt).getTime() && !sd?.running && (sd?.turn?.end ?? 0) <= new Date(d.doneAt).getTime()) continue;
         try {

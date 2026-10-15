@@ -23,7 +23,8 @@ import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, s
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
-import { reviewDetail, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
+import { reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
+import { berichtKopf, execSummary } from './berichtkopf.ts';
 import { readBericht as readBerichtDatei, reviewDir } from './bericht.ts';
 import { readBericht, paketDatei } from './bericht.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
@@ -1435,12 +1436,15 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const u = await needAdmin(req);
   const d = await reviewStrand(u, m[1]);
   const b = await body(req);
-  if (d.lastStatus === 'running') throw new HttpError(409, 'Der Unter-Chat arbeitet gerade — Antworten gehen, sobald er fertig ist.');
+  // Teil C (H3): läuft der Unter-Chat, reicht sendOrch die Antwort nach — kein 409 mehr.
   const { paketDatei } = await import('./bericht.ts');
   const pfad = paketDatei(d, 'bericht');
   const text = readBerichtDatei(pfad);
   if (!text || String(b.berichtHash ?? '') !== berichtHash(text)) throw new HttpError(409, 'Der Bericht hat sich inzwischen geändert — Seite neu laden.');
-  const bekannt = new Map(leseEntscheidungen(text).map((e) => [e.id, e]));
+  const bekannt = new Map<string, { titel: string; empfehlung?: string; knut?: string; kopf?: boolean }>(leseEntscheidungen(text).map((e) => [e.id, e]));
+  // Teil C (D3): auch Fragen aus dem Bericht-Kopf (fragen[].id) gelten als bekannt.
+  const kopf = berichtKopf(text);
+  if (kopf && 'status' in kopf) for (const f of kopf.fragen) if (!bekannt.has(f.id)) bekannt.set(f.id, { titel: f.frage.slice(0, 120), kopf: true });
   // Plan 157, Ergänzung B: „Empfehlung akzeptieren“ / eigene Antwort / „nachprüfen“ (alte Form ohne art = eigene Antwort).
   const antworten = (Array.isArray(b.antworten) ? b.antworten : []).map((a: any) => {
     const id = String(a?.id ?? ''), e = bekannt.get(id);
@@ -1450,6 +1454,16 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
     return { id, art, text: t };
   }).filter((a: any) => a.text && bekannt.has(a.id) && !bekannt.get(a.id)!.knut);
   if (!antworten.length) throw new HttpError(400, 'Keine Antwort auf eine offene Entscheidung.');
+  const ids = antworten.map((a: any) => a.id);
+  // Release 15b: läuft der Strang oder gilt eine Antwort einer Kopf-Frage, trägt der Server NICHT selbst ein (sonst schreiben
+  // Server und Strang gleichzeitig in den Bericht) — dann nur sendOrch an den Strang (Teil C, H3: kein 409).
+  if (d.lastStatus === 'running' || antworten.some((a: any) => bekannt.get(a.id)!.kopf)) {
+    const msg = `Nacharbeit nach Review: Entscheidungen von Knut — bitte in den Bericht eintragen (Kopf: \`antwort:\` der Frage; Text: Zeile „- Knut:“) und danach weiterarbeiten.\n${antworten.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}`;
+    await sendOrch(u, String(d._id), msg, 'hand');
+    await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten, ids } } });
+    log('review entscheidungen (an Strang)', { user: u.id, id: d._id, n: antworten.length });
+    return send(res, 200, { ok: true, gesendet: antworten.length, weiter: true, offen: null, hauptchat: false });
+  }
   // Eine Wahrheit: die Antworten stehen im Bericht („- Knut: …“). Der Server trägt sie ein (Pfad nur unter den Review-Paketen).
   const real = (() => { try { return realpathSync(String(pfad)); } catch { return ''; } })();
   if (!real || !real.startsWith(realpathSync(reviewDir()) + '/')) throw new HttpError(409, 'Bericht liegt nicht im Ordner der Review-Pakete.');
@@ -1468,9 +1482,20 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   writeFileSync(real, neu);
   let hauptchat = false;
   if (!arbeit.length && !offen.length) hauptchat = await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
-  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten }, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
+  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten, ids }, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
   log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length, arbeit: arbeit.length, offen: offen.length });
   send(res, 200, { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat });
+});
+// Teil C (H5): tote Vorschau aus dem Bericht-Kopf → kurze Nachricht an den Unter-Chat (nur ein bekannter, als tot geprüfter Link).
+on('POST', /^\/api\/review\/([\w-]{1,40})\/vorschau-tot$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const d = await reviewStrand(u, m[1]);
+  const b = await body(req);
+  const hit = (d.linkCheck ?? []).find((l: any) => l.url === String(b.url ?? '') && l.tot);
+  if (!hit) throw new HttpError(409, 'Dieser Link ist nicht (mehr) als tot gemeldet — Seite neu laden.');
+  await sendOrch(u, String(d._id), `Die Vorschau „${hit.titel}“ (${hit.url}) antwortet nicht (${hit.ergebnis}) — bitte neu starten und den Bericht-Kopf aktualisieren.`, 'hand');
+  log('vorschau tot gemeldet', { user: u.id, id: d._id });
+  send(res, 200, { ok: true });
 });
 
 // Leitstand-Übersicht, Berichte und Review der Stränge (docs/plan-leitstand.md, Teil B) — nur Admins (Feature leitstand, G7).
@@ -1502,8 +1527,10 @@ on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
   const path = paketDatei(d, art);
   const text = readBericht(path);
   if (text === null) throw new HttpError(404, art === 'auftrag' ? 'Kein lesbarer Auftrag zu diesem Unter-Chat.' : 'Kein lesbarer Bericht zu diesem Unter-Chat.');
-  // Plan 157, B: Entscheidungen auch auf der Berichtsseite beantworten.
-  send(res, 200, { strand: String(d._id), art, name: String(path).split('/').slice(-2).join('/'), text, ...(art === 'bericht' ? { entscheidungen: leseEntscheidungen(text), berichtHash: berichtHash(text), running: d.lastStatus === 'running' } : {}) });
+  // Plan 157, B: Entscheidungen auch auf der Berichtsseite beantworten. Teil C (C3/C.7): formatiert + Exec Summary.
+  const name = String(path).split('/').slice(-2).join('/');
+  const fg: any = art === 'bericht' ? await freigaben().findOne({ strand: String(d._id), pr: { $type: 'string' } }, { sort: { at: -1 } }) : null;
+  send(res, 200, { strand: String(d._id), art, name, text, html: renderPaketMd(text, name.split('/')[0], `${art}.md`), summary: art === 'bericht' ? execSummary(d, fg) : null, ...(art === 'bericht' ? { entscheidungen: leseEntscheidungen(text), berichtHash: berichtHash(text), running: d.lastStatus === 'running' } : {}) });
 });
 
 /** Strang zum Review prüfen (Einzel- und Sammel-„Passt“, Council Bedingung 7): eigen, gesehener Stand (F3), nicht laufend (G4). */
