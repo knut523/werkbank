@@ -196,7 +196,9 @@ export function autoWeiter(run: AutoRun, st: { cause?: AutoCause }, s: StrandSta
   const end = t?.end ?? t?.start ?? sent;
   // Review-Pass: alte Zugenden nie (sonst setzt der erste Takt nach dem Ausrollen tagealte Stränge auf einmal fort).
   if (ctx.now - Math.max(end, sent) > AUTO_STALE_MS) return { action: 'none', why: 'Zugende länger als 6 h her — von Hand fortsetzen' };
-  if (cause === 'busy' && ctx.now - end < AUTO_BUSY_MS) return { action: 'wait', key, why: 'Parallelgrenze — erneut nach 2 min' };
+  // Council 15.10., C5: Parallelgrenze → wachsender Abstand (2, 4, 8, 16, 32 min) statt alle 2 min neu (jeder Neustart lädt den vollen Kontext).
+  const busyMs = AUTO_BUSY_MS * 2 ** Math.min(4, Math.max(0, Number(run.autoStreak ?? 0)));
+  if (cause === 'busy' && ctx.now - end < busyMs) return { action: 'wait', key, why: `Parallelgrenze — erneut nach ${Math.round(busyMs / 60_000)} min` };
   if (cause === 'rate_limit' && ctx.now - end < AUTO_RATE_MS && !ctx.accountFree) return { action: 'wait', key, why: 'Kontingent — erneut nach 30 min oder bei freiem Konto' };
   // Council R1, Bedingung 1: erst wenn LibreChat die Antwort des Zuges gespeichert hat (sonst falsche Elternnachricht).
   if ((cause === 'limit' || cause === 'timeout') && t && !(last && !last.fromUser && last.at >= t.start - 5000) && ctx.now - end < AUTO_SAVE_MS) return { action: 'wait', key, why: 'Antwort wird gespeichert' };
