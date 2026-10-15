@@ -8,8 +8,9 @@
 // Der Token wird nur für die Dauer der Sitzung im Speicher gehalten und nie geloggt.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createHash, randomUUID } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, type Sink } from './sessions.ts';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, autoFor, type Sink } from './sessions.ts';
+import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
 import { mockQuery } from './mock.ts';
@@ -202,6 +203,12 @@ function titleFrom(messages: any[]): string {
   return (words.length > 60 ? words.slice(0, 59) + '…' : words) || 'Neuer Chat';
 }
 
+function internalOk(req: IncomingMessage): boolean {
+  const want = Buffer.from(INTERNAL);
+  const got = Buffer.from(String(req.headers['x-werkbank-internal'] ?? ''));
+  return want.length > 0 && want.length === got.length && timingSafeEqual(want, got);
+}
+
 // ---------- Routen ----------
 
 async function chat(req: IncomingMessage, res: ServerResponse) {
@@ -299,6 +306,24 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/sessions') {
       if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
       return json(res, 200, { sessions: sessionsOf(url.searchParams.get('user') ?? '') });
+    }
+    // Orchestrator-Stränge (docs/plan-orchestrator-agents.md): Anmeldung einer neuen Unterhaltung mit Arbeitsordner, Zustand.
+    if (req.method === 'POST' && url.pathname === '/internal/orchestrate') {
+      if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
+      const b = await readBody(req);
+      const userId = String(b.userId ?? ''), conv = String(b.conv ?? '');
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId) || !/^[0-9a-f-]{36}$/.test(conv)) return json(res, 400, { error: 'Ungültige Person oder Unterhaltung.' });
+      const email = String(b.email ?? '').toLowerCase();
+      if (ALLOWED_EMAILS.length && !ALLOWED_EMAILS.includes(email)) return json(res, 403, { error: 'Konto nicht freigeschaltet.' });
+      const { problem, real } = orchDirProblem(String(b.dir ?? ''));
+      if (problem) return json(res, 400, { error: problem });
+      try { registerOrchestration(userId, conv, real!); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
+      log('strang angemeldet', { user: userId, conv });
+      return json(res, 200, { ok: true, dir: real, mode: autoFor({ email }) });
+    }
+    if (req.method === 'GET' && url.pathname === '/internal/orch-state') {
+      if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
+      return json(res, 200, { strands: orchStateOf(url.searchParams.get('user') ?? '') });
     }
     // Ein bestätigter MCP-Aufruf (Jira-Schreiben vom Board) bzw. der MCP-Status — nur für Werkbank-Web.
     if (req.method === 'POST' && (url.pathname === '/internal/mcp-call' || url.pathname === '/internal/mcp-status')) {
