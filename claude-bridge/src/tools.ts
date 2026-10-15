@@ -289,6 +289,9 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
 // die Git-Umgebung ohne Zugangsdaten (sessions.ts, orchGitEnv).
 const ORCH_BASH_BLOCK: [RegExp, string][] = [
   [git('(?:push|send-pack)'), 'git push'],
+  // Plan 165 (Pass B, 2): Referenzen direkt umbiegen (Integrationszweig, aus dem die Brücke Prüfbefehle liest) — nie nötig.
+  [git('(?:update-ref|symbolic-ref|replace)'), 'Git-Referenzen direkt ändern'],
+  [new RegExp(GIT + String.raw`branch(?![\w-])[^|;&\n]*\s(?:-[a-zA-Z]*[fDMC][a-zA-Z]*|--force|--delete|--move|--copy)\b`), 'Zweige erzwingen/löschen/umbenennen'],
   [/\balias\.[\w-]+/, 'Git-Alias (könnte pushen)'],
   [/\bgit-(send-pack|receive-pack)\b/, 'git push'],
   [/\bcore\.hooksPath\b|\.git\/(hooks|config)\b/, 'Git-Hooks/-Konfiguration'],

@@ -61,7 +61,7 @@ export async function recordChallenge(u: User, conv: unknown, art: unknown, ok: 
 /** Für die Kachel: letzte 24 h je Art × Phase × Modell, Anteil Melious, letzte Delegationen, Quoten je Modell und Rolle (30 Tage). */
 export async function messungView(u: User, now = Date.now()) {
   const seit = new Date(now - 24 * 3600_000);
-  const zs: any[] = await zuege().find({ userId: u.id, at: { $gte: seit } }).project({ art: 1, phase: 1, modell: 1, anbieter: 1, input: 1, output: 1, energie: 1, kette: 1 }).toArray();
+  const zs: any[] = await zuege().find({ userId: u.id, at: { $gte: seit } }).project({ conv: 1, parent: 1, art: 1, phase: 1, modell: 1, anbieter: 1, input: 1, output: 1, energie: 1, kette: 1 }).toArray();
   const gruppen = new Map<string, { art: string; phase: string | null; modell: string; anbieter: string; zuege: number; tokens: number; energie: number; kette: number }>();
   for (const z of zs) {
     const k = `${z.art}|${z.phase ?? ''}|${z.modell}`;
@@ -72,6 +72,15 @@ export async function messungView(u: User, now = Date.now()) {
   const tokens = zs.reduce((a, z) => a + (z.input ?? 0) + (z.output ?? 0), 0);
   const tokensMel = zs.filter((z) => z.anbieter === 'melious').reduce((a, z) => a + (z.input ?? 0) + (z.output ?? 0), 0);
   const worker = zs.filter((z) => z.art === 'worker').reduce((a, z) => a + (z.input ?? 0) + (z.output ?? 0), 0);
+  // Je Strang: Lead-Tokens gegen Worker-Tokens (lohnt das Delegieren?). parent der Worker = „person:strang“.
+  const strang = new Map<string, { conv: string; lead: number; worker: number }>();
+  for (const z of zs) {
+    const c = z.art === 'worker' ? String(z.parent ?? '').split(':').pop() : z.art === 'strang' ? z.conv : null;
+    if (!c) continue;
+    const s = strang.get(c) ?? { conv: c, lead: 0, worker: 0 };
+    s[z.art === 'worker' ? 'worker' : 'lead'] += (z.input ?? 0) + (z.output ?? 0);
+    strang.set(c, s);
+  }
   const ds: any[] = await delegationen().find({ userId: u.id }).sort({ start: -1 }).limit(200).toArray();
   const quoten = new Map<string, { modell: string; rolle: string; n: number; fehlgeschlagen: number; verworfen: number; abweichung: number }>();
   for (const d of ds.filter((x) => x.status !== 'laeuft')) {
@@ -86,6 +95,7 @@ export async function messungView(u: User, now = Date.now()) {
     summe: { zuege: zs.length, tokens, anteilMelious: tokens ? Math.round((tokensMel / tokens) * 100) : 0, workerTokens: worker, leadTokens: tokens - worker },
     delegationen: ds.slice(0, 8).map((d) => ({ id: d.id, rolle: d.rolle, risiko: d.risiko, status: d.status, modell: d.modell, energie: d.energie, tokens: (d.input ?? 0) + (d.output ?? 0),
       dauerMin: d.ende && d.start ? Math.max(1, Math.round((d.ende - d.start) / 60000)) : null, pruefungen: d.pruefungen ?? [], abweichungen: (d.abweichungen ?? []).length, prueferUrteil: d.prueferUrteil ?? null, urteil: d.urteil ?? null, aufgabe: d.aufgabe ?? '' })),
-    quoten: [...quoten.values()].sort((a, b) => b.n - a.n).slice(0, 10),
+    quoten: [...quoten.values()].sort((a, b) => b.n - a.n).slice(0, 10).map((q) => ({ ...q, fehlPct: Math.round((q.fehlgeschlagen / q.n) * 100), verwPct: Math.round((q.verworfen / q.n) * 100) })),
+    straenge: [...strang.values()].filter((s) => s.worker > 0).sort((a, b) => b.worker - a.worker).slice(0, 5),
   };
 }

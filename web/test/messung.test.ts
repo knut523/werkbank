@@ -31,6 +31,7 @@ test('Züge: je Art/Phase × Modell summiert, Melious-Anteil, Worker- gegen Lead
   assert.equal(v.summe.tokens, 21_000);
   assert.equal(v.summe.anteilMelious, 29);   // 6 000 von 21 000
   assert.deepEqual([v.summe.workerTokens, v.summe.leadTokens], [4000, 17_000]);
+  assert.deepEqual(v.straenge, [{ conv: 'c1', lead: 17_000, worker: 4000 }]);
   const bau = v.zuege.filter((g: any) => g.phase === 'bau');
   assert.deepEqual(bau.map((g: any) => [g.modell, g.zuege, g.tokens, g.energie, g.kette]).sort(), [['Claude sonnet', 1, 5000, 0, 0], ['Melious glm-5.3', 1, 2000, 450, 1]]);
   const alt: any = await wb().collection('zug_log').findOne({ modell: 'Claude haiku' });
@@ -46,7 +47,7 @@ test('Delegationen: letztes Bild je Kennung, Quoten je Modell und Rolle; ungült
   await M.recordDelegation(u, { ...d, id: 'böse' }, now);
   const v = await M.messungView(u, now + 2000);
   assert.deepEqual(v.delegationen.map((x: any) => [x.id, x.status, x.urteil, x.dauerMin]), [['d-bbbbbb', 'fehlgeschlagen', null, 1], ['d-aaaaaa', 'fertig', 'verworfen', 2]]);
-  assert.deepEqual(v.quoten, [{ modell: 'Melious glm-5.3', rolle: 'bauer', n: 2, fehlgeschlagen: 1, verworfen: 1, abweichung: 1 }]);
+  assert.deepEqual(v.quoten, [{ modell: 'Melious glm-5.3', rolle: 'bauer', n: 2, fehlgeschlagen: 1, verworfen: 1, abweichung: 1, fehlPct: 50, verwPct: 50 }]);
   assert.equal(await wb().collection('delegationen').countDocuments({}), 2);
 });
 

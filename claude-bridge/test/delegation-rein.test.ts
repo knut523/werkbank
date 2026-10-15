@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseAbschluss, checkUebergabe, phaseModell, klasse, pickPruefer, risikoMin, abweichungen, heikleDateien, subWorktree, gitStand, pruefen, run, KAPPUNG } from '../src/delegation.ts';
 import { g, block, UEB, repo } from './delegation-hilfe.ts';
+import { orchestratorBlock } from '../src/tools.ts';
 
 
 test('Abschluss-Block: gültig, fehlt, kein JSON, falsche Typen, Prüfer braucht Urteil', () => {
@@ -44,10 +45,28 @@ test('Prüfer (C6): anderes Modell, mindestens Autor-Klasse; keiner frei → nul
   assert.deepEqual(pickPruefer('Melious glm-5.3', { melious: true, claude: true }), { anbieter: 'claude', modell: 'sonnet' });
   assert.deepEqual(pickPruefer('Claude sonnet', { melious: true, claude: true }), { anbieter: 'melious', modell: 'glm-5.3' });
   assert.equal(pickPruefer('Claude opus', { melious: true, claude: true }), null);
+  // Volle Claude-Kennung aus der ersten Antwort: die Familie zählt (Sonnet prüft nie Sonnet).
+  assert.equal(pickPruefer('Claude claude-sonnet-5-5', { melious: false, claude: true }), null);
+  assert.deepEqual(pickPruefer('Claude claude-haiku-4-5-20251001', { melious: false, claude: true }), { anbieter: 'claude', modell: 'sonnet' });
   assert.equal(pickPruefer('Melious glm-5.3', { melious: true, claude: false }), null);
   assert.equal(risikoMin('niedrig', 'mittel'), 'mittel');
   assert.equal(risikoMin('hoch', 'mittel'), 'hoch');
   assert.equal(risikoMin('quatsch', 'niedrig'), 'niedrig');
+});
+
+test('Abschluss-Block nach einem Code-Block (Pass B, 7/8): Zäune zeilenweise, Lage des Blocks für das Herausschneiden', () => {
+  const t = 'Ich habe das geändert:\n```ts\nconst x = 1;\n```\nFertig.\n```json\n{\n  "abschluss": {"ziel": true, "dateien": ["a.ts"], "pruefungen": [], "annahmen": [], "widersprueche": []}\n}\n```\n';
+  const p = parseAbschluss(t, 'bauer');
+  assert.ok(p.ok, JSON.stringify(p));
+  assert.deepEqual(p.a.dateien, ['a.ts']);
+  assert.equal(t.slice(0, p.span![0]), 'Ich habe das geändert:\n```ts\nconst x = 1;\n```\nFertig.\n');
+});
+
+test('Wächter im Strang (Pass B, 2): Referenzen umbiegen und Zweige erzwingen gesperrt, normales Arbeiten nicht', () => {
+  for (const c of ['git update-ref refs/remotes/origin/dev HEAD', 'git -C /x symbolic-ref HEAD refs/heads/dev', 'git branch -f dev HEAD', 'git branch -D dev', 'git branch --force main x'])
+    assert.ok(orchestratorBlock('Bash', { command: c }), c);
+  for (const c of ['git commit -m x', 'git branch', 'git branch --show-current', 'git checkout -b neu', 'git log --oneline -3'])
+    assert.equal(orchestratorBlock('Bash', { command: c }), null, c);
 });
 
 test('Abweichungen und heikle Pfade', () => {
@@ -82,7 +101,7 @@ test('Unter-Worktree + Prüfbefehle der Brücke (C6): aus dem Integrationszweig,
   assert.deepEqual(st.dirty, []);
   assert.equal(st.commits, 1);
   const p = await pruefen(wt.dir, wt.base, process.env);
-  assert.equal(p.ref, 'dev');
+  assert.match(String(p.ref), /^dev @ [0-9a-f]{10}$/);
   assert.deepEqual(p.ergebnisse.map((r) => [r.name, r.ok]), [['diff-check', true], ['laeuft', true], ['a-da', true]]);
   assert.ok(heikleDateien(st.dateien).length > 0);
   // Ohne Integrationszweig: keine Prüfbefehle, nur diff-check.

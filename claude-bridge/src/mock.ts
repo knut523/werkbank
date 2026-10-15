@@ -144,7 +144,8 @@ export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<
       const flags = wm ? prompt : workerSessions.get(String(options.resume))?.prompt ?? '';
       workerSessions.set(session_id, { rolle, prompt: flags });
       const cwd = String(options.cwd ?? '.');
-      yield text(`(Mock-Worker) Rolle ${rolle}; Modell ${options.model ?? 'Standard'}; Melious ${mel ? 'ja' : 'nein'}; Profil-Werkzeuge ${options.tools ? options.tools.join(',') : 'alle'}; MCP ${Object.keys(options.mcpServers ?? {}).sort().join(',') || '-'}; Strang-Werkzeuge ${options.mcpServers?.werkbank?.env?.WERKBANK_BRIDGE_URL ? 'ja' : 'nein'}; Kompakt ${options.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW ?? '-'}/${options.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE ?? '-'}; Schritte ${options.maxTurns}; cwd ${cwd}. `);
+      yield text(`(Mock-Worker) Rolle ${rolle}; Modell ${options.model ?? 'Standard'}; Melious ${mel ? 'ja' : 'nein'}; Profil-Werkzeuge ${options.tools ? options.tools.join(',') : 'alle'}; MCP ${Object.keys(options.mcpServers ?? {}).sort().join(',') || '-'}; Strang-Werkzeuge ${options.mcpServers?.werkbank?.env?.WERKBANK_BRIDGE_URL ? 'ja' : 'nein'}; Teilagenten ${options.agents && !(options.disallowedTools ?? []).includes('Task') ? 'ja' : 'nein'}; Kompakt ${options.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW ?? '-'}/${options.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE ?? '-'}; Schritte ${options.maxTurns}; cwd ${cwd}. `);
+      if (wm && prompt.includes('Hinweis des Leads:')) yield text(`(Mock-Worker) Hinweis des Leads gesehen: ${prompt.match(/Hinweis des Leads: ([^\n]*)/)?.[1]}. `);
       const lang = Number(flags.match(/MOCK-LANG (\d+)/)?.[1] ?? 0);
       for (let t = 0; t < lang && !signal?.aborted; t += 100) await sleep(100);
       if (signal?.aborted) throw new Error('aborted');

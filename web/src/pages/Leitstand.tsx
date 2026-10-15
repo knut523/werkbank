@@ -237,7 +237,8 @@ function MessungDetails({ m, z }: { m: any; z: (n: number) => string }) {
         <tbody>{m.delegationen.map((x: any) => <tr key={x.id} title={x.aufgabe}><td>{x.id}{x.dauerMin ? ` · ${x.dauerMin} min` : ''}</td><td>{x.rolle} · {x.risiko}</td><td>{x.modell ?? '—'}{x.energie ? ` · ≈ ${z(x.energie)}` : ''}</td>
           <td>{x.pruefungen.length ? x.pruefungen.map((p: any) => `${p.ok ? '✅' : '❌'} ${p.name}`).join(' ') : '—'}{x.abweichungen ? ` · ⚠️ ${x.abweichungen}` : ''}</td><td>{x.prueferUrteil ?? '—'}</td><td>{urteil(x)}</td></tr>)}</tbody>
       </table>}
-      {m.quoten.length > 0 && <div className="tiny muted" data-testid="messung-quoten" style={{ marginTop: 4 }}>30 Tage: {m.quoten.map((q: any) => `${q.modell} als ${q.rolle}: ${q.n}× (fehlgeschlagen ${q.fehlgeschlagen}, verworfen ${q.verworfen}, Abweichung ${q.abweichung})`).join(' · ')}</div>}
+      {(m.straenge ?? []).length > 0 && <div className="tiny muted" data-testid="messung-straenge" style={{ marginTop: 4 }}>Je Strang (24 h, Lead / Worker): {m.straenge.map((s: any) => `${s.conv.slice(0, 8)}… ${z(s.lead)} / ${z(s.worker)}`).join(' · ')}</div>}
+      {m.quoten.length > 0 && <div className="tiny muted" data-testid="messung-quoten" style={{ marginTop: 4 }}>30 Tage: {m.quoten.map((q: any) => `${q.modell} als ${q.rolle}: ${q.n}× (fehlgeschlagen ${q.fehlPct} %, verworfen ${q.verwPct} %, mit Abweichung ${q.abweichung})`).join(' · ')}</div>}
     </details>
   );
 }

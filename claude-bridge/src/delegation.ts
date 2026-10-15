@@ -26,6 +26,7 @@ export const KAPPUNG = {
   workerKompakt: 70,        // … ab Prozent
   leadKompakt: 80,          // Strang-Leads: Kompaktierung ab Prozent
   maxWorker: 3,             // laufende Worker je Strang (Konzept)
+  lohntTokens: 20_000,      // Delegieren lohnt, wenn der Lead sonst mehr Tokens lesen/schreiben würde
   wartenS: 240,             // höchstens so lange wartet delegation_stand
   pruefS: 600, pruefMaxS: 1_800, pruefAusgabe: 2_000,
 };
@@ -36,10 +37,27 @@ export interface Abschluss { ziel: boolean; dateien: string[]; pruefungen: { bef
 
 const strs = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === 'string');
 
-/** Letzter `json`-Block (oder letztes Objekt mit "abschluss") der Antwort; null + Grund, wenn er fehlt oder ungültig ist. */
-export function parseAbschluss(text: string, rolle: Rolle): { ok: true; a: Abschluss } | { ok: false; why: string } {
-  const blocks = [...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)].map((m) => m[1]);
-  const cand = blocks.reverse().find((b) => b.includes('"abschluss"')) ?? (text.lastIndexOf('{"abschluss"') >= 0 ? text.slice(text.lastIndexOf('{"abschluss"')) : null);
+/** Codeblöcke zeilenweise (Zaun ``` mit optionaler Sprache öffnet, nackter ``` schließt) — mit Lage im Text. */
+export function codeBlocks(text: string): { lang: string; body: string; start: number; end: number }[] {
+  const out: { lang: string; body: string; start: number; end: number }[] = [];
+  let pos = 0;
+  let open: { lang: string; start: number; bodyStart: number } | null = null;
+  for (const line of text.split('\n')) {
+    const next = pos + line.length + 1;
+    const f = line.match(/^\s*```\s*([\w-]*)\s*$/);
+    if (f && !open) open = { lang: f[1], start: pos, bodyStart: next };
+    else if (f && open && !f[1]) { out.push({ lang: open.lang, body: text.slice(open.bodyStart, pos), start: open.start, end: Math.min(text.length, next) }); open = null; }
+    pos = next;
+  }
+  return out;
+}
+
+/** Letzter Codeblock mit "abschluss" (oder letztes Objekt mit "abschluss") der Antwort; Grund, wenn er fehlt oder ungültig ist. */
+export function parseAbschluss(text: string, rolle: Rolle): { ok: true; a: Abschluss; span: [number, number] | null } | { ok: false; why: string } {
+  const blk = codeBlocks(text).reverse().find((b) => b.body.includes('"abschluss"'));
+  const raw = text.lastIndexOf('{"abschluss"');
+  const cand = blk?.body ?? (raw >= 0 ? text.slice(raw) : null);
+  const span: [number, number] | null = blk ? [blk.start, blk.end] : raw >= 0 ? [raw, text.length] : null;
   if (!cand) return { ok: false, why: 'Abschluss-Block fehlt' };
   let j: any;
   try { j = JSON.parse(cand.trim()); } catch {
@@ -55,7 +73,7 @@ export function parseAbschluss(text: string, rolle: Rolle): { ok: true; a: Absch
     if (!['ok', 'maengel', 'falsch'].includes(a.urteil)) return { ok: false, why: '„urteil“ muss ok, maengel oder falsch sein' };
     if (!strs(a.befunde)) return { ok: false, why: '„befunde“ muss eine Liste von Texten sein' };
   }
-  return { ok: true, a: { ziel: a.ziel, dateien: a.dateien, pruefungen: a.pruefungen.map((p: any) => ({ befehl: p.befehl, ausgabe: p.ausgabe })), annahmen: a.annahmen, widersprueche: a.widersprueche, ...(rolle === 'pruefer' ? { urteil: a.urteil, befunde: a.befunde } : {}) } };
+  return { ok: true, a: { ziel: a.ziel, dateien: a.dateien, pruefungen: a.pruefungen.map((p: any) => ({ befehl: p.befehl, ausgabe: p.ausgabe })), annahmen: a.annahmen, widersprueche: a.widersprueche, ...(rolle === 'pruefer' ? { urteil: a.urteil, befunde: a.befunde } : {}) }, span };
 }
 
 export const ABSCHLUSS_PFLICHT = (rolle: Rolle) => `Am Ende deiner Antwort steht PFLICHT ein maschinenlesbarer Abschluss-Block als letzter \`json\`-Codeblock, genau so aufgebaut:
@@ -98,10 +116,8 @@ export function phaseModell(phase: Phase, ziel = ''): { modell: 'opus' | 'sonnet
 
 /** Klasse eines Modells: 3 = Opus, 2 = Sonnet / GLM 5.3, 1 = Haiku und Flash-Modelle. Unbekannt = 1. */
 export function klasse(model: string | null | undefined): number {
-  const m = String(model ?? '').toLowerCase().trim().split(/\s+/).pop()!.replace(/:eco$/, '');
-  if (/opus/.test(m)) return 3;
-  if (/sonnet/.test(m) || m === 'glm-5.3') return 2;
-  return 1;
+  const m = familie(model);
+  return m === 'opus' ? 3 : m === 'sonnet' || m === 'glm-5.3' ? 2 : 1;
 }
 
 export interface Kandidat { anbieter: 'melious' | 'claude'; modell: string }
@@ -110,9 +126,15 @@ export const PRUEFER_KANDIDATEN: Kandidat[] = [{ anbieter: 'melious', modell: 'g
 
 /** Prüfer: Modell ≠ Autor, Klasse ≥ Autor, Ressource frei. null = keiner frei (kein stiller Ersatz). */
 export function pickPruefer(autor: string | null | undefined, frei: { melious: boolean; claude: boolean }): Kandidat | null {
-  // Modellname = letztes Wort („Melious glm-5.3-flash“ → glm-5.3-flash); genauer Vergleich (glm-5.3 ≠ glm-5.3-flash).
-  const a = String(autor ?? '').toLowerCase().trim().split(/\s+/).pop()!.replace(/:eco$/, '');
+  // Modellname = letztes Wort („Melious glm-5.3-flash“ → glm-5.3-flash); Claude als Familie („claude-sonnet-5-5“ = sonnet),
+  // sonst genauer Vergleich (glm-5.3 ≠ glm-5.3-flash).
+  const a = familie(autor);
   return PRUEFER_KANDIDATEN.find((k) => frei[k.anbieter] && klasse(k.modell) >= klasse(a) && k.modell !== a) ?? null;
+}
+
+export function familie(model: string | null | undefined): string {
+  const m = String(model ?? '').toLowerCase().trim().split(/\s+/).pop()!.replace(/:eco$/, '');
+  return /opus|sonnet|haiku/.exec(m)?.[0] ?? m;
 }
 
 export const RISIKO_RANG = { niedrig: 0, mittel: 1, hoch: 2 } as const;
@@ -146,7 +168,7 @@ export async function isGitDir(dir: string): Promise<boolean> {
 }
 
 /** Unter-Worktree vom aktuellen HEAD des Strangs, neben dem Strang-Ordner; node_modules des Strangs verlinkt. */
-export async function subWorktree(strandDir: string, id: string): Promise<{ dir: string; branch: string; base: string } | { error: string }> {
+export async function subWorktree(strandDir: string, id: string): Promise<{ dir: string; branch: string; base: string; top: string; fest: { ref: string; sha: string } | null } | { error: string }> {
   const top = (await git(strandDir, 'rev-parse', '--show-toplevel')).out.trim();
   const base = (await git(strandDir, 'rev-parse', 'HEAD')).out.trim();
   if (!top || !/^[0-9a-f]{40}$/.test(base)) return { error: 'kein Git-Arbeitsordner mit Commit' };
@@ -167,7 +189,7 @@ export async function subWorktree(strandDir: string, id: string): Promise<{ dir:
     if (!/^node_modules$/m.test(cur)) appendFileSync(ex, `${cur && !cur.endsWith('\n') ? '\n' : ''}# Werkbank: verlinkte node_modules in Unter-Worktrees (Plan 165)\nnode_modules\n`);
   } catch { /* egal */ }
   for (const e of safeList(top)) if (e !== 'node_modules' && !e.startsWith('.') && isDir(join(top, e))) link(e);
-  return { dir, branch, base };
+  return { dir, branch, base, top, fest: await integrationSha(top) };
 }
 const safeList = (d: string) => { try { return readdirSync(d); } catch { return []; } };
 const isDir = (p: string) => { try { return statSync(p).isDirectory(); } catch { return false; } };
@@ -201,11 +223,19 @@ export async function integrationRef(dir: string): Promise<string | null> {
   return null;
 }
 
-/** Prüfbefehle aus `.werkbank/pruefungen.json` des Integrationszweigs. Befehl = Argument-Liste (keine Shell). */
-export async function pruefBefehle(dir: string): Promise<{ ref: string; list: PruefBefehl[] } | null> {
+/** Integrationszweig als feste Commit-Kennung (beim Anlegen des Unter-Worktrees gemerkt: ein Worker kann sie nicht umbiegen). */
+export async function integrationSha(dir: string): Promise<{ ref: string; sha: string } | null> {
   const ref = await integrationRef(dir);
-  if (!ref) return null;
-  const r = await git(dir, 'show', `${ref}:.werkbank/pruefungen.json`);
+  const sha = ref ? (await git(dir, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`)).out.trim() : '';
+  return ref && /^[0-9a-f]{40}$/.test(sha) ? { ref, sha } : null;
+}
+
+/** Prüfbefehle aus `.werkbank/pruefungen.json` des Integrationszweigs (fest gemerkt oder jetzt aufgelöst). Befehl = Argument-Liste. */
+export async function pruefBefehle(dir: string, fest?: { ref: string; sha: string } | null): Promise<{ ref: string; list: PruefBefehl[] } | null> {
+  const ir = fest ?? await integrationSha(dir);
+  if (!ir) return null;
+  const ref = `${ir.ref} @ ${ir.sha.slice(0, 10)}`;
+  const r = await git(dir, 'show', `${ir.sha}:.werkbank/pruefungen.json`);
   if (r.code !== 0) return null;
   try {
     const j = JSON.parse(r.out);
@@ -218,9 +248,10 @@ export async function pruefBefehle(dir: string): Promise<{ ref: string; list: Pr
 
 export interface PruefErgebnis { name: string; befehl: string; ok: boolean; code: number; ausgabe: string; ms: number }
 /** Führt die Prüfbefehle im Unter-Worktree aus (Umgebung ohne Geheimnisse; Zeitlimit je Befehl). Plus `git diff --check`. */
-export async function pruefen(dir: string, base: string, env: Record<string, string | undefined>): Promise<{ eingerichtet: boolean; ref: string | null; ergebnisse: PruefErgebnis[] }> {
-  const cfg = await pruefBefehle(dir);
+export async function pruefen(dir: string, base: string, env: Record<string, string | undefined>, o: { fest?: { ref: string; sha: string } | null; maxMs?: number } = {}): Promise<{ eingerichtet: boolean; ref: string | null; ergebnisse: PruefErgebnis[] }> {
+  const cfg = await pruefBefehle(dir, o.fest);
   const list = cfg?.list;
+  const ende = Date.now() + (o.maxMs ?? Infinity);
   const out: PruefErgebnis[] = [];
   const t0 = Date.now();
   const check = await git(dir, 'diff', '--check', `${base}..HEAD`);
@@ -230,7 +261,9 @@ export async function pruefen(dir: string, base: string, env: Record<string, str
     const cwd = p.ordner ? join(dir, p.ordner) : dir;
     const befehl = p.befehl.join(' ');
     if (!existsSync(cwd)) { out.push({ name: p.name, befehl, ok: false, code: 2, ausgabe: `Ordner ${p.ordner} fehlt`, ms: 0 }); continue; }
-    const r = await run(p.befehl[0], p.befehl.slice(1), { cwd, env, timeoutMs: Math.min(KAPPUNG.pruefMaxS, Math.max(10, p.zeitS ?? KAPPUNG.pruefS)) * 1000, max: KAPPUNG.pruefAusgabe });
+    const rest = ende - Date.now();
+    if (rest < 10_000) { out.push({ name: p.name, befehl, ok: false, code: 124, ausgabe: 'nicht gelaufen — Gesamtzeit der Prüfungen aufgebraucht', ms: 0 }); continue; }
+    const r = await run(p.befehl[0], p.befehl.slice(1), { cwd, env, timeoutMs: Math.min(rest, Math.min(KAPPUNG.pruefMaxS, Math.max(10, p.zeitS ?? KAPPUNG.pruefS)) * 1000), max: KAPPUNG.pruefAusgabe });
     out.push({ name: p.name, befehl, ok: r.code === 0, code: r.code, ausgabe: r.out.trim(), ms: Date.now() - t });
   }
   return { eingerichtet: !!list?.length, ref: cfg?.ref ?? null, ergebnisse: out };
