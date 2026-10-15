@@ -7,7 +7,7 @@
 //   auto    – nur im Auto-Modus (mit Arbeitsordner): Bash und Edits im eigenen Arbeitsordner entscheidet der
 //             Klassifikator des SDK (Plan 71 P1, Knut 06.10.2026). Ohne Arbeitsordner gibt es diese Klasse nie.
 
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { resolve, dirname, sep } from 'node:path';
 
 export type ToolClass = 'read' | 'confirm' | 'blocked' | 'auto';
@@ -86,6 +86,7 @@ const within = (p: string, dir: string) => p === dir || p.startsWith(dir.endsWit
 
 export interface ClassifyContext {
   workDir?: string;   // Arbeitsordner der Person — nur im Auto-Modus gesetzt
+  guard?: PathGuard;  // S0: Ordnergrenzen je Person (alle Modi), siehe pathGuardProblem
   // Reichweite des Auto-Modus (BRIDGE_AUTO_SCOPE). „voll“ (Knut, 07.10.2026: „voll autonom wie hier“): auch Vault,
   // Repos, Gedächtnis und andere MCP-Werkzeuge entscheidet der Klassifikator. Rückfrage bleibt für Jira- und
   // GitHub-Schreiben und Geheimnisse; die Sperren bleiben. Ohne Angabe: nur der Arbeitsordner (Stand 06.10.2026).
@@ -110,11 +111,77 @@ function sensitiveTarget(target: string): boolean {
   return /(^|\/)(\.runtime|\.claude|\.ssh)(\/|$)|(^|\/)\.config\/vw(\/|$)|(^|\/)\.env[^/]*$/.test(target);
 }
 
+// ---------- S0: Ordnergrenzen für Agenten (Plan 126, Knut 11.10.2026) ----------
+// Bisher galten Zugriffsregeln nur in der Web-Oberfläche: Read/Glob/Grep ohne Pfadprüfung, alles läuft als ein
+// Linux-Nutzer. Jetzt: der Arbeitsordner einer ANDEREN Person, fremde Claude-Konfigurationen und der Dateispeicher der
+// Werkbank brauchen ein „ja“. Personen mit eigener Konfiguration (strict, also alle außer dem Pilotkonto) lesen ohne
+// Rückfrage nur den eigenen Arbeitsordner (scratch, Chat-Ordner) und den Vault. Ehrliche Grenze: Bash kann über Umwege
+// (cd ..; cat *) trotzdem an andere Pfade — das schließt erst eine Betriebssystem-Sandbox (nicht vorhanden).
+export interface PathGuard {
+  scratchRoot: string;     // …/.runtime/bridge/scratch
+  ownScratch: string;      // …/scratch/<person>
+  homesRoot: string;       // …/.runtime/claude (Konfiguration je Person)
+  ownHome: string | null;  // eigene Konfiguration (null = geteilte des VM-Nutzers)
+  store: string;           // …/.runtime/werkbank (Dateien aller Personen)
+  strict: boolean;         // nur eigene Ordner + Vault ohne Rückfrage
+  allowed: string[];       // eigene Ordner (scratch, Arbeitsordner dieses Chats)
+}
+
+const GUARD_PATH_TOOLS: Record<string, string[]> = {
+  Read: ['file_path'], NotebookRead: ['notebook_path'], Glob: ['path'], Grep: ['path'], LS: ['path'],
+  Write: ['file_path'], Edit: ['file_path'], MultiEdit: ['file_path'], NotebookEdit: ['notebook_path'],
+};
+export const OUTSIDE = 'liegt außerhalb deiner Ordner';
+
+function pathProblem(target: string, g: PathGuard): string | null {
+  const t = realish(target);
+  const R = (p: string) => realish(resolve(p));
+  if (within(t, R(g.scratchRoot)) && !within(t, R(g.ownScratch))) return `${OUTSIDE} (Arbeitsordner einer anderen Person)`;
+  if (within(t, R(g.homesRoot)) && !(g.ownHome && within(t, R(g.ownHome)))) return `${OUTSIDE} (Claude-Konfiguration einer anderen Person)`;
+  if (within(t, R(g.store))) return `${OUTSIDE} (Dateispeicher der Werkbank — Dateien aller Personen)`;
+  if (g.strict && ![...g.allowed, g.ownScratch, VAULT_DIR, ...(g.ownHome ? [g.ownHome] : [])].some((a) => within(t, R(a)))) return OUTSIDE;
+  return null;
+}
+
+/** S0-Grenze für Datei-Werkzeuge: Grund für eine Rückfrage oder null. Ohne Pfad (Glob/Grep im Arbeitsordner) frei. */
+export function pathGuardProblem(tool: string, input: Record<string, unknown>, ctx: ClassifyContext): string | null {
+  const g = ctx.guard;
+  if (!g) return null;
+  const keys = GUARD_PATH_TOOLS[tool];
+  if (!keys) return null;
+  const base = ctx.workDir ?? g.allowed[0] ?? g.ownScratch;
+  for (const k of keys) {
+    const v = input[k];
+    if (typeof v !== 'string' || !v) continue;
+    const p = pathProblem(resolve(base, v.replace(/^~(?=\/|$)/, process.env.HOME ?? '~')), g);
+    if (p) return p;
+  }
+  return null;
+}
+
+/** S0 für Bash (nur Muster, keine Sandbox): fremde scratch-Ordner, Dateispeicher; strict zusätzlich absolute Pfade
+ *  unter /home bzw. ~ außerhalb der eigenen Ordner. */
+export function bashGuardProblem(cmd: string, g: PathGuard | undefined): string | null {
+  if (!g) return null;
+  for (const m of cmd.matchAll(/bridge\/scratch\/([\w.-]+)/g)) if (!g.ownScratch.endsWith('/' + m[1])) return `${OUTSIDE} (Arbeitsordner einer anderen Person)`;
+  if (/bridge\/scratch\/(\*|\s|$|["'])/.test(cmd) || /bridge\/scratch\/?\s*$/.test(cmd)) return `${OUTSIDE} (Arbeitsordner aller Personen)`;
+  if (/\.runtime\/werkbank\b/.test(cmd)) return `${OUTSIDE} (Dateispeicher der Werkbank)`;
+  if (g.strict) {
+    for (const m of cmd.matchAll(/(?:^|[\s'"=:(<>])((?:\/home\/|~\/|\$HOME\/)[^\s'";|&)<>]*|~(?=[\s'";|&]|$))/g)) {
+      const raw = m[1].replace(/^(~|\$HOME)(?=\/|$)/, process.env.HOME ?? '/home');
+      if (pathProblem(resolve(raw), g)) return OUTSIDE;
+    }
+  }
+  return null;
+}
+
 export function classify(tool: string, input: Record<string, unknown>, ctx: ClassifyContext = {}): { cls: ToolClass; why?: string } {
   if (tool === 'Bash') {
     const cmd = String(input.command ?? '');
     for (const [re, why] of BASH_BLOCKED) if (re.test(cmd)) return { cls: 'blocked', why };
     for (const [re, why] of BASH_GITHUB_WRITE) if (re.test(cmd)) return { cls: 'confirm', why };
+    const gb = bashGuardProblem(cmd, ctx.guard);
+    if (gb) return { cls: 'confirm', why: gb };
     if (ctx.workDir && ctx.scope === 'voll') {
       if (BASH_KEEP_CONFIRM_VOLL.some((re) => re.test(cmd)) || bashTouchesJiraWrite(cmd)) return { cls: 'confirm' };
       return { cls: 'auto' };
@@ -122,6 +189,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     if (ctx.workDir && !cmd.includes(VAULT_DIR) && !BASH_KEEP_CONFIRM.some((re) => re.test(cmd))) return { cls: 'auto' };
     return { cls: 'confirm' };
   }
+  const gp = pathGuardProblem(tool, input, ctx);
+  if (gp) return { cls: 'confirm', why: gp };
   if (FILE_TOOLS.has(tool) && ctx.workDir) {
     const f = String(input.file_path ?? input.notebook_path ?? '');
     if (!f) return { cls: 'confirm' };
@@ -137,8 +206,10 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     const [, server, name = ''] = tool.split('__');
     // Eigene Werkbank-Werkzeuge: vault-search nur lesend; "später" ändert nur Werkbank-Zustand.
     if (server === 'vault-search') return { cls: 'read' };
-    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list')) return { cls: 'read' };
-    if (server === 'werkbank' && name === 'jira_update') return { cls: 'confirm' };
+    // review_ready ändert nur Werkbank-Zustand (Fertig-Marke am eigenen Lauf) → ohne Rückfrage.
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready')) return { cls: 'read' };
+    // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
+    if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
     // forge-review (Platzhalter): Review rechnen/lesen frei; nach GitHub posten ist wie alles GitHub-Schreiben
     // im Pilot gesperrt (Ergebnis bleibt Entwurf), mergen nie.
     if (server === 'forge-review') return /merge|post|publish|submit|comment|approve|request_changes/i.test(name) ? { cls: 'blocked', why: 'GitHub schreiben (forge-Ergebnis bleibt Entwurf)' } : { cls: 'read' };
@@ -156,9 +227,77 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
   return { cls: 'confirm' };
 }
 
+// ---------- Orchestrator-Stränge (docs/plan-orchestrator-agents.md, Knut 09.10.2026) ----------
+// Ein Strang ist ein Chat, den die Haupt-Sitzung über den internen Kanal gestartet hat. Dort gilt zusätzlich, vor allen
+// Klassen und auch nach einem „ja“: kein GitHub-Schreiben, kein Jira-Schreiben, keine Änderung an Git-Konfiguration,
+// Hooks, Claude-Einstellungen oder .env. Muster sind keine Sandbox (siehe Plan, Council NOTES); die zweite Schicht ist
+// die Git-Umgebung ohne Zugangsdaten (sessions.ts, orchGitEnv).
+const ORCH_BASH_BLOCK: [RegExp, string][] = [
+  [/\bgit(?:\s+-[cC]\s+\S+|\s+--?[\w-]+(?:=\S+)?)*\s+(push|send-pack)\b/, 'git push'],
+  [/\balias\.[\w-]+/, 'Git-Alias (könnte pushen)'],
+  [/\bgit-(send-pack|receive-pack)\b/, 'git push'],
+  [/\bcore\.hooksPath\b|\.git\/(hooks|config)\b/, 'Git-Hooks/-Konfiguration'],
+  [/\bgh\s+(pr|issue|release|repo|label|secret|variable|workflow|gist|api)\b(?!\s+(view|list|diff|status|checks)\b)/, 'GitHub-CLI (nur lesen erlaubt: view/list/diff/status/checks)'],
+  [/api\.github\.com|github\.com\/[^\s]*\.git\b/, 'GitHub direkt ansprechen'],
+  [/(atlassian\.net|api\.atlassian\.com)/i, 'Atlassian/Jira direkt ansprechen'],
+];
+const ORCH_FILE_BLOCK = /(^|\/)(\.git|\.claude)(\/|$)|(^|\/)\.env[^/]*$/;
+
+/** Grund, warum ein Aufruf in einem Orchestrator-Strang gesperrt ist — oder null. */
+export function orchestratorBlock(tool: string, input: Record<string, unknown>): string | null {
+  if (tool === 'Bash') {
+    const cmd = String(input.command ?? '');
+    for (const [re, why] of [...BASH_BLOCKED, ...BASH_GITHUB_WRITE, ...ORCH_BASH_BLOCK]) if (re.test(cmd)) return why;
+    // git config: nur lesen (--get…/--list/-l); jede schreibende Form ist gesperrt.
+    for (const m of cmd.matchAll(/\bgit(?:\s+-[cC]\s+\S+|\s+--?[\w-]+(?:=\S+)?)*\s+config\b([^|;&\n]*)/g)) if (!/\s(--get(-all|-regexp)?|--list|-l)\b/.test(m[1])) return 'Git-Konfiguration ändern';
+    return null;
+  }
+  if (FILE_TOOLS.has(tool)) {
+    const f = String(input.file_path ?? input.notebook_path ?? '');
+    return ORCH_FILE_BLOCK.test(f) ? 'Git-/Claude-Konfiguration oder .env ändern' : null;
+  }
+  if (tool.startsWith('mcp__')) {
+    const [, server, name = ''] = tool.split('__');
+    if (server === 'werkbank' && /^jira_/.test(name)) return 'Jira schreiben';
+    if (server === 'atlassian' && !MCP_READ.test(name) && name !== 'authenticate' && name !== 'complete_authentication') return 'Jira/Confluence schreiben';
+    if (/github/i.test(server) && !MCP_READ.test(name)) return 'GitHub schreiben';
+    if (server === 'forge-review' && /merge|post|publish|submit|comment|approve|request_changes/i.test(name)) return 'GitHub schreiben';
+  }
+  return null;
+}
+
+/** Erlaubte Wurzeln für Arbeitsordner von Strängen (WERKBANK_ORCH_ROOTS, Komma-getrennt; Vorgabe $HOME/work). */
+export const orchRoots = () => (process.env.WERKBANK_ORCH_ROOTS || `${process.env.HOME ?? '/nonexistent'}/work`).split(',').map((x) => x.trim()).filter(Boolean);
+
+/** Prüft einen Arbeitsordner für einen Strang (echter Pfad). Fehlertext oder null; bei Erfolg der echte Pfad in `real`. */
+export function orchDirProblem(dir: string): { problem: string | null; real?: string } {
+  if (!dir || !dir.startsWith('/')) return { problem: 'Arbeitsordner muss ein absoluter Pfad sein.' };
+  let real: string;
+  try { real = realpathSync(dir); } catch { return { problem: 'Arbeitsordner gibt es nicht.' }; }
+  try { if (!statSync(real).isDirectory()) return { problem: 'Arbeitsordner ist kein Verzeichnis.' }; } catch { return { problem: 'Arbeitsordner nicht lesbar.' }; }
+  const roots = orchRoots().map((r) => { try { return realpathSync(r); } catch { return resolve(r); } });
+  if (!roots.some((r) => real !== r && within(real, r))) return { problem: `Arbeitsordner muss unterhalb von ${orchRoots().join(', ')} liegen (nicht die Wurzel selbst).` };
+  let vault = resolve(VAULT_DIR); try { vault = realpathSync(VAULT_DIR); } catch { /* kein Vault */ }
+  if (within(real, vault)) return { problem: 'Der Vault ist kein Arbeitsordner für Stränge.' };
+  if (/(^|\/)(\.runtime[^/]*|\.git|\.claude|\.ssh)(\/|$)/.test(real)) return { problem: 'Arbeitsordner darf nicht in .runtime, .git, .claude oder .ssh liegen.' };
+  return { problem: null, real };
+}
+
 function short(s: unknown, n = 90): string {
   const t = String(s ?? '').replace(/\s+/g, ' ').trim();
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
+}
+
+/** Was an einem Ticket geändert wird (Status, Fälligkeit, Kommentar) — für die Rückfrage. */
+// Was geschrieben wird, steht hier vollständig (Kommentar bis 1500 Zeichen, mehr lehnt die Werkbank ab); Done und
+// „Datum entfernen“ sind markiert, weil sie in einer langen Liste leicht durchrutschen (Council 09.10.2026).
+function jiraChangeParts(c: Record<string, unknown>): string[] {
+  const st = String(c.status ?? '');
+  return [
+    st ? `${/^(done|erledigt|closed|geschlossen)$/i.test(st.trim()) ? '⚠️ ' : ''}Status → **${short(st, 60)}**` : '',
+    c.due !== undefined && c.due !== null ? (c.due ? `Fällig → **${short(c.due, 20)}**` : '⚠️ Fällig → **ohne Datum** (Datum entfernen)') : '',
+    c.comment ? `Kommentar: „${short(c.comment, 1500)}“` : '',
+  ].filter(Boolean);
 }
 
 function clip(s: unknown, n: number): string {
@@ -199,7 +338,13 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
     const [, server, name] = tool.split('__');
     const key = input.issueIdOrKey ?? input.issueKey ?? input.jql ?? input.query ?? input.cql ?? '';
     if (server === 'vault-search') return `📚 Vault-Suche: ${name}${input.query || input.note || input.folder ? ` – ${short(input.query ?? input.note ?? input.folder, 70)}` : ''}`;
-    if (server === 'werkbank') return name === 'jira_update' ? `🎫 Jira nachgezogen: ${input.key}` : name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
+    if (server === 'werkbank') {
+      if (name === 'jira_update') return `🎫 Jira nachgezogen: ${input.key}`;
+      if (name === 'jira_update_many') return `🎫 Jira nachgezogen: ${Array.isArray(input.changes) ? input.changes.length : 0} Tickets`;
+      if (name === 'agent_start') return `🤖 Agent-Chat gestartet: ${input.key}`;
+      if (name === 'review_ready') return '📬 Bereit zum Review gemeldet';
+      return name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
+    }
     const icon = server === 'atlassian' ? '🎫 Jira' : server === 'compartment' ? '🧠 Gedächtnis' : `🔌 ${server}`;
     return `${icon}: ${name}${key ? ` – ${short(key, 70)}` : ''}`;
   }
@@ -271,12 +416,17 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
       break;
     default:
       if (tool === 'mcp__werkbank__jira_update') {
-        const parts = [
-          input.status ? `Status → **${short(input.status, 30)}**` : '',
-          input.due !== undefined && input.due !== null ? `Fällig → **${input.due || 'ohne Datum'}**` : '',
-          input.comment ? `Kommentar: „${short(input.comment, 300)}“` : '',
-        ].filter(Boolean);
-        return `${neutralizeAnswerAnchors('', `**Soll ich ${input.key} in Jira nachziehen?** (mit deinem Jira-Zugang)\n\n${parts.map((p) => '- ' + p).join('\n')}`)}\n\n${ANSWER_BUTTONS}`;
+        const head = `**${input.key}**${input.summary ? ` „${short(input.summary, 80)}“` : ''}`;
+        const parts = [...jiraChangeParts(input), input.reason ? `Grund: ${short(input.reason, 200)}` : ''].filter(Boolean);
+        return `${neutralizeAnswerAnchors('', `**Soll ich ${head} in Jira nachziehen?** (mit deinem Jira-Zugang)\n\n${input.was ? `Bisher (laut Chat): ${short(input.was, 120)}\n\n` : ''}${parts.map((p) => '- ' + p).join('\n')}`)}\n\n${ANSWER_BUTTONS}`;
+      }
+      if (tool === 'mcp__werkbank__jira_update_many') {
+        const cs = (Array.isArray(input.changes) ? input.changes : []) as Record<string, unknown>[];
+        const rows = cs.map((c) => `- **${short(c.key, 20)}**${c.summary ? ` „${short(c.summary, 60)}“` : ''}${c.was ? ` (bisher laut Chat: ${short(c.was, 60)})` : ''}: ${jiraChangeParts(c).join(' · ') || '—'}${c.reason ? ` — ${short(c.reason, 120)}` : ''}`);
+        return `${neutralizeAnswerAnchors('', `**Soll ich diese ${cs.length} Tickets in Jira nachziehen?** (mit deinem Jira-Zugang, der Reihe nach)\n\n${rows.join('\n')}`)}\n\n${ANSWER_BUTTONS}`;
+      }
+      if (tool === 'mcp__werkbank__agent_start') {
+        return `${neutralizeAnswerAnchors('', `**Soll ich für ${input.key} einen neuen Chat mit einem Agenten starten?** Er arbeitet das Ticket vor und fragt vor jedem Schreiben nach.${input.note ? `\n\nAuftrag: „${short(input.note, 300)}“` : ''}`)}\n\n${ANSWER_BUTTONS}`;
       }
       if (tool.startsWith('mcp__atlassian__')) {
         what = `in Jira **${tool.split('__')[2]}** ausführen`;
@@ -290,6 +440,13 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
   }
   // Was aus dem Werkzeugaufruf stammt (Befehl, Beschreibung, Jira-Text), schreibt das Modell: dort keine Knöpfe.
   return `${neutralizeAnswerAnchors('', `**Soll ich ${what}?**\n\n${detail}`)}\n\n${ANSWER_BUTTONS}`;
+}
+
+/** Die Rückfrage als ein Satz (ohne Markdown) für die Review-Karte der Werkbank: „Soll ich … ?“, bei Bash mit Befehl. */
+export function questionText(tool: string, input: Record<string, unknown>): string {
+  const m = confirmQuestion(tool, input).match(/\*\*(Soll ich [\s\S]*?\?)\*\*/);
+  const q = (m?.[1] ?? statusLine(tool, input)).replace(/\*\*/g, '').replace(/​/g, '');
+  return tool === 'Bash' ? `${q} ${short(input.command, 200)}` : q;
 }
 
 const LANGS: Record<string, string> = { md: 'markdown', ts: 'typescript', tsx: 'tsx', js: 'javascript', mjs: 'javascript', py: 'python', json: 'json', sh: 'bash', yaml: 'yaml', yml: 'yaml', sql: 'sql', html: 'html', css: 'css' };

@@ -1,5 +1,5 @@
 ---
-status: Council 08.10.2026 — HOLD (0,74); wartet auf Knuts Entscheidungen E1–E5
+status: Council 08.10.2026 — HOLD (0,74); E1–E5 entschieden (Knut, 09.10.2026) — Schnitt 1 in Arbeit
 quelle: Knut, 08.10.2026: „make it a real good tool to use, also make it so I can take an item from the roadmap, make it a Jira task — and then in the same go assign an agent to complete so I just need to review“ · „Werkbank im Produkt-View immer noch nicht aufgeräumt genug … in den einzelnen Buckets wäre es gut zu wissen, was done ist und was als nächstes kommt“
 ---
 
@@ -139,3 +139,5 @@ mächtig; die Sperren 1–4 und die getrennte, sichtbare Fortsetzung bei Fehlern
 - **E4 Workstream.** Standard PM-70 (Produkt OLAF), im Dialog änderbar. Empfehlung: **so**.
 - **E5 Reihenfolge.** Erst „Heute“ + eine Liste „bei mir“ + Buckets + Review-Schlange (B, C, Bedingung 11), direkt
   danach „Agent ansetzen“ (A) — oder alles in einem Plan. Empfehlung: **ein Plan, zwei PR-Schnitte in dieser Reihenfolge**.
+
+**Entschieden (Knut, 09.10.2026): alle fünf wie empfohlen** — E1 (a) lokaler Branch + Rückfrage „pushen + Draft-PR?“ in der Review-Karte · E2 Owner Knut, „Passt“ kommentiert nur · E3 Fälligkeit Sprintende · E4 Standard PM-70 · E5 ein Plan, zwei PR-Schnitte: zuerst B + C + Bedingung 11, danach A.
