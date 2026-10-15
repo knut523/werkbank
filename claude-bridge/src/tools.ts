@@ -174,6 +174,25 @@ export function pathGuardProblem(tool: string, input: Record<string, unknown>, c
   return null;
 }
 
+// Rein lesende Bash-Befehle (D7 b, Profil „leser“): jedes Glied einer Kette (|, &&, ||, ;) beginnt mit einem Befehl aus der
+// Liste; keine Umleitung in Dateien, keine Befehlsersetzung, keine Variablen-Zuweisung davor. find ohne -exec/-delete/-fprint,
+// git nur mit lesenden Unterbefehlen. Alles andere bleibt beim normalen Weg (Rückfrage bzw. im Strang abgelehnt).
+const READ_BASH = new Set(['rg', 'grep', 'egrep', 'fgrep', 'ls', 'cat', 'head', 'tail', 'wc', 'find', 'tree', 'stat', 'file', 'du', 'pwd', 'echo', 'sort', 'uniq', 'cut', 'tr', 'jq', 'basename', 'dirname', 'realpath', 'diff', 'nl', 'column']);
+const READ_GIT = new Set(['log', 'show', 'diff', 'status', 'blame', 'ls-files', 'grep', 'rev-parse', 'describe', 'shortlog', 'ls-tree', 'cat-file']);
+export function readOnlyBash(cmd: string): boolean {
+  const c = cmd.replace(/\s+2>\s*\/dev\/null/g, ' ').replace(/\s+2>&1/g, ' ').trim();
+  if (!c || c.length > 2000 || /[`<>]|\$\(|\$\{|\\\n/.test(c)) return false;
+  for (const seg of c.split(/\|\||&&|[|;]/)) {
+    const w = seg.trim().split(/\s+/);
+    if (!w[0] || /=/.test(w[0])) return false;
+    if (w[0] === 'git') { if (!READ_GIT.has(w[1] ?? '') || w.some((x) => /^--(output|exec)/.test(x))) return false; continue; }
+    if (!READ_BASH.has(w[0])) return false;
+    if (w[0] === 'find' && w.some((x) => /^-(exec|execdir|delete|ok|okdir|fprint|fprintf|fls)$/.test(x))) return false;
+    if ((w[0] === 'sort' || w[0] === 'tree') && w.some((x) => /^-o|^--output/.test(x))) return false;
+  }
+  return true;
+}
+
 /** S0 für Bash (nur Muster, keine Sandbox): fremde scratch-Ordner, Dateispeicher; strict zusätzlich absolute Pfade
  *  unter /home bzw. ~ außerhalb der eigenen Ordner. */
 export function bashGuardProblem(cmd: string, g: PathGuard | undefined): string | null {
@@ -223,7 +242,7 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     if (server === 'vault-search') return { cls: 'read' };
     // review_ready ändert nur Werkbank-Zustand (Fertig-Marke am eigenen Lauf) → ohne Rückfrage.
     // hauptchat_melden (Plan 154, S4): Meldung an den Hauptchat — ändert nur Werkbank-Zustand, gedeckelt in der Werkbank.
-    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden')) return { cls: 'read' };
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge')) return { cls: 'read' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
     if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
     // Orchestrator-Werkzeuge (Plan 132, S3): nur im Leitstand. Lesen und Rückfragen an Knut frei; Stränge starten, Nachrichten

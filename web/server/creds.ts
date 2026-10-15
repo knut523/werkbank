@@ -17,6 +17,7 @@ import { cfg } from './config.ts';
 import { wb, lc } from './db.ts';
 import { seal, unseal, librechatEncrypt, librechatDecrypt } from './crypto.ts';
 import type { User } from './auth.ts';
+import { meliousForBridge } from './melious.ts';
 
 export const CLAUDE_ENDPOINT = 'Claude Code';
 
@@ -96,6 +97,9 @@ export async function claudeAccountsForBridge(u: User): Promise<{ id: string; la
     const a = byId.get(id)!;
     try { out.push({ id, label: a.label, token: unseal(a.token) }); } catch { /* Schlüssel gewechselt: Konto übergehen */ }
   }
+  // Melious (Plan 162): nur wenn erlaubt; die Brücke nimmt es nur mit Chat-Schalter bzw. als eingeschalteten letzten Ausweg.
+  const mel = await meliousForBridge(u).catch(() => null);
+  if (mel) out.push(mel as any);
   return out;
 }
 

@@ -1,0 +1,97 @@
+// Plan 162 (Melious als Test-Konto): Bilder und Browser-Prüfungen gegen eine LAUFENDE isolierte Instanz (nie Live), deren Brücke
+// mit MELIOUS_BASE_URL auf einen lokalen Melious-Stub zeigt. Legt einen Platzhalter-Claude-Token und einen Stub-Melious-Schlüssel an,
+// schaltet Melious ein, schickt im Chat `/melious an`, einen kurzen Zug und einen Werkzeug-Zug; danach Einrichtung und Kachel.
+// Am Ende wird der Stub-Schlüssel wieder entfernt und der Stub-Verbrauch gelöscht (Knut trägt den echten Schlüssel selbst ein).
+//
+//   E2E_LC=http://127.0.0.1:3980 E2E_WEB=http://127.0.0.1:3970 E2E_MONGO=mongodb://127.0.0.1:27980 E2E_EMAIL=… E2E_PW_FILE=… \
+//     node e2e/melious-shots.mjs <Bildordner>
+import { chromium } from 'playwright';
+import { MongoClient } from 'mongodb';
+import { readFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+const LC = process.env.E2E_LC || 'http://127.0.0.1:3980';
+const WEB = process.env.E2E_WEB || 'http://127.0.0.1:3970';
+if (/:(3080|3180|3070|3090)\b/.test(LC + WEB)) { console.error('Nicht gegen Live.'); process.exit(2); }
+const OUT = process.argv[2] || '/tmp/melious-shots';
+mkdirSync(OUT, { recursive: true });
+const EMAIL = process.env.E2E_EMAIL, PW = readFileSync(process.env.E2E_PW_FILE, 'utf8').trim();
+const results = [];
+const check = (name, ok, info = '') => { results.push([name, ok]); console.log(`${ok ? '✓' : '✗'} ${name}${info ? ' — ' + info : ''}`); };
+const shot = (p, n) => p.screenshot({ path: join(OUT, n + '.png') });
+const mongo = await MongoClient.connect(process.env.E2E_MONGO || 'mongodb://127.0.0.1:27980');
+const me = await mongo.db('LibreChat').collection('users').findOne({ email: EMAIL });
+const browser = await chromium.launch();
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'de-DE' });
+  const p = await ctx.newPage();
+  // Anmelden im Chat; die Workspace-Seite im Rahmen teilt die Anmeldung. Dort: Platzhalter-Claude-Token (LibreChat verlangt
+  // einen Schlüssel), Stub-Melious-Schlüssel, erlauben — über die API im Rahmen (Cookie und x-werkbank wie die Oberfläche).
+  await p.goto(LC + '/login');
+  await p.fill('input[name=email]', EMAIL); await p.fill('input[name=password]', PW);
+  await p.click('button[type=submit]');
+  await p.locator('#prompt-textarea').waitFor({ timeout: 30000 });
+  await p.goto(LC + '/wb/einrichtung');
+  await p.frameLocator('[data-testid=werkbank-frame]').locator('h1').first().waitFor({ timeout: 30000 });
+  const frame = p.frames().find((x) => x !== p.mainFrame() && /\/werkbank\//.test(x.url())) ?? p.frames().at(-1);
+  const api = async (method, path, body) => {
+    const r = await frame.evaluate(async ([m, u, b]) => { const r = await fetch(location.pathname.replace(/\/$/, '') + u, { method: m, credentials: 'include', headers: { 'content-type': 'application/json', ...(m !== 'GET' ? { 'x-werkbank': '1' } : {}) }, body: b ? JSON.stringify(b) : undefined }); return { ok: r.ok, status: r.status, j: await r.json().catch(() => ({})) }; }, [method, path, body]);
+    if (!r.ok) throw new Error(`${method} ${path}: ${r.status} ${JSON.stringify(r.j)}`);
+    return r.j;
+  };
+  await api('POST', '/api/setup/claude', { token: 'sk-ant-oat01-platzhalter-nur-fuer-den-melious-test-xxxxxxxx' });
+  await api('PUT', '/api/setup/melious', { token: 'sk-mel-stub-vorfuehrung-0000000000000000demo' });
+  let s = await api('GET', '/api/setup/melious');
+  check('Neuer Schlüssel: gespeichert und gleich erlaubt, Überlauf + Ersatzkette an (Knuts Setup)', s.configured && s.enabled && s.fallback && s.kette && s.last4 === 'demo');
+  s = await api('PUT', '/api/setup/melious', { enabled: true });
+  check('Energie-Deckel als Notbremse 384 000 / 7 936 000 (1,5× / 31× von 256 000), 8 000 je Takt', s.enabled && s.dayLimit === 384000 && s.monthLimit === 7936000 && s.proTakt === 8000, `${s.dayLimit}/${s.monthLimit}/${s.proTakt}`);
+
+  // Chat: /melious an, kurzer Zug, Werkzeug-Zug.
+  await p.goto(LC + '/c/new');
+  const say = async (t) => { await p.locator('#prompt-textarea').fill(t); await p.getByRole('button', { name: 'Nachricht senden' }).click(); };
+  await say('/melious an');
+  await p.getByText(/Melious ist für diesen Chat an/).first().waitFor({ timeout: 30000 });
+  check('/melious an → Bestätigung mit Rest bis zum Deckel in Energie (geschätzt)', await p.getByText(/Rest bis zum Deckel: ≈ 384\.000 Energie \(geschätzt/).first().isVisible());
+  check('/melious an → Lastverteilung über die Modelle der Rolle, keine Datenregel', await p.getByText(/verteilt über glm-5\.3-flash, deepseek-v4\.1-flash, deepseek-v4-flash-0731, glm-5\.3/).first().isVisible() && !(await p.getByText(/Datenregel/).count()));
+  await p.waitForTimeout(1500);
+  await say('Antworte mit OK');
+  await p.getByText(/Dieser Zug läuft über „Melious“/).first().waitFor({ timeout: 60000 });
+  await p.getByText('OK', { exact: true }).first().waitFor({ timeout: 60000 });
+  check('Kurzer Zug über Melious, verteiltes Modell sichtbar: „🧪 … · Modell glm-5.3-flash (erstes der Rolle; Open-Weight-Modell, Ergebnisse prüfen)“', await p.getByText(/Dieser Zug läuft über „Melious“ · Modell glm-5\.3-flash \(Open-Weight-Modell, Ergebnisse prüfen\)/).first().isVisible());
+  await p.waitForTimeout(1500);
+  await say('Lies bitte die Datei Home.md im Vault');
+  await p.getByText(/Datei gelesen \(Stub\)/).first().waitFor({ timeout: 90000 });
+  check('Werkzeug-Zug (Read) über Melious', true);
+  await p.waitForTimeout(1000);
+  await shot(p, '1440-chat-melious');
+
+  // Einrichtung: Abschnitt „Melious (Test)“ mit Verbrauch.
+  await p.goto(LC + '/wb/einrichtung');
+  const f = p.frameLocator('[data-testid=werkbank-frame]');
+  await f.locator('[data-testid=melious-account]').waitFor({ timeout: 30000 });
+  await f.locator('[data-testid=melious-account]').scrollIntoViewIfNeeded();
+  await p.waitForTimeout(800);
+  const usage = await f.locator('[data-testid=melious-usage]').innerText();
+  check('Verbrauch heute gezählt (eigene Zählung, Züge > 0)', /heute \([1-9]\d* Züge\)/.test(usage), usage.replace(/\s+/g, ' ').slice(0, 160));
+  const kont = await f.locator('[data-testid=melious-modelle]').innerText();
+  const en = await f.locator('[data-testid=melious-energie]').innerText();
+  check('Energie (geschätzt) je Modell mit Faktoren und Rollen-Rang, Hinweis aufs Dashboard, kein AVV-Schalter', /glm-5\.3-flash/.test(kont) && /Faktor/.test(kont) && /#1/.test(kont) && /geschätzt/.test(en) && /Melious-Dashboard/.test(en) && !(await f.locator('[data-testid=melious-avv]').count()), en.replace(/\s+/g, ' ').slice(0, 220));
+  await f.locator('[data-testid=melious-account]').screenshot({ path: join(OUT, '1440-einrichtung-melious.png') });
+
+  // Hauptchat-Seite: Kachel „Melious heute / Monat“.
+  await p.goto(LC + '/wb/leitstand');
+  await f.locator('[data-testid=melious-kachel]').waitFor({ timeout: 30000 });
+  check('Kachel „Melious heute / Monat“ auf der Hauptchat-Seite', /heute .* Monat/.test(await f.locator('[data-testid=melious-kachel]').innerText()));
+  check('Kachel: Hinweis „Energie verfällt bald“ (geschätzter Topf voll)', /Energie verfällt bald/.test(await f.locator('[data-testid=melious-kachel]').innerText()));
+  await shot(p, '1440-hauptchat-kachel');
+  const h = await (await fetch(LC.replace(/:\d+$/, ':' + (process.env.E2E_BRIDGE_PORT || '3990')) + '/health')).json().catch(() => ({}));
+  check('/health zählt Melious-Züge ohne Schlüssel', (h.konten?.melious?.zuege ?? 0) >= 2 && !JSON.stringify(h).includes('sk-mel-'), JSON.stringify(h.konten?.melious ?? {}));
+  await ctx.close();
+} finally {
+  // Aufräumen: Stub-Schlüssel und Stub-Verbrauch weg — der echte Test zählt von null.
+  await mongo.db('werkbank').collection('creds').updateOne({ userId: String(me._id) }, { $unset: { melious: '' } });
+  await mongo.db('werkbank').collection('melious_usage').deleteMany({ userId: String(me._id) });
+  await browser.close(); await mongo.close();
+}
+const bad = results.filter(([, ok]) => !ok);
+console.log(`\n${results.length - bad.length}/${results.length} Prüfungen bestanden`);
+process.exit(bad.length ? 1 : 0);

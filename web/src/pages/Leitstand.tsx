@@ -124,6 +124,8 @@ function Strand({ s }: { s: any }) {
         {s.reason ? <>{s.reason} · </> : null}
         {s.autoWeiter > 0 && <>automatisch fortgesetzt ({s.autoWeiter}) · </>}
         {s.reviewedBy === 'leitstand' && !s.knutReviewed && <>vom Hauptchat abgelegt · </>}
+        {/* Plan 162, S4: tatsächlich gelaufenes Modell des letzten Zugs (sonst das beim Start gesetzte). */}
+        {(s.modell || s.modellPlan) && <span data-testid="strand-modell">{s.modell ? `Modell ${s.modell}` : `Modell ${s.modellPlan} (geplant)`} · </span>}
         zuletzt {fmtDateTime(s.lastActivity)}
       </div>
       {/* Plan 144 (Knut 12.10.): je Unter-Chat drei Links — Chat · Auftrag · Bericht; fehlt eine Datei, steht das da. */}
@@ -190,6 +192,24 @@ function StartHauptchat({ aktiv, onClose, onStarted }: { aktiv: boolean; onClose
   );
 }
 
+/** Kachel „Melious heute / Monat“ (Plan 162): nur, wenn ein Melious-Schlüssel hinterlegt ist; eigene Zählung, kein Schlüssel. */
+function MeliousKachel() {
+  const t = useLoad(() => api('/api/melious/usage'));
+  const d: any = t.data;
+  if (!d || d.configured === false) return null;
+  const z = (n: number) => (n >= 1e6 ? `${(n / 1e6).toLocaleString('de-DE', { maximumFractionDigits: 1 })} Mio` : n >= 10_000 ? `${Math.round(n / 1000).toLocaleString('de-DE')}k` : n.toLocaleString('de-DE'));
+  const cls = (p: number) => (p >= 100 ? 'bad' : p >= 80 ? 'warn' : '');
+  return (
+    <a className="card soft small" href="#/einrichtung" data-testid="melious-kachel" title={`Quelle: ${d.quelle}`} style={{ padding: '6px 10px', textDecoration: 'none', color: 'inherit' }}>
+      🧪 <b>Melious</b> {!d.enabled ? <span className="chip">aus</span> : d.sperre ? <span className="chip bad">gesperrt</span> : null}
+      {' '}⚡ heute <span className={`chip ${cls(d.heute.pct)}`}>≈ {z(Math.round(d.heute.energie))} / {z(d.heute.limit)}</span>
+      {' '}Monat <span className={`chip ${cls(d.monat.pct)}`}>≈ {z(Math.round(d.monat.energie))} / {z(d.monat.limit)}</span>
+      <span className="tiny muted" data-testid="melious-kachel-energie"> · Energie {d.energie?.geschaetzt === false ? 'echt' : 'geschätzt'} · {d.heute.turns} Züge heute{d.energie?.tempo != null ? ` · Tempo ${Math.round(d.energie.tempo * 100)} %` : ''}{d.energie?.fuell != null ? ` · Topf ${Math.round(d.energie.fuell * 100)} %` : ''}</span>
+      {(d.energie?.hinweise ?? []).map((h: string) => <span key={h} className="chip warn" data-testid="melious-kachel-hinweis" style={{ marginLeft: 6 }}>{h}</span>)}
+    </a>
+  );
+}
+
 export function Leitstand({ hash }: { cfg: Config; hash: string }) {
   const t = useLoad(() => api('/api/leitstand/overview'));
   const d: any = t.data;
@@ -222,6 +242,7 @@ export function Leitstand({ hash }: { cfg: Config; hash: string }) {
           <span className="small">Noch kein Hauptchat aktiv.</span>
           {!starten && <button className="btn small primary" onClick={() => setStarten(true)} data-testid="neu-starten">Hauptchat starten</button>}
         </>}
+        <MeliousKachel />
       </div>
       {starten && <StartHauptchat aktiv={!!d.leitstand} onStarted={() => { setStarten(false); t.reload(); if (wantStart) history.replaceState(null, '', location.pathname + location.search + '#/leitstand'); }} onClose={() => { setStarten(false); if (wantStart) window.location.hash = '#/leitstand'; }} />}
       {reviewId && <Review id={reviewId} onClose={() => { window.location.hash = '#/leitstand'; }} />}

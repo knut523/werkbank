@@ -1,0 +1,187 @@
+# Plan 162 — Melious AI als Test-Konto im Kontowechsel
+
+Stand: gebaut-lokal, offizieller Einbau (14.10.2026). Auftrag Knut 14.10.: Melious (EU, Open-Weight-Modelle, Anthropic-kompatible API) testweise in den
+automatischen Kontowechsel der Werkbank; Zusatz am selben Tag: vorsichtig, Verbrauch messen, Deckel, Standard aus.
+
+## Ziel
+Ein Melious-Schlüssel (`sk-mel-…`) lässt sich wie die Claude-Konten im Modell-Menü hinterlegen. Er wird **nur** benutzt, wenn Knut es
+ausdrücklich einschaltet, und dann sichtbar, gezählt und gedeckelt.
+
+## Entscheidungen (Auftrag, gelten)
+- Kontoart „Melious“ neben den Claude-Konten; Basis-URL fest `https://api.melious.ai` (ohne `/v1`), optional ein Modellname,
+  sonst gehen die Claude-Namen durch (Melious bildet opus/sonnet/haiku ab).
+- **Standard aus.** Global „Melious erlauben“ (aus) und je Chat `/melious an` (aus). Neue Stränge bekommen ihn nie automatisch.
+- „Als letzten Ausweg, wenn alle Claude-Konten erschöpft sind“ ist eine **eigene** Einstellung (aus) — sonst liefe ein neuer Strang
+  doch automatisch auf Melious, sobald die Claude-Kontingente leer sind.
+- Keine Lastverteilung auf Melious (nicht in `orderForTurn`).
+- Verbrauch: je Melious-Zug Input/Output/Cache-Read (und Cache-Write) aus `result.usage`, je Tag und Monat (Europe/Berlin) in der
+  Werkbank (`werkbank.melious_usage`), ohne Schlüssel. Deckel Tag/Monat in Tokens (Summe aller vier), Vorgabe 200 000 / 2 000 000,
+  je Person einstellbar, Vorgabe per Env `MELIOUS_TAG_LIMIT` / `MELIOUS_MONAT_LIMIT` (PRO-Plan = nur andere Zahlen).
+- 80 % → Hinweis an den Hauptchat (Ereignis wie die Freigabe-Hinweise), 100 % → Melious bis Tages-/Monatsende gesperrt,
+  deutsche Meldung im Chat; ein laufender Melious-Zug wird beim Überschreiten des Rests abgebrochen (Schätzung aus den
+  `assistant`-usages, gezählt wird danach die tatsächliche Summe).
+- Melious hat laut Doku **keine** Verbrauchs-/Kontostand-Schnittstelle (nur `X-RateLimit-*`-Header und `billing_cost` im
+  Antwortkörper, die Claude Code nicht weiterreicht) → nur eigene Zählung.
+
+## Offizieller Einbau (Knut 14.10.: „ok passt … lass es uns in den Workspace so offiziell einbauen“)
+Melious wird regulärer Bestandteil, nicht nur Test-Konto. Bindend aus der Modellwahl v2 (Betriebsregeln 1, 3, 4): kein
+Modellwechsel mitten im Strang, Hauptstrang-Modell als Parameter der Brücke je Strang, Anzeige des **tatsächlich** gelaufenen
+Modells, Melious nur mit Datenregel. Die smarte Auswahl selbst (Risikostufe aus Auftrag/Plan) baut Paket 163; hier wird sie
+**vorbereitet**: Schnittstelle, Speicherung, Anwendung in der Brücke.
+
+Schnitte (zusätzlich zu S1 = Commit 9d8eb74):
+- **S2 Modell je Strang/Rolle.** `orch start` und `/internal/orchestrate` nehmen `modell` (`claude:opus|sonnet|haiku` oder
+  `melious:<id>`) und `risiko` (`niedrig|mittel|hoch`) an; die Brücke merkt beides je Strang (orch.json) und wendet es auf jeden
+  Zug an (Melious-Modell = wie `/melious an <id>`, Claude-Modell = Modell der Anfrage). Überlauf auf Melious (letzter Ausweg)
+  nur für Chats und Stränge mit Risiko „niedrig“, mit dem Überlauf-Modell aus der Einrichtung; „hoch“ wartet immer.
+  Einrichtung: Rollen-Tabelle Melious (Standardmodell, Überlauf, Berichte/Texte, Massenarbeit) — Vorgaben nach dem
+  Blindvergleich. Teilagenten laufen beim Anbieter des Hauptzugs (ein Claude-Code-Prozess, eine Basis-URL).
+- **S3 Datenregel bis AVV.** Einstellung „AVV mit Melious liegt vor“ (aus). Solange aus, laufen Melious-Züge ohne die
+  Atlassian- und forge-review-Werkzeuge, mit einem festen Satz im Systemtext (keine Kundendaten, keine Schlüssel, keine Logs mit
+  Personenbezug, keine Push-Vorbereitung). `git push` ist gesperrt, und `/melious an` zeigt die Regel. Schlüssel gehen auch nach
+  dem AVV nie an Melious (die Sitzungsumgebung bleibt geschrubbt).
+- **S4 Tatsächliches Modell.** Offiziell immer mit festem Modellnamen (Vorgabe aus der Einrichtung; ohne Namen zeigt die
+  Statuszeile „Abbildung von <Claude-Name>, tatsächliches Modell nicht gemeldet“). Das Modell steht in der Statuszeile, im Zustand
+  des Strangs (Kopf auf der Hauptchat-Seite) und im Verbrauch (je Tag und Modell).
+- **S5 Blindvergleich.** Der Orchestrator fährt ihn (8 Aufgaben × Haiku/Sonnet/GLM 5.3 Flash/GLM 5.3/DeepSeek V4.1 Flash) und
+  liefert das Ergebnis als Datei. Danach: Vorgaben der Rollen-Tabelle, Bericht mit fairer Einordnung nach Klassen.
+
+Entscheidungen dazu (Bericht, „- Knut:“): Vorgabe-Modelle je Rolle nach dem Vergleich; ob Stränge ohne Risikostufe als
+„mittel“ gelten (kein Überlauf).
+
+Nachgezogen beim Bau:
+- Vorgabe-Modell `glm-5.3-flash` (Blindvergleich: gleichauf mit Haiku, GLM 5.3 deutlich langsamer), per `MELIOUS_MODELL`.
+- **Kein Auto-Modus-Klassifikator über Melious:** Claude Code meldet über das Gateway, dass die neue Klassifikator-Version nicht
+  unterstützt wird; er liefe sonst über das Open-Weight-Modell. Melious-Züge laufen im normalen Modus (Rückfrage im Chat, im
+  Strang abgelehnt). Eine Lockerung (Datei-Änderungen ohne Rückfrage) ist eine Entscheidung für Knut.
+- Datenregel sperrt zusätzlich die Jira-Werkzeuge des Werkbank-MCP (`jira_update*`, `hygiene_*`); der Hauptchat nimmt kein
+  `modell`/`risiko` an (Review 2).
+- Fehlerart „Guthaben leer“ (echter Test: 403 `permission_error` „Insufficient credits“) bis Monatswechsel, zurücksetzbar.
+
+- **S6 Rollen-Profile** (Messung Paket 163: Grundlast 24–34 k Eingabe-Tokens je Zug). `orch start --profil voll|bauer|leser`,
+  je Strang beim Start fest (stabiler Cache-Präfix), Vorgabe `voll` = wie bisher:
+  - `bauer`: voller Claude-Code-Systemprompt, nur die MCP-Server vault-search und werkbank.
+  - `leser`: nur Read (Grep/Glob gibt es in der aktuellen CLI nicht mehr), vault-search und werkbank; keine Skills, keine
+    CLAUDE.md, keine Teilagenten, ohne dynamische Systemprompt-Abschnitte. Über Melious zusätzlich `--bare` mit eigenem
+    kurzem Systemprompt; bei Claude nicht (überspringt OAuth).
+  - Geprüft mit echtem Claude Code gegen den Stub: 8,2 KB statt 89 KB je Anfrage. Der PreToolUse-Wächter der Brücke läuft
+    auch unter `--bare` (Lesen in fremden Arbeitsordnern abgelehnt).
+  - Lesende Bash-Befehle bleiben „Rückfrage“ (keine neue Ausnahme), darum ist Code-Suche Sache des Profils `bauer`.
+## Nacharbeit nach Knuts Review (14.10.)
+- **Keine Sperren mehr** („Datenregel passt schon, bitte nicht blocken. Melious darf alles, was Claude auch darf“): Melious-Züge
+  mit denselben MCP-Servern, Werkzeugen und demselben Rechte-Modus wie Claude; Sperr-Satz, AVV-Schalter und Push-Sperre entfallen.
+- **Auto-Modus wie bei Claude (Variante c).** Geprüft mit echtem Claude Code gegen einen Stub (14.10.):
+  - Für riskante Befehle schickt Claude Code den Klassifikator („security monitor“, Modell `claude-sonnet-5`) an die
+    Basis-URL; dort bildet Melious den Namen ab.
+  - Ist die Antwort unverständlich, sperrt der Klassifikator den Befehl.
+  - Harmlose Befehle laufen ohne Klassifikator — wie bei Claude.
+- **S7 Lastverteilung** („Last auf alle Melious-Modelle verteilen, um alle Token zu nutzen“): Kontingent je Modell (PRO:
+  GLM 5.3 2,5 Mrd., GLM 5.3 Flash / DeepSeek V4.1 Flash / DeepSeek V4 Flash je 25 Mrd. je Monat; Einstellungen) und zulässige
+  Modelle je Rolle (`leser`, `niedrig`; Vorgabe GLM 5.3 Flash, GLM 5.3, DeepSeek V4.1 Flash — V4 Flash erst nach dem Test).
+  - Die Brücke wählt beim ersten Melious-Zug eines Strangs bzw. Chats das zulässige Modell mit dem größten freien Monatsanteil.
+    Bei Gleichstand nimmt sie das größere Kontingent.
+  - Danach behält der Strang bzw. Chat sein Modell (Cache), solange es frei ist.
+  - Ein festes Modell (Einrichtung, `/melious an <modell>`, `--modell melious:<id>`) überstimmt die Verteilung;
+    `--modell melious:auto` = Verteilung.
+  - Anzeige: „Melious-Kontingent je Modell“ in der Einrichtung und als Kurzzeile in der Kachel.
+- **Mehr Tests vor den endgültigen Listen** (läuft beim Orchestrator, Schlüssel nur dort):
+  - zehn Aufgaben direkt mit `claude -p` für alle vier PRO-Modelle plus Haiku/Sonnet, blind bewertet;
+  - ein echter kleiner Schnitt (Mini-Spec über drei Module plus Tests) je Modell mit versteckten Tests und blindem Opus-Review.
+
+  Die Skripte liegen im Review-Paket.
+
+## S8 Energie statt Tokens (PRO-Plan aktiv, 15.10.)
+Melious begrenzt über einen gemeinsamen Energietopf: Nachfüllung alle 45 min, höchstens 4 Tage, darüber verfällt sie. Eine
+Energie-Einheit entspricht dem Verbrauchspreis × 10.000 (1 Einheit = 0,0001 €; Kalibrierung des Orchestrators).
+- **Fehler:**
+  - 402 `BILLING_2001` (Topf leer) sperrt nur bis zum nächsten Nachfüll-Takt (Vorgabe 2700 s).
+  - 429 `AUTH_1028` sperrt bis `Retry-After`, sonst 60 s.
+  - 403 „Insufficient credits“ und 402 `BILLING_2003` (Credits außerhalb des Plans) bleiben bis Monatswechsel bzw. Zurücksetzen.
+- **Schätzung je Zug:** Tokens × Faktor je Modell. Die Faktoren kommen aus der Preisliste (`GET /v1/models?include_meta=true`,
+  einmal am Tag, kostet nichts); bis dahin gelten die Kalibrierwerte. Von Hand gesetzte Faktoren gehen vor. Annahme: Cache-Treffer
+  zählen zum Cache-Preis.
+- **Steuerung (stetig statt Spitzen):** Tempo = Energie heute / Nachfüllung bis jetzt (Energie je Takt aus der Einrichtung bzw.
+  dem Dashboard).
+  - Tempo ≤ 100 % → Rollen in Wunsch-Reihenfolge (Qualität).
+  - Tempo > 100 % → sparsamste Modelle zuerst.
+  - Gleich teure Modelle wechseln sich ab.
+  - Mit echtem Stand gilt zusätzlich: Topf ≥ 75 % → Qualität, ≤ 25 % → sparen.
+- **Deckel in Energie** (Notbremse). Die Anzeige sagt „geschätzt“ und verlinkt das Melious-Dashboard.
+- **Abgleich mit dem echten Stand (Variante 3, optional):** `MELIOUS_DASHBOARD_AUTH` (Kopfzeile der Dashboard-Anmeldung, vom
+  Betrieb gesetzt) → `/v1/billing/balance` bzw. `/v1/auth/session/me`. Fehlt die Kopfzeile, ist der Abgleich aus.
+- **`:eco`-Routing** als Einstellung; gezählt wird wie das Modell.
+
+## S9 Knuts Setup und Ausrollen (15.10.: „voll Melious aktivieren … das Kontingent wirklich nutzen“)
+- **Preisliste festgezogen** auf die echten Felder (`input_cost_per_million_eur`, `output_cost_per_million_eur`,
+  `cache_read_cost_per_million_eur`, `currency` EUR). Testdatei: `web/test/fixtures/melious-pricing-2026-10-15.json`.
+- **Vorgaben = Knuts Setup:**
+  - Melious erlaubt, Überlauf an, Ersatzkette an, `:eco` aus (`MELIOUS_STANDARD=aus` schaltet alles für neue Schlüssel ab).
+  - Nachfüllung 8.000 je Takt (Dashboard: 256.000 je Tag, bis 4 Tage), also Obergrenze 1.024.000.
+  - Deckel als Notbremse: Tag 1,5 × 256.000 = 384.000, Monat 31 × 256.000 = 7.936.000.
+- **Ersatzkette** für Hauptchat und Strang-Leads: Opus → Sonnet (alle Claude-Konten) → Melious GLM 5.3. Ohne Warte-Sperren;
+  Push, PR und Council laufen weiter, das Modell steht im Protokoll.
+- **Leser/Schreiber zuerst Melious** (Profile `leser`, `schreiber`): Verteilung über alle vier PRO-Modelle je Rolle.
+- **D7 b:** Leser dürfen rein lesende Bash-Befehle (Positivliste, keine Umleitung oder Befehlsersetzung, Ordnergrenzen wie
+  bisher).
+- **Kontingent nutzen:**
+  - Geschätzter Topfstand (Annahme: vor 4 Tagen voll, dann Nachfüllung − Verbrauch) bzw. echter Stand.
+  - Ab 75 % Vorrang: niedrig-riskante Arbeit (Chats, Stränge mit Risiko „niedrig“) zuerst auf Melious, Qualitäts-Reihenfolge.
+  - Ab 90 % zeigt die Kachel „Energie verfällt bald“.
+- **Guthaben statt Energie:** Ist die Energie leer, zahlt das Guthaben weiter (402 erst, wenn auch das leer ist).
+  - Erkannt über `billing_cost.paid_with` einer Mini-Anfrage im OpenAI-Format (höchstens alle 15 min, ≈ 0,03 Energie) oder über
+    einen geschätzten Stand ≤ 0.
+  - Ergebnis nur als Hinweis, keine Sperre.
+- **Gegenprüfer GLM 5.3:** Werkbank-MCP-Werkzeug `challenge` (`art=diff|plan|council`), zusätzlich zur Prüfung des Leads.
+  - Läuft über `/v1/chat/completions` mit Energie- und Umweltwerten; der Verbrauch wird gebucht.
+  - Hauptchat und Strang-Leads bekommen einen Hinweis im Systemtext.
+
+- Korrektur zur Token-Aussage: Melious meldet alle Eingaben als Cache-Treffer; der Mehrverbrauch kommt von mehr Zügen, nicht
+  von fehlendem Caching.
+
+## Zusatz 2 (Knut 14.10.: PRO-Plan mit GLM 5.3, GLM 5.3 Flash, DeepSeek V4.1 Flash, DeepSeek V4 Flash)
+- Modell je Chat statt nur der opus/sonnet/haiku-Abbildung: `/melious an <modell>`, `/melious modell <name|standard>`,
+  `/melious modelle` (Liste live über `GET /v1/models`, ohne Tokens). Reihenfolge: Chat-Modell → Modell aus der Einrichtung →
+  Claude-Namen. Mit festem Modell zeigen auch Teilagenten und das Hilfsmodell darauf (`ANTHROPIC_DEFAULT_*_MODEL`,
+  `ANTHROPIC_SMALL_FAST_MODEL`); zurück auf Claude gelten wieder die Werte des Brücken-Prozesses.
+- Modellvergleich (zehn Werkbank-Aufgaben, blind bewertet) läuft über die Brücke der isolierten Instanz, sobald der Schlüssel
+  eingetragen ist; Werkzeug außerhalb des Repos (Review-Paket).
+
+## Review-Korrekturen (unabhängiger Durchgang, 14.10.)
+- Deckel gilt je Person über alle laufenden Melious-Züge (nicht je Chat).
+- Verbrauch: Maximum aus größtem Ergebnis und Summe der Einzelantworten (lieber zu viel als zu wenig zählen).
+- Deckel-Abbruch = Ausgang `rate_limit` (ein Strang setzt sich danach nicht selbst fort), nicht `limit`.
+- Kontotest mit dem Modell aus der Einrichtung.
+- Offen (im echten Test prüfen): Wechsel Melious ↔ Claude mitten im Zug setzt die Sitzung fort — ob das mit Melious-Antworten im
+  Verlauf trägt, zeigt erst der echte Zug.
+
+## Schnitte
+1. Brücke `accounts.ts`: `Account.kind/model/rest/fallback`, `planQueue()` (Claude-Reihenfolge wie heute, Melious vorne bei
+   Chat-Schalter, hinten bei „letzter Ausweg“, nie bei `rest<=0`), `accountEnv()` (Melious: `ANTHROPIC_BASE_URL`,
+   `ANTHROPIC_API_KEY`, `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`, ohne `CLAUDE_CODE_OAUTH_TOKEN`; Claude: wie heute),
+   Chat-Schalter im Zustand `melious-chats.json`, Zähler für `/health`.
+2. Brücke `sessions.ts`: Env/Modell je Versuch über `accountEnv`, Statuszeile „über Melious (Open-Weight-Modell, Ergebnisse
+   prüfen)“, Melious-Fehler (rate_limit, billing_error, authentication_failed, 401/402/429 im Text) → erschöpft wie Claude,
+   Verbrauch je Versuch an die Werkbank (`/internal/melious-usage`), Deckel-Abbruch, Befehl `/melious an|aus|status`.
+3. Werkbank: Speicherung wie die Claude-Konten (AES-GCM in `werkbank.creds.melious`), Einrichtung (Schlüssel, Schalter, Grenzen,
+   Test, Verbrauch), `/internal/claude-accounts` liefert Melious mit `rest`, `/internal/melious-usage` zählt und warnt,
+   `/api/melious/usage` für die Kachel „Melious heute / Monat“ auf der Hauptchat-Seite.
+4. Tests: Kontowahl und Env (rein), Brücke im Mock-Modus (Schalter, letzter Ausweg, Deckel, Fehler → Wechsel, kein Schlüssel im
+   Log), echte Brücke + echtes Claude Code gegen einen lokalen Melious-Stub (`/v1/messages`), Werkbank-Zählung/Deckel.
+
+## DoD
+- Ohne Einschalten ändert sich nichts (bestehende Tests grün, Melious nie in der Warteschlange).
+- Melious-Zug: Env wie oben, Statuszeile sichtbar, Verbrauch gezählt, `/health` zählt Züge ohne Schlüssel.
+- 80 %/100 % wie oben; gesperrt = nicht in der Warteschlange, Meldung auf Deutsch.
+- Schlüssel nie im Log, nie im Browser (nur ••••+4), nie im Repo.
+
+## Rückweg
+Global-Schalter aus (oder Schlüssel entfernen) → Melious ist aus jeder Warteschlange verschwunden; Code-Rückweg: Commit zurücknehmen,
+`werkbank.creds.melious` und `werkbank.melious_usage` können bleiben (werden ignoriert).
+
+## Council (kurz)
+- Skeptiker: „letzter Ausweg“ automatisch = Melious für alles, was nachts läuft (Auto-Weiter der Stränge) → eigene Einstellung, aus.
+- Sicherheit: Schlüssel geht nur an die Basis-URL; `ANTHROPIC_API_KEY` wird vor jedem Claude-Versuch wieder entfernt; Sitzungs-Env
+  bleibt geschrubbt; MCP-Server (forge-review) behalten den Claude-Token.
+- Betrieb: Fortsetzen einer Claude-Sitzung auf Melious (und zurück) teilt den Verlauf; Thinking-Signaturen könnten Melious stören →
+  im echten Test prüfen, sonst bei Melious ohne Fortsetzen neu mit Verlauf.
+- Bedingung: Deckel wirkt in der Brücke **und** in der Werkbank (Werkbank liefert `rest`, Brücke bricht ab).

@@ -9,7 +9,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, type Sink } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, type Sink } from './sessions.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -18,7 +18,7 @@ import { mcpCall, mcpStatus } from './mcpcall.ts';
 import { directCall } from './mcpdirect.ts';
 import { homeFor, ensureHome, atlassianServer, leitstandMcp, type ClaudeHome } from './claudehome.ts';
 import { log } from './log.ts';
-import { testAccount, markExhausted, exhaustedOf, balanceStats } from './accounts.ts';
+import { testAccount, markExhausted, exhaustedOf, balanceStats, clearExhausted, MELIOUS_KEY, MELIOUS_ID, MELIOUS_MODEL } from './accounts.ts';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -104,6 +104,7 @@ const MODELS: Record<string, string | undefined> = {
   'claude-code': undefined,          // Standardmodell von Claude Code
   'claude-code-sonnet': 'sonnet',
   'claude-code-opus': 'opus',
+  'claude-code-haiku': 'haiku',      // nicht im Modellmenü; für den Modellvergleich (Plan 162) über die API der Brücke
 };
 const TITLE_MODEL = 'olaf-titel';
 
@@ -299,6 +300,10 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
       if (!/^[\w:.-]{1,80}$/.test(name)) return;
       fetch(`${WEB_URL}/internal/skill-used`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, skill: name }) }).catch(() => {});
     } : undefined,
+    // Melious (Plan 162): Verbrauch je Versuch an die Werkbank (zählt Tag/Monat, warnt bei 80 %, sperrt bei 100 %).
+    onMeliousUsage: known && INTERNAL ? (u, model) => {
+      fetch(`${WEB_URL}/internal/melious-usage`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, conv: convId, usage: u, model }) }).catch(() => {});
+    } : undefined,
     onMeasure: known && INTERNAL ? (m) => {
       log('kontext gemessen', { user: userId, ...m });
       fetch(`${WEB_URL}/internal/measure`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, conv: convId, measured: m }) }).catch(() => {});
@@ -331,7 +336,15 @@ const server = createServer(async (req, res) => {
         const leitEmails = String(process.env.LEITSTAND_EMAILS ?? process.env.BRIDGE_AUTO_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
         if (!email || !leitEmails.includes(email)) return json(res, 403, { error: 'Hauptchat nur für freigeschaltete Admins (LEITSTAND_EMAILS).' });
       }
-      try { registerOrchestration(userId, conv, real!, kind); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
+      // Modell und Risikostufe des Strangs (Plan 162, S2) — nur bei der Anmeldung, kein Wechsel mitten im Strang.
+      // Der Hauptchat läuft nie auf Melious und hat keine Risikostufe (Review 2, Befund 2): nur für Stränge.
+      const modell = kind === 'strand' && typeof b.modell === 'string' && b.modell ? b.modell : undefined;
+      if (modell && !STRAND_MODEL.test(modell)) return json(res, 400, { error: 'Modell: claude:opus|sonnet|haiku oder melious:<modell>.' });
+      const risiko = kind !== 'strand' ? undefined : b.risiko === 'niedrig' || b.risiko === 'mittel' || b.risiko === 'hoch' ? b.risiko : undefined;
+      // Rollen-Profil (Plan 162, S6): nur Stränge, nur beim Start.
+      const profil = kind === 'strand' && (b.profil === 'bauer' || b.profil === 'leser' || b.profil === 'schreiber') ? b.profil : undefined;
+      if (kind === 'strand' && b.profil && !['voll', 'bauer', 'leser', 'schreiber'].includes(String(b.profil))) return json(res, 400, { error: 'Profil: voll, bauer, leser oder schreiber.' });
+      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
       log(kind === 'leitstand' ? 'leitstand angemeldet' : 'strang angemeldet', { user: userId, conv });
       return json(res, 200, { ok: true, dir: real, mode: autoFor({ email }) });
     }
@@ -389,19 +402,33 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/internal/account-test') {
       if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
       const token = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '').trim();
-      if (!/^sk-ant-oat/.test(token) && !MOCK) return json(res, 400, { ok: false, error: 'auth' });
       const b = await readBody(req);
+      const melious = b.kind === 'melious';
+      if (melious ? !MELIOUS_KEY.test(token) : !/^sk-ant-oat/.test(token) && !MOCK) return json(res, 400, { ok: false, error: 'auth' });
       const uid = String(b.userId ?? 'werkbank');
       const home = homeFor(safeId(uid), b.email ? String(b.email) : undefined);
       await ensureHome(home);
-      const r = await testAccount(query as any, { token, cwd: scratchFor(uid), home });
-      const accountId = String(b.accountId ?? '');
-      if (r.error === 'rate_limit' && /^[\w-]{1,40}$/.test(accountId)) markExhausted(safeId(uid), { id: accountId, label: accountId, token }, r.resetsAt);
+      const model = melious && typeof b.model === 'string' && MELIOUS_MODEL.test(b.model) ? b.model : undefined;
+      const r = await testAccount(query as any, { token, cwd: scratchFor(uid), home, melious, model });
+      const accountId = melious ? MELIOUS_ID : String(b.accountId ?? '');
+      if ((r.error === 'rate_limit' || r.error === 'guthaben') && /^[\w-]{1,40}$/.test(accountId)) markExhausted(safeId(uid), { id: accountId, label: accountId, token }, r.resetsAt);
+      // Melious getestet und ok → ein alter Vermerk (z. B. „Guthaben leer“ vor dem Aufladen) ist hinfällig.
+      if (r.ok && melious) clearExhausted(safeId(uid), MELIOUS_ID);
       log('kontotest', { user: uid, konto: accountId, ok: r.ok, error: r.error });
       return json(res, 200, r);
     }
+    // Vermerk „erschöpft“ eines Kontos aufheben (Einrichtung: „zurücksetzen“, nur für Werkbank-Web).
+    if (req.method === 'POST' && url.pathname === '/internal/accounts-reset') {
+      if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
+      const b = await readBody(req);
+      const id = String(b.accountId ?? '');
+      if (!/^[\w-]{1,40}$/.test(id)) return json(res, 400, { error: 'Ungültiges Konto.' });
+      const ok = clearExhausted(safeId(String(b.userId ?? '')), id);
+      log('konto zurückgesetzt', { user: String(b.userId ?? '?'), konto: id, war: ok });
+      return json(res, 200, { ok });
+    }
     if (req.method === 'GET' && url.pathname === '/v1/models') {
-      return json(res, 200, { object: 'list', data: Object.keys(MODELS).map((id) => ({ id, object: 'model', created: 0, owned_by: 'olaf-werkbank' })) });
+      return json(res, 200, { object: 'list', data: Object.keys(MODELS).filter((id) => id !== 'claude-code-haiku').map((id) => ({ id, object: 'model', created: 0, owned_by: 'olaf-werkbank' })) });
     }
     if (req.method === 'POST' && url.pathname === '/v1/chat/completions') return await chat(req, res);
     json(res, 404, { error: { message: 'Nicht gefunden' } });
