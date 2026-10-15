@@ -360,6 +360,8 @@ export const realJcode: JcodeFn = (o) => new Promise((res) => {
     if (j?.session_id && /^[\w.-]{1,120}$/.test(j.session_id)) {
       try { m = jcodeUsage(JSON.parse(readFileSync(join(env.HOME, '.jcode', 'sessions', `${j.session_id}.json`), 'utf8'))); } catch { /* ohne Sitzungsdatei */ }
     }
+    // Ohne Sitzungsdatei: die Summe aus der Ausgabe (wie die Brücke), als ein Aufruf gezählt.
+    if (!m.aufrufe && j?.usage) { const c = Number(j.usage.cache_read_input_tokens) || 0; m = { usage: { input: Math.max(0, (Number(j.usage.input_tokens) || 0) - c), output: Number(j.usage.output_tokens) || 0, cacheRead: c, cacheWrite: 0 }, aufrufe: 1 }; }
     res({ code: j ? code : code || -1, text: String(j?.text ?? ''), ...m, ms: Date.now() - t0, stderr: se.split('\n').filter(Boolean).slice(-3).join(' · ').slice(0, 600) });
   };
   c.on('close', fertig);
