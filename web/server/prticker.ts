@@ -239,10 +239,10 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
   return n;
 }
 
-/** Für die Oberfläche: Einstellungen, letzter Lauf, letzte Ereignisse, Review-Warteschlange. */
 /** Plan 183: weicht das Schatten-Review vom bestehenden Review ab? null, solange eines von beiden fehlt. */
 export const abweichung = (haupt: string | null | undefined, schatten: string | null | undefined): boolean | null => (haupt && schatten ? haupt !== schatten : null);
 
+/** Für die Oberfläche: Einstellungen, letzter Lauf, letzte Ereignisse, Review-Warteschlange. */
 export async function tickerOverview(limit = 40) {
   const [settings, st, items, reviews] = await Promise.all([
     tickerSettings(),

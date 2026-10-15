@@ -4,7 +4,7 @@
 // Pilot: das Ergebnis wird nie gepostet (P4); Standard erst nach dem Evaluationsset (P6).
 
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { energieOf, type Faktor, type Usage } from './melious.ts';
@@ -223,16 +223,20 @@ export function parseBericht(text: string, a: Auftrag): Bericht {
 }
 
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
-/** Zitat in Teile (an „…“/„...“), je Teil ohne Rand-Anführungszeichen/Backticks. */
-const zitatTeile = (z: string) => z.split(/…|\.\.\./).map((t) => norm(t).replace(/^[`'"„“”]+|[`'"„“”]+$/g, '').trim()).filter((t) => t.length >= 4);
+/** Zitat in Teile (nur an „…“ — „...“ ist im Code ein Spread, Review R2), je Teil ohne Rand-Anführungszeichen/Backticks. */
+const zitatTeile = (z: string) => z.split('…').map((t) => norm(t).replace(/^[`'"„“”]+|[`'"„“”]+$/g, '').trim()).filter((t) => t.length >= 4);
+/** Ein Zitat belegt nur etwas, wenn es lang genug ist (Review R2: „return“ stand überall) und der Bereich klein bleibt. */
+export const ZITAT_MIN = 12, BEREICH_MAX = 30;
 
 export interface Wurzel { name: string | null; dir: string; ref?: string | null }
 
 /** Datei relativ zur Wurzel lesen — nie außerhalb; im Nachbar-Repo ersatzweise `git show <ref>:pfad`. */
 function lies(w: Wurzel, pfad: string): string | null {
+  const innen = (x: string, wurzel: string) => x === wurzel || x.startsWith(wurzel.endsWith(sep) ? wurzel : wurzel + sep);
   const ziel = resolve(w.dir, pfad);
-  if (ziel !== w.dir && !ziel.startsWith(w.dir.endsWith(sep) ? w.dir : w.dir + sep)) return null;
-  try { return readFileSync(ziel, 'utf8'); } catch { /* unten */ }
+  if (!innen(ziel, w.dir)) return null;
+  // Symlinks im PR-Stand dürfen nicht hinausführen (Review R3): echten Pfad gegen die echte Wurzel prüfen.
+  try { return innen(realpathSync(ziel), realpathSync(w.dir)) ? readFileSync(ziel, 'utf8') : null; } catch { /* unten */ }
   if (w.name && w.ref && /^[\w./@+-]+$/.test(pfad)) return git(w.dir, ['show', `${w.ref}:${pfad}`]);
   return null;
 }
@@ -241,10 +245,11 @@ function lies(w: Wurzel, pfad: string): string | null {
 export function pruefeZitat(beleg: string, zitat: string, wurzeln: Wurzel[]): { status: ZitatStatus; ort?: string } {
   const m = /^`?([^\s:`]+):(\d+)(?:[-–](\d+))?/.exec(beleg.trim());
   const teile = zitatTeile(zitat);
-  if (!m || !teile.length) return { status: 'ohne_beleg' };
+  if (!m || teile.join('').replace(/\s/g, '').length < ZITAT_MIN) return { status: 'ohne_beleg' };
   const [, roh, von, bis] = m;
   const pfad = roh.replace(/^\.\//, '');
   const z0 = Number(von), z1 = Number(bis ?? von);
+  if (z1 < z0 || z1 - z0 > BEREICH_MAX) return { status: 'ohne_beleg' };
   const kandidaten: { w: Wurzel; p: string }[] = [];
   for (const w of wurzeln) {
     if (w.name && pfad.startsWith(w.name + '/')) kandidaten.unshift({ w, p: pfad.slice(w.name.length + 1) });
@@ -308,12 +313,21 @@ export type Empfehlung = 'approve' | 'request-changes' | 'comment';
  *  strittig sperren approve und landen in „strittig“ (an Opus/Knut). Der Planer kann einen Befund verwerfen, aber kein Zitat ersetzen. */
 export function urteilAbleiten(a: Auftrag, b: Bericht, punkte: Pruefpunkt[]): { empfehlung: Empfehlung; strittig: string[]; blind: string[] } {
   const strittig: string[] = [];
-  for (const x of b.antworten) if (x.status === 'unklar') strittig.push(`${x.id}: unklar${x.text ? ` — ${x.text.slice(0, 120)}` : ''}`);
+  const zitatFehlt = (key: string, z: ZitatStatus | undefined, beleg: string) => `${key}: Zitat ${z === 'ohne_beleg' ? 'ohne Beleg' : 'nicht an der Stelle gefunden'} (${beleg || '—'})`;
+  const geprueft = new Set(punkte.map((p) => p.key));
+  for (const x of b.antworten) {
+    if (x.status === 'unklar') strittig.push(`${x.id}: unklar${x.text ? ` — ${x.text.slice(0, 120)}` : ''}`);
+    // P3: auch „kein_befund“ braucht einen Beleg — ohne gültiges Zitat sperrt es approve, egal welche Schwere (Review R8).
+    else if (x.status === 'kein_befund' && !geprueft.has(x.id) && x.zitatPruefung !== 'ok') strittig.push(zitatFehlt(x.id, x.zitatPruefung, x.beleg));
+  }
   let hoch = false, mittel = false;
   for (const p of punkte) {
-    if (p.zitatPruefung !== 'ok') { strittig.push(`${p.key}: Zitat ${p.zitatPruefung === 'ohne_beleg' ? 'ohne Beleg' : 'nicht an der Stelle gefunden'} (${p.beleg || '—'})`); continue; }
+    if (p.zitatPruefung !== 'ok') { strittig.push(zitatFehlt(p.key, p.zitatPruefung, p.beleg)); continue; }
     if (p.urteil === 'strittig') { strittig.push(`${p.key}: Planer strittig — ${p.grund ?? ''}`.trim()); continue; }
-    if (p.urteil !== 'bestaetigt' || p.status !== 'befund') continue;
+    if (p.urteil !== 'bestaetigt' && p.urteil !== 'verworfen') { strittig.push(`${p.key}: kein Urteil des Planers`); continue; }
+    // Widerspricht der Planer einem kein_befund, ist das genau der #343-Fall → strittig, nie still approve (Review R1).
+    if (p.status === 'kein_befund') { if (p.urteil === 'verworfen') strittig.push(`${p.key}: Planer widerspricht kein_befund — ${p.grund ?? ''}`.trim()); continue; }
+    if (p.urteil !== 'bestaetigt') continue;
     if (p.schwere === 'hoch') hoch = true; else mittel = true;
   }
   const blind = [
@@ -328,7 +342,7 @@ export function urteilAbleiten(a: Auftrag, b: Bericht, punkte: Pruefpunkt[]): { 
 // ---------- Worker (jcode) ----------
 
 export interface JcodeOut { code: number | null; text: string; usage: Usage; aufrufe: number; ms: number; stderr: string }
-export type JcodeFn = (o: { cwd: string; prompt: string; model: string; key: string; tools: string; timeoutS: number }) => Promise<JcodeOut>;
+export type JcodeFn = (o: { cwd: string; prompt: string; model: string; key: string; tools: string; timeoutS: number; killNachMs?: number }) => Promise<JcodeOut>;
 export const jcodeBin = (env = process.env) => env.WERKBANK_JCODE_BIN || join(env.HOME || homedir(), '.local', 'bin', 'jcode');
 
 /** Summe der token_usage einer jcode-Sitzung (wie die Brücke, sessions.ts jcodeUsage) + Zahl der Aufrufe. */
@@ -347,14 +361,20 @@ export function jcodeUsage(s: any): { usage: Usage; aufrufe: number } {
 
 export const realJcode: JcodeFn = (o) => new Promise((res) => {
   const t0 = Date.now();
-  const env: Record<string, string> = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME || homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key };
+  // Der Worker hat eine Shell (git diff/log, grep). Damit Text aus dem PR ihn nicht zum Schreiben bringt, sieht er keine Git-/GitHub-
+  // Anmeldung aus HOME: keine globale/System-Git-Konfiguration (dort steht der Helper), keine Abfrage, kein gh-Login (Review R4).
+  // Restrisiko: den Melious-Schlüssel braucht jcode selbst — die Shell könnte ihn lesen.
+  const env: Record<string, string> = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME || homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key,
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false', SSH_ASKPASS: '/bin/false', GIT_SSH_COMMAND: '/bin/false', GH_CONFIG_DIR: '/nonexistent' };
   const c = spawn(jcodeBin(), ['--provider-profile', 'melious', '--model', o.model, '--tools', o.tools, 'run', '--json', o.prompt], { cwd: o.cwd, env });
   let so = '', se = '';
   c.stdout.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
   c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
-  const timer = setTimeout(() => c.kill('SIGTERM'), o.timeoutS * 1000);
+  let hart: NodeJS.Timeout | undefined;
+  // Nach SIGTERM hart beenden — ein hängender jcode hielte sonst die Schattenlauf-Sperre bis zum Neustart (Review R6).
+  const timer = setTimeout(() => { c.kill('SIGTERM'); hart = setTimeout(() => c.kill('SIGKILL'), o.killNachMs ?? 10_000); }, o.timeoutS * 1000);
   const fertig = (code: number | null) => {
-    clearTimeout(timer);
+    clearTimeout(timer); clearTimeout(hart);
     let j: any = null; try { j = JSON.parse(so); } catch { /* unten */ }
     let m = { usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as Usage, aufrufe: 0 };
     if (j?.session_id && /^[\w.-]{1,120}$/.test(j.session_id)) {

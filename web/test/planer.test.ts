@@ -126,14 +126,14 @@ const W = [{ name: null, dir: PR }, { name: 'olaf-tariff-app', dir: NB, ref: 'or
 test('P3: Zitatprüfung — Datei:Zeile ± 3, Leerraum egal, Auslassung „…“, Nachbar-Repo per Präfix und per git show', () => {
   assert.equal(pruefeZitat('src/route.ts:3', 'const ok =   length(p.nr) = 33;', W).status, 'ok');
   assert.equal(pruefeZitat('`src/route.ts:6`', 'length(p.nr) = 33', W).status, 'ok', '± 3 Zeilen');
-  assert.equal(pruefeZitat('src/route.ts:3-4', 'const ok … = 33;', W).status, 'ok');
+  assert.equal(pruefeZitat('src/route.ts:3-4', 'const ok = length … = 33;', W).status, 'ok');
   assert.equal(pruefeZitat('src/route.ts:3', 'length(p.nr) = 31', W).status, 'nicht_gefunden');
-  assert.equal(pruefeZitat('src/route.ts:20', 'const ok', W).status, 'nicht_gefunden', 'zu weit weg');
+  assert.equal(pruefeZitat('src/route.ts:20', 'const ok = length(p.nr)', W).status, 'nicht_gefunden', 'zu weit weg');
   assert.equal(pruefeZitat('olaf-tariff-app/src/hook.ts:2', 'raw.slice(0, 31)', W).status, 'ok');
   assert.equal(pruefeZitat('olaf-tariff-app/src/spaeter.ts:2', 'const spaet = 1;', W).status, 'ok', 'nur im origin-Stand → git show');
   assert.equal(pruefeZitat('', 'x', W).status, 'ohne_beleg');
   assert.equal(pruefeZitat('src/route.ts:3', '', W).status, 'ohne_beleg');
-  assert.equal(pruefeZitat('../../etc/passwd:1', 'root:x', W).status, 'nicht_gefunden', 'nie außerhalb der Wurzel');
+  assert.equal(pruefeZitat('../../etc/passwd:1', 'root:x:0:0:root', W).status, 'nicht_gefunden', 'nie außerhalb der Wurzel');
   assert.equal(standardRef(NB), 'origin/develop');
 });
 
@@ -146,25 +146,25 @@ const bericht = (x: any) => pruefeZitate(parseBericht('```json\n' + JSON.stringi
 const A = checkAuftrag(AUFTRAG) as any as { a: Auftrag };
 
 test('P4: prüfpflichtig = Befund hoch/mittel + kein_befund zu Hoch-Fragen + Befunde hoch/mittel', () => {
-  const b = bericht({ antworten: [{ id: 'F1', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'const ok' }, { id: 'F2', status: 'befund', beleg: 'src/route.ts:3', zitat: 'x' }, { id: 'F3', status: 'befund', beleg: 'a:1', zitat: 'y' }],
-    befunde: [{ titel: 'H', schwere: 'hoch', beleg: 'src/route.ts:3', zitat: 'const ok' }, { titel: 'N', schwere: 'niedrig', beleg: 'a:1', zitat: 'z' }] });
+  const b = bericht({ antworten: [{ id: 'F1', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'const ok = length(p.nr) = 33;' }, { id: 'F2', status: 'befund', beleg: 'src/route.ts:3', zitat: 'x' }, { id: 'F3', status: 'befund', beleg: 'a:1', zitat: 'y' }],
+    befunde: [{ titel: 'H', schwere: 'hoch', beleg: 'src/route.ts:3', zitat: 'const ok = length(p.nr) = 33;' }, { titel: 'N', schwere: 'niedrig', beleg: 'a:1', zitat: 'z' }] });
   assert.deepEqual(pruefpflichtig(A.a, b).map((p) => p.key), ['F1', 'F2', 'B1']);
 });
 
 test('P4: urteilAbleiten — hoch bestätigt → request-changes; unklar/Zitat fehlt/strittig sperren approve; verworfen zählt nicht', () => {
-  const b = bericht({ antworten: [{ id: 'F1', status: 'befund', beleg: 'src/route.ts:3', zitat: 'const ok' }, { id: 'F2', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'const ok' }, { id: 'F3', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'const ok' }] });
+  const b = bericht({ antworten: [{ id: 'F1', status: 'befund', beleg: 'src/route.ts:3', zitat: 'const ok = length(p.nr) = 33;' }, { id: 'F2', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'const ok = length(p.nr) = 33;' }, { id: 'F3', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'const ok = length(p.nr) = 33;' }] });
   const p = pruefpflichtig(A.a, b);
   assert.equal(urteilAbleiten(A.a, b, p.map((x) => ({ ...x, urteil: 'bestaetigt' }))).empfehlung, 'request-changes');
   const verworfen = urteilAbleiten(A.a, b, p.map((x) => ({ ...x, urteil: 'verworfen' })));
   assert.equal(verworfen.empfehlung, 'approve');
   assert.deepEqual(verworfen.blind, ['F2: kein_befund (Frage nicht „hoch“) — nicht nachgeprüft', 'F3: kein_befund (Frage nicht „hoch“) — nicht nachgeprüft']);
   // Zitat steht nicht da: auch ein „bestätigt“ des Planers hilft nicht → strittig, kein approve, kein request-changes
-  const falsch = bericht({ antworten: [{ id: 'F1', status: 'befund', beleg: 'src/route.ts:3', zitat: 'erfunden' }, { id: 'F2', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'const ok' }, { id: 'F3', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'const ok' }] });
+  const falsch = bericht({ antworten: [{ id: 'F1', status: 'befund', beleg: 'src/route.ts:3', zitat: 'erfundene Zeile im Code' }, { id: 'F2', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'const ok = length(p.nr) = 33;' }, { id: 'F3', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'const ok = length(p.nr) = 33;' }] });
   const u = urteilAbleiten(A.a, falsch, pruefpflichtig(A.a, falsch).map((x) => ({ ...x, urteil: 'bestaetigt' })));
   assert.equal(u.empfehlung, 'comment');
   assert.match(u.strittig[0], /F1: Zitat nicht an der Stelle/);
   // unklar (Schweigen) sperrt approve
-  const still = bericht({ antworten: [{ id: 'F1', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'const ok' }] });
+  const still = bericht({ antworten: [{ id: 'F1', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'const ok = length(p.nr) = 33;' }] });
   const s = urteilAbleiten(A.a, still, pruefpflichtig(A.a, still).map((x) => ({ ...x, urteil: 'bestaetigt' })));
   assert.equal(s.empfehlung, 'comment');
   assert.deepEqual(s.strittig, ['F2: unklar — keine Antwort', 'F3: unklar — keine Antwort']);
@@ -176,7 +176,7 @@ test('P4: urteilAbleiten — hoch bestätigt → request-changes; unklar/Zitat f
 test('P4: planerPruefung — fehlendes Urteil ist strittig; nichts zu prüfen → kein Aufruf', async () => {
   let n = 0;
   const chat: ChatFn = async () => { n++; return antwort('{"urteile":[{"key":"F1","urteil":"bestätigt","grund":"passt"}]}'); };
-  const b = bericht({ antworten: [{ id: 'F1', status: 'befund', beleg: 'src/route.ts:3', zitat: 'const ok' }, { id: 'F2', status: 'befund', beleg: 'src/route.ts:3', zitat: 'const ok' }] });
+  const b = bericht({ antworten: [{ id: 'F1', status: 'befund', beleg: 'src/route.ts:3', zitat: 'const ok = length(p.nr) = 33;' }, { id: 'F2', status: 'befund', beleg: 'src/route.ts:3', zitat: 'const ok = length(p.nr) = 33;' }] });
   const r = await planerPruefung(chat, A.a, pruefpflichtig(A.a, b));
   assert.deepEqual(r.punkte.map((p) => [p.key, p.urteil]), [['F1', 'bestaetigt'], ['F2', 'strittig']]);
   const leer = await planerPruefung(chat, A.a, []);
@@ -236,4 +236,49 @@ test('P6: Bewertung — Kernbefund nur, wenn alle Muster passen (mit Fundstelle)
   const md = evalMarkdown(bs, sum, 'Test');
   assert.match(md, /\| #343 \| flash-ohne \| 1 \| approve ⚠ Falsch-Approve/);
   assert.match(md, /zaehlpunkt-31-33: „F1 befund/);
+});
+
+test('R5 (P6): bewertet wird nur, was der Worker fand und der Planer bestätigte — nicht die Prüffrage selbst', async () => {
+  const { bewertungsText } = await import('../server/planereval.ts');
+  const t = bewertungsText({ auftrag: { ziel: 'Zählpunkt 31 vs 33 AT prüfen' }, workerText: 'alles gut', punkte: [
+    { key: 'F1', frage: 'Zählpunkt 31 vs 33 AT?', status: 'kein_befund', urteil: 'bestaetigt', grund: '31 33 AT' },
+    { key: 'F2', frage: 'Zählpunkt 31 ohne AT, Abfrage 33', status: 'befund', urteil: 'bestaetigt', grund: 'stimmt' },
+    { key: 'F3', frage: 'verworfen 31 33 AT Zählpunkt', status: 'befund', urteil: 'verworfen', grund: '' }] } as any);
+  assert.ok(!t.includes('prüfen'), 'Auftrag nicht im Text');
+  assert.ok(t.includes('F2') && !t.includes('F1') && !t.includes('F3'));
+});
+
+// ---------- Regressionen aus Review-Runde 1 (Pass B + Pass C) ----------
+const LANG = 'const ok = length(p.nr) = 33;';
+test('R1 (P4): kein_befund zu Hoch-Frage, vom Planer verworfen → strittig, nie approve; fehlendes Urteil → strittig', () => {
+  const b = bericht({ antworten: ['F1', 'F2', 'F3'].map((id) => ({ id, status: 'kein_befund', beleg: 'src/route.ts:3', zitat: LANG })) });
+  const p = pruefpflichtig(A.a, b);
+  const v = urteilAbleiten(A.a, b, p.map((x) => ({ ...x, urteil: 'verworfen', grund: 'Zitat zeigt den Fehler' })));
+  assert.equal(v.empfehlung, 'comment');
+  assert.match(v.strittig[0], /F1: Planer widerspricht kein_befund — Zitat zeigt den Fehler/);
+  const ohne = urteilAbleiten(A.a, b, p.map((x) => ({ ...x, urteil: undefined })));
+  assert.equal(ohne.empfehlung, 'comment');
+  assert.match(ohne.strittig[0], /F1: kein Urteil des Planers/);
+});
+
+test('R2 (P3): Zitatprüfung — Bereich höchstens 30 Zeilen, Zitat mindestens 12 Zeichen, „...“ (Spread) teilt nicht', () => {
+  assert.equal(pruefeZitat('src/route.ts:1-100000', LANG, W).status, 'ohne_beleg');
+  assert.equal(pruefeZitat('src/route.ts:3', 'const', W).status, 'ohne_beleg', 'zu kurz');
+  assert.equal(pruefeZitat('src/route.ts:3', 'length … 33;', W).status, 'ohne_beleg', 'Teile zusammen zu kurz');
+  writeFileSync(join(PR, 'src', 'spread.ts'), 'const x = f(...args, 1);\n');
+  assert.equal(pruefeZitat('src/spread.ts:1', 'const x = f(...args, 1);', W).status, 'ok');
+  assert.equal(pruefeZitat('src/spread.ts:1', 'const x = f(...rest, 1);', W).status, 'nicht_gefunden');
+});
+
+test('R3: ein Symlink im PR-Worktree, der hinausführt, wird nicht gelesen', () => {
+  writeFileSync(join(TMP, 'draussen.txt'), 'WERT_AUSSERHALB_DER_WURZEL\n');
+  execFileSync('ln', ['-sfn', TMP, join(PR, 'raus')]);
+  assert.equal(pruefeZitat('raus/draussen.txt:1', 'WERT_AUSSERHALB_DER_WURZEL', W).status, 'nicht_gefunden');
+});
+
+test('R8 (P3): kein_befund ohne gültiges Zitat sperrt approve auch bei Mittel-/Niedrig-Fragen', () => {
+  const b = bericht({ antworten: [{ id: 'F1', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: LANG }, { id: 'F2', status: 'kein_befund', beleg: '', zitat: '' }, { id: 'F3', status: 'kein_befund', beleg: 'src/route.ts:3', zitat: 'gibt es so nicht im Code' }] });
+  const u = urteilAbleiten(A.a, b, pruefpflichtig(A.a, b).map((x) => ({ ...x, urteil: 'bestaetigt' })));
+  assert.equal(u.empfehlung, 'comment');
+  assert.deepEqual(u.strittig.map((s) => s.slice(0, 2)), ['F2', 'F3']);
 });

@@ -160,7 +160,7 @@ export function SchattenAbschnitt({ pr, onDone }: { pr: any; onDone: () => void 
           {s.p5 && <span className="tiny muted"> · {s.p5} (nur gemessen)</span>}
         </p>
         {s.fehler && <p className="small err">{s.fehler}</p>}
-        {s.strittig?.length > 0 && <><p className="small" style={{ margin: '6px 0 2px' }}><b>Strittig — an Opus/Knut</b> (sperrt „freigeben“):</p>
+        {s.strittig?.length > 0 && <><p className="small" style={{ margin: '6px 0 2px' }}><b>Strittig — an Opus/Knut</b> (der Schattenweg empfiehlt deshalb kein „freigeben“ — deine Knöpfe oben bleiben frei):</p>
           <ul className="small" style={{ margin: 0 }} data-testid="schatten-strittig">{s.strittig.map((x: string, i: number) => <li key={i}>{x}</li>)}</ul></>}
         {s.punkte?.length > 0 && <table className="small" style={{ marginTop: 6 }} data-testid="schatten-punkte"><thead><tr><th>Punkt</th><th>Schwere</th><th>Status</th><th>Beleg</th><th>Planer</th><th></th></tr></thead><tbody>
           {s.punkte.map((p: any) => <tr key={p.key}>

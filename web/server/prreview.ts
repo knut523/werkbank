@@ -30,10 +30,25 @@ export const realGit: GitRun = async (args, cwd, timeoutMs = 120_000) => (await 
 export const scrub = (t: string) => String(t).replace(/(https?:\/\/)[^@\s/]+@/g, '$1').replace(/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '***').slice(0, 300);
 
 export const klonDir = (repo: string, base = prReviewDir()) => join(base, '_klone', repo.replace('/', '__'));
+// Plan 183, Review R11: Haupt-Review und Schatten-Review arbeiten im selben Klon — Git-Aufrufe je Klon nacheinander (Sperren,
+// FETCH_HEAD, worktree add/remove), sonst bricht der bestehende Review-Weg gelegentlich mit einem Lock-Fehler ab.
+const klonSperren = new Map<string, Promise<unknown>>();
+export function mitKlonSperre<T>(klon: string, fn: () => Promise<T> | T): Promise<T> {
+  const vorher = klonSperren.get(klon) ?? Promise.resolve();
+  const lauf = vorher.catch(() => null).then(fn);
+  const ende = lauf.catch(() => null);
+  klonSperren.set(klon, ende);
+  ende.then(() => { if (klonSperren.get(klon) === ende) klonSperren.delete(klon); });
+  return lauf;
+}
+
 /** Eigener Klon je Repo (ohne Checkout), dann `pull/N/head` holen und einen frischen Worktree am reviewten Kopf anlegen.
  *  `suffix` (Plan 183): der Schatten-Review bekommt einen eigenen Worktree neben dem des Review-Strangs. */
 export async function prepareWorktree(repo: string, n: number, head: string, g: GitRun = realGit, base = prReviewDir(), suffix = ''): Promise<string> {
   if (!REPO_RE.test(repo) || !Number.isInteger(n) || n < 1 || !SHA_RE.test(head)) throw new Error('PR-Angaben ungültig.');
+  return mitKlonSperre(klonDir(repo, base), () => worktreeAnlegen(repo, n, head, g, base, suffix));
+}
+async function worktreeAnlegen(repo: string, n: number, head: string, g: GitRun, base: string, suffix: string): Promise<string> {
   const klon = klonDir(repo, base);
   mkdirSync(join(base, '_klone'), { recursive: true });
   let got: string;

@@ -21,3 +21,20 @@ test('realJcode: Argumente wie die Brücke; ohne Sitzungsdatei zählt usage aus 
     assert.equal(kaputt.code, -1, 'keine JSON-Ausgabe gilt als Fehlschlag');
   } finally { delete process.env.WERKBANK_JCODE_BIN; }
 });
+
+test('R4/R6: Worker-Umgebung ohne Git-/GitHub-Zugang aus HOME; hängender jcode wird nach SIGTERM hart beendet', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jcode-'));
+  const bin = join(dir, 'jcode');
+  writeFileSync(bin, '#!/usr/bin/env node\nconst e = process.env; process.stdout.write(JSON.stringify({ text: [e.GIT_CONFIG_GLOBAL, e.GIT_CONFIG_NOSYSTEM, e.GIT_TERMINAL_PROMPT, e.GH_CONFIG_DIR, e.GIT_ASKPASS, e.WB_TEST_DURCH ?? "-"].join("|") }));\n', { mode: 0o755 });
+  process.env.WERKBANK_JCODE_BIN = bin;
+  process.env.WB_TEST_DURCH = 'nein';
+  try {
+    const r = await realJcode({ cwd: dir, prompt: 'P', model: 'm', key: 'test', tools: 'read', timeoutS: 30 });
+    assert.equal(r.text, '/dev/null|1|0|/nonexistent|/bin/false|-');
+    writeFileSync(bin, '#!/usr/bin/env node\nprocess.on("SIGTERM", () => {}); setInterval(() => {}, 1000);\n', { mode: 0o755 });
+    const t0 = Date.now();
+    const h = await realJcode({ cwd: dir, prompt: 'P', model: 'm', key: 'test', tools: 'read', timeoutS: 1, killNachMs: 300 });
+    assert.ok(Date.now() - t0 < 5000, 'hart beendet');
+    assert.notEqual(h.code, 0);
+  } finally { delete process.env.WERKBANK_JCODE_BIN; delete process.env.WB_TEST_DURCH; }
+});

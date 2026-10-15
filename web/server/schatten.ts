@@ -7,8 +7,8 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { wb } from './db.ts';
-import { reviewsCol } from './prticker.ts';
-import { prepareWorktree, klonDir, realGit, scrub, type GitRun } from './prreview.ts';
+import { reviewsCol, tickerSettings } from './prticker.ts';
+import { prepareWorktree, klonDir, mitKlonSperre, realGit, scrub, type GitRun } from './prreview.ts';
 import { reviewDir } from './bericht.ts';
 import {
   planerReview, passendeFallstricke, nachbarRepos, diffOhneLock, schattenMarkdown, realJcode, jcodeBin, AUSFALLPFAD, FALLSTRICKE_START,
@@ -39,11 +39,15 @@ export async function fallstrickMerken(by: { id: string; name: string }, b: any)
 
 // P5: nicht für Migrationen, Auth, Geld/Tarif — an Pfaden und (Migration) am Inhalt; Mindestgröße ohne Lock-Dateien.
 const P5_PFAD: [RegExp, string][] = [
-  [/(^|\/)(migrations?|migrate[\w-]*)(\/|$)|\.sql$/i, 'Migration'],
+  // Review R10: auch `db-migrations/`, `migrate.py`, Alembic/Flyway/Liquibase/Knex-Ordner und das Prisma-Schema.
+  [/(^|\/)([\w-]*migrations?|migrate[\w-]*|alembic|flyway|liquibase|knex)(\/|\.|$)|\.sql$|(^|\/)schema\.prisma$/i, 'Migration'],
   [/(^|\/)(auth|login|logout|session|oauth|middleware)[\w.-]*(\/|$)|(^|\/)(auth|middleware|session)\.[jt]sx?$/i, 'Auth'],
   [/tarif|tariff|preis|price|pricing|billing|abrechnung|rechnung|invoice|payment|zahlung/i, 'Geld/Tarif'],
 ];
-const P5_INHALT: [RegExp, string][] = [[/^\+.*\b(ALTER|CREATE|DROP)\s+TABLE\b/im, 'Migration (SQL im Diff)']];
+const P5_INHALT: [RegExp, string][] = [
+  [/^\+.*\b((ALTER|CREATE|DROP)\s+TABLE|DROP\s+(INDEX|TRIGGER|POLICY|COLUMN))\b/im, 'Migration (SQL im Diff)'],
+  [/^\+.*\b(create_table|drop_table|add_column|createTable|dropTable|alterTable)\s*\(/m, 'Migration (Schema-Aufruf im Diff)'],
+];
 export const P5_MIN_ZEICHEN = 1500;
 export function p5Grund(dateien: string[], diff: string): string | null {
   const gruende = new Set<string>();
@@ -86,8 +90,10 @@ export async function schattenTick(deps: SchattenDeps): Promise<{ started: numbe
   await reviewsCol().updateMany({ 'schatten.status': 'läuft', 'schatten.startedAt': { $lt: new Date(now.getTime() - STALE_MS) } },
     { $set: { 'schatten.status': 'fehler', 'schatten.fehler': 'nach 45 min nicht fertig (Neustart?) — neu anstoßen', 'schatten.doneAt': now } });
   if (laeuft) return { started: 0 };
+  // Schalter aus → nur noch von Hand angestoßene Läufe (mit `by`); automatisch eingereihte warten (Review R7, Rückweg).
+  const an = (await tickerSettings()).schatten;
   const token = randomBytes(6).toString('hex');
-  const r: any = await reviewsCol().findOneAndUpdate({ 'schatten.status': 'wartet' }, { $set: { 'schatten.status': 'läuft', 'schatten.token': token, 'schatten.startedAt': now } }, { sort: { 'schatten.at': 1 }, returnDocument: 'after' });
+  const r: any = await reviewsCol().findOneAndUpdate({ 'schatten.status': 'wartet', ...(an ? {} : { 'schatten.by': { $exists: true } }) }, { $set: { 'schatten.status': 'läuft', 'schatten.token': token, 'schatten.startedAt': now } }, { sort: { 'schatten.at': 1 }, returnDocument: 'after' });
   const doc = r && 'value' in r && !('_id' in r) ? r.value : r;   // mongodb 6: Dokument direkt
   if (!doc) return { started: 0 };
   laeuft = schattenLauf(doc, token, deps).catch((e) => deps.log?.('schatten fehler', { pr: `${doc.repo}#${doc.number}`, error: scrub(e?.message ?? e) })).finally(() => { laeuft = null; });
@@ -119,7 +125,7 @@ export async function schattenLauf(r: any, token: string, deps: SchattenDeps): P
   let wt: string | null = null;
   try {
     wt = await prepareWorktree(r.repo, r.number, r.head, g, undefined, '-schatten');
-    await g(['fetch', '--no-tags', 'origin', `+refs/heads/${pr.base}:refs/remotes/origin/${pr.base}`], klonDir(r.repo));
+    await mitKlonSperre(klonDir(r.repo), () => g(['fetch', '--no-tags', 'origin', `+refs/heads/${pr.base}:refs/remotes/origin/${pr.base}`], klonDir(r.repo)));
     const basis = String(await g(['merge-base', 'HEAD', `origin/${pr.base}`], wt)).trim();
     const [diff, diffStat, namen] = await Promise.all([g(['diff', `${basis}...HEAD`], wt), g(['diff', '--stat', `${basis}...HEAD`], wt), g(['diff', '--name-only', `${basis}...HEAD`], wt)]);
     const p5 = p5Grund(String(namen).split('\n').filter(Boolean), String(diff));
@@ -136,7 +142,7 @@ export async function schattenLauf(r: any, token: string, deps: SchattenDeps): P
   } catch (e: any) {
     await ende(e?.skip ? 'übersprungen' : 'fehler', { fehler: scrub(e?.message ?? e) });
   } finally {
-    if (wt) await Promise.resolve(g(['worktree', 'remove', '--force', wt], klonDir(r.repo))).catch(() => null);
+    if (wt) await mitKlonSperre(klonDir(r.repo), () => g(['worktree', 'remove', '--force', wt!], klonDir(r.repo))).catch(() => null);
   }
 }
 

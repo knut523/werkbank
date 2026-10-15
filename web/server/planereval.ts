@@ -20,6 +20,12 @@ export function fundstelle(text: string, k: KernBefund): string | null {
   return null;
 }
 
+/** Text, gegen den der Arm „flash-mit“ bewertet wird: Bericht des Workers + vom Planer bestätigte Befunde. Nicht der Auftrag und
+ *  nicht die Gründe zu verworfenen oder kein_befund-Punkten — sonst träfen die Muster schon die Prüffrage selbst (Review R5). */
+export function bewertungsText(r: { workerText?: string; punkte?: { key: string; frage?: string; status: string; urteil?: string; grund?: string }[] }): string {
+  return [r.workerText ?? '', ...(r.punkte ?? []).filter((p) => p.status === 'befund' && p.urteil === 'bestaetigt').map((p) => `${p.key} ${p.frage ?? ''} — ${p.grund ?? ''}`)].join('\n');
+}
+
 export function bewerte(pr: RegPr, l: Lauf): Bewertung {
   const treffer = pr.kern_befunde.map((k) => { const f = l.fehler ? null : fundstelle(l.text, k); return { id: k.id, gefunden: !!f, fundstelle: f }; });
   return { pr: pr.id, arm: l.arm, lauf: l.lauf, empfehlung: l.empfehlung, falschApprove: pr.opus.blocker && l.empfehlung === 'approve', treffer, energie: Math.round(l.energie * 100) / 100, aufrufe: l.aufrufe, s: Math.round(l.ms / 1000), ...(l.fehler ? { fehler: l.fehler } : {}) };

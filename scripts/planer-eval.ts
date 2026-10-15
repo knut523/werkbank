@@ -17,7 +17,7 @@ import {
   planerReview, realJcode, passendeFallstricke, nachbarRepos, FALLSTRICKE_START, WORKER_MODELL, type ChatFn,
 } from '../web/server/planer.ts';
 import { energieOf, FAKTOREN_VORGABE } from '../web/server/melious.ts';
-import { bewerte, zusammenfassen, evalMarkdown, type RegPr, type Lauf } from '../web/server/planereval.ts';
+import { bewerte, bewertungsText, zusammenfassen, evalMarkdown, type RegPr, type Lauf } from '../web/server/planereval.ts';
 
 const arg = (k: string, d = '') => { const i = process.argv.indexOf(`--${k}`); return i > 0 ? process.argv[i + 1] : d; };
 const paare = (k: string) => Object.fromEntries(arg(k).split(',').filter(Boolean).map((p) => p.split('=')).filter((p) => p.length === 2)) as Record<string, string>;
@@ -68,7 +68,7 @@ async function armLauf(pr: RegPr, arm: string, n: number): Promise<Lauf> {
   const r = await planerReview({ chat, jcode: realJcode, key, faktoren, timeoutS: 1500 }, {
     dir, basis, diff, diffStat: git(dir, ['diff', '--stat', `${basis}...HEAD`]), ziel: `Code-Review ${pr.repo}#${pr.number}: ${pr.titel}`, fallstricke, nachbarn: nachbarRepos(pr.repo),
   });
-  const text = [JSON.stringify(r.auftrag ?? {}), r.workerText ?? '', ...(r.punkte ?? []).map((p) => `${p.key} ${p.frage} ${p.urteil} ${p.grund ?? ''}`), ...(r.strittig ?? [])].join('\n');
+  const text = bewertungsText(r);
   writeFileSync(join(out, `${pr.id}-${arm}-${n}.json`), JSON.stringify(r, null, 1));
   return { pr: pr.id, arm, lauf: n, empfehlung: r.empfehlung ?? null, text, energie: r.stufen.reduce((a, s) => a + s.energie, 0), aufrufe: r.stufen.reduce((a, s) => a + s.aufrufe, 0), ms: Date.now() - t0, ...(r.status !== 'fertig' ? { fehler: r.fehler ?? r.status } : {}) };
 }

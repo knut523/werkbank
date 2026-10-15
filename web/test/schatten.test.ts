@@ -70,7 +70,7 @@ test('reviewTick: Schalter „Schatten-Review“ an → der gestartete Review be
 // Gespielte Welt für einen Schattenlauf.
 const AUFTRAG = { ziel: 'Review #7', kontext: 'Admin liest Fortschritt der Tarif-App', grenzen: 'nur lesen', fertig_wenn: 'alle Fragen beantwortet',
   pruef_fragen: [{ id: 'F1', frage: 'Zählpunkt-Format über die App-Grenze?', wo_suchen: 'route.ts + olaf-tariff-app', schwere_falls_ja: 'hoch' }, { id: 'F2', frage: 'Null-Checks?', wo_suchen: 'route.ts', schwere_falls_ja: 'mittel' }, { id: 'F3', frage: 'Tests realistisch?', wo_suchen: 'tools/', schwere_falls_ja: 'niedrig' }] };
-const BERICHT = { empfehlung: 'approve', antworten: [{ id: 'F1', status: 'befund', beleg: 'src/route.ts:2', zitat: 'length(p.nr) = 33' }, { id: 'F2', status: 'kein_befund', beleg: 'src/route.ts:1', zitat: 'const a' }, { id: 'F3', status: 'kein_befund', beleg: 'src/route.ts:1', zitat: 'const a' }] };
+const BERICHT = { empfehlung: 'approve', antworten: [{ id: 'F1', status: 'befund', beleg: 'src/route.ts:2', zitat: 'length(p.nr) = 33' }, { id: 'F2', status: 'kein_befund', beleg: 'src/route.ts:1', zitat: 'const alpha = einsZwei();' }, { id: 'F3', status: 'kein_befund', beleg: 'src/route.ts:1', zitat: 'const alpha = einsZwei();' }] };
 const antwort = (content: string, energy: number) => ({ choices: [{ message: { content } }], usage: { prompt_tokens: 2000, completion_tokens: 300 }, billing_cost: { energy } });
 
 function welt(o: { pr?: any; jcode?: (opts: any) => Promise<any>; key?: string | null } = {}) {
@@ -80,7 +80,7 @@ function welt(o: { pr?: any; jcode?: (opts: any) => Promise<any>; key?: string |
   const git = (args: string[], cwd: string) => {
     gitCalls.push([...args, `@${cwd}`]);
     if (args[0] === 'rev-parse') return SHA;
-    if (args[0] === 'worktree' && args[1] === 'add') { mkdirSync(join(args[3], 'src'), { recursive: true }); writeFileSync(join(args[3], 'src', 'route.ts'), 'const a = 1;\nconst ok = length(p.nr) = 33;\n'); }
+    if (args[0] === 'worktree' && args[1] === 'add') { mkdirSync(join(args[3], 'src'), { recursive: true }); writeFileSync(join(args[3], 'src', 'route.ts'), 'const alpha = einsZwei();\nconst ok = length(p.nr) = 33;\n'); }
     if (args[0] === 'merge-base') return 'b'.repeat(40);
     if (args[0] === 'diff') return args[1] === '--stat' ? ' src/app/api/follow-up/claims/route.ts | 80 +' : args[1] === '--name-only' ? 'src/app/api/follow-up/claims/route.ts\n' : DIFF;
     return '';
@@ -120,7 +120,7 @@ test('Anstoßen: aus keinem oder abgeschlossenem Zustand → wartet; läuft scho
 
 test('Schattenlauf: eigener Worktree, Basis geholt, Auftrag mit Fallstrick und PR-Text, Ergebnis neben dem Review, Messung je Stufe, aufgeräumt', async () => {
   const S = await import('../server/schatten.ts');
-  await review({ schatten: { status: 'wartet', at: new Date() } });
+  await review({ schatten: { status: 'wartet', at: new Date(), by: 'Knut' } });
   const w = welt();
   assert.deepEqual(await S.schattenTick(w.deps), { started: 1 });
   assert.deepEqual(await S.schattenTick(w.deps), { started: 0 }, 'einer zur Zeit');
@@ -159,7 +159,7 @@ test('Schattenlauf: eigener Worktree, Basis geholt, Auftrag mit Fallstrick und P
 
 test('Schattenlauf: P5 überspringt mit Grund; WERKBANK_SCHATTEN_P5=messen läuft mit Vermerk', async () => {
   const S = await import('../server/schatten.ts');
-  await review({ schatten: { status: 'wartet', at: new Date() } });
+  await review({ schatten: { status: 'wartet', at: new Date(), by: 'Knut' } });
   const w = welt();
   const g0 = w.deps.git;
   w.deps.git = (args: string[], cwd: string) => (args[0] === 'diff' && args[1] === '--name-only' ? 'prisma/migrations/1/migration.sql\n' : g0(args, cwd));
@@ -183,7 +183,7 @@ test('Schattenlauf: kein Schlüssel / Melious weg → ausgefallen mit Ausfallpfa
     [{ pr: { state: 'OPEN', head: 'd'.repeat(40), base: 'develop', body: '' } }, 'übersprungen', /neuer Stand ddddddd/],
     [{ jcode: async () => ({ code: 2, text: '', usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, aufrufe: 0, ms: 1, stderr: '401 unauthorized' }) }, 'ausgefallen', /Exit 2\) 401 unauthorized · Ausfallpfad/],
   ] as const) {
-    await review({ schatten: { status: 'wartet', at: new Date() } });
+    await review({ schatten: { status: 'wartet', at: new Date(), by: 'Knut' } });
     const w = welt(o as any);
     await S.schattenTick(w.deps); await S.schattenLaeuft();
     const d = await doc();
@@ -194,7 +194,7 @@ test('Schattenlauf: kein Schlüssel / Melious weg → ausgefallen mit Ausfallpfa
 test('Claim: Ergebnis nur mit gültigem Claim (auf fehler gesetzt → bleibt fehler); hängengebliebene Läufe nach 45 min → fehler', async () => {
   const S = await import('../server/schatten.ts');
   const P = await import('../server/prticker.ts');
-  await review({ schatten: { status: 'wartet', at: new Date() } });
+  await review({ schatten: { status: 'wartet', at: new Date(), by: 'Knut' } });
   const w = welt({ jcode: async () => { await P.reviewsCol().updateOne({ _id: ID as any }, { $set: { 'schatten.status': 'fehler', 'schatten.fehler': 'von Hand' } }); return { code: 0, text: '```json\n' + JSON.stringify(BERICHT) + '\n```', usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, aufrufe: 1, ms: 1, stderr: '' }; } });
   await S.schattenTick(w.deps); await S.schattenLaeuft();
   let d = await doc();
@@ -203,4 +203,30 @@ test('Claim: Ergebnis nur mit gültigem Claim (auf fehler gesetzt → bleibt feh
   await S.schattenTick(welt().deps);
   d = await doc();
   assert.equal(d.schatten.status, 'fehler'); assert.match(d.schatten.fehler, /45 min/);
+});
+
+test('R7: Schalter aus → automatisch eingereihte Läufe starten nicht mehr, von Hand angestoßene schon', async () => {
+  const S = await import('../server/schatten.ts');
+  const P = await import('../server/prticker.ts');
+  await P.setTickerSettings({ schatten: false }, { id: 'u1', name: 'Knut' });
+  await review({ schatten: { status: 'wartet', at: new Date() } });
+  assert.deepEqual(await S.schattenTick(welt().deps), { started: 0 });
+  await review();
+  await S.schattenAnstossen(ID, 'Knut');
+  assert.deepEqual(await S.schattenTick(welt().deps), { started: 1 });
+  await S.schattenLaeuft();
+});
+
+test('R10 (P5): weitere Migrationsformen werden erkannt', async () => {
+  const { p5Grund } = await import('../server/schatten.ts');
+  for (const f of ['db-migrations/001.ts', 'alembic/versions/0001_x.py', 'db/migrate.py', 'prisma/schema.prisma']) assert.match(p5Grund([f], DIFF) ?? '', /Migration/, f);
+  for (const z of ["+op.create_table('billing')", '+  DROP INDEX idx_a;', '+ await knex.schema.dropTable("x")']) assert.match(p5Grund(['tools/x.ts'], DIFF + z + '\n') ?? '', /Migration/, z);
+});
+
+test('R11: zwei gleichzeitige prepareWorktree auf demselben Klon laufen nacheinander (Sperre je Klon)', async () => {
+  const R = await import('../server/prreview.ts');
+  let aktiv = 0, maxAktiv = 0;
+  const git = async (args: string[]) => { aktiv++; maxAktiv = Math.max(maxAktiv, aktiv); await new Promise((r) => setTimeout(r, 20)); aktiv--; if (args[0] === 'rev-parse') return SHA; if (args[0] === 'worktree' && args[1] === 'add') mkdirSync(args[3], { recursive: true }); return ''; };
+  await Promise.all([R.prepareWorktree('WirStrom1/olaf-admin', 9, SHA, git), R.prepareWorktree('WirStrom1/olaf-admin', 9, SHA, git, undefined, '-schatten')]);
+  assert.equal(maxAktiv, 1);
 });
