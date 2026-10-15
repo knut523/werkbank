@@ -29,15 +29,19 @@ export const WERKBANK_PAGES = [
   { id: 'einrichtung', hash: '#/einrichtung', label: 'Workspace-Einrichtung', icon: Rocket, nav: false, menu: false },
 ] as { id: string; hash: string; label: string; icon: any; nav: boolean; menu?: boolean; bereich?: string; reiter?: string[] }[];
 
-/** Adresse einer Seite in der Leiste; Planen/Wissen öffnen den zuletzt benutzten Reiter (die Seite schreibt `wb-bereich:<id>`). */
-export function pageHash(p: { id: string; hash: string; bereich?: string; reiter?: string[] }): string {
+/** Adresse einer Seite in der Leiste; Planen/Wissen öffnen den zuletzt benutzten Reiter (die Seite schreibt `wb-bereich:<id>`),
+ *  sonst den ersten freigegebenen (`show`: Funktionsfreigabe je Reiter). */
+export function pageHash(p: { id: string; hash: string; bereich?: string; reiter?: string[] }, show: (id: string) => boolean = () => true): string {
   if (!p.reiter) return p.hash;
+  const hashes = p.reiter.filter(show).map((id) => WERKBANK_PAGES.find((x) => x.id === id)?.hash).filter((h): h is string => !!h);
   try {
     const h = localStorage.getItem(`wb-bereich:${p.id}`);
-    if (h && WERKBANK_PAGES.some((x) => x.bereich === p.id && x.hash === h)) return h;
+    if (h && hashes.includes(h)) return h;
   } catch { /* privat */ }
-  return p.hash;
+  return hashes[0] ?? p.hash;
 }
+/** Seiten-ID (Adresse /wb/<id>) zu einem Hash — wie in WerkbankRoute. */
+export const pageIdOf = (hash: string) => WERKBANK_PAGES.slice().reverse().find((x) => x.hash !== '#/' && hash.startsWith(x.hash))?.id ?? 'heute';
 
 /** Ein Link aus der Werkbank (Chat öffnen, Kontomenü …) im selben Fenster: nur eigener Ursprung; /c/ und /wb/ über den
  *  Router (kein Neuladen), anderes vom eigenen Ursprung normal geladen, Fremdes nie. */
@@ -108,8 +112,9 @@ function WerkbankNav() {
   const go = (p: (typeof WERKBANK_PAGES)[number]) => {
     // Klick auf die offene Seite = neu laden (wie früher, als jeder Klick den iframe neu lud).
     const h = new URLSearchParams(search).get('h');
-    if (p.id === current && (!h || h === pageHash(p))) window.dispatchEvent(new Event('werkbank-reload'));
-    else navigate(`/wb/${p.id}`);
+    const ziel = p.reiter ? pageIdOf(pageHash(p, show)) : p.id;
+    if (ziel === current && (!h || h === pageHash(p, show))) window.dispatchEvent(new Event('werkbank-reload'));
+    else navigate(`/wb/${ziel}`);
     closeOnMobile();
   };
   return (

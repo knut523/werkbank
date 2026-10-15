@@ -11,9 +11,7 @@ registration:
     - konekto.energy
 
 interface:
-  customWelcome: |
-    Willkommen im OLAF Workspace – hier arbeitest du mit Claude Code, unseren Skills, dem Vault und Jira.
-    Neu hier? Im Kontomenü unter „Einrichtung“ verbindest du Claude einmal mit deinem Konto.
+  customWelcome: "Willkommen im OLAF Workspace – hier arbeitest du mit Claude Code, unseren Skills, dem Vault und Jira. Neu hier? Im Kontomenü unter „Einrichtung“ verbindest du Claude einmal mit deinem Konto."
   modelSelect: true
   parameters: false
   presets: false
