@@ -36,6 +36,7 @@ export interface Account {
   ketteModell?: string;
   vorrang?: boolean;
   chainModel?: string;   // nur in der Warteschlange: dieses Konto mit diesem Modell (Stufe der Ersatzkette)
+  abo?: string[];        // Modelle im Abo (Werkbank-Einstellung); andere laufen auf Guthaben → Hinweis, keine Sperre
 }
 export type Exhausted = Record<string, { until: number; fp?: string }>;
 
@@ -154,7 +155,7 @@ const rollenOf = (v: unknown): Record<string, string[]> => Object.fromEntries(Ob
   .filter(([k, l]) => /^[a-z]{1,20}$/.test(k) && Array.isArray(l)).map(([k, l]) => [k, (l as unknown[]).filter((m): m is string => typeof m === 'string' && MODEL_NAME.test(m)).slice(0, 20)]));
 
 /** Konten in Reihenfolge, ohne Doppelte; `chat` (token null) = der Schlüssel aus der Anfrage. Immer mindestens dieser. */
-export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?: unknown; kind?: unknown; model?: unknown; pool?: unknown; rollen?: unknown; faktoren?: unknown; taktS?: unknown; eco?: unknown; kette?: unknown; ketteModell?: unknown; vorrang?: unknown; rest?: unknown; fallback?: unknown; sperre?: unknown }[] | null | undefined, chatToken: string): Account[] {
+export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?: unknown; kind?: unknown; model?: unknown; pool?: unknown; rollen?: unknown; faktoren?: unknown; taktS?: unknown; eco?: unknown; kette?: unknown; ketteModell?: unknown; vorrang?: unknown; abo?: unknown; rest?: unknown; fallback?: unknown; sperre?: unknown }[] | null | undefined, chatToken: string): Account[] {
   const out: Account[] = [];
   const seen = new Set<string>();
   for (const a of list ?? []) {
@@ -164,7 +165,7 @@ export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?:
       if (id !== MELIOUS_ID || !MELIOUS_KEY.test(token) || seen.has(token) || out.some(isMelious)) continue;
       seen.add(token);
       const name = (v: unknown) => (typeof v === 'string' && /^[\w.:/-]{1,80}$/.test(v) ? v : undefined);
-      out.push({ id, label: MELIOUS_LABEL, token, kind: 'melious', model: name(a.model), pool: poolOf(a.pool), rollen: rollenOf(a.rollen), faktoren: faktorenOf(a.faktoren), taktS: Number(a.taktS) > 0 ? Math.min(86_400, Number(a.taktS)) : undefined, eco: a.eco === true, kette: a.kette === true, ketteModell: name(a.ketteModell), vorrang: a.vorrang === true, rest: Math.max(0, Number(a.rest) || 0), fallback: a.fallback === true, sperre: typeof a.sperre === 'string' ? a.sperre.slice(0, 160) : undefined });
+      out.push({ id, label: MELIOUS_LABEL, token, kind: 'melious', model: name(a.model), pool: poolOf(a.pool), rollen: rollenOf(a.rollen), faktoren: faktorenOf(a.faktoren), taktS: Number(a.taktS) > 0 ? Math.min(86_400, Number(a.taktS)) : undefined, eco: a.eco === true, kette: a.kette === true, ketteModell: name(a.ketteModell), vorrang: a.vorrang === true, abo: Array.isArray(a.abo) ? (a.abo as unknown[]).filter((m): m is string => typeof m === 'string' && MODEL_NAME.test(m)).slice(0, 30) : undefined, rest: Math.max(0, Number(a.rest) || 0), fallback: a.fallback === true, sperre: typeof a.sperre === 'string' ? a.sperre.slice(0, 160) : undefined });
       continue;
     }
     const token = id === 'chat' ? chatToken : typeof a?.token === 'string' ? a.token : '';
@@ -236,8 +237,22 @@ export function accountEnv(env: Record<string, string | undefined>, a: Account, 
   // Für Gateways: weniger Anthropic-Betas. Einige schickt Claude Code trotzdem (Stub-Test 14.10.: claude-code, context-1m,
   // interleaved-thinking, effort …) — ob Melious sie ignoriert, zeigt erst der echte Zug.
   env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = '1';
-  if (model) for (const k of MODEL_ENV) env[k] = model;
+  // Hotfix 15.10. (Knut: „bei Melious nur die Modelle nutzen, die auch im Abo drin sind“): nie Claude-Namen an Melious — die
+  // bildet Melious nach eigener Einstellung ab, evtl. auf Modelle außerhalb des Abos (Guthaben). opus/sonnet (Hauptmodell,
+  // Teilagenten) → das gewählte Modell bzw. das Ketten-Modell (Vorgabe glm-5.3); haiku/Hilfsmodell → glm-5.3-flash.
+  const gross = model ?? a.ketteModell ?? MELIOUS_GROSS;
+  env.ANTHROPIC_DEFAULT_OPUS_MODEL = gross;
+  env.ANTHROPIC_DEFAULT_SONNET_MODEL = gross;
+  env.ANTHROPIC_DEFAULT_HAIKU_MODEL = MELIOUS_KLEIN;
+  env.ANTHROPIC_SMALL_FAST_MODEL = MELIOUS_KLEIN;
 }
+
+export const MELIOUS_GROSS = 'glm-5.3';
+export const MELIOUS_KLEIN = 'glm-5.3-flash';
+// Im PRO-Abo enthaltene Modelle (Vorgabe; Einstellung „abo“ in der Werkbank). Andere laufen bei Melious auf Guthaben.
+export const MELIOUS_ABO = ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'];
+/** Ist dieses Modell im Abo? (`:eco` zählt wie das Modell.) */
+export const imAbo = (model: string | undefined, abo: string[] | undefined) => !model || (abo?.length ? abo : MELIOUS_ABO).includes(model.replace(/:eco$/, ''));
 
 /**
  * Fehlerart eines Melious-Fehlers (null = kein Grund zum Wechsel). „guthaben“: echter Test 14.10.2026 — jeder POST /v1/messages

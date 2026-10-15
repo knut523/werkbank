@@ -41,6 +41,11 @@ export const ROLLEN_VORGABE: Record<string, string[]> = {
   niedrig: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731', 'glm-5.3'],
 };
 export const ROLLEN = ['leser', 'schreiber', 'niedrig'];
+// Im PRO-Abo enthalten (Hotfix 15.10., Knut: „bei Melious nur die Modelle nutzen, die auch im Abo drin sind“); Einstellung „abo“.
+export const MELIOUS_ABO = ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'];
+/** Modellnamen, die nicht im Abo sind (`:eco` zählt wie das Modell), ohne Doppelte. */
+export const ausserhalbAbo = (modelle: (string | null | undefined)[], abo: string[]) =>
+  [...new Set(modelle.filter((m): m is string => !!m).map((m) => m.replace(/:eco$/, '')))].filter((m) => !abo.includes(m));
 export const TAKT_S = 2700;
 const TAG_S = 86_400;
 export const TOPF_TAGE = 4;   // Obergrenze des Energietopfs (Melious-Dashboard: „bis zu 4 Tage ansparbar“)
@@ -56,7 +61,7 @@ export const meliousDefaults = (env = process.env) => {
   return {
     dayLimit: num(env.MELIOUS_TAG_LIMIT, tag ? Math.round(tag * 1.5) : 5000), monthLimit: num(env.MELIOUS_MONAT_LIMIT, tag ? Math.round(tag * 31) : 100_000),
     proTakt, taktS, faktoren: FAKTOREN_VORGABE, rollen: ROLLEN_VORGABE, eco: false,
-    enabled: an, fallback: an, kette: an, ketteModell: 'glm-5.3',
+    enabled: an, fallback: an, kette: an, ketteModell: 'glm-5.3', abo: MELIOUS_ABO,
   };
 };
 
@@ -68,7 +73,7 @@ interface Stored {
   dayLimit?: number | null; monthLimit?: number | null; proTakt?: number | null; taktS?: number | null;
   faktoren?: Record<string, Faktor> | null; kalibriert?: string | null; rollen?: Record<string, string[]> | null; eco?: boolean;
   preise?: { stand: Date; faktoren: Record<string, Faktor> } | null;   // aus der Preisliste von Melious (täglich)
-  kette?: boolean; ketteModell?: string | null;
+  kette?: boolean; ketteModell?: string | null; abo?: string[] | null;
 }
 
 async function stored(u: User): Promise<Stored | null> {
@@ -93,6 +98,9 @@ export async function meliousSettings(u: User) {
     faktorQuelle: s?.faktoren ? 'von Hand' : s?.preise ? `Preisliste Melious (${new Date(s.preise.stand).toISOString().slice(0, 10)})` : 'Kalibrierung 15.10. (Preisliste noch nicht geholt)',
     preiseStand: s?.preise?.stand ?? null,
     kalibriert: s?.kalibriert ?? null, rollen: s?.rollen ?? d.rollen, defaults: d, dashboard: MELIOUS_DASHBOARD,
+    abo: s?.abo ?? d.abo,
+    // Hotfix 15.10.: Modelle außerhalb des Abos laufen auf Guthaben — erlaubt, aber nie still (Hinweis in der Einrichtung).
+    warnungen: ausserhalbAbo([s?.model, s?.ketteModell ?? d.ketteModell, ...Object.values(s?.rollen ?? d.rollen).flat()], s?.abo ?? d.abo).map((m) => `„${m}“ ist nicht im Abo und läuft auf Guthaben.`),
   };
 }
 
@@ -264,6 +272,11 @@ export async function setMelious(u: User, b: Record<string, unknown>) {
       if (b.kalibriert !== undefined) f('kalibriert', b.kalibriert ? String(b.kalibriert).slice(0, 80) : null);
     }
   }
+  if (b.abo !== undefined) {
+    if (b.abo === null) f('abo', null);
+    else if (!Array.isArray(b.abo) || b.abo.length > 30 || !b.abo.every((m) => typeof m === 'string' && MODEL.test(m))) throw httpErr(400, 'Abo: Liste von Modellnamen.');
+    else f('abo', b.abo);
+  }
   if (b.rollen !== undefined) {
     if (b.rollen === null) f('rollen', null);
     else {
@@ -407,7 +420,7 @@ export async function meliousForBridge(u: User) {
   const heute = Object.fromEntries(use.modelle.map((m) => [m.model, m.heute]));
   const rollen = Object.fromEntries(Object.entries(s.rollen).map(([r, l]) => [r, ordneRolle(l, { modus: use.energie.modus, faktoren: s.faktoren, heute })]));
   const pool = Object.keys(s.faktoren).map((model) => ({ model, frei: 1 }));
-  return { id: MELIOUS_ID, label: 'Melious', token, kind: 'melious' as const, model: s.model, pool, rollen, faktoren: s.faktoren, taktS: s.taktS, eco: s.eco, kette: s.kette, ketteModell: s.ketteModell, vorrang: use.energie.vorrang,
+  return { id: MELIOUS_ID, label: 'Melious', token, kind: 'melious' as const, model: s.model, pool, rollen, faktoren: s.faktoren, taktS: s.taktS, eco: s.eco, kette: s.kette, ketteModell: s.ketteModell, vorrang: use.energie.vorrang, abo: s.abo,
     fallback: s.fallback, rest: use.sperre ? 0 : use.rest, ...(use.sperre ? { sperre: use.sperre } : {}) };
 }
 

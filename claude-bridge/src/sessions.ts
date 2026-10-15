@@ -16,7 +16,7 @@ import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
-import { acquire, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
+import { acquire, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 
 export interface Sink {
   write(text: string): void;
@@ -653,10 +653,12 @@ export const CHALLENGE_HINT = 'Gegenprüfung: Für Diff-Reviews, Plan-Challenges
 // Antwort → Befehl gesperrt; harmlose Befehle ohne Klassifikator).
 
 /** Statuszeile eines Melious-Zugs: welches Modell wirklich läuft (fester Name) bzw. dass Melious nur abbildet. */
-export function meliousLine(model: string | undefined, asked: string | undefined): string {
+export function meliousLine(model: string | undefined, asked: string | undefined, abo?: string[]): string {
   const m = model && !/^(opus|sonnet|haiku)$/.test(model) ? ` · Modell ${model}` : ` · Abbildung von „${model ?? asked ?? 'Standardmodell'}“ (tatsächliches Modell meldet Melious nicht — in der Einrichtung ein festes Modell wählen)`;
-  return `🧪 Dieser Zug läuft über „Melious“${m} (${MELIOUS_HINT})`;
+  // Kein stilles Guthaben (Hotfix 15.10.): außerhalb des Abos läuft der Zug, aber mit ausdrücklichem Hinweis.
+  return `🧪 Dieser Zug läuft über „Melious“${m} (${MELIOUS_HINT})${model && !imAbo(model, abo) ? ` — ⚠️ ${guthabenHinweis(model)}` : ''}`;
 }
+export const guthabenHinweis = (model: string) => `„${model}“ ist nicht im Melious-Abo und läuft auf Guthaben (kostet Geld); im Abo: siehe Einrichtung → Melious.`;
 
 /** usage je API-Antwort eines Melious-Versuchs (Schätzung für den Deckel; gezählt wird danach die Ergebnis-usage). */
 function meliousCall(live: Live, msg: any) {
@@ -1017,7 +1019,10 @@ async function meliousCommand(req: TurnRequest, key: string, arg: string, name?:
     else setMeliousChat(key, true, !name || /^standard$/i.test(name) ? null : name);
   } else if (arg === 'modelle') {
     lines.push(mel ? await meliousModels(mel) : 'Melious ist in der Einrichtung nicht erlaubt oder es ist kein Schlüssel hinterlegt.');
+    lines.push(`Im Abo (ohne Guthaben): ${(mel?.abo?.length ? mel.abo : MELIOUS_ABO).map((m) => `\`${m}\``).join(', ')}.`);
   }
+  // Freier Modellname außerhalb des Abos: erlaubt, aber nie still auf Guthaben (Hotfix 15.10.).
+  if (name && (arg === 'an' || arg === 'modell') && !/^standard$/i.test(name) && MELIOUS_MODEL.test(name) && !imAbo(name, mel?.abo)) lines.push(`⚠️ ${guthabenHinweis(name)}`);
   const strandMel = orchMap[key]?.modell?.startsWith('melious:') ? orchMap[key].modell!.slice(8) : undefined;
   const on = meliousChatOn(key) || !!strandMel;
   const fixed = meliousChatModel(key) ?? (strandMel && strandMel !== 'auto' ? strandMel : undefined) ?? mel?.model;
@@ -1292,7 +1297,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Werkzeuge, MCP-Server und Rechte-Modus wie bei Claude. Zurück auf Claude: Modell der Anfrage bzw. des Strangs, Token.
   const onAccount = (a: Account) => {
     const mel = isMelious(a);
-    const base = mel ? a.chainModel ?? meliousChatModel(key) ?? (strandMel && strandMel !== 'auto' ? strandMel : undefined) ?? a.model ?? poolModel(a, profil === 'leser' || profil === 'schreiber' ? profil : 'niedrig') : undefined;
+    const base = mel ? a.chainModel ?? meliousChatModel(key) ?? (strandMel && strandMel !== 'auto' ? strandMel : undefined) ?? a.model ?? poolModel(a, profil === 'leser' || profil === 'schreiber' ? profil : 'niedrig') ?? a.ketteModell ?? MELIOUS_GROSS : undefined;   // nie ein Claude-Name an Melious (Hotfix 15.10.)
     // „:eco“-Routing (S8, Einstellung): Melious leitet auf das sparsamste Rechenzentrum; gezählt wird wie das Modell.
     const mm = base && a.eco && !base.endsWith(':eco') ? `${base}:eco` : base;
     accountEnv(env, a, mm);
@@ -1313,7 +1318,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     live.modelSeen = undefined;
   };
   onAccount(acct);
-  if (isMelious(acct)) emitStatus(live, meliousLine(options.model, req.model));
+  if (isMelious(acct)) emitStatus(live, meliousLine(options.model, req.model, acct.abo));
 
   let release = acquire(key, acct);   // ab hier läuft der Zug auf diesem Konto (Lastverteilung); frei im finally
   log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers), permissionMode: live.mode, ...(accounts.length > 1 ? { konto: acct.id, konten: accounts.length } : {}), ...(isMelious(acct) ? { melious: true, rest: acct.rest } : {}) });
@@ -1361,7 +1366,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         acct = next;
         release(); release = acquire(key, acct);
         onAccount(acct);
-        if (isMelious(acct)) emitStatus(live, meliousLine(options.model, req.model));
+        if (isMelious(acct)) emitStatus(live, meliousLine(options.model, req.model, acct.abo));
         // Noch nichts passiert → dieselbe Anfrage von vorn (gleiche Ausgangslage). Schon mitten im Zug → die Sitzung
         // fortsetzen (alle Konten teilen die Konfiguration und damit den Verlauf), ohne Schritte doppelt zu machen.
         // Anderer Anbieter (Melious ↔ Claude): nie fortsetzen (thinking-Signaturen), neu mit Verlauf — mitten im Zug mit Hinweis.

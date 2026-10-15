@@ -267,6 +267,8 @@ function MeliousAccount() {
             {' '}· <a href={u.energie.dashboard} target="_blank" rel="noreferrer">echter Stand im Melious-Dashboard</a>
             {u.energie.stand != null && u.energie.topfMax && <> · Topf {u.energie.geschaetzt ? '≈ ' : ''}{z(u.energie.stand)} / {z(u.energie.topfMax)} ({Math.round((u.energie.fuell ?? 0) * 100)} %)</>}
             {(u.energie.hinweise ?? []).map((h: string) => <div key={h} className="note small" data-testid="melious-hinweis" style={{ margin: '4px 0' }}>{h}</div>)}
+            {(d.warnungen ?? []).map((h: string) => <div key={h} className="note small" data-testid="melious-abo-warnung" style={{ margin: '4px 0' }}>⚠️ {h}</div>)}
+            <div className="tiny muted" data-testid="melious-abo">Im Abo (ohne Guthaben): {(d.abo ?? []).join(', ')}</div>
             <span className="tiny muted"> · Faktoren: {u.energie.faktorQuelle} (1 Einheit = 0,0001 €; Annahme: Cache-Treffer zum Cache-Preis){u.energie.echt ? '' : ' · Abgleich mit dem Dashboard aus'}</span>
           </div>
           <table className="t small" style={{ marginTop: 6 }} data-testid="melious-usage">
