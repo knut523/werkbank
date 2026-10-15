@@ -15,7 +15,7 @@ const API = '/werkbank/api/chat/nachreichen';
 
 const WORT: Record<Item['state'], string> = {
   sende: 'wird zugestellt …',
-  zugestellt: '📨 Zugestellt — der Hauptchat sieht es beim nächsten Schritt',
+  zugestellt: '📨 Zugestellt — Claude sieht es beim nächsten Schritt',
   gelesen: '✓ Gelesen',
   danach: '⏳ Kommt nach diesem Zug dran',
   ungelesen: '⏳ Kommt nach diesem Zug dran',
@@ -150,8 +150,8 @@ function Nachreichen({ conversationId, isSubmitting, methods, submitMessage, tex
           data-testid="nachreichen-button"
           disabled={leer}
           onClick={() => void send()}
-          aria-label="Nachreichen — der Hauptchat sieht es beim nächsten Schritt"
-          title="Nachreichen (Enter) — der Hauptchat sieht es beim nächsten Schritt"
+          aria-label="Nachreichen — Claude sieht es beim nächsten Schritt"
+          title="Nachreichen (Enter) — Claude sieht es beim nächsten Schritt"
           className={cn('mr-1 flex h-9 items-center gap-1 rounded-full border border-border-medium px-3 text-sm text-text-primary transition-colors',
             'hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black dark:focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-40')}
         >

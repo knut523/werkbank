@@ -74,7 +74,7 @@ function Prio({ d, reload, admin }: { d: any; reload: () => void; admin: boolean
             try {
               const top = moved.sort((a, b) => Math.abs(b.r.rank - b.to) - Math.abs(a.r.rank - a.to))[0];
               const p: any = await api('/api/roadmap/rank-proposal', { body: { spec: top.r.spec, from: top.r.rank, to: top.to, why } });
-              if (!(await confirm({ title: 'Rang-Vorschlag festhalten?', confirmLabel: 'In den Vault schreiben', body: <><p className="small">Diese Zeile kommt unter „Vorschläge aus dem OLAF Workspace“ auf <code>{p.preview.path.split('/').pop()}</code>:</p><pre className="small">{p.preview.add}</pre></> }))) return;
+              if (!(await confirm({ title: 'Rang-Vorschlag festhalten?', confirmLabel: 'In den Vault schreiben', body: <><p className="small">Diese Zeile kommt unter „Vorschläge aus der Werkbank“ auf <code>{p.preview.path.split('/').pop()}</code>:</p><pre className="small">{p.preview.add}</pre></> }))) return;
               await api('/api/roadmap/rank-proposal', { body: { spec: top.r.spec, from: top.r.rank, to: top.to, why, confirm: true, hash: p.hash } });
               toast('Vorschlag festgehalten'); setOrder(null); setWhy(''); reload();
             } catch (e) { setErr(e); }

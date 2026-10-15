@@ -96,7 +96,7 @@ export function Dateien({ cfg }: { cfg: Config }) {
             );
           })()}
 
-          {f.ablage.unklar && <p className="note small">Der Besitz der Ablage ist unklar (kein oder mehr als ein Admin-Konto). Ein Admin legt den Besitz fest, dann erscheinen alle Dateien aus der Ablage hier. <details className="tiny" style={{ display: 'inline' }}><summary style={{ display: 'inline', cursor: 'pointer' }}>Technische Details</summary> Einstellung WERKBANK_DOCS_OWNER</details></p>}
+          {f.ablage.unklar && <div className="note small">Der Besitz der Ablage ist unklar (kein oder mehr als ein Admin-Konto). Ein Admin legt den Besitz fest, dann erscheinen alle Dateien aus der Ablage hier. <details className="tiny" style={{ display: 'inline' }}><summary style={{ display: 'inline', cursor: 'pointer' }}>Technische Details</summary> Einstellung WERKBANK_DOCS_OWNER</details></div>}
           <Ablage f={f} people={people} onDone={reloadAll} toChat={toChat} setErr={setErr} />
 
           <h2>Geteilt mit mir ({f.shared.length})</h2>
@@ -328,11 +328,11 @@ function BackupCard({ b }: { b: any }) {
           <a className="btn primary" href="api/backup" download>Backup herunterladen</a>
           <span className="tiny">{last ? <>Letzte Nachtsicherung: {fmtDateTime(last.at)} · {size(last.size)} · {b.nightly.length} von {b.keep} aufbewahrt</> : 'Noch keine Nachtsicherung auf der VM.'}</span>
         </div>
-        <p className="tiny" style={{ margin: '6px 0 0' }}>
+        <div className="tiny" style={{ margin: '6px 0 0' }}>
           Drin: die Datenbank des OLAF Workspace (Tickets-Kopie, Dateien-Einträge, Projekte, Freigaben …), alle Dateien der Ablage, das Freigabe-Protokoll.
           Nicht drin: Zugänge (Claude, Jira) und Anmeldungen, Chats (LibreChat), der Vault (eigenes Git), Arbeitsordner.
           {b.key ? ' Dateien mit Personendaten sind verschlüsselt — den Schlüssel brauchst du zum Wiederherstellen.' : ' Achtung: kein Archiv-Schlüssel gesetzt — Dateien mit Personendaten fehlen im Archiv.'}<details className="tiny" style={{ display: 'inline' }}><summary style={{ display: 'inline', cursor: 'pointer' }}>Technische Details</summary> Schlüssel WERKBANK_BACKUP_KEY</details>
-        </p>
+        </div>
       </div>
     </>
   );

@@ -527,6 +527,19 @@ function StepCarry({ d, id, onCandidates }: { d: any; id: string; onCandidates: 
   );
 }
 
+// Zielbaum hier nur noch für Nutzer ohne Freigabe „ziele“ — sonst steht er unter Planen › Ziele (Paket 187, S6).
+function GoalTree({ g }: { g: any }) {
+  if (g.missing) return <div className="card soft" data-testid="goal-tree"><b>Stage Gate nicht definiert</b><p className="small muted" style={{ margin: 0 }}>Die Zieldatei <code>{g.file}</code> fehlt. Format: Tabelle unter <code>## Ziele</code> mit ID | Ebene | Ergebnis | Messgröße | Baseline | Ziel | Stichtag | Owner | Eltern-ID | Beleg (siehe README).</p></div>;
+  return (
+    <details className="card" open data-testid="goal-tree">
+      <summary><b>Zielbaum</b> <span className="tiny">Gate → Ziel → KR → Monat → Sprint · aus <a href={noteHref(g.file)}>{g.file.split('/').pop()}</a> · Fortschritt = erledigte / zugeordnete Tickets (Zuordnung im OLAF Workspace, sonst Jira-Label, oder in der Zeile genannt)</span></summary>
+      {!g.gate.length && <p className="note small">Stage Gate nicht definiert (keine Zeile mit Ebene „Gate“).</p>}
+      <ul className="goal-tree root">{g.roots.map((n: any) => <GoalNodeView key={n.id} n={n} />)}</ul>
+      {!g.monthGoals.length && <p className="tiny">Monatsziele für diesen Sprint noch nicht gesetzt (Ebene „Monat“, ID M&lt;MM&gt;-&lt;n&gt;).</p>}
+    </details>
+  );
+}
+
 export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
   const cyc = useLoad(() => api('/api/sprint/cycles'));
   const hm = hash.match(/^#\/sprint\/(sprint-\d{4}-\d{2}-\d{2})(?:\/([1-5]))?/);
@@ -592,7 +605,9 @@ export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
             <summary><b>Sprintziele, im Sprint, Kandidaten</b> <span className="tiny">{d.inSprint?.count ?? 0} im Sprint · {d.candidates?.length ?? 0} Kandidaten</span></summary>
             {d.goals && <SprintPlan d={d} cycle={id} reload={() => v.reload()} />}
           </details>
-          {d.goals && <p className="small" data-testid="zielbaum-link">🎯 Der Zielbaum (Gate → Ziel → KR → Monat → Sprint) steht unter <a href="#/ziele">Planen › Ziele</a>.</p>}
+          {d.goals && (cfg?.features?.ziele !== false
+            ? <p className="small" data-testid="zielbaum-link">🎯 Der Zielbaum (Gate → Ziel → KR → Monat → Sprint) steht unter <a href="#/ziele">Planen › Ziele</a>.</p>
+            : <details className="card ctx"><summary><b>Zielbaum</b> <span className="tiny">Gate → Ziel → KR → Monat → Sprint</span></summary><GoalTree g={d.goals} /></details>)}
           <details className="card ctx">
             <summary><b>Alle Fragen und Antwortzeilen</b> <span className="tiny">{Object.values(d.files).reduce((n: number, f: any) => n + f.questions.length, 0)} in Summary, Review, Planning</span></summary>
             <div className="tabs" role="tablist">

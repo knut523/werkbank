@@ -102,7 +102,7 @@ try {
   procs.push(spawn(process.execPath, ['server/main.ts'], { cwd: WEB, stdio: ['ignore', 'ignore', 'inherit'],
     env: { ...env, HOME: tmp, MONGO_URI_WERKBANK: process.env.SHOTS_MONGO || 'mongodb://127.0.0.1:27017', WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_NO_JOBS: '1', WERKBANK_INSECURE_COOKIES: '1', WERKBANK_VAULT_DIR: join(tmp, 'vault'), WERKBANK_DB: DB, LIBRECHAT_DB: LCDB,
       LIBRECHAT_URL: `http://127.0.0.1:${(lc.address() as any).port}`, LIBRECHAT_PUBLIC_URL: 'https://chat.example', BRIDGE_URL: `http://127.0.0.1:${BRIDGE_PORT}`, BRIDGE_STATE_DIR: join(tmp, 'bridge'),
-      WERKBANK_ALLOWED_EMAILS: `${knut.email},${team.email}`, WERKBANK_PILOT_EMAIL: knut.email, WERKBANK_TEAM_FEATURES: process.env.UB_TEAM_FEATURES ?? 'heute,orchestrator', CREDS_KEY: randomBytes(32).toString('hex'), CREDS_IV: randomBytes(16).toString('hex'),
+      WERKBANK_ALLOWED_EMAILS: `${knut.email},${team.email}`, WERKBANK_PILOT_EMAIL: knut.email, WERKBANK_TEAM_FEATURES: process.env.UB_TEAM_FEATURES ?? 'heute,orchestrator,wissen,sprint', CREDS_KEY: randomBytes(32).toString('hex'), CREDS_IV: randomBytes(16).toString('hex'),
       WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: join(tmp, 'data'), WERKBANK_MEILI_INDEX: `werkbank_ubshots_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_SECRET, JWT_REFRESH_SECRET: REFRESH,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'), WERKBANK_FORGE_MCP: '', WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vs'), WERKBANK_VAULT_SYNC_SCRIPT: '/bin/true',
       WERKBANK_LEITSTAND_DIR: LEIT, ORCH_AUTO_WEITER_TICK_MS: '300', WERKBANK_REVIEW_DIR: RP, WERKBANK_PAKETE_URL: PAKETE_URL, WERKBANK_GITHUB_API: `http://127.0.0.1:${(GH.address() as any).port}` } }));
@@ -233,7 +233,12 @@ try {
   const tp = await tc.newPage();
   await tp.goto(B + '/#/'); await tp.getByTestId('uebersicht').waitFor(); await pause(600);
   const tn = await tp.locator('#werkbank-nav a').allInnerTexts();
-  pruef(!tn.some((t) => /Planen|Wissen/.test(t)), `Team (nur Übersicht freigegeben): keine Bereiche Planen/Wissen (${tn.map((t) => t.trim()).join(' · ')})`);
+  pruef(tn.some((t) => /Planen/.test(t)) && tn.some((t) => /Wissen/.test(t)), `Team (Übersicht, Wissen, Sprint freigegeben): Bereiche Planen und Wissen (${tn.map((t) => t.trim()).join(' · ')})`);
+  // Ohne Freigabe „roadmap“/„ziele“ bleiben Roadmap-Tabelle (Wissen) und Zielbaum (Sprint) an der alten Stelle (Pass C).
+  await tp.goto(B + '/#/wissen/~roadmap'); await tp.reload(); await pause(1500);
+  pruef(/#\/wissen\/~roadmap/.test(tp.url()) && await tp.getByRole('heading', { name: 'Produkt-OLAF-Roadmap' }).count() === 1, 'Team ohne Roadmap-Freigabe: #/wissen/~roadmap zeigt die Roadmap-Tabelle (keine Umleitung)');
+  await tp.goto(B + '/#/sprint'); await tp.reload(); await pause(2000);
+  pruef(await tp.getByTestId('zielbaum-link').count() === 0, 'Team ohne Ziele-Freigabe: Sprint verlinkt nicht auf die gesperrte Zielseite');
   await tp.goto(B + '/#/leitstand?start=1'); await tp.reload(); await pause(900);
   pruef(await tp.getByTestId('hauptchat-start').count() === 0 && await tp.getByTestId('uebersicht').count() === 1, 'Team: #/leitstand?start=1 öffnet keinen Admin-Dialog, zeigt die Übersicht');
   await tp.goto(B + '/#/roadmap'); await pause(900);
