@@ -185,7 +185,9 @@ export function readOnlyBash(cmd: string): boolean {
   for (const seg of c.split(/\|\||&&|[|;]/)) {
     const w = seg.trim().split(/\s+/);
     if (!w[0] || /=/.test(w[0])) return false;
-    if (w[0] === 'git') { if (!READ_GIT.has(w[1] ?? '') || w.some((x) => /^--(output|exec)/.test(x))) return false; continue; }
+    // 15.10.: --open-files-in-pager/-O (git grep) und --ext-diff starten ein Programm; rg --pre ebenso.
+    if (w[0] === 'git') { if (!READ_GIT.has(w[1] ?? '') || w.some((x) => /^--(output|exec|open-files-in-pager|ext-diff)|^-O/.test(x))) return false; continue; }
+    if (w[0] === 'rg' && w.some((x) => /^--pre(=|$)/.test(x))) return false;
     if (!READ_BASH.has(w[0])) return false;
     if (w[0] === 'find' && w.some((x) => /^-(exec|execdir|delete|ok|okdir|fprint|fprintf|fls)$/.test(x))) return false;
     if ((w[0] === 'sort' || w[0] === 'tree') && w.some((x) => /^-o|^--output/.test(x))) return false;
