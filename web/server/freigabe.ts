@@ -20,7 +20,8 @@ import { wb } from './db.ts';
 import type { User } from './auth.ts';
 import { GIT_SAFE } from './gitsafe.ts';
 import { readBericht, paketDatei, reviewDir, findPaket } from './bericht.ts';
-import { paketFile, PAKET_RE } from './reviewpakete.ts';
+import { paketFile, PAKET_RE, renderPaketMd } from './reviewpakete.ts';
+import { execSummary } from './berichtkopf.ts';
 
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 export const freigaben = () => wb().collection('freigaben');
@@ -108,6 +109,15 @@ export function vorschauEintraege(yamlText: string, paketNr: number | null, link
   return out.slice(0, 12);
 }
 
+/** Ein einzelner Link aus dem Bericht-Kopf (Teil C, H5): nur das Coder-Muster, Port > 1024, nicht gesperrt — sonst null. */
+export function vorschauAusLink(link: string, titel = '', env = process.env): { port: number; link: string; was: string } | null {
+  const re = new RegExp(`^https://(\\d{2,5})--${HOST(env).replace(/\./g, '\\.')}(/[^\\s)>\\]"']*)?$`);
+  const m = re.exec(link);
+  if (!m) return null;
+  const port = Number(m[1]);
+  return port > 1024 && port < 65536 && !GESPERRT.has(port) ? { port, link, was: titel.slice(0, 160) } : null;
+}
+
 const cache = new Map<number, Vorschau>();
 /** GET / auf 127.0.0.1:<port>, keine Weiterleitung, Körper nie gelesen, 3 s; Ergebnis 30 s gemerkt. */
 export async function pruefeVorschau(v: { port: number; link: string; was: string }, force = false, now = Date.now()): Promise<Vorschau> {
@@ -128,7 +138,7 @@ export async function pruefeVorschau(v: { port: number; link: string; was: strin
 
 // ---------- Entscheidungen aus dem Bericht (Council R3, Bedingung 8) ----------
 
-export interface Entscheidung { id: string; titel: string; text: string; knut: string }
+export interface Entscheidung { id: string; titel: string; text: string; knut: string; empfehlung: string }
 
 /** Blöcke `**D1 — …**` / `**E-147-1 · …**` (zeilengenau, nicht in Codezäunen) bis zum nächsten Block oder `## `. */
 export function entscheidungen(md: string): Entscheidung[] {
@@ -138,7 +148,8 @@ export function entscheidungen(md: string): Entscheidung[] {
   const close = () => {
     if (!cur) return;
     const knut = [...cur.lines].reverse().map((l) => /^\s*-\s*Knut:\s*(.*)$/.exec(l)).find(Boolean);
-    if (!out.some((x) => x.id === cur!.id)) out.push({ id: cur.id, titel: cur.titel.slice(0, 200), text: cur.lines.join('\n').trim().slice(0, 3000), knut: (knut?.[1] ?? '').trim() });
+    const empf = cur.lines.map((l) => /^\s*[-*]\s*\**Empfehlung(?:\s*\([^)]*\))?:?\**:?\s*(.+)$/i.exec(l)).find(Boolean);
+    if (!out.some((x) => x.id === cur!.id)) out.push({ id: cur.id, titel: cur.titel.slice(0, 200), text: cur.lines.join('\n').trim().slice(0, 3000), knut: (knut?.[1] ?? '').trim(), empfehlung: (empf?.[1] ?? '').trim().slice(0, 500) });
     cur = null;
   };
   for (const line of md.split('\n')) {
@@ -151,6 +162,47 @@ export function entscheidungen(md: string): Entscheidung[] {
   }
   close();
   return out.slice(0, 40);
+}
+
+/**
+ * Antworten in den Bericht eintragen (Plan 157, Ergänzung B): je Block die Zeile `- Knut:` füllen (Einrückung bleibt),
+ * fehlt sie, kommt sie nach `- Empfehlung:` bzw. ans Blockende. Format: `- Knut: <Antwort> (TT.MM.)`. Codezäune bleiben unberührt.
+ */
+export function trageEin(md: string, antworten: { id: string; text: string }[], datum: string): string {
+  const want = new Map(antworten.map((a) => [a.id, a.text.replace(/\s+/g, ' ').trim()]));
+  const lines = md.split('\n');
+  const out: string[] = [];
+  let cur: string | null = null, done = false, empfAt = -1, empfIndent = '', fence = false;
+  const filled = new Set<string>();   // doppelte Kennung: nur der erste Block zählt (wie entscheidungen())
+  const flush = () => {
+    if (cur && want.has(cur) && !done && !filled.has(cur)) {
+      filled.add(cur);
+      const line = `${empfIndent}  - Knut: ${want.get(cur)} (${datum})`;
+      if (empfAt >= 0) out.splice(empfAt + 1, 0, line);
+      else { let i = out.length; while (i > 0 && !out[i - 1].trim()) i--; out.splice(i, 0, line); }
+    }
+    cur = null; done = false; empfAt = -1; empfIndent = '';
+  };
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) fence = !fence;
+    if (!fence) {
+      const h = /^\s*(?:[-*]\s+)?\*\*(D\d{1,3}|E-\d{1,4}-\d{1,3})\s*[—·–:-]\s*(.+?)\*\*/.exec(line);
+      if (h) { flush(); cur = filled.has(h[1]) ? null : h[1]; out.push(line); continue; }
+      if (/^#{1,3}\s/.test(line)) { flush(); out.push(line); continue; }
+      if (cur && want.has(cur) && !done) {
+        const k = /^(\s*-\s*Knut:)\s*(.*)$/.exec(line);
+        if (k && !k[2].trim()) { out.push(`${k[1]} ${want.get(cur)} (${datum})`); done = true; filled.add(cur); continue; }
+        if (k) { done = true; filled.add(cur); }   // schon beantwortet: nicht überschreiben
+        const em = /^(\s*)[-*]\s*\**Empfehlung/i.exec(line);
+        if (em) { empfAt = out.length; empfIndent = em[1]; }
+        // Folgezeilen einer mehrzeiligen Empfehlung (tiefer eingerückt, kein neuer Punkt) gehören noch dazu (Review A10).
+        else if (empfAt === out.length - 1 && line.trim() && /^\s+/.test(line) && (line.match(/^\s*/)![0].length > empfIndent.length + 1) && !/^\s*[-*]\s/.test(line)) empfAt = out.length;
+      }
+    }
+    out.push(line);
+  }
+  flush();
+  return out.join('\n');
 }
 
 export const berichtHash = (t: string | null) => createHash('sha256').update(t ?? '').digest('hex').slice(0, 16);
@@ -181,8 +233,9 @@ export async function reviewDetail(d: any, opts: { pruefen?: boolean; g?: GitFn;
   const fg = await freigaben().find({ strand: String(d._id) }).sort({ at: -1 }).limit(20).toArray();
   return {
     id: String(d._id), title: d.title, url: d.url, paket, status: d.lastStatus ?? null, running: d.lastStatus === 'running',
-    bericht: bericht ?? null, berichtHash: berichtHash(bericht), prTexte, entscheidungen: bericht ? entscheidungen(bericht) : [],
+    bericht: bericht ?? null, berichtHtml: bericht && paket ? renderPaketMd(bericht, paket, 'bericht.md') : null, berichtHash: berichtHash(bericht), prTexte, entscheidungen: bericht ? entscheidungen(bericht) : [],
     beantwortet: d.entscheidungenAntwort ?? null, vorschau, repo, freigaben: fg.map(publicFreigabe),
+    summary: execSummary(d, fg.find((x: any) => typeof x.pr === 'string') ?? null),
   };
 }
 
@@ -220,7 +273,8 @@ export async function zurueckziehen(u: User, strand: string, id: string, log?: (
 
 /**
  * Darf <sha> aus dem Repo in <dir> gepusht werden? Ja nur bei einer aktiven, nicht gepushten Freigabe desselben Repos
- * (origin-URL) mit genau diesem SHA — oder mit derselben Patch-ID gegen dieselbe Basis (Rebase vor dem Push).
+ * (origin-URL) mit genau diesem SHA. Knut, 14.10.2026 (Plan Leitstand Teil C, D2/H4): „gilt nur für genau den gesehenen Stand —
+ * ändert sich ein Commit, verfällt die Freigabe“; die Rebase-Toleranz über die patch-id (Plan 154) entfällt.
  */
 export async function pruefeFreigabe(u: User, dir: string, sha: string, g: GitFn = git): Promise<{ ok: boolean; grund: string; freigabe?: ReturnType<typeof publicFreigabe> }> {
   if (!/^[0-9a-f]{40}$/.test(sha)) return { ok: false, grund: 'SHA ungültig (40 Hex-Zeichen).' };
@@ -233,12 +287,8 @@ export async function pruefeFreigabe(u: User, dir: string, sha: string, g: GitFn
   if (!list.length) return { ok: false, grund: `Keine aktive Freigabe für ${key} — erst im OLAF Workspace reviewen und freigeben.` };
   const exakt = list.find((f) => f.head === sha);
   if (exakt) return { ok: true, grund: `freigegeben (${exakt._id}, ${exakt.branch}, genau dieser Stand)`, freigabe: publicFreigabe(exakt) };
-  for (const f of list) {
-    if (!f.baseRef) continue;
-    const mb = tryGit(g, ['merge-base', sha, f.baseRef], real);
-    if (mb && patchId(g, real, mb, sha) === f.patchId) return { ok: true, grund: `freigegeben (${f._id}, ${f.branch}) — nach Rebase, derselbe Patch`, freigabe: publicFreigabe(f) };
-  }
-  return { ok: false, grund: `Dieser Stand (${sha.slice(0, 12)}) ist nicht freigegeben — Inhalt anders als bei der Freigabe. Neu reviewen und freigeben.` };
+  const alt = list[0];
+  return { ok: false, grund: `Dieser Stand (${sha.slice(0, 12)}) ist nicht freigegeben — freigegeben ist ${alt.branch} @ ${String(alt.head).slice(0, 12)}. Jeder neue Commit (auch ein Rebase) braucht eine neue Freigabe im OLAF Workspace.` };
 }
 
 export async function gepusht(u: User, id: string, pr: string | null) {

@@ -111,7 +111,7 @@ function setup() {
   return { origin, seed, wt };
 }
 
-test('Freigabe: sauber + gesehener Stand; unsauber/anderer Stand → 409; zweimal = eine; Prüfweg nach Rebase mit gleichem Patch ok, anderer Patch nein; zurückziehen; gepusht', async () => {
+test('Freigabe: sauber + gesehener Stand; unsauber/anderer Stand → 409; zweimal = eine; nur genau dieser SHA — auch ein Rebase mit gleichem Patch verfällt (Teil C, D2/C-7); zurückziehen; gepusht', async () => {
   const { seed, wt } = setup();
   const d = { _id: 'st1', title: 'Strang', cwd: wt, lastStatus: 'done' };
   const f = F.repoFakten(F.strandRepo(d));
@@ -127,13 +127,14 @@ test('Freigabe: sauber + gesehener Stand; unsauber/anderer Stand → 409; zweima
   assert.equal((await F.freigeben(u, d, { head: f.head, patchId: f.patchId })).id, fg.id, 'zweimal = dieselbe Freigabe');
   // Prüfweg: genau dieser Stand.
   assert.equal((await F.pruefeFreigabe(u, wt, f.head)).ok, true);
-  // develop geht weiter (anderes File), der Strang rebased: neuer SHA, derselbe Patch → ok.
+  // develop geht weiter (anderes File), der Strang rebased: neuer SHA, derselbe Patch → verfällt (Knut 14.10.: nur genau der gesehene Stand).
   writeFileSync(join(seed, 'd.txt'), 'd\n'); sh(seed, 'add', '.'); sh(seed, 'commit', '-q', '-m', 'develop weiter'); sh(seed, 'push', '-q', 'origin', 'HEAD:develop');
   sh(wt, 'fetch', '-q', 'origin'); sh(wt, 'rebase', '-q', 'origin/develop');
   const neu = sh(wt, 'rev-parse', 'HEAD');
   assert.notEqual(neu, f.head);
   const p = await F.pruefeFreigabe(u, wt, neu);
-  assert.equal(p.ok, true, p.grund); assert.match(p.grund, /nach Rebase, derselbe Patch/);
+  assert.equal(p.ok, false, p.grund); assert.match(p.grund, /neue Freigabe/);
+  assert.equal((await F.pruefeFreigabe(u, wt, f.head)).ok, true, 'der freigegebene Stand selbst bleibt grün');
   // Inhalt geändert → nicht freigegeben.
   writeFileSync(join(wt, 'b.txt'), 'b geändert\n'); sh(wt, 'commit', '-qam', 'heimlich');
   const anders = sh(wt, 'rev-parse', 'HEAD');
@@ -177,4 +178,33 @@ test('Arbeitsordner außerhalb von ~/work oder ohne Repo → kein Freigeben', as
   assert.throws(() => F.strandRepo({ cwd: '/tmp' }), /nicht unter ~\/work/);
   const leer = mkdtempSync(join(HOME, 'work', 'knut', 'leer-'));
   assert.throws(() => F.repoFakten(leer), /kein git-Repo/);
+});
+
+test('Plan 157 B: Entscheidungen aus dem echten Bericht 154 (D1–D11) mit Empfehlung; Antworten eintragen', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { entscheidungen, trageEin } = await import('../server/freigabe.ts');
+  const md = readFileSync(new URL('./fixtures/bericht-154-entscheidungen.md', import.meta.url), 'utf8');
+  const e = entscheidungen(md);
+  assert.deepEqual(e.map((x) => x.id), ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9', 'D10', 'D11']);
+  assert.ok(e.every((x) => x.empfehlung && !x.knut));
+  assert.equal(e[1].empfehlung, 'a. Nach einer Woche den Verbrauch im Brücken-Log (`teilagenten`) ansehen.');
+  const neu = trageEin(md, [{ id: 'D1', text: 'akzeptiert (Empfehlung: a)' }, { id: 'D6', text: 'nachprüfen: Hook erst in olaf-admin' }], '14.10.');
+  const e2 = entscheidungen(neu);
+  assert.equal(e2[0].knut, 'akzeptiert (Empfehlung: a) (14.10.)');
+  assert.equal(e2[5].knut, 'nachprüfen: Hook erst in olaf-admin (14.10.)');
+  assert.equal(e2.filter((x) => x.knut).length, 2);
+  assert.match(neu, /\n- Empfehlung: a\n {2}- Knut: akzeptiert \(Empfehlung: a\) \(14\.10\.\)\n/);
+  assert.equal(neu.split('\n').length, md.split('\n').length, 'keine Zeilen dazu, wo „- Knut:“ schon steht');
+  // Schon beantwortet bleibt; fehlt die Knut-Zeile, kommt sie nach der Empfehlung
+  assert.equal(trageEin(neu, [{ id: 'D1', text: 'anders' }], '15.10.'), neu);
+  const ohne = '**D1 — X**\n- a) eins\n- Empfehlung: a\n\n**D2 — Y**\n- b\n';
+  assert.equal(trageEin(ohne, [{ id: 'D1', text: 'ok' }, { id: 'D2', text: 'nein' }], '14.10.'), '**D1 — X**\n- a) eins\n- Empfehlung: a\n  - Knut: ok (14.10.)\n\n**D2 — Y**\n- b\n  - Knut: nein (14.10.)\n');
+});
+
+test('Plan 157 B (Review): doppelte Kennung nur im ersten Block; Einrückung der Empfehlung, mehrzeilige Empfehlung bleibt ganz', async () => {
+  const { trageEin } = await import('../server/freigabe.ts');
+  const md = '**D1 — A**\n- Empfehlung: a\n\n**D1 — A nochmal**\n- Empfehlung: b\n';
+  assert.equal(trageEin(md, [{ id: 'D1', text: 'ok' }], '14.10.'), '**D1 — A**\n- Empfehlung: a\n  - Knut: ok (14.10.)\n\n**D1 — A nochmal**\n- Empfehlung: b\n');
+  const lang = '**D2 — B**\n  - Empfehlung: a, weil\n    das einfacher ist\n';
+  assert.equal(trageEin(lang, [{ id: 'D2', text: 'ok' }], '14.10.'), '**D2 — B**\n  - Empfehlung: a, weil\n    das einfacher ist\n    - Knut: ok (14.10.)\n');
 });

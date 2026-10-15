@@ -6,6 +6,7 @@
 
 import { wb } from './db.ts';
 import { githubChanged } from './events.ts';
+import { prTeile, type PrCheck } from './berichtkopf.ts';
 
 export const GH_ORG = process.env.WERKBANK_GITHUB_ORG || 'WirStrom1';
 const API = () => (process.env.WERKBANK_GITHUB_API || 'https://api.github.com').replace(/\/$/, '');
@@ -22,7 +23,8 @@ export function githubNames(): Record<string, string> {
 
 export class GithubError extends Error { status: number; constructor(status: number, m: string) { super(m); this.status = status; } }
 
-export async function graphql(token: string, query: string, variables: Record<string, unknown> = {}): Promise<any> {
+/** opts.partial: Antwort mit „NOT_FOUND“-Fehlern trotzdem liefern (nicht gefundene Teile sind dann null) — für die PR-Prüfung. */
+export async function graphql(token: string, query: string, variables: Record<string, unknown> = {}, opts: { partial?: boolean } = {}): Promise<any> {
   // Nur Abfragen: keine Mutation, keine Subscription — unabhängig davon, was der Token könnte.
   const q = query.replace(/#[^\n]*/g, '').trim();
   if (!/^(query\b|\{)/.test(q) || /\b(mutation|subscription)\b/.test(q)) throw new GithubError(400, 'Nur lesende GraphQL-Abfragen erlaubt.');
@@ -34,7 +36,7 @@ export async function graphql(token: string, query: string, variables: Record<st
   const text = await r.text();
   if (!r.ok) throw new GithubError(r.status, `GitHub antwortet mit ${r.status}${r.status === 401 ? ' (Token ungültig/abgelaufen)' : ''}`);
   const j = JSON.parse(text);
-  if (j.errors?.length) throw new GithubError(502, 'GitHub: ' + j.errors.map((e: any) => e.message).join('; ').slice(0, 300));
+  if (j.errors?.length && !(opts.partial && j.data && j.errors.every((e: any) => e.type === 'NOT_FOUND'))) throw new GithubError(502, 'GitHub: ' + j.errors.map((e: any) => e.message).join('; ').slice(0, 300));
   return j.data;
 }
 
@@ -141,6 +143,26 @@ export async function syncGithub(token: string | null): Promise<{ count: number;
     }
   })();
   try { return await running; } finally { running = null; }
+}
+
+/**
+ * Stand einzelner PRs (docs/plan-leitstand.md, C.7): existiert er, offen/gemergt/geschlossen? Eine Abfrage für alle Links (höchstens 12),
+ * Besitzer/Repo/Nummer nur als Variablen. Nicht gefunden (oder kein Lesezugriff) → „fehlt“. Wirft bei Netz-/Token-Fehlern.
+ */
+export async function prStaende(token: string, urls: string[]): Promise<PrCheck[]> {
+  const teile = [...new Set(urls)].map((url) => ({ url, t: prTeile(url) })).filter((x): x is { url: string; t: NonNullable<ReturnType<typeof prTeile>> } => !!x.t).slice(0, 12);
+  if (!teile.length) return [];
+  const decl = teile.map((_, i) => `$o${i}: String!, $r${i}: String!, $n${i}: Int!`).join(', ');
+  const body = teile.map((_, i) => `p${i}: repository(owner: $o${i}, name: $r${i}) { pullRequest(number: $n${i}) { state merged title } }`).join('\n  ');
+  const vars: Record<string, unknown> = {};
+  teile.forEach((x, i) => Object.assign(vars, { [`o${i}`]: x.t.owner, [`r${i}`]: x.t.name, [`n${i}`]: x.t.nr }));
+  const d = await graphql(token, `query(${decl}) {\n  ${body}\n}`, vars, { partial: true });
+  return teile.map((x, i) => {
+    const n = d?.[`p${i}`]?.pullRequest;
+    if (!n) return { url: x.url, stand: 'fehlt' as const };
+    const stand = n.merged || n.state === 'MERGED' ? 'gemergt' as const : n.state === 'CLOSED' ? 'geschlossen' as const : 'offen' as const;
+    return { url: x.url, stand, titel: String(n.title ?? '').slice(0, 200) };
+  });
 }
 
 export async function livePrs(): Promise<{ map: Map<string, LivePr>; sync: any }> {

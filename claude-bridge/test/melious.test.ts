@@ -8,7 +8,7 @@ import { mkdtempSync, realpathSync, mkdirSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { planQueue, accountEnv, normalizeAccounts, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, type Account } from '../src/accounts.ts';
+import { planQueue, accountEnv, normalizeAccounts, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, type Account } from '../src/accounts.ts';
 import { readOnlyBash } from '../src/tools.ts';
 
 const PORT = 3394;
@@ -144,10 +144,10 @@ test('/melious an → nächster Zug über Melious (Env, Hinweis), Verbrauch an d
   assert.match(a, /Rest bis zum Deckel: 200\.000 Tokens/);
   const n = usage.length;
   const t = await send(conv(2), 'Antworte mit OK', 'an');
-  assert.match(t, /🧪 Dieser Zug läuft über „Melious“ · Abbildung von „Standardmodell“ \(tatsächliches Modell meldet Melious nicht/);
-  assert.match(t, /\(Mock\) Melious über http:\/\/127\.0\.0\.1:\d+; OAuth: nein; Betas aus: 1; Modell: Standard; Teilagenten: -; MCP: [^;]*; Datenregel: nein; Push gesperrt: nein; Jira gesperrt: nein; Modus: default\./);
+  assert.match(t, /🧪 Dieser Zug läuft über „Melious“ · Modell glm-5\.3 \(Open-Weight-Modell, Ergebnisse prüfen\)/);   // Hotfix 15.10.: nie ein Claude-Name an Melious
+  assert.match(t, /\(Mock\) Melious über http:\/\/127\.0\.0\.1:\d+; OAuth: nein; Betas aus: 1; Modell: glm-5\.3; Teilagenten: glm-5\.3; MCP: [^;]*; Datenregel: nein; Push gesperrt: nein; Jira gesperrt: nein; Modus: default\./);
   await waitUsage(n + 1);
-  assert.deepEqual(usage.at(-1), { userId: 'an', conv: conv(2), usage: { input: 1200, output: 40, cacheRead: 300, cacheWrite: 0 }, model: null });
+  assert.deepEqual(usage.at(-1), { userId: 'an', conv: conv(2), usage: { input: 1200, output: 40, cacheRead: 300, cacheWrite: 0 }, model: 'glm-5.3' });
   // Anderer Chat derselben Person: Schalter gilt nur je Chat.
   assert.doesNotMatch(await send(conv(3), 'Hallo', 'an'), /Melious/);
   assert.match(await send(conv(2), '/melious aus', 'an'), /für diesen Chat \*\*aus\*\*/);
@@ -399,6 +399,26 @@ test('Ersatzkette im Strang (Knuts Setup): Opus erschöpft → Sonnet auf allen 
   ACCOUNTS.schreib = [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ token: key('schreib'), rollen: { schreiber: ['deepseek-v4-flash-0731'] }, pool: [{ model: 'deepseek-v4-flash-0731', frei: 1 }] })];
   assert.equal((await register('schreib', conv(41), { profil: 'schreiber' })).status, 200);
   assert.match(await send(conv(41), 'Hallo', 'schreib'), /Modell: deepseek-v4-flash-0731;/);
+});
+
+test('Hotfix 15.10.: nie Claude-Namen an Melious — opus/sonnet → gewähltes bzw. Ketten-Modell, haiku/Hilfsmodell → glm-5.3-flash', () => {
+  const env: Record<string, string | undefined> = {};
+  accountEnv(env, M);   // ohne Modell
+  assert.deepEqual([env.ANTHROPIC_DEFAULT_OPUS_MODEL, env.ANTHROPIC_DEFAULT_SONNET_MODEL, env.ANTHROPIC_DEFAULT_HAIKU_MODEL, env.ANTHROPIC_SMALL_FAST_MODEL], ['glm-5.3', 'glm-5.3', 'glm-5.3-flash', 'glm-5.3-flash']);
+  accountEnv(env, { ...M, ketteModell: 'glm-5.3-flash' });
+  assert.equal(env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'glm-5.3-flash');
+  accountEnv(env, M, 'deepseek-v4.1-flash');
+  assert.deepEqual([env.ANTHROPIC_DEFAULT_SONNET_MODEL, env.ANTHROPIC_DEFAULT_HAIKU_MODEL], ['deepseek-v4.1-flash', 'glm-5.3-flash']);
+  assert.ok(imAbo('glm-5.3-flash:eco', undefined) && !imAbo('mistral-large', undefined) && imAbo('mistral-large', ['mistral-large']));
+});
+
+test('Hotfix 15.10.: Modell außerhalb des Abos läuft, aber nie still — Hinweis „läuft auf Guthaben“ bei /melious an und in der Statuszeile', async () => {
+  const a = await send(conv(42), '/melious an mistral-large', 'an');
+  assert.match(a, /⚠️ „mistral-large“ ist nicht im Melious-Abo und läuft auf Guthaben/);
+  const t = await send(conv(42), 'Hallo', 'an');
+  assert.match(t, /🧪 Dieser Zug läuft über „Melious“ · Modell mistral-large \(Open-Weight-Modell, Ergebnisse prüfen\) — ⚠️ „mistral-large“ ist nicht im Melious-Abo/);
+  assert.doesNotMatch(await send(conv(43), '/melious an glm-5.3', 'an'), /Guthaben/);
+  assert.match(await send(conv(43), '/melious modelle', 'an'), /Im Abo \(ohne Guthaben\): `glm-5\.3`, `glm-5\.3-flash`, `deepseek-v4\.1-flash`, `deepseek-v4-flash-0731`/);
 });
 
 test('/health zählt Melious-Züge ohne Schlüssel; kein Melious-Schlüssel im Log', async () => {

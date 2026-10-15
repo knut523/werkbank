@@ -6,7 +6,7 @@ import { TEST_MONGO } from './testmongo.ts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -596,10 +596,28 @@ test('Plan 154 §9 (Council R3): Review-Ansicht — Entscheidungen aus dem Beric
   assert.equal((await ok.json()).gesendet, 1);
   const msgs = await msgsOf(st.conv);
   const nach = msgs.filter((m) => m.isCreatedByUser).map(textOf).at(-1)!;
-  assert.match(nach, /^Nacharbeit nach Review: Entscheidungen von Knut/);
+  assert.match(nach, /^Nacharbeit nach Review: Knut hat entschieden/);
   assert.match(nach, /- D1 \(Tabelle umbenennen\?\): a, aber mit Übergangsview/);
   assert.doesNotMatch(nach, /X9/);
+  // Plan 157 B: der Server hat die Antwort in den Bericht eingetragen
+  assert.match(readFileSync(join(tmp, 'review-pakete', '954-review', 'bericht.md'), 'utf8'), /- Empfehlung: a\n {2}- Knut: a, aber mit Übergangsview \(\d\d\.\d\d\.\)\n/);
   await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  await until(() => W().collection('orchestrator_runs').findOne({ _id: st.id as any }), (x: any) => x?.lastStatus !== 'running');
+  // Nur „Empfehlung akzeptieren“ und danach nichts mehr offen → kein Zug, Strang gilt als erledigt
+  writeFileSync(join(tmp, 'review-pakete', '954-review', 'bericht.md'), '# Bericht\n\n**D3 — Noch eine**\n- Empfehlung: b, weil einfacher\n  - Knut:\n');
+  const r3 = await (await get()).json();
+  const vorher = (await msgsOf(st.conv)).length;
+  const ok3 = await post(`/api/review/${st.id}/entscheidungen`, { berichtHash: r3.berichtHash, antworten: [{ id: 'D3', art: 'akzeptiert' }] });
+  assert.equal(ok3.status, 200, await ok3.clone().text());
+  const j3 = await ok3.json();
+  assert.deepEqual({ ...j3, hauptchat: undefined }, { ok: true, gesendet: 1, weiter: false, offen: 0, hauptchat: undefined });
+  assert.match(readFileSync(join(tmp, 'review-pakete', '954-review', 'bericht.md'), 'utf8'), /- Knut: akzeptiert \(Empfehlung: b, weil einfacher\) \(\d\d\.\d\d\.\)/);
+  assert.equal((await msgsOf(st.conv)).length, vorher, 'keine Nachricht an den Strang');
+  assert.ok(((await W().collection('orchestrator_runs').findOne({ _id: st.id as any })) as any).entscheidungenErledigtAt);
+  // Berichtsseite liefert die Entscheidungen mit
+  const bs = await (await fetch(B + `/api/leitstand/bericht?strand=${st.id}&art=bericht`, { headers: { cookie: await cookie(knut) } })).json();
+  assert.equal(bs.entscheidungen[0].empfehlung, 'b, weil einfacher');
+  assert.ok(bs.berichtHash);
   await orch(['review', st.id]);
 });
 
@@ -807,6 +825,32 @@ test('Plan 144: Hauptchat aus der Oberfläche — Entwurf ohne Auszüge, Zaun en
   assert.equal((await fetch(B + '/api/leitstand/bericht?strand=p144evil', { headers: { cookie: await cookie(knut) } })).status, 404);
   assert.equal((await fetch(B + '/api/leitstand/bericht?strand=p144evil&art=auftrag', { headers: { cookie: await cookie(team) } })).status, 403);
   await W().collection('orchestrator_runs').updateOne({ _id: 'p144evil' as any }, { $set: { knutReviewedAt: new Date() } });
+});
+
+test('Teil C (C-6/C-8/H5): Bericht mit Kopf → Karte in „Entscheiden“ mit Diagramm und toter Vorschau als Warnung; Antwort auf der Karte landet im Strang-Chat', async () => {
+  mkdirSync(join(tmp, 'review-pakete', '955-teil-c'), { recursive: true });
+  writeFileSync(join(tmp, 'review-pakete', '955-teil-c', 'bericht.md'), [
+    '---', 'status: wartet_auf_knut', 'offen:', '  - Vorlage umbauen', 'review:', '  - titel: Admin', '    login: https://3999--main--dev--knut.ws.konekto.energy/login',
+    'fragen:', '  - id: D1', '    frage: Jetzt umbauen?', '    empfehlung: ja', '    antwort: ""', '---', '# Bericht', '', '```mermaid', 'flowchart LR', '  A --> B', '```', ''].join('\n'));
+  const st = JSON.parse((await orch(['start', '--title', 'Teil C: Kopf', '--cwd', WT('wt-c1'), '--json'],
+    'Bericht nach ~/work/knut/review-pakete/955-teil-c/bericht.md.\nmock-antwort Fertig.\\n### Stand\\n- Erledigt: x\\nStatus: fertig')).out);
+  const card = await until(() => cardOf(st.id), (c: any) => c?.kopf && (c.linkWarnungen ?? []).length > 0, 20_000);
+  assert.equal(card.spalte, 'entscheiden');
+  assert.deepEqual(card.fragen.map((f: any) => [f.id, f.empfehlung]), [['D1', 'ja']]);
+  assert.equal(card.diagramm, 'flowchart LR\n  A --> B');
+  assert.equal(card.linkWarnungen[0].ergebnis, 'antwortet nicht', 'tote Vorschau als Warnung auf der Karte (H5)');
+  assert.deepEqual(card.kopf.offen, ['Vorlage umbauen']);
+  // D3: Antwort auf der Karte (nur Kopf-Frage, keine Fettzeile im Text) → Nachricht im Strang-Chat.
+  const r = await post(`/api/review/${st.id}/entscheidungen`, { berichtHash: card.berichtHash, antworten: [{ id: 'D1', text: 'Wie empfohlen: ja' }] });
+  assert.equal(r.status, 200, await r.clone().text());
+  const nach = (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser).map(textOf).at(-1)!;
+  assert.match(nach, /^Nacharbeit nach Review: Entscheidungen von Knut/);
+  assert.match(nach, /- D1 \(Jetzt umbauen\?\): Wie empfohlen: ja/);
+  assert.match(nach, /Kopf: `antwort:`/);
+  // Tote Vorschau melden → kurze Nachricht an den Unter-Chat; ein nicht gemeldeter Link → 409.
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  assert.equal((await post(`/api/review/${st.id}/vorschau-tot`, { url: 'https://evil.example/' })).status, 409);
+  await orch(['review', st.id]);
 });
 
 test('Council-Diff Teil B (B-21/B-25, zuletzt — beendet die Brücke): Brücke weg → Heute zeigt die Karte weiter (nur Mongo), Passt → 503', async () => {

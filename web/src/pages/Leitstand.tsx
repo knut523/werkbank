@@ -2,9 +2,21 @@
 // alle Unter-Chats (Orchestrator-Stränge) je Lauf, zugeklappt („Flex — 3 Unter-Chats · 2 fertig · 1 wartet“), mit Status,
 // Zähler „automatisch fortgesetzt“, Chat- und Bericht-Link; oben der Hauptchat mit Start/Neustart (Übergabe vorbefüllt).
 // Nur für Admins (Feature leitstand). Liest nur festgeschriebenen Stand (kein Abruf bei der Brücke).
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, chatTarget, fmtDateTime, openChat, type Config } from '../api.ts';
+import { useMermaidIn } from '../mermaid.tsx';
+
+/** Bericht formatiert (Teil C, C3): Server-HTML ohne rohes HTML, Diagramme gezeichnet; ohne HTML (alter Server) der Rohtext. */
+function BerichtHtml({ html, text }: { html?: string | null; text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useMermaidIn(ref, html);
+  if (!html) return <pre className="small" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '70vh', overflow: 'auto' }}>{text}</pre>;
+  return <div className="note-body" ref={ref} data-testid="bericht-html" dangerouslySetInnerHTML={{ __html: html }} />;
+}
 import { Err, Loading, useLoad } from '../ui.tsx';
+import { PrTicker, PrReviewAbschnitt } from '../prticker.tsx';
+import { Entscheidungen } from '../entscheidungen.tsx';
+import { ExecSummary } from '../execsummary.tsx';
 
 const ICON: Record<string, string> = { läuft: '⏳', wartet: '✋', fertig: '✅', gestoppt: '⛔', erledigt: '✔️' };
 const CHIP: Record<string, string> = { läuft: '', wartet: 'warn', fertig: 'ok', gestoppt: 'bad', erledigt: '' };
@@ -25,7 +37,11 @@ function Bericht({ id, art, onClose }: { id: string; art: 'auftrag' | 'bericht';
         <h2 style={{ margin: 0 }}>{art === 'auftrag' ? 'Auftrag' : 'Bericht'} {d ? <span className="tiny muted mono">{d.name}</span> : null}</h2>
         <button className="btn small ghost" onClick={onClose}>Schließen</button>
       </div>
-      {t.error ? <Err e={t.error} /> : !d ? <Loading /> : <pre className="small" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '70vh', overflow: 'auto' }}>{d.text}</pre>}
+      {t.error ? <Err e={t.error} /> : !d ? <Loading /> : <>
+        <ExecSummary s={d.summary} />
+        {d.entscheidungen?.length > 0 && <Entscheidungen id={id} liste={d.entscheidungen} berichtHash={d.berichtHash} running={!!d.running} onDone={t.reload} />}
+        <BerichtHtml html={d.html} text={d.text} />
+      </>}
     </section>
   );
 }
@@ -41,7 +57,6 @@ const VS: Record<string, string> = { 'läuft': 'ok', 'läuft (Anmeldung)': 'ok',
 function Review({ id, onClose }: { id: string; onClose: () => void }) {
   const t = useLoad(() => api(`/api/review/${encodeURIComponent(id)}`), [id]);
   const d: any = t.data;
-  const [antw, setAntw] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const run = async (key: string, fn: () => Promise<any>, ok: string) => {
@@ -53,7 +68,6 @@ function Review({ id, onClose }: { id: string; onClose: () => void }) {
   const r = d.repo ?? {};
   const aktiv = (d.freigaben ?? []).filter((f: any) => f.aktiv && !f.pushedAt);
   const schonFrei = aktiv.some((f: any) => f.head === r.head);
-  const offen = (d.entscheidungen ?? []).filter((e: any) => !e.knut);
   return (
     <section className="card review" data-testid="review">
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -61,7 +75,9 @@ function Review({ id, onClose }: { id: string; onClose: () => void }) {
         <button className="btn small ghost" onClick={onClose}>Schließen</button>
       </div>
       {msg && <p className={`small ${msg.ok ? '' : 'err'}`} role="status" data-testid="review-msg">{msg.text}</p>}
+      {d.prReview && <PrReviewAbschnitt id={id} pr={d.prReview} onDone={t.reload} />}
 
+      {!d.prReview && <>{/* Plan 157: ein PR-Review hat nichts freizugeben — Push-Freigabe nur für eigene Stränge */}
       <h3>Vorschau</h3>
       {d.vorschau.length === 0 ? <p className="small muted">Keine Vorschau im Dienste-Register zu diesem Paket (review-pakete/00-dienste.yaml).</p> :
         <ul className="plain" data-testid="review-vorschau">{d.vorschau.map((v: any) => (
@@ -92,22 +108,12 @@ function Review({ id, onClose }: { id: string; onClose: () => void }) {
           {f.aktiv && !f.pushedAt && <button className="btn small ghost" disabled={!!busy} data-testid="zurueckziehen" onClick={() => run('z', () => api(`/api/review/${id}/freigabe/${f.id}/zurueck`, { body: {} }), 'Freigabe zurückgezogen.')}>Zurückziehen</button>}
         </li>))}</ul>}
 
-      <h3>Entscheidungen {offen.length > 0 && <span className="chip warn">{offen.length} offen</span>}</h3>
-      {d.entscheidungen.length === 0 ? <p className="small muted">Keine Entscheidungsblöcke (**D1 — …**) im Bericht.</p> : <>
-        {d.entscheidungen.map((e: any) => (
-          <div key={e.id} className="review-entscheidung" data-testid="entscheidung">
-            <p className="small"><b>{e.id}</b> — {e.titel} {e.knut && <span className="chip ok">Knut: {e.knut}</span>}</p>
-            <details><summary className="tiny">Optionen (vom Unter-Chat, als Text)</summary><pre className="small" style={{ whiteSpace: 'pre-wrap' }}>{e.text}</pre></details>
-            {!e.knut && <input className="input" style={{ width: '100%' }} placeholder="Deine Entscheidung (leer = später)" value={antw[e.id] ?? ''} onChange={(ev) => setAntw({ ...antw, [e.id]: ev.target.value })} data-testid={`antwort-${e.id}`} />}
-          </div>))}
-        {offen.length > 0 && <button className="btn small" disabled={!!busy || d.running || !Object.values(antw).some((x) => x.trim())} data-testid="antworten-senden"
-          onClick={() => run('e', () => api(`/api/review/${id}/entscheidungen`, { body: { berichtHash: d.berichtHash, antworten: Object.entries(antw).map(([k, v]) => ({ id: k, text: v })) } }), 'Antworten an den Unter-Chat geschickt — er trägt sie in den Bericht ein.')}>
-          Antworten an den Unter-Chat senden</button>}
       </>}
+      <Entscheidungen id={id} liste={d.entscheidungen ?? []} berichtHash={d.berichtHash} running={!!d.running} onDone={t.reload} />
 
       {d.prTexte.length > 0 && <><h3>PR-Texte</h3>{d.prTexte.map((p: any) => <details key={p.name}><summary className="small mono">{p.name}</summary><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: '50vh', overflow: 'auto' }}>{p.text}</pre></details>)}</>}
       <h3>Bericht</h3>
-      {d.bericht ? <details><summary className="small">Bericht lesen</summary><pre className="small" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '70vh', overflow: 'auto' }}>{d.bericht}</pre></details> : <p className="small muted">Noch kein Bericht.</p>}
+      {d.bericht ? <details open><summary className="small">Bericht</summary><ExecSummary s={d.summary} /><BerichtHtml html={d.berichtHtml} text={d.bericht} /></details> : <p className="small muted">Noch kein Bericht.</p>}
     </section>
   );
 }
@@ -245,6 +251,7 @@ export function Leitstand({ hash }: { cfg: Config; hash: string }) {
         <MeliousKachel />
       </div>
       {starten && <StartHauptchat aktiv={!!d.leitstand} onStarted={() => { setStarten(false); t.reload(); if (wantStart) history.replaceState(null, '', location.pathname + location.search + '#/leitstand'); }} onClose={() => { setStarten(false); if (wantStart) window.location.hash = '#/leitstand'; }} />}
+      <PrTicker />
       {reviewId && <Review id={reviewId} onClose={() => { window.location.hash = '#/leitstand'; }} />}
       {bericht && <Bericht id={bericht.id} art={bericht.art} onClose={() => { setBericht(null); if (fromHash) window.location.hash = '#/leitstand'; }} />}
       {d.offen.length === 0 && <div className="card soft empty"><p><b>Keine offenen Unter-Chats.</b></p></div>}

@@ -112,6 +112,16 @@ export function strandFor(p: Pick<Paket, 'name' | 'nr'>, runs: Array<{ _id: stri
 }
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false, typographer: false });
+// Teil C (C2/H6): Mermaid-Blöcke nur als Text — der Client rendert sie (mermaid, securityLevel strict); nie ausführbares HTML.
+const fenceDefault = md.renderer.rules.fence!;
+md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+  const t = tokens[idx];
+  if (t.info.trim().split(/\s+/)[0] === 'mermaid') return `<pre class="mermaid-src">${md.utils.escapeHtml(t.content.slice(0, 20_000))}</pre>\n`;
+  return fenceDefault(tokens, idx, options, env, self);
+};
+const DOD: Record<string, string> = { ja: '✓', teilweise: '◐', nein: '✗' };
+/** DoD-Zellen („ja | teilweise | nein“) als Häkchen (C3) — nur ganze Tabellenzellen, sonst bleibt alles wie geschrieben. */
+export const dodHaken = (html: string) => html.replace(/<td>\s*(ja|teilweise|nein)\s*<\/td>/gi, (_m, w: string) => `<td class="dod dod-${w.toLowerCase()}" title="${w}">${DOD[w.toLowerCase()]} ${w}</td>`);
 
 /**
  * Markdown einer Paket-Datei als HTML (ohne rohes HTML, wie im Wissen-Reiter). Relative Bilder und Links zeigen auf die
@@ -134,5 +144,5 @@ export function renderPaketMd(src: string, paket: string, rel: string): string {
     if (t.children) walk(t.children);
   } };
   walk(tokens);
-  return md.renderer.render(tokens, md.options, env);
+  return dodHaken(md.renderer.render(tokens, md.options, env));
 }

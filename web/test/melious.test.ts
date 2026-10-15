@@ -159,6 +159,22 @@ test('Gegenprüfer GLM 5.3 (challenge): Diff an glm-5.3 mit Review-Auftrag, Antw
   assert.ok(use.modelle.find((m: any) => m.model === 'glm-5.3')!.turns >= 1);
 });
 
+test('Hotfix 15.10.: Abo-Liste (Vorgabe die vier PRO-Modelle) an die Brücke; Modelle außerhalb → Warnung „läuft auf Guthaben“, keine Sperre', async () => {
+  let s = await M.meliousSettings(u);
+  assert.deepEqual(s.abo, ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731']);
+  assert.deepEqual(s.warnungen, []);
+  s = await M.setMelious(u, { model: 'mistral-large:eco', ketteModell: 'kimi-k3' });
+  assert.deepEqual(s.warnungen, ['„mistral-large“ ist nicht im Abo und läuft auf Guthaben.', '„kimi-k3“ ist nicht im Abo und läuft auf Guthaben.']);
+  assert.equal(s.model, 'mistral-large:eco');   // erlaubt (Knut: keine Sperren)
+  const mel: any = (await claudeAccountsForBridge(u)).find((a: any) => a.kind === 'melious');
+  assert.deepEqual(mel.abo, M.MELIOUS_ABO);
+  s = await M.setMelious(u, { abo: [...M.MELIOUS_ABO, 'mistral-large', 'kimi-k3'] });
+  assert.deepEqual(s.warnungen, []);
+  await assert.rejects(M.setMelious(u, { abo: ['a b'] }), /Abo/);
+  await M.setMelious(u, { model: '', ketteModell: '', abo: null });
+  assert.deepEqual(M.ausserhalbAbo(['glm-5.3:eco', null, 'x', 'x'], M.MELIOUS_ABO), ['x']);
+});
+
 test('Guthaben statt Energie (paid_with credits): Hinweis in der Anzeige, keine Sperre', async () => {
   BEZAHLT = 'credits';
   const later = Date.now() + 16 * 60_000;   // neuer 15-Minuten-Abruf

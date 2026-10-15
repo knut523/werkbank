@@ -6,6 +6,8 @@ import { Err, Loading, useConfirm, useLoad, useToast, useJiraLive } from '../ui.
 import { HygienePanel } from '../components.tsx';
 import { WartetAufDich, Md, mineCount, note } from '../beimir.tsx';
 import { OrchQuestions } from '../orchquestions.tsx';
+import { Mermaid, useMermaidIn } from '../mermaid.tsx';
+import { ExecSummary } from '../execsummary.tsx';
 
 const BIG: CSSProperties = { minHeight: 44 };
 const STAND: Record<string, [string, string]> = { ja: ['✓', 'ok'], teilweise: ['◐', 'warn'], nein: ['✗', 'bad'] };
@@ -117,12 +119,14 @@ function DocView({ paket, doc, onClose }: { paket: string; doc: Doc; onClose: ()
   // Aufgeklappt → ins Bild rücken und Fokus hinein (sonst passiert auf dem Handy sichtbar nichts, Review Nachtrag 3).
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { ref.current?.scrollIntoView({ block: 'nearest' }); ref.current?.focus({ preventScroll: true }); }, [paket, doc]);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useMermaidIn(bodyRef, data);   // Teil C: Diagramme im Bericht zeichnen (lädt mermaid nur, wenn es eins gibt)
   return (
     <div className="rq-doc" ref={ref} tabIndex={-1} data-testid={`doc-${doc}`} role="region" aria-label={doc === 'auftrag' ? 'Auftrag' : 'Bericht'}>
       <div className="row rq-doc-head"><b>{doc === 'auftrag' ? 'Auftrag' : 'Bericht'}</b> <span className="tiny muted">{paket}/{doc}.md</span>
         <a className="tiny" href={paketDoc(paket, doc)} target="_blank" rel="noreferrer">Datei</a>
         <button className="btn ghost small" onClick={onClose}>Zuklappen</button></div>
-      {d.error ? <Err e={d.error} /> : !data ? <Loading /> : <div className="note-body" dangerouslySetInnerHTML={{ __html: data.html ?? '' }} />}
+      {d.error ? <Err e={d.error} /> : !data ? <Loading /> : <div className="note-body" ref={bodyRef} dangerouslySetInnerHTML={{ __html: data.html ?? '' }} />}
     </div>
   );
 }
@@ -132,6 +136,81 @@ function DocButtons({ it, doc, setDoc, small }: { it: any; doc: Doc | null; setD
   if (!it.paket) return null;
   const b = (k: Doc, label: string) => it.docs?.[k] && <button key={k} className={`btn ghost small${small ? ' rq-link' : ''}`} style={small ? undefined : BIG} aria-expanded={doc === k} id={`doc-btn-${it.id}-${k}`} data-testid={`btn-${k}`} onClick={() => setDoc(doc === k ? null : k)}>{label}{doc === k ? ' ▴' : ' ▾'}</button>;
   return <>{b('auftrag', 'Auftrag')}{b('bericht', 'Bericht')}</>;
+}
+
+// ---------- Teil C: Bericht-Kopf auf der Karte (docs/plan-leitstand.md, C4/C5/D2/D3/H1/H3/H5) ----------
+
+const fileUrl = (paket: string, rel: string, inline = false) => `api/files/agenten/${encodeURIComponent(paket)}/${rel.split('/').map(encodeURIComponent).join('/')}${inline ? '?inline=1' : ''}`;
+
+function KopfTeil({ it, onDone }: { it: any; onDone: () => void }) {
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const [antwort, setAntwort] = useState<Record<string, string>>({});
+  const [diagramm, setDiagramm] = useState(false);
+  const run = async (fn: () => Promise<void>) => { setBusy(true); setErr(null); try { await fn(); onDone(); } catch (e) { setErr(e); } finally { setBusy(false); } };
+  const k = it.kopf;
+  const fg = it.freigabe;
+  const reviewLinks = (k?.review ?? []).filter((r: any) => r.url || r.login);
+  const shots = (k?.review ?? []).filter((r: any) => r.screenshot);
+  // C.7: Stand von GitHub (Server-Prüfung) — ein PR-Link im Bericht allein ersetzt keine Freigabe.
+  const aufGithub = (it.prs ?? [])[0]?.stand === 'offen' || (it.prs ?? [])[0]?.stand === 'gemergt';
+  const senden = () => run(async () => {
+    const antworten = (it.fragen ?? []).map((f: any) => ({ id: f.id, text: (antwort[f.id] ?? '').trim() })).filter((a: any) => a.text);
+    await api(`/api/review/${it.id}/entscheidungen`, { body: { berichtHash: it.berichtHash, antworten } });
+    toast(`${antworten.length === 1 ? 'Antwort' : 'Antworten'} an den Unter-Chat geschickt`);
+    setAntwort({});
+  });
+  // D2: genau den gesehenen Stand freigeben — Stand live holen, zeigen, bestätigen lassen.
+  const freigeben = () => run(async () => {
+    const r: any = await api(`/api/review/${it.id}`);
+    const repo = r.repo ?? {};
+    if (repo.fehler) throw new Error(repo.fehler);
+    const ok = await confirm({ title: 'Push freigeben?', confirmLabel: 'Genau diesen Stand freigeben', body: <>
+      <p className="small">Freigegeben wird <b>nur dieser Stand</b>. Ändert sich danach ein Commit (auch ein Rebase), verfällt die Freigabe. Pushen macht die Hauptsitzung nach ihrer Prüfung; gemergt wird nie.</p>
+      <ul className="small plain"><li>Zweig <code>{repo.branch}</code></li><li>Kopf <code>{String(repo.head ?? '').slice(0, 12)}</code> · Basis <code>{repo.baseRef}</code></li><li>{(repo.commits ?? []).length} Commit(s){repo.clean ? '' : ' — ⚠ ungespeicherte Änderungen'}</li></ul>
+      {(repo.commits ?? []).length > 0 && <pre className="tiny" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{(repo.commits ?? []).map((c: any) => (typeof c === 'string' ? c : `${String(c.sha ?? '').slice(0, 8)} ${c.subject ?? ''}`)).join('\n')}</pre>}
+      {repo.stat && <pre className="tiny" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{repo.stat}</pre>}
+      <p className="tiny"><a href={`#/leitstand?review=${it.id}`}>Ganzen Diff und Review-Ansicht öffnen</a></p></> });
+    if (!ok) return;
+    await api(`/api/review/${it.id}/freigabe`, { body: { head: repo.head, patchId: repo.patchId ?? null } });
+    toast('Freigegeben — die Hauptsitzung pusht nach ihrer Prüfung');
+  });
+  const tot = (url: string) => run(async () => { await api(`/api/review/${it.id}/vorschau-tot`, { body: { url } }); toast('Unter-Chat benachrichtigt'); });
+  if (!k && !it.kopfFehler) return null;
+  return (
+    <div className="rq-kopf" data-testid="kopf" data-spalte={it.spalte}>
+      {it.kopfFehler && <p className="small rq-warn" data-testid="kopf-fehler">⚠ Bericht-Kopf unlesbar: {it.kopfFehler}</p>}
+      <ExecSummary s={{ kopf: k, prs: it.prs ?? [], maengel: it.maengel ?? [] }} fragen={(it.fragen ?? []).length} />
+      {(it.linkWarnungen ?? []).map((l: any) => <p key={l.url} className="small rq-tot" data-testid="link-tot">🔴 Vorschau „{l.titel}“ {l.ergebnis} — <a href={l.url} target="_blank" rel="noreferrer">Link</a> <button className="btn ghost small" disabled={busy} onClick={() => tot(l.url)}>Unter-Chat benachrichtigen</button></p>)}
+      {it.commitWarnung && <p className="small rq-warn" data-testid="commit-warnung">⚠ {it.commitWarnung}</p>}
+      {reviewLinks.length > 0 && <p className="small row rq-links" style={{ gap: 10, flexWrap: 'wrap' }}>Ansehen: {reviewLinks.map((r: any, i: number) => <a key={i} className="btn small ghost" style={BIG} href={r.login ?? r.url} target="_blank" rel="noreferrer">{r.titel || 'Vorschau'}{r.login ? ' (Login)' : ''}</a>)}</p>}
+      {shots.length > 0 && it.paket && <div className="rq-shots" data-testid="shots">{shots.slice(0, 6).map((r: any) => <a key={r.screenshot} href={fileUrl(it.paket, r.screenshot, true)} target="_blank" rel="noreferrer"><img loading="lazy" src={fileUrl(it.paket, r.screenshot, true)} alt={r.titel || r.screenshot.split('/').pop()} /></a>)}</div>}
+      {it.diagramm && <details className="rq-diagramm" onToggle={(e) => setDiagramm((e.target as HTMLDetailsElement).open)}>
+        <summary className="small">Diagramm ansehen</summary>
+        {diagramm && <Mermaid code={it.diagramm} />}
+      </details>}
+      {(it.fragen ?? []).length > 0 && <div className="rq-fragen" data-testid="fragen">
+        {it.fragen.map((f: any) => <div key={f.id} className="rq-frage">
+          <p className="small"><b>{f.id}</b> {f.frage}</p>
+          {f.empfehlung && <p className="tiny muted">Empfehlung: {f.empfehlung} <button className="btn ghost small" onClick={() => setAntwort({ ...antwort, [f.id]: `Wie empfohlen: ${f.empfehlung}` })}>übernehmen</button></p>}
+          <textarea rows={2} aria-label={`Antwort auf ${f.id}`} value={antwort[f.id] ?? ''} onChange={(e) => setAntwort({ ...antwort, [f.id]: e.target.value })} placeholder="Deine Antwort" />
+        </div>)}
+        <button className="btn primary small" style={BIG} disabled={busy || !Object.values(antwort).some((v) => v.trim())} onClick={senden} data-testid="antwort-senden">Antwort an den Unter-Chat</button>
+        <span className="tiny muted"> Geht als „Nacharbeit nach Review“ in den Chat; läuft er gerade, wird sie nachgereicht.</span>
+      </div>}
+      {(k?.github?.length > 0 || fg) && <div className="rq-github small" data-testid="github">
+        {(k?.github ?? []).slice(0, 1).map((g: any) => <span key={g.repo}><b>{g.repo}</b> · <code>{g.zweig}</code>{g.commit ? <> · <code>{g.commit.slice(0, 7)}</code></> : null} </span>)}
+        {fg && !fg.pushedAt && !fg.veraltet && <span className="chip ok" data-testid="freigabe">freigegeben für {fg.head.slice(0, 7)} · wartet auf Push</span>}
+        {fg && fg.veraltet && <span className="chip warn" data-testid="freigabe-veraltet">Freigabe gilt für einen älteren Stand ({fg.head.slice(0, 7)})</span>}
+        {fg?.pushedAt && <span className="chip ok" data-testid="gepusht">gepusht{fg.pr ? <> · <a href={fg.pr} target="_blank" rel="noreferrer">PR #{fg.prNr ?? '?'}</a></> : ''}</span>}
+        {(fg?.veraltet || (!fg && !aufGithub)) && <button className="btn small" style={BIG} disabled={busy || it.running} onClick={freigeben} data-testid="push-freigeben">{fg?.veraltet ? 'Neu freigeben' : 'Push freigeben'}</button>}
+        {(it.weitereRepos ?? []).length > 0 && <p className="tiny muted">Weitere Repos ({it.weitereRepos.join(', ')}) sind nicht über die Werkbank freigegeben — die Hauptsitzung fragt dich dazu.</p>}
+      </div>}
+      <Err e={err} />
+    </div>
+  );
 }
 
 function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
@@ -182,7 +261,9 @@ function RunCard({ it, onDone }: { it: any; onDone: () => void }) {
           <button className="btn small ghost" style={BIG} disabled={busy} onClick={() => run(async () => { await api(`/api/runs/${it.id}/passt`, { body: {} }); toast('Ausgeblendet'); })}>Erledigt</button>
         </div>
       </div>}
-      {it.bucket === 'review' && <Klar it={it} berichtOpen={doc === 'bericht'} openBericht={() => setDoc(doc === 'bericht' ? null : 'bericht')} />}
+      {it.bucket === 'review' && it.kind === 'strand' && <KopfTeil it={it} onDone={onDone} />}
+      {/* C.7: Mit Exec Summary (Bericht-Kopf) ersetzt diese das abgeleitete „Worum es geht / Was du jetzt tun sollst“. */}
+      {it.bucket === 'review' && !(it.kind === 'strand' && it.kopf) && <Klar it={it} berichtOpen={doc === 'bericht'} openBericht={() => setDoc(doc === 'bericht' ? null : 'bericht')} />}
       <ReviewBody it={it} />
       {it.bucket === 'review' && <>
         {it.review && !nothing(it.review.risiko) && <p className="small rq-risk rq-risk-line" data-testid="risk-line"><b>⚠ Risiko:</b> <Md text={it.review.risiko} max={200} /></p>}
@@ -261,6 +342,8 @@ function LiveGroup({ items, onDone }: { items: any[]; onDone: () => void }) {
   );
 }
 
+const SPALTEN: [string, string, string][] = [['entscheiden', 'Entscheiden', 'Keine offene Frage.'], ['ansehen', 'Ansehen', 'Nichts anzusehen.'], ['github', 'Auf GitHub', 'Nichts freigegeben.']];
+
 export function Heute({ cfg }: { cfg: Config }) {
   const t = useLoad(() => api('/api/today'));
   const d: any = t.data;
@@ -318,7 +401,15 @@ export function Heute({ cfg }: { cfg: Config }) {
 
       {allReview.length > 0 && <section data-testid="review-queue">
         <h2>Wartet auf dein Review {review.length > 0 ? <span className="chip">{review.length}</span> : <span className="small muted">— nichts zu prüfen</span>}</h2>
-        {review.map((it: any) => <RunCard key={it.id} it={it} onDone={reload} />)}
+        {/* Teil C (C4): drei Spalten — Entscheiden · Ansehen · Auf GitHub; Board-Läufe stehen in „Ansehen“. */}
+        {review.length > 0 && <p className="row small rq-jump rq-spalten-jump" data-testid="spalten-jump">{SPALTEN.map(([k, label]) => <button key={k} className="btn ghost small" onClick={() => document.getElementById(`spalte-${k}`)?.scrollIntoView()}>{label} ({review.filter((x) => (x.spalte ?? 'ansehen') === k).length})</button>)}</p>}
+        <div className="rq-spalten">{SPALTEN.map(([k, label, hint]) => {
+          const xs = review.filter((x) => (x.spalte ?? 'ansehen') === k);
+          return <div key={k} className={`rq-spalte rq-spalte-${k}`} id={`spalte-${k}`} data-testid={`spalte-${k}`}>
+            <h3>{label} <span className="chip">{xs.length}</span></h3>
+            {xs.length ? xs.map((it: any) => <RunCard key={it.id} it={it} onDone={reload} />) : <p className="tiny muted">{hint}</p>}
+          </div>;
+        })}</div>
         {liveDone.length > 0 && <LiveGroup items={liveDone} onDone={reload} />}
       </section>}
 

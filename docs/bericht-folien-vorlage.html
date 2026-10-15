@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bericht · TITEL</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--fg:#1d1d1b;--mut:#5d5b55;--line:#dcd9d0;--acc:#0b6b5c;--ok:#2f7d3a;--okbg:#e5f2e7;--warn:#9a6a00;--warnbg:#fbf0d3;--bad:#a33a2a;--badbg:#f8e1dc}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17181a;--card:#212326;--fg:#ecebe6;--mut:#a9a79f;--line:#3a3c40;--acc:#5cc2ad;--ok:#7fc98a;--okbg:#1f3323;--warn:#e3b54c;--warnbg:#3a3120;--bad:#ee8b7a;--badbg:#3d2420;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#17181a;--card:#212326;--fg:#ecebe6;--mut:#a9a79f;--line:#3a3c40;--acc:#5cc2ad;--ok:#7fc98a;--okbg:#1f3323;--warn:#e3b54c;--warnbg:#3a3120;--bad:#ee8b7a;--badbg:#3d2420;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.deck{max-width:980px;margin:0 auto;padding-inline:16px;padding-block:20px 90px}
+.slide{display:none;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px clamp(18px,4vw,40px);min-height:70vh}
+.slide.on{display:block}
+.k{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:0 0 6px}
+h1{font-size:clamp(24px,4vw,34px);line-height:1.2;margin:0 0 14px;text-wrap:balance}
+h2{font-size:clamp(20px,3vw,26px);line-height:1.25;margin:0 0 16px;text-wrap:balance}
+p,li{max-width:68ch}
+.pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:13px;font-weight:600}
+.ok{background:var(--okbg);color:var(--ok)}.warn{background:var(--warnbg);color:var(--warn)}.bad{background:var(--badbg);color:var(--bad)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+.box{border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-width:0}
+.box h3{margin:0 0 6px;font-size:15px}
+.mermaid{background:var(--card);overflow-x:auto;text-align:center}
+table{border-collapse:collapse;width:100%;font-size:15px}
+td,th{border-bottom:1px solid var(--line);padding:8px 6px;text-align:left;vertical-align:top}
+th{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
+.tw{overflow-x:auto}
+a{color:var(--acc)}
+img{max-width:100%;border:1px solid var(--line);border-radius:8px}
+code{font-size:.9em;background:var(--bg);padding:1px 5px;border-radius:4px}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:center;gap:10px;align-items:center;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));background:var(--bg);border-top:1px solid var(--line)}
+nav button{font:inherit;padding:8px 16px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+#pos{font-variant-numeric:tabular-nums;color:var(--mut);min-width:4em;text-align:center}
+.dots{display:flex;gap:6px}.dots i{width:8px;height:8px;border-radius:50%;background:var(--line)}.dots i.on{background:var(--acc)}
+</style>
+</head>
+<body>
+<!-- Vorlage (docs/plan-leitstand.md, Teil C, C.7): Folie 1 = Exec Summary (worum, was anders, was du tun musst, PR-Tabelle), dann Ablauf, Ausrollen, Screenshots,
+     Prüfungen, Entscheidungen. Alles in GROSSBUCHSTABEN ersetzen; nicht Benötigtes löschen. Mermaid 10.9.8 (10.9.1 hat bekannte Lücken). -->
+<div class="deck">
+
+<section class="slide on">
+  <p class="k">Exec Summary · Strang „STRANG“ · TT.MM.JJJJ</p>
+  <h1>EIN SATZ: WAS JETZT GEHT</h1>
+  <p><span class="pill warn">🟡 wartet auf dich</span> &nbsp; <!-- oder: <span class="pill ok">🟢 bereit für GitHub</span> / <span class="pill bad">🔴 blockiert</span> --> KURZ WARUM.</p>
+  <div class="grid" style="margin-top:18px">
+    <div class="box"><h3>Worum es geht</h3><p style="margin:0">2–3 SÄTZE FÜR JEMANDEN, DER DEN CHAT NICHT KENNT: AUSGANGSLAGE, PROBLEM, ZIEL.</p></div>
+    <div class="box"><h3>Was jetzt anders ist</h3><ul style="margin:0;padding-left:18px"><li>PUNKT 1</li><li>PUNKT 2</li><!-- höchstens 4 --></ul></div>
+    <div class="box"><h3>Was du tun musst</h3><ul style="margin:0;padding-left:18px"><li>AUFGABE 1 (<a href="https://PORT--main--dev--knut.ws.konekto.energy/login">Vorschau mit Login</a>)</li><li>FRAGEN D1, D2 beantworten</li></ul></div>
+  </div>
+  <h3 style="margin:22px 0 8px;font-size:15px">Pull Requests</h3>
+  <!-- Nur PRs, die es auf GitHub wirklich gibt, mit Link. Nicht gepushte Zweige ohne Link als „lokal, nicht auf GitHub“.
+       Den Stand zeigt der Leitstand live von GitHub; hier den Stand beim Schreiben (offen/gemergt). -->
+  <div class="tw"><table>
+    <tr><th>PR</th><th>Was</th><th>Stand</th></tr>
+    <tr><td><a href="https://github.com/ORG/REPO/pull/NR">REPO#NR</a></td><td>INHALT</td><td><span class="pill warn">offen</span></td></tr>
+    <tr><td>REPO · <code>ZWEIG</code></td><td>INHALT</td><td><span class="pill">lokal, nicht auf GitHub</span></td></tr>
+  </table></div>
+  <p class="k" style="margin-top:10px">REVIEWER · nicht gemergt · Screenshots auf Folie N</p>
+</section>
+
+<section class="slide">
+  <p class="k">Wie es jetzt funktioniert</p>
+  <h2>EIN SATZ ZUM ABLAUF</h2>
+<pre class="mermaid">
+flowchart LR
+  A["Eingabe"] --> B{"Entscheidung"}
+  B --> C["Ergebnis 1"]
+  B --> D["Ergebnis 2"]
+</pre>
+</section>
+
+<section class="slide">
+  <p class="k">Was ausgerollt wird, in welcher Reihenfolge</p>
+  <h2>NUR BEI MEHREREN PRS ODER REPOS</h2>
+<pre class="mermaid">
+flowchart LR
+  P["Plan-PR"] -.-> A["Code-PR"]
+  A --> U["Infra-PR"]
+  U --> T["Test auf dev"]
+  T --> R["Prod mit dem Release"]
+</pre>
+</section>
+
+<section class="slide">
+  <p class="k">So sieht es aus</p>
+  <h2>EIN SATZ ZU DEN BILDERN</h2>
+  <div class="grid">
+    <figure style="margin:0"><img src="screenshots/NAME-800.png" alt="BESCHREIBUNG"><figcaption class="k" style="margin-top:6px">UNTERSCHRIFT</figcaption></figure>
+    <figure style="margin:0"><img src="screenshots/NAME-390.png" alt="BESCHREIBUNG (Handy)"><figcaption class="k" style="margin-top:6px">Handy</figcaption></figure>
+  </div>
+</section>
+
+<section class="slide">
+  <p class="k">Geprüft</p>
+  <h2>WAS GRÜN IST, WAS NICHT LAUFEN KONNTE</h2>
+  <div class="tw"><table>
+    <tr><th>Prüfung</th><th>Ergebnis</th></tr>
+    <tr><td>Typecheck, Lint</td><td><span class="pill ok">grün</span></td></tr>
+    <tr><td>Tests</td><td><span class="pill ok">N / N</span></td></tr>
+    <tr><td>GitHub-CI</td><td><span class="pill warn">nicht gelaufen</span></td></tr>
+  </table></div>
+</section>
+
+<section class="slide">
+  <p class="k">Deine Entscheidungen</p>
+  <h2>WAS ENTSCHIEDEN IST, WAS NOCH KOMMT</h2>
+  <div class="tw"><table>
+    <tr><th></th><th>Frage</th><th>Stand</th></tr>
+    <tr><td>D1</td><td>FRAGE</td><td><span class="pill warn">offen</span> Empfehlung: …</td></tr>
+  </table></div>
+</section>
+
+</div>
+<nav><button id="prev" aria-label="Zurück">←</button><div class="dots" id="dots"></div><span id="pos"></span><button id="next" aria-label="Weiter">→</button></nav>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.8/dist/mermaid.min.js"></script>
+<script>
+if(innerWidth<640)document.querySelectorAll('.mermaid').forEach(m=>{m.innerHTML=m.innerHTML.replace('flowchart LR','flowchart TD')});
+const s=[...document.querySelectorAll('.slide')];let i=0;const d=document.getElementById('dots');
+s.forEach(()=>d.appendChild(document.createElement('i')));
+function show(n){i=Math.max(0,Math.min(s.length-1,n));s.forEach((e,k)=>e.classList.toggle('on',k===i));[...d.children].forEach((e,k)=>e.classList.toggle('on',k===i));document.getElementById('pos').textContent=(i+1)+' / '+s.length;
+  if(window.mermaid){mermaid.run({nodes:s[i].querySelectorAll('.mermaid:not([data-processed])')}).catch(()=>{});}}
+document.getElementById('prev').onclick=()=>show(i-1);document.getElementById('next').onclick=()=>show(i+1);
+addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key===' ')show(i+1);if(e.key==='ArrowLeft')show(i-1)});
+let x0=null;addEventListener('touchstart',e=>x0=e.touches[0].clientX);addEventListener('touchend',e=>{if(x0===null)return;const dx=e.changedTouches[0].clientX-x0;if(Math.abs(dx)>50)show(i+(dx<0?1:-1));x0=null});
+const dark=matchMedia('(prefers-color-scheme: dark)').matches&&document.documentElement.dataset.theme!=='light'||document.documentElement.dataset.theme==='dark';
+if(window.mermaid){mermaid.initialize({startOnLoad:false,theme:dark?'dark':'neutral',securityLevel:'strict'});}
+show(0);
+</script>
+</body>
+</html>
