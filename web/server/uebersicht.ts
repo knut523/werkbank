@@ -207,10 +207,16 @@ export function kopfAntwortEintragen(md: string, antworten: { id: string; text: 
     if (item < 0) return null;
     let stop = item + 1;
     while (stop < end && !new RegExp(`^\\s{${dash}}-\\s`).test(lines[stop]) && (lines[stop].trim() === '' || lines[stop].search(/\S/) > dash)) stop++;
-    const zeile = `${' '.repeat(dash + 2)}antwort: ${JSON.stringify(a.text.replace(/\s+/g, ' ').trim().slice(0, 600))}`;
+    // An einer Zeichengrenze kürzen (Pass C: kein halbes Surrogatpaar im YAML).
+    const zeile = `${' '.repeat(dash + 2)}antwort: ${JSON.stringify(Array.from(a.text.replace(/\s+/g, ' ').trim()).slice(0, 600).join(''))}`;
     const hit = lines.slice(item + 1, stop).findIndex((l) => new RegExp(`^\\s{${dash + 2}}antwort:`).test(l));
-    if (hit >= 0) lines[item + 1 + hit] = zeile;
-    else { lines.splice(stop, 0, zeile); end++; }
+    if (hit >= 0) {
+      const at = item + 1 + hit;
+      // Ein früheres mehrzeiliges `antwort: |` samt eingerückter Folgezeilen ganz ersetzen (Pass C, Befund 4).
+      let n = 1;
+      while (at + n < stop && (lines[at + n].trim() === '' ? at + n + 1 < stop : lines[at + n].search(/\S/) > dash + 2)) n++;
+      lines.splice(at, n, zeile); end -= n - 1;
+    } else { lines.splice(stop, 0, zeile); end++; }
   }
   const neu = md.slice(0, m.index) + `---${nl}${lines.join(nl)}${nl}---` + md.slice(m.index + m[0].length);
   const k = berichtKopf(neu);

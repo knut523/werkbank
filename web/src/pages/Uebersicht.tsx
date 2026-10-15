@@ -65,25 +65,27 @@ function Entscheiden({ k, onDone }: { k: any; onDone: () => void }) {
   const [einzeln, setEinzeln] = useStored<boolean>(`${k.id}:einzeln`, false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
+  // Ein Bericht, eine Antwort zur Zeit: solange eine unterwegs ist, sind alle Knöpfe der Karte aus (Pass C, Teil B).
   const send = async (antworten: any[]) => {
+    setBusy(true);
     try {
       const r: any = await api(`/api/review/${k.id}/entscheidungen`, { body: { berichtHash: k.berichtHash, weiter: true, antworten } });
       toast(`${antworten.map((a) => a.id).join(', ')} beantwortet — im Bericht eingetragen${r.weiter ? ', der Unter-Chat macht weiter' : ''}`);
       onDone();
-    } catch (e) { if (is409(e)) onDone(); throw e; }
+    } catch (e) { if (is409(e)) onDone(); throw e; } finally { setBusy(false); }
   };
-  const antwort = (e: any, art: Art, text: string) => art === 'ja' ? (e.empfehlung ? { id: e.id, art: 'akzeptiert' } : { id: e.id, art: 'eigene', text: 'Ja' })
+  const antwort = (e: any, art: Art, text: string) => art === 'ja' ? { id: e.id, art: 'akzeptiert' }   // ohne Empfehlung trägt der Server „ja“ ein
     : art === 'nein' ? { id: e.id, art: 'abgelehnt' } : { id: e.id, art: 'eigene', text };
   const alle = async () => {
-    setBusy(true); setErr(null);
-    try { await send(liste.filter((e) => e.empfehlung).map((e) => ({ id: e.id, art: 'akzeptiert' }))); } catch (e) { setErr(e); } finally { setBusy(false); }
+    setErr(null);
+    try { await send(liste.filter((e) => e.empfehlung).map((e) => ({ id: e.id, art: 'akzeptiert' }))); } catch (e) { setErr(e); }
   };
   const frage = (e: any) => (
     <div key={e.id} className="ub-frage" data-testid="ub-entscheidung" data-id={e.id}>
       <p className="small"><b>{e.id}</b> {e.frage}</p>
       {e.empfehlung && <p className="tiny mut">Empfehlung: {e.empfehlung}</p>}
       {e.optionen && <details className="tiny"><summary className="mut">Optionen aus dem Bericht</summary><pre className="ub-pre">{e.optionen}</pre></details>}
-      <JaNeinAnders k={`${k.id}:${e.id}`} empfehlung={e.empfehlung} onSend={(art, text) => send([antwort(e, art, text)])} />
+      <JaNeinAnders k={`${k.id}:${e.id}`} empfehlung={e.empfehlung} disabled={busy} onSend={(art, text) => send([antwort(e, art, text)])} />
     </div>
   );
   if (liste.length === 1) return <div className="ub-dec">{frage(liste[0])}</div>;

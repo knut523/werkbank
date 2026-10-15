@@ -5,7 +5,7 @@
 // Bestätigungsdialog setzt. Ohne confirm liefern sie nur die Vorschau.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch, realpathSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch, realpathSync, renameSync } from 'node:fs';
 import { join, extname, resolve, normalize, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import YAML from 'yaml';
@@ -1439,6 +1439,14 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const u = await needAdmin(req);
   const d = await reviewStrand(u, m[1]);
   const b = await body(req);
+  // Plan 184, Pass C (Teil B): zwei schnelle Antworten auf denselben Bericht nie gleichzeitig lesen-prüfen-schreiben.
+  const sperre = String(d._id);
+  if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — Seite neu laden und noch einmal.');
+  entscheidSperre.add(sperre);
+  try { await entscheidungenEintragen(u, d, b, res); } finally { entscheidSperre.delete(sperre); }
+});
+const entscheidSperre = new Set<string>();
+async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
   // Teil C (H3): läuft der Unter-Chat, reicht sendOrch die Antwort nach — kein 409 mehr.
   const { paketDatei } = await import('./bericht.ts');
   const pfad = paketDatei(d, 'bericht');
@@ -1454,7 +1462,7 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
     // Plan 184, Teil B: „abgelehnt“ = Nein auf der Übersicht (die Empfehlung gilt nicht).
     const art = a?.art === 'akzeptiert' || a?.art === 'nachpruefen' || a?.art === 'abgelehnt' ? a.art : 'eigene';
     const frei = String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000);
-    const t = art === 'akzeptiert' ? `akzeptiert${e?.empfehlung ? ` (Empfehlung: ${e.empfehlung.slice(0, 200)})` : ''}` : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}`
+    const t = art === 'akzeptiert' ? (e?.empfehlung ? `akzeptiert (Empfehlung: ${e.empfehlung.slice(0, 200)})` : 'ja') : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}`
       : art === 'abgelehnt' ? `nein — Empfehlung abgelehnt${e?.empfehlung ? ` (${e.empfehlung.slice(0, 200)})` : ''}${frei ? `: ${frei}` : ''}` : frei;
     return { id, art, text: t };
   }).filter((a: any) => a.text && bekannt.has(a.id) && !bekannt.get(a.id)!.knut);
@@ -1482,23 +1490,25 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   // Übersicht (Plan 184, Teil B): mit `weiter` arbeitet der Unter-Chat in jedem Fall mit den Antworten weiter; Kopf-Fragen auch.
   const fortsetzen = arbeit.length > 0 || imKopf.length > 0 || b.weiter === true;
   let weiter = false;
-  // Erst zustellen, dann eintragen: scheitert die Nachricht an den Strang, bleibt der Bericht unverändert (Knut kann neu senden).
+  // Erst eintragen, dann den Strang wecken (Pass C, Teil B: sonst liest er den Bericht ohne die Antworten). Atomar über eine
+  // Nachbardatei; scheitert die Nachricht an den Strang, kommt der alte Stand zurück (Knut kann neu senden).
+  const schreibe = (inhalt: string) => { const tmp = `${real}.${process.pid}.tmp`; writeFileSync(tmp, inhalt); renameSync(tmp, real); };
+  schreibe(neu);
   if (fortsetzen) {
     // Abweichung, Nachprüfen oder Fortsetzen gewünscht → der Strang arbeitet weiter (sendOrch startet den Zug).
     const rest = antworten.filter((a: any) => a.art === 'akzeptiert');
     const msg = arbeit.length
       ? `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}${rest.length ? `\nAkzeptiert (wie empfohlen): ${rest.map((a: any) => a.id).join(', ')}` : ''}`
       : `Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“): ${rest.map((a: any) => `${a.id} wie empfohlen`).join(', ')}. Mach damit weiter${offen.length ? ` (noch offen: ${offen.map((e: any) => e.id).join(', ')})` : ''} und aktualisiere danach den Bericht.`;
-    await sendOrch(u, String(d._id), msg, 'hand');
+    try { await sendOrch(u, String(d._id), msg, 'hand'); } catch (e) { schreibe(text); throw e; }
     weiter = true;
   }
-  writeFileSync(real, neu);
   let hauptchat = false;
   if (!fortsetzen && !offen.length) hauptchat = await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
   await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten, ids }, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
   log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length, arbeit: arbeit.length, offen: offen.length });
   send(res, 200, { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat });
-});
+}
 // Teil C (H5): tote Vorschau aus dem Bericht-Kopf → kurze Nachricht an den Unter-Chat (nur ein bekannter, als tot geprüfter Link).
 on('POST', /^\/api\/review\/([\w-]{1,40})\/vorschau-tot$/, async (req, res, m) => {
   const u = await needAdmin(req);

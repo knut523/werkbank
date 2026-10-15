@@ -153,3 +153,14 @@ test('Teil B: Antwort landet im Bericht-Kopf (antwort:), andere Fragen und der T
   // offeneEntscheidungen sieht D3 danach als beantwortet.
   assert.deepEqual(offeneEntscheidungen(neu, null).map((e) => e.id), ['D1']);
 });
+
+test('Pass C (Teil B): ein früheres mehrzeiliges antwort: wird ganz ersetzt, Folgefragen bleiben', async () => {
+  const { kopfAntwortEintragen } = await import('../server/uebersicht.ts');
+  const { berichtKopf } = await import('../server/berichtkopf.ts');
+  const md = ['---', 'status: wartet_auf_knut', 'fragen:', '  - id: D1', '    frage: A?', '    empfehlung: a', '    antwort: |', '      alte Zeile 1', '      alte Zeile 2', '  - id: D2', '    frage: B?', '    empfehlung: b', '    antwort: ""', 'github: []', '---', '# T', ''].join('\n');
+  const neu = kopfAntwortEintragen(md, [{ id: 'D1', text: 'neu 😀'.repeat(1) }])!;
+  assert.ok(neu, 'Kopf bleibt lesbar');
+  assert.ok(!/alte Zeile/.test(neu));
+  const k: any = berichtKopf(neu);
+  assert.deepEqual(k.fragen.map((f: any) => [f.id, f.antwort]), [['D1', 'neu 😀'], ['D2', '']]);
+});
