@@ -13,6 +13,7 @@ import { berichtHash, entscheidungen, dienstePfad } from './freigabe.ts';
 import { worumGeht } from './heutekarte.ts';
 import { themaOf } from './themen.ts';
 import { knutDone, statusWord, kopfFelder } from './leitstand.ts';
+import { OPEN } from './orchestrator.ts';   // in der Abfrage, damit .limit() nicht Geprüfte zählt
 
 export type Ampel = 'laeuft' | 'blockiert' | 'push' | 'review';
 export const AMPEL_TEXT: Record<Ampel, string> = { push: 'bereit zum Push', review: 'dein Review', laeuft: 'läuft', blockiert: 'blockiert' };
@@ -74,19 +75,20 @@ export function kennungen(ids: string[]): string {
 /** „Braucht Knut: …“ aus dem Stand-Abschnitt der letzten Antwort (ohne „nichts“). */
 export function brauchtKnut(excerpt: string | null | undefined): string | null {
   const m = /^\s*-\s*Braucht Knut:\s*(.+)$/im.exec(excerpt ?? '');
-  const t = m?.[1]?.trim().replace(/^\*+|\*+$/g, '') ?? '';
-  return !t || /^(nichts|—|-|keins?)\b/i.test(t) || /^[„"]?nichts[“"]?\b/i.test(t) ? null : t.slice(0, 400);
+  const t = m?.[1]?.trim().replace(/^\*+|\*+$/g, '').trim() ?? '';
+  // „nichts“, „„nichts““, „keine“, „-“, „—“ (Pass C, Befund 3: \b greift nach „-“ nicht).
+  return !t || /^[„"“]?(nichts|keins?|keine|n\/a|[-–—]+)[“"”]?\s*([.!(].*)?$/i.test(t) ? null : t.slice(0, 400);
 }
 
 /** Eine Zeile „Von dir: …“. */
-export function vonDir(o: { ampel: Ampel; freigabeOffen: boolean; kannFreigeben: boolean; entscheidungen: string[]; rueckfragen: number; braucht: string | null }): string {
+export function vonDir(o: { ampel: Ampel; freigabeOffen: boolean; kannFreigeben: boolean; entscheidungen: string[]; rueckfragen: number; braucht: string | null; gepusht?: boolean }): string {
   if (o.ampel === 'laeuft') return 'nichts — läuft noch';
   const teile: string[] = [];
   if (o.ampel === 'push' && o.kannFreigeben && !o.freigabeOffen) teile.push('Push-Go');
   if (o.entscheidungen.length) teile.push(`${o.entscheidungen.length === 1 ? 'Entscheidung' : 'Entscheidungen'} ${kennungen(o.entscheidungen)}`);
   if (o.rueckfragen) teile.push(o.rueckfragen === 1 ? 'eine Rückfrage' : `${o.rueckfragen} Rückfragen`);
   if (o.braucht && !o.entscheidungen.length && !o.rueckfragen) teile.push(`Antwort: ${o.braucht.length > 160 ? o.braucht.slice(0, 157) + '…' : o.braucht}`);
-  if (!teile.length) return o.ampel === 'blockiert' ? 'Blocker ansehen (Bericht/Chat)' : o.ampel === 'push' ? 'nichts — freigegeben, der Hauptchat pusht' : 'Review';
+  if (!teile.length) return o.ampel === 'blockiert' ? 'Blocker ansehen (Bericht/Chat)' : o.gepusht ? 'nichts — gepusht, PR-Review auf GitHub' : o.ampel === 'push' && o.freigabeOffen ? 'nichts — freigegeben, der Hauptchat pusht' : 'Review';
   return teile.join(' und ');
 }
 
@@ -116,7 +118,7 @@ export function kartenLinks(o: { id: string; bericht: boolean; paket: string | n
     if (folien[0]) out.push({ art: 'folien', label: 'Folien', url: `${o.basis}/${encodeURIComponent(o.paket)}/${enc(folien[0].rel)}` });
     const bilder = o.dateien.filter((f) => BILD.test(f.rel));
     if (bilder.length) {
-      const ordner = bilder.every((f) => f.rel.includes('/')) ? bilder[0].rel.split('/')[0] : null;
+      const ordner = bilder.every((f) => f.rel.includes('/')) && new Set(bilder.map((f) => f.rel.split('/')[0])).size === 1 ? bilder[0].rel.split('/')[0] : null;   // Pass C, 10
       out.push({ art: 'bilder', label: `Bilder (${bilder.length})`, url: `${o.basis}/${encodeURIComponent(o.paket)}/${ordner ? enc(ordner) + '/' : enc(bilder[0].rel)}` });
     }
   }
@@ -148,12 +150,12 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null) {
   const kurz = (kopf?.worum || worumGeht({ title: d.title, prompt: [d.zielLine, d.prompt].filter(Boolean).join('\n'), planText: readPlan(d.plan), berichtText: text })).slice(0, 600);
   const seen = String(new Date(d.reviewReadyAt ?? d.doneAt ?? 0).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime());
   return {
-    id: String(d._id), titel: kopf?.titel || d.title || '(ohne Titel)', strangTitel: d.title ?? '', thema: themaOf(d), ampel: a, ampelText: AMPEL_TEXT[a],
+    id: String(d._id), titel: kopf?.titel || d.title || '(ohne Titel)', strangTitel: d.title ?? '', thema: themaOf(d), ampel: a, ampelText: a === 'push' && fg?.pushedAt ? 'gepusht' : AMPEL_TEXT[a],
     zusatz: freigabeZusatz(fg), kurz, anders: (kopf?.anders ?? []).slice(0, 4),
-    github: (kopf?.github ?? []).map((g) => ({ repo: g.repo, zweig: g.zweig, commit: g.commit.slice(0, 7), pr: sicher(g.pr) ? g.pr : null })),
+    github: (kopf?.github ?? []).map((g) => ({ repo: String(g.repo ?? ''), zweig: String(g.zweig ?? ''), commit: String(g.commit ?? '').slice(0, 7), pr: sicher(g.pr) ? g.pr : null })),
     prs: (felder.prs ?? []).filter((z: any) => sicher(z.url)).map((z: any) => ({ label: z.label, url: z.url, stand: z.stand })),
     links: kartenLinks({ id: String(d._id), bericht: !!text, paket, dateien: p?.files ?? [], basis, kopf, chat: d.url }),
-    vonDir: vonDir({ ampel: a, freigabeOffen: !!fg && !fg.pushedAt && !fg.veraltet, kannFreigeben, entscheidungen: offen.map((e) => e.id), rueckfragen: qs.length, braucht }),
+    vonDir: vonDir({ ampel: a, freigabeOffen: !!fg && !fg.pushedAt && !fg.veraltet, kannFreigeben, entscheidungen: offen.map((e) => e.id), rueckfragen: qs.length, braucht, gepusht: !!fg?.pushedAt }),
     entscheidungen: offen, berichtHash: text ? berichtHash(text) : null, rueckfragen: qs, braucht,
     kannFreigeben, freigabe: fg, weitereRepos: felder.weitereRepos ?? [], commitWarnung: felder.commitWarnung ?? null,
     running, wartet: statusWord(d) === 'wartet', seen, chat: sicher(d.url) ? d.url : null, statusAt: d.statusAt ?? d.lastActivity ?? d.startedAt,
@@ -174,8 +176,8 @@ export function gruppieren(karten: Karte[], lose: any[]) {
   return { themen, lose, vonDir };
 }
 
-/** Welche Stränge auf die Übersicht kommen: nicht von Knut geprüft, nicht der Leitstand, ohne Startfehler, ≤ 30 Tage alt. */
-export const AUF_UEBERSICHT = (now = Date.now()) => ({ kind: { $ne: 'leitstand' }, startError: null, startedAt: { $gt: new Date(now - 30 * 86400_000) } });
+/** Welche Stränge auf die Übersicht kommen (Mongo-Filter): nicht von Knut geprüft (OPEN), nicht der Leitstand, ohne Startfehler, ≤ 30 Tage alt. */
+export const AUF_UEBERSICHT = (now = Date.now()) => ({ kind: { $ne: 'leitstand' }, startError: null, startedAt: { $gt: new Date(now - 30 * 86400_000) }, ...OPEN });
 export const offenFuerKnut = (d: any) => !knutDone(d);
 
 /** Text an den Strang (S2): „antwort“ auf eine Rückfrage aus „Braucht Knut“, sonst Nacharbeit nach Review (wie bisher). */

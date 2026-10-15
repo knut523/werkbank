@@ -69,6 +69,8 @@ test('Von dir: Push-Go, Kennungen, Rückfragen, Antwort; läuft → nichts', () 
   assert.equal(vonDir({ ...base, ampel: 'review', entscheidungen: ['D1', 'D2', 'D3'], rueckfragen: 1 }), 'Entscheidungen D1–D3 und eine Rückfrage');
   assert.equal(vonDir({ ...base, ampel: 'review', braucht: 'Freigabe für X' }), 'Antwort: Freigabe für X');
   assert.equal(vonDir({ ...base, ampel: 'review' }), 'Review');
+  assert.equal(vonDir({ ...base, kannFreigeben: false, gepusht: true }), 'nichts — gepusht, PR-Review auf GitHub');
+  assert.equal(vonDir({ ...base, kannFreigeben: false }), 'Review', 'bereit, aber nichts freizugeben (kein Repo im Kopf) → ansehen');
   assert.equal(vonDir({ ...base, ampel: 'laeuft', entscheidungen: ['D1'] }), 'nichts — läuft noch');
   assert.equal(kennungen(['D1', 'D3']), 'D1, D3');
   assert.equal(kennungen(['E-147-1', 'E-147-2', 'E-147-3']), 'E-147-1, E-147-2, E-147-3');
@@ -79,6 +81,8 @@ test('Braucht Knut aus dem Stand-Abschnitt, „nichts“ zählt nicht', () => {
   assert.equal(brauchtKnut('- Braucht Knut: nichts'), null);
   assert.equal(brauchtKnut('- Braucht Knut: „nichts“'), null);
   assert.equal(brauchtKnut(null), null);
+  for (const leer of ['-', '—', 'keine', 'Keine.', 'n/a', 'nichts (alles erledigt)']) assert.equal(brauchtKnut(`- Braucht Knut: ${leer}`), null, leer);
+  assert.equal(brauchtKnut('- Braucht Knut: keine Ahnung, ob D1 passt — bitte entscheiden'), 'keine Ahnung, ob D1 passt — bitte entscheiden');
 });
 
 test('Council 1/6: Links nur http(s); Folien und Bilder nur mit Paketdienst', () => {
@@ -94,6 +98,8 @@ test('Council 1/6: Links nur http(s); Folien und Bilder nur mit Paketdienst', ()
     ['vorschau', 'Admin-Vorschau', 'https://3064--x/login'],
     ['vorschau', 'Bot', 'http://bot'],
   ]);
+  const gemischt = kartenLinks({ id: 'abc', bericht: false, paket: '184-x', dateien: [{ rel: 'a/1.png', size: 1, mtimeMs: 1 }, { rel: 'b/2.png', size: 1, mtimeMs: 1 }], basis: 'https://8098--h', kopf: null });
+  assert.equal(gemischt[0].url, 'https://8098--h/184-x/a/1.png', 'verschiedene Ordner → erstes Bild statt eines Ordners');
   const ohne = kartenLinks({ id: 'abc', bericht: false, paket: '184-x', dateien, basis: null, kopf: null, chat: 'https://chat/c/1' });
   assert.deepEqual(ohne.map((x) => x.art), ['chat']);
 });

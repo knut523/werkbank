@@ -1595,7 +1595,8 @@ on('GET', /^\/api\/uebersicht$/, async (req, res) => {
   const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(60).toArray()) as any[]).filter(offenFuerKnut);
   const ids = docs.map((d) => String(d._id));
   const fgs: any[] = ids.length ? await (await import('./freigabe.ts')).freigaben().find({ strand: { $in: ids }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
-  const qs = await listQuestions(u, { open: true }).catch(() => []);
+  let fragenFehler = false;   // Pass C, 8: nicht still „nichts offen“ zeigen
+  const qs = await listQuestions(u, { open: true }).catch((e: any) => { fragenFehler = true; log('uebersicht fragen', { err: String(e?.message ?? e) }); return []; });
   const basis = paketBasis();
   const karten = docs.map((d) => {
     try { return uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), qs.filter((q: any) => q.strand && String(q.strand.id) === String(d._id)), basis); }
@@ -1603,7 +1604,7 @@ on('GET', /^\/api\/uebersicht$/, async (req, res) => {
   }).filter(Boolean) as any[];
   const imStrang = new Set(karten.map((k) => k.id));
   const lose = qs.filter((q: any) => !q.strand || !imStrang.has(String(q.strand.id)));
-  send(res, 200, { ...gruppieren(karten, lose), at: new Date(), dryRun: dryRun(), paketDienst: !!basis });
+  send(res, 200, { ...gruppieren(karten, lose), at: new Date(), dryRun: dryRun(), paketDienst: !!basis, fragenFehler });
 });
 
 // Rückfragen des Orchestrators (Knut antwortet hier; nur die eigenen).

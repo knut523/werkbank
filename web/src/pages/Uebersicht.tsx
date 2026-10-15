@@ -20,7 +20,7 @@ function useStored<T>(key: string, leer: T): [T, (v: T) => void] {
   return [v, set];
 }
 
-const is409 = (e: any) => /geändert|neu laden|arbeitet gerade/i.test(String(e?.message ?? e));
+const is409 = (e: any) => e?.status === 409;   // Stand veraltet / Strang arbeitet → neu laden, Entwurf bleibt (Pass C, 11)
 
 type Wahl = { art: '' | 'akzeptiert' | 'eigene' | 'nachpruefen'; text: string };
 
@@ -214,6 +214,7 @@ export function Uebersicht({ cfg }: { cfg: Config }) {
         <h1>Übersicht: Was fertig ist</h1>
         <p className="muted small">Stand {fmtDateTime(x.at)} · {n} {n === 1 ? 'Unter-Chat' : 'Unter-Chats'} · <b>Von dir: {x.vonDir}</b> · <button className="linklike" onClick={neu}>neu laden</button></p>
       </header>
+      {x.fragenFehler && <p className="chip bad" role="alert">Rückfragen gerade nicht lesbar — hier fehlen evtl. offene Fragen. Später neu laden.</p>}
       {x.dryRun && <p className="chip warn">Vorschau (Trockenlauf): Antworten an Unter-Chats sind aus.</p>}
       <section className="card ub-exec">
         <h2>So bringst du es auf GitHub</h2>
