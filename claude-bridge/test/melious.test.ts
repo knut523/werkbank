@@ -399,6 +399,13 @@ test('Ersatzkette im Strang (Knuts Setup): Opus erschöpft → Sonnet auf allen 
   ACCOUNTS.schreib = [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ token: key('schreib'), rollen: { schreiber: ['deepseek-v4-flash-0731'] }, pool: [{ model: 'deepseek-v4-flash-0731', frei: 1 }] })];
   assert.equal((await register('schreib', conv(41), { profil: 'schreiber' })).status, 200);
   assert.match(await send(conv(41), 'Hallo', 'schreib'), /Modell: deepseek-v4-flash-0731;/);
+  // Befund live 15.10.: ausdrücklich gesetztes Claude-Modell schlägt die Profil-Regel — Claude Opus, Melious nur als Ersatz.
+  ACCOUNTS.schreibclaude = [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ token: key('schreibclaude'), vorrang: true, rollen: { schreiber: ['deepseek-v4-flash-0731'] }, pool: [{ model: 'deepseek-v4-flash-0731', frei: 1 }] })];
+  assert.equal((await register('schreibclaude', conv(44), { profil: 'schreiber', modell: 'claude:opus', risiko: 'niedrig' })).status, 200);
+  assert.match(await send(conv(44), 'PROFIL?', 'schreibclaude'), /Melious nein\./);
+  // Ohne Claude-Modell bleibt die Profil-Regel: zuerst Melious.
+  assert.equal((await register('schreibclaude', conv(45), { profil: 'schreiber', risiko: 'niedrig' })).status, 200);
+  assert.match(await send(conv(45), 'PROFIL?', 'schreibclaude'), /Melious ja\./);
 });
 
 test('Hotfix 15.10.: nie Claude-Namen an Melious — opus/sonnet → gewähltes bzw. Ketten-Modell, haiku/Hilfsmodell → glm-5.3-flash', () => {
