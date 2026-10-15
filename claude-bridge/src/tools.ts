@@ -313,10 +313,10 @@ const ORCH_FILE_BLOCK = /(^|\/)(\.git|\.claude)(\/|$)|(^|\/)\.env[^/]*$/;
 const ORCH_READ_BLOCK = /^\/proc\/.*\/environ$|(^|\/)\.env(\.(?!example$|sample$|template$)[\w.-]+)?$/;
 const READ_PATH_TOOLS: Record<string, string> = { Read: 'file_path', Grep: 'path', Glob: 'path', NotebookRead: 'notebook_path', LS: 'path' };
 
-/** Grund, warum ein Aufruf in einem Orchestrator-Strang gesperrt ist — oder null. */
 /** Worker (Plan 165): Paket-Installation/-Änderung als eigener Befehl (nicht in Commit-Texten o. ä.) — node_modules ist verlinkt. */
 export const WORKER_PAKETE = /(?:^|[;&|(]\s*)(?:npm|pnpm|yarn|bun)\b(?:[^|;&\n]*\s(?:i|install|ci|add|update|up|remove|rm|uninstall|link)(?=\s|$|[;&|)])|\s*(?=$|[;&|)]))/;
 
+/** Grund, warum ein Aufruf in einem Orchestrator-Strang gesperrt ist — oder null. */
 export function orchestratorBlock(tool: string, input: Record<string, unknown>): string | null {
   if (tool === 'Bash') {
     const cmd = String(input.command ?? '');

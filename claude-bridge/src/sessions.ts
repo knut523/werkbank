@@ -1799,7 +1799,11 @@ async function delegationLauf(d: Deleg): Promise<void> {
     // „läuft“ — sonst könnte ein Urteil den Worktree unter dem Prüfer wegräumen (Re-Review N3).
     if (st === 'fertig' && d.risiko === 'hoch' && (d.rolle === 'bauer' || d.rolle === 'schreiber')) {
       const pr = await startPruefer(d);
-      if (pr) await pr.done;
+      if (pr) {
+        await pr.done;
+        // Prüfer nicht fertig geworden (z. B. Lead-Zug zu Ende): freigeben, damit der Lead neu anfordern kann (Bestätigung B1).
+        if (pr.status !== 'fertig') { d.pruefer = undefined; d.hinweis = `Prüfer ${pr.id} ${pr.status} — neu anfordern oder selbst prüfen`; d.abweichungen.push(d.hinweis); }
+      }
     }
     // Der Worker war fertig — ein Zugende während des Prüfers bricht nur den Prüfer ab, nicht dieses Ergebnis (Re-Review F1).
     d.status = st;
@@ -1948,7 +1952,8 @@ export async function delegationStand(userId: string, convId: string, b: { ids?:
   const parent = `${safeId(userId)}:${safeId(convId)}`;
   const want = Array.isArray(b.ids) ? b.ids.map(String) : [];
   // Ohne ids: nur laufende und noch nicht beurteilte (Pass B, 9 — sonst wächst die Antwort mit jedem Urteil).
-  // Prüfer stehen bei ihrem Geprüften; Fehlschläge/Abbrüche nur bis zur ersten Meldung (Re-Review h / Pass C 8).
+  // Prüfer stehen bei ihrem Geprüften (nur laufende einzeln); Fertige und solche mit noch vorhandenem Worktree bis zum Urteil,
+  // Fehlschläge/Abbrüche ohne Worktree nur bis zur ersten Meldung (Re-Review h / Pass C 8).
   const mine = [...delegs.values()].filter((d) => d.parent === parent && (want.length ? want.includes(d.id) : d.status === 'laeuft' || (d.rolle !== 'pruefer' && (d.status === 'fertig' || (d.wt && existsSync(d.wt.dir)) ? !d.urteil : !d.gemeldet))));
   if (!mine.length) return { ok: true, text: want.length ? `Keine Delegation ${want.join(', ')} in diesem Strang (nach einem Neustart der Brücke sind sie weg).` : 'Keine offenen Delegationen in diesem Strang.' };
   const ms = Math.min(KAPPUNG.wartenS, Math.max(0, Number(b.warten_s ?? KAPPUNG.wartenS) || 0)) * 1000;

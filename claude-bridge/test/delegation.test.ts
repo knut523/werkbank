@@ -220,6 +220,20 @@ test('Pass A/B: Prüfer-Hinweis kommt an; Prüfer nur auf Bauer/Schreiber; Leser
   assert.match(await send(conv(11), lead([{ tool: 'delegieren', args: { rolle: 'bauer', aufgabe: 'x' } }])), /FEHLER 403: Ein Leser-Strang delegiert nur leser oder pruefer, nicht bauer/);
 });
 
+test('Bestätigung B1: Lead-Zug endet während des automatischen Prüfers → Delegation bleibt fertig, Prüfer neu anforderbar', async () => {
+  const dir = repo(ORCH, 's12');
+  await register('knut', conv(12), dir, { risiko: 'niedrig' });
+  // package.json → Risiko hoch → Prüfer der Brücke; beide arbeiten 2 s, der Lead endet nach 3,5 s (Prüfer läuft dann noch).
+  const t = await send(conv(12), lead([{ tool: 'delegieren', args: { rolle: 'bauer', aufgabe: 'MOCK-DATEI package.json={} MOCK-LANG 2000' } }, { warte: 3500 }]));
+  const [b] = ids(t);
+  for (let i = 0; i < 60 && !delegs.some((d) => d.delegation.id === b && d.delegation.status !== 'laeuft'); i++) await new Promise((r) => setTimeout(r, 100));
+  const fertig = delegs.map((d) => d.delegation).filter((d) => d.id === b).at(-1);
+  assert.equal(fertig?.status, 'fertig', JSON.stringify(fertig));
+  assert.ok(fertig.abweichungen.some((x: string) => /Prüfer d-[0-9a-f]{6} abgebrochen — neu anfordern oder selbst prüfen/.test(x)), JSON.stringify(fertig.abweichungen));
+  const t2 = await send(conv(12), lead([{ tool: 'delegieren', args: { rolle: 'pruefer', pruefe: b } }, { tool: 'delegation_stand', args: { warten_s: 20 } }]));
+  assert.match(t2, new RegExp(`Prüfer d-[0-9a-f]{6} für ${b} gestartet`));
+});
+
 test('Worker enden mit dem Lead-Zug (abgebrochen)', async () => {
   const dir = repo(ORCH, 's7');
   await register('knut', conv(7), dir, { risiko: 'niedrig' });

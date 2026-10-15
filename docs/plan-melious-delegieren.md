@@ -161,7 +161,10 @@ Worker haben diese Werkzeuge nicht (keine Verschachtelung), auch kein `hauptchat
   (Prüfer-Hinweis ging verloren; ein Worker hätte die Referenz des Integrationszweigs umbiegen und so die Prüfbefehle bestimmen
   können). Pass C: `challenge` (GLM 5.3) brach live jedes Mal nach 30 s ab (Fix in diesem Paket) — stattdessen eigener feindseliger
   Durchgang und ein Gegner auf Sonnet. Fix-Runde 1 behebt alle Befunde ≥ 50 bis auf die unten genannten Abweichungen.
-- Prüfbefehle lesen jetzt aus dem beim Anlegen des Unter-Worktrees festgehaltenen Commit des Integrationszweigs; `git update-ref`,
+- Re-Review + Gegner (Pass C auf Sonnet): PASS-WITH-CONCERNS → Fix-Runde 2 (u. a. Integrations-Commit je Strang, Worker-Text als
+  Zitat statt Brücken-Zeilen, Diff als Datei, Delegation „läuft“ bis ihr Prüfer fertig ist, Urteil räumt Zweig ab). Letzter
+  Durchgang: PASS-WITH-CONCERNS (F1–F7) → Fix-Runde 3.
+- Prüfbefehle lesen jetzt aus dem je Strang festgehaltenen Commit des Integrationszweigs (auch „keiner“ wird gemerkt); `git update-ref`,
   `symbolic-ref`, `replace` und erzwungene Zweig-Befehle sind in Strängen gesperrt; Prüfläufe bekommen ein leeres HOME.
 - Abweichungen vom Plan: Die Lage (Melious-Rest, Claude-Konten) steht in `delegation_stand`, nicht zusätzlich in der Kachel (die
   zeigt den Melious-Stand wie bisher). Phasen-Modelle gelten nur für Stränge mit Profil voll/bauer; Leser-/Schreiber-Stränge bleiben
