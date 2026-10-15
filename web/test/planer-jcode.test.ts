@@ -36,5 +36,11 @@ test('R4/R6: Worker-Umgebung ohne Git-/GitHub-Zugang aus HOME; hängender jcode 
     const h = await realJcode({ cwd: dir, prompt: 'P', model: 'm', key: 'test', tools: 'read', timeoutS: 1, killNachMs: 300 });
     assert.ok(Date.now() - t0 < 5000, 'hart beendet');
     assert.notEqual(h.code, 0);
+    // Runde 2: ein Kindprozess, der stdout erbt, darf das Ende nicht aufhalten — die ganze Prozessgruppe wird beendet.
+    writeFileSync(bin, '#!/usr/bin/env node\nconst { spawn } = require("node:child_process"); spawn("sleep", ["60"], { stdio: "inherit" }); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);\n', { mode: 0o755 });
+    const t1 = Date.now();
+    const k = await realJcode({ cwd: dir, prompt: 'P', model: 'm', key: 'test', tools: 'read', timeoutS: 1, killNachMs: 300 });
+    assert.ok(Date.now() - t1 < 6000, `mit Kindprozess hart beendet (${Date.now() - t1} ms)`);
+    assert.notEqual(k.code, 0);
   } finally { delete process.env.WERKBANK_JCODE_BIN; delete process.env.WB_TEST_DURCH; }
 });

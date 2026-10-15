@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import {
-  planerReview, realJcode, passendeFallstricke, nachbarRepos, FALLSTRICKE_START, WORKER_MODELL, type ChatFn,
+  planerReview, realJcode, passendeFallstricke, nachbarRepos, FALLSTRICKE_START, WORKER_MODELL, WORKER_TOOLS, type ChatFn,
 } from '../web/server/planer.ts';
 import { energieOf, FAKTOREN_VORGABE } from '../web/server/melious.ts';
 import { bewerte, bewertungsText, zusammenfassen, evalMarkdown, type RegPr, type Lauf } from '../web/server/planereval.ts';
@@ -42,7 +42,8 @@ const chat: ChatFn = async (body) => {
 };
 const git = (dir: string, a: string[]) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', maxBuffer: 64 << 20 });
 
-const EINFACH = (basis: string) => `Code-Review von \`git diff ${basis}...HEAD\` (nur lesen, nichts ändern, keine Repo-Skripte). Prüfe Korrektheit, Annahmen über Daten anderer Apps/Repos, Randfälle, Tests. `
+// Beide Flash-Arme ohne Shell (wie der Schattenweg, WORKER_TOOLS) — Kalibrierung 178 lief noch mit bash, die Zahlen sind nicht 1:1 vergleichbar.
+const EINFACH = (diffDatei: string) => `Code-Review eines PRs. Der Arbeitsordner ist der PR-Stand, der Diff gegen die Basis liegt in \`${diffDatei}\` (mit read lesen; nur read/agentgrep, nichts ändern). Prüfe Korrektheit, Annahmen über Daten anderer Apps/Repos, Randfälle, Tests. `
   + 'Erste Zeile genau `Empfehlung: approve|request-changes|comment`, dann die Befunde mit Schwere (hoch/mittel/niedrig), Datei:Zeile, Fehlerszenario, Fix. Deutsch, max. 450 Wörter.';
 const empfehlungAus = (t: string) => /Empfehlung:\s*\**\s*(approve|request[- ]changes|comment)/i.exec(t)?.[1].toLowerCase().replace(' ', '-') ?? null;
 
@@ -60,7 +61,9 @@ async function armLauf(pr: RegPr, arm: string, n: number): Promise<Lauf> {
   if (kopf !== pr.head) return { pr: pr.id, arm, lauf: n, empfehlung: null, text: '', energie: 0, aufrufe: 0, ms: 0, fehler: `Worktree steht auf ${kopf.slice(0, 7)}, nicht ${pr.head.slice(0, 7)}` };
   const basis = git(dir, ['merge-base', 'HEAD', pr.basis_ref]).trim();
   if (arm === 'flash-ohne') {
-    const w = await realJcode({ cwd: dir, prompt: EINFACH(basis), model: WORKER_MODELL, key, tools: 'read,bash,agentgrep', timeoutS: 1500 });
+    const diffDatei = join(out, `${pr.id}-pr.diff`);
+    writeFileSync(diffDatei, git(dir, ['diff', `${basis}...HEAD`]));
+    const w = await realJcode({ cwd: dir, prompt: EINFACH(diffDatei), model: WORKER_MODELL, key, tools: WORKER_TOOLS, timeoutS: 1500 });
     return { pr: pr.id, arm, lauf: n, empfehlung: empfehlungAus(w.text), text: w.text, energie: energieOf(w.usage, WORKER_MODELL, faktoren), aufrufe: w.aufrufe, ms: Date.now() - t0, ...(w.code !== 0 ? { fehler: `Exit ${w.code} ${w.stderr}` } : {}) };
   }
   const diff = git(dir, ['diff', `${basis}...HEAD`]);

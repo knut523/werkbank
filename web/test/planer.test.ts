@@ -2,7 +2,7 @@
 // mit gespieltem Melious und gespieltem jcode. Ohne Datenbank — der Schattenbetrieb hat eigene Tests (schatten.test.ts).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -28,6 +28,7 @@ test('P1: checkAuftrag lehnt Fehlendes, zu wenige/zu viele Fragen, doppelte ids,
   nein({ ...AUFTRAG, pruef_fragen: [F('F1'), F('F2')] }, /3–8/);
   nein({ ...AUFTRAG, pruef_fragen: Array.from({ length: 9 }, (_, i) => F(`F${i}`)) }, /3–8/);
   nein({ ...AUFTRAG, pruef_fragen: [F('F1'), F('F1'), F('F2')] }, /doppelte/);
+  nein({ ...AUFTRAG, pruef_fragen: [F('F1'), F('B1'), F('F2')] }, /ungültiger/);
   nein({ ...AUFTRAG, pruef_fragen: [F('F1'), F('F2'), F('F3', 'kritisch')] }, /schwere/);
   nein({ ...AUFTRAG, pruef_fragen: [F('F1'), F('F2'), { ...F('F3'), wo_suchen: '' }] }, /wo_suchen/);
   nein({ ...AUFTRAG, kontext: 'x'.repeat(2500) }, /zu lang/);
@@ -196,13 +197,17 @@ test('Pipeline: Auftrag → Worker → Zitate → Prüfung → Urteil, je Stufe 
     return calls.length === 1 ? antwort(JSON.stringify(AUFTRAG), 40) : antwort('{"urteile":[{"key":"F1","urteil":"bestaetigt","grund":"Zitat zeigt 33"}]}', 30);
   };
   let prompt = '';
-  const jcode: JcodeFn = async (o) => { prompt = o.prompt; assert.equal(o.model, 'glm-5.3-flash'); assert.equal(o.tools, 'read,bash,agentgrep');
+  let diffDatei = '';
+  const jcode: JcodeFn = async (o) => { prompt = o.prompt; assert.equal(o.model, 'glm-5.3-flash'); assert.equal(o.tools, 'read,agentgrep', 'keine Shell');
+    diffDatei = /liegt in `([^`]+)`/.exec(o.prompt)![1]; assert.match(readFileSync(diffDatei, 'utf8'), /^Basis: origin\/develop\n\n1 file\n\ndiff --git/);
     return { code: 0, text: 'Befund …\n```json\n' + JSON.stringify({ empfehlung: 'approve', antworten: [{ id: 'F1', status: 'befund', beleg: 'src/route.ts:3', zitat: 'length(p.nr) = 33' }, { id: 'F2', status: 'kein_befund', beleg: 'olaf-tariff-app/src/hook.ts:2', zitat: 'raw.slice(0, 31)' }, { id: 'F3', status: 'kein_befund', beleg: 'src/route.ts:1', zitat: 'a\nb' }] }) + '\n```', usage: { input: 1000, output: 1000, cacheRead: 9000, cacheWrite: 0 }, aufrufe: 7, ms: 5000, stderr: '' }; };
   const r = await planerReview({ chat, jcode, key: 'sk-mel-test', faktoren: FAKT }, { dir: PR, basis: 'origin/develop', diff: 'diff --git a/src/route.ts b/src/route.ts\n+x', diffStat: '1 file', ziel: 'Review', nachbarn: [{ name: 'olaf-tariff-app', dir: NB, ref: 'origin/develop', fetchAlterH: null }] });
   assert.equal(r.status, 'fertig');
   assert.equal(r.empfehlung, 'request-changes');
   assert.equal(r.workerEmpfehlung, 'approve', 'Worker allein hätte approve gesagt — genau die Abweichung, die der Pilot misst');
   assert.ok(prompt.includes('"F1"') && prompt.includes('Schweigen gilt als unklar'));
+  assert.ok(prompt.includes(`olaf-tariff-app = ${NB}`), 'Nachbar-Repos im Worker-Auftrag');
+  assert.equal(existsSync(diffDatei), false, 'Diff-Datei danach entfernt');
   assert.deepEqual(r.stufen.map((s) => [s.stufe, s.aufrufe]), [['plan', 1], ['worker', 7], ['pruefung', 1]]);
   assert.equal(r.stufen[1].energie, 6.8, '1000×1000 + 9000×200 + 1000×4000 je Mio.');
   assert.equal(r.stufen[1].cache, 9000);
@@ -267,7 +272,9 @@ test('R2 (P3): Zitatprüfung — Bereich höchstens 30 Zeilen, Zitat mindestens 
   assert.equal(pruefeZitat('src/route.ts:3', 'length … 33;', W).status, 'ohne_beleg', 'Teile zusammen zu kurz');
   writeFileSync(join(PR, 'src', 'spread.ts'), 'const x = f(...args, 1);\n');
   assert.equal(pruefeZitat('src/spread.ts:1', 'const x = f(...args, 1);', W).status, 'ok');
-  assert.equal(pruefeZitat('src/spread.ts:1', 'const x = f(...rest, 1);', W).status, 'nicht_gefunden');
+  assert.notEqual(pruefeZitat('src/spread.ts:1', 'const x = f(...rest, 1);', W).status, 'ok');
+  assert.notEqual(pruefeZitat('src/route.ts:1-20', 'const … length … 33;', W).status, 'ok', 'kein Teil ≥ 12 Zeichen (Runde 2)');
+  assert.equal(pruefeZitat('src/route.ts:3', 'const ok = length(p.nr) ... = 33;', W).status, 'ok', 'Auslassung mit drei Punkten');
 });
 
 test('R3: ein Symlink im PR-Worktree, der hinausführt, wird nicht gelesen', () => {
