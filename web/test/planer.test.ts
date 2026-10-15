@@ -2,7 +2,7 @@
 // mit gespieltem Melious und gespieltem jcode. Ohne Datenbank — der Schattenbetrieb hat eigene Tests (schatten.test.ts).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -255,26 +255,41 @@ test('R5 (P6): bewertet wird nur, was der Worker fand und der Planer bestätigte
   assert.ok(t.includes('F2') && !t.includes('F1') && !t.includes('F3'));
 });
 
-test('Runde 4: Lese-Gurt — Pfade aus der Sitzung, Symlink nach draußen erkannt, Ergebnis verworfen; ohne Sitzung vermerkt', async () => {
-  const { sessionPfade, ausserhalb } = await import('../server/planer.ts');
-  const s = { messages: [{ content: [{ type: 'tool_use', name: 'read', input: { file_path: `${PR}/src/route.ts` } }, { type: 'tool_use', name: 'agentgrep', input: { query: 'x', path: NB, glob: `${NB}/src/**/*.ts` } }, { type: 'tool_use', name: 'bash', input: { command: 'cat /etc/x' } }] }, { content: 'text' }] };
-  assert.deepEqual(sessionPfade(s), [`${PR}/src/route.ts`, NB, `${NB}/src/**/*.ts`]);
+test('Runden 4/5: Lese-Gurt fail-closed — fremdes Werkzeug, „..“, Symlink nach draußen, fehlende/leere Sitzung; Symlink-Scan vor dem Lauf', async () => {
+  const { sessionPfade, ausserhalb, lesegurt, symlinksNachDraussen } = await import('../server/planer.ts');
+  const s = { messages: [{ content: [{ type: 'tool_use', name: 'read', input: { file_path: `${PR}/src/route.ts` } }, { type: 'tool_use', name: 'agentgrep', input: { query: 'x', path: NB, glob: `${NB}/src/**/*.ts`, paths: [`${PR}/src`] } }, { type: 'tool_use', name: 'bash', input: { command: 'cat /etc/x' } }] }, { content: 'text' }] };
+  assert.deepEqual(sessionPfade(s), [`${PR}/src/route.ts`, NB, `${NB}/src/**/*.ts`, `${PR}/src`, 'werkzeug:bash']);
   const erlaubt = [PR, NB];
-  assert.deepEqual(ausserhalb(sessionPfade(s), PR, erlaubt), []);
-  assert.deepEqual(ausserhalb(['/etc/hostname', 'src/route.ts', `${TMP}/draussen.txt`, '/home/**'], PR, erlaubt), ['/etc/hostname', `${TMP}/draussen.txt`, '/home/**']);
+  assert.deepEqual(ausserhalb(sessionPfade(s), PR, erlaubt), ['werkzeug:bash']);
+  assert.deepEqual(ausserhalb(['/etc/hostname', 'src/route.ts', `${TMP}/draussen.txt`, '/home/**', `${PR}/src/../src/route.ts`, `${PR}/**/../../x`], PR, erlaubt),
+    ['/etc/hostname', `${TMP}/draussen.txt`, '/home/**', `${PR}/src/../src/route.ts`, `${PR}/**/../../x`], '„..“ ist immer ein Verstoß');
+  assert.equal(lesegurt(undefined, PR, erlaubt), null);
+  assert.match(lesegurt(null, PR, erlaubt)!, /nicht prüfbar/);
+  assert.match(lesegurt(['werkzeug:bash'], PR, erlaubt)!, /keine Lese-Aufrufe/);
+  assert.match(lesegurt([`${PR}/src/route.ts`, 'werkzeug:batch'], PR, erlaubt)!, /fremdem Werkzeug \(1 Pfad\)/);
+  assert.equal(lesegurt([`${PR}/src/route.ts`, `${NB}/src/hook.ts`], PR, erlaubt), null);
+  // Symlink im PR nach draußen: der Gurt sieht ihn, und der Scan verhindert den Lauf ganz.
   writeFileSync(join(TMP, 'geheim-ziel.txt'), 'x');
   execFileSync('ln', ['-sfn', join(TMP, 'geheim-ziel.txt'), join(PR, 'src', 'harmlos.ts')]);
-  assert.deepEqual(ausserhalb([`${PR}/src/harmlos.ts`], PR, erlaubt), [`${PR}/src/harmlos.ts`], 'Symlink im PR nach draußen');
+  execFileSync('ln', ['-sfn', 'route.ts', join(PR, 'src', 'innen.ts')]);
+  assert.deepEqual(ausserhalb([`${PR}/src/harmlos.ts`], PR, erlaubt), [`${PR}/src/harmlos.ts`]);
+  assert.deepEqual(symlinksNachDraussen(PR), ['src/harmlos.ts'], 'innen.ts zeigt nach innen und ist erlaubt');
   const chat: ChatFn = async (b: any) => antwort(b.messages[0].content.includes('PRÜFAUFTRAG') ? JSON.stringify(AUFTRAG) : '{"urteile":[]}');
   const mit = (pfade: string[] | null): JcodeFn => async () => ({ code: 0, text: '```json\n{"antworten":[]}\n```', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, aufrufe: 1, ms: 1, stderr: '', pfade });
   const inp = { dir: PR, basis: 'b', diff: 'diff --git a/x b/x\n+x', diffStat: '', ziel: 'z', nachbarn: [{ name: 'olaf-tariff-app', dir: NB, ref: 'origin/develop', fetchAlterH: null }] };
+  let planerAufrufe = 0;
+  const zaehl: ChatFn = async (b) => { planerAufrufe++; return chat(b); };
+  const scan = await planerReview({ chat: zaehl, jcode: mit([`${PR}/src/route.ts`]), key: 'k', faktoren: {} }, inp);
+  assert.equal(scan.status, 'fehler'); assert.match(scan.fehler!, /Symlinks nach außerhalb \(src\/harmlos\.ts\) — Schattenweg nicht gestartet/);
+  assert.equal(planerAufrufe, 0, 'keine Energie verbraucht');
+  rmSync(join(PR, 'src', 'harmlos.ts'));
   const raus = await planerReview({ chat, jcode: mit(['/etc/hostname']), key: 'k', faktoren: {} }, inp);
-  assert.equal(raus.status, 'fehler'); assert.match(raus.fehler!, /außerhalb der erlaubten Ordner \(1 Pfad\) — Ergebnis verworfen/);
+  assert.equal(raus.status, 'fehler'); assert.match(raus.fehler!, /außerhalb der erlaubten Ordner.*\(1 Pfad\) — Ergebnis verworfen/);
   assert.equal(raus.workerText, undefined); assert.equal(raus.bericht, undefined);
+  const ohne = await planerReview({ chat, jcode: mit(null), key: 'k', faktoren: {} }, inp);
+  assert.equal(ohne.status, 'fehler'); assert.match(ohne.fehler!, /nicht prüfbar/);
   const ok = await planerReview({ chat, jcode: mit([`${PR}/src/route.ts`, `${NB}/src/hook.ts`]), key: 'k', faktoren: {} }, inp);
   assert.equal(ok.status, 'fertig');
-  const ohne = await planerReview({ chat, jcode: mit(null), key: 'k', faktoren: {} }, inp);
-  assert.match(ohne.stufen[1].urteil, /Lesepfade nicht prüfbar/);
 });
 
 // ---------- Regressionen aus Review-Runde 1 (Pass B + Pass C) ----------
@@ -305,6 +320,7 @@ test('R3: ein Symlink im PR-Worktree, der hinausführt, wird nicht gelesen', () 
   writeFileSync(join(TMP, 'draussen.txt'), 'WERT_AUSSERHALB_DER_WURZEL\n');
   execFileSync('ln', ['-sfn', TMP, join(PR, 'raus')]);
   assert.equal(pruefeZitat('raus/draussen.txt:1', 'WERT_AUSSERHALB_DER_WURZEL', W).status, 'nicht_gefunden');
+  rmSync(join(PR, 'raus'));
 });
 
 test('R8 (P3): kein_befund ohne gültiges Zitat sperrt approve auch bei Mittel-/Niedrig-Fragen', () => {

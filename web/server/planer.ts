@@ -4,7 +4,7 @@
 // Pilot: das Ergebnis wird nie gepostet (P4); Standard erst nach dem Evaluationsset (P6).
 
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { energieOf, type Faktor, type Usage } from './melious.ts';
@@ -345,29 +345,67 @@ export function urteilAbleiten(a: Auftrag, b: Bericht, punkte: Pruefpunkt[]): { 
 // ---------- Worker (jcode) ----------
 
 /** `pfade`: was der Worker mit read/agentgrep angefasst hat (aus der Sitzungsdatei); null = nicht prüfbar (keine Sitzungsdatei). */
-export interface JcodeOut { code: number | null; text: string; usage: Usage; aufrufe: number; ms: number; stderr: string; pfade?: string[] | null }
+export interface JcodeOut { code: number | null; text: string; usage: Usage; aufrufe: number; ms: number; stderr: string; pfade?: string[] | null; gurt?: string | null }
 export type JcodeFn = (o: { cwd: string; prompt: string; model: string; key: string; tools: string; timeoutS: number; killNachMs?: number }) => Promise<JcodeOut>;
 export const jcodeBin = (env = process.env) => env.WERKBANK_JCODE_BIN || join(env.HOME || homedir(), '.local', 'bin', 'jcode');
 
-/** Pfade aus den read-/agentgrep-Aufrufen einer jcode-Sitzung (file_path, file, path, glob). */
+/** Pfade aus den read-/agentgrep-Aufrufen einer jcode-Sitzung (file_path, file, path, glob — auch als Liste). Jedes andere Werkzeug
+ *  erscheint als `werkzeug:<name>` und gilt im Gurt als Verstoß (fail-closed, Review Runde 5). */
 export function sessionPfade(s: any): string[] {
   const out: string[] = [];
   for (const m of s?.messages ?? []) for (const b of Array.isArray(m?.content) ? m.content : []) {
-    if (b?.type !== 'tool_use' || !['read', 'agentgrep'].includes(b?.name)) continue;
-    for (const k of ['file_path', 'file', 'path', 'glob']) if (typeof b.input?.[k] === 'string' && b.input[k]) out.push(b.input[k]);
+    if (b?.type !== 'tool_use') continue;
+    if (!['read', 'agentgrep'].includes(b?.name)) { out.push(`werkzeug:${String(b?.name ?? '?').slice(0, 40)}`); continue; }
+    for (const k of ['file_path', 'file', 'path', 'glob', 'paths', 'files']) for (const v of [b.input?.[k]].flat()) if (typeof v === 'string' && v) out.push(v);
   }
   return out;
 }
 
-/** Lese-Gurt (Review Runde 4): welche Pfade liegen — nach Auflösen von Symlinks — außerhalb der erlaubten Ordner? Ein Glob zählt bis
- *  zum ersten Platzhalter. Fängt auch einen Symlink im PR, der auf eine Datei in HOME zeigt. */
+/** Lese-Gurt (Review Runden 4/5): welche Pfade liegen außerhalb der erlaubten Ordner? Fail-closed: `..` irgendwo im Pfad, ein fremdes
+ *  Werkzeug oder ein Pfad, der nach Auflösen der Symlinks hinausführt, sind Verstöße. Ein Glob zählt bis zum ersten Platzhalter — das
+ *  reicht nur, weil Symlinks nach draußen im PR-Stand vorher ausgeschlossen werden (symlinksNachDraussen). */
 export function ausserhalb(pfade: string[], cwd: string, erlaubt: string[]): string[] {
   const echt = (x: string) => { try { return realpathSync(x); } catch { return resolve(x); } };
   const wurzeln = erlaubt.map(echt);
   return pfade.filter((p) => {
+    if (p.startsWith('werkzeug:') || p.split(/[\\/]/).includes('..')) return true;
     const abs = echt(resolve(cwd, p.replace(/[*?[{].*$/, '') || '.'));
     return !wurzeln.some((w) => abs === w || abs.startsWith(w.endsWith(sep) ? w : w + sep));
   });
+}
+
+/** Urteil des Lese-Gurts: null = in Ordnung, sonst der Grund. `undefined` heißt: der Worker-Weg liefert keine Pfade (nur gespielte
+ *  Worker in Tests); realJcode liefert immer eine Liste oder null. */
+export function lesegurt(pfade: string[] | null | undefined, cwd: string, erlaubt: string[]): string | null {
+  if (pfade === undefined) return null;
+  if (pfade === null) return 'Lesepfade nicht prüfbar (keine Sitzungsdatei)';
+  if (!pfade.some((p) => !p.startsWith('werkzeug:'))) return 'keine Lese-Aufrufe in der Sitzung (Format geändert?)';
+  const n = ausserhalb(pfade, cwd, erlaubt).length;
+  return n ? `Worker las außerhalb der erlaubten Ordner oder mit fremdem Werkzeug (${n} Pfad${n > 1 ? 'e' : ''})` : null;
+}
+
+/** Symlinks im Ordner (ohne .git), deren Ziel außerhalb des Ordners liegt — ein PR könnte so den Leser des Workers hinausführen. */
+export function symlinksNachDraussen(dir: string, max = 50_000): string[] {
+  const wurzel = realpathSync(dir);
+  const out: string[] = [];
+  const stapel = [dir];
+  let n = 0;
+  while (stapel.length && n < max) {
+    const d = stapel.pop()!;
+    let eintraege: import('node:fs').Dirent[];
+    try { eintraege = readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const e of eintraege) {
+      if (++n > max) break;
+      const p = join(d, e.name);
+      if (e.name === '.git' && d === dir) continue;
+      if (e.isSymbolicLink()) {
+        let ziel: string | null = null;
+        try { ziel = realpathSync(p); } catch { /* ins Leere: harmlos */ }
+        if (ziel && ziel !== wurzel && !ziel.startsWith(wurzel + sep)) out.push(p.slice(dir.length + 1));
+      } else if (e.isDirectory()) stapel.push(p);
+    }
+  }
+  return out;
 }
 
 /** Summe der token_usage einer jcode-Sitzung (wie die Brücke, sessions.ts jcodeUsage) + Zahl der Aufrufe. */
@@ -476,6 +514,9 @@ export interface PlanerInput { dir: string; basis: string; diff: string; diffSta
 /** Der ganze Weg ohne Datenbank: planeAuftrag → jcode → parseBericht → pruefeZitate → planerPruefung → urteilAbleiten. */
 export async function planerReview(d: PlanerDeps, i: PlanerInput): Promise<PlanerErgebnis> {
   const stufen: Stufe[] = [];
+  // Symlinks im PR-Stand, die hinausführen, öffneten dem Leser des Workers (auch über `**`-Globs) Knuts Dateien → gar nicht erst starten.
+  const links = symlinksNachDraussen(i.dir);
+  if (links.length) return { status: 'fehler', fehler: `PR-Stand enthält Symlinks nach außerhalb (${links.slice(0, 3).join(', ')}${links.length > 3 ? ', …' : ''}) — Schattenweg nicht gestartet`, stufen };
   const p = await planeAuftrag(d.chat, 'review', { ziel: i.ziel, diffStat: i.diffStat, diffAuszug: diffAuszug(i.diff), prText: i.prText, fallstricke: i.fallstricke, nachbarn: i.nachbarn });
   stufen.push(stufe('plan', p.messung, p.ok ? `${p.auftrag!.pruef_fragen.length} Fragen` : 'ungültig'));
   if (!p.ok) return { status: /antwortet nicht/.test(p.error ?? '') ? 'ausgefallen' : 'fehler', fehler: `${p.error}${/antwortet nicht/.test(p.error ?? '') ? ` · ${AUSFALLPFAD}` : ''}`, stufen };
@@ -487,17 +528,17 @@ export async function planerReview(d: PlanerDeps, i: PlanerInput): Promise<Plane
   try {
     writeFileSync(diffDatei, `Basis: ${i.basis}\n\n${i.diffStat}\n\n${i.diff}`);
     // Arbeitsordner = der neutrale tmp-Ordner, nie der PR-Stand (sonst lüde jcode eine `.mcp.json` aus dem PR, Review Runde 3).
-    w = await d.jcode({ cwd: tmp, prompt: workerPrompt(a, diffDatei, i.dir, i.nachbarn), model: WORKER_MODELL, key: d.key, tools: WORKER_TOOLS, timeoutS: d.timeoutS ?? 1200 }); }
-  finally { rmSync(tmp, { recursive: true, force: true }); }
+    w = await d.jcode({ cwd: tmp, prompt: workerPrompt(a, diffDatei, i.dir, i.nachbarn), model: WORKER_MODELL, key: d.key, tools: WORKER_TOOLS, timeoutS: d.timeoutS ?? 1200 });
+    // Lese-Gurt, solange tmp noch existiert (Review Runde 5): hat der Worker außerhalb von PR-Stand, Diff-Ordner und Nachbar-Repos
+    // gelesen — oder lässt es sich nicht prüfen —, wird sein Ergebnis verworfen. Melious hat es dann schon gesehen, aber in Mongo und im
+    // Review-Paket landet es nicht (Restrisiko bis zur Sandbox, D2).
+    if (w.code === 0) w.gurt = lesegurt(w.pfade, tmp, [i.dir, tmp, ...(i.nachbarn ?? []).map((n) => n.dir)]);
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
   const we = energieOf(w.usage, WORKER_MODELL, d.faktoren);
   let bericht = parseBericht(w.text, a);
   stufen.push(stufe('worker', { energie: we, usage: w.usage, modell: `${WORKER_MODELL} (jcode)`, ms: w.ms, aufrufe: w.aufrufe }, w.code === 0 ? (bericht.fehler ? 'ohne Block' : `Worker: ${bericht.empfehlung ?? '?'}`) : `Exit ${w.code}`));
   if (w.code !== 0) return { status: 'ausgefallen', fehler: `jcode-Lauf fehlgeschlagen (Exit ${w.code}) ${w.stderr} · ${AUSFALLPFAD}`, auftrag: a, stufen };
-  // Lese-Gurt: hat der Worker außerhalb von PR-Stand, Diff-Ordner und Nachbar-Repos gelesen, wird sein Ergebnis verworfen — Melious hat
-  // es dann schon gesehen, aber in Mongo und im Review-Paket landet es nicht (Review Runde 4, Restrisiko bis zur Sandbox, D2).
-  const draussen = w.pfade ? ausserhalb(w.pfade, tmp, [i.dir, tmp, ...(i.nachbarn ?? []).map((n) => n.dir)]) : [];
-  if (draussen.length) return { status: 'fehler', fehler: `Worker las außerhalb der erlaubten Ordner (${draussen.length} Pfad${draussen.length > 1 ? 'e' : ''}) — Ergebnis verworfen`, auftrag: a, stufen };
-  if (w.pfade === null) stufen[stufen.length - 1].urteil += ' · Lesepfade nicht prüfbar';
+  if (w.gurt) return { status: 'fehler', fehler: `${w.gurt} — Ergebnis verworfen`, auftrag: a, stufen };
   const wurzeln: Wurzel[] = [{ name: null, dir: i.dir }, ...(i.nachbarn ?? []).map((n) => ({ name: n.name, dir: n.dir, ref: n.ref }))];
   bericht = pruefeZitate(bericht, wurzeln);
   const pr = await planerPruefung(d.chat, a, pruefpflichtig(a, bericht));

@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import {
-  planerReview, realJcode, passendeFallstricke, nachbarRepos, FALLSTRICKE_START, WORKER_MODELL, WORKER_TOOLS, type ChatFn,
+  planerReview, realJcode, passendeFallstricke, nachbarRepos, lesegurt, symlinksNachDraussen, FALLSTRICKE_START, WORKER_MODELL, WORKER_TOOLS, type ChatFn,
 } from '../web/server/planer.ts';
 import { energieOf, FAKTOREN_VORGABE } from '../web/server/melious.ts';
 import { bewerte, bewertungsText, zusammenfassen, evalMarkdown, type RegPr, type Lauf } from '../web/server/planereval.ts';
@@ -27,7 +27,7 @@ const nur = arg('nur').split(',').filter(Boolean);
 const arme = arg('arme', 'flash-ohne,flash-mit,opus').split(',');
 const laeufe = Math.max(1, Math.min(5, Number(arg('laeufe', '2'))));
 const dirs = paare('dir'), opusDatei = paare('opus');
-const out = resolve(arg('out', '.'));
+const out = resolve(arg('out', join(tmpdir(), 'planer-eval')));   // nie ins Repo: Worker-Texte sind ungeprüfte Modellausgabe
 const key = process.env.MELIOUS_KEY ?? '';
 const base = process.env.MELIOUS_BASE_URL || 'https://api.melious.ai';
 if (arme.some((a) => a.startsWith('flash')) && !/^sk-mel-/.test(key)) { console.error('MELIOUS_KEY fehlt (sk-mel-…).'); process.exit(2); }
@@ -65,11 +65,16 @@ async function armLauf(pr: RegPr, arm: string, n: number): Promise<Lauf> {
     // Neutraler Arbeitsordner wie im Schattenweg (nie der PR-Stand: jcode lüde dort eine `.mcp.json`).
     const neutral = mkdtempSync(join(tmpdir(), 'planer-eval-'));
     const diffDatei = join(neutral, 'pr.diff');
+    const links = symlinksNachDraussen(dir);
+    if (links.length) return { pr: pr.id, arm, lauf: n, empfehlung: null, text: '', energie: 0, aufrufe: 0, ms: 0, fehler: `Symlinks nach außerhalb: ${links.slice(0, 3).join(', ')}` };
     let w;
     try {
       writeFileSync(diffDatei, git(dir, ['diff', `${basis}...HEAD`]));
       w = await realJcode({ cwd: neutral, prompt: EINFACH(diffDatei, dir), model: WORKER_MODELL, key, tools: WORKER_TOOLS, timeoutS: 1500 });
+      // Gleicher Lese-Gurt wie im Schattenweg (Review Runde 5).
+      if (w.code === 0) w.gurt = lesegurt(w.pfade, neutral, [dir, neutral, ...nachbarRepos(pr.repo).map((x) => x.dir)]);
     } finally { rmSync(neutral, { recursive: true, force: true }); }
+    if (w.gurt) return { pr: pr.id, arm, lauf: n, empfehlung: null, text: '', energie: energieOf(w.usage, WORKER_MODELL, faktoren), aufrufe: w.aufrufe, ms: Date.now() - t0, fehler: `${w.gurt} — verworfen` };
     return { pr: pr.id, arm, lauf: n, empfehlung: empfehlungAus(w.text), text: w.text, energie: energieOf(w.usage, WORKER_MODELL, faktoren), aufrufe: w.aufrufe, ms: Date.now() - t0, ...(w.code !== 0 ? { fehler: `Exit ${w.code} ${w.stderr}` } : {}) };
   }
   const diff = git(dir, ['diff', `${basis}...HEAD`]);
