@@ -143,6 +143,16 @@ async function chatCompletion(u: User, body: Record<string, unknown>, timeoutMs:
   } catch { return null; }
 }
 
+/** Chat-Funktion für den Planer (Plan 183): ein Aufruf im OpenAI-Format, Verbrauch sofort gebucht. null = kein Schlüssel/keine Antwort. */
+export const meliousChat = (u: User) => async (body: Record<string, unknown>): Promise<any | null> => {
+  const j = await chatCompletion(u, body, 290_000);
+  if (j && !j.error) {
+    const cache = Number(j.usage?.prompt_tokens_details?.cached_tokens) || 0;
+    await recordMeliousUsage(u, { input: Math.max(0, (Number(j.usage?.prompt_tokens) || 0) - cache), output: Number(j.usage?.completion_tokens) || 0, cacheRead: cache, cacheWrite: 0 }, Date.now(), body.model).catch(() => null);
+  }
+  return j;
+};
+
 /**
  * Zahlt Melious gerade mit Energie oder schon mit Guthaben? (Dashboard 15.10.: „Ist deine Energie aufgebraucht, übernimmt dein
  * Guthaben“, 402 erst, wenn auch das leer ist.) Nur über eine Mini-Anfrage im OpenAI-Format erkennbar (`billing_cost.paid_with`,
