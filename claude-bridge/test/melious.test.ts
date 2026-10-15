@@ -8,7 +8,7 @@ import { mkdtempSync, realpathSync, mkdirSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { planQueue, accountEnv, normalizeAccounts, meliousExhaustedError, meliousErrorKind, nextBerlinMonth, type Account } from '../src/accounts.ts';
+import { planQueue, accountEnv, normalizeAccounts, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, type Account } from '../src/accounts.ts';
 
 const PORT = 3394;
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-mel-'));
@@ -201,6 +201,32 @@ test('Fehlerarten: Guthaben vor Schlüssel vor Rate-Limit; Monatswechsel Berlin'
   assert.equal(meliousErrorKind('invalid_request', 'context window exceeded'), null);
   assert.equal(new Date(nextBerlinMonth(Date.parse('2026-10-14T12:00:00Z'))).toISOString(), '2026-10-31T23:00:00.000Z');   // Winterzeit ab 25.10.
   assert.equal(new Date(nextBerlinMonth(Date.parse('2026-08-31T21:30:00Z'))).toISOString(), '2026-08-31T22:00:00.000Z');   // 31.08. 23:30 Berlin → 01.09. 00:00
+  // PRO-Plan (Energie): Topf leer = 402 BILLING_2001 → nur bis zum nächsten Nachfüll-Takt; 429 → Retry-After (sonst 60 s).
+  const now = Date.parse('2026-10-15T10:00:00Z');
+  assert.equal(meliousErrorKind('billing_error', 'API Error: 402 {"error":{"code":"BILLING_2001","message":"Out of energy"}}'), 'energie');
+  assert.equal(meliousResetAt('energie', '', { now }), now + 2700_000);
+  assert.equal(meliousResetAt('energie', '', { now, taktS: 600 }), now + 600_000);
+  assert.equal(meliousErrorKind('rate_limit', 'API Error: 429 AUTH_1028 Retry-After: 17'), 'limit');
+  assert.equal(meliousResetAt('limit', 'API Error: 429 AUTH_1028 Retry-After: 17', { now }), now + 17_000);
+  assert.equal(meliousResetAt('limit', '429', { now }), now + 60_000);
+  assert.equal(meliousResetAt('guthaben', '', { now }), nextBerlinMonth(now));
+  // Energie je Zug: Tokens × Faktor (je 1 Mio.), Cache-Treffer zum Cache-Preis, „:eco“ wie das Modell.
+  const F = { 'glm-5.3': { in: 10_000, out: 30_000 }, 'glm-5.3-flash': { in: 1000, out: 4000, cache: 250 } };
+  assert.equal(energieOf({ input: 1749, output: 460, cacheRead: 0, cacheWrite: 0 }, 'glm-5.3', F), (1749 * 10_000 + 460 * 30_000) / 1e6);   // ≈ 31,29 wie gemessen
+  assert.equal(energieOf({ input: 0, output: 0, cacheRead: 1_000_000, cacheWrite: 0 }, 'glm-5.3-flash:eco', F), 250);
+  assert.equal(energieOf({ input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, 'unbekannt', F), 0);
+});
+
+test('Deckel in Energie (S8): mit Faktoren zählt die geschätzte Energie, nicht die Tokens', async () => {
+  ACCOUNTS.energie = [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ token: key('viel-energie'), model: 'glm-5.3', rest: 500, faktoren: { 'glm-5.3': { in: 10_000, out: 30_000 } } })];
+  await send(conv(26), '/melious an', 'energie');
+  const n = usage.length;
+  const t = await send(conv(26), 'Lies viel', 'energie');
+  assert.match(t, /⛔ Melious-Deckel erreicht/);   // je Antwort 30 000 + 8 000 Eingabe, 2 000 Ausgabe ≈ 440 Energie → nach der zweiten Schluss
+  await waitUsage(n + 1);
+  const u = usage.at(-1)!.usage;
+  assert.equal(u.input + u.cacheRead + u.output, 80_000);
+  assert.match(out, /"event":"melious deckel","conv":"energie:[^"]+","geschaetzt":880/);
 });
 
 test('Deckel: Rest 50 000 → Zug wird beim Überschreiten angehalten, gezählt wird bis dahin; gesperrt → Claude mit Grund', async () => {
@@ -257,16 +283,20 @@ test('Melious darf, was Claude darf (Knut 14.10.): gleiche MCP-Server und Werkze
   assert.doesNotMatch(claude, /Melious über/);
 });
 
-test('Lastverteilung (S7): Modell der Rolle mit dem größten freien Anteil, danach fest für den Chat; Strang melious:auto mit Rolle „leser“', async () => {
+test('Lastverteilung (S7/S8): erstes verfügbares Modell der Rolle (Werkbank ordnet nach Energie-Lage), danach fest für den Chat; :eco; Strang melious:auto', async () => {
   const base = { token: key('pool'), rollen: { niedrig: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'glm-5.3'], leser: ['glm-5.3'] } };
-  ACCOUNTS.pool = [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ ...base, pool: [{ model: 'deepseek-v4-flash-0731', frei: 1 }, { model: 'deepseek-v4.1-flash', frei: 0.9 }, { model: 'glm-5.3-flash', frei: 0.5 }, { model: 'glm-5.3', frei: 0.2 }] })];
+  ACCOUNTS.pool = [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ ...base, pool: [{ model: 'deepseek-v4-flash-0731', frei: 1 }, { model: 'deepseek-v4.1-flash', frei: 1 }, { model: 'glm-5.3-flash', frei: 1 }, { model: 'glm-5.3', frei: 1 }] })];
   assert.match(await send(conv(22), '/melious an', 'pool'), /verteilt über glm-5\.3-flash, deepseek-v4\.1-flash, glm-5\.3/);
-  assert.match(await send(conv(22), 'Hallo', 'pool'), /Modell: deepseek-v4\.1-flash;/);   // V4 Flash ist nicht in der Rolle
-  // Andere Lage beim nächsten Zug: der Chat behält sein Modell (Cache), ein neuer Chat bekommt das jetzt freieste.
-  ACCOUNTS.pool[1] = MEL({ ...base, pool: [{ model: 'glm-5.3-flash', frei: 0.95 }, { model: 'deepseek-v4.1-flash', frei: 0.6 }] });
-  assert.match(await send(conv(22), 'Noch einmal', 'pool'), /Modell: deepseek-v4\.1-flash;/);
+  assert.match(await send(conv(22), 'Hallo', 'pool'), /Modell: glm-5\.3-flash;/);   // erstes der Rolle (V4 Flash ist nicht in der Rolle)
+  // Neue Reihenfolge von der Werkbank (z. B. „sparen“): der Chat behält sein Modell (Cache), ein neuer Chat nimmt das neue erste.
+  ACCOUNTS.pool[1] = MEL({ ...base, rollen: { niedrig: ['deepseek-v4.1-flash', 'glm-5.3-flash'], leser: ['glm-5.3'] }, pool: [{ model: 'glm-5.3-flash', frei: 1 }, { model: 'deepseek-v4.1-flash', frei: 1 }] });
+  assert.match(await send(conv(22), 'Noch einmal', 'pool'), /Modell: glm-5\.3-flash;/);
   await send(conv(23), '/melious an', 'pool');
-  assert.match(await send(conv(23), 'Hallo', 'pool'), /Modell: glm-5\.3-flash;/);
+  assert.match(await send(conv(23), 'Hallo', 'pool'), /Modell: deepseek-v4\.1-flash;/);
+  // :eco-Routing (Einstellung): Modellname mit „:eco“.
+  ACCOUNTS.pool[1] = MEL({ ...base, eco: true, pool: [{ model: 'glm-5.3-flash', frei: 1 }] });
+  await send(conv(25), '/melious an', 'pool');
+  assert.match(await send(conv(25), 'Hallo', 'pool'), /Modell: glm-5\.3-flash:eco;/);
   // Modell aufgebraucht (nicht mehr im Pool) → der Chat wechselt auf das nächste freie.
   ACCOUNTS.pool[1] = MEL({ ...base, pool: [{ model: 'glm-5.3', frei: 0.4 }] });
   assert.match(await send(conv(22), 'Und jetzt', 'pool'), /Modell: glm-5\.3;/);

@@ -233,16 +233,17 @@ function MeliousAccount() {
     try { await fn(); await l.reload(); } catch (e) { setErr(e); } finally { setBusy(''); }
   };
   const put = (body: Record<string, unknown>) => api('/api/setup/melious', { method: 'PUT', body });
-  const f = form ?? { model: d.model ?? '', dayLimit: String(d.dayLimit), monthLimit: String(d.monthLimit),
+  const f = form ?? { model: d.model ?? '', dayLimit: String(d.dayLimit), monthLimit: String(d.monthLimit), proTakt: d.proTakt ? String(d.proTakt) : '',
     leser: (d.rollen?.leser ?? []).join(', '), niedrig: (d.rollen?.niedrig ?? []).join(', '),
-    kontingente: Object.entries(d.kontingente ?? {}).map(([m, n]: any) => `${m}=${n}`).join(', ') };
+    faktoren: Object.entries(d.faktoren ?? {}).map(([m, x]: any) => `${m}=${x.in}/${x.out}`).join(', ') };
   const liste = (s: string) => s.split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
   const mio = (n: number) => (n >= 1e9 ? `${(n / 1e9).toLocaleString('de-DE', { maximumFractionDigits: 1 })} Mrd.` : n >= 1e6 ? `${(n / 1e6).toLocaleString('de-DE', { maximumFractionDigits: 1 })} Mio.` : z(n));
+  const ez = (n: number) => `≈ ${Number(n ?? 0).toLocaleString('de-DE', { maximumFractionDigits: n < 10 ? 2 : 0 })}`;
   const u = d.usage;
   return (
     <div data-testid="melious-account" style={{ marginTop: 16 }}>
       <h4 style={{ margin: '0 0 4px' }}>Melious — Open-Weight-Modelle aus der EU</h4>
-      <p className="small" style={{ marginTop: 0 }}>Zusätzliches Konto über die Anthropic-kompatible API von Melious. <b>Standard aus:</b> genommen wird es nur, wenn es hier erlaubt ist, und dann nur in Chats mit <code>/melious an</code> — oder, wenn du es extra einschaltest, als letzter Ausweg, wenn alle Claude-Konten erschöpft sind. Nie in der Lastverteilung der Claude-Konten. Melious-Züge dürfen dasselbe wie Claude-Züge. Ohne festes Modell verteilt die Werkbank die Last über die Melious-Modelle der Rolle (größter freier Monatsanteil; ein Chat bzw. Strang behält sein Modell). Ergebnisse von Open-Weight-Modellen bitte prüfen.</p>
+      <p className="small" style={{ marginTop: 0 }}>Zusätzliches Konto über die Anthropic-kompatible API von Melious. <b>Standard aus:</b> genommen wird es nur, wenn es hier erlaubt ist, und dann nur in Chats mit <code>/melious an</code> — oder, wenn du es extra einschaltest, als letzter Ausweg, wenn alle Claude-Konten erschöpft sind. Nie in der Lastverteilung der Claude-Konten. Melious-Züge dürfen dasselbe wie Claude-Züge. Melious begrenzt über einen <b>Energietopf</b>, der alle 45 Minuten nachfüllt (höchstens 4 Tage, darüber verfällt er). Die Werkbank nutzt ihn stetig: ohne festes Modell nimmt sie die Modelle der Rolle in der eingestellten Reihenfolge; läuft der Verbrauch schneller als die Nachfüllung, zuerst die sparsamen. Ein Chat bzw. Strang behält sein Modell. Ergebnisse von Open-Weight-Modellen bitte prüfen.</p>
       {d.configured ? (
         <>
           <div className="row small" style={{ gap: 12, flexWrap: 'wrap' }}>
@@ -255,37 +256,47 @@ function MeliousAccount() {
           <div className="row small" style={{ gap: 16, marginTop: 6 }}>
             <label><input type="checkbox" aria-label="Melious erlauben" checked={d.enabled} disabled={!!busy} onChange={(e) => run('enabled', () => put({ enabled: e.target.checked }))} /> Melious erlauben (Chats mit <code>/melious an</code>)</label>
             <label><input type="checkbox" aria-label="Melious als letzter Ausweg" checked={d.fallback} disabled={!!busy || !d.enabled} onChange={(e) => run('fallback', () => put({ fallback: e.target.checked }))} /> auch als letzter Ausweg, wenn alle Claude-Konten erschöpft sind (nur Chats und Stränge mit Risiko „niedrig“, nie der Hauptchat)</label>
+            <label><input type="checkbox" aria-label="Melious eco" data-testid="melious-eco" checked={d.eco} disabled={!!busy} onChange={(e) => run('eco', () => put({ eco: e.target.checked }))} /> <code>:eco</code>-Routing (Melious wählt das sparsamste Rechenzentrum; Umweltwerte siehe Bericht)</label>
           </div>
-          <table className="t small" style={{ marginTop: 8 }} data-testid="melious-usage">
-            <thead><tr><th>Verbrauch</th><th>Input</th><th>Output</th><th>Cache-Read</th><th>Summe / Deckel</th></tr></thead>
+          <div className="small" data-testid="melious-energie" style={{ marginTop: 8 }}>
+            ⚡ <b>Energie {u.energie.geschaetzt ? '(geschätzt)' : '(Verbrauch geschätzt, Stand echt)'}</b> heute {ez(u.heute.energie)} · Monat {ez(u.monat.energie)}
+            {u.energie.echt && <> · Topf <span className="chip ok" data-testid="melious-echt">{z(Math.round(u.energie.echt.energy))}{u.energie.echt.energyMax ? ` / ${z(Math.round(u.energie.echt.energyMax))}` : ''}</span></>}
+            {u.energie.nachfuellungTag ? <> · Nachfüllung je Tag {ez(u.energie.nachfuellungTag)} · Tempo <span className={`chip ${u.energie.tempo > 1 ? 'warn' : 'ok'}`}>{Math.round((u.energie.tempo ?? 0) * 100)} %</span> {u.energie.modus === 'sparen' ? '→ sparsame Modelle zuerst' : '→ Reihenfolge der Rolle (Energie bleibt sonst liegen)'}</>
+              : <> · <span className="chip warn">Energie je Nachfüll-Takt eintragen</span> (aus dem Dashboard), dann steuert die Werkbank das Tempo</>}
+            {' '}· <a href={u.energie.dashboard} target="_blank" rel="noreferrer">echter Stand im Melious-Dashboard</a>
+            <span className="tiny muted"> · Faktoren: {u.energie.faktorQuelle} (1 Einheit = 0,0001 €; Annahme: Cache-Treffer zum Cache-Preis){u.energie.echt ? '' : ' · Abgleich mit dem Dashboard aus'}</span>
+          </div>
+          <table className="t small" style={{ marginTop: 6 }} data-testid="melious-usage">
+            <thead><tr><th>Verbrauch</th><th>Tokens</th><th>Energie ≈</th><th>Deckel (Energie)</th></tr></thead>
             <tbody>{[['heute', u.heute], ['Monat', u.monat]].map(([n, p]: any) => (
-              <tr key={n}><td>{n} ({z(p.turns)} Züge)</td><td>{z(p.input)}</td><td>{z(p.output)}</td><td>{z(p.cacheRead)}</td><td><b>{z(p.total)}</b> / {z(p.limit)} ({p.pct} %)</td></tr>
+              <tr key={n}><td>{n} ({z(p.turns)} Züge)</td><td>{mio(p.tokens)}</td><td><b>{ez(p.energie)}</b></td><td>{z(p.limit)} ({p.pct} %)</td></tr>
             ))}</tbody>
           </table>
           {u.modelle?.length > 0 && (
             <table className="t small" style={{ marginTop: 6 }} data-testid="melious-modelle">
-              <thead><tr><th>Melious-Kontingent je Modell (Monat)</th><th>verbraucht</th><th>Kontingent</th><th>frei</th><th>Rollen</th></tr></thead>
+              <thead><tr><th>Melious-Modell</th><th>Tokens (Monat)</th><th>Energie heute / Monat ≈</th><th>Faktor je 1 Mio. (ein/aus)</th><th>Rollen</th></tr></thead>
               <tbody>{u.modelle.map((m: any) => (
                 <tr key={m.model}>
                   <td><code>{m.model === 'abbildung' ? 'ohne festes Modell' : m.model}</code> <span className="tiny muted">{z(m.turns)} Züge</span></td>
-                  <td>{mio(m.total)}</td>
-                  <td>{m.kontingent ? mio(m.kontingent) : '–'}</td>
-                  <td>{m.kontingent ? <span className={`chip ${m.frei < 0.2 ? 'warn' : ''}`}>{Math.round(m.frei * 100)} %</span> : '–'}</td>
-                  <td className="tiny">{Object.entries(d.rollen ?? {}).filter(([, l]: any) => l.includes(m.model)).map(([r]) => r).join(', ') || '–'}</td>
+                  <td>{mio(m.tokens)}</td>
+                  <td>{ez(m.heute)} / {ez(m.energie)}</td>
+                  <td>{m.faktor ? `${m.faktor.in} / ${m.faktor.out}` : '–'}</td>
+                  <td className="tiny">{Object.entries(d.rollen ?? {}).filter(([, l]: any) => l.includes(m.model)).map(([r, l]: any) => `${r} #${l.indexOf(m.model) + 1}`).join(', ') || '–'}</td>
                 </tr>
               ))}</tbody>
             </table>
           )}
-          <p className="tiny">Quelle: {u.quelle}. Summe = Input + Output + Cache-Read + Cache-Write. Bei 80 % kommt ein Hinweis in den Hauptchat, bei 100 % ist Melious bis zum Ende des Zeitraums gesperrt.</p>
-          <form className="row small" style={{ marginTop: 4 }} onSubmit={(e) => { e.preventDefault(); run('limits', async () => { await put({ model: f.model, dayLimit: f.dayLimit, monthLimit: f.monthLimit,
+          <p className="tiny">Quelle: {u.quelle}. Bei 80 % des Energie-Deckels kommt ein Hinweis in den Hauptchat, bei 100 % ist Melious bis zum Ende des Zeitraums gesperrt. Ist der Topf leer (402), pausiert Melious bis zum nächsten Nachfüll-Takt.</p>
+          <form className="row small" style={{ marginTop: 4 }} onSubmit={(e) => { e.preventDefault(); run('limits', async () => { await put({ model: f.model, dayLimit: f.dayLimit, monthLimit: f.monthLimit, proTakt: f.proTakt,
             rollen: { leser: liste(f.leser), niedrig: liste(f.niedrig) },
-            kontingente: Object.fromEntries(liste(f.kontingente).map((x) => x.split('=')).map(([m, n]) => [m, Number(n)])) }); setForm(null); toast('Melious-Einstellungen gespeichert'); }); }}>
-            <label>Tagesdeckel <input aria-label="Tagesdeckel in Tokens" inputMode="numeric" value={f.dayLimit} onChange={(e) => setForm({ ...f, dayLimit: e.target.value })} style={{ width: 110 }} /></label>
-            <label>Monatsdeckel <input aria-label="Monatsdeckel in Tokens" inputMode="numeric" value={f.monthLimit} onChange={(e) => setForm({ ...f, monthLimit: e.target.value })} style={{ width: 120 }} /></label>
+            faktoren: Object.fromEntries(liste(f.faktoren).map((x) => x.split('=')).map(([m, v]) => [m, { in: Number(v?.split('/')[0]), out: Number(v?.split('/')[1]) }])) }); setForm(null); toast('Melious-Einstellungen gespeichert'); }); }}>
+            <label>Tagesdeckel (Energie) <input aria-label="Tagesdeckel in Energie" inputMode="numeric" value={f.dayLimit} onChange={(e) => setForm({ ...f, dayLimit: e.target.value })} style={{ width: 100 }} /></label>
+            <label>Monatsdeckel (Energie) <input aria-label="Monatsdeckel in Energie" inputMode="numeric" value={f.monthLimit} onChange={(e) => setForm({ ...f, monthLimit: e.target.value })} style={{ width: 110 }} /></label>
+            <label>Energie je Takt (45 min) <input aria-label="Energie je Nachfüll-Takt" inputMode="decimal" placeholder="aus dem Dashboard" value={f.proTakt} onChange={(e) => setForm({ ...f, proTakt: e.target.value })} style={{ width: 120 }} /></label>
             <label>Festes Modell <input aria-label="Melious-Modell" placeholder="leer = Lastverteilung" value={f.model} onChange={(e) => setForm({ ...f, model: e.target.value })} style={{ width: 160 }} /></label>
-            <label style={{ flexBasis: '100%' }}>Rolle „leser“ <input aria-label="Melious-Modelle Rolle leser" value={f.leser} onChange={(e) => setForm({ ...f, leser: e.target.value })} style={{ width: '100%' }} /></label>
+            <label style={{ flexBasis: '100%' }}>Rolle „leser“ (Reihenfolge = Wunsch) <input aria-label="Melious-Modelle Rolle leser" value={f.leser} onChange={(e) => setForm({ ...f, leser: e.target.value })} style={{ width: '100%' }} /></label>
             <label style={{ flexBasis: '100%' }}>Risiko „niedrig“ (Chats, Überlauf) <input aria-label="Melious-Modelle Risiko niedrig" value={f.niedrig} onChange={(e) => setForm({ ...f, niedrig: e.target.value })} style={{ width: '100%' }} /></label>
-            <label style={{ flexBasis: '100%' }}>Kontingente (modell=Tokens je Monat) <input aria-label="Melious-Kontingente" value={f.kontingente} onChange={(e) => setForm({ ...f, kontingente: e.target.value })} style={{ width: '100%' }} /></label>
+            <label style={{ flexBasis: '100%' }}>Faktoren (modell=Energie je 1 Mio. Tokens ein/aus) <input aria-label="Melious-Faktoren" value={f.faktoren} onChange={(e) => setForm({ ...f, faktoren: e.target.value })} style={{ width: '100%' }} /></label>
             <button className="btn small" disabled={!form || busy === 'limits'}>Speichern</button>
           </form>
           <div className="row" style={{ gap: 6, marginTop: 6 }}>

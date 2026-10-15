@@ -202,12 +202,9 @@ function MeliousKachel() {
   return (
     <a className="card soft small" href="#/einrichtung" data-testid="melious-kachel" title={`Quelle: ${d.quelle}`} style={{ padding: '6px 10px', textDecoration: 'none', color: 'inherit' }}>
       🧪 <b>Melious</b> {!d.enabled ? <span className="chip">aus</span> : d.sperre ? <span className="chip bad">gesperrt</span> : null}
-      {' '}heute <span className={`chip ${cls(d.heute.pct)}`}>{z(d.heute.total)} / {z(d.heute.limit)}</span>
-      {' '}Monat <span className={`chip ${cls(d.monat.pct)}`}>{z(d.monat.total)} / {z(d.monat.limit)}</span>
-      <span className="tiny muted"> · {d.heute.turns} Züge heute</span>
-      {(d.modelle ?? []).some((m: any) => m.kontingent) && (
-        <span className="tiny muted" data-testid="melious-kachel-modelle"> · frei: {(d.modelle ?? []).filter((m: any) => m.kontingent).map((m: any) => `${m.model} ${Math.round(m.frei * 100)} %`).join(' · ')}</span>
-      )}
+      {' '}⚡ heute <span className={`chip ${cls(d.heute.pct)}`}>≈ {z(Math.round(d.heute.energie))} / {z(d.heute.limit)}</span>
+      {' '}Monat <span className={`chip ${cls(d.monat.pct)}`}>≈ {z(Math.round(d.monat.energie))} / {z(d.monat.limit)}</span>
+      <span className="tiny muted" data-testid="melious-kachel-energie"> · Energie geschätzt · {d.heute.turns} Züge heute{d.energie?.tempo != null ? ` · Tempo ${Math.round(d.energie.tempo * 100)} %` : ''}</span>
     </a>
   );
 }

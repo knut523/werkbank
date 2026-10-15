@@ -24,7 +24,12 @@ export interface Account {
   sperre?: string;         // Melious: warum gesperrt (Deckel), für die Meldung
   // Melious-Lastverteilung (S7): Modelle mit freiem Monatsanteil (0..1, absteigend, Werkbank) und zulässige Modelle je Rolle.
   pool?: { model: string; frei: number }[];
-  rollen?: Record<string, string[]>;
+  rollen?: Record<string, string[]>;   // je Rolle in Wunsch-Reihenfolge (die Werkbank ordnet nach Energie-Lage, S8)
+  // Energie (S8): rest = verbleibende geschätzte Energie bis zum Deckel; Faktoren je Modell (Energie je 1 Mio. Tokens);
+  // Nachfüll-Takt in Sekunden; eco = Modelle mit „:eco“ ansprechen (Melious leitet dann auf sparsamere Rechenzentren).
+  faktoren?: Record<string, Faktor>;
+  taktS?: number;
+  eco?: boolean;
 }
 export type Exhausted = Record<string, { until: number; fp?: string }>;
 
@@ -136,11 +141,14 @@ const poolOf = (v: unknown) => (Array.isArray(v) ? v : [])
   .filter((p: any) => typeof p?.model === 'string' && MODEL_NAME.test(p.model) && Number.isFinite(Number(p.frei)))
   .map((p: any) => ({ model: p.model as string, frei: Math.max(0, Math.min(1, Number(p.frei))) }))
   .sort((x, y) => y.frei - x.frei).slice(0, 20);
+export type Faktor = { in: number; out: number; cache?: number };   // Energie je 1 Mio. Tokens (Eingabe, Ausgabe, Cache-Treffer)
+const faktorenOf = (v: unknown): Record<string, Faktor> => Object.fromEntries(Object.entries(v && typeof v === 'object' ? v : {})
+  .filter(([k, f]: [string, any]) => MODEL_NAME.test(k) && Number(f?.in) >= 0 && Number(f?.out) >= 0).slice(0, 30).map(([k, f]: [string, any]) => [k, { in: Number(f.in), out: Number(f.out), ...(Number(f?.cache) >= 0 && f?.cache !== undefined && f?.cache !== null ? { cache: Number(f.cache) } : {}) }]));
 const rollenOf = (v: unknown): Record<string, string[]> => Object.fromEntries(Object.entries(v && typeof v === 'object' ? v : {})
   .filter(([k, l]) => /^[a-z]{1,20}$/.test(k) && Array.isArray(l)).map(([k, l]) => [k, (l as unknown[]).filter((m): m is string => typeof m === 'string' && MODEL_NAME.test(m)).slice(0, 20)]));
 
 /** Konten in Reihenfolge, ohne Doppelte; `chat` (token null) = der Schlüssel aus der Anfrage. Immer mindestens dieser. */
-export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?: unknown; kind?: unknown; model?: unknown; pool?: unknown; rollen?: unknown; rest?: unknown; fallback?: unknown; sperre?: unknown }[] | null | undefined, chatToken: string): Account[] {
+export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?: unknown; kind?: unknown; model?: unknown; pool?: unknown; rollen?: unknown; faktoren?: unknown; taktS?: unknown; eco?: unknown; rest?: unknown; fallback?: unknown; sperre?: unknown }[] | null | undefined, chatToken: string): Account[] {
   const out: Account[] = [];
   const seen = new Set<string>();
   for (const a of list ?? []) {
@@ -150,7 +158,7 @@ export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?:
       if (id !== MELIOUS_ID || !MELIOUS_KEY.test(token) || seen.has(token) || out.some(isMelious)) continue;
       seen.add(token);
       const name = (v: unknown) => (typeof v === 'string' && /^[\w.:/-]{1,80}$/.test(v) ? v : undefined);
-      out.push({ id, label: MELIOUS_LABEL, token, kind: 'melious', model: name(a.model), pool: poolOf(a.pool), rollen: rollenOf(a.rollen), rest: Math.max(0, Number(a.rest) || 0), fallback: a.fallback === true, sperre: typeof a.sperre === 'string' ? a.sperre.slice(0, 160) : undefined });
+      out.push({ id, label: MELIOUS_LABEL, token, kind: 'melious', model: name(a.model), pool: poolOf(a.pool), rollen: rollenOf(a.rollen), faktoren: faktorenOf(a.faktoren), taktS: Number(a.taktS) > 0 ? Math.min(86_400, Number(a.taktS)) : undefined, eco: a.eco === true, rest: Math.max(0, Number(a.rest) || 0), fallback: a.fallback === true, sperre: typeof a.sperre === 'string' ? a.sperre.slice(0, 160) : undefined });
       continue;
     }
     const token = id === 'chat' ? chatToken : typeof a?.token === 'string' ? a.token : '';
@@ -223,14 +231,35 @@ export function accountEnv(env: Record<string, string | undefined>, a: Account, 
  * zeigt das als „Failed to authenticate. API Error: 403 Insufficient credits“ (Fehlerart authentication_failed). Das ist KEIN
  * ungültiger Schlüssel. Laut Doku auch 402 BILLING_2001/2003 (out of energy/credits).
  */
-export type MeliousFehler = 'guthaben' | 'schluessel' | 'limit';
+// PRO-Plan (Nachtrag 15.10.): Melious begrenzt über einen Energietopf, der alle 45 min nachfüllt. „energie“ = Topf leer
+// (402 BILLING_2001 / out of energy) → nur bis zum nächsten Nachfüll-Takt. „guthaben“ = Credits außerhalb des Plans leer
+// (403 „Insufficient credits“, 402 BILLING_2003) → bis Monatswechsel/Zurücksetzen. „limit“ = 429 (180 Anfragen/min) → Retry-After.
+export type MeliousFehler = 'energie' | 'guthaben' | 'schluessel' | 'limit';
 export function meliousErrorKind(code: unknown, text = ''): MeliousFehler | null {
-  if (/insufficient credits|out of (credits|energy)|BILLING_200[13]|\b402\b/i.test(text) || code === 'billing_error') return 'guthaben';
+  if (/insufficient credits|out of credits|BILLING_2003/i.test(text)) return 'guthaben';
+  if (/BILLING_2001|out of energy|\b402\b/i.test(text) || code === 'billing_error') return 'energie';
   if (code === 'rate_limit' || /\b429\b|AUTH_1028|rate.?limit|quota/i.test(text)) return 'limit';
   if (code === 'authentication_failed' || /\b(401|403)\b|AUTH_10\d\d|invalid.{0,20}(key|token)/i.test(text)) return 'schluessel';
   return null;
 }
 export const meliousExhaustedError = (code: unknown, text = '') => meliousErrorKind(code, text) !== null;
+
+/** Bis wann ein Melious-Fehler das Konto aus dem Wechsel nimmt (ms). taktS = Nachfüll-Takt der Energie (Vorgabe 2700 s). */
+export function meliousResetAt(kind: MeliousFehler, text = '', o: { now?: number; taktS?: number } = {}): number {
+  const now = o.now ?? Date.now();
+  if (kind === 'guthaben') return nextBerlinMonth(now);
+  if (kind === 'energie') return now + (o.taktS ?? (Number(process.env.MELIOUS_TAKT_S) || 2700)) * 1000;
+  if (kind === 'limit') { const s = Number(/retry[- ]?after\D{0,5}(\d{1,5})/i.exec(text)?.[1]); return now + (s > 0 ? s : 60) * 1000; }
+  return now + DEFAULT_RESET_MS;
+}
+
+/** Geschätzte Energie eines Melious-Versuchs: Tokens × Faktor des Modells (Energie je 1 Mio. Tokens; `:eco` zählt wie das Modell). */
+export function energieOf(u: MeliousUsage, model: string | undefined, faktoren: Record<string, Faktor> | undefined): number {
+  const f = faktoren?.[String(model ?? '').replace(/:eco$/, '')] ?? faktoren?.standard;
+  if (!f) return 0;
+  // wie die Werkbank: Cache-Treffer zum Cache-Preis (Annahme), ohne Cache-Preis zum Eingabepreis.
+  return ((u.input + u.cacheWrite) * f.in + u.cacheRead * (f.cache ?? f.in) + u.output * f.out) / 1e6;
+}
 
 /** Beginn des nächsten Monats in Europe/Berlin (ms) — bis dahin gilt „Guthaben leer“, wenn niemand vorher zurücksetzt. */
 export function nextBerlinMonth(now = Date.now()): number {

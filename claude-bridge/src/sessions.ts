@@ -16,7 +16,7 @@ import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
-import { acquire, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, nextBerlinMonth, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler } from './accounts.ts';
+import { acquire, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 
 export interface Sink {
   write(text: string): void;
@@ -84,7 +84,7 @@ interface Live {
   inbox?: Inbox | null;
   carry?: string[];
   // Melious (Plan 162): Versuch auf dem Melious-Konto — Rest bis zum Deckel, usage je API-Antwort (Schätzung), Ergebnis-usage.
-  melious?: { rest: number; calls: Map<string, MeliousUsage>; result: MeliousUsage | null; cut: boolean; fehler?: MeliousFehler };
+  melious?: { rest: number; calls: Map<string, MeliousUsage>; result: MeliousUsage | null; cut: boolean; fehler?: MeliousFehler; model?: string; faktoren?: Record<string, Faktor>; taktS?: number };
   modelSeen?: string;   // Modell laut erster Antwort des Hauptzugs (bei Claude das tatsächliche, bei Melious mit festem Namen ebenso)
 }
 
@@ -621,16 +621,17 @@ function end(live: Live) {
 const msgText = (msg: any) => (msg.message?.content ?? []).map((b: any) => (b?.type === 'text' ? b.text : '')).join(' ').slice(0, 500);
 
 export const MELIOUS_MSGS = {
+  energie: 'Melious-Energie gerade aufgebraucht (402) — Melious ist bis zum nächsten Nachfüll-Takt (höchstens 45 Minuten) aus dem Wechsel genommen.',
   guthaben: 'Melious-Guthaben leer (Melious meldet „Insufficient credits“) — Melious ist bis zum Monatswechsel aus dem Wechsel genommen. Nach dem Aufladen in der Einrichtung unter „Melious“ zurücksetzen.',
   schluessel: 'Melious lehnt den Schlüssel ab — Melious ist für eine Stunde aus dem Wechsel genommen. Schlüssel in der Einrichtung unter „Melious“ prüfen.',
-  limit: 'Melious-Rate-Limit erreicht — Melious ist für eine Stunde aus dem Wechsel genommen.',
+  limit: 'Melious-Rate-Limit erreicht (180 Anfragen je Minute) — Melious pausiert, bis Melious wieder annimmt (Retry-After, sonst eine Minute).',
   cut: 'Melious-Deckel erreicht: dieser Zug ist angehalten, Melious ist bis zum Ende des Zeitraums gesperrt. Die Grenzen stehen in der Einrichtung unter „Melious“.',
 };
 
 /** Melious-Fehler dieses Versuchs: Art merken (Meldung), „Guthaben leer“ gilt bis zum Monatswechsel, sonst die Vorgabe (1 h). */
-function meliousFail(live: Live, kind: MeliousFehler) {
+function meliousFail(live: Live, kind: MeliousFehler, text = '') {
   live.melious!.fehler = kind;
-  live.rateLimited = { resetsAt: kind === 'guthaben' ? nextBerlinMonth() : live.rateLimitReset };
+  live.rateLimited = { resetsAt: kind === 'schluessel' ? live.rateLimitReset : meliousResetAt(kind, text, { taktS: live.melious!.taktS }) };
   log('melious fehler', { conv: live.key, art: kind });
 }
 
@@ -659,7 +660,8 @@ function meliousCall(live: Live, msg: any) {
   const id = msg.message?.id;
   if (!id || !msg.message?.usage) return;
   m.calls.set(id, usageOf(msg.message.usage));
-  const est = [...m.calls.values()].reduce((a, u) => a + usageTotal(u), 0);
+  // Deckel in Energie (S8), geschätzt aus Tokens × Faktor des Modells; ohne Faktoren wie bisher in Tokens.
+  const est = [...m.calls.values()].reduce((a, u) => a + (m.faktoren ? energieOf(u, m.model, m.faktoren) : usageTotal(u)), 0);
   const mine = meliousInflight.get(live.userId) ?? new Map<string, number>();
   mine.set(live.key, est);
   meliousInflight.set(live.userId, mine);
@@ -774,7 +776,7 @@ function handleMessage(live: Live, msg: any) {
       if (!live.modelSeen && !msg.parent_tool_use_id && typeof msg.message?.model === 'string' && !msg.message.model.startsWith('<')) live.modelSeen = msg.message.model.slice(0, 80);
       if (live.melious && msg.error && meliousExhaustedError(msg.error, msgText(msg))) {
         // Melious: Guthaben, Schlüssel oder Rate-Limit → wie ein erschöpftes Claude-Konto (Wechsel bzw. Meldung in handleTurn).
-        meliousFail(live, meliousErrorKind(msg.error, msgText(msg))!);
+        meliousFail(live, meliousErrorKind(msg.error, msgText(msg))!, msgText(msg));
       } else if (msg.error === 'rate_limit') {
         // Kontingent ausgeschöpft: die Meldung kommt erst, wenn kein weiteres Konto übernehmen kann (handleTurn).
         live.rateLimited = { resetsAt: live.rateLimitReset };
@@ -1262,7 +1264,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const free = (m?: string) => !!m && allowed.includes(m) && (a.pool ?? []).some((p) => p.model === m && p.frei > 0);
     const sticky = live.orch ? orchMap[key]?.meliousModell : poolSticky.get(key);
     if (free(sticky)) return sticky;
-    const pick = (a.pool ?? []).find((p) => allowed.includes(p.model) && p.frei > 0)?.model;
+    // Reihenfolge der Rolle (die Werkbank ordnet sie nach Energie-Lage und Qualität, S8); erstes freies Modell gewinnt.
+    const pick = allowed.find((m) => (a.pool ?? []).some((p) => p.model === m && p.frei > 0));
     if (!pick) return undefined;
     if (live.orch && orchMap[key]) { orchMap[key].meliousModell = pick; saveMap(); } else { poolSticky.set(key, pick); if (poolSticky.size > 5000) poolSticky.delete(poolSticky.keys().next().value!); }
     log('melious modell verteilt', { conv: key, rolle: role, modell: pick, frei: a.pool!.find((p) => p.model === pick)!.frei });
@@ -1272,7 +1275,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Werkzeuge, MCP-Server und Rechte-Modus wie bei Claude. Zurück auf Claude: Modell der Anfrage bzw. des Strangs, Token.
   const onAccount = (a: Account) => {
     const mel = isMelious(a);
-    const mm = mel ? meliousChatModel(key) ?? (strandMel && strandMel !== 'auto' ? strandMel : undefined) ?? a.model ?? poolModel(a, profil === 'leser' ? 'leser' : 'niedrig') : undefined;
+    const base = mel ? meliousChatModel(key) ?? (strandMel && strandMel !== 'auto' ? strandMel : undefined) ?? a.model ?? poolModel(a, profil === 'leser' ? 'leser' : 'niedrig') : undefined;
+    // „:eco“-Routing (S8, Einstellung): Melious leitet auf das sparsamste Rechenzentrum; gezählt wird wie das Modell.
+    const mm = base && a.eco && !base.endsWith(':eco') ? `${base}:eco` : base;
     accountEnv(env, a, mm);
     options.mcpServers = profileServers(withToken(req.mcpServers ?? {}, mel ? req.token : a.token));
     options.systemPrompt = { ...basePrompt, append: baseAppend };
@@ -1287,7 +1292,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     // Modell des Strangs vor dem der Anfrage: beim Start festgelegt, nicht durch die Auswahl im Chat überstimmt (Review 2, 3).
     const model = mm ?? (mel ? undefined : strandClaude) ?? req.model;
     if (model) options.model = model; else delete options.model;
-    live.melious = mel ? { rest: a.rest ?? 0, calls: new Map(), result: null, cut: false } : undefined;
+    live.melious = mel ? { rest: a.rest ?? 0, calls: new Map(), result: null, cut: false, model: options.model, faktoren: a.faktoren && Object.keys(a.faktoren).length ? a.faktoren : undefined, taktS: a.taktS } : undefined;
     live.modelSeen = undefined;
   };
   onAccount(acct);
@@ -1388,7 +1393,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       if (live.abort.signal.aborted) { log('turn aborted', { conv: key }); return; }
       const text = redact(String(e?.message ?? e));
       log('turn error', { conv: key, error: text.slice(0, 300) });
-      if (live.melious && !live.rateLimited && meliousExhaustedError(null, text)) { meliousFail(live, meliousErrorKind(null, text)!); return; }
+      if (live.melious && !live.rateLimited && meliousExhaustedError(null, text)) { meliousFail(live, meliousErrorKind(null, text)!, text); return; }
       if (live.rateLimited || isRateLimitText(text)) { live.rateLimited = live.rateLimited ?? { resetsAt: live.rateLimitReset }; return; }
       markEnd(live, 'error');
       const auth = /auth|401|token|login/i.test(text);

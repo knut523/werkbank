@@ -73,7 +73,8 @@ try {
   const usage = await f.locator('[data-testid=melious-usage]').innerText();
   check('Verbrauch heute gezählt (eigene Zählung, Züge > 0)', /heute \([1-9]\d* Züge\)/.test(usage), usage.replace(/\s+/g, ' ').slice(0, 160));
   const kont = await f.locator('[data-testid=melious-modelle]').innerText();
-  check('Melious-Kontingent je Modell (verbraucht / Kontingent / frei / Rollen), kein AVV-Schalter', /glm-5\.3-flash/.test(kont) && /25 Mrd\./.test(kont) && /2,5 Mrd\./.test(kont) && !(await f.locator('[data-testid=melious-avv]').count()), kont.replace(/\s+/g, ' ').slice(0, 200));
+  const en = await f.locator('[data-testid=melious-energie]').innerText();
+  check('Energie (geschätzt) je Modell mit Faktoren und Rollen-Rang, Hinweis aufs Dashboard, kein AVV-Schalter', /glm-5\.3-flash/.test(kont) && /Faktor/.test(kont) && /#1/.test(kont) && /geschätzt/.test(en) && /Melious-Dashboard/.test(en) && !(await f.locator('[data-testid=melious-avv]').count()), en.replace(/\s+/g, ' ').slice(0, 220));
   await f.locator('[data-testid=melious-account]').screenshot({ path: join(OUT, '1440-einrichtung-melious.png') });
 
   // Hauptchat-Seite: Kachel „Melious heute / Monat“.

@@ -90,6 +90,27 @@ Nachgezogen beim Bau:
 
   Die Skripte liegen im Review-Paket.
 
+## S8 Energie statt Tokens (PRO-Plan aktiv, 15.10.)
+Melious begrenzt über einen gemeinsamen Energietopf: Nachfüllung alle 45 min, höchstens 4 Tage, darüber verfällt sie. Eine
+Energie-Einheit entspricht dem Verbrauchspreis × 10.000 (1 Einheit = 0,0001 €; Kalibrierung des Orchestrators).
+- **Fehler:**
+  - 402 `BILLING_2001` (Topf leer) sperrt nur bis zum nächsten Nachfüll-Takt (Vorgabe 2700 s).
+  - 429 `AUTH_1028` sperrt bis `Retry-After`, sonst 60 s.
+  - 403 „Insufficient credits“ und 402 `BILLING_2003` (Credits außerhalb des Plans) bleiben bis Monatswechsel bzw. Zurücksetzen.
+- **Schätzung je Zug:** Tokens × Faktor je Modell. Die Faktoren kommen aus der Preisliste (`GET /v1/models?include_meta=true`,
+  einmal am Tag, kostet nichts); bis dahin gelten die Kalibrierwerte. Von Hand gesetzte Faktoren gehen vor. Annahme: Cache-Treffer
+  zählen zum Cache-Preis.
+- **Steuerung (stetig statt Spitzen):** Tempo = Energie heute / Nachfüllung bis jetzt (Energie je Takt aus der Einrichtung bzw.
+  dem Dashboard).
+  - Tempo ≤ 100 % → Rollen in Wunsch-Reihenfolge (Qualität).
+  - Tempo > 100 % → sparsamste Modelle zuerst.
+  - Gleich teure Modelle wechseln sich ab.
+  - Mit echtem Stand gilt zusätzlich: Topf ≥ 75 % → Qualität, ≤ 25 % → sparen.
+- **Deckel in Energie** (Notbremse). Die Anzeige sagt „geschätzt“ und verlinkt das Melious-Dashboard.
+- **Abgleich mit dem echten Stand (Variante 3, optional):** `MELIOUS_DASHBOARD_AUTH` (Kopfzeile der Dashboard-Anmeldung, vom
+  Betrieb gesetzt) → `/v1/billing/balance` bzw. `/v1/auth/session/me`. Fehlt die Kopfzeile, ist der Abgleich aus.
+- **`:eco`-Routing** als Einstellung; gezählt wird wie das Modell.
+
 - Korrektur zur Token-Aussage: Melious meldet alle Eingaben als Cache-Treffer; der Mehrverbrauch kommt von mehr Zügen, nicht
   von fehlendem Caching.
 
