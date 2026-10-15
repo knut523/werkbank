@@ -6,6 +6,7 @@ import { AnsetzenButton } from '../AgentAnsetzen';
 import { api, type Config, viaLabel } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, StateChip, useJiraLive } from '../ui.tsx';
 import { BeiMirLink, Md, note } from '../beimir.tsx';
+import { PrTickerMeldungen } from '../prticker.tsx';
 import { topicBuckets } from '../buckets.ts';
 
 // Tabs (Council-Bedingung 11): Überblick · Rangliste · PR-Review · Pflege ⋯ (Konsistenz, Ordnung). Die alten Adressen
@@ -155,7 +156,7 @@ function Kanban({ d }: { d: any }) {
 
 const ago = (s?: string | null) => { if (!s) return '—'; const d = Math.floor((Date.now() - new Date(s).getTime()) / 864e5); return d <= 0 ? 'heute' : d === 1 ? '1 Tag' : `${d} Tage`; };
 
-function PrReview({ d, reload }: { d: any; reload: () => void }) {
+function PrReview({ d, reload, ticker }: { d: any; reload: () => void; ticker: boolean }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const [onlyOpen, setOnlyOpen] = useState(true);
@@ -163,6 +164,7 @@ function PrReview({ d, reload }: { d: any; reload: () => void }) {
   const list = d.prs.filter((p: any) => !onlyOpen || p.live || !['nicht mehr offen', 'gemergt'].includes(p.review));
   return (
     <>
+      {ticker && <PrTickerMeldungen />}
       <p className="small muted">Live von GitHub (<b>{gh.org ?? 'WirStrom1'}</b>, alle offenen PRs, alle 5 Minuten, <b>nur lesend</b>) plus <a href={note(d.hub.register)}>PR-Register</a> und PR-Links in den Specs (Spec ↔ PR, Deploy-Gates). Review, Merge und Deploy passieren auf GitHub bzw. durch Menschen.</p>
       <div className="row small" style={{ marginBottom: 8 }}>
         {gh.error ? <span className="chip bad" data-testid="gh-error">GitHub: {gh.error}</span> : gh.at ? <span className="chip ok">GitHub-Stand {new Date(gh.at).toLocaleString('de-AT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {gh.count} offen</span> : <span className="chip warn">GitHub noch nicht abgerufen</span>}
@@ -481,7 +483,7 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
         {[['check', 'Konsistenz'], ['ordnung', 'Ordnung']].map(([id, label]) => { const on = (tab === 'pflege' ? 'check' : tab) === id; return <a key={id} role="tab" aria-selected={on} className={on ? 'active' : ''} href={`#/roadmap/${id}`}>{label}</a>; })}
       </div>}
       {r.error && <Err e={r.error} />}
-      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' || tab === 'pflege' ? <Check d={d} /> : tab === 'prio' ? <Prio d={d} reload={r.reload} admin={cfg.user?.role === 'ADMIN'} /> : <Overview d={d} />}
+      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} ticker={cfg.features?.leitstand !== false} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' || tab === 'pflege' ? <Check d={d} /> : tab === 'prio' ? <Prio d={d} reload={r.reload} admin={cfg.user?.role === 'ADMIN'} /> : <Overview d={d} />}
     </div>
   );
 }

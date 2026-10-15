@@ -159,6 +159,7 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null) {
     entscheidungen: offen, berichtHash: text ? berichtHash(text) : null, rueckfragen: qs, braucht,
     kannFreigeben, freigabe: fg, weitereRepos: felder.weitereRepos ?? [], commitWarnung: felder.commitWarnung ?? null,
     kopfFehler: kopf ? null : felder.kopfFehler ?? (roh && 'fehler' in roh ? roh.fehler : null),   // wie Heute: unlesbaren Kopf zeigen
+    modell: d.lastModell ?? null, modellPlan: d.modell ?? null, gegenpruefung: d.gegenpruefung?.n ?? 0, reviewReady: !!d.reviewReadyAt,   // Karte › Technische Details (Paket 187, S4)
     running, wartet: statusWord(d) === 'wartet', seen, paket, chat: sicher(d.url) ? d.url : null, statusAt: d.statusAt ?? d.lastActivity ?? d.startedAt,
   };
 }

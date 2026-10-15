@@ -22,7 +22,7 @@ export const WERKBANK_PAGES = [
   { id: 'ziele', hash: '#/ziele', label: 'Ziele', icon: Target, nav: false },
   { id: 'skills', hash: '#/skills', label: 'Skills', icon: Blocks, nav: false },
   { id: 'dateien', hash: '#/dateien', label: 'Dateien & Teilen', icon: Share2, nav: false },
-  { id: 'leitstand', hash: '#/leitstand', label: 'Hauptchat & Unter-Chats', icon: Satellite, nav: false },
+  { id: 'leitstand', hash: '#/leitstand', label: 'Übersicht', icon: Satellite, nav: false, menu: false },   // Paket 187 S4: Alias — die Seite ist in der Übersicht aufgegangen
   { id: 'einrichtung', hash: '#/einrichtung', label: 'Workspace-Einrichtung', icon: Rocket, nav: false, menu: false },
 ];
 const MORE = WERKBANK_PAGES.filter((p) => !p.nav && p.menu !== false);

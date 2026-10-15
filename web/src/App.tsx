@@ -11,7 +11,6 @@ import { Dateien } from './pages/Dateien.tsx';
 import { Timebox } from './pages/Timebox.tsx';
 import { Ziele } from './pages/Ziele.tsx';
 import { Uebersicht } from './pages/Uebersicht.tsx';
-import { Leitstand } from './pages/Leitstand.tsx';
 import { useTodayCount } from './beimir.tsx';
 
 function useHash() {
@@ -38,12 +37,12 @@ const SHARED_TOKENS = ['--presentation', '--text-primary', '--text-secondary', '
 // Werkzeug statt Seite (Council-Bedingung 11): oben fünf Einträge, der Rest im Fuß. LibreChat-Leiste: dieselben fünf.
 const NAV = [
   // Plan 184, Teil B: die Übersicht ist die Startseite; #/heute und #/uebersicht führen ebenfalls dorthin (alte Adressen, 185-B3).
-  { href: '#/', label: 'Übersicht', ico: '📋', match: /^#\/?$|^#\/(heute|uebersicht)(\?|$)/, f: 'heute' },
+  // `#/leitstand…` (früher die Seite „Hauptchat & Unter-Chats“, Paket 187 S4) zeigt ebenfalls die Übersicht: alte Adressen bleiben gültig (185-B3).
+  { href: '#/', label: 'Übersicht', ico: '📋', match: /^#\/?(\?|$)|^#\/(heute|uebersicht|leitstand)(\?|$)/, f: 'heute' },
   { href: '#/roadmap', label: 'Roadmap', ico: '🧭', match: /^#\/roadmap/ , f: 'roadmap' },
   { href: '#/board', label: 'Board', ico: '🗂️', match: /^#\/board/ , f: 'board' },
   { href: '#/sprint', label: 'Sprint', ico: '🔁', match: /^#\/sprint/ , f: 'sprint' },
   { href: '#/wissen', label: 'Wissen', ico: '📚', match: /^#\/wissen/ , f: 'wissen' },
-  { href: '#/leitstand', label: 'Hauptchat', ico: '🛰️', match: /^#\/leitstand/ , f: 'leitstand' },
 ];
 const MORE = [
   { href: '#/timebox', label: 'Mein Tag', ico: '⏱️', match: /^#\/timebox/ , f: 'timebox' },
@@ -125,7 +124,7 @@ export function App() {
   const vis = (n: { f: string }) => !n.f || cfg.features?.[n.f] !== false;
   const nav = NAV.filter(vis), more = MORE.filter(vis);
   const hidden = user && [...NAV, ...MORE].find((n) => n.f && n.match.test(hash) && !vis(n));
-  const heuteHidden = user && cfg.features?.heute === false && /^#\/?$|^#\/(heute|uebersicht)(\?|$)/.test(hash);
+  const heuteHidden = user && cfg.features?.heute === false && /^#\/?(\?|$)|^#\/(heute|uebersicht|leitstand)(\?|$)/.test(hash);
   // Anmelden über das Einrichtungs-Formular: weiter mit den ersten Schritten (Claude, Jira) auf der Einrichtung.
   const page = !user ? <Setup cfg={cfg} onLogin={() => { window.location.hash = '#/einrichtung'; load(); }} />
     : /^#\/einrichtung/.test(hash) || heuteHidden ? <Setup cfg={cfg} onLogin={load} />
@@ -138,8 +137,7 @@ export function App() {
     : /^#\/roadmap/.test(hash) ? <Roadmap cfg={cfg} hash={hash} />
     : /^#\/skills/.test(hash) ? <Skills cfg={cfg} />
     : /^#\/dateien/.test(hash) ? <Dateien cfg={cfg} />
-    : /^#\/leitstand/.test(hash) ? <Leitstand cfg={cfg} hash={hash} />
-    : <Uebersicht cfg={cfg} />;
+    : <Uebersicht cfg={cfg} hash={hash} />;
 
   // Eingebettet: kein eigenes Gerüst — Navigation ist LibreChats Leiste (fünf Einträge + „Mehr“), Einrichtung im Kontomenü.
   if (embedded) return <div className="embedded">{page}</div>;

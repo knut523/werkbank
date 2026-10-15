@@ -1,5 +1,5 @@
-// PR-Ticker auf der Hauptchat-Seite (Plan 157): Schalter (Ticker, Auto-Review, automatisch posten, Review-Anfragen),
-// Deckel, Liste „was ist neu“ und die Auto-Reviews. Und in der Review-Ansicht der Abschnitt „PR-Review“ mit Empfehlung,
+// PR-Ticker (Plan 157; seit Paket 187 aufgeteilt): Schalter und Deckel in der Einrichtung (Automatik), Liste „was ist neu“
+// und Auto-Reviews unter Planen › Roadmap › PRs. Und in der Review-Ansicht der Abschnitt „PR-Review“ mit Empfehlung,
 // Entwurf und Knuts Klicks (Kommentar / Freigeben / Änderungen verlangen).
 import { useEffect, useState } from 'react';
 import { api, chatTarget, fmtDateTime } from './api.ts';
@@ -19,7 +19,8 @@ function Schalter({ label, an, onChange, testid, hint, disabled }: { label: stri
   );
 }
 
-export function PrTicker() {
+/** Gemeinsamer Zustand für Schalter (Einrichtung › Automatik) und Meldungen (Planen › Roadmap › PRs). */
+function useTicker() {
   const t = useLoad(() => api('/api/leitstand/ticker'));
   const d: any = t.data;
   const [busy, setBusy] = useState(false);
@@ -32,8 +33,17 @@ export function PrTicker() {
     try { await api('/api/leitstand/ticker/einstellungen', { body: patch }); setMsg({ ok: true, text: ok }); t.reload(); }
     catch (e: any) { setMsg({ ok: false, text: String(e?.message ?? e) }); } finally { setBusy(false); }
   };
-  if (t.error) return <section className="card"><Err e={t.error} /></section>;
-  if (!d) return <section className="card"><Loading /></section>;
+  return { t, d, busy, msg, allow, setAllow, set };
+}
+
+function Fehler({ t }: { t: any }) {
+  return <section className="card">{t.error ? <Err e={t.error} /> : <Loading />}</section>;
+}
+
+/** Schalter, Deckel und Protokoll des PR-Tickers (Einrichtung › Automatik). */
+export function PrTickerSchalter() {
+  const { t, d, busy, msg, allow, setAllow, set } = useTicker();
+  if (!d) return <Fehler t={t} />;
   const s = d.settings;
   return (
     <section className="card" data-testid="pr-ticker" style={{ marginBottom: 14 }}>
@@ -61,7 +71,18 @@ export function PrTicker() {
         {s.log.length > 0 && <ul className="tiny muted" data-testid="schalt-protokoll" style={{ margin: 0 }}>{s.log.map((l: any, i: number) => <li key={i}>{fmtDateTime(l.at)} · {l.by}: {l.was}</li>)}</ul>}
       </details>
       {msg && <p className={`small ${msg.ok ? '' : 'err'}`} role="status">{msg.text}</p>}
+    </section>
+  );
+}
 
+/** Auto-Reviews und „Was ist neu“ des PR-Tickers (Planen › Roadmap › PRs). */
+export function PrTickerMeldungen() {
+  const { t, d } = useTicker();
+  if (!d) return <Fehler t={t} />;
+  const s = d.settings;
+  return (
+    <section className="card" data-testid="pr-ticker-meldungen" style={{ marginBottom: 14 }}>
+      <h2 style={{ margin: 0 }}>PR-Ticker: Meldungen</h2>
       {d.reviews.length > 0 && <>
         <h3 style={{ marginBottom: 4 }}>Auto-Reviews</h3>
         <ul className="small" style={{ margin: 0, paddingLeft: 18 }} data-testid="auto-reviews">

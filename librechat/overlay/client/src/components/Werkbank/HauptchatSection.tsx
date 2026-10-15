@@ -126,7 +126,7 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
   const [auf, setAuf] = useState<Auf>(readAuf);
   const save = useCallback((a: Auf) => { setAuf(a); writeAuf(a); }, []);
   const open = useCallback((p: string) => { navigate(p, { state: { focusChat: true } }); toggleNav?.(); }, [navigate, toggleNav]);
-  const toStart = () => { navigate(`/wb/leitstand?h=${encodeURIComponent('#/leitstand?start=1')}`); toggleNav?.(); };
+  const toStart = () => { navigate(`/wb/heute?h=${encodeURIComponent('#/?start=1')}`); toggleNav?.(); };
 
   // Ohne je geladene Daten nichts zeigen — auch bei Fehlern (sonst sähe ein Team-Konto bei einem Ausfall den Abschnitt; Review).
   if (state === 'kein-zugriff' || !data) return null;
@@ -205,7 +205,7 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
             <Menu.MenuItem className="select-item text-sm" data-testid="hauptchat-neustart" onClick={toStart}>
               {h ? 'Hauptchat neu starten …' : 'Hauptchat starten …'}
             </Menu.MenuItem>
-            <Menu.MenuItem className="select-item text-sm" data-testid="hauptchat-alle" onClick={() => { navigate('/wb/leitstand'); toggleNav?.(); }}>
+            <Menu.MenuItem className="select-item text-sm" data-testid="hauptchat-alle" onClick={() => { navigate('/wb/heute'); toggleNav?.(); }}>
               Alle Unter-Chats
             </Menu.MenuItem>
           </Menu.Menu>

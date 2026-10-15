@@ -1,9 +1,9 @@
-// Seite „Hauptchat & Unter-Chats“ (früher „Leitstand“; docs/plan-leitstand.md Teil B, docs/plan-hauptchat-workspace.md S2):
-// alle Unter-Chats (Orchestrator-Stränge) je Lauf, zugeklappt („Flex — 3 Unter-Chats · 2 fertig · 1 wartet“), mit Status,
-// Zähler „automatisch fortgesetzt“, Chat- und Bericht-Link; oben der Hauptchat mit Start/Neustart (Übergabe vorbefüllt).
-// Nur für Admins (Feature leitstand). Liest nur festgeschriebenen Stand (kein Abruf bei der Brücke).
+// Bausteine der früheren Seite „Hauptchat & Unter-Chats“ (Paket 187, S4: die Seite ist aufgelöst). Hier bleiben die Teile, die
+// woanders weiterleben: Bericht/Auftrag und Review & Freigabe (Schublade bzw. Ansicht der Übersicht, alte Adressen
+// `#/leitstand?bericht=|auftrag=|review=`), Hauptchat starten/neu starten (Dialog der Übersicht, `?start=1`) und die
+// Melious-Kachel mit Messung (Einrichtung › Melious).
 import { useEffect, useRef, useState } from 'react';
-import { api, chatTarget, fmtDateTime, openChat, type Config } from '../api.ts';
+import { api, chatTarget, fmtDateTime, openChat } from '../api.ts';
 import { useMermaidIn } from '../mermaid.tsx';
 
 /** Bericht formatiert (Teil C, C3): Server-HTML ohne rohes HTML, Diagramme gezeichnet; ohne HTML (alter Server) der Rohtext. */
@@ -14,21 +14,13 @@ function BerichtHtml({ html, text }: { html?: string | null; text: string }) {
   return <div className="note-body" ref={ref} data-testid="bericht-html" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 import { Err, Loading, useLoad } from '../ui.tsx';
-import { PrTicker, PrReviewAbschnitt } from '../prticker.tsx';
+import { PrReviewAbschnitt } from '../prticker.tsx';
 import { Entscheidungen } from '../entscheidungen.tsx';
 import { ExecSummary } from '../execsummary.tsx';
 
-const ICON: Record<string, string> = { läuft: '⏳', wartet: '✋', fertig: '✅', gestoppt: '⛔', erledigt: '✔️' };
-const CHIP: Record<string, string> = { läuft: '', wartet: 'warn', fertig: 'ok', gestoppt: 'bad', erledigt: '' };
-// Wörter wie in der Chat-Seitenleiste (Glossar): läuft · braucht dich · bereit · blockiert · erledigt.
-const WORD: Record<string, string> = { läuft: 'läuft', wartet: 'braucht dich', fertig: 'bereit', gestoppt: 'blockiert', erledigt: 'erledigt' };
-const span = (from: string, to: string) => {
-  const a = fmtDateTime(from).split(',')[0], b = fmtDateTime(to).split(',')[0];
-  return a === b ? a : `${a} – ${b}`;
-};
 
 /** Auftrag oder Bericht eines Unter-Chats (review-pakete/NNN-…/auftrag.md bzw. bericht.md) — hier im OLAF Workspace gelesen. */
-function Bericht({ id, art, onClose }: { id: string; art: 'auftrag' | 'bericht'; onClose: () => void }) {
+export function Bericht({ id, art, onClose }: { id: string; art: 'auftrag' | 'bericht'; onClose: () => void }) {
   const t = useLoad(() => api(`/api/leitstand/bericht?strand=${encodeURIComponent(id)}&art=${art}`), [id, art]);
   const d: any = t.data;
   return (
@@ -54,7 +46,7 @@ function Bericht({ id, art, onClose }: { id: string; art: 'auftrag' | 'bericht';
  * gepusht wird danach vom Hauptchat nach der Checkliste (pre-push-Hook prüft). Merge gibt es nicht.
  */
 const VS: Record<string, string> = { 'läuft': 'ok', 'läuft (Anmeldung)': 'ok', 'Proxy läuft, Ziel antwortet nicht': 'warn', 'antwortet nicht': 'bad', 'Fehler': 'bad' };
-function Review({ id, onClose }: { id: string; onClose: () => void }) {
+export function Review({ id, onClose }: { id: string; onClose: () => void }) {
   const t = useLoad(() => api(`/api/review/${encodeURIComponent(id)}`), [id]);
   const d: any = t.data;
   const [busy, setBusy] = useState('');
@@ -118,47 +110,9 @@ function Review({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
-function Strand({ s }: { s: any }) {
-  return (
-    <li className="leit-strand" data-strand={s.id} data-status={s.status}>
-      <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
-        <span className={`chip ${CHIP[s.status] ?? ''}`}>{ICON[s.status] ?? '?'} {WORD[s.status] ?? s.status}</span>
-        <b>{s.title}</b>
-        <span className="tiny muted mono">{s.id}</span>
-      </div>
-      <div className="small muted" style={{ marginTop: 2 }}>
-        {s.reason ? <>{s.reason} · </> : null}
-        {s.autoWeiter > 0 && <>automatisch fortgesetzt ({s.autoWeiter}) · </>}
-        {s.reviewedBy === 'leitstand' && !s.knutReviewed && <>vom Hauptchat abgelegt · </>}
-        {/* Plan 162, S4: tatsächlich gelaufenes Modell des letzten Zugs (sonst das beim Start gesetzte). */}
-        {(s.modell || s.modellPlan) && <span data-testid="strand-modell">{s.modell ? `Modell ${s.modell}` : `Modell ${s.modellPlan} (geplant)`} · </span>}
-        {/* Plan 165, S4: Gegenprüfung (challenge, GLM 5.3) — bei „fertig“ sichtbar, auch wenn sie fehlt. */}
-        {(s.gegenpruefung > 0 || s.reviewReady) && <span data-testid="strand-gegenpruefung">{s.gegenpruefung > 0 ? `Gegenprüfung ${s.gegenpruefung}×` : '⚠️ ohne Gegenprüfung'} · </span>}
-        zuletzt {fmtDateTime(s.lastActivity)}
-      </div>
-      {/* Plan 144 (Knut 12.10.): je Unter-Chat drei Links — Chat · Auftrag · Bericht; fehlt eine Datei, steht das da. */}
-      <div className="row" style={{ gap: 12 }} data-testid="strand-links">
-        {s.url && <a className="small" href={s.url} target={chatTarget}>Chat</a>}
-        {s.auftrag ? <a className="small" href={`#/leitstand?auftrag=${s.id}`}>Auftrag</a> : <span className="small muted" title="Kein auftrag.md im review-pakete-Ordner dieses Unter-Chats">kein Auftrag</span>}
-        {s.bericht ? <a className="small" href={`#/leitstand?bericht=${s.id}`}>Bericht</a> : <span className="small muted" title="Noch kein bericht.md">noch kein Bericht</span>}
-        {(s.status === 'fertig' || s.reviewReady) && <a className="small" href={`#/leitstand?review=${s.id}`} data-testid="review-link">Review &amp; Freigabe</a>}
-      </div>
-    </li>
-  );
-}
-
-function Gruppe({ g, open }: { g: any; open?: boolean }) {
-  return (
-    <details className="card leit-gruppe" open={open} data-lauf={g.lauf}>
-      <summary><b>{g.lauf}</b> — <span data-testid="gruppe-zeile">{g.line}</span> <span className="tiny muted">{span(g.from, g.to)}</span></summary>
-      <ul className="plain" style={{ display: 'grid', gap: 10, marginTop: 10 }}>{g.strands.map((s: any) => <Strand key={s.id} s={s} />)}</ul>
-    </details>
-  );
-}
-
 /** Hauptchat starten oder neu starten (Plan 144, S2): Übergabe automatisch erzeugt, bearbeitbar; nach dem Start öffnet sich der
  *  neue Hauptchat im selben Fenster (die Chat-Seitenleiste lädt beim Chatwechsel neu). */
-function StartHauptchat({ aktiv, onClose, onStarted }: { aktiv: boolean; onClose: () => void; onStarted: () => void }) {
+export function StartHauptchat({ aktiv, onClose, onStarted }: { aktiv: boolean; onClose: () => void; onStarted: () => void }) {
   const draft = useLoad(() => api('/api/leitstand/handover'));
   const d: any = draft.data;
   const [text, setText] = useState<string | null>(null);
@@ -201,7 +155,7 @@ function StartHauptchat({ aktiv, onClose, onStarted }: { aktiv: boolean; onClose
 }
 
 /** Kachel „Melious heute / Monat“ (Plan 162): nur, wenn ein Melious-Schlüssel hinterlegt ist; eigene Zählung, kein Schlüssel. */
-function MeliousKachel() {
+export function MeliousKachel() {
   const t = useLoad(() => api('/api/melious/usage'));
   const d: any = t.data;
   if (!d || d.configured === false) return null;
@@ -210,20 +164,20 @@ function MeliousKachel() {
   const m = d.messung;
   return (
     <div className="card soft small" data-testid="melious-kachel" style={{ padding: '6px 10px' }}>
-      <a href="#/einrichtung" title={`Quelle: ${d.quelle}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+      <div title={`Quelle: ${d.quelle}`}>
         🧪 <b>Melious</b> {!d.enabled ? <span className="chip">aus</span> : d.sperre ? <span className="chip bad">gesperrt</span> : null}
         {' '}⚡ heute <span className={`chip ${cls(d.heute.pct)}`}>≈ {z(Math.round(d.heute.energie))} / {z(d.heute.limit)}</span>
         {' '}Monat <span className={`chip ${cls(d.monat.pct)}`}>≈ {z(Math.round(d.monat.energie))} / {z(d.monat.limit)}</span>
         <span className="tiny muted" data-testid="melious-kachel-energie"> · Energie {d.energie?.geschaetzt === false ? 'echt' : 'geschätzt'} · {d.heute.turns} Züge heute{d.energie?.tempo != null ? ` · Tempo ${Math.round(d.energie.tempo * 100)} %` : ''}{d.energie?.fuell != null ? ` · Topf ${Math.round(d.energie.fuell * 100)} %` : ''}</span>
         {(d.energie?.hinweise ?? []).map((h: string) => <span key={h} className="chip warn" data-testid="melious-kachel-hinweis" style={{ marginLeft: 6 }}>{h}</span>)}
-      </a>
+      </div>
       {m && m.summe.zuege > 0 && <MessungDetails m={m} z={z} />}
     </div>
   );
 }
 
 /** Messung je Zug und Delegation (Plan 165, S8): letzte 24 h je Art/Phase × Modell, letzte Delegationen, Quoten je Modell. */
-function MessungDetails({ m, z }: { m: any; z: (n: number) => string }) {
+export function MessungDetails({ m, z }: { m: any; z: (n: number) => string }) {
   const urteil = (x: any) => x.urteil ?? (x.status === 'laeuft' ? 'läuft' : x.status === 'fertig' ? 'offen' : x.status);
   return (
     <details data-testid="messung" style={{ marginTop: 4 }}>
@@ -240,53 +194,5 @@ function MessungDetails({ m, z }: { m: any; z: (n: number) => string }) {
       {(m.straenge ?? []).length > 0 && <div className="tiny muted" data-testid="messung-straenge" style={{ marginTop: 4 }}>Je Unter-Chat (24 h): {m.straenge.map((s: any) => `${s.conv.slice(0, 8)}… ${z(s.lead)} / ${z(s.worker)}`).join(' · ')}</div>}
       {m.quoten.length > 0 && <div className="tiny muted" data-testid="messung-quoten" style={{ marginTop: 4 }}>30 Tage: {m.quoten.map((q: any) => `${q.modell} als ${q.rolle}: ${q.n}× (fehlgeschlagen ${q.fehlPct} %, verworfen ${q.verwPct} %, mit Abweichung ${q.abweichung})`).join(' · ')}</div>}
     </details>
-  );
-}
-
-export function Leitstand({ hash }: { cfg: Config; hash: string }) {
-  const t = useLoad(() => api('/api/leitstand/overview'));
-  const d: any = t.data;
-  const q = new URLSearchParams(hash.split('?')[1] ?? '');
-  const fromHash = q.get('bericht') ? { id: q.get('bericht')!, art: 'bericht' as const } : q.get('auftrag') ? { id: q.get('auftrag')!, art: 'auftrag' as const } : null;
-  const fromKey = fromHash ? `${fromHash.art}:${fromHash.id}` : '';
-  const [bericht, setBericht] = useState<{ id: string; art: 'auftrag' | 'bericht' } | null>(fromHash);
-  const reviewId = q.get('review');
-  const wantStart = new URLSearchParams(hash.split('?')[1] ?? '').has('start');
-  const [starten, setStarten] = useState(wantStart);
-  useEffect(() => { if (wantStart) setStarten(true); }, [wantStart]);
-  useEffect(() => { if (fromHash) setBericht(fromHash); }, [fromKey]);
-  useEffect(() => { const id = setInterval(() => api('/api/leitstand/overview').then(t.setData).catch(() => {}), 30_000); return () => clearInterval(id); }, []);
-  if (t.error) return <div className="page"><Err e={t.error} /></div>;
-  if (!d) return <div className="page"><Loading /></div>;
-  return (
-    <div className="page leitstand" data-testid="leitstand-seite">
-      <div className="head">
-        <div>
-          <h1>Hauptchat &amp; Unter-Chats</h1>
-          <p className="muted small" style={{ margin: 0 }}>Der Hauptchat führt, die Unter-Chats arbeiten — je Lauf gruppiert. Fertige stehen zum Prüfen auf <a href="#/">Heute</a>.</p>
-        </div>
-      </div>
-      <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center', margin: '8px 0 14px' }} data-testid="leitstand-kopf">
-        {d.leitstand ? <>
-          <span className="small">🛰️ Hauptchat: <b>{d.leitstand.status}</b>{d.leitstand.open > 0 ? ` · ${d.leitstand.open} Meldung${d.leitstand.open === 1 ? '' : 'en'} unterwegs` : ''}</span>
-          <a className="btn small" href={d.leitstand.url} target={chatTarget}>Öffnen</a>
-          {!starten && <button className="btn small ghost" onClick={() => setStarten(true)} data-testid="neu-starten">Neu starten …</button>}
-        </> : <>
-          <span className="small">Noch kein Hauptchat aktiv.</span>
-          {!starten && <button className="btn small primary" onClick={() => setStarten(true)} data-testid="neu-starten">Hauptchat starten</button>}
-        </>}
-        <MeliousKachel />
-      </div>
-      {starten && <StartHauptchat aktiv={!!d.leitstand} onStarted={() => { setStarten(false); t.reload(); if (wantStart) history.replaceState(null, '', location.pathname + location.search + '#/leitstand'); }} onClose={() => { setStarten(false); if (wantStart) window.location.hash = '#/leitstand'; }} />}
-      <PrTicker />
-      {reviewId && <Review id={reviewId} onClose={() => { window.location.hash = '#/leitstand'; }} />}
-      {bericht && <Bericht id={bericht.id} art={bericht.art} onClose={() => { setBericht(null); if (fromHash) window.location.hash = '#/leitstand'; }} />}
-      {d.offen.length === 0 && <div className="card soft empty"><p><b>Keine offenen Unter-Chats.</b></p></div>}
-      <div style={{ display: 'grid', gap: 12 }} data-testid="offen">{d.offen.map((g: any) => <Gruppe key={g.key} g={g} />)}</div>
-      {d.erledigt.length > 0 && <details className="leit-erledigt" style={{ marginTop: 20 }} data-testid="erledigt">
-        <summary><b>Erledigt</b> <span className="tiny muted">(letzte 14 Tage, {d.erledigt.length} {d.erledigt.length === 1 ? 'Lauf' : 'Läufe'})</span></summary>
-        <div style={{ display: 'grid', gap: 12, marginTop: 10 }}>{d.erledigt.map((g: any) => <Gruppe key={g.key} g={g} />)}</div>
-      </details>}
-    </div>
   );
 }

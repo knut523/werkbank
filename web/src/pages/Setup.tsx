@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { api, fmtDateTime, chatTarget, embedded, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useToast, useConfirm } from '../ui.tsx';
+import { PrTickerSchalter } from '../prticker.tsx';
+import { MeliousKachel } from './Leitstand.tsx';
 
 function Login({ cfg, onLogin }: { cfg: Config; onLogin: () => void }) {
   const [email, setEmail] = useState('');
@@ -342,6 +344,7 @@ function Wizard({ cfg }: { cfg: Config }) {
     try { await fn(); await st.reload(); } catch (e) { setErr(e); } finally { setBusy(''); }
   };
   const allOk = s.claude.connected && s.jira.connected;
+  const admin = cfg.features?.leitstand !== false;   // wie bisher die Seite „Hauptchat & Unter-Chats“: nur Admins
   return (
     <div className="page" style={{ maxWidth: 860 }}>
       <div className="head">
@@ -379,7 +382,6 @@ function Wizard({ cfg }: { cfg: Config }) {
               }}>Trennen</button>}
             </form>
             <ClaudeAccounts chat={s.claude.connected} />
-            <MeliousAccount />
           </div>
         </div>
 
@@ -404,6 +406,24 @@ function Wizard({ cfg }: { cfg: Config }) {
         </div>
 
         <McpStep claude={s.claude.connected} />
+
+        {/* Paket 187 (S4): Melious und Automatik wohnen hier, nicht mehr auf der Seite „Hauptchat & Unter-Chats“. */}
+        <div className="step" data-testid="setup-melious">
+          <div className="num">＋</div>
+          <div className="card">
+            <h3 style={{ marginTop: 0 }}>Melious (optional)</h3>
+            <MeliousAccount />
+            {admin && <div style={{ marginTop: 12 }}><MeliousKachel /></div>}
+          </div>
+        </div>
+
+        {admin && <div className="step" data-testid="setup-automatik">
+          <div className="num">＋</div>
+          <div className="card">
+            <h3 style={{ marginTop: 0 }}>Automatik (optional)</h3>
+            <PrTickerSchalter />
+          </div>
+        </div>}
 
         <div className={`step ${allOk ? 'done' : ''}`}>
           <div className="num">{allOk ? '✓' : '5'}</div>

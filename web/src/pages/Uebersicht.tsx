@@ -12,6 +12,7 @@ import { WartetAufDich, mineCount } from '../beimir.tsx';
 import { OrchQuestions } from '../orchquestions.tsx';
 import { HygienePanel } from '../components.tsx';
 import { G0Blocked, LiveGroup, RunCard } from './Heute.tsx';
+import { Bericht, Review, StartHauptchat } from './Leitstand.tsx';
 
 const AMP: Record<string, string> = { push: 'u-push', review: 'u-dich', laeuft: 'u-run', blockiert: 'u-bad' };
 const PREFIX = 'wb-uebersicht:';
@@ -236,6 +237,12 @@ function Karte({ k, onDone, oeffne }: { k: any; onDone: () => void; oeffne: (k: 
         </div>}
       </div>
       {(g || k.zusatz) && <p className="ub-gh">{g && <>{g.repo.split('/').pop()} <code>{g.zweig}</code>{g.commit && <> · <code>{g.commit}</code></>}</>}{k.zusatz && <span className="ub-zusatz" data-testid="ub-zusatz">{k.zusatz}</span>}</p>}
+      <details className="ub-tech tiny" data-testid="ub-tech">
+        <summary className="mut">Technische Details</summary>
+        <p data-testid="strand-modell">{k.modell ? `Modell ${k.modell}` : k.modellPlan ? `Modell ${k.modellPlan} (geplant)` : 'Modell unbekannt'}</p>
+        {(k.gegenpruefung > 0 || k.reviewReady) && <p data-testid="strand-gegenpruefung">{k.gegenpruefung > 0 ? `Gegenprüfung ${k.gegenpruefung}×` : '⚠️ ohne Gegenprüfung'}</p>}
+        <p className="mono">{k.id}</p>
+      </details>
       <Err e={err} />
     </article>
   );
@@ -261,7 +268,7 @@ function Thema({ t, onDone, oeffne }: { t: any; onDone: () => void; oeffne: (k: 
 }
 
 /** Die Startseite. Admins sehen die Unter-Chats; alle sehen ihre Board-Agentenläufe, Fragen und Pflegepunkte. */
-export function Uebersicht({ cfg }: { cfg: Config }) {
+export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string }) {
   const admin = cfg.user?.role === 'ADMIN';
   const u = useLoad(() => (admin ? api('/api/uebersicht') : Promise.resolve(null)), [admin]);
   const t = useLoad(() => api('/api/today'));
@@ -269,6 +276,16 @@ export function Uebersicht({ cfg }: { cfg: Config }) {
   const [pflege, setPflege] = useState<number | null>(null);
   const [planen, setPlanen] = useStored<'' | 'vault' | 'pflege'>('planen', '');
   const [schublade, setSchublade] = useState<{ id: string; tab: Tab } | null>(null);
+  // Alte Adressen (Paket 187, S4; `#/leitstand?…`, `#/heute?…`, `#/?…`): review · bericht · auftrag öffnen Ansicht bzw. Schublade, start=1 den Dialog.
+  const q = new URLSearchParams(hash.split('?')[1] ?? '');
+  const aus = (k: string) => q.get(k) || null;
+  const wantStart = q.has('start');
+  const [ansicht, setAnsicht] = useState<{ id: string; art: 'bericht' | 'auftrag' } | null>(null);
+  const [starten, setStarten] = useState(wantStart);
+  const zurueck = () => { if (hash.includes('?')) window.location.hash = '#/'; };
+  const hq = `${aus('review') ?? ''}|${aus('bericht') ?? ''}|${aus('auftrag') ?? ''}`;
+  useEffect(() => { if (wantStart) setStarten(true); }, [wantStart]);
+  useEffect(() => { const b = aus('bericht'), a = aus('auftrag'); setAnsicht(b ? { id: b, art: 'bericht' } : a ? { id: a, art: 'auftrag' } : null); }, [hq]);
   const neu = () => { if (admin) api('/api/uebersicht').then(u.setData).catch(() => {}); api('/api/today').then(t.setData).catch(() => {}); };
   useEffect(() => { if (admin) api('/api/roadmap/heute').then((r: any) => setVq(r)).catch(() => {}); }, [admin]);
   useEffect(() => { api('/api/hygiene').then((h: any) => setPflege(h.items.filter((i: any) => !h.snoozed.includes(i.key)).length)).catch(() => setPflege(null)); }, []);
@@ -306,7 +323,8 @@ export function Uebersicht({ cfg }: { cfg: Config }) {
     const sel = w === 'laeuft' ? '[data-testid="ub-laeuft"]' : w === 'dich' ? '[data-ampel="review"], [data-testid="ub-lose"], [data-testid="ub-board"]' : `[data-ampel="${w}"]`;
     document.querySelector(sel)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   };
-  const offen = schublade ? karten.find((k) => k.id === schublade.id) : null;
+  const ansichtKarte = ansicht ? karten.find((k) => k.id === ansicht.id) : null;
+  const offen = schublade ? karten.find((k) => k.id === schublade.id) : ansichtKarte;
   const hc = x?.hauptchat;
   const hcFarbe = !hc ? 'bad' : hc.status === 'bereit' ? 'ok' : hc.status === 'läuft' ? 'run' : hc.status === 'wartet auf dich' ? 'dich' : 'bad';
   const heute = new Intl.DateTimeFormat('de-AT', { weekday: 'long', day: '2-digit', month: '2-digit' }).format(new Date());
@@ -329,8 +347,12 @@ export function Uebersicht({ cfg }: { cfg: Config }) {
         <span className={`ub-dot d-${hcFarbe}`} aria-hidden /><b>Hauptchat</b>
         <span className="small mut">{hc ? `${hc.status}${hc.open > 0 ? ` · ${hc.open} Meldung${hc.open === 1 ? '' : 'en'} unterwegs` : ''} · pusht, was du hier freigibst — nie mergen` : 'kein Hauptchat aktiv'}</span>
         <span className="sp" />
-        {hc ? <a className="ub-btn sm" href={hc.url} target={chatTarget}>Hauptchat öffnen</a> : <a className="ub-btn sm" href="#/leitstand">Hauptchat starten</a>}
+        {hc && <a className="ub-btn sm" href={hc.url} target={chatTarget}>Hauptchat öffnen</a>}
+        {!starten && <button className={`ub-btn sm${hc ? ' ghost' : ''}`} onClick={() => setStarten(true)} data-testid="neu-starten">{hc ? 'Neu starten …' : 'Hauptchat starten'}</button>}
       </div>}
+      {admin && starten && <StartHauptchat aktiv={!!hc} onStarted={() => { setStarten(false); neu(); zurueck(); }} onClose={() => { setStarten(false); zurueck(); }} />}
+      {admin && aus('review') && <Review id={aus('review')!} onClose={zurueck} />}
+      {admin && ansicht && !karten.some((k) => k.id === ansicht.id) && <Bericht id={ansicht.id} art={ansicht.art} onClose={() => { setAnsicht(null); zurueck(); }} />}
       {(d.orchAuto ?? []).length > 0 && <p className="small mut" data-testid="orch-auto">🔁 Automatisch fortgesetzt: {d.orchAuto.map((a: any, i: number) => <span key={a.id}>{i ? ', ' : ''}<a href={a.url} target={chatTarget}>{a.title}</a> ({a.n}){a.stopped ? ' — angehalten' : ''}</span>)}</p>}
 
       <div className="ub-themen">
@@ -380,7 +402,7 @@ export function Uebersicht({ cfg }: { cfg: Config }) {
         {planen === 'pflege' && <HygienePanel max={5} title="Deine Tickets" onChange={neu} />}
       </section>
 
-      {offen && schublade && <Schublade k={offen} tab={schublade.tab} setTab={(tab) => setSchublade({ id: offen.id, tab })} onClose={() => setSchublade(null)} onDone={neu} />}
+      {offen && (schublade || ansicht) && <Schublade k={offen} tab={schublade?.tab ?? ansicht!.art} setTab={(tab) => { setAnsicht(null); setSchublade({ id: offen.id, tab }); }} onClose={() => { setSchublade(null); if (ansicht) { setAnsicht(null); zurueck(); } }} onDone={neu} />}
     </div>
   );
 }
