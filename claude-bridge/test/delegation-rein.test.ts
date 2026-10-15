@@ -63,9 +63,9 @@ test('Abschluss-Block nach einem Code-Block (Pass B, 7/8): Zäune zeilenweise, L
 });
 
 test('Wächter im Strang (Pass B, 2): Referenzen umbiegen und Zweige erzwingen gesperrt, normales Arbeiten nicht', () => {
-  for (const c of ['git update-ref refs/remotes/origin/dev HEAD', 'git -C /x symbolic-ref HEAD refs/heads/dev', 'git branch -f dev HEAD', 'git branch -D dev', 'git branch --force main x'])
+  for (const c of ['git fetch . +HEAD:refs/remotes/origin/dev', 'git fetch . HEAD:dev', 'git update-ref refs/remotes/origin/dev HEAD', 'git -C /x symbolic-ref HEAD refs/heads/dev', 'git branch -f dev HEAD', 'git branch -D dev', 'git branch --force main x'])
     assert.ok(orchestratorBlock('Bash', { command: c }), c);
-  for (const c of ['git commit -m x', 'git branch', 'git branch --show-current', 'git checkout -b neu', 'git log --oneline -3'])
+  for (const c of ['git fetch origin', 'git fetch origin dev', 'git commit -m x', 'git branch', 'git branch --show-current', 'git checkout -b neu', 'git log --oneline -3'])
     assert.equal(orchestratorBlock('Bash', { command: c }), null, c);
 });
 

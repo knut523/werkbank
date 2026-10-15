@@ -44,10 +44,12 @@ export async function recordDelegation(u: User, raw: any, now = Date.now()): Pro
   await delegationen().updateOne({ _id: `${u.id}:${raw.id}` as any }, {
     $set: {
       userId: u.id, at: new Date(now), id: raw.id, conv: str(raw.conv, 64), rolle: str(raw.rolle, 12), risiko: str(raw.risiko, 10), status: str(raw.status, 16),
-      modell: str(raw.modell, 80), anbieter: str(raw.anbieter, 10), start: num(raw.start), ende: raw.ende ? num(raw.ende) : null,
+      modell: str(raw.modell, 80), konto: str(raw.konto, 60), anbieter: str(raw.anbieter, 10), start: num(raw.start), ende: raw.ende ? num(raw.ende) : null,
       input: num(raw.input), output: num(raw.output), energie: num(raw.energie), abweichungen: list(raw.abweichungen, 12),
       pruefungen: Array.isArray(raw.pruefungen) ? raw.pruefungen.slice(0, 10).map((p: any) => ({ name: String(p?.name ?? '').slice(0, 40), ok: p?.ok === true })) : [],
-      prueferUrteil: str(raw.prueferUrteil, 20), urteil: str(raw.urteil, 20), aufgabe: str(raw.aufgabe, 200),
+      prueferUrteil: str(raw.prueferUrteil, 20), aufgabe: str(raw.aufgabe, 200),
+      // Meldungen kommen ohne feste Reihenfolge an: ein Urteil wird gesetzt, nie durch ein späteres Bild ohne Urteil gelöscht.
+      ...(str(raw.urteil, 20) ? { urteil: str(raw.urteil, 20) } : {}),
     },
   }, { upsert: true });
 }

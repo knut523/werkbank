@@ -232,7 +232,8 @@ export async function integrationSha(dir: string): Promise<{ ref: string; sha: s
 
 /** Prüfbefehle aus `.werkbank/pruefungen.json` des Integrationszweigs (fest gemerkt oder jetzt aufgelöst). Befehl = Argument-Liste. */
 export async function pruefBefehle(dir: string, fest?: { ref: string; sha: string } | null): Promise<{ ref: string; list: PruefBefehl[] } | null> {
-  const ir = fest ?? await integrationSha(dir);
+  // fest = null heißt „beim Anlegen gab es keinen Integrationszweig“ → nie neu auflösen (Pass C, 2: Refs teilen alle Worktrees).
+  const ir = fest === undefined ? await integrationSha(dir) : fest;
   if (!ir) return null;
   const ref = `${ir.ref} @ ${ir.sha.slice(0, 10)}`;
   const r = await git(dir, 'show', `${ir.sha}:.werkbank/pruefungen.json`);

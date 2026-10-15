@@ -291,6 +291,7 @@ const ORCH_BASH_BLOCK: [RegExp, string][] = [
   [git('(?:push|send-pack)'), 'git push'],
   // Plan 165 (Pass B, 2): Referenzen direkt umbiegen (Integrationszweig, aus dem die Brücke Prüfbefehle liest) — nie nötig.
   [git('(?:update-ref|symbolic-ref|replace)'), 'Git-Referenzen direkt ändern'],
+  [new RegExp(GIT + String.raw`fetch(?![\w-])[^|;&\n]*\s\+?[^\s:]*:(?:refs/)?(?:remotes/|heads/)?(?:origin/)?(?:dev|develop|main|master)\b`), 'Integrationszweig per fetch umbiegen'],
   [new RegExp(GIT + String.raw`branch(?![\w-])[^|;&\n]*\s(?:-[a-zA-Z]*[fDMC][a-zA-Z]*|--force|--delete|--move|--copy)\b`), 'Zweige erzwingen/löschen/umbenennen'],
   [/\balias\.[\w-]+/, 'Git-Alias (könnte pushen)'],
   [/\bgit-(send-pack|receive-pack)\b/, 'git push'],

@@ -43,6 +43,7 @@ test('Delegationen: letztes Bild je Kennung, Quoten je Modell und Rolle; ungült
     abweichungen: [], pruefungen: [{ name: 'tests', ok: true }], prueferUrteil: null, urteil: null, aufgabe: 'a.txt schreiben' };
   await M.recordDelegation(u, d, now);
   await M.recordDelegation(u, { ...d, urteil: 'verworfen' }, now + 1000);
+  await M.recordDelegation(u, { ...d, urteil: null }, now + 1500);   // verspätetes Bild ohne Urteil löscht es nicht
   await M.recordDelegation(u, { ...d, id: 'd-bbbbbb', status: 'fehlgeschlagen', abweichungen: ['Abschluss-Block fehlt'], start: now - 60_000 }, now);
   await M.recordDelegation(u, { ...d, id: 'böse' }, now);
   const v = await M.messungView(u, now + 2000);
