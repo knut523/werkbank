@@ -349,7 +349,6 @@ export interface JcodeOut { code: number | null; text: string; usage: Usage; auf
 export type JcodeFn = (o: { cwd: string; prompt: string; model: string; key: string; tools: string; timeoutS: number; killNachMs?: number }) => Promise<JcodeOut>;
 export const jcodeBin = (env = process.env) => env.WERKBANK_JCODE_BIN || join(env.HOME || homedir(), '.local', 'bin', 'jcode');
 
-/** Summe der token_usage einer jcode-Sitzung (wie die Brücke, sessions.ts jcodeUsage) + Zahl der Aufrufe. */
 /** Pfade aus den read-/agentgrep-Aufrufen einer jcode-Sitzung (file_path, file, path, glob). */
 export function sessionPfade(s: any): string[] {
   const out: string[] = [];
@@ -371,6 +370,7 @@ export function ausserhalb(pfade: string[], cwd: string, erlaubt: string[]): str
   });
 }
 
+/** Summe der token_usage einer jcode-Sitzung (wie die Brücke, sessions.ts jcodeUsage) + Zahl der Aufrufe. */
 export function jcodeUsage(s: any): { usage: Usage; aufrufe: number } {
   const u: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   let n = 0;
