@@ -126,7 +126,7 @@ export function PrReviewAbschnitt({ id, pr, onDone }: { id: string; pr: any; onD
   );
 }
 
-const URTEIL: Record<string, string> = { bestaetigt: 'ok', verworfen: '', strittig: 'warn' };
+const URTEIL: Record<string, { t: string; c: string }> = { bestaetigt: { t: 'bestätigt', c: 'ok' }, verworfen: { t: 'verworfen', c: '' }, strittig: { t: 'strittig', c: 'warn' } };
 const ZITAT: Record<string, string> = { ok: '✓ Zitat', nicht_gefunden: '✗ Zitat nicht gefunden', ohne_beleg: '✗ ohne Beleg' };
 
 /** Plan 183: Ergebnis des Schatten-Reviews (Planer + Flash) neben dem bestehenden — nie gepostet. */
@@ -159,14 +159,14 @@ export function SchattenAbschnitt({ pr, onDone }: { pr: any; onDone: () => void 
           {s.energie != null && <span className="tiny muted"> · ≈ {s.energie} Energie</span>}
           {s.p5 && <span className="tiny muted"> · {s.p5} (nur gemessen)</span>}
         </p>
-        {s.fehler && <p className="small err">{s.fehler}</p>}
+        {s.fehler && <p className={`small ${s.status === 'übersprungen' ? 'muted' : 'err'}`}>{s.fehler}</p>}
         {s.strittig?.length > 0 && <><p className="small" style={{ margin: '6px 0 2px' }}><b>Strittig — an Opus/Knut</b> (der Schattenweg empfiehlt deshalb kein „freigeben“ — deine Knöpfe oben bleiben frei):</p>
           <ul className="small" style={{ margin: 0 }} data-testid="schatten-strittig">{s.strittig.map((x: string, i: number) => <li key={i}>{x}</li>)}</ul></>}
         {s.punkte?.length > 0 && <table className="small" style={{ marginTop: 6 }} data-testid="schatten-punkte"><thead><tr><th>Punkt</th><th>Schwere</th><th>Status</th><th>Beleg</th><th>Planer</th><th></th></tr></thead><tbody>
           {s.punkte.map((p: any) => <tr key={p.key}>
             <td><b>{p.key}</b> {p.frage}</td><td>{p.schwere}</td><td>{p.status}</td>
-            <td className="mono tiny">{p.beleg} <span className={p.zitatPruefung === 'ok' ? '' : 'err'}>{ZITAT[p.zitatPruefung] ?? p.zitatPruefung}</span></td>
-            <td><span className={`chip ${URTEIL[p.urteil] ?? ''}`} title={p.grund}>{p.urteil ?? '—'}</span></td>
+            <td className="mono tiny">{p.beleg} <span style={p.zitatPruefung === 'ok' ? undefined : { color: 'var(--bad, #b42318)', fontWeight: 600 }}>{ZITAT[p.zitatPruefung] ?? p.zitatPruefung}</span></td>
+            <td><span className={`chip ${URTEIL[p.urteil]?.c ?? ''}`} title={p.grund}>{URTEIL[p.urteil]?.t ?? p.urteil ?? '—'}</span></td>
             <td>{p.urteil === 'bestaetigt' && p.status === 'befund' && <button className="btn tiny ghost" onClick={() => merken(p)} data-testid="fallstrick-merken">als Fallstrick merken</button>}</td>
           </tr>)}</tbody></table>}
         {s.blind?.length > 0 && <details className="tiny muted" style={{ marginTop: 4 }}><summary>Nicht nachgeprüft ({s.blind.length})</summary><ul>{s.blind.map((x: string, i: number) => <li key={i}>{x}</li>)}</ul></details>}
