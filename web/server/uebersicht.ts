@@ -158,6 +158,7 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null) {
     vonDir: vonDir({ ampel: a, freigabeOffen: !!fg && !fg.pushedAt && !fg.veraltet, kannFreigeben, entscheidungen: offen.map((e) => e.id), rueckfragen: qs.length, braucht, gepusht: !!fg?.pushedAt }),
     entscheidungen: offen, berichtHash: text ? berichtHash(text) : null, rueckfragen: qs, braucht,
     kannFreigeben, freigabe: fg, weitereRepos: felder.weitereRepos ?? [], commitWarnung: felder.commitWarnung ?? null,
+    kopfFehler: kopf ? null : felder.kopfFehler ?? (roh && 'fehler' in roh ? roh.fehler : null),   // wie Heute: unlesbaren Kopf zeigen
     running, wartet: statusWord(d) === 'wartet', seen, chat: sicher(d.url) ? d.url : null, statusAt: d.statusAt ?? d.lastActivity ?? d.startedAt,
   };
 }

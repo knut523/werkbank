@@ -45,7 +45,8 @@ paket('972-cockpit-layouts', ['---', 'status: wartet_auf_knut', 'titel: Cockpit 
   'github:', '  - repo: WirStrom1/olaf-admin', '    zweig: feat/cockpit-layouts', '    commit: 1a2b3c4d', '---', '# Cockpit-Layouts', '',
   '## Entscheidungen', '', '**D1 — KPI-Kacheln für alle gleich?**', '- Optionen: (a) gleich für alle · (b) je Team', '- Empfehlung: (a) gleich für alle', '',
   '**D2 — Benutzerliste zeigt Namen statt E-Mail?**', '- Empfehlung: Namen, E-Mail im Tooltip', ''], { 'folien.html': '<!doctype html><title>Folien</title>', 'screenshots/a.png': 'x' });
-paket('973-rechner-blockiert', ['---', 'status: blockiert', 'titel: Rechner — vereinfachter Tarifrechner', 'worum: Der Bau steht: die Preis-API der Staging-Umgebung antwortet nicht, ohne sie lassen sich die Tarife nicht prüfen.', '---', '# Rechner', '']);
+paket('974-ws-kaputt', ['---', 'status: wartet_auf_knut', 'worum: Kopf: mit Doppelpunkt kaputt', '---', '# Kaputt', '']);
+paket('973-rechner-blockiert', ['---', 'status: blockiert', 'titel: Rechner — vereinfachter Tarifrechner', 'worum: "Der Bau steht: die Preis-API der Staging-Umgebung antwortet nicht, ohne sie lassen sich die Tarife nicht prüfen."', '---', '# Rechner', '']);
 
 const GH = createServer((_q, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ data: {} })); });
 await new Promise<void>((r) => GH.listen(0, '127.0.0.1', () => r()));
@@ -102,7 +103,7 @@ try {
       WERKBANK_ALLOWED_EMAILS: knut.email, WERKBANK_PILOT_EMAIL: knut.email, CREDS_KEY: randomBytes(32).toString('hex'), CREDS_IV: randomBytes(16).toString('hex'),
       WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: join(tmp, 'data'), WERKBANK_MEILI_INDEX: `werkbank_ushots_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_SECRET, JWT_REFRESH_SECRET: REFRESH,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'), WERKBANK_FORGE_MCP: '', WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vs'), WERKBANK_VAULT_SYNC_SCRIPT: '/bin/true',
-      WERKBANK_LEITSTAND_DIR: LEIT, ORCH_AUTO_WEITER_TICK_MS: '300', WERKBANK_REVIEW_DIR: RP, WERKBANK_PAKETE_URL: PAKETE_URL, WERKBANK_GITHUB_API: `http://127.0.0.1:${(GH.address() as any).port}` } }));
+      WERKBANK_LEITSTAND_DIR: LEIT, ORCH_AUTO_WEITER_TICK_MS: '300', WERKBANK_REVIEW_DIR: RP, WERKBANK_PAKETE_URL: PAKETE_URL, WERKBANK_HEUTE_UEBERSICHT: 'on', WERKBANK_GITHUB_API: `http://127.0.0.1:${(GH.address() as any).port}` } }));
   await waitFor(`http://127.0.0.1:${BRIDGE_PORT}/health`);
   await waitFor(`${B}/api/health`);
 
@@ -112,7 +113,7 @@ try {
   const cockpit: any = await internal('/internal/orchestrator/start', { title: 'Cockpit: Team-Layouts', cwd: join(LEIT, 'wt-cockpit'), prompt: `Bericht nach ~/work/knut/review-pakete/972-cockpit-layouts/bericht.md\n${fertig}` });
   await internal('/internal/orchestrator/start', { title: 'Rechner: vereinfachter Tarifrechner', cwd: join(LEIT, 'wt-rechner'), prompt: `Bericht nach ~/work/knut/review-pakete/973-rechner-blockiert/bericht.md\nmock-antwort Steht.\\n### Stand\\n- Braucht Knut: nichts\\nStatus: blockiert` });
   const bot: any = await internal('/internal/orchestrator/start', { title: 'Bot: Gesprächsführung nach Kundentest', cwd: join(LEIT, 'wt-bot'), prompt: 'Der Bot führt Kundengespräche nach dem Kundentest besser: kein wiederholter Preisblock, Verständnis bei Ärger, Kontakt bei Wunsch nach einem Menschen.\nmock-antwort Sieben Gespräche geführt, drei Fehler behoben.\\n### Stand\\n- Erledigt: Preisblock, Ärger, Kontakt\\n- Offen: Umzug-Wissensquelle\\n- Braucht Knut: Soll der Bot beim Stromausfall den Netzbetreiber nennen — mit Link zur Störungsseite?\\nStatus: braucht Antwort' });
-  const ws: any = await internal('/internal/orchestrator/start', { title: 'Workspace: Übersicht mit direktem Handeln', cwd: join(LEIT, 'wt-ws'), prompt: `Die Übersicht bekommt Knöpfe zum direkten Handeln.\n${fertig}` });
+  const ws: any = await internal('/internal/orchestrator/start', { title: 'Workspace: Übersicht mit direktem Handeln', cwd: join(LEIT, 'wt-ws'), prompt: `Die Übersicht bekommt Knöpfe zum direkten Handeln. Bericht nach ~/work/knut/review-pakete/974-ws-kaputt/bericht.md\n${fertig}` });
   console.log('Stränge:', [flex, cockpit, bot, ws].map((x) => x?.id ?? JSON.stringify(x).slice(0, 80)).join(' '));
   await internal('/internal/orchestrator/questions/ask', { title: 'Cockpit: Videos ins Review-Paket oder nur Screenshots?', context: 'Zwei Videos à 40 MB.', options: [{ label: 'Videos mit', consequence: 'Paket größer' }, { label: 'Nur Screenshots' }], recommendation: 'Videos mit', strand: cockpit.id });
   await internal('/internal/orchestrator/questions/ask', { title: 'Nachtbau heute: Bot-Eval mitlaufen lassen?', context: 'Kostet ca. 40 Minuten.', options: [{ label: 'Ja' }, { label: 'Nein' }], recommendation: 'Ja' });
@@ -144,6 +145,9 @@ try {
   pruef(karten.find((k: any) => k.id === cockpit.id)?.rueckfragen.length === 1 && u.lose.length === 1, 'Rückfrage am Strang und eine ohne Strang');
   pruef(!!karten.find((k: any) => k.id === bot.id)?.braucht, 'Bot: „Braucht Knut“ als Antwortfeld');
   pruef(karten.some((k: any) => k.ampel === 'blockiert'), 'Rechner: blockiert');
+  const rechner = karten.find((k: any) => k.ampel === 'blockiert');
+  pruef(rechner?.kurz?.startsWith('Der Bau steht'), 'Rechner: Kurzfassung aus dem Bericht-Kopf, auch ohne festgeschriebenen Kopf');
+  pruef(/YAML unlesbar/.test(karten.find((k: any) => k.id === ws.id)?.kopfFehler ?? ''), 'unlesbarer Bericht-Kopf wird auf der Karte gemeldet');
   pruef(karten.find((k: any) => k.id === flex.id)?.links.some((l: any) => l.art === 'folien' && l.url.startsWith(PAKETE_URL)), 'Folien über den Paketdienst');
   const nonAdmin = await fetch(B + '/api/uebersicht');
   pruef(nonAdmin.status === 401 || nonAdmin.status === 403, `ohne Anmeldung kein Zugriff (${nonAdmin.status})`);
@@ -168,6 +172,15 @@ try {
       await p.getByTestId('uebersicht').waitFor();
       await pause(500);
       await shot(p, `${name}-${dark ? 'dunkel' : 'hell'}-01-uebersicht`);
+      if (!dark) {
+        // D1 vorbereitet: mit WERKBANK_HEUTE_UEBERSICHT=on ersetzt die Übersicht den Review-Teil von Heute; kein Navigationseintrag.
+        pruef(await p.locator('a[href="#/uebersicht"]').count() === 0, `${name}: kein Navigationseintrag „Übersicht“ (D1 offen)`);
+        await p.goto(B + '/#/');
+        await p.getByTestId('heute-uebersicht').waitFor();
+        await pause(600);
+        pruef(await p.getByTestId('orch-questions').count() === 0, `${name}: Rückfragen auf Heute nicht doppelt`);
+        await shot(p, `${name}-hell-08-heute-mit-uebersicht`);
+      }
       await ctx.close();
     }
   }

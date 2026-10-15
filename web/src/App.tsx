@@ -43,7 +43,6 @@ const NAV = [
   { href: '#/board', label: 'Board', ico: '🗂️', match: /^#\/board/ , f: 'board' },
   { href: '#/sprint', label: 'Sprint', ico: '🔁', match: /^#\/sprint/ , f: 'sprint' },
   { href: '#/wissen', label: 'Wissen', ico: '📚', match: /^#\/wissen/ , f: 'wissen' },
-  { href: '#/uebersicht', label: 'Übersicht', ico: '📋', match: /^#\/uebersicht/ , f: 'uebersicht' },
   { href: '#/leitstand', label: 'Hauptchat', ico: '🛰️', match: /^#\/leitstand/ , f: 'leitstand' },
 ];
 const MORE = [

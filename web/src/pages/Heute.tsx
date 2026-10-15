@@ -9,6 +9,7 @@ import { OrchQuestions } from '../orchquestions.tsx';
 import { Mermaid, useMermaidIn } from '../mermaid.tsx';
 import { ExecSummary } from '../execsummary.tsx';
 import { usePushFreigeben } from '../freigabe.tsx';
+import { UebersichtInhalt } from './Uebersicht.tsx';
 
 const BIG: CSSProperties = { minHeight: 44 };
 const STAND: Record<string, [string, string]> = { ja: ['✓', 'ok'], teilweise: ['◐', 'warn'], nein: ['✗', 'bad'] };
@@ -348,7 +349,10 @@ export function Heute({ cfg }: { cfg: Config }) {
   if (t.error) return <div className="page"><Err e={t.error} /></div>;
   if (!d) return <div className="page"><Loading /></div>;
 
-  const allReview = [...(d.strands ?? []), ...d.queue.filter((x: any) => x.bucket === 'review')];
+  // Plan 184, D1: mit Schalter ersetzt die Übersicht (Themen, direktes Handeln) die Strang-Karten und die Rückfragen hier;
+  // Board-Läufe (agent_runs) bleiben als Karten darunter.
+  const ub = admin && !!cfg.heuteUebersicht;
+  const allReview = [...(ub ? [] : d.strands ?? []), ...d.queue.filter((x: any) => x.bucket === 'review')];
   // Schon live (Paket 141): eigene, eingeklappte Gruppe am Ende; die Zahl am Abschnitt zählt nur, was zu prüfen ist.
   const isLive = (x: any) => x.kind === 'strand' && x.stand?.kind === 'live' && !x.running;
   const liveDone = allReview.filter(isLive);
@@ -357,7 +361,7 @@ export function Heute({ cfg }: { cfg: Config }) {
   const review = allReview.filter((x) => !isLive(x)).sort((a, b) => Number(hasTodo(b)) - Number(hasTodo(a)));
   const waitingRuns = d.queue.filter((x: any) => ['frage', 'haengt', 'still'].includes(x.bucket));
   const running = d.queue.filter((x: any) => x.bucket === 'laeuft');
-  const orchOpen = d.orchOpen ?? 0;
+  const orchOpen = ub ? 0 : d.orchOpen ?? 0;   // mit Übersicht stehen die Rückfragen dort (nicht doppelt)
   // Die Zahl an „Wartet auf dich“ = die Plakette „Heute (n)“: offene Vault-Entscheidungen (auch bereinigt noch Hunderte,
   // ein Rückstand) stehen darunter mit eigener Zahl — der bereinigten —, zählen aber nicht mit (Release-Audit 11.10.2026:
   // 445 neben einer Plakette 2; bereinigt 11.10.: 465 Zeilen → 294 offen, docs/plan-heute-fragen-aktuell.md).
@@ -387,8 +391,11 @@ export function Heute({ cfg }: { cfg: Config }) {
 
       {(d.orchAuto ?? []).length > 0 && <p className="small muted" data-testid="orch-auto">🔁 Orchestrator, automatisch fortgesetzt: {d.orchAuto.map((x: any, i: number) => <span key={x.id}>{i ? ', ' : ''}<a href={x.url} target={chatTarget}>{x.title}</a> ({x.n}){x.stopped ? ' — angehalten' : ''}</span>)}</p>}
 
+      {ub && <section data-testid="heute-uebersicht"><UebersichtInhalt eingebettet onChange={reload} /></section>}
+
       {allReview.length > 0 && <section data-testid="review-queue">
-        <h2>Wartet auf dein Review {review.length > 0 ? <span className="chip">{review.length}</span> : <span className="small muted">— nichts zu prüfen</span>}</h2>
+        <h2>{ub ? 'Agentenläufe am Board' : 'Wartet auf dein Review'} {review.length > 0 ? <span className="chip">{review.length}</span> : <span className="small muted">— nichts zu prüfen</span>}
+          {admin && !ub && <a className="small" style={{ marginLeft: 10, fontWeight: 400 }} href="#/uebersicht" data-testid="link-uebersicht">nach Themen, mit direktem Handeln →</a>}</h2>
         {/* Teil C (C4): drei Spalten — Entscheiden · Ansehen · Auf GitHub; Board-Läufe stehen in „Ansehen“. */}
         {review.length > 0 && <p className="row small rq-jump rq-spalten-jump" data-testid="spalten-jump">{SPALTEN.map(([k, label]) => <button key={k} className="btn ghost small" onClick={() => document.getElementById(`spalte-${k}`)?.scrollIntoView()}>{label} ({review.filter((x) => (x.spalte ?? 'ansehen') === k).length})</button>)}</p>}
         <div className="rq-spalten">{SPALTEN.map(([k, label, hint]) => {
@@ -421,7 +428,7 @@ export function Heute({ cfg }: { cfg: Config }) {
         <HygienePanel max={5} title="Deine Tickets" heading="Tickets, die Pflege brauchen" onChange={reload} />
       </section>
 
-      {allReview.length === 0 && nMine === 0 && <div className="card soft empty" data-testid="today-empty">
+      {!ub && allReview.length === 0 && nMine === 0 && <div className="card soft empty" data-testid="today-empty">
         <p><b>Nichts wartet auf dein Review.</b></p>
         <p className="small muted">Neue Arbeit findest du auf der <a href="#/roadmap">Roadmap</a> (Als Nächstes) oder am <a href="#/board">Board</a>.</p>
       </div>}

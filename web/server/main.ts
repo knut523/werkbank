@@ -361,6 +361,8 @@ on('GET', /^\/api\/config$/, async (req, res) => {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: !!process.env.WERKBANK_FORGE_MCP,
     jiraSite: cfg.jiraSite, project: cfg.jiraProject, vault: cfg.vaultDir,
     dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u),
+    // Plan 184, D1: Übersicht ersetzt den Review-Teil von Heute (nur Admins) — Schalter, bis Knut entschieden hat (Vorgabe aus).
+    heuteUebersicht: u?.role === 'ADMIN' && process.env.WERKBANK_HEUTE_UEBERSICHT === 'on',
   });
 });
 

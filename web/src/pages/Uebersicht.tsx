@@ -158,6 +158,7 @@ function Karte({ k, onDone }: { k: any; onDone: (reload?: boolean) => void }) {
       {k.kurz && <p className="ub-kurz">{k.kurz}</p>}
       {k.github.length > 0 && <p className="tiny muted ub-gh">{k.github.map((g: any, i: number) => <span key={i}>{i ? ' · ' : ''}{g.repo} <code>{g.zweig}</code>{g.commit ? <> → <code>{g.commit}</code></> : null}{g.pr ? <> · <a href={g.pr} target="_blank" rel="noreferrer">PR</a></> : null}</span>)}</p>}
       {k.commitWarnung && <p className="tiny rq-warn">⚠ {k.commitWarnung}</p>}
+      {k.kopfFehler && <p className="tiny rq-warn" data-testid="ub-kopf-fehler">⚠ Bericht-Kopf unlesbar: {k.kopfFehler}</p>}
       {k.links.length > 0 && <div className="ub-links">{k.links.map((l: any) => <a key={l.url} href={l.url} target={l.url.startsWith('#') ? undefined : l.art === 'chat' ? chatTarget : '_blank'} rel="noreferrer" data-art={l.art}>{l.label}</a>)}</div>}
       <p className="ub-von" data-testid="ub-von"><b>Von dir:</b> {k.vonDir}</p>
       <div className="row ub-aktionen">
@@ -192,7 +193,8 @@ function Thema({ t, onDone }: { t: any; onDone: (reload?: boolean) => void }) {
   );
 }
 
-export function Uebersicht({ cfg }: { cfg: Config }) {
+/** Inhalt der Übersicht — eigenständig (#/uebersicht) oder eingebettet als Review-Teil von Heute (Plan 184, D1). */
+export function UebersichtInhalt({ eingebettet = false, onChange }: { eingebettet?: boolean; onChange?: () => void }) {
   const d = useLoad(() => api('/api/uebersicht'));
   const x: any = d.data;
   const neu = () => api('/api/uebersicht').then(d.setData).catch(() => {});
@@ -203,17 +205,16 @@ export function Uebersicht({ cfg }: { cfg: Config }) {
     document.addEventListener('visibilitychange', vis);
     return () => { clearInterval(id); document.removeEventListener('visibilitychange', vis); };
   }, []);
-  if (cfg.user?.role !== 'ADMIN') return <div className="page"><p className="muted">Nur für Admins.</p></div>;
-  if (d.error) return <div className="page"><Err e={d.error} /></div>;
-  if (!x) return <div className="page"><Loading /></div>;
-  const onDone = () => { neu(); };
+  if (d.error) return <Err e={d.error} />;
+  if (!x) return <Loading />;
+  const onDone = () => { neu(); onChange?.(); };
   const n = x.themen.reduce((s: number, t: any) => s + t.karten.length, 0);
+  const stand = <>Stand {fmtDateTime(x.at)} · {n} {n === 1 ? 'Unter-Chat' : 'Unter-Chats'} · <b>Von dir: {x.vonDir}</b> · <button className="linklike" onClick={neu}>neu laden</button></>;
   return (
-    <div className="page ub" data-testid="uebersicht">
-      <header className="ub-head">
-        <h1>Übersicht: Was fertig ist</h1>
-        <p className="muted small">Stand {fmtDateTime(x.at)} · {n} {n === 1 ? 'Unter-Chat' : 'Unter-Chats'} · <b>Von dir: {x.vonDir}</b> · <button className="linklike" onClick={neu}>neu laden</button></p>
-      </header>
+    <div className="ub" data-testid="uebersicht">
+      {eingebettet
+        ? <header className="ub-head"><h2>Wartet auf dein Review <span className="chip">{x.vonDir}</span></h2><p className="muted small">{stand}</p></header>
+        : <header className="ub-head"><h1>Übersicht: Was fertig ist</h1><p className="muted small">{stand}</p></header>}
       {x.fragenFehler && <p className="chip bad" role="alert">Rückfragen gerade nicht lesbar — hier fehlen evtl. offene Fragen. Später neu laden.</p>}
       {x.dryRun && <p className="chip warn">Vorschau (Trockenlauf): Antworten an Unter-Chats sind aus.</p>}
       <section className="card ub-exec">
@@ -229,4 +230,10 @@ export function Uebersicht({ cfg }: { cfg: Config }) {
       {!n && !x.lose.length && <div className="card soft empty"><p><b>Nichts offen.</b></p><p className="small muted">Neue Unter-Chats startet der Hauptchat.</p></div>}
     </div>
   );
+}
+
+/** Eigene Seite #/uebersicht (ohne Navigationseintrag, bis Knut D1 entschieden hat). */
+export function Uebersicht({ cfg }: { cfg: Config }) {
+  if (cfg.user?.role !== 'ADMIN') return <div className="page"><p className="muted">Nur für Admins.</p></div>;
+  return <div className="page"><UebersichtInhalt /></div>;
 }
