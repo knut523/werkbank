@@ -34,11 +34,12 @@ export const ENERGIE_JE_EURO = 10_000;
 export const FAKTOREN_VORGABE: Record<string, Faktor> = {
   'glm-5.3': { in: 10_000, out: 30_000 }, 'glm-5.3-flash': { in: 1000, out: 4000 }, 'deepseek-v4.1-flash': { in: 2000, out: 10_000 }, 'deepseek-v4-flash-0731': { in: 1000, out: 2500 },
 };
-// Rollen in Wunsch-Reihenfolge, Verteilung über alle vier PRO-Modelle (Knut 15.10.: „das Kontingent wirklich nutzen“).
+// Rollen in Wunsch-Reihenfolge — nur die kleinen Modelle (Knut 15.10. abends: „per default flash und nur bei qualitativ
+// hochwertigen Aufgaben das GLM-Modell“). glm-5.3 nur noch: challenge mit hoch/council und Ersatz im Hauptchat.
 export const ROLLEN_VORGABE: Record<string, string[]> = {
-  leser: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731', 'glm-5.3'],
-  schreiber: ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'],
-  niedrig: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731', 'glm-5.3'],
+  leser: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'],
+  schreiber: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'],
+  niedrig: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'],
 };
 export const ROLLEN = ['leser', 'schreiber', 'niedrig'];
 // Im PRO-Abo enthalten (Hotfix 15.10., Knut: „bei Melious nur die Modelle nutzen, die auch im Abo drin sind“); Einstellung „abo“.
@@ -166,19 +167,74 @@ const CHALLENGE: Record<string, string> = {
   plan: 'Du bist Advocatus Diaboli für einen Umsetzungsplan. Suche die schwächsten Annahmen, fehlende Fälle, Reihenfolge- und Rückweg-Probleme, Risiken für Betrieb und Daten. Je Punkt: was genau, warum es schiefgeht, was man im Plan ändern sollte. Kurz, auf Deutsch.',
   council: 'Du bist der Advocatus Diaboli in einem Council. Vertritt die stärkste Gegenposition zur vorgeschlagenen Entscheidung, mit Begründung, und nenne Bedingungen, unter denen du zustimmen würdest. Kurz, auf Deutsch.',
 };
-export async function meliousChallenge(u: User, art: string, text: string, frage = ''): Promise<{ ok: boolean; text?: string; energie?: number; bezahlt?: string | null; umwelt?: unknown; error?: string }> {
+// Fix 15.10. (Knut: „per default flash und nur bei qualitativ hochwertigen Aufgaben das GLM-Modell“): GLM denkt vor der Antwort
+// 9 000–10 600 Tokens (gemessen auf 40 000 Zeichen Diff); mit max_tokens 4000 blieb `content` leer, bezahlt wurde trotzdem.
+// Jetzt: Flash als Vorgabe, glm-5.3 nur für council oder hoch=true; Text in Stücke an Dateigrenzen, parallel; 16 000 Tokens je
+// Stück; leere Antwort ist nie „ok“. Je Stück unter der 300-s-Grenze des Web-Servers (Node requestTimeout).
+export const CHALLENGE_STUECK = 20_000;
+export const CHALLENGE_MAX_TOKENS = 16_000;
+const CHALLENGE_PARALLEL = 4;
+const CHALLENGE_TIMEOUT_MS = 270_000;
+
+/** Text in Stücke ≤ max Zeichen: an `diff --git`-Grenzen, sonst an Zeilen; ein zu langes Stück wird an Zeilen geteilt. */
+export function teileText(t: string, max = CHALLENGE_STUECK): string[] {
+  if (t.length <= max) return [t];
+  const bloecke = t.split(/(?=^diff --git )/m);
+  const out: string[] = [];
+  let cur = '';
+  const push = (x: string) => { if (x.trim()) out.push(x); };
+  for (const b of bloecke) {
+    if (b.length > max) {
+      push(cur); cur = '';
+      let teil = '';
+      for (const zeile of b.split(/(?<=\n)/)) {
+        if (teil.length + zeile.length > max && teil) { push(teil); teil = ''; }
+        teil += zeile.length > max ? zeile.slice(0, max) : zeile;
+      }
+      push(teil);
+    } else if (cur.length + b.length > max) { push(cur); cur = b; }
+    else cur += b;
+  }
+  push(cur);
+  return out;
+}
+
+export async function meliousChallenge(u: User, art: string, text: string, frage = '', hoch = false): Promise<{ ok: boolean; text?: string; energie?: number; bezahlt?: string | null; umwelt?: unknown; error?: string; modell?: string; teile?: number; leer?: number }> {
   const s = await meliousSettings(u);
   if (!s.configured) return { ok: false, error: 'Kein Melious-Schlüssel hinterlegt.' };
   if (!CHALLENGE[art]) return { ok: false, error: 'art: diff, plan oder council.' };
   const t = String(text ?? '').slice(0, 200_000);
   if (!t.trim()) return { ok: false, error: 'Text fehlt.' };
-  const model = s.ketteModell || 'glm-5.3';
-  const j = await chatCompletion(u, { model, max_tokens: 4000, messages: [{ role: 'system', content: CHALLENGE[art] }, { role: 'user', content: `${frage ? `Frage des Leads: ${String(frage).slice(0, 2000)}\n\n` : ''}${t}` }] }, 180_000);
-  if (!j || j.error) return { ok: false, error: `Melious antwortet nicht${j?.error ? ` (${j.error})` : ''}.` };
-  const usage = { input: Number(j.usage?.prompt_tokens) || 0, output: Number(j.usage?.completion_tokens) || 0, cacheRead: Number(j.usage?.prompt_tokens_details?.cached_tokens) || 0, cacheWrite: 0 };
-  usage.input = Math.max(0, usage.input - usage.cacheRead);
-  const booked = await recordMeliousUsage(u, usage, Date.now(), model);
-  return { ok: true, text: String(j.choices?.[0]?.message?.content ?? '').trim(), energie: Number(j.billing_cost?.energy) || r2(booked.energie), bezahlt: j.billing_cost?.paid_with ?? null, umwelt: j.environment_impact ?? null };
+  const model = art === 'council' || hoch ? (s.ketteModell || 'glm-5.3') : 'glm-5.3-flash';
+  const teile = art === 'council' ? [t.slice(0, CHALLENGE_STUECK)] : teileText(t);
+  const kopf = frage ? `Frage des Leads: ${String(frage).slice(0, 2000)}\n\n` : '';
+  const ergebnisse: { text: string; abgeschnitten: boolean; energie: number; bezahlt: string | null; umwelt: unknown; fehler?: string }[] = new Array(teile.length);
+  let next = 0;
+  const worker = async () => {
+    for (let i = next++; i < teile.length; i = next++) {
+      const hinweis = teile.length > 1 ? `(Teil ${i + 1} von ${teile.length} eines größeren Textes — prüfe nur diesen Teil.)\n\n` : '';
+      const j = await chatCompletion(u, { model, max_tokens: CHALLENGE_MAX_TOKENS, messages: [{ role: 'system', content: CHALLENGE[art] }, { role: 'user', content: `${kopf}${hinweis}${teile[i]}` }] }, CHALLENGE_TIMEOUT_MS);
+      if (!j || j.error) { ergebnisse[i] = { text: '', abgeschnitten: false, energie: 0, bezahlt: null, umwelt: null, fehler: `Melious antwortet nicht${j?.error ? ` (${j.error})` : ''}` }; continue; }
+      const usage = { input: Number(j.usage?.prompt_tokens) || 0, output: Number(j.usage?.completion_tokens) || 0, cacheRead: Number(j.usage?.prompt_tokens_details?.cached_tokens) || 0, cacheWrite: 0 };
+      usage.input = Math.max(0, usage.input - usage.cacheRead);
+      const booked = await recordMeliousUsage(u, usage, Date.now(), model);   // je Stück sofort gebucht, nicht erst am Ende
+      ergebnisse[i] = { text: String(j.choices?.[0]?.message?.content ?? '').trim(), abgeschnitten: j.choices?.[0]?.finish_reason === 'length',
+        energie: Number(j.billing_cost?.energy) || r2(booked.energie), bezahlt: j.billing_cost?.paid_with ?? null, umwelt: j.environment_impact ?? null };
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CHALLENGE_PARALLEL, teile.length) }, worker));
+  const energie = r2(ergebnisse.reduce((a, e) => a + (e?.energie || 0), 0));
+  const mitText = ergebnisse.filter((e) => e?.text);
+  const leer = ergebnisse.length - mitText.length;
+  if (!mitText.length) {
+    const f = ergebnisse.find((e) => e?.fehler)?.fehler;
+    return { ok: false, error: f ?? `${model} lieferte keine Antwort (Denkbudget erschöpft${ergebnisse.some((e) => e?.abgeschnitten) ? ', abgeschnitten' : ''}) — Text kleiner machen oder selbst prüfen.`, energie, modell: model, teile: teile.length, leer };
+  }
+  const textAll = teile.length === 1
+    ? mitText[0].text + (mitText[0].abgeschnitten ? '\n\n_(Antwort am Token-Ende abgeschnitten.)_' : '')
+    : ergebnisse.map((e, i) => `### Teil ${i + 1} von ${teile.length}\n${e?.text ? e.text + (e.abgeschnitten ? '\n_(abgeschnitten)_' : '') : `_(keine Antwort${e?.fehler ? `: ${e.fehler}` : ''})_`}`).join('\n\n');
+  const erster = mitText[0];
+  return { ok: true, text: textAll, energie, bezahlt: erster.bezahlt, umwelt: erster.umwelt, modell: model, teile: teile.length, leer };
 }
 
 /** Preisliste höchstens einmal am Tag holen (kostet keine Energie) und speichern. Fehler: alte Faktoren bleiben. */

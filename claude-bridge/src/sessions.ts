@@ -367,6 +367,8 @@ export function isBoardRun(l: { readonly: boolean; mode: PermissionMode }): bool
 
 // Parallele Chats (Plan docs/plan-parallele-chats.md, Knut 07.10.2026): so viele Züge je Person gleichzeitig.
 // 1 = das Verhalten vor dem 07.10. (ein Chat zur Zeit). Jeder neue Chat hat seinen eigenen Ordner (workDirFor).
+/** Ketten-Modell für Unter-Stränge, wenn alle Claude-Konten erschöpft sind (der Hauptchat nimmt das Ketten-Modell der Einrichtung). */
+export const KETTE_STRANG_MODELL = process.env.BRIDGE_KETTE_STRANG_MODELL || 'glm-5.3-flash';
 export const maxParallelChats = () => Math.max(1, Number(process.env.BRIDGE_MAX_PARALLEL_CHATS || 3));
 
 /** Darf ein neuer Zug starten? Chats: bis maxParallelChats() gleichzeitig je Person; Board-Läufe: bis MAX_BOARD_RUNS daneben. */
@@ -1271,7 +1273,10 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Ersatzkette für Hauptchat und Strang-Leads (Knut 15.10.: „keine Limitations“): Opus → Sonnet → Melious, ohne Warten.
   const ketteMit = (m?: Account) => !!m?.kette && (live.leit || (live.orch && !profilMel));
   // strandClaude kann sich im Zug ändern (Phasenwechsel, Plan 165) — deshalb bei jedem Aufruf neu gelesen.
-  const plan = (kette: boolean) => planQueue(accounts, exhaustedOf(user), { conv: key, chatOn, overflow: risiko === 'niedrig', kette, sonnetStufe: !/^(sonnet|haiku)$/.test(String(strandClaude ?? req.model ?? '')) });
+  // Knut 15.10. (550 000 Energie, 16 Stränge auf glm-5.3): ist Claude leer, bekommt NUR der Hauptchat das große Ketten-Modell
+  // (mit Warnung); Unter-Stränge laufen dann auf dem kleinen Modell (glm-5.3-flash), nicht auf dem Lead-Modell.
+  const ketteModellFuer = live.leit ? undefined : KETTE_STRANG_MODELL;
+  const plan = (kette: boolean) => planQueue(accounts, exhaustedOf(user), { conv: key, chatOn, overflow: risiko === 'niedrig', kette, ketteModell: ketteModellFuer, sonnetStufe: !/^(sonnet|haiku)$/.test(String(strandClaude ?? req.model ?? '')) });
   const leadQueue = () => plan(ketteMit(accounts.find(isMelious)));
   // Worker (Plan 165, C7): zuerst Melious, solange der Rest über der Reserve für die Lead-Ersatzkette liegt; Claude nur Haiku/Sonnet,
   // höchstens workerClaudeMax() gleichzeitig je Person und gar nicht, sobald ein Claude-Konto erschöpft ist. Keine Ersatzkette.

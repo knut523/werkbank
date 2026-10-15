@@ -113,6 +113,9 @@ test('Ersatzkette (planQueue): Claude mit Opus → alle Claude-Konten mit Sonnet
   assert.deepEqual(q.map((a) => `${a.id}${a.chainModel ? ':' + a.chainModel : ''}`), ['a1', 'chat', 'a1:sonnet', 'chat:sonnet', 'melious:glm-5.3']);
   const q2 = planQueue([C1, C2, M2], {}, { conv: 'k2', chatOn: false, kette: true, sonnetStufe: false });
   assert.deepEqual(q2.map((a) => `${a.id}${a.chainModel ? ':' + a.chainModel : ''}`), ['a1', 'chat', 'melious:glm-5.3']);
+  // Knut 15.10.: Unter-Stränge bekommen das kleine Ketten-Modell (Aufrufer setzt ketteModell), der Hauptchat das der Einrichtung.
+  const q3 = planQueue([C1, C2, M2], {}, { conv: 'c', chatOn: false, kette: true, sonnetStufe: false, ketteModell: 'glm-5.3-flash' });
+  assert.equal(q3.at(-1)!.chainModel, 'glm-5.3-flash');
 });
 
 test('Env je Konto: Melious = Basis-URL + API-Schlüssel ohne OAuth; zurück auf Claude = wie bisher ohne Basis-URL', () => {
@@ -385,16 +388,16 @@ test('Rollen-Profile (S6): voll wie bisher; bauer nur vault-search/werkbank; les
   assert.equal((await orchState('an')).find((x: any) => x.conv === conv(17)).profil, 'voll');
 });
 
-test('Ersatzkette im Strang (Knuts Setup): Opus erschöpft → Sonnet auf allen Konten → Melious glm-5.3, ohne Warten; Modell im Protokoll', async () => {
+test('Ersatzkette im Strang (Knuts Setup): Opus erschöpft → Sonnet auf allen Konten → Melious glm-5.3-flash (Knut 15.10.: Unter-Stränge nie auf dem Lead-Modell), ohne Warten; Modell im Protokoll', async () => {
   ACCOUNTS.limitkette = [{ id: 'a1', label: 'Firma', token: tok('limit-kette') }, { id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ token: key('kette'), kette: true, ketteModell: 'glm-5.3', rest: 1_000_000 })];
   await register('limitkette', conv(40), { risiko: 'mittel' });
   const t = await send(conv(40), 'Hallo', 'limitkette');
   assert.match(t, /↻ Ersatzkette: Claude Sonnet \(„Firma“\) übernimmt/);
-  assert.match(t, /↻ Ersatzkette: Melious glm-5\.3 übernimmt/);
-  assert.match(t, /Modell: glm-5\.3;/);
+  assert.match(t, /↻ Ersatzkette: Melious glm-5\.3-flash übernimmt/);
+  assert.match(t, /Modell: glm-5\.3-flash;/);
   assert.doesNotMatch(t, /Claude-Kontingent ist gerade ausgeschöpft/);
   await new Promise((r) => setTimeout(r, 100));
-  assert.equal((await orchState('limitkette')).find((x: any) => x.conv === conv(40)).turn.modell, 'Melious glm-5.3');
+  assert.equal((await orchState('limitkette')).find((x: any) => x.conv === conv(40)).turn.modell, 'Melious glm-5.3-flash');
   // Profil „schreiber“: zuerst Melious, Modell aus der Rolle „schreiber“.
   ACCOUNTS.schreib = [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ token: key('schreib'), rollen: { schreiber: ['deepseek-v4-flash-0731'] }, pool: [{ model: 'deepseek-v4-flash-0731', frei: 1 }] })];
   assert.equal((await register('schreib', conv(41), { profil: 'schreiber' })).status, 200);

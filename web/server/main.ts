@@ -2677,8 +2677,8 @@ on('POST', /^\/internal\/melious-usage$/, async (req, res) => {
 on('POST', /^\/internal\/melious-challenge$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
-  const r = await meliousChallenge(u, String(b.art ?? ''), String(b.text ?? ''), String(b.frage ?? ''));
-  log('melious challenge', { user: u.id, art: String(b.art ?? ''), ok: r.ok, energie: r.energie ?? null, error: r.error ?? null });
+  const r = await meliousChallenge(u, String(b.art ?? ''), String(b.text ?? ''), String(b.frage ?? ''), b.hoch === true);
+  log('melious challenge', { user: u.id, art: String(b.art ?? ''), ok: r.ok, energie: r.energie ?? null, error: r.error ?? null, modell: r.modell ?? null, teile: r.teile ?? null, leer: r.leer ?? null });
   await recordChallenge(u, b.conv, b.art, r.ok).catch(() => {});
   send(res, 200, r);
 });

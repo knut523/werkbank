@@ -284,8 +284,8 @@ test('Phasenwechsel nach Ersatz-Lead (C6): Brücke prüft den Strang-Stand und h
   await register('limitk', conv(9), dir, { risiko: 'mittel' });
   writeFileSync(join(dir, 'uebergabe.md'), UEB);
   const t = await send(conv(9), lead([{ tool: 'phase_wechseln', args: { phase: 'bau', uebergabe: 'uebergabe.md' } }]), 'limitk');
-  // Erster Wechsel: noch kein Zug auf der Kette in dieser Phase gemeldet → erst der zweite Wechsel prüft.
-  assert.match(t, /↻ Ersatzkette: Melious glm-5\.3 übernimmt/);
+  // Erster Wechsel: noch kein Zug auf der Kette in dieser Phase gemeldet → erst der zweite Wechsel prüft. Strang → kleines Ketten-Modell.
+  assert.match(t, /↻ Ersatzkette: Melious glm-5\.3-flash übernimmt/);
   const t2 = await send(conv(9), lead([{ tool: 'phase_wechseln', args: { phase: 'review', uebergabe: 'uebergabe.md' } }]), 'limitk');
   assert.match(t2, /Die Brücke hat den Stand geprüft \(Ersatz-Lead\): ROTE Prüfungen/);
   assert.match(t2, /Brücken-Prüfung ja/);
