@@ -1206,9 +1206,12 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Überlauf auf Melious nur bei niedrigem Risiko (Modellwahl v2): Hauptchat nie, Stränge nur mit Risiko „niedrig“, Chats ja.
   const risiko: Risiko = live.leit ? 'hoch' : orchMap[key]?.risiko ?? (live.orch ? 'mittel' : 'niedrig');
   // Energietopf nahe der Obergrenze (vorrang, Werkbank): niedrig-riskante Arbeit zuerst auf Melious, damit nichts verfällt.
-  const chatOn = meliousChatOn(key) || !!strandMel || profil === 'leser' || profil === 'schreiber' || (!!melAcc?.vorrang && risiko === 'niedrig');
+  // Ein ausdrücklich gesetztes Claude-Modell des Strangs (`--modell claude:…`) schlägt Profil und Vorrang (Befund live 15.10.:
+  // `--modell claude:opus --profil schreiber` lief auf Melious); Melious bleibt dann nur Ersatz, wenn Claude erschöpft ist.
+  const profilMel = (profil === 'leser' || profil === 'schreiber') && !strandClaude;
+  const chatOn = meliousChatOn(key) || !!strandMel || profilMel || (!!melAcc?.vorrang && risiko === 'niedrig' && !strandClaude);
   // Ersatzkette für Hauptchat und Strang-Leads (Knut 15.10.: „keine Limitations“): Opus → Sonnet → Melious, ohne Warten.
-  const ketteMit = (m?: Account) => !!m?.kette && (live.leit || (live.orch && profil !== 'leser' && profil !== 'schreiber'));
+  const ketteMit = (m?: Account) => !!m?.kette && (live.leit || (live.orch && !profilMel));
   const bestellt = strandClaude ?? req.model;
   const plan = (kette: boolean) => planQueue(accounts, exhaustedOf(user), { conv: key, chatOn, overflow: risiko === 'niedrig', kette, sonnetStufe: !/^(sonnet|haiku)$/.test(String(bestellt ?? '')) });
   const queue = plan(ketteMit(melAcc));
