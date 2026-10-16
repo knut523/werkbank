@@ -413,8 +413,8 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
         </div>
         {planen === 'vault' && vq && <WartetAufDich x={{ questions: [], prs: [], pendingApprovals: [], draft: null }} decisions={vq.open} today={vq} onChange={neu} />}
         {planen === 'pflege' && <HygienePanel max={5} title="Deine Tickets" onChange={neu} />}
-        {planen === 'tickets' && <ul className="small plain" data-testid="ub-meine-tickets">{d.mine.tickets.slice(0, 30).map((t: any) => <li key={t.key} className="item">
-          <span className="chip" title={t.site === cfgMain ? 'Jira maxenergy (PM)' : 'Entwicklungs-Jira'}>{t.site ?? cfgMain}</span> <a href={`#/board?site=${t.site ?? cfgMain}&key=${t.key}`}><b>{t.key}</b></a> {t.summary} <span className="tiny">· {t.why}</span></li>)}</ul>}
+        {planen === 'tickets' && <ul className="small plain" data-testid="ub-meine-tickets">{(d.mine?.tickets ?? []).slice(0, 30).map((t: any) => <li key={t.key} className="item">
+          <span className="chip" title={(t.site ?? cfgMain) === cfgMain ? 'Jira maxenergy (PM)' : 'Entwicklungs-Jira'}>{t.site ?? cfgMain}</span> <a href={`#/board?site=${t.site ?? cfgMain}&key=${t.key}`}><b>{t.key}</b></a> {t.summary} <span className="tiny">· {t.why}</span></li>)}</ul>}
       </section>
 
       {offen && (schublade || ansicht) && <Schublade k={offen} tab={schublade?.tab ?? ansicht!.art} setTab={(tab) => { setAnsicht(null); setSchublade({ id: offen.id, tab }); }} onClose={() => { setSchublade(null); if (ansicht) { setAnsicht(null); zurueck(); } }} onDone={neu} />}

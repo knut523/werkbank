@@ -63,7 +63,7 @@ export function olafIssues() {
   ];
 }
 
-export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: boolean; issues?: any[]; noSprints?: boolean } = {}): Promise<JiraMock> {
+export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: boolean; issues?: any[]; noSprints?: boolean; truncateSprint?: boolean } = {}): Promise<JiraMock> {
   const issues = opts.issues ?? demoIssues();   // eigene Tickets: zweite Jira-Seite (Release 17b, z. B. OLAF-394)
   const writes: any[] = [];
   const faults: MockFaults = {};
@@ -87,7 +87,7 @@ export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: b
       const inc = String(body.jql ?? '').match(/updated >= -(\d+)m/);
       let pool = inc ? issues.filter((i) => Date.parse(i.fields.updated) >= Date.now() - Number(inc[1]) * 60_000) : issues;
       // „sprint in openSprints()“ (17c, Sprint-Übersicht weiterer Seiten): Testmerkmal fields.sprintOpen; noSprints → 400 wie ein Projekt ohne Sprints.
-      if (/sprint in openSprints\(\)/.test(String(body.jql ?? ''))) { if (opts.noSprints) return send(400, { errorMessages: ["Field 'sprint' does not exist"] }); pool = pool.filter((i) => i.fields.sprintOpen === true); }
+      if (/sprint in openSprints\(\)/.test(String(body.jql ?? ''))) { if (opts.noSprints) return send(400, { errorMessages: ["Field 'sprint' does not exist"] }); if (opts.truncateSprint) return send(200, { issues: [], nextPageToken: '1' }); pool = pool.filter((i) => i.fields.sprintOpen === true); }
       // „text ~ "x"“ / „summary ~ "x"“ (einfach: Teilwort, ohne Groß/klein); staleSearch: frisch Angelegtes fehlt noch.
       const txt = [...String(body.jql ?? '').matchAll(/\b(text|summary) ~ "([^"]*)"/g)];
       if (txt.length) {

@@ -135,7 +135,7 @@ test('Löschschutz lässt sich nach echtem Schrumpfen bestätigt übergehen; Lab
 // Eigener Nachbau, eigene Collection, eigener Stand, eigene Sperre — PM bleibt unberührt.
 test('17c: OLAF-Kopie — eigene Collection, Epics als Bahnen, offener Sprint, Löschschutz und Sperre je Seite', async () => {
   const { olafIssues } = await import('./jira-mock.ts');
-  const o: { noSprints?: boolean; issues?: any[] } = { issues: olafIssues() };
+  const o: { noSprints?: boolean; truncateSprint?: boolean; issues?: any[] } = { issues: olafIssues() };
   const m2 = await startJiraMock(0, o);
   const prevSites = process.env.WERKBANK_JIRA_SITES;
   process.env.WERKBANK_JIRA_SITES = JSON.stringify([
@@ -167,6 +167,11 @@ test('17c: OLAF-Kopie — eigene Collection, Epics als Bahnen, offener Sprint, L
     assert.equal(b.lanes.find((l: any) => l.key === '—')?.name, 'Ohne Epic');
     assert.equal(b.totals.orphans, 0, 'ohne Epic ist im Entwicklungs-Jira kein Fehler');
     assert.ok(!JSON.stringify(b.lanes).includes('"noGoal":true'), 'keine Ziel-Mahnung ohne PM-Regeln');
+    // Sprint-Liste unvollständig geblättert (Pass C): Mitgliedschaft bleibt wie sie war
+    o.truncateSprint = true;
+    await J.syncMirror(creds, 'test', {}, olaf);
+    assert.deepEqual((await col.find({ openSprint: true }).toArray()).map((i: any) => i.key).sort(), ['OLAF-395', 'OLAF-398']);
+    o.truncateSprint = false;
     // Löschschutz je Seite: OLAF liefert plötzlich fast nichts → OLAF-Fehler, PM-Stand unberührt
     const saved = m2.issues.splice(0, 4);
     await assert.rejects(J.syncMirror(creds, 'test', {}, olaf), /nichts gelöscht/);

@@ -68,7 +68,7 @@ function Card({ i, onOpen, expanded, onToggle, fresh, mover }: { i: any; onOpen:
       draggable={!!mover} onDragStart={(e) => { e.dataTransfer.setData('text/plain', i.key); e.dataTransfer.effectAllowed = 'move'; mover?.start(i); }} onDragEnd={() => mover?.end()}>
       <div className="k"><span>{i.key}{/^sub-?task$/i.test(i.type ?? '') ? ' · Sub' : ''}</span><span className="row" style={{ gap: 4 }}>{i.priority && i.priority !== 'Medium' ? i.priority : ''}{mover && <button className="btn ghost small movebtn" aria-label={`${i.key} verschieben nach …`} title="Verschieben nach …" onClick={(e) => { e.stopPropagation(); mover.menu(i); }}>⇄</button>}</span></div>
       <div className="s">{i.summary}</div>
-      {i.broken && (i.type === 'Sub-task'
+      {i.broken && (/^sub-?task$/i.test(i.type ?? '')
         ? <div className="chip bad" style={{ marginBottom: 4 }} title="Sub-task ohne Parent-Ticket — in Jira einem Ticket zuordnen oder in einen Task umwandeln">⚠ kaputt: {i.broken}</div>
         : <div className="chip bad" style={{ marginBottom: 4 }} title="Jedes Ticket hängt an einem Workstream (olaf-jira). In Jira den Parent auf den passenden Workstream setzen — oder im Chat fragen, wohin es gehört.">⚠ {i.broken} — in Jira Parent setzen</div>)}
       <div className="row" style={{ gap: 4 }}>
@@ -471,15 +471,28 @@ function MoveToast({ text, dry, onConfirm, onUndo, busy }: { text: string; dry: 
 /** Seiten mit eigener Kopie (Hauptseite zuerst). */
 export const boardSites = (cfg: Config) => (cfg.jiraSites ?? []).filter((x) => x.main || x.mirror);
 /** Gewählte Seite: `?site=` in der Adresse, sonst die gespeicherte Auswahl, sonst die Hauptseite. Umschalten speichert. */
-export function useBoardSite(cfg: Config, hash: string): [string, (p: string) => void] {
+/** `null` = Auswahl noch nicht geladen (dann nichts zeigen statt kurz die falsche Seite). */
+export function useBoardSite(cfg: Config, hash: string): [string | null, (p: string) => void] {
   const sites = boardSites(cfg);
   const main = sites.find((x) => x.main)?.prefix ?? cfg.project;
-  const fromHash = new URLSearchParams(hash.split('?')[1] ?? '').get('site')?.toUpperCase();
+  // `site=` oder — bei Links wie `#/board?key=OLAF-394` (Ticket-Kacheln, 17b) — die Seite des Schlüssels.
+  const hp = new URLSearchParams(hash.split('?')[1] ?? '');
+  const fromHash = hp.get('site')?.toUpperCase() ?? sites.find((x) => (hp.get('key') ?? '').startsWith(x.prefix + '-'))?.prefix;
   const prefs = useLoad(() => api('/api/prefs'), []);
   const [chosen, setChosen] = useState<string | null>(null);
   const saved = (prefs.data as any)?.boardSite as string | undefined;
-  const pick = [chosen, fromHash, saved].find((x) => x && sites.some((s) => s.prefix === x)) ?? main;
-  const set = (x: string) => { setChosen(x); api('/api/prefs', { body: { boardSite: x } }).catch(() => {}); };
+  const ok = (x?: string | null) => !!x && sites.some((s) => s.prefix === x);
+  // Ein Link mit site=/key= gewinnt (auch nach einem Umschalten in derselben Ansicht); set() nimmt beides aus der Adresse.
+  const explicit = (hp.has('site') || hp.has('key')) && ok(fromHash) ? fromHash : null;
+  const pick = [explicit, chosen, saved].find(ok) ?? (prefs.loading && !prefs.error && sites.length > 1 ? null : main);
+  const set = (x: string) => {
+    setChosen(x);
+    api('/api/prefs', { body: { boardSite: x } }).catch(() => {});
+    // `site=`/`key=` aus der Adresse nehmen: sonst gewänne nach dem Neuladen die alte Seite, und ein offenes Ticket der
+    // anderen Seite ginge auf dem neuen Board auf (Pass C).
+    const [path, qs] = window.location.hash.split('?');
+    if (qs) { const q = new URLSearchParams(qs); if (q.has('site') || q.has('key')) { q.delete('site'); q.delete('key'); window.location.hash = path + (q.toString() ? `?${q}` : ''); } }
+  };
   return [pick, set];
 }
 export function SiteSwitch({ cfg, site, onPick, what }: { cfg: Config; site: string; onPick: (p: string) => void; what: string }) {
@@ -496,6 +509,7 @@ const siteState = new Map<string, { owner: string; filter: string; q: string; do
 
 export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
   const [site, setSite] = useBoardSite(cfg, hash);
+  if (!site) return <div className="page wide"><Loading /></div>;
   return <BoardSite key={site} cfg={cfg} hash={hash} site={site} onSite={setSite} />;
 }
 
@@ -504,13 +518,15 @@ function BoardSite({ cfg, hash, site, onSite }: { cfg: Config; hash: string; sit
   const st = siteState.get(site);
   const main = !boardSites(cfg).some((x) => x.prefix === site && !x.main);
   const [owner, setOwner] = useState(st?.owner ?? params.get('owner') ?? '');
-  const [filter, setFilter] = useState(st?.filter ?? params.get('filter') ?? '');
+  const [filter, setFilter] = useState(() => { const f = st?.filter ?? params.get('filter') ?? ''; return main || ['overdue', 'undated'].includes(f) ? f : ''; });
   const [q, setQ] = useState(st?.q ?? '');
   const [done, setDone] = useState(st?.done ?? false);
   const [sprint, setSprint] = useState(st?.sprint ?? params.get('sprint') === '1');
   useEffect(() => { siteState.set(site, { owner, filter, q, done, sprint }); }, [site, owner, filter, q, done, sprint]);
-  const [open, setOpen] = useState<string | null>(params.get('key'));
-  const hashKey = params.get('key');
+  // Ticket aus der Adresse nur, wenn es zu dieser Seite gehört (beim Umschalten steht kurz noch die alte Adresse da).
+  const ownKey = (k: string | null) => (k && (main ? !boardSites(cfg).some((x) => !x.main && k.startsWith(x.prefix + '-')) : k.startsWith(site + '-')) ? k : null);
+  const [open, setOpen] = useState<string | null>(ownKey(params.get('key')));
+  const hashKey = ownKey(params.get('key'));
   useEffect(() => { if (hashKey) setOpen(hashKey); }, [hashKey]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [allOpen, setAllOpen] = useState(false);

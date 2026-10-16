@@ -654,6 +654,7 @@ const syncOut = (sync: any) => (sync ? { at: sync.at, by: sync.by, count: sync.c
 on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
   await needUser(req);
   const st = siteByPrefix(url.searchParams.get('site'));
+  if (!st.main && !mirrorSites().some((x) => x.prefix === st.prefix)) throw new HttpError(409, `Für ${st.site.replace(/^https:\/\//, '')} gibt es hier keine Kopie.`);
   if (!st.main) {
     const mi = mirrorOf(st);
     const all = await siteIssues(mi);
@@ -716,7 +717,7 @@ on('POST', /^\/api\/board\/sync$/, async (req, res) => {
   if (force) log('jira sync erzwungen', { user: u.id });
   // 17c: `site` (Präfix) gleicht die Kopie einer weiteren Seite ab — nur lesen, mit dem Zugang der Person.
   const st = siteByPrefix(typeof b.site === 'string' ? b.site : null);
-  if (!st.main && !mirrorSites().includes(st)) throw new HttpError(409, `Die Kopie von ${st.site.replace(/^https:\/\//, '')} ist hier nicht eingerichtet.`);
+  if (!st.main && !mirrorSites().some((x) => x.prefix === st.prefix)) throw new HttpError(409, `Die Kopie von ${st.site.replace(/^https:\/\//, '')} ist hier nicht eingerichtet.`);
   send(res, 200, await syncMirror(await needJira(u), u.email, { force }, st));
 });
 
@@ -3056,8 +3057,8 @@ async function backgroundJobs() {
     try {
       const creds = await credsOrError();
       if (!creds) return;
-      const r = await syncIncremental(creds, cfg.jiraIncMinutes * 2);
-      if (r?.keys.length) log('jira inkrementell', { n: r.keys.length });
+      try { const r = await syncIncremental(creds, cfg.jiraIncMinutes * 2); if (r?.keys.length) log('jira inkrementell', { n: r.keys.length }); }
+      catch (e: any) { log('jira inkrementell', { error: String(e.message).slice(0, 200) }); }   // PM-Fehler hält OLAF nicht auf (Pass C)
       for (const st of mirrorSites()) {
         try { const x = await syncIncremental(creds, cfg.jiraIncMinutes * 2, st); if (x?.keys.length) log('jira inkrementell', { site: st.prefix, n: x.keys.length }); }
         catch (e: any) { log('jira inkrementell', { site: st.prefix, error: String(e.message).slice(0, 200) }); }

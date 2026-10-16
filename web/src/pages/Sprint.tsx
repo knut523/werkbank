@@ -544,11 +544,14 @@ function GoalTree({ g }: { g: any }) {
 // 17c: Sprint je Jira-Seite — PM = Workspace-Sprint aus dem Vault (wie bisher), OLAF = laufender Jira-Sprint (nur lesen).
 export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
   const [site, setSite] = useBoardSite(cfg, hash);
-  const main = !boardSites(cfg).some((x) => x.prefix === site && !x.main);
+  // Link auf einen bestimmten Zyklus (#/sprint/sprint-JJJJ-MM-TT…) ist immer der PM-Sprint aus dem Vault.
+  const zyklus = /^#\/sprint\/sprint-\d{4}-\d{2}-\d{2}/.test(hash);
+  if (!site && !zyklus) return <div className="page"><Loading /></div>;
+  const main = zyklus || !boardSites(cfg).some((x) => x.prefix === site && !x.main);
   return (
     <>
-      {boardSites(cfg).length > 1 && <div className="page" style={{ paddingBottom: 0 }}><SiteSwitch cfg={cfg} site={site} onPick={setSite} what="Sprint" /></div>}
-      {main ? <PmSprint cfg={cfg} hash={hash} /> : <JiraSprint key={site} site={site} />}
+      {boardSites(cfg).length > 1 && <div className="page" style={{ paddingBottom: 0 }}><SiteSwitch cfg={cfg} site={main ? (boardSites(cfg).find((x) => x.main)?.prefix ?? cfg.project) : site!} onPick={(x) => { setSite(x); if (zyklus && boardSites(cfg).some((y) => y.prefix === x && !y.main)) window.location.hash = '#/sprint'; }} what="Sprint" /></div>}
+      {main ? <PmSprint cfg={cfg} hash={hash} /> : <JiraSprint key={site} site={site!} />}
     </>
   );
 }

@@ -282,13 +282,16 @@ export async function syncMirror(creds: JiraCreds, by: string, opts: { force?: b
     // erscheint dort spätestens mit dem nächsten Vollabgleich.
     let sprintKeys: Set<string> | null = null;
     if (!mi.site.main) {
-      try { sprintKeys = new Set((await fetchPages(creds, `project = ${mi.project} AND sprint in openSprints() ORDER BY key ASC`, 2000, mi.site, ['summary'])).issues.map((r: any) => r.key)); }
+      // Unvollständig geblättert (Pass C): Mitgliedschaft nicht anfassen — sonst fielen die übrigen still aus dem Sprint.
+      try { const sp = await fetchPages(creds, `project = ${mi.project} AND sprint in openSprints() ORDER BY key ASC`, 2000, mi.site, ['summary']); if (sp.complete) sprintKeys = new Set(sp.issues.map((r: any) => r.key)); }
       catch (e: any) { if (!(e instanceof JiraError) || e.status !== 400) throw e; sprintKeys = new Set(); }
     }
     const col = wb().collection(mi.col);
     const meta: any = await wb().collection('meta').findOne({ _id: mi.meta as any });
     if (issues.length) {
-      await col.bulkWrite(issues.map((i) => ({ replaceOne: { filter: { key: i.key }, replacement: { ...i, ...(sprintKeys ? { openSprint: sprintKeys.has(i.key) } : {}), syncedAt: started }, upsert: true } })));
+      // replaceOne ersetzt das ganze Dokument: ohne frische Sprint-Liste den bisherigen Wert mitnehmen.
+      const prevSprint = !mi.site.main && !sprintKeys ? new Set(((await col.find({ openSprint: true }, { projection: { key: 1 } }).toArray()) as any[]).map((d) => d.key)) : null;
+      await col.bulkWrite(issues.map((i) => ({ replaceOne: { filter: { key: i.key }, replacement: { ...i, ...(sprintKeys ? { openSprint: sprintKeys.has(i.key) } : prevSprint ? { openSprint: prevSprint.has(i.key) } : {}), syncedAt: started }, upsert: true } })));
     }
     // force (bestätigt in der Oberfläche): Schwelle ignorieren — z. B. nach echtem Schrumpfen; Vollständigkeit bleibt Pflicht.
     const guard = deletionAllowed(complete, issues.length, opts.force ? null : meta?.count);

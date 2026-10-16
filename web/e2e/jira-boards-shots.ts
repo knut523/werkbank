@@ -72,9 +72,27 @@ try {
   await p.goto(LC + '/wb/board'); await fr().locator('[data-testid=site-switch]').waitFor();
   await p.waitForTimeout(1500);
   check('Auswahl gemerkt (nach Neuladen OLAF)', (await fr().locator('[data-testid=site-switch] button[aria-pressed=true]').innerText()).startsWith('OLAF'));
+  // Pass C: Adresse mit ?site=OLAF&key=… → Umschalten auf PM schließt das OLAF-Ticket und überstimmt nach dem Neuladen nicht
+  await p.goto(LC + '/wb/board?h=' + encodeURIComponent('#/board?site=OLAF&key=OLAF-395'));
+  check('Adresse ?site=OLAF&key=OLAF-395 öffnet das Ticket', await seen(fr().getByText(/hier nur lesen/)));
+  await fr().locator('[data-testid=site-switch] button', { hasText: 'PM-Board' }).click();
+  await seen(fr().locator('[data-key=PM-331]'));
+  check('Umschalten auf PM: OLAF-Ticket zu', await fr().getByText(/hier nur lesen/).count() === 0);
+  await p.reload(); await fr().locator('[data-testid=site-switch]').waitFor(); await p.waitForTimeout(1500);
+  check('Nach Neuladen bleibt PM (Adresse überstimmt nicht)', (await fr().locator('[data-testid=site-switch] button[aria-pressed=true]').innerText()).startsWith('PM'));
+  await fr().locator('[data-testid=site-switch] button', { hasText: 'OLAF-Board' }).click(); await p.waitForTimeout(800);
+  // 17b-Links ohne site= (Ticket-Kachel an einer Notiz): OLAF-Schlüssel öffnet das OLAF-Board mit dem Ticket, PM-Schlüssel das PM-Board
+  await p.goto(LC + '/wb/board?h=' + encodeURIComponent('#/board?key=OLAF-397'));
+  check('Link #/board?key=OLAF-397 → OLAF-Board mit Ticket', await seen(fr().getByText(/hier nur lesen/)) && (await fr().locator('[data-testid=site-switch] button[aria-pressed=true]').innerText()).startsWith('OLAF'));
+  await p.goto(LC + '/wb/board?h=' + encodeURIComponent('#/board?key=PM-331'));
+  check('Link #/board?key=PM-331 → PM-Board', await seen(fr().locator('[data-testid=site-switch] button[aria-pressed=true]', { hasText: 'PM' })));
   await p.goto(LC + '/wb/sprint'); await fr().locator('[data-testid=jira-sprint]').waitFor({ timeout: 20000 });
   check('Sprint OLAF: laufender Jira-Sprint', await seen(fr().locator('[data-testid=jira-sprint] [data-key=OLAF-395]')) && await fr().locator('[data-testid=jira-sprint] [data-key=OLAF-397]').count() === 0);
   await shot('b-5-olaf-sprint');
+  // Link auf einen bestimmten PM-Zyklus zeigt den PM-Sprint, auch wenn OLAF gewählt ist
+  await p.goto(LC + '/wb/sprint?h=' + encodeURIComponent('#/sprint/sprint-2026-10-12'));
+  check('Zyklus-Link → PM-Sprint trotz OLAF-Auswahl', await seen(fr().locator('h1', { hasText: 'Sprint 2026-10-12' })) && await fr().locator('[data-testid=jira-sprint]').count() === 0);
+  await p.goto(LC + '/wb/sprint'); await seen(fr().locator('[data-testid=jira-sprint]'));
   await fr().locator('[data-testid=site-switch] button', { hasText: 'PM-Sprint' }).click();
   await shot('b-6-pm-sprint');
   await p.goto(LC + '/wb/heute'); await p.waitForTimeout(2500);
