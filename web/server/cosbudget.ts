@@ -67,8 +67,7 @@ export async function budgetTick(deps: { userById: (id: string) => Promise<User 
     const zeigen: BudgetAnzeige = { budget, tokens, prozent: prozent(tokens, budget), stufe: st, energie: energien.get(String(d.conv)) ?? 0 };
     const set: Record<string, unknown> = { 'budget.anzeige': zeigen, 'budget.at': new Date(now) };
     const u = await deps.userById(d.userId).catch(() => null);
-    if ((st === 'warn' || st === 'stopp') && !d.budget?.warn80At) {
-      set['budget.warn80At'] = new Date(now);
+    if ((st === 'warn' || st === 'stopp') && !d.budget?.warn80At && (await runs().updateOne({ _id: d._id, 'budget.warn80At': null }, { $set: { 'budget.warn80At': new Date(now) } })).modifiedCount) {
       if (u) await meldeLeitstand(u, d, `Budget zu ${zeigen.prozent} % verbraucht (${fmt(tokens)} von ${fmt(budget)} Tokens) — bei 100 % hält der Unter-Chat an und fragt Knut.`, now).catch(() => {});
       out.gewarnt.push(String(d._id));
     }
@@ -76,15 +75,14 @@ export async function budgetTick(deps: { userById: (id: string) => Promise<User 
       const at = new Date(now);
       const r = await runs().updateOne({ _id: d._id, autoStopped: null }, { $set: { autoStopped: { at, reason: `Budget erreicht (${fmt(tokens)} von ${fmt(budget)} Tokens)`, cause: 'budget' }, 'budget.stopAt': at } });
       if (r.modifiedCount) {
-        let qid: string;
-        do { qid = 'q-' + randomUUID().slice(0, 6); } while (await questions().findOne({ _id: qid as any }));
-        await questions().insertOne({
+        const qid = 'q-' + randomUUID().replace(/-/g, '').slice(0, 12);
+        try { await questions().insertOne({
           _id: qid, userId: u.id, kind: 'budget', title: `Budget erreicht: „${d.title}“ (${fmt(tokens)} von ${fmt(budget)} Tokens)`.slice(0, 140),
           context: `Der Unter-Chat ${d._id} hat sein Tokenbudget erreicht (Eingabe ohne Cache-Lesen + Ausgabe, mit Workern). Ein laufender Zug endet noch; danach ruht der Chat, bis du entscheidest. Arbeitsordner: ${d.cwd}.`,
           options: [{ label: 'Weiter mit +50 %', consequence: `Hebt das Budget auf ${fmt(Math.ceil(budget * 1.5))} Tokens und schickt „weiter“.` }, { label: 'Anhalten', consequence: 'Der Unter-Chat gilt als geprüft und läuft nicht weiter.' }],
           recommendation: 'Chat ansehen: kommt der Unter-Chat voran und der Rest ist klein, „Weiter mit +50 %“; sonst „Anhalten“ und den Auftrag schärfen.',
           strand: { id: String(d._id), title: d.title, url: d.url }, link: d.url, plan: d.plan ?? null, createdAt: at, status: 'offen', answer: null,
-        } as any);
+        } as any); } catch (e) { await runs().updateOne({ _id: d._id }, { $set: { autoStopped: null, 'budget.stopAt': null } }); throw e; }   // ohne Rückfrage keine Pause (sonst bliebe der Chat ohne Ausweg stehen)
         deps.log?.('cos budget stopp', { id: d._id, tokens, budget });
         out.gestoppt.push(String(d._id));
       }

@@ -18,7 +18,11 @@ export const hashText = (s: string) => createHash('sha256').update(s).digest('he
 
 export class CosError extends Error { status: number; constructor(status: number, msg: string) { super(msg); this.status = status; } }
 
-export const cosDir = () => (process.env.COS_DIR || 'olaf/1-Projects/chief-of-staff').replace(/^\/+|\/+$/g, '');
+export const cosDir = () => {
+  const d = (process.env.COS_DIR || 'olaf/1-Projects/chief-of-staff').replace(/^\/+|\/+$/g, '');
+  if (!d || d.split('/').some((s) => s === '..' || s === '.' || !s)) throw new CosError(500, 'COS_DIR ungültig.');
+  return d;
+};
 export const FILES = { zusagen: 'zusagen-register.md', themen: 'themen-register.md' } as const;
 export type Kind = keyof typeof FILES;
 export const registerRel = (k: Kind) => `${cosDir()}/${FILES[k]}`;
@@ -245,10 +249,10 @@ function fuegeEin(text: string, name: ReturnType<typeof abschnittVon>, heading: 
 
 /** Teile einer Zeile ändern: `key` (Präfix) ersetzen oder anhängen. */
 const NIE = /(?!)/;   // trifft nie: Teil wird angehängt
-function setzeTeil(zeile: string, pruefe: RegExp, neu: string | null): string {
+function setzeTeil(zeile: string, pruefe: RegExp, neu: string | null, ab = 1): string {
   const e = endeVon(zeile), body = ohneEnde(zeile);
   const p = body.split(SEP);
-  const i = p.findIndex((x, k) => k > 0 && pruefe.test(x.trim()));
+  const i = p.findIndex((x, k) => k >= ab && pruefe.test(x.trim()));
   if (neu == null) { if (i > 0) p.splice(i, 1); }
   else if (i > 0) p[i] = neu;
   else p.push(neu);
@@ -275,8 +279,9 @@ export function zusageNeuZeile(id: string, o: ZNeu): string {
   const was = feld(o.was);
   if (!was) throw new CosError(400, 'Was fehlt.');
   pruefeDatum(o.bis);
-  const wer = feld(o.wer);
-  const party = `${wer ? wer : 'Wer: offen'} → ${feld(o.an) || 'Knut'}`;
+  const name = (x: unknown) => feld(x).replace(/\s*→\s*/g, ' – ');   // „→“ trennt Wer und An
+  const wer = name(o.wer);
+  const party = `${wer ? wer : 'Wer: offen'} → ${name(o.an) || 'Knut'}`;
   const teile = [`- **${id}**`, party, was];
   if (o.bis) teile.push(`bis ${o.bis}`); else if (o.fristUnklar) teile.push('Frist unklar');
   if (o.thema) teile.push(`Thema: ${feld(o.thema)}`);
@@ -305,16 +310,17 @@ export function wendeZusagenAn(text: string, ops: ZOp[], heute: string): { text:
       let ls = zeilen(t);
       const alt = ohneEnde(ls[z.zeile - 1]);
       let zeile = ls[z.zeile - 1];
+      if (o.was != null && !feld(o.was)) throw new CosError(400, 'Was fehlt.');
       if (o.was != null) { const p = ohneEnde(zeile).split(SEP); p[2] = feld(o.was); zeile = p.join(SEP) + endeVon(zeile); }
       if (o.bis !== undefined) {
         pruefeDatum(o.bis);
-        zeile = setzeTeil(zeile, /^(bis \d{4}-\d{2}-\d{2}|Frist unklar)$/i, o.bis ? `bis ${o.bis}` : 'Frist unklar');
+        zeile = setzeTeil(zeile, /^(bis \d{4}-\d{2}-\d{2}|Frist unklar)$/i, o.bis ? `bis ${o.bis}` : 'Frist unklar', 3);
       }
-      if (o.notiz) zeile = setzeTeil(zeile, NIE, `Notiz: ${feld(o.notiz)}`);
+      if (o.notiz) zeile = setzeTeil(zeile, NIE, `Notiz: ${feld(o.notiz)}`, 3);
       let ziel: Abschnitt | null = null;
       if (o.status && o.status !== z.abschnitt) {
         ziel = o.status;
-        zeile = setzeTeil(zeile, /^(erledigt|verworfen) \d{4}-\d{2}-\d{2}$/, o.status === 'offen' ? null : `${o.status} ${heute}`);
+        zeile = setzeTeil(zeile, /^(erledigt|verworfen) \d{4}-\d{2}-\d{2}$/, o.status === 'offen' ? null : `${o.status} ${heute}`, 3);
       }
       if (ziel) {
         ls.splice(z.zeile - 1, 1);
@@ -403,7 +409,7 @@ export function schreibe(kind: Kind, apply: (text: string, heute: string) => { t
   const abs = join(o.vaultDir, rel);
   return inReihe(abs, async () => {
     const heute = o.heute ?? wienDatum();
-    const lies = () => (existsSync(abs) ? readFileSync(abs, 'utf8') : null);
+    const lies = () => { try { return readFileSync(abs, 'utf8'); } catch (e: any) { if (e?.code === 'ENOENT') return null; throw e; } };
     const alt = lies();
     const neuAngelegt = alt == null;
     const basis = alt ?? neueDatei(kind, heute, o.vorbefuellung?.() ?? {});
@@ -421,7 +427,7 @@ export function schreibe(kind: Kind, apply: (text: string, heute: string) => { t
     if (hashText(lies() ?? '') !== hashAlt) throw new CosError(409, 'Das Register wurde inzwischen geändert — bitte die Vorschau neu laden.');
     mkdirSync(dirname(abs), { recursive: true });
     writeAtomic(abs, r.text);
-    o.danach?.();
+    try { o.danach?.(); } catch { /* Index wird beim nächsten Takt neu gebaut; geschrieben ist geschrieben */ }
     return { ok: true as const, datei: rel, zeilen: r.zeilen, ids: r.ids ?? [], hash: hashText(r.text) };
   });
 }

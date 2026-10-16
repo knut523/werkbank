@@ -65,7 +65,7 @@ function finde(vaultDir: string, id: string, heute: string): Zusage {
   const z = t[0];
   if (z.abschnitt !== 'offen') throw new CosError(409, 'Die Zusage ist nicht mehr offen.');
   if (!z.wer) throw new CosError(400, 'Wer: offen — ohne Namen entsteht kein Entwurf.');
-  void heute;
+  if (!z.bis || z.bis >= heute) throw new CosError(409, 'Noch nicht überfällig — kein Nachfassen.');
   return z;
 }
 
@@ -77,6 +77,7 @@ export function entwurfFuer(vaultDir: string, id: string, heute: string) {
 }
 
 /** Senden: ohne confirm Vorschau (mit Hash), mit confirm schicken und der Zusage die Notiz „nachgefasst TT.MM.“ geben. */
+const laufend = new Set<string>();   // Doppelklick: dieselbe Zusage nie zweimal gleichzeitig senden
 export async function senden(vaultDir: string, id: string, o: SchreibOpts & { sender: Senden; ueberschrift?: never }): Promise<any> {
   const heute = o.heute ?? new Date().toISOString().slice(0, 10);
   const z = finde(vaultDir, id, heute);
@@ -86,6 +87,9 @@ export async function senden(vaultDir: string, id: string, o: SchreibOpts & { se
   if (!o.confirm) return { needsConfirm: true, id, weg: e.weg, ref: e.ref, ziel: ziel(e), text: e.text, hash };
   if (o.hash !== hash) throw new CosError(409, 'Der Entwurf hat sich geändert — bitte die Vorschau neu laden.');
   if (o.dry) return { ok: true, dry: true, id, ziel: ziel(e) };
+  if (laufend.has(id)) throw new CosError(409, 'Wird gerade gesendet.');
+  laufend.add(id);
+  try {
   let url: string | null = null;
   if (e.weg === 'github') {
     const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(e.ref);
@@ -97,4 +101,5 @@ export async function senden(vaultDir: string, id: string, o: SchreibOpts & { se
   const d = `${heute.slice(8, 10)}.${heute.slice(5, 7)}.`;
   await schreibeZusagen([{ art: 'aendern', id, notiz: `nachgefasst ${d}` }], { ...o, confirm: true, hash: undefined });
   return { ok: true, id, ziel: ziel(e), url };
+  } finally { laufend.delete(id); }
 }

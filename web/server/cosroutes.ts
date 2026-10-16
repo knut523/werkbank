@@ -120,7 +120,7 @@ export function cosRoutes(d: CosDeps) {
   on('POST', /^\/api\/cos\/rueckstau\/zurueck$/, async (req, res) => {
     await d.needAdmin(req);
     const b = await d.body(req);
-    send(res, 200, await rueckgaengig(String(b.datei ?? ''), { vaultDir: d.vaultDir(), teams: meetingTeams(), store: archivStore(), danach: d.invalidate }));
+    send(res, 200, await rueckgaengig(String(b.datei ?? ''), { vaultDir: d.vaultDir(), teams: meetingTeams(), store: archivStore(), dry: d.dry(), danach: d.invalidate }));
   });
   on('GET', /^\/api\/cos\/rueckstau\/zurueck$/, async (req, res) => {
     await d.needAdmin(req);
@@ -150,7 +150,7 @@ export function cosRoutes(d: CosDeps) {
     const teams = meetingTeams();
     const datei = pruefeDatei(String(b.datei ?? ''), teams);
     if (b.art === 'nein') {
-      await wb().collection('cos_triage').updateOne({ _id: datei as any }, { $set: { art: 'nein', at: new Date(), by: u.email } }, { upsert: true });
+      if (!d.dry()) await wb().collection('cos_triage').updateOne({ _id: datei as any }, { $set: { art: 'nein', at: new Date(), by: u.email } }, { upsert: true });
       return send(res, 200, { ok: true, ausgeblendet: datei });
     }
     const o = await opts(b, 'zusagen');

@@ -286,7 +286,7 @@ export async function archiviereRueckstau(dateien: string[], o: { vaultDir: stri
 }
 
 /** Rückgängig (7 Tage): nur, solange die Notiz unverändert so ist, wie wir sie hinterlassen haben. */
-export async function rueckgaengig(datei: string, o: { vaultDir: string; teams: string[]; jetzt?: Date; locked?: () => boolean; store: ArchivStore; danach?: () => void }): Promise<any> {
+export async function rueckgaengig(datei: string, o: { vaultDir: string; teams: string[]; jetzt?: Date; dry?: boolean; locked?: () => boolean; store: ArchivStore; danach?: () => void }): Promise<any> {
   pruefeDatei(datei, o.teams);
   const doc = await o.store.get(datei);
   if (!doc) throw new CosError(404, 'Dazu gibt es nichts rückgängig zu machen.');
@@ -297,6 +297,7 @@ export async function rueckgaengig(datei: string, o: { vaultDir: string; teams: 
   if (hashText(text) !== doc.neuHash) throw new CosError(409, 'Die Notiz wurde seitdem geändert — nicht automatisch zurücksetzen.');
   const zurueck = text.replace(/^(---\r?\n[\s\S]*?\r?\n)status:\s*archived(\s*\r?\n)/, '$1status: draft$2');
   if (zurueck === text) throw new CosError(409, 'Status nicht gefunden.');
+  if (o.dry) return { ok: true, dry: true, datei };
   writeAtomic(abs, zurueck);
   await o.store.del(datei);
   o.danach?.();
