@@ -100,6 +100,7 @@ export function chatUrl(prompt: string, opts: { spec?: string; submit?: boolean 
 
 import { librechatAccessToken } from './auth.ts';
 import { lastMessageId } from './review.ts';
+import { tiefeText, type Tiefe } from './tiefe.ts';
 
 export const CHAT_AGENT_INSTRUCTION = `Du bist vom Board des OLAF Workspace auf dieses Ticket angesetzt. Arbeite nach plan-to-pr — auch wenn es keine Coding-Aufgabe ist (Recherche, Dokument, Abstimmung):
 1. Lies zuerst, was Vault-Register und Jira sagen (Vault vor Code, Board-Stand ist nicht Arbeitsstand).
@@ -139,7 +140,7 @@ export async function createLibreChat(u: User, text: string, opts: { conversatio
   return String(j.conversationId);
 }
 
-export interface AgentPlace { projectName?: string | null; areaDir?: string | null; personName?: string | null; specPath?: string | null }
+export interface AgentPlace { projectName?: string | null; areaDir?: string | null; personName?: string | null; specPath?: string | null; tiefe?: Tiefe | null }
 
 /** Projekt und Workstream-Bereich als Zeile für den Prompt (Plan 81, Schnitte 6/7). */
 export function placeLine(place: AgentPlace = {}): string {
@@ -154,7 +155,7 @@ export function chatAgentPrompt(i: Issue, note: string, kind: 'work' | 'discuss'
   const title = `${i.key} · ${i.summary}`.slice(0, 80);
   return kind === 'discuss'
     ? `${title}\n\n${ticketPrompt(i)}\n\nLass uns an diesem Ticket arbeiten. Lies zuerst, was Vault und Jira dazu sagen.${note ? `\n\n${note}` : ''}`
-    : `${title}\n\n${CHAT_AGENT_INSTRUCTION.replace('{{NAME}}', (place.personName || 'Name').split(/\s+/)[0])}\n\n---\n\n${ticketPrompt(i, [placeLine(place), note ? `Hinweis der Person: ${note}` : ''].filter(Boolean).join('\n\n'))}`;
+    : `${title}\n\n${CHAT_AGENT_INSTRUCTION.replace('{{NAME}}', (place.personName || 'Name').split(/\s+/)[0])}${place.tiefe ? `\n\n${tiefeText(place.tiefe)}` : ''}\n\n---\n\n${ticketPrompt(i, [placeLine(place), note ? `Hinweis der Person: ${note}` : ''].filter(Boolean).join('\n\n'))}`;
 }
 
 export async function startChatAgent(u: User, issue: Issue, note: string, kind: 'work' | 'discuss' = 'work', place: AgentPlace & { projectId?: string | null } = {}): Promise<{ id: string; conv: string; url: string }> {
@@ -165,7 +166,7 @@ export async function startChatAgent(u: User, issue: Issue, note: string, kind: 
   const conv = await createLibreChat(u, chatAgentPrompt(issue, note, kind, place));
   const id = randomUUID();
   const url = `${cfg.librechatPublicUrl}/c/${conv}`;
-  await runs.insertOne({ _id: id as any, key: issue.key, userId: u.id, userName: u.name, mode: 'chat', kind, status: kind === 'work' ? 'läuft' : 'fertig', conv, url, startedAt: new Date(), note: note.slice(0, 300), written: [], projectId: place.projectId ?? null, reviewable: kind === 'work' });
+  await runs.insertOne({ _id: id as any, key: issue.key, userId: u.id, userName: u.name, mode: 'chat', kind, status: kind === 'work' ? 'läuft' : 'fertig', conv, url, startedAt: new Date(), note: note.slice(0, 300), written: [], projectId: place.projectId ?? null, reviewable: kind === 'work', ...(place.tiefe ? { tiefe: place.tiefe } : {}) });
   return { id, conv, url };
 }
 

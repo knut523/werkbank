@@ -196,6 +196,13 @@ function Schublade({ k, tab, setTab, onClose, onDone }: { k: any; tab: Tab; setT
   );
 }
 
+/** Tiefe und ETA eines Strangs (Plan 205): „deep · fertig ca. 17:30“; überfällig gedämpft markiert, kein Alarm. */
+function TiefeEta({ k }: { k: any }) {
+  if (!k.tiefe && !k.eta?.at) return null;
+  return <span className={`tiny ub-eta${k.eta?.ueberfaellig ? ' ueber' : ''}`} data-testid="ub-eta" title={k.eta?.quelle ? `ETA: ${k.eta.quelle}` : undefined}>
+    {k.tiefe && <span className="ub-tiefe" data-testid="ub-tiefe">{k.tiefe}</span>}{k.eta?.text ?? '–'}</span>;
+}
+
 function Karte({ k, onDone, oeffne }: { k: any; onDone: () => void; oeffne: (k: any, t: Tab) => void }) {
   const toast = useToast();
   const pushFreigeben = usePushFreigeben();
@@ -210,6 +217,7 @@ function Karte({ k, onDone, oeffne }: { k: any; onDone: () => void; oeffne: (k: 
   return (
     <article className={`ub-card ub-karte a-${k.ampel}`} data-testid="ub-karte" data-ampel={k.ampel} data-strang={k.id}>
       <div className="ub-top"><h3>{k.titel}</h3><span className={`ub-amp ${AMP[k.ampel]}`} data-testid="ub-ampel">{k.ampelText}</span></div>
+      {(k.tiefe || k.eta?.at) && <p className="ub-etaz"><TiefeEta k={k} /></p>}
       {k.kurz && <p className="ub-kurz">{k.kurz}</p>}
       <div className="ub-chips">
         {k.links.map((l: any) => l.art === 'bericht'
@@ -310,7 +318,7 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
   const karten: any[] = (x?.themen ?? []).flatMap((th: any) => th.karten).filter((k: any) => !liveIds.has(k.id));   // auch Themen nur mit laufenden
   const lose: any[] = x?.lose ?? [];
   const board = d.queue.filter((q: any) => ['review', 'frage', 'haengt', 'still'].includes(q.bucket));
-  const laufen = [...karten.filter((k) => k.ampel === 'laeuft').map((k) => ({ id: k.id, thema: k.thema, titel: k.titel, at: k.statusAt, chat: k.chat })),
+  const laufen = [...karten.filter((k) => k.ampel === 'laeuft').map((k) => ({ id: k.id, thema: k.thema, titel: k.titel, at: k.statusAt, chat: k.chat, tiefe: k.tiefe, eta: k.eta })),
     ...d.queue.filter((q: any) => q.bucket === 'laeuft').map((q: any) => ({ id: q.id, thema: 'Board', titel: `${q.key}${q.summary ? ` — ${q.summary}` : ''}`, at: q.startedAt, chat: q.url }))];
   const mine = mineCount(d.mine, []);
   const zahl = {
@@ -378,7 +386,7 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
       {laufen.length > 0 && <section className="ub-card" data-testid="ub-laeuft" id="lauf">
         <div className="ub-row"><h2>Läuft</h2><span className="ub-amp u-run">{laufen.length}</span><span className="sp" /><span className="tiny mut">steuern im jeweiligen Chat</span></div>
         <div className="ub-runs">{laufen.map((r) => <div key={r.id} className="ub-runrow"><span className="ub-amp u-run">{r.thema}</span><span className="t">{r.titel}</span>
-          <span className="tiny mut">seit {fmtDateTime(r.at)}</span>{r.chat && <a className="ub-btn sm" href={r.chat} target={chatTarget}>Chat</a>}</div>)}</div>
+          <TiefeEta k={r} /><span className="tiny mut">seit {fmtDateTime(r.at)}</span>{r.chat && <a className="ub-btn sm" href={r.chat} target={chatTarget}>Chat</a>}</div>)}</div>
       </section>}
 
       {live.length > 0 && <LiveGroup items={live} onDone={neu} />}

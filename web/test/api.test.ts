@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { MongoClient, ObjectId } from 'mongodb';
-import { startJiraMock, type JiraMock } from './jira-mock.ts';
+import { startJiraMock, demoIssues, type JiraMock } from './jira-mock.ts';
 
 const WEB = new URL('..', import.meta.url).pathname;
 const PORT = Number(process.env.WERKBANK_TEST_PORT || 3071), BRIDGE_PORT = Number(process.env.WERKBANK_TEST_BRIDGE_PORT || 3096);
@@ -36,7 +36,7 @@ const users = {
   c: { _id: new ObjectId(), email: 'carla@konekto.energy', name: 'Carla Fremd', pw: 'pw-carla' },
 };
 
-let web: ChildProcess, bridge: ChildProcess, lcFake: Server, jira: JiraMock, mongo: MongoClient;
+let web: ChildProcess, bridge: ChildProcess, lcFake: Server, jira: JiraMock, jira2: JiraMock, mongo: MongoClient;
 
 async function waitFor(url: string) {
   for (let i = 0; i < 80; i++) { try { if ((await fetch(url)).status < 500) return; } catch { /* startet */ } await new Promise((r) => setTimeout(r, 150)); }
@@ -48,6 +48,8 @@ before(async () => {
   writeFileSync(join(tmp, 'vorschlag.json'), JSON.stringify([{ key: 'PM-267', ziel: 'ziel-kr1', begruendung: 'Hardware-Flow trägt den Vertrieb', sicherheit: 0.8 }, { key: 'PM-999', ziel: 'KR1' }, { key: 'PM-322', ziel: 'KR9' }, { key: 'PM-332', ziel: 'GATE-2701' }]));
   // Ziele-Datei nur in der Kopie (andere Tests zählen die Notizen des Fixture-Vaults).
   cpSync(new URL('./fixtures/ziele-olaf.md', import.meta.url).pathname, join(VAULT, 'olaf/1-Projects/ziele-olaf.md'));
+  // Release 17b: Notiz mit einem Schlüssel der zweiten Jira-Seite (Ticket-Kachel liest live von max-energy).
+  writeFileSync(join(VAULT, 'olaf/1-Projects/entwicklung-olaf-394.md'), '---\ntitle: "Entwicklung OLAF-394"\njira: [OLAF-394, PM-321]\n---\n# Entwicklung OLAF-394\n');
   // Ersatz für vault-sync.sh: schreibt nur seine Argumente mit (Roadmap-Automatik).
   writeFileSync(join(tmp, 'fake-vault-sync.sh'), `#!/bin/bash\necho "lauf $*" >> ${join(tmp, 'fake-vault-sync.log')}\n`);
   mkdirSync(join(tmp, 'skills-src', 'demo-skill'), { recursive: true });
@@ -91,6 +93,9 @@ before(async () => {
   });
   await new Promise<void>((r) => lcFake.listen(0, '127.0.0.1', () => r()));
   jira = await startJiraMock(0);
+  // Zweite Jira-Seite (Release 17b): eigenes Mock mit OLAF-Tickets; die Werkbank liest dort nur.
+  const olaf: any = demoIssues().find((i: any) => i.key === 'PM-321')!;
+  jira2 = await startJiraMock(0, { issues: [{ ...olaf, key: 'OLAF-394', fields: { ...olaf.fields, summary: 'Tarifrechner API (Entwicklungs-Jira)', parent: null } }] });
   bridge = spawn(process.execPath, ['src/server.ts'], {
     cwd: join(WEB, '..', 'claude-bridge'),
     env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(BRIDGE_PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_ALLOWED_EMAILS: '',
@@ -114,7 +119,9 @@ before(async () => {
       VORBAU_PROTOKOLL: join(tmp, 'g0.jsonl'), WERKBANK_VORBAU_REPOS: '', WERKBANK_VORBAU_CHECK: 'on',
       // Abend-Slot nur über den ausdrücklichen Tagesabschluss — sonst hinge der Test an der Uhrzeit (ab 16 Uhr scheiterte er).
       WERKBANK_EOD_HOUR: '24',
-      WERKBANK_ANSETZEN: 'live',   // echter Weg gegen den Jira-Nachbau (Brücke im Mock-Modus spielt createJiraIssue nach)
+      WERKBANK_ANSETZEN: 'live',
+      WERKBANK_JIRA_SITES: JSON.stringify([{ prefix: 'PM', site: 'https://maxenergy.atlassian.net', cloudId: '606f753a-fd3a-4d69-9b8b-ef9574984080', base: `http://127.0.0.1:${jira.port}/rest/api/3` },
+        { prefix: 'OLAF', site: 'https://max-energy.atlassian.net', cloudId: '7aec26a2-2eca-46bb-a608-9be55c1dd167', base: `http://127.0.0.1:${jira2.port}/rest/api/3` }]),   // echter Weg gegen den Jira-Nachbau (Brücke im Mock-Modus spielt createJiraIssue nach)
     },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
@@ -123,7 +130,7 @@ before(async () => {
 });
 
 after(async () => {
-  web?.kill(); bridge?.kill(); lcFake?.close(); await jira?.close();
+  web?.kill(); bridge?.kill(); lcFake?.close(); await jira?.close(); await jira2?.close();
   await mongo.db(DB).dropDatabase(); await mongo.db(LCDB).dropDatabase(); await mongo.close();
 });
 
@@ -215,6 +222,32 @@ test('Board: Sync aus Jira (mit Blättern), Bahnen = Workstreams, Filter', async
   assert.ok(nd.j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).every((i: any) => !i.duedate || i.onlyViaSubtask), "ohne Datum — oder nur wegen eines Sub-tasks ohne Datum sichtbar");
   const ow = await anna.req('/api/board?owner=' + encodeURIComponent('Lisa Probe'));
   assert.equal(ow.j.totals.cards, 1);
+});
+
+test('Release 17b: zweite Jira-Seite — Ticket OLAF-394 live von max-energy (nur lesen), Kachel an der Notiz, Einrichtung je Seite, Schreiben gesperrt', async () => {
+  const d = await anna.req('/api/board/issue/OLAF-394');
+  assert.equal(d.status, 200, JSON.stringify(d.j));
+  assert.equal(d.j.readOnly, true);
+  assert.equal(d.j.issue.summary, 'Tarifrechner API (Entwicklungs-Jira)');
+  assert.equal(d.j.url, 'https://max-energy.atlassian.net/browse/OLAF-394');
+  assert.equal(d.j.site, 'https://max-energy.atlassian.net');
+  assert.equal((await anna.req('/api/board/issue/OLAF-999')).status, 404, 'gibt es auf max-energy nicht');
+  assert.equal((await anna.req('/api/board/issue/PM-321')).j.url, 'https://maxenergy.atlassian.net/browse/PM-321');
+  // Nicht in die Kopie: das Board bleibt PM.
+  assert.ok(!(await anna.req('/api/board')).j.lanes.flatMap((l: any) => Object.values(l.columns).flat()).some((i: any) => i.key.startsWith('OLAF-')));
+  // Schreiben auf max-energy: nicht über die Werkbank — Hinweis auf den Jira-MCP im Chat, nichts geschrieben.
+  const w = await anna.req('/api/board/issue/OLAF-394/comment', { body: { text: 'Hallo', confirm: true } });
+  assert.equal(w.status, 409);
+  assert.match(w.j.error, /max-energy\.atlassian\.net — die Werkbank liest dort nur.*\/mcp/);
+  assert.equal(jira2.writes.length, 0);
+  // Ticket-Kacheln an der Notiz: PM aus der Kopie, OLAF live.
+  const n = await anna.req('/api/vault/note?path=' + encodeURIComponent('olaf/1-Projects/entwicklung-olaf-394.md'));
+  assert.deepEqual(n.j.tickets.map((t: any) => [t.key, t.summary]).sort(), [['OLAF-394', 'Tarifrechner API (Entwicklungs-Jira)'], ['PM-321', 'Hardware Admin Flow']]);
+  // Einrichtung: „Jira verbinden“ je Seite mit Lesestand.
+  const s = await anna.req('/api/setup/status');
+  assert.deepEqual(s.j.jira.sites.map((x: any) => [x.prefix, x.main, x.lesen]), [['PM', true, true], ['OLAF', false, true]]);
+  assert.match(s.j.jira.sites[1].schreibenHinweis, /\/mcp/);
+  assert.deepEqual((await anna.req('/api/config')).j.jiraSites.map((x: any) => x.prefix), ['PM', 'OLAF']);
 });
 
 test('Board: Kommentar/Status/Fälligkeit erst nach Bestätigung, dann in Jira', async () => {

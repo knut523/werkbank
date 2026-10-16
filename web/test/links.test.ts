@@ -9,9 +9,9 @@ test('Ticket-Keys aus Frontmatter, Text und Jira-Links; PRs in derselben Zeile; 
   const r = extractTicketRefs({ jira: ['PM-12', 'PM-13'], ticket: 'PM-14' }, [
     'Stand siehe PM-20 und https://maxenergy.atlassian.net/browse/PM-21.',
     'PR https://github.com/WirStrom1/olaf-admin/pull/171 gehört zu PM-20.',
-    '`PM-99` im Code zählt nicht, OLAF-5 ist ein anderes Projekt.',
+    '`PM-99` im Code zählt nicht, OLAF-5 liegt auf der zweiten Jira-Seite (Release 17b) und zählt mit.',
   ].join('\n'));
-  assert.deepEqual(r.map((x) => `${x.key}:${x.via}`).sort(), ['PM-12:frontmatter', 'PM-13:frontmatter', 'PM-14:frontmatter', 'PM-20:text', 'PM-21:link']);
+  assert.deepEqual(r.map((x) => `${x.key}:${x.via}`).sort(), ['OLAF-5:text', 'PM-12:frontmatter', 'PM-13:frontmatter', 'PM-14:frontmatter', 'PM-20:text', 'PM-21:link']);
   assert.deepEqual(r.find((x) => x.key === 'PM-20')!.prs, ['https://github.com/WirStrom1/olaf-admin/pull/171']);
 });
 

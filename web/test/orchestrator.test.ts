@@ -316,6 +316,44 @@ test('Folgenachricht setzt denselben Chat fort (Elternnachricht = letzte); Push 
   assert.equal(next.code, 0, next.err);
 });
 
+test('Plan 205: --tiefe deep → Auftrag mit Pflichtschritten und ETA-Zeile, Risiko hoch; ETA des Agenten in list/show; quick → Flash; unbekannt 400', async () => {
+  const st = await orch(['start', '--title', 'Tiefer Strang', '--cwd', WT2, '--tiefe', 'deep', '--json'], 'mock-antwort Plan steht.\\n### Stand\\n- Erledigt: Plan\\nETA: ~30 min\\nStatus: braucht Antwort');
+  assert.equal(st.code, 0, st.err);
+  const j = JSON.parse(st.out);
+  assert.equal(j.tiefe, 'deep');
+  const brief = lcCalls.find((c) => c.body.conversationId === j.conv)!.body.text;
+  assert.match(brief, /Tiefe: \*\*deep\*\*.*Council.*hoch=true.*Visual-Check/s);
+  assert.match(brief, /^ETA: HH:MM \| ~N min/m, 'Pflichtzeile im Stand-Block');
+  assert.ok(brief.indexOf('ETA: HH:MM') < brief.indexOf('Status: fertig | braucht Antwort'), 'ETA vor Status');
+  const doc: any = await mongo.db(DB).collection('orchestrator_runs').findOne({ _id: j.id });
+  assert.equal(doc.tiefe, 'deep');
+  assert.equal(doc.risiko, 'hoch', 'deep setzt Risiko hoch vor');
+  assert.equal(doc.modell, null, 'deep: Claude-Phasen-Lead, kein festes Modell');
+  const s = await until(j.id, ['waiting', 'done', 'failed']);
+  assert.equal(s.status, 'waiting', JSON.stringify(s));
+  assert.equal(s.tiefe, 'deep');
+  assert.equal(s.eta.quelle, 'agent');
+  assert.match(s.eta.text, /^fertig ca\. (\d\d\.\d\d\. )?\d\d:\d\d$/);
+  assert.ok(Math.abs(s.eta.at - (Date.now() + 30 * 60_000)) < 3 * 60_000, 'ETA ≈ Antwortzeit + 30 min');
+  const show = await orch(['show', j.id]);
+  assert.match(show.out, /Tiefe deep · fertig ca\. .*\(ETA: Agent\)/);
+  const list = await orch(['list']);
+  assert.match(list.out, /Tiefe deep · fertig ca\./);
+  // quick: Flash als Lead-Modell, Risiko niedrig, kein Council im Auftrag.
+  const q = JSON.parse((await orch(['start', '--title', 'Schneller Strang', '--cwd', WT2, '--shared', '--tiefe', 'quick', '--json'], 'mock-antwort ok')).out);
+  assert.equal(q.tiefe, 'quick');
+  assert.equal(q.modell, 'melious:glm-5.3-flash');
+  const qd: any = await mongo.db(DB).collection('orchestrator_runs').findOne({ _id: q.id });
+  assert.equal(qd.risiko, 'niedrig');
+  assert.match(lcCalls.find((c) => c.body.conversationId === q.conv)!.body.text, /Tiefe: \*\*quick\*\*.*kein Council, keine Gegenprüfung/s);
+  // Ohne Agentenangabe: Rückfall auf die Vorgabe (noch kein Median), Quelle „vorgabe“.
+  const qs = await until(q.id, ['waiting', 'done', 'failed']);
+  assert.equal(qs.eta.quelle, 'vorgabe');
+  assert.ok(Math.abs(qs.eta.at - (new Date(qd.startedAt).getTime() + 20 * 60_000)) < 1000);
+  const bad = await orch(['start', '--title', 'Falsch', '--cwd', WT2, '--shared', '--tiefe', 'tief', '--prompt', 'x']);
+  assert.match(bad.err, /400: Tiefe: quick, regular, deep/);
+});
+
 test('Rückfragen an Knut: anlegen (CLI) → offen in der Werkbank → Knut antwortet → CLI liest die Antwort', async () => {
   const bad = await orch(['ask', '--title', 'Ohne Empfehlung', '--context', 'x']);
   assert.match(bad.err, /--recommend/);

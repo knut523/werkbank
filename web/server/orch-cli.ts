@@ -3,6 +3,9 @@
 //   orch start --title T --cwd DIR [--plan DATEI] [--lauf NAME] [--shared] [--code --slug SPEC-SLUG] (--prompt TEXT | --prompt-file DATEI | Auftrag auf stdin)
 //     [--modell claude:opus|sonnet|haiku|melious:<id>] [--risiko niedrig|mittel|hoch]   Hauptmodell und Risikostufe des Strangs
 //     (Plan 162); nur beim Start, kein Wechsel mitten im Strang. Überlauf auf Melious nur bei „niedrig“.
+//     [--tiefe quick|regular|deep]   Tiefe (Plan 205, Vorgabe regular): quick = Melious Flash, kein Council/keine Gegenprüfung,
+//     nur Repo-Tests; regular = wie bisher (Pass C mit challenge); deep = voller plan-to-pr mit Council, Gegenprüfung auf GLM 5.3,
+//     Visual-Check, Risiko hoch, doppelte Schritte und Deckel. Der Agent meldet „ETA:“ im Stand-Block; list/show zeigen sie.
 //     [--profil voll|bauer|leser|schreiber]   Rollen-Profil (Grundlast je Zug): bauer = nur vault-search/werkbank-MCP; leser =
 //     Lesen + lesende Bash-Befehle, ohne Skills/CLAUDE.md, zuerst Melious (mit --bare); schreiber = wie bauer, zuerst Melious.
 //     Git-Repo mit origin auf github.com/WirStrom1|knut523: vorher git fetch, „Stand: …“ im Chat; --code = frischer Worktree
@@ -118,6 +121,12 @@ async function call(path: string, b: Record<string, unknown>): Promise<any> {
 
 const ICON: Record<string, string> = { running: '⏳', waiting: '✋', done: '✅', failed: '❌', blocked_g0: '⛔' };
 const t = (d: any) => (d ? new Date(d).toLocaleString('de-AT', { timeZone: 'Europe/Vienna', dateStyle: 'short', timeStyle: 'short' }) : '—');
+/** „Tiefe deep · fertig ca. 17:30“ (Plan 205); alte Stränge ohne Tiefe/ETA: „–“. quelle=true nennt die Herkunft der ETA. */
+export function tiefeEta(s: { tiefe?: string | null; eta?: { text?: string; quelle?: string | null; ueberfaellig?: boolean } | null }, quelle = false): string {
+  const q: Record<string, string> = { agent: 'Agent', median: 'Median', vorgabe: 'Vorgabe' };
+  const e = s.eta?.text ?? '–';
+  return `Tiefe ${s.tiefe ?? '–'} · ${s.eta?.ueberfaellig ? `⚠ ${e}` : e}${quelle && s.eta?.quelle ? ` (ETA: ${q[s.eta.quelle] ?? s.eta.quelle})` : ''}`;
+}
 
 async function main() {
   switch (cmd) {
@@ -125,9 +134,9 @@ async function main() {
       const prompt = typeof flags.prompt === 'string' ? flags.prompt : typeof flags['prompt-file'] === 'string' ? readFileSync(flags['prompt-file'], 'utf8') : await stdin();
       if (typeof flags.title !== 'string' || typeof flags.cwd !== 'string') die('start braucht --title und --cwd.');
       const j = await call('start', { title: flags.title, cwd: flags.cwd, plan: typeof flags.plan === 'string' ? flags.plan : null, lauf: typeof flags.lauf === 'string' ? flags.lauf : null, shared: flags.shared === true, code: flags.code === true, slug: typeof flags.slug === 'string' ? flags.slug : null, prompt,
-        ...(typeof flags.modell === 'string' ? { modell: flags.modell } : {}), ...(typeof flags.risiko === 'string' ? { risiko: flags.risiko } : {}), ...(typeof flags.profil === 'string' ? { profil: flags.profil } : {}) });
+        ...(typeof flags.modell === 'string' ? { modell: flags.modell } : {}), ...(typeof flags.risiko === 'string' ? { risiko: flags.risiko } : {}), ...(typeof flags.profil === 'string' ? { profil: flags.profil } : {}), ...(typeof flags.tiefe === 'string' ? { tiefe: flags.tiefe } : {}) });
       if (flags.json) return console.log(JSON.stringify(j, null, 1));
-      console.log(`gestartet: ${j.id}  ${j.url}\nOrdner:    ${j.cwd}${j.worktree ? ' (frischer Worktree)' : ''}${j.stand ? `\n${j.stand}` : ''}${j.plan ? `\nPlan:      ${j.plan}` : ''}${j.warning ? `\nHinweis:   ${j.warning}` : ''}`);
+      console.log(`gestartet: ${j.id}  ${j.url}\nTiefe:     ${j.tiefe ?? 'regular'}${j.modell ? ` · Modell ${j.modell}` : ''}\nOrdner:    ${j.cwd}${j.worktree ? ' (frischer Worktree)' : ''}${j.stand ? `\n${j.stand}` : ''}${j.plan ? `\nPlan:      ${j.plan}` : ''}${j.warning ? `\nHinweis:   ${j.warning}` : ''}`);
       return;
     }
     case 'nachtbau': {
@@ -152,6 +161,7 @@ async function main() {
       if (!j.strands.length) return console.log(flags.all ? 'Keine Stränge.' : 'Keine offenen Stränge (--all zeigt auch geprüfte).');
       for (const s of j.strands) {
         console.log(`${ICON[s.status] ?? '?'} ${s.id}  ${s.status.padEnd(7)} ${s.title}${s.reviewed ? '  [geprüft]' : ''}`);
+        console.log(`   ${tiefeEta(s)}`);
         console.log(`   ${s.reason} · gestartet ${t(s.startedAt)} · zuletzt ${t(s.lastActivity)} · ${s.sends} Nachr.${s.autoWeiter ? ` · automatisch fortgesetzt (${s.autoWeiter})` : ''}${s.reviewReady ? ' · review_ready' : ''}`);
         console.log(`   ${s.cwd}  ${s.url}`);
         if (s.excerpt) console.log(s.excerpt.split('\n').slice(0, 8).map((l: string) => `   │ ${l}`).join('\n'));
@@ -162,7 +172,7 @@ async function main() {
       if (!pos[0]) die('show <id>');
       const j = await call('show', { id: pos[0] });
       if (flags.json) return console.log(JSON.stringify(j, null, 1));
-      console.log(`${ICON[j.status] ?? '?'} ${j.id} ${j.status} — ${j.reason}\n${j.title}\n${j.url}\n${j.cwd}\n`);
+      console.log(`${ICON[j.status] ?? '?'} ${j.id} ${j.status} — ${j.reason}\n${j.title}\n${tiefeEta(j, true)}${j.modell ? ` · Modell ${j.modell}` : ''}${j.risiko ? ` · Risiko ${j.risiko}` : ''}\n${j.url}\n${j.cwd}\n`);
       console.log(j.lastMessage ? `--- letzte Nachricht (${j.lastMessage.fromUser ? 'Orchestrator/Knut' : 'Agent'}, ${t(j.lastMessage.at)}) ---\n${j.lastMessage.text}` : '(noch keine gespeicherte Nachricht)');
       return;
     }
@@ -250,7 +260,7 @@ async function main() {
       return;
     }
     default:
-      console.log(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 21).map((l) => l.slice(3)).join('\n'));
+      console.log(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 24).map((l) => l.slice(3)).join('\n'));
   }
 }
 

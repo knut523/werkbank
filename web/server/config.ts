@@ -67,5 +67,42 @@ export const cfg = {
 };
 
 export const sprintRoot = () => cfg.sprintRoot || join(cfg.vaultDir, 'olaf', '1-Projects');
-export const jiraBase = () => cfg.jiraBase || `https://api.atlassian.com/ex/jira/${cfg.jiraCloudId}/rest/api/3`;
-export const browseUrl = (key: string) => `${cfg.jiraSite}/browse/${key}`;
+export const jiraBase = () => cfg.jiraBase || siteBase(jiraSites()[0]);
+
+// ---------- Mehrere Jira-Seiten (Knut 16.10.2026, Release 17b) ----------
+// Die Kopie, das Board und alles Schreiben gehören zur Hauptseite (maxenergy, Projekt PM). Weitere Seiten (Entwicklungs-Jira
+// max-energy, Projekt OLAF) liest die Werkbank nach Schlüssel-Präfix live über dieselbe Gateway-Adresse mit derselben
+// Anmeldung. WERKBANK_JIRA_SITES (optional, JSON-Liste {prefix, site, cloudId, base?}) ersetzt die Vorgabe; `base` nur für Tests.
+
+export interface JiraSite { prefix: string; site: string; cloudId: string; base?: string; main: boolean }
+
+export const OLAF_DEV_SITE = { prefix: 'OLAF', site: 'https://max-energy.atlassian.net', cloudId: '7aec26a2-2eca-46bb-a608-9be55c1dd167' };
+
+let sitesCache: { raw: string; list: JiraSite[] } | null = null;
+/** Alle Jira-Seiten; die erste ist die Hauptseite (Kopie, Board, Schreiben). Ungültiges Env → Vorgabe (mit Warnung im Log). */
+export function jiraSites(env = process.env): JiraSite[] {
+  const raw = env.WERKBANK_JIRA_SITES ?? '';
+  if (sitesCache && sitesCache.raw === raw && env === process.env) return sitesCache.list;
+  const main: JiraSite = { prefix: cfg.jiraProject, site: cfg.jiraSite, cloudId: cfg.jiraCloudId, ...(cfg.jiraBase ? { base: cfg.jiraBase } : {}), main: true };
+  let list: JiraSite[] = [main, { ...OLAF_DEV_SITE, main: false }];
+  if (raw.trim()) {
+    try {
+      const j = JSON.parse(raw);
+      const ok = Array.isArray(j) ? j.filter((s: any) => /^[A-Z][A-Z0-9]{0,9}$/.test(String(s?.prefix ?? '')) && /^https:\/\/[\w.-]+$/.test(String(s?.site ?? '')) && /^[0-9a-f-]{36}$/.test(String(s?.cloudId ?? ''))) : [];
+      if (ok.length) list = ok.map((s: any, i: number) => ({ prefix: s.prefix, site: s.site, cloudId: s.cloudId, ...(typeof s.base === 'string' && /^https?:\/\//.test(s.base) ? { base: s.base.replace(/\/$/, '') } : {}), main: i === 0 }));
+      else console.warn('WERKBANK_JIRA_SITES ohne gültigen Eintrag — Vorgabe (PM → maxenergy, OLAF → max-energy).');
+    } catch { console.warn('WERKBANK_JIRA_SITES ist kein JSON — Vorgabe (PM → maxenergy, OLAF → max-energy).'); }
+  }
+  if (env === process.env) sitesCache = { raw, list };
+  return list;
+}
+
+/** Seite eines Schlüssels nach Präfix („OLAF-123“ → max-energy); unbekannter Präfix → Hauptseite. */
+export function siteFor(key: string, sites = jiraSites()): JiraSite {
+  const p = String(key).split('-')[0].toUpperCase();
+  return sites.find((s) => s.prefix === p) ?? sites[0];
+}
+export const isMainSite = (key: string, sites = jiraSites()) => siteFor(key, sites).main;
+/** REST-Basis einer Seite (Gateway mit ihrer cloudId). */
+export const siteBase = (s: JiraSite) => s.base || `https://api.atlassian.com/ex/jira/${s.cloudId}/rest/api/3`;
+export const browseUrl = (key: string) => `${siteFor(key).site}/browse/${key}`;
