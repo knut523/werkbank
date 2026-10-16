@@ -45,8 +45,8 @@ export interface JiraMock { server: Server; port: number; writes: any[]; issues:
  *  findet frisch angelegte Tickets noch nicht (Jira-Index hinkt). Jeweils für den nächsten Aufruf. */
 export interface MockFaults { createAfter?: boolean; createBefore?: boolean; dropFields?: string[]; staleSearch?: boolean }
 
-export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: boolean } = {}): Promise<JiraMock> {
-  const issues = demoIssues();
+export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: boolean; issues?: any[] } = {}): Promise<JiraMock> {
+  const issues = opts.issues ?? demoIssues();   // eigene Tickets: zweite Jira-Seite (Release 17b, z. B. OLAF-394)
   const writes: any[] = [];
   const faults: MockFaults = {};
   const fresh = new Set<string>();   // frisch angelegt (staleSearch)

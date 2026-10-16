@@ -4,7 +4,7 @@
 // dem Token der Person, die klickt. Neue Tickets legt die Werkbank nicht an (olaf-jira-Regel).
 
 import { jiraChanged } from './events.ts';
-import { cfg, jiraBase } from './config.ts';
+import { cfg, jiraBase, jiraSites, siteFor, siteBase, type JiraSite } from './config.ts';
 import { wb } from './db.ts';
 import type { JiraCreds } from './creds.ts';
 import { needsGoal } from './goals.ts';
@@ -17,9 +17,10 @@ export class JiraError extends Error {
   constructor(status: number, message: string) { super(message); this.status = status; }
 }
 
-export async function jiraFetch(creds: JiraCreds, method: string, path: string, body?: unknown): Promise<any> {
+/** REST-Aufruf; ohne `site` an die Hauptseite (Kopie, Board, Schreiben), sonst an die Gateway-Adresse dieser Seite. */
+export async function jiraFetch(creds: JiraCreds, method: string, path: string, body?: unknown, site?: JiraSite): Promise<any> {
   const auth = Buffer.from(`${creds.email}:${creds.token}`).toString('base64');
-  const r = await fetch(jiraBase() + path, {
+  const r = await fetch((site && !site.main ? siteBase(site) : jiraBase()) + path, {
     method,
     headers: { authorization: `Basic ${auth}`, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
@@ -35,6 +36,53 @@ export async function jiraFetch(creds: JiraCreds, method: string, path: string, 
   }
   return text ? JSON.parse(text) : null;
 }
+
+// ---------- Weitere Seiten: nur lesen, live nach Präfix (Release 17b) ----------
+// Tickets anderer Seiten (OLAF-123 auf max-energy) stehen nicht in der Kopie. Gelesen wird je Schlüssel über die cloudId der
+// Seite, 10 Minuten im Speicher. Im Demo-/Testbetrieb nur, wenn die Seite eine eigene Test-Basis hat (nie ins Netz).
+
+const FREMD_MS = 10 * 60_000;
+const fremdCache = new Map<string, { at: number; issue: Issue | null }>();
+export const fremdLesbar = (s: JiraSite) => !s.main && (!!s.base || (!cfg.demo && !cfg.jiraBase));
+
+/** Ticket einer anderen Seite lesen; null = gibt es nicht / nicht lesbar. Hauptseiten-Schlüssel: null (die stehen in der Kopie). */
+export async function fremdesTicket(creds: JiraCreds | null, key: string, now = Date.now()): Promise<(Issue & { site: string }) | null> {
+  const s = siteFor(key);
+  if (!creds || !fremdLesbar(s)) return null;
+  const c = fremdCache.get(key);
+  if (c && now - c.at < FREMD_MS) return c.issue ? { ...c.issue, site: s.site } : null;
+  let issue: Issue | null = null;
+  try { issue = mapIssue(await jiraFetch(creds, 'GET', `/issue/${encodeURIComponent(key)}?fields=${FIELDS.join(',')}`, undefined, s)); }
+  catch (e: any) { if (e?.status !== 404) throw e; }
+  fremdCache.set(key, { at: now, issue });
+  return issue ? { ...issue, site: s.site } : null;
+}
+
+/** Mehrere Schlüssel: nur die der anderen Seiten, parallel; Fehler je Schlüssel werden zu „nicht lesbar“. */
+export async function fremdeTickets(creds: JiraCreds | null, keys: string[]): Promise<Map<string, Issue & { site: string }>> {
+  const want = [...new Set(keys)].filter((k) => !siteFor(k).main).slice(0, 30);
+  const out = new Map<string, Issue & { site: string }>();
+  await Promise.all(want.map(async (k) => { try { const i = await fremdesTicket(creds, k); if (i) out.set(k, i); } catch { /* nicht lesbar */ } }));
+  return out;
+}
+
+/** Lesezugang je Seite (GET /myself), 10 Minuten im Speicher — für „Jira verbinden“ in der Einrichtung. */
+const leseCache = new Map<string, { at: number; ok: boolean; why?: string }>();
+export async function siteLesen(creds: JiraCreds | null, s: JiraSite, now = Date.now()): Promise<{ ok: boolean | null; why?: string }> {
+  if (!creds) return { ok: null, why: 'nicht verbunden' };
+  // Demo-/Testbetrieb: nur Seiten mit eigener Test-Basis (Hauptseite: WERKBANK_JIRA_BASE) — nie ins Netz.
+  const testBasis = s.main ? !!(cfg.jiraBase || s.base) : !!s.base;
+  if ((cfg.demo || cfg.jiraBase) && !testBasis) return { ok: null, why: 'im Test-/Demobetrieb nicht geprüft' };
+  const k = `${creds.email}|${s.prefix}`;
+  const c = leseCache.get(k);
+  if (c && now - c.at < FREMD_MS) return { ok: c.ok, ...(c.why ? { why: c.why } : {}) };
+  let r: { ok: boolean; why?: string };
+  try { await jiraFetch(creds, 'GET', '/myself', undefined, s); r = { ok: true }; }
+  catch (e: any) { r = { ok: false, why: String(e?.message ?? e).slice(0, 160) }; }
+  leseCache.set(k, { at: now, ...r });
+  return r;
+}
+export const jiraSitesPublic = () => jiraSites().map((s) => ({ prefix: s.prefix, site: s.site, main: s.main }));
 
 // ---------- Atlassian Document Format → Text ----------
 

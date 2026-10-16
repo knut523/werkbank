@@ -6,9 +6,12 @@
 // bestätigt wird ein Vorschlag, indem `jira:` ins Frontmatter geschrieben wird.
 
 import { stripCode } from './vault.ts';
+import { jiraSites } from './config.ts';
 
 export const PROJECT = process.env.WERKBANK_JIRA_PROJECT || 'PM';
-const KEY_RE = new RegExp(`\\b${PROJECT}-\\d+\\b`, 'g');
+// Release 17b: Schlüssel aller Jira-Seiten (PM-123 auf maxenergy, OLAF-123 auf max-energy).
+const PREFIXES = () => [...new Set([PROJECT, ...jiraSites().map((s) => s.prefix)])].join('|');
+const keyRe = () => new RegExp(`\\b(?:${PREFIXES()})-\\d+\\b`, 'g');
 const PR_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g;
 
 export interface TicketRef { key: string; via: 'frontmatter' | 'text' | 'link'; prs: string[] }
@@ -20,6 +23,7 @@ export function extractTicketRefs(fm: Record<string, unknown>, body: string): Ti
     if (!r) out.set(key, { key, via, prs: [...new Set(prs)] });
     else { r.prs = [...new Set([...r.prs, ...prs])]; if (via === 'frontmatter') r.via = via; }
   };
+  const KEY_RE = keyRe(), LINK_RE = new RegExp(`atlassian\\.net/browse/((?:${PREFIXES()})-\\d+)`, 'g');
   for (const f of ['jira', 'ticket', 'tickets', 'jira-key', 'jira_key']) {
     for (const v of [fm[f]].flat()) for (const k of String(v ?? '').match(KEY_RE) ?? []) add(k, 'frontmatter');
   }
@@ -27,7 +31,7 @@ export function extractTicketRefs(fm: Record<string, unknown>, body: string): Ti
     const keys = line.match(KEY_RE);
     if (!keys) continue;
     const prs = line.match(PR_RE) ?? [];
-    const linked = new Set([...line.matchAll(new RegExp(`atlassian\\.net/browse/(${PROJECT}-\\d+)`, 'g'))].map((m) => m[1]));
+    const linked = new Set([...line.matchAll(LINK_RE)].map((m) => m[1]));
     for (const k of keys) add(k, linked.has(k) ? 'link' : 'text', prs);
   }
   return [...out.values()];

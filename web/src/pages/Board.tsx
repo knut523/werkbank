@@ -354,10 +354,13 @@ export function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: s
     catch (e) { setErr(e); return false; }
   };
   const i: any = (d.data as any)?.issue;
+  // Release 17b: die Seite kommt vom Server (Präfix → Jira-Seite); Tickets anderer Seiten nur lesen.
+  const href: string = (d.data as any)?.url ?? `${site}/browse/${k}`;
+  const ro = !!(d.data as any)?.readOnly;
   return (
     <div className="drawer" role="dialog" aria-label={`Ticket ${k}`}>
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <a href={`${site}/browse/${k}`} target="_blank" rel="noreferrer"><b>{k}</b> ↗</a>
+        <a href={href} target="_blank" rel="noreferrer"><b>{k}</b> ↗</a>
         <button className="btn small" onClick={onClose} aria-label="Schließen">✕</button>
       </div>
       {!i ? (d.error ? <Err e={d.error} /> : <Loading />) : (
@@ -370,7 +373,8 @@ export function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: s
           </div>
           {(d.data as any).parent && <p className="small">Übergeordnet: <b>{(d.data as any).parent.key}</b> {(d.data as any).parent.summary}</p>}
           <div className="row small"><Since i={i} /><Blocked i={i} /></div>
-          <WasFehlt hyg={(d.data as any).hygiene ?? []} href={`${site}/browse/${k}`} />
+          {ro && <p className="note small" data-testid="detail-fremd">Aus dem Jira {String((d.data as any).site ?? '').replace(/^https:\/\//, '')} — hier nur lesen. Schreiben über den Jira-MCP im Chat (ggf. „/mcp“ neu verbinden).</p>}
+          <WasFehlt hyg={(d.data as any).hygiene ?? []} href={href} />
           {i.links?.length > 0 && <ul className="small" data-testid="detail-links">{i.links.map((l: any) => <li key={l.type + l.key}>{l.label} <button className="sublink" onClick={() => onOpenKey(l.key)}><b>{l.key}</b></button> {l.summary} {l.status && <span className={`chip tiny-chip ${l.done ? 'ok' : l.blocks === 'blocked-by' ? 'bad' : ''}`}>{l.status}</span>}</li>)}</ul>}
           {i.description && <div className="card soft small" style={{ whiteSpace: 'pre-wrap' }}>{i.description}</div>}
           {i.lastComment && <p className="small"><b>Letzter Kommentar</b> ({i.lastComment.author}, {fmtDate(i.lastComment.created)}): {i.lastComment.text}</p>}
@@ -387,6 +391,7 @@ export function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: s
           }}>💬 Im Chat besprechen</button></div>
           <Err e={err} />
 
+          {!ro && <>
           <h3 id="aktionen">Aktionen <span className="tiny">(je mit Bestätigung — geschrieben über den Atlassian-MCP, schneller Weg ohne Modell)</span></h3>
           <div className="col">
             <textarea rows={3} placeholder="Kommentar …" value={comment} onChange={(e) => setComment(e.target.value)} aria-label="Kommentar" />
@@ -409,6 +414,7 @@ export function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: s
           <AgentPanel issueKey={k} runs={(d.data as any).runs} onChange={() => d.reload()} />
           {forge && <ForgePanel issueKey={k} enabled onStarted={() => d.reload()} />}
           <p className="tiny" style={{ marginTop: 12 }}>Neue Tickets legt der OLAF Workspace bewusst nicht an (olaf-jira: nur auf ausdrücklichen Auftrag, mit Duplikatsuche und Workstream) — dafür den Chat nutzen.</p>
+          </>}
         </>
       )}
     </div>
@@ -579,6 +585,8 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
         </div>
         {data?.sprint && <button className={`btn small ${sprint ? 'primary' : ''}`} onClick={() => setSprint(!sprint)} title="Nur Tickets im aktuellen Sprint (Workspace-Zuordnung)" aria-pressed={sprint}>🎯 nur aktueller Sprint ({data.sprint.count})</button>}
         <input type="search" placeholder="Suchen (Key, Titel, Owner)" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tickets suchen" />
+        {(() => { const fk = q.trim().toUpperCase(); const st = (cfg.jiraSites ?? []).find((x) => !x.main && fk.startsWith(x.prefix + '-'));   // Release 17b: Schlüssel einer anderen Jira-Seite
+          return st && /^[A-Z][A-Z0-9]*-\d+$/.test(fk) ? <button className="btn small" onClick={() => setOpen(fk)} data-testid="fremd-oeffnen">{fk} öffnen ({st.site.replace(/^https:\/\//, '')}, nur lesen)</button> : null; })()}
         <label className="row small"><input type="checkbox" checked={done} onChange={(e) => setDone(e.target.checked)} /> ältere erledigte zeigen</label>
         <label className="row small" title="Beim Ziehen einer Karte erst bestätigen (Einstellung je Person)"><input type="checkbox" checked={confirmMove} onChange={async (e) => { await api('/api/prefs', { body: { confirmMove: e.target.checked } }); prefs.reload(); }} /> Verschieben bestätigen</label>
         <label className="row small"><input type="checkbox" checked={allOpen} onChange={(e) => { setAllOpen(e.target.checked); setExpanded(new Set()); }} /> Sub-tasks aufklappen</label>

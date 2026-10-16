@@ -390,6 +390,14 @@ function Wizard({ cfg }: { cfg: Config }) {
           <div className="card">
             <h3 style={{ marginTop: 0 }}>Jira lesen (Board-Kopie)</h3>
             {s.jira.connected && <p className="okbox">Verbunden als {s.jira.email} · Quelle: {s.jira.source}{s.jira.canWrite === false ? ' · nur lesen' : s.jira.canWrite ? ' · darf schreiben' : ''}.</p>}
+            {(s.jira.sites ?? []).length > 1 && <table className="t small" data-testid="jira-seiten" style={{ margin: '6px 0' }}>
+              <thead><tr><th>Seite</th><th>Schlüssel</th><th>Lesen</th><th>Schreiben</th></tr></thead>
+              <tbody>{s.jira.sites.map((x: any) => <tr key={x.prefix} data-testid="jira-seite" data-prefix={x.prefix}>
+                <td><a href={x.site} target="_blank" rel="noreferrer">{x.site.replace(/^https:\/\//, '')}</a>{x.main ? ' (Board-Kopie)' : ''}</td><td><code>{x.prefix}-…</code></td>
+                <td>{x.lesen === true ? '✓ ok' : x.lesen === false ? <span className="bad" title={x.lesenWarum ?? ''}>✗ nein</span> : <span className="muted" title={x.lesenWarum ?? ''}>–</span>}</td>
+                <td>{x.main ? (x.schreiben ? '✓ über den Jira-MCP' : x.schreiben === false ? 'nur lesen — schreiben über den Jira-MCP' : '?') : <span className="muted" title={x.schreibenHinweis}>über den Jira-MCP im Chat (ggf. /mcp neu verbinden)</span>}</td>
+              </tr>)}</tbody>
+            </table>}
             {s.jira.source === 'Pilot (Vaultwarden der VM)' && <p className="note small">Pilot: gelesen wird mit dem Team-Lesetoken „Jira api“ aus dem Vaultwarden der VM. Er darf <b>nicht schreiben</b> — geschrieben wird über den Atlassian-MCP (nächster Schritt).</p>}
             <ol className="small">
               <li><a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noreferrer">id.atlassian.com → API-Tokens</a> → <b>API-Token mit Bereichen erstellen</b> → App <b>Jira</b>.</li>

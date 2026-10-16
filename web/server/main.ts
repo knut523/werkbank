@@ -9,14 +9,14 @@ import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mk
 import { join, extname, resolve, normalize, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import YAML from 'yaml';
-import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl } from './config.ts';
+import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl, isMainSite, siteFor, jiraSites } from './config.ts';
 import { connect, wb, lc } from './db.ts';
 import { librechatLogin, createSession, destroySession, currentUser, allowed, teammates, userById, type User } from './auth.ts';
 import { listClaudeAccounts, addClaudeAccount, removeClaudeAccount, reorderClaudeAccounts, claudeAccountToken, claudeAccountsForBridge } from './creds.ts';
 import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraIdentity, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
-import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
+import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema, etaMediane } from './orchestrator.ts';
@@ -120,6 +120,20 @@ async function issueMap(): Promise<Map<string, Issue>> {
   // Jira-Kopie + Werkbank-Zuordnung (Ziel/Sprint lokal, Runde 7).
   const all = await attachLocal((await wb().collection('jira_issues').find({}, { projection: { _id: 0 } }).toArray()) as unknown as Issue[]);
   return new Map(all.map((i) => [i.key, i]));
+}
+
+/** Kopie + Tickets anderer Jira-Seiten (Release 17b): Schlüssel wie OLAF-123 live nach Präfix gelesen (nur lesen, 10 min Cache). */
+async function mitFremden(u: User, im: Map<string, Issue>, keys: Iterable<string>): Promise<Map<string, Issue>> {
+  const fehlen = [...new Set(keys)].filter((k) => !im.has(k) && !isMainSite(k));
+  if (!fehlen.length) return im;
+  const f = await fremdeTickets(await jiraCreds(u).catch(() => null), fehlen);
+  return f.size ? new Map([...im, ...f]) : im;
+}
+
+/** „Nicht in der Kopie“ — bei Schlüsseln anderer Seiten mit dem Hinweis, dass die Werkbank dort nur liest. */
+function nichtInKopie(key: string, what = 'Ticket nicht in der Kopie.') {
+  const s = siteFor(key);
+  return s.main ? new HttpError(404, what) : new HttpError(409, `${key} liegt im Jira ${s.site.replace(/^https:\/\//, '')} — die Werkbank liest dort nur. Schreiben über den Jira-MCP im Chat (dort ggf. „/mcp“ neu verbinden).`);
 }
 
 // ---------- Verknüpfung Vault ↔ Tickets (Index-Refresh bei jeder Vault-Änderung über vaultIdx) ----------
@@ -361,7 +375,7 @@ on('GET', /^\/api\/config$/, async (req, res) => {
   const u = await currentUser(req);
   send(res, 200, {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: !!process.env.WERKBANK_FORGE_MCP,
-    jiraSite: cfg.jiraSite, project: cfg.jiraProject, vault: cfg.vaultDir,
+    jiraSite: cfg.jiraSite, jiraSites: jiraSitesPublic(), project: cfg.jiraProject, vault: cfg.vaultDir,
     dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u),
   });
 });
@@ -383,13 +397,25 @@ on('POST', /^\/api\/logout$/, async (req, res) => { await destroySession(req, re
 
 // --- Einrichtung ---
 
+/** „Jira verbinden“ je Seite (Release 17b): lesen geprüft über GET /myself der Seite; schreiben nur auf der Hauptseite (MCP/REST). */
+async function jiraSeiten(u: User) {
+  const st: any = await jiraStatus(u);
+  const c = st.connected ? await jiraCreds(u).catch(() => null) : null;
+  return Promise.all(jiraSites().map(async (s) => {
+    const l = await siteLesen(c, s);
+    return { prefix: s.prefix, site: s.site, main: s.main, lesen: l.ok, lesenWarum: l.why ?? null,
+      schreiben: s.main ? (st.canWrite ?? null) : null,
+      schreibenHinweis: s.main ? null : 'Schreiben nur über den Jira-MCP im Chat — ist die Seite dort nicht freigegeben, im Chat „/mcp“ neu verbinden.' };
+  }));
+}
+
 on('GET', /^\/api\/setup\/status$/, async (req, res) => {
   const u = await needUser(req);
   const skills = listSkills(cfg.skillsSource, cfg.skillsTarget);
   send(res, 200, {
     user: u,
     claude: await claudeStatus(u),
-    jira: await jiraStatus(u),
+    jira: { ...(await jiraStatus(u)), sites: await jiraSeiten(u) },
     services: await health(),
     skills: { total: skills.length, linked: skills.filter((s) => s.state === 'verlinkt').length, missing: skills.filter((s) => s.state === 'fehlt').length },
     search: searchState,
@@ -590,7 +616,7 @@ on('GET', /^\/api\/vault\/overview$/, async (req, res) => {
 });
 
 on('GET', /^\/api\/vault\/note$/, async (req, res, _m, url) => {
-  await needUser(req);
+  const u = await needUser(req);
   const idx = vaultIdx();
   const path = url.searchParams.get('path') ?? '';
   const n = readNote(idx, path);
@@ -600,7 +626,7 @@ on('GET', /^\/api\/vault\/note$/, async (req, res, _m, url) => {
     path, title: n.meta.title, fm: n.meta.fm, mtime: n.meta.mtime, html: n.html,
     links: n.meta.links.map(info), unresolved: n.meta.unresolved,
     backlinks: [...(idx.backlinks.get(path) ?? [])].sort().map(info),
-    tickets: await (async () => { const im = await issueMap(); return n.meta.tickets.map((k) => { const i = im.get(k); const r = (idx.tickets.get(k) ?? []).find((x) => x.path === path); return { key: k, summary: i?.summary ?? null, status: i?.status ?? null, assignee: i?.assignee ?? null, via: r?.via ?? 'text' }; }); })(),
+    tickets: await (async () => { const im = await mitFremden(u, await issueMap(), n.meta.tickets); return n.meta.tickets.map((k) => { const i = im.get(k); const r = (idx.tickets.get(k) ?? []).find((x) => x.path === path); return { key: k, summary: i?.summary ?? null, status: i?.status ?? null, assignee: i?.assignee ?? null, via: r?.via ?? 'text' }; }); })(),
     suggestedTickets: n.meta.tickets.length ? [] : await (async () => { const im = await issueMap(); const out: any[] = []; for (const [k, list] of await suggestions()) { const hit = list.find((x: any) => x.path === path); if (hit) out.push({ key: k, summary: im.get(k)?.summary, status: im.get(k)?.status, why: hit.why, score: hit.score }); } return out.sort((a, b) => b.score - a.score).slice(0, 5); })(),
     chatUrl: chatUrl(`Lies die Notiz ${cfg.vaultDir}/${path} („${n.meta.title}“) und fass kurz zusammen, was drinsteht und was offen ist. Danach arbeiten wir damit weiter. Änderungen am Vault nur nach meiner Bestätigung.`),
   });
@@ -673,6 +699,13 @@ on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => 
   const u = await needUser(req);
   const im = await issueMap();
   const i = im.get(m[1]);
+  if (!i && !isMainSite(m[1])) {
+    // Release 17b: Ticket einer anderen Seite (OLAF-123) — live lesen, nur anzeigen (keine Läufe, keine Schreibknöpfe).
+    const f = await fremdesTicket(await jiraCreds(u).catch(() => null), m[1]);
+    if (!f) throw new HttpError(404, `${m[1]} nicht lesbar (Jira ${siteFor(m[1]).site.replace(/^https:\/\//, '')}).`);
+    return send(res, 200, { issue: f, url: browseUrl(f.key), children: [], runs: [], hygiene: [], parent: f.parent ? { key: f.parent, summary: f.parentSummary ?? null } : null, docs: await ticketDocs(u, f.key), readOnly: true, site: f.site,
+      chatUrl: chatUrl(`${ticketPrompt(f)}\n\nLass uns an diesem Ticket arbeiten. Lies zuerst, was Vault und Jira dazu sagen.`) });
+  }
   if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
   await refreshChatRuns({ key: i.key });
   const runs = await wb().collection('agent_runs').find({ key: i.key }).sort({ startedAt: -1 }).limit(8).toArray();
@@ -689,6 +722,7 @@ on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => 
 
 on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/transitions$/, async (req, res, m) => {
   const u = await needUser(req);
+  if (!isMainSite(m[1])) throw nichtInKopie(m[1]);
   send(res, 200, { transitions: await transitions(await needJira(u), m[1]) });
 });
 
@@ -696,6 +730,7 @@ const writeRoute = (kind: 'comment' | 'status' | 'due') => async (req: IncomingM
   const u = await needUser(req);
   const b = await body(req);
   const key = m[1];
+  if (!isMainSite(key)) throw nichtInKopie(key);   // Release 17b: andere Jira-Seiten nur lesen
   const preview = kind === 'comment' ? `Kommentar auf ${key}: „${String(b.text ?? '').slice(0, 200)}“`
     : kind === 'status' ? `Status von ${key} → „${b.to}“` : `Fälligkeit von ${key} → ${b.date || 'ohne Datum'}`;
   if (b.confirm !== true) return send(res, 200, { preview, needsConfirm: true, via: writeMode() });
@@ -715,7 +750,7 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/move$/, async (req, res,
   const b = await body(req);
   const im = await issueMap();
   const i = im.get(m[1]);
-  if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  if (!i) throw nichtInKopie(m[1]);
   const wantStatus = b.status ? String(b.status) : undefined;
   const ts = wantStatus && wantStatus !== i.status ? await transitions(await needJira(u), i.key) : [];
   const r = moveActions(i, { status: wantStatus, lane: b.lane ? String(b.lane) : undefined }, ts, (k) => im.get(k)?.type === 'Workstream');
@@ -766,7 +801,7 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/edit$/, async (req, res,
   const b = await body(req);
   const im = await issueMap();
   const i = im.get(m[1]);
-  if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  if (!i) throw nichtInKopie(m[1]);
   const actions: JiraAction[] = [];
   if (b.priority !== undefined) {
     const known = new Set([...PRIORITIES, ...[...im.values()].map((x) => x.priority).filter(Boolean) as string[]]);
@@ -823,7 +858,7 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res
   if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
   const b = await body(req);
   const i = (await issueMap()).get(m[1]);
-  if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  if (!i) throw nichtInKopie(m[1]);
   const token = await getClaudeToken(u);
   if (!token) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen.');
   // Standard: echter Chat („PM-123 · Titel“), der Agent arbeitet mit Rückfrage vor jedem Schreiben.
@@ -843,7 +878,7 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/discuss$/, async (req, r
   const u = await needUser(req);
   if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
   const i = (await issueMap()).get(m[1]);
-  if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
+  if (!i) throw nichtInKopie(m[1]);
   if (!(await getClaudeToken(u))) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen.');
   send(res, 200, await startChatAgent(u, i, '', 'discuss'));
 });
@@ -1006,8 +1041,9 @@ on('GET', /^\/api\/roadmap\/heute$/, async (req, res) => {
 on('GET', /^\/api\/roadmap$/, async (req, res) => {
   const u = await needUser(req);
   const idx = vaultIdx();
-  const im = await issueMap();
   const rm = roadmap(idx, ROADMAP_BASE);
+  // Release 17b: Schlüssel anderer Jira-Seiten im Spec-Kopf (jira: OLAF-123) live lesen, damit Status und Konsistenz stimmen.
+  const im = await mitFremden(u, await issueMap(), rm.topics.flatMap((t: any) => Object.values(t.states).flat().flatMap((sp: any) => idx.notes.get(sp.path)?.tickets ?? [])));
   const byName = new Map<string, any>();
   const { decisions } = collectDecisions(idx, readVault, ROADMAP_BASE);
   const specPrs = new Map<string, string[]>();
@@ -1701,9 +1737,9 @@ on('POST', /^\/api\/roadmap\/github$/, async (req, res) => {
 // --- Spec-Ordnung (Runde 6): Regel-Check je Spec, Zustandswechsel als Kopiertext, neue Spec aus Vorlage ---
 
 on('GET', /^\/api\/roadmap\/order$/, async (req, res) => {
-  await needUser(req);
-  const im = await issueMap();
+  const u = await needUser(req);
   const specs = roadmapSpecs(await assignments('spec'));
+  const im = await mitFremden(u, await issueMap(), specs.flatMap((sp: any) => sp.tickets));
   const ranking = parseRankTable(readVault(`${OVERVIEW}/priorisierung-roadmap-produkt-olaf.md`));
   const rankOf = new Map(ranking.map((r) => [r.spec, r.rank]));
   const infos = specs.map((sp) => ({ ...sp, tickets: sp.tickets.map((k) => ({ key: k, status: im.get(k)?.status ?? null })), jiraKey: true, rank: null }));
@@ -2793,7 +2829,7 @@ on('POST', /^\/internal\/jira-update$/, async (req, res) => {
   const key = String(b.key ?? '');
   if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw new HttpError(400, 'Ungültiger Schlüssel.');
   const cur = (await allIssues()).find((i) => i.key === key);
-  if (!cur) throw new HttpError(404, 'Ticket nicht in der Jira-Kopie (nur bestehende Tickets, keine neuen).');
+  if (!cur) throw nichtInKopie(key, 'Ticket nicht in der Jira-Kopie (nur bestehende Tickets, keine neuen).');
   if (titleMismatch(b.summary, cur.summary)) throw new HttpError(409, `${key} heißt „${cur.summary}“, nicht „${String(b.summary).slice(0, 80)}“ — nichts geschrieben. Bitte mit dem richtigen Titel neu fragen.`);
   const actions: any[] = [];
   if (b.comment) actions.push({ type: 'comment', text: String(b.comment) });
@@ -2827,7 +2863,7 @@ on('POST', /^\/internal\/jira-update-many$/, async (req, res) => {
     if (String(c?.comment ?? '').length > 1500) throw new HttpError(400, `${key}: Kommentar über 1500 Zeichen (die Rückfrage zeigt nur so viel) — nichts geschrieben.`);
     if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw new HttpError(400, `Ungültiger Schlüssel „${key.slice(0, 20)}“ — nichts geschrieben.`);
     const cur = byKey.get(key);
-    if (!cur) throw new HttpError(404, `${key} ist nicht in der Jira-Kopie (nur bestehende Tickets) — nichts geschrieben.`);
+    if (!cur) throw nichtInKopie(key, `${key} ist nicht in der Jira-Kopie (nur bestehende Tickets) — nichts geschrieben.`);
     if (!isMine(cur, who)) throw new HttpError(403, `${key} gehört nicht dir (Owner: ${cur.assignee ?? 'niemand'}) — gesammelt nur eigene Tickets; nichts geschrieben.`);
     if (titleMismatch(c.summary, cur.summary)) throw new HttpError(409, `${key} heißt „${cur.summary}“, nicht „${String(c.summary).slice(0, 80)}“ — nichts geschrieben.`);
     const actions: any[] = [];
