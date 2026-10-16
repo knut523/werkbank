@@ -12,6 +12,7 @@ import { berichtKopf, offeneFragen, type Kopf } from './berichtkopf.ts';
 import { berichtHash, entscheidungen, dienstePfad } from './freigabe.ts';
 import { worumGeht } from './heutekarte.ts';
 import { themaOf } from './themen.ts';
+import { etaFuer, istTiefe, QUELLE_TEXT, type Tiefe } from './tiefe.ts';
 import { knutDone, statusWord, kopfFelder } from './leitstand.ts';
 import { OPEN } from './orchestrator.ts';   // in der Abfrage, damit .limit() nicht Geprüfte zählt
 
@@ -131,7 +132,7 @@ export function kartenLinks(o: { id: string; bericht: boolean; paket: string | n
 }
 
 /** Karte eines Strangs (rein bis auf das Lesen von Bericht, Plan und Paketliste). */
-export function karte(d: any, fgs: any[], qs: any[], basis: string | null) {
+export function karte(d: any, fgs: any[], qs: any[], basis: string | null, med: Record<Tiefe, number | null> | null = null, now = Date.now()) {
   const felder: any = kopfFelder(d, fgs);
   const running = d.lastStatus === 'running';
   const pfad = paketDatei(d, 'bericht');
@@ -148,6 +149,9 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null) {
   const paket = felder.paket ?? (d.paket || null);
   const p = paket ? readPaket(reviewDir(), paket) : null;
   const kurz = (kopf?.worum || worumGeht({ title: d.title, prompt: [d.zielLine, d.prompt].filter(Boolean).join('\n'), planText: readPlan(d.plan), berichtText: text })).slice(0, 600);
+  // Plan 205: ETA nur für nicht fertige Stränge; überfällig = gedämpft markiert, kein Alarm.
+  const wort = statusWord(d);
+  const eta = etaFuer(d, { fertig: wort === 'fertig' || wort === 'gestoppt', mediane: med, now });
   const seen = String(new Date(d.reviewReadyAt ?? d.doneAt ?? 0).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime());
   return {
     id: String(d._id), titel: kopf?.titel || d.title || '(ohne Titel)', strangTitel: d.title ?? '', thema: themaOf(d), ampel: a, ampelText: a === 'push' && fg?.pushedAt ? 'gepusht' : AMPEL_TEXT[a],
@@ -160,7 +164,8 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null) {
     kannFreigeben, freigabe: fg, weitereRepos: felder.weitereRepos ?? [], commitWarnung: felder.commitWarnung ?? null,
     kopfFehler: kopf ? null : felder.kopfFehler ?? (roh && 'fehler' in roh ? roh.fehler : null),   // wie Heute: unlesbaren Kopf zeigen
     modell: d.lastModell ?? null, modellPlan: d.modell ?? null, gegenpruefung: d.gegenpruefung?.n ?? 0, reviewReady: !!d.reviewReadyAt,   // Karte › Technische Details (Paket 187, S4)
-    running, wartet: statusWord(d) === 'wartet', seen, paket, chat: sicher(d.url) ? d.url : null, statusAt: d.statusAt ?? d.lastActivity ?? d.startedAt,
+    tiefe: istTiefe(d.tiefe) ? d.tiefe : null, eta: { text: eta.text, ueberfaellig: eta.ueberfaellig, at: eta.at, quelle: eta.quelle ? QUELLE_TEXT[eta.quelle] : null },
+    running, wartet: wort === 'wartet', seen, paket, chat: sicher(d.url) ? d.url : null, statusAt: d.statusAt ?? d.lastActivity ?? d.startedAt,
   };
 }
 export type Karte = ReturnType<typeof karte>;

@@ -21,6 +21,7 @@ import { pruefe, parsePlan, protokolliere, g0Text, g0Optionen, OHNE_PR, vorbauAu
 import { vienna } from './hygiene.ts';
 import { cleanThema, themaOf } from './themen.ts';
 import { meliousSettings, ausserhalbAbo } from './melious.ts';
+import { tiefeOf, istTiefe, tiefeStart, tiefeText, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, type Tiefe } from './tiefe.ts';
 
 export const ORCH_TAG = 'Orchestrator';
 export type OrchStatus = 'running' | 'waiting' | 'done' | 'failed' | 'blocked_g0';
@@ -29,7 +30,7 @@ const internalHeaders = () => ({ 'content-type': 'application/json', 'x-werkbank
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 OLAF-Werkbank';
 
-export interface BriefInput { title: string; prompt: string; cwd: string; plan?: string | null; person?: string; stand?: string | null }
+export interface BriefInput { title: string; prompt: string; cwd: string; plan?: string | null; person?: string; stand?: string | null; tiefe?: Tiefe | null }
 
 // Berichtsvorlage für jeden Strang (docs/plan-leitstand.md, Teil C, C8; Knut 14.10.2026): fester Kopf, den „Heute“ liest, und
 // Pflicht-Visualisierung neben Screenshots. Vollständiges Muster: docs/bericht-vorlage.md, Folien: docs/bericht-folien-vorlage.html.
@@ -89,6 +90,8 @@ export function orchBrief(b: BriefInput): string {
       // Knut 13.10.2026: PR- und Plan-Texte gehen auf GitHub — dort gibt es weder die lokalen Ordner noch Zweige/PRs, die erst entstehen.
       '- PR- und Plan-Texte verweisen nie auf PRs oder Branches, die es noch nicht gibt, und nie auf lokale Pfade (`~/…`, `/home/…`, Review-Paket-Ordner). Belege als Commit-SHA, Dateipfad im Repo oder bestehender PR-Link.',
     ].join('\n'),
+    // Plan 205: Tiefe (Pflichtschritte) und ETA (Pflichtzeile im Stand-Block, die Werkbank liest sie wie „Status:“).
+    tiefeText(b.tiefe ?? tiefeOf(null)),
     [
       'Schließe JEDE Antwort mit diesem Abschnitt (die Haupt-Sitzung liest ihn maschinell; nach „Status:“ genau eines der drei Wörter — „fertig“ nur, wenn der Auftrag erledigt und geprüft ist):',
       '```text',
@@ -96,9 +99,10 @@ export function orchBrief(b: BriefInput): string {
       '- Erledigt: …',
       '- Offen: …',
       '- Braucht Knut: … (oder „nichts“)',
+      ETA_ZEILE,
       'Status: fertig | braucht Antwort | blockiert',
       '```',
-      'Schreib den Abschnitt selbst als normales Markdown, nicht als Codeblock.',
+      'Schreib den Abschnitt selbst als normales Markdown, nicht als Codeblock. Die ETA schätzt du schon in der ersten Antwort (Uhrzeit in Wiener Zeit oder Dauer ab jetzt) und ziehst sie bei jeder Antwort nach.',
     ].join('\n'),
     BERICHT_PFLICHT,
     `---\n\nAuftrag:\n${b.prompt.trim()}`,
@@ -286,7 +290,7 @@ export async function strandStates(u: User): Promise<Map<string, StrandState & {
 
 // ---------- Öffentliche Schnittstelle ----------
 
-export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null; lauf?: string | null; modell?: string | null; risiko?: 'niedrig' | 'mittel' | 'hoch' | null; profil?: 'voll' | 'bauer' | 'leser' | 'schreiber' | null }
+export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null; lauf?: string | null; modell?: string | null; risiko?: 'niedrig' | 'mittel' | 'hoch' | null; profil?: 'voll' | 'bauer' | 'leser' | 'schreiber' | null; tiefe?: string | null }
 
 // Plan 162, S2: Hauptmodell und Risikostufe eines Strangs (vorbereitet für die smarte Modellwahl, Paket 163). Nur beim Start.
 const STRAND_MODEL = /^(claude:(opus|sonnet|haiku)|melious:[\w.:/-]{1,80})$/;
@@ -313,7 +317,7 @@ async function newId(): Promise<string> {
   for (;;) { const id = randomUUID().slice(0, 8); if (!(await runs().findOne({ _id: id as any }))) return id; }
 }
 
-export async function startOrch(u: User, inp: StartInput): Promise<{ id: string; conv: string; url: string; cwd: string; plan: string | null; mode: any; stand: string | null; g0: G0Public | null; worktree: boolean; warning?: string }> {
+export async function startOrch(u: User, inp: StartInput): Promise<{ id: string; conv: string; url: string; cwd: string; plan: string | null; mode: any; stand: string | null; g0: G0Public | null; worktree: boolean; tiefe: Tiefe; modell: string | null; warning?: string }> {
   const title = String(inp.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
   const prompt = String(inp.prompt ?? '').trim();
   if (!title) throw err(400, 'Titel fehlt.');
@@ -341,25 +345,29 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
     if (open.length) throw err(409, `Im Ordner arbeitet schon der Strang ${open[0].id} („${open[0].title}“, ${open[0].status}). Eigenen Worktree nehmen oder --shared.`);
   }
   const conv = randomUUID();
-  const modell = inp.modell ? String(inp.modell) : null;
+  // Plan 205: Tiefe (Vorgabe regular); quick/deep setzen Modell bzw. Risiko vor, ausdrückliche Angaben schlagen das.
+  if (inp.tiefe && !istTiefe(inp.tiefe)) throw err(400, `Tiefe: ${TIEFEN.join(', ')}.`);
+  const tiefe = tiefeOf(inp.tiefe);
+  const vor = tiefeStart(tiefe, { modell: inp.modell ? String(inp.modell) : null, risiko: inp.risiko && RISIKO.includes(inp.risiko) ? inp.risiko : null });
+  const modell = vor.modell;
   if (modell && !STRAND_MODEL.test(modell)) throw err(400, 'Modell: claude:opus|sonnet|haiku oder melious:<modell>.');
-  const risiko = inp.risiko && RISIKO.includes(inp.risiko) ? inp.risiko : null;
+  const risiko = vor.risiko as StartInput['risiko'];
   // Hotfix 15.10.: Melious-Modell außerhalb des Abos → Start erlaubt, aber mit Hinweis „läuft auf Guthaben“ (kein stilles Guthaben).
   const aboHinweis = modell?.startsWith('melious:') && modell !== 'melious:auto' && ausserhalbAbo([modell.slice(8)], (await meliousSettings(u)).abo).length ? `Melious-Modell „${modell.slice(8)}“ ist nicht im Abo und läuft auf Guthaben.` : null;
   if (inp.profil && !['voll', 'bauer', 'leser', 'schreiber'].includes(inp.profil)) throw err(400, 'Profil: voll, bauer, leser oder schreiber.');
   const profil = inp.profil && inp.profil !== 'voll' ? inp.profil : null;
   // 1) Bei der Brücke anmelden (prüft den Ordner selbst). Ohne Anmeldung kein Chat (fail closed).
-  const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}) }), signal: AbortSignal.timeout(5000) });
+  const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}), tiefe }), signal: AbortSignal.timeout(5000) });
   const rj: any = await reg.json().catch(() => ({}));
   if (!reg.ok) throw err(reg.status === 400 || reg.status === 409 || reg.status === 403 ? reg.status : 502, rj.error ?? `Brücke antwortet mit ${reg.status}`);
   const stand = [fresh.status, g0 ? g0.text : null].filter(Boolean).join('\n') || null;
-  const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand });
+  const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand, tiefe });
   const { lauf, explicit } = laufName(title, inp.lauf);
   // Bericht-Pfad aus dem VOLLEN Auftrag und der Plandatei (F7) — der gespeicherte Auftrag ist gekürzt.
   let planText = '';
   if (plan) { try { planText = readFileSync(plan, 'utf8').slice(0, 200_000); } catch { /* egal */ } }
   const doc: any = { _id: id, userId: u.id, conv, url: `${cfg.librechatPublicUrl}/c/${conv}`, title, cwd: rj.dir ?? real, plan, prompt: prompt.slice(0, 500), startedAt: new Date(), lastSentAt: new Date(), sends: 1, reviewedAt: null, knutReviewedAt: null, mode: rj.mode ?? null, startError: null, slug: g0?.slug ?? null, g0: g0?.public ?? null,
-    lauf, laufExplicit: explicit, bericht: findBericht([prompt, planText]), modell, risiko, profil,
+    lauf, laufExplicit: explicit, bericht: findBericht([prompt, planText]), modell, risiko, profil, tiefe,
     ownWorktree: fresh.worktree,   // Heute/Release-Stand (Paket 141): nur ein eigener Worktree belegt den Stand des Strangs
     paket: findPaket([prompt, planText]),   // review-pakete/NNN-slug — Heute verlinkt daraus Auftrag und Bericht
     // „Worum es geht“ auf Heute (Paket 141): die Ziel-Zeile aus dem VOLLEN Auftrag — der gespeicherte ist auf 500 Zeichen gekürzt.
@@ -376,12 +384,27 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   // Nacheinander: beide lesen sonst dieselbe leere Tag-Liste, und der zweite PUT überschreibt den ersten (Test Teil B).
   decorateSoon(u, conv, title).then(() => (explicit ? decorateSoon(u, conv, title, 20, laufTag(lauf)) : undefined)).catch(() => {});
   const warnungen = [doc.mode && doc.mode !== 'auto' ? `Brücke läuft für dieses Konto im Modus „${doc.mode}“ — ohne Auto-Modus darf der Strang nur lesen.` : null, aboHinweis].filter(Boolean);
-  return { id, conv, url: doc.url, cwd: doc.cwd, plan, mode: doc.mode, stand, g0: g0?.public ?? null, worktree: fresh.worktree, ...(warnungen.length ? { warning: warnungen.join(' ') } : {}) };
+  return { id, conv, url: doc.url, cwd: doc.cwd, plan, mode: doc.mode, stand, g0: g0?.public ?? null, worktree: fresh.worktree, tiefe, modell, ...(warnungen.length ? { warning: warnungen.join(' ') } : {}) };
+}
+
+/** Median-Dauer je Tiefe aus den erledigten Strängen der Person (Plan 205: Rückfall-ETA ohne Agentenangabe). */
+export async function etaMediane(u: User, now = Date.now()) {
+  const docs = await runs().find({ userId: u.id, ...STRANDS, doneAt: { $ne: null }, startedAt: { $gt: new Date(now - 60 * 86400_000) } }, { projection: { tiefe: 1, startedAt: 1, doneAt: 1 } }).sort({ doneAt: -1 }).limit(150).toArray();
+  // Je Tiefe höchstens die letzten 50.
+  const n: Record<string, number> = {};
+  return mediane(docs.filter((d: any) => (n[tiefeOf(d.tiefe)] = (n[tiefeOf(d.tiefe)] ?? 0) + 1) <= 50));
+}
+
+/** ETA eines Strangs für list/show: die ETA-Zeile der letzten Antwort, sonst die zuletzt gemeldete, sonst Median/Vorgabe. */
+function etaVon(d: any, last: LastMsg | null, status: OrchStatus, med: Record<Tiefe, number | null>) {
+  const neu = last && !last.fromUser ? etaMark(last.text, last.at) : null;
+  return etaFuer({ ...d, eta: neu ? { at: neu } : d.eta }, { fertig: status === 'done' || status === 'failed' || status === 'blocked_g0', mediane: med });
 }
 
 export async function listOrch(u: User, opts: { all?: boolean } = {}) {
   const docs: any[] = await runs().find({ userId: u.id, ...STRANDS, ...(opts.all ? {} : OPEN) }).sort({ startedAt: -1 }).limit(100).toArray();
   if (!docs.length) return [];
+  const med = await etaMediane(u).catch(() => null) ?? { quick: null, regular: null, deep: null };
   let states = new Map<string, any>();
   let bridgeError: string | null = null;
   try { states = await strandStates(u); } catch (e: any) { bridgeError = String(e.message ?? e); }
@@ -389,7 +412,8 @@ export async function listOrch(u: User, opts: { all?: boolean } = {}) {
   for (const d of docs) {
     if (d.status === 'blocked_g0') {
       out.push({ id: d._id, title: d.title, status: 'blocked_g0' as OrchStatus, reason: `G0 ${d.g0?.ergebnis === 'stopp' ? 'nicht prüfbar' : 'Treffer'} — Rückfrage ${d.question ?? '?'} im OLAF Workspace (Heute)`, reviewed: !!d.reviewedAt, url: null, cwd: d.cwd, plan: d.plan,
-        startedAt: d.startedAt, lastSentAt: d.startedAt, lastActivity: new Date(d.startedAt).getTime(), sends: 0, excerpt: d.g0?.text ?? '', written: [], slug: d.slug, g0: d.g0 ?? null, question: d.question ?? null });
+        startedAt: d.startedAt, lastSentAt: d.startedAt, lastActivity: new Date(d.startedAt).getTime(), sends: 0, excerpt: d.g0?.text ?? '', written: [], slug: d.slug, g0: d.g0 ?? null, question: d.question ?? null,
+        tiefe: istTiefe(d.tiefe) ? d.tiefe : null, eta: etaFuer(d, { fertig: true }) });
       continue;
     }
     const last = await lastMessage(u, d.conv);
@@ -403,6 +427,8 @@ export async function listOrch(u: User, opts: { all?: boolean } = {}) {
       id: d._id, title: d.title, status: st.status, reason: st.reason, reviewed: !!d.reviewedAt, url: d.url, cwd: d.cwd, plan: d.plan,
       startedAt: d.startedAt, lastSentAt: d.lastSentAt, lastActivity: Math.max(s?.turn?.end ?? 0, s?.turn?.start ?? 0, last?.at ?? 0) || null,
       lauf: d.lauf ?? laufName(d.title).lauf, laufExplicit: !!d.laufExplicit, reviewedBy: d.reviewedBy ?? null, knutReviewed: !!d.knutReviewedAt, doneAt: d.doneAt ?? null, bericht: !!d.bericht,
+      // Plan 205: Tiefe (null = alter Strang ohne Feld) und ETA ({ at, quelle, text, ueberfaellig }).
+      tiefe: istTiefe(d.tiefe) ? d.tiefe : null, eta: etaVon(d, last, st.status, med),
       sends: d.sends ?? 1, autoWeiter: d.autoTotal ?? 0, autoLast: d.autoLastAt ? { at: d.autoLastAt, cause: d.autoLastCause ?? null } : null, reviewReady: !!d.reviewReadyAt, excerpt: last && !last.fromUser ? excerpt(last.text) : '', written: s?.written ?? [],
     });
   }
@@ -444,7 +470,7 @@ export async function showOrch(u: User, id: string, verlauf = 0) {
     }
     hist.reverse();
   }
-  return { ...item, conv: d.conv, prompt: d.prompt, bericht: d.bericht ?? null, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null, ...(hist ? { verlauf: hist } : {}) };
+  return { ...item, conv: d.conv, prompt: d.prompt, bericht: d.bericht ?? null, modell: d.modell ?? null, risiko: d.risiko ?? null, lastModell: d.lastModell ?? null, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null, ...(hist ? { verlauf: hist } : {}) };
 }
 
 export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 'leitstand' = 'hand') {
@@ -561,7 +587,7 @@ async function autoOne(u: User, d: any, s: any, deps: AutoDeps) {
   // heißt „mitten in der Arbeit“, Stränge warten nie auf eine Rückfrage (am 12.10. standen so vier Stränge still).
   const openQuestion = (await questions().countDocuments({ userId: u.id, 'strand.id': d._id, kind: 'auto-weiter', status: 'offen' })) > 0;
   const accountFree = st.cause === 'rate_limit' ? await deps.accountFree(u).catch(() => false) : false;
-  const max = autoMax();
+  const max = autoMaxFuer(tiefeOf(d.tiefe), autoMax());   // Plan 205: Budget je Tiefe
   const dec = autoWeiter(d, st, s, last, { now: Date.now(), openQuestion, accountFree, max });
   if (dec.action === 'stop') {
     const at = new Date();
@@ -655,6 +681,9 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
             lastActivity: new Date(Math.max(s?.turn?.end ?? 0, s?.turn?.start ?? 0, last?.at ?? 0) || now), lastExcerpt: last && !last.fromUser ? excerpt(last.text, 600) : '' };
           // Tatsächlich gelaufenes Modell des letzten Zugs (Plan 162, S4) für den Strang-Kopf.
           if (typeof s?.turn?.modell === 'string') set.lastModell = s.turn.modell.slice(0, 100);
+          // Plan 205: zuletzt gemeldete ETA festhalten — eine Antwort ohne ETA-Zeile löscht sie nicht.
+          const eta = last && !last.fromUser ? etaMark(last.text, last.at) : null;
+          if (eta && eta !== new Date(d.eta?.at ?? 0).getTime()) set.eta = { at: new Date(eta), gemeldetAt: new Date(last!.at) };
           // „fertig“ zählt nur mit einer Antwort NACH der letzten Nachricht an den Strang (G1: nach Nacharbeit nicht die alte).
           if (st.status === 'done' && last && last.at > new Date(d.lastSentAt ?? d.startedAt).getTime() && (!d.doneAt || new Date(d.doneAt).getTime() < last.at)) set.doneAt = new Date(last.at);
           if (!d.bericht) { const b = findBericht([...(d.review?.artefakte ?? []), last && !last.fromUser ? last.text : '']); if (b) set.bericht = b; }

@@ -561,6 +561,11 @@ button.ub-amp { cursor: pointer; font: inherit; font-size: .74rem; font-weight: 
 .ub-gh code { font-size: .78rem; background: var(--surface-secondary); padding: 1px 5px; border-radius: 5px; }
 .ub-zusatz { margin-left: 8px; color: var(--ub-ok); font-weight: 600; }
 .ub-warn { color: var(--ub-bad); }
+/* Plan 205: Tiefe + ETA; überfällig nur gedämpft (kein Alarm). */
+.ub-etaz { margin: 2px 0 0; }
+.ub-eta { display: inline-flex; gap: 6px; align-items: center; color: var(--text-secondary); white-space: nowrap; }
+.ub-eta.ueber { color: var(--ub-wait); }
+.ub-tiefe { border: 1px solid var(--border-light); border-radius: 8px; padding: 0 6px; font-size: .75rem; text-transform: lowercase; }
 .ub-pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0; }
 .ub-runs { display: grid; gap: 2px; }
 .ub-runrow { display: flex; gap: 10px; align-items: center; padding: 7px 2px; border-bottom: 1px solid var(--border-light); font-size: .9rem; }

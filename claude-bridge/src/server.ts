@@ -9,7 +9,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, startDelegation, delegationStand, delegationUrteil, phaseWechseln, type Sink } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, delegationStand, delegationUrteil, phaseWechseln, type Sink, type Tiefe } from './sessions.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -356,7 +356,10 @@ const server = createServer(async (req, res) => {
       // Rollen-Profil (Plan 162, S6): nur Stränge, nur beim Start.
       const profil = kind === 'strand' && (b.profil === 'bauer' || b.profil === 'leser' || b.profil === 'schreiber') ? b.profil : undefined;
       if (kind === 'strand' && b.profil && !['voll', 'bauer', 'leser', 'schreiber'].includes(String(b.profil))) return json(res, 400, { error: 'Profil: voll, bauer, leser oder schreiber.' });
-      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
+      // Tiefe (Plan 205): nur Stränge, nur beim Start; unbekannt → 400.
+      if (kind === 'strand' && b.tiefe != null && !TIEFEN.includes(b.tiefe)) return json(res, 400, { error: 'Tiefe: quick, regular oder deep.' });
+      const tiefe = kind === 'strand' ? b.tiefe as Tiefe | undefined : undefined;
+      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil, tiefe }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
       log(kind === 'leitstand' ? 'leitstand angemeldet' : 'strang angemeldet', { user: userId, conv });
       return json(res, 200, { ok: true, dir: real, mode: autoFor({ email }) });
     }

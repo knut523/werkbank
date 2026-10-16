@@ -62,6 +62,7 @@ export function AnsetzenDialog({ path, onClose }: { path: string; onClose: () =>
   const [parent, setParent] = useState('');
   const [mode, setMode] = useState<'review' | 'plan'>('review');
   const [note, setNote] = useState('');
+  const [tiefe, setTiefe] = useState<'quick' | 'regular' | 'deep'>('regular');   // Plan 205
   const [g0Choice, setG0Choice] = useState('');
   const titleRef = useRef<HTMLInputElement>(null);
 
@@ -87,7 +88,7 @@ export function AnsetzenDialog({ path, onClose }: { path: string; onClose: () =>
   const go = async (extra: Record<string, unknown> = {}) => {
     setBusy(true); setErr(null);
     try {
-      const r = await api('/api/roadmap/ansetzen', { body: { path, confirm: true, hash: pre.hash, summary, parent, mode, note, ...(g0Choice ? { g0Choice } : {}), ...extra } });
+      const r = await api('/api/roadmap/ansetzen', { body: { path, confirm: true, hash: pre.hash, summary, parent, mode, note, tiefe, ...(g0Choice ? { g0Choice } : {}), ...extra } });
       if (r.g0Abgebrochen) { setBusy(false); onClose(); return; }
       setRes(r);
       if (r.link?.state === 'ok') { const fresh = await api('/api/roadmap/ansetzen', { body: { path, parent, mode } }).catch(() => null); if (fresh) setPre(fresh); }
@@ -151,6 +152,12 @@ export function AnsetzenDialog({ path, onClose }: { path: string; onClose: () =>
                   <label style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}><input type="radio" name="ans-mode" checked={mode === 'review'} onChange={() => setMode('review')} /> bis Review (Agent baut auf lokalem Branch, wartet vor GitHub)</label>
                   <label style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}><input type="radio" name="ans-mode" checked={mode === 'plan'} onChange={() => setMode('plan')} /> nur Plan (Agent schreibt den Plan, kein Code)</label>
                 </fieldset>
+                <label className="small" htmlFor="ans-tiefe">Tiefe</label>
+                <select id="ans-tiefe" value={tiefe} onChange={(e) => setTiefe(e.target.value as any)} data-testid="ansetzen-tiefe">
+                  <option value="quick">quick — klein und klar: nur Tests, kurzer Bericht (≈ 20 min)</option>
+                  <option value="regular">regular — wie bisher: Plan, Bau, Tests, Gegenprüfung (≈ 1 h)</option>
+                  <option value="deep">deep — gründlich: Council, Gegenprüfung GLM 5.3, Visual-Check (≈ 3 h)</option>
+                </select>
                 <label className="small" htmlFor="ans-note">Notiz an den Agenten (optional)</label>
                 <textarea id="ans-note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
                 <p className="tiny">Der Agent arbeitet im Chat; jede Schreibaktion wartet dort auf dein „ja“.</p>

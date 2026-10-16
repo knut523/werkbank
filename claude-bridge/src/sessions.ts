@@ -118,7 +118,7 @@ const SECRET_ENV = /KEY|SECRET|TOKEN|PASSWORD|CREDS|CREDENTIAL|_IV$|MONGO_URI|DA
 // Leitstand (Plan 132, S1): mehr Schritte und Zeit je Zug.
 const leitMaxTurns = () => Number(process.env.LEITSTAND_MAX_TURNS || 200);
 const leitTimeoutMs = () => Number(process.env.LEITSTAND_TURN_TIMEOUT_S || 3600) * 1000;
-const turnLimit = (live: { key: string; orch: boolean; leit?: boolean; worker?: boolean }) => (live.leit ? leitMaxTurns() : live.worker ? KAPPUNG.schritte[orchMap[live.key]?.rolle ?? 'leser'] : live.orch ? cfg.orchMaxTurns : cfg.maxTurns);
+const turnLimit = (live: { key: string; orch: boolean; leit?: boolean; worker?: boolean }) => (live.leit ? leitMaxTurns() : live.worker ? KAPPUNG.schritte[orchMap[live.key]?.rolle ?? 'leser'] : live.orch ? cfg.orchMaxTurns * (orchMap[live.key]?.tiefe === 'deep' ? 2 : 1) : cfg.maxTurns);
 
 // Leerlauf (RAM, 11.10.2026): eine Claude-Sitzung, die nur auf „ja/nein“ wartet, hält ihren Prozess samt MCP-Servern
 // (gemessen ≈ 420 MB je Chat). Nach BRIDGE_IDLE_REAP_S (Vorgabe 900 s = 15 min, 0 = aus) wird sie beendet; die
@@ -204,14 +204,17 @@ export const STRAND_MODEL = /^(claude:(opus|sonnet|haiku)|melious:[\w.:/-]{1,80}
 // Systemprompt-Abschnitte — über Melious zusätzlich `--bare` mit eigenem kurzem Systemprompt (bei Claude nicht: --bare
 // überspringt die OAuth-Anmeldung).
 export type Profil = 'voll' | 'bauer' | 'leser' | 'schreiber';
-export const PROFILE: Profil[] = ['voll', 'bauer', 'leser', 'schreiber'];   // schreiber = wie bauer, zuerst Melious
+export const PROFILE: Profil[] = ['voll', 'bauer', 'leser', 'schreiber'];
+// Tiefe des Strangs (Plan 205): quick = ohne Gegenprüfungs-Hinweis, deep = doppelte Schritte je Zug; regular = wie bisher.
+export type Tiefe = 'quick' | 'regular' | 'deep';
+export const TIEFEN: Tiefe[] = ['quick', 'regular', 'deep'];   // schreiber = wie bauer, zuerst Melious
 // Grep/Glob gibt es in der aktuellen Claude-Code-Version nicht mehr (Suche läuft dort über Bash, und Bash fragt im Wächter immer
 // nach — im Strang abgelehnt). Für den Leser bleiben Read und vault-search; Code-Suche = Profil „bauer“.
 const LESER_TOOLS = ['Read', 'Grep', 'Glob'];
 const BAUER_MCP = ['vault-search', 'werkbank'];
 const LESER_MCP = ['vault-search', 'werkbank'];   // Suche im Vault (Lesen); review_ready / hauptchat_melden für Stränge
 export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte auf Deutsch, knapp und in Markdown. Du kannst nur lesen (Read, Grep, Glob) — schreibe und ändere nichts. Belege jede Aussage mit Datei:Zeile. Was du nicht findest, sagst du offen, statt zu raten.';
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; meliousModell?: string; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string };
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string };
   // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
   // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
   auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string };
@@ -458,11 +461,11 @@ export function workDirFor(userId: string, convId: string): string {
  * Meldet eine neue Unterhaltung als Orchestrator-Strang an: Arbeitsordner = dir (vorher geprüft, siehe server.ts),
  * strengere Sperren. Nur für Unterhaltungen ohne Sitzung und ohne Ordner — eine bestehende wird nie umgebogen.
  */
-export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil } = {}): void {
+export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe } = {}): void {
   const key = `${safeId(userId)}:${safeId(convId)}`;
   if (sessionMap[key] || cwdMap[key] || orchMap[key] || lives.has(key)) throw Object.assign(new Error('Unterhaltung gibt es schon.'), { status: 409 });
   cwdMap[key] = dir;
-  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}) };
+  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}), ...(o.tiefe && o.tiefe !== 'regular' && TIEFEN.includes(o.tiefe) ? { tiefe: o.tiefe } : {}) };
   saveMap();
 }
 
@@ -515,7 +518,7 @@ export function orchStateOf(userId: string) {
     const l = lives.get(k);
     const seen = lastSeen.get(k);
     return {
-      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', phase: e.phase ?? null, running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, batches: e.batches ?? [], lastHand: e.lastHand ?? null,
+      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', tiefe: e.tiefe ?? 'regular', phase: e.phase ?? null, running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, batches: e.batches ?? [], lastHand: e.lastHand ?? null,
       // Start ohne Ende und keine laufende Sitzung: die Brücke wurde mitten im Zug neu gestartet.
       interrupted: !l && !!e.turn && e.turn.end === null,
       resumable: !!sessionMap[k], turns: seen?.turns ?? null, written: seen?.written ?? [],
@@ -1318,7 +1321,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, isMelious(acct) ? req.token : acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim

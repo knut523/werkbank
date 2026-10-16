@@ -19,7 +19,7 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema, etaMediane } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { themaOf } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
@@ -64,6 +64,7 @@ import { ansetzenMode, specGate, sprintEnd, ticketDraft, localDuplicates, dupJql
 import { collectDecisions, todayQuestions, todayPayload } from './fragen.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, rule1Goals, specProposals, autoEligible, type GoalNode } from './goals.ts';
+import { istTiefe, type Tiefe } from './tiefe.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -803,7 +804,7 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/edit$/, async (req, res,
  * (Tagesabschluss) und „Agent ansetzen“ an einer Spec. Plan 81 (Schnitte 6/7): das Ticket bekommt sein Projekt
  * (zuordnen vor anlegen), der Agent den Bereich seines Workstreams im Vault für Plan und Notizen.
  */
-async function startTicketAgent(u: User, i: Issue, note: string, place: { specPath?: string | null } = {}) {
+async function startTicketAgent(u: User, i: Issue, note: string, place: { specPath?: string | null; tiefe?: Tiefe | null } = {}) {
   // Erst prüfen, ob schon ein Agent der Person auf der Karte arbeitet — sonst entstünde für einen abgelehnten Start
   // ein Projekt und ein Vault-Eintrag (Review).
   if (await wb().collection('agent_runs').findOne({ key: i.key, userId: u.id, mode: 'chat', status: { $in: ['läuft', 'wartet auf ja'] } })) {
@@ -1619,8 +1620,9 @@ on('GET', /^\/api\/uebersicht$/, async (req, res) => {
   let fragenFehler = false;   // Pass C, 8: nicht still „nichts offen“ zeigen
   const qs = await listQuestions(u, { open: true }).catch((e: any) => { fragenFehler = true; log('uebersicht fragen', { err: String(e?.message ?? e) }); return []; });
   const basis = paketBasis();
+  const med = await etaMediane(u).catch(() => null);   // Plan 205: Rückfall-ETA je Tiefe
   const karten = docs.map((d) => {
-    try { return uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), qs.filter((q: any) => q.strand && String(q.strand.id) === String(d._id)), basis); }
+    try { return uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), qs.filter((q: any) => q.strand && String(q.strand.id) === String(d._id)), basis, med); }
     catch (e: any) { log('uebersicht karte', { id: d._id, err: String(e?.message ?? e) }); return null; }   // eine kaputte Karte reißt die anderen nicht mit
   }).filter(Boolean) as any[];
   const imStrang = new Set(karten.map((k) => k.id));
@@ -1888,7 +1890,7 @@ on('POST', /^\/api\/roadmap\/ansetzen$/, async (req, res) => {
   const r = await runAnsetzen(u, sp, { mode, note: String(b.note ?? '').slice(0, 2000), useKey, newTicket: b.newTicket === true, draft: draft! }, {
     jira: jira!, mirror: issueMap, linkSpec,
     startAgent: async (issue, note, specPath) => {
-      const a = await startTicketAgent(u, issue, note, { specPath });
+      const a = await startTicketAgent(u, issue, note, { specPath, tiefe: istTiefe(b.tiefe) ? b.tiefe : null });   // Plan 205: Tiefe → Pflichtschritte im Auftrag
       await wb().collection('agent_runs').updateOne({ _id: a.id as any }, { $set: { specPath, origin: 'ansetzen' } });
       return a;
     },
@@ -2639,8 +2641,8 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
   const id = String(b.id ?? '');
   switch (m[1]) {
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null });
-      log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null });
+      log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null, tiefe: r.tiefe });
       return send(res, 200, r);
     }
     case 'nachtbau': {
