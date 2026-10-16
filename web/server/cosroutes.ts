@@ -2,6 +2,7 @@
 // Alles nur Admin (Feature `cos`); die internen Wege (MCP-Werkzeuge) schreiben erst, nachdem Knut im Chat „ja“ gesagt hat.
 
 import { liesRegister, schreibeZusagen, schreibeThema, teamNamen, teamSet, seiteVon, registerRel, CosError, type ZOp, type ThemaOp, type SchreibOpts, type SchreibErgebnis } from './cosregister.ts';
+import { startEinwurf, EinwurfError } from './coseinwurf.ts';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -63,6 +64,20 @@ export function cosRoutes(d: CosDeps) {
     const b = await d.body(req);
     const op: ThemaOp = { art: 'thema', name: String(b.name ?? ''), stand: b.stand, naechster: b.naechster, ball: b.ball };
     antwort(res, await schreibeThema(op, await opts(b, 'themen')));
+  });
+
+  // Einwurf (S1.4): Material → Arbeitskopie + neuer Chat mit der Anleitung. Antwort: Link zum Chat.
+  on('POST', /^\/api\/cos\/einwurf$/, async (req, res) => {
+    const u = await d.needAdmin(req);
+    const b = await d.body(req, 4 << 20);
+    try {
+      const r = await startEinwurf(u, { text: b.text, dateiname: typeof b.dateiname === 'string' ? b.dateiname : undefined, titel: b.titel, hinweis: b.hinweis });
+      d.log('cos einwurf', { user: u.id, art: r.art, titel: r.titel });
+      send(res, 200, { ok: true, url: r.url, conv: r.conv, titel: r.titel, art: r.art });
+    } catch (e: any) {
+      if (e instanceof EinwurfError) throw new d.HttpError(e.status, e.message);
+      throw e;
+    }
   });
 
   // Werkbank-MCP (Schnitt S1.1): Lesen frei; Schreiben nach „ja“ im Chat (die Brücke fragt vorher) — daher hier immer bestätigt.

@@ -1585,3 +1585,30 @@ test('CoS Register: nur Admin, Vorschau schreibt nie, confirm schreibt, 409 bei 
   await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
   await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
 });
+
+test('CoS Einwurf: Datei als Arbeitskopie, neuer Chat mit Anleitung, Text nicht im Prompt, nur Admin', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  const vtt = 'WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nKnut: Christoph schickt bis Freitag den Belieferungsstatus.\n\n00:00:05.000 --> 00:00:08.000\nGEHEIM-MARKER-4711\n';
+  assert.equal((await bernd.req('/api/cos/einwurf', { body: { text: vtt } })).status, 403);
+  assert.equal((await anna.req('/api/cos/einwurf', { body: { text: '  ' } })).status, 400);
+  assert.equal((await anna.req('/api/cos/einwurf', { body: { text: 'x', dateiname: 'virus.exe' } })).status, 400);
+  const n = lcChats.length;
+  const r = await anna.req('/api/cos/einwurf', { body: { text: vtt, dateiname: 'teams.vtt', titel: 'Rogue Abstimmung' } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  assert.equal(r.j.art, 'vtt'); assert.match(r.j.url, /^https:\/\/chat\.example\/c\//);
+  assert.equal(lcChats.length, n + 1);
+  const p = lcChats.at(-1).body.text as string;
+  assert.match(p, /^Einwurf · \d\d\.\d\d\. · Rogue Abstimmung\n/);
+  assert.match(p, /Arbeitskopie: .*\/scratch\/.*\/einwurf\/\d{4}-\d{2}-\d{2}-\d{4}-rogue-abstimmung\.vtt/);
+  assert.match(p, /Kandidaten in fünf Klassen/);
+  assert.ok(!p.includes('GEHEIM-MARKER-4711'), 'Rohtext steht nicht im Prompt (K20)');
+  const f = /Arbeitskopie: (\S+\.vtt)/.exec(p)![1];
+  assert.equal(readFileSync(f, 'utf8'), vtt);
+  // nichts davon in Mongo (K20)
+  const dump = JSON.stringify(await Promise.all((await mongo.db(DB).listCollections().toArray()).map((c) => mongo.db(DB).collection(c.name).find({}).limit(200).toArray())));
+  assert.ok(!dump.includes('GEHEIM-MARKER-4711'));
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+});
