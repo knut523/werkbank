@@ -111,3 +111,18 @@ export function LinkButton({ path, ticket, label = 'Verknüpfen', onDone }: { pa
     </>
   );
 }
+
+
+/** „Ziel zuordnen“ — gemeinsame Auswahl für Board und Sprint (Paket 187, S6; vorher zwei Kopien). Wählt nur; speichern macht der Aufrufer
+ *  (Endpunkte unverändert). `zuruecksetzen`: Eintrag „Workspace-Zuordnung zurücksetzen“ (Wert `-`). */
+export function GoalSelect({ goals, label, platzhalter = 'Ziel zuordnen …', zuruecksetzen, onPick }: {
+  goals: { id: string; result?: unknown }[]; label: string; platzhalter?: string; zuruecksetzen?: boolean; onPick: (id: string) => void;
+}) {
+  return (
+    <select aria-label={label} value="" onChange={(e) => { if (e.target.value !== '') onPick(e.target.value === '-' ? '' : e.target.value); }}>
+      <option value="">{platzhalter}</option>
+      {goals.map((x) => <option key={x.id} value={x.id}>{x.id} · {String(x.result).slice(0, 40)}</option>)}
+      {zuruecksetzen && <option value="-">— Workspace-Zuordnung zurücksetzen</option>}
+    </select>
+  );
+}

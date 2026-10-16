@@ -125,9 +125,6 @@ try {
     await p.goto(B + '/#/roadmap/prio');
     await p.getByTestId('rank-table').waitFor();
     await shot('06-roadmap-rangliste');
-    await p.goto(B + '/#/board');
-    await p.getByTestId('beimir-link').waitFor();
-    await shot('07-board-link', false);
     await p.goto(B + '/?embed=1#/');
     await p.getByTestId('review-queue').waitFor();
     await shot('08-eingebettet-heute');

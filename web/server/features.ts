@@ -16,9 +16,10 @@ export const FEATURES = [
   { id: 'orchestrator', label: 'Rückfragen des Orchestrators' },
   { id: 'ansetzen', label: 'Agent ansetzen' },
   { id: 'leitstand', label: 'Hauptchat (führt die Unter-Chats)' },
+  { id: 'uebersicht', label: 'Übersicht (fertige Stränge, direkt handeln)' },
 ] as const;
 // Nur für Admins, auch nicht über WERKBANK_TEAM_FEATURES freigebbar (Plan 132: der Leitstand arbeitet mit Knuts Rechten).
-const ADMIN_ONLY = new Set<string>(['leitstand']);
+const ADMIN_ONLY = new Set<string>(['leitstand', 'uebersicht']);   // Übersicht (Plan 184): Freigaben und Entscheidungen mit Knuts Rechten
 export type FeatureId = typeof FEATURES[number]['id'];
 
 // API-Pfad → Funktion. Nicht aufgeführt (Anmeldung, Einrichtung, Konfiguration, Ereignisse, Einstellungen, Pflege der
@@ -35,6 +36,7 @@ const API: [RegExp, FeatureId][] = [
   [/^\/api\/skills(\/|$)/, 'skills'],
   [/^\/api\/(files|chats|sharelog|scratch)(\/|$)/, 'dateien'],
   [/^\/api\/leitstand(\/|$)/, 'leitstand'],
+  [/^\/api\/uebersicht(\/|$)/, 'uebersicht'],
   [/^\/api\/orchestrator(\/|$)/, 'orchestrator'],
 ];
 

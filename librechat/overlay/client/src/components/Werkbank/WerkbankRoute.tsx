@@ -10,12 +10,13 @@ import { useRecoilValue } from 'recoil';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMediaQuery } from '@librechat/client';
 import OpenSidebar from '~/components/Chat/Menus/OpenSidebar';
-import { WERKBANK_PAGES, openInApp } from './WerkbankNav';
+import { WERKBANK_PAGES, openInApp, pageHash, pageIdOf } from './WerkbankNav';
 import store from '~/store';
 
 const hashFor = (page: string, search: string) => {
   const h = new URLSearchParams(search).get('h');
-  return h && h.startsWith('#/') ? h : (WERKBANK_PAGES.find((p) => p.id === page)?.hash ?? '#/');
+  const p = WERKBANK_PAGES.find((x) => x.id === page);
+  return h && h.startsWith('#/') ? h : p ? pageHash(p) : '#/';
 };
 
 export default function WerkbankRoute() {
@@ -55,7 +56,7 @@ export default function WerkbankRoute() {
       if (e.origin !== window.location.origin || e.source !== frame.current?.contentWindow) return;
       const d = e.data;
       if (d?.type === 'werkbank-route' && typeof d.hash === 'string' && d.hash.startsWith('#/')) {
-        const id = WERKBANK_PAGES.slice().reverse().find((p) => p.hash !== '#/' && d.hash.startsWith(p.hash))?.id ?? 'heute';
+        const id = pageIdOf(d.hash);
         navigate(`/wb/${id}?h=${encodeURIComponent(d.hash)}`, { replace: true });
       }
       if (d?.type === 'werkbank-open' && typeof d.url === 'string') openInApp(navigate, d.url);

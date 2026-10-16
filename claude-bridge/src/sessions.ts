@@ -9,7 +9,8 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, realpathSync, statSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
-import { join, resolve, relative as relPath, isAbsolute } from 'node:path';
+import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
@@ -1749,6 +1750,20 @@ export function jcodeUsage(sessionJson: any): MeliousUsage {
   }
   return u;
 }
+const JCODE_SHIM = join(dirname(fileURLToPath(import.meta.url)), '..', 'shim');
+/** Schreibende jcode-Aufrufe (write/edit/apply_patch) mit Ziel außerhalb des Arbeitsordners — jcode kennt keine Pfadgrenze, also
+ *  prüft die Brücke danach; ein Treffer verwirft das Ergebnis. */
+export function jcodeWritesOutside(sessionJson: any, cwd: string): string[] {
+  const out: string[] = [];
+  const root = resolve(cwd);
+  for (const m of sessionJson?.messages ?? []) for (const b of Array.isArray(m?.content) ? m.content : []) {
+    if (b?.type !== 'tool_use' || !/^(write|edit|multiedit|apply_patch|patch)$/i.test(String(b.name))) continue;
+    const i = b.input ?? {};
+    const paths = [i.file_path, i.path, i.filePath, ...String(i.patch ?? i.input ?? '').matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((x: any) => Array.isArray(x) ? x[1] : x).filter((x) => typeof x === 'string' && x);
+    for (const p of paths) { const abs = resolve(root, p); if (abs !== root && !abs.startsWith(root + '/')) out.push(abs); }
+  }
+  return out;
+}
 async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> {
   if (!jcodeAn() || d.rolle === 'pruefer') return null;
   const e = orchMap[d.workerKey];
@@ -1758,12 +1773,16 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   const now = Date.now();
   if (!mel || !meliousUsable(mel, exhaustedOf(safeId(d.userId)), now) || (mel.rest ?? 0) <= workerMeliousReserve()) return null;
   const fest = typeof e?.modell === 'string' && e.modell.startsWith('melious:') ? e.modell.slice(8) : null;
-  const model = fest ?? mel.rollen?.[d.rolle === 'leser' ? 'leser' : 'schreiber']?.[0] ?? 'glm-5.3-flash';
+  const gewaehlt = fest ?? mel.rollen?.[d.rolle === 'leser' ? 'leser' : 'schreiber']?.[0] ?? 'glm-5.3-flash';
+  // Live-Test 15.10.: die Rolle lieferte „auto“ → jcode lief auf dem Profil-Standard, gebucht wurden 0 Energie (kein Preis für „auto“).
+  // „auto“ (oder ein Name ohne Preis) → kein --model, jcode nimmt den Profil-Standard; gebucht wird mit dem Modell, das jcode meldet.
+  const model = gewaehlt === 'auto' || (mel.faktoren && !mel.faktoren[gewaehlt]) ? null : gewaehlt;
   const tools = d.rolle === 'leser' ? 'read,bash,agentgrep' : 'read,bash,write,edit,agentgrep';
   const t0 = Date.now();
-  const env: Record<string, string> = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: mel.token };
+  // Wächter (Pilot 183, 15.10.): shim/bash vorn in PATH lässt nur lesende Shell-Befehle durch (jcode hat keine Sandbox).
+  const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: mel.token };
   const out = await new Promise<{ code: number | null; stdout: string; stderr: string }>((res) => {
-    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', '--model', model, '--tools', tools, 'run', '--json', prompt], { cwd: d.cwd, env });
+    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', ...(model ? ['--model', model] : []), '--tools', tools, 'run', '--json', prompt], { cwd: d.cwd, env });
     let so = '', se = '';
     c.stdout.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
     c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
@@ -1774,16 +1793,19 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   });
   let j: any = null; try { j = JSON.parse(out.stdout); } catch { /* unten */ }
   let usage: MeliousUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  let draussen: string[] = [];
   if (j?.session_id && /^[\w.-]{1,120}$/.test(j.session_id)) {
-    try { usage = jcodeUsage(JSON.parse(readFileSync(join(homedir(), '.jcode', 'sessions', `${j.session_id}.json`), 'utf8'))); } catch { /* ohne Sitzungsdatei */ }
+    try { const sj = JSON.parse(readFileSync(join(homedir(), '.jcode', 'sessions', `${j.session_id}.json`), 'utf8')); usage = jcodeUsage(sj); draussen = jcodeWritesOutside(sj, d.cwd); } catch { /* ohne Sitzungsdatei */ }
   }
   if (!usageTotal(usage) && j?.usage) usage = { input: Math.max(0, (j.usage.input_tokens || 0) - (j.usage.cache_read_input_tokens || 0)), output: j.usage.output_tokens || 0, cacheRead: j.usage.cache_read_input_tokens || 0, cacheWrite: 0 };
-  const energie = mel.faktoren ? energieOf(usage, model, mel.faktoren) : 0;
+  const gelaufen = String(j?.model ?? model ?? 'glm-5.3-flash');
+  const energie = mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0;
   d.input += usage.input + usage.cacheRead; d.output += usage.output; d.energie += energie;
-  d.modell = `Melious ${model} (jcode)`; d.konto = mel.id; d.anbieter = 'melious';
-  try { d.req.onMeliousUsage?.(usage, model); } catch { /* egal */ }
-  try { d.req.onTurnLog?.({ conv: d.workerConv, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${model} (jcode)`, input: usage.input + usage.cacheRead, output: usage.output, energie, outcome: out.code === 0 ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: d.id, parent: d.parent }); } catch { /* egal */ }
-  log('worker jcode', { delegation: d.id, modell: model, exit: out.code, ms: Date.now() - t0, ...usage, energie: Math.round(energie) });
+  d.modell = `Melious ${gelaufen} (jcode)`; d.konto = mel.id; d.anbieter = 'melious';
+  try { d.req.onMeliousUsage?.(usage, gelaufen); } catch { /* egal */ }
+  try { d.req.onTurnLog?.({ conv: d.workerConv, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${gelaufen} (jcode)`, input: usage.input + usage.cacheRead, output: usage.output, energie, outcome: out.code === 0 ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: d.id, parent: d.parent }); } catch { /* egal */ }
+  log('worker jcode', { delegation: d.id, modell: gelaufen, exit: out.code, ms: Date.now() - t0, ...usage, energie: Math.round(energie) });
+  if (draussen.length) { log('worker jcode ausserhalb', { delegation: d.id, pfade: draussen.slice(0, 10) }); return `jcode-Ergebnis verworfen: Der Worker hat außerhalb des Arbeitsordners geschrieben (${draussen.slice(0, 5).join(', ')}). Bitte prüfen und ggf. zurücksetzen.`; }
   if (out.code !== 0 || !j) return `jcode-Lauf fehlgeschlagen (Exit ${out.code}). ${String(out.stderr).split('\n').filter(Boolean).slice(-3).join(' · ').slice(0, 600)}`;
   return String(j.text ?? '');
 }

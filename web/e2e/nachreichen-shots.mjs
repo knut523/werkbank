@@ -102,7 +102,7 @@ try {
   await shot(p, '1440-3-admin-auf');
   // Zusatz Knut (Z9): offen zuerst, „Fertig (n)“ eingeklappt darunter; „wartet auf dich“ hervorgehoben.
   const ckGroup = section(p).locator('[data-testid=hauptchat-thema-gruppe]').filter({ has: p.locator('[data-testid=hauptchat-thema]', { hasText: 'Cockpit' }) }).first();
-  check('Z9: „wartet auf dich“ im Kopf des Themas', /2 wartet auf dich/.test(await ckGroup.locator('[data-testid=hauptchat-thema-wartet]').innerText().catch(() => '')));
+  check('Z9: „braucht dich“ im Kopf des Themas', /2 braucht dich/.test(await ckGroup.locator('[data-testid=hauptchat-thema-wartet]').innerText().catch(() => '')));
   check('Z9: wartende Zeilen hervorgehoben', (await ckGroup.locator('li[data-status=wartet] [data-testid=unterchat]').first().getAttribute('class') ?? '').includes('bg-amber'));
   const fertigBtn = ckGroup.locator('[data-testid=hauptchat-fertig]');
   check('Z9: „Fertig (n)“ eingeklappt unter den offenen', (await fertigBtn.getAttribute('aria-expanded')) === 'false' && /Fertig \(1\)/.test(await fertigBtn.innerText()) && (await ckGroup.locator('li[data-status=erledigt]').count()) === 0);

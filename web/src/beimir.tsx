@@ -75,12 +75,12 @@ export function WartetAufDich({ x, decisions, today, onChange }: { x: any; decis
     setBusy(q.id); setErr(null);
     try {
       const r: any = await api('/api/roadmap/question', { body: { id: q.id, answer: a } });
-      toast(a === 'ja' ? (r.started ? 'Freigegeben — der Vault-Sync läuft jetzt' : 'Freigegeben — startet, sobald der laufende Sync fertig ist') : a === 'nein' ? 'Verworfen — wird nicht wieder vorgeschlagen' : 'Freigabe zurückgenommen');
+      toast(a === 'ja' ? (r.started ? 'Zugestimmt — der Vault-Sync läuft jetzt' : 'Freigegeben — startet, sobald der laufende Sync fertig ist') : a === 'nein' ? 'Verworfen — wird nicht wieder vorgeschlagen' : 'Zustimmung zurückgenommen');
       onChange();
     } catch (e) { setErr(e); } finally { setBusy(null); }
   };
   const draft = async (action: 'übernehmen' | 'verwerfen') => {
-    if (action === 'übernehmen' && !(await confirm({ title: '„Woran wir gerade arbeiten“ ersetzen?', confirmLabel: 'In den Hub schreiben', body: <><p className="small">Der Block zwischen den Werkbank-Markern im Roadmap-Hub wird durch diesen Entwurf ersetzt. Alles andere auf der Seite bleibt.</p><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{x.draft.body}</pre></> }))) return;
+    if (action === 'übernehmen' && !(await confirm({ title: '„Woran wir gerade arbeiten“ ersetzen?', confirmLabel: 'In den Hub schreiben', body: <><p className="small">Der Block zwischen den Workspace-Markern im Roadmap-Hub wird durch diesen Entwurf ersetzt. Alles andere auf der Seite bleibt.</p><pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{x.draft.body}</pre></> }))) return;
     setBusy('draft'); setErr(null);
     try { await api('/api/roadmap/draft', { body: { action, hash: x.draft.hash } }); toast(action === 'übernehmen' ? 'Im Hub übernommen' : 'Entwurf verworfen'); onChange(); }
     catch (e) { setErr(e); } finally { setBusy(null); }
@@ -101,7 +101,7 @@ export function WartetAufDich({ x, decisions, today, onChange }: { x: any; decis
             <div>{q.text}</div>
             {q.failed !== null && q.failed !== undefined && <div className="chip bad">nicht erledigt{q.failed ? `: ${q.failed}` : ''}</div>}
             {q.answer === 'ja'
-              ? <span><span className="chip ok">freigegeben — wird beim nächsten Sync erledigt</span>{x.admin && <button className="btn ghost small" style={{ marginLeft: 8 }} disabled={busy === q.id} onClick={() => answer(q, 'widerruf')}>Zurücknehmen</button>}</span>
+              ? <span><span className="chip ok">zugestimmt — wird beim nächsten Sync erledigt</span>{x.admin && <button className="btn ghost small" style={{ marginLeft: 8 }} disabled={busy === q.id} onClick={() => answer(q, 'widerruf')}>Zurücknehmen</button>}</span>
               : x.admin && <div className="row" style={{ gap: 8, marginTop: 4 }}>
                   <button className="btn small yes" style={btn} disabled={busy === q.id} onClick={() => answer(q, 'ja')}>✅ Ja</button>
                   <button className="btn ghost small" style={btn} disabled={busy === q.id} onClick={() => answer(q, 'nein')}>✖️ Nein</button>
@@ -109,7 +109,7 @@ export function WartetAufDich({ x, decisions, today, onChange }: { x: any; decis
           </li>))}</ul>
       </>}
       {pend.length > 0 && <>
-        <div className="small docs-h">Freigegeben, noch nicht erledigt ({pend.length})</div>
+        <div className="small docs-h">Zugestimmt, noch nicht erledigt ({pend.length})</div>
         <ul className="small plain">{pend.map((a: any) => (
           <li key={a.id} className="item">{a.text} <span className="tiny">· {a.by}, {String(a.at).slice(0, 10)}</span>
             {a.failed !== null && <span className="chip bad">nicht erledigt{a.failed ? `: ${a.failed}` : ''}</span>}
@@ -119,7 +119,7 @@ export function WartetAufDich({ x, decisions, today, onChange }: { x: any; decis
       {x.draft && <>
         <div className="small docs-h">Entwurf „Woran wir gerade arbeiten“ (vom Morgenlauf)</div>
         <details className="small"><summary>ansehen</summary><pre className="small" style={{ whiteSpace: 'pre-wrap' }}>{x.draft.body}</pre></details>
-        {!x.draft.hubHasMarkers && <p className="small warn">Im Hub fehlen die Werkbank-Marker — Übernehmen geht erst, wenn sie da sind.</p>}
+        {!x.draft.hubHasMarkers && <p className="small warn">Im Hub fehlen die Workspace-Marker — Übernehmen geht erst, wenn sie da sind.</p>}
         <div className="row" style={{ gap: 8, marginTop: 4 }}>
           <button className="btn small" style={btn} disabled={busy === 'draft' || !x.draft.hubHasMarkers} onClick={() => draft('übernehmen')}>Übernehmen</button>
           <button className="btn ghost small" style={btn} disabled={busy === 'draft'} onClick={() => draft('verwerfen')}>Verwerfen</button>

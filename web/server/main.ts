@@ -5,7 +5,7 @@
 // Bestätigungsdialog setzt. Ohne confirm liefern sie nur die Vorschau.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch, realpathSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch, realpathSync, renameSync } from 'node:fs';
 import { join, extname, resolve, normalize, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import YAML from 'yaml';
@@ -21,6 +21,8 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
+import { themaOf } from './themen.ts';
+import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
@@ -1437,6 +1439,14 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const u = await needAdmin(req);
   const d = await reviewStrand(u, m[1]);
   const b = await body(req);
+  // Plan 184, Pass C (Teil B): zwei schnelle Antworten auf denselben Bericht nie gleichzeitig lesen-prüfen-schreiben.
+  const sperre = String(d._id);
+  if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — Seite neu laden und noch einmal.');
+  entscheidSperre.add(sperre);
+  try { await entscheidungenEintragen(u, d, b, res); } finally { entscheidSperre.delete(sperre); }
+});
+const entscheidSperre = new Set<string>();
+async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
   // Teil C (H3): läuft der Unter-Chat, reicht sendOrch die Antwort nach — kein 409 mehr.
   const { paketDatei } = await import('./bericht.ts');
   const pfad = paketDatei(d, 'bericht');
@@ -1445,20 +1455,25 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const bekannt = new Map<string, { titel: string; empfehlung?: string; knut?: string; kopf?: boolean }>(leseEntscheidungen(text).map((e) => [e.id, e]));
   // Teil C (D3): auch Fragen aus dem Bericht-Kopf (fragen[].id) gelten als bekannt.
   const kopf = berichtKopf(text);
-  if (kopf && 'status' in kopf) for (const f of kopf.fragen) if (!bekannt.has(f.id)) bekannt.set(f.id, { titel: f.frage.slice(0, 120), kopf: true });
+  if (kopf && 'status' in kopf) for (const f of kopf.fragen) if (!bekannt.has(f.id)) bekannt.set(f.id, { titel: f.frage.slice(0, 120), empfehlung: f.empfehlung, knut: f.antwort, kopf: true });
   // Plan 157, Ergänzung B: „Empfehlung akzeptieren“ / eigene Antwort / „nachprüfen“ (alte Form ohne art = eigene Antwort).
   const antworten = (Array.isArray(b.antworten) ? b.antworten : []).map((a: any) => {
     const id = String(a?.id ?? ''), e = bekannt.get(id);
-    const art = a?.art === 'akzeptiert' || a?.art === 'nachpruefen' ? a.art : 'eigene';
+    // Plan 184, Teil B: „abgelehnt“ = Nein auf der Übersicht (die Empfehlung gilt nicht).
+    const art = a?.art === 'akzeptiert' || a?.art === 'nachpruefen' || a?.art === 'abgelehnt' ? a.art : 'eigene';
     const frei = String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000);
-    const t = art === 'akzeptiert' ? `akzeptiert${e?.empfehlung ? ` (Empfehlung: ${e.empfehlung.slice(0, 200)})` : ''}` : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}` : frei;
+    const t = art === 'akzeptiert' ? (e?.empfehlung ? `akzeptiert (Empfehlung: ${e.empfehlung.slice(0, 200)})` : 'ja') : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}`
+      : art === 'abgelehnt' ? `nein — Empfehlung abgelehnt${e?.empfehlung ? ` (${e.empfehlung.slice(0, 200)})` : ''}${frei ? `: ${frei}` : ''}` : frei;
     return { id, art, text: t };
   }).filter((a: any) => a.text && bekannt.has(a.id) && !bekannt.get(a.id)!.knut);
   if (!antworten.length) throw new HttpError(400, 'Keine Antwort auf eine offene Entscheidung.');
   const ids = antworten.map((a: any) => a.id);
-  // Release 15b: läuft der Strang oder gilt eine Antwort einer Kopf-Frage, trägt der Server NICHT selbst ein (sonst schreiben
-  // Server und Strang gleichzeitig in den Bericht) — dann nur sendOrch an den Strang (Teil C, H3: kein 409).
-  if (d.lastStatus === 'running' || antworten.some((a: any) => bekannt.get(a.id)!.kopf)) {
+  const imKopf = antworten.filter((a: any) => bekannt.get(a.id)!.kopf);
+  // Release 15b: läuft der Strang, trägt der Server NICHT selbst ein (sonst schreiben Server und Strang gleichzeitig in den
+  // Bericht) — dann nur sendOrch an den Strang (Teil C, H3: kein 409). Plan 184, Teil B: Kopf-Fragen trägt der Server jetzt selbst
+  // als `antwort:` ein; lässt sich der Kopf nicht sicher ändern, geht es wie bisher nur an den Strang.
+  const kopfNeu = d.lastStatus === 'running' || !imKopf.length ? null : kopfAntwortEintragen(text, imKopf);
+  if (d.lastStatus === 'running' || (imKopf.length && !kopfNeu)) {
     const msg = `Nacharbeit nach Review: Entscheidungen von Knut — bitte in den Bericht eintragen (Kopf: \`antwort:\` der Frage; Text: Zeile „- Knut:“) und danach weiterarbeiten.\n${antworten.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}`;
     await sendOrch(u, String(d._id), msg, 'hand');
     await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten, ids } } });
@@ -1469,24 +1484,31 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const real = (() => { try { return realpathSync(String(pfad)); } catch { return ''; } })();
   if (!real || !real.startsWith(realpathSync(reviewDir()) + '/')) throw new HttpError(409, 'Bericht liegt nicht im Ordner der Review-Pakete.');
   const datum = new Intl.DateTimeFormat('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' }).format(new Date());
-  const neu = trageEin(text, antworten, datum);
-  const offen = leseEntscheidungen(neu).filter((e) => !e.knut);
+  const neu = trageEin(kopfNeu ?? text, antworten.filter((a: any) => !bekannt.get(a.id)!.kopf), datum);
+  const offen = [...leseEntscheidungen(neu).filter((e) => !e.knut), ...(() => { const k = berichtKopf(neu); return k && 'status' in k ? k.fragen.filter((f) => !f.antwort && !leseEntscheidungen(neu).some((e) => e.id === f.id)) : []; })()];
   const arbeit = antworten.filter((a: any) => a.art !== 'akzeptiert');
+  // Übersicht (Plan 184, Teil B): mit `weiter` arbeitet der Unter-Chat in jedem Fall mit den Antworten weiter; Kopf-Fragen auch.
+  const fortsetzen = arbeit.length > 0 || imKopf.length > 0 || b.weiter === true;
   let weiter = false;
-  // Erst zustellen, dann eintragen: scheitert die Nachricht an den Strang, bleibt der Bericht unverändert (Knut kann neu senden).
-  if (arbeit.length) {
-    // Abweichung oder Nachprüfen → der Strang arbeitet weiter (sendOrch startet den Zug).
-    const msg = `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen, Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}${antworten.length > arbeit.length ? `\nAkzeptiert (nichts zu tun): ${antworten.filter((a: any) => a.art === 'akzeptiert').map((a: any) => a.id).join(', ')}` : ''}`;
-    await sendOrch(u, String(d._id), msg, 'hand');
+  // Erst eintragen, dann den Strang wecken (Pass C, Teil B: sonst liest er den Bericht ohne die Antworten). Atomar über eine
+  // Nachbardatei; scheitert die Nachricht an den Strang, kommt der alte Stand zurück (Knut kann neu senden).
+  const schreibe = (inhalt: string) => { const tmp = `${real}.${process.pid}.tmp`; writeFileSync(tmp, inhalt); renameSync(tmp, real); };
+  schreibe(neu);
+  if (fortsetzen) {
+    // Abweichung, Nachprüfen oder Fortsetzen gewünscht → der Strang arbeitet weiter (sendOrch startet den Zug).
+    const rest = antworten.filter((a: any) => a.art === 'akzeptiert');
+    const msg = arbeit.length
+      ? `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}${rest.length ? `\nAkzeptiert (wie empfohlen): ${rest.map((a: any) => a.id).join(', ')}` : ''}`
+      : `Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“): ${rest.map((a: any) => `${a.id} wie empfohlen`).join(', ')}. Mach damit weiter${offen.length ? ` (noch offen: ${offen.map((e: any) => e.id).join(', ')})` : ''} und aktualisiere danach den Bericht.`;
+    try { await sendOrch(u, String(d._id), msg, 'hand'); } catch (e) { schreibe(text); throw e; }
     weiter = true;
   }
-  writeFileSync(real, neu);
   let hauptchat = false;
-  if (!arbeit.length && !offen.length) hauptchat = await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
+  if (!fortsetzen && !offen.length) hauptchat = await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
   await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten, ids }, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
   log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length, arbeit: arbeit.length, offen: offen.length });
   send(res, 200, { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat });
-});
+}
 // Teil C (H5): tote Vorschau aus dem Bericht-Kopf → kurze Nachricht an den Unter-Chat (nur ein bekannter, als tot geprüfter Link).
 on('POST', /^\/api\/review\/([\w-]{1,40})\/vorschau-tot$/, async (req, res, m) => {
   const u = await needAdmin(req);
@@ -1581,10 +1603,35 @@ on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (r
   }
   if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
   const text = String(b.text ?? '').trim().slice(0, 4000);
-  if (b.kind !== 'nacharbeit' || !text) throw new HttpError(400, 'Schreib kurz, was nachzuarbeiten ist.');
-  await sendOrch(u, m[1], `Nacharbeit nach Review: ${text}`);
-  log('strang nacharbeit', { user: u.id, id: m[1] });
+  // Übersicht (Plan 184, S2): „antwort“ beantwortet die Rückfrage aus „Braucht Knut“ — derselbe Weg wie die Nacharbeit.
+  if ((b.kind !== 'nacharbeit' && b.kind !== 'antwort') || !text) throw new HttpError(400, b.kind === 'antwort' ? 'Schreib kurz deine Antwort.' : 'Schreib kurz, was nachzuarbeiten ist.');
+  await sendOrch(u, m[1], replyText(b.kind, text));
+  log(b.kind === 'antwort' ? 'strang antwort' : 'strang nacharbeit', { user: u.id, id: m[1] });
   send(res, 200, { ok: true, url: d.url });
+});
+
+// Übersicht „Was fertig ist“ (docs/plan-uebersicht-handeln.md, Paket 184): je offenem Strang eine Karte, nach Thema. Nur lesen.
+on('GET', /^\/api\/uebersicht$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(60).toArray()) as any[]).filter(offenFuerKnut);
+  const ids = docs.map((d) => String(d._id));
+  const fgs: any[] = ids.length ? await (await import('./freigabe.ts')).freigaben().find({ strand: { $in: ids }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
+  let fragenFehler = false;   // Pass C, 8: nicht still „nichts offen“ zeigen
+  const qs = await listQuestions(u, { open: true }).catch((e: any) => { fragenFehler = true; log('uebersicht fragen', { err: String(e?.message ?? e) }); return []; });
+  const basis = paketBasis();
+  const karten = docs.map((d) => {
+    try { return uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), qs.filter((q: any) => q.strand && String(q.strand.id) === String(d._id)), basis); }
+    catch (e: any) { log('uebersicht karte', { id: d._id, err: String(e?.message ?? e) }); return null; }   // eine kaputte Karte reißt die anderen nicht mit
+  }).filter(Boolean) as any[];
+  const imStrang = new Set(karten.map((k) => k.id));
+  const lose = qs.filter((q: any) => !q.strand || !imStrang.has(String(q.strand.id)));
+  // Teil B (Mockup 185): Hauptchat-Zeile und „Erledigt diese Woche“ (von Knut geprüft, 7 Tage) — nur Mongo.
+  const hauptchat = await leitstandLine(u).catch(() => null);
+  const seit = new Date(Date.now() - 7 * 86400_000);
+  const erledigt = ((await orchRuns().find({ userId: u.id, kind: { $ne: 'leitstand' }, $or: [{ knutReviewedAt: { $gte: seit } }, { reviewedAt: { $gte: seit }, reviewedBy: null }] },
+    { projection: { title: 1, thema: 1, paket: 1, cwd: 1, lauf: 1, url: 1, knutReviewedAt: 1, reviewedAt: 1 } }).sort({ knutReviewedAt: -1, reviewedAt: -1 }).limit(40).toArray().catch(() => [])) as any[])
+    .map((d) => ({ id: String(d._id), titel: d.title ?? '', thema: themaOf(d), at: d.knutReviewedAt ?? d.reviewedAt, chat: /^https?:\/\//.test(String(d.url ?? '')) ? d.url : null }));
+  send(res, 200, { ...gruppieren(karten, lose), at: new Date(), dryRun: dryRun(), paketDienst: !!basis, fragenFehler, hauptchat, erledigt });
 });
 
 // Rückfragen des Orchestrators (Knut antwortet hier; nur die eigenen).

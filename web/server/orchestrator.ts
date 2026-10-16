@@ -260,7 +260,14 @@ export async function decorate(u: User, conv: string, title: string, tag = ORCH_
 
 export async function decorateSoon(u: User, conv: string, title: string, tries = 20, tag = ORCH_TAG) {
   for (let i = 0; i < tries; i++) {
-    try { if ((await decorate(u, conv, title, tag)).ok) return; } catch { /* weiter versuchen */ }
+    try {
+      if ((await decorate(u, conv, title, tag)).ok) {
+        // LibreChats Auto-Titel kann nach dem ersten Zug den Titel überschreiben; die Chatliste blendet Unter-Chats an „Orchestrator · …“
+        // aus (Paket 187, D5) — den Titel deshalb noch zweimal nachziehen (idempotent: ohne Abweichung nur ein Lesen).
+        for (const ms of [45_000, 180_000]) setTimeout(() => { decorate(u, conv, title, tag).catch(() => {}); }, ms).unref?.();
+        return;
+      }
+    } catch { /* weiter versuchen */ }
     await new Promise((r) => setTimeout(r, 1500));
   }
 }

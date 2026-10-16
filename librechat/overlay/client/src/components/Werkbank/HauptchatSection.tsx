@@ -8,6 +8,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import * as Menu from '@ariakit/react/menu';
 import { ChevronDown, Ellipsis, FileCheck, FileText, Satellite } from 'lucide-react';
 import { cn } from '~/utils';
+import { useLocalStorage } from '~/hooks';
 
 type Status = 'läuft' | 'wartet' | 'fertig' | 'gestoppt' | 'erledigt';
 type Strand = { id: string; title: string; lauf: string; thema?: string; status: Status; url: string; auftrag?: boolean; bericht?: boolean };
@@ -65,8 +66,10 @@ export function useHauptchat() {
 }
 
 // ---------- Darstellung ----------
-const WORD: Record<string, string> = { läuft: 'läuft', wartet: 'wartet auf dich', fertig: 'zu prüfen', gestoppt: 'gestoppt', erledigt: 'erledigt' };
+const WORD: Record<string, string> = { läuft: 'läuft', wartet: 'braucht dich', fertig: 'bereit', gestoppt: 'blockiert', erledigt: 'erledigt' };
 const DOT: Record<string, string> = { läuft: 'bg-blue-500', wartet: 'bg-amber-500', fertig: 'bg-green-600', gestoppt: 'bg-red-600', erledigt: 'bg-gray-400' };
+// Server-Werte des Hauptchats bleiben (Brücke, Tests); nur die Anzeige wird gemappt.
+const HEAD_WORD: Record<string, string> = { 'wartet auf dich': 'braucht dich' };
 const HEAD_DOT: Record<string, string> = { läuft: 'bg-blue-500', 'wartet auf dich': 'bg-amber-500', bereit: 'bg-green-600' };
 const chatPath = (url: string) => { const m = /\/c\/([^/?#]+)/.exec(url ?? ''); return m ? `/c/${m[1]}` : null; };
 const KEY = 'olaf-hauptchat-auf';
@@ -121,10 +124,13 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const listId = useId();
+  // Paket 187 (S5/D5): Unter-Chats stehen nur hier; der Schalter blendet sie zusätzlich in der normalen Chatliste ein
+  // (patches/75-client-unterchats-liste.patch liest denselben Schlüssel; die Suche zeigt immer alle).
+  const [inListe, setInListe] = useLocalStorage('werkbank-unterchats-in-liste', false);
   const [auf, setAuf] = useState<Auf>(readAuf);
   const save = useCallback((a: Auf) => { setAuf(a); writeAuf(a); }, []);
   const open = useCallback((p: string) => { navigate(p, { state: { focusChat: true } }); toggleNav?.(); }, [navigate, toggleNav]);
-  const toStart = () => { navigate(`/wb/leitstand?h=${encodeURIComponent('#/leitstand?start=1')}`); toggleNav?.(); };
+  const toStart = () => { navigate(`/wb/heute?h=${encodeURIComponent('#/?start=1')}`); toggleNav?.(); };
 
   // Ohne je geladene Daten nichts zeigen — auch bei Fehlern (sonst sähe ein Team-Konto bei einem Ausfall den Abschnitt; Review).
   if (state === 'kein-zugriff' || !data) return null;
@@ -203,7 +209,7 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
             <Menu.MenuItem className="select-item text-sm" data-testid="hauptchat-neustart" onClick={toStart}>
               {h ? 'Hauptchat neu starten …' : 'Hauptchat starten …'}
             </Menu.MenuItem>
-            <Menu.MenuItem className="select-item text-sm" data-testid="hauptchat-alle" onClick={() => { navigate('/wb/leitstand'); toggleNav?.(); }}>
+            <Menu.MenuItem className="select-item text-sm" data-testid="hauptchat-alle" onClick={() => { navigate('/wb/heute'); toggleNav?.(); }}>
               Alle Unter-Chats
             </Menu.MenuItem>
           </Menu.Menu>
@@ -211,12 +217,12 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
       </div>
 
       {!data ? null : h && hPath ? (
-        <ChatLink path={hPath} active={pathname === hPath} onOpen={open} testid="hauptchat-open" label={`Hauptchat (${h.title}) — ${h.status}`}>
+        <ChatLink path={hPath} active={pathname === hPath} onOpen={open} testid="hauptchat-open" label={`Hauptchat (${h.title}) — ${HEAD_WORD[h.status] ?? h.status}`}>
           <Satellite className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate font-medium">Hauptchat</span>
           <span className="flex shrink-0 items-center gap-1 text-xs text-text-secondary">
             <span className={cn('h-2 w-2 rounded-full', HEAD_DOT[h.status] ?? 'bg-gray-400')} aria-hidden="true" />
-            {h.status}
+            {HEAD_WORD[h.status] ?? h.status}
           </span>
         </ChatLink>
       ) : (
@@ -263,7 +269,7 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
                     <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform duration-200', o ? '' : '-rotate-90')} aria-hidden="true" />
                     <span className="min-w-0 flex-1 truncate text-left font-medium">{g.thema}</span>
                     {g.counts.wartet ? (
-                      <span data-testid="hauptchat-thema-wartet" className="shrink-0 rounded-full bg-amber-500/15 px-1.5 text-xs font-medium text-amber-700 dark:text-amber-300">{g.counts.wartet} wartet auf dich</span>
+                      <span data-testid="hauptchat-thema-wartet" className="shrink-0 rounded-full bg-amber-500/15 px-1.5 text-xs font-medium text-amber-700 dark:text-amber-300">{g.counts.wartet} braucht dich</span>
                     ) : first ? <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[first])} aria-hidden="true" /> : null}
                     {/* zu: was sonst los ist; auf: nur die Zahl der offenen, die Zeilen zeigen den Stand */}
                     <span className="min-w-0 shrink truncate text-xs text-text-secondary">
@@ -284,7 +290,7 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
                             className={cn(ROW, 'h-8 pl-8 text-xs text-text-secondary hover:bg-surface-active-alt md:h-8')}
                           >
                             <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform duration-200', fAuf ? '' : '-rotate-90')} aria-hidden="true" />
-                            <span className="min-w-0 flex-1 truncate text-left">Fertig ({fertig.length}){g.counts.fertig ? ` · ${g.counts.fertig} zu prüfen` : ''}</span>
+                            <span className="min-w-0 flex-1 truncate text-left">Fertig ({fertig.length}){g.counts.fertig ? ` · ${g.counts.fertig} bereit` : ''}</span>
                           </button>
                           {fAuf && <ul id={fid} className="flex flex-col">{fertig.map((x) => strandRow(x, 'pl-12', themaTitle(x, g.thema)))}</ul>}
                         </li>
@@ -320,6 +326,12 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
             })}
           </ul>
         </div>
+      )}
+      {groups.length > 0 && (
+        <label className="flex items-center gap-2 px-2 py-1 text-xs text-text-secondary" title="Sonst stehen Unter-Chats nur in diesem Abschnitt; die Suche findet sie immer.">
+          <input type="checkbox" data-testid="unterchats-in-liste" checked={!!inListe} onChange={(e) => setInListe(e.target.checked)} />
+          Unter-Chats auch in der Liste zeigen
+        </label>
       )}
       <div className="mx-1 mt-1 border-b border-border-light" />
     </section>

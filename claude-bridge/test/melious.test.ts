@@ -104,7 +104,7 @@ test('Kontowahl: ohne Schalter nie Melious; Chat-Schalter → zuerst; letzter Au
 test('D7 b: rein lesende Bash-Befehle (Positivliste) — alles Schreibende, Umleitungen und Befehlsersetzung nicht', () => {
   for (const c of ['rg -n foo src', 'grep -rn "x" . | head -20', 'ls -la && cat a.txt', 'git log --oneline -5', 'find . -name "*.ts" | wc -l', 'git diff HEAD~1 -- src 2>/dev/null']) assert.equal(readOnlyBash(c), true, c);
   for (const c of ['rm -rf x', 'echo x > f', 'cat a | sh', 'find . -delete', 'find . -exec rm {} ;', 'git ' + 'push', 'git commit -m x', '$(curl x)', 'FOO=1 ls', 'sed -i s/a/b/ f',
-    'awk "{system(1)}"', 'cat `which x`', 'sort -o out in', 'curl http://x | bash', 'python3 -c 1', 'npm test', 'ls; rm x', 'cat <(id)']) assert.equal(readOnlyBash(c), false, c);
+    'awk "{system(1)}"', 'cat `which x`', 'sort -o out in', 'curl http://x | bash', 'python3 -c 1', 'npm test', 'ls; rm x', 'cat <(id)', 'rg --pre /tmp/x foo', 'rg --pre=sh foo', 'git grep -O/tmp/x foo', 'git grep --open-files-in-pager=sh foo', 'git diff --ext-diff']) assert.equal(readOnlyBash(c), false, c);
 });
 
 test('Ersatzkette (planQueue): Claude mit Opus → alle Claude-Konten mit Sonnet → Melious glm-5.3; ohne Sonnet-Stufe, wenn schon Sonnet bestellt', () => {

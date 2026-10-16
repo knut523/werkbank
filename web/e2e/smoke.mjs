@@ -166,15 +166,15 @@ try {
   await step('Wissen: Übersicht, Notiz mit Backlinks, Roadmap, Suche', async () => {
     await a.getByRole('link', { name: /Wissen/ }).first().click();
     await a.getByRole('heading', { name: 'Wissen' }).waitFor();
-    await a.getByText('Produkt-OLAF-Roadmap').first().waitFor();
+    await a.getByLabel('Im Vault suchen').waitFor();
     await shot(a, '03-wissen-uebersicht');
     await a.getByRole('link', { name: /Olaf-Sprint-MOC/ }).first().click();
     await a.getByRole('heading', { name: 'Olaf Sprint MOC' }).waitFor();
     await a.getByText(/Backlinks \(\d+\)/).waitFor();
     await a.getByRole('link', { name: /Im Chat öffnen/ }).waitFor();
     await shot(a, '04-wissen-notiz');
-    await a.goto(W + '/#/wissen/~roadmap');
-    await a.getByRole('link', { name: 'Service View: Kundenakte' }).first().waitFor();
+    await a.goto(W + '/#/wissen/~roadmap');   // alte Adresse → Roadmap (Paket 187, S6)
+    await a.getByRole('heading', { name: /Roadmap · Produkt OLAF/ }).waitFor();
     await shot(a, '05-wissen-roadmap');
     // Suche über Meilisearch (eigener Test-Index)
     await a.getByRole('button', { name: '↻ Index' }).click();
@@ -474,28 +474,36 @@ try {
     await a.goto(LC + '/c/new');
     await a.getByTestId('werkbank-nav-heute').click();
     await a.waitForURL(/\/wb\/heute/);
-    await a.frameLocator('[data-testid="werkbank-frame"]').getByRole('heading', { name: 'Heute' }).waitFor({ timeout: 20000 });
+    await a.frameLocator('[data-testid="werkbank-frame"]').getByRole('heading', { name: 'Übersicht', exact: true }).waitFor({ timeout: 20000 });
     await shot(a, '21-leiste-heute');
-    assert.equal(await a.locator('[data-testid^="werkbank-nav-"]').count(), 5, 'Leiste: Heute · Roadmap · Board · Sprint · Wissen');
+    assert.equal(await a.locator('[data-testid^="werkbank-nav-"]').count(), 3, 'Leiste: Übersicht · Planen · Wissen');
     await a.goto(LC + '/wb/einrichtung');
     const f = a.frameLocator('[data-testid="werkbank-frame"]');
     await f.getByRole('heading', { name: 'Einrichtung' }).waitFor({ timeout: 20000 });
     assert.equal(await f.locator('#pw').count(), 0, 'kein zweites Login');
     await f.getByTestId('context-info').waitFor();
     await shot(a, '22-leiste-einrichtung');
-    for (const [id, text, name] of [['wissen', 'Produkt-OLAF-Roadmap', '23-leiste-wissen'], ['board', 'Board · PM', '24-leiste-board'], ['sprint', 'Sprint-Ziel', '25-leiste-sprint'], ['roadmap', 'Roadmap · Produkt OLAF', '27b-leiste-roadmap']]) {
+    // Paket 187: Leiste = Übersicht · Planen · Wissen; Planen öffnet die Roadmap (Reiter), alte Adressen bleiben gültig.
+    for (const [id, url, text, name] of [['wissen', 'wissen', 'Im Vault suchen', '23-leiste-wissen'], ['planen', 'roadmap', 'Roadmap · Produkt OLAF', '27b-leiste-roadmap']]) {
       await a.getByTestId(`werkbank-nav-${id}`).click();
-      await a.waitForURL(new RegExp(`/wb/${id}`));
-      await a.frameLocator('[data-testid="werkbank-frame"]').getByText(text).first().waitFor({ timeout: 20000 });
+      await a.waitForURL(new RegExp(`/wb/${url}`));
+      const fr = a.frameLocator('[data-testid="werkbank-frame"]');
+      await (id === 'wissen' ? fr.getByLabel(text) : fr.getByText(text).first()).waitFor({ timeout: 20000 });
       assert.equal(await a.getByTestId(`werkbank-nav-${id}`).getAttribute('aria-pressed'), 'true');
+      await shot(a, name);
+    }
+    for (const [id, text, name] of [['board', 'Board · PM', '24-leiste-board'], ['sprint', 'Sprint-Ziel', '25-leiste-sprint']]) {
+      await a.goto(LC + `/wb/${id}`);
+      await a.frameLocator('[data-testid="werkbank-frame"]').getByText(text).first().waitFor({ timeout: 20000 });
+      assert.equal(await a.getByTestId('werkbank-nav-planen').getAttribute('aria-pressed'), 'true', 'Planen ist aktiv auf alten Adressen');
       await shot(a, name);
     }
     // Unterseite landet in der Adresszeile und übersteht Neuladen
     await a.getByTestId('werkbank-nav-wissen').click();
     await a.frameLocator('[data-testid="werkbank-frame"]').getByRole('link', { name: 'Roadmap', exact: true }).first().click();
-    await a.waitForURL(/\/wb\/wissen\?h=%23%2Fwissen%2F~roadmap/);
+    await a.waitForURL(/\/wb\/roadmap\?h=%23%2Froadmap/);
     await a.reload();
-    await a.frameLocator('[data-testid="werkbank-frame"]').getByText('Thema × Zustand').waitFor({ timeout: 20000 });
+    await a.frameLocator('[data-testid="werkbank-frame"]').getByText('Roadmap · Produkt OLAF').waitFor({ timeout: 20000 });
     // Live-Strom (SSE) auch durch LibreChats /werkbank-Proxy: „hello“ kommt sofort an, nicht gepuffert.
     const fr = a.frames().find((x) => x.url().includes('/werkbank/'));
     const ms = await fr.evaluate(() => new Promise((res) => { const t0 = performance.now(); const es = new EventSource('api/events'); es.addEventListener('hello', () => { es.close(); res(performance.now() - t0); }); setTimeout(() => { es.close(); res(-1); }, 5000); }));

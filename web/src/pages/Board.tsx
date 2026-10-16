@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react';
 import { api, fmtDate, fmtDateTime, today, chatTarget, openChat, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, StateChip, useJiraLive } from '../ui.tsx';
-import { LinkButton, PflegeGlossar } from '../components.tsx';
+import { LinkButton, PflegeGlossar, GoalSelect } from '../components.tsx';
 import { PFLEGE, befundText, zusammenfassung, type Befund, type Act } from '../pflege.ts';
-import { BeiMirLink } from '../beimir.tsx';
 import { NoGoal } from './Sprint.tsx';
 import { moveActions, allowedStatuses, laneAllowed, moveCard, describeMove, type Transition } from '../boardMove.ts';
 
@@ -254,7 +253,7 @@ function ForgePanel({ issueKey, enabled, onStarted }: { issueKey: string; enable
   return (
     <div className="card soft" style={{ marginTop: 12 }} data-testid="forge-panel">
       <h3 style={{ marginTop: 0 }}>🔍 PR prüfen (forge)</h3>
-      {!enabled && <p className="small muted" style={{ margin: 0 }}>Kommt bald: forge-review wird gerade abgesichert und danach hier und im Chat angebunden. Ergebnis immer als Entwurf, nichts wird auf GitHub gepostet.</p>}
+      <p className="small muted" style={{ margin: 0 }}>Ergebnis immer als Entwurf, nichts wird auf GitHub gepostet.</p>
       <div className="row" style={{ marginTop: 6 }}>
         <input aria-label="Pull Request" placeholder="olaf-admin#171 oder GitHub-Link" value={pr} onChange={(e) => setPr(e.target.value)} disabled={!enabled} style={{ flex: 1, minWidth: 200 }} />
         <button className="btn small" disabled={!enabled || !pr.trim()} onClick={async () => {
@@ -291,7 +290,7 @@ function EditFields({ i, onDone }: { i: any; onDone: () => void }) {
     <div className="row" style={{ marginTop: 10, gap: 10 }} data-testid="edit-fields">
       <label className="small">Priorität <select aria-label="Jira-Priorität" value={i.priority ?? ''} onChange={(e) => e.target.value && edit({ priority: e.target.value }, `Priorität von ${i.key} ändern?`)}>{!i.priority && <option value="">— keine —</option>}{m.priorities.map((p: string) => <option key={p} value={p}>{p}</option>)}</select></label>
       <label className="small">Owner <select aria-label="Owner" value={i.assigneeId ?? ''} onChange={(e) => edit({ assignee: e.target.value || null }, `Owner von ${i.key} ändern?`)}><option value="">— niemand —</option>{m.people.map((p: any) => <option key={p.accountId} value={p.accountId}>{p.name}</option>)}</select></label>
-      <label className="small">Ziel <select aria-label="Ziel zuordnen" value="" onChange={(e) => e.target.value && edit({ goal: e.target.value }, `${i.key} dem Ziel ${e.target.value} zuordnen (OLAF Workspace)?`)}><option value="">{i.localGoal === 'KEINS' ? 'bewusst ohne' : i.localGoal || (i.labels ?? []).filter((l: string) => l.toLowerCase().startsWith(m.goalPrefix)).join(', ') || 'ohne Ziel'} → …</option>{m.goalIds.map((g: any) => <option key={g.id} value={g.id}>{g.id} · {String(g.result).slice(0, 40)}</option>)}</select></label>
+      <label className="small">Ziel <GoalSelect goals={m.goalIds} label="Ziel zuordnen" platzhalter={`${i.localGoal === 'KEINS' ? 'bewusst ohne' : i.localGoal || (i.labels ?? []).filter((l: string) => l.toLowerCase().startsWith(m.goalPrefix)).join(', ') || 'ohne Ziel'} → …`} onPick={(id) => edit({ goal: id }, `${i.key} dem Ziel ${id} zuordnen (OLAF Workspace)?`)} /></label>
       <Err e={err} />
     </div>
   );
@@ -408,7 +407,7 @@ export function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: s
           <EditFields i={i} onDone={async () => { await d.reload(); onChanged(); }} />
           <ChatAgents issueKey={k} runs={(d.data as any).runs} onChange={d.reload} />
           <AgentPanel issueKey={k} runs={(d.data as any).runs} onChange={() => d.reload()} />
-          <ForgePanel issueKey={k} enabled={!!forge} onStarted={() => d.reload()} />
+          {forge && <ForgePanel issueKey={k} enabled onStarted={() => d.reload()} />}
           <p className="tiny" style={{ marginTop: 12 }}>Neue Tickets legt der OLAF Workspace bewusst nicht an (olaf-jira: nur auf ausdrücklichen Auftrag, mit Duplikatsuche und Workstream) — dafür den Chat nutzen.</p>
         </>
       )}
@@ -568,7 +567,6 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
           try { const r: any = await api('/api/board/sync', { body: { force: true, confirm: true } }); toast(`${r.count} Tickets, ${r.removed} entfernt`); await b.reload(); } catch (e) { setErr(e); } finally { setSyncing(false); }
         }}>Trotzdem abgleichen …</button>}</div>}
       <Err e={err} />
-      <BeiMirLink what="Pflegepunkte deiner Tickets, Rückfragen und Reviews" />
       <div className="board-bar">
         <select value={owner} onChange={(e) => setOwner(e.target.value)} aria-label="Owner">
           <option value="">Alle Owner</option>

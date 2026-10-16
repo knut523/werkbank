@@ -275,10 +275,16 @@ serve('werkbank', '0.1.0', [
   // Gegenprüfung durch GLM 5.3 über Melious (Plan 162; Knut 15.10.: „Lead kann jeweils sowieso challengen mit GLM 5.3“).
   {
     name: 'challenge',
-    description: 'Zweite Meinung über Melious — ZUSÄTZLICH zu deiner eigenen Prüfung, nie statt ihr. Vorgabe glm-5.3-flash (günstig); hoch=true oder art=council nimmt glm-5.3 (nur für qualitativ wichtige Fragen). art=diff: Code-Review eines Diffs (Befunde mit Datei:Zeile, Schwere, Fix); art=plan: Plan-Challenge; art=council: Advocatus Diaboli zu einer Entscheidung (kurz halten). text: bis 200 000 Zeichen — große Texte werden in Stücke geteilt und parallel geprüft (bis ~5 min). Leere Antworten kommen als Fehler zurück, nicht als ok. Bewerte die Antwort selbst; übernimm nur, was du nachprüfen kannst. Kostet Melious-Energie, keine Claude-Tokens.',
-    inputSchema: { type: 'object', properties: { art: { type: 'string', enum: ['diff', 'plan', 'council'] }, text: { type: 'string' }, frage: { type: 'string' }, hoch: { type: 'boolean' } }, required: ['art', 'text'] },
+    description: 'Zweite Meinung über Melious — ZUSÄTZLICH zu deiner eigenen Prüfung, nie statt ihr. Vorgabe glm-5.3-flash (günstig); hoch=true oder art=council nimmt glm-5.3 (nur für qualitativ wichtige Fragen). art=diff: Code-Review eines Diffs (Befunde mit Datei:Zeile, Schwere, Fix); art=plan: Plan-Challenge; art=council: Advocatus Diaboli zu einer Entscheidung (kurz halten). text: bis 200 000 Zeichen; bei großen Diffs/Plänen statt text lieber datei (Pfad, z. B. nach `git diff base...HEAD > /tmp/x.diff`) — große Texte werden in Stücke geteilt und parallel geprüft (bis ~5 min). Leere Antworten kommen als Fehler zurück, nicht als ok. Bewerte die Antwort selbst; übernimm nur, was du nachprüfen kannst. Kostet Melious-Energie, keine Claude-Tokens.',
+    inputSchema: { type: 'object', properties: { art: { type: 'string', enum: ['diff', 'plan', 'council'] }, text: { type: 'string' }, datei: { type: 'string', description: 'Pfad zu einer Textdatei statt text (Live-Test 15.10.: großer Diff als Argument wurde vom Sicherheits-Klassifikator gestoppt)' }, frage: { type: 'string' }, hoch: { type: 'boolean' } }, required: ['art'] },
     run: async (a: any) => {
-      const j = await call('/internal/melious-challenge', { art: a.art, text: a.text, frage: a.frage ?? '', hoch: a.hoch === true, conv: process.env.WERKBANK_CONV_ID || '' }, 300_000);
+      let text = typeof a.text === 'string' ? a.text : '';
+      if (!text && a.datei) {
+        try { text = readFileSync(String(a.datei), 'utf8'); } catch (e: any) { return `Gegenprüfung nicht möglich: Datei nicht lesbar (${e?.code ?? e?.message ?? e})`; }
+      }
+      if (!text.trim()) return 'Gegenprüfung nicht möglich: text oder datei angeben.';
+      if (text.length > 200_000) return `Gegenprüfung nicht möglich: ${text.length} Zeichen, höchstens 200 000 — Diff auf die relevanten Dateien eingrenzen.`;
+      const j = await call('/internal/melious-challenge', { art: a.art, text, frage: a.frage ?? '', hoch: a.hoch === true, conv: process.env.WERKBANK_CONV_ID || '' }, 300_000);
       if (!j.ok) return `Gegenprüfung nicht möglich: ${j.error ?? 'unbekannter Fehler'}`;
       return `Gegenprüfung ${j.modell ?? 'GLM'} (Melious, Open-Weight — Ergebnis prüfen; ${j.teile > 1 ? `${j.teile} Teile${j.leer ? `, ${j.leer} ohne Antwort` : ''}; ` : ''}≈ ${j.energie ?? '?'} Energie${j.bezahlt === 'credits' ? ', bezahlt mit Guthaben' : ''}):\n\n${j.text}`;
     },

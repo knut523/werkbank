@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { api, fmtDateTime, chatTarget, embedded, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useToast, useConfirm } from '../ui.tsx';
+import { PrTickerSchalter } from '../prticker.tsx';
+import { MeliousKachel } from './Leitstand.tsx';
 
 function Login({ cfg, onLogin }: { cfg: Config; onLogin: () => void }) {
   const [email, setEmail] = useState('');
@@ -54,13 +56,13 @@ function Sessions() {
         <thead><tr><th>Sitzung</th><th>Status</th><th>Züge</th><th>Zuletzt</th></tr></thead>
         <tbody>{d.sessions.slice(0, 10).map((x: any) => (
           <tr key={x.conv}>
-            <td>{x.url ? <a href={x.url} target={chatTarget}>{x.title || x.conv.slice(0, 8)}</a> : <>{x.title || x.conv} <span className="tiny">(Board-Agent)</span></>}</td>
-            <td><span className={`chip ${x.status === 'wartet auf ja' ? 'warn' : x.status === 'läuft' ? 'ok' : ''}`}>{x.status}</span></td>
+            <td>{x.url ? <a href={x.url} target={chatTarget}>{x.title || 'Chat'}</a> : <>{x.title || 'Chat'} <span className="tiny">(Board-Agent)</span></>}</td>
+            <td><span className={`chip ${x.status === 'wartet auf ja' ? 'warn' : x.status === 'läuft' ? 'ok' : ''}`}>{x.status === 'wartet auf ja' ? 'braucht dich' : x.status}</span></td>
             <td>{x.turns ?? '—'}</td><td>{fmtDateTime(x.lastActivity)}</td>
           </tr>
         ))}</tbody>
       </table>
-      <p className="tiny">Jede Unterhaltung ist eine fortsetzbare Claude-Code-Sitzung. „wartet auf ja“: dort steht eine Rückfrage offen.</p>
+      <p className="tiny">Jede Unterhaltung ist eine fortsetzbare Claude-Code-Sitzung. „braucht dich“: dort steht eine Rückfrage offen.</p>
     </>
   );
 }
@@ -243,7 +245,7 @@ function MeliousAccount() {
   return (
     <div data-testid="melious-account" style={{ marginTop: 16 }}>
       <h4 style={{ margin: '0 0 4px' }}>Melious — Open-Weight-Modelle aus der EU</h4>
-      <p className="small" style={{ marginTop: 0 }}>Zusätzliches Konto über die Anthropic-kompatible API von Melious. <b>Standard aus:</b> genommen wird es nur, wenn es hier erlaubt ist, und dann nur in Chats mit <code>/melious an</code> — oder, wenn du es extra einschaltest, als letzter Ausweg, wenn alle Claude-Konten erschöpft sind. Nie in der Lastverteilung der Claude-Konten. Melious-Züge dürfen dasselbe wie Claude-Züge. Melious begrenzt über einen <b>Energietopf</b>, der alle 45 Minuten nachfüllt (höchstens 4 Tage, darüber verfällt er). Die Werkbank nutzt ihn stetig: ohne festes Modell nimmt sie die Modelle der Rolle in der eingestellten Reihenfolge; läuft der Verbrauch schneller als die Nachfüllung, zuerst die sparsamen. Ein Chat bzw. Strang behält sein Modell. Ergebnisse von Open-Weight-Modellen bitte prüfen.</p>
+      <p className="small" style={{ marginTop: 0 }}>Zusätzliches Konto über die Anthropic-kompatible API von Melious. <b>Standard aus:</b> genommen wird es nur, wenn es hier erlaubt ist, und dann nur in Chats mit <code>/melious an</code> — oder, wenn du es extra einschaltest, als letzter Ausweg, wenn alle Claude-Konten erschöpft sind. Nie in der Lastverteilung der Claude-Konten. Melious-Züge dürfen dasselbe wie Claude-Züge. Melious begrenzt über einen <b>Energietopf</b>, der alle 45 Minuten nachfüllt (höchstens 4 Tage, darüber verfällt er). Der OLAF Workspace nutzt ihn stetig: ohne festes Modell nimmt sie die Modelle der Rolle in der eingestellten Reihenfolge; läuft der Verbrauch schneller als die Nachfüllung, zuerst die sparsamen. Ein Chat bzw. Unter-Chat behält sein Modell. Ergebnisse von Open-Weight-Modellen bitte prüfen.</p>
       {d.configured ? (
         <>
           <div className="row small" style={{ gap: 12, flexWrap: 'wrap' }}>
@@ -255,15 +257,15 @@ function MeliousAccount() {
           </div>
           <div className="row small" style={{ gap: 16, marginTop: 6 }}>
             <label><input type="checkbox" aria-label="Melious erlauben" checked={d.enabled} disabled={!!busy} onChange={(e) => run('enabled', () => put({ enabled: e.target.checked }))} /> Melious erlauben (Chats mit <code>/melious an</code>)</label>
-            <label><input type="checkbox" aria-label="Melious als letzter Ausweg" checked={d.fallback} disabled={!!busy || !d.enabled} onChange={(e) => run('fallback', () => put({ fallback: e.target.checked }))} /> auch als letzter Ausweg, wenn alle Claude-Konten erschöpft sind (nur Chats und Stränge mit Risiko „niedrig“, nie der Hauptchat)</label>
-            <label><input type="checkbox" aria-label="Melious Ersatzkette" data-testid="melious-kette" checked={d.kette} disabled={!!busy || !d.enabled} onChange={(e) => run('kette', () => put({ kette: e.target.checked }))} /> Ersatzkette für Hauptchat und Strang-Leads: Opus → Sonnet → {d.ketteModell} (ohne Warten; das Modell steht im Protokoll)</label>
+            <label><input type="checkbox" aria-label="Melious als letzter Ausweg" checked={d.fallback} disabled={!!busy || !d.enabled} onChange={(e) => run('fallback', () => put({ fallback: e.target.checked }))} /> auch als letzter Ausweg, wenn alle Claude-Konten erschöpft sind (nur Chats und Unter-Chats mit Risiko „niedrig“, nie der Hauptchat)</label>
+            <label><input type="checkbox" aria-label="Melious Ersatzkette" data-testid="melious-kette" checked={d.kette} disabled={!!busy || !d.enabled} onChange={(e) => run('kette', () => put({ kette: e.target.checked }))} /> Ersatzkette für Hauptchat und Unter-Chat-Leads: Opus → Sonnet → {d.ketteModell} (ohne Warten; das Modell steht im Protokoll)</label>
             <label><input type="checkbox" aria-label="Melious eco" data-testid="melious-eco" checked={d.eco} disabled={!!busy} onChange={(e) => run('eco', () => put({ eco: e.target.checked }))} /> <code>:eco</code>-Routing (Melious wählt das sparsamste Rechenzentrum; Umweltwerte siehe Bericht)</label>
           </div>
           <div className="small" data-testid="melious-energie" style={{ marginTop: 8 }}>
             ⚡ <b>Energie {u.energie.geschaetzt ? '(geschätzt)' : '(Verbrauch geschätzt, Stand echt)'}</b> heute {ez(u.heute.energie)} · Monat {ez(u.monat.energie)}
             {u.energie.echt && <> · Topf <span className="chip ok" data-testid="melious-echt">{z(Math.round(u.energie.echt.energy))}{u.energie.echt.energyMax ? ` / ${z(Math.round(u.energie.echt.energyMax))}` : ''}</span></>}
             {u.energie.nachfuellungTag ? <> · Nachfüllung je Tag {ez(u.energie.nachfuellungTag)} · Tempo <span className={`chip ${u.energie.tempo > 1 ? 'warn' : 'ok'}`}>{Math.round((u.energie.tempo ?? 0) * 100)} %</span> {u.energie.modus === 'sparen' ? '→ sparsame Modelle zuerst' : '→ Reihenfolge der Rolle (Energie bleibt sonst liegen)'}</>
-              : <> · <span className="chip warn">Energie je Nachfüll-Takt eintragen</span> (aus dem Dashboard), dann steuert die Werkbank das Tempo</>}
+              : <> · <span className="chip warn">Energie je Nachfüll-Takt eintragen</span> (aus dem Dashboard), dann steuert der OLAF Workspace das Tempo</>}
             {' '}· <a href={u.energie.dashboard} target="_blank" rel="noreferrer">echter Stand im Melious-Dashboard</a>
             {u.energie.stand != null && u.energie.topfMax && <> · Topf {u.energie.geschaetzt ? '≈ ' : ''}{z(u.energie.stand)} / {z(u.energie.topfMax)} ({Math.round((u.energie.fuell ?? 0) * 100)} %)</>}
             {(u.energie.hinweise ?? []).map((h: string) => <div key={h} className="note small" data-testid="melious-hinweis" style={{ margin: '4px 0' }}>{h}</div>)}
@@ -342,6 +344,7 @@ function Wizard({ cfg }: { cfg: Config }) {
     try { await fn(); await st.reload(); } catch (e) { setErr(e); } finally { setBusy(''); }
   };
   const allOk = s.claude.connected && s.jira.connected;
+  const admin = cfg.features?.leitstand !== false;   // wie bisher die Seite „Hauptchat & Unter-Chats“: nur Admins
   return (
     <div className="page" style={{ maxWidth: 860 }}>
       <div className="head">
@@ -379,7 +382,6 @@ function Wizard({ cfg }: { cfg: Config }) {
               }}>Trennen</button>}
             </form>
             <ClaudeAccounts chat={s.claude.connected} />
-            <MeliousAccount />
           </div>
         </div>
 
@@ -404,6 +406,24 @@ function Wizard({ cfg }: { cfg: Config }) {
         </div>
 
         <McpStep claude={s.claude.connected} />
+
+        {/* Paket 187 (S4): Melious und Automatik wohnen hier, nicht mehr auf der Seite „Hauptchat & Unter-Chats“. */}
+        <div className="step" data-testid="setup-melious">
+          <div className="num">＋</div>
+          <div className="card">
+            <h3 style={{ marginTop: 0 }}>Melious (optional)</h3>
+            <MeliousAccount />
+            {admin && <div style={{ marginTop: 12 }}><MeliousKachel /></div>}
+          </div>
+        </div>
+
+        {admin && <div className="step" data-testid="setup-automatik">
+          <div className="num">＋</div>
+          <div className="card">
+            <h3 style={{ marginTop: 0 }}>Automatik (optional)</h3>
+            <PrTickerSchalter />
+          </div>
+        </div>}
 
         <div className={`step ${allOk ? 'done' : ''}`}>
           <div className="num">{allOk ? '✓' : '5'}</div>
