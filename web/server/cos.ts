@@ -64,6 +64,7 @@ export interface LageInput {
   team: Set<string>;
   meetings: MeetingLite[]; triage: TriageLite[]; berichte: BerichtZeile[];
   roadmapFragen: number; ich: string;
+  triageInfo?: { aelter: number; ohnePunkte: number };
 }
 
 // ---------- Ausgabe ----------
@@ -87,6 +88,7 @@ export interface Lage {
   schulden: { knut: Liste<Schuld>; team: Liste<Schuld>; partner: Liste<Schuld>; klaeren: Liste<Schuld>; ueberfaellig: number; rueckfragenAnKnut: number };
   themen: { zeilen: Liste<ThemaLage>; ruhig: number };
   triage: Liste<TriageLite>;
+  triageInfo: { aelter: number; ohnePunkte: number };
   unlesbar: { zeile: number; text: string; abschnitt: string }[];
   roadmapFragen: number;
 }
@@ -243,6 +245,7 @@ export function baueLage(i: LageInput): Lage {
     berichte: i.berichte,
     schulden: s, themen: th,
     triage: kappe(i.triage, GRENZEN.entscheide),
+    triageInfo: i.triageInfo ?? { aelter: 0, ohnePunkte: 0 },
     unlesbar: [...i.register.unlesbar, ...(i.register.themenUnlesbar ?? [])],
     roadmapFragen: i.roadmapFragen,
   };

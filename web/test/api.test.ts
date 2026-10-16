@@ -5,7 +5,7 @@ import { TEST_MONGO } from './testmongo.ts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, cpSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync, utimesSync, renameSync, rmSync } from 'node:fs';
+import { mkdtempSync, cpSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync, utimesSync, renameSync, rmSync, unlinkSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -1633,4 +1633,38 @@ test('CoS Morgenlage (K8/P1): eine Rückfrage steht in Lage und „Rückfragen a
   assert.ok(!(await anna.req('/api/uebersicht')).j.lose.some((q: any) => q.id === ask.j.id), 'weg in „Rückfragen an dich“');
   await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
   await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+});
+
+test('CoS Triage (Vexa): Vorschlag in der Lage, Ja = Vorschau → Bestätigung, Nein blendet aus; Nicht-Admin 403', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  const heute = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date(Date.now() - 2 * 86400_000));
+  const md = readFileSync(new URL('./fixtures/cos/vexa-mit-entscheidung.md', import.meta.url), 'utf8').replace(/2026-10-14/g, heute);
+  mkdirSync(join(VAULT, 'olaf/Meetings'), { recursive: true });
+  const rel = (n: string) => `olaf/Meetings/${heute}-${n}.md`;
+  writeFileSync(join(VAULT, rel('a')), md); writeFileSync(join(VAULT, rel('b')), md.replace('meeting_id 777', 'meeting_id 778'));
+  try {
+    assert.equal((await bernd.req('/api/cos/triage', { body: { datei: rel('a') } })).status, 403);
+    const l = await anna.req('/api/cos/lage');
+    const t = l.j.entscheide.items.filter((e: any) => e.art === 'triage');
+    assert.equal(t.length, 2); assert.match(t[0].titel, /4 Zusagen, 1 Entscheidung übernehmen\?/);
+    assert.equal((await anna.req('/api/cos/triage', { body: { datei: 'olaf/2-Areas/x.md' } })).status, 400);
+    const vor = await anna.req('/api/cos/triage', { body: { datei: rel('a') } });
+    assert.equal(vor.status, 200, JSON.stringify(vor.j)); assert.equal(vor.j.needsConfirm, true);
+    assert.equal(readFileSync(join(VAULT, rel('a')), 'utf8'), md, 'Vorschau schreibt nicht');
+    const ok = await anna.req('/api/cos/triage', { body: { datei: rel('a'), confirm: true, hash: vor.j.hash, registerHash: vor.j.registerHash } });
+    assert.equal(ok.status, 200, JSON.stringify(ok.j)); assert.equal(ok.j.ids.length, 4);
+    assert.match(readFileSync(join(VAULT, rel('a')), 'utf8'), /## Triage \(Werkbank,/);
+    assert.equal((await anna.req('/api/cos/lage')).j.entscheide.items.filter((e: any) => e.art === 'triage').length, 1, 'erledigter Vorschlag weg');
+    const nein = await anna.req('/api/cos/triage', { body: { datei: rel('b'), art: 'nein' } });
+    assert.equal(nein.status, 200);
+    assert.equal((await anna.req('/api/cos/lage')).j.entscheide.items.filter((e: any) => e.art === 'triage').length, 0);
+    assert.ok(!readFileSync(join(VAULT, rel('b')), 'utf8').includes('## Triage'), 'Nein lässt den Vault unverändert');
+  } finally {
+    for (const n of ['a', 'b']) { try { unlinkSync(join(VAULT, rel(n))); } catch { /* weg */ } }
+    await mongo.db(DB).collection('cos_triage').deleteMany({});
+    await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+    await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+  }
 });

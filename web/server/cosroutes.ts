@@ -3,7 +3,9 @@
 
 import { liesRegister, schreibeZusagen, schreibeThema, teamNamen, teamSet, seiteVon, registerRel, CosError, type ZOp, type ThemaOp, type SchreibOpts, type SchreibErgebnis } from './cosregister.ts';
 import { startEinwurf, EinwurfError } from './coseinwurf.ts';
-import { sammleLage, type Quellen } from './cossammle.ts';
+import { sammleLage, meetingTeams, type Quellen } from './cossammle.ts';
+import { triageUebernehmen, pruefeDatei } from './cosmeeting.ts';
+import { wb } from './db.ts';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -74,6 +76,20 @@ export function cosRoutes(d: CosDeps) {
     if (process.env.COS_MORGENLAGE === 'off') return send(res, 200, { aus: true });
     const { lage } = await sammleLage(u, d.quellen());
     send(res, 200, lage);
+  });
+
+  // Meeting-Triage (S1.3): ohne confirm Vorschau, mit confirm schreiben; art=nein blendet den Vorschlag aus (Mongo, Vault unverändert).
+  on('POST', /^\/api\/cos\/triage$/, async (req, res) => {
+    const u = await d.needAdmin(req);
+    const b = await d.body(req);
+    const teams = meetingTeams();
+    const datei = pruefeDatei(String(b.datei ?? ''), teams);
+    if (b.art === 'nein') {
+      await wb().collection('cos_triage').updateOne({ _id: datei as any }, { $set: { art: 'nein', at: new Date(), by: u.email } }, { upsert: true });
+      return send(res, 200, { ok: true, ausgeblendet: datei });
+    }
+    const o = await opts(b, 'zusagen');
+    send(res, 200, await triageUebernehmen(datei, { ...o, teams, registerHash: typeof b.registerHash === 'string' ? b.registerHash : undefined }));
   });
 
   // Einwurf (S1.4): Material → Arbeitskopie + neuer Chat mit der Anleitung. Antwort: Link zum Chat.

@@ -8,6 +8,7 @@ import { browseUrl } from './config.ts';
 import { parseFrontmatter } from './vault.ts';
 import { liesRegister, teamNamen, teamSet } from './cosregister.ts';
 import { baueLage, stichzeit, wien, dailyZeilen, debriefZeile, syncZeile, type LageInput, type KarteLite, type FrageLite, type MeetingLite, type BerichtZeile, type PrLite, type IssueLite, type Lage, type PrSnap, type TriageLite } from './cos.ts';
+import { vorschlaege } from './cosmeeting.ts';
 import type { User } from './auth.ts';
 
 export interface Quellen {
@@ -19,8 +20,6 @@ export interface Quellen {
   ich: (u: User) => string;
   /** OLAF-Jira (max-energy), lesend; null = aus. */
   olafJira?: (st: Date) => Promise<{ issues: IssueLite[]; fehler?: string | null } | null>;
-  /** Offene Meeting-Vorschläge (S1.3). */
-  triage?: (u: User, jetzt: Date) => Promise<TriageLite[]>;
   /** Teams, deren Meeting-Notizen gelesen werden (COS_MEETING_TEAMS). */
   meetingTeams?: () => string[];
 }
@@ -120,11 +119,14 @@ export async function sammleEingabe(u: User, q: Quellen, jetzt: Date): Promise<L
   const namen = teamNamen(q.vaultDir);
   const teams = (q.meetingTeams ?? meetingTeams)();
   const berichte = berichteVon(q.vaultDir, heute);
-  const [olafJira, triage] = await Promise.all([q.olafJira ? q.olafJira(st).catch((e: any) => ({ issues: [], fehler: String(e?.message ?? e).slice(0, 120) })) : null, q.triage ? q.triage(u, jetzt).catch(() => []) : []]);
+  const olafJira = q.olafJira ? await q.olafJira(st).catch((e: any) => ({ issues: [], fehler: String(e?.message ?? e).slice(0, 120) })) : null;
+  const versteckt = new Set(((await wb().collection('cos_triage').find({ art: 'nein' }).toArray().catch(() => [])) as any[]).map((d) => String(d._id)));
+  const tri = vorschlaege(q.vaultDir, teams, heute, versteckt);
+  const triage: TriageLite[] = tri.items;
   return {
     jetzt, stichzeit: st, karten, fragen, mine: { prs: mine.prs, tickets: mine.tickets }, prs, prSnapshot: snap?.prs ?? null, jira, jiraSnapshot: snap?.jira ?? null, olafJira,
     register: { vorhanden: register.vorhanden, zusagen: register.zusagen, themen: register.themen, personen: register.personen, unlesbar: register.unlesbar, themenUnlesbar: register.themenUnlesbar, doppelt: register.doppelt },
-    team: teamSet(namen), meetings: meetingsSeit(q.vaultDir, teams, st), triage, berichte, roadmapFragen: (mine.questions ?? []).filter((x: any) => !x.answer).length, ich: q.ich(u),
+    team: teamSet(namen), meetings: meetingsSeit(q.vaultDir, teams, st), triage, berichte, roadmapFragen: (mine.questions ?? []).filter((x: any) => !x.answer).length, ich: q.ich(u), triageInfo: { aelter: tri.aelter, ohnePunkte: tri.ohnePunkte },
   };
 }
 
