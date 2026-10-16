@@ -1539,3 +1539,49 @@ test('Agent ansetzen: Vorschau schreibt nichts, Sperren, genau ein Ticket, Zurü
   assert.match(proto, /"knopf":"trotzdem bauen"/, 'die Bestätigungen oben stehen als Knopf im Protokoll');
   await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
 });
+
+// --- Chief of Staff (docs/plan-chief-of-staff.md, Paket 209) ---
+
+const intern = (path: string, body: unknown) => fetch(B + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId: String(users.a._id), ...(body as object) }) }).then(async (r) => ({ status: r.status, j: await r.json().catch(() => ({})) as any }));
+const COS_REG = () => join(VAULT, 'olaf/1-Projects/chief-of-staff/zusagen-register.md');
+
+test('CoS Register: nur Admin, Vorschau schreibt nie, confirm schreibt, 409 bei Änderung, interne Werkzeuge', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  assert.equal((await bernd.req('/api/cos/register')).status, 403);
+  assert.equal((await bernd.req('/api/cos/zusage', { body: { was: 'x' } })).status, 403);
+  const leer = await anna.req('/api/cos/register');
+  assert.equal(leer.status, 200); assert.equal(leer.j.zusagen.length, 0); assert.equal(leer.j.vorhanden.zusagen, false);
+  const pre = await anna.req('/api/cos/zusage', { body: { wer: 'Christoph Bitzner', was: 'Belieferungsstatus in den Report', bis: '2026-10-23', thema: 'Cockpit' } });
+  assert.equal(pre.status, 200); assert.equal(pre.j.needsConfirm, true);
+  assert.equal(existsSync(COS_REG()), false, 'Vorschau schreibt nicht');
+  const ok = await anna.req('/api/cos/zusage', { body: { wer: 'Christoph Bitzner', was: 'Belieferungsstatus in den Report', bis: '2026-10-23', thema: 'Cockpit', confirm: true, hash: pre.j.hash } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.j)); assert.deepEqual(ok.j.ids, ['Z-001']);
+  assert.match(readFileSync(COS_REG(), 'utf8'), /- \*\*Z-001\*\* · Christoph Bitzner → Knut · Belieferungsstatus in den Report · bis 2026-10-23 · Thema: Cockpit/);
+  const stale = await anna.req('/api/cos/zusage', { body: { was: 'zweite', confirm: true, hash: pre.j.hash } });
+  assert.equal(stale.status, 409); assert.match(stale.j.error, /geändert/);
+  const g = await anna.req('/api/cos/register');
+  assert.equal(g.j.zusagen.length, 1); assert.equal(g.j.zusagen[0].seite, 'Seite?');
+  // Vault-Sync läuft (flock auf der Sperrdatei) → 409
+  const lockDir = join(tmp, 'vault-sync'); mkdirSync(lockDir, { recursive: true });
+  const holder = spawn('flock', [join(lockDir, '.lock'), 'sleep', '2'], { stdio: 'ignore' });
+  const frei = new Promise((r) => holder.on('exit', r));
+  await new Promise((r) => setTimeout(r, 400));
+  const gesperrt = await anna.req('/api/cos/zusage', { body: { was: 'während Sync', confirm: true } });
+  await frei;
+  assert.equal(gesperrt.status, 409); assert.match(gesperrt.j.error, /Vault-Sync/);
+  // Interner Weg (Werkbank-MCP): lesen, ändern (schon bestätigt vom Chat)
+  const l = await intern('/internal/cos/zusagen', {});
+  assert.equal(l.status, 200); assert.equal(l.j.zusagen[0].id, 'Z-001');
+  const ae = await intern('/internal/cos/zusage', { art: 'aendern', id: 'Z-001', status: 'erledigt', notiz: 'im Report' });
+  assert.equal(ae.status, 200, JSON.stringify(ae.j));
+  assert.match(readFileSync(COS_REG(), 'utf8'), /## Erledigt\n\n- \*\*Z-001\*\*.*Notiz: im Report · erledigt \d{4}-\d{2}-\d{2}/);
+  const th = await intern('/internal/cos/thema', { name: 'Flex', ball: 'Knut', stand: 'Umfrage läuft' });
+  assert.equal(th.status, 200, JSON.stringify(th.j));
+  const reg = await anna.req('/api/cos/register');
+  assert.equal(reg.j.themen.find((t: any) => t.name === 'Flex').ball, 'Knut');
+  assert.ok(reg.j.themen.length >= 2, 'beim ersten Schreiben aus Jira-Workstreams/Strängen vorbefüllt (K9)');
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+});

@@ -21,7 +21,7 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
-import { themaOf } from './themen.ts';
+import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
@@ -45,6 +45,7 @@ import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
 import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog, logShare, scratchDir } from './sharing.ts';
 import { log } from './log.ts';
+import { cosRoutes } from './cosroutes.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, type JiraAction } from './jirawrite.ts';
@@ -2611,6 +2612,16 @@ on('POST', /^\/api\/hygiene\/([A-Z][A-Z0-9]+-\d+)\/answer$/, async (req, res, m)
 on('GET', /^\/api\/context$/, async (req, res) => {
   const u = await needUser(req);
   send(res, 200, await contextStats(u));
+});
+
+// Chief of Staff (docs/plan-chief-of-staff.md): Register, Einwurf, Morgenlage — Routen in cosroutes.ts.
+cosRoutes({
+  on, needAdmin, internalUser: (req, b) => internalUser(req, b), body, send, HttpError, vaultDir: () => cfg.vaultDir, dry: vaultDry, invalidate: invalidateIndex, log,
+  themenVorschlag: async () => {
+    const ws = (await wb().collection('jira_issues').distinct('workstream')).map(String).filter(Boolean);
+    const th = (await orchRuns().distinct('thema')).map(String).filter(Boolean);
+    return [...new Set([...ws, ...th, ...THEMEN.map((t) => t.thema)])];
+  },
 });
 
 // --- intern: nur für die Brücke und ihre Werkzeuge (Header mit WERKBANK_INTERNAL_TOKEN) ---
