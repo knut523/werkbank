@@ -137,12 +137,13 @@ function Einwurf({ onClose, vorgabe }: { onClose: () => void; vorgabe?: string }
 }
 
 /** Die Karte. `alle` = Vollansicht der Entscheide (Freigabe-Inbox, S3.1). */
-export function Morgenlage({ onChange }: { onChange: () => void }) {
+export function Morgenlage({ onChange, onAktiv }: { onChange: () => void; onAktiv?: (aktiv: boolean) => void }) {
   const [l, setL] = useState<any>(null);
   const [err, setErr] = useState<unknown>(null);
   const [zu, setZu] = useStored<boolean>('cos:zu', false);
   const [einwurf, setEinwurf] = useState<{ notiz?: string } | null>(null);
-  const lade = () => api('/api/cos/lage').then((x) => { setL(x); setErr(null); }).catch((e) => setErr(e));
+  const [alle, setAlle] = useState<any>(null);
+  const lade = () => api('/api/cos/lage').then((x) => { setL(x); setErr(null); onAktiv?.(!x.aus); if (alle) api('/api/cos/inbox').then(setAlle).catch(() => {}); }).catch((e) => { setErr(e); onAktiv?.(false); });
   useEffect(() => {
     lade();
     const id = setInterval(() => { if (document.visibilityState === 'visible') lade(); }, 120_000);
@@ -174,8 +175,10 @@ export function Morgenlage({ onChange }: { onChange: () => void }) {
         {l.leer && <p className="small cos-leer" data-testid="cos-leer">{l.leer}</p>}
         <div className="cos-block" data-testid="cos-entscheide">
           <h3>① Entscheide heute <span className="ub-amp u-dich">{l.entscheide.gesamt}</span></h3>
-          {l.entscheide.items.length ? l.entscheide.items.map((e: any) => <EntscheidZeile key={e.id} e={e} onDone={fertig} />) : <p className="small mut">Nichts wartet auf dich.</p>}
-          <Mehr n={l.entscheide.weitere} />
+          {(alle ? alle.items : l.entscheide.items).length ? (alle ? alle.items : l.entscheide.items).map((e: any) => <EntscheidZeile key={e.id} e={e} onDone={fertig} />) : <p className="small mut">Nichts wartet auf dich.</p>}
+          {alle ? <button className="linklike tiny" onClick={() => setAlle(null)} data-testid="cos-inbox-zu">nur die ersten {l.entscheide.items.length} zeigen</button>
+            : l.entscheide.weitere > 0 && <p className="tiny mut" data-testid="cos-mehr">… und {l.entscheide.weitere} weitere → <button className="linklike" onClick={() => api('/api/cos/inbox').then(setAlle).catch(setErr)} data-testid="cos-inbox-auf">alle ansehen (Inbox)</button></p>}
+          {alle && <p className="tiny mut" data-testid="cos-inbox-zahl">Inbox: {alle.gesamt} offen, davon {alle.blockierend} blockieren einen Unter-Chat.</p>}
           {l.roadmapFragen > 0 && <p className="tiny mut">{l.roadmapFragen} offene Roadmap-Fragen → <a href="#/roadmap">Planen</a></p>}
         </div>
         <div className="cos-block" data-testid="cos-blockiert">
@@ -183,6 +186,10 @@ export function Morgenlage({ onChange }: { onChange: () => void }) {
           {l.blockiert.items.length ? <ul>{l.blockiert.items.map((b: any) => <li key={b.id} className="small"><b>{b.titel}</b> — {b.von}{b.link ? <> <a className="tiny" href={b.link} target="_blank" rel="noreferrer">öffnen</a></> : null}</li>)}</ul> : <p className="small mut">Nichts blockiert.</p>}
           <Mehr n={l.blockiert.weitere} />
         </div>
+        {(l.budgets?.items ?? []).length > 0 && <div className="cos-block" data-testid="cos-budget">
+          <h3>Budget je Unter-Chat</h3>
+          <ul>{l.budgets.items.map((b: any) => <li key={b.id} className="small" data-stufe={b.stufe}><b>{b.titel}</b>: {b.prozent} % ({b.tokens.toLocaleString('de-AT')} von {b.budget.toLocaleString('de-AT')} Tokens){b.stufe === 'stopp' ? <span className="ub-amp u-bad"> Pause — Rückfrage steht unter ①</span> : b.stufe === 'warn' ? <span className="ub-amp u-dich"> ab 80 %</span> : null}{b.energie > 0 && <span className="tiny mut"> · Melious {b.energie} Energie</span>}</li>)}</ul>
+        </div>}
         <details className="cos-block" data-testid="cos-nacht" open={nachtN > 0 && nachtN <= 12}>
           <summary><h3 style={{ display: 'inline' }}>③ Über Nacht geändert <span className="tiny mut">{nachtN}</span></h3></summary>
           {(['pr', 'jira', 'olafjira', 'strang', 'meeting'] as const).map((k) => n[k].gesamt > 0 && <div key={k}><h4>{{ pr: 'GitHub', jira: 'Jira PM', olafjira: 'Jira OLAF', strang: 'Unter-Chats', meeting: 'Meetings' }[k]}</h4>
@@ -212,8 +219,55 @@ export function Morgenlage({ onChange }: { onChange: () => void }) {
             {t.offeneZusagen > 0 && <span className="tiny mut"> · {t.offeneZusagen} Zusagen</span>}{t.straenge > 0 && <span className="tiny mut"> · {t.straenge} Unter-Chats</span>}</li>)}</ul> : <p className="small mut">{l.leer ? 'Noch keine Themen im Register.' : 'Alle Themen ruhig.'}</p>}
           {l.themen.ruhig > 0 && <p className="tiny mut">{l.themen.ruhig} weitere Themen ohne Bewegung.</p>}
         </div>
+        <Nachmittag onChange={fertig} />
         {l.unlesbar.length > 0 && <p className="tiny mut" data-testid="cos-unlesbar">Nicht lesbar im Register ({l.unlesbar.length}): {l.unlesbar.slice(0, 3).map((u: any) => `Zeile ${u.zeile}`).join(', ')} — bleibt unverändert, bitte von Hand prüfen.</p>}
       </>}
     </section>
+  );
+}
+
+/** Nachmittagskarte (S3.4): ab 15 Uhr der Tagesabschluss, freitags die Wochendurchsicht mit Rückstau — live berechnet; die Vault-Seiten schreibt der Takt. */
+function Nachmittag({ onChange }: { onChange: () => void }) {
+  const jetzt = new Date();
+  const wien = new Intl.DateTimeFormat('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', hourCycle: 'h23', weekday: 'short' }).formatToParts(jetzt);
+  const h = Number(wien.find((p) => p.type === 'hour')?.value ?? 0), freitag = /^fr/i.test(wien.find((p) => p.type === 'weekday')?.value ?? '');
+  const [a, setA] = useState<any>(null);
+  const [w, setW] = useState<any>(null);
+  const [wahl, setWahl] = useState<Record<string, boolean>>({});
+  const [zurueck, setZurueck] = useState<any[]>([]);
+  const [err, setErr] = useState<unknown>(null);
+  const toast = useToast();
+  const ladeW = () => api('/api/cos/woche').then((x) => { setW(x); setWahl(Object.fromEntries((x.rueckstauListe ?? []).map((i: any) => [i.datei, true]))); }).catch(setErr);
+  useEffect(() => {
+    if (h >= 15) api('/api/cos/abschluss').then(setA).catch(setErr);
+    if (freitag && h >= 14) ladeW();
+    api('/api/cos/rueckstau/zurueck').then((r) => setZurueck(r.moeglich ?? [])).catch(() => {});
+  }, []);
+  if (h < 15 && !(freitag && h >= 14) && !zurueck.length) return null;
+  const archivieren = async () => {
+    setErr(null);
+    try {
+      const dateien = (w.rueckstauListe as any[]).filter((i) => wahl[i.datei]).map((i) => i.datei);
+      const hashes = Object.fromEntries((w.rueckstauListe as any[]).map((i) => [i.datei, i.hash]));
+      const r = await api('/api/cos/rueckstau', { body: { dateien, confirm: true, hashes } });
+      toast(`${r.archiviert.length} Entwürfe archiviert — rückgängig 7 Tage`); ladeW(); api('/api/cos/rueckstau/zurueck').then((x) => setZurueck(x.moeglich ?? [])).catch(() => {}); onChange();
+    } catch (e) { setErr(e); }
+  };
+  const rueck = async (datei: string) => { try { await api('/api/cos/rueckstau/zurueck', { body: { datei } }); toast('Wieder auf Entwurf gesetzt'); setZurueck(zurueck.filter((z) => z.datei !== datei)); ladeW(); } catch (e) { setErr(e); } };
+  return (
+    <div className="cos-block" data-testid="cos-nachmittag">
+      {a && h >= 15 && <div data-testid="cos-abschluss"><h3>Tagesabschluss</h3>
+        <p className="small">Heute entschieden: <b>{a.entschieden.length}</b> · Zusagen erledigt <b>{a.erledigt.length}</b>, neu <b>{a.neu.length}</b>, überfällig <b>{a.ueberfaellig}</b> · läuft über Nacht: <b>{a.laeuft.length}</b></p>
+        {a.morgen.length > 0 && <p className="small">Morgen fällig: {a.morgen.map((z: any) => `${z.id} ${z.was}`).join(' · ')}</p>}
+        <p className="tiny mut">Um 17:30 entsteht dazu die Seite im Vault und setzt die Stichzeit für „über Nacht“.</p></div>}
+      {w && <div data-testid="cos-woche"><h3>Wochendurchsicht</h3>
+        <p className="small">Überfällig <b>{w.ueberfaellig.length}</b> · seit 14 Tagen unverändert <b>{w.unveraendert.length}</b> · nächste Woche fällig <b>{w.naechsteWoche.length}</b> · Themen ohne Bewegung <b>{w.themenRuhig.length}</b></p>
+        {w.teuerste.length > 0 && <p className="tiny mut">Teuerste Unter-Chats: {w.teuerste.map((t: any) => `${t.titel} ${Math.round(t.tokens / 1000)}k`).join(' · ')}</p>}
+        {w.rueckstauListe.length > 0 && <details data-testid="cos-rueckstau"><summary className="small">{w.rueckstauListe.length} ältere Meeting-Entwürfe ohne Action Items — sammelweise archivieren</summary>
+          <ul className="cos-rs">{w.rueckstauListe.map((i: any) => <li key={i.datei}><label className="small"><input type="checkbox" checked={!!wahl[i.datei]} onChange={(e) => setWahl({ ...wahl, [i.datei]: e.target.checked })} /> {i.titel} <span className="tiny mut">({i.datum})</span></label></li>)}</ul>
+          <button className="ub-btn pri sm" disabled={!Object.values(wahl).some(Boolean)} onClick={archivieren} data-testid="cos-rueckstau-ja">Ausgewählte archivieren (Status → archived)</button></details>}</div>}
+      {zurueck.length > 0 && <p className="tiny mut" data-testid="cos-zurueck">Rückgängig möglich: {zurueck.slice(0, 5).map((z) => <span key={z.datei}>{z.datei.split('/').pop()} <button className="linklike" onClick={() => rueck(z.datei)}>zurück</button> </span>)}</p>}
+      <Err e={err} />
+    </div>
   );
 }

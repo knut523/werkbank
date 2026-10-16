@@ -3,8 +3,10 @@
 
 import { liesRegister, schreibeZusagen, schreibeThema, teamNamen, teamSet, seiteVon, registerRel, CosError, type ZOp, type ThemaOp, type SchreibOpts, type SchreibErgebnis } from './cosregister.ts';
 import { startEinwurf, EinwurfError } from './coseinwurf.ts';
-import { sammleLage, meetingTeams, type Quellen } from './cossammle.ts';
-import { triageUebernehmen, pruefeDatei } from './cosmeeting.ts';
+import { sammleLage, sammleEingabe, meetingTeams, type Quellen } from './cossammle.ts';
+import { triageUebernehmen, pruefeDatei, rueckstau, archiviereRueckstau, rueckgaengig, RUECKGAENGIG_TAGE, type ArchivStore } from './cosmeeting.ts';
+import { sammleAbschluss, sammleWoche } from './cosabschluss.ts';
+import { entscheide, wien } from './cos.ts';
 import { entwurfFuer, senden as nachfassSenden, type Senden } from './cosnachfassen.ts';
 import { wienDatum } from './cosregister.ts';
 import { wb } from './db.ts';
@@ -80,6 +82,50 @@ export function cosRoutes(d: CosDeps) {
     if (process.env.COS_MORGENLAGE === 'off') return send(res, 200, { aus: true });
     const { lage } = await sammleLage(u, d.quellen());
     send(res, 200, lage);
+  });
+
+  // Freigabe-Inbox (S3.1): alle Entscheidungen statt der ersten sieben, mit „wartet seit“ und „blockiert: Unter-Chat X“.
+  on('GET', /^\/api\/cos\/inbox$/, async (req, res) => {
+    const u = await d.needAdmin(req);
+    const e = await sammleEingabe(u, d.quellen(), new Date());
+    const items = entscheide(e);
+    send(res, 200, { items, gesamt: items.length, blockierend: items.filter((x) => x.wartet).length });
+  });
+
+  // Tagesabschluss / Wochendurchsicht (S3.4): live berechnet, die Vault-Seiten schreibt nur der Takt.
+  on('GET', /^\/api\/cos\/abschluss$/, async (req, res) => {
+    const u = await d.needAdmin(req);
+    send(res, 200, await sammleAbschluss(u, d.quellen(), new Date()));
+  });
+  on('GET', /^\/api\/cos\/woche$/, async (req, res) => {
+    const u = await d.needAdmin(req);
+    const jetzt = new Date();
+    const st = rueckstau(d.vaultDir(), meetingTeams(), wien(jetzt).datum);
+    const { woche } = await sammleWoche(u, d.quellen(), jetzt, st.length);
+    send(res, 200, { ...woche, rueckstauListe: st });
+  });
+  // Rückstau (K14/K21): Vorschau mit allen Notizen (alle vorausgewählt), Bestätigung für die abgehakten, Rückgängig 7 Tage.
+  const archivStore = (): ArchivStore => ({
+    put: async (datei, doc) => { await wb().collection('cos_archiv').updateOne({ _id: datei as any }, { $set: doc }, { upsert: true }); },
+    get: async (datei) => (await wb().collection('cos_archiv').findOne({ _id: datei as any })) as any,
+    del: async (datei) => { await wb().collection('cos_archiv').deleteOne({ _id: datei as any }); },
+  });
+  on('POST', /^\/api\/cos\/rueckstau$/, async (req, res) => {
+    await d.needAdmin(req);
+    const b = await d.body(req);
+    const teams = meetingTeams(), heute = wienDatum();
+    const dateien: string[] = Array.isArray(b.dateien) ? b.dateien.map(String) : rueckstau(d.vaultDir(), teams, heute).map((x) => x.datei);
+    send(res, 200, await archiviereRueckstau(dateien, { vaultDir: d.vaultDir(), teams, heute, confirm: b.confirm === true, hashes: b.hashes && typeof b.hashes === 'object' ? b.hashes : undefined, dry: d.dry(), store: archivStore(), danach: d.invalidate }));
+  });
+  on('POST', /^\/api\/cos\/rueckstau\/zurueck$/, async (req, res) => {
+    await d.needAdmin(req);
+    const b = await d.body(req);
+    send(res, 200, await rueckgaengig(String(b.datei ?? ''), { vaultDir: d.vaultDir(), teams: meetingTeams(), store: archivStore(), danach: d.invalidate }));
+  });
+  on('GET', /^\/api\/cos\/rueckstau\/zurueck$/, async (req, res) => {
+    await d.needAdmin(req);
+    const docs = (await wb().collection('cos_archiv').find({ at: { $gte: new Date(Date.now() - RUECKGAENGIG_TAGE * 86_400_000) } }).toArray()) as any[];
+    send(res, 200, { moeglich: docs.map((x) => ({ datei: String(x._id), at: x.at })) });
   });
 
   // Nachfassen (S2.1): Entwurf lesen; Absenden nur für PR/Ticket-Quellen, mit Vorschau und Bestätigung. Mails nie.

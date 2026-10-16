@@ -1704,3 +1704,45 @@ test('CoS Nachfassen und Vorbereitung: Entwurf ohne Notiztext, Mail nie senden, 
     await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
   }
 });
+
+test('CoS Inbox, Abschluss, Woche, Rückstau: alle Entscheide statt sieben, Nachmittagsansichten live, Sammelarchivierung mit Vorschau und Rückgängig; nur Admin', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  const alt = readFileSync(new URL('./fixtures/cos/vexa-2026-09-18.md', import.meta.url), 'utf8').replace(/^- \[ \] .*\n/gm, '');
+  mkdirSync(join(VAULT, 'olaf/Meetings'), { recursive: true });
+  const dateien = ['olaf/Meetings/2026-06-01-rs-a.md', 'olaf/Meetings/2026-06-02-rs-b.md'];
+  dateien.forEach((f, i) => writeFileSync(join(VAULT, f), alt.replace(/meeting-date: .*/, 'meeting-date: 2026-06-0' + (i + 1)).replace('meeting_id 92', 'meeting_id 9' + i)));
+  const ids: string[] = [];
+  try {
+    for (const p of ['/api/cos/inbox', '/api/cos/abschluss', '/api/cos/woche']) assert.equal((await bernd.req(p)).status, 403, p);
+    assert.equal((await bernd.req('/api/cos/rueckstau', { body: {} })).status, 403);
+    for (let n = 0; n < 9; n++) { const a = await intern('/internal/orchestrator/questions/ask', { title: 'Inbox-Frage ' + n, context: 'c', options: [{ label: 'Ja' }], recommendation: 'Ja' }); ids.push(a.j.id); }
+    const lage = await anna.req('/api/cos/lage');
+    assert.equal(lage.j.entscheide.items.length, 7); assert.ok(lage.j.entscheide.weitere >= 2, 'nur sieben in der Karte');
+    const inbox = await anna.req('/api/cos/inbox');
+    assert.equal(inbox.status, 200); assert.ok(inbox.j.gesamt >= 9); assert.ok(inbox.j.items.every((e: any) => e.seit), '„wartet seit“ bei jedem');
+    assert.ok(inbox.j.items.length === lage.j.entscheide.gesamt, 'dieselbe Liste, nur ohne Obergrenze');
+    const ab = await anna.req('/api/cos/abschluss');
+    assert.equal(ab.status, 200); assert.ok(Array.isArray(ab.j.entschieden) && Array.isArray(ab.j.morgen));
+    const w = await anna.req('/api/cos/woche');
+    assert.equal(w.status, 200); assert.deepEqual(w.j.rueckstauListe.map((x: any) => x.datei).sort(), dateien);
+    // Vorschau schreibt nichts
+    const vor = await anna.req('/api/cos/rueckstau', { body: { dateien } });
+    assert.equal(vor.j.needsConfirm, true); assert.match(readFileSync(join(VAULT, dateien[0]), 'utf8'), /^status: draft$/m);
+    const hashes = Object.fromEntries(w.j.rueckstauListe.map((x: any) => [x.datei, x.hash]));
+    const ok = await anna.req('/api/cos/rueckstau', { body: { dateien: [dateien[0]], confirm: true, hashes } });
+    assert.equal(ok.status, 200, JSON.stringify(ok.j)); assert.deepEqual(ok.j.archiviert, [dateien[0]]);
+    assert.match(readFileSync(join(VAULT, dateien[0]), 'utf8'), /^status: archived$/m); assert.match(readFileSync(join(VAULT, dateien[1]), 'utf8'), /^status: draft$/m);
+    assert.deepEqual((await anna.req('/api/cos/rueckstau/zurueck')).j.moeglich.map((x: any) => x.datei), [dateien[0]]);
+    const z = await anna.req('/api/cos/rueckstau/zurueck', { body: { datei: dateien[0] } });
+    assert.equal(z.status, 200); assert.match(readFileSync(join(VAULT, dateien[0]), 'utf8'), /^status: draft$/m);
+    assert.equal((await anna.req('/api/cos/rueckstau', { body: { dateien: ['olaf/2-Areas/x.md'], confirm: true } })).status, 400);
+  } finally {
+    for (const f of dateien) { try { unlinkSync(join(VAULT, f)); } catch { /* weg */ } }
+    for (const id of ids) await anna.req(`/api/orchestrator/questions/${id}/answer`, { body: { option: 'Ja' } }).catch(() => {});
+    await mongo.db(DB).collection('cos_archiv').deleteMany({});
+    await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+    await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+  }
+});

@@ -49,6 +49,10 @@ import { cosRoutes } from './cosroutes.ts';
 import { morgenTick, schnappschussTick } from './cosjob.ts';
 import { olafJira } from './cos-olafjira.ts';
 import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
+import { abschlussTick, wocheTick } from './cosabschluss.ts';
+import { rueckstau as cosRueckstau, } from './cosmeeting.ts';
+import { meetingTeams as cosMeetingTeams } from './cossammle.ts';
+const cosRueckstauZahl = () => { try { return cosRueckstau(cfg.vaultDir, cosMeetingTeams(), new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date())).length; } catch { return 0; } };
 import type { Quellen as CosQuellen } from './cossammle.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
@@ -3109,6 +3113,8 @@ async function backgroundJobs() {
     try { const r = await morgenTick(cosQuellen(), { dry: vaultDry() }); if (r !== 'nichts' && r !== 'zu-frueh' && r !== 'aus') log('cos morgenlage', { r }); if (r === 'geschrieben' || r === 'nachgezogen') invalidateIndex(); }
     catch (e: any) { log('cos morgenlage', { error: String(e?.message ?? e).slice(0, 200) }); }
     try { if (await schnappschussTick()) log('cos schnappschuss'); } catch (e: any) { log('cos schnappschuss', { error: String(e?.message ?? e).slice(0, 200) }); }
+    try { const a = await abschlussTick(cosQuellen(), { dry: vaultDry() }); if (a === 'geschrieben') { log('cos tagesabschluss'); invalidateIndex(); } } catch (e: any) { log('cos tagesabschluss', { error: String(e?.message ?? e).slice(0, 200) }); }
+    try { const a = await wocheTick(cosQuellen(), { dry: vaultDry(), rueckstau: () => cosRueckstauZahl() }); if (a === 'geschrieben') { log('cos woche'); invalidateIndex(); } } catch (e: any) { log('cos woche', { error: String(e?.message ?? e).slice(0, 200) }); }
     // Budget je Unter-Chat (80 % Meldung, 100 % Pause) und Lebenszeichen (hängt? / still) — deterministisch, ohne Modell.
     try { const b = await budgetTick(orchDeps); if (b.gewarnt.length || b.gestoppt.length) log('cos budget', b); } catch (e: any) { log('cos budget', { error: String(e?.message ?? e).slice(0, 200) }); }
     try { const l = await lebenszeichenTick(orchDeps); if (l.gemeldet.length) log('cos lebenszeichen', l); } catch (e: any) { log('cos lebenszeichen', { error: String(e?.message ?? e).slice(0, 200) }); }

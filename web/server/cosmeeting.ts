@@ -231,3 +231,74 @@ export async function triageUebernehmen(datei: string, o: TriageOpts): Promise<a
   if (!o.dry) { writeAtomic(abs, neuText); o.danach?.(); }
   return { ok: true, dry: !!o.dry, datei, ids, archiviert: archivieren, entscheidungen: m.entscheidungen.length };
 }
+
+// ---------- Rückstau aufräumen (K14, K21): ältere Entwürfe ohne Action Items sammelweise archivieren ----------
+
+export interface RueckstauItem { datei: string; titel: string; datum: string | null; hash: string }
+
+/** Notetaker-Entwürfe, die älter als 14 Tage sind, weder Action Items noch Entscheidungen haben und nicht triagiert sind. */
+export function rueckstau(vaultDir: string, teams: string[], heute: string): RueckstauItem[] {
+  const out: RueckstauItem[] = [];
+  for (const t of teams) {
+    const dir = join(vaultDir, t, 'Meetings');
+    let files: string[] = [];
+    try { files = readdirSync(dir).filter((f) => f.endsWith('.md')); } catch { continue; }
+    for (const f of files) {
+      const rel = `${t}/Meetings/${f}`;
+      let text: string;
+      try { if (!statSync(join(dir, f)).isFile()) continue; text = readFileSync(join(dir, f), 'utf8'); } catch { continue; }
+      if (!/^status:\s*draft\b/m.test(text.slice(0, 1500)) || !/vexa/i.test(text.slice(0, 2000))) continue;
+      const m = liesMeeting(rel, text);
+      if (!m.vexa || m.status !== 'draft' || m.hatTriage || m.aktionen.length || m.entscheidungen.length) continue;
+      if (!m.datum || tageZwischen(m.datum, heute) <= TAGE_VORSCHLAG) continue;
+      out.push({ datei: rel, titel: m.titel, datum: m.datum, hash: m.hash });
+    }
+  }
+  return out.sort((a, b) => String(b.datum).localeCompare(String(a.datum)));
+}
+
+export interface ArchivStore { put: (datei: string, doc: any) => Promise<void>; get: (datei: string) => Promise<any | null>; del: (datei: string) => Promise<void> }
+export const RUECKGAENGIG_TAGE = 7;
+
+export async function archiviereRueckstau(dateien: string[], o: { vaultDir: string; teams: string[]; heute: string; jetzt?: Date; confirm?: boolean; hashes?: Record<string, string>; dry?: boolean; locked?: () => boolean; store: ArchivStore; danach?: () => void }): Promise<any> {
+  if (!Array.isArray(dateien) || !dateien.length) throw new CosError(400, 'Keine Notiz ausgewählt.');
+  if (dateien.length > 200) throw new CosError(400, 'Höchstens 200 Notizen je Durchgang.');
+  const erlaubt = new Map(rueckstau(o.vaultDir, o.teams, o.heute).map((x) => [x.datei, x]));
+  const auswahl = dateien.map((d) => { pruefeDatei(d, o.teams); const x = erlaubt.get(d); if (!x) throw new CosError(409, `${d} gehört nicht (mehr) zum Rückstau — Vorschau neu laden.`); return x; });
+  if (!o.confirm) return { needsConfirm: true, notizen: auswahl, aenderung: 'Status draft → archived (je Notiz, rückgängig 7 Tage)' };
+  if ((o.locked ?? (() => syncLocked()))()) throw new CosError(409, 'Vault-Sync läuft gerade — bitte gleich noch einmal bestätigen.');
+  for (const x of auswahl) if (o.hashes?.[x.datei] !== x.hash) throw new CosError(409, `${x.datei} wurde inzwischen geändert — Vorschau neu laden.`);
+  const fertig: string[] = [];
+  for (const x of auswahl) {
+    const abs = join(o.vaultDir, x.datei);
+    const alt = readFileSync(abs, 'utf8');
+    if (hashText(alt) !== x.hash) throw new CosError(409, `${x.datei} wurde inzwischen geändert — ${fertig.length} Notizen sind schon archiviert (rückgängig möglich).`);
+    const neu = archiviert(alt);
+    if (!neu) continue;
+    if (!o.dry) {
+      writeAtomic(abs, neu);
+      await o.store.put(x.datei, { alt: 'draft', neuHash: hashText(neu), at: o.jetzt ?? new Date() });
+    }
+    fertig.push(x.datei);
+  }
+  if (!o.dry) o.danach?.();
+  return { ok: true, dry: !!o.dry, archiviert: fertig };
+}
+
+/** Rückgängig (7 Tage): nur, solange die Notiz unverändert so ist, wie wir sie hinterlassen haben. */
+export async function rueckgaengig(datei: string, o: { vaultDir: string; teams: string[]; jetzt?: Date; locked?: () => boolean; store: ArchivStore; danach?: () => void }): Promise<any> {
+  pruefeDatei(datei, o.teams);
+  const doc = await o.store.get(datei);
+  if (!doc) throw new CosError(404, 'Dazu gibt es nichts rückgängig zu machen.');
+  if ((o.jetzt?.getTime() ?? Date.now()) - new Date(doc.at).getTime() > RUECKGAENGIG_TAGE * 86_400_000) throw new CosError(409, 'Die 7 Tage zum Rückgängigmachen sind vorbei.');
+  if ((o.locked ?? (() => syncLocked()))()) throw new CosError(409, 'Vault-Sync läuft gerade — bitte gleich noch einmal.');
+  const abs = join(o.vaultDir, datei);
+  const text = existsSync(abs) ? readFileSync(abs, 'utf8') : '';
+  if (hashText(text) !== doc.neuHash) throw new CosError(409, 'Die Notiz wurde seitdem geändert — nicht automatisch zurücksetzen.');
+  const zurueck = text.replace(/^(---\r?\n[\s\S]*?\r?\n)status:\s*archived(\s*\r?\n)/, '$1status: draft$2');
+  if (zurueck === text) throw new CosError(409, 'Status nicht gefunden.');
+  writeAtomic(abs, zurueck);
+  await o.store.del(datei);
+  o.danach?.();
+  return { ok: true, datei };
+}

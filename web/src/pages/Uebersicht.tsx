@@ -283,6 +283,7 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
   const wantStart = q.has('start');
   const [ansicht, setAnsicht] = useState<{ id: string; art: 'bericht' | 'auftrag' } | null>(null);
   const [starten, setStarten] = useState(wantStart);
+  const [cosAktiv, setCosAktiv] = useState(false);   // Chief of Staff: die Entscheide stehen oben in der Morgenlage — dann nur eine Liste (Plan 209, S3.1)
   const zurueck = () => { if (hash.includes('?')) window.location.hash = '#/'; };
   const hq = `${aus('review') ?? ''}|${aus('bericht') ?? ''}|${aus('auftrag') ?? ''}`;
   useEffect(() => { setStarten(wantStart); }, [wantStart]);   // Dialog folgt der Adresse (auch beim Verlassen); der Knopf öffnet ihn ohne Adresse
@@ -344,7 +345,7 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
       {x?.fragenFehler && <p className="ub-amp u-bad" role="alert">Rückfragen gerade nicht lesbar — hier fehlen evtl. offene Fragen. Später neu laden.</p>}
       {u.error ? <Err e={u.error} /> : null}
 
-      {admin && <Morgenlage onChange={neu} />}
+      {admin && <Morgenlage onChange={neu} onAktiv={setCosAktiv} />}
 
       {admin && <div className="ub-card soft ub-hc" data-testid="ub-hauptchat">
         <span className={`ub-dot d-${hcFarbe}`} aria-hidden /><b>Hauptchat</b>
@@ -359,7 +360,7 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
       {(d.orchAuto ?? []).length > 0 && <p className="small mut" data-testid="orch-auto">🔁 Automatisch fortgesetzt: {d.orchAuto.map((a: any, i: number) => <span key={a.id}>{i ? ', ' : ''}<a href={a.url} target={chatTarget}>{a.title}</a> ({a.n}){a.stopped ? ' — angehalten' : ''}</span>)}</p>}
 
       <div className="ub-themen">
-      {lose.length > 0 && <section className={`ub-thema-flach${lose.length > 1 ? ' ub-breit' : ''}`} data-testid="ub-lose">
+      {lose.length > 0 && !cosAktiv && <section className={`ub-thema-flach${lose.length > 1 ? ' ub-breit' : ''}`} data-testid="ub-lose">
         <h2 className="ub-h">Rückfragen an dich <span className="ub-amp u-dich">{lose.length}</span></h2>
         <div className="ub-grid">{lose.map((q) => <article key={q.id} className="ub-card a-review" data-ampel="review">
           <div className="ub-top"><h3>{q.title}</h3><span className="ub-amp u-dich">ja / nein</span></div>
