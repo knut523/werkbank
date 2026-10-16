@@ -11,6 +11,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMediaQuery } from '@librechat/client';
 import OpenSidebar from '~/components/Chat/Menus/OpenSidebar';
 import { WERKBANK_PAGES, openInApp, pageHash, pageIdOf } from './WerkbankNav';
+import { useOpenChat } from './openChat';
 import store from '~/store';
 
 const hashFor = (page: string, search: string) => {
@@ -23,6 +24,7 @@ export default function WerkbankRoute() {
   const { page = 'heute' } = useParams();
   const { search } = useLocation();
   const navigate = useNavigate();
+  const openChat = useOpenChat();
   const isSmallScreen = useMediaQuery('(max-width: 768px)');
   const sidebarExpanded = useRecoilValue(store.sidebarExpanded);
   const frame = useRef<HTMLIFrameElement>(null);
@@ -59,11 +61,11 @@ export default function WerkbankRoute() {
         const id = pageIdOf(d.hash);
         navigate(`/wb/${id}?h=${encodeURIComponent(d.hash)}`, { replace: true });
       }
-      if (d?.type === 'werkbank-open' && typeof d.url === 'string') openInApp(navigate, d.url);
+      if (d?.type === 'werkbank-open' && typeof d.url === 'string') openInApp(openChat, d.url);
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
-  }, [navigate]);
+  }, [navigate, openChat]);
 
   return (
     <div className="flex h-full w-full flex-col bg-presentation">

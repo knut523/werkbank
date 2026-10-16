@@ -44,8 +44,9 @@ export function pageHash(p: { id: string; hash: string; bereich?: string; reiter
 export const pageIdOf = (hash: string) => WERKBANK_PAGES.slice().reverse().find((x) => x.hash !== '#/' && hash.startsWith(x.hash))?.id ?? 'heute';
 
 /** Ein Link aus der Werkbank (Chat öffnen, Kontomenü …) im selben Fenster: nur eigener Ursprung; /c/ und /wb/ über den
- *  Router (kein Neuladen), anderes vom eigenen Ursprung normal geladen, Fremdes nie. */
-export function openInApp(navigate: NavigateFunction, raw: string) {
+ *  Router (kein Neuladen; Chats über useOpenChat, sonst bliebe der vorige Chat aktiv), anderes vom eigenen Ursprung normal
+ *  geladen, Fremdes nie. */
+export function openInApp(navigate: NavigateFunction | ((to: string) => void), raw: string) {
   let u: URL;
   try { u = new URL(raw, window.location.origin); } catch { return; }
   if (u.origin !== window.location.origin) return;
