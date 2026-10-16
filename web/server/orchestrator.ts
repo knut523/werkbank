@@ -389,7 +389,7 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
 
 /** Median-Dauer je Tiefe aus den erledigten Strängen der Person (Plan 205: Rückfall-ETA ohne Agentenangabe). */
 export async function etaMediane(u: User, now = Date.now()) {
-  const docs = await runs().find({ userId: u.id, ...STRANDS, doneAt: { $ne: null }, startedAt: { $gt: new Date(now - 60 * 86400_000) } }, { projection: { tiefe: 1, startedAt: 1, doneAt: 1 } }).sort({ doneAt: -1 }).limit(150).toArray();
+  const docs = await runs().find({ userId: u.id, ...STRANDS, doneAt: { $ne: null }, startedAt: { $gt: new Date(now - 60 * 86400_000) } }, { projection: { tiefe: 1, startedAt: 1, doneAt: 1 } }).sort({ doneAt: -1 }).limit(600).toArray();
   // Je Tiefe höchstens die letzten 50.
   const n: Record<string, number> = {};
   return mediane(docs.filter((d: any) => (n[tiefeOf(d.tiefe)] = (n[tiefeOf(d.tiefe)] ?? 0) + 1) <= 50));

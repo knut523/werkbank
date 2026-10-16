@@ -49,12 +49,15 @@ export const fremdLesbar = (s: JiraSite) => !s.main && (!!s.base || (!cfg.demo &
 export async function fremdesTicket(creds: JiraCreds | null, key: string, now = Date.now()): Promise<(Issue & { site: string }) | null> {
   const s = siteFor(key);
   if (!creds || !fremdLesbar(s)) return null;
-  const c = fremdCache.get(key);
+  // Je Person (Gegenprüfung Pass C): ein Ticket, das A lesen darf, sieht B nur mit eigenem Zugang.
+  const ck = `${creds.email}|${key}`;
+  const c = fremdCache.get(ck);
   if (c && now - c.at < FREMD_MS) return c.issue ? { ...c.issue, site: s.site } : null;
   let issue: Issue | null = null;
   try { issue = mapIssue(await jiraFetch(creds, 'GET', `/issue/${encodeURIComponent(key)}?fields=${FIELDS.join(',')}`, undefined, s)); }
   catch (e: any) { if (e?.status !== 404) throw e; }
-  fremdCache.set(key, { at: now, issue });
+  if (fremdCache.size > 2000) fremdCache.clear();
+  fremdCache.set(ck, { at: now, issue });
   return issue ? { ...issue, site: s.site } : null;
 }
 

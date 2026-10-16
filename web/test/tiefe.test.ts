@@ -48,6 +48,10 @@ test('ETA-Parser: Uhrzeit in Wiener Zeit, Dauer ab Antwort, letzte Zeile zählt,
   // Knapp vorbei (≤ 1 h) bleibt heute → wird als überfällig angezeigt, nicht als morgen.
   assert.equal(etaMark('ETA: 16:30', AT), Date.parse('2026-10-16T14:30:00Z'));
   assert.equal(etaMark('ETA: HH:MM | ~N min', AT), null, 'Vorlage ist keine Angabe');
+  // Pass C (Gegenprüfung): „1.30 h“ ist eine Dauer, keine Uhrzeit; Überschrift „### ETA:“ zählt.
+  assert.equal(etaMark('ETA: 1.30 h', AT), AT + 78 * MIN);
+  assert.equal(etaMark('ETA: 2.5 Std', AT), AT + 150 * MIN);
+  assert.equal(etaMark('### ETA: 17:45', AT), Date.parse('2026-10-16T15:45:00Z'));
   assert.equal(etaMark('ETA: bald', AT), null);
   assert.equal(etaMark('keine Zeile', AT), null);
   // Winterzeit (UTC+1): 01.12. 10:00 Wien = 09:00Z.

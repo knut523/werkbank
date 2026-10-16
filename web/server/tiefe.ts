@@ -58,12 +58,13 @@ export function wienUm(hh: number, mm: number, bezug: number): number {
  * der Antwort (Bezug für „~N min“ und den Tag). null = keine lesbare Angabe.
  */
 export function etaMark(text: string, at: number): number | null {
-  const all = [...String(text ?? '').matchAll(/^[\s>*_-]*ETA[*_]*\s*:\s*[*_]*\s*(.+)$/gim)];
+  const all = [...String(text ?? '').matchAll(/^[\s>*_#-]*ETA[*_]*\s*:\s*[*_]*\s*(.+)$/gim)];
   const v = all.at(-1)?.[1]?.replace(/[*_`]/g, '').trim();
   if (!v) return null;
-  const uhr = v.match(/^(?:ca\.?\s*|~\s*)?([01]?\d|2[0-3])[:.]([0-5]\d)(?:\s*uhr)?\b/i);
+  // „1.30 h“ ist eine Dauer, keine Uhrzeit (Gegenprüfung Pass C): hinter der Zahl keine Einheit.
+  const uhr = v.match(/^(?:ca\.?\s*|~\s*)?([01]?\d|2[0-3])[:.]([0-5]\d)(?!\s*(?:h|std|stunden?|min|minuten)\b)(?:\s*uhr)?\b/i);
   if (uhr) return wienUm(+uhr[1], +uhr[2], at);
-  const dauer = v.match(/^(?:ca\.?\s*|~\s*|in\s+)?(\d{1,4}(?:[.,]\d)?)\s*(min|minuten|m|h|std|stunden?)\b/i);
+  const dauer = v.match(/^(?:ca\.?\s*|~\s*|in\s+)?(\d{1,4}(?:[.,]\d{1,2})?)\s*(min|minuten|m|h|std|stunden?)\b/i);
   if (dauer) {
     const n = Number(dauer[1].replace(',', '.'));
     const min = /^(h|std|stunde)/i.test(dauer[2]) ? n * 60 : n;

@@ -49,3 +49,23 @@ test('Andere Seiten lesen: nie ohne Zugang; im Test-/Demobetrieb nur mit eigener
   assert.equal(await fremdesTicket(null, 'OLAF-394'), null, 'ohne Zugang nichts');
   assert.equal(await fremdesTicket({ email: 'a@b', token: 't', source: 'x' } as any, 'PM-1'), null, 'PM steht in der Kopie');
 });
+
+test('Cache je Person (Pass C): ein Ticket, das A gelesen hat, sieht B nicht ohne eigenen Abruf', async () => {
+  process.env.WERKBANK_JIRA_SITES = JSON.stringify([{ prefix: 'PM', site: 'https://maxenergy.atlassian.net', cloudId: '606f753a-fd3a-4d69-9b8b-ef9574984080' },
+    { prefix: 'OLAF', site: 'https://max-energy.atlassian.net', cloudId: '7aec26a2-2eca-46bb-a608-9be55c1dd167', base: 'http://127.0.0.1:9/rest/api/3' }]);
+  const { createServer } = await import('node:http');
+  const seen: string[] = [];
+  const srv = createServer((req, res) => {
+    const who = Buffer.from(String(req.headers.authorization).slice(6), 'base64').toString().split(':')[0];
+    seen.push(who);
+    if (who === 'a@x') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ key: 'OLAF-7', fields: { summary: 'geheim' } })); }
+    else { res.writeHead(404, { 'content-type': 'application/json' }); res.end('{"errorMessages":["nope"]}'); }
+  });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+  try {
+    process.env.WERKBANK_JIRA_SITES = process.env.WERKBANK_JIRA_SITES.replace('127.0.0.1:9', `127.0.0.1:${(srv.address() as any).port}`);
+    assert.equal((await fremdesTicket({ email: 'a@x', token: 't', source: 'x' } as any, 'OLAF-7'))?.summary, 'geheim');
+    assert.equal(await fremdesTicket({ email: 'b@x', token: 't', source: 'x' } as any, 'OLAF-7'), null, 'B ohne Zugriff bekommt nichts aus A’s Cache');
+    assert.deepEqual(seen, ['a@x', 'b@x']);
+  } finally { srv.close(); delete process.env.WERKBANK_JIRA_SITES; }
+});

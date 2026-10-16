@@ -204,10 +204,10 @@ export const STRAND_MODEL = /^(claude:(opus|sonnet|haiku)|melious:[\w.:/-]{1,80}
 // Systemprompt-Abschnitte — über Melious zusätzlich `--bare` mit eigenem kurzem Systemprompt (bei Claude nicht: --bare
 // überspringt die OAuth-Anmeldung).
 export type Profil = 'voll' | 'bauer' | 'leser' | 'schreiber';
-export const PROFILE: Profil[] = ['voll', 'bauer', 'leser', 'schreiber'];
+export const PROFILE: Profil[] = ['voll', 'bauer', 'leser', 'schreiber'];   // schreiber = wie bauer, zuerst Melious
 // Tiefe des Strangs (Plan 205): quick = ohne Gegenprüfungs-Hinweis, deep = doppelte Schritte je Zug; regular = wie bisher.
 export type Tiefe = 'quick' | 'regular' | 'deep';
-export const TIEFEN: Tiefe[] = ['quick', 'regular', 'deep'];   // schreiber = wie bauer, zuerst Melious
+export const TIEFEN: Tiefe[] = ['quick', 'regular', 'deep'];
 // Grep/Glob gibt es in der aktuellen Claude-Code-Version nicht mehr (Suche läuft dort über Bash, und Bash fragt im Wächter immer
 // nach — im Strang abgelehnt). Für den Leser bleiben Read und vault-search; Code-Suche = Profil „bauer“.
 const LESER_TOOLS = ['Read', 'Grep', 'Glob'];
