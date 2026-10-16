@@ -84,9 +84,9 @@ const ORCH_TOOLS = [
   {
     name: 'orch_start',
     description: 'Neuen Arbeitsstrang starten: eigener Workspace-Chat in Knuts Konto mit Auftrag, Arbeitsordner (Worktree unter ~/work/knut) und optional Plandatei. lauf = Name des Auftrags, zu dem der Strang gehört (Gruppe + Lesezeichen „Orch · <Lauf>“; alle Stränge eines Auftrags mit demselben lauf). Bericht nach ~/work/knut/review-pakete/NNN-<slug>/bericht.md verlangen, dann verlinkt der OLAF Workspace ihn. code=true legt einen frischen Worktree vom Integrationszweig an. Liefert ID und Link.',
-    inputSchema: { type: 'object', properties: { title: { type: 'string' }, cwd: { type: 'string' }, prompt: { type: 'string' }, plan: { type: 'string' }, lauf: { type: 'string' }, code: { type: 'boolean' }, shared: { type: 'boolean' } }, required: ['title', 'cwd', 'prompt'] },
+    inputSchema: { type: 'object', properties: { title: { type: 'string' }, cwd: { type: 'string' }, prompt: { type: 'string' }, plan: { type: 'string' }, lauf: { type: 'string' }, code: { type: 'boolean' }, shared: { type: 'boolean' }, budget: { type: 'number', description: 'Tokenbudget des Strangs (Eingabe ohne Cache-Lesen + Ausgabe); bei 80 % Meldung, bei 100 % Pause mit Rückfrage. Leer = Vorgabe des Workspace.' } }, required: ['title', 'cwd', 'prompt'] },
     run: async (a: any) => {
-      const j = await call('/internal/orchestrator/start', { title: a.title, cwd: a.cwd, prompt: a.prompt, plan: a.plan || null, lauf: a.lauf || null, code: a.code === true, shared: a.shared === true }, 60_000);
+      const j = await call('/internal/orchestrator/start', { title: a.title, cwd: a.cwd, prompt: a.prompt, plan: a.plan || null, lauf: a.lauf || null, code: a.code === true, shared: a.shared === true, budget: a.budget || null }, 60_000);
       return `gestartet: ${j.id} ${j.url}\nOrdner: ${j.cwd}${j.worktree ? ' (frischer Worktree)' : ''}${j.stand ? `\n${j.stand}` : ''}${j.warning ? `\nHinweis: ${j.warning}` : ''}`;
     },
   },

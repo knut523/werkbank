@@ -111,7 +111,8 @@ export async function sammleEingabe(u: User, q: Quellen, jetzt: Date): Promise<L
   const [ub, mine, snap, abschluss] = await Promise.all([q.uebersicht(u), q.mine(u), ladeSchnappschuss(), abschlussZeit()]);
   const st = stichzeit(jetzt, abschluss);
   const startedAt = new Map(ub.docs.map((d: any) => [String(d._id), iso(d.startedAt)]));
-  const karten = ub.karten.map((k) => ({ ...lite.karte(k), startedAt: startedAt.get(k.id) ?? null }));
+  const docVon = new Map(ub.docs.map((d: any) => [String(d._id), d]));
+  const karten = ub.karten.map((k) => { const d: any = docVon.get(k.id); return { ...lite.karte(k), startedAt: startedAt.get(k.id) ?? null, budget: d?.budget?.anzeige ?? null, lebenszeichen: d?.heartbeat?.zustand ? { zustand: d.heartbeat.zustand, minuten: d.heartbeat.minuten ?? 0 } : null }; });
   const titel = new Map(karten.map((k) => [k.id, k.titel]));
   const fragen = ub.qs.map((x: any) => lite.frage(x, titel));
   const prs = ((await wb().collection('github_prs').find({}, { projection: { _id: 0 } }).toArray()) as any[]).map((p): PrLite => ({ pr: p.pr, title: p.title ?? '', url: p.url ?? '', author: p.author ?? null, createdAt: p.createdAt ?? '', updatedAt: p.updatedAt ?? '', reviewDecision: p.reviewDecision ?? null, turn: p.turn ?? { who: '', role: '', why: '' } }));

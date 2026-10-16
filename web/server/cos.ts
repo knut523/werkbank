@@ -45,7 +45,9 @@ export const hhmmMin = (s: string, fallback: string) => { const m = /^(\d{1,2}):
 
 // ---------- Eingaben (aus den Sammlern) ----------
 
-export interface KarteLite { id: string; titel: string; thema: string; ampel: 'laeuft' | 'blockiert' | 'push' | 'review'; running: boolean; braucht: string | null; entscheidungen: { id: string; frage: string; empfehlung: string }[]; berichtHash: string | null; rueckfragen: number; statusAt: string; startedAt?: string | null; chat?: string | null }
+export interface KarteLite { id: string; titel: string; thema: string; ampel: 'laeuft' | 'blockiert' | 'push' | 'review'; running: boolean; braucht: string | null; entscheidungen: { id: string; frage: string; empfehlung: string }[]; berichtHash: string | null; rueckfragen: number; statusAt: string; startedAt?: string | null; chat?: string | null;
+  /** Budget-Anzeige und Lebenszeichen des Unter-Chats (cosbudget.ts) */
+  budget?: { budget: number; tokens: number; prozent: number; stufe: string; energie: number } | null; lebenszeichen?: { zustand: string; minuten: number } | null }
 export interface FrageLite { id: string; title: string; recommendation: string; options: { label: string; consequence?: string }[]; strandId: string | null; strandTitel?: string; createdAt: string; link?: string | null }
 export interface PrLite { pr: string; title: string; url: string; author: string | null; createdAt: string; updatedAt: string; reviewDecision: string | null; turn: { who: string; role: string; why: string } }
 export interface PrSnap { pr: string; title: string; url: string; reviewDecision: string | null }
@@ -90,6 +92,7 @@ export interface Lage {
   schulden: { knut: Liste<Schuld>; team: Liste<Schuld>; partner: Liste<Schuld>; klaeren: Liste<Schuld>; ueberfaellig: number; rueckfragenAnKnut: number };
   themen: { zeilen: Liste<ThemaLage>; ruhig: number };
   triage: Liste<TriageLite>;
+  budgets: Liste<{ id: string; titel: string; prozent: number; tokens: number; budget: number; stufe: string; energie: number }>;
   triageInfo: { aelter: number; ohnePunkte: number };
   termine: TerminKarte[];
   unlesbar: { zeile: number; text: string; abschnitt: string }[];
@@ -118,6 +121,8 @@ export function entscheide(i: Pick<LageInput, 'karten' | 'fragen' | 'triage'>): 
 export function blockiert(i: Pick<LageInput, 'karten' | 'jira'>): Blockiert[] {
   const out: Blockiert[] = [];
   for (const k of i.karten) {
+    if (k.lebenszeichen?.zustand === 'haengt') out.push({ art: 'strang', id: k.id, titel: k.titel, von: `hängt? läuft seit ${k.lebenszeichen.minuten} min ohne Aktivität`, seit: k.statusAt, link: k.chat ?? null });
+    else if (k.lebenszeichen?.zustand === 'still') out.push({ art: 'strang', id: k.id, titel: k.titel, von: `still: seit ${Math.round(k.lebenszeichen.minuten / 60)} h ohne Aktivität`, seit: k.statusAt, link: k.chat ?? null });
     if (k.ampel === 'blockiert') out.push({ art: 'strang', id: k.id, titel: k.titel, von: k.braucht ?? 'Unter-Chat meldet „blockiert“', seit: k.statusAt, link: k.chat ?? null });
     else if (k.braucht) out.push({ art: 'strang', id: k.id, titel: k.titel, von: `braucht Knut: ${k.braucht}`, seit: k.statusAt, link: k.chat ?? null });
   }
@@ -248,6 +253,7 @@ export function baueLage(i: LageInput): Lage {
     berichte: i.berichte,
     schulden: s, themen: th,
     triage: kappe(i.triage, GRENZEN.entscheide),
+    budgets: kappe(i.karten.filter((k) => k.budget && k.budget.budget > 0).map((k) => ({ id: k.id, titel: k.titel, prozent: k.budget!.prozent, tokens: k.budget!.tokens, budget: k.budget!.budget, stufe: k.budget!.stufe, energie: k.budget!.energie })).sort((a, b) => b.prozent - a.prozent), GRENZEN.entscheide),
     triageInfo: i.triageInfo ?? { aelter: 0, ohnePunkte: 0 },
     termine: i.termine ?? [],
     unlesbar: [...i.register.unlesbar, ...(i.register.themenUnlesbar ?? [])],

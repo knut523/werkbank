@@ -48,6 +48,7 @@ import { log } from './log.ts';
 import { cosRoutes } from './cosroutes.ts';
 import { morgenTick, schnappschussTick } from './cosjob.ts';
 import { olafJira } from './cos-olafjira.ts';
+import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
 import type { Quellen as CosQuellen } from './cossammle.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
@@ -2679,7 +2680,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
   const id = String(b.id ?? '');
   switch (m[1]) {
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null, budget: b.budget || null });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null });
       return send(res, 200, r);
     }
@@ -3108,6 +3109,9 @@ async function backgroundJobs() {
     try { const r = await morgenTick(cosQuellen(), { dry: vaultDry() }); if (r !== 'nichts' && r !== 'zu-frueh' && r !== 'aus') log('cos morgenlage', { r }); if (r === 'geschrieben' || r === 'nachgezogen') invalidateIndex(); }
     catch (e: any) { log('cos morgenlage', { error: String(e?.message ?? e).slice(0, 200) }); }
     try { if (await schnappschussTick()) log('cos schnappschuss'); } catch (e: any) { log('cos schnappschuss', { error: String(e?.message ?? e).slice(0, 200) }); }
+    // Budget je Unter-Chat (80 % Meldung, 100 % Pause) und Lebenszeichen (hängt? / still) — deterministisch, ohne Modell.
+    try { const b = await budgetTick(orchDeps); if (b.gewarnt.length || b.gestoppt.length) log('cos budget', b); } catch (e: any) { log('cos budget', { error: String(e?.message ?? e).slice(0, 200) }); }
+    try { const l = await lebenszeichenTick(orchDeps); if (l.gemeldet.length) log('cos lebenszeichen', l); } catch (e: any) { log('cos lebenszeichen', { error: String(e?.message ?? e).slice(0, 200) }); }
   };
   setTimeout(cosTick, 45_000);
   setInterval(cosTick, 60_000);

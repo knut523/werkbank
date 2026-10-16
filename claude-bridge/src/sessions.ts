@@ -51,7 +51,7 @@ interface Live {
   modelTail?: string;
   lastStatus: string;
   sawStreamText: boolean;
-  usage: { input: number; output: number };
+  usage: { input: number; output: number; cacheRead?: number };
   turnTimer: NodeJS.Timeout | null;
   confirmChain: Promise<unknown>;
   readonly: boolean;
@@ -879,6 +879,7 @@ function handleMessage(live: Live, msg: any) {
       if (live.melious && (!live.melious.result || usageTotal(usageOf(u)) > usageTotal(live.melious.result))) live.melious.result = usageOf(u);
       live.usage.input += (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
       live.usage.output += u.output_tokens ?? 0;
+      live.usage.cacheRead = (live.usage.cacheRead ?? 0) + (u.cache_read_input_tokens ?? 0);   // Plan 209 K7: Cache-Lesen getrennt (Budget zählt es nicht)
       if (!live.rateLimited) markEnd(live, msg.subtype === 'error_max_turns' ? 'max_turns' : msg.subtype !== 'success' || msg.is_error ? 'error' : 'ok');
       if (live.rateLimited) { /* Meldung bzw. Kontowechsel in handleTurn */ }
       else if (msg.subtype === 'error_max_turns') { live.outcome ??= 'limit'; emitStatus(live, `⏹️ Maximale Schrittzahl (${turnLimit(live)}) erreicht. Schreib „weiter“, dann mache ich dort weiter.`); }
@@ -1169,7 +1170,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // 3) Neuer Zug.
   const live: Live = {
     key, userId: req.userId, abort: new AbortController(), sink: null, buffer: [], pending: null,
-    lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
+    lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0, cacheRead: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
     jiraCalls: new Map(), onJiraWrite: req.onJiraWrite, home: '',
     mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
@@ -1455,7 +1456,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
           if (live.orch && !live.worker && e) { e.phaseModelle = [...new Set([...(e.phaseModelle ?? []), `${modell}${acct.chainModel || (isMelious(acct) && !chatOn) ? ' (Kette)' : ''}`])].slice(-8); }
           try {
             req.onTurnLog?.({ conv: req.convId, art: live.leit ? 'hauptchat' : live.worker ? 'worker' : 'strang', phase: live.worker ? e?.rolle ?? null : e?.phase ?? null, konto: acct.label, anbieter: providerOf(acct), modell,
-              input: live.usage.input - u0.input, output: live.usage.output - u0.output, energie: Math.round(energie), outcome: live.rateLimited ? 'rate_limit' : live.outcome ?? (live.abort.signal.aborted ? 'aborted' : 'ok'), ms: Date.now() - a0,
+              input: live.usage.input - u0.input, output: live.usage.output - u0.output, cacheRead: (live.usage.cacheRead ?? 0) - (u0.cacheRead ?? 0), energie: Math.round(energie), outcome: live.rateLimited ? 'rate_limit' : live.outcome ?? (live.abort.signal.aborted ? 'aborted' : 'ok'), ms: Date.now() - a0,
               ...(live.worker && e?.delegation ? { delegation: e.delegation, parent: e.parent } : {}), ...(acct.chainModel ? { kette: true } : {}) });
           } catch { /* Messung ist optional */ }
         }
@@ -1804,7 +1805,7 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   d.input += usage.input + usage.cacheRead; d.output += usage.output; d.energie += energie;
   d.modell = `Melious ${gelaufen} (jcode)`; d.konto = mel.id; d.anbieter = 'melious';
   try { d.req.onMeliousUsage?.(usage, gelaufen); } catch { /* egal */ }
-  try { d.req.onTurnLog?.({ conv: d.workerConv, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${gelaufen} (jcode)`, input: usage.input + usage.cacheRead, output: usage.output, energie, outcome: out.code === 0 ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: d.id, parent: d.parent }); } catch { /* egal */ }
+  try { d.req.onTurnLog?.({ conv: d.workerConv, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${gelaufen} (jcode)`, input: usage.input + usage.cacheRead, output: usage.output, cacheRead: usage.cacheRead, energie, outcome: out.code === 0 ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: d.id, parent: d.parent }); } catch { /* egal */ }
   log('worker jcode', { delegation: d.id, modell: gelaufen, exit: out.code, ms: Date.now() - t0, ...usage, energie: Math.round(energie) });
   if (draussen.length) { log('worker jcode ausserhalb', { delegation: d.id, pfade: draussen.slice(0, 10) }); return `jcode-Ergebnis verworfen: Der Worker hat außerhalb des Arbeitsordners geschrieben (${draussen.slice(0, 5).join(', ')}). Bitte prüfen und ggf. zurücksetzen.`; }
   if (out.code !== 0 || !j) return `jcode-Lauf fehlgeschlagen (Exit ${out.code}). ${String(out.stderr).split('\n').filter(Boolean).slice(-3).join(' · ').slice(0, 600)}`;

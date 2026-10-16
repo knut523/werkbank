@@ -132,6 +132,7 @@ test('Leser + Bauer: zuerst Melious, über die Abo-Modelle verteilt; Bauer im Un
   await new Promise((r) => setTimeout(r, 200));
   assert.ok(zuege.some((z) => z.zug.art === 'worker' && z.zug.anbieter === 'melious' && z.zug.delegation === b));
   assert.ok(zuege.some((z) => z.zug.art === 'strang' && z.zug.conv === conv(3)));
+  assert.ok(zuege.every((z) => Number.isFinite(z.zug.cacheRead)), 'Plan 209 K7: jeder Zug meldet das Cache-Lesen getrennt (das Budget zählt es nicht mit)');
   assert.ok(delegs.some((d) => d.delegation.id === b && d.delegation.urteil === 'uebernommen' && d.delegation.pruefungen.every((p: any) => p.ok)));
 });
 
