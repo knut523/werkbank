@@ -116,12 +116,11 @@ function Overview({ ov }: { ov: any }) {
           </div>
         ))}
       </div>
-      <h2>Produkt-OLAF-Roadmap</h2>
-      <Roadmap rm={ov.roadmap} />
     </div>
   );
 }
 
+// Roadmap-Tabelle (Thema × Zustand) nur noch für Nutzer ohne Freigabe „roadmap“ — sonst steht sie unter Planen › Roadmap (Paket 187, S6).
 function Roadmap({ rm }: { rm: any }) {
   return (
     <div className="roadmap">
@@ -181,7 +180,8 @@ export function Wissen({ cfg, hash }: { cfg: Config; hash: string }) {
     return tab === 'olaf' ? tree.children?.find((c) => c.name === 'olaf') : tree;
   }, [tree, tab]);
   if (ov.error) return <div className="page"><Err e={ov.error} /></div>;
-  const view = path === '~roadmap' ? 'roadmap' : params.get('q') ? 'search' : params.get('fehlt') ? 'missing' : path ? 'note' : 'overview';
+  const rmFrei = cfg?.features?.roadmap !== false;
+  const view = path === '~roadmap' ? (rmFrei ? 'weiter' : 'roadmap') : params.get('q') ? 'search' : params.get('fehlt') ? 'missing' : path ? 'note' : 'overview';
   return (
     <div className="page wide">
       <div className="wissen">
@@ -190,7 +190,7 @@ export function Wissen({ cfg, hash }: { cfg: Config; hash: string }) {
             <input type="search" placeholder="Im Vault suchen …" aria-label="Im Vault suchen" value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: 1 }} />
           </form>
           <div className="row small" style={{ marginBottom: 8 }}>
-            <a href="#/wissen">Übersicht</a> · <a href="#/wissen/~roadmap">Roadmap</a> ·
+            <a href="#/wissen">Übersicht</a> · <a href={rmFrei ? '#/roadmap' : '#/wissen/~roadmap'}>Roadmap</a> ·
             <button className="btn ghost small" onClick={async () => { const r: any = await api('/api/vault/reindex', { method: 'POST' }); toast(`Suche aktualisiert (${r.added} neu, ${r.removed} entfernt)`); }}>↻ Index</button>
           </div>
           <div className="tabs" style={{ marginBottom: 6 }}>
@@ -202,8 +202,8 @@ export function Wissen({ cfg, hash }: { cfg: Config; hash: string }) {
         {view === 'note' ? <NoteView path={path} admin={cfg?.user?.role === 'ADMIN'} />
           : view === 'search' ? <div style={{ gridColumn: 'span 2' }}><SearchResults q={params.get('q')!} /></div>
           : view === 'missing' ? <div><h1>Notiz nicht gefunden</h1><p className="muted">Der Link „{params.get('fehlt')}“ zeigt auf keine Notiz im Vault.</p></div>
-          : !ov.data ? <Loading />
-          : view === 'roadmap' ? <div style={{ gridColumn: 'span 2' }}><h1>Produkt-OLAF-Roadmap</h1><p className="muted">Thema × Zustand, aus <code>{(ov.data as any).roadmap.base}</code>. Eine Spec-Seite je geplantem PR (Skill <code>olaf-produkt-roadmap</code>).</p><Roadmap rm={(ov.data as any).roadmap} /></div>
+          : view === 'weiter' || !ov.data ? <Loading />
+          : view === 'roadmap' ? <div style={{ gridColumn: 'span 2' }}><h1>Produkt-OLAF-Roadmap</h1><p className="muted">Thema × Zustand, aus <code>{(ov.data as any).roadmap.base}</code>.</p><Roadmap rm={(ov.data as any).roadmap} /></div>
           : <div style={{ gridColumn: 'span 2' }}><Overview ov={ov.data} /></div>}
       </div>
     </div>

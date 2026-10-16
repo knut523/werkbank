@@ -113,7 +113,7 @@ export function AnsetzenDialog({ path, onClose }: { path: string; onClose: () =>
         <p className="tiny" style={{ marginTop: -6 }}>{(pre?.spec?.title ?? path.split('/').pop()).replace(/^olaf — Spec:\s*/i, '')} · {pre?.spec?.topic}</p>
         {!pre && !err && <p className="muted">Lade Vorschau …</p>}
         <Err e={err} />
-        {pre && pre.mode === 'aus' && <div className="err" role="alert">„Agent ansetzen“ ist ausgeschaltet{pre.problem ? `: ${pre.problem}` : ' (WERKBANK_ANSETZEN).'}</div>}
+        {pre && pre.mode === 'aus' && <div className="err" role="alert">„Agent ansetzen“ ist ausgeschaltet{pre.problem ? `: ${pre.problem}` : '.'} <details className="tiny" style={{ display: 'inline' }}><summary style={{ display: 'inline', cursor: 'pointer' }}>Technische Details</summary> Schalter WERKBANK_ANSETZEN</details></div>}
         {pre && pre.mode !== 'aus' && !pre.gate.ok && (
           <div className="card soft" data-testid="ansetzen-gate">
             <b>{pre.gate.why}</b>

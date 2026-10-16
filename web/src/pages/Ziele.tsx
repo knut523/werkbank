@@ -121,7 +121,7 @@ function Assign({ onChange }: { onChange: () => void }) {
     const items = chosen.map((t: any) => ({ key: t.key, goal: G[t.key], begruendung: W[t.key] }));
     try {
       const pre: any = await api('/api/goals/assign', { body: { items } });
-      if (!(await confirm({ title: `${items.length} Tickets Zielen zuordnen?`, confirmLabel: 'Im OLAF Workspace speichern', body: <><p className="small">Die Zuordnung wird <b>im OLAF Workspace</b> gespeichert (mit Verlauf), nicht in Jira{pre.toJira ? ' — zusätzlich Jira-Labels (WERKBANK_GOALS_TO_JIRA=labels)' : ''}:</p><pre className="small" style={{ maxHeight: 280, overflow: 'auto' }}>{pre.preview.join('\n')}</pre></> }))) return;
+      if (!(await confirm({ title: `${items.length} Tickets Zielen zuordnen?`, confirmLabel: 'Im OLAF Workspace speichern', body: <><p className="small">Die Zuordnung wird <b>im OLAF Workspace</b> gespeichert (mit Verlauf), nicht in Jira{pre.toJira ? ' — zusätzlich als Jira-Labels' : ''}:</p><pre className="small" style={{ maxHeight: 280, overflow: 'auto' }}>{pre.preview.join('\n')}</pre></> }))) return;
       const r: any = await api('/api/goals/assign', { body: { items, confirm: true } });
       const bad = r.results.filter((y: any) => !y.ok);
       toast(`${r.results.length - bad.length} zugeordnet (OLAF Workspace)${bad.length ? `, ${bad.length} Fehler` : ''}`);

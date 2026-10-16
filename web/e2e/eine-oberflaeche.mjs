@@ -48,40 +48,39 @@ try {
 
   const main = countDocs(p), sub = countFrameDocs(p);
   await p.locator('[data-testid=werkbank-nav-heute]').click();
-  await heading(p).filter({ hasText: 'Heute' }).waitFor();
+  await heading(p).filter({ hasText: 'Übersicht' }).waitFor();
   sub.n = 0; main.n = 0;
-  await p.locator('[data-testid=werkbank-nav-board]').click();
-  await heading(p).filter({ hasText: 'Board' }).waitFor();
-  check('Leiste Heute → Board ohne Neuladen', main.n === 0 && sub.n === 0, `Dokumente: Fenster ${main.n}, iframe ${sub.n}`);
-  check('Adresse folgt', /\/wb\/board/.test(p.url()), p.url());
-  // DoD 7 + gemischte Folge: Link in der Seite (iframe-Verlauf), dann Leiste, dann zweimal Zurück.
-  await p.goBack(); await heading(p).filter({ hasText: 'Heute' }).waitFor({ timeout: 5000 }).catch(() => {});
-  check('Zurück: Board → Heute mit einem Klick', /\/wb\/heute/.test(p.url()) && (await heading(p).textContent())?.includes('Heute'), p.url());
-  await frame(p).locator('a[href="#/roadmap"]').first().click();
+  await p.locator('[data-testid=werkbank-nav-planen]').click();
   await heading(p).filter({ hasText: 'Roadmap' }).waitFor();
+  check('Leiste Übersicht → Planen ohne Neuladen', main.n === 0 && sub.n === 0, `Dokumente: Fenster ${main.n}, iframe ${sub.n}`);
+  check('Adresse folgt', /\/wb\/roadmap/.test(p.url()), p.url());
+  // DoD 7 + gemischte Folge: Link in der Seite (iframe-Verlauf), dann Leiste, dann zweimal Zurück.
+  await p.goBack(); await heading(p).filter({ hasText: 'Übersicht' }).waitFor({ timeout: 5000 }).catch(() => {});
+  check('Zurück: Planen → Übersicht mit einem Klick', /\/wb\/heute/.test(p.url()) && (await heading(p).textContent())?.includes('Übersicht'), p.url());
+  await frame(p).locator('a[href="#/timebox"]').first().click();
+  await heading(p).filter({ hasText: 'Mein Tag' }).waitFor();
   await p.locator('[data-testid=werkbank-nav-wissen]').click();
   await heading(p).filter({ hasText: 'Wissen' }).waitFor();
   await p.goBack(); await p.waitForTimeout(600);
   const b1 = [p.url(), await heading(p).textContent()];
   await p.goBack(); await p.waitForTimeout(600);
   const b2 = [p.url(), await heading(p).textContent()];
-  check('Zurück nach Link + Leiste: Roadmap, dann Heute', /\/wb\/roadmap/.test(b1[0]) && /Roadmap/.test(b1[1]) && /\/wb\/heute/.test(b2[0]) && /Heute/.test(b2[1]), `${b1.join(' | ')} → ${b2.join(' | ')}`);
+  check('Zurück nach Link + Leiste: Mein Tag, dann Übersicht', /\/wb\/timebox/.test(b1[0]) && /Mein Tag/.test(b1[1]) && /\/wb\/heute/.test(b2[0]) && /Übersicht/.test(b2[1]), `${b1.join(' | ')} → ${b2.join(' | ')}`);
 
-  // DoD 4: „Mehr“ — vier Seiten, aktiv markiert, Tastatur/Escape; keine Zeile „Weitere Seiten“.
-  await p.locator('[data-testid=werkbank-mehr]').click();
-  // Plan 144: Admins sehen dort zusätzlich „Hauptchat & Unter-Chats“ — nicht mitzählen.
-  const items = await p.locator('[data-testid^=werkbank-mehr-]:not([data-testid=werkbank-mehr-menu]):not([data-testid=werkbank-mehr-leitstand])').allTextContents();
-  check('Mehr: Mein Tag, Ziele, Skills, Dateien', items.length === 4, items.join(', '));
-  await p.waitForTimeout(400); await shot(p, 'mehr-menue');
-  await p.keyboard.press('Escape');
-  await p.waitForTimeout(500);
-  check('Mehr: Escape schließt', (await p.locator('[data-testid=werkbank-mehr-menu]:visible').count()) === 0);
-  await p.locator('[data-testid=werkbank-mehr]').click();
-  await p.locator('[data-testid=werkbank-mehr-skills]').click();
-  await heading(p).filter({ hasText: 'Skills' }).waitFor();
-  check('Mehr ist aktiv auf Skills', /offen: Skills/.test((await p.locator('[data-testid=werkbank-mehr]').getAttribute('aria-label')) ?? ''));
-  check('keine Zeile „Weitere Seiten“ im iframe', (await frame(p).locator('nav[aria-label="Weitere Seiten"]').count()) === 0);
-  check('Leiste hat weiter genau fünf Werkbank-Einträge', (await p.locator('[data-testid^=werkbank-nav-]:not([data-testid=werkbank-nav-hauptchat])').count()) === 5);
+  // DoD 4 (Paket 187, S5): kein „Mehr“, kein Hauptchat-Symbol; drei Einträge (Übersicht · Planen · Wissen), Reiter in der Seite.
+  check('kein „Mehr“, kein Hauptchat-Symbol', (await p.locator('[data-testid=werkbank-mehr], [data-testid=werkbank-nav-hauptchat]').count()) === 0);
+  check('Leiste hat genau drei Werkbank-Einträge', (await p.locator('[data-testid^=werkbank-nav-]').count()) === 3);
+  await p.locator('[data-testid=werkbank-nav-planen]').click();
+  await heading(p).filter({ hasText: 'Mein Tag' }).waitFor();   // zuletzt benutzter Reiter (oben: Mein Tag)
+  check('Planen: Reiter Roadmap · Sprint · Board · Ziele · Mein Tag', (await frame(p).locator('.bereich-bar .tabs a').allTextContents()).join(',') === 'Roadmap,Sprint,Board,Ziele,Mein Tag');
+  await frame(p).locator('.bereich-bar .tabs a', { hasText: 'Ziele' }).click();
+  await heading(p).filter({ hasText: 'Ziele' }).waitFor();
+  await p.locator('[data-testid=werkbank-nav-wissen]').click();
+  await heading(p).filter({ hasText: 'Wissen' }).waitFor();
+  await p.locator('[data-testid=werkbank-nav-planen]').click();
+  await heading(p).filter({ hasText: 'Ziele' }).waitFor();
+  check('Planen merkt den zuletzt benutzten Reiter (Ziele)', /\/wb\/ziele/.test(p.url()), p.url());
+  await shot(p, 'planen-reiter');
 
   // DoD 5: Kontomenü → Werkbank-Einrichtung, ohne Neuladen.
   main.n = 0;
@@ -137,23 +136,22 @@ try {
   // ---------- Handy ----------
   const m = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   const q = await login(m);
-  await q.goto(LC + '/wb/board'); await heading(q).filter({ hasText: 'Board' }).waitFor();
+  await q.goto(LC + '/wb/board'); await heading(q).filter({ hasText: 'Board' }).waitFor();   // alte Adresse bleibt gültig
   check('Handy: Knopf „Leiste öffnen“ auf Werkbank-Seite', (await q.locator('[data-testid=werkbank-mobile-header] [data-testid=open-sidebar-button]').count()) === 1);
   await shot(q, 'handy-board');
   await q.locator('[data-testid=werkbank-mobile-header] [data-testid=open-sidebar-button]').click();
   await q.waitForTimeout(500);
   await q.locator('[data-testid=werkbank-nav-heute]').click();
-  await heading(q).filter({ hasText: 'Heute' }).waitFor();
+  await heading(q).filter({ hasText: 'Übersicht' }).waitFor();
   await q.waitForTimeout(500);
-  check('Handy: Tipp auf Heute schließt die Leiste', (await q.locator('[data-testid=werkbank-mobile-header]').count()) === 1);
+  check('Handy: Tipp auf Übersicht schließt die Leiste', (await q.locator('[data-testid=werkbank-mobile-header]').count()) === 1);
   await q.locator('[data-testid=werkbank-mobile-header] [data-testid=open-sidebar-button]').click();
   await q.waitForTimeout(500);
-  await q.locator('[data-testid=werkbank-mehr]').click();
-  await q.locator('[data-testid=werkbank-mehr-ziele]').click();
-  await heading(q).filter({ hasText: 'Ziele' }).waitFor();
+  await q.locator('[data-testid=werkbank-nav-planen]').click();
+  await heading(q).filter({ hasText: 'Roadmap' }).waitFor();
   await q.waitForTimeout(500);
-  check('Handy: Mehr → Ziele schließt die Leiste', (await q.locator('[data-testid=werkbank-mobile-header]').count()) === 1);
-  await shot(q, 'handy-ziele');
+  check('Handy: Planen schließt die Leiste', (await q.locator('[data-testid=werkbank-mobile-header]').count()) === 1);
+  await shot(q, 'handy-planen');
   await m.close();
 } finally {
   await browser.close();

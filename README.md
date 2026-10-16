@@ -6,9 +6,12 @@
 
 Chat-Oberfläche fürs Team (LibreChat), hinter der **Claude Code** arbeitet — mit unseren Skills,
 dem Obsidian-Vault und Jira, **unter dem eigenen Claude-Konto jeder Person, ohne API-Schlüssel** —
-und daneben die **Werkbank-Web-App**: Startseite **Heute** (was auf mich wartet, Review-Schlange der Agenten),
+und daneben die **Werkbank-Web-App**: Startseite **Übersicht** (was fertig ist, was mich braucht, was läuft; früher „Heute“),
 Roadmap, Board (Jira-Kopie PM), Sprint (Review/Planning), Wissen (Vault); im Fuß Mein Tag, Ziele, Skills,
-Dateien & Teilen und Einrichtung.
+Dateien & Teilen und Einrichtung. Die Übersicht zeigt je Unter-Chat eine Karte nach Thema (Ampel, Kurzfassung,
+Bericht/Folien/Bilder/Vorschau) mit direktem Handeln — Push freigeben, Entscheidungen und Rückfragen mit Ja / Nein / Anders,
+Nacharbeit, Abhaken — und darunter Board-Agentenläufe, Vault-Sync-Fragen und die Zeile „Außerdem in Planen“
+([`docs/plan-uebersicht-handeln.md`](docs/plan-uebersicht-handeln.md)); `#/heute` führt weiter dorthin.
 Plan und Entscheidungen: [`PLAN.md`](PLAN.md).
 
 ```

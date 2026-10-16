@@ -6,7 +6,6 @@ import { api, fmtDate, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useToast, useConfirm } from '../ui.tsx';
 import { Detail } from './Board.tsx';
 import { NoGoal } from './Sprint.tsx';
-import { BeiMirLink } from '../beimir.tsx';
 
 const SLOT = 16;           // px je 15 Minuten
 const STEP = 15;
@@ -128,7 +127,6 @@ export function Timebox({ cfg }: { cfg: Config }) {
         </div>
       </div>
       <Err e={err} />
-      <BeiMirLink what="Reviews, Rückfragen und Pflegepunkte" />
       {sum && (
         <div className="tb-sum card soft" data-testid="tb-summary">
           <span><b>{fmtDate(date)}</b></span>

@@ -2,7 +2,7 @@
 // muss, Pull Requests mit dem Stand von GitHub (vom Server geprüft, nie aus dem Bericht). Auf „Heute“ in der Karte und über dem
 // Bericht in der Leitstand-Ansicht.
 
-export const STATUS_TEXT: Record<string, [string, string]> = { wartet_auf_knut: ['wartet auf dich', 'warn'], bereit_fuer_github: ['Strang meldet: bereit für GitHub', 'ok'], blockiert: ['blockiert', 'bad'] };
+export const STATUS_TEXT: Record<string, [string, string]> = { wartet_auf_knut: ['braucht dich', 'warn'], bereit_fuer_github: ['Unter-Chat meldet: bereit zum Push', 'ok'], blockiert: ['blockiert', 'bad'] };
 const STAND_CHIP: Record<string, string> = { offen: 'warn', gemergt: 'ok', geschlossen: 'bad', fehlt: 'bad', unbekannt: '', lokal: '' };
 
 export interface Summary { kopf: any; prs: any[]; maengel?: string[]; prsAt?: string | null }

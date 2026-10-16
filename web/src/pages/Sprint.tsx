@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, fmtDate, fmtDateTime, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, useJiraLive } from '../ui.tsx';
-import { BeiMirLink } from '../beimir.tsx';
+import { GoalSelect } from '../components.tsx';
 
 const noteHref = (p: string) => '#/wissen/' + p.split('/').map(encodeURIComponent).join('/');
 const FILE_LABEL: Record<string, string> = { summary: 'Summary', review: 'Review', planning: 'Planning' };
@@ -62,18 +62,6 @@ export function GoalNodeView({ n, depth = 0 }: { n: any; depth?: number }) {
   );
 }
 
-function GoalTree({ g }: { g: any }) {
-  if (g.missing) return <div className="card soft" data-testid="goal-tree"><b>Stage Gate nicht definiert</b><p className="small muted" style={{ margin: 0 }}>Die Zieldatei <code>{g.file}</code> fehlt. Format: Tabelle unter <code>## Ziele</code> mit ID | Ebene | Ergebnis | Messgröße | Baseline | Ziel | Stichtag | Owner | Eltern-ID | Beleg (siehe README).</p></div>;
-  return (
-    <details className="card" open data-testid="goal-tree">
-      <summary><b>Zielbaum</b> <span className="tiny">Gate → Ziel → KR → Monat → Sprint · aus <a href={noteHref(g.file)}>{g.file.split('/').pop()}</a> · Fortschritt = erledigte / zugeordnete Tickets (Zuordnung im OLAF Workspace, sonst Jira-Label, oder in der Zeile genannt)</span></summary>
-      {!g.gate.length && <p className="note small">Stage Gate nicht definiert (keine Zeile mit Ebene „Gate“).</p>}
-      <ul className="goal-tree root">{g.roots.map((n: any) => <GoalNodeView key={n.id} n={n} />)}</ul>
-      {!g.monthGoals.length && <p className="tiny">Monatsziele für diesen Sprint noch nicht gesetzt (Ebene „Monat“, ID M&lt;MM&gt;-&lt;n&gt;).</p>}
-    </details>
-  );
-}
-
 /** Sprint-Mitgliedschaft und Ziel werden in der Werkbank gespeichert (Runde 7), nicht als Jira-Label — mit Bestätigung. */
 function useLocalChange(cycle: string, reload: () => void) {
   const confirm = useConfirm();
@@ -120,14 +108,8 @@ function SprintPlan({ d, cycle, reload }: { d: any; cycle: string; reload: () =>
   const lc = useLocalChange(cycle, reload);
   const err = lc.err;
   const assign = (t: any, id: string) => lc.goal(t.key, id);
-  const GoalSelect = ({ t }: { t: any }) => (
-    <select aria-label={`Ziel für ${t.key}`} value="" onChange={(e) => { if (e.target.value !== '') assign(t, e.target.value === '-' ? '' : e.target.value); }}>
-      <option value="">Ziel zuordnen …</option>
-      {g.goalIds.map((x: any) => <option key={x.id} value={x.id}>{x.id} · {String(x.result).slice(0, 40)}</option>)}
-      {t.goals?.length > 0 && <option value="-">— Workspace-Zuordnung zurücksetzen</option>}
-    </select>
-  );
-  const inRow = (t: any) => <TicketRow key={t.key} t={t}><GoalSelect t={t} /><button className="btn small" onClick={() => lc.member(t.key, false)}>rausnehmen</button></TicketRow>;
+  const GoalPick = ({ t }: { t: any }) => <GoalSelect goals={g.goalIds} label={`Ziel für ${t.key}`} zuruecksetzen={t.goals?.length > 0} onPick={(id) => assign(t, id)} />;
+  const inRow = (t: any) => <TicketRow key={t.key} t={t}><GoalPick t={t} /><button className="btn small" onClick={() => lc.member(t.key, false)}>rausnehmen</button></TicketRow>;
   return (
     <>
 
@@ -167,7 +149,7 @@ function Question({ q, file, hash, cycle, me, onSaved }: { q: any; file: string;
         body: <>
           <p className="small"><code>{pre.preview.file}</code>, Zeile {pre.preview.line} ({pre.preview.mode === 'filled' ? 'leeres Antwortfeld wird gefüllt' : 'neue Zeile'})</p>
           <div className="diff card soft">{pre.preview.before !== null && <div className="del">- {pre.preview.before}</div>}<div className="add">+ {pre.preview.after}</div></div>
-          <p className="tiny">Ein Text wird beim nächsten Sprint-Sync zum Jira-Kommentar (erst nach Freigabe); „→ mitnehmen: …“ nie.</p>
+          <p className="tiny">Ein Text wird beim nächsten Sprint-Sync zum Jira-Kommentar (erst nach deiner Zustimmung); „→ mitnehmen: …“ nie.</p>
         </>,
         confirmLabel: 'Schreiben',
       });
@@ -247,7 +229,7 @@ function SyncPlan({ cycle, onDone }: { cycle: string; onDone: () => void }) {
             <tbody>
               {plan.map((p) => (
                 <tr key={p.id}>
-                  <td><input type="checkbox" aria-label={`Vorschlag ${p.id} freigeben`} disabled={p.carry || !p.actions.length} checked={!!sel[p.id]} onChange={(e) => setSel({ ...sel, [p.id]: e.target.checked })} /></td>
+                  <td><input type="checkbox" aria-label={`Vorschlag ${p.id} übernehmen`} disabled={p.carry || !p.actions.length} checked={!!sel[p.id]} onChange={(e) => setSel({ ...sel, [p.id]: e.target.checked })} /></td>
                   <td>{p.ticket ?? p.row.key}</td>
                   <td>{p.row.speaker !== '-' && <b>{p.row.speaker}: </b>}{p.row.payload}<div className="tiny">{p.row.file.split('/').pop()}:{p.row.line}</div></td>
                   <td>{p.carry ? <span className="chip">→ Mitnahme, nie Jira</span> : p.actions.map((a: any, k: number) => (
@@ -267,7 +249,7 @@ function SyncPlan({ cycle, onDone }: { cycle: string; onDone: () => void }) {
               const ok = await confirm({
                 title: `${approved.length} Vorschläge in Jira ausführen?`,
                 body: <><p>Unter deinem Jira-Konto, genau diese Liste:</p><ul className="small">{approved.map((p) => <li key={p.id}><b>{p.ticket}</b>: {actionsOf(p).map((a: any) => a.type === 'comment' ? `Kommentar „${a.text.slice(0, 80)}…“` : a.type === 'status' ? `Status → ${a.to}` : `Fällig → ${a.date ?? 'ohne'}`).join(' · ')}</li>)}</ul><p className="tiny">Danach werden die umgesetzten Zeilen in der Notiz mit „✓ Datum → Jira“ markiert (jira-sync-mark.sh).</p></>,
-                confirmLabel: 'Freigeben und ausführen',
+                confirmLabel: 'Zustimmen und ausführen',
               });
               if (!ok) return;
               setBusy(true); setErr(null);
@@ -545,6 +527,19 @@ function StepCarry({ d, id, onCandidates }: { d: any; id: string; onCandidates: 
   );
 }
 
+// Zielbaum hier nur noch für Nutzer ohne Freigabe „ziele“ — sonst steht er unter Planen › Ziele (Paket 187, S6).
+function GoalTree({ g }: { g: any }) {
+  if (g.missing) return <div className="card soft" data-testid="goal-tree"><b>Stage Gate nicht definiert</b><p className="small muted" style={{ margin: 0 }}>Die Zieldatei <code>{g.file}</code> fehlt. Format: Tabelle unter <code>## Ziele</code> mit ID | Ebene | Ergebnis | Messgröße | Baseline | Ziel | Stichtag | Owner | Eltern-ID | Beleg (siehe README).</p></div>;
+  return (
+    <details className="card" open data-testid="goal-tree">
+      <summary><b>Zielbaum</b> <span className="tiny">Gate → Ziel → KR → Monat → Sprint · aus <a href={noteHref(g.file)}>{g.file.split('/').pop()}</a> · Fortschritt = erledigte / zugeordnete Tickets (Zuordnung im OLAF Workspace, sonst Jira-Label, oder in der Zeile genannt)</span></summary>
+      {!g.gate.length && <p className="note small">Stage Gate nicht definiert (keine Zeile mit Ebene „Gate“).</p>}
+      <ul className="goal-tree root">{g.roots.map((n: any) => <GoalNodeView key={n.id} n={n} />)}</ul>
+      {!g.monthGoals.length && <p className="tiny">Monatsziele für diesen Sprint noch nicht gesetzt (Ebene „Monat“, ID M&lt;MM&gt;-&lt;n&gt;).</p>}
+    </details>
+  );
+}
+
 export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
   const cyc = useLoad(() => api('/api/sprint/cycles'));
   const hm = hash.match(/^#\/sprint\/(sprint-\d{4}-\d{2}-\d{2})(?:\/([1-5]))?/);
@@ -610,7 +605,9 @@ export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
             <summary><b>Sprintziele, im Sprint, Kandidaten</b> <span className="tiny">{d.inSprint?.count ?? 0} im Sprint · {d.candidates?.length ?? 0} Kandidaten</span></summary>
             {d.goals && <SprintPlan d={d} cycle={id} reload={() => v.reload()} />}
           </details>
-          {d.goals && <details className="card ctx"><summary><b>Zielbaum</b> <span className="tiny">Gate → Ziel → KR → Monat → Sprint</span></summary><GoalTree g={d.goals} /></details>}
+          {d.goals && (cfg?.features?.ziele !== false
+            ? <p className="small" data-testid="zielbaum-link">🎯 Der Zielbaum (Gate → Ziel → KR → Monat → Sprint) steht unter <a href="#/ziele">Planen › Ziele</a>.</p>
+            : <details className="card ctx"><summary><b>Zielbaum</b> <span className="tiny">Gate → Ziel → KR → Monat → Sprint</span></summary><GoalTree g={d.goals} /></details>)}
           <details className="card ctx">
             <summary><b>Alle Fragen und Antwortzeilen</b> <span className="tiny">{Object.values(d.files).reduce((n: number, f: any) => n + f.questions.length, 0)} in Summary, Review, Planning</span></summary>
             <div className="tabs" role="tablist">
@@ -629,7 +626,6 @@ export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
               );
             })}
           </details>
-          <details className="card ctx"><summary><b>Deine offenen Pflegepunkte</b></summary><BeiMirLink what="Deine Pflegepunkte (mit Antwortfeld je Ticket)" /></details>
           <details className="card ctx">
             <summary><b>Tickets ohne Termin-Klarheit</b> <span className="tiny">{d.overdue.length} überfällig · {d.undated.length} ohne Datum</span></summary>
             <p className="small muted">Aus der Jira-Kopie{d.jiraSync ? ` (Stand ${fmtDateTime(d.jiraSync.at)})` : ' — noch nicht synchronisiert'}. Offenes Ticket heißt nicht unerledigte Arbeit — als Frage in die Runde.</p>

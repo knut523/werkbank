@@ -5,7 +5,8 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { AnsetzenButton } from '../AgentAnsetzen';
 import { api, type Config, viaLabel } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, StateChip, useJiraLive } from '../ui.tsx';
-import { BeiMirLink, Md, note } from '../beimir.tsx';
+import { Md, note } from '../beimir.tsx';
+import { PrTickerMeldungen } from '../prticker.tsx';
 import { topicBuckets } from '../buckets.ts';
 
 // Tabs (Council-Bedingung 11): Überblick · Rangliste · PR-Review · Pflege ⋯ (Konsistenz, Ordnung). Die alten Adressen
@@ -63,7 +64,7 @@ function Prio({ d, reload, admin }: { d: any; reload: () => void; admin: boolean
   return (
     <>
       <NextUp d={d} />
-      <p className="small muted">Nach Thema gruppiert, innerhalb nach Rang aus <a href={note(d.hub.prio)}>der Priorisierungsseite</a> (WSJF-leicht: (GW+ZK+RR)/Größe, gerechnet von <code>rank.py</code>). „Noch nicht priorisiert“ = Specs ohne Zeile in der Rangtabelle. Verschieben erzeugt einen <b>Vorschlag</b> — nach Bestätigung als Zeile auf der Priorisierungsseite; neu gerechnet wird in der Hauptsitzung.</p>
+      <p className="small muted">Nach Thema gruppiert, innerhalb nach Rang aus <a href={note(d.hub.prio)}>der Priorisierungsseite</a> (WSJF-leicht: (GW+ZK+RR)/Größe, gerechnet von <code>rank.py</code>). „Noch nicht priorisiert“ = Specs ohne Zeile in der Rangtabelle. Verschieben erzeugt einen <b>Vorschlag</b> — nach Bestätigung als Zeile auf der Priorisierungsseite; neu gerechnet wird im Hauptchat.</p>
       <div className="row" style={{ marginBottom: 8 }}>
         <input type="search" placeholder="Spec, Thema, Zustand …" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Rangliste filtern" />
         {order && <>
@@ -155,7 +156,7 @@ function Kanban({ d }: { d: any }) {
 
 const ago = (s?: string | null) => { if (!s) return '—'; const d = Math.floor((Date.now() - new Date(s).getTime()) / 864e5); return d <= 0 ? 'heute' : d === 1 ? '1 Tag' : `${d} Tage`; };
 
-function PrReview({ d, reload }: { d: any; reload: () => void }) {
+function PrReview({ d, reload, ticker }: { d: any; reload: () => void; ticker: boolean }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const [onlyOpen, setOnlyOpen] = useState(true);
@@ -163,6 +164,7 @@ function PrReview({ d, reload }: { d: any; reload: () => void }) {
   const list = d.prs.filter((p: any) => !onlyOpen || p.live || !['nicht mehr offen', 'gemergt'].includes(p.review));
   return (
     <>
+      {ticker && <PrTickerMeldungen />}
       <p className="small muted">Live von GitHub (<b>{gh.org ?? 'WirStrom1'}</b>, alle offenen PRs, alle 5 Minuten, <b>nur lesend</b>) plus <a href={note(d.hub.register)}>PR-Register</a> und PR-Links in den Specs (Spec ↔ PR, Deploy-Gates). Review, Merge und Deploy passieren auf GitHub bzw. durch Menschen.</p>
       <div className="row small" style={{ marginBottom: 8 }}>
         {gh.error ? <span className="chip bad" data-testid="gh-error">GitHub: {gh.error}</span> : gh.at ? <span className="chip ok">GitHub-Stand {new Date(gh.at).toLocaleString('de-AT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {gh.count} offen</span> : <span className="chip warn">GitHub noch nicht abgerufen</span>}
@@ -402,12 +404,12 @@ function Check({ d: rd }: { d: any }) {
   );
 }
 
-// Überblick (Standard): je Thema eine Zeile mit vier Feldern — Wartet auf dich → In Arbeit → Als Nächstes → Erledigt;
+// Überblick (Standard): je Thema eine Zeile mit vier Feldern — Braucht dich → In Arbeit → Als Nächstes → Erledigt;
 // Themen mit offenen Entscheidungen zuerst. „Alle Zustände ▾“ klappt die volle Swimlane des Themas auf.
 function Overview({ d }: { d: any }) {
   const [openLane, setOpenLane] = useState<string | null>(null);
   const rows = useMemo(() => topicBuckets(d.lanes.map((l: any) => ({ name: l.topic, states: l.states })), d.admin ? d.decisions : [], d.agents ?? {}), [d]);
-  const waitLabel = d.admin ? 'Wartet auf dich' : 'Wartet auf Entscheidung';
+  const waitLabel = d.admin ? 'Braucht dich' : 'Braucht eine Entscheidung';
   const specLink = (s: any) => <a href={note(s.path)}>{s.title}</a>;
   const empty = <span className="muted">—</span>;
   return (
@@ -473,7 +475,6 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
         </div>
         {d && <a className="btn" href={note(d.hub.path)}>Roadmap-Hub öffnen</a>}
       </div>
-      <BeiMirLink what="Offene Entscheidungen, Sync-Fragen und Reviews" />
       <div className="tabs" role="tablist">
         {TABS.map(([id, label]) => <a key={id} role="tab" aria-selected={activeTab === id} className={activeTab === id ? 'active' : ''} href={`#/roadmap/${id}`}>{label}{d && id === 'prs' ? ` (${d.prs.length})` : d && id === 'prio' ? ` (${d.ranking.length})` : ''}</a>)}
       </div>
@@ -481,7 +482,7 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
         {[['check', 'Konsistenz'], ['ordnung', 'Ordnung']].map(([id, label]) => { const on = (tab === 'pflege' ? 'check' : tab) === id; return <a key={id} role="tab" aria-selected={on} className={on ? 'active' : ''} href={`#/roadmap/${id}`}>{label}</a>; })}
       </div>}
       {r.error && <Err e={r.error} />}
-      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' || tab === 'pflege' ? <Check d={d} /> : tab === 'prio' ? <Prio d={d} reload={r.reload} admin={cfg.user?.role === 'ADMIN'} /> : <Overview d={d} />}
+      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} ticker={cfg.features?.leitstand !== false} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' || tab === 'pflege' ? <Check d={d} /> : tab === 'prio' ? <Prio d={d} reload={r.reload} admin={cfg.user?.role === 'ADMIN'} /> : <Overview d={d} />}
     </div>
   );
 }

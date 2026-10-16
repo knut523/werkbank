@@ -11,17 +11,16 @@ registration:
     - konekto.energy
 
 interface:
-  customWelcome: |
-    Willkommen im OLAF Workspace – hier arbeitet Claude Code mit unseren Skills, dem Vault und Jira, unter deinem eigenen Claude-Konto. Neu hier? Zuerst im Kontomenü 🚀 „Workspace-Einrichtung“: Claude einmal verbinden.
-    Zum Verbinden einmal im Terminal `claude setup-token` ausführen und den Token im OLAF Workspace unter „Einrichtung“ eintragen (Link unten) — oder oben im Modell-Menü bei „Claude Code“ über das Zahnrad (Ablauf: „nie“).
-    Wissen, Board, Sprint, Skills und Dateien: Links unten in der Fußzeile. Vorlagen für Skills (Spec schreiben, Council, Teilagenten, Jira-Ticket, Sprint-Review, Service-Fall, Vault aufräumen) im Modell-Menü.
+  customWelcome: "Willkommen im OLAF Workspace – hier arbeitest du mit Claude Code, unseren Skills, dem Vault und Jira. Neu hier? Im Kontomenü unter „Einrichtung“ verbindest du Claude einmal mit deinem Konto."
   modelSelect: true
   parameters: false
-  presets: true
-  prompts: true
+  presets: false
+  prompts: false
+  # bookmarks bleibt true: sonst sperrt LibreChat die Tags-API, über die der Hauptchat seine Lesezeichen setzt.
+  # Die Oberfläche dazu (Panel, Kopf-Knopf, Filter) blendet librechat/patches/70-client-entruempeln.patch aus.
   bookmarks: true
   multiConvo: false
-  temporaryChat: true
+  temporaryChat: false
   memories: false
   agents: false
   marketplace:
