@@ -276,13 +276,17 @@ function Thema({ t, onDone, oeffne }: { t: any; onDone: () => void; oeffne: (k: 
 }
 
 /** Die Startseite. Admins sehen die Unter-Chats; alle sehen ihre Board-Agentenläufe, Fragen und Pflegepunkte. */
+/** Anzahl eigener Tickets je Jira-Seite (17c). */
+const meineTickets = (ts: any[]) => ts.reduce((m: Record<string, number>, t: any) => ({ ...m, [t.site ?? '?']: (m[t.site ?? '?'] ?? 0) + 1 }), {});
+
 export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string }) {
   const admin = cfg.user?.role === 'ADMIN';
   const u = useLoad(() => (admin ? api('/api/uebersicht') : Promise.resolve(null)), [admin]);
   const t = useLoad(() => api('/api/today'));
   const [vq, setVq] = useState<{ open: any[]; cleanup: any[]; raw: number; duplicates: number } | null>(null);
   const [pflege, setPflege] = useState<number | null>(null);
-  const [planen, setPlanen] = useStored<'' | 'vault' | 'pflege'>('planen', '');
+  const [planen, setPlanen] = useStored<'' | 'vault' | 'pflege' | 'tickets'>('planen', '');
+  const cfgMain = cfg.project;   // 17c: Seiten-Kennzeichen der Tickets (PM | OLAF)
   const [schublade, setSchublade] = useState<{ id: string; tab: Tab } | null>(null);
   // Alte Adressen (Paket 187, S4; `#/leitstand?…`, `#/heute?…`, `#/?…`): review · bericht · auftrag öffnen Ansicht bzw. Schublade, start=1 den Dialog.
   const q = new URLSearchParams(hash.split('?')[1] ?? '');
@@ -404,10 +408,13 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
         <div className="ub-row ub-planen"><span className="small">Außerdem in <b>Planen</b>:</span>
           {admin && <button className="ub-chip" aria-expanded={planen === 'vault'} onClick={() => setPlanen(planen === 'vault' ? '' : 'vault')} data-testid="ub-planen-vault">{vq ? `${nVault} offene Entscheidungen im Vault` : 'Entscheidungen im Vault …'}</button>}
           <button className="ub-chip" aria-expanded={planen === 'pflege'} onClick={() => setPlanen(planen === 'pflege' ? '' : 'pflege')} data-testid="ub-planen-pflege">{pflege === null ? 'Tickets, die Pflege brauchen' : `${pflege} Tickets brauchen Pflege`}</button>
+          {(d.mine?.tickets?.length ?? 0) > 0 && <button className="ub-chip" aria-expanded={planen === 'tickets'} onClick={() => setPlanen(planen === 'tickets' ? '' : 'tickets')} data-testid="ub-planen-tickets">Meine Tickets: {Object.entries(meineTickets(d.mine.tickets)).map(([k, n]) => `${k} ${n}`).join(' · ')}</button>}
           <a className="ub-chip" href="#/timebox">Mein Tag: {d.day.length} {d.day.length === 1 ? 'Block' : 'Blöcke'}</a>
         </div>
         {planen === 'vault' && vq && <WartetAufDich x={{ questions: [], prs: [], pendingApprovals: [], draft: null }} decisions={vq.open} today={vq} onChange={neu} />}
         {planen === 'pflege' && <HygienePanel max={5} title="Deine Tickets" onChange={neu} />}
+        {planen === 'tickets' && <ul className="small plain" data-testid="ub-meine-tickets">{d.mine.tickets.slice(0, 30).map((t: any) => <li key={t.key} className="item">
+          <span className="chip" title={t.site === cfgMain ? 'Jira maxenergy (PM)' : 'Entwicklungs-Jira'}>{t.site ?? cfgMain}</span> <a href={`#/board?site=${t.site ?? cfgMain}&key=${t.key}`}><b>{t.key}</b></a> {t.summary} <span className="tiny">· {t.why}</span></li>)}</ul>}
       </section>
 
       {offen && (schublade || ansicht) && <Schublade k={offen} tab={schublade?.tab ?? ansicht!.art} setTab={(tab) => { setAnsicht(null); setSchublade({ id: offen.id, tab }); }} onClose={() => { setSchublade(null); if (ansicht) { setAnsicht(null); zurueck(); } }} onDone={neu} />}

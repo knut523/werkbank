@@ -17,7 +17,7 @@ function DueChip({ i, small }: { i: any; small?: boolean }) {
     return <span className={`${c} bad`}>{befundText({ rule: 'überfällig', days })} · {fmtDate(i.duedate)}</span>;
   }
   if (i.duedate) return <span className={c}>{fmtDate(i.duedate)}</span>;
-  if (i.status === 'Done' || i.statusCategory === 'done') return null;
+  if (i.status === 'Done' || i.statusCategory === 'done' || i.fremd) return null;   // 17c: Entwicklungs-Jira ohne Datumspflicht
   return <span className={`${c} warn`}>{hasRule(i, 'ohne Datum') ? befundText({ rule: 'ohne Datum' }) : 'ohne Datum'}</span>;
 }
 const ownerText = (i: any) => i.assignee ?? (hasRule(i, 'Sub-task ohne Owner') ? befundText({ rule: 'Sub-task ohne Owner' }) : 'ohne Owner');
@@ -66,7 +66,7 @@ function Card({ i, onOpen, expanded, onToggle, fresh, mover }: { i: any; onOpen:
   return (
     <div className={`tcard ${i.broken ? 'broken' : ''} ${i.onlyViaSubtask ? 'dim' : ''} ${fresh ? 'fresh' : ''} ${i.pending ? 'pending' : ''}`} role="button" tabIndex={0} onClick={() => onOpen(i.key)} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(i.key); }} data-key={i.key}
       draggable={!!mover} onDragStart={(e) => { e.dataTransfer.setData('text/plain', i.key); e.dataTransfer.effectAllowed = 'move'; mover?.start(i); }} onDragEnd={() => mover?.end()}>
-      <div className="k"><span>{i.key}{i.type === 'Sub-task' ? ' · Sub' : ''}</span><span className="row" style={{ gap: 4 }}>{i.priority && i.priority !== 'Medium' ? i.priority : ''}{mover && <button className="btn ghost small movebtn" aria-label={`${i.key} verschieben nach …`} title="Verschieben nach …" onClick={(e) => { e.stopPropagation(); mover.menu(i); }}>⇄</button>}</span></div>
+      <div className="k"><span>{i.key}{/^sub-?task$/i.test(i.type ?? '') ? ' · Sub' : ''}</span><span className="row" style={{ gap: 4 }}>{i.priority && i.priority !== 'Medium' ? i.priority : ''}{mover && <button className="btn ghost small movebtn" aria-label={`${i.key} verschieben nach …`} title="Verschieben nach …" onClick={(e) => { e.stopPropagation(); mover.menu(i); }}>⇄</button>}</span></div>
       <div className="s">{i.summary}</div>
       {i.broken && (i.type === 'Sub-task'
         ? <div className="chip bad" style={{ marginBottom: 4 }} title="Sub-task ohne Parent-Ticket — in Jira einem Ticket zuordnen oder in einen Task umwandeln">⚠ kaputt: {i.broken}</div>
@@ -467,13 +467,48 @@ function MoveToast({ text, dry, onConfirm, onUndo, busy }: { text: string; dry: 
   );
 }
 
+// ---------- Zwei Jira-Übersichten (17c): „PM-Board | OLAF-Board“, Auswahl je Person (/api/prefs boardSite) ----------
+/** Seiten mit eigener Kopie (Hauptseite zuerst). */
+export const boardSites = (cfg: Config) => (cfg.jiraSites ?? []).filter((x) => x.main || x.mirror);
+/** Gewählte Seite: `?site=` in der Adresse, sonst die gespeicherte Auswahl, sonst die Hauptseite. Umschalten speichert. */
+export function useBoardSite(cfg: Config, hash: string): [string, (p: string) => void] {
+  const sites = boardSites(cfg);
+  const main = sites.find((x) => x.main)?.prefix ?? cfg.project;
+  const fromHash = new URLSearchParams(hash.split('?')[1] ?? '').get('site')?.toUpperCase();
+  const prefs = useLoad(() => api('/api/prefs'), []);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const saved = (prefs.data as any)?.boardSite as string | undefined;
+  const pick = [chosen, fromHash, saved].find((x) => x && sites.some((s) => s.prefix === x)) ?? main;
+  const set = (x: string) => { setChosen(x); api('/api/prefs', { body: { boardSite: x } }).catch(() => {}); };
+  return [pick, set];
+}
+export function SiteSwitch({ cfg, site, onPick, what }: { cfg: Config; site: string; onPick: (p: string) => void; what: string }) {
+  const sites = boardSites(cfg);
+  if (sites.length < 2) return null;
+  return (
+    <div className="row" role="group" aria-label={`${what} wählen`} data-testid="site-switch">
+      {sites.map((x) => <button key={x.prefix} className={`btn small ${site === x.prefix ? 'primary' : ''}`} aria-pressed={site === x.prefix} onClick={() => onPick(x.prefix)} title={x.site.replace(/^https:\/\//, '')}>{x.prefix}-{what}</button>)}
+    </div>
+  );
+}
+// Filter und Suche je Seite (beim Umschalten nicht verloren, nicht auf die andere Seite übertragen).
+const siteState = new Map<string, { owner: string; filter: string; q: string; done: boolean; sprint: boolean }>();
+
 export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
+  const [site, setSite] = useBoardSite(cfg, hash);
+  return <BoardSite key={site} cfg={cfg} hash={hash} site={site} onSite={setSite} />;
+}
+
+function BoardSite({ cfg, hash, site, onSite }: { cfg: Config; hash: string; site: string; onSite: (p: string) => void }) {
   const params = new URLSearchParams(hash.split('?')[1] ?? '');
-  const [owner, setOwner] = useState(params.get('owner') ?? '');
-  const [filter, setFilter] = useState(params.get('filter') ?? '');
-  const [q, setQ] = useState('');
-  const [done, setDone] = useState(false);
-  const [sprint, setSprint] = useState(params.get('sprint') === '1');
+  const st = siteState.get(site);
+  const main = !boardSites(cfg).some((x) => x.prefix === site && !x.main);
+  const [owner, setOwner] = useState(st?.owner ?? params.get('owner') ?? '');
+  const [filter, setFilter] = useState(st?.filter ?? params.get('filter') ?? '');
+  const [q, setQ] = useState(st?.q ?? '');
+  const [done, setDone] = useState(st?.done ?? false);
+  const [sprint, setSprint] = useState(st?.sprint ?? params.get('sprint') === '1');
+  useEffect(() => { siteState.set(site, { owner, filter, q, done, sprint }); }, [site, owner, filter, q, done, sprint]);
   const [open, setOpen] = useState<string | null>(params.get('key'));
   const hashKey = params.get('key');
   useEffect(() => { if (hashKey) setOpen(hashKey); }, [hashKey]);
@@ -484,7 +519,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
   const [err, setErr] = useState<unknown>(null);
   const toast = useToast();
   const confirm = useConfirm();
-  const boardUrl = `/api/board?owner=${encodeURIComponent(owner)}&filter=${filter}&q=${encodeURIComponent(q)}&done=${done ? 1 : 0}&sprint=${sprint ? 1 : 0}`;
+  const boardUrl = `/api/board?owner=${encodeURIComponent(owner)}&filter=${filter}&q=${encodeURIComponent(q)}&done=${done ? 1 : 0}&sprint=${sprint ? 1 : 0}${main ? '' : `&site=${site}`}`;
   const b = useLoad(() => api(boardUrl), [owner, filter, q, done, sprint]);
   const data: any = b.data;
   // Live: jede Jira-Änderung (Board, Sprint, Chat, Abgleich) lädt das Board still nach; geänderte Karten leuchten kurz auf.
@@ -538,7 +573,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
     const p = { i, prev, lane, status, text: describeMove(i, r.actions, laneName) };
     if (confirmMove) setPending(p); else commit(p);
   };
-  const mover: Mover = {
+  const mover: Mover | undefined = !main ? undefined : {
     start: (i) => { if (busy) { setErr(new Error('Erst die offene Verschiebung bestätigen oder rückgängig machen.')); return; } setDrag(i); setDragTs(tsCache.current.get(i.key) ?? null); loadTs(i.key).then((t) => setDragTs(t)).catch(() => setDragTs([])); },
     end: () => { setDrag(null); setDragTs(null); },
     menu: (i) => { if (busy) { setErr(new Error('Erst die offene Verschiebung bestätigen oder rückgängig machen.')); return; } setMenuFor(i); setDragTs(null); loadTs(i.key).then(setDragTs).catch((e) => { setErr(e); setDragTs([]); }); },
@@ -555,13 +590,15 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
     <div className="page wide">
       <div className="head">
         <div>
-          <h1>Board · {cfg.project}</h1>
-          <p className="muted" style={{ margin: 0 }}>Jira-Kopie des Projekts „OLAF“ (Schlüssel {cfg.project}). Spalten = Status, Bahnen = Workstreams. Board-Stand ist nicht Arbeitsstand — im Zweifel fragen.</p>
+          <h1>Board · {site}{main ? '' : ' (Entwicklungs-Jira)'}</h1>
+          {main ? <p className="muted" style={{ margin: 0 }}>Jira-Kopie des Projekts „OLAF“ (Schlüssel {cfg.project}). Spalten = Status, Bahnen = Workstreams. Board-Stand ist nicht Arbeitsstand — im Zweifel fragen.</p>
+            : <p className="muted" style={{ margin: 0 }} data-testid="board-nur-lesen">Jira-Kopie des Projekts {site} im Entwicklungs-Jira ({(data?.site ?? '').replace(/^https:\/\//, '')}). Spalten = Status, Bahnen = Epics. <b>Nur lesen</b> — ändern im Jira selbst oder über den Jira-MCP im Chat (dort ggf. „/mcp“ neu verbinden).</p>}
+          <SiteSwitch cfg={cfg} site={site} onPick={onSite} what="Board" />
         </div>
         <div className="col" style={{ alignItems: 'flex-end', gap: 4 }}>
           <button className="btn" disabled={syncing} onClick={async () => {
             setSyncing(true); setErr(null);
-            try { const r: any = await api('/api/board/sync', { method: 'POST' }); toast(`${r.count} Tickets synchronisiert`); await b.reload(); } catch (e) { setErr(e); } finally { setSyncing(false); }
+            try { const r: any = await api('/api/board/sync', main ? { method: 'POST' } : { body: { site } }); toast(`${r.count} Tickets synchronisiert`); await b.reload(); } catch (e) { setErr(e); } finally { setSyncing(false); }
           }}>{syncing ? 'Synchronisiere …' : '↻ Jetzt synchronisieren'}</button>
           {data?.sync && <span className="tiny">Voll {fmtDateTime(data.sync.at)} · {data.sync.count} Tickets · {data.sync.source}{data.sync.incAt ? ` · zuletzt nachgezogen ${fmtDateTime(data.sync.incAt)}` : ''}</span>}
         </div>
@@ -570,7 +607,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
         {data.sync.errorKind === 'löschschutz' && <button className="btn small danger" style={{ marginLeft: 8 }} onClick={async () => {
           if (!(await confirm({ title: 'Trotzdem abgleichen und löschen?', danger: true, confirmLabel: 'Abgleichen, Löschen erlauben', body: <p className="small">Nur wenn Jira wirklich weniger Tickets hat (z. B. nach dem Verschieben in ein anderes Projekt). Was Jira nicht mehr liefert, fällt aus der Kopie. Vollständiges Blättern bleibt Pflicht.</p> }))) return;
           setSyncing(true); setErr(null);
-          try { const r: any = await api('/api/board/sync', { body: { force: true, confirm: true } }); toast(`${r.count} Tickets, ${r.removed} entfernt`); await b.reload(); } catch (e) { setErr(e); } finally { setSyncing(false); }
+          try { const r: any = await api('/api/board/sync', { body: { force: true, confirm: true, ...(main ? {} : { site }) } }); toast(`${r.count} Tickets, ${r.removed} entfernt`); await b.reload(); } catch (e) { setErr(e); } finally { setSyncing(false); }
         }}>Trotzdem abgleichen …</button>}</div>}
       <Err e={err} />
       <div className="board-bar">
@@ -579,16 +616,16 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
           {data?.owners.map((o: string) => <option key={o} value={o}>{o}{data.hygiene.perOwner[o] ? ` · ${data.hygiene.perOwner[o]} Pflege` : ''}</option>)}
         </select>
         <div className="row" role="group" aria-label="Filter">
-          {[['', 'Alle'], ['overdue', `Überfällig${data ? ` (${data.totals.overdue})` : ''}`], ['undated', `Ohne Datum${data ? ` (${data.totals.undated})` : ''}`], ['pflege', `Braucht Pflege${data ? ` (${data.hygiene.total})` : ''}`], ['ohneziel', `Ohne Ziel${data ? ` (${data.totals.noGoal})` : ''}`]].map(([v, l]) => (
+          {[['', 'Alle'], ['overdue', `Überfällig${data ? ` (${data.totals.overdue})` : ''}`], ['undated', `Ohne Datum${data ? ` (${data.totals.undated})` : ''}`], ...(main ? [['pflege', `Braucht Pflege${data ? ` (${data.hygiene.total})` : ''}`], ['ohneziel', `Ohne Ziel${data ? ` (${data.totals.noGoal})` : ''}`]] : [])].map(([v, l]) => (
             <button key={v} className={`btn small ${filter === v ? 'primary' : ''}`} onClick={() => setFilter(v)}>{l}</button>
           ))}
         </div>
-        {data?.sprint && <button className={`btn small ${sprint ? 'primary' : ''}`} onClick={() => setSprint(!sprint)} title="Nur Tickets im aktuellen Sprint (Workspace-Zuordnung)" aria-pressed={sprint}>🎯 nur aktueller Sprint ({data.sprint.count})</button>}
+        {data?.sprint && <button className={`btn small ${sprint ? 'primary' : ''}`} onClick={() => setSprint(!sprint)} title={data.sprint.jira ? 'Nur Tickets im laufenden Jira-Sprint' : 'Nur Tickets im aktuellen Sprint (Workspace-Zuordnung)'} aria-pressed={sprint}>🎯 nur {data.sprint.jira ? 'laufender Jira-Sprint' : 'aktueller Sprint'} ({data.sprint.count})</button>}
         <input type="search" placeholder="Suchen (Key, Titel, Owner)" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tickets suchen" />
         {(() => { const fk = q.trim().toUpperCase(); const st = (cfg.jiraSites ?? []).find((x) => !x.main && fk.startsWith(x.prefix + '-'));   // Release 17b: Schlüssel einer anderen Jira-Seite
           return st && /^[A-Z][A-Z0-9]*-\d+$/.test(fk) ? <button className="btn small" onClick={() => setOpen(fk)} data-testid="fremd-oeffnen">{fk} öffnen ({st.site.replace(/^https:\/\//, '')}, nur lesen)</button> : null; })()}
         <label className="row small"><input type="checkbox" checked={done} onChange={(e) => setDone(e.target.checked)} /> ältere erledigte zeigen</label>
-        <label className="row small" title="Beim Ziehen einer Karte erst bestätigen (Einstellung je Person)"><input type="checkbox" checked={confirmMove} onChange={async (e) => { await api('/api/prefs', { body: { confirmMove: e.target.checked } }); prefs.reload(); }} /> Verschieben bestätigen</label>
+        {main && <label className="row small" title="Beim Ziehen einer Karte erst bestätigen (Einstellung je Person)"><input type="checkbox" checked={confirmMove} onChange={async (e) => { await api('/api/prefs', { body: { confirmMove: e.target.checked } }); prefs.reload(); }} /> Verschieben bestätigen</label>}
         <label className="row small"><input type="checkbox" checked={allOpen} onChange={(e) => { setAllOpen(e.target.checked); setExpanded(new Set()); }} /> Sub-tasks aufklappen</label>
         {data && <span className="tiny">{data.totals.cards} Karten · {data.totals.subtasks} Sub-tasks{data.totals.broken ? <> · <span className="chip bad">⚠ {data.totals.broken} kaputt</span></> : null}{data.totals.orphans ? <> · <span className="chip bad" title="Tickets ohne Parent (kein Workstream)">⚠ {data.totals.orphans} ohne Parent</span></> : null}</span>}
       </div>
@@ -599,7 +636,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
       ) : data.lanes.map((lane: any) => (
         <section className="lane" key={lane.key}>
           <h3 className="lane-head">
-            {lane.workstream ? <button className="sublink" onClick={() => setOpen(lane.key)} title="Workstream öffnen"><b>{lane.name}</b></button> : lane.name} <span className="chip">{lane.count}</span>
+            {lane.workstream ? <button className="sublink" onClick={() => setOpen(lane.key)} title={main ? 'Workstream öffnen' : 'Epic öffnen'}><b>{lane.name}</b></button> : lane.name} <span className="chip">{lane.count}</span>
             {lane.hygiene > 0 && <span className="badge-hyg">{brauchen(lane.hygiene)}</span>}
             {lane.head && <>
               <span className="tiny">{lane.key}</span>
@@ -607,9 +644,9 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
               <span className={`chip ${lane.head.owner ? '' : 'warn'}`}>{lane.head.owner ?? 'ohne Owner'}</span>
               {lane.head.duedate ? <span className={`chip ${lane.head.overdue ? 'bad' : ''}`}>{lane.head.overdue ? 'über ' : 'bis '}{fmtDate(lane.head.duedate)}</span> : <span className="chip">ohne Datum</span>}
             </>}
-            {lane.key === '—' && <span className="tiny">Tickets ohne Parent — in Jira einem Workstream zuordnen</span>}
+            {lane.key === '—' && main && <span className="tiny">Tickets ohne Parent — in Jira einem Workstream zuordnen</span>}
           </h3>
-          {lane.count === 0 && <p className="tiny" style={{ margin: '2px 0 4px' }}>Keine sichtbaren Tickets in diesem Workstream{lane.workstream ? ' — Tasks lassen sich hierher ziehen.' : '.'}</p>}
+          {lane.count === 0 && <p className="tiny" style={{ margin: '2px 0 4px' }}>Keine sichtbaren Tickets in {main ? 'diesem Workstream' : 'diesem Epic'}{lane.workstream && main ? ' — Tasks lassen sich hierher ziehen.' : '.'}</p>}
           {(lane.count > 0 || (drag && lane.workstream)) &&
           <div className="cols" style={{ '--ncol': data.statuses.length } as CSSProperties}>
             {data.statuses.map((s: string) => (
@@ -617,7 +654,7 @@ export function Board({ cfg, hash }: { cfg: Config; hash: string }) {
                 <div className="colhead">{s} · {lane.columns[s].length}</div>
                 <div className={`col-cards ${drag ? (dropOk(lane.key, s) ? 'drop-ok' : 'drop-no') : ''}`} data-drop={`${lane.key}|${s}`}
                   onDragOver={(e) => { if (dropOk(lane.key, s)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; } }}
-                  onDrop={(e) => { e.preventDefault(); const i = drag; mover.end(); if (i && dropOk(lane.key, s)) doMove(i, lane.key, s); }}>
+                  onDrop={(e) => { e.preventDefault(); const i = drag; mover?.end(); if (i && dropOk(lane.key, s)) doMove(i, lane.key, s); }}>
                   {lane.columns[s].map((i: any) => <Card key={i.key} i={i} fresh={fresh.has(i.key)} onOpen={setOpen} expanded={allOpen !== expanded.has(i.key)} onToggle={() => toggle(i.key)} mover={mover} />)}
                 </div>
               </div>

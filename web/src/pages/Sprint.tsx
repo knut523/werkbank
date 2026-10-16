@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, fmtDate, fmtDateTime, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useConfirm, useToast, useJiraLive } from '../ui.tsx';
 import { GoalSelect } from '../components.tsx';
+import { SiteSwitch, useBoardSite, boardSites } from './Board.tsx';
 
 const noteHref = (p: string) => '#/wissen/' + p.split('/').map(encodeURIComponent).join('/');
 const FILE_LABEL: Record<string, string> = { summary: 'Summary', review: 'Review', planning: 'Planning' };
@@ -540,7 +541,56 @@ function GoalTree({ g }: { g: any }) {
   );
 }
 
+// 17c: Sprint je Jira-Seite — PM = Workspace-Sprint aus dem Vault (wie bisher), OLAF = laufender Jira-Sprint (nur lesen).
 export function Sprint({ cfg, hash }: { cfg: Config; hash: string }) {
+  const [site, setSite] = useBoardSite(cfg, hash);
+  const main = !boardSites(cfg).some((x) => x.prefix === site && !x.main);
+  return (
+    <>
+      {boardSites(cfg).length > 1 && <div className="page" style={{ paddingBottom: 0 }}><SiteSwitch cfg={cfg} site={site} onPick={setSite} what="Sprint" /></div>}
+      {main ? <PmSprint cfg={cfg} hash={hash} /> : <JiraSprint key={site} site={site} />}
+    </>
+  );
+}
+
+const jiraSprintState = new Map<string, { q: string; owner: string }>();
+/** Laufender Jira-Sprint einer weiteren Seite: Tickets nach Status, Filter/Suche je Seite, Klick öffnet das Ticket am Board. */
+function JiraSprint({ site }: { site: string }) {
+  const st = jiraSprintState.get(site);
+  const [q, setQ] = useState(st?.q ?? '');
+  const [owner, setOwner] = useState(st?.owner ?? '');
+  useEffect(() => { jiraSprintState.set(site, { q, owner }); }, [site, q, owner]);
+  const url = `/api/board?site=${site}&sprint=1&done=1&q=${encodeURIComponent(q)}&owner=${encodeURIComponent(owner)}`;
+  const b = useLoad(() => api(url), [url]);
+  useJiraLive(() => { api(url).then(b.setData).catch(() => {}); });
+  const d: any = b.data;
+  const cards: any[] = d ? d.lanes.flatMap((l: any) => Object.values(l.columns).flat().map((c: any) => ({ ...c, lane: l.name }))) : [];
+  return (
+    <div className="page" data-testid="jira-sprint">
+      <div className="head"><div>
+        <h1>Sprint · {site} (Entwicklungs-Jira)</h1>
+        <p className="muted" style={{ margin: 0 }}>Laufender Jira-Sprint aus der Kopie{d?.site ? ` von ${d.site.replace(/^https:\/\//, '')}` : ''} — <b>nur lesen</b>. Planung und Review laufen dort im Jira; der Workspace-Sprint (Vault) gehört zum PM-Board.</p>
+      </div>{d?.sync && <span className="tiny">Stand {fmtDateTime(d.sync.at)} · {d.sprint?.count ?? 0} Tickets im Sprint</span>}</div>
+      {b.error && <Err e={b.error} />}
+      <div className="board-bar">
+        <select value={owner} onChange={(e) => setOwner(e.target.value)} aria-label="Owner"><option value="">Alle Owner</option>{d?.owners.map((o: string) => <option key={o} value={o}>{o}</option>)}</select>
+        <input type="search" placeholder="Suchen (Key, Titel, Owner)" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tickets suchen" />
+        <span className="tiny">{cards.length} Tickets</span>
+      </div>
+      {!d ? <Loading /> : !d.sync ? <div className="card soft"><p>Noch keine Kopie — am <a href={`#/board?site=${site}`}>{site}-Board</a> auf „Jetzt synchronisieren“ klicken.</p></div>
+        : !cards.length ? <div className="card soft"><p>Kein Ticket im laufenden Jira-Sprint{q || owner ? ' für diesen Filter' : ' (oder das Projekt hat keinen offenen Sprint)'}.</p></div>
+        : <div className="cols" style={{ '--ncol': d.statuses.length } as any}>
+          {d.statuses.map((s: string) => { const xs = cards.filter((c) => c.status === s); return (
+            <div key={s}><div className="colhead">{s} · {xs.length}</div><div className="col-cards">
+              {xs.map((c) => <a key={c.key} className="tcard" href={`#/board?site=${site}&key=${c.key}`} data-key={c.key}><div className="k"><span>{c.key}</span></div><div className="s">{c.summary}</div>
+                <div className="row" style={{ gap: 4 }}><span className="chip">{c.assignee ?? 'ohne Owner'}</span><span className="chip">{c.lane}</span>{c.subtasks?.length ? <span className="chip">{c.subtaskDone}/{c.subtasks.length} Sub</span> : null}</div></a>)}
+            </div></div>); })}
+        </div>}
+    </div>
+  );
+}
+
+function PmSprint({ cfg, hash }: { cfg: Config; hash: string }) {
   const cyc = useLoad(() => api('/api/sprint/cycles'));
   const hm = hash.match(/^#\/sprint\/(sprint-\d{4}-\d{2}-\d{2})(?:\/([1-5]))?/);
   const want = hm?.[1];

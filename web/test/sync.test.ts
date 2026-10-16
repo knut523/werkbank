@@ -130,3 +130,61 @@ test('Löschschutz lässt sich nach echtem Schrumpfen bestätigt übergehen; Lab
   const W = await import('../server/jirawrite.ts');
   await assert.rejects(W.writeJira({ id: 'u1', email: 'x@maxenergy.at', name: 'X' }, 'PM-331', [{ type: 'labels', add: ['sprint-2026-09-28'] }]), /Lesezugang/);
 });
+
+// ---------- 17c: Kopie einer weiteren Seite (OLAF, Entwicklungs-Jira) ----------
+// Eigener Nachbau, eigene Collection, eigener Stand, eigene Sperre — PM bleibt unberührt.
+test('17c: OLAF-Kopie — eigene Collection, Epics als Bahnen, offener Sprint, Löschschutz und Sperre je Seite', async () => {
+  const { olafIssues } = await import('./jira-mock.ts');
+  const o: { noSprints?: boolean; issues?: any[] } = { issues: olafIssues() };
+  const m2 = await startJiraMock(0, o);
+  const prevSites = process.env.WERKBANK_JIRA_SITES;
+  process.env.WERKBANK_JIRA_SITES = JSON.stringify([
+    { prefix: 'PM', site: 'https://pm.example', cloudId: '00000000-0000-0000-0000-000000000001', base: `http://127.0.0.1:${m.port}/rest/api/3` },
+    { prefix: 'OLAF', site: 'https://olaf.example', cloudId: '00000000-0000-0000-0000-000000000002', base: `http://127.0.0.1:${m2.port}/rest/api/3` }]);
+  try {
+    const C = await import('../server/config.ts');
+    const olaf = C.jiraSites().find((x) => x.prefix === 'OLAF')!;
+    assert.deepEqual(J.mirrorSites().map((x) => x.prefix), ['OLAF']);
+    assert.equal(J.siteByPrefix('olaf'), olaf);
+    assert.equal(J.siteByPrefix('XY').main, true, 'unbekannt → Hauptseite');
+    const pmBefore = await count();
+    const r = await J.syncMirror(creds, 'test', {}, olaf);
+    assert.equal(r.count, 5);
+    const col = D.wb().collection('jira_issues_olaf');
+    assert.equal(await col.countDocuments(), 5);
+    assert.equal(await count(), pmBefore, 'PM-Kopie unverändert');
+    assert.equal(((await col.findOne({ key: 'OLAF-396' })) as any).workstream, 'OLAF-1', 'Subtask → Story → Epic');
+    assert.deepEqual((await col.find({ openSprint: true }).toArray()).map((i: any) => i.key).sort(), ['OLAF-395', 'OLAF-398']);
+    const mo: any = await D.wb().collection('meta').findOne({ _id: 'jira_sync_olaf' as any });
+    assert.equal(mo.count, 5); assert.equal(mo.sprintCount, 2);
+    // Board: Epic als Bahn, Spalten = vorkommende Status nach Kategorie, Subtask unter der Story
+    const all = (await col.find({}, { projection: { _id: 0 } }).toArray()) as any[];
+    const b = J.boardModel(all, { laneType: 'Epic', columns: J.siteColumns(all.filter((i) => i.type !== 'Epic')), showDone: true, pmRules: false });
+    assert.deepEqual(b.statuses, ['To Do', 'In Review', 'Done']);
+    const epic = b.lanes.find((l: any) => l.key === 'OLAF-1')!;
+    assert.equal(epic.name, 'Tarifrechner v2');
+    assert.equal(epic.columns['In Review'][0].subtasks[0].key, 'OLAF-396');
+    assert.equal(b.lanes.find((l: any) => l.key === '—')?.name, 'Ohne Epic');
+    assert.equal(b.totals.orphans, 0, 'ohne Epic ist im Entwicklungs-Jira kein Fehler');
+    assert.ok(!JSON.stringify(b.lanes).includes('"noGoal":true'), 'keine Ziel-Mahnung ohne PM-Regeln');
+    // Löschschutz je Seite: OLAF liefert plötzlich fast nichts → OLAF-Fehler, PM-Stand unberührt
+    const saved = m2.issues.splice(0, 4);
+    await assert.rejects(J.syncMirror(creds, 'test', {}, olaf), /nichts gelöscht/);
+    assert.equal(await col.countDocuments(), 5);
+    assert.equal(((await D.wb().collection('meta').findOne({ _id: 'jira_sync_olaf' as any })) as any).errorKind, 'löschschutz');
+    assert.notEqual((await meta())?.errorKind, 'löschschutz');
+    m2.issues.unshift(...saved);
+    // Sperre je Seite: ein laufender PM-Vollabgleich hält OLAF inkrementell nicht auf
+    const pm = J.syncMirror(creds, 'test');
+    const inc = await J.syncIncremental(creds, 60 * 24 * 365, olaf);
+    assert.ok(inc, 'OLAF inkrementell läuft neben PM');
+    await pm;
+    // Projekt ohne Sprints (Jira 400 auf openSprints): kein Abbruch, niemand im Sprint
+    o.noSprints = true;
+    await J.syncMirror(creds, 'test', {}, olaf);
+    assert.equal(await col.countDocuments({ openSprint: true }), 0);
+  } finally {
+    if (prevSites === undefined) delete process.env.WERKBANK_JIRA_SITES; else process.env.WERKBANK_JIRA_SITES = prevSites;
+    await m2.close();
+  }
+});

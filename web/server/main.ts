@@ -16,7 +16,7 @@ import { listClaudeAccounts, addClaudeAccount, removeClaudeAccount, reorderClaud
 import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraIdentity, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
-import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, type Issue } from './jira.ts';
+import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, mirrorOf, mirrorSites, siteByPrefix, siteColumns, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema, etaMediane } from './orchestrator.ts';
@@ -647,8 +647,30 @@ on('POST', /^\/api\/vault\/reindex$/, async (req, res) => {
 
 // --- Board ---
 
+/** Kopie einer weiteren Seite (17c: OLAF-Board) — nur lesen, ohne PM-Regeln (Pflege, Ziele, Workspace-Sprint). */
+const siteIssues = async (mi: ReturnType<typeof mirrorOf>) => (await wb().collection(mi.col).find({}, { projection: { _id: 0 } }).toArray()) as unknown as Issue[];
+const syncOut = (sync: any) => (sync ? { at: sync.at, by: sync.by, count: sync.count, source: sync.source, error: sync.error, errorAt: sync.errorAt, errorKind: sync.errorKind ?? null, incAt: sync.incAt ?? null } : null);
+
 on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
   await needUser(req);
+  const st = siteByPrefix(url.searchParams.get('site'));
+  if (!st.main) {
+    const mi = mirrorOf(st);
+    const all = await siteIssues(mi);
+    const filter = ['overdue', 'undated'].includes(url.searchParams.get('filter') ?? '') ? url.searchParams.get('filter')! : undefined;
+    const sprintKeys = new Set(all.filter((i) => i.openSprint).map((i) => i.key));
+    const model = boardModel(all, {
+      owner: url.searchParams.get('owner') || undefined, filter, q: url.searchParams.get('q') || undefined,
+      showDone: url.searchParams.get('done') === '1', keys: url.searchParams.get('sprint') === '1' ? sprintKeys : undefined,
+      laneType: mi.laneType, columns: siteColumns(all.filter((i) => i.type !== mi.laneType)), pmRules: false,
+    });
+    return send(res, 200, {
+      ...model, lanes: model.lanes.map((l) => ({ ...l, hygiene: 0 })), hygiene: { perOwner: {}, total: 0 },
+      sync: syncOut(await wb().collection('meta').findOne({ _id: mi.meta as any })),
+      site: st.site, prefix: st.prefix, readOnly: true, laneType: mi.laneType,
+      sprint: { id: null, date: null, label: 'laufender Jira-Sprint', count: sprintKeys.size, jira: true }, dryRun: dryRun(),
+    });
+  }
   const all = [...(await issueMap()).values()];
   const hyg = hygieneAll(all);
   await refreshChatRuns();
@@ -673,8 +695,8 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
     ...model,
     lanes: model.lanes.map((l) => ({ ...l, hygiene: Object.values(l.columns).flat().reduce((n: number, c: any) => n + (c.hygiene?.length ? 1 : 0) + c.subtasks.filter((x: any) => x.hygiene?.length).length, 0) })),
     hygiene: { perOwner, total: [...hyg.keys()].length },
-    sync: sync ? { at: sync.at, by: sync.by, count: sync.count, source: sync.source, error: sync.error, errorAt: sync.errorAt, errorKind: sync.errorKind ?? null, incAt: sync.incAt ?? null } : null,
-    site: cfg.jiraSite,
+    sync: syncOut(sync),
+    site: cfg.jiraSite, prefix: cfg.jiraProject,
     sprint: curCycle ? { id: curCycle.id, date: curCycle.date, label: sprintLabel(curCycle.date), count: all.filter((i) => inSprint(i, curCycle.date)).length } : null,
     dryRun: dryRun(),
   });
@@ -692,7 +714,10 @@ on('POST', /^\/api\/board\/sync$/, async (req, res) => {
   // force: Löschschutz-Schwelle einmal übergehen (nach echtem Schrumpfen) — nur mit Bestätigung aus der Oberfläche.
   const force = b.force === true && b.confirm === true;
   if (force) log('jira sync erzwungen', { user: u.id });
-  send(res, 200, await syncMirror(await needJira(u), u.email, { force }));
+  // 17c: `site` (Präfix) gleicht die Kopie einer weiteren Seite ab — nur lesen, mit dem Zugang der Person.
+  const st = siteByPrefix(typeof b.site === 'string' ? b.site : null);
+  if (!st.main && !mirrorSites().includes(st)) throw new HttpError(409, `Die Kopie von ${st.site.replace(/^https:\/\//, '')} ist hier nicht eingerichtet.`);
+  send(res, 200, await syncMirror(await needJira(u), u.email, { force }, st));
 });
 
 on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => {
@@ -700,10 +725,15 @@ on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => 
   const im = await issueMap();
   const i = im.get(m[1]);
   if (!i && !isMainSite(m[1])) {
-    // Release 17b: Ticket einer anderen Seite (OLAF-123) — live lesen, nur anzeigen (keine Läufe, keine Schreibknöpfe).
-    const f = await fremdesTicket(await jiraCreds(u).catch(() => null), m[1]);
+    // Release 17b: Ticket einer anderen Seite (OLAF-123) — nur anzeigen (keine Läufe, keine Schreibknöpfe). 17c: zuerst aus
+    // der Kopie der Seite (mit Kindern), sonst live gelesen.
+    const mi = mirrorOf(siteFor(m[1]));
+    const own = (await wb().collection(mi.col).findOne({ key: m[1] }, { projection: { _id: 0 } })) as unknown as Issue | null;
+    const f = own ? { ...own, site: mi.site.site } : await fremdesTicket(await jiraCreds(u).catch(() => null), m[1]);
     if (!f) throw new HttpError(404, `${m[1]} nicht lesbar (Jira ${siteFor(m[1]).site.replace(/^https:\/\//, '')}).`);
-    return send(res, 200, { issue: f, url: browseUrl(f.key), children: [], runs: [], hygiene: [], parent: f.parent ? { key: f.parent, summary: f.parentSummary ?? null } : null, docs: await ticketDocs(u, f.key), readOnly: true, site: f.site,
+    const children = own ? ((await wb().collection(mi.col).find({ parent: f.key }, { projection: { _id: 0, key: 1, summary: 1, status: 1, statusCategory: 1, assignee: 1, duedate: 1 } }).toArray()) as any[])
+      .sort((a, b) => a.key.localeCompare(b.key, 'de', { numeric: true })).map((x) => ({ ...x, overdue: isOverdue(x), hygiene: [] })) : [];
+    return send(res, 200, { issue: f, url: browseUrl(f.key), children, runs: [], hygiene: [], parent: f.parent ? { key: f.parent, summary: f.parentSummary ?? null } : null, docs: await ticketDocs(u, f.key), readOnly: true, site: f.site,
       chatUrl: chatUrl(`${ticketPrompt(f)}\n\nLass uns an diesem Ticket arbeiten. Lies zuerst, was Vault und Jira dazu sagen.`) });
   }
   if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
@@ -768,13 +798,15 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/move$/, async (req, res,
 on('GET', /^\/api\/prefs$/, async (req, res) => {
   const u = await needUser(req);
   const d: any = await wb().collection('user_prefs').findOne({ _id: u.id as any });
-  send(res, 200, { confirmMove: d?.confirmMove ?? true });
+  send(res, 200, { confirmMove: d?.confirmMove ?? true, boardSite: d?.boardSite ?? cfg.jiraProject });
 });
 on('POST', /^\/api\/prefs$/, async (req, res) => {
   const u = await needUser(req);
   const b = await body(req);
   const set: any = {};
   if (typeof b.confirmMove === 'boolean') set.confirmMove = b.confirmMove;
+  // 17c: gewählte Jira-Übersicht (PM-Board | OLAF-Board) je Person — nur bekannte Präfixe.
+  if (typeof b.boardSite === 'string' && jiraSites().some((x) => x.prefix === b.boardSite)) set.boardSite = b.boardSite;
   await wb().collection('user_prefs').updateOne({ _id: u.id as any }, { $set: { ...set, at: new Date() } }, { upsert: true });
   send(res, 200, { ok: true, ...set });
 });
@@ -1193,8 +1225,17 @@ async function mineFor(u: User, { write = true } = {}) {
   const tickets = ((await wb().collection('jira_issues').find({ type: { $ne: 'Workstream' } }, { projection: { _id: 0, key: 1, summary: 1, status: 1, statusCategory: 1, assignee: 1, duedate: 1 } }).toArray()) as any[])
     .filter((i) => i.statusCategory !== 'Done' && i.status !== 'Done' && String(i.assignee ?? '').toLowerCase().split(/\s+/)[0] === me)
     .filter((i) => !i.duedate || i.duedate < today)
-    .map((i) => ({ key: i.key, summary: i.summary, duedate: i.duedate, why: i.duedate ? 'überfällig' : 'ohne Datum' }))
+    .map((i) => ({ key: i.key, summary: i.summary, duedate: i.duedate, why: i.duedate ? 'überfällig' : 'ohne Datum', site: cfg.jiraProject }))
     .sort((a, b) => String(a.duedate ?? '9').localeCompare(String(b.duedate ?? '9')));
+  // 17c: weitere Seiten (OLAF) — mir zugewiesen, offen, im laufenden Jira-Sprint oder überfällig („ohne Datum“ ist dort normal).
+  for (const st of mirrorSites()) {
+    const mi = mirrorOf(st);
+    for (const i of (await wb().collection(mi.col).find({ type: { $ne: mi.laneType }, statusCategory: { $ne: 'done' } }, { projection: { _id: 0, key: 1, summary: 1, status: 1, assignee: 1, duedate: 1, openSprint: 1 } }).toArray()) as any[]) {
+      if (i.status === 'Done' || String(i.assignee ?? '').toLowerCase().split(/\s+/)[0] !== me) continue;
+      const over = !!i.duedate && i.duedate < today;
+      if (over || i.openSprint) tickets.push({ key: i.key, summary: i.summary, duedate: i.duedate, why: over ? 'überfällig' : 'im Jira-Sprint', site: st.prefix });
+    }
+  }
   const admin = u.role === 'ADMIN';
   let questions: any[] = [], draft: any = null, section: string | null = null, pendingApprovals: any[] = [];
   if (admin) {
@@ -2998,6 +3039,15 @@ async function backgroundJobs() {
       log('jira sync', { count: r.count, removed: r.removed });
       await applyAutoGoals(await issueMap());
     } catch (e: any) { log('jira sync', { error: String(e.message).slice(0, 200) }); }
+    // 17c: Kopien weiterer Seiten (OLAF) nacheinander, je mit eigenem Fehler am Board — ein Ausfall dort hält PM nicht auf.
+    for (const st of mirrorSites()) {
+      try {
+        const creds = await jiraCreds(null);
+        if (!creds) { await recordSyncError('zugang', 'Kein Jira-Zugang für den automatischen Abgleich — „Jetzt synchronisieren“ geht mit dem eigenen Token.', st); continue; }
+        const r = await syncMirror(creds, 'Intervall', {}, st);
+        log('jira sync', { site: st.prefix, count: r.count, removed: r.removed });
+      } catch (e: any) { log('jira sync', { site: st.prefix, error: String(e.message).slice(0, 200) }); }
+    }
   };
   setTimeout(jiraTick, 5000);
   setInterval(jiraTick, cfg.jiraSyncMinutes * 60_000);
@@ -3008,6 +3058,10 @@ async function backgroundJobs() {
       if (!creds) return;
       const r = await syncIncremental(creds, cfg.jiraIncMinutes * 2);
       if (r?.keys.length) log('jira inkrementell', { n: r.keys.length });
+      for (const st of mirrorSites()) {
+        try { const x = await syncIncremental(creds, cfg.jiraIncMinutes * 2, st); if (x?.keys.length) log('jira inkrementell', { site: st.prefix, n: x.keys.length }); }
+        catch (e: any) { log('jira inkrementell', { site: st.prefix, error: String(e.message).slice(0, 200) }); }
+      }
     } catch (e: any) { log('jira inkrementell', { error: String(e.message).slice(0, 200) }); }
   };
   if (cfg.jiraIncMinutes > 0) setInterval(incTick, cfg.jiraIncMinutes * 60_000);

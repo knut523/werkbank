@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { MongoClient, ObjectId } from 'mongodb';
-import { startJiraMock, demoIssues, type JiraMock } from './jira-mock.ts';
+import { startJiraMock, demoIssues, olafIssues, type JiraMock } from './jira-mock.ts';
 
 const WEB = new URL('..', import.meta.url).pathname;
 const PORT = Number(process.env.WERKBANK_TEST_PORT || 3071), BRIDGE_PORT = Number(process.env.WERKBANK_TEST_BRIDGE_PORT || 3096);
@@ -95,7 +95,7 @@ before(async () => {
   jira = await startJiraMock(0);
   // Zweite Jira-Seite (Release 17b): eigenes Mock mit OLAF-Tickets; die Werkbank liest dort nur.
   const olaf: any = demoIssues().find((i: any) => i.key === 'PM-321')!;
-  jira2 = await startJiraMock(0, { issues: [{ ...olaf, key: 'OLAF-394', fields: { ...olaf.fields, summary: 'Tarifrechner API (Entwicklungs-Jira)', parent: null } }] });
+  jira2 = await startJiraMock(0, { issues: [{ ...olaf, key: 'OLAF-394', fields: { ...olaf.fields, summary: 'Tarifrechner API (Entwicklungs-Jira)', parent: null } }, ...olafIssues()] });
   bridge = spawn(process.execPath, ['src/server.ts'], {
     cwd: join(WEB, '..', 'claude-bridge'),
     env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(BRIDGE_PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_ALLOWED_EMAILS: '',
@@ -248,6 +248,57 @@ test('Release 17b: zweite Jira-Seite — Ticket OLAF-394 live von max-energy (nu
   assert.deepEqual(s.j.jira.sites.map((x: any) => [x.prefix, x.main, x.lesen]), [['PM', true, true], ['OLAF', false, true]]);
   assert.match(s.j.jira.sites[1].schreibenHinweis, /\/mcp/);
   assert.deepEqual((await anna.req('/api/config')).j.jiraSites.map((x: any) => x.prefix), ['PM', 'OLAF']);
+});
+
+test('Release 17c: OLAF-Kopie — Board und Sprint je Seite, Auswahl je Person, „Wartet auf dich“ mit Seite, Schreiben gesperrt', async () => {
+  assert.deepEqual((await anna.req('/api/config')).j.jiraSites.map((x: any) => [x.prefix, x.mirror]), [['PM', true], ['OLAF', true]]);
+  const before = await anna.req('/api/board?site=OLAF');
+  assert.equal(before.status, 200);
+  assert.equal(before.j.sync, null, 'noch nie abgeglichen');
+  const sy = await anna.req('/api/board/sync', { body: { site: 'OLAF' } });
+  assert.equal(sy.status, 200, JSON.stringify(sy.j));
+  assert.equal(sy.j.count, 6);
+  const b = (await anna.req('/api/board?site=OLAF&done=1')).j;
+  assert.equal(b.readOnly, true); assert.equal(b.prefix, 'OLAF'); assert.equal(b.laneType, 'Epic');
+  assert.equal(b.sync.count, 6);
+  assert.deepEqual(b.lanes.map((l: any) => l.name), ['Tarifrechner v2', 'Ohne Epic']);
+  assert.ok(b.statuses.includes('In Review') && !b.statuses.includes('Ongoing'), 'Spalten der Seite, nicht die PM-Spalten');
+  assert.equal(b.sprint.count, 2); assert.equal(b.sprint.jira, true);
+  // Filter/Suche wirken auf die gewählte Seite; PM-Regeln (Pflege, Ziel) gibt es dort nicht.
+  const keys = (x: any) => x.lanes.flatMap((l: any) => Object.values(l.columns).flat()).map((i: any) => i.key).sort();
+  assert.deepEqual(keys((await anna.req('/api/board?site=OLAF&sprint=1&done=1')).j), ['OLAF-395', 'OLAF-398']);
+  assert.deepEqual(keys((await anna.req('/api/board?site=OLAF&q=logging')).j), ['OLAF-397']);
+  assert.ok(keys((await anna.req('/api/board?site=OLAF&filter=pflege')).j).length >= 3, 'Pflege-Filter greift auf OLAF nicht');
+  // PM-Board bleibt PM
+  assert.ok(!keys((await anna.req('/api/board')).j).some((k: string) => k.startsWith('OLAF-')));
+  assert.equal((await anna.req('/api/board')).j.prefix, 'PM');
+  // Detail aus der Kopie, mit Kindern, nur lesen
+  const d = await anna.req('/api/board/issue/OLAF-395');
+  assert.equal(d.j.readOnly, true);
+  assert.deepEqual(d.j.children.map((c: any) => c.key), ['OLAF-396']);
+  assert.equal(d.j.url, 'https://max-energy.atlassian.net/browse/OLAF-395');
+  // Schreibwege: alle 409 mit Hinweis, nichts geschrieben
+  for (const [p, body] of [['move', { status: 'Done', lane: 'OLAF-1', confirm: true }], ['edit', { summary: 'x', confirm: true }], ['status', { to: 'Done', confirm: true }], ['due', { date: '2026-12-01', confirm: true }]] as const) {
+    const w = await anna.req(`/api/board/issue/OLAF-395/${p}`, { body });
+    assert.equal(w.status, 409, `${p}: ${JSON.stringify(w.j)}`);
+  }
+  assert.equal((await anna.req('/api/board/issue/OLAF-395/transitions')).status, 409);
+  assert.equal(jira2.writes.length, 0);
+  // Auswahl je Person
+  assert.equal((await anna.req('/api/prefs')).j.boardSite, 'PM');
+  assert.equal((await anna.req('/api/prefs', { body: { boardSite: 'OLAF' } })).status, 200);
+  assert.equal((await anna.req('/api/prefs')).j.boardSite, 'OLAF');
+  assert.equal((await bernd.req('/api/prefs')).j.boardSite, 'PM', 'Bernd unberührt');
+  await anna.req('/api/prefs', { body: { boardSite: 'XYZ' } });
+  assert.equal((await anna.req('/api/prefs')).j.boardSite, 'OLAF', 'unbekannte Seite wird ignoriert');
+  await anna.req('/api/prefs', { body: { boardSite: 'PM' } });
+  // „Wartet auf dich“: OLAF-Ticket im laufenden Sprint (Anna) mit Seite; ohne Sprint/Datum nicht; erledigt nicht
+  const mine = (await anna.req('/api/roadmap/mine')).j.tickets;
+  const o = mine.filter((t: any) => t.site === 'OLAF');
+  assert.deepEqual(o.map((t: any) => [t.key, t.why]), [['OLAF-395', 'im Jira-Sprint']]);
+  assert.ok(mine.filter((t: any) => t.key.startsWith('PM-')).every((t: any) => t.site === 'PM'));
+  // Unbekannte Seite beim Abgleich → Hauptseite? Nein: nur bekannte Präfixe, sonst PM wie bisher.
+  assert.equal((await anna.req('/api/board/sync', { body: { site: 'PM' } })).status, 200);
 });
 
 test('Board: Kommentar/Status/Fälligkeit erst nach Bestätigung, dann in Jira', async () => {

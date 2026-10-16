@@ -85,7 +85,8 @@ export async function siteLesen(creds: JiraCreds | null, s: JiraSite, now = Date
   leseCache.set(k, { at: now, ...r });
   return r;
 }
-export const jiraSitesPublic = () => jiraSites().map((s) => ({ prefix: s.prefix, site: s.site, main: s.main }));
+// mirror (17c): Seite hat eine eigene Kopie mit Board und Sprint-Übersicht (Hauptseite immer, weitere wie beim Lesen).
+export const jiraSitesPublic = () => jiraSites().map((s) => ({ prefix: s.prefix, site: s.site, main: s.main, mirror: s.main || fremdLesbar(s) }));
 
 // ---------- Atlassian Document Format → Text ----------
 
@@ -131,6 +132,8 @@ export interface Issue {
   links?: IssueLink[];
   /** Offene Tickets, die dieses blockieren („is blocked by“, Blocker nicht erledigt). */
   blockedBy?: string[];
+  /** Nur Kopien weiterer Seiten (17c): im laufenden Jira-Sprint. */
+  openSprint?: boolean;
 }
 
 export interface IssueLink { type: string; label: string; key: string; summary?: string; status?: string; done?: boolean; blocks?: 'blocks' | 'blocked-by' }
@@ -179,15 +182,16 @@ export function mapIssue(raw: any): Issue {
   };
 }
 
-/** Workstream je Ticket: Workstream selbst, Parent, oder Parent des Parents (Sub-task). */
-export function assignWorkstreams(issues: Issue[]): Issue[] {
+/** Workstream je Ticket: Workstream selbst, Parent, oder Parent des Parents (Sub-task). `laneType`: Bahnen-Typ der Seite
+ *  (PM: Workstream, weitere Seiten: Epic). */
+export function assignWorkstreams(issues: Issue[], laneType = 'Workstream'): Issue[] {
   const by = new Map(issues.map((i) => [i.key, i]));
   for (const i of issues) {
-    if (i.type === 'Workstream') { i.workstream = i.key; continue; }
+    if (i.type === laneType) { i.workstream = i.key; continue; }
     let p = i.parent ? by.get(i.parent) : undefined;
     let hops = 0;
-    while (p && p.type !== 'Workstream' && p.parent && hops++ < 3) p = by.get(p.parent);
-    i.workstream = p?.type === 'Workstream' ? p.key : (i.parent && !by.has(i.parent) ? i.parent : null);
+    while (p && p.type !== laneType && p.parent && hops++ < 3) p = by.get(p.parent);
+    i.workstream = p?.type === laneType ? p.key : (i.parent && !by.has(i.parent) ? i.parent : null);
   }
   return issues;
 }
@@ -196,13 +200,13 @@ export function assignWorkstreams(issues: Issue[]): Issue[] {
 // Vollabgleich (alle 15 min, Knopf) holt das ganze Projekt und löscht, was nicht mehr kommt — aber nur mit
 // Löschschutz. Der inkrementelle Abgleich (jede Minute) holt nur kürzlich Geändertes und löscht nie.
 
-export async function fetchPages(creds: JiraCreds, jql = `project = ${cfg.jiraProject} ORDER BY updated DESC`, max = 2000): Promise<{ issues: any[]; complete: boolean }> {
+export async function fetchPages(creds: JiraCreds, jql = `project = ${cfg.jiraProject} ORDER BY updated DESC`, max = 2000, site?: JiraSite, fields = FIELDS): Promise<{ issues: any[]; complete: boolean }> {
   const out: any[] = [];
   let token = '';
   while (out.length < max) {
-    const body: any = { jql, fields: FIELDS, maxResults: 100 };
+    const body: any = { jql, fields, maxResults: 100 };
     if (token) body.nextPageToken = token;
-    const r = await jiraFetch(creds, 'POST', '/search/jql', body);
+    const r = await jiraFetch(creds, 'POST', '/search/jql', body, site);
     const page = r.issues ?? [];
     out.push(...page);
     token = r.nextPageToken ?? '';
@@ -228,86 +232,114 @@ export function deletionAllowed(complete: boolean, count: number, lastCount: num
 
 type SyncErrorKind = 'zugang' | 'voll' | 'inkrementell' | 'löschschutz';
 
-export async function recordSyncError(kind: SyncErrorKind, message: string) {
-  await wb().collection('meta').updateOne({ _id: 'jira_sync' as any }, { $set: { errorAt: new Date(), error: message.slice(0, 300), errorKind: kind } }, { upsert: true });
+// ---------- Kopie je Seite (Release 17c) ----------
+// Hauptseite (PM): Collection `jira_issues`, Stand `meta.jira_sync` — unverändert, alles PM-Spezifische (Pflege, Ziele,
+// Sprint-Zyklus, Mein Tag) liest nur sie. Weitere Seiten (OLAF): eigene Collection `jira_issues_<präfix>`, eigener Stand,
+// Bahnen nach Epic (dort gibt es keine Workstreams), nur lesen.
+export interface Mirror { site: JiraSite; col: string; meta: string; project: string; laneType: string }
+export function mirrorOf(site: JiraSite = jiraSites()[0]): Mirror {
+  if (site.main) return { site, col: 'jira_issues', meta: 'jira_sync', project: cfg.jiraProject, laneType: 'Workstream' };
+  const p = site.prefix.toLowerCase();
+  return { site, col: `jira_issues_${p}`, meta: `jira_sync_${p}`, project: site.prefix, laneType: 'Epic' };
+}
+/** Weitere Seiten mit eigener Kopie (gleiche Regel wie das Lesen je Schlüssel: im Test-/Demobetrieb nur mit Test-Basis). */
+export const mirrorSites = () => jiraSites().filter(fremdLesbar);
+/** Seite zu einem Präfix aus der Anfrage (`?site=OLAF`); leer/unbekannt → Hauptseite. */
+export const siteByPrefix = (prefix?: string | null) => jiraSites().find((s) => s.prefix === String(prefix ?? '').toUpperCase()) ?? jiraSites()[0];
+
+export async function recordSyncError(kind: SyncErrorKind, message: string, site?: JiraSite) {
+  await wb().collection('meta').updateOne({ _id: mirrorOf(site).meta as any }, { $set: { errorAt: new Date(), error: message.slice(0, 300), errorKind: kind } }, { upsert: true });
 }
 
-/** Workstream aller Tickets neu rechnen und geänderte zurückschreiben; gibt die geänderten Schlüssel zurück. */
-export async function recomputeWorkstreams(): Promise<string[]> {
-  const col = wb().collection('jira_issues');
+/** Workstream (bzw. Epic) aller Tickets neu rechnen und geänderte zurückschreiben; gibt die geänderten Schlüssel zurück. */
+export async function recomputeWorkstreams(site?: JiraSite): Promise<string[]> {
+  const mi = mirrorOf(site);
+  const col = wb().collection(mi.col);
   const all = (await col.find({}, { projection: { _id: 0, key: 1, type: 1, parent: 1, workstream: 1 } }).toArray()) as any[];
   const before = new Map(all.map((i) => [i.key, i.workstream ?? null]));
-  assignWorkstreams(all as Issue[]);
+  assignWorkstreams(all as Issue[], mi.laneType);
   const changed = all.filter((i) => (i.workstream ?? null) !== before.get(i.key));
   if (changed.length) await col.bulkWrite(changed.map((i) => ({ updateOne: { filter: { key: i.key }, update: { $set: { workstream: i.workstream ?? null } } } })));
   return changed.map((i) => i.key);
 }
 
-let syncing: Promise<any> | null = null;
-let syncingKind: 'voll' | 'inkrementell' | null = null;
+// Eine Sperre je Seite: ein Vollabgleich der einen Seite hält die andere nicht auf.
+const locks = new Map<string, { p: Promise<any>; kind: 'voll' | 'inkrementell' }>();
 
-export async function syncMirror(creds: JiraCreds, by: string, opts: { force?: boolean } = {}): Promise<{ count: number; removed: number; at: Date; complete: boolean }> {
-  if (syncing && syncingKind === 'voll') return syncing;
-  while (syncing) { try { await syncing; } catch { /* egal */ } if (syncing && syncingKind === 'voll') return syncing; }
-  syncingKind = 'voll';
-  syncing = (async () => {
+export async function syncMirror(creds: JiraCreds, by: string, opts: { force?: boolean } = {}, site?: JiraSite): Promise<{ count: number; removed: number; at: Date; complete: boolean }> {
+  const mi = mirrorOf(site);
+  const lk = mi.col;
+  if (locks.get(lk)?.kind === 'voll') return locks.get(lk)!.p;
+  while (locks.has(lk)) { try { await locks.get(lk)!.p; } catch { /* egal */ } if (locks.get(lk)?.kind === 'voll') return locks.get(lk)!.p; }
+  const run = (async () => {
     const started = new Date();
     // Nach Schlüssel blättern (nicht nach „updated“): ein während des Laufs geändertes Ticket springt sonst von hinten
     // nach vorn, fehlt in der Liste und würde gelöscht.
-    const { issues: raw, complete } = await fetchPages(creds, `project = ${cfg.jiraProject} ORDER BY key ASC`, 20_000);
-    const issues = assignWorkstreams(raw.map(mapIssue));
-    const col = wb().collection('jira_issues');
-    const meta: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+    const { issues: raw, complete } = await fetchPages(creds, `project = ${mi.project} ORDER BY key ASC`, 20_000, mi.site);
+    const issues = assignWorkstreams(raw.map(mapIssue), mi.laneType);
+    // Weitere Seiten: Mitgliedschaft im laufenden Jira-Sprint (Sprint-Übersicht OLAF). Ein Projekt ohne Sprints (Jira: 400)
+    // heißt „kein Sprint“, kein Abbruch. ponytail: nur im Vollabgleich (15 min) — ein frisch in den Sprint gezogenes Ticket
+    // erscheint dort spätestens mit dem nächsten Vollabgleich.
+    let sprintKeys: Set<string> | null = null;
+    if (!mi.site.main) {
+      try { sprintKeys = new Set((await fetchPages(creds, `project = ${mi.project} AND sprint in openSprints() ORDER BY key ASC`, 2000, mi.site, ['summary'])).issues.map((r: any) => r.key)); }
+      catch (e: any) { if (!(e instanceof JiraError) || e.status !== 400) throw e; sprintKeys = new Set(); }
+    }
+    const col = wb().collection(mi.col);
+    const meta: any = await wb().collection('meta').findOne({ _id: mi.meta as any });
     if (issues.length) {
-      await col.bulkWrite(issues.map((i) => ({ replaceOne: { filter: { key: i.key }, replacement: { ...i, syncedAt: started }, upsert: true } })));
+      await col.bulkWrite(issues.map((i) => ({ replaceOne: { filter: { key: i.key }, replacement: { ...i, ...(sprintKeys ? { openSprint: sprintKeys.has(i.key) } : {}), syncedAt: started }, upsert: true } })));
     }
     // force (bestätigt in der Oberfläche): Schwelle ignorieren — z. B. nach echtem Schrumpfen; Vollständigkeit bleibt Pflicht.
     const guard = deletionAllowed(complete, issues.length, opts.force ? null : meta?.count);
     if (!guard.ok) {
-      await recordSyncError('löschschutz', guard.reason);
+      await recordSyncError('löschschutz', guard.reason, mi.site);
       jiraChanged(issues.map((i) => i.key), 'sync', true);
       throw Object.assign(new JiraError(502, guard.reason), { guard: true });
     }
     // Vollständiger Lauf: was nicht mehr kommt (gelöscht/verschoben), fällt aus der Kopie.
     const removed = (await col.deleteMany({ syncedAt: { $lt: started } })).deletedCount ?? 0;
     const at = new Date();
-    await wb().collection('meta').updateOne({ _id: 'jira_sync' as any }, { $set: { at, by, source: creds.source, count: issues.length, complete, error: null, errorKind: null } }, { upsert: true });
+    await wb().collection('meta').updateOne({ _id: mi.meta as any }, { $set: { at, by, source: creds.source, count: issues.length, complete, error: null, errorKind: null, ...(sprintKeys ? { sprintCount: sprintKeys.size } : {}) } }, { upsert: true });
     jiraChanged([], 'sync', true);
     return { count: issues.length, removed, at, complete };
   })();
-  try { return await syncing; } catch (e: any) {
-    if (!e?.guard) await recordSyncError('voll', String(e.message));
+  locks.set(lk, { p: run, kind: 'voll' });
+  try { return await run; } catch (e: any) {
+    if (!e?.guard) await recordSyncError('voll', String(e.message), mi.site);
     throw e;
-  } finally { syncing = null; syncingKind = null; }
+  } finally { if (locks.get(lk)?.p === run) locks.delete(lk); }
 }
 
 /** Inkrementell: nur in den letzten `minutes` Minuten Geändertes holen, einspielen, Workstreams nachrechnen. Löscht nie. */
-export async function syncIncremental(creds: JiraCreds, minutes = 2): Promise<{ keys: string[]; at: Date } | null> {
-  if (syncing) return null;   // ein Vollabgleich läuft gerade
-  syncingKind = 'inkrementell';
-  syncing = (async () => {
-    const jql = `project = ${cfg.jiraProject} AND updated >= -${Math.max(1, Math.round(minutes))}m ORDER BY updated DESC`;
-    const { issues: raw } = await fetchPages(creds, jql, 500);
+export async function syncIncremental(creds: JiraCreds, minutes = 2, site?: JiraSite): Promise<{ keys: string[]; at: Date } | null> {
+  const mi = mirrorOf(site);
+  const lk = mi.col;
+  if (locks.has(lk)) return null;   // ein Abgleich dieser Seite läuft gerade
+  const run = (async () => {
+    const jql = `project = ${mi.project} AND updated >= -${Math.max(1, Math.round(minutes))}m ORDER BY updated DESC`;
+    const { issues: raw } = await fetchPages(creds, jql, 500, mi.site);
     const issues = raw.map(mapIssue);
-    const col = wb().collection('jira_issues');
+    const col = wb().collection(mi.col);
     const now = new Date();
     if (issues.length) {
-      // Workstream vorerst behalten, gleich darauf aus der ganzen Kopie neu gerechnet.
+      // Workstream (und offener Sprint) vorerst behalten, gleich darauf aus der ganzen Kopie neu gerechnet.
       await col.bulkWrite(issues.map((i) => ({ updateOne: { filter: { key: i.key }, update: { $set: { ...i, syncedAt: now } }, upsert: true } })));
     }
-    const ws = issues.length ? await recomputeWorkstreams() : [];
+    const ws = issues.length ? await recomputeWorkstreams(mi.site) : [];
     const at = new Date();
-    const meta: any = await wb().collection('meta').findOne({ _id: 'jira_sync' as any });
+    const meta: any = await wb().collection('meta').findOne({ _id: mi.meta as any });
     const clear = meta?.errorKind === 'zugang' || meta?.errorKind === 'inkrementell' ? { error: null, errorKind: null } : {};
-    await wb().collection('meta').updateOne({ _id: 'jira_sync' as any }, { $set: { incAt: at, incCount: issues.length, ...clear } }, { upsert: true });
+    await wb().collection('meta').updateOne({ _id: mi.meta as any }, { $set: { incAt: at, incCount: issues.length, ...clear } }, { upsert: true });
     const keys = [...new Set([...issues.map((i) => i.key), ...ws])];
     if (keys.length) jiraChanged(keys, 'inkrementell');
     return { keys, at };
   })();
-  try { return await syncing; } catch (e: any) {
-    await recordSyncError('inkrementell', String(e.message));
+  locks.set(lk, { p: run, kind: 'inkrementell' });
+  try { return await run; } catch (e: any) {
+    await recordSyncError('inkrementell', String(e.message), mi.site);
     throw e;
-  } finally { syncing = null; syncingKind = null; }
+  } finally { if (locks.get(lk)?.p === run) locks.delete(lk); }
 }
 
 /** Einzelnes Ticket nach einer Änderung neu in die Kopie holen (Workstreams der Kinder werden mitgerechnet). */
@@ -331,8 +363,24 @@ export function isOverdue(i: Pick<Issue, 'duedate' | 'statusCategory' | 'status'
   return !!i.duedate && i.duedate < today && i.statusCategory !== 'done' && i.status !== 'Done' && !isRecurring(i);
 }
 
-export function boardModel(issues: (Issue & { hygiene?: unknown[] })[], opts: { owner?: string; filter?: string; q?: string; showDone?: boolean; label?: string; keys?: Set<string>; knownGoals?: Set<string> } = {}) {
-  const ws = issues.filter((i) => i.type === 'Workstream');
+/** Spalten einer weiteren Seite: die vorkommenden Status nach Jira-Kategorie (neu → in Arbeit → fertig), dann nach Name. */
+export function siteColumns(issues: Pick<Issue, 'status' | 'statusCategory'>[]): string[] {
+  const rank = (c?: string) => (c === 'new' ? 0 : c === 'done' ? 2 : 1);
+  const cat = new Map<string, number>();
+  for (const i of issues) if (!cat.has(i.status)) cat.set(i.status, rank(i.statusCategory));
+  return [...cat.keys()].sort((a, b) => cat.get(a)! - cat.get(b)! || a.localeCompare(b, 'de'));
+}
+
+export function boardModel(issues: (Issue & { hygiene?: unknown[] })[], opts: { owner?: string; filter?: string; q?: string; showDone?: boolean; label?: string; keys?: Set<string>; knownGoals?: Set<string>; laneType?: string; columns?: string[]; pmRules?: boolean } = {}) {
+  // Bahnen-Typ und Spalten je Seite (17c): PM = Workstreams und die festen Spalten; weitere Seiten = Epics und ihre Status.
+  const LT = opts.laneType ?? 'Workstream';
+  const COLS = opts.columns ?? STATUS_COLUMNS;
+  // PM-Regeln (Ziel nötig, Datum nötig) nur auf der Hauptseite; weitere Seiten: `fremd` (keine Ziel-/Datums-Mahnung).
+  const pm = opts.pmRules ?? true;
+  const noGoalOf = (x: Issue) => (pm ? needsGoal(x, byKey, opts.knownGoals) : false);
+  const extra = pm ? {} : { fremd: true };
+  const ws = issues.filter((i) => i.type === LT);
+  const isSub = (i: Pick<Issue, 'type'>) => /^sub-?task$/i.test(i.type);   // Jira: „Sub-task“, team-verwaltet „Subtask“
   const names = new Map(ws.map((w) => [w.key, w.summary]));
   const today = new Date().toISOString().slice(0, 10);
   const byKey = new Map(issues.map((i) => [i.key, i]));
@@ -350,45 +398,45 @@ export function boardModel(issues: (Issue & { hygiene?: unknown[] })[], opts: { 
     return true;
   };
   // Sub-tasks mit Parent in der Kopie hängen unter ihrer Karte; ohne Parent sind sie „kaputt“ und eigene Karten.
-  const nested = (i: Issue) => i.type === 'Sub-task' && !!i.parent && byKey.has(i.parent) && byKey.get(i.parent)!.type !== 'Workstream';
+  const nested = (i: Issue) => isSub(i) && !!i.parent && byKey.has(i.parent) && byKey.get(i.parent)!.type !== LT;
   const children = new Map<string, Issue[]>();
   for (const i of issues) if (nested(i)) children.set(i.parent!, [...(children.get(i.parent!) ?? []), i]);
-  const cards = issues.filter((i) => i.type !== 'Workstream' && !nested(i)).flatMap((i) => {
+  const cards = issues.filter((i) => i.type !== LT && !nested(i)).flatMap((i) => {
     const subs = (children.get(i.key) ?? []).slice().sort((a, b) => a.key.localeCompare(b.key, 'de', { numeric: true }))
-      .map((s) => ({ ...s, overdue: isOverdue(s, today), match: matches(s), noGoal: needsGoal(s, byKey, opts.knownGoals) }));
+      .map((s) => ({ ...s, overdue: isOverdue(s, today), match: matches(s), noGoal: noGoalOf(s), ...extra }));
     const self = matches(i);
     const viaSub = subs.some((s) => s.match && !oldDone(s));
     if (!self && !viaSub) return [];
     if (!opts.showDone && oldDone(i) && !viaSub) return [];
-    const broken = i.type === 'Sub-task' ? (i.parent ? (byKey.get(i.parent)?.type === 'Workstream' ? 'Sub-task direkt unter Workstream' : 'Parent nicht in der Kopie') : 'Sub-task ohne Parent')
-      : !i.parent ? 'ohne Parent — keinem Workstream zugeordnet' : null;
-    return [{ ...i, subtasks: subs, subtaskDone: subs.filter(isDoneI).length, broken, onlyViaSubtask: !self, noGoal: needsGoal(i, byKey, opts.knownGoals) }];
+    const broken = isSub(i) ? (i.parent ? (byKey.get(i.parent)?.type === LT ? `Sub-task direkt unter ${LT}` : 'Parent nicht in der Kopie') : 'Sub-task ohne Parent')
+      : !i.parent ? (LT === 'Workstream' ? 'ohne Parent — keinem Workstream zugeordnet' : null) : null;
+    return [{ ...i, subtasks: subs, subtaskDone: subs.filter(isDoneI).length, broken, onlyViaSubtask: !self, noGoal: noGoalOf(i), ...extra }];
   });
-  const statuses = [...STATUS_COLUMNS, ...[...new Set(cards.map((c) => c.status))].filter((s) => !STATUS_COLUMNS.includes(s)).sort()];
+  const statuses = [...COLS, ...[...new Set(cards.map((c) => c.status))].filter((s) => !COLS.includes(s)).sort()];
   // Ohne Filter: Bahnen für alle Workstreams, auch ohne sichtbare Kinder (PM-223); alte erledigte nur mit showDone.
   const filtered = !!(opts.owner || opts.filter || opts.q || opts.label || opts.keys);
   const wsLanes = filtered ? [] : ws.filter((w) => opts.showDone || !oldDone(w)).map((w) => w.key);
   const laneKeys = [...new Set([...wsLanes, ...cards.map((c) => c.workstream ?? '—')])];
   const lanes = laneKeys.map((k) => ({
     key: k,
-    name: k === '—' ? 'Ohne Workstream' : names.get(k) ?? k,
+    name: k === '—' ? (LT === 'Workstream' ? 'Ohne Workstream' : `Ohne ${LT}`) : names.get(k) ?? k,
     workstream: ws.find((w) => w.key === k) ?? null,
-    head: (() => { const w = byKey.get(k); return w && w.type === 'Workstream' ? { status: w.status, owner: w.assignee ?? null, duedate: w.duedate ?? null, overdue: isOverdue(w, today), done: isDoneI(w) } : null; })(),
+    head: (() => { const w = byKey.get(k); return w && w.type === LT ? { status: w.status, owner: w.assignee ?? null, duedate: w.duedate ?? null, overdue: isOverdue(w, today), done: isDoneI(w) } : null; })(),
     columns: Object.fromEntries(statuses.map((s) => [s, cards.filter((c) => (c.workstream ?? '—') === k && c.status === s)
       .sort((a, b) => (a.duedate ?? '9999').localeCompare(b.duedate ?? '9999'))])),
     count: cards.filter((c) => (c.workstream ?? '—') === k).length,
   })).sort((a, b) => (a.key === '—' ? 1 : b.key === '—' ? -1 : a.name.localeCompare(b.name, 'de')));
-  const owners = [...new Set(issues.filter((i) => i.type !== 'Workstream').map((i) => i.assignee ?? '—'))].sort((a, b) => a.localeCompare(b, 'de'));
+  const owners = [...new Set(issues.filter((i) => i.type !== LT).map((i) => i.assignee ?? '—'))].sort((a, b) => a.localeCompare(b, 'de'));
   return {
     statuses, lanes, owners,
     totals: {
       cards: cards.length,
       subtasks: cards.reduce((n, c) => n + c.subtasks.length, 0),
-      broken: cards.filter((c) => c.broken && c.type === 'Sub-task').length,
-      orphans: cards.filter((c) => c.broken && c.type !== 'Sub-task').length,
-      overdue: issues.filter((i) => i.type !== 'Workstream' && isOverdue(i, today)).length,
-      undated: issues.filter((i) => i.type !== 'Workstream' && !i.duedate && !isDoneI(i) && !isRecurring(i)).length,
-      noGoal: issues.filter((i) => needsGoal(i, byKey, opts.knownGoals)).length,
+      broken: cards.filter((c) => c.broken && isSub(c)).length,
+      orphans: cards.filter((c) => c.broken && !isSub(c)).length,
+      overdue: issues.filter((i) => i.type !== LT && isOverdue(i, today)).length,
+      undated: issues.filter((i) => i.type !== LT && !i.duedate && !isDoneI(i) && !isRecurring(i)).length,
+      noGoal: pm ? issues.filter((i) => needsGoal(i, byKey, opts.knownGoals)).length : 0,
     },
   };
 }

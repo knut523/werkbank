@@ -45,7 +45,25 @@ export interface JiraMock { server: Server; port: number; writes: any[]; issues:
  *  findet frisch angelegte Tickets noch nicht (Jira-Index hinkt). Jeweils für den nächsten Aufruf. */
 export interface MockFaults { createAfter?: boolean; createBefore?: boolean; dropFields?: string[]; staleSearch?: boolean }
 
-export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: boolean; issues?: any[] } = {}): Promise<JiraMock> {
+/** Zweite Jira-Seite (17c): Projekt OLAF im Entwicklungs-Jira — Epic als Bahn, eigene Status, team-verwalteter „Subtask“. */
+export function olafIssues() {
+  const base = (key: string, summary: string, st: string, type: string, parent: string | null, owner: string | null, extra: any = {}) => ({
+    key, fields: {
+      summary, status: status(st), issuetype: { name: type }, assignee: owner ? user(owner) : null, parent: parent ? { key: parent, fields: { summary: 'x' } } : null,
+      duedate: null, priority: { name: 'Medium' }, updated: '2026-10-14T10:00:00.000+0200', created: '2026-10-01T10:00:00.000+0200',
+      description: adf(`Entwicklung ${key}: ${summary}.`), comment: { total: 0, comments: [] }, labels: [], issuelinks: [], ...extra,
+    },
+  });
+  return [
+    base('OLAF-1', 'Tarifrechner v2', 'In Progress', 'Epic', null, 'Christoph Beispiel'),
+    base('OLAF-395', 'Preisblock-API', 'In Review', 'Story', 'OLAF-1', 'Anna Test', { sprintOpen: true }),
+    base('OLAF-396', 'Tests für Preisblock', 'To Do', 'Subtask', 'OLAF-395', 'Anna Test'),
+    base('OLAF-397', 'Logging vereinheitlichen', 'To Do', 'Task', null, 'Anna Test'),
+    base('OLAF-398', 'Alte Migration', 'Done', 'Task', 'OLAF-1', 'Christoph Beispiel', { sprintOpen: true }),
+  ];
+}
+
+export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: boolean; issues?: any[]; noSprints?: boolean } = {}): Promise<JiraMock> {
   const issues = opts.issues ?? demoIssues();   // eigene Tickets: zweite Jira-Seite (Release 17b, z. B. OLAF-394)
   const writes: any[] = [];
   const faults: MockFaults = {};
@@ -68,6 +86,8 @@ export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: b
       // „updated >= -Nm“: nur Tickets, deren updated in den letzten N Minuten liegt (inkrementeller Abgleich).
       const inc = String(body.jql ?? '').match(/updated >= -(\d+)m/);
       let pool = inc ? issues.filter((i) => Date.parse(i.fields.updated) >= Date.now() - Number(inc[1]) * 60_000) : issues;
+      // „sprint in openSprints()“ (17c, Sprint-Übersicht weiterer Seiten): Testmerkmal fields.sprintOpen; noSprints → 400 wie ein Projekt ohne Sprints.
+      if (/sprint in openSprints\(\)/.test(String(body.jql ?? ''))) { if (opts.noSprints) return send(400, { errorMessages: ["Field 'sprint' does not exist"] }); pool = pool.filter((i) => i.fields.sprintOpen === true); }
       // „text ~ "x"“ / „summary ~ "x"“ (einfach: Teilwort, ohne Groß/klein); staleSearch: frisch Angelegtes fehlt noch.
       const txt = [...String(body.jql ?? '').matchAll(/\b(text|summary) ~ "([^"]*)"/g)];
       if (txt.length) {
