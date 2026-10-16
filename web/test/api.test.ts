@@ -1668,3 +1668,39 @@ test('CoS Triage (Vexa): Vorschlag in der Lage, Ja = Vorschau → Bestätigung, 
     await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
   }
 });
+
+test('CoS Nachfassen und Vorbereitung: Entwurf ohne Notiztext, Mail nie senden, Wer: offen ohne Entwurf; Termine in der Lage; nur Admin', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  try {
+    const heute = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date());
+    const ops = [
+      { art: 'neu', wer: 'Peter Test', was: 'Bericht schicken', bis: '2020-01-10', quelle: '[[2020-01-02-irgendein-meeting]]', notiz: 'GEHEIM-IM-NOTIZTEXT' },
+      { art: 'neu', was: 'Ohne Namen', bis: '2020-01-10' },
+    ];
+    const pre = await anna.req('/api/cos/zusage', { body: { ops } });
+    const w = await anna.req('/api/cos/zusage', { body: { ops, confirm: true, hash: pre.j.hash } });
+    assert.equal(w.status, 200, JSON.stringify(w.j));
+    const [idMail, idOffen] = w.j.ids as string[];
+    assert.equal((await bernd.req('/api/cos/nachfassen', { body: { id: idMail } })).status, 403);
+    const e = await anna.req('/api/cos/nachfassen', { body: { id: idMail } });
+    assert.equal(e.status, 200, JSON.stringify(e.j));
+    assert.match(e.j.text, /^Hallo Peter,\n\nkurze Erinnerung \(Meeting vom 02\.01\.\): Bericht schicken — vereinbart war bis 10\.01\.2020/);
+    assert.ok(!e.j.text.includes('GEHEIM-IM-NOTIZTEXT'));
+    assert.equal(e.j.senden, false);
+    assert.equal((await anna.req('/api/cos/nachfassen/senden', { body: { id: idMail } })).status, 400);
+    assert.equal((await anna.req('/api/cos/nachfassen', { body: { id: idOffen } })).status, 400);
+    // Termin im Register → Vorbereitung in der Lage
+    const reg = COS_REG();
+    writeFileSync(reg, readFileSync(reg, 'utf8').replace(/## Termine\n/, `## Termine\n\n- Termin ${heute} 10:00 Peter-Runde · mit: Peter Test, Knut\n`));
+    const l = await anna.req('/api/cos/lage');
+    const t = l.j.termine.find((x: any) => x.titel === 'Peter-Runde');
+    assert.ok(t, JSON.stringify(l.j.termine)); assert.equal(t.wann, 'heute'); assert.equal(t.notetaker, 'notetaker@konekto.energy');
+    assert.deepEqual(t.schuldenAnKnut.map((z: any) => z.id), [idMail]);
+    assert.ok(l.j.schulden.team.items.some((s: any) => s.id === idMail && s.ueberfaellig) || l.j.schulden.klaeren.items.some((s: any) => s.id === idMail && s.ueberfaellig));
+  } finally {
+    await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+    await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+  }
+});

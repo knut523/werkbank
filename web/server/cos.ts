@@ -4,6 +4,7 @@
 
 import type { Register, Personen, Zusage, ThemaZeile } from './cosregister.ts';
 import { seiteVon } from './cosregister.ts';
+import type { TerminKarte } from './cosvorbereitung.ts';
 
 const DAY = 86_400_000;
 export const GRENZEN = { entscheide: 7, nacht: 10, schulden: 5, blockiert: 7, themen: 8 } as const;
@@ -65,6 +66,7 @@ export interface LageInput {
   meetings: MeetingLite[]; triage: TriageLite[]; berichte: BerichtZeile[];
   roadmapFragen: number; ich: string;
   triageInfo?: { aelter: number; ohnePunkte: number };
+  termine?: TerminKarte[];
 }
 
 // ---------- Ausgabe ----------
@@ -89,6 +91,7 @@ export interface Lage {
   themen: { zeilen: Liste<ThemaLage>; ruhig: number };
   triage: Liste<TriageLite>;
   triageInfo: { aelter: number; ohnePunkte: number };
+  termine: TerminKarte[];
   unlesbar: { zeile: number; text: string; abschnitt: string }[];
   roadmapFragen: number;
 }
@@ -115,7 +118,7 @@ export function entscheide(i: Pick<LageInput, 'karten' | 'fragen' | 'triage'>): 
 export function blockiert(i: Pick<LageInput, 'karten' | 'jira'>): Blockiert[] {
   const out: Blockiert[] = [];
   for (const k of i.karten) {
-    if (k.ampel === 'blockiert') out.push({ art: 'strang', id: k.id, titel: k.titel, von: k.braucht ?? 'Strang meldet „blockiert“', seit: k.statusAt, link: k.chat ?? null });
+    if (k.ampel === 'blockiert') out.push({ art: 'strang', id: k.id, titel: k.titel, von: k.braucht ?? 'Unter-Chat meldet „blockiert“', seit: k.statusAt, link: k.chat ?? null });
     else if (k.braucht) out.push({ art: 'strang', id: k.id, titel: k.titel, von: `braucht Knut: ${k.braucht}`, seit: k.statusAt, link: k.chat ?? null });
   }
   for (const t of i.jira) {
@@ -157,10 +160,10 @@ export function jiraNacht(issues: IssueLite[], snap: Record<string, string> | nu
 export function strangNacht(karten: KarteLite[], st: Date): NachtItem[] {
   const out: NachtItem[] = [];
   for (const k of karten) {
-    if (k.startedAt && new Date(k.startedAt) > st) { out.push({ art: 'strang', text: `Strang neu: ${k.titel}`, link: k.chat ?? null, wann: k.startedAt }); continue; }
+    if (k.startedAt && new Date(k.startedAt) > st) { out.push({ art: 'strang', text: `Unter-Chat neu: ${k.titel}`, link: k.chat ?? null, wann: k.startedAt }); continue; }
     if (new Date(k.statusAt) <= st || k.running) continue;
-    if (k.ampel === 'blockiert') out.push({ art: 'strang', text: `Strang blockiert: ${k.titel}`, link: k.chat ?? null, wann: k.statusAt });
-    else if (k.ampel === 'push' || k.ampel === 'review') out.push({ art: 'strang', text: `Strang fertig: ${k.titel}`, link: k.chat ?? null, wann: k.statusAt });
+    if (k.ampel === 'blockiert') out.push({ art: 'strang', text: `Unter-Chat blockiert: ${k.titel}`, link: k.chat ?? null, wann: k.statusAt });
+    else if (k.ampel === 'push' || k.ampel === 'review') out.push({ art: 'strang', text: `Unter-Chat fertig: ${k.titel}`, link: k.chat ?? null, wann: k.statusAt });
   }
   return out.sort((a, b) => String(b.wann ?? '').localeCompare(String(a.wann ?? '')));
 }
@@ -246,6 +249,7 @@ export function baueLage(i: LageInput): Lage {
     schulden: s, themen: th,
     triage: kappe(i.triage, GRENZEN.entscheide),
     triageInfo: i.triageInfo ?? { aelter: 0, ohnePunkte: 0 },
+    termine: i.termine ?? [],
     unlesbar: [...i.register.unlesbar, ...(i.register.themenUnlesbar ?? [])],
     roadmapFragen: i.roadmapFragen,
   };
@@ -292,7 +296,7 @@ export function lageMarkdown(l: Lage, o: { links?: Record<string, string>; schre
   if (l.entscheide.gesamt > 3) z.push(`- … und ${l.entscheide.gesamt - 3} weitere → Übersicht`);
   z.push(`**Blockiert (${l.blockiert.gesamt}):** ${l.blockiert.items.slice(0, 2).map((b) => kurz(b.titel, 50) + ' – ' + kurz(b.von, 40)).join(' · ') || 'nichts'}${l.blockiert.gesamt > 2 ? ` · … +${l.blockiert.gesamt - 2}` : ''}`);
   const n = l.nacht;
-  z.push(`**Über Nacht:** PRs ${n.pr.gesamt} · Jira ${n.jira.gesamt}${n.olafjira.gesamt ? ` + OLAF ${n.olafjira.gesamt}` : ''} · Stränge ${n.strang.gesamt} · Meetings ${n.meeting.gesamt}`);
+  z.push(`**Über Nacht:** PRs ${n.pr.gesamt} · Jira ${n.jira.gesamt}${n.olafjira.gesamt ? ` + OLAF ${n.olafjira.gesamt}` : ''} · Unter-Chats ${n.strang.gesamt} · Meetings ${n.meeting.gesamt}`);
   const s = l.schulden;
   z.push(`**Wer schuldet was:** Knut ${s.knut.gesamt} · Team ${s.team.gesamt} · Partner ${s.partner.gesamt}${s.klaeren.gesamt ? ` · Seite? ${s.klaeren.gesamt}` : ''} · überfällig ${s.ueberfaellig}`);
   z.push(`**Themen:** ${l.leer ? 'Register noch leer → Einwurf' : l.themen.zeilen.items.slice(0, 4).map((t) => `${t.name} (Ball: ${t.ball || '–'})`).join(' · ') || 'ruhig'}${l.themen.ruhig ? ` · ${l.themen.ruhig} ruhig` : ''}`);

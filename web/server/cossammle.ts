@@ -9,6 +9,7 @@ import { parseFrontmatter } from './vault.ts';
 import { liesRegister, teamNamen, teamSet } from './cosregister.ts';
 import { baueLage, stichzeit, wien, dailyZeilen, debriefZeile, syncZeile, type LageInput, type KarteLite, type FrageLite, type MeetingLite, type BerichtZeile, type PrLite, type IssueLite, type Lage, type PrSnap, type TriageLite } from './cos.ts';
 import { vorschlaege } from './cosmeeting.ts';
+import { scanNotizen, vorbereitung } from './cosvorbereitung.ts';
 import type { User } from './auth.ts';
 
 export interface Quellen {
@@ -127,6 +128,7 @@ export async function sammleEingabe(u: User, q: Quellen, jetzt: Date): Promise<L
     jetzt, stichzeit: st, karten, fragen, mine: { prs: mine.prs, tickets: mine.tickets }, prs, prSnapshot: snap?.prs ?? null, jira, jiraSnapshot: snap?.jira ?? null, olafJira,
     register: { vorhanden: register.vorhanden, zusagen: register.zusagen, themen: register.themen, personen: register.personen, unlesbar: register.unlesbar, themenUnlesbar: register.themenUnlesbar, doppelt: register.doppelt },
     team: teamSet(namen), meetings: meetingsSeit(q.vaultDir, teams, st), triage, berichte, roadmapFragen: (mine.questions ?? []).filter((x: any) => !x.answer).length, ich: q.ich(u), triageInfo: { aelter: tri.aelter, ohnePunkte: tri.ohnePunkte },
+    termine: vorbereitung({ heute, notizen: scanNotizen(q.vaultDir, teams), register: { termine: register.termine, zusagen: register.zusagen, personen: register.personen } }),
   };
 }
 

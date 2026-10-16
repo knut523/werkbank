@@ -47,6 +47,7 @@ import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyTo
 import { log } from './log.ts';
 import { cosRoutes } from './cosroutes.ts';
 import { morgenTick, schnappschussTick } from './cosjob.ts';
+import { olafJira } from './cos-olafjira.ts';
 import type { Quellen as CosQuellen } from './cossammle.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
@@ -2628,10 +2629,23 @@ const cosQuellen = (): CosQuellen => ({
   uebersicht: async (u) => { const r = await uebersichtDaten(u); return { karten: r.karten, qs: r.qs, docs: r.docs }; },
   mine: async (u) => { const m = await mineFor(u, { write: false }); return { prs: m.prs, tickets: m.tickets, questions: m.questions }; },
   ich: (u) => firstName(u),
+  olafJira: (st) => olafJira(st, { creds: () => jiraCreds(null) }),   // lesend; Nachzieh-Stelle nach 17b: siteFor/browseUrl (cos-olafjira.ts)
 });
 cosRoutes({
   on, needAdmin, internalUser: (req, b) => internalUser(req, b), body, send, HttpError, vaultDir: () => cfg.vaultDir, dry: vaultDry, invalidate: invalidateIndex, log,
   quellen: () => cosQuellen(),
+  // Nachfassen (nur nach Vorschau + Bestätigung in der Oberfläche): GitHub-Kommentar am PR (Review-Art COMMENT, an den aktuellen Kopf gebunden)
+  // oder Jira-Kommentar mit Knuts Zugang. Mails werden nie gesendet.
+  nachfasser: (u) => ({
+    github: async (repo, nummer, text) => {
+      const token = await githubReadToken();
+      const now = token ? await prNowVia(token, repo, nummer).catch(() => null) : null;
+      if (!now) throw new HttpError(502, 'PR-Stand nicht lesbar (Lesetoken).');
+      if (now.state !== 'OPEN') throw new HttpError(409, `PR ist ${now.state === 'MERGED' ? 'gemergt' : 'geschlossen'} — Nachfassen nicht mehr nötig.`);
+      return postReview({ repo, number: nummer, head: now.head }, text, 'COMMENT').catch((e: any) => { throw new HttpError(502, e.message); });
+    },
+    jira: async (key, text) => { await jiraWrite(u, () => writeJira(u, key, [{ type: 'comment', text }])); },
+  }),
   themenVorschlag: async () => {
     const ws = (await wb().collection('jira_issues').distinct('workstream')).map(String).filter(Boolean);
     const th = (await orchRuns().distinct('thema')).map(String).filter(Boolean);

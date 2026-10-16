@@ -5,6 +5,8 @@ import { liesRegister, schreibeZusagen, schreibeThema, teamNamen, teamSet, seite
 import { startEinwurf, EinwurfError } from './coseinwurf.ts';
 import { sammleLage, meetingTeams, type Quellen } from './cossammle.ts';
 import { triageUebernehmen, pruefeDatei } from './cosmeeting.ts';
+import { entwurfFuer, senden as nachfassSenden, type Senden } from './cosnachfassen.ts';
+import { wienDatum } from './cosregister.ts';
 import { wb } from './db.ts';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -23,6 +25,8 @@ export interface CosDeps {
   themenVorschlag: () => Promise<string[]>;
   log: (m: string, d?: any) => void;
   quellen: () => Quellen;
+  /** Nachfass-Kommentare schicken (GitHub-Kommentar / Jira-Kommentar); in Tests ein Mock. */
+  nachfasser: (u: any) => Senden;
 }
 
 const OPS = new Set(['neu', 'aendern']);
@@ -76,6 +80,21 @@ export function cosRoutes(d: CosDeps) {
     if (process.env.COS_MORGENLAGE === 'off') return send(res, 200, { aus: true });
     const { lage } = await sammleLage(u, d.quellen());
     send(res, 200, lage);
+  });
+
+  // Nachfassen (S2.1): Entwurf lesen; Absenden nur für PR/Ticket-Quellen, mit Vorschau und Bestätigung. Mails nie.
+  on('POST', /^\/api\/cos\/nachfassen$/, async (req, res) => {
+    await d.needAdmin(req);
+    const b = await d.body(req);
+    send(res, 200, entwurfFuer(d.vaultDir(), String(b.id ?? ''), wienDatum()));
+  });
+  on('POST', /^\/api\/cos\/nachfassen\/senden$/, async (req, res) => {
+    const u = await d.needAdmin(req);
+    const b = await d.body(req);
+    const o = await opts(b, 'zusagen');
+    const r = await nachfassSenden(d.vaultDir(), String(b.id ?? ''), { ...o, sender: d.nachfasser(u) });
+    if (r.ok) d.log('cos nachgefasst', { user: u.id, id: r.id, ziel: r.ziel });
+    send(res, 200, r);
   });
 
   // Meeting-Triage (S1.3): ohne confirm Vorschau, mit confirm schreiben; art=nein blendet den Vorschlag aus (Mongo, Vault unverändert).

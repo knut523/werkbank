@@ -78,7 +78,7 @@ test('③ Jira: neu, erledigt, Status geändert; Aktualisierung ohne Statuswechs
 
 test('③ Stränge: neu, fertig, blockiert; laufende nicht', () => {
   const n = strangNacht([karte({ id: 'a', titel: 'A', startedAt: '2026-10-16T01:00:00Z' }), karte({ id: 'b', titel: 'B' }), karte({ id: 'c', titel: 'C', ampel: 'blockiert' }), karte({ id: 'd', titel: 'D', running: true, ampel: 'laeuft' }), karte({ id: 'e', titel: 'E', statusAt: '2026-10-01T00:00:00Z' })], ST);
-  assert.deepEqual(n.map((x) => x.text).sort(), ['Strang blockiert: C', 'Strang fertig: B', 'Strang neu: A']);
+  assert.deepEqual(n.map((x) => x.text).sort(), ['Unter-Chat blockiert: C', 'Unter-Chat fertig: B', 'Unter-Chat neu: A']);
 });
 
 const REG = `## Offen

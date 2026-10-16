@@ -23,7 +23,7 @@ function Mehr({ n, href }: { n: number; href?: string }) {
 export function EntscheidZeile({ e, onDone }: { e: any; onDone: () => void }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
-  const wartet = e.wartet && e.strang ? <span className="ub-amp u-dich" title="Ein Strang wartet auf diese Antwort">blockiert: {e.strang.titel || 'Strang'}</span> : null;
+  const wartet = e.wartet && e.strang ? <span className="ub-amp u-dich" title="Ein Unter-Chat wartet auf diese Antwort">blockiert: {e.strang.titel || 'Unter-Chat'}</span> : null;
   const kopf = <div className="ub-row"><b className="small">{e.titel}</b>{wartet}<span className="tiny mut">{seitText(e.seit)}</span></div>;
   if (e.art === 'frage') {
     const q = { id: e.id, title: e.titel, recommendation: e.empfehlung, options: (e.optionen ?? []).map((label: string) => ({ label })), context: '' };
@@ -185,7 +185,7 @@ export function Morgenlage({ onChange }: { onChange: () => void }) {
         </div>
         <details className="cos-block" data-testid="cos-nacht" open={nachtN > 0 && nachtN <= 12}>
           <summary><h3 style={{ display: 'inline' }}>③ Über Nacht geändert <span className="tiny mut">{nachtN}</span></h3></summary>
-          {(['pr', 'jira', 'olafjira', 'strang', 'meeting'] as const).map((k) => n[k].gesamt > 0 && <div key={k}><h4>{{ pr: 'GitHub', jira: 'Jira PM', olafjira: 'Jira OLAF', strang: 'Stränge', meeting: 'Meetings' }[k]}</h4>
+          {(['pr', 'jira', 'olafjira', 'strang', 'meeting'] as const).map((k) => n[k].gesamt > 0 && <div key={k}><h4>{{ pr: 'GitHub', jira: 'Jira PM', olafjira: 'Jira OLAF', strang: 'Unter-Chats', meeting: 'Meetings' }[k]}</h4>
             <ul>{n[k].items.map((x: any, i: number) => <li key={i} className="small">{x.link && /^https?:/.test(x.link) ? <a href={x.link} target="_blank" rel="noreferrer">{x.text}</a> : x.text}</li>)}</ul><Mehr n={n[k].weitere} /></div>)}
           {n.olafjiraFehler && <p className="tiny mut">OLAF-Jira nicht lesbar: {n.olafjiraFehler}</p>}
           {nachtN === 0 && <p className="small mut">Seit {hm(l.stand.stichzeit)} ist nichts passiert, was Aufmerksamkeit braucht.</p>}
@@ -197,10 +197,19 @@ export function Morgenlage({ onChange }: { onChange: () => void }) {
           {s.klaeren.gesamt > 0 && <div className="cos-sp"><h4>Seite klären <span className="tiny mut">{s.klaeren.gesamt}</span></h4><ul>{s.klaeren.items.map((x: any, i: number) => <SchuldZeile key={x.id ?? `k${i}`} s={x} />)}</ul></div>}
           {s.rueckfragenAnKnut > 0 && <p className="tiny mut">{s.rueckfragenAnKnut} offene Rückfragen an dich stehen oben unter ①.</p>}
         </div>
+        {(l.termine ?? []).length > 0 && <div className="cos-block" data-testid="cos-termine">
+          <h3>Termine vorbereiten <span className="tiny mut">{l.termine.length}</span></h3>
+          {l.termine.map((t: any, i: number) => <div key={i} className="cos-e" data-testid="cos-termin">
+            <p className="small"><b>{t.wann === 'heute' ? 'Heute' : 'Morgen'}{t.zeit ? ` ${t.zeit}` : ''}: {t.link ? <a href={`#/wissen/${t.link}`}>{t.titel}</a> : t.titel}</b>{t.teilnehmer.length > 0 && <span className="tiny mut"> · mit {t.teilnehmer.join(', ')}</span>}</p>
+            {t.schuldenAnKnut.length > 0 && <p className="tiny">Schulden dir: {t.schuldenAnKnut.map((z: any) => `${z.id} ${z.was}${z.ueberfaellig ? ' (überfällig)' : ''}`).join(' · ')}</p>}
+            {t.knutSchuldet.length > 0 && <p className="tiny">Du schuldest: {t.knutSchuldet.map((z: any) => `${z.id} ${z.was}${z.ueberfaellig ? ' (überfällig)' : ''}`).join(' · ')}</p>}
+            {t.letzteNotiz && <p className="tiny mut">Letzte Notiz der Serie: {t.letzteNotiz.titel} ({datumKurz(t.letzteNotiz.datum)}){t.letzteNotiz.offeneFragen.length > 0 ? ` — offen: ${t.letzteNotiz.offeneFragen.join('; ')}` : ''}{t.letzteNotiz.offeneAktionen > 0 ? ` · ${t.letzteNotiz.offeneAktionen} offene Action Items` : ''}</p>}
+            <p className="tiny mut">Notetaker einladen: {t.notetaker}</p></div>)}
+        </div>}
         <div className="cos-block" data-testid="cos-themen">
           <h3>⑤ Themen</h3>
           {l.themen.zeilen.items.length ? <ul>{l.themen.zeilen.items.map((t: any) => <li key={t.name} className="small"><b>{t.name}</b>: {t.stand || '–'} · Nächster Schritt: {t.naechster || '–'} · Ball bei <b>{t.ball || '–'}</b>
-            {t.offeneZusagen > 0 && <span className="tiny mut"> · {t.offeneZusagen} Zusagen</span>}{t.straenge > 0 && <span className="tiny mut"> · {t.straenge} Stränge</span>}</li>)}</ul> : <p className="small mut">{l.leer ? 'Noch keine Themen im Register.' : 'Alle Themen ruhig.'}</p>}
+            {t.offeneZusagen > 0 && <span className="tiny mut"> · {t.offeneZusagen} Zusagen</span>}{t.straenge > 0 && <span className="tiny mut"> · {t.straenge} Unter-Chats</span>}</li>)}</ul> : <p className="small mut">{l.leer ? 'Noch keine Themen im Register.' : 'Alle Themen ruhig.'}</p>}
           {l.themen.ruhig > 0 && <p className="tiny mut">{l.themen.ruhig} weitere Themen ohne Bewegung.</p>}
         </div>
         {l.unlesbar.length > 0 && <p className="tiny mut" data-testid="cos-unlesbar">Nicht lesbar im Register ({l.unlesbar.length}): {l.unlesbar.slice(0, 3).map((u: any) => `Zeile ${u.zeile}`).join(', ')} — bleibt unverändert, bitte von Hand prüfen.</p>}
