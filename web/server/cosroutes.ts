@@ -3,6 +3,7 @@
 
 import { liesRegister, schreibeZusagen, schreibeThema, teamNamen, teamSet, seiteVon, registerRel, CosError, type ZOp, type ThemaOp, type SchreibOpts, type SchreibErgebnis } from './cosregister.ts';
 import { startEinwurf, EinwurfError } from './coseinwurf.ts';
+import { sammleLage, type Quellen } from './cossammle.ts';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -19,6 +20,7 @@ export interface CosDeps {
   /** Themen für die Vorbefüllung (Jira-Workstreams + Strang-Themen), nur beim Anlegen der Datei gebraucht. */
   themenVorschlag: () => Promise<string[]>;
   log: (m: string, d?: any) => void;
+  quellen: () => Quellen;
 }
 
 const OPS = new Set(['neu', 'aendern']);
@@ -64,6 +66,14 @@ export function cosRoutes(d: CosDeps) {
     const b = await d.body(req);
     const op: ThemaOp = { art: 'thema', name: String(b.name ?? ''), stand: b.stand, naechster: b.naechster, ball: b.ball };
     antwort(res, await schreibeThema(op, await opts(b, 'themen')));
+  });
+
+  // Morgenlage (S1.2): immer live berechnet, die Karte zeigt ihre eigene Uhrzeit (K19).
+  on('GET', /^\/api\/cos\/lage$/, async (req, res) => {
+    const u = await d.needAdmin(req);
+    if (process.env.COS_MORGENLAGE === 'off') return send(res, 200, { aus: true });
+    const { lage } = await sammleLage(u, d.quellen());
+    send(res, 200, lage);
   });
 
   // Einwurf (S1.4): Material → Arbeitskopie + neuer Chat mit der Anleitung. Antwort: Link zum Chat.

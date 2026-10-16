@@ -46,6 +46,8 @@ import { listSkills, syncSkills } from './skills.ts';
 import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog, logShare, scratchDir } from './sharing.ts';
 import { log } from './log.ts';
 import { cosRoutes } from './cosroutes.ts';
+import { morgenTick, schnappschussTick } from './cosjob.ts';
+import type { Quellen as CosQuellen } from './cossammle.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, type JiraAction } from './jirawrite.ts';
@@ -1612,8 +1614,8 @@ on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (r
 });
 
 // Übersicht „Was fertig ist“ (docs/plan-uebersicht-handeln.md, Paket 184): je offenem Strang eine Karte, nach Thema. Nur lesen.
-on('GET', /^\/api\/uebersicht$/, async (req, res) => {
-  const u = await needAdmin(req);
+/** Karten und Rückfragen der Übersicht — eine Quelle für die Seite und für den Chief of Staff (Plan 209, K8). */
+async function uebersichtDaten(u: User) {
   const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(60).toArray()) as any[]).filter(offenFuerKnut);
   const ids = docs.map((d) => String(d._id));
   const fgs: any[] = ids.length ? await (await import('./freigabe.ts')).freigaben().find({ strand: { $in: ids }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
@@ -1626,6 +1628,12 @@ on('GET', /^\/api\/uebersicht$/, async (req, res) => {
   }).filter(Boolean) as any[];
   const imStrang = new Set(karten.map((k) => k.id));
   const lose = qs.filter((q: any) => !q.strand || !imStrang.has(String(q.strand.id)));
+  return { docs, karten, qs, lose, fragenFehler, basis };
+}
+
+on('GET', /^\/api\/uebersicht$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const { karten, lose, fragenFehler, basis } = await uebersichtDaten(u);
   // Teil B (Mockup 185): Hauptchat-Zeile und „Erledigt diese Woche“ (von Knut geprüft, 7 Tage) — nur Mongo.
   const hauptchat = await leitstandLine(u).catch(() => null);
   const seit = new Date(Date.now() - 7 * 86400_000);
@@ -2615,8 +2623,15 @@ on('GET', /^\/api\/context$/, async (req, res) => {
 });
 
 // Chief of Staff (docs/plan-chief-of-staff.md): Register, Einwurf, Morgenlage — Routen in cosroutes.ts.
+const cosQuellen = (): CosQuellen => ({
+  vaultDir: cfg.vaultDir,
+  uebersicht: async (u) => { const r = await uebersichtDaten(u); return { karten: r.karten, qs: r.qs, docs: r.docs }; },
+  mine: async (u) => { const m = await mineFor(u, { write: false }); return { prs: m.prs, tickets: m.tickets, questions: m.questions }; },
+  ich: (u) => firstName(u),
+});
 cosRoutes({
   on, needAdmin, internalUser: (req, b) => internalUser(req, b), body, send, HttpError, vaultDir: () => cfg.vaultDir, dry: vaultDry, invalidate: invalidateIndex, log,
+  quellen: () => cosQuellen(),
   themenVorschlag: async () => {
     const ws = (await wb().collection('jira_issues').distinct('workstream')).map(String).filter(Boolean);
     const th = (await orchRuns().distinct('thema')).map(String).filter(Boolean);
@@ -3073,6 +3088,15 @@ async function backgroundJobs() {
   };
   setTimeout(houseTick, 60_000);
   setInterval(houseTick, 60 * 60_000);
+
+  // Chief of Staff: Morgenlage-Seite (06:55, Nachzug 07:40) und abendlicher Vergleichsstand (Plan 209).
+  const cosTick = async () => {
+    try { const r = await morgenTick(cosQuellen(), { dry: vaultDry() }); if (r !== 'nichts' && r !== 'zu-frueh' && r !== 'aus') log('cos morgenlage', { r }); if (r === 'geschrieben' || r === 'nachgezogen') invalidateIndex(); }
+    catch (e: any) { log('cos morgenlage', { error: String(e?.message ?? e).slice(0, 200) }); }
+    try { if (await schnappschussTick()) log('cos schnappschuss'); } catch (e: any) { log('cos schnappschuss', { error: String(e?.message ?? e).slice(0, 200) }); }
+  };
+  setTimeout(cosTick, 45_000);
+  setInterval(cosTick, 60_000);
 
   // Werkbank-Feed für den Vault-Sync-Snapshot und Abgleich der Freigaben mit dem Protokoll (alle 5 min).
   const roadmapTick = async () => {

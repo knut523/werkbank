@@ -1612,3 +1612,25 @@ test('CoS Einwurf: Datei als Arbeitskopie, neuer Chat mit Anleitung, Text nicht 
   await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
   await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
 });
+
+test('CoS Morgenlage (K8/P1): eine Rückfrage steht in Lage und „Rückfragen an dich“, nach der Antwort in keinem von beiden; nur Admin', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  assert.equal((await bernd.req('/api/cos/lage')).status, 403);
+  const ask = await intern('/internal/orchestrator/questions/ask', { title: 'Flex-Pilot starten?', context: 'Umfrage fertig', options: [{ label: 'Ja', consequence: 'starten' }, { label: 'Nein', consequence: 'warten' }], recommendation: 'Ja' });
+  assert.equal(ask.status, 200, JSON.stringify(ask.j));
+  const l1 = await anna.req('/api/cos/lage');
+  assert.equal(l1.status, 200, JSON.stringify(l1.j));
+  assert.match(l1.j.stand.hhmm, /^\d\d:\d\d$/);
+  const e = l1.j.entscheide.items.find((x: any) => x.id === ask.j.id);
+  assert.ok(e, 'Frage in ①'); assert.equal(e.empfehlung, 'Ja'); assert.equal(e.art, 'frage');
+  assert.ok((await anna.req('/api/uebersicht')).j.lose.some((q: any) => q.id === ask.j.id), 'Frage in „Rückfragen an dich“');
+  assert.equal(l1.j.schulden.rueckfragenAnKnut >= 1, true);
+  const an = await anna.req(`/api/orchestrator/questions/${ask.j.id}/answer`, { body: { option: 'Ja' } });
+  assert.equal(an.status, 200, JSON.stringify(an.j));
+  assert.ok(!(await anna.req('/api/cos/lage')).j.entscheide.items.some((x: any) => x.id === ask.j.id), 'weg in ①');
+  assert.ok(!(await anna.req('/api/uebersicht')).j.lose.some((q: any) => q.id === ask.j.id), 'weg in „Rückfragen an dich“');
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+});

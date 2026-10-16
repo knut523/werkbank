@@ -13,12 +13,13 @@ import { OrchQuestions } from '../orchquestions.tsx';
 import { HygienePanel } from '../components.tsx';
 import { G0Blocked, LiveGroup, RunCard } from './Heute.tsx';
 import { Bericht, Review, StartHauptchat } from './Leitstand.tsx';
+import { Morgenlage } from './Morgenlage.tsx';
 
 const AMP: Record<string, string> = { push: 'u-push', review: 'u-dich', laeuft: 'u-run', blockiert: 'u-bad' };
 const PREFIX = 'wb-uebersicht:';
 
 /** Zustand im localStorage (je Schlüssel); `leer` wird nicht gespeichert, sondern gelöscht. */
-function useStored<T>(key: string, leer: T): [T, (v: T) => void] {
+export function useStored<T>(key: string, leer: T): [T, (v: T) => void] {
   const [v, setV] = useState<T>(() => { try { const s = localStorage.getItem(PREFIX + key); return s ? JSON.parse(s) : leer; } catch { return leer; } });
   const set = (n: T) => {
     setV(n);
@@ -30,10 +31,10 @@ function useStored<T>(key: string, leer: T): [T, (v: T) => void] {
 const is409 = (e: any) => e?.status === 409;   // Stand veraltet / Unter-Chat arbeitet → neu laden, Entwurf bleibt
 const kurzText = (t: string, n = 140) => (t.length > n ? t.slice(0, n - 1) + '…' : t);
 
-type Art = 'ja' | 'nein' | 'anders';
+export type Art = 'ja' | 'nein' | 'anders';
 
 /** Eine Frage, eine Antwort: Ja (= Empfehlung) · Nein · Anders … (Textfeld). Ja/Nein gehen mit einem Klick ab. */
-function JaNeinAnders({ k, empfehlung, disabled, onSend, extra }: { k: string; empfehlung?: string | null; disabled?: boolean; onSend: (art: Art, text: string) => Promise<void>; extra?: ReactNode }) {
+export function JaNeinAnders({ k, empfehlung, disabled, onSend, extra }: { k: string; empfehlung?: string | null; disabled?: boolean; onSend: (art: Art, text: string) => Promise<void>; extra?: ReactNode }) {
   const [anders, setAnders] = useStored<string | null>(`${k}:anders`, null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
@@ -103,7 +104,7 @@ function Entscheiden({ k, onDone }: { k: any; onDone: () => void }) {
 }
 
 /** Rückfrage des Orchestrators (q-…): Ja = empfohlene Option, Nein, Anders = andere Option und/oder Text. */
-function Rueckfrage({ q, onDone, ohneTitel }: { q: any; onDone: () => void; ohneTitel?: boolean }) {
+export function Rueckfrage({ q, onDone, ohneTitel }: { q: any; onDone: () => void; ohneTitel?: boolean }) {
   const toast = useToast();
   const opts: any[] = q.options ?? [];
   const rec = opts.find((o) => o.label === q.recommendation) ?? opts.find((o) => String(q.recommendation ?? '').startsWith(o.label));
@@ -342,6 +343,8 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
       {d.dryRun && <p className="ub-amp u-dich">Vorschau (Trockenlauf): Antworten an Agenten sind aus.</p>}
       {x?.fragenFehler && <p className="ub-amp u-bad" role="alert">Rückfragen gerade nicht lesbar — hier fehlen evtl. offene Fragen. Später neu laden.</p>}
       {u.error ? <Err e={u.error} /> : null}
+
+      {admin && <Morgenlage onChange={neu} />}
 
       {admin && <div className="ub-card soft ub-hc" data-testid="ub-hauptchat">
         <span className={`ub-dot d-${hcFarbe}`} aria-hidden /><b>Hauptchat</b>

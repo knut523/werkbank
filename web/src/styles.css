@@ -594,3 +594,20 @@ details.ub-card > summary::-webkit-details-marker { display: none; }
 .bereich-bar.page { padding-top: 14px; padding-bottom: 0; }
 .bereich-bar .tabs { margin-bottom: 0; }
 .embedded .bereich-bar.page { padding-top: 14px; }
+
+/* Chief of Staff — Morgenlage (Plan 209) */
+.cos { gap: 12px; border-left: 4px solid var(--border-heavy, #6b7280); }
+.cos h2 { margin: 0; font-size: 1.15rem; }
+.cos h3 { margin: 0 0 4px; font-size: 1rem; }
+.cos h4 { margin: 8px 0 2px; font-size: .9rem; }
+.cos ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 3px; }
+.cos-block { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border-light); }
+.cos-e { padding: 8px 10px; background: var(--surface-secondary); border-radius: 8px; display: grid; gap: 4px; }
+.cos-spalten { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.cos-sp { min-width: 0; }
+.cos-s.ueber > .small { color: var(--text-primary); }
+.cos-leer { background: var(--surface-secondary); padding: 8px 10px; border-radius: 8px; }
+.cos-nf, .cos-vorschau { margin-top: 6px; padding: 8px; background: var(--surface-secondary); border-radius: 8px; display: grid; gap: 6px; }
+.cos-einwurf { gap: 8px; }
+.cos-einwurf textarea, .cos-einwurf input[type=text] { width: 100%; box-sizing: border-box; }
+@media (max-width: 600px) { .cos-spalten { grid-template-columns: 1fr; } }
