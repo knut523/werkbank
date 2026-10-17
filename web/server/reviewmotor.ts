@@ -152,6 +152,8 @@ export async function basisVon(wt: string, o: { git?: Git; bevorzugt?: string | 
 }
 
 export const motorAn = (env = process.env) => env.WERKBANK_REVIEW_MOTOR !== '0';
+/** Stufe deep mit Ausführung (S7b) — erst eingeschaltet, wenn der Läufer und sein Rückweg eingerichtet sind (D4). Vorgabe aus. */
+export const deepAn = (env = process.env) => env.WERKBANK_REVIEW_DEEP === '1';
 
 /** Abschnitt für den Review-Auftrag: Prüfliste und Vorlauf als feste Grundlage, Ergebnisformat. */
 export function motorAbschnitt(paket: string): string {

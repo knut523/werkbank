@@ -567,6 +567,12 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       }
       const u = await deps.userById(r.ownerId);
       if (!u) throw Object.assign(new Error('Besitzer des Auto-Reviews nicht gefunden'), { endgueltig: true });
+      // Plan 213 S4b: „Review starten“ aus dem Workspace kennt den Kopf nicht — der aktuelle Stand des PR gilt.
+      if (!r.head) {
+        r.head = pr?.head ?? null;
+        if (!r.head) throw new Error('Kopf des PR unbekannt (GitHub nicht erreichbar)');
+        await reviewsCol().updateOne({ _id: r._id }, { $set: { head: r.head } });
+      }
       const wt = await prepareWorktree(r.repo, r.number, r.head, deps.git);
       const paket = nextPaket(r.repo, r.number);
       const dir = join(reviewDir(), paket);

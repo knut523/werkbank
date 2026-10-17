@@ -12,7 +12,7 @@ import { Timebox } from './pages/Timebox.tsx';
 import { Ziele } from './pages/Ziele.tsx';
 import { Uebersicht } from './pages/Uebersicht.tsx';
 import { HeuteNeu, InboxSeite } from './pages/HeuteNeu.tsx';
-import { ArbeitUnterchats } from './pages/Arbeit.tsx';
+import { ArbeitUnterchats, ArbeitReviews } from './pages/Arbeit.tsx';
 import { useTodayCount } from './beimir.tsx';
 
 function useHash() {
@@ -198,7 +198,7 @@ export function App() {
     // Plan 213 S3: neue Seiten der Navigation Heute · Arbeit · Wissen (alte Adressen führen weiter zu ihren Seiten).
     : neu && /^#\/inbox/.test(hash) ? <InboxSeite />
     : neu && HEUTE.match.test(hash) ? <HeuteNeu cfg={cfg} />
-    : neu && /^#\/arbeit\/reviews/.test(hash) ? <Roadmap cfg={cfg} hash="#/roadmap/prs" />
+    : neu && /^#\/arbeit\/reviews/.test(hash) ? (user.role === 'ADMIN' ? <ArbeitReviews /> : <Roadmap cfg={cfg} hash="#/roadmap/prs" />)
     : neu && /^#\/arbeit/.test(hash) ? (user.role === 'ADMIN' ? <ArbeitUnterchats cfg={cfg} /> : <Uebersicht cfg={cfg} hash="#/" />)
     : neu && /^#\/ablage/.test(hash) ? <Dateien cfg={cfg} />
     : /^#\/wissen/.test(hash) ? <Wissen cfg={cfg} hash={hash} />
