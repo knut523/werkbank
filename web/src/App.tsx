@@ -84,6 +84,8 @@ export function App() {
   const [menu, setMenu] = useState(false);
   const todayN = useTodayCount(hash, !!cfg?.user && cfg?.features?.heute !== false);
   useEffect(() => setMenu(false), [hash]);
+  // Plan 213 S0: Seitenaufruf zählen (nur die Seite, keine Inhalte) — Grundlage für „erst messen, dann umziehen“.
+  useEffect(() => { if (cfg?.user) api('/api/nutzung/seite', { method: 'POST', body: { seite: hash } }).catch(() => {}); }, [hash, cfg?.user?.id]);
   // Die Roadmap-Tabelle in Wissen ist entfallen (Paket 187, S6): die alte Adresse führt zur Roadmap.
   // Ohne Freigabe „roadmap“ bleibt die Tabelle in Wissen (Team-Nutzer verlieren nichts).
   useEffect(() => { if (cfg?.user && cfg.features?.roadmap !== false && /^#\/wissen\/~roadmap/.test(hash)) window.location.replace('#/roadmap'); }, [hash, cfg]);
