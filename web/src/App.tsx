@@ -242,7 +242,7 @@ export function App() {
           {current ? <>{current.ico} {current.label}</> : 'Menü'}
           {/* Auf der Übersicht steht der Zähler am Namen („Übersicht 10“), sonst als Hinweis daneben („· Übersicht 10“) — nie beides. */}
           {current?.href === '#/' && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span>
-            : !menu && <span className="menu-more">· {todayN ? `Übersicht ${todayN}` : `${nav.length + more.length - (current ? 1 : 0)} weitere`}</span>}<span aria-hidden>{menu ? '▴' : '▾'}</span>
+            : !menu && <span className="menu-more">· {todayN ? `${START.label} ${todayN}` : `${nav.length + more.length - (current ? 1 : 0)} weitere`}</span>}<span aria-hidden>{menu ? '▴' : '▾'}</span>
         </button>
         <nav className="nav col" id="werkbank-nav" style={{ gap: 2 }}>
           <a href={cfg.librechatUrl} className="" title="Zurück zum Chat (LibreChat)"><span className="ico">💬</span>Chat</a>
