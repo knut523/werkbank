@@ -50,13 +50,17 @@ export async function meliousPassC(u: User, o: { wt: string; basis: string; zwec
   if (!key) return nein('kein Melious-Schlüssel', brief.energie);
   const env: Record<string, string> = { PATH: `${SHIM()}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: key };
   const out = await new Promise<{ code: number | null; stdout: string; stderr: string }>((res) => {
-    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', '--model', 'glm-5.3-flash', '--tools', 'read,bash,agentgrep', 'run', '--json', jcodePrompt(o.basis, brief.text)], { cwd: o.wt, env });
-    let so = '', se = '';
-    c.stdout.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
-    c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
-    const timer = setTimeout(() => c.kill('SIGTERM'), (o.timeoutS ?? 1500) * 1000);
-    c.on('close', (code) => { clearTimeout(timer); res({ code, stdout: so, stderr: se }); });
-    c.on('error', () => { clearTimeout(timer); res({ code: -1, stdout: so, stderr: se }); });
+    // stdin zu (nichts wartet auf Eingabe); nach dem Zeitlimit SIGTERM, 30 s später SIGKILL und spätestens dann fertig.
+    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', '--model', 'glm-5.3-flash', '--tools', 'read,bash,agentgrep', 'run', '--json', jcodePrompt(o.basis, brief.text)], { cwd: o.wt, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let so = '', se = '', fertig = false;
+    const ende = (code: number | null) => { if (fertig) return; fertig = true; clearTimeout(t1); clearTimeout(t2); res({ code, stdout: so, stderr: se }); };
+    c.stdout!.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
+    c.stderr!.on('data', (b) => { se = (se + b).slice(-20_000); });
+    const ms = (o.timeoutS ?? 1500) * 1000;
+    const t1 = setTimeout(() => c.kill('SIGTERM'), ms);
+    const t2 = setTimeout(() => { c.kill('SIGKILL'); ende(-2); }, ms + 30_000);
+    c.on('close', (code) => ende(code));
+    c.on('error', () => ende(-1));
   });
   let j: any = null; try { j = JSON.parse(out.stdout); } catch { /* unten */ }
   let energie = brief.energie;
@@ -70,6 +74,7 @@ export async function meliousPassC(u: User, o: { wt: string; basis: string; zwec
     } catch { /* ohne Sitzungsdatei: nur der Prüfauftrag gebucht */ }
   }
   if (out.code !== 0 || !j?.text) return nein(`jcode-Lauf fehlgeschlagen (Exit ${out.code})`, energie);
-  const text = `# Prüfauftrag (glm-5.3)\n\n${brief.text}\n\n# Review (jcode + glm-5.3-flash)\n\n${String(j.text)}\n`;
+  // Der Schlüssel darf nie im Ergebnis stehen (es geht an den Strang und von dort ggf. in einen Kommentar).
+  const text = `# Prüfauftrag (glm-5.3)\n\n${brief.text}\n\n# Review (jcode + glm-5.3-flash)\n\n${String(j.text)}\n`.split(key).join('***');
   return { ok: true, text, energie: Math.round(energie), ms: Date.now() - t0 };
 }

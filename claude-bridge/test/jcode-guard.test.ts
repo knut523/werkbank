@@ -28,6 +28,14 @@ test('jcode-Wächter: die eval-Hülle von jcode 0.98 wird ausgepackt und ihr Inh
   assert.equal(existsSync('/tmp/jcode-guard-probe2'), false);
 });
 
+test('jcode-Wächter (17c): Umgebung und /proc nicht lesbar, Schlüssel nicht in der Shell', () => {
+  const env = { ...process.env, PATH: `${SHIM}:${process.env.PATH}`, JCODE_PROVIDER_MELIOUS_API_KEY: 'sk-mel-probe-nur-test-123' };
+  const r = (c: string) => spawnSync('bash', ['-c', c], { env, encoding: 'utf8' });
+  for (const c of ['env', 'printenv', 'cat /proc/self/environ', 'ls /proc/1', 'export -p', 'grep -a sk /proc/self/environ']) assert.equal(r(c).status, 126, c);
+  // ein erlaubter Befehl läuft weiter
+  assert.equal(r('ls /').status, 0);
+});
+
 test('jcode: Schreiben außerhalb des Arbeitsordners wird erkannt', () => {
   const sj = { messages: [{ content: [
     { type: 'tool_use', name: 'write', input: { file_path: '/home/x/.bashrc' } },
