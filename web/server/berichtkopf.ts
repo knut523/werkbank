@@ -5,7 +5,7 @@ import { parse as parseYaml } from 'yaml';
 
 export type KopfStatus = 'bereit_fuer_github' | 'wartet_auf_knut' | 'blockiert';
 export interface KopfReview { titel: string; url?: string; login?: string; screenshot?: string; pr_text?: string }
-export interface KopfFrage { id: string; frage: string; empfehlung: string; antwort: string }
+export interface KopfFrage { id: string; frage: string; empfehlung: string; antwort: string; stufe?: 'wichtig' | 'normal' }
 export interface KopfGithub { repo: string; zweig: string; commit: string; was?: string; pr_text?: string; pr?: string }
 // Exec Summary (C.7): titel, worum, anders; „Was du tun musst“ ist `offen`.
 export interface Kopf { status: KopfStatus; titel: string; worum: string; anders: string[]; offen: string[]; review: KopfReview[]; fragen: KopfFrage[]; github: KopfGithub[] }
@@ -39,7 +39,7 @@ export function berichtKopf(text: string | null | undefined): Kopf | { fehler: s
     const frage = str(f.frage, 600);
     if (!frage) return null;
     const id = /^(D\d{1,3}|E-\d{1,4}-\d{1,3}|F\d{1,3})$/.test(str(f.id, 20)) ? str(f.id, 20) : `F${i + 1}`;
-    return { id, frage, empfehlung: str(f.empfehlung, 600), antwort: str(f.antwort, 600) };
+    return { id, frage, empfehlung: str(f.empfehlung, 600), antwort: str(f.antwort, 600), ...(f.stufe === 'wichtig' || f.stufe === 'normal' ? { stufe: f.stufe } : {}) };
   }).filter((x): x is KopfFrage => !!x);
   const github: KopfGithub[] = list(y.github).slice(0, 6).map((g: any) => {
     if (!g || typeof g !== 'object') return null;

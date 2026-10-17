@@ -814,7 +814,9 @@ export interface AskInput { title: string; context: string; options?: { label: s
   key?: string | null;
   /** Herkunft; für Automaten (`drift`) höchstens AUTO_PRO_TAG neue Fragen je Tag (429). */
   quelle?: string | null;
-  g0?: { kriterien: string[]; ergebnis: string; belege?: string[] } | null }
+  g0?: { kriterien: string[]; ergebnis: string; belege?: string[] } | null;
+  /** Wichtigkeit (Knut 17.10.): „wichtig“ = Knut muss selbst entscheiden; „normal“ stuft eine Regel-Einstufung nie herunter (stufe.ts). */
+  stufe?: 'wichtig' | 'normal' | null }
 
 export const AUTO_PRO_TAG = 5;
 
@@ -849,14 +851,14 @@ export async function askKnut(u: User, inp: AskInput) {
   let id: string;
   do { id = 'q-' + randomUUID().slice(0, 6); } while (await questions().findOne({ _id: id as any }));
   const doc: any = { _id: id, userId: u.id, title, context, options, recommendation, strand, link, plan: inp.plan ? String(inp.plan).slice(0, 500) : null, createdAt: new Date(), status: 'offen', answer: null,
-    ...(key ? { key, keyActive: key } : {}), ...(quelle ? { quelle, day: vienna().date } : {}), ...(inp.g0 ? { g0: inp.g0 } : {}) };
+    ...(key ? { key, keyActive: key } : {}), ...(quelle ? { quelle, day: vienna().date } : {}), ...(inp.g0 ? { g0: inp.g0 } : {}), ...(inp.stufe === 'wichtig' || inp.stufe === 'normal' ? { stufe: inp.stufe } : {}) };
   try { await questions().insertOne(doc); }
   catch (e: any) { if (e?.code === 11000) throw err(409, `Schlüssel ${key} ist schon vergeben — keine zweite Frage.`); throw e; }
   return publicQuestion(doc);
 }
 
 export function publicQuestion(d: any) {
-  return { id: String(d._id), kind: d.kind ?? 'frage', title: d.title, context: d.context, options: d.options ?? [], recommendation: d.recommendation, strand: d.strand ?? null, link: d.link ?? null, plan: d.plan ?? null, createdAt: d.createdAt, status: d.status, answer: d.answer ?? null, key: d.key ?? null, quelle: d.quelle ?? null };
+  return { id: String(d._id), kind: d.kind ?? 'frage', title: d.title, context: d.context, options: d.options ?? [], recommendation: d.recommendation, strand: d.strand ?? null, link: d.link ?? null, plan: d.plan ?? null, createdAt: d.createdAt, status: d.status, answer: d.answer ?? null, key: d.key ?? null, quelle: d.quelle ?? null, stufe: d.stufe ?? null };
 }
 
 export async function listQuestions(u: User, opts: { open?: boolean; limit?: number } = {}) {
@@ -871,7 +873,7 @@ export async function getQuestion(u: User, id: string) {
 }
 
 /** Knut antwortet (Werkbank-Oberfläche): Option und/oder Freitext. Eine beantwortete Frage bleibt beantwortet. */
-export async function answerQuestion(u: User, id: string, a: { option?: string | null; text?: string | null }) {
+export async function answerQuestion(u: User, id: string, a: { option?: string | null; text?: string | null; by?: string }) {
   const d: any = await questions().findOne({ _id: id as any, userId: u.id });
   if (!d) throw err(404, 'Diese Rückfrage gibt es nicht.');
   if (d.status !== 'offen') throw err(409, d.status === 'beantwortet' ? 'Schon beantwortet.' : 'Vom Orchestrator zurückgezogen.');
@@ -879,7 +881,7 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
   const text = String(a.text ?? '').trim().slice(0, 4000);
   if (option && !(d.options ?? []).some((o: any) => o.label === option)) throw err(400, 'Unbekannte Option.');
   if (!option && !text) throw err(400, 'Option wählen oder Antwort schreiben.');
-  const answer = { option, text, at: new Date(), by: u.email };
+  const answer = { option, text, at: new Date(), by: a.by ?? u.email };
   const r = await questions().updateOne({ _id: id as any, status: 'offen' }, { $set: { status: 'beantwortet', answer } });
   if (!r.modifiedCount) throw err(409, 'Schon beantwortet.');
   // G0: jeder gewählte Knopf ins Protokoll (Fehlalarme, Kriterium „anderer Autor“ gesondert — DoD 13, 25).

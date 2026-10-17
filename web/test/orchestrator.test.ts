@@ -217,7 +217,7 @@ before(async () => {
       BRIDGE_PERMISSION_MODE: 'auto', BRIDGE_AUTO_SCOPE: 'voll', BRIDGE_AUTO_EMAILS: knut.email, WERKBANK_SKILLS_SOURCE: join(tmp, 'skills') },
     stdio: 'ignore',
   });
-  webEnv = { ...process.env, WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_TEAM_FEATURES: 'heute,orchestrator', WERKBANK_NO_JOBS: '1', WERKBANK_INSECURE_COOKIES: '1', WERKBANK_VAULT_DIR: join(tmp, 'vault'),
+  webEnv = { ...process.env, WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_TEAM_FEATURES: 'heute,orchestrator', WERKBANK_NO_JOBS: '1', WERKBANK_AUTO_ANNAHME_H: '0', WERKBANK_INSECURE_COOKIES: '1', WERKBANK_VAULT_DIR: join(tmp, 'vault'),
     WERKBANK_DB: DB, LIBRECHAT_DB: LCDB, LIBRECHAT_URL: `http://127.0.0.1:${(lcFake.address() as any).port}`, LIBRECHAT_PUBLIC_URL: 'https://chat.example',
     BRIDGE_URL: `http://127.0.0.1:${BRIDGE_PORT}`, BRIDGE_STATE_DIR: state, WERKBANK_ALLOWED_EMAILS: knut.email, WERKBANK_PILOT_EMAIL: knut.email,
     WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_SECRET, JWT_REFRESH_SECRET: REFRESH_SECRET, WERKBANK_DATA_DIR: join(tmp, 'data'),
@@ -762,4 +762,40 @@ test('deliver je Unterhaltung nacheinander (Fix 17d, Fund 6): zwei gleichzeitige
   const parents = calls.map((c) => c.body.parentMessageId);
   assert.equal(new Set(parents).size, parents.length, `keine Geschwister im Nachrichtenbaum: ${parents.join(', ')}`);
   await bridgeUntil(conv, 'bereit');
+test('Knut 17.10.: Stufen — wichtig oben und offen, normal nach Frist angenommen und im Log, Widerruf braucht einen Empfänger', async () => {
+  const cookie = await knutCookie();
+  const h = { cookie, 'content-type': 'application/json', 'x-werkbank': '1' };
+  const get = async (p: string) => { const r = await fetch(B + p, { headers: { cookie } }); return { status: r.status, j: await r.json() as any }; };
+  const post = async (p: string, b: unknown) => { const r = await fetch(B + p, { method: 'POST', headers: h, body: JSON.stringify(b) }); return { status: r.status, j: await r.json() as any }; };
+  const normal = JSON.parse((await orch(['ask', '--title', 'Stufe: Knopffarbe in der Inbox?', '--context', 'rein optisch', '--option', 'Grün', '--option', 'Blau', '--recommend', 'Grün', '--json'])).out);
+  const regel = JSON.parse((await orch(['ask', '--title', 'Stufe: Budget für Melious erhöhen?', '--context', '80 € mehr im Monat', '--recommend', 'ja', '--json'])).out);
+  const markiert = JSON.parse((await orch(['ask', '--title', 'Stufe: Reihenfolge der Schnitte?', '--context', 'x', '--recommend', 'wie geplant', '--stufe', 'wichtig', '--json'])).out);
+  const aussen = JSON.parse((await orch(['ask', '--title', 'Stufe: Kommentar auf GitHub posten?', '--context', 'x', '--recommend', 'ja', '--stufe', 'normal', '--json'])).out);
+  const ib = (await get('/api/inbox')).j.eintraege;
+  const von = (q: any) => ib.find((x: any) => x.daten?.qid === q.id);
+  assert.equal(von(normal).stufe, 'normal'); assert.ok(von(normal).autoAb, 'normal: Annahmezeit gesetzt');
+  assert.equal(von(regel).stufe, 'wichtig'); assert.match(von(regel).stufeGrund, /Geld/); assert.equal(von(regel).autoAb, null);
+  assert.equal(von(markiert).stufe, 'wichtig'); assert.equal(von(aussen).stufe, 'wichtig', 'Regel stuft „normal“ des Strangs hoch'); assert.equal(von(aussen).autoAb, null);
+  const ersteNormale = ib.findIndex((x: any) => x.stufe !== 'wichtig');
+  assert.ok(ersteNormale === -1 || ib.slice(ersteNormale).every((x: any) => x.stufe !== 'wichtig'), 'wichtige stehen oben');
+  // Lauf (Frist im Test 0 h): nur die normale wird angenommen, mit der empfohlenen Option, Autor „auto“.
+  const l = await post('/api/entscheidungen/lauf', {});
+  assert.equal(l.status, 200); assert.ok(l.j.angenommen.includes(von(normal).id));
+  assert.ok(!l.j.angenommen.includes(von(regel).id) && !l.j.angenommen.includes(von(markiert).id) && !l.j.angenommen.includes(von(aussen).id));
+  const got = JSON.parse((await orch(['questions', 'get', normal.id, '--json'])).out);
+  assert.equal(got.status, 'beantwortet'); assert.equal(got.answer.option, 'Grün'); assert.equal(got.answer.by, 'auto'); assert.match(got.answer.text, /automatisch angenommen/);
+  for (const q of [regel, markiert, aussen]) assert.equal(JSON.parse((await orch(['questions', 'get', q.id, '--json'])).out).status, 'offen');
+  // Log: automatisch + von Knut (frühere Inbox-Antworten), filterbar.
+  const auto = (await get('/api/entscheidungen?durch=auto')).j.zeilen;
+  const z = auto.find((x: any) => x.kennung === von(normal).id);
+  assert.ok(z && z.durch === 'auto' && z.stufe === 'normal' && z.widerrufbar, JSON.stringify(z));
+  assert.ok((await get('/api/entscheidungen?durch=knut')).j.zeilen.every((x: any) => x.durch === 'knut'));
+  assert.ok((await get('/api/entscheidungen?durch=knut')).j.zeilen.length >= 1, 'Antworten aus der Inbox stehen im Log');
+  // Widerruf: Text nötig; ohne Strang und ohne Hauptchat gäbe es keinen Empfänger → 409, nichts vermerkt.
+  assert.equal((await post(`/api/entscheidungen/${encodeURIComponent(z.id)}/anders`, { text: '' })).status, 400);
+  const w = await post(`/api/entscheidungen/${encodeURIComponent(z.id)}/anders`, { text: 'Blau' });
+  assert.equal(w.status, 409); assert.match(w.j.error, /Hauptchat/);
+  assert.equal((await get('/api/entscheidungen?durch=auto')).j.zeilen.find((x: any) => x.id === z.id).widerruf, null);
+  // Ein zweiter Lauf nimmt nichts doppelt an.
+  assert.ok(!(await post('/api/entscheidungen/lauf', {})).j.angenommen.includes(von(normal).id));
 });

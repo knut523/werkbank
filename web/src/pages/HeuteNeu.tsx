@@ -12,7 +12,8 @@ const ABGEBROCHEN = Symbol('abgebrochen');
 /** Nur Workspace-Adressen (#/…) und http(s) werden verlinkt — nie `javascript:` o. ä. (Pass C). */
 const sicher = (u: string | null | undefined): string | null => (u && (/^https?:\/\//.test(u) || /^#\//.test(u)) ? u : null);
 
-type Eintrag = { id: string; art: string; frage: string; empfehlung: string | null; quelle: { text: string; strand: string | null; url: string | null }; wartetSeit: string | null; blockiert: number; antworten: string[]; daten: any };
+type Eintrag = { id: string; art: string; frage: string; empfehlung: string | null; quelle: { text: string; strand: string | null; url: string | null }; wartetSeit: string | null; blockiert: number; antworten: string[]; daten: any;
+  stufe?: 'wichtig' | 'normal'; stufeGrund?: string; autoAb?: string | null };
 type HeuteDaten = { eintraege: Eintrag[]; zahl: number; zurueckgestellt: number; blockiert: any[]; geaendert: any; at: string; admin: boolean };
 
 const ART: Record<string, string> = { rueckfrage: 'Rückfrage', entscheidung: 'Entscheidung', braucht: 'Frage', push: 'Push', vault: 'Vault-Sync', pflege: 'Pflege', schlange: 'Schlange', altbestand: 'Altbestand' };
@@ -50,12 +51,13 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
       <div className="h-text">
         <div className="h-frage">{e.frage}</div>
         <div className="tiny mut">
+          {e.stufe === 'wichtig' && <><span className="chip warn" title={e.stufeGrund ?? ''} data-testid="stufe-wichtig">wichtig</span>{' '}</>}
           <span className={`chip${e.blockiert ? ' bad' : ''}`}>{ART[e.art] ?? e.art}</span>{' '}
           {e.blockiert > 0 && <span className="chip bad">blockiert {e.blockiert}</span>}{' '}
           {sicher(e.quelle.url)?.startsWith('http') ? <a href={sicher(e.quelle.url)!} target={chatTarget} rel="noreferrer">{e.quelle.text}</a> : sicher(e.quelle.url) ? <a href={sicher(e.quelle.url)!}>{e.quelle.text}</a> : e.quelle.text}
           {e.wartetSeit ? ` · wartet ${seit(e.wartetSeit)}` : ''}
         </div>
-        {e.empfehlung && <div className="tiny">Empfehlung: <b>{e.empfehlung}</b></div>}
+        {e.empfehlung && <div className="tiny">Empfehlung: <b>{e.empfehlung}</b>{e.autoAb && <span className="mut" data-testid="auto-ab"> · gilt {new Date(e.autoAb).getTime() <= Date.now() ? 'gleich' : `ab ${fmtDateTime(e.autoAb)}`} als angenommen{e.art === 'entscheidung' && (e.daten.autoIds?.length ?? 0) < (e.daten.entscheidungen?.length ?? 0) ? ` (${e.daten.autoIds.join(', ')})` : ''}</span>}</div>}
         {e.art === 'altbestand' && auf && <ul className="tiny h-liste">{(e.daten.eintraege ?? []).map((x: Eintrag) => <li key={x.id}>{x.frage} <span className="mut">({ART[x.art]}, {seit(x.wartetSeit)})</span></li>)}</ul>}
         {e.art === 'pflege' && e.daten.berichte && <ul className="tiny h-liste">{e.daten.berichte.map((b: any) => <li key={b.id}><a href={`#/leitstand?bericht=${b.id}`}>{b.titel}</a></li>)}</ul>}
         {anders !== null && <div className="ub-anders">
@@ -142,6 +144,48 @@ export function InboxSeite() {
         {arten.map((a) => <a key={a} role="tab" aria-selected={art === a} className={art === a ? 'active' : ''} href="#/inbox" onClick={(x) => { x.preventDefault(); setArt(a); }}>{ART[a] ?? a} {data.eintraege.filter((e) => e.art === a).length}</a>)}
       </nav>
       <InboxListe eintraege={liste} onDone={reload} />
+      <EntscheidungsLog />
     </div>
+  );
+}
+
+type LogZeile = { id: string; art: string; ids: string[]; frage: string; empfehlung: string | null; stufe: string | null; grund: string | null; antwort: string; durch: 'auto' | 'knut'; at: string;
+  strand: { id: string; titel: string } | null; widerruf: { at: string; text: string } | null; widerrufbar: boolean; widerrufGrund: string | null };
+
+/** Entscheidungs-Log (Knut 17.10.): was du beantwortet hast und was nach 24 h automatisch angenommen wurde — filterbar,
+ *  automatische Annahmen mit „Anders …“ widerrufbar, solange nichts darauf gebaut wurde. */
+export function EntscheidungsLog() {
+  const [durch, setDurch] = useState('');
+  const [stufe, setStufe] = useState('');
+  const { data, error, reload } = useLoad<{ zeilen: LogZeile[]; autoAnnahme: boolean; stunden: number }>(() => api(`/api/entscheidungen?tage=30${durch ? `&durch=${durch}` : ''}${stufe ? `&stufe=${stufe}` : ''}`), [durch, stufe]);
+  const toast = useToast();
+  const [offen, setOffen] = useState<string | null>(null);
+  const [text, setText] = useState('');
+  const [err, setErr] = useState<unknown>(null);
+  const widerrufen = async (id: string) => {
+    setErr(null);
+    try { await api(`/api/entscheidungen/${encodeURIComponent(id)}/anders`, { body: { text } }); toast('Widerrufen — der Unter-Chat bekommt die Korrektur'); setOffen(null); setText(''); reload(); }
+    catch (x) { setErr(x); }
+  };
+  const knopf = (wert: string, akt: string, set: (v: string) => void, label: string) => <button className={`ub-btn sm${akt === wert ? ' pri' : ' ghost'}`} aria-pressed={akt === wert} onClick={() => set(wert)}>{label}</button>;
+  return (
+    <section aria-labelledby="h-log" data-testid="entscheidungs-log">
+      <h2 id="h-log" className="h-titel">Entscheidungs-Log <span className="mut small">30 Tage{data && !data.autoAnnahme ? ' · automatische Annahme ist aus' : ''}</span></h2>
+      <div className="ub-row">{knopf('', durch, setDurch, 'Alle')}{knopf('auto', durch, setDurch, 'Automatisch')}{knopf('knut', durch, setDurch, 'Von dir')}
+        <span className="mut small"> · </span>{knopf('', stufe, setStufe, 'Jede Stufe')}{knopf('wichtig', stufe, setStufe, 'Wichtig')}{knopf('normal', stufe, setStufe, 'Normal')}</div>
+      <Err e={error ?? err} />
+      {!data ? <Loading /> : !data.zeilen.length ? <div className="ub-card soft"><p className="small mut">Noch nichts im Log.</p></div> :
+        <div className="ub-card"><ul className="plain h-liste">{data.zeilen.map((z) => <li key={z.id} data-testid="log-zeile" data-durch={z.durch}>
+          <span className={`chip${z.durch === 'auto' ? ' warn' : ''}`}>{z.durch === 'auto' ? 'nach 24 h angenommen' : 'von dir'}</span>{' '}
+          {z.stufe === 'wichtig' && <><span className="chip warn">wichtig</span>{' '}</>}
+          <b>{z.frage}</b> <span className="tiny mut">· {fmtDateTime(z.at)}{z.strand ? ` · ${z.strand.titel}` : ''}</span>
+          <div className="tiny">{z.antwort}{z.widerruf ? <span className="mut"> — widerrufen: {z.widerruf.text}</span> : null}</div>
+          {z.durch === 'auto' && !z.widerruf && (z.widerrufbar
+            ? (offen === z.id ? <div className="ub-anders"><textarea rows={2} value={text} placeholder="Was soll stattdessen gelten?" aria-label="Was soll stattdessen gelten?" onChange={(x) => setText(x.target.value)} />
+                <div className="ub-row"><button className="ub-btn pri sm" disabled={!text.trim()} onClick={() => widerrufen(z.id)}>Widerrufen</button><button className="ub-btn ghost sm" onClick={() => setOffen(null)}>Abbrechen</button></div></div>
+              : <button className="ub-btn ghost sm" onClick={() => { setOffen(z.id); setText(''); }}>Anders …</button>)
+            : <div className="tiny mut">{z.widerrufGrund}</div>)}
+        </li>)}</ul></div>}
+    </section>
   );
 }

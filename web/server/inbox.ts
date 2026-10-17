@@ -7,6 +7,7 @@
 // „Altbestand“. Freitext im Hauptchat wird nie automatisch zugeordnet; die Chat-Knöpfe tragen die Kennung.
 
 import { wienDatum, wienUm, naechsterTag } from './zustand.ts';
+import { stufeVon, autoAb, autoFaehig, ANNAHME_MS, type Stufe } from './stufe.ts';
 
 export type InboxArt ='rueckfrage' | 'entscheidung' | 'braucht' | 'push' | 'vault' | 'pflege' | 'schlange' | 'altbestand';
 export type Antwort = 'ja' | 'nein' | 'anders' | 'spaeter';
@@ -24,6 +25,10 @@ export interface InboxEintrag {
   antworten: Antwort[];
   /** Zusatz je Art (Optionen einer Rückfrage, Kennungen D1…, Kopf-SHA für den Push, Anzahl bei Sammel-Einträgen …). */
   daten: Record<string, unknown>;
+  /** Wichtigkeit (Knut 17.10.): wichtig steht oben und bleibt offen; normal gilt ab `autoAb` als angenommen (stufe.ts). */
+  stufe?: Stufe;
+  stufeGrund?: string;
+  autoAb?: string | null;
 }
 
 export const ALTBESTAND_TAGE = 14;
@@ -53,10 +58,10 @@ export function spaeterBis(now = Date.now()): Date {
 
 export interface InboxQuellen {
   /** Karten der Übersicht (uebersicht.ts → karte), nur Admin. */
-  karten: Array<{ id: string; titel: string; strangTitel?: string; running: boolean; entscheidungen: { id: string; frage: string; empfehlung: string | null }[]; berichtHash: string | null; rueckfragen: any[];
+  karten: Array<{ id: string; titel: string; strangTitel?: string; running: boolean; entscheidungen: { id: string; frage: string; empfehlung: string | null; optionen?: string; stufe?: string | null }[]; berichtHash: string | null; rueckfragen: any[];
     braucht: string | null; kannFreigeben: boolean; freigabe: any; github: { repo: string; zweig: string; commit: string }[]; statusAt: any; chat: string | null; paket: string | null; seen?: string }>;
   /** Offene Rückfragen ohne Karte (Hauptchat, Drift, G0 …). */
-  lose: Array<{ id: string; title: string; recommendation?: string | null; options?: { label: string }[]; createdAt: any; strand?: { id: string; title?: string; url?: string } | null; quelle?: string | null; key?: string | null; context?: string | null }>;
+  lose: Array<{ id: string; title: string; recommendation?: string | null; options?: { label: string }[]; createdAt: any; strand?: { id: string; title?: string; url?: string } | null; quelle?: string | null; key?: string | null; context?: string | null; kind?: string | null; stufe?: string | null }>;
   /** Fragen des Vault-Syncs (mineFor → questions/pendingApprovals). */
   vault: Array<{ id: string; text: string; at?: any }>;
   /** Offene Ticketpflege (Hygiene) — nur die Zahl, als ein Sammel-Eintrag. */
@@ -72,7 +77,7 @@ export interface InboxQuellen {
 const iso = (v: unknown): string | null => { const t = v ? new Date(v as any).getTime() : NaN; return Number.isFinite(t) ? new Date(t).toISOString() : null; };
 
 /** Einträge aus allen Quellen (rein). `spaeter`: Kennung → bis; `now` für Altbestand und Schlange. */
-export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; now?: number; schlangeAlarmMs?: number } = {}): { eintraege: InboxEintrag[]; zurueckgestellt: number } {
+export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; now?: number; schlangeAlarmMs?: number; annahmeMs?: number } = {}): { eintraege: InboxEintrag[]; zurueckgestellt: number } {
   const now = o.now ?? Date.now();
   const out: InboxEintrag[] = [];
   const kartenIds = new Set(q.karten.map((k) => k.id));
@@ -115,6 +120,7 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
     out.push({ id: 'schlange', art: 'schlange', frage: `Die Schlange steht: ${lang.length} Unter-Chat${lang.length > 1 ? 's warten' : ' wartet'} seit ${Math.round((now - aelteste) / 60_000)} min auf einen freien Platz`,
       empfehlung: 'einen laufenden Unter-Chat anhalten oder abwarten', quelle: { text: 'Brücke', strand: null, url: null }, wartetSeit: new Date(aelteste).toISOString(), blockiert: lang.length, antworten: ['spaeter'], daten: { unterchats: lang } });
   }
+  for (const e of out) mitStufe(e, o.annahmeMs ?? ANNAHME_MS);
   // Später zurückgestellt
   const spaeter = o.spaeter ?? new Map<string, number>();
   const sichtbar = out.filter((e) => !((spaeter.get(e.id) ?? 0) > now));
@@ -123,8 +129,11 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
   const alt = sichtbar.filter((e) => e.art !== 'push' && e.art !== 'schlange' && e.wartetSeit && new Date(e.wartetSeit).getTime() < grenze);
   const frisch = sichtbar.filter((e) => !alt.includes(e));
   if (alt.length) frisch.push({ id: 'altbestand', art: 'altbestand', frage: `Altbestand: ${alt.length} ${alt.length === 1 ? 'Frage ist' : 'Fragen sind'} älter als ${ALTBESTAND_TAGE} Tage — durchsehen oder alle verwerfen`, empfehlung: 'alle verwerfen',
-    quelle: { text: 'Inbox', strand: null, url: null }, wartetSeit: alt.map((e) => e.wartetSeit!).sort()[0], blockiert: alt.reduce((s, e) => s + e.blockiert, 0), antworten: ['nein', 'spaeter'], daten: { eintraege: alt } });
-  frisch.sort((a, b) => b.blockiert - a.blockiert || (a.wartetSeit ?? '9').localeCompare(b.wartetSeit ?? '9'));
+    quelle: { text: 'Inbox', strand: null, url: null }, wartetSeit: alt.map((e) => e.wartetSeit!).sort()[0], blockiert: alt.reduce((s, e) => s + e.blockiert, 0), antworten: ['nein', 'spaeter'], daten: { eintraege: alt },
+    stufe: alt.some((e) => e.stufe === 'wichtig') ? 'wichtig' : 'normal', stufeGrund: 'Sammel-Eintrag', autoAb: null });
+  // Wichtige oben (Knut 17.10.), darin wie bisher: blockiert am meisten, dann wartet am längsten.
+  const rang = (e: InboxEintrag) => (e.stufe === 'wichtig' ? 0 : 1);
+  frisch.sort((a, b) => rang(a) - rang(b) || b.blockiert - a.blockiert || (a.wartetSeit ?? '9').localeCompare(b.wartetSeit ?? '9'));
   return { eintraege: frisch, zurueckgestellt: out.length - sichtbar.length };
 }
 
@@ -132,7 +141,32 @@ function rueckfrageEintrag(r: InboxQuellen['lose'][number], quelle: InboxEintrag
   const opts = r.options ?? [];
   const g0 = /#G0$/.test(String(r.key ?? ''));
   return { id: kennung.rueckfrage(r.id), art: 'rueckfrage', frage: r.title, empfehlung: r.recommendation ?? null, quelle, wartetSeit: iso(r.createdAt), blockiert: quelle.strand || g0 ? 1 : 0,
-    antworten: ['ja', 'nein', 'anders', 'spaeter'], daten: { qid: r.id, optionen: opts.map((o) => o.label), kontext: r.context ?? null } };
+    antworten: ['ja', 'nein', 'anders', 'spaeter'], daten: { qid: r.id, optionen: opts.map((o) => o.label), kontext: r.context ?? null,
+      // Deckel- und G0-Fragen entscheidet immer Knut selbst (Bau-Tor, Fortsetzen) — nie automatisch.
+      markiert: g0 || /^(auto-weiter|leitstand-)/.test(String(r.kind ?? '')) ? 'wichtig' : r.stufe ?? null } };
+}
+
+/** Stufe, Grund und „gilt ab … als angenommen“ je Eintrag. Automatisch nur Rückfragen und Bericht-Entscheidungen. */
+function mitStufe(e: InboxEintrag, ms: number) {
+  if (e.art === 'entscheidung') {
+    const liste = (e.daten.entscheidungen as any[]) ?? [];
+    for (const x of liste) {
+      const s = stufeVon({ text: `${x.frage} ${x.empfehlung ?? ''} ${x.optionen ?? ''}`, markiert: x.stufe ?? null });
+      x.stufe = s.stufe; x.stufeGrund = s.grund;
+      x.auto = autoFaehig({ stufe: s.stufe, empfehlung: x.empfehlung, text: `${x.frage} ${x.optionen ?? ''}` });
+    }
+    const wichtig = liste.find((x) => x.stufe === 'wichtig');
+    e.stufe = wichtig ? 'wichtig' : 'normal';
+    e.stufeGrund = wichtig ? `${liste.length > 1 ? `${wichtig.id}: ` : ''}${wichtig.stufeGrund}` : 'normal: Empfehlung gilt nach 24 h';
+    const auto = liste.filter((x) => x.auto).map((x) => x.id);
+    e.daten.autoIds = auto;
+    e.autoAb = auto.length && e.wartetSeit ? new Date(new Date(e.wartetSeit).getTime() + ms).toISOString() : null;
+    return;
+  }
+  const text = `${e.frage} ${e.empfehlung ?? ''} ${(e.daten.kontext as string) ?? ''} ${((e.daten.optionen as string[]) ?? []).join(' ')}`;
+  const s = stufeVon({ text, markiert: (e.daten.markiert as string) ?? null, art: e.art });
+  e.stufe = s.stufe; e.stufeGrund = s.grund;
+  e.autoAb = e.art === 'rueckfrage' ? autoAb({ stufe: s.stufe, empfehlung: e.empfehlung, text, seit: e.wartetSeit }, ms) : null;
 }
 
 /** Zähler für Leiste und Heute-Kopf (K11): nur sichtbare, nicht zurückgestellte Einträge; der Altbestand zählt als einer. */
