@@ -45,6 +45,72 @@ function NeuerUnterChat({ onClose, onDone }: { onClose: () => void; onDone: () =
   );
 }
 
+// ---------- Arbeit › Reviews & PRs (Plan 213 S4b) ----------
+
+const REVIEW_TEXT: Record<string, string> = { wartet: 'in der Schlange', startet: 'startet', 'läuft': 'läuft', fertig: 'fertig', fehler: 'Fehler', 'übersprungen': 'übersprungen', deckel: 'Deckel erreicht' };
+
+function ReviewStarten({ prs, deep, vorgabe, onClose, onDone }: { prs: any[]; deep: boolean; vorgabe: string; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const [pr, setPr] = useState(vorgabe);
+  const [stufe, setStufe] = useState<'quick' | 'deep'>('quick');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const start = async () => {
+    setBusy(true); setErr(null);
+    try { const r: any = await api('/api/arbeit/reviews/start', { body: { pr, stufe } }); toast(r.hinweis ?? 'Review eingereiht'); onDone(); onClose(); }
+    catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  return (
+    <div className="ub-drawer" data-testid="review-starten">
+      <div className="ub-scrim" onClick={onClose} />
+      <div className="ub-sheet a-dialog" role="dialog" aria-modal="true" aria-labelledby="rs-titel">
+        <h2 id="rs-titel">Review starten</h2>
+        <label className="small" htmlFor="rs-pr">PR</label>
+        <input id="rs-pr" list="rs-prs" value={pr} onChange={(e) => setPr(e.target.value)} placeholder="owner/repo#123 oder GitHub-Link" />
+        <datalist id="rs-prs">{prs.map((p) => <option key={p.pr} value={p.pr}>{p.titel}</option>)}</datalist>
+        <span className="small" id="rs-stufe">Stufe</span>
+        <div className="ub-row" role="radiogroup" aria-labelledby="rs-stufe">
+          <button role="radio" aria-checked={stufe === 'quick'} className={`ub-btn sm${stufe === 'quick' ? ' pri' : ''}`} onClick={() => setStufe('quick')}>quick — liest, keine Ausführung</button>
+          <button role="radio" aria-checked={stufe === 'deep'} disabled={!deep} className={`ub-btn sm${stufe === 'deep' ? ' pri' : ''}`} onClick={() => setStufe('deep')}>deep — führt Tests aus</button>
+        </div>
+        <p className="tiny mut">{deep ? 'deep: Prüfbefehle des Basiszweigs im abgeschotteten Läufer, Council ab ~500 Zeilen.' : 'deep (mit Ausführung) ist noch nicht eingeschaltet.'} Ergebnis: Kommentar-Entwurf (englisch) und Bericht (deutsch); gepostet wird erst nach deinem Ja.</p>
+        <Err e={err} />
+        <div className="ub-row" style={{ justifyContent: 'flex-end' }}><button className="ub-btn sm" onClick={onClose}>Abbrechen</button><button className="ub-btn pri sm" disabled={busy || !pr.trim()} onClick={start}>Review starten</button></div>
+      </div>
+    </div>
+  );
+}
+
+export function ArbeitReviews() {
+  const { data, error, reload } = useLoad<any>(() => api('/api/arbeit/reviews'), []);
+  const [starten, setStarten] = useState<string | null>(null);
+  if (error) return <div className="page"><Err e={error} /></div>;
+  if (!data) return <div className="page"><Loading /></div>;
+  const fuer = data.prs.filter((p: any) => p.fuerDich).length;
+  return (
+    <div className="page wide" data-testid="arbeit-reviews">
+      <div className="h-kopf">
+        <div><h1>Reviews & PRs</h1><p className="small mut">live von GitHub{data.stand ? `, Stand ${fmtDateTime(data.stand)}` : ''} · {fuer} für dich · {data.laufend.length} Reviews laufen{data.fehler ? ` · ⚠ ${data.fehler}` : ''}</p></div>
+        <button className="ub-btn pri" onClick={() => setStarten('')} data-testid="review-knopf">＋ Review starten</button>
+      </div>
+      <table className="a-tab" data-testid="pr-tabelle">
+        <thead><tr><th>PR</th><th>Für dich</th><th className="a-m">Review</th><th className="a-m">Geändert</th><th></th></tr></thead>
+        <tbody>{data.prs.map((p: any) => <tr key={p.pr} data-fuer={p.fuerDich ? '1' : '0'}>
+          <td>{p.url ? <a href={p.url} target="_blank" rel="noreferrer"><b>{p.pr}</b></a> : <b>{p.pr}</b>}{p.entwurf ? <span className="chip"> Entwurf</span> : null}<div className="tiny mut">{p.titel}</div></td>
+          <td>{p.fuerDich ? <span className="chip warn">{p.warum}</span> : '–'}</td>
+          <td className="a-m tiny">{p.review ? <>{p.review.stufe} · {REVIEW_TEXT[p.review.status] ?? p.review.status}{p.review.empfehlung ? ` · ${p.review.empfehlung}` : ''}{p.review.paket ? <> · <a href={`#/dateien`}>{p.review.paket.split('-')[0]}</a></> : null}</> : '–'}</td>
+          <td className="a-m tiny">{p.geaendert ? fmtDateTime(p.geaendert) : '–'}</td>
+          <td><button className="ub-btn ghost sm" onClick={() => setStarten(p.pr)} aria-label={`Review für ${p.pr} starten`}>Review</button></td>
+        </tr>)}</tbody>
+      </table>
+      {!data.prs.length && <div className="ub-card soft"><p className="small mut">Keine offenen PRs im Abgleich.</p></div>}
+      {data.meldungen.length > 0 && <details className="ub-card" style={{ marginTop: 14 }}><summary className="small">Neu an PRs ({data.meldungen.length})</summary>
+        <ul className="plain h-liste tiny">{data.meldungen.map((m: any, i: number) => <li key={i}><b>{m.pr}</b> {m.wer ? `${m.wer}: ` : ''}{m.text} <span className="mut">{fmtDateTime(m.at)}</span></li>)}</ul></details>}
+      {starten !== null && <ReviewStarten prs={data.prs} deep={data.deep} vorgabe={starten} onClose={() => setStarten(null)} onDone={reload} />}
+    </div>
+  );
+}
+
 export function ArbeitUnterchats({ cfg: _cfg }: { cfg: Config }) {
   const toast = useToast();
   const [filter, setFilter] = useState<'offen' | 'erledigt'>('offen');

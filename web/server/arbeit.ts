@@ -47,6 +47,29 @@ export function naechstesPaket(reviewDir: string, titel: string): string {
   return `${max + 1}-${slug}`;
 }
 
+// ---------- Arbeit › Reviews & PRs (Plan 213 S4b) ----------
+
+/** „owner/repo#12“ oder GitHub-Link → { repo, number } (sonst null). */
+export function prAus(s: unknown): { repo: string; number: number } | null {
+  const t = String(s ?? '').trim();
+  const a = /^([\w.-]+\/[\w.-]+)#(\d{1,6})$/.exec(t) ?? /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d{1,6})(?:[/?#].*)?$/.exec(t);
+  return a ? { repo: a[1], number: Number(a[2]) } : null;
+}
+
+/** Eine PR-Zeile: „für dich“ zuerst (am Zug: Review von dir oder Freigabe), dann nach letzter Änderung; dazu der letzte Review-Lauf. */
+export function prZeilen(prs: any[], reviews: any[], o: { ich: string[] }): any[] {
+  const ich = o.ich.map((x) => x.toLowerCase());
+  const lauf = new Map<string, any>();
+  for (const r of [...reviews].sort((a, b) => +new Date(a.createdAt ?? 0) - +new Date(b.createdAt ?? 0))) lauf.set(`${r.repo}#${r.number}`, r);
+  return prs.map((p) => {
+    const r = lauf.get(p.pr);
+    const fuerDich = !!p.turn && ich.includes(String(p.turn.who ?? '').toLowerCase()) || (p.requested ?? []).some((x: string) => ich.includes(String(x).toLowerCase()));
+    return { pr: p.pr, repo: p.repo, number: p.number, titel: p.title, url: /^https:\/\/github\.com\//.test(String(p.url)) ? p.url : null, entwurf: !!p.isDraft,
+      fuerDich, warum: fuerDich ? String(p.turn?.why ?? 'Review angefragt') : null, entscheidung: p.reviewDecision ?? null, geaendert: p.updatedAt ?? null,
+      review: r ? { status: r.status, empfehlung: r.empfehlung ?? null, paket: r.paket ?? null, stufe: r.deep ? 'deep' : 'quick', at: r.doneAt ?? r.startedAt ?? r.createdAt } : null };
+  }).sort((a, b) => Number(b.fuerDich) - Number(a.fuerDich) || String(b.geaendert ?? '').localeCompare(String(a.geaendert ?? '')));
+}
+
 /** Eingaben für „Neuer Unter-Chat“ prüfen und in einen Start für startOrch übersetzen. */
 export function startEingabe(b: any, o: { repos: { name: string; pfad: string }[]; reviewDir: string }): { title: string; prompt: string; cwd: string; code: boolean; tiefe: Tiefe; paket: string } {
   const auftrag = String(b?.auftrag ?? '').trim();

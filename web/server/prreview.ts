@@ -177,6 +177,12 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       if (pr && pr.state !== 'OPEN') { await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'übersprungen', note: `PR ${pr.state === 'MERGED' ? 'gemergt' : 'geschlossen'}`, startDay: null } }); continue; }
       const u = await deps.userById(r.ownerId);
       if (!u) throw new Error('Besitzer des Auto-Reviews nicht gefunden');
+      // Plan 213 S4b: „Review starten“ aus dem Workspace kennt den Kopf nicht — der aktuelle Stand des PR gilt.
+      if (!r.head) {
+        r.head = pr?.head ?? null;
+        if (!r.head) throw new Error('Kopf des PR unbekannt (GitHub nicht erreichbar)');
+        await reviewsCol().updateOne({ _id: r._id }, { $set: { head: r.head } });
+      }
       const wt = await prepareWorktree(r.repo, r.number, r.head, deps.git);
       const paket = nextPaket(r.repo, r.number);
       mkdirSync(join(reviewDir(), paket), { recursive: true });
@@ -189,7 +195,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
         prompt += '\n' + motorAbschnitt(paket);
       }
       writeFileSync(join(reviewDir(), paket, 'auftrag.md'), prompt + '\n');
-      const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}`, prompt, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker', vorrang: true });
+      const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}`, prompt, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker', vorrang: true, ...(r.deep ? { tiefe: 'deep' } : {}) });
       await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt } });
       await deps.markStrand?.(st.id, { repo: r.repo, number: r.number, paket });
       deps.log?.('pr-review gestartet', { pr: `${r.repo}#${r.number}`, strand: st.id });

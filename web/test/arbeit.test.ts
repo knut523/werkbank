@@ -5,7 +5,25 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { zeile, sortiere, repos, naechstesPaket, startEingabe } from '../server/arbeit.ts';
+import { zeile, sortiere, repos, naechstesPaket, startEingabe, prAus, prZeilen } from '../server/arbeit.ts';
+
+test('S4b: PR aus Kurzform oder Link; „für dich“ zuerst; letzter Review-Lauf je PR', () => {
+  assert.deepEqual(prAus('WirStrom1/olaf-admin#354'), { repo: 'WirStrom1/olaf-admin', number: 354 });
+  assert.deepEqual(prAus('https://github.com/WirStrom1/tariff-app/pull/210/files'), { repo: 'WirStrom1/tariff-app', number: 210 });
+  assert.equal(prAus('olaf-admin#354'), null); assert.equal(prAus('https://evil.example/x/y/pull/1'), null);
+  const prs = [
+    { pr: 'o/a#1', repo: 'o/a', number: 1, title: 'A', url: 'https://github.com/o/a/pull/1', updatedAt: '2026-10-17T10:00:00Z', turn: { who: 'Christoph', why: 'Review' } },
+    { pr: 'o/b#2', repo: 'o/b', number: 2, title: 'B', url: 'javascript:x', updatedAt: '2026-10-16T10:00:00Z', turn: { who: 'Knut', why: 'dein Approve' } },
+    { pr: 'o/c#3', repo: 'o/c', number: 3, title: 'C', url: 'https://github.com/o/c/pull/3', updatedAt: '2026-10-15T10:00:00Z', requested: ['knut523'] },
+  ];
+  const reviews = [{ repo: 'o/b', number: 2, status: 'fehler', createdAt: '2026-10-15' }, { repo: 'o/b', number: 2, status: 'fertig', empfehlung: 'approve', paket: '300-review-b-2', createdAt: '2026-10-16' }];
+  const z = prZeilen(prs, reviews, { ich: ['Knut', 'knut523'] });
+  assert.deepEqual(z.map((x) => x.pr), ['o/b#2', 'o/c#3', 'o/a#1']);
+  assert.equal(z[0].warum, 'dein Approve'); assert.equal(z[0].url, null, 'nur GitHub-Links');
+  assert.equal(z[0].review.status, 'fertig', 'der letzte Lauf zählt'); assert.equal(z[0].review.empfehlung, 'approve');
+  assert.equal(z[1].warum, 'Review angefragt');
+  assert.equal(z[2].fuerDich, false);
+});
 
 test('Zeile: Zustand aus dem Status-Takt, alter Status als Rückfall, erledigt nur weggeräumt/abgehakt; keine fremden Links', () => {
   const d = { _id: 'aa000001', title: 'Flex: Fragebogen', zustand: 'stand-fehlt', zustandGrund: 'Antwort ohne Stand', tiefe: 'deep', startedAt: new Date(), url: 'javascript:alert(1)' };

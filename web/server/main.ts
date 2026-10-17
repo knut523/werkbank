@@ -52,7 +52,8 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
-import { tickerTick, tickerOverview, setTickerSettings, reviewsCol, reviewErlaubt } from './prticker.ts';
+import { tickerTick, tickerOverview, setTickerSettings, reviewsCol, reviewErlaubt, tickerCol } from './prticker.ts';
+import { deepAn } from './reviewmotor.ts';
 import { reviewTick, prNowVia, parseKommentar, fussnote } from './prreview.ts';
 import { postReview, schreibenAus, type ReviewEvent } from './githubwrite.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
@@ -69,7 +70,7 @@ import { istTiefe, type Tiefe } from './tiefe.ts';
 import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
 import { zaehle, statusNeu, autoSchliessenAn, navNeu, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
-import { zeile as arbeitZeile, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe } from './arbeit.ts';
+import { zeile as arbeitZeile, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -1471,6 +1472,34 @@ on('POST', /^\/api\/arbeit\/start$/, async (req, res) => {
   log('unter-chat gestartet (workspace)', { user: u.id, id: (r as any).id, tiefe: e.tiefe });
   zahlCache.delete(u.id);
   send(res, 200, { ...(r as any), paket: e.paket });
+});
+
+// --- Arbeit › Reviews & PRs (Plan 213 S4b): PRs live (für dich zuerst), Review-Läufe, „Review starten“ in die Review-Schlange ---
+on('GET', /^\/api\/arbeit\/reviews$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const { map, sync } = await livePrs();
+  const reviews: any[] = await reviewsCol().find({ createdAt: { $gte: new Date(Date.now() - 30 * 86400_000) } }).sort({ createdAt: -1 }).limit(200).toArray();
+  const ich = [firstName(u), u.name, 'knut523', ...(process.env.WERKBANK_GITHUB_LOGIN ? [process.env.WERKBANK_GITHUB_LOGIN] : [])];
+  const meldungen: any[] = await tickerCol().find({}).sort({ at: -1 }).limit(15).toArray().catch(() => []);
+  send(res, 200, { prs: prZeilen([...map.values()], reviews, { ich }), laufend: reviews.filter((r) => ['wartet', 'startet', 'läuft'].includes(r.status)).map((r) => ({ pr: `${r.repo}#${r.number}`, status: r.status, at: r.createdAt })),
+    meldungen: meldungen.map((e) => ({ pr: `${e.repo}#${e.number}`, art: e.kind ?? null, wer: e.actor ?? null, at: e.at, text: String(e.text ?? e.title ?? '').slice(0, 200) })),
+    stand: sync?.at ?? null, fehler: sync?.error ?? null, stufen: ['quick', 'deep'], deep: deepAn() });
+});
+on('POST', /^\/api\/arbeit\/reviews\/start$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  const pr = prAus(b.pr);
+  if (!pr) throw new HttpError(400, 'PR als „owner/repo#123“ oder GitHub-Link angeben.');
+  const deep = b.stufe === 'deep';
+  if (deep && !deepAn()) throw new HttpError(409, 'Stufe deep (mit Ausführung der Tests) ist noch nicht eingeschaltet — quick wählen.');
+  if (!reviewErlaubt(pr.repo)) throw new HttpError(403, `Für ${pr.repo} sind Reviews nicht freigegeben.`);
+  const live = (await livePrs()).map.get(`${pr.repo}#${pr.number}`);
+  if (!live) throw new HttpError(404, 'PR nicht in der Liste offener PRs (Abgleich mit GitHub abwarten oder „jetzt abrufen“).');
+  if (await reviewsCol().findOne({ repo: pr.repo, number: pr.number, status: { $in: ['wartet', 'startet', 'läuft'] } })) throw new HttpError(409, 'Für diesen PR läuft schon ein Review.');
+  const id = `hand-${pr.repo.replace('/', '-')}-${pr.number}-${Date.now().toString(36)}`;
+  await reviewsCol().insertOne({ _id: id as any, repo: pr.repo, number: pr.number, title: live.title, url: live.url, head: null, trigger: 'hand', by: u.name, event: null, ownerId: u.id, status: 'wartet', createdAt: new Date(), day: vienna().date, ...(deep ? { deep: true } : {}) });
+  log('review gestartet (workspace)', { user: u.id, pr: `${pr.repo}#${pr.number}`, stufe: deep ? 'deep' : 'quick' });
+  send(res, 200, { ok: true, id, stufe: deep ? 'deep' : 'quick', hinweis: 'In der Review-Schlange — startet mit dem nächsten Takt (Deckel je Tag und gleichzeitig gelten).' });
 });
 
 on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/zurueckholen$/, async (req, res, m) => {
