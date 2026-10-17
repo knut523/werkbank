@@ -12,7 +12,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
-import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
+import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
@@ -63,6 +63,8 @@ interface Live {
   onSkill?: (name: string) => void;
   // Schreibende Atlassian-Aufrufe dieses Zuges (tool_use_id → Werkzeug/Argumente), bis ihr Ergebnis kommt.
   jiraCalls: Map<string, { name: string; input: Record<string, unknown> }>;
+  /** Aufrufe des Inbox-Werkzeugs (Plan 213 K4): an ihr Ergebnis hängt die Brücke selbst die Knöpfe. */
+  inboxCalls: Set<string>;
   onJiraWrite?: (keys: string[], tool: string) => void;
   home: string;   // CLAUDE_CONFIG_DIR dieser Sitzung oder 'shared'
   // Auto-Modus (Plan 71 P1): Rechte-Modus des Zuges, Arbeitsordner für die Klasse „auto“ (nur im Auto-Modus gesetzt),
@@ -835,6 +837,7 @@ function handleMessage(live: Live, msg: any) {
           // Nutzung je Skill zählen (Knut, 29.09.: Skill-Kern nach einer Woche mit echten Zahlen nachschärfen).
           if (block.name === 'Skill' && live.onSkill) { try { live.onSkill(String(block.input?.skill ?? block.input?.command ?? '').replace(/^\//, '').split(/\s/)[0]); } catch { /* egal */ } }
           if ((block.name === 'Task' || block.name === 'Agent') && !msg.parent_tool_use_id) live.subagents.set(block.id, subLabel(block.input ?? {}));
+          if (block.name === INBOX_TOOL && !msg.parent_tool_use_id) live.inboxCalls.add(block.id);
           if (cls === 'read') emitStatus(live, subPrefix(live, msg.parent_tool_use_id) + statusLine(block.name, block.input ?? {}));
           // Schreibende Werkzeuge melden sich erst nach der Bestätigung (siehe Hook).
         } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
@@ -865,6 +868,16 @@ function handleMessage(live: Live, msg: any) {
           if (label === undefined) continue;
           live.subagents.delete(b.tool_use_id);
           emitStatus(live, `↳ Teilagent ${label} ${b.is_error ? 'abgebrochen' : 'fertig'}`);
+        }
+      }
+      // Inbox-Knöpfe (Plan 213 K4): nur aus dem Ergebnis des Werkbank-Werkzeugs, gesetzt von der Brücke — das Modell
+      // kann keine Knöpfe schreiben (emitModelText entschärft sie), also bestätigt kein eingeschleuster Text etwas.
+      if (live.inboxCalls.size) {
+        for (const b of msg.message?.content ?? []) {
+          if (b?.type !== 'tool_result' || !live.inboxCalls.delete(b.tool_use_id) || b.is_error) continue;
+          const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.map((c: any) => c?.text ?? '').join('\n') : '';
+          const k = inboxKnoepfe(text);
+          if (k) { live.lastKind = 'text'; emit(live, `\n\n${k}\n\n`); }
         }
       }
       if (!live.jiraCalls.size) return;
@@ -1208,7 +1221,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     key, userId: req.userId, abort: new AbortController(), sink: null, buffer: [], pending: null,
     lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0, cacheRead: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
-    jiraCalls: new Map(), onJiraWrite: req.onJiraWrite, home: '',
+    jiraCalls: new Map(), inboxCalls: new Set(), onJiraWrite: req.onJiraWrite, home: '',
     mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
     subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: kind === 'strand' || kind === 'worker', leit: kind === 'leitstand', worker: kind === 'worker', ...(kind === 'strand' ? { req } : {}),
     // Posteingang ab Zugbeginn: Nachreichen geht auch, während Kontext-Paket und Konten noch laden (Bild-Prüfung Plan 154).

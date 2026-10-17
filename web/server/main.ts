@@ -3109,6 +3109,13 @@ on('POST', /^\/internal\/session-start$/, async (req, res) => {
   send(res, 200, r);
 });
 
+// Inbox für das Werkbank-Werkzeug `inbox` (Plan 213 K4) — die Brücke baut daraus die Chat-Knöpfe.
+on('POST', /^\/internal\/inbox$/, async (req, res) => {
+  const u = await internalUser(req, await body(req));
+  const r = await inboxFuer(u);
+  send(res, 200, { eintraege: r.eintraege.map((e) => ({ id: e.id, art: e.art, frage: e.frage, empfehlung: e.empfehlung, quelle: { text: e.quelle.text }, antworten: e.antworten })) });
+});
+
 // Claude-Konten der Person für die Brücke (Klartext nur über diesen Kanal; chat = Schlüssel aus der Anfrage).
 on('POST', /^\/internal\/claude-accounts$/, async (req, res) => {
   const u = await internalUser(req, await body(req));

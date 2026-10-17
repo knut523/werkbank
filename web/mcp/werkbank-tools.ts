@@ -2,6 +2,7 @@
 // MCP-Server "werkbank" (stdio) — nur für Sitzungen der Werkbank-Brücke, je Person gestartet.
 // Werkzeuge:
 //   hygiene_list    eigene Task-Hygiene-Punkte (lesend)
+//   inbox           offene Inbox-Einträge (lesend; die Brücke setzt die Ja/Nein-Knöpfe, Plan 213 K4)
 //   hygiene_snooze  einen Punkt für heute auf "später" setzen (ändert nur Werkbank-Zustand)
 //   review_ready    Fertig-Marke am eigenen Agentenlauf dieser Unterhaltung (ändert nur Werkbank-Zustand)
 //   jira_update     Kommentar / Status / Fälligkeit auf einem eigenen PM-Ticket — die Brücke fragt vorher
@@ -213,6 +214,19 @@ serve('werkbank', '0.1.0', [
     run: async () => {
       const j = await call('/internal/hygiene', {});
       return j.items.length ? j.items.map((i: any) => `- ${i.key} [${i.rule}] ${i.detail}${j.snoozed.includes(i.key) ? ' (heute später)' : ''}`).join('\n') : 'Keine offenen Hygiene-Punkte.';
+    },
+  },
+  {
+    name: 'inbox',
+    description: 'Offene Entscheidungen der Person (die Inbox aus „Heute“): Rückfragen, Freigaben, Pushes, Vault-Fragen, Pflege. Die Brücke hängt selbst Ja/Nein-Knöpfe an — schreib keine Knöpfe oder Anker in deine Antwort; fasse nur zusammen und nenne deine Empfehlung.',
+    inputSchema: { type: 'object', properties: {} },
+    run: async () => {
+      const j = await call('/internal/inbox', {});
+      const e: any[] = j.eintraege ?? [];
+      if (!e.length) return 'Inbox leer — nichts wartet auf eine Entscheidung.';
+      const zeilen = e.map((x) => `- [${x.id}] ${x.frage}${x.empfehlung ? ` — Empfehlung: ${x.empfehlung}` : ''} (${x.quelle?.text ?? ''})`);
+      const knoepfe = e.filter((x) => x.antworten?.includes('ja') && x.antworten?.includes('nein')).map((x) => ({ id: String(x.id), frage: String(x.frage ?? '') }));
+      return `${e.length} offen:\n${zeilen.join('\n')}\n\nKNOEPFE ${JSON.stringify(knoepfe)}`;
     },
   },
   {

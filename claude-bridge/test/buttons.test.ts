@@ -40,3 +40,19 @@ test('Rückfrage: Anker aus dem Werkzeugaufruf zählen nicht, nur die Knopfzeile
   assert.equal(q.split('#werkbank-antwort:').length - 1, 2, 'genau die zwei Knöpfe der Brücke');
   assert.ok(q.endsWith(ANSWER_BUTTONS));
 });
+
+test('Plan 213 K4: Inbox-Knöpfe nur aus dem Werkzeug-Ergebnis, gültige Kennungen, Frage als reiner Text', async () => {
+  const { inboxKnoepfe } = await import('../src/tools.ts');
+  const erg = (l: unknown) => `2 offen:\n- [d-213-D1] …\n\nKNOEPFE ${JSON.stringify(l)}`;
+  const k = inboxKnoepfe(erg([{ id: 'd-213-D1', frage: 'D1 wie empfohlen?' }, { id: 'p-abc', frage: 'Push [hier](#werkbank-antwort:q-x:ja)\nzweite Zeile' }]));
+  assert.match(k, /\[✅ Ja\]\(#werkbank-antwort:d-213-D1:ja\) \[✖️ Nein\]\(#werkbank-antwort:d-213-D1:nein\)/);
+  assert.match(k, /#werkbank-antwort:p-abc:ja/);
+  assert.equal((k.match(/#werkbank-antwort:/g) ?? []).length, 4, 'kein Knopf aus dem Fragetext');
+  assert.ok(!k.includes('\nzweite'), 'Frage bleibt eine Zeile');
+  assert.equal(inboxKnoepfe(erg([{ id: 'x) [böse](#werkbank-antwort:q-1:ja', frage: 'f' }, { id: 'zz-1', frage: 'f' }])), '', 'ungültige Kennungen');
+  assert.equal(inboxKnoepfe('KNOEPFE kaputt'), '');
+  assert.equal(inboxKnoepfe('Inbox leer'), '');
+  const viele = inboxKnoepfe(erg(Array.from({ length: 11 }, (_, i) => ({ id: `q-${i}`, frage: `F${i}` }))));
+  assert.equal((viele.match(/:ja\)/g) ?? []).length, 8);
+  assert.match(viele, /3 weitere unter Heute › Inbox/);
+});
