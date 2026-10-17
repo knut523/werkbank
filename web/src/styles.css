@@ -616,3 +616,33 @@ details.ub-card > summary::-webkit-details-marker { display: none; }
 .cos-einwurf { gap: 8px; }
 .cos-einwurf textarea, .cos-einwurf input[type=text] { width: 100%; box-sizing: border-box; }
 @media (max-width: 600px) { .cos-spalten { grid-template-columns: 1fr; } }
+/* Plan 213 S3: Heute · Arbeit · Wissen — Startseite mit Inbox, Handy-Tableiste (S3b), Umzugshinweis. */
+.h-seite { max-width: 1120px; }
+.h-kopf { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 8px; }
+.h-kopf h1 { margin: 0; }
+.h-titel { font-size: 1rem; margin: 18px 0 8px; display: flex; gap: 8px; align-items: baseline; }
+.h-titel a { margin-left: auto; }
+.h-inbox { gap: 0; padding: 4px 16px; }
+.h-zeile { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; padding: 12px 0; border-top: 1px solid var(--border-light); align-items: start; }
+.h-zeile:first-child { border-top: 0; }
+.h-frage { font-weight: 600; overflow-wrap: anywhere; }
+.h-text { display: grid; gap: 3px; min-width: 0; }
+.h-acts { justify-content: flex-end; }
+.h-acts .ub-btn { min-height: 44px; }
+.h-liste { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+ul.plain.h-liste { padding-left: 0; list-style: none; }
+.h-zwei { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.linkbtn { background: none; border: 0; padding: 0; font: inherit; color: var(--link); cursor: pointer; text-decoration: underline; }
+.umzug { display: flex; gap: 10px; align-items: center; justify-content: space-between; background: var(--chip-warn); color: var(--chip-warn-text); padding: 8px 12px; border-radius: 9px; margin: 0 0 12px; }
+.tabbar { display: none; }
+@media (max-width: 760px) {
+  .h-zeile { grid-template-columns: 1fr; }
+  .h-acts { justify-content: flex-start; }
+  .h-zwei { grid-template-columns: 1fr; }
+  .shell.nav-neu .main { padding-bottom: 76px; }
+  .shell.nav-neu .tabbar { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; background: var(--surface-primary); border-top: 1px solid var(--border-light); justify-content: space-around; padding: 4px 0 calc(6px + env(safe-area-inset-bottom)); }
+  .tabbar a { display: grid; justify-items: center; gap: 2px; min-width: 64px; min-height: 48px; padding: 4px; font-size: 12px; color: var(--text-secondary); text-decoration: none; position: relative; }
+  .tabbar a .ico { font-size: 20px; }
+  .tabbar a.active { color: var(--text-primary); font-weight: 700; }
+  .tabbar a .nav-count { position: absolute; top: 0; right: 10px; }
+}

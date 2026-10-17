@@ -11,6 +11,7 @@ import { Dateien } from './pages/Dateien.tsx';
 import { Timebox } from './pages/Timebox.tsx';
 import { Ziele } from './pages/Ziele.tsx';
 import { Uebersicht } from './pages/Uebersicht.tsx';
+import { HeuteNeu, InboxSeite } from './pages/HeuteNeu.tsx';
 import { useTodayCount } from './beimir.tsx';
 
 function useHash() {
@@ -59,6 +60,31 @@ const BEREICHE: { id: string; label: string; ico: string; reiter: Reiter[] }[] =
   ] },
 ];
 const EINRICHTUNG: Nav = { href: '#/einrichtung', label: 'Einrichtung', ico: '🚀', match: /^#\/einrichtung/, f: '' };
+
+// Plan 213 S3 (WERKBANK_NAV_NEU): drei Bereiche Heute · Arbeit · Wissen, dazu Chat und Einstellungen. Heute = Entscheide (Inbox),
+// Arbeit = Unter-Chats, Reviews & PRs, Board, Sprint (Mein Tag bis zur Messung), Wissen = Vault, Ablage, Roadmap, Ziele.
+// Alle alten Adressen bleiben gültig (185 B3); Team-Nutzer sehen weiter jede freigegebene Seite (B2) — nur an neuer Stelle.
+const HEUTE: Nav = { href: '#/', label: 'Heute', ico: '☀️', match: /^#\/?(\?|$)|^#\/(heute|uebersicht|inbox)(\?|$)/, f: 'heute' };
+const BEREICHE_NEU: { id: string; label: string; ico: string; reiter: Reiter[] }[] = [
+  { id: 'arbeit', label: 'Arbeit', ico: '🛠️', reiter: [
+    { href: '#/arbeit', label: 'Unter-Chats', match: /^#\/arbeit\/?(\?|$)|^#\/leitstand/, f: 'heute', wide: true },
+    { href: '#/arbeit/reviews', label: 'Reviews & PRs', match: /^#\/arbeit\/reviews/, f: 'roadmap', wide: true },
+    { href: '#/board', label: 'Board', match: /^#\/board/, f: 'board', wide: true },
+    { href: '#/sprint', label: 'Sprint', match: /^#\/sprint/, f: 'sprint' },
+    { href: '#/timebox', label: 'Mein Tag', match: /^#\/timebox/, f: 'timebox', wide: true },
+  ] },
+  { id: 'wissen', label: 'Wissen', ico: '📚', reiter: [
+    { href: '#/wissen', label: 'Vault', match: /^#\/wissen/, f: 'wissen', wide: true },
+    { href: '#/dateien', label: 'Ablage', match: /^#\/(dateien|ablage)/, f: 'dateien' },
+    { href: '#/roadmap', label: 'Roadmap', match: /^#\/roadmap/, f: 'roadmap', wide: true },
+    { href: '#/ziele', label: 'Ziele', match: /^#\/ziele/, f: 'ziele', wide: true },
+  ] },
+  { id: 'einstellungen', label: 'Einstellungen', ico: '⚙️', reiter: [
+    { href: '#/einrichtung', label: 'Konten & Automatik', match: /^#\/einrichtung/, f: '' },
+    { href: '#/skills', label: 'Skills', match: /^#\/skills/, f: 'skills' },
+  ] },
+];
+const UMZUG_KEY = 'wb-umzug-213';
 const merkKey = (id: string) => `wb-bereich:${id}`;
 /** Zuletzt benutzter Reiter des Bereichs (nur freigegebene), sonst der erste freigegebene. */
 function letzterReiter(b: { id: string; reiter: Reiter[] }): string {
@@ -92,7 +118,7 @@ export function App() {
   // Bereich merkt sich den zuletzt benutzten Reiter (die LibreChat-Leiste liest denselben Schlüssel) — nur freigegebene.
   useEffect(() => {
     if (!cfg?.user) return;
-    for (const b of BEREICHE) { const r = b.reiter.find((x) => x.match.test(hash)); if (r && cfg.features?.[r.f] !== false) try { localStorage.setItem(merkKey(b.id), r.href); } catch { /* privat */ } }
+    for (const b of (cfg.navNeu ? BEREICHE_NEU : BEREICHE)) { const r = b.reiter.find((x) => x.match.test(hash)); if (r && cfg.features?.[r.f] !== false) try { localStorage.setItem(merkKey(b.id), r.href); } catch { /* privat */ } }
   }, [hash, cfg]);
   const load = () => api<Config>('/api/config').then((c) => { setChatOrigin(c.librechatUrl); setCfg(c); }, setErr);
   useEffect(() => { load(); }, []);
@@ -147,10 +173,13 @@ export function App() {
   // Freigabe je Funktion (web/server/features.ts): Admins alles, das Team nur, was Knut freigegeben hat.
   const vis = (n: { f: string }) => !n.f || cfg.features?.[n.f] !== false;
   // Bereiche mit ihren freigegebenen Reitern; ein Bereich ohne freigegebenen Reiter fehlt ganz.
-  const bereiche = BEREICHE.map((b) => ({ ...b, reiter: b.reiter.filter(vis) })).filter((b) => b.reiter.length > 0);
-  const nav: Nav[] = [UEBERSICHT, ...bereiche.map((b) => ({ href: letzterReiter(b), label: b.label, ico: b.ico, match: new RegExp(b.reiter.map((r) => r.match.source).join('|')), f: '' }))].filter(vis);
-  const more: Nav[] = [EINRICHTUNG];
-  const alle = [UEBERSICHT, ...BEREICHE.flatMap((b) => b.reiter)];
+  const neu = !!cfg.navNeu;
+  const START = neu ? HEUTE : UEBERSICHT;
+  const bereiche = (neu ? BEREICHE_NEU : BEREICHE).map((b) => ({ ...b, reiter: b.reiter.filter(vis) })).filter((b) => b.reiter.length > 0);
+  const alsNav = (b: (typeof bereiche)[number]): Nav => ({ href: letzterReiter(b), label: b.label, ico: b.ico, match: new RegExp(b.reiter.map((r) => r.match.source).join('|')), f: '' });
+  const nav: Nav[] = [START, ...bereiche.filter((b) => b.id !== 'einstellungen').map(alsNav)].filter(vis);
+  const more: Nav[] = neu ? bereiche.filter((b) => b.id === 'einstellungen').map(alsNav) : [EINRICHTUNG];
+  const alle = [START, ...(neu ? BEREICHE_NEU : BEREICHE).flatMap((b) => b.reiter)];
   const hidden = user && alle.find((n) => n.f && n.match.test(hash) && !vis(n));
   const bereich = bereiche.find((b) => b.reiter.some((r) => r.match.test(hash)));
   const reiterLeiste = bereich && <div className={`page bereich-bar${bereich.reiter.find((r) => r.match.test(hash))?.wide ? ' wide' : ''}`} data-testid={`bereich-${bereich.id}`}>
@@ -163,6 +192,12 @@ export function App() {
   const page = !user ? <Setup cfg={cfg} onLogin={() => { window.location.hash = '#/einrichtung'; load(); }} />
     : /^#\/einrichtung/.test(hash) || heuteHidden ? <Setup cfg={cfg} onLogin={load} />
     : hidden ? <div className="page" data-testid="not-released"><h1>{hidden.label}</h1><div className="card soft empty"><p><b>Noch nicht für das Team freigegeben.</b></p><p className="small muted">Knut gibt die Funktionen des OLAF Workspace nach und nach frei. Bis dahin: Chat und <a href="#/einrichtung">Einrichtung</a>.</p></div></div>
+    // Plan 213 S3: neue Seiten der Navigation Heute · Arbeit · Wissen (alte Adressen führen weiter zu ihren Seiten).
+    : neu && /^#\/inbox/.test(hash) ? <InboxSeite />
+    : neu && HEUTE.match.test(hash) ? <HeuteNeu cfg={cfg} />
+    : neu && /^#\/arbeit\/reviews/.test(hash) ? <Roadmap cfg={cfg} hash="#/roadmap/prs" />
+    : neu && /^#\/arbeit/.test(hash) ? <Uebersicht cfg={cfg} hash="#/" />
+    : neu && /^#\/ablage/.test(hash) ? <Dateien cfg={cfg} />
     : /^#\/wissen/.test(hash) ? <Wissen cfg={cfg} hash={hash} />
     : /^#\/board/.test(hash) ? <Board cfg={cfg} hash={hash} />
     : /^#\/sprint/.test(hash) ? <Sprint cfg={cfg} hash={hash} />
@@ -173,12 +208,17 @@ export function App() {
     : /^#\/dateien/.test(hash) ? <Dateien cfg={cfg} />
     : <Uebersicht cfg={cfg} hash={hash} />;
 
+  // Plan 213 S3 (P4): einmal je Person ein Hinweis auf den Umzug — Planen ist jetzt unter Arbeit (Board, Sprint) und Wissen (Roadmap, Ziele).
+  const umzug = neu && user && bereich && bereich.id !== 'einstellungen' && (() => { try { return !localStorage.getItem(UMZUG_KEY); } catch { return false; } })()
+    ? <div className="page"><div className="umzug" role="status" data-testid="umzug"><span className="small">Neu geordnet: <b>Board</b> und <b>Sprint</b> stehen unter <b>Arbeit</b>, <b>Roadmap</b> und <b>Ziele</b> unter <b>Wissen</b>, Skills unter Einstellungen. Alte Adressen funktionieren weiter.</span>
+      <button className="ub-btn sm" onClick={(e) => { try { localStorage.setItem(UMZUG_KEY, '1'); } catch { /* privat */ } (e.currentTarget.closest('.page') as HTMLElement | null)?.remove(); }}>Verstanden</button></div></div> : null;
+
   // Eingebettet: kein eigenes Gerüst — Navigation ist LibreChats Leiste (Chats · Übersicht · Planen · Wissen), Einrichtung im Kontomenü.
-  if (embedded) return <div className="embedded">{reiterLeiste}{page}</div>;
+  if (embedded) return <div className="embedded">{umzug}{reiterLeiste}{page}</div>;
   const current = [...nav, ...more].find((n) => n.match.test(hash));
 
   return (
-    <div className="shell">
+    <div className={`shell${neu ? ' nav-neu' : ''}`}>
       <aside className={`side${menu ? ' open' : ''}`} aria-label="Navigation">
         <div className="brand"><img src="favicon.svg" alt="" /><span>OLAF Workspace</span></div>
         <a href={cfg.librechatUrl} className="menu-chat btn small" title="Zurück zum Chat (LibreChat)">💬 Chat</a>
@@ -205,7 +245,12 @@ export function App() {
           </div>
         </div>
       </aside>
-      <main className="main">{reiterLeiste}{page}</main>
+      <main className="main">{umzug}{reiterLeiste}{page}</main>
+      {/* Plan 213 S3b: Handy-Tableiste Heute · Arbeit · Wissen · Chat (nur ≤ 760 px, nur neue Navigation; 185 B6). */}
+      {neu && user && <nav className="tabbar" aria-label="Bereiche">
+        {nav.map((n) => { const on = n.match.test(hash); return <a key={n.href} href={n.href} className={on ? 'active' : ''} aria-current={on ? 'page' : undefined}><span className="ico" aria-hidden>{n.ico}</span>{n.label}{n.href === '#/' && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span> : null}</a>; })}
+        <a href={cfg.librechatUrl}><span className="ico" aria-hidden>💬</span>Chat</a>
+      </nav>}
     </div>
   );
 }

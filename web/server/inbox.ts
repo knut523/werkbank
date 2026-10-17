@@ -35,7 +35,7 @@ export const kennung = {
   push: (strand: string, head: string) => `p-${strand}-${String(head).slice(0, 12)}`,
   vault: (id: string) => `v-${kurzHash(id)}`,
 };
-export const KENNUNG_RE = /^(q|d|b|p|v|pflege|schlange|altbestand)(-[A-Za-z0-9-]{1,80})?$/;
+export const KENNUNG_RE = /^(q|d|b|p|v|pflege|laeufe|schlange|altbestand)(-[A-Za-z0-9-]{1,80})?$/;
 
 export function kurzHash(s: string): string {
   let h = 2166136261;
@@ -68,6 +68,8 @@ export interface InboxQuellen {
   schlange: Array<{ id: string; titel: string; since: number }>;
   /** Berichte mit unlesbarem Kopf (K10: ein Sammel-Eintrag). */
   kopfFehler: Array<{ id: string; titel: string }>;
+  /** Agentenläufe am Board, die auf die Person warten (eigene Karten in Arbeit) — ein Sammel-Eintrag (185 B8). */
+  laeufe?: number;
 }
 
 const iso = (v: unknown): string | null => { const t = v ? new Date(v as any).getTime() : NaN; return Number.isFinite(t) ? new Date(t).toISOString() : null; };
@@ -106,6 +108,7 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
     out.push({ id: kennung.vault(v.id), art: 'vault', frage: v.text, empfehlung: null, quelle: { text: 'Vault-Sync', strand: null, url: null }, wartetSeit: iso(v.at), blockiert: 0, antworten: ['ja', 'nein', 'spaeter'], daten: { vaultId: v.id } });
   }
   if (q.pflege > 0) out.push({ id: 'pflege', art: 'pflege', frage: `${q.pflege} ${q.pflege === 1 ? 'Ticket braucht' : 'Tickets brauchen'} Pflege`, empfehlung: null, quelle: { text: 'Pflege', strand: null, url: '#/board' }, wartetSeit: null, blockiert: 0, antworten: ['spaeter'], daten: { n: q.pflege } });
+  if ((q.laeufe ?? 0) > 0) out.push({ id: 'laeufe', art: 'pflege', frage: `${q.laeufe} ${q.laeufe === 1 ? 'Agentenlauf am Board wartet' : 'Agentenläufe am Board warten'} auf dich`, empfehlung: null, quelle: { text: 'Board-Agenten', strand: null, url: '#/arbeit' }, wartetSeit: null, blockiert: 0, antworten: ['spaeter'], daten: { n: q.laeufe } });
   if (q.kopfFehler.length) out.push({ id: 'pflege-kopf', art: 'pflege', frage: `${q.kopfFehler.length} ${q.kopfFehler.length === 1 ? 'Bericht hat' : 'Berichte haben'} einen unlesbaren Kopf`, empfehlung: 'im Unter-Chat reparieren lassen', quelle: { text: 'Pflege', strand: null, url: null }, wartetSeit: null, blockiert: 0, antworten: ['spaeter'], daten: { berichte: q.kopfFehler } });
   // Schlange steht (K3): wartet der Erste länger als 30 min, genau ein Eintrag.
   const alarm = o.schlangeAlarmMs ?? 30 * 60_000;

@@ -394,6 +394,46 @@ test('Rückfragen an Knut: anlegen (CLI) → offen in der Werkbank → Knut antw
   assert.equal((await post({ option: 'Nord' })).status, 409);
 });
 
+test('Plan 213 S2/S3: Inbox zeigt die Rückfrage, Antwort an der Quelle, Später bis morgen, Heute und Status lesen dieselbe Quelle', async () => {
+  const cookie = await knutCookie();
+  const h = { cookie, 'content-type': 'application/json', 'x-werkbank': '1' };
+  const get = async (p: string) => { const r = await fetch(B + p, { headers: { cookie } }); return { status: r.status, j: await r.json() as any }; };
+  const post = async (p: string, b: unknown) => { const r = await fetch(B + p, { method: 'POST', headers: h, body: JSON.stringify(b) }); return { status: r.status, j: await r.json() as any }; };
+  const q = JSON.parse((await orch(['ask', '--title', 'Inbox: Nachtbau mit Eval?', '--context', 'kostet 40 min', '--option', 'Ja', '--option', 'Nein', '--recommend', 'Ja', '--json'])).out);
+  const q2 = JSON.parse((await orch(['ask', '--title', 'Inbox: später', '--context', 'x', '--recommend', 'egal', '--json'])).out);
+  let ib = await get('/api/inbox');
+  assert.equal(ib.status, 200);
+  const e = ib.j.eintraege.find((x: any) => x.daten?.qid === q.id);
+  assert.ok(e, 'Rückfrage steht in der Inbox');
+  assert.equal(e.art, 'rueckfrage'); assert.equal(e.empfehlung, 'Ja'); assert.deepEqual(e.antworten, ['ja', 'nein', 'anders', 'spaeter']);
+  assert.equal(ib.j.zahl, ib.j.eintraege.length);
+  // Heute und der Zähler lesen dieselbe Inbox (K11).
+  const heute = await get('/api/heute');
+  assert.equal(heute.status, 200); assert.equal(heute.j.zahl, ib.j.zahl); assert.ok(Array.isArray(heute.j.blockiert));
+  // Antwort über die Inbox → an der Quelle (Rückfrage beantwortet, empfohlene Option).
+  assert.equal((await post(`/api/inbox/${e.id}/antwort`, { antwort: 'vielleicht' })).status, 400);
+  assert.equal((await post(`/api/inbox/${e.id}/antwort`, { antwort: 'anders' })).status, 400, 'Anders braucht Text');
+  const a = await post(`/api/inbox/${e.id}/antwort`, { antwort: 'ja', weg: 'chat-knopf' });
+  assert.equal(a.status, 200, JSON.stringify(a.j));
+  const got = JSON.parse((await orch(['questions', 'get', q.id, '--json'])).out);
+  assert.equal(got.status, 'beantwortet'); assert.equal(got.answer.option, 'Ja');
+  assert.equal((await post(`/api/inbox/${e.id}/antwort`, { antwort: 'ja' })).status, 409, 'schon beantwortet: nie raten');
+  // Später: verschwindet bis morgen 07:00, zählt als zurückgestellt.
+  const e2 = (await get('/api/inbox')).j.eintraege.find((x: any) => x.daten?.qid === q2.id);
+  assert.equal((await post(`/api/inbox/${e2.id}/spaeter`, {})).status, 200);
+  assert.equal((await post('/api/inbox/..%2Fx/spaeter', {})).status, 404);
+  ib = await get('/api/inbox');
+  assert.ok(!ib.j.eintraege.some((x: any) => x.id === e2.id)); assert.ok(ib.j.zurueckgestellt >= 1);
+  // Status (S1b) und Auswertung der Nutzung (S0) nur für Admins; Seiten zählen darf jede angemeldete Person.
+  assert.equal((await get('/api/status')).status, 403);
+  assert.equal((await get('/api/nutzung')).status, 403);
+  assert.equal(heute.j.admin, false);
+  assert.equal((await get('/api/config')).j.navNeu, false);
+  assert.equal((await post('/api/nutzung/seite', { seite: '#/inbox' })).status, 200);
+  // Fremde Kennung: nicht in der eigenen Inbox → 409, nie raten.
+  assert.equal((await post('/api/inbox/q-gibtsnicht/antwort', { antwort: 'ja' })).status, 409);
+});
+
 // ---------- Automatisch fortsetzen, Ende-zu-Ende (docs/plan-orchestrator-auto-weiter.md) ----------
 
 const msgsOf = (conv: string) => mongo.db(LCDB).collection('messages').find({ conversationId: conv }).sort({ createdAt: 1 }).toArray();
