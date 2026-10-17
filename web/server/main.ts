@@ -81,6 +81,7 @@ import { istTiefe, type Tiefe } from './tiefe.ts';
 import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
 import { zaehle, statusNeu, autoSchliessenAn, navNeu, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
+import { zeile as arbeitZeile, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe } from './arbeit.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -1500,6 +1501,36 @@ on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => {
   zahlCache.delete(u.id);
   if (e.art !== 'push') antwortGezaehlt(e.art === 'rueckfrage' ? 'rueckfrage' : e.art === 'braucht' ? 'braucht' : 'inbox', weg);
   send(res, 200, { ok: true, art: e.art });
+});
+
+// --- Arbeit › Unter-Chats (Plan 213 S4a): Tabelle aus der einen Statusquelle, „Neuer Unter-Chat“ aus der Oberfläche ---
+on('GET', /^\/api\/arbeit\/unterchats$/, async (req, res, _m, url) => {
+  const u = await needAdmin(req);
+  const erledigt = url.searchParams.get('filter') === 'erledigt';
+  const filter = erledigt
+    ? { userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: { $gte: new Date(Date.now() - 14 * 86400_000) }, $or: [{ reviewedBy: 'auto' }, { knutReviewedAt: { $ne: null } }] }
+    : { userId: u.id, ...AUF_UEBERSICHT() };
+  const docs: any[] = await orchRuns().find(filter as any).sort({ startedAt: -1 }).limit(200).toArray();
+  const med = await etaMediane(u).catch(() => null);
+  const zeilen = arbeitSortiere(docs.filter((d) => erledigt || offenFuerKnut(d)).map((d) => arbeitZeile(d, { mediane: med })));
+  const offen = erledigt ? null : zeilen.length;
+  const erledigtN = erledigt ? zeilen.length : await orchRuns().countDocuments({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: { $gte: new Date(Date.now() - 14 * 86400_000) }, $or: [{ reviewedBy: 'auto' }, { knutReviewedAt: { $ne: null } }] } as any);
+  send(res, 200, { zeilen, offen, erledigt: erledigtN, zaehler: await zaehlerFuer(u), at: new Date() });
+});
+on('GET', /^\/api\/arbeit\/start$/, async (req, res) => {
+  await needAdmin(req);
+  send(res, 200, { repos: arbeitRepos().map((r) => ({ name: r.name })), tiefen: ['quick', 'regular', 'deep'], dryRun: dryRun() });
+});
+on('POST', /^\/api\/arbeit\/start$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req, 64 * 1024);
+  let e;
+  try { e = startEingabe(b, { repos: arbeitRepos(), reviewDir: cfg.reviewDir }); } catch (x: any) { throw new HttpError(x.status ?? 400, x.message); }
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): hier startet kein Unter-Chat.');
+  const r = await startOrch(u, { title: e.title, prompt: e.prompt, cwd: e.cwd, code: e.code, tiefe: e.tiefe, lauf: null, aufrufer: 'workspace arbeit' });
+  log('unter-chat gestartet (workspace)', { user: u.id, id: (r as any).id, tiefe: e.tiefe });
+  zahlCache.delete(u.id);
+  send(res, 200, { ...(r as any), paket: e.paket });
 });
 
 on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/zurueckholen$/, async (req, res, m) => {

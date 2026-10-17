@@ -646,3 +646,14 @@ ul.plain.h-liste { padding-left: 0; list-style: none; }
   .tabbar a.active { color: var(--text-primary); font-weight: 700; }
   .tabbar a .nav-count { position: absolute; top: 0; right: 10px; }
 }
+/* Plan 213 S4a: Arbeit › Unter-Chats als Tabelle */
+.a-tab { width: 100%; border-collapse: collapse; background: var(--surface-primary); border: 1px solid var(--border-light); border-radius: 12px; overflow: hidden; margin-top: 10px; }
+.a-tab th, .a-tab td { text-align: left; padding: 9px 10px; border-top: 1px solid var(--border-light); vertical-align: top; }
+.a-tab th { background: var(--surface-secondary); font-size: 12px; color: var(--text-secondary); border-top: 0; }
+.a-tab tbody tr:not(.a-detail) { cursor: pointer; }
+.a-tab tbody tr:not(.a-detail):hover, .a-tab tr.auf { background: var(--surface-secondary); }
+.a-tab tr.a-detail td { background: var(--surface-secondary); }
+.a-dialog { display: grid; gap: 8px; max-width: 560px; }
+.a-dialog textarea, .a-dialog select { width: 100%; font: inherit; padding: 9px; border: 1px solid var(--border-light); border-radius: 9px; background: var(--surface-primary); color: var(--text-primary); min-height: 44px; }
+.sp { flex: 1; }
+@media (max-width: 760px) { .a-m { display: none; } }
