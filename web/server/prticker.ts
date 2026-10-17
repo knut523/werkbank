@@ -234,8 +234,8 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
     } catch (x: any) {
       if (x?.code !== 11000) throw x;
       // `@review deep` auf einen schon eingereihten Stand: Tiefe anheben, solange er noch wartet (nie absenken).
-      if (e.kind === 'tag' && TAG_DEEP.test(e.text ?? '')) await reviewsCol().updateOne({ _id: id as any, status: 'wartet' }, { $set: { deep: true } });
-      await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: 'schon reviewt für diesen Stand' } });
+      const hoch = e.kind === 'tag' && TAG_DEEP.test(e.text ?? '') ? (await reviewsCol().updateOne({ _id: id as any, status: 'wartet', deep: { $ne: true } }, { $set: { deep: true } })).modifiedCount : 0;
+      await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: hoch ? 'Tiefe auf deep angehoben (wartet noch)' : 'schon reviewt für diesen Stand' } });
     }
   }
   return n;

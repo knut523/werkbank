@@ -162,6 +162,7 @@ export async function diffMaterial(wt: string, klon: string, baseRef: string | n
       await g(['cat-file', '-e', `${prevHead}^{commit}`], klon);
       // Dateien des PRs jetzt UND beim alten Kopf — sonst fehlte eine seither auf den Basisstand zurückgesetzte Datei im Delta.
       const alle = [...new Set([...String(await g(['diff', '--name-only', out.basis!, head], wt)).split('\n'), ...String(await g(['diff', '--name-only', out.basis!, prevHead], wt)).split('\n')].filter(Boolean))];
+      if (!alle.length) { out.hinweis.push('Keine Dateien im PR — kein Delta'); return out; }   // `--` ohne Pfade wäre der ganze Baum
       const files = alle.slice(0, 800);
       if (alle.length > files.length) out.hinweis.push(`Delta auf 800 von ${alle.length} Dateien gekappt — Rest mit git diff im Worktree`);
       const stat = String(await g(['diff', '--stat=200', prevHead, head, '--', ...files], wt));
@@ -341,15 +342,15 @@ function starteGegenpruefung(r: any, deps: ReviewDeps, now: Date) {
       deps.log?.('pr-review gegenprüfung aus', { pr: `${r.repo}#${r.number}`, grund: res?.fehler ?? 'nicht möglich' });
       return;
     }
-    // Inzwischen vom Takt abgeräumt (Zeitüberschreitung/Neustart, Review schon abgeschlossen)? Dann keine Seiteneffekte mehr.
-    if (((await reviewsCol().findOne({ _id: r._id }, { projection: { status: 1 } })) as any)?.status !== 'gegenprüfung') return;
+    // Erst den Übergang beanspruchen, dann Seiteneffekte: inzwischen vom Takt abgeräumt (Zeitüberschreitung/Neustart) → nichts.
+    const claim = await reviewsCol().updateOne({ _id: r._id, status: 'gegenprüfung' }, { $set: { status: 'abgleich', gp: { ok: true, at, energie: res.energie ?? null } } });
+    if (!claim.modifiedCount) return;
     writeFileSync(join(reviewDir(), r.paket, 'gegenpruefung.md'), res.text);
     try { await deps.sendStrand?.(r, abgleichText(r.paket)); }
     catch (e: any) {
-      await reviewsCol().updateOne({ _id: r._id, status: 'gegenprüfung' }, { $set: { status: 'läuft', gp: { ok: false, at, fehler: `Abgleich nicht zugestellt: ${scrub(e?.message ?? e)}`, energie: res.energie ?? null } } });
+      await reviewsCol().updateOne({ _id: r._id, status: 'abgleich' }, { $set: { status: 'läuft', gp: { ok: false, at, fehler: `Abgleich nicht zugestellt: ${scrub(e?.message ?? e)}`, energie: res.energie ?? null } } });
       return;
     }
-    await reviewsCol().updateOne({ _id: r._id, status: 'gegenprüfung' }, { $set: { status: 'abgleich', gp: { ok: true, at, energie: res.energie ?? null } } });
     deps.log?.('pr-review gegenprüfung', { pr: `${r.repo}#${r.number}`, energie: res.energie ?? null });
   })().finally(() => gpLaufend.delete(p));
   gpLaufend.add(p);

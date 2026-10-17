@@ -32,8 +32,16 @@ test('jcode-Wächter (17c): Umgebung und /proc nicht lesbar, Schlüssel nicht in
   const env = { ...process.env, PATH: `${SHIM}:${process.env.PATH}`, JCODE_PROVIDER_MELIOUS_API_KEY: 'sk-mel-probe-nur-test-123' };
   const r = (c: string) => spawnSync('bash', ['-c', c], { env, encoding: 'utf8' });
   for (const c of ['env', 'printenv', 'cat /proc/self/environ', 'ls /proc/1', 'export -p', 'grep -a sk /proc/self/environ']) assert.equal(r(c).status, 126, c);
-  // ein erlaubter Befehl läuft weiter
+  // Umgehungen aus der Gegenprüfung: Glob, Quotes, Backslash, leere Variable, rekursive Suche ab /
+  // Glob: nicht abgelehnt, aber nicht expandiert (-f) → Datei gibt es nicht, nichts gelesen
+  const glob = r('cat /pro?/*/en*');
+  assert.notEqual(glob.status, 0); assert.doesNotMatch(glob.stdout, /sk-mel-probe/);
+  for (const c of ["cat '/pr''oc/1/env''iron'", 'cat /pr\\oc/1/environ', 'cat /pr$1oc/1/envi$1ron', 'rg -a sk-mel /', 'grep -r -a sk-mel ../../../../../../../..', 'find / -name x']) assert.equal(r(c).status, 126, c);
+  // erlaubte Befehle laufen weiter (auch Suchen nach Wörtern wie „set“)
   assert.equal(r('ls /').status, 0);
+  assert.equal(r('grep -c set /dev/null').status, 1, 'läuft (kein Treffer), nicht abgelehnt');
+  // Globs werden nicht expandiert (-f)
+  assert.match(r('ls /bi?').stderr, /No such file/);
 });
 
 test('jcode: Schreiben außerhalb des Arbeitsordners wird erkannt', () => {

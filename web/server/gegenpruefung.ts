@@ -51,14 +51,15 @@ export async function meliousPassC(u: User, o: { wt: string; basis: string; zwec
   const env: Record<string, string> = { PATH: `${SHIM()}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: key };
   const out = await new Promise<{ code: number | null; stdout: string; stderr: string }>((res) => {
     // stdin zu (nichts wartet auf Eingabe); nach dem Zeitlimit SIGTERM, 30 s später SIGKILL und spätestens dann fertig.
-    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', '--model', 'glm-5.3-flash', '--tools', 'read,bash,agentgrep', 'run', '--json', jcodePrompt(o.basis, brief.text)], { cwd: o.wt, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', '--model', 'glm-5.3-flash', '--tools', 'read,bash,agentgrep', 'run', '--json', jcodePrompt(o.basis, brief.text)], { cwd: o.wt, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });   // eigene Prozessgruppe
     let so = '', se = '', fertig = false;
     const ende = (code: number | null) => { if (fertig) return; fertig = true; clearTimeout(t1); clearTimeout(t2); res({ code, stdout: so, stderr: se }); };
     c.stdout!.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
     c.stderr!.on('data', (b) => { se = (se + b).slice(-20_000); });
     const ms = (o.timeoutS ?? 1500) * 1000;
-    const t1 = setTimeout(() => c.kill('SIGTERM'), ms);
-    const t2 = setTimeout(() => { c.kill('SIGKILL'); ende(-2); }, ms + 30_000);
+    const toeten = (sig: NodeJS.Signals) => { try { process.kill(-c.pid!, sig); } catch { try { c.kill(sig); } catch { /* schon weg */ } } };   // ganze Gruppe
+    const t1 = setTimeout(() => toeten('SIGTERM'), ms);
+    const t2 = setTimeout(() => { toeten('SIGKILL'); ende(-2); }, ms + 30_000);
     c.on('close', (code) => ende(code));
     c.on('error', () => ende(-1));
   });
