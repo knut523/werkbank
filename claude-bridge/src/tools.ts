@@ -245,7 +245,7 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // review_ready ändert nur Werkbank-Zustand (Fertig-Marke am eigenen Lauf) → ohne Rückfrage.
     // hauptchat_melden (Plan 154, S4): Meldung an den Hauptchat — ändert nur Werkbank-Zustand, gedeckelt in der Werkbank.
     // delegieren/delegation_*/phase_wechseln (Plan 165): Steuerung durch die Brücke; Worker arbeiten unter ihrem eigenen Wächter.
-    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
     if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
     // Orchestrator-Werkzeuge (Plan 132, S3): nur im Leitstand. Lesen und Rückfragen an Knut frei; Stränge starten, Nachrichten
@@ -513,6 +513,35 @@ export function neutralizeAnswerAnchors(tail: string, text: string): string {
   let out = text;
   for (const at of cuts.reverse()) out = out.slice(0, at) + '\u200b' + out.slice(at);
   return out;
+}
+
+/** Werkbank-Werkzeug mit den offenen Inbox-Einträgen (web/mcp/werkbank-tools.ts `inbox`). */
+export const INBOX_TOOL = 'mcp__werkbank__inbox';
+/** Kennungen wie web/server/inbox.ts KENNUNG_RE — was nicht passt, bekommt keinen Knopf. */
+const INBOX_KENNUNG = /^(q|d|b|p|v|pflege|laeufe|schlange|altbestand)(-[A-Za-z0-9-]{1,80})?$/;
+const INBOX_MAX = 8;
+
+/**
+ * Plan 213 K4: Ja/Nein-Knöpfe je Inbox-Eintrag aus dem Ergebnis des Inbox-Werkzeugs. Die letzte Zeile des Ergebnisses
+ * ist `KNOEPFE <JSON>` mit `[{id, frage}]`; nur gültige Kennungen, Frage als reiner Text (keine Links, keine Anker),
+ * höchstens 8 Einträge. Leer, wenn nichts zu beantworten ist.
+ */
+export function inboxKnoepfe(ergebnis: string): string {
+  const zeile = ergebnis.split('\n').reverse().find((z) => z.startsWith('KNOEPFE '));
+  if (!zeile) return '';
+  let liste: unknown;
+  try { liste = JSON.parse(zeile.slice(8)); } catch { return ''; }
+  if (!Array.isArray(liste)) return '';
+  const gueltig = liste.filter((e: any) => e && typeof e.id === 'string' && INBOX_KENNUNG.test(e.id) && typeof e.frage === 'string');
+  const rows = gueltig.slice(0, INBOX_MAX).map((e: any) => {
+    const roh = e.frage.replace(/[\r\n]+/g, ' ').trim();
+    const f = (roh.length > 120 ? roh.slice(0, 119) + '…' : roh).replace(/[\\`*_[\]()<>#|~!]/g, (c: string) => '\\' + c);
+    const frage = neutralizeAnswerAnchors('', f);
+    return `- ${frage}  \n  [✅ Ja](#werkbank-antwort:${e.id}:ja) [✖️ Nein](#werkbank-antwort:${e.id}:nein)`;
+  });
+  if (!rows.length) return '';
+  const mehr = gueltig.length > INBOX_MAX ? `\n\n_${gueltig.length - INBOX_MAX} weitere unter Heute › Inbox_` : '';
+  return `**Zum Antworten:**\n\n${rows.join('\n')}${mehr}`;
 }
 
 /** Die Rückfrage vor einem Schreibzugriff, auf Deutsch. */
