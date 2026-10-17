@@ -21,7 +21,7 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema, etaMediane } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
-import { themaOf } from './themen.ts';
+import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
@@ -45,6 +45,15 @@ import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
 import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog, logShare, scratchDir } from './sharing.ts';
 import { log } from './log.ts';
+import { cosRoutes } from './cosroutes.ts';
+import { morgenTick, schnappschussTick } from './cosjob.ts';
+import { olafJira } from './cos-olafjira.ts';
+import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
+import { abschlussTick, wocheTick } from './cosabschluss.ts';
+import { rueckstau as cosRueckstau, } from './cosmeeting.ts';
+import { meetingTeams as cosMeetingTeams } from './cossammle.ts';
+const cosRueckstauZahl = () => { try { return cosRueckstau(cfg.vaultDir, cosMeetingTeams(), new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date())).length; } catch { return 0; } };
+import type { Quellen as CosQuellen } from './cossammle.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, type JiraAction } from './jirawrite.ts';
@@ -1693,8 +1702,8 @@ on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (r
 });
 
 // Übersicht „Was fertig ist“ (docs/plan-uebersicht-handeln.md, Paket 184): je offenem Strang eine Karte, nach Thema. Nur lesen.
-on('GET', /^\/api\/uebersicht$/, async (req, res) => {
-  const u = await needAdmin(req);
+/** Karten und Rückfragen der Übersicht — eine Quelle für die Seite und für den Chief of Staff (Plan 209, K8). */
+async function uebersichtDaten(u: User) {
   const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(60).toArray()) as any[]).filter(offenFuerKnut);
   const ids = docs.map((d) => String(d._id));
   const fgs: any[] = ids.length ? await (await import('./freigabe.ts')).freigaben().find({ strand: { $in: ids }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
@@ -1708,6 +1717,12 @@ on('GET', /^\/api\/uebersicht$/, async (req, res) => {
   }).filter(Boolean) as any[];
   const imStrang = new Set(karten.map((k) => k.id));
   const lose = qs.filter((q: any) => !q.strand || !imStrang.has(String(q.strand.id)));
+  return { docs, karten, qs, lose, fragenFehler, basis };
+}
+
+on('GET', /^\/api\/uebersicht$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const { karten, lose, fragenFehler, basis } = await uebersichtDaten(u);
   // Teil B (Mockup 185): Hauptchat-Zeile und „Erledigt diese Woche“ (von Knut geprüft, 7 Tage) — nur Mongo.
   const hauptchat = await leitstandLine(u).catch(() => null);
   const seit = new Date(Date.now() - 7 * 86400_000);
@@ -2696,6 +2711,36 @@ on('GET', /^\/api\/context$/, async (req, res) => {
   send(res, 200, await contextStats(u));
 });
 
+// Chief of Staff (docs/plan-chief-of-staff.md): Register, Einwurf, Morgenlage — Routen in cosroutes.ts.
+const cosQuellen = (): CosQuellen => ({
+  vaultDir: cfg.vaultDir,
+  uebersicht: async (u) => { const r = await uebersichtDaten(u); return { karten: r.karten, qs: r.qs, docs: r.docs }; },
+  mine: async (u) => { const m = await mineFor(u, { write: false }); return { prs: m.prs, tickets: m.tickets, questions: m.questions }; },
+  ich: (u) => firstName(u),
+  olafJira: (st) => olafJira(st, { creds: () => jiraCreds(null) }),   // lesend; Seite aus jiraSites (cos-olafjira.ts)
+});
+cosRoutes({
+  on, needAdmin, internalUser: (req, b) => internalUser(req, b), body, send, HttpError, vaultDir: () => cfg.vaultDir, dry: vaultDry, invalidate: invalidateIndex, log,
+  quellen: () => cosQuellen(),
+  // Nachfassen (nur nach Vorschau + Bestätigung in der Oberfläche): GitHub-Kommentar am PR (Review-Art COMMENT, an den aktuellen Kopf gebunden)
+  // oder Jira-Kommentar mit Knuts Zugang. Mails werden nie gesendet.
+  nachfasser: (u) => ({
+    github: async (repo, nummer, text) => {
+      const token = await githubReadToken();
+      const now = token ? await prNowVia(token, repo, nummer).catch(() => null) : null;
+      if (!now) throw new HttpError(502, 'PR-Stand nicht lesbar (Lesetoken).');
+      if (now.state !== 'OPEN') throw new HttpError(409, `PR ist ${now.state === 'MERGED' ? 'gemergt' : 'geschlossen'} — Nachfassen nicht mehr nötig.`);
+      return postReview({ repo, number: nummer, head: now.head }, text, 'COMMENT').catch((e: any) => { throw new HttpError(502, e.message); });
+    },
+    jira: async (key, text) => { await jiraWrite(u, () => writeJira(u, key, [{ type: 'comment', text }])); },
+  }),
+  themenVorschlag: async () => {
+    const ws = (await wb().collection('jira_issues').distinct('workstream')).map(String).filter(Boolean);
+    const th = (await orchRuns().distinct('thema')).map(String).filter(Boolean);
+    return [...new Set([...ws, ...th, ...THEMEN.map((t) => t.thema)])];
+  },
+});
+
 // --- intern: nur für die Brücke und ihre Werkzeuge (Header mit WERKBANK_INTERNAL_TOKEN) ---
 
 async function internalUser(req: IncomingMessage, b: any): Promise<User> {
@@ -2722,7 +2767,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
   const id = String(b.id ?? '');
   switch (m[1]) {
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null, budget: b.budget || null });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null, tiefe: r.tiefe });
       return send(res, 200, r);
     }
@@ -3170,6 +3215,20 @@ async function backgroundJobs() {
   };
   setTimeout(houseTick, 60_000);
   setInterval(houseTick, 60 * 60_000);
+
+  // Chief of Staff: Morgenlage-Seite (06:55, Nachzug 07:40) und abendlicher Vergleichsstand (Plan 209).
+  const cosTick = async () => {
+    try { const r = await morgenTick(cosQuellen(), { dry: vaultDry() }); if (r !== 'nichts' && r !== 'zu-frueh' && r !== 'aus') log('cos morgenlage', { r }); if (r === 'geschrieben' || r === 'nachgezogen') invalidateIndex(); }
+    catch (e: any) { log('cos morgenlage', { error: String(e?.message ?? e).slice(0, 200) }); }
+    try { if (await schnappschussTick()) log('cos schnappschuss'); } catch (e: any) { log('cos schnappschuss', { error: String(e?.message ?? e).slice(0, 200) }); }
+    try { const a = await abschlussTick(cosQuellen(), { dry: vaultDry() }); if (a === 'geschrieben') { log('cos tagesabschluss'); invalidateIndex(); } } catch (e: any) { log('cos tagesabschluss', { error: String(e?.message ?? e).slice(0, 200) }); }
+    try { const a = await wocheTick(cosQuellen(), { dry: vaultDry(), rueckstau: () => cosRueckstauZahl() }); if (a === 'geschrieben') { log('cos woche'); invalidateIndex(); } } catch (e: any) { log('cos woche', { error: String(e?.message ?? e).slice(0, 200) }); }
+    // Budget je Unter-Chat (80 % Meldung, 100 % Pause) und Lebenszeichen (hängt? / still) — deterministisch, ohne Modell.
+    try { const b = await budgetTick(orchDeps); if (b.gewarnt.length || b.gestoppt.length) log('cos budget', b); } catch (e: any) { log('cos budget', { error: String(e?.message ?? e).slice(0, 200) }); }
+    try { const l = await lebenszeichenTick(orchDeps); if (l.gemeldet.length) log('cos lebenszeichen', l); } catch (e: any) { log('cos lebenszeichen', { error: String(e?.message ?? e).slice(0, 200) }); }
+  };
+  setTimeout(cosTick, 45_000);
+  setInterval(cosTick, 60_000);
 
   // Werkbank-Feed für den Vault-Sync-Snapshot und Abgleich der Freigaben mit dem Protokoll (alle 5 min).
   const roadmapTick = async () => {

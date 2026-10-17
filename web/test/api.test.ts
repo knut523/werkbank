@@ -5,7 +5,7 @@ import { TEST_MONGO } from './testmongo.ts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, cpSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync, utimesSync, renameSync, rmSync } from 'node:fs';
+import { mkdtempSync, cpSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync, utimesSync, renameSync, rmSync, unlinkSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -1622,4 +1622,211 @@ test('Agent ansetzen: Vorschau schreibt nichts, Sperren, genau ein Ticket, Zurü
   assert.match(proto, /"art":"knopf","slug":"[a-z-]*g0-erinnerung-zwei","knopf":"Spec nachziehen\/abräumen"/);
   assert.match(proto, /"knopf":"trotzdem bauen"/, 'die Bestätigungen oben stehen als Knopf im Protokoll');
   await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+});
+
+// --- Chief of Staff (docs/plan-chief-of-staff.md, Paket 209) ---
+
+const intern = (path: string, body: unknown) => fetch(B + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId: String(users.a._id), ...(body as object) }) }).then(async (r) => ({ status: r.status, j: await r.json().catch(() => ({})) as any }));
+const COS_REG = () => join(VAULT, 'olaf/1-Projects/chief-of-staff/zusagen-register.md');
+
+test('CoS Register: nur Admin, Vorschau schreibt nie, confirm schreibt, 409 bei Änderung, interne Werkzeuge', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  assert.equal((await bernd.req('/api/cos/register')).status, 403);
+  assert.equal((await bernd.req('/api/cos/zusage', { body: { was: 'x' } })).status, 403);
+  const leer = await anna.req('/api/cos/register');
+  assert.equal(leer.status, 200); assert.equal(leer.j.zusagen.length, 0); assert.equal(leer.j.vorhanden.zusagen, false);
+  const pre = await anna.req('/api/cos/zusage', { body: { wer: 'Christoph Bitzner', was: 'Belieferungsstatus in den Report', bis: '2026-10-23', thema: 'Cockpit' } });
+  assert.equal(pre.status, 200); assert.equal(pre.j.needsConfirm, true);
+  assert.equal(existsSync(COS_REG()), false, 'Vorschau schreibt nicht');
+  const ok = await anna.req('/api/cos/zusage', { body: { wer: 'Christoph Bitzner', was: 'Belieferungsstatus in den Report', bis: '2026-10-23', thema: 'Cockpit', confirm: true, hash: pre.j.hash } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.j)); assert.deepEqual(ok.j.ids, ['Z-001']);
+  assert.match(readFileSync(COS_REG(), 'utf8'), /- \*\*Z-001\*\* · Christoph Bitzner → Knut · Belieferungsstatus in den Report · bis 2026-10-23 · Thema: Cockpit/);
+  const stale = await anna.req('/api/cos/zusage', { body: { was: 'zweite', confirm: true, hash: pre.j.hash } });
+  assert.equal(stale.status, 409); assert.match(stale.j.error, /geändert/);
+  const g = await anna.req('/api/cos/register');
+  assert.equal(g.j.zusagen.length, 1); assert.equal(g.j.zusagen[0].seite, 'Seite?');
+  // Vault-Sync läuft (flock auf der Sperrdatei) → 409
+  const lockDir = join(tmp, 'vault-sync'); mkdirSync(lockDir, { recursive: true });
+  const holder = spawn('flock', [join(lockDir, '.lock'), 'sleep', '2'], { stdio: 'ignore' });
+  const frei = new Promise((r) => holder.on('exit', r));
+  await new Promise((r) => setTimeout(r, 400));
+  const gesperrt = await anna.req('/api/cos/zusage', { body: { was: 'während Sync', confirm: true } });
+  await frei;
+  assert.equal(gesperrt.status, 409); assert.match(gesperrt.j.error, /Vault-Sync/);
+  // Interner Weg (Werkbank-MCP): lesen, ändern (schon bestätigt vom Chat)
+  const l = await intern('/internal/cos/zusagen', {});
+  assert.equal(l.status, 200); assert.equal(l.j.zusagen[0].id, 'Z-001');
+  const ae = await intern('/internal/cos/zusage', { art: 'aendern', id: 'Z-001', status: 'erledigt', notiz: 'im Report' });
+  assert.equal(ae.status, 200, JSON.stringify(ae.j));
+  assert.match(readFileSync(COS_REG(), 'utf8'), /## Erledigt\n\n- \*\*Z-001\*\*.*Notiz: im Report · erledigt \d{4}-\d{2}-\d{2}/);
+  const th = await intern('/internal/cos/thema', { name: 'Flex', ball: 'Knut', stand: 'Umfrage läuft' });
+  assert.equal(th.status, 200, JSON.stringify(th.j));
+  const reg = await anna.req('/api/cos/register');
+  assert.equal(reg.j.themen.find((t: any) => t.name === 'Flex').ball, 'Knut');
+  assert.ok(reg.j.themen.length >= 2, 'beim ersten Schreiben aus Jira-Workstreams/Strängen vorbefüllt (K9)');
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+});
+
+test('CoS Einwurf: Datei als Arbeitskopie, neuer Chat mit Anleitung, Text nicht im Prompt, nur Admin', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  const vtt = 'WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nKnut: Christoph schickt bis Freitag den Belieferungsstatus.\n\n00:00:05.000 --> 00:00:08.000\nGEHEIM-MARKER-4711\n';
+  assert.equal((await bernd.req('/api/cos/einwurf', { body: { text: vtt } })).status, 403);
+  assert.equal((await anna.req('/api/cos/einwurf', { body: { text: '  ' } })).status, 400);
+  assert.equal((await anna.req('/api/cos/einwurf', { body: { text: 'x', dateiname: 'virus.exe' } })).status, 400);
+  const n = lcChats.length;
+  const r = await anna.req('/api/cos/einwurf', { body: { text: vtt, dateiname: 'teams.vtt', titel: 'Rogue Abstimmung' } });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  assert.equal(r.j.art, 'vtt'); assert.match(r.j.url, /^https:\/\/chat\.example\/c\//);
+  assert.equal(lcChats.length, n + 1);
+  const p = lcChats.at(-1).body.text as string;
+  assert.match(p, /^Einwurf · \d\d\.\d\d\. · Rogue Abstimmung\n/);
+  assert.match(p, /Arbeitskopie: .*\/scratch\/.*\/einwurf\/\d{4}-\d{2}-\d{2}-\d{4}-rogue-abstimmung\.vtt/);
+  assert.match(p, /Kandidaten in fünf Klassen/);
+  assert.ok(!p.includes('GEHEIM-MARKER-4711'), 'Rohtext steht nicht im Prompt (K20)');
+  const f = /Arbeitskopie: (\S+\.vtt)/.exec(p)![1];
+  assert.equal(readFileSync(f, 'utf8'), vtt);
+  // nichts davon in Mongo (K20)
+  const dump = JSON.stringify(await Promise.all((await mongo.db(DB).listCollections().toArray()).map((c) => mongo.db(DB).collection(c.name).find({}).limit(200).toArray())));
+  assert.ok(!dump.includes('GEHEIM-MARKER-4711'));
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+});
+
+test('CoS Morgenlage (K8/P1): eine Rückfrage steht in Lage und „Rückfragen an dich“, nach der Antwort in keinem von beiden; nur Admin', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  assert.equal((await bernd.req('/api/cos/lage')).status, 403);
+  const ask = await intern('/internal/orchestrator/questions/ask', { title: 'Flex-Pilot starten?', context: 'Umfrage fertig', options: [{ label: 'Ja', consequence: 'starten' }, { label: 'Nein', consequence: 'warten' }], recommendation: 'Ja' });
+  assert.equal(ask.status, 200, JSON.stringify(ask.j));
+  const l1 = await anna.req('/api/cos/lage');
+  assert.equal(l1.status, 200, JSON.stringify(l1.j));
+  assert.match(l1.j.stand.hhmm, /^\d\d:\d\d$/);
+  const e = l1.j.entscheide.items.find((x: any) => x.id === ask.j.id);
+  assert.ok(e, 'Frage in ①'); assert.equal(e.empfehlung, 'Ja'); assert.equal(e.art, 'frage');
+  assert.ok((await anna.req('/api/uebersicht')).j.lose.some((q: any) => q.id === ask.j.id), 'Frage in „Rückfragen an dich“');
+  assert.equal(l1.j.schulden.rueckfragenAnKnut >= 1, true);
+  const an = await anna.req(`/api/orchestrator/questions/${ask.j.id}/answer`, { body: { option: 'Ja' } });
+  assert.equal(an.status, 200, JSON.stringify(an.j));
+  assert.ok(!(await anna.req('/api/cos/lage')).j.entscheide.items.some((x: any) => x.id === ask.j.id), 'weg in ①');
+  assert.ok(!(await anna.req('/api/uebersicht')).j.lose.some((q: any) => q.id === ask.j.id), 'weg in „Rückfragen an dich“');
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+});
+
+test('CoS Triage (Vexa): Vorschlag in der Lage, Ja = Vorschau → Bestätigung, Nein blendet aus; Nicht-Admin 403', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  const heute = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date(Date.now() - 2 * 86400_000));
+  const md = readFileSync(new URL('./fixtures/cos/vexa-mit-entscheidung.md', import.meta.url), 'utf8').replace(/2026-10-14/g, heute);
+  mkdirSync(join(VAULT, 'olaf/Meetings'), { recursive: true });
+  const rel = (n: string) => `olaf/Meetings/${heute}-${n}.md`;
+  writeFileSync(join(VAULT, rel('a')), md); writeFileSync(join(VAULT, rel('b')), md.replace('meeting_id 777', 'meeting_id 778'));
+  try {
+    assert.equal((await bernd.req('/api/cos/triage', { body: { datei: rel('a') } })).status, 403);
+    const l = await anna.req('/api/cos/lage');
+    const t = l.j.entscheide.items.filter((e: any) => e.art === 'triage');
+    assert.equal(t.length, 2); assert.match(t[0].titel, /4 Zusagen, 1 Entscheidung übernehmen\?/);
+    assert.equal((await anna.req('/api/cos/triage', { body: { datei: 'olaf/2-Areas/x.md' } })).status, 400);
+    const vor = await anna.req('/api/cos/triage', { body: { datei: rel('a') } });
+    assert.equal(vor.status, 200, JSON.stringify(vor.j)); assert.equal(vor.j.needsConfirm, true);
+    assert.equal(readFileSync(join(VAULT, rel('a')), 'utf8'), md, 'Vorschau schreibt nicht');
+    const ok = await anna.req('/api/cos/triage', { body: { datei: rel('a'), confirm: true, hash: vor.j.hash, registerHash: vor.j.registerHash } });
+    assert.equal(ok.status, 200, JSON.stringify(ok.j)); assert.equal(ok.j.ids.length, 4);
+    assert.match(readFileSync(join(VAULT, rel('a')), 'utf8'), /## Triage \(Werkbank,/);
+    assert.equal((await anna.req('/api/cos/lage')).j.entscheide.items.filter((e: any) => e.art === 'triage').length, 1, 'erledigter Vorschlag weg');
+    const nein = await anna.req('/api/cos/triage', { body: { datei: rel('b'), art: 'nein' } });
+    assert.equal(nein.status, 200);
+    assert.equal((await anna.req('/api/cos/lage')).j.entscheide.items.filter((e: any) => e.art === 'triage').length, 0);
+    assert.ok(!readFileSync(join(VAULT, rel('b')), 'utf8').includes('## Triage'), 'Nein lässt den Vault unverändert');
+  } finally {
+    for (const n of ['a', 'b']) { try { unlinkSync(join(VAULT, rel(n))); } catch { /* weg */ } }
+    await mongo.db(DB).collection('cos_triage').deleteMany({});
+    await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+    await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+  }
+});
+
+test('CoS Nachfassen und Vorbereitung: Entwurf ohne Notiztext, Mail nie senden, Wer: offen ohne Entwurf; Termine in der Lage; nur Admin', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  try {
+    const heute = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date());
+    const ops = [
+      { art: 'neu', wer: 'Peter Test', was: 'Bericht schicken', bis: '2020-01-10', quelle: '[[2020-01-02-irgendein-meeting]]', notiz: 'GEHEIM-IM-NOTIZTEXT' },
+      { art: 'neu', was: 'Ohne Namen', bis: '2020-01-10' },
+    ];
+    const pre = await anna.req('/api/cos/zusage', { body: { ops } });
+    const w = await anna.req('/api/cos/zusage', { body: { ops, confirm: true, hash: pre.j.hash } });
+    assert.equal(w.status, 200, JSON.stringify(w.j));
+    const [idMail, idOffen] = w.j.ids as string[];
+    assert.equal((await bernd.req('/api/cos/nachfassen', { body: { id: idMail } })).status, 403);
+    const e = await anna.req('/api/cos/nachfassen', { body: { id: idMail } });
+    assert.equal(e.status, 200, JSON.stringify(e.j));
+    assert.match(e.j.text, /^Hallo Peter,\n\nkurze Erinnerung \(Meeting vom 02\.01\.\): Bericht schicken — vereinbart war bis 10\.01\.2020/);
+    assert.ok(!e.j.text.includes('GEHEIM-IM-NOTIZTEXT'));
+    assert.equal(e.j.senden, false);
+    assert.equal((await anna.req('/api/cos/nachfassen/senden', { body: { id: idMail } })).status, 400);
+    assert.equal((await anna.req('/api/cos/nachfassen', { body: { id: idOffen } })).status, 400);
+    // Termin im Register → Vorbereitung in der Lage
+    const reg = COS_REG();
+    writeFileSync(reg, readFileSync(reg, 'utf8').replace(/## Termine\n/, `## Termine\n\n- Termin ${heute} 10:00 Peter-Runde · mit: Peter Test, Knut\n`));
+    const l = await anna.req('/api/cos/lage');
+    const t = l.j.termine.find((x: any) => x.titel === 'Peter-Runde');
+    assert.ok(t, JSON.stringify(l.j.termine)); assert.equal(t.wann, 'heute'); assert.equal(t.notetaker, 'notetaker@konekto.energy');
+    assert.deepEqual(t.schuldenAnKnut.map((z: any) => z.id), [idMail]);
+    assert.ok(l.j.schulden.team.items.some((s: any) => s.id === idMail && s.ueberfaellig) || l.j.schulden.klaeren.items.some((s: any) => s.id === idMail && s.ueberfaellig));
+  } finally {
+    await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+    await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+  }
+});
+
+test('CoS Inbox, Abschluss, Woche, Rückstau: alle Entscheide statt sieben, Nachmittagsansichten live, Sammelarchivierung mit Vorschau und Rückgängig; nur Admin', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  const alt = readFileSync(new URL('./fixtures/cos/vexa-2026-09-18.md', import.meta.url), 'utf8').replace(/^- \[ \] .*\n/gm, '');
+  mkdirSync(join(VAULT, 'olaf/Meetings'), { recursive: true });
+  const dateien = ['olaf/Meetings/2026-06-01-rs-a.md', 'olaf/Meetings/2026-06-02-rs-b.md'];
+  dateien.forEach((f, i) => writeFileSync(join(VAULT, f), alt.replace(/meeting-date: .*/, 'meeting-date: 2026-06-0' + (i + 1)).replace('meeting_id 92', 'meeting_id 9' + i)));
+  const ids: string[] = [];
+  try {
+    for (const p of ['/api/cos/inbox', '/api/cos/abschluss', '/api/cos/woche']) assert.equal((await bernd.req(p)).status, 403, p);
+    assert.equal((await bernd.req('/api/cos/rueckstau', { body: {} })).status, 403);
+    for (let n = 0; n < 9; n++) { const a = await intern('/internal/orchestrator/questions/ask', { title: 'Inbox-Frage ' + n, context: 'c', options: [{ label: 'Ja' }], recommendation: 'Ja' }); ids.push(a.j.id); }
+    const lage = await anna.req('/api/cos/lage');
+    assert.equal(lage.j.entscheide.items.length, 7); assert.ok(lage.j.entscheide.weitere >= 2, 'nur sieben in der Karte');
+    const inbox = await anna.req('/api/cos/inbox');
+    assert.equal(inbox.status, 200); assert.ok(inbox.j.gesamt >= 9); assert.ok(inbox.j.items.every((e: any) => e.seit), '„wartet seit“ bei jedem');
+    assert.ok(inbox.j.items.length === lage.j.entscheide.gesamt, 'dieselbe Liste, nur ohne Obergrenze');
+    const ab = await anna.req('/api/cos/abschluss');
+    assert.equal(ab.status, 200); assert.ok(Array.isArray(ab.j.entschieden) && Array.isArray(ab.j.morgen));
+    const w = await anna.req('/api/cos/woche');
+    assert.equal(w.status, 200); assert.deepEqual(w.j.rueckstauListe.map((x: any) => x.datei).sort(), dateien);
+    // Vorschau schreibt nichts
+    const vor = await anna.req('/api/cos/rueckstau', { body: { dateien } });
+    assert.equal(vor.j.needsConfirm, true); assert.match(readFileSync(join(VAULT, dateien[0]), 'utf8'), /^status: draft$/m);
+    const hashes = Object.fromEntries(w.j.rueckstauListe.map((x: any) => [x.datei, x.hash]));
+    const ok = await anna.req('/api/cos/rueckstau', { body: { dateien: [dateien[0]], confirm: true, hashes } });
+    assert.equal(ok.status, 200, JSON.stringify(ok.j)); assert.deepEqual(ok.j.archiviert, [dateien[0]]);
+    assert.match(readFileSync(join(VAULT, dateien[0]), 'utf8'), /^status: archived$/m); assert.match(readFileSync(join(VAULT, dateien[1]), 'utf8'), /^status: draft$/m);
+    assert.deepEqual((await anna.req('/api/cos/rueckstau/zurueck')).j.moeglich.map((x: any) => x.datei), [dateien[0]]);
+    const z = await anna.req('/api/cos/rueckstau/zurueck', { body: { datei: dateien[0] } });
+    assert.equal(z.status, 200); assert.match(readFileSync(join(VAULT, dateien[0]), 'utf8'), /^status: draft$/m);
+    assert.equal((await anna.req('/api/cos/rueckstau', { body: { dateien: ['olaf/2-Areas/x.md'], confirm: true } })).status, 400);
+  } finally {
+    for (const f of dateien) { try { unlinkSync(join(VAULT, f)); } catch { /* weg */ } }
+    for (const id of ids) await anna.req(`/api/orchestrator/questions/${id}/answer`, { body: { option: 'Ja' } }).catch(() => {});
+    await mongo.db(DB).collection('cos_archiv').deleteMany({});
+    await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+    await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+  }
 });

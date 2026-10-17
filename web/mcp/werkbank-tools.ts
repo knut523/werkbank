@@ -84,9 +84,9 @@ const ORCH_TOOLS = [
   {
     name: 'orch_start',
     description: 'Neuen Arbeitsstrang starten: eigener Workspace-Chat in Knuts Konto mit Auftrag, Arbeitsordner (Worktree unter ~/work/knut) und optional Plandatei. lauf = Name des Auftrags, zu dem der Strang gehört (Gruppe + Lesezeichen „Orch · <Lauf>“; alle Stränge eines Auftrags mit demselben lauf). Bericht nach ~/work/knut/review-pakete/NNN-<slug>/bericht.md verlangen, dann verlinkt der OLAF Workspace ihn. code=true legt einen frischen Worktree vom Integrationszweig an. tiefe (Vorgabe regular): quick = kleine, klare Aufgabe (Melious Flash, kein Council, keine Gegenprüfung, nur Repo-Tests); regular = wie bisher (plan-to-pr, Pass C mit challenge); deep = voller plan-to-pr mit Council, Gegenprüfung auf GLM 5.3, Visual-Check, doppeltes Budget. Liefert ID und Link.',
-    inputSchema: { type: 'object', properties: { title: { type: 'string' }, cwd: { type: 'string' }, prompt: { type: 'string' }, plan: { type: 'string' }, lauf: { type: 'string' }, code: { type: 'boolean' }, shared: { type: 'boolean' }, tiefe: { type: 'string', enum: ['quick', 'regular', 'deep'] } }, required: ['title', 'cwd', 'prompt'] },
+    inputSchema: { type: 'object', properties: { title: { type: 'string' }, cwd: { type: 'string' }, prompt: { type: 'string' }, plan: { type: 'string' }, lauf: { type: 'string' }, code: { type: 'boolean' }, shared: { type: 'boolean' }, tiefe: { type: 'string', enum: ['quick', 'regular', 'deep'] }, budget: { type: 'number', description: 'Tokenbudget des Strangs (Eingabe ohne Cache-Lesen + Ausgabe); bei 80 % Meldung, bei 100 % Pause mit Rückfrage. Leer = Vorgabe des Workspace je Tiefe.' } }, required: ['title', 'cwd', 'prompt'] },
     run: async (a: any) => {
-      const j = await call('/internal/orchestrator/start', { title: a.title, cwd: a.cwd, prompt: a.prompt, plan: a.plan || null, lauf: a.lauf || null, code: a.code === true, shared: a.shared === true, ...(a.tiefe ? { tiefe: a.tiefe } : {}) }, 60_000);
+      const j = await call('/internal/orchestrator/start', { title: a.title, cwd: a.cwd, prompt: a.prompt, plan: a.plan || null, lauf: a.lauf || null, code: a.code === true, shared: a.shared === true, ...(a.tiefe ? { tiefe: a.tiefe } : {}), budget: a.budget || null }, 60_000);
       return `gestartet: ${j.id} ${j.url}\nTiefe: ${j.tiefe ?? 'regular'}${j.modell ? ` · Modell ${j.modell}` : ''}\nOrdner: ${j.cwd}${j.worktree ? ' (frischer Worktree)' : ''}${j.stand ? `\n${j.stand}` : ''}${j.warning ? `\nHinweis: ${j.warning}` : ''}`;
     },
   },
@@ -169,7 +169,43 @@ const ORCH_TOOLS = [
   },
 ];
 
+// Chief of Staff (docs/plan-chief-of-staff.md, S1.1): Zusagen-Register im Vault. Schreibende Werkzeuge fragt die Brücke im Chat vorher ab
+// (Klasse confirm), im Strang sind sie gesperrt; die Werkbank prüft Hash und Vault-Sync-Sperre und vergibt die Kennung.
+const ZUSAGE_FELDER = { wer: { type: 'string', description: 'Wer schuldet es (voller Name aus der Quelle). Ohne Namen weglassen — nie aus den Teilnehmern raten.' }, an: { type: 'string', description: 'Wem (Vorgabe Knut)' }, was: { type: 'string' }, bis: { type: 'string', description: 'JJJJ-MM-TT; unklar → weglassen und fristUnklar setzen' }, fristUnklar: { type: 'boolean' }, thema: { type: 'string' }, quelle: { type: 'string', description: 'z. B. [[meeting-notiz]] oder PM-123' }, notiz: { type: 'string' } };
+const zeilenText = (j: any) => (j.zeilen ?? []).map((z: any) => `${z.vorher ? `~ ${z.vorher}\n→ ` : '+ '}${z.nachher}`).join('\n');
+const COS_TOOLS = [
+  {
+    name: 'zusagen',
+    description: 'Zusagen-Register lesen (Vault, olaf/1-Projects/chief-of-staff): wer schuldet wem was, bis wann. Vorgabe nur offene; alle=true auch erledigte/verworfene.',
+    inputSchema: { type: 'object', properties: { alle: { type: 'boolean' } } },
+    run: async (a: any) => {
+      const j = await call('/internal/cos/zusagen', { alle: a.alle === true });
+      const z = j.zusagen.map((x: any) => `- ${x.id} [${x.abschnitt}] ${x.wer ?? 'Wer: offen'} (${x.seite}) → ${x.an}: ${x.was}${x.bis ? ` · bis ${x.bis}` : x.fristUnklar ? ' · Frist unklar' : ''}${x.thema ? ` · ${x.thema}` : ''}`);
+      return `${z.length} Zusagen (${j.datei})${j.unlesbar ? `, ${j.unlesbar} unlesbare Zeilen` : ''}:\n${z.join('\n') || '–'}`;
+    },
+  },
+  {
+    name: 'zusage_eintragen',
+    description: 'Eine oder mehrere neue Zusagen ins Register schreiben (Vault). Kennung vergibt die Werkbank. Die Person bestätigt vorher im Chat. Kein Name in der Quelle → wer weglassen („Wer: offen“).',
+    inputSchema: { type: 'object', properties: { zusagen: { type: 'array', items: { type: 'object', properties: ZUSAGE_FELDER, required: ['was'] } } }, required: ['zusagen'] },
+    run: async (a: any) => zeilenText(await call('/internal/cos/zusage', { ops: (a.zusagen ?? []).map((z: any) => ({ art: 'neu', ...z })) })) || 'nichts geändert',
+  },
+  {
+    name: 'zusage_aendern',
+    description: 'Eine Zusage im Register ändern: status offen|erledigt|verworfen (verschiebt die Zeile), neue Frist (bis), Notiz anhängen. Die Person bestätigt vorher im Chat.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'z. B. Z-007' }, status: { type: 'string', enum: ['offen', 'erledigt', 'verworfen'] }, bis: { type: 'string' }, notiz: { type: 'string' } }, required: ['id'] },
+    run: async (a: any) => zeilenText(await call('/internal/cos/zusage', { art: 'aendern', id: a.id, status: a.status, bis: a.bis, notiz: a.notiz })),
+  },
+  {
+    name: 'thema_setzen',
+    description: 'Themen-Register (eine Zeile je Thema): Stand, nächster Schritt, Ball bei. Legt das Thema an, wenn es fehlt. Die Person bestätigt vorher im Chat.',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' }, stand: { type: 'string' }, naechster: { type: 'string' }, ball: { type: 'string' } }, required: ['name'] },
+    run: async (a: any) => zeilenText(await call('/internal/cos/thema', { name: a.name, stand: a.stand, naechster: a.naechster, ball: a.ball })),
+  },
+];
+
 serve('werkbank', '0.1.0', [
+  ...COS_TOOLS,
   {
     name: 'hygiene_list',
     description: 'Eigene Task-Hygiene-Punkte (überfällig, ohne Datum, still, Widerspruch, ohne Workstream, Sub-task ohne Owner).',

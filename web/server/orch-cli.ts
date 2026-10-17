@@ -6,6 +6,8 @@
 //     [--tiefe quick|regular|deep]   Tiefe (Plan 205, Vorgabe regular): quick = Melious Flash, kein Council/keine Gegenprüfung,
 //     nur Repo-Tests; regular = wie bisher (Pass C mit challenge); deep = voller plan-to-pr mit Council, Gegenprüfung auf GLM 5.3,
 //     Visual-Check, Risiko hoch, doppelte Schritte und Deckel. Der Agent meldet „ETA:“ im Stand-Block; list/show zeigen sie.
+//     [--budget TOKENS]   Tokenbudget des Strangs (Eingabe ohne Cache-Lesen + Ausgabe; Plan 209): bei 80 % eine Meldung, bei 100 % Pause mit Rückfrage;
+//     ohne Angabe ORCH_BUDGET_TOKENS je Tiefe (quick ⅓, deep 2×; Vorgabe 0 = aus)
 //     [--profil voll|bauer|leser|schreiber]   Rollen-Profil (Grundlast je Zug): bauer = nur vault-search/werkbank-MCP; leser =
 //     Lesen + lesende Bash-Befehle, ohne Skills/CLAUDE.md, zuerst Melious (mit --bare); schreiber = wie bauer, zuerst Melious.
 //     Git-Repo mit origin auf github.com/WirStrom1|knut523: vorher git fetch, „Stand: …“ im Chat; --code = frischer Worktree
@@ -134,7 +136,8 @@ async function main() {
       const prompt = typeof flags.prompt === 'string' ? flags.prompt : typeof flags['prompt-file'] === 'string' ? readFileSync(flags['prompt-file'], 'utf8') : await stdin();
       if (typeof flags.title !== 'string' || typeof flags.cwd !== 'string') die('start braucht --title und --cwd.');
       const j = await call('start', { title: flags.title, cwd: flags.cwd, plan: typeof flags.plan === 'string' ? flags.plan : null, lauf: typeof flags.lauf === 'string' ? flags.lauf : null, shared: flags.shared === true, code: flags.code === true, slug: typeof flags.slug === 'string' ? flags.slug : null, prompt,
-        ...(typeof flags.modell === 'string' ? { modell: flags.modell } : {}), ...(typeof flags.risiko === 'string' ? { risiko: flags.risiko } : {}), ...(typeof flags.profil === 'string' ? { profil: flags.profil } : {}), ...(typeof flags.tiefe === 'string' ? { tiefe: flags.tiefe } : {}) });
+        ...(typeof flags.modell === 'string' ? { modell: flags.modell } : {}), ...(typeof flags.risiko === 'string' ? { risiko: flags.risiko } : {}), ...(typeof flags.profil === 'string' ? { profil: flags.profil } : {}), ...(typeof flags.tiefe === 'string' ? { tiefe: flags.tiefe } : {}),
+        ...(typeof flags.budget === 'string' && Number(flags.budget) > 0 ? { budget: Number(flags.budget) } : {}) });
       if (flags.json) return console.log(JSON.stringify(j, null, 1));
       console.log(`gestartet: ${j.id}  ${j.url}\nTiefe:     ${j.tiefe ?? 'regular'}${j.modell ? ` · Modell ${j.modell}` : ''}\nOrdner:    ${j.cwd}${j.worktree ? ' (frischer Worktree)' : ''}${j.stand ? `\n${j.stand}` : ''}${j.plan ? `\nPlan:      ${j.plan}` : ''}${j.warning ? `\nHinweis:   ${j.warning}` : ''}`);
       return;

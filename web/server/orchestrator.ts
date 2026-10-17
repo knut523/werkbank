@@ -290,7 +290,9 @@ export async function strandStates(u: User): Promise<Map<string, StrandState & {
 
 // ---------- Öffentliche Schnittstelle ----------
 
-export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null; lauf?: string | null; modell?: string | null; risiko?: 'niedrig' | 'mittel' | 'hoch' | null; profil?: 'voll' | 'bauer' | 'leser' | 'schreiber' | null; tiefe?: string | null }
+export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null; lauf?: string | null; modell?: string | null; risiko?: 'niedrig' | 'mittel' | 'hoch' | null; profil?: 'voll' | 'bauer' | 'leser' | 'schreiber' | null; tiefe?: string | null;
+  /** Tokenbudget des Strangs (Plan 209, S3.2); leer = ORCH_BUDGET_TOKENS je Tiefe (Vorgabe 0 = aus). */
+  budget?: number | null }
 
 // Plan 162, S2: Hauptmodell und Risikostufe eines Strangs (vorbereitet für die smarte Modellwahl, Paket 163). Nur beim Start.
 const STRAND_MODEL = /^(claude:(opus|sonnet|haiku)|melious:[\w.:/-]{1,80})$/;
@@ -368,6 +370,7 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   if (plan) { try { planText = readFileSync(plan, 'utf8').slice(0, 200_000); } catch { /* egal */ } }
   const doc: any = { _id: id, userId: u.id, conv, url: `${cfg.librechatPublicUrl}/c/${conv}`, title, cwd: rj.dir ?? real, plan, prompt: prompt.slice(0, 500), startedAt: new Date(), lastSentAt: new Date(), sends: 1, reviewedAt: null, knutReviewedAt: null, mode: rj.mode ?? null, startError: null, slug: g0?.slug ?? null, g0: g0?.public ?? null,
     lauf, laufExplicit: explicit, bericht: findBericht([prompt, planText]), modell, risiko, profil, tiefe,
+    budgetTokens: Number(inp.budget) > 0 ? Math.round(Number(inp.budget)) : null,
     ownWorktree: fresh.worktree,   // Heute/Release-Stand (Paket 141): nur ein eigener Worktree belegt den Stand des Strangs
     paket: findPaket([prompt, planText]),   // review-pakete/NNN-slug — Heute verlinkt daraus Auftrag und Bericht
     // „Worum es geht“ auf Heute (Paket 141): die Ziel-Zeile aus dem VOLLEN Auftrag — der gespeicherte ist auf 500 Zeichen gekürzt.
@@ -793,6 +796,18 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
       if (option === 'Anhalten') { await reviewOrch(u, d.strand.id, 'angehalten nach dem Deckel der automatischen Fortsetzung'); action = 'angehalten'; }
     } catch (e: any) { action = `nicht ausgeführt: ${String(e.message ?? e).slice(0, 200)}`; }
   }
+  // Budget je Strang (Plan 209, S3.2): „Weiter mit +50 %“ hebt das Budget und setzt fort, „Anhalten“ legt den Strang ab.
+  if (d.kind === 'budget' && d.strand?.id && option) {
+    try {
+      if (option.startsWith('Weiter')) {
+        const r: any = await runs().findOne({ _id: d.strand.id as any });
+        const alt = Number(r?.budgetTokens) > 0 ? Number(r.budgetTokens) : Number(process.env.ORCH_BUDGET_TOKENS) || 0;
+        await runs().updateOne({ _id: d.strand.id as any }, { $set: { budgetTokens: Math.ceil(alt * 1.5), autoStopped: null, 'budget.stopAt': null } });
+        await sendOrch(u, d.strand.id, 'weiter (Budget um 50 % erhöht)'); action = 'fortgesetzt';
+      }
+      if (option === 'Anhalten') { await reviewOrch(u, d.strand.id, 'angehalten: Budget erreicht'); action = 'angehalten'; }
+    } catch (e: any) { action = `nicht ausgeführt: ${String(e.message ?? e).slice(0, 200)}`; }
+  }
   // Leitstand-Deckel (Plan 132, A4): „Fortsetzen“ zählt ab jetzt neu; die Antwort selbst wird sofort zugestellt (leitstand.ts).
   if ((d.kind === 'leitstand-deckel' || d.kind === 'leitstand-weiter') && option === 'Fortsetzen') {
     await runs().updateOne({ userId: u.id, kind: 'leitstand', endedAt: null }, { $set: d.kind === 'leitstand-deckel' ? { capResetAt: new Date() } : { weiterStreak: 0, weiterStopped: null } });
@@ -804,7 +819,7 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
 export async function withdrawQuestion(u: User, id: string) {
   // Deckel-Fragen entscheidet nur Knut (Council-Diff R1): der Leitstand darf sie nicht über orch_questions wegräumen.
   const q: any = await questions().findOne({ _id: id as any, userId: u.id });
-  if (q && /^(auto-weiter|leitstand-)/.test(String(q.kind ?? ''))) throw err(409, 'Diese Rückfrage entscheidet nur Knut (Deckel) — zurückziehen nicht möglich.');
+  if (q && /^(auto-weiter|budget|leitstand-)/.test(String(q.kind ?? ''))) throw err(409, 'Diese Rückfrage entscheidet nur Knut (Deckel) — zurückziehen nicht möglich.');
   const r = await questions().updateOne({ _id: id as any, userId: u.id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() }, $unset: { keyActive: '' } });
   if (!r.matchedCount) throw err(409, 'Keine offene Rückfrage mit dieser Kennung.');
   return { id, status: 'zurückgezogen' };
