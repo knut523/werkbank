@@ -67,7 +67,7 @@ import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, par
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, rule1Goals, specProposals, autoEligible, type GoalNode } from './goals.ts';
 import { istTiefe, type Tiefe } from './tiefe.ts';
 import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
-import { zaehle, statusNeu, autoSchliessenAn, type Zustand } from './zustand.ts';
+import { zaehle, statusNeu, autoSchliessenAn, navNeu, type Zustand } from './zustand.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 
 const DIST = join(WEB_DIR, 'dist');
@@ -380,7 +380,7 @@ on('GET', /^\/api\/config$/, async (req, res) => {
   send(res, 200, {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: !!process.env.WERKBANK_FORGE_MCP,
     jiraSite: cfg.jiraSite, jiraSites: jiraSitesPublic(), project: cfg.jiraProject, vault: cfg.vaultDir,
-    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u),
+    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u), navNeu: navNeu(),
   });
 });
 
@@ -1271,6 +1271,8 @@ async function myQueue(u: User) {
 
 /** Zähler für die Navigation: alles, was etwas von der Person will (laufende Agenten nicht). */
 async function todayCount(u: User, queue?: any[], mine?: any, cards?: any[]) {
+  // Plan 213 S3 (K11): mit der neuen Navigation ist der Zähler die Zahl der Inbox — dieselbe Zahl wie im Heute-Kopf und im Chat.
+  if (navNeu()) return inboxZahl((await inboxFuer(u)).eintraege);
   const q = queue ?? await myQueue(u);
   const m = mine ?? await mineFor(u, { write: false });   // Zähler (alle 60 s): nur lesen, nie freigaben.md schreiben
   const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
@@ -1333,16 +1335,40 @@ async function inboxFuer(u: User, now = Date.now()) {
     for (const d of docs) { const s = states?.get(d.conv); if (s?.queued) schlange.push({ id: String(d._id), titel: d.title ?? '', since: s.queued.since }); }
     const m = await mineFor(u, { write: false }).catch(() => null);
     vault = [...(m?.questions ?? []).filter((q: any) => !q.answer), ...(m?.pendingApprovals ?? [])].map((q: any) => ({ id: String(q.id), text: String(q.text ?? ''), at: q.at ?? null }));
+    if (m?.draft) vault.push({ id: 'entwurf', text: 'Vault-Arbeitsentwurf wartet: übernehmen oder verwerfen (Arbeit › Unter-Chats)', at: null });
   }
   const h = await hygieneOf(u).catch(() => ({ items: [] as any[], snoozed: [] as string[] }));
   const spaeter = new Map(((await spaeterCol().find({ userId: u.id, bis: { $gt: new Date(now) } }).toArray()) as any[]).map((s) => [String(s.id), new Date(s.bis).getTime()]));
-  return baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange,
+  const laeufe = (await myQueue(u).catch(() => [] as any[])).filter((x: any) => x.bucket !== 'laeuft').length;
+  return baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe,
     kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now });
 }
 on('GET', /^\/api\/inbox$/, async (req, res) => {
   const u = await needUser(req);
   const r = await inboxFuer(u);
   send(res, 200, { ...r, zahl: inboxZahl(r.eintraege), at: new Date() });
+});
+/** Heute (Plan 213 S3): Entscheide (Inbox) · Blockiert/hängt · Geändert seit gestern 18:00 — ein Abruf für die Startseite. */
+on('GET', /^\/api\/heute$/, async (req, res) => {
+  const u = await needUser(req);
+  const inbox = await inboxFuer(u);
+  const admin = u.role === 'ADMIN';
+  const jetzt = new Date();
+  const gesternAbend = new Date(new Date(Date.now() - 86400_000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }) + 'T18:00:00');
+  let blockiert: any[] = [], geaendert: any = null;
+  if (admin) {
+    const offen: any[] = await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT(), zustand: { $in: ['blockiert', 'haengt', 'schlange', 'stand-fehlt'] } }, { projection: { title: 1, zustand: 1, zustandGrund: 1, url: 1, statusAt: 1 } }).sort({ statusAt: 1 }).limit(10).toArray().catch(() => []);
+    blockiert = offen.map((d) => ({ id: String(d._id), titel: d.title ?? '', zustand: d.zustand, grund: d.zustandGrund ?? '', chat: /^https?:\/\//.test(String(d.url ?? '')) ? d.url : null, seit: d.statusAt ?? null }));
+    const R = orchRuns();
+    const [fertig, weg, gepusht] = await Promise.all([
+      R.countDocuments({ userId: u.id, kind: { $ne: 'leitstand' }, doneAt: { $gte: gesternAbend } }).catch(() => 0),
+      R.countDocuments({ userId: u.id, autoGeschlossenAt: { $gte: gesternAbend } }).catch(() => 0),
+      freigaben().countDocuments({ userId: u.id, pushedAt: { $gte: gesternAbend } }).catch(() => 0),
+    ]);
+    const prs = await wb().collection('pr_ticker').countDocuments({ at: { $gte: gesternAbend } }).catch(() => 0);
+    geaendert = { seit: gesternAbend, fertig, gepusht, weggeraeumt: weg, prMeldungen: prs };
+  }
+  send(res, 200, { ...inbox, zahl: inboxZahl(inbox.eintraege), blockiert, geaendert, at: jetzt, admin, navNeu: navNeu() });
 });
 on('POST', /^\/api\/inbox\/([\w-]{1,90})\/spaeter$/, async (req, res, m) => {
   const u = await needUser(req);

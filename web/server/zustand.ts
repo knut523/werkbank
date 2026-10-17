@@ -17,6 +17,8 @@ export const ZUSTAND_TEXT: Record<Zustand, string> = {
 
 export const statusNeu = (env = process.env) => env.WERKBANK_STATUS_NEU === '1';
 export const autoSchliessenAn = (env = process.env) => env.WERKBANK_AUTO_SCHLIESSEN === '1';
+/** Neue Navigation Heute · Arbeit · Wissen (Plan 213 S3, P4: frühestens 14 Tage nach der Messung live). Vorgabe aus. */
+export const navNeu = (env = process.env) => env.WERKBANK_NAV_NEU === '1';
 /** Höchstens so viele Nachforderungen „Stand nachreichen“ je Person und Tag (P2). */
 export const NACHFORDERN_PRO_TAG = 10;
 /** So lange nach der Nachforderung ohne Antwort → „hängt?“. */
