@@ -47,7 +47,7 @@ function NeuerUnterChat({ onClose, onDone }: { onClose: () => void; onDone: () =
 
 // ---------- Arbeit › Reviews & PRs (Plan 213 S4b) ----------
 
-const REVIEW_TEXT: Record<string, string> = { wartet: 'in der Schlange', startet: 'startet', 'läuft': 'läuft', fertig: 'fertig', fehler: 'Fehler', 'übersprungen': 'übersprungen', deckel: 'Deckel erreicht' };
+const REVIEW_TEXT: Record<string, string> = { wartet: 'in der Schlange', startet: 'startet', 'läuft': 'läuft', 'führt aus': 'führt Tests aus', fertig: 'fertig', fehler: 'Fehler', 'übersprungen': 'übersprungen', deckel: 'Deckel erreicht' };
 
 function ReviewStarten({ prs, deep, vorgabe, onClose, onDone }: { prs: any[]; deep: boolean; vorgabe: string; onClose: () => void; onDone: () => void }) {
   const toast = useToast();

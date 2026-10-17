@@ -16,7 +16,36 @@ import { reviewDir, readBericht } from './bericht.ts';
 import { vienna } from './hygiene.ts';
 import { graphql } from './github.ts';
 import { reviewsCol, tickerSettings, tickerAus, reviewErlaubt, type TickerSettings } from './prticker.ts';
-import { vorlauf, basisVon, motorAbschnitt, motorAn } from './reviewmotor.ts';
+import { vorlauf, basisVon, motorAbschnitt, motorAn, deepAn } from './reviewmotor.ts';
+import { backend, befehleAusBasis, ausfuehrungErlaubt, berichtMd } from './laeufer.ts';
+
+/**
+ * Plan 213 S7b: Ausführung für Stufe deep — Befehle nur aus dem Basiszweig (K7), nur für Repos der Erlaubtliste (K6), Backend
+ * nach REVIEW_EXEC. Schreibt `ausfuehrung.md` (deutsch) und `tests-en.md` (englischer Abschnitt für den Kommentar) ins Paket und
+ * gibt den Abschnitt für den Review-Auftrag zurück.
+ */
+export async function ausfuehren(o: { repo: string; number: number; wt: string; basis: string | null; paket: string; id: string }, dir = reviewDir()): Promise<string> {
+  const ziel = (f: string) => join(dir, o.paket, f);
+  if (!ausfuehrungErlaubt(o.repo)) {
+    writeFileSync(ziel('ausfuehrung.md'), `# Ausführung\n\nNicht ausgeführt: ${o.repo} steht nicht auf der Erlaubtliste der Ausführung (K6). vollständig: nein\n`);
+    return `Ausführung: nicht erlaubt für ${o.repo} (Erlaubtliste) — Ergebnis ist \`incomplete\`; Tests nur nennen.`;
+  }
+  if (!o.basis) {
+    writeFileSync(ziel('ausfuehrung.md'), '# Ausführung\n\nNicht ausgeführt: keine Basis gefunden — Befehle kommen nur aus dem Basiszweig. vollständig: nein\n');
+    return 'Ausführung: keine Basis gefunden — Ergebnis ist `incomplete`.';
+  }
+  const { quelle, befehle } = await befehleAusBasis(o.wt, o.basis);
+  const b = befehle.length ? await backend().laufe({ repo: o.repo, wt: o.wt, basis: o.basis, befehle, quelle, id: o.id.slice(-20).toLowerCase() })
+    : { backend: 'keins', netz: 'nicht getrennt' as const, quelle, vollstaendig: false, gruende: ['keine Prüfbefehle im Basiszweig gefunden'], ergebnisse: [] };
+  const md = berichtMd(b);
+  writeFileSync(ziel('ausfuehrung.md'), md.de + '\n');
+  writeFileSync(ziel('tests-en.md'), md.en + '\n');
+  const rot = b.ergebnisse.filter((x) => x.ergebnis === 'rot').map((x) => x.name);
+  return [
+    `Ausführung (Läufer ${b.backend}, Netz ${b.netz}): Ergebnisse in \`review-pakete/${o.paket}/ausfuehrung.md\`; vollständig: ${b.vollstaendig ? 'ja' : 'nein'}${rot.length ? `; ROT: ${rot.join(', ')}` : ''}.`,
+    `Übernimm \`tests-en.md\` als Abschnitt „Tests“ in kommentar.md. Ein roter Test ist ein bestätigter Befund (Ausgabe im Bericht zitieren); „konnte nicht laufen“ macht das Review \`incomplete\`.`,
+  ].join('\n');
+}
 
 export const prReviewDir = (env = process.env) => env.WERKBANK_PR_REVIEW_DIR || join(env.HOME || homedir(), 'work', 'knut', 'pr-reviews');
 const REPO_RE = /^[\w.-]{1,100}\/[\w.-]{1,100}$/;
@@ -162,7 +191,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
   const heute = vienna(now).date;
   let started = 0;
   for (const r of (await reviewsCol().find({ status: { $in: ['wartet'] } }).sort({ createdAt: 1 }).limit(10).toArray()) as any[]) {
-    const laufend = await reviewsCol().countDocuments({ status: 'läuft' });
+    const laufend = await reviewsCol().countDocuments({ status: { $in: ['läuft', 'führt aus'] } });
     const heuteN = await reviewsCol().countDocuments({ startDay: heute });
     const dk = deckel(s, laufend, heuteN);
     if (!dk.ok) {
@@ -188,17 +217,30 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       mkdirSync(join(reviewDir(), paket), { recursive: true });
       // Plan 213 S6: ein Motor — deterministischer Vorlauf (vorlauf.md) und die eine Prüfliste im Auftrag (WERKBANK_REVIEW_MOTOR=0 = alter Weg).
       let prompt = reviewPrompt(r, wt, paket);
+      let basis: string | null = null;
       if (motorAn()) {
-        const basis = await basisVon(wt).catch(() => null);
+        basis = await basisVon(wt).catch(() => null);
         const vl = basis ? await vorlauf(wt, basis).catch((e: any) => ({ md: `# Vorlauf\n\nvollständig: nein — ${scrub(e?.message ?? e)}` })) : { md: '# Vorlauf\n\nvollständig: nein — keine Basis gefunden (origin/develop|dev|main|master).' };
         writeFileSync(join(reviewDir(), paket, 'vorlauf.md'), vl.md + '\n');
         prompt += '\n' + motorAbschnitt(paket);
       }
-      writeFileSync(join(reviewDir(), paket, 'auftrag.md'), prompt + '\n');
-      const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}`, prompt, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker', vorrang: true, ...(r.deep ? { tiefe: 'deep' } : {}) });
-      await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt } });
-      await deps.markStrand?.(st.id, { repo: r.repo, number: r.number, paket });
-      deps.log?.('pr-review gestartet', { pr: `${r.repo}#${r.number}`, strand: st.id });
+      const starte = async (p: string) => {
+        writeFileSync(join(reviewDir(), paket, 'auftrag.md'), p + '\n');
+        const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}`, prompt: p, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker', vorrang: true, ...(r.deep ? { tiefe: 'deep' } : {}) });
+        await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt } });
+        await deps.markStrand?.(st.id, { repo: r.repo, number: r.number, paket });
+        deps.log?.('pr-review gestartet', { pr: `${r.repo}#${r.number}`, strand: st.id });
+      };
+      if (r.deep && deepAn()) {
+        // Plan 213 S7b: Stufe deep führt zuerst die Prüfbefehle des Basiszweigs im Läufer aus (im Hintergrund), dann startet das Review.
+        await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'führt aus', paket, worktree: wt } });
+        void ausfuehren({ repo: r.repo, number: r.number, wt, basis, paket, id: String(r._id) })
+          .then((abschnitt) => starte(prompt + '\n' + abschnitt))
+          .catch(async (e: any) => { await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'fehler', note: scrub(e?.message ?? e), doneAt: new Date() } }); deps.log?.('pr-review fehler', { pr: `${r.repo}#${r.number}`, error: scrub(e?.message ?? e) }); });
+        started++;
+        continue;
+      }
+      await starte(prompt);
       started++;
     } catch (e: any) {
       await reviewsCol().updateOne({ _id: r._id }, { $set: { status: e?.skip ? 'übersprungen' : 'fehler', note: scrub(e.message ?? e), doneAt: now, ...(e?.skip ? { startDay: null } : {}) } });
