@@ -77,6 +77,7 @@ import { collectDecisions, todayQuestions, todayPayload } from './fragen.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, rule1Goals, specProposals, autoEligible, type GoalNode } from './goals.ts';
 import { istTiefe, type Tiefe } from './tiefe.ts';
+import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon } from './nutzung.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -406,6 +407,19 @@ on('POST', /^\/api\/login$/, async (req, res) => {
 });
 
 on('POST', /^\/api\/logout$/, async (req, res) => { await destroySession(req, res); send(res, 200, { ok: true }); });
+
+// --- Nutzung messen (Plan 213 S0): Seitenaufrufe je Rolle und Zugang, Auswertung nur für Admins ---
+on('POST', /^\/api\/nutzung\/seite$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req, 2048);
+  seiteGesehen(b.seite, rolleVon(u), zugangVon(req.headers));
+  send(res, 200, { ok: true });
+});
+on('GET', /^\/api\/nutzung$/, async (req, res, _m, url) => {
+  await needAdmin(req);
+  const tage = Math.min(90, Math.max(1, Number(url.searchParams.get('tage')) || 14));
+  send(res, 200, await nutzungAuswertung(tage));
+});
 
 // --- Einrichtung ---
 
@@ -1533,6 +1547,7 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/freigabe$/, async (req, res, m) => {
   const d = await reviewStrand(u, m[1]);
   const b = await body(req);
   const f = await freigeben(u, d, { head: b.head, patchId: b.patchId ?? null }, undefined, log);
+  antwortGezaehlt('push', 'ui');
   await hinweisFreigabe(u, f, d).catch(() => {});
   send(res, 200, f);
 });
@@ -1548,6 +1563,7 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const u = await needAdmin(req);
   const d = await reviewStrand(u, m[1]);
   const b = await body(req);
+  antwortGezaehlt('entscheidung', 'ui');
   // Plan 184, Pass C (Teil B): zwei schnelle Antworten auf denselben Bericht nie gleichzeitig lesen-prüfen-schreiben.
   const sperre = String(d._id);
   if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — Seite neu laden und noch einmal.');
@@ -1705,6 +1721,7 @@ on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (r
   const u = await needAdmin(req);
   const b = await body(req);
   const d = await strandForReview(u, m[1], b.seen, await strandStates(u).catch(() => null));
+  antwortGezaehlt(m[2] === 'passt' ? 'abhaken' : String(b.kind ?? 'braucht'), 'ui');
   if (m[2] === 'passt') {
     await reviewOrch(u, m[1], String(b.note ?? 'Passt (Heute)'), 'knut', expectOf(d));
     log('strang geprüft', { user: u.id, id: m[1] });
@@ -1762,6 +1779,7 @@ on('POST', /^\/api\/orchestrator\/questions\/([\w-]{1,20})\/answer$/, async (req
   const b = await body(req);
   const q = await answerQuestion(u, m[1], { option: b.option ?? null, text: b.text ?? null });
   log('rückfrage beantwortet', { user: u.id, id: q.id });
+  antwortGezaehlt('rueckfrage', 'ui');
   roadmapChanged('orchestrator-antwort');
   send(res, 200, q);
 });
@@ -2712,6 +2730,7 @@ on('POST', /^\/api\/hygiene\/([A-Z][A-Z0-9]+-\d+)\/snooze$/, async (req, res, m)
 on('POST', /^\/api\/hygiene\/([A-Z][A-Z0-9]+-\d+)\/answer$/, async (req, res, m) => {
   const u = await needUser(req);
   const b = await body(req);
+  if (b.confirm === true) antwortGezaehlt('pflege', 'ui');
   if (b.confirm !== true) {
     const p = await proposeFromAnswer(u, m[1], String(b.text ?? ''));
     if (p.snooze) { await snoozeItem(u, m[1]); return send(res, 200, { snoozed: true }); }
