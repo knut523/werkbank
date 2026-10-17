@@ -31,7 +31,7 @@ function NeuerUnterChat({ onClose, onDone }: { onClose: () => void; onDone: () =
           <textarea id="nuc-auftrag" rows={5} value={auftrag} onChange={(e) => setAuftrag(e.target.value)} placeholder="Was soll fertig sein? (ein, zwei Sätze — der Unter-Chat plant selbst)" />
           <label className="small" htmlFor="nuc-repo">Repo</label>
           <select id="nuc-repo" value={repo || opt.data.repos[0]?.name || ''} onChange={(e) => setRepo(e.target.value)}>{opt.data.repos.map((r: any) => <option key={r.name} value={r.name}>{r.name}</option>)}</select>
-          {!opt.data.repos.length && <p className="tiny mut">Keine Repos eingerichtet (WERKBANK_ARBEIT_REPOS) — bis dahin über den Hauptchat starten.</p>}
+          {!opt.data.repos.length && <p className="tiny mut">Für „Neuer Unter-Chat“ sind noch keine Repos eingerichtet — bis dahin über den Hauptchat starten.</p>}
           <span className="small" id="nuc-tiefe">Tiefe</span>
           <div className="ub-row" role="radiogroup" aria-labelledby="nuc-tiefe">{opt.data.tiefen.map((t: string) => <button key={t} role="radio" aria-checked={tiefe === t} className={`ub-btn sm${tiefe === t ? ' pri' : ''}`} onClick={() => setTiefe(t)}>{t}</button>)}</div>
           <p className="tiny mut">{tiefe === 'quick' ? 'quick: kurz, ohne Council, kleines Budget.' : tiefe === 'deep' ? 'deep: plan-to-pr mit Council, mehr Schritte, Gegenprüfung.' : 'regular: plan-to-pr, Tests, Pass A/B/C.'} Das Review-Paket bekommt die nächste freie Nummer.</p>
