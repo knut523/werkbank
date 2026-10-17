@@ -354,8 +354,8 @@ const server = createServer(async (req, res) => {
       if (modell && !STRAND_MODEL.test(modell)) return json(res, 400, { error: 'Modell: claude:opus|sonnet|haiku oder melious:<modell>.' });
       const risiko = kind !== 'strand' ? undefined : b.risiko === 'niedrig' || b.risiko === 'mittel' || b.risiko === 'hoch' ? b.risiko : undefined;
       // Rollen-Profil (Plan 162, S6): nur Stränge, nur beim Start.
-      const profil = kind === 'strand' && (b.profil === 'bauer' || b.profil === 'leser' || b.profil === 'schreiber') ? b.profil : undefined;
-      if (kind === 'strand' && b.profil && !['voll', 'bauer', 'leser', 'schreiber'].includes(String(b.profil))) return json(res, 400, { error: 'Profil: voll, bauer, leser oder schreiber.' });
+      const profil = kind === 'strand' && (b.profil === 'bauer' || b.profil === 'leser' || b.profil === 'schreiber' || b.profil === 'release') ? b.profil : undefined;
+      if (kind === 'strand' && b.profil && !['voll', 'bauer', 'leser', 'schreiber', 'release'].includes(String(b.profil))) return json(res, 400, { error: 'Profil: voll, bauer, leser, schreiber oder release.' });
       // Tiefe (Plan 205): nur Stränge, nur beim Start; unbekannt → 400.
       if (kind === 'strand' && b.tiefe != null && !TIEFEN.includes(b.tiefe)) return json(res, 400, { error: 'Tiefe: quick, regular oder deep.' });
       const tiefe = kind === 'strand' ? b.tiefe as Tiefe | undefined : undefined;

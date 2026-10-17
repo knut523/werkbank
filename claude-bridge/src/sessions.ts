@@ -12,7 +12,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
-import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe } from './tools.ts';
+import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
@@ -206,8 +206,9 @@ export const STRAND_MODEL = /^(claude:(opus|sonnet|haiku)|melious:[\w.:/-]{1,80}
 // MCP-Server (vault-search, werkbank); leser = nur Read/Grep/Glob, keine Skills, keine CLAUDE.md, ohne dynamische
 // Systemprompt-Abschnitte — über Melious zusätzlich `--bare` mit eigenem kurzem Systemprompt (bei Claude nicht: --bare
 // überspringt die OAuth-Anmeldung).
-export type Profil = 'voll' | 'bauer' | 'leser' | 'schreiber';
-export const PROFILE: Profil[] = ['voll', 'bauer', 'leser', 'schreiber'];   // schreiber = wie bauer, zuerst Melious
+export type Profil = 'voll' | 'bauer' | 'leser' | 'schreiber' | 'release';
+// schreiber = wie bauer, zuerst Melious; release = wie voll, dazu `git -C <Worktree> merge` im Release-Worktree (Plan 213)
+export const PROFILE: Profil[] = ['voll', 'bauer', 'leser', 'schreiber', 'release'];
 // Tiefe des Strangs (Plan 205): quick = ohne Gegenprüfungs-Hinweis, deep = doppelte Schritte je Zug; regular = wie bisher.
 export type Tiefe = 'quick' | 'regular' | 'deep';
 export const TIEFEN: Tiefe[] = ['quick', 'regular', 'deep'];
@@ -469,6 +470,7 @@ export function workDirFor(userId: string, convId: string): string {
 export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; vorrang?: boolean } = {}): void {
   const key = `${safeId(userId)}:${safeId(convId)}`;
   if (sessionMap[key] || cwdMap[key] || orchMap[key] || lives.has(key)) throw Object.assign(new Error('Unterhaltung gibt es schon.'), { status: 409 });
+  if (o.profil === 'release') { const p = kind === 'strand' ? releaseWorktreeProblem(dir) : 'Profil release nur für Stränge.'; if (p) throw Object.assign(new Error(p), { status: 400 }); }
   cwdMap[key] = dir;
   orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}), ...(o.tiefe && o.tiefe !== 'regular' && TIEFEN.includes(o.tiefe) ? { tiefe: o.tiefe } : {}), ...(o.vorrang ? { vorrang: true } : {}) };
   saveMap();
@@ -565,6 +567,8 @@ export const LEITSTAND_APPEND = `Dieser Chat ist der HAUPTCHAT (früher „Leits
 - Nie mergen; pushen, Jira/Confluence schreiben, die Live-Instanz (~/work/werkbank-dev), crontab und ~/bin ändern nur nach Knuts „ja“; git im Vault ist gesperrt. Arbeitsordner: Worktrees unter dem aktuellen Verzeichnis.`;
 
 const ORCH_APPEND = `Dieser Chat ist ein Orchestrator-Strang: Die Haupt-Sitzung hat dich gestartet, Knut liest mit. Hier gibt es KEINE Rückfragen — was im Chat ein „ja“ bräuchte, wird abgelehnt. Schreib solche Punkte stattdessen unter „### Stand“ → „Braucht Knut“. GitHub schreiben (push, PR), Jira/Confluence schreiben, Git-Konfiguration, Git-Hooks, .claude/ und .env sind gesperrt; versuch nicht, das zu umgehen. Lokale Commits im Arbeitsordner sind erlaubt, wenn der Auftrag sie verlangt. Braucht der Hauptchat etwas von dir, BEVOR du fertig bist — ein Blocker, der die Arbeit anhält und eine Entscheidung von Knut braucht, oder ein Risiko/eine Planänderung, die den Auftrag ändert —, meld es mit dem Werkzeug hauptchat_melden (kurz, mit Empfehlung). Kein Fortschritt dorthin: der gehört in den Abschnitt „### Stand“. Höchstens eine Meldung je 10 Minuten.`;
+/** Profil „release“ (Plan 213, Knut 17.10.): lokal mergen im zugewiesenen Worktree. */
+const RELEASE_APPEND = `Release-Strang: In deinem Arbeitsordner (einem Release-Worktree der Werkbank) darfst du lokal mergen — genau in der Form \`git -C <Arbeitsordner> merge …\` (auch --abort/--continue), als einzelner Befehl ohne && oder ;. Konflikte löst du mit Edit im Arbeitsordner, dann \`git -C <Arbeitsordner> add …\` und den Merge-Commit. Push, Live-Schalten (werkbank.sh, Live-Instanz, release-live-Skripte) und alles außerhalb des Arbeitsordners bleiben gesperrt — das macht die Hauptsitzung.`;
 
 export function safeId(s: string): string {
   return /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : createHash('sha256').update(s).digest('hex').slice(0, 24);
@@ -942,6 +946,21 @@ function makeGuard(live: Live) {
     const decide = (permissionDecision: 'allow' | 'deny', reason: string) => ({
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason },
     });
+    // Profil „release“ (Plan 213): Live-Schalten zusätzlich gesperrt; `git -C <Worktree> merge …` erlaubt — vor den Strang-Sperren,
+    // die `git merge` sonst immer ablehnen. Nur im eigenen Worktree, nur als einzelner Befehl (releaseMerge).
+    if (live.orch && live.profil === 'release' && tool === 'Bash') {
+      const cmd = String(toolInput.command ?? '');
+      const sperre = RELEASE_BLOCK.find(([re]) => re.test(cmd));
+      if (sperre) {
+        emitStatus(live, `⛔ Release-Strang: ${sperre[1]} gesperrt — ${statusLine(tool, toolInput)}`);
+        return decide('deny', `Im Release-Strang gesperrt (${sperre[1]}). Live schaltet die Hauptsitzung; schreib es unter „### Stand“ → „Braucht Knut“.`);
+      }
+      const wt = orchMap[live.key]?.dir;
+      if (wt && releaseMerge(cmd, wt)) {
+        emitStatus(live, `🔀 Release-Merge im Worktree: ${statusLine(tool, toolInput)}`);
+        return decide('allow', 'Release-Strang: Merge im zugewiesenen Worktree erlaubt.');
+      }
+    }
     if (live.orch) {
       // Worker (Plan 165, Pass C 9): keine Paket-Installation — node_modules im Unter-Worktree ist ein Link auf die des Strangs.
       const why = orchestratorBlock(tool, toolInput) ?? (live.worker && tool === 'Bash' && WORKER_PAKETE.test(String(toolInput.command ?? '')) ? 'Pakete installieren/ändern (Worker)' : null);
@@ -1307,7 +1326,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const e = orchMap[key];
     // Nur für Voll/Bauer-Stränge: Leser/Schreiber bleiben bei „zuerst Melious“ (Pass A 8 / B 6).
     const p = e?.profil ?? 'voll';
-    return live.orch && !live.worker && e?.phase && !strandModel && (p === 'voll' || p === 'bauer') ? (e.phaseC2 ? 'opus' : phaseModell(e.phase).modell) : undefined;
+    return live.orch && !live.worker && e?.phase && !strandModel && (p === 'voll' || p === 'bauer' || p === 'release') ? (e.phaseC2 ? 'opus' : phaseModell(e.phase).modell) : undefined;
   };
   let strandClaude = (strandModel?.startsWith('claude:') ? strandModel.slice(7) : undefined) ?? phaseClaude();
   // Rollen-Profil des Strangs (S6): fest für alle Züge. Leser und Schreiber laufen zuerst über Melious (Knut 15.10.: Standard,
@@ -1368,7 +1387,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}${profil === 'release' ? `\n\n${RELEASE_APPEND}` : ''}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, isMelious(acct) ? req.token : acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim
@@ -1422,7 +1441,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const baseAppend: string = basePrompt.append;
   const baseDisallowed: string[] = options.disallowedTools;
   const baseExtra: Record<string, unknown> = { ...(options.extraArgs ?? {}) };
-  const profileServers = (s: Record<string, unknown>) => (profil === 'voll' ? s : Object.fromEntries(Object.entries(s).filter(([k]) => (profil === 'leser' ? LESER_MCP : BAUER_MCP).includes(k))));
+  const profileServers = (s: Record<string, unknown>) => (profil === 'voll' || profil === 'release' ? s : Object.fromEntries(Object.entries(s).filter(([k]) => (profil === 'leser' ? LESER_MCP : BAUER_MCP).includes(k))));
   // Lastverteilung über die Melious-Modelle (S7, Knut 14.10.: „Last auf alle Melious-Modelle verteilen, um alle Token zu nutzen“):
   // aus der Liste der Rolle das Modell mit dem größten freien Monatsanteil (Werkbank: Verbrauch je Modell gegen dessen
   // Kontingent). Einmal gewählt, behält ein Strang (orch.json) bzw. Chat (Speicher) sein Modell, solange es zulässig und frei ist.
@@ -2175,6 +2194,6 @@ export async function phaseWechseln(userId: string, convId: string, b: { phase?:
   saveMap();
   log('phase angemeldet', { conv: key, von: e.phase ?? null, nach: phase, c2, ersatz: ersatz.length });
   const p = e.profil ?? 'voll';
-  const ziel = e.modell ? `Modell bleibt ${e.modell} (beim Start gesetzt)` : p !== 'voll' && p !== 'bauer' ? `Modell nach Profil „${p}“ (zuerst Melious)` : `Claude ${modell === 'opus' ? 'Opus' : 'Sonnet'}${c2 ? ' (Opus bevorzugt: Eingriff mit Rückwirkung, C2)' : ''}`;
+  const ziel = e.modell ? `Modell bleibt ${e.modell} (beim Start gesetzt)` : p !== 'voll' && p !== 'bauer' && p !== 'release' ? `Modell nach Profil „${p}“ (zuerst Melious)` : `Claude ${modell === 'opus' ? 'Opus' : 'Sonnet'}${c2 ? ' (Opus bevorzugt: Eingriff mit Rückwirkung, C2)' : ''}`;
   return { ok: true, text: `Phase „${phase}“ angemeldet (Übergabe geprüft). Beende jetzt deinen Zug mit einem kurzen Satz und ohne weitere Werkzeuge — die Brücke setzt sofort in einer neuen Sitzung fort: ${ziel}, Kontext nur Auftrag + Übergabe.${pruefText ? ` Die Brücke hat den Stand geprüft (Ersatz-Lead): ${pruefText.includes('ROT') ? 'ROTE Prüfungen — stehen in der Übergabe.' : 'alles grün.'}` : ''}` };
 }

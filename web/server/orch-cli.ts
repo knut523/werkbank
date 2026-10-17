@@ -6,8 +6,9 @@
 //     [--tiefe quick|regular|deep]   Tiefe (Plan 205, Vorgabe regular): quick = Melious Flash, kein Council/keine Gegenprüfung,
 //     nur Repo-Tests; regular = wie bisher (Pass C mit challenge); deep = voller plan-to-pr mit Council, Gegenprüfung auf GLM 5.3,
 //     Visual-Check, Risiko hoch, doppelte Schritte und Deckel. Der Agent meldet „ETA:“ im Stand-Block; list/show zeigen sie.
-//     [--profil voll|bauer|leser|schreiber]   Rollen-Profil (Grundlast je Zug): bauer = nur vault-search/werkbank-MCP; leser =
-//     Lesen + lesende Bash-Befehle, ohne Skills/CLAUDE.md, zuerst Melious (mit --bare); schreiber = wie bauer, zuerst Melious.
+//     [--profil voll|bauer|leser|schreiber|release]   Rollen-Profil (Grundlast je Zug): bauer = nur vault-search/werkbank-MCP; leser =
+//     Lesen + lesende Bash-Befehle, ohne Skills/CLAUDE.md, zuerst Melious (mit --bare); schreiber = wie bauer, zuerst Melious;
+//     release = wie voll, dazu `git -C <cwd> merge …` — nur in einem eigenen Git-Worktree des Werkbank-Repos (Plan 213).
 //     Git-Repo mit origin auf github.com/WirStrom1|knut523: vorher git fetch, „Stand: …“ im Chat; --code = frischer Worktree
 //     <repo>-agent-<id> (Zweig agent/<id>) von origin/develop|dev|main statt des angegebenen Ordners. Nie pushen.
 //     --code prüft vorher G0 (scripts/vorbau-check; Slug aus --slug oder spec: der Plandatei): Treffer/Stopp → kein Start,
