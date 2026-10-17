@@ -7,7 +7,7 @@ import { Err, Loading, useLoad } from './ui.tsx';
 
 const KIND: Record<string, string> = { neu: '🆕', stand: '⬆️', zu: '🏁', kommentar: '💬', review: '🔎', anfrage: '🙋', tag: '🏷️' };
 const STATUS_CHIP: Record<string, string> = { wartet: '', startet: '', läuft: '', gegenprüfung: '', abgleich: '', fertig: 'ok', deckel: 'warn', fehler: 'bad', übersprungen: '' };
-const uhr = (d: string) => new Date(d).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit' });
+const uhr = (d: string) => new Date(d).toLocaleTimeString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', minute: '2-digit' });
 const EMPF: Record<string, { t: string; c: string }> = { approve: { t: 'approven', c: 'ok' }, 'request-changes': { t: 'Änderungen verlangen', c: 'bad' }, comment: { t: 'nur kommentieren', c: 'warn' } };
 const short = (repo: string) => repo.split('/')[1] ?? repo;
 
