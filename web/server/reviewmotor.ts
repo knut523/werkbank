@@ -6,7 +6,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, dirname, basename, extname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -62,7 +62,11 @@ export function sast(patch: string, max = 12): Treffer[] {
   const out: Treffer[] = [];
   for (const z of hinzugefuegt(patch)) {
     if (istRauschen(z.datei) || /\.(md|txt)$/i.test(z.datei)) continue;
-    for (const r of REGELN) if (r.re.test(z.text)) { out.push({ datei: z.datei, zeile: z.zeile, regel: r.id, schwere: r.schwere, text: z.text.trim().slice(0, 160) }); break; }
+    for (const r of REGELN) if (r.re.test(z.text)) {
+      // Ein gefundenes Geheimnis nie weitertragen (Paket, Prompt, Kommentar): nur Anfang und Ende zeigen (Pass C).
+      const text = r.id === 'geheimnis-im-code' ? z.text.trim().replace(r.re, (m) => `${m.slice(0, 4)}…${m.slice(-2)} (gekürzt)`).slice(0, 160) : z.text.trim().slice(0, 160);
+      out.push({ datei: z.datei, zeile: z.zeile, regel: r.id, schwere: r.schwere, text }); break;
+    }
     if (out.length >= max) break;
   }
   return out;
@@ -92,20 +96,24 @@ export async function vorlauf(wt: string, base: string, o: { git?: Git; semgrep?
   const echt = zeilen.filter((z) => !istRauschen(z.datei));
   // Repo-Regeln wörtlich (gekürzt)
   const regeln: string[] = [];
-  for (const f of REGEL_DATEIEN) { const p = join(wt, f); if (existsSync(p)) regeln.push(`### ${f}\n\n${readFileSync(p, 'utf8').slice(0, 4000)}`); }
+  // Aus dem Git-Objekt lesen, nie über das Dateisystem: ein Symlink im PR (AGENTS.md → ~/.ssh/…) liefert dann nur seinen Zielpfad (Pass C).
+  for (const f of REGEL_DATEIEN) {
+    let t = '';
+    try { if ((await git(['cat-file', '-t', `HEAD:${f}`], wt)).trim() === 'blob' && !(await git(['ls-tree', 'HEAD', '--', f], wt)).startsWith('120000')) t = await git(['show', `HEAD:${f}`], wt); } catch { t = ''; }
+    if (t) regeln.push(`### ${f}\n\n${t.slice(0, 4000)}`);
+  }
   // Erreichbarkeit neuer Quelldateien: wird der Dateiname irgendwo sonst erwähnt?
   for (const z of echt.filter((x) => x.st === 'A' && QUELLE.test(x.datei) && !TEST.test(x.datei)).slice(0, 30)) {
     const name = basename(z.datei, extname(z.datei));
     if (name.length < 3 || name === 'index') continue;
     let treffer = '';
-    try { treffer = await git(['grep', '-l', '-F', name, 'HEAD', '--', '.'], wt); } catch { treffer = ''; }
+    try { treffer = await git(['grep', '-l', '-F', '-e', name, 'HEAD', '--', '.'], wt); } catch { treffer = ''; }
     const andere = treffer.split('\n').filter((l) => l && !l.endsWith(z.datei));
     if (!andere.length) seeds.push(`Erreichbar? \`${z.datei}\` ist neu, aber keine andere Datei erwähnt „${name}“.`);
   }
   // Neue Tests in CI verdrahtet?
   const neueTests = echt.filter((x) => x.st === 'A' && TEST.test(x.datei));
-  const wfDir = join(wt, '.github', 'workflows');
-  const workflows = existsSync(wfDir) ? readdirSync(wfDir).filter((f) => /\.ya?ml$/.test(f)) : [];
+  const workflows = (await git(['ls-tree', '--name-only', 'HEAD', '.github/workflows/'], wt).catch(() => '')).split('\n').filter((f) => /\.ya?ml$/.test(f));
   if (neueTests.length && !workflows.length) seeds.push(`${neueTests.length} neue Testdatei(en), aber keine CI-Workflows (.github/workflows) — laufen sie irgendwo?`);
   const geaenderteWorkflows = zeilen.filter((z) => z.datei.startsWith('.github/workflows/') || z.datei === '.werkbank/pruefungen.json');
   if (geaenderteWorkflows.length) seeds.push(`Der PR ändert Prüfbefehle/CI (${geaenderteWorkflows.map((z) => z.datei).join(', ')}) — diese Befehle laufen im Läufer nicht aus dem PR (Basis gilt).`);

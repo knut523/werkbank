@@ -16,7 +16,7 @@
 
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, writeFileSync, createReadStream } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, writeFileSync, readFileSync, createReadStream } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer, connect } from 'node:net';
@@ -29,7 +29,8 @@ export interface Befehl { name: string; befehl: string[]; ordner?: string; zeitS
 export interface LaufErgebnis { name: string; befehl: string; ergebnis: Ergebnis; code: number | null; ms: number; ausgabe: string; grund?: string }
 export interface LaufBericht { backend: string; netz: 'getrennt' | 'nicht getrennt'; quelle: string; vollstaendig: boolean; gruende: string[]; ergebnisse: LaufErgebnis[] }
 export interface Deckel { speicherMb: number; cpuS: number; dateiMb: number; befehlS: number; gesamtS: number }
-export const DECKEL: Deckel = { speicherMb: 2048, cpuS: 900, dateiMb: 256, befehlS: 600, gesamtS: 1800 };
+// Speicher als Adressraum (prlimit --as): Node/V8 reserviert viel virtuellen Speicher — 4 GB, damit Builds nicht fälschlich sterben (Pass C).
+export const DECKEL: Deckel = { speicherMb: 4096, cpuS: 900, dateiMb: 256, befehlS: 600, gesamtS: 1800 };
 
 export type ExecName = 'local-allowlist' | 'docker-remote' | 'managed-agents';
 export const execBackend = (env = process.env): ExecName => (['docker-remote', 'managed-agents'].includes(String(env.REVIEW_EXEC)) ? env.REVIEW_EXEC as ExecName : 'local-allowlist');
@@ -64,21 +65,23 @@ const gueltig = (p: any): p is Befehl => p && typeof p.name === 'string' && Arra
   && (!p.ordner || (typeof p.ordner === 'string' && !p.ordner.split('/').includes('..') && !p.ordner.startsWith('/')));
 
 /** Prüfbefehle am Basis-SHA: `.werkbank/pruefungen.json`, sonst npm-Skripte typecheck/lint/test/build (Wurzel und eine Ebene tiefer). */
-export async function befehleAusBasis(wt: string, basis: string, git: Git = realGit): Promise<{ quelle: string; befehle: Befehl[] }> {
+export const MAX_BEFEHLE = 12;
+/** `gekappt` > 0: mehr Befehle als erlaubt — der Lauf ist dann nicht vollständig (Pass C: nie still abschneiden). */
+export async function befehleAusBasis(wt: string, basis: string, git: Git = realGit): Promise<{ quelle: string; befehle: Befehl[]; gekappt: number }> {
   try {
     const j = JSON.parse(await git(['show', `${basis}:.werkbank/pruefungen.json`], wt));
-    const list = (Array.isArray(j) ? j : j.pruefungen ?? []).filter(gueltig).slice(0, 12);
-    if (list.length) return { quelle: `.werkbank/pruefungen.json @ ${basis.slice(0, 10)}`, befehle: list };
+    const alle = (Array.isArray(j) ? j : j.pruefungen ?? []).filter(gueltig);
+    if (alle.length) return { quelle: `.werkbank/pruefungen.json @ ${basis.slice(0, 10)}`, befehle: alle.slice(0, MAX_BEFEHLE), gekappt: Math.max(0, alle.length - MAX_BEFEHLE) };
   } catch { /* keine Datei am Basis-SHA */ }
   const dateien = (await git(['ls-tree', '-r', '--name-only', basis], wt).catch(() => '')).split('\n').filter((f) => /^([^/]+\/)?package\.json$/.test(f));
   const befehle: Befehl[] = [];
-  for (const f of dateien.slice(0, 6)) {
+  for (const f of dateien.slice(0, 8)) {
     let pkg: any;
     try { pkg = JSON.parse(await git(['show', `${basis}:${f}`], wt)); } catch { continue; }
     const ordner = dirname(f) === '.' ? undefined : dirname(f);
     for (const s of ['typecheck', 'lint', 'test', 'build']) if (typeof pkg?.scripts?.[s] === 'string') befehle.push({ name: `${ordner ?? '.'}:${s}`, befehl: ['npm', 'run', s], ordner, zeitS: 600, db: /mongo/i.test(pkg.scripts[s]) ? 'mongo' : /postgres|pg_/i.test(pkg.scripts[s]) ? 'postgres' : null });
   }
-  return { quelle: `package.json-Skripte @ ${basis.slice(0, 10)}`, befehle: befehle.slice(0, 12) };
+  return { quelle: `package.json-Skripte @ ${basis.slice(0, 10)}`, befehle: befehle.slice(0, MAX_BEFEHLE), gekappt: Math.max(0, befehle.length - MAX_BEFEHLE) };
 }
 
 // ---------- Aufräumen (K9) ----------
@@ -90,7 +93,12 @@ export function aufraeumenAlt(root = tmpdir(), alterMs = 2 * 3600_000, now = Dat
   let namen: string[] = [];
   try { namen = readdirSync(root).filter((n) => n.startsWith(LAUF_PREFIX)); } catch { return weg; }
   for (const n of namen) {
-    try { if (now - statSync(join(root, n)).mtimeMs > alterMs) { rmSync(join(root, n), { recursive: true, force: true }); weg.push(n); } } catch { /* weg */ }
+    try {
+      if (now - statSync(join(root, n)).mtimeMs <= alterMs) continue;
+      // Eine verwaiste Wegwerf-Mongo (Server-Neustart mitten im Lauf) zuerst beenden (Pass C).
+      try { const pid = Number(readFileSync(join(root, n, 'mongod.pid'), 'utf8')); if (pid > 1) process.kill(pid, 'SIGKILL'); } catch { /* keine */ }
+      rmSync(join(root, n), { recursive: true, force: true }); weg.push(n);
+    } catch { /* weg */ }
   }
   return weg;
 }
@@ -104,11 +112,23 @@ export async function wegwerfMongo(o: { mongod?: string; dir: string }): Promise
   const port = await freierPort();
   const db = join(o.dir, 'mongo'); mkdirSync(db, { recursive: true });
   const p = spawn(bin, ['--dbpath', db, '--bind_ip', '127.0.0.1', '--port', String(port), '--quiet', '--wiredTigerCacheSizeGB', '0.25'], { stdio: 'ignore', detached: false });
-  for (let i = 0; i < 60; i++) { if (await new Promise<boolean>((r) => { const s = connect(port, '127.0.0.1', () => { s.end(); r(true); }); s.on('error', () => r(false)); })) break; await new Promise((r) => setTimeout(r, 250)); }
-  return { url: `mongodb://127.0.0.1:${port}`, stopp: async () => { try { p.kill('SIGTERM'); } catch { /* weg */ } await new Promise((r) => setTimeout(r, 300)); try { p.kill('SIGKILL'); } catch { /* weg */ } rmSync(db, { recursive: true, force: true }); } };
+  let tot = false;
+  p.on('error', () => { tot = true; });   // nie unbehandelt (Pass C: sonst reißt es den Server mit)
+  p.on('exit', () => { tot = true; });
+  if (p.pid) writeFileSync(join(o.dir, 'mongod.pid'), String(p.pid));   // für aufraeumenAlt nach einem Neustart
+  const stopp = async () => { try { p.kill('SIGTERM'); } catch { /* weg */ } await new Promise((r) => setTimeout(r, 300)); try { p.kill('SIGKILL'); } catch { /* weg */ } rmSync(db, { recursive: true, force: true }); };
+  let bereit = false;
+  for (let i = 0; i < 60 && !tot; i++) { if (await new Promise<boolean>((r) => { const s = connect(port, '127.0.0.1', () => { s.end(); r(true); }); s.on('error', () => r(false)); })) { bereit = true; break; } await new Promise((r) => setTimeout(r, 250)); }
+  // Startet sie nicht, gibt es keine DB — die Befehle laufen dann ehrlich als „konnte nicht laufen“, nicht als „rot“ (Pass C).
+  if (!bereit || tot) { await stopp(); return null; }
+  return { url: `mongodb://127.0.0.1:${port}`, stopp };
 }
 
 // ---------- Backend: local-allowlist ----------
+
+function nichtErlaubt(name: string, e: BackendEingang): LaufBericht {
+  return { backend: name, netz: 'nicht getrennt', quelle: e.quelle, vollstaendig: false, gruende: [`${e.repo} steht nicht auf der Erlaubtliste der Ausführung (K6)`], ergebnisse: [] };
+}
 
 /** Umgebung nur aus der Erlaubtliste (keine Geheimnisse, kein Token, kein Git-Zugang). */
 export function sichereUmgebung(home: string, extra: Record<string, string> = {}, env = process.env): Record<string, string> {
@@ -140,6 +160,7 @@ export function lokal(o: { prlimit?: boolean; mongo?: typeof wegwerfMongo } = {}
   return {
     name: 'local-allowlist', netzGetrennt: false,
     async laufe(e) {
+      if (!ausfuehrungErlaubt(e.repo)) return nichtErlaubt('local-allowlist', e);   // doppelt gesichert (K6, Pass C)
       const deckel = e.deckel ?? DECKEL;
       const gruende: string[] = ['Netz nicht getrennt (diese VM kann keine Netztrennung) — nur Repos der Erlaubtliste'];
       aufraeumenAlt();
@@ -203,6 +224,7 @@ export function dockerRemote(o: { ssh?: string; host?: string; key?: string; env
   return {
     name: 'docker-remote', netzGetrennt: true,
     async laufe(e) {
+      if (!ausfuehrungErlaubt(e.repo, env)) return nichtErlaubt('docker-remote', e);
       const deckel = e.deckel ?? DECKEL;
       if (!host || !key) return { backend: 'docker-remote', netz: 'getrennt', quelle: e.quelle, vollstaendig: false, gruende: ['docker-remote nicht eingerichtet (Host oder Schlüsselpfad fehlt)'], ergebnisse: [] };
       aufraeumenAlt();
@@ -224,7 +246,9 @@ export function dockerRemote(o: { ssh?: string; host?: string; key?: string; env
           const t = setTimeout(() => { try { p.kill('SIGKILL'); } catch { /* weg */ } }, (deckel.gesamtS + 300) * 1000);
           p.on('error', (x) => { clearTimeout(t); reject(x); });
           p.on('close', (code) => { clearTimeout(t); code === 0 || out.includes('"ende"') ? resolve(out) : reject(new Error(`ssh endete mit ${code}: ${err.trim().slice(-300)}`)); });
-          createReadStream(join(dir, 'paket.tgz')).pipe(p.stdin);
+          // Fehler am Pipe (ssh bricht früh ab: EPIPE) nie unbehandelt — sonst reißt es den Server mit (Pass C).
+          p.stdin.on('error', () => {});
+          createReadStream(join(dir, 'paket.tgz')).on('error', (x) => { clearTimeout(t); reject(x); }).pipe(p.stdin);
         });
         for (const l of zeilen.split('\n')) {
           let j: any; try { j = JSON.parse(l); } catch { continue; }
@@ -253,24 +277,32 @@ export function managedAgents(env = process.env): Backend {
   };
 }
 
+/** Backend nach REVIEW_EXEC. Leer = local-allowlist (Rückfall); ein unbekannter Wert führt NICHT lokal aus (Pass C: fail closed). */
 export function backend(env = process.env): Backend {
+  const roh = String(env.REVIEW_EXEC ?? '').trim();
+  if (roh && !['local-allowlist', 'docker-remote', 'managed-agents'].includes(roh)) {
+    const grund = `REVIEW_EXEC „${roh.slice(0, 40)}“ unbekannt — nichts ausgeführt`;
+    return { name: 'local-allowlist', netzGetrennt: false, laufe: async (e) => ({ backend: 'keins', netz: 'nicht getrennt', quelle: e.quelle, vollstaendig: false, gruende: [grund], ergebnisse: [] }) };
+  }
   const n = execBackend(env);
   return n === 'docker-remote' ? dockerRemote({ env }) : n === 'managed-agents' ? managedAgents(env) : lokal();
 }
 
 /** `ausfuehrung.md` (deutsch, fürs Paket) und ein englischer Abschnitt „Tests“ für den Kommentar. */
 export function berichtMd(b: LaufBericht): { de: string; en: string } {
-  const z = (r: LaufErgebnis) => `| ${r.name} | \`${r.befehl.replace(/\|/g, '\\|')}\` | ${r.ergebnis}${r.grund ? ` (${r.grund})` : ''} | ${Math.round(r.ms / 1000)} s |`;
+  const zelle = (s: string) => s.replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|');
+  const z = (r: LaufErgebnis) => `| ${zelle(r.name)} | \`${zelle(r.befehl).replace(/`/g, 'ʼ')}\` | ${r.ergebnis}${r.grund ? ` (${zelle(r.grund)})` : ''} | ${Math.round(r.ms / 1000)} s |`;
   const de = [
     '# Ausführung (Review-Läufer)', '',
     `Backend: ${b.backend} · Netz: ${b.netz} · Befehle aus: ${b.quelle} · vollständig: ${b.vollstaendig ? 'ja' : 'nein'}`,
     ...(b.gruende.length ? ['', ...b.gruende.map((g) => `- ${g}`)] : []), '',
     '| Prüfung | Befehl | Ergebnis | Dauer |', '|---|---|---|---|', ...b.ergebnisse.map(z), '',
-    ...b.ergebnisse.filter((r) => r.ergebnis !== 'ok' && r.ausgabe).flatMap((r) => [`## ${r.name} — Ausgabe (Ende)`, '', '```', r.ausgabe.slice(-1500), '```', '']),
+    // Ausgabe stammt aus PR-Code: der Code-Block ist länger als jede Backtick-Folge darin, damit nichts ausbricht (Pass C).
+    ...b.ergebnisse.filter((r) => r.ergebnis !== 'ok' && r.ausgabe).flatMap((r) => { const zaun = '`'.repeat(Math.max(3, ...[...r.ausgabe.matchAll(/`+/g)].map((m) => m[0].length + 1))); return [`## ${r.name.replace(/[\r\n]/g, ' ')} — Ausgabe (Ende)`, '', zaun, r.ausgabe.slice(-1500), zaun, '']; }),
   ].join('\n');
   const en = [
     '### Tests', '',
-    `Executed by the review runner (${b.backend}; network ${b.netz === 'getrennt' ? 'isolated' : 'NOT isolated'}; commands from the base branch). Complete: ${b.vollstaendig ? 'yes' : 'no'}.`, '',
+    `Executed by the review runner (${b.backend}; network ${b.netz === 'getrennt' ? 'isolated' : 'NOT isolated'}; commands from the base branch: ${b.quelle.replace(/[\r\n]/g, ' ')}). Complete: ${b.vollstaendig ? 'yes' : 'no'}.`, '',
     ...b.ergebnisse.map((r) => `- ${r.name}: ${r.ergebnis === 'ok' ? 'passed' : r.ergebnis === 'rot' ? 'FAILED' : `could not run${r.grund ? ` (${r.grund})` : ''}`}`),
     ...(b.vollstaendig ? [] : ['', '> Incomplete run — a missing failure is not evidence of correctness.']),
   ].join('\n');

@@ -26,7 +26,7 @@ function NeuerUnterChat({ onClose, onDone }: { onClose: () => void; onDone: () =
       <div className="ub-scrim" onClick={onClose} />
       <div className="ub-sheet a-dialog" role="dialog" aria-modal="true" aria-labelledby="nuc-titel">
         <h2 id="nuc-titel">Neuer Unter-Chat</h2>
-        {!opt.data ? <Loading /> : <>
+        {!opt.data ? (opt.error ? <Err e={opt.error} /> : <Loading />) : <>
           <label className="small" htmlFor="nuc-auftrag">Auftrag</label>
           <textarea id="nuc-auftrag" rows={5} value={auftrag} onChange={(e) => setAuftrag(e.target.value)} placeholder="Was soll fertig sein? (ein, zwei Sätze — der Unter-Chat plant selbst)" />
           <label className="small" htmlFor="nuc-repo">Repo</label>
@@ -98,7 +98,7 @@ export function ArbeitReviews() {
         <tbody>{data.prs.map((p: any) => <tr key={p.pr} data-fuer={p.fuerDich ? '1' : '0'}>
           <td>{p.url ? <a href={p.url} target="_blank" rel="noreferrer"><b>{p.pr}</b></a> : <b>{p.pr}</b>}{p.entwurf ? <span className="chip"> Entwurf</span> : null}<div className="tiny mut">{p.titel}</div></td>
           <td>{p.fuerDich ? <span className="chip warn">{p.warum}</span> : '–'}</td>
-          <td className="a-m tiny">{p.review ? <>{p.review.stufe} · {REVIEW_TEXT[p.review.status] ?? p.review.status}{p.review.empfehlung ? ` · ${p.review.empfehlung}` : ''}{p.review.paket ? <> · <a href={`#/dateien`}>{p.review.paket.split('-')[0]}</a></> : null}</> : '–'}</td>
+          <td className="a-m tiny">{p.review ? <>{p.review.stufe} · {REVIEW_TEXT[p.review.status] ?? p.review.status}{p.review.empfehlung ? ` · ${p.review.empfehlung}` : ''}{p.review.paket ? <> · <a href={`#/ablage`}>{p.review.paket.split('-')[0]}</a></> : null}</> : '–'}</td>
           <td className="a-m tiny">{p.geaendert ? fmtDateTime(p.geaendert) : '–'}</td>
           <td><button className="ub-btn ghost sm" onClick={() => setStarten(p.pr)} aria-label={`Review für ${p.pr} starten`}>Review</button></td>
         </tr>)}</tbody>

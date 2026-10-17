@@ -17,7 +17,7 @@ import { vienna } from './hygiene.ts';
 import { graphql } from './github.ts';
 import { reviewsCol, tickerSettings, tickerAus, reviewErlaubt, type TickerSettings } from './prticker.ts';
 import { vorlauf, basisVon, motorAbschnitt, motorAn, deepAn } from './reviewmotor.ts';
-import { backend, befehleAusBasis, ausfuehrungErlaubt, berichtMd } from './laeufer.ts';
+import { backend, befehleAusBasis, ausfuehrungErlaubt, berichtMd, DECKEL } from './laeufer.ts';
 
 /**
  * Plan 213 S7b: Ausführung für Stufe deep — Befehle nur aus dem Basiszweig (K7), nur für Repos der Erlaubtliste (K6), Backend
@@ -34,9 +34,10 @@ export async function ausfuehren(o: { repo: string; number: number; wt: string; 
     writeFileSync(ziel('ausfuehrung.md'), '# Ausführung\n\nNicht ausgeführt: keine Basis gefunden — Befehle kommen nur aus dem Basiszweig. vollständig: nein\n');
     return 'Ausführung: keine Basis gefunden — Ergebnis ist `incomplete`.';
   }
-  const { quelle, befehle } = await befehleAusBasis(o.wt, o.basis);
-  const b = befehle.length ? await backend().laufe({ repo: o.repo, wt: o.wt, basis: o.basis, befehle, quelle, id: o.id.slice(-20).toLowerCase() })
+  const { quelle, befehle, gekappt } = await befehleAusBasis(o.wt, o.basis);
+  const b = befehle.length ? await backend().laufe({ repo: o.repo, wt: o.wt, basis: o.basis, befehle, quelle, id: o.id.slice(-20).toLowerCase().replace(/[^a-z0-9-]/g, '') })
     : { backend: 'keins', netz: 'nicht getrennt' as const, quelle, vollstaendig: false, gruende: ['keine Prüfbefehle im Basiszweig gefunden'], ergebnisse: [] };
+  if (gekappt) { b.gruende.push(`${gekappt} weitere Prüfbefehle nicht gelaufen (höchstens 12)`); b.vollstaendig = false; }
   const md = berichtMd(b);
   writeFileSync(ziel('ausfuehrung.md'), md.de + '\n');
   writeFileSync(ziel('tests-en.md'), md.en + '\n');
@@ -186,6 +187,10 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
     done++;
     if (k && s.autoPost && deps.post) await autoPost({ ...r, ...set }, k, deps, now);
   }
+  // Plan 213 S7b (Pass C): eine Ausführung, die länger als Gesamtdeckel + 15 min „führt aus“ steht (Neustart, hängender Host),
+  // ist ein Fehler — sonst belegt sie den Deckel für immer.
+  await reviewsCol().updateMany({ status: 'führt aus', execAt: { $lt: new Date(now.getTime() - (DECKEL.gesamtS + 900) * 1000) } },
+    { $set: { status: 'fehler', note: 'Ausführung ohne Ergebnis abgebrochen (Zeitdeckel oder Neustart)', doneAt: now } });
   // 2) neue starten
   if (!s.autoReview) return { started: 0, done };
   const heute = vienna(now).date;
@@ -217,9 +222,9 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       mkdirSync(join(reviewDir(), paket), { recursive: true });
       // Plan 213 S6: ein Motor — deterministischer Vorlauf (vorlauf.md) und die eine Prüfliste im Auftrag (WERKBANK_REVIEW_MOTOR=0 = alter Weg).
       let prompt = reviewPrompt(r, wt, paket);
-      let basis: string | null = null;
+      // Basis auch ohne Motor, wenn deep ausführt (Pass C: sonst „keine Basis“ trotz vorhandener Basis).
+      let basis: string | null = motorAn() || (r.deep && deepAn()) ? await basisVon(wt).catch(() => null) : null;
       if (motorAn()) {
-        basis = await basisVon(wt).catch(() => null);
         const vl = basis ? await vorlauf(wt, basis).catch((e: any) => ({ md: `# Vorlauf\n\nvollständig: nein — ${scrub(e?.message ?? e)}` })) : { md: '# Vorlauf\n\nvollständig: nein — keine Basis gefunden (origin/develop|dev|main|master).' };
         writeFileSync(join(reviewDir(), paket, 'vorlauf.md'), vl.md + '\n');
         prompt += '\n' + motorAbschnitt(paket);
@@ -233,10 +238,10 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       };
       if (r.deep && deepAn()) {
         // Plan 213 S7b: Stufe deep führt zuerst die Prüfbefehle des Basiszweigs im Läufer aus (im Hintergrund), dann startet das Review.
-        await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'führt aus', paket, worktree: wt } });
+        await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'führt aus', paket, worktree: wt, execAt: new Date() } });
         void ausfuehren({ repo: r.repo, number: r.number, wt, basis, paket, id: String(r._id) })
           .then((abschnitt) => starte(prompt + '\n' + abschnitt))
-          .catch(async (e: any) => { await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'fehler', note: scrub(e?.message ?? e), doneAt: new Date() } }); deps.log?.('pr-review fehler', { pr: `${r.repo}#${r.number}`, error: scrub(e?.message ?? e) }); });
+          .catch(async (e: any) => { await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'fehler', note: scrub(e?.message ?? e), doneAt: new Date() } }).catch(() => {}); deps.log?.('pr-review fehler', { pr: `${r.repo}#${r.number}`, error: scrub(e?.message ?? e) }); });
         started++;
         continue;
       }

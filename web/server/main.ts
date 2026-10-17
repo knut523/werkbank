@@ -1482,7 +1482,7 @@ on('GET', /^\/api\/ablage\/pakete$/, async (req, res, _m, url) => {
   const status = String(url.searchParams.get('status') ?? '');
   const q = String(url.searchParams.get('q') ?? '').trim().toLowerCase().slice(0, 80);
   let zeilen = status ? alle.filter((z) => z.status === status) : alle.filter((z) => z.status !== 'archiv');
-  if (q) zeilen = zeilen.filter((z) => z.name.includes(q) || z.titel.toLowerCase().includes(q));
+  if (q) zeilen = zeilen.filter((z) => z.name.toLowerCase().includes(q) || z.titel.toLowerCase().includes(q));
   send(res, 200, { zeilen: zeilen.slice(0, 300), zahlen: paketZahlen(alle), gesamt: alle.length });
 });
 

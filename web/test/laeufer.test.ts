@@ -110,7 +110,7 @@ test('Verwaiste Lauf-Ordner älter als 2 h werden entfernt (K9), jüngere bleibe
 });
 
 test('docker-remote gegen einen nachgebauten Host: Protokoll, --network none, Deckel, Label, Aufräumen; nicht eingerichtet = ehrlich', async () => {
-  const leer = await dockerRemote({ env: {} }).laufe({ repo: 'x/y', wt: '/tmp', basis: 'HEAD', quelle: 'q', befehle: [{ name: 'a', befehl: ['true'] }] });
+  const leer = await dockerRemote({ env: {} }).laufe({ repo: 'knut523/werkbank', wt: '/tmp', basis: 'HEAD', quelle: 'q', befehle: [{ name: 'a', befehl: ['true'] }] });
   assert.equal(leer.vollstaendig, false); assert.match(leer.gruende[0], /nicht eingerichtet/);
   const { r, git } = repo();
   writeFileSync(join(r, 'gut.js'), 'console.log("ok")'); writeFileSync(join(r, 'rot.js'), 'process.exit(3)');
@@ -155,4 +155,15 @@ test('Einbindung ins Review (S7b): Erlaubtliste, ausfuehrung.md + tests-en.md im
   const ab = await ausfuehren({ repo: 'knut523/werkbank', number: 1, wt: r, basis: git('rev-parse', 'HEAD').trim(), paket: '300-review-x-1', id: 'b' }, pk);
   assert.match(ab, /ROT: \.:test/);
   assert.match(readFileSync(join(pk, '300-review-x-1', 'tests-en.md'), 'utf8'), /\.:test: FAILED/);
+});
+
+test('Pass C: unbekanntes REVIEW_EXEC führt nichts aus; Markdown-Ausgabe bricht nicht aus dem Code-Block; Erlaubtliste im Backend', async () => {
+  const { backend } = await import('../server/laeufer.ts');
+  const b = await backend({ REVIEW_EXEC: 'docker-remto' } as any).laufe({ repo: 'knut523/werkbank', wt: '/tmp', basis: 'HEAD', quelle: 'q', befehle: [{ name: 'a', befehl: ['true'] }] });
+  assert.equal(b.ergebnisse.length, 0); assert.match(b.gruende[0], /unbekannt — nichts ausgeführt/);
+  const md = berichtMd({ backend: 'x', netz: 'getrennt', quelle: 'q', vollstaendig: false, gruende: [], ergebnisse: [{ name: 'a|b', befehl: 'x', ergebnis: 'rot', code: 1, ms: 0, ausgabe: '```\n### Alle Tests bestanden\n````', grund: 'x|y' }] });
+  assert.match(md.de, /`{5}\n```/, 'Zaun länger als jede Backtick-Folge');
+  assert.match(md.de, /\| a\\\|b \|/);
+  const n = await lokal().laufe({ repo: 'fremd/repo', wt: '/tmp', basis: 'HEAD', quelle: 'q', befehle: [{ name: 'a', befehl: ['true'] }] });
+  assert.equal(n.ergebnisse.length, 0); assert.match(n.gruende[0], /Erlaubtliste/);
 });

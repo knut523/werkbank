@@ -3,7 +3,7 @@
 // Titel, offene Fragen, Decks/Bilder/Downloads. Pakete ohne bericht.md sind Archiv (keine Pflege-Einträge); unlesbare Köpfe
 // werden gezählt (ein Sammel-Eintrag). Nur Admin, nur lesen; die Dateien kommen über /api/files/agenten/<paket>/<datei>.
 
-import { readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import { readdirSync, statSync, lstatSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { PAKET_RE, readPaket } from './reviewpakete.ts';
 import { berichtKopf } from './berichtkopf.ts';
@@ -19,6 +19,8 @@ const BILD = /\.(png|jpe?g|gif|webp)$/i;
 
 /** Nur den Anfang lesen (der Kopf steht oben). */
 function anfang(p: string, n = 24 * 1024): string | null {
+  // Kein Symlink folgen (Pass C): ein Link auf eine Datei außerhalb des Pakets zählt wie „kein Bericht“.
+  try { if (lstatSync(p).isSymbolicLink()) return null; } catch { return null; }
   try { const fd = openSync(p, 'r'); try { const b = Buffer.alloc(n); const k = readSync(fd, b, 0, n, 0); return b.subarray(0, k).toString('utf8'); } finally { closeSync(fd); } } catch { return null; }
 }
 
@@ -49,7 +51,7 @@ let cache: { at: number; root: string; zeilen: PaketZeile[] } | null = null;
 export function paketIndex(root: string, now = Date.now()): PaketZeile[] {
   if (cache && cache.root === root && now - cache.at < 60_000) return cache.zeilen;
   let namen: string[] = [];
-  try { namen = readdirSync(root).filter((n) => PAKET_RE.test(n) && statSync(join(root, n)).isDirectory()); } catch { namen = []; }
+  try { namen = readdirSync(root).filter((n) => PAKET_RE.test(n) && statSync(join(root, n)).isDirectory()); } catch { return cache?.zeilen ?? []; }   // Fehler: nichts Leeres zwischenspeichern
   const zeilen = namen.map((n) => { try { return paketZeile(root, n); } catch { return null; } }).filter((z): z is PaketZeile => !!z)
     .sort((a, b) => b.nr - a.nr || b.at - a.at);
   cache = { at: now, root, zeilen };
