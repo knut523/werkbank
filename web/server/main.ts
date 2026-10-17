@@ -1369,10 +1369,12 @@ on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: a
 
 // --- Eine Statusquelle (Plan 213 S1b): Zähler für alle Ansichten, Schattenvergleich, Wegräumen/Zurückholen ---
 /** Zustand der offenen Unter-Chats einer Person, gezählt (K11). Ohne neuen Zustand (alte Läufe) aus dem alten Status abgeleitet. */
+const ALT_ZUSTAND: Record<string, Zustand> = { running: 'laeuft', done: 'fertig', failed: 'haengt', waiting: 'wartet', blocked_g0: 'blockiert' };
+/** Wirksamer Zustand eines Laufs — dieselbe Ableitung für Zähler und Heute (frisch gestartet, noch kein Takt: läuft). */
+const wirksam = (d: any): Zustand => (d.zustand as Zustand) ?? ALT_ZUSTAND[d.lastStatus] ?? 'laeuft';
 async function zaehlerFuer(u: User) {
-  const alt: Record<string, Zustand> = { running: 'laeuft', done: 'fertig', failed: 'haengt', waiting: 'wartet', blocked_g0: 'blockiert' };
   const docs: any[] = await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }, { projection: { zustand: 1, lastStatus: 1 } }).toArray();
-  return zaehle(docs.map((d) => (d.zustand as Zustand) ?? alt[d.lastStatus] ?? 'laeuft'));   // frisch gestartet, noch kein Takt: läuft
+  return zaehle(docs.map(wirksam));
 }
 on('GET', /^\/api\/status$/, async (req, res) => {
   const u = await needAdmin(req);
@@ -1418,8 +1420,10 @@ on('GET', /^\/api\/heute$/, async (req, res) => {
   const gesternAbend = wienUm(vorigerTag(wienDatum()), 18);   // gestern 18:00 Wiener Zeit, nicht Server-Zeit (Pass C)
   let blockiert: any[] = [], geaendert: any = null;
   if (admin) {
-    const offen: any[] = await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT(), zustand: { $in: ['blockiert', 'haengt', 'schlange', 'stand-fehlt'] } }, { projection: { title: 1, zustand: 1, zustandGrund: 1, url: 1, statusAt: 1 } }).sort({ statusAt: 1 }).limit(10).toArray().catch(() => []);
-    blockiert = offen.map((d) => ({ id: String(d._id), titel: d.title ?? '', zustand: d.zustand, grund: d.zustandGrund ?? '', chat: /^https?:\/\//.test(String(d.url ?? '')) ? d.url : null, seit: d.statusAt ?? null }));
+    // Dieselbe Ableitung wie die Zähler in Arbeit (Sichtprüfung: sonst „Nichts blockiert“ neben „5 hängen/blockiert“).
+    const alle: any[] = await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }, { projection: { title: 1, zustand: 1, lastStatus: 1, zustandGrund: 1, url: 1, statusAt: 1 } }).sort({ statusAt: 1 }).toArray().catch(() => []);
+    const offen = alle.filter((d) => ['blockiert', 'haengt', 'schlange', 'stand-fehlt'].includes(wirksam(d))).slice(0, 10);
+    blockiert = offen.map((d) => ({ id: String(d._id), titel: d.title ?? '', zustand: wirksam(d), grund: d.zustandGrund ?? '', chat: /^https?:\/\//.test(String(d.url ?? '')) ? d.url : null, seit: d.statusAt ?? null }));
     const R = orchRuns();
     const [fertig, weg, gepusht] = await Promise.all([
       R.countDocuments({ userId: u.id, kind: { $ne: 'leitstand' }, doneAt: { $gte: gesternAbend } }).catch(() => 0),
