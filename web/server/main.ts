@@ -19,7 +19,7 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema, etaMediane } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema, etaMediane, statusSchatten } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { themaOf } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
@@ -65,7 +65,9 @@ import { collectDecisions, todayQuestions, todayPayload } from './fragen.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, rule1Goals, specProposals, autoEligible, type GoalNode } from './goals.ts';
 import { istTiefe, type Tiefe } from './tiefe.ts';
-import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon } from './nutzung.ts';
+import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
+import { zaehle, statusNeu, autoSchliessenAn, type Zustand } from './zustand.ts';
+import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -1273,7 +1275,9 @@ async function todayCount(u: User, queue?: any[], mine?: any, cards?: any[]) {
   const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
   const hyg = h.items.filter((i: any) => !h.snoozed.includes(i.key)).length;
   const orch = (await listQuestions(u, { open: true }).catch(() => [])).length;   // Rückfragen des Orchestrators
-  const strands = (cards ?? await strandCards(u).catch(() => [])).filter((c: any) => !c.running).length;   // fertige Stränge (nur Admins, nur Mongo — Teil B, F1)
+  // Plan 213 S1b (K11): im neuen Modus zählt, was wirklich auf Knut wartet (wartet, blockiert, fertig) — dieselbe Zählung wie /api/status.
+  const strands = statusNeu() ? (u.role === 'ADMIN' ? (await zaehlerFuer(u)).brauchtDich : 0)
+    : (cards ?? await strandCards(u).catch(() => [])).filter((c: any) => !c.running).length;   // fertige Stränge (nur Admins, nur Mongo — Teil B, F1)
   return strands + q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + (m.pendingApprovals?.length ?? 0) + (m.draft ? 1 : 0) + hyg + orch;
 }
 
@@ -1300,6 +1304,24 @@ on('GET', /^\/api\/today$/, async (req, res) => {
 });
 
 on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
+
+// --- Eine Statusquelle (Plan 213 S1b): Zähler für alle Ansichten, Schattenvergleich, Wegräumen/Zurückholen ---
+/** Zustand der offenen Unter-Chats einer Person, gezählt (K11). Ohne neuen Zustand (alte Läufe) aus dem alten Status abgeleitet. */
+async function zaehlerFuer(u: User) {
+  const alt: Record<string, Zustand> = { running: 'laeuft', done: 'fertig', failed: 'haengt', waiting: 'wartet', blocked_g0: 'blockiert' };
+  const docs: any[] = await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }, { projection: { zustand: 1, lastStatus: 1 } }).toArray();
+  return zaehle(docs.map((d) => (d.zustand as Zustand) ?? alt[d.lastStatus] ?? 'haengt'));
+}
+on('GET', /^\/api\/status$/, async (req, res) => {
+  const u = await needAdmin(req);
+  send(res, 200, { neu: statusNeu(), autoSchliessen: autoSchliessenAn(), zaehler: await zaehlerFuer(u), schatten: await statusSchatten(7), wegraeumbar: (await autoSchliessen({ dry: true })).length });
+});
+on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/zurueckholen$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  if (!(await zurueckholen(u.id, m[1]))) throw new HttpError(409, 'Nur automatisch weggeräumte Unter-Chats lassen sich zurückholen.');
+  log('strang zurückgeholt', { user: u.id, id: m[1] });
+  send(res, 200, { ok: true });
+});
 
 async function ownRun(u: User, id: string) {
   const run: any = await wb().collection('agent_runs').findOne({ _id: id as any });
@@ -1604,6 +1626,8 @@ on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
   const path = paketDatei(d, art);
   const text = readBericht(path);
   if (text === null) throw new HttpError(404, art === 'auftrag' ? 'Kein lesbarer Auftrag zu diesem Unter-Chat.' : 'Kein lesbarer Bericht zu diesem Unter-Chat.');
+  // Plan 213 S1b (K1): Knut hat den Bericht gesehen — Voraussetzung fürs automatische Wegräumen.
+  if (art === 'bericht') await orchRuns().updateOne({ _id: d._id }, { $set: { gesehenAt: new Date() } }).catch(() => {});
   // Plan 157, B: Entscheidungen auch auf der Berichtsseite beantworten. Teil C (C3/C.7): formatiert + Exec Summary.
   const name = String(path).split('/').slice(-2).join('/');
   const fg: any = art === 'bericht' ? await freigaben().findOne({ strand: String(d._id), pr: { $type: 'string' } }, { sort: { at: -1 } }) : null;
@@ -2550,11 +2574,13 @@ on('GET', /^\/api\/files\/agenten$/, async (req, res) => {
 });
 
 on('GET', /^\/api\/files\/agenten\/(\d{1,4}-[a-z0-9][a-z0-9-]*)\/(.+)$/, async (req, res, m, url) => {
-  await needAdmin(req);
+  const gu = await needAdmin(req);
   let rel = '';
   try { rel = m[2].split('/').map(decodeURIComponent).join('/'); } catch { throw new HttpError(400, 'Ungültiger Pfad.'); }
   const abs = paketFile(cfg.reviewDir, m[1], rel);
   if (!abs) throw new HttpError(404, 'Datei nicht gefunden.');
+  // Plan 213 S1b (K1): Bericht in der Schublade geöffnet = gesehen (alle Unter-Chats dieses Pakets).
+  if (rel === 'bericht.md') await orchRuns().updateMany({ userId: gu.id, paket: m[1] }, { $set: { gesehenAt: new Date() } }).catch(() => {});
   const ext = extname(abs).toLowerCase();
   const name = rel.split('/').pop()!;
   if (url.searchParams.get('vorschau') === '1') {
@@ -3162,6 +3188,11 @@ const orchDeps = {
 startAutoWeiter(orchDeps);
 // Stand je Strang festschreiben (Teil B, G1) — unabhängig vom Auto-Fortsetzen; ORCH_STATUS=off schaltet ab.
 startStatusTick(orchDeps);
+// Plan 213 S1b (K1, P3): fertige, gesehene Unter-Chats nach 24 h wegräumen — nur mit WERKBANK_AUTO_SCHLIESSEN=1 (mit der Inbox).
+if (process.env.ORCH_STATUS !== 'off') setInterval(() => {
+  autoSchliessen().then((w) => { if (w.length) log('automatisch weggeräumt', { n: w.length, ids: w.map((x) => x.id) }); }).catch((e) => log('wegräumen fehler', { error: String(e?.message ?? e).slice(0, 160) }));
+}, 10 * 60_000).unref();
 // Leitstand wecken (Plan 132, S2): eigener Durchgang im selben Takt; LEITSTAND_WAKE=off schaltet ab.
 startLeitstandTick(orchDeps);
-for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { server.close(); process.exit(0); });
+// Beim Beenden die gesammelten Nutzungszahlen noch schreiben (Plan 213 S0, Pass C: sonst gehen die letzten ≤ 60 s verloren).
+for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { server.close(); nutzungSchreiben().catch(() => {}).finally(() => process.exit(0)); });
