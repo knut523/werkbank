@@ -149,9 +149,9 @@ const ORCH_TOOLS = [
   },
   {
     name: 'orch_ask',
-    description: 'Echte Entscheidung an Knut (erscheint im OLAF Workspace unter „Heute“ → „Wartet auf dich“). Nur was wirklich Knuts Entscheidung ist; Kontext in Klartext (2–4 Sätze), Optionen mit Folge, eigene Empfehlung. Du wirst geweckt, sobald Knut antwortet.',
-    inputSchema: { type: 'object', properties: { title: { type: 'string' }, context: { type: 'string' }, recommendation: { type: 'string' }, options: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, consequence: { type: 'string' } }, required: ['label'] } }, strand: { type: 'string' }, link: { type: 'string' }, plan: { type: 'string' } }, required: ['title', 'context', 'recommendation'] },
-    run: async (a: any) => { const j = await call('/internal/orchestrator/questions/ask', { title: a.title, context: a.context, recommendation: a.recommendation, options: a.options ?? [], strand: a.strand || null, link: a.link || null, plan: a.plan || null }); return `Rückfrage angelegt: ${j.id} — erscheint in „Heute“.`; },
+    description: 'Echte Entscheidung an Knut (erscheint im OLAF Workspace unter „Heute“ → „Wartet auf dich“). Nur was wirklich Knuts Entscheidung ist; Kontext in Klartext (2–4 Sätze), Optionen mit Folge, eigene Empfehlung. Du wirst geweckt, sobald Knut antwortet. Stufe: „wichtig“, wenn Knut selbst entscheiden muss (bleibt offen); sonst gilt deine Empfehlung bei Stufe „normal“ nach 24 h als angenommen — Push/Release, Geld, Recht, Außenwirkung und Architektur stuft der Workspace ohnehin als wichtig ein.',
+    inputSchema: { type: 'object', properties: { title: { type: 'string' }, context: { type: 'string' }, recommendation: { type: 'string' }, options: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, consequence: { type: 'string' } }, required: ['label'] } }, strand: { type: 'string' }, link: { type: 'string' }, plan: { type: 'string' }, stufe: { type: 'string', enum: ['wichtig', 'normal'] } }, required: ['title', 'context', 'recommendation'] },
+    run: async (a: any) => { const j = await call('/internal/orchestrator/questions/ask', { title: a.title, context: a.context, recommendation: a.recommendation, options: a.options ?? [], strand: a.strand || null, link: a.link || null, plan: a.plan || null, stufe: a.stufe ?? null }); return `Rückfrage angelegt: ${j.id} — erscheint in „Heute“${j.stufe === 'wichtig' ? '' : ' (Stufe normal: Empfehlung gilt nach 24 h als angenommen, außer die Regeln stufen sie als wichtig ein)'}.`; },
   },
   {
     name: 'orch_questions',
@@ -189,7 +189,7 @@ serve('werkbank', '0.1.0', [
       const e: any[] = j.eintraege ?? [];
       if (!e.length) return 'Inbox leer — nichts wartet auf eine Entscheidung.';
       const einz = (v: unknown) => String(v ?? '').replace(/[\r\n]+/g, ' ');
-      const zeilen = e.map((x) => `- [${x.id}] ${einz(x.frage)}${x.empfehlung ? ` — Empfehlung: ${einz(x.empfehlung)}` : ''} (${einz(x.quelle?.text)})`);
+      const zeilen = e.map((x) => `- [${x.id}]${x.stufe === 'wichtig' ? ' (wichtig)' : x.autoAb ? ` (normal, gilt ab ${t(x.autoAb)} als angenommen)` : ''} ${einz(x.frage)}${x.empfehlung ? ` — Empfehlung: ${einz(x.empfehlung)}` : ''} (${einz(x.quelle?.text)})`);
       const knoepfe = e.filter((x) => x.antworten?.includes('ja') && x.antworten?.includes('nein')).map((x) => ({ id: String(x.id), frage: einz(x.frage), quelle: einz(x.quelle?.text) }));
       return `${e.length} offen:\n${zeilen.join('\n')}\n\nKNOEPFE ${JSON.stringify(knoepfe)}`;
     },

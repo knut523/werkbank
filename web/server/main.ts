@@ -71,6 +71,8 @@ import { istTiefe, type Tiefe } from './tiefe.ts';
 import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
 import { zaehle, statusNeu, autoSchliessenAn, navNeu, aufraeumenAn, meinTagWeg, einLogin, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
+import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
+import { autoAnnahmeAn, annahmeMs } from './stufe.ts';
 import { zeile as arbeitZeile, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
 
 const DIST = join(WEB_DIR, 'dist');
@@ -1350,7 +1352,7 @@ async function inboxFuer(u: User, now = Date.now()) {
   const spaeter = new Map(((await spaeterCol().find({ userId: u.id, bis: { $gt: new Date(now) } }).toArray()) as any[]).map((s) => [String(s.id), new Date(s.bis).getTime()]));
   const laeufe = (await myQueue(u).catch(() => [] as any[])).filter((x: any) => x.bucket !== 'laeuft').length;
   return baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe,
-    kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now });
+    kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now, annahmeMs: annahmeMs() });
 }
 on('GET', /^\/api\/inbox$/, async (req, res) => {
   const u = await needUser(req);
@@ -1423,7 +1425,7 @@ on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => {
     if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — gleich noch einmal.');
     entscheidSperre.add(sperre);
     antwortGezaehlt('inbox', weg);
-    try { return await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }, res); } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
+    try { const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }); await logEntscheidung(u, e, art === 'ja' ? 'ja (Empfehlungen übernommen)' : art === 'nein' ? 'nein' : `anders: ${text}`, u.email).catch(() => {}); return send(res, 200, r); } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
   } else if (e.art === 'push') {
     if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
     if (art !== 'ja') throw new HttpError(400, 'Push: nur „Ja“ (freigeben) oder „Später“.');
@@ -1445,9 +1447,96 @@ on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => {
     if (fehler) throw new HttpError(409, `${fehler} Rückfrage(n) ließen sich nicht verwerfen — Inbox neu laden und einzeln ansehen.`);
   } else throw new HttpError(400, 'Diese Frage beantwortest du in ihrer Ansicht (Vault-Sync, Pflege, Schlange).');
   log('inbox antwort', { user: u.id, art: e.art, weg });
+  if (e.art !== 'altbestand') await logEntscheidung(u, e, art === 'ja' ? `ja${e.empfehlung ? ` (${e.empfehlung})` : ''}` : art === 'nein' ? 'nein' : `anders: ${text}`, u.email).catch(() => {});
   zahlCache.delete(u.id);
   if (e.art !== 'push') antwortGezaehlt(e.art === 'rueckfrage' ? 'rueckfrage' : e.art === 'braucht' ? 'braucht' : 'inbox', weg);
   send(res, 200, { ok: true, art: e.art });
+});
+
+// --- Entscheidungen nach Wichtigkeit (Knut 17.10.): Annahme nach 24 h, Entscheidungs-Log, Widerruf mit „Anders“ ---
+const logCol = () => wb().collection('entscheidungs_log');
+async function logEntscheidung(u: User, e: any, antwort: string, durch: string, auto = false, ids: string[] = []) {
+  await logCol().insertOne(logZeile(u.id, e, { antwort, durch, auto, ids }) as any);
+}
+/** Normale Einträge, deren 24 h um sind: Empfehlung annehmen — an derselben Quelle wie eine Antwort von Knut, dann ins Log. */
+async function annahmeLauf(u: User, now = Date.now()): Promise<string[]> {
+  if (!autoAnnahmeAn()) return [];
+  const done: string[] = [];
+  for (const f of faellig((await inboxFuer(u, now)).eintraege, now)) {
+    const e = f.eintrag;
+    try {
+      if (e.art === 'rueckfrage') {
+        const opts = (e.daten.optionen as string[]) ?? [];
+        const rec = opts.find((o) => o === e.empfehlung) ?? opts.find((o) => String(e.empfehlung ?? '').startsWith(o)) ?? null;
+        await answerQuestion(u, String(e.daten.qid), { option: rec, text: `Nach 24 h ohne Antwort automatisch angenommen (Stufe normal): ${e.empfehlung}`, by: 'auto' });
+      } else {
+        if (u.role !== 'ADMIN') continue;
+        const d = await reviewStrand(u, String(e.daten.strand));
+        const sperre = String(d._id);
+        if (entscheidSperre.has(sperre)) continue;   // gerade antwortet Knut selbst — nächster Takt
+        entscheidSperre.add(sperre);
+        try { await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, auto: true, antworten: f.ids.map((id) => ({ id, art: 'akzeptiert' })) }); } finally { entscheidSperre.delete(sperre); }
+      }
+      await logEntscheidung(u, e, `angenommen wie empfohlen${f.ids.length && e.art === 'entscheidung' ? ` (${f.ids.join(', ')})` : ''}`, 'auto', true, f.ids);
+      done.push(e.id);
+    } catch (err: any) { log('annahme fehler', { user: u.id, id: e.id, error: String(err?.message ?? err).slice(0, 160) }); }
+  }
+  if (done.length) { zahlCache.delete(u.id); roadmapChanged('orchestrator-antwort'); log('automatisch angenommen', { user: u.id, ids: done }); }
+  return done;
+}
+async function annahmeTakt() {
+  const ids = new Set<string>([
+    ...((await wb().collection('orchestrator_questions').distinct('userId', { status: 'offen' })) as string[]),
+    ...((await orchRuns().distinct('userId', AUF_UEBERSICHT() as any)) as string[]),
+  ].map(String));
+  for (const id of ids) { const u = await userById(id).catch(() => null); if (u && allowed(u.email)) await annahmeLauf(u).catch(() => []); }
+}
+/** Wurde auf eine automatische Annahme schon gebaut? Unter-Chat beendet/weggeräumt oder ein Commit nach der Zustellung. */
+async function gebaut(u: User, z: any): Promise<boolean> {
+  if (!z.strand?.id) return false;
+  const d: any = await orchRuns().findOne({ _id: z.strand.id as any, userId: u.id });
+  if (!d) return false;
+  const seit = new Date(z.zugestelltAt ?? z.at).getTime();
+  if (d.endedAt || (d.reviewedAt && new Date(d.reviewedAt).getTime() > seit)) return true;
+  if (!d.cwd) return false;
+  return new Promise((resolve) => execFile('git', ['-C', String(d.cwd), 'log', `--since=@${Math.floor(seit / 1000)}`, '--format=%H', '-1'], { timeout: 5000 }, (err, out) => resolve(!err && String(out).trim().length > 0)));
+}
+const logOeffentlich = (z: any, w: { ok: boolean; grund: string | null }) => ({ id: String(z._id), kennung: z.kennung, art: z.art, ids: z.ids ?? [], frage: z.frage, empfehlung: z.empfehlung, stufe: z.stufe, grund: z.grund,
+  antwort: z.antwort, durch: z.auto ? 'auto' : 'knut', at: z.at, strand: z.strand ?? null, widerruf: z.widerruf ?? null, widerrufbar: w.ok, widerrufGrund: w.grund });
+on('GET', /^\/api\/entscheidungen$/, async (req, res, _m, url) => {
+  const u = await needUser(req);
+  const tage = Math.min(90, Math.max(1, Number(url.searchParams.get('tage') ?? 30) || 30));
+  const q: any = { userId: u.id, at: { $gte: new Date(Date.now() - tage * 86400_000) } };
+  const durch = url.searchParams.get('durch');
+  if (durch === 'auto') q.auto = true; else if (durch === 'knut') q.auto = false;
+  const st = url.searchParams.get('stufe');
+  if (st === 'wichtig' || st === 'normal') q.stufe = st;
+  const zeilen: any[] = await logCol().find(q).sort({ at: -1 }).limit(200).toArray();
+  const out = [];
+  for (const z of zeilen) out.push(logOeffentlich(z, widerrufbar(z, { gebaut: z.auto && !z.widerruf ? await gebaut(u, z) : false })));
+  send(res, 200, { zeilen: out, autoAnnahme: autoAnnahmeAn(), stunden: annahmeMs() / 3600_000 });
+});
+on('POST', /^\/api\/entscheidungen\/([\w:.-]{1,200})\/anders$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const text = String((await body(req)).text ?? '').trim().slice(0, 2000);
+  if (!text) throw new HttpError(400, 'Schreib kurz, was stattdessen gelten soll.');
+  const z: any = await logCol().findOne({ _id: m[1] as any, userId: u.id });
+  if (!z) throw new HttpError(404, 'Diesen Eintrag im Entscheidungs-Log gibt es nicht.');
+  const w = widerrufbar(z, { gebaut: await gebaut(u, z) });
+  if (!w.ok) throw new HttpError(409, w.grund!);
+  const msg = widerrufText(z, text);
+  // Erst zustellen, dann vermerken (sonst stünde ein Widerruf im Log, den niemand bekommen hat).
+  if (z.strand?.id) await sendOrch(u, String(z.strand.id), msg, 'hand');
+  if (z.art === 'rueckfrage' && !(await meldeLeitstand(u, { _id: z.kennung, title: z.frage }, msg)) && !z.strand?.id) throw new HttpError(409, 'Kein Hauptchat aktiv — die Korrektur könnte niemand empfangen. Hauptchat starten und noch einmal.');
+  const r = await logCol().updateOne({ _id: z._id, widerruf: null }, { $set: { widerruf: { at: new Date(), text } } });
+  if (!r.modifiedCount) throw new HttpError(409, 'Schon widerrufen.');
+  log('annahme widerrufen', { user: u.id, id: z._id });
+  send(res, 200, { ok: true });
+});
+// Lauf sofort (statt im 10-min-Takt): nimmt nur eigene, schon fällige Einträge an — nichts früher als nach der Frist.
+on('POST', /^\/api\/entscheidungen\/lauf$/, async (req, res) => {
+  const u = await needUser(req);
+  send(res, 200, { angenommen: await annahmeLauf(u), an: autoAnnahmeAn() });
 });
 
 // --- Arbeit › Unter-Chats (Plan 213 S4a): Tabelle aus der einen Statusquelle, „Neuer Unter-Chat“ aus der Oberfläche ---
@@ -1720,10 +1809,10 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const sperre = String(d._id);
   if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — Seite neu laden und noch einmal.');
   entscheidSperre.add(sperre);
-  try { await entscheidungenEintragen(u, d, b, res); } finally { entscheidSperre.delete(sperre); }
+  try { send(res, 200, await entscheidungenEintragen(u, d, { ...b, auto: false })); } finally { entscheidSperre.delete(sperre); }
 });
 const entscheidSperre = new Set<string>();
-async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
+async function entscheidungenEintragen(u: User, d: any, b: any): Promise<Record<string, unknown>> {
   // Teil C (H3): läuft der Unter-Chat, reicht sendOrch die Antwort nach — kein 409 mehr.
   const { paketDatei } = await import('./bericht.ts');
   const pfad = paketDatei(d, 'bericht');
@@ -1739,7 +1828,7 @@ async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
     // Plan 184, Teil B: „abgelehnt“ = Nein auf der Übersicht (die Empfehlung gilt nicht).
     const art = a?.art === 'akzeptiert' || a?.art === 'nachpruefen' || a?.art === 'abgelehnt' ? a.art : 'eigene';
     const frei = String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000);
-    const t = art === 'akzeptiert' ? (e?.empfehlung ? `akzeptiert (Empfehlung: ${e.empfehlung.slice(0, 200)})` : 'ja') : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}`
+    const t = art === 'akzeptiert' ? (e?.empfehlung ? `${b.auto ? 'nach 24 h automatisch angenommen (Stufe normal)' : 'akzeptiert'} (Empfehlung: ${e.empfehlung.slice(0, 200)})` : 'ja') : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}`
       : art === 'abgelehnt' ? `nein — Empfehlung abgelehnt${e?.empfehlung ? ` (${e.empfehlung.slice(0, 200)})` : ''}${frei ? `: ${frei}` : ''}` : frei;
     return { id, art, text: t };
   }).filter((a: any) => a.text && bekannt.has(a.id) && !bekannt.get(a.id)!.knut);
@@ -1751,12 +1840,12 @@ async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
   // als `antwort:` ein; lässt sich der Kopf nicht sicher ändern, geht es wie bisher nur an den Strang.
   const kopfNeu = d.lastStatus === 'running' || !imKopf.length ? null : kopfAntwortEintragen(text, imKopf);
   if (d.lastStatus === 'running' || (imKopf.length && !kopfNeu)) {
-    const msg = `Nacharbeit nach Review: Entscheidungen von Knut — bitte in den Bericht eintragen (Kopf: \`antwort:\` der Frage; Text: Zeile „- Knut:“) und danach weiterarbeiten.\n${antworten.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}`;
+    const msg = `Nacharbeit nach Review: ${b.auto ? 'nach 24 h automatisch angenommene Empfehlungen (Stufe normal)' : 'Entscheidungen von Knut'} — bitte in den Bericht eintragen (Kopf: \`antwort:\` der Frage; Text: Zeile „- Knut:“) und danach weiterarbeiten.\n${antworten.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}`;
     await sendOrch(u, String(d._id), msg, 'hand');
     await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten, ids } } });
     log('review entscheidungen (an Strang)', { user: u.id, id: d._id, n: antworten.length });
     antwortGezaehlt('entscheidung', 'ui');
-    return send(res, 200, { ok: true, gesendet: antworten.length, weiter: true, offen: null, hauptchat: false });
+    return { ok: true, gesendet: antworten.length, weiter: true, offen: null, hauptchat: false };
   }
   // Eine Wahrheit: die Antworten stehen im Bericht („- Knut: …“). Der Server trägt sie ein (Pfad nur unter den Review-Paketen).
   const real = (() => { try { return realpathSync(String(pfad)); } catch { return ''; } })();
@@ -1777,7 +1866,7 @@ async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
     const rest = antworten.filter((a: any) => a.art === 'akzeptiert');
     const msg = arbeit.length
       ? `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}${rest.length ? `\nAkzeptiert (wie empfohlen): ${rest.map((a: any) => a.id).join(', ')}` : ''}`
-      : `Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“): ${rest.map((a: any) => `${a.id} wie empfohlen`).join(', ')}. Mach damit weiter${offen.length ? ` (noch offen: ${offen.map((e: any) => e.id).join(', ')})` : ''} und aktualisiere danach den Bericht.`;
+      : `${b.auto ? 'Nach 24 h ohne Antwort automatisch angenommen (Stufe normal; Knut kann das mit „Anders“ noch widerrufen, solange nichts darauf gebaut ist)' : 'Knut hat entschieden'} (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“): ${rest.map((a: any) => `${a.id} wie empfohlen`).join(', ')}. Mach damit weiter${offen.length ? ` (noch offen: ${offen.map((e: any) => e.id).join(', ')})` : ''} und aktualisiere danach den Bericht.`;
     try { await sendOrch(u, String(d._id), msg, 'hand'); } catch (e) { schreibe(text); throw e; }
     weiter = true;
   }
@@ -1786,7 +1875,7 @@ async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
   await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten, ids }, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
   log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length, arbeit: arbeit.length, offen: offen.length });
   antwortGezaehlt('entscheidung', 'ui');
-  send(res, 200, { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat });
+  return { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat };
 }
 // Teil C (H5): tote Vorschau aus dem Bericht-Kopf → kurze Nachricht an den Unter-Chat (nur ein bekannter, als tot geprüfter Link).
 on('POST', /^\/api\/review\/([\w-]{1,40})\/vorschau-tot$/, async (req, res, m) => {
@@ -2975,7 +3064,7 @@ on('POST', /^\/internal\/orchestrator\/questions\/(ask|list|get|withdraw)$/, asy
   const u = await orchPerson(req, b);
   switch (m[1]) {
     case 'ask': {
-      const q = await askKnut(u, { title: b.title, context: b.context, options: b.options, recommendation: b.recommendation, strand: b.strand || null, link: b.link || null, plan: b.plan || null, key: b.key || null, quelle: b.quelle || null });
+      const q = await askKnut(u, { title: b.title, context: b.context, options: b.options, recommendation: b.recommendation, strand: b.strand || null, link: b.link || null, plan: b.plan || null, key: b.key || null, quelle: b.quelle || null, stufe: b.stufe === 'wichtig' || b.stufe === 'normal' ? b.stufe : null });
       log('rückfrage an knut', { user: u.id, id: q.id, key: q.key });
       roadmapChanged('orchestrator-frage');
       return send(res, 200, q);
@@ -2998,7 +3087,7 @@ on('POST', /^\/internal\/session-start$/, async (req, res) => {
 on('POST', /^\/internal\/inbox$/, async (req, res) => {
   const u = await internalUser(req, await body(req));
   const r = await inboxFuer(u);
-  send(res, 200, { eintraege: r.eintraege.map((e) => ({ id: e.id, art: e.art, frage: e.frage, empfehlung: e.empfehlung, quelle: { text: e.quelle.text }, antworten: e.antworten })) });
+  send(res, 200, { eintraege: r.eintraege.map((e) => ({ id: e.id, art: e.art, frage: e.frage, empfehlung: e.empfehlung, quelle: { text: e.quelle.text }, antworten: e.antworten, stufe: e.stufe ?? null, autoAb: e.autoAb ?? null })) });
 });
 
 // Claude-Konten der Person für die Brücke (Klartext nur über diesen Kanal; chat = Schlüssel aus der Anfrage).
@@ -3402,6 +3491,8 @@ startStatusTick(orchDeps);
 // Plan 213 S1b (K1, P3): fertige, gesehene Unter-Chats nach 24 h wegräumen — nur mit WERKBANK_AUTO_SCHLIESSEN=1 (mit der Inbox).
 if (process.env.ORCH_STATUS !== 'off') setInterval(() => {
   autoSchliessen().then((w) => { if (w.length) log('automatisch weggeräumt', { n: w.length, ids: w.map((x) => x.id) }); }).catch((e) => log('wegräumen fehler', { error: String(e?.message ?? e).slice(0, 160) }));
+  // Knut 17.10.: normale Entscheidungen nach 24 h annehmen (WERKBANK_AUTO_ANNAHME=0 schaltet ab).
+  annahmeTakt().catch((e) => log('annahme fehler', { error: String(e?.message ?? e).slice(0, 160) }));
 }, 10 * 60_000).unref();
 // Leitstand wecken (Plan 132, S2): eigener Durchgang im selben Takt; LEITSTAND_WAKE=off schaltet ab.
 startLeitstandTick(orchDeps);

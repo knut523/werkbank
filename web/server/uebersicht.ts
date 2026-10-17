@@ -20,7 +20,7 @@ export type Ampel = 'laeuft' | 'blockiert' | 'push' | 'review';
 export const AMPEL_TEXT: Record<Ampel, string> = { push: 'bereit zum Push', review: 'dein Review', laeuft: 'läuft', blockiert: 'blockiert' };
 const RANG: Record<Ampel, number> = { blockiert: 0, review: 0, push: 1, laeuft: 2 };
 
-export interface OffeneEntscheidung { id: string; frage: string; empfehlung: string; optionen: string; quelle: 'bericht' | 'kopf' }
+export interface OffeneEntscheidung { id: string; frage: string; empfehlung: string; optionen: string; quelle: 'bericht' | 'kopf'; stufe?: 'wichtig' | 'normal' }
 export interface Link { art: 'bericht' | 'folien' | 'bilder' | 'vorschau' | 'chat' | 'pr'; label: string; url: string }
 
 const sicher = (u: unknown): u is string => typeof u === 'string' && /^https?:\/\/[^\s"'<>]+$/i.test(u);
@@ -42,8 +42,8 @@ export function offeneEntscheidungen(text: string | null, beantwortet: { bericht
   for (const f of offeneFragen(kopf, beantwortet, hash)) {
     if (erledigt.has(f.id)) continue;
     const da = out.find((x) => x.id === f.id);
-    if (da) { if (!da.empfehlung) da.empfehlung = f.empfehlung; continue; }
-    out.push({ id: f.id, frage: f.frage, empfehlung: f.empfehlung, optionen: '', quelle: 'kopf' });
+    if (da) { if (!da.empfehlung) da.empfehlung = f.empfehlung; if (f.stufe) da.stufe = f.stufe; continue; }
+    out.push({ id: f.id, frage: f.frage, empfehlung: f.empfehlung, optionen: '', quelle: 'kopf', ...(f.stufe ? { stufe: f.stufe } : {}) });
   }
   // Im Kopf beantwortet (antwort gesetzt) gilt auch für einen gleichnamigen Textblock.
   const kopfFertig = new Set(imKopf.filter((f) => f.antwort).map((f) => f.id));
