@@ -23,6 +23,7 @@ import { cleanThema, themaOf } from './themen.ts';
 import { meliousSettings, ausserhalbAbo } from './melious.ts';
 import { budgetVon } from './cosbudget.ts';   // zyklisch (cosbudget → orchestrator), nur zur Laufzeit im Rückfrage-Pfad benutzt
 import { tiefeOf, istTiefe, tiefeStart, tiefeText, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, type Tiefe } from './tiefe.ts';
+import { zustandAus, abweichung, nachfordern, statusNeu, NACHFORDER_TEXT } from './zustand.ts';
 
 export const ORCH_TAG = 'Orchestrator';
 export type OrchStatus = 'running' | 'waiting' | 'done' | 'failed' | 'blocked_g0';
@@ -433,6 +434,8 @@ export async function listOrch(u: User, opts: { all?: boolean } = {}) {
     if (d.laufExplicit && !d.decoratedLauf && !d.startError) { try { if ((await decorate(u, d.conv, d.title, laufTag(d.lauf))).ok) await runs().updateOne({ _id: d._id }, { $set: { decoratedLauf: true } }); } catch { /* nächstes Mal */ } }
     out.push({
       id: d._id, title: d.title, status: st.status, reason: st.reason, reviewed: !!d.reviewedAt, url: d.url, cwd: d.cwd, plan: d.plan,
+      // Plan 213 S1b: Zustand aus dem Status-Takt (eine Quelle für Workspace, Chat-Leiste und `orch list`).
+      zustand: d.zustand ?? null, zustandGrund: d.zustandGrund ?? null, queued: s?.queued ?? null,
       startedAt: d.startedAt, lastSentAt: d.lastSentAt, lastActivity: Math.max(s?.turn?.end ?? 0, s?.turn?.start ?? 0, last?.at ?? 0) || null,
       lauf: d.lauf ?? laufName(d.title).lauf, laufExplicit: !!d.laufExplicit, reviewedBy: d.reviewedBy ?? null, knutReviewed: !!d.knutReviewedAt, doneAt: d.doneAt ?? null, bericht: !!d.bericht,
       // Plan 205: Tiefe (null = alter Strang ohne Feld) und ETA ({ at, quelle, text, ueberfaellig }).
@@ -712,6 +715,13 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
       if (!u) continue;
       let states: Map<string, any>;
       try { states = await strandStates(u); } catch { continue; }
+      // Plan 213 S1b: offene Rückfragen je Unter-Chat (für „wartet auf dich“) und der Stand der Nachforderungen heute.
+      const fragenJe = new Map<string, number>();
+      for (const q of await questions().find({ userId, status: 'offen', 'strand.id': { $ne: null } }, { projection: { strand: 1 } }).toArray().catch(() => [] as any[])) {
+        const k = String((q as any).strand?.id ?? ''); if (k) fragenJe.set(k, (fragenJe.get(k) ?? 0) + 1);
+      }
+      const tagBeginn = new Date(new Date(now).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }) + 'T00:00:00');
+      let nachgefordertHeute = statusNeu() ? await runs().countDocuments({ userId, 'standNachgefordert.at': { $gte: tagBeginn } }).catch(() => 0) : 0;
       for (const d of list) {
         // Schon fertig nach der letzten Nachricht an den Strang: ohne neue Nachricht ändert sich nichts (Last, Council Teil B).
         // … aber nur, wenn seitdem kein Zug lief (Knut schreibt direkt im Chat) und der Bericht schon gefunden ist (Council-Diff B R2).
@@ -719,7 +729,11 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
         try { const ks = await kopfPflege(d, now); if (Object.keys(ks).length) { await runs().updateOne({ _id: d._id }, { $set: ks }); Object.assign(d, ks); } }
         catch (e: any) { deps.log?.('bericht-kopf fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
         const sd = states.get(d.conv);
-        if (d.lastStatus === 'done' && d.doneAt && d.bericht && new Date(d.doneAt).getTime() > new Date(d.lastSentAt ?? d.startedAt).getTime() && !sd?.running && (sd?.turn?.end ?? 0) <= new Date(d.doneAt).getTime()) continue;
+        if (d.lastStatus === 'done' && d.doneAt && d.bericht && new Date(d.doneAt).getTime() > new Date(d.lastSentAt ?? d.startedAt).getTime() && !sd?.running && (sd?.turn?.end ?? 0) <= new Date(d.doneAt).getTime()) {
+          // Plan 213 S1b: „done“ heißt Marke „fertig“ — der Zustand fehlt nur bei Unter-Chats von vor der Umstellung.
+          if (!d.zustand) await runs().updateOne({ _id: d._id, zustand: null }, { $set: { zustand: (fragenJe.get(String(d._id)) ?? 0) > 0 ? 'wartet' : 'fertig', zustandGrund: 'Agent meldet „fertig“', marke: 'fertig' } }).catch(() => {});
+          continue;
+        }
         try {
           const s = states.get(d.conv);
           const last = await lastMessage(u, d.conv);
@@ -734,12 +748,41 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
           // „fertig“ zählt nur mit einer Antwort NACH der letzten Nachricht an den Strang (G1: nach Nacharbeit nicht die alte).
           if (st.status === 'done' && last && last.at > new Date(d.lastSentAt ?? d.startedAt).getTime() && (!d.doneAt || new Date(d.doneAt).getTime() < last.at)) set.doneAt = new Date(last.at);
           if (!d.bericht) { const b = findBericht([...(d.review?.artefakte ?? []), last && !last.fromUser ? last.text : '']); if (b) set.bericht = b; }
+          // Plan 213 S1b: neuer Zustand (eine Statusquelle) — im Schattenbetrieb nur berechnet und verglichen (P2).
+          const marke = last && !last.fromUser ? statusMark(last.text) : null;
+          const zugEnde = typeof s?.turn?.end === 'number' ? s.turn.end : null;
+          const nachAt = d.standNachgefordert?.zug && d.standNachgefordert.zug === zugEnde ? new Date(d.standNachgefordert.at).getTime() : null;
+          const z = zustandAus({ status: st.status, reason: st.reason, cause: st.cause, queued: s?.queued ?? null, marke, offeneFragen: fragenJe.get(String(d._id)) ?? 0, nachgefordertAt: nachAt }, now);
+          set.zustand = z.zustand; set.zustandGrund = z.grund; set.marke = marke;
+          const ab = abweichung(st.status, z.zustand);
+          if (ab) await wb().collection('meta').updateOne({ _id: `status_schatten:${tagBeginn.toISOString().slice(0, 10)}` as any }, { $addToSet: { [`paare.${ab}`]: String(d._id) } }, { upsert: true }).catch(() => {});
           // Nur, wenn inzwischen keine neue Nachricht an den Strang ging (sonst käme mit der alten Antwort ein altes doneAt zurück).
           await runs().updateOne({ _id: d._id, lastSentAt: d.lastSentAt ?? null }, { $set: set });
+          // „Stand fehlt“ → den Stand einmal je Zug nachfordern (nur neuer Modus, nie rückwirkend, ≤ 10/Tag; nie in die Inbox — K2).
+          const seit = statusNeu() ? await statusNeuSeit(now) : now;
+          if (nachfordern({ zustand: z.zustand, neu: statusNeu(), zugEnde, seit, schonFuerZug: d.standNachgefordert?.zug ?? null, heute: nachgefordertHeute })) {
+            await runs().updateOne({ _id: d._id }, { $set: { standNachgefordert: { zug: zugEnde, at: new Date(now) } } });
+            nachgefordertHeute++;
+            await sendOrch(u, String(d._id), NACHFORDER_TEXT, 'leitstand').catch((e: any) => deps.log?.('stand nachfordern fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }));
+            deps.log?.('stand nachgefordert', { id: d._id });
+          }
         } catch (e: any) { deps.log?.('orch-status fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
       }
     }
   } finally { statusTicking = false; }
+}
+
+/** Seit wann der neue Zustand gilt (beim ersten Takt im neuen Modus festgehalten) — nichts davor wird nachgefordert (P2). */
+export async function statusNeuSeit(now = Date.now()): Promise<number> {
+  const r: any = await wb().collection('meta').findOneAndUpdate({ _id: 'status_neu' as any }, { $setOnInsert: { seit: new Date(now) } }, { upsert: true, returnDocument: 'after' });
+  return new Date((r?.value ?? r)?.seit ?? now).getTime();
+}
+
+/** Schattenbetrieb (P2): je Tag, welche Unter-Chats alt und neu verschieden einordnen („wartet→stand-fehlt“: n). */
+export async function statusSchatten(tage = 7, now = Date.now()) {
+  const ab = new Date(now - tage * 86400_000).toISOString().slice(0, 10);
+  const docs: any[] = await wb().collection('meta').find({ _id: { $gte: `status_schatten:${ab}`, $lt: 'status_schatten;' } as any }).toArray();
+  return docs.map((d) => ({ tag: String(d._id).slice(16), paare: Object.fromEntries(Object.entries(d.paare ?? {}).map(([k, v]) => [k, (v as string[]).length])) })).sort((a, b) => a.tag.localeCompare(b.tag));
 }
 
 /** Takt für statusTick (aus main.ts), unabhängig von ORCH_AUTO_WEITER; ORCH_STATUS=off schaltet ab. */
