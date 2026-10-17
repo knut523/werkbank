@@ -4,6 +4,7 @@
 // Grundlage für „erst messen, dann umziehen“: kein Umzug und keine Entfernung, bevor 14 Tage Zahlen da sind.
 
 import { wb } from './db.ts';
+import { log } from './log.ts';
 
 export type Rolle = 'admin' | 'team';
 export type Weg = 'ui' | 'chat-knopf' | 'unterchat' | 'hauptchat';
@@ -35,7 +36,7 @@ let timer: NodeJS.Timeout | null = null;
 function merke(art: string, schluessel: Record<string, string>) {
   const k = JSON.stringify({ tag: tagVon(), art, ...schluessel });
   offen.set(k, (offen.get(k) ?? 0) + 1);
-  if (!timer) { timer = setTimeout(() => { timer = null; void schreibe().catch(() => {}); }, 60_000); timer.unref?.(); }
+  if (!timer) { timer = setTimeout(() => { timer = null; void schreibe().catch((e) => log('nutzung', { error: String(e?.message ?? e).slice(0, 160) })); }, 60_000); timer.unref?.(); }
 }
 
 export async function schreibe(): Promise<void> {
@@ -43,12 +44,20 @@ export async function schreibe(): Promise<void> {
   const jetzt = [...offen.entries()];
   offen.clear();
   if (!jetzt.length) return;
-  await wb().collection('nutzung').bulkWrite(jetzt.map(([k, n]) => ({ updateOne: { filter: JSON.parse(k), update: { $inc: { n } }, upsert: true } })), { ordered: false });
+  try {
+    await wb().collection('nutzung').bulkWrite(jetzt.map(([k, n]) => ({ updateOne: { filter: JSON.parse(k), update: { $inc: { n } }, upsert: true } })), { ordered: false });
+  } catch (e) {
+    // Nichts verlieren: zurück in den Puffer (begrenzt), beim nächsten Takt erneut.
+    if (offen.size < 5_000) for (const [k, n] of jetzt) offen.set(k, (offen.get(k) ?? 0) + n);
+    throw e;
+  }
 }
 
 export function seiteGesehen(hash: unknown, rolle: Rolle, zugang: Zugang) { merke('seite', { seite: seiteAus(hash), rolle, zugang }); }
+/** Arten von Antworten — feste Liste, damit nie freier Text aus einer Anfrage in die Zählung kommt (Pass C). */
+const ARTEN = new Set(['rueckfrage', 'entscheidung', 'braucht', 'nacharbeit', 'abhaken', 'push', 'pflege', 'inbox']);
 /** Eine Antwort auf eine Frage/Entscheidung: art = Art der Frage (rueckfrage, entscheidung, braucht, push, pflege, …). */
-export function antwortGezaehlt(art: string, weg: Weg) { merke('antwort', { frage: art.toLowerCase().replace(/[^a-z-]/g, '').slice(0, 20) || 'andere', weg }); }
+export function antwortGezaehlt(art: string, weg: Weg) { const a = String(art).toLowerCase(); merke('antwort', { frage: ARTEN.has(a) ? a : 'andere', weg }); }
 
 export interface NutzungsZeile { tag: string; art: string; n: number; seite?: string; rolle?: Rolle; zugang?: Zugang; frage?: string; weg?: Weg }
 

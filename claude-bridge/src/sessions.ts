@@ -19,7 +19,7 @@ import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
-import { warte, wecke, inSchlange, schlangeAn, laenge } from './schlange.ts';
+import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet } from './schlange.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 
 export interface Sink {
@@ -426,7 +426,7 @@ setInterval(() => { try { reapIdle(); } catch (e: any) { log('leerlauf-prüfung 
 export function stats() {
   const pending = [...lives.values()].filter(l => l.pending).length;
   // laufend/schlange: für den Release-Neustart (scripts/werkbank.sh wartet, bis laufende Züge fertig sind — Plan 213 S1a).
-  return { live: lives.size, pending, laufend: lives.size - pending, schlange: laenge(), sessions: Object.keys(sessionMap).length };
+  return { live: lives.size, pending, drainLaufend: lives.size - pending, schlange: laenge(), sessions: Object.keys(sessionMap).length };
 }
 
 /** S0 (Plan 126): Ordnergrenzen dieser Person für Datei-Werkzeuge und Bash. BRIDGE_PATH_GUARD=off nur zur Diagnose. */
@@ -1158,6 +1158,11 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   let lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode });
   // Warteschlange statt Fehlschlag (Plan 213 S1a, K3): der Zug wartet, bis ein Platz frei ist; der Chat zeigt den Platz.
   if (lock === 'chat-busy' && schlangeAn() && !req.sink.closed) {
+    if (inSchlange(key)) {   // zweite Nachricht derselben Unterhaltung: kein zweiter Platz
+      req.sink.write('Diese Unterhaltung wartet schon in der Schlange — sie startet von selbst.');
+      req.sink.finish();
+      return;
+    }
     if (orchMap[key]) setTurn(key, { start: Date.now(), end: null, outcome: null });
     let erst = true;
     const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang }, {
@@ -1215,6 +1220,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   else if (live.leit && orchMap[key]) orchMap[key].lastHand = Date.now();   // Knut hat selbst geschrieben (Zähler für „weiter“ beginnt neu)
   if (live.orch || live.leit) setTurn(key, { start: Date.now(), end: null, outcome: null, ...(live.leit ? { batch } : {}) });
   lives.set(key, live);
+  angemeldet();   // Plan 213 S1a: ab jetzt zählt dieser Zug — die Schlange darf den Nächsten prüfen
   attach(live, req.sink);
   // Sofort ein Lebenszeichen: bis zum ersten Token vergehen mit echtem Claude einige Sekunden
   // (CLI-Start, MCP-Server, langer System-Prompt, Denken).

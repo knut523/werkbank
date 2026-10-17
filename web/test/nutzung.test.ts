@@ -40,12 +40,15 @@ test('Zählen und auswerten: Summen je Seite, Rolle, Zugang und je Antwortweg; �
   N.seiteGesehen('#/timebox', 'team', 'direkt');
   N.antwortGezaehlt('rueckfrage', 'ui');
   N.antwortGezaehlt('rueckfrage', 'chat-knopf');
-  N.antwortGezaehlt('Push!!', 'ui');
+  N.antwortGezaehlt('PUSH', 'ui');
+  N.antwortGezaehlt('geheimprojekt-x', 'ui');   // freier Text aus einer Anfrage → nur „andere“
   const a = await N.auswertung(14);
   assert.deepEqual(a.seiten.heute, { admin: 2, team: 0, chat: 2, direkt: 0 });
   assert.deepEqual(a.seiten.timebox, { admin: 0, team: 1, chat: 0, direkt: 1 });
   assert.deepEqual(a.antworten.rueckfrage, { ui: 1, 'chat-knopf': 1 });
-  assert.deepEqual(a.antworten.push, { ui: 1 }, 'Art wird bereinigt');
+  assert.deepEqual(a.antworten.push, { ui: 1 }, 'Art klein geschrieben');
+  assert.deepEqual(a.antworten.andere, { ui: 1 }, 'unbekannte Art landet nie als Text in der Zählung');
+  assert.equal(a.antworten['geheimprojekt-x'], undefined);
   assert.equal(a.tageMitDaten, 1);
   assert.equal(a.genug, false);
   // Gespeichert wird nur Zählbares — keine Freitexte, keine Personen.
