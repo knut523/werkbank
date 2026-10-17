@@ -24,11 +24,14 @@ export async function autoSchliessen(o: { now?: number; dry?: boolean; env?: Nod
     const fragen = await wb().collection('orchestrator_questions').countDocuments({ userId: d.userId, status: 'offen', 'strand.id': d._id });
     const gepusht = !!(await wb().collection('freigaben').findOne({ strand: id, pushedAt: { $ne: null }, revokedAt: null }));
     const text = (() => { try { return readBericht(paketDatei(d, 'bericht')); } catch { return null; } })();
+    if (d.bericht && !text) continue;   // Bericht da, aber nicht lesbar: offene Entscheidungen nicht prüfbar → bleibt (Pass C)
     const entscheidungen = offeneEntscheidungen(text, d.entscheidungenAntwort).length;
     if (!schliessbar({ zustand: d.zustand as Zustand, marke: d.marke ?? null, gesehen: !!d.gesehenAt, gepusht, offeneFragen: fragen, offeneEntscheidungen: entscheidungen, doneAt: d.doneAt ? new Date(d.doneAt).getTime() : null, now })) continue;
     if (!o.dry) {
-      // Nur, wenn sich seitdem nichts geändert hat (keine neue Nachricht, kein neues „fertig“).
-      const r = await runs().updateOne({ _id: d._id, reviewedAt: null, knutReviewedAt: null, doneAt: d.doneAt, lastSentAt: d.lastSentAt ?? null },
+      // Nur, wenn sich seitdem nichts geändert hat (keine neue Nachricht, kein neues „fertig“, Zustand noch „fertig“) und direkt davor
+      // noch immer keine Rückfrage offen ist (Pass C: eine Frage kann zwischen Lesen und Schreiben dazugekommen sein).
+      if (await wb().collection('orchestrator_questions').countDocuments({ userId: d.userId, status: 'offen', 'strand.id': d._id })) continue;
+      const r = await runs().updateOne({ _id: d._id, reviewedAt: null, knutReviewedAt: null, zustand: 'fertig', doneAt: d.doneAt, lastSentAt: d.lastSentAt ?? null },
         { $set: { reviewedAt: new Date(now), reviewedBy: 'auto', autoGeschlossenAt: new Date(now), zustand: 'erledigt', zustandGrund: 'automatisch weggeräumt' } });
       if (!r.modifiedCount) continue;
     }

@@ -59,6 +59,8 @@ test('Rückfrage zu einer Karte steht bei der Karte, nicht doppelt; G0-Frage blo
 test('Später bis morgen 07:00 Wiener Zeit (Sommer- und Winterzeit); zurückgestellte zählen nicht', () => {
   assert.equal(spaeterBis(Date.UTC(2026, 9, 17, 10)).toISOString(), '2026-10-18T05:00:00.000Z');
   assert.equal(spaeterBis(Date.UTC(2026, 9, 25, 10)).toISOString(), '2026-10-26T06:00:00.000Z', 'nach der Zeitumstellung am 25.10.');
+  assert.equal(spaeterBis(Date.UTC(2026, 9, 24, 22, 30)).toISOString(), '2026-10-26T06:00:00.000Z', 'Nacht der Umstellung (00:30 Wien am 25.): morgen = 26., nicht 27.');
+  assert.equal(spaeterBis(Date.UTC(2027, 2, 27, 22, 30)).toISOString(), '2027-03-28T05:00:00.000Z', 'Frühjahr: 27.03. 23:30 Wien → 28.03. 07:00 Sommerzeit');
   const r = baueInbox({ ...leer, lose: [{ id: 'q-1', title: 'a', createdAt: vor(5) }, { id: 'q-2', title: 'b', createdAt: vor(5) }] }, { now, spaeter: new Map([['q-1', now + 3600_000], ['q-2', now - 1]]) });
   assert.deepEqual(r.eintraege.map((e) => e.id), ['q-2'], 'abgelaufenes Später zeigt wieder');
   assert.equal(r.zurueckgestellt, 1);

@@ -79,7 +79,7 @@ import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, par
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, rule1Goals, specProposals, autoEligible, type GoalNode } from './goals.ts';
 import { istTiefe, type Tiefe } from './tiefe.ts';
 import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
-import { zaehle, statusNeu, autoSchliessenAn, navNeu, type Zustand } from './zustand.ts';
+import { zaehle, statusNeu, autoSchliessenAn, navNeu, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 
 const DIST = join(WEB_DIR, 'dist');
@@ -1326,7 +1326,14 @@ async function myQueue(u: User) {
 /** Zähler für die Navigation: alles, was etwas von der Person will (laufende Agenten nicht). */
 async function todayCount(u: User, queue?: any[], mine?: any, cards?: any[]) {
   // Plan 213 S3 (K11): mit der neuen Navigation ist der Zähler die Zahl der Inbox — dieselbe Zahl wie im Heute-Kopf und im Chat.
-  if (navNeu()) return inboxZahl((await inboxFuer(u)).eintraege);
+  if (navNeu()) {
+    // Der Zähler fragt alle 60 s — die ganze Inbox (Karten, Berichte) höchstens alle 30 s je Person neu bauen (Pass C).
+    const c = zahlCache.get(u.id);
+    if (c && Date.now() - c.at < 30_000) return c.n;
+    const n = inboxZahl((await inboxFuer(u)).eintraege);
+    zahlCache.set(u.id, { at: Date.now(), n });
+    return n;
+  }
   const q = queue ?? await myQueue(u);
   const m = mine ?? await mineFor(u, { write: false });   // Zähler (alle 60 s): nur lesen, nie freigaben.md schreiben
   const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
@@ -1367,7 +1374,7 @@ on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: a
 async function zaehlerFuer(u: User) {
   const alt: Record<string, Zustand> = { running: 'laeuft', done: 'fertig', failed: 'haengt', waiting: 'wartet', blocked_g0: 'blockiert' };
   const docs: any[] = await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }, { projection: { zustand: 1, lastStatus: 1 } }).toArray();
-  return zaehle(docs.map((d) => (d.zustand as Zustand) ?? alt[d.lastStatus] ?? 'haengt'));
+  return zaehle(docs.map((d) => (d.zustand as Zustand) ?? alt[d.lastStatus] ?? 'laeuft'));   // frisch gestartet, noch kein Takt: läuft
 }
 on('GET', /^\/api\/status$/, async (req, res) => {
   const u = await needAdmin(req);
@@ -1375,6 +1382,7 @@ on('GET', /^\/api\/status$/, async (req, res) => {
 });
 // --- Eine Inbox (Plan 213 S2): alle Fragearten an einer Stelle, Antwort an der Quelle, Chat-Knöpfe mit Kennung ---
 const spaeterCol = () => wb().collection('inbox_spaeter');
+const zahlCache = new Map<string, { at: number; n: number }>();
 async function inboxFuer(u: User, now = Date.now()) {
   const admin = u.role === 'ADMIN';
   const qs = await listQuestions(u, { open: true }).catch(() => [] as any[]);
@@ -1392,6 +1400,7 @@ async function inboxFuer(u: User, now = Date.now()) {
     if (m?.draft) vault.push({ id: 'entwurf', text: 'Vault-Arbeitsentwurf wartet: übernehmen oder verwerfen (Arbeit › Unter-Chats)', at: null });
   }
   const h = await hygieneOf(u).catch(() => ({ items: [] as any[], snoozed: [] as string[] }));
+  await spaeterCol().deleteMany({ userId: u.id, bis: { $lte: new Date(now) } }).catch(() => {});   // abgelaufene aufräumen
   const spaeter = new Map(((await spaeterCol().find({ userId: u.id, bis: { $gt: new Date(now) } }).toArray()) as any[]).map((s) => [String(s.id), new Date(s.bis).getTime()]));
   const laeufe = (await myQueue(u).catch(() => [] as any[])).filter((x: any) => x.bucket !== 'laeuft').length;
   return baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe,
@@ -1408,7 +1417,7 @@ on('GET', /^\/api\/heute$/, async (req, res) => {
   const inbox = await inboxFuer(u);
   const admin = u.role === 'ADMIN';
   const jetzt = new Date();
-  const gesternAbend = new Date(new Date(Date.now() - 86400_000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }) + 'T18:00:00');
+  const gesternAbend = wienUm(vorigerTag(wienDatum()), 18);   // gestern 18:00 Wiener Zeit, nicht Server-Zeit (Pass C)
   let blockiert: any[] = [], geaendert: any = null;
   if (admin) {
     const offen: any[] = await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT(), zustand: { $in: ['blockiert', 'haengt', 'schlange', 'stand-fehlt'] } }, { projection: { title: 1, zustand: 1, zustandGrund: 1, url: 1, statusAt: 1 } }).sort({ statusAt: 1 }).limit(10).toArray().catch(() => []);
@@ -1429,6 +1438,7 @@ on('POST', /^\/api\/inbox\/([\w-]{1,90})\/spaeter$/, async (req, res, m) => {
   if (!KENNUNG_RE.test(m[1])) throw new HttpError(400, 'Unbekannte Kennung.');
   const bis = spaeterBis();
   await spaeterCol().updateOne({ _id: `${u.id}:${m[1]}` as any }, { $set: { userId: u.id, id: m[1], bis, at: new Date() } }, { upsert: true });
+  zahlCache.delete(u.id);
   send(res, 200, { ok: true, bis });
 });
 /**
@@ -1465,7 +1475,7 @@ on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => {
     if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — gleich noch einmal.');
     entscheidSperre.add(sperre);
     antwortGezaehlt('inbox', weg);
-    try { return await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }, res); } finally { entscheidSperre.delete(sperre); }
+    try { return await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }, res); } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
   } else if (e.art === 'push') {
     if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
     if (art !== 'ja') throw new HttpError(400, 'Push: nur „Ja“ (freigeben) oder „Später“.');
@@ -1479,12 +1489,15 @@ on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => {
     antwortGezaehlt('push', weg);
   } else if (e.art === 'altbestand') {
     if (art !== 'nein') throw new HttpError(400, 'Altbestand: „Nein“ verwirft alle, sonst einzeln durchsehen.');
+    let fehler = 0;
     for (const x of (e.daten.eintraege as any[]) ?? []) {
-      if (x.art === 'rueckfrage') await withdrawQuestion(u, String(x.daten.qid)).catch(() => {});
+      if (x.art === 'rueckfrage') await withdrawQuestion(u, String(x.daten.qid)).catch(() => { fehler++; });
       else await spaeterCol().updateOne({ _id: `${u.id}:${x.id}` as any }, { $set: { userId: u.id, id: x.id, bis: new Date(Date.now() + 30 * 86400_000), at: new Date() } }, { upsert: true });
     }
+    if (fehler) throw new HttpError(409, `${fehler} Rückfrage(n) ließen sich nicht verwerfen — Inbox neu laden und einzeln ansehen.`);
   } else throw new HttpError(400, 'Diese Frage beantwortest du in ihrer Ansicht (Vault-Sync, Pflege, Schlange).');
   log('inbox antwort', { user: u.id, art: e.art, weg });
+  zahlCache.delete(u.id);
   if (e.art !== 'push') antwortGezaehlt(e.art === 'rueckfrage' ? 'rueckfrage' : e.art === 'braucht' ? 'braucht' : 'inbox', weg);
   send(res, 200, { ok: true, art: e.art });
 });
@@ -2777,7 +2790,8 @@ on('GET', /^\/api\/files\/agenten\/(\d{1,4}-[a-z0-9][a-z0-9-]*)\/(.+)$/, async (
   const abs = paketFile(cfg.reviewDir, m[1], rel);
   if (!abs) throw new HttpError(404, 'Datei nicht gefunden.');
   // Plan 213 S1b (K1): Bericht in der Schublade geöffnet = gesehen (alle Unter-Chats dieses Pakets).
-  if (rel === 'bericht.md') await orchRuns().updateMany({ userId: gu.id, paket: m[1] }, { $set: { gesehenAt: new Date() } }).catch(() => {});
+  // Nur die Vorschau der Schublade (?vorschau=1) zählt — kein Herunterladen, kein Vorladen (Pass C).
+  if (rel === 'bericht.md' && url.searchParams.get('vorschau') === '1') await orchRuns().updateMany({ userId: gu.id, paket: m[1] }, { $set: { gesehenAt: new Date() } }).catch(() => {});
   const ext = extname(abs).toLowerCase();
   const name = rel.split('/').pop()!;
   if (url.searchParams.get('vorschau') === '1') {

@@ -2,7 +2,7 @@
 // nie rückwirkend, Wegräumen nur fertig + gesehen/gepusht + nichts offen + 24 h, Zählung für alle Ansichten.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { zustandAus, abweichung, nachfordern, schliessbar, zaehle, statusNeu, autoSchliessenAn, NACHFORDERN_FRIST_MS, SCHLIESSEN_NACH_MS } from '../server/zustand.ts';
+import { zustandAus, abweichung, nachfordern, schliessbar, zaehle, statusNeu, autoSchliessenAn, wienDatum, wienUm, naechsterTag, vorigerTag, NACHFORDERN_FRIST_MS, SCHLIESSEN_NACH_MS } from '../server/zustand.ts';
 
 const e = (o: Partial<Parameters<typeof zustandAus>[0]>) => zustandAus({ status: 'waiting', reason: '', marke: null, offeneFragen: 0, ...o });
 
@@ -40,6 +40,17 @@ test('Nachfordern (K2, P2): nur neuer Modus, einmal je Zug, nie rückwirkend, h�
   assert.equal(nachfordern({ ...basis, heute: 10 }), false, 'Tagesdeckel');
   assert.equal(nachfordern({ ...basis, zustand: 'wartet' }), false);
   assert.equal(nachfordern({ ...basis, zugEnde: null }), false);
+  // Pass C: die Antwort auf die Nachforderung kommt wieder ohne Marke → neuer Zug, aber keine zweite Nachforderung.
+  assert.equal(nachfordern({ ...basis, zugEnde: 3000, schonFuerZug: 2000, offen: true }), false, 'keine Schleife');
+});
+
+test('Wiener Zeit unabhängig von der Zeitzone des Servers (Pass C)', () => {
+  assert.equal(wienDatum(Date.UTC(2026, 9, 17, 22, 30)), '2026-10-18', 'nach Mitternacht Wien');
+  assert.equal(wienUm('2026-10-17', 18).toISOString(), '2026-10-17T16:00:00.000Z', 'Sommerzeit');
+  assert.equal(wienUm('2026-10-26', 7).toISOString(), '2026-10-26T06:00:00.000Z', 'Winterzeit');
+  assert.equal(wienUm('2026-10-25', 0).toISOString(), '2026-10-24T22:00:00.000Z', 'Mitternacht vor der Umstellung');
+  assert.equal(naechsterTag('2026-12-31'), '2027-01-01');
+  assert.equal(vorigerTag('2026-03-01'), '2026-02-28');
 });
 
 test('Wegräumen (K1): Marke fertig + gesehen oder gepusht + keine offene Frage/Entscheidung + 24 h', () => {

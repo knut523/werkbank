@@ -23,7 +23,7 @@ import { cleanThema, themaOf } from './themen.ts';
 import { meliousSettings, ausserhalbAbo } from './melious.ts';
 import { budgetVon } from './cosbudget.ts';   // zyklisch (cosbudget → orchestrator), nur zur Laufzeit im Rückfrage-Pfad benutzt
 import { tiefeOf, istTiefe, tiefeStart, tiefeText, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, type Tiefe } from './tiefe.ts';
-import { zustandAus, abweichung, nachfordern, statusNeu, NACHFORDER_TEXT } from './zustand.ts';
+import { zustandAus, abweichung, nachfordern, statusNeu, NACHFORDER_TEXT, wienDatum, wienUm } from './zustand.ts';
 
 export const ORCH_TAG = 'Orchestrator';
 export type OrchStatus = 'running' | 'waiting' | 'done' | 'failed' | 'blocked_g0';
@@ -720,8 +720,10 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
       for (const q of await questions().find({ userId, status: 'offen', 'strand.id': { $ne: null } }, { projection: { strand: 1 } }).toArray().catch(() => [] as any[])) {
         const k = String((q as any).strand?.id ?? ''); if (k) fragenJe.set(k, (fragenJe.get(k) ?? 0) + 1);
       }
-      const tagBeginn = new Date(new Date(now).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }) + 'T00:00:00');
+      const heuteWien = wienDatum(now);
+      const tagBeginn = wienUm(heuteWien, 0);   // Wiener Mitternacht, nicht die Zeitzone des Servers (Pass C)
       let nachgefordertHeute = statusNeu() ? await runs().countDocuments({ userId, 'standNachgefordert.at': { $gte: tagBeginn } }).catch(() => 0) : 0;
+      const seit = statusNeu() ? await statusNeuSeit(now) : now;
       for (const d of list) {
         // Schon fertig nach der letzten Nachricht an den Strang: ohne neue Nachricht ändert sich nichts (Last, Council Teil B).
         // … aber nur, wenn seitdem kein Zug lief (Knut schreibt direkt im Chat) und der Bericht schon gefunden ist (Council-Diff B R2).
@@ -731,7 +733,9 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
         const sd = states.get(d.conv);
         if (d.lastStatus === 'done' && d.doneAt && d.bericht && new Date(d.doneAt).getTime() > new Date(d.lastSentAt ?? d.startedAt).getTime() && !sd?.running && (sd?.turn?.end ?? 0) <= new Date(d.doneAt).getTime()) {
           // Plan 213 S1b: „done“ heißt Marke „fertig“ — der Zustand fehlt nur bei Unter-Chats von vor der Umstellung.
-          if (!d.zustand) await runs().updateOne({ _id: d._id, zustand: null }, { $set: { zustand: (fragenJe.get(String(d._id)) ?? 0) > 0 ? 'wartet' : 'fertig', zustandGrund: 'Agent meldet „fertig“', marke: 'fertig' } }).catch(() => {});
+          // Eine später gestellte Rückfrage macht aus „fertig“ wieder „wartet“ (und umgekehrt) — je Takt neu, nicht eingefroren (Pass C).
+          const soll = (fragenJe.get(String(d._id)) ?? 0) > 0 ? 'wartet' : 'fertig';
+          if (d.zustand !== soll && d.zustand !== 'erledigt') await runs().updateOne({ _id: d._id, zustand: d.zustand ?? null }, { $set: { zustand: soll, zustandGrund: soll === 'wartet' ? 'Rückfrage an dich' : 'Agent meldet „fertig“', marke: 'fertig' } }).catch(() => {});
           continue;
         }
         try {
@@ -751,20 +755,25 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
           // Plan 213 S1b: neuer Zustand (eine Statusquelle) — im Schattenbetrieb nur berechnet und verglichen (P2).
           const marke = last && !last.fromUser ? statusMark(last.text) : null;
           const zugEnde = typeof s?.turn?.end === 'number' ? s.turn.end : null;
-          const nachAt = d.standNachgefordert?.zug && d.standNachgefordert.zug === zugEnde ? new Date(d.standNachgefordert.at).getTime() : null;
+          // Nachgefordert und seitdem keine Antwort MIT Marke → offen (zählt für „hängt?“ nach 30 min und gegen eine zweite Nachforderung).
+          const offenNach = !!d.standNachgefordert && !marke;
+          const nachAt = offenNach ? new Date(d.standNachgefordert.at).getTime() : null;
           const z = zustandAus({ status: st.status, reason: st.reason, cause: st.cause, queued: s?.queued ?? null, marke, offeneFragen: fragenJe.get(String(d._id)) ?? 0, nachgefordertAt: nachAt }, now);
           set.zustand = z.zustand; set.zustandGrund = z.grund; set.marke = marke;
+          if (marke && d.standNachgefordert) set.standNachgefordert = null;   // wieder eine Marke: nächste Lücke darf nachgefordert werden
           const ab = abweichung(st.status, z.zustand);
-          if (ab) await wb().collection('meta').updateOne({ _id: `status_schatten:${tagBeginn.toISOString().slice(0, 10)}` as any }, { $addToSet: { [`paare.${ab}`]: String(d._id) } }, { upsert: true }).catch(() => {});
+          if (ab) await wb().collection('meta').updateOne({ _id: `status_schatten:${heuteWien}` as any }, { $addToSet: { [`paare.${ab}`]: String(d._id) } }, { upsert: true }).catch(() => {});
           // Nur, wenn inzwischen keine neue Nachricht an den Strang ging (sonst käme mit der alten Antwort ein altes doneAt zurück).
           await runs().updateOne({ _id: d._id, lastSentAt: d.lastSentAt ?? null }, { $set: set });
-          // „Stand fehlt“ → den Stand einmal je Zug nachfordern (nur neuer Modus, nie rückwirkend, ≤ 10/Tag; nie in die Inbox — K2).
-          const seit = statusNeu() ? await statusNeuSeit(now) : now;
-          if (nachfordern({ zustand: z.zustand, neu: statusNeu(), zugEnde, seit, schonFuerZug: d.standNachgefordert?.zug ?? null, heute: nachgefordertHeute })) {
-            await runs().updateOne({ _id: d._id }, { $set: { standNachgefordert: { zug: zugEnde, at: new Date(now) } } });
-            nachgefordertHeute++;
-            await sendOrch(u, String(d._id), NACHFORDER_TEXT, 'leitstand').catch((e: any) => deps.log?.('stand nachfordern fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }));
-            deps.log?.('stand nachgefordert', { id: d._id });
+          // „Stand fehlt“ → den Stand nachfordern (nur neuer Modus, nie rückwirkend, ≤ 10/Tag, je Unter-Chat einmal bis zur nächsten
+          // Marke; nie in die Inbox — K2). Der Vermerk erst nach erfolgreichem Senden (Pass C).
+          if (nachfordern({ zustand: z.zustand, neu: statusNeu(), zugEnde, seit, schonFuerZug: d.standNachgefordert?.zug ?? null, heute: nachgefordertHeute, offen: offenNach })) {
+            try {
+              await sendOrch(u, String(d._id), NACHFORDER_TEXT, 'leitstand');
+              await runs().updateOne({ _id: d._id }, { $set: { standNachgefordert: { zug: zugEnde, at: new Date(now) } } });
+              nachgefordertHeute++;
+              deps.log?.('stand nachgefordert', { id: d._id });
+            } catch (e: any) { deps.log?.('stand nachfordern fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
           }
         } catch (e: any) { deps.log?.('orch-status fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
       }
@@ -780,7 +789,7 @@ export async function statusNeuSeit(now = Date.now()): Promise<number> {
 
 /** Schattenbetrieb (P2): je Tag, welche Unter-Chats alt und neu verschieden einordnen („wartet→stand-fehlt“: n). */
 export async function statusSchatten(tage = 7, now = Date.now()) {
-  const ab = new Date(now - tage * 86400_000).toISOString().slice(0, 10);
+  const ab = wienDatum(now - tage * 86400_000);
   const docs: any[] = await wb().collection('meta').find({ _id: { $gte: `status_schatten:${ab}`, $lt: 'status_schatten;' } as any }).toArray();
   return docs.map((d) => ({ tag: String(d._id).slice(16), paare: Object.fromEntries(Object.entries(d.paare ?? {}).map(([k, v]) => [k, (v as string[]).length])) })).sort((a, b) => a.tag.localeCompare(b.tag));
 }

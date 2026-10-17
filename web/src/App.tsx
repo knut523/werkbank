@@ -108,6 +108,8 @@ export function App() {
   const [theme, setTheme] = useState(document.documentElement.dataset.theme ?? 'light');
   // Handy (≤ 760 px): Navigation und Fuß stecken im Menü oben (Knut, 07.10.2026: Abmelden/Hell-Dunkel fehlten am Handy).
   const [menu, setMenu] = useState(false);
+  // Plan 213 S3: Umzugshinweis einmal je Person — als Zustand, nie am DOM vorbei (Pass C: sonst stürzt React beim nächsten Rendern ab).
+  const [umzugZu, setUmzugZu] = useState(() => { try { return !!localStorage.getItem(UMZUG_KEY); } catch { return false; } });
   const todayN = useTodayCount(hash, !!cfg?.user && cfg?.features?.heute !== false);
   useEffect(() => setMenu(false), [hash]);
   // Plan 213 S0: Seitenaufruf zählen (nur die Seite, keine Inhalte) — Grundlage für „erst messen, dann umziehen“.
@@ -209,9 +211,9 @@ export function App() {
     : <Uebersicht cfg={cfg} hash={hash} />;
 
   // Plan 213 S3 (P4): einmal je Person ein Hinweis auf den Umzug — Planen ist jetzt unter Arbeit (Board, Sprint) und Wissen (Roadmap, Ziele).
-  const umzug = neu && user && bereich && bereich.id !== 'einstellungen' && (() => { try { return !localStorage.getItem(UMZUG_KEY); } catch { return false; } })()
+  const umzug = neu && user && bereich && bereich.id !== 'einstellungen' && !umzugZu
     ? <div className="page"><div className="umzug" role="status" data-testid="umzug"><span className="small">Neu geordnet: <b>Board</b> und <b>Sprint</b> stehen unter <b>Arbeit</b>, <b>Roadmap</b> und <b>Ziele</b> unter <b>Wissen</b>, Skills unter Einstellungen. Alte Adressen funktionieren weiter.</span>
-      <button className="ub-btn sm" onClick={(e) => { try { localStorage.setItem(UMZUG_KEY, '1'); } catch { /* privat */ } (e.currentTarget.closest('.page') as HTMLElement | null)?.remove(); }}>Verstanden</button></div></div> : null;
+      <button className="ub-btn sm" onClick={() => { try { localStorage.setItem(UMZUG_KEY, '1'); } catch { /* privat */ } setUmzugZu(true); }}>Verstanden</button></div></div> : null;
 
   // Eingebettet: kein eigenes Gerüst — Navigation ist LibreChats Leiste (Chats · Übersicht · Planen · Wissen), Einrichtung im Kontomenü.
   if (embedded) return <div className="embedded">{umzug}{reiterLeiste}{page}</div>;

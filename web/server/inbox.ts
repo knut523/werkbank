@@ -6,7 +6,9 @@
 // Chat beantwortet ist, verschwindet überall (209 K8). Stichtag: Einträge älter als 14 Tage erscheinen als ein Sammel-Eintrag
 // „Altbestand“. Freitext im Hauptchat wird nie automatisch zugeordnet; die Chat-Knöpfe tragen die Kennung.
 
-export type InboxArt = 'rueckfrage' | 'entscheidung' | 'braucht' | 'push' | 'vault' | 'pflege' | 'schlange' | 'altbestand';
+import { wienDatum, wienUm, naechsterTag } from './zustand.ts';
+
+export type InboxArt ='rueckfrage' | 'entscheidung' | 'braucht' | 'push' | 'vault' | 'pflege' | 'schlange' | 'altbestand';
 export type Antwort = 'ja' | 'nein' | 'anders' | 'spaeter';
 
 export interface InboxEintrag {
@@ -45,13 +47,8 @@ export function kurzHash(s: string): string {
 
 /** Bis wann „Später“ gilt: morgen 07:00 Wiener Zeit (Council 1, UX-Befund 3). */
 export function spaeterBis(now = Date.now()): Date {
-  const morgen = new Date(now + 86400_000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' });
-  // 07:00 Wien = 05:00 (Sommerzeit) oder 06:00 UTC.
-  for (const h of ['05', '06']) {
-    const d = new Date(`${morgen}T${h}:00:00Z`);
-    if (d.toLocaleTimeString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', hour12: false }).startsWith('07')) return d;
-  }
-  return new Date(`${morgen}T06:00:00Z`);
+  // Kalendertag in Wien + 1 (nicht +24 h: in der Nacht der Zeitumstellung wäre das sonst übermorgen — Pass C).
+  return wienUm(naechsterTag(wienDatum(now)), 7);
 }
 
 export interface InboxQuellen {
@@ -126,7 +123,7 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
   const alt = sichtbar.filter((e) => e.art !== 'push' && e.art !== 'schlange' && e.wartetSeit && new Date(e.wartetSeit).getTime() < grenze);
   const frisch = sichtbar.filter((e) => !alt.includes(e));
   if (alt.length) frisch.push({ id: 'altbestand', art: 'altbestand', frage: `Altbestand: ${alt.length} ${alt.length === 1 ? 'Frage ist' : 'Fragen sind'} älter als ${ALTBESTAND_TAGE} Tage — durchsehen oder alle verwerfen`, empfehlung: 'alle verwerfen',
-    quelle: { text: 'Inbox', strand: null, url: null }, wartetSeit: alt.map((e) => e.wartetSeit!).sort()[0], blockiert: 0, antworten: ['nein', 'spaeter'], daten: { eintraege: alt } });
+    quelle: { text: 'Inbox', strand: null, url: null }, wartetSeit: alt.map((e) => e.wartetSeit!).sort()[0], blockiert: alt.reduce((s, e) => s + e.blockiert, 0), antworten: ['nein', 'spaeter'], daten: { eintraege: alt } });
   frisch.sort((a, b) => b.blockiert - a.blockiert || (a.wartetSeit ?? '9').localeCompare(b.wartetSeit ?? '9'));
   return { eintraege: frisch, zurueckgestellt: out.length - sichtbar.length };
 }
