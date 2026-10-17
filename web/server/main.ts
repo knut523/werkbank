@@ -379,7 +379,7 @@ on('GET', /^\/api\/health$/, async (_q, res) => send(res, 200, { ok: true, ...(a
 on('GET', /^\/api\/config$/, async (req, res) => {
   const u = await currentUser(req);
   send(res, 200, {
-    librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: !!process.env.WERKBANK_FORGE_MCP,
+    librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: false,   // Plan 213 S6: forge abgeschaltet (172 D1/D5)
     jiraSite: cfg.jiraSite, jiraSites: jiraSitesPublic(), project: cfg.jiraProject, vault: cfg.vaultDir,
     dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u), navNeu: navNeu(),
   });
@@ -916,16 +916,10 @@ on('POST', /^\/api\/board\/runs\/([0-9a-f-]{36})\/followup$/, async (req, res, m
   send(res, 200, { id });
 });
 
-on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/forge$/, async (req, res, m) => {
-  const u = await needUser(req);
-  if (!process.env.WERKBANK_FORGE_MCP) throw new HttpError(412, 'forge-review ist noch nicht angebunden (wird gerade abgesichert).');
-  const b = await body(req);
-  const pr = String(b.pr ?? '').trim();
-  if (!/^([\w.-]+\/[\w.-]+)?#\d+$|^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(pr)) throw new HttpError(400, 'PR als „repo#123“ oder GitHub-Link angeben.');
-  const i = (await issueMap()).get(m[1]);
-  const token = await getClaudeToken(u);
-  if (!i || !token) throw new HttpError(412, 'Ticket oder Claude-Zugang fehlt.');
-  send(res, 200, { id: await startAgentRun(u, token, i, pr, undefined, 'forge') });
+// Plan 213 S6 / Paket 172 D1+D5 (Knut 17.10.: abschalten): der Review-Motor ersetzt forge — „Review starten“ in Arbeit › Reviews & PRs.
+on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/forge$/, async (req) => {
+  await needUser(req);
+  throw new HttpError(410, 'forge ist abgeschaltet — Reviews startest du unter Arbeit › Reviews & PRs.');
 });
 
 on('GET', /^\/api\/sessions$/, async (req, res) => {

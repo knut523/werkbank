@@ -16,6 +16,7 @@ import { reviewDir, readBericht } from './bericht.ts';
 import { vienna } from './hygiene.ts';
 import { graphql } from './github.ts';
 import { reviewsCol, tickerSettings, tickerAus, reviewErlaubt, type TickerSettings } from './prticker.ts';
+import { vorlauf, basisVon, motorAbschnitt, motorAn } from './reviewmotor.ts';
 
 export const prReviewDir = (env = process.env) => env.WERKBANK_PR_REVIEW_DIR || join(env.HOME || homedir(), 'work', 'knut', 'pr-reviews');
 const REPO_RE = /^[\w.-]{1,100}\/[\w.-]{1,100}$/;
@@ -179,7 +180,14 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       const wt = await prepareWorktree(r.repo, r.number, r.head, deps.git);
       const paket = nextPaket(r.repo, r.number);
       mkdirSync(join(reviewDir(), paket), { recursive: true });
-      const prompt = reviewPrompt(r, wt, paket);
+      // Plan 213 S6: ein Motor — deterministischer Vorlauf (vorlauf.md) und die eine Prüfliste im Auftrag (WERKBANK_REVIEW_MOTOR=0 = alter Weg).
+      let prompt = reviewPrompt(r, wt, paket);
+      if (motorAn()) {
+        const basis = await basisVon(wt).catch(() => null);
+        const vl = basis ? await vorlauf(wt, basis).catch((e: any) => ({ md: `# Vorlauf\n\nvollständig: nein — ${scrub(e?.message ?? e)}` })) : { md: '# Vorlauf\n\nvollständig: nein — keine Basis gefunden (origin/develop|dev|main|master).' };
+        writeFileSync(join(reviewDir(), paket, 'vorlauf.md'), vl.md + '\n');
+        prompt += '\n' + motorAbschnitt(paket);
+      }
       writeFileSync(join(reviewDir(), paket, 'auftrag.md'), prompt + '\n');
       const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}`, prompt, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker', vorrang: true });
       await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt } });
