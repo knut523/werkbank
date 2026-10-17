@@ -1547,7 +1547,7 @@ on('GET', /^\/api\/arbeit\/reviews$/, async (req, res) => {
   const reviews: any[] = await reviewsCol().find({ createdAt: { $gte: new Date(Date.now() - 30 * 86400_000) } }).sort({ createdAt: -1 }).limit(200).toArray();
   const ich = [firstName(u), u.name, 'knut523', ...(process.env.WERKBANK_GITHUB_LOGIN ? [process.env.WERKBANK_GITHUB_LOGIN] : [])];
   const meldungen: any[] = await tickerCol().find({}).sort({ at: -1 }).limit(15).toArray().catch(() => []);
-  send(res, 200, { prs: prZeilen([...map.values()], reviews, { ich }), laufend: reviews.filter((r) => ['wartet', 'startet', 'läuft'].includes(r.status)).map((r) => ({ pr: `${r.repo}#${r.number}`, status: r.status, at: r.createdAt })),
+  send(res, 200, { prs: prZeilen([...map.values()], reviews, { ich }), laufend: reviews.filter((r) => ['wartet', 'startet', 'führt aus', 'läuft'].includes(r.status)).map((r) => ({ pr: `${r.repo}#${r.number}`, status: r.status, at: r.createdAt })),
     meldungen: meldungen.map((e) => ({ pr: `${e.repo}#${e.number}`, art: e.kind ?? null, wer: e.actor ?? null, at: e.at, text: String(e.text ?? e.title ?? '').slice(0, 200) })),
     stand: sync?.at ?? null, fehler: sync?.error ?? null, stufen: ['quick', 'deep'], deep: deepAn() });
 });
@@ -1561,7 +1561,7 @@ on('POST', /^\/api\/arbeit\/reviews\/start$/, async (req, res) => {
   if (!reviewErlaubt(pr.repo)) throw new HttpError(403, `Für ${pr.repo} sind Reviews nicht freigegeben.`);
   const live = (await livePrs()).map.get(`${pr.repo}#${pr.number}`);
   if (!live) throw new HttpError(404, 'PR nicht in der Liste offener PRs (Abgleich mit GitHub abwarten oder „jetzt abrufen“).');
-  if (await reviewsCol().findOne({ repo: pr.repo, number: pr.number, status: { $in: ['wartet', 'startet', 'läuft'] } })) throw new HttpError(409, 'Für diesen PR läuft schon ein Review.');
+  if (await reviewsCol().findOne({ repo: pr.repo, number: pr.number, status: { $in: ['wartet', 'startet', 'führt aus', 'läuft'] } })) throw new HttpError(409, 'Für diesen PR läuft schon ein Review.');
   const id = `hand-${pr.repo.replace('/', '-')}-${pr.number}-${Date.now().toString(36)}`;
   await reviewsCol().insertOne({ _id: id as any, repo: pr.repo, number: pr.number, title: live.title, url: live.url, head: null, trigger: 'hand', by: u.name, event: null, ownerId: u.id, status: 'wartet', createdAt: new Date(), day: vienna().date, ...(deep ? { deep: true } : {}) });
   log('review gestartet (workspace)', { user: u.id, pr: `${pr.repo}#${pr.number}`, stufe: deep ? 'deep' : 'quick' });
