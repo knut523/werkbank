@@ -27,3 +27,9 @@ test('Schalter S9 aus der Umgebung, Vorgabe aus', async () => {
   const { einLogin } = await import('../server/zustand.ts');
   assert.equal(einLogin({}), false); assert.equal(einLogin({ WERKBANK_EIN_LOGIN: '1' }), true);
 });
+
+test('Pass C: ohne absolute Chat-Adresse keine Umleitung', () => {
+  assert.equal(einLoginUmleiten({ an: true, embedded: false, search: '', librechatUrl: '' }), false);
+  assert.equal(einLoginUmleiten({ an: true, embedded: false, search: '', librechatUrl: '/' }), false);
+  assert.equal(einLoginUmleiten({ an: true, embedded: false, search: '', librechatUrl: 'https://chat.example.org' }), true);
+});

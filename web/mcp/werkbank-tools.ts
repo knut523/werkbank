@@ -188,8 +188,9 @@ serve('werkbank', '0.1.0', [
       const j = await call('/internal/inbox', {});
       const e: any[] = j.eintraege ?? [];
       if (!e.length) return 'Inbox leer — nichts wartet auf eine Entscheidung.';
-      const zeilen = e.map((x) => `- [${x.id}] ${x.frage}${x.empfehlung ? ` — Empfehlung: ${x.empfehlung}` : ''} (${x.quelle?.text ?? ''})`);
-      const knoepfe = e.filter((x) => x.antworten?.includes('ja') && x.antworten?.includes('nein')).map((x) => ({ id: String(x.id), frage: String(x.frage ?? '') }));
+      const einz = (v: unknown) => String(v ?? '').replace(/[\r\n]+/g, ' ');
+      const zeilen = e.map((x) => `- [${x.id}] ${einz(x.frage)}${x.empfehlung ? ` — Empfehlung: ${einz(x.empfehlung)}` : ''} (${einz(x.quelle?.text)})`);
+      const knoepfe = e.filter((x) => x.antworten?.includes('ja') && x.antworten?.includes('nein')).map((x) => ({ id: String(x.id), frage: einz(x.frage), quelle: einz(x.quelle?.text) }));
       return `${e.length} offen:\n${zeilen.join('\n')}\n\nKNOEPFE ${JSON.stringify(knoepfe)}`;
     },
   },

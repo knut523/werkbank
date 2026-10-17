@@ -532,12 +532,16 @@ export function inboxKnoepfe(ergebnis: string): string {
   let liste: unknown;
   try { liste = JSON.parse(zeile.slice(8)); } catch { return ''; }
   if (!Array.isArray(liste)) return '';
-  const gueltig = liste.filter((e: any) => e && typeof e.id === 'string' && INBOX_KENNUNG.test(e.id) && typeof e.frage === 'string');
+  const gesehen = new Set<string>();
+  const gueltig = liste.filter((e: any) => e && typeof e.id === 'string' && INBOX_KENNUNG.test(e.id) && typeof e.frage === 'string' && !gesehen.has(e.id) && gesehen.add(e.id));
+  const klar = (t: string, max: number) => {
+    const roh = t.replace(/[\r\n]+/g, ' ').trim();
+    return neutralizeAnswerAnchors('', (roh.length > max ? roh.slice(0, max - 1) + '…' : roh).replace(/[\\`*_[\]()<>#|~!]/g, (c: string) => '\\' + c));
+  };
+  // Die Herkunft steht sichtbar daneben (Pass C): Fragetext aus einem Unter-Chat gibt sich nicht als neutrale Frage aus.
   const rows = gueltig.slice(0, INBOX_MAX).map((e: any) => {
-    const roh = e.frage.replace(/[\r\n]+/g, ' ').trim();
-    const f = (roh.length > 120 ? roh.slice(0, 119) + '…' : roh).replace(/[\\`*_[\]()<>#|~!]/g, (c: string) => '\\' + c);
-    const frage = neutralizeAnswerAnchors('', f);
-    return `- ${frage}  \n  [✅ Ja](#werkbank-antwort:${e.id}:ja) [✖️ Nein](#werkbank-antwort:${e.id}:nein)`;
+    const quelle = typeof e.quelle === 'string' && e.quelle.trim() ? ` _(${klar(e.quelle, 60)})_` : '';
+    return `- ${klar(e.frage, 120)}${quelle}  \n  [✅ Ja](#werkbank-antwort:${e.id}:ja) [✖️ Nein](#werkbank-antwort:${e.id}:nein)`;
   });
   if (!rows.length) return '';
   const mehr = gueltig.length > INBOX_MAX ? `\n\n_${gueltig.length - INBOX_MAX} weitere unter Heute › Inbox_` : '';
