@@ -604,7 +604,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       }
       const prompt = reviewPrompt(r, wt, paket, { tiefe, eta, kontext: !!kontext, dm, vorher: dm.delta && vorher ? { head: vorher.head, paket: vorher.paket } : null, verknuepft: v ?? undefined, tests: testsText });
       writeFileSync(join(dir, 'auftrag.md'), prompt + '\n');
-      const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}${dm.delta ? ' (Delta)' : ''}`, prompt, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker', tiefe, modell: REVIEW_MODELL });
+      const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}${dm.delta ? ' (Delta)' : ''}`, prompt, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker', tiefe, modell: REVIEW_MODELL, vorrang: true });
       await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt, tiefe, zeilen, eta, basis: dm.basis, delta: dm.delta, vorher: vorher ? vorher._id : null, kontext: !!kontext, note: dm.hinweis.join('; ') || null, retryAt: null } });
       // Der Strang läuft schon: ein Fehler hier darf nicht erneut einreihen (sonst zweiter Strang für denselben Stand).
       try { await deps.markStrand?.(st.id, { repo: r.repo, number: r.number, paket }, { eta: new Date(now.getTime() + eta * 60_000) }); }

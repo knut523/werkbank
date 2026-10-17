@@ -124,7 +124,7 @@ export function statusMark(text: string): 'fertig' | 'braucht Antwort' | 'blocki
   return v === 'fertig' ? 'fertig' : v === 'braucht antwort' ? 'braucht Antwort' : v === 'blockiert' ? 'blockiert' : null;
 }
 
-export interface StrandState { running: boolean; interrupted: boolean; turn: { start: number; end: number | null; outcome: string | null; modell?: string } | null }
+export interface StrandState { running: boolean; interrupted: boolean; queued?: { pos: number; since: number } | null; turn: { start: number; end: number | null; outcome: string | null; modell?: string } | null }
 export interface LastMsg { fromUser: boolean; text: string; error: boolean; at: number }
 
 /**
@@ -136,6 +136,8 @@ export type AutoCause = 'limit' | 'timeout' | 'interrupted' | 'lost' | 'busy' | 
 export function orchStatus(run: { startError?: string | null; startedAt: Date | number; lastSentAt?: Date | number | null }, s: StrandState | null | undefined, last: LastMsg | null, now = Date.now()): { status: OrchStatus; reason: string; cause?: AutoCause } {
   if (run.startError) return { status: 'failed', reason: `Start fehlgeschlagen: ${run.startError}` };
   if (s?.running) return { status: 'running', reason: 'Zug läuft' };
+  // Plan 213 S1a: wartet in der Schlange der Brücke (Parallelgrenze) — kein Fehlschlag, startet von selbst.
+  if (s?.queued) return { status: 'running', reason: `in der Schlange (Platz ${s.queued.pos}, seit ${Math.max(0, Math.round((now - s.queued.since) / 60_000))} min)` };
   // Kein Fehler: das automatische „weiter“ übernimmt; greift es nicht, meldet der Hauptchat „hängt“ (Plan 154, G10).
   if (s?.interrupted) return { status: 'waiting', reason: 'Zug abgebrochen (Brücke neu gestartet) — wird automatisch fortgesetzt, sonst `send <id> weiter`', cause: 'interrupted' };
   const sent = new Date(run.lastSentAt ?? run.startedAt).getTime();
@@ -293,7 +295,9 @@ export async function strandStates(u: User): Promise<Map<string, StrandState & {
 
 export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null; lauf?: string | null; modell?: string | null; risiko?: 'niedrig' | 'mittel' | 'hoch' | null; profil?: 'voll' | 'bauer' | 'leser' | 'schreiber' | null; tiefe?: string | null;
   /** Tokenbudget des Strangs (Plan 209, S3.2); leer = ORCH_BUDGET_TOKENS je Tiefe (Vorgabe 0 = aus). */
-  budget?: number | null }
+  budget?: number | null;
+  /** Vorrang in der Warteschlange der Brücke (Plan 213 S1a: Reviews). */
+  vorrang?: boolean }
 
 // Plan 162, S2: Hauptmodell und Risikostufe eines Strangs (vorbereitet für die smarte Modellwahl, Paket 163). Nur beim Start.
 const STRAND_MODEL = /^(claude:(opus|sonnet|haiku)|melious:[\w.:/-]{1,80})$/;
@@ -360,7 +364,7 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   if (inp.profil && !['voll', 'bauer', 'leser', 'schreiber'].includes(inp.profil)) throw err(400, 'Profil: voll, bauer, leser oder schreiber.');
   const profil = inp.profil && inp.profil !== 'voll' ? inp.profil : null;
   // 1) Bei der Brücke anmelden (prüft den Ordner selbst). Ohne Anmeldung kein Chat (fail closed).
-  const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}), tiefe }), signal: AbortSignal.timeout(5000) });
+  const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}), tiefe, ...(inp.vorrang === true ? { vorrang: true } : {}) }), signal: AbortSignal.timeout(5000) });
   const rj: any = await reg.json().catch(() => ({}));
   if (!reg.ok) throw err(reg.status === 400 || reg.status === 409 || reg.status === 403 ? reg.status : 502, rj.error ?? `Brücke antwortet mit ${reg.status}`);
   const stand = [fresh.status, g0 ? g0.text : null].filter(Boolean).join('\n') || null;
