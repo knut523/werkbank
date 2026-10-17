@@ -13,6 +13,7 @@ export const ME = (process.env.WERKBANK_GITHUB_LOGIN || 'knut523').toLowerCase()
 
 export interface TickerSettings {
   ticker: boolean; autoReview: boolean; autoPost: boolean; onRequest: boolean;
+  /** Entfallen (Knut 17.10.: „nimm den Deckel komplett raus“) — immer 0 = ohne Tagesgrenze; nur noch für alte Dokumente. */
   allow: string[]; maxPerDay: number; maxParallel: number; minutes: number;
   ownerId: string | null; autoReviewSince: string | null;
   log: { at: string; by: string; was: string }[];
@@ -20,7 +21,7 @@ export interface TickerSettings {
 
 export const DEFAULTS: TickerSettings = {
   ticker: false, autoReview: false, autoPost: true, onRequest: false,
-  allow: ['knut523', 'bizarrochris'], maxPerDay: 5, maxParallel: 2, minutes: 5,
+  allow: ['knut523', 'bizarrochris'], maxPerDay: 0, maxParallel: 2, minutes: 5,
   ownerId: null, autoReviewSince: null, log: [],
 };
 
@@ -36,7 +37,13 @@ export const tickerAus = (env = process.env) => env.WERKBANK_PR_TICKER === 'off'
 export async function tickerSettings(): Promise<TickerSettings> {
   const d: any = await meta().findOne({ _id: 'pr_ticker_settings' as any });
   const { _id, ...rest } = d ?? {};
-  return { ...DEFAULTS, ...rest };
+  // Einmalige Migration (Knut 17.10.): gespeicherte Tagesgrenze (5 bzw. übergangsweise 50) → ohne Grenze; am Tagesdeckel
+  // abgewiesene Reviews der letzten 24 h laufen jetzt doch.
+  if (d && Number(d.maxPerDay) > 0) {
+    const m = await meta().updateOne({ _id: 'pr_ticker_settings' as any, maxPerDay: d.maxPerDay }, { $set: { maxPerDay: 0 } });
+    if (m.modifiedCount) await reviewsCol().updateMany({ status: 'deckel', createdAt: { $gte: new Date(Date.now() - 86400_000) } }, { $set: { status: 'wartet', note: 'Tagesgrenze entfällt — erneut eingereiht', retryAt: null } });
+  }
+  return { ...DEFAULTS, ...rest, maxPerDay: 0 };
 }
 
 const LOGIN = /^[a-z\d](?:[a-z\d-]{0,38})$/i;
@@ -53,7 +60,7 @@ export function mergeSettings(cur: TickerSettings, inp: any, by: { id: string; n
     const allow = [...new Set(inp.allow.map((x: unknown) => String(x).trim().replace(/^@/, '').toLowerCase()).filter((x: string) => LOGIN.test(x)))].slice(0, 20) as string[];
     if (allow.join(',') !== cur.allow.join(',')) { next.allow = allow; was.push(`Liste: ${allow.join(', ') || '(leer)'}`); }
   }
-  for (const [k, lo, hi] of [['maxPerDay', 0, 50], ['maxParallel', 1, 5], ['minutes', 2, 60]] as const) {
+  for (const [k, lo, hi] of [['maxParallel', 1, 5], ['minutes', 2, 60]] as const) {   // maxPerDay entfällt (ohne Tagesgrenze)
     if (inp?.[k] !== undefined) { const v = clampInt(inp[k], lo, hi, cur[k]); if (v !== cur[k]) { next[k] = v; was.push(`${k} ${v}`); } }
   }
   // Auto-Review gehört der Person, die es einschaltet (T12); ab dann zählen @review-Tags (T5).

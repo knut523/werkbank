@@ -63,7 +63,7 @@ import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { tickerTick, tickerOverview, setTickerSettings, reviewsCol, reviewErlaubt } from './prticker.ts';
 import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia } from './prreview.ts';
 import { meliousPassC } from './gegenpruefung.ts';
-import { postReview, schreibenAus, type ReviewEvent } from './githubwrite.ts';
+import { postReview, statusKommentar, schreibenAus, type ReviewEvent } from './githubwrite.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
 import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './timebox.ts';
@@ -3144,7 +3144,9 @@ async function backgroundJobs() {
           return meliousPassC(u, { wt: r.worktree, basis, zweck: `Review ${r.repo}#${r.number}: ${r.title ?? ''}${r.delta ? ' (nur Änderungen seit dem letzten Review)' : ''}` });
         },
         sendStrand: async (r, text) => { const u = await userById(r.ownerId); if (!u) throw new Error('Besitzer nicht gefunden'); return sendOrch(u, r.strand, text, 'leitstand'); },
-        post: (r, text, event) => postReview(r, text, event), log,
+        post: (r, text, event) => postReview(r, text, event),
+        // Statuszeile am PR (queued → running → done …), englisch; WERKBANK_REVIEW_STATUS=off schaltet ab.
+        status: (r, text, id) => statusKommentar(r, text, id), log,
       });
       if (r.started || r.done) log('pr-review', r);
     } catch (e: any) { log('pr-review', { error: String(e.message).slice(0, 200) }); }

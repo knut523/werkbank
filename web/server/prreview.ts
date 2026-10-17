@@ -1,5 +1,5 @@
-// Auto-Deep-Review (Plan 157): aus der Warteschlange `pr_reviews` einen Review-Strang starten — unter dem Deckel
-// (max. N je Tag, max. M gleichzeitig). Ein Strang kann GitHub nicht erreichen (Brücke sperrt das, Git ohne Zugangsdaten),
+// Auto-Deep-Review (Plan 157): aus der Warteschlange `pr_reviews` einen Review-Strang starten — höchstens M gleichzeitig,
+// ohne Tagesgrenze (Knut 17.10.2026); wer nicht starten kann, wartet in der Schlange. Ein Strang kann GitHub nicht erreichen (Brücke sperrt das, Git ohne Zugangsdaten),
 // darum holt der WEB-SERVER den PR-Stand mit dem Lesetoken (`GIT_VW_READ=1` für den Credential-Helper) in einen eigenen
 // Klon und legt einen frischen Worktree an; der Strang prüft offline. Ergebnis: `kommentar.md` im Review-Paket
 // (erste Zeile „Empfehlung: …“). Ist der Strang fertig und „Kommentare automatisch posten“ an (Knut, 13.10.2026,
@@ -10,6 +10,11 @@
 // mit älterem Kopf; (3) Tiefe und ETA nach Größe, `@review deep` → deep; (4) danach automatisch Pass C über Melious, der Strang
 // übernimmt nur im Code bestätigte Befunde; (5) Abbruch/Parallelgrenze → erneut einreihen mit wachsendem Abstand.
 // Kommentar für GitHub auf Englisch (olaf-docs/AGENTS.md); Verweise auf existierende PRs/Issues blocken das Posten nicht.
+//
+// Release 17c, Zusatz (Knut 17.10.: „direktes Feedback als Kommentar immer (Lauf läuft, ETA) … erkläre ihm Review und Deep
+// Review“): EINE Statuszeile je Review als PR-Kommentar (englisch), die der Takt bei jedem Zustandswechsel bearbeitet —
+// queued (Position, Tiefe, ETA) → running → retry/failed/skipped → done. Beim ersten Mal je GitHub-Login hängt eine kurze
+// Erklärung von `@review` und `@review deep` daran. Not-Aus: WERKBANK_REVIEW_STATUS=off.
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -22,6 +27,7 @@ import { reviewDir, readBericht } from './bericht.ts';
 import { vienna } from './hygiene.ts';
 import { graphql } from './github.ts';
 import { jiraSites } from './config.ts';
+import { wb } from './db.ts';
 import { reviewsCol, tickerSettings, tickerAus, reviewErlaubt, type TickerSettings } from './prticker.ts';
 
 export const prReviewDir = (env = process.env) => env.WERKBANK_PR_REVIEW_DIR || join(env.HOME || homedir(), 'work', 'knut', 'pr-reviews');
@@ -256,17 +262,98 @@ export function nochmalPlan(versuche: number, now: Date): { retryAt: Date | null
 }
 const hhmm = (d: Date) => d.toLocaleTimeString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', minute: '2-digit' });
 /** Review erneut einreihen (zählt nicht gegen den Tagesdeckel) oder nach dem letzten Versuch als „fehler“ abschließen. */
-async function nochmal(r: any, grund: string, now: Date, deps: { log?: ReviewDeps['log'] }) {
+async function nochmal(r: any, grund: string, now: Date, deps: Pick<ReviewDeps, 'log' | 'status'>) {
   const p = nochmalPlan(Number(r.versuche ?? 0), now);
   const g = scrub(grund);
   // Nur aus dem Zustand heraus, in dem der Takt den Eintrag gelesen hat (zwei Takte/Abschluss dazwischen: nichts tun).
   const wo = { _id: r._id, status: r.status };
   if (!p.retryAt) {
-    await reviewsCol().updateOne(wo, { $set: { status: 'fehler', note: `${g} — nach ${p.versuch - 1} Versuchen aufgegeben; „Jetzt reviewen“ startet neu`, doneAt: now } });
+    const f = await reviewsCol().updateOne(wo, { $set: { status: 'fehler', note: `${g} — nach ${p.versuch - 1} Versuchen aufgegeben; „Jetzt reviewen“ startet neu`, doneAt: now } });
+    if (f.modifiedCount) await meldeStatus(r, statusZeile({ art: 'failed', grund: grundEn(g), versuch: p.versuch - 1 }), deps, now);
     return;
   }
   const u = await reviewsCol().updateOne(wo, { $set: { status: 'wartet', retryAt: p.retryAt, versuche: p.versuch, note: `erneut eingereiht: ${g} (Versuch ${p.versuch + 1} ab ${hhmm(p.retryAt)})`, startDay: null, strand: null } });
   if (u.modifiedCount) deps.log?.('pr-review erneut eingereiht', { pr: `${r.repo}#${r.number}`, grund: g, versuch: p.versuch });
+  if (u.modifiedCount) await meldeStatus(r, statusZeile({ art: 'retry', grund: grundEn(g), minuten: Math.round((p.retryAt.getTime() - now.getTime()) / 60_000), versuch: p.versuch + 1 }), deps, now);
+}
+
+// ---------- Statuszeile am PR (Release 17c, Zusatz) ----------
+
+export const statusAus = (env = process.env) => env.WERKBANK_REVIEW_STATUS === 'off';
+/** Deep-Reviews führen Tests/Typecheck/Build erst aus, wenn das eingeschaltet ist (isolierte Umgebung, Folgeschritt). */
+export const deepTestsAn = (env = process.env) => env.WERKBANK_REVIEW_DEEP_TESTS === 'on';
+const MARKE = '(OLAF Workspace)';
+const STATIC_DEEP = 'test execution not enabled yet — static deep review';
+
+/** Interne (deutsche) Gründe → kurze englische Fassung ohne Interna. */
+export function grundEn(g: string): string {
+  if (/Parallelgrenze|gleichzeitig|parallel/i.test(g)) return 'parallel limit reached';
+  if (/Neustart|abgebrochen|Strang nicht mehr da|Zeitüberschreitung/i.test(g)) return 'review run was interrupted';
+  if (/Besitzer/i.test(g)) return 'reviewer account not available';
+  if (/kommentar\.md|Entwurf/i.test(g)) return 'no review draft was produced';
+  if (/git|fetch|Worktree|Klon/i.test(g)) return 'could not check out the PR';
+  return 'temporary error';
+}
+
+export type StatusArt = 'queued' | 'running' | 'retry' | 'failed' | 'skipped' | 'done';
+/** Rein: die eine Zeile der Statusmeldung (englisch). */
+export function statusZeile(a: { art: StatusArt; position?: number; tiefe?: string; eta?: number; grund?: string; minuten?: number; versuch?: number; empfehlung?: string | null; url?: string | null; gepostet?: boolean }): string {
+  const tiefe = `depth ${a.tiefe ?? 'by size'}${a.tiefe === 'deep' && !deepTestsAn() ? ` (${STATIC_DEEP})` : ''}`;
+  switch (a.art) {
+    case 'queued': return `🔎 Automated review queued · position ${a.position ?? 1} · ${tiefe} · ETA ~${a.eta ?? '?'} min ${MARKE}`;
+    case 'running': return `🔎 Automated review running · ${tiefe} · ETA ~${a.eta ?? '?'} min ${MARKE}`;
+    case 'retry': return `⚠️ Automated review interrupted: ${a.grund ?? 'temporary error'} — will retry in ~${a.minuten ?? '?'} min (attempt ${a.versuch ?? 2}) ${MARKE}`;
+    case 'failed': return `❌ Automated review failed: ${a.grund ?? 'error'}${a.versuch ? ` (gave up after ${a.versuch} attempts)` : ''} — Knut will follow up ${MARKE}`;
+    case 'skipped': return `⏭️ Automated review skipped — ${a.grund ?? 'PR already merged'} ${MARKE}`;
+    case 'done': return a.gepostet
+      ? `✅ Automated review done · recommendation: ${a.empfehlung ?? 'comment'}${a.url ? ` · ${a.url}` : ''} ${MARKE}`
+      : `✅ Automated review done — the result waits for Knut's check before it is posted ${MARKE}`;
+  }
+}
+
+/** Einmal je Person: was `@review` und `@review deep` tun. */
+export function erklaerung(): string {
+  return `\n\n<sub>How this works: \`@review\` = fast review, depth chosen by size — static analysis, PR context and comments, delta since the last review, then a cross-check by a second model; ~5–15 min. `
+    + `\`@review deep\` = additionally runs the repo's tests, typecheck, build and DB suites in an isolated environment${deepTestsAn() ? '' : ` (${STATIC_DEEP})`}; ~20–40 min. `
+    + 'The result is posted as a review comment; approval stays with Knut.</sub>';
+}
+const erklaert = () => wb().collection('pr_review_erklaert');
+
+/**
+ * Statuszeile setzen: gibt es den Kommentar schon, wird er bearbeitet; sonst legt ihn genau ein Takt an (Anspruch `sk` im
+ * Review-Dokument). Fehler beim Schreiben bremsen das Review nie.
+ */
+export async function meldeStatus(r: any, zeile: string, deps: Pick<ReviewDeps, 'status' | 'log'>, now = new Date(), o: { nurAnlegen?: boolean } = {}): Promise<void> {
+  if (!deps.status || statusAus() || !reviewErlaubt(r.repo)) return;
+  try {
+    const doc: any = await reviewsCol().findOne({ _id: r._id }, { projection: { sk: 1, by: 1 } });
+    const sk = doc?.sk;
+    // „queued“ legt nur an: ein langsamer Takt mit altem Stand überschreibt nie eine neuere Zeile (running/done).
+    if (o.nurAnlegen && sk) return;
+    if (sk?.id) {
+      if (sk.zeile === zeile) return;
+      await deps.status(r, zeile + (sk.fuss ?? ''), sk.id);
+      await reviewsCol().updateOne({ _id: r._id }, { $set: { 'sk.zeile': zeile, 'sk.at': now } });
+      return;
+    }
+    // Anspruch: neu, oder nach gescheitertem Anlegen ein neuer Versuch beim nächsten Zustandswechsel (je Wechsel höchstens
+    // einer — nie im Minutentakt). Ohne `fehler` legt gerade ein anderer Takt an.
+    const wo = sk ? { _id: r._id, 'sk.id': null, 'sk.fehler': sk.fehler ?? '\u0000', 'sk.zeile': { $ne: zeile } } : { _id: r._id, sk: { $exists: false } };
+    if (sk && !sk.fehler) return;
+    const claim = await reviewsCol().updateOne(wo as any, { $set: { sk: { id: null, at: now, zeile } } });
+    if (!claim.modifiedCount) return;
+    const wer = String(doc?.by ?? r.by ?? '').toLowerCase() || '?';
+    let fuss = '';
+    try { await erklaert().insertOne({ _id: wer as any, at: now, pr: `${r.repo}#${r.number}` }); fuss = erklaerung(); } catch (e: any) { if (e?.code !== 11000) throw e; }
+    try {
+      const res = await deps.status(r, zeile + fuss, null);
+      await reviewsCol().updateOne({ _id: r._id }, { $set: { sk: { id: res.id, url: res.url, zeile, fuss, at: now } } });
+    } catch (e: any) {
+      if (fuss) await erklaert().deleteOne({ _id: wer as any });   // Erklärung beim nächsten Review nachholen
+      await reviewsCol().updateOne({ _id: r._id }, { $set: { sk: { id: null, fehler: scrub(e?.message ?? e), zeile, at: now } } });
+      throw e;
+    }
+  } catch (e: any) { deps.log?.('pr-review status', { pr: `${r.repo}#${r.number}`, error: scrub(e?.message ?? e) }); }
 }
 
 export interface ReviewDeps {
@@ -277,6 +364,8 @@ export interface ReviewDeps {
   markStrand?: (id: string, prReview: { repo: string; number: number; paket: string }, extra?: { eta?: Date }) => Promise<unknown>;
   git?: GitRun;
   post?: (r: any, body: string, event: 'COMMENT') => Promise<{ url: string | null }>;
+  /** Statuszeile als PR-Kommentar: id = null → neu anlegen, sonst diesen Kommentar ersetzen. */
+  status?: (r: any, body: string, id: number | null) => Promise<{ id: number; url: string | null }>;
   prNow?: (repo: string, n: number) => Promise<{ state: string; head: string } | null>;
   /** PR-Kontext mit dem Lesetoken (Beschreibung, Kommentare, Reviews, Inline-Kommentare). */
   kontext?: (repo: string, n: number) => Promise<PrKontext | null>;
@@ -290,9 +379,8 @@ export interface ReviewDeps {
   now?: () => Date;
 }
 
-/** Rein: darf jetzt ein weiteres Review starten? */
-export function deckel(s: Pick<TickerSettings, 'maxPerDay' | 'maxParallel'>, laufend: number, heute: number): { ok: boolean; why: string } {
-  if (heute >= s.maxPerDay) return { ok: false, why: `Tagesdeckel erreicht (${heute}/${s.maxPerDay})` };
+/** Rein: darf jetzt ein weiteres Review starten? Nur die Parallelität zählt (keine Tagesgrenze, Knut 17.10.); sonst warten. */
+export function deckel(s: Pick<TickerSettings, 'maxParallel'>, laufend: number): { ok: boolean; why: string } {
   if (laufend >= s.maxParallel) return { ok: false, why: `schon ${laufend} gleichzeitig` };
   return { ok: true, why: '' };
 }
@@ -323,6 +411,8 @@ export function textRegeln(text: string, r: { repo: string; number: number }, be
 const GEHEIM = /\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY|\bAKIA[0-9A-Z]{16}\b|\b(password|passwort|secret|token|api[_-]?key)\s*[=:]\s*\S{6,}|mongodb(\+srv)?:\/\/[^\s:]+:[^\s@]+@|\bsk-[A-Za-z0-9_-]{20,}/i;
 
 // Englisch: geht nach GitHub (olaf-docs/AGENTS.md).
+/** Erste Zeile jedes automatisch geposteten Ergebnisses (Knut 17.10.). */
+export const AUTO_KOPF = 'Automated review (OLAF Workspace) — not yet read by Knut';
 export const fussnote = (head: string, empf: string) => `\n\n---\n_Automated review (OLAF Workspace) · commit \`${head.slice(0, 7)}\` · recommendation: ${empf}. Approval or change requests are decided by Knut._`;
 
 // Gegenprüfungen laufen neben dem Takt (jcode braucht Minuten); hier gemerkt, damit Tests und Neustarts sie abwarten können.
@@ -399,18 +489,34 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
     if (!claim.modifiedCount) continue;
     done++;
     if (k && s.autoPost && deps.post) await autoPost({ ...r, ...set }, k, deps, now);
+    if (!k) await meldeStatus(r, statusZeile({ art: 'failed', grund: grundEn(set.note) }), deps, now);
+    else {
+      const posted = ((await reviewsCol().findOne({ _id: r._id }, { projection: { posted: 1 } })) as any)?.posted;
+      await meldeStatus(r, statusZeile({ art: 'done', gepostet: !!posted?.url, url: posted?.url ?? null, empfehlung: k.empfehlung }), deps, now);
+    }
   }
   // 2) neue starten (erneut eingereihte erst ab retryAt)
   if (!s.autoReview) return { started: 0, done };
   const heute = vienna(now).date;
+  // 2a) Sofort-Rückmeldung am PR für neu eingereihte: Position, Tiefe nach Größe, ETA inkl. grober Wartezeit (10 min je Platz)
+  if (deps.status && !statusAus()) {
+    const schlange = (await reviewsCol().find({ status: 'wartet' }).sort({ createdAt: 1 }).limit(50).toArray()) as any[];
+    const frei = Math.max(0, s.maxParallel - await reviewsCol().countDocuments({ status: { $in: ['startet', 'läuft', 'gegenprüfung', 'abgleich'] } }));
+    for (const [i, r] of schlange.entries()) {
+      if (r.sk || !reviewErlaubt(r.repo)) continue;
+      const k = deps.kontext ? await deps.kontext(r.repo, r.number).catch(() => null) : null;
+      const zeilen = k ? k.additions + k.deletions : null;
+      const tiefe = tiefeFuer(zeilen, !!r.deep);
+      const eta = etaMinuten(tiefe, zeilen, !!deps.gegenpruefung) + Math.max(0, i + 1 - frei) * 10;
+      await meldeStatus(r, statusZeile({ art: 'queued', position: i + 1, tiefe: zeilen == null && !r.deep ? undefined : tiefe, eta }), deps, now, { nurAnlegen: true });
+    }
+  }
   let started = 0;
   for (const r of (await reviewsCol().find({ status: 'wartet', $or: [{ retryAt: null }, { retryAt: { $exists: false } }, { retryAt: { $lte: now } }] }).sort({ createdAt: 1 }).limit(10).toArray()) as any[]) {
     const laufend = await reviewsCol().countDocuments({ status: { $in: ['startet', 'läuft', 'gegenprüfung', 'abgleich'] } });
-    const heuteN = await reviewsCol().countDocuments({ startDay: heute });
-    const dk = deckel(s, laufend, heuteN);
+    const dk = deckel(s, laufend);
     if (!dk.ok) {
-      if (heuteN >= s.maxPerDay) await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'deckel', note: dk.why } });
-      else await reviewsCol().updateOne({ _id: r._id }, { $set: { note: `wartet: ${dk.why}` } });   // sichtbar im Ticker
+      await reviewsCol().updateOne({ _id: r._id }, { $set: { note: `wartet: ${dk.why}` } });   // bleibt eingereiht, sichtbar im Ticker
       break;
     }
     // Claim: nur einer startet (falls zwei Takte überlappen).
@@ -418,7 +524,11 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
     if (!claim.modifiedCount) continue;
     try {
       const pr = deps.prNow ? await deps.prNow(r.repo, r.number) : null;
-      if (pr && pr.state !== 'OPEN') { await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'übersprungen', note: `PR ${pr.state === 'MERGED' ? 'gemergt' : 'geschlossen'}`, startDay: null } }); continue; }
+      if (pr && pr.state !== 'OPEN') {
+        await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'übersprungen', note: `PR ${pr.state === 'MERGED' ? 'gemergt' : 'geschlossen'}`, startDay: null } });
+        await meldeStatus(r, statusZeile({ art: 'skipped', grund: pr.state === 'MERGED' ? 'PR already merged' : 'PR closed' }), deps, now);
+        continue;
+      }
       const u = await deps.userById(r.ownerId);
       if (!u) throw Object.assign(new Error('Besitzer des Auto-Reviews nicht gefunden'), { endgueltig: true });
       const wt = await prepareWorktree(r.repo, r.number, r.head, deps.git);
@@ -446,10 +556,18 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       try { await deps.markStrand?.(st.id, { repo: r.repo, number: r.number, paket }, { eta: new Date(now.getTime() + eta * 60_000) }); }
       catch (e: any) { deps.log?.('pr-review markStrand', { pr: `${r.repo}#${r.number}`, error: scrub(e?.message ?? e) }); }
       deps.log?.('pr-review gestartet', { pr: `${r.repo}#${r.number}`, strand: st.id, tiefe, zeilen, delta: !!dm.delta });
+      await meldeStatus(r, statusZeile({ art: 'running', tiefe, eta }), deps, now);
       started++;
     } catch (e: any) {
-      if (e?.skip) { await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'übersprungen', note: scrub(e.message ?? e), doneAt: now, startDay: null } }); continue; }
-      if (e?.endgueltig) await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'fehler', note: scrub(e.message ?? e), doneAt: now } });
+      if (e?.skip) {
+        await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'übersprungen', note: scrub(e.message ?? e), doneAt: now, startDay: null } });
+        await meldeStatus(r, statusZeile({ art: 'skipped', grund: 'new commits since the tag — tag @review again for the new head' }), deps, now);
+        continue;
+      }
+      if (e?.endgueltig) {
+        await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'fehler', note: scrub(e.message ?? e), doneAt: now } });
+        await meldeStatus(r, statusZeile({ art: 'failed', grund: grundEn(String(e.message ?? e)) }), deps, now);
+      }
       else await nochmal({ ...r, status: 'startet' }, e?.message ?? String(e), now, deps);   // Parallelgrenze der Brücke, Netz, Git … → später nochmal
       deps.log?.('pr-review fehler', { pr: `${r.repo}#${r.number}`, error: scrub(e.message ?? e) });
     }
@@ -470,7 +588,7 @@ export async function autoPost(r: any, k: { empfehlung: string; text: string }, 
   if (pr.state !== 'OPEN') { await reviewsCol().updateOne({ _id: r._id }, { $set: { note: `nicht gepostet: PR ${pr.state === 'MERGED' ? 'gemergt' : 'geschlossen'}` } }); return; }
   if (pr.head !== r.head) { await reviewsCol().updateOne({ _id: r._id }, { $set: { note: `nicht gepostet: neuer Stand ${pr.head.slice(0, 7)} seit dem Review` } }); return; }
   try {
-    const res = await deps.post!(r, k.text + fussnote(r.head, k.empfehlung), 'COMMENT');
+    const res = await deps.post!(r, `**${AUTO_KOPF}**\n\n${k.text}${fussnote(r.head, k.empfehlung)}`, 'COMMENT');
     await reviewsCol().updateOne({ _id: r._id }, { $set: { posted: { at: now, url: res.url, event: 'COMMENT', by: 'auto' } } });
     deps.log?.('pr-review gepostet', { pr: `${r.repo}#${r.number}`, event: 'COMMENT' });
   } catch (e: any) {

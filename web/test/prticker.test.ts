@@ -32,8 +32,9 @@ before(async () => {
   srv = createServer(async (req, res) => {
     let b = ''; for await (const c of req) b += c;
     if (req.url?.startsWith('/repos/')) {
-      posts.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(b) });
+      posts.push({ url: req.url, method: req.method, auth: req.headers.authorization, body: JSON.parse(b) });
       res.writeHead(200, { 'content-type': 'application/json' });
+      if (req.url.includes('/issues/')) return res.end(JSON.stringify({ id: Number(req.url.match(/comments\/(\d+)$/)?.[1] ?? 4711), html_url: 'https://github.com/x/y/pull/1#issuecomment-4711' }));
       return res.end(JSON.stringify({ html_url: 'https://github.com/x/y/pull/1#pullrequestreview-1' }));
     }
     const j = JSON.parse(b);
@@ -75,7 +76,8 @@ test('Einstellungen: Standard aus, Protokoll mit Person, Auto-Review merkt Besit
   const now = new Date('2026-10-13T10:00:00Z');
   const s = mergeSettings(DEFAULTS, { ticker: true, autoReview: true, maxPerDay: 999, allow: ['@Knut523', 'bad login!', 'bizarrochris'] }, by, now);
   assert.equal(s.ticker, true); assert.equal(s.ownerId, 'u1'); assert.equal(s.autoReviewSince, now.toISOString());
-  assert.equal(s.maxPerDay, 50, 'gedeckelt');
+  assert.equal(s.maxPerDay, 0, 'keine Tagesgrenze mehr — Eingabe wird ignoriert');
+  assert.equal(DEFAULTS.maxPerDay, 0);
   assert.deepEqual(s.allow, ['knut523', 'bizarrochris']);
   assert.equal(s.log.length, 1); assert.match(s.log[0].was, /ticker an.*autoReview an/); assert.equal(s.log[0].by, 'Knut');
   assert.equal(mergeSettings(s, { ticker: true }, by).log.length, 1, 'keine Änderung → keine Zeile');
@@ -145,9 +147,9 @@ test('Lauf: aus → keine Abfrage; an → Ereignisse einmal (Dedupe), Tag nach d
 
 test('Deckel und Kommentar-Entwurf: Empfehlung lesen, Textregeln vor dem Posten', async () => {
   const { deckel, parseKommentar, textRegeln, nextPaket } = await import('../server/prreview.ts');
-  assert.equal(deckel({ maxPerDay: 5, maxParallel: 2 }, 0, 5).ok, false);
-  assert.equal(deckel({ maxPerDay: 5, maxParallel: 2 }, 2, 1).ok, false);
-  assert.equal(deckel({ maxPerDay: 5, maxParallel: 2 }, 1, 4).ok, true);
+  assert.equal(deckel({ maxParallel: 2 }, 2).ok, false);
+  assert.equal(deckel({ maxParallel: 2 }, 1).ok, true);
+  assert.equal(deckel({ maxParallel: 2, maxPerDay: 5 } as any, 0).ok, true, 'Tagesgrenze zählt nicht mehr');
   assert.deepEqual(parseKommentar('Empfehlung: request-changes\n\nBitte X fixen.'), { empfehlung: 'request-changes', text: 'Bitte X fixen.' });
   assert.equal(parseKommentar('Empfehlung: merge!\ntext'), null);
   assert.equal(parseKommentar('Empfehlung: approve\n'), null, 'ohne Text');
@@ -216,14 +218,131 @@ test('Auto-Posten unterbleibt bei neuem Stand, geschlossenem PR, Textregel, Not-
   await assert.rejects(postReview({ repo: 'x/../y', number: 1, head: SHA1 }, 't', 'COMMENT'), /ungültig/);
 });
 
-test('Deckel im Lauf: über dem Tagesdeckel → „deckel“, kein Start', async () => {
+// ---------- 17c Zusatz (Knut 17.10.): ohne Tagesgrenze, Statuszeile am PR, Erklärung, Kennzeichnung ----------
+
+const W = 'WirStrom1/olaf-admin';
+const zusatz = async () => {
   const P = await import('../server/prticker.ts');
   const R = await import('../server/prreview.ts');
-  await P.setTickerSettings({ maxPerDay: 1 }, by);
-  await P.reviewsCol().insertOne({ _id: 'z/z#9@' + SHA2, repo: 'z/z', number: 9, head: SHA2, status: 'wartet', ownerId: 'u1', createdAt: new Date() } as any);
-  const r = await R.reviewTick({ userById: async () => null, startOrch: async () => { throw new Error('nein'); }, strandDoc: async () => ({ _id: 's1', reviewReadyAt: new Date() }) });
+  const G = await import('../server/githubwrite.ts');
+  const D = await import('../server/db.ts');
+  return { P, R, G, D };
+};
+// Einstellungen der übrigen Tests nicht verändern: vorher sichern, danach zurück.
+let gesichert: any = null;
+const sichern = async () => { const { P } = await zusatz(); gesichert = await P.wbMeta().findOne({ _id: 'pr_ticker_settings' as any }); };
+const zurueck = async () => { const { P } = await zusatz(); if (gesichert) await P.wbMeta().replaceOne({ _id: 'pr_ticker_settings' as any }, gesichert); else await P.wbMeta().deleteOne({ _id: 'pr_ticker_settings' as any }); };
+
+test('Ohne Tagesgrenze: alte Grenze 50/5 → aus, „deckel“ der letzten 24 h wieder eingereiht; volle Parallelität → wartet, nie verworfen', async () => {
+  const { P, R } = await zusatz();
+  await sichern();
+  await P.reviewsCol().deleteMany({});
+  await P.wbMeta().replaceOne({ _id: 'pr_ticker_settings' as any }, { ...P.DEFAULTS, autoReview: true, ticker: true, ownerId: 'u1', autoReviewSince: '2026-10-01T00:00:00Z', maxPerDay: 50, maxParallel: 1 } as any, { upsert: true });
+  await P.reviewsCol().insertMany([
+    { _id: 'z/z#8@' + SHA1, repo: 'z/z', number: 8, head: SHA1, status: 'deckel', ownerId: 'u1', createdAt: new Date(), note: 'Tagesdeckel erreicht' },
+    { _id: 'z/z#7@' + SHA1, repo: 'z/z', number: 7, head: SHA1, status: 'deckel', ownerId: 'u1', createdAt: new Date(Date.now() - 3 * 86400_000) },
+    { _id: 'z/z#6@' + SHA1, repo: 'z/z', number: 6, head: SHA1, status: 'läuft', strand: 's-lauf', ownerId: 'u1', createdAt: new Date(), startedAt: new Date() },
+  ] as any[]);
+  const s = await P.tickerSettings();
+  assert.equal(s.maxPerDay, 0);
+  assert.equal(((await P.wbMeta().findOne({ _id: 'pr_ticker_settings' as any })) as any).maxPerDay, 0, 'gespeichert');
+  assert.equal(((await P.reviewsCol().findOne({ _id: 'z/z#8@' + SHA1 as any })) as any).status, 'wartet', 'frisch abgewiesen → eingereiht');
+  assert.equal(((await P.reviewsCol().findOne({ _id: 'z/z#7@' + SHA1 as any })) as any).status, 'deckel', 'alte bleiben');
+  for (let i = 0; i < 3; i++) await P.reviewsCol().insertOne({ _id: `z/z#${20 + i}@${SHA1}`, repo: 'z/z', number: 20 + i, head: SHA1, status: 'wartet', ownerId: 'u1', createdAt: new Date() } as any);
+  const r = await R.reviewTick({ userById: async () => null, startOrch: async () => { throw new Error('darf nicht starten'); }, strandDoc: async () => ({ _id: 's-lauf', lastStatus: 'running' }) });
   assert.equal(r.started, 0);
-  assert.equal(((await P.reviewsCol().findOne({ _id: 'z/z#9@' + SHA2 as any })) as any).status, 'deckel');
+  const alle: any[] = await P.reviewsCol().find({ number: { $gte: 20 } }).toArray();
+  assert.ok(alle.every((x) => x.status === 'wartet'), 'nichts verworfen');
+  assert.match(((await P.reviewsCol().findOne({ _id: 'z/z#8@' + SHA1 as any })) as any).note, /wartet: schon 1 gleichzeitig/);
+  await P.reviewsCol().deleteMany({});
+  await zurueck();
+});
+
+test('Statuszeile: Sofort-Kommentar englisch mit Position/Tiefe/ETA, ein Takt postet (zwei parallel), Erklärung einmal je Person, Bearbeiten statt Neuposten, gemergt → skipped', async () => {
+  const { P, R, G, D } = await zusatz();
+  await sichern();
+  await P.reviewsCol().deleteMany({});
+  await D.wb().collection('pr_review_erklaert').deleteMany({});
+  await P.wbMeta().replaceOne({ _id: 'pr_ticker_settings' as any }, { ...P.DEFAULTS, autoReview: true, ticker: true, ownerId: 'u1', autoReviewSince: '2026-10-01T00:00:00Z', maxParallel: 1 } as any, { upsert: true });
+  const t0 = Date.now();
+  await P.reviewsCol().insertMany([
+    { _id: `${W}#1@${SHA2}`, repo: W, number: 1, head: SHA2, status: 'läuft', strand: 's-lauf', ownerId: 'u1', by: 'knut523', createdAt: new Date(t0 - 60_000), startedAt: new Date(), sk: { id: 99, zeile: 'x' } },
+    { _id: `${W}#2@${SHA1}`, repo: W, number: 2, head: SHA1, status: 'wartet', ownerId: 'u1', by: 'bizarrochris', trigger: 'tag', createdAt: new Date(t0) },
+    { _id: `${W}#3@${SHA1}`, repo: W, number: 3, head: SHA1, status: 'wartet', ownerId: 'u1', by: 'bizarrochris', trigger: 'tag', deep: true, createdAt: new Date(t0 + 1000) },
+  ] as any[]);
+  const vorher = posts.length;
+  const deps: any = {
+    userById: async () => null, startOrch: async () => { throw new Error('darf nicht starten'); }, strandDoc: async () => ({ _id: 's-lauf', lastStatus: 'running' }),
+    kontext: async () => ({ additions: 100, deletions: 20 }), status: (r: any, body: string, id: number | null) => G.statusKommentar(r, body, id),
+  };
+  await Promise.all([R.reviewTick(deps), R.reviewTick(deps)]);   // zwei überlappende Takte
+  const neu = posts.slice(vorher).filter((p) => String(p.url).includes('/issues/'));
+  assert.equal(neu.length, 2, 'je wartendem Review genau ein Kommentar');
+  const [k2, k3] = [neu.find((p) => p.url === `/repos/${W}/issues/2/comments`), neu.find((p) => p.url === `/repos/${W}/issues/3/comments`)];
+  assert.ok(k2 && k3); assert.equal(k2.method, 'POST'); assert.equal(k2.auth, 'bearer write-tok');
+  assert.match(k2.body.body, /^🔎 Automated review queued · position 1 · depth quick · ETA ~\d+ min \(OLAF Workspace\)/);
+  assert.match(k3.body.body, /^🔎 Automated review queued · position 2 · depth deep \(test execution not enabled yet — static deep review\) · ETA ~\d+ min/);
+  for (const k of [k2, k3]) assert.doesNotMatch(k.body.body, /[äöüßÄÖÜ]/, 'englisch');
+  assert.equal([k2, k3].filter((k) => /How this works: `@review` = fast review/.test(k.body.body)).length, 1, 'Erklärung einmal je Person');
+  assert.match((k2.body.body + k3.body.body), /`@review deep` = additionally runs the repo's tests, typecheck, build and DB suites/);
+  // dritter Takt: nichts Neues
+  const n = posts.length; await R.reviewTick(deps); assert.equal(posts.length, n, 'kein Doppelpost');
+  // Bearbeiten derselben Zeile (running), Fußzeile bleibt; gleiche Zeile nochmal = kein Aufruf
+  const w2: any = await P.reviewsCol().findOne({ _id: `${W}#2@${SHA1}` as any });
+  const mitErkl = /How this works/.test(k2.body.body);
+  await R.meldeStatus(w2, R.statusZeile({ art: 'running', tiefe: 'quick', eta: 12 }), deps);
+  const ed = posts.at(-1);
+  assert.equal(ed.method, 'PATCH'); assert.equal(ed.url, `/repos/${W}/issues/comments/4711`);
+  assert.match(ed.body.body, /^🔎 Automated review running · depth quick · ETA ~12 min \(OLAF Workspace\)/);
+  assert.equal(/How this works/.test(ed.body.body), mitErkl);
+  const n2 = posts.length; await R.meldeStatus(w2, R.statusZeile({ art: 'running', tiefe: 'quick', eta: 12 }), deps); assert.equal(posts.length, n2);
+  // Pass C: ein langsamer Takt mit alter „queued“-Zeile überschreibt „running“ nicht
+  await R.meldeStatus(w2, R.statusZeile({ art: 'queued', position: 1, tiefe: 'quick', eta: 9 }), deps, new Date(), { nurAnlegen: true }); assert.equal(posts.length, n2);
+  // Pass C: Anlegen gescheitert → beim nächsten Zustandswechsel genau ein neuer Versuch, nicht im Minutentakt
+  const kaputt: any = { ...deps, status: async () => { throw new Error('503'); } };
+  await P.reviewsCol().insertOne({ _id: `${W}#4@${SHA1}`, repo: W, number: 4, head: SHA1, status: 'läuft', by: 'knut523', createdAt: new Date() } as any);
+  const w4: any = { _id: `${W}#4@${SHA1}`, repo: W, number: 4 };
+  await R.meldeStatus(w4, 'zeile A', kaputt);
+  assert.match(((await P.reviewsCol().findOne({ _id: w4._id })) as any).sk.fehler, /503/);
+  const n4 = posts.length;
+  await R.meldeStatus(w4, 'zeile A', deps); assert.equal(posts.length, n4, 'gleiche Zeile: kein neuer Versuch');
+  await R.meldeStatus(w4, 'zeile B', deps); assert.equal(posts.length, n4 + 1, 'neuer Zustand: ein Versuch');
+  assert.equal(((await P.reviewsCol().findOne({ _id: w4._id })) as any).sk.id, 4711);
+  await P.reviewsCol().deleteOne({ _id: w4._id });
+  // Platz frei, PR inzwischen gemergt → „skipped — PR already merged“ in derselben Zeile
+  await P.reviewsCol().updateOne({ _id: `${W}#1@${SHA2}` as any }, { $set: { status: 'fertig' } });
+  await R.reviewTick({ ...deps, prNow: async () => ({ state: 'MERGED', head: SHA1 }) });
+  const sk = posts.slice(n2).find((p) => p.method === 'PATCH');
+  assert.match(sk.body.body, /^⏭️ Automated review skipped — PR already merged \(OLAF Workspace\)/);
+  assert.equal(((await P.reviewsCol().findOne({ _id: `${W}#2@${SHA1}` as any })) as any).status, 'übersprungen');
+  // Not-Aus
+  process.env.WERKBANK_REVIEW_STATUS = 'off';
+  const n3 = posts.length; await R.meldeStatus({ _id: 'x', repo: W, number: 9 }, 'egal', deps); assert.equal(posts.length, n3);
+  delete process.env.WERKBANK_REVIEW_STATUS;
+  await P.reviewsCol().deleteMany({});
+  await zurueck();
+});
+
+test('Statuszeile: Texte für Erneut-Einreihen, Fehler, Fertig — englisch, ohne interne Gründe', async () => {
+  const { R } = await zusatz();
+  assert.equal(R.grundEn('Brücke: Parallelgrenze erreicht'), 'parallel limit reached');
+  assert.equal(R.grundEn('Strang nicht mehr da'), 'review run was interrupted');
+  assert.equal(R.grundEn('/home/knut/geheim: irgendwas'), 'temporary error');
+  assert.match(R.statusZeile({ art: 'retry', grund: 'parallel limit reached', minuten: 5, versuch: 2 }), /^⚠️ Automated review interrupted: parallel limit reached — will retry in ~5 min \(attempt 2\)/);
+  assert.match(R.statusZeile({ art: 'failed', grund: 'temporary error', versuch: 4 }), /^❌ Automated review failed: temporary error \(gave up after 4 attempts\)/);
+  assert.match(R.statusZeile({ art: 'done', gepostet: true, empfehlung: 'comment', url: 'https://x' }), /^✅ Automated review done · recommendation: comment · https:\/\/x/);
+  assert.match(R.statusZeile({ art: 'done', gepostet: false }), /waits for Knut's check/);
+});
+
+test('Kennzeichnung: automatisch gepostetes Ergebnis beginnt mit „Automated review (OLAF Workspace) — not yet read by Knut“', async () => {
+  const { P, R } = await zusatz();
+  const base = { _id: `${W}#5@${SHA1}`, repo: W, number: 5, head: SHA1 };
+  await P.reviewsCol().insertOne({ ...base } as any);
+  let body = '';
+  await R.autoPost(base, { empfehlung: 'comment', text: 'Looks fine.' }, { post: async (_r: any, b: string) => { body = b; return { url: 'u' }; }, prNow: async () => ({ state: 'OPEN', head: SHA1 }) } as any);
+  assert.equal(body.split('\n')[0], '**Automated review (OLAF Workspace) — not yet read by Knut**');
+  assert.match(body, /Looks fine\./);
+  await P.reviewsCol().deleteMany({});
 });
 
 test('Echte Aufzeichnung (15.10., nur lesend): Ableitung ohne Fehler, keine eigenen Aktionen, werkbank sieht nichts, Abschneiden erkannt', async () => {

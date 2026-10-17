@@ -63,9 +63,9 @@ export function PrTickerSchalter() {
         <Schalter label="auch bei Review-Anfrage an mich" an={s.onRequest} disabled={busy || !s.autoReview} testid="schalter-anfrage" onChange={(v) => set({ onRequest: v })} />
       </div>
       <details className="small" style={{ marginBottom: 8 }}>
-        <summary>Deckel und Liste · {s.maxPerDay}/Tag · {s.maxParallel} gleichzeitig · heute {d.heute} gestartet · Auto-Review und Posten nur für {(d.reviewOrgs ?? []).join(', ')} · PR-Tests werden nicht ausgeführt</summary>
+        <summary>Grenzen und Liste · ohne Tagesgrenze · {s.maxParallel} gleichzeitig (weitere warten) · heute {d.heute} gestartet · Auto-Review und Posten nur für {(d.reviewOrgs ?? []).join(', ')} · PR-Tests werden nicht ausgeführt</summary>
         <div className="row" style={{ gap: 10, flexWrap: 'wrap', margin: '6px 0' }}>
-          <label>max. je Tag <input className="input" type="number" min={0} max={50} defaultValue={s.maxPerDay} style={{ width: 60 }} onBlur={(e) => Number(e.target.value) !== s.maxPerDay && set({ maxPerDay: Number(e.target.value) })} data-testid="deckel-tag" /></label>
+          <span className="muted" data-testid="deckel-tag">ohne Tagesgrenze</span>
           <label>gleichzeitig <input className="input" type="number" min={1} max={5} defaultValue={s.maxParallel} style={{ width: 50 }} onBlur={(e) => Number(e.target.value) !== s.maxParallel && set({ maxParallel: Number(e.target.value) })} /></label>
           <label>@review zählt von <input className="input" value={allow} onChange={(e) => setAllow(e.target.value)} style={{ width: 220 }} onBlur={() => allow !== s.allow.join(', ') && set({ allow: allow.split(/[\s,]+/) })} data-testid="allowlist" /></label>
         </div>
