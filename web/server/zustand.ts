@@ -19,6 +19,12 @@ export const statusNeu = (env = process.env) => env.WERKBANK_STATUS_NEU === '1';
 export const autoSchliessenAn = (env = process.env) => env.WERKBANK_AUTO_SCHLIESSEN === '1';
 /** Neue Navigation Heute · Arbeit · Wissen (Plan 213 S3, P4: frühestens 14 Tage nach der Messung live). Vorgabe aus. */
 export const navNeu = (env = process.env) => env.WERKBANK_NAV_NEU === '1';
+/** S8 Aufräumen (frühestens 14 Tage nach S0): „Automatisch fortgesetzt“-Zeile und Loslegen-Kacheln weg. Vorgabe aus. */
+export const aufraeumenAn = (env = process.env) => env.WERKBANK_AUFRAEUMEN === '1';
+/** D6: „Mein Tag“ aus der Leiste (nur wenn die Zählung zeigt, dass auch das Team ihn nicht nutzt); die Adresse bleibt. */
+export const meinTagWeg = (env = process.env) => env.WERKBANK_MEIN_TAG_WEG === '1';
+/** S9 Ein Login (D7, P8: erst nach 14 Tagen Zählung der Direktzugriffe): Direktadresse leitet in den Chat um. Vorgabe aus. */
+export const einLogin = (env = process.env) => env.WERKBANK_EIN_LOGIN === '1';
 /** Höchstens so viele Nachforderungen „Stand nachreichen“ je Person und Tag (P2). */
 export const NACHFORDERN_PRO_TAG = 10;
 /** So lange nach der Nachforderung ohne Antwort → „hängt?“. */

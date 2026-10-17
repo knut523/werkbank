@@ -15,6 +15,7 @@ import { HeuteNeu, InboxSeite } from './pages/HeuteNeu.tsx';
 import { ArbeitUnterchats, ArbeitReviews } from './pages/Arbeit.tsx';
 import { Ablage } from './pages/Ablage.tsx';
 import { useTodayCount } from './beimir.tsx';
+import { einLoginUmleiten, einLoginZiel } from './einlogin.ts';
 
 function useHash() {
   const [h, setH] = useState(() => window.location.hash || '#/');
@@ -124,7 +125,16 @@ export function App() {
     if (!cfg?.user) return;
     for (const b of (cfg.navNeu ? BEREICHE_NEU : BEREICHE)) { const r = b.reiter.find((x) => x.match.test(hash)); if (r && cfg.features?.[r.f] !== false) try { localStorage.setItem(merkKey(b.id), r.href); } catch { /* privat */ } }
   }, [hash, cfg]);
-  const load = () => api<Config>('/api/config').then((c) => { setChatOrigin(c.librechatUrl); setCfg(c); }, setErr);
+  const load = () => api<Config>('/api/config').then((c) => {
+    // S9: Direktadresse → dieselbe Seite im Chat (gezählt als Zugang „direkt“, dann umgeleitet).
+    if (einLoginUmleiten({ an: !!c.einLogin, embedded, search: window.location.search })) {
+      const ziel = einLoginZiel(c.librechatUrl, window.location.hash);
+      Promise.race([api('/api/nutzung/seite', { method: 'POST', body: { seite: window.location.hash || '#/' } }).catch(() => {}), new Promise((r) => setTimeout(r, 800))])
+        .finally(() => window.location.replace(ziel));
+      return;
+    }
+    setChatOrigin(c.librechatUrl); setCfg(c);
+  }, setErr);
   useEffect(() => { load(); }, []);
   const toggleTheme = () => {
     const t = theme === 'dark' ? 'light' : 'dark';
@@ -179,7 +189,9 @@ export function App() {
   // Bereiche mit ihren freigegebenen Reitern; ein Bereich ohne freigegebenen Reiter fehlt ganz.
   const neu = !!cfg.navNeu;
   const START = neu ? HEUTE : UEBERSICHT;
-  const bereiche = (neu ? BEREICHE_NEU : BEREICHE).map((b) => ({ ...b, reiter: b.reiter.filter(vis) })).filter((b) => b.reiter.length > 0);
+  // D6: „Mein Tag“ nur aus der Leiste — die Adresse #/timebox bleibt erreichbar.
+  const inLeiste = (r: Reiter) => vis(r) && !(cfg.meinTagWeg && r.f === 'timebox');
+  const bereiche = (neu ? BEREICHE_NEU : BEREICHE).map((b) => ({ ...b, reiter: b.reiter.filter(inLeiste) })).filter((b) => b.reiter.length > 0);
   const alsNav = (b: (typeof bereiche)[number]): Nav => ({ href: letzterReiter(b), label: b.label, ico: b.ico, match: new RegExp(b.reiter.map((r) => r.match.source).join('|')), f: '' });
   const nav: Nav[] = [START, ...bereiche.filter((b) => b.id !== 'einstellungen').map(alsNav)].filter(vis);
   const more: Nav[] = neu ? bereiche.filter((b) => b.id === 'einstellungen').map(alsNav) : [EINRICHTUNG];
