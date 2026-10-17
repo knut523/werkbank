@@ -588,7 +588,7 @@ function Pakete() {
 }
 
 /** Vorschau im Overlay: Markdown gerendert (Bilder im Bericht zeigen auf das Paket), Text, Bilder inline. */
-function Vorschau({ paket, rel, onClose }: { paket: string; rel: string; onClose: () => void }) {
+export function Vorschau({ paket, rel, onClose }: { paket: string; rel: string; onClose: () => void }) {
   const d = useLoad(() => (isText(rel) ? api(`${paketUrl(paket, rel)}?vorschau=1`) : Promise.resolve(null)), [paket, rel]);
   const data: any = d.data;
   return (
