@@ -5,8 +5,12 @@
 // Der Chief of Staff (Paket 209) setzt hier seine Blöcke „Wer schuldet was“ und „Einwurf“ dazu (eine Startseite, 185 B1).
 import { useState } from 'react';
 import { api, fmtDateTime, chatTarget, type Config } from '../api.ts';
-import { Err, Loading, useLoad, useToast } from '../ui.tsx';
+import { Err, Loading, useConfirm, useLoad, useToast } from '../ui.tsx';
 import { usePushFreigeben } from '../freigabe.tsx';
+
+const ABGEBROCHEN = Symbol('abgebrochen');
+/** Nur Workspace-Adressen (#/…) und http(s) werden verlinkt — nie `javascript:` o. ä. (Pass C). */
+const sicher = (u: string | null | undefined): string | null => (u && (/^https?:\/\//.test(u) || /^#\//.test(u)) ? u : null);
 
 type Eintrag = { id: string; art: string; frage: string; empfehlung: string | null; quelle: { text: string; strand: string | null; url: string | null }; wartetSeit: string | null; blockiert: number; antworten: string[]; daten: any };
 type HeuteDaten = { eintraege: Eintrag[]; zahl: number; zurueckgestellt: number; blockiert: any[]; geaendert: any; at: string; admin: boolean };
@@ -29,9 +33,12 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const [auf, setAuf] = useState(false);
+  const confirm = useConfirm();
   const run = async (fn: () => Promise<unknown>, meldung: string) => {
     setBusy(true); setErr(null);
-    try { await fn(); toast(meldung); onDone(); } catch (x: any) { if (x?.status === 409) onDone(); setErr(x); } finally { setBusy(false); }
+    try { if ((await fn()) !== ABGEBROCHEN) { toast(meldung); onDone(); } }
+    catch (x: any) { if (x?.status === 409) { onDone(); toast(x?.message ?? 'Schon beantwortet oder geändert — neu geladen'); } else setErr(x); }
+    finally { setBusy(false); }
   };
   const antworten = (antwort: string, text = '') => run(() => api(`/api/inbox/${e.id}/antwort`, { body: { antwort, text, weg: 'ui' } }), 'Eingetragen — an der Quelle beantwortet');
   const spaeter = () => run(() => api(`/api/inbox/${e.id}/spaeter`, { method: 'POST', body: {} }), 'Zurückgestellt bis morgen 07:00');
@@ -45,7 +52,7 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
         <div className="tiny mut">
           <span className={`chip${e.blockiert ? ' bad' : ''}`}>{ART[e.art] ?? e.art}</span>{' '}
           {e.blockiert > 0 && <span className="chip bad">blockiert {e.blockiert}</span>}{' '}
-          {e.quelle.url && /^https?:/.test(e.quelle.url) ? <a href={e.quelle.url} target={chatTarget} rel="noreferrer">{e.quelle.text}</a> : e.quelle.url ? <a href={e.quelle.url}>{e.quelle.text}</a> : e.quelle.text}
+          {sicher(e.quelle.url)?.startsWith('http') ? <a href={sicher(e.quelle.url)!} target={chatTarget} rel="noreferrer">{e.quelle.text}</a> : sicher(e.quelle.url) ? <a href={sicher(e.quelle.url)!}>{e.quelle.text}</a> : e.quelle.text}
           {e.wartetSeit ? ` · wartet ${seit(e.wartetSeit)}` : ''}
         </div>
         {e.empfehlung && <div className="tiny">Empfehlung: <b>{e.empfehlung}</b></div>}
@@ -58,7 +65,7 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
         <Err e={err} />
       </div>
       <div className="ub-row h-acts">
-        {e.art === 'push' && <><button className={pri} disabled={busy} onClick={() => run(async () => { if (!(await pushFreigeben(e.daten.strand))) throw Object.assign(new Error('abgebrochen'), { status: 409 }); }, 'Freigegeben — der Hauptchat pusht nach seiner Prüfung')}>Freigeben …</button></>}
+        {e.art === 'push' && e.daten.strand && <button className={pri} disabled={busy} onClick={() => run(async () => ((await pushFreigeben(e.daten.strand)) ? null : ABGEBROCHEN), 'Freigegeben — der Hauptchat pusht nach seiner Prüfung')}>Freigeben …</button>}
         {mehrere && <><button className={pri} disabled={busy} onClick={() => antworten('ja')}>Alle Empfehlungen</button><a className="ub-btn sm" href={`#/leitstand?bericht=${e.daten.strand}`}>Einzeln</a></>}
         {e.art === 'vault' && e.daten.vaultId !== 'entwurf' && <><button className={pri} disabled={busy} onClick={() => vault('ja')}>Ja</button><button className="ub-btn sm" disabled={busy} onClick={() => vault('nein')}>Nein</button></>}
         {['rueckfrage', 'braucht'].includes(e.art) || (e.art === 'entscheidung' && !mehrere) ? <>
@@ -66,8 +73,10 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
           <button className="ub-btn sm" disabled={busy} onClick={() => antworten('nein')}>Nein</button>
           <button className="ub-btn ghost sm" disabled={busy} aria-expanded={anders !== null} onClick={() => setAnders(anders === null ? '' : null)}>Anders …</button>
         </> : null}
-        {e.art === 'altbestand' && <><button className={pri} disabled={busy} onClick={() => antworten('nein')}>Alle verwerfen</button><button className="ub-btn sm" aria-expanded={auf} onClick={() => setAuf(!auf)}>Durchsehen</button></>}
-        {(e.art === 'pflege' || e.art === 'schlange' || (e.art === 'vault' && e.daten.vaultId === 'entwurf')) && e.quelle.url && <a className="ub-btn sm" href={e.quelle.url}>Ansehen</a>}
+        {e.art === 'altbestand' && <><button className={pri} disabled={busy} onClick={async () => {
+          if (await confirm({ title: 'Altbestand verwerfen?', confirmLabel: 'Alle verwerfen', body: <p className="small">{(e.daten.eintraege ?? []).length} Fragen, älter als 14 Tage. Rückfragen werden zurückgezogen, alles andere ist 30 Tage zurückgestellt.</p> })) await antworten('nein');
+        }}>Alle verwerfen</button><button className="ub-btn sm" aria-expanded={auf} onClick={() => setAuf(!auf)}>Durchsehen</button></>}
+        {(e.art === 'pflege' || e.art === 'schlange' || (e.art === 'vault' && e.daten.vaultId === 'entwurf')) && sicher(e.quelle.url) && <a className="ub-btn sm" href={sicher(e.quelle.url)!}>Ansehen</a>}
         {e.antworten.includes('spaeter') && <button className="ub-btn ghost sm" disabled={busy} onClick={spaeter}>Später</button>}
       </div>
     </div>
@@ -104,7 +113,7 @@ export function HeuteNeu({ cfg }: { cfg: Config }) {
         <section aria-labelledby="h-blk"><h2 id="h-blk" className="h-titel">Blockiert / hängt</h2>
           <div className="ub-card">{data.blockiert.length ? <ul className="plain h-liste">{data.blockiert.map((b) => <li key={b.id}>
             <span className={`chip${b.zustand === 'blockiert' ? ' bad' : ' warn'}`}>{ZUSTAND[b.zustand] ?? b.zustand}</span> {b.titel}
-            {b.grund ? <span className="tiny mut"> — {b.grund}</span> : null} {b.chat && <a className="tiny" href={b.chat} target={chatTarget} rel="noreferrer">Chat</a>}</li>)}</ul>
+            {b.grund ? <span className="tiny mut"> — {b.grund}</span> : null} {sicher(b.chat) && <a className="tiny" href={sicher(b.chat)!} target={chatTarget} rel="noreferrer">Chat</a>}</li>)}</ul>
             : <p className="small mut">Nichts blockiert.</p>}</div></section>
         <section aria-labelledby="h-neu"><h2 id="h-neu" className="h-titel">Geändert seit gestern 18:00</h2>
           <div className="ub-card"><ul className="plain h-liste">

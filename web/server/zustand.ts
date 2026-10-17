@@ -73,13 +73,34 @@ export function abweichung(alt: string, neu: Zustand): string | null {
   return a === neu ? null : `${a}→${neu}`;
 }
 
-/** Soll der Stand jetzt nachgefordert werden? Nur neuer Modus, nur Züge, die nach der Umschaltung endeten, einmal je Zug, ≤ 10/Tag. */
-export function nachfordern(o: { zustand: Zustand; neu: boolean; zugEnde: number | null; seit: number; schonFuerZug: number | null; heute: number }): boolean {
+/**
+ * Soll der Stand jetzt nachgefordert werden? Nur neuer Modus, nur Züge, die nach der Umschaltung endeten, ≤ 10/Tag — und je
+ * Unter-Chat nur einmal, bis wieder eine Antwort MIT Marke kam (`offen` = schon nachgefordert, noch keine Marke): sonst erzeugte
+ * jede Nachforderung einen neuen Zug ohne Marke und damit die nächste Nachforderung (Pass C, Schleife).
+ */
+export function nachfordern(o: { zustand: Zustand; neu: boolean; zugEnde: number | null; seit: number; schonFuerZug: number | null; heute: number; offen?: boolean }): boolean {
   if (!o.neu || o.zustand !== 'stand-fehlt' || !o.zugEnde) return false;
   if (o.zugEnde < o.seit) return false;                       // nie rückwirkend
-  if (o.schonFuerZug === o.zugEnde) return false;             // einmal je Zug
+  if (o.schonFuerZug === o.zugEnde || o.offen) return false;  // einmal je Zug und einmal, bis wieder eine Marke kam
   return o.heute < NACHFORDERN_PRO_TAG;
 }
+
+/** Datum in Wien (JJJJ-MM-TT) — nie die Zeitzone des Servers (Pass C). */
+export const wienDatum = (t: number | Date = Date.now()) => new Date(t).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' });
+
+/** Zeitpunkt „Datum hh:00 Wiener Zeit“ als Date, unabhängig von der Zeitzone des Servers (Sommer-/Winterzeit). */
+export function wienUm(datum: string, stunde: number): Date {
+  const utc = Date.UTC(+datum.slice(0, 4), +datum.slice(5, 7) - 1, +datum.slice(8, 10), stunde);
+  for (const versatz of [1, 2, 0, 3]) {   // Wien = UTC+1 (Winter) oder UTC+2 (Sommer)
+    const d = new Date(utc - versatz * 3600_000);
+    if (wienDatum(d) === datum && Number(d.toLocaleString('en-GB', { timeZone: 'Europe/Vienna', hour: '2-digit', hour12: false })) === stunde) return d;
+  }
+  return new Date(utc - 3600_000);
+}
+
+/** Der Kalendertag nach `datum` (JJJJ-MM-TT), ohne Umweg über 24 h (Zeitumstellung). */
+export const naechsterTag = (datum: string) => new Date(Date.UTC(+datum.slice(0, 4), +datum.slice(5, 7) - 1, +datum.slice(8, 10) + 1)).toISOString().slice(0, 10);
+export const vorigerTag = (datum: string) => new Date(Date.UTC(+datum.slice(0, 4), +datum.slice(5, 7) - 1, +datum.slice(8, 10) - 1)).toISOString().slice(0, 10);
 
 export const NACHFORDER_TEXT = 'Bitte reich nur deinen Stand-Abschnitt nach (### Stand mit Erledigt, Offen, Braucht Knut, ETA und der Zeile „Status: fertig | braucht Antwort | blockiert“) — ohne weitere Arbeit. (Workspace, automatisch)';
 
