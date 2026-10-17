@@ -13,6 +13,7 @@ import { Ziele } from './pages/Ziele.tsx';
 import { Uebersicht } from './pages/Uebersicht.tsx';
 import { HeuteNeu, InboxSeite } from './pages/HeuteNeu.tsx';
 import { ArbeitUnterchats, ArbeitReviews } from './pages/Arbeit.tsx';
+import { Ablage } from './pages/Ablage.tsx';
 import { useTodayCount } from './beimir.tsx';
 
 function useHash() {
@@ -76,7 +77,7 @@ const BEREICHE_NEU: { id: string; label: string; ico: string; reiter: Reiter[] }
   ] },
   { id: 'wissen', label: 'Wissen', ico: '📚', reiter: [
     { href: '#/wissen', label: 'Vault', match: /^#\/wissen/, f: 'wissen', wide: true },
-    { href: '#/dateien', label: 'Ablage', match: /^#\/(dateien|ablage)/, f: 'dateien' },
+    { href: '#/ablage', label: 'Ablage', match: /^#\/(dateien|ablage)/, f: 'dateien' },
     { href: '#/roadmap', label: 'Roadmap', match: /^#\/roadmap/, f: 'roadmap', wide: true },
     { href: '#/ziele', label: 'Ziele', match: /^#\/ziele/, f: 'ziele', wide: true },
   ] },
@@ -200,7 +201,7 @@ export function App() {
     : neu && HEUTE.match.test(hash) ? <HeuteNeu cfg={cfg} />
     : neu && /^#\/arbeit\/reviews/.test(hash) ? (user.role === 'ADMIN' ? <ArbeitReviews /> : <Roadmap cfg={cfg} hash="#/roadmap/prs" />)
     : neu && /^#\/arbeit/.test(hash) ? (user.role === 'ADMIN' ? <ArbeitUnterchats cfg={cfg} /> : <Uebersicht cfg={cfg} hash="#/" />)
-    : neu && /^#\/ablage/.test(hash) ? <Dateien cfg={cfg} />
+    : neu && /^#\/ablage/.test(hash) ? <Ablage cfg={cfg} />
     : /^#\/wissen/.test(hash) ? <Wissen cfg={cfg} hash={hash} />
     : /^#\/board/.test(hash) ? <Board cfg={cfg} hash={hash} />
     : /^#\/sprint/.test(hash) ? <Sprint cfg={cfg} hash={hash} />
