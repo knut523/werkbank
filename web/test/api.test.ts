@@ -999,8 +999,8 @@ test('Board-Agent: Nachfrage setzt dieselbe Sitzung fort; forge-Platzhalter; Sit
   assert.equal(run.conv, first.conv, 'gleiche Brücken-Sitzung');
   assert.match(run.output, /Sitzung fortgesetzt/);
   const forge = await anna.req('/api/board/issue/PM-321/forge', { body: { pr: 'olaf-admin#171' } });
-  assert.equal(forge.status, 412);
-  assert.match(forge.j.error, /noch nicht angebunden/);
+  assert.equal(forge.status, 410, 'Plan 213 S6: forge abgeschaltet');
+  assert.match(forge.j.error, /abgeschaltet.*Arbeit › Reviews & PRs/);
   assert.equal((await anna.req('/api/config')).j.forge, false);
   const s = await anna.req('/api/sessions');
   assert.ok(Array.isArray(s.j.sessions));

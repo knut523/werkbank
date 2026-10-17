@@ -30,6 +30,7 @@ import { jiraSites } from './config.ts';
 import { wb } from './db.ts';
 import { execErlaubt, execMinuten, schreibeErgebnis, type ExecErgebnis, type ExecJob } from './reviewexec.ts';
 import { reviewsCol, tickerSettings, tickerAus, reviewErlaubt, type TickerSettings } from './prticker.ts';
+import { vorlauf, basisVon, motorAbschnitt, motorAn } from './reviewmotor.ts';
 
 export const prReviewDir = (env = process.env) => env.WERKBANK_PR_REVIEW_DIR || join(env.HOME || homedir(), 'work', 'knut', 'pr-reviews');
 const REPO_RE = /^[\w.-]{1,100}\/[\w.-]{1,100}$/;
@@ -602,7 +603,15 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
           testsFlag = ex.ausgefuehrt ? true : ex.grund;
         } else testsFlag = 'test execution is switched off', testsText = 'Tests: nicht ausgeführt (Testausführung ist aus) — statisches Deep-Review; schreib im Kommentar „static deep review — test execution is switched off“.';
       }
-      const prompt = reviewPrompt(r, wt, paket, { tiefe, eta, kontext: !!kontext, dm, vorher: dm.delta && vorher ? { head: vorher.head, paket: vorher.paket } : null, verknuepft: v ?? undefined, tests: testsText });
+      // Plan 213 S6: ein Motor — deterministischer Vorlauf (vorlauf.md) und die eine Prüfliste im Auftrag (WERKBANK_REVIEW_MOTOR=0 = ohne).
+      let motor = '';
+      if (motorAn()) {
+        const basis = dm.basis ?? await basisVon(wt).catch(() => null);
+        const vl = basis ? await vorlauf(wt, basis).catch((e: any) => ({ md: `# Vorlauf\n\nvollständig: nein — ${scrub(e?.message ?? e)}` })) : { md: '# Vorlauf\n\nvollständig: nein — keine Basis gefunden.' };
+        writeFileSync(join(dir, 'vorlauf.md'), vl.md + '\n');
+        motor = '\n' + motorAbschnitt(paket);
+      }
+      const prompt = reviewPrompt(r, wt, paket, { tiefe, eta, kontext: !!kontext, dm, vorher: dm.delta && vorher ? { head: vorher.head, paket: vorher.paket } : null, verknuepft: v ?? undefined, tests: testsText }) + motor;
       writeFileSync(join(dir, 'auftrag.md'), prompt + '\n');
       const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}${dm.delta ? ' (Delta)' : ''}`, prompt, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker', tiefe, modell: REVIEW_MODELL, vorrang: true });
       await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt, tiefe, zeilen, eta, basis: dm.basis, delta: dm.delta, vorher: vorher ? vorher._id : null, kontext: !!kontext, note: dm.hinweis.join('; ') || null, retryAt: null } });
