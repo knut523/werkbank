@@ -81,7 +81,7 @@ import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, par
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, rule1Goals, specProposals, autoEligible, type GoalNode } from './goals.ts';
 import { istTiefe, type Tiefe } from './tiefe.ts';
 import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
-import { zaehle, statusNeu, autoSchliessenAn, navNeu, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
+import { zaehle, statusNeu, autoSchliessenAn, navNeu, aufraeumenAn, meinTagWeg, einLogin, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 import { zeile as arbeitZeile, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
 
@@ -395,7 +395,7 @@ on('GET', /^\/api\/config$/, async (req, res) => {
   send(res, 200, {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: false,   // Plan 213 S6: forge abgeschaltet (172 D1/D5)
     jiraSite: cfg.jiraSite, jiraSites: jiraSitesPublic(), project: cfg.jiraProject, vault: cfg.vaultDir,
-    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u), navNeu: navNeu(),
+    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u), navNeu: navNeu(), aufraeumen: aufraeumenAn(), meinTagWeg: meinTagWeg(), einLogin: einLogin(),
   });
 });
 
@@ -1355,7 +1355,8 @@ on('GET', /^\/api\/today$/, async (req, res) => {
   // Automatisch fortgesetzte Stränge (Plan auto-weiter, DoD 6): nur der Zähler aus Mongo, kein Abruf bei der Brücke.
   const cards = await strandCards(u, { detail: true }).catch(() => []);
   const carded = new Set(cards.map((c: any) => c.id));
-  const orchAuto = (await wb().collection('orchestrator_runs').find({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
+  // S8: die Zeile „Automatisch fortgesetzt“ entfällt (Schalter); die Strang-Karte zeigt den Zustand weiter.
+  const orchAuto = aufraeumenAn() ? [] : (await wb().collection('orchestrator_runs').find({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
     .filter((r: any) => !carded.has(String(r._id)))   // keine Doppelung mit der Karte (F5)
     .map((r: any) => ({ id: String(r._id), title: r.title, url: r.url, n: r.autoTotal, stopped: !!r.autoStopped }));
   const g0 = await g0Blocked(u).catch(() => []);   // Nachtbau: von G0 gestoppte Stränge (blocked_g0)
