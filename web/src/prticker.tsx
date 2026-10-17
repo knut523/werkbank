@@ -6,7 +6,8 @@ import { api, chatTarget, fmtDateTime } from './api.ts';
 import { Err, Loading, useLoad } from './ui.tsx';
 
 const KIND: Record<string, string> = { neu: '🆕', stand: '⬆️', zu: '🏁', kommentar: '💬', review: '🔎', anfrage: '🙋', tag: '🏷️' };
-const STATUS_CHIP: Record<string, string> = { wartet: '', startet: '', läuft: '', fertig: 'ok', deckel: 'warn', fehler: 'bad', übersprungen: '' };
+const STATUS_CHIP: Record<string, string> = { wartet: '', startet: '', läuft: '', gegenprüfung: '', abgleich: '', fertig: 'ok', deckel: 'warn', fehler: 'bad', übersprungen: '' };
+const uhr = (d: string) => new Date(d).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit' });
 const EMPF: Record<string, { t: string; c: string }> = { approve: { t: 'approven', c: 'ok' }, 'request-changes': { t: 'Änderungen verlangen', c: 'bad' }, comment: { t: 'nur kommentieren', c: 'warn' } };
 const short = (repo: string) => repo.split('/')[1] ?? repo;
 
@@ -89,11 +90,13 @@ export function PrTickerMeldungen() {
           {d.reviews.map((r: any) => (
             <li key={r.id}>
               <a href={r.url} target="_blank" rel="noreferrer">{short(r.repo)}#{r.number}</a> {r.title}{' '}
-              <span className={`chip ${STATUS_CHIP[r.status] ?? ''}`}>{r.status}</span>
+              <span className={`chip ${STATUS_CHIP[r.status] ?? ''}`} data-testid="review-status">{r.status === 'wartet' && r.retryAt ? `erneut ab ${uhr(r.retryAt)} (Versuch ${r.versuche + 1})` : r.status}</span>
+              {r.tiefe && <> <span className="chip" title={`${r.zeilen ?? '?'} geänderte Zeilen${r.delta ? ` · Delta seit ${r.delta.von}: ${r.delta.zeilen}` : ''}`}>{r.delta ? 'Delta · ' : ''}{r.tiefe}{r.eta ? ` · ~${r.eta} min` : ''}</span></>}
+              {r.gp && <> <span className={`chip ${r.gp.ok ? '' : 'warn'}`} title={r.gp.fehler ?? ''}>{r.gp.ok ? 'Gegenprüfung ✓' : 'ohne Gegenprüfung'}</span></>}
               {r.empfehlung && <> <span className={`chip ${EMPF[r.empfehlung]?.c ?? ''}`}>Empfehlung: {EMPF[r.empfehlung]?.t ?? r.empfehlung}</span></>}
               {r.posted && <> · <a href={r.posted.url ?? r.url} target="_blank" rel="noreferrer">gepostet</a></>}
               {r.strand && <> · <a href={`#/leitstand?review=${r.strand}`}>Review-Ansicht</a></>}
-              {['deckel', 'fehler', 'übersprungen'].includes(r.status) && <> · <button className="btn tiny ghost" onClick={async () => { await api('/api/leitstand/ticker/review', { body: { id: r.id } }); t.reload(); }}>Jetzt reviewen</button></>}
+              {(['deckel', 'fehler', 'übersprungen'].includes(r.status) || (r.status === 'wartet' && r.retryAt)) && <> · <button className="btn tiny ghost" onClick={async () => { await api('/api/leitstand/ticker/review', { body: { id: r.id } }); t.reload(); }}>Jetzt reviewen</button></>}
               {r.note && <span className="tiny muted"> · {r.note}</span>}
             </li>))}
         </ul>

@@ -52,7 +52,8 @@ import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { tickerTick, tickerOverview, setTickerSettings, reviewsCol, reviewErlaubt } from './prticker.ts';
-import { reviewTick, prNowVia, parseKommentar, fussnote } from './prreview.ts';
+import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia } from './prreview.ts';
+import { meliousPassC } from './gegenpruefung.ts';
 import { postReview, schreibenAus, type ReviewEvent } from './githubwrite.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
@@ -1471,7 +1472,9 @@ on('POST', /^\/api\/leitstand\/ticker\/review$/, async (req, res) => {
   const u = await needAdmin(req);
   const b = await body(req);
   if (!reviewErlaubt(String(b.id ?? '').split('#')[0])) throw new HttpError(409, 'Für dieses Repo gibt es kein Auto-Review (WERKBANK_PR_REVIEW_ORGS).');
-  const r = await reviewsCol().updateOne({ _id: String(b.id ?? '') as any, status: { $in: ['deckel', 'fehler', 'übersprungen', 'startet'] } }, { $set: { status: 'wartet', note: `von ${u.name} erneut angestoßen`, ownerId: u.id } });
+  // 17c: auch ein erneut eingereihtes (wartet mit retryAt) sofort; neuer Anlauf ohne alte Gegenprüfung und Versuchszähler.
+  const r = await reviewsCol().updateOne({ _id: String(b.id ?? '') as any, $or: [{ status: { $in: ['deckel', 'fehler', 'übersprungen', 'startet'] } }, { status: 'wartet', retryAt: { $ne: null } }] },
+    { $set: { status: 'wartet', note: `von ${u.name} erneut angestoßen`, ownerId: u.id, retryAt: null, versuche: 0 }, $unset: { gp: '', gpStart: '' } });
   if (!r.modifiedCount) throw new HttpError(409, 'Eintrag nicht gefunden oder läuft schon.');
   send(res, 200, { ok: true });
 });
@@ -1493,7 +1496,7 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/github$/, async (req, res, m) => {
   if (now.head !== pr.head) throw new HttpError(409, `Neuer Stand ${now.head.slice(0, 7)} seit dem Review — erst neu reviewen.`);
   if (event === 'COMMENT' && pr.posted) throw new HttpError(409, 'Der Kommentar ist schon gepostet.');
   if (event !== 'COMMENT' && (pr.postings ?? []).some((x: any) => x.event === event)) throw new HttpError(409, 'Für diesen Stand schon abgeschickt.');
-  const r = await postReview(pr, pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automatisches Review', 'Review'), event).catch((e: any) => { throw new HttpError(502, e.message); });
+  const r = await postReview(pr, pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automated review', 'Review'), event).catch((e: any) => { throw new HttpError(502, e.message); });
   await reviewsCol().updateOne({ _id: pr.id as any }, { $push: { postings: { at: new Date(), url: r.url, event, by: u.name } } as any, ...(event === 'COMMENT' && !pr.posted ? { $set: { posted: { at: new Date(), url: r.url, event, by: u.name } } } : {}) });
   log('pr-review github', { user: u.id, pr: `${pr.repo}#${pr.number}`, event });
   send(res, 200, { ok: true, url: r.url });
@@ -3082,8 +3085,20 @@ async function backgroundJobs() {
       const r = await reviewTick({
         userById: async (id) => { const u = await userById(id); return u && allowed(u.email) && u.role === 'ADMIN' ? u : null; },
         startOrch, strandDoc: (id) => orchRuns().findOne({ _id: id as any }),
-        markStrand: (id, prReview) => orchRuns().updateOne({ _id: id as any }, { $set: { prReview } }),
+        // 17c: Vorgabe-ETA nach Größe, bis der Strang selbst eine meldet.
+        markStrand: (id, prReview, extra) => orchRuns().updateOne({ _id: id as any }, { $set: { prReview, ...(extra?.eta ? { eta: { at: extra.eta, quelle: 'groesse' } } : {}) } }),
         prNow: async (repo, n) => { const t = await githubReadToken(); return t ? prNowVia(t, repo, n) : null; },
+        kontext: async (repo, n) => { const t = await githubReadToken(); return t ? prKontextVia(t, repo, n) : null; },
+        vorhanden: async (repo, nums) => { const t = await githubReadToken(); return t ? vorhandenVia(t, repo, nums) : new Set<number>(); },
+        // Pass C über Melious mit dem Konto des Review-Besitzers; WERKBANK_REVIEW_GEGENPRUEFUNG=off schaltet ab.
+        gegenpruefung: process.env.WERKBANK_REVIEW_GEGENPRUEFUNG === 'off' ? undefined : async (r) => {
+          const u = await userById(r.ownerId);
+          if (!u) return null;
+          const basis = r.delta?.von ?? r.basis;
+          if (!r.worktree || !basis) return { ok: false, text: '', fehler: 'keine Basis für den Diff' };
+          return meliousPassC(u, { wt: r.worktree, basis, zweck: `Review ${r.repo}#${r.number}: ${r.title ?? ''}${r.delta ? ' (nur Änderungen seit dem letzten Review)' : ''}` });
+        },
+        sendStrand: async (r, text) => { const u = await userById(r.ownerId); if (!u) throw new Error('Besitzer nicht gefunden'); return sendOrch(u, r.strand, text, 'leitstand'); },
         post: (r, text, event) => postReview(r, text, event), log,
       });
       if (r.started || r.done) log('pr-review', r);

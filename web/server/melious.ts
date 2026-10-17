@@ -143,6 +143,17 @@ async function chatCompletion(u: User, body: Record<string, unknown>, timeoutMs:
   } catch { return null; }
 }
 
+/** Ein Melious-Aufruf mit Buchung (Auto-Review, Pass C): Text oder null; Energie aus billing_cost bzw. geschätzt. */
+export async function meliousChat(u: User, model: string, prompt: string, maxTokens = CHALLENGE_MAX_TOKENS, timeoutMs = CHALLENGE_TIMEOUT_MS): Promise<{ text: string; energie: number } | null> {
+  const j = await chatCompletion(u, { model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }, timeoutMs);
+  if (!j || j.error) return null;
+  const usage = { input: Number(j.usage?.prompt_tokens) || 0, output: Number(j.usage?.completion_tokens) || 0, cacheRead: Number(j.usage?.prompt_tokens_details?.cached_tokens) || 0, cacheWrite: 0 };
+  usage.input = Math.max(0, usage.input - usage.cacheRead);
+  const booked = await recordMeliousUsage(u, usage, Date.now(), model);
+  const text = String(j.choices?.[0]?.message?.content ?? '').trim();
+  return text ? { text, energie: Number(j.billing_cost?.energy) || r2(booked.energie) } : null;
+}
+
 /**
  * Zahlt Melious gerade mit Energie oder schon mit Guthaben? (Dashboard 15.10.: „Ist deine Energie aufgebraucht, übernimmt dein
  * Guthaben“, 402 erst, wenn auch das leer ist.) Nur über eine Mini-Anfrage im OpenAI-Format erkennbar (`billing_cost.paid_with`,

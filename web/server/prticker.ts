@@ -117,6 +117,8 @@ export interface TickerEvent { _id: string; kind: Kind; repo: string; number: nu
 export interface PrMem { _id: string; head: string; state: string }
 
 export const TAG = /(^|[\s(])@review\b/i;
+/** `@review deep` → Tiefe deep (Knut 17.10.). */
+export const TAG_DEEP = /(^|[\s(])@review\s+deep\b/i;
 const REVIEW_STATE: Record<string, string> = { APPROVED: 'freigegeben', CHANGES_REQUESTED: 'Änderungen verlangt', COMMENTED: 'kommentiert', DISMISSED: 'verworfen' };
 const kurz = (t: string, n = 140) => { const s = String(t ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 export const prKey = (repo: string, n: number) => `${repo}#${n}`;
@@ -227,7 +229,7 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
     if (!reviewErlaubt(e.repo)) { await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: 'kein Auto-Review für dieses Repo' } }); continue; }
     const id = `${prKey(e.repo, e.number)}@${e.head}`;
     try {
-      await reviewsCol().insertOne({ _id: id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, head: e.head, trigger: e.kind, by: e.actor, event: e._id, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date });
+      await reviewsCol().insertOne({ _id: id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, head: e.head, trigger: e.kind, by: e.actor, event: e._id, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date, deep: e.kind === 'tag' && TAG_DEEP.test(e.text ?? '') });
       n++;
     } catch (x: any) {
       if (x?.code !== 11000) throw x;
@@ -253,7 +255,10 @@ export async function tickerOverview(limit = 40) {
     scopes: scopes(),
     reviewOrgs: reviewOrgs(),
     items: items.map(({ seenAt, ...e }: any) => e),
-    reviews: reviews.map((r: any) => ({ id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, trigger: r.trigger, by: r.by, status: r.status, strand: r.strand ?? null, empfehlung: r.empfehlung ?? null, posted: r.posted ?? null, note: r.note ?? null, createdAt: r.createdAt })),
+    reviews: reviews.map((r: any) => ({ id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, trigger: r.trigger, by: r.by, status: r.status, strand: r.strand ?? null, empfehlung: r.empfehlung ?? null, posted: r.posted ?? null, note: r.note ?? null, createdAt: r.createdAt,
+      // 17c: erneut eingereiht (ab wann, wievielter Versuch), Tiefe/Größe/ETA, Delta, Gegenprüfung
+      retryAt: r.status === 'wartet' ? r.retryAt ?? null : null, versuche: r.versuche ?? 0, tiefe: r.tiefe ?? null, zeilen: r.zeilen ?? null, eta: r.eta ?? null, deep: !!r.deep,
+      delta: r.delta ? { von: String(r.delta.von).slice(0, 7), zeilen: r.delta.zeilen } : null, gp: r.gp ? { ok: !!r.gp.ok, fehler: r.gp.fehler ?? null, energie: r.gp.energie ?? null } : null, startedAt: r.startedAt ?? null })),
     heute: reviews.filter((r: any) => r.startedAt && vienna(new Date(r.startedAt)).date === heute).length,
   };
 }
