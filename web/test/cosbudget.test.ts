@@ -95,6 +95,18 @@ test('Tick: nichts ohne Budget; 50 % still; 85 % einmal Meldung; 100 % Pause + R
   await assert.rejects(O.withdrawQuestion(u, qs[0]._id), (e: any) => e.status === 409, 'Budget-Fragen entscheidet nur Knut');
 });
 
+test('„+50 %“ geht vom Budget der Tiefe aus (deep 2× Vorgabe), nicht von der rohen Vorgabe', async () => {
+  process.env.ORCH_BUDGET_TOKENS = '1000';
+  try {
+    await O.runs().insertOne(strang('s-deep', { tiefe: 'deep', autoStopped: { at: new Date(), reason: 'Budget erreicht', cause: 'budget' } }) as any);
+    await O.questions().insertOne({ _id: 'q-deep', userId: u.id, kind: 'budget', title: 'Budget erreicht', context: '', options: [{ label: 'Weiter mit +50 %' }, { label: 'Anhalten' }], strand: { id: 's-deep', title: 'x', url: 'u' }, createdAt: new Date(), status: 'offen', answer: null } as any);
+    await O.answerQuestion(u, 'q-deep', { option: 'Weiter mit +50 %' });
+    assert.equal(((await O.runs().findOne({ _id: 's-deep' as any })) as any).budgetTokens, 3000, '2 000 × 1,5');
+  } finally { delete process.env.ORCH_BUDGET_TOKENS; }
+  assert.equal(B.budgetVon({ tiefe: 'quick' }, { ORCH_BUDGET_TOKENS: '100000' } as any), 33333, 'gerundet');
+  assert.equal(B.budgetVon({ tiefe: null }, { ORCH_BUDGET_TOKENS: '100000' } as any), 100000, 'ohne Tiefe = regular');
+});
+
 test('Lebenszeichen (D2): läuft + 20 min ohne Aktivität = hängt?; weder fertig noch laufend + 2 h = still; Normalfall null', () => {
   const now = Date.parse('2026-10-16T10:00:00Z');
   const vor = (min: number) => new Date(now - min * 60_000);

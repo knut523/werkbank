@@ -21,6 +21,7 @@ import { pruefe, parsePlan, protokolliere, g0Text, g0Optionen, OHNE_PR, vorbauAu
 import { vienna } from './hygiene.ts';
 import { cleanThema, themaOf } from './themen.ts';
 import { meliousSettings, ausserhalbAbo } from './melious.ts';
+import { budgetVon } from './cosbudget.ts';   // zyklisch (cosbudget → orchestrator), nur zur Laufzeit im Rückfrage-Pfad benutzt
 import { tiefeOf, istTiefe, tiefeStart, tiefeText, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, type Tiefe } from './tiefe.ts';
 
 export const ORCH_TAG = 'Orchestrator';
@@ -801,7 +802,7 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
     try {
       if (option.startsWith('Weiter')) {
         const r: any = await runs().findOne({ _id: d.strand.id as any });
-        const alt = Number(r?.budgetTokens) > 0 ? Number(r.budgetTokens) : Number(process.env.ORCH_BUDGET_TOKENS) || 0;
+        const alt = budgetVon(r);   // dasselbe Budget, an dem der Strang angehalten hat (inkl. Faktor der Tiefe)
         await runs().updateOne({ _id: d.strand.id as any }, { $set: { budgetTokens: Math.ceil(alt * 1.5), autoStopped: null, 'budget.stopAt': null } });
         await sendOrch(u, d.strand.id, 'weiter (Budget um 50 % erhöht)'); action = 'fortgesetzt';
       }
