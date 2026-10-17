@@ -56,3 +56,10 @@ test('Plan 213 K4: Inbox-Knöpfe nur aus dem Werkzeug-Ergebnis, gültige Kennung
   assert.equal((viele.match(/:ja\)/g) ?? []).length, 8);
   assert.match(viele, /3 weitere unter Heute › Inbox/);
 });
+
+test('Pass C (K4): Herkunft sichtbar am Knopf, doppelte Kennungen nur einmal', async () => {
+  const { inboxKnoepfe } = await import('../src/tools.ts');
+  const k = inboxKnoepfe(`KNOEPFE ${JSON.stringify([{ id: 'q-1', frage: 'Freigeben?', quelle: 'Unter-Chat „x“' }, { id: 'q-1', frage: 'nochmal', quelle: 'y' }])}`);
+  assert.match(k, /Freigeben\? _\(Unter-Chat „x“\)_/);
+  assert.equal((k.match(/q-1:ja/g) ?? []).length, 1);
+});

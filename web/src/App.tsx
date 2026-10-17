@@ -127,7 +127,7 @@ export function App() {
   }, [hash, cfg]);
   const load = () => api<Config>('/api/config').then((c) => {
     // S9: Direktadresse → dieselbe Seite im Chat (gezählt als Zugang „direkt“, dann umgeleitet).
-    if (einLoginUmleiten({ an: !!c.einLogin, embedded, search: window.location.search })) {
+    if (einLoginUmleiten({ an: !!c.einLogin, embedded, search: window.location.search, librechatUrl: c.librechatUrl ?? '' })) {
       const ziel = einLoginZiel(c.librechatUrl, window.location.hash);
       Promise.race([api('/api/nutzung/seite', { method: 'POST', body: { seite: window.location.hash || '#/' } }).catch(() => {}), new Promise((r) => setTimeout(r, 800))])
         .finally(() => window.location.replace(ziel));

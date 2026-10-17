@@ -9,6 +9,8 @@ export function einLoginZiel(librechatUrl: string, hash: string): string {
 }
 
 /** Umleiten? Nur mit Schalter, nur außerhalb des Chats und ohne Notausgang. */
-export function einLoginUmleiten(o: { an: boolean; embedded: boolean; search: string }): boolean {
+export function einLoginUmleiten(o: { an: boolean; embedded: boolean; search: string; librechatUrl?: string }): boolean {
+  // Ohne absolute Chat-Adresse nie umleiten (Fehlkonfiguration würde sonst auf die eigene Seite zeigen).
+  if (o.librechatUrl !== undefined && !/^https?:\/\/[^/]/.test(o.librechatUrl)) return false;
   return o.an && !o.embedded && !new URLSearchParams(o.search).has('direkt');
 }
