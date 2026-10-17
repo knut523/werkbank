@@ -271,3 +271,69 @@ export async function tickerOverview(limit = 40) {
     heute: reviews.filter((r: any) => r.startedAt && vienna(new Date(r.startedAt)).date === heute).length,
   };
 }
+
+// ---------- Review-Log (Knut 17.10.: „welcher PR, wer hat das Review angefragt, dann Kommentar gepostet“) ----------
+// Nur lesen: je Review eine Zeile aus `pr_reviews` plus Link auf das auslösende `pr_ticker`-Ereignis. Geschrieben wird nur
+// `posted` — automatisch beim Posten, von Knuts Klick in der Review-Ansicht oder von Hand über `orch review-posted`.
+
+export type LogStatus = 'wartet' | 'läuft' | 'fertig' | 'übersprungen' | 'fehler';
+/** Rohzustand → die fünf Stufen der Tabelle (Zwischenschritte zählen als „läuft“, alter Tagesdeckel als „übersprungen“). */
+export function logStatus(s: string): LogStatus {
+  if (s === 'wartet' || s === 'fertig' || s === 'übersprungen' || s === 'fehler') return s;
+  if (s === 'deckel') return 'übersprungen';
+  return 'läuft';
+}
+
+export interface LogFilter { person?: string; repo?: string; status?: string }
+export interface LogZeile {
+  id: string; repo: string; number: number; url: string; title: string; von: string | null; anfrage: string | null; am: string;
+  tiefe: string | null; status: LogStatus; roh: string; grund: string | null; dauerMin: number | null; empfehlung: string | null;
+  gepostet: { url: string | null; wie: 'automatisch' | 'von Hand' | 'Review-Ansicht'; von: string | null; at: string } | null; paket: string | null;
+}
+
+export function logZeile(r: any, anfrage: string | null = null): LogZeile {
+  const p = r.posted;
+  const wie = !p ? null : p.by === 'auto' ? 'automatisch' : p.manuell ? 'von Hand' : 'Review-Ansicht';
+  const ende = r.doneAt ? new Date(r.doneAt).getTime() : null, start = r.startedAt ? new Date(r.startedAt).getTime() : null;
+  return {
+    id: String(r._id), repo: r.repo, number: r.number, url: r.url ?? `https://github.com/${r.repo}/pull/${r.number}`, title: r.title ?? '', von: r.by ?? null, anfrage,
+    am: new Date(r.createdAt ?? 0).toISOString(), tiefe: r.tiefe ?? (r.deep ? 'deep' : null), status: logStatus(String(r.status ?? '')), roh: String(r.status ?? ''),
+    grund: r.note ?? null, dauerMin: ende && start && ende >= start ? Math.round((ende - start) / 60_000) : null, empfehlung: r.empfehlung ?? null,
+    gepostet: p ? { url: p.url ?? null, wie: wie!, von: p.by === 'auto' ? null : p.by ?? null, at: new Date(p.at ?? 0).toISOString() } : null, paket: r.paket ?? null,
+  };
+}
+
+/** Neueste oben; Filter nach Person (GitHub-Login), Repo und Stufe. */
+export async function reviewLog(f: LogFilter = {}, limit = 200): Promise<{ zeilen: LogZeile[]; personen: string[]; repos: string[] }> {
+  const q: any = {};
+  if (f.person) q.by = String(f.person).toLowerCase();
+  if (f.repo) q.repo = String(f.repo);
+  // Stufe in der Abfrage (vor dem Limit — sonst fehlten ältere Zeilen einer Stufe)
+  const ROH: Record<string, string[]> = { wartet: ['wartet'], fertig: ['fertig'], fehler: ['fehler'], übersprungen: ['übersprungen', 'deckel'] };
+  if (f.status) q.status = ROH[String(f.status)] ? { $in: ROH[String(f.status)] } : String(f.status) === 'läuft' ? { $nin: Object.values(ROH).flat() } : '\u0000';
+  const docs: any[] = await reviewsCol().find(q).sort({ createdAt: -1 }).limit(Math.min(Math.max(limit, 1), 500)).toArray();
+  const ev = new Map(((await tickerCol().find({ _id: { $in: docs.map((d) => d.event).filter(Boolean) } }).project({ url: 1 }).toArray()) as any[]).map((e) => [String(e._id), e.url ?? null]));
+  const zeilen = docs.map((d) => logZeile(d, d.event ? ev.get(String(d.event)) ?? null : null));
+  const [personen, repos] = await Promise.all([reviewsCol().distinct('by'), reviewsCol().distinct('repo')]);
+  return { zeilen, personen: (personen as any[]).filter(Boolean).map(String).sort(), repos: (repos as any[]).filter(Boolean).map(String).sort() };
+}
+
+/**
+ * Von Hand gepostet (`orch review-posted <id|repo#n> <url>`): Link am Review vermerken. `repo#n` = das jüngste Review
+ * dieses PRs. Ein schon vermerktes Posten wird nicht überschrieben.
+ */
+export async function vermerkePosted(ref: string, url: string, von: string, now = new Date()): Promise<{ id: string; url: string }> {
+  const m = /^([\w.-]+\/[\w.-]+)#(\d+)(?:@([0-9a-f]{40}))?$/.exec(String(ref).trim());
+  if (!m) throw Object.assign(new Error('Kennung: <owner/repo>#<n> oder <owner/repo>#<n>@<sha>'), { status: 400 });
+  const [, repo, n] = m;
+  const u = String(url).trim();
+  let pfad = '';
+  try { const x = new URL(u); if (x.protocol === 'https:' && x.host === 'github.com' && !x.username && !x.password) pfad = x.pathname; } catch { /* ungültig */ }
+  // Nach dem Normalisieren (`..` aufgelöst) muss der Pfad genau dieser PR sein (Unterseiten wie /files erlaubt).
+  if (!new RegExp(`^/${repo.replace(/[.]/g, '\\.')}/pull/${n}(?:/[\\w-]*)?/?$`, 'i').test(pfad)) throw Object.assign(new Error(`URL muss auf https://github.com/${repo}/pull/${n} zeigen.`), { status: 400 });
+  const doc: any = m[3] ? await reviewsCol().findOne({ _id: ref as any }) : (await reviewsCol().find({ repo, number: Number(n) }).sort({ createdAt: -1 }).limit(1).toArray())[0];
+  if (!doc) throw Object.assign(new Error('Kein Review zu dieser Kennung.'), { status: 404 });
+  const r = await reviewsCol().updateOne({ _id: doc._id, posted: { $in: [null] } }, { $set: { posted: { at: now, url: u, event: 'COMMENT', by: von, manuell: true } } });
+  if (!r.modifiedCount) throw Object.assign(new Error('Für dieses Review ist schon ein Posten vermerkt.'), { status: 409 });
+  return { id: String(doc._id), url: u };
+}

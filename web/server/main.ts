@@ -60,7 +60,7 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
-import { tickerTick, tickerOverview, setTickerSettings, reviewsCol, reviewErlaubt } from './prticker.ts';
+import { tickerTick, tickerOverview, setTickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted } from './prticker.ts';
 import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia } from './prreview.ts';
 import { meliousPassC } from './gegenpruefung.ts';
 import { postReview, statusKommentar, schreibenAus, type ReviewEvent } from './githubwrite.ts';
@@ -1465,6 +1465,12 @@ async function prReviewOf(strand: string) {
     text: k?.text ?? null, posted: r.posted ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus() };
 }
 on('GET', /^\/api\/leitstand\/ticker$/, async (req, res) => { await needAdmin(req); send(res, 200, await tickerOverview()); });
+// Review-Log (Knut 17.10.): je Review eine Zeile, neueste oben; Filter Person/Repo/Status. Nur lesen.
+on('GET', /^\/api\/leitstand\/ticker\/log$/, async (req, res) => {
+  await needAdmin(req);
+  const q = new URL(req.url ?? '/', 'http://x').searchParams;
+  send(res, 200, await reviewLog({ person: q.get('person') || undefined, repo: q.get('repo') || undefined, status: q.get('status') || undefined }));
+});
 on('POST', /^\/api\/leitstand\/ticker\/einstellungen$/, async (req, res) => {
   const u = await needAdmin(req);
   const s = await setTickerSettings(await body(req), { id: u.id, name: u.name });
@@ -2798,6 +2804,18 @@ on('POST', /^\/internal\/orchestrator\/(freigaben|freigabe-pruefen|freigabe-gepu
   const r = await gepusht(u, String(b.id ?? ''), b.pr ? String(b.pr) : null);
   log('freigabe gepusht', { user: u.id, id: r.id, pr: r.pr });
   return send(res, 200, r);
+});
+
+// Review-Log: ein von Hand (außerhalb des Workspace) gepostetes Review vermerken — `orch review-posted <id|repo#n> <url>`.
+on('POST', /^\/internal\/orchestrator\/review-posted$/, async (req, res) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  try {
+    const r = await vermerkePosted(String(b.id ?? ''), String(b.url ?? ''), u.name);
+    log('pr-review von hand gepostet', { user: u.id, id: r.id });
+    return send(res, 200, r);
+  } catch (e: any) { throw new HttpError(e?.status ?? 500, e?.message ?? String(e)); }
 });
 
 on('POST', /^\/internal\/orchestrator\/leitstand\/start$/, async (req, res) => {

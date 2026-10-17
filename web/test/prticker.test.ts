@@ -334,6 +334,55 @@ test('Statuszeile: Texte für Erneut-Einreihen, Fehler, Fertig — englisch, ohn
   assert.match(R.statusZeile({ art: 'done', gepostet: false }), /waits for Knut's check/);
 });
 
+test('Review-Log: je Review eine Zeile, neueste oben, Anfrage-Link, Tiefe, Status mit Grund, Dauer, gepostet (automatisch/Review-Ansicht/von Hand), Filter', async () => {
+  const { P } = await zusatz();
+  await P.reviewsCol().deleteMany({});
+  const t = (min: number) => new Date(Date.UTC(2026, 9, 17, 10, min));
+  await P.tickerCol().updateOne({ _id: 'tag:IC_log1' as any }, { $set: { kind: 'tag', url: 'https://github.com/WirStrom1/olaf-admin/pull/10#issuecomment-1' } }, { upsert: true });
+  await P.reviewsCol().insertMany([
+    { _id: `${W}#10@${SHA1}`, repo: W, number: 10, title: 'Zehn', url: `https://github.com/${W}/pull/10`, head: SHA1, by: 'bizarrochris', event: 'tag:IC_log1', status: 'fertig', tiefe: 'quick', createdAt: t(0), startedAt: t(1), doneAt: t(15), empfehlung: 'comment', paket: '300-review-olaf-admin-10', posted: { at: t(16), url: 'https://github.com/x#r1', by: 'auto' } },
+    { _id: `${W}#11@${SHA1}`, repo: W, number: 11, title: 'Elf', head: SHA1, by: 'knut523', status: 'gegenprüfung', tiefe: 'regular', createdAt: t(5), startedAt: t(6) },
+    { _id: `WirStrom1/olaf-docs#12@${SHA1}`, repo: 'WirStrom1/olaf-docs', number: 12, head: SHA1, by: 'bizarrochris', status: 'übersprungen', note: 'PR gemergt', deep: true, createdAt: t(10) },
+    { _id: `${W}#13@${SHA1}`, repo: W, number: 13, head: SHA1, by: 'knut523', status: 'fertig', createdAt: t(2), empfehlung: 'approve', posted: { at: t(20), url: 'https://github.com/x#r2', by: 'Knut Peters' } },
+  ] as any[]);
+  const alle = await P.reviewLog();
+  assert.deepEqual(alle.zeilen.map((z) => z.number), [12, 11, 13, 10], 'neueste oben');
+  const z10 = alle.zeilen.find((z) => z.number === 10)!;
+  assert.equal(z10.anfrage, 'https://github.com/WirStrom1/olaf-admin/pull/10#issuecomment-1'); assert.equal(z10.von, 'bizarrochris');
+  assert.equal(z10.dauerMin, 14); assert.equal(z10.tiefe, 'quick'); assert.equal(z10.gepostet?.wie, 'automatisch'); assert.equal(z10.paket, '300-review-olaf-admin-10');
+  assert.equal(alle.zeilen.find((z) => z.number === 11)!.status, 'läuft', 'Gegenprüfung zählt als läuft');
+  const z12 = alle.zeilen.find((z) => z.number === 12)!;
+  assert.equal(z12.status, 'übersprungen'); assert.equal(z12.grund, 'PR gemergt'); assert.equal(z12.tiefe, 'deep'); assert.equal(z12.gepostet, null);
+  assert.equal(alle.zeilen.find((z) => z.number === 13)!.gepostet?.wie, 'Review-Ansicht');
+  assert.deepEqual(alle.personen, ['bizarrochris', 'knut523']); assert.deepEqual(alle.repos, ['WirStrom1/olaf-admin', 'WirStrom1/olaf-docs']);
+  assert.deepEqual((await P.reviewLog({ person: 'Bizarrochris' })).zeilen.map((z) => z.number), [12, 10]);
+  assert.deepEqual((await P.reviewLog({ repo: 'WirStrom1/olaf-docs' })).zeilen.map((z) => z.number), [12]);
+  assert.deepEqual((await P.reviewLog({ status: 'fertig' })).zeilen.map((z) => z.number), [13, 10]);
+  // von Hand gepostet (orch review-posted): ohne @sha das jüngste Review des PRs; vorhandenes Posten bleibt
+  await assert.rejects(P.vermerkePosted(`${W}#11`, 'https://evil.example/x', 'Knut'), (e: any) => e.status === 400);
+  await assert.rejects(P.vermerkePosted(`${W}#11`, `https://github.com/${W}/pull/12#x`, 'Knut'), (e: any) => e.status === 400, 'anderer PR');
+  const v = await P.vermerkePosted(`${W}#11`, `https://github.com/${W}/pull/11#pullrequestreview-9`, 'Knut Peters');
+  assert.equal(v.id, `${W}#11@${SHA1}`);
+  const z11 = (await P.reviewLog()).zeilen.find((z) => z.number === 11)!;
+  assert.deepEqual([z11.gepostet?.wie, z11.gepostet?.url, z11.gepostet?.von], ['von Hand', `https://github.com/${W}/pull/11#pullrequestreview-9`, 'Knut Peters']);
+  await assert.rejects(P.vermerkePosted(`${W}#10@${SHA1}`, `https://github.com/${W}/pull/10`, 'Knut'), (e: any) => e.status === 409, 'automatisch gepostet bleibt');
+  await assert.rejects(P.vermerkePosted(v.id, `https://github.com/${W}/pull/11`, 'Knut'), (e: any) => e.status === 409, 'von Hand vermerkt bleibt');
+  await assert.rejects(P.vermerkePosted(`${W}#99`, `https://github.com/${W}/pull/99`, 'Knut'), (e: any) => e.status === 404);
+  await assert.rejects(P.vermerkePosted(`${W}#11@${SHA2}`, `https://github.com/${W}/pull/11`, 'Knut'), (e: any) => e.status === 404, 'falscher Stand');
+  await assert.rejects(P.vermerkePosted(`${W}#12`, `https://github.com/${W}/pull/12/../../../other/repo/pull/9`, 'Knut'), (e: any) => e.status === 400, 'Punkt-Segmente');
+  // ohne @sha: das jüngste Review des PRs
+  await P.reviewsCol().insertMany([
+    { _id: `${W}#14@${SHA1}`, repo: W, number: 14, head: SHA1, status: 'fertig', createdAt: t(1) },
+    { _id: `${W}#14@${SHA2}`, repo: W, number: 14, head: SHA2, status: 'fertig', createdAt: t(30) },
+  ] as any[]);
+  assert.equal((await P.vermerkePosted(`${W}#14`, `https://github.com/${W}/pull/14`, 'Knut')).id, `${W}#14@${SHA2}`);
+  // Stufen-Filter vor dem Limit
+  assert.deepEqual((await P.reviewLog({ status: 'übersprungen' }, 1)).zeilen.map((z) => z.number), [12]);
+  assert.deepEqual((await P.reviewLog({ status: 'läuft' })).zeilen.map((z) => z.number), [11]);
+  await P.reviewsCol().deleteMany({});
+  await P.tickerCol().deleteOne({ _id: 'tag:IC_log1' as any });
+});
+
 test('Kennzeichnung: automatisch gepostetes Ergebnis beginnt mit „Automated review (OLAF Workspace) — not yet read by Knut“', async () => {
   const { P, R } = await zusatz();
   const base = { _id: `${W}#5@${SHA1}`, repo: W, number: 5, head: SHA1 };

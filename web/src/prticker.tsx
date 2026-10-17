@@ -117,6 +117,54 @@ export function PrTickerMeldungen() {
   );
 }
 
+const LOG_CHIP: Record<string, string> = { wartet: '', läuft: '', fertig: 'ok', übersprungen: '', fehler: 'bad' };
+const tag = (d: string) => new Date(d).toLocaleString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+/**
+ * Review-Log (Knut 17.10.): je Review eine Zeile — PR, angefragt von/am, Tiefe, Status mit Grund, Dauer, Empfehlung, gepostet,
+ * Paket. Neueste oben, Filter nach Person/Repo/Status. Nur lesen. Eigene Komponente, damit sie mit dem Zielbild (Paket 213)
+ * nach „Arbeit › Reviews & PRs“ umziehen kann.
+ */
+export function ReviewLog() {
+  const [f, setF] = useState({ person: '', repo: '', status: '' });
+  const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
+  const l = useLoad(() => api(`/api/leitstand/ticker/log${qs ? `?${qs}` : ''}`), [qs]);
+  const d: any = l.data;
+  const wahl = (k: 'person' | 'repo' | 'status', opts: string[], leer: string) => (
+    <select className="input small" value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} data-testid={`log-filter-${k}`}>
+      <option value="">{leer}</option>{opts.map((o) => <option key={o} value={o}>{k === 'repo' ? short(o) : o}</option>)}
+    </select>);
+  return (
+    <section className="card" data-testid="review-log" style={{ marginBottom: 14 }}>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+        <h2 style={{ margin: 0 }}>Review-Log</h2>
+        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+          {wahl('person', d?.personen ?? [], 'alle Personen')}{wahl('repo', d?.repos ?? [], 'alle Repos')}
+          {wahl('status', ['wartet', 'läuft', 'fertig', 'übersprungen', 'fehler'], 'jeder Status')}
+        </div>
+      </div>
+      {!d ? (l.error ? <Err e={l.error} /> : <Loading />) : d.zeilen.length === 0 ? <p className="small muted">Keine Reviews{qs ? ' für diesen Filter' : ''}.</p> :
+        <div style={{ overflowX: 'auto' }}>
+          <table className="small" data-testid="review-log-tabelle">
+            <thead><tr><th>PR</th><th>angefragt</th><th>Tiefe</th><th>Status</th><th>Dauer</th><th>Empfehlung</th><th>gepostet</th><th>Paket</th></tr></thead>
+            <tbody>{d.zeilen.map((z: any) => (
+              <tr key={z.id} data-testid="review-log-zeile">
+                <td><a href={z.url} target="_blank" rel="noreferrer" className="mono">{short(z.repo)}#{z.number}</a><div className="tiny muted">{z.title}</div></td>
+                <td>{z.anfrage ? <a href={z.anfrage} target="_blank" rel="noreferrer">{z.von ?? '?'}</a> : (z.von ?? '–')}<div className="tiny muted">{tag(z.am)}</div></td>
+                <td>{z.tiefe ?? '–'}</td>
+                <td><span className={`chip ${LOG_CHIP[z.status] ?? ''}`}>{z.status}</span>{z.grund && <div className="tiny muted">{z.grund}</div>}</td>
+                <td>{z.dauerMin != null ? `${z.dauerMin} min` : '–'}</td>
+                <td>{z.empfehlung ? <span className={`chip ${EMPF[z.empfehlung]?.c ?? ''}`}>{EMPF[z.empfehlung]?.t ?? z.empfehlung}</span> : '–'}</td>
+                <td data-testid="log-gepostet">{z.gepostet ? <><a href={z.gepostet.url ?? z.url} target="_blank" rel="noreferrer">ja</a> <span className="tiny muted">({z.gepostet.wie}{z.gepostet.von ? `, ${z.gepostet.von}` : ''})</span></> : 'nein'}</td>
+                <td>{z.paket ? <a href={`api/files/agenten/${encodeURIComponent(z.paket)}/kommentar.md`} target="_blank" rel="noreferrer">{z.paket}</a> : '–'}</td>
+              </tr>))}
+            </tbody>
+          </table>
+        </div>}
+    </section>
+  );
+}
+
 /** Abschnitt in der Review-Ansicht eines Auto-Review-Strangs. */
 export function PrReviewAbschnitt({ id, pr, onDone }: { id: string; pr: any; onDone: () => void }) {
   const [busy, setBusy] = useState('');

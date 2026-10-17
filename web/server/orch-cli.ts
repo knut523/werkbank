@@ -24,6 +24,8 @@
 //   orch freigaben [--alle] [--json]   Knuts Freigaben zum Push (Review-Ansicht im OLAF Workspace); anlegen nur dort
 //   orch freigabe-pruefen <repo-ordner> <sha>   Exit 0 nur bei aktiver Freigabe dieses Stands (oder desselben Patches nach Rebase);
 //     der pre-push-Hook templates/git-hooks/pre-push ruft das auf
+//   orch review-posted <owner/repo#n[@sha]> <github-url>   PR-Review von Hand gepostet → im Review-Log vermerken
+//     (ohne @sha das jüngste Review dieses PRs; ein schon vermerktes Posten bleibt)
 //   orch freigabe-gepusht <freigabe-id> [--pr URL]   nach dem Push: Freigabe als gepusht markieren (nicht mehr zurückziehbar)
 //   orch ask --title T --context TEXT --recommend TEXT [--option "Label :: Folge"]… [--strand <id>] [--link URL] [--plan DATEI]
 //     [--key <slug>#<id>] [--quelle drift]   Schlüssel offen/beantwortet → Exit 3 (keine zweite Frage); Tageskappe → Exit 4
@@ -208,6 +210,12 @@ async function main() {
       if (j.ok) { console.log(`ok: ${j.grund}`); return; }
       process.stderr.write(`orch: NICHT freigegeben — ${j.grund}\n`);
       process.exit(2);
+    }
+    case 'review-posted': {
+      if (!pos[0] || !pos[1]) die('review-posted <owner/repo#n[@sha]> <github-url>');
+      const j = await call('review-posted', { id: pos[0], url: pos[1] });
+      console.log(`von Hand gepostet vermerkt: ${j.id} ${j.url}`);
+      return;
     }
     case 'freigabe-gepusht': {
       if (!pos[0]) die('freigabe-gepusht <freigabe-id> [--pr URL]');

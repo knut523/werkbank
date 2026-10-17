@@ -1830,3 +1830,26 @@ test('CoS Inbox, Abschluss, Woche, Rückstau: alle Entscheide statt sieben, Nach
     await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
   }
 });
+
+test('Review-Log (17c): Tabelle neueste oben, Filter über die Adresse; nur Admin', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'ADMIN' } });
+  await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $set: { role: 'ADMIN' } });
+  const R = mongo.db(DB).collection('pr_reviews');
+  try {
+    await R.insertMany([
+      { _id: 'WirStrom1/a#1@' + 'a'.repeat(40), repo: 'WirStrom1/a', number: 1, head: 'a'.repeat(40), by: 'bizarrochris', status: 'fertig', createdAt: new Date(Date.now() - 60_000), posted: { at: new Date(), url: 'https://github.com/WirStrom1/a/pull/1#r', by: 'auto' } },
+      { _id: 'WirStrom1/b#2@' + 'a'.repeat(40), repo: 'WirStrom1/b', number: 2, head: 'a'.repeat(40), by: 'knut523', status: 'wartet', createdAt: new Date() },
+    ] as any[]);
+    const r = await anna.req('/api/leitstand/ticker/log');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.j.zeilen.map((z: any) => z.number), [2, 1]);
+    assert.equal(r.j.zeilen[1].gepostet.wie, 'automatisch');
+    assert.deepEqual((await anna.req('/api/leitstand/ticker/log?person=bizarrochris&status=fertig')).j.zeilen.map((z: any) => z.number), [1]);
+    assert.equal((await bernd.req('/api/leitstand/ticker/log')).status, 403);
+  } finally {
+    await R.deleteMany({});
+    await mongo.db(DB).collection('sessions').updateMany({ email: users.a.email }, { $set: { role: 'USER' } });
+    await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
+  }
+});
