@@ -2,7 +2,7 @@
 // Verbindung weg, Zeitdeckel, Aufrücken nach dem Ende eines Zugs.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { reihe, position, warte, wecke, inSchlange, laenge, _leeren, type Platz } from '../src/schlange.ts';
+import { reihe, position, warte, wecke, inSchlange, laenge, angemeldet, maxWarteMs, _leeren, type Platz } from '../src/schlange.ts';
 
 beforeEach(() => _leeren());
 
@@ -33,7 +33,7 @@ test('Fünf Starts bei Grenze 3: zwei warten (Platz 1 und 2), keiner schlägt fe
   assert.deepEqual(inSchlange('y')?.pos, 2);
   laufend = 2; wecke();
   assert.equal(await x, 'start');
-  laufend = 3;   // x läuft jetzt
+  laufend = 3; angemeldet();   // x läuft jetzt (sessions.ts meldet das gleich nach dem Eintrag)
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(inSchlange('y')?.pos, 1, 'y ist aufgerückt');
   assert.deepEqual(gemeldet.y, [2, 1]);
@@ -52,7 +52,7 @@ test('Vorrang (Review) überholt, Verbindung weg verlässt die Schlange, Zeitdec
   assert.equal(inSchlange('r')?.pos, 1);
   frei = true; wecke();
   assert.equal(await review, 'start');
-  frei = false; zu = true; wecke();
+  frei = false; zu = true; angemeldet();
   assert.equal(await normal, 'zu');
   assert.equal(laenge(), 0);
   // Zeitdeckel: 1 Minute Mindestwert, simuliert über eine eigene Uhr.
@@ -60,5 +60,33 @@ test('Vorrang (Review) überholt, Verbindung weg verlässt die Schlange, Zeitdec
   const alt = process.env.BRIDGE_QUEUE_MAX_MIN; process.env.BRIDGE_QUEUE_MAX_MIN = '1';
   const z = warte({ key: 'z', userId: 'u', vorrang: false }, { frei: () => false, geschlossen: () => false, melde: () => { t += 61_000; }, now: () => t, takt: 5 });
   assert.equal(await z, 'zeit');
+  if (alt === undefined) delete process.env.BRIDGE_QUEUE_MAX_MIN; else process.env.BRIDGE_QUEUE_MAX_MIN = alt;
+});
+
+test('Pass C: zwei Wartende, ein freier Platz, im selben Takt geweckt — der zweite startet erst nach angemeldet()', async () => {
+  let laufend = 3;
+  const frei = () => laufend < 3;
+  const a = warte({ key: 'a', userId: 'u', vorrang: false }, { frei, geschlossen: () => false, melde: () => {}, takt: 1_000 });
+  await new Promise((r) => setTimeout(r, 2));
+  const b = warte({ key: 'b', userId: 'u', vorrang: false }, { frei, geschlossen: () => false, melde: () => {}, takt: 1_000 });
+  await new Promise((r) => setTimeout(r, 2));
+  laufend = 2; wecke();   // ein Platz frei, beide wachen im selben Takt auf
+  assert.equal(await a, 'start');
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(inSchlange('b')?.pos, 1, 'b wartet weiter, obwohl frei() noch „ja“ sagt (a ist noch nicht eingetragen)');
+  laufend = 3; angemeldet();   // a ist jetzt eingetragen → kein Platz mehr
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(inSchlange('b')?.pos, 1);
+  laufend = 2; wecke();
+  assert.equal(await b, 'start');
+  angemeldet();
+});
+
+test('Pass C: ungültige Wartezeit fällt auf 45 min zurück (nie ewig warten)', () => {
+  const alt = process.env.BRIDGE_QUEUE_MAX_MIN;
+  process.env.BRIDGE_QUEUE_MAX_MIN = 'vierzig';
+  assert.equal(maxWarteMs(), 45 * 60_000);
+  process.env.BRIDGE_QUEUE_MAX_MIN = '0.5';
+  assert.equal(maxWarteMs(), 60_000);
   if (alt === undefined) delete process.env.BRIDGE_QUEUE_MAX_MIN; else process.env.BRIDGE_QUEUE_MAX_MIN = alt;
 });

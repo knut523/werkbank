@@ -59,8 +59,10 @@ EOT
 drain() {
   local max=${WB_DRAIN_S:-600} t=0 n
   [ "$max" -gt 0 ] || return 0
+  local port; port=$(load_env >/dev/null 2>&1; echo "${BRIDGE_PORT:-3090}")
   while [ "$t" -lt "$max" ]; do
-    n=$(curl -s --max-time 3 "http://127.0.0.1:${BRIDGE_PORT:-3090}/health" | sed -n 's/.*"laufend":\([0-9]*\).*/\1/p')
+    # Brücke nicht erreichbar (n leer) = nichts zu unterbrechen. Gezählt sind alle laufenden Züge (auch Hauptchat, Worker).
+    n=$(curl -s --max-time 3 "http://127.0.0.1:$port/health" | sed -n 's/.*"drainLaufend":\([0-9]*\).*/\1/p')
     [ -z "$n" ] || [ "$n" = 0 ] && return 0
     [ $((t % 60)) = 0 ] && echo "  … warte auf $n laufende Züge (höchstens $((max - t)) s, WB_DRAIN_S=0 überspringt)"
     sleep 10; t=$((t + 10))

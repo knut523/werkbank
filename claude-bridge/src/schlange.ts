@@ -24,7 +24,7 @@ export function position(q: readonly Platz[], key: string): number {
 }
 
 export const schlangeAn = () => process.env.BRIDGE_QUEUE !== '0';
-export const maxWarteMs = () => Math.max(60_000, Number(process.env.BRIDGE_QUEUE_MAX_MIN || 45) * 60_000);
+export const maxWarteMs = () => { const m = Number(process.env.BRIDGE_QUEUE_MAX_MIN || 45); return Number.isFinite(m) ? Math.max(60_000, m * 60_000) : 45 * 60_000; };
 
 export function inSchlange(key: string): { pos: number; since: number } | null {
   const p = schlange.find((x) => x.key === key);
@@ -68,8 +68,16 @@ export async function warte(p: Omit<Platz, 'since'>, o: { frei: () => boolean; g
     if (i >= 0) schlange.splice(i, 1);
     // Die Nächsten rücken auf. Nach einem Start erst im nächsten Takt: der gestartete Zug muss zuerst als laufend
     // eingetragen sein, sonst hält der Nächste den Platz noch für frei und die Grenze wird überschritten.
-    if (gestartet) setTimeout(() => { startSperre = false; wecke(); }, 0); else wecke();
+    // Gelöst wird die Sperre von angemeldet() (gleich nach dem Eintrag als laufend); die Uhr ist nur der Rückfall.
+    if (gestartet) { const t = setTimeout(angemeldet, 2_000); t.unref?.(); } else wecke();
   }
+}
+
+/** Der gestartete Zug ist als laufend eingetragen: Sperre lösen, die Nächsten prüfen erneut. */
+export function angemeldet(): void {
+  if (!startSperre) return;
+  startSperre = false;
+  wecke();
 }
 
 /** Nur für Tests. */

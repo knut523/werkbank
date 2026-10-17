@@ -1491,7 +1491,6 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const u = await needAdmin(req);
   const d = await reviewStrand(u, m[1]);
   const b = await body(req);
-  antwortGezaehlt('entscheidung', 'ui');
   // Plan 184, Pass C (Teil B): zwei schnelle Antworten auf denselben Bericht nie gleichzeitig lesen-prüfen-schreiben.
   const sperre = String(d._id);
   if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — Seite neu laden und noch einmal.');
@@ -1531,6 +1530,7 @@ async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
     await sendOrch(u, String(d._id), msg, 'hand');
     await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten, ids } } });
     log('review entscheidungen (an Strang)', { user: u.id, id: d._id, n: antworten.length });
+    antwortGezaehlt('entscheidung', 'ui');
     return send(res, 200, { ok: true, gesendet: antworten.length, weiter: true, offen: null, hauptchat: false });
   }
   // Eine Wahrheit: die Antworten stehen im Bericht („- Knut: …“). Der Server trägt sie ein (Pfad nur unter den Review-Paketen).
@@ -1560,6 +1560,7 @@ async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
   if (!fortsetzen && !offen.length) hauptchat = await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
   await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten, ids }, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
   log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length, arbeit: arbeit.length, offen: offen.length });
+  antwortGezaehlt('entscheidung', 'ui');
   send(res, 200, { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat });
 }
 // Teil C (H5): tote Vorschau aus dem Bericht-Kopf → kurze Nachricht an den Unter-Chat (nur ein bekannter, als tot geprüfter Link).
@@ -1649,10 +1650,10 @@ on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (r
   const u = await needAdmin(req);
   const b = await body(req);
   const d = await strandForReview(u, m[1], b.seen, await strandStates(u).catch(() => null));
-  antwortGezaehlt(m[2] === 'passt' ? 'abhaken' : String(b.kind ?? 'braucht'), 'ui');
   if (m[2] === 'passt') {
     await reviewOrch(u, m[1], String(b.note ?? 'Passt (Heute)'), 'knut', expectOf(d));
     log('strang geprüft', { user: u.id, id: m[1] });
+    antwortGezaehlt('abhaken', 'ui');
     return send(res, 200, { ok: true });
   }
   if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
@@ -1661,6 +1662,7 @@ on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (r
   if ((b.kind !== 'nacharbeit' && b.kind !== 'antwort') || !text) throw new HttpError(400, b.kind === 'antwort' ? 'Schreib kurz deine Antwort.' : 'Schreib kurz, was nachzuarbeiten ist.');
   await sendOrch(u, m[1], replyText(b.kind, text));
   log(b.kind === 'antwort' ? 'strang antwort' : 'strang nacharbeit', { user: u.id, id: m[1] });
+  antwortGezaehlt(b.kind === 'antwort' ? 'braucht' : 'nacharbeit', 'ui');
   send(res, 200, { ok: true, url: d.url });
 });
 
