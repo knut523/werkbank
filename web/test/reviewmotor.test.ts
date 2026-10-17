@@ -59,3 +59,19 @@ test('Vorlauf im echten Repo: Regeln wörtlich, Lockfile ausgenommen, unerreichb
   const kaputt = await vorlauf(r, 'gibtsnicht');
   assert.equal(kaputt.vollstaendig, false); assert.match(kaputt.md, /vollständig: nein/);
 });
+
+test('Pass C: Regeln aus dem Git-Objekt (Symlink zeigt nur den Zielpfad), Geheimnisse gekürzt', async () => {
+  const r = mkdtempSync(join(tmpdir(), 'motor-link-'));
+  const git = (...a: string[]) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...a], { cwd: r, encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  writeFileSync(join(r, 'x.txt'), '1'); git('add', '-A'); git('commit', '-qm', 'b');
+  const geheim = join(tmpdir(), `motor-geheim-${Date.now()}.txt`);
+  writeFileSync(geheim, 'GEHEIMER-INHALT-DES-HOSTS');
+  execFileSync('ln', ['-s', geheim, join(r, 'AGENTS.md')]);
+  writeFileSync(join(r, 'y.ts'), 'const k = "ghp_abcdefghijklmnopqrstuvwxyz0123";\n');
+  git('add', '-A'); git('commit', '-qm', 'pr');
+  const v = await vorlauf(r, 'HEAD~1');
+  assert.ok(!v.md.includes('GEHEIMER-INHALT'), 'nie dem Symlink folgen');
+  assert.ok(!v.md.includes('ghp_abcdefghijklmnopqrstuvwxyz0123'), 'Geheimnis nicht im Klartext');
+  assert.match(v.md, /ghp_…23 \(gekürzt\)/);
+});
