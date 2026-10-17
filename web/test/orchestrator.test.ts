@@ -40,6 +40,10 @@ test('Status: Reihenfolge Startfehler → läuft → Neustart → unterwegs → 
   assert.equal(orchStatus(run, turn('ok'), ai('Status: blockiert')).status, 'failed');
   assert.match(orchStatus(run, turn('ok'), ai('ohne Marke')).reason, /ohne Status-Marke/);
   assert.equal(orchStatus(run, turn('ok', T0 + 60_000), { fromUser: true, text: 'x', error: false, at: T0 }, T0 + 70_000).status, 'running', 'Antwort wird gerade gespeichert');
+
+  // Plan 213 S1a: in der Schlange der Brücke → läuft (kein Fehlschlag, kein „abgebrochen“), mit Platz und Wartezeit.
+  const q = orchStatus(run, { running: false, interrupted: false, queued: { pos: 2, since: T0 }, turn: { start: T0 + 1000, end: null, outcome: null } }, null, T0 + 5 * 60_000);
+  assert.equal(q.status, 'running'); assert.match(q.reason, /in der Schlange \(Platz 2, seit 5 min\)/);
 });
 
 test('Marke, Nachrichtentext, Auszug, Auftrag', () => {

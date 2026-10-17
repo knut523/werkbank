@@ -181,7 +181,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       mkdirSync(join(reviewDir(), paket), { recursive: true });
       const prompt = reviewPrompt(r, wt, paket);
       writeFileSync(join(reviewDir(), paket, 'auftrag.md'), prompt + '\n');
-      const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}`, prompt, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker' });
+      const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}`, prompt, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker', vorrang: true });
       await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt } });
       await deps.markStrand?.(st.id, { repo: r.repo, number: r.number, paket });
       deps.log?.('pr-review gestartet', { pr: `${r.repo}#${r.number}`, strand: st.id });

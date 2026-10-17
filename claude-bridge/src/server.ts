@@ -359,7 +359,7 @@ const server = createServer(async (req, res) => {
       // Tiefe (Plan 205): nur Stränge, nur beim Start; unbekannt → 400.
       if (kind === 'strand' && b.tiefe != null && !TIEFEN.includes(b.tiefe)) return json(res, 400, { error: 'Tiefe: quick, regular oder deep.' });
       const tiefe = kind === 'strand' ? b.tiefe as Tiefe | undefined : undefined;
-      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil, tiefe }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
+      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil, tiefe, vorrang: b.vorrang === true }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
       log(kind === 'leitstand' ? 'leitstand angemeldet' : 'strang angemeldet', { user: userId, conv });
       return json(res, 200, { ok: true, dir: real, mode: autoFor({ email }) });
     }

@@ -19,6 +19,7 @@ import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
+import { warte, wecke, inSchlange, schlangeAn, laenge } from './schlange.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 
 export interface Sink {
@@ -214,7 +215,7 @@ const LESER_TOOLS = ['Read', 'Grep', 'Glob'];
 const BAUER_MCP = ['vault-search', 'werkbank'];
 const LESER_MCP = ['vault-search', 'werkbank'];   // Suche im Vault (Lesen); review_ready / hauptchat_melden für Stränge
 export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte auf Deutsch, knapp und in Markdown. Du kannst nur lesen (Read, Grep, Glob) — schreibe und ändere nichts. Belege jede Aussage mit Datei:Zeile. Was du nicht findest, sagst du offen, statt zu raten.';
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string };
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string };
   // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
   // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
   auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string };
@@ -423,7 +424,9 @@ export function reapIdle(now = Date.now()): number {
 setInterval(() => { try { reapIdle(); } catch (e: any) { log('leerlauf-prüfung fehlgeschlagen', { error: String(e?.message ?? e).slice(0, 120) }); } }, 60_000).unref();
 
 export function stats() {
-  return { live: lives.size, pending: [...lives.values()].filter(l => l.pending).length, sessions: Object.keys(sessionMap).length };
+  const pending = [...lives.values()].filter(l => l.pending).length;
+  // laufend/schlange: für den Release-Neustart (scripts/werkbank.sh wartet, bis laufende Züge fertig sind — Plan 213 S1a).
+  return { live: lives.size, pending, laufend: lives.size - pending, schlange: laenge(), sessions: Object.keys(sessionMap).length };
 }
 
 /** S0 (Plan 126): Ordnergrenzen dieser Person für Datei-Werkzeuge und Bash. BRIDGE_PATH_GUARD=off nur zur Diagnose. */
@@ -461,11 +464,11 @@ export function workDirFor(userId: string, convId: string): string {
  * Meldet eine neue Unterhaltung als Orchestrator-Strang an: Arbeitsordner = dir (vorher geprüft, siehe server.ts),
  * strengere Sperren. Nur für Unterhaltungen ohne Sitzung und ohne Ordner — eine bestehende wird nie umgebogen.
  */
-export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe } = {}): void {
+export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; vorrang?: boolean } = {}): void {
   const key = `${safeId(userId)}:${safeId(convId)}`;
   if (sessionMap[key] || cwdMap[key] || orchMap[key] || lives.has(key)) throw Object.assign(new Error('Unterhaltung gibt es schon.'), { status: 409 });
   cwdMap[key] = dir;
-  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}), ...(o.tiefe && o.tiefe !== 'regular' && TIEFEN.includes(o.tiefe) ? { tiefe: o.tiefe } : {}) };
+  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}), ...(o.tiefe && o.tiefe !== 'regular' && TIEFEN.includes(o.tiefe) ? { tiefe: o.tiefe } : {}), ...(o.vorrang ? { vorrang: true } : {}) };
   saveMap();
 }
 
@@ -518,9 +521,9 @@ export function orchStateOf(userId: string) {
     const l = lives.get(k);
     const seen = lastSeen.get(k);
     return {
-      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', tiefe: e.tiefe ?? 'regular', phase: e.phase ?? null, running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, batches: e.batches ?? [], lastHand: e.lastHand ?? null,
+      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', tiefe: e.tiefe ?? 'regular', phase: e.phase ?? null, running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, queued: inSchlange(k), batches: e.batches ?? [], lastHand: e.lastHand ?? null,
       // Start ohne Ende und keine laufende Sitzung: die Brücke wurde mitten im Zug neu gestartet.
-      interrupted: !l && !!e.turn && e.turn.end === null,
+      interrupted: !l && !inSchlange(k) && !!e.turn && e.turn.end === null,
       resumable: !!sessionMap[k], turns: seen?.turns ?? null, written: seen?.written ?? [],
     };
   });
@@ -645,6 +648,7 @@ function end(live: Live) {
   if (live.pending) { clearTimeout(live.pending.timer); live.pending = null; }
   detach(live);
   lives.delete(live.key);
+  wecke();   // ein Platz ist frei (Plan 213 S1a)
 }
 
 // ---------- Übersetzung der SDK-Nachrichten ----------
@@ -989,6 +993,7 @@ function makeGuard(live: Live) {
         since: Date.now(),
       };
       detach(live);
+      wecke();   // wartet nur noch auf „ja“ → zählt nicht zur Parallelgrenze (Plan 213 S1a)
     });
     if (live.pending) { clearTimeout(live.pending.timer); live.pending = null; }
     if (answer === '\u0000timeout') {
@@ -1145,9 +1150,32 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // 2) Höchstens maxParallelChats() aktive Züge je Nutzer, jeder Chat in seinem eigenen Ordner. Chats, die nur auf
   //    „ja“ warten, zählen nicht. Board-Läufe (nur lesend) laufen daneben, höchstens MAX_BOARD_RUNS je Person (E5).
   // Der Leitstand zählt nicht und wird nicht gezählt (Plan 132, E2/B9): er koordiniert die Chats, die er sonst blockieren würde.
-  const mine = [...lives.values()].filter((l) => l.userId === req.userId && !l.leit && !l.worker);
+  const meine = () => [...lives.values()].filter((l) => l.userId === req.userId && !l.leit && !l.worker);
+  let mine = meine();
   const mode = autoFor(req);
-  const lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode });
+  let lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode });
+  // Warteschlange statt Fehlschlag (Plan 213 S1a, K3): der Zug wartet, bis ein Platz frei ist; der Chat zeigt den Platz.
+  if (lock === 'chat-busy' && schlangeAn() && !req.sink.closed) {
+    if (orchMap[key]) setTurn(key, { start: Date.now(), end: null, outcome: null });
+    let erst = true;
+    const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang }, {
+      frei: () => !lives.has(key) && lockFor(meine(), { readonly: !!req.readonly, mode }) === 'ok',
+      geschlossen: () => req.sink.closed,
+      melde: (pos) => {
+        req.sink.write(erst ? `⏳ In der Schlange: Platz ${pos} — es laufen schon ${maxParallelChats()} Chats gleichzeitig. Startet von selbst, sobald ein Platz frei ist.\n\n` : `⏳ Jetzt Platz ${pos} …\n\n`);
+        erst = false;
+      },
+    });
+    log('schlange', { conv: key, ergebnis: r });
+    if (r === 'zu') { if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'aborted' }); return; }
+    if (lives.has(key)) {
+      req.sink.write('Diese Unterhaltung arbeitet noch an der vorigen Nachricht. Bitte kurz warten.');
+      req.sink.finish();
+      return;
+    }
+    mine = meine();
+    lock = r === 'start' ? 'ok' : lock;
+  }
   if (lock !== 'ok') {
     if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'busy' });
     req.sink.write(lock === 'board-full'

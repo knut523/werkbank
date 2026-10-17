@@ -53,6 +53,21 @@ Nächste Schritte
 EOT
 }
 
+# Vor einem Neustart warten, bis laufende Züge der Brücke fertig sind (Plan 213 S1a: „Neustart beim Release unterbricht
+# laufende Unter-Chats“, 31× in 14 Tagen). Höchstens WB_DRAIN_S Sekunden (Vorgabe 600, 0 = nicht warten); wer in der
+# Schlange steht oder nur auf „ja“ wartet, zählt nicht — das setzt nach dem Neustart das automatische „weiter“ fort.
+drain() {
+  local max=${WB_DRAIN_S:-600} t=0 n
+  [ "$max" -gt 0 ] || return 0
+  while [ "$t" -lt "$max" ]; do
+    n=$(curl -s --max-time 3 "http://127.0.0.1:${BRIDGE_PORT:-3090}/health" | sed -n 's/.*"laufend":\([0-9]*\).*/\1/p')
+    [ -z "$n" ] || [ "$n" = 0 ] && return 0
+    [ $((t % 60)) = 0 ] && echo "  … warte auf $n laufende Züge (höchstens $((max - t)) s, WB_DRAIN_S=0 überspringt)"
+    sleep 10; t=$((t + 10))
+  done
+  echo "  ! Nach $max s laufen noch Züge — Neustart trotzdem (sie werden danach automatisch fortgesetzt)"
+}
+
 doctor() {
   FAIL=0
   load_env
@@ -99,13 +114,13 @@ case "${1:-}" in
     next_steps
     exit $rc ;;
   down) "$HERE/stop.sh" ;;
-  restart) "$HERE/stop.sh"; "$HERE/start.sh" && health ;;
+  restart) drain; "$HERE/stop.sh"; "$HERE/start.sh" && health ;;
   status) "$HERE/status.sh" ;;
   update)
     echo "OLAF Workspace: auffrischen"
     rm -f "$WB/web/dist/index.html"   # erzwingt den Neubau der Oberfläche
     "$HERE/setup.sh" || exit 1
-    "$HERE/stop.sh"; "$HERE/start.sh" || exit 1
+    drain; "$HERE/stop.sh"; "$HERE/start.sh" || exit 1
     (load_env; cd "$WB/web" && node server/reindex-cli.ts)
     health ;;
   doctor) doctor ;;
