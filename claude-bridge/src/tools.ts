@@ -8,7 +8,8 @@
 //             Klassifikator des SDK (Plan 71 P1, Knut 06.10.2026). Ohne Arbeitsordner gibt es diese Klasse nie.
 
 import { realpathSync, statSync } from 'node:fs';
-import { resolve, dirname, sep } from 'node:path';
+import { resolve, dirname, sep, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 export type ToolClass = 'read' | 'confirm' | 'blocked' | 'auto';
 
@@ -401,6 +402,41 @@ export function orchDirProblem(dir: string): { problem: string | null; real?: st
   if (/(^|\/)(\.runtime[^/]*|\.git|\.claude|\.ssh)(\/|$)/.test(real)) return { problem: 'Arbeitsordner darf nicht in .runtime, .git, .claude oder .ssh liegen.' };
   return { problem: null, real };
 }
+
+// ---------- Profil „release“ (Plan 213, Knut 17.10.: „Release-Strang darf lokal mergen“) ----------
+// Erlaubt ist genau `git -C <Worktree> merge …` (auch --abort/--continue) im zugewiesenen Release-Worktree; Konflikte löst
+// der Strang mit Edit im Worktree, der Merge-Commit ist ein normaler lokaler Commit. Push, Live-Schalten und alles außerhalb
+// des Worktrees bleibt gesperrt. Der Ordner steht im Befehl, weil die Brücke das cwd der Shell nicht kennt.
+
+/** Worktree für einen Release-Strang: eigener Git-Worktree (nicht der Haupt-Checkout) eines Werkbank-Repos, nie die Live-Instanz. */
+export function releaseWorktreeProblem(dir: string): string | null {
+  if (/werkbank-dev(\/|$)/.test(dir)) return 'Die Live-Instanz ist kein Release-Worktree.';
+  try { if (!statSync(join(dir, '.git')).isFile()) return 'Release-Strang braucht einen eigenen Git-Worktree (git worktree add), nicht den Haupt-Checkout.'; } catch { return 'Release-Strang braucht einen Git-Worktree.'; }
+  const g = (...a: string[]) => { try { return execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } };
+  let top = g('rev-parse', '--show-toplevel'); try { top = realpathSync(top); } catch { /* bleibt */ }
+  if (top !== dir) return 'Der Arbeitsordner muss die Wurzel des Release-Worktrees sein.';
+  if (!/werkbank/i.test(g('remote', 'get-url', 'origin'))) return 'Release-Strang nur in einem Worktree des Werkbank-Repos.';
+  return null;
+}
+
+const SHELL_META = /[;&|`$()<>\n\\]/;
+const MERGE_FORM = new RegExp(String.raw`^git\s+-C\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+merge(?![\w-])(\s.*)?$`);
+/** Ein Release-Merge: einzelner Befehl ohne Verkettung/Ersetzung, `-C` zeigt genau auf den Worktree des Strangs. */
+export function releaseMerge(cmd: string, dir: string): boolean {
+  const c = cmd.trim();
+  if (SHELL_META.test(c)) return false;
+  const m = c.match(MERGE_FORM);
+  if (!m) return false;
+  const ziel = m[1] ?? m[2] ?? m[3];
+  let real = resolve(ziel); try { real = realpathSync(ziel); } catch { return false; }
+  return real === dir && !/\s--(git-dir|work-tree)\b|\s-C\s/.test(m[4] ?? '');
+}
+
+/** Im Release-Strang zusätzlich gesperrt: alles, was live schaltet. */
+export const RELEASE_BLOCK: [RegExp, string][] = [
+  [/werkbank-dev\b|\bwerkbank\.sh\b|release-live[\w-]*\.sh/, 'Live-Instanz / Live-Schalten'],
+  [/\b(systemctl|crontab)\b/, 'Dienste/crontab'],
+];
 
 function short(s: unknown, n = 90): string {
   const t = String(s ?? '').replace(/\s+/g, ' ').trim();

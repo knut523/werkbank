@@ -294,7 +294,7 @@ export async function strandStates(u: User): Promise<Map<string, StrandState & {
 
 // ---------- Öffentliche Schnittstelle ----------
 
-export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null; lauf?: string | null; modell?: string | null; risiko?: 'niedrig' | 'mittel' | 'hoch' | null; profil?: 'voll' | 'bauer' | 'leser' | 'schreiber' | null; tiefe?: string | null;
+export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null; lauf?: string | null; modell?: string | null; risiko?: 'niedrig' | 'mittel' | 'hoch' | null; profil?: 'voll' | 'bauer' | 'leser' | 'schreiber' | 'release' | null; tiefe?: string | null;
   /** Tokenbudget des Strangs (Plan 209, S3.2); leer = ORCH_BUDGET_TOKENS je Tiefe (Vorgabe 0 = aus). */
   budget?: number | null;
   /** Vorrang in der Warteschlange der Brücke (Plan 213 S1a: Reviews). */
@@ -362,7 +362,7 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   const risiko = vor.risiko as StartInput['risiko'];
   // Hotfix 15.10.: Melious-Modell außerhalb des Abos → Start erlaubt, aber mit Hinweis „läuft auf Guthaben“ (kein stilles Guthaben).
   const aboHinweis = modell?.startsWith('melious:') && modell !== 'melious:auto' && ausserhalbAbo([modell.slice(8)], (await meliousSettings(u)).abo).length ? `Melious-Modell „${modell.slice(8)}“ ist nicht im Abo und läuft auf Guthaben.` : null;
-  if (inp.profil && !['voll', 'bauer', 'leser', 'schreiber'].includes(inp.profil)) throw err(400, 'Profil: voll, bauer, leser oder schreiber.');
+  if (inp.profil && !['voll', 'bauer', 'leser', 'schreiber', 'release'].includes(inp.profil)) throw err(400, 'Profil: voll, bauer, leser, schreiber oder release.');
   const profil = inp.profil && inp.profil !== 'voll' ? inp.profil : null;
   // 1) Bei der Brücke anmelden (prüft den Ordner selbst). Ohne Anmeldung kein Chat (fail closed).
   const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}), tiefe, ...(inp.vorrang === true ? { vorrang: true } : {}) }), signal: AbortSignal.timeout(5000) });
