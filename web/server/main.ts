@@ -22,7 +22,8 @@ import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema, etaMediane, statusSchatten } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { themaOf } from './themen.ts';
-import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
+import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
+import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
@@ -1316,6 +1317,98 @@ on('GET', /^\/api\/status$/, async (req, res) => {
   const u = await needAdmin(req);
   send(res, 200, { neu: statusNeu(), autoSchliessen: autoSchliessenAn(), zaehler: await zaehlerFuer(u), schatten: await statusSchatten(7), wegraeumbar: (await autoSchliessen({ dry: true })).length });
 });
+// --- Eine Inbox (Plan 213 S2): alle Fragearten an einer Stelle, Antwort an der Quelle, Chat-Knöpfe mit Kennung ---
+const spaeterCol = () => wb().collection('inbox_spaeter');
+async function inboxFuer(u: User, now = Date.now()) {
+  const admin = u.role === 'ADMIN';
+  const qs = await listQuestions(u, { open: true }).catch(() => [] as any[]);
+  let karten: any[] = [], vault: { id: string; text: string; at?: any }[] = [], schlange: { id: string; titel: string; since: number }[] = [];
+  if (admin) {
+    const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(60).toArray()) as any[]).filter(offenFuerKnut);
+    const ids = docs.map((d) => String(d._id));
+    const fgs: any[] = ids.length ? await freigaben().find({ strand: { $in: ids }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
+    const basis = paketBasis();
+    karten = docs.map((d) => { try { return uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), qs.filter((q: any) => q.strand && String(q.strand.id) === String(d._id)), basis, null); } catch { return null; } }).filter(Boolean);
+    const states = await strandStates(u).catch(() => null);
+    for (const d of docs) { const s = states?.get(d.conv); if (s?.queued) schlange.push({ id: String(d._id), titel: d.title ?? '', since: s.queued.since }); }
+    const m = await mineFor(u, { write: false }).catch(() => null);
+    vault = [...(m?.questions ?? []).filter((q: any) => !q.answer), ...(m?.pendingApprovals ?? [])].map((q: any) => ({ id: String(q.id), text: String(q.text ?? ''), at: q.at ?? null }));
+  }
+  const h = await hygieneOf(u).catch(() => ({ items: [] as any[], snoozed: [] as string[] }));
+  const spaeter = new Map(((await spaeterCol().find({ userId: u.id, bis: { $gt: new Date(now) } }).toArray()) as any[]).map((s) => [String(s.id), new Date(s.bis).getTime()]));
+  return baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange,
+    kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now });
+}
+on('GET', /^\/api\/inbox$/, async (req, res) => {
+  const u = await needUser(req);
+  const r = await inboxFuer(u);
+  send(res, 200, { ...r, zahl: inboxZahl(r.eintraege), at: new Date() });
+});
+on('POST', /^\/api\/inbox\/([\w-]{1,90})\/spaeter$/, async (req, res, m) => {
+  const u = await needUser(req);
+  if (!KENNUNG_RE.test(m[1])) throw new HttpError(400, 'Unbekannte Kennung.');
+  const bis = spaeterBis();
+  await spaeterCol().updateOne({ _id: `${u.id}:${m[1]}` as any }, { $set: { userId: u.id, id: m[1], bis, at: new Date() } }, { upsert: true });
+  send(res, 200, { ok: true, bis });
+});
+/**
+ * Antwort auf einen Inbox-Eintrag — für die Knöpfe im Chat (Kennung im Anker) und für die Inbox selbst. Geschrieben wird an der
+ * Quelle über dieselben Wege wie bisher. Nur die Kennung zählt; der Stand muss noch derselbe sein (sonst 409, nie raten — K4).
+ */
+on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const id = m[1];
+  const art = String(b.antwort ?? '');
+  const text = String(b.text ?? '').trim().slice(0, 4000);
+  const weg = b.weg === 'chat-knopf' ? 'chat-knopf' : 'ui';
+  if (!['ja', 'nein', 'anders'].includes(art)) throw new HttpError(400, 'Antwort ist ja, nein oder anders.');
+  if (art === 'anders' && !text) throw new HttpError(400, 'Schreib kurz, was stattdessen.');
+  const e = (await inboxFuer(u)).eintraege.flatMap((x) => (x.art === 'altbestand' ? [x, ...((x.daten.eintraege as any[]) ?? [])] : [x])).find((x) => x.id === id);
+  if (!e) throw new HttpError(409, 'Diese Frage ist schon beantwortet oder hat sich geändert — Inbox neu laden.');
+  if (e.art === 'rueckfrage') {
+    const opts = (e.daten.optionen as string[]) ?? [];
+    const rec = opts.find((o) => o === e.empfehlung) ?? opts.find((o) => String(e.empfehlung ?? '').startsWith(o));
+    const a = art === 'ja' ? (rec ? { option: rec, text: '' } : { option: null, text: janein('ja', e.empfehlung) }) : art === 'nein' ? { option: null, text: janein('nein', e.empfehlung) } : { option: null, text };
+    await answerQuestion(u, String(e.daten.qid), a);
+    roadmapChanged('orchestrator-antwort');
+  } else if (e.art === 'braucht') {
+    if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
+    await sendOrch(u, String(e.daten.strand), replyText('antwort', art === 'ja' ? 'Ja.' : art === 'nein' ? 'Nein.' : text));
+  } else if (e.art === 'entscheidung') {
+    if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
+    const liste = (e.daten.entscheidungen as any[]) ?? [];
+    if (liste.length > 1 && art !== 'ja') throw new HttpError(400, 'Mehrere Entscheidungen: „Ja“ übernimmt alle Empfehlungen; einzeln in der Inbox entscheiden.');
+    const antworten = art === 'ja' ? liste.map((x) => ({ id: x.id, art: 'akzeptiert' })) : [{ id: liste[0].id, art: art === 'nein' ? 'abgelehnt' : 'eigene', text }];
+    const d = await reviewStrand(u, String(e.daten.strand));
+    const sperre = String(d._id);
+    if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — gleich noch einmal.');
+    entscheidSperre.add(sperre);
+    antwortGezaehlt('inbox', weg);
+    try { return await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }, res); } finally { entscheidSperre.delete(sperre); }
+  } else if (e.art === 'push') {
+    if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
+    if (art !== 'ja') throw new HttpError(400, 'Push: nur „Ja“ (freigeben) oder „Später“.');
+    // D8 (Knut 17.10.): der Knopf ist an den gesehenen Stand gebunden — nur, wenn der Kopf noch derselbe ist.
+    const d = await reviewStrand(u, String(e.daten.strand));
+    const det: any = await reviewDetail(d);
+    const head = String(det?.repo?.head ?? '');
+    if (!head || !head.startsWith(String(e.daten.commit))) throw new HttpError(409, 'Der Stand hat sich geändert — neu ansehen und dann freigeben.');
+    const f = await freigeben(u, d, { head, patchId: det.repo.patchId ?? null }, undefined, log);
+    await hinweisFreigabe(u, f, d).catch(() => {});
+    antwortGezaehlt('push', weg);
+  } else if (e.art === 'altbestand') {
+    if (art !== 'nein') throw new HttpError(400, 'Altbestand: „Nein“ verwirft alle, sonst einzeln durchsehen.');
+    for (const x of (e.daten.eintraege as any[]) ?? []) {
+      if (x.art === 'rueckfrage') await withdrawQuestion(u, String(x.daten.qid)).catch(() => {});
+      else await spaeterCol().updateOne({ _id: `${u.id}:${x.id}` as any }, { $set: { userId: u.id, id: x.id, bis: new Date(Date.now() + 30 * 86400_000), at: new Date() } }, { upsert: true });
+    }
+  } else throw new HttpError(400, 'Diese Frage beantwortest du in ihrer Ansicht (Vault-Sync, Pflege, Schlange).');
+  log('inbox antwort', { user: u.id, art: e.art, weg });
+  if (e.art !== 'push') antwortGezaehlt(e.art === 'rueckfrage' ? 'rueckfrage' : e.art === 'braucht' ? 'braucht' : 'inbox', weg);
+  send(res, 200, { ok: true, art: e.art });
+});
+
 on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/zurueckholen$/, async (req, res, m) => {
   const u = await needAdmin(req);
   if (!(await zurueckholen(u.id, m[1]))) throw new HttpError(409, 'Nur automatisch weggeräumte Unter-Chats lassen sich zurückholen.');
