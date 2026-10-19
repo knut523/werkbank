@@ -73,6 +73,8 @@ import { zaehle, statusNeu, autoSchliessenAn, navNeu, aufraeumenAn, meinTagWeg, 
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
 import { autoAnnahmeAn, annahmeMs } from './stufe.ts';
+import { entwurfHash, postenErlaubt } from './befunde.ts';
+import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
 import { zeile as arbeitZeile, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
 
 const DIST = join(WEB_DIR, 'dist');
@@ -1738,7 +1740,8 @@ async function prReviewOf(strand: string) {
   if (!r) return null;
   const k = parseKommentar(readBerichtDatei(join(reviewDir(), r.paket ?? '_', 'kommentar.md')));
   return { id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, status: r.status, empfehlung: k?.empfehlung ?? r.empfehlung ?? null,
-    text: k?.text ?? null, posted: r.posted ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus() };
+    text: k?.text ?? null, hash: k ? entwurfHash(k.text) : null, vollstaendig: r.entwurf?.vollstaendig ?? null, statistik: r.entwurf?.statistik ?? null, gedaechtnis: r.gedaechtnis ?? null,
+    posted: r.posted ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus() };
 }
 on('GET', /^\/api\/leitstand\/ticker$/, async (req, res) => { await needAdmin(req); send(res, 200, await tickerOverview()); });
 on('POST', /^\/api\/leitstand\/ticker\/einstellungen$/, async (req, res) => {
@@ -1771,7 +1774,13 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/github$/, async (req, res, m) => {
   const b = await body(req);
   const event = String(b.event ?? '') as ReviewEvent;
   if (!['COMMENT', 'APPROVE', 'REQUEST_CHANGES'].includes(event)) throw new HttpError(400, 'Art: COMMENT, APPROVE oder REQUEST_CHANGES.');
-  if (String(b.text ?? '') !== pr.text) throw new HttpError(409, 'Der Entwurf hat sich geändert — Seite neu laden.');
+  // #11: gebunden an den gespeicherten Entwurf über seinen Hash; `incomplete` nur mit Hinweis von Hand.
+  const roh: any = await reviewsCol().findOne({ _id: pr.id as any });
+  const hinweis = String(b.hinweis ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
+  const darf = postenErlaubt({ hashGespeichert: roh?.entwurf?.hash ?? null, hashJetzt: entwurfHash(pr.text), hashGesehen: String(b.hash ?? (String(b.text ?? '') === pr.text ? entwurfHash(pr.text) : '')), vollstaendig: roh?.entwurf?.vollstaendig ?? null, auto: false, hinweis });
+  if (!darf.ok) throw new HttpError(409, darf.grund!);
+  if (event === 'APPROVE' && roh?.entwurf?.vollstaendig === false) throw new HttpError(409, 'Review unvollständig — kein Approve; Kommentar mit Hinweis geht.');
+  const vorspann = roh?.entwurf?.vollstaendig === false ? `> **Note:** ${hinweis}\n\n` : '';
   const token = await githubReadToken();
   const now = token ? await prNowVia(token, pr.repo, pr.number).catch(() => null) : null;
   if (!now) throw new HttpError(502, 'PR-Stand nicht lesbar (Lesetoken).');
@@ -1779,7 +1788,7 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/github$/, async (req, res, m) => {
   if (now.head !== pr.head) throw new HttpError(409, `Neuer Stand ${now.head.slice(0, 7)} seit dem Review — erst neu reviewen.`);
   if (event === 'COMMENT' && pr.posted) throw new HttpError(409, 'Der Kommentar ist schon gepostet.');
   if (event !== 'COMMENT' && (pr.postings ?? []).some((x: any) => x.event === event)) throw new HttpError(409, 'Für diesen Stand schon abgeschickt.');
-  const r = await postReview(pr, pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automatisches Review', 'Review'), event).catch((e: any) => { throw new HttpError(502, e.message); });
+  const r = await postReview(pr, vorspann + pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automatisches Review', 'Review'), event).catch((e: any) => { throw new HttpError(502, e.message); });
   await reviewsCol().updateOne({ _id: pr.id as any }, { $push: { postings: { at: new Date(), url: r.url, event, by: u.name } } as any, ...(event === 'COMMENT' && !pr.posted ? { $set: { posted: { at: new Date(), url: r.url, event, by: u.name } } } : {}) });
   log('pr-review github', { user: u.id, pr: `${pr.repo}#${pr.number}`, event });
   send(res, 200, { ok: true, url: r.url });
@@ -3377,6 +3386,20 @@ async function backgroundJobs() {
         markStrand: (id, prReview) => orchRuns().updateOne({ _id: id as any }, { $set: { prReview } }),
         prNow: async (repo, n) => { const t = await githubReadToken(); return t ? prNowVia(t, repo, n) : null; },
         post: (r, text, event) => postReview(r, text, event), log,
+        // #14 PR-Gedächtnis: eine API-Seite je Repo und Tag (Lesetoken), Index in Mongo.
+        gedaechtnis: (repo) => gedaechtnisIndex(repo, {
+          holen: async (url) => {
+            const t = await githubReadToken();
+            if (!t) throw new Error('kein Lesetoken');
+            const r = await fetch(url, { headers: { authorization: `Bearer ${t}`, accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15_000) });
+            if (!r.ok) throw new Error(`GitHub ${r.status}`);
+            return r.json();
+          },
+          cache: {
+            lese: async (repo) => (await wb().collection('pr_gedaechtnis').findOne({ _id: repo as any })) as any,
+            schreibe: async (repo, kommentare) => { await wb().collection('pr_gedaechtnis').updateOne({ _id: repo as any }, { $set: { at: new Date(), kommentare } }, { upsert: true }); },
+          },
+        }),
       });
       if (r.started || r.done) log('pr-review', r);
     } catch (e: any) { log('pr-review', { error: String(e.message).slice(0, 200) }); }

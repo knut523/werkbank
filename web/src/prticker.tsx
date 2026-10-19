@@ -118,10 +118,13 @@ export function PrTickerMeldungen() {
 export function PrReviewAbschnitt({ id, pr, onDone }: { id: string; pr: any; onDone: () => void }) {
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [hinweis, setHinweis] = useState('');
+  const unvoll = pr.vollstaendig === false;
   const go = async (event: string, label: string) => {
     if (event !== 'COMMENT' && !confirm(`${label} auf GitHub für ${pr.repo}#${pr.number}?`)) return;
     setBusy(event); setMsg(null);
-    try { const r: any = await api(`/api/review/${id}/github`, { body: { event, text: pr.text } }); setMsg({ ok: true, text: `${label}: gepostet${r.url ? ` (${r.url})` : ''}.` }); onDone(); }
+    // Gebunden an genau diesen Entwurf (Hash); unvollständig nur mit Hinweis.
+    try { const r: any = await api(`/api/review/${id}/github`, { body: { event, hash: pr.hash, ...(unvoll ? { hinweis } : {}) } }); setMsg({ ok: true, text: `${label}: gepostet${r.url ? ` (${r.url})` : ''}.` }); onDone(); }
     catch (e: any) { setMsg({ ok: false, text: String(e?.message ?? e) }); } finally { setBusy(''); }
   };
   const e = EMPF[pr.empfehlung ?? ''];
@@ -131,11 +134,15 @@ export function PrReviewAbschnitt({ id, pr, onDone }: { id: string; pr: any; onD
       <p className="small">{e ? <span className={`chip ${e.c}`} data-testid="empfehlung">Empfehlung: {e.t}</span> : <span className="chip">noch keine Empfehlung</span>}
         {pr.posted && <> · Kommentar <a href={pr.posted.url ?? pr.url} target="_blank" rel="noreferrer">gepostet</a> ({pr.posted.by === 'auto' ? 'automatisch' : pr.posted.by}, {fmtDateTime(pr.posted.at)})</>}
         {pr.note && <span className="tiny muted"> · {pr.note}</span>}</p>
+      {pr.statistik && <p className="tiny muted" data-testid="befund-statistik">{pr.statistik.kandidaten} Kandidaten · {pr.statistik.widerlegt} widerlegt · {pr.statistik.ohneBeleg} ohne Beleg · {pr.statistik.herabgestuft} auf „advisory“ herabgestuft
+        {pr.gedaechtnis ? ` · PR-Gedächtnis: ${pr.gedaechtnis.kommentare} frühere Kommentare an ${pr.gedaechtnis.dateien} Dateien, ${pr.statistik.gedaechtnis} Befunde dazu` : ''}</p>}
       {pr.text ? <pre className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: '50vh', overflow: 'auto' }} data-testid="kommentar-entwurf">{pr.text}</pre> : <p className="small muted">Noch kein Kommentar-Entwurf (kommentar.md).</p>}
+      {pr.text && unvoll && <div className="small" data-testid="unvollstaendig"><b>Review unvollständig</b> — wird nie automatisch gepostet. Von Hand nur mit Hinweis (steht oben im Kommentar), kein Approve.
+        <textarea rows={2} value={hinweis} placeholder="Hinweis für den PR (englisch), z. B. warum es trotzdem hilft" aria-label="Hinweis für den PR" onChange={(x) => setHinweis(x.target.value)} style={{ width: '100%' }} /></div>}
       {pr.text && <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-        {!pr.posted && <button className="btn small primary" disabled={!!busy || pr.schreibenAus} onClick={() => go('COMMENT', 'Kommentar')} data-testid="kommentar-posten">Kommentar posten</button>}
-        <button className="btn small" disabled={!!busy || pr.schreibenAus} onClick={() => go('APPROVE', 'Approve')} data-testid="approve">Approve</button>
-        <button className="btn small" disabled={!!busy || pr.schreibenAus} onClick={() => go('REQUEST_CHANGES', 'Änderungen verlangen')} data-testid="request-changes">Änderungen verlangen</button>
+        {!pr.posted && <button className="btn small primary" disabled={!!busy || pr.schreibenAus || (unvoll && !hinweis.trim())} onClick={() => go('COMMENT', 'Kommentar')} data-testid="kommentar-posten">Kommentar posten</button>}
+        <button className="btn small" disabled={!!busy || pr.schreibenAus || unvoll} onClick={() => go('APPROVE', 'Approve')} data-testid="approve">Approve</button>
+        <button className="btn small" disabled={!!busy || pr.schreibenAus || (unvoll && !hinweis.trim())} onClick={() => go('REQUEST_CHANGES', 'Änderungen verlangen')} data-testid="request-changes">Änderungen verlangen</button>
         <button className="btn small ghost" onClick={() => navigator.clipboard?.writeText(pr.text).then(() => setMsg({ ok: true, text: 'Text kopiert.' }))}>Text kopieren</button>
         {pr.schreibenAus && <span className="tiny muted">Schreiben auf GitHub ist aus. <details className="tiny" style={{ display: 'inline' }}><summary style={{ display: 'inline', cursor: 'pointer' }}>Technische Details</summary> Schalter WERKBANK_GITHUB_KOMMENTAR=off</details></span>}
       </div>}

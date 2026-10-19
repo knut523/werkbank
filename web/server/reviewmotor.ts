@@ -169,6 +169,24 @@ export function motorAbschnitt(paket: string): string {
     '',
     'Review-Motor (Plan 213): Arbeite die Prüfliste ab — `templates/review/pruefliste.md` im Werkbank-Repo (ein Befund nur mit Datei:Zeile und Code-Zitat).',
     `Der deterministische Vorlauf liegt in \`review-pakete/${paket}/vorlauf.md\` (Repo-Regeln, geänderte Dateien ohne Lockfiles, Erreichbarkeit, CI, SAST auf hinzugefügten Zeilen) — jeden Kandidaten prüfen und als bestätigt oder widerlegt vermerken.`,
-    'Fehlt etwas (Diff gekürzt, Werkzeug fehlt), ist das Ergebnis `incomplete` mit Grund — nie „sauber“. Ergebnis: `kommentar.md` englisch, `bericht.md` deutsch mit `vollständig: ja|nein`.',
+    'Fehlt etwas (Diff gekürzt, Werkzeug fehlt), ist das Ergebnis `incomplete` mit Grund — nie „sauber“.',
+    '',
+    'Ablauf je Kandidat (forge-Handwerk): erst BREAK (feindlich: wie bricht das?), dann REFUTE (versuch den Befund zu widerlegen, schreib den Versuch auf)',
+    'und gib einen Vertrauensgrad. Nur CONFIRMED oder PLAUSIBLE kommt in den Kommentar; REFUTED bleibt im Bericht.',
+    `Ergebnis: \`review-pakete/${paket}/befunde.json\` (Pflicht, Form unten) und \`bericht.md\` deutsch mit \`vollständig: ja|nein\`. \`kommentar.md\` baut der Workspace aus befunde.json — schreib ihn nicht selbst.`,
+    BEFUNDE_FORM,
   ].join('\n');
 }
+
+/** Form von befunde.json (befunde.ts prüft sie; Unbekanntes fällt raus). */
+export const BEFUNDE_FORM = [
+  '```json',
+  '{ "vollstaendig": true, "gruende": [], "tests": "what ran / what could not run (English)",',
+  '  "abdeckung": { "security": "geprüft", "data_integrity": "geprüft", "cross_file": "geprüft", "idempotency": "geprüft", "pii": "geprüft", "access_control": "geprüft",',
+  '                 "correctness": "geprüft", "spec": "geprüft", "tests": "nicht geprüft", "performance": "nicht geprüft", "maintainability": "geprüft", "docs": "nicht geprüft" },',
+  '  "befunde": [ { "datei": "src/a.ts", "zeile": 42, "klasse": "security", "schwere": "blocking", "vertrauen": "hoch",',
+  '                 "pruefung": "CONFIRMED", "widerlegung": "tried X, still breaks because Y", "quelle": "spec", "titel": "English one-liner", "fix": "English fix", "gedaechtnis": false } ] }',
+  '```',
+  'Klassen: security, data_integrity, cross_file, idempotency, pii, access_control (nur diese dürfen `blocking` sein) · correctness, spec, tests, performance, maintainability, docs (immer `advisory`).',
+  '`quelle`: `spec` = Anforderung/Abnahmekriterium aus PR-Text, Plan oder Spec; `standard` = Repo-Regeln, Sicherheit, Handwerk. Ein nicht geprüfter Blockier-Klasse macht das Review `incomplete`.',
+].join('\n');

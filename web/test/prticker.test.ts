@@ -201,6 +201,13 @@ test('Auto-Posten unterbleibt bei neuem Stand, geschlossenem PR, Textregel, Not-
   assert.match(((await P.reviewsCol().findOne({ _id: base._id as any })) as any).note, /gemergt/);
   await R.autoPost(base, { empfehlung: 'comment', text: 'siehe ~/work/x' }, deps);
   assert.match(((await P.reviewsCol().findOne({ _id: base._id as any })) as any).note, /lokalen Pfad/);
+  // forge #11: unvollständige Entwürfe nie automatisch; geänderter Entwurf (anderer Hash) auch nicht.
+  const { entwurfHash } = await import('../server/befunde.ts');
+  deps.prNow = async () => ({ state: 'OPEN', head: SHA1 });
+  await R.autoPost({ ...base, entwurf: { hash: entwurfHash('ok'), vollstaendig: false } }, { empfehlung: 'comment', text: 'ok' }, deps);
+  assert.match(((await P.reviewsCol().findOne({ _id: base._id as any })) as any).note, /unvollständig — nie automatisch/);
+  await R.autoPost({ ...base, entwurf: { hash: entwurfHash('anders'), vollstaendig: true } }, { empfehlung: 'comment', text: 'ok' }, deps);
+  assert.match(((await P.reviewsCol().findOne({ _id: base._id as any })) as any).note, /nach dem Review geändert/);
   const { postReview } = await import('../server/githubwrite.ts');
   process.env.WERKBANK_GITHUB_KOMMENTAR = 'off';
   await assert.rejects(postReview({ repo: 'x/y', number: 1, head: SHA1 }, 't', 'COMMENT'), /aus/);
