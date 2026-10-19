@@ -320,7 +320,7 @@ export function statusZeile(a: { art: StatusArt; position?: number; tiefe?: stri
 
 /** Kurze Anleitung an jedem Status-Kommentar: was `@review` und `@review deep` tun. */
 export function erklaerung(): string {
-  return `\n\n<sub>How this works: \`@review\` = fast review, depth chosen by size — static analysis, PR context and comments, delta since the last review, then a cross-check by a second model; ~5–15 min. `
+  return `\n\n<sub>How this works: \`@review\` = full review — static analysis, PR context and comments, delta since the last review; every claim ("fixed", "addressed") must be proven in code; a council weighs the findings, then a second model (Melious) cross-checks; ~10–30 min. `
     + `\`@review deep\` = additionally runs the repo's tests, typecheck, build and DB suites (throw-away copy of a template database) on the workspace VM — not network-isolated, only for PRs by allow-listed authors; otherwise a static deep review; ~20–40 min. `
     + 'The result is posted as a review comment; approval stays with Knut.</sub>';
 }
