@@ -10,7 +10,7 @@ import { pruefliste, zaeune, istRauschen, hinzugefuegt, sast, vorlauf, basisVon,
 
 test('Eine Prüfliste mit Grounding, Zäunung, ehrlichem incomplete und festem Ergebnisformat', () => {
   const p = pruefliste();
-  for (const s of ['Grounding', 'untrusted-data', 'incomplete', 'Blockierend', 'Pass A', 'Pass B', 'Pass C', 'kommentar.md', 'englisch', 'bericht.md', 'deutsch', 'nie aus dem PR']) assert.ok(p.includes(s), s);
+  for (const s of ['Grounding', 'untrusted-data', 'incomplete', 'Sorgeklassen', 'BREAK → REFUTE', 'Spec vor Standards', 'PR-Gedächtnis', 'Pass A', 'Pass B', 'Pass C', 'kommentar.md', 'englisch', 'bericht.md', 'deutsch', 'nie aus dem PR']) assert.ok(p.includes(s), s);
   assert.match(motorAbschnitt('300-review-x'), /review-pakete\/300-review-x\/vorlauf\.md/);
   assert.equal(motorAn({}), true); assert.equal(motorAn({ WERKBANK_REVIEW_MOTOR: '0' }), false, 'Rückfallweg P7');
 });
