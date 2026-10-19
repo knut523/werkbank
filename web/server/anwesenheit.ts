@@ -1,6 +1,7 @@
 // Abwesenheits-Bremse für „normal nach 24 h angenommen“ (Council-Bedingung 3, Zielbild F4a, Knut 19.10.: per Schalter an).
 // Wer in den 24 h vor der Frist nicht im Workspace war, bekommt nichts automatisch angenommen; nach der Rückkehr läuft die Frist
-// neu. „Da“ heißt: eine Anfrage an die Oberfläche oder ein eigener Chat-Zug (Hauptchat) — Stränge zählen nicht.
+// neu. „Da“ heißt: eine Handlung in der Oberfläche (Seitenwechsel, Antwort — kein GET-Polling) oder ein eigener Chat-Zug (Hauptchat);
+// Stränge zählen nicht.
 // WERKBANK_ABWESENHEIT_BREMSE=0 schaltet ab. Rein bis auf den kleinen Speicher-Helfer.
 
 export const bremseAn = (env = process.env) => env.WERKBANK_ABWESENHEIT_BREMSE !== '0';

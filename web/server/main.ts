@@ -119,7 +119,9 @@ const isMutation = (req: IncomingMessage) => req.method !== 'GET' && req.method 
 async function needUser(req: IncomingMessage): Promise<User> {
   const u = await currentUser(req);
   if (!u) throw new HttpError(401, 'Bitte anmelden.');
-  merkeDa(anwesenheitCol(), u.id, annahmeMs()).catch(() => {});   // Anwesenheit für die Abwesenheits-Bremse
+  // Anwesenheit für die Abwesenheits-Bremse: nur echte Handlungen (Seitenwechsel, Antworten — alles außer GET). Das Polling eines
+  // offen gelassenen Tabs (Zähler alle 60 s, Morgenlage alle 120 s) ist kein „da“ (Pass C).
+  if (isMutation(req)) merkeDa(anwesenheitCol(), u.id, annahmeMs()).catch(() => {});
   if (isMutation(req) && req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Workspace-Header.');
   // Freigabe je Funktion fürs Team (features.ts): Admins alles, sonst WERKBANK_TEAM_FEATURES.
   const f = blockedFeature(u, String(req.url ?? '').split('?')[0]);

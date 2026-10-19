@@ -336,7 +336,8 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
   };
   const springe = (w: string) => {
     const sel = w === 'laeuft' ? '[data-testid="ub-laeuft"]' : w === 'dich' ? (cosAktiv ? '[data-testid="cos-entscheide"]' : '[data-ampel="review"], [data-testid="ub-lose"], [data-testid="ub-board"]') : `[data-ampel="${w}"]`;
-    document.querySelector(sel)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    // Morgenlage zugeklappt → ① ist nicht im Dokument; dann auf die Karten der Übersicht springen (Pass C).
+    (document.querySelector(sel) ?? document.querySelector('[data-testid="cos-morgenlage"]'))?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   };
   const ansichtKarte = ansicht ? karten.find((k) => k.id === ansicht.id) : null;
   const offen = schublade ? karten.find((k) => k.id === schublade.id) : ansichtKarte;

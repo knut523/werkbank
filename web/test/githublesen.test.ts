@@ -15,7 +15,7 @@ test('erlaubt: lesende Pfade mit einfachen Parametern; Repo wird erkannt', () =>
 
 test('gesperrt: fremde Endpunkte, Schreibähnliches, Pfadtricks, freie Parameter', () => {
   for (const p of ['user', 'repos/o/r', 'repos/o/r/hooks', 'repos/o/r/collaborators', 'repos/o/r/pulls/1/merge', 'orgs/x/members',
-    'repos/o/r/contents/../../x', 'repos/o/r/pulls?access_token=x', 'repos/o/r/pulls?state=open&q=a b', 'graphql', 'repos/o/r/git/refs']) {
+    'repos/o/r/contents/../../x', 'repos/o/r/contents/x/compare/../../../../user/emails', 'repos/o/r/compare/a/../../../user...b', 'repos/o/r/contents/./x', 'repos/o/r/pulls?access_token=x', 'repos/o/r/pulls?state=open&q=a b', 'graphql', 'repos/o/r/git/refs']) {
     assert.ok('fehler' in githubLesePfad(p), p);
   }
 });

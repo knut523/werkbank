@@ -18,7 +18,9 @@ const QUERY = /^(per_page|page|state|ref|sha|path|head|base|sort|direction)=[\w.
 export function githubLesePfad(roh: string): { pfad: string; repo: string } | { fehler: string } {
   const s = roh.trim().replace(/^https:\/\/api\.github\.com\//, '').replace(/^\//, '');
   const [pfad, q = ''] = s.split('?');
-  if (pfad.includes('..') && !/\/compare\//.test(pfad)) return { fehler: 'Pfad mit „..“ ist nicht erlaubt.' };
+  // „..“ als Segment nirgends (auch nicht hinter „compare/“ — Pass C: contents/x/compare/../../user wäre sonst durchgegangen);
+  // „a...b“ im Compare ist kein Segment „..“ und bleibt erlaubt.
+  if (pfad.split('/').some((t) => t === '..' || t === '.')) return { fehler: 'Pfad mit „..“ ist nicht erlaubt.' };
   const m = ERLAUBT.exec(pfad);
   if (!m) return { fehler: 'Nur lesende Pfade: repos/<org>/<repo>/(pulls|issues|contents|commits|compare|branches|actions/runs)…' };
   const teile = q ? q.split('&') : [];
