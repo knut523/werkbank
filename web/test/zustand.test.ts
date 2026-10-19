@@ -83,7 +83,6 @@ test('Schalter: Vorgabe aus (Schattenbetrieb, kein Wegräumen) — Rückfallweg 
 });
 
 test('S8/D6: Aufräumen und „Mein Tag“ aus der Leiste nur per Schalter (Vorgabe aus, Rückfallweg P7)', async () => {
-  const { aufraeumenAn, meinTagWeg } = await import('../server/zustand.ts');
+  const { aufraeumenAn } = await import('../server/zustand.ts');
   assert.equal(aufraeumenAn({}), false); assert.equal(aufraeumenAn({ WERKBANK_AUFRAEUMEN: '1' }), true);
-  assert.equal(meinTagWeg({}), false); assert.equal(meinTagWeg({ WERKBANK_MEIN_TAG_WEG: '1' }), true);
 });

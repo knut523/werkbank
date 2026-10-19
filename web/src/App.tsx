@@ -191,8 +191,8 @@ export function App() {
   // Bereiche mit ihren freigegebenen Reitern; ein Bereich ohne freigegebenen Reiter fehlt ganz.
   const neu = !!cfg.navNeu;
   const START = neu ? HEUTE : UEBERSICHT;
-  // D6: „Mein Tag“ nur aus der Leiste — die Adresse #/timebox bleibt erreichbar.
-  const inLeiste = (r: Reiter) => vis(r) && !(cfg.meinTagWeg && r.f === 'timebox');
+  // D6/F2 (Knut 19.10.): „Mein Tag“ steht nie in der Leiste (der Kalender erledigt den Job) — die Adresse #/timebox bleibt erreichbar.
+  const inLeiste = (r: Reiter) => vis(r) && r.f !== 'timebox';
   const bereiche = (neu ? BEREICHE_NEU : BEREICHE).map((b) => ({ ...b, reiter: b.reiter.filter(inLeiste) })).filter((b) => b.reiter.length > 0);
   const alsNav = (b: (typeof bereiche)[number]): Nav => ({ href: letzterReiter(b), label: b.label, ico: b.ico, match: new RegExp(b.reiter.map((r) => r.match.source).join('|')), f: '' });
   const nav: Nav[] = (neu
