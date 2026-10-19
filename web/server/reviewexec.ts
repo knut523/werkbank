@@ -265,12 +265,14 @@ export function lokalAdapter(d: LokalDeps = {}): ExecAdapter {
       let db: ExecErgebnis['db'] = null, dbHinweis: string | null = null;
       const pg = d.pg === undefined ? (pgZiel(env) ? pgVia(pgZiel(env)!, run) : null) : d.pg;
       let dbUrl: string | null = null;
+      // olaf-admin baut die Verbindung aus DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME (src/lib/prisma.ts), nicht aus DATABASE_URL (19.10.).
+      let dbEnv: Record<string, string> = {};
       let belegt: string | null = null;   // Review-DB dieses Laufs (wird im finally immer gelöscht)
       const schritt = async (name: string, cmd: string, args: string[]) => {
         const rest = ende - jetzt();
         if (rest < 10_000) { schritte.push({ name, code: 124, minuten: 0, timedOut: true, tail: 'overall time limit reached' }); return false; }
         const t0 = jetzt();
-        const r = await run(cmd, args, { cwd: job.wt, env: leereUmgebung({ home, npmCache, extra: dbUrl ? { DATABASE_URL: dbUrl } : {} }), timeoutMs: Math.min(rest, 8 * 60_000) });
+        const r = await run(cmd, args, { cwd: job.wt, env: leereUmgebung({ home, npmCache, extra: dbUrl ? { DATABASE_URL: dbUrl, ...dbEnv } : {} }), timeoutMs: Math.min(rest, 8 * 60_000) });
         schritte.push({ name, code: r.code, minuten: Math.round((jetzt() - t0) / 6000) / 10, timedOut: !!r.timedOut, tail: maske(r.out.trim().split('\n').slice(-40).join('\n').slice(-6000)) });
         return r.code === 0;
       };
@@ -310,6 +312,7 @@ export function lokalAdapter(d: LokalDeps = {}): ExecAdapter {
               await reviewDb(pg, v.name, rv);
               db = { vorlage: v.name, neu: v.neu, review: rv };
               dbUrl = z ? pgUrl(z, rv) : null;
+              if (z) dbEnv = { DB_HOST: z.host, DB_PORT: z.port, DB_USER: z.user, DB_PASSWORD: z.password, DB_NAME: rv, DB_SSL: 'disable' };
               const t0 = jetzt();
               try { await migrate(rv); schritte.push({ name: 'prisma migrate deploy (PR delta)', code: 0, minuten: Math.round((jetzt() - t0) / 6000) / 10, timedOut: false, tail: '' }); }
               catch (e: any) { schritte.push({ name: 'prisma migrate deploy (PR delta)', code: 1, minuten: Math.round((jetzt() - t0) / 6000) / 10, timedOut: false, tail: String(e.message) }); }
