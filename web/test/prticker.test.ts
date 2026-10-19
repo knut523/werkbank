@@ -151,6 +151,12 @@ test('Deckel und Kommentar-Entwurf: Empfehlung lesen, Textregeln vor dem Posten'
   assert.equal(deckel({ maxParallel: 2 }, 2).ok, false);
   assert.equal(deckel({ maxParallel: 2 }, 1).ok, true);
   assert.equal(deckel({ maxParallel: 2, maxPerDay: 5 } as any, 0).ok, true, 'Tagesgrenze zählt nicht mehr');
+  // Knut 19.10.: mehr parallel, aber gegen den Speicher der ganzen Box
+  assert.equal(deckel({ maxParallel: 5 }, 3, { echtGb: 4, hostFreiGb: 14 }).ok, true, 'Luft → viertes darf');
+  assert.match(deckel({ maxParallel: 5 }, 3, { echtGb: 9.5, hostFreiGb: 14 }).why, /Box ausgelastet/);
+  assert.match(deckel({ maxParallel: 5 }, 1, { echtGb: 3, hostFreiGb: 5 }).why, /Box ausgelastet/, 'Host knapp (Nachbarn)');
+  assert.equal(deckel({ maxParallel: 5 }, 0, { echtGb: 3, hostFreiGb: 5 }).ok, true, 'das erste läuft immer an');
+  assert.equal(deckel({ maxParallel: 5 }, 0, { echtGb: 3, hostFreiGb: 2 }).ok, false, 'außer der Host ist fast voll');
   assert.deepEqual(parseKommentar('Empfehlung: request-changes\n\nBitte X fixen.'), { empfehlung: 'request-changes', text: 'Bitte X fixen.' });
   assert.equal(parseKommentar('Empfehlung: merge!\ntext'), null);
   assert.equal(parseKommentar('Empfehlung: approve\n'), null, 'ohne Text');
