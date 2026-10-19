@@ -207,6 +207,11 @@ function kopf(kind: Kind, heute: string): string {
 
 /** Leere Datei mit Kopf; Personen vorbefüllt (K11), Themen vorbefüllt aus Jira-Workstreams/Strängen (K9). */
 export type ThemaVor = string | { name: string; stand?: string; naechster?: string; ball?: string };
+/** Gegenprüfung 19.10.: dieselbe Namensgleichheit wie beim Schreiben (norm), höchstens `max` — so zeigt die Vorschau genau, was in die Datei kommt. */
+export function themenEindeutig<T extends { name: string }>(liste: T[], max = 60): T[] {
+  const gesehen = new Set<string>();
+  return liste.filter((t) => { const k = norm(t.name); if (!k || gesehen.has(k)) return false; gesehen.add(k); return true; }).slice(0, max);
+}
 export function neueDatei(kind: Kind, heute: string, vor: { personen?: { name: string; aliase: string[] }[]; themen?: ThemaVor[] } = {}): string {
   let t = kopf(kind, heute);
   if (kind === 'zusagen') {

@@ -181,3 +181,11 @@ test('Register aus dem aktuellen Stand (Knut 19.10.): Themen mit Stand, nächste
   assert.deepEqual(th.map((x) => x.name), ['Bill-OCR', 'Cockpit', 'Flex']);
   assert.equal(th[0].ball, 'Daniela'); assert.match(th[0].stand, /1 überfällig/); assert.match(th[0].naechster, /PM-1/);
 });
+
+test('Gegenprüfung 19.10.: Vorschau = Datei — gleiche Themennamen fallen schon im Vorschlag zusammen, höchstens 60', async () => {
+  const { themenEindeutig } = await import('../server/cosregister.ts');
+  const l = themenEindeutig([{ name: 'Produkt OLAF' }, { name: 'produkt-olaf' }, { name: 'Flexibilität' }, { name: 'Flexibilitat' }, { name: ' ' }]);
+  assert.deepEqual(l.map((x) => x.name), ['Produkt OLAF', 'Flexibilität']);
+  assert.equal(parseThemen(neueDatei('themen', HEUTE, { themen: l })).themen.length, l.length, 'Datei hat genau die Zeilen der Vorschau');
+  assert.equal(themenEindeutig(Array.from({ length: 70 }, (_, n) => ({ name: 'T' + n }))).length, 60);
+});

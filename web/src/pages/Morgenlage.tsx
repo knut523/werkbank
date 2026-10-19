@@ -176,7 +176,7 @@ function RegisterAnlegen({ onDone }: { onDone: () => void }) {
     setErr(null); setBusy(true);
     try {
       const r: any = await api('/api/cos/register/anlegen', { body: { confirm: true, themen: vor.vorschlag } });
-      toast(r.themen?.dry ? 'Trockenlauf: Register nicht geschrieben (Testinstanz)' : 'Register angelegt'); setVor(null); onDone();
+      toast((r.themen ?? r.zusagen)?.dry ? 'Trockenlauf: Register nicht geschrieben (Testinstanz)' : 'Register angelegt'); setVor(null); onDone();
     } catch (e) { setErr(e); } finally { setBusy(false); }
   };
   return <div className="small cos-leer" data-testid="cos-leer">
@@ -184,9 +184,9 @@ function RegisterAnlegen({ onDone }: { onDone: () => void }) {
       die aus Jira und GitHub abgeleitet sind. {!vor && <button className="ub-btn sm" disabled={busy} onClick={zeigen} data-testid="cos-register-vorschlag">{busy ? 'Lädt …' : 'Aus dem aktuellen Stand anlegen …'}</button>}</p>
     {vor && <div className="cos-vorschau" data-testid="cos-register-vorschau">
       <p className="tiny">Vorschlag aus Jira-Workstreams mit offenen Tickets und offenen Unter-Chats — {vor.vorschlag.length} Themen. Zusagen kommen danach über „Einwurf“ (Meeting-Notizen, Mails).</p>
-      <p className="tiny"><b>{vor.themen.preview.datei}</b></p>
-      <ul className="tiny">{vor.themen.preview.zeilen.map((z: any, i: number) => <li key={i}><code>{z.nachher}</code></li>)}</ul>
-      <p className="tiny"><b>{vor.zusagen.preview.datei}</b> — Personen: {vor.zusagen.preview.zeilen.length}</p>
+      {vor.themen && <><p className="tiny"><b>{vor.themen.preview.datei}</b></p>
+        <ul className="tiny">{vor.themen.preview.zeilen.map((z: any, i: number) => <li key={i}><code>{z.nachher}</code></li>)}</ul></>}
+      {vor.zusagen && <p className="tiny"><b>{vor.zusagen.preview.datei}</b> — Personen: {vor.zusagen.preview.zeilen.length}</p>}
       <div className="ub-row"><button className="ub-btn pri sm" disabled={busy} onClick={anlegen} data-testid="cos-register-ja">Ja, so anlegen</button>
         <button className="linklike tiny" onClick={() => setVor(null)}>abbrechen</button></div>
     </div>}

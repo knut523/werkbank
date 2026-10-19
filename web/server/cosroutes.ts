@@ -1,7 +1,7 @@
 // Chief of Staff: Routen (docs/plan-chief-of-staff.md). main.ts ruft `cosRoutes(deps)` einmal auf — so bleibt der Eingriff dort klein.
 // Alles nur Admin (Feature `cos`); die internen Wege (MCP-Werkzeuge) schreiben erst, nachdem Knut im Chat „ja“ gesagt hat.
 
-import { liesRegister, schreibeZusagen, schreibeThema, schreibe, hashText, teamNamen, teamSet, seiteVon, registerRel, CosError, type ZOp, type ThemaOp, type SchreibOpts, type SchreibErgebnis } from './cosregister.ts';
+import { liesRegister, schreibeZusagen, schreibeThema, schreibe, hashText, themenEindeutig, teamNamen, teamSet, seiteVon, registerRel, CosError, type ZOp, type ThemaOp, type SchreibOpts, type SchreibErgebnis } from './cosregister.ts';
 import { startEinwurf, EinwurfError } from './coseinwurf.ts';
 import { sammleLage, sammleEingabe, meetingTeams, type Quellen } from './cossammle.ts';
 import { triageUebernehmen, pruefeDatei, rueckstau, archiviereRueckstau, rueckgaengig, RUECKGAENGIG_TAGE, type ArchivStore } from './cosmeeting.ts';
@@ -84,14 +84,16 @@ export function cosRoutes(d: CosDeps) {
     const u = await d.needAdmin(req);
     const b = await d.body(req, 1 << 20);
     const vaultDir = d.vaultDir();
-    if (existsSync(join(vaultDir, registerRel('zusagen'))) || existsSync(join(vaultDir, registerRel('themen')))) throw new d.HttpError(409, 'Die Register gibt es schon — sie wachsen über Einwurf und Morgenlage.');
-    const gezeigt = Array.isArray(b.themen) && b.confirm === true ? b.themen.slice(0, 60).filter((t: any) => t && typeof t.name === 'string' && t.name.trim())
+    // Je Datei: fehlt nur eine (abgebrochenes Anlegen), wird nur sie angelegt — kein 409-Sackgasse.
+    const fehlt = { zusagen: !existsSync(join(vaultDir, registerRel('zusagen'))), themen: !existsSync(join(vaultDir, registerRel('themen'))) };
+    if (!fehlt.zusagen && !fehlt.themen) throw new d.HttpError(409, 'Die Register gibt es schon — sie wachsen über Einwurf und Morgenlage.');
+    const gezeigt = Array.isArray(b.themen) && b.confirm === true ? b.themen.filter((t: any) => t && typeof t.name === 'string' && t.name.trim())
       .map((t: any) => ({ name: String(t.name), stand: String(t.stand ?? ''), naechster: String(t.naechster ?? ''), ball: String(t.ball ?? '') })) : null;
-    const themen: ThemaVorschlag[] = gezeigt ?? await d.registerVorschlag(u);
+    const themen: ThemaVorschlag[] = themenEindeutig(gezeigt ?? await d.registerVorschlag(u));
     const alle = (t: string) => ({ text: t, zeilen: t.split('\n').filter((l) => l.startsWith('- ')).map((l) => ({ vorher: null, nachher: l })) });
     const o = (): SchreibOpts => ({ vaultDir, dry: d.dry(), confirm: b.confirm === true, hash: b.confirm === true ? hashText('') : undefined, vorbefuellung: () => ({ personen: teamNamen(vaultDir), themen }), danach: d.invalidate });
-    const zusagen = await schreibe('zusagen', alle, o());
-    const th = await schreibe('themen', alle, o());
+    const zusagen = fehlt.zusagen ? await schreibe('zusagen', alle, o()) : null;
+    const th = fehlt.themen ? await schreibe('themen', alle, o()) : null;
     if (b.confirm === true) d.log('cos register angelegt', { themen: themen.length, dry: d.dry() });
     send(res, 200, { zusagen, themen: th, vorschlag: themen });
   });
