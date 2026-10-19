@@ -17,6 +17,15 @@ export function wechselSperre(aktiv: string | null | undefined, text: unknown, n
   return true;
 }
 
+/** Der jetzt offene Chat ist das Ziel: Wechsel vorbei. */
+export function angekommen(aktiv: string | null | undefined) { if (wechsel && aktiv === wechsel.zu) wechsel = null; }
+
+/** Ziel eines noch ladenden Chatwechsels (sonst null). LibreChat beendet beim Klick sofort den Stream (isSubmitting false), der
+ *  vorige Chat ist aber noch aktiv — Nachreichen behandelt sein Zugende dann schon als „anderer Chat“ (Fund 1). */
+export function wechselZiel(now = Date.now()): string | null {
+  return wechsel && now <= wechsel.bis ? wechsel.zu : null;
+}
+
 /** Vorgemerkter Text für den jetzt offenen Chat (einmal), samt dem Chat, in dem er getippt wurde. */
 export function abholen(aktiv: string | null | undefined): { von: string; text: string } | null {
   if (!vorgemerkt || !aktiv || vorgemerkt.zu !== aktiv) return null;
