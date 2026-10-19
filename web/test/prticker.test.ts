@@ -290,7 +290,7 @@ test('Statuszeile: Sofort-Kommentar englisch mit Position/Tiefe/ETA, ein Takt po
   assert.match(k2.body.body, /^🔎 Automated review queued · position 1 · depth regular · ETA ~\d+ min \(OLAF Workspace\)/);
   assert.match(k3.body.body, /^🔎 Automated review queued · position 2 · depth deep \(static deep review — test execution is switched off\) · ETA ~\d+ min/);
   for (const k of [k2, k3]) assert.doesNotMatch(k.body.body, /[äöüßÄÖÜ]/, 'englisch');
-  assert.equal([k2, k3].filter((k) => /How this works: `@review` = fast review/.test(k.body.body)).length, 2, 'Anleitung an jedem Status-Kommentar');
+  assert.equal([k2, k3].filter((k) => /How this works: `@review` = full review/.test(k.body.body)).length, 2, 'Anleitung an jedem Status-Kommentar');
   assert.match((k2.body.body + k3.body.body), /`@review deep` = additionally runs the repo's tests, typecheck, build and DB suites/);
   // dritter Takt: nichts Neues
   const n = posts.length; await R.reviewTick(deps); assert.equal(posts.length, n, 'kein Doppelpost');
