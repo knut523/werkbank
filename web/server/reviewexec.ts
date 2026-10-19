@@ -249,7 +249,8 @@ export function ciUmgebung(wt: string): Map<string, CiEnv> {
           // Läuft die CI dasselbe Skript mehrmals (z. B. ohne und mit DB), zählt die Vereinigung: frühere Werte bleiben, fehlende
           // kommen dazu — sonst liefe die Variante ohne DB und die DB-Hälfte überspränge sich still (Pass C).
           const alt = out.get(m[2]);
-          out.set(m[2], alt ? { env: { ...e.env, ...alt.env }, secrets: [...new Set([...alt.secrets, ...e.secrets])], db: alt.db || e.db } : e);
+          // Secrets: Schnittmenge — läuft eine Variante ohne Secret, wird sie nicht übersprungen (Re-Pass). DB: Vereinigung (kein falsches Grün).
+          out.set(m[2], alt ? { env: { ...e.env, ...alt.env }, secrets: alt.secrets.filter((x) => e.secrets.includes(x)), db: alt.db || e.db } : e);
         }
       }
     }

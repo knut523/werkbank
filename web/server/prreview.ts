@@ -449,7 +449,7 @@ export function textRegeln(text: string, r: { repo: string; number: number }, be
 }
 
 /** Paket 223: Kommentar gesteht eine unvollständige eigene Prüfung ein (Eval: Teilagenten waren bei der Abgabe nicht zurück). */
-const UNVOLLSTAENDIG = /\b(this pass did not cover|incomplete review|review is incomplete because|(sub-?(reviews?|checks?|passes|agents?)|parallel (reviews?|checks?|passes)|teilprüfungen?)\W+(?:\w+\W+){0,4}?(had |have |were |was )?(not|never) (yet )?(returned|come back|finished|incorporated))/i;
+const UNVOLLSTAENDIG = /\b(this pass did not cover|incomplete review|review is incomplete because|(sub-?(reviews?|checks?|passes|agents?)|subagents?|parallel (reviews?|checks?|passes)|[\w-]+ passes|teilprüfungen?)\W+(?:[\w-]+\W+){0,4}?((had |have |were |was )?(not|never) (yet )?(returned|come back|finished|incorporated)|(haven|hadn|didn|weren)['’]t (yet )?(return(ed)?|come back|finish(ed)?)|(are|were|is) still (pending|running)))/i;
 // Pass C (Claude): „the null check is incomplete“, „still running when“ und „this review did not check runtime behaviour“ (statisches
 // Review, D5) sind normale Review-Sprache — nur Formulierungen über fehlende Teilprüfungen zählen.
 
@@ -594,13 +594,15 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       const nums = verweise(k.text, r.number);
       // Eigene Abfrage gescheitert → nichts umschreiben (sonst würde ein richtiges #N auf ein anderes Repo umgebogen, Pass C).
       const da = nums.length && deps.vorhanden ? await deps.vorhanden(r.repo, nums).catch(() => null) : new Set<number>();
-      const bekannt = da ?? new Set<number>();
+      const bekannt = da ?? new Set<number>(nums);   // nicht prüfbar ≠ gibt es nicht (Re-Pass): kein Nachfass mit falscher Behauptung
       const q = da ? await qualifiziere(k.text, r, readBericht(join(reviewDir(), r.paket, 'kontext.md')) ?? '', bekannt, deps.vorhanden) : k.text;
       if (q !== k.text) {
         k = { ...k, text: q };
         writeFileSync(join(reviewDir(), r.paket, 'kommentar.md'), `Empfehlung: ${k.empfehlung}\n\n${q}\n`);
       }
       probleme = textRegeln(k.text, r, bekannt);
+      // Re-Pass: Nachfass (Formatfehler) und dann abgebrochen → der Entwurf hat nie eine Gegenprüfung gesehen.
+      if (r.status === 'nachbessern' && !r.gp && deps.gegenpruefung && kaputt) probleme.push('ohne Gegenprüfung (Strang nach dem Nachfass abgebrochen)');
     } else probleme = ['kein kommentar.md mit erster Zeile „Empfehlung: …“ (Format)'];
     // Einmal nachfassen, solange der Strang lebt; danach abschließen (gepostet wird dann nicht, Knut bekommt eine Meldung).
     if (probleme.length && !r.nb && d0 && !d.autoStopped && !kaputt && deps.sendStrand) {
@@ -620,10 +622,14 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
     if (!claim.modifiedCount) continue;
     done++;
     if (!k) { await meldeStatus(r, statusZeile({ art: 'failed', grund: grundEn(set.note) }), deps, now); await meldeKnut({ ...r, ...set }, set.note, deps, now); continue; }
-    const pe = s.autoPost && deps.post ? await autoPost({ ...r, ...set }, k, deps, now) : { art: 'aus' as const, grund: 'automatisches Posten ist aus' };
+    // Probleme, die nach dem Nachfass bleiben, sperren das Posten selbst — nicht nur die Textregeln, die autoPost neu prüft (Re-Pass).
+    const pe: PostErgebnis = !(s.autoPost && deps.post) ? { art: 'aus', grund: 'automatisches Posten ist aus' }
+      : probleme.length ? (await reviewsCol().updateOne({ _id: r._id }, { $set: { note: `nicht automatisch gepostet: ${probleme.join('; ')} — in der Review-Ansicht prüfen` } }), { art: 'regel', grund: probleme.join('; ') })
+      : await autoPost({ ...r, ...set }, k, deps, now);
     // Bewusst nicht gepostet (gemergt, neuer Stand, Posten aus/nicht freigegeben, verworfen) → die Wache meldet es nicht (Pass C).
     if (pe.art === 'zu' || pe.art === 'neu' || pe.art === 'aus') await reviewsCol().updateOne({ _id: r._id }, { $set: { ohnePost: pe.art } });
     if (pe.art === 'gepostet') await meldeStatus(r, statusZeile({ art: 'done', gepostet: true, url: pe.url ?? null, empfehlung: k.empfehlung }), deps, now);
+    else if (pe.art === 'hand') { /* Knut postet gerade selbst — keine Statuszeile „not posted“, keine Meldung (Re-Pass) */ }
     else if (pe.art === 'zu' || pe.art === 'neu') await meldeStatus(r, statusZeile({ art: 'skipped', grund: pe.art === 'neu' ? 'new commits since the review — tag @review again for the new head' : 'PR was merged or closed before the review was posted' }), deps, now);
     else {
       await meldeStatus(r, statusZeile({ art: 'done', gepostet: false, empfehlung: k.empfehlung }), deps, now);
@@ -734,7 +740,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
 }
 
 /** Automatisch posten (Ergänzung A): nur COMMENT, nur wenn PR offen und Kopf unverändert, nur wenn die Textregeln passen. */
-export type PostErgebnis = { art: 'gepostet' | 'regel' | 'zu' | 'neu' | 'fehler' | 'aus'; grund: string; url?: string | null };
+export type PostErgebnis = { art: 'gepostet' | 'regel' | 'zu' | 'neu' | 'fehler' | 'aus' | 'hand'; grund: string; url?: string | null };
 export async function autoPost(r: any, k: { empfehlung: string; text: string }, deps: ReviewDeps, now = new Date()): Promise<PostErgebnis> {
   // Ergebnis für Statuszeile und Meldung (Paket 223): jeder Ausgang ohne Posten hat einen Grund.
   const nicht = async (art: PostErgebnis['art'], note: string, grund = note): Promise<PostErgebnis> => { await reviewsCol().updateOne({ _id: r._id }, { $set: { note } }); return { art, grund }; };
@@ -742,7 +748,9 @@ export async function autoPost(r: any, k: { empfehlung: string; text: string }, 
   if (r.posted) return { art: 'gepostet', grund: '', url: r.posted.url ?? null };   // Absicherung: nie zweimal (Pass C)
   // Verweise auf andere PRs/Issues: existierende (offen, gemergt, geschlossen) sind in Ordnung; nur unbekannte blocken (Knut 17.10.).
   const nums = verweise(k.text, r.number);
-  const bekannt = nums.length && deps.vorhanden ? await deps.vorhanden(r.repo, nums).catch(() => new Set<number>()) : new Set<number>();
+  const da = nums.length && deps.vorhanden ? await deps.vorhanden(r.repo, nums).catch(() => null) : new Set<number>();
+  if (!da) return nicht('fehler', 'nicht gepostet: Verweise nicht prüfbar (GitHub-Abfrage gescheitert)');
+  const bekannt = da;
   const regeln = textRegeln(k.text, r, bekannt);
   if (regeln.length) return nicht('regel', `nicht automatisch gepostet: ${regeln.join('; ')} — in der Review-Ansicht prüfen`, regeln.join('; '));
   const pr = deps.prNow ? await deps.prNow(r.repo, r.number).catch(() => null) : null;
@@ -756,7 +764,7 @@ export async function autoPost(r: any, k: { empfehlung: string; text: string }, 
   if (!c.modifiedCount) {
     const j: any = await reviewsCol().findOne({ _id: r._id }, { projection: { verworfen: 1, posted: 1 } });
     if (j?.posted) return { art: 'gepostet', grund: '', url: j.posted.url ?? null };
-    return j?.verworfen ? { art: 'aus', grund: 'von Knut verworfen' } : { art: 'fehler', grund: 'wird gerade von Hand gepostet' };
+    return j?.verworfen ? { art: 'aus', grund: 'von Knut verworfen' } : { art: 'hand', grund: 'wird gerade von Hand gepostet' };
   }
   try {
     const res = await deps.post!(r, `**${AUTO_KOPF}**\n\n${k.text}${fussnote(r.head, k.empfehlung)}`, 'COMMENT');
@@ -805,7 +813,7 @@ export async function wache(s: TickerSettings, deps: Pick<ReviewDeps, 'melde' | 
       else await meta.updateOne({ _id: 'pr_ticker' as any }, { $set: { fehlerGemeldet: null } });
     }
   }
-  const offen = (await reviewsCol().find({ posted: { $in: [null] }, verworfen: { $in: [null] }, ohnePost: { $in: [null] }, status: { $nin: ['übersprungen', 'deckel'] }, createdAt: { $gte: new Date(now.getTime() - 7 * TAG_MS) } }).sort({ createdAt: 1 }).toArray()) as any[];
+  const offen = (await reviewsCol().find({ posted: { $in: [null] }, verworfen: { $in: [null] }, ohnePost: { $in: [null] }, status: { $nin: ['übersprungen', 'deckel'] }, $or: [{ queuedAt: { $gte: new Date(now.getTime() - 7 * TAG_MS) } }, { queuedAt: { $in: [null] }, createdAt: { $gte: new Date(now.getTime() - 7 * TAG_MS) } }] }).sort({ createdAt: 1 }).toArray()) as any[];
   for (const r of offen) {
     if (n >= WACHE_JE_TAKT) break;   // nach einem langen Ausfall nicht zwanzig Meldungen auf einmal; der Rest kommt in den nächsten Takten
     if (!s.autoPost && r.status === 'fertig') continue;   // Posten ist aus: Knut prüft ohnehin selbst

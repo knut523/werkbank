@@ -245,6 +245,9 @@ test('Paket 223: Umgebung der CI-Suiten aus dem Workflow (olaf-admin deploy.yml)
   const ci2 = X.ciUmgebung(wt);
   assert.deepEqual(ci2.get('pay:test')!.secrets, ['STRIPE_KEY']);
   assert.deepEqual(ci2.get('quote:test')!.env, { TZ: 'Europe/Vienna', MSG: 'a b' });
+  // Re-Pass: läuft ein Skript einmal ohne und einmal mit Secret, wird die Variante ohne Secret nicht übersprungen
+  writeFileSync(join(wt, '.github', 'workflows', 'zwei.yml'), 'jobs:\n  unit:\n    steps:\n      - run: npm run both:test\n  integ:\n    env:\n      API_KEY: ${{ secrets.X }}\n    steps:\n      - run: npm run both:test\n');
+  assert.deepEqual(X.ciUmgebung(wt).get('both:test')!.secrets, []);
   const p = ci.get('parity:test')!;
   assert.deepEqual(p.secrets, ['TARIFF_APP_READ_TOKEN']); assert.equal(p.env.REF, 'main'); assert.equal(p.env.SHARD, undefined); assert.equal(p.env.PATH, undefined);
   assert.deepEqual(Object.keys(p.env).sort(), ['BASE', 'REF'], 'LD_*, BASH_ENV, Proxy nie');
