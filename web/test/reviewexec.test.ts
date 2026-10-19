@@ -2,7 +2,7 @@
 // Ohne echte Postgres: ein Schein-Läufer spielt psql/createdb/dropdb nach und merkt sich die Datenbanken.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as X from '../server/reviewexec.ts';
@@ -174,7 +174,7 @@ test('Ohne Review-Postgres: Suiten laufen, Hinweis statt DB; fehlgeschlagener Sc
   assert.equal(X.pgZiel({} as any), null);
 });
 
-test('Pass C: Ausgaben maskiert (DB-URL, Passwort), verwaiste Review-/Bau-DBs weg, kein zweiter Lauf auf derselben Review-DB, Unsinn im Deckel → 12 min', async () => {
+test('Pass C: Ausgaben maskiert (DB-URL, Passwort), verwaiste Review-/Bau-DBs weg, kein zweiter Lauf auf derselben Review-DB, Unsinn im Deckel → 20 min', async () => {
   // Ausgabe druckt die Verbindungs-URL
   const s = schein({ fremde: ['olaf_rv_admin_1_deadbeef', 'olaf_tpl_admin_0000000000_bau', 'olaf_admin', 'olaf_tpl_admin_9999999999'] });
   const laut: X.Run = async (cmd, args, o) => (cmd === 'npm' && args[1] === 'test' ? { code: 1, out: `Error: connect ${o.env.DATABASE_URL} failed (password pw)` } : s.run(cmd, args, o));
@@ -194,7 +194,7 @@ test('Pass C: Ausgaben maskiert (DB-URL, Passwort), verwaiste Review-/Bau-DBs we
   assert.ok(s2.dbs.has('olaf_rv_admin_354_cccccccc'), 'DB des ersten Laufs unberührt');
   auf(); await p1;
   assert.equal(s2.dbs.has('olaf_rv_admin_354_cccccccc'), false);
-  assert.equal(X.execMinuten({ WERKBANK_REVIEW_EXEC_MIN: '12min' } as any), 12);
+  assert.equal(X.execMinuten({ WERKBANK_REVIEW_EXEC_MIN: '12min' } as any), 20, 'Unsinn → Vorgabe 20 (19.10.)');
   assert.equal(X.execMinuten({ WERKBANK_REVIEW_EXEC_MIN: '20' } as any), 20);
 });
 
@@ -205,4 +205,18 @@ test('realRun: Zeitdeckel beendet die ganze Prozessgruppe; Umgebung genau wie ü
   assert.equal(r.timedOut, true); assert.ok(Date.now() - t0 < 5000);
   const e = await X.realRun(process.execPath, ['-e', 'console.log(Object.keys(process.env).sort().join(","))'], { env: { PATH: '/usr/bin:/bin', HOME: '/tmp/x' }, timeoutMs: 5000 });
   assert.equal(e.code, 0); assert.equal(e.out.trim(), 'HOME,PATH');
+});
+
+test('19.10.: Repos ohne `test` (olaf-admin) — die CI-Suiten laufen, passende zuerst, Deploy/Sync nie', async () => {
+  const wt = worktree({ typecheck: 'tsc', lint: 'eslint', build: 'next build', 'follow-up:test': 'tsx --test src/lib/follow-up.test.ts',
+    'follow-up:test:db': 'tsx --test tools/follow-up-staff-opt-out-db.test.ts', 'otp:test': 'tsx --test tools/otp-mail.test.ts', 'tariff-parity:sync': 'tsx sync.ts' }, false);
+  mkdirSync(join(wt, '.github', 'workflows'), { recursive: true });
+  writeFileSync(join(wt, '.github', 'workflows', 'deploy.yml'), 'steps:\n - run: npm run typecheck\n - run: npm run otp:test\n - run: npm run follow-up:test:db\n - run: npm run tariff-parity:sync\n - run: npm run otp:test\n');
+  assert.deepEqual(X.ciSkripte(wt), ['typecheck', 'otp:test', 'follow-up:test:db']);
+  const plan = X.skriptPlan(X.SKRIPTE({} as any), X.ciSkripte(wt), JSON.parse(readFileSync(join(wt, 'package.json'), 'utf8')).scripts, ['src/lib/follow-up-staff-opt-out.ts']);
+  assert.deepEqual(plan, ['typecheck', 'lint', 'follow-up:test:db', 'build', 'otp:test']);
+  const s = schein();
+  const e = await X.lokalAdapter({ run: s.run, pg: null, env: { HOME: TMP } as any, git: async (a) => (a[0] === 'diff' ? 'src/lib/follow-up-staff-opt-out.ts\n' : ''), base: join(TMP, 'b9') }).lauf(job(wt));
+  assert.deepEqual(e.schritte.map((x) => x.name), ['npm ci', 'npm run typecheck', 'npm run lint', 'npm run follow-up:test:db', 'npm run build', 'npm run otp:test']);
+  assert.doesNotMatch(e.md, /tariff-parity:sync/);
 });
