@@ -12,7 +12,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
-import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK } from './tools.ts';
+import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
@@ -557,6 +557,12 @@ export function orchStateOf(userId: string) {
       resumable: !!sessionMap[k], turns: seen?.turns ?? null, written: seen?.written ?? [],
     };
   });
+}
+
+/** Die Deny-Regeln, die ein Strang im Auto-Modus zusätzlich bekommt (Fund 1, Knut 19.10.2026). Eigene Funktion, damit sie
+ *  ohne laufende Brücke prüfbar ist; der Wächter-Test fährt zusätzlich die Bash-Muster über den echten Weg. */
+export function strandDeny(profil: string): string[] {
+  return [...ORCH_DENY, ...orchMcpDeny(), ...(profil === 'leser' ? LESER_DENY : [])];
 }
 
 // Git ohne Zugangsdaten für Stränge: eigene globale Konfiguration (nur Name/E-Mail), kein Credential-Helfer, Push auf
@@ -1480,6 +1486,14 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     stderr: (d: string) => { if (/error/i.test(d)) log('sdk stderr', { conv: key, line: redact(d.slice(0, 300)) }); },
   };
   if (live.mode === 'auto') options.settings = autoSettings();
+  // Fund 1 (Knut 19.10.2026): Im Auto-Modus entscheidet allein der SDK-Klassifikator — der PreToolUse-Hook der Brücke
+  // wird dort nicht aufgerufen. Die harten Strang-Sperren müssen deshalb als Deny-Regeln mit, sonst laufen `scripts/orch`,
+  // `/proc/*/environ` und `.env.local` durch (im Log als „auto erlaubt“). Gilt für Stränge und Worker; der Leitstand
+  // behält bewusst seine Rückfrage für Vault und Jira.
+  if (live.mode === 'auto' && live.orch) {
+    const deny = strandDeny(profil);
+    options.settings = { ...(options.settings ?? {}), permissions: { ...((options.settings as any)?.permissions ?? {}), deny: [...(((options.settings as any)?.permissions?.deny) ?? []), ...deny] } };
+  }
   applyHome(home, env, options);
   if (resume) options.resume = resume;
   // Anbieter seit dem letzten Zug gewechselt (Melious ↔ Claude): nicht fortsetzen. Melious liefert thinking-Blöcke ohne
