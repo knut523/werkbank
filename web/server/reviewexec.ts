@@ -16,7 +16,7 @@
 // werden nur Datenbanken mit den Präfixen olaf_tpl_ und olaf_rv_.
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -190,8 +190,33 @@ export interface ExecErgebnis { ausgefuehrt: boolean; grund: string; schritte: E
 /** Adapter-Schnittstelle: heute lokal; docker-remote / managed-agents folgen mit derselben Form. */
 export interface ExecAdapter { name: ExecModus; lauf: (job: ExecJob) => Promise<ExecErgebnis> }
 
-/** Gesamtdeckel in Minuten (WERKBANK_REVIEW_EXEC_MIN, Vorgabe 12; Unsinn → 12). */
-export const execMinuten = (env = process.env) => { const n = Number(env.WERKBANK_REVIEW_EXEC_MIN); return Number.isFinite(n) && n > 0 && n <= 60 ? n : 12; };
+/** Gesamtdeckel in Minuten (WERKBANK_REVIEW_EXEC_MIN, Vorgabe 20 seit 19.10. — die CI-Suiten brauchen mehr als 12; Unsinn → 20). */
+export const execMinuten = (env = process.env) => { const n = Number(env.WERKBANK_REVIEW_EXEC_MIN); return Number.isFinite(n) && n > 0 && n <= 60 ? n : 20; };
+
+/** Was die CI des Repos ausführt: `npm run <name>` aus .github/workflows/*.yml, in Reihenfolge, ohne Doppelte und ohne
+ *  Deploy/Release/Publish/Sync/Mirror/Seed (Knut 19.10.: olaf-admin hat kein `test`, die Tests heißen `<bereich>:test[:db]`). */
+export function ciSkripte(wt: string): string[] {
+  const dir = join(wt, '.github', 'workflows');
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  for (const f of readdirSync(dir).filter((x) => /\.ya?ml$/.test(x)).sort()) {
+    let t = ''; try { t = readFileSync(join(dir, f), 'utf8'); } catch { continue; }
+    for (const m of t.matchAll(/npm run ([\w:.-]+)/g)) if (!out.includes(m[1]) && !/(^|:)(deploy|release|publish|sync|mirror|seed)$/.test(m[1])) out.push(m[1]);
+  }
+  return out;
+}
+
+/** Rein: Reihenfolge der Schritte — Grundskripte (typecheck, lint, test…), dann CI-Suiten, die eine geänderte Datei berühren,
+ *  dann build, dann die übrigen CI-Suiten, solange der Deckel reicht. */
+export function skriptPlan(grund: string[], ci: string[], scripts: Record<string, string>, geaendert: string[]): string[] {
+  const da = (x: string) => !!scripts[x];
+  const vorne = grund.filter((x) => x !== 'build' && da(x));
+  const stems = geaendert.map((g) => g.split('/').pop()!.replace(/\.(test\.)?[cm]?[tj]sx?$/, '')).filter((x) => x.length >= 5);
+  const trifft = (x: string) => geaendert.some((g) => scripts[x].includes(g)) || stems.some((st) => scripts[x].includes(st));
+  const rest = ci.filter((x) => da(x) && !vorne.includes(x) && x !== 'build');
+  const relevant = rest.filter(trifft);
+  return [...vorne, ...relevant, ...(grund.includes('build') && da('build') ? ['build'] : []), ...rest.filter((x) => !relevant.includes(x))];
+}
 export const SKRIPTE = (env = process.env) => String(env.WERKBANK_REVIEW_EXEC_SCRIPTS || 'typecheck,lint,test,test:db,test:integration,build').split(',').map((s) => s.trim()).filter((s) => /^[\w:.-]{1,40}$/.test(s));
 
 export function ergebnisMd(job: ExecJob, e: Omit<ExecErgebnis, 'md'>): string {
@@ -291,7 +316,8 @@ export function lokalAdapter(d: LokalDeps = {}): ExecAdapter {
             } catch (e: any) { dbHinweis = `not set up: ${maske(String(e?.message ?? e)).slice(0, 200)}`; }
           }
         }
-        for (const s of SKRIPTE(env)) if (scripts[s]) await schritt(`npm run ${s}`, 'npm', ['run', s, '--if-present']);
+        const geaendert = job.basis && d.git ? (await d.git(['diff', '--name-only', `${job.basis}...HEAD`], job.wt).catch(() => '')).split('\n').map((x) => x.trim()).filter(Boolean) : [];
+        for (const s of skriptPlan(SKRIPTE(env), ciSkripte(job.wt), scripts, geaendert)) await schritt(`npm run ${s}`, 'npm', ['run', s, '--if-present']);
         return fertig();
       } finally {
         if (pg && belegt) await pg.dropdb(belegt).catch((e: any) => d.log?.(`dropdb ${belegt}: ${e.message}`));
