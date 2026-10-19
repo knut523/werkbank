@@ -52,6 +52,7 @@ import { olafJira } from './cos-olafjira.ts';
 import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
 import { boxTick } from './boxwaechter.ts';
 import { startSchaetzung, laufMediane } from './startschaetzung.ts';
+import { ladeSichtung, waehle as waehleSichtung } from './vaultsichtung.ts';
 import { starte as claudeAnmeldungStarten, codeEinreichen as claudeCodeEinreichen } from './claudeverbinden.ts';
 import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungsseite.ts';
 import { abschlussTick, wocheTick } from './cosabschluss.ts';
@@ -1456,8 +1457,12 @@ function vaultFragenFuerInbox(now = Date.now()) {
     const idx = vaultIdx();
     const { decisions, texts } = collectDecisions(idx, readVault, ROADMAP_BASE);
     const offen = todayQuestions(decisions, { texts, fm: (p) => idx.notes.get(p)?.fm, today: vienna().date }).open;
-    const einzeln = offen.map((q) => ({ q, st: stufeVon({ text: `${q.head} ${q.question} ${q.section}` }) })).filter(({ q, st }) => st.stufe === 'wichtig' && q.first && !q.old)
-      .map(({ q, st }) => ({ path: q.path, line: q.line, hash: q.hash, head: q.head, section: q.section, title: q.title, topic: q.topic, since: q.since, grund: st.grund }));
+    // U6: mit Sichtung (Melious, aktuell/erledigt/veraltet + Priorität) die aktuellen einzeln; ohne die alte Regel.
+    const wichtige = offen.map((q) => ({ ...q, st: stufeVon({ text: `${q.head} ${q.question} ${q.section}` }) })).filter((q) => q.st.stufe === 'wichtig');
+    const sicht = ladeSichtung(join(cfg.dataDir, 'vault-sichtung.json'));
+    const { einzeln: wahl } = waehleSichtung(wichtige, sicht?.eintraege ?? null);
+    const einzeln = wahl.map((q) => ({ path: q.path, line: q.line, hash: q.hash, head: q.head, section: q.section, title: q.title, topic: q.topic, since: q.since, grund: q.st.grund,
+      prio: q.sichtung?.prio ?? null, kurz: q.sichtung?.kurz ?? null, beleg: q.sichtung?.beleg ?? null }));
     v = { einzeln, rest: offen.length - einzeln.length };
   } catch { /* Vault nicht lesbar: keine Vault-Fragen */ }
   vaultFragenCache = { at: now, v };

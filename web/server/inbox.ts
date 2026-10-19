@@ -79,7 +79,7 @@ export interface InboxQuellen {
   /** Meeting-Vorschläge der Morgenlage (cosmeeting.ts → vorschlaege), nur Admin mit Morgenlage — damit ① und der Zähler dieselbe Liste zählen (221). */
   triage?: Array<{ id: string; datei: string; titel: string; zusagen: number; entscheidungen: number; datum: string | null }>;
   /** F10 (Knut 19.10.: „muss halt viel einfacher sein“): aktuelle wichtige „- Knut:“-Zeilen aus dem Vault einzeln … */
-  vaultFragen?: Array<{ path: string; line: number; hash: string; head: string; section: string; title: string; topic: string; since: string | null; grund: string }>;
+  vaultFragen?: Array<{ path: string; line: number; hash: string; head: string; section: string; title: string; topic: string; since: string | null; grund: string; prio?: number | null; kurz?: string | null; beleg?: string | null }>;
   /** … der Rest als ein Sammeleintrag. */
   vaultRest?: number;
 }
@@ -128,8 +128,9 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
   }
   for (const v of q.vaultFragen ?? []) {
     out.push({ id: kennung.vaultfrage(v.path, v.line), art: 'vaultfrage', frage: v.head, empfehlung: null,
-      quelle: { text: `Spec „${v.title}“`, strand: null, url: '#/wissen/' + v.path.split('/').map(encodeURIComponent).join('/') }, wartetSeit: iso(v.since), blockiert: 0,
-      antworten: ['ja', 'nein', 'anders', 'spaeter'], daten: { path: v.path, line: v.line, hash: v.hash, section: v.section, markiert: 'wichtig', grund: v.grund }, thema: v.topic });
+      quelle: { text: `Spec „${v.title}“`, strand: null, url: '#/wissen/' + v.path.split('/').map(encodeURIComponent).join('/') }, wartetSeit: iso(v.since),
+      blockiert: v.prio === 1 ? 1 : 0,   // Priorität 1 aus der Sichtung (U6) = hält Arbeit an → steht unter „Heute“
+      antworten: ['ja', 'nein', 'anders', 'spaeter'], daten: { path: v.path, line: v.line, hash: v.hash, section: v.section, markiert: 'wichtig', grund: v.grund, prio: v.prio ?? null, kurz: v.kurz ?? null, beleg: v.beleg ?? null }, thema: v.topic });
   }
   if ((q.vaultRest ?? 0) > 0) out.push({ id: 'pflege-vault', art: 'pflege', frage: `${q.vaultRest} weitere offene Vault-Fragen (nicht dringend) — in Ruhe durchsehen`, empfehlung: null,
     quelle: { text: 'Roadmap › Entscheidungen', strand: null, url: '#/roadmap/entscheidungen' }, wartetSeit: null, blockiert: 0, antworten: ['spaeter'], daten: { n: q.vaultRest } });

@@ -68,7 +68,7 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
     const kontext = ein(e.daten.kontext);
     const worum = e.art === 'braucht' ? `${e.quelle.text} wartet auf dich (Abschnitt „Braucht Knut“ im Stand).${tw.rest ? ` ${tw.rest}` : ''}`
       : e.art === 'push' ? `Der Stand von ${e.quelle.text} ist geprüft und kann auf GitHub (Zweig ${ein(e.daten.zweig)}, Stand ${String(e.daten.commit ?? '').slice(0, 7)}). Ja öffnet die Freigabe mit dem gesehenen Stand.`
-      : e.art === 'vaultfrage' ? `Offene Frage in ${e.quelle.text}${e.daten.section ? `, Abschnitt „${ein(e.daten.section)}“` : ''} — wichtig, weil: ${ein(e.daten.grund)}. Deine Antwort kommt als Zeile „- Knut:“ in die Notiz.${tw.rest ? ` ${tw.rest}` : ''}`
+      : e.art === 'vaultfrage' ? `${e.daten.kurz ? `${ein(e.daten.kurz)} ` : ''}Offene Frage in ${e.quelle.text}${e.daten.section ? `, Abschnitt „${ein(e.daten.section)}“` : ''} — wichtig, weil: ${ein(e.daten.grund)}.${e.daten.beleg ? ` Stand laut Sichtung: ${ein(e.daten.beleg)}.` : ''} Deine Antwort kommt als Zeile „- Knut:“ in die Notiz.${tw.rest ? ` ${tw.rest}` : ''}`
       : e.art === 'vault' ? `Der Vault-Sync hat beim Abgleich etwas gefunden, das er nicht selbst entscheiden darf.${tw.rest ? ` ${tw.rest}` : ''}`
       : [kontext, tw.rest].filter(Boolean).join(' ') || `Rückfrage aus ${e.quelle.text}.`;
     fragen.push({ ...basis, id: e.id, teil: null, kennung: null, titel: tw.titel, worum, optionen: ((e.daten.optionen as string[]) ?? []).map(ein).filter(Boolean),
