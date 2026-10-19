@@ -370,6 +370,7 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
       {admin && aus('review') && <Review id={aus('review')!} onClose={zurueck} />}
       {admin && ansicht && !karten.some((k) => k.id === ansicht.id) && <Bericht id={ansicht.id} art={ansicht.art} onClose={() => { setAnsicht(null); zurueck(); }} />}
       {(d.orchAuto ?? []).length > 0 && <p className="small mut" data-testid="orch-auto">🔁 Automatisch fortgesetzt: {d.orchAuto.map((a: any, i: number) => <span key={a.id}>{i ? ', ' : ''}<a href={a.url} target={chatTarget}>{a.title}</a> ({a.n}){a.stopped ? ' — angehalten' : ''}</span>)}</p>}
+      <p className="small" data-testid="link-entscheidungs-log"><a href="#/inbox">Alle Entscheide und Entscheidungs-Log (was nach 24 h automatisch angenommen wurde) →</a></p>
 
       <div className="ub-themen">
       {lose.length > 0 && !cosAktiv && <section className={`ub-thema-flach${lose.length > 1 ? ' ub-breit' : ''}`} data-testid="ub-lose">

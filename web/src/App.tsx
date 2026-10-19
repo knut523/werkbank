@@ -209,7 +209,8 @@ export function App() {
     : /^#\/einrichtung/.test(hash) || heuteHidden ? <Setup cfg={cfg} onLogin={load} />
     : hidden ? <div className="page" data-testid="not-released"><h1>{hidden.label}</h1><div className="card soft empty"><p><b>Noch nicht für das Team freigegeben.</b></p><p className="small muted">Knut gibt die Funktionen des OLAF Workspace nach und nach frei. Bis dahin: Chat und <a href="#/einrichtung">Einrichtung</a>.</p></div></div>
     // Plan 213 S3: neue Seiten der Navigation Heute · Arbeit · Wissen (alte Adressen führen weiter zu ihren Seiten).
-    : neu && /^#\/inbox/.test(hash) ? <InboxSeite />
+    // Inbox mit Entscheidungs-Log auch in der alten Leiste (Stufen/Annahme nach 24 h gehen mit Bündel A live, Knut 17.10.).
+    : /^#\/inbox/.test(hash) ? <InboxSeite />
     : neu && HEUTE.match.test(hash) ? <HeuteNeu cfg={cfg} />
     : neu && /^#\/arbeit\/reviews/.test(hash) ? (user.role === 'ADMIN' ? <ArbeitReviews /> : <Roadmap cfg={cfg} hash="#/roadmap/prs" />)
     : neu && /^#\/arbeit/.test(hash) ? (user.role === 'ADMIN' ? <ArbeitUnterchats cfg={cfg} /> : <Uebersicht cfg={cfg} hash="#/" />)
