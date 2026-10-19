@@ -281,7 +281,7 @@ test('Statuszeile: Sofort-Kommentar englisch mit Position/Tiefe/ETA, ein Takt po
   assert.equal(neu.length, 2, 'je wartendem Review genau ein Kommentar');
   const [k2, k3] = [neu.find((p) => p.url === `/repos/${W}/issues/2/comments`), neu.find((p) => p.url === `/repos/${W}/issues/3/comments`)];
   assert.ok(k2 && k3); assert.equal(k2.method, 'POST'); assert.equal(k2.auth, 'bearer write-tok');
-  assert.match(k2.body.body, /^🔎 Automated review queued · position 1 · depth quick · ETA ~\d+ min \(OLAF Workspace\)/);
+  assert.match(k2.body.body, /^🔎 Automated review queued · position 1 · depth regular · ETA ~\d+ min \(OLAF Workspace\)/);
   assert.match(k3.body.body, /^🔎 Automated review queued · position 2 · depth deep \(static deep review — test execution is switched off\) · ETA ~\d+ min/);
   for (const k of [k2, k3]) assert.doesNotMatch(k.body.body, /[äöüßÄÖÜ]/, 'englisch');
   assert.equal([k2, k3].filter((k) => /How this works: `@review` = fast review/.test(k.body.body)).length, 2, 'Anleitung an jedem Status-Kommentar');
@@ -525,15 +525,16 @@ test('17c: Kontext vorab ins Paket (als Daten), Diff gegen die Basis, Delta-Revi
   assert.ok(calls.some((a) => a[0] === 'diff' && a[1] === SHA1 && a[2] === SHA3 && a.includes('--') && a.includes('src/a.ts')), 'Delta nur über die Dateien des PRs');
   assert.ok(existsSync(join(dir, 'delta.patch')));
   // Delta 50 Zeilen → quick; Lead bleibt Claude; ETA nach Größe
-  assert.equal(started[0].tiefe, 'quick'); assert.equal(started[0].modell, 'claude:opus');
+  assert.equal(started[0].tiefe, 'regular'); assert.equal(started[0].modell, 'claude:opus');
   assert.match(started[0].title, /\(Delta\)/);
   assert.match(started[0].prompt, /DELTA-REVIEW/); assert.match(started[0].prompt, /Punkt · Quelle .* erledigt\?/);
   assert.match(started[0].prompt, /auf Englisch/); assert.match(started[0].prompt, /kontext\.md/);
-  assert.equal(d.tiefe, 'quick'); assert.equal(d.zeilen, 50); assert.equal(d.delta.von, SHA1); assert.equal(d.basis, MB);
-  assert.equal(d.eta, R.etaMinuten('quick', 50, true));
+  assert.equal(d.tiefe, 'regular'); assert.equal(d.zeilen, 50); assert.equal(d.delta.von, SHA1); assert.equal(d.basis, MB);
+  assert.equal(d.eta, R.etaMinuten('regular', 50, true));
+  assert.match(started[0].prompt, /BEHAUPTUNGEN SIND UNBEWIESEN/); assert.match(started[0].prompt, /COUNCIL vor der Empfehlung/);
   assert.ok(marks[0][2].eta instanceof Date);
   // ohne früheres Review: volles Review, 1000 Zeilen → regular; ohne Kontext: Hinweis statt Diff
-  assert.equal(R.tiefeFuer(1000, false), 'regular'); assert.equal(R.tiefeFuer(399, false), 'quick'); assert.equal(R.tiefeFuer(10, true), 'deep');
+  assert.equal(R.tiefeFuer(1000, false), 'regular'); assert.equal(R.tiefeFuer(399, false), 'regular', 'nie mehr quick (Knut 19.10.)'); assert.equal(R.tiefeFuer(10, true), 'deep');
   assert.equal(R.tiefeFuer(null, false), 'regular');
   assert.ok(R.etaMinuten('regular', 2900, false) <= 20, '#354: 2 900 Zeilen, regular — lief 14 min');
   const dm = await R.diffMaterial(TMP, TMP, null, SHA3, null, gitFake([]));
