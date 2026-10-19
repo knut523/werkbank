@@ -12,6 +12,7 @@ import { useWatch, type UseFormReturn } from 'react-hook-form';
 import { SendHorizontal } from 'lucide-react';
 import { cn, getDraft, setDraft } from '~/utils';
 import { nachsenden, zugende, type Eintrag } from './nachsenden';
+import { abholen } from './chatWechsel';
 
 type Item = Eintrag & { key: number };
 const API = '/werkbank/api/chat/nachreichen';
@@ -71,6 +72,18 @@ function Nachreichen({ conversationId, isSubmitting, methods, submitMessage, tex
     feld.conv = aktiv;
     feld.legen = legen;
     return () => { if (feld.legen === legen) { feld.conv = null; feld.legen = null; } };
+  }, [aktiv, legen]);
+  // Fund 2: im Wechselfenster Abgeschicktes steht nach dem Laden hier im Feld (nicht gesendet). Kurz nach LibreChats useAutoSave,
+  // das beim Wechsel das Feld in den Entwurf des vorigen Chats sichert und den des neuen lädt; dort wird der Text wieder entfernt.
+  useEffect(() => {
+    const v = abholen(aktiv);
+    if (!v) return;
+    const t = setTimeout(() => {
+      if (v.von) setDraft({ id: v.von, value: '' });
+      legen(v.text);
+      setHinweis('Der Chat lud noch — dein Text steht jetzt hier im Eingabefeld. Bitte noch einmal senden.');
+    }, 50);
+    return () => clearTimeout(t);
   }, [aktiv, legen]);
   useEffect(() => {
     const on = (e: Event) => setHinweis(String((e as CustomEvent).detail ?? ''));
