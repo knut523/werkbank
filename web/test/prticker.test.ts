@@ -125,7 +125,7 @@ test('Lauf: aus → keine Abfrage; an → Ereignisse einmal (Dedupe), Tag nach d
   const later = new Date(new Date(since).getTime() + 60_000).toISOString();
   const earlier = new Date(new Date(since).getTime() - 60_000).toISOString();
   searchResult = [pr('WirStrom1/olaf-admin', 5, { createdAt: earlier, author: { login: 'bizarrochris' }, comments: { nodes: [
-    { id: 'T1', author: { login: 'bizarrochris' }, body: '@review', createdAt: later, url: 'u1' },
+    { id: 'T1', author: { login: 'bizarrochris' }, body: 'Bitte @review deep', createdAt: later, url: 'u1' },
     { id: 'T0', author: { login: 'knut523' }, body: '@review', createdAt: earlier, url: 'u0' }] } })];
   const r = await P.tickerTick(async () => 'read-tok');
   assert.equal(seen.at(-1).auth, 'bearer read-tok');
@@ -133,6 +133,7 @@ test('Lauf: aus → keine Abfrage; an → Ereignisse einmal (Dedupe), Tag nach d
   assert.equal(r.reviews, 1);
   const q = await P.reviewsCol().find({}).toArray();
   assert.equal(q.length, 1); assert.equal(q[0]._id, `WirStrom1/olaf-admin#5@${SHA1}`); assert.equal(q[0].status, 'wartet');
+  assert.equal(q[0].deep, true, '`@review deep` aus dem echten Kommentartext erkannt (19.10.: Ticker speicherte nur „@review von …“)');
   // gleich noch einmal (Takt erzwingen): nichts doppelt
   await P.wbMeta().updateOne({ _id: 'pr_ticker' as any }, { $set: { lastAttempt: new Date(0) } });
   const r2 = await P.tickerTick(async () => 'read-tok');

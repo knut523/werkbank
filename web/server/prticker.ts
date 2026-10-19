@@ -126,6 +126,8 @@ export interface PrMem { _id: string; head: string; state: string }
 export const TAG = /(^|[\s(])@review\b/i;
 /** `@review deep` → Tiefe deep (Knut 17.10.). */
 export const TAG_DEEP = /(^|[\s(])@review\s+deep\b/i;
+/** Ereignistext eines Tags: „deep“ muss erhalten bleiben, sonst sieht queueReviews es nie (Fehler 19.10.). */
+const tagText = (body: string | null | undefined, who: string) => `${TAG_DEEP.test(body ?? '') ? '@review deep' : '@review'} von ${who}`;
 const REVIEW_STATE: Record<string, string> = { APPROVED: 'freigegeben', CHANGES_REQUESTED: 'Änderungen verlangt', COMMENTED: 'kommentiert', DISMISSED: 'verworfen' };
 const kurz = (t: string, n = 140) => { const s = String(t ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 export const prKey = (repo: string, n: number) => `${repo}#${n}`;
@@ -160,13 +162,13 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
     for (const c of p.comments?.nodes ?? []) {
       const who = (c.author?.login ?? '').toLowerCase();
       if (!c.id || c.createdAt < since) continue;
-      if (TAG.test(c.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${c.id}`, 'tag', c.createdAt, who, `@review von ${who}`, c.url);
+      if (TAG.test(c.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${c.id}`, 'tag', c.createdAt, who, tagText(c.body, who), c.url);
       else if (ours && who && who !== ME) ev(`c:${c.id}`, 'kommentar', c.createdAt, who, `Kommentar von ${who}: ${kurz(c.body, 120)}`, c.url);
     }
     for (const r of p.reviews?.nodes ?? []) {
       const who = (r.author?.login ?? '').toLowerCase();
       if (!r.id || !r.submittedAt || r.submittedAt < since) continue;
-      if (TAG.test(r.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${r.id}`, 'tag', r.submittedAt, who, `@review von ${who}`, r.url);
+      if (TAG.test(r.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${r.id}`, 'tag', r.submittedAt, who, tagText(r.body, who), r.url);
       else if (ours && who && who !== ME && r.state !== 'PENDING') ev(`r:${r.id}`, 'review', r.submittedAt, who, `Review von ${who}: ${REVIEW_STATE[r.state] ?? r.state}${r.body ? ` — ${kurz(r.body, 100)}` : ''}`, r.url);
     }
     const asked = (p.reviewRequests?.nodes ?? []).some((x: any) => (x.requestedReviewer?.login ?? '').toLowerCase() === ME);
