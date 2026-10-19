@@ -53,7 +53,7 @@ export function pruefeBefunde(roh: unknown): Gepruefte {
     if (pruefung === 'REFUTED' || !widerlegung) { stat.widerlegt++; continue; }
     // Grounding: Datei:Zeile ist Pflicht.
     const datei = s(b.datei, 300), zeile = Number(b.zeile);
-    if (!datei || !Number.isInteger(zeile) || zeile < 1 || /^[\/~]|(^|\/)\.\.(\/|$)/.test(datei)) { stat.ohneBeleg++; continue; }
+    if (!datei || !Number.isInteger(zeile) || zeile < 1 || /^[\/~]|(^|\/)\.\.(\/|$)|[`<>|\s]/.test(datei)) { stat.ohneBeleg++; continue; }
     // #5: blockieren dürfen nur die sechs Klassen; beratend blockiert nie.
     let schwere: Befund['schwere'] = b.schwere === 'blocking' ? 'blocking' : 'advisory';
     if (schwere === 'blocking' && !(BLOCKIERBAR as readonly string[]).includes(klasse)) { schwere = 'advisory'; stat.herabgestuft++; }
@@ -66,7 +66,7 @@ export function pruefeBefunde(roh: unknown): Gepruefte {
   const abdeckung: Gepruefte['abdeckung'] = {};
   const ab = j.abdeckung && typeof j.abdeckung === 'object' ? j.abdeckung : {};
   for (const k of KLASSEN) abdeckung[k] = befunde.some((b) => b.klasse === k) ? 'Befund' : ab[k] === 'geprüft' ? 'geprüft' : 'nicht geprüft';
-  const gruende = Array.isArray(j.gruende) ? j.gruende.map((x: unknown) => s(x, 300)).filter(Boolean).slice(0, 10) : [];
+  const gruende = Array.isArray(j.gruende) ? j.gruende.map((x: unknown) => s(x, 300).replace(/\s+/g, ' ')).filter(Boolean).slice(0, 10) : [];
   const offen = BLOCKIERBAR.filter((k) => abdeckung[k] === 'nicht geprüft');
   if (offen.length) gruende.push(`not checked: ${offen.map((k) => KLASSE_TEXT[k]).join(', ')}`);
   const vollstaendig = j.vollstaendig === true && offen.length === 0 && gruende.length === 0;
@@ -75,13 +75,14 @@ export function pruefeBefunde(roh: unknown): Gepruefte {
   return { befunde, abdeckung, vollstaendig, gruende, empfehlung, statistik: stat, tests: s(j.tests, 2000), delta: s(j.delta, 4000) };
 }
 
-const zelle = (t: string) => t.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+// Tabellenzelle: Pipes und Zeilen entschärft; @-Erwähnungen gebrochen (ein Befundtext soll niemanden auf GitHub anpingen — Pass C).
+const zelle = (t: string) => t.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').replace(/@(?=[\w-])/g, '@\u200b');
 const RANG: Record<string, number> = { blocking: 0, advisory: 1 };
 
 /** kommentar.md (englisch, für GitHub) aus den geprüften Befunden — Spec vor Standards, Felder als Tabelle, Abdeckung je Klasse. */
 export function kommentarAusBefunden(g: Gepruefte): string {
   const z: string[] = [`Empfehlung: ${g.empfehlung}`, ''];
-  if (!g.vollstaendig) z.push(`> **Incomplete review.** ${g.gruende.length ? g.gruende.join('; ') : 'The reviewer did not confirm full coverage.'} A missing finding is not evidence of safety.`, '');
+  if (!g.vollstaendig) z.push(`> **Incomplete review.** ${g.gruende.length ? zelle(g.gruende.join('; ')) : 'The reviewer did not confirm full coverage.'} A missing finding is not evidence of safety.`, '');
   const gruppe = (quelle: 'spec' | 'standard', titel: string) => {
     const l = g.befunde.filter((b) => b.quelle === quelle).sort((a, b) => RANG[a.schwere] - RANG[b.schwere] || a.datei.localeCompare(b.datei) || a.zeile - b.zeile);
     if (!l.length) return;
@@ -96,7 +97,7 @@ export function kommentarAusBefunden(g: Gepruefte): string {
   for (const k of KLASSEN) z.push(`| ${KLASSE_TEXT[k]}${(BLOCKIERBAR as readonly string[]).includes(k) ? '' : ' (advisory)'} | ${g.abdeckung[k] === 'Befund' ? 'finding' : g.abdeckung[k] === 'geprüft' ? 'checked' : 'not checked'} |`);
   z.push('');
   if (g.delta) z.push('### Items from the previous review', '', g.delta.replace(/@(?=[\w-])/g, '@\u200b'), '');
-  if (g.tests) z.push('### Tests', '', g.tests, '');
+  if (g.tests) z.push('### Tests', '', g.tests.replace(/@(?=[\w-])/g, '@\u200b'), '');
   return z.join('\n').trim() + '\n';
 }
 

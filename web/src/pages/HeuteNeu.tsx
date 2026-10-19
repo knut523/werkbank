@@ -57,7 +57,7 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
           {sicher(e.quelle.url)?.startsWith('http') ? <a href={sicher(e.quelle.url)!} target={chatTarget} rel="noreferrer">{e.quelle.text}</a> : sicher(e.quelle.url) ? <a href={sicher(e.quelle.url)!}>{e.quelle.text}</a> : e.quelle.text}
           {e.wartetSeit ? ` · wartet ${seit(e.wartetSeit)}` : ''}
         </div>
-        {e.empfehlung && <div className="tiny">Empfehlung: <b>{e.empfehlung}</b>{e.autoAb && <span className="mut" data-testid="auto-ab"> · gilt {new Date(e.autoAb).getTime() <= Date.now() ? 'gleich' : `ab ${fmtDateTime(e.autoAb)}`} als angenommen{e.art === 'entscheidung' && (e.daten.autoIds?.length ?? 0) < (e.daten.entscheidungen?.length ?? 0) ? ` (${e.daten.autoIds.join(', ')})` : ''}</span>}</div>}
+        {e.empfehlung && <div className="tiny">Empfehlung: <b>{e.empfehlung}</b>{e.autoAb && <span className="mut" data-testid="auto-ab"> · gilt {new Date(e.autoAb).getTime() <= Date.now() ? 'gleich' : `ab ${fmtDateTime(e.autoAb)}`} als angenommen{e.art === 'entscheidung' && (e.daten.autoIds?.length ?? 0) < (e.daten.entscheidungen?.length ?? 0) ? ` (${e.daten.autoIds?.join(', ') ?? ''})` : ''}</span>}</div>}
         {e.art === 'altbestand' && auf && <ul className="tiny h-liste">{(e.daten.eintraege ?? []).map((x: Eintrag) => <li key={x.id}>{x.frage} <span className="mut">({ART[x.art]}, {seit(x.wartetSeit)})</span></li>)}</ul>}
         {e.art === 'pflege' && e.daten.berichte && <ul className="tiny h-liste">{e.daten.berichte.map((b: any) => <li key={b.id}><a href={`#/leitstand?bericht=${b.id}`}>{b.titel}</a></li>)}</ul>}
         {anders !== null && <div className="ub-anders">
@@ -162,10 +162,13 @@ export function EntscheidungsLog() {
   const [offen, setOffen] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [err, setErr] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
   const widerrufen = async (id: string) => {
-    setErr(null);
+    if (busy) return;
+    setErr(null); setBusy(true);
     try { await api(`/api/entscheidungen/${encodeURIComponent(id)}/anders`, { body: { text } }); toast('Widerrufen — der Unter-Chat bekommt die Korrektur'); setOffen(null); setText(''); reload(); }
-    catch (x) { setErr(x); }
+    catch (x: any) { setErr(x); if (x?.status === 409) reload(); }
+    finally { setBusy(false); }
   };
   const knopf = (wert: string, akt: string, set: (v: string) => void, label: string) => <button className={`ub-btn sm${akt === wert ? ' pri' : ' ghost'}`} aria-pressed={akt === wert} onClick={() => set(wert)}>{label}</button>;
   return (
@@ -182,7 +185,7 @@ export function EntscheidungsLog() {
           <div className="tiny">{z.antwort}{z.widerruf ? <span className="mut"> — widerrufen: {z.widerruf.text}</span> : null}</div>
           {z.durch === 'auto' && !z.widerruf && (z.widerrufbar
             ? (offen === z.id ? <div className="ub-anders"><textarea rows={2} value={text} placeholder="Was soll stattdessen gelten?" aria-label="Was soll stattdessen gelten?" onChange={(x) => setText(x.target.value)} />
-                <div className="ub-row"><button className="ub-btn pri sm" disabled={!text.trim()} onClick={() => widerrufen(z.id)}>Widerrufen</button><button className="ub-btn ghost sm" onClick={() => setOffen(null)}>Abbrechen</button></div></div>
+                <div className="ub-row"><button className="ub-btn pri sm" disabled={busy || !text.trim()} onClick={() => widerrufen(z.id)}>Widerrufen</button><button className="ub-btn ghost sm" onClick={() => setOffen(null)}>Abbrechen</button></div></div>
               : <button className="ub-btn ghost sm" onClick={() => { setOffen(z.id); setText(''); }}>Anders …</button>)
             : <div className="tiny mut">{z.widerrufGrund}</div>)}
         </li>)}</ul></div>}

@@ -413,7 +413,8 @@ export function entwurfAusPaket(dir: string): { entwurf: { hash: string; vollsta
       const text = kommentarAusBefunden(g);
       writeFileSync(join(dir, 'kommentar.md'), text);
       const k = parseKommentar(text);
-      return { entwurf: { hash: entwurfHash(k!.text), vollstaendig: g.vollstaendig, statistik: g.statistik, quelle: 'befunde' }, note: null };
+      if (!k) throw new Error('Kommentar ohne Empfehlung');
+      return { entwurf: { hash: entwurfHash(k.text), vollstaendig: g.vollstaendig, statistik: g.statistik, quelle: 'befunde' }, note: null };
     } catch (e: any) {
       const k = parseKommentar(lies('kommentar.md'));
       return { entwurf: k ? { hash: entwurfHash(k.text), vollstaendig: false, statistik: null, quelle: 'kommentar' } : null, note: `befunde.json unlesbar (${String(e?.message ?? e).slice(0, 120)}) — Entwurf gilt als unvollständig` };
