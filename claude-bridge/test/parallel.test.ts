@@ -19,12 +19,22 @@ before(async () => {
 const chat = (pending = false) => ({ readonly: false, mode: 'default' as const, pending: pending ? {} : null });
 const board = () => ({ readonly: true, mode: 'dontAsk' as const, pending: null });
 
-test('Sperre: Vorgabe 3 laufende Chats je Person; wartende und Board-Läufe zählen nicht', () => {
+test('Sperre (F7, Knut 19.10.): keine Zahl-Grenze — die Schätzung entscheidet gegen die Box; Board-Läufe wie bisher', async () => {
   delete process.env.BRIDGE_MAX_PARALLEL_CHATS;
-  assert.equal(mod.lockFor([], chat()), 'ok');
-  assert.equal(mod.lockFor([chat(), chat()], chat()), 'ok');
-  assert.equal(mod.lockFor([chat(), chat(), chat()], chat()), 'chat-busy');
-  assert.equal(mod.lockFor([chat(), chat(), chat(true), board(), board()], chat()), 'ok', 'auf „ja“ wartend und Board zählen nicht');
+  const { schaetze } = await import('../src/schaetzung.ts');
+  const strang = schaetze({ kind: 'strand', profil: 'bauer', tiefe: 'regular' });
+  const viele = Array.from({ length: 6 }, () => chat());
+  assert.equal(mod.lockFor(viele, chat()), 'ok', 'ohne Box-Abgleich keine Zahl-Grenze');
+  const luft = { echtGb: 3, hostFreiGb: 15 }, eng = { echtGb: 8.5, hostFreiGb: 10 };
+  assert.equal(mod.lockFor(viele, chat(), { neu: strang, stand: luft }), 'ok', 'passt in die Box');
+  assert.equal(mod.lockFor([chat()], chat(), { neu: strang, stand: eng }), 'chat-busy', '8,5 + 1,6 GB > 9 GB');
+  assert.match(mod.lockGrund, /passt gerade nicht in die Box/);
+  assert.equal(mod.lockFor([chat(true)], chat(), { neu: strang, stand: eng }), 'ok', 'erster laufender Zug startet, wartende zählen nicht');
+  // Eben gestartete Züge zählen mit ihrer Schätzung, bis der Speicherstand sie zeigt.
+  const jetzt = Date.now();
+  const frisch = [1, 2, 3].map(() => ({ ...chat(), schaetzung: strang, t0: jetzt - 30_000 }));
+  assert.equal(mod.lockFor(frisch, chat(), { neu: strang, stand: luft, now: jetzt }), 'chat-busy', '3 + 3×1,6 + 1,6 GB > 9 GB');
+  assert.equal(mod.lockFor(frisch, chat(), { neu: strang, stand: luft, now: jetzt + 5 * 60_000 }), 'ok', 'nach 3 min zählt der echte Stand');
   assert.equal(mod.lockFor([board(), board()], board()), 'board-full');
 });
 

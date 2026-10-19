@@ -8,12 +8,20 @@ import { Err, Loading, useLoad, useToast } from '../ui.tsx';
 const FARBE: Record<string, string> = { wartet: 'warn', blockiert: 'bad', fertig: 'ok', haengt: 'warn', 'stand-fehlt': 'warn', schlange: '', laeuft: '', erledigt: '' };
 const sicher = (u: unknown) => (/^https?:\/\//.test(String(u ?? '')) ? String(u) : null);
 
+// Tiefe in Klartext (Walkthrough 221: „plan-to-pr“, „Council“, „Pass A/B/C“ versteht ohne Knuts Kontext niemand).
+const TIEFE_KLAR: Record<string, string> = {
+  quick: 'Kurz: eine kleine, klar umrissene Änderung — ohne große Planung.',
+  regular: 'Normal: plant erst, baut dann, testet und prüft das Ergebnis selbst; am Ende ein Bericht mit Fragen an dich.',
+  deep: 'Gründlich: wie Normal, dazu eine Gegenprüfung des Plans durch mehrere Blickwinkel und ein zweites Modell — für Riskantes.',
+};
+
 function NeuerUnterChat({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const opt = useLoad<any>(() => api('/api/arbeit/start'), []);
   const [auftrag, setAuftrag] = useState('');
   const [repo, setRepo] = useState('');
   const [tiefe, setTiefe] = useState('regular');
+  const sch = useLoad<any>(() => api(`/api/arbeit/schaetzung?tiefe=${tiefe}`), [tiefe]);   // F7: Schätzung vor dem Start
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const start = async () => {
@@ -34,7 +42,8 @@ function NeuerUnterChat({ onClose, onDone }: { onClose: () => void; onDone: () =
           {!opt.data.repos.length && <p className="tiny mut">Für „Neuer Unter-Chat“ sind noch keine Repos eingerichtet — bis dahin über den Hauptchat starten.</p>}
           <span className="small" id="nuc-tiefe">Tiefe</span>
           <div className="ub-row" role="radiogroup" aria-labelledby="nuc-tiefe">{opt.data.tiefen.map((t: string) => <button key={t} role="radio" aria-checked={tiefe === t} className={`ub-btn sm${tiefe === t ? ' pri' : ''}`} onClick={() => setTiefe(t)}>{t}</button>)}</div>
-          <p className="tiny mut">{tiefe === 'quick' ? 'quick: kurz, ohne Council, kleines Budget.' : tiefe === 'deep' ? 'deep: plan-to-pr mit Council, mehr Schritte, Gegenprüfung.' : 'regular: plan-to-pr, Tests, Pass A/B/C.'} Das Review-Paket bekommt die nächste freie Nummer.</p>
+          <p className="tiny mut">{TIEFE_KLAR[tiefe] ?? ''}</p>
+          {sch.data?.text && <p className="tiny" data-testid="nuc-schaetzung">{sch.data.text}{(sch.data.hinweise ?? []).map((h: string) => <span key={h} className="note"> · {h}</span>)}</p>}
           {opt.data.dryRun && <p className="tiny note">Vorschau (Trockenlauf): hier startet nichts.</p>}
           <Err e={err} />
           <div className="ub-row" style={{ justifyContent: 'flex-end' }}><button className="ub-btn sm" onClick={onClose}>Abbrechen</button>

@@ -35,7 +35,8 @@ function startBridge(port: number, extra: Record<string, string>) {
 
 let autoBridge: { STATE: string; HOMES: string };
 before(async () => {
-  autoBridge = startBridge(AUTO_PORT, { BRIDGE_PERMISSION_MODE: 'auto' });
+  // F7: ohne Wert gibt es keine Zahl-Grenze mehr (Schätzung gegen die Box, im Mock aus) — die Schlangen-Mechanik prüft dieser Test mit 3.
+  autoBridge = startBridge(AUTO_PORT, { BRIDGE_PERMISSION_MODE: 'auto', BRIDGE_MAX_PARALLEL_CHATS: '3' });
   startBridge(OFF_PORT, { BRIDGE_PERMISSION_MODE: 'default', BRIDGE_MAX_PARALLEL_CHATS: '1', BRIDGE_QUEUE: '0' });   // Schlange aus: alter Weg (Rückfall, Plan 213 P7)
   for (const port of [AUTO_PORT, OFF_PORT]) {
     let up = false;

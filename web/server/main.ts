@@ -51,6 +51,7 @@ import { morgenTick, schnappschussTick } from './cosjob.ts';
 import { olafJira } from './cos-olafjira.ts';
 import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
 import { boxTick } from './boxwaechter.ts';
+import { startSchaetzung, laufMediane } from './startschaetzung.ts';
 import { abschlussTick, wocheTick } from './cosabschluss.ts';
 import { rueckstau as cosRueckstau, vorschlaege as cosVorschlaege } from './cosmeeting.ts';
 import { meetingTeams as cosMeetingTeams } from './cossammle.ts';
@@ -78,7 +79,7 @@ import { ansetzenMode, specGate, sprintEnd, ticketDraft, localDuplicates, dupJql
 import { collectDecisions, todayQuestions, todayPayload } from './fragen.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, rule1Goals, specProposals, autoEligible, type GoalNode } from './goals.ts';
-import { istTiefe, type Tiefe } from './tiefe.ts';
+import { istTiefe, tiefeOf, type Tiefe } from './tiefe.ts';
 import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
 import { zaehle, statusNeu, autoSchliessenAn, navNeu, aufraeumenAn, meinTagWeg, einLogin, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
@@ -1631,6 +1632,19 @@ on('GET', /^\/api\/arbeit\/unterchats$/, async (req, res, _m, url) => {
   const erledigtN = erledigt ? zeilen.length : await orchRuns().countDocuments({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: { $gte: new Date(Date.now() - 14 * 86400_000) }, $or: [{ reviewedBy: 'auto' }, { knutReviewedAt: { $ne: null } }] } as any);
   send(res, 200, { zeilen, offen, erledigt: erledigtN, zaehler: await zaehlerFuer(u), at: new Date() });
 });
+/** F7 (Knut 19.10.): Schätzung vor dem Start — eigene Läufe derselben Tiefe, Box-Stand (Heartbeat), Budget. Nie ein Fehler. */
+async function schaetzungFuer(u: User, o: { tiefe?: string | null; profil?: string | null; budget?: number | null }) {
+  try {
+    const med = (await laufMediane({ runs: orchRuns, zugLog: () => wb().collection('zug_log') }, u.id))[tiefeOf(o.tiefe)];
+    const hb: any = await wb().collection('meta').findOne({ _id: 'box_heartbeat' as any });
+    const box = hb && Date.now() - new Date(hb.at).getTime() < 5 * 60_000 && hb.echtGb != null ? { echtGb: hb.echtGb, hostFreiGb: hb.hostFreiGb } : null;
+    return startSchaetzung({ ...o, dauerMs: med.dauerMs, tokens: med.tokens, box });
+  } catch { return null; }
+}
+on('GET', /^\/api\/arbeit\/schaetzung$/, async (req, res, _m, url) => {
+  const u = await needAdmin(req);
+  send(res, 200, await schaetzungFuer(u, { tiefe: url.searchParams.get('tiefe'), profil: 'bauer' }));
+});
 on('GET', /^\/api\/arbeit\/start$/, async (req, res) => {
   await needAdmin(req);
   send(res, 200, { repos: arbeitRepos().map((r) => ({ name: r.name })), tiefen: ['quick', 'regular', 'deep'], dryRun: dryRun() });
@@ -1644,7 +1658,7 @@ on('POST', /^\/api\/arbeit\/start$/, async (req, res) => {
   const r = await startOrch(u, { title: e.title, prompt: e.prompt, cwd: e.cwd, code: e.code, tiefe: e.tiefe, lauf: null, aufrufer: 'workspace arbeit' });
   log('unter-chat gestartet (workspace)', { user: u.id, id: (r as any).id, tiefe: e.tiefe });
   zahlCache.delete(u.id);
-  send(res, 200, { ...(r as any), paket: e.paket });
+  send(res, 200, { ...(r as any), paket: e.paket, schaetzung: await schaetzungFuer(u, { tiefe: e.tiefe, profil: 'bauer' }) });
 });
 
 // --- Wissen › Ablage › Pakete (Plan 213 S5): Index der Review-Pakete aus den Bericht-Köpfen, Decks und Downloads direkt ---
@@ -3161,7 +3175,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
     case 'start': {
       const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null, budget: b.budget || null });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null, tiefe: r.tiefe });
-      return send(res, 200, r);
+      return send(res, 200, { ...r, schaetzung: await schaetzungFuer(u, { tiefe: r.tiefe, profil: b.profil || null, budget: Number(b.budget) || null }) });
     }
     case 'nachtbau': {
       // Nachtbau (docs/plan-vorbau-check.md): je Item G0; Treffer → blocked_g0, nicht prüfbar → ein Morgeneintrag.

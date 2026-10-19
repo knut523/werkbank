@@ -20,6 +20,7 @@ import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet } from './schlange.ts';
+import { schaetze, passt, schaetzungText, speicherStand, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 
@@ -66,6 +67,8 @@ interface Live {
   jiraCalls: Map<string, { name: string; input: Record<string, unknown> }>;
   /** Aufrufe des Inbox-Werkzeugs (Plan 213 K4): an ihr Ergebnis hängt die Brücke selbst die Knöpfe. */
   inboxCalls: Set<string>;
+  /** Schätzung beim Start (F7) — zählt für die Box, bis der Speicherstand den Zug zeigt. */
+  schaetzung?: Schaetzung;
   onJiraWrite?: (keys: string[], tool: string) => void;
   home: string;   // CLAUDE_CONFIG_DIR dieser Sitzung oder 'shared'
   // Auto-Modus (Plan 71 P1): Rechte-Modus des Zuges, Arbeitsordner für die Klasse „auto“ (nur im Auto-Modus gesetzt),
@@ -382,12 +385,27 @@ export function isBoardRun(l: { readonly: boolean; mode: PermissionMode }): bool
 // 1 = das Verhalten vor dem 07.10. (ein Chat zur Zeit). Jeder neue Chat hat seinen eigenen Ordner (workDirFor).
 /** Ketten-Modell für Unter-Stränge, wenn alle Claude-Konten erschöpft sind (der Hauptchat nimmt das Ketten-Modell der Einrichtung). */
 export const KETTE_STRANG_MODELL = process.env.BRIDGE_KETTE_STRANG_MODELL || 'glm-5.3-flash';
-export const maxParallelChats = () => Math.max(1, Number(process.env.BRIDGE_MAX_PARALLEL_CHATS || 3));
+// F7 (Knut 19.10.): keine Zahl-Grenze mehr — ob ein Zug startet, entscheidet die Schätzung gegen die Box (schaetzung.ts).
+// BRIDGE_MAX_PARALLEL_CHATS bleibt nur als ausdrücklich gesetzte Obergrenze (Tests, Notfall); ohne Wert: unbegrenzt.
+export const maxParallelChats = () => (process.env.BRIDGE_MAX_PARALLEL_CHATS ? Math.max(1, Number(process.env.BRIDGE_MAX_PARALLEL_CHATS)) : Infinity);
 
-/** Darf ein neuer Zug starten? Chats: bis maxParallelChats() gleichzeitig je Person; Board-Läufe: bis MAX_BOARD_RUNS daneben. */
-export function lockFor(mine: { readonly: boolean; mode: PermissionMode; pending: unknown }[], next: { readonly: boolean; mode: PermissionMode }): 'ok' | 'chat-busy' | 'board-full' {
+type ZugLite = { readonly: boolean; mode: PermissionMode; pending: unknown; schaetzung?: Schaetzung; t0?: number };
+/** Grund der letzten Ablehnung von lockFor (für die Zeile im Chat). */
+export let lockGrund = '';
+/** Darf ein neuer Zug starten? Chats: wenn die Schätzung in die Box passt (und unter einer gesetzten Obergrenze); Board-Läufe:
+ *  bis MAX_BOARD_RUNS daneben. Ohne `box` gilt nur die Obergrenze (alte Aufrufer, Tests). */
+export function lockFor(mine: ZugLite[], next: { readonly: boolean; mode: PermissionMode }, box?: { neu: Schaetzung; stand: SpeicherStand | null; now?: number }): 'ok' | 'chat-busy' | 'board-full' {
+  lockGrund = '';
   if (isBoardRun(next)) return mine.filter(isBoardRun).length >= MAX_BOARD_RUNS ? 'board-full' : 'ok';
-  return mine.filter((l) => !isBoardRun(l) && !l.pending).length >= maxParallelChats() ? 'chat-busy' : 'ok';
+  const aktiv = mine.filter((l) => !isBoardRun(l) && !l.pending);
+  if (aktiv.length >= maxParallelChats()) { lockGrund = `es laufen schon ${aktiv.length} Chats gleichzeitig`; return 'chat-busy'; }
+  if (!box) return 'ok';
+  // Eben gestartete Züge zeigt der Speicherstand noch nicht: ihre Schätzung zählt die ersten 3 Minuten mit.
+  const now = box.now ?? Date.now();
+  const frisch = aktiv.filter((l) => l.t0 && now - l.t0 < 3 * 60_000).reduce((n, l) => n + (l.schaetzung?.speicherGb ?? 0), 0);
+  const r = passt(box.neu, { stand: box.stand, frisch, laufend: aktiv.length });
+  lockGrund = r.grund;
+  return r.ok ? 'ok' : 'chat-busy';
 }
 
 // Status je Unterhaltung (Idee: coder/agentapi „running/stable“, CloudCLI Sitzungsliste).
@@ -1201,7 +1219,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const meine = () => [...lives.values()].filter((l) => l.userId === req.userId && !l.leit && !l.worker);
   let mine = meine();
   const mode = autoFor(req);
-  let lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode });
+  const schaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe });
+  const box = () => ({ neu: schaetzung, stand: speicherStand() });
+  let lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode }, box());
   // Warteschlange statt Fehlschlag (Plan 213 S1a, K3): der Zug wartet, bis ein Platz frei ist; der Chat zeigt den Platz.
   if (lock === 'chat-busy' && schlangeAn() && !req.sink.closed) {
     if (inSchlange(key)) {   // zweite Nachricht derselben Unterhaltung: kein zweiter Platz
@@ -1212,10 +1232,10 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     if (orchMap[key]) setTurn(key, { start: Date.now(), end: null, outcome: null });
     let erst = true;
     const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang }, {
-      frei: () => !lives.has(key) && lockFor(meine(), { readonly: !!req.readonly, mode }) === 'ok',
+      frei: () => !lives.has(key) && lockFor(meine(), { readonly: !!req.readonly, mode }, box()) === 'ok',
       geschlossen: () => req.sink.closed,
       melde: (pos) => {
-        req.sink.write(erst ? `⏳ In der Schlange: Platz ${pos} — es laufen schon ${maxParallelChats()} Chats gleichzeitig. Startet von selbst, sobald ein Platz frei ist.\n\n` : `⏳ Jetzt Platz ${pos} …\n\n`);
+        req.sink.write(erst ? `⏳ In der Schlange: Platz ${pos} — ${lockGrund || 'gerade kein Platz'} (${schaetzungText(schaetzung)}). Startet von selbst, sobald es passt.\n\n` : `⏳ Jetzt Platz ${pos} …\n\n`);
         erst = false;
       },
     });
@@ -1235,7 +1255,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       ? `Bei dir laufen schon ${MAX_BOARD_RUNS} Board-Agenten. Bitte warte, bis einer fertig ist.`
       : maxParallelChats() === 1
         ? 'Bei dir läuft gerade schon eine Anfrage in einem anderen Chat. Bitte warte, bis sie fertig ist.'
-        : `Bei dir laufen schon ${maxParallelChats()} Chats gleichzeitig. Bitte warte, bis einer fertig ist.`);
+        : `Jetzt nicht gestartet: ${lockGrund || 'gerade kein Platz'} (${schaetzungText(schaetzung)}). Bitte warte, bis ein anderer Chat fertig ist.`);
     req.sink.finish();
     return;
   }
@@ -1255,7 +1275,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0, cacheRead: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
     jiraCalls: new Map(), inboxCalls: new Set(), onJiraWrite: req.onJiraWrite, home: '',
-    mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
+    mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false, schaetzung,
     subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: kind === 'strand' || kind === 'worker', leit: kind === 'leitstand', worker: kind === 'worker', ...(kind === 'strand' || kind === 'leitstand' ? { req } : {}),   // Lead auch: melious_sub braucht Konten und Buchung des Zugs
     // Posteingang ab Zugbeginn: Nachreichen geht auch, während Kontext-Paket und Konten noch laden (Bild-Prüfung Plan 154).
     inbox: nachreichenOn() ? newInbox([]) : null,
