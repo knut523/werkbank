@@ -32,7 +32,13 @@ test('Wächter: hängender Prozess → KILL, Neustart, Erfolg erst wenn sie antw
   writeFileSync(join(T, 'web.pid'), String(haengt.pid));
   const neu = join(T, 'neu.sh');
   writeFileSync(neu, `#!/bin/bash\ntouch ${join(T, 'neu')}\n`); chmodSync(neu, 0o755);
-  const env = { WACHE_LOG: join(T, 'log'), WACHE_SPERRE: join(T, 'sperre'), WACHE_PIDFILE: join(T, 'web.pid'), WACHE_NEUSTART: neu, WACHE_URL: 'http://127.0.0.1:9/' };
+  const env = { WACHE_LOG: join(T, 'log'), WACHE_SPERRE: join(T, 'sperre'), WACHE_PIDFILE: join(T, 'web.pid'), WACHE_NEUSTART: neu, WACHE_URL: 'http://127.0.0.1:9/', WACHE_KENNUNG: 'while true' };
+  // PID neu vergeben an einen fremden Prozess → nie beenden
+  const fremd = spawn('sleep', ['30'], { stdio: 'ignore' });
+  writeFileSync(join(T, 'web.pid'), String(fremd.pid));
+  assert.equal(await lauf({ ...env, WACHE_SPERRE: join(T, 'sperre0') }), 1);
+  assert.equal(fremd.exitCode, null, 'fremder Prozess lebt'); fremd.kill();
+  writeFileSync(join(T, 'web.pid'), String(haengt.pid));
   assert.equal(await lauf(env), 1, 'antwortet nach dem Neustart nicht → Exit 1');
   assert.ok(existsSync(join(T, 'neu')));
   await new Promise((res) => setTimeout(res, 200));
