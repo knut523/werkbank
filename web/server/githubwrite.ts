@@ -3,7 +3,9 @@
 // Automatisch nur event COMMENT; APPROVE/REQUEST_CHANGES nur nach Knuts Klick in der Review-Ansicht (Route prüft Admin).
 // Token: WERKBANK_GITHUB_WRITE_TOKEN (Tests/Notfall), sonst das Push-Token über den Credential-Helper (`git credential
 // fill`, ohne GIT_VW_READ) — nur im Speicher dieses Aufrufs, nie im Log, nie im Frontend.
-// Not-Aus: WERKBANK_GITHUB_KOMMENTAR=off.
+// Dazu (Knut 17.10.2026, Release 17c): EINE Statuszeile je Auto-Review als Issue-Kommentar am PR, die danach nur bearbeitet
+// wird (POST …/issues/{n}/comments, PATCH …/issues/comments/{id}).
+// Not-Aus: WERKBANK_GITHUB_KOMMENTAR=off (alles), WERKBANK_REVIEW_STATUS=off (nur die Statuszeile, prreview.ts).
 
 import { execFile } from 'node:child_process';
 
@@ -40,4 +42,23 @@ export async function postReview(r: { repo: string; number: number; head: string
   if (!res.ok) throw new Error(`GitHub antwortet mit ${res.status}${res.status === 422 ? ' (Stand passt nicht mehr oder eigener PR)' : res.status === 403 || res.status === 404 ? ' (keine Schreibrechte auf dieses Repo)' : ''}`);
   const j: any = await res.json().catch(() => ({}));
   return { url: typeof j.html_url === 'string' ? j.html_url : null };
+}
+
+/** Statuszeile: id = null → Kommentar anlegen, sonst genau diesen Kommentar ersetzen. */
+export async function statusKommentar(r: { repo: string; number: number }, body: string, id: number | null): Promise<{ id: number; url: string | null }> {
+  if (schreibenAus()) throw new Error('GitHub-Schreiben ist aus (WERKBANK_GITHUB_KOMMENTAR=off).');
+  if (!REPO_RE.test(r.repo) || !Number.isInteger(r.number) || r.number < 1 || (id !== null && !(Number.isInteger(id) && id > 0))) throw new Error('PR-Angaben ungültig.');
+  if (!body.trim()) throw new Error('Kein Text.');
+  const token = await writeToken(r.repo);
+  if (!token) throw new Error('Kein Schreibtoken für dieses Repo (Credential-Helper antwortet nicht).');
+  const url = id === null ? `${API()}/repos/${r.repo}/issues/${r.number}/comments` : `${API()}/repos/${r.repo}/issues/comments/${id}`;
+  const res = await fetch(url, {
+    method: id === null ? 'POST' : 'PATCH', signal: AbortSignal.timeout(30_000), redirect: 'error',
+    headers: { authorization: `bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'olaf-werkbank' },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) throw new Error(`GitHub antwortet mit ${res.status}${res.status === 403 || res.status === 404 ? ' (keine Schreibrechte auf dieses Repo)' : ''}`);
+  const j: any = await res.json().catch(() => ({}));
+  if (!Number.isInteger(j.id)) throw new Error('GitHub lieferte keine Kommentar-Kennung.');
+  return { id: j.id, url: typeof j.html_url === 'string' ? j.html_url : null };
 }

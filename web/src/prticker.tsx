@@ -6,7 +6,8 @@ import { api, chatTarget, fmtDateTime } from './api.ts';
 import { Err, Loading, useLoad } from './ui.tsx';
 
 const KIND: Record<string, string> = { neu: '🆕', stand: '⬆️', zu: '🏁', kommentar: '💬', review: '🔎', anfrage: '🙋', tag: '🏷️' };
-const STATUS_CHIP: Record<string, string> = { wartet: '', startet: '', läuft: '', fertig: 'ok', deckel: 'warn', fehler: 'bad', übersprungen: '' };
+const STATUS_CHIP: Record<string, string> = { wartet: '', startet: '', läuft: '', gegenprüfung: '', abgleich: '', fertig: 'ok', deckel: 'warn', fehler: 'bad', übersprungen: '' };
+const uhr = (d: string) => new Date(d).toLocaleTimeString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', minute: '2-digit' });
 const EMPF: Record<string, { t: string; c: string }> = { approve: { t: 'approven', c: 'ok' }, 'request-changes': { t: 'Änderungen verlangen', c: 'bad' }, comment: { t: 'nur kommentieren', c: 'warn' } };
 const short = (repo: string) => repo.split('/')[1] ?? repo;
 
@@ -62,9 +63,9 @@ export function PrTickerSchalter() {
         <Schalter label="auch bei Review-Anfrage an mich" an={s.onRequest} disabled={busy || !s.autoReview} testid="schalter-anfrage" onChange={(v) => set({ onRequest: v })} />
       </div>
       <details className="small" style={{ marginBottom: 8 }}>
-        <summary>Deckel und Liste · {s.maxPerDay}/Tag · {s.maxParallel} gleichzeitig · heute {d.heute} gestartet · Auto-Review und Posten nur für {(d.reviewOrgs ?? []).join(', ')} · PR-Tests werden nicht ausgeführt</summary>
+        <summary>Grenzen und Liste · ohne Tagesgrenze · {s.maxParallel} gleichzeitig (weitere warten) · heute {d.heute} gestartet · Auto-Review und Posten nur für {(d.reviewOrgs ?? []).join(', ')} · PR-Tests werden nicht ausgeführt</summary>
         <div className="row" style={{ gap: 10, flexWrap: 'wrap', margin: '6px 0' }}>
-          <label>max. je Tag <input className="input" type="number" min={0} max={50} defaultValue={s.maxPerDay} style={{ width: 60 }} onBlur={(e) => Number(e.target.value) !== s.maxPerDay && set({ maxPerDay: Number(e.target.value) })} data-testid="deckel-tag" /></label>
+          <span className="muted" data-testid="deckel-tag">ohne Tagesgrenze</span>
           <label>gleichzeitig <input className="input" type="number" min={1} max={5} defaultValue={s.maxParallel} style={{ width: 50 }} onBlur={(e) => Number(e.target.value) !== s.maxParallel && set({ maxParallel: Number(e.target.value) })} /></label>
           <label>@review zählt von <input className="input" value={allow} onChange={(e) => setAllow(e.target.value)} style={{ width: 220 }} onBlur={() => allow !== s.allow.join(', ') && set({ allow: allow.split(/[\s,]+/) })} data-testid="allowlist" /></label>
         </div>
@@ -89,11 +90,13 @@ export function PrTickerMeldungen() {
           {d.reviews.map((r: any) => (
             <li key={r.id}>
               <a href={r.url} target="_blank" rel="noreferrer">{short(r.repo)}#{r.number}</a> {r.title}{' '}
-              <span className={`chip ${STATUS_CHIP[r.status] ?? ''}`}>{r.status}</span>
+              <span className={`chip ${STATUS_CHIP[r.status] ?? ''}`} data-testid="review-status">{r.status === 'wartet' && r.retryAt ? `erneut ab ${uhr(r.retryAt)} (Versuch ${r.versuche + 1})` : r.status}</span>
+              {r.tiefe && <> <span className="chip" title={`${r.zeilen ?? '?'} geänderte Zeilen${r.delta ? ` · Delta seit ${r.delta.von}: ${r.delta.zeilen}` : ''}`}>{r.delta ? 'Delta · ' : ''}{r.tiefe}{r.eta ? ` · ~${r.eta} min` : ''}</span></>}
+              {r.gp && <> <span className={`chip ${r.gp.ok ? '' : 'warn'}`} title={r.gp.fehler ?? ''}>{r.gp.ok ? 'Gegenprüfung ✓' : 'ohne Gegenprüfung'}</span></>}
               {r.empfehlung && <> <span className={`chip ${EMPF[r.empfehlung]?.c ?? ''}`}>Empfehlung: {EMPF[r.empfehlung]?.t ?? r.empfehlung}</span></>}
               {r.posted && <> · <a href={r.posted.url ?? r.url} target="_blank" rel="noreferrer">gepostet</a></>}
               {r.strand && <> · <a href={`#/leitstand?review=${r.strand}`}>Review-Ansicht</a></>}
-              {['deckel', 'fehler', 'übersprungen'].includes(r.status) && <> · <button className="btn tiny ghost" onClick={async () => { await api('/api/leitstand/ticker/review', { body: { id: r.id } }); t.reload(); }}>Jetzt reviewen</button></>}
+              {(['deckel', 'fehler', 'übersprungen'].includes(r.status) || (r.status === 'wartet' && r.retryAt)) && <> · <button className="btn tiny ghost" onClick={async () => { await api('/api/leitstand/ticker/review', { body: { id: r.id } }); t.reload(); }}>Jetzt reviewen</button></>}
               {r.note && <span className="tiny muted"> · {r.note}</span>}
             </li>))}
         </ul>
@@ -110,6 +113,54 @@ export function PrTickerMeldungen() {
               <span className="tiny muted">{fmtDateTime(e.at)}</span>{e.note && <span className="tiny muted"> · {e.note}</span>}
             </li>))}
         </ul>}
+    </section>
+  );
+}
+
+const LOG_CHIP: Record<string, string> = { wartet: '', läuft: '', fertig: 'ok', übersprungen: '', fehler: 'bad' };
+const tag = (d: string) => new Date(d).toLocaleString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+/**
+ * Review-Log (Knut 17.10.): je Review eine Zeile — PR, angefragt von/am, Tiefe, Status mit Grund, Dauer, Empfehlung, gepostet,
+ * Paket. Neueste oben, Filter nach Person/Repo/Status. Nur lesen. Eigene Komponente, damit sie mit dem Zielbild (Paket 213)
+ * nach „Arbeit › Reviews & PRs“ umziehen kann.
+ */
+export function ReviewLog() {
+  const [f, setF] = useState({ person: '', repo: '', status: '' });
+  const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
+  const l = useLoad(() => api(`/api/leitstand/ticker/log${qs ? `?${qs}` : ''}`), [qs]);
+  const d: any = l.data;
+  const wahl = (k: 'person' | 'repo' | 'status', opts: string[], leer: string) => (
+    <select className="input small" value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} data-testid={`log-filter-${k}`}>
+      <option value="">{leer}</option>{opts.map((o) => <option key={o} value={o}>{k === 'repo' ? short(o) : o}</option>)}
+    </select>);
+  return (
+    <section className="card" data-testid="review-log" style={{ marginBottom: 14 }}>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+        <h2 style={{ margin: 0 }}>Review-Log</h2>
+        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+          {wahl('person', d?.personen ?? [], 'alle Personen')}{wahl('repo', d?.repos ?? [], 'alle Repos')}
+          {wahl('status', ['wartet', 'läuft', 'fertig', 'übersprungen', 'fehler'], 'jeder Status')}
+        </div>
+      </div>
+      {!d ? (l.error ? <Err e={l.error} /> : <Loading />) : d.zeilen.length === 0 ? <p className="small muted">Keine Reviews{qs ? ' für diesen Filter' : ''}.</p> :
+        <div style={{ overflowX: 'auto' }}>
+          <table className="small" data-testid="review-log-tabelle">
+            <thead><tr><th>PR</th><th>angefragt</th><th>Tiefe</th><th>Status</th><th>Dauer</th><th>Empfehlung</th><th>gepostet</th><th>Paket</th></tr></thead>
+            <tbody>{d.zeilen.map((z: any) => (
+              <tr key={z.id} data-testid="review-log-zeile">
+                <td><a href={z.url} target="_blank" rel="noreferrer" className="mono">{short(z.repo)}#{z.number}</a><div className="tiny muted">{z.title}</div></td>
+                <td>{z.anfrage ? <a href={z.anfrage} target="_blank" rel="noreferrer">{z.von ?? '?'}</a> : (z.von ?? '–')}<div className="tiny muted">{tag(z.am)}</div></td>
+                <td>{z.tiefe ?? '–'}</td>
+                <td><span className={`chip ${LOG_CHIP[z.status] ?? ''}`}>{z.status}</span>{z.grund && <div className="tiny muted">{z.grund}</div>}</td>
+                <td>{z.dauerMin != null ? `${z.dauerMin} min` : '–'}</td>
+                <td>{z.empfehlung ? <span className={`chip ${EMPF[z.empfehlung]?.c ?? ''}`}>{EMPF[z.empfehlung]?.t ?? z.empfehlung}</span> : '–'}</td>
+                <td data-testid="log-gepostet">{z.gepostet ? <><a href={z.gepostet.url ?? z.url} target="_blank" rel="noreferrer">ja</a> <span className="tiny muted">({z.gepostet.wie}{z.gepostet.von ? `, ${z.gepostet.von}` : ''})</span></> : 'nein'}</td>
+                <td>{z.paket ? <a href={`api/files/agenten/${encodeURIComponent(z.paket)}/kommentar.md`} target="_blank" rel="noreferrer">{z.paket}</a> : '–'}</td>
+              </tr>))}
+            </tbody>
+          </table>
+        </div>}
     </section>
   );
 }

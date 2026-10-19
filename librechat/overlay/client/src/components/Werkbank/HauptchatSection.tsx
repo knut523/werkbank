@@ -9,6 +9,7 @@ import * as Menu from '@ariakit/react/menu';
 import { ChevronDown, Ellipsis, FileCheck, FileText, Satellite } from 'lucide-react';
 import { cn } from '~/utils';
 import { useLocalStorage } from '~/hooks';
+import { useOpenChat } from './openChat';
 
 type Status = 'läuft' | 'wartet' | 'fertig' | 'gestoppt' | 'erledigt';
 type Strand = { id: string; title: string; lauf: string; thema?: string; status: Status; url: string; auftrag?: boolean; bericht?: boolean };
@@ -129,7 +130,9 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
   const [inListe, setInListe] = useLocalStorage('werkbank-unterchats-in-liste', false);
   const [auf, setAuf] = useState<Auf>(readAuf);
   const save = useCallback((a: Auf) => { setAuf(a); writeAuf(a); }, []);
-  const open = useCallback((p: string) => { navigate(p, { state: { focusChat: true } }); toggleNav?.(); }, [navigate, toggleNav]);
+  // Chats über LibreChats Chatwechsel öffnen, nicht nur die Adresse ändern (17c, Bug A: Senden ging sonst in den Hauptchat).
+  const openChat = useOpenChat();
+  const open = useCallback((p: string) => { openChat(p, { state: { focusChat: true } }); toggleNav?.(); }, [openChat, toggleNav]);
   const toStart = () => { navigate(`/wb/heute?h=${encodeURIComponent('#/?start=1')}`); toggleNav?.(); };
 
   // Ohne je geladene Daten nichts zeigen — auch bei Fehlern (sonst sähe ein Team-Konto bei einem Ausfall den Abschnitt; Review).

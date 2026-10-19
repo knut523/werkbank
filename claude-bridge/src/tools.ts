@@ -248,6 +248,9 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
     if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
+    // Chief of Staff (Plan 209, K17): Zusagen lesen frei; das Register schreiben erst nach „ja“ (im Strang gesperrt, siehe orchestratorBlock).
+    if (server === 'werkbank' && name === 'zusagen') return { cls: 'read' };
+    if (server === 'werkbank' && (name === 'zusage_eintragen' || name === 'zusage_aendern' || name === 'thema_setzen')) return { cls: 'confirm' };
     // Orchestrator-Werkzeuge (Plan 132, S3): nur im Leitstand. Lesen und Rückfragen an Knut frei; Stränge starten, Nachrichten
     // schicken und prüfen entscheidet der Klassifikator; ein Strang außerhalb des Leitstand-Ordners braucht ein „ja“.
     if (server === 'werkbank' && name.startsWith('orch_')) {
@@ -335,6 +338,7 @@ export function orchestratorBlock(tool: string, input: Record<string, unknown>):
   if (tool.startsWith('mcp__')) {
     const [, server, name = ''] = tool.split('__');
     if (server === 'werkbank' && /^(jira_|orch_)/.test(name)) return name.startsWith('orch_') ? 'Orchestrator-Werkzeuge' : 'Jira schreiben';
+    if (server === 'werkbank' && /^(zusage_eintragen|zusage_aendern|thema_setzen)$/.test(name)) return 'Register schreiben braucht Knuts Ja im Chat';
     if (server === 'atlassian' && !MCP_READ.test(name) && name !== 'authenticate' && name !== 'complete_authentication') return 'Jira/Confluence schreiben';
     if (/github/i.test(server) && !MCP_READ.test(name)) return 'GitHub schreiben';
     if (server === 'forge-review' && /merge|post|publish|submit|comment|approve|request_changes/i.test(name)) return 'GitHub schreiben';
@@ -548,6 +552,19 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
       }
       if (tool === 'mcp__werkbank__agent_start') {
         return `${neutralizeAnswerAnchors('', `**Soll ich für ${input.key} einen neuen Chat mit einem Agenten starten?** Er arbeitet das Ticket vor und fragt vor jedem Schreiben nach.${input.note ? `\n\nAuftrag: „${short(input.note, 300)}“` : ''}`)}\n\n${ANSWER_BUTTONS}`;
+      }
+      if (tool === 'mcp__werkbank__zusage_eintragen') {
+        const zs = (Array.isArray(input.zusagen) ? input.zusagen : []) as Record<string, unknown>[];
+        const rows = zs.map((z) => `- ${z.wer ? short(z.wer, 40) : 'Wer: offen'} → ${short(z.an ?? 'Knut', 30)}: ${short(z.was, 140)}${z.bis ? ` · bis ${short(z.bis, 12)}` : z.fristUnklar ? ' · Frist unklar' : ''}${z.thema ? ` · ${short(z.thema, 30)}` : ''}`);
+        return `${neutralizeAnswerAnchors('', `**Soll ich ${zs.length} ${zs.length === 1 ? 'Zusage' : 'Zusagen'} ins Zusagen-Register (Vault) eintragen?**\n\n${rows.join('\n')}`)}\n\n${ANSWER_BUTTONS}`;
+      }
+      if (tool === 'mcp__werkbank__zusage_aendern') {
+        const parts = [input.status ? `Status → ${short(input.status, 20)}` : '', input.bis ? `Frist → ${short(input.bis, 12)}` : '', input.notiz ? `Notiz: ${short(input.notiz, 160)}` : ''].filter(Boolean);
+        return `${neutralizeAnswerAnchors('', `**Soll ich im Zusagen-Register ${short(input.id, 12)} ändern?**\n\n${parts.map((p) => '- ' + p).join('\n')}`)}\n\n${ANSWER_BUTTONS}`;
+      }
+      if (tool === 'mcp__werkbank__thema_setzen') {
+        const parts = [input.stand ? `Stand: ${short(input.stand, 160)}` : '', input.naechster ? `Nächster Schritt: ${short(input.naechster, 160)}` : '', input.ball ? `Ball bei: ${short(input.ball, 40)}` : ''].filter(Boolean);
+        return `${neutralizeAnswerAnchors('', `**Soll ich das Thema „${short(input.name, 40)}“ im Themen-Register (Vault) setzen?**\n\n${parts.map((p) => '- ' + p).join('\n')}`)}\n\n${ANSWER_BUTTONS}`;
       }
       if (tool.startsWith('mcp__atlassian__')) {
         what = `in Jira **${tool.split('__')[2]}** ausführen`;

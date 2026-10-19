@@ -16,12 +16,12 @@ import { listClaudeAccounts, addClaudeAccount, removeClaudeAccount, reorderClaud
 import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraIdentity, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
 import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
-import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, type Issue } from './jira.ts';
+import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, mirrorOf, mirrorSites, siteByPrefix, siteColumns, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema, etaMediane } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
-import { themaOf } from './themen.ts';
+import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
@@ -45,15 +45,26 @@ import { runSyncPlan, proposalsFor, type Proposal } from './syncplan.ts';
 import { listSkills, syncSkills } from './skills.ts';
 import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog, logShare, scratchDir } from './sharing.ts';
 import { log } from './log.ts';
+import { cosRoutes } from './cosroutes.ts';
+import { morgenTick, schnappschussTick } from './cosjob.ts';
+import { olafJira } from './cos-olafjira.ts';
+import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
+import { abschlussTick, wocheTick } from './cosabschluss.ts';
+import { rueckstau as cosRueckstau, } from './cosmeeting.ts';
+import { meetingTeams as cosMeetingTeams } from './cossammle.ts';
+const cosRueckstauZahl = () => { try { return cosRueckstau(cfg.vaultDir, cosMeetingTeams(), new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date())).length; } catch { return 0; } };
+import type { Quellen as CosQuellen } from './cossammle.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, type JiraAction } from './jirawrite.ts';
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
-import { tickerTick, tickerOverview, setTickerSettings, reviewsCol, reviewErlaubt } from './prticker.ts';
-import { reviewTick, prNowVia, parseKommentar, fussnote } from './prreview.ts';
-import { postReview, schreibenAus, type ReviewEvent } from './githubwrite.ts';
+import { tickerTick, tickerOverview, setTickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted } from './prticker.ts';
+import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit } from './prreview.ts';
+import { execModus, lokalAdapter } from './reviewexec.ts';
+import { meliousPassC } from './gegenpruefung.ts';
+import { postReview, statusKommentar, schreibenAus, type ReviewEvent } from './githubwrite.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
 import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './timebox.ts';
@@ -647,8 +658,31 @@ on('POST', /^\/api\/vault\/reindex$/, async (req, res) => {
 
 // --- Board ---
 
+/** Kopie einer weiteren Seite (17c: OLAF-Board) — nur lesen, ohne PM-Regeln (Pflege, Ziele, Workspace-Sprint). */
+const siteIssues = async (mi: ReturnType<typeof mirrorOf>) => (await wb().collection(mi.col).find({}, { projection: { _id: 0 } }).toArray()) as unknown as Issue[];
+const syncOut = (sync: any) => (sync ? { at: sync.at, by: sync.by, count: sync.count, source: sync.source, error: sync.error, errorAt: sync.errorAt, errorKind: sync.errorKind ?? null, incAt: sync.incAt ?? null } : null);
+
 on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
   await needUser(req);
+  const st = siteByPrefix(url.searchParams.get('site'));
+  if (!st.main && !mirrorSites().some((x) => x.prefix === st.prefix)) throw new HttpError(409, `Für ${st.site.replace(/^https:\/\//, '')} gibt es hier keine Kopie.`);
+  if (!st.main) {
+    const mi = mirrorOf(st);
+    const all = await siteIssues(mi);
+    const filter = ['overdue', 'undated'].includes(url.searchParams.get('filter') ?? '') ? url.searchParams.get('filter')! : undefined;
+    const sprintKeys = new Set(all.filter((i) => i.openSprint).map((i) => i.key));
+    const model = boardModel(all, {
+      owner: url.searchParams.get('owner') || undefined, filter, q: url.searchParams.get('q') || undefined,
+      showDone: url.searchParams.get('done') === '1', keys: url.searchParams.get('sprint') === '1' ? sprintKeys : undefined,
+      laneType: mi.laneType, columns: siteColumns(all.filter((i) => i.type !== mi.laneType)), pmRules: false,
+    });
+    return send(res, 200, {
+      ...model, lanes: model.lanes.map((l) => ({ ...l, hygiene: 0 })), hygiene: { perOwner: {}, total: 0 },
+      sync: syncOut(await wb().collection('meta').findOne({ _id: mi.meta as any })),
+      site: st.site, prefix: st.prefix, readOnly: true, laneType: mi.laneType,
+      sprint: { id: null, date: null, label: 'laufender Jira-Sprint', count: sprintKeys.size, jira: true }, dryRun: dryRun(),
+    });
+  }
   const all = [...(await issueMap()).values()];
   const hyg = hygieneAll(all);
   await refreshChatRuns();
@@ -673,8 +707,8 @@ on('GET', /^\/api\/board$/, async (req, res, _m, url) => {
     ...model,
     lanes: model.lanes.map((l) => ({ ...l, hygiene: Object.values(l.columns).flat().reduce((n: number, c: any) => n + (c.hygiene?.length ? 1 : 0) + c.subtasks.filter((x: any) => x.hygiene?.length).length, 0) })),
     hygiene: { perOwner, total: [...hyg.keys()].length },
-    sync: sync ? { at: sync.at, by: sync.by, count: sync.count, source: sync.source, error: sync.error, errorAt: sync.errorAt, errorKind: sync.errorKind ?? null, incAt: sync.incAt ?? null } : null,
-    site: cfg.jiraSite,
+    sync: syncOut(sync),
+    site: cfg.jiraSite, prefix: cfg.jiraProject,
     sprint: curCycle ? { id: curCycle.id, date: curCycle.date, label: sprintLabel(curCycle.date), count: all.filter((i) => inSprint(i, curCycle.date)).length } : null,
     dryRun: dryRun(),
   });
@@ -692,7 +726,10 @@ on('POST', /^\/api\/board\/sync$/, async (req, res) => {
   // force: Löschschutz-Schwelle einmal übergehen (nach echtem Schrumpfen) — nur mit Bestätigung aus der Oberfläche.
   const force = b.force === true && b.confirm === true;
   if (force) log('jira sync erzwungen', { user: u.id });
-  send(res, 200, await syncMirror(await needJira(u), u.email, { force }));
+  // 17c: `site` (Präfix) gleicht die Kopie einer weiteren Seite ab — nur lesen, mit dem Zugang der Person.
+  const st = siteByPrefix(typeof b.site === 'string' ? b.site : null);
+  if (!st.main && !mirrorSites().some((x) => x.prefix === st.prefix)) throw new HttpError(409, `Die Kopie von ${st.site.replace(/^https:\/\//, '')} ist hier nicht eingerichtet.`);
+  send(res, 200, await syncMirror(await needJira(u), u.email, { force }, st));
 });
 
 on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => {
@@ -700,10 +737,15 @@ on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)$/, async (req, res, m) => 
   const im = await issueMap();
   const i = im.get(m[1]);
   if (!i && !isMainSite(m[1])) {
-    // Release 17b: Ticket einer anderen Seite (OLAF-123) — live lesen, nur anzeigen (keine Läufe, keine Schreibknöpfe).
-    const f = await fremdesTicket(await jiraCreds(u).catch(() => null), m[1]);
+    // Release 17b: Ticket einer anderen Seite (OLAF-123) — nur anzeigen (keine Läufe, keine Schreibknöpfe). 17c: zuerst aus
+    // der Kopie der Seite (mit Kindern), sonst live gelesen.
+    const mi = mirrorOf(siteFor(m[1]));
+    const own = (await wb().collection(mi.col).findOne({ key: m[1] }, { projection: { _id: 0 } })) as unknown as Issue | null;
+    const f = own ? { ...own, site: mi.site.site } : await fremdesTicket(await jiraCreds(u).catch(() => null), m[1]);
     if (!f) throw new HttpError(404, `${m[1]} nicht lesbar (Jira ${siteFor(m[1]).site.replace(/^https:\/\//, '')}).`);
-    return send(res, 200, { issue: f, url: browseUrl(f.key), children: [], runs: [], hygiene: [], parent: f.parent ? { key: f.parent, summary: f.parentSummary ?? null } : null, docs: await ticketDocs(u, f.key), readOnly: true, site: f.site,
+    const children = own ? ((await wb().collection(mi.col).find({ parent: f.key }, { projection: { _id: 0, key: 1, summary: 1, status: 1, statusCategory: 1, assignee: 1, duedate: 1 } }).toArray()) as any[])
+      .sort((a, b) => a.key.localeCompare(b.key, 'de', { numeric: true })).map((x) => ({ ...x, overdue: isOverdue(x), hygiene: [] })) : [];
+    return send(res, 200, { issue: f, url: browseUrl(f.key), children, runs: [], hygiene: [], parent: f.parent ? { key: f.parent, summary: f.parentSummary ?? null } : null, docs: await ticketDocs(u, f.key), readOnly: true, site: f.site,
       chatUrl: chatUrl(`${ticketPrompt(f)}\n\nLass uns an diesem Ticket arbeiten. Lies zuerst, was Vault und Jira dazu sagen.`) });
   }
   if (!i) throw new HttpError(404, 'Ticket nicht in der Kopie.');
@@ -768,13 +810,15 @@ on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/move$/, async (req, res,
 on('GET', /^\/api\/prefs$/, async (req, res) => {
   const u = await needUser(req);
   const d: any = await wb().collection('user_prefs').findOne({ _id: u.id as any });
-  send(res, 200, { confirmMove: d?.confirmMove ?? true });
+  send(res, 200, { confirmMove: d?.confirmMove ?? true, boardSite: d?.boardSite ?? cfg.jiraProject });
 });
 on('POST', /^\/api\/prefs$/, async (req, res) => {
   const u = await needUser(req);
   const b = await body(req);
   const set: any = {};
   if (typeof b.confirmMove === 'boolean') set.confirmMove = b.confirmMove;
+  // 17c: gewählte Jira-Übersicht (PM-Board | OLAF-Board) je Person — nur bekannte Präfixe.
+  if (typeof b.boardSite === 'string' && jiraSites().some((x) => x.prefix === b.boardSite)) set.boardSite = b.boardSite;
   await wb().collection('user_prefs').updateOne({ _id: u.id as any }, { $set: { ...set, at: new Date() } }, { upsert: true });
   send(res, 200, { ok: true, ...set });
 });
@@ -1193,8 +1237,17 @@ async function mineFor(u: User, { write = true } = {}) {
   const tickets = ((await wb().collection('jira_issues').find({ type: { $ne: 'Workstream' } }, { projection: { _id: 0, key: 1, summary: 1, status: 1, statusCategory: 1, assignee: 1, duedate: 1 } }).toArray()) as any[])
     .filter((i) => i.statusCategory !== 'Done' && i.status !== 'Done' && String(i.assignee ?? '').toLowerCase().split(/\s+/)[0] === me)
     .filter((i) => !i.duedate || i.duedate < today)
-    .map((i) => ({ key: i.key, summary: i.summary, duedate: i.duedate, why: i.duedate ? 'überfällig' : 'ohne Datum' }))
+    .map((i) => ({ key: i.key, summary: i.summary, duedate: i.duedate, why: i.duedate ? 'überfällig' : 'ohne Datum', site: cfg.jiraProject }))
     .sort((a, b) => String(a.duedate ?? '9').localeCompare(String(b.duedate ?? '9')));
+  // 17c: weitere Seiten (OLAF) — mir zugewiesen, offen, im laufenden Jira-Sprint oder überfällig („ohne Datum“ ist dort normal).
+  for (const st of mirrorSites()) {
+    const mi = mirrorOf(st);
+    for (const i of (await wb().collection(mi.col).find({ type: { $ne: mi.laneType }, statusCategory: { $ne: 'done' } }, { projection: { _id: 0, key: 1, summary: 1, status: 1, assignee: 1, duedate: 1, openSprint: 1 } }).toArray()) as any[]) {
+      if (i.status === 'Done' || String(i.assignee ?? '').toLowerCase().split(/\s+/)[0] !== me) continue;
+      const over = !!i.duedate && i.duedate < today;
+      if (over || i.openSprint) tickets.push({ key: i.key, summary: i.summary, duedate: i.duedate, why: over ? 'überfällig' : 'im Jira-Sprint', site: st.prefix });
+    }
+  }
   const admin = u.role === 'ADMIN';
   let questions: any[] = [], draft: any = null, section: string | null = null, pendingApprovals: any[] = [];
   if (admin) {
@@ -1413,6 +1466,12 @@ async function prReviewOf(strand: string) {
     text: k?.text ?? null, posted: r.posted ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus() };
 }
 on('GET', /^\/api\/leitstand\/ticker$/, async (req, res) => { await needAdmin(req); send(res, 200, await tickerOverview()); });
+// Review-Log (Knut 17.10.): je Review eine Zeile, neueste oben; Filter Person/Repo/Status. Nur lesen.
+on('GET', /^\/api\/leitstand\/ticker\/log$/, async (req, res) => {
+  await needAdmin(req);
+  const q = new URL(req.url ?? '/', 'http://x').searchParams;
+  send(res, 200, await reviewLog({ person: q.get('person') || undefined, repo: q.get('repo') || undefined, status: q.get('status') || undefined }));
+});
 on('POST', /^\/api\/leitstand\/ticker\/einstellungen$/, async (req, res) => {
   const u = await needAdmin(req);
   const s = await setTickerSettings(await body(req), { id: u.id, name: u.name });
@@ -1429,7 +1488,9 @@ on('POST', /^\/api\/leitstand\/ticker\/review$/, async (req, res) => {
   const u = await needAdmin(req);
   const b = await body(req);
   if (!reviewErlaubt(String(b.id ?? '').split('#')[0])) throw new HttpError(409, 'Für dieses Repo gibt es kein Auto-Review (WERKBANK_PR_REVIEW_ORGS).');
-  const r = await reviewsCol().updateOne({ _id: String(b.id ?? '') as any, status: { $in: ['deckel', 'fehler', 'übersprungen', 'startet'] } }, { $set: { status: 'wartet', note: `von ${u.name} erneut angestoßen`, ownerId: u.id } });
+  // 17c: auch ein erneut eingereihtes (wartet mit retryAt) sofort; neuer Anlauf ohne alte Gegenprüfung und Versuchszähler.
+  const r = await reviewsCol().updateOne({ _id: String(b.id ?? '') as any, $or: [{ status: { $in: ['deckel', 'fehler', 'übersprungen', 'startet'] } }, { status: 'wartet', retryAt: { $ne: null } }] },
+    { $set: { status: 'wartet', note: `von ${u.name} erneut angestoßen`, ownerId: u.id, retryAt: null, versuche: 0 }, $unset: { gp: '', gpStart: '' } });
   if (!r.modifiedCount) throw new HttpError(409, 'Eintrag nicht gefunden oder läuft schon.');
   send(res, 200, { ok: true });
 });
@@ -1451,7 +1512,7 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/github$/, async (req, res, m) => {
   if (now.head !== pr.head) throw new HttpError(409, `Neuer Stand ${now.head.slice(0, 7)} seit dem Review — erst neu reviewen.`);
   if (event === 'COMMENT' && pr.posted) throw new HttpError(409, 'Der Kommentar ist schon gepostet.');
   if (event !== 'COMMENT' && (pr.postings ?? []).some((x: any) => x.event === event)) throw new HttpError(409, 'Für diesen Stand schon abgeschickt.');
-  const r = await postReview(pr, pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automatisches Review', 'Review'), event).catch((e: any) => { throw new HttpError(502, e.message); });
+  const r = await postReview(pr, pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automated review', 'Review'), event).catch((e: any) => { throw new HttpError(502, e.message); });
   await reviewsCol().updateOne({ _id: pr.id as any }, { $push: { postings: { at: new Date(), url: r.url, event, by: u.name } } as any, ...(event === 'COMMENT' && !pr.posted ? { $set: { posted: { at: new Date(), url: r.url, event, by: u.name } } } : {}) });
   log('pr-review github', { user: u.id, pr: `${pr.repo}#${pr.number}`, event });
   send(res, 200, { ok: true, url: r.url });
@@ -1648,8 +1709,8 @@ on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (r
 });
 
 // Übersicht „Was fertig ist“ (docs/plan-uebersicht-handeln.md, Paket 184): je offenem Strang eine Karte, nach Thema. Nur lesen.
-on('GET', /^\/api\/uebersicht$/, async (req, res) => {
-  const u = await needAdmin(req);
+/** Karten und Rückfragen der Übersicht — eine Quelle für die Seite und für den Chief of Staff (Plan 209, K8). */
+async function uebersichtDaten(u: User) {
   const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(60).toArray()) as any[]).filter(offenFuerKnut);
   const ids = docs.map((d) => String(d._id));
   const fgs: any[] = ids.length ? await (await import('./freigabe.ts')).freigaben().find({ strand: { $in: ids }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
@@ -1663,6 +1724,12 @@ on('GET', /^\/api\/uebersicht$/, async (req, res) => {
   }).filter(Boolean) as any[];
   const imStrang = new Set(karten.map((k) => k.id));
   const lose = qs.filter((q: any) => !q.strand || !imStrang.has(String(q.strand.id)));
+  return { docs, karten, qs, lose, fragenFehler, basis };
+}
+
+on('GET', /^\/api\/uebersicht$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const { karten, lose, fragenFehler, basis } = await uebersichtDaten(u);
   // Teil B (Mockup 185): Hauptchat-Zeile und „Erledigt diese Woche“ (von Knut geprüft, 7 Tage) — nur Mongo.
   const hauptchat = await leitstandLine(u).catch(() => null);
   const seit = new Date(Date.now() - 7 * 86400_000);
@@ -2651,6 +2718,36 @@ on('GET', /^\/api\/context$/, async (req, res) => {
   send(res, 200, await contextStats(u));
 });
 
+// Chief of Staff (docs/plan-chief-of-staff.md): Register, Einwurf, Morgenlage — Routen in cosroutes.ts.
+const cosQuellen = (): CosQuellen => ({
+  vaultDir: cfg.vaultDir,
+  uebersicht: async (u) => { const r = await uebersichtDaten(u); return { karten: r.karten, qs: r.qs, docs: r.docs }; },
+  mine: async (u) => { const m = await mineFor(u, { write: false }); return { prs: m.prs, tickets: m.tickets, questions: m.questions }; },
+  ich: (u) => firstName(u),
+  olafJira: (st) => olafJira(st, { creds: () => jiraCreds(null) }),   // lesend; Seite aus jiraSites (cos-olafjira.ts)
+});
+cosRoutes({
+  on, needAdmin, internalUser: (req, b) => internalUser(req, b), body, send, HttpError, vaultDir: () => cfg.vaultDir, dry: vaultDry, invalidate: invalidateIndex, log,
+  quellen: () => cosQuellen(),
+  // Nachfassen (nur nach Vorschau + Bestätigung in der Oberfläche): GitHub-Kommentar am PR (Review-Art COMMENT, an den aktuellen Kopf gebunden)
+  // oder Jira-Kommentar mit Knuts Zugang. Mails werden nie gesendet.
+  nachfasser: (u) => ({
+    github: async (repo, nummer, text) => {
+      const token = await githubReadToken();
+      const now = token ? await prNowVia(token, repo, nummer).catch(() => null) : null;
+      if (!now) throw new HttpError(502, 'PR-Stand nicht lesbar (Lesetoken).');
+      if (now.state !== 'OPEN') throw new HttpError(409, `PR ist ${now.state === 'MERGED' ? 'gemergt' : 'geschlossen'} — Nachfassen nicht mehr nötig.`);
+      return postReview({ repo, number: nummer, head: now.head }, text, 'COMMENT').catch((e: any) => { throw new HttpError(502, e.message); });
+    },
+    jira: async (key, text) => { await jiraWrite(u, () => writeJira(u, key, [{ type: 'comment', text }])); },
+  }),
+  themenVorschlag: async () => {
+    const ws = (await wb().collection('jira_issues').distinct('workstream')).map(String).filter(Boolean);
+    const th = (await orchRuns().distinct('thema')).map(String).filter(Boolean);
+    return [...new Set([...ws, ...th, ...THEMEN.map((t) => t.thema)])];
+  },
+});
+
 // --- intern: nur für die Brücke und ihre Werkzeuge (Header mit WERKBANK_INTERNAL_TOKEN) ---
 
 async function internalUser(req: IncomingMessage, b: any): Promise<User> {
@@ -2677,7 +2774,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
   const id = String(b.id ?? '');
   switch (m[1]) {
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null, budget: b.budget || null });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null, tiefe: r.tiefe });
       return send(res, 200, r);
     }
@@ -2708,6 +2805,18 @@ on('POST', /^\/internal\/orchestrator\/(freigaben|freigabe-pruefen|freigabe-gepu
   const r = await gepusht(u, String(b.id ?? ''), b.pr ? String(b.pr) : null);
   log('freigabe gepusht', { user: u.id, id: r.id, pr: r.pr });
   return send(res, 200, r);
+});
+
+// Review-Log: ein von Hand (außerhalb des Workspace) gepostetes Review vermerken — `orch review-posted <id|repo#n> <url>`.
+on('POST', /^\/internal\/orchestrator\/review-posted$/, async (req, res) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  try {
+    const r = await vermerkePosted(String(b.id ?? ''), String(b.url ?? ''), u.name);
+    log('pr-review von hand gepostet', { user: u.id, id: r.id });
+    return send(res, 200, r);
+  } catch (e: any) { throw new HttpError(e?.status ?? 500, e?.message ?? String(e)); }
 });
 
 on('POST', /^\/internal\/orchestrator\/leitstand\/start$/, async (req, res) => {
@@ -2998,6 +3107,15 @@ async function backgroundJobs() {
       log('jira sync', { count: r.count, removed: r.removed });
       await applyAutoGoals(await issueMap());
     } catch (e: any) { log('jira sync', { error: String(e.message).slice(0, 200) }); }
+    // 17c: Kopien weiterer Seiten (OLAF) nacheinander, je mit eigenem Fehler am Board — ein Ausfall dort hält PM nicht auf.
+    for (const st of mirrorSites()) {
+      try {
+        const creds = await jiraCreds(null);
+        if (!creds) { await recordSyncError('zugang', 'Kein Jira-Zugang für den automatischen Abgleich — „Jetzt synchronisieren“ geht mit dem eigenen Token.', st); continue; }
+        const r = await syncMirror(creds, 'Intervall', {}, st);
+        log('jira sync', { site: st.prefix, count: r.count, removed: r.removed });
+      } catch (e: any) { log('jira sync', { site: st.prefix, error: String(e.message).slice(0, 200) }); }
+    }
   };
   setTimeout(jiraTick, 5000);
   setInterval(jiraTick, cfg.jiraSyncMinutes * 60_000);
@@ -3006,8 +3124,12 @@ async function backgroundJobs() {
     try {
       const creds = await credsOrError();
       if (!creds) return;
-      const r = await syncIncremental(creds, cfg.jiraIncMinutes * 2);
-      if (r?.keys.length) log('jira inkrementell', { n: r.keys.length });
+      try { const r = await syncIncremental(creds, cfg.jiraIncMinutes * 2); if (r?.keys.length) log('jira inkrementell', { n: r.keys.length }); }
+      catch (e: any) { log('jira inkrementell', { error: String(e.message).slice(0, 200) }); }   // PM-Fehler hält OLAF nicht auf (Pass C)
+      for (const st of mirrorSites()) {
+        try { const x = await syncIncremental(creds, cfg.jiraIncMinutes * 2, st); if (x?.keys.length) log('jira inkrementell', { site: st.prefix, n: x.keys.length }); }
+        catch (e: any) { log('jira inkrementell', { site: st.prefix, error: String(e.message).slice(0, 200) }); }
+      }
     } catch (e: any) { log('jira inkrementell', { error: String(e.message).slice(0, 200) }); }
   };
   if (cfg.jiraIncMinutes > 0) setInterval(incTick, cfg.jiraIncMinutes * 60_000);
@@ -3027,9 +3149,27 @@ async function backgroundJobs() {
       const r = await reviewTick({
         userById: async (id) => { const u = await userById(id); return u && allowed(u.email) && u.role === 'ADMIN' ? u : null; },
         startOrch, strandDoc: (id) => orchRuns().findOne({ _id: id as any }),
-        markStrand: (id, prReview) => orchRuns().updateOne({ _id: id as any }, { $set: { prReview } }),
+        // 17c: Vorgabe-ETA nach Größe, bis der Strang selbst eine meldet.
+        markStrand: (id, prReview, extra) => orchRuns().updateOne({ _id: id as any }, { $set: { prReview, ...(extra?.eta ? { eta: { at: extra.eta, quelle: 'groesse' } } : {}) } }),
         prNow: async (repo, n) => { const t = await githubReadToken(); return t ? prNowVia(t, repo, n) : null; },
-        post: (r, text, event) => postReview(r, text, event), log,
+        kontext: async (repo, n) => { const t = await githubReadToken(); return t ? prKontextVia(t, repo, n) : null; },
+        vorhanden: async (repo, nums) => { const t = await githubReadToken(); return t ? vorhandenVia(t, repo, nums) : new Set<number>(); },
+        // Pass C über Melious mit dem Konto des Review-Besitzers; WERKBANK_REVIEW_GEGENPRUEFUNG=off schaltet ab.
+        gegenpruefung: process.env.WERKBANK_REVIEW_GEGENPRUEFUNG === 'off' ? undefined : async (r) => {
+          const u = await userById(r.ownerId);
+          if (!u) return null;
+          const basis = r.delta?.von ?? r.basis;
+          if (!r.worktree || !basis) return { ok: false, text: '', fehler: 'keine Basis für den Diff' };
+          return meliousPassC(u, { wt: r.worktree, basis, zweck: `Review ${r.repo}#${r.number}: ${r.title ?? ''}${r.delta ? ' (nur Änderungen seit dem letzten Review)' : ''}` });
+        },
+        sendStrand: async (r, text) => { const u = await userById(r.ownerId); if (!u) throw new Error('Besitzer nicht gefunden'); return sendOrch(u, r.strand, text, 'leitstand'); },
+        post: (r, text, event) => postReview(r, text, event),
+        // Statuszeile am PR (queued → running → done …), englisch; WERKBANK_REVIEW_STATUS=off schaltet ab.
+        status: (r, text, id) => statusKommentar(r, text, id),
+        // `@review deep` führt Tests aus (WERKBANK_REVIEW_EXEC, Vorgabe local-allowlist; off = statisch).
+        // docker-remote/managed-agents gibt es noch nicht: execErlaubt liefert dort „statisch“, ausgeführt wird nichts.
+        exec: execModus() === 'off' ? undefined : (job) => lokalAdapter({ git: async (args, cwd) => String(await realGit(args, cwd)), log: (m) => log('pr-review exec', { m }) }).lauf(job),
+        log,
       });
       if (r.started || r.done) log('pr-review', r);
     } catch (e: any) { log('pr-review', { error: String(e.message).slice(0, 200) }); }
@@ -3100,6 +3240,20 @@ async function backgroundJobs() {
   };
   setTimeout(houseTick, 60_000);
   setInterval(houseTick, 60 * 60_000);
+
+  // Chief of Staff: Morgenlage-Seite (06:55, Nachzug 07:40) und abendlicher Vergleichsstand (Plan 209).
+  const cosTick = async () => {
+    try { const r = await morgenTick(cosQuellen(), { dry: vaultDry() }); if (r !== 'nichts' && r !== 'zu-frueh' && r !== 'aus') log('cos morgenlage', { r }); if (r === 'geschrieben' || r === 'nachgezogen') invalidateIndex(); }
+    catch (e: any) { log('cos morgenlage', { error: String(e?.message ?? e).slice(0, 200) }); }
+    try { if (await schnappschussTick()) log('cos schnappschuss'); } catch (e: any) { log('cos schnappschuss', { error: String(e?.message ?? e).slice(0, 200) }); }
+    try { const a = await abschlussTick(cosQuellen(), { dry: vaultDry() }); if (a === 'geschrieben') { log('cos tagesabschluss'); invalidateIndex(); } } catch (e: any) { log('cos tagesabschluss', { error: String(e?.message ?? e).slice(0, 200) }); }
+    try { const a = await wocheTick(cosQuellen(), { dry: vaultDry(), rueckstau: () => cosRueckstauZahl() }); if (a === 'geschrieben') { log('cos woche'); invalidateIndex(); } } catch (e: any) { log('cos woche', { error: String(e?.message ?? e).slice(0, 200) }); }
+    // Budget je Unter-Chat (80 % Meldung, 100 % Pause) und Lebenszeichen (hängt? / still) — deterministisch, ohne Modell.
+    try { const b = await budgetTick(orchDeps); if (b.gewarnt.length || b.gestoppt.length) log('cos budget', b); } catch (e: any) { log('cos budget', { error: String(e?.message ?? e).slice(0, 200) }); }
+    try { const l = await lebenszeichenTick(orchDeps); if (l.gemeldet.length) log('cos lebenszeichen', l); } catch (e: any) { log('cos lebenszeichen', { error: String(e?.message ?? e).slice(0, 200) }); }
+  };
+  setTimeout(cosTick, 45_000);
+  setInterval(cosTick, 60_000);
 
   // Werkbank-Feed für den Vault-Sync-Snapshot und Abgleich der Freigaben mit dem Protokoll (alle 5 min).
   const roadmapTick = async () => {

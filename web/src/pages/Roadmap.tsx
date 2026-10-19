@@ -6,7 +6,7 @@ import { AnsetzenButton } from '../AgentAnsetzen';
 import { api, type Config, viaLabel } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, StateChip, useJiraLive } from '../ui.tsx';
 import { Md, note } from '../beimir.tsx';
-import { PrTickerMeldungen } from '../prticker.tsx';
+import { PrTickerMeldungen, ReviewLog } from '../prticker.tsx';
 import { topicBuckets } from '../buckets.ts';
 
 // Tabs (Council-Bedingung 11): Überblick · Rangliste · PR-Review · Pflege ⋯ (Konsistenz, Ordnung). Die alten Adressen
@@ -165,6 +165,7 @@ function PrReview({ d, reload, ticker }: { d: any; reload: () => void; ticker: b
   return (
     <>
       {ticker && <PrTickerMeldungen />}
+      {ticker && <ReviewLog />}
       <p className="small muted">Live von GitHub (<b>{gh.org ?? 'WirStrom1'}</b>, alle offenen PRs, alle 5 Minuten, <b>nur lesend</b>) plus <a href={note(d.hub.register)}>PR-Register</a> und PR-Links in den Specs (Spec ↔ PR, Deploy-Gates). Review, Merge und Deploy passieren auf GitHub bzw. durch Menschen.</p>
       <div className="row small" style={{ marginBottom: 8 }}>
         {gh.error ? <span className="chip bad" data-testid="gh-error">GitHub: {gh.error}</span> : gh.at ? <span className="chip ok">GitHub-Stand {new Date(gh.at).toLocaleString('de-AT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {gh.count} offen</span> : <span className="chip warn">GitHub noch nicht abgerufen</span>}

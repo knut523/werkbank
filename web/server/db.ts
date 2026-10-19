@@ -3,7 +3,7 @@
 // Claude-Schlüssel, geteilte Chats).
 
 import { MongoClient, type Db } from 'mongodb';
-import { cfg } from './config.ts';
+import { cfg, jiraSites } from './config.ts';
 
 let client: MongoClient | undefined;
 
@@ -15,6 +15,8 @@ export async function connect(): Promise<MongoClient> {
     await Promise.all([
       db.collection('sessions').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
       db.collection('jira_issues').createIndex({ key: 1 }, { unique: true }),
+      // 17c: Kopien weiterer Jira-Seiten (Name wie mirrorOf in jira.ts)
+      ...jiraSites().filter((x) => !x.main).map((x) => db.collection(`jira_issues_${x.prefix.toLowerCase()}`).createIndex({ key: 1 }, { unique: true })),
       db.collection('creds').createIndex({ userId: 1 }, { unique: true }),
       db.collection('files').createIndex({ owner: 1 }),
       db.collection('files').createIndex({ sharedWith: 1 }),

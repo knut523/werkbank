@@ -13,6 +13,7 @@ export const ME = (process.env.WERKBANK_GITHUB_LOGIN || 'knut523').toLowerCase()
 
 export interface TickerSettings {
   ticker: boolean; autoReview: boolean; autoPost: boolean; onRequest: boolean;
+  /** Entfallen (Knut 17.10.: „nimm den Deckel komplett raus“) — immer 0 = ohne Tagesgrenze; nur noch für alte Dokumente. */
   allow: string[]; maxPerDay: number; maxParallel: number; minutes: number;
   ownerId: string | null; autoReviewSince: string | null;
   log: { at: string; by: string; was: string }[];
@@ -20,7 +21,7 @@ export interface TickerSettings {
 
 export const DEFAULTS: TickerSettings = {
   ticker: false, autoReview: false, autoPost: true, onRequest: false,
-  allow: ['knut523', 'bizarrochris'], maxPerDay: 5, maxParallel: 2, minutes: 5,
+  allow: ['knut523', 'bizarrochris'], maxPerDay: 0, maxParallel: 2, minutes: 5,
   ownerId: null, autoReviewSince: null, log: [],
 };
 
@@ -36,7 +37,13 @@ export const tickerAus = (env = process.env) => env.WERKBANK_PR_TICKER === 'off'
 export async function tickerSettings(): Promise<TickerSettings> {
   const d: any = await meta().findOne({ _id: 'pr_ticker_settings' as any });
   const { _id, ...rest } = d ?? {};
-  return { ...DEFAULTS, ...rest };
+  // Einmalige Migration (Knut 17.10.): gespeicherte Tagesgrenze (5 bzw. übergangsweise 50) → ohne Grenze; am Tagesdeckel
+  // abgewiesene Reviews der letzten 24 h laufen jetzt doch.
+  if (d && Number(d.maxPerDay) > 0) {
+    const m = await meta().updateOne({ _id: 'pr_ticker_settings' as any, maxPerDay: d.maxPerDay }, { $set: { maxPerDay: 0 } });
+    if (m.modifiedCount) await reviewsCol().updateMany({ status: 'deckel', createdAt: { $gte: new Date(Date.now() - 86400_000) } }, { $set: { status: 'wartet', note: 'Tagesgrenze entfällt — erneut eingereiht', retryAt: null } });
+  }
+  return { ...DEFAULTS, ...rest, maxPerDay: 0 };
 }
 
 const LOGIN = /^[a-z\d](?:[a-z\d-]{0,38})$/i;
@@ -53,7 +60,7 @@ export function mergeSettings(cur: TickerSettings, inp: any, by: { id: string; n
     const allow = [...new Set(inp.allow.map((x: unknown) => String(x).trim().replace(/^@/, '').toLowerCase()).filter((x: string) => LOGIN.test(x)))].slice(0, 20) as string[];
     if (allow.join(',') !== cur.allow.join(',')) { next.allow = allow; was.push(`Liste: ${allow.join(', ') || '(leer)'}`); }
   }
-  for (const [k, lo, hi] of [['maxPerDay', 0, 50], ['maxParallel', 1, 5], ['minutes', 2, 60]] as const) {
+  for (const [k, lo, hi] of [['maxParallel', 1, 5], ['minutes', 2, 60]] as const) {   // maxPerDay entfällt (ohne Tagesgrenze)
     if (inp?.[k] !== undefined) { const v = clampInt(inp[k], lo, hi, cur[k]); if (v !== cur[k]) { next[k] = v; was.push(`${k} ${v}`); } }
   }
   // Auto-Review gehört der Person, die es einschaltet (T12); ab dann zählen @review-Tags (T5).
@@ -117,6 +124,8 @@ export interface TickerEvent { _id: string; kind: Kind; repo: string; number: nu
 export interface PrMem { _id: string; head: string; state: string }
 
 export const TAG = /(^|[\s(])@review\b/i;
+/** `@review deep` → Tiefe deep (Knut 17.10.). */
+export const TAG_DEEP = /(^|[\s(])@review\s+deep\b/i;
 const REVIEW_STATE: Record<string, string> = { APPROVED: 'freigegeben', CHANGES_REQUESTED: 'Änderungen verlangt', COMMENTED: 'kommentiert', DISMISSED: 'verworfen' };
 const kurz = (t: string, n = 140) => { const s = String(t ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 export const prKey = (repo: string, n: number) => `${repo}#${n}`;
@@ -227,11 +236,13 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
     if (!reviewErlaubt(e.repo)) { await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: 'kein Auto-Review für dieses Repo' } }); continue; }
     const id = `${prKey(e.repo, e.number)}@${e.head}`;
     try {
-      await reviewsCol().insertOne({ _id: id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, head: e.head, trigger: e.kind, by: e.actor, event: e._id, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date });
+      await reviewsCol().insertOne({ _id: id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, head: e.head, trigger: e.kind, by: e.actor, event: e._id, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date, deep: e.kind === 'tag' && TAG_DEEP.test(e.text ?? '') });
       n++;
     } catch (x: any) {
       if (x?.code !== 11000) throw x;
-      await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: 'schon reviewt für diesen Stand' } });
+      // `@review deep` auf einen schon eingereihten Stand: Tiefe anheben, solange er noch wartet (nie absenken).
+      const hoch = e.kind === 'tag' && TAG_DEEP.test(e.text ?? '') ? (await reviewsCol().updateOne({ _id: id as any, status: 'wartet', deep: { $ne: true } }, { $set: { deep: true } })).modifiedCount : 0;
+      await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: hoch ? 'Tiefe auf deep angehoben (wartet noch)' : 'schon reviewt für diesen Stand' } });
     }
   }
   return n;
@@ -253,7 +264,76 @@ export async function tickerOverview(limit = 40) {
     scopes: scopes(),
     reviewOrgs: reviewOrgs(),
     items: items.map(({ seenAt, ...e }: any) => e),
-    reviews: reviews.map((r: any) => ({ id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, trigger: r.trigger, by: r.by, status: r.status, strand: r.strand ?? null, empfehlung: r.empfehlung ?? null, posted: r.posted ?? null, note: r.note ?? null, createdAt: r.createdAt })),
+    reviews: reviews.map((r: any) => ({ id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, trigger: r.trigger, by: r.by, status: r.status, strand: r.strand ?? null, empfehlung: r.empfehlung ?? null, posted: r.posted ?? null, note: r.note ?? null, createdAt: r.createdAt,
+      // 17c: erneut eingereiht (ab wann, wievielter Versuch), Tiefe/Größe/ETA, Delta, Gegenprüfung
+      retryAt: r.status === 'wartet' ? r.retryAt ?? null : null, versuche: r.versuche ?? 0, tiefe: r.tiefe ?? null, zeilen: r.zeilen ?? null, eta: r.eta ?? null, deep: !!r.deep,
+      delta: r.delta ? { von: String(r.delta.von).slice(0, 7), zeilen: r.delta.zeilen } : null, gp: r.gp ? { ok: !!r.gp.ok, fehler: r.gp.fehler ?? null, energie: r.gp.energie ?? null } : null, startedAt: r.startedAt ?? null })),
     heute: reviews.filter((r: any) => r.startedAt && vienna(new Date(r.startedAt)).date === heute).length,
   };
+}
+
+// ---------- Review-Log (Knut 17.10.: „welcher PR, wer hat das Review angefragt, dann Kommentar gepostet“) ----------
+// Nur lesen: je Review eine Zeile aus `pr_reviews` plus Link auf das auslösende `pr_ticker`-Ereignis. Geschrieben wird nur
+// `posted` — automatisch beim Posten, von Knuts Klick in der Review-Ansicht oder von Hand über `orch review-posted`.
+
+export type LogStatus = 'wartet' | 'läuft' | 'fertig' | 'übersprungen' | 'fehler';
+/** Rohzustand → die fünf Stufen der Tabelle (Zwischenschritte zählen als „läuft“, alter Tagesdeckel als „übersprungen“). */
+export function logStatus(s: string): LogStatus {
+  if (s === 'wartet' || s === 'fertig' || s === 'übersprungen' || s === 'fehler') return s;
+  if (s === 'deckel') return 'übersprungen';
+  return 'läuft';
+}
+
+export interface LogFilter { person?: string; repo?: string; status?: string }
+export interface LogZeile {
+  id: string; repo: string; number: number; url: string; title: string; von: string | null; anfrage: string | null; am: string;
+  tiefe: string | null; status: LogStatus; roh: string; grund: string | null; dauerMin: number | null; empfehlung: string | null;
+  gepostet: { url: string | null; wie: 'automatisch' | 'von Hand' | 'Review-Ansicht'; von: string | null; at: string } | null; paket: string | null;
+}
+
+export function logZeile(r: any, anfrage: string | null = null): LogZeile {
+  const p = r.posted;
+  const wie = !p ? null : p.by === 'auto' ? 'automatisch' : p.manuell ? 'von Hand' : 'Review-Ansicht';
+  const ende = r.doneAt ? new Date(r.doneAt).getTime() : null, start = r.startedAt ? new Date(r.startedAt).getTime() : null;
+  return {
+    id: String(r._id), repo: r.repo, number: r.number, url: r.url ?? `https://github.com/${r.repo}/pull/${r.number}`, title: r.title ?? '', von: r.by ?? null, anfrage,
+    am: new Date(r.createdAt ?? 0).toISOString(), tiefe: r.tiefe ?? (r.deep ? 'deep' : null), status: logStatus(String(r.status ?? '')), roh: String(r.status ?? ''),
+    grund: r.note ?? null, dauerMin: ende && start && ende >= start ? Math.round((ende - start) / 60_000) : null, empfehlung: r.empfehlung ?? null,
+    gepostet: p ? { url: p.url ?? null, wie: wie!, von: p.by === 'auto' ? null : p.by ?? null, at: new Date(p.at ?? 0).toISOString() } : null, paket: r.paket ?? null,
+  };
+}
+
+/** Neueste oben; Filter nach Person (GitHub-Login), Repo und Stufe. */
+export async function reviewLog(f: LogFilter = {}, limit = 200): Promise<{ zeilen: LogZeile[]; personen: string[]; repos: string[] }> {
+  const q: any = {};
+  if (f.person) q.by = String(f.person).toLowerCase();
+  if (f.repo) q.repo = String(f.repo);
+  // Stufe in der Abfrage (vor dem Limit — sonst fehlten ältere Zeilen einer Stufe)
+  const ROH: Record<string, string[]> = { wartet: ['wartet'], fertig: ['fertig'], fehler: ['fehler'], übersprungen: ['übersprungen', 'deckel'] };
+  if (f.status) q.status = ROH[String(f.status)] ? { $in: ROH[String(f.status)] } : String(f.status) === 'läuft' ? { $nin: Object.values(ROH).flat() } : '\u0000';
+  const docs: any[] = await reviewsCol().find(q).sort({ createdAt: -1 }).limit(Math.min(Math.max(limit, 1), 500)).toArray();
+  const ev = new Map(((await tickerCol().find({ _id: { $in: docs.map((d) => d.event).filter(Boolean) } }).project({ url: 1 }).toArray()) as any[]).map((e) => [String(e._id), e.url ?? null]));
+  const zeilen = docs.map((d) => logZeile(d, d.event ? ev.get(String(d.event)) ?? null : null));
+  const [personen, repos] = await Promise.all([reviewsCol().distinct('by'), reviewsCol().distinct('repo')]);
+  return { zeilen, personen: (personen as any[]).filter(Boolean).map(String).sort(), repos: (repos as any[]).filter(Boolean).map(String).sort() };
+}
+
+/**
+ * Von Hand gepostet (`orch review-posted <id|repo#n> <url>`): Link am Review vermerken. `repo#n` = das jüngste Review
+ * dieses PRs. Ein schon vermerktes Posten wird nicht überschrieben.
+ */
+export async function vermerkePosted(ref: string, url: string, von: string, now = new Date()): Promise<{ id: string; url: string }> {
+  const m = /^([\w.-]+\/[\w.-]+)#(\d+)(?:@([0-9a-f]{40}))?$/.exec(String(ref).trim());
+  if (!m) throw Object.assign(new Error('Kennung: <owner/repo>#<n> oder <owner/repo>#<n>@<sha>'), { status: 400 });
+  const [, repo, n] = m;
+  const u = String(url).trim();
+  let pfad = '';
+  try { const x = new URL(u); if (x.protocol === 'https:' && x.host === 'github.com' && !x.username && !x.password) pfad = x.pathname; } catch { /* ungültig */ }
+  // Nach dem Normalisieren (`..` aufgelöst) muss der Pfad genau dieser PR sein (Unterseiten wie /files erlaubt).
+  if (!new RegExp(`^/${repo.replace(/[.]/g, '\\.')}/pull/${n}(?:/[\\w-]*)?/?$`, 'i').test(pfad)) throw Object.assign(new Error(`URL muss auf https://github.com/${repo}/pull/${n} zeigen.`), { status: 400 });
+  const doc: any = m[3] ? await reviewsCol().findOne({ _id: ref as any }) : (await reviewsCol().find({ repo, number: Number(n) }).sort({ createdAt: -1 }).limit(1).toArray())[0];
+  if (!doc) throw Object.assign(new Error('Kein Review zu dieser Kennung.'), { status: 404 });
+  const r = await reviewsCol().updateOne({ _id: doc._id, posted: { $in: [null] } }, { $set: { posted: { at: now, url: u, event: 'COMMENT', by: von, manuell: true } } });
+  if (!r.modifiedCount) throw Object.assign(new Error('Für dieses Review ist schon ein Posten vermerkt.'), { status: 409 });
+  return { id: String(doc._id), url: u };
 }

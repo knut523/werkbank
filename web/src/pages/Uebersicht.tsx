@@ -13,12 +13,13 @@ import { OrchQuestions } from '../orchquestions.tsx';
 import { HygienePanel } from '../components.tsx';
 import { G0Blocked, LiveGroup, RunCard } from './Heute.tsx';
 import { Bericht, Review, StartHauptchat } from './Leitstand.tsx';
+import { Morgenlage } from './Morgenlage.tsx';
 
 const AMP: Record<string, string> = { push: 'u-push', review: 'u-dich', laeuft: 'u-run', blockiert: 'u-bad' };
 const PREFIX = 'wb-uebersicht:';
 
 /** Zustand im localStorage (je Schlüssel); `leer` wird nicht gespeichert, sondern gelöscht. */
-function useStored<T>(key: string, leer: T): [T, (v: T) => void] {
+export function useStored<T>(key: string, leer: T): [T, (v: T) => void] {
   const [v, setV] = useState<T>(() => { try { const s = localStorage.getItem(PREFIX + key); return s ? JSON.parse(s) : leer; } catch { return leer; } });
   const set = (n: T) => {
     setV(n);
@@ -30,10 +31,10 @@ function useStored<T>(key: string, leer: T): [T, (v: T) => void] {
 const is409 = (e: any) => e?.status === 409;   // Stand veraltet / Unter-Chat arbeitet → neu laden, Entwurf bleibt
 const kurzText = (t: string, n = 140) => (t.length > n ? t.slice(0, n - 1) + '…' : t);
 
-type Art = 'ja' | 'nein' | 'anders';
+export type Art = 'ja' | 'nein' | 'anders';
 
 /** Eine Frage, eine Antwort: Ja (= Empfehlung) · Nein · Anders … (Textfeld). Ja/Nein gehen mit einem Klick ab. */
-function JaNeinAnders({ k, empfehlung, disabled, onSend, extra }: { k: string; empfehlung?: string | null; disabled?: boolean; onSend: (art: Art, text: string) => Promise<void>; extra?: ReactNode }) {
+export function JaNeinAnders({ k, empfehlung, disabled, onSend, extra }: { k: string; empfehlung?: string | null; disabled?: boolean; onSend: (art: Art, text: string) => Promise<void>; extra?: ReactNode }) {
   const [anders, setAnders] = useStored<string | null>(`${k}:anders`, null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
@@ -103,7 +104,7 @@ function Entscheiden({ k, onDone }: { k: any; onDone: () => void }) {
 }
 
 /** Rückfrage des Orchestrators (q-…): Ja = empfohlene Option, Nein, Anders = andere Option und/oder Text. */
-function Rueckfrage({ q, onDone, ohneTitel }: { q: any; onDone: () => void; ohneTitel?: boolean }) {
+export function Rueckfrage({ q, onDone, ohneTitel }: { q: any; onDone: () => void; ohneTitel?: boolean }) {
   const toast = useToast();
   const opts: any[] = q.options ?? [];
   const rec = opts.find((o) => o.label === q.recommendation) ?? opts.find((o) => String(q.recommendation ?? '').startsWith(o.label));
@@ -276,13 +277,17 @@ function Thema({ t, onDone, oeffne }: { t: any; onDone: () => void; oeffne: (k: 
 }
 
 /** Die Startseite. Admins sehen die Unter-Chats; alle sehen ihre Board-Agentenläufe, Fragen und Pflegepunkte. */
+/** Anzahl eigener Tickets je Jira-Seite (17c). */
+const meineTickets = (ts: any[]) => ts.reduce((m: Record<string, number>, t: any) => ({ ...m, [t.site ?? '?']: (m[t.site ?? '?'] ?? 0) + 1 }), {});
+
 export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string }) {
   const admin = cfg.user?.role === 'ADMIN';
   const u = useLoad(() => (admin ? api('/api/uebersicht') : Promise.resolve(null)), [admin]);
   const t = useLoad(() => api('/api/today'));
   const [vq, setVq] = useState<{ open: any[]; cleanup: any[]; raw: number; duplicates: number } | null>(null);
   const [pflege, setPflege] = useState<number | null>(null);
-  const [planen, setPlanen] = useStored<'' | 'vault' | 'pflege'>('planen', '');
+  const [planen, setPlanen] = useStored<'' | 'vault' | 'pflege' | 'tickets'>('planen', '');
+  const cfgMain = cfg.project;   // 17c: Seiten-Kennzeichen der Tickets (PM | OLAF)
   const [schublade, setSchublade] = useState<{ id: string; tab: Tab } | null>(null);
   // Alte Adressen (Paket 187, S4; `#/leitstand?…`, `#/heute?…`, `#/?…`): review · bericht · auftrag öffnen Ansicht bzw. Schublade, start=1 den Dialog.
   const q = new URLSearchParams(hash.split('?')[1] ?? '');
@@ -290,6 +295,7 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
   const wantStart = q.has('start');
   const [ansicht, setAnsicht] = useState<{ id: string; art: 'bericht' | 'auftrag' } | null>(null);
   const [starten, setStarten] = useState(wantStart);
+  const [cosAktiv, setCosAktiv] = useState(false);   // Chief of Staff: die Entscheide stehen oben in der Morgenlage — dann nur eine Liste (Plan 209, S3.1)
   const zurueck = () => { if (hash.includes('?')) window.location.hash = '#/'; };
   const hq = `${aus('review') ?? ''}|${aus('bericht') ?? ''}|${aus('auftrag') ?? ''}`;
   useEffect(() => { setStarten(wantStart); }, [wantStart]);   // Dialog folgt der Adresse (auch beim Verlassen); der Knopf öffnet ihn ohne Adresse
@@ -351,6 +357,8 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
       {x?.fragenFehler && <p className="ub-amp u-bad" role="alert">Rückfragen gerade nicht lesbar — hier fehlen evtl. offene Fragen. Später neu laden.</p>}
       {u.error ? <Err e={u.error} /> : null}
 
+      {admin && <Morgenlage onChange={neu} onAktiv={setCosAktiv} />}
+
       {admin && <div className="ub-card soft ub-hc" data-testid="ub-hauptchat">
         <span className={`ub-dot d-${hcFarbe}`} aria-hidden /><b>Hauptchat</b>
         <span className="small mut">{hc ? `${hc.status}${hc.open > 0 ? ` · ${hc.open} Meldung${hc.open === 1 ? '' : 'en'} unterwegs` : ''} · pusht, was du hier freigibst — nie mergen` : 'kein Hauptchat aktiv'}</span>
@@ -364,7 +372,7 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
       {(d.orchAuto ?? []).length > 0 && <p className="small mut" data-testid="orch-auto">🔁 Automatisch fortgesetzt: {d.orchAuto.map((a: any, i: number) => <span key={a.id}>{i ? ', ' : ''}<a href={a.url} target={chatTarget}>{a.title}</a> ({a.n}){a.stopped ? ' — angehalten' : ''}</span>)}</p>}
 
       <div className="ub-themen">
-      {lose.length > 0 && <section className={`ub-thema-flach${lose.length > 1 ? ' ub-breit' : ''}`} data-testid="ub-lose">
+      {lose.length > 0 && !cosAktiv && <section className={`ub-thema-flach${lose.length > 1 ? ' ub-breit' : ''}`} data-testid="ub-lose">
         <h2 className="ub-h">Rückfragen an dich <span className="ub-amp u-dich">{lose.length}</span></h2>
         <div className="ub-grid">{lose.map((q) => <article key={q.id} className="ub-card a-review" data-ampel="review">
           <div className="ub-top"><h3>{q.title}</h3><span className="ub-amp u-dich">ja / nein</span></div>
@@ -404,10 +412,13 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
         <div className="ub-row ub-planen"><span className="small">Außerdem in <b>Planen</b>:</span>
           {admin && <button className="ub-chip" aria-expanded={planen === 'vault'} onClick={() => setPlanen(planen === 'vault' ? '' : 'vault')} data-testid="ub-planen-vault">{vq ? `${nVault} offene Entscheidungen im Vault` : 'Entscheidungen im Vault …'}</button>}
           <button className="ub-chip" aria-expanded={planen === 'pflege'} onClick={() => setPlanen(planen === 'pflege' ? '' : 'pflege')} data-testid="ub-planen-pflege">{pflege === null ? 'Tickets, die Pflege brauchen' : `${pflege} Tickets brauchen Pflege`}</button>
+          {(d.mine?.tickets?.length ?? 0) > 0 && <button className="ub-chip" aria-expanded={planen === 'tickets'} onClick={() => setPlanen(planen === 'tickets' ? '' : 'tickets')} data-testid="ub-planen-tickets">Meine Tickets: {Object.entries(meineTickets(d.mine.tickets)).map(([k, n]) => `${k} ${n}`).join(' · ')}</button>}
           <a className="ub-chip" href="#/timebox">Mein Tag: {d.day.length} {d.day.length === 1 ? 'Block' : 'Blöcke'}</a>
         </div>
         {planen === 'vault' && vq && <WartetAufDich x={{ questions: [], prs: [], pendingApprovals: [], draft: null }} decisions={vq.open} today={vq} onChange={neu} />}
         {planen === 'pflege' && <HygienePanel max={5} title="Deine Tickets" onChange={neu} />}
+        {planen === 'tickets' && <ul className="small plain" data-testid="ub-meine-tickets">{(d.mine?.tickets ?? []).slice(0, 30).map((t: any) => <li key={t.key} className="item">
+          <span className="chip" title={(t.site ?? cfgMain) === cfgMain ? 'Jira maxenergy (PM)' : 'Entwicklungs-Jira'}>{t.site ?? cfgMain}</span> <a href={`#/board?site=${t.site ?? cfgMain}&key=${t.key}`}><b>{t.key}</b></a> {t.summary} <span className="tiny">· {t.why}</span></li>)}</ul>}
       </section>
 
       {offen && (schublade || ansicht) && <Schublade k={offen} tab={schublade?.tab ?? ansicht!.art} setTab={(tab) => { setAnsicht(null); setSchublade({ id: offen.id, tab }); }} onClose={() => { setSchublade(null); if (ansicht) { setAnsicht(null); zurueck(); } }} onDone={neu} />}
