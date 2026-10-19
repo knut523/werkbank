@@ -2057,9 +2057,9 @@ async function entscheidungenEintragen(u: User, d: any, b: any): Promise<Record<
   // als `antwort:` ein; lässt sich der Kopf nicht sicher ändern, geht es wie bisher nur an den Strang.
   const kopfNeu = d.lastStatus === 'running' || !imKopf.length ? null : kopfAntwortEintragen(text, imKopf);
   if (d.lastStatus === 'running' || (imKopf.length && !kopfNeu)) {
-    const msg = `Nacharbeit nach Review: ${b.auto ? 'nach 24 h automatisch angenommene Empfehlungen (Stufe normal)' : 'Entscheidungen von Knut'} — bitte in den Bericht eintragen (Kopf: \`antwort:\` der Frage; Text: Zeile „- Knut:“) und danach weiterarbeiten.\n${antworten.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}`;
+    const msg = `Nacharbeit nach Review: ${b.auto ? 'nach 24 h automatisch angenommene Empfehlungen (Stufe normal)' : 'Entscheidungen von Knut'} — bitte in den Bericht eintragen (Kopf: \`antwort:\` der Frage; Text: Zeile „- Knut:“) und danach weiterarbeiten.\n${[...((d.entscheidungenSammel as any[]) ?? []), ...antworten].map((a: any) => `- ${a.id} (${bekannt.get(a.id)?.titel ?? ''}): ${a.text}`).join('\n')}`;
     await sendOrch(u, String(d._id), msg, 'hand');
-    await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten, ids } } });
+    await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten, ids }, entscheidungenSammel: null } });
     log('review entscheidungen (an Strang)', { user: u.id, id: d._id, n: antworten.length });
     antwortGezaehlt('entscheidung', 'ui');
     return { ok: true, gesendet: antworten.length, weiter: true, offen: null, hauptchat: false };
@@ -2072,10 +2072,12 @@ async function entscheidungenEintragen(u: User, d: any, b: any): Promise<Record<
   const offen = [...leseEntscheidungen(neu).filter((e) => !e.knut), ...(() => { const k = berichtKopf(neu); return k && 'status' in k ? k.fragen.filter((f) => !f.antwort && !leseEntscheidungen(neu).some((e) => e.id === f.id)) : []; })()];
   // Entscheidungsseite (Knuts Muster, 19.10.): Fragen einzeln beantworten; der Unter-Chat arbeitet erst weiter, wenn alle seine
   // Fragen beantwortet sind — dann mit allen gesammelten Antworten in einer Nachricht.
-  const sammel = b.sammeln === true ? [...((d.entscheidungenSammel as any[]) ?? []), ...antworten] : null;
-  const arbeit = (sammel ?? antworten).filter((a: any) => a.art !== 'akzeptiert');
+  // Gesammeltes gilt auch, wenn die letzte Antwort auf anderem Weg kommt (Heute, Chat-Knopf) — sonst ginge eine Abweichung,
+  // die schon im Bericht steht, in der Nachricht an den Unter-Chat verloren (Pass C).
+  const sammel = [...((d.entscheidungenSammel as any[]) ?? []), ...antworten];
+  const arbeit = sammel.filter((a: any) => a.art !== 'akzeptiert');
   // Übersicht (Plan 184, Teil B): mit `weiter` arbeitet der Unter-Chat in jedem Fall mit den Antworten weiter; Kopf-Fragen auch.
-  const fortsetzen = sammel ? offen.length === 0 : arbeit.length > 0 || imKopf.length > 0 || b.weiter === true;
+  const fortsetzen = b.sammeln === true ? offen.length === 0 : arbeit.length > 0 || imKopf.length > 0 || b.weiter === true;
   let weiter = false;
   // Erst eintragen, dann den Strang wecken (Pass C, Teil B: sonst liest er den Bericht ohne die Antworten). Atomar über eine
   // Nachbardatei; scheitert die Nachricht an den Strang, kommt der alte Stand zurück (Knut kann neu senden).
@@ -2083,7 +2085,7 @@ async function entscheidungenEintragen(u: User, d: any, b: any): Promise<Record<
   schreibe(neu);
   if (fortsetzen) {
     // Abweichung, Nachprüfen oder Fortsetzen gewünscht → der Strang arbeitet weiter (sendOrch startet den Zug).
-    const rest = (sammel ?? antworten).filter((a: any) => a.art === 'akzeptiert');
+    const rest = sammel.filter((a: any) => a.art === 'akzeptiert');
     const msg = arbeit.length
       ? `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)?.titel ?? ""}): ${a.text}`).join('\n')}${rest.length ? `\nAkzeptiert (wie empfohlen): ${rest.map((a: any) => a.id).join(', ')}` : ''}`
       : `${b.auto ? 'Nach 24 h ohne Antwort automatisch angenommen (Stufe normal; Knut kann das mit „Anders“ noch widerrufen, solange nichts darauf gebaut ist)' : 'Knut hat entschieden'} (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“): ${rest.map((a: any) => `${a.id} wie empfohlen`).join(', ')}. Mach damit weiter${offen.length ? ` (noch offen: ${offen.map((e: any) => e.id).join(', ')})` : ''} und aktualisiere danach den Bericht.`;
@@ -2092,7 +2094,7 @@ async function entscheidungenEintragen(u: User, d: any, b: any): Promise<Record<
   }
   let hauptchat = false;
   if (!fortsetzen && !offen.length) hauptchat = await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
-  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten, ids }, entscheidungenSammel: sammel && !fortsetzen ? sammel : null, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
+  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten, ids }, entscheidungenSammel: fortsetzen ? null : sammel, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
   log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length, arbeit: arbeit.length, offen: offen.length });
   antwortGezaehlt('entscheidung', 'ui');
   return { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat };

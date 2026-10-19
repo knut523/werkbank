@@ -911,6 +911,29 @@ test('Entscheidungsseite (Knut 19.10.): eine Karte je D-Frage; einzeln beantwort
   await orch(['review', st.id]);
 });
 
+test('Pass C: Abweichung auf der Karten-Seite gesammelt, letzte Antwort über Heute — die Nachricht an den Unter-Chat enthält beide', async () => {
+  mkdirSync(join(tmp, 'review-pakete', '958-gemischt'), { recursive: true });
+  const datei = join(tmp, 'review-pakete', '958-gemischt', 'bericht.md');
+  writeFileSync(datei, ['---', 'status: wartet_auf_knut', 'fragen:', '  - id: D1', '    frage: Farbe blau?', '    empfehlung: ja', '    antwort: ""', '  - id: D2', '    frage: Logo größer?', '    empfehlung: nein',
+    '    antwort: ""', '---', '# Bericht', ''].join('\n'));
+  const st = JSON.parse((await orch(['start', '--title', 'Gemischt', '--cwd', WT('wt-gemischt'), '--json'],
+    'Bericht nach ~/work/knut/review-pakete/958-gemischt/bericht.md.\nmock-antwort Fertig.\\n### Stand\\n- Erledigt: x\\nStatus: fertig')).out);
+  await until(() => cardOf(st.id), (c: any) => c?.kopf && c.berichtHash, 20_000);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  const seite = async () => (await (await fetch(B + '/api/entscheidungen/fragen', { headers: { cookie: await cookie(knut) } })).json()) as any;
+  const d2 = (await seite()).fragen.find((f: any) => f.teil === 'D2' && f.eintrag.includes(st.id));
+  const vorher = (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser).length;
+  assert.equal((await post('/api/entscheidungen/fragen/antwort', { id: d2.id, antwort: 'anders', text: 'doppelt so groß' })).status, 200);
+  const card = await until(() => cardOf(st.id), (c: any) => c?.berichtHash && c.entscheidungen?.length === 1);
+  const r = await post(`/api/review/${st.id}/entscheidungen`, { berichtHash: card.berichtHash, weiter: true, antworten: [{ id: 'D1', art: 'akzeptiert' }] });
+  assert.equal(r.status, 200, await r.clone().text());
+  const nach = (await until(async () => (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser), (ms: any[]) => ms.length > vorher)).map(textOf).at(-1)!;
+  assert.match(nach, /D2 \(Logo größer\?\): doppelt so groß/, 'gesammelte Abweichung geht mit');
+  assert.match(nach, /Akzeptiert \(wie empfohlen\): D1/);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  await orch(['review', st.id]);
+});
+
 test('Council-Diff Teil B (B-21/B-25, zuletzt — beendet die Brücke): Brücke weg → Heute zeigt die Karte weiter (nur Mongo), Passt → 503', async () => {
   const st = await doneStrand('Teil B: Brücke weg', 'wt-b7');
   const card = await until(() => cardOf(st.id), (c: any) => !!c);
