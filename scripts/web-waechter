@@ -4,22 +4,33 @@
 #
 #   */5 * * * * $HOME/work/werkbank-dev/scripts/web-waechter
 #
-# Antwortet die Web-App zweimal im Abstand von 30 s nicht, startet er nur die Web-App neu (höchstens einmal je 30 min) und
-# schreibt eine Zeile ins Log. Die Meldung an Knut macht danach die Web-App selbst: ihr erster Tickerlauf sieht die Lücke und
-# meldet „PR-Ticker lief … nicht — nachgeholt: N Reviews“ im Hauptchat. Umgebung (nur für Tests): WACHE_URL, WACHE_PAUSE,
-# WACHE_NEUSTART (Befehl), WACHE_LOG, WACHE_SPERRE.
+# Handelt nur, wenn die Web-App laufen SOLL: Ihre PID-Datei existiert (nach `werkbank.sh down` ist sie weg → nichts tun). Antwortet
+# sie zweimal im Abstand von 30 s nicht, beendet er den alten Prozess (TERM, nach 10 s KILL — eine hängende App reagiert nicht auf
+# TERM) und startet über `werkbank.sh restart-web` neu, höchstens einmal je 30 min; danach prüft er, ob sie wieder antwortet. Die
+# Meldung an Knut macht die Web-App selbst: ihr erster Tickerlauf sieht die Lücke („PR-Ticker lief … nicht — nachgeholt: N“).
+# Umgebung (nur für Tests): WACHE_URL, WACHE_PAUSE, WACHE_NEUSTART (Befehl), WACHE_LOG, WACHE_SPERRE, WACHE_PIDFILE.
 set -uo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 URL=${WACHE_URL:-http://127.0.0.1:3070/api/config}
 LOG=${WACHE_LOG:-$HERE/../.runtime/logs/web-waechter.log}
 SPERRE=${WACHE_SPERRE:-$HERE/../.runtime/web-waechter.letzter-neustart}
+PIDFILE=${WACHE_PIDFILE:-$HERE/../.runtime/pids/werkbank-web.pid}
+log() { mkdir -p "$(dirname "$LOG")"; echo "$(date -Is) $*" >> "$LOG"; }
 lebt() { local c; c=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$URL"); [ "$c" != "000" ] && [ "${c:0:1}" != "5" ]; }
+[ -f "$PIDFILE" ] || exit 0          # bewusst gestoppt (down) oder nie gestartet
 lebt && exit 0
 sleep "${WACHE_PAUSE:-30}"
 lebt && exit 0
-mkdir -p "$(dirname "$LOG")"
 jetzt=$(date +%s); letzter=$(cat "$SPERRE" 2>/dev/null || echo 0)
-if [ $((jetzt - letzter)) -lt 1800 ]; then echo "$(date -Is) Web-App antwortet nicht — Neustart vor < 30 min schon versucht, warte" >> "$LOG"; exit 1; fi
+if [ $((jetzt - letzter)) -lt 1800 ]; then log "Web-App antwortet nicht — Neustart vor < 30 min schon versucht, warte"; exit 1; fi
 echo "$jetzt" > "$SPERRE"
-echo "$(date -Is) Web-App antwortet nicht ($URL) — starte sie neu" >> "$LOG"
-if ${WACHE_NEUSTART:-"$HERE/werkbank.sh" restart-web} >> "$LOG" 2>&1; then echo "$(date -Is) Neustart ausgeführt" >> "$LOG"; else echo "$(date -Is) Neustart fehlgeschlagen" >> "$LOG"; exit 1; fi
+log "Web-App antwortet nicht ($URL) — starte sie neu"
+pid=$(cat "$PIDFILE" 2>/dev/null || echo "")
+if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+  kill "$pid" 2>/dev/null
+  for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
+  kill -0 "$pid" 2>/dev/null && { kill -9 "$pid" 2>/dev/null; log "alter Prozess $pid hing — KILL"; }
+fi
+${WACHE_NEUSTART:-"$HERE/werkbank.sh" restart-web} >> "$LOG" 2>&1
+sleep "${WACHE_PAUSE:-30}"
+if lebt; then log "Neustart ausgeführt, Web-App antwortet wieder"; else log "Neustart ohne Erfolg — Web-App antwortet weiter nicht"; exit 1; fi

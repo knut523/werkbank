@@ -132,11 +132,13 @@ const tagText = (body: string | null | undefined, who: string) => `${TAG_DEEP.te
  *  „noch nicht behoben“) zählt nicht; ein Treffer ohne Verneinung davor reicht. */
 const ERLEDIGT = /\b(addressed|fixed|done|resolved|erledigt|behoben|umgesetzt)\b/gi;
 // Pass C: `n't` ohne \b davor (isn't, don't), nothing/nichts/keine, und „well done“/„gut gemacht“ ist Lob, kein Erledigt.
-const VERNEINT = /(?:n['’]t|(?<![a-zäöü])(?:not|no|never|nothing|noch nicht|nicht|nichts|keine?|yet to|still|will be|to be|todo|well|gut|good|great|nice|sehr))\W+(?:[\wäöüß]+\W+){0,3}$/i;
+const VERNEINT = /(?:n['’]t|(?<![a-zäöü])(?:not|no|never|nothing|noch nicht|nicht|nichts|keine?|yet to|still|will be|to be|todo))\W+(?:[\wäöüß]+\W+){0,3}$/i;
+/** Lob nur DIREKT davor („well done“, „gut gemacht“) — „Good catch, fixed“ ist ein Erledigt (Re-Pass). */
+const LOB = /(?<![a-zäöü])(?:well|gut|sehr gut|nicely)\W+$/i;
 export function meldetErledigt(body: string | null | undefined): boolean {
   const t = String(body ?? '');
   if (TAG.test(t)) return false;
-  for (const m of t.matchAll(ERLEDIGT)) if (!VERNEINT.test(t.slice(Math.max(0, m.index! - 40), m.index!)) && !/^\s*(?:yet|nicht|not)\b/i.test(t.slice(m.index! + m[0].length, m.index! + m[0].length + 8))) return true;
+  for (const m of t.matchAll(ERLEDIGT)) if (!VERNEINT.test(t.slice(Math.max(0, m.index! - 40), m.index!)) && !LOB.test(t.slice(Math.max(0, m.index! - 15), m.index!)) && !/^\s*(?:yet|nicht|not)\b/i.test(t.slice(m.index! + m[0].length, m.index! + m[0].length + 8))) return true;
   return false;
 }
 const REVIEW_STATE: Record<string, string> = { APPROVED: 'freigegeben', CHANGES_REQUESTED: 'Änderungen verlangt', COMMENTED: 'kommentiert', DISMISSED: 'verworfen' };

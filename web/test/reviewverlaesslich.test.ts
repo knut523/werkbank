@@ -350,7 +350,7 @@ test('Pass C: Posten mit Anspruch — läuft gerade ein Posten oder ist verworfe
   const base: any = { _id: 'x', repo: 'WirStrom1/olaf-admin', number: 7, head: SHA };
   const f = fakes();
   await P.reviewsCol().insertOne({ ...base, posting: new Date() } as any);
-  assert.deepEqual(await R.autoPost(base, { empfehlung: 'comment', text: 'Looks fine to me.' }, f.deps), { art: 'fehler', grund: 'wird gerade von Hand gepostet' });
+  assert.deepEqual(await R.autoPost(base, { empfehlung: 'comment', text: 'Looks fine to me.' }, f.deps), { art: 'hand', grund: 'wird gerade von Hand gepostet' });
   await P.reviewsCol().updateOne({ _id: 'x' } as any, { $set: { posting: new Date(Date.now() - 11 * 60_000) } });
   assert.equal((await R.autoPost(base, { empfehlung: 'comment', text: 'Looks fine to me.' }, f.deps)).art, 'gepostet', 'liegengebliebener Anspruch gilt nach 10 min als frei');
   const d: any = await P.reviewsCol().findOne({ _id: 'x' } as any);
@@ -369,6 +369,56 @@ test('Pass C: Text-Regeln — normale Review-Sprache ist keine „Lücke“, deu
     assert.deepEqual(R.textRegeln(t, r, new Set()), [], t);
   const zitate = 'The copy on the card reads „Ihre Anmeldung ist bei uns eingegangen und wird gerade geprüft, das dauert ein paar Tage“ and the hint says „Sie können die Seite jetzt schließen und später wiederkommen, wenn Sie mögen“. Both are fine.\n> Die Daten werden nicht gespeichert, wenn der Kunde nicht zustimmt und die Seite schließt.\n> Wir melden uns, sobald die Prüfung abgeschlossen ist und es weiter geht.';
   assert.equal(R.englisch(zitate), true);
+});
+
+test('Re-Pass: Lob vor „fixed“ ist ein Erledigt; Lücken-Sperre erkennt weitere Formulierungen fehlender Teilprüfungen', async () => {
+  const P = await import('../server/prticker.ts');
+  const R = await import('../server/prreview.ts');
+  for (const t of ['Good catch — fixed in abc123', 'Great point, addressed', 'Nice find. Fixed.', 'Danke, gut gesehen — behoben']) assert.equal(P.meldetErledigt(t), true, t);
+  assert.equal(P.meldetErledigt('Well done, thanks for the review!'), false);
+  const r = { repo: 'a/b', number: 1 };
+  for (const t of ['The security and data-integrity passes had not returned when this was written, so those areas are open.', "Two subagents haven't returned yet; their areas are not covered here.", 'Two sub-reviews are still pending, the rest is covered below.'])
+    assert.match(R.textRegeln(t, r, new Set()).join(' '), /Lücke/, t);
+});
+
+test('Re-Pass: eigene #N-Abfrage gescheitert → kein Nachfass mit falscher Behauptung, nicht gepostet mit ehrlichem Grund', async () => {
+  const P = await import('../server/prticker.ts');
+  const R = await import('../server/prreview.ts');
+  await P.reviewsCol().deleteMany({});
+  await P.reviewsCol().insertOne(lauf('a#7@' + SHA, paket('330-review-a-7', 'Empfehlung: comment\n\nSee #324 for the earlier change; the rest is covered by the new tests and looks fine to me.\n')) as any);
+  const f = fakes({ vorhanden: async () => { throw new Error('502'); } });
+  await R.reviewTick(f.deps);
+  const d: any = await P.reviewsCol().findOne({});
+  assert.equal(f.sent.length, 0, 'kein Nachfass'); assert.equal(d.status, 'fertig'); assert.equal(f.posts.length, 0);
+  assert.match(d.note, /Verweise nicht prüfbar/); assert.equal(f.meld.length, 1);
+});
+
+test('Re-Pass: postet Knut gerade selbst, schreibt der Takt keine „not posted“-Zeile und meldet nichts', async () => {
+  const P = await import('../server/prticker.ts');
+  const R = await import('../server/prreview.ts');
+  await P.reviewsCol().deleteMany({});
+  await P.reviewsCol().insertOne(lauf('a#7@' + SHA, paket('331-review-a-7', 'Empfehlung: approve\n\nLooks good to me; nothing blocking was found in this change.\n'), { posting: new Date() }) as any);
+  const f = fakes();
+  await R.reviewTick(f.deps);
+  assert.equal(f.posts.length, 0); assert.equal(f.meld.length, 0);
+  assert.doesNotMatch(f.status.join('\n'), /waits for Knut/);
+});
+
+test('Re-Pass: Nachfass wegen Formatfehler, dann Strang abgebrochen → nicht ungeprüft posten; Wache sieht neu angestoßene alte Reviews', async () => {
+  const P = await import('../server/prticker.ts');
+  const R = await import('../server/prreview.ts');
+  await P.reviewsCol().deleteMany({});
+  await P.reviewsCol().insertOne(lauf('a#7@' + SHA, paket('332-review-a-7', 'Empfehlung: comment\n\nLooks fine to me; the change is covered by the new test in the suite.\n'), { status: 'nachbessern', gp: undefined, nb: { at: new Date(Date.now() - 2 * 3600_000), probleme: ['Format'] } }) as any);
+  const f = fakes({ gegenpruefung: async () => ({ ok: true, text: 'x' }), strandDoc: async () => ({ _id: 'st', autoStopped: true }) });
+  await R.reviewTick(f.deps);
+  const d: any = await P.reviewsCol().findOne({});
+  assert.equal(f.posts.length, 0); assert.match(d.note, /ohne Gegenprüfung/);
+  // 8 Tage alt, heute neu angestoßen und hängt → die Wache meldet es
+  await P.reviewsCol().deleteMany({});
+  const t0 = new Date('2026-10-19T08:00:00Z');
+  await P.reviewsCol().insertOne({ _id: 'alt', repo: 'WirStrom1/olaf-admin', number: 7, head: SHA, status: 'läuft', createdAt: new Date(t0.getTime() - 8 * 86400_000), queuedAt: t0, eta: 20 } as any);
+  const meld: string[] = [];
+  assert.equal(await R.wache(await P.tickerSettings(), { melde: async (_r: any, t: string) => { meld.push(t); } }, new Date(t0.getTime() + 40 * 60_000)), 1);
 });
 
 test('S4 Gegenprüfung: nach zwei Neustarts der Web-App ohne sie abschließen statt endlos neu', async () => {
