@@ -83,7 +83,57 @@ function TriageZeile({ e, onDone, kopf }: { e: any; onDone: () => void; kopf: Re
   );
 }
 
-function SchuldZeile({ s, onChange }: { s: any; onChange?: () => void }) {
+/** Morgenlage-Walkthrough 19.10.: „Ticket erledigt / neues Datum“ direkt an der Zeile. Erst die Vorschau des Servers, dann Knuts Klick —
+ *  geschrieben wird über denselben Weg wie am Board (/api/board/issue/…, Trockenlauf in der Testinstanz). */
+function JiraAktion({ k, onDone }: { k: string; onDone?: () => void }) {
+  const [vor, setVor] = useState<{ art: 'status' | 'due'; body: any; preview: string } | null>(null);
+  const [datum, setDatum] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const toast = useToast();
+  const pruefe = async (art: 'status' | 'due', body: any) => {
+    setErr(null); setBusy(true);
+    try { const r: any = await api(`/api/board/issue/${k}/${art}`, { body }); setVor({ art, body, preview: r.preview }); } catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  const schreibe = async () => {
+    if (!vor) return;
+    setErr(null); setBusy(true);
+    try {
+      const r: any = await api(`/api/board/issue/${k}/${vor.art}`, { body: { ...vor.body, confirm: true } });
+      toast(r.dryRun ? `Trockenlauf: ${vor.preview} (nichts geschrieben)` : `In Jira geschrieben: ${vor.preview}`);
+      setVor(null); setDatum(null); onDone?.();
+    } catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  const inWoche = () => { const d = new Date(Date.now() + 7 * 864e5); return d.toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }); };
+  return <span className="cos-jira" data-testid="cos-jira-aktion">
+    {!vor && datum === null && <> <button className="linklike tiny" disabled={busy} onClick={() => pruefe('status', { to: 'Done' })} data-testid="cos-jira-erledigt">erledigt …</button>
+      {' · '}<button className="linklike tiny" disabled={busy} onClick={() => setDatum(inWoche())} data-testid="cos-jira-datum">neues Datum …</button></>}
+    {!vor && datum !== null && <> <input type="date" className="tiny" value={datum} onChange={(e) => setDatum(e.target.value)} aria-label={`Neues Fälligkeitsdatum für ${k}`} data-testid="cos-jira-datum-feld" />
+      <button className="linklike tiny" disabled={busy || !datum} onClick={() => pruefe('due', { date: datum })} data-testid="cos-jira-datum-weiter">weiter</button>
+      {' · '}<button className="linklike tiny" onClick={() => setDatum(null)}>abbrechen</button></>}
+    {vor && <span className="cos-jira-vor" data-testid="cos-jira-vorschau"> <b className="tiny">{vor.preview}</b> — in Jira schreiben?{' '}
+      <button className="ub-btn pri sm" disabled={busy} onClick={schreibe} data-testid="cos-jira-ja">Ja, schreiben</button>{' '}
+      <button className="linklike tiny" disabled={busy} onClick={() => { setVor(null); setDatum(null); }}>abbrechen</button></span>}
+    <Err e={err} />
+  </span>;
+}
+
+/** Abgeleitete Sammelzeile („18 überfällige Jira-Tickets — aufräumen?“): eingeklappt, aufgeklappt jede Zeile mit Herkunft und Aktion. */
+function SchuldGruppe({ s, onChange }: { s: any; onChange?: () => void }) {
+  const veraltet = s.gruppe.filter((x: any) => x.veraltet).length;
+  // bleibt offen, während man aufräumt (Walkthrough: nach jedem „Ja“ klappte die Gruppe wieder zu)
+  const [auf, setAuf] = useStored<boolean>(`cos-gruppe-${s.seite}-${s.wer ?? ''}`, false);
+  return <li className="cos-s ueber" data-testid="cos-schuld-gruppe">
+    <details open={auf} onToggle={(e) => { const o = (e.currentTarget as HTMLDetailsElement).open; if (o !== auf) setAuf(o); }}>
+      <summary className="small"><b>{s.was}</b> <span className="ub-amp u-bad">{s.tage > 0 ? `älteste ${s.tage} T.` : 'überfällig'}</span>
+        {veraltet > 0 && <> <span className="ub-amp" data-testid="cos-veraltet-zahl">{veraltet} vermutlich veraltet</span></>}</summary>
+      <p className="tiny mut cos-herkunft" data-testid="cos-herkunft">{s.herkunft}</p>
+      <ul>{s.gruppe.map((x: any, i: number) => <SchuldZeile key={x.was + i} s={x} onChange={onChange} kurz />)}</ul>
+    </details>
+  </li>;
+}
+
+function SchuldZeile({ s, onChange, kurz }: { s: any; onChange?: () => void; kurz?: boolean }) {
   const [nf, setNf] = useState<any>(null);
   const [err, setErr] = useState<unknown>(null);
   const toast = useToast();
@@ -100,9 +150,11 @@ function SchuldZeile({ s, onChange }: { s: any; onChange?: () => void }) {
   };
   return (
     <li className={`cos-s${s.ueberfaellig ? ' ueber' : ''}`} data-testid="cos-schuld" data-id={s.id ?? ''}>
-      <span className="small">{s.id && <b>{s.id} </b>}{s.wer ?? 'Wer: offen'} → {s.an}: {s.was}</span>
+      <span className="small">{s.id && <b>{s.id} </b>}{kurz ? null : <>{s.wer ?? 'Wer: offen'} → {s.an}: </>}{s.link ? <a href={s.link} target="_blank" rel="noreferrer" data-testid="cos-schuld-link">{s.was}</a> : s.was}</span>
       {' '}{s.ueberfaellig ? <span className="ub-amp u-bad">überfällig{s.tage > 0 ? ` (${s.tage} T.)` : ''}</span> : s.bis ? <span className="tiny mut">bis {datumKurz(s.bis)}</span> : s.fristUnklar && !s.abgeleitet ? <span className="tiny mut">Frist unklar</span> : null}
-      {s.abgeleitet && s.link && <> <a className="tiny" href={s.link} target="_blank" rel="noreferrer">öffnen</a></>}
+      {s.veraltet && <> <span className="ub-amp" title="Über 14 Tage ohne Änderung in Jira — vermutlich erledigt oder überholt" data-testid="cos-veraltet">vermutlich veraltet</span></>}
+      {s.jira && <JiraAktion k={s.jira.key} onDone={onChange} />}
+      {s.herkunft && <div className="tiny mut cos-herkunft" data-testid="cos-herkunft">{s.herkunft}</div>}
       {s.id && s.ueberfaellig && s.seite !== 'Knut' && s.wer && <> <button className="linklike tiny" onClick={entwurf} data-testid="cos-nachfassen">Nachfassen …</button></>}
       {nf && <div className="cos-nf" data-testid="cos-nachfass-entwurf"><pre className="ub-pre">{nf.text}</pre>
         <div className="ub-row"><button className="ub-btn sm" onClick={kopieren}>Kopieren</button>
@@ -111,6 +163,35 @@ function SchuldZeile({ s, onChange }: { s: any; onChange?: () => void }) {
       <Err e={err} />
     </li>
   );
+}
+
+/** Register einmal aus dem aktuellen Stand anlegen (K9, Knut 19.10.): Vorschau beider Dateien, dann Knuts Ja. Danach wachsen sie über Einwurf. */
+function RegisterAnlegen({ onDone }: { onDone: () => void }) {
+  const [vor, setVor] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const toast = useToast();
+  const zeigen = async () => { setErr(null); setBusy(true); try { setVor(await api('/api/cos/register/anlegen', { body: {} })); } catch (e) { setErr(e); } finally { setBusy(false); } };
+  const anlegen = async () => {
+    setErr(null); setBusy(true);
+    try {
+      const r: any = await api('/api/cos/register/anlegen', { body: { confirm: true, themen: vor.vorschlag } });
+      toast(r.themen?.dry ? 'Trockenlauf: Register nicht geschrieben (Testinstanz)' : 'Register angelegt'); setVor(null); onDone();
+    } catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  return <div className="small cos-leer" data-testid="cos-leer">
+    <p style={{ margin: 0 }}><b>Zusagen- und Themen-Register gibt es noch nicht.</b> Deshalb sind „Themen“ leer, und unter ④ stehen nur Punkte,
+      die aus Jira und GitHub abgeleitet sind. {!vor && <button className="ub-btn sm" disabled={busy} onClick={zeigen} data-testid="cos-register-vorschlag">{busy ? 'Lädt …' : 'Aus dem aktuellen Stand anlegen …'}</button>}</p>
+    {vor && <div className="cos-vorschau" data-testid="cos-register-vorschau">
+      <p className="tiny">Vorschlag aus Jira-Workstreams mit offenen Tickets und offenen Unter-Chats — {vor.vorschlag.length} Themen. Zusagen kommen danach über „Einwurf“ (Meeting-Notizen, Mails).</p>
+      <p className="tiny"><b>{vor.themen.preview.datei}</b></p>
+      <ul className="tiny">{vor.themen.preview.zeilen.map((z: any, i: number) => <li key={i}><code>{z.nachher}</code></li>)}</ul>
+      <p className="tiny"><b>{vor.zusagen.preview.datei}</b> — Personen: {vor.zusagen.preview.zeilen.length}</p>
+      <div className="ub-row"><button className="ub-btn pri sm" disabled={busy} onClick={anlegen} data-testid="cos-register-ja">Ja, so anlegen</button>
+        <button className="linklike tiny" onClick={() => setVor(null)}>abbrechen</button></div>
+    </div>}
+    <Err e={err} />
+  </div>;
 }
 
 function Einwurf({ onClose, vorgabe }: { onClose: () => void; vorgabe?: string }) {
@@ -176,9 +257,10 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
     : <InboxZeile key={e.id} e={e} erste={i === 0} onDone={fertig} />;
   const blockZeile = (b: any) => <li key={b.id} className="small"><b>{b.titel}</b> — {b.von}{b.link ? <> <a className="tiny" href={b.link} target={b.art === 'strang' ? chatTarget : '_blank'} rel="noreferrer">öffnen</a></> : null}</li>;
   const nachtZeile = (x: any, i: number) => <li key={i} className="small">{x.link && /^https?:/.test(x.link) ? <a href={x.link} target="_blank" rel="noreferrer">{x.text}</a> : x.text}</li>;
+  const schuld = (x: any, k: string) => x.gruppe ? <SchuldGruppe key={k} s={x} onChange={fertig} /> : <SchuldZeile key={x.id ?? k} s={x} onChange={fertig} />;
   const spalte = (titel: string, liste: any, key: string) => (
     <div className="cos-sp" data-testid={`cos-schulden-${key}`}><h4>{titel} <span className="tiny mut">{liste.gesamt}</span></h4>
-      {liste.items.length ? <ul>{liste.items.map((x: any, i: number) => <SchuldZeile key={x.id ?? `${key}${i}`} s={x} onChange={fertig} />)}</ul> : <p className="tiny mut">nichts offen</p>}<Mehr liste={liste} zeile={(x: any, i: number) => <SchuldZeile key={x.id ?? `${key}r${i}`} s={x} onChange={fertig} />} /></div>
+      {liste.items.length ? <ul>{liste.items.map((x: any, i: number) => schuld(x, `${key}${i}`))}</ul> : <p className="tiny mut">nichts offen</p>}<Mehr liste={liste} zeile={(x: any, i: number) => schuld(x, `${key}r${i}`)} /></div>
   );
   return (
     <section className="ub-card cos" data-testid="cos-morgenlage" aria-label="Morgenlage">
@@ -192,7 +274,7 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
       </div>
       {einwurf && <Einwurf vorgabe={einwurf.notiz} onClose={() => setEinwurf(null)} />}
       {zu ? <p className="small mut">{entN} Entscheide · {l.blockiert.gesamt} blockiert · {nachtN} über Nacht · {s.ueberfaellig} überfällig</p> : <>
-        {l.leer && <p className="small cos-leer" data-testid="cos-leer">{l.leer}</p>}
+        {l.leer && <RegisterAnlegen onDone={fertig} />}
         {!ohneEntscheide && <div className="cos-block" data-testid="cos-entscheide">
           <h3>① Entscheide heute <span className="ub-amp u-dich" data-testid="cos-entscheide-zahl">{entN}</span> <a className="tiny" href="#/entscheidungen" data-testid="cos-entscheidungen-link">alle als Karten →</a></h3>
           {ib ? (gezeigt.length ? <div className="h-inbox">{gezeigt.map(inboxZeile)}</div> : <p className="small mut">Nichts wartet auf dich.</p>)
@@ -222,7 +304,7 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
         <div className="cos-block" data-testid="cos-schulden">
           <h3>④ Wer schuldet was {s.ueberfaellig > 0 && (l.zusagenDatei ? <a className="ub-amp u-bad" href={note(l.zusagenDatei)} title="Register der Zusagen öffnen" data-testid="cos-ueberfaellig">{s.ueberfaellig} überfällig</a> : <span className="ub-amp u-bad">{s.ueberfaellig} überfällig</span>)}</h3>
           <div className="cos-spalten">{spalte('Knut', s.knut, 'knut')}{spalte('Team', s.team, 'team')}{spalte('Partner', s.partner, 'partner')}</div>
-          {s.klaeren.gesamt > 0 && <div className="cos-sp"><h4>Seite klären <span className="tiny mut">{s.klaeren.gesamt}</span></h4><ul>{s.klaeren.items.map((x: any, i: number) => <SchuldZeile key={x.id ?? `k${i}`} s={x} />)}</ul></div>}
+          {s.klaeren.gesamt > 0 && <div className="cos-sp"><h4>Seite klären <span className="tiny mut">{s.klaeren.gesamt}</span></h4><ul>{s.klaeren.items.map((x: any, i: number) => schuld(x, `k${i}`))}</ul></div>}
           {s.rueckfragenAnKnut > 0 && <p className="tiny mut">{s.rueckfragenAnKnut} offene Rückfragen an dich stehen oben unter ①.</p>}
         </div>
         {(l.termine ?? []).length > 0 && <div className="cos-block" data-testid="cos-termine">

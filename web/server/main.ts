@@ -85,6 +85,7 @@ import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, go
 import { istTiefe, tiefeOf, type Tiefe } from './tiefe.ts';
 import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
 import { zaehle, statusNeu, autoSchliessenAn, navNeu, aufraeumenAn, einLogin, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
+import { themenAusStand } from './cos.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
 import { autoAnnahmeAn, annahmeMs, stufeVon } from './stufe.ts';
@@ -3271,6 +3272,12 @@ cosRoutes({
     const ws = (await wb().collection('jira_issues').distinct('workstream')).map(String).filter(Boolean);
     const th = (await orchRuns().distinct('thema')).map(String).filter(Boolean);
     return [...new Set([...ws, ...th, ...THEMEN.map((t) => t.thema)])];
+  },
+  registerVorschlag: async (u) => {
+    const alle = (await wb().collection('jira_issues').find({}, { projection: { _id: 0, key: 1, summary: 1, status: 1, statusCategory: 1, assignee: 1, duedate: 1, updated: 1, workstream: 1, type: 1 } }).toArray()) as any[];
+    const wsNamen = Object.fromEntries(alle.filter((x) => x.type === 'Workstream').map((x) => [x.key, String(x.summary ?? x.key)]));
+    const karten = (await uebersichtDaten(u)).karten.map((k: any) => ({ id: k.id, titel: k.titel, thema: k.thema, braucht: k.braucht ?? null, entscheidungen: k.entscheidungen ?? [] })) as any[];
+    return themenAusStand(alle.filter((x) => x.type !== 'Workstream'), wsNamen, karten, wienDatum());
   },
 });
 

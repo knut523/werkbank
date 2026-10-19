@@ -80,7 +80,7 @@ export const kappe = <T>(a: T[], n: number): Liste<T> => ({ items: a.slice(0, n)
 export interface Entscheid { art: 'frage' | 'bericht' | 'triage'; id: string; titel: string; empfehlung: string; optionen: string[]; strang: { id: string; titel: string } | null; seit: string; wartet: boolean; berichtHash?: string | null; datei?: string; zusagen?: number; entscheidungen?: number }
 export interface Blockiert { art: 'strang' | 'jira'; id: string; titel: string; von: string; seit?: string | null; link?: string | null }
 export interface NachtItem { art: 'pr' | 'jira' | 'olafjira' | 'strang' | 'meeting'; text: string; link?: string | null; wann?: string | null }
-export interface Schuld { id: string | null; wer: string | null; an: string; was: string; bis: string | null; fristUnklar: boolean; ueberfaellig: boolean; tage: number; thema?: string; quelle?: string; seite: string; abgeleitet: boolean; link?: string | null; notizen?: string[] }
+export interface Schuld { id: string | null; wer: string | null; an: string; was: string; bis: string | null; fristUnklar: boolean; ueberfaellig: boolean; tage: number; thema?: string; quelle?: string; seite: string; abgeleitet: boolean; link?: string | null; notizen?: string[]; herkunft?: string; veraltet?: boolean; jira?: { key: string; status: string } | null; gruppe?: Schuld[] }
 export interface ThemaLage { name: string; stand: string; naechster: string; ball: string; geaendert: string | null; offeneZusagen: number; straenge: number; entscheidungen: number; bewegt: boolean }
 
 export interface Lage {
@@ -182,19 +182,69 @@ export function meetingNacht(ms: MeetingLite[], st: Date): NachtItem[] {
 
 const namePassend = (a: string | null, ich: string) => !!a && a.toLowerCase().split(/\s+/)[0] === ich.toLowerCase();
 
+/** Morgenlage-Walkthrough 19.10. (Knut: „verstehe ich nicht so richtig, und sind die alle aktuell?“): so lange ohne Änderung
+ *  gilt ein überfälliges Ticket als „vermutlich veraltet“. */
+export const VERALTET_TAGE = 14;
+const dm = (d?: string | null) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.` : '–');
+
+/** Ein überfälliges Jira-Ticket als Zeile — mit Herkunft und Grund in Klartext, klickbar, und Kennung für „erledigt / neues Datum“. */
+export function jiraSchuld(t: IssueLite, heute: string, o: { wer: string | null; an: string; seite: string; aktion: boolean }): Schuld {
+  const geaendert = t.updated ? wien(new Date(t.updated)).datum : null;
+  const still = geaendert ? tageZwischen(geaendert, heute) : 0;
+  const nichtAngefasst = !!geaendert && !!t.duedate && geaendert < t.duedate && t.duedate < heute;
+  return {
+    id: null, wer: o.wer, an: o.an, was: `${t.key} ${t.summary}`, bis: t.duedate, fristUnklar: false, ueberfaellig: true,
+    tage: t.duedate ? tageZwischen(t.duedate, heute) : 0, seite: o.seite, abgeleitet: true, link: t.url ?? null,
+    herkunft: `Jira ${t.key} · ${t.status} · fällig ${dm(t.duedate)} · zuletzt geändert ${dm(geaendert)}${nichtAngefasst ? ' (seit der Fälligkeit nicht angefasst)' : ''}`,
+    veraltet: still > VERALTET_TAGE, jira: o.aktion ? { key: t.key, status: t.status } : null,
+  };
+}
+
+/** Mehrere überfällige Tickets einer Person: eine eingeklappte Zeile statt vieler einzelner oben. */
+function jiraGruppe(items: Schuld[], o: { wer: string | null; an: string; seite: string; fuerMich: boolean }): Schuld {
+  const v = items.filter((x) => x.veraltet).length;
+  const aelteste = items.reduce((a, b) => (String(a.bis) < String(b.bis) ? a : b));
+  return {
+    id: null, wer: o.wer, an: o.an, was: `${items.length} überfällige Jira-Tickets — ${o.fuerMich ? 'aufräumen?' : 'nachfassen oder aufräumen?'}`,
+    bis: aelteste.bis, fristUnklar: false, ueberfaellig: true, tage: aelteste.tage, seite: o.seite, abgeleitet: true, link: null,
+    herkunft: `Jira · ${o.fuerMich ? 'dir' : (o.wer ?? '').split(/\s+/)[0]} zugewiesen, Fälligkeit vorbei · älteste seit ${aelteste.tage} T.${v ? ` · ${v} vermutlich veraltet (über ${VERALTET_TAGE} Tage ohne Änderung)` : ''}`,
+    veraltet: v === items.length, gruppe: items.sort((a, b) => Number(!!b.veraltet) - Number(!!a.veraltet) || b.tage - a.tage),
+  };
+}
+
 export function schulden(i: LageInput): Lage['schulden'] {
   const heute = wien(i.jetzt).datum;
   const alle: Schuld[] = [];
+  let ueber = 0;
   for (const z of i.register.zusagen) {
     if (z.abschnitt !== 'offen') continue;
     const seite = seiteVon(z.wer, i.register.personen, i.team);
     const tage = z.bis ? tageZwischen(z.bis, heute) : 0;
-    alle.push({ id: z.id, wer: z.wer, an: z.an, was: z.was, bis: z.bis, fristUnklar: z.fristUnklar || !z.bis, ueberfaellig: !!z.bis && z.bis < heute, tage, thema: z.thema, quelle: z.quelle, seite, abgeleitet: false, notizen: z.notizen });
+    const ueberfaellig = !!z.bis && z.bis < heute;
+    if (ueberfaellig) ueber++;
+    alle.push({ id: z.id, wer: z.wer, an: z.an, was: z.was, bis: z.bis, fristUnklar: z.fristUnklar || !z.bis, ueberfaellig, tage, thema: z.thema, quelle: z.quelle, seite, abgeleitet: false, notizen: z.notizen,
+      herkunft: `Zusagen-Register ${z.id}${z.quelle ? ` · aus ${z.quelle}` : ''}${z.bis ? ` · bis ${dm(z.bis)}` : ' · ohne Frist'}` });
   }
   // abgeleitet (nicht ins Register geschrieben): dieselben Quellen wie „Wartet auf dich“ (K8)
-  for (const p of i.mine.prs) alle.push({ id: null, wer: i.ich, an: 'Team', was: `PR ${p.pr}: ${p.why ?? 'dran'} — ${p.title}`, bis: null, fristUnklar: false, ueberfaellig: false, tage: 0, seite: 'Knut', abgeleitet: true, link: p.url });
-  for (const t of i.mine.tickets) if (t.why === 'überfällig') alle.push({ id: null, wer: i.ich, an: 'Team', was: `${t.key} ${t.summary}`, bis: t.duedate, fristUnklar: false, ueberfaellig: true, tage: t.duedate ? tageZwischen(t.duedate, heute) : 0, seite: 'Knut', abgeleitet: true });
-  for (const p of i.prs) if (p.reviewDecision === 'CHANGES_REQUESTED' && !namePassend(p.turn.who, i.ich) && p.turn.role === 'author') alle.push({ id: null, wer: p.turn.who, an: i.ich, was: `PR ${p.pr}: Änderungen verlangt — ${p.title}`, bis: null, fristUnklar: false, ueberfaellig: false, tage: 0, seite: seiteVon(p.turn.who, i.register.personen, i.team) === 'Seite?' ? 'Team' : seiteVon(p.turn.who, i.register.personen, i.team), abgeleitet: true, link: p.url });
+  const prVon = new Map(i.prs.map((p) => [p.pr, p]));
+  for (const p of i.mine.prs) {
+    const g = prVon.get(p.pr);
+    alle.push({ id: null, wer: i.ich, an: 'Team', was: `PR ${p.pr}: ${p.why ?? 'dran'} — ${p.title}`, bis: null, fristUnklar: false, ueberfaellig: false, tage: 0, seite: 'Knut', abgeleitet: true, link: p.url,
+      herkunft: `GitHub ${p.pr} · du bist dran: ${p.why ?? 'dran'}${g?.updatedAt ? ` · zuletzt geändert ${dm(wien(new Date(g.updatedAt)).datum)}` : ''}` });
+  }
+  const jiraVon = new Map([...(i.olafJira?.issues ?? []), ...i.jira].map((t) => [t.key, t]));
+  const pmKeys = new Set(i.jira.map((t) => t.key));
+  const meine: Schuld[] = [];
+  for (const t of i.mine.tickets) {
+    if (t.why !== 'überfällig') continue;
+    ueber++;
+    const voll = jiraVon.get(t.key);
+    meine.push(voll ? jiraSchuld(voll, heute, { wer: i.ich, an: 'Team', seite: 'Knut', aktion: pmKeys.has(t.key) })
+      : { id: null, wer: i.ich, an: 'Team', was: `${t.key} ${t.summary}`, bis: t.duedate, fristUnklar: false, ueberfaellig: true, tage: t.duedate ? tageZwischen(t.duedate, heute) : 0, seite: 'Knut', abgeleitet: true, herkunft: `Jira ${t.key} · fällig ${dm(t.duedate)}`, jira: null });
+  }
+  if (meine.length > 1) alle.push(jiraGruppe(meine, { wer: i.ich, an: 'Team', seite: 'Knut', fuerMich: true })); else alle.push(...meine);
+  for (const p of i.prs) if (p.reviewDecision === 'CHANGES_REQUESTED' && !namePassend(p.turn.who, i.ich) && p.turn.role === 'author') alle.push({ id: null, wer: p.turn.who, an: i.ich, was: `PR ${p.pr}: Änderungen verlangt — ${p.title}`, bis: null, fristUnklar: false, ueberfaellig: false, tage: 0, seite: seiteVon(p.turn.who, i.register.personen, i.team) === 'Seite?' ? 'Team' : seiteVon(p.turn.who, i.register.personen, i.team), abgeleitet: true, link: p.url,
+    herkunft: `GitHub ${p.pr} · Änderungen verlangt, ${p.turn.who.split(/\s+/)[0]} ist dran${p.updatedAt ? ` · zuletzt geändert ${dm(wien(new Date(p.updatedAt)).datum)}` : ''}` });
   const mineKeys = new Set(i.mine.tickets.map((t) => t.key));
   const proPerson = new Map<string, IssueLite[]>();
   for (const t of i.jira) {
@@ -202,16 +252,21 @@ export function schulden(i: LageInput): Lage['schulden'] {
     proPerson.set(t.assignee, [...(proPerson.get(t.assignee) ?? []), t]);
   }
   for (const [wer, ts] of proPerson) {
-    const aelteste = ts.reduce((a, b) => (a.duedate! < b.duedate! ? a : b));
-    const seite = seiteVon(wer, i.register.personen, i.team);
-    alle.push({ id: null, wer, an: i.ich, was: `${ts.length} überfällige Jira-Tickets (${ts.slice(0, 3).map((t) => t.key).join(', ')}${ts.length > 3 ? ' …' : ''})`, bis: aelteste.duedate, fristUnklar: false, ueberfaellig: true, tage: tageZwischen(aelteste.duedate!, heute), seite: seite === 'Seite?' ? 'Team' : seite, abgeleitet: true });
+    const s = seiteVon(wer, i.register.personen, i.team);
+    const seite = s === 'Seite?' ? 'Team' : s;
+    ueber += ts.length;
+    const items = ts.map((t) => jiraSchuld(t, heute, { wer, an: i.ich, seite, aktion: true }));
+    alle.push(items.length > 1 ? jiraGruppe(items, { wer, an: i.ich, seite, fuerMich: false }) : items[0]);
   }
-  const sort = (a: Schuld, b: Schuld) => Number(b.ueberfaellig) - Number(a.ueberfaellig) || b.tage - a.tage || String(a.bis ?? '9').localeCompare(String(b.bis ?? '9')) || Number(a.abgeleitet) - Number(b.abgeleitet);
+  // Gruppen (abgeleitete Jira-Sammelzeilen) stehen unten, eingeklappt — oben bleibt, was jemand zugesagt hat.
+  const sort = (a: Schuld, b: Schuld) => Number(!!a.gruppe) - Number(!!b.gruppe) || Number(b.ueberfaellig) - Number(a.ueberfaellig) || b.tage - a.tage || String(a.bis ?? '9').localeCompare(String(b.bis ?? '9')) || Number(a.abgeleitet) - Number(b.abgeleitet);
   const von = (s: string) => alle.filter((x) => x.seite === s).sort(sort);
   const klaeren = alle.filter((x) => x.seite === 'Seite?' || x.seite === 'offen').sort(sort);
+  // Walkthrough: die eingeklappten Sammelzeilen zählen nicht gegen die Grenze — sonst verschwänden sie hinter „… und N weitere“.
+  const k = (a: Schuld[]) => { const e = kappe(a.filter((x) => !x.gruppe), GRENZEN.schulden); const g = a.filter((x) => x.gruppe); return { ...e, items: [...e.items, ...g], gesamt: e.gesamt + g.length }; };
   return {
-    knut: kappe(von('Knut'), GRENZEN.schulden), team: kappe(von('Team'), GRENZEN.schulden), partner: kappe(von('Partner'), GRENZEN.schulden), klaeren: kappe(klaeren, GRENZEN.schulden),
-    ueberfaellig: alle.filter((x) => x.ueberfaellig).length, rueckfragenAnKnut: i.fragen.length,
+    knut: k(von('Knut')), team: k(von('Team')), partner: k(von('Partner')), klaeren: k(klaeren),
+    ueberfaellig: ueber, rueckfragenAnKnut: i.fragen.length,
   };
 }
 
@@ -231,6 +286,35 @@ export function themen(i: LageInput, ents: Entscheid[]): Lage['themen'] {
   });
   const gezeigt = zeilen.filter((z) => z.bewegt).sort((a, b) => Number(/^knut/i.test(b.ball)) - Number(/^knut/i.test(a.ball)) || b.entscheidungen - a.entscheidungen || String(b.geaendert ?? '').localeCompare(String(a.geaendert ?? '')));
   return { zeilen: kappe(gezeigt, GRENZEN.themen), ruhig: zeilen.length - gezeigt.length };
+}
+
+// ---------- Register einmal aus dem aktuellen Stand (K9, nie passiert; Knut 19.10.) ----------
+
+export interface ThemaVorschlag { name: string; stand: string; naechster: string; ball: string }
+const kurzText = (t: string, n: number) => (t.length > n ? t.slice(0, n - 1) + '…' : t);
+/** Themen aus den Jira-Workstreams mit offenen Tickets (Stand, nächster fälliger Schritt, wer ihn hat) und den Themen offener Unter-Chats. */
+export function themenAusStand(jira: IssueLite[], wsNamen: Record<string, string>, karten: KarteLite[], heute: string): ThemaVorschlag[] {
+  const offen = jira.filter((t) => t.statusCategory !== 'done' && t.status !== 'Done');
+  const proWs = new Map<string, IssueLite[]>();
+  for (const t of offen) if (t.workstream) proWs.set(t.workstream, [...(proWs.get(t.workstream) ?? []), t]);
+  const aus: (ThemaVorschlag & { ueber: number })[] = [];
+  for (const [ws, ts] of proWs) {
+    const ueber = ts.filter((t) => t.duedate && t.duedate < heute).length;
+    const n = [...ts].sort((a, b) => String(a.duedate ?? '9').localeCompare(String(b.duedate ?? '9')))[0];
+    aus.push({ name: wsNamen[ws] ?? ws, ueber,
+      stand: `${ts.length} offene Tickets${ueber ? `, ${ueber} überfällig` : ''} (Jira ${ws})`,
+      naechster: `${n.key} ${kurzText(n.summary, 60)}${n.duedate ? ` (fällig ${dm(n.duedate)})` : ''}`,
+      ball: (n.assignee ?? '–').split(/\s+/)[0] });
+  }
+  const namen = new Set(aus.map((x) => nn(x.name)));
+  const proThema = new Map<string, KarteLite[]>();
+  for (const k of karten) if (k.thema && !namen.has(nn(k.thema))) proThema.set(k.thema, [...(proThema.get(k.thema) ?? []), k]);
+  for (const [name, ks] of proThema) {
+    const wartet = ks.find((k) => k.braucht || k.entscheidungen.length);
+    aus.push({ name, ueber: 0, stand: `${ks.length} offene${ks.length === 1 ? 'r Unter-Chat' : ' Unter-Chats'}`,
+      naechster: wartet ? kurzText(wartet.braucht ?? wartet.entscheidungen[0].frage, 80) : kurzText(ks[0].titel, 80), ball: wartet ? 'Knut' : 'Lead' });
+  }
+  return aus.sort((a, b) => b.ueber - a.ueber || a.name.localeCompare(b.name, 'de')).map(({ ueber, ...t }) => t);
 }
 
 // ---------- Lage ----------

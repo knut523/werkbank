@@ -166,3 +166,18 @@ test('Datei anlegen: Personen aus Intern/2-Areas/People vorbefüllt', async () =
   await schreibeThema({ art: 'thema', name: 'Flex', ball: 'Knut' }, { vaultDir: v, confirm: true, locked: () => false, vorbefuellung: () => ({ themen: ['Cockpit'] }) });
   assert.deepEqual(liesRegister(v).themen.map((t) => t.name).sort(), ['Cockpit', 'Flex']);
 });
+
+test('Register aus dem aktuellen Stand (Knut 19.10.): Themen mit Stand, nächstem Schritt und Ball — lesbar und in Vorschlags-Reihenfolge', async () => {
+  const { themenAusStand } = await import('../server/cos.ts');
+  const t = (key: string, o: any = {}) => ({ key, summary: 'S ' + key, status: 'In Progress', assignee: 'Daniela Martinez', duedate: '2026-10-25', updated: '2026-10-10T00:00:00Z', workstream: 'PM-70', ...o });
+  const vor = themenAusStand([t('PM-1', { duedate: '2026-10-10' }), t('PM-2'), t('PM-3', { status: 'Done', statusCategory: 'done' }), t('PM-4', { workstream: 'PM-73', assignee: 'Knut Peters', duedate: null })],
+    { 'PM-70': 'Bill-OCR', 'PM-73': 'Cockpit' },
+    [{ id: 'k1', titel: 'Strang Flex', thema: 'Flex', ampel: 'review', running: false, braucht: 'Zugang fehlt', entscheidungen: [] } as any, { id: 'k2', titel: 'OCR-Feinschliff', thema: 'Bill-OCR', ampel: 'laeuft', running: true, braucht: null, entscheidungen: [] } as any], '2026-10-19');
+  assert.deepEqual(vor.map((x) => x.name), ['Bill-OCR', 'Cockpit', 'Flex'], 'Überfälliges zuerst; Strang-Thema, das schon Workstream ist, nicht doppelt');
+  assert.deepEqual(vor[0], { name: 'Bill-OCR', stand: '2 offene Tickets, 1 überfällig (Jira PM-70)', naechster: 'PM-1 S PM-1 (fällig 10.10.)', ball: 'Daniela' });
+  assert.deepEqual(vor[2], { name: 'Flex', stand: '1 offener Unter-Chat', naechster: 'Zugang fehlt', ball: 'Knut' });
+  const datei = neueDatei('themen', HEUTE, { themen: vor });
+  const th = parseThemen(datei).themen;
+  assert.deepEqual(th.map((x) => x.name), ['Bill-OCR', 'Cockpit', 'Flex']);
+  assert.equal(th[0].ball, 'Daniela'); assert.match(th[0].stand, /1 überfällig/); assert.match(th[0].naechster, /PM-1/);
+});

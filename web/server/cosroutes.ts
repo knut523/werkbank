@@ -1,12 +1,12 @@
 // Chief of Staff: Routen (docs/plan-chief-of-staff.md). main.ts ruft `cosRoutes(deps)` einmal auf — so bleibt der Eingriff dort klein.
 // Alles nur Admin (Feature `cos`); die internen Wege (MCP-Werkzeuge) schreiben erst, nachdem Knut im Chat „ja“ gesagt hat.
 
-import { liesRegister, schreibeZusagen, schreibeThema, teamNamen, teamSet, seiteVon, registerRel, CosError, type ZOp, type ThemaOp, type SchreibOpts, type SchreibErgebnis } from './cosregister.ts';
+import { liesRegister, schreibeZusagen, schreibeThema, schreibe, hashText, teamNamen, teamSet, seiteVon, registerRel, CosError, type ZOp, type ThemaOp, type SchreibOpts, type SchreibErgebnis } from './cosregister.ts';
 import { startEinwurf, EinwurfError } from './coseinwurf.ts';
 import { sammleLage, sammleEingabe, meetingTeams, type Quellen } from './cossammle.ts';
 import { triageUebernehmen, pruefeDatei, rueckstau, archiviereRueckstau, rueckgaengig, RUECKGAENGIG_TAGE, type ArchivStore } from './cosmeeting.ts';
 import { sammleAbschluss, sammleWoche } from './cosabschluss.ts';
-import { entscheide, wien } from './cos.ts';
+import { entscheide, wien, type ThemaVorschlag } from './cos.ts';
 import { entwurfFuer, senden as nachfassSenden, type Senden } from './cosnachfassen.ts';
 import { wienDatum } from './cosregister.ts';
 import { wb } from './db.ts';
@@ -25,6 +25,8 @@ export interface CosDeps {
   invalidate: () => void;
   /** Themen für die Vorbefüllung (Jira-Workstreams + Strang-Themen), nur beim Anlegen der Datei gebraucht. */
   themenVorschlag: () => Promise<string[]>;
+  /** Register einmal aus dem aktuellen Stand (Knut 19.10.): Themen mit Stand, nächstem Schritt und Ball. */
+  registerVorschlag: (u: any) => Promise<ThemaVorschlag[]>;
   log: (m: string, d?: any) => void;
   quellen: () => Quellen;
   /** Nachfass-Kommentare schicken (GitHub-Kommentar / Jira-Kommentar); in Tests ein Mock. */
@@ -74,6 +76,24 @@ export function cosRoutes(d: CosDeps) {
     const b = await d.body(req);
     const op: ThemaOp = { art: 'thema', name: String(b.name ?? ''), stand: b.stand, naechster: b.naechster, ball: b.ball };
     antwort(res, await schreibeThema(op, await opts(b, 'themen')));
+  });
+
+  // Register einmal anlegen (K9 sah das beim ersten Schreiben vor — das kam nie; Knut 19.10.: „Vorschlag mit Knuts Ja“).
+  // Ohne confirm: Vorschau beider neuen Dateien. Mit confirm: genau die gezeigten Themen (vom Client zurück), sonst neu berechnet.
+  on('POST', /^\/api\/cos\/register\/anlegen$/, async (req, res) => {
+    const u = await d.needAdmin(req);
+    const b = await d.body(req, 1 << 20);
+    const vaultDir = d.vaultDir();
+    if (existsSync(join(vaultDir, registerRel('zusagen'))) || existsSync(join(vaultDir, registerRel('themen')))) throw new d.HttpError(409, 'Die Register gibt es schon — sie wachsen über Einwurf und Morgenlage.');
+    const gezeigt = Array.isArray(b.themen) && b.confirm === true ? b.themen.slice(0, 60).filter((t: any) => t && typeof t.name === 'string' && t.name.trim())
+      .map((t: any) => ({ name: String(t.name), stand: String(t.stand ?? ''), naechster: String(t.naechster ?? ''), ball: String(t.ball ?? '') })) : null;
+    const themen: ThemaVorschlag[] = gezeigt ?? await d.registerVorschlag(u);
+    const alle = (t: string) => ({ text: t, zeilen: t.split('\n').filter((l) => l.startsWith('- ')).map((l) => ({ vorher: null, nachher: l })) });
+    const o = (): SchreibOpts => ({ vaultDir, dry: d.dry(), confirm: b.confirm === true, hash: b.confirm === true ? hashText('') : undefined, vorbefuellung: () => ({ personen: teamNamen(vaultDir), themen }), danach: d.invalidate });
+    const zusagen = await schreibe('zusagen', alle, o());
+    const th = await schreibe('themen', alle, o());
+    if (b.confirm === true) d.log('cos register angelegt', { themen: themen.length, dry: d.dry() });
+    send(res, 200, { zusagen, themen: th, vorschlag: themen });
   });
 
   // Morgenlage (S1.2): immer live berechnet, die Karte zeigt ihre eigene Uhrzeit (K19).

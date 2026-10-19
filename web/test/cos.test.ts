@@ -116,7 +116,7 @@ test('④ Wer schuldet was: Seiten, Überfälliges zuerst, abgeleitete Zeilen, O
   assert.ok(s.knut.items.some((x) => x.id === 'Z-001' && !x.abgeleitet));
   assert.ok(s.knut.items.some((x) => x.abgeleitet && /admin#7/.test(x.was)));
   assert.ok(!JSON.stringify(s).includes('PM-51'), '„ohne Datum“ ist keine Schuld');
-  assert.deepEqual(s.team.items.map((x) => x.id ?? x.was.slice(0, 20)).sort(), ['PR admin#8: Änderung', 'Z-002', '1 überfällige Jira-T'].sort());
+  assert.deepEqual(s.team.items.map((x) => x.id ?? x.was.slice(0, 20)).sort(), ['PR admin#8: Änderung', 'Z-002', 'PM-60 x'].sort(), 'ein einzelnes überfälliges Ticket steht als eigene Zeile da');
   assert.deepEqual(s.partner.items.map((x) => x.id), ['Z-003']);
   assert.deepEqual(s.klaeren.items.map((x) => x.id).sort(), ['Z-004', 'Z-005']);
   assert.equal(s.rueckfragenAnKnut, 1);
@@ -124,6 +124,42 @@ test('④ Wer schuldet was: Seiten, Überfälliges zuerst, abgeleitete Zeilen, O
   const viele = eingabe({ register: { ...eingabe().register, zusagen: Array.from({ length: 9 }, (_, n) => ({ ...parseRegister(REG).zusagen[0], id: 'Z-9' + n })) } });
   const s2 = schulden(viele);
   assert.equal(s2.knut.items.length, 5); assert.equal(s2.knut.weitere, 4);
+});
+
+test('Morgenlage-Walkthrough 19.10.: jede Zeile mit Herkunft + Grund, überfällige Jira-Tickets je Person eingeklappt, „vermutlich veraltet“, Aktion nur für PM', () => {
+  const t = (key: string, o: any = {}) => ({ key, summary: 'S ' + key, status: 'In Progress', assignee: 'Knut Peters', duedate: '2026-10-10', updated: '2026-10-07T09:00:00Z', url: 'https://jira/browse/' + key, ...o });
+  const jira = [t('PM-382'), t('PM-383', { updated: '2026-09-20T09:00:00Z', duedate: '2026-09-25' }), t('PM-384', { updated: '2026-10-12T09:00:00Z' }),
+    t('PM-329', { assignee: 'Daniela Martinez', duedate: '2026-09-18', updated: '2026-09-25T09:00:00Z' }), t('PM-362', { assignee: 'Daniela Martinez', duedate: '2026-09-23', updated: '2026-10-12T09:00:00Z' })];
+  const s = schulden(eingabe({
+    register: { ...eingabe().register, zusagen: [] },
+    mine: { prs: [{ pr: 'admin#7', title: 'Cockpit-Tab', url: 'https://gh/7', why: 'Review angefragt' }], tickets: [...['PM-382', 'PM-383', 'PM-384'].map((key) => ({ key, summary: 'S ' + key, duedate: '2026-10-10', why: 'überfällig' })), { key: 'OLAF-9', summary: 'fremd', duedate: '2026-10-01', why: 'überfällig' }] },
+    prs: [pr(7, { updatedAt: '2026-10-14T08:00:00Z' })], jira,
+  }));
+  // Knut: PR einzeln oben, die vier überfälligen Tickets als EINE Gruppe unten
+  assert.equal(s.knut.items.at(-1)!.gruppe?.length, 4);
+  assert.match(s.knut.items.at(-1)!.was, /^4 überfällige Jira-Tickets — aufräumen\?$/);
+  assert.match(s.knut.items.at(-1)!.herkunft!, /dir zugewiesen.*1 vermutlich veraltet \(über 14 Tage ohne Änderung\)/);
+  assert.match(s.knut.items[0].herkunft!, /^GitHub admin#7 · du bist dran: Review angefragt · zuletzt geändert 14\.10\.$/);
+  const g = s.knut.items.at(-1)!.gruppe!;
+  const z382 = g.find((x) => x.was.startsWith('PM-382'))!;
+  assert.equal(z382.herkunft, 'Jira PM-382 · In Progress · fällig 10.10. · zuletzt geändert 07.10. (seit der Fälligkeit nicht angefasst)');
+  assert.equal(z382.link, 'https://jira/browse/PM-382');
+  assert.deepEqual(z382.jira, { key: 'PM-382', status: 'In Progress' }, 'PM-Kopie: erledigt / neues Datum an der Zeile');
+  assert.equal(z382.veraltet, false, '9 Tage ohne Änderung: noch nicht veraltet');
+  assert.equal(g[0].was.startsWith('PM-383') && g[0].veraltet, true, 'vermutlich veraltet zuerst');
+  assert.equal(g.find((x) => x.was.startsWith('OLAF-9'))!.jira, null, 'andere Jira-Seite: nur lesen');
+  assert.doesNotMatch(g.find((x) => x.was.startsWith('PM-384'))!.herkunft!, /nicht angefasst/, 'nach der Fälligkeit geändert');
+  // Team: Daniela als eine Gruppe mit Einzelzeilen
+  const d = s.team.items.find((x) => x.wer === 'Daniela Martinez')!;
+  assert.equal(d.gruppe?.length, 2);
+  assert.match(d.was, /2 überfällige Jira-Tickets — nachfassen oder aufräumen\?/);
+  assert.equal(s.ueberfaellig, 6, 'überfällig zählt Tickets, nicht Gruppen');
+  // Gruppen bleiben sichtbar, auch wenn die Spalte voll ist (Walkthrough: 5 PRs schoben die Gruppe hinter „… und N weitere“)
+  const voll = schulden(eingabe({ register: { ...eingabe().register, zusagen: [] }, mine: { prs: Array.from({ length: 7 }, (_, n) => ({ pr: 'admin#' + n, title: 'T', url: 'u', why: 'Review angefragt' })), tickets: ['PM-382', 'PM-383'].map((key) => ({ key, summary: 'S', duedate: '2026-10-10', why: 'überfällig' })) }, prs: [], jira }));
+  assert.equal(voll.knut.items.length, 6); assert.ok(voll.knut.items.at(-1)!.gruppe); assert.equal(voll.knut.weitere, 2);
+  // jede Zeile, auch in den Gruppen, sagt woher sie kommt
+  const jede = [...s.knut.items, ...s.team.items].flatMap((x) => [x, ...(x.gruppe ?? [])]);
+  assert.ok(jede.every((x) => x.herkunft), JSON.stringify(jede.filter((x) => !x.herkunft)));
 });
 
 test('⑤ Themen: nur Bewegtes oder Ball bei Knut, der Rest als Zahl; Namen passen zu themaOf (K9)', () => {
