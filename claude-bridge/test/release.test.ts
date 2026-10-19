@@ -95,3 +95,10 @@ test('Release-Strang: Merge im Worktree läuft; ohne -C, Push und Live-Schalten 
   assert.equal((await register({ conv: voll, dir: WT })).status, 200);
   assert.match(await send(voll, bash('git -C $CWD merge feat/x')), /Bash nicht ausgeführt/, 'Profil voll: Merge bleibt gesperrt');
 });
+
+test('Lead-Werkzeuge (Paket 217): github_lesen frei, pr_review_starten wie orch_start (nur im Hauptchat)', async () => {
+  const { classify } = await import('../src/tools.ts');
+  assert.equal(classify('mcp__werkbank__github_lesen', {}).cls, 'read');
+  assert.equal(classify('mcp__werkbank__pr_review_starten', { pr: 'o/r#1' }).cls, 'blocked', 'außerhalb des Hauptchats gesperrt');
+  assert.equal(classify('mcp__werkbank__pr_review_starten', { pr: 'o/r#1' }, { leit: true }).cls, 'confirm', 'ohne Auto-Modus: Rückfrage');
+});

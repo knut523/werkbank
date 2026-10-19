@@ -85,6 +85,7 @@ import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
 import { autoAnnahmeAn, annahmeMs } from './stufe.ts';
 import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
+import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
 import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
 import { zeile as arbeitZeile, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
@@ -1670,12 +1671,11 @@ on('GET', /^\/api\/arbeit\/reviews$/, async (req, res) => {
     meldungen: meldungen.map((e) => ({ pr: `${e.repo}#${e.number}`, art: e.kind ?? null, wer: e.actor ?? null, at: e.at, text: String(e.text ?? e.title ?? '').slice(0, 200) })),
     stand: sync?.at ?? null, fehler: sync?.error ?? null, stufen: ['quick', 'deep'], deep: true, deepTests: execModus() });   // deep: live immer (statisch oder mit Tests nach reviewexec)
 });
-on('POST', /^\/api\/arbeit\/reviews\/start$/, async (req, res) => {
-  const u = await needAdmin(req);
-  const b = await body(req);
-  const pr = prAus(b.pr);
+/** Review starten — dieselbe Logik für die Oberfläche und den Lead (Werkzeug pr_review_starten, Paket 217). */
+async function reviewStarten(u: User, prText: unknown, stufe: unknown) {
+  const pr = prAus(prText);
   if (!pr) throw new HttpError(400, 'PR als „owner/repo#123“ oder GitHub-Link angeben.');
-  const deep = b.stufe === 'deep';
+  const deep = stufe === 'deep';
   if (!reviewErlaubt(pr.repo)) throw new HttpError(403, `Für ${pr.repo} sind Reviews nicht freigegeben.`);
   const live = (await livePrs()).map.get(`${pr.repo}#${pr.number}`);
   if (!live) throw new HttpError(404, 'PR nicht in der Liste offener PRs (Abgleich mit GitHub abwarten oder „jetzt abrufen“).');
@@ -1683,7 +1683,12 @@ on('POST', /^\/api\/arbeit\/reviews\/start$/, async (req, res) => {
   const id = `hand-${pr.repo.replace('/', '-')}-${pr.number}-${Date.now().toString(36)}`;
   await reviewsCol().insertOne({ _id: id as any, repo: pr.repo, number: pr.number, title: live.title, url: live.url, head: null, trigger: 'hand', by: u.name, event: null, ownerId: u.id, status: 'wartet', createdAt: new Date(), day: vienna().date, ...(deep ? { deep: true } : {}) });
   log('review gestartet (workspace)', { user: u.id, pr: `${pr.repo}#${pr.number}`, stufe: deep ? 'deep' : 'quick' });
-  send(res, 200, { ok: true, id, stufe: deep ? 'deep' : 'quick', hinweis: 'In der Review-Schlange — startet mit dem nächsten Takt (Deckel je Tag und gleichzeitig gelten).' });
+  return { ok: true, id, pr: `${pr.repo}#${pr.number}`, stufe: deep ? 'deep' : 'quick', hinweis: 'In der Review-Schlange — startet mit dem nächsten Takt (Deckel je Tag und gleichzeitig gelten).' };
+}
+on('POST', /^\/api\/arbeit\/reviews\/start$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  send(res, 200, await reviewStarten(u, b.pr, b.stufe));
 });
 
 on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/zurueckholen$/, async (req, res, m) => {
@@ -3232,6 +3237,28 @@ on('POST', /^\/internal\/session-start$/, async (req, res) => {
   const r = await sessionStart(u, String(b.conv ?? ''), { eod: b.eod === true, skills: b.skills });
   log('kontext', { user: u.id, tokens: r.tokens, cached: r.cached, slot: r.slot, questions: r.questions.length });
   send(res, 200, r);
+});
+
+// Lead-Lücken aus Paket 217 (Knut 19.10.): PR-Review aus dem Lead starten, privates GitHub nur lesen (Lesetoken des Servers).
+on('POST', /^\/internal\/lead\/pr-review$/, async (req, res) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  send(res, 200, await reviewStarten(u, b.pr, b.stufe));
+});
+on('POST', /^\/internal\/lead\/github$/, async (req, res) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  const p = githubLesePfad(String(b.pfad ?? ''));
+  if ('fehler' in p) throw new HttpError(400, p.fehler);
+  if (!reviewErlaubt(p.repo)) throw new HttpError(403, `${p.repo} ist nicht freigegeben (WERKBANK_PR_REVIEW_ORGS).`);
+  const token = await githubReadToken();
+  if (!token) throw new HttpError(503, 'Kein GitHub-Lesetoken hinterlegt.');
+  const r = await fetch(`https://api.github.com/${p.pfad}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(20_000) });
+  const text = await r.text();
+  log('lead github lesen', { user: u.id, repo: p.repo, status: r.status });
+  send(res, 200, { status: r.status, text: githubLeseText(text) });
 });
 
 // Inbox für das Werkbank-Werkzeug `inbox` (Plan 213 K4) — die Brücke baut daraus die Chat-Knöpfe.

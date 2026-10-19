@@ -246,7 +246,7 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // review_ready ändert nur Werkbank-Zustand (Fertig-Marke am eigenen Lauf) → ohne Rückfrage.
     // hauptchat_melden (Plan 154, S4): Meldung an den Hauptchat — ändert nur Werkbank-Zustand, gedeckelt in der Werkbank.
     // delegieren/delegation_*/phase_wechseln (Plan 165): Steuerung durch die Brücke; Worker arbeiten unter ihrem eigenen Wächter.
-    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'melious_sub' || name === 'auslastung' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'melious_sub' || name === 'auslastung' || name === 'github_lesen' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
     if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
     // Chief of Staff (Plan 209, K17): Zusagen lesen frei; das Register schreiben erst nach „ja“ (im Strang gesperrt, siehe orchestratorBlock).
@@ -254,7 +254,7 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     if (server === 'werkbank' && (name === 'zusage_eintragen' || name === 'zusage_aendern' || name === 'thema_setzen')) return { cls: 'confirm' };
     // Orchestrator-Werkzeuge (Plan 132, S3): nur im Leitstand. Lesen und Rückfragen an Knut frei; Stränge starten, Nachrichten
     // schicken und prüfen entscheidet der Klassifikator; ein Strang außerhalb des Leitstand-Ordners braucht ein „ja“.
-    if (server === 'werkbank' && name.startsWith('orch_')) {
+    if (server === 'werkbank' && (name.startsWith('orch_') || name === 'pr_review_starten')) {   // pr_review_starten startet einen Review-Strang (Paket 217)
       if (!ctx.leit) return { cls: 'blocked', why: 'Orchestrator-Werkzeuge gibt es nur im Hauptchat' };
       if (/^orch_(list|show|questions|ask)$/.test(name)) return { cls: 'read' };
       if (name === 'orch_start' && ctx.workDir) {
