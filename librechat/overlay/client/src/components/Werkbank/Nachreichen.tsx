@@ -12,7 +12,7 @@ import { useWatch, type UseFormReturn } from 'react-hook-form';
 import { SendHorizontal } from 'lucide-react';
 import { cn, getDraft, setDraft } from '~/utils';
 import { nachsenden, zugende, type Eintrag } from './nachsenden';
-import { abholen } from './chatWechsel';
+import { abholen, angekommen, wechselZiel } from './chatWechsel';
 
 type Item = Eintrag & { key: number };
 const API = '/werkbank/api/chat/nachreichen';
@@ -76,6 +76,7 @@ function Nachreichen({ conversationId, isSubmitting, methods, submitMessage, tex
   // Fund 2: im Wechselfenster Abgeschicktes steht nach dem Laden hier im Feld (nicht gesendet). Kurz nach LibreChats useAutoSave,
   // das beim Wechsel das Feld in den Entwurf des vorigen Chats sichert und den des neuen lädt; dort wird der Text wieder entfernt.
   useEffect(() => {
+    angekommen(aktiv);
     const v = abholen(aktiv);
     if (!v) return;
     const t = setTimeout(() => {
@@ -153,7 +154,9 @@ function Nachreichen({ conversationId, isSubmitting, methods, submitMessage, tex
         xs = await Promise.all(itemsRef.current.map(async (x) => (x.state === 'zugestellt' && x.id ? { ...x, state: await stand(x.id) } : x)));
       }
       setItems([]);
-      const plan = zugende(xs, convRef.current, stopped.current);
+      // Lädt gerade ein Chatwechsel aus der Werkbank, gilt schon das Ziel als offener Chat (LibreChat beendet den Stream beim
+      // Klick, bevor der neue Chat aktiv ist) — sonst ginge Ungelesenes mitten im Wechsel über das Formular.
+      const plan = zugende(xs, wechselZiel() ?? convRef.current, stopped.current);
       for (const [conv, ys] of plan.fremd) void nachsenden(conv, ys, DEPS);
       const m = methodsRef.current;
       if (plan.zuruecklegen) {
