@@ -724,3 +724,20 @@ test('17c deep: Tests vor dem Review (exec), Ergebnis als tests.md, Auftrag nenn
   assert.match(R.statusZeile({ art: 'running', tiefe: 'deep', eta: 30, tests: true }), /depth deep \(tests run on the workspace VM, not network-isolated\)/);
   await P.reviewsCol().deleteMany({});
 });
+
+test('19.10.: Gegenprüfung aus einem früheren Prozess (Neustart der Web-App) startet sofort neu statt 45 min zu hängen', async () => {
+  const P = await import('../server/prticker.ts');
+  const R = await import('../server/prreview.ts');
+  await P.reviewsCol().deleteMany({});
+  mkdirSync(join(TMP, 'pakete', '181-review-x-2'), { recursive: true });
+  writeFileSync(join(TMP, 'pakete', '181-review-x-2', 'kommentar.md'), 'Empfehlung: comment\n\nOk.\n');
+  const vorNeustart = new Date(R.PROZESS_START.getTime() - 60_000);
+  await P.reviewsCol().insertOne({ _id: 'WirStrom1/olaf-admin#2@' + SHA3, repo: 'WirStrom1/olaf-admin', number: 2, head: SHA3, status: 'gegenprüfung', gpStart: vorNeustart,
+    strand: 'sy', paket: '181-review-x-2', worktree: TMP, basis: MB, ownerId: 'u1', createdAt: vorNeustart, startedAt: vorNeustart } as any);
+  const gpCalls: any[] = [];
+  const deps: any = { userById: async () => ({ id: 'u1' }), startOrch: async () => { throw new Error('nein'); }, strandDoc: async () => ({ _id: 'sy', reviewReadyAt: vorNeustart }),
+    gegenpruefung: async (r: any) => { gpCalls.push(r); return { ok: false, text: '', fehler: 'test' }; }, sendStrand: async () => {},
+    prNow: async () => ({ state: 'OPEN', merged: false, headRefOid: SHA3 }), vorhanden: async () => [] };
+  await R.reviewTick(deps); await R.gegenpruefungenAbwarten();
+  assert.equal(gpCalls.length, 1, 'Gegenprüfung neu gestartet');
+});
