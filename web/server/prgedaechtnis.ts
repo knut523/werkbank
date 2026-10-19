@@ -38,7 +38,7 @@ export function gedaechtnisMd(g: Map<string, AlterKommentar[]>, o: { stand: stri
     'Steht ein Befund im Zusammenhang mit einem früheren Kommentar, setz `gedaechtnis: true` am Befund (befunde.json) — so messen wir den Nutzen.', ''];
   if (!g.size) { z.push('Keine früheren Kommentare an diesen Dateien.'); return z.join('\n'); }
   for (const [pfad, l] of g) {
-    z.push(`- \`${pfad}\``);
+    z.push(`- \`${pfad.replace(/`/g, "'")}\``);
     for (const k of l) z.push(`  - #${k.pr}${k.zeile ? ` Zeile ${k.zeile}` : ''}: ${zaeune(k.text, `Kommentar #${k.pr}`)}`);
   }
   return z.join('\n');

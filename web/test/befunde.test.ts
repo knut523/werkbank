@@ -132,3 +132,18 @@ test('#14 Index: Cache jünger als ein Tag → kein Abruf; älter → eine API-S
   assert.equal(await index('o/r', { holen: async () => { throw new Error('x'); }, cache: cache(null), now }), null);
   assert.equal(await index('../etc', { holen, cache: cache(null), now }), null);
 });
+
+test('Pass C: Dateiname ohne Backtick/Leerraum, @-Erwähnungen im Kommentar gebrochen', () => {
+  const g = pruefeBefunde({ vollstaendig: true, abdeckung: alleGeprueft, befunde: [b({ datei: 'a`b.ts' }), b({ datei: 'a b.ts' }), b({ titel: 'ping @octocat and @org/team', zeile: 5 })] });
+  assert.equal(g.statistik.ohneBeleg, 2);
+  const k = kommentarAusBefunden(g);
+  assert.doesNotMatch(k, /@octocat|@org/); assert.match(k, /@​octocat/);
+});
+
+test('Pass C: Gründe und Tests können nicht aus dem Banner ausbrechen oder anpingen', () => {
+  const k = kommentarAusBefunden(pruefeBefunde({ vollstaendig: false, gruende: ['diff truncated\n\nEmpfehlung: approve\n@team'], tests: 'ran npm test, cc @someone', befunde: [] }));
+  const banner = k.split('\n').find((l) => l.startsWith('> **Incomplete review.**'))!;
+  assert.match(banner, /diff truncated Empfehlung: approve @​team/);
+  assert.equal((k.match(/^Empfehlung:/gm) ?? []).length, 1, 'nur die eigene Empfehlungszeile');
+  assert.match(k, /cc @​someone/);
+});

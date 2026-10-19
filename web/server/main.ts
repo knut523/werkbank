@@ -24,7 +24,7 @@ import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebn
 import { themaOf } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
 import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
-import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand, activeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
 import { reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
@@ -1527,11 +1527,15 @@ on('POST', /^\/api\/entscheidungen\/([\w:.-]{1,200})\/anders$/, async (req, res,
   const w = widerrufbar(z, { gebaut: await gebaut(u, z) });
   if (!w.ok) throw new HttpError(409, w.grund!);
   const msg = widerrufText(z, text);
-  // Erst zustellen, dann vermerken (sonst stünde ein Widerruf im Log, den niemand bekommen hat).
-  if (z.strand?.id) await sendOrch(u, String(z.strand.id), msg, 'hand');
-  if (z.art === 'rueckfrage' && !(await meldeLeitstand(u, { _id: z.kennung, title: z.frage }, msg)) && !z.strand?.id) throw new HttpError(409, 'Kein Hauptchat aktiv — die Korrektur könnte niemand empfangen. Hauptchat starten und noch einmal.');
+  // Erst beanspruchen (genau einer gewinnt, auch bei Doppelklick — Pass C), dann zustellen; scheitert die Zustellung,
+  // wird der Anspruch zurückgenommen (sonst stünde ein Widerruf im Log, den niemand bekommen hat).
+  if (z.art === 'rueckfrage' && !z.strand?.id && !(await activeLeitstand(u))) throw new HttpError(409, 'Kein Hauptchat aktiv — die Korrektur könnte niemand empfangen. Hauptchat starten und noch einmal.');
   const r = await logCol().updateOne({ _id: z._id, widerruf: null }, { $set: { widerruf: { at: new Date(), text } } });
   if (!r.modifiedCount) throw new HttpError(409, 'Schon widerrufen.');
+  try {
+    if (z.strand?.id) await sendOrch(u, String(z.strand.id), msg, 'hand');
+    if (z.art === 'rueckfrage' && !(await meldeLeitstand(u, { _id: z.kennung, title: z.frage }, msg)) && !z.strand?.id) throw new HttpError(409, 'Kein Hauptchat aktiv — die Korrektur könnte niemand empfangen. Hauptchat starten und noch einmal.');
+  } catch (e) { await logCol().updateOne({ _id: z._id }, { $set: { widerruf: null } }).catch(() => {}); throw e; }
   log('annahme widerrufen', { user: u.id, id: z._id });
   send(res, 200, { ok: true });
 });
