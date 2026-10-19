@@ -84,6 +84,7 @@ import { zaehle, statusNeu, autoSchliessenAn, navNeu, aufraeumenAn, meinTagWeg, 
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
 import { autoAnnahmeAn, annahmeMs } from './stufe.ts';
+import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
 import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
 import { zeile as arbeitZeile, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
@@ -117,6 +118,7 @@ const isMutation = (req: IncomingMessage) => req.method !== 'GET' && req.method 
 async function needUser(req: IncomingMessage): Promise<User> {
   const u = await currentUser(req);
   if (!u) throw new HttpError(401, 'Bitte anmelden.');
+  merkeDa(anwesenheitCol(), u.id, annahmeMs()).catch(() => {});   // Anwesenheit für die Abwesenheits-Bremse
   if (isMutation(req) && req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Workspace-Header.');
   // Freigabe je Funktion fürs Team (features.ts): Admins alles, sonst WERKBANK_TEAM_FEATURES.
   const f = blockedFeature(u, String(req.url ?? '').split('?')[0]);
@@ -1412,9 +1414,16 @@ async function inboxFuer(u: User, now = Date.now()) {
   await spaeterCol().deleteMany({ userId: u.id, bis: { $lte: new Date(now) } }).catch(() => {});   // abgelaufene aufräumen
   const spaeter = new Map(((await spaeterCol().find({ userId: u.id, bis: { $gt: new Date(now) } }).toArray()) as any[]).map((s) => [String(s.id), new Date(s.bis).getTime()]));
   const laeufe = (await myQueue(u).catch(() => [] as any[])).filter((x: any) => x.bucket !== 'laeuft').length;
-  return baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe,
+  const ib = baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe,
     kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now, annahmeMs: annahmeMs() });
+  // Abwesenheits-Bremse (F4a): nach einer Rückkehr gilt „angenommen ab“ frühestens eine volle Frist später.
+  if (bremseAn()) {
+    const fr = anwesenheitFrei(await anwesenheitCol().findOne({ _id: u.id as any }) as any, now, annahmeMs());
+    if (fr.ab) for (const e of ib.eintraege) if (e.autoAb && new Date(e.autoAb).getTime() < fr.ab.getTime()) e.autoAb = fr.ab.toISOString();
+  }
+  return ib;
 }
+const anwesenheitCol = () => wb().collection('anwesenheit');
 on('GET', /^\/api\/inbox$/, async (req, res) => {
   const u = await needUser(req);
   const r = await inboxFuer(u);
@@ -1522,6 +1531,11 @@ async function logEntscheidung(u: User, e: any, antwort: string, durch: string, 
 /** Normale Einträge, deren 24 h um sind: Empfehlung annehmen — an derselben Quelle wie eine Antwort von Knut, dann ins Log. */
 async function annahmeLauf(u: User, now = Date.now()): Promise<string[]> {
   if (!autoAnnahmeAn()) return [];
+  // Abwesenheits-Bremse (Council-Bedingung 3, F4a): wer nicht da war, dem wird nichts automatisch angenommen.
+  if (bremseAn()) {
+    const fr = anwesenheitFrei(await anwesenheitCol().findOne({ _id: u.id as any }) as any, now, annahmeMs());
+    if (!fr.frei) return [];
+  }
   const done: string[] = [];
   for (const f of faellig((await inboxFuer(u, now)).eintraege, now)) {
     const e = f.eintrag;
@@ -3257,6 +3271,7 @@ on('POST', /^\/internal\/zug-log$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
   await recordZug(u, b.zug);
+  if (b.zug?.art === 'hauptchat') merkeDa(anwesenheitCol(), u.id, annahmeMs()).catch(() => {});   // eigener Chat-Zug = da
   send(res, 200, { ok: true });
 });
 on('POST', /^\/internal\/delegation-log$/, async (req, res) => {
