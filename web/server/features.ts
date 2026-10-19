@@ -54,6 +54,9 @@ const isAdmin = (u: { role?: string } | null | undefined) => u?.role === 'ADMIN'
 // Instanz betrifft (Chief of Staff: Morgenlage, Zusagen-Register, Einwurf), ist dort aus — in Oberfläche und API.
 const NUR_KNUTS_INSTANZ = new Set<string>(['cos']);
 export const teamInstanz = (env = process.env) => env.WERKBANK_INSTANZ === 'team';
+/** U5 (Walkthrough als neue Person): Knuts Vault-Fragen („- Knut:“-Zeilen, Fragen und Freigaben seines Vault-Syncs, Meeting-Vorschläge)
+ *  nur in Knuts Instanz und nur für Admins — die Besitzerin einer Team-Instanz sähe sonst ab der ersten Minute Knuts offene Fragen. */
+export const knutsFragen = (u: { role?: string } | null | undefined, env = process.env) => isAdmin(u) && !teamInstanz(env);
 
 /** Sichtbarkeit je Funktion für diese Person (Admins: alles, außer was ihr Instanz-Profil ausschließt). */
 export function featuresFor(u: { role?: string } | null | undefined, env = process.env): Record<FeatureId, boolean> {

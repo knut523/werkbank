@@ -2,7 +2,7 @@
 // nichts); gesperrte API-Pfade → 403; Anmeldung, Einrichtung, Konfiguration bleiben offen.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { featuresFor, blockedFeature, featureOfPath, teamFeatures, FEATURES } from '../server/features.ts';
+import { featuresFor, blockedFeature, featureOfPath, teamFeatures, FEATURES, knutsFragen } from '../server/features.ts';
 
 const admin = { role: 'ADMIN' }, user = { role: 'USER' };
 
@@ -39,4 +39,12 @@ test('F6 (Knut 19.10.): Instanz-Profil team — die Besitzerin hat alles außer 
   assert.equal(blockedFeature({ role: 'ADMIN' }, '/api/cos/lage', env), 'cos');
   assert.equal(blockedFeature({ role: 'ADMIN' }, '/api/leitstand/overview', env), null);
   assert.equal(featuresFor({ role: 'ADMIN' }, {} as any).cos, true, 'Knuts Instanz: alles');
+});
+
+test('U5: Knuts Vault-Fragen nur in Knuts Instanz und nur für Admins — nie bei der Besitzerin einer Team-Instanz', () => {
+  const admin = { role: 'ADMIN' }, person = { role: 'USER' };
+  assert.equal(knutsFragen(admin, {}), true);
+  assert.equal(knutsFragen(person, {}), false);
+  assert.equal(knutsFragen(admin, { WERKBANK_INSTANZ: 'team' }), false);
+  assert.equal(knutsFragen(null, {}), false);
 });

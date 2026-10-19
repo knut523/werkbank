@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { groupThemen, themaOf } from './themen.ts';
 import { homedir } from 'node:os';
 import { cfg } from './config.ts';
+import { teamInstanz } from './features.ts';
 import { wb } from './db.ts';
 import type { User } from './auth.ts';
 import { createLibreChat } from './agent.ts';
@@ -302,6 +303,19 @@ const VORLAGE_REGISTER = `## Register (erst dort lesen, dann im Code prüfen)
 - Hochgeladene Dateien immer einsortieren (\`~/work/dokumente/<team>/<vorgang>/JJJJ-MM-TT_<art>_<slug>.<ext>\`).
 - Gedächtnis: compartment (\`memory_search\` vor dem Antworten, \`memory_store\` für neue Fakten).`;
 
+// U5 (Walkthrough als neue Person): in einer Team-Instanz (F6) nichts von Knuts Maschine — keine Pfade unter ~/work/knut, keine
+// Regeln aus Knuts ~/.claude/CLAUDE.md (Ablage, compartment); die gemeinsamen Register im Vault und die harten Grenzen bleiben.
+const VORLAGE_REGISTER_TEAM = `## Register (erst dort lesen, dann im Code prüfen)
+- Roadmap: \`/vault/olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/0-Overview/0-roadmap-produkt-olaf.md\`
+- PR-Stand: \`/vault/olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/0-Overview/pr-stand-produkt-olaf.md\`
+- Bau-Stand je Thema: \`/vault/olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/<Thema>/0-<thema>-uebersicht.md\`
+
+## Regeln
+- Erst nachsehen, dann herleiten: Register vor Code; gegen den echten HEAD prüfen, nicht gegen den lokalen Klon.
+- Keine Jira-Tasks ohne ausdrücklichen Auftrag. **Nie mergen. Pushen nur auf ausdrückliches Ok.**`;
+/** Kopf und Abschnittsnamen der Übergabe je Instanz-Profil (Knuts Instanz oder Team-Instanz). */
+export const uebergabeTeile = (team = teamInstanz()) => ({ fragenAn: team ? 'Offene Rückfragen an dich' : 'Offene Rückfragen an Knut', register: team ? VORLAGE_REGISTER_TEAM : VORLAGE_REGISTER });
+
 const cell = (t: unknown) => String(t ?? '').replace(/[\u0000-\u001f\u007f|]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
 
 /**
@@ -326,13 +340,14 @@ export async function handoverDraft(u: User, now = new Date()) {
     lines.push('| ID | Lauf | Titel | Status | Arbeitsordner |', '|---|---|---|---|---|');
     for (const d of docs) lines.push(`| ${cell(d._id)} | ${cell(d.lauf ?? laufName(d.title ?? '').lauf)} | ${cell(d.title)} | ${word(d)} | \`${cell(d.cwd)}\` |`);
   }
-  lines.push('', '## Offene Rückfragen an Knut');
+  const teile = uebergabeTeile();
+  lines.push('', `## ${teile.fragenAn}`);
   if (!qs.length) lines.push('Keine offenen Rückfragen.');
   for (const q of qs) {
     const since = new Date(q.createdAt).toLocaleDateString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' });
     lines.push(`- \`${cell(q._id)}\` — ${cell(q.title)} — seit ${since}${q.strand ? ` — Unter-Chat \`${cell(q.strand.id ?? q.strand)}\`` : ''} — Empfehlung: ${cell(q.recommendation)}`);
   }
-  lines.push('', VORLAGE_REGISTER, '', '## Was als Nächstes ansteht', '1. ');
+  lines.push('', teile.register, '', '## Was als Nächstes ansteht', '1. ');
   return { text: lines.join('\n'), strands: docs.length, questions: qs.length, max: HANDOVER_MAX };
 }
 

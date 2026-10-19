@@ -25,7 +25,10 @@ export function waehle<T extends Kandidat>(wichtige: T[], sicht: Map<string, Sic
   for (const q of wichtige) {
     const s = sicht?.get(sichtKey(q.path, q.head)) ?? null;
     if (s?.status === 'erledigt' || s?.status === 'veraltet') { ausgesiebt[s.status]++; continue; }
-    if (s?.status === 'aktuell' || (q.first && !q.old)) einzeln.push({ ...q, sichtung: s });
+    // Vollständige Sichtung 19.10.: 131 aktuell (9 × P1, 58 × P2, 64 × P3) — Priorität 3 heißt „kann warten“ und bleibt im
+    // Sammeleintrag, sonst stünden 131 Karten unter Entscheidungen.
+    if (s?.status === 'aktuell' && s.prio === 3) continue;
+    if (s?.status === 'aktuell' || (!s && q.first && !q.old)) einzeln.push({ ...q, sichtung: s });
   }
   einzeln.sort((a, b) => (a.sichtung?.prio ?? 2) - (b.sichtung?.prio ?? 2) || String(b.since ?? '').localeCompare(String(a.since ?? '')));
   return { einzeln, ausgesiebt };

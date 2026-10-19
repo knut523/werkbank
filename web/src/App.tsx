@@ -234,7 +234,8 @@ export function App() {
     : <Uebersicht cfg={cfg} hash={hash} />;
 
   // Plan 213 S3 (P4): einmal je Person ein Hinweis auf den Umzug — Planen ist jetzt unter Arbeit (Board, Sprint) und Wissen (Roadmap, Ziele).
-  const umzug = neu && user && bereich && bereich.id !== 'einstellungen' && !umzugZu
+  // U5: eine Team-Instanz kennt die alte Leiste nicht — der Umzugs-Hinweis verwirrt dort nur (Walkthrough als neue Person).
+  const umzug = neu && user && !cfg.teamInstanz && bereich && bereich.id !== 'einstellungen' && !umzugZu
     ? <div className="page"><div className="umzug" role="status" data-testid="umzug"><span className="small">Neu geordnet: <b>Lead · Entscheidungen · Arbeit · Heute</b>, alles andere unter <b>Mehr</b> (Wissen, Jira-Board, Sprint, Roadmap, Einstellungen). Mein Tag und Ziele stehen nicht mehr in der Leiste. Alte Adressen funktionieren weiter.</span>
       <button className="ub-btn sm" onClick={() => { try { localStorage.setItem(UMZUG_KEY, '1'); } catch { /* privat */ } setUmzugZu(true); }}>Verstanden</button></div></div> : null;
 

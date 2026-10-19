@@ -36,7 +36,7 @@ import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName, ortAus, vorschlagAusPfad, isEingang } from './ablage.ts';
 import { ablageOwner, syncAblage, lastSyncAt } from './ablagesync.ts';
 import { listPakete, paketFile, renderPaketMd, strandFor, BILD_MIME } from './reviewpakete.ts';
-import { FEATURES, featuresFor, blockedFeature } from './features.ts';
+import { FEATURES, featuresFor, blockedFeature, knutsFragen, teamInstanz } from './features.ts';
 import { memoryWarning } from './memory.ts';
 import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
 import { keep as keepScratch, runScratch } from './scratch.ts';
@@ -407,7 +407,7 @@ on('GET', /^\/api\/config$/, async (req, res) => {
   send(res, 200, {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: false,   // Plan 213 S6: forge abgeschaltet (172 D1/D5)
     jiraSite: cfg.jiraSite, jiraSites: jiraSitesPublic(), project: cfg.jiraProject, vault: cfg.vaultDir,
-    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u), navNeu: navNeu(), aufraeumen: aufraeumenAn(), einLogin: einLogin(),
+    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u), navNeu: navNeu(), teamInstanz: teamInstanz(), aufraeumen: aufraeumenAn(), einLogin: einLogin(),
     // P4: eine Zustandszeile oben statt verstreuter Hinweise — Speicher nur für Admins (RAM-Plan 125).
     speicher: u?.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null,
   });
@@ -1300,7 +1300,8 @@ async function mineFor(u: User, { write = true } = {}) {
   }
   const admin = u.role === 'ADMIN';
   let questions: any[] = [], draft: any = null, section: string | null = null, pendingApprovals: any[] = [];
-  if (admin) {
+  // U5: Sync-Fragen, Freigaben und Arbeitsentwurf gehören zu Knuts Vault-Sync — eine Team-Instanz hat keinen.
+  if (knutsFragen(u)) {
     if (write) writeApprovals().catch((e) => log('roadmap-freigaben', { error: String(e?.message ?? e).slice(0, 160) }));   // nicht warten: GET bleibt lesend schnell
     const protocol = readVault(SYNC_PROTOCOL);
     const qs = parseSyncQuestions(protocol);
@@ -1430,11 +1431,12 @@ async function inboxFuer(u: User, now = Date.now()) {
   const laeufe = (await myQueue(u).catch(() => [] as any[])).filter((x: any) => x.bucket !== 'laeuft').length;
   // Meeting-Vorschläge zählen mit — eine Zahl für Kopf, Leiste, ① und Entscheidungen (221); beantwortet über die Vorschau.
   let triage: any[] = [];
-  if (admin && process.env.COS_MORGENLAGE !== 'off') {
+  if (knutsFragen(u) && process.env.COS_MORGENLAGE !== 'off') {
     const versteckt = new Set(((await wb().collection('cos_triage').find({ art: 'nein' }).toArray().catch(() => [])) as any[]).map((d) => String(d._id)));
     try { triage = cosVorschlaege(cfg.vaultDir, cosMeetingTeams(), wienDatum(), versteckt).items; } catch { /* Vault nicht lesbar */ }
   }
-  const vf = admin ? vaultFragenFuerInbox(now) : { einzeln: [], rest: 0 };
+  // U5: die „- Knut:“-Zeilen der Roadmap sind an Knut gerichtet — in einer Team-Instanz (F6) keine davon, auch kein Sammeleintrag.
+  const vf = knutsFragen(u) ? vaultFragenFuerInbox(now) : { einzeln: [], rest: 0 };
   const ib = baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe, triage, vaultFragen: vf.einzeln, vaultRest: vf.rest,
     kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now, annahmeMs: annahmeMs() });
   // Abwesenheits-Bremse (F4a): nach einer Rückkehr gilt „angenommen ab“ frühestens eine volle Frist später.

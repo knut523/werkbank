@@ -15,9 +15,10 @@ test('Sichtung: aktuelle nach Priorität einzeln, erledigte/veraltete gezählt u
     [sichtKey('b.md', 'Frage B'), { status: 'aktuell' as const, prio: 1, kurz: 'B', beleg: 'b.md:2' }],
     [sichtKey('c.md', 'Frage C'), { status: 'erledigt' as const, prio: null, kurz: '', beleg: 'Decisions/x.md' }],
     [sichtKey('d.md', 'Frage D'), { status: 'veraltet' as const, prio: null, kurz: '', beleg: '4-Archive' }],
+    [sichtKey('g.md', 'Frage G'), { status: 'aktuell' as const, prio: 3, kurz: 'G kann warten', beleg: 'g.md:3' }],
   ]);
-  const r = waehle([q('a.md', 'Frage A mit Leerraum'), q('b.md', 'Frage B'), q('c.md', 'Frage C', true, false), q('d.md', 'Frage D'), q('e.md', 'Neu E', true, false), q('f.md', 'Alt F')], sicht);
-  assert.deepEqual(r.einzeln.map((x) => x.path), ['b.md', 'a.md', 'e.md'], 'Prio 1 vor 2; ungesichtet neu nach alter Regel (Prio wie 2, jüngeres Datum zuerst)');
+  const r = waehle([q('a.md', 'Frage A mit Leerraum'), q('b.md', 'Frage B'), q('c.md', 'Frage C', true, false), q('d.md', 'Frage D'), q('e.md', 'Neu E', true, false), q('f.md', 'Alt F'), q('g.md', 'Frage G', true, false)], sicht);
+  assert.deepEqual(r.einzeln.map((x) => x.path), ['b.md', 'a.md', 'e.md'], 'Prio 1 vor 2; Prio 3 im Sammeleintrag, auch wenn neu; ungesichtet neu nach alter Regel (Prio wie 2, jüngeres Datum zuerst)');
   assert.deepEqual(r.ausgesiebt, { erledigt: 1, veraltet: 1 });
   assert.equal(r.einzeln[0].sichtung?.kurz, 'B');
   assert.deepEqual(waehle([q('e.md', 'Neu E', true, false), q('f.md', 'Alt F')], null).einzeln.map((x) => x.path), ['e.md'], 'ohne Sichtung: alte Regel');

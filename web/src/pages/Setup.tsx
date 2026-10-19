@@ -381,7 +381,8 @@ function Wizard({ cfg }: { cfg: Config }) {
           <p className="muted" style={{ margin: 0 }}>Einmal durchklicken, dann arbeitet Claude Code im Chat, am Board und im Sprint mit deinen eigenen Zugängen.</p>
           {embedded && <p className="small muted" style={{ margin: '4px 0 0' }}>Design, Sprache und Chat-Verhalten: Kontomenü (unten links) → Einstellungen.</p>}
         </div>
-        {!embedded && <a className="btn primary" href={cfg.librechatUrl}>💬 Zum Chat</a>}
+        {/* U5: vor „Claude verbinden“ führt der Chat nur zur Fehlermeldung über den fehlenden Schlüssel. */}
+        {!embedded && s.claude.connected && <a className="btn primary" href={cfg.librechatUrl}>💬 Zum Chat</a>}
       </div>
       <Err e={err} />
       <div className="steps" style={{ marginTop: 12 }}>
