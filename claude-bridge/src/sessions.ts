@@ -69,6 +69,8 @@ interface Live {
   inboxCalls: Set<string>;
   /** Schätzung beim Start (F7) — zählt für die Box, bis der Speicherstand den Zug zeigt. */
   schaetzung?: Schaetzung;
+  /** Beendet den Zug von außen (Nachlauf zu lang, neue Nachricht im Nachlauf, CLI reagiert nicht) — gibt Konto frei, setzt das Zugende. */
+  erzwinge?: (grund: string) => void;
   onJiraWrite?: (keys: string[], tool: string) => void;
   home: string;   // CLAUDE_CONFIG_DIR dieser Sitzung oder 'shared'
   // Auto-Modus (Plan 71 P1): Rechte-Modus des Zuges, Arbeitsordner für die Klasse „auto“ (nur im Auto-Modus gesetzt),
@@ -272,7 +274,7 @@ export type InjectState = 'zugestellt' | 'gelesen' | 'ungelesen';
 // Stand je Nachricht, unabhängig vom Live (das nach dem Zug verschwindet), eine Stunde lang (Bedingung 2).
 const injects = new Map<string, { key: string; text: string; state: InjectState; at: number }>();
 // sent: schon an das CLI gegeben (ein Echo dazu zählt auch nach dem Schließen); read: in diesem Versuch gelesen (Review A).
-interface Inbox { queue: any[]; wake: (() => void) | null; open: boolean; unread: Set<string>; sent: Set<string>; read: string[]; grace: NodeJS.Timeout | null; resultSeen: boolean }
+interface Inbox { queue: any[]; wake: (() => void) | null; open: boolean; unread: Set<string>; sent: Set<string>; read: string[]; grace: NodeJS.Timeout | null; resultSeen: boolean; closedAt?: number }
 
 const userMsg = (text: string, uuid?: string) => ({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, ...(uuid ? { uuid, priority: 'next' } : {}) });
 
@@ -297,6 +299,7 @@ function closeInbox(inbox: Inbox, mark = true): string[] {
   if (inbox.grace) { clearTimeout(inbox.grace); inbox.grace = null; }
   const left = [...inbox.unread];
   inbox.open = false;
+  inbox.closedAt = Date.now();
   inbox.unread.clear();
   inbox.queue.length = 0;
   if (mark) for (const id of left) { const m = injects.get(id); if (m && m.state === 'zugestellt') m.state = 'ungelesen'; }
@@ -674,6 +677,22 @@ function attach(live: Live, sink: Sink) {
   live.lastKind = 'none';
   for (const t of live.buffer.splice(0)) sink.write(t);
   armTurnTimer(live);
+}
+
+// Nachlauf (Strang 9563d9ec, 19.10.: stundenlang „Zug läuft / Der Zug endet gerade“, orch send 409): Nach dem Ergebnis ist die
+// Eingabe zu, aber die CLI kann weiterlaufen — Hintergrund-Aufgaben lösen alle paar Minuten neue Runden aus und stellen den
+// Zug-Wächter jedes Mal neu, bis zur Obergrenze von Stunden. Darum: Nachlauf höchstens BRIDGE_NACHLAUF_S (Vorgabe 600 s), dann
+// abbrechen; reagiert die CLI nicht (z. B. Prozess weg, Strom hängt), nach 5 s hart beenden. Eine neue Nachricht beendet ihn sofort.
+export const nachlaufMs = () => Math.max(1000, Number(process.env.BRIDGE_NACHLAUF_S || 600) * 1000);
+export const imNachlauf = (live: Pick<Live, 'inbox'>) => !!live.inbox && !live.inbox.open && live.inbox.resultSeen;
+/** Abbrechen und — wenn der Zug nicht binnen `wartenMs` von selbst endet — hart beenden. Liefert, ob der Zug danach weg ist. */
+async function nachlaufBeenden(live: Live, grund: string, wartenMs = 5000): Promise<boolean> {
+  log('nachlauf beenden', { conv: live.key, grund });
+  live.abort.abort();
+  const bis = Date.now() + wartenMs;
+  while (Date.now() < bis && lives.get(live.key) === live) await new Promise((r) => setTimeout(r, 100));
+  if (lives.get(live.key) === live) live.erzwinge?.(grund);
+  return lives.get(live.key) !== live;
 }
 
 function end(live: Live) {
@@ -1178,7 +1197,7 @@ const CONTINUE_PROMPT ='Mach bitte genau dort weiter, wo du unterbrochen wurdest
 export async function handleTurn(req: TurnRequest): Promise<void> {
   const key = `${safeId(req.userId)}:${safeId(req.convId)}`;
   const seen = lastSeen.get(key);
-  const existing = lives.get(key);
+  let existing = lives.get(key);
   const now = Date.now();
   lastSeen.set(key, { at: now, turns: (seen?.turns ?? 0) + 1, title: seen?.title || req.prompt.replace(/\s+/g, ' ').slice(0, 60), written: seen?.written, roundAt: existing?.pending ? seen?.roundAt ?? now : now });
 
@@ -1206,6 +1225,11 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     attach(existing, req.sink);
     existing.pending.resolve(req.prompt);
     return waitClosed(req.sink, existing);
+  }
+  if (existing && imNachlauf(existing) && !existing.pending) {
+    // Der vorige Zug hat sein Ergebnis schon geliefert und läuft nur noch nach (Hintergrund-Aufgaben) — die neue Nachricht gewinnt.
+    await nachlaufBeenden(existing, 'neue Nachricht im Nachlauf');
+    existing = lives.get(key);
   }
   if (existing) {
     req.sink.write('Diese Unterhaltung arbeitet noch an der vorigen Nachricht. Bitte kurz warten.');
@@ -1534,6 +1558,26 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   let release = acquire(key, acct);   // ab hier läuft der Zug auf diesem Konto (Lastverteilung); frei im finally
   log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers), permissionMode: live.mode, ...(accounts.length > 1 ? { konto: acct.id, konten: accounts.length } : {}), ...(isMelious(acct) ? { melious: true, rest: acct.rest } : {}) });
 
+  // Zwangsende (Nachlauf): Konto frei, Zugende setzen, Worker beenden, aus `lives` nehmen — der hängende Strom darf liegen bleiben.
+  let erzwungen = false;
+  live.erzwinge = (grund: string) => {
+    if (erzwungen || lives.get(key) !== live) return;
+    erzwungen = true;
+    clearInterval(nachlaufTakt);
+    log('nachlauf erzwungen', { conv: key, grund });
+    if (live.inbox?.open) closeInbox(live.inbox);
+    release();
+    if ((live.orch || live.leit) && orchMap[key]?.kind !== 'beendet') setTurn(key, { ...orchMap[key]?.turn, start: orchMap[key]?.turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? 'aborted' });
+    if (live.req) abortWorkersOf(key);
+    end(live);
+  };
+  const nachlaufTakt = setInterval(() => {
+    if (!imNachlauf(live) || Date.now() - (live.inbox?.closedAt ?? Date.now()) < nachlaufMs()) return;
+    clearInterval(nachlaufTakt);
+    emitStatus(live, `⏱️ Das Ergebnis steht seit ${Math.round(nachlaufMs() / 60000)} Minuten, Claude arbeitet aber noch nach (Hintergrund-Aufgaben) — ich beende den Zug. Schreib einfach weiter.`);
+    void nachlaufBeenden(live, 'nachlauf zu lang');
+  }, Math.min(15_000, Math.max(250, nachlaufMs() / 4)));
+
   // Die Sitzung läuft unabhängig von der HTTP-Antwort weiter (Rückfragen!).
   (async () => {
     try {
@@ -1643,6 +1687,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         }
       }
     } finally {
+      clearInterval(nachlaufTakt);
+      if (erzwungen) { log('nachlauf: später Ende nach Zwangsende', { conv: key }); return; }   // schon aufgeräumt
       release();
       // Zug zu Ende: was noch für einen weiteren Versuch zurückgelegt war, ist ungelesen (der Client sendet es neu).
       for (const id of live.carry ?? []) { const m = injects.get(id); if (m && m.state === 'zugestellt') m.state = 'ungelesen'; }
