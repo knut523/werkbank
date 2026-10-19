@@ -8,6 +8,7 @@ import { api, fmtDateTime } from '../api.ts';
 import { Err, Loading, useLoad, useToast } from '../ui.tsx';
 import { InboxZeile, EntscheidungsLog, seit } from './HeuteNeu.tsx';
 import { usePushFreigeben } from '../freigabe.tsx';
+import { EntscheidZeile } from './Morgenlage.tsx';
 
 type Frage = { id: string; eintrag: string; teil: string | null; art: string; gruppe: string; kennung: string | null; titel: string; worum: string; optionen: string[];
   empfehlung: string | null; stufe: 'wichtig' | 'normal'; stufeGrund: string | null; autoAb: string | null; quelle: { text: string; url: string | null }; wartetSeit: string | null; antworten: string[]; ref: string | null };
@@ -108,7 +109,9 @@ export function Entscheidungen() {
         return <div key={f.id}>{h}{erledigt[f.id] ? <p className="small e-erledigt" data-testid="e-erledigt">✓ {f.kennung ? `${f.kennung}: ` : ''}{f.titel} — {L[erledigt[f.id]] ?? erledigt[f.id]}</p> : <Karte f={f} onDone={fertigMelden} />}</div>;
       })}
       {data.sonstiges.length > 0 && <section><h2 className="e-gruppe">Sonstiges (keine Frage, nur ansehen oder später)</h2>
-        <div className="ub-card h-inbox">{data.sonstiges.map((e, i) => <InboxZeile key={e.id} e={e} erste={i === 0} onDone={reload} />)}</div></section>}
+        <div className="ub-card h-inbox">{data.sonstiges.map((e, i) => e.art === 'triage'
+          ? <EntscheidZeile key={e.id} e={{ art: 'triage', id: e.daten.triageId, titel: e.frage, empfehlung: e.empfehlung, datei: e.daten.datei, seit: e.wartetSeit, wartet: false }} onDone={reload} />
+          : <InboxZeile key={e.id} e={e} erste={i === 0} onDone={reload} />)}</div></section>}
       {data.zurueckgestellt > 0 && <p className="tiny mut">{data.zurueckgestellt} bis morgen 07:00 zurückgestellt.</p>}
       <EntscheidungsLog />
     </div>

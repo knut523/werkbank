@@ -3,7 +3,7 @@ import { memo, useEffect, useState } from 'react';
 import Cookies from 'js-cookie';
 import { useSetRecoilState } from 'recoil';
 import { useLocation, useNavigate, type NavigateFunction } from 'react-router-dom';
-import { Rocket, BookOpen, SquareKanban, RefreshCw, Blocks, Share2, Compass, Sun, Timer, Target, Satellite, Briefcase } from 'lucide-react';
+import { Rocket, BookOpen, SquareKanban, RefreshCw, Blocks, Share2, Compass, Sun, Timer, Target, Satellite, Briefcase, ListChecks, Ellipsis } from 'lucide-react';
 import { Button, TooltipAnchor, useMediaQuery } from '@librechat/client';
 import { cn } from '~/utils';
 import store from '~/store';
@@ -28,7 +28,10 @@ export const WERKBANK_PAGES = [
   { id: 'leitstand', hash: '#/leitstand', label: 'Übersicht', icon: Satellite, nav: false, menu: false },   // Alias: die Seite „Hauptchat & Unter-Chats“ ist in der Übersicht aufgegangen (S4)
   { id: 'einrichtung', hash: '#/einrichtung', label: 'Workspace-Einrichtung', icon: Rocket, nav: false, menu: false },
   // Plan 213 S3 (WERKBANK_NAV_NEU): Adressen der neuen Seiten; die Leiste zeigt dann Heute · Arbeit · Wissen (NAV_NEU unten).
-  { id: 'inbox', hash: '#/inbox', label: 'Entscheide', icon: Sun, nav: false, menu: false },
+  { id: 'inbox', hash: '#/inbox', label: 'Entscheidungen', icon: ListChecks, nav: false, menu: false },
+  // Zielbild F1 (Knut 19.10.): Lead · Entscheidungen · Arbeit · Heute · Mehr.
+  { id: 'entscheidungen', hash: '#/entscheidungen', label: 'Entscheidungen', icon: ListChecks, nav: false, menu: false },
+  { id: 'lead', hash: '#/lead', label: 'Lead', icon: Compass, nav: false, menu: false },
   // Reihenfolge: pageIdOf sucht rückwärts nach Präfix — die längere Adresse (#/arbeit/reviews) muss nach #/arbeit stehen.
   { id: 'arbeit', hash: '#/arbeit', label: 'Arbeit', icon: Briefcase, nav: false, menu: false, bereich: 'arbeit' },
   { id: 'reviews', hash: '#/arbeit/reviews', label: 'Reviews & PRs', icon: Briefcase, nav: false, menu: false, bereich: 'arbeit' },
@@ -37,10 +40,14 @@ export const WERKBANK_PAGES = [
 /** Leiste der neuen Navigation (Plan 213 S3): Heute · Arbeit · Wissen — dieselben Namen und dieselbe Zahl wie im Workspace (K11).
  *  `zeige`: Funktionsfreigaben, bei denen der Bereich erscheint; `teil`: Seiten-IDs, die zum Bereich gehören (aktiv markieren). */
 export const NAV_NEU = [
-  { id: 'heute', hash: '#/', label: 'Heute', icon: Sun, zeige: ['heute'], teil: ['heute', 'inbox'] },
-  { id: 'arbeit', hash: '#/arbeit', label: 'Arbeit', icon: Briefcase, zeige: ['heute', 'roadmap', 'board', 'sprint', 'timebox'], teil: ['arbeit', 'reviews', 'board', 'sprint', 'timebox', 'leitstand'] },
-  { id: 'wissen', hash: '#/wissen', label: 'Wissen', icon: BookOpen, zeige: ['wissen', 'dateien', 'roadmap', 'ziele'], teil: ['wissen', 'dateien', 'roadmap', 'ziele'] },
+  { id: 'lead', hash: '#/lead', label: 'Lead', icon: Compass, zeige: ['leitstand'], teil: ['lead'] },
+  { id: 'entscheidungen', hash: '#/entscheidungen', label: 'Entscheidungen', icon: ListChecks, zeige: ['heute'], teil: ['entscheidungen', 'inbox'] },
+  { id: 'arbeit', hash: '#/arbeit', label: 'Arbeit', icon: Briefcase, zeige: ['heute', 'roadmap', 'dateien'], teil: ['arbeit', 'reviews', 'leitstand'] },
+  { id: 'heute', hash: '#/', label: 'Heute', icon: Sun, zeige: ['heute'], teil: ['heute'] },
+  { id: 'mehr', hash: '#/wissen', label: 'Mehr', icon: Ellipsis, zeige: ['wissen', 'board', 'sprint', 'roadmap', 'dateien', 'skills'], teil: ['wissen', 'board', 'sprint', 'roadmap', 'dateien', 'skills', 'einrichtung', 'ziele', 'timebox'] },
 ];
+/** Der Zähler steht an „Entscheidungen“ — dieselbe Zahl wie im Workspace (eine Quelle: die Inbox). */
+const ZAEHLT = 'entscheidungen';
 
 /** Adresse einer Seite in der Leiste; Planen/Wissen öffnen den zuletzt benutzten Reiter (die Seite schreibt `wb-bereich:<id>`),
  *  sonst den ersten freigegebenen (`show`: Funktionsfreigabe je Reiter). */
@@ -168,7 +175,7 @@ function WerkbankNav() {
 /** Plan 213 S3: Heute · Arbeit · Wissen; Wissen öffnet den zuletzt benutzten Reiter wie bisher. */
 function NavNeu({ current, show, count, onlySetup, go }: { current: string; show: (id: string) => boolean; count: number; onlySetup: boolean; go: (id: string) => void }) {
   const eintraege = NAV_NEU.filter((p) => p.zeige.some(show));
-  const ziel = (p: (typeof NAV_NEU)[number]) => (p.id === 'wissen' ? pageIdOf(pageHash({ id: 'wissen', hash: '#/wissen', reiter: ['wissen', 'dateien', 'roadmap', 'ziele'] }, show)) : p.id);
+  const ziel = (p: (typeof NAV_NEU)[number]) => (p.id === 'mehr' ? pageIdOf(pageHash({ id: 'mehr', hash: '#/wissen', reiter: ['wissen', 'board', 'sprint', 'roadmap'] }, show)) : p.id);
   return (
     <>
       <div className="mx-2 border-b border-border-light" />
@@ -177,10 +184,10 @@ function NavNeu({ current, show, count, onlySetup, go }: { current: string; show
           const aktiv = p.teil.includes(current);
           return (
             <TooltipAnchor key={p.id} description={p.label} side="right" render={
-              <Button size="icon" variant="ghost" aria-label={p.id === 'heute' && count ? `${p.label}, ${count} offen` : p.label} aria-pressed={aktiv} data-testid={`werkbank-nav-${p.id}`}
+              <Button size="icon" variant="ghost" aria-label={p.id === ZAEHLT && count ? `${p.label}, ${count} offen` : p.label} aria-pressed={aktiv} data-testid={`werkbank-nav-${p.id}`}
                 className={cn('relative h-9 w-9 rounded-lg', aktiv ? 'bg-surface-active-alt text-text-primary' : 'text-text-secondary')} onClick={() => go(ziel(p))}>
                 <p.icon className="h-5 w-5" aria-hidden="true" />
-                {p.id === 'heute' && count > 0 && <span data-testid="werkbank-heute-count" aria-hidden="true" className="absolute -right-0.5 -top-0.5 min-w-[16px] rounded-full bg-yellow-400 px-1 text-[10px] font-bold leading-4 text-gray-900">{count > 99 ? '99+' : count}</span>}
+                {p.id === ZAEHLT && count > 0 && <span data-testid="werkbank-heute-count" aria-hidden="true" className="absolute -right-0.5 -top-0.5 min-w-[16px] rounded-full bg-yellow-400 px-1 text-[10px] font-bold leading-4 text-gray-900">{count > 99 ? '99+' : count}</span>}
               </Button>
             } />
           );

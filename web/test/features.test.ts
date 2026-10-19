@@ -31,3 +31,12 @@ test('API: gesperrte Pfade für das Team, offene Pfade immer, Admin nie gesperrt
   assert.equal(blockedFeature(admin, '/api/board/issues', {} as NodeJS.ProcessEnv), null);
   assert.equal(featureOfPath('/api/boardx'), null, 'nur ganze Pfadstücke');
 });
+
+test('F6 (Knut 19.10.): Instanz-Profil team — die Besitzerin hat alles außer Knuts Chief of Staff, auch in der API', () => {
+  const env = { WERKBANK_INSTANZ: 'team' } as any;
+  const f = featuresFor({ role: 'ADMIN' }, env);
+  assert.equal(f.leitstand, true); assert.equal(f.heute, true); assert.equal(f.cos, false);
+  assert.equal(blockedFeature({ role: 'ADMIN' }, '/api/cos/lage', env), 'cos');
+  assert.equal(blockedFeature({ role: 'ADMIN' }, '/api/leitstand/overview', env), null);
+  assert.equal(featuresFor({ role: 'ADMIN' }, {} as any).cos, true, 'Knuts Instanz: alles');
+});

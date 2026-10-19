@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { api, fmtDateTime, chatTarget, type Config } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast } from '../ui.tsx';
 import { usePushFreigeben } from '../freigabe.tsx';
+import { Morgenlage } from './Morgenlage.tsx';
 
 const ABGEBROCHEN = Symbol('abgebrochen');
 /** Nur Workspace-Adressen (#/…) und http(s) werden verlinkt — nie `javascript:` o. ä. (Pass C). */
@@ -68,7 +69,7 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
       </div>
       <div className="ub-row h-acts">
         {e.art === 'push' && e.daten.strand && <button className={pri} disabled={busy} onClick={() => run(async () => ((await pushFreigeben(e.daten.strand)) ? null : ABGEBROCHEN), 'Freigegeben — der Hauptchat pusht nach seiner Prüfung')}>Freigeben …</button>}
-        {mehrere && <><button className={pri} disabled={busy} onClick={() => antworten('ja')}>Alle Empfehlungen</button><a className="ub-btn sm" href={`#/leitstand?bericht=${e.daten.strand}`}>Einzeln</a></>}
+        {mehrere && <><button className={pri} disabled={busy} onClick={() => antworten('ja')}>Alle Empfehlungen</button><a className="ub-btn sm" href="#/entscheidungen" title="Jede Frage als eigene Karte beantworten">Einzeln</a></>}
         {e.art === 'vault' && e.daten.vaultId !== 'entwurf' && <><button className={pri} disabled={busy} onClick={() => vault('ja')}>Ja</button><button className="ub-btn sm" disabled={busy} onClick={() => vault('nein')}>Nein</button></>}
         {['rueckfrage', 'braucht', 'vaultfrage'].includes(e.art) || (e.art === 'entscheidung' && !mehrere) ? <>
           <button className={pri} disabled={busy} onClick={() => antworten('ja')} title={e.empfehlung ? `Empfehlung übernehmen: ${e.empfehlung}` : 'Ja'}>Ja</button>
@@ -107,9 +108,10 @@ export function HeuteNeu({ cfg }: { cfg: Config }) {
         </div>
       </div>
       <section aria-labelledby="h-entscheide">
-        <h2 id="h-entscheide" className="h-titel">Entscheide <span className="mut small">{data.zahl}{data.zurueckgestellt ? ` · ${data.zurueckgestellt} später` : ''}</span>
-          {data.eintraege.length > 7 && <a className="small" href="#/inbox">alle {data.eintraege.length} →</a>}</h2>
-        <InboxListe eintraege={data.eintraege} max={7} onDone={reload} />
+        {/* F1: die Liste steht unter „Entscheidungen“ — hier nur die drei obersten (wichtige zuerst), die Zahl führt zur Seite. */}
+        <h2 id="h-entscheide" className="h-titel">Entscheide <a className="mut small" href="#/entscheidungen" data-testid="h-entscheide-zahl">{data.zahl}{data.zurueckgestellt ? ` · ${data.zurueckgestellt} später` : ''}</a>
+          {data.eintraege.length > 3 && <a className="small" href="#/entscheidungen">alle {data.zahl} →</a>}</h2>
+        <InboxListe eintraege={data.eintraege} max={3} onDone={reload} />
       </section>
       {data.admin && <div className="h-zwei">
         <section aria-labelledby="h-blk"><h2 id="h-blk" className="h-titel">Blockiert / hängt</h2>
@@ -124,6 +126,8 @@ export function HeuteNeu({ cfg }: { cfg: Config }) {
             <li>{data.geaendert?.prMeldungen ?? 0} Meldungen an PRs <a className="tiny" href="#/arbeit/reviews">ansehen</a></li>
           </ul></div></section>
       </div>}
+      {/* Chief of Staff (Admin-Instanz): Wer schuldet was, Über Nacht, Termine — ohne ①, das steht unter Entscheidungen. */}
+      {data.admin && cfg.features?.cos !== false && <Morgenlage onChange={reload} ohneEntscheide />}
     </div>
   );
 }

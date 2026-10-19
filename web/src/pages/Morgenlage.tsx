@@ -144,7 +144,7 @@ function Einwurf({ onClose, vorgabe }: { onClose: () => void; vorgabe?: string }
 }
 
 /** Die Karte. `alle` = Vollansicht der Entscheide (Freigabe-Inbox, S3.1). */
-export function Morgenlage({ onChange, onAktiv }: { onChange: () => void; onAktiv?: (aktiv: boolean) => void }) {
+export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: () => void; onAktiv?: (aktiv: boolean) => void; ohneEntscheide?: boolean }) {
   const [l, setL] = useState<any>(null);
   const [err, setErr] = useState<unknown>(null);
   const [zu, setZu] = useStored<boolean>('cos:zu', false);
@@ -190,14 +190,14 @@ export function Morgenlage({ onChange, onAktiv }: { onChange: () => void; onAkti
       {einwurf && <Einwurf vorgabe={einwurf.notiz} onClose={() => setEinwurf(null)} />}
       {zu ? <p className="small mut">{entN} Entscheide · {l.blockiert.gesamt} blockiert · {nachtN} über Nacht · {s.ueberfaellig} überfällig</p> : <>
         {l.leer && <p className="small cos-leer" data-testid="cos-leer">{l.leer}</p>}
-        <div className="cos-block" data-testid="cos-entscheide">
+        {!ohneEntscheide && <div className="cos-block" data-testid="cos-entscheide">
           <h3>① Entscheide heute <span className="ub-amp u-dich" data-testid="cos-entscheide-zahl">{entN}</span> <a className="tiny" href="#/entscheidungen" data-testid="cos-entscheidungen-link">alle als Karten →</a></h3>
           {ib ? (gezeigt.length ? <div className="h-inbox">{gezeigt.map(inboxZeile)}</div> : <p className="small mut">Nichts wartet auf dich.</p>)
             : (l.entscheide.items.length ? l.entscheide.items.map((e: any) => <EntscheidZeile key={e.id} e={e} onDone={fertig} />) : <p className="small mut">Nichts wartet auf dich.</p>)}
           {ib && eintraege.length > 7 && <button className="linklike tiny" aria-expanded={alle} onClick={() => setAlle(!alle)} data-testid="cos-inbox-auf">{alle ? 'nur die ersten 7 zeigen' : `… und ${eintraege.length - 7} weitere zeigen`}</button>}
           {ib?.zurueckgestellt > 0 && <p className="tiny mut">{ib.zurueckgestellt} bis morgen 07:00 zurückgestellt.</p>}
           {l.roadmapFragen > 0 && <p className="tiny mut">{l.roadmapFragen} offene Roadmap-Fragen → <a href="#/roadmap">Planen</a></p>}
-        </div>
+        </div>}
         <div className="cos-block" data-testid="cos-blockiert">
           <h3>② Blockiert <span className="ub-amp u-bad">{l.blockiert.gesamt}</span></h3>
           {l.blockiert.items.length ? <ul>{l.blockiert.items.map(blockZeile)}</ul> : <p className="small mut">Nichts blockiert.</p>}

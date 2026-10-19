@@ -13,6 +13,7 @@ import { Ziele } from './pages/Ziele.tsx';
 import { Uebersicht } from './pages/Uebersicht.tsx';
 import { HeuteNeu } from './pages/HeuteNeu.tsx';
 import { Entscheidungen } from './pages/Entscheidungen.tsx';
+import { LeadSeite } from './pages/Lead.tsx';
 import { ArbeitUnterchats, ArbeitReviews } from './pages/Arbeit.tsx';
 import { Ablage } from './pages/Ablage.tsx';
 import { useTodayCount } from './beimir.tsx';
@@ -68,27 +69,27 @@ const EINRICHTUNG: Nav = { href: '#/einrichtung', label: 'Einrichtung', ico: '�
 // Plan 213 S3 (WERKBANK_NAV_NEU): drei Bereiche Heute · Arbeit · Wissen, dazu Chat und Einstellungen. Heute = Entscheide (Inbox),
 // Arbeit = Unter-Chats, Reviews & PRs, Board, Sprint (Mein Tag bis zur Messung), Wissen = Vault, Ablage, Roadmap, Ziele.
 // Alle alten Adressen bleiben gültig (185 B3); Team-Nutzer sehen weiter jede freigegebene Seite (B2) — nur an neuer Stelle.
-const HEUTE: Nav = { href: '#/', label: 'Heute', ico: '☀️', match: /^#\/?(\?|$)|^#\/(heute|uebersicht|inbox)(\?|$)/, f: 'heute' };
+const HEUTE: Nav = { href: '#/', label: 'Heute', ico: '☀️', match: /^#\/?(\?|$)|^#\/(heute|uebersicht)(\?|$)/, f: 'heute' };
+// Zielbild F1 (Knut 19.10.): Lead · Entscheidungen · Arbeit · Heute, alles andere unter „Mehr“. Geparktes (Mein Tag, Ziele — F2:
+// der Kalender bzw. der Vault erledigen den Job) steht nicht mehr in der Leiste; die Adressen bleiben gültig.
+const LEAD: Nav = { href: '#/lead', label: 'Lead', ico: '🧭', match: /^#\/lead/, f: 'leitstand' };
+const ENTSCHEIDUNGEN: Nav = { href: '#/entscheidungen', label: 'Entscheidungen', ico: '✅', match: /^#\/(entscheidungen|inbox)/, f: 'heute' };
 const BEREICHE_NEU: { id: string; label: string; ico: string; reiter: Reiter[] }[] = [
   { id: 'arbeit', label: 'Arbeit', ico: '🛠️', reiter: [
     { href: '#/arbeit', label: 'Unter-Chats', match: /^#\/arbeit\/?(\?|$)|^#\/leitstand/, f: 'heute', wide: true },
     { href: '#/arbeit/reviews', label: 'Reviews & PRs', match: /^#\/arbeit\/reviews/, f: 'roadmap', wide: true },
-    { href: '#/board', label: 'Board', match: /^#\/board/, f: 'board', wide: true },
+    { href: '#/ablage', label: 'Berichte & Ablage', match: /^#\/(dateien|ablage)/, f: 'dateien' },
+  ] },
+  { id: 'mehr', label: 'Mehr', ico: '⋯', reiter: [
+    { href: '#/wissen', label: 'Wissen', match: /^#\/wissen/, f: 'wissen', wide: true },
+    { href: '#/board', label: 'Jira-Board', match: /^#\/board/, f: 'board', wide: true },
     { href: '#/sprint', label: 'Sprint', match: /^#\/sprint/, f: 'sprint' },
-    { href: '#/timebox', label: 'Mein Tag', match: /^#\/timebox/, f: 'timebox', wide: true },
-  ] },
-  { id: 'wissen', label: 'Wissen', ico: '📚', reiter: [
-    { href: '#/wissen', label: 'Vault', match: /^#\/wissen/, f: 'wissen', wide: true },
-    { href: '#/ablage', label: 'Ablage', match: /^#\/(dateien|ablage)/, f: 'dateien' },
     { href: '#/roadmap', label: 'Roadmap', match: /^#\/roadmap/, f: 'roadmap', wide: true },
-    { href: '#/ziele', label: 'Ziele', match: /^#\/ziele/, f: 'ziele', wide: true },
-  ] },
-  { id: 'einstellungen', label: 'Einstellungen', ico: '⚙️', reiter: [
-    { href: '#/einrichtung', label: 'Konten & Automatik', match: /^#\/einrichtung/, f: '' },
+    { href: '#/einrichtung', label: 'Einstellungen', match: /^#\/einrichtung/, f: '' },
     { href: '#/skills', label: 'Skills', match: /^#\/skills/, f: 'skills' },
   ] },
 ];
-const UMZUG_KEY = 'wb-umzug-213';
+const UMZUG_KEY = 'wb-umzug-f1';   // neuer Schlüssel: der Hinweis kommt nach der Umstellung auf die F1-Leiste noch einmal
 const merkKey = (id: string) => `wb-bereich:${id}`;
 /** Zuletzt benutzter Reiter des Bereichs (nur freigegebene), sonst der erste freigegebene. */
 function letzterReiter(b: { id: string; reiter: Reiter[] }): string {
@@ -194,9 +195,13 @@ export function App() {
   const inLeiste = (r: Reiter) => vis(r) && !(cfg.meinTagWeg && r.f === 'timebox');
   const bereiche = (neu ? BEREICHE_NEU : BEREICHE).map((b) => ({ ...b, reiter: b.reiter.filter(inLeiste) })).filter((b) => b.reiter.length > 0);
   const alsNav = (b: (typeof bereiche)[number]): Nav => ({ href: letzterReiter(b), label: b.label, ico: b.ico, match: new RegExp(b.reiter.map((r) => r.match.source).join('|')), f: '' });
-  const nav: Nav[] = [START, ...bereiche.filter((b) => b.id !== 'einstellungen').map(alsNav)].filter(vis);
-  const more: Nav[] = neu ? bereiche.filter((b) => b.id === 'einstellungen').map(alsNav) : [EINRICHTUNG];
-  const alle = [START, ...(neu ? BEREICHE_NEU : BEREICHE).flatMap((b) => b.reiter)];
+  const nav: Nav[] = (neu
+    ? [LEAD, ENTSCHEIDUNGEN, ...bereiche.filter((b) => b.id === 'arbeit').map(alsNav), HEUTE, ...bereiche.filter((b) => b.id === 'mehr').map(alsNav)]
+    : [START, ...bereiche.map(alsNav)]).filter(vis);
+  const more: Nav[] = neu ? [] : [EINRICHTUNG];
+  const alle = [START, ...(neu ? [LEAD, ENTSCHEIDUNGEN] : []), ...(neu ? BEREICHE_NEU : BEREICHE).flatMap((b) => b.reiter)];
+  // Der Zähler steht dort, wo die Fragen stehen: neu an „Entscheidungen“, sonst an der Übersicht (eine Zahl, eine Quelle).
+  const zaehlHref = neu ? ENTSCHEIDUNGEN.href : '#/';
   const hidden = user && alle.find((n) => n.f && n.match.test(hash) && !vis(n));
   const bereich = bereiche.find((b) => b.reiter.some((r) => r.match.test(hash)));
   const reiterLeiste = bereich && <div className={`page bereich-bar${bereich.reiter.find((r) => r.match.test(hash))?.wide ? ' wide' : ''}`} data-testid={`bereich-${bereich.id}`}>
@@ -213,6 +218,7 @@ export function App() {
     // Inbox mit Entscheidungs-Log auch in der alten Leiste (Stufen/Annahme nach 24 h gehen mit Bündel A live, Knut 17.10.).
     // Entscheidungen (Knut 19.10., Muster entscheidungen-site): eine Karte je Frage; #/inbox führt dorthin.
     : /^#\/(inbox|entscheidungen)/.test(hash) ? <Entscheidungen />
+    : /^#\/lead/.test(hash) ? <LeadSeite cfg={cfg} />
     : neu && HEUTE.match.test(hash) ? <HeuteNeu cfg={cfg} />
     : neu && /^#\/arbeit\/reviews/.test(hash) ? (user.role === 'ADMIN' ? <ArbeitReviews /> : <Roadmap cfg={cfg} hash="#/roadmap/prs" />)
     : neu && /^#\/arbeit/.test(hash) ? (user.role === 'ADMIN' ? <ArbeitUnterchats cfg={cfg} /> : <Uebersicht cfg={cfg} hash="#/" />)
@@ -229,7 +235,7 @@ export function App() {
 
   // Plan 213 S3 (P4): einmal je Person ein Hinweis auf den Umzug — Planen ist jetzt unter Arbeit (Board, Sprint) und Wissen (Roadmap, Ziele).
   const umzug = neu && user && bereich && bereich.id !== 'einstellungen' && !umzugZu
-    ? <div className="page"><div className="umzug" role="status" data-testid="umzug"><span className="small">Neu geordnet: <b>Board</b> und <b>Sprint</b> stehen unter <b>Arbeit</b>, <b>Roadmap</b> und <b>Ziele</b> unter <b>Wissen</b>, Skills unter Einstellungen. Alte Adressen funktionieren weiter.</span>
+    ? <div className="page"><div className="umzug" role="status" data-testid="umzug"><span className="small">Neu geordnet: <b>Lead · Entscheidungen · Arbeit · Heute</b>, alles andere unter <b>Mehr</b> (Wissen, Jira-Board, Sprint, Roadmap, Einstellungen). Mein Tag und Ziele stehen nicht mehr in der Leiste. Alte Adressen funktionieren weiter.</span>
       <button className="ub-btn sm" onClick={() => { try { localStorage.setItem(UMZUG_KEY, '1'); } catch { /* privat */ } setUmzugZu(true); }}>Verstanden</button></div></div> : null;
 
   // Eingebettet: kein eigenes Gerüst — Navigation ist LibreChats Leiste (Chats · Übersicht · Planen · Wissen), Einrichtung im Kontomenü.
@@ -244,12 +250,12 @@ export function App() {
         <button className="menu-btn btn small" aria-expanded={menu} aria-controls="werkbank-nav" onClick={() => setMenu(!menu)}>
           {current ? <>{current.ico} {current.label}</> : 'Menü'}
           {/* Auf der Übersicht steht der Zähler am Namen („Übersicht 10“), sonst als Hinweis daneben („· Übersicht 10“) — nie beides. */}
-          {current?.href === '#/' && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span>
-            : !menu && <span className="menu-more">· {todayN ? `${START.label} ${todayN}` : `${nav.length + more.length - (current ? 1 : 0)} weitere`}</span>}<span aria-hidden>{menu ? '▴' : '▾'}</span>
+          {current?.href === zaehlHref && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span>
+            : !menu && <span className="menu-more">· {todayN ? `${neu ? ENTSCHEIDUNGEN.label : START.label} ${todayN}` : `${nav.length + more.length - (current ? 1 : 0)} weitere`}</span>}<span aria-hidden>{menu ? '▴' : '▾'}</span>
         </button>
         <nav className="nav col" id="werkbank-nav" style={{ gap: 2 }}>
           <a href={cfg.librechatUrl} className="" title="Zurück zum Chat (LibreChat)"><span className="ico">💬</span>Chat</a>
-          {nav.map((n) => <NavLink key={n.href} n={n} hash={hash} count={n.href === '#/' ? todayN : null} />)}
+          {nav.map((n) => <NavLink key={n.href} n={n} hash={hash} count={n.href === zaehlHref ? todayN : null} />)}
         </nav>
         <div className="spacer" />
         <nav className="nav col more" aria-label="Weitere Seiten" style={{ gap: 0 }}>
@@ -267,7 +273,7 @@ export function App() {
       <main className="main">{umzug}{reiterLeiste}{page}</main>
       {/* Plan 213 S3b: Handy-Tableiste Heute · Arbeit · Wissen · Chat (nur ≤ 760 px, nur neue Navigation; 185 B6). */}
       {neu && user && <nav className="tabbar" aria-label="Bereiche">
-        {nav.map((n) => { const on = n.match.test(hash); return <a key={n.href} href={n.href} className={on ? 'active' : ''} aria-current={on ? 'page' : undefined}><span className="ico" aria-hidden>{n.ico}</span>{n.label}{n.href === '#/' && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span> : null}</a>; })}
+        {nav.map((n) => { const on = n.match.test(hash); return <a key={n.href} href={n.href} className={on ? 'active' : ''} aria-current={on ? 'page' : undefined}><span className="ico" aria-hidden>{n.ico}</span>{n.label}{n.href === zaehlHref && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span> : null}</a>; })}
         <a href={cfg.librechatUrl}><span className="ico" aria-hidden>💬</span>Chat</a>
       </nav>}
     </div>

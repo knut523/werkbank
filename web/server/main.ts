@@ -1409,9 +1409,9 @@ async function inboxFuer(u: User, now = Date.now()) {
   await spaeterCol().deleteMany({ userId: u.id, bis: { $lte: new Date(now) } }).catch(() => {});   // abgelaufene aufräumen
   const spaeter = new Map(((await spaeterCol().find({ userId: u.id, bis: { $gt: new Date(now) } }).toArray()) as any[]).map((s) => [String(s.id), new Date(s.bis).getTime()]));
   const laeufe = (await myQueue(u).catch(() => [] as any[])).filter((x: any) => x.bucket !== 'laeuft').length;
-  // Meeting-Vorschläge zählen mit, wo die Morgenlage sie zeigt (alte Übersicht) — eine Zahl für Kopf, Leiste und ① (221).
+  // Meeting-Vorschläge zählen mit — eine Zahl für Kopf, Leiste, ① und Entscheidungen (221); beantwortet über die Vorschau.
   let triage: any[] = [];
-  if (admin && !navNeu() && process.env.COS_MORGENLAGE !== 'off') {
+  if (admin && process.env.COS_MORGENLAGE !== 'off') {
     const versteckt = new Set(((await wb().collection('cos_triage').find({ art: 'nein' }).toArray().catch(() => [])) as any[]).map((d) => String(d._id)));
     try { triage = cosVorschlaege(cfg.vaultDir, cosMeetingTeams(), wienDatum(), versteckt).items; } catch { /* Vault nicht lesbar */ }
   }

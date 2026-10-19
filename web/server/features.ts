@@ -49,10 +49,17 @@ export function teamFeatures(env = process.env): Set<string> {
 
 const isAdmin = (u: { role?: string } | null | undefined) => u?.role === 'ADMIN';
 
-/** Sichtbarkeit je Funktion für diese Person (Admins: alles). */
+// F6 (Knut 19.10.): jede Person bekommt eine eigene Instanz, alles individuell. Die Rolle ist ein Profil der Instanz:
+// WERKBANK_INSTANZ=team — die Besitzerin (Admin ihrer Instanz) hat Lead, Entscheidungen, Arbeit und Mehr; was nur Knuts
+// Instanz betrifft (Chief of Staff: Morgenlage, Zusagen-Register, Einwurf), ist dort aus — in Oberfläche und API.
+const NUR_KNUTS_INSTANZ = new Set<string>(['cos']);
+export const teamInstanz = (env = process.env) => env.WERKBANK_INSTANZ === 'team';
+
+/** Sichtbarkeit je Funktion für diese Person (Admins: alles, außer was ihr Instanz-Profil ausschließt). */
 export function featuresFor(u: { role?: string } | null | undefined, env = process.env): Record<FeatureId, boolean> {
   const team = teamFeatures(env);
-  return Object.fromEntries(FEATURES.map((f) => [f.id, isAdmin(u) || team.has(f.id)])) as Record<FeatureId, boolean>;
+  const aus = teamInstanz(env) ? NUR_KNUTS_INSTANZ : new Set<string>();
+  return Object.fromEntries(FEATURES.map((f) => [f.id, !aus.has(f.id) && (isAdmin(u) || team.has(f.id))])) as Record<FeatureId, boolean>;
 }
 
 /** Welche Funktion gehört zu diesem API-Pfad (null = immer offen)? */
@@ -64,6 +71,7 @@ export function featureOfPath(path: string): FeatureId | null {
 /** null = erlaubt, sonst die gesperrte Funktion. */
 export function blockedFeature(u: { role?: string } | null | undefined, path: string, env = process.env): FeatureId | null {
   const f = featureOfPath(path);
+  if (f && teamInstanz(env) && NUR_KNUTS_INSTANZ.has(f)) return f;
   if (!f || isAdmin(u)) return null;
   return teamFeatures(env).has(f) ? null : f;
 }
