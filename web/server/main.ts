@@ -2020,7 +2020,7 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/github$/, async (req, res, m) => {
   if (event === 'COMMENT' && pr.posted) throw new HttpError(409, 'Der Kommentar ist schon gepostet.');
   if (event !== 'COMMENT' && (pr.postings ?? []).some((x: any) => x.event === event)) throw new HttpError(409, 'Für diesen Stand schon abgeschickt.');
   const r = await postReview(pr, vorspann + pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automated review', 'Review'), event).catch((e: any) => { throw new HttpError(502, e.message); });
-  await reviewsCol().updateOne({ _id: pr.id as any }, { $push: { postings: { at: new Date(), url: r.url, event, by: u.name } } as any, ...(event === 'COMMENT' && !pr.posted ? { $set: { posted: { at: new Date(), url: r.url, event, by: u.name } } } : {}) });
+  await reviewsCol().updateOne({ _id: pr.id as any }, { $push: { postings: { at: new Date(), url: r.url, event, by: u.name } } as any, ...(event === 'COMMENT' && !pr.posted ? { $set: { posted: { at: new Date(), url: r.url, event, by: u.name } }, $unset: { verworfen: '' } } : {}) });   // nach „Verwerfen“ doch gepostet: Knuts letzte Entscheidung gilt
   log('pr-review github', { user: u.id, pr: `${pr.repo}#${pr.number}`, event });
   send(res, 200, { ok: true, url: r.url });
 });
@@ -2031,7 +2031,9 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/verwerfen$/, async (req, res, m) => {
   const pr = await prReviewOf(String(d._id));
   if (!pr) throw new HttpError(404, 'Kein Auto-Review zu diesem Unter-Chat.');
   if (pr.posted) throw new HttpError(409, 'Der Kommentar ist schon gepostet.');
-  await reviewsCol().updateOne({ _id: pr.id as any, posted: { $in: [null] } }, { $set: { verworfen: { at: new Date(), by: u.name }, note: `von ${u.name} verworfen (nicht gepostet)` } });
+  // Pass C: nur wer den Eintrag wirklich umschaltet, meldet Erfolg (gleichzeitig gepostet → 409).
+  const vw = await reviewsCol().updateOne({ _id: pr.id as any, posted: { $in: [null] } }, { $set: { verworfen: { at: new Date(), by: u.name }, note: `von ${u.name} verworfen (nicht gepostet)` } });
+  if (!vw.matchedCount) throw new HttpError(409, 'Der Kommentar ist inzwischen gepostet.');
   log('pr-review verworfen', { user: u.id, pr: `${pr.repo}#${pr.number}` });
   send(res, 200, { ok: true });
 });
@@ -3750,7 +3752,7 @@ async function backgroundJobs() {
           const owner = r?.ownerId ?? (await tickerSettings()).ownerId;
           const u = owner ? await userById(owner) : null;
           if (!u) return false;
-          const wo = r?.strand ? `Review-Ansicht: ${cfg.publicUrl}/#/leitstand?review=${r.strand} („Kommentar posten“ oder „Verwerfen“)` : `Ticker: ${cfg.publicUrl}/#/roadmap/prs${r ? ' („Jetzt reviewen“)' : ''}`;
+          const wo = r?.strand && r.status === 'fertig' ? `Review-Ansicht: ${cfg.publicUrl}/#/leitstand?review=${r.strand} („Kommentar posten“ oder „Verwerfen“)` : r?.strand ? `Review-Ansicht: ${cfg.publicUrl}/#/leitstand?review=${r.strand} · Ticker: ${cfg.publicUrl}/#/roadmap/prs („Jetzt reviewen“)` : `Ticker: ${cfg.publicUrl}/#/roadmap/prs${r ? ' („Jetzt reviewen“)' : ''}`;
           return meldeLeitstand(u, { _id: r ? `pr-review:${r._id}` : 'pr-ticker', title: r ? `PR-Review ${String(r.repo).split('/')[1]}#${r.number}` : 'PR-Ticker' }, `${text} → ${wo}`);
         },
         post: (r, text, event) => postReview(r, text, event),

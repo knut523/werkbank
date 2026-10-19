@@ -231,6 +231,9 @@ export function reviewPrompt(r: { repo: string; number: number; title: string; u
       `Dafür eine Tabelle „Punkt · Quelle (letztes Review / Kommentar / Inline-Thread) · erledigt? · Beleg Datei:Zeile“ — in ${motorAn() ? 'befunde.json (Feld `delta`, englisch)' : 'kommentar.md (englisch)'} und bericht.md.`,
     ] : []),
     '',
+    // Paket 223: im Eval gaben zwei Reviews ab, bevor ihre Teilagenten zurück waren — gepostet wäre ein halbes Review.
+    'TEILAGENTEN: nur im Vordergrund starten oder vor dem Abschluss auf ALLE warten und ihre Ergebnisse einarbeiten. Fehlt ein Teil noch, nicht abschließen',
+    '(kein review_ready); ein Kommentar, der eine Lücke der eigenen Prüfung einräumt („this pass did not cover …“), geht nicht automatisch an den PR.',
     'Arbeite nach plan-to-pr, NUR Phase 4 (Review): Pre-Checks (Basis, Diff-Umfang, Migrations/Secrets/Lizenzen), Pass A (Korrektheit),',
     'Pass B (Sicherheit, Daten, Fehlerfälle), Pass C (Einfachheit, Tests, Lesbarkeit). Die Gegenprüfung über Melious startet der Ticker danach selbst.',
     // Knut 15.10. (D5): PR-Code wird auf dieser Maschine NICHT ausgeführt, bis der geführte Lauf entschieden ist.
@@ -481,9 +484,13 @@ export function textRegeln(text: string, r: { repo: string; number: number }, be
   if (fremd.length) out.push(`verweist auf #${fremd.join(', #')} (gibt es im Repo nicht)`);
   if (GEHEIM.test(text)) out.push('sieht nach einem Geheimnis aus (Token/Schlüssel/Passwort)');
   if (!englisch(text)) out.push('nicht englisch');
+  if (UNVOLLSTAENDIG.test(text)) out.push('räumt eine Lücke der eigenen Prüfung ein (Teilprüfung nicht zurück?) — erst vollständig prüfen');
   if (text.length > 60_000) out.push('zu lang');
   return out;
 }
+
+/** Paket 223: Kommentar gesteht eine unvollständige eigene Prüfung ein (Eval: Teilagenten waren bei der Abgabe nicht zurück). */
+const UNVOLLSTAENDIG = /\b(this (pass|review) did not (cover|check|review)|(review|check) is incomplete|incomplete review|(sub-?)?(checks?|reviews?|passes) (had )?not (yet )?(returned|come back)|still running when|could not finish (the|this) review)\b/i;
 
 // Paket 223: der Entwurf zu olaf-admin#354 war deutsch. Deutsche Fachwörter (Zählpunkt, Sammelanmeldung) und Code stehen auch
 // in englischen Entwürfen — darum Funktionswörter zählen, Code-Blöcke, Code-Spans und Links ausklammern.
@@ -661,13 +668,13 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
     const claim = await reviewsCol().updateOne({ _id: r._id, status: r.status }, { $set: set });
     if (!claim.modifiedCount) continue;
     done++;
-    if (!k) { await meldeStatus(r, statusZeile({ art: 'failed', grund: grundEn(set.note) }), deps, now); await meldeKnut(r, set.note, deps, now); continue; }
+    if (!k) { await meldeStatus(r, statusZeile({ art: 'failed', grund: grundEn(set.note) }), deps, now); await meldeKnut({ ...r, ...set }, set.note, deps, now); continue; }
     const pe = s.autoPost && deps.post ? await autoPost({ ...r, ...set }, k, deps, now) : { art: 'aus' as const, grund: 'automatisches Posten ist aus' };
     if (pe.art === 'gepostet') await meldeStatus(r, statusZeile({ art: 'done', gepostet: true, url: pe.url ?? null, empfehlung: k.empfehlung }), deps, now);
     else if (pe.art === 'zu' || pe.art === 'neu') await meldeStatus(r, statusZeile({ art: 'skipped', grund: pe.art === 'neu' ? 'new commits since the review — tag @review again for the new head' : 'PR was merged or closed before the review was posted' }), deps, now);
     else {
       await meldeStatus(r, statusZeile({ art: 'done', gepostet: false, empfehlung: k.empfehlung }), deps, now);
-      if (pe.art !== 'aus') await meldeKnut(r, `nicht gepostet: ${pe.grund}${r.nb ? ' (auch nach dem Nachfass)' : ''}`, deps, now);
+      if (pe.art !== 'aus') await meldeKnut({ ...r, ...set }, `nicht gepostet: ${pe.grund}${r.nb ? ' (auch nach dem Nachfass)' : ''}`, deps, now);
     }
   }
   // 2) neue starten (erneut eingereihte erst ab retryAt)

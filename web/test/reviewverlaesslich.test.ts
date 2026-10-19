@@ -63,6 +63,14 @@ test('S1 Sprache: deutsche Entwürfe aus dem Log fallen durch, englische passier
   assert.deepEqual(R.textRegeln(readFileSync(join(FIX, 'olaf-admin-354.md'), 'utf8'), { repo: 'WirStrom1/olaf-admin', number: 354 }, new Set([324])), ['nicht englisch']);
 });
 
+test('Eval-Befund: ein Entwurf, der eine Lücke der eigenen Prüfung einräumt, geht nicht automatisch an den PR; Auftrag verlangt Teilagenten abzuwarten', async () => {
+  const R = await import('../server/prreview.ts');
+  const r = { repo: 'WirStrom1/olaf-admin', number: 353 };
+  assert.match(R.textRegeln(readFileSync(join(FIX, 'replay-unvollstaendig-353.md'), 'utf8'), r, new Set([88, 350, 352, 355])).join(' '), /Lücke der eigenen Prüfung/);
+  for (const f of readdirSync(FIX).filter((x) => !x.startsWith('replay-'))) assert.doesNotMatch(R.textRegeln(readFileSync(join(FIX, f), 'utf8'), r, new Set()).join(' '), /Lücke/, f);
+  assert.match(R.reviewPrompt({ repo: 'a/b', number: 1, title: 't', url: 'u', head: SHA, by: null, trigger: 'tag' }, '/wt', '1-x'), /TEILAGENTEN: nur im Vordergrund starten oder vor dem Abschluss auf ALLE warten/);
+});
+
 test('S1 Verweise: #N eines anderen Repos wird qualifiziert, aber nur wenn es die Nummer dort gibt', async () => {
   const R = await import('../server/prreview.ts');
   const kontext = 'Docs for https://github.com/WirStrom1/olaf-admin/pull/359 and WirStrom1/olaf-docs#88';
