@@ -119,7 +119,7 @@ export async function fetchTicker(token: string, since: Date, env = process.env)
 
 // ---------- Ereignisse (rein) ----------
 
-export type Kind = 'neu' | 'stand' | 'zu' | 'kommentar' | 'review' | 'anfrage' | 'tag';
+export type Kind = 'neu' | 'stand' | 'zu' | 'kommentar' | 'review' | 'anfrage' | 'tag' | 'erledigt';
 export interface TickerEvent { _id: string; kind: Kind; repo: string; number: number; title: string; url: string; prUrl: string; actor: string | null; text: string; at: string; head: string }
 export interface PrMem { _id: string; head: string; state: string }
 
@@ -128,6 +128,16 @@ export const TAG = /(^|[\s(])@review\b/i;
 export const TAG_DEEP = /(^|[\s(])@review\s+deep\b/i;
 /** Ereignistext eines Tags: „deep“ muss erhalten bleiben, sonst sieht queueReviews es nie (Fehler 19.10.). */
 const tagText = (body: string | null | undefined, who: string) => `${TAG_DEEP.test(body ?? '') ? '@review deep' : '@review'} von ${who}`;
+/** Paket 223 (#364: „Nits 1–2 addressed“ ohne @review): meldet der PR-Autor Punkte als erledigt? Verneint („not done yet“,
+ *  „noch nicht behoben“) zählt nicht; ein Treffer ohne Verneinung davor reicht. */
+const ERLEDIGT = /\b(addressed|fixed|done|resolved|erledigt|behoben|umgesetzt)\b/gi;
+const VERNEINT = /\b(not|n't|no|never|noch nicht|nicht|kein|yet to|still|will be|to be|todo)\W+(?:\w+\W+){0,3}$/i;
+export function meldetErledigt(body: string | null | undefined): boolean {
+  const t = String(body ?? '');
+  if (TAG.test(t)) return false;
+  for (const m of t.matchAll(ERLEDIGT)) if (!VERNEINT.test(t.slice(Math.max(0, m.index! - 40), m.index!)) && !/^\s*(?:yet|nicht|not)\b/i.test(t.slice(m.index! + m[0].length, m.index! + m[0].length + 8))) return true;
+  return false;
+}
 const REVIEW_STATE: Record<string, string> = { APPROVED: 'freigegeben', CHANGES_REQUESTED: 'Änderungen verlangt', COMMENTED: 'kommentiert', DISMISSED: 'verworfen' };
 const kurz = (t: string, n = 140) => { const s = String(t ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 export const prKey = (repo: string, n: number) => `${repo}#${n}`;
@@ -163,12 +173,14 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
       const who = (c.author?.login ?? '').toLowerCase();
       if (!c.id || c.createdAt < since) continue;
       if (TAG.test(c.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${c.id}`, 'tag', c.createdAt, who, tagText(c.body, who), c.url);
+      else if (who && who === author && who !== ME && allowSet.has(who) && state === 'OPEN' && meldetErledigt(c.body)) ev(`erledigt:${c.id}`, 'erledigt', c.createdAt, who, `${who} meldet erledigt: ${kurz(c.body, 100)}`, c.url);
       else if (ours && who && who !== ME) ev(`c:${c.id}`, 'kommentar', c.createdAt, who, `Kommentar von ${who}: ${kurz(c.body, 120)}`, c.url);
     }
     for (const r of p.reviews?.nodes ?? []) {
       const who = (r.author?.login ?? '').toLowerCase();
       if (!r.id || !r.submittedAt || r.submittedAt < since) continue;
       if (TAG.test(r.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${r.id}`, 'tag', r.submittedAt, who, tagText(r.body, who), r.url);
+      else if (who && who === author && who !== ME && allowSet.has(who) && state === 'OPEN' && meldetErledigt(r.body)) ev(`erledigt:${r.id}`, 'erledigt', r.submittedAt, who, `${who} meldet erledigt: ${kurz(r.body, 100)}`, r.url);
       else if (ours && who && who !== ME && r.state !== 'PENDING') ev(`r:${r.id}`, 'review', r.submittedAt, who, `Review von ${who}: ${REVIEW_STATE[r.state] ?? r.state}${r.body ? ` — ${kurz(r.body, 100)}` : ''}`, r.url);
     }
     const asked = (p.reviewRequests?.nodes ?? []).some((x: any) => (x.requestedReviewer?.login ?? '').toLowerCase() === ME);
@@ -181,6 +193,8 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
 // ---------- Lauf ----------
 
 let running: Promise<any> | null = null;
+/** Ab so vielen Minuten ohne erfolgreichen Lauf gilt es als Lücke (Takt ist 1–60 min; Lücke heißt: deutlich darüber). */
+export const LUECKE_MIN = 30;
 
 export interface TickResult { events: number; reviews: number; prs: number; skipped?: string }
 
@@ -221,7 +235,10 @@ export async function tickerTick(getToken: () => Promise<string | null>, now = n
     }
     if (mem.length) await prState().bulkWrite(mem.map((m) => ({ replaceOne: { filter: { _id: m._id as any }, replacement: { ...m, at: now }, upsert: true } })));
     const reviews = await queueReviews(fresh, s, now);
-    await meta().updateOne({ _id: 'pr_ticker' as any }, { $set: { at: got.truncatedAt ? new Date(got.truncatedAt) : now, error: null, rate: got.rate, counts: got.counts, prs: got.prs.length, truncated: !!got.truncatedAt } }, { upsert: true });
+    // Paket 223: lag der letzte erfolgreiche Lauf > 30 min zurück (Web-App aus, kein Token), merkt sich der Lauf die Lücke —
+    // die Wache (prreview.ts) meldet sie einmal mit der Zahl der nachgeholten Reviews. Erfolg setzt die Fehlermeldung zurück.
+    const luecke = st.at && now.getTime() - new Date(st.at).getTime() > Math.max(LUECKE_MIN, 2 * s.minutes + 5) * 60_000 ? { luecke: { von: new Date(st.at), bis: now, reviews, gemeldet: false } } : {};
+    await meta().updateOne({ _id: 'pr_ticker' as any }, { $set: { at: got.truncatedAt ? new Date(got.truncatedAt) : now, error: null, fehlerGemeldet: null, rate: got.rate, counts: got.counts, prs: got.prs.length, truncated: !!got.truncatedAt, ...luecke } }, { upsert: true });
     return { events: fresh.length, reviews, prs: got.prs.length };
   })();
   try { return await running; } finally { running = null; }
@@ -232,6 +249,8 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
   if (!s.autoReview || !s.ownerId || !s.autoReviewSince) return 0;
   let n = 0;
   for (const e of fresh) {
+    // Paket 223: „erledigt“ des Autors oder ein neuer Stand nach so einem Kommentar → Nachprüfung (Delta gegen das letzte Review).
+    if ((e.kind === 'erledigt' || e.kind === 'stand') && e.at >= s.autoReviewSince && e.head && reviewErlaubt(e.repo)) { n += await nachpruefung(e, s, now); continue; }
     // Review-Anfrage nur, wenn der PR-Autor auf der Liste steht: das Review führt die Tests des PRs aus (Review A2).
     const trigger = e.kind === 'tag' || (e.kind === 'anfrage' && s.onRequest && !!e.actor && s.allow.includes(e.actor));
     if (!trigger || e.at < s.autoReviewSince || !e.head) continue;
@@ -248,6 +267,30 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
     }
   }
   return n;
+}
+
+/**
+ * Nachprüfung ohne Tag (Paket 223): nur wenn es ein fertiges Review dieses PRs an einem ÄLTEREN Kopf gibt. Kommentar „erledigt“
+ * bei unverändertem Kopf → vermerkt; kommt der neue Stand danach, löst der Stand aus (ein „erledigt“ nach dem letzten Review).
+ * Kennung PR@Kopf wie beim Tag: je Kopf höchstens ein Review, egal welcher Auslöser.
+ */
+async function nachpruefung(e: TickerEvent, s: TickerSettings, now: Date): Promise<number> {
+  const letzte: any = (await reviewsCol().find({ repo: e.repo, number: e.number, status: 'fertig' }).sort({ doneAt: -1 }).limit(1).toArray())[0];
+  if (!letzte) { if (e.kind === 'erledigt') await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: 'keine Nachprüfung: noch kein Review dieses PRs' } }); return 0; }
+  if (letzte.head === e.head) { if (e.kind === 'erledigt') await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: 'Nachprüfung, sobald ein neuer Commit kommt' } }); return 0; }
+  let wer = e.actor;
+  if (e.kind === 'stand') {
+    const ok: any = await tickerCol().findOne({ kind: 'erledigt', repo: e.repo, number: e.number, at: { $gte: new Date(letzte.doneAt ?? letzte.createdAt ?? 0).toISOString() } });
+    if (!ok) return 0;
+    wer = ok.actor;
+  }
+  if (!wer || !s.allow.includes(wer)) return 0;
+  const id = `${prKey(e.repo, e.number)}@${e.head}`;
+  try {
+    await reviewsCol().insertOne({ _id: id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, head: e.head, trigger: 'nachpruefung', by: wer, event: e._id, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date, deep: false });
+    await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: `Nachprüfung eingereiht (letztes Review am Stand ${String(letzte.head).slice(0, 7)})` } });
+    return 1;
+  } catch (x: any) { if (x?.code !== 11000) throw x; return 0; }
 }
 
 /** Für die Oberfläche: Einstellungen, letzter Lauf, letzte Ereignisse, Review-Warteschlange. */

@@ -1464,7 +1464,7 @@ async function prReviewOf(strand: string) {
   if (!r) return null;
   const k = parseKommentar(readBerichtDatei(join(reviewDir(), r.paket ?? '_', 'kommentar.md')));
   return { id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, status: r.status, empfehlung: k?.empfehlung ?? r.empfehlung ?? null,
-    text: k?.text ?? null, posted: r.posted ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus() };
+    text: k?.text ?? null, posted: r.posted ?? null, verworfen: r.verworfen ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus() };
 }
 on('GET', /^\/api\/leitstand\/ticker$/, async (req, res) => { await needAdmin(req); send(res, 200, await tickerOverview()); });
 // Review-Log (Knut 17.10.): je Review eine Zeile, neueste oben; Filter Person/Repo/Status. Nur lesen.
@@ -1517,6 +1517,17 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/github$/, async (req, res, m) => {
   await reviewsCol().updateOne({ _id: pr.id as any }, { $push: { postings: { at: new Date(), url: r.url, event, by: u.name } } as any, ...(event === 'COMMENT' && !pr.posted ? { $set: { posted: { at: new Date(), url: r.url, event, by: u.name } } } : {}) });
   log('pr-review github', { user: u.id, pr: `${pr.repo}#${pr.number}`, event });
   send(res, 200, { ok: true, url: r.url });
+});
+// Paket 223: Entwurf bewusst nicht posten — die Wache meldet ihn dann nicht mehr.
+on('POST', /^\/api\/review\/([\w-]{1,40})\/verwerfen$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const d = await reviewStrand(u, m[1]);
+  const pr = await prReviewOf(String(d._id));
+  if (!pr) throw new HttpError(404, 'Kein Auto-Review zu diesem Unter-Chat.');
+  if (pr.posted) throw new HttpError(409, 'Der Kommentar ist schon gepostet.');
+  await reviewsCol().updateOne({ _id: pr.id as any, posted: { $in: [null] } }, { $set: { verworfen: { at: new Date(), by: u.name }, note: `von ${u.name} verworfen (nicht gepostet)` } });
+  log('pr-review verworfen', { user: u.id, pr: `${pr.repo}#${pr.number}` });
+  send(res, 200, { ok: true });
 });
 on('POST', /^\/api\/review\/([\w-]{1,40})\/freigabe$/, async (req, res, m) => {
   const u = await needAdmin(req);
@@ -3164,6 +3175,14 @@ async function backgroundJobs() {
           return meliousPassC(u, { wt: r.worktree, basis, zweck: `Review ${r.repo}#${r.number}: ${r.title ?? ''}${r.delta ? ' (nur Änderungen seit dem letzten Review)' : ''}` });
         },
         sendStrand: async (r, text) => { const u = await userById(r.ownerId); if (!u) throw new Error('Besitzer nicht gefunden'); return sendOrch(u, r.strand, text, 'leitstand'); },
+        // Paket 223: nicht gepostet / Wache / Ticker-Lücke → Hauptchat des Auto-Review-Besitzers, mit Link zum Handeln.
+        melde: async (r, text) => {
+          const owner = r?.ownerId ?? (await tickerSettings()).ownerId;
+          const u = owner ? await userById(owner) : null;
+          if (!u) return false;
+          const wo = r?.strand ? `Review-Ansicht: ${cfg.publicUrl}/#/leitstand?review=${r.strand} („Kommentar posten“ oder „Verwerfen“)` : `Ticker: ${cfg.publicUrl}/#/roadmap/prs${r ? ' („Jetzt reviewen“)' : ''}`;
+          return meldeLeitstand(u, { _id: r ? `pr-review:${r._id}` : 'pr-ticker', title: r ? `PR-Review ${String(r.repo).split('/')[1]}#${r.number}` : 'PR-Ticker' }, `${text} → ${wo}`);
+        },
         post: (r, text, event) => postReview(r, text, event),
         // Statuszeile am PR (queued → running → done …), englisch; WERKBANK_REVIEW_STATUS=off schaltet ab.
         status: (r, text, id) => statusKommentar(r, text, id),

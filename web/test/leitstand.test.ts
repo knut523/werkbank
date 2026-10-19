@@ -583,6 +583,17 @@ test('Plan 154 §9 (Council R3): Review-Ansicht — Entscheidungen aus dem Beric
   assert.equal((await post(`/api/review/${st.id}/freigabe`, { head: 'a'.repeat(40), patchId: 'x' })).status, 409);
   assert.equal((await fetch(B + `/api/review/${st.id}/freigabe`, { method: 'POST', headers: { cookie: await cookie(knut), 'content-type': 'application/json' }, body: '{}' })).status, 403);
   assert.equal((await post(`/api/review/${st.id}/freigabe`, { head: 'a'.repeat(40) }, team)).status, 403);
+  // Paket 223: Auto-Review-Entwurf verwerfen — ohne Auto-Review 404, Team 403, dann vermerkt (die Wache meldet ihn nicht mehr), gepostet → 409.
+  assert.equal((await post(`/api/review/${st.id}/verwerfen`, {})).status, 404);
+  await W().collection('pr_reviews').insertOne({ _id: `WirStrom1/olaf-admin#954@${'e'.repeat(40)}`, repo: 'WirStrom1/olaf-admin', number: 954, head: 'e'.repeat(40), strand: st.id, paket: '954-review', status: 'fertig', createdAt: new Date() } as any);
+  assert.equal((await post(`/api/review/${st.id}/verwerfen`, {}, team)).status, 403);
+  assert.equal((await post(`/api/review/${st.id}/verwerfen`, {})).status, 200);
+  const vw: any = await W().collection('pr_reviews').findOne({ strand: st.id });
+  assert.ok(vw.verworfen?.by); assert.match(vw.note, /verworfen/);
+  assert.equal((await get()).status, 200);
+  await W().collection('pr_reviews').updateOne({ strand: st.id }, { $set: { posted: { at: new Date(), url: 'u', by: 'auto' } } });
+  assert.equal((await post(`/api/review/${st.id}/verwerfen`, {})).status, 409);
+  await W().collection('pr_reviews').deleteOne({ strand: st.id });
   // Kein interner Weg legt an oder zieht zurück (Bedingung 4); lesen geht.
   const ip = (path: string, b: unknown) => fetch(B + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId: String(knut._id), ...(b as object) }) });
   assert.equal((await ip('/internal/orchestrator/freigabe', { strand: st.id })).status, 404);
