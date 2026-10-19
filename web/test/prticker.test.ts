@@ -283,18 +283,17 @@ test('Statuszeile: Sofort-Kommentar englisch mit Position/Tiefe/ETA, ein Takt po
   assert.match(k2.body.body, /^🔎 Automated review queued · position 1 · depth quick · ETA ~\d+ min \(OLAF Workspace\)/);
   assert.match(k3.body.body, /^🔎 Automated review queued · position 2 · depth deep \(static deep review — test execution is switched off\) · ETA ~\d+ min/);
   for (const k of [k2, k3]) assert.doesNotMatch(k.body.body, /[äöüßÄÖÜ]/, 'englisch');
-  assert.equal([k2, k3].filter((k) => /How this works: `@review` = fast review/.test(k.body.body)).length, 1, 'Erklärung einmal je Person');
+  assert.equal([k2, k3].filter((k) => /How this works: `@review` = fast review/.test(k.body.body)).length, 2, 'Anleitung an jedem Status-Kommentar');
   assert.match((k2.body.body + k3.body.body), /`@review deep` = additionally runs the repo's tests, typecheck, build and DB suites/);
   // dritter Takt: nichts Neues
   const n = posts.length; await R.reviewTick(deps); assert.equal(posts.length, n, 'kein Doppelpost');
   // Bearbeiten derselben Zeile (running), Fußzeile bleibt; gleiche Zeile nochmal = kein Aufruf
   const w2: any = await P.reviewsCol().findOne({ _id: `${W}#2@${SHA1}` as any });
-  const mitErkl = /How this works/.test(k2.body.body);
   await R.meldeStatus(w2, R.statusZeile({ art: 'running', tiefe: 'quick', eta: 12 }), deps);
   const ed = posts.at(-1);
   assert.equal(ed.method, 'PATCH'); assert.equal(ed.url, `/repos/${W}/issues/comments/4711`);
   assert.match(ed.body.body, /^🔎 Automated review running · depth quick · ETA ~12 min \(OLAF Workspace\)/);
-  assert.equal(/How this works/.test(ed.body.body), mitErkl);
+  assert.match(ed.body.body, /How this works/, 'Anleitung bleibt beim Bearbeiten');
   const n2 = posts.length; await R.meldeStatus(w2, R.statusZeile({ art: 'running', tiefe: 'quick', eta: 12 }), deps); assert.equal(posts.length, n2);
   // Pass C: ein langsamer Takt mit alter „queued“-Zeile überschreibt „running“ nicht
   await R.meldeStatus(w2, R.statusZeile({ art: 'queued', position: 1, tiefe: 'quick', eta: 9 }), deps, new Date(), { nurAnlegen: true }); assert.equal(posts.length, n2);

@@ -13,7 +13,7 @@
 //
 // Release 17c, Zusatz (Knut 17.10.: „direktes Feedback als Kommentar immer (Lauf läuft, ETA) … erkläre ihm Review und Deep
 // Review“): EINE Statuszeile je Review als PR-Kommentar (englisch), die der Takt bei jedem Zustandswechsel bearbeitet —
-// queued (Position, Tiefe, ETA) → running → retry/failed/skipped → done. Beim ersten Mal je GitHub-Login hängt eine kurze
+// queued (Position, Tiefe, ETA) → running → retry/failed/skipped → done. An jedem Status-Kommentar hängt eine kurze
 // Erklärung von `@review` und `@review deep` daran. Not-Aus: WERKBANK_REVIEW_STATUS=off.
 
 import { execFile } from 'node:child_process';
@@ -312,7 +312,7 @@ export function statusZeile(a: { art: StatusArt; position?: number; tiefe?: stri
   }
 }
 
-/** Einmal je Person: was `@review` und `@review deep` tun. */
+/** Kurze Anleitung an jedem Status-Kommentar: was `@review` und `@review deep` tun. */
 export function erklaerung(): string {
   return `\n\n<sub>How this works: \`@review\` = fast review, depth chosen by size — static analysis, PR context and comments, delta since the last review, then a cross-check by a second model; ~5–15 min. `
     + `\`@review deep\` = additionally runs the repo's tests, typecheck, build and DB suites (throw-away copy of a template database) on the workspace VM — not network-isolated, only for PRs by allow-listed authors; otherwise a static deep review; ~20–40 min. `
@@ -345,12 +345,13 @@ export async function meldeStatus(r: any, zeile: string, deps: Pick<ReviewDeps, 
     if (!claim.modifiedCount) return;
     const wer = String(doc?.by ?? r.by ?? '').toLowerCase() || '?';
     let fuss = '';
-    try { await erklaert().insertOne({ _id: wer as any, at: now, pr: `${r.repo}#${r.number}` }); fuss = erklaerung(); } catch (e: any) { if (e?.code !== 11000) throw e; }
+    // Knut 19.10.: die kurze Anleitung hängt an jedem Status-Kommentar, nicht nur beim ersten je Person (Tabelle bleibt als Log).
+    fuss = erklaerung();
+    try { await erklaert().insertOne({ _id: wer as any, at: now, pr: `${r.repo}#${r.number}` }); } catch (e: any) { if (e?.code !== 11000) throw e; }
     try {
       const res = await deps.status(r, zeile + fuss, null);
       await reviewsCol().updateOne({ _id: r._id }, { $set: { sk: { id: res.id, url: res.url, zeile, fuss, at: now } } });
     } catch (e: any) {
-      if (fuss) await erklaert().deleteOne({ _id: wer as any });   // Erklärung beim nächsten Review nachholen
       await reviewsCol().updateOne({ _id: r._id }, { $set: { sk: { id: null, fehler: scrub(e?.message ?? e), zeile, at: now } } });
       throw e;
     }
