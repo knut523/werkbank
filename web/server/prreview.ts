@@ -429,6 +429,8 @@ export const fussnote = (head: string, empf: string) => `\n\n---\n_Automated rev
 const gpLaufend = new Set<Promise<unknown>>();
 export const gegenpruefungenAbwarten = async () => { while (gpLaufend.size) await Promise.allSettled([...gpLaufend]); };
 const GP_MAX_MS = 45 * 60_000;
+/** Start dieses Prozesses: eine Gegenprüfung von davor lebt nicht mehr (sie läuft im Prozess) — sofort neu starten (Knut 19.10.). */
+export const PROZESS_START = new Date();
 const nachher = (x: unknown, ref: unknown) => !!x && !!ref && new Date(x as any).getTime() > new Date(ref as any).getTime();
 
 /** Gegenprüfung starten (nicht abwarten): Ergebnis ins Paket, Abgleich an den Strang; ohne Ergebnis direkt abschließen. */
@@ -467,7 +469,9 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
   for (const r of (await reviewsCol().find({ status: 'startet', startedAt: { $lt: new Date(now.getTime() - 15 * 60_000) }, $or: [{ execBis: null }, { execBis: { $lt: now } }] }).toArray()) as any[]) {
     await nochmal(r, 'Start abgebrochen (Neustart?)', now, deps);
   }
-  // 0b) Gegenprüfung ohne Ergebnis (Server-Neustart mitten im jcode-Lauf) → ohne Gegenprüfung abschließen
+  // 0a) Gegenprüfung aus einem früheren Prozess (Neustart der Web-App) → neu starten statt bis GP_MAX_MS zu hängen
+  await reviewsCol().updateMany({ status: 'gegenprüfung', gpStart: { $lt: PROZESS_START, $gte: new Date(now.getTime() - GP_MAX_MS) } }, { $set: { status: 'läuft' }, $unset: { gpStart: '', gp: '' } });
+  // 0b) Gegenprüfung ohne Ergebnis über GP_MAX_MS (hängt wirklich) → ohne Gegenprüfung abschließen
   await reviewsCol().updateMany({ status: 'gegenprüfung', gpStart: { $lt: new Date(now.getTime() - GP_MAX_MS) } }, { $set: { status: 'läuft', gp: { ok: false, at: now, fehler: 'abgebrochen (Neustart oder Zeitüberschreitung)' } } });
   // 1) laufende und im Abgleich
   for (const r of (await reviewsCol().find({ status: { $in: ['läuft', 'abgleich'] } }).toArray()) as any[]) {
