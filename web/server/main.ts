@@ -14,7 +14,7 @@ import { connect, wb, lc } from './db.ts';
 import { librechatLogin, createSession, destroySession, currentUser, allowed, teammates, userById, type User } from './auth.ts';
 import { listClaudeAccounts, addClaudeAccount, removeClaudeAccount, reorderClaudeAccounts, claudeAccountToken, claudeAccountsForBridge } from './creds.ts';
 import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraIdentity, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
-import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
+import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter, titelSuche } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, mirrorOf, mirrorSites, siteByPrefix, siteColumns, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
@@ -671,7 +671,13 @@ on('GET', /^\/api\/vault\/search$/, async (req, res, _m, url) => {
   await needUser(req);
   const q = (url.searchParams.get('q') ?? '').trim();
   if (!q) return send(res, 200, { hits: [] });
-  send(res, 200, { hits: await search(q, { team: url.searchParams.get('team') || undefined }) });
+  const team = url.searchParams.get('team') || undefined;
+  try { send(res, 200, { hits: await search(q, { team }) }); }
+  catch (e: any) {
+    // Walkthrough 19.10.: Suchdienst aus → „Interner Fehler.“ ohne Hinweis. Jetzt: Suche in Titeln und Dateinamen, mit Erklärung.
+    log('suche ersatz', { error: String(e?.message ?? e).slice(0, 120) });
+    send(res, 200, { hits: titelSuche(vaultIdx(), q, team), ersatz: 'Die Volltextsuche ist gerade nicht erreichbar (Suchdienst aus oder startet noch). Gezeigt werden Treffer in Titeln und Dateinamen.' });
+  }
 });
 
 on('POST', /^\/api\/vault\/reindex$/, async (req, res) => {

@@ -313,3 +313,12 @@ export function getIndex(root: string, maxAgeMs = 60_000): VaultIndex {
   return current;
 }
 export function invalidateIndex() { if (current) current.builtAt = 0; }
+
+/** Ersatzsuche ohne Suchdienst: alle Wörter müssen in Titel oder Pfad vorkommen; höchstens 30 Treffer, neueste zuerst. */
+export function titelSuche(idx: { notes: Map<string, { path: string; title: string; team: string; fm: Record<string, unknown>; mtime: number }> }, q: string, team?: string) {
+  const woerter = q.toLowerCase().split(/\s+/).filter(Boolean);
+  return [...idx.notes.values()]
+    .filter((n) => (!team || n.team === team) && woerter.every((w) => `${n.title} ${n.path}`.toLowerCase().includes(w)))
+    .sort((a, b) => b.mtime - a.mtime).slice(0, 30)
+    .map((n) => ({ path: n.path, title: n.title, team: n.team, type: String(n.fm.type ?? ''), status: String(n.fm.status ?? ''), snippet: '' }));
+}
