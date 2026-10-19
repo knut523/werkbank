@@ -80,6 +80,84 @@ export const AUTO_DENY = [
   'Read(~/.config/vw/**)', 'Read(~/.ssh/**)', 'Read(~/.claude/.credentials.json)', 'Edit(~/.claude/**)', 'Read(**/.env*)',
 ];
 
+/**
+ * Strang-Sperren als Deny-Regeln (Knut 19.10.2026, Fund 1/2): Im permissionMode `auto` ruft das CLI den PreToolUse-Hook
+ * der Brücke *nie* auf — der Sicherheits-Klassifikator entscheidet allein. Damit waren orchestratorBlock, die
+ * Leser-Erlaubnisliste und leitstandCheck im Auto-Modus wirkungslos; nur Deny-Regeln greifen dort (vor dem Klassifikator,
+ * auch unter `--bare`, und sie zerlegen auch `bash -c "…"`).
+ *
+ * Die Bash-Form ist bewusst grob (kann selten einen harmlosen Befehl mitsperren — im Zweifel sperren ist hier richtig).
+ * Fund 1, Review des Hauptchats: ein blankes `Bash(git push:*)` fängt die globalen Optionen vor dem Unterbefehl nicht
+ * (`git -C <dir> push`, `git -c x=y push` — genau der Fall, den orchestratorBlock prüft). `Bash(git * push*)` deckt sie
+ * mit ab; die Muster fürs Setzen von Zweigen und Remotes sind ebenso gebaut.
+ */
+export const ORCH_DENY: string[] = [
+  'Bash(*scripts/orch*)', 'Bash(orch-cli:*)',
+  'Bash(*x-werkbank-internal*)', 'Bash(*WERKBANK_INTERNAL_TOKEN*)',
+  'Bash(*localhost*/internal/*)', 'Bash(*127.0.0.1*/internal/*)', 'Bash(*0.0.0.0*/internal/*)', 'Bash(*[::1]*/internal/*)',
+  'Bash(*/proc/*environ*)', 'Bash(*.env.local*)',
+  'Bash(git push:*)', 'Bash(git * push*)',
+  'Bash(git send-pack:*)', 'Bash(git * send-pack*)',
+  'Bash(git update-ref:*)', 'Bash(git * update-ref*)',
+  'Bash(git symbolic-ref:*)', 'Bash(git * symbolic-ref*)',
+  'Bash(git replace:*)', 'Bash(git * replace*)',
+  'Bash(git remote add:*)', 'Bash(git * remote add*)',
+  'Bash(git remote set-url:*)', 'Bash(git * remote set-url*)',
+  'Bash(git remote rename:*)', 'Bash(git * remote rename*)',
+  'Bash(git branch -f:*)', 'Bash(git * branch -f*)',
+  'Bash(git branch -D:*)', 'Bash(git * branch -D*)',
+  'Bash(git branch -M:*)', 'Bash(git * branch -M*)',
+  'Bash(git branch --delete:*)', 'Bash(git * branch --delete*)',
+  'Bash(git branch --force:*)', 'Bash(git * branch --force*)',
+  'Bash(core.hooksPath:*)',
+];
+/** Leser-Profil: kein Netz (Fund 2). curl/wget sind nie Teil der Leser-Erlaubnisliste. */
+export const LESER_DENY: string[] = ['Bash(curl:*)', 'Bash(wget:*)'];
+
+/**
+ * Die Sperren für die MCP-Werkzeuge — **abgeleitet** aus `classify` statt von Hand gepflegt (Review des Hauptchats,
+ * 19.10.2026: eine Handliste hatte `addWorklogToJiraIssue` und die Werkbank-Schreibwerkzeuge übersehen). Was der
+ * Wächter im Strang ablehnt oder nachfragt, wird als Deny-Regel übersetzt: „blocked“ (Orchestrator-Werkzeuge außerhalb
+ * des Hauptchats) und „confirm“ (Jira-Schreiben, Register, agent_start) fragen im Strang niemanden — also sperren.
+ * Ein `auto`-Werkzeug bleibt dem Klassifikator. Neue Werkzeugnamen in classify sind damit automatisch mitgesperrt.
+ *
+ * Der Server heißt über die Brücke immer `atlassian` (claudehome.ts:99) — Knuts geteilte Konfiguration bringt einen
+ * eigenen Server `atlassian-pm` mit (`~/.claude.json:1618`), der über `strictMcpConfig` gar nicht erst lädt.
+ */
+export const ORCH_MCP_TOOLS: string[] = [
+  'mcp__vault-search__vault-outline', 'mcp__vault-search__vault-read', 'mcp__vault-search__vault-list',
+  'mcp__vault-search__vault-recent', 'mcp__vault-search__vault-links', 'mcp__vault-search__vault-backlinks',
+  'mcp__vault-search__vault-related', 'mcp__vault-search__vault-search',
+  'mcp__werkbank__delegieren', 'mcp__werkbank__delegation_stand', 'mcp__werkbank__delegation_urteil',
+  'mcp__werkbank__phase_wechseln', 'mcp__werkbank__orch_start', 'mcp__werkbank__orch_list', 'mcp__werkbank__orch_show',
+  'mcp__werkbank__orch_send', 'mcp__werkbank__orch_thema', 'mcp__werkbank__orch_review', 'mcp__werkbank__orch_ask',
+  'mcp__werkbank__orch_questions', 'mcp__werkbank__zusagen', 'mcp__werkbank__zusage_eintragen', 'mcp__werkbank__zusage_aendern',
+  'mcp__werkbank__thema_setzen', 'mcp__werkbank__hygiene_list', 'mcp__werkbank__hygiene_snooze', 'mcp__werkbank__skills_list',
+  'mcp__werkbank__review_ready', 'mcp__werkbank__jira_update', 'mcp__werkbank__jira_update_many', 'mcp__werkbank__agent_start',
+  'mcp__werkbank__hauptchat_melden', 'mcp__werkbank__challenge',
+  'mcp__atlassian__addCommentToJiraIssue', 'mcp__atlassian__editJiraIssue', 'mcp__atlassian__transitionJiraIssue',
+  'mcp__atlassian__createJiraIssue', 'mcp__atlassian__updateJiraIssue', 'mcp__atlassian__deleteJiraIssue',
+  'mcp__atlassian__addWorklogToJiraIssue', 'mcp__atlassian__createIssueLink', 'mcp__atlassian__editIssueLink',
+  'mcp__atlassian__deleteIssueLink', 'mcp__atlassian__getJiraIssue', 'mcp__atlassian__searchJiraIssuesUsingJql',
+  'mcp__atlassian__getVisibleJiraProjects', 'mcp__atlassian__lookupJiraAccountId', 'mcp__atlassian__atlassianUserInfo',
+];
+
+const ORCH_CTX = { workDir: '/', scope: 'voll', leit: false, guard: null as never } as const;
+
+/**
+ * Die Werkzeuge, die in einem Strang als Deny-Regel mitgehen: was `classify` dort „blocked“ oder „confirm“ nennt.
+ * Reine Funktion, damit sie ohne Brücke prüfbar ist (`strandDeny` in sessions.ts baut darauf auf).
+ */
+export function mcpDenyForStrang(tools: readonly string[] = ORCH_MCP_TOOLS): string[] {
+  return tools.filter((t) => { const c = classify(t, {}, ORCH_CTX as never); return c.cls === 'blocked' || c.cls === 'confirm'; });
+}
+/**
+ * Faul, nicht beim Laden: `classify` liest `FILE_TOOLS`, und das steht weiter unten — eine Konstante hier oben liefe
+ * in „Cannot access before initialization“ (19.10. geprüft). Gesperrt sind die Orchestrator-Werkzeuge außerhalb des
+ * Hauptchats und alles, was Jira oder das Register schreibt.
+ */
+export function orchMcpDeny(): string[] { return mcpDenyForStrang(); }
+
 const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
 /** Echter Pfad: realpath des tiefsten vorhandenen Vorfahren + Rest (ein Symlink auf den Vault zählt als Vault). */
