@@ -20,6 +20,7 @@ import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet } from './schlange.ts';
+import { auslastung, auslastungZeile } from './auslastung.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 
 export interface Sink {
@@ -80,6 +81,9 @@ interface Live {
   // Orchestrator (P2): gestartete Teilagenten (tool_use_id → Beschreibung), Starts in diesem Zug, Rolle je agent_id.
   subagents: Map<string, string>;
   subagentStarts: number;
+  /** melious_sub-Aufrufe in diesem Zug (Deckel) und ob Melious für die Person frei ist (Wächter: lesende Teilagenten → Melious). */
+  melSubs?: number;
+  melFrei?: boolean;
   agentTypes: Map<string, string>;
   // Orchestrator-Strang (docs/plan-orchestrator-agents.md): strengere Sperren, keine Rückfragen, Ausgang des Zuges.
   orch: boolean;
@@ -247,6 +251,7 @@ function saveMap() {
 }
 
 const lives = new Map<string, Live>();       // Unterhaltung → laufende Sitzung
+const letzteStufe = new Map<string, string>();   // Lead: zuletzt gemeldete Auslastungsstufe (nur bei Wechsel neu melden)
 
 // ---------- Nachreichen während des Zugs (docs/plan-hauptchat-monitor.md, S1; Knut 12.10.2026: „Ich kann nichts eingeben,
 // wenn er arbeitet, ich kann ihn nur stoppen.“) ----------
@@ -570,6 +575,8 @@ export const LEITSTAND_APPEND = `Dieser Chat ist der HAUPTCHAT (früher „Leits
 const ORCH_APPEND = `Dieser Chat ist ein Orchestrator-Strang: Die Haupt-Sitzung hat dich gestartet, Knut liest mit. Hier gibt es KEINE Rückfragen — was im Chat ein „ja“ bräuchte, wird abgelehnt. Schreib solche Punkte stattdessen unter „### Stand“ → „Braucht Knut“. GitHub schreiben (push, PR), Jira/Confluence schreiben, Git-Konfiguration, Git-Hooks, .claude/ und .env sind gesperrt; versuch nicht, das zu umgehen. Lokale Commits im Arbeitsordner sind erlaubt, wenn der Auftrag sie verlangt. Braucht der Hauptchat etwas von dir, BEVOR du fertig bist — ein Blocker, der die Arbeit anhält und eine Entscheidung von Knut braucht, oder ein Risiko/eine Planänderung, die den Auftrag ändert —, meld es mit dem Werkzeug hauptchat_melden (kurz, mit Empfehlung). Kein Fortschritt dorthin: der gehört in den Abschnitt „### Stand“. Höchstens eine Meldung je 10 Minuten.`;
 /** Profil „release“ (Plan 213, Knut 17.10.): lokal mergen im zugewiesenen Worktree. */
 const RELEASE_APPEND = `Release-Strang: In deinem Arbeitsordner (einem Release-Worktree der Werkbank) darfst du lokal mergen — genau in der Form \`git -C <Arbeitsordner> merge …\` (auch --abort/--continue), als einzelner Befehl ohne && oder ;. Konflikte löst du mit Edit im Arbeitsordner, dann \`git -C <Arbeitsordner> add …\` und den Merge-Commit. Push, Live-Schalten (werkbank.sh, Live-Instanz, release-live-Skripte) und alles außerhalb des Arbeitsordners bleiben gesperrt — das macht die Hauptsitzung.`;
+/** Knut 19.10. (native Verteilung): wofür Melious, wofür Claude — gilt für Lead und Stränge. */
+const MEL_SUB_HINT = `Verteilung Claude ↔ Melious: Lesen, Suchen im Code, Recherche und Gegenprüfen gibst du mit dem Werkzeug melious_sub an Melious (jcode, nur lesend; modell „flash“ für Fan-out, „glm“ für Urteile) — mehrere Aufrufe dürfen parallel laufen. Das Ergebnis ist ein Kandidat: am Code nachprüfen, bevor du es übernimmst. Code schreiben, Entscheidungen und Antworten an Knut bleiben bei dir (Claude). Lesende Claude-Teilagenten (leser, strang-leser, ticket-pruefer, Explore) leitet der Workspace auf Melious um; nur wenn Melious nicht reicht, „[claude]“ in die description. Die Claude-Auslastung zeigt das Werkzeug auslastung.`;
 
 export function safeId(s: string): string {
   return /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : createHash('sha256').update(s).digest('hex').slice(0, 24);
@@ -971,6 +978,13 @@ function makeGuard(live: Live) {
         return decide('deny', `In einem Orchestrator-Strang gesperrt (${why}). Nicht erneut versuchen, nicht umgehen; schreib unter „### Stand“ → „Braucht Knut“, was zu tun wäre.`);
       }
     }
+    // Knut 19.10. (native Verteilung): lesende Teilagenten aus Lead und Strängen laufen auf Melious (melious_sub), solange
+    // Melious für die Person frei ist. „[claude]“ in der description erzwingt Claude (wenn Melious nicht reicht).
+    if ((tool === 'Task' || tool === 'Agent') && !agentId && (live.orch || live.leit) && !live.worker && live.melFrei
+      && LESE_TEILAGENTEN.has(String(toolInput.subagent_type ?? '')) && !/\[claude\]/i.test(String(toolInput.description ?? ''))) {
+      emitStatus(live, `🇪🇺 Lesender Teilagent „${String(toolInput.subagent_type)}“ → Melious (melious_sub)`);
+      return decide('deny', 'Lesende Teilaufgaben laufen standardmäßig auf Melious: ruf das Werkzeug melious_sub mit demselben Auftrag auf (modell „flash“, für Urteile „glm“) und prüf das Ergebnis am Code. Nur wenn Melious nicht reicht: denselben Teilagenten mit „[claude]“ in der description starten.');
+    }
     if ((tool === 'Task' || tool === 'Agent') && !agentId) {
       // Obergrenze an Teilagenten je Zug (Kosten).
       if (live.subagentStarts >= maxSubagents()) {
@@ -1242,7 +1256,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
     jiraCalls: new Map(), inboxCalls: new Set(), onJiraWrite: req.onJiraWrite, home: '',
     mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
-    subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: kind === 'strand' || kind === 'worker', leit: kind === 'leitstand', worker: kind === 'worker', ...(kind === 'strand' ? { req } : {}),
+    subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: kind === 'strand' || kind === 'worker', leit: kind === 'leitstand', worker: kind === 'worker', ...(kind === 'strand' || kind === 'leitstand' ? { req } : {}),   // Lead auch: melious_sub braucht Konten und Buchung des Zugs
     // Posteingang ab Zugbeginn: Nachreichen geht auch, während Kontext-Paket und Konten noch laden (Bild-Prüfung Plan 154).
     inbox: nachreichenOn() ? newInbox([]) : null,
   };
@@ -1335,6 +1349,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // nicht nur Überlauf), verteilt über die Modelle ihrer Rolle.
   const profil: Profil = live.orch ? orchMap[key]?.profil ?? 'voll' : 'voll';
   const melAcc = accounts.find(isMelious);
+  // Knut 19.10.: lesende Teilagenten laufen auf Melious, wenn es für die Person frei ist (Wächter, melious_sub).
+  live.melFrei = !!melAcc && meliousUsable(melAcc, exhaustedOf(safeId(req.userId)), Date.now()) && melSubAn();
   // Überlauf auf Melious nur bei niedrigem Risiko (Modellwahl v2): Hauptchat nie, Stränge nur mit Risiko „niedrig“, Chats ja.
   const risiko: Risiko = live.leit ? 'hoch' : orchMap[key]?.risiko ?? (live.orch ? 'mittel' : 'niedrig');
   // Energietopf nahe der Obergrenze (vorrang, Werkbank): niedrig-riskante Arbeit zuerst auf Melious, damit nichts verfällt.
@@ -1389,7 +1405,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}${profil === 'release' ? `\n\n${RELEASE_APPEND}` : ''}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}${profil === 'release' ? `\n\n${RELEASE_APPEND}` : ''}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melSubAn() ? MEL_SUB_HINT : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, isMelious(acct) ? req.token : acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim
@@ -1489,6 +1505,11 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   };
   onAccount(acct);
   if (isMelious(acct)) emitStatus(live, meliousLine(options.model, req.model, acct.abo));
+  // Auslastung im Lead (Knut 19.10.): beim ersten Zug und wenn die Stufe wechselt — sonst Ruhe.
+  if (live.leit && process.env.BRIDGE_AUSLASTUNG !== 'off') {
+    const a = await auslastung().catch(() => null);
+    if (a && letzteStufe.get(key) !== a.stufe) { letzteStufe.set(key, a.stufe); emitStatus(live, auslastungZeile(a, melAcc && live.melFrei ? { rest: melAcc.rest ?? null } : null)); }
+  }
 
   let release = acquire(key, acct);   // ab hier läuft der Zug auf diesem Konto (Lastverteilung); frei im finally
   log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers), permissionMode: live.mode, ...(accounts.length > 1 ? { konto: acct.id, konten: accounts.length } : {}), ...(isMelious(acct) ? { melious: true, rest: acct.rest } : {}) });
@@ -1835,6 +1856,32 @@ export function jcodeWritesOutside(sessionJson: any, cwd: string): string[] {
   }
   return out;
 }
+/** jcode einmal laufen lassen (Melious-Profil). Wächter (Pilot 183): shim/bash vorn in PATH lässt nur lesende Shell-Befehle durch. */
+function jcodeSpawn(o: { cwd: string; prompt: string; model: string | null; tools: string; key: string; timeoutS: number; abbruch?: () => boolean }): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key };
+  return new Promise((res) => {
+    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', o.prompt], { cwd: o.cwd, env });
+    let so = '', se = '';
+    c.stdout.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
+    c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
+    const timer = setTimeout(() => c.kill('SIGTERM'), o.timeoutS * 1000);
+    const stopper = setInterval(() => { if (o.abbruch?.()) c.kill('SIGTERM'); }, 2000);
+    c.on('close', (code) => { clearTimeout(timer); clearInterval(stopper); res({ code, stdout: so, stderr: se }); });
+    c.on('error', () => { clearTimeout(timer); clearInterval(stopper); res({ code: -1, stdout: so, stderr: se }); });
+  });
+}
+/** jcode-Ausgabe (JSON) und Sitzungsdatei → Antwort, Nutzung, gelaufenes Modell, Schreibzugriffe außerhalb des Ordners. */
+function jcodeAuswerten(out: { stdout: string }, cwd: string, model: string | null): { j: any; usage: MeliousUsage; draussen: string[]; gelaufen: string } {
+  let j: any = null; try { j = JSON.parse(out.stdout); } catch { /* unten */ }
+  let usage: MeliousUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  let draussen: string[] = [];
+  if (j?.session_id && /^[\w.-]{1,120}$/.test(j.session_id)) {
+    try { const sj = JSON.parse(readFileSync(join(homedir(), '.jcode', 'sessions', `${j.session_id}.json`), 'utf8')); usage = jcodeUsage(sj); draussen = jcodeWritesOutside(sj, cwd); } catch { /* ohne Sitzungsdatei */ }
+  }
+  if (!usageTotal(usage) && j?.usage) usage = { input: Math.max(0, (j.usage.input_tokens || 0) - (j.usage.cache_read_input_tokens || 0)), output: j.usage.output_tokens || 0, cacheRead: j.usage.cache_read_input_tokens || 0, cacheWrite: 0 };
+  return { j, usage, draussen, gelaufen: String(j?.model ?? model ?? 'glm-5.3-flash') };
+}
+
 async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> {
   if (!jcodeAn() || d.rolle === 'pruefer') return null;
   const e = orchMap[d.workerKey];
@@ -1850,26 +1897,8 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   const model = gewaehlt === 'auto' || (mel.faktoren && !mel.faktoren[gewaehlt]) ? null : gewaehlt;
   const tools = d.rolle === 'leser' ? 'read,bash,agentgrep' : 'read,bash,write,edit,agentgrep';
   const t0 = Date.now();
-  // Wächter (Pilot 183, 15.10.): shim/bash vorn in PATH lässt nur lesende Shell-Befehle durch (jcode hat keine Sandbox).
-  const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: mel.token };
-  const out = await new Promise<{ code: number | null; stdout: string; stderr: string }>((res) => {
-    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', ...(model ? ['--model', model] : []), '--tools', tools, 'run', '--json', prompt], { cwd: d.cwd, env });
-    let so = '', se = '';
-    c.stdout.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
-    c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
-    const timer = setTimeout(() => c.kill('SIGTERM'), envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60) * 1000);
-    const stopper = setInterval(() => { if (d.aborted) c.kill('SIGTERM'); }, 2000);
-    c.on('close', (code) => { clearTimeout(timer); clearInterval(stopper); res({ code, stdout: so, stderr: se }); });
-    c.on('error', () => { clearTimeout(timer); clearInterval(stopper); res({ code: -1, stdout: so, stderr: se }); });
-  });
-  let j: any = null; try { j = JSON.parse(out.stdout); } catch { /* unten */ }
-  let usage: MeliousUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  let draussen: string[] = [];
-  if (j?.session_id && /^[\w.-]{1,120}$/.test(j.session_id)) {
-    try { const sj = JSON.parse(readFileSync(join(homedir(), '.jcode', 'sessions', `${j.session_id}.json`), 'utf8')); usage = jcodeUsage(sj); draussen = jcodeWritesOutside(sj, d.cwd); } catch { /* ohne Sitzungsdatei */ }
-  }
-  if (!usageTotal(usage) && j?.usage) usage = { input: Math.max(0, (j.usage.input_tokens || 0) - (j.usage.cache_read_input_tokens || 0)), output: j.usage.output_tokens || 0, cacheRead: j.usage.cache_read_input_tokens || 0, cacheWrite: 0 };
-  const gelaufen = String(j?.model ?? model ?? 'glm-5.3-flash');
+  const out = await jcodeSpawn({ cwd: d.cwd, prompt, model, tools, key: mel.token, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted });
+  const { j, usage, draussen, gelaufen } = jcodeAuswerten(out, d.cwd, model);
   const energie = mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0;
   d.input += usage.input + usage.cacheRead; d.output += usage.output; d.energie += energie;
   d.modell = `Melious ${gelaufen} (jcode)`; d.konto = mel.id; d.anbieter = 'melious';
@@ -1879,6 +1908,59 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   if (draussen.length) { log('worker jcode ausserhalb', { delegation: d.id, pfade: draussen.slice(0, 10) }); return `jcode-Ergebnis verworfen: Der Worker hat außerhalb des Arbeitsordners geschrieben (${draussen.slice(0, 5).join(', ')}). Bitte prüfen und ggf. zurücksetzen.`; }
   if (out.code !== 0 || !j) return `jcode-Lauf fehlgeschlagen (Exit ${out.code}). ${String(out.stderr).split('\n').filter(Boolean).slice(-3).join(' · ').slice(0, 600)}`;
   return String(j.text ?? '');
+}
+
+// ---------- melious_sub (Knut 19.10.: „nativ mehr auf Melious und Claude verteilen“) ----------
+// Lesen, Recherche und Gegenprüfen aus Lead und Strängen laufen standardmäßig auf Melious über jcode — wie ~/bin/mel-sub, aber
+// mit dem Melious-Konto der Person und gebucht wie ein Worker. Synchron, nur lesend (shim/bash), im Arbeitsordner des Zugs.
+// Code schreiben und entscheiden bleibt auf Claude. BRIDGE_MEL_SUB=off schaltet ab (dann wieder Claude-Teilagenten).
+export const melSubAn = () => process.env.BRIDGE_MEL_SUB !== 'off' && existsSync(JCODE_BIN());
+const MEL_SUB_MODELL: Record<string, string> = { flash: 'glm-5.3-flash', glm: 'glm-5.3' };
+/** Rollen der Teilagenten, die nur lesen — die gehen standardmäßig an Melious. */
+export const LESE_TEILAGENTEN = new Set(['leser', 'strang-leser', 'ticket-pruefer', 'Explore']);
+
+async function melKonto(live: Live, userId: string): Promise<Account | null> {
+  try {
+    const mel = normalizeAccounts(live.req?.accounts ? await live.req.accounts() : [], live.req?.token).find(isMelious);
+    return mel && meliousUsable(mel, exhaustedOf(safeId(userId)), Date.now()) ? mel : null;
+  } catch { return null; }
+}
+
+export async function melSub(userId: string, convId: string, b: { auftrag?: unknown; modell?: unknown }): Promise<Res> {
+  const key = `${safeId(userId)}:${safeId(convId)}`;
+  const live = lives.get(key);
+  if (!live?.req) return { ok: false, status: 409, error: 'melious_sub geht nur während eines laufenden Zugs.' };
+  if (live.worker) return { ok: false, status: 403, error: 'Worker rufen melious_sub nicht auf.' };
+  if (!melSubAn()) return { ok: false, status: 503, error: 'jcode fehlt oder BRIDGE_MEL_SUB=off — nimm einen Teilagenten über Claude.' };
+  const auftrag = String(b.auftrag ?? '').trim();
+  if (!auftrag) return { ok: false, status: 400, error: 'auftrag fehlt.' };
+  if (auftrag.length > KAPPUNG.auftrag) return { ok: false, status: 400, error: `auftrag ist ${auftrag.length} Zeichen lang, höchstens ${KAPPUNG.auftrag} — kürzen oder aufteilen.` };
+  if ((live.melSubs ?? 0) >= 2 * maxSubagents()) return { ok: false, status: 429, error: `Höchstens ${2 * maxSubagents()} Melious-Teilagenten je Nachricht.` };
+  const mel = await melKonto(live, userId);
+  if (!mel) return { ok: false, status: 409, error: 'Melious ist für dich gerade nicht verfügbar (kein Konto, erschöpft oder gesperrt) — nimm einen Teilagenten über Claude ([claude] in der description).' };
+  live.melSubs = (live.melSubs ?? 0) + 1;
+  const model = MEL_SUB_MODELL[String(b.modell ?? 'flash')] ?? MEL_SUB_MODELL.flash;
+  const cwd = orchMap[key]?.dir ?? live.workDir ?? cwdMap[key] ?? homedir();
+  const t0 = Date.now();
+  emitStatus(live, `🇪🇺 Melious-Teilagent (${model}, jcode): ${auftrag.replace(/\s+/g, ' ').slice(0, 80)}${auftrag.length > 80 ? '…' : ''}`);
+  const out = await jcodeSpawn({ cwd, prompt: `${auftrag}\n\n(Nur lesen: nichts ändern, nichts installieren, keine Repo-Skripte ausführen.)`, model, tools: 'read,bash,agentgrep', key: mel.token,
+    timeoutS: envZahl('BRIDGE_MEL_SUB_TIMEOUT_S', 900, 60), abbruch: () => live.abort.signal.aborted });
+  const { j, usage, gelaufen } = jcodeAuswerten(out, cwd, model);
+  const energie = mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0;
+  try { live.req.onMeliousUsage?.(usage, gelaufen); } catch { /* egal */ }
+  // Gebucht wie ein Worker des Zugs (Budget und Messung zählen ihn beim Strang bzw. Hauptchat).
+  try { live.req.onTurnLog?.({ conv: convId, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${gelaufen} (jcode, melious_sub)`, input: usage.input + usage.cacheRead, output: usage.output, cacheRead: usage.cacheRead, energie, outcome: out.code === 0 && j ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: 'mel-sub', parent: key } as ZugLog); } catch { /* egal */ }
+  log('mel-sub', { conv: key, modell: gelaufen, exit: out.code, ms: Date.now() - t0, ...usage, energie: Math.round(energie) });
+  if (out.code !== 0 || !j) return { ok: true, text: `melious_sub fehlgeschlagen (Exit ${out.code}) — nimm denselben Auftrag als Teilagent über Claude ([claude] in der description).` };
+  return { ok: true, text: `${String(j.text ?? '(keine Antwort)')}\n\n— melious_sub · ${gelaufen} · jcode · ≈ ${Math.round(energie)} Energie · Ergebnis ist ein Kandidat: am Code nachprüfen.` };
+}
+
+/** Auslastung für das Werkzeug `auslastung` (Lead): cswap + Melious-Rest des Kontos der Person. */
+export async function auslastungFuer(userId: string, convId: string): Promise<Res> {
+  const live = lives.get(`${safeId(userId)}:${safeId(convId)}`);
+  const a = await auslastung();
+  const mel = live?.req ? await melKonto(live, userId) : undefined;
+  return { ok: true, text: auslastungZeile(a, mel === undefined ? undefined : mel ? { rest: mel.rest ?? null } : null) };
 }
 
 async function runWorker(d: Deleg, prompt: string): Promise<string> {

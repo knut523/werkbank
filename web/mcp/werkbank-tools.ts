@@ -324,6 +324,21 @@ serve('werkbank', '0.1.0', [
   }] : []),
   // Delegieren und Phasen-Lead (Plan 165): nur in Strängen; die Brücke kennt Person und Strang aus dieser Umgebung.
   ...(process.env.WERKBANK_STRANG === '1' && process.env.WERKBANK_BRIDGE_URL ? DELEG_TOOLS : []),
+  // Native Verteilung Claude ↔ Melious (Knut 19.10.): Lead und Stränge.
+  ...(process.env.WERKBANK_BRIDGE_URL ? [
+    {
+      name: 'melious_sub',
+      description: 'Teilagent auf Melious (EU, jcode, nur lesend) im Arbeitsordner dieses Chats — Standard für Lesen, Suchen im Code, Recherche und Gegenprüfen; spart Claude. modell: flash (Vorgabe, Fan-out) oder glm (Urteile). Synchron, Ergebnis ist ein Kandidat: am Code nachprüfen. Code schreiben und Entscheidungen bleiben bei Claude.',
+      inputSchema: { type: 'object', properties: { auftrag: { type: 'string', description: 'vollständiger Auftrag, mit Pfaden und gewünschtem Ergebnisformat (z. B. Datei:Zeile)' }, modell: { type: 'string', enum: ['flash', 'glm'] } }, required: ['auftrag'] },
+      run: async (a: any) => bridge('/internal/mel-sub', { auftrag: a.auftrag, modell: a.modell ?? 'flash' }, Number(process.env.WERKBANK_MEL_SUB_TIMEOUT_MS) || 960_000),
+    },
+    {
+      name: 'auslastung',
+      description: 'Claude-Auslastung (cswap: 5-Stunden- und Wochenfenster, Stufe grün/gelb/rot) und Melious-Rest — mit der Regel, was gerade an Melious geht.',
+      inputSchema: { type: 'object', properties: {} },
+      run: async () => bridge('/internal/auslastung', {}, 30_000),
+    },
+  ] : []),
   // Gegenprüfung durch GLM 5.3 über Melious (Plan 162; Knut 15.10.: „Lead kann jeweils sowieso challengen mit GLM 5.3“).
   {
     name: 'challenge',
