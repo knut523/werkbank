@@ -192,6 +192,13 @@ export function PrReviewAbschnitt({ id, pr, onDone }: { id: string; pr: any; onD
         <textarea rows={2} value={hinweis} placeholder="Hinweis für den PR (englisch), z. B. warum es trotzdem hilft" aria-label="Hinweis für den PR" onChange={(x) => setHinweis(x.target.value)} style={{ width: '100%' }} /></div>}
       {pr.text && <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
         {!pr.posted && <button className="btn small primary" disabled={!!busy || pr.schreibenAus || (unvoll && !hinweis.trim())} onClick={() => go('COMMENT', 'Kommentar')} data-testid="kommentar-posten">Kommentar posten</button>}
+        {!pr.posted && !pr.verworfen && pr.status === 'fertig' && <button className="btn small ghost" disabled={!!busy} data-testid="verwerfen" onClick={async () => {
+          if (!confirm(`Entwurf für ${pr.repo}#${pr.number} verwerfen? Er wird nicht gepostet, die Erinnerung entfällt.`)) return;
+          setBusy('verwerfen'); setMsg(null);
+          try { await api(`/api/review/${id}/verwerfen`, { body: {} }); setMsg({ ok: true, text: 'Verworfen — wird nicht gepostet.' }); onDone(); }
+          catch (e: any) { setMsg({ ok: false, text: String(e?.message ?? e) }); } finally { setBusy(''); }
+        }}>Verwerfen</button>}
+        {pr.verworfen && <span className="tiny muted" data-testid="verworfen">verworfen ({pr.verworfen.by})</span>}
         <button className="btn small" disabled={!!busy || pr.schreibenAus || unvoll} onClick={() => go('APPROVE', 'Approve')} data-testid="approve">Approve</button>
         <button className="btn small" disabled={!!busy || pr.schreibenAus || (unvoll && !hinweis.trim())} onClick={() => go('REQUEST_CHANGES', 'Änderungen verlangen')} data-testid="request-changes">Änderungen verlangen</button>
         <button className="btn small ghost" onClick={() => navigator.clipboard?.writeText(pr.text).then(() => setMsg({ ok: true, text: 'Text kopiert.' }))}>Text kopieren</button>

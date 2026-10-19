@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import YAML from 'yaml';
 
 export type ExecModus = 'local-allowlist' | 'off' | 'docker-remote' | 'managed-agents';
 export const execModus = (env = process.env): ExecModus => {
@@ -206,6 +207,53 @@ export function ciSkripte(wt: string): string[] {
   return out;
 }
 
+// ---------- Umgebung aus der CI (Paket 223: #364 deep — 3 Suiten rot nur wegen fehlender CI-Umgebung) ----------
+
+export interface CiEnv { env: Record<string, string>; secrets: string[]; db: boolean }
+/** Platzhalter für die Review-DB in übernommenen Werten (Postgres auf localhost in der CI). */
+export const REVIEW_DB = '__REVIEW_DB__';
+/** Nie aus der CI übernehmen: Laufzeit, Zugang zu GitHub/Git, npm-Einstellungen, Heap/Shard; DB_* setzt die Review-DB. */
+const NIE = /^(PATH|HOME|TMPDIR|NODE_OPTIONS|NODE_PATH|SHELL|USER|LD_\w*|BASH_ENV|ENV|\w*_PROXY|GH_TOKEN|GITHUB_\w*|ACTIONS_\w*|RUNNER_\w*|GIT_\w*|SSH_\w*|npm_config_\w*|NPM_TOKEN|BW_SESSION|DB_(HOST|PORT|USER|PASSWORD|NAME|SSL))$/i;
+const PG_LOKAL = /^postgres(?:ql)?:\/\/[^@\s]*@(?:127\.0\.0\.1|localhost)(?::\d+)?\/[\w-]+(?:\?\S*)?$/;
+
+/**
+ * Liest nur Dateien: je `npm run X` aus .github/workflows/*.yml die Umgebung, mit der die CI es startet — env von Workflow, Job,
+ * Schritt und Inline-`VAR=wert` davor. `${{ secrets.N }}` → secrets (Suite wird übersprungen), `${{ env.N }}` aufgelöst, jeder andere
+ * Ausdruck fällt weg; Postgres-URLs auf localhost → REVIEW_DB. Erstes Vorkommen eines Skripts gilt.
+ */
+export function ciUmgebung(wt: string): Map<string, CiEnv> {
+  const out = new Map<string, CiEnv>();
+  const dir = join(wt, '.github', 'workflows');
+  if (!existsSync(dir)) return out;
+  const obj = (x: any): Record<string, string> => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, String(v)])) : {});
+  for (const f of readdirSync(dir).filter((x) => /\.ya?ml$/.test(x)).sort()) {
+    let doc: any; try { doc = YAML.parse(readFileSync(join(dir, f), 'utf8')); } catch { continue; }
+    for (const job of Object.values<any>(doc?.jobs ?? {})) {
+      for (const st of Array.isArray(job?.steps) ? job.steps : []) {
+        if (typeof st?.run !== 'string') continue;
+        const basis = { ...obj(doc?.env), ...obj(job?.env), ...obj(st?.env) };
+        for (const m of st.run.matchAll(/((?:\b[A-Z_][A-Z0-9_]*=\S+\s+)*)npm run ([\w:.-]+)/g)) {
+          if (out.has(m[2])) continue;
+          const roh: Record<string, string> = { ...basis };
+          for (const kv of m[1].trim().split(/\s+/).filter(Boolean)) { const i = kv.indexOf('='); roh[kv.slice(0, i)] = kv.slice(i + 1); }
+          const e: CiEnv = { env: {}, secrets: [], db: false };
+          for (const [k, v0] of Object.entries(roh)) {
+            if (NIE.test(k)) continue;
+            const sec = /\$\{\{\s*secrets\.(\w+)\s*\}\}/.exec(v0);
+            if (sec) { e.secrets.push(sec[1]); continue; }
+            const ref = /^\$\{\{\s*env\.(\w+)\s*\}\}$/.exec(v0.trim());
+            const v = ref ? roh[ref[1]] ?? '' : v0;
+            if (!v || v.includes('${{')) continue;
+            if (PG_LOKAL.test(v)) { e.env[k] = REVIEW_DB; e.db = true; } else e.env[k] = v;
+          }
+          out.set(m[2], e);
+        }
+      }
+    }
+  }
+  return out;
+}
+
 /** Rein: Reihenfolge der Schritte — Grundskripte (typecheck, lint, test…), dann CI-Suiten, die eine geänderte Datei berühren,
  *  dann build, dann die übrigen CI-Suiten, solange der Deckel reicht. */
 export function skriptPlan(grund: string[], ci: string[], scripts: Record<string, string>, geaendert: string[]): string[] {
@@ -223,7 +271,7 @@ export function ergebnisMd(job: ExecJob, e: Omit<ExecErgebnis, 'md'>): string {
   const kopf = `# Tests — ${job.repo}#${job.number} @ ${job.head.slice(0, 7)}\n\n**${e.ausgefuehrt ? BESCHRIFTUNG : `static deep review — ${e.grund}`}**\n`;
   if (!e.ausgefuehrt) return `${kopf}\nNo commands from the PR were executed.\n`;
   const db = e.db ? `\nDatabase: copy of template \`${e.db.vorlage}\` (${e.db.neu ? 'built for this migration state' : 'reused'}), only the PR's new migrations applied, dropped afterwards.\n` : e.dbHinweis ? `\nDatabase: ${e.dbHinweis}\n` : '';
-  const tab = ['| step | result | minutes |', '|---|---|---|', ...e.schritte.map((s) => `| ${s.name} | ${s.timedOut ? 'timed out' : s.code === -1 ? 'skipped (no database)' : s.code === 0 ? 'passed' : `failed (exit ${s.code})`} | ${s.minuten} |`)].join('\n');
+  const tab = ['| step | result | minutes |', '|---|---|---|', ...e.schritte.map((s) => `| ${s.name} | ${s.timedOut ? 'timed out' : s.code === -1 ? `skipped (${s.tail.replace(/^skipped: /, '') || 'no database'})` : s.code === 0 ? 'passed' : `failed (exit ${s.code})`} | ${s.minuten} |`)].join('\n');
   const fehl = e.schritte.filter((s) => s.code !== 0 && s.code !== -1).map((s) => `\n## ${s.name} — last lines\n\n\`\`\`text\n${s.tail.replace(/```/g, "'''")}\n\`\`\`\n`).join('');
   return `${kopf}${db}\n${tab}\n${fehl}`;
 }
@@ -268,11 +316,13 @@ export function lokalAdapter(d: LokalDeps = {}): ExecAdapter {
       // olaf-admin baut die Verbindung aus DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME (src/lib/prisma.ts), nicht aus DATABASE_URL (19.10.).
       let dbEnv: Record<string, string> = {};
       let belegt: string | null = null;   // Review-DB dieses Laufs (wird im finally immer gelöscht)
-      const schritt = async (name: string, cmd: string, args: string[]) => {
+      const schritt = async (name: string, cmd: string, args: string[], ciEnv: Record<string, string> = {}) => {
         const rest = ende - jetzt();
         if (rest < 10_000) { schritte.push({ name, code: 124, minuten: 0, timedOut: true, tail: 'overall time limit reached' }); return false; }
         const t0 = jetzt();
-        const r = await run(cmd, args, { cwd: job.wt, env: leereUmgebung({ home, npmCache, extra: dbUrl ? { DATABASE_URL: dbUrl, ...dbEnv } : {} }), timeoutMs: Math.min(rest, 8 * 60_000) });
+        // CI-Werte zuerst, die Review-DB danach (sie gewinnt immer); REVIEW_DB → die URL dieses Laufs.
+        const ci = Object.fromEntries(Object.entries(ciEnv).filter(([k]) => !NIE.test(k)).map(([k, v]) => [k, v === REVIEW_DB ? dbUrl ?? '' : v]));
+        const r = await run(cmd, args, { cwd: job.wt, env: leereUmgebung({ home, npmCache, extra: { ...ci, ...(dbUrl ? { DATABASE_URL: dbUrl, ...dbEnv } : {}) } }), timeoutMs: Math.min(rest, 8 * 60_000) });
         schritte.push({ name, code: r.code, minuten: Math.round((jetzt() - t0) / 6000) / 10, timedOut: !!r.timedOut, tail: maske(r.out.trim().split('\n').slice(-40).join('\n').slice(-6000)) });
         return r.code === 0;
       };
@@ -320,10 +370,14 @@ export function lokalAdapter(d: LokalDeps = {}): ExecAdapter {
           }
         }
         const geaendert = job.basis && d.git ? (await d.git(['diff', '--name-only', `${job.basis}...HEAD`], job.wt).catch(() => '')).split('\n').map((x) => x.trim()).filter(Boolean) : [];
+        const ciEnv = ciUmgebung(job.wt);
         for (const s of skriptPlan(SKRIPTE(env), ciSkripte(job.wt), scripts, geaendert)) {
+          const c = ciEnv.get(s);
+          // Braucht die CI dafür ein Secret, das wir nie haben → übersprungen mit Namen, kein falsches Rot (Paket 223).
+          if (c?.secrets.length) { schritte.push({ name: `npm run ${s}`, code: -1, minuten: 0, timedOut: false, tail: `skipped: needs secret ${c.secrets.join(', ')}` }); continue; }
           // DB-Suiten ohne Datenbank melden sonst ein falsches Grün (19.10.: Probe auf olaf-admin#364) → als übersprungen führen.
-          if (!dbUrl && /(^|:)(test:)?db(:|$)|:db:/.test(s) && existsSync(join(job.wt, 'prisma', 'migrations'))) { schritte.push({ name: `npm run ${s}`, code: -1, minuten: 0, timedOut: false, tail: 'skipped: no review database' }); continue; }
-          await schritt(`npm run ${s}`, 'npm', ['run', s, '--if-present']);
+          if (!dbUrl && (c?.db || (/(^|:)(test:)?db(:|$)|:db:/.test(s) && existsSync(join(job.wt, 'prisma', 'migrations'))))) { schritte.push({ name: `npm run ${s}`, code: -1, minuten: 0, timedOut: false, tail: 'skipped: no review database' }); continue; }
+          await schritt(`npm run ${s}`, 'npm', ['run', s, '--if-present'], c?.env);
         }
         return fertig();
       } finally {

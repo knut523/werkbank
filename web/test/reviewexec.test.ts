@@ -223,6 +223,36 @@ test('19.10.: Repos ohne `test` (olaf-admin) — die CI-Suiten laufen, passende 
   // mit Prisma-Migrationen, aber ohne Review-DB: DB-Suiten nicht „grün“, sondern übersprungen
   mkdirSync(join(wt, 'prisma', 'migrations'), { recursive: true });
   const e2 = await X.lokalAdapter({ run: s.run, pg: null, env: { HOME: TMP } as any, git: async (a) => (a[0] === 'diff' ? 'src/lib/follow-up-staff-opt-out.ts\n' : ''), base: join(TMP, 'b10') }).lauf(job(wt));
-  assert.match(e2.md, /\| npm run follow-up:test:db \| skipped \(no database\)/);
+  assert.match(e2.md, /\| npm run follow-up:test:db \| skipped \(no review database\)/);
   assert.equal(s.calls.filter((c) => c.args[1] === 'follow-up:test:db').length, 1, 'nur im ersten Lauf (ohne Migrationen) ausgeführt');
+});
+
+test('Paket 223: Umgebung der CI-Suiten aus dem Workflow (olaf-admin deploy.yml) — Testwerte ja, Secrets nie, Postgres → Review-DB', async () => {
+  const wt = worktree({ 'bulk-registration:test:db': 'tsx --test a', 'pii:test:backfill': 'tsx --test b', 'brevo:events:test': 'tsx --test c', 'parity:test': 'tsx --test d', 'cockpit:test': 'tsx --test e' });
+  mkdirSync(join(wt, '.github', 'workflows'), { recursive: true });
+  writeFileSync(join(wt, '.github', 'workflows', 'deploy.yml'), readFileSync(join(import.meta.dirname, 'fixtures', 'workflows', 'olaf-admin-deploy.yml'), 'utf8'));
+  writeFileSync(join(wt, '.github', 'workflows', 'parity.yml'), 'env:\n  BASE: main\njobs:\n  p:\n    env:\n      READ_TOKEN: ${{ secrets.TARIFF_APP_READ_TOKEN }}\n      REF: ${{ env.BASE }}\n      SHARD: ${{ matrix.shard }}\n      PATH: /evil\n      LD_PRELOAD: /evil.so\n      BASH_ENV: /evil.sh\n      https_proxy: http://evil:1\n    steps:\n      - run: npm run parity:test\n');
+  const ci = X.ciUmgebung(wt);
+  const bulk = ci.get('bulk-registration:test:db')!;
+  assert.equal(bulk.env.BULK_TEST_DATABASE_URL, X.REVIEW_DB); assert.equal(bulk.db, true);
+  assert.equal(bulk.env.BETTER_AUTH_SECRET, 'ci-only-test-sessions-not-a-secret'); assert.deepEqual(bulk.secrets, []);
+  assert.equal(bulk.env.NODE_OPTIONS, undefined, 'Shard/Heap nie aus der CI');
+  assert.equal(ci.get('pii:test:backfill')!.env.PII_TEST_DATABASE_URL, X.REVIEW_DB, 'Inline-VAR=wert vor npm run');
+  assert.equal(ci.get('brevo:events:test')!.env.TZ, 'Europe/Vienna', 'erstes Vorkommen gilt');
+  const p = ci.get('parity:test')!;
+  assert.deepEqual(p.secrets, ['TARIFF_APP_READ_TOKEN']); assert.equal(p.env.REF, 'main'); assert.equal(p.env.SHARD, undefined); assert.equal(p.env.PATH, undefined);
+  assert.deepEqual(Object.keys(p.env).sort(), ['BASE', 'REF'], 'LD_*, BASH_ENV, Proxy nie');
+  for (const e of ci.values()) for (const [k, v] of Object.entries(e.env)) { assert.doesNotMatch(v, /\$\{\{/, k); assert.doesNotMatch(k, /^DB_/, 'DB_* setzt die Review-DB'); }
+  // Lauf: Secret-Suite übersprungen mit Namen; DB-Suite bekommt die Review-DB unter dem CI-Namen; ohne DB übersprungen
+  const s = schein();
+  const e = await X.lokalAdapter({ run: s.run, pg: s.pg, env, git: git(() => 'e'.repeat(40)), base: join(TMP, 'b223') }).lauf(job(wt));
+  assert.match(e.md, /\| npm run parity:test \| skipped \(needs secret TARIFF_APP_READ_TOKEN\)/);
+  const bulkRun = s.calls.find((c) => c.args[1] === 'bulk-registration:test:db')!;
+  assert.match(bulkRun.env.BULK_TEST_DATABASE_URL, /\/olaf_rv_admin_354_cccccccc$/); assert.equal(bulkRun.env.BETTER_AUTH_SECRET, 'ci-only-test-sessions-not-a-secret');
+  assert.match(bulkRun.env.NODE_OPTIONS, /--max-old-space-size/); assert.ok(!bulkRun.env.PATH.includes('/evil'));
+  assert.equal(s.calls.some((c) => c.args[1] === 'parity:test'), false);
+  const s2 = schein();
+  const e2 = await X.lokalAdapter({ run: s2.run, pg: null, env: { HOME: TMP } as any, git: git(() => 'e'.repeat(40)), base: join(TMP, 'b224') }).lauf(job(wt));
+  assert.match(e2.md, /\| npm run bulk-registration:test:db \| skipped \(no review database\)/);
+  assert.match(e2.md, /\| npm run cockpit:test \| passed/);
 });

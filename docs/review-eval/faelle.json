@@ -1,0 +1,66 @@
+{
+  "_hinweis": "Eval-Satz der Auto-Reviews (Paket 223). Je Fall: PR-Kopf, Stichzeit (nur Kontext davor), bekannte echte Befunde (gold) und bekannte Scheinbefunde (schein). Quelle: Kommentare von Christoph (bizarrochris), martenc, Knuts Reviews und Melious-Gegenprüfungen. Treffer = der Review-Text nennt denselben Fehler (Stelle + Wirkung), nicht nur dieselbe Datei.",
+  "faelle": [
+    {
+      "id": "E1-356", "repo": "WirStrom1/olaf-admin", "number": 356, "head": "6ec9e217fffef2593487102f5072fcbe60a5e848", "cutoff": "2026-10-17T09:41:48Z",
+      "gold": [
+        { "id": "K10", "schwere": "blocker", "datei": "src/lib/cockpit/semantic/drill.ts", "kurz": "Drill-Umgehung: Zeilensumme {dim} ohne split und __total nennen das geschützte Merkmal (Altersgruppe/Geschlecht) nicht und öffnen deshalb auch Kleinstzellen (1 Person) — Datenschutzlücke Zeilensumme" },
+        { "id": "K12", "schwere": "major", "datei": "src/lib/cockpit/semantic/drill.ts", "kurz": "Auch mit Drill-Schwelle bleibt eine Umgehung über Differenz/Schnitt zweier erlaubter Drills (z. B. 12 minus 11 = 1 Person)" },
+        { "id": "K11", "schwere": "minor", "datei": "src/app/api/admin/cockpit/route.ts", "kurz": "Rohe nicht zugeordnete Bank-Codes (unmapped[].code und series) wieder im Payload; #353 hatte auf { codes, count } reduziert" },
+        { "id": "K13", "schwere": "nit", "datei": "src/lib/cockpit/semantic/kleinzellen.test.ts", "kurz": "Unbenutzte Importe in kleinzellen.test.ts (resultTable, ResultCell) und parity.db.test.ts (MIN_N)" }
+      ],
+      "schein": ["protectComplement nur halb / n und num unterdrückter Zellen im Payload", "String() statt fmt() in Tabellen", "?? 0 auf der Karte", "Drill-Spalten enthalten Alter/Geschlecht", "Sperre in chart-def tot (bewusst entfernt)"]
+    },
+    {
+      "id": "E2-353", "repo": "WirStrom1/olaf-admin", "number": 353, "head": "c00ec8512e40e969381d9983acc71338b36f8116", "cutoff": "2026-10-16T13:50:00Z",
+      "gold": [
+        { "id": "K6", "schwere": "major", "datei": "src/app/api/admin/joules-sync-log/route.ts", "kurz": "Abgelaufene link_audit-Läufe bleiben im Sync-Log als „Läuft“ stehen (runOutcome nur aus finished_at, kein Ablauf)" },
+        { "id": "K7", "schwere": "major", "datei": "src/lib/cockpit/iban-bundesland-load.ts", "kurz": "Ohne PII-Schlüssel wirft iban-bundesland-load PiiKeyUnavailableError weiter: Cockpit antwortet 500 statt die Karte als nicht verfügbar zu zeigen" },
+        { "id": "B1", "schwere": "major", "datei": "prisma/migrations/*belieferung_one_definition*/migration.sql", "kurz": "Datenmigration schreibt Bestandsdaten (Statusdefinitionen) admin-weit um, ohne Rollback/Down-Migration; per Code-Revert nicht rückgängig" },
+        { "id": "B2", "schwere": "major", "datei": "src/lib/cockpit/bank-tab-load.ts", "kurz": "Der Plan-114-Fix für die Bankleitzahl versiegelter Bank-Leads (loadBankCodes) hat keinen Regressionstest" },
+        { "id": "B3", "schwere": "major", "datei": "src/lib/cockpit/rechner-funnel-load.ts", "kurz": "Karte „Rechner → Anmeldung“ zählt Stufe 5 auf einer zweiten Basis (status IN SUBMITTED/CONFIRMED statt statusBaseWhere)" },
+        { "id": "M2", "schwere": "minor", "datei": "src/app/api/admin/link-audit", "kurz": "Die 409-/Abbruch-Zweige der Link-Audit-Route (offset>0, geschlossener Lauf) sind ungetestet" },
+        { "id": "M1", "schwere": "minor", "datei": "src/lib/cockpit/bank-tab-load.ts", "kurz": "loadBankCodes lädt alle Bank-Leads ungepaginiert je Request" },
+        { "id": "K8", "schwere": "nit", "datei": "src/lib/permission-catalog.ts", "kurz": "Label/Kartentitel generisches Maskulinum statt „Berater:in“" }
+      ],
+      "schein": []
+    },
+    {
+      "id": "E3-364", "repo": "WirStrom1/olaf-admin", "number": 364, "head": "55131d4b743de3be728f3a47040f03900124d3e5", "cutoff": "2026-10-18T18:05:37Z",
+      "gold": [
+        { "id": "K1", "schwere": "major", "datei": "src/app/api/bank/prefill/route.ts", "kurz": "Die zwei Statements des Bank-Prefills laufen ohne Transaktion; ein Kunden-Opt-out dazwischen wird vom zweiten updateMany gelöscht" },
+        { "id": "K2", "schwere": "minor", "datei": "src/app/api/admin/follow-up/staff-opt-out/route.ts", "kurz": "Audit-Actor von Hand gebaut mit 'admin'-Fallback für id/E-Mail — nicht zuordenbare append-only Audit-Zeile möglich" },
+        { "id": "K4", "schwere": "minor", "datei": "src/app/api/auth/send-otp/route.ts", "kurz": "send-otp mit Einwilligung hebt einen Team-Stopp still auf; kein Test pinnt den Pfad" }
+      ],
+      "schein": ["Doppelter getAdminSession-Aufruf als TOCTOU-Lücke"]
+    },
+    {
+      "id": "E4-202", "repo": "WirStrom1/olaf-tariff-app", "number": 202, "head": "61fa310bff6f4cf2365c3b732c14943c2df5506c", "cutoff": "2026-10-13T07:35:00Z",
+      "gold": [
+        { "id": "K2", "schwere": "blocker", "datei": "src/lib/usage-count.ts", "kurz": "POST usage/count hat keinen olaf-admin-Endpoint; jedes Ergebnis feuert Beacons ins Leere (404)" },
+        { "id": "K3", "schwere": "major", "datei": "src/lib/qparams.ts", "kurz": "quelle/ersparnis sind in olaf-admin keine Attribution-Keys; Submit fügt sie in external_details ein bzw. sie gehen verloren" },
+        { "id": "K6", "schwere": "major", "datei": "src/app/(tariff-calculate)/tariff-calculate/calculator/StandardAnsicht.tsx", "kurz": "Variante a (control) nicht unverändert: nach Rechnungs-Upload bekommt auch control die neue Bestätigungsbox" },
+        { "id": "K7", "schwere": "major", "datei": "src/lib/utils/number.ts", "kurz": "Zahl-Parser rundet '4,5'/'4.50' still zu 5 kWh und lässt sie durch, während '4.500,0' abgelehnt wird" },
+        { "id": "K5", "schwere": "minor", "datei": "src/hooks/useTariffCalculator.ts", "kurz": "Event sendet exakten advantage_eur — verletzt Stufe-0-DoD (keine Feldwerte)" },
+        { "id": "K8", "schwere": "nit", "datei": "TariffCalculateContent.tsx", "kurz": "exhaustive-deps-Suppressions ohne Begründung" },
+        { "id": "K9", "schwere": "nit", "datei": "TariffResultsB.tsx", "kurz": "toLocaleDateString('de-AT') ohne timeZone" },
+        { "id": "K10", "schwere": "nit", "datei": "TariffResultsB.tsx", "kurz": "Farbe #3fa7b4 ist keine Palettenfarbe" }
+      ],
+      "schein": []
+    },
+    {
+      "id": "E5-331", "repo": "WirStrom1/olaf-admin", "number": 331, "head": "5acf181f6a2b4ccb4fe80faf9e2b985f52d161b2", "cutoff": "2026-10-16T13:37:00Z",
+      "gold": [
+        { "id": "K16", "schwere": "blocker", "datei": "src/lib/bulk/process.ts", "kurz": "failRun gibt im UNKLAR-Fall Zählpunkte frei, obwohl der Vertrag/das Mandat schon angelegt sein kann → Doppelanmeldung/Doppelversand" },
+        { "id": "K17", "schwere": "blocker", "datei": "src/lib/bulk/deps-default.ts", "kurz": "Bulk-Weg umgeht die Zählpunkt-Reservierung; kein DB-Unique über Zählpunkte → Doppelanmeldung möglich" },
+        { "id": "K7", "schwere": "major", "datei": "src/lib/bulk/store.ts", "kurz": "Freigabe der Mieter-Einladungen vor der Bestätigung überlebt eine geänderte Mieterliste" },
+        { "id": "K8", "schwere": "major", "datei": "src/lib/bulk/parse-file.ts", "kurz": "Zip-Bomb-Sperre umgehbar (prüft zentrales Verzeichnis, SheetJS liest lokale Header)" },
+        { "id": "K9", "schwere": "minor", "datei": "src/lib/bulk/route-auth.ts", "kurz": "Ohne Content-Length keine Größenbegrenzung (Number(null)=0, formData puffert alles)" },
+        { "id": "K10", "schwere": "minor", "datei": "src/lib/pii-encrypt-run.ts", "kurz": "Bulk-Tabellen fehlen in PII_STORES (Nachversiegeln, Key-Rotation, Auskunft)" },
+        { "id": "K12", "schwere": "minor", "datei": "src/lib/bulk/tenant.ts", "kurz": "Zurücksetzen nach Fehlversand still verschluckt (.catch(() => {})) → invited_at bleibt gesetzt" },
+        { "id": "K19", "schwere": "minor", "datei": "src/lib/bulk/tenant.ts", "kurz": "Einladungs-Backoff zählt eine Brevo-Störung wie eine schlechte Adresse" }
+      ],
+      "schein": []
+    }
+  ]
+}
