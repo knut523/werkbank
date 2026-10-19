@@ -239,7 +239,14 @@ export function App() {
       <button className="ub-btn sm" onClick={() => { try { localStorage.setItem(UMZUG_KEY, '1'); } catch { /* privat */ } setUmzugZu(true); }}>Verstanden</button></div></div> : null;
 
   // Eingebettet: kein eigenes Gerüst — Navigation ist LibreChats Leiste (Chats · Übersicht · Planen · Wissen), Einrichtung im Kontomenü.
-  if (embedded) return <div className="embedded">{umzug}{reiterLeiste}{page}</div>;
+  // P4 (Zielbild § 3, Rahmen): EINE Zustandszeile oben, nur wenn etwas nicht normal ist — mit dem, was das für dich heißt.
+  const zustaende = [
+    cfg.demo && 'Demo-Modus: Daten sind Beispiele.',
+    cfg.dryRun && 'Vorschau (Trockenlauf): Antworten an Agenten und Schreibzugriffe sind aus.',
+    cfg.speicher && `Speicher knapp (${cfg.speicher}) — neue Chats warten, bis Platz ist.`,
+  ].filter(Boolean) as string[];
+  const zustand = zustaende.length ? <div className="page"><p className="zustand" role="status" data-testid="zustandszeile">{zustaende.join(' · ')}</p></div> : null;
+  if (embedded) return <div className="embedded">{zustand}{umzug}{reiterLeiste}{page}</div>;
   const current = [...nav, ...more].find((n) => n.match.test(hash));
 
   return (
@@ -262,7 +269,6 @@ export function App() {
           {more.map((n) => <NavLink key={n.href} n={n} hash={hash} />)}
         </nav>
         <div className="foot">
-          {cfg.demo && <span className="chip warn">Demo-Modus</span>}
           {user && <div className="small"><b>{user.name}</b><div className="tiny">{user.email}</div></div>}
           <div className="row">
             <button className="btn small" onClick={toggleTheme} aria-label="Hell/Dunkel umschalten">{theme === 'dark' ? '☀️ Hell' : '🌙 Dunkel'}</button>
@@ -270,7 +276,7 @@ export function App() {
           </div>
         </div>
       </aside>
-      <main className="main">{umzug}{reiterLeiste}{page}</main>
+      <main className="main">{zustand}{umzug}{reiterLeiste}{page}</main>
       {/* Plan 213 S3b: Handy-Tableiste Heute · Arbeit · Wissen · Chat (nur ≤ 760 px, nur neue Navigation; 185 B6). */}
       {neu && user && <nav className="tabbar" aria-label="Bereiche">
         {nav.map((n) => { const on = n.match.test(hash); return <a key={n.href} href={n.href} className={on ? 'active' : ''} aria-current={on ? 'page' : undefined}><span className="ico" aria-hidden>{n.ico}</span>{n.label}{n.href === zaehlHref && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span> : null}</a>; })}

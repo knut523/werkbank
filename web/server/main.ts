@@ -407,6 +407,8 @@ on('GET', /^\/api\/config$/, async (req, res) => {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: false,   // Plan 213 S6: forge abgeschaltet (172 D1/D5)
     jiraSite: cfg.jiraSite, jiraSites: jiraSitesPublic(), project: cfg.jiraProject, vault: cfg.vaultDir,
     dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u), navNeu: navNeu(), aufraeumen: aufraeumenAn(), einLogin: einLogin(),
+    // P4: eine Zustandszeile oben statt verstreuter Hinweise — Speicher nur für Admins (RAM-Plan 125).
+    speicher: u?.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null,
   });
 });
 

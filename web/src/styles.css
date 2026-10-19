@@ -684,3 +684,7 @@ ul.plain.h-liste { padding-left: 0; list-style: none; }
 .e-karte textarea { width: 100%; min-height: 44px; resize: vertical; }
 .e-erledigt { color: var(--text-secondary); padding: 6px 2px; }
 @media (max-width: 600px) { .e-kopf { position: static; } }
+
+/* P4: eine Zustandszeile oben (Trockenlauf, Demo, Speicher) */
+.zustand { margin: 0 0 8px; padding: 6px 10px; border-radius: 8px; background: var(--amber-100); color: var(--amber-700); font-size: 13px; }
+:root[data-theme='dark'] .zustand { background: #352c16; color: #e2b84d; }

@@ -15,10 +15,10 @@ const TIEFE_KLAR: Record<string, string> = {
   deep: 'Gründlich: wie Normal, dazu eine Gegenprüfung des Plans durch mehrere Blickwinkel und ein zweites Modell — für Riskantes.',
 };
 
-function NeuerUnterChat({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+function NeuerUnterChat({ onClose, onDone, vorgabe = '' }: { onClose: () => void; onDone: () => void; vorgabe?: string }) {
   const toast = useToast();
   const opt = useLoad<any>(() => api('/api/arbeit/start'), []);
-  const [auftrag, setAuftrag] = useState('');
+  const [auftrag, setAuftrag] = useState(vorgabe);
   const [repo, setRepo] = useState('');
   const [tiefe, setTiefe] = useState('regular');
   const sch = useLoad<any>(() => api(`/api/arbeit/schaetzung?tiefe=${tiefe}`), [tiefe]);   // F7: Schätzung vor dem Start
@@ -124,7 +124,10 @@ export function ArbeitUnterchats({ cfg: _cfg }: { cfg: Config }) {
   const toast = useToast();
   const [filter, setFilter] = useState<'offen' | 'erledigt'>('offen');
   const [auf, setAuf] = useState<string | null>(null);
-  const [neu, setNeu] = useState(false);
+  // Ein Start (P4): #/arbeit?neu=1&auftrag=… öffnet den Dialog vorbefüllt (aus dem Board, später aus Specs).
+  const q = new URLSearchParams(window.location.hash.split('?')[1] ?? '');
+  const [neu, setNeu] = useState(q.get('neu') === '1');
+  const [vorgabe] = useState(q.get('auftrag') ?? '');
   const { data, error, reload } = useLoad<any>(() => api(`/api/arbeit/unterchats?filter=${filter}`), [filter]);
   const zurueck = async (id: string) => { try { await api(`/api/leitstand/strands/${id}/zurueckholen`, { method: 'POST', body: {} }); toast('Zurückgeholt'); reload(); } catch (e: any) { toast(e.message ?? 'Fehler'); } };
   if (error) return <div className="page"><Err e={error} /></div>;
@@ -165,7 +168,7 @@ export function ArbeitUnterchats({ cfg: _cfg }: { cfg: Config }) {
         </tbody>
       </table>
       {!data.zeilen.length && <div className="ub-card soft"><p className="small mut">{filter === 'offen' ? 'Nichts offen.' : 'Nichts erledigt in den letzten 14 Tagen.'}</p></div>}
-      {neu && <NeuerUnterChat onClose={() => setNeu(false)} onDone={reload} />}
+      {neu && <NeuerUnterChat vorgabe={vorgabe} onClose={() => { setNeu(false); if (/[?&]neu=1/.test(window.location.hash)) window.history.replaceState(null, '', '#/arbeit'); }} onDone={reload} />}
     </div>
   );
 }

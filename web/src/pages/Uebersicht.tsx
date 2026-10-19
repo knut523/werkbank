@@ -354,8 +354,6 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
           {PILLE.map(([w, cls, text]) => (zahl as any)[w] > 0 && <button key={w} className={`ub-amp ${cls}`} onClick={() => springe(w)} data-testid={`ub-pille-${w}`}>{pille((zahl as any)[w], text)}</button>)}
         </div>
       </div>
-      {d.memory && <div className="ub-card soft" role="status" data-testid="memory-warning"><b>⚠️ Speicher knapp:</b> <span className="small">{d.memory}. Neue Chats und Agenten können langsam werden oder abbrechen — Testinstanzen stoppen, wartende Chats beantworten.</span></div>}
-      {d.dryRun && <p className="ub-amp u-dich">Vorschau (Trockenlauf): Antworten an Agenten sind aus.</p>}
       {x?.fragenFehler && <p className="ub-amp u-bad" role="alert">Rückfragen gerade nicht lesbar — hier fehlen evtl. offene Fragen. Später neu laden.</p>}
       {u.error ? <Err e={u.error} /> : null}
 
