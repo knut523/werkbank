@@ -244,14 +244,8 @@ export function reviewPrompt(r: { repo: string; number: number; title: string; u
     'BEHAUPTUNGEN SIND UNBEWIESEN: „addressed“, „fixed“, „tested“, „no behaviour change“ u. ä. in Beschreibung, Kommentaren oder Commit-Texten',
     'gelten erst, wenn du sie im Code belegt hast (Datei:Zeile, ggf. Test, der den Fall wirklich abdeckt). Nicht belegbar → als offen/unbelegt führen, nie als erledigt.',
     'Auch im Delta-Review: Aufrufer und Nachbarpfade der geänderten Stellen prüfen (Pass B, Winkel C „cross-file“), nicht nur die geänderten Zeilen.',
-    // Paket 223 (forge #5/#4, im Eval gemessen): feste Sorgeklassen als Pflicht-Abdeckung, dann jeden Kandidaten zu widerlegen versuchen.
-    'PFLICHT-ABDECKUNG je Sorgeklasse — in bericht.md eine Zeile je Klasse „geprüft wo · Befund oder ‚nichts‘ · nicht anwendbar, weil …“:',
-    '  security (Eingaben, Uploads/Archive, Größen-/Ratengrenzen, Injection) · data_integrity (Migrationen, Datenumschreibung, Rückweg, Zählbasen) ·',
-    '  idempotency (Wiederholung, Doppelversand/-anmeldung, Nebenläufigkeit, Teilfehler ohne Rückbau) · pii (Personendaten: Klartext, Versiegelung/Schlüssel,',
-    '  Register wie PII_STORES, Löschung, Auskunft, Logs/Payloads) · access_control (Rechte je Route/Feld, wer sieht was) · cross_file (Aufrufer, andere Apps/Repos,',
-    '  die die Daten lesen oder schreiben) · error_handling (verschluckte Fehler `.catch(() => {})`, 500 statt Rückfall). Blockieren dürfen nur die ersten sechs.',
-    'WIDERLEGEN vor dem Aufnehmen: jeden Befund-Kandidaten einmal ernsthaft zu widerlegen versuchen (Guard, Test, Aufrufer, Constraint, der den Fall ausschließt).',
-    'Widerlegt → nicht in kommentar.md (in bericht.md kurz unter „verworfen“); bestätigt oder plausibel → mit Beleg Datei:Zeile aufnehmen.',
+    // Paket 223: Pflicht-Abdeckung je Sorgeklasse + Widerlegen (forge #5/#4) im Eval v0→v1 gemessen — kein klarer Gewinn (ein Fall
+    // schlechter), darum nicht live (D2). Wortlaut: Commit 4f12795, docs/plan-review-verlaesslich.md.
     'COUNCIL vor der Empfehlung: Befürworter, Spezialist (Domäne/Sicherheit) und Advocatus Diaboli über die Befunde laufen lassen (Skill council),',
     'Urteil mit bindenden Bedingungen in bericht.md; `approve` nur, wenn der Council kein offenes Muss hat.',
     '',
@@ -490,7 +484,9 @@ export function textRegeln(text: string, r: { repo: string; number: number }, be
 }
 
 /** Paket 223: Kommentar gesteht eine unvollständige eigene Prüfung ein (Eval: Teilagenten waren bei der Abgabe nicht zurück). */
-const UNVOLLSTAENDIG = /\b(this (pass|review) did not (cover|check|review)|(review|check) is incomplete|incomplete review|(sub-?)?(checks?|reviews?|passes) (had )?not (yet )?(returned|come back)|still running when|could not finish (the|this) review)\b/i;
+const UNVOLLSTAENDIG = /\b(this pass did not cover|incomplete review|review is incomplete because|(sub-?(reviews?|checks?|passes|agents?)|parallel (reviews?|checks?|passes)|teilprüfungen?)\W+(?:\w+\W+){0,4}?(had |have |were |was )?(not|never) (yet )?(returned|come back|finished|incorporated))/i;
+// Pass C (Claude): „the null check is incomplete“, „still running when“ und „this review did not check runtime behaviour“ (statisches
+// Review, D5) sind normale Review-Sprache — nur Formulierungen über fehlende Teilprüfungen zählen.
 
 // Paket 223: der Entwurf zu olaf-admin#354 war deutsch. Deutsche Fachwörter (Zählpunkt, Sammelanmeldung) und Code stehen auch
 // in englischen Entwürfen — darum Funktionswörter zählen, Code-Blöcke, Code-Spans und Links ausklammern.
@@ -498,7 +494,8 @@ const DE = new Set('der die das und nicht ist mit für auf ein eine einen dem de
 const EN = new Set('the and is not with for on a an of to by be are if that also only but or as in at before after it we they this these here should no which from'.split(' '));
 /** Rein: überwiegend englischer Fließtext? (Zu wenig Text → ja.) */
 export function englisch(text: string): boolean {
-  const prosa = text.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ').replace(/\]\([^)]*\)|https?:\/\/\S+/g, ' ');
+  // Zitate aus dem PR (Blockzitat, ~~~, „…“, "…") zählen nicht — ein englisches Review über deutsche UI-Texte zitiert viel Deutsch (Pass C).
+  const prosa = text.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, ' ').replace(/^\s*>.*$/gm, ' ').replace(/`[^`\n]*`/g, ' ').replace(/„[^“\n]*“|"[^"\n]*"|»[^«\n]*«/g, ' ').replace(/\]\([^)]*\)|https?:\/\/\S+/g, ' ');
   let de = 0, en = 0;
   for (const w of prosa.toLowerCase().match(/[a-zäöüß]+/g) ?? []) { if (DE.has(w) && !EN.has(w)) de++; else if (EN.has(w) && !DE.has(w)) en++; }
   return de + en < 20 || en >= de;
@@ -631,8 +628,9 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
     let k = parseKommentar(readBericht(join(reviewDir(), r.paket, 'kommentar.md')));
     if (!k && kaputt && r.status === 'läuft') { await nochmal(r, 'Strang abgebrochen ohne Kommentar-Entwurf', now, deps); continue; }
     // Erst Claude fertig → einmal Pass C über Melious (Knut 17.10.); der Strang gleicht danach ab.
-    if (k && r.status === 'läuft' && !r.gp && deps.gegenpruefung && !kaputt) {
-      const claim = await reviewsCol().updateOne({ _id: r._id, status: 'läuft' }, { $set: { status: 'gegenprüfung', gpStart: now } });
+    // Auch nach einem Nachfass (erst Formatfehler, Pass C): ohne Gegenprüfung ginge der Entwurf sonst ungeprüft hinaus.
+    if (k && (r.status === 'läuft' || r.status === 'nachbessern') && !r.gp && deps.gegenpruefung && !kaputt) {
+      const claim = await reviewsCol().updateOne({ _id: r._id, status: r.status }, { $set: { status: 'gegenprüfung', gpStart: now } });
       if (claim.modifiedCount) starteGegenpruefung({ ...r, status: 'gegenprüfung' }, deps, now);
       continue;
     }
@@ -640,8 +638,10 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
     let probleme: string[] = [];
     if (k) {
       const nums = verweise(k.text, r.number);
-      const bekannt = nums.length && deps.vorhanden ? await deps.vorhanden(r.repo, nums).catch(() => new Set<number>()) : new Set<number>();
-      const q = await qualifiziere(k.text, r, readBericht(join(reviewDir(), r.paket, 'kontext.md')) ?? '', bekannt, deps.vorhanden);
+      // Eigene Abfrage gescheitert → nichts umschreiben (sonst würde ein richtiges #N auf ein anderes Repo umgebogen, Pass C).
+      const da = nums.length && deps.vorhanden ? await deps.vorhanden(r.repo, nums).catch(() => null) : new Set<number>();
+      const bekannt = da ?? new Set<number>();
+      const q = da ? await qualifiziere(k.text, r, readBericht(join(reviewDir(), r.paket, 'kontext.md')) ?? '', bekannt, deps.vorhanden) : k.text;
       if (q !== k.text) {
         k = { ...k, text: q };
         writeFileSync(join(reviewDir(), r.paket, 'kommentar.md'), `Empfehlung: ${k.empfehlung}\n\n${q}\n`);
@@ -670,6 +670,8 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
     done++;
     if (!k) { await meldeStatus(r, statusZeile({ art: 'failed', grund: grundEn(set.note) }), deps, now); await meldeKnut({ ...r, ...set }, set.note, deps, now); continue; }
     const pe = s.autoPost && deps.post ? await autoPost({ ...r, ...set }, k, deps, now) : { art: 'aus' as const, grund: 'automatisches Posten ist aus' };
+    // Bewusst nicht gepostet (gemergt, neuer Stand, Posten aus/nicht freigegeben, verworfen) → die Wache meldet es nicht (Pass C).
+    if (pe.art === 'zu' || pe.art === 'neu' || pe.art === 'aus') await reviewsCol().updateOne({ _id: r._id }, { $set: { ohnePost: pe.art } });
     if (pe.art === 'gepostet') await meldeStatus(r, statusZeile({ art: 'done', gepostet: true, url: pe.url ?? null, empfehlung: k.empfehlung }), deps, now);
     else if (pe.art === 'zu' || pe.art === 'neu') await meldeStatus(r, statusZeile({ art: 'skipped', grund: pe.art === 'neu' ? 'new commits since the review — tag @review again for the new head' : 'PR was merged or closed before the review was posted' }), deps, now);
     else {
@@ -693,6 +695,8 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       const erl = execErlaubt(r.repo, k?.author ?? null);
       const tests = tiefe !== 'deep' ? undefined : !deps.exec ? 'test execution is switched off' : erl.ok ? true as const : erl.grund;
       await meldeStatus(r, statusZeile({ art: 'queued', position: i + 1, tiefe: zeilen == null && !r.deep ? undefined : tiefe, eta, tests }), deps, now, { nurAnlegen: true });
+      // Die am PR zugesagte ETA (mit Wartezeit) ist der Maßstab der Wache (Pass C: sonst Fehlalarm für Wartende).
+      await reviewsCol().updateOne({ _id: r._id, etaZusage: { $in: [null] } }, { $set: { etaZusage: eta } });
     }
   }
   let started = 0;
@@ -823,15 +827,27 @@ export async function autoPost(r: any, k: { empfehlung: string; text: string }, 
   if (!pr) return nicht('fehler', 'nicht gepostet: PR-Stand nicht lesbar');
   if (pr.state !== 'OPEN') return nicht('zu', `nicht gepostet: PR ${pr.state === 'MERGED' ? 'gemergt' : 'geschlossen'}`);
   if (pr.head !== r.head) return nicht('neu', `nicht gepostet: neuer Stand ${pr.head.slice(0, 7)} seit dem Review`);
+  // Pass C: atomarer Anspruch vor dem Posten — Knuts „Verwerfen“ oder „Kommentar posten“ in denselben Sekunden gewinnt oder verliert
+  // sauber, nie beides. Ein hängengebliebener Anspruch (Absturz mitten im Posten) gilt nach POSTEN_MIN als frei.
+  const frei = { $or: [{ posting: { $in: [null] } }, { posting: { $lt: new Date(now.getTime() - POSTEN_MIN * 60_000) } }] };
+  const c = await reviewsCol().updateOne({ _id: r._id, posted: { $in: [null] }, verworfen: { $in: [null] }, ...frei }, { $set: { posting: now } });
+  if (!c.modifiedCount) {
+    const j: any = await reviewsCol().findOne({ _id: r._id }, { projection: { verworfen: 1, posted: 1 } });
+    if (j?.posted) return { art: 'gepostet', grund: '', url: j.posted.url ?? null };
+    return j?.verworfen ? { art: 'aus', grund: 'von Knut verworfen' } : { art: 'fehler', grund: 'wird gerade von Hand gepostet' };
+  }
   try {
     const res = await deps.post!(r, `**${AUTO_KOPF}**\n\n${k.text}${fussnote(r.head, k.empfehlung)}`, 'COMMENT');
-    await reviewsCol().updateOne({ _id: r._id }, { $set: { posted: { at: now, url: res.url, event: 'COMMENT', by: 'auto' } } });
+    await reviewsCol().updateOne({ _id: r._id }, { $set: { posted: { at: now, url: res.url, event: 'COMMENT', by: 'auto' } }, $unset: { posting: '' } });
     deps.log?.('pr-review gepostet', { pr: `${r.repo}#${r.number}`, event: 'COMMENT' });
     return { art: 'gepostet', grund: '', url: res.url };
   } catch (e: any) {
+    await reviewsCol().updateOne({ _id: r._id }, { $unset: { posting: '' } });
     return nicht('fehler', `Posten fehlgeschlagen: ${scrub(e.message ?? e)}`);
   }
 }
+/** Nach so vielen Minuten gilt ein Posten-Anspruch als liegengeblieben. */
+export const POSTEN_MIN = 10;
 
 /** Nach ETA + WACHE_MIN ohne Kommentar meldet sich ein Review im Hauptchat; nach 24 h höchstens noch einmal. */
 export const WACHE_MIN = 15;
@@ -859,7 +875,7 @@ export async function wache(s: TickerSettings, deps: Pick<ReviewDeps, 'melde' | 
       else await meta.updateOne({ _id: 'pr_ticker' as any }, { $set: { 'luecke.gemeldet': false } });
     }
   }
-  const seit = new Date(t?.at ?? t?.errorAt ?? now).getTime();
+  const seit = new Date(t?.ok ?? t?.at ?? t?.errorAt ?? now).getTime();   // ok = letzter Erfolg (at ist der Lese-Zeiger)
   if (t?.error && t.errorAt && now.getTime() - seit > 15 * 60_000 && !t.fehlerGemeldet) {
     const claim = await meta.updateOne({ _id: 'pr_ticker' as any, fehlerGemeldet: { $in: [null] } }, { $set: { fehlerGemeldet: now } });
     if (claim.modifiedCount) {
@@ -867,12 +883,13 @@ export async function wache(s: TickerSettings, deps: Pick<ReviewDeps, 'melde' | 
       else await meta.updateOne({ _id: 'pr_ticker' as any }, { $set: { fehlerGemeldet: null } });
     }
   }
-  const offen = (await reviewsCol().find({ posted: { $in: [null] }, verworfen: { $in: [null] }, status: { $nin: ['übersprungen', 'deckel'] }, createdAt: { $gte: new Date(now.getTime() - 7 * TAG_MS) } }).sort({ createdAt: 1 }).toArray()) as any[];
+  const offen = (await reviewsCol().find({ posted: { $in: [null] }, verworfen: { $in: [null] }, ohnePost: { $in: [null] }, status: { $nin: ['übersprungen', 'deckel'] }, createdAt: { $gte: new Date(now.getTime() - 7 * TAG_MS) } }).sort({ createdAt: 1 }).toArray()) as any[];
   for (const r of offen) {
     if (n >= WACHE_JE_TAKT) break;   // nach einem langen Ausfall nicht zwanzig Meldungen auf einmal; der Rest kommt in den nächsten Takten
     if (!s.autoPost && r.status === 'fertig') continue;   // Posten ist aus: Knut prüft ohnehin selbst
-    const eta = Number(r.eta) || etaMinuten(r.deep ? 'deep' : 'regular', r.zeilen ?? null, true);
-    const ueber = now.getTime() - new Date(r.createdAt).getTime() - (eta + WACHE_MIN) * 60_000;
+    // Maßstab: die am PR zugesagte ETA (inkl. Wartezeit), sonst die ETA des Laufs; ab dem letzten Einreihen („Jetzt reviewen“).
+    const eta = Number(r.etaZusage) || Number(r.eta) || etaMinuten(r.deep ? 'deep' : 'regular', r.zeilen ?? null, true);
+    const ueber = now.getTime() - new Date(r.queuedAt ?? r.createdAt).getTime() - (eta + WACHE_MIN) * 60_000;
     if (ueber <= 0) continue;
     const w = r.wache;
     if (w && (w.n >= 2 || now.getTime() - new Date(w.at).getTime() < TAG_MS)) continue;
@@ -891,14 +908,15 @@ export const WACHE_JE_TAKT = 5;
 /** Meldung an Knut im Hauptchat (Paket 223): einmal je Review sofort; die Wache wiederholt höchstens einmal nach 24 h. */
 async function meldeKnut(r: any, grund: string, deps: Pick<ReviewDeps, 'melde' | 'log'>, now: Date) {
   if (!deps.melde) return;
-  const w = { at: now, n: 1, grund };
-  const claim = await reviewsCol().updateOne({ _id: r._id, wache: { $in: [null] } }, { $set: { wache: w } });
+  // Eigenes Feld (Pass C): hat die Wache schon „läuft noch“ gemeldet, muss der Abschluss mit Grund und Link trotzdem kommen.
+  const claim = await reviewsCol().updateOne({ _id: r._id, abschlussGemeldet: { $in: [null] } }, { $set: { abschlussGemeldet: { at: now, grund } } });
   if (!claim.modifiedCount) return;
   let ok = false;
   try { ok = (await deps.melde(r, `Review ${r.repo}#${r.number} @ ${String(r.head).slice(0, 7)}: ${grund}`)) !== false; }
   catch (e: any) { deps.log?.('pr-review meldung', { pr: `${r.repo}#${r.number}`, error: scrub(e?.message ?? e) }); }
-  // Nicht zugestellt → die Wache übernimmt (sie meldet, sobald ETA + 15 min um sind, und versucht es jeden Takt).
-  if (!ok) await reviewsCol().updateOne({ _id: r._id, wache: w }, { $set: { wache: null } });
+  // Zugestellt: die Wache wiederholt frühestens nach 24 h. Nicht zugestellt: die Wache übernimmt (ETA + 15 min, jeder Takt).
+  if (ok) await reviewsCol().updateOne({ _id: r._id, wache: { $in: [null] } }, { $set: { wache: { at: now, n: 1, grund } } });
+  else await reviewsCol().updateOne({ _id: r._id }, { $set: { abschlussGemeldet: null } });
 }
 
 /** Welche Nummern gibt es im Repo (PR oder Issue, egal ob offen/gemergt/geschlossen)? Lesetoken, eine Abfrage. */

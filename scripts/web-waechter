@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Kleiner externer Wächter für die Web-App (Paket 223, D3 — Knut 19.10.: „ja, wenn es einfach ist“). Läuft AUSSERHALB der
+# Web-App (crontab alle 5 min), weil die Wache in der Web-App nichts melden kann, solange diese steht (17.–19.10.: 41 h aus).
+#
+#   */5 * * * * $HOME/work/werkbank-dev/scripts/web-waechter
+#
+# Antwortet die Web-App zweimal im Abstand von 30 s nicht, startet er nur die Web-App neu (höchstens einmal je 30 min) und
+# schreibt eine Zeile ins Log. Die Meldung an Knut macht danach die Web-App selbst: ihr erster Tickerlauf sieht die Lücke und
+# meldet „PR-Ticker lief … nicht — nachgeholt: N Reviews“ im Hauptchat. Umgebung (nur für Tests): WACHE_URL, WACHE_PAUSE,
+# WACHE_NEUSTART (Befehl), WACHE_LOG, WACHE_SPERRE.
+set -uo pipefail
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+URL=${WACHE_URL:-http://127.0.0.1:3070/api/config}
+LOG=${WACHE_LOG:-$HERE/../.runtime/logs/web-waechter.log}
+SPERRE=${WACHE_SPERRE:-$HERE/../.runtime/web-waechter.letzter-neustart}
+lebt() { local c; c=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$URL"); [ "$c" != "000" ] && [ "${c:0:1}" != "5" ]; }
+lebt && exit 0
+sleep "${WACHE_PAUSE:-30}"
+lebt && exit 0
+mkdir -p "$(dirname "$LOG")"
+jetzt=$(date +%s); letzter=$(cat "$SPERRE" 2>/dev/null || echo 0)
+if [ $((jetzt - letzter)) -lt 1800 ]; then echo "$(date -Is) Web-App antwortet nicht — Neustart vor < 30 min schon versucht, warte" >> "$LOG"; exit 1; fi
+echo "$jetzt" > "$SPERRE"
+echo "$(date -Is) Web-App antwortet nicht ($URL) — starte sie neu" >> "$LOG"
+if ${WACHE_NEUSTART:-"$HERE/werkbank.sh" restart-web} >> "$LOG" 2>&1; then echo "$(date -Is) Neustart ausgeführt" >> "$LOG"; else echo "$(date -Is) Neustart fehlgeschlagen" >> "$LOG"; exit 1; fi

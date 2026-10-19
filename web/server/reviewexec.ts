@@ -232,10 +232,10 @@ export function ciUmgebung(wt: string): Map<string, CiEnv> {
       for (const st of Array.isArray(job?.steps) ? job.steps : []) {
         if (typeof st?.run !== 'string') continue;
         const basis = { ...obj(doc?.env), ...obj(job?.env), ...obj(st?.env) };
-        for (const m of st.run.matchAll(/((?:\b[A-Z_][A-Z0-9_]*=\S+\s+)*)npm run ([\w:.-]+)/g)) {
-          if (out.has(m[2])) continue;
+        // Inline-Werte auch in Anführungszeichen oder als `${{ … }}` (Pass C: sonst fiel `X=${{ secrets.X }} npm run …` still weg).
+        for (const m of st.run.matchAll(/((?:\b[A-Z_][A-Z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|\$\{\{[^}\n]*\}\}|\S+)\s+)*)npm run ([\w:.-]+)/g)) {
           const roh: Record<string, string> = { ...basis };
-          for (const kv of m[1].trim().split(/\s+/).filter(Boolean)) { const i = kv.indexOf('='); roh[kv.slice(0, i)] = kv.slice(i + 1); }
+          for (const kv of m[1].matchAll(/\b([A-Z_][A-Z0-9_]*)=("[^"\n]*"|'[^'\n]*'|\$\{\{[^}\n]*\}\}|\S+)/g)) roh[kv[1]] = kv[2].replace(/^(["'])(.*)\1$/, '$2');
           const e: CiEnv = { env: {}, secrets: [], db: false };
           for (const [k, v0] of Object.entries(roh)) {
             if (NIE.test(k)) continue;
@@ -246,7 +246,10 @@ export function ciUmgebung(wt: string): Map<string, CiEnv> {
             if (!v || v.includes('${{')) continue;
             if (PG_LOKAL.test(v)) { e.env[k] = REVIEW_DB; e.db = true; } else e.env[k] = v;
           }
-          out.set(m[2], e);
+          // Läuft die CI dasselbe Skript mehrmals (z. B. ohne und mit DB), zählt die Vereinigung: frühere Werte bleiben, fehlende
+          // kommen dazu — sonst liefe die Variante ohne DB und die DB-Hälfte überspränge sich still (Pass C).
+          const alt = out.get(m[2]);
+          out.set(m[2], alt ? { env: { ...e.env, ...alt.env }, secrets: [...new Set([...alt.secrets, ...e.secrets])], db: alt.db || e.db } : e);
         }
       }
     }

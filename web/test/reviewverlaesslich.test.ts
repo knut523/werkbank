@@ -171,7 +171,9 @@ test('S2 Erledigt erkennen: nur ohne Verneinung, nie bei @review', async () => {
   const P = await import('../server/prticker.ts');
   for (const t of ['Nits 1–2 of the delta review addressed in the latest commit', 'Review points addressed:\n1. AGENTS.md', 'Fixed both in c693a19.', 'Beide Punkte erledigt.', 'Done — see the new test.'])
     assert.equal(P.meldetErledigt(t), true, t);
-  for (const t of ['Not done here: plan 132 status', 'This is not fixed yet', 'Punkt 2 noch nicht erledigt', 'will be addressed in a follow-up', '@review — addressed the nits', 'Thanks for the review!'])
+  for (const t of ['Not done here: plan 132 status', 'This is not fixed yet', 'Punkt 2 noch nicht erledigt', 'will be addressed in a follow-up', '@review — addressed the nits', 'Thanks for the review!',
+    // Pass C (GLM): Verkürzungen, „nothing/nichts“, Lob
+    "This isn't fixed.", "I don't think this is done correctly", "can't reproduce, so nothing was fixed here", 'Nothing fixed here yet today', 'damit ist nichts erledigt', 'Well done, thanks for the review!'])
     assert.equal(P.meldetErledigt(t), false, t);
 });
 
@@ -286,7 +288,87 @@ test('S4 Ticker-Lauf merkt die Lücke (> 30 min seit dem letzten Erfolg), nicht 
     await P.tickerTick(lese, new Date('2026-10-19T07:55:00Z'), { force: true });
     const m2: any = await P.wbMeta().findOne({ _id: 'pr_ticker' as any });
     assert.equal(m2.luecke.gemeldet, true, 'Takt von 1 min ist keine Lücke');
+    // Pass C: abgeschnittene Suche setzt den Lese-Zeiger `at` zurück — die Lücke misst trotzdem am letzten Erfolg `ok`
+    assert.equal(new Date(m2.ok).toISOString(), '2026-10-19T07:55:00.000Z');
+    await P.wbMeta().updateOne({ _id: 'pr_ticker' as any }, { $set: { at: new Date('2026-10-17T12:00:00Z') } });
+    await P.tickerTick(lese, new Date('2026-10-19T07:56:00Z'), { force: true });
+    assert.equal(((await P.wbMeta().findOne({ _id: 'pr_ticker' as any })) as any).luecke.gemeldet, true, 'keine zweite Lücke');
   } finally { srv.close(); }
+});
+
+test('Pass C: Abschlussmeldung kommt auch, wenn die Wache schon „läuft noch“ gemeldet hat; bewusst nicht gepostet → keine Wache', async () => {
+  const P = await import('../server/prticker.ts');
+  const R = await import('../server/prreview.ts');
+  await P.reviewsCol().deleteMany({});
+  const p = paket('320-review-a-7', 'Empfehlung: comment\n\nSee #999 for the earlier attempt; the rest of the change looks fine and is covered by tests.\n');
+  await P.reviewsCol().insertOne(lauf('a#7@' + SHA, p, { createdAt: new Date(Date.now() - 3 * 3600_000), eta: 20, wache: { at: new Date(), n: 1, grund: 'läuft' }, nb: { at: new Date(Date.now() - 2 * 3600_000), probleme: ['x'] } }) as any);
+  const f = fakes();
+  await R.reviewTick(f.deps);
+  assert.equal(f.posts.length, 0); assert.equal(f.meld.length, 1, 'Abschluss trotz Wache-Meldung'); assert.match(f.meld[0], /nicht gepostet: verweist auf #999/);
+  // gemergt → ohnePost, die Wache schweigt auch Tage später
+  await P.reviewsCol().deleteMany({});
+  await P.reviewsCol().insertOne(lauf('a#7@' + SHA, paket('321-review-a-7', 'Empfehlung: approve\n\nLooks good to me; nothing blocking was found in this change.\n'), { createdAt: new Date(Date.now() - 3 * 3600_000), eta: 20 }) as any);
+  const g = fakes({ prNow: async () => ({ state: 'MERGED', head: SHA }) });
+  await R.reviewTick(g.deps);
+  const d: any = await P.reviewsCol().findOne({});
+  assert.equal(d.ohnePost, 'zu');
+  assert.equal(await R.wache(await P.tickerSettings(), g.deps, new Date(Date.now() + 3 * 86400_000)), 0);
+});
+
+test('Pass C: Wache misst an der zugesagten ETA (mit Wartezeit) ab dem letzten Einreihen', async () => {
+  const P = await import('../server/prticker.ts');
+  const R = await import('../server/prreview.ts');
+  await P.reviewsCol().deleteMany({});
+  const t0 = new Date('2026-10-19T08:00:00Z');
+  await P.reviewsCol().insertOne({ _id: 'q', repo: 'WirStrom1/olaf-admin', number: 7, head: SHA, status: 'wartet', createdAt: t0, eta: 20, etaZusage: 60 } as any);
+  await P.reviewsCol().insertOne({ _id: 'n', repo: 'WirStrom1/olaf-admin', number: 8, head: SHA, status: 'wartet', createdAt: t0, queuedAt: new Date(t0.getTime() + 3600_000), eta: 20 } as any);
+  const meld: string[] = [];
+  const deps = { melde: async (_r: any, t: string) => { meld.push(t); } };
+  assert.equal(await R.wache(await P.tickerSettings(), deps, new Date(t0.getTime() + 50 * 60_000)), 0, 'zugesagt 60 min + 15');
+  assert.equal(await R.wache(await P.tickerSettings(), deps, new Date(t0.getTime() + 80 * 60_000)), 1, 'nur q; n wurde neu eingereiht');
+});
+
+test('Pass C: Gegenprüfung auch nach einem Nachfass wegen Formatfehler; eigene #N-Abfrage gescheitert → nichts umschreiben', async () => {
+  const P = await import('../server/prticker.ts');
+  const R = await import('../server/prreview.ts');
+  await P.reviewsCol().deleteMany({});
+  const p = paket('322-review-a-7', 'Empfehlung: comment\n\nFixed upstream as in WirStrom1/olaf-docs#88; see #359 for context, the rest looks fine to me.\n', 'https://github.com/WirStrom1/olaf-docs/pull/359');
+  await P.reviewsCol().insertOne(lauf('a#7@' + SHA, p, { status: 'nachbessern', gp: undefined, nb: { at: new Date(Date.now() - 120_000), probleme: ['Format'] } }) as any);
+  const gp: any[] = [];
+  const f = fakes({ gegenpruefung: async (r: any) => { gp.push(r); return { ok: false, text: '', fehler: 'aus' }; }, vorhanden: async (repo: string) => { if (repo === 'WirStrom1/olaf-admin') throw new Error('502'); return new Set([359]); } });
+  f.strand.reviewReadyAt = new Date();
+  await R.reviewTick(f.deps); await R.gegenpruefungenAbwarten();
+  assert.equal(gp.length, 1, 'Gegenprüfung läuft');
+  await R.reviewTick(f.deps);
+  assert.doesNotMatch(readFileSync(join(TMP, 'pakete', p, 'kommentar.md'), 'utf8'), /olaf-docs#359/, 'kein Umschreiben ohne eigene Abfrage');
+});
+
+test('Pass C: Posten mit Anspruch — läuft gerade ein Posten oder ist verworfen, postet der Takt nicht', async () => {
+  const P = await import('../server/prticker.ts');
+  const R = await import('../server/prreview.ts');
+  await P.reviewsCol().deleteMany({});
+  const base: any = { _id: 'x', repo: 'WirStrom1/olaf-admin', number: 7, head: SHA };
+  const f = fakes();
+  await P.reviewsCol().insertOne({ ...base, posting: new Date() } as any);
+  assert.deepEqual(await R.autoPost(base, { empfehlung: 'comment', text: 'Looks fine to me.' }, f.deps), { art: 'fehler', grund: 'wird gerade von Hand gepostet' });
+  await P.reviewsCol().updateOne({ _id: 'x' } as any, { $set: { posting: new Date(Date.now() - 11 * 60_000) } });
+  assert.equal((await R.autoPost(base, { empfehlung: 'comment', text: 'Looks fine to me.' }, f.deps)).art, 'gepostet', 'liegengebliebener Anspruch gilt nach 10 min als frei');
+  const d: any = await P.reviewsCol().findOne({ _id: 'x' } as any);
+  assert.equal(d.posting, undefined); assert.ok(d.posted);
+  await P.reviewsCol().replaceOne({ _id: 'x' } as any, { ...base, verworfen: { by: 'Knut' } });
+  assert.equal((await R.autoPost(base, { empfehlung: 'comment', text: 'Looks fine to me.' }, f.deps)).art, 'aus');
+  assert.equal(f.posts.length, 1);
+});
+
+test('Pass C: Text-Regeln — normale Review-Sprache ist keine „Lücke“, deutsche Zitate machen ein englisches Review nicht deutsch', async () => {
+  const R = await import('../server/prreview.ts');
+  const r = { repo: 'a/b', number: 1 };
+  for (const t of ['The null check is incomplete: it misses the empty list case, which the new test does not cover either and should be added.',
+    'The job may still be running when the next tick starts, which then claims the same row twice in this flow.',
+    'This review did not check runtime behaviour; it is a static review of the diff against the plan and the tests in the repo.'])
+    assert.deepEqual(R.textRegeln(t, r, new Set()), [], t);
+  const zitate = 'The copy on the card reads „Ihre Anmeldung ist bei uns eingegangen und wird gerade geprüft, das dauert ein paar Tage“ and the hint says „Sie können die Seite jetzt schließen und später wiederkommen, wenn Sie mögen“. Both are fine.\n> Die Daten werden nicht gespeichert, wenn der Kunde nicht zustimmt und die Seite schließt.\n> Wir melden uns, sobald die Prüfung abgeschlossen ist und es weiter geht.';
+  assert.equal(R.englisch(zitate), true);
 });
 
 test('S4 Gegenprüfung: nach zwei Neustarts der Web-App ohne sie abschließen statt endlos neu', async () => {

@@ -67,7 +67,7 @@ import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol } from './prticker.ts';
-import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit } from './prreview.ts';
+import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
 import { meliousPassC } from './gegenpruefung.ts';
 import { postReview, statusKommentar, schreibenAus, type ReviewEvent } from './githubwrite.ts';
@@ -1991,7 +1991,8 @@ on('POST', /^\/api\/leitstand\/ticker\/review$/, async (req, res) => {
   if (!reviewErlaubt(String(b.id ?? '').split('#')[0])) throw new HttpError(409, 'Für dieses Repo gibt es kein Auto-Review (WERKBANK_PR_REVIEW_ORGS).');
   // 17c: auch ein erneut eingereihtes (wartet mit retryAt) sofort; neuer Anlauf ohne alte Gegenprüfung und Versuchszähler.
   const r = await reviewsCol().updateOne({ _id: String(b.id ?? '') as any, $or: [{ status: { $in: ['deckel', 'fehler', 'übersprungen', 'startet'] } }, { status: 'wartet', retryAt: { $ne: null } }] },
-    { $set: { status: 'wartet', note: `von ${u.name} erneut angestoßen`, ownerId: u.id, retryAt: null, versuche: 0 }, $unset: { gp: '', gpStart: '' } });
+    // Paket 223 (Pass C): neuer Anlauf = frische Zähler und Meldungen, Wache-Uhr ab jetzt.
+    { $set: { status: 'wartet', note: `von ${u.name} erneut angestoßen`, ownerId: u.id, retryAt: null, versuche: 0, queuedAt: new Date() }, $unset: { gp: '', gpStart: '', nb: '', wache: '', abschlussGemeldet: '', gpNeustarts: '', verworfen: '', ohnePost: '', etaZusage: '', posting: '' } });
   if (!r.modifiedCount) throw new HttpError(409, 'Eintrag nicht gefunden oder läuft schon.');
   send(res, 200, { ok: true });
 });
@@ -2019,8 +2020,16 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/github$/, async (req, res, m) => {
   if (now.head !== pr.head) throw new HttpError(409, `Neuer Stand ${now.head.slice(0, 7)} seit dem Review — erst neu reviewen.`);
   if (event === 'COMMENT' && pr.posted) throw new HttpError(409, 'Der Kommentar ist schon gepostet.');
   if (event !== 'COMMENT' && (pr.postings ?? []).some((x: any) => x.event === event)) throw new HttpError(409, 'Für diesen Stand schon abgeschickt.');
-  const r = await postReview(pr, vorspann + pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automated review', 'Review'), event).catch((e: any) => { throw new HttpError(502, e.message); });
-  await reviewsCol().updateOne({ _id: pr.id as any }, { $push: { postings: { at: new Date(), url: r.url, event, by: u.name } } as any, ...(event === 'COMMENT' && !pr.posted ? { $set: { posted: { at: new Date(), url: r.url, event, by: u.name } }, $unset: { verworfen: '' } } : {}) });   // nach „Verwerfen“ doch gepostet: Knuts letzte Entscheidung gilt
+  // Paket 223 (Pass C): COMMENT nur mit Anspruch — postet der Takt gerade automatisch, gibt es keinen zweiten Kommentar.
+  if (event === 'COMMENT') {
+    const c = await reviewsCol().updateOne({ _id: pr.id as any, posted: { $in: [null] }, $or: [{ posting: { $in: [null] } }, { posting: { $lt: new Date(Date.now() - POSTEN_MIN * 60_000) } }] }, { $set: { posting: new Date() } });
+    if (!c.modifiedCount) throw new HttpError(409, 'Der Kommentar wird gerade gepostet oder ist schon gepostet — Seite neu laden.');
+  }
+  const r = await postReview(pr, vorspann + pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automated review', 'Review'), event).catch(async (e: any) => {
+    if (event === 'COMMENT') await reviewsCol().updateOne({ _id: pr.id as any }, { $unset: { posting: '' } });
+    throw new HttpError(502, e.message);
+  });
+  await reviewsCol().updateOne({ _id: pr.id as any }, { $push: { postings: { at: new Date(), url: r.url, event, by: u.name } } as any, ...(event === 'COMMENT' && !pr.posted ? { $set: { posted: { at: new Date(), url: r.url, event, by: u.name } }, $unset: { verworfen: '', posting: '' } } : {}) });   // nach „Verwerfen“ doch gepostet: Knuts letzte Entscheidung gilt
   log('pr-review github', { user: u.id, pr: `${pr.repo}#${pr.number}`, event });
   send(res, 200, { ok: true, url: r.url });
 });
@@ -2032,8 +2041,8 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/verwerfen$/, async (req, res, m) => {
   if (!pr) throw new HttpError(404, 'Kein Auto-Review zu diesem Unter-Chat.');
   if (pr.posted) throw new HttpError(409, 'Der Kommentar ist schon gepostet.');
   // Pass C: nur wer den Eintrag wirklich umschaltet, meldet Erfolg (gleichzeitig gepostet → 409).
-  const vw = await reviewsCol().updateOne({ _id: pr.id as any, posted: { $in: [null] } }, { $set: { verworfen: { at: new Date(), by: u.name }, note: `von ${u.name} verworfen (nicht gepostet)` } });
-  if (!vw.matchedCount) throw new HttpError(409, 'Der Kommentar ist inzwischen gepostet.');
+  const vw = await reviewsCol().updateOne({ _id: pr.id as any, posted: { $in: [null] }, $or: [{ posting: { $in: [null] } }, { posting: { $lt: new Date(Date.now() - POSTEN_MIN * 60_000) } }] }, { $set: { verworfen: { at: new Date(), by: u.name }, note: `von ${u.name} verworfen (nicht gepostet)` } });
+  if (!vw.matchedCount) throw new HttpError(409, 'Der Kommentar ist inzwischen gepostet oder wird gerade gepostet.');
   log('pr-review verworfen', { user: u.id, pr: `${pr.repo}#${pr.number}` });
   send(res, 200, { ok: true });
 });
