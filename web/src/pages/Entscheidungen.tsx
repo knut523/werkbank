@@ -11,7 +11,7 @@ import { usePushFreigeben } from '../freigabe.tsx';
 import { EntscheidZeile } from './Morgenlage.tsx';
 
 type Frage = { id: string; eintrag: string; teil: string | null; art: string; gruppe: string; kennung: string | null; titel: string; worum: string; optionen: string[];
-  empfehlung: string | null; stufe: 'wichtig' | 'normal'; stufeGrund: string | null; autoAb: string | null; quelle: { text: string; url: string | null }; wartetSeit: string | null; antworten: string[]; ref: string | null };
+  empfehlung: string | null; stufe: 'wichtig' | 'normal'; stufeGrund: string | null; autoAb: string | null; blockiert: number; quelle: { text: string; url: string | null }; wartetSeit: string | null; antworten: string[]; ref: string | null };
 type Daten = { fragen: Frage[]; sonstiges: any[]; beantwortetHeute: number; zurueckgestellt: number; zahl: number; at: string };
 
 const L: Record<string, string> = { ja: 'Ja (wie empfohlen)', nein: 'Nein', anders: 'Anders', spaeter: 'Später' };
@@ -86,6 +86,10 @@ export function Entscheidungen() {
       toast('Wie empfohlen beantwortet'); setErledigt({}); reload();
     } catch (x: any) { setBulk(`Nicht gespeichert: ${x?.message ?? x}`); }
   };
+  // U3 (Knut 19.10.): drei Teile wie auf der Entscheidungsseite — Heute (fällig) · Offen · Log.
+  const faellig = (f: Frage) => (!!f.autoAb && new Date(f.autoAb).getTime() <= Date.now() + 24 * 3600_000) || (f.stufe === 'wichtig' && f.blockiert > 0);
+  const heute = sichtbar.filter(faellig), offenListe = sichtbar.filter((f) => !faellig(f));
+  const karte = (f: Frage) => erledigt[f.id] ? <p className="small e-erledigt" data-testid="e-erledigt">✓ {f.kennung ? `${f.kennung}: ` : ''}{f.titel} — {L[erledigt[f.id]] ?? erledigt[f.id]}</p> : <Karte f={f} onDone={fertigMelden} />;
   let zuletzt = '';
   return (
     <div className="page wide e-seite" data-testid="entscheidungen-seite">
@@ -102,18 +106,24 @@ export function Entscheidungen() {
         </div>
         {bulk && <p className="tiny mut" data-testid="e-bulk-out">{bulk}</p>}
       </header>
+      <nav className="tabs e-sprung" aria-label="Teile"><a href="#e-heute" onClick={(x) => { x.preventDefault(); document.getElementById('e-heute')?.scrollIntoView({ behavior: 'smooth' }); }}>Heute {heute.length}</a>
+        <a href="#e-offen" onClick={(x) => { x.preventDefault(); document.getElementById('e-offen')?.scrollIntoView({ behavior: 'smooth' }); }}>Offen {offenListe.length}</a>
+        <a href="#e-log" onClick={(x) => { x.preventDefault(); document.getElementById('e-log')?.scrollIntoView({ behavior: 'smooth' }); }}>Log</a></nav>
       {!sichtbar.length && <p className="small mut">Alles beantwortet. Danke!</p>}
-      {sichtbar.map((f) => {
-        const h = f.gruppe !== zuletzt ? <h2 className="e-gruppe" key={`g-${f.gruppe}`}>{f.gruppe}</h2> : null;
+      <section id="e-heute" data-testid="e-teil-heute"><h2 className="e-teil">Heute <span className="mut small">fällig: gilt in 24 h als angenommen oder hält einen Unter-Chat an</span></h2>
+        {heute.length ? heute.map((f) => <div key={f.id}>{karte(f)}</div>) : <p className="small mut">Heute ist nichts fällig.</p>}</section>
+      <section id="e-offen" data-testid="e-teil-offen"><h2 className="e-teil">Offen <span className="mut small">nach Wichtigkeit und Thema</span></h2>
+      {offenListe.map((f) => {
+        const h = f.gruppe !== zuletzt ? <h3 className="e-gruppe" key={`g-${f.gruppe}`}>{f.gruppe}</h3> : null;
         zuletzt = f.gruppe;
-        return <div key={f.id}>{h}{erledigt[f.id] ? <p className="small e-erledigt" data-testid="e-erledigt">✓ {f.kennung ? `${f.kennung}: ` : ''}{f.titel} — {L[erledigt[f.id]] ?? erledigt[f.id]}</p> : <Karte f={f} onDone={fertigMelden} />}</div>;
-      })}
+        return <div key={f.id}>{h}{karte(f)}</div>;
+      })}</section>
       {data.sonstiges.length > 0 && <section><h2 className="e-gruppe">Sonstiges (keine Frage, nur ansehen oder später)</h2>
         <div className="ub-card h-inbox">{data.sonstiges.map((e, i) => e.art === 'triage'
           ? <EntscheidZeile key={e.id} e={{ art: 'triage', id: e.daten.triageId, titel: e.frage, empfehlung: e.empfehlung, datei: e.daten.datei, seit: e.wartetSeit, wartet: false }} onDone={reload} />
           : <InboxZeile key={e.id} e={e} erste={i === 0} onDone={reload} />)}</div></section>}
       {data.zurueckgestellt > 0 && <p className="tiny mut">{data.zurueckgestellt} bis morgen 07:00 zurückgestellt.</p>}
-      <EntscheidungsLog />
+      <section id="e-log" data-testid="e-teil-log"><h2 className="e-teil">Log <span className="mut small">beantwortet und nach 24 h angenommen</span></h2><EntscheidungsLog /></section>
     </div>
   );
 }

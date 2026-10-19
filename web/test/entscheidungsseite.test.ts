@@ -59,3 +59,12 @@ test('Bericht-Kopf und Textblock liefern „Worum es geht“ und Optionen für d
   assert.equal(o.find((x) => x.id === 'D2')!.worum, 'Der Tooltip erklärt die Kennzahl.', 'Textblock ohne Empfehlungszeile');
   assert.equal(blockWorum('**fett** Satz\n- Knut: ja\n- Optionen: a/b'), 'fett Satz');
 });
+
+test('U3: „Heute“ = gilt in 24 h als angenommen oder wichtig und hält einen Unter-Chat an; sonst „Offen“', async () => {
+  const { heuteFaellig } = await import('../server/entscheidungsseite.ts');
+  const t = Date.parse('2026-10-19T10:00:00Z');
+  assert.equal(heuteFaellig({ autoAb: '2026-10-20T09:00:00Z', stufe: 'normal', blockiert: 0 }, t), true);
+  assert.equal(heuteFaellig({ autoAb: '2026-10-21T09:00:00Z', stufe: 'normal', blockiert: 0 }, t), false);
+  assert.equal(heuteFaellig({ autoAb: null, stufe: 'wichtig', blockiert: 1 }, t), true);
+  assert.equal(heuteFaellig({ autoAb: null, stufe: 'wichtig', blockiert: 0 }, t), false);
+});

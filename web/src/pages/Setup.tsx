@@ -452,7 +452,7 @@ function Wizard({ cfg }: { cfg: Config }) {
           <div className="card">
             <h3 style={{ marginTop: 0 }}>Melious (optional)</h3>
             <MeliousAccount />
-            {admin && <div style={{ marginTop: 12 }}><MeliousKachel /></div>}
+            {admin && <details style={{ marginTop: 12 }} data-testid="erweitert-melious"><summary className="small">Erweitert: Melious-Verbrauch und Energie</summary><MeliousKachel /></details>}
           </div>
         </div>
 
@@ -481,8 +481,11 @@ function Wizard({ cfg }: { cfg: Config }) {
         </div>
       </div>
 
-      <Sessions />
-      <ContextInfo />
+      {/* U4 (Knut 19.10.): Sitzungen und Token-Tabelle sind Technik — unter „Erweitert“, nicht im Blick. */}
+      <details data-testid="erweitert-technik"><summary className="small">Erweitert: Sitzungen und Token-Verbrauch</summary>
+        <Sessions />
+        <ContextInfo />
+      </details>
 
       <h2>Dienste</h2>
       <div className="row">

@@ -152,6 +152,9 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
   const [alle, setAlle] = useState(false);
   // ① kommt aus der Inbox — dieselbe Quelle wie der Zähler in der Leiste und im Kopf (Walkthrough 221: „6 brauchen dich“ vs. „0“).
   const [ib, setIb] = useState<any>(null);
+  // U4 (Knut 19.10.): „Mein Tag“ nur noch als eine Zeile hier — Blöcke von heute, Klick öffnet die Seite.
+  const [tag, setTag] = useState<any[] | null>(null);
+  useEffect(() => { api('/api/timebox').then((t: any) => setTag(t.blocks ?? [])).catch(() => setTag(null)); }, []);
   const lade = () => Promise.all([api('/api/cos/lage'), api('/api/inbox').catch(() => null)]).then(([x, i]: any[]) => { setL(x); setIb(i); setErr(null); onAktiv?.(!x.aus); }).catch((e) => { setErr(e); onAktiv?.(false); });
   useEffect(() => {
     lade();
@@ -215,6 +218,7 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
           {nachtN === 0 && <p className="small mut">Seit {hm(l.stand.stichzeit)} ist nichts passiert, was Aufmerksamkeit braucht.</p>}
           {l.berichte.length > 0 && <div><h4>Berichte von heute</h4><ul>{l.berichte.map((b: any) => <li key={b.art} className="small" data-testid={`cos-bericht-${b.art}`}><b>{b.label}:</b> {b.link ? <a href={note(b.link)} title="Bericht im Wissen öffnen — dort stehen die Tickets hinter den Zahlen">{b.zeile}</a> : b.zeile}</li>)}</ul></div>}
         </details>
+        {tag && <p className="small" data-testid="cos-mein-tag"><a href="#/timebox">Mein Tag</a>: {tag.length ? `${tag.length} ${tag.length === 1 ? 'Block' : 'Blöcke'} — als Nächstes ${tag.find((b: any) => !b.done)?.title ?? tag[0].title ?? tag[0].key ?? ''}`.trim() : 'nichts geplant'}</p>}
         <div className="cos-block" data-testid="cos-schulden">
           <h3>④ Wer schuldet was {s.ueberfaellig > 0 && (l.zusagenDatei ? <a className="ub-amp u-bad" href={note(l.zusagenDatei)} title="Register der Zusagen öffnen" data-testid="cos-ueberfaellig">{s.ueberfaellig} überfällig</a> : <span className="ub-amp u-bad">{s.ueberfaellig} überfällig</span>)}</h3>
           <div className="cos-spalten">{spalte('Knut', s.knut, 'knut')}{spalte('Team', s.team, 'team')}{spalte('Partner', s.partner, 'partner')}</div>

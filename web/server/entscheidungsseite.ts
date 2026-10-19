@@ -23,6 +23,8 @@ export interface Frage {
   quelle: { text: string; url: string | null };
   wartetSeit: string | null;
   antworten: Antwort[];
+  /** Wie viele Unter-Chats auf diese Antwort warten. */
+  blockiert: number;
   /** Kennung an der Quelle für Arten mit eigenem Weg: Vault-Sync-Frage (vaultId), Push (Strang). */
   ref: string | null;
 }
@@ -50,7 +52,7 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
   for (const e of eintraege) {
     if (!FRAGE_ARTEN.has(e.art)) { sonstiges.push(e); continue; }
     const ref = e.art === 'vault' ? String(e.daten.vaultId ?? '') || null : e.art === 'push' ? String(e.daten.strand ?? '') || null : null;
-    const basis = { eintrag: e.id, ref, art: e.art, gruppe: gruppeVon(e), quelle: { text: e.quelle.text, url: e.quelle.url }, wartetSeit: e.wartetSeit, autoAb: e.autoAb ?? null };
+    const basis = { eintrag: e.id, ref, art: e.art, gruppe: gruppeVon(e), quelle: { text: e.quelle.text, url: e.quelle.url }, wartetSeit: e.wartetSeit, autoAb: e.autoAb ?? null, blockiert: e.blockiert };
     if (e.art === 'entscheidung') {
       for (const x of (e.daten.entscheidungen as any[]) ?? []) {
         const tw = titelUndWorum(x.frage);
@@ -83,6 +85,11 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
   ordnung.sort((a, b) => gruppeWichtig.get(a.f.gruppe)! - gruppeWichtig.get(b.f.gruppe)! || rang.get(a.f.gruppe)! - rang.get(b.f.gruppe)! || wichtig(a.f) - wichtig(b.f) || a.i - b.i);
   return { fragen: ordnung.map((x) => x.f), sonstiges };
 }
+
+/** U3 (Knut 19.10., wie die Entscheidungsseite): „Heute“ = was heute fällig ist — gilt in den nächsten 24 h als angenommen, oder
+ *  ist wichtig und hält einen Unter-Chat an. Alles andere steht unter „Offen“. */
+export const heuteFaellig = (f: Pick<Frage, 'autoAb' | 'stufe' | 'blockiert'>, now = Date.now()) =>
+  (!!f.autoAb && new Date(f.autoAb).getTime() <= now + 24 * 3600_000) || (f.stufe === 'wichtig' && f.blockiert > 0);
 
 /** „Alle offenen wie empfohlen“: nur Fragen mit Empfehlung; Push nie (braucht den Freigabe-Dialog mit dem gesehenen Stand). */
 export const empfohlenBeantwortbar = (f: Frage) => !!f.empfehlung && f.art !== 'push' && f.art !== 'vault' && f.antworten.includes('ja');
