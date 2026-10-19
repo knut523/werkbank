@@ -60,7 +60,7 @@ export function mergeSettings(cur: TickerSettings, inp: any, by: { id: string; n
     const allow = [...new Set(inp.allow.map((x: unknown) => String(x).trim().replace(/^@/, '').toLowerCase()).filter((x: string) => LOGIN.test(x)))].slice(0, 20) as string[];
     if (allow.join(',') !== cur.allow.join(',')) { next.allow = allow; was.push(`Liste: ${allow.join(', ') || '(leer)'}`); }
   }
-  for (const [k, lo, hi] of [['maxParallel', 1, 5], ['minutes', 2, 60]] as const) {   // maxPerDay entfällt (ohne Tagesgrenze)
+  for (const [k, lo, hi] of [['maxParallel', 1, 5], ['minutes', 1, 60]] as const) {   // minutes ab 1 (Knut 19.10.: „instant statt warten“)   // maxPerDay entfällt (ohne Tagesgrenze)
     if (inp?.[k] !== undefined) { const v = clampInt(inp[k], lo, hi, cur[k]); if (v !== cur[k]) { next[k] = v; was.push(`${k} ${v}`); } }
   }
   // Auto-Review gehört der Person, die es einschaltet (T12); ab dann zählen @review-Tags (T5).
