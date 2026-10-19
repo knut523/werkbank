@@ -147,6 +147,34 @@ function McpStep({ claude }: { claude: boolean }) {
 }
 
 /** Mehrere Claude-Konten (Knut, 06.10.2026): ist das Kontingent ausgeschöpft, übernimmt automatisch das nächste. */
+/** Claude verbinden ohne Terminal (P5): Knopf → Anmelde-Link bei claude.com → dort angezeigten Code einfügen → verbunden. */
+function ClaudeAnmelden({ onDone }: { onDone: () => void }) {
+  const toast = useToast();
+  const [url, setUrl] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const start = async () => { setBusy(true); setErr(null); try { setUrl(((await api('/api/setup/claude/anmelden', { method: 'POST', body: {} })) as any).url); } catch (e) { setErr(e); } finally { setBusy(false); } };
+  const senden = async () => {
+    setBusy(true); setErr(null);
+    try { await api('/api/setup/claude/anmelden/code', { body: { code } }); toast('Claude verbunden'); setUrl(null); setCode(''); onDone(); }
+    catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  return (
+    <div className="card soft" data-testid="claude-anmelden" style={{ margin: '8px 0' }}>
+      {!url ? <><p className="small" style={{ marginTop: 0 }}>Ohne Terminal: Du meldest dich bei Claude an und fügst den angezeigten Code hier ein. Der Zugang gilt ein Jahr.</p>
+        <button className="btn primary" disabled={busy} onClick={start} data-testid="claude-anmelden-start">{busy ? 'Startet …' : 'Mit Claude anmelden'}</button></>
+        : <ol className="small" style={{ margin: 0 }}>
+          <li><a href={url} target="_blank" rel="noreferrer" data-testid="claude-anmelden-link">Bei Claude anmelden (neuer Tab)</a> — mit deinem eigenen Claude-Konto (Abo nötig).</li>
+          <li>Claude zeigt danach einen Code. Hier einfügen:
+            <div className="row" style={{ marginTop: 4 }}><input aria-label="Code von Claude" value={code} onChange={(e) => setCode(e.target.value)} style={{ flex: 1, minWidth: 220 }} autoComplete="off" />
+              <button className="btn primary" disabled={busy || code.trim().length < 10} onClick={senden} data-testid="claude-anmelden-code">{busy ? 'Verbindet …' : 'Verbinden'}</button></div></li>
+        </ol>}
+      <Err e={err} />
+    </div>
+  );
+}
+
 function ClaudeAccounts({ chat }: { chat: boolean }) {
   const l = useLoad(() => api('/api/setup/claude-accounts'));
   const toast = useToast();
@@ -369,6 +397,8 @@ function Wizard({ cfg }: { cfg: Config }) {
             {s.claude.connected
               ? <p className="okbox">Verbunden{s.claude.expiresAt ? `, gültig bis ${fmtDateTime(s.claude.expiresAt)}` : ' (läuft nicht ab)'}. Der Token liegt verschlüsselt im Chat-Schlüsselspeicher und gilt dort genauso.</p>
               : <p>Der OLAF Workspace arbeitet ohne API-Schlüssel — mit <b>deinem</b> Claude-Abo.</p>}
+            {!s.claude.connected && <ClaudeAnmelden onDone={() => st.reload()} />}
+            <details className="small"><summary>Alternativ mit Terminal (Token selbst erzeugen)</summary>
             <ol className="small">
               <li>Im Terminal (auf deinem Rechner oder in der Coder-Workspace) mit deinem Claude-Konto angemeldet: <code>claude setup-token</code></li>
               <li>Den ausgegebenen Token kopieren (beginnt mit <code>sk-ant-oat</code>). Er gilt ein Jahr.</li>
@@ -381,6 +411,7 @@ function Wizard({ cfg }: { cfg: Config }) {
                 if (await confirm({ title: 'Claude trennen?', body: <p>Der Token wird gelöscht; Chat und Board-Agent arbeiten dann nicht mehr, bis du einen neuen einträgst.</p>, danger: true, confirmLabel: 'Trennen' })) run('claude', () => api('/api/setup/claude', { method: 'DELETE' }));
               }}>Trennen</button>}
             </form>
+            </details>
             <ClaudeAccounts chat={s.claude.connected} />
           </div>
         </div>

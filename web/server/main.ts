@@ -52,6 +52,7 @@ import { olafJira } from './cos-olafjira.ts';
 import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
 import { boxTick } from './boxwaechter.ts';
 import { startSchaetzung, laufMediane } from './startschaetzung.ts';
+import { starte as claudeAnmeldungStarten, codeEinreichen as claudeCodeEinreichen } from './claudeverbinden.ts';
 import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungsseite.ts';
 import { abschlussTick, wocheTick } from './cosabschluss.ts';
 import { rueckstau as cosRueckstau, vorschlaege as cosVorschlaege } from './cosmeeting.ts';
@@ -473,6 +474,20 @@ on('POST', /^\/api\/setup\/claude$/, async (req, res) => {
   send(res, 200, { ok: true, claude: await claudeStatus(u) });
 });
 
+// Claude verbinden ohne Terminal (P5): Anmelde-Link → Code von claude.com → Token gespeichert wie oben. Nie im Log.
+on('POST', /^\/api\/setup\/claude\/anmelden$/, async (req, res) => {
+  const u = await needUser(req);
+  try { send(res, 200, await claudeAnmeldungStarten(u.id)); } catch (e: any) { throw new HttpError(e.status ?? 500, e.message); }
+});
+on('POST', /^\/api\/setup\/claude\/anmelden\/code$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  let token: string;
+  try { token = await claudeCodeEinreichen(u.id, String(b.code ?? '')); } catch (e: any) { throw new HttpError(e.status ?? 500, e.message); }
+  await setClaudeToken(u, token);
+  log('claude token gesetzt (ohne Terminal)', { user: u.id });
+  send(res, 200, { ok: true, claude: await claudeStatus(u) });
+});
 on('DELETE', /^\/api\/setup\/claude$/, async (req, res) => { const u = await needUser(req); await removeClaudeToken(u); send(res, 200, { ok: true }); });
 
 // --- Mehrere Claude-Konten (Knut, 06.10.2026): bei ausgeschöpftem Kontingent übernimmt das nächste ---
