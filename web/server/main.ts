@@ -462,6 +462,7 @@ on('GET', /^\/api\/setup\/status$/, async (req, res) => {
     services: await health(),
     skills: { total: skills.length, linked: skills.filter((s) => s.state === 'verlinkt').length, missing: skills.filter((s) => s.state === 'fehlt').length },
     search: searchState,
+    melious: { connected: !!(await meliousSettings(u).catch(() => null))?.configured },   // Onboarding-Checkliste (Zielbild § 4)
     links: { librechat: cfg.librechatPublicUrl, register: cfg.librechatPublicUrl + '/register' },
   });
 });

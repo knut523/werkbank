@@ -468,14 +468,15 @@ function Wizard({ cfg }: { cfg: Config }) {
           <div className="num">{allOk ? '✓' : '5'}</div>
           <div className="card">
             <h3 style={{ marginTop: 0 }}>Loslegen</h3>
-            {cfg.aufraeumen ? <p className="small" data-testid="loslegen-kurz">Fertig eingerichtet. Weiter im <a href={cfg.librechatUrl} target={chatTarget}>Chat</a> oder unter <a href="#/">Heute</a>.</p> : <div className="grid2">
-              <a className="card soft" href={cfg.librechatUrl} target={chatTarget}><b>💬 Chat</b><div className="small muted">Claude Code mit Skills, Vault und Jira. Schreibt nur nach deinem „ja“.</div></a>
-              <a className="card soft" href="#/wissen"><b>📚 Wissen</b><div className="small muted">Der Vault: Struktur, Roadmap, Suche, Backlinks.</div></a>
-              <a className="card soft" href="#/board"><b>🗂️ Board</b><div className="small muted">Jira-Kopie von {cfg.project}, Agent auf Karte ansetzen.</div></a>
-              <a className="card soft" href="#/sprint"><b>🔁 Sprint</b><div className="small muted">Review und Planning: Fragen beantworten, Sprint-Sync vorbereiten.</div></a>
-              <a className="card soft" href="#/skills"><b>🧰 Skills</b><div className="small muted">{s.skills.linked} Team-Skills aus dem Vault aktiv{s.skills.missing ? `, ${s.skills.missing} noch nicht eingerichtet` : ''}.</div></a>
-              <a className="card soft" href="#/dateien"><b>📎 Dateien & Teilen</b><div className="small muted">Dateien ablegen, mit Teammates teilen, geteilte Chats.</div></a>
-            </div>}
+            {/* Zielbild § 4 (Onboarding) statt fest verdrahteter Kacheln: drei Haken, dann ein Satz, wo man startet. */}
+            <ul className="plain small" data-testid="loslegen-check">
+              <li>{s.claude.connected ? '✓' : '☐'} Claude verbunden <span className="muted">(Pflicht — oben)</span></li>
+              <li>{s.jira.connected ? '✓' : '☐'} Jira verbunden <span className="muted">(für Tickets)</span></li>
+              <li>{s.melious?.connected ? '✓' : '☐'} Melious <span className="muted">(optional — spart Claude beim Lesen und Recherchieren)</span></li>
+            </ul>
+            <p className="small" data-testid="loslegen-kurz">{s.claude.connected
+              ? <>Jetzt: {cfg.navNeu && cfg.features?.leitstand !== false ? <a href="#/lead">Lead öffnen</a> : <a href={cfg.librechatUrl} target={chatTarget}>Chat öffnen</a>} und schreiben, woran du arbeitest — er startet die Arbeit und fragt dich, wenn er etwas braucht. Fragen findest du unter <a href={cfg.navNeu ? '#/entscheidungen' : '#/'}>{cfg.navNeu ? 'Entscheidungen' : 'Heute'}</a>.</>
+              : 'Erst Claude verbinden — dann geht es im Lead los.'}</p>
           </div>
         </div>
       </div>
