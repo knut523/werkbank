@@ -123,6 +123,7 @@ test('Vorlage: erster Lauf baut sie einmal (Basis-Migrationen), zweiter Lauf kop
   assert.equal(s.dbs.has('olaf_rv_admin_354_cccccccc'), false, 'Review-DB gelöscht');
   const tests = s.calls.filter((c) => c.cmd === 'npm' && c.args[0] === 'run');
   assert.ok(tests.every((c) => /olaf_rv_admin_354_cccccccc$/.test(c.env.DATABASE_URL)), 'Suiten gegen die Review-DB');
+  assert.ok(tests.every((c) => c.env.DB_NAME === 'olaf_rv_admin_354_cccccccc' && c.env.DB_HOST === '127.0.0.1' && c.env.DB_PORT === '55433' && c.env.DB_SSL === 'disable'), 'DB_* für Apps, die nicht DATABASE_URL lesen (olaf-admin prisma.ts)');
   assert.match(e1.md, /tests executed on the workspace VM \(not network-isolated\)/);
   assert.match(e1.md, /built for this migration state/);
   // zweiter Lauf, gleicher Migrationsstand der Basis
