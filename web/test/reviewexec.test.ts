@@ -211,12 +211,17 @@ test('19.10.: Repos ohne `test` (olaf-admin) — die CI-Suiten laufen, passende 
   const wt = worktree({ typecheck: 'tsc', lint: 'eslint', build: 'next build', 'follow-up:test': 'tsx --test src/lib/follow-up.test.ts',
     'follow-up:test:db': 'tsx --test tools/follow-up-staff-opt-out-db.test.ts', 'otp:test': 'tsx --test tools/otp-mail.test.ts', 'tariff-parity:sync': 'tsx sync.ts' }, false);
   mkdirSync(join(wt, '.github', 'workflows'), { recursive: true });
-  writeFileSync(join(wt, '.github', 'workflows', 'deploy.yml'), 'steps:\n - run: npm run typecheck\n - run: npm run otp:test\n - run: npm run follow-up:test:db\n - run: npm run tariff-parity:sync\n - run: npm run otp:test\n');
+  writeFileSync(join(wt, '.github', 'workflows', 'deploy.yml'), 'steps:\n - run: npm run typecheck\n - run: npm run otp:test\n - run: npm run follow-up:test:db\n - run: npm run tariff-parity:sync\n - run: npm run otp:test\n - run: npm run cockpit:e2e\n - run: npm run tariff-parity:check\n');
   assert.deepEqual(X.ciSkripte(wt), ['typecheck', 'otp:test', 'follow-up:test:db']);
   const plan = X.skriptPlan(X.SKRIPTE({} as any), X.ciSkripte(wt), JSON.parse(readFileSync(join(wt, 'package.json'), 'utf8')).scripts, ['src/lib/follow-up-staff-opt-out.ts']);
   assert.deepEqual(plan, ['typecheck', 'lint', 'follow-up:test:db', 'build', 'otp:test']);
   const s = schein();
   const e = await X.lokalAdapter({ run: s.run, pg: null, env: { HOME: TMP } as any, git: async (a) => (a[0] === 'diff' ? 'src/lib/follow-up-staff-opt-out.ts\n' : ''), base: join(TMP, 'b9') }).lauf(job(wt));
   assert.deepEqual(e.schritte.map((x) => x.name), ['npm ci', 'npm run typecheck', 'npm run lint', 'npm run follow-up:test:db', 'npm run build', 'npm run otp:test']);
-  assert.doesNotMatch(e.md, /tariff-parity:sync/);
+  assert.doesNotMatch(e.md, /tariff-parity:sync|cockpit:e2e|tariff-parity:check/);
+  // mit Prisma-Migrationen, aber ohne Review-DB: DB-Suiten nicht „grün“, sondern übersprungen
+  mkdirSync(join(wt, 'prisma', 'migrations'), { recursive: true });
+  const e2 = await X.lokalAdapter({ run: s.run, pg: null, env: { HOME: TMP } as any, git: async (a) => (a[0] === 'diff' ? 'src/lib/follow-up-staff-opt-out.ts\n' : ''), base: join(TMP, 'b10') }).lauf(job(wt));
+  assert.match(e2.md, /\| npm run follow-up:test:db \| skipped \(no database\)/);
+  assert.equal(s.calls.filter((c) => c.args[1] === 'follow-up:test:db').length, 1, 'nur im ersten Lauf (ohne Migrationen) ausgeführt');
 });

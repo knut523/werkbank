@@ -194,14 +194,14 @@ export interface ExecAdapter { name: ExecModus; lauf: (job: ExecJob) => Promise<
 export const execMinuten = (env = process.env) => { const n = Number(env.WERKBANK_REVIEW_EXEC_MIN); return Number.isFinite(n) && n > 0 && n <= 60 ? n : 20; };
 
 /** Was die CI des Repos ausführt: `npm run <name>` aus .github/workflows/*.yml, in Reihenfolge, ohne Doppelte und ohne
- *  Deploy/Release/Publish/Sync/Mirror/Seed (Knut 19.10.: olaf-admin hat kein `test`, die Tests heißen `<bereich>:test[:db]`). */
+ *  Deploy/Release/Publish/Sync/Mirror/Seed, ohne `:check` (braucht Nachbar-Repos) und e2e (braucht Browser/Server) (Knut 19.10.: olaf-admin hat kein `test`, die Tests heißen `<bereich>:test[:db]`). */
 export function ciSkripte(wt: string): string[] {
   const dir = join(wt, '.github', 'workflows');
   if (!existsSync(dir)) return [];
   const out: string[] = [];
   for (const f of readdirSync(dir).filter((x) => /\.ya?ml$/.test(x)).sort()) {
     let t = ''; try { t = readFileSync(join(dir, f), 'utf8'); } catch { continue; }
-    for (const m of t.matchAll(/npm run ([\w:.-]+)/g)) if (!out.includes(m[1]) && !/(^|:)(deploy|release|publish|sync|mirror|seed)$/.test(m[1])) out.push(m[1]);
+    for (const m of t.matchAll(/npm run ([\w:.-]+)/g)) if (!out.includes(m[1]) && !/(^|:)(deploy|release|publish|sync|mirror|seed|check)$/.test(m[1]) && !/(^|:)e2e(:|$)/.test(m[1])) out.push(m[1]);
   }
   return out;
 }
@@ -223,8 +223,8 @@ export function ergebnisMd(job: ExecJob, e: Omit<ExecErgebnis, 'md'>): string {
   const kopf = `# Tests — ${job.repo}#${job.number} @ ${job.head.slice(0, 7)}\n\n**${e.ausgefuehrt ? BESCHRIFTUNG : `static deep review — ${e.grund}`}**\n`;
   if (!e.ausgefuehrt) return `${kopf}\nNo commands from the PR were executed.\n`;
   const db = e.db ? `\nDatabase: copy of template \`${e.db.vorlage}\` (${e.db.neu ? 'built for this migration state' : 'reused'}), only the PR's new migrations applied, dropped afterwards.\n` : e.dbHinweis ? `\nDatabase: ${e.dbHinweis}\n` : '';
-  const tab = ['| step | result | minutes |', '|---|---|---|', ...e.schritte.map((s) => `| ${s.name} | ${s.timedOut ? 'timed out' : s.code === 0 ? 'passed' : `failed (exit ${s.code})`} | ${s.minuten} |`)].join('\n');
-  const fehl = e.schritte.filter((s) => s.code !== 0).map((s) => `\n## ${s.name} — last lines\n\n\`\`\`text\n${s.tail.replace(/```/g, "'''")}\n\`\`\`\n`).join('');
+  const tab = ['| step | result | minutes |', '|---|---|---|', ...e.schritte.map((s) => `| ${s.name} | ${s.timedOut ? 'timed out' : s.code === -1 ? 'skipped (no database)' : s.code === 0 ? 'passed' : `failed (exit ${s.code})`} | ${s.minuten} |`)].join('\n');
+  const fehl = e.schritte.filter((s) => s.code !== 0 && s.code !== -1).map((s) => `\n## ${s.name} — last lines\n\n\`\`\`text\n${s.tail.replace(/```/g, "'''")}\n\`\`\`\n`).join('');
   return `${kopf}${db}\n${tab}\n${fehl}`;
 }
 
@@ -317,7 +317,11 @@ export function lokalAdapter(d: LokalDeps = {}): ExecAdapter {
           }
         }
         const geaendert = job.basis && d.git ? (await d.git(['diff', '--name-only', `${job.basis}...HEAD`], job.wt).catch(() => '')).split('\n').map((x) => x.trim()).filter(Boolean) : [];
-        for (const s of skriptPlan(SKRIPTE(env), ciSkripte(job.wt), scripts, geaendert)) await schritt(`npm run ${s}`, 'npm', ['run', s, '--if-present']);
+        for (const s of skriptPlan(SKRIPTE(env), ciSkripte(job.wt), scripts, geaendert)) {
+          // DB-Suiten ohne Datenbank melden sonst ein falsches Grün (19.10.: Probe auf olaf-admin#364) → als übersprungen führen.
+          if (!dbUrl && /(^|:)(test:)?db(:|$)|:db:/.test(s) && existsSync(join(job.wt, 'prisma', 'migrations'))) { schritte.push({ name: `npm run ${s}`, code: -1, minuten: 0, timedOut: false, tail: 'skipped: no review database' }); continue; }
+          await schritt(`npm run ${s}`, 'npm', ['run', s, '--if-present']);
+        }
         return fertig();
       } finally {
         if (pg && belegt) await pg.dropdb(belegt).catch((e: any) => d.log?.(`dropdb ${belegt}: ${e.message}`));
