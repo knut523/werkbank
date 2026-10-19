@@ -246,7 +246,7 @@ export function reviewPrompt(r: { repo: string; number: number; title: string; u
     '',
     'Liefern (im Review-Paket):',
     // Plan 213 S6/forge: mit Motor liefert der Strang Felder (befunde.json), den Kommentar baut der Workspace.
-    ...(motorAn() ? ['1. `befunde.json` (Form im Abschnitt Review-Motor unten; Texte englisch) — daraus baut der Workspace `kommentar.md`. Schreib kommentar.md nicht selbst.'] : [
+    ...(motorAn() ? ['1. `befunde.json` (Form im Abschnitt Review-Motor unten; alle Texte für GitHub **auf Englisch**) — daraus baut der Workspace `kommentar.md`. Schreib kommentar.md nicht selbst.'] : [
     `1. \`kommentar.md\`: erste Zeile genau \`Empfehlung: approve\` | \`Empfehlung: request-changes\` | \`Empfehlung: comment\`,`,
     '   darunter der Kommentar für den PR **auf Englisch** (GitHub-Texte sind englisch, olaf-docs/AGENTS.md), Befunde mit Datei:Zeile.',
     '   Keine lokalen Pfade; Verweise nur auf PRs/Issues, die es gibt. Der Text kann automatisch als Review-Kommentar gepostet werden.',]),

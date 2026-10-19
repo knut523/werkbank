@@ -1,3 +1,5 @@
+// Seit Bündel A auf 17c: die Ausführung im Review läuft live über reviewexec.ts; dieser Läufer ist der vorbereitete
+// docker-remote-/managed-agents-Adapter (D4) und noch nicht eingehängt.
 // Review-Läufer (Plan 213 S7a/S7b, Council K6–K9, D4): Einordnung ok/rot/konnte nicht laufen, ehrlich „vollständig“,
 // Befehle nur aus dem Basiszweig, Erlaubtliste, Umgebung ohne Geheimnisse, Kanarien-Selbsttest (K8) im lokalen Läufer
 // mit prlimit, Zeitdeckel beendet die ganze Prozessgruppe, Aufräumen; docker-remote gegen einen nachgebauten Host.
@@ -141,20 +143,6 @@ test('docker-remote gegen einen nachgebauten Host: Protokoll, --network none, De
 test('managed-agents: ohne API-Key ehrlich „konnte nicht laufen“', async () => {
   const b = await managedAgents({}).laufe({ repo: 'x/y', wt: '/tmp', basis: 'HEAD', quelle: 'q', befehle: [{ name: 'a', befehl: ['true'] }] });
   assert.equal(b.vollstaendig, false); assert.equal(b.ergebnisse[0].ergebnis, 'konnte-nicht-laufen'); assert.match(b.gruende[0], /API-Key/);
-});
-
-test('Einbindung ins Review (S7b): Erlaubtliste, ausfuehrung.md + tests-en.md im Paket, Abschnitt für den Auftrag', async () => {
-  const { ausfuehren } = await import('../server/prreview.ts');
-  const pk = mkdtempSync(join(tmpdir(), 'laeufer-pakete-'));
-  mkdirSync(join(pk, '300-review-x-1'));
-  const nicht = await ausfuehren({ repo: 'fremd/repo', number: 1, wt: '/tmp', basis: 'HEAD', paket: '300-review-x-1', id: 'a' }, pk);
-  assert.match(nicht, /nicht erlaubt/); assert.match(readFileSync(join(pk, '300-review-x-1', 'ausfuehrung.md'), 'utf8'), /Erlaubtliste/);
-  const { r, git } = repo();
-  writeFileSync(join(r, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(1)"' } }));
-  git('add', '-A'); git('commit', '-qm', 'k');
-  const ab = await ausfuehren({ repo: 'knut523/werkbank', number: 1, wt: r, basis: git('rev-parse', 'HEAD').trim(), paket: '300-review-x-1', id: 'b' }, pk);
-  assert.match(ab, /ROT: \.:test/);
-  assert.match(readFileSync(join(pk, '300-review-x-1', 'tests-en.md'), 'utf8'), /\.:test: FAILED/);
 });
 
 test('Pass C: unbekanntes REVIEW_EXEC führt nichts aus; Markdown-Ausgabe bricht nicht aus dem Code-Block; Erlaubtliste im Backend', async () => {

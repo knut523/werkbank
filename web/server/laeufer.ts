@@ -1,3 +1,5 @@
+// Stand Bündel A auf 17c: NICHT eingehängt. Die Ausführung im Review läuft live über reviewexec.ts (local-allowlist);
+// docker-remote und managed-agents hier sind der vorbereitete Adapter für D4, einzuhängen in reviewexec, sobald eingerichtet.
 // Review-Läufer (Plan 213 S7a/S7b, Council K6–K9, D4): führt die Prüfbefehle eines PR-Stands aus und meldet je Befehl
 // ehrlich `ok | rot | konnte-nicht-laufen`, dazu `vollständig: ja|nein`. Die Befehle kommen nur aus dem Basiszweig
 // (`.werkbank/pruefungen.json` am Basis-SHA, sonst die npm-Skripte typecheck/lint/test/build der package.json am Basis-SHA) —

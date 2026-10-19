@@ -49,7 +49,7 @@ function NeuerUnterChat({ onClose, onDone }: { onClose: () => void; onDone: () =
 
 const REVIEW_TEXT: Record<string, string> = { wartet: 'in der Schlange', startet: 'startet', 'läuft': 'läuft', 'führt aus': 'führt Tests aus', fertig: 'fertig', fehler: 'Fehler', 'übersprungen': 'übersprungen', deckel: 'Deckel erreicht' };
 
-function ReviewStarten({ prs, deep, vorgabe, onClose, onDone }: { prs: any[]; deep: boolean; vorgabe: string; onClose: () => void; onDone: () => void }) {
+function ReviewStarten({ prs, deep, deepTests, vorgabe, onClose, onDone }: { prs: any[]; deep: boolean; deepTests?: string; vorgabe: string; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const [pr, setPr] = useState(vorgabe);
   const [stufe, setStufe] = useState<'quick' | 'deep'>('quick');
@@ -71,9 +71,9 @@ function ReviewStarten({ prs, deep, vorgabe, onClose, onDone }: { prs: any[]; de
         <span className="small" id="rs-stufe">Stufe</span>
         <div className="ub-row" role="radiogroup" aria-labelledby="rs-stufe">
           <button role="radio" aria-checked={stufe === 'quick'} className={`ub-btn sm${stufe === 'quick' ? ' pri' : ''}`} onClick={() => setStufe('quick')}>quick — liest, keine Ausführung</button>
-          <button role="radio" aria-checked={stufe === 'deep'} disabled={!deep} className={`ub-btn sm${stufe === 'deep' ? ' pri' : ''}`} onClick={() => setStufe('deep')}>deep — führt Tests aus</button>
+          <button role="radio" aria-checked={stufe === 'deep'} disabled={!deep} className={`ub-btn sm${stufe === 'deep' ? ' pri' : ''}`} onClick={() => setStufe('deep')}>deep{deepTests && deepTests !== 'off' ? ' — mit Tests (Erlaubtliste)' : ' — statisch'}</button>
         </div>
-        <p className="tiny mut">{deep ? 'deep: Prüfbefehle des Basiszweigs im abgeschotteten Läufer, Council ab ~500 Zeilen.' : 'deep (mit Ausführung) ist noch nicht eingeschaltet.'} Ergebnis: Kommentar-Entwurf (englisch) und Bericht (deutsch); gepostet wird erst nach deinem Ja.</p>
+        <p className="tiny mut">{deepTests && deepTests !== 'off' ? 'deep: Tests laufen auf der Workspace-VM, nur für PRs von der Erlaubtliste (nicht netzisoliert); sonst statisches Deep-Review mit Council.' : 'deep: statisches Deep-Review mit Council (Testausführung ist aus).'} Ergebnis: Kommentar-Entwurf (englisch) und Bericht (deutsch); gepostet wird erst nach deinem Ja.</p>
         <Err e={err} />
         <div className="ub-row" style={{ justifyContent: 'flex-end' }}><button className="ub-btn sm" onClick={onClose}>Abbrechen</button><button className="ub-btn pri sm" disabled={busy || !pr.trim()} onClick={start}>Review starten</button></div>
       </div>
@@ -106,7 +106,7 @@ export function ArbeitReviews() {
       {!data.prs.length && <div className="ub-card soft"><p className="small mut">Keine offenen PRs im Abgleich.</p></div>}
       {data.meldungen.length > 0 && <details className="ub-card" style={{ marginTop: 14 }}><summary className="small">Neu an PRs ({data.meldungen.length})</summary>
         <ul className="plain h-liste tiny">{data.meldungen.map((m: any, i: number) => <li key={i}><b>{m.pr}</b> {m.wer ? `${m.wer}: ` : ''}{m.text} <span className="mut">{fmtDateTime(m.at)}</span></li>)}</ul></details>}
-      {starten !== null && <ReviewStarten prs={data.prs} deep={data.deep} vorgabe={starten} onClose={() => setStarten(null)} onDone={reload} />}
+      {starten !== null && <ReviewStarten prs={data.prs} deep={data.deep} deepTests={data.deepTests} vorgabe={starten} onClose={() => setStarten(null)} onDone={reload} />}
     </div>
   );
 }

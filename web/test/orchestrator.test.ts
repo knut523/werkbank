@@ -762,6 +762,8 @@ test('deliver je Unterhaltung nacheinander (Fix 17d, Fund 6): zwei gleichzeitige
   const parents = calls.map((c) => c.body.parentMessageId);
   assert.equal(new Set(parents).size, parents.length, `keine Geschwister im Nachrichtenbaum: ${parents.join(', ')}`);
   await bridgeUntil(conv, 'bereit');
+});
+
 test('Knut 17.10.: Stufen — wichtig oben und offen, normal nach Frist angenommen und im Log, Widerruf braucht einen Empfänger', async () => {
   const cookie = await knutCookie();
   const h = { cookie, 'content-type': 'application/json', 'x-werkbank': '1' };

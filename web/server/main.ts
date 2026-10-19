@@ -63,7 +63,6 @@ import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol } from './prticker.ts';
-import { deepAn } from './reviewmotor.ts';
 import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
 import { meliousPassC } from './gegenpruefung.ts';
@@ -1649,7 +1648,7 @@ on('GET', /^\/api\/arbeit\/reviews$/, async (req, res) => {
   const meldungen: any[] = await tickerCol().find({}).sort({ at: -1 }).limit(15).toArray().catch(() => []);
   send(res, 200, { prs: prZeilen([...map.values()], reviews, { ich }), laufend: reviews.filter((r) => ['wartet', 'startet', 'führt aus', 'läuft'].includes(r.status)).map((r) => ({ pr: `${r.repo}#${r.number}`, status: r.status, at: r.createdAt })),
     meldungen: meldungen.map((e) => ({ pr: `${e.repo}#${e.number}`, art: e.kind ?? null, wer: e.actor ?? null, at: e.at, text: String(e.text ?? e.title ?? '').slice(0, 200) })),
-    stand: sync?.at ?? null, fehler: sync?.error ?? null, stufen: ['quick', 'deep'], deep: deepAn() });
+    stand: sync?.at ?? null, fehler: sync?.error ?? null, stufen: ['quick', 'deep'], deep: true, deepTests: execModus() });   // deep: live immer (statisch oder mit Tests nach reviewexec)
 });
 on('POST', /^\/api\/arbeit\/reviews\/start$/, async (req, res) => {
   const u = await needAdmin(req);
@@ -1657,7 +1656,6 @@ on('POST', /^\/api\/arbeit\/reviews\/start$/, async (req, res) => {
   const pr = prAus(b.pr);
   if (!pr) throw new HttpError(400, 'PR als „owner/repo#123“ oder GitHub-Link angeben.');
   const deep = b.stufe === 'deep';
-  if (deep && !deepAn()) throw new HttpError(409, 'Stufe deep (mit Ausführung der Tests) ist noch nicht eingeschaltet — quick wählen.');
   if (!reviewErlaubt(pr.repo)) throw new HttpError(403, `Für ${pr.repo} sind Reviews nicht freigegeben.`);
   const live = (await livePrs()).map.get(`${pr.repo}#${pr.number}`);
   if (!live) throw new HttpError(404, 'PR nicht in der Liste offener PRs (Abgleich mit GitHub abwarten oder „jetzt abrufen“).');
