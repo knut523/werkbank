@@ -1,16 +1,27 @@
 diff --git a/client/src/components/Chat/Input/ChatForm.tsx b/client/src/components/Chat/Input/ChatForm.tsx
-index c02ee15..37c1bf9 100644
+index c02ee15..893a370 100644
 --- a/client/src/components/Chat/Input/ChatForm.tsx
 +++ b/client/src/components/Chat/Input/ChatForm.tsx
-@@ -37,6 +37,7 @@ import QuoteButton from './QuoteButton';
+@@ -37,6 +37,8 @@ import QuoteButton from './QuoteButton';
  import StreamAudio from './StreamAudio';
  import TokenUsage from './TokenUsage';
  import StopButton from './StopButton';
 +import Nachreichen from '~/components/Werkbank/Nachreichen'; // OLAF Workspace: schreiben während der Arbeit (Plan 154)
++import { wechselSperre } from '~/components/Werkbank/chatWechsel'; // OLAF Workspace (Fix 17d, Fund 2)
  import SendButton from './SendButton';
  import EditBadges from './EditBadges';
  import BadgeRow from './BadgeRow';
-@@ -400,7 +401,8 @@ const ChatForm = memo(function ChatForm({
+@@ -245,7 +247,8 @@ const ChatForm = memo(function ChatForm({
+ 
+   return (
+     <form
+-      onSubmit={methods.handleSubmit(submitMessage)}
++      // OLAF Workspace (Fix 17d, Fund 2): solange ein Chatwechsel lädt, ist noch der vorige Chat aktiv — nicht dorthin senden.
++      onSubmit={methods.handleSubmit((data) => { if (!wechselSperre(conversationId, data?.text)) submitMessage(data); })}
+       className={cn(
+         'mx-auto flex w-full flex-row gap-3 transition-[max-width] duration-300 sm:px-2',
+         maximizeChatSpace ? 'max-w-full' : 'md:max-w-3xl xl:max-w-4xl',
+@@ -400,7 +403,8 @@ const ChatForm = memo(function ChatForm({
                    isSubmitting={isSubmitting}
                  />
                )}

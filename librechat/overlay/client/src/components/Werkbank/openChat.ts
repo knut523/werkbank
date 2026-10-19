@@ -9,6 +9,7 @@ import { useNavigate, type NavigateOptions } from 'react-router-dom';
 import type { TConversation } from 'librechat-data-provider';
 import { useNavigateToConvo } from '~/hooks';
 import store from '~/store';
+import { wechselStarten } from './chatWechsel';
 
 const CHAT = /^\/c\/([0-9a-f-]{36})(?:[/?#]|$)/i;
 
@@ -21,6 +22,7 @@ export function useOpenChat() {
     const id = CHAT.exec(to)?.[1];
     // Derselbe Chat ist schon geladen (Zustand stimmt): nur die Adresse, wie bisher.
     if (!id || id === current) return navigate(to, opts);
+    wechselStarten(id);   // Fix 17d, Fund 2: bis das Ziel geladen ist, sendet ChatForm nicht in den vorigen Chat
     navigateToConvo({ conversationId: id } as TConversation, { currentConvoId: current ?? undefined });
   }, [navigate, navigateToConvo, current]);
 }

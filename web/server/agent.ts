@@ -115,13 +115,13 @@ Schließe mit „### Stand“ (3–5 Zeilen: was erledigt ist, was offen ist, we
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 OLAF-Werkbank';
 
 /** Legt die Unterhaltung an und schickt die erste Nachricht; liefert die LibreChat-Unterhaltungs-ID. */
-export async function createLibreChat(u: User, text: string, opts: { conversationId?: string; parentMessageId?: string } = {}): Promise<string> {
+export async function createLibreChat(u: User, text: string, opts: { conversationId?: string; parentMessageId?: string; messageId?: string } = {}): Promise<string> {
   const token = await librechatAccessToken(u);
   const r = await fetch(`${cfg.librechatUrl}/api/agents/chat/${encodeURIComponent('Claude Code')}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'user-agent': UA },
     body: JSON.stringify({
-      text, sender: 'User', isCreatedByUser: true, parentMessageId: opts.parentMessageId ?? '00000000-0000-0000-0000-000000000000', messageId: randomUUID(),
+      text, sender: 'User', isCreatedByUser: true, parentMessageId: opts.parentMessageId ?? '00000000-0000-0000-0000-000000000000', messageId: opts.messageId ?? randomUUID(),
       ...(opts.conversationId ? { conversationId: opts.conversationId } : {}),
       clientTimestamp: new Date().toISOString().slice(0, 19), error: false,
       endpoint: 'Claude Code', endpointType: 'custom', model: 'claude-code', modelLabel: 'Claude Code (OLAF)', spec: 'claude-code-olaf',

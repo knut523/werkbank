@@ -125,7 +125,7 @@ test('Lauf: aus → keine Abfrage; an → Ereignisse einmal (Dedupe), Tag nach d
   const later = new Date(new Date(since).getTime() + 60_000).toISOString();
   const earlier = new Date(new Date(since).getTime() - 60_000).toISOString();
   searchResult = [pr('WirStrom1/olaf-admin', 5, { createdAt: earlier, author: { login: 'bizarrochris' }, comments: { nodes: [
-    { id: 'T1', author: { login: 'bizarrochris' }, body: '@review', createdAt: later, url: 'u1' },
+    { id: 'T1', author: { login: 'bizarrochris' }, body: 'Bitte @review deep', createdAt: later, url: 'u1' },
     { id: 'T0', author: { login: 'knut523' }, body: '@review', createdAt: earlier, url: 'u0' }] } })];
   const r = await P.tickerTick(async () => 'read-tok');
   assert.equal(seen.at(-1).auth, 'bearer read-tok');
@@ -133,6 +133,7 @@ test('Lauf: aus → keine Abfrage; an → Ereignisse einmal (Dedupe), Tag nach d
   assert.equal(r.reviews, 1);
   const q = await P.reviewsCol().find({}).toArray();
   assert.equal(q.length, 1); assert.equal(q[0]._id, `WirStrom1/olaf-admin#5@${SHA1}`); assert.equal(q[0].status, 'wartet');
+  assert.equal(q[0].deep, true, '`@review deep` aus dem echten Kommentartext erkannt (19.10.: Ticker speicherte nur „@review von …“)');
   // gleich noch einmal (Takt erzwingen): nichts doppelt
   await P.wbMeta().updateOne({ _id: 'pr_ticker' as any }, { $set: { lastAttempt: new Date(0) } });
   const r2 = await P.tickerTick(async () => 'read-tok');
@@ -150,6 +151,12 @@ test('Deckel und Kommentar-Entwurf: Empfehlung lesen, Textregeln vor dem Posten'
   assert.equal(deckel({ maxParallel: 2 }, 2).ok, false);
   assert.equal(deckel({ maxParallel: 2 }, 1).ok, true);
   assert.equal(deckel({ maxParallel: 2, maxPerDay: 5 } as any, 0).ok, true, 'Tagesgrenze zählt nicht mehr');
+  // Knut 19.10.: mehr parallel, aber gegen den Speicher der ganzen Box
+  assert.equal(deckel({ maxParallel: 5 }, 3, { echtGb: 4, hostFreiGb: 14 }).ok, true, 'Luft → viertes darf');
+  assert.match(deckel({ maxParallel: 5 }, 3, { echtGb: 9.5, hostFreiGb: 14 }).why, /Box ausgelastet/);
+  assert.match(deckel({ maxParallel: 5 }, 1, { echtGb: 3, hostFreiGb: 5 }).why, /Box ausgelastet/, 'Host knapp (Nachbarn)');
+  assert.equal(deckel({ maxParallel: 5 }, 0, { echtGb: 3, hostFreiGb: 5 }).ok, true, 'das erste läuft immer an');
+  assert.equal(deckel({ maxParallel: 5 }, 0, { echtGb: 3, hostFreiGb: 2 }).ok, false, 'außer der Host ist fast voll');
   assert.deepEqual(parseKommentar('Empfehlung: request-changes\n\nBitte X fixen.'), { empfehlung: 'request-changes', text: 'Bitte X fixen.' });
   assert.equal(parseKommentar('Empfehlung: merge!\ntext'), null);
   assert.equal(parseKommentar('Empfehlung: approve\n'), null, 'ohne Text');
@@ -280,21 +287,20 @@ test('Statuszeile: Sofort-Kommentar englisch mit Position/Tiefe/ETA, ein Takt po
   assert.equal(neu.length, 2, 'je wartendem Review genau ein Kommentar');
   const [k2, k3] = [neu.find((p) => p.url === `/repos/${W}/issues/2/comments`), neu.find((p) => p.url === `/repos/${W}/issues/3/comments`)];
   assert.ok(k2 && k3); assert.equal(k2.method, 'POST'); assert.equal(k2.auth, 'bearer write-tok');
-  assert.match(k2.body.body, /^🔎 Automated review queued · position 1 · depth quick · ETA ~\d+ min \(OLAF Workspace\)/);
+  assert.match(k2.body.body, /^🔎 Automated review queued · position 1 · depth regular · ETA ~\d+ min \(OLAF Workspace\)/);
   assert.match(k3.body.body, /^🔎 Automated review queued · position 2 · depth deep \(static deep review — test execution is switched off\) · ETA ~\d+ min/);
   for (const k of [k2, k3]) assert.doesNotMatch(k.body.body, /[äöüßÄÖÜ]/, 'englisch');
-  assert.equal([k2, k3].filter((k) => /How this works: `@review` = fast review/.test(k.body.body)).length, 1, 'Erklärung einmal je Person');
+  assert.equal([k2, k3].filter((k) => /How this works: `@review` = full review/.test(k.body.body)).length, 2, 'Anleitung an jedem Status-Kommentar');
   assert.match((k2.body.body + k3.body.body), /`@review deep` = additionally runs the repo's tests, typecheck, build and DB suites/);
   // dritter Takt: nichts Neues
   const n = posts.length; await R.reviewTick(deps); assert.equal(posts.length, n, 'kein Doppelpost');
   // Bearbeiten derselben Zeile (running), Fußzeile bleibt; gleiche Zeile nochmal = kein Aufruf
   const w2: any = await P.reviewsCol().findOne({ _id: `${W}#2@${SHA1}` as any });
-  const mitErkl = /How this works/.test(k2.body.body);
   await R.meldeStatus(w2, R.statusZeile({ art: 'running', tiefe: 'quick', eta: 12 }), deps);
   const ed = posts.at(-1);
   assert.equal(ed.method, 'PATCH'); assert.equal(ed.url, `/repos/${W}/issues/comments/4711`);
   assert.match(ed.body.body, /^🔎 Automated review running · depth quick · ETA ~12 min \(OLAF Workspace\)/);
-  assert.equal(/How this works/.test(ed.body.body), mitErkl);
+  assert.match(ed.body.body, /How this works/, 'Anleitung bleibt beim Bearbeiten');
   const n2 = posts.length; await R.meldeStatus(w2, R.statusZeile({ art: 'running', tiefe: 'quick', eta: 12 }), deps); assert.equal(posts.length, n2);
   // Pass C: ein langsamer Takt mit alter „queued“-Zeile überschreibt „running“ nicht
   await R.meldeStatus(w2, R.statusZeile({ art: 'queued', position: 1, tiefe: 'quick', eta: 9 }), deps, new Date(), { nurAnlegen: true }); assert.equal(posts.length, n2);
@@ -525,15 +531,16 @@ test('17c: Kontext vorab ins Paket (als Daten), Diff gegen die Basis, Delta-Revi
   assert.ok(calls.some((a) => a[0] === 'diff' && a[1] === SHA1 && a[2] === SHA3 && a.includes('--') && a.includes('src/a.ts')), 'Delta nur über die Dateien des PRs');
   assert.ok(existsSync(join(dir, 'delta.patch')));
   // Delta 50 Zeilen → quick; Lead bleibt Claude; ETA nach Größe
-  assert.equal(started[0].tiefe, 'quick'); assert.equal(started[0].modell, 'claude:opus');
+  assert.equal(started[0].tiefe, 'regular'); assert.equal(started[0].modell, 'claude:opus');
   assert.match(started[0].title, /\(Delta\)/);
   assert.match(started[0].prompt, /DELTA-REVIEW/); assert.match(started[0].prompt, /Punkt · Quelle .* erledigt\?/);
   assert.match(started[0].prompt, /auf Englisch/); assert.match(started[0].prompt, /kontext\.md/);
-  assert.equal(d.tiefe, 'quick'); assert.equal(d.zeilen, 50); assert.equal(d.delta.von, SHA1); assert.equal(d.basis, MB);
-  assert.equal(d.eta, R.etaMinuten('quick', 50, true));
+  assert.equal(d.tiefe, 'regular'); assert.equal(d.zeilen, 50); assert.equal(d.delta.von, SHA1); assert.equal(d.basis, MB);
+  assert.equal(d.eta, R.etaMinuten('regular', 50, true));
+  assert.match(started[0].prompt, /BEHAUPTUNGEN SIND UNBEWIESEN/); assert.match(started[0].prompt, /COUNCIL vor der Empfehlung/);
   assert.ok(marks[0][2].eta instanceof Date);
   // ohne früheres Review: volles Review, 1000 Zeilen → regular; ohne Kontext: Hinweis statt Diff
-  assert.equal(R.tiefeFuer(1000, false), 'regular'); assert.equal(R.tiefeFuer(399, false), 'quick'); assert.equal(R.tiefeFuer(10, true), 'deep');
+  assert.equal(R.tiefeFuer(1000, false), 'regular'); assert.equal(R.tiefeFuer(399, false), 'regular', 'nie mehr quick (Knut 19.10.)'); assert.equal(R.tiefeFuer(10, true), 'deep');
   assert.equal(R.tiefeFuer(null, false), 'regular');
   assert.ok(R.etaMinuten('regular', 2900, false) <= 20, '#354: 2 900 Zeilen, regular — lief 14 min');
   const dm = await R.diffMaterial(TMP, TMP, null, SHA3, null, gitFake([]));
@@ -722,4 +729,21 @@ test('17c deep: Tests vor dem Review (exec), Ergebnis als tests.md, Auftrag nenn
   assert.match(R.statusZeile({ art: 'queued', tiefe: 'deep', eta: 30, tests: 'PR author is not on the allow-list' }), /depth deep \(static deep review — PR author is not on the allow-list\)/);
   assert.match(R.statusZeile({ art: 'running', tiefe: 'deep', eta: 30, tests: true }), /depth deep \(tests run on the workspace VM, not network-isolated\)/);
   await P.reviewsCol().deleteMany({});
+});
+
+test('19.10.: Gegenprüfung aus einem früheren Prozess (Neustart der Web-App) startet sofort neu statt 45 min zu hängen', async () => {
+  const P = await import('../server/prticker.ts');
+  const R = await import('../server/prreview.ts');
+  await P.reviewsCol().deleteMany({});
+  mkdirSync(join(TMP, 'pakete', '181-review-x-2'), { recursive: true });
+  writeFileSync(join(TMP, 'pakete', '181-review-x-2', 'kommentar.md'), 'Empfehlung: comment\n\nOk.\n');
+  const vorNeustart = new Date(R.PROZESS_START.getTime() - 60_000);
+  await P.reviewsCol().insertOne({ _id: 'WirStrom1/olaf-admin#2@' + SHA3, repo: 'WirStrom1/olaf-admin', number: 2, head: SHA3, status: 'gegenprüfung', gpStart: vorNeustart,
+    strand: 'sy', paket: '181-review-x-2', worktree: TMP, basis: MB, ownerId: 'u1', createdAt: vorNeustart, startedAt: vorNeustart } as any);
+  const gpCalls: any[] = [];
+  const deps: any = { userById: async () => ({ id: 'u1' }), startOrch: async () => { throw new Error('nein'); }, strandDoc: async () => ({ _id: 'sy', reviewReadyAt: vorNeustart }),
+    gegenpruefung: async (r: any) => { gpCalls.push(r); return { ok: false, text: '', fehler: 'test' }; }, sendStrand: async () => {},
+    prNow: async () => ({ state: 'OPEN', merged: false, headRefOid: SHA3 }), vorhanden: async () => [] };
+  await R.reviewTick(deps); await R.gegenpruefungenAbwarten();
+  assert.equal(gpCalls.length, 1, 'Gegenprüfung neu gestartet');
 });

@@ -675,3 +675,47 @@ test('Nachtbau ohne Lesetoken: kein Bau, genau ein Morgeneintrag „G0 nachts ni
     assert.deepEqual(q.options.map((o: any) => o.label), ['trotzdem bauen', 'Spec nachziehen/abräumen']);
   } finally { writeFileSync(G0_TOKEN, '1'); }
 });
+
+// ---------- Fix 17d: Nachrichten landen im richtigen Chat ----------
+const ROOT_MSG = '00000000-0000-0000-0000-000000000000';
+async function eigenerChat(): Promise<{ conv: string; first: string }> {
+  const conv = randomUUID(), first = randomUUID();
+  await mongo.db(LCDB).collection('messages').insertOne({ messageId: first, parentMessageId: ROOT_MSG, conversationId: conv, user: String(knut._id), isCreatedByUser: true, text: 'Start', createdAt: new Date() });
+  return { conv, first };
+}
+const nachsendenPost = async (b: unknown) => fetch(B + '/api/chat/nachsenden', { method: 'POST', headers: { cookie: await knutCookie(), 'content-type': 'application/json', 'x-werkbank': '1' }, body: JSON.stringify(b) });
+async function bridgeStatus(conv: string): Promise<string> {
+  const j: any = await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/sessions?user=${String(knut._id)}`, { headers: { 'x-werkbank-internal': INTERNAL } })).json();
+  return j.sessions.find((s: any) => s.conv === conv)?.status ?? 'unbekannt';
+}
+async function bridgeUntil(conv: string, want: string, ms = 10_000) {
+  for (const t0 = Date.now(); Date.now() - t0 < ms;) { if (await bridgeStatus(conv) === want) return true; await new Promise((r) => setTimeout(r, 100)); }
+  return false;
+}
+
+test('Nachsenden (Fix 17d, Fund 1): ausdrücklich in die Unterhaltung, in der nachgereicht wurde; dort läuft ein Zug → 409; fremd → 404', async () => {
+  const { conv, first } = await eigenerChat();
+  assert.equal((await nachsendenPost({ conv: randomUUID(), text: 'x' })).status, 404, 'keine eigene Unterhaltung');
+  assert.equal((await nachsendenPost({ conv, text: '  ' })).status, 400);
+  assert.equal((await nachsendenPost({ conv: 'kaputt', text: 'x' })).status, 400);
+  const r = await nachsendenPost({ conv, text: 'langsam 2500' });
+  assert.equal(r.status, 200, await r.text());
+  const call = lcCalls.filter((c) => c.path.startsWith('/api/agents/chat') && c.body.conversationId === conv).at(-1)!;
+  assert.equal(call.body.text, 'langsam 2500');
+  assert.equal(call.body.parentMessageId, first, 'Eltern = letzte Nachricht genau dieser Unterhaltung');
+  assert.ok(await bridgeUntil(conv, 'läuft'), 'Zug läuft');
+  const busy = await nachsendenPost({ conv, text: 'noch etwas' });
+  assert.equal(busy.status, 409, 'während des Zugs nicht nachsenden — der Client fragt später erneut');
+  assert.ok(await bridgeUntil(conv, 'bereit'));
+});
+
+test('deliver je Unterhaltung nacheinander (Fix 17d, Fund 6): zwei gleichzeitige Nachrichten hängen nie unter derselben Elternnachricht', async () => {
+  const { conv } = await eigenerChat();
+  const rs = await Promise.all([nachsendenPost({ conv, text: 'eins' }), nachsendenPost({ conv, text: 'zwei' })]);
+  assert.ok(rs.every((r) => r.status === 200 || r.status === 409), rs.map((r) => r.status).join(','));
+  const calls = lcCalls.filter((c) => c.path.startsWith('/api/agents/chat') && c.body.conversationId === conv);
+  assert.ok(calls.length >= 1);
+  const parents = calls.map((c) => c.body.parentMessageId);
+  assert.equal(new Set(parents).size, parents.length, `keine Geschwister im Nachrichtenbaum: ${parents.join(', ')}`);
+  await bridgeUntil(conv, 'bereit');
+});
