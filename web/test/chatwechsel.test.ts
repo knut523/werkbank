@@ -24,7 +24,7 @@ test('Wechsel hängt: nach 8 s gibt die Sperre frei (nichts bleibt dauerhaft blo
   wechselStarten(B, 0);
   assert.equal(wechselSperre(A, 'x', 7000), true);
   assert.equal(wechselSperre(A, 'y', 9000), false);
-  assert.equal(abholen(B)?.text, 'x');
+  assert.equal(abholen(B), null, 'Ziel kam nie an: Text steht noch in A — nicht zusätzlich in B auftauchen');
 });
 
 test('wechselZiel: während des Ladens das Ziel (Nachreichen ordnet A-Einträge dann als „anderer Chat“ ein), danach null', () => {
@@ -39,4 +39,14 @@ test('wechselZiel: während des Ladens das Ziel (Nachreichen ordnet A-Einträge 
   assert.equal(wechselZiel(100), B, 'anderer Chat: Wechsel läuft weiter');
   angekommen(B);
   assert.equal(wechselZiel(100), null, 'Ziel offen: vorbei');
+});
+
+test('Neuer Wechsel, bevor das vorige Ziel ankam: der alte Vormerk taucht später nicht in B auf', () => {
+  const C = 'cccccccc-0000-4000-8000-000000000003';
+  wechselStarten(B, 0);
+  assert.equal(wechselSperre(A, 'für B', 100), true);
+  wechselStarten(C, 200);
+  assert.equal(abholen(B), null);
+  assert.equal(abholen(C), null);
+  angekommen(C);
 });

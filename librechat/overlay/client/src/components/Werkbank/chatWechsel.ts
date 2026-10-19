@@ -6,12 +6,18 @@
 let wechsel: { zu: string; bis: number } | null = null;
 let vorgemerkt: { zu: string; von: string; text: string } | null = null;
 
-export function wechselStarten(zu: string, now = Date.now()) { wechsel = { zu, bis: now + 8000 }; }
+export function wechselStarten(zu: string, now = Date.now()) {
+  // Neuer Wechsel vor dem Ankommen des vorigen: dessen Text steht noch im Feld (bzw. LibreChat sichert ihn als Entwurf dort).
+  if (vorgemerkt && vorgemerkt.zu !== zu) vorgemerkt = null;
+  wechsel = { zu, bis: now + 8000 };
+}
 
 /** true = ein Chatwechsel lädt noch (aktiv ist noch nicht das Ziel): nicht senden, `text` für das Ziel vormerken. */
 export function wechselSperre(aktiv: string | null | undefined, text: unknown, now = Date.now()): boolean {
   if (!wechsel) return false;
-  if (aktiv === wechsel.zu || now > wechsel.bis) { wechsel = null; return false; }
+  if (aktiv === wechsel.zu) { wechsel = null; return false; }
+  // Abgelaufen, ohne dass das Ziel ankam: der Text steht noch im Feld des vorigen Chats — nichts mehr vormerken.
+  if (now > wechsel.bis) { if (vorgemerkt?.zu === wechsel.zu) vorgemerkt = null; wechsel = null; return false; }
   const t = String(text ?? '').trim();
   if (t) vorgemerkt = { zu: wechsel.zu, von: String(aktiv ?? ''), text: vorgemerkt?.zu === wechsel.zu ? `${vorgemerkt.text}\n\n${t}` : t };
   return true;

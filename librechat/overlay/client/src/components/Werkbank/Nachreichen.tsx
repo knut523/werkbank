@@ -77,9 +77,10 @@ function Nachreichen({ conversationId, isSubmitting, methods, submitMessage, tex
   // das beim Wechsel das Feld in den Entwurf des vorigen Chats sichert und den des neuen lädt; dort wird der Text wieder entfernt.
   useEffect(() => {
     angekommen(aktiv);
-    const v = abholen(aktiv);
-    if (!v) return;
+    // Erst im Timer abholen: fällt der Effekt vorher weg (nächster Wechsel, Unmount), bleibt der Text vorgemerkt.
     const t = setTimeout(() => {
+      const v = abholen(aktiv);
+      if (!v) return;
       if (v.von) setDraft({ id: v.von, value: '' });
       legen(v.text);
       setHinweis('Der Chat lud noch — dein Text steht jetzt hier im Eingabefeld. Bitte noch einmal senden.');
