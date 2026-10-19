@@ -18,7 +18,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, readdirSync, writeFileSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { g0Env, g0GitArgs } from './vorbau.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -365,6 +365,8 @@ export async function meldeStatus(r: any, zeile: string, deps: Pick<ReviewDeps, 
 }
 
 export interface ReviewDeps {
+  /** Speicherstand der Box (Tests setzen ihn; Vorgabe speicherStand()). */
+  speicher?: () => { echtGb: number; hostFreiGb: number } | null;
   userById: (id: string) => Promise<any>;
   startOrch: (u: any, inp: any) => Promise<{ id: string }>;
   strandDoc: (id: string) => Promise<any>;
@@ -389,9 +391,26 @@ export interface ReviewDeps {
   now?: () => Date;
 }
 
-/** Rein: darf jetzt ein weiteres Review starten? Nur die Parallelität zählt (keine Tagesgrenze, Knut 17.10.); sonst warten. */
-export function deckel(s: Pick<TickerSettings, 'maxParallel'>, laufend: number): { ok: boolean; why: string } {
+/** Speicher der ganzen Box (Knut 19.10.: „gegen die gesamtheitliche Grenze der Box“): echt belegt = anon + slab_unreclaimable der
+ *  cgroup (memory.current zählt Platten-Cache mit und täuscht), Host frei = MemAvailable (der Host ist geteilt). null = nicht lesbar. */
+export function speicherStand(): { echtGb: number; hostFreiGb: number } | null {
+  try {
+    const st = readFileSync('/sys/fs/cgroup/memory.stat', 'utf8');
+    const wert = (k: string) => Number(st.match(new RegExp(`^${k} (\\d+)`, 'm'))?.[1] ?? 0);
+    const frei = Number(readFileSync('/proc/meminfo', 'utf8').match(/^MemAvailable:\s+(\d+)/m)?.[1] ?? NaN);
+    if (!Number.isFinite(frei)) return null;
+    return { echtGb: (wert('anon') + wert('slab_unreclaimable')) / 1e9, hostFreiGb: frei / 1e6 };
+  } catch { return null; }
+}
+export const SPEICHER = { echtMaxGb: 9, hostMinGb: 6, hostNotGb: 3 };
+
+/** Rein: darf jetzt ein weiteres Review starten? Parallelität bis maxParallel (keine Tagesgrenze, Knut 17.10.), aber ein weiteres
+ *  nur, wenn die Box Luft hat (Knut 19.10.); das erste läuft immer an, außer der Host ist fast voll. Sonst warten. */
+export function deckel(s: Pick<TickerSettings, 'maxParallel'>, laufend: number, sp: { echtGb: number; hostFreiGb: number } | null = null): { ok: boolean; why: string } {
   if (laufend >= s.maxParallel) return { ok: false, why: `schon ${laufend} gleichzeitig` };
+  if (sp && sp.hostFreiGb < SPEICHER.hostNotGb) return { ok: false, why: `Box ausgelastet (Host frei ${sp.hostFreiGb.toFixed(1)} GB)` };
+  if (sp && laufend > 0 && (sp.echtGb > SPEICHER.echtMaxGb || sp.hostFreiGb < SPEICHER.hostMinGb))
+    return { ok: false, why: `Box ausgelastet (echt ${sp.echtGb.toFixed(1)} GB, Host frei ${sp.hostFreiGb.toFixed(1)} GB)` };
   return { ok: true, why: '' };
 }
 
@@ -530,7 +549,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
   let started = 0;
   for (const r of (await reviewsCol().find({ status: 'wartet', $or: [{ retryAt: null }, { retryAt: { $exists: false } }, { retryAt: { $lte: now } }] }).sort({ createdAt: 1 }).limit(10).toArray()) as any[]) {
     const laufend = await reviewsCol().countDocuments({ status: { $in: ['startet', 'läuft', 'gegenprüfung', 'abgleich'] } });
-    const dk = deckel(s, laufend);
+    const dk = deckel(s, laufend, (deps.speicher ?? speicherStand)());
     if (!dk.ok) {
       await reviewsCol().updateOne({ _id: r._id }, { $set: { note: `wartet: ${dk.why}` } });   // bleibt eingereiht, sichtbar im Ticker
       break;
