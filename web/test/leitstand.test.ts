@@ -594,6 +594,16 @@ test('Plan 154 §9 (Council R3): Review-Ansicht — Entscheidungen aus dem Beric
   await W().collection('pr_reviews').updateOne({ strand: st.id }, { $set: { posted: { at: new Date(), url: 'u', by: 'auto' } } });
   assert.equal((await post(`/api/review/${st.id}/verwerfen`, {})).status, 409);
   await W().collection('pr_reviews').deleteOne({ strand: st.id });
+  // Pass C: „Jetzt reviewen“ = frischer Anlauf — Nachfass, Wache, Abschlussmeldung, Neustart-Zähler, Verwerfen zurückgesetzt
+  const rid = `WirStrom1/olaf-admin#955@${'f'.repeat(40)}`;
+  await W().collection('pr_reviews').insertOne({ _id: rid, repo: 'WirStrom1/olaf-admin', number: 955, head: 'f'.repeat(40), status: 'fehler', createdAt: new Date(0),
+    nb: { at: new Date() }, wache: { n: 2 }, abschlussGemeldet: { at: new Date() }, gpNeustarts: 2, verworfen: { by: 'x' }, ohnePost: 'aus', etaZusage: 30 } as any);
+  assert.equal((await post('/api/leitstand/ticker/review', { id: rid })).status, 200);
+  const neu: any = await W().collection('pr_reviews').findOne({ _id: rid as any });
+  assert.equal(neu.status, 'wartet');
+  for (const k of ['nb', 'wache', 'abschlussGemeldet', 'gpNeustarts', 'verworfen', 'ohnePost', 'etaZusage']) assert.equal(neu[k], undefined, k);
+  assert.ok(Date.now() - new Date(neu.queuedAt).getTime() < 60_000);
+  await W().collection('pr_reviews').deleteOne({ _id: rid as any });
   // Kein interner Weg legt an oder zieht zurück (Bedingung 4); lesen geht.
   const ip = (path: string, b: unknown) => fetch(B + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId: String(knut._id), ...(b as object) }) });
   assert.equal((await ip('/internal/orchestrator/freigabe', { strand: st.id })).status, 404);

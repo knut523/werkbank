@@ -131,7 +131,8 @@ const tagText = (body: string | null | undefined, who: string) => `${TAG_DEEP.te
 /** Paket 223 (#364: „Nits 1–2 addressed“ ohne @review): meldet der PR-Autor Punkte als erledigt? Verneint („not done yet“,
  *  „noch nicht behoben“) zählt nicht; ein Treffer ohne Verneinung davor reicht. */
 const ERLEDIGT = /\b(addressed|fixed|done|resolved|erledigt|behoben|umgesetzt)\b/gi;
-const VERNEINT = /\b(not|n't|no|never|noch nicht|nicht|kein|yet to|still|will be|to be|todo)\W+(?:\w+\W+){0,3}$/i;
+// Pass C: `n't` ohne \b davor (isn't, don't), nothing/nichts/keine, und „well done“/„gut gemacht“ ist Lob, kein Erledigt.
+const VERNEINT = /(?:n['’]t|(?<![a-zäöü])(?:not|no|never|nothing|noch nicht|nicht|nichts|keine?|yet to|still|will be|to be|todo|well|gut|good|great|nice|sehr))\W+(?:[\wäöüß]+\W+){0,3}$/i;
 export function meldetErledigt(body: string | null | undefined): boolean {
   const t = String(body ?? '');
   if (TAG.test(t)) return false;
@@ -237,8 +238,10 @@ export async function tickerTick(getToken: () => Promise<string | null>, now = n
     const reviews = await queueReviews(fresh, s, now);
     // Paket 223: lag der letzte erfolgreiche Lauf > 30 min zurück (Web-App aus, kein Token), merkt sich der Lauf die Lücke —
     // die Wache (prreview.ts) meldet sie einmal mit der Zahl der nachgeholten Reviews. Erfolg setzt die Fehlermeldung zurück.
-    const luecke = st.at && now.getTime() - new Date(st.at).getTime() > Math.max(LUECKE_MIN, 2 * s.minutes + 5) * 60_000 ? { luecke: { von: new Date(st.at), bis: now, reviews, gemeldet: false } } : {};
-    await meta().updateOne({ _id: 'pr_ticker' as any }, { $set: { at: got.truncatedAt ? new Date(got.truncatedAt) : now, error: null, fehlerGemeldet: null, rate: got.rate, counts: got.counts, prs: got.prs.length, truncated: !!got.truncatedAt, ...luecke } }, { upsert: true });
+    // `ok` = letzter erfolgreicher Lauf; `at` ist der Lese-Zeiger und kann bei abgeschnittenen Suchen alt sein (Pass C).
+    const letzter = st.ok ?? st.at;
+    const luecke = letzter && now.getTime() - new Date(letzter).getTime() > Math.max(LUECKE_MIN, 2 * s.minutes + 5) * 60_000 ? { luecke: { von: new Date(letzter), bis: now, reviews, gemeldet: false } } : {};
+    await meta().updateOne({ _id: 'pr_ticker' as any }, { $set: { at: got.truncatedAt ? new Date(got.truncatedAt) : now, ok: now, error: null, fehlerGemeldet: null, rate: got.rate, counts: got.counts, prs: got.prs.length, truncated: !!got.truncatedAt, ...luecke } }, { upsert: true });
     return { events: fresh.length, reviews, prs: got.prs.length };
   })();
   try { return await running; } finally { running = null; }

@@ -239,6 +239,12 @@ test('Paket 223: Umgebung der CI-Suiten aus dem Workflow (olaf-admin deploy.yml)
   assert.equal(bulk.env.NODE_OPTIONS, undefined, 'Shard/Heap nie aus der CI');
   assert.equal(ci.get('pii:test:backfill')!.env.PII_TEST_DATABASE_URL, X.REVIEW_DB, 'Inline-VAR=wert vor npm run');
   assert.equal(ci.get('brevo:events:test')!.env.TZ, 'Europe/Vienna', 'erstes Vorkommen gilt');
+  // Pass C: submit-route:test läuft im checks-Job ohne und im db-Job mit SUBMIT_TEST_DATABASE_URL → Vereinigung
+  assert.equal(ci.get('submit-route:test')!.env.SUBMIT_TEST_DATABASE_URL, X.REVIEW_DB);
+  writeFileSync(join(wt, '.github', 'workflows', 'inline.yml'), 'jobs:\n  i:\n    steps:\n      - run: |\n          STRIPE_KEY=${{ secrets.STRIPE_KEY }} npm run pay:test\n          TZ="Europe/Vienna" MSG=\'a b\' npm run quote:test\n');
+  const ci2 = X.ciUmgebung(wt);
+  assert.deepEqual(ci2.get('pay:test')!.secrets, ['STRIPE_KEY']);
+  assert.deepEqual(ci2.get('quote:test')!.env, { TZ: 'Europe/Vienna', MSG: 'a b' });
   const p = ci.get('parity:test')!;
   assert.deepEqual(p.secrets, ['TARIFF_APP_READ_TOKEN']); assert.equal(p.env.REF, 'main'); assert.equal(p.env.SHARD, undefined); assert.equal(p.env.PATH, undefined);
   assert.deepEqual(Object.keys(p.env).sort(), ['BASE', 'REF'], 'LD_*, BASH_ENV, Proxy nie');
