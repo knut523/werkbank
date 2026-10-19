@@ -81,7 +81,7 @@ export function cosRoutes(d: CosDeps) {
     const u = await d.needAdmin(req);
     if (process.env.COS_MORGENLAGE === 'off') return send(res, 200, { aus: true });
     const { lage } = await sammleLage(u, d.quellen());
-    send(res, 200, lage);
+    send(res, 200, { ...lage, zusagenDatei: existsSync(join(d.vaultDir(), registerRel('zusagen'))) ? registerRel('zusagen') : null });
   });
 
   // Freigabe-Inbox (S3.1): alle Entscheidungen statt der ersten sieben, mit „wartet seit“ und „blockiert: Unter-Chat X“.

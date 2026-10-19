@@ -328,13 +328,14 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
     ...d.queue.filter((q: any) => q.bucket === 'laeuft').map((q: any) => ({ id: q.id, thema: 'Board', titel: `${q.key}${q.summary ? ` — ${q.summary}` : ''}`, at: q.startedAt, chat: q.url }))];
   const mine = mineCount(d.mine, []);
   const zahl = {
-    dich: karten.filter((k) => k.ampel === 'review' && !String(k.vonDir).startsWith('nichts')).length + lose.length + board.length + mine + (d.g0?.length ?? 0),
+    // Eine Zahl, eine Quelle (Walkthrough 221): der Kopf zeigt die Inbox-Zahl wie Leiste und Morgenlage ①.
+    dich: typeof d.count === 'number' ? d.count : karten.filter((k) => k.ampel === 'review' && !String(k.vonDir).startsWith('nichts')).length + lose.length + board.length + mine + (d.g0?.length ?? 0),
     push: karten.filter((k) => k.ampel === 'push' && k.kannFreigeben).length,
     laeuft: laufen.length,
     blockiert: karten.filter((k) => k.ampel === 'blockiert').length,
   };
   const springe = (w: string) => {
-    const sel = w === 'laeuft' ? '[data-testid="ub-laeuft"]' : w === 'dich' ? '[data-ampel="review"], [data-testid="ub-lose"], [data-testid="ub-board"]' : `[data-ampel="${w}"]`;
+    const sel = w === 'laeuft' ? '[data-testid="ub-laeuft"]' : w === 'dich' ? (cosAktiv ? '[data-testid="cos-entscheide"]' : '[data-ampel="review"], [data-testid="ub-lose"], [data-testid="ub-board"]') : `[data-ampel="${w}"]`;
     document.querySelector(sel)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   };
   const ansichtKarte = ansicht ? karten.find((k) => k.id === ansicht.id) : null;

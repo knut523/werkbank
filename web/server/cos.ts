@@ -73,8 +73,9 @@ export interface LageInput {
 
 // ---------- Ausgabe ----------
 
-export interface Liste<T> { items: T[]; weitere: number; gesamt: number }
-export const kappe = <T>(a: T[], n: number): Liste<T> => ({ items: a.slice(0, n), weitere: Math.max(0, a.length - n), gesamt: a.length });
+/** `rest`: die nicht gezeigten Einträge (höchstens 50) — „… und N weitere“ klappt damit an Ort und Stelle auf (Walkthrough 221). */
+export interface Liste<T> { items: T[]; weitere: number; gesamt: number; rest?: T[] }
+export const kappe = <T>(a: T[], n: number): Liste<T> => ({ items: a.slice(0, n), weitere: Math.max(0, a.length - n), gesamt: a.length, ...(a.length > n ? { rest: a.slice(n, n + 50) } : {}) });
 
 export interface Entscheid { art: 'frage' | 'bericht' | 'triage'; id: string; titel: string; empfehlung: string; optionen: string[]; strang: { id: string; titel: string } | null; seit: string; wartet: boolean; berichtHash?: string | null; datei?: string; zusagen?: number; entscheidungen?: number }
 export interface Blockiert { art: 'strang' | 'jira'; id: string; titel: string; von: string; seit?: string | null; link?: string | null }

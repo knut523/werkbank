@@ -1,0 +1,27 @@
+diff --git a/client/src/components/Messages/Content/Error.tsx b/client/src/components/Messages/Content/Error.tsx
+index b464ce2..c263418 100644
+--- a/client/src/components/Messages/Content/Error.tsx
++++ b/client/src/components/Messages/Content/Error.tsx
+@@ -38,8 +38,20 @@ type TGenericError = {
+ 
+ const errorMessages = {
+   [ErrorTypes.MODERATION]: 'com_error_moderation',
+-  [ErrorTypes.NO_USER_KEY]: 'com_error_no_user_key',
+-  [ErrorTypes.INVALID_USER_KEY]: 'com_error_invalid_user_key',
++  // Werkbank (Walkthrough 221): statt „Kein API-Key gefunden“ ein Satz mit Link auf die Einrichtung (dort wird Claude verbunden).
++  [ErrorTypes.NO_USER_KEY]: () => (
++    <>
++      Noch kein Claude-Zugang verbunden. Verbinde ihn einmal unter{' '}
++      <a href="/wb/einrichtung" className="underline" data-testid="werkbank-einrichtung-link">Workspace-Einrichtung</a>
++      {' '}(Kontomenü unten links) — danach diese Nachricht erneut senden.
++    </>
++  ),
++  [ErrorTypes.INVALID_USER_KEY]: () => (
++    <>
++      Der Claude-Zugang ist abgelaufen oder ungültig. Neu verbinden unter{' '}
++      <a href="/wb/einrichtung" className="underline" data-testid="werkbank-einrichtung-link">Workspace-Einrichtung</a>.
++    </>
++  ),
+   [ErrorTypes.NO_BASE_URL]: 'com_error_no_base_url',
+   [ErrorTypes.INVALID_BASE_URL]: 'com_error_invalid_base_url',
+   [ErrorTypes.INVALID_ACTION]: `com_error_${ErrorTypes.INVALID_ACTION}`,

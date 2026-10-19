@@ -52,7 +52,7 @@ import { olafJira } from './cos-olafjira.ts';
 import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
 import { boxTick } from './boxwaechter.ts';
 import { abschlussTick, wocheTick } from './cosabschluss.ts';
-import { rueckstau as cosRueckstau, } from './cosmeeting.ts';
+import { rueckstau as cosRueckstau, vorschlaege as cosVorschlaege } from './cosmeeting.ts';
 import { meetingTeams as cosMeetingTeams } from './cossammle.ts';
 const cosRueckstauZahl = () => { try { return cosRueckstau(cfg.vaultDir, cosMeetingTeams(), new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date())).length; } catch { return 0; } };
 import type { Quellen as CosQuellen } from './cossammle.ts';
@@ -1333,25 +1333,15 @@ async function myQueue(u: User) {
 }
 
 /** Zähler für die Navigation: alles, was etwas von der Person will (laufende Agenten nicht). */
-async function todayCount(u: User, queue?: any[], mine?: any, cards?: any[]) {
-  // Plan 213 S3 (K11): mit der neuen Navigation ist der Zähler die Zahl der Inbox — dieselbe Zahl wie im Heute-Kopf und im Chat.
-  if (navNeu()) {
-    // Der Zähler fragt alle 60 s — die ganze Inbox (Karten, Berichte) höchstens alle 30 s je Person neu bauen (Pass C).
-    const c = zahlCache.get(u.id);
-    if (c && Date.now() - c.at < 30_000) return c.n;
-    const n = inboxZahl((await inboxFuer(u)).eintraege);
-    zahlCache.set(u.id, { at: Date.now(), n });
-    return n;
-  }
-  const q = queue ?? await myQueue(u);
-  const m = mine ?? await mineFor(u, { write: false });   // Zähler (alle 60 s): nur lesen, nie freigaben.md schreiben
-  const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
-  const hyg = h.items.filter((i: any) => !h.snoozed.includes(i.key)).length;
-  const orch = (await listQuestions(u, { open: true }).catch(() => [])).length;   // Rückfragen des Orchestrators
-  // Plan 213 S1b (K11): im neuen Modus zählt, was wirklich auf Knut wartet (wartet, blockiert, fertig) — dieselbe Zählung wie /api/status.
-  const strands = statusNeu() ? (u.role === 'ADMIN' ? (await zaehlerFuer(u)).brauchtDich : 0)
-    : (cards ?? await strandCards(u).catch(() => [])).filter((c: any) => !c.running).length;   // fertige Stränge (nur Admins, nur Mongo — Teil B, F1)
-  return strands + q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + (m.pendingApprovals?.length ?? 0) + (m.draft ? 1 : 0) + hyg + orch;
+async function todayCount(u: User) {
+  // Plan 213 S3 (K11): der Zähler ist die Zahl der Inbox — dieselbe Zahl wie im Heute-Kopf, in der Morgenlage ① und im Chat.
+  // Walkthrough 221: auch in der alten Leiste (die eigene Formel gab „6 brauchen dich“ neben „Entscheide heute 0“).
+  // Der Zähler fragt alle 60 s — die ganze Inbox (Karten, Berichte) höchstens alle 30 s je Person neu bauen (Pass C).
+  const c = zahlCache.get(u.id);
+  if (c && Date.now() - c.at < 30_000) return c.n;
+  const n = inboxZahl((await inboxFuer(u)).eintraege);
+  zahlCache.set(u.id, { at: Date.now(), n });
+  return n;
 }
 
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -1374,7 +1364,7 @@ on('GET', /^\/api\/today$/, async (req, res) => {
   const g0 = await g0Blocked(u).catch(() => []);   // Nachtbau: von G0 gestoppte Stränge (blocked_g0)
   const memory = u.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null;   // nur Admins (RAM-Plan 125)
   const leitstand = await leitstandLine(u).catch(() => null);   // nur Admins (Plan 132)
-  send(res, 200, { queue, strands: cards, mine, day, today, orchOpen, orchAuto, g0, leitstand, memory, count: await todayCount(u, queue, mine, cards), dryRun: dryRun() });
+  send(res, 200, { queue, strands: cards, mine, day, today, orchOpen, orchAuto, g0, leitstand, memory, count: await todayCount(u), dryRun: dryRun() });
 });
 
 on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
@@ -1415,13 +1405,20 @@ async function inboxFuer(u: User, now = Date.now()) {
   await spaeterCol().deleteMany({ userId: u.id, bis: { $lte: new Date(now) } }).catch(() => {});   // abgelaufene aufräumen
   const spaeter = new Map(((await spaeterCol().find({ userId: u.id, bis: { $gt: new Date(now) } }).toArray()) as any[]).map((s) => [String(s.id), new Date(s.bis).getTime()]));
   const laeufe = (await myQueue(u).catch(() => [] as any[])).filter((x: any) => x.bucket !== 'laeuft').length;
-  const ib = baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe,
+  // Meeting-Vorschläge zählen mit, wo die Morgenlage sie zeigt (alte Übersicht) — eine Zahl für Kopf, Leiste und ① (221).
+  let triage: any[] = [];
+  if (admin && !navNeu() && process.env.COS_MORGENLAGE !== 'off') {
+    const versteckt = new Set(((await wb().collection('cos_triage').find({ art: 'nein' }).toArray().catch(() => [])) as any[]).map((d) => String(d._id)));
+    try { triage = cosVorschlaege(cfg.vaultDir, cosMeetingTeams(), wienDatum(), versteckt).items; } catch { /* Vault nicht lesbar */ }
+  }
+  const ib = baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe, triage,
     kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now, annahmeMs: annahmeMs() });
   // Abwesenheits-Bremse (F4a): nach einer Rückkehr gilt „angenommen ab“ frühestens eine volle Frist später.
   if (bremseAn()) {
     const fr = anwesenheitFrei(await anwesenheitCol().findOne({ _id: u.id as any }) as any, now, annahmeMs());
     if (fr.ab) for (const e of ib.eintraege) if (e.autoAb && new Date(e.autoAb).getTime() < fr.ab.getTime()) e.autoAb = fr.ab.toISOString();
   }
+  zahlCache.set(u.id, { at: Date.now(), n: inboxZahl(ib.eintraege) });   // jede frisch gebaute Inbox stellt auch den Zähler (Kopf = Leiste, 221)
   return ib;
 }
 const anwesenheitCol = () => wb().collection('anwesenheit');

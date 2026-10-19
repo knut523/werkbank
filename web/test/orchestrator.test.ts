@@ -424,6 +424,8 @@ test('Plan 213 S2/S3: Inbox zeigt die Rückfrage, Antwort an der Quelle, Später
   assert.equal((await post('/api/inbox/..%2Fx/spaeter', {})).status, 404);
   ib = await get('/api/inbox');
   assert.ok(!ib.j.eintraege.some((x: any) => x.id === e2.id)); assert.ok(ib.j.zurueckgestellt >= 1);
+  // Walkthrough 221: auch mit der alten Leiste (navNeu aus) ist der Zähler die Inbox-Zahl — keine zweite Formel.
+  assert.equal((await get('/api/today/count')).j.count, ib.j.zahl);
   // Status (S1b) und Auswertung der Nutzung (S0) nur für Admins; Seiten zählen darf jede angemeldete Person.
   assert.equal((await get('/api/status')).status, 403);
   assert.equal((await get('/api/nutzung')).status, 403);

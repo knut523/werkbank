@@ -174,3 +174,11 @@ test('Vault-Seite: Stand in der ersten Zeile (K19), bei voller Last höchstens 2
   const ohne = lageMarkdown(l, { links: {} });
   assert.ok(!/\[\[/.test(ohne), 'ohne geprüfte Datei kein Wikilink');
 });
+
+test('kappe (Walkthrough 221): „… und N weitere“ trägt die versteckten Einträge mit, damit die Liste aufklappt', () => {
+  assert.deepEqual(kappe([1, 2, 3], 5), { items: [1, 2, 3], weitere: 0, gesamt: 3 });
+  const k = kappe([1, 2, 3, 4, 5, 6, 7], 5);
+  assert.deepEqual(k.rest, [6, 7]);
+  assert.equal(k.weitere, 2);
+  assert.equal(kappe(Array.from({ length: 80 }, (_, i) => i), 5).rest!.length, 50, 'höchstens 50 nachgereicht');
+});

@@ -91,3 +91,17 @@ test('Kennungen sind stabil und kurz; nur bekannte Formen gelten', () => {
   assert.notEqual(kennung.braucht('aa', 'X?'), kennung.braucht('aa', 'Y?'));
   assert.ok(KENNUNG_RE.test('q-abc')); assert.ok(KENNUNG_RE.test('altbestand')); assert.ok(!KENNUNG_RE.test('../x')); assert.ok(!KENNUNG_RE.test('x-1'));
 });
+
+test('Meeting-Vorschläge (Walkthrough 221): eigene Einträge mit fester Kennung, nur „Später“ hier, Link auf die Notiz — zählen wie alles andere', () => {
+  const now = Date.parse('2026-10-19T08:00:00Z');
+  const ib = baueInbox({ ...leer, triage: [{ id: 'olaf/Meetings/2026-10-18 Weekly.md', datei: 'olaf/Meetings/2026-10-18 Weekly.md', titel: 'Weekly', zusagen: 2, entscheidungen: 1, datum: '2026-10-18' }] }, { now });
+  assert.equal(ib.eintraege.length, 1);
+  const e = ib.eintraege[0];
+  assert.equal(e.art, 'triage');
+  assert.equal(e.id, kennung.triage('olaf/Meetings/2026-10-18 Weekly.md'));
+  assert.ok(KENNUNG_RE.test(e.id));
+  assert.deepEqual(e.antworten, ['spaeter'], 'Ja geht über die Vorschau der Morgenlage, nie blind über Chat-Knopf');
+  assert.equal(e.quelle.url, '#/wissen/olaf/Meetings/2026-10-18%20Weekly.md');
+  assert.equal(e.autoAb, null, 'Meeting-Vorschläge werden nie automatisch angenommen');
+  assert.match(e.frage, /2 Zusagen, 1 Entscheidung/);
+});

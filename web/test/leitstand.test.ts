@@ -559,8 +559,10 @@ test('Teil B (B-1/B-6/B-2/B-20): Lauf + Lesezeichen, fertiger Strang als Karte a
   await W().collection('orchestrator_runs').updateOne({ _id: st.id as any }, { $set: { autoTotal: 2 } });
   const t = await today();
   assert.ok(!(t.orchAuto ?? []).some((x: any) => x.id === st.id));
+  // Walkthrough 221: der Zähler ist die Inbox-Zahl (fertige Stränge ohne Frage zählen nicht mehr, sie stehen in Arbeit).
+  const ib = await (await fetch(B + '/api/inbox', { headers: { cookie: await cookie(knut) } })).json();
   const cnt = await (await fetch(B + '/api/today/count', { headers: { cookie: await cookie(knut) } })).json();
-  assert.ok(cnt.count >= t.strands.length);
+  assert.equal(cnt.count, ib.zahl);
 });
 
 test('Plan 154 §9 (Council R3): Review-Ansicht — Entscheidungen aus dem Bericht, Antworten als Nacharbeit (Bericht-Hash), Rechte, kein interner Weg legt Freigaben an', async () => {
@@ -708,8 +710,10 @@ test('Council-Diff Teil B: läuft ein fertiger Strang wieder, bleibt die Karte s
   assert.equal(p.status, 409);
   assert.match((await p.json()).error, /arbeitet gerade/);
   await until(() => cardOf(st.id), (x: any) => x && !x.running, 20_000);
+  // Walkthrough 221: Zähler = Inbox (ein fertiger Strang zählt nur mit offener Frage, Entscheidung oder Push).
+  const ib = await (await fetch(B + '/api/inbox', { headers: { cookie: await cookie(knut) } })).json();
   const countAfter = (await (await fetch(B + '/api/today/count', { headers: { cookie: await cookie(knut) } })).json()).count;
-  assert.ok(countAfter >= countNow + 1, `erst die wieder fertige Karte zählt (${countNow} → ${countAfter}; andere Karten können parallel dazukommen)`);
+  assert.equal(countAfter, ib.zahl, `Zähler = Inbox (${countNow} → ${countAfter})`);
 });
 
 test('Paket 141 (DoD 5/6/12–15): Karte mit Worum/Was tun/Stand; passt-live hakt nur wirklich Live-Stränge ab; Team 403', async () => {

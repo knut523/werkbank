@@ -5,6 +5,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, chatTarget } from '../api.ts';
 import { Err, useToast } from '../ui.tsx';
 import { JaNeinAnders, Rueckfrage, useStored, type Art } from './Uebersicht.tsx';
+import { InboxZeile } from './HeuteNeu.tsx';
+import { note } from '../beimir.tsx';
 
 const hm = (iso?: string | null) => (iso ? new Date(iso).toLocaleString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', minute: '2-digit' }) : '—');
 const seitText = (iso?: string | null) => {
@@ -14,9 +16,14 @@ const seitText = (iso?: string | null) => {
 };
 const datumKurz = (d?: string | null) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.` : '');
 
-function Mehr({ n, href }: { n: number; href?: string }) {
-  if (!n) return null;
-  return <p className="tiny mut" data-testid="cos-mehr">… und {n} weitere{href ? <> → <a href={href}>alle</a></> : null}</p>;
+/** „… und N weitere“ klappt an Ort und Stelle auf (`rest` vom Server) — keine Sackgasse mehr (Walkthrough 221). */
+function Mehr({ liste, zeile }: { liste: { weitere: number; rest?: any[] }; zeile: (x: any, i: number) => ReactNode }) {
+  const [auf, setAuf] = useState(false);
+  if (!liste.weitere) return null;
+  const rest = liste.rest ?? [];
+  if (!rest.length) return <p className="tiny mut" data-testid="cos-mehr">… und {liste.weitere} weitere</p>;
+  return <>{auf && <ul data-testid="cos-mehr-liste">{rest.map(zeile)}</ul>}
+    <button className="linklike tiny" aria-expanded={auf} onClick={() => setAuf(!auf)} data-testid="cos-mehr">{auf ? 'weniger zeigen' : `… und ${liste.weitere} weitere zeigen`}</button></>;
 }
 
 /** Eine Entscheidung mit Ja / Nein / Anders — antwortet dort, wo sie hingehört (Strang, Bericht, Meeting-Notiz). */
@@ -142,8 +149,10 @@ export function Morgenlage({ onChange, onAktiv }: { onChange: () => void; onAkti
   const [err, setErr] = useState<unknown>(null);
   const [zu, setZu] = useStored<boolean>('cos:zu', false);
   const [einwurf, setEinwurf] = useState<{ notiz?: string } | null>(null);
-  const [alle, setAlle] = useState<any>(null);
-  const lade = () => api('/api/cos/lage').then((x) => { setL(x); setErr(null); onAktiv?.(!x.aus); if (alle) api('/api/cos/inbox').then(setAlle).catch(() => {}); }).catch((e) => { setErr(e); onAktiv?.(false); });
+  const [alle, setAlle] = useState(false);
+  // ① kommt aus der Inbox — dieselbe Quelle wie der Zähler in der Leiste und im Kopf (Walkthrough 221: „6 brauchen dich“ vs. „0“).
+  const [ib, setIb] = useState<any>(null);
+  const lade = () => Promise.all([api('/api/cos/lage'), api('/api/inbox').catch(() => null)]).then(([x, i]: any[]) => { setL(x); setIb(i); setErr(null); onAktiv?.(!x.aus); }).catch((e) => { setErr(e); onAktiv?.(false); });
   useEffect(() => {
     lade();
     const id = setInterval(() => { if (document.visibilityState === 'visible') lade(); }, 120_000);
@@ -156,9 +165,17 @@ export function Morgenlage({ onChange, onAktiv }: { onChange: () => void; onAkti
   if (!l || l.aus) return null;
   const s = l.schulden, n = l.nacht;
   const nachtN = n.pr.gesamt + n.jira.gesamt + n.olafjira.gesamt + n.strang.gesamt + n.meeting.gesamt;
+  const eintraege: any[] = ib?.eintraege ?? [];
+  const entN = ib ? ib.zahl : l.entscheide.gesamt;
+  const gezeigt = alle ? eintraege : eintraege.slice(0, 7);
+  const inboxZeile = (e: any, i: number) => e.art === 'triage'
+    ? <EntscheidZeile key={e.id} e={{ art: 'triage', id: e.daten.triageId, titel: e.frage, empfehlung: e.empfehlung, datei: e.daten.datei, seit: e.wartetSeit, wartet: false }} onDone={fertig} />
+    : <InboxZeile key={e.id} e={e} erste={i === 0} onDone={fertig} />;
+  const blockZeile = (b: any) => <li key={b.id} className="small"><b>{b.titel}</b> — {b.von}{b.link ? <> <a className="tiny" href={b.link} target={b.art === 'strang' ? chatTarget : '_blank'} rel="noreferrer">öffnen</a></> : null}</li>;
+  const nachtZeile = (x: any, i: number) => <li key={i} className="small">{x.link && /^https?:/.test(x.link) ? <a href={x.link} target="_blank" rel="noreferrer">{x.text}</a> : x.text}</li>;
   const spalte = (titel: string, liste: any, key: string) => (
     <div className="cos-sp" data-testid={`cos-schulden-${key}`}><h4>{titel} <span className="tiny mut">{liste.gesamt}</span></h4>
-      {liste.items.length ? <ul>{liste.items.map((x: any, i: number) => <SchuldZeile key={x.id ?? `${key}${i}`} s={x} onChange={fertig} />)}</ul> : <p className="tiny mut">nichts offen</p>}<Mehr n={liste.weitere} /></div>
+      {liste.items.length ? <ul>{liste.items.map((x: any, i: number) => <SchuldZeile key={x.id ?? `${key}${i}`} s={x} onChange={fertig} />)}</ul> : <p className="tiny mut">nichts offen</p>}<Mehr liste={liste} zeile={(x: any, i: number) => <SchuldZeile key={x.id ?? `${key}r${i}`} s={x} onChange={fertig} />} /></div>
   );
   return (
     <section className="ub-card cos" data-testid="cos-morgenlage" aria-label="Morgenlage">
@@ -171,20 +188,20 @@ export function Morgenlage({ onChange, onAktiv }: { onChange: () => void; onAkti
         <button className="ub-btn ghost sm" aria-expanded={!zu} onClick={() => setZu(!zu)} data-testid="cos-zu">{zu ? 'aufklappen' : 'zuklappen'}</button>
       </div>
       {einwurf && <Einwurf vorgabe={einwurf.notiz} onClose={() => setEinwurf(null)} />}
-      {zu ? <p className="small mut">{l.entscheide.gesamt} Entscheide · {l.blockiert.gesamt} blockiert · {nachtN} über Nacht · {s.ueberfaellig} überfällig</p> : <>
+      {zu ? <p className="small mut">{entN} Entscheide · {l.blockiert.gesamt} blockiert · {nachtN} über Nacht · {s.ueberfaellig} überfällig</p> : <>
         {l.leer && <p className="small cos-leer" data-testid="cos-leer">{l.leer}</p>}
         <div className="cos-block" data-testid="cos-entscheide">
-          <h3>① Entscheide heute <span className="ub-amp u-dich">{l.entscheide.gesamt}</span></h3>
-          {(alle ? alle.items : l.entscheide.items).length ? (alle ? alle.items : l.entscheide.items).map((e: any) => <EntscheidZeile key={e.id} e={e} onDone={fertig} />) : <p className="small mut">Nichts wartet auf dich.</p>}
-          {alle ? <button className="linklike tiny" onClick={() => setAlle(null)} data-testid="cos-inbox-zu">nur die ersten {l.entscheide.items.length} zeigen</button>
-            : l.entscheide.weitere > 0 && <p className="tiny mut" data-testid="cos-mehr">… und {l.entscheide.weitere} weitere → <button className="linklike" onClick={() => api('/api/cos/inbox').then(setAlle).catch(setErr)} data-testid="cos-inbox-auf">alle ansehen (Inbox)</button></p>}
-          {alle && <p className="tiny mut" data-testid="cos-inbox-zahl">Inbox: {alle.gesamt} offen, davon {alle.blockierend} blockieren einen Unter-Chat.</p>}
+          <h3>① Entscheide heute <span className="ub-amp u-dich" data-testid="cos-entscheide-zahl">{entN}</span></h3>
+          {ib ? (gezeigt.length ? <div className="h-inbox">{gezeigt.map(inboxZeile)}</div> : <p className="small mut">Nichts wartet auf dich.</p>)
+            : (l.entscheide.items.length ? l.entscheide.items.map((e: any) => <EntscheidZeile key={e.id} e={e} onDone={fertig} />) : <p className="small mut">Nichts wartet auf dich.</p>)}
+          {ib && eintraege.length > 7 && <button className="linklike tiny" aria-expanded={alle} onClick={() => setAlle(!alle)} data-testid="cos-inbox-auf">{alle ? 'nur die ersten 7 zeigen' : `… und ${eintraege.length - 7} weitere zeigen`}</button>}
+          {ib?.zurueckgestellt > 0 && <p className="tiny mut">{ib.zurueckgestellt} bis morgen 07:00 zurückgestellt.</p>}
           {l.roadmapFragen > 0 && <p className="tiny mut">{l.roadmapFragen} offene Roadmap-Fragen → <a href="#/roadmap">Planen</a></p>}
         </div>
         <div className="cos-block" data-testid="cos-blockiert">
           <h3>② Blockiert <span className="ub-amp u-bad">{l.blockiert.gesamt}</span></h3>
-          {l.blockiert.items.length ? <ul>{l.blockiert.items.map((b: any) => <li key={b.id} className="small"><b>{b.titel}</b> — {b.von}{b.link ? <> <a className="tiny" href={b.link} target="_blank" rel="noreferrer">öffnen</a></> : null}</li>)}</ul> : <p className="small mut">Nichts blockiert.</p>}
-          <Mehr n={l.blockiert.weitere} />
+          {l.blockiert.items.length ? <ul>{l.blockiert.items.map(blockZeile)}</ul> : <p className="small mut">Nichts blockiert.</p>}
+          <Mehr liste={l.blockiert} zeile={blockZeile} />
         </div>
         {(l.budgets?.items ?? []).length > 0 && <div className="cos-block" data-testid="cos-budget">
           <h3>Budget je Unter-Chat</h3>
@@ -193,13 +210,13 @@ export function Morgenlage({ onChange, onAktiv }: { onChange: () => void; onAkti
         <details className="cos-block" data-testid="cos-nacht" open={nachtN > 0 && nachtN <= 12}>
           <summary><h3 style={{ display: 'inline' }}>③ Über Nacht geändert <span className="tiny mut">{nachtN}</span></h3></summary>
           {(['pr', 'jira', 'olafjira', 'strang', 'meeting'] as const).map((k) => n[k].gesamt > 0 && <div key={k}><h4>{{ pr: 'GitHub', jira: 'Jira PM', olafjira: 'Jira OLAF', strang: 'Unter-Chats', meeting: 'Meetings' }[k]}</h4>
-            <ul>{n[k].items.map((x: any, i: number) => <li key={i} className="small">{x.link && /^https?:/.test(x.link) ? <a href={x.link} target="_blank" rel="noreferrer">{x.text}</a> : x.text}</li>)}</ul><Mehr n={n[k].weitere} /></div>)}
+            <ul>{n[k].items.map(nachtZeile)}</ul><Mehr liste={n[k]} zeile={nachtZeile} /></div>)}
           {n.olafjiraFehler && <p className="tiny mut">OLAF-Jira nicht lesbar: {n.olafjiraFehler}</p>}
           {nachtN === 0 && <p className="small mut">Seit {hm(l.stand.stichzeit)} ist nichts passiert, was Aufmerksamkeit braucht.</p>}
-          {l.berichte.length > 0 && <div><h4>Berichte von heute</h4><ul>{l.berichte.map((b: any) => <li key={b.art} className="small"><b>{b.label}:</b> {b.zeile}</li>)}</ul></div>}
+          {l.berichte.length > 0 && <div><h4>Berichte von heute</h4><ul>{l.berichte.map((b: any) => <li key={b.art} className="small" data-testid={`cos-bericht-${b.art}`}><b>{b.label}:</b> {b.link ? <a href={note(b.link)} title="Bericht im Wissen öffnen — dort stehen die Tickets hinter den Zahlen">{b.zeile}</a> : b.zeile}</li>)}</ul></div>}
         </details>
         <div className="cos-block" data-testid="cos-schulden">
-          <h3>④ Wer schuldet was {s.ueberfaellig > 0 && <span className="ub-amp u-bad">{s.ueberfaellig} überfällig</span>}</h3>
+          <h3>④ Wer schuldet was {s.ueberfaellig > 0 && (l.zusagenDatei ? <a className="ub-amp u-bad" href={note(l.zusagenDatei)} title="Register der Zusagen öffnen" data-testid="cos-ueberfaellig">{s.ueberfaellig} überfällig</a> : <span className="ub-amp u-bad">{s.ueberfaellig} überfällig</span>)}</h3>
           <div className="cos-spalten">{spalte('Knut', s.knut, 'knut')}{spalte('Team', s.team, 'team')}{spalte('Partner', s.partner, 'partner')}</div>
           {s.klaeren.gesamt > 0 && <div className="cos-sp"><h4>Seite klären <span className="tiny mut">{s.klaeren.gesamt}</span></h4><ul>{s.klaeren.items.map((x: any, i: number) => <SchuldZeile key={x.id ?? `k${i}`} s={x} />)}</ul></div>}
           {s.rueckfragenAnKnut > 0 && <p className="tiny mut">{s.rueckfragenAnKnut} offene Rückfragen an dich stehen oben unter ①.</p>}

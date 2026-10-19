@@ -9,7 +9,7 @@
 import { wienDatum, wienUm, naechsterTag } from './zustand.ts';
 import { stufeVon, autoAb, autoFaehig, ANNAHME_MS, type Stufe } from './stufe.ts';
 
-export type InboxArt ='rueckfrage' | 'entscheidung' | 'braucht' | 'push' | 'vault' | 'pflege' | 'schlange' | 'altbestand';
+export type InboxArt ='rueckfrage' | 'entscheidung' | 'braucht' | 'push' | 'vault' | 'pflege' | 'schlange' | 'altbestand' | 'triage';
 export type Antwort = 'ja' | 'nein' | 'anders' | 'spaeter';
 
 export interface InboxEintrag {
@@ -32,7 +32,7 @@ export interface InboxEintrag {
 }
 
 export const ALTBESTAND_TAGE = 14;
-export const ART_TEXT: Record<InboxArt, string> = { rueckfrage: 'Rückfrage', entscheidung: 'Entscheidung', braucht: 'Frage im Stand', push: 'Push', vault: 'Vault-Sync', pflege: 'Pflege', schlange: 'Schlange', altbestand: 'Altbestand' };
+export const ART_TEXT: Record<InboxArt, string> = { rueckfrage: 'Rückfrage', entscheidung: 'Entscheidung', braucht: 'Frage im Stand', push: 'Push', vault: 'Vault-Sync', pflege: 'Pflege', schlange: 'Schlange', altbestand: 'Altbestand', triage: 'Meeting' };
 
 /** Kennung bleibt gleich, solange sich die Frage nicht ändert (Chat-Knöpfe und „Später“ hängen daran). */
 export const kennung = {
@@ -41,8 +41,9 @@ export const kennung = {
   braucht: (strand: string, text: string) => `b-${strand}-${kurzHash(text)}`,
   push: (strand: string, head: string) => `p-${strand}-${String(head).slice(0, 12)}`,
   vault: (id: string) => `v-${kurzHash(id)}`,
+  triage: (id: string) => `t-${kurzHash(id)}`,
 };
-export const KENNUNG_RE = /^(q|d|b|p|v|pflege|laeufe|schlange|altbestand)(-[A-Za-z0-9-]{1,80})?$/;
+export const KENNUNG_RE = /^(q|d|b|p|v|t|pflege|laeufe|schlange|altbestand)(-[A-Za-z0-9-]{1,80})?$/;
 
 export function kurzHash(s: string): string {
   let h = 2166136261;
@@ -72,6 +73,8 @@ export interface InboxQuellen {
   kopfFehler: Array<{ id: string; titel: string }>;
   /** Agentenläufe am Board, die auf die Person warten (eigene Karten in Arbeit) — ein Sammel-Eintrag (185 B8). */
   laeufe?: number;
+  /** Meeting-Vorschläge der Morgenlage (cosmeeting.ts → vorschlaege), nur Admin mit Morgenlage — damit ① und der Zähler dieselbe Liste zählen (221). */
+  triage?: Array<{ id: string; datei: string; titel: string; zusagen: number; entscheidungen: number; datum: string | null }>;
 }
 
 const iso = (v: unknown): string | null => { const t = v ? new Date(v as any).getTime() : NaN; return Number.isFinite(t) ? new Date(t).toISOString() : null; };
@@ -108,6 +111,11 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
   }
   for (const v of q.vault) {
     out.push({ id: kennung.vault(v.id), art: 'vault', frage: v.text, empfehlung: null, quelle: { text: 'Vault-Sync', strand: null, url: null }, wartetSeit: iso(v.at), blockiert: 0, antworten: ['ja', 'nein', 'spaeter'], daten: { vaultId: v.id } });
+  }
+  for (const t of q.triage ?? []) {
+    out.push({ id: kennung.triage(t.id), art: 'triage', frage: `Meeting „${t.titel}“: ${t.zusagen} ${t.zusagen === 1 ? 'Zusage' : 'Zusagen'}, ${t.entscheidungen} ${t.entscheidungen === 1 ? 'Entscheidung' : 'Entscheidungen'} übernehmen?`,
+      empfehlung: t.entscheidungen ? 'Zusagen eintragen, Entscheidungen als ADR im Chat' : 'Zusagen ins Register eintragen', quelle: { text: 'Meeting-Notiz', strand: null, url: '#/wissen/' + t.datei.split('/').map(encodeURIComponent).join('/') },
+      wartetSeit: iso(t.datum), blockiert: 0, antworten: ['spaeter'], daten: { triageId: t.id, datei: t.datei, zusagen: t.zusagen, entscheidungen: t.entscheidungen } });
   }
   if (q.pflege > 0) out.push({ id: 'pflege', art: 'pflege', frage: `${q.pflege} ${q.pflege === 1 ? 'Ticket braucht' : 'Tickets brauchen'} Pflege`, empfehlung: null, quelle: { text: 'Pflege', strand: null, url: '#/board' }, wartetSeit: null, blockiert: 0, antworten: ['spaeter'], daten: { n: q.pflege } });
   if ((q.laeufe ?? 0) > 0) out.push({ id: 'laeufe', art: 'pflege', frage: `${q.laeufe} ${q.laeufe === 1 ? 'Agentenlauf am Board wartet' : 'Agentenläufe am Board warten'} auf dich`, empfehlung: null, quelle: { text: 'Board-Agenten', strand: null, url: '#/arbeit' }, wartetSeit: null, blockiert: 0, antworten: ['spaeter'], daten: { n: q.laeufe } });
