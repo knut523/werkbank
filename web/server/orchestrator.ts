@@ -543,13 +543,52 @@ async function nachzuegler(u: User, d: any, s: any, deps: AutoDeps): Promise<boo
   return true;
 }
 
+/**
+ * Nachgereichtes aus einem Chat, den Knut während des Zugs verlassen hat (Fix 17d, Fund 1): als nächste Nachricht GENAU in diese
+ * Unterhaltung (nicht in den gerade offenen Chat). 409, solange dort ein Zug läuft oder eine Rückfrage wartet (der Client fragt
+ * später erneut) — nie als Antwort auf eine ja/nein-Rückfrage. 404 = keine eigene Unterhaltung.
+ */
+export async function nachsendenInChat(u: User, conv: string, text: string): Promise<void> {
+  const t = String(text ?? '').trim();
+  if (!/^[0-9a-f-]{36}$/.test(conv)) throw err(400, 'Ungültige Unterhaltung.');
+  if (!t) throw err(400, 'Nachricht fehlt.');
+  if (t.length > 20_000) throw err(400, 'Nachricht zu lang (höchstens 20 000 Zeichen).');
+  // Prüfen und Zustellen in einem Schritt je Unterhaltung: eine zweite gleichzeitige Zustellung sieht den Zug der ersten.
+  return nacheinander(conv, async () => {
+    const r = await fetch(`${cfg.bridgeUrl}/sessions?user=${encodeURIComponent(u.id)}`, { headers: internalHeaders(), signal: AbortSignal.timeout(4000) }).catch(() => null);
+    if (!r?.ok) throw err(502, `Brücke antwortet nicht (${r?.status ?? 'Netz'}).`);
+    const s = (((await r.json().catch(() => ({}))) as any).sessions ?? []).find((x: any) => x.conv === conv);
+    if (s && s.status !== 'bereit') throw err(409, s.status === 'wartet auf ja' ? 'Der Chat wartet auf „ja“ oder „nein“.' : 'In diesem Chat läuft noch ein Zug.');
+    if (!(await lastMessage(u, conv))) throw err(404, 'Unterhaltung nicht gefunden.');
+    await deliverNow(u, conv, t);
+  });
+}
+
+// Fix 17d, Fund 6: Zustellungen je Unterhaltung nacheinander (Weckruf, „weiter“, Nachzügler, Handnachricht, Nachsenden). Sonst
+// lesen zwei gleichzeitige dieselbe letzte Nachricht als Eltern und hängen als Geschwister im Baum — LibreChat zeigt nur einen Zweig.
+const zustellung = new Map<string, Promise<unknown>>();
+function nacheinander<T>(conv: string, f: () => Promise<T>): Promise<T> {
+  const vor = zustellung.get(conv) ?? Promise.resolve();
+  const p = vor.catch(() => {}).then(f);
+  const fertig = p.catch(() => {});
+  zustellung.set(conv, fertig);
+  void fertig.then(() => { if (zustellung.get(conv) === fertig) zustellung.delete(conv); });
+  return p;
+}
+
 /** Nachricht an den Chat hängen (Elternnachricht = letzte gespeicherte); LibreChat 409 = Zug noch nicht abgeschlossen. */
-export async function deliver(u: User, conv: string, msg: string) {
+export function deliver(u: User, conv: string, msg: string): Promise<void> {
+  return nacheinander(conv, () => deliverNow(u, conv, msg));
+}
+async function deliverNow(u: User, conv: string, msg: string) {
   for (let i = 0; ; i++) {
     const last = await lastMessage(u, conv);
     if (!last) throw err(409, 'Im Chat ist noch keine Nachricht gespeichert.');
     try {
-      await createLibreChat(u, msg, { conversationId: conv, parentMessageId: last.id });
+      const messageId = randomUUID();
+      await createLibreChat(u, msg, { conversationId: conv, parentMessageId: last.id, messageId });
+      // Erst weiter, wenn LibreChat die Nachricht gespeichert hat — die nächste Zustellung nimmt sie dann als Eltern (höchstens 5 s).
+      for (let k = 0; k < 50 && !(await lc().collection('messages').findOne({ messageId, conversationId: conv }, { projection: { _id: 1 } })); k++) await new Promise((r) => setTimeout(r, 100));
       return;
     } catch (e: any) {
       if (e.status === 409 && i < 5) { await new Promise((r) => setTimeout(r, 1500)); continue; }

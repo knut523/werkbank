@@ -19,7 +19,7 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, mirrorOf, mirrorSites, siteByPrefix, siteColumns, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, setThema, etaMediane } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
@@ -1442,6 +1442,16 @@ on('GET', /^\/api\/chat\/nachreichen\/([0-9a-f-]{36})$/, async (req, res, m) => 
   const u = await needUser(req);
   const st = await injectStateBridge(u, m[1]);
   send(res, 200, { id: m[1], state: st?.state ?? 'unbekannt' });
+});
+
+// Fix 17d (Fund 1): Nachgereichtes, das ein anderer Chat nicht mehr gelesen hat, als nächste Nachricht in GENAU diese Unterhaltung
+// (Nachreichen.tsx → nachsenden.ts). 409 = dort läuft noch ein Zug / wartet eine Rückfrage → der Client fragt später erneut.
+on('POST', /^\/api\/chat\/nachsenden$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req, 64 << 10);
+  await nachsendenInChat(u, String(b.conv ?? ''), String(b.text ?? ''));
+  log('nachgesendet', { user: u.id });
+  send(res, 200, { ok: true });
 });
 
 // Review → Freigabe → Push (docs/plan-hauptchat-monitor.md §9, Council R3): Ansicht je Strang, Freigabe je Repo (nur hier, nur
