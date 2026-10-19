@@ -20,10 +20,15 @@ export type Ampel = 'laeuft' | 'blockiert' | 'push' | 'review';
 export const AMPEL_TEXT: Record<Ampel, string> = { push: 'bereit zum Push', review: 'dein Review', laeuft: 'läuft', blockiert: 'blockiert' };
 const RANG: Record<Ampel, number> = { blockiert: 0, review: 0, push: 1, laeuft: 2 };
 
-export interface OffeneEntscheidung { id: string; frage: string; empfehlung: string; optionen: string; quelle: 'bericht' | 'kopf'; stufe?: 'wichtig' | 'normal' }
+export interface OffeneEntscheidung { id: string; frage: string; empfehlung: string; optionen: string; quelle: 'bericht' | 'kopf'; stufe?: 'wichtig' | 'normal'; worum?: string; optionenListe?: string[] }
 export interface Link { art: 'bericht' | 'folien' | 'bilder' | 'vorschau' | 'chat' | 'pr'; label: string; url: string }
 
 const sicher = (u: unknown): u is string => typeof u === 'string' && /^https?:\/\/[^\s"'<>]+$/i.test(u);
+
+/** „Worum es geht“ aus einem Textblock **D1 — …**: der Fließtext ohne Empfehlungs-, Knut- und Optionszeilen, höchstens 800 Zeichen. */
+export function blockWorum(text: string): string {
+  return text.split('\n').filter((l) => !/^\s*[-*]\s*\**(Empfehlung|Knut|Option(en)?\b)/i.test(l)).join(' ').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim().slice(0, 800);
+}
 
 /** Offene Entscheidungen eines Berichts: Textblöcke **D1 — …** ohne „- Knut:“ und Kopf-`fragen` ohne `antwort`, je Kennung
  *  eine Zeile (Council 2). `schon` = über die Werkbank für genau diesen Bericht-Stand schon beantwortete Kennungen. */
@@ -37,13 +42,13 @@ export function offeneEntscheidungen(text: string | null, beantwortet: { bericht
   const erledigt = new Set<string>();
   for (const e of entscheidungen(text)) {
     if (e.knut || schon.has(e.id)) { erledigt.add(e.id); continue; }
-    out.push({ id: e.id, frage: e.titel, empfehlung: e.empfehlung, optionen: e.text, quelle: 'bericht' });
+    out.push({ id: e.id, frage: e.titel, empfehlung: e.empfehlung, optionen: e.text, quelle: 'bericht', worum: blockWorum(e.text) });
   }
   for (const f of offeneFragen(kopf, beantwortet, hash)) {
     if (erledigt.has(f.id)) continue;
     const da = out.find((x) => x.id === f.id);
-    if (da) { if (!da.empfehlung) da.empfehlung = f.empfehlung; if (f.stufe) da.stufe = f.stufe; continue; }
-    out.push({ id: f.id, frage: f.frage, empfehlung: f.empfehlung, optionen: '', quelle: 'kopf', ...(f.stufe ? { stufe: f.stufe } : {}) });
+    if (da) { if (!da.empfehlung) da.empfehlung = f.empfehlung; if (f.stufe) da.stufe = f.stufe; if (f.worum) da.worum = f.worum; if (f.optionen) da.optionenListe = f.optionen; continue; }
+    out.push({ id: f.id, frage: f.frage, empfehlung: f.empfehlung, optionen: (f.optionen ?? []).join('; '), quelle: 'kopf', ...(f.stufe ? { stufe: f.stufe } : {}), ...(f.worum ? { worum: f.worum } : {}), ...(f.optionen ? { optionenListe: f.optionen } : {}) });
   }
   // Im Kopf beantwortet (antwort gesetzt) gilt auch für einen gleichnamigen Textblock.
   const kopfFertig = new Set(imKopf.filter((f) => f.antwort).map((f) => f.id));

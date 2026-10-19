@@ -11,7 +11,8 @@ import { Dateien } from './pages/Dateien.tsx';
 import { Timebox } from './pages/Timebox.tsx';
 import { Ziele } from './pages/Ziele.tsx';
 import { Uebersicht } from './pages/Uebersicht.tsx';
-import { HeuteNeu, InboxSeite } from './pages/HeuteNeu.tsx';
+import { HeuteNeu } from './pages/HeuteNeu.tsx';
+import { Entscheidungen } from './pages/Entscheidungen.tsx';
 import { ArbeitUnterchats, ArbeitReviews } from './pages/Arbeit.tsx';
 import { Ablage } from './pages/Ablage.tsx';
 import { useTodayCount } from './beimir.tsx';
@@ -210,7 +211,8 @@ export function App() {
     : hidden ? <div className="page" data-testid="not-released"><h1>{hidden.label}</h1><div className="card soft empty"><p><b>Noch nicht für das Team freigegeben.</b></p><p className="small muted">Knut gibt die Funktionen des OLAF Workspace nach und nach frei. Bis dahin: Chat und <a href="#/einrichtung">Einrichtung</a>.</p></div></div>
     // Plan 213 S3: neue Seiten der Navigation Heute · Arbeit · Wissen (alte Adressen führen weiter zu ihren Seiten).
     // Inbox mit Entscheidungs-Log auch in der alten Leiste (Stufen/Annahme nach 24 h gehen mit Bündel A live, Knut 17.10.).
-    : /^#\/inbox/.test(hash) ? <InboxSeite />
+    // Entscheidungen (Knut 19.10., Muster entscheidungen-site): eine Karte je Frage; #/inbox führt dorthin.
+    : /^#\/(inbox|entscheidungen)/.test(hash) ? <Entscheidungen />
     : neu && HEUTE.match.test(hash) ? <HeuteNeu cfg={cfg} />
     : neu && /^#\/arbeit\/reviews/.test(hash) ? (user.role === 'ADMIN' ? <ArbeitReviews /> : <Roadmap cfg={cfg} hash="#/roadmap/prs" />)
     : neu && /^#\/arbeit/.test(hash) ? (user.role === 'ADMIN' ? <ArbeitUnterchats cfg={cfg} /> : <Uebersicht cfg={cfg} hash="#/" />)

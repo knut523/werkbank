@@ -9,7 +9,7 @@
 import { wienDatum, wienUm, naechsterTag } from './zustand.ts';
 import { stufeVon, autoAb, autoFaehig, ANNAHME_MS, type Stufe } from './stufe.ts';
 
-export type InboxArt ='rueckfrage' | 'entscheidung' | 'braucht' | 'push' | 'vault' | 'pflege' | 'schlange' | 'altbestand' | 'triage';
+export type InboxArt ='rueckfrage' | 'entscheidung' | 'braucht' | 'push' | 'vault' | 'pflege' | 'schlange' | 'altbestand' | 'triage' | 'vaultfrage';
 export type Antwort = 'ja' | 'nein' | 'anders' | 'spaeter';
 
 export interface InboxEintrag {
@@ -29,10 +29,12 @@ export interface InboxEintrag {
   stufe?: Stufe;
   stufeGrund?: string;
   autoAb?: string | null;
+  /** Thema des Unter-Chats (Gruppe auf der Entscheidungsseite); fehlt bei Einträgen ohne Strang. */
+  thema?: string | null;
 }
 
 export const ALTBESTAND_TAGE = 14;
-export const ART_TEXT: Record<InboxArt, string> = { rueckfrage: 'Rückfrage', entscheidung: 'Entscheidung', braucht: 'Frage im Stand', push: 'Push', vault: 'Vault-Sync', pflege: 'Pflege', schlange: 'Schlange', altbestand: 'Altbestand', triage: 'Meeting' };
+export const ART_TEXT: Record<InboxArt, string> = { rueckfrage: 'Rückfrage', entscheidung: 'Entscheidung', braucht: 'Frage im Stand', push: 'Push', vault: 'Vault-Sync', pflege: 'Pflege', schlange: 'Schlange', altbestand: 'Altbestand', triage: 'Meeting', vaultfrage: 'Vault-Frage' };
 
 /** Kennung bleibt gleich, solange sich die Frage nicht ändert (Chat-Knöpfe und „Später“ hängen daran). */
 export const kennung = {
@@ -42,8 +44,9 @@ export const kennung = {
   push: (strand: string, head: string) => `p-${strand}-${String(head).slice(0, 12)}`,
   vault: (id: string) => `v-${kurzHash(id)}`,
   triage: (id: string) => `t-${kurzHash(id)}`,
+  vaultfrage: (path: string, line: number) => `k-${kurzHash(`${path}:${line}`)}`,
 };
-export const KENNUNG_RE = /^(q|d|b|p|v|t|pflege|laeufe|schlange|altbestand)(-[A-Za-z0-9-]{1,80})?$/;
+export const KENNUNG_RE = /^(q|d|b|p|v|t|k|pflege|laeufe|schlange|altbestand)(-[A-Za-z0-9-]{1,80})?$/;
 
 export function kurzHash(s: string): string {
   let h = 2166136261;
@@ -59,7 +62,7 @@ export function spaeterBis(now = Date.now()): Date {
 
 export interface InboxQuellen {
   /** Karten der Übersicht (uebersicht.ts → karte), nur Admin. */
-  karten: Array<{ id: string; titel: string; strangTitel?: string; running: boolean; entscheidungen: { id: string; frage: string; empfehlung: string | null; optionen?: string; stufe?: string | null }[]; berichtHash: string | null; rueckfragen: any[];
+  karten: Array<{ id: string; titel: string; strangTitel?: string; thema?: string | null; running: boolean; entscheidungen: { id: string; frage: string; empfehlung: string | null; optionen?: string; stufe?: string | null }[]; berichtHash: string | null; rueckfragen: any[];
     braucht: string | null; kannFreigeben: boolean; freigabe: any; github: { repo: string; zweig: string; commit: string }[]; statusAt: any; chat: string | null; paket: string | null; seen?: string }>;
   /** Offene Rückfragen ohne Karte (Hauptchat, Drift, G0 …). */
   lose: Array<{ id: string; title: string; recommendation?: string | null; options?: { label: string }[]; createdAt: any; strand?: { id: string; title?: string; url?: string } | null; quelle?: string | null; key?: string | null; context?: string | null; kind?: string | null; stufe?: string | null }>;
@@ -75,6 +78,10 @@ export interface InboxQuellen {
   laeufe?: number;
   /** Meeting-Vorschläge der Morgenlage (cosmeeting.ts → vorschlaege), nur Admin mit Morgenlage — damit ① und der Zähler dieselbe Liste zählen (221). */
   triage?: Array<{ id: string; datei: string; titel: string; zusagen: number; entscheidungen: number; datum: string | null }>;
+  /** F10 (Knut 19.10.: „muss halt viel einfacher sein“): aktuelle wichtige „- Knut:“-Zeilen aus dem Vault einzeln … */
+  vaultFragen?: Array<{ path: string; line: number; hash: string; head: string; section: string; title: string; topic: string; since: string | null; grund: string }>;
+  /** … der Rest als ein Sammeleintrag. */
+  vaultRest?: number;
 }
 
 const iso = (v: unknown): string | null => { const t = v ? new Date(v as any).getTime() : NaN; return Number.isFinite(t) ? new Date(t).toISOString() : null; };
@@ -87,12 +94,13 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
   for (const k of q.karten) {
     const quelle = { text: `Unter-Chat „${k.strangTitel || k.titel}“`, strand: k.id, url: k.chat, paket: k.paket };
     const seit = iso(k.statusAt);
+    const vorher = out.length;
     if (k.entscheidungen.length) {
       const ids = k.entscheidungen.map((e) => e.id);
       out.push({ id: kennung.entscheidung(k.id, k.berichtHash), art: 'entscheidung', frage: k.entscheidungen.length === 1 ? `${ids[0]}: ${k.entscheidungen[0].frage}` : `${k.titel} — ${ids.length} Entscheidungen im Bericht (${ids.join(', ')})`,
         empfehlung: k.entscheidungen.length === 1 ? k.entscheidungen[0].empfehlung : (k.entscheidungen.every((e) => e.empfehlung) ? 'alle Empfehlungen übernehmen' : null),
         quelle: { ...quelle, text: k.paket ? `Bericht ${k.paket.split('-')[0]}` : quelle.text }, wartetSeit: seit, blockiert: 1, antworten: ['ja', 'nein', 'anders', 'spaeter'],
-        daten: { berichtHash: k.berichtHash, entscheidungen: k.entscheidungen, strand: k.id } });
+        daten: { berichtHash: k.berichtHash, entscheidungen: k.entscheidungen, strand: k.id, strangTitel: k.strangTitel || k.titel } });
     }
     for (const r of k.rueckfragen ?? []) out.push(rueckfrageEintrag(r, quelle));
     if (k.braucht && !k.entscheidungen.length && !(k.rueckfragen ?? []).length && !k.running) {
@@ -104,6 +112,7 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
         quelle: { ...quelle, text: `${g.repo.split('/').pop()}${k.github.length > 1 ? ` + ${k.github.length - 1}` : ''}` }, wartetSeit: seit, blockiert: 1, antworten: ['ja', 'spaeter'],
         daten: { strand: k.id, repo: g.repo, zweig: g.zweig, commit: g.commit } });
     }
+    for (const e of out.slice(vorher)) e.thema = k.thema ?? null;
   }
   for (const r of q.lose) {
     if (r.strand && kartenIds.has(String(r.strand.id))) continue;   // steht schon bei seiner Karte
@@ -117,6 +126,13 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
       empfehlung: t.entscheidungen ? 'Zusagen eintragen, Entscheidungen als ADR im Chat' : 'Zusagen ins Register eintragen', quelle: { text: 'Meeting-Notiz', strand: null, url: '#/wissen/' + t.datei.split('/').map(encodeURIComponent).join('/') },
       wartetSeit: iso(t.datum), blockiert: 0, antworten: ['spaeter'], daten: { triageId: t.id, datei: t.datei, zusagen: t.zusagen, entscheidungen: t.entscheidungen } });
   }
+  for (const v of q.vaultFragen ?? []) {
+    out.push({ id: kennung.vaultfrage(v.path, v.line), art: 'vaultfrage', frage: v.head, empfehlung: null,
+      quelle: { text: `Spec „${v.title}“`, strand: null, url: '#/wissen/' + v.path.split('/').map(encodeURIComponent).join('/') }, wartetSeit: iso(v.since), blockiert: 0,
+      antworten: ['ja', 'nein', 'anders', 'spaeter'], daten: { path: v.path, line: v.line, hash: v.hash, section: v.section, markiert: 'wichtig', grund: v.grund }, thema: v.topic });
+  }
+  if ((q.vaultRest ?? 0) > 0) out.push({ id: 'pflege-vault', art: 'pflege', frage: `${q.vaultRest} weitere offene Vault-Fragen (nicht dringend) — in Ruhe durchsehen`, empfehlung: null,
+    quelle: { text: 'Roadmap › Entscheidungen', strand: null, url: '#/roadmap/entscheidungen' }, wartetSeit: null, blockiert: 0, antworten: ['spaeter'], daten: { n: q.vaultRest } });
   if (q.pflege > 0) out.push({ id: 'pflege', art: 'pflege', frage: `${q.pflege} ${q.pflege === 1 ? 'Ticket braucht' : 'Tickets brauchen'} Pflege`, empfehlung: null, quelle: { text: 'Pflege', strand: null, url: '#/board' }, wartetSeit: null, blockiert: 0, antworten: ['spaeter'], daten: { n: q.pflege } });
   if ((q.laeufe ?? 0) > 0) out.push({ id: 'laeufe', art: 'pflege', frage: `${q.laeufe} ${q.laeufe === 1 ? 'Agentenlauf am Board wartet' : 'Agentenläufe am Board warten'} auf dich`, empfehlung: null, quelle: { text: 'Board-Agenten', strand: null, url: '#/arbeit' }, wartetSeit: null, blockiert: 0, antworten: ['spaeter'], daten: { n: q.laeufe } });
   if (q.kopfFehler.length) out.push({ id: 'pflege-kopf', art: 'pflege', frage: `${q.kopfFehler.length} ${q.kopfFehler.length === 1 ? 'Bericht hat' : 'Berichte haben'} einen unlesbaren Kopf`, empfehlung: 'im Unter-Chat reparieren lassen', quelle: { text: 'Pflege', strand: null, url: null }, wartetSeit: null, blockiert: 0, antworten: ['spaeter'], daten: { berichte: q.kopfFehler } });
@@ -178,4 +194,5 @@ function mitStufe(e: InboxEintrag, ms: number) {
 }
 
 /** Zähler für Leiste und Heute-Kopf (K11): nur sichtbare, nicht zurückgestellte Einträge; der Altbestand zählt als einer. */
-export const inboxZahl = (eintraege: InboxEintrag[]) => eintraege.length;
+// Entscheidungsseite (19.10.): ein Bericht mit D1–D3 sind drei Fragen — Leiste, Kopf, ① und Seite zählen gleich.
+export const inboxZahl = (eintraege: InboxEintrag[]) => eintraege.reduce((n, e) => n + (e.art === 'entscheidung' ? Math.max(1, ((e.daten.entscheidungen as any[]) ?? []).length) : 1), 0);

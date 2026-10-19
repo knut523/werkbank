@@ -16,7 +16,7 @@ type Eintrag = { id: string; art: string; frage: string; empfehlung: string | nu
   stufe?: 'wichtig' | 'normal'; stufeGrund?: string; autoAb?: string | null };
 type HeuteDaten = { eintraege: Eintrag[]; zahl: number; zurueckgestellt: number; blockiert: any[]; geaendert: any; at: string; admin: boolean };
 
-const ART: Record<string, string> = { rueckfrage: 'Rückfrage', entscheidung: 'Entscheidung', braucht: 'Frage', push: 'Push', vault: 'Vault-Sync', pflege: 'Pflege', schlange: 'Schlange', altbestand: 'Altbestand' };
+const ART: Record<string, string> = { rueckfrage: 'Rückfrage', entscheidung: 'Entscheidung', braucht: 'Frage', push: 'Push', vault: 'Vault-Sync', pflege: 'Pflege', schlange: 'Schlange', altbestand: 'Altbestand', triage: 'Meeting', vaultfrage: 'Vault-Frage' };
 const ZUSTAND: Record<string, string> = { blockiert: 'blockiert', haengt: 'hängt?', schlange: 'in der Schlange', 'stand-fehlt': 'Stand fehlt' };
 
 /** „seit 2 h“, „seit 3 Tagen“ */
@@ -70,7 +70,7 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
         {e.art === 'push' && e.daten.strand && <button className={pri} disabled={busy} onClick={() => run(async () => ((await pushFreigeben(e.daten.strand)) ? null : ABGEBROCHEN), 'Freigegeben — der Hauptchat pusht nach seiner Prüfung')}>Freigeben …</button>}
         {mehrere && <><button className={pri} disabled={busy} onClick={() => antworten('ja')}>Alle Empfehlungen</button><a className="ub-btn sm" href={`#/leitstand?bericht=${e.daten.strand}`}>Einzeln</a></>}
         {e.art === 'vault' && e.daten.vaultId !== 'entwurf' && <><button className={pri} disabled={busy} onClick={() => vault('ja')}>Ja</button><button className="ub-btn sm" disabled={busy} onClick={() => vault('nein')}>Nein</button></>}
-        {['rueckfrage', 'braucht'].includes(e.art) || (e.art === 'entscheidung' && !mehrere) ? <>
+        {['rueckfrage', 'braucht', 'vaultfrage'].includes(e.art) || (e.art === 'entscheidung' && !mehrere) ? <>
           <button className={pri} disabled={busy} onClick={() => antworten('ja')} title={e.empfehlung ? `Empfehlung übernehmen: ${e.empfehlung}` : 'Ja'}>Ja</button>
           <button className="ub-btn sm" disabled={busy} onClick={() => antworten('nein')}>Nein</button>
           <button className="ub-btn ghost sm" disabled={busy} aria-expanded={anders !== null} onClick={() => setAnders(anders === null ? '' : null)}>Anders …</button>

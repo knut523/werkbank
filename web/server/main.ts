@@ -52,6 +52,7 @@ import { olafJira } from './cos-olafjira.ts';
 import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
 import { boxTick } from './boxwaechter.ts';
 import { startSchaetzung, laufMediane } from './startschaetzung.ts';
+import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungsseite.ts';
 import { abschlussTick, wocheTick } from './cosabschluss.ts';
 import { rueckstau as cosRueckstau, vorschlaege as cosVorschlaege } from './cosmeeting.ts';
 import { meetingTeams as cosMeetingTeams } from './cossammle.ts';
@@ -84,7 +85,7 @@ import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVo
 import { zaehle, statusNeu, autoSchliessenAn, navNeu, aufraeumenAn, meinTagWeg, einLogin, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
-import { autoAnnahmeAn, annahmeMs } from './stufe.ts';
+import { autoAnnahmeAn, annahmeMs, stufeVon } from './stufe.ts';
 import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
 import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
@@ -1414,7 +1415,8 @@ async function inboxFuer(u: User, now = Date.now()) {
     const versteckt = new Set(((await wb().collection('cos_triage').find({ art: 'nein' }).toArray().catch(() => [])) as any[]).map((d) => String(d._id)));
     try { triage = cosVorschlaege(cfg.vaultDir, cosMeetingTeams(), wienDatum(), versteckt).items; } catch { /* Vault nicht lesbar */ }
   }
-  const ib = baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe, triage,
+  const vf = admin ? vaultFragenFuerInbox(now) : { einzeln: [], rest: 0 };
+  const ib = baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe, triage, vaultFragen: vf.einzeln, vaultRest: vf.rest,
     kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now, annahmeMs: annahmeMs() });
   // Abwesenheits-Bremse (F4a): nach einer Rückkehr gilt „angenommen ab“ frühestens eine volle Frist später.
   if (bremseAn()) {
@@ -1425,6 +1427,24 @@ async function inboxFuer(u: User, now = Date.now()) {
   return ib;
 }
 const anwesenheitCol = () => wb().collection('anwesenheit');
+/** F10 (Knut 19.10.: „muss halt viel einfacher sein“): von den offenen „- Knut:“-Zeilen der Roadmap nur die aktuellen wichtigen
+ *  einzeln — Stufe wichtig, Spec in Plan/Review oder „Neu am …“, jünger als 14 Tage (19 von 324 am 19.10.); der Rest als ein
+ *  Sammeleintrag. Der Vault-Index ist zwischengespeichert; die Auswahl höchstens alle 5 Minuten neu. */
+let vaultFragenCache: { at: number; v: { einzeln: any[]; rest: number } } | null = null;
+function vaultFragenFuerInbox(now = Date.now()) {
+  if (vaultFragenCache && now - vaultFragenCache.at < 5 * 60_000) return vaultFragenCache.v;
+  let v: { einzeln: any[]; rest: number } = { einzeln: [], rest: 0 };
+  try {
+    const idx = vaultIdx();
+    const { decisions, texts } = collectDecisions(idx, readVault, ROADMAP_BASE);
+    const offen = todayQuestions(decisions, { texts, fm: (p) => idx.notes.get(p)?.fm, today: vienna().date }).open;
+    const einzeln = offen.map((q) => ({ q, st: stufeVon({ text: `${q.head} ${q.question} ${q.section}` }) })).filter(({ q, st }) => st.stufe === 'wichtig' && q.first && !q.old)
+      .map(({ q, st }) => ({ path: q.path, line: q.line, hash: q.hash, head: q.head, section: q.section, title: q.title, topic: q.topic, since: q.since, grund: st.grund }));
+    v = { einzeln, rest: offen.length - einzeln.length };
+  } catch { /* Vault nicht lesbar: keine Vault-Fragen */ }
+  vaultFragenCache = { at: now, v };
+  return v;
+}
 on('GET', /^\/api\/inbox$/, async (req, res) => {
   const u = await needUser(req);
   const r = await inboxFuer(u);
@@ -1507,6 +1527,17 @@ async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
     const f = await freigeben(u, d, { head, patchId: det.repo.patchId ?? null }, undefined, log);
     await hinweisFreigabe(u, f, d).catch(() => {});
     antwortGezaehlt('push', weg);
+  } else if (e.art === 'vaultfrage') {
+    // Antwort als Zeile „- Knut: …“ in die Notiz (wie Roadmap › Entscheidungen; Trockenlauf schreibt nicht).
+    if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
+    const abs = vaultPath(String(e.daten.path));
+    if (!abs.includes(`/${ROADMAP_BASE}/`)) throw new HttpError(400, 'Nur Roadmap-Notizen.');
+    const zeile = art === 'anders' ? text : `${art}${text ? ` — ${text}` : ''}`;
+    let r;
+    try { r = fillDecision(readFileSync(abs, 'utf8'), Number(e.daten.line), zeile, String(e.daten.hash)); }
+    catch (x: any) { throw new HttpError(/geändert/.test(x.message) ? 409 : 400, x.message); }
+    if (!vaultDry()) { writeFileSync(abs, r.text); invalidateIndex(); checkCache = null; }
+    vaultFragenCache = null;
   } else if (e.art === 'altbestand') {
     if (art !== 'nein') throw new HttpError(400, 'Altbestand: „Nein“ verwirft alle, sonst einzeln durchsehen.');
     let fehler = 0;
@@ -1524,6 +1555,69 @@ async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
 }
 
 // --- Entscheidungen nach Wichtigkeit (Knut 17.10.): Annahme nach 24 h, Entscheidungs-Log, Widerruf mit „Anders“ ---
+// --- Entscheidungsseite (Knut 19.10., Muster entscheidungen-site): eine Karte je Frage, Antwort an der Quelle ---
+on('GET', /^\/api\/entscheidungen\/fragen$/, async (req, res) => {
+  const u = await needUser(req);
+  const ib = await inboxFuer(u);
+  const { fragen, sonstiges } = fragenAus(ib.eintraege);
+  const heute = await logCol().countDocuments({ userId: u.id, auto: { $ne: true }, at: { $gte: wienUm(wienDatum(), 0) } }).catch(() => 0);
+  send(res, 200, { fragen, sonstiges, beantwortetHeute: heute, zurueckgestellt: ib.zurueckgestellt, zahl: inboxZahl(ib.eintraege), at: new Date() });
+});
+/** Eine Bericht-Entscheidung (D…) einzeln: in den Bericht eintragen; der Unter-Chat arbeitet weiter, wenn alle beantwortet sind. */
+async function teilAntworten(u: User, e: any, teile: { id: string; antwort: string; text: string }[]) {
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
+  const d = await reviewStrand(u, String(e.daten.strand));
+  const sperre = String(d._id);
+  if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — gleich noch einmal.');
+  entscheidSperre.add(sperre);
+  try {
+    const antworten = teile.map((t) => ({ id: t.id, art: t.antwort === 'ja' ? 'akzeptiert' : t.antwort === 'nein' ? 'abgelehnt' : 'eigene', text: t.text }));
+    const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, sammeln: true, antworten });
+    for (const t of teile) {
+      const x = ((e.daten.entscheidungen as any[]) ?? []).find((y) => String(y.id) === t.id) ?? {};
+      await logEntscheidung(u, { ...e, frage: `${t.id}: ${x.frage ?? ''}`, empfehlung: x.empfehlung ?? null, stufe: x.stufe ?? e.stufe }, t.antwort === 'ja' ? `ja${x.empfehlung ? ` (${x.empfehlung})` : ''}` : t.antwort === 'nein' ? 'nein' : `anders: ${t.text}`, u.email, false, [t.id]).catch(() => {});
+    }
+    return r;
+  } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
+}
+on('POST', /^\/api\/entscheidungen\/fragen\/antwort$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const [eintrag, teil = null] = String(b.id ?? '').split('~');
+  const antwort = String(b.antwort ?? '');
+  const text = String(b.text ?? '').trim().slice(0, 4000);
+  if (!KENNUNG_RE.test(eintrag) || (teil !== null && !/^[\w.-]{1,20}$/.test(teil))) throw new HttpError(400, 'Unbekannte Kennung.');
+  if (!['ja', 'nein', 'anders', 'spaeter'].includes(antwort)) throw new HttpError(400, 'Antwort ist ja, nein, anders oder später.');
+  if (antwort === 'anders' && !text) throw new HttpError(400, 'Bei „Anders“ bitte kurz schreiben, was stattdessen.');
+  if (antwort === 'spaeter') {
+    await spaeterCol().updateOne({ _id: `${u.id}:${eintrag}` as any }, { $set: { userId: u.id, id: eintrag, bis: spaeterBis(), at: new Date(), notiz: text || null } }, { upsert: true });
+    zahlCache.delete(u.id);
+    return send(res, 200, { ok: true, spaeter: true });
+  }
+  if (teil === null) return send(res, 200, await inboxAntworten(u, eintrag, { antwort, text, weg: 'ui' }));
+  const e = (await inboxFuer(u)).eintraege.find((x) => x.id === eintrag && x.art === 'entscheidung');
+  if (!e || !((e.daten.entscheidungen as any[]) ?? []).some((x) => String(x.id) === teil)) throw new HttpError(409, 'Diese Frage ist schon beantwortet oder hat sich geändert — Seite neu laden.');
+  send(res, 200, await teilAntworten(u, e, [{ id: teil, antwort, text }]));
+});
+/** „Alle offenen wie empfohlen beantworten“ (mit Sicherheitsabfrage in der Oberfläche): nur die gesehenen Fragen mit Empfehlung. */
+on('POST', /^\/api\/entscheidungen\/fragen\/alle$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req, 64 * 1024);
+  const gesehen = new Set<string>((Array.isArray(b.ids) ? b.ids : []).map(String).slice(0, 200));
+  const ib = await inboxFuer(u);
+  const fragen = fragenAus(ib.eintraege).fragen.filter((f) => gesehen.has(f.id) && empfohlenBeantwortbar(f));
+  let ok = 0; const fehler: string[] = [];
+  const je = new Map<string, Frage[]>();
+  for (const f of fragen) je.set(f.eintrag, [...(je.get(f.eintrag) ?? []), f]);
+  for (const [eintrag, fs] of je) {
+    try {
+      if (fs[0].teil) await teilAntworten(u, ib.eintraege.find((x) => x.id === eintrag), fs.map((f) => ({ id: f.teil!, antwort: 'ja', text: '' })));
+      else await inboxAntworten(u, eintrag, { antwort: 'ja', weg: 'ui' });
+      ok += fs.length;
+    } catch (x: any) { fehler.push(`${fs.map((f) => f.kennung ?? f.titel.slice(0, 40)).join(', ')}: ${x?.message ?? x}`); }
+  }
+  send(res, 200, { ok, fehler });
+});
 const logCol = () => wb().collection('entscheidungs_log');
 async function logEntscheidung(u: User, e: any, antwort: string, durch: string, auto = false, ids: string[] = []) {
   await logCol().insertOne(logZeile(u.id, e, { antwort, durch, auto, ids }) as any);
@@ -1933,6 +2027,9 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
 });
 const entscheidSperre = new Set<string>();
 async function entscheidungenEintragen(u: User, d: any, b: any): Promise<Record<string, unknown>> {
+  // Trockenlauf (Testinstanz, Vorschau): nie in einen Bericht schreiben und keinen Strang wecken — die Review-Pakete sind echt
+  // (19.10.: eine Sichtprüfung hat sonst eine Testantwort in einen echten Bericht geschrieben).
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Antworten werden nicht in den Bericht eingetragen.');
   // Teil C (H3): läuft der Unter-Chat, reicht sendOrch die Antwort nach — kein 409 mehr.
   const { paketDatei } = await import('./bericht.ts');
   const pfad = paketDatei(d, 'bericht');
@@ -1973,9 +2070,12 @@ async function entscheidungenEintragen(u: User, d: any, b: any): Promise<Record<
   const datum = new Intl.DateTimeFormat('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' }).format(new Date());
   const neu = trageEin(kopfNeu ?? text, antworten.filter((a: any) => !bekannt.get(a.id)!.kopf), datum);
   const offen = [...leseEntscheidungen(neu).filter((e) => !e.knut), ...(() => { const k = berichtKopf(neu); return k && 'status' in k ? k.fragen.filter((f) => !f.antwort && !leseEntscheidungen(neu).some((e) => e.id === f.id)) : []; })()];
-  const arbeit = antworten.filter((a: any) => a.art !== 'akzeptiert');
+  // Entscheidungsseite (Knuts Muster, 19.10.): Fragen einzeln beantworten; der Unter-Chat arbeitet erst weiter, wenn alle seine
+  // Fragen beantwortet sind — dann mit allen gesammelten Antworten in einer Nachricht.
+  const sammel = b.sammeln === true ? [...((d.entscheidungenSammel as any[]) ?? []), ...antworten] : null;
+  const arbeit = (sammel ?? antworten).filter((a: any) => a.art !== 'akzeptiert');
   // Übersicht (Plan 184, Teil B): mit `weiter` arbeitet der Unter-Chat in jedem Fall mit den Antworten weiter; Kopf-Fragen auch.
-  const fortsetzen = arbeit.length > 0 || imKopf.length > 0 || b.weiter === true;
+  const fortsetzen = sammel ? offen.length === 0 : arbeit.length > 0 || imKopf.length > 0 || b.weiter === true;
   let weiter = false;
   // Erst eintragen, dann den Strang wecken (Pass C, Teil B: sonst liest er den Bericht ohne die Antworten). Atomar über eine
   // Nachbardatei; scheitert die Nachricht an den Strang, kommt der alte Stand zurück (Knut kann neu senden).
@@ -1983,16 +2083,16 @@ async function entscheidungenEintragen(u: User, d: any, b: any): Promise<Record<
   schreibe(neu);
   if (fortsetzen) {
     // Abweichung, Nachprüfen oder Fortsetzen gewünscht → der Strang arbeitet weiter (sendOrch startet den Zug).
-    const rest = antworten.filter((a: any) => a.art === 'akzeptiert');
+    const rest = (sammel ?? antworten).filter((a: any) => a.art === 'akzeptiert');
     const msg = arbeit.length
-      ? `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}${rest.length ? `\nAkzeptiert (wie empfohlen): ${rest.map((a: any) => a.id).join(', ')}` : ''}`
+      ? `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)?.titel ?? ""}): ${a.text}`).join('\n')}${rest.length ? `\nAkzeptiert (wie empfohlen): ${rest.map((a: any) => a.id).join(', ')}` : ''}`
       : `${b.auto ? 'Nach 24 h ohne Antwort automatisch angenommen (Stufe normal; Knut kann das mit „Anders“ noch widerrufen, solange nichts darauf gebaut ist)' : 'Knut hat entschieden'} (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“): ${rest.map((a: any) => `${a.id} wie empfohlen`).join(', ')}. Mach damit weiter${offen.length ? ` (noch offen: ${offen.map((e: any) => e.id).join(', ')})` : ''} und aktualisiere danach den Bericht.`;
     try { await sendOrch(u, String(d._id), msg, 'hand'); } catch (e) { schreibe(text); throw e; }
     weiter = true;
   }
   let hauptchat = false;
   if (!fortsetzen && !offen.length) hauptchat = await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
-  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten, ids }, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
+  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten, ids }, entscheidungenSammel: sammel && !fortsetzen ? sammel : null, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
   log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length, arbeit: arbeit.length, offen: offen.length });
   antwortGezaehlt('entscheidung', 'ui');
   return { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat };

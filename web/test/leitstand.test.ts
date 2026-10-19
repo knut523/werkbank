@@ -879,6 +879,38 @@ test('Plan 184, Teil B: Ja (Textblock) und Nein (Kopf-Frage) landen an der Quell
   await orch(['review', st.id]);
 });
 
+test('Entscheidungsseite (Knut 19.10.): eine Karte je D-Frage; einzeln beantwortet trägt ein, der Unter-Chat läuft erst nach der letzten weiter', async () => {
+  mkdirSync(join(tmp, 'review-pakete', '957-karten'), { recursive: true });
+  const datei = join(tmp, 'review-pakete', '957-karten', 'bericht.md');
+  writeFileSync(datei, ['---', 'status: wartet_auf_knut', 'fragen:', '  - id: D1', '    frage: Kacheln gleich für alle? Die KPI-Kacheln sehen heute je Rolle anders aus.', '    empfehlung: gleich',
+    '    antwort: ""', '  - id: D2', '    frage: Tooltip zeigen?', '    empfehlung: ja', '    antwort: ""', '---', '# Bericht', ''].join('\n'));
+  const st = JSON.parse((await orch(['start', '--title', 'Karten je Frage', '--cwd', WT('wt-karten'), '--json'],
+    'Bericht nach ~/work/knut/review-pakete/957-karten/bericht.md.\nmock-antwort Fertig.\\n### Stand\\n- Erledigt: x\\nStatus: fertig')).out);
+  await until(() => cardOf(st.id), (c: any) => c?.kopf && c.berichtHash, 20_000);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  const seite = async () => (await (await fetch(B + '/api/entscheidungen/fragen', { headers: { cookie: await cookie(knut) } })).json()) as any;
+  let s = await seite();
+  const karten = s.fragen.filter((f: any) => f.teil && f.eintrag.includes(st.id));
+  assert.deepEqual(karten.map((f: any) => f.kennung), ['D1', 'D2'], 'eine Karte je Frage');
+  assert.match(karten[0].worum, /je Rolle anders/); assert.equal(karten[0].empfehlung, 'gleich');
+  const vorher = (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser).length;
+  assert.equal((await post('/api/entscheidungen/fragen/antwort', { id: karten[1].id, antwort: 'anders' })).status, 400, 'Anders verlangt eine Notiz');
+  const r1 = await post('/api/entscheidungen/fragen/antwort', { id: karten[1].id, antwort: 'anders', text: 'nur auf dem Handy' });
+  assert.equal(r1.status, 200, await r1.clone().text());
+  assert.match(readFileSync(datei, 'utf8'), /antwort: "nur auf dem Handy"/, 'sofort im Bericht');
+  assert.equal((await msgsOf(st.conv)).filter((m) => m.isCreatedByUser).length, vorher, 'D1 noch offen → der Unter-Chat wartet');
+  s = await seite();
+  const d1 = s.fragen.find((f: any) => f.teil === 'D1' && f.eintrag.includes(st.id));
+  assert.ok(d1 && !s.fragen.some((f: any) => f.teil === 'D2' && f.eintrag.includes(st.id)), 'beantwortete Karte ist weg');
+  const r2 = await post('/api/entscheidungen/fragen/antwort', { id: d1.id, antwort: 'ja' });
+  assert.equal(r2.status, 200, await r2.clone().text());
+  const nach = (await until(async () => (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser), (ms: any[]) => ms.length > vorher)).map(textOf).at(-1)!;
+  assert.match(nach, /D2 \(Tooltip zeigen\?\): nur auf dem Handy/, 'eine Nachricht mit allen gesammelten Antworten');
+  assert.match(nach, /Akzeptiert \(wie empfohlen\): D1/);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  await orch(['review', st.id]);
+});
+
 test('Council-Diff Teil B (B-21/B-25, zuletzt — beendet die Brücke): Brücke weg → Heute zeigt die Karte weiter (nur Mongo), Passt → 503', async () => {
   const st = await doneStrand('Teil B: Brücke weg', 'wt-b7');
   const card = await until(() => cardOf(st.id), (c: any) => !!c);
