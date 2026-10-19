@@ -102,3 +102,10 @@ test('Lead-Werkzeuge (Paket 217): github_lesen frei, pr_review_starten wie orch_
   assert.equal(classify('mcp__werkbank__pr_review_starten', { pr: 'o/r#1' }).cls, 'blocked', 'außerhalb des Hauptchats gesperrt');
   assert.equal(classify('mcp__werkbank__pr_review_starten', { pr: 'o/r#1' }, { leit: true }).cls, 'confirm', 'ohne Auto-Modus: Rückfrage');
 });
+
+test('inbox_antworten (Walkthrough 221, „Anders“ im Chat): nur der Hauptchat, nie ein Unter-Chat', async () => {
+  const { classify } = await import('../src/tools.ts');
+  assert.equal(classify('mcp__werkbank__inbox_antworten', { kennung: 'q-1', antwort: 'anders', text: 'x' }).cls, 'blocked');
+  assert.equal(classify('mcp__werkbank__inbox_antworten', { kennung: 'q-1', antwort: 'ja' }, { leit: true }).cls, 'confirm');
+  assert.equal(classify('mcp__werkbank__inbox_antworten', { kennung: 'q-1', antwort: 'ja' }, { leit: true, workDir: '/tmp', scope: 'voll' } as any).cls, 'auto');
+});

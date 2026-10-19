@@ -226,9 +226,16 @@ serve('werkbank', '0.1.0', [
       if (!e.length) return 'Inbox leer — nichts wartet auf eine Entscheidung.';
       const einz = (v: unknown) => String(v ?? '').replace(/[\r\n]+/g, ' ');
       const zeilen = e.map((x) => `- [${x.id}]${x.stufe === 'wichtig' ? ' (wichtig)' : x.autoAb ? ` (normal, gilt ab ${t(x.autoAb)} als angenommen)` : ''} ${einz(x.frage)}${x.empfehlung ? ` — Empfehlung: ${einz(x.empfehlung)}` : ''} (${einz(x.quelle?.text)})`);
-      const knoepfe = e.filter((x) => x.antworten?.includes('ja') && x.antworten?.includes('nein')).map((x) => ({ id: String(x.id), frage: einz(x.frage), quelle: einz(x.quelle?.text) }));
+      // Knöpfe nur, wo Ja und Nein an der Quelle wirklich gehen (Vault-Fragen antworten in ihrer Ansicht, mehrere Entscheidungen einzeln).
+      const knoepfe = e.filter((x) => ['rueckfrage', 'braucht', 'entscheidung'].includes(x.art) && !x.mehrere).map((x) => ({ id: String(x.id), frage: einz(x.frage), quelle: einz(x.quelle?.text) }));
       return `${e.length} offen:\n${zeilen.join('\n')}\n\nKNOEPFE ${JSON.stringify(knoepfe)}`;
     },
+  },
+  {
+    name: 'inbox_antworten',
+    description: 'Einen Inbox-Eintrag an seiner Quelle beantworten: kennung aus `inbox` (z. B. q-…, d-…, b-…), antwort ja | nein | anders (dann text = was stattdessen gelten soll). Für „Anders“ aus dem Chat; Ja/Nein gehen auch über die Knöpfe. Nie raten: nur mit der Kennung, die die Person gemeint hat.',
+    inputSchema: { type: 'object', properties: { kennung: { type: 'string' }, antwort: { type: 'string', enum: ['ja', 'nein', 'anders'] }, text: { type: 'string' } }, required: ['kennung', 'antwort'] },
+    run: async (a: any) => { const j = await call('/internal/inbox/antwort', { kennung: a.kennung, antwort: a.antwort, text: a.text ?? '' }); return `Eingetragen (${j.art ?? 'ok'}) — an der Quelle beantwortet, steht im Entscheidungs-Log.`; },
   },
   {
     name: 'hygiene_snooze',

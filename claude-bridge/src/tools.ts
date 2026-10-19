@@ -252,6 +252,12 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // Chief of Staff (Plan 209, K17): Zusagen lesen frei; das Register schreiben erst nach „ja“ (im Strang gesperrt, siehe orchestratorBlock).
     if (server === 'werkbank' && name === 'zusagen') return { cls: 'read' };
     if (server === 'werkbank' && (name === 'zusage_eintragen' || name === 'zusage_aendern' || name === 'thema_setzen')) return { cls: 'confirm' };
+    // inbox_antworten: nur der Hauptchat der Person trägt ihre Antwort ein (ein Unter-Chat beantwortet nie Knuts Fragen selbst);
+    // dort wie orch_*: Auto-Modus voll ohne Rückfrage — die Person hat die Antwort gerade selbst geschrieben —, sonst nach „ja“.
+    if (server === 'werkbank' && name === 'inbox_antworten') {
+      if (!ctx.leit) return { cls: 'blocked', why: 'Inbox-Antworten trägt nur der Hauptchat der Person ein' };
+      return ctx.workDir && ctx.scope === 'voll' ? { cls: 'auto' } : { cls: 'confirm' };
+    }
     // Orchestrator-Werkzeuge (Plan 132, S3): nur im Leitstand. Lesen und Rückfragen an Knut frei; Stränge starten, Nachrichten
     // schicken und prüfen entscheidet der Klassifikator; ein Strang außerhalb des Leitstand-Ordners braucht ein „ja“.
     if (server === 'werkbank' && (name.startsWith('orch_') || name === 'pr_review_starten')) {   // pr_review_starten startet einen Review-Strang (Paket 217)
@@ -503,6 +509,7 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
       if (name === 'delegation_stand') return '🧑‍🔧 Stand der Delegationen';
       if (name === 'delegation_urteil') return `🧑‍🔧 Urteil ${input.id ?? ''}: ${input.urteil ?? ''}`;
       if (name === 'phase_wechseln') return `🔀 Phase → ${input.phase ?? '?'}`;
+      if (name === 'inbox_antworten') return `✅ Entscheidung eingetragen: ${input.kennung ?? ''} → ${input.antwort ?? ''}`;
       if (name === 'challenge') return `🔍 Gegenprüfung GLM 5.3 (${input.art ?? ''})`;
       return name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
     }
@@ -585,7 +592,7 @@ export function inboxKnoepfe(ergebnis: string): string {
   });
   if (!rows.length) return '';
   const mehr = gueltig.length > INBOX_MAX ? `\n\n_${gueltig.length - INBOX_MAX} weitere unter Heute › Inbox_` : '';
-  return `**Zum Antworten:**\n\n${rows.join('\n')}${mehr}`;
+  return `**Zum Antworten:**\n\n${rows.join('\n')}${mehr}\n\n_Anders? Schreib einfach, was stattdessen gelten soll — ich trage es an der Quelle ein._`;
 }
 
 /** Die Rückfrage vor einem Schreibzugriff, auf Deutsch. */

@@ -1463,13 +1463,12 @@ on('POST', /^\/api\/inbox\/([\w-]{1,90})\/spaeter$/, async (req, res, m) => {
  * Antwort auf einen Inbox-Eintrag — für die Knöpfe im Chat (Kennung im Anker) und für die Inbox selbst. Geschrieben wird an der
  * Quelle über dieselben Wege wie bisher. Nur die Kennung zählt; der Stand muss noch derselbe sein (sonst 409, nie raten — K4).
  */
-on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => {
-  const u = await needUser(req);
-  const b = await body(req);
-  const id = m[1];
+on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => send(res, 200, await inboxAntworten(await needUser(req), m[1], await body(req))));
+/** Antwort auf einen Inbox-Eintrag an seiner Quelle — für Heute, die Chat-Knöpfe und den Lead (`inbox_antworten`, auch „Anders“). */
+async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
   const art = String(b.antwort ?? '');
   const text = String(b.text ?? '').trim().slice(0, 4000);
-  const weg = b.weg === 'chat-knopf' ? 'chat-knopf' : 'ui';
+  const weg = b.weg === 'chat-knopf' ? 'chat-knopf' : b.weg === 'hauptchat' ? 'hauptchat' : 'ui';
   if (!['ja', 'nein', 'anders'].includes(art)) throw new HttpError(400, 'Antwort ist ja, nein oder anders.');
   if (art === 'anders' && !text) throw new HttpError(400, 'Schreib kurz, was stattdessen.');
   const e = (await inboxFuer(u)).eintraege.flatMap((x) => (x.art === 'altbestand' ? [x, ...((x.daten.eintraege as any[]) ?? [])] : [x])).find((x) => x.id === id);
@@ -1493,7 +1492,7 @@ on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => {
     if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — gleich noch einmal.');
     entscheidSperre.add(sperre);
     antwortGezaehlt('inbox', weg);
-    try { const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }); await logEntscheidung(u, e, art === 'ja' ? 'ja (Empfehlungen übernommen)' : art === 'nein' ? 'nein' : `anders: ${text}`, u.email).catch(() => {}); return send(res, 200, r); } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
+    try { const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }); await logEntscheidung(u, e, art === 'ja' ? 'ja (Empfehlungen übernommen)' : art === 'nein' ? 'nein' : `anders: ${text}`, u.email).catch(() => {}); return r; } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
   } else if (e.art === 'push') {
     if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
     if (art !== 'ja') throw new HttpError(400, 'Push: nur „Ja“ (freigeben) oder „Später“.');
@@ -1518,8 +1517,8 @@ on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => {
   if (e.art !== 'altbestand') await logEntscheidung(u, e, art === 'ja' ? `ja${e.empfehlung ? ` (${e.empfehlung})` : ''}` : art === 'nein' ? 'nein' : `anders: ${text}`, u.email).catch(() => {});
   zahlCache.delete(u.id);
   if (e.art !== 'push') antwortGezaehlt(e.art === 'rueckfrage' ? 'rueckfrage' : e.art === 'braucht' ? 'braucht' : 'inbox', weg);
-  send(res, 200, { ok: true, art: e.art });
-});
+  return { ok: true, art: e.art };
+}
 
 // --- Entscheidungen nach Wichtigkeit (Knut 17.10.): Annahme nach 24 h, Entscheidungs-Log, Widerruf mit „Anders“ ---
 const logCol = () => wb().collection('entscheidungs_log');
@@ -3262,7 +3261,15 @@ on('POST', /^\/internal\/lead\/github$/, async (req, res) => {
 on('POST', /^\/internal\/inbox$/, async (req, res) => {
   const u = await internalUser(req, await body(req));
   const r = await inboxFuer(u);
-  send(res, 200, { eintraege: r.eintraege.map((e) => ({ id: e.id, art: e.art, frage: e.frage, empfehlung: e.empfehlung, quelle: { text: e.quelle.text }, antworten: e.antworten, stufe: e.stufe ?? null, autoAb: e.autoAb ?? null })) });
+  send(res, 200, { eintraege: r.eintraege.map((e) => ({ id: e.id, art: e.art, frage: e.frage, empfehlung: e.empfehlung, quelle: { text: e.quelle.text }, antworten: e.antworten, mehrere: e.art === 'entscheidung' && ((e.daten.entscheidungen as any[])?.length ?? 0) > 1, stufe: e.stufe ?? null, autoAb: e.autoAb ?? null })) });
+});
+// Ein-Klick im Chat zu Ende gedacht: der Lead trägt „Anders …“ (und Ja/Nein) mit der Kennung ein — nie aus geratenem Freitext.
+on('POST', /^\/internal\/inbox\/antwort$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const id = String(b.kennung ?? '');
+  if (!KENNUNG_RE.test(id)) throw new HttpError(400, 'Unbekannte Kennung.');
+  send(res, 200, await inboxAntworten(u, id, { antwort: b.antwort, text: b.text, weg: 'hauptchat' }));
 });
 
 // Claude-Konten der Person für die Brücke (Klartext nur über diesen Kanal; chat = Schlüssel aus der Anfrage).

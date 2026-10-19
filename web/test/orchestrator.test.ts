@@ -426,6 +426,16 @@ test('Plan 213 S2/S3: Inbox zeigt die Rückfrage, Antwort an der Quelle, Später
   assert.ok(!ib.j.eintraege.some((x: any) => x.id === e2.id)); assert.ok(ib.j.zurueckgestellt >= 1);
   // Walkthrough 221: auch mit der alten Leiste (navNeu aus) ist der Zähler die Inbox-Zahl — keine zweite Formel.
   assert.equal((await get('/api/today/count')).j.count, ib.j.zahl);
+  // „Anders“ im Chat: der Lead trägt die Antwort mit der Kennung ein (inbox_antworten) — an der Quelle, ohne Raten.
+  const q3 = JSON.parse((await orch(['ask', '--title', 'Inbox: Anders aus dem Chat?', '--context', 'x', '--recommend', 'Ja', '--json'])).out);
+  const e3 = (await get('/api/inbox')).j.eintraege.find((x: any) => x.daten?.qid === q3.id);
+  assert.equal((await internal('/internal/inbox/antwort', { userId: String(knut._id), kennung: '../x', antwort: 'ja' })).status, 400);
+  assert.equal((await internal('/internal/inbox/antwort', { userId: String(knut._id), kennung: e3.id, antwort: 'anders' })).status, 400, 'Anders braucht Text');
+  const an = await internal('/internal/inbox/antwort', { userId: String(knut._id), kennung: e3.id, antwort: 'anders', text: 'erst nach dem Release' });
+  assert.equal(an.status, 200, await an.clone().text());
+  const got3 = JSON.parse((await orch(['questions', 'get', q3.id, '--json'])).out);
+  assert.equal(got3.status, 'beantwortet'); assert.match(got3.answer.text, /erst nach dem Release/);
+  assert.equal((await internal('/internal/inbox/antwort', { userId: String(knut._id), kennung: e3.id, antwort: 'ja' })).status, 409, 'zweimal: nie raten');
   // Status (S1b) und Auswertung der Nutzung (S0) nur für Admins; Seiten zählen darf jede angemeldete Person.
   assert.equal((await get('/api/status')).status, 403);
   assert.equal((await get('/api/nutzung')).status, 403);
