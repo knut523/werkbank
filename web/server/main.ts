@@ -49,6 +49,7 @@ import { cosRoutes } from './cosroutes.ts';
 import { morgenTick, schnappschussTick } from './cosjob.ts';
 import { olafJira } from './cos-olafjira.ts';
 import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
+import { boxTick } from './boxwaechter.ts';
 import { abschlussTick, wocheTick } from './cosabschluss.ts';
 import { rueckstau as cosRueckstau, } from './cosmeeting.ts';
 import { meetingTeams as cosMeetingTeams } from './cossammle.ts';
@@ -60,7 +61,7 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
-import { tickerTick, tickerOverview, setTickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted } from './prticker.ts';
+import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted } from './prticker.ts';
 import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
 import { meliousPassC } from './gegenpruefung.ts';
@@ -3251,6 +3252,8 @@ async function backgroundJobs() {
     // Budget je Unter-Chat (80 % Meldung, 100 % Pause) und Lebenszeichen (hängt? / still) — deterministisch, ohne Modell.
     try { const b = await budgetTick(orchDeps); if (b.gewarnt.length || b.gestoppt.length) log('cos budget', b); } catch (e: any) { log('cos budget', { error: String(e?.message ?? e).slice(0, 200) }); }
     try { const l = await lebenszeichenTick(orchDeps); if (l.gemeldet.length) log('cos lebenszeichen', l); } catch (e: any) { log('cos lebenszeichen', { error: String(e?.message ?? e).slice(0, 200) }); }
+    // Box-Heartbeat (19.10.): Speicher der Box + Host, Meldung an den Hauptchat nur bei Stufenwechsel.
+    try { await boxTick({ userById: orchDeps.userById, ownerId: async () => (await tickerSettings()).ownerId ?? null, log }); } catch (e: any) { log('box heartbeat', { error: String(e?.message ?? e).slice(0, 200) }); }
   };
   setTimeout(cosTick, 45_000);
   setInterval(cosTick, 60_000);
