@@ -12,7 +12,7 @@ import { berichtKopf, offeneFragen, type Kopf } from './berichtkopf.ts';
 import { berichtHash, entscheidungen, dienstePfad } from './freigabe.ts';
 import { worumGeht } from './heutekarte.ts';
 import { themaOf } from './themen.ts';
-import { etaFuer, istTiefe, QUELLE_TEXT, type Tiefe } from './tiefe.ts';
+import { etaFertig, etaFuer, istTiefe, QUELLE_TEXT, type Tiefe } from './tiefe.ts';
 import { knutDone, statusWord, kopfFelder } from './leitstand.ts';
 import { OPEN } from './orchestrator.ts';   // in der Abfrage, damit .limit() nicht Geprüfte zählt
 
@@ -20,7 +20,7 @@ export type Ampel = 'laeuft' | 'blockiert' | 'push' | 'review';
 export const AMPEL_TEXT: Record<Ampel, string> = { push: 'bereit zum Push', review: 'dein Review', laeuft: 'läuft', blockiert: 'blockiert' };
 const RANG: Record<Ampel, number> = { blockiert: 0, review: 0, push: 1, laeuft: 2 };
 
-export interface OffeneEntscheidung { id: string; frage: string; empfehlung: string; optionen: string; quelle: 'bericht' | 'kopf'; stufe?: 'wichtig' | 'normal'; worum?: string; optionenListe?: string[] }
+export interface OffeneEntscheidung { id: string; frage: string; empfehlung: string; optionen: string; quelle: 'bericht' | 'kopf'; stufe?: 'wichtig' | 'normal'; worum?: string; optionenListe?: string[]; alternativen?: string[] }
 export interface Link { art: 'bericht' | 'folien' | 'bilder' | 'vorschau' | 'chat' | 'pr'; label: string; url: string }
 
 const sicher = (u: unknown): u is string => typeof u === 'string' && /^https?:\/\/[^\s"'<>]+$/i.test(u);
@@ -47,8 +47,8 @@ export function offeneEntscheidungen(text: string | null, beantwortet: { bericht
   for (const f of offeneFragen(kopf, beantwortet, hash)) {
     if (erledigt.has(f.id)) continue;
     const da = out.find((x) => x.id === f.id);
-    if (da) { if (!da.empfehlung) da.empfehlung = f.empfehlung; if (f.stufe) da.stufe = f.stufe; if (f.worum) da.worum = f.worum; if (f.optionen) da.optionenListe = f.optionen; continue; }
-    out.push({ id: f.id, frage: f.frage, empfehlung: f.empfehlung, optionen: (f.optionen ?? []).join('; '), quelle: 'kopf', ...(f.stufe ? { stufe: f.stufe } : {}), ...(f.worum ? { worum: f.worum } : {}), ...(f.optionen ? { optionenListe: f.optionen } : {}) });
+    if (da) { if (!da.empfehlung) da.empfehlung = f.empfehlung; if (f.stufe) da.stufe = f.stufe; if (f.worum) da.worum = f.worum; if (f.optionen) da.optionenListe = f.optionen; if (f.alternativen) da.alternativen = f.alternativen; continue; }
+    out.push({ id: f.id, frage: f.frage, empfehlung: f.empfehlung, optionen: (f.optionen ?? []).join('; '), quelle: 'kopf', ...(f.stufe ? { stufe: f.stufe } : {}), ...(f.worum ? { worum: f.worum } : {}), ...(f.optionen ? { optionenListe: f.optionen } : {}), ...(f.alternativen ? { alternativen: f.alternativen } : {}) });
   }
   // Im Kopf beantwortet (antwort gesetzt) gilt auch für einen gleichnamigen Textblock.
   const kopfFertig = new Set(imKopf.filter((f) => f.antwort).map((f) => f.id));
@@ -154,9 +154,11 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null, med: 
   const paket = felder.paket ?? (d.paket || null);
   const p = paket ? readPaket(reviewDir(), paket) : null;
   const kurz = (kopf?.worum || worumGeht({ title: d.title, prompt: [d.zielLine, d.prompt].filter(Boolean).join('\n'), planText: readPlan(d.plan), berichtText: text })).slice(0, 600);
-  // Plan 205: ETA nur für nicht fertige Stränge; überfällig = gedämpft markiert, kein Alarm.
+  // Plan 205: ETA nur für nicht fertige Stränge; überfällig = gedämpft markiert, kein Alarm. Fertig = keine ETA (null), auch wenn
+  // der Agent trotzdem eine meldet (Knut 20.10.2026).
   const wort = statusWord(d);
-  const eta = etaFuer(d, { fertig: wort === 'fertig' || wort === 'gestoppt', mediane: med, now });
+  const fertig = etaFertig(d, wort === 'fertig');
+  const eta = etaFuer(d, { fertig: fertig || wort === 'gestoppt', mediane: med, now });
   const seen = String(new Date(d.reviewReadyAt ?? d.doneAt ?? 0).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime());
   return {
     id: String(d._id), titel: kopf?.titel || d.title || '(ohne Titel)', strangTitel: d.title ?? '', thema: themaOf(d), ampel: a, ampelText: a === 'push' && fg?.pushedAt ? 'gepusht' : AMPEL_TEXT[a],
@@ -169,7 +171,7 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null, med: 
     kannFreigeben, freigabe: fg, weitereRepos: felder.weitereRepos ?? [], commitWarnung: felder.commitWarnung ?? null,
     kopfFehler: kopf ? null : felder.kopfFehler ?? (roh && 'fehler' in roh ? roh.fehler : null),   // wie Heute: unlesbaren Kopf zeigen
     modell: d.lastModell ?? null, modellPlan: d.modell ?? null, gegenpruefung: d.gegenpruefung?.n ?? 0, reviewReady: !!d.reviewReadyAt,   // Karte › Technische Details (Paket 187, S4)
-    tiefe: istTiefe(d.tiefe) ? d.tiefe : null, eta: { text: eta.text, ueberfaellig: eta.ueberfaellig, at: eta.at, quelle: eta.quelle ? QUELLE_TEXT[eta.quelle] : null },
+    tiefe: istTiefe(d.tiefe) ? d.tiefe : null, eta: fertig ? null : { text: eta.text, ueberfaellig: eta.ueberfaellig, at: eta.at, quelle: eta.quelle ? QUELLE_TEXT[eta.quelle] : null },
     running, wartet: wort === 'wartet', seen, paket, chat: sicher(d.url) ? d.url : null, statusAt: d.statusAt ?? d.lastActivity ?? d.startedAt,
   };
 }

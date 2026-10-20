@@ -32,7 +32,7 @@ export function tiefeText(t: Tiefe): string {
 }
 
 /** Pflichtzeile im Stand-Block (steht vor „Status:“). */
-export const ETA_ZEILE = 'ETA: HH:MM | ~N min   (deine Schätzung, wann du fertig bist; bei jeder Antwort nachziehen)';
+export const ETA_ZEILE = 'ETA: HH:MM | ~N min   (deine Schätzung, wann du fertig bist; bei jeder Antwort nachziehen — bei „Status: fertig“ keine ETA-Zeile)';
 
 // ---------- Zeit in Wien ----------
 
@@ -96,13 +96,18 @@ export function mediane(docs: { tiefe?: unknown; startedAt?: unknown; doneAt?: u
 export type EtaQuelle = 'agent' | 'median' | 'vorgabe';
 export interface Eta { at: number | null; quelle: EtaQuelle | null; text: string; ueberfaellig: boolean }
 
+/** Ist der Strang fertig, gibt es keine ETA (Knut 20.10.2026: „warum gibst du ein ETA mit, wenn Status fertig? weird“) — auch
+ *  wenn erst der Agent „Status: fertig“ gemeldet hat (`marke`) oder der Status-Takt den Zustand fertig/erledigt gesetzt hat. */
+export const etaFertig = (d: { marke?: unknown; zustand?: unknown }, fertig = false) =>
+  fertig || d.marke === 'fertig' || d.zustand === 'fertig' || d.zustand === 'erledigt';
+
 /**
  * ETA eines Strangs: die zuletzt gemeldete des Agenten, sonst Start + Median gleicher Tiefe, sonst Vorgabe. Fertige Stränge
- * haben keine ETA. Alte Stränge ohne Tiefe und ohne gemeldete ETA: „–“ (keine Migration).
+ * (siehe etaFertig) haben keine ETA. Alte Stränge ohne Tiefe und ohne gemeldete ETA: „–“ (keine Migration).
  */
-export function etaFuer(d: { tiefe?: unknown; startedAt?: unknown; eta?: { at?: unknown } | null }, o: { fertig: boolean; mediane?: Record<Tiefe, number | null> | null; now?: number }): Eta {
+export function etaFuer(d: { tiefe?: unknown; startedAt?: unknown; eta?: { at?: unknown } | null; marke?: unknown; zustand?: unknown }, o: { fertig: boolean; mediane?: Record<Tiefe, number | null> | null; now?: number }): Eta {
   const now = o.now ?? Date.now();
-  if (o.fertig) return { at: null, quelle: null, text: '–', ueberfaellig: false };
+  if (etaFertig(d, o.fertig)) return { at: null, quelle: null, text: '–', ueberfaellig: false };
   let at: number | null = null, quelle: EtaQuelle | null = null;
   const gemeldet = d.eta?.at ? new Date(d.eta.at as any).getTime() : NaN;
   if (Number.isFinite(gemeldet)) { at = gemeldet; quelle = 'agent'; }

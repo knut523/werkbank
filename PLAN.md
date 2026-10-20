@@ -93,6 +93,14 @@ Chat möglich); Knuts Pilot-Konto bleibt per Schalter auf seiner Konfiguration, 
 5,4 s → 1,3–1,6 s. Jede Jira-Änderung (Board, Sprint, Chat über den Atlassian-MCP) zieht das Ticket sofort in die Kopie
 und erscheint per SSE auf offenen Board-/Sprint-Seiten. Details und offene Entscheidungen R4-1 … R4-3: README.
 
+## Roadmap (geplant, nicht gebaut)
+
+- **Web-Push „Ein Strang fragt“** (Knut, 20.10.2026) — Chrome-Benachrichtigung, sobald ein Unter-Chat oder der Hauptchat Knut
+  etwas fragt; Klick öffnet die Frage auf der Entscheidungsseite, einfache Fragen mit „Ja (wie empfohlen)“ direkt aus der
+  Benachrichtigung. Leere Payload (nur VAPID, keine neue Abhängigkeit), Auslöser = neue Frage-Kennungen der Inbox, Ruhezeiten
+  und Bündelung. Plan mit Entscheidungen W1–W6 und DoD: [`docs/plan-266-web-push.md`](docs/plan-266-web-push.md). Stand: wartet
+  auf Knuts Antworten, dann Bau als eigener PR.
+
 ## Leitplanken
 
 - Keine Zugangsdaten im Repo oder im Log; Tokens je Nutzer verschlüsselt gespeichert.

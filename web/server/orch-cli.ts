@@ -128,8 +128,10 @@ async function call(path: string, b: Record<string, unknown>): Promise<any> {
 
 const ICON: Record<string, string> = { running: '⏳', waiting: '✋', done: '✅', failed: '❌', blocked_g0: '⛔' };
 const t = (d: any) => (d ? new Date(d).toLocaleString('de-AT', { timeZone: 'Europe/Vienna', dateStyle: 'short', timeStyle: 'short' }) : '—');
-/** „Tiefe deep · fertig ca. 17:30“ (Plan 205); alte Stränge ohne Tiefe/ETA: „–“. quelle=true nennt die Herkunft der ETA. */
-export function tiefeEta(s: { tiefe?: string | null; eta?: { text?: string; quelle?: string | null; ueberfaellig?: boolean } | null }, quelle = false): string {
+/** „Tiefe deep · fertig ca. 17:30“ (Plan 205); alte Stränge ohne Tiefe/ETA: „–“. quelle=true nennt die Herkunft der ETA.
+ *  Fertig (eta null oder Status done): nur die Tiefe — keine ETA (Knut 20.10.2026). */
+export function tiefeEta(s: { tiefe?: string | null; status?: string; eta?: { text?: string; quelle?: string | null; ueberfaellig?: boolean } | null }, quelle = false): string {
+  if (s.eta === null || s.status === 'done') return `Tiefe ${s.tiefe ?? '–'}`;
   const q: Record<string, string> = { agent: 'Agent', median: 'Median', vorgabe: 'Vorgabe' };
   const e = s.eta?.text ?? '–';
   return `Tiefe ${s.tiefe ?? '–'} · ${s.eta?.ueberfaellig ? `⚠ ${e}` : e}${quelle && s.eta?.quelle ? ` (ETA: ${q[s.eta.quelle] ?? s.eta.quelle})` : ''}`;

@@ -5,7 +5,7 @@
 
 import { readdirSync, realpathSync } from 'node:fs';
 import { basename } from 'node:path';
-import { etaFuer, istTiefe, TIEFEN, type Tiefe } from './tiefe.ts';
+import { etaFertig, etaFuer, istTiefe, TIEFEN, type Tiefe } from './tiefe.ts';
 import { themaOf } from './themen.ts';
 import { ZUSTAND_TEXT, type Zustand } from './zustand.ts';
 
@@ -15,7 +15,7 @@ const sicher = (u: unknown) => (/^https?:\/\//.test(String(u ?? '')) ? String(u)
 /** Eine Zeile der Tabelle (rein). */
 export function zeile(d: any, o: { mediane?: Record<Tiefe, number | null> | null; now?: number } = {}) {
   const zustand: Zustand = d.reviewedAt && (d.reviewedBy === 'auto' || d.knutReviewedAt) ? 'erledigt' : (d.zustand as Zustand) ?? ALT[d.lastStatus] ?? 'laeuft';
-  const fertig = zustand === 'fertig' || zustand === 'erledigt';
+  const fertig = etaFertig({ marke: d.marke, zustand });
   const eta = etaFuer(d, { fertig, mediane: o.mediane ?? null, now: o.now });
   return {
     id: String(d._id), titel: String(d.title ?? '(ohne Titel)'), thema: themaOf(d), zustand, zustandText: ZUSTAND_TEXT[zustand], grund: String(d.zustandGrund ?? d.lastReason ?? ''),

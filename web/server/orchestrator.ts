@@ -60,6 +60,7 @@ export const BERICHT_PFLICHT = [
   '    optionen:                  # die echten Wahlmöglichkeiten, je eine Zeile',
   '      - …',
   '    empfehlung: …',
+  '    alternativen: ["…", "…"]   # optional, 2–3 kurze, konkrete Alternativen zur Empfehlung (je ≤ 120 Zeichen) — Knut wählt sie per Klick statt zu tippen; nur, wenn es echte gibt',
   '    antwort: ""',
   'github:                       # je Repo/PR eine Zeile (wird die PR-Tabelle); commit = ≥ 7-stelliger SHA des Stands, den Knut freigeben soll',
   '  - repo: <org>/<repo>',
@@ -107,7 +108,7 @@ export function orchBrief(b: BriefInput): string {
       ETA_ZEILE,
       'Status: fertig | braucht Antwort | blockiert',
       '```',
-      'Schreib den Abschnitt selbst als normales Markdown, nicht als Codeblock. Die ETA schätzt du schon in der ersten Antwort (Uhrzeit in Wiener Zeit oder Dauer ab jetzt) und ziehst sie bei jeder Antwort nach.',
+      'Schreib den Abschnitt selbst als normales Markdown, nicht als Codeblock. Die ETA schätzt du schon in der ersten Antwort (Uhrzeit in Wiener Zeit oder Dauer ab jetzt) und ziehst sie bei jeder Antwort nach. Bei „Status: fertig“ lässt du die ETA-Zeile weg.',
     ].join('\n'),
     BERICHT_PFLICHT,
     `---\n\nAuftrag:\n${b.prompt.trim()}`,
@@ -408,9 +409,12 @@ export async function etaMediane(u: User, now = Date.now()) {
 }
 
 /** ETA eines Strangs für list/show: die ETA-Zeile der letzten Antwort, sonst die zuletzt gemeldete, sonst Median/Vorgabe. */
+/** Fertig (Status done oder Marke „fertig“ in der letzten Antwort): null — keine ETA, auch wenn der Agent eine mitschickt. */
 function etaVon(d: any, last: LastMsg | null, status: OrchStatus, med: Record<Tiefe, number | null>) {
+  const marke = last ? (last.fromUser ? null : statusMark(last.text)) : d.marke ?? null;
+  if (status === 'done' || marke === 'fertig') return null;
   const neu = last && !last.fromUser ? etaMark(last.text, last.at) : null;
-  return etaFuer({ ...d, eta: neu ? { at: neu } : d.eta }, { fertig: status === 'done' || status === 'failed' || status === 'blocked_g0', mediane: med });
+  return etaFuer({ ...d, marke, zustand: null, eta: neu ? { at: neu } : d.eta }, { fertig: status === 'failed' || status === 'blocked_g0', mediane: med });
 }
 
 export async function listOrch(u: User, opts: { all?: boolean } = {}) {

@@ -23,6 +23,7 @@ fragen:
   - id: D1
     frage: Wer ist Ansprechperson in der Mail, wenn kein Bearbeiter gesetzt ist?
     empfehlung: die erste Zuständige der Anfrage
+    alternativen: ["eine feste Service-Adresse", "die Person, die das Angebot angelegt hat"]
     antwort: ""
 github:
   - repo: WirStrom1/olaf-admin
@@ -46,6 +47,8 @@ github:
      ansehen oder entscheiden soll; blockiert, wenn es ohne Hilfe nicht weitergeht. offen höchstens 5 Zeilen.
      review: Coder-Vorschau mit Login-Link (die Werkbank prüft, ob sie antwortet), Screenshots (relativ im Paket), PR-Text.
      fragen: nur echte Entscheidungen, je mit Empfehlung; antwort bleibt leer, bis Knut antwortet (kommt als „Nacharbeit nach Review“).
+     alternativen (je Frage, optional): 2–3 kurze, konkrete Alternativen zur Empfehlung, wenn es echte gibt — Knut klickt sie an
+     statt zu tippen (Antwort „Anders: <Alternative>“). Inline ["a", "b"] oder als Block-Liste.
      github: je Repo Zweig und der Commit, den Knut freigeben soll (≥ 7 Zeichen). Neuer Commit → Kopf ändern; Knuts Freigabe gilt
      nur für genau diesen Stand. -->
 

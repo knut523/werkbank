@@ -1513,6 +1513,8 @@ on('POST', /^\/api\/inbox\/([\w-]{1,90})\/spaeter$/, async (req, res, m) => {
  * Quelle über dieselben Wege wie bisher. Nur die Kennung zählt; der Stand muss noch derselbe sein (sonst 409, nie raten — K4).
  */
 on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => send(res, 200, await inboxAntworten(await needUser(req), m[1], await body(req))));
+/** Log-Zeile einer „Anders“-Antwort; eine gewählte Alternative kommt schon als „Anders: …“ (Paket 266) — nicht doppelt. */
+const andersLog = (text: string) => (/^anders:/i.test(text) ? `anders:${text.slice(7)}` : `anders: ${text}`);
 /** Antwort auf einen Inbox-Eintrag an seiner Quelle — für Heute, die Chat-Knöpfe und den Lead (`inbox_antworten`, auch „Anders“). */
 async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
   const art = String(b.antwort ?? '');
@@ -1541,7 +1543,7 @@ async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
     if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — gleich noch einmal.');
     entscheidSperre.add(sperre);
     antwortGezaehlt('inbox', weg);
-    try { const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }); await logEntscheidung(u, e, art === 'ja' ? 'ja (Empfehlungen übernommen)' : art === 'nein' ? 'nein' : `anders: ${text}`, u.email).catch(() => {}); return r; } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
+    try { const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }); await logEntscheidung(u, e, art === 'ja' ? 'ja (Empfehlungen übernommen)' : art === 'nein' ? 'nein' : andersLog(text), u.email).catch(() => {}); return r; } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
   } else if (e.art === 'push') {
     if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
     if (art !== 'ja') throw new HttpError(400, 'Push: nur „Ja“ (freigeben) oder „Später“.');
@@ -1574,7 +1576,7 @@ async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
     if (fehler) throw new HttpError(409, `${fehler} Rückfrage(n) ließen sich nicht verwerfen — Inbox neu laden und einzeln ansehen.`);
   } else throw new HttpError(400, 'Diese Frage beantwortest du in ihrer Ansicht (Vault-Sync, Pflege, Schlange).');
   log('inbox antwort', { user: u.id, art: e.art, weg });
-  if (e.art !== 'altbestand') await logEntscheidung(u, e, art === 'ja' ? `ja${e.empfehlung ? ` (${e.empfehlung})` : ''}` : art === 'nein' ? 'nein' : `anders: ${text}`, u.email).catch(() => {});
+  if (e.art !== 'altbestand') await logEntscheidung(u, e, art === 'ja' ? `ja${e.empfehlung ? ` (${e.empfehlung})` : ''}` : art === 'nein' ? 'nein' : andersLog(text), u.email).catch(() => {});
   zahlCache.delete(u.id);
   if (e.art !== 'push') antwortGezaehlt(e.art === 'rueckfrage' ? 'rueckfrage' : e.art === 'braucht' ? 'braucht' : 'inbox', weg);
   return { ok: true, art: e.art };
@@ -1601,7 +1603,7 @@ async function teilAntworten(u: User, e: any, teile: { id: string; antwort: stri
     const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, sammeln: true, antworten });
     for (const t of teile) {
       const x = ((e.daten.entscheidungen as any[]) ?? []).find((y) => String(y.id) === t.id) ?? {};
-      await logEntscheidung(u, { ...e, frage: `${t.id}: ${x.frage ?? ''}`, empfehlung: x.empfehlung ?? null, stufe: x.stufe ?? e.stufe }, t.antwort === 'ja' ? `ja${x.empfehlung ? ` (${x.empfehlung})` : ''}` : t.antwort === 'nein' ? 'nein' : `anders: ${t.text}`, u.email, false, [t.id]).catch(() => {});
+      await logEntscheidung(u, { ...e, frage: `${t.id}: ${x.frage ?? ''}`, empfehlung: x.empfehlung ?? null, stufe: x.stufe ?? e.stufe }, t.antwort === 'ja' ? `ja${x.empfehlung ? ` (${x.empfehlung})` : ''}` : t.antwort === 'nein' ? 'nein' : andersLog(t.text), u.email, false, [t.id]).catch(() => {});
     }
     return r;
   } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
