@@ -14,6 +14,8 @@ export const ME = (process.env.WERKBANK_GITHUB_LOGIN || 'knut523').toLowerCase()
 
 export interface TickerSettings {
   ticker: boolean; autoReview: boolean; autoPost: boolean; onRequest: boolean;
+  /** Auto-Delta bei neuem Stand (Release 20b, Knut 20.10.: „if chris posts his fixes directly also review them“). */
+  autoDelta: boolean;
   /** Entfallen (Knut 17.10.: „nimm den Deckel komplett raus“) — immer 0 = ohne Tagesgrenze; nur noch für alte Dokumente. */
   allow: string[]; maxPerDay: number; maxParallel: number; minutes: number;
   ownerId: string | null; autoReviewSince: string | null;
@@ -21,7 +23,7 @@ export interface TickerSettings {
 }
 
 export const DEFAULTS: TickerSettings = {
-  ticker: false, autoReview: false, autoPost: true, onRequest: false,
+  ticker: false, autoReview: false, autoPost: true, onRequest: false, autoDelta: true,
   allow: ['knut523', 'bizarrochris'], maxPerDay: 0, maxParallel: 2, minutes: 5,
   ownerId: null, autoReviewSince: null, log: [],
 };
@@ -54,7 +56,7 @@ const clampInt = (v: unknown, lo: number, hi: number, dflt: number) => { const n
 export function mergeSettings(cur: TickerSettings, inp: any, by: { id: string; name: string }, now = new Date()): TickerSettings {
   const next: TickerSettings = { ...cur, log: [...cur.log] };
   const was: string[] = [];
-  for (const k of ['ticker', 'autoReview', 'autoPost', 'onRequest'] as const) {
+  for (const k of ['ticker', 'autoReview', 'autoPost', 'onRequest', 'autoDelta'] as const) {
     if (typeof inp?.[k] === 'boolean' && inp[k] !== cur[k]) { next[k] = inp[k]; was.push(`${k} ${inp[k] ? 'an' : 'aus'}`); }
   }
   if (Array.isArray(inp?.allow)) {
@@ -286,6 +288,8 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
   let n = 0;
   for (const e of fresh) {
     // Paket 223: „erledigt“ des Autors oder ein neuer Stand nach so einem Kommentar → Nachprüfung (Delta gegen das letzte Review).
+    // Release 20b: neuer Stand eines Erlaubtliste-Autors auf einem schon reviewten und geposteten PR → Delta-Review ohne Tag.
+    if (e.kind === 'stand' && s.autoDelta && e.at >= s.autoReviewSince && e.head && reviewErlaubt(e.repo)) { const d = await autoDelta(e, s, now); if (d !== null) { n += d; continue; } }
     if ((e.kind === 'erledigt' || e.kind === 'stand') && e.at >= s.autoReviewSince && e.head && reviewErlaubt(e.repo)) { n += await nachpruefung(e, s, now); continue; }
     // Review-Anfrage nur, wenn der PR-Autor auf der Liste steht: das Review führt die Tests des PRs aus (Review A2).
     const trigger = e.kind === 'tag' || (e.kind === 'anfrage' && s.onRequest && !!e.actor && s.allow.includes(e.actor));
@@ -303,6 +307,31 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
     }
   }
   return n;
+}
+
+/** Mehrere Pushes in diesem Fenster → ein Review auf den letzten Kopf (jeder Push schiebt den Start nach hinten). */
+export const DELTA_BUENDEL_MS = 10 * 60_000;
+
+/**
+ * Auto-Delta (Release 20b): Autor auf der Erlaubtliste (nicht wir selbst), letztes Review dieses PRs fertig UND gepostet, an einem
+ * anderen Kopf → Delta-Review (`trigger: 'delta'`), Start erst nach DELTA_BUENDEL_MS. Ein noch wartendes Auto-Delta desselben PRs
+ * geht in diesem auf (übersprungen, „zusammengefasst“). null = trifft nicht zu (dann gilt die Nachprüfung wie bisher).
+ */
+async function autoDelta(e: TickerEvent, s: TickerSettings, now: Date): Promise<number | null> {
+  const autor = String(e.actor ?? '').toLowerCase();
+  if (!autor || autor === ME || !s.allow.map((a) => a.toLowerCase()).includes(autor)) return null;
+  const letzte: any = (await reviewsCol().find({ repo: e.repo, number: e.number, status: 'fertig' }).sort({ doneAt: -1 }).limit(1).toArray())[0];
+  if (!letzte?.posted || letzte.head === e.head) return null;
+  // Hat der Autor seit dem letzten Review „erledigt“ gemeldet, gilt die Nachprüfung (Paket 223, sofort, ohne Bündeln).
+  if (await tickerCol().findOne({ kind: 'erledigt', repo: e.repo, number: e.number, at: { $gte: new Date(letzte.doneAt ?? letzte.createdAt ?? 0).toISOString() } })) return null;
+  const id = `${prKey(e.repo, e.number)}@${e.head}`;
+  const start = new Date(now.getTime() + DELTA_BUENDEL_MS);
+  try {
+    await reviewsCol().insertOne({ _id: id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, head: e.head, trigger: 'delta', by: autor, event: e._id, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date, deep: false, retryAt: start, vorherHead: letzte.head });
+  } catch (x: any) { if (x?.code !== 11000) throw x; return 0; }
+  const alt = await reviewsCol().updateMany({ repo: e.repo, number: e.number, trigger: 'delta', status: 'wartet', _id: { $ne: id as any } }, { $set: { status: 'übersprungen', note: `zusammengefasst: neuer Stand ${e.head.slice(0, 7)} kam innerhalb von ${DELTA_BUENDEL_MS / 60_000} min` } });
+  await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: `Delta-Review eingereiht (seit Stand ${String(letzte.head).slice(0, 7)}; startet frühestens in ${DELTA_BUENDEL_MS / 60_000} min${alt.modifiedCount ? ', vorige Pushes zusammengefasst' : ''})` } });
+  return 1;
 }
 
 /**

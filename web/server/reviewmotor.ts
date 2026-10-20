@@ -181,7 +181,8 @@ export function motorAbschnitt(paket: string): string {
 /** Form von befunde.json (befunde.ts prüft sie; Unbekanntes fällt raus). */
 export const BEFUNDE_FORM = [
   '```json',
-  '{ "vollstaendig": true, "gruende": [], "tests": "what ran / what could not run (English)", "delta": "nur beim Delta-Review: Tabelle der Punkte aus dem letzten Review (English)",',
+  '{ "vollstaendig": true, "gruende": [], "tests": "what ran / what could not run (English)", "kurz": "optional: one or two sentences up front (English)",',
+  '  "vorige": [ { "punkt": "nur beim Delta-Review: item from our last review or open with the author (English)", "quelle": "review", "stand": "erledigt", "beleg": "src/a.ts:12" } ],',
   '  "abdeckung": { "security": "geprüft", "data_integrity": "geprüft", "cross_file": "geprüft", "idempotency": "geprüft", "pii": "geprüft", "access_control": "geprüft",',
   '                 "correctness": "geprüft", "spec": "geprüft", "tests": "nicht geprüft", "performance": "nicht geprüft", "maintainability": "geprüft", "docs": "nicht geprüft" },',
   '  "befunde": [ { "datei": "src/a.ts", "zeile": 42, "klasse": "security", "schwere": "blocking", "vertrauen": "hoch",',
@@ -189,4 +190,5 @@ export const BEFUNDE_FORM = [
   '```',
   'Klassen: security, data_integrity, cross_file, idempotency, pii, access_control (nur diese dürfen `blocking` sein) · correctness, spec, tests, performance, maintainability, docs (immer `advisory`).',
   '`quelle`: `spec` = Anforderung/Abnahmekriterium aus PR-Text, Plan oder Spec; `standard` = Repo-Regeln, Sicherheit, Handwerk. Ein nicht geprüfter Blockier-Klasse macht das Review `incomplete`.',
+  '`vorige` (nur Delta-Review): `quelle` review = unser letztes Review, autor = eigener offener Punkt des Autors; `stand` erledigt | teilweise | offen; `beleg` Datei:Zeile im neuen Stand.',
 ].join('\n');

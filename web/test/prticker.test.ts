@@ -540,7 +540,7 @@ test('17c: Kontext vorab ins Paket (als Daten), Diff gegen die Basis, Delta-Revi
   // Delta 50 Zeilen → quick; Lead bleibt Claude; ETA nach Größe
   assert.equal(started[0].tiefe, 'regular'); assert.equal(started[0].modell, 'claude:opus');
   assert.match(started[0].title, /\(Delta\)/);
-  assert.match(started[0].prompt, /DELTA-REVIEW/); assert.match(started[0].prompt, /Punkt · Quelle .* erledigt\?/);
+  assert.match(started[0].prompt, /DELTA-REVIEW/); assert.match(started[0].prompt, /Je Punkt: erledigt \| teilweise \| offen mit Beleg/); assert.match(started[0].prompt, /`vorige`/);   // Release 20b: Liste statt Tabelle
   assert.match(started[0].prompt, /auf Englisch/); assert.match(started[0].prompt, /kontext\.md/);
   assert.equal(d.tiefe, 'regular'); assert.equal(d.zeilen, 50); assert.equal(d.delta.von, SHA1); assert.equal(d.basis, MB);
   assert.equal(d.eta, R.etaMinuten('regular', 50, true));
