@@ -506,6 +506,8 @@ export const knutDone = (d: any) => !!d.knutReviewedAt || (!!d.reviewedAt && !d.
 
 /** Statuswort aus dem festgeschriebenen Stand (B-3): failed und Deckel → gestoppt; review_ready/fertig → fertig. */
 export function statusWord(d: any): StatusWord {
+  // Plan 274 (D9): „fertig“ gemeldet schlägt einen späteren Deckel (Budget nach der Abgabe) — Karte sagt fertig, nicht gestoppt.
+  if (d.lastStatus === 'done' && d.doneAt) return 'fertig';
   if (d.autoStopped || d.status === 'blocked_g0') return 'gestoppt';   // G0 (Release 3): ohne Chat, wartet auf Knuts Antwort
   if (d.reviewReadyAt || (d.doneAt && d.lastStatus !== 'running')) return 'fertig';
   return d.lastStatus === 'running' ? 'läuft' : d.lastStatus === 'failed' ? 'gestoppt' : d.lastStatus === 'done' ? 'fertig' : 'wartet';

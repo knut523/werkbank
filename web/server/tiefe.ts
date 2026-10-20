@@ -1,11 +1,12 @@
 // Tiefe und ETA je Strang (docs/plan-eta-tiefe.md, Knut 16.10.2026: „je Task auch ein ETA … Aufgaben mit quick oder regular
 // oder deep“). Rein (kein Mongo, keine Brücke) — der Orchestrator, die CLI und die Übersicht nutzen dieselben Bausteine.
 
-export type Tiefe = 'quick' | 'regular' | 'deep';
-export const TIEFEN: Tiefe[] = ['quick', 'regular', 'deep'];
+// live (Plan 274, Knut 20.10.2026): UI-Feedback am laufenden Dev-Server — quick je Runde, einmal „jetzt gründlich“ vor dem Push.
+export type Tiefe = 'quick' | 'regular' | 'deep' | 'live';
+export const TIEFEN: Tiefe[] = ['quick', 'regular', 'deep', 'live'];
 export const TIEFE_VORGABE: Tiefe = 'regular';
 /** Vorgabe-Dauer in Minuten, solange es keine Agentenangabe und keinen Median gibt. */
-export const ETA_VORGABE_MIN: Record<Tiefe, number> = { quick: 20, regular: 60, deep: 180 };
+export const ETA_VORGABE_MIN: Record<Tiefe, number> = { quick: 20, regular: 60, deep: 180, live: 30 };
 /** Lead-Modell eines quick-Strangs ohne ausdrückliches --modell (klein; Unter-Stränge nie auf dem Lead-Modell glm-5.3). */
 export const QUICK_MODELL = 'melious:glm-5.3-flash';
 
@@ -16,20 +17,25 @@ export const tiefeOf = (x: unknown): Tiefe => (istTiefe(x) ? x : TIEFE_VORGABE);
 /** Modell und Risiko beim Start: ausdrückliche Angaben schlagen die Vorgabe der Tiefe. */
 export function tiefeStart(t: Tiefe, o: { modell?: string | null; risiko?: string | null }): { modell: string | null; risiko: string | null } {
   const modell = o.modell || (t === 'quick' ? QUICK_MODELL : null);
-  const risiko = o.risiko || (t === 'quick' ? 'niedrig' : t === 'deep' ? 'hoch' : null);
+  // live: Risiko wie quick, Modell aber die Vorgabe der Brücke (Claude) — Knut sitzt davor und wartet (Bericht 274, D1).
+  const risiko = o.risiko || (t === 'quick' || t === 'live' ? 'niedrig' : t === 'deep' ? 'hoch' : null);
   return { modell, risiko };
 }
 
 /** Deckel „automatisch weiter“ je Tiefe (Budget): quick ein Drittel, deep das Doppelte. */
-export const autoMaxFuer = (t: Tiefe, max: number) => (t === 'quick' ? Math.max(1, Math.ceil(max / 3)) : t === 'deep' ? max * 2 : max);
+export const autoMaxFuer = (t: Tiefe, max: number) => (t === 'quick' || t === 'live' ? Math.max(1, Math.ceil(max / 3)) : t === 'deep' ? max * 2 : max);
 
 /** Absatz im Auftrag: welche Schritte bei dieser Tiefe Pflicht sind. */
 export function tiefeText(t: Tiefe): string {
-  const kopf = `Tiefe: **${t}** (gewählt beim Start; quick | regular | deep).`;
+  const kopf = `Tiefe: **${t}** (gewählt beim Start; quick | regular | deep | live).`;
+  if (t === 'live') return `${kopf} Live-Modus für UI-Feedback: Knut schaut am laufenden Dev-Server zu und schreibt Rückmeldungen in Runden. Je Runde wie quick: Änderung klein und sofort sichtbar machen (Dev-Server mit Hot Reload laufen lassen, nicht neu bauen, Vorschau-Link nennen), nur die Tests, die die Änderung betreffen, lokal committen — kein Council, kein Pass C, keine Gegenprüfung (challenge), kein Grillen, kurze Antworten. Erst wenn die Nachricht „jetzt gründlich“ kommt: einmal der volle Durchlauf (alle Tests des Repos, Pass A/B/C mit \`challenge\` art=diff, Screenshots, Bericht vollständig), danach „Status: fertig“. Bis dahin endet jede Runde mit „Status: braucht Antwort“.`;
   if (t === 'quick') return `${kopf} Schnell und schlank: kein Council, keine Gegenprüfung (challenge), kein Grillen; nur die Tests des Repos, die deine Änderung betreffen, müssen grün sein. Bericht kurz (Kopf + ein Diagramm + Prüfausgaben). Wird die Aufgabe größer als gedacht, sag das unter „Offen“, statt still auf deep zu gehen.`;
   if (t === 'deep') return `${kopf} Voller plan-to-pr: Plan, Council mit Advocatus Diaboli (zusätzlich \`challenge\` art=council), Pass A/B/C, in Pass C \`challenge\` art=diff mit hoch=true (GLM 5.3), alle Tests des Repos, Visual-Check mit Screenshots bei allem Sichtbaren. Lieber gründlich als schnell.`;
   return `${kopf} plan-to-pr wie gewohnt: kurz planen, bauen, Tests des Repos, Pass A/B/C; in Pass C zusätzlich \`challenge\` art=diff (Gegenprüfung). Council nur bei riskanten oder schwer umkehrbaren Entscheidungen.`;
 }
+
+/** „jetzt gründlich“ (Live-Modus): der eine volle Durchlauf vor dem Push — als Nachricht an den Strang (CLI, MCP, Knopf). */
+export const GRUENDLICH_TEXT = 'Jetzt gründlich (Live-Modus, Knopf/Befehl „jetzt gründlich“): Die Runden sind durch. Mach jetzt einmal den vollen Durchlauf vor dem Push — alle Tests des Repos und den Build grün, Pass A/B/C, in Pass C zusätzlich `challenge` art=diff (Gegenprüfung gegen die Basis), Visual Review mit Screenshots der geänderten Seiten, Bericht vollständig (Kopf, Diagramm, Prüfausgaben, offene Fragen). Danach „Status: fertig“.';
 
 /** Pflichtzeile im Stand-Block (steht vor „Status:“). */
 export const ETA_ZEILE = 'ETA: HH:MM | ~N min   (deine Schätzung, wann du fertig bist; bei jeder Antwort nachziehen — bei „Status: fertig“ keine ETA-Zeile)';
@@ -85,7 +91,7 @@ const DAUER_MAX = 3 * 86400_000;
 
 /** Median-Dauer (ms) je Tiefe aus erledigten Strängen ({tiefe, startedAt, doneAt}); null = zu wenige Daten. */
 export function mediane(docs: { tiefe?: unknown; startedAt?: unknown; doneAt?: unknown }[]): Record<Tiefe, number | null> {
-  const by: Record<Tiefe, number[]> = { quick: [], regular: [], deep: [] };
+  const by: Record<Tiefe, number[]> = { quick: [], regular: [], deep: [], live: [] };
   for (const d of docs) {
     const ms = new Date(d.doneAt as any).getTime() - new Date(d.startedAt as any).getTime();
     if (ms > 0 && ms <= DAUER_MAX) by[tiefeOf(d.tiefe)].push(ms);

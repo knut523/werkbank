@@ -17,11 +17,16 @@ export function zeile(d: any, o: { mediane?: Record<Tiefe, number | null> | null
   const zustand: Zustand = d.reviewedAt && (d.reviewedBy === 'auto' || d.knutReviewedAt) ? 'erledigt' : (d.zustand as Zustand) ?? ALT[d.lastStatus] ?? 'laeuft';
   const fertig = etaFertig({ marke: d.marke, zustand });
   const eta = etaFuer(d, { fertig, mediane: o.mediane ?? null, now: o.now });
+  const grund = String(d.zustandGrund ?? d.lastReason ?? '');
+  // Plan 274 (D9): „fertig“ gemeldet, danach technisch abgebrochen → genau so anzeigen, nicht als hängt/blockiert.
+  const ehrlich = zustand === 'fertig' && /^fertig \(danach /.test(grund) ? grund.slice(0, 90) : null;
   return {
-    id: String(d._id), titel: String(d.title ?? '(ohne Titel)'), thema: themaOf(d), zustand, zustandText: ZUSTAND_TEXT[zustand], grund: String(d.zustandGrund ?? d.lastReason ?? ''),
+    id: String(d._id), titel: String(d.title ?? '(ohne Titel)'), thema: themaOf(d), zustand, zustandText: ehrlich ?? ZUSTAND_TEXT[zustand], grund,
     tiefe: istTiefe(d.tiefe) ? d.tiefe : 'regular', eta: fertig ? null : { text: eta.text, ueberfaellig: eta.ueberfaellig },
     zuletzt: d.lastActivity ?? d.statusAt ?? d.startedAt ?? null, chat: sicher(d.url), paket: d.paket ?? null, bericht: !!d.bericht,
     autoWeg: d.reviewedBy === 'auto', abgehakt: !!d.knutReviewedAt,
+    // Live-Modus (Plan 274, D1): Knopf „Jetzt gründlich“, solange der Durchlauf nicht nach der letzten Runde angestoßen ist.
+    gruendlich: d.tiefe === 'live' && zustand !== 'erledigt' ? { angestossen: !!d.gruendlichAt && new Date(d.gruendlichAt).getTime() >= new Date(d.lastSentAt ?? 0).getTime() - 5000 } : null,
   };
 }
 

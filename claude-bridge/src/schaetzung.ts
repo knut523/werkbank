@@ -12,6 +12,7 @@ export interface SpeicherStand { echtGb: number; hostFreiGb: number }
 export const GRENZE = { echtStartGb: 9, hostMinGb: 3 } as const;
 const TIEFE: Record<string, { dauerMin: number; tokens: number }> = {
   quick: { dauerMin: 10, tokens: 200_000 }, regular: { dauerMin: 45, tokens: 1_200_000 }, deep: { dauerMin: 120, tokens: 3_000_000 },
+  live: { dauerMin: 10, tokens: 200_000 },   // Plan 274: eine Live-Runde ist wie quick
 };
 
 /** Was ein Zug voraussichtlich braucht. Chat-Zug: kurz; Strang nach Tiefe; bauende Profile mit Platz für Tests/Builds. */

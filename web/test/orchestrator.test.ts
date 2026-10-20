@@ -31,8 +31,9 @@ test('Status: Reihenfolge Startfehler → läuft → Neustart → unterwegs → 
   assert.equal(orchStatus(run, null, { fromUser: false, text: 'Fehler', error: true, at: T0 + 2000 }, T0 + 5000).status, 'failed', 'LibreChat-Fehler');
   // Nachricht nach dem letzten Zug gesendet: wieder unterwegs, nicht „fertig“ vom vorigen Zug.
   assert.equal(orchStatus({ ...run, lastSentAt: T0 + 120_000 }, turn('ok'), ai('Status: fertig'), T0 + 125_000).status, 'running');
+  // Plan 274 (D9): technisches Zugende ohne „fertig“ → wie bisher; mit „fertig“ nach dem Senden → done (zuverlaessigkeit.test.ts).
   for (const [o, st] of [['busy', 'failed'], ['limit', 'waiting'], ['timeout', 'waiting'], ['rate_limit', 'failed'], ['error', 'failed'], ['aborted', 'failed']] as const) {
-    assert.equal(orchStatus(run, turn(o), ai('Status: fertig')).status, st, o);
+    assert.equal(orchStatus(run, turn(o), ai('Zwischenstand')).status, st, o);
   }
   assert.match(orchStatus(run, turn('limit'), null).reason, /send <id> weiter/);
   assert.equal(orchStatus(run, turn('ok'), ai('…\n### Stand\n- Erledigt: x\nStatus: fertig')).status, 'done');
@@ -287,7 +288,7 @@ test('Start: Chat in Knuts Konto mit vorgegebener ID, Titel + Lesezeichen, Brüc
 test('Ein Worktree, ein offener Strang (409, außer --shared); Ordner außerhalb der Wurzeln 400', async () => {
   const again = await orch(['start', '--title', 'Zweiter', '--cwd', WT, '--prompt', 'x']);
   assert.notEqual(again.code, 0);
-  assert.match(again.err, /409: Im Ordner arbeitet schon der Strang/);
+  assert.match(again.err, /409: Im selben Worktree arbeitet schon der Strang/);
   const outside = await orch(['start', '--title', 'Draußen', '--cwd', tmpdir(), '--prompt', 'x']);
   assert.match(outside.err, /400: Arbeitsordner muss unterhalb/);
   const nope = await orch(['start', '--title', 'Weg', '--cwd', join(ROOT, 'gibts-nicht'), '--prompt', 'x']);

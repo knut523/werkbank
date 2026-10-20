@@ -6,6 +6,9 @@
 //     [--tiefe quick|regular|deep]   Tiefe (Plan 205, Vorgabe regular): quick = Melious Flash, kein Council/keine Gegenprüfung,
 //     nur Repo-Tests; regular = wie bisher (Pass C mit challenge); deep = voller plan-to-pr mit Council, Gegenprüfung auf GLM 5.3,
 //     Visual-Check, Risiko hoch, doppelte Schritte und Deckel. Der Agent meldet „ETA:“ im Stand-Block; list/show zeigen sie.
+//     live = Live-Modus für UI-Feedback (Plan 274): je Runde wie quick am laufenden Dev-Server, ohne Council/Pass C; einmal vor dem
+//     Push `orch gruendlich <id>` (oder Knopf „Jetzt gründlich“ in Arbeit) → voller Durchlauf mit Pass C und Gegenprüfung.
+//     Ein Worktree, ein Strang: belegt ein offener Strang denselben Git-Worktree (cwd oder geschriebene Dateien), 409 — außer --shared.
 //     [--budget TOKENS]   Tokenbudget des Strangs (Eingabe ohne Cache-Lesen + Ausgabe; Plan 209): bei 80 % eine Meldung, bei 100 % Pause mit Rückfrage;
 //     ohne Angabe ORCH_BUDGET_TOKENS je Tiefe (quick ⅓, deep 2×; Vorgabe 0 = aus)
 //     [--profil voll|bauer|leser|schreiber|release]   Rollen-Profil (Grundlast je Zug): bauer = nur vault-search/werkbank-MCP; leser =
@@ -19,7 +22,11 @@
 //     gestartete/verworfene Items verlassen die Datei, blockierte (blocked_g0) und ungeprüfte bleiben.
 //   orch list [--all] [--json]
 //   orch show <id> [--json]
-//   orch send <id> (TEXT … | --text TEXT | Text auf stdin)   läuft der Strang, wird die Nachricht in den laufenden Zug nachgereicht
+//   orch send <id> (TEXT … | --text TEXT | Text auf stdin)   läuft der Strang, wird die Nachricht in den laufenden Zug nachgereicht;
+//     sonst wartet send bis 15 s (ORCH_SEND_BESTAETIGEN_MS) auf die Bestätigung der Brücke und meldet „angekommen“ oder „nicht
+//     bestätigt“ — dann schickt die Werkbank nach 3 min denselben Text noch einmal. Arbeitet ein anderer Strang gerade im selben
+//     Worktree: 409 (später senden).
+//   orch gruendlich <id>   Live-Strang: „jetzt gründlich“ — der eine volle Durchlauf vor dem Push
 //   orch review <id> [--note TEXT]
 //   orch thema <id> <Thema|auto>   Themen-Gruppe in der Chat-Seitenleiste von Hand (auto = wieder automatisch)
 //   orch freigaben [--alle] [--json]   Knuts Freigaben zum Push (Review-Ansicht im OLAF Workspace); anlegen nur dort
@@ -194,6 +201,13 @@ async function main() {
       const text = given ?? await stdin();
       const j = await call('send', { id: pos[0], text });
       console.log(j.injected ? `nachgereicht (Strang arbeitet, der Agent sieht es beim nächsten Schritt): ${j.id}  ${j.url}` : `gesendet: ${j.id}  ${j.url}`);
+      if (j.zustellung) console.log(`Zustellung: ${j.zustellung}`);
+      return;
+    }
+    case 'gruendlich': {
+      if (!pos[0]) die('gruendlich <id>');
+      const j = await call('gruendlich', { id: pos[0] });
+      console.log(`jetzt gründlich: ${j.id}  ${j.url}${j.zustellung ? `\nZustellung: ${j.zustellung}` : ''}`);
       return;
     }
     case 'review': {

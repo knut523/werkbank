@@ -19,7 +19,7 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, mirrorOf, mirrorSites, siteByPrefix, siteColumns, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane, statusSchatten } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane, statusSchatten, sendWarteMs, gruendlichOrch, worktreeBelegt } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, setzeLeseQuelle, type VorbauErgebnis } from './vorbau.ts';
 import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
@@ -1769,7 +1769,7 @@ on('GET', /^\/api\/arbeit\/schaetzung$/, async (req, res, _m, url) => {
 });
 on('GET', /^\/api\/arbeit\/start$/, async (req, res) => {
   await needAdmin(req);
-  send(res, 200, { repos: arbeitRepos().map((r) => ({ name: r.name })), tiefen: ['quick', 'regular', 'deep'], dryRun: dryRun() });
+  send(res, 200, { repos: arbeitRepos().map((r) => ({ name: r.name })), tiefen: ['quick', 'regular', 'deep', 'live'], dryRun: dryRun() });
 });
 on('POST', /^\/api\/arbeit\/start$/, async (req, res) => {
   const u = await needAdmin(req);
@@ -1823,6 +1823,15 @@ on('POST', /^\/api\/arbeit\/reviews\/start$/, async (req, res) => {
   const u = await needAdmin(req);
   const b = await body(req);
   send(res, 200, await reviewStarten(u, b.pr, b.stufe));
+});
+
+// Plan 274 (D1): Knopf „Jetzt gründlich“ an einem Live-Unter-Chat (Arbeit › Unter-Chats) — derselbe Weg wie `orch gruendlich`.
+on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/gruendlich$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const r = await gruendlichOrch(u, m[1], 'hand');
+  log('jetzt gründlich', { user: u.id, id: m[1] });
+  zahlCache.delete(u.id);
+  send(res, 200, { ok: true, zustellung: r.zustellung ?? null });
 });
 
 on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/zurueckholen$/, async (req, res, m) => {
@@ -3325,7 +3334,7 @@ async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
   return internalUser(req, { userId: d ? String(d._id) : '' });
 }
 
-on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema)$/, async (req, res, m) => {
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich)$/, async (req, res, m) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
   const id = String(b.id ?? '');
@@ -3345,7 +3354,9 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
     }
     case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
     case 'show': return send(res, 200, await showOrch(u, id, Number(b.verlauf) || 0));
-    case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand'));
+    // Plan 274 (D4b): CLI und Hauptchat warten kurz auf die Bestätigung der Brücke und lesen sie in der Antwort.
+    case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand', { warteMs: sendWarteMs() }));
+    case 'gruendlich': return send(res, 200, await gruendlichOrch(u, id, b.via === 'leitstand' ? 'leitstand' : 'hand'));   // Plan 274 (D1)
     case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? '', b.via === 'leitstand' ? 'leitstand' : 'knut'));
     case 'thema': return send(res, 200, await setThema(u, id, b.thema));   // Plan 154, S2: Themen-Gruppe von Hand
   }
@@ -3912,6 +3923,7 @@ const orchDeps = {
     return list.some((a: any) => !(ex[a.id] > Date.now()));
   },
   log,
+  belegt: worktreeBelegt,   // Plan 274 (D4a): „weiter“ wartet, solange ein anderer Strang im selben Worktree läuft
 };
 startAutoWeiter(orchDeps);
 // Stand je Strang festschreiben (Teil B, G1) — unabhängig vom Auto-Fortsetzen; ORCH_STATUS=off schaltet ab.

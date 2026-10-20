@@ -219,8 +219,9 @@ export type Profil = 'voll' | 'bauer' | 'leser' | 'schreiber' | 'release';
 // schreiber = wie bauer, zuerst Melious; release = wie voll, dazu `git -C <Worktree> merge` im Release-Worktree (Plan 213)
 export const PROFILE: Profil[] = ['voll', 'bauer', 'leser', 'schreiber', 'release'];
 // Tiefe des Strangs (Plan 205): quick = ohne Gegenprüfungs-Hinweis, deep = doppelte Schritte je Zug; regular = wie bisher.
-export type Tiefe = 'quick' | 'regular' | 'deep';
-export const TIEFEN: Tiefe[] = ['quick', 'regular', 'deep'];
+// live (Plan 274): Live-Modus für UI-Feedback — je Runde wie quick, einmal „jetzt gründlich“ vor dem Push.
+export type Tiefe = 'quick' | 'regular' | 'deep' | 'live';
+export const TIEFEN: Tiefe[] = ['quick', 'regular', 'deep', 'live'];
 // Grep/Glob gibt es in der aktuellen Claude-Code-Version nicht mehr (Suche läuft dort über Bash, und Bash fragt im Wächter immer
 // nach — im Strang abgelehnt). Für den Leser bleiben Read und vault-search; Code-Suche = Profil „bauer“.
 const LESER_TOOLS = ['Read', 'Grep', 'Glob'];
@@ -974,6 +975,39 @@ function rememberWritten(live: Live, tool: string, toolInput: Record<string, unk
   }
 }
 
+// ---------- Ein Strang je Worktree (Plan 274, D4a; Vorfall 20.10.: b9b968af und 4c836b73 im selben Rechner-Worktree) ----------
+// Zweite Schicht neben der Startsperre der Werkbank: schreibt ein Strang (Write/Edit) in einen Git-Worktree, in dem gerade ein anderer
+// Strang derselben Person läuft (dessen Arbeitsordner oder Dateien, die er geschrieben hat), wird abgelehnt. Bash ist nicht erfasst.
+
+const wtCache = new Map<string, { at: number; wt: string }>();
+/** Git-Wurzel einer Datei/eines Ordners (auch nicht vorhanden: der nächste vorhandene Elternordner); ohne Git der Ordner selbst. */
+export function worktreeOf(pfad: string): string {
+  let dir = resolve(String(pfad ?? ''));
+  while (dir !== dirname(dir) && !existsSync(dir)) dir = dirname(dir);
+  try { if (!statSync(dir).isDirectory()) dir = dirname(dir); dir = realpathSync(dir); } catch { return dir; }
+  const c = wtCache.get(dir);
+  if (c && Date.now() - c.at < 60_000) return c.wt;
+  let wt = dir;
+  try { wt = realpathSync(execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()) || dir; } catch { /* kein Git */ }
+  wtCache.set(dir, { at: Date.now(), wt });
+  return wt;
+}
+
+/** Läuft gerade ein ANDERER Strang in dem Worktree, in den `datei` gehört? → dessen Schlüssel, sonst null (rein bis auf worktreeOf). */
+export function fremderWorktree(datei: string, andere: { key: string; dir?: string | null; written?: string[] }[], wtOf: (p: string) => string = worktreeOf): string | null {
+  const ziel = wtOf(datei);
+  for (const a of andere) {
+    if ([a.dir, ...(a.written ?? [])].filter(Boolean).some((p) => wtOf(String(p)) === ziel)) return a.key;
+  }
+  return null;
+}
+
+/** Andere laufende Stränge derselben Person (ohne Worker, ohne Hauptchat) mit Arbeitsordner und geschriebenen Dateien. */
+function andereLaufende(live: Live) {
+  return [...lives.values()].filter((l) => l !== live && l.key !== live.key && l.userId === live.userId && l.orch && !l.worker)
+    .map((l) => ({ key: l.key, dir: orchMap[l.key]?.dir ?? null, written: lastSeen.get(l.key)?.written ?? [] }));
+}
+
 /**
  * Der Wächter. Als PreToolUse-Hook: (input) mit tool_name/tool_input. Als canUseTool (Eskalation des Auto-Modus oder
  * zweite Sicherung): escalated = true, dann gibt es für „auto“ keine Durchreiche mehr, sondern die Rückfrage im Chat.
@@ -1019,6 +1053,16 @@ function makeGuard(live: Live) {
       if (why) {
         emitStatus(live, `⛔ Orchestrator-Strang: ${why} gesperrt — ${statusLine(tool, toolInput)}`);
         return decide('deny', `In einem Orchestrator-Strang gesperrt (${why}). Nicht erneut versuchen, nicht umgehen; schreib unter „### Stand“ → „Braucht Knut“, was zu tun wäre.`);
+      }
+      // Plan 274 (D4a): höchstens ein Strang je Worktree — nicht in einen Worktree schreiben, in dem gerade ein anderer Strang arbeitet.
+      const datei = toolInput.file_path ?? toolInput.notebook_path;
+      if (!live.worker && datei && /^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool) && process.env.BRIDGE_WORKTREE_SPERRE !== 'off') {
+        const anderer = fremderWorktree(String(datei), andereLaufende(live));
+        if (anderer) {
+          const conv = anderer.split(':').pop();
+          emitStatus(live, `⛔ Worktree belegt: dort arbeitet gerade der Strang ${conv} — ${statusLine(tool, toolInput)} nicht ausgeführt`);
+          return decide('deny', `Im Worktree dieser Datei arbeitet gerade ein anderer Strang (Unterhaltung ${conv}) — höchstens ein Strang je Worktree, sonst überschreibt ihr euch gegenseitig. Nicht umgehen: schreib unter „Offen“, was dort noch zu tun ist, oder arbeite in deinem eigenen Worktree.`);
+        }
       }
     }
     // Knut 19.10. (native Verteilung): lesende Teilagenten aus Lead und Strängen laufen auf Melious (melious_sub), solange
@@ -1455,7 +1499,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}${profil === 'release' ? `\n\n${RELEASE_APPEND}` : ''}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melSubAn() ? MEL_SUB_HINT : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}${profil === 'release' ? `\n\n${RELEASE_APPEND}` : ''}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melSubAn() ? MEL_SUB_HINT : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' && orchMap[key]?.tiefe !== 'live' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, isMelious(acct) ? req.token : acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim

@@ -13,6 +13,7 @@ const TIEFE_KLAR: Record<string, string> = {
   quick: 'Kurz: eine kleine, klar umrissene Änderung — ohne große Planung.',
   regular: 'Normal: plant erst, baut dann, testet und prüft das Ergebnis selbst; am Ende ein Bericht mit Fragen an dich.',
   deep: 'Gründlich: wie Normal, dazu eine Gegenprüfung des Plans durch mehrere Blickwinkel und ein zweites Modell — für Riskantes.',
+  live: 'Live: du gibst am laufenden Dev-Server Rückmeldung in Runden, jede Änderung ist in Minuten sichtbar. Vor dem Push einmal „Jetzt gründlich“ — dann Tests, Gegenprüfung und Bericht.',
 };
 
 function NeuerUnterChat({ onClose, onDone, vorgabe = '' }: { onClose: () => void; onDone: () => void; vorgabe?: string }) {
@@ -130,6 +131,8 @@ export function ArbeitUnterchats({ cfg: _cfg }: { cfg: Config }) {
   const [vorgabe] = useState(q.get('auftrag') ?? '');
   const { data, error, reload } = useLoad<any>(() => api(`/api/arbeit/unterchats?filter=${filter}`), [filter]);
   const zurueck = async (id: string) => { try { await api(`/api/leitstand/strands/${id}/zurueckholen`, { method: 'POST', body: {} }); toast('Zurückgeholt'); reload(); } catch (e: any) { toast(e.message ?? 'Fehler'); } };
+  // Plan 274 (D1): Live-Modus — einmal der volle Durchlauf (Tests, Gegenprüfung, Bericht) vor dem Push.
+  const gruendlich = async (id: string) => { try { await api(`/api/leitstand/strands/${id}/gruendlich`, { method: 'POST', body: {} }); toast('Jetzt gründlich — der Unter-Chat macht den vollen Durchlauf'); reload(); } catch (e: any) { toast(e.message ?? 'Fehler'); } };
   if (error) return <div className="page"><Err e={error} /></div>;
   if (!data) return <div className="page"><Loading /></div>;
   const z = data.zaehler ?? {};
@@ -162,6 +165,9 @@ export function ArbeitUnterchats({ cfg: _cfg }: { cfg: Config }) {
                 {sicher(r.chat) && <a className="ub-btn sm" href={sicher(r.chat)!} target={chatTarget} rel="noreferrer">Chat</a>}
                 <a className="ub-btn sm" href={`#/leitstand?review=${r.id}`}>Review & Freigabe</a>
                 {r.autoWeg && <button className="ub-btn sm" onClick={() => zurueck(r.id)}>Zurückholen</button>}
+                {r.gruendlich && (r.gruendlich.angestossen
+                  ? <span className="chip" data-testid="gruendlich-laeuft">gründlicher Durchlauf angestoßen</span>
+                  : <button className="ub-btn pri sm" data-testid="gruendlich-knopf" onClick={() => gruendlich(r.id)} title="Die Runden sind durch: alle Tests, Gegenprüfung (Pass C) und Bericht — einmal vor dem Push">Jetzt gründlich</button>)}
               </div>
             </td></tr>}
           </Fragment>)}

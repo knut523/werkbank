@@ -9,15 +9,35 @@ export const reviewDir = () => process.env.WERKBANK_REVIEW_DIR || join(process.e
 const MAX = 200 * 1024;
 const RE = /(?:(?:~|\/home\/[^/\s`'"]+)\/work\/knut\/)?review-pakete\/(\d{2,4}-[\w.-]+)\/bericht\.md/g;
 
-/** Erster Bericht-Pfad in den Texten (in dieser Reihenfolge), als absoluter Pfad unter reviewDir — oder null. */
-export function findBericht(texts: (string | null | undefined)[]): string | null {
-  for (const t of texts) {
-    for (const m of String(t ?? '').matchAll(RE)) {
-      if (m[1].includes('..')) continue;
-      return join(reviewDir(), m[1], 'bericht.md');
-    }
+/** Erster (letzter = true: letzter) Bericht-Pfad in den Texten, als absoluter Pfad unter reviewDir — oder null. */
+export function findBericht(texts: (string | null | undefined)[], letzter = false): string | null {
+  const alle = texts.flatMap((t) => [...String(t ?? '').matchAll(RE)].map((m) => m[1]).filter((x) => !x.includes('..')));
+  const x = letzter ? alle.at(-1) : alle[0];
+  return x ? join(reviewDir(), x, 'bericht.md') : null;
+}
+
+const PAKET_NAME = /^\d{2,4}-[a-z0-9][a-z0-9-]*$/;
+const PFAD = String.raw`(?:(?:~|\/home\/[^/\s\`'"]+)\/work\/knut\/)?review-pakete\/(\d{2,4}-[a-z0-9][a-z0-9-]*)`;
+
+/**
+ * Eigenes Paket eines Strangs (Plan 274, D8 — Vorfall ce076bec: der Auftrag nannte zuerst die Vorarbeit in Paket 242). Reihenfolge:
+ * 1. Arbeitsordner liegt in einem Paket; 2. ausdrücklich „Paket <pfad>“ im Auftrag; 3. `auftrag.md` (liegt im eigenen Paket);
+ * 4. genau EIN Paket im Auftrag genannt. Sonst null — lieber kein Bericht als der falsche.
+ */
+export function eigenesPaket(cwd: string, texts: (string | null | undefined)[]): string | null {
+  let root = reviewDir();
+  try { root = realpathSync(root); } catch { /* wie angegeben */ }
+  const c = resolve(String(cwd ?? ''));
+  for (const r of new Set([root, resolve(reviewDir())])) {
+    if (c.startsWith(r + sep)) { const name = c.slice(r.length + 1).split(sep)[0]; if (PAKET_NAME.test(name)) return name; }
   }
-  return null;
+  const t = texts.map((x) => String(x ?? '')).join('\n');
+  const marke = t.match(new RegExp(String.raw`\bPaket:?\s+\`?` + PFAD, 'i'));
+  if (marke) return marke[1];
+  const auftrag = t.match(new RegExp(PFAD + String.raw`\/auftrag\.md`));
+  if (auftrag) return auftrag[1];
+  const alle = new Set([...t.matchAll(new RegExp(PFAD, 'g'))].map((m) => m[1]));
+  return alle.size === 1 ? [...alle][0] : null;
 }
 
 const PAKET_PFAD = /(?:(?:~|\/home\/[^/\s`'"]+)\/work\/knut\/)?review-pakete\/(\d{2,4}-[a-z0-9][a-z0-9-]*)\/(?:auftrag|bericht)\.md/g;
