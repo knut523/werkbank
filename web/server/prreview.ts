@@ -19,7 +19,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
-import { g0Env, g0GitArgs } from './vorbau.ts';
+import { g0Env, g0GitArgs, g0Lesetoken } from './vorbau.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { GIT_SAFE } from './gitsafe.ts';
@@ -40,9 +40,13 @@ const SHA_RE = /^[0-9a-f]{40}$/;
 
 export type GitRun = (args: string[], cwd: string, timeoutMs?: number) => Promise<string> | string;
 // Asynchron (Review: execFileSync hielte den ganzen Web-Server an). Zugangsdaten wie G0 (vorbau.ts): geerbte Helper
-// zurückgesetzt, nur der Vaultwarden-Helper mit GIT_VW_READ=1 (Lesetoken), kein SSH, GIT_VW_ITEM entfernt.
+// zurückgesetzt, nur der Lese-Helper (Lesetoken des Tickers, Paket 269; sonst Vaultwarden mit GIT_VW_READ=1), kein SSH,
+// GIT_VW_ITEM entfernt.
 const run = promisify(execFile);
-export const realGit: GitRun = async (args, cwd, timeoutMs = 120_000) => (await run('git', [...GIT_SAFE, ...g0GitArgs(), ...args], { cwd, env: g0Env(), timeout: timeoutMs, encoding: 'utf8', maxBuffer: 16 << 20 })).stdout.trim();
+export const realGit: GitRun = async (args, cwd, timeoutMs = 120_000) => {
+  const t = await g0Lesetoken();
+  return (await run('git', [...GIT_SAFE, ...g0GitArgs(process.env, t), ...args], { cwd, env: g0Env(process.env, t), timeout: timeoutMs, encoding: 'utf8', maxBuffer: 16 << 20 })).stdout.trim();
+};
 /** Zugangsdaten aus Fehlertexten entfernen. */
 export const scrub = (t: string) => String(t).replace(/(https?:\/\/)[^@\s/]+@/g, '$1').replace(/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '***').slice(0, 300);
 

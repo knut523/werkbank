@@ -1043,7 +1043,7 @@ export async function nachtbau(u: User, items: NachtItem[], datum = vienna().dat
       const q = await askKnut(u, {
         key: `g0-nachts#${datum}`, quelle: 'nachtbau', title: `G0 nachts nicht prüfbar — ${rest.length} Item(s) nicht gebaut`,
         context: `${tor.ergebnis.stopp!.text}\n\nNicht gebaut (bleiben in der Warteschlange):\n${rest.map((x) => `- ${x.title}${x.slug ? ` (${x.slug})` : ''}`).join('\n')}`,
-        recommendation: tor.ergebnis.stopp!.grund === 'lesetoken' ? 'Neues GitHub-Lesetoken in Vaultwarden hinterlegen (Item „Github wirstrom read only“); die Items laufen in der nächsten Nacht.' : 'Ursache beheben; die Items laufen in der nächsten Nacht.',
+        recommendation: tor.ergebnis.stopp!.grund === 'lesetoken' ? 'GitHub-Lesetoken prüfen (WERKBANK_GITHUB_TOKEN oder Vaultwarden „View only github API“, dasselbe wie der PR-Ticker); die Items laufen in der nächsten Nacht.' : 'Ursache beheben; die Items laufen in der nächsten Nacht.',
       }).catch((e: any) => { if (e.status === 409) return null; throw e; });
       for (const x of rest) out.push({ slug: g0Slug(x.slug, x.plan), title: String(x.title ?? '').slice(0, 80), status: 'nicht geprüft', question: q?.id ?? null, text: 'G0 nachts nicht prüfbar' });
       break;

@@ -121,7 +121,10 @@ export async function fetchTicker(token: string, since: Date, env = process.env)
 
 export type Kind = 'neu' | 'stand' | 'zu' | 'kommentar' | 'review' | 'anfrage' | 'tag' | 'erledigt';
 export interface TickerEvent { _id: string; kind: Kind; repo: string; number: number; title: string; url: string; prUrl: string; actor: string | null; text: string; at: string; head: string }
-export interface PrMem { _id: string; head: string; state: string }
+export interface PrMem { _id: string; head: string; state: string; at?: Date | string }
+/** Paket 269 (#215): Überlappung des Lesefensters. Die GitHub-Suche hinkt Minuten hinterher; bei 2 min und Takt 1 min lag ein
+ *  Tag schon vor dem Fenster, als die Suche den PR endlich lieferte. Doppeltes fängt die feste Kennung ab. */
+export const UEBERLAPPUNG_MIN = 15;
 
 export const TAG = /(^|[\s(])@review\b/i;
 /** `@review deep` → Tiefe deep (Knut 17.10.). */
@@ -147,7 +150,9 @@ export const prKey = (repo: string, n: number) => `${repo}#${n}`;
 
 /**
  * Aus einem Abruf die neuen Ereignisse. `known` = gemerkter Zustand je PR (Kopf, open/closed). Kommentare und Reviews
- * zählen ab `since` (Kennung dedupliziert Überlappungen); eigene Aktionen (ME) nie. Review/Kommentar nur auf UNSEREN PRs,
+ * zählen ab `since` — bei einem bekannten PR ab dem letzten Mal, als ihn die Suche lieferte, falls das früher war (Paket 269:
+ * lieferte die Suche den PR wegen Index-Verzugs erst Minuten später, lag der Tag sonst vor dem Fenster). Die Kennung
+ * dedupliziert Überlappungen; eigene Aktionen (ME) nie. Review/Kommentar nur auf UNSEREN PRs,
  * `@review` und Review-Anfragen auf allen.
  */
 export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: string, allow: string[]): { events: TickerEvent[]; mem: PrMem[] } {
@@ -172,16 +177,19 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
     }
     mem.push({ _id: key, head, state });
     const ours = author === ME;
+    // Kommentare im Knoten sind aktuell (kein Suchindex): was vor dem letzten Sehen lag, war damals schon da; 2 min für Uhren.
+    const gesehen = before?.at ? new Date(new Date(before.at).getTime() - 2 * 60_000) : null;
+    const ab = gesehen && !isNaN(+gesehen) && ghTime(gesehen) < since ? ghTime(gesehen) : since;
     for (const c of p.comments?.nodes ?? []) {
       const who = (c.author?.login ?? '').toLowerCase();
-      if (!c.id || c.createdAt < since) continue;
+      if (!c.id || c.createdAt < ab) continue;
       if (TAG.test(c.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${c.id}`, 'tag', c.createdAt, who, tagText(c.body, who), c.url);
       else if (who && who === author && who !== ME && allowSet.has(who) && state === 'OPEN' && meldetErledigt(c.body)) ev(`erledigt:${c.id}`, 'erledigt', c.createdAt, who, `${who} meldet erledigt: ${kurz(c.body, 100)}`, c.url);
       else if (ours && who && who !== ME) ev(`c:${c.id}`, 'kommentar', c.createdAt, who, `Kommentar von ${who}: ${kurz(c.body, 120)}`, c.url);
     }
     for (const r of p.reviews?.nodes ?? []) {
       const who = (r.author?.login ?? '').toLowerCase();
-      if (!r.id || !r.submittedAt || r.submittedAt < since) continue;
+      if (!r.id || !r.submittedAt || r.submittedAt < ab) continue;
       if (TAG.test(r.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${r.id}`, 'tag', r.submittedAt, who, tagText(r.body, who), r.url);
       else if (who && who === author && who !== ME && allowSet.has(who) && state === 'OPEN' && meldetErledigt(r.body)) ev(`erledigt:${r.id}`, 'erledigt', r.submittedAt, who, `${who} meldet erledigt: ${kurz(r.body, 100)}`, r.url);
       else if (ours && who && who !== ME && r.state !== 'PENDING') ev(`r:${r.id}`, 'review', r.submittedAt, who, `Review von ${who}: ${REVIEW_STATE[r.state] ?? r.state}${r.body ? ` — ${kurz(r.body, 100)}` : ''}`, r.url);
@@ -193,6 +201,26 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
   return { events, mem };
 }
 
+/**
+ * Abgleich (Paket 269): `@review`-Kommentare und -Reviews von Personen auf der Liste ab `since`, die der Ticker nie als
+ * Ereignis `tag:<id>` gesehen hat. Von Hand vermerkt (`orch review-posted --neu`) nach dem Tag zählt als nachgeholt.
+ */
+export function verpassteTags(prs: any[], gesehen: Set<string>, manuell: { repo: string; number: number; at: string }[], since: string, allow: string[]):
+  { repo: string; number: number; url: string; von: string; at: string; nachgeholt: boolean }[] {
+  const ok = new Set(allow.map((a) => a.toLowerCase()));
+  const out: { repo: string; number: number; url: string; von: string; at: string; nachgeholt: boolean }[] = [];
+  for (const p of prs) {
+    const repo = String(p.repository?.nameWithOwner ?? '');
+    const items = [...(p.comments?.nodes ?? []).map((c: any) => ({ ...c, at: c.createdAt })), ...(p.reviews?.nodes ?? []).map((r: any) => ({ ...r, at: r.submittedAt }))];
+    for (const c of items) {
+      const von = (c.author?.login ?? '').toLowerCase();
+      if (!c.id || !c.at || c.at < since || !ok.has(von) || !TAG.test(c.body ?? '') || gesehen.has(`tag:${c.id}`)) continue;
+      out.push({ repo, number: p.number, url: c.url ?? p.url, von, at: c.at, nachgeholt: manuell.some((m) => m.repo === repo && m.number === p.number && m.at >= c.at) });
+    }
+  }
+  return out.sort((a, b) => a.at.localeCompare(b.at));
+}
+
 // ---------- Lauf ----------
 
 let running: Promise<any> | null = null;
@@ -202,7 +230,7 @@ export const LUECKE_MIN = 30;
 export interface TickResult { events: number; reviews: number; prs: number; skipped?: string }
 
 /**
- * Ein Durchgang: Abruf ab dem letzten erfolgreichen Lauf (2 min Überlappung), Ereignisse speichern, Auslöser in die
+ * Ein Durchgang: Abruf ab dem letzten erfolgreichen Lauf (UEBERLAPPUNG_MIN Überlappung), Ereignisse speichern, Auslöser in die
  * Review-Warteschlange. Erster Lauf: ab jetzt − 1 h; PRs, die er nur kennenlernt, melden nichts (T5).
  */
 export async function tickerTick(getToken: () => Promise<string | null>, now = new Date(), opts: { force?: boolean } = {}): Promise<TickResult> {
@@ -219,7 +247,7 @@ export async function tickerTick(getToken: () => Promise<string | null>, now = n
       await meta().updateOne({ _id: 'pr_ticker' as any }, { $set: { error: 'Kein GitHub-Lesetoken (WERKBANK_GITHUB_TOKEN oder Vaultwarden „View only github API“).', errorAt: now } }, { upsert: true });
       return { events: 0, reviews: 0, prs: 0, skipped: 'kein Token' };
     }
-    const since = st.at ? new Date(new Date(st.at).getTime() - 2 * 60_000) : new Date(now.getTime() - 3600_000);
+    const since = st.at ? new Date(new Date(st.at).getTime() - UEBERLAPPUNG_MIN * 60_000) : new Date(now.getTime() - 3600_000);
     let got;
     try { got = await fetchTicker(token, since); }
     catch (e: any) {
@@ -372,7 +400,7 @@ export async function reviewLog(f: LogFilter = {}, limit = 200): Promise<{ zeile
  * Von Hand gepostet (`orch review-posted <id|repo#n> <url>`): Link am Review vermerken. `repo#n` = das jüngste Review
  * dieses PRs. Ein schon vermerktes Posten wird nicht überschrieben.
  */
-export async function vermerkePosted(ref: string, url: string, von: string, now = new Date()): Promise<{ id: string; url: string }> {
+export async function vermerkePosted(ref: string, url: string, von: string, now = new Date(), o: { neu?: boolean } = {}): Promise<{ id: string; url: string; neu?: boolean }> {
   const m = /^([\w.-]+\/[\w.-]+)#(\d+)(?:@([0-9a-f]{40}))?$/.exec(String(ref).trim());
   if (!m) throw Object.assign(new Error('Kennung: <owner/repo>#<n> oder <owner/repo>#<n>@<sha>'), { status: 400 });
   const [, repo, n] = m;
@@ -382,7 +410,14 @@ export async function vermerkePosted(ref: string, url: string, von: string, now 
   // Nach dem Normalisieren (`..` aufgelöst) muss der Pfad genau dieser PR sein (Unterseiten wie /files erlaubt).
   if (!new RegExp(`^/${repo.replace(/[.]/g, '\\.')}/pull/${n}(?:/[\\w-]*)?/?$`, 'i').test(pfad)) throw Object.assign(new Error(`URL muss auf https://github.com/${repo}/pull/${n} zeigen.`), { status: 400 });
   const doc: any = m[3] ? await reviewsCol().findOne({ _id: ref as any }) : (await reviewsCol().find({ repo, number: Number(n) }).sort({ createdAt: -1 }).limit(1).toArray())[0];
-  if (!doc) throw Object.assign(new Error('Kein Review zu dieser Kennung.'), { status: 404 });
+  if (!doc && o.neu) {
+    // Paket 269 (#215): der Ticker hat den PR nie eingereiht, das Review kam von Hand — Eintrag anlegen, sonst zählt es
+    // im Log (und im Abgleich gegen die @review-Kommentare) als verpasst. Ohne @sha ist der Stand unbekannt.
+    const id = m[3] ? ref : `${repo}#${n}@manuell-${now.getTime()}`;
+    await reviewsCol().insertOne({ _id: id as any, repo, number: Number(n), title: '', url: `https://github.com/${repo}/pull/${n}`, head: m[3] ?? null, trigger: 'manuell', by: null, status: 'fertig', note: 'von Hand gepostet, ohne Eintrag des Tickers', createdAt: now, doneAt: now, day: vienna(now).date, posted: { at: now, url: u, event: 'COMMENT', by: von, manuell: true } });
+    return { id, url: u, neu: true };
+  }
+  if (!doc) throw Object.assign(new Error('Kein Review zu dieser Kennung (ohne Eintrag des Tickers: --neu).'), { status: 404 });
   const r = await reviewsCol().updateOne({ _id: doc._id, posted: { $in: [null] } }, { $set: { posted: { at: now, url: u, event: 'COMMENT', by: von, manuell: true } } });
   if (!r.modifiedCount) throw Object.assign(new Error('Für dieses Review ist schon ein Posten vermerkt.'), { status: 409 });
   return { id: String(doc._id), url: u };

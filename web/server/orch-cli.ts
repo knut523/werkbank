@@ -25,8 +25,9 @@
 //   orch freigaben [--alle] [--json]   Knuts Freigaben zum Push (Review-Ansicht im OLAF Workspace); anlegen nur dort
 //   orch freigabe-pruefen <repo-ordner> <sha>   Exit 0 nur bei aktiver Freigabe dieses Stands (oder desselben Patches nach Rebase);
 //     der pre-push-Hook templates/git-hooks/pre-push ruft das auf
-//   orch review-posted <owner/repo#n[@sha]> <github-url>   PR-Review von Hand gepostet → im Review-Log vermerken
-//     (ohne @sha das jüngste Review dieses PRs; ein schon vermerktes Posten bleibt)
+//   orch review-posted <owner/repo#n[@sha]> <github-url> [--neu]   PR-Review von Hand gepostet → im Review-Log vermerken
+//     (ohne @sha das jüngste Review dieses PRs; ein schon vermerktes Posten bleibt; --neu legt den Eintrag an, wenn der
+//     Ticker den PR nie eingereiht hat — Paket 269, #215)
 //   orch freigabe-gepusht <freigabe-id> [--pr URL]   nach dem Push: Freigabe als gepusht markieren (nicht mehr zurückziehbar)
 //   orch ask --title T --context TEXT --recommend TEXT [--option "Label :: Folge"]… [--strand <id>] [--link URL] [--plan DATEI]
 //     [--key <slug>#<id>] [--quelle drift]   Schlüssel offen/beantwortet → Exit 3 (keine zweite Frage); Tageskappe → Exit 4
@@ -61,7 +62,7 @@ for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a.startsWith('--')) {
     const k = a.slice(2);
-    if (['all', 'alle', 'json', 'shared', 'open', 'code'].includes(k)) flags[k] = true;
+    if (['all', 'alle', 'json', 'shared', 'open', 'code', 'neu'].includes(k)) flags[k] = true;
     else if (k === 'option') options.push(args[++i] ?? '');
     else flags[k] = args[++i] ?? '';
   } else pos.push(a);
@@ -214,9 +215,9 @@ async function main() {
       process.exit(2);
     }
     case 'review-posted': {
-      if (!pos[0] || !pos[1]) die('review-posted <owner/repo#n[@sha]> <github-url>');
-      const j = await call('review-posted', { id: pos[0], url: pos[1] });
-      console.log(`von Hand gepostet vermerkt: ${j.id} ${j.url}`);
+      if (!pos[0] || !pos[1]) die('review-posted <owner/repo#n[@sha]> <github-url> [--neu]');
+      const j = await call('review-posted', { id: pos[0], url: pos[1], neu: flags.neu === true });
+      console.log(`von Hand gepostet vermerkt${j.neu ? ' (neuer Eintrag)' : ''}: ${j.id} ${j.url}`);
       return;
     }
     case 'freigabe-gepusht': {
