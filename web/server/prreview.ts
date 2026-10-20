@@ -254,8 +254,11 @@ export function reviewPrompt(r: { repo: string; number: number; title: string; u
     ...(motorAn() ? ['1. `befunde.json` (Form im Abschnitt Review-Motor unten; alle Texte für GitHub **auf Englisch**) — daraus baut der Workspace `kommentar.md`. Schreib kommentar.md nicht selbst.'] : [
     `1. \`kommentar.md\`: erste Zeile genau \`Empfehlung: approve\` | \`Empfehlung: request-changes\` | \`Empfehlung: comment\`,`,
     '   darunter der Kommentar für den PR **auf Englisch** (GitHub-Texte sind englisch, olaf-docs/AGENTS.md), Befunde mit Datei:Zeile.',
-    '   Keine lokalen Pfade; Verweise nur auf PRs/Issues, die es gibt (anderes Repo: `owner/repo#N`; Testfall-/Schritt-Nummern ohne `#`).',
-    '   Der Text wird automatisch als Review-Kommentar (COMMENT) gepostet — auch bei deep. Die Empfehlung wählst du selbst; keine Rückfrage an Knut (Approve/Request-Changes entscheidet er ohnehin).',]),
+    '   Keine lokalen Pfade; Verweise nur auf PRs/Issues, die es gibt.',
+    ]),
+    // Paket 223 (Release 20a: für beide Wege, mit und ohne Motor): Empfehlung selbst, automatisch gepostet, Querverweise qualifiziert.
+    '   Der Kommentar wird automatisch als Review-Kommentar (COMMENT) gepostet — auch bei deep. Die Empfehlung wählst du selbst; keine Rückfrage an Knut (Approve/Request-Changes entscheidet er ohnehin).',
+    '   Verweise auf andere Repos als `owner/repo#N`; Testfall-/Schritt-Nummern ohne `#`.',
     '2. `bericht.md` (Deutsch): Pre-Checks, Pass A/B/C, welche Tests es gibt und was sie abdecken (nicht ausgeführt), offene Punkte.',
     '3. Zum Schluss review_ready aufrufen. Danach kommt die Melious-Gegenprüfung als Nachricht — dann die Befunde im Code prüfen und abgleichen.',
   ].filter((x) => x !== '').join('\n');
