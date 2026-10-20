@@ -20,7 +20,7 @@ import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue,
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane, statusSchatten } from './orchestrator.ts';
-import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
+import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, setzeLeseQuelle, type VorbauErgebnis } from './vorbau.ts';
 import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
 import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
@@ -3368,7 +3368,7 @@ on('POST', /^\/internal\/orchestrator\/review-posted$/, async (req, res) => {
   const u = await orchPerson(req, b);
   if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
   try {
-    const r = await vermerkePosted(String(b.id ?? ''), String(b.url ?? ''), u.name);
+    const r = await vermerkePosted(String(b.id ?? ''), String(b.url ?? ''), u.name, new Date(), { neu: b.neu === true });
     log('pr-review von hand gepostet', { user: u.id, id: r.id });
     return send(res, 200, r);
   } catch (e: any) { throw new HttpError(e?.status ?? 500, e?.message ?? String(e)); }
@@ -3734,6 +3734,8 @@ async function backgroundJobs() {
     catch (e: any) { log('github', { error: String(e.message).slice(0, 200) }); }
   };
   setTimeout(ghTick, 8000);
+  // Paket 269: G0 und die PR-Review-Klone holen mit demselben Lesetoken wie der Ticker (nicht über git-credential-vaultwarden).
+  setzeLeseQuelle(githubReadToken);
   // PR-Ticker + Auto-Review (Plan 157): jede Minute nachsehen; der Ticker selbst hält seinen Takt (Einstellung „minutes“).
   const prTick = async () => {
     try { const r = await tickerTick(githubReadToken); if (r.events || r.reviews) log('pr-ticker', { ...r }); }

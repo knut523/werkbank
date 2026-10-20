@@ -280,6 +280,25 @@ test('Nur Lesetoken: Fetch und PR-API über GIT_VW_READ=1, geerbter Helper und G
   assert.ok(apiAuth.length > 0 && apiAuth.every((a) => a === 'bearer ghp_LESETOKENtest'));
 });
 
+test('Paket 269: mit Lesequelle (creds.githubReadToken wie der Ticker) holt G0 das Token dort — Vaultwarden-Helper und Push-Helper nie gefragt', async () => {
+  const { setzeLeseQuelle, g0Env } = await import('../server/vorbau.ts');
+  writeFileSync(HELPER_LOG, ''); apiAuth.length = 0; rmSync(PUSH_LOG, { force: true });
+  rmSync(TOKEN_OK);   // der Vaultwarden-Weg liefert nichts (wie live am 20.10.)
+  setzeLeseQuelle(async () => 'ghp_TICKERtest');
+  try {
+    const r = await run('ganz-neue-sache', [admin]);
+    assert.equal(r.ergebnis, 'frei', r.stopp?.text);
+    assert.ok(apiAuth.length > 0 && apiAuth.every((a) => a === 'bearer ghp_TICKERtest'), apiAuth.join('|'));
+    assert.equal(readFileSync(HELPER_LOG, 'utf8').trim(), '', 'Vaultwarden-Helper nicht gefragt');
+    assert.ok(!existsSync(PUSH_LOG), 'Push-Helper nie gefragt');
+    // Quelle liefert nichts → zurück auf den Helper (der hier auch nichts hat) → Stopp ohne Knopf
+    setzeLeseQuelle(async () => null);
+    const s = await run('ganz-neue-sache', [admin]);
+    assert.equal(s.stopp?.grund, 'lesetoken'); assert.equal(s.stopp?.knopf, null);
+    assert.equal(g0Env({ WERKBANK_GIT_LESETOKEN: 'alt' } as any).WERKBANK_GIT_LESETOKEN, undefined, 'geerbtes Token nie weitergereicht');
+  } finally { setzeLeseQuelle(null); writeFileSync(TOKEN_OK, '1'); }
+});
+
 test('Fetch-Pfad: verlangt der Server eine Anmeldung, fragt git nur den Lese-Helper (GIT_VW_READ=1); 401 → Stopp ohne Knopf (DoD 17, 21)', async () => {
   // Smart-HTTP-Nachbau, der immer 401 verlangt — in eigenem Prozess, weil G0 git synchron aufruft.
   const auth = spawn(process.execPath, ['-e', "const s=require('http').createServer((q,r)=>{r.writeHead(401,{'www-authenticate':'Basic realm=\"gh\"'});r.end()});s.listen(0,'127.0.0.1',()=>console.log(s.address().port))"], { stdio: ['ignore', 'pipe', 'ignore'] });
