@@ -9,7 +9,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, delegationStand, delegationUrteil, phaseWechseln, type Sink, type Tiefe } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, type Sink, type Tiefe } from './sessions.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -67,8 +67,9 @@ function mcpServersFor(userId: string, claudeToken: string, home: ClaudeHome, co
       type: 'stdio', command: node, args: [join(MCP_DIR, 'werkbank-tools.ts')],
       // WERKBANK_CONV_ID: review_ready markiert nur den Lauf DIESER Unterhaltung (nie aus den Argumenten des Agenten).
       // WERKBANK_LEITSTAND: nur aus der Art in der Brücke (orch.json), nie aus einem Header (Plan 132, S3).
-      // WERKBANK_BRIDGE_URL (Plan 165): delegieren/delegation_*/phase_wechseln rufen die Brücke direkt (nur in Strängen).
-      env: { WERKBANK_URL: WEB_URL, WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_USER_ID: userId, WERKBANK_CONV_ID: convId, PATH: process.env.PATH || '', ...(leit ? { WERKBANK_LEITSTAND: '1' } : {}), ...(strang ? { WERKBANK_STRANG: '1', WERKBANK_BRIDGE_URL: `http://127.0.0.1:${PORT}` } : {}) },
+      // WERKBANK_BRIDGE_URL (Plan 165): delegieren/delegation_*/phase_wechseln rufen die Brücke direkt (Stränge); melious_sub und
+      // auslastung auch der Lead (Knut 19.10., native Verteilung).
+      env: { WERKBANK_URL: WEB_URL, WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_USER_ID: userId, WERKBANK_CONV_ID: convId, PATH: process.env.PATH || '', ...(leit ? { WERKBANK_LEITSTAND: '1' } : {}), ...(strang ? { WERKBANK_STRANG: '1' } : {}), ...(strang || leit ? { WERKBANK_BRIDGE_URL: `http://127.0.0.1:${PORT}` } : {}) },
     };
   }
   return { ...(leit ? leitstandMcp() : {}), ...servers, ...atlassianServer() };
@@ -354,12 +355,12 @@ const server = createServer(async (req, res) => {
       if (modell && !STRAND_MODEL.test(modell)) return json(res, 400, { error: 'Modell: claude:opus|sonnet|haiku oder melious:<modell>.' });
       const risiko = kind !== 'strand' ? undefined : b.risiko === 'niedrig' || b.risiko === 'mittel' || b.risiko === 'hoch' ? b.risiko : undefined;
       // Rollen-Profil (Plan 162, S6): nur Stränge, nur beim Start.
-      const profil = kind === 'strand' && (b.profil === 'bauer' || b.profil === 'leser' || b.profil === 'schreiber') ? b.profil : undefined;
-      if (kind === 'strand' && b.profil && !['voll', 'bauer', 'leser', 'schreiber'].includes(String(b.profil))) return json(res, 400, { error: 'Profil: voll, bauer, leser oder schreiber.' });
+      const profil = kind === 'strand' && (b.profil === 'bauer' || b.profil === 'leser' || b.profil === 'schreiber' || b.profil === 'release') ? b.profil : undefined;
+      if (kind === 'strand' && b.profil && !['voll', 'bauer', 'leser', 'schreiber', 'release'].includes(String(b.profil))) return json(res, 400, { error: 'Profil: voll, bauer, leser, schreiber oder release.' });
       // Tiefe (Plan 205): nur Stränge, nur beim Start; unbekannt → 400.
       if (kind === 'strand' && b.tiefe != null && !TIEFEN.includes(b.tiefe)) return json(res, 400, { error: 'Tiefe: quick, regular oder deep.' });
       const tiefe = kind === 'strand' ? b.tiefe as Tiefe | undefined : undefined;
-      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil, tiefe }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
+      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil, tiefe, vorrang: b.vorrang === true }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
       log(kind === 'leitstand' ? 'leitstand angemeldet' : 'strang angemeldet', { user: userId, conv });
       return json(res, 200, { ok: true, dir: real, mode: autoFor({ email }) });
     }
@@ -385,13 +386,14 @@ const server = createServer(async (req, res) => {
       return st ? json(res, 200, { id: inj[1], ...st }) : json(res, 404, { error: 'unbekannt' });
     }
     // Plan 165: Werkzeuge der Strang-Leads (Werkbank-MCP mit Person und Unterhaltung aus seiner Umgebung, nie aus Argumenten).
-    const deleg = req.method === 'POST' ? url.pathname.match(/^\/internal\/(delegate|delegate-stand|delegate-urteil|phase)$/) : null;
+    const deleg = req.method === 'POST' ? url.pathname.match(/^\/internal\/(delegate|delegate-stand|delegate-urteil|phase|mel-sub|auslastung)$/) : null;
     if (deleg) {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
       const b = await readBody(req);
       const userId = String(b.userId ?? ''), conv = String(b.conv ?? '');
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId) || !/^[A-Za-z0-9_-]{1,64}$/.test(conv)) return json(res, 400, { error: 'Ungültige Person oder Unterhaltung.' });
-      const fn = { delegate: startDelegation, 'delegate-stand': delegationStand, 'delegate-urteil': delegationUrteil, phase: phaseWechseln }[deleg[1] as 'delegate'];
+      // Knut 19.10.: melious_sub und auslastung auch für den Lead (native Verteilung Claude ↔ Melious).
+      const fn = { delegate: startDelegation, 'delegate-stand': delegationStand, 'delegate-urteil': delegationUrteil, phase: phaseWechseln, 'mel-sub': melSub, auslastung: (u: string, c: string) => auslastungFuer(u, c) }[deleg[1] as 'delegate'];
       const r = await fn(userId, conv, b);
       return r.ok ? json(res, 200, r) : json(res, r.status, { error: r.error });
     }

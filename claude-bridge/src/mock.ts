@@ -51,6 +51,19 @@ function mockStreamed(prompt: AsyncIterable<any>, options: Record<string, any>) 
       yield m;
       if (m.type === 'assistant' && (m.message?.content ?? []).some((b: any) => b?.type === 'tool_use')) afterTool = true;
     }
+    // Nachlauf (Strang 9563d9ec): „mock-nachlauf <ms>“ arbeitet nach dem Ergebnis weiter wie Hintergrund-Aufgaben (alle 200 ms ein
+    // Lebenszeichen, auch wenn die Eingabe zu ist), bis zum Abbruch; „mock-zombie“ endet nie und überhört den Abbruch (Prozess weg).
+    const erst = textOf(first.value);
+    const nl = erst.match(/mock-nachlauf (\d+)/);
+    if (nl) {
+      const bis = Date.now() + Number(nl[1]);
+      while (Date.now() < bis && !signal?.aborted) {
+        await new Promise((r) => setTimeout(r, 200));
+        yield { type: 'stream_event', parent_tool_use_id: null, session_id: sid, event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '' } } };
+      }
+      return;
+    }
+    if (/mock-zombie/.test(erst)) await new Promise<void>(() => { /* nie */ });
     // Nach dem Ergebnis: Folgezug für jede weitere Nachricht, bis die Eingabe geschlossen wird.
     for (;;) {
       if (signal?.aborted) return;
@@ -120,7 +133,7 @@ export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<
       const plan = JSON.parse(leadM[1]);
       for (const s of plan.schritte ?? []) {
         if (s.warte) { await sleep(s.warte); continue; }
-        const path = ({ delegieren: '/internal/delegate', delegation_stand: '/internal/delegate-stand', delegation_urteil: '/internal/delegate-urteil', phase_wechseln: '/internal/phase' } as Record<string, string>)[s.tool];
+        const path = ({ delegieren: '/internal/delegate', delegation_stand: '/internal/delegate-stand', delegation_urteil: '/internal/delegate-urteil', phase_wechseln: '/internal/phase', melious_sub: '/internal/mel-sub', auslastung: '/internal/auslastung' } as Record<string, string>)[s.tool];
         const r = await fetch(`${wenv.WERKBANK_BRIDGE_URL}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': wenv.WERKBANK_INTERNAL_TOKEN }, body: JSON.stringify({ userId: wenv.WERKBANK_USER_ID, conv: wenv.WERKBANK_CONV_ID, ...s.args }) });
         const j: any = await r.json().catch(() => ({}));
         yield text(`\n[${s.tool}] ${r.ok ? j.text : `FEHLER ${r.status}: ${j.error}`}\n`);

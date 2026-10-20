@@ -157,6 +157,7 @@ function SearchResults({ q }: { q: string }) {
   return (
     <div className="hits">
       <h1>Suche: „{q}“</h1>
+      {(r.data as any).ersatz && <p className="small" role="status" data-testid="suche-ersatz">ℹ️ {(r.data as any).ersatz}</p>}
       <p className="muted">{hits.length} Treffer</p>
       {hits.map((h) => (
         <div className="hit" key={h.path}>

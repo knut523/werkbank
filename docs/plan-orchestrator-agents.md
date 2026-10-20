@@ -203,3 +203,20 @@ echte Entscheidungen Knuts, immer mit eigener Empfehlung (`--recommend` ist Pfli
 - Kein Zähler in LibreChats eigener Leiste (bräuchte einen Overlay-Patch und einen Neubau des LibreChat-Clients); der
   Zähler steht in der Werkbank-Navigation und auf der Karte, die auch eingebettet unter `/wb/roadmap` erscheint.
 - Keine Benachrichtigung nach außen (Mail, Push aufs Handy).
+
+## Nachtrag: Profil `release` (Plan 213, Knut 17.10.2026)
+
+Ein Release-Strang darf lokal mergen. In jedem anderen Strang bleibt Mergen gesperrt.
+
+- **Start:** `orch start --profil release` mit einem Arbeitsordner, der ein **eigener Git-Worktree** (`git worktree add`)
+  eines Werkbank-Repos ist (`origin` enthält „werkbank“). Haupt-Checkout, fremde Repos und die Live-Instanz lehnt die Brücke
+  schon bei der Anmeldung ab (`releaseWorktreeProblem`, 400).
+- **Erlaubt:** genau `git -C <Arbeitsordner> merge …` (auch `--abort`/`--continue`), als einzelner Befehl ohne `&&`, `;`,
+  Pipe oder Befehlsersetzung (`releaseMerge`). Der Ordner muss im Befehl stehen, weil die Brücke das cwd der Shell nicht
+  kennt. Konflikte löst der Strang mit Edit im Worktree; der Merge-Commit ist ein normaler lokaler Commit.
+- **Weiter gesperrt:**
+  - Push und alles, was nach GitHub schreibt;
+  - Mergen ohne `-C` oder mit einem anderen Ordner;
+  - zusätzlich alles, was live schaltet: `werkbank.sh`, Live-Instanz, `release-live-*.sh`, `systemctl`, `crontab`
+    (`RELEASE_BLOCK`).
+- **Sonst wie `voll`:** alle MCP-Server, Phasenmodell. Tests: `claude-bridge/test/release.test.ts`.

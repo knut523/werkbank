@@ -23,6 +23,7 @@ import { cleanThema, themaOf } from './themen.ts';
 import { meliousSettings, ausserhalbAbo } from './melious.ts';
 import { budgetVon } from './cosbudget.ts';   // zyklisch (cosbudget → orchestrator), nur zur Laufzeit im Rückfrage-Pfad benutzt
 import { tiefeOf, istTiefe, tiefeStart, tiefeText, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, type Tiefe } from './tiefe.ts';
+import { zustandAus, abweichung, nachfordern, statusNeu, NACHFORDER_TEXT, wienDatum, wienUm } from './zustand.ts';
 
 export const ORCH_TAG = 'Orchestrator';
 export type OrchStatus = 'running' | 'waiting' | 'done' | 'failed' | 'blocked_g0';
@@ -52,9 +53,12 @@ export const BERICHT_PFLICHT = [
   '    login: https://<port>--main--dev--knut.ws.konekto.energy/login?next=/<seite>',
   '  - screenshot: screenshots/<name>.png',
   '  - pr_text: pr.md',
-  'fragen:                       # nur echte Entscheidungen Knuts, je mit Empfehlung; antwort bleibt leer',
+  'fragen:                       # nur echte Entscheidungen Knuts, je mit Empfehlung; antwort bleibt leer — jede Frage muss ohne andere Datei verständlich sein (Entscheidungsseite)',
   '  - id: D1',
-  '    frage: …',
+  '    frage: …                   # die Frage in einem Satz',
+  '    worum: …                   # 2–4 Sätze ohne Codes/Kürzel: Ausgangslage und was an der Entscheidung hängt',
+  '    optionen:                  # die echten Wahlmöglichkeiten, je eine Zeile',
+  '      - …',
   '    empfehlung: …',
   '    antwort: ""',
   'github:                       # je Repo/PR eine Zeile (wird die PR-Tabelle); commit = ≥ 7-stelliger SHA des Stands, den Knut freigeben soll',
@@ -124,7 +128,7 @@ export function statusMark(text: string): 'fertig' | 'braucht Antwort' | 'blocki
   return v === 'fertig' ? 'fertig' : v === 'braucht antwort' ? 'braucht Antwort' : v === 'blockiert' ? 'blockiert' : null;
 }
 
-export interface StrandState { running: boolean; interrupted: boolean; turn: { start: number; end: number | null; outcome: string | null; modell?: string } | null }
+export interface StrandState { running: boolean; interrupted: boolean; queued?: { pos: number; since: number } | null; turn: { start: number; end: number | null; outcome: string | null; modell?: string } | null }
 export interface LastMsg { fromUser: boolean; text: string; error: boolean; at: number }
 
 /**
@@ -136,6 +140,8 @@ export type AutoCause = 'limit' | 'timeout' | 'interrupted' | 'lost' | 'busy' | 
 export function orchStatus(run: { startError?: string | null; startedAt: Date | number; lastSentAt?: Date | number | null }, s: StrandState | null | undefined, last: LastMsg | null, now = Date.now()): { status: OrchStatus; reason: string; cause?: AutoCause } {
   if (run.startError) return { status: 'failed', reason: `Start fehlgeschlagen: ${run.startError}` };
   if (s?.running) return { status: 'running', reason: 'Zug läuft' };
+  // Plan 213 S1a: wartet in der Schlange der Brücke (Parallelgrenze) — kein Fehlschlag, startet von selbst.
+  if (s?.queued) return { status: 'running', reason: `in der Schlange (Platz ${s.queued.pos}, seit ${Math.max(0, Math.round((now - s.queued.since) / 60_000))} min)` };
   // Kein Fehler: das automatische „weiter“ übernimmt; greift es nicht, meldet der Hauptchat „hängt“ (Plan 154, G10).
   if (s?.interrupted) return { status: 'waiting', reason: 'Zug abgebrochen (Brücke neu gestartet) — wird automatisch fortgesetzt, sonst `send <id> weiter`', cause: 'interrupted' };
   const sent = new Date(run.lastSentAt ?? run.startedAt).getTime();
@@ -291,9 +297,11 @@ export async function strandStates(u: User): Promise<Map<string, StrandState & {
 
 // ---------- Öffentliche Schnittstelle ----------
 
-export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null; lauf?: string | null; modell?: string | null; risiko?: 'niedrig' | 'mittel' | 'hoch' | null; profil?: 'voll' | 'bauer' | 'leser' | 'schreiber' | null; tiefe?: string | null;
+export interface StartInput { title: string; prompt: string; cwd: string; plan?: string | null; shared?: boolean; code?: boolean; slug?: string | null; aufrufer?: string; g0?: G0Tor | null; lauf?: string | null; modell?: string | null; risiko?: 'niedrig' | 'mittel' | 'hoch' | null; profil?: 'voll' | 'bauer' | 'leser' | 'schreiber' | 'release' | null; tiefe?: string | null;
   /** Tokenbudget des Strangs (Plan 209, S3.2); leer = ORCH_BUDGET_TOKENS je Tiefe (Vorgabe 0 = aus). */
-  budget?: number | null }
+  budget?: number | null;
+  /** Vorrang in der Warteschlange der Brücke (Plan 213 S1a: Reviews). */
+  vorrang?: boolean }
 
 // Plan 162, S2: Hauptmodell und Risikostufe eines Strangs (vorbereitet für die smarte Modellwahl, Paket 163). Nur beim Start.
 const STRAND_MODEL = /^(claude:(opus|sonnet|haiku)|melious:[\w.:/-]{1,80})$/;
@@ -357,10 +365,10 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   const risiko = vor.risiko as StartInput['risiko'];
   // Hotfix 15.10.: Melious-Modell außerhalb des Abos → Start erlaubt, aber mit Hinweis „läuft auf Guthaben“ (kein stilles Guthaben).
   const aboHinweis = modell?.startsWith('melious:') && modell !== 'melious:auto' && ausserhalbAbo([modell.slice(8)], (await meliousSettings(u)).abo).length ? `Melious-Modell „${modell.slice(8)}“ ist nicht im Abo und läuft auf Guthaben.` : null;
-  if (inp.profil && !['voll', 'bauer', 'leser', 'schreiber'].includes(inp.profil)) throw err(400, 'Profil: voll, bauer, leser oder schreiber.');
+  if (inp.profil && !['voll', 'bauer', 'leser', 'schreiber', 'release'].includes(inp.profil)) throw err(400, 'Profil: voll, bauer, leser, schreiber oder release.');
   const profil = inp.profil && inp.profil !== 'voll' ? inp.profil : null;
   // 1) Bei der Brücke anmelden (prüft den Ordner selbst). Ohne Anmeldung kein Chat (fail closed).
-  const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}), tiefe }), signal: AbortSignal.timeout(5000) });
+  const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}), tiefe, ...(inp.vorrang === true ? { vorrang: true } : {}) }), signal: AbortSignal.timeout(5000) });
   const rj: any = await reg.json().catch(() => ({}));
   if (!reg.ok) throw err(reg.status === 400 || reg.status === 409 || reg.status === 403 ? reg.status : 502, rj.error ?? `Brücke antwortet mit ${reg.status}`);
   const stand = [fresh.status, g0 ? g0.text : null].filter(Boolean).join('\n') || null;
@@ -429,6 +437,8 @@ export async function listOrch(u: User, opts: { all?: boolean } = {}) {
     if (d.laufExplicit && !d.decoratedLauf && !d.startError) { try { if ((await decorate(u, d.conv, d.title, laufTag(d.lauf))).ok) await runs().updateOne({ _id: d._id }, { $set: { decoratedLauf: true } }); } catch { /* nächstes Mal */ } }
     out.push({
       id: d._id, title: d.title, status: st.status, reason: st.reason, reviewed: !!d.reviewedAt, url: d.url, cwd: d.cwd, plan: d.plan,
+      // Plan 213 S1b: Zustand aus dem Status-Takt (eine Quelle für Workspace, Chat-Leiste und `orch list`).
+      zustand: d.zustand ?? null, zustandGrund: d.zustandGrund ?? null, queued: s?.queued ?? null,
       startedAt: d.startedAt, lastSentAt: d.lastSentAt, lastActivity: Math.max(s?.turn?.end ?? 0, s?.turn?.start ?? 0, last?.at ?? 0) || null,
       lauf: d.lauf ?? laufName(d.title).lauf, laufExplicit: !!d.laufExplicit, reviewedBy: d.reviewedBy ?? null, knutReviewed: !!d.knutReviewedAt, doneAt: d.doneAt ?? null, bericht: !!d.bericht,
       // Plan 205: Tiefe (null = alter Strang ohne Feld) und ETA ({ at, quelle, text, ueberfaellig }).
@@ -708,6 +718,15 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
       if (!u) continue;
       let states: Map<string, any>;
       try { states = await strandStates(u); } catch { continue; }
+      // Plan 213 S1b: offene Rückfragen je Unter-Chat (für „wartet auf dich“) und der Stand der Nachforderungen heute.
+      const fragenJe = new Map<string, number>();
+      for (const q of await questions().find({ userId, status: 'offen', 'strand.id': { $ne: null } }, { projection: { strand: 1 } }).toArray().catch(() => [] as any[])) {
+        const k = String((q as any).strand?.id ?? ''); if (k) fragenJe.set(k, (fragenJe.get(k) ?? 0) + 1);
+      }
+      const heuteWien = wienDatum(now);
+      const tagBeginn = wienUm(heuteWien, 0);   // Wiener Mitternacht, nicht die Zeitzone des Servers (Pass C)
+      let nachgefordertHeute = statusNeu() ? await runs().countDocuments({ userId, 'standNachgefordert.at': { $gte: tagBeginn } }).catch(() => 0) : 0;
+      const seit = statusNeu() ? await statusNeuSeit(now) : now;
       for (const d of list) {
         // Schon fertig nach der letzten Nachricht an den Strang: ohne neue Nachricht ändert sich nichts (Last, Council Teil B).
         // … aber nur, wenn seitdem kein Zug lief (Knut schreibt direkt im Chat) und der Bericht schon gefunden ist (Council-Diff B R2).
@@ -715,7 +734,13 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
         try { const ks = await kopfPflege(d, now); if (Object.keys(ks).length) { await runs().updateOne({ _id: d._id }, { $set: ks }); Object.assign(d, ks); } }
         catch (e: any) { deps.log?.('bericht-kopf fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
         const sd = states.get(d.conv);
-        if (d.lastStatus === 'done' && d.doneAt && d.bericht && new Date(d.doneAt).getTime() > new Date(d.lastSentAt ?? d.startedAt).getTime() && !sd?.running && (sd?.turn?.end ?? 0) <= new Date(d.doneAt).getTime()) continue;
+        if (d.lastStatus === 'done' && d.doneAt && d.bericht && new Date(d.doneAt).getTime() > new Date(d.lastSentAt ?? d.startedAt).getTime() && !sd?.running && (sd?.turn?.end ?? 0) <= new Date(d.doneAt).getTime()) {
+          // Plan 213 S1b: „done“ heißt Marke „fertig“ — der Zustand fehlt nur bei Unter-Chats von vor der Umstellung.
+          // Eine später gestellte Rückfrage macht aus „fertig“ wieder „wartet“ (und umgekehrt) — je Takt neu, nicht eingefroren (Pass C).
+          const soll = (fragenJe.get(String(d._id)) ?? 0) > 0 ? 'wartet' : 'fertig';
+          if (d.zustand !== soll && d.zustand !== 'erledigt') await runs().updateOne({ _id: d._id, zustand: d.zustand ?? null }, { $set: { zustand: soll, zustandGrund: soll === 'wartet' ? 'Rückfrage an dich' : 'Agent meldet „fertig“', marke: 'fertig' } }).catch(() => {});
+          continue;
+        }
         try {
           const s = states.get(d.conv);
           const last = await lastMessage(u, d.conv);
@@ -730,12 +755,46 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
           // „fertig“ zählt nur mit einer Antwort NACH der letzten Nachricht an den Strang (G1: nach Nacharbeit nicht die alte).
           if (st.status === 'done' && last && last.at > new Date(d.lastSentAt ?? d.startedAt).getTime() && (!d.doneAt || new Date(d.doneAt).getTime() < last.at)) set.doneAt = new Date(last.at);
           if (!d.bericht) { const b = findBericht([...(d.review?.artefakte ?? []), last && !last.fromUser ? last.text : '']); if (b) set.bericht = b; }
+          // Plan 213 S1b: neuer Zustand (eine Statusquelle) — im Schattenbetrieb nur berechnet und verglichen (P2).
+          const marke = last && !last.fromUser ? statusMark(last.text) : null;
+          const zugEnde = typeof s?.turn?.end === 'number' ? s.turn.end : null;
+          // Nachgefordert und seitdem keine Antwort MIT Marke → offen (zählt für „hängt?“ nach 30 min und gegen eine zweite Nachforderung).
+          const offenNach = !!d.standNachgefordert && !marke;
+          const nachAt = offenNach ? new Date(d.standNachgefordert.at).getTime() : null;
+          const z = zustandAus({ status: st.status, reason: st.reason, cause: st.cause, queued: s?.queued ?? null, marke, offeneFragen: fragenJe.get(String(d._id)) ?? 0, nachgefordertAt: nachAt }, now);
+          set.zustand = z.zustand; set.zustandGrund = z.grund; set.marke = marke;
+          if (marke && d.standNachgefordert) set.standNachgefordert = null;   // wieder eine Marke: nächste Lücke darf nachgefordert werden
+          const ab = abweichung(st.status, z.zustand);
+          if (ab) await wb().collection('meta').updateOne({ _id: `status_schatten:${heuteWien}` as any }, { $addToSet: { [`paare.${ab}`]: String(d._id) } }, { upsert: true }).catch(() => {});
           // Nur, wenn inzwischen keine neue Nachricht an den Strang ging (sonst käme mit der alten Antwort ein altes doneAt zurück).
           await runs().updateOne({ _id: d._id, lastSentAt: d.lastSentAt ?? null }, { $set: set });
+          // „Stand fehlt“ → den Stand nachfordern (nur neuer Modus, nie rückwirkend, ≤ 10/Tag, je Unter-Chat einmal bis zur nächsten
+          // Marke; nie in die Inbox — K2). Der Vermerk erst nach erfolgreichem Senden (Pass C).
+          if (nachfordern({ zustand: z.zustand, neu: statusNeu(), zugEnde, seit, schonFuerZug: d.standNachgefordert?.zug ?? null, heute: nachgefordertHeute, offen: offenNach })) {
+            try {
+              await sendOrch(u, String(d._id), NACHFORDER_TEXT, 'leitstand');
+              await runs().updateOne({ _id: d._id }, { $set: { standNachgefordert: { zug: zugEnde, at: new Date(now) } } });
+              nachgefordertHeute++;
+              deps.log?.('stand nachgefordert', { id: d._id });
+            } catch (e: any) { deps.log?.('stand nachfordern fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
+          }
         } catch (e: any) { deps.log?.('orch-status fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
       }
     }
   } finally { statusTicking = false; }
+}
+
+/** Seit wann der neue Zustand gilt (beim ersten Takt im neuen Modus festgehalten) — nichts davor wird nachgefordert (P2). */
+export async function statusNeuSeit(now = Date.now()): Promise<number> {
+  const r: any = await wb().collection('meta').findOneAndUpdate({ _id: 'status_neu' as any }, { $setOnInsert: { seit: new Date(now) } }, { upsert: true, returnDocument: 'after' });
+  return new Date((r?.value ?? r)?.seit ?? now).getTime();
+}
+
+/** Schattenbetrieb (P2): je Tag, welche Unter-Chats alt und neu verschieden einordnen („wartet→stand-fehlt“: n). */
+export async function statusSchatten(tage = 7, now = Date.now()) {
+  const ab = wienDatum(now - tage * 86400_000);
+  const docs: any[] = await wb().collection('meta').find({ _id: { $gte: `status_schatten:${ab}`, $lt: 'status_schatten;' } as any }).toArray();
+  return docs.map((d) => ({ tag: String(d._id).slice(16), paare: Object.fromEntries(Object.entries(d.paare ?? {}).map(([k, v]) => [k, (v as string[]).length])) })).sort((a, b) => a.tag.localeCompare(b.tag));
 }
 
 /** Takt für statusTick (aus main.ts), unabhängig von ORCH_AUTO_WEITER; ORCH_STATUS=off schaltet ab. */
@@ -758,7 +817,9 @@ export interface AskInput { title: string; context: string; options?: { label: s
   key?: string | null;
   /** Herkunft; für Automaten (`drift`) höchstens AUTO_PRO_TAG neue Fragen je Tag (429). */
   quelle?: string | null;
-  g0?: { kriterien: string[]; ergebnis: string; belege?: string[] } | null }
+  g0?: { kriterien: string[]; ergebnis: string; belege?: string[] } | null;
+  /** Wichtigkeit (Knut 17.10.): „wichtig“ = Knut muss selbst entscheiden; „normal“ stuft eine Regel-Einstufung nie herunter (stufe.ts). */
+  stufe?: 'wichtig' | 'normal' | null }
 
 export const AUTO_PRO_TAG = 5;
 
@@ -793,14 +854,14 @@ export async function askKnut(u: User, inp: AskInput) {
   let id: string;
   do { id = 'q-' + randomUUID().slice(0, 6); } while (await questions().findOne({ _id: id as any }));
   const doc: any = { _id: id, userId: u.id, title, context, options, recommendation, strand, link, plan: inp.plan ? String(inp.plan).slice(0, 500) : null, createdAt: new Date(), status: 'offen', answer: null,
-    ...(key ? { key, keyActive: key } : {}), ...(quelle ? { quelle, day: vienna().date } : {}), ...(inp.g0 ? { g0: inp.g0 } : {}) };
+    ...(key ? { key, keyActive: key } : {}), ...(quelle ? { quelle, day: vienna().date } : {}), ...(inp.g0 ? { g0: inp.g0 } : {}), ...(inp.stufe === 'wichtig' || inp.stufe === 'normal' ? { stufe: inp.stufe } : {}) };
   try { await questions().insertOne(doc); }
   catch (e: any) { if (e?.code === 11000) throw err(409, `Schlüssel ${key} ist schon vergeben — keine zweite Frage.`); throw e; }
   return publicQuestion(doc);
 }
 
 export function publicQuestion(d: any) {
-  return { id: String(d._id), kind: d.kind ?? 'frage', title: d.title, context: d.context, options: d.options ?? [], recommendation: d.recommendation, strand: d.strand ?? null, link: d.link ?? null, plan: d.plan ?? null, createdAt: d.createdAt, status: d.status, answer: d.answer ?? null, key: d.key ?? null, quelle: d.quelle ?? null };
+  return { id: String(d._id), kind: d.kind ?? 'frage', title: d.title, context: d.context, options: d.options ?? [], recommendation: d.recommendation, strand: d.strand ?? null, link: d.link ?? null, plan: d.plan ?? null, createdAt: d.createdAt, status: d.status, answer: d.answer ?? null, key: d.key ?? null, quelle: d.quelle ?? null, stufe: d.stufe ?? null };
 }
 
 export async function listQuestions(u: User, opts: { open?: boolean; limit?: number } = {}) {
@@ -815,7 +876,7 @@ export async function getQuestion(u: User, id: string) {
 }
 
 /** Knut antwortet (Werkbank-Oberfläche): Option und/oder Freitext. Eine beantwortete Frage bleibt beantwortet. */
-export async function answerQuestion(u: User, id: string, a: { option?: string | null; text?: string | null }) {
+export async function answerQuestion(u: User, id: string, a: { option?: string | null; text?: string | null; by?: string }) {
   const d: any = await questions().findOne({ _id: id as any, userId: u.id });
   if (!d) throw err(404, 'Diese Rückfrage gibt es nicht.');
   if (d.status !== 'offen') throw err(409, d.status === 'beantwortet' ? 'Schon beantwortet.' : 'Vom Orchestrator zurückgezogen.');
@@ -823,7 +884,7 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
   const text = String(a.text ?? '').trim().slice(0, 4000);
   if (option && !(d.options ?? []).some((o: any) => o.label === option)) throw err(400, 'Unbekannte Option.');
   if (!option && !text) throw err(400, 'Option wählen oder Antwort schreiben.');
-  const answer = { option, text, at: new Date(), by: u.email };
+  const answer = { option, text, at: new Date(), by: a.by ?? u.email };
   const r = await questions().updateOne({ _id: id as any, status: 'offen' }, { $set: { status: 'beantwortet', answer } });
   if (!r.modifiedCount) throw err(409, 'Schon beantwortet.');
   // G0: jeder gewählte Knopf ins Protokoll (Fehlalarme, Kriterium „anderer Autor“ gesondert — DoD 13, 25).

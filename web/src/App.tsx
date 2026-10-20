@@ -11,7 +11,13 @@ import { Dateien } from './pages/Dateien.tsx';
 import { Timebox } from './pages/Timebox.tsx';
 import { Ziele } from './pages/Ziele.tsx';
 import { Uebersicht } from './pages/Uebersicht.tsx';
+import { HeuteNeu } from './pages/HeuteNeu.tsx';
+import { Entscheidungen } from './pages/Entscheidungen.tsx';
+import { LeadSeite } from './pages/Lead.tsx';
+import { ArbeitUnterchats, ArbeitReviews } from './pages/Arbeit.tsx';
+import { Ablage } from './pages/Ablage.tsx';
 import { useTodayCount } from './beimir.tsx';
+import { einLoginUmleiten, einLoginZiel } from './einlogin.ts';
 
 function useHash() {
   const [h, setH] = useState(() => window.location.hash || '#/');
@@ -59,6 +65,31 @@ const BEREICHE: { id: string; label: string; ico: string; reiter: Reiter[] }[] =
   ] },
 ];
 const EINRICHTUNG: Nav = { href: '#/einrichtung', label: 'Einrichtung', ico: '🚀', match: /^#\/einrichtung/, f: '' };
+
+// Plan 213 S3 (WERKBANK_NAV_NEU): drei Bereiche Heute · Arbeit · Wissen, dazu Chat und Einstellungen. Heute = Entscheide (Inbox),
+// Arbeit = Unter-Chats, Reviews & PRs, Board, Sprint (Mein Tag bis zur Messung), Wissen = Vault, Ablage, Roadmap, Ziele.
+// Alle alten Adressen bleiben gültig (185 B3); Team-Nutzer sehen weiter jede freigegebene Seite (B2) — nur an neuer Stelle.
+const HEUTE: Nav = { href: '#/', label: 'Heute', ico: '☀️', match: /^#\/?(\?|$)|^#\/(heute|uebersicht)(\?|$)/, f: 'heute' };
+// Zielbild F1 (Knut 19.10.): Lead · Entscheidungen · Arbeit · Heute, alles andere unter „Mehr“. Geparktes (Mein Tag, Ziele — F2:
+// der Kalender bzw. der Vault erledigen den Job) steht nicht mehr in der Leiste; die Adressen bleiben gültig.
+const LEAD: Nav = { href: '#/lead', label: 'Lead', ico: '🧭', match: /^#\/lead/, f: 'leitstand' };
+const ENTSCHEIDUNGEN: Nav = { href: '#/entscheidungen', label: 'Entscheidungen', ico: '✅', match: /^#\/(entscheidungen|inbox)/, f: 'heute' };
+const BEREICHE_NEU: { id: string; label: string; ico: string; reiter: Reiter[] }[] = [
+  { id: 'arbeit', label: 'Arbeit', ico: '🛠️', reiter: [
+    { href: '#/arbeit', label: 'Unter-Chats', match: /^#\/arbeit\/?(\?|$)|^#\/leitstand/, f: 'heute', wide: true },
+    { href: '#/arbeit/reviews', label: 'Reviews & PRs', match: /^#\/arbeit\/reviews/, f: 'roadmap', wide: true },
+    { href: '#/ablage', label: 'Berichte & Ablage', match: /^#\/(dateien|ablage)/, f: 'dateien' },
+  ] },
+  { id: 'mehr', label: 'Mehr', ico: '⋯', reiter: [
+    { href: '#/wissen', label: 'Wissen', match: /^#\/wissen/, f: 'wissen', wide: true },
+    { href: '#/board', label: 'Jira-Board', match: /^#\/board/, f: 'board', wide: true },
+    { href: '#/sprint', label: 'Sprint', match: /^#\/sprint/, f: 'sprint' },
+    { href: '#/roadmap', label: 'Roadmap', match: /^#\/roadmap/, f: 'roadmap', wide: true },
+    { href: '#/einrichtung', label: 'Einstellungen', match: /^#\/einrichtung/, f: '' },
+    { href: '#/skills', label: 'Skills', match: /^#\/skills/, f: 'skills' },
+  ] },
+];
+const UMZUG_KEY = 'wb-umzug-f1';   // neuer Schlüssel: der Hinweis kommt nach der Umstellung auf die F1-Leiste noch einmal
 const merkKey = (id: string) => `wb-bereich:${id}`;
 /** Zuletzt benutzter Reiter des Bereichs (nur freigegebene), sonst der erste freigegebene. */
 function letzterReiter(b: { id: string; reiter: Reiter[] }): string {
@@ -82,17 +113,30 @@ export function App() {
   const [theme, setTheme] = useState(document.documentElement.dataset.theme ?? 'light');
   // Handy (≤ 760 px): Navigation und Fuß stecken im Menü oben (Knut, 07.10.2026: Abmelden/Hell-Dunkel fehlten am Handy).
   const [menu, setMenu] = useState(false);
+  // Plan 213 S3: Umzugshinweis einmal je Person — als Zustand, nie am DOM vorbei (Pass C: sonst stürzt React beim nächsten Rendern ab).
+  const [umzugZu, setUmzugZu] = useState(() => { try { return !!localStorage.getItem(UMZUG_KEY); } catch { return false; } });
   const todayN = useTodayCount(hash, !!cfg?.user && cfg?.features?.heute !== false);
   useEffect(() => setMenu(false), [hash]);
+  // Plan 213 S0: Seitenaufruf zählen (nur die Seite, keine Inhalte) — Grundlage für „erst messen, dann umziehen“.
+  useEffect(() => { if (cfg?.user) api('/api/nutzung/seite', { method: 'POST', body: { seite: hash } }).catch(() => {}); }, [hash, cfg?.user?.id]);
   // Die Roadmap-Tabelle in Wissen ist entfallen (Paket 187, S6): die alte Adresse führt zur Roadmap.
   // Ohne Freigabe „roadmap“ bleibt die Tabelle in Wissen (Team-Nutzer verlieren nichts).
   useEffect(() => { if (cfg?.user && cfg.features?.roadmap !== false && /^#\/wissen\/~roadmap/.test(hash)) window.location.replace('#/roadmap'); }, [hash, cfg]);
   // Bereich merkt sich den zuletzt benutzten Reiter (die LibreChat-Leiste liest denselben Schlüssel) — nur freigegebene.
   useEffect(() => {
     if (!cfg?.user) return;
-    for (const b of BEREICHE) { const r = b.reiter.find((x) => x.match.test(hash)); if (r && cfg.features?.[r.f] !== false) try { localStorage.setItem(merkKey(b.id), r.href); } catch { /* privat */ } }
+    for (const b of (cfg.navNeu ? BEREICHE_NEU : BEREICHE)) { const r = b.reiter.find((x) => x.match.test(hash)); if (r && cfg.features?.[r.f] !== false) try { localStorage.setItem(merkKey(b.id), r.href); } catch { /* privat */ } }
   }, [hash, cfg]);
-  const load = () => api<Config>('/api/config').then((c) => { setChatOrigin(c.librechatUrl); setCfg(c); }, setErr);
+  const load = () => api<Config>('/api/config').then((c) => {
+    // S9: Direktadresse → dieselbe Seite im Chat (gezählt als Zugang „direkt“, dann umgeleitet).
+    if (einLoginUmleiten({ an: !!c.einLogin, embedded, search: window.location.search, librechatUrl: c.librechatUrl ?? '' })) {
+      const ziel = einLoginZiel(c.librechatUrl, window.location.hash);
+      Promise.race([api('/api/nutzung/seite', { method: 'POST', body: { seite: window.location.hash || '#/' } }).catch(() => {}), new Promise((r) => setTimeout(r, 800))])
+        .finally(() => window.location.replace(ziel));
+      return;
+    }
+    setChatOrigin(c.librechatUrl); setCfg(c);
+  }, setErr);
   useEffect(() => { load(); }, []);
   const toggleTheme = () => {
     const t = theme === 'dark' ? 'light' : 'dark';
@@ -145,10 +189,19 @@ export function App() {
   // Freigabe je Funktion (web/server/features.ts): Admins alles, das Team nur, was Knut freigegeben hat.
   const vis = (n: { f: string }) => !n.f || cfg.features?.[n.f] !== false;
   // Bereiche mit ihren freigegebenen Reitern; ein Bereich ohne freigegebenen Reiter fehlt ganz.
-  const bereiche = BEREICHE.map((b) => ({ ...b, reiter: b.reiter.filter(vis) })).filter((b) => b.reiter.length > 0);
-  const nav: Nav[] = [UEBERSICHT, ...bereiche.map((b) => ({ href: letzterReiter(b), label: b.label, ico: b.ico, match: new RegExp(b.reiter.map((r) => r.match.source).join('|')), f: '' }))].filter(vis);
-  const more: Nav[] = [EINRICHTUNG];
-  const alle = [UEBERSICHT, ...BEREICHE.flatMap((b) => b.reiter)];
+  const neu = !!cfg.navNeu;
+  const START = neu ? HEUTE : UEBERSICHT;
+  // D6/F2 (Knut 19.10.): „Mein Tag“ steht nie in der Leiste (der Kalender erledigt den Job) — die Adresse #/timebox bleibt erreichbar.
+  const inLeiste = (r: Reiter) => vis(r) && r.f !== 'timebox';
+  const bereiche = (neu ? BEREICHE_NEU : BEREICHE).map((b) => ({ ...b, reiter: b.reiter.filter(inLeiste) })).filter((b) => b.reiter.length > 0);
+  const alsNav = (b: (typeof bereiche)[number]): Nav => ({ href: letzterReiter(b), label: b.label, ico: b.ico, match: new RegExp(b.reiter.map((r) => r.match.source).join('|')), f: '' });
+  const nav: Nav[] = (neu
+    ? [LEAD, ENTSCHEIDUNGEN, ...bereiche.filter((b) => b.id === 'arbeit').map(alsNav), HEUTE, ...bereiche.filter((b) => b.id === 'mehr').map(alsNav)]
+    : [START, ...bereiche.map(alsNav)]).filter(vis);
+  const more: Nav[] = neu ? [] : [EINRICHTUNG];
+  const alle = [START, ...(neu ? [LEAD, ENTSCHEIDUNGEN] : []), ...(neu ? BEREICHE_NEU : BEREICHE).flatMap((b) => b.reiter)];
+  // Der Zähler steht dort, wo die Fragen stehen: neu an „Entscheidungen“, sonst an der Übersicht (eine Zahl, eine Quelle).
+  const zaehlHref = neu ? ENTSCHEIDUNGEN.href : '#/';
   const hidden = user && alle.find((n) => n.f && n.match.test(hash) && !vis(n));
   const bereich = bereiche.find((b) => b.reiter.some((r) => r.match.test(hash)));
   const reiterLeiste = bereich && <div className={`page bereich-bar${bereich.reiter.find((r) => r.match.test(hash))?.wide ? ' wide' : ''}`} data-testid={`bereich-${bereich.id}`}>
@@ -161,6 +214,15 @@ export function App() {
   const page = !user ? <Setup cfg={cfg} onLogin={() => { window.location.hash = '#/einrichtung'; load(); }} />
     : /^#\/einrichtung/.test(hash) || heuteHidden ? <Setup cfg={cfg} onLogin={load} />
     : hidden ? <div className="page" data-testid="not-released"><h1>{hidden.label}</h1><div className="card soft empty"><p><b>Noch nicht für das Team freigegeben.</b></p><p className="small muted">Knut gibt die Funktionen des OLAF Workspace nach und nach frei. Bis dahin: Chat und <a href="#/einrichtung">Einrichtung</a>.</p></div></div>
+    // Plan 213 S3: neue Seiten der Navigation Heute · Arbeit · Wissen (alte Adressen führen weiter zu ihren Seiten).
+    // Inbox mit Entscheidungs-Log auch in der alten Leiste (Stufen/Annahme nach 24 h gehen mit Bündel A live, Knut 17.10.).
+    // Entscheidungen (Knut 19.10., Muster entscheidungen-site): eine Karte je Frage; #/inbox führt dorthin.
+    : /^#\/(inbox|entscheidungen)/.test(hash) ? <Entscheidungen />
+    : /^#\/lead/.test(hash) ? <LeadSeite cfg={cfg} />
+    : neu && HEUTE.match.test(hash) ? <HeuteNeu cfg={cfg} />
+    : neu && /^#\/arbeit\/reviews/.test(hash) ? (user.role === 'ADMIN' ? <ArbeitReviews /> : <Roadmap cfg={cfg} hash="#/roadmap/prs" />)
+    : neu && /^#\/arbeit/.test(hash) ? (user.role === 'ADMIN' ? <ArbeitUnterchats cfg={cfg} /> : <Uebersicht cfg={cfg} hash="#/" />)
+    : neu && /^#\/ablage/.test(hash) ? <Ablage cfg={cfg} />
     : /^#\/wissen/.test(hash) ? <Wissen cfg={cfg} hash={hash} />
     : /^#\/board/.test(hash) ? <Board cfg={cfg} hash={hash} />
     : /^#\/sprint/.test(hash) ? <Sprint cfg={cfg} hash={hash} />
@@ -171,31 +233,43 @@ export function App() {
     : /^#\/dateien/.test(hash) ? <Dateien cfg={cfg} />
     : <Uebersicht cfg={cfg} hash={hash} />;
 
+  // Plan 213 S3 (P4): einmal je Person ein Hinweis auf den Umzug — Planen ist jetzt unter Arbeit (Board, Sprint) und Wissen (Roadmap, Ziele).
+  // U5: eine Team-Instanz kennt die alte Leiste nicht — der Umzugs-Hinweis verwirrt dort nur (Walkthrough als neue Person).
+  const umzug = neu && user && !cfg.teamInstanz && bereich && bereich.id !== 'einstellungen' && !umzugZu
+    ? <div className="page"><div className="umzug" role="status" data-testid="umzug"><span className="small">Neu geordnet: <b>Lead · Entscheidungen · Arbeit · Heute</b>, alles andere unter <b>Mehr</b> (Wissen, Jira-Board, Sprint, Roadmap, Einstellungen). Mein Tag und Ziele stehen nicht mehr in der Leiste. Alte Adressen funktionieren weiter.</span>
+      <button className="ub-btn sm" onClick={() => { try { localStorage.setItem(UMZUG_KEY, '1'); } catch { /* privat */ } setUmzugZu(true); }}>Verstanden</button></div></div> : null;
+
   // Eingebettet: kein eigenes Gerüst — Navigation ist LibreChats Leiste (Chats · Übersicht · Planen · Wissen), Einrichtung im Kontomenü.
-  if (embedded) return <div className="embedded">{reiterLeiste}{page}</div>;
+  // P4 (Zielbild § 3, Rahmen): EINE Zustandszeile oben, nur wenn etwas nicht normal ist — mit dem, was das für dich heißt.
+  const zustaende = [
+    cfg.demo && 'Demo-Modus: Daten sind Beispiele.',
+    cfg.dryRun && 'Vorschau (Trockenlauf): Antworten an Agenten und Schreibzugriffe sind aus.',
+    cfg.speicher && `Speicher knapp (${cfg.speicher}) — neue Chats warten, bis Platz ist.`,
+  ].filter(Boolean) as string[];
+  const zustand = zustaende.length ? <div className="page"><p className="zustand" role="status" data-testid="zustandszeile">{zustaende.join(' · ')}</p></div> : null;
+  if (embedded) return <div className="embedded">{zustand}{umzug}{reiterLeiste}{page}</div>;
   const current = [...nav, ...more].find((n) => n.match.test(hash));
 
   return (
-    <div className="shell">
+    <div className={`shell${neu ? ' nav-neu' : ''}`}>
       <aside className={`side${menu ? ' open' : ''}`} aria-label="Navigation">
         <div className="brand"><img src="favicon.svg" alt="" /><span>OLAF Workspace</span></div>
         <a href={cfg.librechatUrl} className="menu-chat btn small" title="Zurück zum Chat (LibreChat)">💬 Chat</a>
         <button className="menu-btn btn small" aria-expanded={menu} aria-controls="werkbank-nav" onClick={() => setMenu(!menu)}>
           {current ? <>{current.ico} {current.label}</> : 'Menü'}
           {/* Auf der Übersicht steht der Zähler am Namen („Übersicht 10“), sonst als Hinweis daneben („· Übersicht 10“) — nie beides. */}
-          {current?.href === '#/' && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span>
-            : !menu && <span className="menu-more">· {todayN ? `Übersicht ${todayN}` : `${nav.length + more.length - (current ? 1 : 0)} weitere`}</span>}<span aria-hidden>{menu ? '▴' : '▾'}</span>
+          {current?.href === zaehlHref && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span>
+            : !menu && <span className="menu-more">· {todayN ? `${neu ? ENTSCHEIDUNGEN.label : START.label} ${todayN}` : `${nav.length + more.length - (current ? 1 : 0)} weitere`}</span>}<span aria-hidden>{menu ? '▴' : '▾'}</span>
         </button>
         <nav className="nav col" id="werkbank-nav" style={{ gap: 2 }}>
           <a href={cfg.librechatUrl} className="" title="Zurück zum Chat (LibreChat)"><span className="ico">💬</span>Chat</a>
-          {nav.map((n) => <NavLink key={n.href} n={n} hash={hash} count={n.href === '#/' ? todayN : null} />)}
+          {nav.map((n) => <NavLink key={n.href} n={n} hash={hash} count={n.href === zaehlHref ? todayN : null} />)}
         </nav>
         <div className="spacer" />
         <nav className="nav col more" aria-label="Weitere Seiten" style={{ gap: 0 }}>
           {more.map((n) => <NavLink key={n.href} n={n} hash={hash} />)}
         </nav>
         <div className="foot">
-          {cfg.demo && <span className="chip warn">Demo-Modus</span>}
           {user && <div className="small"><b>{user.name}</b><div className="tiny">{user.email}</div></div>}
           <div className="row">
             <button className="btn small" onClick={toggleTheme} aria-label="Hell/Dunkel umschalten">{theme === 'dark' ? '☀️ Hell' : '🌙 Dunkel'}</button>
@@ -203,7 +277,12 @@ export function App() {
           </div>
         </div>
       </aside>
-      <main className="main">{reiterLeiste}{page}</main>
+      <main className="main">{zustand}{umzug}{reiterLeiste}{page}</main>
+      {/* Plan 213 S3b: Handy-Tableiste Heute · Arbeit · Wissen · Chat (nur ≤ 760 px, nur neue Navigation; 185 B6). */}
+      {neu && user && <nav className="tabbar" aria-label="Bereiche">
+        {nav.map((n) => { const on = n.match.test(hash); return <a key={n.href} href={n.href} className={on ? 'active' : ''} aria-current={on ? 'page' : undefined}><span className="ico" aria-hidden>{n.ico}</span>{n.label}{n.href === zaehlHref && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span> : null}</a>; })}
+        <a href={cfg.librechatUrl}><span className="ico" aria-hidden>💬</span>Chat</a>
+      </nav>}
     </div>
   );
 }

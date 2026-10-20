@@ -8,7 +8,8 @@
 //             Klassifikator des SDK (Plan 71 P1, Knut 06.10.2026). Ohne Arbeitsordner gibt es diese Klasse nie.
 
 import { realpathSync, statSync } from 'node:fs';
-import { resolve, dirname, sep } from 'node:path';
+import { resolve, dirname, sep, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 export type ToolClass = 'read' | 'confirm' | 'blocked' | 'auto';
 
@@ -79,6 +80,84 @@ export const AUTO_DENY = [
   'Bash(git merge:*)', 'Bash(gh pr merge:*)', 'Bash(bw:*)',
   'Read(~/.config/vw/**)', 'Read(~/.ssh/**)', 'Read(~/.claude/.credentials.json)', 'Edit(~/.claude/**)', 'Read(**/.env*)',
 ];
+
+/**
+ * Strang-Sperren als Deny-Regeln (Knut 19.10.2026, Fund 1/2): Im permissionMode `auto` ruft das CLI den PreToolUse-Hook
+ * der Brücke *nie* auf — der Sicherheits-Klassifikator entscheidet allein. Damit waren orchestratorBlock, die
+ * Leser-Erlaubnisliste und leitstandCheck im Auto-Modus wirkungslos; nur Deny-Regeln greifen dort (vor dem Klassifikator,
+ * auch unter `--bare`, und sie zerlegen auch `bash -c "…"`).
+ *
+ * Die Bash-Form ist bewusst grob (kann selten einen harmlosen Befehl mitsperren — im Zweifel sperren ist hier richtig).
+ * Fund 1, Review des Hauptchats: ein blankes `Bash(git push:*)` fängt die globalen Optionen vor dem Unterbefehl nicht
+ * (`git -C <dir> push`, `git -c x=y push` — genau der Fall, den orchestratorBlock prüft). `Bash(git * push*)` deckt sie
+ * mit ab; die Muster fürs Setzen von Zweigen und Remotes sind ebenso gebaut.
+ */
+export const ORCH_DENY: string[] = [
+  'Bash(*scripts/orch*)', 'Bash(orch-cli:*)',
+  'Bash(*x-werkbank-internal*)', 'Bash(*WERKBANK_INTERNAL_TOKEN*)',
+  'Bash(*localhost*/internal/*)', 'Bash(*127.0.0.1*/internal/*)', 'Bash(*0.0.0.0*/internal/*)', 'Bash(*[::1]*/internal/*)',
+  'Bash(*/proc/*environ*)', 'Bash(*.env.local*)',
+  'Bash(git push:*)', 'Bash(git * push*)',
+  'Bash(git send-pack:*)', 'Bash(git * send-pack*)',
+  'Bash(git update-ref:*)', 'Bash(git * update-ref*)',
+  'Bash(git symbolic-ref:*)', 'Bash(git * symbolic-ref*)',
+  'Bash(git replace:*)', 'Bash(git * replace*)',
+  'Bash(git remote add:*)', 'Bash(git * remote add*)',
+  'Bash(git remote set-url:*)', 'Bash(git * remote set-url*)',
+  'Bash(git remote rename:*)', 'Bash(git * remote rename*)',
+  'Bash(git branch -f:*)', 'Bash(git * branch -f*)',
+  'Bash(git branch -D:*)', 'Bash(git * branch -D*)',
+  'Bash(git branch -M:*)', 'Bash(git * branch -M*)',
+  'Bash(git branch --delete:*)', 'Bash(git * branch --delete*)',
+  'Bash(git branch --force:*)', 'Bash(git * branch --force*)',
+  'Bash(core.hooksPath:*)',
+];
+/** Leser-Profil: kein Netz (Fund 2). curl/wget sind nie Teil der Leser-Erlaubnisliste. */
+export const LESER_DENY: string[] = ['Bash(curl:*)', 'Bash(wget:*)'];
+
+/**
+ * Die Sperren für die MCP-Werkzeuge — **abgeleitet** aus `classify` statt von Hand gepflegt (Review des Hauptchats,
+ * 19.10.2026: eine Handliste hatte `addWorklogToJiraIssue` und die Werkbank-Schreibwerkzeuge übersehen). Was der
+ * Wächter im Strang ablehnt oder nachfragt, wird als Deny-Regel übersetzt: „blocked“ (Orchestrator-Werkzeuge außerhalb
+ * des Hauptchats) und „confirm“ (Jira-Schreiben, Register, agent_start) fragen im Strang niemanden — also sperren.
+ * Ein `auto`-Werkzeug bleibt dem Klassifikator. Neue Werkzeugnamen in classify sind damit automatisch mitgesperrt.
+ *
+ * Der Server heißt über die Brücke immer `atlassian` (claudehome.ts:99) — Knuts geteilte Konfiguration bringt einen
+ * eigenen Server `atlassian-pm` mit (`~/.claude.json:1618`), der über `strictMcpConfig` gar nicht erst lädt.
+ */
+export const ORCH_MCP_TOOLS: string[] = [
+  'mcp__vault-search__vault-outline', 'mcp__vault-search__vault-read', 'mcp__vault-search__vault-list',
+  'mcp__vault-search__vault-recent', 'mcp__vault-search__vault-links', 'mcp__vault-search__vault-backlinks',
+  'mcp__vault-search__vault-related', 'mcp__vault-search__vault-search',
+  'mcp__werkbank__delegieren', 'mcp__werkbank__delegation_stand', 'mcp__werkbank__delegation_urteil',
+  'mcp__werkbank__phase_wechseln', 'mcp__werkbank__orch_start', 'mcp__werkbank__orch_list', 'mcp__werkbank__orch_show',
+  'mcp__werkbank__orch_send', 'mcp__werkbank__orch_thema', 'mcp__werkbank__orch_review', 'mcp__werkbank__orch_ask',
+  'mcp__werkbank__orch_questions', 'mcp__werkbank__zusagen', 'mcp__werkbank__zusage_eintragen', 'mcp__werkbank__zusage_aendern',
+  'mcp__werkbank__thema_setzen', 'mcp__werkbank__hygiene_list', 'mcp__werkbank__hygiene_snooze', 'mcp__werkbank__skills_list',
+  'mcp__werkbank__review_ready', 'mcp__werkbank__jira_update', 'mcp__werkbank__jira_update_many', 'mcp__werkbank__agent_start',
+  'mcp__werkbank__hauptchat_melden', 'mcp__werkbank__challenge',
+  'mcp__atlassian__addCommentToJiraIssue', 'mcp__atlassian__editJiraIssue', 'mcp__atlassian__transitionJiraIssue',
+  'mcp__atlassian__createJiraIssue', 'mcp__atlassian__updateJiraIssue', 'mcp__atlassian__deleteJiraIssue',
+  'mcp__atlassian__addWorklogToJiraIssue', 'mcp__atlassian__createIssueLink', 'mcp__atlassian__editIssueLink',
+  'mcp__atlassian__deleteIssueLink', 'mcp__atlassian__getJiraIssue', 'mcp__atlassian__searchJiraIssuesUsingJql',
+  'mcp__atlassian__getVisibleJiraProjects', 'mcp__atlassian__lookupJiraAccountId', 'mcp__atlassian__atlassianUserInfo',
+];
+
+const ORCH_CTX = { workDir: '/', scope: 'voll', leit: false, guard: null as never } as const;
+
+/**
+ * Die Werkzeuge, die in einem Strang als Deny-Regel mitgehen: was `classify` dort „blocked“ oder „confirm“ nennt.
+ * Reine Funktion, damit sie ohne Brücke prüfbar ist (`strandDeny` in sessions.ts baut darauf auf).
+ */
+export function mcpDenyForStrang(tools: readonly string[] = ORCH_MCP_TOOLS): string[] {
+  return tools.filter((t) => { const c = classify(t, {}, ORCH_CTX as never); return c.cls === 'blocked' || c.cls === 'confirm'; });
+}
+/**
+ * Faul, nicht beim Laden: `classify` liest `FILE_TOOLS`, und das steht weiter unten — eine Konstante hier oben liefe
+ * in „Cannot access before initialization“ (19.10. geprüft). Gesperrt sind die Orchestrator-Werkzeuge außerhalb des
+ * Hauptchats und alles, was Jira oder das Register schreibt.
+ */
+export function orchMcpDeny(): string[] { return mcpDenyForStrang(); }
 
 const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
@@ -245,15 +324,21 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // review_ready ändert nur Werkbank-Zustand (Fertig-Marke am eigenen Lauf) → ohne Rückfrage.
     // hauptchat_melden (Plan 154, S4): Meldung an den Hauptchat — ändert nur Werkbank-Zustand, gedeckelt in der Werkbank.
     // delegieren/delegation_*/phase_wechseln (Plan 165): Steuerung durch die Brücke; Worker arbeiten unter ihrem eigenen Wächter.
-    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'melious_sub' || name === 'auslastung' || name === 'github_lesen' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
     if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
     // Chief of Staff (Plan 209, K17): Zusagen lesen frei; das Register schreiben erst nach „ja“ (im Strang gesperrt, siehe orchestratorBlock).
     if (server === 'werkbank' && name === 'zusagen') return { cls: 'read' };
     if (server === 'werkbank' && (name === 'zusage_eintragen' || name === 'zusage_aendern' || name === 'thema_setzen')) return { cls: 'confirm' };
+    // inbox_antworten: nur der Hauptchat der Person trägt ihre Antwort ein (ein Unter-Chat beantwortet nie Knuts Fragen selbst);
+    // dort wie orch_*: Auto-Modus voll ohne Rückfrage — die Person hat die Antwort gerade selbst geschrieben —, sonst nach „ja“.
+    if (server === 'werkbank' && name === 'inbox_antworten') {
+      if (!ctx.leit) return { cls: 'blocked', why: 'Inbox-Antworten trägt nur der Hauptchat der Person ein' };
+      return ctx.workDir && ctx.scope === 'voll' ? { cls: 'auto' } : { cls: 'confirm' };
+    }
     // Orchestrator-Werkzeuge (Plan 132, S3): nur im Leitstand. Lesen und Rückfragen an Knut frei; Stränge starten, Nachrichten
     // schicken und prüfen entscheidet der Klassifikator; ein Strang außerhalb des Leitstand-Ordners braucht ein „ja“.
-    if (server === 'werkbank' && name.startsWith('orch_')) {
+    if (server === 'werkbank' && (name.startsWith('orch_') || name === 'pr_review_starten')) {   // pr_review_starten startet einen Review-Strang (Paket 217)
       if (!ctx.leit) return { cls: 'blocked', why: 'Orchestrator-Werkzeuge gibt es nur im Hauptchat' };
       if (/^orch_(list|show|questions|ask)$/.test(name)) return { cls: 'read' };
       if (name === 'orch_start' && ctx.workDir) {
@@ -402,6 +487,41 @@ export function orchDirProblem(dir: string): { problem: string | null; real?: st
   return { problem: null, real };
 }
 
+// ---------- Profil „release“ (Plan 213, Knut 17.10.: „Release-Strang darf lokal mergen“) ----------
+// Erlaubt ist genau `git -C <Worktree> merge …` (auch --abort/--continue) im zugewiesenen Release-Worktree; Konflikte löst
+// der Strang mit Edit im Worktree, der Merge-Commit ist ein normaler lokaler Commit. Push, Live-Schalten und alles außerhalb
+// des Worktrees bleibt gesperrt. Der Ordner steht im Befehl, weil die Brücke das cwd der Shell nicht kennt.
+
+/** Worktree für einen Release-Strang: eigener Git-Worktree (nicht der Haupt-Checkout) eines Werkbank-Repos, nie die Live-Instanz. */
+export function releaseWorktreeProblem(dir: string): string | null {
+  if (/werkbank-dev(\/|$)/.test(dir)) return 'Die Live-Instanz ist kein Release-Worktree.';
+  try { if (!statSync(join(dir, '.git')).isFile()) return 'Release-Strang braucht einen eigenen Git-Worktree (git worktree add), nicht den Haupt-Checkout.'; } catch { return 'Release-Strang braucht einen Git-Worktree.'; }
+  const g = (...a: string[]) => { try { return execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } };
+  let top = g('rev-parse', '--show-toplevel'); try { top = realpathSync(top); } catch { /* bleibt */ }
+  if (top !== dir) return 'Der Arbeitsordner muss die Wurzel des Release-Worktrees sein.';
+  if (!/werkbank/i.test(g('remote', 'get-url', 'origin'))) return 'Release-Strang nur in einem Worktree des Werkbank-Repos.';
+  return null;
+}
+
+const SHELL_META = /[;&|`$()<>\n\\]/;
+const MERGE_FORM = new RegExp(String.raw`^git\s+-C\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+merge(?![\w-])(\s.*)?$`);
+/** Ein Release-Merge: einzelner Befehl ohne Verkettung/Ersetzung, `-C` zeigt genau auf den Worktree des Strangs. */
+export function releaseMerge(cmd: string, dir: string): boolean {
+  const c = cmd.trim();
+  if (SHELL_META.test(c)) return false;
+  const m = c.match(MERGE_FORM);
+  if (!m) return false;
+  const ziel = m[1] ?? m[2] ?? m[3];
+  let real = resolve(ziel); try { real = realpathSync(ziel); } catch { return false; }
+  return real === dir && !/\s--(git-dir|work-tree)\b|\s-C\s/.test(m[4] ?? '');
+}
+
+/** Im Release-Strang zusätzlich gesperrt: alles, was live schaltet. */
+export const RELEASE_BLOCK: [RegExp, string][] = [
+  [/werkbank-dev\b|\bwerkbank\.sh\b|release-live[\w-]*\.sh/, 'Live-Instanz / Live-Schalten'],
+  [/\b(systemctl|crontab)\b/, 'Dienste/crontab'],
+];
+
 function short(s: unknown, n = 90): string {
   const t = String(s ?? '').replace(/\s+/g, ' ').trim();
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
@@ -467,6 +587,7 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
       if (name === 'delegation_stand') return '🧑‍🔧 Stand der Delegationen';
       if (name === 'delegation_urteil') return `🧑‍🔧 Urteil ${input.id ?? ''}: ${input.urteil ?? ''}`;
       if (name === 'phase_wechseln') return `🔀 Phase → ${input.phase ?? '?'}`;
+      if (name === 'inbox_antworten') return `✅ Entscheidung eingetragen: ${input.kennung ?? ''} → ${input.antwort ?? ''}`;
       if (name === 'challenge') return `🔍 Gegenprüfung GLM 5.3 (${input.art ?? ''})`;
       return name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
     }
@@ -517,6 +638,39 @@ export function neutralizeAnswerAnchors(tail: string, text: string): string {
   let out = text;
   for (const at of cuts.reverse()) out = out.slice(0, at) + '\u200b' + out.slice(at);
   return out;
+}
+
+/** Werkbank-Werkzeug mit den offenen Inbox-Einträgen (web/mcp/werkbank-tools.ts `inbox`). */
+export const INBOX_TOOL = 'mcp__werkbank__inbox';
+/** Kennungen wie web/server/inbox.ts KENNUNG_RE — was nicht passt, bekommt keinen Knopf. */
+const INBOX_KENNUNG = /^(q|d|b|p|v|pflege|laeufe|schlange|altbestand)(-[A-Za-z0-9-]{1,80})?$/;
+const INBOX_MAX = 8;
+
+/**
+ * Plan 213 K4: Ja/Nein-Knöpfe je Inbox-Eintrag aus dem Ergebnis des Inbox-Werkzeugs. Die letzte Zeile des Ergebnisses
+ * ist `KNOEPFE <JSON>` mit `[{id, frage}]`; nur gültige Kennungen, Frage als reiner Text (keine Links, keine Anker),
+ * höchstens 8 Einträge. Leer, wenn nichts zu beantworten ist.
+ */
+export function inboxKnoepfe(ergebnis: string): string {
+  const zeile = ergebnis.split('\n').reverse().find((z) => z.startsWith('KNOEPFE '));
+  if (!zeile) return '';
+  let liste: unknown;
+  try { liste = JSON.parse(zeile.slice(8)); } catch { return ''; }
+  if (!Array.isArray(liste)) return '';
+  const gesehen = new Set<string>();
+  const gueltig = liste.filter((e: any) => e && typeof e.id === 'string' && INBOX_KENNUNG.test(e.id) && typeof e.frage === 'string' && !gesehen.has(e.id) && gesehen.add(e.id));
+  const klar = (t: string, max: number) => {
+    const roh = t.replace(/[\r\n]+/g, ' ').trim();
+    return neutralizeAnswerAnchors('', (roh.length > max ? roh.slice(0, max - 1) + '…' : roh).replace(/[\\`*_[\]()<>#|~!]/g, (c: string) => '\\' + c));
+  };
+  // Die Herkunft steht sichtbar daneben (Pass C): Fragetext aus einem Unter-Chat gibt sich nicht als neutrale Frage aus.
+  const rows = gueltig.slice(0, INBOX_MAX).map((e: any) => {
+    const quelle = typeof e.quelle === 'string' && e.quelle.trim() ? ` _(${klar(e.quelle, 60)})_` : '';
+    return `- ${klar(e.frage, 120)}${quelle}  \n  [✅ Ja](#werkbank-antwort:${e.id}:ja) [✖️ Nein](#werkbank-antwort:${e.id}:nein)`;
+  });
+  if (!rows.length) return '';
+  const mehr = gueltig.length > INBOX_MAX ? `\n\n_${gueltig.length - INBOX_MAX} weitere unter Heute › Inbox_` : '';
+  return `**Zum Antworten:**\n\n${rows.join('\n')}${mehr}\n\n_Anders? Schreib einfach, was stattdessen gelten soll — ich trage es an der Quelle ein._`;
 }
 
 /** Die Rückfrage vor einem Schreibzugriff, auf Deutsch. */

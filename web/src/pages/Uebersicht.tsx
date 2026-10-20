@@ -10,7 +10,6 @@ import { usePushFreigeben } from '../freigabe.tsx';
 import { useMermaidIn } from '../mermaid.tsx';
 import { WartetAufDich, mineCount } from '../beimir.tsx';
 import { OrchQuestions } from '../orchquestions.tsx';
-import { HygienePanel } from '../components.tsx';
 import { G0Blocked, LiveGroup, RunCard } from './Heute.tsx';
 import { Bericht, Review, StartHauptchat } from './Leitstand.tsx';
 import { Morgenlage } from './Morgenlage.tsx';
@@ -284,9 +283,6 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
   const admin = cfg.user?.role === 'ADMIN';
   const u = useLoad(() => (admin ? api('/api/uebersicht') : Promise.resolve(null)), [admin]);
   const t = useLoad(() => api('/api/today'));
-  const [vq, setVq] = useState<{ open: any[]; cleanup: any[]; raw: number; duplicates: number } | null>(null);
-  const [pflege, setPflege] = useState<number | null>(null);
-  const [planen, setPlanen] = useStored<'' | 'vault' | 'pflege' | 'tickets'>('planen', '');
   const cfgMain = cfg.project;   // 17c: Seiten-Kennzeichen der Tickets (PM | OLAF)
   const [schublade, setSchublade] = useState<{ id: string; tab: Tab } | null>(null);
   // Alte Adressen (Paket 187, S4; `#/leitstand?…`, `#/heute?…`, `#/?…`): review · bericht · auftrag öffnen Ansicht bzw. Schublade, start=1 den Dialog.
@@ -301,8 +297,6 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
   useEffect(() => { setStarten(wantStart); }, [wantStart]);   // Dialog folgt der Adresse (auch beim Verlassen); der Knopf öffnet ihn ohne Adresse
   useEffect(() => { const b = aus('bericht'), a = aus('auftrag'); setAnsicht(b ? { id: b, art: 'bericht' } : a ? { id: a, art: 'auftrag' } : null); }, [hq]);
   const neu = () => { if (admin) api('/api/uebersicht').then(u.setData).catch(() => {}); api('/api/today').then(t.setData).catch(() => {}); };
-  useEffect(() => { if (admin) api('/api/roadmap/heute').then((r: any) => setVq(r)).catch(() => {}); }, [admin]);
-  useEffect(() => { api('/api/hygiene').then((h: any) => setPflege(h.items.filter((i: any) => !h.snoozed.includes(i.key)).length)).catch(() => setPflege(null)); }, []);
   useJiraLive(() => { api('/api/today').then(t.setData).catch(() => {}); }, 'both');
   // Sichtbarer Stand: alle 60 s (20 s, solange ein Board-Agent arbeitet oder fragt) und beim Zurückkehren in den Tab.
   const d: any = t.data;
@@ -328,21 +322,22 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
     ...d.queue.filter((q: any) => q.bucket === 'laeuft').map((q: any) => ({ id: q.id, thema: 'Board', titel: `${q.key}${q.summary ? ` — ${q.summary}` : ''}`, at: q.startedAt, chat: q.url }))];
   const mine = mineCount(d.mine, []);
   const zahl = {
-    dich: karten.filter((k) => k.ampel === 'review' && !String(k.vonDir).startsWith('nichts')).length + lose.length + board.length + mine + (d.g0?.length ?? 0),
+    // Eine Zahl, eine Quelle (Walkthrough 221): der Kopf zeigt die Inbox-Zahl wie Leiste und Morgenlage ①.
+    dich: typeof d.count === 'number' ? d.count : karten.filter((k) => k.ampel === 'review' && !String(k.vonDir).startsWith('nichts')).length + lose.length + board.length + mine + (d.g0?.length ?? 0),
     push: karten.filter((k) => k.ampel === 'push' && k.kannFreigeben).length,
     laeuft: laufen.length,
     blockiert: karten.filter((k) => k.ampel === 'blockiert').length,
   };
   const springe = (w: string) => {
-    const sel = w === 'laeuft' ? '[data-testid="ub-laeuft"]' : w === 'dich' ? '[data-ampel="review"], [data-testid="ub-lose"], [data-testid="ub-board"]' : `[data-ampel="${w}"]`;
-    document.querySelector(sel)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    const sel = w === 'laeuft' ? '[data-testid="ub-laeuft"]' : w === 'dich' ? (cosAktiv ? '[data-testid="cos-entscheide"]' : '[data-ampel="review"], [data-testid="ub-lose"], [data-testid="ub-board"]') : `[data-ampel="${w}"]`;
+    // Morgenlage zugeklappt → ① ist nicht im Dokument; dann auf die Karten der Übersicht springen (Pass C).
+    (document.querySelector(sel) ?? document.querySelector('[data-testid="cos-morgenlage"]'))?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   };
   const ansichtKarte = ansicht ? karten.find((k) => k.id === ansicht.id) : null;
   const offen = schublade ? karten.find((k) => k.id === schublade.id) : ansichtKarte;
   const hc = x?.hauptchat;
   const hcFarbe = !hc ? 'bad' : hc.status === 'bereit' ? 'ok' : hc.status === 'läuft' ? 'run' : hc.status === 'wartet auf dich' ? 'dich' : 'bad';
   const heute = new Intl.DateTimeFormat('de-AT', { weekday: 'long', day: '2-digit', month: '2-digit' }).format(new Date());
-  const nVault = vq?.open.length ?? 0;
 
   return (
     <div className="page ub" data-testid="uebersicht">
@@ -352,8 +347,6 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
           {PILLE.map(([w, cls, text]) => (zahl as any)[w] > 0 && <button key={w} className={`ub-amp ${cls}`} onClick={() => springe(w)} data-testid={`ub-pille-${w}`}>{pille((zahl as any)[w], text)}</button>)}
         </div>
       </div>
-      {d.memory && <div className="ub-card soft" role="status" data-testid="memory-warning"><b>⚠️ Speicher knapp:</b> <span className="small">{d.memory}. Neue Chats und Agenten können langsam werden oder abbrechen — Testinstanzen stoppen, wartende Chats beantworten.</span></div>}
-      {d.dryRun && <p className="ub-amp u-dich">Vorschau (Trockenlauf): Antworten an Agenten sind aus.</p>}
       {x?.fragenFehler && <p className="ub-amp u-bad" role="alert">Rückfragen gerade nicht lesbar — hier fehlen evtl. offene Fragen. Später neu laden.</p>}
       {u.error ? <Err e={u.error} /> : null}
 
@@ -370,6 +363,7 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
       {admin && aus('review') && <Review id={aus('review')!} onClose={zurueck} />}
       {admin && ansicht && !karten.some((k) => k.id === ansicht.id) && <Bericht id={ansicht.id} art={ansicht.art} onClose={() => { setAnsicht(null); zurueck(); }} />}
       {(d.orchAuto ?? []).length > 0 && <p className="small mut" data-testid="orch-auto">🔁 Automatisch fortgesetzt: {d.orchAuto.map((a: any, i: number) => <span key={a.id}>{i ? ', ' : ''}<a href={a.url} target={chatTarget}>{a.title}</a> ({a.n}){a.stopped ? ' — angehalten' : ''}</span>)}</p>}
+      <p className="small" data-testid="link-entscheidungs-log"><a href="#/inbox">Alle Entscheide und Entscheidungs-Log (was nach 24 h automatisch angenommen wurde) →</a></p>
 
       <div className="ub-themen">
       {lose.length > 0 && !cosAktiv && <section className={`ub-thema-flach${lose.length > 1 ? ' ub-breit' : ''}`} data-testid="ub-lose">
@@ -408,18 +402,7 @@ export function Uebersicht({ cfg, hash = '#/' }: { cfg: Config; hash?: string })
       {!karten.length && !lose.length && !board.length && !mine && !laufen.length && <div className="ub-card soft" data-testid="today-empty">
         <p><b>Nichts braucht dich.</b></p><p className="small mut">Neue Arbeit findest du auf der <a href="#/roadmap">Roadmap</a> (Als Nächstes) oder am <a href="#/board">Board</a>.</p></div>}
 
-      <section className="ub-card soft" data-testid="ub-planen">
-        <div className="ub-row ub-planen"><span className="small">Außerdem in <b>Planen</b>:</span>
-          {admin && <button className="ub-chip" aria-expanded={planen === 'vault'} onClick={() => setPlanen(planen === 'vault' ? '' : 'vault')} data-testid="ub-planen-vault">{vq ? `${nVault} offene Entscheidungen im Vault` : 'Entscheidungen im Vault …'}</button>}
-          <button className="ub-chip" aria-expanded={planen === 'pflege'} onClick={() => setPlanen(planen === 'pflege' ? '' : 'pflege')} data-testid="ub-planen-pflege">{pflege === null ? 'Tickets, die Pflege brauchen' : `${pflege} Tickets brauchen Pflege`}</button>
-          {(d.mine?.tickets?.length ?? 0) > 0 && <button className="ub-chip" aria-expanded={planen === 'tickets'} onClick={() => setPlanen(planen === 'tickets' ? '' : 'tickets')} data-testid="ub-planen-tickets">Meine Tickets: {Object.entries(meineTickets(d.mine.tickets)).map(([k, n]) => `${k} ${n}`).join(' · ')}</button>}
-          <a className="ub-chip" href="#/timebox">Mein Tag: {d.day.length} {d.day.length === 1 ? 'Block' : 'Blöcke'}</a>
-        </div>
-        {planen === 'vault' && vq && <WartetAufDich x={{ questions: [], prs: [], pendingApprovals: [], draft: null }} decisions={vq.open} today={vq} onChange={neu} />}
-        {planen === 'pflege' && <HygienePanel max={5} title="Deine Tickets" onChange={neu} />}
-        {planen === 'tickets' && <ul className="small plain" data-testid="ub-meine-tickets">{(d.mine?.tickets ?? []).slice(0, 30).map((t: any) => <li key={t.key} className="item">
-          <span className="chip" title={(t.site ?? cfgMain) === cfgMain ? 'Jira maxenergy (PM)' : 'Entwicklungs-Jira'}>{t.site ?? cfgMain}</span> <a href={`#/board?site=${t.site ?? cfgMain}&key=${t.key}`}><b>{t.key}</b></a> {t.summary} <span className="tiny">· {t.why}</span></li>)}</ul>}
-      </section>
+      {/* U4 (Knut 19.10.): „Außerdem in Planen“ ist weg — Vault-Fragen stehen unter Entscheidungen, Pflege ist ein Eintrag dort, eigene Tickets im Board. */}
 
       {offen && (schublade || ansicht) && <Schublade k={offen} tab={schublade?.tab ?? ansicht!.art} setTab={(tab) => { setAnsicht(null); setSchublade({ id: offen.id, tab }); }} onClose={() => { setSchublade(null); if (ansicht) { setAnsicht(null); zurueck(); } }} onDone={neu} />}
     </div>

@@ -14,16 +14,17 @@ import { connect, wb, lc } from './db.ts';
 import { librechatLogin, createSession, destroySession, currentUser, allowed, teammates, userById, type User } from './auth.ts';
 import { listClaudeAccounts, addClaudeAccount, removeClaudeAccount, reorderClaudeAccounts, claudeAccountToken, claudeAccountsForBridge } from './creds.ts';
 import { claudeStatus, setClaudeToken, removeClaudeToken, getClaudeToken, jiraCreds, githubReadToken, jiraIdentity, jiraStatus, setJiraCreds, removeJiraCreds, markJiraWrite } from './creds.ts';
-import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter } from './vault.ts';
+import { getIndex, readNote, tree, roadmap, teams, invalidateIndex, parseFrontmatter, titelSuche } from './vault.ts';
 import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, mirrorOf, mirrorSites, siteByPrefix, siteColumns, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane, statusSchatten } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
 import { themaOf, THEMEN } from './themen.ts';
-import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut } from './uebersicht.ts';
-import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand } from './leitstand.ts';
+import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
+import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand, activeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
 import { reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
@@ -35,7 +36,7 @@ import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName, ortAus, vorschlagAusPfad, isEingang } from './ablage.ts';
 import { ablageOwner, syncAblage, lastSyncAt } from './ablagesync.ts';
 import { listPakete, paketFile, renderPaketMd, strandFor, BILD_MIME } from './reviewpakete.ts';
-import { FEATURES, featuresFor, blockedFeature } from './features.ts';
+import { FEATURES, featuresFor, blockedFeature, knutsFragen, teamInstanz } from './features.ts';
 import { memoryWarning } from './memory.ts';
 import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
 import { keep as keepScratch, runScratch } from './scratch.ts';
@@ -50,8 +51,12 @@ import { morgenTick, schnappschussTick } from './cosjob.ts';
 import { olafJira } from './cos-olafjira.ts';
 import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
 import { boxTick } from './boxwaechter.ts';
+import { startSchaetzung, laufMediane } from './startschaetzung.ts';
+import { ladeSichtung, waehle as waehleSichtung } from './vaultsichtung.ts';
+import { starte as claudeAnmeldungStarten, codeEinreichen as claudeCodeEinreichen } from './claudeverbinden.ts';
+import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungsseite.ts';
 import { abschlussTick, wocheTick } from './cosabschluss.ts';
-import { rueckstau as cosRueckstau, } from './cosmeeting.ts';
+import { rueckstau as cosRueckstau, vorschlaege as cosVorschlaege } from './cosmeeting.ts';
 import { meetingTeams as cosMeetingTeams } from './cossammle.ts';
 const cosRueckstauZahl = () => { try { return cosRueckstau(cfg.vaultDir, cosMeetingTeams(), new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date())).length; } catch { return 0; } };
 import type { Quellen as CosQuellen } from './cossammle.ts';
@@ -61,11 +66,12 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
-import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted } from './prticker.ts';
-import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit } from './prreview.ts';
+import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol } from './prticker.ts';
+import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
 import { meliousPassC } from './gegenpruefung.ts';
 import { postReview, statusKommentar, schreibenAus, type ReviewEvent } from './githubwrite.ts';
+import { paketIndex, paketZahlen } from './pakete.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
 import { cleanBlock, carryOver, daySummary, sortMyTickets, nextDay } from './timebox.ts';
@@ -76,7 +82,18 @@ import { ansetzenMode, specGate, sprintEnd, ticketDraft, localDuplicates, dupJql
 import { collectDecisions, todayQuestions, todayPayload } from './fragen.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, rule1Goals, specProposals, autoEligible, type GoalNode } from './goals.ts';
-import { istTiefe, type Tiefe } from './tiefe.ts';
+import { istTiefe, tiefeOf, type Tiefe } from './tiefe.ts';
+import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
+import { zaehle, statusNeu, autoSchliessenAn, navNeu, aufraeumenAn, einLogin, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
+import { themenAusStand } from './cos.ts';
+import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
+import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
+import { autoAnnahmeAn, annahmeMs, stufeVon } from './stufe.ts';
+import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
+import { githubLesePfad, githubLeseText } from './githublesen.ts';
+import { entwurfHash, postenErlaubt } from './befunde.ts';
+import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
+import { zeile as arbeitZeile, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -107,6 +124,9 @@ const isMutation = (req: IncomingMessage) => req.method !== 'GET' && req.method 
 async function needUser(req: IncomingMessage): Promise<User> {
   const u = await currentUser(req);
   if (!u) throw new HttpError(401, 'Bitte anmelden.');
+  // Anwesenheit für die Abwesenheits-Bremse: nur echte Handlungen (Seitenwechsel, Antworten — alles außer GET). Das Polling eines
+  // offen gelassenen Tabs (Zähler alle 60 s, Morgenlage alle 120 s) ist kein „da“ (Pass C).
+  if (isMutation(req)) merkeDa(anwesenheitCol(), u.id, annahmeMs()).catch(() => {});
   if (isMutation(req) && req.headers['x-werkbank'] !== '1') throw new HttpError(403, 'Fehlender Workspace-Header.');
   // Freigabe je Funktion fürs Team (features.ts): Admins alles, sonst WERKBANK_TEAM_FEATURES.
   const f = blockedFeature(u, String(req.url ?? '').split('?')[0]);
@@ -386,9 +406,11 @@ on('GET', /^\/api\/health$/, async (_q, res) => send(res, 200, { ok: true, ...(a
 on('GET', /^\/api\/config$/, async (req, res) => {
   const u = await currentUser(req);
   send(res, 200, {
-    librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: !!process.env.WERKBANK_FORGE_MCP,
+    librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: false,   // Plan 213 S6: forge abgeschaltet (172 D1/D5)
     jiraSite: cfg.jiraSite, jiraSites: jiraSitesPublic(), project: cfg.jiraProject, vault: cfg.vaultDir,
-    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u),
+    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u), navNeu: navNeu(), teamInstanz: teamInstanz(), aufraeumen: aufraeumenAn(), einLogin: einLogin(),
+    // P4: eine Zustandszeile oben statt verstreuter Hinweise — Speicher nur für Admins (RAM-Plan 125).
+    speicher: u?.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null,
   });
 });
 
@@ -406,6 +428,19 @@ on('POST', /^\/api\/login$/, async (req, res) => {
 });
 
 on('POST', /^\/api\/logout$/, async (req, res) => { await destroySession(req, res); send(res, 200, { ok: true }); });
+
+// --- Nutzung messen (Plan 213 S0): Seitenaufrufe je Rolle und Zugang, Auswertung nur für Admins ---
+on('POST', /^\/api\/nutzung\/seite$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req, 2048);
+  seiteGesehen(b.seite, rolleVon(u), zugangVon(req.headers));
+  send(res, 200, { ok: true });
+});
+on('GET', /^\/api\/nutzung$/, async (req, res, _m, url) => {
+  await needAdmin(req);
+  const tage = Math.min(90, Math.max(1, Number(url.searchParams.get('tage')) || 14));
+  send(res, 200, await nutzungAuswertung(tage));
+});
 
 // --- Einrichtung ---
 
@@ -431,6 +466,7 @@ on('GET', /^\/api\/setup\/status$/, async (req, res) => {
     services: await health(),
     skills: { total: skills.length, linked: skills.filter((s) => s.state === 'verlinkt').length, missing: skills.filter((s) => s.state === 'fehlt').length },
     search: searchState,
+    melious: { connected: !!(await meliousSettings(u).catch(() => null))?.configured },   // Onboarding-Checkliste (Zielbild § 4)
     links: { librechat: cfg.librechatPublicUrl, register: cfg.librechatPublicUrl + '/register' },
   });
 });
@@ -443,6 +479,20 @@ on('POST', /^\/api\/setup\/claude$/, async (req, res) => {
   send(res, 200, { ok: true, claude: await claudeStatus(u) });
 });
 
+// Claude verbinden ohne Terminal (P5): Anmelde-Link → Code von claude.com → Token gespeichert wie oben. Nie im Log.
+on('POST', /^\/api\/setup\/claude\/anmelden$/, async (req, res) => {
+  const u = await needUser(req);
+  try { send(res, 200, await claudeAnmeldungStarten(u.id)); } catch (e: any) { throw new HttpError(e.status ?? 500, e.message); }
+});
+on('POST', /^\/api\/setup\/claude\/anmelden\/code$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  let token: string;
+  try { token = await claudeCodeEinreichen(u.id, String(b.code ?? '')); } catch (e: any) { throw new HttpError(e.status ?? 500, e.message); }
+  await setClaudeToken(u, token);
+  log('claude token gesetzt (ohne Terminal)', { user: u.id });
+  send(res, 200, { ok: true, claude: await claudeStatus(u) });
+});
 on('DELETE', /^\/api\/setup\/claude$/, async (req, res) => { const u = await needUser(req); await removeClaudeToken(u); send(res, 200, { ok: true }); });
 
 // --- Mehrere Claude-Konten (Knut, 06.10.2026): bei ausgeschöpftem Kontingent übernimmt das nächste ---
@@ -648,7 +698,13 @@ on('GET', /^\/api\/vault\/search$/, async (req, res, _m, url) => {
   await needUser(req);
   const q = (url.searchParams.get('q') ?? '').trim();
   if (!q) return send(res, 200, { hits: [] });
-  send(res, 200, { hits: await search(q, { team: url.searchParams.get('team') || undefined }) });
+  const team = url.searchParams.get('team') || undefined;
+  try { send(res, 200, { hits: await search(q, { team }) }); }
+  catch (e: any) {
+    // Walkthrough 19.10.: Suchdienst aus → „Interner Fehler.“ ohne Hinweis. Jetzt: Suche in Titeln und Dateinamen, mit Erklärung.
+    log('suche ersatz', { error: String(e?.message ?? e).slice(0, 120) });
+    send(res, 200, { hits: titelSuche(vaultIdx(), q, team), ersatz: 'Die Volltextsuche ist gerade nicht erreichbar (Suchdienst aus oder startet noch). Gezeigt werden Treffer in Titeln und Dateinamen.' });
+  }
 });
 
 on('POST', /^\/api\/vault\/reindex$/, async (req, res) => {
@@ -943,16 +999,10 @@ on('POST', /^\/api\/board\/runs\/([0-9a-f-]{36})\/followup$/, async (req, res, m
   send(res, 200, { id });
 });
 
-on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/forge$/, async (req, res, m) => {
-  const u = await needUser(req);
-  if (!process.env.WERKBANK_FORGE_MCP) throw new HttpError(412, 'forge-review ist noch nicht angebunden (wird gerade abgesichert).');
-  const b = await body(req);
-  const pr = String(b.pr ?? '').trim();
-  if (!/^([\w.-]+\/[\w.-]+)?#\d+$|^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(pr)) throw new HttpError(400, 'PR als „repo#123“ oder GitHub-Link angeben.');
-  const i = (await issueMap()).get(m[1]);
-  const token = await getClaudeToken(u);
-  if (!i || !token) throw new HttpError(412, 'Ticket oder Claude-Zugang fehlt.');
-  send(res, 200, { id: await startAgentRun(u, token, i, pr, undefined, 'forge') });
+// Plan 213 S6 / Paket 172 D1+D5 (Knut 17.10.: abschalten): der Review-Motor ersetzt forge — „Review starten“ in Arbeit › Reviews & PRs.
+on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/forge$/, async (req) => {
+  await needUser(req);
+  throw new HttpError(410, 'forge ist abgeschaltet — Reviews startest du unter Arbeit › Reviews & PRs.');
 });
 
 on('GET', /^\/api\/sessions$/, async (req, res) => {
@@ -1251,7 +1301,8 @@ async function mineFor(u: User, { write = true } = {}) {
   }
   const admin = u.role === 'ADMIN';
   let questions: any[] = [], draft: any = null, section: string | null = null, pendingApprovals: any[] = [];
-  if (admin) {
+  // U5: Sync-Fragen, Freigaben und Arbeitsentwurf gehören zu Knuts Vault-Sync — eine Team-Instanz hat keinen.
+  if (knutsFragen(u)) {
     if (write) writeApprovals().catch((e) => log('roadmap-freigaben', { error: String(e?.message ?? e).slice(0, 160) }));   // nicht warten: GET bleibt lesend schnell
     const protocol = readVault(SYNC_PROTOCOL);
     const qs = parseSyncQuestions(protocol);
@@ -1307,14 +1358,15 @@ async function myQueue(u: User) {
 }
 
 /** Zähler für die Navigation: alles, was etwas von der Person will (laufende Agenten nicht). */
-async function todayCount(u: User, queue?: any[], mine?: any, cards?: any[]) {
-  const q = queue ?? await myQueue(u);
-  const m = mine ?? await mineFor(u, { write: false });   // Zähler (alle 60 s): nur lesen, nie freigaben.md schreiben
-  const h = await hygieneOf(u).catch(() => ({ items: [], snoozed: [] as string[] }));
-  const hyg = h.items.filter((i: any) => !h.snoozed.includes(i.key)).length;
-  const orch = (await listQuestions(u, { open: true }).catch(() => [])).length;   // Rückfragen des Orchestrators
-  const strands = (cards ?? await strandCards(u).catch(() => [])).filter((c: any) => !c.running).length;   // fertige Stränge (nur Admins, nur Mongo — Teil B, F1)
-  return strands + q.filter((x) => x.bucket !== 'laeuft').length + m.prs.length + m.questions.length + (m.pendingApprovals?.length ?? 0) + (m.draft ? 1 : 0) + hyg + orch;
+async function todayCount(u: User) {
+  // Plan 213 S3 (K11): der Zähler ist die Zahl der Inbox — dieselbe Zahl wie im Heute-Kopf, in der Morgenlage ① und im Chat.
+  // Walkthrough 221: auch in der alten Leiste (die eigene Formel gab „6 brauchen dich“ neben „Entscheide heute 0“).
+  // Der Zähler fragt alle 60 s — die ganze Inbox (Karten, Berichte) höchstens alle 30 s je Person neu bauen (Pass C).
+  const c = zahlCache.get(u.id);
+  if (c && Date.now() - c.at < 30_000) return c.n;
+  const n = inboxZahl((await inboxFuer(u)).eintraege);
+  zahlCache.set(u.id, { at: Date.now(), n });
+  return n;
 }
 
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -1330,16 +1382,453 @@ on('GET', /^\/api\/today$/, async (req, res) => {
   // Automatisch fortgesetzte Stränge (Plan auto-weiter, DoD 6): nur der Zähler aus Mongo, kein Abruf bei der Brücke.
   const cards = await strandCards(u, { detail: true }).catch(() => []);
   const carded = new Set(cards.map((c: any) => c.id));
-  const orchAuto = (await wb().collection('orchestrator_runs').find({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
+  // S8: die Zeile „Automatisch fortgesetzt“ entfällt (Schalter); die Strang-Karte zeigt den Zustand weiter.
+  const orchAuto = aufraeumenAn() ? [] : (await wb().collection('orchestrator_runs').find({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: null, autoTotal: { $gt: 0 } }, { projection: { title: 1, url: 1, autoTotal: 1, autoStopped: 1 } }).sort({ autoLastAt: -1 }).limit(20).toArray().catch(() => []))
     .filter((r: any) => !carded.has(String(r._id)))   // keine Doppelung mit der Karte (F5)
     .map((r: any) => ({ id: String(r._id), title: r.title, url: r.url, n: r.autoTotal, stopped: !!r.autoStopped }));
   const g0 = await g0Blocked(u).catch(() => []);   // Nachtbau: von G0 gestoppte Stränge (blocked_g0)
   const memory = u.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null;   // nur Admins (RAM-Plan 125)
   const leitstand = await leitstandLine(u).catch(() => null);   // nur Admins (Plan 132)
-  send(res, 200, { queue, strands: cards, mine, day, today, orchOpen, orchAuto, g0, leitstand, memory, count: await todayCount(u, queue, mine, cards), dryRun: dryRun() });
+  send(res, 200, { queue, strands: cards, mine, day, today, orchOpen, orchAuto, g0, leitstand, memory, count: await todayCount(u), dryRun: dryRun() });
 });
 
 on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
+
+// --- Eine Statusquelle (Plan 213 S1b): Zähler für alle Ansichten, Schattenvergleich, Wegräumen/Zurückholen ---
+/** Zustand der offenen Unter-Chats einer Person, gezählt (K11). Ohne neuen Zustand (alte Läufe) aus dem alten Status abgeleitet. */
+const ALT_ZUSTAND: Record<string, Zustand> = { running: 'laeuft', done: 'fertig', failed: 'haengt', waiting: 'wartet', blocked_g0: 'blockiert' };
+/** Wirksamer Zustand eines Laufs — dieselbe Ableitung für Zähler und Heute (frisch gestartet, noch kein Takt: läuft). */
+const wirksam = (d: any): Zustand => (d.zustand as Zustand) ?? ALT_ZUSTAND[d.lastStatus] ?? 'laeuft';
+async function zaehlerFuer(u: User) {
+  const docs: any[] = await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }, { projection: { zustand: 1, lastStatus: 1 } }).toArray();
+  return zaehle(docs.map(wirksam));
+}
+on('GET', /^\/api\/status$/, async (req, res) => {
+  const u = await needAdmin(req);
+  send(res, 200, { neu: statusNeu(), autoSchliessen: autoSchliessenAn(), zaehler: await zaehlerFuer(u), schatten: await statusSchatten(7), wegraeumbar: (await autoSchliessen({ dry: true })).length });
+});
+// --- Eine Inbox (Plan 213 S2): alle Fragearten an einer Stelle, Antwort an der Quelle, Chat-Knöpfe mit Kennung ---
+const spaeterCol = () => wb().collection('inbox_spaeter');
+const zahlCache = new Map<string, { at: number; n: number }>();
+async function inboxFuer(u: User, now = Date.now()) {
+  const admin = u.role === 'ADMIN';
+  const qs = await listQuestions(u, { open: true }).catch(() => [] as any[]);
+  let karten: any[] = [], vault: { id: string; text: string; at?: any }[] = [], schlange: { id: string; titel: string; since: number }[] = [];
+  if (admin) {
+    const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(60).toArray()) as any[]).filter(offenFuerKnut);
+    const ids = docs.map((d) => String(d._id));
+    const fgs: any[] = ids.length ? await freigaben().find({ strand: { $in: ids }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
+    const basis = paketBasis();
+    karten = docs.map((d) => { try { return uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), qs.filter((q: any) => q.strand && String(q.strand.id) === String(d._id)), basis, null); } catch { return null; } }).filter(Boolean);
+    const states = await strandStates(u).catch(() => null);
+    for (const d of docs) { const s = states?.get(d.conv); if (s?.queued) schlange.push({ id: String(d._id), titel: d.title ?? '', since: s.queued.since }); }
+    const m = await mineFor(u, { write: false }).catch(() => null);
+    vault = [...(m?.questions ?? []).filter((q: any) => !q.answer), ...(m?.pendingApprovals ?? [])].map((q: any) => ({ id: String(q.id), text: String(q.text ?? ''), at: q.at ?? null }));
+    if (m?.draft) vault.push({ id: 'entwurf', text: 'Vault-Arbeitsentwurf wartet: übernehmen oder verwerfen (Arbeit › Unter-Chats)', at: null });
+  }
+  const h = await hygieneOf(u).catch(() => ({ items: [] as any[], snoozed: [] as string[] }));
+  await spaeterCol().deleteMany({ userId: u.id, bis: { $lte: new Date(now) } }).catch(() => {});   // abgelaufene aufräumen
+  const spaeter = new Map(((await spaeterCol().find({ userId: u.id, bis: { $gt: new Date(now) } }).toArray()) as any[]).map((s) => [String(s.id), new Date(s.bis).getTime()]));
+  const laeufe = (await myQueue(u).catch(() => [] as any[])).filter((x: any) => x.bucket !== 'laeuft').length;
+  // Meeting-Vorschläge zählen mit — eine Zahl für Kopf, Leiste, ① und Entscheidungen (221); beantwortet über die Vorschau.
+  let triage: any[] = [];
+  if (knutsFragen(u) && process.env.COS_MORGENLAGE !== 'off') {
+    const versteckt = new Set(((await wb().collection('cos_triage').find({ art: 'nein' }).toArray().catch(() => [])) as any[]).map((d) => String(d._id)));
+    try { triage = cosVorschlaege(cfg.vaultDir, cosMeetingTeams(), wienDatum(), versteckt).items; } catch { /* Vault nicht lesbar */ }
+  }
+  // U5: die „- Knut:“-Zeilen der Roadmap sind an Knut gerichtet — in einer Team-Instanz (F6) keine davon, auch kein Sammeleintrag.
+  const vf = knutsFragen(u) ? vaultFragenFuerInbox(now) : { einzeln: [], rest: 0 };
+  const ib = baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe, triage, vaultFragen: vf.einzeln, vaultRest: vf.rest,
+    kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now, annahmeMs: annahmeMs() });
+  // Abwesenheits-Bremse (F4a): nach einer Rückkehr gilt „angenommen ab“ frühestens eine volle Frist später.
+  if (bremseAn()) {
+    const fr = anwesenheitFrei(await anwesenheitCol().findOne({ _id: u.id as any }) as any, now, annahmeMs());
+    if (fr.ab) for (const e of ib.eintraege) if (e.autoAb && new Date(e.autoAb).getTime() < fr.ab.getTime()) e.autoAb = fr.ab.toISOString();
+  }
+  zahlCache.set(u.id, { at: Date.now(), n: inboxZahl(ib.eintraege) });   // jede frisch gebaute Inbox stellt auch den Zähler (Kopf = Leiste, 221)
+  return ib;
+}
+const anwesenheitCol = () => wb().collection('anwesenheit');
+/** F10 (Knut 19.10.: „muss halt viel einfacher sein“): von den offenen „- Knut:“-Zeilen der Roadmap nur die aktuellen wichtigen
+ *  einzeln — Stufe wichtig, Spec in Plan/Review oder „Neu am …“, jünger als 14 Tage (19 von 324 am 19.10.); der Rest als ein
+ *  Sammeleintrag. Der Vault-Index ist zwischengespeichert; die Auswahl höchstens alle 5 Minuten neu. */
+let vaultFragenCache: { at: number; v: { einzeln: any[]; rest: number } } | null = null;
+function vaultFragenFuerInbox(now = Date.now()) {
+  if (vaultFragenCache && now - vaultFragenCache.at < 5 * 60_000) return vaultFragenCache.v;
+  let v: { einzeln: any[]; rest: number } = { einzeln: [], rest: 0 };
+  try {
+    const idx = vaultIdx();
+    const { decisions, texts } = collectDecisions(idx, readVault, ROADMAP_BASE);
+    const offen = todayQuestions(decisions, { texts, fm: (p) => idx.notes.get(p)?.fm, today: vienna().date }).open;
+    // U6: mit Sichtung (Melious, aktuell/erledigt/veraltet + Priorität) die aktuellen einzeln; ohne die alte Regel.
+    const wichtige = offen.map((q) => ({ ...q, st: stufeVon({ text: `${q.head} ${q.question} ${q.section}` }) })).filter((q) => q.st.stufe === 'wichtig');
+    const sicht = ladeSichtung(join(cfg.dataDir, 'vault-sichtung.json'));
+    const { einzeln: wahl } = waehleSichtung(wichtige, sicht?.eintraege ?? null);
+    const einzeln = wahl.map((q) => ({ path: q.path, line: q.line, hash: q.hash, head: q.head, section: q.section, title: q.title, topic: q.topic, since: q.since, grund: q.st.grund,
+      prio: q.sichtung?.prio ?? null, kurz: q.sichtung?.kurz ?? null, beleg: q.sichtung?.beleg ?? null }));
+    v = { einzeln, rest: offen.length - einzeln.length };
+  } catch { /* Vault nicht lesbar: keine Vault-Fragen */ }
+  vaultFragenCache = { at: now, v };
+  return v;
+}
+on('GET', /^\/api\/inbox$/, async (req, res) => {
+  const u = await needUser(req);
+  const r = await inboxFuer(u);
+  send(res, 200, { ...r, zahl: inboxZahl(r.eintraege), at: new Date() });
+});
+/** Heute (Plan 213 S3): Entscheide (Inbox) · Blockiert/hängt · Geändert seit gestern 18:00 — ein Abruf für die Startseite. */
+on('GET', /^\/api\/heute$/, async (req, res) => {
+  const u = await needUser(req);
+  const inbox = await inboxFuer(u);
+  const admin = u.role === 'ADMIN';
+  const jetzt = new Date();
+  const gesternAbend = wienUm(vorigerTag(wienDatum()), 18);   // gestern 18:00 Wiener Zeit, nicht Server-Zeit (Pass C)
+  let blockiert: any[] = [], geaendert: any = null;
+  if (admin) {
+    // Dieselbe Ableitung wie die Zähler in Arbeit (Sichtprüfung: sonst „Nichts blockiert“ neben „5 hängen/blockiert“).
+    const alle: any[] = await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }, { projection: { title: 1, zustand: 1, lastStatus: 1, zustandGrund: 1, url: 1, statusAt: 1 } }).sort({ statusAt: 1 }).toArray().catch(() => []);
+    const offen = alle.filter((d) => ['blockiert', 'haengt', 'schlange', 'stand-fehlt'].includes(wirksam(d))).slice(0, 10);
+    blockiert = offen.map((d) => ({ id: String(d._id), titel: d.title ?? '', zustand: wirksam(d), grund: d.zustandGrund ?? '', chat: /^https?:\/\//.test(String(d.url ?? '')) ? d.url : null, seit: d.statusAt ?? null }));
+    const R = orchRuns();
+    const [fertig, weg, gepusht] = await Promise.all([
+      R.countDocuments({ userId: u.id, kind: { $ne: 'leitstand' }, doneAt: { $gte: gesternAbend } }).catch(() => 0),
+      R.countDocuments({ userId: u.id, autoGeschlossenAt: { $gte: gesternAbend } }).catch(() => 0),
+      freigaben().countDocuments({ userId: u.id, pushedAt: { $gte: gesternAbend } }).catch(() => 0),
+    ]);
+    const prs = await wb().collection('pr_ticker').countDocuments({ at: { $gte: gesternAbend } }).catch(() => 0);
+    geaendert = { seit: gesternAbend, fertig, gepusht, weggeraeumt: weg, prMeldungen: prs };
+  }
+  send(res, 200, { ...inbox, zahl: inboxZahl(inbox.eintraege), blockiert, geaendert, at: jetzt, admin, navNeu: navNeu() });
+});
+on('POST', /^\/api\/inbox\/([\w-]{1,90})\/spaeter$/, async (req, res, m) => {
+  const u = await needUser(req);
+  if (!KENNUNG_RE.test(m[1])) throw new HttpError(400, 'Unbekannte Kennung.');
+  const bis = spaeterBis();
+  await spaeterCol().updateOne({ _id: `${u.id}:${m[1]}` as any }, { $set: { userId: u.id, id: m[1], bis, at: new Date() } }, { upsert: true });
+  zahlCache.delete(u.id);
+  send(res, 200, { ok: true, bis });
+});
+/**
+ * Antwort auf einen Inbox-Eintrag — für die Knöpfe im Chat (Kennung im Anker) und für die Inbox selbst. Geschrieben wird an der
+ * Quelle über dieselben Wege wie bisher. Nur die Kennung zählt; der Stand muss noch derselbe sein (sonst 409, nie raten — K4).
+ */
+on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => send(res, 200, await inboxAntworten(await needUser(req), m[1], await body(req))));
+/** Antwort auf einen Inbox-Eintrag an seiner Quelle — für Heute, die Chat-Knöpfe und den Lead (`inbox_antworten`, auch „Anders“). */
+async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
+  const art = String(b.antwort ?? '');
+  const text = String(b.text ?? '').trim().slice(0, 4000);
+  const weg = b.weg === 'chat-knopf' ? 'chat-knopf' : b.weg === 'hauptchat' ? 'hauptchat' : 'ui';
+  if (!['ja', 'nein', 'anders'].includes(art)) throw new HttpError(400, 'Antwort ist ja, nein oder anders.');
+  if (art === 'anders' && !text) throw new HttpError(400, 'Schreib kurz, was stattdessen.');
+  const e = (await inboxFuer(u)).eintraege.flatMap((x) => (x.art === 'altbestand' ? [x, ...((x.daten.eintraege as any[]) ?? [])] : [x])).find((x) => x.id === id);
+  if (!e) throw new HttpError(409, 'Diese Frage ist schon beantwortet oder hat sich geändert — Inbox neu laden.');
+  if (e.art === 'rueckfrage') {
+    const opts = (e.daten.optionen as string[]) ?? [];
+    const rec = opts.find((o) => o === e.empfehlung) ?? opts.find((o) => String(e.empfehlung ?? '').startsWith(o));
+    const a = art === 'ja' ? (rec ? { option: rec, text: '' } : { option: null, text: janein('ja', e.empfehlung) }) : art === 'nein' ? { option: null, text: janein('nein', e.empfehlung) } : { option: null, text };
+    await answerQuestion(u, String(e.daten.qid), a);
+    roadmapChanged('orchestrator-antwort');
+  } else if (e.art === 'braucht') {
+    if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
+    await sendOrch(u, String(e.daten.strand), replyText('antwort', art === 'ja' ? 'Ja.' : art === 'nein' ? 'Nein.' : text));
+  } else if (e.art === 'entscheidung') {
+    if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
+    const liste = (e.daten.entscheidungen as any[]) ?? [];
+    if (liste.length > 1 && art !== 'ja') throw new HttpError(400, 'Mehrere Entscheidungen: „Ja“ übernimmt alle Empfehlungen; einzeln in der Inbox entscheiden.');
+    const antworten = art === 'ja' ? liste.map((x) => ({ id: x.id, art: 'akzeptiert' })) : [{ id: liste[0].id, art: art === 'nein' ? 'abgelehnt' : 'eigene', text }];
+    const d = await reviewStrand(u, String(e.daten.strand));
+    const sperre = String(d._id);
+    if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — gleich noch einmal.');
+    entscheidSperre.add(sperre);
+    antwortGezaehlt('inbox', weg);
+    try { const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }); await logEntscheidung(u, e, art === 'ja' ? 'ja (Empfehlungen übernommen)' : art === 'nein' ? 'nein' : `anders: ${text}`, u.email).catch(() => {}); return r; } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
+  } else if (e.art === 'push') {
+    if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
+    if (art !== 'ja') throw new HttpError(400, 'Push: nur „Ja“ (freigeben) oder „Später“.');
+    // D8 (Knut 17.10.): der Knopf ist an den gesehenen Stand gebunden — nur, wenn der Kopf noch derselbe ist.
+    const d = await reviewStrand(u, String(e.daten.strand));
+    const det: any = await reviewDetail(d);
+    const head = String(det?.repo?.head ?? '');
+    if (!head || !head.startsWith(String(e.daten.commit))) throw new HttpError(409, 'Der Stand hat sich geändert — neu ansehen und dann freigeben.');
+    const f = await freigeben(u, d, { head, patchId: det.repo.patchId ?? null }, undefined, log);
+    await hinweisFreigabe(u, f, d).catch(() => {});
+    antwortGezaehlt('push', weg);
+  } else if (e.art === 'vaultfrage') {
+    // Antwort als Zeile „- Knut: …“ in die Notiz (wie Roadmap › Entscheidungen; Trockenlauf schreibt nicht).
+    if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
+    const abs = vaultPath(String(e.daten.path));
+    if (!abs.includes(`/${ROADMAP_BASE}/`)) throw new HttpError(400, 'Nur Roadmap-Notizen.');
+    const zeile = art === 'anders' ? text : `${art}${text ? ` — ${text}` : ''}`;
+    let r;
+    try { r = fillDecision(readFileSync(abs, 'utf8'), Number(e.daten.line), zeile, String(e.daten.hash)); }
+    catch (x: any) { throw new HttpError(/geändert/.test(x.message) ? 409 : 400, x.message); }
+    if (!vaultDry()) { writeFileSync(abs, r.text); invalidateIndex(); checkCache = null; }
+    vaultFragenCache = null;
+  } else if (e.art === 'altbestand') {
+    if (art !== 'nein') throw new HttpError(400, 'Altbestand: „Nein“ verwirft alle, sonst einzeln durchsehen.');
+    let fehler = 0;
+    for (const x of (e.daten.eintraege as any[]) ?? []) {
+      if (x.art === 'rueckfrage') await withdrawQuestion(u, String(x.daten.qid)).catch(() => { fehler++; });
+      else await spaeterCol().updateOne({ _id: `${u.id}:${x.id}` as any }, { $set: { userId: u.id, id: x.id, bis: new Date(Date.now() + 30 * 86400_000), at: new Date() } }, { upsert: true });
+    }
+    if (fehler) throw new HttpError(409, `${fehler} Rückfrage(n) ließen sich nicht verwerfen — Inbox neu laden und einzeln ansehen.`);
+  } else throw new HttpError(400, 'Diese Frage beantwortest du in ihrer Ansicht (Vault-Sync, Pflege, Schlange).');
+  log('inbox antwort', { user: u.id, art: e.art, weg });
+  if (e.art !== 'altbestand') await logEntscheidung(u, e, art === 'ja' ? `ja${e.empfehlung ? ` (${e.empfehlung})` : ''}` : art === 'nein' ? 'nein' : `anders: ${text}`, u.email).catch(() => {});
+  zahlCache.delete(u.id);
+  if (e.art !== 'push') antwortGezaehlt(e.art === 'rueckfrage' ? 'rueckfrage' : e.art === 'braucht' ? 'braucht' : 'inbox', weg);
+  return { ok: true, art: e.art };
+}
+
+// --- Entscheidungen nach Wichtigkeit (Knut 17.10.): Annahme nach 24 h, Entscheidungs-Log, Widerruf mit „Anders“ ---
+// --- Entscheidungsseite (Knut 19.10., Muster entscheidungen-site): eine Karte je Frage, Antwort an der Quelle ---
+on('GET', /^\/api\/entscheidungen\/fragen$/, async (req, res) => {
+  const u = await needUser(req);
+  const ib = await inboxFuer(u);
+  const { fragen, sonstiges } = fragenAus(ib.eintraege);
+  const heute = await logCol().countDocuments({ userId: u.id, auto: { $ne: true }, at: { $gte: wienUm(wienDatum(), 0) } }).catch(() => 0);
+  send(res, 200, { fragen, sonstiges, beantwortetHeute: heute, zurueckgestellt: ib.zurueckgestellt, zahl: inboxZahl(ib.eintraege), at: new Date() });
+});
+/** Eine Bericht-Entscheidung (D…) einzeln: in den Bericht eintragen; der Unter-Chat arbeitet weiter, wenn alle beantwortet sind. */
+async function teilAntworten(u: User, e: any, teile: { id: string; antwort: string; text: string }[]) {
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
+  const d = await reviewStrand(u, String(e.daten.strand));
+  const sperre = String(d._id);
+  if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — gleich noch einmal.');
+  entscheidSperre.add(sperre);
+  try {
+    const antworten = teile.map((t) => ({ id: t.id, art: t.antwort === 'ja' ? 'akzeptiert' : t.antwort === 'nein' ? 'abgelehnt' : 'eigene', text: t.text }));
+    const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, sammeln: true, antworten });
+    for (const t of teile) {
+      const x = ((e.daten.entscheidungen as any[]) ?? []).find((y) => String(y.id) === t.id) ?? {};
+      await logEntscheidung(u, { ...e, frage: `${t.id}: ${x.frage ?? ''}`, empfehlung: x.empfehlung ?? null, stufe: x.stufe ?? e.stufe }, t.antwort === 'ja' ? `ja${x.empfehlung ? ` (${x.empfehlung})` : ''}` : t.antwort === 'nein' ? 'nein' : `anders: ${t.text}`, u.email, false, [t.id]).catch(() => {});
+    }
+    return r;
+  } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
+}
+on('POST', /^\/api\/entscheidungen\/fragen\/antwort$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req);
+  const [eintrag, teil = null] = String(b.id ?? '').split('~');
+  const antwort = String(b.antwort ?? '');
+  const text = String(b.text ?? '').trim().slice(0, 4000);
+  if (!KENNUNG_RE.test(eintrag) || (teil !== null && !/^[\w.-]{1,20}$/.test(teil))) throw new HttpError(400, 'Unbekannte Kennung.');
+  if (!['ja', 'nein', 'anders', 'spaeter'].includes(antwort)) throw new HttpError(400, 'Antwort ist ja, nein, anders oder später.');
+  if (antwort === 'anders' && !text) throw new HttpError(400, 'Bei „Anders“ bitte kurz schreiben, was stattdessen.');
+  if (antwort === 'spaeter') {
+    await spaeterCol().updateOne({ _id: `${u.id}:${eintrag}` as any }, { $set: { userId: u.id, id: eintrag, bis: spaeterBis(), at: new Date(), notiz: text || null } }, { upsert: true });
+    zahlCache.delete(u.id);
+    return send(res, 200, { ok: true, spaeter: true });
+  }
+  if (teil === null) return send(res, 200, await inboxAntworten(u, eintrag, { antwort, text, weg: 'ui' }));
+  const e = (await inboxFuer(u)).eintraege.find((x) => x.id === eintrag && x.art === 'entscheidung');
+  if (!e || !((e.daten.entscheidungen as any[]) ?? []).some((x) => String(x.id) === teil)) throw new HttpError(409, 'Diese Frage ist schon beantwortet oder hat sich geändert — Seite neu laden.');
+  send(res, 200, await teilAntworten(u, e, [{ id: teil, antwort, text }]));
+});
+/** „Alle offenen wie empfohlen beantworten“ (mit Sicherheitsabfrage in der Oberfläche): nur die gesehenen Fragen mit Empfehlung. */
+on('POST', /^\/api\/entscheidungen\/fragen\/alle$/, async (req, res) => {
+  const u = await needUser(req);
+  const b = await body(req, 64 * 1024);
+  const gesehen = new Set<string>((Array.isArray(b.ids) ? b.ids : []).map(String).slice(0, 200));
+  const ib = await inboxFuer(u);
+  const fragen = fragenAus(ib.eintraege).fragen.filter((f) => gesehen.has(f.id) && empfohlenBeantwortbar(f));
+  let ok = 0; const fehler: string[] = [];
+  const je = new Map<string, Frage[]>();
+  for (const f of fragen) je.set(f.eintrag, [...(je.get(f.eintrag) ?? []), f]);
+  for (const [eintrag, fs] of je) {
+    try {
+      if (fs[0].teil) await teilAntworten(u, ib.eintraege.find((x) => x.id === eintrag), fs.map((f) => ({ id: f.teil!, antwort: 'ja', text: '' })));
+      else await inboxAntworten(u, eintrag, { antwort: 'ja', weg: 'ui' });
+      ok += fs.length;
+    } catch (x: any) { fehler.push(`${fs.map((f) => f.kennung ?? f.titel.slice(0, 40)).join(', ')}: ${x?.message ?? x}`); }
+  }
+  send(res, 200, { ok, fehler });
+});
+const logCol = () => wb().collection('entscheidungs_log');
+async function logEntscheidung(u: User, e: any, antwort: string, durch: string, auto = false, ids: string[] = []) {
+  await logCol().insertOne(logZeile(u.id, e, { antwort, durch, auto, ids }) as any);
+}
+/** Normale Einträge, deren 24 h um sind: Empfehlung annehmen — an derselben Quelle wie eine Antwort von Knut, dann ins Log. */
+async function annahmeLauf(u: User, now = Date.now()): Promise<string[]> {
+  if (!autoAnnahmeAn()) return [];
+  // Abwesenheits-Bremse (Council-Bedingung 3, F4a): wer nicht da war, dem wird nichts automatisch angenommen.
+  if (bremseAn()) {
+    const fr = anwesenheitFrei(await anwesenheitCol().findOne({ _id: u.id as any }) as any, now, annahmeMs());
+    if (!fr.frei) return [];
+  }
+  const done: string[] = [];
+  for (const f of faellig((await inboxFuer(u, now)).eintraege, now)) {
+    const e = f.eintrag;
+    try {
+      if (e.art === 'rueckfrage') {
+        const opts = (e.daten.optionen as string[]) ?? [];
+        const rec = opts.find((o) => o === e.empfehlung) ?? opts.find((o) => String(e.empfehlung ?? '').startsWith(o)) ?? null;
+        await answerQuestion(u, String(e.daten.qid), { option: rec, text: `Nach 24 h ohne Antwort automatisch angenommen (Stufe normal): ${e.empfehlung}`, by: 'auto' });
+      } else {
+        if (u.role !== 'ADMIN') continue;
+        const d = await reviewStrand(u, String(e.daten.strand));
+        const sperre = String(d._id);
+        if (entscheidSperre.has(sperre)) continue;   // gerade antwortet Knut selbst — nächster Takt
+        entscheidSperre.add(sperre);
+        try { await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, auto: true, antworten: f.ids.map((id) => ({ id, art: 'akzeptiert' })) }); } finally { entscheidSperre.delete(sperre); }
+      }
+      await logEntscheidung(u, e, `angenommen wie empfohlen${f.ids.length && e.art === 'entscheidung' ? ` (${f.ids.join(', ')})` : ''}`, 'auto', true, f.ids);
+      done.push(e.id);
+    } catch (err: any) { log('annahme fehler', { user: u.id, id: e.id, error: String(err?.message ?? err).slice(0, 160) }); }
+  }
+  if (done.length) { zahlCache.delete(u.id); roadmapChanged('orchestrator-antwort'); log('automatisch angenommen', { user: u.id, ids: done }); }
+  return done;
+}
+async function annahmeTakt() {
+  const ids = new Set<string>([
+    ...((await wb().collection('orchestrator_questions').distinct('userId', { status: 'offen' })) as string[]),
+    ...((await orchRuns().distinct('userId', AUF_UEBERSICHT() as any)) as string[]),
+  ].map(String));
+  for (const id of ids) { const u = await userById(id).catch(() => null); if (u && allowed(u.email)) await annahmeLauf(u).catch(() => []); }
+}
+/** Wurde auf eine automatische Annahme schon gebaut? Unter-Chat beendet/weggeräumt oder ein Commit nach der Zustellung. */
+async function gebaut(u: User, z: any): Promise<boolean> {
+  if (!z.strand?.id) return false;
+  const d: any = await orchRuns().findOne({ _id: z.strand.id as any, userId: u.id });
+  if (!d) return false;
+  const seit = new Date(z.zugestelltAt ?? z.at).getTime();
+  if (d.endedAt || (d.reviewedAt && new Date(d.reviewedAt).getTime() > seit)) return true;
+  if (!d.cwd) return false;
+  return new Promise((resolve) => execFile('git', ['-C', String(d.cwd), 'log', `--since=@${Math.floor(seit / 1000)}`, '--format=%H', '-1'], { timeout: 5000 }, (err, out) => resolve(!err && String(out).trim().length > 0)));
+}
+const logOeffentlich = (z: any, w: { ok: boolean; grund: string | null }) => ({ id: String(z._id), kennung: z.kennung, art: z.art, ids: z.ids ?? [], frage: z.frage, empfehlung: z.empfehlung, stufe: z.stufe, grund: z.grund,
+  antwort: z.antwort, durch: z.auto ? 'auto' : 'knut', at: z.at, strand: z.strand ?? null, widerruf: z.widerruf ?? null, widerrufbar: w.ok, widerrufGrund: w.grund });
+on('GET', /^\/api\/entscheidungen$/, async (req, res, _m, url) => {
+  const u = await needUser(req);
+  const tage = Math.min(90, Math.max(1, Number(url.searchParams.get('tage') ?? 30) || 30));
+  const q: any = { userId: u.id, at: { $gte: new Date(Date.now() - tage * 86400_000) } };
+  const durch = url.searchParams.get('durch');
+  if (durch === 'auto') q.auto = true; else if (durch === 'knut') q.auto = false;
+  const st = url.searchParams.get('stufe');
+  if (st === 'wichtig' || st === 'normal') q.stufe = st;
+  const zeilen: any[] = await logCol().find(q).sort({ at: -1 }).limit(200).toArray();
+  const out = [];
+  for (const z of zeilen) out.push(logOeffentlich(z, widerrufbar(z, { gebaut: z.auto && !z.widerruf ? await gebaut(u, z) : false })));
+  send(res, 200, { zeilen: out, autoAnnahme: autoAnnahmeAn(), stunden: annahmeMs() / 3600_000 });
+});
+on('POST', /^\/api\/entscheidungen\/([\w:.-]{1,200})\/anders$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const text = String((await body(req)).text ?? '').trim().slice(0, 2000);
+  if (!text) throw new HttpError(400, 'Schreib kurz, was stattdessen gelten soll.');
+  const z: any = await logCol().findOne({ _id: m[1] as any, userId: u.id });
+  if (!z) throw new HttpError(404, 'Diesen Eintrag im Entscheidungs-Log gibt es nicht.');
+  const w = widerrufbar(z, { gebaut: await gebaut(u, z) });
+  if (!w.ok) throw new HttpError(409, w.grund!);
+  const msg = widerrufText(z, text);
+  // Erst beanspruchen (genau einer gewinnt, auch bei Doppelklick — Pass C), dann zustellen; scheitert die Zustellung,
+  // wird der Anspruch zurückgenommen (sonst stünde ein Widerruf im Log, den niemand bekommen hat).
+  if (z.art === 'rueckfrage' && !z.strand?.id && !(await activeLeitstand(u))) throw new HttpError(409, 'Kein Hauptchat aktiv — die Korrektur könnte niemand empfangen. Hauptchat starten und noch einmal.');
+  const r = await logCol().updateOne({ _id: z._id, widerruf: null }, { $set: { widerruf: { at: new Date(), text } } });
+  if (!r.modifiedCount) throw new HttpError(409, 'Schon widerrufen.');
+  try {
+    if (z.strand?.id) await sendOrch(u, String(z.strand.id), msg, 'hand');
+    if (z.art === 'rueckfrage' && !(await meldeLeitstand(u, { _id: z.kennung, title: z.frage }, msg)) && !z.strand?.id) throw new HttpError(409, 'Kein Hauptchat aktiv — die Korrektur könnte niemand empfangen. Hauptchat starten und noch einmal.');
+  } catch (e) { await logCol().updateOne({ _id: z._id }, { $set: { widerruf: null } }).catch(() => {}); throw e; }
+  log('annahme widerrufen', { user: u.id, id: z._id });
+  send(res, 200, { ok: true });
+});
+// Lauf sofort (statt im 10-min-Takt): nimmt nur eigene, schon fällige Einträge an — nichts früher als nach der Frist.
+on('POST', /^\/api\/entscheidungen\/lauf$/, async (req, res) => {
+  const u = await needUser(req);
+  send(res, 200, { angenommen: await annahmeLauf(u), an: autoAnnahmeAn() });
+});
+
+// --- Arbeit › Unter-Chats (Plan 213 S4a): Tabelle aus der einen Statusquelle, „Neuer Unter-Chat“ aus der Oberfläche ---
+on('GET', /^\/api\/arbeit\/unterchats$/, async (req, res, _m, url) => {
+  const u = await needAdmin(req);
+  const erledigt = url.searchParams.get('filter') === 'erledigt';
+  const filter = erledigt
+    ? { userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: { $gte: new Date(Date.now() - 14 * 86400_000) }, $or: [{ reviewedBy: 'auto' }, { knutReviewedAt: { $ne: null } }] }
+    : { userId: u.id, ...AUF_UEBERSICHT() };
+  const docs: any[] = await orchRuns().find(filter as any).sort({ startedAt: -1 }).limit(200).toArray();
+  const med = await etaMediane(u).catch(() => null);
+  const zeilen = arbeitSortiere(docs.filter((d) => erledigt || offenFuerKnut(d)).map((d) => arbeitZeile(d, { mediane: med })));
+  const offen = erledigt ? null : zeilen.length;
+  const erledigtN = erledigt ? zeilen.length : await orchRuns().countDocuments({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: { $gte: new Date(Date.now() - 14 * 86400_000) }, $or: [{ reviewedBy: 'auto' }, { knutReviewedAt: { $ne: null } }] } as any);
+  send(res, 200, { zeilen, offen, erledigt: erledigtN, zaehler: await zaehlerFuer(u), at: new Date() });
+});
+/** F7 (Knut 19.10.): Schätzung vor dem Start — eigene Läufe derselben Tiefe, Box-Stand (Heartbeat), Budget. Nie ein Fehler. */
+async function schaetzungFuer(u: User, o: { tiefe?: string | null; profil?: string | null; budget?: number | null }) {
+  try {
+    const med = (await laufMediane({ runs: orchRuns, zugLog: () => wb().collection('zug_log') }, u.id))[tiefeOf(o.tiefe)];
+    const hb: any = await wb().collection('meta').findOne({ _id: 'box_heartbeat' as any });
+    const box = hb && Date.now() - new Date(hb.at).getTime() < 5 * 60_000 && hb.echtGb != null ? { echtGb: hb.echtGb, hostFreiGb: hb.hostFreiGb } : null;
+    return startSchaetzung({ ...o, dauerMs: med.dauerMs, tokens: med.tokens, box });
+  } catch { return null; }
+}
+on('GET', /^\/api\/arbeit\/schaetzung$/, async (req, res, _m, url) => {
+  const u = await needAdmin(req);
+  send(res, 200, await schaetzungFuer(u, { tiefe: url.searchParams.get('tiefe'), profil: 'bauer' }));
+});
+on('GET', /^\/api\/arbeit\/start$/, async (req, res) => {
+  await needAdmin(req);
+  send(res, 200, { repos: arbeitRepos().map((r) => ({ name: r.name })), tiefen: ['quick', 'regular', 'deep'], dryRun: dryRun() });
+});
+on('POST', /^\/api\/arbeit\/start$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req, 64 * 1024);
+  let e;
+  try { e = startEingabe(b, { repos: arbeitRepos(), reviewDir: cfg.reviewDir }); } catch (x: any) { throw new HttpError(x.status ?? 400, x.message); }
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): hier startet kein Unter-Chat.');
+  const r = await startOrch(u, { title: e.title, prompt: e.prompt, cwd: e.cwd, code: e.code, tiefe: e.tiefe, lauf: null, aufrufer: 'workspace arbeit' });
+  log('unter-chat gestartet (workspace)', { user: u.id, id: (r as any).id, tiefe: e.tiefe });
+  zahlCache.delete(u.id);
+  send(res, 200, { ...(r as any), paket: e.paket, schaetzung: await schaetzungFuer(u, { tiefe: e.tiefe, profil: 'bauer' }) });
+});
+
+// --- Wissen › Ablage › Pakete (Plan 213 S5): Index der Review-Pakete aus den Bericht-Köpfen, Decks und Downloads direkt ---
+on('GET', /^\/api\/ablage\/pakete$/, async (req, res, _m, url) => {
+  await needAdmin(req);
+  const alle = paketIndex(cfg.reviewDir);
+  const status = String(url.searchParams.get('status') ?? '');
+  const q = String(url.searchParams.get('q') ?? '').trim().toLowerCase().slice(0, 80);
+  let zeilen = status ? alle.filter((z) => z.status === status) : alle.filter((z) => z.status !== 'archiv');
+  if (q) zeilen = zeilen.filter((z) => z.name.toLowerCase().includes(q) || z.titel.toLowerCase().includes(q));
+  send(res, 200, { zeilen: zeilen.slice(0, 300), zahlen: paketZahlen(alle), gesamt: alle.length });
+});
+
+// --- Arbeit › Reviews & PRs (Plan 213 S4b): PRs live (für dich zuerst), Review-Läufe, „Review starten“ in die Review-Schlange ---
+on('GET', /^\/api\/arbeit\/reviews$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const { map, sync } = await livePrs();
+  const reviews: any[] = await reviewsCol().find({ createdAt: { $gte: new Date(Date.now() - 30 * 86400_000) } }).sort({ createdAt: -1 }).limit(200).toArray();
+  const ich = [firstName(u), u.name, 'knut523', ...(process.env.WERKBANK_GITHUB_LOGIN ? [process.env.WERKBANK_GITHUB_LOGIN] : [])];
+  const meldungen: any[] = await tickerCol().find({}).sort({ at: -1 }).limit(15).toArray().catch(() => []);
+  send(res, 200, { prs: prZeilen([...map.values()], reviews, { ich }), laufend: reviews.filter((r) => ['wartet', 'startet', 'führt aus', 'läuft'].includes(r.status)).map((r) => ({ pr: `${r.repo}#${r.number}`, status: r.status, at: r.createdAt })),
+    meldungen: meldungen.map((e) => ({ pr: `${e.repo}#${e.number}`, art: e.kind ?? null, wer: e.actor ?? null, at: e.at, text: String(e.text ?? e.title ?? '').slice(0, 200) })),
+    stand: sync?.at ?? null, fehler: sync?.error ?? null, stufen: ['quick', 'deep'], deep: true, deepTests: execModus() });   // deep: live immer (statisch oder mit Tests nach reviewexec)
+});
+/** Review starten — dieselbe Logik für die Oberfläche und den Lead (Werkzeug pr_review_starten, Paket 217). */
+async function reviewStarten(u: User, prText: unknown, stufe: unknown) {
+  const pr = prAus(prText);
+  if (!pr) throw new HttpError(400, 'PR als „owner/repo#123“ oder GitHub-Link angeben.');
+  const deep = stufe === 'deep';
+  if (!reviewErlaubt(pr.repo)) throw new HttpError(403, `Für ${pr.repo} sind Reviews nicht freigegeben.`);
+  const live = (await livePrs()).map.get(`${pr.repo}#${pr.number}`);
+  if (!live) throw new HttpError(404, 'PR nicht in der Liste offener PRs (Abgleich mit GitHub abwarten oder „jetzt abrufen“).');
+  if (await reviewsCol().findOne({ repo: pr.repo, number: pr.number, status: { $in: ['wartet', 'startet', 'führt aus', 'läuft'] } })) throw new HttpError(409, 'Für diesen PR läuft schon ein Review.');
+  const id = `hand-${pr.repo.replace('/', '-')}-${pr.number}-${Date.now().toString(36)}`;
+  await reviewsCol().insertOne({ _id: id as any, repo: pr.repo, number: pr.number, title: live.title, url: live.url, head: null, trigger: 'hand', by: u.name, event: null, ownerId: u.id, status: 'wartet', createdAt: new Date(), day: vienna().date, ...(deep ? { deep: true } : {}) });
+  log('review gestartet (workspace)', { user: u.id, pr: `${pr.repo}#${pr.number}`, stufe: deep ? 'deep' : 'quick' });
+  return { ok: true, id, pr: `${pr.repo}#${pr.number}`, stufe: deep ? 'deep' : 'quick', hinweis: 'In der Review-Schlange — startet mit dem nächsten Takt (Deckel je Tag und gleichzeitig gelten).' };
+}
+on('POST', /^\/api\/arbeit\/reviews\/start$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  send(res, 200, await reviewStarten(u, b.pr, b.stufe));
+});
+
+on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/zurueckholen$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  if (!(await zurueckholen(u.id, m[1]))) throw new HttpError(409, 'Nur automatisch weggeräumte Unter-Chats lassen sich zurückholen.');
+  log('strang zurückgeholt', { user: u.id, id: m[1] });
+  send(res, 200, { ok: true });
+});
 
 async function ownRun(u: User, id: string) {
   const run: any = await wb().collection('agent_runs').findOne({ _id: id as any });
@@ -1474,7 +1963,8 @@ async function prReviewOf(strand: string) {
   if (!r) return null;
   const k = parseKommentar(readBerichtDatei(join(reviewDir(), r.paket ?? '_', 'kommentar.md')));
   return { id: r._id, repo: r.repo, number: r.number, title: r.title, url: r.url, head: r.head, status: r.status, empfehlung: k?.empfehlung ?? r.empfehlung ?? null,
-    text: k?.text ?? null, posted: r.posted ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus() };
+    text: k?.text ?? null, hash: k ? entwurfHash(k.text) : null, vollstaendig: r.entwurf?.vollstaendig ?? null, statistik: r.entwurf?.statistik ?? null, gedaechtnis: r.gedaechtnis ?? null,
+    posted: r.posted ?? null, verworfen: r.verworfen ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus() };
 }
 on('GET', /^\/api\/leitstand\/ticker$/, async (req, res) => { await needAdmin(req); send(res, 200, await tickerOverview()); });
 // Review-Log (Knut 17.10.): je Review eine Zeile, neueste oben; Filter Person/Repo/Status. Nur lesen.
@@ -1501,7 +1991,8 @@ on('POST', /^\/api\/leitstand\/ticker\/review$/, async (req, res) => {
   if (!reviewErlaubt(String(b.id ?? '').split('#')[0])) throw new HttpError(409, 'Für dieses Repo gibt es kein Auto-Review (WERKBANK_PR_REVIEW_ORGS).');
   // 17c: auch ein erneut eingereihtes (wartet mit retryAt) sofort; neuer Anlauf ohne alte Gegenprüfung und Versuchszähler.
   const r = await reviewsCol().updateOne({ _id: String(b.id ?? '') as any, $or: [{ status: { $in: ['deckel', 'fehler', 'übersprungen', 'startet'] } }, { status: 'wartet', retryAt: { $ne: null } }] },
-    { $set: { status: 'wartet', note: `von ${u.name} erneut angestoßen`, ownerId: u.id, retryAt: null, versuche: 0 }, $unset: { gp: '', gpStart: '' } });
+    // Paket 223 (Pass C): neuer Anlauf = frische Zähler und Meldungen, Wache-Uhr ab jetzt.
+    { $set: { status: 'wartet', note: `von ${u.name} erneut angestoßen`, ownerId: u.id, retryAt: null, versuche: 0, queuedAt: new Date() }, $unset: { gp: '', gpStart: '', nb: '', wache: '', abschlussGemeldet: '', gpNeustarts: '', verworfen: '', ohnePost: '', etaZusage: '', posting: '' } });
   if (!r.modifiedCount) throw new HttpError(409, 'Eintrag nicht gefunden oder läuft schon.');
   send(res, 200, { ok: true });
 });
@@ -1515,7 +2006,13 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/github$/, async (req, res, m) => {
   const b = await body(req);
   const event = String(b.event ?? '') as ReviewEvent;
   if (!['COMMENT', 'APPROVE', 'REQUEST_CHANGES'].includes(event)) throw new HttpError(400, 'Art: COMMENT, APPROVE oder REQUEST_CHANGES.');
-  if (String(b.text ?? '') !== pr.text) throw new HttpError(409, 'Der Entwurf hat sich geändert — Seite neu laden.');
+  // #11: gebunden an den gespeicherten Entwurf über seinen Hash; `incomplete` nur mit Hinweis von Hand.
+  const roh: any = await reviewsCol().findOne({ _id: pr.id as any });
+  const hinweis = String(b.hinweis ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
+  const darf = postenErlaubt({ hashGespeichert: roh?.entwurf?.hash ?? null, hashJetzt: entwurfHash(pr.text), hashGesehen: String(b.hash ?? (String(b.text ?? '') === pr.text ? entwurfHash(pr.text) : '')), vollstaendig: roh?.entwurf?.vollstaendig ?? null, auto: false, hinweis });
+  if (!darf.ok) throw new HttpError(409, darf.grund!);
+  if (event === 'APPROVE' && roh?.entwurf?.vollstaendig === false) throw new HttpError(409, 'Review unvollständig — kein Approve; Kommentar mit Hinweis geht.');
+  const vorspann = roh?.entwurf?.vollstaendig === false ? `> **Note:** ${hinweis}\n\n` : '';
   const token = await githubReadToken();
   const now = token ? await prNowVia(token, pr.repo, pr.number).catch(() => null) : null;
   if (!now) throw new HttpError(502, 'PR-Stand nicht lesbar (Lesetoken).');
@@ -1523,16 +2020,38 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/github$/, async (req, res, m) => {
   if (now.head !== pr.head) throw new HttpError(409, `Neuer Stand ${now.head.slice(0, 7)} seit dem Review — erst neu reviewen.`);
   if (event === 'COMMENT' && pr.posted) throw new HttpError(409, 'Der Kommentar ist schon gepostet.');
   if (event !== 'COMMENT' && (pr.postings ?? []).some((x: any) => x.event === event)) throw new HttpError(409, 'Für diesen Stand schon abgeschickt.');
-  const r = await postReview(pr, pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automated review', 'Review'), event).catch((e: any) => { throw new HttpError(502, e.message); });
-  await reviewsCol().updateOne({ _id: pr.id as any }, { $push: { postings: { at: new Date(), url: r.url, event, by: u.name } } as any, ...(event === 'COMMENT' && !pr.posted ? { $set: { posted: { at: new Date(), url: r.url, event, by: u.name } } } : {}) });
+  // Paket 223 (Pass C): COMMENT nur mit Anspruch — postet der Takt gerade automatisch, gibt es keinen zweiten Kommentar.
+  if (event === 'COMMENT') {
+    const c = await reviewsCol().updateOne({ _id: pr.id as any, posted: { $in: [null] }, $or: [{ posting: { $in: [null] } }, { posting: { $lt: new Date(Date.now() - POSTEN_MIN * 60_000) } }] }, { $set: { posting: new Date() } });
+    if (!c.modifiedCount) throw new HttpError(409, 'Der Kommentar wird gerade gepostet oder ist schon gepostet — Seite neu laden.');
+  }
+  const r = await postReview(pr, vorspann + pr.text + fussnote(pr.head, pr.empfehlung ?? '–').replace('Automated review', 'Review'), event).catch(async (e: any) => {
+    if (event === 'COMMENT') await reviewsCol().updateOne({ _id: pr.id as any }, { $unset: { posting: '' } });
+    throw new HttpError(502, e.message);
+  });
+  await reviewsCol().updateOne({ _id: pr.id as any }, { $push: { postings: { at: new Date(), url: r.url, event, by: u.name } } as any, ...(event === 'COMMENT' && !pr.posted ? { $set: { posted: { at: new Date(), url: r.url, event, by: u.name } }, $unset: { verworfen: '', posting: '' } } : {}) });   // nach „Verwerfen“ doch gepostet: Knuts letzte Entscheidung gilt
   log('pr-review github', { user: u.id, pr: `${pr.repo}#${pr.number}`, event });
   send(res, 200, { ok: true, url: r.url });
+});
+// Paket 223: Entwurf bewusst nicht posten — die Wache meldet ihn dann nicht mehr.
+on('POST', /^\/api\/review\/([\w-]{1,40})\/verwerfen$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const d = await reviewStrand(u, m[1]);
+  const pr = await prReviewOf(String(d._id));
+  if (!pr) throw new HttpError(404, 'Kein Auto-Review zu diesem Unter-Chat.');
+  if (pr.posted) throw new HttpError(409, 'Der Kommentar ist schon gepostet.');
+  // Pass C: nur wer den Eintrag wirklich umschaltet, meldet Erfolg (gleichzeitig gepostet → 409).
+  const vw = await reviewsCol().updateOne({ _id: pr.id as any, posted: { $in: [null] }, $or: [{ posting: { $in: [null] } }, { posting: { $lt: new Date(Date.now() - POSTEN_MIN * 60_000) } }] }, { $set: { verworfen: { at: new Date(), by: u.name }, note: `von ${u.name} verworfen (nicht gepostet)` } });
+  if (!vw.matchedCount) throw new HttpError(409, 'Der Kommentar ist inzwischen gepostet oder wird gerade gepostet.');
+  log('pr-review verworfen', { user: u.id, pr: `${pr.repo}#${pr.number}` });
+  send(res, 200, { ok: true });
 });
 on('POST', /^\/api\/review\/([\w-]{1,40})\/freigabe$/, async (req, res, m) => {
   const u = await needAdmin(req);
   const d = await reviewStrand(u, m[1]);
   const b = await body(req);
   const f = await freigeben(u, d, { head: b.head, patchId: b.patchId ?? null }, undefined, log);
+  antwortGezaehlt('push', 'ui');
   await hinweisFreigabe(u, f, d).catch(() => {});
   send(res, 200, f);
 });
@@ -1552,10 +2071,13 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/entscheidungen$/, async (req, res, m)
   const sperre = String(d._id);
   if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — Seite neu laden und noch einmal.');
   entscheidSperre.add(sperre);
-  try { await entscheidungenEintragen(u, d, b, res); } finally { entscheidSperre.delete(sperre); }
+  try { send(res, 200, await entscheidungenEintragen(u, d, { ...b, auto: false })); } finally { entscheidSperre.delete(sperre); }
 });
 const entscheidSperre = new Set<string>();
-async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
+async function entscheidungenEintragen(u: User, d: any, b: any): Promise<Record<string, unknown>> {
+  // Trockenlauf (Testinstanz, Vorschau): nie in einen Bericht schreiben und keinen Strang wecken — die Review-Pakete sind echt
+  // (19.10.: eine Sichtprüfung hat sonst eine Testantwort in einen echten Bericht geschrieben).
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Antworten werden nicht in den Bericht eingetragen.');
   // Teil C (H3): läuft der Unter-Chat, reicht sendOrch die Antwort nach — kein 409 mehr.
   const { paketDatei } = await import('./bericht.ts');
   const pfad = paketDatei(d, 'bericht');
@@ -1571,7 +2093,7 @@ async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
     // Plan 184, Teil B: „abgelehnt“ = Nein auf der Übersicht (die Empfehlung gilt nicht).
     const art = a?.art === 'akzeptiert' || a?.art === 'nachpruefen' || a?.art === 'abgelehnt' ? a.art : 'eigene';
     const frei = String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000);
-    const t = art === 'akzeptiert' ? (e?.empfehlung ? `akzeptiert (Empfehlung: ${e.empfehlung.slice(0, 200)})` : 'ja') : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}`
+    const t = art === 'akzeptiert' ? (e?.empfehlung ? `${b.auto ? 'nach 24 h automatisch angenommen (Stufe normal)' : 'akzeptiert'} (Empfehlung: ${e.empfehlung.slice(0, 200)})` : 'ja') : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}`
       : art === 'abgelehnt' ? `nein — Empfehlung abgelehnt${e?.empfehlung ? ` (${e.empfehlung.slice(0, 200)})` : ''}${frei ? `: ${frei}` : ''}` : frei;
     return { id, art, text: t };
   }).filter((a: any) => a.text && bekannt.has(a.id) && !bekannt.get(a.id)!.knut);
@@ -1583,11 +2105,12 @@ async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
   // als `antwort:` ein; lässt sich der Kopf nicht sicher ändern, geht es wie bisher nur an den Strang.
   const kopfNeu = d.lastStatus === 'running' || !imKopf.length ? null : kopfAntwortEintragen(text, imKopf);
   if (d.lastStatus === 'running' || (imKopf.length && !kopfNeu)) {
-    const msg = `Nacharbeit nach Review: Entscheidungen von Knut — bitte in den Bericht eintragen (Kopf: \`antwort:\` der Frage; Text: Zeile „- Knut:“) und danach weiterarbeiten.\n${antworten.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}`;
+    const msg = `Nacharbeit nach Review: ${b.auto ? 'nach 24 h automatisch angenommene Empfehlungen (Stufe normal)' : 'Entscheidungen von Knut'} — bitte in den Bericht eintragen (Kopf: \`antwort:\` der Frage; Text: Zeile „- Knut:“) und danach weiterarbeiten.\n${[...((d.entscheidungenSammel as any[]) ?? []), ...antworten].map((a: any) => `- ${a.id} (${bekannt.get(a.id)?.titel ?? ''}): ${a.text}`).join('\n')}`;
     await sendOrch(u, String(d._id), msg, 'hand');
-    await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten, ids } } });
+    await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: b.berichtHash, antworten, ids }, entscheidungenSammel: null } });
     log('review entscheidungen (an Strang)', { user: u.id, id: d._id, n: antworten.length });
-    return send(res, 200, { ok: true, gesendet: antworten.length, weiter: true, offen: null, hauptchat: false });
+    antwortGezaehlt('entscheidung', 'ui');
+    return { ok: true, gesendet: antworten.length, weiter: true, offen: null, hauptchat: false };
   }
   // Eine Wahrheit: die Antworten stehen im Bericht („- Knut: …“). Der Server trägt sie ein (Pfad nur unter den Review-Paketen).
   const real = (() => { try { return realpathSync(String(pfad)); } catch { return ''; } })();
@@ -1595,9 +2118,14 @@ async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
   const datum = new Intl.DateTimeFormat('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' }).format(new Date());
   const neu = trageEin(kopfNeu ?? text, antworten.filter((a: any) => !bekannt.get(a.id)!.kopf), datum);
   const offen = [...leseEntscheidungen(neu).filter((e) => !e.knut), ...(() => { const k = berichtKopf(neu); return k && 'status' in k ? k.fragen.filter((f) => !f.antwort && !leseEntscheidungen(neu).some((e) => e.id === f.id)) : []; })()];
-  const arbeit = antworten.filter((a: any) => a.art !== 'akzeptiert');
+  // Entscheidungsseite (Knuts Muster, 19.10.): Fragen einzeln beantworten; der Unter-Chat arbeitet erst weiter, wenn alle seine
+  // Fragen beantwortet sind — dann mit allen gesammelten Antworten in einer Nachricht.
+  // Gesammeltes gilt auch, wenn die letzte Antwort auf anderem Weg kommt (Heute, Chat-Knopf) — sonst ginge eine Abweichung,
+  // die schon im Bericht steht, in der Nachricht an den Unter-Chat verloren (Pass C).
+  const sammel = [...((d.entscheidungenSammel as any[]) ?? []), ...antworten];
+  const arbeit = sammel.filter((a: any) => a.art !== 'akzeptiert');
   // Übersicht (Plan 184, Teil B): mit `weiter` arbeitet der Unter-Chat in jedem Fall mit den Antworten weiter; Kopf-Fragen auch.
-  const fortsetzen = arbeit.length > 0 || imKopf.length > 0 || b.weiter === true;
+  const fortsetzen = b.sammeln === true ? offen.length === 0 : arbeit.length > 0 || imKopf.length > 0 || b.weiter === true;
   let weiter = false;
   // Erst eintragen, dann den Strang wecken (Pass C, Teil B: sonst liest er den Bericht ohne die Antworten). Atomar über eine
   // Nachbardatei; scheitert die Nachricht an den Strang, kommt der alte Stand zurück (Knut kann neu senden).
@@ -1605,18 +2133,19 @@ async function entscheidungenEintragen(u: User, d: any, b: any, res: any) {
   schreibe(neu);
   if (fortsetzen) {
     // Abweichung, Nachprüfen oder Fortsetzen gewünscht → der Strang arbeitet weiter (sendOrch startet den Zug).
-    const rest = antworten.filter((a: any) => a.art === 'akzeptiert');
+    const rest = sammel.filter((a: any) => a.art === 'akzeptiert');
     const msg = arbeit.length
-      ? `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)!.titel}): ${a.text}`).join('\n')}${rest.length ? `\nAkzeptiert (wie empfohlen): ${rest.map((a: any) => a.id).join(', ')}` : ''}`
-      : `Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“): ${rest.map((a: any) => `${a.id} wie empfohlen`).join(', ')}. Mach damit weiter${offen.length ? ` (noch offen: ${offen.map((e: any) => e.id).join(', ')})` : ''} und aktualisiere danach den Bericht.`;
+      ? `Nacharbeit nach Review: Knut hat entschieden (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“). Setz die Abweichungen um bzw. prüf nach und aktualisiere danach den Bericht:\n${arbeit.map((a: any) => `- ${a.id} (${bekannt.get(a.id)?.titel ?? ""}): ${a.text}`).join('\n')}${rest.length ? `\nAkzeptiert (wie empfohlen): ${rest.map((a: any) => a.id).join(', ')}` : ''}`
+      : `${b.auto ? 'Nach 24 h ohne Antwort automatisch angenommen (Stufe normal; Knut kann das mit „Anders“ noch widerrufen, solange nichts darauf gebaut ist)' : 'Knut hat entschieden'} (schon im Bericht eingetragen: Kopf \`antwort:\` bzw. Zeile „- Knut:“): ${rest.map((a: any) => `${a.id} wie empfohlen`).join(', ')}. Mach damit weiter${offen.length ? ` (noch offen: ${offen.map((e: any) => e.id).join(', ')})` : ''} und aktualisiere danach den Bericht.`;
     try { await sendOrch(u, String(d._id), msg, 'hand'); } catch (e) { schreibe(text); throw e; }
     weiter = true;
   }
   let hauptchat = false;
   if (!fortsetzen && !offen.length) hauptchat = await meldeLeitstand(u, d, 'alle Entscheidungen beantwortet (Empfehlungen übernommen) — fertig, nichts mehr zu tun');
-  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten, ids }, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
+  await orchRuns().updateOne({ _id: d._id }, { $set: { entscheidungenAntwort: { at: new Date(), berichtHash: berichtHash(neu), antworten, ids }, entscheidungenSammel: fortsetzen ? null : sammel, ...(!offen.length && !weiter ? { entscheidungenErledigtAt: new Date() } : {}) } });
   log('review entscheidungen', { user: u.id, id: d._id, n: antworten.length, arbeit: arbeit.length, offen: offen.length });
-  send(res, 200, { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat });
+  antwortGezaehlt('entscheidung', 'ui');
+  return { ok: true, gesendet: antworten.length, weiter, offen: offen.length, hauptchat };
 }
 // Teil C (H5): tote Vorschau aus dem Bericht-Kopf → kurze Nachricht an den Unter-Chat (nur ein bekannter, als tot geprüfter Link).
 on('POST', /^\/api\/review\/([\w-]{1,40})\/vorschau-tot$/, async (req, res, m) => {
@@ -1659,6 +2188,8 @@ on('GET', /^\/api\/leitstand\/bericht$/, async (req, res, _m, url) => {
   const path = paketDatei(d, art);
   const text = readBericht(path);
   if (text === null) throw new HttpError(404, art === 'auftrag' ? 'Kein lesbarer Auftrag zu diesem Unter-Chat.' : 'Kein lesbarer Bericht zu diesem Unter-Chat.');
+  // Plan 213 S1b (K1): Knut hat den Bericht gesehen — Voraussetzung fürs automatische Wegräumen.
+  if (art === 'bericht') await orchRuns().updateOne({ _id: d._id }, { $set: { gesehenAt: new Date() } }).catch(() => {});
   // Plan 157, B: Entscheidungen auch auf der Berichtsseite beantworten. Teil C (C3/C.7): formatiert + Exec Summary.
   const name = String(path).split('/').slice(-2).join('/');
   const fg: any = art === 'bericht' ? await freigaben().findOne({ strand: String(d._id), pr: { $type: 'string' } }, { sort: { at: -1 } }) : null;
@@ -1708,6 +2239,7 @@ on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (r
   if (m[2] === 'passt') {
     await reviewOrch(u, m[1], String(b.note ?? 'Passt (Heute)'), 'knut', expectOf(d));
     log('strang geprüft', { user: u.id, id: m[1] });
+    antwortGezaehlt('abhaken', 'ui');
     return send(res, 200, { ok: true });
   }
   if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
@@ -1716,6 +2248,7 @@ on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/(passt|reply)$/, async (r
   if ((b.kind !== 'nacharbeit' && b.kind !== 'antwort') || !text) throw new HttpError(400, b.kind === 'antwort' ? 'Schreib kurz deine Antwort.' : 'Schreib kurz, was nachzuarbeiten ist.');
   await sendOrch(u, m[1], replyText(b.kind, text));
   log(b.kind === 'antwort' ? 'strang antwort' : 'strang nacharbeit', { user: u.id, id: m[1] });
+  antwortGezaehlt(b.kind === 'antwort' ? 'braucht' : 'nacharbeit', 'ui');
   send(res, 200, { ok: true, url: d.url });
 });
 
@@ -1762,6 +2295,7 @@ on('POST', /^\/api\/orchestrator\/questions\/([\w-]{1,20})\/answer$/, async (req
   const b = await body(req);
   const q = await answerQuestion(u, m[1], { option: b.option ?? null, text: b.text ?? null });
   log('rückfrage beantwortet', { user: u.id, id: q.id });
+  antwortGezaehlt('rueckfrage', 'ui');
   roadmapChanged('orchestrator-antwort');
   send(res, 200, q);
 });
@@ -2608,11 +3142,14 @@ on('GET', /^\/api\/files\/agenten$/, async (req, res) => {
 });
 
 on('GET', /^\/api\/files\/agenten\/(\d{1,4}-[a-z0-9][a-z0-9-]*)\/(.+)$/, async (req, res, m, url) => {
-  await needAdmin(req);
+  const gu = await needAdmin(req);
   let rel = '';
   try { rel = m[2].split('/').map(decodeURIComponent).join('/'); } catch { throw new HttpError(400, 'Ungültiger Pfad.'); }
   const abs = paketFile(cfg.reviewDir, m[1], rel);
   if (!abs) throw new HttpError(404, 'Datei nicht gefunden.');
+  // Plan 213 S1b (K1): Bericht in der Schublade geöffnet = gesehen (alle Unter-Chats dieses Pakets).
+  // Nur die Vorschau der Schublade (?vorschau=1) zählt — kein Herunterladen, kein Vorladen (Pass C).
+  if (rel === 'bericht.md' && url.searchParams.get('vorschau') === '1') await orchRuns().updateMany({ userId: gu.id, paket: m[1] }, { $set: { gesehenAt: new Date() } }).catch(() => {});
   const ext = extname(abs).toLowerCase();
   const name = rel.split('/').pop()!;
   if (url.searchParams.get('vorschau') === '1') {
@@ -2712,6 +3249,7 @@ on('POST', /^\/api\/hygiene\/([A-Z][A-Z0-9]+-\d+)\/snooze$/, async (req, res, m)
 on('POST', /^\/api\/hygiene\/([A-Z][A-Z0-9]+-\d+)\/answer$/, async (req, res, m) => {
   const u = await needUser(req);
   const b = await body(req);
+  if (b.confirm === true) antwortGezaehlt('pflege', 'ui');
   if (b.confirm !== true) {
     const p = await proposeFromAnswer(u, m[1], String(b.text ?? ''));
     if (p.snooze) { await snoozeItem(u, m[1]); return send(res, 200, { snoozed: true }); }
@@ -2757,6 +3295,12 @@ cosRoutes({
     const th = (await orchRuns().distinct('thema')).map(String).filter(Boolean);
     return [...new Set([...ws, ...th, ...THEMEN.map((t) => t.thema)])];
   },
+  registerVorschlag: async (u) => {
+    const alle = (await wb().collection('jira_issues').find({}, { projection: { _id: 0, key: 1, summary: 1, status: 1, statusCategory: 1, assignee: 1, duedate: 1, updated: 1, workstream: 1, type: 1 } }).toArray()) as any[];
+    const wsNamen = Object.fromEntries(alle.filter((x) => x.type === 'Workstream').map((x) => [x.key, String(x.summary ?? x.key)]));
+    const karten = (await uebersichtDaten(u)).karten.map((k: any) => ({ id: k.id, titel: k.titel, thema: k.thema, braucht: k.braucht ?? null, entscheidungen: k.entscheidungen ?? [] })) as any[];
+    return themenAusStand(alle.filter((x) => x.type !== 'Workstream'), wsNamen, karten, wienDatum());
+  },
 });
 
 // --- intern: nur für die Brücke und ihre Werkzeuge (Header mit WERKBANK_INTERNAL_TOKEN) ---
@@ -2787,7 +3331,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
     case 'start': {
       const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null, budget: b.budget || null });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null, tiefe: r.tiefe });
-      return send(res, 200, r);
+      return send(res, 200, { ...r, schaetzung: await schaetzungFuer(u, { tiefe: r.tiefe, profil: b.profil || null, budget: Number(b.budget) || null }) });
     }
     case 'nachtbau': {
       // Nachtbau (docs/plan-vorbau-check.md): je Item G0; Treffer → blocked_g0, nicht prüfbar → ein Morgeneintrag.
@@ -2844,7 +3388,7 @@ on('POST', /^\/internal\/orchestrator\/questions\/(ask|list|get|withdraw)$/, asy
   const u = await orchPerson(req, b);
   switch (m[1]) {
     case 'ask': {
-      const q = await askKnut(u, { title: b.title, context: b.context, options: b.options, recommendation: b.recommendation, strand: b.strand || null, link: b.link || null, plan: b.plan || null, key: b.key || null, quelle: b.quelle || null });
+      const q = await askKnut(u, { title: b.title, context: b.context, options: b.options, recommendation: b.recommendation, strand: b.strand || null, link: b.link || null, plan: b.plan || null, key: b.key || null, quelle: b.quelle || null, stufe: b.stufe === 'wichtig' || b.stufe === 'normal' ? b.stufe : null });
       log('rückfrage an knut', { user: u.id, id: q.id, key: q.key });
       roadmapChanged('orchestrator-frage');
       return send(res, 200, q);
@@ -2861,6 +3405,43 @@ on('POST', /^\/internal\/session-start$/, async (req, res) => {
   const r = await sessionStart(u, String(b.conv ?? ''), { eod: b.eod === true, skills: b.skills });
   log('kontext', { user: u.id, tokens: r.tokens, cached: r.cached, slot: r.slot, questions: r.questions.length });
   send(res, 200, r);
+});
+
+// Lead-Lücken aus Paket 217 (Knut 19.10.): PR-Review aus dem Lead starten, privates GitHub nur lesen (Lesetoken des Servers).
+on('POST', /^\/internal\/lead\/pr-review$/, async (req, res) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  send(res, 200, await reviewStarten(u, b.pr, b.stufe));
+});
+on('POST', /^\/internal\/lead\/github$/, async (req, res) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  const p = githubLesePfad(String(b.pfad ?? ''));
+  if ('fehler' in p) throw new HttpError(400, p.fehler);
+  if (!reviewErlaubt(p.repo)) throw new HttpError(403, `${p.repo} ist nicht freigegeben (WERKBANK_PR_REVIEW_ORGS).`);
+  const token = await githubReadToken();
+  if (!token) throw new HttpError(503, 'Kein GitHub-Lesetoken hinterlegt.');
+  const r = await fetch(`https://api.github.com/${p.pfad}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(20_000) });
+  const text = await r.text();
+  log('lead github lesen', { user: u.id, repo: p.repo, status: r.status });
+  send(res, 200, { status: r.status, text: githubLeseText(text) });
+});
+
+// Inbox für das Werkbank-Werkzeug `inbox` (Plan 213 K4) — die Brücke baut daraus die Chat-Knöpfe.
+on('POST', /^\/internal\/inbox$/, async (req, res) => {
+  const u = await internalUser(req, await body(req));
+  const r = await inboxFuer(u);
+  send(res, 200, { eintraege: r.eintraege.map((e) => ({ id: e.id, art: e.art, frage: e.frage, empfehlung: e.empfehlung, quelle: { text: e.quelle.text }, antworten: e.antworten, mehrere: e.art === 'entscheidung' && ((e.daten.entscheidungen as any[])?.length ?? 0) > 1, stufe: e.stufe ?? null, autoAb: e.autoAb ?? null })) });
+});
+// Ein-Klick im Chat zu Ende gedacht: der Lead trägt „Anders …“ (und Ja/Nein) mit der Kennung ein — nie aus geratenem Freitext.
+on('POST', /^\/internal\/inbox\/antwort$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const id = String(b.kennung ?? '');
+  if (!KENNUNG_RE.test(id)) throw new HttpError(400, 'Unbekannte Kennung.');
+  send(res, 200, await inboxAntworten(u, id, { antwort: b.antwort, text: b.text, weg: 'hauptchat' }));
 });
 
 // Claude-Konten der Person für die Brücke (Klartext nur über diesen Kanal; chat = Schlüssel aus der Anfrage).
@@ -2893,6 +3474,7 @@ on('POST', /^\/internal\/zug-log$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
   await recordZug(u, b.zug);
+  if (b.zug?.art === 'hauptchat') merkeDa(anwesenheitCol(), u.id, annahmeMs()).catch(() => {});   // eigener Chat-Zug = da
   send(res, 200, { ok: true });
 });
 on('POST', /^\/internal\/delegation-log$/, async (req, res) => {
@@ -3174,6 +3756,14 @@ async function backgroundJobs() {
           return meliousPassC(u, { wt: r.worktree, basis, zweck: `Review ${r.repo}#${r.number}: ${r.title ?? ''}${r.delta ? ' (nur Änderungen seit dem letzten Review)' : ''}` });
         },
         sendStrand: async (r, text) => { const u = await userById(r.ownerId); if (!u) throw new Error('Besitzer nicht gefunden'); return sendOrch(u, r.strand, text, 'leitstand'); },
+        // Paket 223: nicht gepostet / Wache / Ticker-Lücke → Hauptchat des Auto-Review-Besitzers, mit Link zum Handeln.
+        melde: async (r, text) => {
+          const owner = r?.ownerId ?? (await tickerSettings()).ownerId;
+          const u = owner ? await userById(owner) : null;
+          if (!u) return false;
+          const wo = r?.strand && r.status === 'fertig' ? `Review-Ansicht: ${cfg.publicUrl}/#/leitstand?review=${r.strand} („Kommentar posten“ oder „Verwerfen“)` : r?.strand ? `Review-Ansicht: ${cfg.publicUrl}/#/leitstand?review=${r.strand} · Ticker: ${cfg.publicUrl}/#/roadmap/prs („Jetzt reviewen“)` : `Ticker: ${cfg.publicUrl}/#/roadmap/prs${r ? ' („Jetzt reviewen“)' : ''}`;
+          return meldeLeitstand(u, { _id: r ? `pr-review:${r._id}` : 'pr-ticker', title: r ? `PR-Review ${String(r.repo).split('/')[1]}#${r.number}` : 'PR-Ticker' }, `${text} → ${wo}`);
+        },
         post: (r, text, event) => postReview(r, text, event),
         // Statuszeile am PR (queued → running → done …), englisch; WERKBANK_REVIEW_STATUS=off schaltet ab.
         status: (r, text, id) => statusKommentar(r, text, id),
@@ -3181,6 +3771,20 @@ async function backgroundJobs() {
         // docker-remote/managed-agents gibt es noch nicht: execErlaubt liefert dort „statisch“, ausgeführt wird nichts.
         exec: execModus() === 'off' ? undefined : (job) => lokalAdapter({ git: async (args, cwd) => String(await realGit(args, cwd)), log: (m) => log('pr-review exec', { m }) }).lauf(job),
         log,
+        // #14 PR-Gedächtnis: eine API-Seite je Repo und Tag (Lesetoken), Index in Mongo.
+        gedaechtnis: (repo) => gedaechtnisIndex(repo, {
+          holen: async (url) => {
+            const t = await githubReadToken();
+            if (!t) throw new Error('kein Lesetoken');
+            const r = await fetch(url, { headers: { authorization: `Bearer ${t}`, accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15_000) });
+            if (!r.ok) throw new Error(`GitHub ${r.status}`);
+            return r.json();
+          },
+          cache: {
+            lese: async (repo) => (await wb().collection('pr_gedaechtnis').findOne({ _id: repo as any })) as any,
+            schreibe: async (repo, kommentare) => { await wb().collection('pr_gedaechtnis').updateOne({ _id: repo as any }, { $set: { at: new Date(), kommentare } }, { upsert: true }); },
+          },
+        }),
       });
       if (r.started || r.done) log('pr-review', r);
     } catch (e: any) { log('pr-review', { error: String(e.message).slice(0, 200) }); }
@@ -3308,6 +3912,13 @@ const orchDeps = {
 startAutoWeiter(orchDeps);
 // Stand je Strang festschreiben (Teil B, G1) — unabhängig vom Auto-Fortsetzen; ORCH_STATUS=off schaltet ab.
 startStatusTick(orchDeps);
+// Plan 213 S1b (K1, P3): fertige, gesehene Unter-Chats nach 24 h wegräumen — nur mit WERKBANK_AUTO_SCHLIESSEN=1 (mit der Inbox).
+if (process.env.ORCH_STATUS !== 'off') setInterval(() => {
+  autoSchliessen().then((w) => { if (w.length) log('automatisch weggeräumt', { n: w.length, ids: w.map((x) => x.id) }); }).catch((e) => log('wegräumen fehler', { error: String(e?.message ?? e).slice(0, 160) }));
+  // Knut 17.10.: normale Entscheidungen nach 24 h annehmen (WERKBANK_AUTO_ANNAHME=0 schaltet ab).
+  annahmeTakt().catch((e) => log('annahme fehler', { error: String(e?.message ?? e).slice(0, 160) }));
+}, 10 * 60_000).unref();
 // Leitstand wecken (Plan 132, S2): eigener Durchgang im selben Takt; LEITSTAND_WAKE=off schaltet ab.
 startLeitstandTick(orchDeps);
-for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { server.close(); process.exit(0); });
+// Beim Beenden die gesammelten Nutzungszahlen noch schreiben (Plan 213 S0, Pass C: sonst gehen die letzten ≤ 60 s verloren).
+for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { server.close(); nutzungSchreiben().catch(() => {}).finally(() => process.exit(0)); });

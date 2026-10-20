@@ -12,13 +12,16 @@ import { execFileSync, spawn } from 'node:child_process';
 import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
-import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ANSWER_MARK, neutralizeAnswerAnchors } from './tools.ts';
+import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
+import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet } from './schlange.ts';
+import { schaetze, passt, schaetzungText, speicherStand, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
+import { auslastung, auslastungZeile } from './auslastung.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 
 export interface Sink {
@@ -62,6 +65,12 @@ interface Live {
   onSkill?: (name: string) => void;
   // Schreibende Atlassian-Aufrufe dieses Zuges (tool_use_id → Werkzeug/Argumente), bis ihr Ergebnis kommt.
   jiraCalls: Map<string, { name: string; input: Record<string, unknown> }>;
+  /** Aufrufe des Inbox-Werkzeugs (Plan 213 K4): an ihr Ergebnis hängt die Brücke selbst die Knöpfe. */
+  inboxCalls: Set<string>;
+  /** Schätzung beim Start (F7) — zählt für die Box, bis der Speicherstand den Zug zeigt. */
+  schaetzung?: Schaetzung;
+  /** Beendet den Zug von außen (Nachlauf zu lang, neue Nachricht im Nachlauf, CLI reagiert nicht) — gibt Konto frei, setzt das Zugende. */
+  erzwinge?: (grund: string) => void;
   onJiraWrite?: (keys: string[], tool: string) => void;
   home: string;   // CLAUDE_CONFIG_DIR dieser Sitzung oder 'shared'
   // Auto-Modus (Plan 71 P1): Rechte-Modus des Zuges, Arbeitsordner für die Klasse „auto“ (nur im Auto-Modus gesetzt),
@@ -77,6 +86,9 @@ interface Live {
   // Orchestrator (P2): gestartete Teilagenten (tool_use_id → Beschreibung), Starts in diesem Zug, Rolle je agent_id.
   subagents: Map<string, string>;
   subagentStarts: number;
+  /** melious_sub-Aufrufe in diesem Zug (Deckel) und ob Melious für die Person frei ist (Wächter: lesende Teilagenten → Melious). */
+  melSubs?: number;
+  melFrei?: boolean;
   agentTypes: Map<string, string>;
   // Orchestrator-Strang (docs/plan-orchestrator-agents.md): strengere Sperren, keine Rückfragen, Ausgang des Zuges.
   orch: boolean;
@@ -203,8 +215,9 @@ export const STRAND_MODEL = /^(claude:(opus|sonnet|haiku)|melious:[\w.:/-]{1,80}
 // MCP-Server (vault-search, werkbank); leser = nur Read/Grep/Glob, keine Skills, keine CLAUDE.md, ohne dynamische
 // Systemprompt-Abschnitte — über Melious zusätzlich `--bare` mit eigenem kurzem Systemprompt (bei Claude nicht: --bare
 // überspringt die OAuth-Anmeldung).
-export type Profil = 'voll' | 'bauer' | 'leser' | 'schreiber';
-export const PROFILE: Profil[] = ['voll', 'bauer', 'leser', 'schreiber'];   // schreiber = wie bauer, zuerst Melious
+export type Profil = 'voll' | 'bauer' | 'leser' | 'schreiber' | 'release';
+// schreiber = wie bauer, zuerst Melious; release = wie voll, dazu `git -C <Worktree> merge` im Release-Worktree (Plan 213)
+export const PROFILE: Profil[] = ['voll', 'bauer', 'leser', 'schreiber', 'release'];
 // Tiefe des Strangs (Plan 205): quick = ohne Gegenprüfungs-Hinweis, deep = doppelte Schritte je Zug; regular = wie bisher.
 export type Tiefe = 'quick' | 'regular' | 'deep';
 export const TIEFEN: Tiefe[] = ['quick', 'regular', 'deep'];
@@ -214,7 +227,7 @@ const LESER_TOOLS = ['Read', 'Grep', 'Glob'];
 const BAUER_MCP = ['vault-search', 'werkbank'];
 const LESER_MCP = ['vault-search', 'werkbank'];   // Suche im Vault (Lesen); review_ready / hauptchat_melden für Stränge
 export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte auf Deutsch, knapp und in Markdown. Du kannst nur lesen (Read, Grep, Glob) — schreibe und ändere nichts. Belege jede Aussage mit Datei:Zeile. Was du nicht findest, sagst du offen, statt zu raten.';
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string };
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string };
   // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
   // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
   auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string };
@@ -243,6 +256,7 @@ function saveMap() {
 }
 
 const lives = new Map<string, Live>();       // Unterhaltung → laufende Sitzung
+const letzteStufe = new Map<string, string>();   // Lead: zuletzt gemeldete Auslastungsstufe (nur bei Wechsel neu melden)
 
 // ---------- Nachreichen während des Zugs (docs/plan-hauptchat-monitor.md, S1; Knut 12.10.2026: „Ich kann nichts eingeben,
 // wenn er arbeitet, ich kann ihn nur stoppen.“) ----------
@@ -260,7 +274,7 @@ export type InjectState = 'zugestellt' | 'gelesen' | 'ungelesen';
 // Stand je Nachricht, unabhängig vom Live (das nach dem Zug verschwindet), eine Stunde lang (Bedingung 2).
 const injects = new Map<string, { key: string; text: string; state: InjectState; at: number }>();
 // sent: schon an das CLI gegeben (ein Echo dazu zählt auch nach dem Schließen); read: in diesem Versuch gelesen (Review A).
-interface Inbox { queue: any[]; wake: (() => void) | null; open: boolean; unread: Set<string>; sent: Set<string>; read: string[]; grace: NodeJS.Timeout | null; resultSeen: boolean }
+interface Inbox { queue: any[]; wake: (() => void) | null; open: boolean; unread: Set<string>; sent: Set<string>; read: string[]; grace: NodeJS.Timeout | null; resultSeen: boolean; closedAt?: number }
 
 const userMsg = (text: string, uuid?: string) => ({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, ...(uuid ? { uuid, priority: 'next' } : {}) });
 
@@ -285,6 +299,7 @@ function closeInbox(inbox: Inbox, mark = true): string[] {
   if (inbox.grace) { clearTimeout(inbox.grace); inbox.grace = null; }
   const left = [...inbox.unread];
   inbox.open = false;
+  inbox.closedAt = Date.now();
   inbox.unread.clear();
   inbox.queue.length = 0;
   if (mark) for (const id of left) { const m = injects.get(id); if (m && m.state === 'zugestellt') m.state = 'ungelesen'; }
@@ -373,12 +388,27 @@ export function isBoardRun(l: { readonly: boolean; mode: PermissionMode }): bool
 // 1 = das Verhalten vor dem 07.10. (ein Chat zur Zeit). Jeder neue Chat hat seinen eigenen Ordner (workDirFor).
 /** Ketten-Modell für Unter-Stränge, wenn alle Claude-Konten erschöpft sind (der Hauptchat nimmt das Ketten-Modell der Einrichtung). */
 export const KETTE_STRANG_MODELL = process.env.BRIDGE_KETTE_STRANG_MODELL || 'glm-5.3-flash';
-export const maxParallelChats = () => Math.max(1, Number(process.env.BRIDGE_MAX_PARALLEL_CHATS || 3));
+// F7 (Knut 19.10.): keine Zahl-Grenze mehr — ob ein Zug startet, entscheidet die Schätzung gegen die Box (schaetzung.ts).
+// BRIDGE_MAX_PARALLEL_CHATS bleibt nur als ausdrücklich gesetzte Obergrenze (Tests, Notfall); ohne Wert: unbegrenzt.
+export const maxParallelChats = () => (process.env.BRIDGE_MAX_PARALLEL_CHATS ? Math.max(1, Number(process.env.BRIDGE_MAX_PARALLEL_CHATS)) : Infinity);
 
-/** Darf ein neuer Zug starten? Chats: bis maxParallelChats() gleichzeitig je Person; Board-Läufe: bis MAX_BOARD_RUNS daneben. */
-export function lockFor(mine: { readonly: boolean; mode: PermissionMode; pending: unknown }[], next: { readonly: boolean; mode: PermissionMode }): 'ok' | 'chat-busy' | 'board-full' {
+type ZugLite = { readonly: boolean; mode: PermissionMode; pending: unknown; schaetzung?: Schaetzung; t0?: number };
+/** Grund der letzten Ablehnung von lockFor (für die Zeile im Chat). */
+export let lockGrund = '';
+/** Darf ein neuer Zug starten? Chats: wenn die Schätzung in die Box passt (und unter einer gesetzten Obergrenze); Board-Läufe:
+ *  bis MAX_BOARD_RUNS daneben. Ohne `box` gilt nur die Obergrenze (alte Aufrufer, Tests). */
+export function lockFor(mine: ZugLite[], next: { readonly: boolean; mode: PermissionMode }, box?: { neu: Schaetzung; stand: SpeicherStand | null; now?: number }): 'ok' | 'chat-busy' | 'board-full' {
+  lockGrund = '';
   if (isBoardRun(next)) return mine.filter(isBoardRun).length >= MAX_BOARD_RUNS ? 'board-full' : 'ok';
-  return mine.filter((l) => !isBoardRun(l) && !l.pending).length >= maxParallelChats() ? 'chat-busy' : 'ok';
+  const aktiv = mine.filter((l) => !isBoardRun(l) && !l.pending);
+  if (aktiv.length >= maxParallelChats()) { lockGrund = `es laufen schon ${aktiv.length} Chats gleichzeitig`; return 'chat-busy'; }
+  if (!box) return 'ok';
+  // Eben gestartete Züge zeigt der Speicherstand noch nicht: ihre Schätzung zählt die ersten 3 Minuten mit.
+  const now = box.now ?? Date.now();
+  const frisch = aktiv.filter((l) => l.t0 && now - l.t0 < 3 * 60_000).reduce((n, l) => n + (l.schaetzung?.speicherGb ?? 0), 0);
+  const r = passt(box.neu, { stand: box.stand, frisch, laufend: aktiv.length });
+  lockGrund = r.grund;
+  return r.ok ? 'ok' : 'chat-busy';
 }
 
 // Status je Unterhaltung (Idee: coder/agentapi „running/stable“, CloudCLI Sitzungsliste).
@@ -423,7 +453,9 @@ export function reapIdle(now = Date.now()): number {
 setInterval(() => { try { reapIdle(); } catch (e: any) { log('leerlauf-prüfung fehlgeschlagen', { error: String(e?.message ?? e).slice(0, 120) }); } }, 60_000).unref();
 
 export function stats() {
-  return { live: lives.size, pending: [...lives.values()].filter(l => l.pending).length, sessions: Object.keys(sessionMap).length };
+  const pending = [...lives.values()].filter(l => l.pending).length;
+  // laufend/schlange: für den Release-Neustart (scripts/werkbank.sh wartet, bis laufende Züge fertig sind — Plan 213 S1a).
+  return { live: lives.size, pending, drainLaufend: lives.size - pending, schlange: laenge(), sessions: Object.keys(sessionMap).length };
 }
 
 /** S0 (Plan 126): Ordnergrenzen dieser Person für Datei-Werkzeuge und Bash. BRIDGE_PATH_GUARD=off nur zur Diagnose. */
@@ -461,11 +493,12 @@ export function workDirFor(userId: string, convId: string): string {
  * Meldet eine neue Unterhaltung als Orchestrator-Strang an: Arbeitsordner = dir (vorher geprüft, siehe server.ts),
  * strengere Sperren. Nur für Unterhaltungen ohne Sitzung und ohne Ordner — eine bestehende wird nie umgebogen.
  */
-export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe } = {}): void {
+export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; vorrang?: boolean } = {}): void {
   const key = `${safeId(userId)}:${safeId(convId)}`;
   if (sessionMap[key] || cwdMap[key] || orchMap[key] || lives.has(key)) throw Object.assign(new Error('Unterhaltung gibt es schon.'), { status: 409 });
+  if (o.profil === 'release') { const p = kind === 'strand' ? releaseWorktreeProblem(dir) : 'Profil release nur für Stränge.'; if (p) throw Object.assign(new Error(p), { status: 400 }); }
   cwdMap[key] = dir;
-  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}), ...(o.tiefe && o.tiefe !== 'regular' && TIEFEN.includes(o.tiefe) ? { tiefe: o.tiefe } : {}) };
+  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}), ...(o.tiefe && o.tiefe !== 'regular' && TIEFEN.includes(o.tiefe) ? { tiefe: o.tiefe } : {}), ...(o.vorrang ? { vorrang: true } : {}) };
   saveMap();
 }
 
@@ -518,12 +551,18 @@ export function orchStateOf(userId: string) {
     const l = lives.get(k);
     const seen = lastSeen.get(k);
     return {
-      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', tiefe: e.tiefe ?? 'regular', phase: e.phase ?? null, running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, batches: e.batches ?? [], lastHand: e.lastHand ?? null,
+      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', tiefe: e.tiefe ?? 'regular', phase: e.phase ?? null, running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, queued: inSchlange(k), batches: e.batches ?? [], lastHand: e.lastHand ?? null,
       // Start ohne Ende und keine laufende Sitzung: die Brücke wurde mitten im Zug neu gestartet.
-      interrupted: !l && !!e.turn && e.turn.end === null,
+      interrupted: !l && !inSchlange(k) && !!e.turn && e.turn.end === null,
       resumable: !!sessionMap[k], turns: seen?.turns ?? null, written: seen?.written ?? [],
     };
   });
+}
+
+/** Die Deny-Regeln, die ein Strang im Auto-Modus zusätzlich bekommt (Fund 1, Knut 19.10.2026). Eigene Funktion, damit sie
+ *  ohne laufende Brücke prüfbar ist; der Wächter-Test fährt zusätzlich die Bash-Muster über den echten Weg. */
+export function strandDeny(profil: string): string[] {
+  return [...ORCH_DENY, ...orchMcpDeny(), ...(profil === 'leser' ? LESER_DENY : [])];
 }
 
 // Git ohne Zugangsdaten für Stränge: eigene globale Konfiguration (nur Name/E-Mail), kein Credential-Helfer, Push auf
@@ -561,6 +600,10 @@ export const LEITSTAND_APPEND = `Dieser Chat ist der HAUPTCHAT (früher „Leits
 - Nie mergen; pushen, Jira/Confluence schreiben, die Live-Instanz (~/work/werkbank-dev), crontab und ~/bin ändern nur nach Knuts „ja“; git im Vault ist gesperrt. Arbeitsordner: Worktrees unter dem aktuellen Verzeichnis.`;
 
 const ORCH_APPEND = `Dieser Chat ist ein Orchestrator-Strang: Die Haupt-Sitzung hat dich gestartet, Knut liest mit. Hier gibt es KEINE Rückfragen — was im Chat ein „ja“ bräuchte, wird abgelehnt. Schreib solche Punkte stattdessen unter „### Stand“ → „Braucht Knut“. GitHub schreiben (push, PR), Jira/Confluence schreiben, Git-Konfiguration, Git-Hooks, .claude/ und .env sind gesperrt; versuch nicht, das zu umgehen. Lokale Commits im Arbeitsordner sind erlaubt, wenn der Auftrag sie verlangt. Braucht der Hauptchat etwas von dir, BEVOR du fertig bist — ein Blocker, der die Arbeit anhält und eine Entscheidung von Knut braucht, oder ein Risiko/eine Planänderung, die den Auftrag ändert —, meld es mit dem Werkzeug hauptchat_melden (kurz, mit Empfehlung). Kein Fortschritt dorthin: der gehört in den Abschnitt „### Stand“. Höchstens eine Meldung je 10 Minuten.`;
+/** Profil „release“ (Plan 213, Knut 17.10.): lokal mergen im zugewiesenen Worktree. */
+const RELEASE_APPEND = `Release-Strang: In deinem Arbeitsordner (einem Release-Worktree der Werkbank) darfst du lokal mergen — genau in der Form \`git -C <Arbeitsordner> merge …\` (auch --abort/--continue), als einzelner Befehl ohne && oder ;. Konflikte löst du mit Edit im Arbeitsordner, dann \`git -C <Arbeitsordner> add …\` und den Merge-Commit. Push, Live-Schalten (werkbank.sh, Live-Instanz, release-live-Skripte) und alles außerhalb des Arbeitsordners bleiben gesperrt — das macht die Hauptsitzung.`;
+/** Knut 19.10. (native Verteilung): wofür Melious, wofür Claude — gilt für Lead und Stränge. */
+const MEL_SUB_HINT = `Verteilung Claude ↔ Melious: Lesen, Suchen im Code, Recherche und Gegenprüfen gibst du mit dem Werkzeug melious_sub an Melious (jcode, nur lesend; modell „flash“ für Fan-out, „glm“ für Urteile) — mehrere Aufrufe dürfen parallel laufen. Das Ergebnis ist ein Kandidat: am Code nachprüfen, bevor du es übernimmst. Code schreiben, Entscheidungen und Antworten an Knut bleiben bei dir (Claude). Lesende Claude-Teilagenten (leser, strang-leser, ticket-pruefer, Explore) leitet der Workspace auf Melious um; nur wenn Melious nicht reicht, „[claude]“ in die description. Die Claude-Auslastung zeigt das Werkzeug auslastung.`;
 
 export function safeId(s: string): string {
   return /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : createHash('sha256').update(s).digest('hex').slice(0, 24);
@@ -642,10 +685,27 @@ function attach(live: Live, sink: Sink) {
   armTurnTimer(live);
 }
 
+// Nachlauf (Strang 9563d9ec, 19.10.: stundenlang „Zug läuft / Der Zug endet gerade“, orch send 409): Nach dem Ergebnis ist die
+// Eingabe zu, aber die CLI kann weiterlaufen — Hintergrund-Aufgaben lösen alle paar Minuten neue Runden aus und stellen den
+// Zug-Wächter jedes Mal neu, bis zur Obergrenze von Stunden. Darum: Nachlauf höchstens BRIDGE_NACHLAUF_S (Vorgabe 600 s), dann
+// abbrechen; reagiert die CLI nicht (z. B. Prozess weg, Strom hängt), nach 5 s hart beenden. Eine neue Nachricht beendet ihn sofort.
+export const nachlaufMs = () => Math.max(1000, Number(process.env.BRIDGE_NACHLAUF_S || 600) * 1000);
+export const imNachlauf = (live: Pick<Live, 'inbox'>) => !!live.inbox && !live.inbox.open && live.inbox.resultSeen;
+/** Abbrechen und — wenn der Zug nicht binnen `wartenMs` von selbst endet — hart beenden. Liefert, ob der Zug danach weg ist. */
+async function nachlaufBeenden(live: Live, grund: string, wartenMs = 5000): Promise<boolean> {
+  log('nachlauf beenden', { conv: live.key, grund });
+  live.abort.abort();
+  const bis = Date.now() + wartenMs;
+  while (Date.now() < bis && lives.get(live.key) === live) await new Promise((r) => setTimeout(r, 100));
+  if (lives.get(live.key) === live) live.erzwinge?.(grund);
+  return lives.get(live.key) !== live;
+}
+
 function end(live: Live) {
   if (live.pending) { clearTimeout(live.pending.timer); live.pending = null; }
   detach(live);
   lives.delete(live.key);
+  wecke();   // ein Platz ist frei (Plan 213 S1a)
 }
 
 // ---------- Übersetzung der SDK-Nachrichten ----------
@@ -831,6 +891,7 @@ function handleMessage(live: Live, msg: any) {
           // Nutzung je Skill zählen (Knut, 29.09.: Skill-Kern nach einer Woche mit echten Zahlen nachschärfen).
           if (block.name === 'Skill' && live.onSkill) { try { live.onSkill(String(block.input?.skill ?? block.input?.command ?? '').replace(/^\//, '').split(/\s/)[0]); } catch { /* egal */ } }
           if ((block.name === 'Task' || block.name === 'Agent') && !msg.parent_tool_use_id) live.subagents.set(block.id, subLabel(block.input ?? {}));
+          if (block.name === INBOX_TOOL && !msg.parent_tool_use_id) live.inboxCalls.add(block.id);
           if (cls === 'read') emitStatus(live, subPrefix(live, msg.parent_tool_use_id) + statusLine(block.name, block.input ?? {}));
           // Schreibende Werkzeuge melden sich erst nach der Bestätigung (siehe Hook).
         } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
@@ -861,6 +922,16 @@ function handleMessage(live: Live, msg: any) {
           if (label === undefined) continue;
           live.subagents.delete(b.tool_use_id);
           emitStatus(live, `↳ Teilagent ${label} ${b.is_error ? 'abgebrochen' : 'fertig'}`);
+        }
+      }
+      // Inbox-Knöpfe (Plan 213 K4): nur aus dem Ergebnis des Werkbank-Werkzeugs, gesetzt von der Brücke — das Modell
+      // kann keine Knöpfe schreiben (emitModelText entschärft sie), also bestätigt kein eingeschleuster Text etwas.
+      if (live.inboxCalls.size) {
+        for (const b of msg.message?.content ?? []) {
+          if (b?.type !== 'tool_result' || !live.inboxCalls.delete(b.tool_use_id) || b.is_error) continue;
+          const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.map((c: any) => c?.text ?? '').join('\n') : '';
+          const k = inboxKnoepfe(text);
+          if (k) { live.lastKind = 'text'; emit(live, `\n\n${k}\n\n`); }
         }
       }
       if (!live.jiraCalls.size) return;
@@ -927,6 +998,21 @@ function makeGuard(live: Live) {
     const decide = (permissionDecision: 'allow' | 'deny', reason: string) => ({
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason },
     });
+    // Profil „release“ (Plan 213): Live-Schalten zusätzlich gesperrt; `git -C <Worktree> merge …` erlaubt — vor den Strang-Sperren,
+    // die `git merge` sonst immer ablehnen. Nur im eigenen Worktree, nur als einzelner Befehl (releaseMerge).
+    if (live.orch && live.profil === 'release' && tool === 'Bash') {
+      const cmd = String(toolInput.command ?? '');
+      const sperre = RELEASE_BLOCK.find(([re]) => re.test(cmd));
+      if (sperre) {
+        emitStatus(live, `⛔ Release-Strang: ${sperre[1]} gesperrt — ${statusLine(tool, toolInput)}`);
+        return decide('deny', `Im Release-Strang gesperrt (${sperre[1]}). Live schaltet die Hauptsitzung; schreib es unter „### Stand“ → „Braucht Knut“.`);
+      }
+      const wt = orchMap[live.key]?.dir;
+      if (wt && releaseMerge(cmd, wt)) {
+        emitStatus(live, `🔀 Release-Merge im Worktree: ${statusLine(tool, toolInput)}`);
+        return decide('allow', 'Release-Strang: Merge im zugewiesenen Worktree erlaubt.');
+      }
+    }
     if (live.orch) {
       // Worker (Plan 165, Pass C 9): keine Paket-Installation — node_modules im Unter-Worktree ist ein Link auf die des Strangs.
       const why = orchestratorBlock(tool, toolInput) ?? (live.worker && tool === 'Bash' && WORKER_PAKETE.test(String(toolInput.command ?? '')) ? 'Pakete installieren/ändern (Worker)' : null);
@@ -934,6 +1020,13 @@ function makeGuard(live: Live) {
         emitStatus(live, `⛔ Orchestrator-Strang: ${why} gesperrt — ${statusLine(tool, toolInput)}`);
         return decide('deny', `In einem Orchestrator-Strang gesperrt (${why}). Nicht erneut versuchen, nicht umgehen; schreib unter „### Stand“ → „Braucht Knut“, was zu tun wäre.`);
       }
+    }
+    // Knut 19.10. (native Verteilung): lesende Teilagenten aus Lead und Strängen laufen auf Melious (melious_sub), solange
+    // Melious für die Person frei ist. „[claude]“ in der description erzwingt Claude (wenn Melious nicht reicht).
+    if ((tool === 'Task' || tool === 'Agent') && !agentId && (live.orch || live.leit) && !live.worker && live.melFrei
+      && LESE_TEILAGENTEN.has(String(toolInput.subagent_type ?? '')) && !/\[claude\]/i.test(String(toolInput.description ?? ''))) {
+      emitStatus(live, `🇪🇺 Lesender Teilagent „${String(toolInput.subagent_type)}“ → Melious (melious_sub)`);
+      return decide('deny', 'Lesende Teilaufgaben laufen standardmäßig auf Melious: ruf das Werkzeug melious_sub mit demselben Auftrag auf (modell „flash“, für Urteile „glm“) und prüf das Ergebnis am Code. Nur wenn Melious nicht reicht: denselben Teilagenten mit „[claude]“ in der description starten.');
     }
     if ((tool === 'Task' || tool === 'Agent') && !agentId) {
       // Obergrenze an Teilagenten je Zug (Kosten).
@@ -991,6 +1084,7 @@ function makeGuard(live: Live) {
         since: Date.now(),
       };
       detach(live);
+      wecke();   // wartet nur noch auf „ja“ → zählt nicht zur Parallelgrenze (Plan 213 S1a)
     });
     if (live.pending) { clearTimeout(live.pending.timer); live.pending = null; }
     if (answer === '\u0000timeout') {
@@ -1109,7 +1203,7 @@ const CONTINUE_PROMPT ='Mach bitte genau dort weiter, wo du unterbrochen wurdest
 export async function handleTurn(req: TurnRequest): Promise<void> {
   const key = `${safeId(req.userId)}:${safeId(req.convId)}`;
   const seen = lastSeen.get(key);
-  const existing = lives.get(key);
+  let existing = lives.get(key);
   const now = Date.now();
   lastSeen.set(key, { at: now, turns: (seen?.turns ?? 0) + 1, title: seen?.title || req.prompt.replace(/\s+/g, ' ').slice(0, 60), written: seen?.written, roundAt: existing?.pending ? seen?.roundAt ?? now : now });
 
@@ -1138,6 +1232,11 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     existing.pending.resolve(req.prompt);
     return waitClosed(req.sink, existing);
   }
+  if (existing && imNachlauf(existing) && !existing.pending) {
+    // Der vorige Zug hat sein Ergebnis schon geliefert und läuft nur noch nach (Hintergrund-Aufgaben) — die neue Nachricht gewinnt.
+    await nachlaufBeenden(existing, 'neue Nachricht im Nachlauf');
+    existing = lives.get(key);
+  }
   if (existing) {
     req.sink.write('Diese Unterhaltung arbeitet noch an der vorigen Nachricht. Bitte kurz warten.');
     req.sink.finish();
@@ -1147,16 +1246,46 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // 2) Höchstens maxParallelChats() aktive Züge je Nutzer, jeder Chat in seinem eigenen Ordner. Chats, die nur auf
   //    „ja“ warten, zählen nicht. Board-Läufe (nur lesend) laufen daneben, höchstens MAX_BOARD_RUNS je Person (E5).
   // Der Leitstand zählt nicht und wird nicht gezählt (Plan 132, E2/B9): er koordiniert die Chats, die er sonst blockieren würde.
-  const mine = [...lives.values()].filter((l) => l.userId === req.userId && !l.leit && !l.worker);
+  const meine = () => [...lives.values()].filter((l) => l.userId === req.userId && !l.leit && !l.worker);
+  let mine = meine();
   const mode = autoFor(req);
-  const lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode });
+  const schaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe });
+  const box = () => ({ neu: schaetzung, stand: speicherStand() });
+  let lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode }, box());
+  // Warteschlange statt Fehlschlag (Plan 213 S1a, K3): der Zug wartet, bis ein Platz frei ist; der Chat zeigt den Platz.
+  if (lock === 'chat-busy' && schlangeAn() && !req.sink.closed) {
+    if (inSchlange(key)) {   // zweite Nachricht derselben Unterhaltung: kein zweiter Platz
+      req.sink.write('Diese Unterhaltung wartet schon in der Schlange — sie startet von selbst.');
+      req.sink.finish();
+      return;
+    }
+    if (orchMap[key]) setTurn(key, { start: Date.now(), end: null, outcome: null });
+    let erst = true;
+    const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang }, {
+      frei: () => !lives.has(key) && lockFor(meine(), { readonly: !!req.readonly, mode }, box()) === 'ok',
+      geschlossen: () => req.sink.closed,
+      melde: (pos) => {
+        req.sink.write(erst ? `⏳ In der Schlange: Platz ${pos} — ${lockGrund || 'gerade kein Platz'} (${schaetzungText(schaetzung)}). Startet von selbst, sobald es passt.\n\n` : `⏳ Jetzt Platz ${pos} …\n\n`);
+        erst = false;
+      },
+    });
+    log('schlange', { conv: key, ergebnis: r });
+    if (r === 'zu') { if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'aborted' }); return; }
+    if (lives.has(key)) {
+      req.sink.write('Diese Unterhaltung arbeitet noch an der vorigen Nachricht. Bitte kurz warten.');
+      req.sink.finish();
+      return;
+    }
+    mine = meine();
+    lock = r === 'start' ? 'ok' : lock;
+  }
   if (lock !== 'ok') {
     if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'busy' });
     req.sink.write(lock === 'board-full'
       ? `Bei dir laufen schon ${MAX_BOARD_RUNS} Board-Agenten. Bitte warte, bis einer fertig ist.`
       : maxParallelChats() === 1
         ? 'Bei dir läuft gerade schon eine Anfrage in einem anderen Chat. Bitte warte, bis sie fertig ist.'
-        : `Bei dir laufen schon ${maxParallelChats()} Chats gleichzeitig. Bitte warte, bis einer fertig ist.`);
+        : `Jetzt nicht gestartet: ${lockGrund || 'gerade kein Platz'} (${schaetzungText(schaetzung)}). Bitte warte, bis ein anderer Chat fertig ist.`);
     req.sink.finish();
     return;
   }
@@ -1175,9 +1304,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     key, userId: req.userId, abort: new AbortController(), sink: null, buffer: [], pending: null,
     lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0, cacheRead: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
     readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
-    jiraCalls: new Map(), onJiraWrite: req.onJiraWrite, home: '',
-    mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false,
-    subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: kind === 'strand' || kind === 'worker', leit: kind === 'leitstand', worker: kind === 'worker', ...(kind === 'strand' ? { req } : {}),
+    jiraCalls: new Map(), inboxCalls: new Set(), onJiraWrite: req.onJiraWrite, home: '',
+    mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false, schaetzung,
+    subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: kind === 'strand' || kind === 'worker', leit: kind === 'leitstand', worker: kind === 'worker', ...(kind === 'strand' || kind === 'leitstand' ? { req } : {}),   // Lead auch: melious_sub braucht Konten und Buchung des Zugs
     // Posteingang ab Zugbeginn: Nachreichen geht auch, während Kontext-Paket und Konten noch laden (Bild-Prüfung Plan 154).
     inbox: nachreichenOn() ? newInbox([]) : null,
   };
@@ -1187,6 +1316,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   else if (live.leit && orchMap[key]) orchMap[key].lastHand = Date.now();   // Knut hat selbst geschrieben (Zähler für „weiter“ beginnt neu)
   if (live.orch || live.leit) setTurn(key, { start: Date.now(), end: null, outcome: null, ...(live.leit ? { batch } : {}) });
   lives.set(key, live);
+  angemeldet();   // Plan 213 S1a: ab jetzt zählt dieser Zug — die Schlange darf den Nächsten prüfen
   attach(live, req.sink);
   // Sofort ein Lebenszeichen: bis zum ersten Token vergehen mit echtem Claude einige Sekunden
   // (CLI-Start, MCP-Server, langer System-Prompt, Denken).
@@ -1262,13 +1392,15 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const e = orchMap[key];
     // Nur für Voll/Bauer-Stränge: Leser/Schreiber bleiben bei „zuerst Melious“ (Pass A 8 / B 6).
     const p = e?.profil ?? 'voll';
-    return live.orch && !live.worker && e?.phase && !strandModel && (p === 'voll' || p === 'bauer') ? (e.phaseC2 ? 'opus' : phaseModell(e.phase).modell) : undefined;
+    return live.orch && !live.worker && e?.phase && !strandModel && (p === 'voll' || p === 'bauer' || p === 'release') ? (e.phaseC2 ? 'opus' : phaseModell(e.phase).modell) : undefined;
   };
   let strandClaude = (strandModel?.startsWith('claude:') ? strandModel.slice(7) : undefined) ?? phaseClaude();
   // Rollen-Profil des Strangs (S6): fest für alle Züge. Leser und Schreiber laufen zuerst über Melious (Knut 15.10.: Standard,
   // nicht nur Überlauf), verteilt über die Modelle ihrer Rolle.
   const profil: Profil = live.orch ? orchMap[key]?.profil ?? 'voll' : 'voll';
   const melAcc = accounts.find(isMelious);
+  // Knut 19.10.: lesende Teilagenten laufen auf Melious, wenn es für die Person frei ist (Wächter, melious_sub).
+  live.melFrei = !!melAcc && meliousUsable(melAcc, exhaustedOf(safeId(req.userId)), Date.now()) && melSubAn();
   // Überlauf auf Melious nur bei niedrigem Risiko (Modellwahl v2): Hauptchat nie, Stränge nur mit Risiko „niedrig“, Chats ja.
   const risiko: Risiko = live.leit ? 'hoch' : orchMap[key]?.risiko ?? (live.orch ? 'mittel' : 'niedrig');
   // Energietopf nahe der Obergrenze (vorrang, Werkbank): niedrig-riskante Arbeit zuerst auf Melious, damit nichts verfällt.
@@ -1323,7 +1455,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}${profil === 'release' ? `\n\n${RELEASE_APPEND}` : ''}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melSubAn() ? MEL_SUB_HINT : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, isMelious(acct) ? req.token : acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim
@@ -1354,6 +1486,14 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     stderr: (d: string) => { if (/error/i.test(d)) log('sdk stderr', { conv: key, line: redact(d.slice(0, 300)) }); },
   };
   if (live.mode === 'auto') options.settings = autoSettings();
+  // Fund 1 (Knut 19.10.2026): Im Auto-Modus entscheidet allein der SDK-Klassifikator — der PreToolUse-Hook der Brücke
+  // wird dort nicht aufgerufen. Die harten Strang-Sperren müssen deshalb als Deny-Regeln mit, sonst laufen `scripts/orch`,
+  // `/proc/*/environ` und `.env.local` durch (im Log als „auto erlaubt“). Gilt für Stränge und Worker; der Leitstand
+  // behält bewusst seine Rückfrage für Vault und Jira.
+  if (live.mode === 'auto' && live.orch) {
+    const deny = strandDeny(profil);
+    options.settings = { ...(options.settings ?? {}), permissions: { ...((options.settings as any)?.permissions ?? {}), deny: [...(((options.settings as any)?.permissions?.deny) ?? []), ...deny] } };
+  }
   applyHome(home, env, options);
   if (resume) options.resume = resume;
   // Anbieter seit dem letzten Zug gewechselt (Melious ↔ Claude): nicht fortsetzen. Melious liefert thinking-Blöcke ohne
@@ -1377,7 +1517,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const baseAppend: string = basePrompt.append;
   const baseDisallowed: string[] = options.disallowedTools;
   const baseExtra: Record<string, unknown> = { ...(options.extraArgs ?? {}) };
-  const profileServers = (s: Record<string, unknown>) => (profil === 'voll' ? s : Object.fromEntries(Object.entries(s).filter(([k]) => (profil === 'leser' ? LESER_MCP : BAUER_MCP).includes(k))));
+  const profileServers = (s: Record<string, unknown>) => (profil === 'voll' || profil === 'release' ? s : Object.fromEntries(Object.entries(s).filter(([k]) => (profil === 'leser' ? LESER_MCP : BAUER_MCP).includes(k))));
   // Lastverteilung über die Melious-Modelle (S7, Knut 14.10.: „Last auf alle Melious-Modelle verteilen, um alle Token zu nutzen“):
   // aus der Liste der Rolle das Modell mit dem größten freien Monatsanteil (Werkbank: Verbrauch je Modell gegen dessen
   // Kontingent). Einmal gewählt, behält ein Strang (orch.json) bzw. Chat (Speicher) sein Modell, solange es zulässig und frei ist.
@@ -1423,9 +1563,34 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   };
   onAccount(acct);
   if (isMelious(acct)) emitStatus(live, meliousLine(options.model, req.model, acct.abo));
+  // Auslastung im Lead (Knut 19.10.): beim ersten Zug und wenn die Stufe wechselt — sonst Ruhe.
+  if (live.leit && process.env.BRIDGE_AUSLASTUNG !== 'off') {
+    const a = await auslastung().catch(() => null);
+    if (a && letzteStufe.get(key) !== a.stufe) { letzteStufe.set(key, a.stufe); emitStatus(live, auslastungZeile(a, melAcc && live.melFrei ? { rest: melAcc.rest ?? null } : null)); }
+  }
 
   let release = acquire(key, acct);   // ab hier läuft der Zug auf diesem Konto (Lastverteilung); frei im finally
   log('turn start', { conv: key, resume: !!resume, model: req.model ?? 'default', konfig: home.mode, mcp: Object.keys(options.mcpServers), permissionMode: live.mode, ...(accounts.length > 1 ? { konto: acct.id, konten: accounts.length } : {}), ...(isMelious(acct) ? { melious: true, rest: acct.rest } : {}) });
+
+  // Zwangsende (Nachlauf): Konto frei, Zugende setzen, Worker beenden, aus `lives` nehmen — der hängende Strom darf liegen bleiben.
+  let erzwungen = false;
+  live.erzwinge = (grund: string) => {
+    if (erzwungen || lives.get(key) !== live) return;
+    erzwungen = true;
+    clearInterval(nachlaufTakt);
+    log('nachlauf erzwungen', { conv: key, grund });
+    if (live.inbox?.open) closeInbox(live.inbox);
+    release();
+    if ((live.orch || live.leit) && orchMap[key]?.kind !== 'beendet') setTurn(key, { ...orchMap[key]?.turn, start: orchMap[key]?.turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? 'aborted' });
+    if (live.req) abortWorkersOf(key);
+    end(live);
+  };
+  const nachlaufTakt = setInterval(() => {
+    if (!imNachlauf(live) || Date.now() - (live.inbox?.closedAt ?? Date.now()) < nachlaufMs()) return;
+    clearInterval(nachlaufTakt);
+    emitStatus(live, `⏱️ Das Ergebnis steht seit ${Math.round(nachlaufMs() / 60000)} Minuten, Claude arbeitet aber noch nach (Hintergrund-Aufgaben) — ich beende den Zug. Schreib einfach weiter.`);
+    void nachlaufBeenden(live, 'nachlauf zu lang');
+  }, Math.min(15_000, Math.max(250, nachlaufMs() / 4)));
 
   // Die Sitzung läuft unabhängig von der HTTP-Antwort weiter (Rückfragen!).
   (async () => {
@@ -1536,6 +1701,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         }
       }
     } finally {
+      clearInterval(nachlaufTakt);
+      if (erzwungen) { log('nachlauf: später Ende nach Zwangsende', { conv: key }); return; }   // schon aufgeräumt
       release();
       // Zug zu Ende: was noch für einen weiteren Versuch zurückgelegt war, ist ungelesen (der Client sendet es neu).
       for (const id of live.carry ?? []) { const m = injects.get(id); if (m && m.state === 'zugestellt') m.state = 'ungelesen'; }
@@ -1756,6 +1923,8 @@ export function jcodeUsage(sessionJson: any): MeliousUsage {
   return u;
 }
 const JCODE_SHIM = join(dirname(fileURLToPath(import.meta.url)), '..', 'shim');
+// Release 20a: pre_tool-Hook vor JEDEM jcode-Werkzeug (read/agentgrep/write …), nicht nur der Shell — siehe jcode-pre-tool.ts.
+export const JCODE_HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'hooks', 'jcode-pre-tool');
 /** Schreibende jcode-Aufrufe (write/edit/apply_patch) mit Ziel außerhalb des Arbeitsordners — jcode kennt keine Pfadgrenze, also
  *  prüft die Brücke danach; ein Treffer verwirft das Ergebnis. */
 export function jcodeWritesOutside(sessionJson: any, cwd: string): string[] {
@@ -1769,6 +1938,33 @@ export function jcodeWritesOutside(sessionJson: any, cwd: string): string[] {
   }
   return out;
 }
+/** jcode einmal laufen lassen (Melious-Profil). Wächter (Pilot 183): shim/bash vorn in PATH lässt nur lesende Shell-Befehle durch. */
+function jcodeSpawn(o: { cwd: string; prompt: string; model: string | null; tools: string; key: string; timeoutS: number; abbruch?: () => boolean }): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key,
+    JCODE_HOOK_PRE_TOOL: JCODE_HOOK, JCODE_HOOK_PRE_TOOL_TIMEOUT_MS: '10000' };
+  return new Promise((res) => {
+    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', o.prompt], { cwd: o.cwd, env });
+    let so = '', se = '';
+    c.stdout.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
+    c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
+    const timer = setTimeout(() => c.kill('SIGTERM'), o.timeoutS * 1000);
+    const stopper = setInterval(() => { if (o.abbruch?.()) c.kill('SIGTERM'); }, 2000);
+    c.on('close', (code) => { clearTimeout(timer); clearInterval(stopper); res({ code, stdout: so, stderr: se }); });
+    c.on('error', () => { clearTimeout(timer); clearInterval(stopper); res({ code: -1, stdout: so, stderr: se }); });
+  });
+}
+/** jcode-Ausgabe (JSON) und Sitzungsdatei → Antwort, Nutzung, gelaufenes Modell, Schreibzugriffe außerhalb des Ordners. */
+function jcodeAuswerten(out: { stdout: string }, cwd: string, model: string | null): { j: any; usage: MeliousUsage; draussen: string[]; gelaufen: string } {
+  let j: any = null; try { j = JSON.parse(out.stdout); } catch { /* unten */ }
+  let usage: MeliousUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  let draussen: string[] = [];
+  if (j?.session_id && /^[\w.-]{1,120}$/.test(j.session_id)) {
+    try { const sj = JSON.parse(readFileSync(join(homedir(), '.jcode', 'sessions', `${j.session_id}.json`), 'utf8')); usage = jcodeUsage(sj); draussen = jcodeWritesOutside(sj, cwd); } catch { /* ohne Sitzungsdatei */ }
+  }
+  if (!usageTotal(usage) && j?.usage) usage = { input: Math.max(0, (j.usage.input_tokens || 0) - (j.usage.cache_read_input_tokens || 0)), output: j.usage.output_tokens || 0, cacheRead: j.usage.cache_read_input_tokens || 0, cacheWrite: 0 };
+  return { j, usage, draussen, gelaufen: String(j?.model ?? model ?? 'glm-5.3-flash') };
+}
+
 async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> {
   if (!jcodeAn() || d.rolle === 'pruefer') return null;
   const e = orchMap[d.workerKey];
@@ -1784,26 +1980,8 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   const model = gewaehlt === 'auto' || (mel.faktoren && !mel.faktoren[gewaehlt]) ? null : gewaehlt;
   const tools = d.rolle === 'leser' ? 'read,bash,agentgrep' : 'read,bash,write,edit,agentgrep';
   const t0 = Date.now();
-  // Wächter (Pilot 183, 15.10.): shim/bash vorn in PATH lässt nur lesende Shell-Befehle durch (jcode hat keine Sandbox).
-  const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: mel.token };
-  const out = await new Promise<{ code: number | null; stdout: string; stderr: string }>((res) => {
-    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', ...(model ? ['--model', model] : []), '--tools', tools, 'run', '--json', prompt], { cwd: d.cwd, env });
-    let so = '', se = '';
-    c.stdout.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
-    c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
-    const timer = setTimeout(() => c.kill('SIGTERM'), envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60) * 1000);
-    const stopper = setInterval(() => { if (d.aborted) c.kill('SIGTERM'); }, 2000);
-    c.on('close', (code) => { clearTimeout(timer); clearInterval(stopper); res({ code, stdout: so, stderr: se }); });
-    c.on('error', () => { clearTimeout(timer); clearInterval(stopper); res({ code: -1, stdout: so, stderr: se }); });
-  });
-  let j: any = null; try { j = JSON.parse(out.stdout); } catch { /* unten */ }
-  let usage: MeliousUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  let draussen: string[] = [];
-  if (j?.session_id && /^[\w.-]{1,120}$/.test(j.session_id)) {
-    try { const sj = JSON.parse(readFileSync(join(homedir(), '.jcode', 'sessions', `${j.session_id}.json`), 'utf8')); usage = jcodeUsage(sj); draussen = jcodeWritesOutside(sj, d.cwd); } catch { /* ohne Sitzungsdatei */ }
-  }
-  if (!usageTotal(usage) && j?.usage) usage = { input: Math.max(0, (j.usage.input_tokens || 0) - (j.usage.cache_read_input_tokens || 0)), output: j.usage.output_tokens || 0, cacheRead: j.usage.cache_read_input_tokens || 0, cacheWrite: 0 };
-  const gelaufen = String(j?.model ?? model ?? 'glm-5.3-flash');
+  const out = await jcodeSpawn({ cwd: d.cwd, prompt, model, tools, key: mel.token, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted });
+  const { j, usage, draussen, gelaufen } = jcodeAuswerten(out, d.cwd, model);
   const energie = mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0;
   d.input += usage.input + usage.cacheRead; d.output += usage.output; d.energie += energie;
   d.modell = `Melious ${gelaufen} (jcode)`; d.konto = mel.id; d.anbieter = 'melious';
@@ -1813,6 +1991,59 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   if (draussen.length) { log('worker jcode ausserhalb', { delegation: d.id, pfade: draussen.slice(0, 10) }); return `jcode-Ergebnis verworfen: Der Worker hat außerhalb des Arbeitsordners geschrieben (${draussen.slice(0, 5).join(', ')}). Bitte prüfen und ggf. zurücksetzen.`; }
   if (out.code !== 0 || !j) return `jcode-Lauf fehlgeschlagen (Exit ${out.code}). ${String(out.stderr).split('\n').filter(Boolean).slice(-3).join(' · ').slice(0, 600)}`;
   return String(j.text ?? '');
+}
+
+// ---------- melious_sub (Knut 19.10.: „nativ mehr auf Melious und Claude verteilen“) ----------
+// Lesen, Recherche und Gegenprüfen aus Lead und Strängen laufen standardmäßig auf Melious über jcode — wie ~/bin/mel-sub, aber
+// mit dem Melious-Konto der Person und gebucht wie ein Worker. Synchron, nur lesend (shim/bash), im Arbeitsordner des Zugs.
+// Code schreiben und entscheiden bleibt auf Claude. BRIDGE_MEL_SUB=off schaltet ab (dann wieder Claude-Teilagenten).
+export const melSubAn = () => process.env.BRIDGE_MEL_SUB !== 'off' && existsSync(JCODE_BIN());
+const MEL_SUB_MODELL: Record<string, string> = { flash: 'glm-5.3-flash', glm: 'glm-5.3' };
+/** Rollen der Teilagenten, die nur lesen — die gehen standardmäßig an Melious. */
+export const LESE_TEILAGENTEN = new Set(['leser', 'strang-leser', 'ticket-pruefer', 'Explore']);
+
+async function melKonto(live: Live, userId: string): Promise<Account | null> {
+  try {
+    const mel = normalizeAccounts(live.req?.accounts ? await live.req.accounts() : [], live.req?.token).find(isMelious);
+    return mel && meliousUsable(mel, exhaustedOf(safeId(userId)), Date.now()) ? mel : null;
+  } catch { return null; }
+}
+
+export async function melSub(userId: string, convId: string, b: { auftrag?: unknown; modell?: unknown }): Promise<Res> {
+  const key = `${safeId(userId)}:${safeId(convId)}`;
+  const live = lives.get(key);
+  if (!live?.req) return { ok: false, status: 409, error: 'melious_sub geht nur während eines laufenden Zugs.' };
+  if (live.worker) return { ok: false, status: 403, error: 'Worker rufen melious_sub nicht auf.' };
+  if (!melSubAn()) return { ok: false, status: 503, error: 'jcode fehlt oder BRIDGE_MEL_SUB=off — nimm einen Teilagenten über Claude.' };
+  const auftrag = String(b.auftrag ?? '').trim();
+  if (!auftrag) return { ok: false, status: 400, error: 'auftrag fehlt.' };
+  if (auftrag.length > KAPPUNG.auftrag) return { ok: false, status: 400, error: `auftrag ist ${auftrag.length} Zeichen lang, höchstens ${KAPPUNG.auftrag} — kürzen oder aufteilen.` };
+  if ((live.melSubs ?? 0) >= 2 * maxSubagents()) return { ok: false, status: 429, error: `Höchstens ${2 * maxSubagents()} Melious-Teilagenten je Nachricht.` };
+  const mel = await melKonto(live, userId);
+  if (!mel) return { ok: false, status: 409, error: 'Melious ist für dich gerade nicht verfügbar (kein Konto, erschöpft oder gesperrt) — nimm einen Teilagenten über Claude ([claude] in der description).' };
+  live.melSubs = (live.melSubs ?? 0) + 1;
+  const model = MEL_SUB_MODELL[String(b.modell ?? 'flash')] ?? MEL_SUB_MODELL.flash;
+  const cwd = orchMap[key]?.dir ?? live.workDir ?? cwdMap[key] ?? homedir();
+  const t0 = Date.now();
+  emitStatus(live, `🇪🇺 Melious-Teilagent (${model}, jcode): ${auftrag.replace(/\s+/g, ' ').slice(0, 80)}${auftrag.length > 80 ? '…' : ''}`);
+  const out = await jcodeSpawn({ cwd, prompt: `${auftrag}\n\n(Nur lesen: nichts ändern, nichts installieren, keine Repo-Skripte ausführen.)`, model, tools: 'read,bash,agentgrep', key: mel.token,
+    timeoutS: envZahl('BRIDGE_MEL_SUB_TIMEOUT_S', 900, 60), abbruch: () => live.abort.signal.aborted });
+  const { j, usage, gelaufen } = jcodeAuswerten(out, cwd, model);
+  const energie = mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0;
+  try { live.req.onMeliousUsage?.(usage, gelaufen); } catch { /* egal */ }
+  // Gebucht wie ein Worker des Zugs (Budget und Messung zählen ihn beim Strang bzw. Hauptchat).
+  try { live.req.onTurnLog?.({ conv: convId, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${gelaufen} (jcode, melious_sub)`, input: usage.input + usage.cacheRead, output: usage.output, cacheRead: usage.cacheRead, energie, outcome: out.code === 0 && j ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: 'mel-sub', parent: key } as ZugLog); } catch { /* egal */ }
+  log('mel-sub', { conv: key, modell: gelaufen, exit: out.code, ms: Date.now() - t0, ...usage, energie: Math.round(energie) });
+  if (out.code !== 0 || !j) return { ok: true, text: `melious_sub fehlgeschlagen (Exit ${out.code}) — nimm denselben Auftrag als Teilagent über Claude ([claude] in der description).` };
+  return { ok: true, text: `${String(j.text ?? '(keine Antwort)')}\n\n— melious_sub · ${gelaufen} · jcode · ≈ ${Math.round(energie)} Energie · Ergebnis ist ein Kandidat: am Code nachprüfen.` };
+}
+
+/** Auslastung für das Werkzeug `auslastung` (Lead): cswap + Melious-Rest des Kontos der Person. */
+export async function auslastungFuer(userId: string, convId: string): Promise<Res> {
+  const live = lives.get(`${safeId(userId)}:${safeId(convId)}`);
+  const a = await auslastung();
+  const mel = live?.req ? await melKonto(live, userId) : undefined;
+  return { ok: true, text: auslastungZeile(a, mel === undefined ? undefined : mel ? { rest: mel.rest ?? null } : null) };
 }
 
 async function runWorker(d: Deleg, prompt: string): Promise<string> {
@@ -2130,6 +2361,6 @@ export async function phaseWechseln(userId: string, convId: string, b: { phase?:
   saveMap();
   log('phase angemeldet', { conv: key, von: e.phase ?? null, nach: phase, c2, ersatz: ersatz.length });
   const p = e.profil ?? 'voll';
-  const ziel = e.modell ? `Modell bleibt ${e.modell} (beim Start gesetzt)` : p !== 'voll' && p !== 'bauer' ? `Modell nach Profil „${p}“ (zuerst Melious)` : `Claude ${modell === 'opus' ? 'Opus' : 'Sonnet'}${c2 ? ' (Opus bevorzugt: Eingriff mit Rückwirkung, C2)' : ''}`;
+  const ziel = e.modell ? `Modell bleibt ${e.modell} (beim Start gesetzt)` : p !== 'voll' && p !== 'bauer' && p !== 'release' ? `Modell nach Profil „${p}“ (zuerst Melious)` : `Claude ${modell === 'opus' ? 'Opus' : 'Sonnet'}${c2 ? ' (Opus bevorzugt: Eingriff mit Rückwirkung, C2)' : ''}`;
   return { ok: true, text: `Phase „${phase}“ angemeldet (Übergabe geprüft). Beende jetzt deinen Zug mit einem kurzen Satz und ohne weitere Werkzeuge — die Brücke setzt sofort in einer neuen Sitzung fort: ${ziel}, Kontext nur Auftrag + Übergabe.${pruefText ? ` Die Brücke hat den Stand geprüft (Ersatz-Lead): ${pruefText.includes('ROT') ? 'ROTE Prüfungen — stehen in der Übergabe.' : 'alles grün.'}` : ''}` };
 }

@@ -8,8 +8,9 @@
 //     Visual-Check, Risiko hoch, doppelte Schritte und Deckel. Der Agent meldet „ETA:“ im Stand-Block; list/show zeigen sie.
 //     [--budget TOKENS]   Tokenbudget des Strangs (Eingabe ohne Cache-Lesen + Ausgabe; Plan 209): bei 80 % eine Meldung, bei 100 % Pause mit Rückfrage;
 //     ohne Angabe ORCH_BUDGET_TOKENS je Tiefe (quick ⅓, deep 2×; Vorgabe 0 = aus)
-//     [--profil voll|bauer|leser|schreiber]   Rollen-Profil (Grundlast je Zug): bauer = nur vault-search/werkbank-MCP; leser =
-//     Lesen + lesende Bash-Befehle, ohne Skills/CLAUDE.md, zuerst Melious (mit --bare); schreiber = wie bauer, zuerst Melious.
+//     [--profil voll|bauer|leser|schreiber|release]   Rollen-Profil (Grundlast je Zug): bauer = nur vault-search/werkbank-MCP; leser =
+//     Lesen + lesende Bash-Befehle, ohne Skills/CLAUDE.md, zuerst Melious (mit --bare); schreiber = wie bauer, zuerst Melious;
+//     release = wie voll, dazu `git -C <cwd> merge …` — nur in einem eigenen Git-Worktree des Werkbank-Repos (Plan 213).
 //     Git-Repo mit origin auf github.com/WirStrom1|knut523: vorher git fetch, „Stand: …“ im Chat; --code = frischer Worktree
 //     <repo>-agent-<id> (Zweig agent/<id>) von origin/develop|dev|main statt des angegebenen Ordners. Nie pushen.
 //     --code prüft vorher G0 (scripts/vorbau-check; Slug aus --slug oder spec: der Plandatei): Treffer/Stopp → kein Start,
@@ -29,6 +30,7 @@
 //   orch freigabe-gepusht <freigabe-id> [--pr URL]   nach dem Push: Freigabe als gepusht markieren (nicht mehr zurückziehbar)
 //   orch ask --title T --context TEXT --recommend TEXT [--option "Label :: Folge"]… [--strand <id>] [--link URL] [--plan DATEI]
 //     [--key <slug>#<id>] [--quelle drift]   Schlüssel offen/beantwortet → Exit 3 (keine zweite Frage); Tageskappe → Exit 4
+//     [--stufe wichtig|normal]   wichtig = Knut entscheidet selbst; normal = Empfehlung gilt nach 24 h (Regeln stufen nie herunter)
 //   orch questions list [--open] [--json] · orch questions get <id> [--json] · orch questions withdraw <id>
 //   orch leitstand start --handover DATEI [--json]   Leitstand-Chat (Plan 132, nur Admin): Übergabe aus der Datei (Vorlage
 //     docs/leitstand-uebergabe-vorlage.md), ein vorhandener Leitstand wird beendet. Danach weckt die Werkbank ihn bei Ereignissen.
@@ -233,7 +235,7 @@ async function main() {
       const str = (k: string) => (typeof flags[k] === 'string' ? flags[k] as string : undefined);
       if (!str('title') || !str('context') || !str('recommend')) die('ask braucht --title, --context und --recommend (nur echte Entscheidungen, mit Empfehlung).');
       const opts = options.map((o) => { const [label, ...rest] = o.split('::'); return { label: label.trim(), consequence: rest.join('::').trim() }; });
-      const j = await call('questions/ask', { title: str('title'), context: str('context'), recommendation: str('recommend'), options: opts, strand: str('strand') ?? null, link: str('link') ?? null, plan: str('plan') ?? null, key: str('key') ?? null, quelle: str('quelle') ?? null });
+      const j = await call('questions/ask', { title: str('title'), context: str('context'), recommendation: str('recommend'), options: opts, strand: str('strand') ?? null, link: str('link') ?? null, plan: str('plan') ?? null, key: str('key') ?? null, quelle: str('quelle') ?? null, stufe: str('stufe') ?? null });
       if (flags.json) return console.log(JSON.stringify(j, null, 1));
       console.log(`Rückfrage angelegt: ${j.id} — erscheint im OLAF Workspace unter Heute → „Wartet auf dich“ und zählt in „Heute (n)“. Antwort: orch questions get ${j.id}`);
       return;

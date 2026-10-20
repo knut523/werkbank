@@ -206,7 +206,13 @@ function kopf(kind: Kind, heute: string): string {
 }
 
 /** Leere Datei mit Kopf; Personen vorbefüllt (K11), Themen vorbefüllt aus Jira-Workstreams/Strängen (K9). */
-export function neueDatei(kind: Kind, heute: string, vor: { personen?: { name: string; aliase: string[] }[]; themen?: string[] } = {}): string {
+export type ThemaVor = string | { name: string; stand?: string; naechster?: string; ball?: string };
+/** Gegenprüfung 19.10.: dieselbe Namensgleichheit wie beim Schreiben (norm), höchstens `max` — so zeigt die Vorschau genau, was in die Datei kommt. */
+export function themenEindeutig<T extends { name: string }>(liste: T[], max = 60): T[] {
+  const gesehen = new Set<string>();
+  return liste.filter((t) => { const k = norm(t.name); if (!k || gesehen.has(k)) return false; gesehen.add(k); return true; }).slice(0, max);
+}
+export function neueDatei(kind: Kind, heute: string, vor: { personen?: { name: string; aliase: string[] }[]; themen?: ThemaVor[] } = {}): string {
   let t = kopf(kind, heute);
   if (kind === 'zusagen') {
     t = t.replace(/\n$/, '\n') + `- Knut · Knut · auch: ${KNUT_NAMEN.filter((x) => x !== 'knut').map((x) => x.replace(/\b\w/g, (c) => c.toUpperCase())).join(', ')}\n`;
@@ -215,7 +221,11 @@ export function neueDatei(kind: Kind, heute: string, vor: { personen?: { name: s
       t += `- ${feld(p.name)} · Team${p.aliase.length ? SEP + 'auch: ' + p.aliase.map(feld).join(', ') : ''}\n`;
     }
   } else {
-    for (const th of [...new Set(vor.themen ?? [])].sort()) t += `- **${feld(th)}**${SEP}Stand: –${SEP}Nächster Schritt: –${SEP}Ball bei: –${SEP}geändert ${heute}\n`;
+    const th = new Map<string, Exclude<ThemaVor, string>>();
+    for (const x of vor.themen ?? []) { const o = typeof x === 'string' ? { name: x } : x; if (!th.has(norm(o.name))) th.set(norm(o.name), o); }
+    // Strings (alte Vorbefüllung) alphabetisch; Vorschläge aus dem Stand behalten ihre Reihenfolge (Überfälliges zuerst).
+    const liste = (vor.themen ?? []).every((x) => typeof x === 'string') ? [...th.values()].sort((a, b) => a.name.localeCompare(b.name)) : [...th.values()];
+    for (const o of liste) t += `- **${feld(o.name)}**${SEP}Stand: ${feld(o.stand) || '–'}${SEP}Nächster Schritt: ${feld(o.naechster) || '–'}${SEP}Ball bei: ${feld(o.ball) || '–'}${SEP}geändert ${heute}\n`;
   }
   return t;
 }
@@ -393,7 +403,7 @@ function inReihe<T>(key: string, fn: () => Promise<T>): Promise<T> {
 
 export interface SchreibOpts {
   vaultDir: string; dry?: boolean; confirm?: boolean; hash?: string; heute?: string;
-  vorbefuellung?: () => { personen?: { name: string; aliase: string[] }[]; themen?: string[] };
+  vorbefuellung?: () => { personen?: { name: string; aliase: string[] }[]; themen?: ThemaVor[] };
   /** Sperre des Vault-Syncs (Tests ersetzen sie). */
   locked?: () => boolean;
   /** Nach erfolgreichem Schreiben (Index verwerfen). */

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Eval-Satz der Auto-Reviews (Paket 223). Hilfe: web/server/revieweval-cli.ts. Nur lesend, postet nie.
+# Für „vorbereiten“ das GitHub-Lesetoken wie ghr über den Vaultwarden-Helper (GIT_VW_READ=1), nur im Speicher dieses Aufrufs.
+set -euo pipefail
+WB="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+[ -x "$WB/.runtime/node/bin/node" ] && export PATH="$WB/.runtime/node/bin:$PATH"
+if [ "${1:-}" = vorbereiten ] && [ -z "${WERKBANK_GITHUB_TOKEN:-}" ]; then
+  WERKBANK_GITHUB_TOKEN="$(printf 'protocol=https\nhost=github.com\npath=WirStrom1/olaf-admin.git\n\n' | GIT_VW_READ=1 "$HOME/bin/git-credential-vaultwarden" get | sed -n 's/^password=//p')"
+  export WERKBANK_GITHUB_TOKEN
+fi
+exec node "$WB/web/server/revieweval-cli.ts" "$@"

@@ -2,7 +2,7 @@
 // nichts); gesperrte API-Pfade → 403; Anmeldung, Einrichtung, Konfiguration bleiben offen.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { featuresFor, blockedFeature, featureOfPath, teamFeatures, FEATURES } from '../server/features.ts';
+import { featuresFor, blockedFeature, featureOfPath, teamFeatures, FEATURES, knutsFragen } from '../server/features.ts';
 
 const admin = { role: 'ADMIN' }, user = { role: 'USER' };
 
@@ -30,4 +30,21 @@ test('API: gesperrte Pfade für das Team, offene Pfade immer, Admin nie gesperrt
   for (const p of ['/api/config', '/api/setup/status', '/api/login', '/api/events', '/api/prefs', '/api/hygiene']) assert.equal(blockedFeature(user, p, env), null, p);
   assert.equal(blockedFeature(admin, '/api/board/issues', {} as NodeJS.ProcessEnv), null);
   assert.equal(featureOfPath('/api/boardx'), null, 'nur ganze Pfadstücke');
+});
+
+test('F6 (Knut 19.10.): Instanz-Profil team — die Besitzerin hat alles außer Knuts Chief of Staff, auch in der API', () => {
+  const env = { WERKBANK_INSTANZ: 'team' } as any;
+  const f = featuresFor({ role: 'ADMIN' }, env);
+  assert.equal(f.leitstand, true); assert.equal(f.heute, true); assert.equal(f.cos, false);
+  assert.equal(blockedFeature({ role: 'ADMIN' }, '/api/cos/lage', env), 'cos');
+  assert.equal(blockedFeature({ role: 'ADMIN' }, '/api/leitstand/overview', env), null);
+  assert.equal(featuresFor({ role: 'ADMIN' }, {} as any).cos, true, 'Knuts Instanz: alles');
+});
+
+test('U5: Knuts Vault-Fragen nur in Knuts Instanz und nur für Admins — nie bei der Besitzerin einer Team-Instanz', () => {
+  const admin = { role: 'ADMIN' }, person = { role: 'USER' };
+  assert.equal(knutsFragen(admin, {}), true);
+  assert.equal(knutsFragen(person, {}), false);
+  assert.equal(knutsFragen(admin, { WERKBANK_INSTANZ: 'team' }), false);
+  assert.equal(knutsFragen(null, {}), false);
 });

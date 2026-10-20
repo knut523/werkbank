@@ -2,6 +2,7 @@
 // MCP-Server "werkbank" (stdio) — nur für Sitzungen der Werkbank-Brücke, je Person gestartet.
 // Werkzeuge:
 //   hygiene_list    eigene Task-Hygiene-Punkte (lesend)
+//   inbox           offene Inbox-Einträge (lesend; die Brücke setzt die Ja/Nein-Knöpfe, Plan 213 K4)
 //   hygiene_snooze  einen Punkt für heute auf "später" setzen (ändert nur Werkbank-Zustand)
 //   review_ready    Fertig-Marke am eigenen Agentenlauf dieser Unterhaltung (ändert nur Werkbank-Zustand)
 //   jira_update     Kommentar / Status / Fälligkeit auf einem eigenen PM-Ticket — die Brücke fragt vorher
@@ -55,7 +56,7 @@ async function bridge(path: string, body: unknown, timeoutMs: number): Promise<s
 const DELEG_TOOLS = [
   {
     name: 'delegieren',
-    description: 'Teilaufgabe an einen Worker abgeben (zuerst Melious; Claude Haiku/Sonnet nur unter Deckel). Nur für große, abgegrenzte Aufgaben (du müsstest sonst > 20k Tokens selbst lesen/schreiben), gebündelt; höchstens 3 gleichzeitig. rolle: leser (liest/sucht, Belege), schreiber (Texte/Dateien im eigenen Worktree), bauer (Code im eigenen Unter-Worktree vom Strang-Kopf, liefert Commit), pruefer (begutachtet eine Delegation: pruefe=<Kennung>). aufgabe: vollständiger Auftrag (höchstens 20 000 Zeichen; der Worker kennt deinen Chat nicht). risiko: niedrig|mittel|hoch (nie unter dem des Strangs). Antwortet sofort mit der Kennung; Ergebnis mit delegation_stand. Worker enden mit deinem Zug.',
+    description: 'Vor allem für Schreibarbeit (schreiber, bauer; pruefer prüft deren Ergebnis) — kurzes Lesen und Recherchieren gibst du lieber synchron mit melious_sub ab; leser nur für lange, parallele Lesearbeit. Teilaufgabe an einen Worker abgeben (zuerst Melious; Claude Haiku/Sonnet nur unter Deckel). Nur für große, abgegrenzte Aufgaben (du müsstest sonst > 20k Tokens selbst lesen/schreiben), gebündelt; höchstens 3 gleichzeitig. rolle: leser (liest/sucht, Belege), schreiber (Texte/Dateien im eigenen Worktree), bauer (Code im eigenen Unter-Worktree vom Strang-Kopf, liefert Commit), pruefer (begutachtet eine Delegation: pruefe=<Kennung>). aufgabe: vollständiger Auftrag (höchstens 20 000 Zeichen; der Worker kennt deinen Chat nicht). risiko: niedrig|mittel|hoch (nie unter dem des Strangs). Antwortet sofort mit der Kennung; Ergebnis mit delegation_stand. Worker enden mit deinem Zug.',
     inputSchema: { type: 'object', properties: { rolle: { type: 'string', enum: ['leser', 'schreiber', 'bauer', 'pruefer'] }, aufgabe: { type: 'string' }, risiko: { type: 'string', enum: ['niedrig', 'mittel', 'hoch'] }, pruefe: { type: 'string' } }, required: ['rolle'] },
     run: (a: any) => bridge('/internal/delegate', { rolle: a.rolle, aufgabe: a.aufgabe ?? '', risiko: a.risiko, pruefe: a.pruefe }, 120_000),
   },
@@ -84,10 +85,10 @@ const ORCH_TOOLS = [
   {
     name: 'orch_start',
     description: 'Neuen Arbeitsstrang starten: eigener Workspace-Chat in Knuts Konto mit Auftrag, Arbeitsordner (Worktree unter ~/work/knut) und optional Plandatei. lauf = Name des Auftrags, zu dem der Strang gehört (Gruppe + Lesezeichen „Orch · <Lauf>“; alle Stränge eines Auftrags mit demselben lauf). Bericht nach ~/work/knut/review-pakete/NNN-<slug>/bericht.md verlangen, dann verlinkt der OLAF Workspace ihn. code=true legt einen frischen Worktree vom Integrationszweig an. tiefe (Vorgabe regular): quick = kleine, klare Aufgabe (Melious Flash, kein Council, keine Gegenprüfung, nur Repo-Tests); regular = wie bisher (plan-to-pr, Pass C mit challenge); deep = voller plan-to-pr mit Council, Gegenprüfung auf GLM 5.3, Visual-Check, doppeltes Budget. Liefert ID und Link.',
-    inputSchema: { type: 'object', properties: { title: { type: 'string' }, cwd: { type: 'string' }, prompt: { type: 'string' }, plan: { type: 'string' }, lauf: { type: 'string' }, code: { type: 'boolean' }, shared: { type: 'boolean' }, tiefe: { type: 'string', enum: ['quick', 'regular', 'deep'] }, budget: { type: 'number', description: 'Tokenbudget des Strangs (Eingabe ohne Cache-Lesen + Ausgabe); bei 80 % Meldung, bei 100 % Pause mit Rückfrage. Leer = Vorgabe des Workspace je Tiefe.' } }, required: ['title', 'cwd', 'prompt'] },
+    inputSchema: { type: 'object', properties: { title: { type: 'string' }, cwd: { type: 'string' }, prompt: { type: 'string' }, plan: { type: 'string' }, lauf: { type: 'string' }, code: { type: 'boolean' }, shared: { type: 'boolean' }, tiefe: { type: 'string', enum: ['quick', 'regular', 'deep'] }, profil: { type: 'string', enum: ['voll', 'bauer', 'leser', 'schreiber', 'release'], description: 'release = Release-Strang: darf im eigenen Werkbank-Worktree lokal zusammenführen; Push und Live-Schalten bleiben gesperrt' }, budget: { type: 'number', description: 'Tokenbudget des Strangs (Eingabe ohne Cache-Lesen + Ausgabe); bei 80 % Meldung, bei 100 % Pause mit Rückfrage. Leer = Vorgabe des Workspace je Tiefe.' } }, required: ['title', 'cwd', 'prompt'] },
     run: async (a: any) => {
-      const j = await call('/internal/orchestrator/start', { title: a.title, cwd: a.cwd, prompt: a.prompt, plan: a.plan || null, lauf: a.lauf || null, code: a.code === true, shared: a.shared === true, ...(a.tiefe ? { tiefe: a.tiefe } : {}), budget: a.budget || null }, 60_000);
-      return `gestartet: ${j.id} ${j.url}\nTiefe: ${j.tiefe ?? 'regular'}${j.modell ? ` · Modell ${j.modell}` : ''}\nOrdner: ${j.cwd}${j.worktree ? ' (frischer Worktree)' : ''}${j.stand ? `\n${j.stand}` : ''}${j.warning ? `\nHinweis: ${j.warning}` : ''}`;
+      const j = await call('/internal/orchestrator/start', { title: a.title, cwd: a.cwd, prompt: a.prompt, plan: a.plan || null, lauf: a.lauf || null, code: a.code === true, shared: a.shared === true, ...(a.tiefe ? { tiefe: a.tiefe } : {}), ...(a.profil ? { profil: a.profil } : {}), budget: a.budget || null }, 60_000);
+      return `gestartet: ${j.id} ${j.url}\nTiefe: ${j.tiefe ?? 'regular'}${j.modell ? ` · Modell ${j.modell}` : ''}\nOrdner: ${j.cwd}${j.worktree ? ' (frischer Worktree)' : ''}${j.stand ? `\n${j.stand}` : ''}${j.warning ? `\nHinweis: ${j.warning}` : ''}${j.schaetzung ? `\n${j.schaetzung.text}${(j.schaetzung.hinweise ?? []).map((h: string) => `\nHinweis: ${h}`).join('')}` : ''}`;
     },
   },
   {
@@ -148,9 +149,9 @@ const ORCH_TOOLS = [
   },
   {
     name: 'orch_ask',
-    description: 'Echte Entscheidung an Knut (erscheint im OLAF Workspace unter „Heute“ → „Wartet auf dich“). Nur was wirklich Knuts Entscheidung ist; Kontext in Klartext (2–4 Sätze), Optionen mit Folge, eigene Empfehlung. Du wirst geweckt, sobald Knut antwortet.',
-    inputSchema: { type: 'object', properties: { title: { type: 'string' }, context: { type: 'string' }, recommendation: { type: 'string' }, options: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, consequence: { type: 'string' } }, required: ['label'] } }, strand: { type: 'string' }, link: { type: 'string' }, plan: { type: 'string' } }, required: ['title', 'context', 'recommendation'] },
-    run: async (a: any) => { const j = await call('/internal/orchestrator/questions/ask', { title: a.title, context: a.context, recommendation: a.recommendation, options: a.options ?? [], strand: a.strand || null, link: a.link || null, plan: a.plan || null }); return `Rückfrage angelegt: ${j.id} — erscheint in „Heute“.`; },
+    description: 'Echte Entscheidung an Knut (erscheint im OLAF Workspace unter „Heute“ → „Wartet auf dich“). Nur was wirklich Knuts Entscheidung ist; Kontext in Klartext (2–4 Sätze), Optionen mit Folge, eigene Empfehlung. Du wirst geweckt, sobald Knut antwortet. Stufe: „wichtig“, wenn Knut selbst entscheiden muss (bleibt offen); sonst gilt deine Empfehlung bei Stufe „normal“ nach 24 h als angenommen — Push/Release, Geld, Recht, Außenwirkung und Architektur stuft der Workspace ohnehin als wichtig ein.',
+    inputSchema: { type: 'object', properties: { title: { type: 'string' }, context: { type: 'string' }, recommendation: { type: 'string' }, options: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, consequence: { type: 'string' } }, required: ['label'] } }, strand: { type: 'string' }, link: { type: 'string' }, plan: { type: 'string' }, stufe: { type: 'string', enum: ['wichtig', 'normal'] } }, required: ['title', 'context', 'recommendation'] },
+    run: async (a: any) => { const j = await call('/internal/orchestrator/questions/ask', { title: a.title, context: a.context, recommendation: a.recommendation, options: a.options ?? [], strand: a.strand || null, link: a.link || null, plan: a.plan || null, stufe: a.stufe ?? null }); return `Rückfrage angelegt: ${j.id} — erscheint in „Heute“${j.stufe === 'wichtig' ? '' : ' (Stufe normal: Empfehlung gilt nach 24 h als angenommen, außer die Regeln stufen sie als wichtig ein)'}.`; },
   },
   {
     name: 'orch_questions',
@@ -214,6 +215,27 @@ serve('werkbank', '0.1.0', [
       const j = await call('/internal/hygiene', {});
       return j.items.length ? j.items.map((i: any) => `- ${i.key} [${i.rule}] ${i.detail}${j.snoozed.includes(i.key) ? ' (heute später)' : ''}`).join('\n') : 'Keine offenen Hygiene-Punkte.';
     },
+  },
+  {
+    name: 'inbox',
+    description: 'Offene Entscheidungen der Person (die Inbox aus „Heute“): Rückfragen, Freigaben, Pushes, Vault-Fragen, Pflege. Die Brücke hängt selbst Ja/Nein-Knöpfe an — schreib keine Knöpfe oder Anker in deine Antwort; fasse nur zusammen und nenne deine Empfehlung.',
+    inputSchema: { type: 'object', properties: {} },
+    run: async () => {
+      const j = await call('/internal/inbox', {});
+      const e: any[] = j.eintraege ?? [];
+      if (!e.length) return 'Inbox leer — nichts wartet auf eine Entscheidung.';
+      const einz = (v: unknown) => String(v ?? '').replace(/[\r\n]+/g, ' ');
+      const zeilen = e.map((x) => `- [${x.id}]${x.stufe === 'wichtig' ? ' (wichtig)' : x.autoAb ? ` (normal, gilt ab ${t(x.autoAb)} als angenommen)` : ''} ${einz(x.frage)}${x.empfehlung ? ` — Empfehlung: ${einz(x.empfehlung)}` : ''} (${einz(x.quelle?.text)})`);
+      // Knöpfe nur, wo Ja und Nein an der Quelle wirklich gehen (Vault-Fragen antworten in ihrer Ansicht, mehrere Entscheidungen einzeln).
+      const knoepfe = e.filter((x) => ['rueckfrage', 'braucht', 'entscheidung'].includes(x.art) && !x.mehrere).map((x) => ({ id: String(x.id), frage: einz(x.frage), quelle: einz(x.quelle?.text) }));
+      return `${e.length} offen:\n${zeilen.join('\n')}\n\nKNOEPFE ${JSON.stringify(knoepfe)}`;
+    },
+  },
+  {
+    name: 'inbox_antworten',
+    description: 'Einen Inbox-Eintrag an seiner Quelle beantworten: kennung aus `inbox` (z. B. q-…, d-…, b-…), antwort ja | nein | anders (dann text = was stattdessen gelten soll). Für „Anders“ aus dem Chat; Ja/Nein gehen auch über die Knöpfe. Nie raten: nur mit der Kennung, die die Person gemeint hat.',
+    inputSchema: { type: 'object', properties: { kennung: { type: 'string' }, antwort: { type: 'string', enum: ['ja', 'nein', 'anders'] }, text: { type: 'string' } }, required: ['kennung', 'antwort'] },
+    run: async (a: any) => { const j = await call('/internal/inbox/antwort', { kennung: a.kennung, antwort: a.antwort, text: a.text ?? '' }); return `Eingetragen (${j.art ?? 'ok'}) — an der Quelle beantwortet, steht im Entscheidungs-Log.`; },
   },
   {
     name: 'hygiene_snooze',
@@ -297,6 +319,21 @@ serve('werkbank', '0.1.0', [
     },
   },
   ...(process.env.WERKBANK_LEITSTAND === '1' ? ORCH_TOOLS : []),
+  // Lead-Lücken aus Paket 217 (Knut 19.10.): PR-Review starten, privates GitHub lesen — nur im Hauptchat.
+  ...(process.env.WERKBANK_LEITSTAND === '1' ? [
+    {
+      name: 'pr_review_starten',
+      description: 'PR-Review starten wie „Review starten“ in Arbeit › Reviews & PRs: pr = „owner/repo#123“ oder GitHub-Link, stufe quick (Vorgabe) oder deep. Läuft als eigener Review-Strang; Ergebnis kommt als Meldung.',
+      inputSchema: { type: 'object', properties: { pr: { type: 'string' }, stufe: { type: 'string', enum: ['quick', 'deep'] } }, required: ['pr'] },
+      run: async (a: any) => { const j = await call('/internal/lead/pr-review', { pr: a.pr, stufe: a.stufe ?? 'quick' }); return `Review ${j.pr} (${j.stufe}) eingereiht: ${j.id}. ${j.hinweis}`; },
+    },
+    {
+      name: 'github_lesen',
+      description: 'Privates GitHub NUR LESEN über den Lesetoken des Workspace (REST, freigegebene Orgs): pfad z. B. „repos/WirStrom1/olaf-admin/pulls/354“, „…/pulls/354/files“, „…/contents/src/a.ts?ref=main“, „…/compare/main...feat/x“, „…/actions/runs“. Schreiben geht nur über den Freigabeweg.',
+      inputSchema: { type: 'object', properties: { pfad: { type: 'string' } }, required: ['pfad'] },
+      run: async (a: any) => { const j = await call('/internal/lead/github', { pfad: a.pfad }); return `HTTP ${j.status}\n${j.text}`; },
+    },
+  ] : []),
   // Push (Plan 154, S4): nur in Unter-Chats (WERKBANK_STRANG setzt die Brücke aus der Art der Unterhaltung).
   ...(process.env.WERKBANK_STRANG === '1' ? [{
     name: 'hauptchat_melden',
@@ -309,6 +346,21 @@ serve('werkbank', '0.1.0', [
   }] : []),
   // Delegieren und Phasen-Lead (Plan 165): nur in Strängen; die Brücke kennt Person und Strang aus dieser Umgebung.
   ...(process.env.WERKBANK_STRANG === '1' && process.env.WERKBANK_BRIDGE_URL ? DELEG_TOOLS : []),
+  // Native Verteilung Claude ↔ Melious (Knut 19.10.): Lead und Stränge.
+  ...(process.env.WERKBANK_BRIDGE_URL ? [
+    {
+      name: 'melious_sub',
+      description: 'Teilagent auf Melious (EU, jcode, nur lesend) im Arbeitsordner dieses Chats — Standard für Lesen, Suchen im Code, Recherche und Gegenprüfen; spart Claude. modell: flash (Vorgabe, Fan-out) oder glm (Urteile). Synchron, Ergebnis ist ein Kandidat: am Code nachprüfen. Code schreiben und Entscheidungen bleiben bei Claude.',
+      inputSchema: { type: 'object', properties: { auftrag: { type: 'string', description: 'vollständiger Auftrag, mit Pfaden und gewünschtem Ergebnisformat (z. B. Datei:Zeile)' }, modell: { type: 'string', enum: ['flash', 'glm'] } }, required: ['auftrag'] },
+      run: async (a: any) => bridge('/internal/mel-sub', { auftrag: a.auftrag, modell: a.modell ?? 'flash' }, Number(process.env.WERKBANK_MEL_SUB_TIMEOUT_MS) || 960_000),
+    },
+    {
+      name: 'auslastung',
+      description: 'Claude-Auslastung (cswap: 5-Stunden- und Wochenfenster, Stufe grün/gelb/rot) und Melious-Rest — mit der Regel, was gerade an Melious geht.',
+      inputSchema: { type: 'object', properties: {} },
+      run: async () => bridge('/internal/auslastung', {}, 30_000),
+    },
+  ] : []),
   // Gegenprüfung durch GLM 5.3 über Melious (Plan 162; Knut 15.10.: „Lead kann jeweils sowieso challengen mit GLM 5.3“).
   {
     name: 'challenge',

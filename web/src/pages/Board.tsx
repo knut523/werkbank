@@ -335,7 +335,7 @@ function WasFehlt({ hyg, href }: { hyg: Befund[]; href: string }) {
   );
 }
 
-export function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: string; onClose: () => void; onChanged: () => void; site: string; forge?: boolean; onOpenKey: (k: string) => void }) {
+export function Detail({ k, onClose, onChanged, site, forge, onOpenKey, einStart }: { k: string; onClose: () => void; onChanged: () => void; site: string; forge?: boolean; onOpenKey: (k: string) => void; einStart?: boolean }) {
   const d = useLoad(() => api('/api/board/issue/' + k), [k]);
   // Jira-Änderung an genau diesem Ticket (z. B. aus einem Chat) → Details still nachladen.
   useJiraLive((e) => { if (e.all || e.keys.includes(k)) api('/api/board/issue/' + k).then(d.setData).catch(() => {}); });
@@ -410,7 +410,13 @@ export function Detail({ k, onClose, onChanged, site, forge, onOpenKey }: { k: s
             {i.duedate && <button className="btn small" onClick={() => write('due', { date: null }, `Fälligkeit von ${k} entfernen?`, <p>{fmtDate(i.duedate)} → ohne Datum</p>)}>Entfernen</button>}
           </div>
           <EditFields i={i} onDone={async () => { await d.reload(); onChanged(); }} />
-          <ChatAgents issueKey={k} runs={(d.data as any).runs} onChange={d.reload} />
+          {/* P4 (Zielbild § 3, „ein Start“): mit der neuen Leiste startet ein Admin Arbeit an einem Ticket wie jede andere — als
+              Unter-Chat mit Bericht, vorbefüllt mit dem Ticket. Der Chat-Agent bleibt für Team-Konten ohne Unter-Chats. */}
+          {einStart ? <div className="card soft" style={{ marginTop: 12 }} data-testid="ein-start">
+            <h3 style={{ marginTop: 0 }}>Arbeit an {k} starten</h3>
+            <p className="small muted">Als Unter-Chat mit Bericht und Fragen an dich — derselbe Start wie unter Arbeit.</p>
+            <a className="btn primary" href={`#/arbeit?neu=1&auftrag=${encodeURIComponent(`${k}: ${i.summary}\n\nTicket: ${k} (Jira). `)}`}>Unter-Chat starten …</a>
+          </div> : <ChatAgents issueKey={k} runs={(d.data as any).runs} onChange={d.reload} />}
           <AgentPanel issueKey={k} runs={(d.data as any).runs} onChange={() => d.reload()} />
           {forge && <ForgePanel issueKey={k} enabled onStarted={() => d.reload()} />}
           <p className="tiny" style={{ marginTop: 12 }}>Neue Tickets legt der OLAF Workspace bewusst nicht an (olaf-jira: nur auf ausdrücklichen Auftrag, mit Duplikatsuche und Workstream) — dafür den Chat nutzen.</p>
@@ -681,7 +687,7 @@ function BoardSite({ cfg, hash, site, onSite }: { cfg: Config; hash: string; sit
       {menuFor && <MoveMenu i={menuFor} lanes={data?.lanes ?? []} ts={dragTs} onClose={() => setMenuFor(null)} onMove={(lane, status) => doMove(menuFor, lane, status)} />}
       {pending && <MoveToast text={pending.text} dry={!!data?.dryRun} busy={moving} onUndo={() => { b.setData(pending.prev); setPending(null); }}
         onConfirm={async (noAsk) => { if (noAsk) { await api('/api/prefs', { body: { confirmMove: false } }).catch(() => {}); prefs.reload(); } commit(pending); }} />}
-      {open && <Detail k={open} onOpenKey={setOpen} site={data?.site ?? cfg.jiraSite} forge={cfg.forge} onClose={() => { setOpen(null); b.reload(); }} onChanged={() => b.reload()} />}
+      {open && <Detail k={open} onOpenKey={setOpen} site={data?.site ?? cfg.jiraSite} forge={cfg.forge} einStart={!!cfg.navNeu && cfg.user?.role === 'ADMIN'} onClose={() => { setOpen(null); b.reload(); }} onChanged={() => b.reload()} />}
     </div>
   );
 }

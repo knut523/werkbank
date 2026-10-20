@@ -1,0 +1,952 @@
+name: Deploy Admin App
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+    tags:
+      - 'v*'
+  # Verification only — a pull_request run resolves no deployment target, so every deploy step
+  # below skips itself. Without this the checks in this file run for the first time AFTER a merge,
+  # on the push, which is how a failing typecheck reached main on 2026-09-22 (#178) and how the
+  # next PR inherited it (#173). Same job, same step list: a second workflow would duplicate the
+  # list and drift from it, which is the defect class this repo has been paying for.
+  pull_request:
+    branches:
+      - develop
+      - main
+    # ready_for_review: a draft runs nothing (see `changes`), so the first run comes when it is
+    # marked ready.
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: Deployment target
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+      confirm_production:
+        description: Type deploy-production when target_environment is prod
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  # The db job's Postgres image from GHCR (mirror-ci-images.yml).
+  packages: read
+  # gh pr create, for the main -> develop sync PR after a release.
+  pull-requests: write
+  # OIDC token for azure/login, used by the Prod staging slot start, swap and stop.
+  id-token: write
+
+env:
+  NODE_VERSION: '24.x'
+  # Next phones home anonymous usage data on every build and prints a notice about it. Off in CI:
+  # nothing here needs to be measured by Vercel, and it keeps the build log to our own output.
+  NEXT_TELEMETRY_DISABLED: '1'
+
+# One group for the whole run, so the jobs below move together: a newer pull-request run cancels
+# every job of the older one, and a push waits for the previous push's run — deploy included — to
+# finish rather than racing it.
+concurrency:
+  group: admin-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target_environment || github.ref_name }}
+  # A superseded verification run is waste; a superseded deploy is a half-deployed app.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The checks run as parallel jobs and `deploy` needs every one of them, so a failure anywhere still
+# stops the deployment. Each job sets up Node through .github/actions/setup.
+#
+# What runs where (Actions minutes, 16.10.2026: the org's free minutes ran out, admin was 86%):
+#   pull request, ready, code      checks, db, build — the gate before develop; no deploy job
+#   pull request, draft            nothing; marking it ready runs it
+#   pull request, Markdown only    nothing
+#   push (develop, main), tag,     everything, then deploy (Dev, UAT, Prod, manual). The run after
+#     dispatch                       a merge is the only one that tests merged PRs together (#349).
+# Every billed job rounds up to a full minute, so a job that only decides to skip is not free.
+jobs:
+  # Whether a ready pull request touches anything but Markdown. A PR that changes docs alone
+  # (README, AGENTS.md, a runbook) runs no job after this one. Runs on pull requests only; on the
+  # other events every job runs (table above), so a push, a tag or a manual run never skips a test. Deliberately the inverse of a path allowlist: a new top-level folder is
+  # code until someone says otherwise.
+  changes:
+    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          files=$(git diff --name-only "$BASE" "$HEAD")
+          echo "$files"
+          if [ -n "$files" ] && ! echo "$files" | grep -qvE '\.md$'; then
+            echo "Markdown only: the DB suites are skipped."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Few jobs, each one a hosted runner to wait for: while GitHub was short of runners (2026-10-05)
+  # a run stalled on whichever job had not started yet. Static checks and the unit suites share one
+  # job (since #349, for Actions minutes): every job sets up Node again and bills a whole minute.
+  checks:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js and dependencies
+        uses: ./.github/actions/setup
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify Prisma table parity
+        run: npm run prisma:check-table-parity
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # A linter that only runs locally is a linter nobody runs.
+      - name: Lint
+        run: npm run lint
+
+
+      # Every suite that needs no database, in the same job as the static checks: one runner and
+      # one dependency install instead of two (each job bills at least a full minute).
+
+      # The rest of this repo's *:test scripts are not wired in here either, but a suite a PR
+      # cites as its evidence should actually gate it.
+      - name: Execution-failure notification tests
+        run: npm run execution-failure-notify:test && npm run brevo:test
+
+      # A failed HTTP call must not log its request: the MAXENERGY api-key, the Durable Functions
+      # host key, the Graph client secret and Bearer token, the customer on an appointment.
+      - name: HTTP error redaction tests
+        run: npm run http-error:test
+
+      # Which traces reach Application Insights. The last case runs the real Azure Monitor distro
+      # against a local sink, because the route-aware sampler is installed through a private field
+      # of the OpenTelemetry SDK — an upgrade that moves it must fail here, not go quiet in Prod.
+      - name: Trace sampling tests
+        run: npm run trace-sampling:test
+
+      # OLAF-321: the customer session lifetime is a cross-repo contract — the tariff app keeps a
+      # verified customer's device session until this token's exp — so a silent change must fail CI.
+      - name: OTP session lifetime tests
+        run: npm run otp-session:test
+
+      # A magic login link carries the one-time code, so where it may point is a security
+      # boundary: a foreign origin would receive a working login for the customer's address.
+      - name: OTP mail and magic-link origin tests
+        run: npm run otp:test
+
+      # The .ics builder and the booking-attachment suite are this PR's evidence — gate on them so
+      # a regression in the calendar invite (past-slot guard, escaping, folding, SEQUENCE) fails CI
+      # instead of reaching a customer's calendar.
+      - name: Booking / .ics tests
+        run: npm run booking:test
+
+      # The Report hero's KPIs are counted on two different bases (meter points vs contracts) and
+      # mixing them is silent on screen — gate on the assertion instead of noticing in a report.
+      - name: Cockpit report KPI tests
+        run: npm run cockpit:test
+
+      # The Brevo webhook is the only internet-facing endpoint in this repo that writes to the
+      # database, and it authenticates with a shared secret in a header rather than a session.
+      # The suite pins the admission rules, the two streams' disagreeing vocabularies (unsubscribed vs
+      # unsubscribe), and the idempotency key — all things a refactor can quietly break with
+      # nothing on screen to show for it. TZ is pinned because the payload-time parsing is
+      # timezone-dependent by nature and a green run on a UTC agent must not hide a bug that
+      # only appears on a developer's machine.
+      - name: Brevo webhook event tests
+        run: TZ=Europe/Vienna npm run brevo:events:test && TZ=UTC npm run brevo:events:test
+
+      # The handler itself during a database outage, through the real Prisma/pg stack against a
+      # local socket that never answers — no database needed. Pins the status Brevo retries on
+      # (429; every 5xx is discarded) and that no recipient reaches the log. The real-Postgres
+      # half (poisoned rows, redelivery, a connection lost mid-batch) self-skips here: this job
+      # has no database. Run it locally with BREVO_EVENTS_TEST_DATABASE_URL — as brevo:akte:test,
+      # the mails in the Kundenakte against Postgres, which self-skips here for the same reason.
+      - name: Brevo webhook outage tests (+ Kundenakte mail DB tests, self-skipping)
+        run: npm run brevo:webhook:test && npm run brevo:akte:test
+
+      - name: List-controls tests
+        run: npm run list-controls:test
+
+      # OLAF-164's evidence. The delivery-date formatter is the reason this gates: MAXENERGY's
+      # confirmed_delivery_* are text columns whose real format was never observed, and
+      # new Date('01.03.2026') silently yields 3 January rather than an invalid date.
+      - name: Wechselstatus tests
+        run: npm run switch-status:test
+
+      # The status name is a lookup key: the sync seeds cockpit_status_categories from the same
+      # stored values the Wechselstatus filter joins against. If the two disagree by so much as
+      # whitespace, that status is "Nicht klassifiziert" for good and nothing on screen says why.
+      - name: Joules sync tests
+        run: npm run joules:test
+
+      # The status history (one row per change, append-only) and the sync's audit rows need
+      # Postgres and self-skip here, like hardware-assignee:test:db; listed so a run with a
+      # database proves them and nobody has to remember they exist.
+      - name: Status history and sync audit tests (self-skipping without a database)
+        run: npm run status-history:test && npm run joules:audit:test
+
+      # The Wechselstatus roll-up is written twice: as `matchesSwitchFilter` over loaded rows, and
+      # as a generated Prisma predicate for the server-side filter. This suite asserts the two
+      # select the same contracts, which is the only thing keeping the SQL honest about the
+      # unanimity rule as either side is edited.
+      - name: Wechselstatus filter tests
+        run: npm run contracts:test
+
+      # The sync log's outcome buckets have to partition the runs: an abandoned run also carries an
+      # error, so a naive predicate counts it twice and the filtered totals stop adding up. The
+      # render half pins that a failed run, which writes no summary at all, still draws.
+      - name: MAXENERGY-Abgleich tests
+        run: npm run sync-log:test
+
+      # A new permission resource is a rollout event: accounts stored before it existed are denied
+      # until an administrator grants it. These pin that, and the nav gate that follows from it.
+      # permissions:test also pins that no account can write its own permissions through
+      # /update-user; auth:test:db is the same with real sessions and runs in the db job below.
+      - name: Navigation, permissions and section-settings tests
+        run: npm run nav:test && npm run permissions:test && npm run section-settings:test
+
+      # OLAF-347: every Postgres connection verifies the certificate, the only way back is
+      # DB_TLS_INSECURE=true, and migrate.sh makes Prisma verify too.
+      - name: Postgres TLS policy tests
+        run: npm run db-tls:test
+
+      - name: CSV export format tests
+        run: npm run csv-format:test
+
+      # The Anmeldung editor's rules, the endpoint's shape check and the form markup. Pure, needs no
+      # database; the DB-backed half (submission:test) needs a local Postgres and stays out of CI.
+      #
+      # Twice, in two zones: the form computes the Wunschtermin window in the admin's browser and the
+      # endpoint computes it again on the server, so a rule that reads local time would let the two
+      # disagree — which it did, for ~34 hours a year, until the limits moved to UTC.
+      - name: Anmeldung edit validation tests (UTC)
+        run: TZ=UTC npm run submission:test:pure
+
+      - name: Anmeldung edit validation tests (Europe/Vienna)
+        run: TZ=Europe/Vienna npm run submission:test:pure
+
+      # /api/tariff/submit is the one route a customer's OTP token can reach that writes. These two
+      # suites are its ownership and privilege regressions, so they gate the build. The DB-backed
+      # half self-skips without SUBMIT_TEST_DATABASE_URL, exactly like booking:test above.
+      - name: Tariff submit ownership / attribution tests
+        run: npm run attribution:test && npm run submit-route:test && npm run progress:test && npm run reservation:test && npm run usage:test
+      # Plan 114: the PII cipher and its key loader (format, AAD, row binding, canary, the refusal
+      # of local keys on App Service). Pure; the extension's DB half runs in the db job.
+      - name: PII encryption tests
+        run: npm run pii:test
+      # The meter-point slot definitions. Pure, needs no database, and every other file's slot
+      # handling is now generated from them — a wrong field name here loses a Zählpunkt silently.
+      - name: Meter-point slot tests
+        run: npm run slots:test && npm run change-date:test
+
+      # Plan 087: the BEV address register's rules — the one normaliser, house numbers and ranges,
+      # the search text, locate's exactness (never the first of two localities), the coordinate
+      # conversion's fixed vectors and the import's sanity gate. Its DB half runs in the db job.
+      - name: BEV address register tests
+        run: npm run address:test
+
+      # Also pure, and its columns are generated from the same slot definitions — an export that
+      # loses a slot loses every field of that Zählpunkt, not just its number.
+      - name: Submission export tests
+        run: npm run submission-export:test
+
+      # The Service View (#175). service:test is pure; its DB half (service:test:db) runs in the
+      # db job. submission:test is NOT here: its DB half writes append-only audit rows into
+      # whatever .env.local names — a follow-up, not a one-line change.
+      - name: Service View tests
+        run: npm run service:test && npm run submission:test:pure
+
+      # Hardware-Bearbeiter: the additive-migration guard and the Bearbeiter control are pure.
+      # hardware-assignee:test:db needs the local admin Postgres (55433) and self-skips elsewhere.
+      - name: Hardware assignee tests
+        run: npm run hardware-assignee:test && npm run hardware-assignee:test:db
+
+      # The Hardware-Anfrage page in the Akte layout and its list rail (plan 109), and the catalogue
+      # the offer editor reads. Pure: rendered to static markup, no database.
+      - name: Hardware tests
+        run: npm run hardware:test
+
+      # The offer PDF's positions (offer-pdf.ts, in this PR): what a customer reads on the offer.
+      - name: Offer tests
+        run: npm run offer:test
+
+      # Lost-submission recovery decides import vs repair vs skip on prod data; a regression here
+      # duplicates contracts or drops MAXENERGY ids, with nothing on screen to show for it.
+      - name: Recovery tests
+        run: npm run recover:test
+
+      # Sammelanmeldung (plan 088): row check, run planner, run payload, checksum, the frozen consent
+      # wording and that no Strecken-Konfigurator code is under the Sammel paths. Pure.
+      - name: Sammelanmeldung tests
+        run: npm run bulk-registration:test
+
+  # The suites against a real Postgres. Each shard runs every step below, and node:test runs only
+  # its share of each script's files (--test-shard): the shards together run every file once. Each
+  # shard has its own throwaway database, so the files that share one (--test-concurrency=1) still
+  # share it within a shard. Two shards, not more, for the runner reason above. One job instead was
+  # tried in #349: 3:31 bills 4 minutes, the same as two 2-minute shards, and the run got slower.
+  db:
+    needs: changes
+    # Skipped (not failed) where `checks` is skipped; `deploy` needs it, and a PR run deploys nothing.
+    if: ${{ !cancelled() && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      NODE_OPTIONS: --test-shard=${{ matrix.shard }}/2
+    # A throwaway Postgres for the cockpit's DB tests (council review of the built dashboard, F9):
+    # the rules the council made binding — manual sends do not use up the Turnus (A1), moves only
+    # after asking (A4), the tranche counting rule (D4), names only with cockpit.names (D5), the
+    # append-only audit log — are guaranteed by the database and only a real one can test them.
+    # No secret: it lives and dies with the job.
+    # Pulled from this org's GHCR with the job's own token, not anonymously: Docker Hub's pull rate
+    # limit failed every db job of #310 (2026-10-09), and AWS's public mirror then answered "Data
+    # limit exceeded" (#328, 2026-10-16). mirror-ci-images.yml copies library/postgres:16 there weekly.
+    services:
+      postgres:
+        image: ghcr.io/wirstrom1/postgres:16
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          POSTGRES_USER: olaf
+          POSTGRES_PASSWORD: olaf
+          POSTGRES_DB: olaf_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U olaf -d olaf_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js and dependencies
+        uses: ./.github/actions/setup
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Plan 113 (OLAF-345): what olaf_admin_app, the request path's role, may do, and that no later
+      # migration gives it more. Migrated in the Azure shape — by a CREATEROLE role that owns the
+      # database and is no superuser — because a superuser passes every GRANT that fails on Azure.
+      # First of the DB steps on purpose: the roles are per cluster, and the migrating role must be
+      # the one that creates them (it then holds ADMIN on them, as on Azure); the superuser
+      # migrations after it work with roles that exist. The suite gives the role LOGIN for its run
+      # only. Without APP_ROLE_TEST_DATABASE_URL it would self-skip and prove nothing.
+      - name: App role DB tests (Azure-shaped owner)
+        # One file, so --test-shard leaves shard 2 with nothing to run.
+        if: ${{ matrix.shard == 1 }}
+        env:
+          PGPASSWORD: olaf
+        run: |
+          psql -h 127.0.0.1 -U olaf -d olaf_ci -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE olaf_owner_ci LOGIN CREATEROLE PASSWORD 'olaf_owner_ci'" \
+            -c "CREATE DATABASE olaf_app_role_ci OWNER olaf_owner_ci"
+          psql -h 127.0.0.1 -U olaf -d olaf_app_role_ci -v ON_ERROR_STOP=1 -c "ALTER SCHEMA public OWNER TO olaf_owner_ci"
+          DATABASE_URL=postgresql://olaf_owner_ci:olaf_owner_ci@127.0.0.1:5432/olaf_app_role_ci npx prisma migrate deploy
+          APP_ROLE_TEST_DATABASE_URL=postgresql://olaf_owner_ci:olaf_owner_ci@127.0.0.1:5432/olaf_app_role_ci npm run app-role:test:db
+
+      # Against the service container above: migrate the empty database, then the DB tests, which
+      # seed and remove their own rows. BETTER_AUTH_SECRET only signs the test sessions' cookies.
+      # The 390 px Playwright run (npm run cockpit:e2e) is NOT here: it needs a production build
+      # with seeded fixture data and a Playwright install outside this repo, so it is a documented
+      # gate before merge (see the PR), not a CI step.
+      - name: Cockpit DB tests (Postgres service)
+        env:
+          DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_USER: olaf
+          DB_PASSWORD: olaf
+          DB_NAME: olaf_ci
+          DB_SSL: disable
+          BETTER_AUTH_SECRET: ci-only-test-sessions-not-a-secret
+          BETTER_AUTH_URL: http://localhost:3000
+          TZ: UTC
+        run: npx prisma migrate deploy && npm run cockpit:test:db
+
+      # The Service View's DB half (#175), against the database the cockpit step migrated —
+      # without SERVICE_TEST_DATABASE_URL it would self-skip and prove nothing.
+      - name: Service View DB tests
+        env:
+          SERVICE_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+        run: npm run service:test:db
+
+      # Plan 087: the BEV import (gate, swap, re-run) and both reads on the register's PLZ 3443, against
+      # the database the cockpit step migrated — without BEV_TEST_DATABASE_URL it would self-skip.
+      - name: BEV address register DB tests
+        env:
+          BEV_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+        run: npm run address:test:db
+
+      # Plan 101 S5: 50 parallel wrong guesses at one OTP count exactly 5, single use with a 60 s
+      # grace window, and at most 5 code mails per address and hour even from 20 simultaneous
+      # requests. The suite sets its own sessions to Europe/Vienna, so one clock is proven, against
+      # the database the cockpit step migrated.
+      # Without OTP_TEST_DATABASE_URL it would self-skip and prove nothing. Mail is switched off by
+      # the test itself (DISABLE_MAIL_SENDING); its rows are fresh @example.test addresses, removed
+      # afterwards.
+      - name: OTP attempt and send-limit DB tests
+        env:
+          OTP_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+        run: npm run otp:test:db
+
+      # Plan 071 (E0): only verify-otp may write form_users.first_verified_at (source guard, pure), and
+      # a verified login records the first time once. Without OTP_TEST_DATABASE_URL the DB half
+      # self-skips and proves nothing.
+      - name: First verified login tests
+        env:
+          OTP_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+        run: npm run first-verified:test
+
+      # Hotfix 09.10.: the funnel backfill SQL against the migrated database — the JS-exact e-mail
+      # normalisation, no hash stored, and a second run changing nothing. Synthetic rows only.
+      - name: Funnel backfill SQL tests
+        env:
+          FUNNEL_BACKFILL_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+        run: npm run funnel-backfill:test
+
+      # The OTP reminder's recipient choice through the real claims route: an address that is on a
+      # contract (either side, any case) is never claimed, even when form_users.contract_id is NULL.
+      # Without FOLLOW_UP_TEST_DATABASE_URL it would self-skip and prove nothing.
+      - name: OTP reminder recipient DB tests
+        env:
+          FOLLOW_UP_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+        run: npm run follow-up:test:db
+
+      # Plan 101 S6: every coupon route per grant (none, view, modify, admin, api-key) with real
+      # Better Auth sessions, against the database the cockpit step migrated. Without
+      # COUPON_TEST_DATABASE_URL it would self-skip and prove nothing. BETTER_AUTH_SECRET only signs
+      # the test sessions' cookies; the Benutzer it creates are removed afterwards.
+      - name: Coupon permission DB tests
+        env:
+          COUPON_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+          BETTER_AUTH_SECRET: ci-only-test-sessions-not-a-secret
+          BETTER_AUTH_URL: http://localhost:3000
+        run: npm run coupon:test:db
+
+      # Plan 033: /api/tariff/progress authenticates itself — the proxy admits the BFF's api-key before
+      # any bearer check — so its negative auth tests, the compare-and-swap, the CHECK constraints and
+      # the retention step gate the build, against the database the cockpit step migrated. Without
+      # SUBMIT_TEST_DATABASE_URL it would self-skip and prove nothing.
+      - name: Registration progress DB tests
+        env:
+          SUBMIT_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+        run: npm run progress:test:db
+
+      # Plan 110 (Benutzer-Konzept): the real migration.sql in a scratch schema — nobody gains or loses a
+      # right, and the gate aborts a migration that would — and the /api/admin/users* and /api/admin/roles*
+      # routes with real sessions (superadmin only, one audit row per change). Outside CI the suites run
+      # only on the local Postgres (55433), the route suite only on a scratch database (DB_NAME like
+      # olaf_test_x); here on the service container above.
+      - name: Benutzer-Konzept DB tests
+        env:
+          DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_USER: olaf
+          DB_PASSWORD: olaf
+          DB_NAME: olaf_ci
+          DB_SSL: disable
+          BETTER_AUTH_SECRET: ci-only-test-sessions-not-a-secret
+          BETTER_AUTH_URL: http://localhost:3000
+        run: npm run benutzer:test:db
+
+      # The auth suites with real sessions: `user.permissions` grants nothing and the session's rights
+      # come from roles and Zusatzrechte (plan 110, DoD S3-2/S3-8), better-auth's /admin/* is refused over
+      # HTTP, nobody writes their own rights through /update-user, the 2FA recovery. They self-skip
+      # without AUTH_TEST_DATABASE_URL, so in the unit job (which has no database) they proved nothing
+      # (#324 review). They set the DB_* variables from the URL themselves.
+      - name: Auth DB tests
+        env:
+          AUTH_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+        run: npm run auth:test:db
+
+      # Sammelanmeldung (plan 088) through the real handlers: confirmation by code and in the customer
+      # route, the wording hash, the cap, runs and retries. The file does not self-skip: without
+      # BULK_TEST_DATABASE_URL it fails. Orchestrator, mail, PDFs and the Vollmacht store are stubbed.
+      - name: Sammelanmeldung DB tests
+        env:
+          BULK_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+          BETTER_AUTH_SECRET: ci-only-test-sessions-not-a-secret
+          BETTER_AUTH_URL: http://localhost:3000
+        run: npm run bulk-registration:test:db
+      # Plan 023 (OLAF-374): /api/tariff/reserve decides, before MAXENERGY, whether a submission may
+      # start — its rules, the per-customer lock and the takeover past the window only show against
+      # Postgres. Same migrated database; without the URL it would self-skip and prove nothing.
+      - name: Submission reservation DB tests
+        env:
+          SUBMIT_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+        run: npm run reservation:test:db
+
+      # POST /api/usage/count (plan 111): concurrent counts add up, and the table's CHECKs keep anything
+      # personal out even past the route. Without USAGE_TEST_DATABASE_URL it would self-skip.
+      - name: Usage counter DB tests
+        env:
+          USAGE_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+        run: npm run usage:test:db
+
+      # Round 3's DB suites (#249), which self-skip without their URL and so proved nothing here:
+      # the backfill of the Anmeldedatum (ingest:test), the DB half of the tariff submit route
+      # (submit-route:test, which writes created_at), and both retention exceptions to append-only
+      # (service:test:retention). Retention deletes every old row of the whole table, which is its
+      # point, so it gets a database of its own (migrate deploy creates it); the other two seed and
+      # remove their own rows in olaf_ci, migrated by the cockpit step. olaf is the container's
+      # superuser, so `SET ROLE olaf_retention` works and the trigger's refusals are exercised.
+      # relink-duplicate:test (the one writer that replaces a MAXENERGY link) seeds its own rows too.
+      - name: Backfill, submit-route and retention DB tests (Postgres service)
+        env:
+          ORPHAN_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+          SUBMIT_TEST_DATABASE_URL: postgresql://olaf:olaf@127.0.0.1:5432/olaf_ci
+          DB_SSL: disable
+          BETTER_AUTH_SECRET: ci-only-test-sessions-not-a-secret
+          TZ: UTC
+        run: |
+          npm run ingest:test
+          npm run submit-route:test
+          npm run pii:test:db
+          npm run relink-duplicate:test
+          # Plan 114 R2: the backfill rewrites whole tables, so it gets a database of its own.
+          DATABASE_URL=postgresql://olaf:olaf@127.0.0.1:5432/olaf_pii_ci npx prisma migrate deploy
+          PII_TEST_DATABASE_URL=postgresql://olaf:olaf@127.0.0.1:5432/olaf_pii_ci npm run pii:test:backfill
+          DATABASE_URL=postgresql://olaf:olaf@127.0.0.1:5432/olaf_retention_ci npx prisma migrate deploy
+          SERVICE_TEST_DATABASE_URL=postgresql://olaf:olaf@127.0.0.1:5432/olaf_retention_ci npm run service:test:retention
+
+  build:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js and dependencies
+        uses: ./.github/actions/setup
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # The setup action caches node_modules, which is a different cache from Next's compile output
+      # in .next/cache. Without this one `next build` reported "No build cache found" on every run.
+      # This restores it. The deployment package strips .next/standalone/.next/cache further down,
+      # so nothing cached here reaches the App Service.
+      # The key carries the commit so every run saves a fresh entry, and restore-keys falls back to
+      # the newest entry built against the same lockfile.
+      - name: Restore Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: ${{ runner.os }}-next-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-next-${{ hashFiles('package-lock.json') }}-
+
+      - name: Build
+        run: npm run build
+
+      - name: Install migrate-runner dependencies
+        run: npm install --prefix ./migrate-runner
+
+      - name: Prepare App Service deployment package
+        run: |
+          cp -R .next/static .next/standalone/.next/static
+          if [ -d public ]; then cp -R public .next/standalone/public; fi
+          if [ -f preload.js ]; then cp preload.js .next/standalone/; fi
+
+          rm -rf .next/standalone/.next/cache
+          cp -R prisma .next/standalone/prisma
+          cp -R node_modules/@prisma .next/standalone/node_modules/
+
+          cp -rn migrate-runner/node_modules/. .next/standalone/node_modules/
+          cp migrate-runner/migrate.sh .next/standalone/
+          cp prisma.config.ts .next/standalone/
+
+          mv .next/standalone deploy
+
+      # One file instead of the package's tens of thousands: upload-artifact is slow per file.
+      # zstd and compression-level 0, because the tarball is already compressed. Symlinks and modes
+      # survive tar (-p on unpack: the runner is not root, so tar would otherwise apply the umask), so
+      # `deploy` unpacks byte-for-byte what used to be deployed from this job.
+      # Nothing to hand over on a pull request, which deploys nothing.
+      - name: Pack deployment package
+        if: ${{ github.event_name != 'pull_request' }}
+        run: tar --zstd -cf deploy.tar.zst deploy
+
+      - name: Upload deployment package
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-package
+          path: deploy.tar.zst
+          compression-level: 0
+          # Only until deploy has run. Re-running deploy alone a day later finds no package; re-run
+          # all jobs instead, which is what a re-run did before the split anyway.
+          retention-days: 1
+          # A re-run of this job uploads again under the same name.
+          overwrite: true
+
+  deploy:
+    needs: [checks, db, build]
+    # Never on a pull request (it deployed nothing there anyway). Elsewhere every check must pass: a
+    # failed or cancelled one stops the deploy, and so does a build that did not succeed.
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.build.result == 'success' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    runs-on: ubuntu-latest
+    # Prod starts the staging slot, waits for it, deploys, swaps, smoke-tests and stops it again.
+    timeout-minutes: 45
+    # Matches the ref/dispatch-input logic in the "Resolve deployment target" step below,
+    # re-expressed here since job-level `environment:` can't read that step's output — it's
+    # evaluated before any step runs. Needed so the Prod OIDC federated credential (subject
+    # repo:WirStrom1/olaf-admin:environment:prod) can authenticate regardless of which tag
+    # name triggered the run.
+    environment: >-
+      ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target_environment
+       || (github.ref == 'refs/heads/develop' && 'dev')
+       || (github.ref == 'refs/heads/main' && 'uat')
+       || (startsWith(github.ref, 'refs/tags/v') && 'prod')
+       || '' }}
+
+    steps:
+      - name: Resolve deployment target
+        id: target
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          INPUT_TARGET_ENVIRONMENT: ${{ github.event.inputs.target_environment || '' }}
+          INPUT_CONFIRM_PRODUCTION: ${{ github.event.inputs.confirm_production || '' }}
+          PRODUCTION_DEPLOYERS: ${{ vars.PRODUCTION_DEPLOYERS || '' }}
+          DEV_AZURE_WEBAPP_NAME: ${{ vars.DEV_AZURE_WEBAPP_NAME || 'olaf-admin' }}
+          UAT_AZURE_WEBAPP_NAME: ${{ vars.UAT_AZURE_WEBAPP_NAME || 'olaf-uat-admin' }}
+          PROD_AZURE_WEBAPP_NAME: ${{ vars.PROD_AZURE_WEBAPP_NAME || 'olaf-prod-admin' }}
+          DEV_SMOKE_TEST_URL: ${{ vars.DEV_SMOKE_TEST_URL || 'https://olaf-admin.azurewebsites.net/' }}
+          UAT_SMOKE_TEST_URL: ${{ vars.UAT_SMOKE_TEST_URL || 'https://olaf-uat-admin.azurewebsites.net/' }}
+          # Through Front Door, like DEV and UAT: the app's *.azurewebsites.net host only admits
+          # Front Door (access restriction "Allow Azure Front Door", then "Deny all") and answers
+          # 403 to anything else, the runner included. This fallback used to be that host.
+          PROD_SMOKE_TEST_URL: ${{ vars.PROD_SMOKE_TEST_URL || 'https://admin.app.raiffeisenenergie.at/' }}
+          # The staging slot's own Front Door endpoint: the umbrella's Bicep output
+          # <app>StagingFrontDoorEndpointUrl. It carries a generated suffix, so it is set, not derived.
+          PROD_STAGING_SMOKE_TEST_URL: ${{ vars.PROD_STAGING_SMOKE_TEST_URL || '' }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # Verification only. Emitted as a target so the deploy steps' existing
+            # `target_environment == '<env>'` guards skip on their own, rather than adding a second
+            # condition to each of them that could be forgotten on the next step someone adds.
+            echo "target_environment=none" >> "$GITHUB_OUTPUT"
+            echo "app_name=" >> "$GITHUB_OUTPUT"
+            echo "smoke_test_url=" >> "$GITHUB_OUTPUT"
+            echo "staging_smoke_test_url=" >> "$GITHUB_OUTPUT"
+            echo "Pull request: checks only, no deployment target."
+            exit 0
+          fi
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            target="$INPUT_TARGET_ENVIRONMENT"
+          else
+            case "$REF" in
+              refs/heads/develop) target="dev" ;;
+              refs/heads/main) target="uat" ;;
+              refs/tags/v*) target="prod" ;;
+              *)
+                echo "::error::Unsupported ref for deployment: $REF"
+                exit 1
+                ;;
+            esac
+          fi
+
+          case "$target" in
+            dev)
+              app_name="$DEV_AZURE_WEBAPP_NAME"
+              smoke_test_url="$DEV_SMOKE_TEST_URL"
+              ;;
+            uat)
+              app_name="$UAT_AZURE_WEBAPP_NAME"
+              smoke_test_url="$UAT_SMOKE_TEST_URL"
+              ;;
+            prod)
+              app_name="$PROD_AZURE_WEBAPP_NAME"
+              smoke_test_url="$PROD_SMOKE_TEST_URL"
+              if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_CONFIRM_PRODUCTION" != "deploy-production" ]; then
+                echo "::error::Production workflow_dispatch deployments require confirm_production=deploy-production."
+                exit 1
+              fi
+              if [ -n "$PRODUCTION_DEPLOYERS" ]; then
+                normalized_deployers=",${PRODUCTION_DEPLOYERS// /},"
+                if [[ "$normalized_deployers" != *",$ACTOR,"* ]]; then
+                  echo "::error::$ACTOR is not listed in PRODUCTION_DEPLOYERS."
+                  exit 1
+                fi
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported deployment target: $target"
+              exit 1
+              ;;
+          esac
+
+          # Through the staging slot's own Front Door endpoint. Slot and site admit only Front Door,
+          # so a direct *.azurewebsites.net request is 403 for any caller, the runner included.
+          # Deriving the URL by rewriting the smoke URL was worse than wrong: against the Front Door
+          # domain it replaced nothing, and the "staging" probe would have tested live production.
+          staging_smoke_test_url=""
+          if [ "$target" = "prod" ]; then
+            staging_smoke_test_url="$PROD_STAGING_SMOKE_TEST_URL"
+            if [ -z "$staging_smoke_test_url" ]; then
+              echo "::error::PROD_STAGING_SMOKE_TEST_URL is not set. Set it to the staging slot's Front Door endpoint (umbrella output <app>StagingFrontDoorEndpointUrl)."
+              exit 1
+            fi
+            if [ "$staging_smoke_test_url" = "$smoke_test_url" ]; then
+              echo "::error::The staging smoke-test URL equals the production one; refusing to test production as if it were staging."
+              exit 1
+            fi
+          fi
+
+          {
+            echo "target_environment=$target"
+            echo "app_name=$app_name"
+            echo "smoke_test_url=$smoke_test_url"
+            echo "staging_smoke_test_url=$staging_smoke_test_url"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Show deployment target
+        run: |
+          echo "Target environment: ${{ steps.target.outputs.target_environment }}"
+          echo "Azure App Service: ${{ steps.target.outputs.app_name }}"
+          echo "Smoke test URL: ${{ steps.target.outputs.smoke_test_url }}"
+
+      - name: Download deployment package
+        if: ${{ steps.target.outputs.target_environment != 'none' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-package
+
+      - name: Unpack deployment package
+        if: ${{ steps.target.outputs.target_environment != 'none' }}
+        run: tar --zstd -xpf deploy.tar.zst
+
+      - name: Validate Dev publish profile secret
+        if: ${{ steps.target.outputs.target_environment == 'dev' }}
+        env:
+          PUBLISH_PROFILE: ${{ secrets.DEV_AZURE_WEBAPP_PUBLISH_PROFILE }}
+        run: |
+          if [ -z "$PUBLISH_PROFILE" ]; then
+            echo "::error::Missing DEV_AZURE_WEBAPP_PUBLISH_PROFILE secret."
+            exit 1
+          fi
+
+      - name: Validate UAT publish profile secret
+        if: ${{ steps.target.outputs.target_environment == 'uat' }}
+        env:
+          PUBLISH_PROFILE: ${{ secrets.UAT_AZURE_WEBAPP_PUBLISH_PROFILE }}
+        run: |
+          if [ -z "$PUBLISH_PROFILE" ]; then
+            echo "::error::Missing UAT_AZURE_WEBAPP_PUBLISH_PROFILE secret."
+            exit 1
+          fi
+
+      - name: Validate Prod staging slot publish profile secret
+        if: ${{ steps.target.outputs.target_environment == 'prod' }}
+        env:
+          PUBLISH_PROFILE: ${{ secrets.PROD_AZURE_WEBAPP_STAGING_PUBLISH_PROFILE }}
+        run: |
+          if [ -z "$PUBLISH_PROFILE" ]; then
+            echo "::error::Missing PROD_AZURE_WEBAPP_STAGING_PUBLISH_PROFILE secret."
+            exit 1
+          fi
+
+      - name: Deploy to Dev Azure App Service
+        if: ${{ steps.target.outputs.target_environment == 'dev' }}
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ steps.target.outputs.app_name }}
+          publish-profile: ${{ secrets.DEV_AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: deploy
+
+      - name: Deploy to UAT Azure App Service
+        if: ${{ steps.target.outputs.target_environment == 'uat' }}
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ steps.target.outputs.app_name }}
+          publish-profile: ${{ secrets.UAT_AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: deploy
+
+      - name: Azure login (OIDC)
+        if: ${{ steps.target.outputs.target_environment == 'prod' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # The staging slot is stopped between releases (see "Stop Prod staging slot" below), and a
+      # stopped slot cannot take the deploy: on 2026-10-07 the admin deploy needed a manual start
+      # first. Starting a running slot is a no-op.
+      - name: Start Prod staging slot
+        id: start_slot
+        if: ${{ steps.target.outputs.target_environment == 'prod' }}
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP || 'olaf-prod-rg' }}
+          APP_NAME: ${{ steps.target.outputs.app_name }}
+        run: |
+          set -euo pipefail
+          az webapp start --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --slot staging
+          deadline=$((SECONDS + 120))
+          until [ "$(az webapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --slot staging --query state --output tsv)" = "Running" ]; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Prod staging slot did not reach state Running within two minutes."
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "Prod staging slot is Running."
+
+      - name: Deploy to Prod staging slot
+        if: ${{ steps.target.outputs.target_environment == 'prod' }}
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ steps.target.outputs.app_name }}
+          slot-name: staging
+          publish-profile: ${{ secrets.PROD_AZURE_WEBAPP_STAGING_PUBLISH_PROFILE }}
+          package: deploy
+
+      - name: Smoke test Prod staging slot
+        if: ${{ steps.target.outputs.target_environment == 'prod' }}
+        env:
+          STAGING_SMOKE_TEST_URL: ${{ steps.target.outputs.staging_smoke_test_url }}
+        run: |
+          deadline=$((SECONDS + 300))
+          attempt=1
+          until curl --fail --silent --show-error --location --max-time 20 "$STAGING_SMOKE_TEST_URL" --output /tmp/admin-staging-smoke.html; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Prod staging slot did not become healthy within five minutes."
+              exit 1
+            fi
+            echo "Staging slot not ready (attempt $attempt); retrying in 10 seconds..."
+            attempt=$((attempt + 1))
+            sleep 10
+          done
+          wc -c /tmp/admin-staging-smoke.html
+
+      # Swap only re-points routing and warms up the target slot first, so it's near-instant
+      # and zero-downtime, unlike restarting production in place. To roll back, run the exact
+      # same command again: the previous production bits are now sitting in staging, so a
+      # second swap reverts it. After a successful release the slot is stopped (see "Stop Prod
+      # staging slot" below), so start it first and wait for its smoke test before swapping back. Note: this app's staging slot also runs migrate.sh on startup,
+      # so a swap-in effectively re-runs migrations against the same Prod database — no
+      # different from today's direct deploy in that respect.
+      - name: Swap Prod staging slot into production
+        id: swap
+        if: ${{ steps.target.outputs.target_environment == 'prod' }}
+        run: |
+          az webapp deployment slot swap \
+            --resource-group "${{ vars.PROD_RESOURCE_GROUP || 'olaf-prod-rg' }}" \
+            --name "${{ steps.target.outputs.app_name }}" \
+            --slot staging \
+            --target-slot production
+
+      - name: Smoke test deployed app
+        id: smoke
+        # The only deploy-side step without a target guard of its own; on a pull request there is
+        # nothing deployed to smoke.
+        if: ${{ steps.target.outputs.target_environment != 'none' }}
+        env:
+          SMOKE_TEST_URL: ${{ steps.target.outputs.smoke_test_url }}
+        run: |
+          curl --fail --silent --show-error --location --retry 6 --retry-all-errors --retry-delay 10 "$SMOKE_TEST_URL" --output /tmp/admin-smoke.html
+          wc -c /tmp/admin-smoke.html
+
+      # Releases (tag pushes) deploy straight to prod from main, sometimes without develop ever
+      # having seen the fix (hotfixes branch off main directly). Without this, main and develop
+      # silently diverge. success() is explicit here — don't open a sync PR off a release whose
+      # deploy or smoke test just failed.
+      - name: Open sync PR (main → develop) after a release
+        if: ${{ success() && steps.target.outputs.target_environment == 'prod' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          ahead_by=$(gh api "repos/${{ github.repository }}/compare/develop...main" --jq '.ahead_by')
+          if [ "$ahead_by" -eq 0 ]; then
+            echo "main has no commits ahead of develop — nothing to sync."
+            exit 0
+          fi
+
+          open_count=$(gh pr list --repo "${{ github.repository }}" --base develop --head main --state open --json number --jq 'length')
+          if [ "$open_count" -gt 0 ]; then
+            echo "An open main → develop sync PR already exists — skipping."
+            exit 0
+          fi
+
+          gh pr create --repo "${{ github.repository }}" --base develop --head main \
+            --title "Sync main → develop after release ${{ github.ref_name }}" \
+            --body "Automated sync opened after deploying **${{ github.ref_name }}** to production, so hotfixes/releases landed directly on \`main\` don't drift out of \`develop\`."
+
+      # After every swap the staging slot holds the previous build, reachable through its own Front
+      # Door endpoint, against the Production database and with Production secrets (plan 101, S11).
+      # Stopped only once the swap AND the production smoke test passed: if either failed, the slot
+      # holds the build a swap-back needs (or the swap never happened), so it stays running and the
+      # next step says so in the job summary. Keyed on the smoke step's outcome rather than on
+      # success(), so a failed sync PR above does not leave the slot running.
+      - name: Stop Prod staging slot
+        id: stop_slot
+        if: ${{ !cancelled() && steps.target.outputs.target_environment == 'prod' && steps.smoke.outcome == 'success' }}
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP || 'olaf-prod-rg' }}
+          APP_NAME: ${{ steps.target.outputs.app_name }}
+        run: az webapp stop --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --slot staging
+
+      - name: Report Prod staging slot left running
+        if: ${{ (failure() || cancelled()) && steps.target.outputs.target_environment == 'prod' && steps.start_slot.outcome == 'success' && steps.stop_slot.outcome != 'success' }}
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP || 'olaf-prod-rg' }}
+          APP_NAME: ${{ steps.target.outputs.app_name }}
+          SWAP_OUTCOME: ${{ steps.swap.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          STOP_OUTCOME: ${{ steps.stop_slot.outcome }}
+        run: |
+          stop="az webapp stop --resource-group $RESOURCE_GROUP --name $APP_NAME --slot staging"
+          swap_back="az webapp deployment slot swap --resource-group $RESOURCE_GROUP --name $APP_NAME --slot staging --target-slot production"
+          {
+            echo "### Prod staging slot left running"
+            echo
+            if [ "$SWAP_OUTCOME" != "success" ]; then
+              echo "The swap did not run or did not complete (swap: \`$SWAP_OUTCOME\`), so production should still serve the previous build and the staging slot holds the new one. Check, then stop the slot: \`$stop\`"
+            elif [ "$SMOKE_OUTCOME" != "success" ]; then
+              echo "The production smoke test failed after the swap. The staging slot holds the previous production build and was left running for a swap-back: \`$swap_back\`. Stop it once production is good again: \`$stop\`"
+            else
+              echo "Swap and production smoke test passed, but the slot was not stopped (stop: \`$STOP_OUTCOME\`). Stop it by hand: \`$stop\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Prod staging slot left running, see the job summary."

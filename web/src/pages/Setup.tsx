@@ -147,6 +147,34 @@ function McpStep({ claude }: { claude: boolean }) {
 }
 
 /** Mehrere Claude-Konten (Knut, 06.10.2026): ist das Kontingent ausgeschöpft, übernimmt automatisch das nächste. */
+/** Claude verbinden ohne Terminal (P5): Knopf → Anmelde-Link bei claude.com → dort angezeigten Code einfügen → verbunden. */
+function ClaudeAnmelden({ onDone }: { onDone: () => void }) {
+  const toast = useToast();
+  const [url, setUrl] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const start = async () => { setBusy(true); setErr(null); try { setUrl(((await api('/api/setup/claude/anmelden', { method: 'POST', body: {} })) as any).url); } catch (e) { setErr(e); } finally { setBusy(false); } };
+  const senden = async () => {
+    setBusy(true); setErr(null);
+    try { await api('/api/setup/claude/anmelden/code', { body: { code } }); toast('Claude verbunden'); setUrl(null); setCode(''); onDone(); }
+    catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  return (
+    <div className="card soft" data-testid="claude-anmelden" style={{ margin: '8px 0' }}>
+      {!url ? <><p className="small" style={{ marginTop: 0 }}>Ohne Terminal: Du meldest dich bei Claude an und fügst den angezeigten Code hier ein. Der Zugang gilt ein Jahr.</p>
+        <button className="btn primary" disabled={busy} onClick={start} data-testid="claude-anmelden-start">{busy ? 'Startet …' : 'Mit Claude anmelden'}</button></>
+        : <ol className="small" style={{ margin: 0 }}>
+          <li><a href={url} target="_blank" rel="noreferrer" data-testid="claude-anmelden-link">Bei Claude anmelden (neuer Tab)</a> — mit deinem eigenen Claude-Konto (Abo nötig).</li>
+          <li>Claude zeigt danach einen Code. Hier einfügen:
+            <div className="row" style={{ marginTop: 4 }}><input aria-label="Code von Claude" value={code} onChange={(e) => setCode(e.target.value)} style={{ flex: 1, minWidth: 220 }} autoComplete="off" />
+              <button className="btn primary" disabled={busy || code.trim().length < 10} onClick={senden} data-testid="claude-anmelden-code">{busy ? 'Verbindet …' : 'Verbinden'}</button></div></li>
+        </ol>}
+      <Err e={err} />
+    </div>
+  );
+}
+
 function ClaudeAccounts({ chat }: { chat: boolean }) {
   const l = useLoad(() => api('/api/setup/claude-accounts'));
   const toast = useToast();
@@ -353,7 +381,8 @@ function Wizard({ cfg }: { cfg: Config }) {
           <p className="muted" style={{ margin: 0 }}>Einmal durchklicken, dann arbeitet Claude Code im Chat, am Board und im Sprint mit deinen eigenen Zugängen.</p>
           {embedded && <p className="small muted" style={{ margin: '4px 0 0' }}>Design, Sprache und Chat-Verhalten: Kontomenü (unten links) → Einstellungen.</p>}
         </div>
-        {!embedded && <a className="btn primary" href={cfg.librechatUrl}>💬 Zum Chat</a>}
+        {/* U5: vor „Claude verbinden“ führt der Chat nur zur Fehlermeldung über den fehlenden Schlüssel. */}
+        {!embedded && s.claude.connected && <a className="btn primary" href={cfg.librechatUrl}>💬 Zum Chat</a>}
       </div>
       <Err e={err} />
       <div className="steps" style={{ marginTop: 12 }}>
@@ -369,6 +398,8 @@ function Wizard({ cfg }: { cfg: Config }) {
             {s.claude.connected
               ? <p className="okbox">Verbunden{s.claude.expiresAt ? `, gültig bis ${fmtDateTime(s.claude.expiresAt)}` : ' (läuft nicht ab)'}. Der Token liegt verschlüsselt im Chat-Schlüsselspeicher und gilt dort genauso.</p>
               : <p>Der OLAF Workspace arbeitet ohne API-Schlüssel — mit <b>deinem</b> Claude-Abo.</p>}
+            {!s.claude.connected && <ClaudeAnmelden onDone={() => st.reload()} />}
+            <details className="small"><summary>Alternativ mit Terminal (Token selbst erzeugen)</summary>
             <ol className="small">
               <li>Im Terminal (auf deinem Rechner oder in der Coder-Workspace) mit deinem Claude-Konto angemeldet: <code>claude setup-token</code></li>
               <li>Den ausgegebenen Token kopieren (beginnt mit <code>sk-ant-oat</code>). Er gilt ein Jahr.</li>
@@ -381,6 +412,7 @@ function Wizard({ cfg }: { cfg: Config }) {
                 if (await confirm({ title: 'Claude trennen?', body: <p>Der Token wird gelöscht; Chat und Board-Agent arbeiten dann nicht mehr, bis du einen neuen einträgst.</p>, danger: true, confirmLabel: 'Trennen' })) run('claude', () => api('/api/setup/claude', { method: 'DELETE' }));
               }}>Trennen</button>}
             </form>
+            </details>
             <ClaudeAccounts chat={s.claude.connected} />
           </div>
         </div>
@@ -421,7 +453,7 @@ function Wizard({ cfg }: { cfg: Config }) {
           <div className="card">
             <h3 style={{ marginTop: 0 }}>Melious (optional)</h3>
             <MeliousAccount />
-            {admin && <div style={{ marginTop: 12 }}><MeliousKachel /></div>}
+            {admin && <details style={{ marginTop: 12 }} data-testid="erweitert-melious"><summary className="small">Erweitert: Melious-Verbrauch und Energie</summary><MeliousKachel /></details>}
           </div>
         </div>
 
@@ -437,20 +469,24 @@ function Wizard({ cfg }: { cfg: Config }) {
           <div className="num">{allOk ? '✓' : '5'}</div>
           <div className="card">
             <h3 style={{ marginTop: 0 }}>Loslegen</h3>
-            <div className="grid2">
-              <a className="card soft" href={cfg.librechatUrl} target={chatTarget}><b>💬 Chat</b><div className="small muted">Claude Code mit Skills, Vault und Jira. Schreibt nur nach deinem „ja“.</div></a>
-              <a className="card soft" href="#/wissen"><b>📚 Wissen</b><div className="small muted">Der Vault: Struktur, Roadmap, Suche, Backlinks.</div></a>
-              <a className="card soft" href="#/board"><b>🗂️ Board</b><div className="small muted">Jira-Kopie von {cfg.project}, Agent auf Karte ansetzen.</div></a>
-              <a className="card soft" href="#/sprint"><b>🔁 Sprint</b><div className="small muted">Review und Planning: Fragen beantworten, Sprint-Sync vorbereiten.</div></a>
-              <a className="card soft" href="#/skills"><b>🧰 Skills</b><div className="small muted">{s.skills.linked} Team-Skills aus dem Vault aktiv{s.skills.missing ? `, ${s.skills.missing} noch nicht eingerichtet` : ''}.</div></a>
-              <a className="card soft" href="#/dateien"><b>📎 Dateien & Teilen</b><div className="small muted">Dateien ablegen, mit Teammates teilen, geteilte Chats.</div></a>
-            </div>
+            {/* Zielbild § 4 (Onboarding) statt fest verdrahteter Kacheln: drei Haken, dann ein Satz, wo man startet. */}
+            <ul className="plain small" data-testid="loslegen-check">
+              <li>{s.claude.connected ? '✓' : '☐'} Claude verbunden <span className="muted">(Pflicht — oben)</span></li>
+              <li>{s.jira.connected ? '✓' : '☐'} Jira verbunden <span className="muted">(für Tickets)</span></li>
+              <li>{s.melious?.connected ? '✓' : '☐'} Melious <span className="muted">(optional — spart Claude beim Lesen und Recherchieren)</span></li>
+            </ul>
+            <p className="small" data-testid="loslegen-kurz">{s.claude.connected
+              ? <>Jetzt: {cfg.navNeu && cfg.features?.leitstand !== false ? <a href="#/lead">Lead öffnen</a> : <a href={cfg.librechatUrl} target={chatTarget}>Chat öffnen</a>} und schreiben, woran du arbeitest — er startet die Arbeit und fragt dich, wenn er etwas braucht. Fragen findest du unter <a href={cfg.navNeu ? '#/entscheidungen' : '#/'}>{cfg.navNeu ? 'Entscheidungen' : 'Heute'}</a>.</>
+              : 'Erst Claude verbinden — dann geht es im Lead los.'}</p>
           </div>
         </div>
       </div>
 
-      <Sessions />
-      <ContextInfo />
+      {/* U4 (Knut 19.10.): Sitzungen und Token-Tabelle sind Technik — unter „Erweitert“, nicht im Blick. */}
+      <details data-testid="erweitert-technik"><summary className="small">Erweitert: Sitzungen und Token-Verbrauch</summary>
+        <Sessions />
+        <ContextInfo />
+      </details>
 
       <h2>Dienste</h2>
       <div className="row">

@@ -559,8 +559,10 @@ test('Teil B (B-1/B-6/B-2/B-20): Lauf + Lesezeichen, fertiger Strang als Karte a
   await W().collection('orchestrator_runs').updateOne({ _id: st.id as any }, { $set: { autoTotal: 2 } });
   const t = await today();
   assert.ok(!(t.orchAuto ?? []).some((x: any) => x.id === st.id));
+  // Walkthrough 221: der Zähler ist die Inbox-Zahl (fertige Stränge ohne Frage zählen nicht mehr, sie stehen in Arbeit).
+  const ib = await (await fetch(B + '/api/inbox', { headers: { cookie: await cookie(knut) } })).json();
   const cnt = await (await fetch(B + '/api/today/count', { headers: { cookie: await cookie(knut) } })).json();
-  assert.ok(cnt.count >= t.strands.length);
+  assert.equal(cnt.count, ib.zahl);
 });
 
 test('Plan 154 §9 (Council R3): Review-Ansicht — Entscheidungen aus dem Bericht, Antworten als Nacharbeit (Bericht-Hash), Rechte, kein interner Weg legt Freigaben an', async () => {
@@ -583,6 +585,27 @@ test('Plan 154 §9 (Council R3): Review-Ansicht — Entscheidungen aus dem Beric
   assert.equal((await post(`/api/review/${st.id}/freigabe`, { head: 'a'.repeat(40), patchId: 'x' })).status, 409);
   assert.equal((await fetch(B + `/api/review/${st.id}/freigabe`, { method: 'POST', headers: { cookie: await cookie(knut), 'content-type': 'application/json' }, body: '{}' })).status, 403);
   assert.equal((await post(`/api/review/${st.id}/freigabe`, { head: 'a'.repeat(40) }, team)).status, 403);
+  // Paket 223: Auto-Review-Entwurf verwerfen — ohne Auto-Review 404, Team 403, dann vermerkt (die Wache meldet ihn nicht mehr), gepostet → 409.
+  assert.equal((await post(`/api/review/${st.id}/verwerfen`, {})).status, 404);
+  await W().collection('pr_reviews').insertOne({ _id: `WirStrom1/olaf-admin#954@${'e'.repeat(40)}`, repo: 'WirStrom1/olaf-admin', number: 954, head: 'e'.repeat(40), strand: st.id, paket: '954-review', status: 'fertig', createdAt: new Date() } as any);
+  assert.equal((await post(`/api/review/${st.id}/verwerfen`, {}, team)).status, 403);
+  assert.equal((await post(`/api/review/${st.id}/verwerfen`, {})).status, 200);
+  const vw: any = await W().collection('pr_reviews').findOne({ strand: st.id });
+  assert.ok(vw.verworfen?.by); assert.match(vw.note, /verworfen/);
+  assert.equal((await get()).status, 200);
+  await W().collection('pr_reviews').updateOne({ strand: st.id }, { $set: { posted: { at: new Date(), url: 'u', by: 'auto' } } });
+  assert.equal((await post(`/api/review/${st.id}/verwerfen`, {})).status, 409);
+  await W().collection('pr_reviews').deleteOne({ strand: st.id });
+  // Pass C: „Jetzt reviewen“ = frischer Anlauf — Nachfass, Wache, Abschlussmeldung, Neustart-Zähler, Verwerfen zurückgesetzt
+  const rid = `WirStrom1/olaf-admin#955@${'f'.repeat(40)}`;
+  await W().collection('pr_reviews').insertOne({ _id: rid, repo: 'WirStrom1/olaf-admin', number: 955, head: 'f'.repeat(40), status: 'fehler', createdAt: new Date(0),
+    nb: { at: new Date() }, wache: { n: 2 }, abschlussGemeldet: { at: new Date() }, gpNeustarts: 2, verworfen: { by: 'x' }, ohnePost: 'aus', etaZusage: 30 } as any);
+  assert.equal((await post('/api/leitstand/ticker/review', { id: rid })).status, 200);
+  const neu: any = await W().collection('pr_reviews').findOne({ _id: rid as any });
+  assert.equal(neu.status, 'wartet');
+  for (const k of ['nb', 'wache', 'abschlussGemeldet', 'gpNeustarts', 'verworfen', 'ohnePost', 'etaZusage']) assert.equal(neu[k], undefined, k);
+  assert.ok(Date.now() - new Date(neu.queuedAt).getTime() < 60_000);
+  await W().collection('pr_reviews').deleteOne({ _id: rid as any });
   // Kein interner Weg legt an oder zieht zurück (Bedingung 4); lesen geht.
   const ip = (path: string, b: unknown) => fetch(B + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId: String(knut._id), ...(b as object) }) });
   assert.equal((await ip('/internal/orchestrator/freigabe', { strand: st.id })).status, 404);
@@ -708,8 +731,10 @@ test('Council-Diff Teil B: läuft ein fertiger Strang wieder, bleibt die Karte s
   assert.equal(p.status, 409);
   assert.match((await p.json()).error, /arbeitet gerade/);
   await until(() => cardOf(st.id), (x: any) => x && !x.running, 20_000);
+  // Walkthrough 221: Zähler = Inbox (ein fertiger Strang zählt nur mit offener Frage, Entscheidung oder Push).
+  const ib = await (await fetch(B + '/api/inbox', { headers: { cookie: await cookie(knut) } })).json();
   const countAfter = (await (await fetch(B + '/api/today/count', { headers: { cookie: await cookie(knut) } })).json()).count;
-  assert.ok(countAfter >= countNow + 1, `erst die wieder fertige Karte zählt (${countNow} → ${countAfter}; andere Karten können parallel dazukommen)`);
+  assert.equal(countAfter, ib.zahl, `Zähler = Inbox (${countNow} → ${countAfter})`);
 });
 
 test('Paket 141 (DoD 5/6/12–15): Karte mit Worum/Was tun/Stand; passt-live hakt nur wirklich Live-Stränge ab; Team 403', async () => {
@@ -870,6 +895,61 @@ test('Plan 184, Teil B: Ja (Textblock) und Nein (Kopf-Frage) landen an der Quell
   assert.match(md, /^    antwort: "nein — Empfehlung abgelehnt \(ja\)"$/m, 'Kopf: antwort:');
   const nach = (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser).map(textOf).at(-1)!;
   assert.match(nach, /D2 \(Tooltip zeigen\?\): nein — Empfehlung abgelehnt/);
+  assert.match(nach, /Akzeptiert \(wie empfohlen\): D1/);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  await orch(['review', st.id]);
+});
+
+test('Entscheidungsseite (Knut 19.10.): eine Karte je D-Frage; einzeln beantwortet trägt ein, der Unter-Chat läuft erst nach der letzten weiter', async () => {
+  mkdirSync(join(tmp, 'review-pakete', '957-karten'), { recursive: true });
+  const datei = join(tmp, 'review-pakete', '957-karten', 'bericht.md');
+  writeFileSync(datei, ['---', 'status: wartet_auf_knut', 'fragen:', '  - id: D1', '    frage: Kacheln gleich für alle? Die KPI-Kacheln sehen heute je Rolle anders aus.', '    empfehlung: gleich',
+    '    antwort: ""', '  - id: D2', '    frage: Tooltip zeigen?', '    empfehlung: ja', '    antwort: ""', '---', '# Bericht', ''].join('\n'));
+  const st = JSON.parse((await orch(['start', '--title', 'Karten je Frage', '--cwd', WT('wt-karten'), '--json'],
+    'Bericht nach ~/work/knut/review-pakete/957-karten/bericht.md.\nmock-antwort Fertig.\\n### Stand\\n- Erledigt: x\\nStatus: fertig')).out);
+  await until(() => cardOf(st.id), (c: any) => c?.kopf && c.berichtHash, 20_000);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  const seite = async () => (await (await fetch(B + '/api/entscheidungen/fragen', { headers: { cookie: await cookie(knut) } })).json()) as any;
+  let s = await seite();
+  const karten = s.fragen.filter((f: any) => f.teil && f.eintrag.includes(st.id));
+  assert.deepEqual(karten.map((f: any) => f.kennung), ['D1', 'D2'], 'eine Karte je Frage');
+  assert.match(karten[0].worum, /je Rolle anders/); assert.equal(karten[0].empfehlung, 'gleich');
+  const vorher = (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser).length;
+  assert.equal((await post('/api/entscheidungen/fragen/antwort', { id: karten[1].id, antwort: 'anders' })).status, 400, 'Anders verlangt eine Notiz');
+  const r1 = await post('/api/entscheidungen/fragen/antwort', { id: karten[1].id, antwort: 'anders', text: 'nur auf dem Handy' });
+  assert.equal(r1.status, 200, await r1.clone().text());
+  assert.match(readFileSync(datei, 'utf8'), /antwort: "nur auf dem Handy"/, 'sofort im Bericht');
+  assert.equal((await msgsOf(st.conv)).filter((m) => m.isCreatedByUser).length, vorher, 'D1 noch offen → der Unter-Chat wartet');
+  s = await seite();
+  const d1 = s.fragen.find((f: any) => f.teil === 'D1' && f.eintrag.includes(st.id));
+  assert.ok(d1 && !s.fragen.some((f: any) => f.teil === 'D2' && f.eintrag.includes(st.id)), 'beantwortete Karte ist weg');
+  const r2 = await post('/api/entscheidungen/fragen/antwort', { id: d1.id, antwort: 'ja' });
+  assert.equal(r2.status, 200, await r2.clone().text());
+  const nach = (await until(async () => (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser), (ms: any[]) => ms.length > vorher)).map(textOf).at(-1)!;
+  assert.match(nach, /D2 \(Tooltip zeigen\?\): nur auf dem Handy/, 'eine Nachricht mit allen gesammelten Antworten');
+  assert.match(nach, /Akzeptiert \(wie empfohlen\): D1/);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  await orch(['review', st.id]);
+});
+
+test('Pass C: Abweichung auf der Karten-Seite gesammelt, letzte Antwort über Heute — die Nachricht an den Unter-Chat enthält beide', async () => {
+  mkdirSync(join(tmp, 'review-pakete', '958-gemischt'), { recursive: true });
+  const datei = join(tmp, 'review-pakete', '958-gemischt', 'bericht.md');
+  writeFileSync(datei, ['---', 'status: wartet_auf_knut', 'fragen:', '  - id: D1', '    frage: Farbe blau?', '    empfehlung: ja', '    antwort: ""', '  - id: D2', '    frage: Logo größer?', '    empfehlung: nein',
+    '    antwort: ""', '---', '# Bericht', ''].join('\n'));
+  const st = JSON.parse((await orch(['start', '--title', 'Gemischt', '--cwd', WT('wt-gemischt'), '--json'],
+    'Bericht nach ~/work/knut/review-pakete/958-gemischt/bericht.md.\nmock-antwort Fertig.\\n### Stand\\n- Erledigt: x\\nStatus: fertig')).out);
+  await until(() => cardOf(st.id), (c: any) => c?.kopf && c.berichtHash, 20_000);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
+  const seite = async () => (await (await fetch(B + '/api/entscheidungen/fragen', { headers: { cookie: await cookie(knut) } })).json()) as any;
+  const d2 = (await seite()).fragen.find((f: any) => f.teil === 'D2' && f.eintrag.includes(st.id));
+  const vorher = (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser).length;
+  assert.equal((await post('/api/entscheidungen/fragen/antwort', { id: d2.id, antwort: 'anders', text: 'doppelt so groß' })).status, 200);
+  const card = await until(() => cardOf(st.id), (c: any) => c?.berichtHash && c.entscheidungen?.length === 1);
+  const r = await post(`/api/review/${st.id}/entscheidungen`, { berichtHash: card.berichtHash, weiter: true, antworten: [{ id: 'D1', art: 'akzeptiert' }] });
+  assert.equal(r.status, 200, await r.clone().text());
+  const nach = (await until(async () => (await msgsOf(st.conv)).filter((m) => m.isCreatedByUser), (ms: any[]) => ms.length > vorher)).map(textOf).at(-1)!;
+  assert.match(nach, /D2 \(Logo größer\?\): doppelt so groß/, 'gesammelte Abweichung geht mit');
   assert.match(nach, /Akzeptiert \(wie empfohlen\): D1/);
   await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === st.id), (x: any) => x?.status !== 'running');
   await orch(['review', st.id]);

@@ -40,6 +40,10 @@ test('Status: Reihenfolge Startfehler → läuft → Neustart → unterwegs → 
   assert.equal(orchStatus(run, turn('ok'), ai('Status: blockiert')).status, 'failed');
   assert.match(orchStatus(run, turn('ok'), ai('ohne Marke')).reason, /ohne Status-Marke/);
   assert.equal(orchStatus(run, turn('ok', T0 + 60_000), { fromUser: true, text: 'x', error: false, at: T0 }, T0 + 70_000).status, 'running', 'Antwort wird gerade gespeichert');
+
+  // Plan 213 S1a: in der Schlange der Brücke → läuft (kein Fehlschlag, kein „abgebrochen“), mit Platz und Wartezeit.
+  const q = orchStatus(run, { running: false, interrupted: false, queued: { pos: 2, since: T0 }, turn: { start: T0 + 1000, end: null, outcome: null } }, null, T0 + 5 * 60_000);
+  assert.equal(q.status, 'running'); assert.match(q.reason, /in der Schlange \(Platz 2, seit 5 min\)/);
 });
 
 test('Marke, Nachrichtentext, Auszug, Auftrag', () => {
@@ -213,7 +217,7 @@ before(async () => {
       BRIDGE_PERMISSION_MODE: 'auto', BRIDGE_AUTO_SCOPE: 'voll', BRIDGE_AUTO_EMAILS: knut.email, WERKBANK_SKILLS_SOURCE: join(tmp, 'skills') },
     stdio: 'ignore',
   });
-  webEnv = { ...process.env, WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_TEAM_FEATURES: 'heute,orchestrator', WERKBANK_NO_JOBS: '1', WERKBANK_INSECURE_COOKIES: '1', WERKBANK_VAULT_DIR: join(tmp, 'vault'),
+  webEnv = { ...process.env, WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_TEAM_FEATURES: 'heute,orchestrator', WERKBANK_NO_JOBS: '1', WERKBANK_AUTO_ANNAHME_H: '0', WERKBANK_INSECURE_COOKIES: '1', WERKBANK_VAULT_DIR: join(tmp, 'vault'),
     WERKBANK_DB: DB, LIBRECHAT_DB: LCDB, LIBRECHAT_URL: `http://127.0.0.1:${(lcFake.address() as any).port}`, LIBRECHAT_PUBLIC_URL: 'https://chat.example',
     BRIDGE_URL: `http://127.0.0.1:${BRIDGE_PORT}`, BRIDGE_STATE_DIR: state, WERKBANK_ALLOWED_EMAILS: knut.email, WERKBANK_PILOT_EMAIL: knut.email,
     WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_SECRET, JWT_REFRESH_SECRET: REFRESH_SECRET, WERKBANK_DATA_DIR: join(tmp, 'data'),
@@ -388,6 +392,58 @@ test('Rückfragen an Knut: anlegen (CLI) → offen in der Werkbank → Knut antw
   assert.equal((await orch(['questions', 'withdraw', w.id])).code, 0);
   assert.notEqual((await orch(['questions', 'withdraw', w.id])).code, 0);
   assert.equal((await post({ option: 'Nord' })).status, 409);
+});
+
+test('Plan 213 S2/S3: Inbox zeigt die Rückfrage, Antwort an der Quelle, Später bis morgen, Heute und Status lesen dieselbe Quelle', async () => {
+  const cookie = await knutCookie();
+  const h = { cookie, 'content-type': 'application/json', 'x-werkbank': '1' };
+  const get = async (p: string) => { const r = await fetch(B + p, { headers: { cookie } }); return { status: r.status, j: await r.json() as any }; };
+  const post = async (p: string, b: unknown) => { const r = await fetch(B + p, { method: 'POST', headers: h, body: JSON.stringify(b) }); return { status: r.status, j: await r.json() as any }; };
+  const q = JSON.parse((await orch(['ask', '--title', 'Inbox: Nachtbau mit Eval?', '--context', 'kostet 40 min', '--option', 'Ja', '--option', 'Nein', '--recommend', 'Ja', '--json'])).out);
+  const q2 = JSON.parse((await orch(['ask', '--title', 'Inbox: später', '--context', 'x', '--recommend', 'egal', '--json'])).out);
+  let ib = await get('/api/inbox');
+  assert.equal(ib.status, 200);
+  const e = ib.j.eintraege.find((x: any) => x.daten?.qid === q.id);
+  assert.ok(e, 'Rückfrage steht in der Inbox');
+  assert.equal(e.art, 'rueckfrage'); assert.equal(e.empfehlung, 'Ja'); assert.deepEqual(e.antworten, ['ja', 'nein', 'anders', 'spaeter']);
+  assert.equal(ib.j.zahl, ib.j.eintraege.length);
+  // Heute und der Zähler lesen dieselbe Inbox (K11).
+  const heute = await get('/api/heute');
+  assert.equal(heute.status, 200); assert.equal(heute.j.zahl, ib.j.zahl); assert.ok(Array.isArray(heute.j.blockiert));
+  // Antwort über die Inbox → an der Quelle (Rückfrage beantwortet, empfohlene Option).
+  assert.equal((await post(`/api/inbox/${e.id}/antwort`, { antwort: 'vielleicht' })).status, 400);
+  assert.equal((await post(`/api/inbox/${e.id}/antwort`, { antwort: 'anders' })).status, 400, 'Anders braucht Text');
+  const a = await post(`/api/inbox/${e.id}/antwort`, { antwort: 'ja', weg: 'chat-knopf' });
+  assert.equal(a.status, 200, JSON.stringify(a.j));
+  const got = JSON.parse((await orch(['questions', 'get', q.id, '--json'])).out);
+  assert.equal(got.status, 'beantwortet'); assert.equal(got.answer.option, 'Ja');
+  assert.equal((await post(`/api/inbox/${e.id}/antwort`, { antwort: 'ja' })).status, 409, 'schon beantwortet: nie raten');
+  // Später: verschwindet bis morgen 07:00, zählt als zurückgestellt.
+  const e2 = (await get('/api/inbox')).j.eintraege.find((x: any) => x.daten?.qid === q2.id);
+  assert.equal((await post(`/api/inbox/${e2.id}/spaeter`, {})).status, 200);
+  assert.equal((await post('/api/inbox/..%2Fx/spaeter', {})).status, 404);
+  ib = await get('/api/inbox');
+  assert.ok(!ib.j.eintraege.some((x: any) => x.id === e2.id)); assert.ok(ib.j.zurueckgestellt >= 1);
+  // Walkthrough 221: auch mit der alten Leiste (navNeu aus) ist der Zähler die Inbox-Zahl — keine zweite Formel.
+  assert.equal((await get('/api/today/count')).j.count, ib.j.zahl);
+  // „Anders“ im Chat: der Lead trägt die Antwort mit der Kennung ein (inbox_antworten) — an der Quelle, ohne Raten.
+  const q3 = JSON.parse((await orch(['ask', '--title', 'Inbox: Anders aus dem Chat?', '--context', 'x', '--recommend', 'Ja', '--json'])).out);
+  const e3 = (await get('/api/inbox')).j.eintraege.find((x: any) => x.daten?.qid === q3.id);
+  assert.equal((await internal('/internal/inbox/antwort', { userId: String(knut._id), kennung: '../x', antwort: 'ja' })).status, 400);
+  assert.equal((await internal('/internal/inbox/antwort', { userId: String(knut._id), kennung: e3.id, antwort: 'anders' })).status, 400, 'Anders braucht Text');
+  const an = await internal('/internal/inbox/antwort', { userId: String(knut._id), kennung: e3.id, antwort: 'anders', text: 'erst nach dem Release' });
+  assert.equal(an.status, 200, await an.clone().text());
+  const got3 = JSON.parse((await orch(['questions', 'get', q3.id, '--json'])).out);
+  assert.equal(got3.status, 'beantwortet'); assert.match(got3.answer.text, /erst nach dem Release/);
+  assert.equal((await internal('/internal/inbox/antwort', { userId: String(knut._id), kennung: e3.id, antwort: 'ja' })).status, 409, 'zweimal: nie raten');
+  // Status (S1b) und Auswertung der Nutzung (S0) nur für Admins; Seiten zählen darf jede angemeldete Person.
+  assert.equal((await get('/api/status')).status, 403);
+  assert.equal((await get('/api/nutzung')).status, 403);
+  assert.equal(heute.j.admin, false);
+  assert.equal((await get('/api/config')).j.navNeu, false);
+  assert.equal((await post('/api/nutzung/seite', { seite: '#/inbox' })).status, 200);
+  // Fremde Kennung: nicht in der eigenen Inbox → 409, nie raten.
+  assert.equal((await post('/api/inbox/q-gibtsnicht/antwort', { antwort: 'ja' })).status, 409);
 });
 
 // ---------- Automatisch fortsetzen, Ende-zu-Ende (docs/plan-orchestrator-auto-weiter.md) ----------
@@ -718,4 +774,42 @@ test('deliver je Unterhaltung nacheinander (Fix 17d, Fund 6): zwei gleichzeitige
   const parents = calls.map((c) => c.body.parentMessageId);
   assert.equal(new Set(parents).size, parents.length, `keine Geschwister im Nachrichtenbaum: ${parents.join(', ')}`);
   await bridgeUntil(conv, 'bereit');
+});
+
+test('Knut 17.10.: Stufen — wichtig oben und offen, normal nach Frist angenommen und im Log, Widerruf braucht einen Empfänger', async () => {
+  const cookie = await knutCookie();
+  const h = { cookie, 'content-type': 'application/json', 'x-werkbank': '1' };
+  const get = async (p: string) => { const r = await fetch(B + p, { headers: { cookie } }); return { status: r.status, j: await r.json() as any }; };
+  const post = async (p: string, b: unknown) => { const r = await fetch(B + p, { method: 'POST', headers: h, body: JSON.stringify(b) }); return { status: r.status, j: await r.json() as any }; };
+  const normal = JSON.parse((await orch(['ask', '--title', 'Stufe: Knopffarbe in der Inbox?', '--context', 'rein optisch', '--option', 'Grün', '--option', 'Blau', '--recommend', 'Grün', '--json'])).out);
+  const regel = JSON.parse((await orch(['ask', '--title', 'Stufe: Budget für Melious erhöhen?', '--context', '80 € mehr im Monat', '--recommend', 'ja', '--json'])).out);
+  const markiert = JSON.parse((await orch(['ask', '--title', 'Stufe: Reihenfolge der Schnitte?', '--context', 'x', '--recommend', 'wie geplant', '--stufe', 'wichtig', '--json'])).out);
+  const aussen = JSON.parse((await orch(['ask', '--title', 'Stufe: Kommentar auf GitHub posten?', '--context', 'x', '--recommend', 'ja', '--stufe', 'normal', '--json'])).out);
+  const ib = (await get('/api/inbox')).j.eintraege;
+  const von = (q: any) => ib.find((x: any) => x.daten?.qid === q.id);
+  assert.equal(von(normal).stufe, 'normal'); assert.ok(von(normal).autoAb, 'normal: Annahmezeit gesetzt');
+  assert.equal(von(regel).stufe, 'wichtig'); assert.match(von(regel).stufeGrund, /Geld/); assert.equal(von(regel).autoAb, null);
+  assert.equal(von(markiert).stufe, 'wichtig'); assert.equal(von(aussen).stufe, 'wichtig', 'Regel stuft „normal“ des Strangs hoch'); assert.equal(von(aussen).autoAb, null);
+  const ersteNormale = ib.findIndex((x: any) => x.stufe !== 'wichtig');
+  assert.ok(ersteNormale === -1 || ib.slice(ersteNormale).every((x: any) => x.stufe !== 'wichtig'), 'wichtige stehen oben');
+  // Lauf (Frist im Test 0 h): nur die normale wird angenommen, mit der empfohlenen Option, Autor „auto“.
+  const l = await post('/api/entscheidungen/lauf', {});
+  assert.equal(l.status, 200); assert.ok(l.j.angenommen.includes(von(normal).id));
+  assert.ok(!l.j.angenommen.includes(von(regel).id) && !l.j.angenommen.includes(von(markiert).id) && !l.j.angenommen.includes(von(aussen).id));
+  const got = JSON.parse((await orch(['questions', 'get', normal.id, '--json'])).out);
+  assert.equal(got.status, 'beantwortet'); assert.equal(got.answer.option, 'Grün'); assert.equal(got.answer.by, 'auto'); assert.match(got.answer.text, /automatisch angenommen/);
+  for (const q of [regel, markiert, aussen]) assert.equal(JSON.parse((await orch(['questions', 'get', q.id, '--json'])).out).status, 'offen');
+  // Log: automatisch + von Knut (frühere Inbox-Antworten), filterbar.
+  const auto = (await get('/api/entscheidungen?durch=auto')).j.zeilen;
+  const z = auto.find((x: any) => x.kennung === von(normal).id);
+  assert.ok(z && z.durch === 'auto' && z.stufe === 'normal' && z.widerrufbar, JSON.stringify(z));
+  assert.ok((await get('/api/entscheidungen?durch=knut')).j.zeilen.every((x: any) => x.durch === 'knut'));
+  assert.ok((await get('/api/entscheidungen?durch=knut')).j.zeilen.length >= 1, 'Antworten aus der Inbox stehen im Log');
+  // Widerruf: Text nötig; ohne Strang und ohne Hauptchat gäbe es keinen Empfänger → 409, nichts vermerkt.
+  assert.equal((await post(`/api/entscheidungen/${encodeURIComponent(z.id)}/anders`, { text: '' })).status, 400);
+  const w = await post(`/api/entscheidungen/${encodeURIComponent(z.id)}/anders`, { text: 'Blau' });
+  assert.equal(w.status, 409); assert.match(w.j.error, /Hauptchat/);
+  assert.equal((await get('/api/entscheidungen?durch=auto')).j.zeilen.find((x: any) => x.id === z.id).widerruf, null);
+  // Ein zweiter Lauf nimmt nichts doppelt an.
+  assert.ok(!(await post('/api/entscheidungen/lauf', {})).j.angenommen.includes(von(normal).id));
 });
