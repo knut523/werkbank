@@ -26,7 +26,8 @@ export function zeile(d: any, o: { mediane?: Record<Tiefe, number | null> | null
     zuletzt: d.lastActivity ?? d.statusAt ?? d.startedAt ?? null, chat: sicher(d.url), paket: d.paket ?? null, bericht: !!d.bericht,
     autoWeg: d.reviewedBy === 'auto', abgehakt: !!d.knutReviewedAt,
     // Live-Modus (Plan 274, D1): Knopf „Jetzt gründlich“, solange der Durchlauf nicht nach der letzten Runde angestoßen ist.
-    gruendlich: d.tiefe === 'live' && zustand !== 'erledigt' ? { angestossen: !!d.gruendlichAt && new Date(d.gruendlichAt).getTime() >= new Date(d.lastSentAt ?? 0).getTime() - 5000 } : null,
+    // gruendlichAt setzt nur eine neue Handnachricht zurück (nicht das automatische Nachsenden) — Pass C.
+    gruendlich: d.tiefe === 'live' && zustand !== 'erledigt' ? { angestossen: !!d.gruendlichAt } : null,
   };
 }
 

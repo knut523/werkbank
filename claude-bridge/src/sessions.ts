@@ -1004,7 +1004,9 @@ export function fremderWorktree(datei: string, andere: { key: string; dir?: stri
 
 /** Andere laufende Stränge derselben Person (ohne Worker, ohne Hauptchat) mit Arbeitsordner und geschriebenen Dateien. */
 function andereLaufende(live: Live) {
-  return [...lives.values()].filter((l) => l !== live && l.key !== live.key && l.userId === live.userId && l.orch && !l.worker)
+  // Gleicher Arbeitsordner = bewusst geteilt (orch start --shared; ohne es lehnt die Werkbank den Start ab) — nicht sperren (Pass C).
+  const eigen = orchMap[live.key]?.dir;
+  return [...lives.values()].filter((l) => l !== live && l.key !== live.key && l.userId === live.userId && l.orch && !l.worker && !(eigen && orchMap[l.key]?.dir === eigen))
     .map((l) => ({ key: l.key, dir: orchMap[l.key]?.dir ?? null, written: lastSeen.get(l.key)?.written ?? [] }));
 }
 

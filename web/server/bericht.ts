@@ -32,7 +32,8 @@ export function eigenesPaket(cwd: string, texts: (string | null | undefined)[]):
     if (c.startsWith(r + sep)) { const name = c.slice(r.length + 1).split(sep)[0]; if (PAKET_NAME.test(name)) return name; }
   }
   const t = texts.map((x) => String(x ?? '')).join('\n');
-  const marke = t.match(new RegExp(String.raw`\bPaket:?\s+\`?` + PFAD, 'i'));
+  // Nur als Ansage am Satz-/Zeilenanfang („Paket ~/…/274-x.“, „Paket: `…`“) — „aus dem Paket …/242“ ist Vorarbeit (Pass C).
+  const marke = t.match(new RegExp(String.raw`(?:^|[\n.;:(…]\s*|^\s*[-*]\s*)Paket:?\s+\`?` + PFAD, 'i'));
   if (marke) return marke[1];
   const auftrag = t.match(new RegExp(PFAD + String.raw`\/auftrag\.md`));
   if (auftrag) return auftrag[1];

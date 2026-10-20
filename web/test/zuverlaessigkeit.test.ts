@@ -148,6 +148,8 @@ test('D9 Status ehrlich: Antwort mit „Status: fertig“ nach der letzten Nachr
   }
   // Ohne „fertig“ bleibt es beim technischen Zugende.
   assert.equal(O.orchStatus(run, { running: false, interrupted: false, turn: { start: T0 + 1000, end: T0 + 60_000, outcome: 'error' } }, ai('Zwischenstand')).status, 'failed');
+  // Eine „fertig“-Antwort kurz VOR dem Senden ist nicht das Ergebnis der neuen Nachricht (Pass C): verloren bleibt verloren.
+  assert.equal(O.orchStatus({ ...run, lastSentAt: T0 + 64_000 }, null, fertig, T0 + 500_000).cause, 'lost');
   // Eine alte „fertig“-Antwort vor der letzten Nachricht zählt nicht.
   assert.equal(O.orchStatus({ ...run, lastSentAt: T0 + 120_000 }, { running: false, interrupted: false, turn: { start: T0 + 1000, end: T0 + 60_000, outcome: 'error' } }, fertig, T0 + 500_000).status, 'failed');
   // Brücke ohne Zugvermerk (Neustart), aber gespeicherte „fertig“-Antwort nach dem Senden.
@@ -176,6 +178,9 @@ test('D8 Paket eines Strangs: Arbeitsordner im Paket schlägt die Vorarbeit im A
   // Arbeitsordner ist ein Repo: ausdrücklich „Paket …“ im Auftrag.
   assert.equal(Bt.eigenesPaket('/home/knut/work/knut/werkbank-20b', ['… Paket ~/work/knut/review-pakete/274-workspace-20b. Lokal committen. Vorbild: review-pakete/213-workspace-neu/bericht.md']), '274-workspace-20b');
   assert.equal(Bt.eigenesPaket('/repo', ['Paket: review-pakete/275-x-y, Vorarbeit review-pakete/100-alt/bericht.md']), '275-x-y');
+  // „aus dem Paket …“ ist Vorarbeit, keine Ansage (Gegenprüfung Pass C).
+  assert.equal(Bt.eigenesPaket('/repo', ['Basiert auf der Vorarbeit aus dem Paket review-pakete/242-alt. Auftrag: review-pakete/290-neu/auftrag.md']), '290-neu');
+  assert.equal(Bt.eigenesPaket('/repo', ['- Paket: `~/work/knut/review-pakete/291-liste`']), '291-liste');
   // Sonst der Auftrag des Pakets (auftrag.md liegt im eigenen Paket).
   assert.equal(Bt.eigenesPaket('/repo', ['Auftrag: ~/work/knut/review-pakete/280-neu/auftrag.md; Vorarbeit review-pakete/100-alt/bericht.md']), '280-neu');
   // Sonst nur, wenn genau EIN Paket genannt ist.

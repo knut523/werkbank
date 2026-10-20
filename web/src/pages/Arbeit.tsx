@@ -132,7 +132,11 @@ export function ArbeitUnterchats({ cfg: _cfg }: { cfg: Config }) {
   const { data, error, reload } = useLoad<any>(() => api(`/api/arbeit/unterchats?filter=${filter}`), [filter]);
   const zurueck = async (id: string) => { try { await api(`/api/leitstand/strands/${id}/zurueckholen`, { method: 'POST', body: {} }); toast('Zurückgeholt'); reload(); } catch (e: any) { toast(e.message ?? 'Fehler'); } };
   // Plan 274 (D1): Live-Modus — einmal der volle Durchlauf (Tests, Gegenprüfung, Bericht) vor dem Push.
-  const gruendlich = async (id: string) => { try { await api(`/api/leitstand/strands/${id}/gruendlich`, { method: 'POST', body: {} }); toast('Jetzt gründlich — der Unter-Chat macht den vollen Durchlauf'); reload(); } catch (e: any) { toast(e.message ?? 'Fehler'); } };
+  const [gruendlichBei, setGruendlichBei] = useState<string | null>(null);
+  const gruendlich = async (id: string) => {
+    setGruendlichBei(id);
+    try { await api(`/api/leitstand/strands/${id}/gruendlich`, { method: 'POST', body: {} }); toast('Jetzt gründlich — der Unter-Chat macht den vollen Durchlauf'); reload(); } catch (e: any) { toast(e.message ?? 'Fehler'); } finally { setGruendlichBei(null); }
+  };
   if (error) return <div className="page"><Err e={error} /></div>;
   if (!data) return <div className="page"><Loading /></div>;
   const z = data.zaehler ?? {};
@@ -167,7 +171,7 @@ export function ArbeitUnterchats({ cfg: _cfg }: { cfg: Config }) {
                 {r.autoWeg && <button className="ub-btn sm" onClick={() => zurueck(r.id)}>Zurückholen</button>}
                 {r.gruendlich && (r.gruendlich.angestossen
                   ? <span className="chip" data-testid="gruendlich-laeuft">gründlicher Durchlauf angestoßen</span>
-                  : <button className="ub-btn pri sm" data-testid="gruendlich-knopf" onClick={() => gruendlich(r.id)} title="Die Runden sind durch: alle Tests, Gegenprüfung (Pass C) und Bericht — einmal vor dem Push">Jetzt gründlich</button>)}
+                  : <button className="ub-btn pri sm" data-testid="gruendlich-knopf" disabled={gruendlichBei === r.id} onClick={() => gruendlich(r.id)} title="Die Runden sind durch: alle Tests, Gegenprüfung (Pass C) und Bericht — einmal vor dem Push">Jetzt gründlich</button>)}
               </div>
             </td></tr>}
           </Fragment>)}

@@ -154,7 +154,9 @@ export function orchStatus(run: { startError?: string | null; startedAt: Date | 
   const sent = new Date(run.lastSentAt ?? run.startedAt).getTime();
   // Plan 274 (D9): eine gespeicherte Antwort mit „Status: fertig“ NACH der letzten Nachricht ist das Ergebnis — was danach technisch
   // schiefging (Zugende, Brücke ohne Vermerk), steht nur noch im Grund. Kein cause: nach „fertig“ kein automatisches „weiter“.
-  const fertigNachSend = !!last && !last.fromUser && !last.error && last.at >= sent - 5000 && statusMark(last.text) === 'fertig';
+  // Nur Antworten NACH dem Senden (lastSentAt wird vor dem Senden gestempelt) — sonst gälte eine ältere „fertig“-Antwort als Ergebnis
+  // einer verlorenen Nachricht (Gegenprüfung Pass C).
+  const fertigNachSend = !!last && !last.fromUser && !last.error && last.at > sent && statusMark(last.text) === 'fertig';
   if (!s?.turn || s.turn.start < sent - 5000) {
     if (last?.error && last.at >= sent - 5000) return { status: 'failed', reason: `LibreChat meldet einen Fehler: ${last.text.slice(0, 160)}` };
     if (fertigNachSend) return { status: 'done', reason: 'fertig (Zug in der Brücke nicht vermerkt)' };
@@ -553,7 +555,7 @@ export async function listOrch(u: User, opts: { all?: boolean } = {}) {
     const last = await lastMessage(u, d.conv);
     const s = states.get(d.conv);
     let st: { status: OrchStatus; reason: string; cause?: AutoCause } = bridgeError ? { status: 'failed', reason: `Brücke nicht erreichbar: ${bridgeError}` } : orchStatus(d, s, last);
-    st = mitDeckel(st, d.autoStopped);
+    if (!bridgeError) st = mitDeckel(st, d.autoStopped);   // Brücke weg bleibt sichtbar, auch bei Budget-Pause (Pass C)
     // Titel/Lesezeichen nachziehen, falls der Start-Durchlauf es nicht geschafft hat (selbstheilend, idempotent).
     if (!d.decorated && !d.startError) { try { if ((await decorate(u, d.conv, d.title)).ok) await runs().updateOne({ _id: d._id }, { $set: { decorated: true } }); } catch { /* nächstes Mal */ } }
     if (d.laufExplicit && !d.decoratedLauf && !d.startError) { try { if ((await decorate(u, d.conv, d.title, laufTag(d.lauf))).ok) await runs().updateOne({ _id: d._id }, { $set: { decoratedLauf: true } }); } catch { /* nächstes Mal */ } }
@@ -642,7 +644,7 @@ export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 
   }
   // Handnachricht: der Deckel beginnt neu, Stopp und review_ready sind aufgehoben (Council R1, Bedingung 4).
   // Teil B, F6: auch Karte, DoD-Tabellen und Knuts Prüfung sind damit weg (nach erneutem „fertig“ keine alte Tabelle).
-  await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: sentAt, lastSentText: msg.slice(0, 40_000), reviewedAt: null, reviewedBy: null, knutReviewedAt: null, reviewReadyAt: null, review: null, prevReview: null, doneAt: null, autoStreak: 0, autoStopped: null, ...(/^Nacharbeit nach Review:/.test(msg) ? { reworkAt: new Date(), reworkText: msg.slice(0, 500) } : {}) }, $inc: { sends: 1 } });
+  await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: sentAt, lastSentText: msg.slice(0, 40_000), gruendlichAt: null, reviewedAt: null, reviewedBy: null, knutReviewedAt: null, reviewReadyAt: null, review: null, prevReview: null, doneAt: null, autoStreak: 0, autoStopped: null, ...(/^Nacharbeit nach Review:/.test(msg) ? { reworkAt: new Date(), reworkText: msg.slice(0, 500) } : {}) }, $inc: { sends: 1 } });
   await questions().updateMany({ userId: u.id, kind: 'auto-weiter', 'strand.id': d._id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() } });
   return { id, conv: d.conv, url: d.url, ...(await bestaetigen(u, d.conv, sentAt, o.warteMs)) };
 }
@@ -667,8 +669,13 @@ async function bestaetigen(u: User, conv: string, sentAt: Date, warteMs = 0): Pr
 export async function gruendlichOrch(u: User, id: string, via: 'hand' | 'leitstand' = 'hand') {
   const d = await ownRun(u, id);
   if (d.tiefe !== 'live') throw err(409, `Strang ${id} läuft nicht im Live-Modus (Tiefe ${d.tiefe ?? 'regular'}) — „jetzt gründlich“ gibt es nur dort.`);
-  const r = await sendOrch(u, id, GRUENDLICH_TEXT, via);
-  await runs().updateOne({ _id: d._id }, { $set: { gruendlichAt: new Date() } });
+  // Einmal je Runde (Doppelklick, Pass C): erst eine neue Handnachricht (neue Runde) setzt gruendlichAt zurück.
+  const anspruch = await runs().updateOne({ _id: d._id, gruendlichAt: null }, { $set: { gruendlichAt: new Date() } });
+  if (!anspruch.modifiedCount) throw err(409, `„Jetzt gründlich“ ist für ${id} schon angestoßen — der Durchlauf läuft.`);
+  let r;
+  try { r = await sendOrch(u, id, GRUENDLICH_TEXT, via); }
+  catch (e) { await runs().updateOne({ _id: d._id }, { $set: { gruendlichAt: null } }); throw e; }
+  await runs().updateOne({ _id: d._id }, { $set: { gruendlichAt: new Date() } });   // die Handnachricht hat es eben zurückgesetzt
   return { ...r, gruendlich: true };
 }
 
@@ -701,7 +708,8 @@ async function nachzuegler(u: User, d: any, s: any, deps: AutoDeps): Promise<boo
   const staende = [];
   for (const li of offen) {
     const st = await injectStateBridge(u, li.id).catch(() => undefined);
-    if (st === undefined || st?.state === 'zugestellt') return false;   // Brücke weg bzw. noch offen: nächster Takt (nichts abhaken)
+    if (st === undefined) return false;   // Brücke weg: nächster Takt (nichts abhaken)
+    if (st?.state === 'zugestellt') continue;   // noch offen (für den nächsten Versuch aufgehoben) — blockiert die anderen nicht (Pass C)
     staende.push({ li, st });
   }
   const nach: string[] = [];
@@ -917,7 +925,7 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
         // Teil C (H2): Bericht-Kopf, Diagramm, Commit-Abgleich und Vorschau-Links — auch für fertige Stränge, vor dem Übersprung.
         // Plan 274 (D8): falsch zugeordneten Bericht auf das eigene Paket umstellen (einmalig, danach stimmt es).
         const heil = paketHeilung(d);
-        if (heil) { await runs().updateOne({ _id: d._id }, { $set: heil }).catch(() => {}); Object.assign(d, heil); deps.log?.('bericht neu zugeordnet', { id: d._id, paket: heil.paket }); }
+        if (heil && (await runs().updateOne({ _id: d._id }, { $set: heil }).catch(() => null))?.modifiedCount) { Object.assign(d, heil); deps.log?.('bericht neu zugeordnet', { id: d._id, paket: heil.paket }); }
         try { const ks = await kopfPflege(d, now); if (Object.keys(ks).length) { await runs().updateOne({ _id: d._id }, { $set: ks }); Object.assign(d, ks); } }
         catch (e: any) { deps.log?.('bericht-kopf fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
         const sd = states.get(d.conv);
