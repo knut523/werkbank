@@ -110,3 +110,21 @@ test('Format-Vorgabe: befunde.json kennt `vorige`; der Weg ohne Motor bekommt di
   const ohneMotor = (() => { const alt = process.env.WERKBANK_REVIEW_MOTOR; process.env.WERKBANK_REVIEW_MOTOR = '0'; try { return P.reviewPrompt({ repo: 'o/r', number: 1, title: 't', url: 'u', head: 'h', by: 'knut523', trigger: 'hand' }, '/wt', '1-r'); } finally { if (alt === undefined) delete process.env.WERKBANK_REVIEW_MOTOR; else process.env.WERKBANK_REVIEW_MOTOR = alt; } })();
   assert.ok(ohneMotor.includes(Bf.KOMMENTAR_FORM), 'Auftrag ohne Motor enthält die Formvorgabe');
 });
+
+test('Entwurf aus dem Paket: Kopfzeile aus review.json; nur GitHub-Links des vorigen Reviews kommen in den Kommentar', async () => {
+  const { mkdtempSync, writeFileSync, readFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const alle = Object.fromEntries(Bf.KLASSEN.map((k) => [k, 'geprüft']));
+  const paket = (url: string) => {
+    const d = mkdtempSync(join(tmpdir(), 'wb-delta-'));
+    writeFileSync(join(d, 'befunde.json'), JSON.stringify({ vollstaendig: true, abdeckung: alle, befunde: [], vorige: [{ punkt: 'x', quelle: 'review', stand: 'erledigt', beleg: 'a.ts:1' }] }));
+    writeFileSync(join(d, 'review.json'), JSON.stringify({ head: 'c'.repeat(40), vorher: { head: 'a'.repeat(40), url } }));
+    assert.ok(P.entwurfAusPaket(d).entwurf);
+    return readFileSync(join(d, 'kommentar.md'), 'utf8');
+  };
+  assert.match(paket('https://github.com/o/r/pull/1#pullrequestreview-9'), /changes since our review of `aaaaaaa` \(https:\/\/github\.com\/o\/r\/pull\/1#pullrequestreview-9\)\./);
+  const fremd = paket('[click](https://evil.example)');
+  assert.match(fremd, /changes since our review of `aaaaaaa`\./); assert.doesNotMatch(fremd, /evil/);
+  assert.match(Bf.KOMMENTAR_FORM, /Empfehlung: <approve \| request-changes \| comment>/, 'Vorlage ohne vorgegebene Empfehlung');
+});

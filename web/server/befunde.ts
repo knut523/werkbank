@@ -97,7 +97,7 @@ const kurzSha = (h: string) => String(h).slice(0, 7);
 export const KOMMENTAR_FORM = [
   'Form von kommentar.md (dieselbe wie bei automatisch gebauten Kommentaren; englisch; keine Tabellen):',
   '```markdown',
-  'Empfehlung: request-changes',
+  'Empfehlung: <approve | request-changes | comment>',
   '',
   'Automated review of `<sha7>`.   (Delta: „Delta review of `<sha7>` — changes since our review of `<sha7>` (<link>).“)',
   '<one or two sentences, optional>',

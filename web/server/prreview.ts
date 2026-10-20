@@ -434,7 +434,7 @@ export function entwurfAusPaket(dir: string): { entwurf: { hash: string; vollsta
       // Kopfzeile (Stand, beim Delta das vorige Review mit Link) aus review.json, die der Start ins Paket legt (Release 20b).
       let kopf: any = {};
       try { kopf = JSON.parse(lies('review.json') ?? '{}'); } catch { kopf = {}; }
-      const text = kommentarAusBefunden(g, { head: typeof kopf.head === 'string' ? kopf.head : null, vorher: kopf.vorher?.head ? { head: String(kopf.vorher.head), url: typeof kopf.vorher.url === 'string' ? kopf.vorher.url : null } : null });
+      const text = kommentarAusBefunden(g, { head: typeof kopf.head === 'string' ? kopf.head : null, vorher: kopf.vorher?.head ? { head: String(kopf.vorher.head), url: /^https:\/\/github\.com\/[^\s()]+$/.test(String(kopf.vorher.url ?? '')) ? String(kopf.vorher.url) : null } : null });
       writeFileSync(join(dir, 'kommentar.md'), text);
       const k = parseKommentar(text);
       if (!k) throw new Error('Kommentar ohne Empfehlung');
