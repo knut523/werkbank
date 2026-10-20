@@ -8,6 +8,7 @@
 import { wb } from './db.ts';
 import { graphql, GithubError } from './github.ts';
 import { vienna } from './hygiene.ts';
+import { regelZeilen, regelAnhaengen } from './regelquelle.ts';
 
 export const ME = (process.env.WERKBANK_GITHUB_LOGIN || 'knut523').toLowerCase();
 
@@ -88,7 +89,7 @@ const PR_FIELDS = `number title url state merged isDraft createdAt updatedAt hea
   repository { nameWithOwner } author { login }
   reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } } } }
   comments(last: 30) { nodes { id author { login } body createdAt url } }
-  reviews(last: 20) { nodes { id author { login } body state submittedAt url } }`;
+  reviews(last: 20) { nodes { id author { login } body state submittedAt url comments(first: 30) { nodes { path line originalLine body } } } }`;
 
 export function tickerQuery(n: number): string {
   const vars = Array.from({ length: n }, (_, i) => `$q${i}: String!`).join(', ');
@@ -227,7 +228,7 @@ let running: Promise<any> | null = null;
 /** Ab so vielen Minuten ohne erfolgreichen Lauf gilt es als Lücke (Takt ist 1–60 min; Lücke heißt: deutlich darüber). */
 export const LUECKE_MIN = 30;
 
-export interface TickResult { events: number; reviews: number; prs: number; skipped?: string }
+export interface TickResult { events: number; reviews: number; prs: number; skipped?: string; regel?: number }
 
 /**
  * Ein Durchgang: Abruf ab dem letzten erfolgreichen Lauf (UEBERLAPPUNG_MIN Überlappung), Ereignisse speichern, Auslöser in die
@@ -266,13 +267,15 @@ export async function tickerTick(getToken: () => Promise<string | null>, now = n
     }
     if (mem.length) await prState().bulkWrite(mem.map((m) => ({ replaceOne: { filter: { _id: m._id as any }, replacement: { ...m, at: now }, upsert: true } })));
     const reviews = await queueReviews(fresh, s, now);
+    // Plan 274 (Zusatz A): Reviews/Kommentare der Erlaubtliste als Regel-Quelle für das Pre-Push-Gate (nur mit WERKBANK_REGEL_DIR).
+    const regel = await regelAnhaengen(regelZeilen(got.prs, ghTime(since), s.allow, ME), now).catch(() => 0);
     // Paket 223: lag der letzte erfolgreiche Lauf > 30 min zurück (Web-App aus, kein Token), merkt sich der Lauf die Lücke —
     // die Wache (prreview.ts) meldet sie einmal mit der Zahl der nachgeholten Reviews. Erfolg setzt die Fehlermeldung zurück.
     // `ok` = letzter erfolgreicher Lauf; `at` ist der Lese-Zeiger und kann bei abgeschnittenen Suchen alt sein (Pass C).
     const letzter = st.ok ?? st.at;
     const luecke = letzter && now.getTime() - new Date(letzter).getTime() > Math.max(LUECKE_MIN, 2 * s.minutes + 5) * 60_000 ? { luecke: { von: new Date(letzter), bis: now, reviews, gemeldet: false } } : {};
     await meta().updateOne({ _id: 'pr_ticker' as any }, { $set: { at: got.truncatedAt ? new Date(got.truncatedAt) : now, ok: now, error: null, fehlerGemeldet: null, rate: got.rate, counts: got.counts, prs: got.prs.length, truncated: !!got.truncatedAt, ...luecke } }, { upsert: true });
-    return { events: fresh.length, reviews, prs: got.prs.length };
+    return { events: fresh.length, reviews, prs: got.prs.length, ...(regel ? { regel } : {}) };
   })();
   try { return await running; } finally { running = null; }
 }

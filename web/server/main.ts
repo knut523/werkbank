@@ -19,7 +19,7 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, mirrorOf, mirrorSites, siteByPrefix, siteColumns, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane, statusSchatten, sendWarteMs, gruendlichOrch, worktreeBelegt } from './orchestrator.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane, statusSchatten, sendWarteMs, gruendlichOrch, worktreeBelegt, questions as orchQuestions } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, setzeLeseQuelle, type VorbauErgebnis } from './vorbau.ts';
 import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
@@ -67,6 +67,7 @@ import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol } from './prticker.ts';
+import { regelDir, regelVorschlaege } from './regelquelle.ts';
 import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
 import { meliousPassC } from './gegenpruefung.ts';
@@ -1824,6 +1825,27 @@ on('POST', /^\/api\/arbeit\/reviews\/start$/, async (req, res) => {
   const b = await body(req);
   send(res, 200, await reviewStarten(u, b.pr, b.stufe));
 });
+
+/** Regel-Vorschläge (Plan 274, Zusatz A) für den Besitzer des Tickers: Rückfrage „Übernehmen/Verwerfen“ + Meldung im Hauptchat. */
+async function regelVorschlagTakt(neu: number) {
+  if (!regelDir()) return;
+  const s = await tickerSettings();
+  const u = s.ownerId ? await userById(s.ownerId) : null;
+  if (!u) return;
+  await regelVorschlaege({
+    frage: async (v, key) => {
+      const q = await askKnut(u, { key, quelle: 'regel', title: `Regel-Vorschlag: ${v.titel}`.slice(0, 140),
+        context: `${v.regel}${v.begruendung ? `\n\nWarum: ${v.begruendung}` : ''}${v.belege?.length ? `\n\nBelege: ${v.belege.join(' · ')}` : ''}\n\nAus den Reviews der Erlaubtliste (PR-Ticker → regel-vorschlag.sh).`,
+        options: [{ label: 'Übernehmen', consequence: 'Die Regel kommt in die Prüfliste des Pre-Push-Gates (regeln-bestaetigt.jsonl).' }, { label: 'Verwerfen', consequence: 'Kein Eintrag; derselbe Vorschlag kommt nicht wieder.' }],
+        recommendation: 'Übernehmen, wenn die Regel allgemein gilt und nicht nur diesen einen PR betrifft.' }).catch((e: any) => { if (e.status === 409) return null; throw e; });
+      if (!q) return null;
+      await orchQuestions().updateOne({ _id: q.id as any }, { $set: { kind: 'regel-vorschlag', regel: v } });
+      return q.id;
+    },
+    melde: (text) => meldeLeitstand(u, { _id: 'regel-vorschlaege', title: 'Regel-Vorschläge' }, text),
+    log,
+  }, { neu });
+}
 
 // Plan 274 (D1): Knopf „Jetzt gründlich“ an einem Live-Unter-Chat (Arbeit › Unter-Chats) — derselbe Weg wie `orch gruendlich`.
 on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/gruendlich$/, async (req, res, m) => {
@@ -3751,8 +3773,11 @@ async function backgroundJobs() {
   setzeLeseQuelle(githubReadToken);
   // PR-Ticker + Auto-Review (Plan 157): jede Minute nachsehen; der Ticker selbst hält seinen Takt (Einstellung „minutes“).
   const prTick = async () => {
-    try { const r = await tickerTick(githubReadToken); if (r.events || r.reviews) log('pr-ticker', { ...r }); }
+    let regelNeu = 0;
+    try { const r = await tickerTick(githubReadToken); regelNeu = r.regel ?? 0; if (r.events || r.reviews || r.regel) log('pr-ticker', { ...r }); }
     catch (e: any) { log('pr-ticker', { error: String(e.message).slice(0, 200) }); }
+    // Plan 274 (Zusatz A): neue Reviews → regel-vorschlag.sh (sonst einmal am Tag) → Vorschläge als Rückfrage + Hauptchat-Meldung.
+    try { await regelVorschlagTakt(regelNeu); } catch (e: any) { log('regel-vorschlag', { error: String(e?.message ?? e).slice(0, 200) }); }
     try {
       const r = await reviewTick({
         userById: async (id) => { const u = await userById(id); return u && allowed(u.email) && u.role === 'ADMIN' ? u : null; },

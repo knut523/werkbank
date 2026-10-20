@@ -26,6 +26,7 @@ import { meliousSettings, ausserhalbAbo } from './melious.ts';
 import { budgetVon } from './cosbudget.ts';   // zyklisch (cosbudget → orchestrator), nur zur Laufzeit im Rückfrage-Pfad benutzt
 import { tiefeOf, istTiefe, tiefeStart, tiefeText, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, GRUENDLICH_TEXT, type Tiefe } from './tiefe.ts';
 import { zustandAus, abweichung, nachfordern, statusNeu, NACHFORDER_TEXT, wienDatum, wienUm } from './zustand.ts';
+import { regelBestaetigen } from './regelquelle.ts';
 
 export const ORCH_TAG = 'Orchestrator';
 export type OrchStatus = 'running' | 'waiting' | 'done' | 'failed' | 'blocked_g0';
@@ -80,6 +81,18 @@ export const BERICHT_PFLICHT = [
   '- Fragen im Kopf tragen dieselbe Kennung wie im Text (`D1`). Antworten Knuts kommen als „Nacharbeit nach Review“; trag sie dann in `antwort:` ein.',
 ].join('\n');
 
+/**
+ * Regeltreue vor „fertig“ (Plan 274, Zusatz B — Knut 20.10.2026: Christophs Reviews fanden vor allem Verstöße gegen AGENTS.md).
+ * Pflicht bei Code-/Doku-Arbeit; das Ergebnis steht im Stand-Block (Zeile „Regeln:“), fehlende Werkzeuge werden genannt.
+ */
+export const REGEL_PFLICHT = [
+  'Regeltreue (Pflicht vor „Status: fertig“ bei Code- oder Doku-Arbeit; Ergebnis in die Zeile „Regeln:“ des Stand-Blocks):',
+  '1. `AGENTS.md` des Repos lesen und dazu `olaf-docs/AGENTS.md` (lokaler Klon, sonst die Kopie `~/work/knut/tools/pre-push-gate/quellen/AGENTS-olaf-docs.md`).',
+  '2. Den Skill `olaf-feedback-check` abarbeiten — je Punkt ein Beleg (Datei:Zeile, Befehl mit Ausgabe oder „nicht betroffen, weil …“).',
+  '3. Den Checklisten-Teil des Pre-Push-Gates gegen den eigenen Diff laufen lassen: `~/work/knut/tools/pre-push-gate/pre-push-gate.sh --checkliste <repo> HEAD <zweig>` — Befunde beheben oder begründen.',
+  'Fehlt eine Datei, der Skill oder der Modus `--checkliste`, schreib das so in die Zeile „Regeln:“ — nicht still überspringen. Reine Recherche ohne Änderung: „Regeln: nicht betroffen (keine Änderung)“.',
+].join('\n');
+
 /** Erster Text des Strangs. Erste Zeile = Titel; der Auftrag steht am Ende. */
 export function orchBrief(b: BriefInput): string {
   const first = (b.person || 'Knut').split(/\s+/)[0];
@@ -104,6 +117,7 @@ export function orchBrief(b: BriefInput): string {
     ].join('\n'),
     // Plan 205: Tiefe (Pflichtschritte) und ETA (Pflichtzeile im Stand-Block, die Werkbank liest sie wie „Status:“).
     tiefeText(b.tiefe ?? tiefeOf(null)),
+    REGEL_PFLICHT,
     [
       'Schließe JEDE Antwort mit diesem Abschnitt (die Haupt-Sitzung liest ihn maschinell; nach „Status:“ genau eines der drei Wörter — „fertig“ nur, wenn der Auftrag erledigt und geprüft ist):',
       '```text',
@@ -111,6 +125,7 @@ export function orchBrief(b: BriefInput): string {
       '- Erledigt: …',
       '- Offen: …',
       '- Braucht Knut: … (oder „nichts“)',
+      '- Regeln: AGENTS.md gelesen · olaf-feedback-check n/n mit Beleg · Checkliste: ohne Befund | Befunde …',
       ETA_ZEILE,
       'Status: fertig | braucht Antwort | blockiert',
       '```',
@@ -1105,6 +1120,8 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
       if (option === 'Anhalten') { await reviewOrch(u, d.strand.id, 'angehalten: Budget erreicht'); action = 'angehalten'; }
     } catch (e: any) { action = `nicht ausgeführt: ${String(e.message ?? e).slice(0, 200)}`; }
   }
+  // Regel-Vorschlag aus den Reviews (Plan 274, Zusatz A): „Übernehmen“ schreibt die Regel für das Pre-Push-Gate fest.
+  if (d.kind === 'regel-vorschlag' && d.regel && option === 'Übernehmen') action = regelBestaetigen({ ...d.regel, key: d.key ?? undefined, frage: id }, a.by ?? u.email) ? 'übernommen' : 'nicht ausgeführt: WERKBANK_REGEL_DIR fehlt';
   // Leitstand-Deckel (Plan 132, A4): „Fortsetzen“ zählt ab jetzt neu; die Antwort selbst wird sofort zugestellt (leitstand.ts).
   if ((d.kind === 'leitstand-deckel' || d.kind === 'leitstand-weiter') && option === 'Fortsetzen') {
     await runs().updateOne({ userId: u.id, kind: 'leitstand', endedAt: null }, { $set: d.kind === 'leitstand-deckel' ? { capResetAt: new Date() } : { weiterStreak: 0, weiterStopped: null } });
