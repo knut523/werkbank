@@ -5,7 +5,7 @@ import { parse as parseYaml } from 'yaml';
 
 export type KopfStatus = 'bereit_fuer_github' | 'wartet_auf_knut' | 'blockiert';
 export interface KopfReview { titel: string; url?: string; login?: string; screenshot?: string; pr_text?: string }
-export interface KopfFrage { id: string; frage: string; empfehlung: string; antwort: string; stufe?: 'wichtig' | 'normal'; worum?: string; optionen?: string[] }
+export interface KopfFrage { id: string; frage: string; empfehlung: string; antwort: string; stufe?: 'wichtig' | 'normal'; worum?: string; optionen?: string[]; alternativen?: string[] }
 export interface KopfGithub { repo: string; zweig: string; commit: string; was?: string; pr_text?: string; pr?: string }
 // Exec Summary (C.7): titel, worum, anders; „Was du tun musst“ ist `offen`.
 export interface Kopf { status: KopfStatus; titel: string; worum: string; anders: string[]; offen: string[]; review: KopfReview[]; fragen: KopfFrage[]; github: KopfGithub[] }
@@ -41,7 +41,11 @@ export function berichtKopf(text: string | null | undefined): Kopf | { fehler: s
     const id = /^(D\d{1,3}|E-\d{1,4}-\d{1,3}|F\d{1,3})$/.test(str(f.id, 20)) ? str(f.id, 20) : `F${i + 1}`;
     // Entscheidungsseite (Knut 19.10.): worum = 2–4 Sätze ohne Codes, optionen = Liste — beides optional.
     const worum = str(f.worum, 800), optionen = list(f.optionen).slice(0, 6).map((o: unknown) => str(o, 200)).filter(Boolean);
-    return { id, frage, empfehlung: str(f.empfehlung, 600), antwort: str(f.antwort, 600), ...(f.stufe === 'wichtig' || f.stufe === 'normal' ? { stufe: f.stufe } : {}), ...(worum ? { worum } : {}), ...(optionen.length ? { optionen } : {}) };
+    // Knut 20.10.: „bei anders … gibt es oft nur 2-3 andere Vorschläge — einfach auswählen statt schreiben“. alternativen = Knöpfe neben
+    // „Ja (wie empfohlen)“; Inline- (["a", "b"]) und Block-Liste liest der YAML-Parser gleich. Höchstens 3, kurz, ohne die Empfehlung selbst.
+    const empfehlung = str(f.empfehlung, 600);
+    const alternativen = [...new Set(list(f.alternativen).map((o: unknown) => str(o, 120)).filter((o) => o && o !== empfehlung))].slice(0, 3);
+    return { id, frage, empfehlung, antwort: str(f.antwort, 600), ...(f.stufe === 'wichtig' || f.stufe === 'normal' ? { stufe: f.stufe } : {}), ...(worum ? { worum } : {}), ...(optionen.length ? { optionen } : {}), ...(alternativen.length ? { alternativen } : {}) };
   }).filter((x): x is KopfFrage => !!x);
   const github: KopfGithub[] = list(y.github).slice(0, 6).map((g: any) => {
     if (!g || typeof g !== 'object') return null;

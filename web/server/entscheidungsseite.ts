@@ -16,6 +16,9 @@ export interface Frage {
   titel: string;
   worum: string;
   optionen: string[];
+  /** Knöpfe zwischen „Ja (wie empfohlen)“ und „Nein“: ein Klick = „Anders: <Alternative>“ (Bericht-Kopf `alternativen:`, bei
+   *  Rückfragen die Optionen außer der empfohlenen). */
+  alternativen: string[];
   empfehlung: string | null;
   stufe: 'wichtig' | 'normal';
   stufeGrund: string | null;
@@ -59,6 +62,7 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
         const worum = [tw.rest, ein(x.worum)].filter(Boolean).join(' ') || `Aus ${e.quelle.text} (Unter-Chat „${ein(e.daten.strangTitel) || 'ohne Titel'}“) — dort steht der Zusammenhang.`;
         fragen.push({ ...basis, id: `${e.id}~${x.id}`, teil: String(x.id), kennung: String(x.id), titel: tw.titel, worum,
           optionen: Array.isArray(x.optionenListe) ? x.optionenListe.map(ein).filter(Boolean) : [], empfehlung: x.empfehlung ? ein(x.empfehlung) : null,
+          alternativen: Array.isArray(x.alternativen) ? x.alternativen.map(ein).filter(Boolean).slice(0, 3) : [],
           stufe: x.stufe === 'wichtig' ? 'wichtig' : 'normal', stufeGrund: x.stufeGrund ?? null, autoAb: x.auto ? e.autoAb ?? null : null,
           antworten: ['ja', 'nein', 'anders', 'spaeter'] });
       }
@@ -71,7 +75,11 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
       : e.art === 'vaultfrage' ? `${e.daten.kurz ? `${ein(e.daten.kurz)} ` : ''}Offene Frage in ${e.quelle.text}${e.daten.section ? `, Abschnitt „${ein(e.daten.section)}“` : ''} — wichtig, weil: ${ein(e.daten.grund)}.${e.daten.beleg ? ` Stand laut Sichtung: ${ein(e.daten.beleg)}.` : ''} Deine Antwort kommt als Zeile „- Knut:“ in die Notiz.${tw.rest ? ` ${tw.rest}` : ''}`
       : e.art === 'vault' ? `Der Vault-Sync hat beim Abgleich etwas gefunden, das er nicht selbst entscheiden darf.${tw.rest ? ` ${tw.rest}` : ''}`
       : [kontext, tw.rest].filter(Boolean).join(' ') || `Rückfrage aus ${e.quelle.text}.`;
-    fragen.push({ ...basis, id: e.id, teil: null, kennung: null, titel: tw.titel, worum, optionen: ((e.daten.optionen as string[]) ?? []).map(ein).filter(Boolean),
+    const optionen = ((e.daten.optionen as string[]) ?? []).map(ein).filter(Boolean);
+    // Rückfragen: die nicht empfohlenen Optionen als Alternativ-Knöpfe (die empfohlene ist „Ja“, ein bloßes Ja/Nein hat schon seinen Knopf).
+    const rec = optionen.find((o) => o === ein(e.empfehlung)) ?? optionen.find((o) => ein(e.empfehlung).startsWith(o));
+    const alternativen = e.art === 'rueckfrage' && e.antworten.includes('anders') ? optionen.filter((o) => o !== rec && !/^(ja|nein)[.!]?$/i.test(o)).slice(0, 3) : [];
+    fragen.push({ ...basis, id: e.id, teil: null, kennung: null, titel: tw.titel, worum, optionen, alternativen,
       empfehlung: e.empfehlung ? ein(e.empfehlung) : null, stufe: e.stufe === 'wichtig' ? 'wichtig' : 'normal', stufeGrund: e.stufeGrund ?? null,
       antworten: (e.antworten as Antwort[]).filter((a) => a !== 'anders' || e.art !== 'vault') });
   }
