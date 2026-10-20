@@ -1,0 +1,24 @@
+# Learnings 20.10.2026 — Vorfälle und die Regel/der Test, der jeden verhindert
+
+Release 20b (Plan: `docs/plan-20b-zuverlaessigkeit.md`). Je Vorfall: was passiert ist, die Ursache im Code, und der Test bzw.
+die Regel, die ihn ab jetzt abfängt. Tests: `web/test/zuverlaessigkeit.test.ts`, `web/test/regelquelle.test.ts`,
+`claude-bridge/test/worktree-sperre.test.ts`, Sichtprüfung `web/e2e/live-shots.ts`.
+
+| # | Vorfall | Ursache | Verhindert durch |
+|---|---------|---------|------------------|
+| 1 | Zwei Stränge im selben Rechner-Worktree, gegenseitig blockiert (b9b968af, 4c836b73) | Die Sperre verglich nur den `cwd`. Der eine Strang hatte den Paketordner als `cwd` und schrieb in den Repo-Worktree, der andere startete dort. | Schlüssel = Git-Wurzel; geschriebene Dateien zählen mit. `start` → 409, `send`/automatisches „weiter“ warten; die Brücke lehnt Write/Edit in einen Worktree ab, in dem gerade ein anderer Strang läuft. Tests „D4a Konflikt …“, „Wächter: zweiter Strang darf nicht …“, Sichtprüfung „409 im Unterordner“. |
+| 2 | 3× „Nachricht ist nach 3 Minuten nicht bei der Brücke angekommen“ (e422ab42), obwohl sie ankam | `lastSentAt` wurde erst nach dem Warten auf die gespeicherte Nachricht gesetzt (bis 5 s). Zugbeginn 16:13:57.458, `lastSentAt` 16:14:02.574 → 5,1 s > Toleranz → nach dem Zugende „verloren“. | Sendezeit wird vor dem Senden gestempelt (`deliver` liefert sie). `send` wartet auf die Bestätigung der Brücke und meldet „angekommen“. Tests „D4b Bestätigung“, Sichtprüfung „orch send meldet die Zustellung“. |
+| 3 | Ein ganzer Durchlauf in die falsche Richtung (e422ab42) | Die Richtungsänderung kam als Nachreichung mitten in einen 57-min-Zug; gemerkt wurde nur die **letzte** Nachreichung (15:27 überschrieb 15:06); „unbekannt“ nach einem Brücken-Neustart wurde nie nachgesendet; „nicht angekommen“ schickte nur „weiter“, nicht die Nachricht. | Alle Nachreichungen werden verfolgt; ungelesene und unbekannte kommen nach dem Zug als normale Nachricht (mit Hinweis); „nicht angekommen“ schickt denselben Text noch einmal. Strang-Regel: Nachgereichtes hat Vorrang und wird im nächsten Text bestätigt. Tests „D4b Wiederholung“, „D4b Nachreichungen“. |
+| 4 | Budget „bricht ab“ (b95d9cdd, 8fdd44b6, e422ab42) | Kein harter Abbruch, aber: der Budget-Stopp machte jeden Strang zu „failed“ — auch 40 s nach „fertig“ (b95d9cdd) und während ein Zug noch sauber lief (e422ab42); der Zug selbst erfuhr nichts. | 100 % während eines Zuges → Nachricht „Schritt sauber beenden, Stand sichern, mit ‚braucht Antwort‘ enden“, dann Pause + Rückfrage; nach „fertig“ nur ein Vermerk; Budget-Pause = „wartet“. Tests „D5 Budget …“ (zwei). |
+| 5 | Strang zeigt den Bericht eines anderen Pakets (ce076bec → 242; ebenso 8fdd44b6 → 257, b95d9cdd → 254, e422ab42 → 256) | `findBericht` nahm den **ersten** Paketpfad im Auftrag — meist die Vorarbeit — und korrigierte nie. | Eigenes Paket: Arbeitsordner im Paket › „Paket …“ als Ansage › `auftrag.md` › genau ein genanntes Paket; sonst keiner statt des falschen. Der Status-Takt heilt alte Zuordnungen, wenn der Arbeitsordner im Paket liegt. Tests „D8 …“ (zwei). |
+| 6 | „failed/blockiert“, obwohl der Agent „fertig“ meldete | Der technische Ausgang des Zuges wurde vor der Status-Marke der gespeicherten Antwort ausgewertet. | „fertig“ nach der letzten Nachricht schlägt das technische Zugende → „fertig (danach abgebrochen: Grund)“, ohne automatisches „weiter“. Tests „D9 …“ (zwei), Sichtprüfung „Zustand fertig (danach abgebrochen …)“. |
+| 7 | Rechner-Runden: Summen/Vorzeichen/Beschriftung erst im Review gefunden | Grundregeln standen nicht als Test fest. | Regel im Strang-Brief: bei Rechner-, Geld- oder Summenlogik zuerst rote Tests für Summe = Summe der Posten, Vorzeichen, netto/brutto. Test „D2 …“. |
+| 8 | Christophs Reviews: vor allem Verstöße gegen AGENTS.md | Regeln wurden nicht vor „fertig“ geprüft; neue Regeln aus Reviews kamen nicht von selbst an. | Strang-Brief: vor „fertig“ AGENTS.md (+ olaf-docs), `olaf-feedback-check` mit Beleg je Punkt, `pre-push-gate.sh --checkliste`; Zeile „Regeln:“ im Stand-Block. Der PR-Ticker sammelt Reviews der Erlaubtliste, `regel-vorschlag.sh` schlägt Regeln vor, Knut bestätigt. Tests in `regelquelle.test.ts`. |
+
+## Arbeitsregeln, die heute Zeit gekostet haben
+
+- **Tests der Brücke nie mit der Umgebung einer laufenden Sitzung starten.** Ein Strang erbt `BRIDGE_*`-Variablen der Live-Brücke;
+  43 Tests schlugen dann fehl, ohne dass am Code etwas falsch war. Immer mit sauberer Umgebung (`env -i HOME PATH LANG`).
+- **Nie `pkill -f <muster>`, wenn das Muster in der eigenen Kommandozeile steht** — es beendet die eigene Shell. PID merken, gezielt `kill`.
+- **Sichtprüfungen mit einem Nachbau im selben Prozess:** die CLI dort asynchron aufrufen (`execFile`), sonst blockiert
+  `execFileSync` den Nachbau, auf den der Server gerade wartet → scheinbarer Zeitüberlauf im Produkt.
