@@ -1923,6 +1923,8 @@ export function jcodeUsage(sessionJson: any): MeliousUsage {
   return u;
 }
 const JCODE_SHIM = join(dirname(fileURLToPath(import.meta.url)), '..', 'shim');
+// Release 20a: pre_tool-Hook vor JEDEM jcode-Werkzeug (read/agentgrep/write …), nicht nur der Shell — siehe jcode-pre-tool.ts.
+export const JCODE_HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'hooks', 'jcode-pre-tool');
 /** Schreibende jcode-Aufrufe (write/edit/apply_patch) mit Ziel außerhalb des Arbeitsordners — jcode kennt keine Pfadgrenze, also
  *  prüft die Brücke danach; ein Treffer verwirft das Ergebnis. */
 export function jcodeWritesOutside(sessionJson: any, cwd: string): string[] {
@@ -1938,7 +1940,8 @@ export function jcodeWritesOutside(sessionJson: any, cwd: string): string[] {
 }
 /** jcode einmal laufen lassen (Melious-Profil). Wächter (Pilot 183): shim/bash vorn in PATH lässt nur lesende Shell-Befehle durch. */
 function jcodeSpawn(o: { cwd: string; prompt: string; model: string | null; tools: string; key: string; timeoutS: number; abbruch?: () => boolean }): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key };
+  const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key,
+    JCODE_HOOK_PRE_TOOL: JCODE_HOOK, JCODE_HOOK_PRE_TOOL_TIMEOUT_MS: '10000' };
   return new Promise((res) => {
     const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', o.prompt], { cwd: o.cwd, env });
     let so = '', se = '';
