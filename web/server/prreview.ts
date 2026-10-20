@@ -29,7 +29,7 @@ import { graphql } from './github.ts';
 import { jiraSites } from './config.ts';
 import { wb } from './db.ts';
 import { execErlaubt, execMinuten, schreibeErgebnis, type ExecErgebnis, type ExecJob } from './reviewexec.ts';
-import { reviewsCol, tickerSettings, tickerAus, reviewErlaubt, type TickerSettings } from './prticker.ts';
+import { reviewsCol, tickerSettings, tickerAus, reviewErlaubt, ME, type TickerSettings } from './prticker.ts';
 import { vorlauf, basisVon, motorAbschnitt, motorAn } from './reviewmotor.ts';
 import { pruefeBefunde, kommentarAusBefunden, entwurfHash, postenErlaubt } from './befunde.ts';
 import { gedaechtnisFuer, gedaechtnisMd, type AlterKommentar } from './prgedaechtnis.ts';
@@ -454,10 +454,32 @@ export function speicherStand(): { echtGb: number; hostFreiGb: number } | null {
 }
 export const SPEICHER = { echtMaxGb: 9, hostMinGb: 6, hostNotGb: 3 };
 
+// Review-Schlange (Release 20b, Knut 20.10.2026: „warum so lange, nicht mehr als 2 möglich?“): gegen maxParallel zählen nur Phasen,
+// in denen gerechnet wird — „abgleich“ heißt: Claude prüft die Melious-Befunde am Code nach. „gegenprüfung“ wartet nur auf Melious
+// und hat einen eigenen, höheren Deckel (REVIEW_GEGENPRUEFUNG_MAX, Vorgabe 6).
+export const RECHNEN = ['startet', 'läuft', 'abgleich', 'nachbessern'];
+export const WARTEN = ['gegenprüfung'];
+export const WARTE_DECKEL = Math.max(1, Math.floor(Number(process.env.REVIEW_GEGENPRUEFUNG_MAX)) || 6);
+/** Rein: wie viele Reviews rechnen bzw. warten auf Melious. */
+export function belegung(status: string[]): { rechnen: number; warten: number } {
+  return { rechnen: status.filter((x) => RECHNEN.includes(x)).length, warten: status.filter((x) => WARTEN.includes(x)).length };
+}
+async function belegungJetzt() {
+  return belegung(((await reviewsCol().find({ status: { $in: [...RECHNEN, ...WARTEN] } }, { projection: { status: 1 } }).toArray()) as any[]).map((r) => String(r.status)));
+}
+/** Rein: zuerst @review von Reviewern der Erlaubtliste (nicht von mir), dann der Rest — je nach Eingang (Knut 20.10.). */
+export function reihenfolge<T extends { by?: string | null; createdAt?: Date | string }>(schlange: T[], allow: string[], me: string): T[] {
+  const ok = new Set(allow.map((a) => a.toLowerCase())), ich = me.toLowerCase();
+  const rang = (r: T) => { const by = String(r.by ?? '').toLowerCase(); return by && by !== ich && ok.has(by) ? 0 : 1; };
+  return [...schlange].sort((a, b) => rang(a) - rang(b) || +new Date(a.createdAt ?? 0) - +new Date(b.createdAt ?? 0));
+}
+
 /** Rein: darf jetzt ein weiteres Review starten? Parallelität bis maxParallel (keine Tagesgrenze, Knut 17.10.), aber ein weiteres
- *  nur, wenn die Box Luft hat (Knut 19.10.); das erste läuft immer an, außer der Host ist fast voll. Sonst warten. */
-export function deckel(s: Pick<TickerSettings, 'maxParallel'>, laufend: number, sp: { echtGb: number; hostFreiGb: number } | null = null): { ok: boolean; why: string } {
+ *  nur, wenn die Box Luft hat (Knut 19.10.); das erste läuft immer an, außer der Host ist fast voll. Sonst warten.
+ *  `laufend` = rechnende Reviews; `warten` = in der Gegenprüfung (eigener Deckel, Release 20b). */
+export function deckel(s: Pick<TickerSettings, 'maxParallel'>, laufend: number, sp: { echtGb: number; hostFreiGb: number } | null = null, warten = 0): { ok: boolean; why: string } {
   if (laufend >= s.maxParallel) return { ok: false, why: `schon ${laufend} gleichzeitig` };
+  if (warten >= WARTE_DECKEL) return { ok: false, why: `schon ${warten} in der Gegenprüfung (warten auf Melious)` };
   if (sp && sp.hostFreiGb < SPEICHER.hostNotGb) return { ok: false, why: `Box ausgelastet (Host frei ${sp.hostFreiGb.toFixed(1)} GB)` };
   if (sp && laufend > 0 && (sp.echtGb > SPEICHER.echtMaxGb || sp.hostFreiGb < SPEICHER.hostMinGb))
     return { ok: false, why: `Box ausgelastet (echt ${sp.echtGb.toFixed(1)} GB, Host frei ${sp.hostFreiGb.toFixed(1)} GB)` };
@@ -697,8 +719,8 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
   const heute = vienna(now).date;
   // 2a) Sofort-Rückmeldung am PR für neu eingereihte: Position, Tiefe nach Größe, ETA inkl. grober Wartezeit (10 min je Platz)
   if (deps.status && !statusAus()) {
-    const schlange = (await reviewsCol().find({ status: 'wartet' }).sort({ createdAt: 1 }).limit(50).toArray()) as any[];
-    const frei = Math.max(0, s.maxParallel - await reviewsCol().countDocuments({ status: { $in: ['startet', 'läuft', 'gegenprüfung', 'abgleich'] } }));
+    const schlange = reihenfolge((await reviewsCol().find({ status: 'wartet' }).sort({ createdAt: 1 }).limit(50).toArray()) as any[], s.allow, ME);
+    const frei = Math.max(0, s.maxParallel - (await belegungJetzt()).rechnen);
     for (const [i, r] of schlange.entries()) {
       if (r.sk || !reviewErlaubt(r.repo)) continue;
       const k = deps.kontext ? await deps.kontext(r.repo, r.number).catch(() => null) : null;
@@ -713,9 +735,10 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
     }
   }
   let started = 0;
-  for (const r of (await reviewsCol().find({ status: 'wartet', $or: [{ retryAt: null }, { retryAt: { $exists: false } }, { retryAt: { $lte: now } }] }).sort({ createdAt: 1 }).limit(10).toArray()) as any[]) {
-    const laufend = await reviewsCol().countDocuments({ status: { $in: ['startet', 'läuft', 'gegenprüfung', 'abgleich'] } });
-    const dk = deckel(s, laufend, (deps.speicher ?? speicherStand)());
+  const bereit = reihenfolge((await reviewsCol().find({ status: 'wartet', $or: [{ retryAt: null }, { retryAt: { $exists: false } }, { retryAt: { $lte: now } }] }).sort({ createdAt: 1 }).limit(50).toArray()) as any[], s.allow, ME).slice(0, 10);
+  for (const r of bereit) {
+    const b = await belegungJetzt();
+    const dk = deckel(s, b.rechnen, (deps.speicher ?? speicherStand)(), b.warten);
     if (!dk.ok) {
       await reviewsCol().updateOne({ _id: r._id }, { $set: { note: `wartet: ${dk.why}` } });   // bleibt eingereiht, sichtbar im Ticker
       break;
