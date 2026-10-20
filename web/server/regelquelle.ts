@@ -58,9 +58,11 @@ export async function regelAnhaengen(zeilen: RegelZeile[], now = new Date(), dat
   mkdirSync(dirname(datei), { recursive: true });
   let n = 0;
   for (const z of zeilen) {
-    try { await regelCol().insertOne({ _id: z.id as any, at: now, repo: z.repo, pr: z.pr }); }
-    catch (e: any) { if (e?.code === 11000) continue; throw e; }
+    // Erst die Datei, dann das Gedächtnis (Gegenprüfung): bricht es dazwischen ab, gibt es höchstens eine doppelte Zeile (über `id`
+    // erkennbar) statt einer für immer verlorenen.
+    if (await regelCol().findOne({ _id: z.id as any }, { projection: { _id: 1 } })) continue;
     appendFileSync(datei, JSON.stringify(z) + '\n');
+    try { await regelCol().insertOne({ _id: z.id as any, at: now, repo: z.repo, pr: z.pr }); } catch (e: any) { if (e?.code !== 11000) throw e; }
     n++;
   }
   return n;

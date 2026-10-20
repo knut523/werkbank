@@ -1121,7 +1121,10 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
     } catch (e: any) { action = `nicht ausgeführt: ${String(e.message ?? e).slice(0, 200)}`; }
   }
   // Regel-Vorschlag aus den Reviews (Plan 274, Zusatz A): „Übernehmen“ schreibt die Regel für das Pre-Push-Gate fest.
-  if (d.kind === 'regel-vorschlag' && d.regel && option === 'Übernehmen') action = regelBestaetigen({ ...d.regel, key: d.key ?? undefined, frage: id }, a.by ?? u.email) ? 'übernommen' : 'nicht ausgeführt: WERKBANK_REGEL_DIR fehlt';
+  if (d.kind === 'regel-vorschlag' && d.regel && option === 'Übernehmen') {
+    try { action = regelBestaetigen({ ...d.regel, key: d.key ?? undefined, frage: id }, a.by ?? u.email) ? 'übernommen' : 'nicht ausgeführt: WERKBANK_REGEL_DIR fehlt'; }
+    catch (e: any) { action = `nicht ausgeführt: ${String(e.message ?? e).slice(0, 200)}`; }
+  }
   // Leitstand-Deckel (Plan 132, A4): „Fortsetzen“ zählt ab jetzt neu; die Antwort selbst wird sofort zugestellt (leitstand.ts).
   if ((d.kind === 'leitstand-deckel' || d.kind === 'leitstand-weiter') && option === 'Fortsetzen') {
     await runs().updateOne({ userId: u.id, kind: 'leitstand', endedAt: null }, { $set: d.kind === 'leitstand-deckel' ? { capResetAt: new Date() } : { weiterStreak: 0, weiterStopped: null } });
