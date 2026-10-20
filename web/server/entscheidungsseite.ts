@@ -62,7 +62,7 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
         const worum = [tw.rest, ein(x.worum)].filter(Boolean).join(' ') || `Aus ${e.quelle.text} (Unter-Chat „${ein(e.daten.strangTitel) || 'ohne Titel'}“) — dort steht der Zusammenhang.`;
         fragen.push({ ...basis, id: `${e.id}~${x.id}`, teil: String(x.id), kennung: String(x.id), titel: tw.titel, worum,
           optionen: Array.isArray(x.optionenListe) ? x.optionenListe.map(ein).filter(Boolean) : [], empfehlung: x.empfehlung ? ein(x.empfehlung) : null,
-          alternativen: Array.isArray(x.alternativen) ? x.alternativen.map(ein).filter(Boolean).slice(0, 3) : [],
+          alternativen: Array.isArray(x.alternativen) ? [...new Set<string>(x.alternativen.map(ein).filter(Boolean))].filter((o) => o !== ein(x.empfehlung)).slice(0, 3) : [],
           stufe: x.stufe === 'wichtig' ? 'wichtig' : 'normal', stufeGrund: x.stufeGrund ?? null, autoAb: x.auto ? e.autoAb ?? null : null,
           antworten: ['ja', 'nein', 'anders', 'spaeter'] });
       }
