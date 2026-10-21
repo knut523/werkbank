@@ -8,6 +8,7 @@ import { api, chatTarget, fmtDateTime, type Config } from '../api.ts';
 import { Err, Loading, useJiraLive, useLoad, useToast } from '../ui.tsx';
 import { usePushFreigeben } from '../freigabe.tsx';
 import { useMermaidIn } from '../mermaid.tsx';
+import { altText } from '../alternativen.ts';
 import { WartetAufDich, mineCount } from '../beimir.tsx';
 import { OrchQuestions } from '../orchquestions.tsx';
 import { G0Blocked, LiveGroup, RunCard } from './Heute.tsx';
@@ -32,8 +33,10 @@ const kurzText = (t: string, n = 140) => (t.length > n ? t.slice(0, n - 1) + '�
 
 export type Art = 'ja' | 'nein' | 'anders';
 
-/** Eine Frage, eine Antwort: Ja (= Empfehlung) · Nein · Anders … (Textfeld). Ja/Nein gehen mit einem Klick ab. */
-export function JaNeinAnders({ k, empfehlung, disabled, onSend, extra }: { k: string; empfehlung?: string | null; disabled?: boolean; onSend: (art: Art, text: string) => Promise<void>; extra?: ReactNode }) {
+/** Eine Frage, eine Antwort: Ja (= Empfehlung) · je Alternative ein Knopf · Nein · Anders … (Textfeld). Ja, Nein und Alternativen gehen
+ *  mit einem Klick ab; eine Alternative antwortet „Anders: <Alternative>“ (Knut 20.10.: „einfach auswählen statt schreiben“) — steht im
+ *  offenen Anders-Feld schon Text, geht er als Notiz mit. */
+export function JaNeinAnders({ k, empfehlung, alternativen = [], disabled, onSend, extra }: { k: string; empfehlung?: string | null; alternativen?: string[]; disabled?: boolean; onSend: (art: Art, text: string) => Promise<void>; extra?: ReactNode }) {
   const [anders, setAnders] = useStored<string | null>(`${k}:anders`, null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
@@ -44,9 +47,10 @@ export function JaNeinAnders({ k, empfehlung, disabled, onSend, extra }: { k: st
   return (
     <div className="ub-jna" data-testid="ub-jna">
       <div className="ub-row">
-        <button className="ub-btn pri sm" disabled={busy || disabled} title={empfehlung ? `Empfehlung übernehmen: ${empfehlung}` : 'Ja'} onClick={() => go('ja')} data-testid="ub-ja">Ja</button>
+        <button className="ub-btn pri sm" disabled={busy || disabled} title={empfehlung ? `Empfehlung übernehmen: ${empfehlung}` : 'Ja'} onClick={() => go('ja')} data-testid="ub-ja">{empfehlung && alternativen.length ? 'Ja (wie empfohlen)' : 'Ja'}</button>
+        {alternativen.map((a) => <button key={a} className="ub-btn sm ub-alt" disabled={busy || disabled} title={`Antwort: „Anders: ${a}“`} onClick={() => go('anders', altText(a, anders ?? ''))} data-testid="ub-alt">{a}</button>)}
         <button className="ub-btn sm" disabled={busy || disabled} onClick={() => go('nein')} data-testid="ub-nein">Nein</button>
-        <button className="ub-btn ghost sm" aria-expanded={anders !== null} disabled={disabled} onClick={() => setAnders(anders === null ? '' : null)} data-testid="ub-anders">Anders …</button>
+        <button className="ub-btn ghost sm" aria-expanded={anders !== null} disabled={disabled} onClick={() => setAnders(anders === null ? '' : null)} data-testid="ub-anders">{alternativen.length ? 'Anders (frei) …' : 'Anders …'}</button>
       </div>
       {anders !== null && <div className="ub-anders">
         {extra}
@@ -86,7 +90,7 @@ function Entscheiden({ k, onDone }: { k: any; onDone: () => void }) {
       <p className="small"><b>{e.id}</b> {e.frage}</p>
       {e.empfehlung && <p className="tiny mut">Empfehlung: {e.empfehlung}</p>}
       {e.optionen && <details className="tiny"><summary className="mut">Optionen aus dem Bericht</summary><pre className="ub-pre">{e.optionen}</pre></details>}
-      <JaNeinAnders k={`${k.id}:${e.id}`} empfehlung={e.empfehlung} disabled={busy} onSend={(art, text) => send([antwort(e, art, text)])} />
+      <JaNeinAnders k={`${k.id}:${e.id}`} empfehlung={e.empfehlung} alternativen={e.alternativen ?? []} disabled={busy} onSend={(art, text) => send([antwort(e, art, text)])} />
     </div>
   );
   if (liste.length === 1) return <div className="ub-dec">{frage(liste[0])}</div>;
@@ -196,11 +200,11 @@ function Schublade({ k, tab, setTab, onClose, onDone }: { k: any; tab: Tab; setT
   );
 }
 
-/** Tiefe und ETA eines Strangs (Plan 205): „deep · fertig ca. 17:30“; überfällig gedämpft markiert, kein Alarm. */
+/** Tiefe und ETA eines Strangs (Plan 205): „deep · fertig ca. 17:30“; überfällig gedämpft markiert, kein Alarm. Fertig: eta null → nur die Tiefe. */
 function TiefeEta({ k }: { k: any }) {
   if (!k.tiefe && !k.eta?.at) return null;
   return <span className={`tiny ub-eta${k.eta?.ueberfaellig ? ' ueber' : ''}`} data-testid="ub-eta" title={k.eta?.quelle ? `ETA: ${k.eta.quelle}` : undefined}>
-    {k.tiefe && <span className="ub-tiefe" data-testid="ub-tiefe">{k.tiefe}</span>}{k.eta?.text ?? '–'}</span>;
+    {k.tiefe && <span className="ub-tiefe" data-testid="ub-tiefe">{k.tiefe}</span>}{k.eta ? k.eta.text : null}</span>;
 }
 
 function Karte({ k, onDone, oeffne }: { k: any; onDone: () => void; oeffne: (k: any, t: Tab) => void }) {

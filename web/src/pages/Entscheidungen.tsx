@@ -1,7 +1,8 @@
 // Entscheidungen (Knut 19.10.: „Die Entscheidungsseite, wie du sie mir jetzt gibst, finde ich toll … das brauchen wir im Workspace“).
 // Muster ~/work/knut/entscheidungen-site, so übernommen: eine Seite, alle offenen Fragen nach Thema gruppiert, Fortschritt
 // „x von y beantwortet“, Filter „nur offene“; je Frage Worum es geht · Optionen · Empfehlung (farbig); Ja (wie empfohlen) · Nein ·
-// Anders · Später + Notiz („Anders“ verlangt eine Notiz); „Alle offenen wie empfohlen beantworten“ mit Sicherheitsabfrage.
+// Anders · Später + Notiz („Anders“ verlangt eine Notiz); Knut 20.10.: je Alternative ein Knopf zwischen Ja und Nein — ein Klick
+// = „Anders: <Alternative>“, Notiz optional; „Anders (frei)“ verlangt weiter eine Notiz; „Alle offenen wie empfohlen beantworten“ mit Sicherheitsabfrage.
 // Die Antwort geht an die Quelle (Rückfrage, Bericht, Strang) — ein Unter-Chat arbeitet weiter, sobald alle seine Fragen beantwortet sind.
 import { useState } from 'react';
 import { api, fmtDateTime } from '../api.ts';
@@ -9,8 +10,9 @@ import { Err, Loading, useLoad, useToast } from '../ui.tsx';
 import { InboxZeile, EntscheidungsLog, seit } from './HeuteNeu.tsx';
 import { usePushFreigeben } from '../freigabe.tsx';
 import { EntscheidZeile } from './Morgenlage.tsx';
+import { altText } from '../alternativen.ts';
 
-type Frage = { id: string; eintrag: string; teil: string | null; art: string; gruppe: string; kennung: string | null; titel: string; worum: string; optionen: string[];
+type Frage = { id: string; eintrag: string; teil: string | null; art: string; gruppe: string; kennung: string | null; titel: string; worum: string; optionen: string[]; alternativen?: string[];
   empfehlung: string | null; stufe: 'wichtig' | 'normal'; stufeGrund: string | null; autoAb: string | null; blockiert: number; quelle: { text: string; url: string | null }; wartetSeit: string | null; antworten: string[]; ref: string | null };
 type Daten = { fragen: Frage[]; sonstiges: any[]; beantwortetHeute: number; zurueckgestellt: number; zahl: number; at: string };
 
@@ -21,21 +23,23 @@ function Karte({ f, onDone }: { f: Frage; onDone: (id: string, status: string) =
   const toast = useToast();
   const pushFreigeben = usePushFreigeben();
   const [wahl, setWahl] = useState<string | null>(null);
+  const [alt, setAlt] = useState<string | null>(null);
   const [notiz, setNotiz] = useState('');
+  const alts = f.antworten.includes('anders') ? f.alternativen ?? [] : [];
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const [out, setOut] = useState('');
   const speichern = async () => {
     setErr(null);
     if (!wahl) { setOut('Bitte zuerst Ja, Nein, Anders oder Später wählen.'); return; }
-    if (wahl === 'anders' && !notiz.trim()) { setOut('Bei „Anders“ bitte kurz schreiben, was stattdessen.'); return; }
+    if (wahl === 'anders' && !alt && !notiz.trim()) { setOut('Bei „Anders“ bitte kurz schreiben, was stattdessen.'); return; }
     setBusy(true); setOut('Speichert …');
     try {
       if (f.art === 'push' && wahl === 'ja') { if (!(await pushFreigeben(String(f.ref ?? '')))) { setOut(''); return; } }
       else if (f.art === 'vault' && (wahl === 'ja' || wahl === 'nein')) await api('/api/roadmap/question', { body: { id: f.ref, answer: wahl } });
-      else await api('/api/entscheidungen/fragen/antwort', { body: { id: f.id, antwort: wahl, text: notiz.trim() } });
+      else await api('/api/entscheidungen/fragen/antwort', { body: { id: f.id, antwort: wahl, text: wahl === 'anders' && alt ? altText(alt, notiz) : notiz.trim() } });
       toast(wahl === 'spaeter' ? 'Zurückgestellt bis morgen 07:00' : 'Gespeichert — an der Quelle eingetragen');
-      onDone(f.id, wahl);
+      onDone(f.id, wahl === 'anders' && alt ? `Anders: ${alt}` : wahl);
     } catch (x: any) { setOut(''); if (x?.status === 409) { toast(x.message); onDone(f.id, ''); } else setErr(x); }
     finally { setBusy(false); }
   };
@@ -48,9 +52,15 @@ function Karte({ f, onDone }: { f: Frage; onDone: (id: string, status: string) =
       {f.empfehlung && <div className="e-rec"><div className="e-lbl">Empfehlung</div>{f.empfehlung}
         {f.autoAb && <div className="tiny mut" data-testid="e-auto-ab">gilt {new Date(f.autoAb).getTime() <= Date.now() ? 'gleich' : `ab ${fmtDateTime(f.autoAb)}`} als angenommen, wenn du bis dahin da warst</div>}</div>}
       <div className="tiny mut">{sicher(f.quelle.url) ? <a href={sicher(f.quelle.url)!}>{f.quelle.text}</a> : f.quelle.text}{f.wartetSeit ? ` · wartet ${seit(f.wartetSeit)}` : ''}</div>
-      <div className="e-btns" role="group" aria-label="Antwort">{f.antworten.map((v) => (
-        <button key={v} data-v={v} aria-pressed={wahl === v} disabled={busy} onClick={() => { setWahl(v); setOut(''); }}>{v === 'ja' && !f.empfehlung ? 'Ja' : L[v]}</button>))}</div>
-      <textarea rows={2} value={notiz} onChange={(e) => setNotiz(e.target.value)} placeholder="Notiz (bei „Anders“: was stattdessen?)" aria-label="Notiz" />
+      {/* Reihenfolge: Ja (wie empfohlen) · je Alternative ein Knopf · Nein · Später · Anders (frei). */}
+      <div className="e-btns" role="group" aria-label="Antwort">
+        {f.antworten.includes('ja') && <button data-v="ja" aria-pressed={wahl === 'ja'} disabled={busy} onClick={() => { setWahl('ja'); setAlt(null); setOut(''); }}>{f.empfehlung ? L.ja : 'Ja'}</button>}
+        {alts.map((a) => <button key={`alt:${a}`} data-v="anders" data-alt={a} className="e-alt" data-testid="e-alt" aria-pressed={wahl === 'anders' && alt === a} disabled={busy}
+          onClick={() => { setWahl('anders'); setAlt(a); setOut(''); }}>{a}</button>)}
+        {(['nein', 'spaeter', 'anders'] as const).filter((v) => f.antworten.includes(v)).map((v) => (
+          <button key={v} data-v={v} aria-pressed={wahl === v && !alt} disabled={busy} onClick={() => { setWahl(v); setAlt(null); setOut(''); }}>{v === 'anders' && alts.length ? 'Anders (frei)' : L[v]}</button>))}
+      </div>
+      <textarea rows={2} value={notiz} onChange={(e) => setNotiz(e.target.value)} placeholder={alts.length ? 'Notiz (optional; bei „Anders (frei)“: was stattdessen?)' : 'Notiz (bei „Anders“: was stattdessen?)'} aria-label="Notiz" />
       <div className="ub-row"><button className="ub-btn pri sm" disabled={busy} onClick={speichern} data-testid="e-speichern">Speichern</button><span className="tiny mut">{out}</span></div>
       <Err e={err} />
     </article>

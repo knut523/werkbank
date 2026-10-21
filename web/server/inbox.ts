@@ -62,7 +62,7 @@ export function spaeterBis(now = Date.now()): Date {
 
 export interface InboxQuellen {
   /** Karten der Übersicht (uebersicht.ts → karte), nur Admin. */
-  karten: Array<{ id: string; titel: string; strangTitel?: string; thema?: string | null; running: boolean; entscheidungen: { id: string; frage: string; empfehlung: string | null; optionen?: string; stufe?: string | null }[]; berichtHash: string | null; rueckfragen: any[];
+  karten: Array<{ id: string; titel: string; strangTitel?: string; thema?: string | null; running: boolean; entscheidungen: { id: string; frage: string; empfehlung: string | null; optionen?: string; stufe?: string | null; alternativen?: string[] }[]; berichtHash: string | null; rueckfragen: any[];
     braucht: string | null; kannFreigeben: boolean; freigabe: any; github: { repo: string; zweig: string; commit: string }[]; statusAt: any; chat: string | null; paket: string | null; seen?: string }>;
   /** Offene Rückfragen ohne Karte (Hauptchat, Drift, G0 …). */
   lose: Array<{ id: string; title: string; recommendation?: string | null; options?: { label: string }[]; createdAt: any; strand?: { id: string; title?: string; url?: string } | null; quelle?: string | null; key?: string | null; context?: string | null; kind?: string | null; stufe?: string | null }>;

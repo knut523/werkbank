@@ -6,6 +6,9 @@
 //     [--tiefe quick|regular|deep]   Tiefe (Plan 205, Vorgabe regular): quick = Melious Flash, kein Council/keine Gegenprüfung,
 //     nur Repo-Tests; regular = wie bisher (Pass C mit challenge); deep = voller plan-to-pr mit Council, Gegenprüfung auf GLM 5.3,
 //     Visual-Check, Risiko hoch, doppelte Schritte und Deckel. Der Agent meldet „ETA:“ im Stand-Block; list/show zeigen sie.
+//     live = Live-Modus für UI-Feedback (Plan 274): je Runde wie quick am laufenden Dev-Server, ohne Council/Pass C; einmal vor dem
+//     Push `orch gruendlich <id>` (oder Knopf „Jetzt gründlich“ in Arbeit) → voller Durchlauf mit Pass C und Gegenprüfung.
+//     Ein Worktree, ein Strang: belegt ein offener Strang denselben Git-Worktree (cwd oder geschriebene Dateien), 409 — außer --shared.
 //     [--budget TOKENS]   Tokenbudget des Strangs (Eingabe ohne Cache-Lesen + Ausgabe; Plan 209): bei 80 % eine Meldung, bei 100 % Pause mit Rückfrage;
 //     ohne Angabe ORCH_BUDGET_TOKENS je Tiefe (quick ⅓, deep 2×; Vorgabe 0 = aus)
 //     [--profil voll|bauer|leser|schreiber|release]   Rollen-Profil (Grundlast je Zug): bauer = nur vault-search/werkbank-MCP; leser =
@@ -19,14 +22,19 @@
 //     gestartete/verworfene Items verlassen die Datei, blockierte (blocked_g0) und ungeprüfte bleiben.
 //   orch list [--all] [--json]
 //   orch show <id> [--json]
-//   orch send <id> (TEXT … | --text TEXT | Text auf stdin)   läuft der Strang, wird die Nachricht in den laufenden Zug nachgereicht
+//   orch send <id> (TEXT … | --text TEXT | Text auf stdin)   läuft der Strang, wird die Nachricht in den laufenden Zug nachgereicht;
+//     sonst wartet send bis 15 s (ORCH_SEND_BESTAETIGEN_MS) auf die Bestätigung der Brücke und meldet „angekommen“ oder „nicht
+//     bestätigt“ — dann schickt die Werkbank nach 3 min denselben Text noch einmal. Arbeitet ein anderer Strang gerade im selben
+//     Worktree: 409 (später senden).
+//   orch gruendlich <id>   Live-Strang: „jetzt gründlich“ — der eine volle Durchlauf vor dem Push
 //   orch review <id> [--note TEXT]
 //   orch thema <id> <Thema|auto>   Themen-Gruppe in der Chat-Seitenleiste von Hand (auto = wieder automatisch)
 //   orch freigaben [--alle] [--json]   Knuts Freigaben zum Push (Review-Ansicht im OLAF Workspace); anlegen nur dort
 //   orch freigabe-pruefen <repo-ordner> <sha>   Exit 0 nur bei aktiver Freigabe dieses Stands (oder desselben Patches nach Rebase);
 //     der pre-push-Hook templates/git-hooks/pre-push ruft das auf
-//   orch review-posted <owner/repo#n[@sha]> <github-url>   PR-Review von Hand gepostet → im Review-Log vermerken
-//     (ohne @sha das jüngste Review dieses PRs; ein schon vermerktes Posten bleibt)
+//   orch review-posted <owner/repo#n[@sha]> <github-url> [--neu]   PR-Review von Hand gepostet → im Review-Log vermerken
+//     (ohne @sha das jüngste Review dieses PRs; ein schon vermerktes Posten bleibt; --neu legt den Eintrag an, wenn der
+//     Ticker den PR nie eingereiht hat — Paket 269, #215)
 //   orch freigabe-gepusht <freigabe-id> [--pr URL]   nach dem Push: Freigabe als gepusht markieren (nicht mehr zurückziehbar)
 //   orch ask --title T --context TEXT --recommend TEXT [--option "Label :: Folge"]… [--strand <id>] [--link URL] [--plan DATEI]
 //     [--key <slug>#<id>] [--quelle drift]   Schlüssel offen/beantwortet → Exit 3 (keine zweite Frage); Tageskappe → Exit 4
@@ -61,7 +69,7 @@ for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a.startsWith('--')) {
     const k = a.slice(2);
-    if (['all', 'alle', 'json', 'shared', 'open', 'code'].includes(k)) flags[k] = true;
+    if (['all', 'alle', 'json', 'shared', 'open', 'code', 'neu'].includes(k)) flags[k] = true;
     else if (k === 'option') options.push(args[++i] ?? '');
     else flags[k] = args[++i] ?? '';
   } else pos.push(a);
@@ -127,8 +135,10 @@ async function call(path: string, b: Record<string, unknown>): Promise<any> {
 
 const ICON: Record<string, string> = { running: '⏳', waiting: '✋', done: '✅', failed: '❌', blocked_g0: '⛔' };
 const t = (d: any) => (d ? new Date(d).toLocaleString('de-AT', { timeZone: 'Europe/Vienna', dateStyle: 'short', timeStyle: 'short' }) : '—');
-/** „Tiefe deep · fertig ca. 17:30“ (Plan 205); alte Stränge ohne Tiefe/ETA: „–“. quelle=true nennt die Herkunft der ETA. */
-export function tiefeEta(s: { tiefe?: string | null; eta?: { text?: string; quelle?: string | null; ueberfaellig?: boolean } | null }, quelle = false): string {
+/** „Tiefe deep · fertig ca. 17:30“ (Plan 205); alte Stränge ohne Tiefe/ETA: „–“. quelle=true nennt die Herkunft der ETA.
+ *  Fertig (eta null oder Status done): nur die Tiefe — keine ETA (Knut 20.10.2026). */
+export function tiefeEta(s: { tiefe?: string | null; status?: string; eta?: { text?: string; quelle?: string | null; ueberfaellig?: boolean } | null }, quelle = false): string {
+  if (s.eta === null || s.status === 'done') return `Tiefe ${s.tiefe ?? '–'}`;
   const q: Record<string, string> = { agent: 'Agent', median: 'Median', vorgabe: 'Vorgabe' };
   const e = s.eta?.text ?? '–';
   return `Tiefe ${s.tiefe ?? '–'} · ${s.eta?.ueberfaellig ? `⚠ ${e}` : e}${quelle && s.eta?.quelle ? ` (ETA: ${q[s.eta.quelle] ?? s.eta.quelle})` : ''}`;
@@ -191,6 +201,13 @@ async function main() {
       const text = given ?? await stdin();
       const j = await call('send', { id: pos[0], text });
       console.log(j.injected ? `nachgereicht (Strang arbeitet, der Agent sieht es beim nächsten Schritt): ${j.id}  ${j.url}` : `gesendet: ${j.id}  ${j.url}`);
+      if (j.zustellung) console.log(`Zustellung: ${j.zustellung}`);
+      return;
+    }
+    case 'gruendlich': {
+      if (!pos[0]) die('gruendlich <id>');
+      const j = await call('gruendlich', { id: pos[0] });
+      console.log(`jetzt gründlich: ${j.id}  ${j.url}${j.zustellung ? `\nZustellung: ${j.zustellung}` : ''}`);
       return;
     }
     case 'review': {
@@ -214,9 +231,9 @@ async function main() {
       process.exit(2);
     }
     case 'review-posted': {
-      if (!pos[0] || !pos[1]) die('review-posted <owner/repo#n[@sha]> <github-url>');
-      const j = await call('review-posted', { id: pos[0], url: pos[1] });
-      console.log(`von Hand gepostet vermerkt: ${j.id} ${j.url}`);
+      if (!pos[0] || !pos[1]) die('review-posted <owner/repo#n[@sha]> <github-url> [--neu]');
+      const j = await call('review-posted', { id: pos[0], url: pos[1], neu: flags.neu === true });
+      console.log(`von Hand gepostet vermerkt${j.neu ? ' (neuer Eintrag)' : ''}: ${j.id} ${j.url}`);
       return;
     }
     case 'freigabe-gepusht': {

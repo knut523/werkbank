@@ -131,7 +131,7 @@ export const ORCH_MCP_TOOLS: string[] = [
   'mcp__vault-search__vault-related', 'mcp__vault-search__vault-search',
   'mcp__werkbank__delegieren', 'mcp__werkbank__delegation_stand', 'mcp__werkbank__delegation_urteil',
   'mcp__werkbank__phase_wechseln', 'mcp__werkbank__orch_start', 'mcp__werkbank__orch_list', 'mcp__werkbank__orch_show',
-  'mcp__werkbank__orch_send', 'mcp__werkbank__orch_thema', 'mcp__werkbank__orch_review', 'mcp__werkbank__orch_ask',
+  'mcp__werkbank__orch_send', 'mcp__werkbank__orch_gruendlich', 'mcp__werkbank__orch_thema', 'mcp__werkbank__orch_review', 'mcp__werkbank__orch_ask',
   'mcp__werkbank__orch_questions', 'mcp__werkbank__zusagen', 'mcp__werkbank__zusage_eintragen', 'mcp__werkbank__zusage_aendern',
   'mcp__werkbank__thema_setzen', 'mcp__werkbank__hygiene_list', 'mcp__werkbank__hygiene_snooze', 'mcp__werkbank__skills_list',
   'mcp__werkbank__review_ready', 'mcp__werkbank__jira_update', 'mcp__werkbank__jira_update_many', 'mcp__werkbank__agent_start',

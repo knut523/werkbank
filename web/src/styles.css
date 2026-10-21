@@ -681,6 +681,8 @@ ul.plain.h-liste { padding-left: 0; list-style: none; }
 .e-btns button[aria-pressed=true][data-v=nein] { background: var(--red-600); border-color: var(--red-600); color: #fff; }
 .e-btns button[aria-pressed=true][data-v=anders] { background: var(--amber-700); border-color: var(--amber-700); color: #fff; }
 .e-btns button[aria-pressed=true][data-v=spaeter] { background: var(--gray-600); border-color: var(--gray-600); color: #fff; }
+/* Alternativen (Knut 20.10.): gestrichelt = „Anders: <Alternative>“ mit einem Klick, ohne Tippen. */
+.e-btns button.e-alt, .ub-btn.ub-alt { border-style: dashed; }
 .e-karte textarea { width: 100%; min-height: 44px; resize: vertical; }
 .e-erledigt { color: var(--text-secondary); padding: 6px 2px; }
 @media (max-width: 600px) { .e-kopf { position: static; } }

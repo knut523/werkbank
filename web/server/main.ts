@@ -19,8 +19,8 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, mirrorOf, mirrorSites, siteByPrefix, siteColumns, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane, statusSchatten } from './orchestrator.ts';
-import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, type VorbauErgebnis } from './vorbau.ts';
+import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane, statusSchatten, sendWarteMs, gruendlichOrch, worktreeBelegt, questions as orchQuestions } from './orchestrator.ts';
+import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, setzeLeseQuelle, type VorbauErgebnis } from './vorbau.ts';
 import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
 import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
@@ -67,6 +67,7 @@ import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol } from './prticker.ts';
+import { regelDir, regelVorschlaege } from './regelquelle.ts';
 import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
 import { meliousPassC } from './gegenpruefung.ts';
@@ -1513,6 +1514,8 @@ on('POST', /^\/api\/inbox\/([\w-]{1,90})\/spaeter$/, async (req, res, m) => {
  * Quelle über dieselben Wege wie bisher. Nur die Kennung zählt; der Stand muss noch derselbe sein (sonst 409, nie raten — K4).
  */
 on('POST', /^\/api\/inbox\/([\w-]{1,90})\/antwort$/, async (req, res, m) => send(res, 200, await inboxAntworten(await needUser(req), m[1], await body(req))));
+/** Log-Zeile einer „Anders“-Antwort; eine gewählte Alternative kommt schon als „Anders: …“ (Paket 266) — nicht doppelt. */
+const andersLog = (text: string) => (/^anders:/i.test(text) ? `anders:${text.slice(7)}` : `anders: ${text}`);
 /** Antwort auf einen Inbox-Eintrag an seiner Quelle — für Heute, die Chat-Knöpfe und den Lead (`inbox_antworten`, auch „Anders“). */
 async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
   const art = String(b.antwort ?? '');
@@ -1541,7 +1544,7 @@ async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
     if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — gleich noch einmal.');
     entscheidSperre.add(sperre);
     antwortGezaehlt('inbox', weg);
-    try { const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }); await logEntscheidung(u, e, art === 'ja' ? 'ja (Empfehlungen übernommen)' : art === 'nein' ? 'nein' : `anders: ${text}`, u.email).catch(() => {}); return r; } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
+    try { const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }); await logEntscheidung(u, e, art === 'ja' ? 'ja (Empfehlungen übernommen)' : art === 'nein' ? 'nein' : andersLog(text), u.email).catch(() => {}); return r; } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
   } else if (e.art === 'push') {
     if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
     if (art !== 'ja') throw new HttpError(400, 'Push: nur „Ja“ (freigeben) oder „Später“.');
@@ -1574,7 +1577,7 @@ async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
     if (fehler) throw new HttpError(409, `${fehler} Rückfrage(n) ließen sich nicht verwerfen — Inbox neu laden und einzeln ansehen.`);
   } else throw new HttpError(400, 'Diese Frage beantwortest du in ihrer Ansicht (Vault-Sync, Pflege, Schlange).');
   log('inbox antwort', { user: u.id, art: e.art, weg });
-  if (e.art !== 'altbestand') await logEntscheidung(u, e, art === 'ja' ? `ja${e.empfehlung ? ` (${e.empfehlung})` : ''}` : art === 'nein' ? 'nein' : `anders: ${text}`, u.email).catch(() => {});
+  if (e.art !== 'altbestand') await logEntscheidung(u, e, art === 'ja' ? `ja${e.empfehlung ? ` (${e.empfehlung})` : ''}` : art === 'nein' ? 'nein' : andersLog(text), u.email).catch(() => {});
   zahlCache.delete(u.id);
   if (e.art !== 'push') antwortGezaehlt(e.art === 'rueckfrage' ? 'rueckfrage' : e.art === 'braucht' ? 'braucht' : 'inbox', weg);
   return { ok: true, art: e.art };
@@ -1601,7 +1604,7 @@ async function teilAntworten(u: User, e: any, teile: { id: string; antwort: stri
     const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, sammeln: true, antworten });
     for (const t of teile) {
       const x = ((e.daten.entscheidungen as any[]) ?? []).find((y) => String(y.id) === t.id) ?? {};
-      await logEntscheidung(u, { ...e, frage: `${t.id}: ${x.frage ?? ''}`, empfehlung: x.empfehlung ?? null, stufe: x.stufe ?? e.stufe }, t.antwort === 'ja' ? `ja${x.empfehlung ? ` (${x.empfehlung})` : ''}` : t.antwort === 'nein' ? 'nein' : `anders: ${t.text}`, u.email, false, [t.id]).catch(() => {});
+      await logEntscheidung(u, { ...e, frage: `${t.id}: ${x.frage ?? ''}`, empfehlung: x.empfehlung ?? null, stufe: x.stufe ?? e.stufe }, t.antwort === 'ja' ? `ja${x.empfehlung ? ` (${x.empfehlung})` : ''}` : t.antwort === 'nein' ? 'nein' : andersLog(t.text), u.email, false, [t.id]).catch(() => {});
     }
     return r;
   } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
@@ -1767,7 +1770,7 @@ on('GET', /^\/api\/arbeit\/schaetzung$/, async (req, res, _m, url) => {
 });
 on('GET', /^\/api\/arbeit\/start$/, async (req, res) => {
   await needAdmin(req);
-  send(res, 200, { repos: arbeitRepos().map((r) => ({ name: r.name })), tiefen: ['quick', 'regular', 'deep'], dryRun: dryRun() });
+  send(res, 200, { repos: arbeitRepos().map((r) => ({ name: r.name })), tiefen: ['quick', 'regular', 'deep', 'live'], dryRun: dryRun() });
 });
 on('POST', /^\/api\/arbeit\/start$/, async (req, res) => {
   const u = await needAdmin(req);
@@ -1821,6 +1824,36 @@ on('POST', /^\/api\/arbeit\/reviews\/start$/, async (req, res) => {
   const u = await needAdmin(req);
   const b = await body(req);
   send(res, 200, await reviewStarten(u, b.pr, b.stufe));
+});
+
+/** Regel-Vorschläge (Plan 274, Zusatz A) für den Besitzer des Tickers: Rückfrage „Übernehmen/Verwerfen“ + Meldung im Hauptchat. */
+async function regelVorschlagTakt(neu: number) {
+  if (!regelDir()) return;
+  const s = await tickerSettings();
+  const u = s.ownerId ? await userById(s.ownerId) : null;
+  if (!u) return;
+  await regelVorschlaege({
+    frage: async (v, key) => {
+      const q = await askKnut(u, { key, quelle: 'regel', title: `Regel-Vorschlag: ${v.titel}`.slice(0, 140),
+        context: `${v.regel}${v.begruendung ? `\n\nWarum: ${v.begruendung}` : ''}${v.belege?.length ? `\n\nBelege: ${v.belege.join(' · ')}` : ''}\n\nAus den Reviews der Erlaubtliste (PR-Ticker → regel-vorschlag.sh).`,
+        options: [{ label: 'Übernehmen', consequence: 'Die Regel kommt in die Prüfliste des Pre-Push-Gates (regeln-bestaetigt.jsonl).' }, { label: 'Verwerfen', consequence: 'Kein Eintrag; derselbe Vorschlag kommt nicht wieder.' }],
+        recommendation: 'Übernehmen, wenn die Regel allgemein gilt und nicht nur diesen einen PR betrifft.' }).catch((e: any) => { if (e.status === 409) return null; throw e; });
+      if (!q) return null;
+      await orchQuestions().updateOne({ _id: q.id as any }, { $set: { kind: 'regel-vorschlag', regel: v } });
+      return q.id;
+    },
+    melde: (text) => meldeLeitstand(u, { _id: 'regel-vorschlaege', title: 'Regel-Vorschläge' }, text),
+    log,
+  }, { neu });
+}
+
+// Plan 274 (D1): Knopf „Jetzt gründlich“ an einem Live-Unter-Chat (Arbeit › Unter-Chats) — derselbe Weg wie `orch gruendlich`.
+on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/gruendlich$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const r = await gruendlichOrch(u, m[1], 'hand');
+  log('jetzt gründlich', { user: u.id, id: m[1] });
+  zahlCache.delete(u.id);
+  send(res, 200, { ok: true, zustellung: r.zustellung ?? null });
 });
 
 on('POST', /^\/api\/leitstand\/strands\/([0-9a-f]{8})\/zurueckholen$/, async (req, res, m) => {
@@ -3323,7 +3356,7 @@ async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
   return internalUser(req, { userId: d ? String(d._id) : '' });
 }
 
-on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema)$/, async (req, res, m) => {
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich)$/, async (req, res, m) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
   const id = String(b.id ?? '');
@@ -3343,7 +3376,9 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
     }
     case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
     case 'show': return send(res, 200, await showOrch(u, id, Number(b.verlauf) || 0));
-    case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand'));
+    // Plan 274 (D4b): CLI und Hauptchat warten kurz auf die Bestätigung der Brücke und lesen sie in der Antwort.
+    case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand', { warteMs: sendWarteMs() }));
+    case 'gruendlich': return send(res, 200, await gruendlichOrch(u, id, b.via === 'leitstand' ? 'leitstand' : 'hand'));   // Plan 274 (D1)
     case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? '', b.via === 'leitstand' ? 'leitstand' : 'knut'));
     case 'thema': return send(res, 200, await setThema(u, id, b.thema));   // Plan 154, S2: Themen-Gruppe von Hand
   }
@@ -3368,7 +3403,7 @@ on('POST', /^\/internal\/orchestrator\/review-posted$/, async (req, res) => {
   const u = await orchPerson(req, b);
   if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
   try {
-    const r = await vermerkePosted(String(b.id ?? ''), String(b.url ?? ''), u.name);
+    const r = await vermerkePosted(String(b.id ?? ''), String(b.url ?? ''), u.name, new Date(), { neu: b.neu === true });
     log('pr-review von hand gepostet', { user: u.id, id: r.id });
     return send(res, 200, r);
   } catch (e: any) { throw new HttpError(e?.status ?? 500, e?.message ?? String(e)); }
@@ -3734,10 +3769,15 @@ async function backgroundJobs() {
     catch (e: any) { log('github', { error: String(e.message).slice(0, 200) }); }
   };
   setTimeout(ghTick, 8000);
+  // Paket 269: G0 und die PR-Review-Klone holen mit demselben Lesetoken wie der Ticker (nicht über git-credential-vaultwarden).
+  setzeLeseQuelle(githubReadToken);
   // PR-Ticker + Auto-Review (Plan 157): jede Minute nachsehen; der Ticker selbst hält seinen Takt (Einstellung „minutes“).
   const prTick = async () => {
-    try { const r = await tickerTick(githubReadToken); if (r.events || r.reviews) log('pr-ticker', { ...r }); }
+    let regelNeu = 0;
+    try { const r = await tickerTick(githubReadToken); regelNeu = r.regel ?? 0; if (r.events || r.reviews || r.regel) log('pr-ticker', { ...r }); }
     catch (e: any) { log('pr-ticker', { error: String(e.message).slice(0, 200) }); }
+    // Plan 274 (Zusatz A): neue Reviews → regel-vorschlag.sh (sonst einmal am Tag) → Vorschläge als Rückfrage + Hauptchat-Meldung.
+    try { await regelVorschlagTakt(regelNeu); } catch (e: any) { log('regel-vorschlag', { error: String(e?.message ?? e).slice(0, 200) }); }
     try {
       const r = await reviewTick({
         userById: async (id) => { const u = await userById(id); return u && allowed(u.email) && u.role === 'ADMIN' ? u : null; },
@@ -3908,6 +3948,7 @@ const orchDeps = {
     return list.some((a: any) => !(ex[a.id] > Date.now()));
   },
   log,
+  belegt: worktreeBelegt,   // Plan 274 (D4a): „weiter“ wartet, solange ein anderer Strang im selben Worktree läuft
 };
 startAutoWeiter(orchDeps);
 // Stand je Strang festschreiben (Teil B, G1) — unabhängig vom Auto-Fortsetzen; ORCH_STATUS=off schaltet ab.

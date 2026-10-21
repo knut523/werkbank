@@ -5,9 +5,11 @@
 // Ein Prüfer, drei Aufrufer: scripts/vorbau-check (CLI, drift.py 06:30), Werkbank-Bau-Start (`orch start --code`,
 // „Agent ansetzen“) und der Nachtbau (`orch nachtbau`). Ergebnis frei | fortsetzen | treffer | stopp, mit Belegen.
 //
-// Zugang: ausschließlich das Lesetoken. Jeder git-Aufruf (fetch und `credential fill` für die PR-API) läuft mit
-// GIT_VW_READ=1, ohne GIT_VW_ITEM und mit genau EINEM Credential-Helper (die geerbten werden geleert) — so kann der
-// Push-Token weder über einen anderen Helper noch über die Item-Wahl hereinkommen. Kein Lesetoken → Stopp ohne Knopf.
+// Zugang: ausschließlich das Lesetoken. Jeder git-Aufruf (fetch und `credential fill` für die PR-API) läuft mit genau
+// EINEM Credential-Helper (die geerbten werden geleert) — so kann der Push-Token weder über einen anderen Helper noch über
+// die Item-Wahl hereinkommen. Der Helper liefert das Lesetoken des PR-Tickers (creds.githubReadToken, Paket 269: der Weg
+// über git-credential-vaultwarden lieferte live nichts, der Ticker schon); ohne diese Quelle der Vaultwarden-Helper mit
+// GIT_VW_READ=1, ohne GIT_VW_ITEM. Kein Lesetoken → Stopp ohne Knopf.
 // Die Entscheidung (decide) ist rein und getestet; git und GitHub laufen nur in gather().
 import { GIT_SAFE } from './gitsafe.ts';
 import { execFileSync } from 'node:child_process';
@@ -198,19 +200,33 @@ export const stoppErgebnis = (slug: string, s: Stopp, hinweise: string[] = []): 
 
 export function credHelper(env = process.env): string { return env.VORBAU_CRED_HELPER || join(homedir(), 'bin', 'git-credential-vaultwarden'); }
 
+/** Paket 269: dieselbe Quelle wie der PR-Ticker. Die Web-App setzt creds.githubReadToken; ohne Quelle (CLI, Tests) nur
+ *  WERKBANK_GITHUB_TOKEN, sonst bleibt es beim Vaultwarden-Helper. */
+let leseQuelle: (() => Promise<string | null>) | null = null;
+export const setzeLeseQuelle = (f: (() => Promise<string | null>) | null) => { leseQuelle = f; };
+export async function g0Lesetoken(env = process.env): Promise<string | null> {
+  if (!leseQuelle) return env.WERKBANK_GITHUB_TOKEN || null;
+  try { return (await leseQuelle()) || null; } catch { return null; }
+}
+/** Helper für ein bekanntes Lesetoken: liest es aus der Umgebung des git-Kindprozesses — nie auf der Kommandozeile, nie im Log. */
+export const LESE_HELPER = `!f() { cat >/dev/null; if [ "$1" = get ]; then printf 'username=x-access-token\\npassword=%s\\n' "$WERKBANK_GIT_LESETOKEN"; fi; }; f`;
+
 /** Umgebung für jeden git-Aufruf von G0: Lesetoken erzwungen, Item-Wahl entfernt, nie fragen. */
-export function g0Env(env = process.env): NodeJS.ProcessEnv {
+export function g0Env(env = process.env, token: string | null = null): NodeJS.ProcessEnv {
   // GIT_SSH_COMMAND=false: kein SSH-Schlüssel (der hätte Schreibrechte) — G0 holt nur über https mit dem Lesetoken.
   const e: NodeJS.ProcessEnv = { ...env, GIT_VW_READ: '1', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false', SSH_ASKPASS: '/bin/false', GCM_INTERACTIVE: 'never', GIT_SSH_COMMAND: 'false' };
   delete e.GIT_SSH;
   delete e.GIT_VW_ITEM;
+  if (token) e.WERKBANK_GIT_LESETOKEN = token; else delete e.WERKBANK_GIT_LESETOKEN;
   return e;
 }
-/** Genau ein Helper: leerer Eintrag setzt die geerbte Liste zurück (gitcredentials(7)), dann nur der Vaultwarden-Helper. */
-export const g0GitArgs = (env = process.env) => ['-c', 'credential.helper=', '-c', `credential.helper=${credHelper(env)}`, '-c', 'credential.useHttpPath=true', '-c', 'credential.interactive=never'];
+/** Genau ein Helper: leerer Eintrag setzt die geerbte Liste zurück (gitcredentials(7)), dann nur der Lese-Helper —
+ *  mit bekanntem Lesetoken LESE_HELPER, sonst der Vaultwarden-Helper. */
+export const g0GitArgs = (env = process.env, token: string | null = null) => ['-c', 'credential.helper=', '-c', `credential.helper=${token ? LESE_HELPER : credHelper(env)}`, '-c', 'credential.useHttpPath=true', '-c', 'credential.interactive=never'];
 
 type Git = (args: string[], cwd: string, opts?: { input?: string; timeout?: number }) => string;
-export const realGit: Git = (args, cwd, opts = {}) => execFileSync('git', [...GIT_SAFE, ...g0GitArgs(), ...args], { cwd, env: g0Env(), input: opts.input, timeout: opts.timeout ?? 20_000, stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 << 20 }).trim();
+export const g0Git = (token: string | null): Git => (args, cwd, opts = {}) => execFileSync('git', [...GIT_SAFE, ...g0GitArgs(process.env, token), ...args], { cwd, env: g0Env(process.env, token), input: opts.input, timeout: opts.timeout ?? 20_000, stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 << 20 }).trim();
+export const realGit: Git = g0Git(null);
 const scrub = (s: string) => s.replace(/(https?:\/\/)[^@\s/]+@/g, '$1').replace(/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '***').replace(/\s+/g, ' ').trim().slice(0, 200);
 
 /** owner/name aus der origin-URL (https, ssh oder lokaler Pfad …/<owner>/<name>.git). */
@@ -219,7 +235,7 @@ export function ownerRepo(url: string): { owner: string; name: string } | null {
   return m ? { owner: m[1], name: m[2] } : null;
 }
 
-/** Lesetoken über den Credential-Helper (GIT_VW_READ=1) — derselbe Weg wie beim Fetch, nie das Push-Item. */
+/** Lesetoken über den Credential-Helper (siehe g0GitArgs) — derselbe Weg wie beim Fetch, nie das Push-Item. */
 export function lesetoken(repoDir: string, o: { owner: string; name: string }, git: Git = realGit): string | null {
   try {
     const out = git(['credential', 'fill'], repoDir, { input: `protocol=https\nhost=github.com\npath=${o.owner}/${o.name}.git\n\n`, timeout: 30_000 });
@@ -283,7 +299,7 @@ export function specAusDatei(pfad: string): { pfad: string; zitiert: string[]; c
 
 /** Fakten sammeln: fetch, origin/HEAD, Plandateien, Merge-Commits, Branches, PR-API. Stopp statt stillem „frei“. */
 export async function gather(o: GatherOpts): Promise<{ fakten: Fakten } | { stopp: Stopp }> {
-  const git = o.git ?? realGit;
+  const git = o.git ?? g0Git(await g0Lesetoken());
   const plan = o.plan ?? null;
   const spec = o.specDatei === null ? null : o.specDatei ? specAusDatei(o.specDatei) : specLesen(plan?.spec ?? plan?.specHeader ?? o.slug);
   const zitiert = spec?.zitiert ?? [];
@@ -304,7 +320,7 @@ export async function gather(o: GatherOpts): Promise<{ fakten: Fakten } | { stop
     const repo = or.name;
     // Lesetoken zuerst: ohne Lesetoken weder Fetch noch PR-API (Stopp ohne Knopf, Nachtbau aus — DoD 17).
     const token = lesetoken(top, or, git);
-    if (!token) return { stopp: { grund: 'lesetoken', knopf: null, text: `Kein GitHub-Lesetoken (GIT_VW_READ=1 git credential fill für ${or.owner}/${or.name} liefert nichts) — G0 prüft nicht mit dem Push-Token. Bauen nur über Knuts „trotzdem bauen“.` } };
+    if (!token) return { stopp: { grund: 'lesetoken', knopf: null, text: `Kein GitHub-Lesetoken (weder WERKBANK_GITHUB_TOKEN/Vaultwarden „View only github API“ noch git credential fill für ${or.owner}/${or.name}) — G0 prüft nicht mit dem Push-Token. Bauen nur über Knuts „trotzdem bauen“.` } };
     // origin per SSH → stattdessen dieselben Refs über https holen (Lesetoken über den Helper), nie über den SSH-Schlüssel.
     const ssh = /^(git@|ssh:\/\/)/.test(url);
     const quelle = ssh ? `${(process.env.VORBAU_GITHUB_HTTPS || 'https://github.com').replace(/\/$/, '')}/${or.owner}/${or.name}.git` : 'origin';

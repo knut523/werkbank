@@ -202,9 +202,13 @@ test('S2 Nachprüfung ohne Tag: Autor meldet erledigt + neuer Kopf → Delta-Rev
   const push = P.deriveEvents([prKnoten()], known, '2026-10-19T08:49:00Z', s.allow).events;
   assert.deepEqual(push.map((e) => e.kind), ['stand']);
   assert.equal(await P.queueReviews(push, s), 1);
-  // Neuer Stand ohne „erledigt“ → nichts
+  // Neuer Stand ohne „erledigt“: mit „Auto-Delta bei neuem Stand“ aus → nichts (wie bisher) …
   await P.reviewsCol().deleteMany({ trigger: 'nachpruefung' }); await P.tickerCol().deleteMany({});
-  assert.equal(await P.queueReviews(push, s), 0);
+  assert.equal(await P.queueReviews(push, { ...s, autoDelta: false }), 0);
+  // … mit Auto-Delta an (Vorgabe, Release 20b) → Delta-Review, weil das letzte Review gepostet ist.
+  assert.equal(await P.queueReviews(push, s), 1);
+  assert.equal(((await P.reviewsCol().findOne({ _id: 'WirStrom1/olaf-admin#7@' + SHA2 } as any)) as any).trigger, 'delta');
+  await P.reviewsCol().deleteMany({ trigger: 'delta' });
 });
 
 test('S2 Auftrag nennt die Nachprüfung; das Delta läuft wie beim Tag gegen das letzte fertige Review', async () => {

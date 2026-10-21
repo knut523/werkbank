@@ -101,7 +101,7 @@ test('Übersicht-Karte: Tiefe + ETA für laufende; fertige ohne ETA; alte ohne T
   const spaet = karte({ ...base, tiefe: 'quick', lastStatus: 'waiting' }, [], [], null, null, AT + 32 * MIN);
   assert.deepEqual([spaet.eta.text, spaet.eta.ueberfaellig], ['überfällig seit 12 min', true]);
   const fertig = karte({ ...base, tiefe: 'regular', lastStatus: 'done', doneAt: new Date(AT) }, [], [], null, null, AT);
-  assert.equal(fertig.eta.text, '–');
+  assert.equal(fertig.eta, null, 'fertig: keine ETA');
   const alt = karte({ ...base, lastStatus: 'running' }, [], [], null, null, AT);
   assert.deepEqual([alt.tiefe, alt.eta.text], [null, '–']);
 });
@@ -110,4 +110,20 @@ test('Agent ansetzen: Tiefe landet als Pflichtschritte im Auftrag; ohne Tiefe un
   const i: any = { key: 'PM-1', summary: 'Etwas', status: 'To Do', description: '' };
   assert.match(chatAgentPrompt(i, '', 'work', { tiefe: 'quick' }), /Tiefe: \*\*quick\*\*/);
   assert.doesNotMatch(chatAgentPrompt(i, '', 'work', {}), /Tiefe: \*\*/);
+});
+
+// Knut 20.10.2026: „warum gibst du im workspace ein eta mit wenn status fertig …? weird“ — fertig heißt keine ETA, auch wenn der
+// Agent trotzdem eine meldet oder erst seine Marke „Status: fertig“ den Strang fertig macht.
+test('Fertig = keine ETA: Marke „fertig“, Zustand fertig/erledigt, CLI ohne ETA-Teil, Anweisung ohne ETA-Zeile bei fertig', () => {
+  const start = new Date(AT);
+  const gemeldet = { tiefe: 'regular', startedAt: start, eta: { at: new Date(AT + 30 * MIN) } };
+  assert.equal(etaFuer({ ...gemeldet, marke: 'fertig' }, { fertig: false, now: AT }).at, null, 'Marke fertig');
+  assert.equal(etaFuer({ ...gemeldet, zustand: 'erledigt' }, { fertig: false, now: AT }).at, null, 'Zustand erledigt');
+  assert.equal(etaFuer({ ...gemeldet, marke: 'braucht Antwort' }, { fertig: false, now: AT }).quelle, 'agent', 'braucht Antwort behält die ETA');
+  const base = { _id: 'abc12345', title: 'Strang', startedAt: start, lastSentAt: start, statusAt: start };
+  const k = karte({ ...base, ...gemeldet, lastStatus: 'waiting', zustand: 'fertig', marke: 'fertig' }, [], [], null, null, AT);
+  assert.equal(k.eta, null, 'Übersicht: Agent meldet fertig + ETA → keine ETA');
+  assert.equal(tiefeEta({ tiefe: 'deep', status: 'done', eta: { text: 'fertig ca. 17:30', quelle: 'agent' } }), 'Tiefe deep');
+  assert.equal(tiefeEta({ tiefe: 'deep', eta: null }, true), 'Tiefe deep');
+  assert.match(orchBrief({ title: 'T', prompt: 'mach', cwd: '/x' }), /Bei „Status: fertig“ lässt du die ETA-Zeile weg/);
 });

@@ -8,11 +8,14 @@
 import { wb } from './db.ts';
 import { graphql, GithubError } from './github.ts';
 import { vienna } from './hygiene.ts';
+import { regelZeilen, regelAnhaengen } from './regelquelle.ts';
 
 export const ME = (process.env.WERKBANK_GITHUB_LOGIN || 'knut523').toLowerCase();
 
 export interface TickerSettings {
   ticker: boolean; autoReview: boolean; autoPost: boolean; onRequest: boolean;
+  /** Auto-Delta bei neuem Stand (Release 20b, Knut 20.10.: „if chris posts his fixes directly also review them“). */
+  autoDelta: boolean;
   /** Entfallen (Knut 17.10.: „nimm den Deckel komplett raus“) — immer 0 = ohne Tagesgrenze; nur noch für alte Dokumente. */
   allow: string[]; maxPerDay: number; maxParallel: number; minutes: number;
   ownerId: string | null; autoReviewSince: string | null;
@@ -20,7 +23,7 @@ export interface TickerSettings {
 }
 
 export const DEFAULTS: TickerSettings = {
-  ticker: false, autoReview: false, autoPost: true, onRequest: false,
+  ticker: false, autoReview: false, autoPost: true, onRequest: false, autoDelta: true,
   allow: ['knut523', 'bizarrochris'], maxPerDay: 0, maxParallel: 2, minutes: 5,
   ownerId: null, autoReviewSince: null, log: [],
 };
@@ -53,14 +56,14 @@ const clampInt = (v: unknown, lo: number, hi: number, dflt: number) => { const n
 export function mergeSettings(cur: TickerSettings, inp: any, by: { id: string; name: string }, now = new Date()): TickerSettings {
   const next: TickerSettings = { ...cur, log: [...cur.log] };
   const was: string[] = [];
-  for (const k of ['ticker', 'autoReview', 'autoPost', 'onRequest'] as const) {
+  for (const k of ['ticker', 'autoReview', 'autoPost', 'onRequest', 'autoDelta'] as const) {
     if (typeof inp?.[k] === 'boolean' && inp[k] !== cur[k]) { next[k] = inp[k]; was.push(`${k} ${inp[k] ? 'an' : 'aus'}`); }
   }
   if (Array.isArray(inp?.allow)) {
     const allow = [...new Set(inp.allow.map((x: unknown) => String(x).trim().replace(/^@/, '').toLowerCase()).filter((x: string) => LOGIN.test(x)))].slice(0, 20) as string[];
     if (allow.join(',') !== cur.allow.join(',')) { next.allow = allow; was.push(`Liste: ${allow.join(', ') || '(leer)'}`); }
   }
-  for (const [k, lo, hi] of [['maxParallel', 1, 5], ['minutes', 1, 60]] as const) {   // minutes ab 1 (Knut 19.10.: „instant statt warten“)   // maxPerDay entfällt (ohne Tagesgrenze)
+  for (const [k, lo, hi] of [['maxParallel', 1, 8], ['minutes', 1, 60]] as const) {   // maxParallel bis 8 (Release 20b; Speicherdeckel bremst)   // minutes ab 1 (Knut 19.10.: „instant statt warten“)   // maxPerDay entfällt (ohne Tagesgrenze)
     if (inp?.[k] !== undefined) { const v = clampInt(inp[k], lo, hi, cur[k]); if (v !== cur[k]) { next[k] = v; was.push(`${k} ${v}`); } }
   }
   // Auto-Review gehört der Person, die es einschaltet (T12); ab dann zählen @review-Tags (T5).
@@ -88,7 +91,7 @@ const PR_FIELDS = `number title url state merged isDraft createdAt updatedAt hea
   repository { nameWithOwner } author { login }
   reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } } } }
   comments(last: 30) { nodes { id author { login } body createdAt url } }
-  reviews(last: 20) { nodes { id author { login } body state submittedAt url } }`;
+  reviews(last: 20) { nodes { id author { login } body state submittedAt url comments(first: 30) { nodes { path line originalLine body } } } }`;
 
 export function tickerQuery(n: number): string {
   const vars = Array.from({ length: n }, (_, i) => `$q${i}: String!`).join(', ');
@@ -121,7 +124,10 @@ export async function fetchTicker(token: string, since: Date, env = process.env)
 
 export type Kind = 'neu' | 'stand' | 'zu' | 'kommentar' | 'review' | 'anfrage' | 'tag' | 'erledigt';
 export interface TickerEvent { _id: string; kind: Kind; repo: string; number: number; title: string; url: string; prUrl: string; actor: string | null; text: string; at: string; head: string }
-export interface PrMem { _id: string; head: string; state: string }
+export interface PrMem { _id: string; head: string; state: string; at?: Date | string }
+/** Paket 269 (#215): Überlappung des Lesefensters. Die GitHub-Suche hinkt Minuten hinterher; bei 2 min und Takt 1 min lag ein
+ *  Tag schon vor dem Fenster, als die Suche den PR endlich lieferte. Doppeltes fängt die feste Kennung ab. */
+export const UEBERLAPPUNG_MIN = 15;
 
 export const TAG = /(^|[\s(])@review\b/i;
 /** `@review deep` → Tiefe deep (Knut 17.10.). */
@@ -147,7 +153,9 @@ export const prKey = (repo: string, n: number) => `${repo}#${n}`;
 
 /**
  * Aus einem Abruf die neuen Ereignisse. `known` = gemerkter Zustand je PR (Kopf, open/closed). Kommentare und Reviews
- * zählen ab `since` (Kennung dedupliziert Überlappungen); eigene Aktionen (ME) nie. Review/Kommentar nur auf UNSEREN PRs,
+ * zählen ab `since` — bei einem bekannten PR ab dem letzten Mal, als ihn die Suche lieferte, falls das früher war (Paket 269:
+ * lieferte die Suche den PR wegen Index-Verzugs erst Minuten später, lag der Tag sonst vor dem Fenster). Die Kennung
+ * dedupliziert Überlappungen; eigene Aktionen (ME) nie. Review/Kommentar nur auf UNSEREN PRs,
  * `@review` und Review-Anfragen auf allen.
  */
 export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: string, allow: string[]): { events: TickerEvent[]; mem: PrMem[] } {
@@ -172,16 +180,19 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
     }
     mem.push({ _id: key, head, state });
     const ours = author === ME;
+    // Kommentare im Knoten sind aktuell (kein Suchindex): was vor dem letzten Sehen lag, war damals schon da; 2 min für Uhren.
+    const gesehen = before?.at ? new Date(new Date(before.at).getTime() - 2 * 60_000) : null;
+    const ab = gesehen && !isNaN(+gesehen) && ghTime(gesehen) < since ? ghTime(gesehen) : since;
     for (const c of p.comments?.nodes ?? []) {
       const who = (c.author?.login ?? '').toLowerCase();
-      if (!c.id || c.createdAt < since) continue;
+      if (!c.id || c.createdAt < ab) continue;
       if (TAG.test(c.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${c.id}`, 'tag', c.createdAt, who, tagText(c.body, who), c.url);
       else if (who && who === author && who !== ME && allowSet.has(who) && state === 'OPEN' && meldetErledigt(c.body)) ev(`erledigt:${c.id}`, 'erledigt', c.createdAt, who, `${who} meldet erledigt: ${kurz(c.body, 100)}`, c.url);
       else if (ours && who && who !== ME) ev(`c:${c.id}`, 'kommentar', c.createdAt, who, `Kommentar von ${who}: ${kurz(c.body, 120)}`, c.url);
     }
     for (const r of p.reviews?.nodes ?? []) {
       const who = (r.author?.login ?? '').toLowerCase();
-      if (!r.id || !r.submittedAt || r.submittedAt < since) continue;
+      if (!r.id || !r.submittedAt || r.submittedAt < ab) continue;
       if (TAG.test(r.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${r.id}`, 'tag', r.submittedAt, who, tagText(r.body, who), r.url);
       else if (who && who === author && who !== ME && allowSet.has(who) && state === 'OPEN' && meldetErledigt(r.body)) ev(`erledigt:${r.id}`, 'erledigt', r.submittedAt, who, `${who} meldet erledigt: ${kurz(r.body, 100)}`, r.url);
       else if (ours && who && who !== ME && r.state !== 'PENDING') ev(`r:${r.id}`, 'review', r.submittedAt, who, `Review von ${who}: ${REVIEW_STATE[r.state] ?? r.state}${r.body ? ` — ${kurz(r.body, 100)}` : ''}`, r.url);
@@ -193,16 +204,36 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
   return { events, mem };
 }
 
+/**
+ * Abgleich (Paket 269): `@review`-Kommentare und -Reviews von Personen auf der Liste ab `since`, die der Ticker nie als
+ * Ereignis `tag:<id>` gesehen hat. Von Hand vermerkt (`orch review-posted --neu`) nach dem Tag zählt als nachgeholt.
+ */
+export function verpassteTags(prs: any[], gesehen: Set<string>, manuell: { repo: string; number: number; at: string }[], since: string, allow: string[]):
+  { repo: string; number: number; url: string; von: string; at: string; nachgeholt: boolean }[] {
+  const ok = new Set(allow.map((a) => a.toLowerCase()));
+  const out: { repo: string; number: number; url: string; von: string; at: string; nachgeholt: boolean }[] = [];
+  for (const p of prs) {
+    const repo = String(p.repository?.nameWithOwner ?? '');
+    const items = [...(p.comments?.nodes ?? []).map((c: any) => ({ ...c, at: c.createdAt })), ...(p.reviews?.nodes ?? []).map((r: any) => ({ ...r, at: r.submittedAt }))];
+    for (const c of items) {
+      const von = (c.author?.login ?? '').toLowerCase();
+      if (!c.id || !c.at || c.at < since || !ok.has(von) || !TAG.test(c.body ?? '') || gesehen.has(`tag:${c.id}`)) continue;
+      out.push({ repo, number: p.number, url: c.url ?? p.url, von, at: c.at, nachgeholt: manuell.some((m) => m.repo === repo && m.number === p.number && m.at >= c.at) });
+    }
+  }
+  return out.sort((a, b) => a.at.localeCompare(b.at));
+}
+
 // ---------- Lauf ----------
 
 let running: Promise<any> | null = null;
 /** Ab so vielen Minuten ohne erfolgreichen Lauf gilt es als Lücke (Takt ist 1–60 min; Lücke heißt: deutlich darüber). */
 export const LUECKE_MIN = 30;
 
-export interface TickResult { events: number; reviews: number; prs: number; skipped?: string }
+export interface TickResult { events: number; reviews: number; prs: number; skipped?: string; regel?: number }
 
 /**
- * Ein Durchgang: Abruf ab dem letzten erfolgreichen Lauf (2 min Überlappung), Ereignisse speichern, Auslöser in die
+ * Ein Durchgang: Abruf ab dem letzten erfolgreichen Lauf (UEBERLAPPUNG_MIN Überlappung), Ereignisse speichern, Auslöser in die
  * Review-Warteschlange. Erster Lauf: ab jetzt − 1 h; PRs, die er nur kennenlernt, melden nichts (T5).
  */
 export async function tickerTick(getToken: () => Promise<string | null>, now = new Date(), opts: { force?: boolean } = {}): Promise<TickResult> {
@@ -219,7 +250,7 @@ export async function tickerTick(getToken: () => Promise<string | null>, now = n
       await meta().updateOne({ _id: 'pr_ticker' as any }, { $set: { error: 'Kein GitHub-Lesetoken (WERKBANK_GITHUB_TOKEN oder Vaultwarden „View only github API“).', errorAt: now } }, { upsert: true });
       return { events: 0, reviews: 0, prs: 0, skipped: 'kein Token' };
     }
-    const since = st.at ? new Date(new Date(st.at).getTime() - 2 * 60_000) : new Date(now.getTime() - 3600_000);
+    const since = st.at ? new Date(new Date(st.at).getTime() - UEBERLAPPUNG_MIN * 60_000) : new Date(now.getTime() - 3600_000);
     let got;
     try { got = await fetchTicker(token, since); }
     catch (e: any) {
@@ -238,13 +269,15 @@ export async function tickerTick(getToken: () => Promise<string | null>, now = n
     }
     if (mem.length) await prState().bulkWrite(mem.map((m) => ({ replaceOne: { filter: { _id: m._id as any }, replacement: { ...m, at: now }, upsert: true } })));
     const reviews = await queueReviews(fresh, s, now);
+    // Plan 274 (Zusatz A): Reviews/Kommentare der Erlaubtliste als Regel-Quelle für das Pre-Push-Gate (nur mit WERKBANK_REGEL_DIR).
+    const regel = await regelAnhaengen(regelZeilen(got.prs, ghTime(since), s.allow, ME), now).catch(() => 0);
     // Paket 223: lag der letzte erfolgreiche Lauf > 30 min zurück (Web-App aus, kein Token), merkt sich der Lauf die Lücke —
     // die Wache (prreview.ts) meldet sie einmal mit der Zahl der nachgeholten Reviews. Erfolg setzt die Fehlermeldung zurück.
     // `ok` = letzter erfolgreicher Lauf; `at` ist der Lese-Zeiger und kann bei abgeschnittenen Suchen alt sein (Pass C).
     const letzter = st.ok ?? st.at;
     const luecke = letzter && now.getTime() - new Date(letzter).getTime() > Math.max(LUECKE_MIN, 2 * s.minutes + 5) * 60_000 ? { luecke: { von: new Date(letzter), bis: now, reviews, gemeldet: false } } : {};
     await meta().updateOne({ _id: 'pr_ticker' as any }, { $set: { at: got.truncatedAt ? new Date(got.truncatedAt) : now, ok: now, error: null, fehlerGemeldet: null, rate: got.rate, counts: got.counts, prs: got.prs.length, truncated: !!got.truncatedAt, ...luecke } }, { upsert: true });
-    return { events: fresh.length, reviews, prs: got.prs.length };
+    return { events: fresh.length, reviews, prs: got.prs.length, ...(regel ? { regel } : {}) };
   })();
   try { return await running; } finally { running = null; }
 }
@@ -255,6 +288,8 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
   let n = 0;
   for (const e of fresh) {
     // Paket 223: „erledigt“ des Autors oder ein neuer Stand nach so einem Kommentar → Nachprüfung (Delta gegen das letzte Review).
+    // Release 20b: neuer Stand eines Erlaubtliste-Autors auf einem schon reviewten und geposteten PR → Delta-Review ohne Tag.
+    if (e.kind === 'stand' && s.autoDelta && e.at >= s.autoReviewSince && e.head && reviewErlaubt(e.repo)) { const d = await autoDelta(e, s, now); if (d !== null) { n += d; continue; } }
     if ((e.kind === 'erledigt' || e.kind === 'stand') && e.at >= s.autoReviewSince && e.head && reviewErlaubt(e.repo)) { n += await nachpruefung(e, s, now); continue; }
     // Review-Anfrage nur, wenn der PR-Autor auf der Liste steht: das Review führt die Tests des PRs aus (Review A2).
     const trigger = e.kind === 'tag' || (e.kind === 'anfrage' && s.onRequest && !!e.actor && s.allow.includes(e.actor));
@@ -272,6 +307,31 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
     }
   }
   return n;
+}
+
+/** Mehrere Pushes in diesem Fenster → ein Review auf den letzten Kopf (jeder Push schiebt den Start nach hinten). */
+export const DELTA_BUENDEL_MS = 10 * 60_000;
+
+/**
+ * Auto-Delta (Release 20b): Autor auf der Erlaubtliste (nicht wir selbst), letztes Review dieses PRs fertig UND gepostet, an einem
+ * anderen Kopf → Delta-Review (`trigger: 'delta'`), Start erst nach DELTA_BUENDEL_MS. Ein noch wartendes Auto-Delta desselben PRs
+ * geht in diesem auf (übersprungen, „zusammengefasst“). null = trifft nicht zu (dann gilt die Nachprüfung wie bisher).
+ */
+async function autoDelta(e: TickerEvent, s: TickerSettings, now: Date): Promise<number | null> {
+  const autor = String(e.actor ?? '').toLowerCase();
+  if (!autor || autor === ME || !s.allow.map((a) => a.toLowerCase()).includes(autor)) return null;
+  const letzte: any = (await reviewsCol().find({ repo: e.repo, number: e.number, status: 'fertig' }).sort({ doneAt: -1 }).limit(1).toArray())[0];
+  if (!letzte?.posted || letzte.head === e.head) return null;
+  // Hat der Autor seit dem letzten Review „erledigt“ gemeldet, gilt die Nachprüfung (Paket 223, sofort, ohne Bündeln).
+  if (await tickerCol().findOne({ kind: 'erledigt', repo: e.repo, number: e.number, at: { $gte: new Date(letzte.doneAt ?? letzte.createdAt ?? 0).toISOString() } })) return null;
+  const id = `${prKey(e.repo, e.number)}@${e.head}`;
+  const start = new Date(now.getTime() + DELTA_BUENDEL_MS);
+  try {
+    await reviewsCol().insertOne({ _id: id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, head: e.head, trigger: 'delta', by: autor, event: e._id, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date, deep: false, retryAt: start, vorherHead: letzte.head });
+  } catch (x: any) { if (x?.code !== 11000) throw x; return 0; }
+  const alt = await reviewsCol().updateMany({ repo: e.repo, number: e.number, trigger: 'delta', status: 'wartet', _id: { $ne: id as any } }, { $set: { status: 'übersprungen', note: `zusammengefasst: neuer Stand ${e.head.slice(0, 7)} kam innerhalb von ${DELTA_BUENDEL_MS / 60_000} min` } });
+  await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: `Delta-Review eingereiht (seit Stand ${String(letzte.head).slice(0, 7)}; startet frühestens in ${DELTA_BUENDEL_MS / 60_000} min${alt.modifiedCount ? ', vorige Pushes zusammengefasst' : ''})` } });
+  return 1;
 }
 
 /**
@@ -372,7 +432,7 @@ export async function reviewLog(f: LogFilter = {}, limit = 200): Promise<{ zeile
  * Von Hand gepostet (`orch review-posted <id|repo#n> <url>`): Link am Review vermerken. `repo#n` = das jüngste Review
  * dieses PRs. Ein schon vermerktes Posten wird nicht überschrieben.
  */
-export async function vermerkePosted(ref: string, url: string, von: string, now = new Date()): Promise<{ id: string; url: string }> {
+export async function vermerkePosted(ref: string, url: string, von: string, now = new Date(), o: { neu?: boolean } = {}): Promise<{ id: string; url: string; neu?: boolean }> {
   const m = /^([\w.-]+\/[\w.-]+)#(\d+)(?:@([0-9a-f]{40}))?$/.exec(String(ref).trim());
   if (!m) throw Object.assign(new Error('Kennung: <owner/repo>#<n> oder <owner/repo>#<n>@<sha>'), { status: 400 });
   const [, repo, n] = m;
@@ -382,7 +442,14 @@ export async function vermerkePosted(ref: string, url: string, von: string, now 
   // Nach dem Normalisieren (`..` aufgelöst) muss der Pfad genau dieser PR sein (Unterseiten wie /files erlaubt).
   if (!new RegExp(`^/${repo.replace(/[.]/g, '\\.')}/pull/${n}(?:/[\\w-]*)?/?$`, 'i').test(pfad)) throw Object.assign(new Error(`URL muss auf https://github.com/${repo}/pull/${n} zeigen.`), { status: 400 });
   const doc: any = m[3] ? await reviewsCol().findOne({ _id: ref as any }) : (await reviewsCol().find({ repo, number: Number(n) }).sort({ createdAt: -1 }).limit(1).toArray())[0];
-  if (!doc) throw Object.assign(new Error('Kein Review zu dieser Kennung.'), { status: 404 });
+  if (!doc && o.neu) {
+    // Paket 269 (#215): der Ticker hat den PR nie eingereiht, das Review kam von Hand — Eintrag anlegen, sonst zählt es
+    // im Log (und im Abgleich gegen die @review-Kommentare) als verpasst. Ohne @sha ist der Stand unbekannt.
+    const id = m[3] ? ref : `${repo}#${n}@manuell-${now.getTime()}`;
+    await reviewsCol().insertOne({ _id: id as any, repo, number: Number(n), title: '', url: `https://github.com/${repo}/pull/${n}`, head: m[3] ?? null, trigger: 'manuell', by: null, status: 'fertig', note: 'von Hand gepostet, ohne Eintrag des Tickers', createdAt: now, doneAt: now, day: vienna(now).date, posted: { at: now, url: u, event: 'COMMENT', by: von, manuell: true } });
+    return { id, url: u, neu: true };
+  }
+  if (!doc) throw Object.assign(new Error('Kein Review zu dieser Kennung (ohne Eintrag des Tickers: --neu).'), { status: 404 });
   const r = await reviewsCol().updateOne({ _id: doc._id, posted: { $in: [null] } }, { $set: { posted: { at: now, url: u, event: 'COMMENT', by: von, manuell: true } } });
   if (!r.modifiedCount) throw Object.assign(new Error('Für dieses Review ist schon ein Posten vermerkt.'), { status: 409 });
   return { id: String(doc._id), url: u };

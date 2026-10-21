@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { wb } from './db.ts';
-import { runs, questions, STRANDS, OPEN } from './orchestrator.ts';
+import { runs, questions, STRANDS, OPEN, injectBridge } from './orchestrator.ts';
 import { meldeLeitstand } from './leitstand.ts';
 import type { User } from './auth.ts';
 import { tiefeOf, type Tiefe } from './tiefe.ts';
@@ -22,7 +22,8 @@ import { tiefeOf, type Tiefe } from './tiefe.ts';
 export interface ZugLite { conv?: string | null; parent?: string | null; art?: string; input?: number; output?: number; cacheRead?: number }
 export const budgetEnv = (env = process.env) => (Number(env.ORCH_BUDGET_TOKENS) > 0 ? Math.round(Number(env.ORCH_BUDGET_TOKENS)) : 0);
 /** Vorgabe je Tiefe (Plan 205, wie der Deckel „automatisch weiter“): quick ein Drittel, deep das Doppelte. */
-const FAKTOR: Record<Tiefe, number> = { quick: 1 / 3, regular: 1, deep: 2 };
+// live (Plan 274): viele kurze Runden mit Knut — Budget wie regular, nicht ⅓.
+const FAKTOR: Record<Tiefe, number> = { quick: 1 / 3, regular: 1, deep: 2, live: 1 };
 /** Budget des Strangs: am Strang gesetzt, sonst ORCH_BUDGET_TOKENS × Faktor der Tiefe; 0 = aus (Knut D3). */
 export const budgetVon = (d: { budgetTokens?: unknown; tiefe?: unknown } | null | undefined, env = process.env) =>
   (Number(d?.budgetTokens) > 0 ? Math.round(Number(d!.budgetTokens)) : Math.round(budgetEnv(env) * FAKTOR[tiefeOf(d?.tiefe)]));
@@ -54,8 +55,17 @@ export interface BudgetAnzeige { budget: number; tokens: number; prozent: number
 
 export interface Ergebnis { gewarnt: string[]; gestoppt: string[]; angezeigt: number }
 
+/**
+ * Plan 274 (D5, Knut 20.10.2026: „bei 100 % NICHT mitten im Zug abbrechen“): Nachricht an einen laufenden Zug, wenn das Budget erreicht
+ * ist. Der Zug endet selbst — sauber, mit gesichertem Stand und Stand-Block; danach ruht der Strang bis zu Knuts Entscheidung.
+ */
+export const BUDGET_ABSCHLUSS = 'Budget erreicht (Werkbank): Bring den laufenden Schritt sauber zu Ende — keinen neuen Arbeitsschritt anfangen. Sichere den Stand (lokaler WIP-Commit im Arbeitsordner, Bericht/Notizen nachziehen, was offen ist unter „Offen“) und beende den Zug mit dem Stand-Block und „Status: braucht Antwort“. Danach ruht der Strang, bis Knut über „Weiter mit +50 %“ oder „Anhalten“ entscheidet.';
+
+/** Fertig nach der letzten Nachricht an den Strang (Antwort mit „Status: fertig“)? Dann pausiert nichts mehr (Vorfall b95d9cdd). */
+const fertigSeitSend = (d: any) => !!d.doneAt && new Date(d.doneAt).getTime() >= new Date(d.lastSentAt ?? d.startedAt).getTime() && d.lastStatus !== 'running';
+
 /** Takt (eine Minute): Budgets prüfen, Schwellen einmal melden, Anzeige am Strang festhalten. */
-export async function budgetTick(deps: { userById: (id: string) => Promise<User | null>; log?: (m: string, d?: any) => void }, now = Date.now()): Promise<Ergebnis> {
+export async function budgetTick(deps: { userById: (id: string) => Promise<User | null>; log?: (m: string, d?: any) => void; nachreichen?: (u: User, d: any, text: string) => Promise<boolean> }, now = Date.now()): Promise<Ergebnis> {
   const out: Ergebnis = { gewarnt: [], gestoppt: [], angezeigt: 0 };
   const docs: any[] = await runs().find({ ...STRANDS, ...OPEN, startError: null, conv: { $ne: null }, startedAt: { $gt: new Date(now - 14 * 86400_000) } }).toArray();
   const mitBudget = docs.filter((d) => budgetVon(d) > 0);
@@ -75,18 +85,26 @@ export async function budgetTick(deps: { userById: (id: string) => Promise<User 
       if (u) await meldeLeitstand(u, d, `Budget zu ${zeigen.prozent} % verbraucht (${fmt(tokens)} von ${fmt(budget)} Tokens) — bei 100 % hält der Unter-Chat an und fragt Knut.`, now).catch(() => {});
       out.gewarnt.push(String(d._id));
     }
-    if (st === 'stopp' && !d.autoStopped && !d.budget?.stopAt && u) {
+    // Schon fertig: keine Pause und keine Rückfrage — nur vermerken (Karte zeigt die Überschreitung).
+    if (st === 'stopp' && fertigSeitSend(d)) { if (!d.budget?.ueberAt) set['budget.ueberAt'] = new Date(now); }
+    else if (st === 'stopp' && !d.autoStopped && !d.budget?.stopAt && u) {
       const at = new Date(now);
       const r = await runs().updateOne({ _id: d._id, autoStopped: null }, { $set: { autoStopped: { at, reason: `Budget erreicht (${fmt(tokens)} von ${fmt(budget)} Tokens)`, cause: 'budget' }, 'budget.stopAt': at } });
       if (r.modifiedCount) {
         const qid = 'q-' + randomUUID().replace(/-/g, '').slice(0, 12);
         try { await questions().insertOne({
           _id: qid, userId: u.id, kind: 'budget', title: `Budget erreicht: „${d.title}“ (${fmt(tokens)} von ${fmt(budget)} Tokens)`.slice(0, 140),
-          context: `Der Unter-Chat ${d._id} hat sein Tokenbudget erreicht (Eingabe ohne Cache-Lesen + Ausgabe, mit Workern). Ein laufender Zug endet noch; danach ruht der Chat, bis du entscheidest. Arbeitsordner: ${d.cwd}.`,
+          context: `Der Unter-Chat ${d._id} hat sein Tokenbudget erreicht (Eingabe ohne Cache-Lesen + Ausgabe, mit Workern). Nichts wird mitten im Zug abgebrochen: ein laufender Zug bringt seinen Schritt zu Ende, sichert den Stand und meldet sich; danach ruht der Chat, bis du entscheidest. Arbeitsordner: ${d.cwd}.`,
           options: [{ label: 'Weiter mit +50 %', consequence: `Hebt das Budget auf ${fmt(Math.ceil(budget * 1.5))} Tokens und schickt „weiter“.` }, { label: 'Anhalten', consequence: 'Der Unter-Chat gilt als geprüft und läuft nicht weiter.' }],
           recommendation: 'Chat ansehen: kommt der Unter-Chat voran und der Rest ist klein, „Weiter mit +50 %“; sonst „Anhalten“ und den Auftrag schärfen.',
           strand: { id: String(d._id), title: d.title, url: d.url }, link: d.url, plan: d.plan ?? null, createdAt: at, status: 'offen', answer: null,
         } as any); } catch (e) { await runs().updateOne({ _id: d._id }, { $set: { autoStopped: null, 'budget.stopAt': null } }); throw e; }   // ohne Rückfrage keine Pause (sonst bliebe der Chat ohne Ausweg stehen)
+        // Läuft der Zug noch: nicht abbrechen — er bekommt die Abschluss-Nachricht und endet selbst (einmal je Pause).
+        if (d.lastStatus === 'running' && !d.budget?.abschlussAt) {
+          const ok = await (deps.nachreichen ?? (async (uu: User, dd: any, text: string) => (await injectBridge(uu, dd.conv, text)).ok))(u, d, BUDGET_ABSCHLUSS).catch(() => false);
+          if (ok) set['budget.abschlussAt'] = new Date(now);
+          deps.log?.('cos budget abschluss', { id: d._id, zugestellt: ok });
+        }
         deps.log?.('cos budget stopp', { id: d._id, tokens, budget });
         out.gestoppt.push(String(d._id));
       }

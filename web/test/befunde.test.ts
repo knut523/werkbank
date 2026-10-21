@@ -42,24 +42,26 @@ test('#5 Abdeckung: je Klasse Befund / geprüft / nicht geprüft; ungeprüfte Bl
   assert.equal(pruefeBefunde({ befunde: [] }).vollstaendig, false, 'ohne Abdeckung unvollständig');
 });
 
-test('#9 Felder statt Prosa: Grounding Pflicht, Spec vor Standards, Tabelle mit allen Feldern, Abdeckung, Pipes entschärft', () => {
+test('#9 Felder (Release 20b: ein Listenformat statt Tabellen): Grounding Pflicht, Must/Should fix, Spec vor Standards je Gruppe, Abdeckung in einer Zeile', () => {
   const g = pruefeBefunde({ vollstaendig: true, abdeckung: alleGeprueft, tests: 'npm test: ok', befunde: [
     b({ quelle: 'standard', titel: 'a | b', gedaechtnis: true }), b({ quelle: 'spec', klasse: 'spec', schwere: 'advisory', vertrauen: 'mittel', pruefung: 'PLAUSIBLE', titel: 'Missing acceptance case', zeile: 2 }),
+    b({ quelle: 'standard', klasse: 'docs', schwere: 'advisory', titel: 'Stale README', zeile: 1, datei: 'README.md' }),
     b({ datei: '', zeile: 4 }), b({ datei: '/etc/passwd' }), b({ datei: '../x.ts' }), b({ zeile: 0 }),
   ] });
   assert.equal(g.statistik.ohneBeleg, 4); assert.equal(g.statistik.gedaechtnis, 1);
   const k = kommentarAusBefunden(g);
   assert.match(k, /^Empfehlung: request-changes\n/);
-  assert.ok(k.indexOf('### Spec / acceptance') < k.indexOf('### Standards'), 'Spec vor Standards');
-  assert.match(k, /\| Severity \| Class \| Confidence \| Check \| Location \| Finding \| Fix \|/);
-  assert.match(k, /\| advisory \| Spec \/ acceptance \| medium \| plausible \| `src\/a\.ts:2` \| Missing acceptance case \|/);
-  assert.match(k, /a \\\| b \(raised on this file before\)/);
-  assert.equal((k.split('### Coverage')[1].match(/^\| (?!Class|---)/gm) ?? []).length, KLASSEN.length, 'eine Zeile je Klasse');
-  assert.match(k, /\| Security \| finding \|/); assert.match(k, /\| Docs \(advisory\) \| checked \|/);
-  assert.match(k, /### Tests\n\nnpm test: ok/);
+  assert.doesNotMatch(k, /^\|/m, 'keine Tabellen');
+  assert.ok(k.indexOf('**Must fix**') < k.indexOf('**Should fix**'));
+  assert.match(k, /1\. \*\*a \| b\*\* — `src\/a\.ts:10`\n   Fix: use parameters _\(Security · high confidence · confirmed · raised on this file before\)_/);
+  assert.ok(k.indexOf('Missing acceptance case') < k.indexOf('Stale README'), 'Spec vor Standards innerhalb der Gruppe');
+  assert.match(k, /\*\*Missing acceptance case\*\* \(spec\) — `src\/a\.ts:2`/);
+  assert.match(k, /\*\*Coverage:\*\* checked — Security, .*Docs\.\n/, 'alle Klassen in einer Zeile');
+  assert.match(k, /\*\*Tests:\*\* npm test: ok/);
   assert.doesNotMatch(k, /Incomplete review/);
   const unv = kommentarAusBefunden(pruefeBefunde({ vollstaendig: false, gruende: ['diff truncated'], befunde: [] }));
   assert.match(unv, /Incomplete review\.\*\* diff truncated.*A missing finding is not evidence of safety/);
+  assert.match(unv, /not checked — Security/);
 });
 
 test('#11 Posten: nur genau der gespeicherte Entwurf; incomplete nie automatisch, von Hand nur mit Hinweis', () => {

@@ -68,3 +68,28 @@ test('U3: „Heute“ = gilt in 24 h als angenommen oder wichtig und hält einen
   assert.equal(heuteFaellig({ autoAb: null, stufe: 'wichtig', blockiert: 1 }, t), true);
   assert.equal(heuteFaellig({ autoAb: null, stufe: 'wichtig', blockiert: 0 }, t), false);
 });
+
+// Knut 20.10.2026: „bei anders … oft nur 2-3 andere Vorschläge — einfach auswählen statt schreiben“.
+test('Alternativen: Kopf liest Inline- und Block-Liste (höchstens 3, ohne die Empfehlung), Karte und Rückfrage bekommen Knöpfe', async () => {
+  const { berichtKopf } = await import('../server/berichtkopf.ts');
+  const { offeneEntscheidungen } = await import('../server/uebersicht.ts');
+  const { altText } = await import('../src/alternativen.ts');
+  const md = ['---', 'status: wartet_auf_knut', 'titel: x', 'fragen:',
+    '  - id: D1', '    frage: Kacheln gleich?', '    empfehlung: gleich', '    alternativen: ["je Rolle", "nur für Admins"]', '    antwort: ""',
+    '  - id: D2', '    frage: Wann bauen?', '    empfehlung: jetzt', '    alternativen:', '      - jetzt', '      - nächster Sprint', '      - nach dem Release', '      - nie', '      - auch nie', '    antwort: ""',
+    '  - id: D3', '    frage: Ohne?', '    empfehlung: ja', '    antwort: ""', '---', ''].join('\n');
+  const k: any = berichtKopf(md);
+  assert.deepEqual(k.fragen[0].alternativen, ['je Rolle', 'nur für Admins'], 'Inline-Liste');
+  assert.deepEqual(k.fragen[1].alternativen, ['nächster Sprint', 'nach dem Release', 'nie'], 'Block-Liste: ohne Empfehlung, höchstens 3');
+  assert.equal(k.fragen[2].alternativen, undefined, 'ohne alternativen: kein Feld');
+  const o = offeneEntscheidungen(md, null);
+  assert.deepEqual(o.find((x) => x.id === 'D1')!.alternativen, ['je Rolle', 'nur für Admins']);
+  const ib = baueInbox({ ...leer, karten: [karte('a1', 'Flex', o)],
+    lose: [{ id: 'q1', title: 'Wohin?', recommendation: 'Vault', options: [{ label: 'Vault' }, { label: 'Jira' }, { label: 'Nein' }], createdAt: new Date(now - 7200_000) }] }, { now });
+  const { fragen } = fragenAus(ib.eintraege);
+  assert.deepEqual(fragen.find((f) => f.teil === 'D1')!.alternativen, ['je Rolle', 'nur für Admins']);
+  assert.deepEqual(fragen.find((f) => f.teil === 'D3')!.alternativen, []);
+  assert.deepEqual(fragen.find((f) => f.art === 'rueckfrage')!.alternativen, ['Jira'], 'Rückfrage: Optionen außer Empfehlung und bloßem Nein');
+  assert.equal(altText('je Rolle'), 'Anders: je Rolle');
+  assert.equal(altText(' je Rolle ', '  aber erst ab Q1 '), 'Anders: je Rolle — aber erst ab Q1');
+});

@@ -61,12 +61,13 @@ export function PrTickerSchalter() {
         <Schalter label="Auto-Review bei @review" an={s.autoReview} disabled={busy || !s.ticker} testid="schalter-autoreview" onChange={(v) => set({ autoReview: v }, v ? 'Auto-Review an — zählt @review ab jetzt.' : 'Auto-Review aus.')} hint="startet je getaggtem PR einen Review-Unter-Chat" />
         <Schalter label="Kommentare automatisch posten" an={s.autoPost} disabled={busy || !s.autoReview} testid="schalter-autopost" onChange={(v) => set({ autoPost: v })} hint="nur als Kommentar (COMMENT); Approve/Änderungen verlangen bleibt dein Klick" />
         <Schalter label="auch bei Review-Anfrage an mich" an={s.onRequest} disabled={busy || !s.autoReview} testid="schalter-anfrage" onChange={(v) => set({ onRequest: v })} />
+        <Schalter label="Auto-Delta bei neuem Stand (Autor auf der Liste, letztes Review gepostet; Pushes in 10 min gebündelt)" an={s.autoDelta !== false} disabled={busy || !s.autoReview} testid="schalter-autodelta" onChange={(v) => set({ autoDelta: v })} />
       </div>
       <details className="small" style={{ marginBottom: 8 }}>
         <summary>Grenzen und Liste · ohne Tagesgrenze · {s.maxParallel} gleichzeitig (weitere warten) · heute {d.heute} gestartet · Auto-Review und Posten nur für {(d.reviewOrgs ?? []).join(', ')} · PR-Tests werden nicht ausgeführt</summary>
         <div className="row" style={{ gap: 10, flexWrap: 'wrap', margin: '6px 0' }}>
           <span className="muted" data-testid="deckel-tag">ohne Tagesgrenze</span>
-          <label>gleichzeitig <input className="input" type="number" min={1} max={5} defaultValue={s.maxParallel} style={{ width: 50 }} onBlur={(e) => Number(e.target.value) !== s.maxParallel && set({ maxParallel: Number(e.target.value) })} /></label>
+          <label>gleichzeitig <input className="input" type="number" min={1} max={8} defaultValue={s.maxParallel} style={{ width: 50 }} onBlur={(e) => Number(e.target.value) !== s.maxParallel && set({ maxParallel: Number(e.target.value) })} /></label>
           <label>@review zählt von <input className="input" value={allow} onChange={(e) => setAllow(e.target.value)} style={{ width: 220 }} onBlur={() => allow !== s.allow.join(', ') && set({ allow: allow.split(/[\s,]+/) })} data-testid="allowlist" /></label>
         </div>
         {s.log.length > 0 && <ul className="tiny muted" data-testid="schalt-protokoll" style={{ margin: 0 }}>{s.log.map((l: any, i: number) => <li key={i}>{fmtDateTime(l.at)} · {l.by}: {l.was}</li>)}</ul>}

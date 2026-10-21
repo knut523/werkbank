@@ -107,7 +107,7 @@ export function wienUm(datum: string, stunde: number): Date {
 export const naechsterTag = (datum: string) => new Date(Date.UTC(+datum.slice(0, 4), +datum.slice(5, 7) - 1, +datum.slice(8, 10) + 1)).toISOString().slice(0, 10);
 export const vorigerTag = (datum: string) => new Date(Date.UTC(+datum.slice(0, 4), +datum.slice(5, 7) - 1, +datum.slice(8, 10) - 1)).toISOString().slice(0, 10);
 
-export const NACHFORDER_TEXT = 'Bitte reich nur deinen Stand-Abschnitt nach (### Stand mit Erledigt, Offen, Braucht Knut, ETA und der Zeile „Status: fertig | braucht Antwort | blockiert“) — ohne weitere Arbeit. (Workspace, automatisch)';
+export const NACHFORDER_TEXT = 'Bitte reich nur deinen Stand-Abschnitt nach (### Stand mit Erledigt, Offen, Braucht Knut, ETA (nicht bei fertig) und der Zeile „Status: fertig | braucht Antwort | blockiert“) — ohne weitere Arbeit. (Workspace, automatisch)';
 
 /** Darf automatisch weggeräumt werden (K1)? Marke „fertig“, von Knut gesehen oder gepusht, keine offene Frage, 24 h seit fertig. */
 export function schliessbar(o: { zustand: Zustand; marke: string | null; gesehen: boolean; gepusht: boolean; offeneFragen: number; offeneEntscheidungen: number; doneAt: number | null; now: number }): boolean {

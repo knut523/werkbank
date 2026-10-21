@@ -5,7 +5,7 @@
 
 import { readdirSync, realpathSync } from 'node:fs';
 import { basename } from 'node:path';
-import { etaFuer, istTiefe, TIEFEN, type Tiefe } from './tiefe.ts';
+import { etaFertig, etaFuer, istTiefe, TIEFEN, type Tiefe } from './tiefe.ts';
 import { themaOf } from './themen.ts';
 import { ZUSTAND_TEXT, type Zustand } from './zustand.ts';
 
@@ -15,13 +15,19 @@ const sicher = (u: unknown) => (/^https?:\/\//.test(String(u ?? '')) ? String(u)
 /** Eine Zeile der Tabelle (rein). */
 export function zeile(d: any, o: { mediane?: Record<Tiefe, number | null> | null; now?: number } = {}) {
   const zustand: Zustand = d.reviewedAt && (d.reviewedBy === 'auto' || d.knutReviewedAt) ? 'erledigt' : (d.zustand as Zustand) ?? ALT[d.lastStatus] ?? 'laeuft';
-  const fertig = zustand === 'fertig' || zustand === 'erledigt';
+  const fertig = etaFertig({ marke: d.marke, zustand });
   const eta = etaFuer(d, { fertig, mediane: o.mediane ?? null, now: o.now });
+  const grund = String(d.zustandGrund ?? d.lastReason ?? '');
+  // Plan 274 (D9): „fertig“ gemeldet, danach technisch abgebrochen → genau so anzeigen, nicht als hängt/blockiert.
+  const ehrlich = zustand === 'fertig' && /^fertig \(danach /.test(grund) ? grund.slice(0, 90) : null;
   return {
-    id: String(d._id), titel: String(d.title ?? '(ohne Titel)'), thema: themaOf(d), zustand, zustandText: ZUSTAND_TEXT[zustand], grund: String(d.zustandGrund ?? d.lastReason ?? ''),
+    id: String(d._id), titel: String(d.title ?? '(ohne Titel)'), thema: themaOf(d), zustand, zustandText: ehrlich ?? ZUSTAND_TEXT[zustand], grund,
     tiefe: istTiefe(d.tiefe) ? d.tiefe : 'regular', eta: fertig ? null : { text: eta.text, ueberfaellig: eta.ueberfaellig },
     zuletzt: d.lastActivity ?? d.statusAt ?? d.startedAt ?? null, chat: sicher(d.url), paket: d.paket ?? null, bericht: !!d.bericht,
     autoWeg: d.reviewedBy === 'auto', abgehakt: !!d.knutReviewedAt,
+    // Live-Modus (Plan 274, D1): Knopf „Jetzt gründlich“, solange der Durchlauf nicht nach der letzten Runde angestoßen ist.
+    // gruendlichAt setzt nur eine neue Handnachricht zurück (nicht das automatische Nachsenden) — Pass C.
+    gruendlich: d.tiefe === 'live' && zustand !== 'erledigt' ? { angestossen: !!d.gruendlichAt } : null,
   };
 }
 
