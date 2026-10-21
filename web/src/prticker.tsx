@@ -5,8 +5,8 @@ import { useEffect, useState } from 'react';
 import { api, chatTarget, fmtDateTime } from './api.ts';
 import { Err, Loading, useLoad } from './ui.tsx';
 
-const KIND: Record<string, string> = { neu: '🆕', stand: '⬆️', zu: '🏁', kommentar: '💬', review: '🔎', anfrage: '🙋', tag: '🏷️' };
-const STATUS_CHIP: Record<string, string> = { wartet: '', startet: '', läuft: '', gegenprüfung: '', abgleich: '', fertig: 'ok', deckel: 'warn', fehler: 'bad', übersprungen: '' };
+const KIND: Record<string, string> = { neu: '🆕', stand: '⬆️', zu: '🏁', kommentar: '💬', review: '🔎', anfrage: '🙋', tag: '🏷️', fix: '🔧' };
+const STATUS_CHIP: Record<string, string> = { wartet: '', startet: '', läuft: '', gegenprüfung: '', abgleich: '', fertig: 'ok', deckel: 'warn', fehler: 'bad', übersprungen: '', prüft: '', abgelehnt: 'warn', nichts: '' };
 const uhr = (d: string) => new Date(d).toLocaleTimeString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', minute: '2-digit' });
 const EMPF: Record<string, { t: string; c: string }> = { approve: { t: 'approven', c: 'ok' }, 'request-changes': { t: 'Änderungen verlangen', c: 'bad' }, comment: { t: 'nur kommentieren', c: 'warn' } };
 const short = (repo: string) => repo.split('/')[1] ?? repo;
@@ -62,6 +62,7 @@ export function PrTickerSchalter() {
         <Schalter label="Kommentare automatisch posten" an={s.autoPost} disabled={busy || !s.autoReview} testid="schalter-autopost" onChange={(v) => set({ autoPost: v })} hint="nur als Kommentar (COMMENT); Approve/Änderungen verlangen bleibt dein Klick" />
         <Schalter label="auch bei Review-Anfrage an mich" an={s.onRequest} disabled={busy || !s.autoReview} testid="schalter-anfrage" onChange={(v) => set({ onRequest: v })} />
         <Schalter label="Auto-Delta bei neuem Stand (Autor auf der Liste, letztes Review gepostet; Pushes in 10 min gebündelt)" an={s.autoDelta !== false} disabled={busy || !s.autoReview} testid="schalter-autodelta" onChange={(v) => set({ autoDelta: v })} />
+        <Schalter label="@fix erlaubt" an={s.autoFix !== false} disabled={busy || !s.ticker} testid="schalter-autofix" onChange={(v) => set({ autoFix: v })} hint="Fix-Unter-Chat für @fix von der Liste; Push nur auf den PR-Zweig, nur fast-forward, nur mit grünen Tests und Pre-Push-Gate — nie Basis, nie Merge" />
       </div>
       <details className="small" style={{ marginBottom: 8 }}>
         <summary>Grenzen und Liste · ohne Tagesgrenze · {s.maxParallel} gleichzeitig (weitere warten) · heute {d.heute} gestartet · Auto-Review und Posten nur für {(d.reviewOrgs ?? []).join(', ')} · PR-Tests werden nicht ausgeführt</summary>
@@ -101,6 +102,22 @@ export function PrTickerMeldungen() {
               {r.note && <span className="tiny muted"> · {r.note}</span>}
             </li>))}
         </ul>
+      </>}
+      {(d.fixes ?? []).length > 0 && <>
+        <h3 style={{ marginBottom: 4 }}>@fix</h3>
+        <ul className="small" style={{ margin: 0, paddingLeft: 18 }} data-testid="auto-fixes">
+          {d.fixes.map((f: any) => (
+            <li key={f.id}>
+              <a href={f.url} target="_blank" rel="noreferrer">{short(f.repo)}#{f.number}</a> von {f.by}{f.auftrag ? `: ${f.auftrag}` : ' (offene Punkte des letzten Reviews)'}{' '}
+              <span className={`chip ${STATUS_CHIP[f.status] ?? ''}`} data-testid="fix-status">{f.status === 'fertig' ? 'gepusht' : f.status}</span>
+              {f.antwort && <> · <a href={f.antwort} target="_blank" rel="noreferrer">Antwort</a></>}
+              {f.strand && <> · <a href={`#/leitstand?strand=${f.strand}`}>Unter-Chat</a></>}
+              {f.note && <span className="tiny muted"> · {f.note}</span>}
+            </li>))}
+        </ul>
+        {(d.audit ?? []).length > 0 && <details className="tiny" data-testid="fix-audit"><summary>Push-Protokoll</summary><ul style={{ margin: 0 }}>
+          {d.audit.map((a: any, i: number) => <li key={i}>{fmtDateTime(a.at)} · {a.wer} · {a.pr} · {a.ergebnis} · <span className="mono">{a.zweig} {a.von}..{a.nach}</span> · Gate {a.gate ? (a.gate.exit === 0 ? '0 harte' : `${a.gate.hart} harte / Exit ${a.gate.exit}`) : '–'}{(a.gruende ?? []).length ? ` · ${a.gruende.join('; ')}` : ''}</li>)}
+        </ul></details>}
       </>}
 
       <h3 style={{ marginBottom: 4 }}>Was ist neu</h3>

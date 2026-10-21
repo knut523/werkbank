@@ -5,7 +5,8 @@
 // fill`, ohne GIT_VW_READ) — nur im Speicher dieses Aufrufs, nie im Log, nie im Frontend.
 // Dazu (Knut 17.10.2026, Release 17c): EINE Statuszeile je Auto-Review als Issue-Kommentar am PR, die danach nur bearbeitet
 // wird (POST …/issues/{n}/comments, PATCH …/issues/comments/{id}).
-// Not-Aus: WERKBANK_GITHUB_KOMMENTAR=off (alles), WERKBANK_REVIEW_STATUS=off (nur die Statuszeile, prreview.ts).
+// Not-Aus: WERKBANK_GITHUB_KOMMENTAR=off (alles, auch der `@fix`-Push), WERKBANK_REVIEW_STATUS=off (nur die Statuszeile, prreview.ts).
+// Zweiter Schreibweg (Knut 21.10.2026, Plan 286): `@fix`-Push auf den Kopf-Zweig eines PRs — siehe prfix.ts (pushVia).
 
 import { execFile } from 'node:child_process';
 
@@ -15,7 +16,8 @@ const REPO_RE = /^[\w.-]{1,100}\/[\w.-]{1,100}$/;
 
 export const schreibenAus = (env = process.env) => env.WERKBANK_GITHUB_KOMMENTAR === 'off';
 
-function writeToken(repo: string): Promise<string | null> {
+// Plan 286: auch der `@fix`-Push (prfix.ts, nur WirStrom1 nach pushPruefung) holt sein Token hier — nur im Speicher.
+export function writeToken(repo: string): Promise<string | null> {
   if (process.env.WERKBANK_GITHUB_WRITE_TOKEN) return Promise.resolve(process.env.WERKBANK_GITHUB_WRITE_TOKEN);
   const env: Record<string, string | undefined> = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false' };
   delete env.GIT_VW_READ;

@@ -71,7 +71,8 @@ import { regelDir, regelVorschlaege } from './regelquelle.ts';
 import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
 import { meliousPassC } from './gegenpruefung.ts';
-import { postReview, statusKommentar, schreibenAus, type ReviewEvent } from './githubwrite.ts';
+import { postReview, statusKommentar, schreibenAus, writeToken, type ReviewEvent } from './githubwrite.ts';
+import { fixTick, fixOverview, prLageVia, pushVia, gateVia } from './prfix.ts';
 import { paketIndex, paketZahlen } from './pakete.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
@@ -1999,7 +2000,7 @@ async function prReviewOf(strand: string) {
     text: k?.text ?? null, hash: k ? entwurfHash(k.text) : null, vollstaendig: r.entwurf?.vollstaendig ?? null, statistik: r.entwurf?.statistik ?? null, gedaechtnis: r.gedaechtnis ?? null,
     posted: r.posted ?? null, verworfen: r.verworfen ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus() };
 }
-on('GET', /^\/api\/leitstand\/ticker$/, async (req, res) => { await needAdmin(req); send(res, 200, await tickerOverview()); });
+on('GET', /^\/api\/leitstand\/ticker$/, async (req, res) => { await needAdmin(req); send(res, 200, { ...(await tickerOverview()), ...(await fixOverview()) }); });
 // Review-Log (Knut 17.10.): je Review eine Zeile, neueste oben; Filter Person/Repo/Status. Nur lesen.
 on('GET', /^\/api\/leitstand\/ticker\/log$/, async (req, res) => {
   await needAdmin(req);
@@ -2009,7 +2010,7 @@ on('GET', /^\/api\/leitstand\/ticker\/log$/, async (req, res) => {
 on('POST', /^\/api\/leitstand\/ticker\/einstellungen$/, async (req, res) => {
   const u = await needAdmin(req);
   const s = await setTickerSettings(await body(req), { id: u.id, name: u.name });
-  log('pr-ticker einstellungen', { user: u.id, ticker: s.ticker, autoReview: s.autoReview, autoPost: s.autoPost });
+  log('pr-ticker einstellungen', { user: u.id, ticker: s.ticker, autoReview: s.autoReview, autoPost: s.autoPost, autoFix: s.autoFix });
   send(res, 200, { ok: true, settings: s });
 });
 on('POST', /^\/api\/leitstand\/ticker\/jetzt$/, async (req, res) => {
@@ -3828,6 +3829,27 @@ async function backgroundJobs() {
       });
       if (r.started || r.done) log('pr-review', r);
     } catch (e: any) { log('pr-review', { error: String(e.message).slice(0, 200) }); }
+    // Plan 286: `@fix` — eigener Takt, nicht abgewartet (Tests und Gate dauern Minuten; fixTick läuft nie doppelt).
+    // Der Strang bekommt kein GitHub; gepusht wird hier, nach pushPruefung, mit dem Schreibtoken (nur WirStrom1, nur der PR-Zweig).
+    const gateSkript = regelDir() ? join(regelDir()!, 'pre-push-gate.sh') : null;
+    void fixTick({
+      userById: async (id) => { const u = await userById(id); return u && allowed(u.email) && u.role === 'ADMIN' ? u : null; },
+      startOrch, strandDoc: (id) => orchRuns().findOne({ _id: id as any }),
+      pr: async (repo, n) => { const t = await githubReadToken(); return t ? prLageVia(t, repo, n) : null; },
+      kontext: async (repo, n) => { const t = await githubReadToken(); return t ? prKontextVia(t, repo, n) : null; },
+      status: (f, text, id) => statusKommentar(f, text, id),
+      kommentar: (f, text) => statusKommentar(f, text, null),
+      tests: execModus() === 'off' ? undefined : (job) => lokalAdapter({ git: async (args, cwd) => String(await realGit(args, cwd)), log: (m) => log('pr-fix tests', { m }) }).lauf(job),
+      gate: gateSkript && existsSync(gateSkript) ? (wt, zweig, basis) => gateVia(gateSkript, wt, zweig, basis) : undefined,
+      gatePfad: gateSkript,
+      push: schreibenAus() ? undefined : (repo, klon, sha, zweig) => pushVia(repo, klon, sha, zweig, () => writeToken(repo)),
+      melde: async (f, text) => {
+        const u = f?.ownerId ? await userById(f.ownerId) : null;
+        if (!u) return false;
+        return meldeLeitstand(u, { _id: `pr-fix:${f._id}`, title: `@fix ${String(f.repo).split('/')[1]}#${f.number}` }, `${text} → Ticker: ${cfg.publicUrl}/#/roadmap/prs`);
+      },
+      log,
+    }).then((r) => { if (r.started || r.done) log('pr-fix', r); }, (e: any) => log('pr-fix', { error: String(e?.message ?? e).slice(0, 200) }));
   };
   setTimeout(prTick, 20_000);
   setInterval(prTick, 60_000);

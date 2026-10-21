@@ -75,10 +75,10 @@ export async function prepareWorktree(repo: string, n: number, head: string, g: 
 }
 
 /** Nächste freie Paketnummer im Ordner der Review-Pakete → `NNN-review-<repo>-<n>`. */
-export function nextPaket(repo: string, n: number, dir = reviewDir()): string {
+export function nextPaket(repo: string, n: number, dir = reviewDir(), art: 'review' | 'fix' = 'review'): string {
   let max = 0;
   try { for (const name of readdirSync(dir)) { const m = /^(\d{1,4})-/.exec(name); if (m) max = Math.max(max, Number(m[1])); } } catch { /* leer */ }
-  const slug = `review-${repo.split('/')[1]}-${n}`.toLowerCase().replace(/[^\w.-]+/g, '-');
+  const slug = `${art}-${repo.split('/')[1]}-${n}`.toLowerCase().replace(/[^\w.-]+/g, '-');
   return `${String(max + 1).padStart(3, '0')}-${slug}`;
 }
 
@@ -587,7 +587,7 @@ export function nachbessernText(paket: string, probleme: string[], motor = motor
   ].join('\n');
 }
 
-const GEHEIM = /\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY|\bAKIA[0-9A-Z]{16}\b|\b(password|passwort|secret|token|api[_-]?key)\s*[=:]\s*\S{6,}|mongodb(\+srv)?:\/\/[^\s:]+:[^\s@]+@|\bsk-[A-Za-z0-9_-]{20,}/i;
+export const GEHEIM = /\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY|\bAKIA[0-9A-Z]{16}\b|\b(password|passwort|secret|token|api[_-]?key)\s*[=:]\s*\S{6,}|mongodb(\+srv)?:\/\/[^\s:]+:[^\s@]+@|\bsk-[A-Za-z0-9_-]{20,}/i;
 
 // Englisch: geht nach GitHub (olaf-docs/AGENTS.md).
 /** Erste Zeile jedes automatisch geposteten Ergebnisses (Knut 17.10.). */

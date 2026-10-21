@@ -16,6 +16,8 @@ export interface TickerSettings {
   ticker: boolean; autoReview: boolean; autoPost: boolean; onRequest: boolean;
   /** Auto-Delta bei neuem Stand (Release 20b, Knut 20.10.: „if chris posts his fixes directly also review them“). */
   autoDelta: boolean;
+  /** `@fix` (Plan 286, Knut 21.10.): Fix-Strang + automatischer Push auf den PR-Zweig, nur für die Erlaubtliste. */
+  autoFix: boolean;
   /** Entfallen (Knut 17.10.: „nimm den Deckel komplett raus“) — immer 0 = ohne Tagesgrenze; nur noch für alte Dokumente. */
   allow: string[]; maxPerDay: number; maxParallel: number; minutes: number;
   ownerId: string | null; autoReviewSince: string | null;
@@ -23,7 +25,7 @@ export interface TickerSettings {
 }
 
 export const DEFAULTS: TickerSettings = {
-  ticker: false, autoReview: false, autoPost: true, onRequest: false, autoDelta: true,
+  ticker: false, autoReview: false, autoPost: true, onRequest: false, autoDelta: true, autoFix: true,
   allow: ['knut523', 'bizarrochris'], maxPerDay: 0, maxParallel: 2, minutes: 5,
   ownerId: null, autoReviewSince: null, log: [],
 };
@@ -56,7 +58,7 @@ const clampInt = (v: unknown, lo: number, hi: number, dflt: number) => { const n
 export function mergeSettings(cur: TickerSettings, inp: any, by: { id: string; name: string }, now = new Date()): TickerSettings {
   const next: TickerSettings = { ...cur, log: [...cur.log] };
   const was: string[] = [];
-  for (const k of ['ticker', 'autoReview', 'autoPost', 'onRequest', 'autoDelta'] as const) {
+  for (const k of ['ticker', 'autoReview', 'autoPost', 'onRequest', 'autoDelta', 'autoFix'] as const) {
     if (typeof inp?.[k] === 'boolean' && inp[k] !== cur[k]) { next[k] = inp[k]; was.push(`${k} ${inp[k] ? 'an' : 'aus'}`); }
   }
   if (Array.isArray(inp?.allow)) {
@@ -83,6 +85,9 @@ export async function setTickerSettings(inp: any, by: { id: string; name: string
 /** Knut 15.10. (D2/D3): Auto-Review und automatisches Posten nur für Repos dieser Organisationen (Ticker sieht mehr). */
 export const reviewOrgs = (env = process.env) => String(env.WERKBANK_PR_REVIEW_ORGS || 'WirStrom1').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 export const reviewErlaubt = (repo: string, env = process.env) => reviewOrgs(env).includes(String(repo).split('/')[0].toLowerCase());
+/** Plan 286: `@fix` mit automatischem Push nur für Repos dieser Organisationen (Vorgabe WirStrom1, nie knut523/werkbank). */
+export const fixOrgs = (env = process.env) => String(env.WERKBANK_FIX_ORGS || 'WirStrom1').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+export const fixRepoErlaubt = (repo: string, env = process.env) => /^[\w.-]{1,100}\/[\w.-]{1,100}$/.test(String(repo)) && fixOrgs(env).includes(String(repo).split('/')[0].toLowerCase());
 
 export const scopes = (env = process.env) => String(env.WERKBANK_TICKER_SCOPE || 'org:WirStrom1,repo:knut523/werkbank')
   .split(',').map((s) => s.trim()).filter((s) => /^(org|repo|user):[\w.\/-]+$/.test(s)).slice(0, 4);
@@ -122,8 +127,10 @@ export async function fetchTicker(token: string, since: Date, env = process.env)
 
 // ---------- Ereignisse (rein) ----------
 
-export type Kind = 'neu' | 'stand' | 'zu' | 'kommentar' | 'review' | 'anfrage' | 'tag' | 'erledigt';
-export interface TickerEvent { _id: string; kind: Kind; repo: string; number: number; title: string; url: string; prUrl: string; actor: string | null; text: string; at: string; head: string }
+export type Kind = 'neu' | 'stand' | 'zu' | 'kommentar' | 'review' | 'anfrage' | 'tag' | 'erledigt' | 'fix';
+export interface TickerEvent { _id: string; kind: Kind; repo: string; number: number; title: string; url: string; prUrl: string; actor: string | null; text: string; at: string; head: string;
+  /** nur `fix`: Auftrag (Text nach @fix, leer = offene Punkte des letzten Reviews), Art und Ort (Inline: Datei:Zeile) */
+  fix?: { auftrag: string; quelle: 'kommentar' | 'review' | 'inline'; ort: string | null } }
 export interface PrMem { _id: string; head: string; state: string; at?: Date | string }
 /** Paket 269 (#215): Überlappung des Lesefensters. Die GitHub-Suche hinkt Minuten hinterher; bei 2 min und Takt 1 min lag ein
  *  Tag schon vor dem Fenster, als die Suche den PR endlich lieferte. Doppeltes fängt die feste Kennung ab. */
@@ -133,6 +140,14 @@ export const TAG = /(^|[\s(])@review\b/i;
 /** `@review deep` → Tiefe deep (Knut 17.10.). */
 export const TAG_DEEP = /(^|[\s(])@review\s+deep\b/i;
 /** Ereignistext eines Tags: „deep“ muss erhalten bleiben, sonst sieht queueReviews es nie (Fehler 19.10.). */
+/** Plan 286: `@fix` — eigene Regex, Wortgrenze wie `@review` (`@fixes`, `@fix-it`, `mail@fix.de` zählen nicht). */
+export const FIX_TAG = /(^|[\s(])@fix\b(?![-\w])/i;
+/** Auftrag hinter `@fix` (bis 4000 Zeichen); leer = „alle offenen Punkte des letzten Reviews dieser Person“. */
+export function fixAuftrag(body: string | null | undefined): string {
+  const t = String(body ?? '');
+  const m = FIX_TAG.exec(t);
+  return m ? t.slice(m.index + m[0].length).replace(/^[\s:,.\-–—]+/, '').trim().slice(0, 4000) : '';
+}
 const tagText = (body: string | null | undefined, who: string) => `${TAG_DEEP.test(body ?? '') ? '@review deep' : '@review'} von ${who}`;
 /** Paket 223 (#364: „Nits 1–2 addressed“ ohne @review): meldet der PR-Autor Punkte als erledigt? Verneint („not done yet“,
  *  „noch nicht behoben“) zählt nicht; ein Treffer ohne Verneinung davor reicht. */
@@ -183,9 +198,18 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
     // Kommentare im Knoten sind aktuell (kein Suchindex): was vor dem letzten Sehen lag, war damals schon da; 2 min für Uhren.
     const gesehen = before?.at ? new Date(new Date(before.at).getTime() - 2 * 60_000) : null;
     const ab = gesehen && !isNaN(+gesehen) && ghTime(gesehen) < since ? ghTime(gesehen) : since;
+    // Plan 286: `@fix` zusätzlich zu allem anderen (ein Kommentar darf `@review` und `@fix` tragen).
+    const fix = (id: string, at: string, who: string, body: string, url: string, quelle: 'kommentar' | 'review' | 'inline', ort: string | null = null) => {
+      if (!FIX_TAG.test(body) || !allowSet.has(who) || state !== 'OPEN') return;
+      // Eigene Status-/Antwort-Kommentare des Workspace (unter Knuts Konto) lösen nie aus — Knuts eigenes @fix schon.
+      if (who === ME && body.includes('(OLAF Workspace)')) return;
+      const auftrag = fixAuftrag(body);
+      events.push({ _id: `fix:${id}`, kind: 'fix', at, actor: who, text: `@fix von ${who}${ort ? ` (${ort})` : ''}${auftrag ? `: ${kurz(auftrag, 100)}` : ' (offene Punkte des letzten Reviews)'}`, url, ...base, fix: { auftrag, quelle, ort } });
+    };
     for (const c of p.comments?.nodes ?? []) {
       const who = (c.author?.login ?? '').toLowerCase();
       if (!c.id || c.createdAt < ab) continue;
+      fix(c.id, c.createdAt, who, c.body ?? '', c.url ?? p.url, 'kommentar');
       if (TAG.test(c.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${c.id}`, 'tag', c.createdAt, who, tagText(c.body, who), c.url);
       else if (who && who === author && who !== ME && allowSet.has(who) && state === 'OPEN' && meldetErledigt(c.body)) ev(`erledigt:${c.id}`, 'erledigt', c.createdAt, who, `${who} meldet erledigt: ${kurz(c.body, 100)}`, c.url);
       else if (ours && who && who !== ME) ev(`c:${c.id}`, 'kommentar', c.createdAt, who, `Kommentar von ${who}: ${kurz(c.body, 120)}`, c.url);
@@ -193,6 +217,8 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
     for (const r of p.reviews?.nodes ?? []) {
       const who = (r.author?.login ?? '').toLowerCase();
       if (!r.id || !r.submittedAt || r.submittedAt < ab) continue;
+      if (FIX_TAG.test(r.body ?? '')) fix(r.id, r.submittedAt, who, r.body ?? '', r.url ?? p.url, 'review');
+      else (r.comments?.nodes ?? []).forEach((ic: any, i: number) => fix(`${r.id}:${i}`, r.submittedAt, who, ic?.body ?? '', r.url ?? p.url, 'inline', ic?.path ? `${ic.path}:${ic.line ?? ic.originalLine ?? '?'}` : null));
       if (TAG.test(r.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${r.id}`, 'tag', r.submittedAt, who, tagText(r.body, who), r.url);
       else if (who && who === author && who !== ME && allowSet.has(who) && state === 'OPEN' && meldetErledigt(r.body)) ev(`erledigt:${r.id}`, 'erledigt', r.submittedAt, who, `${who} meldet erledigt: ${kurz(r.body, 100)}`, r.url);
       else if (ours && who && who !== ME && r.state !== 'PENDING') ev(`r:${r.id}`, 'review', r.submittedAt, who, `Review von ${who}: ${REVIEW_STATE[r.state] ?? r.state}${r.body ? ` — ${kurz(r.body, 100)}` : ''}`, r.url);
@@ -269,6 +295,7 @@ export async function tickerTick(getToken: () => Promise<string | null>, now = n
     }
     if (mem.length) await prState().bulkWrite(mem.map((m) => ({ replaceOne: { filter: { _id: m._id as any }, replacement: { ...m, at: now }, upsert: true } })));
     const reviews = await queueReviews(fresh, s, now);
+    await queueFixes(fresh, s, now);
     // Plan 274 (Zusatz A): Reviews/Kommentare der Erlaubtliste als Regel-Quelle für das Pre-Push-Gate (nur mit WERKBANK_REGEL_DIR).
     const regel = await regelAnhaengen(regelZeilen(got.prs, ghTime(since), s.allow, ME), now).catch(() => 0);
     // Paket 223: lag der letzte erfolgreiche Lauf > 30 min zurück (Web-App aus, kein Token), merkt sich der Lauf die Lücke —
@@ -305,6 +332,25 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
       const hoch = e.kind === 'tag' && TAG_DEEP.test(e.text ?? '') ? (await reviewsCol().updateOne({ _id: id as any, status: 'wartet', deep: { $ne: true } }, { $set: { deep: true } })).modifiedCount : 0;
       await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: hoch ? 'Tiefe auf deep angehoben (wartet noch)' : 'schon reviewt für diesen Stand' } });
     }
+  }
+  return n;
+}
+
+export const fixesCol = () => wb().collection('pr_fixes');
+
+/** Plan 286: `@fix`-Ereignisse → Warteschlange `pr_fixes` (eine Kennung je Kommentar). Den Fix-Strang startet prfix.ts. */
+export async function queueFixes(fresh: TickerEvent[], s: TickerSettings, now = new Date()): Promise<number> {
+  let n = 0;
+  for (const e of fresh) {
+    if (e.kind !== 'fix' || !e.fix) continue;
+    const nein = !s.autoFix ? '@fix ist aus (Ticker-Einstellungen)' : !s.ownerId ? '@fix: niemand hat Auto-Review eingeschaltet (Besitzer fehlt)'
+      : !fixRepoErlaubt(e.repo) ? '@fix nicht für dieses Repo (WERKBANK_FIX_ORGS)' : !e.actor || !s.allow.includes(e.actor) ? '@fix: Person nicht auf der Liste' : null;
+    if (nein) { await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: nein } }); continue; }
+    try {
+      await fixesCol().insertOne({ _id: e._id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, quelle: e.url, headTag: e.head, by: e.actor, auftrag: e.fix.auftrag, art: e.fix.quelle, ort: e.fix.ort, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date });
+      await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: 'Fix eingereiht' } });
+      n++;
+    } catch (x: any) { if (x?.code !== 11000) throw x; }
   }
   return n;
 }
