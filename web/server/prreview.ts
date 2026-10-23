@@ -461,7 +461,17 @@ export function speicherStand(): { echtGb: number; hostFreiGb: number } | null {
     return { echtGb: (wert('anon') + wert('slab_unreclaimable')) / 1e9, hostFreiGb: frei / 1e6 };
   } catch { return null; }
 }
-export const SPEICHER = { echtMaxGb: 9, hostMinGb: 6, hostNotGb: 3 };
+// Schwellen (q-d76f5c, 23.10.2026): knapp = keine schweren Starts unter hostMinGb, zurück auf grün erst ab hostGruenGb
+// (Hysterese, damit der Wächter nicht pendelt, wenn der Host um die Schwelle schwankt); kritisch unter hostNotGb sofort.
+// meldungPauseMin: höchstens eine „knapp“/„grün“-Meldung je so viele Minuten an den Hauptchat — kritisch ungehindert.
+// Per Umgebungsvariable überschreibbar (WERKBANK_BOX_KNAPP_GB, WERKBANK_BOX_GRUEN_GB, WERKBANK_BOX_PAUSE_MIN).
+const envNum = (name: string) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : null; };
+export const SPEICHER = {
+  echtMaxGb: 9, hostNotGb: 3,
+  hostMinGb: envNum('WERKBANK_BOX_KNAPP_GB') ?? 6,
+  hostGruenGb: envNum('WERKBANK_BOX_GRUEN_GB') ?? 8,
+  meldungPauseMin: envNum('WERKBANK_BOX_PAUSE_MIN') ?? 30,
+};
 
 // Review-Schlange (Release 20b, Knut 20.10.2026: „warum so lange, nicht mehr als 2 möglich?“): gegen maxParallel zählen nur Phasen,
 // in denen gerechnet wird — „abgleich“ heißt: Claude prüft die Melious-Befunde am Code nach. „gegenprüfung“ wartet nur auf Melious
