@@ -1765,7 +1765,7 @@ on('GET', /^\/api\/arbeit\/unterchats$/, async (req, res, _m, url) => {
 // offenen Fragen (dieselben Karten wie die Entscheidungsseite, beantwortet wird über deren Endpunkt), bei „in Review“ das Paket mit
 // „passt“ / „Änderung“ (die vorhandenen Endpunkte /api/leitstand/strands/<id>/passt|reply). Nur lesen.
 async function chatStatusListe(u: User) {
-  const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(60).toArray()) as any[]).filter(offenFuerKnut);
+  const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(200).toArray()) as any[]).filter(offenFuerKnut);
   const offenJe = offeneJeStrang((await inboxFuer(u)).eintraege);
   const strange = docs.map((d) => { const n = offenJe.get(String(d._id)) ?? 0; return { id: String(d._id), conv: d.conv ?? null, titel: String(d.title ?? ''), offen: n, ...chatStatusVon(d, n) }; });
   return { strange, zaehler: zaehleChat(strange.map((x) => x.status)) };

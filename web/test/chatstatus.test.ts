@@ -10,6 +10,8 @@ const ZUSTAENDE: Zustand[] = ['laeuft', 'schlange', 'wartet', 'stand-fehlt', 'ha
 test('Schalter: Vorgabe aus', () => {
   assert.equal(chatStatusAn({}), false);
   assert.equal(chatStatusAn({ WERKBANK_CHAT_STATUS: '1' }), true);
+  assert.equal(chatStatusAn({ WERKBANK_CHAT_STATUS: '0' }), false);
+  assert.equal(chatStatusAn({ WERKBANK_CHAT_STATUS: '' }), false);
 });
 
 test('feste Menge: fünf Status, jeder mit Text und Rang', () => {
@@ -90,6 +92,6 @@ test('Arbeit-Zeile: ohne Schalter kein Chat-Status, mit Schalter genau einer —
   assert.equal(z.cs?.status, 'review'); assert.equal(z.cs?.text, 'in Review');
   assert.equal(zeile(d('b', 'fertig'), { offeneFragen: 2 }).cs?.status, 'braucht');
   assert.equal(zeile(d('c', 'fertig', { knutReviewedAt: new Date() }), { offeneFragen: 0 }).cs?.status, 'fertig');
-  const sortiert = sortiere([zeile(d('l', 'laeuft'), { offeneFragen: 0 }), zeile(d('r', 'fertig'), { offeneFragen: 0 }), zeile(d('b', 'wartet'), { offeneFragen: 1 })]).map((x) => x.id);
-  assert.deepEqual(sortiert, ['b', 'r', 'l']);
+  const sortiert = sortiere([zeile(d('l', 'laeuft'), { offeneFragen: 0 }), zeile(d('r', 'fertig'), { offeneFragen: 0 }), zeile(d('h', 'haengt'), { offeneFragen: 0 }), zeile(d('b', 'wartet'), { offeneFragen: 1 })]).map((x) => x.id);
+  assert.deepEqual(sortiert, ['b', 'r', 'h', 'l']);
 });

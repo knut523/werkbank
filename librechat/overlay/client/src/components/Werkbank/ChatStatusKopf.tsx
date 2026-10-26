@@ -13,22 +13,25 @@ function ChatStatusKopf({ conversationId }: { conversationId?: string | null }) 
   const [k, setK] = useState<Kopf | null>(null);
   const [zu, setZu] = useState(false);
   const [hoehe, setHoehe] = useState(160);
-  const lade = useCallback(async () => {
+  const lade = useCallback(async (aktuell: () => boolean) => {
     if (!conversationId || conversationId === 'new') { setK(null); return; }
     try {
       const r = await fetch(`/werkbank/api/chatstatus/${encodeURIComponent(conversationId)}`, { credentials: 'same-origin' });
       const j: any = r.ok ? await r.json() : null;
-      setK(j?.an && j.strang ? { id: j.id, status: j.status, text: j.text, grund: j.grund } : null);
-    } catch { setK(null); }
+      // Eine späte Antwort für den vorigen Chat darf den neuen nicht überschreiben.
+      if (aktuell()) { setK(j?.an && j.strang ? { id: j.id, status: j.status, text: j.text, grund: j.grund } : null); }
+    } catch { if (aktuell()) { setK(null); } }
   }, [conversationId]);
   useEffect(() => {
-    lade();
-    const t = setInterval(() => { if (document.visibilityState === 'visible') lade(); }, 15_000);
-    return () => clearInterval(t);
+    let weg = false;
+    const aktuell = () => !weg;
+    lade(aktuell);
+    const t = setInterval(() => { if (document.visibilityState === 'visible') { lade(aktuell); } }, 15_000);
+    return () => { weg = true; clearInterval(t); };
   }, [lade]);
   useEffect(() => {
     const f = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin || e.data?.type !== 'werkbank-chatkarte' || e.data.id !== k?.id) { return; }
+      if (e.origin !== window.location.origin || e.data?.type !== 'werkbank-chatkarte' || !k || e.data.id !== k.id) { return; }
       setHoehe(Math.min(Math.max(Number(e.data.hoehe) || 0, 60), 640));
     };
     window.addEventListener('message', f);
@@ -44,7 +47,7 @@ function ChatStatusKopf({ conversationId }: { conversationId?: string | null }) 
         <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">{k.grund}</span>
       </button>
       {karte && !zu && (
-        <iframe title="Karte zu diesem Chat" src={`/werkbank/#/chatkarte/${k.id}`} className="mt-2 w-full rounded-md border-0" style={{ height: hoehe }} data-testid="chatstatus-karte" />
+        <iframe title="Karte zu diesem Chat" src={`/werkbank/#/chatkarte/${encodeURIComponent(k.id)}`} className="mt-2 w-full rounded-md border-0" style={{ height: hoehe }} data-testid="chatstatus-karte" />
       )}
     </div>
   );

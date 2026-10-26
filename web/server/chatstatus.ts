@@ -55,7 +55,7 @@ export function offeneJeStrang(eintraege: InboxEintrag[]): Map<string, number> {
   for (const e of eintraege) {
     const s = e.quelle?.strand;
     if (!s || (e.art !== 'entscheidung' && e.art !== 'rueckfrage' && e.art !== 'braucht')) continue;
-    const n = e.art === 'entscheidung' ? ((e.daten.entscheidungen as unknown[]) ?? []).length : 1;
+    const n = e.art === 'entscheidung' ? ((e.daten?.entscheidungen as unknown[]) ?? []).length : 1;
     if (n) m.set(s, (m.get(s) ?? 0) + n);
   }
   return m;
