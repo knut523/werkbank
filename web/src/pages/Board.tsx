@@ -472,7 +472,7 @@ function JiraKette({ issueKey }: { issueKey: string }) {
             <span className="tiny">{k.repo || 'Repo offen'} · {fmtDateTime(k.updatedAt)}</span>
           </div>
           {k.state === 'plan_frage' && <p className="small">Der Plan wartet auf deine Freigabe → <a href="#/entscheidungen">Entscheidungen</a>.</p>}
-          {k.state === 'push_frage' && <p className="small">Bau fertig. Ansehen und „Freigeben zum Push“ in der Review-Ansicht des Bau-Strangs → <a href="#/arbeit">Arbeit</a>.</p>}
+          {k.state === 'push_frage' && <p className="small">Bau fertig. Ansehen und „Freigeben zum Push“ in der Review-Ansicht des Bau-Chats → <a href="#/arbeit">Arbeit</a>.</p>}
           {k.fehler && <p className="err small">{k.fehler}</p>}
           {k.pr && <p className="small">Draft-PR: <a href={k.pr} target="_blank" rel="noreferrer">{k.pr}</a></p>}
           {k.trocken && <p className="small muted">{k.trocken}</p>}

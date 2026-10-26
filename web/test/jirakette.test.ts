@@ -23,7 +23,7 @@ before(async () => { await db.connect(); raw = await MongoClient.connect(TEST_MO
 after(async () => { await raw.db(process.env.WERKBANK_DB).dropDatabase(); await raw.close(); process.exit(0); });
 
 const SHA = 'a'.repeat(40), SHA2 = 'b'.repeat(40);
-const U: any = { id: 'u1', name: 'Knut', email: 'k@x.at', role: 'ADMIN' };
+const U: any = { id: 'u1', name: 'Knut', email: 'k@example.com', role: 'ADMIN' };
 
 // ---------- Schalter ----------
 test('ketteModus: Vorgabe aus; trocken und live; Unbekanntes gilt als aus (mit Hinweis)', () => {
@@ -71,7 +71,7 @@ test('plan: wartet, bis Strang fertig UND plan.md da ist; failed → fehler', ()
   assert.equal(K.naechsterSchritt(k, sig({ strang: { status: 'done' }, planDa: false })).art, 'warten');
   assert.equal(K.naechsterSchritt(k, sig({ strang: { status: 'done' }, planDa: true })).art, 'frage_plan');
   assert.equal(K.naechsterSchritt(k, sig({ strang: { status: 'waiting' }, planDa: true })).art, 'frage_plan');
-  assert.deepEqual(K.naechsterSchritt(k, sig({ strang: { status: 'failed' } })), { art: 'ende', zustand: 'fehler', grund: 'Plan-Strang: failed' });
+  assert.deepEqual(K.naechsterSchritt(k, sig({ strang: { status: 'failed' } })), { art: 'ende', zustand: 'fehler', grund: 'Plan-Chat: failed' });
 });
 test('plan_frage: offen wartet; Freigeben → bau; Verwerfen → abgelehnt; Nachbessern nur mit Text', () => {
   const k = { state: 'plan_frage' as const, head: null };

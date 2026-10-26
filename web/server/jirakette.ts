@@ -178,7 +178,7 @@ export function naechsterSchritt(k: Pick<Kette, 'state' | 'head'>, s: Signale): 
   switch (k.state) {
     case 'plan':
       if (!s.strang) return { art: 'warten', grund: 'Strang nicht lesbar' };
-      if (s.strang.status === 'failed' || s.strang.status === 'blocked_g0') return { art: 'ende', zustand: 'fehler', grund: `Plan-Strang: ${s.strang.status}` };
+      if (s.strang.status === 'failed' || s.strang.status === 'blocked_g0') return { art: 'ende', zustand: 'fehler', grund: `Plan-Chat: ${s.strang.status}` };
       if (!strangFertig(s.strang)) return { art: 'warten', grund: 'Plan wird geschrieben' };
       return s.planDa ? { art: 'frage_plan' } : { art: 'warten', grund: 'Strang fertig, aber plan.md fehlt noch' };
     case 'plan_frage': {
@@ -191,7 +191,7 @@ export function naechsterSchritt(k: Pick<Kette, 'state' | 'head'>, s: Signale): 
     }
     case 'bau':
       if (!s.strang) return { art: 'warten', grund: 'Strang nicht lesbar' };
-      if (s.strang.status === 'failed' || s.strang.status === 'blocked_g0') return { art: 'ende', zustand: 'fehler', grund: `Bau-Strang: ${s.strang.status}` };
+      if (s.strang.status === 'failed' || s.strang.status === 'blocked_g0') return { art: 'ende', zustand: 'fehler', grund: `Bau-Chat: ${s.strang.status}` };
       if (!strangFertig(s.strang)) return { art: 'warten', grund: 'Bau läuft' };
       if (!s.fakten) return { art: 'ende', zustand: 'fehler', grund: 'Arbeitsordner des Bau-Strangs nicht lesbar' };
       if (!s.fakten.commits) return { art: 'ende', zustand: 'fehler', grund: 'Bau-Strang fertig, aber kein Commit gegenüber der Basis' };
@@ -356,7 +356,7 @@ async function schrittOhneClaim(k: any, deps: KDeps, env: Record<string, string 
     case 'frage_push': {
       const f = deps.fakten(k.bauCwd);
       await setze(k, { state: 'push_frage', head: f.head, basis: f.baseRef ? f.baseRef.replace(/^origin\//, '') : null }, `Bau fertig (${f.head.slice(0, 7)}), wartet auf „Freigeben zum Push“`);
-      await deps.melde?.(u, k, `Kette ${k.key}: Bau fertig — bitte in der Review-Ansicht des Strangs ${k.bauStrand} ansehen und „Freigeben zum Push“. Dann öffnet der Server den Draft-PR.`);
+      await deps.melde?.(u, k, `Kette ${k.key}: Bau fertig — bitte in der Review-Ansicht des Bau-Chats (${k.bauStrand}) ansehen und „Freigeben zum Push“. Dann öffnet der Server den Draft-PR.`);
       return 'wartet auf Push-Freigabe';
     }
     case 'ausfuehren':
