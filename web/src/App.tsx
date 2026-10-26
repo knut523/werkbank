@@ -16,6 +16,7 @@ import { Entscheidungen } from './pages/Entscheidungen.tsx';
 import { LeadSeite } from './pages/Lead.tsx';
 import { ArbeitUnterchats, ArbeitReviews } from './pages/Arbeit.tsx';
 import { Ablage } from './pages/Ablage.tsx';
+import { ChatKarte } from './chatkarte.tsx';
 import { useTodayCount } from './beimir.tsx';
 import { einLoginUmleiten, einLoginZiel } from './einlogin.ts';
 
@@ -186,6 +187,9 @@ export function App() {
   if (embedded && !user) {
     return <div className="page"><h1>OLAF Workspace</h1><p className="muted">Dein Chat-Konto ist für den OLAF Workspace noch nicht freigeschaltet (Pilot) — oder die Anmeldung ist abgelaufen. Seite neu laden; hilft das nicht, frag Knut.</p></div>;
   }
+  // Karte am Chat (Release 29): nur die Karte, ohne Leiste — das ist die Seite, die LibreChat oben im Chat einbettet.
+  const ck = user && /^#\/chatkarte\/([0-9a-f]{8}|[0-9a-f-]{36})/.exec(hash);
+  if (ck) return <div className="embedded ck-einbett"><ChatKarte id={ck[1]} /></div>;
   // Freigabe je Funktion (web/server/features.ts): Admins alles, das Team nur, was Knut freigegeben hat.
   const vis = (n: { f: string }) => !n.f || cfg.features?.[n.f] !== false;
   // Bereiche mit ihren freigegebenen Reitern; ein Bereich ohne freigegebenen Reiter fehlt ganz.

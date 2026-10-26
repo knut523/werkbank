@@ -12,14 +12,15 @@ import { usePushFreigeben } from '../freigabe.tsx';
 import { EntscheidZeile } from './Morgenlage.tsx';
 import { altText } from '../alternativen.ts';
 
-type Frage = { id: string; eintrag: string; teil: string | null; art: string; gruppe: string; kennung: string | null; titel: string; worum: string; optionen: string[]; alternativen?: string[];
+export type Frage = { id: string; worumKurz?: string; eintrag: string; teil: string | null; art: string; gruppe: string; kennung: string | null; titel: string; worum: string; optionen: string[]; alternativen?: string[];
   empfehlung: string | null; stufe: 'wichtig' | 'normal'; stufeGrund: string | null; autoAb: string | null; blockiert: number; quelle: { text: string; url: string | null }; wartetSeit: string | null; antworten: string[]; ref: string | null };
 type Daten = { fragen: Frage[]; sonstiges: any[]; beantwortetHeute: number; zurueckgestellt: number; zahl: number; at: string };
 
 const L: Record<string, string> = { ja: 'Ja (wie empfohlen)', nein: 'Nein', anders: 'Anders', spaeter: 'Später' };
 const sicher = (u: string | null | undefined) => (u && (/^https?:\/\//.test(u) || /^#\//.test(u)) ? u : null);
 
-function Karte({ f, onDone }: { f: Frage; onDone: (id: string, status: string) => void }) {
+/** Eine Frage-Karte; `kurz`: nur „Worum“ in einem Satz (Karte am Chat), der ganze Text hinter „mehr“. */
+export function Karte({ f, onDone, kurz = false }: { f: Frage; onDone: (id: string, status: string) => void; kurz?: boolean }) {
   const toast = useToast();
   const pushFreigeben = usePushFreigeben();
   const [wahl, setWahl] = useState<string | null>(null);
@@ -47,7 +48,7 @@ function Karte({ f, onDone }: { f: Frage; onDone: (id: string, status: string) =
     <article className={`e-karte${f.stufe === 'wichtig' ? ' e-wichtig' : ''}`} data-testid="e-karte" data-id={f.id}>
       <div className="e-top">{f.kennung && <span className="e-id">{f.kennung}</span>}<span className="e-ttl">{f.titel}</span>
         {f.stufe === 'wichtig' ? <span className="chip warn" title={f.stufeGrund ?? ''}>wichtig</span> : <span className="chip">offen</span>}</div>
-      <div><div className="e-lbl">Worum es geht</div>{f.worum}</div>
+      <div><div className="e-lbl">Worum es geht</div>{kurz && f.worumKurz ? <>{f.worumKurz}{f.worum !== f.worumKurz && <details className="tiny"><summary>mehr</summary>{f.worum}</details>}</> : f.worum}</div>
       {f.optionen.length > 0 && <div><div className="e-lbl">Optionen</div><ul>{f.optionen.map((o) => <li key={o}>{o}</li>)}</ul></div>}
       {f.empfehlung && <div className="e-rec"><div className="e-lbl">Empfehlung</div>{f.empfehlung}
         {f.autoAb && <div className="tiny mut" data-testid="e-auto-ab">gilt {new Date(f.autoAb).getTime() <= Date.now() ? 'gleich' : `ab ${fmtDateTime(f.autoAb)}`} als angenommen, wenn du bis dahin da warst</div>}</div>}

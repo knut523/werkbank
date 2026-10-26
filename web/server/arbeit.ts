@@ -8,13 +8,24 @@ import { basename } from 'node:path';
 import { etaFertig, etaFuer, istTiefe, TIEFEN, type Tiefe } from './tiefe.ts';
 import { themaOf } from './themen.ts';
 import { ZUSTAND_TEXT, type Zustand } from './zustand.ts';
+import { chatStatus, CHAT_STATUS_TEXT, CHAT_STATUS_TON, CHAT_STATUS_RANG, type ChatStatus } from './chatstatus.ts';
 
 const ALT: Record<string, Zustand> = { running: 'laeuft', done: 'fertig', failed: 'haengt', waiting: 'wartet', blocked_g0: 'blockiert' };
 const sicher = (u: unknown) => (/^https?:\/\//.test(String(u ?? '')) ? String(u) : null);
 
-/** Eine Zeile der Tabelle (rein). */
-export function zeile(d: any, o: { mediane?: Record<Tiefe, number | null> | null; now?: number } = {}) {
-  const zustand: Zustand = d.reviewedAt && (d.reviewedBy === 'auto' || d.knutReviewedAt) ? 'erledigt' : (d.zustand as Zustand) ?? ALT[d.lastStatus] ?? 'laeuft';
+/** Zustand eines Unter-Chats aus seinem Dokument (eine Stelle für Tabelle, Leiste und Chatkopf). */
+export const zustandVon = (d: any): Zustand => (d.reviewedAt && (d.reviewedBy === 'auto' || d.knutReviewedAt) ? 'erledigt' : (d.zustand as Zustand) ?? ALT[d.lastStatus] ?? 'laeuft');
+
+/** Chat-Status (Release 29, WERKBANK_CHAT_STATUS) eines Unter-Chats; `offeneFragen` aus der Inbox (offeneJeStrang). */
+export function chatStatusVon(d: any, offeneFragen = 0): { status: ChatStatus; text: string; ton: string; grund: string } {
+  const zustand = zustandVon(d);
+  const r = chatStatus({ zustand, offeneFragen, geprueft: !!d.knutReviewedAt });
+  return { status: r.status, text: CHAT_STATUS_TEXT[r.status], ton: CHAT_STATUS_TON[r.status], grund: r.grund };
+}
+
+/** Eine Zeile der Tabelle (rein). `offeneFragen` gesetzt = Chat-Status mitliefern (Schalter an). */
+export function zeile(d: any, o: { mediane?: Record<Tiefe, number | null> | null; now?: number; offeneFragen?: number } = {}) {
+  const zustand: Zustand = zustandVon(d);
   const fertig = etaFertig({ marke: d.marke, zustand });
   const eta = etaFuer(d, { fertig, mediane: o.mediane ?? null, now: o.now });
   const grund = String(d.zustandGrund ?? d.lastReason ?? '');
@@ -27,14 +38,15 @@ export function zeile(d: any, o: { mediane?: Record<Tiefe, number | null> | null
     autoWeg: d.reviewedBy === 'auto', abgehakt: !!d.knutReviewedAt,
     // Live-Modus (Plan 274, D1): Knopf „Jetzt gründlich“, solange der Durchlauf nicht nach der letzten Runde angestoßen ist.
     // gruendlichAt setzt nur eine neue Handnachricht zurück (nicht das automatische Nachsenden) — Pass C.
+    cs: o.offeneFragen === undefined ? null : { ...chatStatusVon(d, o.offeneFragen), offen: o.offeneFragen },
     gruendlich: d.tiefe === 'live' && zustand !== 'erledigt' ? { angestossen: !!d.gruendlichAt } : null,
   };
 }
 
 /** Reihenfolge: was dich braucht zuerst, dann was hängt, dann was läuft; innerhalb nach „zuletzt“. */
 const RANG: Record<Zustand, number> = { wartet: 0, blockiert: 1, fertig: 2, haengt: 3, 'stand-fehlt': 4, schlange: 5, laeuft: 6, erledigt: 7 };
-export function sortiere<T extends { zustand: Zustand; zuletzt: any }>(z: T[]): T[] {
-  return [...z].sort((a, b) => RANG[a.zustand] - RANG[b.zustand] || +new Date(b.zuletzt ?? 0) - +new Date(a.zuletzt ?? 0));
+export function sortiere<T extends { zustand: Zustand; zuletzt: any; cs?: { status: ChatStatus } | null }>(z: T[]): T[] {
+  return [...z].sort((a, b) => (a.cs && b.cs ? CHAT_STATUS_RANG[a.cs.status] - CHAT_STATUS_RANG[b.cs.status] : 0) || RANG[a.zustand] - RANG[b.zustand] || +new Date(b.zuletzt ?? 0) - +new Date(a.zuletzt ?? 0));
 }
 
 /** Repos für „Neuer Unter-Chat“: nur aus der Konfiguration, nie aus der Anfrage (der Server nimmt den Pfad aus dieser Liste). */

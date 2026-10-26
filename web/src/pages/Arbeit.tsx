@@ -4,6 +4,7 @@
 import { Fragment, useState } from 'react';
 import { api, chatTarget, fmtDateTime, type Config } from '../api.ts';
 import { Err, Loading, useLoad, useToast } from '../ui.tsx';
+import { StatusChip, ChatKarte } from '../chatkarte.tsx';
 
 const FARBE: Record<string, string> = { wartet: 'warn', blockiert: 'bad', fertig: 'ok', haengt: 'warn', 'stand-fehlt': 'warn', schlange: '', laeuft: '', erledigt: '' };
 const sicher = (u: unknown) => (/^https?:\/\//.test(String(u ?? '')) ? String(u) : null);
@@ -143,7 +144,9 @@ export function ArbeitUnterchats({ cfg: _cfg }: { cfg: Config }) {
   return (
     <div className="page wide" data-testid="arbeit-unterchats">
       <div className="h-kopf">
-        <div><h1>Arbeit</h1><p className="small mut">{z.laeuft ?? 0} laufen · {z.schlange ?? 0} in der Schlange · {z.wartet ?? 0} warten auf dich · {(z.haengt ?? 0) + (z.blockiert ?? 0)} hängen/blockiert</p></div>
+        <div><h1>Arbeit</h1>{data.chatStatus
+          ? <p className="small mut" data-testid="a-zaehler">{data.zeilen.filter((r: any) => r.cs?.status === 'braucht').length} brauchen dich · {data.zeilen.filter((r: any) => r.cs?.status === 'review').length} in Review · {data.zeilen.filter((r: any) => r.cs?.status === 'laeuft').length} laufen · {data.zeilen.filter((r: any) => r.cs?.status === 'haengt').length} hängen</p>
+          : <p className="small mut">{z.laeuft ?? 0} laufen · {z.schlange ?? 0} in der Schlange · {z.wartet ?? 0} warten auf dich · {(z.haengt ?? 0) + (z.blockiert ?? 0)} hängen/blockiert</p>}</div>
         <button className="ub-btn pri" onClick={() => setNeu(true)} data-testid="neu-knopf">＋ Neuer Unter-Chat</button>
       </div>
       <div className="ub-row small" role="tablist" aria-label="Filter">
@@ -155,15 +158,15 @@ export function ArbeitUnterchats({ cfg: _cfg }: { cfg: Config }) {
         <thead><tr><th>Unter-Chat</th><th>Zustand</th><th className="a-m">Tiefe</th><th>ETA</th><th className="a-m">Zuletzt</th></tr></thead>
         <tbody>
           {data.zeilen.map((r: any) => <Fragment key={r.id}>
-            <tr className={auf === r.id ? 'auf' : ''} onClick={() => setAuf(auf === r.id ? null : r.id)} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') setAuf(auf === r.id ? null : r.id); }} aria-expanded={auf === r.id} data-testid="a-zeile" data-zustand={r.zustand}>
+            <tr className={auf === r.id ? 'auf' : ''} onClick={() => setAuf(auf === r.id ? null : r.id)} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') setAuf(auf === r.id ? null : r.id); }} aria-expanded={auf === r.id} data-testid="a-zeile" data-zustand={r.zustand} data-status={r.cs?.status}>
               <td><b>{r.titel}</b><div className="tiny mut">{r.thema}</div></td>
-              <td><span className={`chip ${FARBE[r.zustand] ?? ''}`}>{r.zustandText}</span></td>
+              <td>{data.chatStatus && r.cs ? <StatusChip text={r.cs.text} ton={r.cs.ton} status={r.cs.status} /> : <span className={`chip ${FARBE[r.zustand] ?? ''}`}>{r.zustandText}</span>}</td>
               <td className="a-m">{r.tiefe}</td>
               <td>{r.eta ? <span className={r.eta.ueberfaellig ? 'mut' : ''}>{r.eta.text}</span> : '–'}</td>
               <td className="a-m tiny">{r.zuletzt ? fmtDateTime(r.zuletzt) : '–'}</td>
             </tr>
             {auf === r.id && <tr className="a-detail"><td colSpan={5}>
-              {r.grund && <p className="small">{r.grund}</p>}
+              {data.chatStatus && r.cs && (r.cs.status === 'braucht' || r.cs.status === 'review') ? <ChatKarte id={r.id} /> : r.grund && <p className="small">{r.cs?.grund ?? r.grund}</p>}
               <div className="ub-row">
                 {r.bericht && <a className="ub-btn sm" href={`#/leitstand?bericht=${r.id}`}>Bericht</a>}
                 {sicher(r.chat) && <a className="ub-btn sm" href={sicher(r.chat)!} target={chatTarget} rel="noreferrer">Chat</a>}
