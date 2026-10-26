@@ -64,3 +64,24 @@ export async function statusKommentar(r: { repo: string; number: number }, body:
   if (!Number.isInteger(j.id)) throw new Error('GitHub lieferte keine Kommentar-Kennung.');
   return { id: j.id, url: typeof j.html_url === 'string' ? j.html_url : null };
 }
+
+/**
+ * Dritter Schreibweg (Release 29, Ticket-Kette, jirakette.ts): ein Draft-PR — nur nach Knuts zweiter Freigabe und nur aus dem Takt der
+ * Kette. Fest verdrahtet: draft = true, Basis nur develop/dev, Kopf nur `kette/…`; nie Merge, kein Update eines bestehenden PRs.
+ */
+export async function erstelleDraftPr(r: { repo: string; head: string; base: string; title: string; body: string }): Promise<{ number: number; url: string }> {
+  if (schreibenAus()) throw new Error('GitHub-Schreiben ist aus (WERKBANK_GITHUB_KOMMENTAR=off).');
+  if (!REPO_RE.test(r.repo) || !/^kette\/[\w.-]{1,150}$/.test(r.head) || !/^(develop|dev)$/.test(r.base)) throw new Error('PR-Angaben ungültig (Kopf kette/…, Basis develop|dev).');
+  if (!r.title.trim() || !r.body.trim()) throw new Error('Kein Text.');
+  const token = await writeToken(r.repo);
+  if (!token) throw new Error('Kein Schreibtoken für dieses Repo (Credential-Helper antwortet nicht).');
+  const res = await fetch(`${API()}/repos/${r.repo}/pulls`, {
+    method: 'POST', signal: AbortSignal.timeout(30_000), redirect: 'error',
+    headers: { authorization: `bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'olaf-werkbank' },
+    body: JSON.stringify({ title: r.title.slice(0, 200), head: r.head, base: r.base, body: r.body.slice(0, 60_000), draft: true, maintainer_can_modify: false }),
+  });
+  if (!res.ok) throw new Error(`GitHub antwortet mit ${res.status}${res.status === 422 ? ' (PR existiert schon oder Zweig fehlt)' : res.status === 403 || res.status === 404 ? ' (keine Schreibrechte auf dieses Repo)' : ''}`);
+  const j: any = await res.json().catch(() => ({}));
+  if (!Number.isInteger(j.number) || typeof j.html_url !== 'string') throw new Error('GitHub lieferte keine PR-Nummer.');
+  return { number: j.number, url: j.html_url };
+}
