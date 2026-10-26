@@ -168,6 +168,7 @@ export type Aktion =
   | { art: 'frage_plan' }
   | { art: 'bau_starten' }
   | { art: 'nachbessern'; text: string }
+  | { art: 'nochmal' }
   | { art: 'frage_push' }
   | { art: 'ausfuehren' }
   | { art: 'ende'; zustand: 'abgelehnt' | 'fehler'; grund: string };
@@ -187,7 +188,7 @@ export function naechsterSchritt(k: Pick<Kette, 'state' | 'head'>, s: Signale): 
       if (s.frage.option === OPT_PLAN.frei) return { art: 'bau_starten' };
       if (s.frage.option === OPT_PLAN.weg) return { art: 'ende', zustand: 'abgelehnt', grund: 'Plan verworfen' };
       // „Nachbessern“ oder Freitext: nur mit Text; ein leeres Nachbessern bleibt eine Rückfrage
-      return s.frage.text.trim() ? { art: 'nachbessern', text: s.frage.text.trim() } : { art: 'ende', zustand: 'abgelehnt', grund: 'Nachbessern ohne Text' };
+      return s.frage.text.trim() ? { art: 'nachbessern', text: s.frage.text.trim() } : { art: 'nochmal' };   // Nachbessern ohne Text beendet nichts: dieselbe Frage kommt neu
     }
     case 'bau':
       if (!s.strang) return { art: 'warten', grund: 'Strang nicht lesbar' };
@@ -333,7 +334,7 @@ async function schrittOhneClaim(k: any, deps: KDeps, env: Record<string, string 
     case 'frage_plan': {
       const plan = lesePlan(k.planPfad) ?? '';
       const q = await deps.askKnut(u, { title: `${k.key}: Plan freigeben?`, strand: k.planStrand, key: `${k._id}#PLAN${k.planRunde}`, quelle: 'kette',
-        context: `Ticket ${k.key} („${k.summary}“, ${k.site}), Ziel-Repo ${k.repo || 'noch offen'}. Der Agent hat den Plan geschrieben (Paket ${k.paket}). Auszug:\n\n${planAuszug(plan, 1300)}`.slice(0, 1990),
+        context: `Ticket ${k.key} („${k.summary}“, ${k.site}), Ziel-Repo ${k.repo || 'noch offen'}. Der Agent hat den Plan geschrieben (Paket ${k.paket}). Auszug:\n\n${planAuszug(plan, 1300)}${k.leereAntwort ? '\n\nHinweis: Die letzte Antwort „Nachbessern“ hatte keinen Text — bitte freigeben, verwerfen oder mit einem Satz sagen, was fehlt.' : ''}`.slice(0, 1990),
         options: [{ label: OPT_PLAN.frei, consequence: 'Der Agent baut im eigenen Worktree des Repos; gepusht wird noch nichts (zweite Freigabe folgt).' },
           { label: OPT_PLAN.nach, consequence: 'Dein Text geht an den Plan-Agenten, der Plan wird überarbeitet.' }, { label: OPT_PLAN.weg, consequence: 'Die Kette endet, nichts wird gebaut.' }],
         recommendation: `${OPT_PLAN.frei} — wenn Ziel und Definition of Done stimmen; sonst „${OPT_PLAN.nach}“ mit einem Satz, was fehlt.`, stufe: 'wichtig' });
@@ -345,6 +346,9 @@ async function schrittOhneClaim(k: any, deps: KDeps, env: Record<string, string 
       await setze(k, { state: 'plan', planRunde: k.planRunde + 1, frage: null }, 'Plan wird nachgebessert');
       return 'Plan nachgebessert';
     }
+    case 'nochmal':
+      await setze(k, { state: 'plan', planRunde: k.planRunde + 1, frage: null, leereAntwort: true }, 'Nachbessern ohne Text — Frage wird neu gestellt');
+      return 'Frage neu gestellt (Nachbessern ohne Text)';
     case 'bau_starten': {
       if (!k.repo) { await setze(k, { state: 'fehler', fehler: 'Kein Ziel-Repo — Kette mit Repo neu ansetzen' }, 'Kein Ziel-Repo'); return 'Kein Ziel-Repo'; }
       const klon = deps.klon(k.repo);

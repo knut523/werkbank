@@ -450,7 +450,7 @@ function JiraKette({ issueKey }: { issueKey: string }) {
   if (!data || (data.modus === 'aus' && !data.ketten?.length)) return null;
   return (
     <div className="card soft" style={{ marginTop: 12 }} data-testid="jira-kette">
-      <h3 style={{ marginTop: 0 }}>🔗 Kette: Plan → Bau → Draft-PR {data.modus === 'trocken' && <span className="chip warn">Trockenlauf</span>}</h3>
+      <h3 style={{ marginTop: 0 }}>Kette: Plan, Bau, Draft-PR {data.modus === 'trocken' && <span className="chip warn">Trockenlauf</span>}</h3>
       <p className="small muted">Ein Agent plant mit dir, baut nach deiner Freigabe im eigenen Worktree des Repos und öffnet erst nach einer zweiten Freigabe („Freigeben zum Push“) einen <b>Draft-PR gegen develop</b>. Nie mergen. Jira bleibt lesend; Plan und PR kommen nur als Kommentarentwurf.</p>
       {data.problem && <p className="err small">{data.problem}</p>}
       {data.modus !== 'aus' && !aktiv && (
@@ -468,11 +468,11 @@ function JiraKette({ issueKey }: { issueKey: string }) {
         <div key={k.id} style={{ marginTop: 10 }} data-testid="kette-zeile">
           <div className="row small">
             {KETTE_SCHRITTE.map(([z, label]) => <span key={z} className={`chip ${k.state === z ? 'warn' : ''}`}>{label}</span>)}
-            <span className={`chip ${k.state === 'review' ? 'ok' : ['fehler', 'abgelehnt', 'abgebrochen'].includes(k.state) ? 'bad' : ''}`}>{k.state === 'review' ? (k.pr ? 'fertig' : 'fertig (Trockenlauf)') : k.state}</span>
+            {['review', 'fehler', 'abgelehnt', 'abgebrochen'].includes(k.state) && <span className={`chip ${k.state === 'review' ? 'ok' : 'bad'}`}>{k.state === 'review' ? (k.pr ? 'fertig' : 'fertig (Trockenlauf)') : k.state}</span>}
             <span className="tiny">{k.repo || 'Repo offen'} · {fmtDateTime(k.updatedAt)}</span>
           </div>
-          {k.state === 'plan_frage' && <p className="small">Der Plan wartet auf deine Freigabe → <a href="#/entscheidungen">Entscheidungen</a>.</p>}
-          {k.state === 'push_frage' && <p className="small">Bau fertig. Ansehen und „Freigeben zum Push“ in der Review-Ansicht des Bau-Chats → <a href="#/arbeit">Arbeit</a>.</p>}
+          {k.state === 'plan_frage' && <p className="small">Der Plan wartet auf deine Freigabe, zu den <a href="#/entscheidungen">Entscheidungen</a>.</p>}
+          {k.state === 'push_frage' && <p className="small">Bau fertig. Ansehen und „Freigeben zum Push“ in der Review-Ansicht des Bau-Chats, unter <a href="#/arbeit">Unter-Chats</a>.</p>}
           {k.fehler && <p className="err small">{k.fehler}</p>}
           {k.pr && <p className="small">Draft-PR: <a href={k.pr} target="_blank" rel="noreferrer">{k.pr}</a></p>}
           {k.trocken && <p className="small muted">{k.trocken}</p>}

@@ -80,7 +80,7 @@ test('plan_frage: offen wartet; Freigeben → bau; Verwerfen → abgelehnt; Nach
   assert.equal(K.naechsterSchritt(k, f('beantwortet', K.OPT_PLAN.frei)).art, 'bau_starten');
   assert.deepEqual(K.naechsterSchritt(k, f('beantwortet', K.OPT_PLAN.weg)), { art: 'ende', zustand: 'abgelehnt', grund: 'Plan verworfen' });
   assert.deepEqual(K.naechsterSchritt(k, f('beantwortet', K.OPT_PLAN.nach, 'Tests ergänzen')), { art: 'nachbessern', text: 'Tests ergänzen' });
-  assert.equal(K.naechsterSchritt(k, f('beantwortet', K.OPT_PLAN.nach, '')).art, 'ende');
+  assert.equal(K.naechsterSchritt(k, f('beantwortet', K.OPT_PLAN.nach, '  ')).art, 'nochmal', 'Nachbessern ohne Text beendet die Kette nicht');
   assert.equal(K.naechsterSchritt(k, f('zurückgezogen', null)).art, 'ende');
   assert.equal(K.naechsterSchritt(k, sig()).art, 'warten', 'Frage nicht lesbar → nie bauen');
 });
@@ -270,4 +270,22 @@ test('Draft-PR liegt schon vor (Neustart nach Fehler) → kein zweiter', async (
 });
 test('repoAusTicket: Dateien mit beliebiger Endung zählen nicht', () => {
   assert.equal(K.repoAusTicket({ labels: [], summary: '', description: 'WirStrom1/anleitung.pdf und WirStrom1/cli.sh' }, ['wirstrom1']), null);
+});
+
+test('Nachbessern ohne Text: Kette bleibt aktiv, Frage kommt neu (neuer Schlüssel, mit Hinweis), kein Strang-Aufruf', async () => {
+  const env = { WERKBANK_JIRAKETTE: 'trocken' };
+  const f = fakes();
+  const k = await K.starteKette(U, { issue: { ...ISSUE, key: 'OLAF-40' }, site: 'OLAF' }, f.deps, env);
+  const doc = async () => (await K.ketten().findOne({ _id: k.id as any })) as any;
+  f.st.strang = 'done';
+  writeFileSync((await doc()).planPfad, '## Ziel\nX\n');
+  await K.ketteSchritt(await doc(), f.deps, env);
+  f.st.antwort = { option: K.OPT_PLAN.nach, text: '' };
+  assert.match(await K.ketteSchritt(await doc(), f.deps, env), /ohne Text/);
+  assert.equal((await doc()).state, 'plan'); assert.ok((await doc()).aktivKey, 'weiter aktiv');
+  assert.ok(!f.calls.some((c) => c.startsWith('send:')));
+  f.st.antwort = null;
+  await K.ketteSchritt(await doc(), f.deps, env);
+  assert.equal((await doc()).state, 'plan_frage');
+  assert.match(f.fragen[1].key, /#PLAN2$/); assert.match(f.fragen[1].context, /keinen Text/);
 });
