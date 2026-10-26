@@ -11,6 +11,7 @@ import { wien, wienZuUtc, addTage, tageZwischen, hhmmMin, MAX_ZEILEN } from './c
 import type { Quellen } from './cossammle.ts';
 import { cosOwner, cosAn } from './cosjob.ts';
 import { verbrauchJeStrang } from './cosbudget.ts';
+import { budgetEmpfehlung } from './cosics.ts';
 import { runs, questions } from './orchestrator.ts';
 import type { User } from './auth.ts';
 
@@ -72,6 +73,8 @@ export interface Teuer { conv: string; titel: string; tokens: number }
 export interface WocheInput { heute: string; zusagen: Zusage[]; hist: Record<string, { hash: string; seit: string }>; themen: { name: string; geaendert: string | null; ball: string }[]; teuerste: Teuer[]; rueckstau: number }
 export interface Woche {
   datum: string; ueberfaellig: Zusage[]; unveraendert: Zusage[]; naechsteWoche: Zusage[]; themenRuhig: { name: string; geaendert: string | null; ball: string }[]; teuerste: Teuer[]; rueckstau: number;
+  /** D3 (Paket 374): empfohlenes Strang-Budget aus der Messung (Median ×2, auf 50k) — null ohne Daten. */
+  budgetEmpfehlung: number | null;
 }
 export const UNVERAENDERT_TAGE = 14, THEMA_RUHIG_TAGE = 7;
 
@@ -87,6 +90,7 @@ export function wochendurchsicht(i: WocheInput): Woche {
     naechsteWoche: offen.filter((z) => z.bis && z.bis >= montag && z.bis <= sonntag),
     themenRuhig: i.themen.filter((t) => !t.geaendert || tageZwischen(t.geaendert, i.heute) >= THEMA_RUHIG_TAGE),
     teuerste: i.teuerste.slice(0, 5), rueckstau: i.rueckstau,
+    budgetEmpfehlung: budgetEmpfehlung(i.teuerste),
   };
 }
 
@@ -104,6 +108,7 @@ export function wocheMarkdown(w: Woche, o: { hhmm: string } = { hhmm: '15:00' })
   z.push(`**Nächste Woche fällig (${w.naechsteWoche.length}):** ${liste(w.naechsteWoche) || 'nichts'}`);
   z.push(`**Themen ohne Bewegung seit ${THEMA_RUHIG_TAGE} Tagen (${w.themenRuhig.length}):** ${w.themenRuhig.slice(0, 6).map((t) => t.name).join(' · ') || 'keine'}`);
   z.push(`**Teuerste Unter-Chats der Woche:** ${w.teuerste.map((t) => `${kurz(t.titel, 30)} ${Math.round(t.tokens / 1000)}k`).join(' · ') || 'keine Messung'}`);
+  if (w.budgetEmpfehlung) z.push(`**Strang-Budget (Empfehlung aus der Messung):** ${Math.round(w.budgetEmpfehlung / 1000)}k Token je Strang — Median ×2, aufgerundet (D3, Paket 374).`);
   if (w.rueckstau) z.push(`**Rückstau:** ${w.rueckstau} ältere Meeting-Entwürfe ohne Action Items — in der Übersicht gesammelt archivieren.`);
   return [...kopfFm('Wochendurchsicht', w.datum), ...kapp(z)].join('\n') + '\n';
 }
