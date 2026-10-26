@@ -64,3 +64,19 @@ export async function statusKommentar(r: { repo: string; number: number }, body:
   if (!Number.isInteger(j.id)) throw new Error('GitHub lieferte keine Kommentar-Kennung.');
   return { id: j.id, url: typeof j.html_url === 'string' ? j.html_url : null };
 }
+
+/** R29 D (S5): PR öffnen — nur nach Klick im Hauptchat (githubaktion.ts). Kein Merge, kein Schließen. */
+export async function prOeffnen(a: { repo: string; head: string; base: string; titel: string; text: string; entwurf: boolean }): Promise<{ url: string | null }> {
+  if (schreibenAus()) throw new Error('GitHub-Schreiben ist aus (WERKBANK_GITHUB_KOMMENTAR=off).');
+  if (!REPO_RE.test(a.repo)) throw new Error('Repo ungültig.');
+  const token = await writeToken(a.repo);
+  if (!token) throw new Error('Kein Schreibtoken für dieses Repo (Credential-Helper antwortet nicht).');
+  const res = await fetch(`${API()}/repos/${a.repo}/pulls`, {
+    method: 'POST', signal: AbortSignal.timeout(30_000), redirect: 'error',
+    headers: { authorization: `bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'olaf-werkbank' },
+    body: JSON.stringify({ title: a.titel, head: a.head, base: a.base, body: a.text, draft: a.entwurf }),
+  });
+  if (!res.ok) throw new Error(`GitHub antwortet mit ${res.status}${res.status === 422 ? ' (Zweig nicht auf GitHub, schon ein PR offen oder keine Unterschiede)' : res.status === 403 || res.status === 404 ? ' (keine Schreibrechte auf dieses Repo)' : ''}`);
+  const j: any = await res.json().catch(() => ({}));
+  return { url: typeof j.html_url === 'string' ? j.html_url : null };
+}

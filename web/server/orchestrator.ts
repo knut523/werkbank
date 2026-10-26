@@ -623,7 +623,7 @@ export async function showOrch(u: User, id: string, verlauf = 0) {
     }
     hist.reverse();
   }
-  return { ...item, conv: d.conv, prompt: d.prompt, bericht: d.bericht ?? null, modell: d.modell ?? null, risiko: d.risiko ?? null, lastModell: d.lastModell ?? null, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null, ...(hist ? { verlauf: hist } : {}) };
+  return { ...item, conv: d.conv, prompt: d.prompt, bericht: d.bericht ?? null, modell: d.modell ?? null, risiko: d.risiko ?? null, lastModell: d.lastModell ?? null, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null, meldungen: (d.meldungen ?? []).slice(-5).map((m: any) => ({ at: m.at, art: String(m.art ?? ''), text: String(m.text ?? '').slice(0, 500) })), ...(hist ? { verlauf: hist } : {}) };
 }
 
 export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 'leitstand' = 'hand', o: { warteMs?: number } = {}) {

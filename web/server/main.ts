@@ -8,6 +8,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch, realpathSync, renameSync } from 'node:fs';
 import { join, extname, resolve, normalize, basename } from 'node:path';
 import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import YAML from 'yaml';
 import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl, isMainSite, siteFor, jiraSites } from './config.ts';
 import { connect, wb, lc } from './db.ts';
@@ -31,6 +32,7 @@ import { reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepu
 import { berichtKopf, execSummary } from './berichtkopf.ts';
 import { readBericht as readBerichtDatei, reviewDir } from './bericht.ts';
 import { readBericht, paketDatei } from './bericht.ts';
+import { abschlussAn, abschlussProblem } from './abschluss.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName, ortAus, vorschlagAusPfad, isEingang } from './ablage.ts';
@@ -71,7 +73,8 @@ import { regelDir, regelVorschlaege } from './regelquelle.ts';
 import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
 import { meliousPassC } from './gegenpruefung.ts';
-import { postReview, statusKommentar, schreibenAus, writeToken, type ReviewEvent } from './githubwrite.ts';
+import { postReview, statusKommentar, schreibenAus, writeToken, prOeffnen, type ReviewEvent } from './githubwrite.ts';
+import { fuehreAus as githubAktion } from './githubaktion.ts';
 import { fixTick, fixOverview, prLageVia, pushVia, gateVia } from './prfix.ts';
 import { paketIndex, paketZahlen } from './pakete.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
@@ -1936,6 +1939,13 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
   if (strand) {
     const p = parseReview(b);
     if (!p.review) throw new HttpError(400, p.error!);
+    // R29 D / S2 (Paket 159 V2): Bericht prüfen statt erbitten — mit Beispiel zurück an den Strang (WERKBANK_ABSCHLUSS_PRUEFEN, Vorgabe aus).
+    if (abschlussAn()) {
+      let md: string | null = null;
+      try { md = readBericht(paketDatei(strand, 'bericht')); } catch { md = null; }
+      const problem = abschlussProblem(md);
+      if (problem) throw new HttpError(400, `Der Bericht (bericht.md) ist noch nicht abschlussreif: ${problem}\nBehebe das und ruf review_ready erneut auf.`);
+    }
     await wb().collection('orchestrator_runs').updateOne({ _id: strand._id }, { $set: { reviewReadyAt: new Date(), review: p.review } });
     log('review bereit (strang)', { user: u.id, id: strand._id, dod: p.review.dod.length });
     return send(res, 200, { ok: true, strand: strand._id });
@@ -3463,6 +3473,29 @@ on('POST', /^\/internal\/lead\/github$/, async (req, res) => {
   const text = await r.text();
   log('lead github lesen', { user: u.id, repo: p.repo, status: r.status });
   send(res, 200, { status: r.status, text: githubLeseText(text) });
+});
+
+// GitHub schreiben aus dem Hauptchat (R29 D, S5): die Brücke hat die Aktion vorher als Karte gezeigt und Knuts Klick abgewartet.
+// Schalter WERKBANK_HAUPTCHAT_GITHUB (Vorgabe aus); nur Kommentar / PR öffnen / Branch pushen, nie Merge (githubaktion.ts).
+on('POST', /^\/internal\/lead\/github-schreiben$/, async (req, res) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  let r;
+  try {
+    r = await githubAktion(b.aktion ?? {}, process.env, {
+      kommentar: (x, text) => statusKommentar(x, text, null),
+      prOeffnen,
+      push: (repo, klon, sha, zweig) => pushVia(repo, klon, sha, zweig, () => writeToken(repo)),
+      kopf: async (klon) => (await promisify(execFile)('git', ['-C', klon, 'rev-parse', 'HEAD'], { timeout: 10_000, encoding: 'utf8' })).stdout.trim(),
+      origin: async (klon) => (await promisify(execFile)('git', ['-C', klon, 'remote', 'get-url', 'origin'], { timeout: 10_000, encoding: 'utf8' })).stdout.trim(),
+    });
+  } catch (e: any) {
+    log('lead github schreiben abgelehnt', { user: u.id, art: b.aktion?.art, repo: b.aktion?.repo, grund: String(e?.message ?? e).slice(0, 200) });
+    throw new HttpError(400, String(e?.message ?? e));
+  }
+  log('lead github schreiben', { user: u.id, art: b.aktion?.art, repo: b.aktion?.repo });
+  send(res, 200, r);
 });
 
 // Inbox für das Werkbank-Werkzeug `inbox` (Plan 213 K4) — die Brücke baut daraus die Chat-Knöpfe.
