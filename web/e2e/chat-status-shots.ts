@@ -150,6 +150,7 @@ try {
   const status = async (id: string) => (await get(`/api/chatstatus/${id}`)).status;
 
   // --- Zustände: je Strang genau ein Status ---
+  await festsetzen();
   const liste = await get('/api/chatstatus');
   const je = Object.fromEntries(liste.strange.map((s: any) => [s.id, s.status]));
   pruef(liste.an === true, 'Schalter an: /api/chatstatus liefert Daten');
