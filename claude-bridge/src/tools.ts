@@ -327,6 +327,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'melious_sub' || name === 'auslastung' || name === 'github_lesen' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
     if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
+    // GitHub schreiben aus dem Hauptchat (R29 D, S5): immer erst nach Klick auf die Karte, auch im Auto-Modus „voll“; in Strängen gesperrt.
+    if (server === 'werkbank' && name === 'github_schreiben') return ctx.leit ? { cls: 'confirm' } : { cls: 'blocked', why: 'GitHub schreiben nur im Hauptchat nach Knuts Klick' };
     // Chief of Staff (Plan 209, K17): Zusagen lesen frei; das Register schreiben erst nach „ja“ (im Strang gesperrt, siehe orchestratorBlock).
     if (server === 'werkbank' && name === 'zusagen') return { cls: 'read' };
     if (server === 'werkbank' && (name === 'zusage_eintragen' || name === 'zusage_aendern' || name === 'thema_setzen')) return { cls: 'confirm' };
@@ -422,6 +424,7 @@ export function orchestratorBlock(tool: string, input: Record<string, unknown>):
   if (READ_PATH_TOOLS[tool] && ORCH_READ_BLOCK.test(String(input[READ_PATH_TOOLS[tool]] ?? ''))) return 'Umgebung/Geheimnisse lesen';
   if (tool.startsWith('mcp__')) {
     const [, server, name = ''] = tool.split('__');
+    if (server === 'werkbank' && name === 'github_schreiben') return 'GitHub schreiben';
     if (server === 'werkbank' && /^(jira_|orch_)/.test(name)) return name.startsWith('orch_') ? 'Orchestrator-Werkzeuge' : 'Jira schreiben';
     if (server === 'werkbank' && /^(zusage_eintragen|zusage_aendern|thema_setzen)$/.test(name)) return 'Register schreiben braucht Knuts Ja im Chat';
     if (server === 'atlassian' && !MCP_READ.test(name) && name !== 'authenticate' && name !== 'complete_authentication') return 'Jira/Confluence schreiben';
@@ -447,6 +450,19 @@ const LEIT_BASH_CONFIRM: [RegExp, string][] = [
   [/(^|[\s/'"])\.claude(\/|\b)|(^|[\s/'"])\.env\b|\.git\/(hooks|config)\b|\bcore\.hooksPath\b/, 'Claude-/Git-Konfiguration oder .env'],
 ];
 
+/**
+ * Vault-Commit im Hauptchat (R29 D, BRIDGE_LEIT_VAULT_COMMIT=on): nur `git -C <Vault> add (-A|.|<Pfad>)`, `commit -m "<einfacher Text>"`
+ * und `status`/`diff`/`log` — Glieder durch `&&`, sonst nichts (keine Umleitung, Befehlsersetzung, Optionen wie --no-verify/--amend).
+ * Ergebnis ist trotzdem eine Rückfrage mit Karte, nie eine stille Freigabe.
+ */
+function vaultCommitOk(cmd: string, vaults: string[]): boolean {
+  if (/[`$;|<>\n\\]|\|\||\.\./.test(cmd)) return false;
+  const roots = [...new Set(vaults)].map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const glied = new RegExp(String.raw`^git -C (?:${roots}) (?:add (?:-A|\.|[\w./ äöüÄÖÜß-]+)|commit -m (?:"[^"]{1,200}"|'[^']{1,200}')|status(?: --short)?|diff(?: --stat)?|log(?: --oneline)?(?: -\d{1,2})?)$`);
+  const teile = cmd.trim().split(/\s*&&\s*/);
+  return teile.length <= 3 && teile.every((t) => glied.test(t));
+}
+
 /** Leitstand: gesperrt / Rückfrage (mit Grund) / null = normale Einordnung. Läuft vor classify (Plan 132, C7/D4). */
 export function leitstandCheck(tool: string, input: Record<string, unknown>, ctx: { workDir?: string; scratch?: string }): { cls: 'blocked' | 'confirm'; why: string } | null {
   const vault = realish(resolve(VAULT_DIR));
@@ -455,7 +471,10 @@ export function leitstandCheck(tool: string, input: Record<string, unknown>, ctx
     // Sehr lange Befehle prüft niemand mit Mustern (VAULT_GIT wächst quadratisch): immer „ja“ (Council-Diff R1).
     // Billige Vorprüfung zuerst: Auffüllen macht aus der Vault-git-Sperre keine Rückfrage (Council-Diff R2).
     if (cmd.length > 16_000) return /\bgit\b/.test(cmd) && (cmd.includes(VAULT_DIR) || cmd.includes(vault)) ? { cls: 'blocked', why: 'git im Vault (langer Befehl)' } : { cls: 'confirm', why: 'sehr langer Befehl' };
-    if (VAULT_GIT(VAULT_DIR).test(cmd) || (vault !== VAULT_DIR && VAULT_GIT(vault).test(cmd))) return { cls: 'blocked', why: 'git im Vault' };
+    if (VAULT_GIT(VAULT_DIR).test(cmd) || (vault !== VAULT_DIR && VAULT_GIT(vault).test(cmd))) {
+      if (process.env.BRIDGE_LEIT_VAULT_COMMIT === 'on' && vaultCommitOk(cmd, [VAULT_DIR, vault])) return { cls: 'confirm', why: 'Vault-Commit (Regel 9)' };
+      return { cls: 'blocked', why: 'git im Vault' };
+    }
     for (const [re, why] of LEIT_BASH_CONFIRM) if (re.test(cmd)) return { cls: 'confirm', why };
     return null;
   }
@@ -673,6 +692,30 @@ export function inboxKnoepfe(ergebnis: string): string {
   return `**Zum Antworten:**\n\n${rows.join('\n')}${mehr}\n\n_Anders? Schreib einfach, was stattdessen gelten soll — ich trage es an der Quelle ein._`;
 }
 
+/**
+ * Karte vor „GitHub schreiben“ (R29 D, S5): genau das, was nach dem Klick passiert — Repo, Ziel, voller Text. Text und Titel
+ * stammen vom Modell: keine Knöpfe darin (neutralizeAnswerAnchors), Codezaun statt Fließtext.
+ */
+export function githubKarte(input: Record<string, unknown>): string {
+  const repo = short(input.repo, 80);
+  const text = (s: unknown) => fence(clip(String(s ?? ''), 3000));
+  let kopf: string, teile: string;
+  if (input.art === 'kommentar') {
+    kopf = `**Soll ich an ${repo}#${short(input.nummer, 8)} diesen Kommentar auf GitHub posten?**`;
+    teile = text(input.text);
+  } else if (input.art === 'pr_oeffnen') {
+    kopf = `**Soll ich auf GitHub einen ${input.entwurf === true ? 'Entwurfs-' : ''}PR in ${repo} öffnen?** (${short(input.head, 80)} → ${short(input.base, 60)})`;
+    teile = `Titel: ${short(input.titel, 200)}\n\n${text(input.text)}`;
+  } else if (input.art === 'push') {
+    kopf = `**Soll ich den Zweig ${short(input.zweig, 80)} nach ${repo} pushen?** (Kopf-Commit des Worktrees, ohne Force)`;
+    teile = `Worktree: \`${short(input.klon, 200)}\``;
+  } else {
+    kopf = `**Soll ich auf GitHub schreiben (${short(input.art, 30)})?**`;
+    teile = fence(clip(JSON.stringify(input, null, 2), 1500), 'json');
+  }
+  return `${neutralizeAnswerAnchors('', `${kopf}\n\n${teile}`)}\n\n${ANSWER_BUTTONS}`;
+}
+
 /** Die Rückfrage vor einem Schreibzugriff, auf Deutsch. */
 export function confirmQuestion(tool: string, input: Record<string, unknown>): string {
   let what: string;
@@ -704,6 +747,7 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
         const rows = cs.map((c) => `- **${short(c.key, 20)}**${c.summary ? ` „${short(c.summary, 60)}“` : ''}${c.was ? ` (bisher laut Chat: ${short(c.was, 60)})` : ''}: ${jiraChangeParts(c).join(' · ') || '—'}${c.reason ? ` — ${short(c.reason, 120)}` : ''}`);
         return `${neutralizeAnswerAnchors('', `**Soll ich diese ${cs.length} Tickets in Jira nachziehen?** (mit deinem Jira-Zugang, der Reihe nach)\n\n${rows.join('\n')}`)}\n\n${ANSWER_BUTTONS}`;
       }
+      if (tool === 'mcp__werkbank__github_schreiben') return githubKarte(input);
       if (tool === 'mcp__werkbank__agent_start') {
         return `${neutralizeAnswerAnchors('', `**Soll ich für ${input.key} einen neuen Chat mit einem Agenten starten?** Er arbeitet das Ticket vor und fragt vor jedem Schreiben nach.${input.note ? `\n\nAuftrag: „${short(input.note, 300)}“` : ''}`)}\n\n${ANSWER_BUTTONS}`;
       }

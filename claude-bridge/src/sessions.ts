@@ -12,6 +12,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
+import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './profil.ts';
 import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
@@ -162,9 +163,10 @@ export function autoFor(req: { email?: string; readonly?: boolean }): Permission
  * Flag-Settings im Auto-Modus (gelten auch für die geteilte Konfiguration): AUTO_DENY plus die absoluten Pfade der
  * Konfigurationen je Person. Keine Deny-Regel für den Vault — Deny schlägt das „ja“ im Chat.
  */
-export function autoSettings(): { permissions: { deny: string[]; disableBypassPermissionsMode: 'disable' } } {
+export function autoSettings(): { permissions: { deny: string[]; ask: string[]; disableBypassPermissionsMode: 'disable' } } {
   const homes = resolve(homesRoot());
-  return { permissions: { deny: [...AUTO_DENY, `Read(/${homes}/*/.credentials.json)`, `Edit(/${homes}/**)`], disableBypassPermissionsMode: 'disable' } };
+  // ask: GitHub schreiben aus dem Hauptchat (R29 D, S5) fragt immer — der Klassifikator darf es nicht durchwinken.
+  return { permissions: { deny: [...AUTO_DENY, `Read(/${homes}/*/.credentials.json)`, `Edit(/${homes}/**)`], ask: ['mcp__werkbank__github_schreiben'], disableBypassPermissionsMode: 'disable' } };
 }
 
 const ansi = (s: unknown) => String(s ?? '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -1501,7 +1503,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}${profil === 'release' ? `\n\n${RELEASE_APPEND}` : ''}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melSubAn() ? MEL_SUB_HINT : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' && orchMap[key]?.tiefe !== 'live' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.leit ? githubAppend() : '', live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}${profil === 'release' ? `\n\n${RELEASE_APPEND}` : ''}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melSubAn() ? MEL_SUB_HINT : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' && orchMap[key]?.tiefe !== 'live' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, isMelious(acct) ? req.token : acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim
@@ -1552,6 +1554,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   if (req.model) options.model = req.model;
   // Rollen-Profil: was nicht vom Konto abhängt, gleich hier.
   live.profil = profil;
+  const leserBasis = { skills: options.skills };   // S4: Skills des Leser-Strangs zurück, wenn BRIDGE_LESER_ERWEITERT an ist
   if (profil === 'leser') {
     options.tools = [...LESER_TOOLS, 'Bash'];   // D7 b (Knut 15.10.): lesende Bash-Befehle, der Wächter erlaubt nur Lesendes
     options.skills = [];
@@ -1595,6 +1598,12 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     options.extraArgs = { ...baseExtra };
     options.disallowedTools = baseDisallowed;
     options.permissionMode = live.mode;
+    // R29 D / S4: Leser mit Web, Skills und lesenden Teilagenten — nur mit BRIDGE_LESER_ERWEITERT=on und nur auf Claude (profil.ts).
+    if (profil === 'leser') {
+      const lo = leserOptionen({ erweitert: leserErweitert(), melious: mel });
+      options.tools = lo.tools; options.settingSources = lo.settingSources; options.skills = lo.skills ? leserBasis.skills : [];
+      if (lo.agents && !live.worker) options.agents = leserAgents(); else delete options.agents;
+    }
     // Leser über Melious: `--bare` mit eigenem kurzem Systemprompt (−91 % je Anfrage gemessen). Nicht bei Claude (OAuth).
     if (profil === 'leser' && mel) {
       options.extraArgs = { ...baseExtra, bare: null };
