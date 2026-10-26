@@ -707,7 +707,7 @@ export function githubKarte(input: Record<string, unknown>): string {
     kopf = `**Soll ich auf GitHub einen ${input.entwurf === true ? 'Entwurfs-' : ''}PR in ${repo} öffnen?** (${short(input.head, 80)} → ${short(input.base, 60)})`;
     teile = `Titel: ${short(input.titel, 200)}\n\n${text(input.text)}`;
   } else if (input.art === 'push') {
-    kopf = `**Soll ich den Zweig ${short(input.zweig, 80)} nach ${repo} pushen?** (Kopf-Commit des Worktrees, ohne Force)`;
+    kopf = `**Soll ich den Zweig ${short(input.zweig, 80)} nach ${repo} pushen?** (Kopf-Commit des Worktrees, ohne Force; vorher läuft das Pre-Push-Gate gegen ${short(input.base || 'dev', 60)} — nur bei grün wird gesendet)`;
     teile = `Worktree: \`${short(input.klon, 200)}\``;
   } else {
     kopf = `**Soll ich auf GitHub schreiben (${short(input.art, 30)})?**`;

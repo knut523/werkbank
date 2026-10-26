@@ -3488,6 +3488,18 @@ on('POST', /^\/internal\/lead\/github-schreiben$/, async (req, res) => {
       prOeffnen,
       push: (repo, klon, sha, zweig) => pushVia(repo, klon, sha, zweig, () => writeToken(repo)),
       kopf: async (klon) => (await promisify(execFile)('git', ['-C', klon, 'rev-parse', 'HEAD'], { timeout: 10_000, encoding: 'utf8' })).stdout.trim(),
+      // D2: Nachweis bei der Brücke (dort hat Knut die Karte bestätigt); Brücke weg oder anderer Fehler = kein Nachweis.
+      nachweis: async (aktion) => {
+        try {
+          const r = await fetch(`${cfg.bridgeUrl}/internal/aktion-freigabe`, { method: 'POST', headers: { 'content-type': 'application/json', ...bridgeInternal }, body: JSON.stringify({ userId: u.id, aktion }), signal: AbortSignal.timeout(5000) });
+          return r.ok && (await r.json().catch(() => ({})))?.ok === true;
+        } catch { return false; }
+      },
+      // D3: Pre-Push-Gate wie beim @fix-Push; ohne Skript kein Push.
+      gate: async (klon, zweig, base) => {
+        const skript = regelDir() ? join(regelDir()!, 'pre-push-gate.sh') : null;
+        return skript && existsSync(skript) ? gateVia(skript, klon, zweig, base) : null;
+      },
       origin: async (klon) => (await promisify(execFile)('git', ['-C', klon, 'remote', 'get-url', 'origin'], { timeout: 10_000, encoding: 'utf8' })).stdout.trim(),
     });
   } catch (e: any) {

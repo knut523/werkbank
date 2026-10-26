@@ -12,7 +12,7 @@ export const githubAktionAn = (env: Record<string, string | undefined> = process
 export type Aktion =
   | { art: 'kommentar'; repo: string; nummer: number; text: string }
   | { art: 'pr_oeffnen'; repo: string; head: string; base: string; titel: string; text: string; entwurf?: boolean }
-  | { art: 'push'; repo: string; zweig: string; klon: string };
+  | { art: 'push'; repo: string; zweig: string; klon: string; base: string };
 
 const zweigOk = (z: unknown) => typeof z === 'string' && ZWEIG_RE.test(z);
 
@@ -42,7 +42,9 @@ export function pruefeAktion(a: Record<string, unknown>, env: Record<string, str
     const wurzel = `${(env.WERKBANK_GITHUB_KLON_ROOT || `${env.HOME ?? '/nonexistent'}/work`).replace(/\/+$/, '')}/`;
     if (!klon.startsWith('/') || klon.includes('\0') || klon.split('/').includes('..')) return { fehler: 'klon: absoluter Pfad des Worktrees fehlt.' };
     if (!klon.startsWith(wurzel) || klon.length === wurzel.length) return { fehler: `klon: nur Worktrees unterhalb von ${wurzel} (WERKBANK_GITHUB_KLON_ROOT).` };
-    return { art: 'push', repo, zweig: String(a.zweig), klon };
+    const base = a.base === undefined || a.base === '' ? 'dev' : a.base;
+    if (!zweigOk(base)) return { fehler: 'base: ungültiger Zielzweig für das Gate.' };
+    return { art: 'push', repo, zweig: String(a.zweig), klon, base: String(base) };
   }
   return { fehler: 'art: nur kommentar, pr_oeffnen oder push — Mergen gibt es hier nicht.' };
 }
@@ -55,6 +57,10 @@ export interface Wege {
   kopf: (klon: string) => Promise<string>;
   /** URL des Remotes „origin“ des Klons — er muss zum Repo der Aktion gehören (Gegenprüfung R29 D: kein fremdes lokales Repo publizieren). */
   origin: (klon: string) => Promise<string>;
+  /** D2: hat Knut genau diese Aktion auf der Karte bestätigt? Verbraucht den Nachweis (Brücke, einmalig). */
+  nachweis: (aktion: Record<string, unknown>) => Promise<boolean>;
+  /** D3: Pre-Push-Gate im Klon (exit 0 = grün, 1 = harter Befund, 2 = Aufruffehler); null = Gate nicht verfügbar. */
+  gate: (klon: string, zweig: string, base: string) => Promise<{ exit: number; out: string } | null>;
 }
 
 /** Gehört die Remote-URL zu genau diesem Repo (https oder ssh, ohne Groß-/Kleinschreibung, mit oder ohne .git)? */
@@ -64,6 +70,8 @@ export async function fuehreAus(roh: Record<string, unknown>, env: Record<string
   if (!githubAktionAn(env)) throw new Error('GitHub-Schreiben aus dem Hauptchat ist aus (WERKBANK_HAUPTCHAT_GITHUB).');
   const a = pruefeAktion(roh, env);
   if ('fehler' in a) throw new Error(a.fehler);
+  // D2: ohne Klick auf die Karte wird nichts geschrieben (erst nach der Prüfung, damit Ungültiges keinen Nachweis verbraucht).
+  if (!(await w.nachweis(roh))) throw new Error('Kein Klick-Nachweis: Knut hat diese Aktion nicht auf der Karte bestätigt (oder der Nachweis ist abgelaufen/schon verbraucht). Karte neu anzeigen.');
   if (a.art === 'kommentar') {
     const r = await w.kommentar({ repo: a.repo, number: a.nummer }, a.text);
     return { url: r.url, text: `Kommentar an ${a.repo}#${a.nummer} gepostet${r.url ? `: ${r.url}` : '.'}` };
@@ -73,8 +81,12 @@ export async function fuehreAus(roh: Record<string, unknown>, env: Record<string
     return { url: r.url, text: `PR geöffnet${r.url ? `: ${r.url}` : '.'} (${a.head} → ${a.base})` };
   }
   if (!originPasst(await w.origin(a.klon), a.repo)) throw new Error(`Der Klon ${a.klon} gehört nicht zu ${a.repo} (origin passt nicht) — nichts gepusht.`);
+  // D3: Push nur bei grünem Pre-Push-Gate (Regeln, Checkliste, Sprache) — wie in der CLI.
+  const g = await w.gate(a.klon, a.zweig, a.base);
+  if (!g) throw new Error('Das Pre-Push-Gate ist nicht verfügbar (WERKBANK_REGEL_DIR) — nichts gepusht.');
+  if (g.exit !== 0) throw new Error(`Das Pre-Push-Gate meldet ${g.exit === 1 ? 'harte Befunde' : 'einen Aufruffehler'} — nichts gepusht. Befunde beheben, dann neu fragen.\n${g.out.slice(-1500)}`);
   const sha = await w.kopf(a.klon);
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('Kein gültiger Kopf-Commit im Klon.');
   await w.push(a.repo, a.klon, sha, a.zweig);
-  return { url: null, text: `Gepusht: ${a.zweig} @ ${sha.slice(0, 7)} → ${a.repo} (ohne Force).` };
+  return { url: null, text: `Gepusht: ${a.zweig} @ ${sha.slice(0, 7)} → ${a.repo} (ohne Force, Gate grün gegen ${a.base}).` };
 }

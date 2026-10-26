@@ -343,8 +343,8 @@ serve('werkbank', '0.1.0', [
     },
     {
       name: 'github_schreiben',
-      description: 'GitHub SCHREIBEN, genau drei Aktionen: art=kommentar (repo, nummer, text), art=pr_oeffnen (repo, head, base, titel, text, entwurf?) oder art=push (repo, zweig, klon = absoluter Pfad des Worktrees; pusht dessen Kopf-Commit ohne Force). Texte für GitHub auf Englisch, ohne lokale Pfade und ohne Verweise auf noch nicht existierende PRs. Die Brücke zeigt Knut vorher eine Karte mit Ja/Nein — erst nach „Ja“ läuft der Aufruf. Nie mergen, nie auf main/develop/dev/release. Nur wenn WERKBANK_HAUPTCHAT_GITHUB an ist.',
-      inputSchema: { type: 'object', properties: { art: { type: 'string', enum: ['kommentar', 'pr_oeffnen', 'push'] }, repo: { type: 'string' }, nummer: { type: 'number' }, text: { type: 'string' }, head: { type: 'string' }, base: { type: 'string' }, titel: { type: 'string' }, entwurf: { type: 'boolean' }, zweig: { type: 'string' }, klon: { type: 'string' } }, required: ['art', 'repo'] },
+      description: 'GitHub SCHREIBEN, genau drei Aktionen: art=kommentar (repo, nummer, text), art=pr_oeffnen (repo, head, base, titel, text, entwurf?) oder art=push (repo, zweig, klon = absoluter Pfad des Worktrees, base = Zielzweig für das Gate, Vorgabe dev; pusht dessen Kopf-Commit ohne Force, nur wenn das Pre-Push-Gate grün ist). Texte für GitHub auf Englisch, ohne lokale Pfade und ohne Verweise auf noch nicht existierende PRs. Die Brücke zeigt Knut vorher eine Karte mit Ja/Nein — erst nach „Ja“ läuft der Aufruf. Nie mergen, nie auf main/develop/dev/release. Nur wenn WERKBANK_HAUPTCHAT_GITHUB an ist.',
+      inputSchema: { type: 'object', properties: { art: { type: 'string', enum: ['kommentar', 'pr_oeffnen', 'push'] }, repo: { type: 'string' }, nummer: { type: 'number' }, text: { type: 'string' }, head: { type: 'string' }, base: { type: 'string' }, titel: { type: 'string' }, entwurf: { type: 'boolean' }, zweig: { type: 'string' }, klon: { type: 'string' }, base: { type: 'string' } }, required: ['art', 'repo'] },
       run: async (a: any) => (await call('/internal/lead/github-schreiben', { aktion: a }, 150_000)).text,
     },
   ] : []),

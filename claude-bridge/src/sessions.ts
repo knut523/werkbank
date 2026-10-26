@@ -13,6 +13,7 @@ import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:pa
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './profil.ts';
+import { freigabeMerken } from './freigabe.ts';
 import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
@@ -1144,6 +1145,8 @@ function makeGuard(live: Live) {
     if (a === 'yes') {
       emitStatus(live, '✅ ' + statusLine(tool, toolInput));
       rememberWritten(live, tool, toolInput);
+      // D2: Klick-Nachweis für die Schreib-Route der Web-App (nur im Hauptchat, nur genau diese Aktion).
+      if (tool === 'mcp__werkbank__github_schreiben' && live.leit) freigabeMerken(live.userId, toolInput);
       return decide('allow', 'Von der Person im Chat bestätigt.');
     }
     emitStatus(live, '🚫 Nicht ausgeführt.');

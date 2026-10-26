@@ -17,7 +17,7 @@ export function leserOptionen(o: { erweitert: boolean; melious: boolean }) {
 
 /** Hauptchat: Hinweis auf das Werkzeug „github_schreiben“ — nur mit WERKBANK_HAUPTCHAT_GITHUB=on (S5), sonst bleibt „gesperrt“ der Stand. */
 export const githubAppend = (env: Record<string, string | undefined> = process.env) => env.WERKBANK_HAUPTCHAT_GITHUB === 'on'
-  ? 'GitHub schreiben (Ausnahme zur Regel oben, Knut 26.10.): nur über das Werkzeug github_schreiben (Kommentar, PR öffnen, Branch pushen). Es zeigt Knut eine Karte mit Ja/Nein; erst nach seinem Klick passiert es. Texte für GitHub auf Englisch, ohne lokale Pfade. Mergen bleibt gesperrt, ebenso Push auf main/develop/dev/release.'
+  ? 'GitHub schreiben (Ausnahme zur Regel oben, Knut 26.10.): nur über das Werkzeug github_schreiben (Kommentar, PR öffnen, Branch pushen). Es zeigt Knut eine Karte mit Ja/Nein; erst nach seinem Klick passiert es (die Web-App prüft den Klick zusätzlich). Ein Push läuft nur bei grünem Pre-Push-Gate; push mit base (Zielzweig, Vorgabe dev). Texte für GitHub auf Englisch, ohne lokale Pfade. Mergen bleibt gesperrt, ebenso Push auf main/develop/dev/release.'
   : '';
 
 /** Teilagenten des erweiterten Lesers: nur die rein lesenden Rollen (strang-leser gibt es nur im Hauptchat). */

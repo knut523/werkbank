@@ -44,6 +44,7 @@ test('Karte Push: Zweig, Repo, Worktree, „ohne Force“', () => {
   const q = confirmQuestion(T, { art: 'push', repo: 'WirStrom1/x', zweig: 'feat/a', klon: '/work/wt' });
   assert.match(q, /feat\/a/);
   assert.match(q, /ohne Force/);
+  assert.match(q, /Pre-Push-Gate gegen dev — nur bei grün/);
   assert.match(q, /\/work\/wt/);
 });
 
