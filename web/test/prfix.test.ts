@@ -546,6 +546,8 @@ test('Ende-zu-Ende Trockenlauf: Strang, Tests und Gate laufen, kein Push, kein G
   // Paket: geplanter Antwort-Kommentar, Fix-Diff, Gate-Urteil, Testergebnis
   const dir = join(process.env.WERKBANK_REVIEW_DIR!, f.paket);
   const antwort = readFileSync(join(dir, 'antwort.md'), 'utf8');
+  // Gegenprüfung 26.10.: Der Trockenlauf-Text kennzeichnet sich selbst, bevor er den Push beschreibt
+  assert.match(antwort, /^\*\*DRY RUN — nothing was pushed and nothing was posted\*\* \(planned comment; verdict: push would have gone ahead\)/m);
   assert.match(antwort, /Automated fix \(OLAF Workspace\)/);
   assert.match(antwort, new RegExp(`pushed \`${vorher.slice(0, 7)}\\.`), 'der Text, der gepostet würde, wenn live geschaltet wäre');
   assert.match(antwort, /- ✅ fixed — rename foo\./);

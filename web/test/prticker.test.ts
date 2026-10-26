@@ -419,8 +419,9 @@ test('R29 A: TAG/TAG_DEEP/FIX_TAG nach Satzzeichen und Markdown-Formatierung; E-
   }
   for (const ja of ['bitte,@fix', 'danke. @fix', '`@fix` im Code', '**@fix** fett', '_@fix_ kursiv', '„@fix danke“', '(@fix)', '[@fix]']) assert.equal(FIX_TAG.test(ja), true, ja);
   for (const ja of ['—@review deep', ',@review deep', '``@review deep``', '**@review deep**']) assert.equal(TAG_DEEP.test(ja), true, ja);
-  // nie: E-Mail, Teil eines Worts, Abgetrenntes
-  for (const nein of ['foo@review', '@reviewer', 'mail@review.de', 'x@fix', '@fixes', '@fix-it', '@fixed', 'mail@fix.de', '@@review', 'x@review deep']) {
+  // nie: E-Mail, Teil eines Worts, Abgetrenntes — auch in Großbuchstaben (mit /i faltet die Klasse vor dem @)
+  for (const nein of ['foo@review', '@reviewer', 'mail@review.de', 'x@fix', '@fixes', '@fix-it', '@fixed', 'mail@fix.de', '@@review', 'x@review deep',
+    'X@review deep', 'MAIL@review.de', 'Ticket-ABC@review deep', '@review-tickets ist ein Projekttag, kein Tag']) {
     assert.equal(TAG.test(nein), false, nein);
     assert.equal(FIX_TAG.test(nein), false, nein);
   }
@@ -436,16 +437,16 @@ test('R29 A: Inline-Kommentar mit @review erzeugt ein tag-Ereignis; Review-Körp
   const { deriveEvents } = await import('../server/prticker.ts');
   const p = pr('WirStrom1/olaf-admin', 6, { author: { login: 'bizarrochris' }, reviews: { nodes: [
     { id: 'RI1', author: { login: 'knut523' }, body: 'Overall fine, but one thing: @review', state: 'COMMENTED', submittedAt: '2026-10-13T10:04:00Z', url: 'r-i1', comments: { nodes: [
-      { path: 'src/a.ts', line: 12, body: 'Hier fehlt der Null-Fall. `@review deep` bitte.' },
-      { path: 'src/b.ts', line: 3, body: 'nur ein Hinweis' },
+      { databaseId: 9001, path: 'src/a.ts', line: 12, body: 'Hier fehlt der Null-Fall. `@review deep` bitte.' },
+      { databaseId: 9002, path: 'src/b.ts', line: 3, body: 'nur ein Hinweis' },
     ] } },
   ] } });
   const { events } = deriveEvents([p], new Map(), '2026-10-13T10:00:00Z', ['knut523', 'bizarrochris']);
   const tags = events.filter((e) => e.kind === 'tag');
   assert.equal(tags.length, 2, 'Körper und Inline: genau zwei Ereignisse');
-  assert.deepEqual(tags.map((e) => e._id).sort(), ['tag:RI1', 'tag:RI1:0']);
+  assert.deepEqual(tags.map((e) => e._id).sort(), ['tag:RI1', 'tag:RI1:9001'], 'Inline-Kennung = databaseId (stabil), nicht der Listenindex');
   // deep kommt aus dem Inline-Kommentar (Ereignistext trägt es)
-  assert.match(tags.find((e) => e._id === 'tag:RI1:0')!.text, /@review deep von knut523/);
+  assert.match(tags.find((e) => e._id === 'tag:RI1:9001')!.text, /@review deep von knut523/);
   // @fix im Inline-Kommentar bleibt wie vorher (quelle inline, ort Datei:Zeile)
   const p2 = pr('WirStrom1/olaf-admin', 6, { author: { login: 'bizarrochris' }, reviews: { nodes: [
     { id: 'RI2', author: { login: 'knut523' }, body: '', state: 'COMMENTED', submittedAt: '2026-10-13T10:04:00Z', url: 'r-i2', comments: { nodes: [
@@ -465,20 +466,36 @@ test('R29 A: Inline-Kommentar mit @review erzeugt ein tag-Ereignis; Review-Körp
   // geschlossen: auch Inline-@review nicht
   const p4 = { ...p, state: 'CLOSED', merged: false };
   assert.equal(deriveEvents([p4], new Map(), '2026-10-13T10:00:00Z', ['knut523']).events.filter((e) => e.kind === 'tag').length, 0);
+  // Gegenprüfung 26.10. (Melious): Eigene Reviews unter Knuts Konto mit der Marke lösen nie aus —
+  // weder der Körper noch ein Inline-Kommentar (Self-Echo: der Strang würde sich sonst selbst beauftragen).
+  const echo = pr('WirStrom1/olaf-admin', 8, { author: { login: 'bizarrochris' }, reviews: { nodes: [
+    { id: 'RE1', author: { login: 'knut523' }, body: 'Automated review (OLAF Workspace) — Deck das ab: @review deep', state: 'COMMENTED', submittedAt: '2026-10-26T10:04:00Z', url: 'r-e1', comments: { nodes: [
+      { path: 'src/f.ts', line: 4, body: '(OLAF Workspace) Quelle `@​review`' },
+    ] } },
+  ] } });
+  assert.equal(deriveEvents([echo], new Map(), '2026-10-26T10:00:00Z', ['knut523', 'bizarrochris']).events.filter((e) => e.kind === 'tag' || e.kind === 'fix').length, 0, 'Marke: Körper und Inline lösen nicht aus');
+  // Dieselben Texte ohne Marke: Knuts eigenes @review löst aus (Guard ist die Marke, nicht der Autor)
+  const ohne = pr('WirStrom1/olaf-admin', 9, { author: { login: 'bizarrochris' }, reviews: { nodes: [
+    { id: 'RE2', author: { login: 'knut523' }, body: 'Deck das ab: @review deep', state: 'COMMENTED', submittedAt: '2026-10-26T10:04:00Z', url: 'r-e2', comments: { nodes: [
+      { path: 'src/f.ts', line: 4, body: 'Quelle `@review`' },
+    ] } },
+  ] } });
+  const tags2 = deriveEvents([ohne], new Map(), '2026-10-26T10:00:00Z', ['knut523', 'bizarrochris']).events.filter((e) => e.kind === 'tag');
+  assert.deepEqual(tags2.map((e) => e._id).sort(), ['tag:RE2', 'tag:RE2:0'], 'ohne Marke: Körper und Inline lösen aus');
 });
 
 test('R29 A: verpassteTags sieht Inline-Kommentare; von Hand nachgeholt zählt weiter', async () => {
   const { verpassteTags } = await import('../server/prticker.ts');
   const p = pr('WirStrom1/olaf-admin', 7, { author: { login: 'bizarrochris' }, reviews: { nodes: [
     { id: 'RV1', author: { login: 'knut523' }, body: '', state: 'COMMENTED', submittedAt: '2026-10-13T10:04:00Z', url: 'r-v1', comments: { nodes: [
-      { path: 'src/e.ts', line: 2, body: 'bitte,@review' },
+      { databaseId: 9003, path: 'src/e.ts', line: 2, body: 'bitte,@review' },
     ] } },
   ] } });
   const weg = verpassteTags([p], new Set(), [], '2026-10-13T10:00:00Z', ['knut523']);
   assert.equal(weg.length, 1);
   assert.equal(weg[0].von, 'knut523'); assert.equal(weg[0].repo, 'WirStrom1/olaf-admin'); assert.equal(weg[0].number, 7);
-  // schon gesehen (tag:<reviewId>:<i>) → kein verpasster Tag; manuell nachgeholt zählt
-  assert.equal(verpassteTags([p], new Set([`tag:RV1:0`]), [], '2026-10-13T10:00:00Z', ['knut523']).length, 0);
+  // schon gesehen (tag:<reviewId>:<databaseId>) → kein verpasster Tag; manuell nachgeholt zählt
+  assert.equal(verpassteTags([p], new Set([`tag:RV1:9003`]), [], '2026-10-13T10:00:00Z', ['knut523']).length, 0);
   assert.equal(verpassteTags([p], new Set(), [{ repo: 'WirStrom1/olaf-admin', number: 7, at: '2026-10-13T10:05:00Z' }], '2026-10-13T10:00:00Z', ['knut523'])[0].nachgeholt, true);
 });
 

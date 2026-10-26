@@ -493,13 +493,17 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
  * Wäre der Push gegangen, zeigt die Notiz das — sonst die Gründe.
  */
 async function trocknen(f: any, p: { ok: boolean; gruende: string[] }, x: { fix: FixJson | null; neu: string; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any }, dir: string, klon: string, g: GitRun, deps: FixDeps, now: Date) {
-  const text = antwortText({ by: f.by, quelle: f.quelle ?? null, start: f.head, neu: x.neu, zweig: f.zweig, gepusht: p.ok, gruende: p.ok ? undefined : p.gruende, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview: false });
+  // Gegenprüfung 26.10.: Der Trockenlauf-Text kennzeichnet sich selbst — sonst hält der Leser `antwort.md` für einen echten Push.
+  const text = antwortText({ by: f.by, quelle: f.quelle ?? null, start: f.head, neu: x.neu, zweig: f.zweig, gepusht: p.ok, gruende: p.ok ? undefined : p.gruende, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview: false }).replace('**Automated fix (OLAF Workspace) — not yet read by Knut**', `**DRY RUN — nothing was pushed and nothing was posted** (planned comment; verdict: ${p.ok ? 'push would have gone ahead' : `push would have been refused: ${p.gruende.join('; ')}`})\n\n**Automated fix (OLAF Workspace) — not yet read by Knut**`);
   const kappen = (t: string) => (t.length > 400_000 ? `${t.slice(0, 400_000)}\n\n[… abgeschnitten — Rest im Worktree mit git diff]\n` : t);
+  let paketFehler: string | null = null;
   try {
-    writeFileSync(join(dir, 'antwort.md'), `${text}\n`);
+    writeFileSync(join(dir, 'antwort.md'), `${GEHEIM.test(text) ? '(Antwort zurückgehalten — sah nach einem Geheimnis aus.)' : text}\n`);
     if (x.neu !== f.head) writeFileSync(join(dir, 'fix-diff.patch'), kappen(String(await g(['diff', f.head, x.neu], f.worktree))));
-  } catch (e: any) { deps.log?.('pr-fix trockenlauf paket', { pr: `${f.repo}#${f.number}`, error: scrub(e?.message ?? e) }); }
-  await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'trocken', doneAt: now, neu: x.neu, trocken: true, urteil: p.ok ? 'push möglich' : 'push wäre abgelehnt worden', gruende: p.ok ? [] : p.gruende, note: `${p.ok ? 'Trockenlauf: Bedingungen erfüllt, Push wäre gegangen' : `Trockenlauf: nicht gepusht worden (${p.gruende.join('; ')})`} — Paket ${f.paket}` } });
+  } catch (e: any) { paketFehler = scrub(e?.message ?? e); deps.log?.('pr-fix trockenlauf paket', { pr: `${f.repo}#${f.number}`, error: paketFehler }); }
+  // Gegenprüfung 26.10.: Ein Schreibfehler darf das Urteil nicht unmarkiert lassen — sonst fehlt der Beleg im Paket.
+  const note = `${p.ok ? 'Trockenlauf: Bedingungen erfüllt, Push wäre gegangen' : `Trockenlauf: nicht gepusht worden (${p.gruende.join('; ')})`}${paketFehler ? ` — Paket unvollständig (Schreibfehler: ${paketFehler})` : ''} — Paket ${f.paket}`;
+  await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'trocken', doneAt: now, neu: x.neu, trocken: true, urteil: p.ok ? 'push möglich' : 'push wäre abgelehnt worden', gruende: p.ok ? [] : p.gruende, note } });
   await audit(f, { ergebnis: 'trocken', von: f.head, nach: x.neu, zweig: f.zweig, gate: x.gate, tests: x.tests, gruende: p.gruende }, now);
   deps.log?.('pr-fix trockenlauf fertig', { pr: `${f.repo}#${f.number}`, urteil: p.ok ? 'push möglich' : 'abgelehnt', paket: f.paket });
   await melde(f, `${p.ok ? 'Trockenlauf: Push wäre gegangen' : `Trockenlauf: Push wäre abgelehnt worden (${p.gruende.join('; ')})`} — Paket ${f.paket}`, deps);

@@ -98,7 +98,7 @@ const PR_FIELDS = `number title url state merged isDraft createdAt updatedAt hea
   repository { nameWithOwner } author { login }
   reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } } } }
   comments(last: 30) { nodes { id author { login } body createdAt url } }
-  reviews(last: 20) { nodes { id author { login } body state submittedAt url comments(first: 30) { nodes { path line originalLine body } } } }`;
+  reviews(last: 20) { nodes { id author { login } body state submittedAt url comments(first: 30) { nodes { databaseId path line originalLine body } } } }`;
 
 export function tickerQuery(n: number): string {
   const vars = Array.from({ length: n }, (_, i) => `$q${i}: String!`).join(', ');
@@ -140,9 +140,11 @@ export const UEBERLAPPUNG_MIN = 15;
 
 /** R29 A (Knut 24.10.: „@review comments die hinter einem Fließtext sind gehen verloren“): Tag auch nach Satzzeichen
  *  und in Markdown-Formatierung (`,@review`, `` `@review` ``, `**@review**`, `_@review_`) — Lookbehind statt Präfix-Zeichen.
- *  Rot bleibt: Buchstabe/Ziffer oder `@` direkt davor (`foo@review`, `mail@review.de`, `@@review`) und Wortfortsetzung
- *  (`@reviewer`, `@review_foo`); ein einzelnes `_` danach ist Markdown-Kursiv und zählt (daher Lookahead statt \b,
- *  denn `_` ist \w und \b fände keine Grenze). */
+ *  Rot bleibt: Buchstabe/Ziffer oder `@` direkt davor (`foo@review`, `mail@review.de`, `@@review`; mit /i auch `X@review`,
+ *  `MAIL@review.de` — die Klasse faltet mit) und Wortfortsetzung (`@reviewer`, `@review_foo`); ein einzelnes `_` danach
+ *  ist Markdown-Kursiv und zählt (daher Lookahead statt \b, denn `_` ist \w und \b fände keine Grenze). Verschärfung
+ *  gegen die Basis: `-` direkt dahinter zählt nicht mehr (`@review-tickets` war in der Basis ein Tag) — ein Tag heißt
+ *  `@review`, sonst nichts (Gegenprüfung 26.10.); `_` davor bleibt erlaubt (Kursiv), `pfad_zu_@review` matcht also. */
 export const TAG = /(?<![a-z\d@])@review(?=$|[^-\w]|_(?![\w-]))/i;
 /** `@review deep` → Tiefe deep (Knut 17.10.). */
 export const TAG_DEEP = /(?<![a-z\d@])@review\s+deep(?=$|[^-\w]|_(?![\w-]))/i;
@@ -225,14 +227,20 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
     for (const r of p.reviews?.nodes ?? []) {
       const who = (r.author?.login ?? '').toLowerCase();
       if (!r.id || !r.submittedAt || r.submittedAt < ab) continue;
+      // R29 A (Gegenprüfung 26.10.): Inline-Kommentare kennzeichnet die databaseId, nicht der Listenindex —
+      // GitHub sortiert nicht stabil (Löschen verschiebt Indizes), ein Index würde Tags verschieben statt auslösen.
+      const inlineId = (ic: any, i: number) => ic?.databaseId ? String(ic.databaseId) : `${i}`;
       if (FIX_TAG.test(r.body ?? '')) fix(r.id, r.submittedAt, who, r.body ?? '', r.url ?? p.url, 'review');
-      else (r.comments?.nodes ?? []).forEach((ic: any, i: number) => fix(`${r.id}:${i}`, r.submittedAt, who, ic?.body ?? '', r.url ?? p.url, 'inline', ic?.path ? `${ic.path}:${ic.line ?? ic.originalLine ?? '?'}` : null));
-      // R29 A: @review auch in den Inline-Zeilenkommentaren des Reviews — eigene Kennung `tag:<rid>:<i>`, eigener Text
-      // („deep“ aus der Inline-Zeile), der Review-Körper zählt weiterhin getrennt (nicht doppelt).
-      if (allowSet.has(who) && state === 'OPEN') (r.comments?.nodes ?? []).forEach((ic: any, i: number) => {
-        if (TAG.test(ic?.body ?? '')) ev(`tag:${r.id}:${i}`, 'tag', r.submittedAt, who, tagText(ic.body, who), r.url ?? p.url);
+      else (r.comments?.nodes ?? []).forEach((ic: any, i: number) => fix(`${r.id}:${inlineId(ic, i)}`, r.submittedAt, who, ic?.body ?? '', r.url ?? p.url, 'inline', ic?.path ? `${ic.path}:${ic.line ?? ic.originalLine ?? '?'}` : null));
+      // R29 A: @review auch in den Inline-Zeilenkommentaren des Reviews — eigene Kennung `tag:<rid>:<inlineId>`, eigener Text
+      // („deep“ aus der Inline-Zeile), der Review-Körper zählt weiterhin getrennt (nicht doppelt). Eigene Reviews unter
+      // Knuts Konto mit der Marke lösen nie aus (Gegenprüfung 26.10.: der Guard fehlte hier — Selbst-Auslösen wäre möglich,
+      // hätte der Strang je einen Review-Körper/Inline-Kommentar mit wörtlichem @review gepostet).
+      const eigen = who === ME && ((r.body ?? '').includes(MARKE_TICKER) || (r.comments?.nodes ?? []).some((ic: any) => (ic?.body ?? '').includes(MARKE_TICKER)));
+      if (allowSet.has(who) && state === 'OPEN' && !eigen) (r.comments?.nodes ?? []).forEach((ic: any, i: number) => {
+        if (TAG.test(ic?.body ?? '')) ev(`tag:${r.id}:${inlineId(ic, i)}`, 'tag', r.submittedAt, who, tagText(ic.body, who), r.url ?? p.url);
       });
-      if (TAG.test(r.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${r.id}`, 'tag', r.submittedAt, who, tagText(r.body, who), r.url);
+      if (TAG.test(r.body ?? '') && allowSet.has(who) && state === 'OPEN' && !eigen) ev(`tag:${r.id}`, 'tag', r.submittedAt, who, tagText(r.body, who), r.url);
       else if (who && who === author && who !== ME && allowSet.has(who) && state === 'OPEN' && meldetErledigt(r.body)) ev(`erledigt:${r.id}`, 'erledigt', r.submittedAt, who, `${who} meldet erledigt: ${kurz(r.body, 100)}`, r.url);
       else if (ours && who && who !== ME && r.state !== 'PENDING') ev(`r:${r.id}`, 'review', r.submittedAt, who, `Review von ${who}: ${REVIEW_STATE[r.state] ?? r.state}${r.body ? ` — ${kurz(r.body, 100)}` : ''}`, r.url);
     }
@@ -255,8 +263,9 @@ export function verpassteTags(prs: any[], gesehen: Set<string>, manuell: { repo:
     const repo = String(p.repository?.nameWithOwner ?? '');
     const items = [...(p.comments?.nodes ?? []).map((c: any) => ({ ...c, at: c.createdAt })),
       ...(p.reviews?.nodes ?? []).flatMap((r: any) => [{ ...r, at: r.submittedAt },
-        // R29 A: Inline-Zeilenkommentare des Reviews zählen als eigene Tags (Kennung wie in deriveEvents: tag:<rid>:<i>).
-        ...(r.comments?.nodes ?? []).map((ic: any, i: number) => ({ id: `${r.id}:${i}`, author: r.author, body: ic?.body ?? '', url: r.url, at: r.submittedAt }))])];
+        // R29 A: Inline-Zeilenkommentare des Reviews zählen als eigene Tags (Kennung wie in deriveEvents: databaseId,
+        // Index nur als Fallback, wenn die Query sie nicht liefert).
+        ...(r.comments?.nodes ?? []).map((ic: any, i: number) => ({ id: `${r.id}:${ic?.databaseId ? String(ic.databaseId) : i}`, author: r.author, body: ic?.body ?? '', url: r.url, at: r.submittedAt }))])];
     for (const c of items) {
       const von = (c.author?.login ?? '').toLowerCase();
       if (!c.id || !c.at || c.at < since || !ok.has(von) || !TAG.test(c.body ?? '') || gesehen.has(`tag:${c.id}`)) continue;
