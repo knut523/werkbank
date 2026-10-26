@@ -11,6 +11,8 @@ import { vienna } from './hygiene.ts';
 import { regelZeilen, regelAnhaengen } from './regelquelle.ts';
 
 export const ME = (process.env.WERKBANK_GITHUB_LOGIN || 'knut523').toLowerCase();
+/** Signatur eigener Workspace-Kommentare unter Knuts Konto (Statuszeilen, Antworten) — lösen nie selbst aus. */
+const MARKE_TICKER = '(OLAF Workspace)';
 
 export interface TickerSettings {
   ticker: boolean; autoReview: boolean; autoPost: boolean; onRequest: boolean;
@@ -136,17 +138,22 @@ export interface PrMem { _id: string; head: string; state: string; at?: Date | s
  *  Tag schon vor dem Fenster, als die Suche den PR endlich lieferte. Doppeltes fängt die feste Kennung ab. */
 export const UEBERLAPPUNG_MIN = 15;
 
-export const TAG = /(^|[\s(])@review\b/i;
+/** R29 A (Knut 24.10.: „@review comments die hinter einem Fließtext sind gehen verloren“): Tag auch nach Satzzeichen
+ *  und in Markdown-Formatierung (`,@review`, `` `@review` ``, `**@review**`, `_@review_`) — Lookbehind statt Präfix-Zeichen.
+ *  Rot bleibt: Buchstabe/Ziffer oder `@` direkt davor (`foo@review`, `mail@review.de`, `@@review`) und Wortfortsetzung
+ *  (`@reviewer`, `@review_foo`); ein einzelnes `_` danach ist Markdown-Kursiv und zählt (daher Lookahead statt \b,
+ *  denn `_` ist \w und \b fände keine Grenze). */
+export const TAG = /(?<![a-z\d@])@review(?=$|[^-\w]|_(?![\w-]))/i;
 /** `@review deep` → Tiefe deep (Knut 17.10.). */
-export const TAG_DEEP = /(^|[\s(])@review\s+deep\b/i;
+export const TAG_DEEP = /(?<![a-z\d@])@review\s+deep(?=$|[^-\w]|_(?![\w-]))/i;
 /** Ereignistext eines Tags: „deep“ muss erhalten bleiben, sonst sieht queueReviews es nie (Fehler 19.10.). */
 /** Plan 286: `@fix` — eigene Regex, Wortgrenze wie `@review` (`@fixes`, `@fix-it`, `mail@fix.de` zählen nicht). */
-export const FIX_TAG = /(^|[\s(])@fix\b(?![-\w])/i;
+export const FIX_TAG = /(?<![a-z\d@])@fix(?=$|[^-\w]|_(?![\w-]))/i;
 /** Auftrag hinter `@fix` (bis 4000 Zeichen); leer = „alle offenen Punkte des letzten Reviews dieser Person“. */
 export function fixAuftrag(body: string | null | undefined): string {
   const t = String(body ?? '');
   const m = FIX_TAG.exec(t);
-  return m ? t.slice(m.index + m[0].length).replace(/^[\s:,.\-–—]+/, '').trim().slice(0, 4000) : '';
+  return m ? t.slice(m.index + m[0].length).replace(/^[\s:,.\-–—`*_]+/, '').trim().slice(0, 4000) : '';
 }
 const tagText = (body: string | null | undefined, who: string) => `${TAG_DEEP.test(body ?? '') ? '@review deep' : '@review'} von ${who}`;
 /** Paket 223 (#364: „Nits 1–2 addressed“ ohne @review): meldet der PR-Autor Punkte als erledigt? Verneint („not done yet“,
@@ -210,7 +217,8 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
       const who = (c.author?.login ?? '').toLowerCase();
       if (!c.id || c.createdAt < ab) continue;
       fix(c.id, c.createdAt, who, c.body ?? '', c.url ?? p.url, 'kommentar');
-      if (TAG.test(c.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${c.id}`, 'tag', c.createdAt, who, tagText(c.body, who), c.url);
+      // R29 A: Eigene Workspace-Kommentare (OLAF Workspace) unter Knuts Konto lösen auch als Tag nie aus — Knuts eigenes @review schon.
+      if (TAG.test(c.body ?? '') && allowSet.has(who) && state === 'OPEN' && !(who === ME && (c.body ?? '').includes(MARKE_TICKER))) ev(`tag:${c.id}`, 'tag', c.createdAt, who, tagText(c.body, who), c.url);
       else if (who && who === author && who !== ME && allowSet.has(who) && state === 'OPEN' && meldetErledigt(c.body)) ev(`erledigt:${c.id}`, 'erledigt', c.createdAt, who, `${who} meldet erledigt: ${kurz(c.body, 100)}`, c.url);
       else if (ours && who && who !== ME) ev(`c:${c.id}`, 'kommentar', c.createdAt, who, `Kommentar von ${who}: ${kurz(c.body, 120)}`, c.url);
     }
@@ -219,6 +227,11 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
       if (!r.id || !r.submittedAt || r.submittedAt < ab) continue;
       if (FIX_TAG.test(r.body ?? '')) fix(r.id, r.submittedAt, who, r.body ?? '', r.url ?? p.url, 'review');
       else (r.comments?.nodes ?? []).forEach((ic: any, i: number) => fix(`${r.id}:${i}`, r.submittedAt, who, ic?.body ?? '', r.url ?? p.url, 'inline', ic?.path ? `${ic.path}:${ic.line ?? ic.originalLine ?? '?'}` : null));
+      // R29 A: @review auch in den Inline-Zeilenkommentaren des Reviews — eigene Kennung `tag:<rid>:<i>`, eigener Text
+      // („deep“ aus der Inline-Zeile), der Review-Körper zählt weiterhin getrennt (nicht doppelt).
+      if (allowSet.has(who) && state === 'OPEN') (r.comments?.nodes ?? []).forEach((ic: any, i: number) => {
+        if (TAG.test(ic?.body ?? '')) ev(`tag:${r.id}:${i}`, 'tag', r.submittedAt, who, tagText(ic.body, who), r.url ?? p.url);
+      });
       if (TAG.test(r.body ?? '') && allowSet.has(who) && state === 'OPEN') ev(`tag:${r.id}`, 'tag', r.submittedAt, who, tagText(r.body, who), r.url);
       else if (who && who === author && who !== ME && allowSet.has(who) && state === 'OPEN' && meldetErledigt(r.body)) ev(`erledigt:${r.id}`, 'erledigt', r.submittedAt, who, `${who} meldet erledigt: ${kurz(r.body, 100)}`, r.url);
       else if (ours && who && who !== ME && r.state !== 'PENDING') ev(`r:${r.id}`, 'review', r.submittedAt, who, `Review von ${who}: ${REVIEW_STATE[r.state] ?? r.state}${r.body ? ` — ${kurz(r.body, 100)}` : ''}`, r.url);
@@ -240,7 +253,10 @@ export function verpassteTags(prs: any[], gesehen: Set<string>, manuell: { repo:
   const out: { repo: string; number: number; url: string; von: string; at: string; nachgeholt: boolean }[] = [];
   for (const p of prs) {
     const repo = String(p.repository?.nameWithOwner ?? '');
-    const items = [...(p.comments?.nodes ?? []).map((c: any) => ({ ...c, at: c.createdAt })), ...(p.reviews?.nodes ?? []).map((r: any) => ({ ...r, at: r.submittedAt }))];
+    const items = [...(p.comments?.nodes ?? []).map((c: any) => ({ ...c, at: c.createdAt })),
+      ...(p.reviews?.nodes ?? []).flatMap((r: any) => [{ ...r, at: r.submittedAt },
+        // R29 A: Inline-Zeilenkommentare des Reviews zählen als eigene Tags (Kennung wie in deriveEvents: tag:<rid>:<i>).
+        ...(r.comments?.nodes ?? []).map((ic: any, i: number) => ({ id: `${r.id}:${i}`, author: r.author, body: ic?.body ?? '', url: r.url, at: r.submittedAt }))])];
     for (const c of items) {
       const von = (c.author?.login ?? '').toLowerCase();
       if (!c.id || !c.at || c.at < since || !ok.has(von) || !TAG.test(c.body ?? '') || gesehen.has(`tag:${c.id}`)) continue;
@@ -339,6 +355,11 @@ export async function queueReviews(fresh: TickerEvent[], s: TickerSettings, now 
 export const fixesCol = () => wb().collection('pr_fixes');
 
 /** Plan 286: `@fix`-Ereignisse → Warteschlange `pr_fixes` (eine Kennung je Kommentar). Den Fix-Strang startet prfix.ts. */
+/** R29 A (Knut 24.10.: „@fix müssen wir noch testen, bevor wir es anschalten … in einer Art Drymode“): Trockenlauf für
+ *  `@fix` — der Fix läuft komplett (Strang, Tests, Pre-Push-Gate), aber es wird nie gepusht und nie an GitHub kommentiert.
+ *  Reiner Umgebungsschalter, Vorgabe aus; das Ergebnis landet als Paket (s. prfix.ts). */
+export const fixTrocken = (env = process.env) => env.WERKBANK_FIX_DRYRUN === '1';
+
 export async function queueFixes(fresh: TickerEvent[], s: TickerSettings, now = new Date()): Promise<number> {
   let n = 0;
   for (const e of fresh) {
@@ -347,8 +368,10 @@ export async function queueFixes(fresh: TickerEvent[], s: TickerSettings, now = 
       : !fixRepoErlaubt(e.repo) ? '@fix nicht für dieses Repo (WERKBANK_FIX_ORGS)' : !e.actor || !s.allow.includes(e.actor) ? '@fix: Person nicht auf der Liste' : null;
     if (nein) { await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: nein } }); continue; }
     try {
-      await fixesCol().insertOne({ _id: e._id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, quelle: e.url, headTag: e.head, by: e.actor, auftrag: e.fix.auftrag, art: e.fix.quelle, ort: e.fix.ort, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date });
-      await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: 'Fix eingereiht' } });
+      // R29 A: Im Trockenlauf trägt der Eintrag die Marke von Anfang an — auch wenn der Schalter während des
+      // Laufens wieder ausgeht, wird so ein Eintrag nie gepusht.
+      await fixesCol().insertOne({ _id: e._id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, quelle: e.url, headTag: e.head, by: e.actor, auftrag: e.fix.auftrag, art: e.fix.quelle, ort: e.fix.ort, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date, ...(fixTrocken() ? { trocken: true } : {}) });
+      await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: fixTrocken() ? 'Fix eingereiht (Trockenlauf)' : 'Fix eingereiht' } });
       n++;
     } catch (x: any) { if (x?.code !== 11000) throw x; }
   }

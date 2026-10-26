@@ -22,6 +22,10 @@ import { klonPfad, prReviewDir, nextPaket, kontextMd, diffMaterial, realGit, scr
 import { schreibeErgebnis, type ExecErgebnis, type ExecJob } from './reviewexec.ts';
 
 export const fixAus = (env = process.env) => env.WERKBANK_FIX === 'off';
+/** R29 A: Trockenlauf — der Fix läuft komplett (Strang, Tests, Gate), aber ohne Push und ohne GitHub-Kommentar.
+ *  Der Eintrag trägt `trocken` (beim Einreihen gesetzt), nicht nur der Schalter: Geht der Schalter während des
+ *  Laufens aus, wird der Lauf trotzdem nie gepusht. */
+export const fixTrocken = (f: any, env = process.env) => f?.trocken === true || env.WERKBANK_FIX_DRYRUN === '1';
 /** Höchstens so viele Fix-Stränge gleichzeitig (eigener Deckel neben den Reviews). */
 export const fixMax = (env = process.env) => { const n = Math.floor(Number(env.WERKBANK_FIX_MAX)); return n >= 1 && n <= 4 ? n : 1; };
 export const auditCol = () => wb().collection('pr_fix_audit');
@@ -126,7 +130,7 @@ export function fixZeile(a0: { art: FixStatus; eta?: number; position?: number; 
   }
 }
 export function fixErklaerung(): string {
-  return '\n\n<sub>How this works: `@fix <what>` (or `@fix` alone = all open items of your last review) starts a fix run in the workspace: tests first, then the fix, one commit per item. '
+  return '\n\n<sub>How this works: `@​fix <what>` (or `@​fix` alone = all open items of your last review) starts a fix run in the workspace: tests first, then the fix, one commit per item. '
     + 'The workspace pushes only if the target is this PR\'s head branch, it is a fast-forward, the branch is not protected, the tests are green and the pre-push gate shows no hard findings — never to the base branch, never a merge.</sub>';
 }
 
@@ -184,7 +188,9 @@ export function antwortText(a: { by: string; quelle: string | null; start: strin
   z.push(`**Tests:** ${!t ? 'not run' : !t.ausgefuehrt ? `not run — ${zeile1(t.grund)}` : t.schritte.map((s) => `${zeile1(s.name)} ${s.code === -1 ? `⏭️ (${zeile1(s.tail.replace(/^skipped:\s*/, '')).slice(0, 60)})` : s.code === 0 && !s.timedOut ? '✅' : '❌'}`).join(' · ') || 'no scripts'} (run by the workspace after the fix)`);
   z.push(`**Pre-push gate:** ${!a.gate ? 'not run' : a.gate.exit === 0 ? `0 hard findings${a.gate.warnungen ? `, ${a.gate.warnungen} warning(s)` : ''}` : a.gate.exit === 1 ? `${a.gate.hart || 'at least one'} hard finding(s)` : 'failed to run'}`);
   z.push('');
-  if (a.gepusht) z.push(a.deltaReview ? 'A delta review of these commits has been queued; its result follows as a separate comment.' : 'Tag `@review` for a delta review of these commits.');
+  // R29 A: `@review`/`@fix` im eigenen Text wörtlich genannt — mit ZWNJ entschärft (wie zeile1), sonst löst der eigene
+  // Kommentar unter Knuts Konto den Ticker erneut aus (Backticks schützen seit der neuen Erkennung nicht mehr).
+  if (a.gepusht) z.push(a.deltaReview ? 'A delta review of these commits has been queued; its result follows as a separate comment.' : `Tag \`@​review\` for a delta review of these commits.`);
   z.push('', '---', `_Automated fix (OLAF Workspace) · pushed only after tests and the pre-push gate passed, fast-forward only, never to the base branch. Merging stays with the PR owner._`);
   return z.join('\n');
 }
@@ -261,6 +267,8 @@ export interface FixDeps {
 }
 
 async function setzeStatus(f: any, zeile: string, deps: FixDeps, now: Date) {
+  // R29 A: Im Trockenlauf keine Statuszeile an GitHub — die Zeile steht nur im Eintrag/Log.
+  if (fixTrocken(f)) { deps.log?.('pr-fix trockenlauf status', { pr: `${f.repo}#${f.number}`, zeile }); return; }
   if (!deps.status) return;
   try {
     const doc: any = await fixesCol().findOne({ _id: f._id }, { projection: { sk: 1 } });
@@ -298,7 +306,7 @@ export async function fixWorktree(f: any, pr: PrLage, g: GitRun, base = prReview
   return wt;
 }
 
-export async function audit(f: any, e: { ergebnis: 'gepusht' | 'abgelehnt' | 'push-fehler'; von: string; nach: string | null; zweig: string; gate: any; tests: any; gruende: string[] }, now: Date) {
+export async function audit(f: any, e: { ergebnis: 'gepusht' | 'abgelehnt' | 'push-fehler' | 'trocken'; von: string; nach: string | null; zweig: string; gate: any; tests: any; gruende: string[] }, now: Date) {
   await auditCol().insertOne({ at: now, fix: String(f._id), wer: f.by, pr: `${f.repo}#${f.number}`, repo: f.repo, number: f.number, ...e });
 }
 
@@ -371,7 +379,8 @@ async function fixTickInnen(deps: FixDeps): Promise<{ started: number; done: num
 async function starte(f: any, s: TickerSettings, deps: FixDeps, g: GitRun, now: Date): Promise<boolean> {
   const pr = await deps.pr(f.repo, f.number);
   // Ohne Push, Gate oder Testausführung könnte der Fix nie gepusht werden — dann gar keinen Strang starten.
-  const fehlt = [!deps.push && 'pushing is switched off in the workspace', !deps.gate && 'the pre-push gate is not set up', !deps.tests && 'test execution is switched off'].filter(Boolean) as string[];
+  // R29 A: Im Trockenlauf wird nie gepusht — ein fehlender Push-Weg darf den Strang dann nicht verhindern.
+  const fehlt = [!deps.push && !fixTrocken(f) && 'pushing is switched off in the workspace', !deps.gate && 'the pre-push gate is not set up', !deps.tests && 'test execution is switched off'].filter(Boolean) as string[];
   const vorab = !s.autoFix ? ['@fix is switched off'] : [...vorabPruefung(f.repo, pr), ...fehlt];
   if (vorab.length) {
     await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'übersprungen', note: vorab.join('; '), doneAt: now } });
@@ -413,8 +422,10 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
   if (anzahl === 0) {
     await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'nichts', doneAt: now, neu, note: abgebrochen ? 'Strang abgebrochen, keine Commits' : 'keine Commits' } });
     let url: string | null = null;
+    // R29 A: Ohne fix.json wird kein Antwort-Kommentar geplant — nur im Paket vermerkt.
     const text = fix ? zuGithub(antwortText({ by: f.by, quelle: f.quelle ?? null, start: f.head, neu: null, zweig: f.zweig, gepusht: false, gruende: ['the fix produced no commits'], fix, commits: [], tests: null, gate: null, deltaReview: false })) : null;
-    if (text && deps.kommentar) url = (await deps.kommentar(f, text).catch(() => null))?.url ?? null;
+    if (fixTrocken(f)) { if (text) try { writeFileSync(join(dir, 'antwort.md'), `${text}\n`); } catch { /* s. o. */ } }
+    else if (text && deps.kommentar) url = (await deps.kommentar(f, text).catch(() => null))?.url ?? null;
     await setzeStatus(f, fixZeile({ art: 'nothing', grund: abgebrochen ? 'the fix run was interrupted' : fix?.kurz ? zeile1(fix.kurz).slice(0, 200) : undefined, url }), deps, now);
     await melde(f, `keine Änderungen${abgebrochen ? ' (Strang abgebrochen)' : ''} — Paket ${f.paket}`, deps);
     return;
@@ -441,8 +452,11 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
   const s2 = await tickerSettings();
   const lage: PushLage = { repo: f.repo, ziel: f.zweig, pr, start: f.head, neu, commits: anzahl, fastForward: ff, gate: gate && { exit: gate.exit, hart: gate.hart }, tests: testsGruen(tests), autoFix: s2.autoFix, von: f.by, allow: s2.allow, configOk };
   const p = pushPruefung(lage);
-  if (p.ok && !deps.push) p.gruende.push('push is not configured'), (p.ok = false);
+  if (p.ok && !deps.push && !fixTrocken(f)) p.gruende.push('push is not configured'), (p.ok = false);
   const testsAudit = lage.tests;
+  // R29 A (Trockenlauf): Tests und Gate sind gelaufen, das Urteil steht fest — jetzt wird das Paket geschrieben
+  // statt gepusht: Antwort-Text, Fix-Diff (f.head..neu) und Gate-Test gehören hinein; Statuszeile nur im Eintrag.
+  if (fixTrocken(f)) return trocknen(f, p, { fix, neu, commits, tests, gate }, dir, klon, g, deps, now);
   if (!p.ok) {
     await audit(f, { ergebnis: 'abgelehnt', von: f.head, nach: neu, zweig: f.zweig, gate, tests: testsAudit, gruende: p.gruende }, now);
     return ablehnen(f, p.gruende, { fix, neu, commits, tests, gate }, deps, now);
@@ -472,10 +486,31 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
   if (!text) await melde(f, `gepusht ${f.head.slice(0, 7)}..${neu.slice(0, 7)}, Antwort-Kommentar zurückgehalten (sah nach einem Geheimnis aus) — Paket ${f.paket}`, deps);
 }
 
+/**
+ * R29 A — Abschluss eines Trockenlaufs (statt Push und Antwort-Kommentar): Der geplante Kommentar (`antwort.md`) und der
+ * Fix-Diff (`fix-diff.patch`, `f.head..neu`) landen im Paket; `gate.txt`/`tests.md` hat der Lauf schon geschrieben. Der
+ * Eintrag wird `trocken` abgeschlossen (Urteil von `pushPruefung` in der Notiz), der Hauptchat bekommt den Paketpfad.
+ * Wäre der Push gegangen, zeigt die Notiz das — sonst die Gründe.
+ */
+async function trocknen(f: any, p: { ok: boolean; gruende: string[] }, x: { fix: FixJson | null; neu: string; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any }, dir: string, klon: string, g: GitRun, deps: FixDeps, now: Date) {
+  const text = antwortText({ by: f.by, quelle: f.quelle ?? null, start: f.head, neu: x.neu, zweig: f.zweig, gepusht: p.ok, gruende: p.ok ? undefined : p.gruende, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview: false });
+  const kappen = (t: string) => (t.length > 400_000 ? `${t.slice(0, 400_000)}\n\n[… abgeschnitten — Rest im Worktree mit git diff]\n` : t);
+  try {
+    writeFileSync(join(dir, 'antwort.md'), `${text}\n`);
+    if (x.neu !== f.head) writeFileSync(join(dir, 'fix-diff.patch'), kappen(String(await g(['diff', f.head, x.neu], f.worktree))));
+  } catch (e: any) { deps.log?.('pr-fix trockenlauf paket', { pr: `${f.repo}#${f.number}`, error: scrub(e?.message ?? e) }); }
+  await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'trocken', doneAt: now, neu: x.neu, trocken: true, urteil: p.ok ? 'push möglich' : 'push wäre abgelehnt worden', gruende: p.ok ? [] : p.gruende, note: `${p.ok ? 'Trockenlauf: Bedingungen erfüllt, Push wäre gegangen' : `Trockenlauf: nicht gepusht worden (${p.gruende.join('; ')})`} — Paket ${f.paket}` } });
+  await audit(f, { ergebnis: 'trocken', von: f.head, nach: x.neu, zweig: f.zweig, gate: x.gate, tests: x.tests, gruende: p.gruende }, now);
+  deps.log?.('pr-fix trockenlauf fertig', { pr: `${f.repo}#${f.number}`, urteil: p.ok ? 'push möglich' : 'abgelehnt', paket: f.paket });
+  await melde(f, `${p.ok ? 'Trockenlauf: Push wäre gegangen' : `Trockenlauf: Push wäre abgelehnt worden (${p.gruende.join('; ')})`} — Paket ${f.paket}`, deps);
+}
+
 async function ablehnen(f: any, gruende: string[], x: { fix: FixJson | null; neu: string; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any }, deps: FixDeps, now: Date) {
   let url: string | null = null;
   const text = antwortText({ by: f.by, quelle: f.quelle ?? null, start: f.head, neu: x.neu, zweig: f.zweig, gepusht: false, gruende, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview: false });
-  if (!GEHEIM.test(text) && deps.kommentar) url = (await deps.kommentar(f, text).catch(() => null))?.url ?? null;
+  // R29 A: Ablehnung im Trockenlauf: Antwort-Text nur ins Paket, kein GitHub-Kommentar.
+  if (fixTrocken(f)) { try { writeFileSync(join(reviewDir(), f.paket, 'antwort.md'), `${text}\n`); } catch { /* s. o. */ } }
+  else if (!GEHEIM.test(text) && deps.kommentar) url = (await deps.kommentar(f, text).catch(() => null))?.url ?? null;
   await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'abgelehnt', doneAt: now, neu: x.neu, gruende, antwort: url, note: `nicht gepusht: ${gruende.join('; ')}` } });
   await setzeStatus(f, fixZeile({ art: 'refused', gruende, url }), deps, now);
   await melde(f, `nicht gepusht: ${gruende.join('; ')} — Commits liegen lokal im Worktree ${f.worktree} (Stand ${x.neu.slice(0, 7)}), Paket ${f.paket}`, deps);
@@ -532,7 +567,7 @@ export async function gateVia(skript: string, wt: string, zweig: string, basis: 
 export async function fixOverview(limit = 10) {
   const [fixes, aud] = await Promise.all([fixesCol().find({}).sort({ createdAt: -1 }).limit(limit).toArray(), auditCol().find({}).sort({ at: -1 }).limit(limit).toArray()]);
   return {
-    fixes: fixes.map((f: any) => ({ id: String(f._id), repo: f.repo, number: f.number, url: f.url, by: f.by, auftrag: String(f.auftrag ?? '').slice(0, 140), status: f.status, note: f.note ?? null, antwort: f.antwort ?? null, createdAt: f.createdAt, strand: f.strand ?? null })),
+    fixes: fixes.map((f: any) => ({ id: String(f._id), repo: f.repo, number: f.number, url: f.url, by: f.by, auftrag: String(f.auftrag ?? '').slice(0, 140), status: f.status, note: f.note ?? null, antwort: f.antwort ?? null, createdAt: f.createdAt, strand: f.strand ?? null, ...(f.trocken ? { trocken: true, urteil: f.urteil ?? null, gruende: f.gruende ?? [] } : {}) })),
     audit: aud.map((a: any) => ({ at: a.at, wer: a.wer, pr: a.pr, ergebnis: a.ergebnis, von: String(a.von ?? '').slice(0, 7), nach: String(a.nach ?? '').slice(0, 7), zweig: a.zweig, gate: a.gate ? { exit: a.gate.exit, hart: a.gate.hart } : null, gruende: a.gruende ?? [] })),
   };
 }

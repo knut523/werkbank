@@ -407,6 +407,81 @@ test('Kennzeichnung: automatisch gepostetes Ergebnis beginnt mit „Automated re
   await P.reviewsCol().deleteMany({});
 });
 
+// ---------- R29 A (Knut 24.10.): @review/@fix überall im Text erkennen ----------
+
+test('R29 A: TAG/TAG_DEEP/FIX_TAG nach Satzzeichen und Markdown-Formatierung; E-Mail und Wortbestandteil bleiben rot', async () => {
+  const { TAG, TAG_DEEP, FIX_TAG, fixAuftrag } = await import('../server/prticker.ts');
+  // hinter Fließtext/Satzzeichen (Knut: „@review comments die hinter einem Fließtext sind gehen verloren“)
+  for (const ja of ['bitte,@review', 'danke. @review', 'sieht gut —@review deep', '`@review` im Code', '**@review** fett', '_@review_ kursiv',
+    '„@review“ bitte', '(@review)', '[@review]', 'Schau: @review deep bitte', 'zuletzt:@review', 'e/…@review', 'am Ende @review']) {
+    assert.equal(TAG.test(ja), true, ja);
+    assert.equal(FIX_TAG.test(ja), false, `${ja}: @review ist kein @fix`);
+  }
+  for (const ja of ['bitte,@fix', 'danke. @fix', '`@fix` im Code', '**@fix** fett', '_@fix_ kursiv', '„@fix danke“', '(@fix)', '[@fix]']) assert.equal(FIX_TAG.test(ja), true, ja);
+  for (const ja of ['—@review deep', ',@review deep', '``@review deep``', '**@review deep**']) assert.equal(TAG_DEEP.test(ja), true, ja);
+  // nie: E-Mail, Teil eines Worts, Abgetrenntes
+  for (const nein of ['foo@review', '@reviewer', 'mail@review.de', 'x@fix', '@fixes', '@fix-it', '@fixed', 'mail@fix.de', '@@review', 'x@review deep']) {
+    assert.equal(TAG.test(nein), false, nein);
+    assert.equal(FIX_TAG.test(nein), false, nein);
+  }
+  assert.equal(TAG_DEEP.test('foo@review deep'), false);
+  assert.equal(TAG_DEEP.test('@reviewer deep'), false);
+  // mehrere im Text, auch tief im Fließtext
+  assert.equal(TAG.test('Erst Text, dann mehr. Und noch @review zum Schluss'), true);
+  // fixAuftrag hinter formatiertem @fix
+  assert.equal(fixAuftrag('`@fix` rename `foo`'), 'rename `foo`');
+});
+
+test('R29 A: Inline-Kommentar mit @review erzeugt ein tag-Ereignis; Review-Körper nicht doppelt', async () => {
+  const { deriveEvents } = await import('../server/prticker.ts');
+  const p = pr('WirStrom1/olaf-admin', 6, { author: { login: 'bizarrochris' }, reviews: { nodes: [
+    { id: 'RI1', author: { login: 'knut523' }, body: 'Overall fine, but one thing: @review', state: 'COMMENTED', submittedAt: '2026-10-13T10:04:00Z', url: 'r-i1', comments: { nodes: [
+      { path: 'src/a.ts', line: 12, body: 'Hier fehlt der Null-Fall. `@review deep` bitte.' },
+      { path: 'src/b.ts', line: 3, body: 'nur ein Hinweis' },
+    ] } },
+  ] } });
+  const { events } = deriveEvents([p], new Map(), '2026-10-13T10:00:00Z', ['knut523', 'bizarrochris']);
+  const tags = events.filter((e) => e.kind === 'tag');
+  assert.equal(tags.length, 2, 'Körper und Inline: genau zwei Ereignisse');
+  assert.deepEqual(tags.map((e) => e._id).sort(), ['tag:RI1', 'tag:RI1:0']);
+  // deep kommt aus dem Inline-Kommentar (Ereignistext trägt es)
+  assert.match(tags.find((e) => e._id === 'tag:RI1:0')!.text, /@review deep von knut523/);
+  // @fix im Inline-Kommentar bleibt wie vorher (quelle inline, ort Datei:Zeile)
+  const p2 = pr('WirStrom1/olaf-admin', 6, { author: { login: 'bizarrochris' }, reviews: { nodes: [
+    { id: 'RI2', author: { login: 'knut523' }, body: '', state: 'COMMENTED', submittedAt: '2026-10-13T10:04:00Z', url: 'r-i2', comments: { nodes: [
+      { path: 'src/c.ts', line: 8, body: 'Null-Fall?,@fix das' },
+    ] } },
+  ] } });
+  const fx = deriveEvents([p2], new Map(), '2026-10-13T10:00:00Z', ['knut523']).events.filter((e) => e.kind === 'fix');
+  assert.equal(fx.length, 1);
+  assert.equal(fx[0].fix!.quelle, 'inline'); assert.equal(fx[0].fix!.ort, 'src/c.ts:8');
+  // eine Person ohne Erlaubtliste: kein tag/fix aus dem Inline-Kommentar
+  const p3 = pr('WirStrom1/olaf-admin', 6, { author: { login: 'bizarrochris' }, reviews: { nodes: [
+    { id: 'RI3', author: { login: 'fremder' }, body: '', state: 'COMMENTED', submittedAt: '2026-10-13T10:04:00Z', url: 'r-i3', comments: { nodes: [
+      { path: 'src/d.ts', line: 1, body: '@review bitte' },
+    ] } },
+  ] } });
+  assert.equal(deriveEvents([p3], new Map(), '2026-10-13T10:00:00Z', ['knut523']).events.filter((e) => e.kind === 'tag' || e.kind === 'fix').length, 0);
+  // geschlossen: auch Inline-@review nicht
+  const p4 = { ...p, state: 'CLOSED', merged: false };
+  assert.equal(deriveEvents([p4], new Map(), '2026-10-13T10:00:00Z', ['knut523']).events.filter((e) => e.kind === 'tag').length, 0);
+});
+
+test('R29 A: verpassteTags sieht Inline-Kommentare; von Hand nachgeholt zählt weiter', async () => {
+  const { verpassteTags } = await import('../server/prticker.ts');
+  const p = pr('WirStrom1/olaf-admin', 7, { author: { login: 'bizarrochris' }, reviews: { nodes: [
+    { id: 'RV1', author: { login: 'knut523' }, body: '', state: 'COMMENTED', submittedAt: '2026-10-13T10:04:00Z', url: 'r-v1', comments: { nodes: [
+      { path: 'src/e.ts', line: 2, body: 'bitte,@review' },
+    ] } },
+  ] } });
+  const weg = verpassteTags([p], new Set(), [], '2026-10-13T10:00:00Z', ['knut523']);
+  assert.equal(weg.length, 1);
+  assert.equal(weg[0].von, 'knut523'); assert.equal(weg[0].repo, 'WirStrom1/olaf-admin'); assert.equal(weg[0].number, 7);
+  // schon gesehen (tag:<reviewId>:<i>) → kein verpasster Tag; manuell nachgeholt zählt
+  assert.equal(verpassteTags([p], new Set([`tag:RV1:0`]), [], '2026-10-13T10:00:00Z', ['knut523']).length, 0);
+  assert.equal(verpassteTags([p], new Set(), [{ repo: 'WirStrom1/olaf-admin', number: 7, at: '2026-10-13T10:05:00Z' }], '2026-10-13T10:00:00Z', ['knut523'])[0].nachgeholt, true);
+});
+
 test('Echte Aufzeichnung (15.10., nur lesend): Ableitung ohne Fehler, keine eigenen Aktionen, werkbank sieht nichts, Abschneiden erkannt', async () => {
   const dir = join(import.meta.dirname, 'fixtures', 'github');
   const files = readdirSync(dir).filter((f) => f.endsWith('.json'));

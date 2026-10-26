@@ -499,3 +499,123 @@ test('Not-Aus WERKBANK_FIX=off: nichts startet', async () => {
   await T.fixesCol().deleteOne({ _id: 'fix:aus1' as any });
   assert.ok(existsSync(T0));
 });
+
+// ---------- R29 A: Trockenlauf (WERKBANK_FIX_DRYRUN / Eintrag trocken) ----------
+
+test('fixTrocken: Vorgabe aus; Eintrag-Marke oder WERKBANK_FIX_DRYRUN=1 an; queueFixes reiht mit Marke ein', async () => {
+  assert.equal(F.fixTrocken({ trocken: true }), true);
+  assert.equal(F.fixTrocken({}), false, 'Vorgabe aus');
+  assert.equal(F.fixTrocken(null), false);
+  process.env.WERKBANK_FIX_DRYRUN = '1';
+  try {
+    assert.equal(F.fixTrocken({}), true);
+    assert.equal(T.fixTrocken(), true, 'prticker-Schalter derselbe');
+    // queueFixes schreibt die Marke an den Eintrag — auch wenn der Schalter später ausgeht, wird er nie gepusht.
+    await T.tickerCol().insertOne({ _id: 'fix:dryq' } as any);
+    assert.equal(await T.queueFixes([ev('dryq')], S, NOW), 1);
+    const f: any = await T.fixesCol().findOne({ _id: 'fix:dryq' as any });
+    assert.equal(f.trocken, true);
+    assert.equal(((await T.tickerCol().findOne({ _id: 'fix:dryq' as any })) as any).note, 'Fix eingereiht (Trockenlauf)');
+    await T.fixesCol().deleteOne({ _id: 'fix:dryq' as any });
+  } finally { delete process.env.WERKBANK_FIX_DRYRUN; }
+  assert.equal(T.fixTrocken(), false, 'Schalter wieder aus');
+  // Ohne Schalter: keine Marke, normale Notiz.
+  assert.equal(await T.queueFixes([ev('dryq')], S, NOW), 1);
+  const f2: any = await T.fixesCol().findOne({ _id: 'fix:dryq' as any });
+  assert.equal(f2.trocken, undefined);
+  assert.equal(((await T.tickerCol().findOne({ _id: 'fix:dryq' as any })) as any).note, 'Fix eingereiht');
+  await T.fixesCol().deleteOne({ _id: 'fix:dryq' as any });
+});
+
+test('Ende-zu-Ende Trockenlauf: Strang, Tests und Gate laufen, kein Push, kein GitHub-Kommentar, keine Statuszeile; Paket mit Urteil, Antwort und Fix-Diff', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-dry', 'feat/d', 20);
+  const vorher = gh.kopf();
+  await einreihen('dry1', 'olaf-dry', 20);
+  await T.fixesCol().updateOne({ _id: 'fix:dry1' as any }, { $set: { trocken: true } });
+  const { d, calls } = deps(gh, { zweig: 'feat/d' });
+  assert.deepEqual(await F.fixTick(d), { started: 1, done: 0 }, 'Strang läuft im Trockenlauf');
+  assert.equal(calls.status.length, 0, 'keine Statuszeile an GitHub');
+  assert.deepEqual(await F.fixTick(d), { started: 0, done: 1 });
+  const f: any = await T.fixesCol().findOne({ _id: 'fix:dry1' as any });
+  // Nie gepusht, nie kommentiert, nie Status an GitHub
+  assert.equal(gh.kopf(), vorher, 'Fake-GitHub unverändert');
+  assert.equal(calls.push, 0); assert.equal(calls.kommentar.length, 0); assert.equal(calls.status.length, 0);
+  assert.equal(f.status, 'trocken'); assert.equal(f.trocken, true); assert.equal(f.urteil, 'push möglich'); assert.deepEqual(f.gruende, []);
+  assert.match(f.note, /Trockenlauf: Bedingungen erfüllt, Push wäre gegangen/);
+  // Paket: geplanter Antwort-Kommentar, Fix-Diff, Gate-Urteil, Testergebnis
+  const dir = join(process.env.WERKBANK_REVIEW_DIR!, f.paket);
+  const antwort = readFileSync(join(dir, 'antwort.md'), 'utf8');
+  assert.match(antwort, /Automated fix \(OLAF Workspace\)/);
+  assert.match(antwort, new RegExp(`pushed \`${vorher.slice(0, 7)}\\.`), 'der Text, der gepostet würde, wenn live geschaltet wäre');
+  assert.match(antwort, /- ✅ fixed — rename foo\./);
+  assert.match(readFileSync(join(dir, 'fix-diff.patch'), 'utf8'), /\+export const bar/, 'Diff des Fixes im Paket');
+  assert.match(readFileSync(join(dir, 'gate.txt'), 'utf8'), /0 harte/);
+  assert.ok(existsSync(join(dir, 'tests.md')));
+  // Eintrag in der Werkbank (Oberfläche) + Meldung an Knut mit Paketpfad
+  assert.match(calls.melde.at(-1)!, /Trockenlauf: Push wäre gegangen/);
+  assert.match(calls.melde.at(-1)!, new RegExp(f.paket));
+  const au: any = await F.auditCol().findOne({ fix: 'fix:dry1' });
+  assert.equal(au.ergebnis, 'trocken'); assert.deepEqual(au.gruende, []);
+});
+
+test('Ende-zu-Ende Trockenlauf mit hartem Gate-Befund: kein Push, Urteil „wäre abgelehnt“, Gründe in Paket und Eintrag', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-dry2', 'feat/e', 21);
+  const vorher = gh.kopf();
+  await einreihen('dry2', 'olaf-dry2', 21);
+  await T.fixesCol().updateOne({ _id: 'fix:dry2' as any }, { $set: { trocken: true } });
+  const { d, calls } = deps(gh, { zweig: 'feat/e', gate: 1 });
+  await F.fixTick(d); await F.fixTick(d);
+  const f: any = await T.fixesCol().findOne({ _id: 'fix:dry2' as any });
+  assert.equal(gh.kopf(), vorher); assert.equal(calls.push, 0); assert.equal(calls.kommentar.length, 0); assert.equal(calls.status.length, 0);
+  assert.equal(f.status, 'trocken'); assert.equal(f.urteil, 'push wäre abgelehnt worden');
+  assert.ok(f.gruende.some((g: string) => /hard finding/.test(g)));
+  const antwort = readFileSync(join(process.env.WERKBANK_REVIEW_DIR!, f.paket, 'antwort.md'), 'utf8');
+  assert.match(antwort, /\*\*not pushed\*\*: pre-push gate: 1 hard finding/);
+  assert.match(calls.melde.at(-1)!, /Push wäre abgelehnt worden/);
+});
+
+test('Ende-zu-Ende Trockenlauf: Strang ohne Commits → „nichts“ wie sonst, Antwort nur ins Paket', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-dry3', 'feat/f', 22);
+  await einreihen('dry3', 'olaf-dry3', 22);
+  await T.fixesCol().updateOne({ _id: 'fix:dry3' as any }, { $set: { trocken: true } });
+  const { d, calls } = deps(gh, { zweig: 'feat/f', strangAendert: false });
+  await F.fixTick(d); await F.fixTick(d);
+  const f: any = await T.fixesCol().findOne({ _id: 'fix:dry3' as any });
+  assert.equal(f.status, 'nichts'); assert.equal(calls.push, 0); assert.equal(calls.kommentar.length, 0); assert.equal(calls.status.length, 0);
+  assert.ok(!existsSync(join(process.env.WERKBANK_REVIEW_DIR!, f.paket, 'antwort.md')), 'ohne fix.json wird kein Antworttext geplant');
+});
+
+test('Trockenlauf über den Schalter (WERKBANK_FIX_DRYRUN=1) ohne Marken am Eintrag: auch dann nie gepusht', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-dry4', 'feat/g', 23);
+  await einreihen('dry4', 'olaf-dry4', 23);
+  const { d, calls } = deps(gh, { zweig: 'feat/g' });
+  process.env.WERKBANK_FIX_DRYRUN = '1';
+  try { await F.fixTick(d); await F.fixTick(d); } finally { delete process.env.WERKBANK_FIX_DRYRUN; }
+  const f: any = await T.fixesCol().findOne({ _id: 'fix:dry4' as any });
+  assert.equal(f.status, 'trocken'); assert.equal(calls.push, 0); assert.equal(calls.kommentar.length, 0); assert.equal(calls.status.length, 0);
+});
+
+// ---------- Paket 286 D1/D2, verankert (R29 A Auftrag, Punkt 3) ----------
+
+test('D1: übersprungener Test-Schritt (code −1) blockiert den Push nicht und steht im Antwort-Kommentar', () => {
+  const e = (schritte: any[]) => ({ ausgefuehrt: true, grund: '', schritte, db: null, dbHinweis: null, md: '' });
+  const skipped = F.testsGruen(e([{ name: 'npm ci', code: 0, minuten: 1, timedOut: false, tail: '' }, { name: 'npm run test:db', code: -1, minuten: 0, timedOut: false, tail: 'skipped: no review database' }, { name: 'npm run test', code: 0, minuten: 1, timedOut: false, tail: '' }]))!;
+  assert.deepEqual(skipped, { gruen: true }, 'übersprungen zählt nicht als rot → Push-Bedingung erfüllt');
+  // Und der Kommentar nennt den übersprungenen Schritt mit Grund (kein stiller Grün-Bogen)
+  const t = F.antwortText({ by: 'bizarrochris', quelle: null, start: A, neu: B, zweig: 'feat/x', gepusht: true, commits: [{ sha: '1'.repeat(40), titel: 'fix: x' }], fix: null,
+    tests: e([{ name: 'npm ci', code: 0, minuten: 1, timedOut: false, tail: '' }, { name: 'npm run test:db', code: -1, minuten: 0, timedOut: false, tail: 'skipped: no review database' }, { name: 'npm run test', code: 0, minuten: 1, timedOut: false, tail: '' }]),
+    gate: { exit: 0, hart: 0, warnungen: 0 }, deltaReview: false });
+  assert.match(t, /npm run test:db ⏭️ \(no review database\)/);
+});
+
+test('D2: jede Statuszeile englisch (auch checking, nothing, failed)', () => {
+  assert.equal(F.fixZeile({ art: 'checking' }), '🔧 Fix ready — the workspace is running the tests and the pre-push gate before pushing (OLAF Workspace)');
+  assert.match(F.fixZeile({ art: 'nothing' }), /^ℹ️ Fix run made no changes/);
+  assert.match(F.fixZeile({ art: 'failed', grund: 'x' }), /^❌ Fix failed: x — Knut will follow up/);
+  for (const art of ['queued', 'running', 'checking', 'pushed', 'refused', 'nothing', 'failed', 'skipped'] as const)
+    assert.doesNotMatch(F.fixZeile({ art, gruende: ['tests not green'], grund: 'x', zweig: 'feat/x', von: A, nach: B }), /[äöüßÄÖÜ]/, `art=${art}: keine deutschen Umlaute`);
+});
