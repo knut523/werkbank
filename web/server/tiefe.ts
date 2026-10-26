@@ -14,13 +14,29 @@ export const istTiefe = (x: unknown): x is Tiefe => TIEFEN.includes(x as Tiefe);
 /** Tiefe eines gespeicherten Strangs; alte Stränge ohne Feld laufen wie heute = regular. */
 export const tiefeOf = (x: unknown): Tiefe => (istTiefe(x) ? x : TIEFE_VORGABE);
 
-/** Modell und Risiko beim Start: ausdrückliche Angaben schlagen die Vorgabe der Tiefe. */
+/** Lead-Modell eines regular-Strangs mit niedrigem Risiko ohne ausdrückliches --modell (Knut 26.10.2026: Melious als Standard). */
+export const REGULAR_MODELL = 'melious:glm-5.3';
+/** Melious-Modelle im Coder-Abo: laufen über Energie statt Guthaben (Knut 26.10.: „beim Coder-Plan bleiben, Energie, kein Geld“). */
+export const MELIOUS_ABO_MODELLE = ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'];
+/** Fehlertext für ein Melious-Modell außerhalb des Abos, sonst null. */
+export function modellAusserhalbAbo(modell: string | null | undefined): string | null {
+  const m = /^melious:(.+)$/.exec(String(modell ?? ''));
+  if (!m || m[1] === 'auto' || MELIOUS_ABO_MODELLE.includes(m[1])) return null;
+  return `„${m[1]}“ ist nicht im Melious-Abo und liefe auf Guthaben. Erlaubt: ${MELIOUS_ABO_MODELLE.join(', ')}.`;
+}
+
+/** Modell und Risiko beim Start: ausdrückliche Angaben schlagen die Vorgabe der Tiefe.
+ *  Vorgabe (Knut 26.10., Paket 163): quick → glm-5.3-flash; regular ohne Risiko oder „niedrig“ → glm-5.3 (Risiko niedrig);
+ *  regular „mittel“ und deep/„hoch“ → Claude der Brücke (nie herabstufen); live → Claude (Knut wartet davor). */
 export function tiefeStart(t: Tiefe, o: { modell?: string | null; risiko?: string | null }): { modell: string | null; risiko: string | null } {
-  const modell = o.modell || (t === 'quick' ? QUICK_MODELL : null);
   // live: Risiko wie quick, Modell aber die Vorgabe der Brücke (Claude) — Knut sitzt davor und wartet (Bericht 274, D1).
-  const risiko = o.risiko || (t === 'quick' || t === 'live' ? 'niedrig' : t === 'deep' ? 'hoch' : null);
+  const risiko = o.risiko || (t === 'quick' || t === 'live' || t === 'regular' ? 'niedrig' : t === 'deep' ? 'hoch' : null);
+  const modell = o.modell || (t === 'quick' ? QUICK_MODELL : t === 'regular' && risiko === 'niedrig' ? REGULAR_MODELL : null);
   return { modell, risiko };
 }
+
+/** Absatz für Stränge auf Claude: Zuarbeit an Melious (Abo-Modelle, Energie statt Geld). */
+export const MELIOUS_ZUARBEIT_TEXT = 'Zuarbeit an Melious (Knut 26.10.): Lesen, Suchen, Ist-Stand belegen, Zweitmeinung und Logs auswerten per `mel-sub` abgeben — Standard glm-5.3-flash, Massenlesen deepseek-v4.1-flash, Anspruchsvolles `-m glm`. Nur Modelle aus dem Coder-Abo (Energie, kein Guthaben). Deine eigenen Züge nur für Entscheiden und Schreiben; Melious-Antworten gegen den Code prüfen.';
 
 /** Deckel „automatisch weiter“ je Tiefe (Budget): quick ein Drittel, deep das Doppelte. */
 export const autoMaxFuer = (t: Tiefe, max: number) => (t === 'quick' || t === 'live' ? Math.max(1, Math.ceil(max / 3)) : t === 'deep' ? max * 2 : max);

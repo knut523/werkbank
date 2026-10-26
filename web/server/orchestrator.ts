@@ -24,7 +24,7 @@ import { vienna } from './hygiene.ts';
 import { cleanThema, themaOf } from './themen.ts';
 import { meliousSettings, ausserhalbAbo } from './melious.ts';
 import { budgetVon } from './cosbudget.ts';   // zyklisch (cosbudget → orchestrator), nur zur Laufzeit im Rückfrage-Pfad benutzt
-import { tiefeOf, istTiefe, tiefeStart, tiefeText, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, GRUENDLICH_TEXT, type Tiefe } from './tiefe.ts';
+import { tiefeOf, istTiefe, tiefeStart, tiefeText, modellAusserhalbAbo, MELIOUS_ZUARBEIT_TEXT, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, GRUENDLICH_TEXT, type Tiefe } from './tiefe.ts';
 import { zustandAus, abweichung, nachfordern, statusNeu, NACHFORDER_TEXT, wienDatum, wienUm } from './zustand.ts';
 import { regelBestaetigen } from './regelquelle.ts';
 
@@ -35,7 +35,7 @@ const internalHeaders = () => ({ 'content-type': 'application/json', 'x-werkbank
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 OLAF-Werkbank';
 
-export interface BriefInput { title: string; prompt: string; cwd: string; plan?: string | null; person?: string; stand?: string | null; tiefe?: Tiefe | null }
+export interface BriefInput { title: string; prompt: string; cwd: string; plan?: string | null; person?: string; stand?: string | null; tiefe?: Tiefe | null; modell?: string | null }
 
 // Berichtsvorlage für jeden Strang (docs/plan-leitstand.md, Teil C, C8; Knut 14.10.2026): fester Kopf, den „Heute“ liest, und
 // Pflicht-Visualisierung neben Screenshots. Vollständiges Muster: docs/bericht-vorlage.md, Folien: docs/bericht-folien-vorlage.html.
@@ -117,6 +117,8 @@ export function orchBrief(b: BriefInput): string {
     ].join('\n'),
     // Plan 205: Tiefe (Pflichtschritte) und ETA (Pflichtzeile im Stand-Block, die Werkbank liest sie wie „Status:“).
     tiefeText(b.tiefe ?? tiefeOf(null)),
+    // Knut 26.10.2026: Stränge auf Claude geben Zuarbeit an Melious (Abo, Energie statt Geld).
+    ...(String(b.modell ?? '').startsWith('melious:') ? [] : [MELIOUS_ZUARBEIT_TEXT]),
     REGEL_PFLICHT,
     [
       'Schließe JEDE Antwort mit diesem Abschnitt (die Haupt-Sitzung liest ihn maschinell; nach „Status:“ genau eines der drei Wörter — „fertig“ nur, wenn der Auftrag erledigt und geprüft ist):',
@@ -497,6 +499,8 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   const vor = tiefeStart(tiefe, { modell: inp.modell ? String(inp.modell) : null, risiko: inp.risiko && RISIKO.includes(inp.risiko) ? inp.risiko : null });
   const modell = vor.modell;
   if (modell && !STRAND_MODEL.test(modell)) throw err(400, 'Modell: claude:opus|sonnet|haiku oder melious:<modell>.');
+  const abo = modellAusserhalbAbo(modell);
+  if (abo) throw err(400, abo);
   const risiko = vor.risiko as StartInput['risiko'];
   // Hotfix 15.10.: Melious-Modell außerhalb des Abos → Start erlaubt, aber mit Hinweis „läuft auf Guthaben“ (kein stilles Guthaben).
   const aboHinweis = modell?.startsWith('melious:') && modell !== 'melious:auto' && ausserhalbAbo([modell.slice(8)], (await meliousSettings(u)).abo).length ? `Melious-Modell „${modell.slice(8)}“ ist nicht im Abo und läuft auf Guthaben.` : null;
@@ -507,7 +511,7 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   const rj: any = await reg.json().catch(() => ({}));
   if (!reg.ok) throw err(reg.status === 400 || reg.status === 409 || reg.status === 403 ? reg.status : 502, rj.error ?? `Brücke antwortet mit ${reg.status}`);
   const stand = [fresh.status, g0 ? g0.text : null].filter(Boolean).join('\n') || null;
-  const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand, tiefe });
+  const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand, tiefe, modell });
   const { lauf, explicit } = laufName(title, inp.lauf);
   // Bericht-Pfad aus dem VOLLEN Auftrag und der Plandatei (F7) — der gespeicherte Auftrag ist gekürzt.
   let planText = '';
