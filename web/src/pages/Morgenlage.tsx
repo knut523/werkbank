@@ -8,9 +8,10 @@ import { JaNeinAnders, Rueckfrage, useStored, type Art } from './Uebersicht.tsx'
 import { InboxZeile } from './HeuteNeu.tsx';
 import { note } from '../beimir.tsx';
 
-/** Nutzung zählen (Plan 213 S0): die Morgenlage hat keinen eigenen Hash — das Aufklappen meldet sich selbst als Seite. */
-const seiteGezählt = { morgenlage: false };
-function meldeSeite(seite: string) { if (seiteGezählt[seite as keyof typeof seiteGezählt]) return; seiteGezählt[seite as keyof typeof seiteGezählt] = true; api('/api/nutzung/seite', { method: 'POST', body: { seite } }).catch(() => {}); }
+/** Nutzung zählen (Plan 213 S0): die Morgenlage hat keinen eigenen Hash — das Aufklappen meldet sich selbst als Seite,
+ *  je Aufklappen einmal (zugeklappt = nicht gezählt, wieder auf = neu). */
+let seiteGezählt = false;
+function meldeSeite(seite: 'morgenlage') { if (seiteGezählt) return; seiteGezählt = true; api('/api/nutzung/seite', { method: 'POST', body: { seite } }).catch(() => {}); }
 
 const hm = (iso?: string | null) => (iso ? new Date(iso).toLocaleString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', minute: '2-digit' }) : '—');
 const seitText = (iso?: string | null) => {
@@ -274,7 +275,7 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
         <span className="sp" />
         <button className="ub-btn sm" onClick={() => setEinwurf({})} data-testid="cos-einwurf-knopf">Einwurf</button>
         <button className="linklike" onClick={lade}>neu laden</button>
-        <button className="ub-btn ghost sm" aria-expanded={!zu} onClick={() => { setZu(!zu); if (zu) meldeSeite('morgenlage'); }} data-testid="cos-zu">{zu ? 'aufklappen' : 'zuklappen'}</button>
+        <button className="ub-btn ghost sm" aria-expanded={!zu} onClick={() => { setZu(!zu); if (zu) meldeSeite('morgenlage'); else seiteGezählt = false; }} data-testid="cos-zu">{zu ? 'aufklappen' : 'zuklappen'}</button>
       </div>
       {einwurf && <Einwurf vorgabe={einwurf.notiz} onClose={() => setEinwurf(null)} />}
       {zu ? <p className="small mut">{entN} Entscheide · {l.blockiert.gesamt} blockiert · {nachtN} über Nacht · {s.ueberfaellig} überfällig</p> : <>
@@ -341,7 +342,14 @@ function Kalender() {
   const toast = useToast();
   useEffect(() => { api('/api/cos/ics/link').then(setLink).catch(() => {}); }, []);
   if (!link || !link.an) return null;
-  const kopieren = async () => { try { await navigator.clipboard.writeText(link.url); toast('Feed-Link kopiert — in den Kalender als Internetkalender einfügen'); } catch { toast('Kopieren ging nicht — Link markieren und selbst kopieren'); } };
+  const kopieren = async () => {
+    try {
+      const r: any = await api('/api/cos/ics/link', { method: 'POST' });   // Kopier-Klick zählt als Nutzung (ics-link)
+      if (r?.url) setLink({ ...link, url: r.url });
+      await navigator.clipboard.writeText(r?.url ?? link.url);
+      toast('Feed-Link kopiert — in den Kalender als Internetkalender einfügen');
+    } catch { toast('Kopieren ging nicht — Link markieren und selbst kopieren'); }
+  };
   return <div className="cos-block" data-testid="cos-kalender">
     <h3>Kalender abonnieren</h3>
     <p className="small">Termine und Fristen aus dem Register als ICS-Feed — Outlook/Apple: „Internetkalender abonnieren“, Link einfügen. Stündliches Nachladen.</p>

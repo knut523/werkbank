@@ -54,11 +54,13 @@ export function buildICS(i: IcsInput): string {
   for (const t of i.termine) {
     if (!t.datum) continue;
     const zeit = t.zeit && /^\d{2}:\d{2}$/.test(t.zeit) ? t.zeit : null;
+    // Jede Zeile einzeln im Array — \r\n gehört nur zwischen fertige Zeilen (Pass C: eingebettetes CRLF in einer
+    // „Zeile“ würde von falte() als eine logische Zeile gefaltet und das ICS unbrauchbar machen).
     const dt = zeit
-      ? `DTSTART;TZID=Europe/Vienna:${datum8(t.datum)}T${zeit.replace(':', '')}00\r\nDTEND;TZID=Europe/Vienna:${datum8(t.datum)}T${plusStunde(zeit)}00`
-      : `DTSTART;VALUE=DATE:${datum8(t.datum)}`;
+      ? [`DTSTART;TZID=Europe/Vienna:${datum8(t.datum)}T${zeit.replace(':', '')}00`, `DTEND;TZID=Europe/Vienna:${plusStunde(t.datum, zeit)}`]
+      : [`DTSTART;VALUE=DATE:${datum8(t.datum)}`];
     events.push({ datum: t.datum, zeit, zeilen: [
-      'BEGIN:VEVENT', `UID:${uidVon('zusagen-register.md#termine', `${t.zeile}`)}`, `DTSTAMP:${stamp}`, dt,
+      'BEGIN:VEVENT', `UID:${uidVon('zusagen-register.md#termine', `${t.zeile}`)}`, `DTSTAMP:${stamp}`, ...dt,
       `SUMMARY:${icsEsc(t.titel || t.text)}`,
       ...(t.mit.length ? [`DESCRIPTION:${icsEsc(`mit: ${t.mit.join(', ')}`)}`] : []),
       'TRANSP:TRANSPARENT',   // Termine/Listen, die den Tag nicht blockieren
@@ -82,8 +84,14 @@ export function buildICS(i: IcsInput): string {
   return [...kopf, ...events.flatMap((e) => e.zeilen), 'END:VCALENDAR'].map(falte).join('\r\n') + '\r\n';
 }
 
-/** „10:00“ + 1 h → „1100“ (Termin mit Uhrzeit bekommt ein Ende, damit Kalender es als Block zeigen). */
-const plusStunde = (zeit: string) => { const h = Number(zeit.slice(0, 2)); return `${String(h + 1).padStart(2, '0')}${zeit.slice(3)}`; };
+/** „10:00“ + 1 h → Ende am selben Tag; 23:xx endet am Folgetag 00:xx (T240000 wäre ungültig, Pass C). */
+const plusStunde = (datum: string, zeit: string) => {
+  const h = Number(zeit.slice(0, 2)), m = zeit.slice(3);
+  if (h < 23) return `${datum8(datum)}T${String(h + 1).padStart(2, '0')}${m}00`;
+  const naechster = new Date(datum + 'T12:00:00Z');
+  naechster.setUTCDate(naechster.getUTCDate() + 1);
+  return `${naechster.toISOString().slice(0, 4)}${naechster.toISOString().slice(5, 7)}${naechster.toISOString().slice(8, 10)}T00${m}00`;
+};
 
 // ---------- D3: Budget-Zahl aus der Messung (Empfehlung für die Wochendurchsicht) ----------
 

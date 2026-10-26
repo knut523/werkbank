@@ -113,7 +113,7 @@ test('ICS-Feed: Schalter aus → 404; an → Token-Link nur Admin, Feed mit Term
   assert.equal((await anna.req('/api/cos/ics/link')).j.an, false);
   assert.equal((await fetch(`${B}/api/cos/ics?token=egal`)).status, 404);
   // Kein Token liegt an: nur der Link-Weg legt eines an (auch mit Schalter aus nichts in user_prefs).
-  assert.equal(await mongo.db(DB).collection('user_prefs').countDocuments({ _id: 'cos.ics' as any }), 0);
+  assert.equal(await mongo.db(DB).collection('user_prefs').countDocuments({ _id: /^cos\.ics\./ }), 0);
 
   // Zweiter Server mit COS_ICS=an (dieselbe Vault-Kopie und DB).
   const PORT2 = PORT + 1;
@@ -128,10 +128,20 @@ test('ICS-Feed: Schalter aus → 404; an → Token-Link nur Admin, Feed mit Term
     assert.equal(link.status, 403, 'Link nur Admin');
     const annaLink = await (await fetch(`http://127.0.0.1:${PORT2}/api/cos/ics/link`, { headers: { cookie: anna.cookie } })).json();
     assert.equal(annaLink.an, true);
-    assert.match(annaLink.url, /^http:\/\/127\.0\.0\.1:3670\/api\/cos\/ics\?token=cos-[0-9a-f]{16}$/, 'persönlicher Feed-Link aus publicUrl + Token');
-    // Gleicher Aufruf liefert denselben Token (kein Neuanlegen).
+    assert.match(annaLink.url, /^http:\/\/127\.0\.0\.1:3670\/api\/cos\/ics\?token=ics-[0-9a-f]{48}$/, 'persönlicher Feed-Link aus publicUrl + Zufalls-Token (48 Hex)');
+    // Gleicher Aufruf liefert denselben Token (kein Neuanlegen); zwei gleichzeitige Klicks erzeugen trotzdem nur
+    // ein Dokument (findOneAndUpdate + $setOnInsert, Pass C).
     const nochmal = await (await fetch(`http://127.0.0.1:${PORT2}/api/cos/ics/link`, { headers: { cookie: anna.cookie } })).json();
     assert.equal(nochmal.url, annaLink.url);
+    const [p1, p2] = await Promise.all([
+      fetch(`http://127.0.0.1:${PORT2}/api/cos/ics/link`, { method: 'POST', headers: { cookie: anna.cookie, 'x-werkbank': '1' } }).then((r) => r.json()),
+      fetch(`http://127.0.0.1:${PORT2}/api/cos/ics/link`, { method: 'POST', headers: { cookie: anna.cookie, 'x-werkbank': '1' } }).then((r) => r.json()),
+    ]);
+    assert.ok(new Set([p1.url, p2.url]).size <= 1, 'Parallel-Klicks: ein Token');
+    assert.equal(await mongo.db(DB).collection('user_prefs').countDocuments({ _id: /^cos\.ics\./ }), 1);
+    // Der POST (Kopier-Klick) zählt die Aktion ics-link in der Nutzungszählung; /api/nutzung flusht den Puffer.
+    const auswertung = await (await fetch(`http://127.0.0.1:${PORT2}/api/nutzung`, { headers: { cookie: anna.cookie } })).json();
+    assert.ok((auswertung.aktionen?.['ics-link'] ?? 0) >= 1, 'Kopier-Klick gezählt');
     // Feed: gültiges ICS mit Termin (mit Uhrzeit, TZID) und Frist (All-Day); Erledigtes fehlt.
     const feed = await get(`/api/cos/ics?token=${new URL(annaLink.url).searchParams.get('token')}`);
     assert.equal(feed.status, 200);

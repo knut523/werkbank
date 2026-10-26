@@ -91,6 +91,17 @@ test('buildICS: Termine ohne Datum und unbekannte Quellen fallen weg, Duplikate 
   assert.ok(!/BEGIN:VEVENT/.test(ics));
 });
 
+test('buildICS: 23:00-Termin endet am Folgetag 00:00 (kein T240000, Pass C)', () => {
+  const jetzt = new Date('2026-10-26T06:00:00Z');
+  const ics = buildICS({ termine: [termin({ datum: '2026-10-23', zeit: '23:00' }), termin({ datum: '2026-12-31', zeit: '23:30' })], fristen: [], dtstamp: jetzt });
+  const flach = ics.replace(/\r\n /g, '');
+  assert.match(flach, /DTSTART;TZID=Europe\/Vienna:20261023T230000\r\n/);
+  assert.match(flach, /DTEND;TZID=Europe\/Vienna:20261024T000000\r\n/, '23:00 → Folgetag 00:00');
+  assert.match(flach, /DTSTART;TZID=Europe\/Vienna:20261231T233000\r\n/);
+  assert.match(flach, /DTEND;TZID=Europe\/Vienna:20270101T003000\r\n/, 'Silvester 23:30 → Neujahr 00:30, auch über Jahresgrenze');
+  assert.ok(!flach.includes('T2400'), 'T240000 kommt nie vor');
+});
+
 test('buildICS: Zeitzone wird als VTIMEZONE ausgeliefert (Europe/Vienna, Sommer- und Winterzeit)', () => {
   const jetzt = new Date('2026-10-26T06:00:00Z');
   const ics = buildICS({ termine: [termin({})], fristen: [], dtstamp: jetzt });
