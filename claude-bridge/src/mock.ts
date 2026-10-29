@@ -343,6 +343,7 @@ export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<
       const append = String(options.systemPrompt?.append ?? '');
       yield text('OPTIONEN ' + JSON.stringify({ maxTurns: options.maxTurns, disallowed: options.disallowedTools, mcp: Object.keys(options.mcpServers ?? {}).sort(),
         leitstand: append.includes('Dieser Chat ist der HAUPTCHAT') || append.includes('Dieser Chat ist der LEITSTAND'), strang: append.includes('Orchestrator-Strang'), werkbankLeit: options.mcpServers?.werkbank?.env?.WERKBANK_LEITSTAND ?? null, werkbankStrang: options.mcpServers?.werkbank?.env?.WERKBANK_STRANG ?? null,
+        tools: options.tools ?? null, skills: Array.isArray(options.skills) ? options.skills.length : null, agents: Object.keys(options.agents ?? {}).sort(), settingSources: options.settingSources ?? null,
         gitConfig: !!options.env?.GIT_CONFIG_GLOBAL }));
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
       return;
