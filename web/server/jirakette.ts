@@ -353,7 +353,17 @@ async function schrittOhneClaim(k: any, deps: KDeps, env: Record<string, string 
       if (!k.repo) { await setze(k, { state: 'fehler', fehler: 'Kein Ziel-Repo — Kette mit Repo neu ansetzen' }, 'Kein Ziel-Repo'); return 'Kein Ziel-Repo'; }
       const klon = deps.klon(k.repo);
       if (!existsSync(klon)) { await setze(k, { state: 'fehler', fehler: `Kein lokaler Klon von ${k.repo}` }, 'Klon fehlt'); return 'Klon fehlt'; }
-      const r = await deps.startOrch(u, { title: `${k.key} · Bau`, prompt: bauPrompt(k), cwd: klon, plan: k.planPfad, code: true, tiefe: k.tiefe ?? undefined, lauf: `kette-${String(k.key).toLowerCase()}` });
+      let r: { id: string; cwd: string };
+      try {
+        // slug: die „Prüfung vor dem Bau“ (G0) braucht eine Identität; ohne sie lehnt startOrch jeden Code-Bau ab (aktiver Test 29.10.).
+        r = await deps.startOrch(u, { title: `${k.key} · Bau`, prompt: bauPrompt(k), cwd: klon, plan: k.planPfad, code: true, slug: `kette-${String(k.key).toLowerCase()}`, aufrufer: 'kette', tiefe: k.tiefe ?? undefined, lauf: `kette-${String(k.key).toLowerCase()}` });
+      } catch (e: any) {
+        // Nicht bei jedem Takt neu versuchen (G0-Rückfragen, Worktree-Konflikt …): die Kette endet sichtbar mit dem Grund.
+        const grund = `Bau konnte nicht starten: ${String(e?.message ?? e).slice(0, 260)}`;
+        await setze(k, { state: 'fehler', fehler: grund }, grund);
+        await deps.melde?.(u, k, `Kette ${k.key}: ${grund}`);
+        return grund;
+      }
       await setze(k, { state: 'bau', bauStrand: r.id, bauCwd: r.cwd }, `Bau gestartet (${r.id})`);
       return 'Bau gestartet';
     }

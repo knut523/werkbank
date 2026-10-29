@@ -289,3 +289,21 @@ test('Nachbessern ohne Text: Kette bleibt aktiv, Frage kommt neu (neuer Schlüss
   assert.equal((await doc()).state, 'plan_frage');
   assert.match(f.fragen[1].key, /#PLAN2$/); assert.match(f.fragen[1].context, /keinen Text/);
 });
+
+test('Bau-Start scheitert (z. B. G0 stoppt): Kette endet sichtbar mit Grund, kein Wiederholen im Takt; Bau bekommt slug + aufrufer', async () => {
+  const env = { WERKBANK_JIRAKETTE: 'trocken' };
+  const f = fakes();
+  const k = await K.starteKette(U, { issue: { ...ISSUE, key: 'OLAF-41' }, site: 'OLAF' }, f.deps, env);
+  const doc = async () => (await K.ketten().findOne({ _id: k.id as any })) as any;
+  f.st.strang = 'done'; writeFileSync((await doc()).planPfad, '## Ziel\nX\n');
+  await K.ketteSchritt(await doc(), f.deps, env);
+  f.st.antwort = { option: K.OPT_PLAN.frei, text: '' };
+  let versuche = 0; let args: any = null;
+  f.deps.startOrch = async (_u, inp) => { versuche++; args = inp; throw Object.assign(new Error('G0 (Prüfung vor dem Bau): Treffer — Rückfrage q-9'), { status: 409 }); };
+  const r = await K.ketteSchritt(await doc(), f.deps, env);
+  assert.match(r, /Bau konnte nicht starten: G0/);
+  assert.equal((await doc()).state, 'fehler'); assert.match((await doc()).fehler, /G0/);
+  assert.equal(args.slug, 'kette-olaf-41'); assert.equal(args.aufrufer, 'kette'); assert.equal(args.code, true);
+  await K.ketteSchritt(await doc(), f.deps, env);
+  assert.equal(versuche, 1, 'Endzustand: kein zweiter Versuch');
+});
