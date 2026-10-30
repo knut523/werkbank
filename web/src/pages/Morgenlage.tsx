@@ -8,6 +8,11 @@ import { JaNeinAnders, Rueckfrage, useStored, type Art } from './Uebersicht.tsx'
 import { InboxZeile } from './HeuteNeu.tsx';
 import { note } from '../beimir.tsx';
 
+/** Nutzung zählen (Plan 213 S0): die Morgenlage hat keinen eigenen Hash — das Aufklappen meldet sich selbst als Seite,
+ *  je Aufklappen einmal (zugeklappt = nicht gezählt, wieder auf = neu). */
+let seiteGezählt = false;
+function meldeSeite(seite: 'morgenlage') { if (seiteGezählt) return; seiteGezählt = true; api('/api/nutzung/seite', { method: 'POST', body: { seite } }).catch(() => {}); }
+
 const hm = (iso?: string | null) => (iso ? new Date(iso).toLocaleString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', minute: '2-digit' }) : '—');
 const seitText = (iso?: string | null) => {
   if (!iso) return '';
@@ -270,7 +275,7 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
         <span className="sp" />
         <button className="ub-btn sm" onClick={() => setEinwurf({})} data-testid="cos-einwurf-knopf">Einwurf</button>
         <button className="linklike" onClick={lade}>neu laden</button>
-        <button className="ub-btn ghost sm" aria-expanded={!zu} onClick={() => setZu(!zu)} data-testid="cos-zu">{zu ? 'aufklappen' : 'zuklappen'}</button>
+        <button className="ub-btn ghost sm" aria-expanded={!zu} onClick={() => { setZu(!zu); if (zu) meldeSeite('morgenlage'); else seiteGezählt = false; }} data-testid="cos-zu">{zu ? 'aufklappen' : 'zuklappen'}</button>
       </div>
       {einwurf && <Einwurf vorgabe={einwurf.notiz} onClose={() => setEinwurf(null)} />}
       {zu ? <p className="small mut">{entN} Entscheide · {l.blockiert.gesamt} blockiert · {nachtN} über Nacht · {s.ueberfaellig} überfällig</p> : <>
@@ -322,12 +327,49 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
             {t.offeneZusagen > 0 && <span className="tiny mut"> · {t.offeneZusagen} Zusagen</span>}{t.straenge > 0 && <span className="tiny mut"> · {t.straenge} Unter-Chats</span>}</li>)}</ul> : <p className="small mut">{l.leer ? 'Noch keine Themen im Register.' : 'Alle Themen ruhig.'}</p>}
           {l.themen.ruhig > 0 && <p className="tiny mut">{l.themen.ruhig} weitere Themen ohne Bewegung.</p>}
         </div>
+        <Kalender />
+        <Nutzung />
         <Nachmittag onChange={fertig} />
         {l.unlesbar.length > 0 && <p className="tiny mut" data-testid="cos-unlesbar">Nicht lesbar im Register ({l.unlesbar.length}): {l.unlesbar.slice(0, 3).map((u: any) => `Zeile ${u.zeile}`).join(', ')} — bleibt unverändert, bitte von Hand prüfen.</p>}
       </>}
     </section>
   );
 }
+
+/** Kalender-Feed (Paket 374): Termine/Fristen des Registers als ICS abonnieren — nur sichtbar, wenn der Schalter COS_ICS an ist. */
+function Kalender() {
+  const [link, setLink] = useState<any>(null);
+  const toast = useToast();
+  useEffect(() => { api('/api/cos/ics/link').then(setLink).catch(() => {}); }, []);
+  if (!link || !link.an) return null;
+  const kopieren = async () => {
+    try {
+      const r: any = await api('/api/cos/ics/link', { method: 'POST' });   // Kopier-Klick zählt als Nutzung (ics-link)
+      if (r?.url) setLink({ ...link, url: r.url });
+      await navigator.clipboard.writeText(r?.url ?? link.url);
+      toast('Feed-Link kopiert — in den Kalender als Internetkalender einfügen');
+    } catch { toast('Kopieren ging nicht — Link markieren und selbst kopieren'); }
+  };
+  return <div className="cos-block" data-testid="cos-kalender">
+    <h3>Kalender abonnieren</h3>
+    <p className="small">Termine und Fristen aus dem Register als ICS-Feed — Outlook/Apple: „Internetkalender abonnieren“, Link einfügen. Stündliches Nachladen.</p>
+    <div className="ub-row"><code className="tiny" data-testid="cos-ics-url" style={{ overflowWrap: 'anywhere' }}>{link.url}</code><span className="sp" /><button className="ub-btn sm" onClick={kopieren} data-testid="cos-ics-kopieren">Link kopieren</button></div>
+  </div>;
+}
+
+/** Nutzung der CoS-Funktionen (Paket 374): Zahlen aus /api/nutzung — still, solange nichts gezählt wurde. */
+function Nutzung() {
+  const [n, setN] = useState<any>(null);
+  useEffect(() => { api('/api/nutzung?tage=30').then((x: any) => setN((x.aktionen ?? Object.keys(x.seiten ?? {}).length) ? x : null)).catch(() => {}); }, []);
+  const cosSeiten = n ? Object.entries(n.seiten ?? {}).filter(([s]: any) => s === 'morgenlage') : [];
+  const cosAktionen = n ? Object.entries(n.aktionen ?? {}) : [];
+  if (!n || (!cosSeiten.length && !cosAktionen.length)) return null;
+  return <div className="cos-block" data-testid="cos-nutzung">
+    <h3>Nutzung <span className="tiny mut">seit {n.ab}</span></h3>
+    <p className="small">Morgenlage geöffnet: <b>{cosSeiten.length ? cosSeiten[0][1].admin + cosSeiten[0][1].team : 0}</b>{cosAktionen.length > 0 && <> · Aktionen: {cosAktionen.map(([a, x]: any) => `${AKTION_LABEL[a] ?? a} ${x}`).join(' · ')}</>}</p>
+  </div>;
+}
+const AKTION_LABEL: Record<string, string> = { triage: 'Triage', einwurf: 'Einwurf', nachfassen: 'Nachfassen (Entwurf)', 'nachfassen-senden': 'Nachfassen gesendet', 'register-anlegen': 'Register angelegt', rueckstau: 'Rückstau archiviert', 'rueckstau-zurueck': 'Rückstau zurück', 'ics-link': 'Kalender-Link', zusage: 'Zusage geändert', thema: 'Thema geändert' };
 
 /** Nachmittagskarte (S3.4): ab 15 Uhr der Tagesabschluss, freitags die Wochendurchsicht mit Rückstau — live berechnet; die Vault-Seiten schreibt der Takt. */
 function Nachmittag({ onChange }: { onChange: () => void }) {
@@ -366,6 +408,7 @@ function Nachmittag({ onChange }: { onChange: () => void }) {
       {w && <div data-testid="cos-woche"><h3>Wochendurchsicht</h3>
         <p className="small">Überfällig <b>{w.ueberfaellig.length}</b> · seit 14 Tagen unverändert <b>{w.unveraendert.length}</b> · nächste Woche fällig <b>{w.naechsteWoche.length}</b> · Themen ohne Bewegung <b>{w.themenRuhig.length}</b></p>
         {w.teuerste.length > 0 && <p className="tiny mut">Teuerste Unter-Chats: {w.teuerste.map((t: any) => `${t.titel} ${Math.round(t.tokens / 1000)}k`).join(' · ')}</p>}
+        {w.budgetEmpfehlung > 0 && <p className="tiny mut" data-testid="cos-budget-empfehlung">Budget-Empfehlung aus der Messung: <b>{Math.round(w.budgetEmpfehlung / 1000)}k Token</b> je Unter-Chat (Median ×2) — Zahl am 29.10. setzen (D3).</p>}
         {w.rueckstauListe.length > 0 && <details data-testid="cos-rueckstau"><summary className="small">{w.rueckstauListe.length} ältere Meeting-Entwürfe ohne Action Items — sammelweise archivieren</summary>
           <ul className="cos-rs">{w.rueckstauListe.map((i: any) => <li key={i.datei}><label className="small"><input type="checkbox" checked={!!wahl[i.datei]} onChange={(e) => setWahl({ ...wahl, [i.datei]: e.target.checked })} /> {i.titel} <span className="tiny mut">({i.datum})</span></label></li>)}</ul>
           <button className="ub-btn pri sm" disabled={!Object.values(wahl).some(Boolean)} onClick={archivieren} data-testid="cos-rueckstau-ja">Ausgewählte archivieren (Status → archived)</button></details>}</div>}

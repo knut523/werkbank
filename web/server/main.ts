@@ -3406,7 +3406,7 @@ const cosQuellen = (): CosQuellen => ({
   olafJira: (st) => olafJira(st, { creds: () => jiraCreds(null) }),   // lesend; Seite aus jiraSites (cos-olafjira.ts)
 });
 cosRoutes({
-  on, needAdmin, internalUser: (req, b) => internalUser(req, b), body, send, HttpError, vaultDir: () => cfg.vaultDir, dry: vaultDry, invalidate: invalidateIndex, log,
+  on, needAdmin, internalUser: (req, b) => internalUser(req, b), body, send, HttpError, vaultDir: () => cfg.vaultDir, dry: vaultDry, invalidate: invalidateIndex, log, publicUrl: () => cfg.publicUrl,
   quellen: () => cosQuellen(),
   // Nachfassen (nur nach Vorschau + Bestätigung in der Oberfläche): GitHub-Kommentar am PR (Review-Art COMMENT, an den aktuellen Kopf gebunden)
   // oder Jira-Kommentar mit Knuts Zugang. Mails werden nie gesendet.

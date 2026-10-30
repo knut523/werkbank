@@ -9,7 +9,11 @@ import { sammleAbschluss, sammleWoche } from './cosabschluss.ts';
 import { entscheide, wien, type ThemaVorschlag } from './cos.ts';
 import { entwurfFuer, senden as nachfassSenden, type Senden } from './cosnachfassen.ts';
 import { wienDatum } from './cosregister.ts';
+import { buildICS, ICS_AN } from './cosics.ts';
+import { cosAktion } from './nutzung.ts';
 import { wb } from './db.ts';
+import { randomBytes } from 'node:crypto';
+import { teamInstanz } from './features.ts';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -23,6 +27,8 @@ export interface CosDeps {
   vaultDir: () => string;
   dry: () => boolean;
   invalidate: () => void;
+  /** Basis für öffentliche Links (Kalender-Feed) — cfg.publicUrl in main.ts. */
+  publicUrl: () => string;
   /** Themen für die Vorbefüllung (Jira-Workstreams + Strang-Themen), nur beim Anlegen der Datei gebraucht. */
   themenVorschlag: () => Promise<string[]>;
   /** Register einmal aus dem aktuellen Stand (Knut 19.10.): Themen mit Stand, nächstem Schritt und Ball. */
@@ -68,14 +74,18 @@ export function cosRoutes(d: CosDeps) {
   on('POST', /^\/api\/cos\/zusage$/, async (req, res) => {
     await d.needAdmin(req);
     const b = await d.body(req);
-    antwort(res, await schreibeZusagen(zusageOps(b, d.HttpError), await opts(b, 'zusagen')));
+    const r = await schreibeZusagen(zusageOps(b, d.HttpError), await opts(b, 'zusagen'));
+    cosAktion('zusage');   // nach Erfolg gezählt (Pass C): Validierungsfehler und Trockenlauf sind keine Nutzung
+    antwort(res, r);
   });
 
   on('POST', /^\/api\/cos\/thema$/, async (req, res) => {
     await d.needAdmin(req);
     const b = await d.body(req);
     const op: ThemaOp = { art: 'thema', name: String(b.name ?? ''), stand: b.stand, naechster: b.naechster, ball: b.ball };
-    antwort(res, await schreibeThema(op, await opts(b, 'themen')));
+    const r = await schreibeThema(op, await opts(b, 'themen'));
+    cosAktion('thema');
+    antwort(res, r);
   });
 
   // Register einmal anlegen (K9 sah das beim ersten Schreiben vor — das kam nie; Knut 19.10.: „Vorschlag mit Knuts Ja“).
@@ -94,7 +104,7 @@ export function cosRoutes(d: CosDeps) {
     const o = (): SchreibOpts => ({ vaultDir, dry: d.dry(), confirm: b.confirm === true, hash: b.confirm === true ? hashText('') : undefined, vorbefuellung: () => ({ personen: teamNamen(vaultDir), themen }), danach: d.invalidate });
     const zusagen = fehlt.zusagen ? await schreibe('zusagen', alle, o()) : null;
     const th = fehlt.themen ? await schreibe('themen', alle, o()) : null;
-    if (b.confirm === true) d.log('cos register angelegt', { themen: themen.length, dry: d.dry() });
+    if (b.confirm === true) { cosAktion('register-anlegen'); d.log('cos register angelegt', { themen: themen.length, dry: d.dry() }); }
     send(res, 200, { zusagen, themen: th, vorschlag: themen });
   });
 
@@ -137,12 +147,16 @@ export function cosRoutes(d: CosDeps) {
     const b = await d.body(req);
     const teams = meetingTeams(), heute = wienDatum();
     const dateien: string[] = Array.isArray(b.dateien) ? b.dateien.map(String) : rueckstau(d.vaultDir(), teams, heute).map((x) => x.datei);
-    send(res, 200, await archiviereRueckstau(dateien, { vaultDir: d.vaultDir(), teams, heute, confirm: b.confirm === true, hashes: b.hashes && typeof b.hashes === 'object' ? b.hashes : undefined, dry: d.dry(), store: archivStore(), danach: d.invalidate }));
+    const r = await archiviereRueckstau(dateien, { vaultDir: d.vaultDir(), teams, heute, confirm: b.confirm === true, hashes: b.hashes && typeof b.hashes === 'object' ? b.hashes : undefined, dry: d.dry(), store: archivStore(), danach: d.invalidate });
+    if (r.archiviert?.length) cosAktion('rueckstau');
+    send(res, 200, r);
   });
   on('POST', /^\/api\/cos\/rueckstau\/zurueck$/, async (req, res) => {
     await d.needAdmin(req);
     const b = await d.body(req);
-    send(res, 200, await rueckgaengig(String(b.datei ?? ''), { vaultDir: d.vaultDir(), teams: meetingTeams(), store: archivStore(), dry: d.dry(), danach: d.invalidate }));
+    const r = await rueckgaengig(String(b.datei ?? ''), { vaultDir: d.vaultDir(), teams: meetingTeams(), store: archivStore(), dry: d.dry(), danach: d.invalidate });
+    cosAktion('rueckstau-zurueck');
+    send(res, 200, r);
   });
   on('GET', /^\/api\/cos\/rueckstau\/zurueck$/, async (req, res) => {
     await d.needAdmin(req);
@@ -154,14 +168,16 @@ export function cosRoutes(d: CosDeps) {
   on('POST', /^\/api\/cos\/nachfassen$/, async (req, res) => {
     await d.needAdmin(req);
     const b = await d.body(req);
-    send(res, 200, entwurfFuer(d.vaultDir(), String(b.id ?? ''), wienDatum()));
+    const r = entwurfFuer(d.vaultDir(), String(b.id ?? ''), wienDatum());
+    cosAktion('nachfassen');
+    send(res, 200, r);
   });
   on('POST', /^\/api\/cos\/nachfassen\/senden$/, async (req, res) => {
     const u = await d.needAdmin(req);
     const b = await d.body(req);
     const o = await opts(b, 'zusagen');
     const r = await nachfassSenden(d.vaultDir(), String(b.id ?? ''), { ...o, sender: d.nachfasser(u) });
-    if (r.ok) d.log('cos nachgefasst', { user: u.id, id: r.id, ziel: r.ziel });
+    if (r.ok) { cosAktion('nachfassen-senden'); d.log('cos nachgefasst', { user: u.id, id: r.id, ziel: r.ziel }); }
     send(res, 200, r);
   });
 
@@ -173,10 +189,13 @@ export function cosRoutes(d: CosDeps) {
     const datei = pruefeDatei(String(b.datei ?? ''), teams);
     if (b.art === 'nein') {
       if (!d.dry()) await wb().collection('cos_triage').updateOne({ _id: datei as any }, { $set: { art: 'nein', at: new Date(), by: u.email } }, { upsert: true });
+      cosAktion('triage');
       return send(res, 200, { ok: true, ausgeblendet: datei });
     }
     const o = await opts(b, 'zusagen');
-    send(res, 200, await triageUebernehmen(datei, { ...o, teams, registerHash: typeof b.registerHash === 'string' ? b.registerHash : undefined }));
+    const r = await triageUebernehmen(datei, { ...o, teams, registerHash: typeof b.registerHash === 'string' ? b.registerHash : undefined });
+    cosAktion('triage');
+    send(res, 200, r);
   });
 
   // Einwurf (S1.4): Material → Arbeitskopie + neuer Chat mit der Anleitung. Antwort: Link zum Chat.
@@ -185,12 +204,60 @@ export function cosRoutes(d: CosDeps) {
     const b = await d.body(req, 4 << 20);
     try {
       const r = await startEinwurf(u, { text: b.text, dateiname: typeof b.dateiname === 'string' ? b.dateiname : undefined, titel: b.titel, hinweis: b.hinweis });
+      cosAktion('einwurf');
       d.log('cos einwurf', { user: u.id, art: r.art, titel: r.titel });
       send(res, 200, { ok: true, url: r.url, conv: r.conv, titel: r.titel, art: r.art });
     } catch (e: any) {
       if (e instanceof EinwurfError) throw new d.HttpError(e.status, e.message);
       throw e;
     }
+  });
+
+  // Kalender-Feed (Paket 374, D-Entscheidung): Termine/Fristen aus dem Register als ICS (RFC 5545). Schalter COS_ICS (Vorgabe aus).
+  // Kalender-Clients können sich nicht anmelden — daher persönlicher Token in user_prefs statt Session. Der Token ist
+  // Zufall (nicht aus anything ableitbar, Pass C), wird erst erzeugt, wenn jemand „Feed-Link kopieren“ klickt, und
+  // zeitkonstant verglichen. Jede Person bekommt ihren eigenen — aber es gilt genau einer (Feed shared nichts).
+  const icsFeed = async (req: any, res: any, url: URL) => {
+    // Team-Instanzen sehen den Feed nie (cos ist Knuts Instanz vorbehalten) — genauso wie die übrigen CoS-Routen.
+    if (!ICS_AN() || teamInstanz()) throw new d.HttpError(404, 'Kalender-Feed ist aus.');   // aus = nicht vorhanden, kein Hinweis auf die Funktion
+    const token = url.searchParams.get('token') ?? '';
+    const prefs = token ? await wb().collection('user_prefs').findOne({ token }) : null;   // Zufalls-Token, je Person eins
+    if (!prefs) throw new d.HttpError(403, 'Token stimmt nicht.');
+    const r = liesRegister(d.vaultDir());
+    const ics = buildICS({ termine: r.termine, fristen: r.zusagen });
+    res.writeHead(200, { 'content-type': 'text/calendar; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+    res.end(ics);
+  };
+  on('GET', /^\/api\/cos\/ics$/, async (req, res, _m, url) => { await icsFeed(req, res, url); });
+  // Feed-Link zeigen/erzeugen (Admin): Token wird erst hier angelegt, atomar (findOneAndUpdate — zwei gleichzeitige
+  // Klicks erzeugen nie zwei Token, Pass C), Link zum Kopieren zurück. Das reine Anzeigen (GET) zählt nicht als
+  // Nutzung — gezählt wird der Kopier-Klick (POST, `ics-link`).
+  const icsLink = async (u: any) => {
+    const neu = `ics-${randomBytes(24).toString('hex')}`;
+    let token: string | undefined;
+    try {
+      const doc = await wb().collection('user_prefs').findOneAndUpdate(
+        { _id: `cos.ics.${u.id}` as any },
+        { $setOnInsert: { token: neu, at: new Date(), by: u.email } },
+        { upsert: true, returnDocument: 'after' },
+      ) as any;
+      token = doc?.token;
+    } catch {
+      // Parallel-Klick-Rest: wer den upsert verloren hat (E11000), liest das gerade entstandene Dokument.
+    }
+    token ??= (await wb().collection('user_prefs').findOne({ _id: `cos.ics.${u.id}` as any }))?.token;
+    return `${d.publicUrl()}/api/cos/ics?token=${token}`;
+  };
+  on('GET', /^\/api\/cos\/ics\/link$/, async (req, res) => {
+    const u = await d.needAdmin(req);
+    if (!ICS_AN()) return send(res, 200, { an: false });
+    send(res, 200, { an: true, url: await icsLink(u) });
+  });
+  on('POST', /^\/api\/cos\/ics\/link$/, async (req, res) => {
+    const u = await d.needAdmin(req);
+    if (!ICS_AN()) return send(res, 200, { an: false });
+    cosAktion('ics-link');   // erst der Kopier-Klick zählt (Pass C) — nicht jedes Aufklappen der Karte
+    send(res, 200, { an: true, url: await icsLink(u) });
   });
 
   // Werkbank-MCP (Schnitt S1.1): Lesen frei; Schreiben nach „ja“ im Chat (die Brücke fragt vorher) — daher hier immer bestätigt.
