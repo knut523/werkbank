@@ -14,7 +14,7 @@ await c.connect();
 const db = c.db(process.env.WERKBANK_DB);
 const U = { id: 'u-uebergabe' } as any;
 
-after(async () => { await db.dropDatabase(); await c.close(); });
+after(async () => { await db.dropDatabase(); await c.close(); await (await import('../server/db.ts')).closeDb(); });
 
 test('Meldung ohne aktiven Hauptchat steht in der Übergabe; Zusammenfassung nur mit Schalter', async () => {
   await db.collection('orchestrator_runs').insertOne({ _id: 'ueb1' as any, userId: U.id, conv: 'c1', title: 'Strang Eins', cwd: '/tmp/x', startedAt: new Date(), lastSentAt: new Date(),
