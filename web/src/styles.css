@@ -694,3 +694,18 @@ ul.plain.h-liste { padding-left: 0; list-style: none; }
 /* U3: Teile der Entscheidungsseite */
 .e-teil { font-size: 18px; margin: 24px 0 6px; }
 .e-sprung { margin: 6px 0 0; }
+
+/* Chat-Status und Karte am Chat (Release 29, Strang B) */
+.chip.info { background: var(--surface-tertiary); color: var(--text-primary); border: 1px solid var(--border-medium); }
+.ck { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border-light); border-left: 4px solid var(--border-medium); border-radius: 10px; background: var(--surface-primary); }
+.ck.ck-braucht { border-left-color: var(--amber-500); }
+.ck.ck-review { border-left-color: var(--border-heavy); }
+.ck-kopf { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ck-grund { color: var(--text-secondary); }
+.ck .e-karte { margin-bottom: 0; }
+.ck-bilder { display: flex; gap: 8px; flex-wrap: wrap; }
+.ck-bilder img { height: 90px; border-radius: 6px; border: 1px solid var(--border-light); display: block; }
+.ck-frei textarea { width: 100%; box-sizing: border-box; }
+.ck-einbett { padding: 0; background: transparent; }
+@media (max-width: 640px) { .ck { padding: 8px; } .ck-bilder img { height: 70px; } }
+.ck-review { display: grid; gap: 10px; }

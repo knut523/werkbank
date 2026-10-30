@@ -35,7 +35,7 @@ import { assignProject, workstreamArea, syncWorkstreamOverview } from './project
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName, ortAus, vorschlagAusPfad, isEingang } from './ablage.ts';
 import { ablageOwner, syncAblage, lastSyncAt } from './ablagesync.ts';
-import { listPakete, paketFile, renderPaketMd, strandFor, BILD_MIME } from './reviewpakete.ts';
+import { listPakete, paketFile, renderPaketMd, strandFor, BILD_MIME, readPaket } from './reviewpakete.ts';
 import { FEATURES, featuresFor, blockedFeature, knutsFragen, teamInstanz } from './features.ts';
 import { memoryWarning } from './memory.ts';
 import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
@@ -95,7 +95,8 @@ import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
 import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
 import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
-import { zeile as arbeitZeile, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
+import { chatStatusAn, offeneJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
+import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -1751,10 +1752,54 @@ on('GET', /^\/api\/arbeit\/unterchats$/, async (req, res, _m, url) => {
     : { userId: u.id, ...AUF_UEBERSICHT() };
   const docs: any[] = await orchRuns().find(filter as any).sort({ startedAt: -1 }).limit(200).toArray();
   const med = await etaMediane(u).catch(() => null);
-  const zeilen = arbeitSortiere(docs.filter((d) => erledigt || offenFuerKnut(d)).map((d) => arbeitZeile(d, { mediane: med })));
+  // Chat-Status (Release 29, Schalter): eine Frage-Quelle — dieselbe Inbox wie die Entscheidungsseite.
+  const csAn = chatStatusAn();
+  const offenJe = csAn && !erledigt ? offeneJeStrang((await inboxFuer(u)).eintraege) : new Map<string, number>();
+  const zeilen = arbeitSortiere(docs.filter((d) => erledigt || offenFuerKnut(d)).map((d) => arbeitZeile(d, { mediane: med, offeneFragen: csAn ? offenJe.get(String(d._id)) ?? 0 : undefined })));
   const offen = erledigt ? null : zeilen.length;
   const erledigtN = erledigt ? zeilen.length : await orchRuns().countDocuments({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: { $gte: new Date(Date.now() - 14 * 86400_000) }, $or: [{ reviewedBy: 'auto' }, { knutReviewedAt: { $ne: null } }] } as any);
-  send(res, 200, { zeilen, offen, erledigt: erledigtN, zaehler: await zaehlerFuer(u), at: new Date() });
+  send(res, 200, { zeilen, offen, erledigt: erledigtN, zaehler: await zaehlerFuer(u), chatStatus: csAn, at: new Date() });
+});
+// --- Chat-Status und Karte am Chat (Release 29, Strang B; Schalter WERKBANK_CHAT_STATUS, Vorgabe aus) ---
+// Ein Status je Chat (läuft · braucht Knut · in Review · fertig · hängt), dazu die Karte oben im Chat: bei „braucht Knut“ genau die
+// offenen Fragen (dieselben Karten wie die Entscheidungsseite, beantwortet wird über deren Endpunkt), bei „in Review“ das Paket mit
+// „passt“ / „Änderung“ (die vorhandenen Endpunkte /api/leitstand/strands/<id>/passt|reply). Nur lesen.
+async function chatStatusListe(u: User) {
+  const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(200).toArray()) as any[]).filter(offenFuerKnut);
+  const offenJe = offeneJeStrang((await inboxFuer(u)).eintraege);
+  const strange = docs.map((d) => { const n = offenJe.get(String(d._id)) ?? 0; return { id: String(d._id), conv: d.conv ?? null, titel: String(d.title ?? ''), offen: n, ...chatStatusVon(d, n) }; });
+  return { strange, zaehler: zaehleChat(strange.map((x) => x.status)) };
+}
+on('GET', /^\/api\/chatstatus$/, async (req, res) => {
+  const u = await needAdmin(req);
+  if (!chatStatusAn()) return send(res, 200, { an: false });
+  send(res, 200, { an: true, ...(await chatStatusListe(u)), at: new Date() });
+});
+/** Karte eines Chats; `key` = Strang-Kennung (8 Hex) oder die Unterhaltung (LibreChat-ID aus der Adresse /c/<id>). */
+on('GET', /^\/api\/chatstatus\/([0-9a-f]{8}|[0-9a-f-]{36})$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  if (!chatStatusAn()) return send(res, 200, { an: false });
+  const d: any = await orchRuns().findOne({ userId: u.id, kind: { $ne: 'leitstand' }, ...(m[1].length === 8 ? { _id: m[1] as any } : { conv: m[1] }) });
+  if (!d) return send(res, 200, { an: true, strang: false });   // ein normaler Chat, kein Unter-Chat: keine Karte
+  const id = String(d._id);
+  const ib = await inboxFuer(u);
+  const fragen = fragenJeStrang(ib.eintraege, id);
+  const offen = offeneJeStrang(ib.eintraege).get(id) ?? 0;
+  const cs = chatStatusVon(d, offen);
+  const qs = await listQuestions(u, { open: true }).catch(() => [] as any[]);
+  const fgs: any[] = await freigaben().find({ strand: id, revokedAt: null }).sort({ at: -1 }).toArray().catch(() => []);
+  const basis = paketBasis();
+  const k: any = (() => { try { return uebersichtKarte(d, fgs, qs.filter((q: any) => q.strand && String(q.strand.id) === id), basis, null); } catch (e: any) { log('chatstatus karte', { id, err: String(e?.message ?? e) }); return null; } })();
+  const paket = k?.paket ? readPaket(reviewDir(), k.paket) : null;
+  send(res, 200, {
+    an: true, strang: true, id, conv: d.conv ?? null, titel: String(d.title ?? ''), status: cs.status, text: cs.text, ton: cs.ton, grund: cs.grund, offen,
+    seen: k?.seen ?? null, laeuft: d.lastStatus === 'running',
+    fragen: fragen.map((f) => ({ ...f, worumKurz: ersterSatz(f.worum) })),
+    // Blockiert/„braucht Antwort“ ohne einzelne Frage: der Grund und ein freies Antwortfeld (geht als Antwort an den Strang).
+    freitext: cs.status === 'braucht' && !fragen.length ? { grund: d.zustandGrund ?? d.lastReason ?? '', auszug: String(d.lastExcerpt ?? '').slice(0, 600) } : null,
+    review: cs.status === 'review' && k ? { titel: k.titel, kurz: ersterSatz(k.kurz), links: k.links, bilder: /^\d{1,4}-[a-z0-9][a-z0-9-]*$/.test(k.paket ?? '') ? (paket?.files ?? []).filter((f: any) => /\.(png|jpe?g|gif|webp)$/i.test(f.rel)).slice(0, 4).map((f: any) => `api/files/agenten/${k.paket}/${f.rel.split('/').map(encodeURIComponent).join('/')}?inline=1`) : [], github: k.github, anders: k.anders, paket: k.paket } : null,
+    at: new Date(),
+  });
 });
 /** F7 (Knut 19.10.): Schätzung vor dem Start — eigene Läufe derselben Tiefe, Box-Stand (Heartbeat), Budget. Nie ein Fehler. */
 async function schaetzungFuer(u: User, o: { tiefe?: string | null; profil?: string | null; budget?: number | null }) {
