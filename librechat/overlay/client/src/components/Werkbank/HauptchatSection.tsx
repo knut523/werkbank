@@ -24,6 +24,18 @@ const subs = new Set<() => void>();
 let inflight: Promise<void> | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
 const set = (s: Snap) => { snap = s; subs.forEach((f) => f()); };
+// Chat-Status (Release 29, Schalter WERKBANK_CHAT_STATUS am Server): ein Wort je Unter-Chat — läuft · braucht Knut · in Review ·
+// fertig · hängt. Aus → `an: false`, die Leiste bleibt wie sie war. Gruppierung und Zähler der Themen bleiben beim alten Status.
+type Cs = Record<string, { status: string; text: string }>;
+let csMap: Cs = {};
+const CS_DOT: Record<string, string> = { laeuft: 'bg-blue-500', braucht: 'bg-amber-500', review: 'bg-violet-500', fertig: 'bg-green-600', haengt: 'bg-red-600' };
+async function ladeCs() {
+  try {
+    const r = await fetch('/werkbank/api/chatstatus', { credentials: 'same-origin' });
+    const j: any = r.ok ? await r.json() : null;
+    csMap = j?.an ? Object.fromEntries((j.strange as any[]).map((x) => [x.id, { status: x.status, text: x.text }])) : {};
+  } catch { csMap = {}; }
+}
 
 export function reloadHauptchat() {
   if (snap.state === 'kein-zugriff' || inflight) return inflight ?? undefined;
@@ -33,7 +45,9 @@ export function reloadHauptchat() {
       if (r.status === 403) { set({ state: 'kein-zugriff', data: null }); return; }
       if (r.status === 401) { set({ state: snap.data ? snap.state : 'laden', data: snap.data }); return; }
       if (!r.ok) throw new Error(String(r.status));
-      set({ state: 'ok', data: (await r.json()) as Overview });
+      const data = (await r.json()) as Overview;
+      await ladeCs();
+      set({ state: 'ok', data });
     })
     .catch(() => set({ state: 'fehler', data: snap.data }))
     .finally(() => { inflight = null; });
@@ -111,7 +125,16 @@ function ChatLink({ path, active, onOpen, className, children, testid, label }: 
   );
 }
 
-function StatusWort({ status }: { status: string }) {
+function StatusWort({ status, id }: { status: string; id?: string }) {
+  const cs = id ? csMap[id] : undefined;
+  if (cs) {
+    return (
+      <span className="flex shrink-0 items-center gap-1 text-xs text-text-secondary" data-testid="unterchat-status-wrap">
+        <span className={cn('h-2 w-2 rounded-full', CS_DOT[cs.status] ?? 'bg-gray-400')} aria-hidden="true" />
+        <span data-testid="unterchat-status" data-chat-status={cs.status}>{cs.text}</span>
+      </span>
+    );
+  }
   return (
     <span className="flex shrink-0 items-center gap-1 text-xs text-text-secondary" data-testid="unterchat-status-wrap">
       <span className={cn('h-2 w-2 rounded-full', DOT[status] ?? 'bg-gray-400')} aria-hidden="true" />
@@ -178,7 +201,7 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
           className={cn(indent, 'h-auto min-h-[48px] py-1 pr-[72px] md:h-auto md:min-h-[44px]', s.status === 'wartet' && pathname !== p && 'bg-amber-500/10 font-medium hover:bg-amber-500/20')}>
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="truncate">{label}</span>
-            <StatusWort status={s.status} />
+            <StatusWort status={s.status} id={s.id} />
           </span>
         </ChatLink>
         <span className="absolute right-1 top-1/2 flex -translate-y-1/2 gap-0.5">{datei(s, 'auftrag')}{datei(s, 'bericht')}</span>

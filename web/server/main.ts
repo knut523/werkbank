@@ -8,6 +8,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch, realpathSync, renameSync } from 'node:fs';
 import { join, extname, resolve, normalize, basename } from 'node:path';
 import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import YAML from 'yaml';
 import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl, isMainSite, siteFor, jiraSites } from './config.ts';
 import { connect, wb, lc } from './db.ts';
@@ -27,15 +28,16 @@ import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand, activeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
-import { reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
+import { repoFakten, reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
 import { berichtKopf, execSummary } from './berichtkopf.ts';
 import { readBericht as readBerichtDatei, reviewDir } from './bericht.ts';
 import { readBericht, paketDatei } from './bericht.ts';
+import { abschlussAn, abschlussProblem } from './abschluss.ts';
 import { assignProject, workstreamArea, syncWorkstreamOverview } from './projects.ts';
 import { ingestSessions } from './agentfiles.ts';
 import { ARTEN, folders, schemaName, ortAus, vorschlagAusPfad, isEingang } from './ablage.ts';
 import { ablageOwner, syncAblage, lastSyncAt } from './ablagesync.ts';
-import { listPakete, paketFile, renderPaketMd, strandFor, BILD_MIME } from './reviewpakete.ts';
+import { listPakete, paketFile, renderPaketMd, strandFor, BILD_MIME, readPaket } from './reviewpakete.ts';
 import { FEATURES, featuresFor, blockedFeature, knutsFragen, teamInstanz } from './features.ts';
 import { memoryWarning } from './memory.ts';
 import { ablegen, migrateLegacy, placeInfo, suggestFor } from './einsortieren.ts';
@@ -68,10 +70,13 @@ import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, not
 import { syncGithub, livePrs, GH_ORG } from './github.ts';
 import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol } from './prticker.ts';
 import { regelDir, regelVorschlaege } from './regelquelle.ts';
-import { reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
+import { klonPfad, reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
 import { meliousPassC } from './gegenpruefung.ts';
-import { postReview, statusKommentar, schreibenAus, type ReviewEvent } from './githubwrite.ts';
+import { postReview, statusKommentar, schreibenAus, writeToken, erstelleDraftPr, prOeffnen, type ReviewEvent } from './githubwrite.ts';
+import { ketteModus, starteKette, ketteTick, ketten as ketteCol, publicKette, brichAb as ketteAbbrechen, repoAusTicket, AKTIV as KETTE_AKTIV, type KDeps } from './jirakette.ts';
+import { fuehreAus as githubAktion } from './githubaktion.ts';
+import { fixTick, fixOverview, prLageVia, pushVia, gateVia } from './prfix.ts';
 import { paketIndex, paketZahlen } from './pakete.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
@@ -94,7 +99,8 @@ import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
 import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
 import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
-import { zeile as arbeitZeile, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
+import { chatStatusAn, offeneJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
+import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -955,6 +961,46 @@ async function startTicketAgent(u: User, i: Issue, note: string, place: { specPa
   return startChatAgent(u, i, note, 'work', { projectName: project?.name ?? null, areaDir, projectId: project?._id ?? null, personName: u.name, ...place });
 }
 
+// Ticket-Kette (Release 29, Strang C; jirakette.ts): Ticket → Plan → Freigabe → Bau → „Freigeben zum Push“ → Draft-PR, für das PM-Board UND
+// die Lesekopie des OLAF-Software-Boards. Jira bleibt lesend. Schalter WERKBANK_JIRAKETTE (Vorgabe aus).
+async function ketteTicket(u: User, key: string): Promise<{ issue: Issue; site: string }> {
+  const im = await issueMap();
+  const i = im.get(key);
+  if (i) return { issue: i, site: 'PM' };
+  if (!isMainSite(key)) {
+    const mi = mirrorOf(siteFor(key));
+    const own = (await wb().collection(mi.col).findOne({ key }, { projection: { _id: 0 } })) as unknown as Issue | null;
+    if (own) return { issue: own, site: mi.site.prefix };
+  }
+  throw nichtInKopie(key);
+}
+
+on('GET', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/kette$/, async (req, res, m) => {
+  const u = await needUser(req);
+  const { modus, problem } = ketteModus();
+  const { issue } = await ketteTicket(u, m[1]).catch(() => ({ issue: null as Issue | null }));
+  const liste = await ketteCol().find({ key: m[1], userId: u.id }).sort({ createdAt: -1 }).limit(5).toArray();
+  send(res, 200, { modus, problem, repo: issue ? repoAusTicket(issue) : null, ketten: liste.map(publicKette) });
+});
+
+on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/kette$/, async (req, res, m) => {
+  const u = await needUser(req);
+  if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
+  if (!(await getClaudeToken(u))) throw new HttpError(412, 'Noch kein Claude verbunden — unter „Einrichtung“ den Token aus `claude setup-token` eintragen.');
+  const b = await body(req);
+  const { issue, site } = await ketteTicket(u, m[1]);
+  try {
+    const k = await starteKette(u, { issue, site, repo: typeof b.repo === 'string' ? b.repo : null, note: String(b.note ?? '').slice(0, 2000), tiefe: istTiefe(b.tiefe) ? b.tiefe : null }, { startOrch, klon: (r) => klonPfad(r) });
+    log('jirakette gestartet', { user: u.id, key: m[1], id: k.id, modus: k.modus });
+    send(res, 200, k);
+  } catch (e: any) { if (e?.status) throw new HttpError(e.status, e.message); throw e; }
+});
+
+on('POST', /^\/api\/board\/kette\/(k-[0-9a-f]{8})\/abbrechen$/, async (req, res, m) => {
+  const u = await needUser(req);
+  try { send(res, 200, await ketteAbbrechen(u, m[1])); } catch (e: any) { if (e?.status) throw new HttpError(e.status, e.message); throw e; }
+});
+
 on('POST', /^\/api\/board\/issue\/([A-Z][A-Z0-9]+-\d+)\/agent$/, async (req, res, m) => {
   const u = await needUser(req);
   if (dryRun()) throw new HttpError(409, 'Vorschau (Trockenlauf): Agenten und Chats sind hier aus.');
@@ -1750,10 +1796,54 @@ on('GET', /^\/api\/arbeit\/unterchats$/, async (req, res, _m, url) => {
     : { userId: u.id, ...AUF_UEBERSICHT() };
   const docs: any[] = await orchRuns().find(filter as any).sort({ startedAt: -1 }).limit(200).toArray();
   const med = await etaMediane(u).catch(() => null);
-  const zeilen = arbeitSortiere(docs.filter((d) => erledigt || offenFuerKnut(d)).map((d) => arbeitZeile(d, { mediane: med })));
+  // Chat-Status (Release 29, Schalter): eine Frage-Quelle — dieselbe Inbox wie die Entscheidungsseite.
+  const csAn = chatStatusAn();
+  const offenJe = csAn && !erledigt ? offeneJeStrang((await inboxFuer(u)).eintraege) : new Map<string, number>();
+  const zeilen = arbeitSortiere(docs.filter((d) => erledigt || offenFuerKnut(d)).map((d) => arbeitZeile(d, { mediane: med, offeneFragen: csAn ? offenJe.get(String(d._id)) ?? 0 : undefined })));
   const offen = erledigt ? null : zeilen.length;
   const erledigtN = erledigt ? zeilen.length : await orchRuns().countDocuments({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: { $gte: new Date(Date.now() - 14 * 86400_000) }, $or: [{ reviewedBy: 'auto' }, { knutReviewedAt: { $ne: null } }] } as any);
-  send(res, 200, { zeilen, offen, erledigt: erledigtN, zaehler: await zaehlerFuer(u), at: new Date() });
+  send(res, 200, { zeilen, offen, erledigt: erledigtN, zaehler: await zaehlerFuer(u), chatStatus: csAn, at: new Date() });
+});
+// --- Chat-Status und Karte am Chat (Release 29, Strang B; Schalter WERKBANK_CHAT_STATUS, Vorgabe aus) ---
+// Ein Status je Chat (läuft · braucht Knut · in Review · fertig · hängt), dazu die Karte oben im Chat: bei „braucht Knut“ genau die
+// offenen Fragen (dieselben Karten wie die Entscheidungsseite, beantwortet wird über deren Endpunkt), bei „in Review“ das Paket mit
+// „passt“ / „Änderung“ (die vorhandenen Endpunkte /api/leitstand/strands/<id>/passt|reply). Nur lesen.
+async function chatStatusListe(u: User) {
+  const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(200).toArray()) as any[]).filter(offenFuerKnut);
+  const offenJe = offeneJeStrang((await inboxFuer(u)).eintraege);
+  const strange = docs.map((d) => { const n = offenJe.get(String(d._id)) ?? 0; return { id: String(d._id), conv: d.conv ?? null, titel: String(d.title ?? ''), offen: n, ...chatStatusVon(d, n) }; });
+  return { strange, zaehler: zaehleChat(strange.map((x) => x.status)) };
+}
+on('GET', /^\/api\/chatstatus$/, async (req, res) => {
+  const u = await needAdmin(req);
+  if (!chatStatusAn()) return send(res, 200, { an: false });
+  send(res, 200, { an: true, ...(await chatStatusListe(u)), at: new Date() });
+});
+/** Karte eines Chats; `key` = Strang-Kennung (8 Hex) oder die Unterhaltung (LibreChat-ID aus der Adresse /c/<id>). */
+on('GET', /^\/api\/chatstatus\/([0-9a-f]{8}|[0-9a-f-]{36})$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  if (!chatStatusAn()) return send(res, 200, { an: false });
+  const d: any = await orchRuns().findOne({ userId: u.id, kind: { $ne: 'leitstand' }, ...(m[1].length === 8 ? { _id: m[1] as any } : { conv: m[1] }) });
+  if (!d) return send(res, 200, { an: true, strang: false });   // ein normaler Chat, kein Unter-Chat: keine Karte
+  const id = String(d._id);
+  const ib = await inboxFuer(u);
+  const fragen = fragenJeStrang(ib.eintraege, id);
+  const offen = offeneJeStrang(ib.eintraege).get(id) ?? 0;
+  const cs = chatStatusVon(d, offen);
+  const qs = await listQuestions(u, { open: true }).catch(() => [] as any[]);
+  const fgs: any[] = await freigaben().find({ strand: id, revokedAt: null }).sort({ at: -1 }).toArray().catch(() => []);
+  const basis = paketBasis();
+  const k: any = (() => { try { return uebersichtKarte(d, fgs, qs.filter((q: any) => q.strand && String(q.strand.id) === id), basis, null); } catch (e: any) { log('chatstatus karte', { id, err: String(e?.message ?? e) }); return null; } })();
+  const paket = k?.paket ? readPaket(reviewDir(), k.paket) : null;
+  send(res, 200, {
+    an: true, strang: true, id, conv: d.conv ?? null, titel: String(d.title ?? ''), status: cs.status, text: cs.text, ton: cs.ton, grund: cs.grund, offen,
+    seen: k?.seen ?? null, laeuft: d.lastStatus === 'running',
+    fragen: fragen.map((f) => ({ ...f, worumKurz: ersterSatz(f.worum) })),
+    // Blockiert/„braucht Antwort“ ohne einzelne Frage: der Grund und ein freies Antwortfeld (geht als Antwort an den Strang).
+    freitext: cs.status === 'braucht' && !fragen.length ? { grund: d.zustandGrund ?? d.lastReason ?? '', auszug: String(d.lastExcerpt ?? '').slice(0, 600) } : null,
+    review: cs.status === 'review' && k ? { titel: k.titel, kurz: ersterSatz(k.kurz), links: k.links, bilder: /^\d{1,4}-[a-z0-9][a-z0-9-]*$/.test(k.paket ?? '') ? (paket?.files ?? []).filter((f: any) => /\.(png|jpe?g|gif|webp)$/i.test(f.rel)).slice(0, 4).map((f: any) => `api/files/agenten/${k.paket}/${f.rel.split('/').map(encodeURIComponent).join('/')}?inline=1`) : [], github: k.github, anders: k.anders, paket: k.paket } : null,
+    at: new Date(),
+  });
 });
 /** F7 (Knut 19.10.): Schätzung vor dem Start — eigene Läufe derselben Tiefe, Box-Stand (Heartbeat), Budget. Nie ein Fehler. */
 async function schaetzungFuer(u: User, o: { tiefe?: string | null; profil?: string | null; budget?: number | null }) {
@@ -1935,6 +2025,13 @@ on('POST', /^\/internal\/review-ready$/, async (req, res) => {
   if (strand) {
     const p = parseReview(b);
     if (!p.review) throw new HttpError(400, p.error!);
+    // R29 D / S2 (Paket 159 V2): Bericht prüfen statt erbitten — mit Beispiel zurück an den Strang (WERKBANK_ABSCHLUSS_PRUEFEN, Vorgabe aus).
+    if (abschlussAn()) {
+      let md: string | null = null;
+      try { md = readBericht(paketDatei(strand, 'bericht')); } catch { md = null; }
+      const problem = abschlussProblem(md);
+      if (problem) throw new HttpError(400, `Der Bericht (bericht.md) ist noch nicht abschlussreif: ${problem}\nBehebe das und ruf review_ready erneut auf.`);
+    }
     await wb().collection('orchestrator_runs').updateOne({ _id: strand._id }, { $set: { reviewReadyAt: new Date(), review: p.review } });
     log('review bereit (strang)', { user: u.id, id: strand._id, dod: p.review.dod.length });
     return send(res, 200, { ok: true, strand: strand._id });
@@ -1999,7 +2096,7 @@ async function prReviewOf(strand: string) {
     text: k?.text ?? null, hash: k ? entwurfHash(k.text) : null, vollstaendig: r.entwurf?.vollstaendig ?? null, statistik: r.entwurf?.statistik ?? null, gedaechtnis: r.gedaechtnis ?? null,
     posted: r.posted ?? null, verworfen: r.verworfen ?? null, postings: (r.postings ?? []).map((x: any) => ({ event: x.event, at: x.at, by: x.by })), note: r.note ?? null, schreibenAus: schreibenAus() };
 }
-on('GET', /^\/api\/leitstand\/ticker$/, async (req, res) => { await needAdmin(req); send(res, 200, await tickerOverview()); });
+on('GET', /^\/api\/leitstand\/ticker$/, async (req, res) => { await needAdmin(req); send(res, 200, { ...(await tickerOverview()), ...(await fixOverview()) }); });
 // Review-Log (Knut 17.10.): je Review eine Zeile, neueste oben; Filter Person/Repo/Status. Nur lesen.
 on('GET', /^\/api\/leitstand\/ticker\/log$/, async (req, res) => {
   await needAdmin(req);
@@ -2009,7 +2106,7 @@ on('GET', /^\/api\/leitstand\/ticker\/log$/, async (req, res) => {
 on('POST', /^\/api\/leitstand\/ticker\/einstellungen$/, async (req, res) => {
   const u = await needAdmin(req);
   const s = await setTickerSettings(await body(req), { id: u.id, name: u.name });
-  log('pr-ticker einstellungen', { user: u.id, ticker: s.ticker, autoReview: s.autoReview, autoPost: s.autoPost });
+  log('pr-ticker einstellungen', { user: u.id, ticker: s.ticker, autoReview: s.autoReview, autoPost: s.autoPost, autoFix: s.autoFix });
   send(res, 200, { ok: true, settings: s });
 });
 on('POST', /^\/api\/leitstand\/ticker\/jetzt$/, async (req, res) => {
@@ -3309,7 +3406,7 @@ const cosQuellen = (): CosQuellen => ({
   olafJira: (st) => olafJira(st, { creds: () => jiraCreds(null) }),   // lesend; Seite aus jiraSites (cos-olafjira.ts)
 });
 cosRoutes({
-  on, needAdmin, internalUser: (req, b) => internalUser(req, b), body, send, HttpError, vaultDir: () => cfg.vaultDir, dry: vaultDry, invalidate: invalidateIndex, log,
+  on, needAdmin, internalUser: (req, b) => internalUser(req, b), body, send, HttpError, vaultDir: () => cfg.vaultDir, dry: vaultDry, invalidate: invalidateIndex, log, publicUrl: () => cfg.publicUrl,
   quellen: () => cosQuellen(),
   // Nachfassen (nur nach Vorschau + Bestätigung in der Oberfläche): GitHub-Kommentar am PR (Review-Art COMMENT, an den aktuellen Kopf gebunden)
   // oder Jira-Kommentar mit Knuts Zugang. Mails werden nie gesendet.
@@ -3462,6 +3559,41 @@ on('POST', /^\/internal\/lead\/github$/, async (req, res) => {
   const text = await r.text();
   log('lead github lesen', { user: u.id, repo: p.repo, status: r.status });
   send(res, 200, { status: r.status, text: githubLeseText(text) });
+});
+
+// GitHub schreiben aus dem Hauptchat (R29 D, S5): die Brücke hat die Aktion vorher als Karte gezeigt und Knuts Klick abgewartet.
+// Schalter WERKBANK_HAUPTCHAT_GITHUB (Vorgabe aus); nur Kommentar / PR öffnen / Branch pushen, nie Merge (githubaktion.ts).
+on('POST', /^\/internal\/lead\/github-schreiben$/, async (req, res) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  let r;
+  try {
+    r = await githubAktion(b.aktion ?? {}, process.env, {
+      kommentar: (x, text) => statusKommentar(x, text, null),
+      prOeffnen,
+      push: (repo, klon, sha, zweig) => pushVia(repo, klon, sha, zweig, () => writeToken(repo)),
+      kopf: async (klon) => (await promisify(execFile)('git', ['-C', klon, 'rev-parse', 'HEAD'], { timeout: 10_000, encoding: 'utf8' })).stdout.trim(),
+      // D2: Nachweis bei der Brücke (dort hat Knut die Karte bestätigt); Brücke weg oder anderer Fehler = kein Nachweis.
+      nachweis: async (aktion) => {
+        try {
+          const r = await fetch(`${cfg.bridgeUrl}/internal/aktion-freigabe`, { method: 'POST', headers: { 'content-type': 'application/json', ...bridgeInternal }, body: JSON.stringify({ userId: u.id, aktion }), signal: AbortSignal.timeout(5000) });
+          return r.ok && (await r.json().catch(() => ({})))?.ok === true;
+        } catch { return false; }
+      },
+      // D3: Pre-Push-Gate wie beim @fix-Push; ohne Skript kein Push.
+      gate: async (klon, zweig, base) => {
+        const skript = regelDir() ? join(regelDir()!, 'pre-push-gate.sh') : null;
+        return skript && existsSync(skript) ? gateVia(skript, klon, zweig, base) : null;
+      },
+      origin: async (klon) => (await promisify(execFile)('git', ['-C', klon, 'remote', 'get-url', 'origin'], { timeout: 10_000, encoding: 'utf8' })).stdout.trim(),
+    });
+  } catch (e: any) {
+    log('lead github schreiben abgelehnt', { user: u.id, art: b.aktion?.art, repo: b.aktion?.repo, grund: String(e?.message ?? e).slice(0, 200) });
+    throw new HttpError(400, String(e?.message ?? e));
+  }
+  log('lead github schreiben', { user: u.id, art: b.aktion?.art, repo: b.aktion?.repo });
+  send(res, 200, r);
 });
 
 // Inbox für das Werkbank-Werkzeug `inbox` (Plan 213 K4) — die Brücke baut daraus die Chat-Knöpfe.
@@ -3828,6 +3960,45 @@ async function backgroundJobs() {
       });
       if (r.started || r.done) log('pr-review', r);
     } catch (e: any) { log('pr-review', { error: String(e.message).slice(0, 200) }); }
+    // Plan 286: `@fix` — eigener Takt, nicht abgewartet (Tests und Gate dauern Minuten; fixTick läuft nie doppelt).
+    // Der Strang bekommt kein GitHub; gepusht wird hier, nach pushPruefung, mit dem Schreibtoken (nur WirStrom1, nur der PR-Zweig).
+    const gateSkript = regelDir() ? join(regelDir()!, 'pre-push-gate.sh') : null;
+    void fixTick({
+      userById: async (id) => { const u = await userById(id); return u && allowed(u.email) && u.role === 'ADMIN' ? u : null; },
+      startOrch, strandDoc: (id) => orchRuns().findOne({ _id: id as any }),
+      pr: async (repo, n) => { const t = await githubReadToken(); return t ? prLageVia(t, repo, n) : null; },
+      kontext: async (repo, n) => { const t = await githubReadToken(); return t ? prKontextVia(t, repo, n) : null; },
+      status: (f, text, id) => statusKommentar(f, text, id),
+      kommentar: (f, text) => statusKommentar(f, text, null),
+      tests: execModus() === 'off' ? undefined : (job) => lokalAdapter({ git: async (args, cwd) => String(await realGit(args, cwd)), log: (m) => log('pr-fix tests', { m }) }).lauf(job),
+      gate: gateSkript && existsSync(gateSkript) ? (wt, zweig, basis) => gateVia(gateSkript, wt, zweig, basis) : undefined,
+      gatePfad: gateSkript,
+      push: schreibenAus() ? undefined : (repo, klon, sha, zweig) => pushVia(repo, klon, sha, zweig, () => writeToken(repo)),
+      melde: async (f, text) => {
+        const u = f?.ownerId ? await userById(f.ownerId) : null;
+        if (!u) return false;
+        return meldeLeitstand(u, { _id: `pr-fix:${f._id}`, title: `@fix ${String(f.repo).split('/')[1]}#${f.number}` }, `${text} → Ticker: ${cfg.publicUrl}/#/roadmap/prs`);
+      },
+      log,
+    }).then((r) => { if (r.started || r.done) log('pr-fix', r); }, (e: any) => log('pr-fix', { error: String(e?.message ?? e).slice(0, 200) }));
+    // Release 29 (Ticket-Kette): eigener Takt, nicht abgewartet; Vorgabe aus (WERKBANK_JIRAKETTE).
+    if (ketteModus().modus !== 'aus') {
+      const gs = regelDir() ? join(regelDir()!, 'pre-push-gate.sh') : null;
+      const kd: KDeps = {
+        startOrch, showOrch: (uu, id) => showOrch(uu, id) as any, sendOrch: (uu, id, t) => sendOrch(uu, id, t), askKnut: (uu, i) => askKnut(uu, i), frage: (uu, id) => getQuestion(uu, id) as any,
+        freigabe: async (strand) => (await freigaben().findOne({ strand, revokedAt: null, pushedAt: null }, { sort: { at: -1 } })) as any,
+        fakten: (dir) => repoFakten(dir), klon: (r) => klonPfad(r), browse: (key) => browseUrl(key),
+        userById: async (id) => { const uu = await userById(id); return uu && allowed(uu.email) && uu.role === 'ADMIN' ? uu : null; },
+        gate: gs && existsSync(gs) ? (wt, zweig, basis) => gateVia(gs, wt, zweig, basis) : undefined,
+        push: schreibenAus() ? undefined : (repo, klon, sha, zweig) => pushVia(repo, klon, sha, zweig, () => writeToken(repo)),
+        draftPr: schreibenAus() ? undefined : (repo, zweig, basis, t) => erstelleDraftPr({ repo, head: zweig, base: basis, title: t.title, body: t.body }),
+        kommentar: (repo, number, text) => statusKommentar({ repo, number }, text, null),
+        gepusht: (uu, id, pr) => gepusht(uu, id, pr),
+        melde: (uu, k, text) => meldeLeitstand(uu, { _id: `kette:${k._id}`, title: `Kette ${k.key}` }, text),
+        log,
+      };
+      void ketteTick(kd).then((r) => { if (r.bewegt) log('jirakette', r); }, (e: any) => log('jirakette', { error: String(e?.message ?? e).slice(0, 200) }));
+    }
   };
   setTimeout(prTick, 20_000);
   setInterval(prTick, 60_000);

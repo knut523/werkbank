@@ -10,9 +10,10 @@ export type Rolle = 'admin' | 'team';
 export type Weg = 'ui' | 'chat-knopf' | 'unterchat' | 'hauptchat';
 export type Zugang = 'chat' | 'direkt';
 
-/** Seiten, die gezählt werden — alles andere fällt unter „andere“, damit keine freien Texte in die Zählung kommen. */
+/** Seiten, die gezählt werden — alles andere fällt unter „andere“, damit keine freien Texte in die Zählung kommen.
+ * `morgenlage`: kein eigener Hash (Paket 374) — die Karte auf der Übersicht meldet ihr Aufklappen selbst als Seite. */
 const SEITEN = new Set(['heute', 'uebersicht', 'inbox', 'arbeit', 'arbeit/unterchats', 'arbeit/reviews', 'arbeit/tickets', 'roadmap', 'sprint', 'board', 'ziele',
-  'timebox', 'wissen', 'dateien', 'ablage', 'skills', 'einrichtung', 'einstellungen', 'leitstand', 'chat']);
+  'timebox', 'wissen', 'dateien', 'ablage', 'skills', 'einrichtung', 'einstellungen', 'leitstand', 'chat', 'morgenlage']);
 
 /** `#/roadmap/prs` → `roadmap`, `#/wissen/olaf/x.md` → `wissen`, `#/arbeit/reviews` → `arbeit/reviews`. */
 export function seiteAus(hash: unknown): string {
@@ -59,15 +60,21 @@ const ARTEN = new Set(['rueckfrage', 'entscheidung', 'braucht', 'nacharbeit', 'a
 /** Eine Antwort auf eine Frage/Entscheidung: art = Art der Frage (rueckfrage, entscheidung, braucht, push, pflege, …). */
 export function antwortGezaehlt(art: string, weg: Weg) { const a = String(art).toLowerCase(); merke('antwort', { frage: ARTEN.has(a) ? a : 'andere', weg }); }
 
-export interface NutzungsZeile { tag: string; art: string; n: number; seite?: string; rolle?: Rolle; zugang?: Zugang; frage?: string; weg?: Weg }
+// --- Chief of Staff (Paket 374): Aktionen der Morgenlage zählen — gleiche feste Liste, gleiche Collection ---
+/** CoS-Aktionen (Paket 374, Nutzungsauswertung für Knut am 29.10.) — feste Liste wie ARTEN, kein freier Text. */
+export const COS_AKTIONEN = new Set(['triage', 'einwurf', 'nachfassen', 'nachfassen-senden', 'register-anlegen', 'rueckstau', 'rueckstau-zurueck', 'ics-link', 'zusage', 'thema']);
+export function cosAktion(aktion: string) { const a = String(aktion).toLowerCase(); merke('aktion', { aktion: COS_AKTIONEN.has(a) ? a : 'andere' }); }
 
-/** Auswertung der letzten `tage` Tage: Summen je Seite/Rolle/Zugang und je Antwortweg, dazu die Zahl der Tage mit Daten. */
+export interface NutzungsZeile { tag: string; art: string; n: number; seite?: string; rolle?: Rolle; zugang?: Zugang; frage?: string; weg?: Weg; aktion?: string }
+
+/** Auswertung der letzten `tage` Tage: Summen je Seite/Rolle/Zugang, je Antwortweg und je CoS-Aktion, dazu die Zahl der Tage mit Daten. */
 export async function auswertung(tage = 14, now = new Date()) {
   await schreibe();
   const ab = tagVon(new Date(now.getTime() - (tage - 1) * 86_400_000));
   const zeilen = await wb().collection<NutzungsZeile>('nutzung').find({ tag: { $gte: ab } }, { projection: { _id: 0 } }).toArray();
   const seiten: Record<string, { admin: number; team: number; chat: number; direkt: number }> = {};
   const antworten: Record<string, Partial<Record<Weg, number>>> = {};
+  const aktionen: Record<string, number> = {};
   for (const z of zeilen) {
     if (z.art === 'seite' && z.seite) {
       const s = (seiten[z.seite] ??= { admin: 0, team: 0, chat: 0, direkt: 0 });
@@ -75,8 +82,10 @@ export async function auswertung(tage = 14, now = new Date()) {
     } else if (z.art === 'antwort' && z.frage && z.weg) {
       const a = (antworten[z.frage] ??= {});
       a[z.weg] = (a[z.weg] ?? 0) + z.n;
+    } else if (z.art === 'aktion' && z.aktion) {
+      aktionen[z.aktion] = (aktionen[z.aktion] ?? 0) + z.n;
     }
   }
   const tageMitDaten = new Set(zeilen.map((z) => z.tag)).size;
-  return { ab, tage, tageMitDaten, genug: tageMitDaten >= 14, seiten, antworten };
+  return { ab, tage, tageMitDaten, genug: tageMitDaten >= 14, seiten, antworten, aktionen };
 }

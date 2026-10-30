@@ -2,7 +2,7 @@
 // (Wiener Zeit), Median, Rückfall, Anzeige, Karte der Übersicht.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tiefeOf, tiefeStart, tiefeText, autoMaxFuer, etaMark, etaFuer, etaAnzeige, mediane, median, wienUm, uhrzeit, QUICK_MODELL } from '../server/tiefe.ts';
+import { tiefeOf, tiefeStart, tiefeText, autoMaxFuer, etaMark, etaFuer, etaAnzeige, mediane, median, wienUm, uhrzeit, QUICK_MODELL, REGULAR_MODELL, modellAusserhalbAbo } from '../server/tiefe.ts';
 import { orchBrief, statusMark } from '../server/orchestrator.ts';
 import { karte } from '../server/uebersicht.ts';
 import { tiefeEta } from '../server/orch-cli.ts';
@@ -17,7 +17,10 @@ test('Tiefe: Vorgabe regular, alte Stränge ohne Feld = regular; Start-Vorgaben;
   assert.equal(tiefeOf('tief'), 'regular');
   assert.equal(tiefeOf('deep'), 'deep');
   assert.deepEqual(tiefeStart('quick', {}), { modell: QUICK_MODELL, risiko: 'niedrig' });
-  assert.deepEqual(tiefeStart('regular', {}), { modell: null, risiko: null }, 'regular = heutiges Verhalten');
+  assert.deepEqual(tiefeStart('regular', {}), { modell: REGULAR_MODELL, risiko: 'niedrig' }, 'regular: Melious als Standard (Knut 26.10.)');
+  assert.deepEqual(tiefeStart('regular', { risiko: 'mittel' }), { modell: null, risiko: 'mittel' }, 'regular mittel: Claude der Brücke');
+  assert.deepEqual(tiefeStart('regular', { risiko: 'hoch' }), { modell: null, risiko: 'hoch' }, 'hoch: nie herabstufen');
+  assert.deepEqual(tiefeStart('live', {}), { modell: null, risiko: 'niedrig' }, 'live: Claude, Knut wartet');
   assert.deepEqual(tiefeStart('deep', {}), { modell: null, risiko: 'hoch' }, 'deep: Claude-Phasen-Lead, nie das Lead-Modell glm-5.3');
   assert.deepEqual(tiefeStart('quick', { modell: 'claude:sonnet', risiko: 'mittel' }), { modell: 'claude:sonnet', risiko: 'mittel' });
   assert.equal(autoMaxFuer('quick', 30), 10);
@@ -126,4 +129,9 @@ test('Fertig = keine ETA: Marke „fertig“, Zustand fertig/erledigt, CLI ohne 
   assert.equal(tiefeEta({ tiefe: 'deep', status: 'done', eta: { text: 'fertig ca. 17:30', quelle: 'agent' } }), 'Tiefe deep');
   assert.equal(tiefeEta({ tiefe: 'deep', eta: null }, true), 'Tiefe deep');
   assert.match(orchBrief({ title: 'T', prompt: 'mach', cwd: '/x' }), /Bei „Status: fertig“ lässt du die ETA-Zeile weg/);
+});
+
+test('Melious-Abo: nur Abo-Modelle (Energie statt Guthaben), Claude und melious:auto frei', () => {
+  for (const m of ['melious:glm-5.3', 'melious:glm-5.3-flash', 'melious:deepseek-v4.1-flash', 'melious:auto', 'claude:sonnet', null]) assert.equal(modellAusserhalbAbo(m), null, String(m));
+  assert.match(String(modellAusserhalbAbo('melious:kimi-k2')), /nicht im Melious-Abo/);
 });

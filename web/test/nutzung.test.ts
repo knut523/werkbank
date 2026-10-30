@@ -64,3 +64,19 @@ test('Zählen und auswerten: Summen je Seite, Rolle, Zugang und je Antwortweg; �
   await wb().collection('nutzung').insertOne({ tag: '2020-01-01', art: 'seite', seite: 'board', rolle: 'team', zugang: 'direkt', n: 99 });
   assert.equal((await N.auswertung(14)).seiten.board.team, 14);
 });
+
+test('CoS (Paket 374): Morgenlage als Seite, Aktionen nur aus der festen Liste, Auswertung summiert', async () => {
+  assert.equal(N.seiteAus('#/irgendwo-morgenlage-x'), 'andere', 'morgenlage ist nur der gemeldete Aufklapp-Klick, kein Hash');
+  N.seiteGesehen('#/', 'admin', 'direkt');   // stört nicht
+  N.cosAktion('triage'); N.cosAktion('triage'); N.cosAktion('einwurf');
+  N.cosAktion('geheimprojekt-x');   // freier Text → „andere“
+  N.antwortGezaehlt('rueckfrage', 'ui');
+  const a = await N.auswertung(14);
+  assert.equal(a.aktionen.triage, 2);
+  assert.equal(a.aktionen.einwurf, 1);
+  assert.equal(a.aktionen.andere, 1, 'unbekannte Aktion landet nie als Text in der Zählung');
+  assert.equal(a.aktionen['geheimprojekt-x'], undefined);
+  // Gespeichert wird nur Zählbares — aktion ist aus der festen Liste
+  const roh = await wb().collection('nutzung').find({ art: 'aktion' }, { projection: { _id: 0 } }).toArray();
+  assert.ok(roh.every((z) => N.COS_AKTIONEN.has(z.aktion) || z.aktion === 'andere'));
+});

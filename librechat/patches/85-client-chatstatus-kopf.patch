@@ -1,0 +1,20 @@
+diff --git a/client/src/components/Chat/ChatView.tsx b/client/src/components/Chat/ChatView.tsx
+index 1c84b93..cf17e1e 100644
+--- a/client/src/components/Chat/ChatView.tsx
++++ b/client/src/components/Chat/ChatView.tsx
+@@ -23,6 +23,7 @@ import ChatForm from './Input/ChatForm';
+ import Landing from './Landing';
+ import Header from './Header';
+ import Footer from './Footer';
++import ChatStatusKopf from '~/components/Werkbank/ChatStatusKopf'; // OLAF Workspace: Status und Karte oben im Chat (Release 29)
+ import { cn } from '~/utils';
+ import store from '~/store';
+ 
+@@ -102,6 +103,7 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
+           <Presentation>
+             <div className="relative flex h-full w-full flex-col">
+               <Header />
++              <ChatStatusKopf conversationId={conversationId} />
+               <>
+                 <div
+                   className={cn(

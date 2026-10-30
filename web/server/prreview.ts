@@ -75,10 +75,10 @@ export async function prepareWorktree(repo: string, n: number, head: string, g: 
 }
 
 /** Nächste freie Paketnummer im Ordner der Review-Pakete → `NNN-review-<repo>-<n>`. */
-export function nextPaket(repo: string, n: number, dir = reviewDir()): string {
+export function nextPaket(repo: string, n: number, dir = reviewDir(), art: 'review' | 'fix' = 'review'): string {
   let max = 0;
   try { for (const name of readdirSync(dir)) { const m = /^(\d{1,4})-/.exec(name); if (m) max = Math.max(max, Number(m[1])); } } catch { /* leer */ }
-  const slug = `review-${repo.split('/')[1]}-${n}`.toLowerCase().replace(/[^\w.-]+/g, '-');
+  const slug = `${art}-${repo.split('/')[1]}-${n}`.toLowerCase().replace(/[^\w.-]+/g, '-');
   return `${String(max + 1).padStart(3, '0')}-${slug}`;
 }
 
@@ -461,7 +461,17 @@ export function speicherStand(): { echtGb: number; hostFreiGb: number } | null {
     return { echtGb: (wert('anon') + wert('slab_unreclaimable')) / 1e9, hostFreiGb: frei / 1e6 };
   } catch { return null; }
 }
-export const SPEICHER = { echtMaxGb: 9, hostMinGb: 6, hostNotGb: 3 };
+// Schwellen (q-d76f5c, 23.10.2026): knapp = keine schweren Starts unter hostMinGb, zurück auf grün erst ab hostGruenGb
+// (Hysterese, damit der Wächter nicht pendelt, wenn der Host um die Schwelle schwankt); kritisch unter hostNotGb sofort.
+// meldungPauseMin: höchstens eine „knapp“/„grün“-Meldung je so viele Minuten an den Hauptchat — kritisch ungehindert.
+// Per Umgebungsvariable überschreibbar (WERKBANK_BOX_KNAPP_GB, WERKBANK_BOX_GRUEN_GB, WERKBANK_BOX_PAUSE_MIN).
+const envNum = (name: string) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : null; };
+export const SPEICHER = {
+  echtMaxGb: 9, hostNotGb: 3,
+  hostMinGb: envNum('WERKBANK_BOX_KNAPP_GB') ?? 6,
+  hostGruenGb: envNum('WERKBANK_BOX_GRUEN_GB') ?? 8,
+  meldungPauseMin: envNum('WERKBANK_BOX_PAUSE_MIN') ?? 30,
+};
 
 // Review-Schlange (Release 20b, Knut 20.10.2026: „warum so lange, nicht mehr als 2 möglich?“): gegen maxParallel zählen nur Phasen,
 // in denen gerechnet wird — „abgleich“ heißt: Claude prüft die Melious-Befunde am Code nach. „gegenprüfung“ wartet nur auf Melious
@@ -587,7 +597,7 @@ export function nachbessernText(paket: string, probleme: string[], motor = motor
   ].join('\n');
 }
 
-const GEHEIM = /\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY|\bAKIA[0-9A-Z]{16}\b|\b(password|passwort|secret|token|api[_-]?key)\s*[=:]\s*\S{6,}|mongodb(\+srv)?:\/\/[^\s:]+:[^\s@]+@|\bsk-[A-Za-z0-9_-]{20,}/i;
+export const GEHEIM = /\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY|\bAKIA[0-9A-Z]{16}\b|\b(password|passwort|secret|token|api[_-]?key)\s*[=:]\s*\S{6,}|mongodb(\+srv)?:\/\/[^\s:]+:[^\s@]+@|\bsk-[A-Za-z0-9_-]{20,}/i;
 
 // Englisch: geht nach GitHub (olaf-docs/AGENTS.md).
 /** Erste Zeile jedes automatisch geposteten Ergebnisses (Knut 17.10.). */

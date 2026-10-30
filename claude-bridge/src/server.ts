@@ -7,6 +7,7 @@
 // Authorization: Bearer <Claude-OAuth-Token des Nutzers aus `claude setup-token`>.
 // Der Token wird nur für die Dauer der Sitzung im Speicher gehalten und nie geloggt.
 
+import { freigabeVerbrauchen } from './freigabe.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, type Sink, type Tiefe } from './sessions.ts';
@@ -371,6 +372,14 @@ const server = createServer(async (req, res) => {
     }
     // Nachreichen während des Zugs (docs/plan-hauptchat-monitor.md, S1): nur für Werkbank-Web; der Schlüssel person:chat
     // beschränkt jede Nachricht auf die eigenen Unterhaltungen der Person.
+    // Klick-Nachweis (R29 D, D2): die Web-App fragt vor dem Schreiben nach GitHub, ob Knut diese Aktion auf der Karte bestätigt hat.
+    if (req.method === 'POST' && url.pathname === '/internal/aktion-freigabe') {
+      if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
+      const b = await readBody(req);
+      const userId = String(b.userId ?? '');
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId)) return json(res, 400, { error: 'Ungültige Person.' });
+      return json(res, 200, { ok: freigabeVerbrauchen(userId, b.aktion) });
+    }
     if (req.method === 'POST' && url.pathname === '/internal/inject') {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
       const b = await readBody(req);

@@ -375,6 +375,7 @@ export function Detail({ k, onClose, onChanged, site, forge, onOpenKey, einStart
           <div className="row small"><Since i={i} /><Blocked i={i} /></div>
           {ro && <p className="note small" data-testid="detail-fremd">Aus dem Jira {String((d.data as any).site ?? '').replace(/^https:\/\//, '')} — hier nur lesen. Schreiben über den Jira-MCP im Chat (ggf. „/mcp“ neu verbinden).</p>}
           <WasFehlt hyg={(d.data as any).hygiene ?? []} href={href} />
+          <JiraKette issueKey={k} />
           {i.links?.length > 0 && <ul className="small" data-testid="detail-links">{i.links.map((l: any) => <li key={l.type + l.key}>{l.label} <button className="sublink" onClick={() => onOpenKey(l.key)}><b>{l.key}</b></button> {l.summary} {l.status && <span className={`chip tiny-chip ${l.done ? 'ok' : l.blocks === 'blocked-by' ? 'bad' : ''}`}>{l.status}</span>}</li>)}</ul>}
           {i.description && <div className="card soft small" style={{ whiteSpace: 'pre-wrap' }}>{i.description}</div>}
           {i.lastComment && <p className="small"><b>Letzter Kommentar</b> ({i.lastComment.author}, {fmtDate(i.lastComment.created)}): {i.lastComment.text}</p>}
@@ -427,6 +428,62 @@ export function Detail({ k, onClose, onChanged, site, forge, onOpenKey, einStart
   );
 }
 
+
+const KETTE_SCHRITTE: [string, string][] = [['plan', 'Plan'], ['plan_frage', 'Plan-Freigabe'], ['bau', 'Bau'], ['push_frage', 'Push-Freigabe'], ['review', 'Draft-PR']];
+
+/** Ticket-Kette (Release 29, Strang C): Plan → Freigabe → Bau → „Freigeben zum Push“ → Draft-PR. Für PM und OLAF; Vorgabe aus (WERKBANK_JIRAKETTE). */
+function JiraKette({ issueKey }: { issueKey: string }) {
+  const d = useLoad<any>(() => api(`/api/board/issue/${issueKey}/kette`), [issueKey]);
+  const [repo, setRepo] = useState('');
+  const [note, setNote] = useState('');
+  const [err, setErr] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const data: any = d.data;
+  const aktiv = (data?.ketten ?? []).some((k: any) => ['plan', 'plan_frage', 'bau', 'push_frage'].includes(k.state));
+  const reload = d.reload;
+  useEffect(() => {
+    if (!aktiv) return;
+    const t = setInterval(() => reload(), 5000);
+    return () => clearInterval(t);
+  }, [aktiv, reload]);
+  if (!data || (data.modus === 'aus' && !data.ketten?.length)) return null;
+  return (
+    <div className="card soft" style={{ marginTop: 12 }} data-testid="jira-kette">
+      <h3 style={{ marginTop: 0 }}>Kette: Plan, Bau, Draft-PR {data.modus === 'trocken' && <span className="chip warn">Trockenlauf</span>}</h3>
+      <p className="small muted">Ein Agent plant mit dir, baut nach deiner Freigabe im eigenen Worktree des Repos und öffnet erst nach einer zweiten Freigabe („Freigeben zum Push“) einen <b>Draft-PR gegen develop</b>. Nie mergen. Jira bleibt lesend; Plan und PR kommen nur als Kommentarentwurf.</p>
+      {data.problem && <p className="err small">{data.problem}</p>}
+      {data.modus !== 'aus' && !aktiv && (
+        <div className="col">
+          <input aria-label="Ziel-Repo" placeholder={data.repo ? `Ziel-Repo (aus dem Ticket: ${data.repo})` : 'Ziel-Repo, z. B. WirStrom1/olaf-admin (leer = Agent schlägt vor)'} value={repo} onChange={(e) => setRepo(e.target.value)} />
+          <textarea rows={2} placeholder="Optional: Hinweis für den Plan" value={note} onChange={(e) => setNote(e.target.value)} aria-label="Hinweis für den Plan" />
+          <div><button className="btn primary" disabled={busy} onClick={async () => {
+            setErr(null); setBusy(true);
+            try { await api(`/api/board/issue/${issueKey}/kette`, { body: { repo: repo.trim() || data.repo || undefined, note } }); setNote(''); toast('Plan-Agent gestartet'); d.reload(); } catch (e) { setErr(e); } finally { setBusy(false); }
+          }}>{busy ? 'Starte …' : 'Kette starten (Plan zuerst)'}</button></div>
+        </div>
+      )}
+      <Err e={err} />
+      {(data.ketten ?? []).map((k: any) => (
+        <div key={k.id} style={{ marginTop: 10 }} data-testid="kette-zeile">
+          <div className="row small">
+            {KETTE_SCHRITTE.map(([z, label]) => <span key={z} className={`chip ${k.state === z ? 'warn' : ''}`}>{label}</span>)}
+            {['review', 'fehler', 'abgelehnt', 'abgebrochen'].includes(k.state) && <span className={`chip ${k.state === 'review' ? 'ok' : 'bad'}`}>{k.state === 'review' ? (k.pr ? 'fertig' : 'fertig (Trockenlauf)') : k.state}</span>}
+            <span className="tiny">{k.repo || 'Repo offen'} · {fmtDateTime(k.updatedAt)}</span>
+          </div>
+          {k.state === 'plan_frage' && <p className="small">Der Plan wartet auf deine Freigabe, zu den <a href="#/entscheidungen">Entscheidungen</a>.</p>}
+          {k.state === 'push_frage' && <p className="small">Bau fertig. Ansehen und „Freigeben zum Push“ in der Review-Ansicht des Bau-Chats, unter <a href="#/arbeit">Unter-Chats</a>.</p>}
+          {k.fehler && <p className="err small">{k.fehler}</p>}
+          {k.pr && <p className="small">Draft-PR: <a href={k.pr} target="_blank" rel="noreferrer">{k.pr}</a></p>}
+          {k.trocken && <p className="small muted">{k.trocken}</p>}
+          {k.kommentarEntwurf && <><label className="small">Kommentarentwurf für {issueKey} (nach Jira nur mit deinem Ok)</label><textarea readOnly rows={3} value={k.kommentarEntwurf} onFocus={(e) => e.currentTarget.select()} /></>}
+          <details className="small"><summary>Verlauf</summary><ul>{(k.log ?? []).map((l: any, n: number) => <li key={n}>{fmtDateTime(l.at)} — {l.text}</li>)}</ul></details>
+          {['plan', 'plan_frage', 'bau', 'push_frage'].includes(k.state) && <button className="btn small" onClick={async () => { try { await api(`/api/board/kette/${k.id}/abbrechen`, { body: {} }); d.reload(); } catch (e) { setErr(e); } }}>Abbrechen</button>}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** „Verschieben nach …“ — Tastatur-/Mobil-Alternative zum Ziehen. */
 function MoveMenu({ i, lanes, ts, onMove, onClose }: { i: any; lanes: any[]; ts: Transition[] | null; onMove: (lane: string, status: string) => void; onClose: () => void }) {
