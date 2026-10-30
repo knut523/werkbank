@@ -32,7 +32,7 @@ export const auditCol = () => wb().collection('pr_fix_audit');
 export const FIX_ETA_MIN = 30;
 const LAEUFT = ['startet', 'läuft', 'prüft'];
 const SHA_RE = /^[0-9a-f]{40}$/;
-const ZWEIG_RE = /^(?!.*\.\.)(?!.*\/\/)(?!\/)(?!.*\/$)[\w./-]{1,200}$/;
+export const ZWEIG_RE = /^(?!.*\.\.)(?!.*\/\/)(?!\/)(?!.*\/$)[\w./-]{1,200}$/;
 const MARKE = '(OLAF Workspace)';
 
 // ---------- Push-Bedingungen (rein) ----------
