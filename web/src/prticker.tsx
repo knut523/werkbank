@@ -6,7 +6,7 @@ import { api, chatTarget, fmtDateTime } from './api.ts';
 import { Err, Loading, useLoad } from './ui.tsx';
 
 const KIND: Record<string, string> = { neu: '🆕', stand: '⬆️', zu: '🏁', kommentar: '💬', review: '🔎', anfrage: '🙋', tag: '🏷️', fix: '🔧' };
-const STATUS_CHIP: Record<string, string> = { wartet: '', startet: '', läuft: '', gegenprüfung: '', abgleich: '', fertig: 'ok', deckel: 'warn', fehler: 'bad', übersprungen: '', prüft: '', abgelehnt: 'warn', nichts: '' };
+const STATUS_CHIP: Record<string, string> = { wartet: '', startet: '', läuft: '', gegenprüfung: '', abgleich: '', fertig: 'ok', deckel: 'warn', fehler: 'bad', übersprungen: '', prüft: '', abgelehnt: 'warn', nichts: '', trocken: 'warn' };
 const uhr = (d: string) => new Date(d).toLocaleTimeString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', minute: '2-digit' });
 const EMPF: Record<string, { t: string; c: string }> = { approve: { t: 'approven', c: 'ok' }, 'request-changes': { t: 'Änderungen verlangen', c: 'bad' }, comment: { t: 'nur kommentieren', c: 'warn' } };
 const short = (repo: string) => repo.split('/')[1] ?? repo;
@@ -109,7 +109,7 @@ export function PrTickerMeldungen() {
           {d.fixes.map((f: any) => (
             <li key={f.id}>
               <a href={f.url} target="_blank" rel="noreferrer">{short(f.repo)}#{f.number}</a> von {f.by}{f.auftrag ? `: ${f.auftrag}` : ' (offene Punkte des letzten Reviews)'}{' '}
-              <span className={`chip ${STATUS_CHIP[f.status] ?? ''}`} data-testid="fix-status">{f.status === 'fertig' ? 'gepusht' : f.status}</span>
+              <span className={`chip ${STATUS_CHIP[f.status] ?? ''}`} data-testid="fix-status">{f.status === 'fertig' ? 'gepusht' : f.status === 'trocken' ? 'Trockenlauf' : f.status}</span>
               {f.antwort && <> · <a href={f.antwort} target="_blank" rel="noreferrer">Antwort</a></>}
               {f.strand && <> · <a href={`#/leitstand?strand=${f.strand}`}>Unter-Chat</a></>}
               {f.note && <span className="tiny muted"> · {f.note}</span>}
