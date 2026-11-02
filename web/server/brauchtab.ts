@@ -75,6 +75,30 @@ const punkt = (k: BrauchtKarte, art: BrauchtPunkt['art'], wasTun: string, aktion
   antworten: art === 'entscheidung' ? ['ja', 'nein', 'anders', 'spaeter'] : [],   // (b): kein Knopf — nichts für Knut zu entscheiden
 });
 
+/**
+ * S5: die Klassifikation auf die Inbox legen (Einträge der Art „braucht“, Zuordnung je Strang — die Inbox-Kennung
+ * bleibt, damit Antworten weiter an der Quelle landen). (c) verschwindet, (b) wird eine Statuszeile ohne Knöpfe
+ * („Nichts für dich — der Hauptchat …“, blockiert Knut nicht), (a) trägt „Was du tun musst“ als Frage. Andere Arten
+ * und Schalter aus: unverändert.
+ */
+export function wendeAufInbox<E extends { art: string; frage: string; antworten: string[]; blockiert: number; daten: any }>(eintraege: E[], r: BrauchtErgebnis, o: { an: boolean } = { an: true }): E[] {
+  if (!o.an) return eintraege;
+  const zu = new Set(r.geschlossen.map((g) => g.strand));
+  const punkt = new Map(r.punkte.map((p) => [p.strand, p]));
+  const out: E[] = [];
+  for (const e of eintraege) {
+    const s = e.art === 'braucht' ? String(e.daten?.strand ?? '') : '';
+    if (!s) { out.push(e); continue; }
+    if (zu.has(s)) continue;
+    const p = punkt.get(s);
+    if (!p) { out.push(e); continue; }
+    out.push(p.art === 'aktion'
+      ? { ...e, frage: p.wasTun, antworten: [], blockiert: 0, daten: { ...e.daten, klasse: 'aktion', aktion: p.aktion, zeile: p.frage } }
+      : { ...e, frage: p.wasTun || e.frage, daten: { ...e.daten, klasse: 'entscheidung', zeile: p.frage } });
+  }
+  return out;
+}
+
 // ---- Schreiben: (c) schließen ------------------------------------------------------------
 
 /** Log-Zeile einer Schließung (annahme.ts-Form; Quelle = der Strang). */

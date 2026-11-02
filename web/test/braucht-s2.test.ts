@@ -94,3 +94,29 @@ test('Absturz-Sicherheit: kaputte Karte (leere Zeile) wird übersprungen, wirft 
   assert.deepEqual(r.punkte, []);
   assert.deepEqual(r.geschlossen, []);
 });
+
+// S5: die Klassifikation wirkt auf die Inbox-Einträge der Art „braucht“ (Zuordnung je Strang; Kennungen bleiben).
+test('S5 wendeAufInbox: (c) verschwindet, (b) ohne Knöpfe mit „erledigt der Hauptchat“, (a) mit „Was du tun musst“', async () => {
+  const { wendeAufInbox } = await import('../server/brauchtab.ts');
+  const ein = (strand: string, frage: string) => ({ id: `b-${strand}-x`, art: 'braucht', frage, empfehlung: null, quelle: { text: 'Unter-Chat', strand, url: null, paket: null }, wartetSeit: null, blockiert: 1, antworten: ['ja', 'nein', 'anders', 'spaeter'], daten: { strand, seen: null } }) as any;
+  const andere = { id: 'q-1', art: 'rueckfrage', frage: 'Q', antworten: ['ja'], daten: {} } as any;
+  const k = kartEingabe({ strand: 'ee1', titel: 'E', zeile: 'Paket 302 veröffentlichen — freigeben?' });
+  const r = braucheBraucht([k, tickerKarte, mergeKarte], fakten({ paketeLive: [269], aktionen: ['merge-im-worktree'] }), { an: true });
+  const out = wendeAufInbox([ein('ee1', k.zeile), ein('bb1', tickerKarte.zeile), ein('cc1', mergeKarte.zeile), andere], r);
+  assert.deepEqual(out.map((e: any) => e.id), ['b-ee1-x', 'b-cc1-x', 'q-1'], '(c) Ticker weg, andere Arten unberührt');
+  const a = out[0], b = out[1];
+  assert.equal(a.daten.klasse, 'entscheidung'); assert.match(a.frage, /Paket 302 veröffentlichen/); assert.deepEqual(a.antworten, ['ja', 'nein', 'anders', 'spaeter']);
+  assert.equal(b.daten.klasse, 'aktion'); assert.equal(b.daten.aktion, 'merge-im-worktree'); assert.deepEqual(b.antworten, []);
+  assert.match(b.frage, /Hauptchat/); assert.equal(b.blockiert, 0, '(b) blockiert Knut nicht');
+  assert.equal(out[2], andere);
+  // Schalter aus (Ergebnis ohne Klassifikation): nichts ändert sich.
+  const aus = braucheBraucht([k], fakten(), { an: false });
+  const e0 = ein('ee1', k.zeile);
+  assert.deepEqual(wendeAufInbox([e0], aus, { an: false }), [e0]);
+});
+
+test('S5 Zähler: (b)-Einträge zählen nicht als Entscheidung für Knut', async () => {
+  const { inboxZahl } = await import('../server/inbox.ts');
+  const e = (klasse?: string) => ({ id: 'b-x', art: 'braucht', frage: 'f', empfehlung: null, quelle: { text: '', strand: 'x', url: null, paket: null }, wartetSeit: null, blockiert: 0, antworten: [], daten: { strand: 'x', klasse } }) as any;
+  assert.equal(inboxZahl([e(), e('entscheidung'), e('aktion')]), 2);
+});

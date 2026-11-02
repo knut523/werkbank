@@ -95,7 +95,7 @@ import { themenAusStand, entscheide as cosEntscheide } from './cos.ts';
 import { vorschlag as tagesvorschlag, ausLage as vorschlagAusLage, TAGESVORSCHLAG_AN } from './tagesvorschlag.ts';
 import { ICS_AN } from './cosics.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
-import { braucheBraucht, schliesseBraucht, archiviere as archiviereStrang, zurueckholen as brauchtZurueck, hauptchatAktionen, kartEingabe, paketLiveFakten, BRAUCHT_AN as brauchtAn } from './brauchtab.ts';
+import { braucheBraucht, schliesseBraucht, archiviere as archiviereStrang, zurueckholen as brauchtZurueck, hauptchatAktionen, kartEingabe, paketLiveFakten, wendeAufInbox, BRAUCHT_AN as brauchtAn } from './brauchtab.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
 import { autoAnnahmeAn, annahmeMs, stufeVon } from './stufe.ts';
 import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
@@ -1494,6 +1494,11 @@ async function inboxFuer(u: User, now = Date.now()) {
   if (bremseAn()) {
     const fr = anwesenheitFrei(await anwesenheitCol().findOne({ _id: u.id as any }) as any, now, annahmeMs());
     if (fr.ab) for (const e of ib.eintraege) if (e.autoAb && new Date(e.autoAb).getTime() < fr.ab.getTime()) e.autoAb = fr.ab.toISOString();
+  }
+  // R30b S5: „Braucht Knut“-Einträge klassifiziert — (c) weg, (b) Statuszeile ohne Knöpfe, (a) „Was du tun musst“.
+  if (admin && brauchtAn() && karten.some((k) => k.braucht && !k.running)) {
+    const s = await brauchtSicht(u, { karten }).catch((e: any) => { log('braucht fehler', { user: u.id, error: String(e?.message ?? e).slice(0, 160) }); return null; });
+    if (s) ib.eintraege = wendeAufInbox(ib.eintraege, s, { an: true });
   }
   zahlCache.set(u.id, { at: Date.now(), n: inboxZahl(ib.eintraege) });   // jede frisch gebaute Inbox stellt auch den Zähler (Kopf = Leiste, 221)
   return ib;
@@ -3675,14 +3680,17 @@ on('POST', /^\/internal\/inbox\/antwort$/, async (req, res) => {
 // Fakten aus den bestehenden Quellen: Entscheidungs-Log und berichtskopf-antworten (beantwortet), releasestand.ts
 // (Paket im Live-Stand über Merge-Commit nach Nummer, nie nur Git-Abstammung), github_prs/prCheck (PR zu),
 // orchestrator_runs (neuerer Strang mit gleichem lauf). Schalter WERKBANK_BRAUCHT_DICH (Vorgabe aus).
-async function brauchtSicht(u: User, o: { schliessen?: boolean } = {}): Promise<any> {
+async function brauchtSicht(u: User, o: { schliessen?: boolean; karten?: any[] } = {}): Promise<any> {
   const an = brauchtAn();
   // Karten mit offener „Braucht Knut“-Zeile — derselbe Weg wie die Inbox (nicht running, keine Entscheidungen/Rückfragen).
-  const qs = await listQuestions(u, { open: true }).catch(() => [] as any[]);
+  // Die Inbox reicht ihre schon gebauten Karten herein (keine zweite Runde über Mongo).
   const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(60).toArray()) as any[]).filter(offenFuerKnut);
-  const fgs: any[] = docs.length ? await freigaben().find({ strand: { $in: docs.map((d) => String(d._id)) }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
-  const karten = docs.map((d) => { try { return uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), qs.filter((q: any) => q.strand && String(q.strand.id) === String(d._id)), paketBasis(), null); } catch { return null; } })
-    .filter(Boolean).filter((k: any) => k.braucht && !k.running) as any[];
+  const roh = o.karten ?? await (async () => {
+    const qs = await listQuestions(u, { open: true }).catch(() => [] as any[]);
+    const fgs: any[] = docs.length ? await freigaben().find({ strand: { $in: docs.map((d) => String(d._id)) }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
+    return docs.map((d) => { try { return uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), qs.filter((q: any) => q.strand && String(q.strand.id) === String(d._id)), paketBasis(), null); } catch { return null; } });
+  })();
+  const karten = roh.filter(Boolean).filter((k: any) => k.braucht && !k.running) as any[];
   if (!karten.length) return { an, punkte: [], geschlossen: [], aktionen: [] };
 
   // Fakten (alles lesend aus den bestehenden Quellen; jede Prüfung braucht einen Beleg, sonst bleibt die Frage).
