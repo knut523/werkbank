@@ -67,14 +67,18 @@ export function klassifiziere(zeile: string, k: BrauchtKontext): BrauchtErgebnis
 
   // ---- (c) veraltet/erledigt: Gründe sammeln, jeder mit einem Satz Begründung ----
   const gruende: string[] = [];
-  if (k.beantwortet(k.kennung) || D_RE.test(z) && [...z.matchAll(D_RE)].every((m) => k.beantwortet(m[0]))) gruende.push('schon beantwortet (steht im Entscheidungs-Log bzw. als antwort im Kopf)');
+  // Pass C: matchAll je Aufruf (ein /g-Regex mit test() davor ließ lastIndex stehen und übersprang D-Nummern).
+  const ds = [...z.matchAll(D_RE)].map((m) => m[0]);
+  if (k.beantwortet(k.kennung) || (ds.length > 0 && ds.every((d) => k.beantwortet(d)))) gruende.push('schon beantwortet (steht im Entscheidungs-Log bzw. als antwort im Kopf)');
   if (k.paket != null && k.paketLive(k.paket)) gruende.push(`Paket ${k.paket} ist im Live-Stand (Merge-Commit nach Paketnummer)`);
   if (k.pr != null) { const zu = k.prZu(k.pr); if (zu === true) gruende.push(`PR ${k.pr} ist geschlossen oder gemergt`); }
   if (k.lauf != null && k.laufNeuere(k.lauf)) gruende.push('ein neuerer Strang mit demselben Ziel hat das übernommen');
   if (gruende.length) return { art: 'veraltet', grund: gruende.join('; '), wasTun: '' };
 
   // ---- (b) Hauptchat-Aktion ----
-  const akt = AKTIONEN.find((a) => a.re.test(z))?.aktion;
+  // Eine Frage mit Alternative („pushen oder warten?“) ist eine Entscheidung, keine Aufgabe (Pass C).
+  const wahl = /\?/.test(z) && /\boder\b/i.test(z);
+  const akt = wahl ? undefined : AKTIONEN.find((a) => a.re.test(z))?.aktion;
   if (aktionErlaubt(akt, k.hauptchatAktionen)) {
     return { art: 'aktion', aktion: akt, wasTun: `Nichts für dich — der Hauptchat kann das ausführen (${akt}).` };
   }

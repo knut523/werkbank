@@ -149,7 +149,7 @@ export function Timebox({ cfg }: { cfg: Config }) {
           <div className="row">
             {!vorschlag.leer && <button className="btn small" onClick={() => { setZeigeVorschlag(false); setVerworfen([]); }}>Ausblenden</button>}
             <button className="btn small primary" disabled={!vbloecke.length} data-testid="tb-vorschlag-uebernehmen" onClick={() => call(async () => {
-              const r: any = await api('/api/timebox/vorschlag', { body: { date, bloecke: vbloecke.map((b) => ({ start: b.start, dur: b.dur, title: b.title, key: b.key, prio: b.prio })) } });
+              const r: any = await api('/api/timebox/vorschlag', { body: { date, bloecke: vbloecke.map((b) => ({ start: b.start, dur: b.dur, title: b.title, key: b.key, prio: b.prio, von: b.von })) } });
               setZeigeVorschlag(false); setVerworfen([]); toast(`${r.angelegt} Blöcke übernommen`);
             })}>Übernehmen</button>
           </div>

@@ -78,6 +78,7 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
           <button className="ub-btn sm" disabled={busy} onClick={() => antworten('nein')}>Nein</button>
           <button className="ub-btn ghost sm" disabled={busy} aria-expanded={anders !== null} onClick={() => setAnders(anders === null ? '' : null)}>Anders …</button>
         </> : null}
+        {e.art === 'braucht' && e.daten?.klasse === 'aktion' && <button className="ub-btn ghost sm" disabled={busy} aria-expanded={anders !== null} title="Doch etwas für dich? Antwort geht an den Unter-Chat" onClick={() => setAnders(anders === null ? '' : null)}>Anders …</button>}
         {e.art === 'altbestand' && <><button className={pri} disabled={busy} onClick={async () => {
           if (await confirm({ title: 'Altbestand verwerfen?', confirmLabel: 'Alle verwerfen', body: <p className="small">{(e.daten.eintraege ?? []).length} Fragen, älter als 14 Tage. Rückfragen werden zurückgezogen, alles andere ist 30 Tage zurückgestellt.</p> })) await antworten('nein');
         }}>Alle verwerfen</button><button className="ub-btn sm" aria-expanded={auf} onClick={() => setAuf(!auf)}>Durchsehen</button></>}

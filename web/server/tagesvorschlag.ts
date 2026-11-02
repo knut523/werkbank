@@ -20,10 +20,10 @@ export interface VorschlagEingabe {
   reviews: { pr: string; title: string }[];
   termine: { zeit: string | null; titel: string }[];
   /** Unerledigtes von gestern (noch nicht übertragen). */
-  uebertrag: { title?: string; key?: string | null; dur: number; prio?: 1 | 2 | 3 | null }[];
+  uebertrag: { title?: string; key?: string | null; dur: number; prio?: 1 | 2 | 3 | null; von?: string }[];
 }
 
-export type VorschlagBlock = Omit<Block, 'userId'> & { quelle: 'vorschlag'; grund: string };
+export type VorschlagBlock = Omit<Block, 'userId'> & { quelle: 'vorschlag'; grund: string; von?: string };
 export interface Vorschlag { bloecke: VorschlagBlock[]; ausgelassen: number; hinweise: string[] }
 
 const VON = 9 * 60, BIS = 17 * 60, STEP = 15, MAX_MUSS = 3;
@@ -32,15 +32,15 @@ const dm = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}.`;
 const minuten = (s: string) => { const m = /^(\d{1,2}):(\d{2})$/.exec(s.trim()); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
 const snap = (n: number) => Math.round(n / STEP) * STEP;
 
-type Kandidat = { title?: string; key?: string | null; dur: number; prio: 1 | 2 | 3; frist: string; grund: string };
+type Kandidat = { title?: string; key?: string | null; dur: number; prio: 1 | 2 | 3; frist: string; grund: string; von?: string };
 
 export function vorschlag(e: VorschlagEingabe): Vorschlag {
   const bis = morgen(e.datum);
   const hinweise: string[] = [];
   const belegt: { start: number; dur: number }[] = [];
   const bloecke: VorschlagBlock[] = [];
-  const block = (o: { start: number; dur: number; title?: string; key?: string | null; prio: 1 | 2 | 3 | null; grund: string }): VorschlagBlock =>
-    ({ date: e.datum, start: o.start, dur: o.dur, title: o.title, key: o.key ?? null, state: 'geplant', prio: o.prio, quelle: 'vorschlag', grund: o.grund });
+  const block = (o: { start: number; dur: number; title?: string; key?: string | null; prio: 1 | 2 | 3 | null; grund: string; von?: string }): VorschlagBlock =>
+    ({ date: e.datum, start: o.start, dur: o.dur, title: o.title, key: o.key ?? null, state: 'geplant', prio: o.prio, quelle: 'vorschlag', grund: o.grund, ...(o.von ? { von: o.von } : {}) });
 
   // Termine zuerst: sie stehen fest, der Rest füllt die Lücken.
   for (const t of e.termine) {
@@ -59,7 +59,7 @@ export function vorschlag(e: VorschlagEingabe): Vorschlag {
     k.push({ title: `Entscheidungen durcharbeiten (${e.entscheidungen.anzahl} offen)`, dur: e.entscheidungen.anzahl > 5 ? 45 : 30, prio: b > 0 ? 1 : 2, frist: '0000',
       grund: b > 0 ? `${b} davon blockieren einen laufenden Unter-Chat` : 'gebündelt: alle offenen Fragen in einem Block' });
   }
-  for (const u of e.uebertrag) k.push({ title: u.title, key: u.key ?? null, dur: u.dur, prio: u.prio ?? 3, frist: u.prio === 1 ? '0001' : '9999', grund: 'von gestern übertragen' });
+  for (const u of e.uebertrag) k.push({ title: u.title, key: u.key ?? null, dur: u.dur, prio: u.prio ?? 3, frist: u.prio === 1 ? '0001' : '9999', grund: 'von gestern übertragen', von: u.von });
   for (const t of e.tickets) {
     const faellig = !!t.duedate && t.duedate <= bis;
     if (faellig) k.push({ key: t.key, title: `${t.key} ${t.summary}`, dur: 60, prio: 1, frist: t.duedate!, grund: t.duedate! < e.datum ? `überfällig seit ${dm(t.duedate!)}` : `fällig ${t.duedate === e.datum ? 'heute' : 'morgen'}` });
@@ -84,7 +84,7 @@ export function vorschlag(e: VorschlagEingabe): Vorschlag {
     }
     if (s + dur > BIS) { ausgelassen++; continue; }
     belegt.push({ start: s, dur });
-    bloecke.push(block({ start: s, dur, title: x.title, key: x.key, prio: x.prio, grund: x.grund }));
+    bloecke.push(block({ start: s, dur, title: x.title, key: x.key, prio: x.prio, grund: x.grund, von: x.von }));
   }
   return { bloecke: bloecke.sort((a, b) => a.start - b.start), ausgelassen, hinweise };
 }

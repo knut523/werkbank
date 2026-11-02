@@ -80,3 +80,17 @@ test('Fakten aus der Live-Maschinerie: Merge nach Paketnummer zählt als „pake
   assert.equal(await T.paketLiveFakten(idx).live(302), false, 'anderes Paket nicht');
   assert.equal(await T.paketLiveFakten(null).live(269), false, 'ohne Index kein Beleg — kein stilles Schließen');
 });
+
+test('Pass C: Schließen ist idempotent — der 10-min-Takt schreibt Log-Zeile und Nachricht nur einmal', async () => {
+  const R = wb().collection('orchestrator_runs');
+  const L = wb().collection('entscheidungs_log');
+  await R.insertOne(run('dd100020') as any);
+  const g = { strand: 'dd100020', titel: 'T', kennung: 'b-dd100020-xyz', frage: 'Push-Ok', grund: 'Paket 270 ist im Live-Stand' };
+  const env = { WERKBANK_BRAUCHT_DICH: 'an' };
+  const a = await T.schliesseBraucht('u1', [g], { env, now });
+  const [b, c] = await Promise.all([T.schliesseBraucht('u1', [g], { env, now: now + 600_000 }), T.schliesseBraucht('u1', [g], { env, now: now + 600_001 })]);
+  assert.equal(a.length, 1); assert.equal(b.length + c.length, 0, 'zweiter und gleichzeitiger Takt: nichts');
+  assert.equal(await L.countDocuments({ userId: 'u1', kennung: 'b-dd100020-xyz' }), 1);
+  const d: any = await R.findOne({ _id: 'dd100020' as any });
+  assert.equal((d.meldungen ?? []).length, 1);
+});

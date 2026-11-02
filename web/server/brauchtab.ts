@@ -53,7 +53,8 @@ export function braucheBraucht(karten: BrauchtKarte[], fakten: BrauchtFakten, o:
     const ken = `b-${k.strand}-${kurz(k.zeile)}`;
     const ctx: BrauchtKontext = {
       kennung: ken,
-      beantwortet: (s) => fakten.beantwortet.includes(s),
+      // D-Nummern gelten je Strang („strang:D1“); Kennungen tragen den Strang schon (b-<strang>-…).
+      beantwortet: (s) => (/^D\d+$/.test(s) ? fakten.beantwortet.includes(`${k.strand}:${s}`) || fakten.beantwortet.includes(s) : fakten.beantwortet.includes(s)),
       paketLive: (n) => fakten.paketeLive.includes(n),
       prZu: (pr) => (fakten.prsZu.includes(pr) ? true : null),
       laufNeuere: (l) => fakten.laeufeNeuer.includes(l),
@@ -81,7 +82,7 @@ const punkt = (k: BrauchtKarte, art: BrauchtPunkt['art'], wasTun: string, aktion
  * („Nichts für dich — der Hauptchat …“, blockiert Knut nicht), (a) trägt „Was du tun musst“ als Frage. Andere Arten
  * und Schalter aus: unverändert.
  */
-export function wendeAufInbox<E extends { art: string; frage: string; antworten: string[]; blockiert: number; daten: any }>(eintraege: E[], r: BrauchtErgebnis, o: { an: boolean } = { an: true }): E[] {
+export function wendeAufInbox<E extends { art: string; frage: string; antworten: string[]; blockiert: number; daten: any }>(eintraege: E[], r: BrauchtErgebnis, o: { an: boolean }): E[] {
   if (!o.an) return eintraege;
   const zu = new Set(r.geschlossen.map((g) => g.strand));
   const punkt = new Map(r.punkte.map((p) => [p.strand, p]));
@@ -119,7 +120,10 @@ export async function schliesseBraucht(userId: string, geschlossen: BrauchtGesch
   const send = o.send ?? ((strand, text) => runs().updateOne({ _id: strand as any }, { $push: { meldungen: { at: new Date(now), art: 'braucht-geschlossen', text } } }));
   const out: BrauchtGeschlossen[] = [];
   for (const g of geschlossen) {
-    await wb().collection('entscheidungs_log').insertOne(logZeile(userId, g.strand, g.kennung, g.frage, { antwort: `automatisch geschlossen: ${g.grund}`, durch: 'auto', auto: true }) as any);
+    // Idempotent (Pass C): feste _id je Kennung — der 10-min-Takt und gleichzeitige Läufe schreiben Log und Nachricht nur einmal.
+    const zeile = { ...logZeile(userId, g.strand, g.kennung, g.frage, { antwort: `automatisch geschlossen: ${g.grund}`, durch: 'auto', auto: true }), _id: `${userId}-${g.kennung}-auto` };
+    try { await wb().collection('entscheidungs_log').insertOne(zeile as any); }
+    catch (e: any) { if (e?.code === 11000) continue; throw e; }
     await send(g.strand, `Braucht dich — automatisch geschlossen: ${g.grund}`);
     out.push(g);
   }

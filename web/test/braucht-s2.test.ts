@@ -102,7 +102,7 @@ test('S5 wendeAufInbox: (c) verschwindet, (b) ohne Knöpfe mit „erledigt der H
   const andere = { id: 'q-1', art: 'rueckfrage', frage: 'Q', antworten: ['ja'], daten: {} } as any;
   const k = kartEingabe({ strand: 'ee1', titel: 'E', zeile: 'Paket 302 veröffentlichen — freigeben?' });
   const r = braucheBraucht([k, tickerKarte, mergeKarte], fakten({ paketeLive: [269], aktionen: ['merge-im-worktree'] }), { an: true });
-  const out = wendeAufInbox([ein('ee1', k.zeile), ein('bb1', tickerKarte.zeile), ein('cc1', mergeKarte.zeile), andere], r);
+  const out = wendeAufInbox([ein('ee1', k.zeile), ein('bb1', tickerKarte.zeile), ein('cc1', mergeKarte.zeile), andere], r, { an: true });
   assert.deepEqual(out.map((e: any) => e.id), ['b-ee1-x', 'b-cc1-x', 'q-1'], '(c) Ticker weg, andere Arten unberührt');
   const a = out[0], b = out[1];
   assert.equal(a.daten.klasse, 'entscheidung'); assert.match(a.frage, /Paket 302 veröffentlichen/); assert.deepEqual(a.antworten, ['ja', 'nein', 'anders', 'spaeter']);
@@ -119,4 +119,32 @@ test('S5 Zähler: (b)-Einträge zählen nicht als Entscheidung für Knut', async
   const { inboxZahl } = await import('../server/inbox.ts');
   const e = (klasse?: string) => ({ id: 'b-x', art: 'braucht', frage: 'f', empfehlung: null, quelle: { text: '', strand: 'x', url: null, paket: null }, wartetSeit: null, blockiert: 0, antworten: [], daten: { strand: 'x', klasse } }) as any;
   assert.equal(inboxZahl([e(), e('entscheidung'), e('aktion')]), 2);
+});
+
+// ---- Pass C (eigene Prüfung, Kandidaten aus der Flash-Gegenprüfung am Code nachgeprüft) ----
+test('Pass C: zwei D-Nummern, nur die zweite beantwortet → bleibt offen; Ergebnis hängt nicht von vorherigen Aufrufen ab', () => {
+  const z = kartEingabe({ strand: 'gg1', titel: 'G', zeile: 'D12 klären und D45 bestätigen' });
+  for (let i = 0; i < 3; i++) {
+    const r = braucheBraucht([z], fakten({ beantwortet: ['D45'] }), { an: true });
+    assert.equal(r.geschlossen.length, 0, `Lauf ${i}: D12 ist offen`);
+  }
+  assert.equal(braucheBraucht([z], fakten({ beantwortet: ['D12', 'D45'] }), { an: true }).geschlossen.length, 1);
+});
+
+test('Pass C: D-Antwort zählt nur im eigenen Strang (Schreibweise strang:D1), global nur für Kennungen', () => {
+  const z = kartEingabe({ strand: 'hh1', titel: 'H', zeile: 'D1 entscheiden' });
+  assert.equal(braucheBraucht([z], fakten({ beantwortet: ['anderer:D1'] }), { an: true }).geschlossen.length, 0, 'D1 eines anderen Strangs schließt nicht');
+  assert.equal(braucheBraucht([z], fakten({ beantwortet: ['hh1:D1'] }), { an: true }).geschlossen.length, 1);
+});
+
+test('Pass C: neuerer Strang wird über die Strang-Kennung geprüft (Karte nennt sich selbst)', () => {
+  const z = kartEingabe({ strand: 'ii1', titel: 'I', zeile: 'Weiter so?', lauf: 'ii1' });
+  assert.equal(braucheBraucht([z], fakten({ laeufeNeuer: ['ii1'] }), { an: true }).geschlossen.length, 1);
+});
+
+test('Pass C: echte Frage mit Alternative („pushen oder warten?“) bleibt Knuts Entscheidung', () => {
+  const z = kartEingabe({ strand: 'jj1', titel: 'J', zeile: 'Jetzt pushen oder bis Montag warten?' });
+  assert.equal(braucheBraucht([z], fakten({ aktionen: ALLE_AKTIONEN }), { an: true }).punkte[0].art, 'entscheidung');
+  const y = kartEingabe({ strand: 'jj2', titel: 'J', zeile: 'Push-Ok für den Zweig' });
+  assert.equal(braucheBraucht([y], fakten({ aktionen: ALLE_AKTIONEN }), { an: true }).punkte[0].art, 'aktion');
 });

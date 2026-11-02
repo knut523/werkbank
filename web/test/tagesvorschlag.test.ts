@@ -104,3 +104,9 @@ test('ausLage: echte Morgenlage-Eingabe (Erzeuger-Form) → Vorschlags-Eingabe',
   assert.deepEqual(v.termine, [{ zeit: '14:00', titel: 'Sync WirStrom' }], 'nur heute');
   assert.deepEqual(ausLage(lage, [], { datum: '2026-11-02', tickets: [], uebertrag: [], termine: false }).termine, [], 'ohne COS_ICS keine Termine (D4)');
 });
+
+test('Pass C: Übertrag trägt seine Herkunft (von), damit die Übernahme den gestrigen Block als übertragen markiert', () => {
+  const r = vorschlag(e({ uebertrag: [{ title: 'Spec', dur: 60, prio: 2, von: '6720aa000000000000000001' }] }));
+  assert.equal(r.bloecke[0].von, '6720aa000000000000000001');
+  assert.equal(vorschlag(e({ tickets: [{ key: 'PM-1', summary: 'A', duedate: HEUTE }] })).bloecke[0].von, undefined);
+});

@@ -3188,7 +3188,7 @@ on('POST', /^\/api\/timebox\/prio$/, async (req, res) => {
 async function vorschlagFuer(u: User, datum: string, tickets: { key: string; summary: string; duedate: string | null; inSprint: boolean }[]) {
   const d = new Date(datum + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - 1);
   const uebertrag = ((await tbCol().find({ userId: u.id, date: d.toISOString().slice(0, 10), state: { $ne: 'erledigt' }, carriedTo: { $exists: false } }).toArray()) as any[])
-    .map((b) => ({ title: b.title, key: b.key ?? null, dur: b.dur, prio: b.prio ?? null }));
+    .map((b) => ({ title: b.title, key: b.key ?? null, dur: b.dur, prio: b.prio ?? null, von: String(b._id) }));
   let lage: any = { mine: { prs: [], tickets: [] }, register: { zusagen: [], personen: [] }, ich: firstName(u), termine: [] }, ents: any[] = [];
   if (u.role === 'ADMIN' && process.env.COS_MORGENLAGE !== 'off') {
     try { lage = await cosEingabe(u, cosQuellen(), new Date()); ents = cosEntscheide(lage); }
@@ -3208,14 +3208,21 @@ on('POST', /^\/api\/timebox\/vorschlag$/, async (req, res) => {
   const roh: any[] = Array.isArray(b.bloecke) ? b.bloecke.slice(0, 30) : [];
   if (!roh.length) throw new HttpError(400, 'Keine Blöcke.');
   const im = await issueMap();
-  const docs: any[] = [];
+  const docs: any[] = [], vonIds: string[] = [];
+  const gestern = (() => { const g = new Date(date + 'T12:00:00Z'); g.setUTCDate(g.getUTCDate() - 1); return g.toISOString().slice(0, 10); })();
   for (const x of roh) {
     const r = cleanBlock({ date, start: x.start, dur: x.dur, title: x.title, key: x.key && im.has(x.key) ? x.key : undefined, prio: x.prio ?? null, quelle: 'vorschlag' });
     if ('error' in r) throw new HttpError(400, r.error);
-    docs.push({ ...r.ok, userId: u.id, state: 'geplant', createdAt: new Date() });
+    const von = typeof x.von === 'string' && /^[0-9a-f]{24}$/.test(x.von) ? x.von : null;
+    if (von) vonIds.push(von);
+    docs.push({ ...r.ok, userId: u.id, state: 'geplant', createdAt: new Date(), ...(von ? { carriedFrom: gestern } : {}) });
   }
-  if (await tbCol().countDocuments({ userId: u.id, date, quelle: 'vorschlag' })) throw new HttpError(409, 'Der Vorschlag für diesen Tag ist schon übernommen.');
+  // Atomar einmal je Tag (Pass C: Zählen und Einfügen waren getrennt — Doppelklick/zwei Tabs legten doppelt an).
+  const res1 = await wb().collection('timebox_vorschlag').updateOne({ _id: `${u.id}:${date}` as any }, { $setOnInsert: { userId: u.id, date, at: new Date() } }, { upsert: true });
+  if (!res1.upsertedCount) throw new HttpError(409, 'Der Vorschlag für diesen Tag ist schon übernommen.');
   await tbCol().insertMany(docs);
+  // Übertrag von gestern wie „Unerledigtes auf morgen“ markieren — sonst böte der Knopf ihn ein zweites Mal an (Pass C).
+  for (const id of vonIds) await tbCol().updateOne({ _id: new ObjectId(id), userId: u.id, date: gestern, carriedTo: { $exists: false } }, { $set: { state: 'verschoben', carriedTo: date } });
   log('tagesvorschlag übernommen', { user: u.id, date, n: docs.length });
   send(res, 200, { ok: true, angelegt: docs.length });
 });
@@ -3694,9 +3701,9 @@ async function brauchtSicht(u: User, o: { schliessen?: boolean; karten?: any[] }
   if (!karten.length) return { an, punkte: [], geschlossen: [], aktionen: [] };
 
   // Fakten (alles lesend aus den bestehenden Quellen; jede Prüfung braucht einen Beleg, sonst bleibt die Frage).
-  const logBeantwortet = new Set(((await wb().collection('entscheidungs_log').find({ userId: u.id }, { projection: { kennung: 1, ids: 1, _id: 0 } }).limit(2000).toArray()) as any[]).flatMap((z) => [String(z.kennung), ...(z.ids ?? []).map(String)]));
-  const antwortIds = new Set(karten.flatMap((k: any) => (k.entscheidungen ?? []).map((e: any) => String(e.id))));
-  const beantwortet = [...logBeantwortet, ...antwortIds];
+  // D-Nummern nur im eigenen Strang („strang:D1“, Pass C) — sonst schlösse D1 aus Strang A die Frage D1 in Strang B.
+  const beantwortet = [...new Set(((await wb().collection('entscheidungs_log').find({ userId: u.id }, { projection: { kennung: 1, ids: 1, strand: 1, _id: 0 } }).sort({ at: -1 }).limit(2000).toArray()) as any[])
+    .flatMap((z) => [String(z.kennung), ...(z.strand?.id ? (z.ids ?? []).map((i: any) => `${z.strand.id}:${i}`) : [])]))];
   // Paket im Live-Stand: Merge-Commit nach Paketnummer im Live-Zweig (releasestand.ts, 60-s-Cache; Inhalt, nie Abstammung).
   const { liveIndex } = await import('./releasestand.ts');
   const idx = await liveIndex(cfg.liveRoot, cfg.sourceRepo).catch(() => null);
@@ -3706,26 +3713,32 @@ async function brauchtSicht(u: User, o: { schliessen?: boolean; karten?: any[] }
   for (const n of paketNummern) if (await paketLiveFn.live(n)) paketeLive.push(n);
   // PR zu: nur wenn die Karte selbst einen gemergt/geschlossen PR nennt (github_prs-Kopie übernimmt die Karte).
   const prsZu = karten.flatMap((k: any) => (k.prs ?? []).filter((z: any) => z.stand === 'gemergt' || z.stand === 'geschlossen').map((z: any) => prKennung(z.url)));
-  // Neuerer Strang mit gleichem lauf: gleicher lauf mehrfach in den letzten 30 Tagen (ohne Beleg bleibt die Frage).
-  const laufZahl = new Map<string, number>((await orchRuns().aggregate([{ $match: { userId: u.id, kind: 'strand', startedAt: { $gt: new Date(Date.now() - 30 * 86400_000) } } }, { $group: { _id: '$lauf', n: { $sum: 1 } } }]).toArray().catch(() => [] as any[])).map((r: any) => [String(r._id), r.n]));
+  // Neuerer Strang mit gleichem Ziel: nur ausdrücklich gesetzter lauf (laufExplicit, nie aus dem Titel geraten) und ein
+  // jüngerer Strang dieses Laufs existiert. Geprüft wird je Strang-Kennung (Pass C: vorher thema gegen Strang-Ids — griff nie).
   const laeufeNeuer: string[] = [];
-  for (const d of docs) { const l = String(d.lauf ?? ''); if (l && (laufZahl.get(l) ?? 0) > 1 && String(d._id) !== String(docs.find((x: any) => x.lauf === l)?._id)) laeufeNeuer.push(String(d._id)); }
+  for (const d of docs) {
+    if (!d.laufExplicit || !d.lauf) continue;
+    const juenger = await orchRuns().countDocuments({ userId: u.id, lauf: d.lauf, laufExplicit: true, _id: { $ne: d._id }, startedAt: { $gt: d.startedAt } }).catch(() => 0);
+    if (juenger > 0) laeufeNeuer.push(String(d._id));
+  }
 
   const sicht = braucheBraucht(karten.map((k: any) => kartEingabe({
     strand: k.id, titel: k.titel, zeile: k.braucht,
     paket: k.paket ? Number(k.paket.split('-')[0]) || null : null,
     pr: (k.prs ?? []).filter((z: any) => z.stand === 'gemergt' || z.stand === 'geschlossen').map((z: any) => prKennung(z.url))[0] ?? null,
-    lauf: k.thema ?? null,
+    lauf: k.id,   // laeufeNeuer enthält Strang-Kennungen (Pass C)
   })), { beantwortet, paketeLive, prsZu, laeufeNeuer, aktionen: hauptchatAktionen() }, { an });
   // (c) sofort schließen (der Takt ruft mit schliessen, GET ohne).
   if (o.schliessen && sicht.geschlossen.length) await schliesseBraucht(u.id, sicht.geschlossen, { env: process.env });
   return { an, ...sicht };
 }
 const prKennung = (url: string) => { const m = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/.exec(String(url ?? '')); return m ? `${m[1]}#${m[2]}` : String(url ?? ''); };
+let brauchtTaktLaeuft = false;   // Takt-Schutz (Pass C): ein Durchgang zur Zeit
 on('POST', /^\/internal\/braucht$/, async (req, res) => {
   const u = await internalUser(req, await body(req));
   if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
-  send(res, 200, await brauchtSicht(u));
+  // Schalter aus: nichts klassifizieren (keine Git-/Log-Abfragen) — das Werkzeug meldet „Schalter aus“.
+  send(res, 200, brauchtAn() ? await brauchtSicht(u) : { an: false, punkte: [], geschlossen: [], aktionen: [] });
 });
 
 // Claude-Konten der Person für die Brücke (Klartext nur über diesen Kanal; chat = Schlüssel aus der Anfrage).
@@ -4246,9 +4259,13 @@ if (process.env.ORCH_STATUS !== 'off') setInterval(() => {
   autoSchliessen().then((w) => { if (w.length) log('automatisch weggeräumt', { n: w.length, ids: w.map((x) => x.id) }); }).catch((e) => log('wegräumen fehler', { error: String(e?.message ?? e).slice(0, 160) }));
   // „Braucht dich“ (R30b): veraltete Karten (schon beantwortet, Paket live, PR zu) automatisch schließen — nur mit
   // WERKBANK_BRAUCHT_DICH=an, je Person mit offenen Punkten, nie still (Log + Nachricht an den Strang).
-  if (brauchtAn()) wb().collection('orchestrator_runs').distinct('userId', AUF_UEBERSICHT() as any).then(async (ids: any[]) => {
-    for (const id of ids) { const u = await userById(String(id)).catch(() => null); if (u && allowed(u.email) && u.role === 'ADMIN') await brauchtSicht(u, { schliessen: true }).catch((e) => log('braucht fehler', { user: String(id), error: String(e?.message ?? e).slice(0, 160) })); }
-  }).catch((e) => log('braucht fehler', { error: String(e?.message ?? e).slice(0, 160) }));
+  // Nie zwei Durchgänge gleichzeitig (Pass C); das Schließen selbst ist zusätzlich idempotent (brauchtab.ts).
+  if (brauchtAn() && !brauchtTaktLaeuft) {
+    brauchtTaktLaeuft = true;
+    wb().collection('orchestrator_runs').distinct('userId', AUF_UEBERSICHT() as any).then(async (ids: any[]) => {
+      for (const id of ids) { const u = await userById(String(id)).catch(() => null); if (u && allowed(u.email) && u.role === 'ADMIN') await brauchtSicht(u, { schliessen: true }).catch((e) => log('braucht fehler', { user: String(id), error: String(e?.message ?? e).slice(0, 160) })); }
+    }).catch((e) => log('braucht fehler', { error: String(e?.message ?? e).slice(0, 160) })).finally(() => { brauchtTaktLaeuft = false; });
+  }
   // Knut 17.10.: normale Entscheidungen nach 24 h annehmen (WERKBANK_AUTO_ANNAHME=0 schaltet ab).
   annahmeTakt().catch((e) => log('annahme fehler', { error: String(e?.message ?? e).slice(0, 160) }));
 }, 10 * 60_000).unref();
