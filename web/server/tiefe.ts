@@ -28,15 +28,57 @@ export function modellAusserhalbAbo(modell: string | null | undefined): string |
 /** Modell und Risiko beim Start: ausdrückliche Angaben schlagen die Vorgabe der Tiefe.
  *  Vorgabe (Knut 26.10., Paket 163): quick → glm-5.3-flash; regular ohne Risiko oder „niedrig“ → glm-5.3 (Risiko niedrig);
  *  regular „mittel“ und deep/„hoch“ → Claude der Brücke (nie herabstufen); live → Claude (Knut wartet davor). */
-export function tiefeStart(t: Tiefe, o: { modell?: string | null; risiko?: string | null }): { modell: string | null; risiko: string | null } {
+export function tiefeStart(t: Tiefe, o: { modell?: string | null; risiko?: string | null }, v: { quick: string | null; regular: string | null } = { quick: QUICK_MODELL, regular: REGULAR_MODELL }): { modell: string | null; risiko: string | null } {
   // live: Risiko wie quick, Modell aber die Vorgabe der Brücke (Claude) — Knut sitzt davor und wartet (Bericht 274, D1).
   const risiko = o.risiko || (t === 'quick' || t === 'live' || t === 'regular' ? 'niedrig' : t === 'deep' ? 'hoch' : null);
-  const modell = o.modell || (t === 'quick' ? QUICK_MODELL : t === 'regular' && risiko === 'niedrig' ? REGULAR_MODELL : null);
+  const modell = o.modell || (t === 'quick' ? v.quick : t === 'regular' && risiko === 'niedrig' ? v.regular : null);
   return { modell, risiko };
 }
 
 /** Absatz für Stränge auf Claude: Zuarbeit an Melious (Abo-Modelle, Energie statt Geld). */
 export const MELIOUS_ZUARBEIT_TEXT = 'Zuarbeit an Melious (Knut 26.10.): Lesen, Suchen, Ist-Stand belegen, Zweitmeinung und Logs auswerten per `mel-sub` abgeben — Standard glm-5.3-flash, Massenlesen deepseek-v4.1-flash, Anspruchsvolles `-m glm`. Nur Modelle aus dem Coder-Abo (Energie, kein Guthaben). Deine eigenen Züge nur für Entscheiden und Schreiben; Melious-Antworten gegen den Code prüfen.';
+/** Dasselbe, wenn die Zuarbeit auf Claude läuft (WERKBANK_ZUARBEIT=claude oder auto bei knappem Melious). */
+export const CLAUDE_ZUARBEIT_TEXT = 'Zuarbeit auf Claude (Melious ist gerade knapp oder abgeschaltet): Lesen, Suchen, Ist-Stand belegen und Logs auswerten gibst du an lesende Claude-Teilagenten (Explore, leser) ab, gebündelt und sparsam. Deine eigenen Züge nur für Entscheiden und Schreiben.';
+
+// ---------- Modellwahl per Schalter (R31, Nachträge Knut 02.11.2026) ----------
+// WERKBANK_REGULAR_MODELL / WERKBANK_QUICK_MODELL: `melious:<Abo-Modell>` | `claude` (Claude der Brücke) | `auto`.
+// WERKBANK_ZUARBEIT: `melious` | `claude` | `auto`. auto = Melious, solange sein Rest ≥ WERKBANK_KONTINGENT_SCHWELLE (%, Vorgabe 20)
+// liegt, sonst Claude; sind alle Claude-Konten erschöpft → Melious. Ohne Schalter: genau das bisherige Verhalten.
+
+export type Zuarbeit = 'melious' | 'claude';
+/** Kontingent-Lage für auto (web/server/kontingent.ts): Melious-Rest in % (null = unbekannt/kein Konto), ein Claude-Konto frei? */
+export interface KontingentLage { meliousRest: number | null; claudeFrei: boolean }
+
+/** Gültige Modell-Einstellung oder die Vorgabe (unbekannte Werte und Modelle außerhalb des Abos kippen nie still). */
+export function modellEinstellung(wert: string | undefined, vorgabe: string): string {
+  const w = String(wert ?? '').trim();
+  if (w === 'claude' || w === 'auto') return w;
+  return /^melious:[\w.-]{1,60}$/.test(w) && !modellAusserhalbAbo(w) && w !== 'melious:auto' ? w : vorgabe;
+}
+export const zuarbeitEinstellung = (wert: string | undefined): Zuarbeit | 'auto' => (wert === 'claude' || wert === 'auto' ? wert : 'melious');
+export function kontingentSchwelle(env: Record<string, string | undefined>): number {
+  const n = Number(env.WERKBANK_KONTINGENT_SCHWELLE);
+  return env.WERKBANK_KONTINGENT_SCHWELLE !== undefined && env.WERKBANK_KONTINGENT_SCHWELLE !== '' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : 20;
+}
+/** auto: Melious bei Rest ≥ Schwelle; sonst Claude — es sei denn, alle Claude-Konten sind erschöpft. */
+export const autoWahl = (l: KontingentLage, schwelle: number): Zuarbeit => ((l.meliousRest !== null && l.meliousRest >= schwelle) || !l.claudeFrei ? 'melious' : 'claude');
+
+/** Aufgelöste Vorgaben für Strangstart und Zuarbeit; `auto` nennt, welche davon automatisch gewählt wurden. lage null = unbekannt → Melious. */
+export function modellVorgaben(env: Record<string, string | undefined>, lage: KontingentLage | null): { quick: string | null; regular: string | null; zuarbeit: Zuarbeit; auto: ('quick' | 'regular' | 'zuarbeit')[] } {
+  const wahl: Zuarbeit = lage ? autoWahl(lage, kontingentSchwelle(env)) : 'melious';
+  const auto: ('quick' | 'regular' | 'zuarbeit')[] = [];
+  const modell = (k: 'quick' | 'regular', wert: string | undefined, vorgabe: string): string | null => {
+    const e = modellEinstellung(wert, vorgabe);
+    if (e === 'auto') { auto.push(k); return wahl === 'melious' ? vorgabe : null; }
+    return e === 'claude' ? null : e;
+  };
+  const quick = modell('quick', env.WERKBANK_QUICK_MODELL, QUICK_MODELL);
+  const regular = modell('regular', env.WERKBANK_REGULAR_MODELL, REGULAR_MODELL);
+  const z = zuarbeitEinstellung(env.WERKBANK_ZUARBEIT);
+  if (z === 'auto') auto.push('zuarbeit');
+  return { quick, regular, zuarbeit: z === 'auto' ? wahl : z, auto };
+}
+export const zuarbeitText = (z: Zuarbeit) => (z === 'claude' ? CLAUDE_ZUARBEIT_TEXT : MELIOUS_ZUARBEIT_TEXT);
 
 /** Deckel „automatisch weiter“ je Tiefe (Budget): quick ein Drittel, deep das Doppelte. */
 export const autoMaxFuer = (t: Tiefe, max: number) => (t === 'quick' || t === 'live' ? Math.max(1, Math.ceil(max / 3)) : t === 'deep' ? max * 2 : max);

@@ -49,6 +49,7 @@ import { listSkills, syncSkills } from './skills.ts';
 import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog, logShare, scratchDir } from './sharing.ts';
 import { log } from './log.ts';
 import { cosRoutes } from './cosroutes.ts';
+import { betriebRoutes, neustartMelden } from './betriebroutes.ts';
 import { morgenTick, schnappschussTick } from './cosjob.ts';
 import { olafJira } from './cos-olafjira.ts';
 import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
@@ -3310,12 +3311,18 @@ on('PUT', /^\/api\/files$/, async (req, res, _m, url) => {
   send(res, 200, { ok: true, id: f._id, name: f.name });
 });
 
-on('GET', /^\/api\/files\/([0-9a-f-]{36})\/download$/, async (req, res, m) => {
+on('GET', /^\/api\/files\/([0-9a-f-]{36})\/download$/, async (req, res, m, url) => {
   const u = await needUser(req);
   const f = await fileFor(u, m[1]);
   if (!f) throw new HttpError(404, 'Datei nicht gefunden.');
   // Eine verschobene Vault-Notiz (oder eine fehlende Kopie) ist ein 404, kein Absturz des Prozesses (Review B2).
   if (!existsSync(filePath(f))) throw new HttpError(404, f.kind === 'vault' ? 'Die Notiz liegt nicht mehr an dieser Stelle im Vault.' : 'Datei nicht mehr vorhanden.');
+  // R31 (screenshot): Bilder mit ?inline=1 im Chat anzeigen (wie die Paket-Bilder, BILD_MIME; Sandbox-CSP bleibt).
+  const bild = BILD_MIME[extname(String(f.name)).toLowerCase()];
+  if (bild && url.searchParams.get('inline') === '1') {
+    res.writeHead(200, { 'content-type': bild, 'x-content-type-options': 'nosniff', 'content-security-policy': "sandbox; default-src 'none'", 'cache-control': 'private, max-age=60' });
+    return void createReadStream(filePath(f)).on('error', () => res.destroy()).pipe(res);
+  }
   res.writeHead(200, {
     'content-type': 'application/octet-stream', 'x-content-type-options': 'nosniff',
     'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(f.name)}`,
@@ -3493,6 +3500,9 @@ cosRoutes({
     return themenAusStand(alle.filter((x) => x.type !== 'Workstream'), wsNamen, karten, wienDatum());
   },
 });
+
+// R31 S3+S4 (Umzug): werkbank_betrieb/_stand, Geheimnis-Vermittler, Coolify, datei_teilen, screenshot, Kontingent.
+betriebRoutes({ on, needUser, orchPerson: (req, b) => orchPerson(req, b), body, send, HttpError, log });
 
 // --- intern: nur für die Brücke und ihre Werkzeuge (Header mit WERKBANK_INTERNAL_TOKEN) ---
 
@@ -4252,6 +4262,8 @@ mkdirSync(cfg.dataDir, { recursive: true });
 migrateLegacy(log).catch((e) => log('ablage-umzug', { error: String(e?.message ?? e).slice(0, 200) }));
 server.listen(cfg.port, cfg.host, () => log('listening', { host: cfg.host, port: cfg.port, demo: cfg.demo, vault: cfg.vaultDir }));
 if (process.env.WERKBANK_NO_JOBS !== '1') backgroundJobs();
+// R31 (werkbank_betrieb): nach einem Neustart aus dem Hauptchat dort „fertig“ melden (Marke in cfg.dataDir).
+setTimeout(() => neustartMelden(async (id) => { const u = await userById(id); return u && allowed(u.email) ? u : null; }, log).catch(() => {}), 5000).unref();
 // Orchestrator-Stränge selbst fortsetzen (docs/plan-orchestrator-auto-weiter.md) — eigener Takt, auch ohne Hintergrundjobs.
 // „Konto frei“ nur mit Antwort der Brücke und mindestens zwei Konten (sonst wartet `rate_limit` die 30 min ab).
 const orchDeps = {

@@ -18,6 +18,15 @@ import { wb, lc } from './db.ts';
 import { seal, unseal, librechatEncrypt, librechatDecrypt } from './crypto.ts';
 import type { User } from './auth.ts';
 import { meliousForBridge } from './melious.ts';
+import { modellVorgaben, zuarbeitEinstellung, type Zuarbeit } from './tiefe.ts';
+
+/** Zuarbeit der Person (R31): fester Schalterwert, bei `auto` aus der Kontingent-Lage (Fehler → Melious wie bisher). */
+async function zuarbeitFuer(u: User): Promise<Zuarbeit> {
+  const z = zuarbeitEinstellung(process.env.WERKBANK_ZUARBEIT);
+  if (z !== 'auto') return z;
+  const { lageFuer } = await import('./kontingent.ts');
+  return modellVorgaben(process.env, await lageFuer(u)).zuarbeit;
+}
 
 export const CLAUDE_ENDPOINT = 'Claude Code';
 
@@ -99,7 +108,8 @@ export async function claudeAccountsForBridge(u: User): Promise<{ id: string; la
   }
   // Melious (Plan 162): nur wenn erlaubt; die Brücke nimmt es nur mit Chat-Schalter bzw. als eingeschalteten letzten Ausweg.
   const mel = await meliousForBridge(u).catch(() => null);
-  if (mel) out.push(mel as any);
+  // R31 (WERKBANK_ZUARBEIT): wohin die lesenden Teilagenten gehen — melious | claude, bei `auto` nach Kontingent-Lage.
+  if (mel) out.push({ ...mel, zuarbeit: await zuarbeitFuer(u) } as any);
   return out;
 }
 

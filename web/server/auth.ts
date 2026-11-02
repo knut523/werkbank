@@ -52,6 +52,16 @@ export async function createSession(res: ServerResponse, user: User) {
   res.setHeader('set-cookie', `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${DAYS * 86400}${cfg.secureCookies ? '; Secure' : ''}`);
 }
 
+/** Kurzlebige Sitzung für einen Screenshot der eigenen Werkbank-Seiten (R31 S4): Cookie-Name, Token, Aufräumen. Höchstens 5 Minuten. */
+export async function kurzSitzung(user: User): Promise<{ name: string; token: string; weg: () => Promise<void> }> {
+  const token = randomBytes(32).toString('hex');
+  await wb().collection('sessions').insertOne({
+    _id: hash(token) as any, userId: user.id, email: user.email, name: user.name, role: user.role ?? 'USER',
+    createdAt: new Date(), expiresAt: new Date(Date.now() + 5 * 60_000), zweck: 'screenshot',
+  } as any);
+  return { name: COOKIE, token, weg: async () => { await wb().collection('sessions').deleteOne({ _id: hash(token) as any }).catch(() => {}); } };
+}
+
 export async function destroySession(req: IncomingMessage, res: ServerResponse) {
   const t = cookies(req)[COOKIE];
   if (t) await wb().collection('sessions').deleteOne({ _id: hash(t) as any });

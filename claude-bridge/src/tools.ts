@@ -136,6 +136,8 @@ export const ORCH_MCP_TOOLS: string[] = [
   'mcp__werkbank__thema_setzen', 'mcp__werkbank__hygiene_list', 'mcp__werkbank__hygiene_snooze', 'mcp__werkbank__skills_list',
   'mcp__werkbank__review_ready', 'mcp__werkbank__jira_update', 'mcp__werkbank__jira_update_many', 'mcp__werkbank__agent_start',
   'mcp__werkbank__hauptchat_melden', 'mcp__werkbank__challenge',
+  'mcp__werkbank__werkbank_betrieb', 'mcp__werkbank__werkbank_stand', 'mcp__werkbank__geheimnis_nutzen', 'mcp__werkbank__coolify',
+  'mcp__werkbank__coolify_status', 'mcp__werkbank__datei_teilen', 'mcp__werkbank__screenshot',
   'mcp__atlassian__addCommentToJiraIssue', 'mcp__atlassian__editJiraIssue', 'mcp__atlassian__transitionJiraIssue',
   'mcp__atlassian__createJiraIssue', 'mcp__atlassian__updateJiraIssue', 'mcp__atlassian__deleteJiraIssue',
   'mcp__atlassian__addWorklogToJiraIssue', 'mcp__atlassian__createIssueLink', 'mcp__atlassian__editIssueLink',
@@ -160,6 +162,13 @@ export function mcpDenyForStrang(tools: readonly string[] = ORCH_MCP_TOOLS): str
 export function orchMcpDeny(): string[] { return mcpDenyForStrang(); }
 
 const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+
+/** R31 S3+S4 (Umzug): Werkzeuge nur für den Hauptchat; die mit Klick fragen immer (auch im Auto-Modus, ask-Regel). */
+export const HAUPTCHAT_R31 = new Set(['werkbank_betrieb', 'werkbank_stand', 'geheimnis_nutzen', 'coolify', 'coolify_status', 'datei_teilen', 'screenshot']);
+export const R31_KLICK = ['mcp__werkbank__werkbank_betrieb', 'mcp__werkbank__geheimnis_nutzen', 'mcp__werkbank__coolify'];
+/** Coolify direkt (Bash/curl) — die Lücke aus Paket 400: ein POST ginge sonst ohne Klick durch den Klassifikator. */
+const COOLIFY_HOST = /coolify\.konekto\.energy|159\.195\.34\.21/i;
+export const COOLIFY_ASK = ['Bash(*coolify.konekto.energy*)', 'Bash(*159.195.34.21*)'];
 
 /** Echter Pfad: realpath des tiefsten vorhandenen Vorfahren + Rest (ein Symlink auf den Vault zählt als Vault). */
 function realish(p: string): string {
@@ -295,6 +304,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     const cmd = String(input.command ?? '');
     for (const [re, why] of BASH_BLOCKED) if (re.test(cmd)) return { cls: 'blocked', why };
     for (const [re, why] of BASH_GITHUB_WRITE) if (re.test(cmd)) return { cls: 'confirm', why };
+    // R31: Coolify direkt immer nach „ja“ (Werkzeug coolify/coolify_status ist der Weg; Auto-Modus: ask-Regel COOLIFY_ASK).
+    if (COOLIFY_HOST.test(cmd)) return { cls: 'confirm', why: 'Coolify direkt (nimm das Werkzeug coolify)' };
     const gb = bashGuardProblem(cmd, ctx.guard);
     if (gb) return { cls: 'confirm', why: gb };
     if (ctx.workDir && ctx.scope === 'voll') {
@@ -327,6 +338,12 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'melious_sub' || name === 'auslastung' || name === 'github_lesen' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
     if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
+    // R31 S3+S4: nur im Hauptchat. Lesen (Stand, Coolify-Stand, Datei teilen, Screenshot) frei; Betrieb, Geheimnis und Coolify-Schreiben
+    // immer erst nach Klick auf die Karte (auch im Auto-Modus „voll“: ask-Regel in autoSettings); in Strängen gesperrt.
+    if (server === 'werkbank' && HAUPTCHAT_R31.has(name)) {
+      if (!ctx.leit) return { cls: 'blocked', why: 'Betrieb, Geheimnisse, Coolify und Dateien gibt es nur im Hauptchat' };
+      return R31_KLICK.includes(`mcp__werkbank__${name}`) ? { cls: 'confirm' } : { cls: 'read' };
+    }
     // GitHub schreiben aus dem Hauptchat (R29 D, S5): immer erst nach Klick auf die Karte, auch im Auto-Modus „voll“; in Strängen gesperrt.
     if (server === 'werkbank' && name === 'github_schreiben') return ctx.leit ? { cls: 'confirm' } : { cls: 'blocked', why: 'GitHub schreiben nur im Hauptchat nach Knuts Klick' };
     // Chief of Staff (Plan 209, K17): Zusagen lesen frei; das Register schreiben erst nach „ja“ (im Strang gesperrt, siehe orchestratorBlock).
@@ -425,6 +442,7 @@ export function orchestratorBlock(tool: string, input: Record<string, unknown>):
   if (tool.startsWith('mcp__')) {
     const [, server, name = ''] = tool.split('__');
     if (server === 'werkbank' && name === 'github_schreiben') return 'GitHub schreiben';
+    if (server === 'werkbank' && HAUPTCHAT_R31.has(name)) return 'Betrieb, Geheimnisse, Coolify und Dateien gibt es nur im Hauptchat';
     if (server === 'werkbank' && /^(jira_|orch_)/.test(name)) return name.startsWith('orch_') ? 'Orchestrator-Werkzeuge' : 'Jira schreiben';
     if (server === 'werkbank' && /^(zusage_eintragen|zusage_aendern|thema_setzen)$/.test(name)) return 'Register schreiben braucht Knuts Ja im Chat';
     if (server === 'atlassian' && !MCP_READ.test(name) && name !== 'authenticate' && name !== 'complete_authentication') return 'Jira/Confluence schreiben';
@@ -444,6 +462,7 @@ const VAULT_GIT = (vault: string) => {
 };
 const LEIT_BASH_CONFIRM: [RegExp, string][] = [
   [/werkbank-dev\b|\bwerkbank\.sh\b/, 'Live-Instanz des OLAF Workspace'],
+  [COOLIFY_HOST, 'Coolify direkt (nimm das Werkzeug coolify)'],
   [/\bcrontab\b/, 'crontab'],
   [/(~|\$HOME|\/home\/[^/\s]+)\/bin\b/, '~/bin'],
   [/\bsystemctl\b/, 'systemctl'],
@@ -608,6 +627,14 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
       if (name === 'phase_wechseln') return `🔀 Phase → ${input.phase ?? '?'}`;
       if (name === 'inbox_antworten') return `✅ Entscheidung eingetragen: ${input.kennung ?? ''} → ${input.antwort ?? ''}`;
       if (name === 'challenge') return `🔍 Gegenprüfung GLM 5.3 (${input.art ?? ''})`;
+      // R31 S3+S4
+      if (name === 'werkbank_betrieb') return `⚙️ Werkbank-Betrieb: ${input.art === 'schalter_setzen' ? `Schalter ${Object.keys((input.schalter ?? {}) as object).join(', ')}` : String(input.art ?? '')}`;
+      if (name === 'werkbank_stand') return '⚙️ Werkbank-Stand (Soll/Ist)';
+      if (name === 'geheimnis_nutzen') return `🔐 Geheimnis genutzt (${short(input.zweck, 30)}): ${short(input.methode ?? 'GET', 8)} ${short(input.url, 70)}`;
+      if (name === 'coolify') return `🚢 Coolify ${short(input.art, 20)}: ${short(input.app, 50)}${input.key ? ` (${short(input.key, 40)})` : ''}`;
+      if (name === 'coolify_status') return `🚢 Coolify-Stand: ${short(input.app, 50)}`;
+      if (name === 'datei_teilen') return `📎 Datei geteilt: ${short(input.pfad || input.id, 80)}`;
+      if (name === 'screenshot') return `📸 Screenshot (${short(input.geraet ?? 'desktop', 10)}): ${short(input.url, 70)}`;
       return name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
     }
     const icon = server === 'atlassian' ? '🎫 Jira' : server === 'compartment' ? '🧠 Gedächtnis' : `🔌 ${server}`;
@@ -722,6 +749,33 @@ export function githubKarte(input: Record<string, unknown>): string {
   return `${neutralizeAnswerAnchors('', `${kopf}\n\n${teile}`)}\n\n${ANSWER_BUTTONS}`;
 }
 
+/** R31: Karten für Werkbank-Betrieb, Geheimnis-Vermittler und Coolify — zeigen genau, was nach dem Klick passiert. */
+export function r31Karte(tool: string, input: Record<string, unknown>): string {
+  const grund = input.grund ? `\n\nGrund: ${short(input.grund, 300)}` : '';
+  let kopf: string, teile = '';
+  if (tool === 'mcp__werkbank__werkbank_betrieb') {
+    if (input.art === 'schalter_setzen') {
+      const s = Object.entries((input.schalter && typeof input.schalter === 'object' ? input.schalter : {}) as Record<string, unknown>);
+      kopf = `**Soll ich in der Werkbank ${s.length === 1 ? 'diesen Schalter' : `diese ${s.length} Schalter`} in .env.local setzen${input.neustart === false ? ' (ohne Neustart)' : ' und danach neu starten'}?**`;
+      teile = s.map(([n, w]) => `- \`${short(n, 60)}\` → \`${short(w, 60)}\``).join('\n') + (input.neustart === false ? '' : '\n\nNeustart mit Drain (ohne den Hauptchat): laufende Stränge werden höchstens 10 min abgewartet und laufen danach automatisch weiter.');
+    } else {
+      kopf = `**Soll ich die Werkbank neu starten (${input.art === 'neustart' ? 'alles: Brücke, Web, LibreChat' : 'nur die Web-App'})?**`;
+      teile = input.art === 'neustart' ? 'Drain ohne den Hauptchat; unterbrochene Stränge laufen danach automatisch weiter.' : 'Die Brücke und laufende Züge bleiben unberührt.';
+    }
+  } else if (tool === 'mcp__werkbank__geheimnis_nutzen') {
+    kopf = `**Soll ich das Geheimnis für den Zweck „${short(input.zweck, 40)}“ aus Vaultwarden nutzen?** (Der Wert bleibt in der Werkbank; nur diese Anfrage wird gesendet, die Antwort kommt geschwärzt zurück.)`;
+    teile = `${short(String(input.methode ?? 'GET').toUpperCase(), 8)} \`${short(input.url, 300)}\`${input.body !== undefined && input.body !== '' ? `\n\n${fence(clip(typeof input.body === 'string' ? input.body : JSON.stringify(input.body, null, 2), 1500), 'json')}` : ''}`;
+  } else {
+    const app = short(input.app, 80);
+    kopf = input.art === 'variable_setzen' ? `**Soll ich in Coolify bei ${app} die Variable ${short(input.key, 80)} setzen?** (wirkt erst nach Neustart/Deploy)`
+      : input.art === 'neustart' ? `**Soll ich die Coolify-App ${app} neu starten?** (baut neu, einige Minuten nicht erreichbar)`
+      : input.art === 'deploy' ? `**Soll ich die Coolify-App ${app} deployen?**`
+      : `**Soll ich in Coolify (${short(input.art, 30)}) bei ${app} schreiben?**`;
+    teile = input.art === 'variable_setzen' ? `\`${short(input.key, 80)}\` = ${fence(clip(String(input.value ?? ''), 600))}` : '';
+  }
+  return `${neutralizeAnswerAnchors('', `${kopf}${teile ? `\n\n${teile}` : ''}${grund}`)}\n\n${ANSWER_BUTTONS}`;
+}
+
 /** Die Rückfrage vor einem Schreibzugriff, auf Deutsch. */
 export function confirmQuestion(tool: string, input: Record<string, unknown>): string {
   let what: string;
@@ -754,6 +808,7 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
         return `${neutralizeAnswerAnchors('', `**Soll ich diese ${cs.length} Tickets in Jira nachziehen?** (mit deinem Jira-Zugang, der Reihe nach)\n\n${rows.join('\n')}`)}\n\n${ANSWER_BUTTONS}`;
       }
       if (tool === 'mcp__werkbank__github_schreiben') return githubKarte(input);
+      if (R31_KLICK.includes(tool)) return r31Karte(tool, input);
       if (tool === 'mcp__werkbank__agent_start') {
         return `${neutralizeAnswerAnchors('', `**Soll ich für ${input.key} einen neuen Chat mit einem Agenten starten?** Er arbeitet das Ticket vor und fragt vor jedem Schreiben nach.${input.note ? `\n\nAuftrag: „${short(input.note, 300)}“` : ''}`)}\n\n${ANSWER_BUTTONS}`;
       }
