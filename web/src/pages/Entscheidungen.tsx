@@ -13,7 +13,7 @@ import { EntscheidZeile } from './Morgenlage.tsx';
 import { altText } from '../alternativen.ts';
 
 export type Frage = { id: string; worumKurz?: string; eintrag: string; teil: string | null; art: string; gruppe: string; kennung: string | null; titel: string; worum: string; optionen: string[]; alternativen?: string[];
-  empfehlung: string | null; stufe: 'wichtig' | 'normal'; stufeGrund: string | null; autoAb: string | null; blockiert: number; quelle: { text: string; url: string | null }; wartetSeit: string | null; antworten: string[]; ref: string | null };
+  empfehlung: string | null; stufe: 'wichtig' | 'normal'; stufeGrund: string | null; autoAb: string | null; blockiert: number; quelle: { text: string; url: string | null }; wartetSeit: string | null; antworten: string[]; ref: string | null; klasse?: 'aktion' | 'entscheidung' | null };
 type Daten = { fragen: Frage[]; sonstiges: any[]; beantwortetHeute: number; zurueckgestellt: number; zahl: number; at: string };
 
 const L: Record<string, string> = { ja: 'Ja (wie empfohlen)', nein: 'Nein', anders: 'Anders', spaeter: 'Später' };
@@ -48,6 +48,8 @@ export function Karte({ f, onDone, kurz = false }: { f: Frage; onDone: (id: stri
     <article className={`e-karte${f.stufe === 'wichtig' ? ' e-wichtig' : ''}`} data-testid="e-karte" data-id={f.id}>
       <div className="e-top">{f.kennung && <span className="e-id">{f.kennung}</span>}<span className="e-ttl">{f.titel}</span>
         {f.stufe === 'wichtig' ? <span className="chip warn" title={f.stufeGrund ?? ''}>wichtig</span> : <span className="chip">offen</span>}</div>
+      {f.klasse === 'entscheidung' && <div className="tiny mut" data-testid="was-tun">Was du tun musst: die Frage oben beantworten.</div>}
+      {f.klasse === 'aktion' && <div className="tiny" data-testid="hauptchat-aufgabe"><span className="chip ok">nichts für dich</span> Erledigt der Hauptchat. „Anders“ nur, wenn es doch etwas für dich ist.</div>}
       <div><div className="e-lbl">Worum es geht</div>{kurz && f.worumKurz ? <>{f.worumKurz}{f.worum !== f.worumKurz && <details className="tiny"><summary>mehr</summary>{f.worum}</details>}</> : f.worum}</div>
       {f.optionen.length > 0 && <div><div className="e-lbl">Optionen</div><ul>{f.optionen.map((o) => <li key={o}>{o}</li>)}</ul></div>}
       {f.empfehlung && <div className="e-rec"><div className="e-lbl">Empfehlung</div>{f.empfehlung}

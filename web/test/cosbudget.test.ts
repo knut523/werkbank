@@ -107,6 +107,35 @@ test('„+50 %“ geht vom Budget der Tiefe aus (deep 2× Vorgabe), nicht von de
   assert.equal(B.budgetVon({ tiefe: null }, { ORCH_BUDGET_TOKENS: '100000' } as any), 100000, 'ohne Tiefe = regular');
 });
 
+// R30b S3: Budget-Knöpfe in Knuts Worten („schließen“ / „+50 % Budget“), nur mit Schalter — Faktor 1,5 bleibt.
+test('Budget-Knöpfe (S3): Schalter an → „schließen“/„+50 % Budget“ auf der Karte; beide wirken', async () => {
+  process.env.WERKBANK_BRAUCHT_DICH = 'an';
+  try {
+    const runs = O.runs();
+    await runs.insertOne(strang('s-budget-s3', { budgetTokens: 1000, lastStatus: 'waiting' }) as any);
+    await M.recordZug(u, { conv: 'conv-s-budget-s3', art: 'strang', modell: 'Claude sonnet', input: 1000, output: 50, cacheRead: 0 });   // 1 050 > 1 000
+    await B.budgetTick(deps);   // Stopp: Frage anlegen (kein sendOrch — lastStatus wartet schon)
+    const q: any = await O.questions().findOne({ kind: 'budget', 'strand.id': 's-budget-s3', status: 'offen' });
+    assert.ok(q, 'Budget-Frage angelegt');
+    assert.deepEqual(q.options.map((o: any) => o.label), ['+50 % Budget', 'schließen'], 'Knöpfe in Knuts Worten');
+    assert.match(q.options[0].consequence, /1[\s.  ]500/, 'Konsequenz nennt das neue Budget');
+    assert.match(String(q.recommendation), /\+50 % Budget/); assert.match(String(q.recommendation), /schließen/);
+    const a: any = await O.answerQuestion(u, q._id, { option: '+50 % Budget' });
+    assert.match(a.action, /fortgesetzt|nicht ausgeführt/);
+    const s: any = await runs.findOne({ _id: 's-budget-s3' as any });
+    assert.equal(s.budgetTokens, 1500); assert.equal(s.autoStopped, null); assert.equal(s.budget.stopAt ?? null, null);
+    // „schließen“ (Anhalten-Weg): wieder über das Budget → zweite Frage → Strang wird abgelegt.
+    await M.recordZug(u, { conv: 'conv-s-budget-s3', art: 'strang', modell: 'Claude sonnet', input: 600, output: 50, cacheRead: 0 });   // 1 700 > 1 500
+    await B.budgetTick(deps);
+    const q2: any = await O.questions().findOne({ kind: 'budget', 'strand.id': 's-budget-s3', status: 'offen' });
+    assert.ok(q2, 'zweite Budget-Frage offen');
+    const a2: any = await O.answerQuestion(u, q2._id, { option: 'schließen' });
+    assert.match(a2.action, /angehalten|nicht ausgeführt/);
+    const s2: any = await runs.findOne({ _id: 's-budget-s3' as any });
+    assert.notEqual(s2.reviewedAt, null, 'Strang abgelegt (angehalten)');
+  } finally { delete process.env.WERKBANK_BRAUCHT_DICH; }
+});
+
 test('Lebenszeichen (D2): läuft + 20 min ohne Aktivität = hängt?; weder fertig noch laufend + 2 h = still; Normalfall null', () => {
   const now = Date.parse('2026-10-16T10:00:00Z');
   const vor = (min: number) => new Date(now - min * 60_000);

@@ -28,7 +28,10 @@ export function Timebox({ cfg }: { cfg: Config }) {
   const [week, setWeek] = useState(false);
   const from = week ? monday(date) : date;
   const days = week ? 7 : 1;
-  const d = useLoad(() => api(`/api/timebox?from=${from}&days=${days}&day=${date}`), [from, days, date]);
+  // Tagesvorschlag (R30b): bei leerem Tag liefert der Server ihn mit; sonst erst auf „Vorschlag ansehen“.
+  const [zeigeVorschlag, setZeigeVorschlag] = useState(false);
+  const [verworfen, setVerworfen] = useState<string[]>([]);
+  const d = useLoad(() => api(`/api/timebox?from=${from}&days=${days}&day=${date}${zeigeVorschlag ? '&vorschlag=1' : ''}`), [from, days, date, zeigeVorschlag]);
   const data: any = d.data;
   const toast = useToast();
   const confirm = useConfirm();
@@ -47,6 +50,7 @@ export function Timebox({ cfg }: { cfg: Config }) {
   };
   const colAt = (x: number, y: number) => (document.elementsFromPoint(x, y).find((e) => (e as HTMLElement).dataset?.col) as HTMLElement | undefined);
   const set = (o: Op | null) => { opRef.current = o; setOp(o); };
+  const tag = (s: string) => { setDate(s); setZeigeVorschlag(false); setVerworfen([]); };
   const call = async (fn: () => Promise<any>, msg?: string) => { setErr(null); try { await fn(); if (msg) toast(msg); await d.reload(); } catch (e) { setErr(e); d.reload(); } };
 
   // ---------- Zeiger: anlegen / verschieben / Länge ----------
@@ -109,6 +113,10 @@ export function Timebox({ cfg }: { cfg: Config }) {
   const blocksOf = (day: string) => (data?.blocks ?? []).filter((b: any) => b.date === day);
   // Beim Ziehen auf einen anderen Tag erscheint der Block in der Zielspalte (nicht unsichtbar).
   const shownIn = (day: string) => (data?.blocks ?? []).filter((b: any) => { const o = op && op.kind !== 'create' && op.id === b.id ? op : null; return (o ? o.date : b.date) === day; });
+  const vk = (b: any) => `${b.start}-${b.key ?? b.title}`;
+  const vorschlag = !week && data?.vorschlag?.bloecke ? data.vorschlag : null;
+  const vbloecke: any[] = vorschlag ? vorschlag.bloecke.filter((b: any) => !verworfen.includes(vk(b))) : [];
+  const anzahl = (p: number) => vbloecke.filter((b) => b.prio === p).length;
   const sum = (data?.summary ?? {})[date] ?? null;
   const wsum = week && data ? Object.values(data.summary as Record<string, any>).reduce((a: any, s: any) => ({ planned: a.planned + s.planned, done: a.done + s.done, goal: a.goal + s.goal }), { planned: 0, done: 0, goal: 0 }) : null;
   return (
@@ -119,14 +127,34 @@ export function Timebox({ cfg }: { cfg: Config }) {
           <p className="muted small" style={{ margin: 0 }}>Timebox für {cfg.user?.name.split(' ')[0]} — privat, ohne Kalender, schreibt nichts nach Jira. Im Raster ziehen = Block anlegen; Block ziehen = verschieben; unterer Rand = Länge.</p>
         </div>
         <div className="row tb-nav">
-          <button className="btn small" onClick={() => setDate(addDays(date, week ? -7 : -1))} aria-label="zurück">‹</button>
-          <input type="date" value={date} onChange={(e) => e.target.value && setDate(e.target.value)} aria-label="Tag" />
-          <button className="btn small" onClick={() => setDate(addDays(date, week ? 7 : 1))} aria-label="vor">›</button>
-          <button className="btn small" onClick={() => setDate(iso(new Date()))}>Heute</button>
+          <button className="btn small" onClick={() => tag(addDays(date, week ? -7 : -1))} aria-label="zurück">‹</button>
+          <input type="date" value={date} onChange={(e) => e.target.value && tag(e.target.value)} aria-label="Tag" />
+          <button className="btn small" onClick={() => tag(addDays(date, week ? 7 : 1))} aria-label="vor">›</button>
+          <button className="btn small" onClick={() => tag(iso(new Date()))}>Heute</button>
           <div className="row" role="group" aria-label="Ansicht"><button className={`btn small ${!week ? 'primary' : ''}`} onClick={() => setWeek(false)}>Tag</button><button className={`btn small ${week ? 'primary' : ''}`} onClick={() => setWeek(true)}>Woche</button></div>
         </div>
       </div>
       <Err e={err} />
+      {!week && data?.vorschlag?.hinweis && !zeigeVorschlag && (
+        <div className="row tb-vorschlag-hinweis"><button className="btn small" onClick={() => { setZeigeVorschlag(true); setVerworfen([]); }} data-testid="tb-vorschlag-ansehen">Vorschlag ansehen</button></div>
+      )}
+      {vorschlag && (
+        <div className="card soft tb-vorschlag" data-testid="tb-vorschlag">
+          <div>
+            <b>Vorschlag für {fmtDate(date)}</b> <span className="tiny">— {vbloecke.length} Blöcke · Muss {anzahl(1)} · Soll {anzahl(2)} · Kann {anzahl(3)} · grau, bis du übernimmst; ✕ verwirft einen Block</span>
+            {vorschlag.ausgelassen > 0 && <div className="tiny">{vorschlag.ausgelassen} weitere passen heute nicht mehr hinein (stehen rechts in „Meine offenen Tickets“).</div>}
+            {(vorschlag.hinweise ?? []).map((h: string) => <div key={h} className="tiny">{h}</div>)}
+            {!vorschlag.bloecke.length && <div className="tiny">Nichts Fälliges bekannt — kein Vorschlag.</div>}
+          </div>
+          <div className="row">
+            {!vorschlag.leer && <button className="btn small" onClick={() => { setZeigeVorschlag(false); setVerworfen([]); }}>Ausblenden</button>}
+            <button className="btn small primary" disabled={!vbloecke.length} data-testid="tb-vorschlag-uebernehmen" onClick={() => call(async () => {
+              const r: any = await api('/api/timebox/vorschlag', { body: { date, bloecke: vbloecke.map((b) => ({ start: b.start, dur: b.dur, title: b.title, key: b.key, prio: b.prio, von: b.von })) } });
+              setZeigeVorschlag(false); setVerworfen([]); toast(`${r.angelegt} Blöcke übernommen`);
+            })}>Übernehmen</button>
+          </div>
+        </div>
+      )}
       {sum && (
         <div className="tb-sum card soft" data-testid="tb-summary">
           <span><b>{fmtDate(date)}</b></span>
@@ -146,13 +174,25 @@ export function Timebox({ cfg }: { cfg: Config }) {
           <div className="tb-scroll">
             <div className="tb-grid" style={{ gridTemplateColumns: `44px repeat(${dates.length}, minmax(${week ? 120 : 200}px, 1fr))` }}>
               <div />
-              {dates.map((day, i) => <div key={day} className={`tb-dayhead ${day === iso(new Date()) ? 'today' : ''}`}><button className="sublink" onClick={() => { setDate(day); setWeek(false); }}>{week ? `${WD[i]} ${day.slice(8)}.${day.slice(5, 7)}.` : fmtDate(day)}</button>{week && data.summary[day]?.planned > 0 && <span className="tiny"> {hours(data.summary[day].done)}/{hours(data.summary[day].planned)} h</span>}</div>)}
+              {dates.map((day, i) => <div key={day} className={`tb-dayhead ${day === iso(new Date()) ? 'today' : ''}`}><button className="sublink" onClick={() => { tag(day); setWeek(false); }}>{week ? `${WD[i]} ${day.slice(8)}.${day.slice(5, 7)}.` : fmtDate(day)}</button>{week && data.summary[day]?.planned > 0 && <span className="tiny"> {hours(data.summary[day].done)}/{hours(data.summary[day].planned)} h</span>}</div>)}
               <div className="tb-times" style={{ height: H }}>
                 {Array.from({ length: (g.end - g.start) / 60 + 1 }, (_, i) => <div key={i} className="tb-time" style={{ top: i * 4 * SLOT }}>{pad(g.start / 60 + i)}:00</div>)}
               </div>
               {dates.map((day) => (
                 <div key={day} className="tb-col" data-col={day} style={{ height: H }} onPointerDown={(e) => onColDown(e, day)}
                   onDragOver={(e) => { if (e.dataTransfer.types.includes('application/x-ticket')) e.preventDefault(); }} onDrop={(e) => onDrop(e, day)} data-testid={`tb-col-${day}`}>
+                  {day === date && vbloecke.map((b: any) => (
+                    <div key={`v-${vk(b)}`} className={`tb-block vorschlag bp${b.prio ?? 0}`} data-vorschlag={vk(b)} title={b.grund}
+                      style={{ top: ((b.start - g.start) / STEP) * SLOT, height: Math.max(SLOT, (b.dur / STEP) * SLOT - 2) }} onPointerDown={(e) => e.stopPropagation()}>
+                      <div className="tb-bhead">
+                        {/* Titel in der Kopfzeile: 30-Minuten-Blöcke (32 px) hätten sonst keinen Platz für ihn. */}
+                        <span className="tiny row tb-vkopf" style={{ gap: 4 }}>{hm(b.start)}–{hm(b.start + b.dur)} <span className={`prio-chip p${b.prio ?? 0}`}>{b.prio ? PRIO[b.prio] : '·'}</span>
+                          <b className="tb-vtitel">{b.ticket ? `${b.ticket.key} ${b.ticket.summary}` : b.title}</b></span>
+                        <span className="tb-actions"><button className="btn ghost small" title="Block verwerfen" aria-label="verwerfen" onClick={() => setVerworfen([...verworfen, vk(b)])}>✕</button></span>
+                      </div>
+                      <div className="tiny">{b.grund}</div>
+                    </div>
+                  ))}
                   {op?.kind === 'create' && op.date === day && <div className="tb-ghost" style={{ top: ((op.from - g.start) / STEP) * SLOT, height: ((op.to - op.from) / STEP) * SLOT }}>{hm(op.from)}–{hm(op.to)}</div>}
                   {shownIn(day).map((b: any) => {
                     const live = op && op.kind !== 'create' && op.id === b.id ? op : null;

@@ -59,7 +59,7 @@ import { starte as claudeAnmeldungStarten, codeEinreichen as claudeCodeEinreiche
 import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungsseite.ts';
 import { abschlussTick, wocheTick } from './cosabschluss.ts';
 import { rueckstau as cosRueckstau, vorschlaege as cosVorschlaege } from './cosmeeting.ts';
-import { meetingTeams as cosMeetingTeams } from './cossammle.ts';
+import { meetingTeams as cosMeetingTeams, sammleEingabe as cosEingabe } from './cossammle.ts';
 const cosRueckstauZahl = () => { try { return cosRueckstau(cfg.vaultDir, cosMeetingTeams(), new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date())).length; } catch { return 0; } };
 import type { Quellen as CosQuellen } from './cossammle.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
@@ -91,8 +91,11 @@ import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, go
 import { istTiefe, tiefeOf, type Tiefe } from './tiefe.ts';
 import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
 import { zaehle, statusNeu, autoSchliessenAn, navNeu, aufraeumenAn, einLogin, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
-import { themenAusStand } from './cos.ts';
+import { themenAusStand, entscheide as cosEntscheide } from './cos.ts';
+import { vorschlag as tagesvorschlag, ausLage as vorschlagAusLage, TAGESVORSCHLAG_AN } from './tagesvorschlag.ts';
+import { ICS_AN } from './cosics.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
+import { braucheBraucht, schliesseBraucht, archiviere as archiviereStrang, zurueckholen as brauchtZurueck, hauptchatAktionen, kartEingabe, paketLiveFakten, wendeAufInbox, BRAUCHT_AN as brauchtAn } from './brauchtab.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
 import { autoAnnahmeAn, annahmeMs, stufeVon } from './stufe.ts';
 import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
@@ -1491,6 +1494,11 @@ async function inboxFuer(u: User, now = Date.now()) {
   if (bremseAn()) {
     const fr = anwesenheitFrei(await anwesenheitCol().findOne({ _id: u.id as any }) as any, now, annahmeMs());
     if (fr.ab) for (const e of ib.eintraege) if (e.autoAb && new Date(e.autoAb).getTime() < fr.ab.getTime()) e.autoAb = fr.ab.toISOString();
+  }
+  // R30b S5: „Braucht Knut“-Einträge klassifiziert — (c) weg, (b) Statuszeile ohne Knöpfe, (a) „Was du tun musst“.
+  if (admin && brauchtAn() && karten.some((k) => k.braucht && !k.running)) {
+    const s = await brauchtSicht(u, { karten }).catch((e: any) => { log('braucht fehler', { user: u.id, error: String(e?.message ?? e).slice(0, 160) }); return null; });
+    if (s) ib.eintraege = wendeAufInbox(ib.eintraege, s, { an: true });
   }
   zahlCache.set(u.id, { at: Date.now(), n: inboxZahl(ib.eintraege) });   // jede frisch gebaute Inbox stellt auch den Zähler (Kopf = Leiste, 221)
   return ib;
@@ -3117,7 +3125,17 @@ on('GET', /^\/api\/timebox$/, async (req, res, _m, url) => {
   const mine = sortMyTickets([...im.values()].filter((i) => i.type !== 'Workstream' && i.status !== 'Done' && i.statusCategory !== 'done' && isMine(i, who)), sl, dayPrio, cur ? (t) => inSprint(t, cur.date) : undefined);
   const tbKnown = knownGoals(goalsAll(im));
   const ticket = (k?: string | null) => { const i = k ? im.get(k) : undefined; return i ? { key: i.key, summary: i.summary, status: i.status, goals: ownGoals(i), inSprint: !!cur && inSprint(i, cur.date), noGoal: needsGoal(i, im, tbKnown), priority: i.priority } : null; };
+  // R30b Teil B: leerer Tag → Vorschlag (nur Tagesansicht, Schalter WERKBANK_TAGESVORSCHLAG); sonst nur der Hinweis.
+  let vorschlag: any = null;
+  if (TAGESVORSCHLAG_AN() && days === 1) {
+    const leer = !blocks.some((b) => b.date === from && b.state !== 'verschoben');
+    vorschlag = leer || url.searchParams.get('vorschlag') === '1'
+      ? { leer, ...(await vorschlagFuer(u, from, mine.slice(0, 80).map((i) => ({ key: i.key, summary: i.summary, duedate: i.duedate ?? null, inSprint: !!cur && inSprint(i, cur.date) })))) }
+      : { leer: false, hinweis: true };
+    if (vorschlag.bloecke) vorschlag.bloecke = vorschlag.bloecke.map((b: any) => ({ ...b, ticket: ticket(b.key) }));
+  }
   send(res, 200, {
+    vorschlag,
     dates, prioDay: pday, sprint: cur ? { id: cur.id, label: sl } : null,
     blocks: blocks.map((b) => ({ ...tbOut(b), ticket: ticket(b.key) })),
     summary: Object.fromEntries(dates.map((d) => [d, daySummary(blocks.filter((b) => b.date === d), im)])),
@@ -3164,6 +3182,49 @@ on('POST', /^\/api\/timebox\/prio$/, async (req, res) => {
   if (prio !== null && ![1, 2, 3].includes(prio)) throw new HttpError(400, 'Tagespriorität 1 (Muss), 2 (Soll), 3 (Kann) oder leer.');
   await wb().collection('timebox_prio').updateOne({ userId: u.id, date, key }, { $set: { prio, at: new Date() } }, { upsert: true });
   send(res, 200, { ok: true });
+});
+
+/** Tagesvorschlag (R30b Teil B): Eingabe aus Morgenlage (nur Admin mit Chief of Staff), Tickets und Übertrag von gestern. */
+async function vorschlagFuer(u: User, datum: string, tickets: { key: string; summary: string; duedate: string | null; inSprint: boolean }[]) {
+  const d = new Date(datum + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - 1);
+  const uebertrag = ((await tbCol().find({ userId: u.id, date: d.toISOString().slice(0, 10), state: { $ne: 'erledigt' }, carriedTo: { $exists: false } }).toArray()) as any[])
+    .map((b) => ({ title: b.title, key: b.key ?? null, dur: b.dur, prio: b.prio ?? null, von: String(b._id) }));
+  let lage: any = { mine: { prs: [], tickets: [] }, register: { zusagen: [], personen: [] }, ich: firstName(u), termine: [] }, ents: any[] = [];
+  if (u.role === 'ADMIN' && process.env.COS_MORGENLAGE !== 'off') {
+    try { lage = await cosEingabe(u, cosQuellen(), new Date()); ents = cosEntscheide(lage); }
+    catch (e: any) { log('tagesvorschlag morgenlage', { error: String(e?.message ?? e).slice(0, 160) }); }
+  }
+  return tagesvorschlag(vorschlagAusLage(lage, ents, { datum, tickets, uebertrag, termine: ICS_AN() }));
+}
+
+// Vorschlag übernehmen (R30b Teil B): legt die gezeigten (nicht verworfenen) Blöcke an, mit quelle 'vorschlag'.
+// Einmal je Tag (zweiter Klick → 409); Verwerfen geschieht vorher in der Ansicht (bis dahin ist nichts gespeichert).
+on('POST', /^\/api\/timebox\/vorschlag$/, async (req, res) => {
+  const u = await needUser(req);
+  if (!TAGESVORSCHLAG_AN()) throw new HttpError(404, 'Tagesvorschlag ist aus.');
+  const b = await body(req);
+  const date = String(b.date ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, 'Datum im Format JJJJ-MM-TT.');
+  const roh: any[] = Array.isArray(b.bloecke) ? b.bloecke.slice(0, 30) : [];
+  if (!roh.length) throw new HttpError(400, 'Keine Blöcke.');
+  const im = await issueMap();
+  const docs: any[] = [], vonIds: string[] = [];
+  const gestern = (() => { const g = new Date(date + 'T12:00:00Z'); g.setUTCDate(g.getUTCDate() - 1); return g.toISOString().slice(0, 10); })();
+  for (const x of roh) {
+    const r = cleanBlock({ date, start: x.start, dur: x.dur, title: x.title, key: x.key && im.has(x.key) ? x.key : undefined, prio: x.prio ?? null, quelle: 'vorschlag' });
+    if ('error' in r) throw new HttpError(400, r.error);
+    const von = typeof x.von === 'string' && /^[0-9a-f]{24}$/.test(x.von) ? x.von : null;
+    if (von) vonIds.push(von);
+    docs.push({ ...r.ok, userId: u.id, state: 'geplant', createdAt: new Date(), ...(von ? { carriedFrom: gestern } : {}) });
+  }
+  // Atomar einmal je Tag (Pass C: Zählen und Einfügen waren getrennt — Doppelklick/zwei Tabs legten doppelt an).
+  const res1 = await wb().collection('timebox_vorschlag').updateOne({ _id: `${u.id}:${date}` as any }, { $setOnInsert: { userId: u.id, date, at: new Date() } }, { upsert: true });
+  if (!res1.upsertedCount) throw new HttpError(409, 'Der Vorschlag für diesen Tag ist schon übernommen.');
+  await tbCol().insertMany(docs);
+  // Übertrag von gestern wie „Unerledigtes auf morgen“ markieren — sonst böte der Knopf ihn ein zweites Mal an (Pass C).
+  for (const id of vonIds) await tbCol().updateOne({ _id: new ObjectId(id), userId: u.id, date: gestern, carriedTo: { $exists: false } }, { $set: { state: 'verschoben', carriedTo: date } });
+  log('tagesvorschlag übernommen', { user: u.id, date, n: docs.length });
+  send(res, 200, { ok: true, angelegt: docs.length });
 });
 
 on('POST', /^\/api\/timebox\/carry$/, async (req, res) => {
@@ -3453,11 +3514,20 @@ async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
   return internalUser(req, { userId: d ? String(d._id) : '' });
 }
 
-on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich)$/, async (req, res, m) => {
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich|aktion)$/, async (req, res, m) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
   const id = String(b.id ?? '');
   switch (m[1]) {
+    case 'aktion': {
+      // „Braucht dich“ (R30b): Strang schließen/archivieren gab es noch nicht — (c)-Punkte und der Hauptchat können
+      // damit einen erledigten Strang aus der Knut-Sicht nehmen, ohne zu löschen (Compare-and-Set, Grund im Feld).
+      if (String(b.aktion ?? '') !== 'archivieren') throw new HttpError(400, 'Nur aktion=archivieren.');
+      if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+      const ok = await archiviereStrang(u.id, id, String(b.grund ?? 'archiviert (Hauptchat)'), { env: process.env });
+      log('strang archiviert', { user: u.id, id, ok });
+      return send(res, 200, { ok, id });
+    }
     case 'start': {
       const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null, budget: b.budget || null });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null, tiefe: r.tiefe });
@@ -3625,6 +3695,66 @@ on('POST', /^\/internal\/inbox\/antwort$/, async (req, res) => {
   const id = String(b.kennung ?? '');
   if (!KENNUNG_RE.test(id)) throw new HttpError(400, 'Unbekannte Kennung.');
   send(res, 200, await inboxAntworten(u, id, { antwort: b.antwort, text: b.text, weg: 'hauptchat' }));
+});
+
+// --- „Braucht dich“ (R30b, Knut 02.11.): klassifizierte offene Punkte für den Hauptchat, gebündelt je Strang ---
+// (a) echte Entscheidung für Knut · (b) Aktion des Hauptchats (z. B. Push nach Gate, Merge im Worktree) ·
+// (c) erledigt/veraltet — wird automatisch geschlossen (Log-Zeile + Nachricht an den Strang, nie still).
+// Fakten aus den bestehenden Quellen: Entscheidungs-Log und berichtskopf-antworten (beantwortet), releasestand.ts
+// (Paket im Live-Stand über Merge-Commit nach Nummer, nie nur Git-Abstammung), github_prs/prCheck (PR zu),
+// orchestrator_runs (neuerer Strang mit gleichem lauf). Schalter WERKBANK_BRAUCHT_DICH (Vorgabe aus).
+async function brauchtSicht(u: User, o: { schliessen?: boolean; karten?: any[] } = {}): Promise<any> {
+  const an = brauchtAn();
+  // Karten mit offener „Braucht Knut“-Zeile — derselbe Weg wie die Inbox (nicht running, keine Entscheidungen/Rückfragen).
+  // Die Inbox reicht ihre schon gebauten Karten herein (keine zweite Runde über Mongo).
+  const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(60).toArray()) as any[]).filter(offenFuerKnut);
+  const roh = o.karten ?? await (async () => {
+    const qs = await listQuestions(u, { open: true }).catch(() => [] as any[]);
+    const fgs: any[] = docs.length ? await freigaben().find({ strand: { $in: docs.map((d) => String(d._id)) }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
+    return docs.map((d) => { try { return uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), qs.filter((q: any) => q.strand && String(q.strand.id) === String(d._id)), paketBasis(), null); } catch { return null; } });
+  })();
+  const karten = roh.filter(Boolean).filter((k: any) => k.braucht && !k.running) as any[];
+  if (!karten.length) return { an, punkte: [], geschlossen: [], aktionen: [] };
+
+  // Fakten (alles lesend aus den bestehenden Quellen; jede Prüfung braucht einen Beleg, sonst bleibt die Frage).
+  // D-Nummern nur im eigenen Strang („strang:D1“, Pass C) — sonst schlösse D1 aus Strang A die Frage D1 in Strang B.
+  const beantwortet = [...new Set(((await wb().collection('entscheidungs_log').find({ userId: u.id }, { projection: { kennung: 1, ids: 1, strand: 1, _id: 0 } }).sort({ at: -1 }).limit(2000).toArray()) as any[])
+    .flatMap((z) => [String(z.kennung), ...(z.strand?.id ? (z.ids ?? []).map((i: any) => `${z.strand.id}:${i}`) : [])]))];
+  // Paket im Live-Stand: Merge-Commit nach Paketnummer im Live-Zweig (releasestand.ts, 60-s-Cache; Inhalt, nie Abstammung).
+  const { liveIndex } = await import('./releasestand.ts');
+  const idx = await liveIndex(cfg.liveRoot, cfg.sourceRepo).catch(() => null);
+  const paketLiveFn = paketLiveFakten(idx);
+  const paketNummern = new Set(karten.map((k: any) => (k.paket ? Number(k.paket.split('-')[0]) || null : null)).filter((n: any) => n != null) as number[]);
+  const paketeLive: number[] = [];
+  for (const n of paketNummern) if (await paketLiveFn.live(n)) paketeLive.push(n);
+  // PR zu: nur wenn die Karte selbst einen gemergt/geschlossen PR nennt (github_prs-Kopie übernimmt die Karte).
+  const prsZu = karten.flatMap((k: any) => (k.prs ?? []).filter((z: any) => z.stand === 'gemergt' || z.stand === 'geschlossen').map((z: any) => prKennung(z.url)));
+  // Neuerer Strang mit gleichem Ziel: nur ausdrücklich gesetzter lauf (laufExplicit, nie aus dem Titel geraten) und ein
+  // jüngerer Strang dieses Laufs existiert. Geprüft wird je Strang-Kennung (Pass C: vorher thema gegen Strang-Ids — griff nie).
+  const laeufeNeuer: string[] = [];
+  for (const d of docs) {
+    if (!d.laufExplicit || !d.lauf) continue;
+    const juenger = await orchRuns().countDocuments({ userId: u.id, lauf: d.lauf, laufExplicit: true, _id: { $ne: d._id }, startedAt: { $gt: d.startedAt } }).catch(() => 0);
+    if (juenger > 0) laeufeNeuer.push(String(d._id));
+  }
+
+  const sicht = braucheBraucht(karten.map((k: any) => kartEingabe({
+    strand: k.id, titel: k.titel, zeile: k.braucht,
+    paket: k.paket ? Number(k.paket.split('-')[0]) || null : null,
+    pr: (k.prs ?? []).filter((z: any) => z.stand === 'gemergt' || z.stand === 'geschlossen').map((z: any) => prKennung(z.url))[0] ?? null,
+    lauf: k.id,   // laeufeNeuer enthält Strang-Kennungen (Pass C)
+  })), { beantwortet, paketeLive, prsZu, laeufeNeuer, aktionen: hauptchatAktionen() }, { an });
+  // (c) sofort schließen (der Takt ruft mit schliessen, GET ohne).
+  if (o.schliessen && sicht.geschlossen.length) await schliesseBraucht(u.id, sicht.geschlossen, { env: process.env });
+  return { an, ...sicht };
+}
+const prKennung = (url: string) => { const m = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/.exec(String(url ?? '')); return m ? `${m[1]}#${m[2]}` : String(url ?? ''); };
+let brauchtTaktLaeuft = false;   // Takt-Schutz (Pass C): ein Durchgang zur Zeit
+on('POST', /^\/internal\/braucht$/, async (req, res) => {
+  const u = await internalUser(req, await body(req));
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  // Schalter aus: nichts klassifizieren (keine Git-/Log-Abfragen) — das Werkzeug meldet „Schalter aus“.
+  send(res, 200, brauchtAn() ? await brauchtSicht(u) : { an: false, punkte: [], geschlossen: [], aktionen: [] });
 });
 
 // Claude-Konten der Person für die Brücke (Klartext nur über diesen Kanal; chat = Schlüssel aus der Anfrage).
@@ -4143,6 +4273,15 @@ startStatusTick(orchDeps);
 // Plan 213 S1b (K1, P3): fertige, gesehene Unter-Chats nach 24 h wegräumen — nur mit WERKBANK_AUTO_SCHLIESSEN=1 (mit der Inbox).
 if (process.env.ORCH_STATUS !== 'off') setInterval(() => {
   autoSchliessen().then((w) => { if (w.length) log('automatisch weggeräumt', { n: w.length, ids: w.map((x) => x.id) }); }).catch((e) => log('wegräumen fehler', { error: String(e?.message ?? e).slice(0, 160) }));
+  // „Braucht dich“ (R30b): veraltete Karten (schon beantwortet, Paket live, PR zu) automatisch schließen — nur mit
+  // WERKBANK_BRAUCHT_DICH=an, je Person mit offenen Punkten, nie still (Log + Nachricht an den Strang).
+  // Nie zwei Durchgänge gleichzeitig (Pass C); das Schließen selbst ist zusätzlich idempotent (brauchtab.ts).
+  if (brauchtAn() && !brauchtTaktLaeuft) {
+    brauchtTaktLaeuft = true;
+    wb().collection('orchestrator_runs').distinct('userId', AUF_UEBERSICHT() as any).then(async (ids: any[]) => {
+      for (const id of ids) { const u = await userById(String(id)).catch(() => null); if (u && allowed(u.email) && u.role === 'ADMIN') await brauchtSicht(u, { schliessen: true }).catch((e) => log('braucht fehler', { user: String(id), error: String(e?.message ?? e).slice(0, 160) })); }
+    }).catch((e) => log('braucht fehler', { error: String(e?.message ?? e).slice(0, 160) })).finally(() => { brauchtTaktLaeuft = false; });
+  }
   // Knut 17.10.: normale Entscheidungen nach 24 h annehmen (WERKBANK_AUTO_ANNAHME=0 schaltet ab).
   annahmeTakt().catch((e) => log('annahme fehler', { error: String(e?.message ?? e).slice(0, 160) }));
 }, 10 * 60_000).unref();

@@ -50,7 +50,9 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
   return (
     <div className="h-zeile" data-testid="inbox-zeile" data-art={e.art} data-id={e.id}>
       <div className="h-text">
+        {e.art === 'braucht' && e.daten?.klasse === 'entscheidung' && <div className="tiny mut" data-testid="was-tun">Was du tun musst:</div>}
         <div className="h-frage">{e.frage}</div>
+        {e.art === 'braucht' && e.daten?.klasse === 'aktion' && <div className="tiny" data-testid="hauptchat-aufgabe"><span className="chip ok">nichts für dich</span> Der Hauptchat übernimmt das ({e.daten.aktion}) und fragt nur, wenn eine Freigabe nötig ist.</div>}
         <div className="tiny mut">
           {e.stufe === 'wichtig' && <><span className="chip warn" title={e.stufeGrund ?? ''} data-testid="stufe-wichtig">wichtig</span>{' '}</>}
           <span className={`chip${e.blockiert ? ' bad' : ''}`}>{ART[e.art] ?? e.art}</span>{' '}
@@ -71,11 +73,12 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
         {e.art === 'push' && e.daten.strand && <button className={pri} disabled={busy} onClick={() => run(async () => ((await pushFreigeben(e.daten.strand)) ? null : ABGEBROCHEN), 'Freigegeben — der Hauptchat pusht nach seiner Prüfung')}>Freigeben …</button>}
         {mehrere && <><button className={pri} disabled={busy} onClick={() => antworten('ja')}>Alle Empfehlungen</button><a className="ub-btn sm" href="#/entscheidungen" title="Jede Frage als eigene Karte beantworten">Einzeln</a></>}
         {e.art === 'vault' && e.daten.vaultId !== 'entwurf' && <><button className={pri} disabled={busy} onClick={() => vault('ja')}>Ja</button><button className="ub-btn sm" disabled={busy} onClick={() => vault('nein')}>Nein</button></>}
-        {['rueckfrage', 'braucht', 'vaultfrage'].includes(e.art) || (e.art === 'entscheidung' && !mehrere) ? <>
+        {(['rueckfrage', 'braucht', 'vaultfrage'].includes(e.art) && e.daten?.klasse !== 'aktion') || (e.art === 'entscheidung' && !mehrere) ? <>
           <button className={pri} disabled={busy} onClick={() => antworten('ja')} title={e.empfehlung ? `Empfehlung übernehmen: ${e.empfehlung}` : 'Ja'}>Ja</button>
           <button className="ub-btn sm" disabled={busy} onClick={() => antworten('nein')}>Nein</button>
           <button className="ub-btn ghost sm" disabled={busy} aria-expanded={anders !== null} onClick={() => setAnders(anders === null ? '' : null)}>Anders …</button>
         </> : null}
+        {e.art === 'braucht' && e.daten?.klasse === 'aktion' && <button className="ub-btn ghost sm" disabled={busy} aria-expanded={anders !== null} title="Doch etwas für dich? Antwort geht an den Unter-Chat" onClick={() => setAnders(anders === null ? '' : null)}>Anders …</button>}
         {e.art === 'altbestand' && <><button className={pri} disabled={busy} onClick={async () => {
           if (await confirm({ title: 'Altbestand verwerfen?', confirmLabel: 'Alle verwerfen', body: <p className="small">{(e.daten.eintraege ?? []).length} Fragen, älter als 14 Tage. Rückfragen werden zurückgezogen, alles andere ist 30 Tage zurückgestellt.</p> })) await antworten('nein');
         }}>Alle verwerfen</button><button className="ub-btn sm" aria-expanded={auf} onClick={() => setAuf(!auf)}>Durchsehen</button></>}

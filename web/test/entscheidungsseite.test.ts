@@ -93,3 +93,17 @@ test('Alternativen: Kopf liest Inline- und Block-Liste (höchstens 3, ohne die E
   assert.equal(altText('je Rolle'), 'Anders: je Rolle');
   assert.equal(altText(' je Rolle ', '  aber erst ab Q1 '), 'Anders: je Rolle — aber erst ab Q1');
 });
+
+test('R30b S5: „Braucht dich“ auf der Entscheidungsseite — (b) „nichts für dich“ nur mit Anders, (a) „braucht eine Entscheidung“', () => {
+  const ein = (strand: string, frage: string, daten: any, antworten: string[]) => ({ id: `b-${strand}-x`, art: 'braucht', frage, empfehlung: null, quelle: { text: 'Unter-Chat „T“', strand, url: null, paket: null }, wartetSeit: null, blockiert: 0, antworten, daten: { strand, seen: null, ...daten } }) as any;
+  const { fragen } = fragenAus([
+    ein('cc1', 'Nichts für dich — der Hauptchat kann das ausführen (merge-im-worktree).', { klasse: 'aktion', aktion: 'merge-im-worktree', zeile: 'Merge muss erlaubt werden' }, []),
+    ein('dd1', 'Vertrag mit Rogue zustimmen', { klasse: 'entscheidung', zeile: 'Vertrag mit Rogue zustimmen?' }, ['ja', 'nein', 'anders', 'spaeter']),
+    ein('ee1', 'Alt', {}, ['ja', 'nein', 'anders', 'spaeter']),
+  ]);
+  const [b, a, alt] = fragen.sort((x, y) => x.id.localeCompare(y.id)).map((f) => f);
+  assert.equal(b.klasse, 'aktion'); assert.deepEqual(b.antworten, ['anders'], 'nur „Anders“, falls doch etwas für Knut');
+  assert.match(b.worum, /Merge muss erlaubt werden/); assert.match(b.worum, /nichts für dich/i);
+  assert.equal(a.klasse, 'entscheidung'); assert.match(a.worum, /Entscheidung von dir/);
+  assert.equal(alt.klasse, null); assert.match(alt.worum, /wartet auf dich/, 'Schalter aus: wie bisher');
+});
