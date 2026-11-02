@@ -293,6 +293,9 @@ a.tcard { display: block; color: inherit; text-decoration: none; }
 .tb-block.dragging { cursor: grabbing; outline: 2px solid var(--amber-500); z-index: 5; }
 /* R30b Tagesvorschlag: grau und gestrichelt, bis Knut übernimmt — nicht ziehbar. */
 .tb-block.vorschlag { cursor: default; background: var(--surface-secondary, #f3f3f3); border-style: dashed; color: var(--text-secondary, #666); box-shadow: none; filter: grayscale(1); }
+.tb-block.vorschlag .tb-bhead { gap: 4px; }
+.tb-vkopf { min-width: 0; flex: 1; flex-wrap: nowrap; }
+.tb-vtitel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--text-primary, #222); }
 .tb-vorschlag { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .tb-vorschlag-hinweis { margin-bottom: 8px; }
 .tb-bhead { display: flex; justify-content: space-between; align-items: center; gap: 4px; }

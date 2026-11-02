@@ -185,10 +185,11 @@ export function Timebox({ cfg }: { cfg: Config }) {
                     <div key={`v-${vk(b)}`} className={`tb-block vorschlag bp${b.prio ?? 0}`} data-vorschlag={vk(b)} title={b.grund}
                       style={{ top: ((b.start - g.start) / STEP) * SLOT, height: Math.max(SLOT, (b.dur / STEP) * SLOT - 2) }} onPointerDown={(e) => e.stopPropagation()}>
                       <div className="tb-bhead">
-                        <span className="tiny row" style={{ gap: 4 }}>{hm(b.start)}–{hm(b.start + b.dur)} <span className={`prio-chip p${b.prio ?? 0}`}>{b.prio ? PRIO[b.prio] : '·'}</span></span>
+                        {/* Titel in der Kopfzeile: 30-Minuten-Blöcke (32 px) hätten sonst keinen Platz für ihn. */}
+                        <span className="tiny row tb-vkopf" style={{ gap: 4 }}>{hm(b.start)}–{hm(b.start + b.dur)} <span className={`prio-chip p${b.prio ?? 0}`}>{b.prio ? PRIO[b.prio] : '·'}</span>
+                          <b className="tb-vtitel">{b.ticket ? `${b.ticket.key} ${b.ticket.summary}` : b.title}</b></span>
                         <span className="tb-actions"><button className="btn ghost small" title="Block verwerfen" aria-label="verwerfen" onClick={() => setVerworfen([...verworfen, vk(b)])}>✕</button></span>
                       </div>
-                      <div className="tb-btitle">{b.ticket ? <><b>{b.ticket.key}</b> {b.ticket.summary}</> : b.title}</div>
                       <div className="tiny">{b.grund}</div>
                     </div>
                   ))}
