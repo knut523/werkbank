@@ -10,7 +10,7 @@
 import { freigabeVerbrauchen } from './freigabe.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, type Sink, type Tiefe } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -373,6 +373,11 @@ const server = createServer(async (req, res) => {
     // Nachreichen während des Zugs (docs/plan-hauptchat-monitor.md, S1): nur für Werkbank-Web; der Schlüssel person:chat
     // beschränkt jede Nachricht auf die eigenen Unterhaltungen der Person.
     // Klick-Nachweis (R29 D, D2): die Web-App fragt vor dem Schreiben nach GitHub, ob Knut diese Aktion auf der Karte bestätigt hat.
+    // R31 (werkbank_stand): Schalter dieser Brücke als Wertklassen (nie Werte von Geheimnissen).
+    if (req.method === 'GET' && url.pathname === '/internal/schalter') {
+      if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
+      return json(res, 200, { werte: schalterKlassen() });
+    }
     if (req.method === 'POST' && url.pathname === '/internal/aktion-freigabe') {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
       const b = await readBody(req);

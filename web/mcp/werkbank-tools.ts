@@ -372,6 +372,52 @@ serve('werkbank', '0.1.0', [
       run: async (a: any) => (await call('/internal/lead/github-schreiben', { aktion: a }, 150_000)).text,
     },
   ] : []),
+  // R31 S3+S4 „Umzug“ (Knut 02.11.): Betrieb, Geheimnis-Vermittler, Coolify, Dateien/Bilder — nur im Hauptchat, je Werkzeug ein
+  // Schalter (Vorgabe aus, die Werkbank lehnt sonst ab). Schreibendes zeigt die Brücke vorher als Karte; erst nach Knuts Klick.
+  ...(process.env.WERKBANK_LEITSTAND === '1' ? [
+    {
+      name: 'werkbank_betrieb',
+      description: 'Werkbank selbst betreiben (nach Knuts Klick auf die Karte): art=schalter_setzen (schalter = { NAME: wert } aus der Positivliste, z. B. { "WERKBANK_ZUARBEIT": "auto" }; neustart=false nur setzen) setzt die Zeilen in .env.local und startet danach den passenden Neustart; art=neustart_web (nur Web-App) oder art=neustart (alles, mit Drain ohne deinen eigenen Zug). Unterbrochene Stränge laufen danach automatisch weiter, du bekommst eine Meldung „neu gestartet“ — beende nach dem Aufruf deinen Zug. Werte von Geheimnissen gibt es hier nie. Nur mit WERKBANK_HAUPTCHAT_BETRIEB=on.',
+      inputSchema: { type: 'object', properties: { art: { type: 'string', enum: ['schalter_setzen', 'neustart_web', 'neustart'] }, schalter: { type: 'object', additionalProperties: { type: 'string' } }, neustart: { type: 'boolean' }, grund: { type: 'string' } }, required: ['art'] },
+      run: async (a: any) => (await call('/internal/lead/betrieb', { aktion: a }, 60_000)).text,
+    },
+    {
+      name: 'werkbank_stand',
+      description: 'Ist die Werkbank so deployt wie gewollt? Live-Commit gegen den Kopf des Release-Zweigs, je Schalter der Positivliste Vorgabe · Soll (.env.local) · Ist (laufender Prozess) · „Neustart nötig“, dazu Web/Brücke (Laufzeit, laufende Züge). Ohne Werte von Geheimnissen. Lesend, ohne Klick. Nur mit WERKBANK_HAUPTCHAT_BETRIEB=on.',
+      inputSchema: { type: 'object', properties: {} },
+      run: async () => (await call('/internal/lead/stand', {}, 30_000)).text,
+    },
+    {
+      name: 'geheimnis_nutzen',
+      description: 'Einen Vaultwarden-Eintrag für einen freigegebenen ZWECK nutzen, ohne den Wert zu sehen: Die Werkbank holt den Wert und ruft genau diese URL auf (Header aus dem Eintrag), die Antwort kommt geschwärzt zurück. zweck: coolify | github-lesen (+ von Knut eingetragene); methode: GET/POST/PATCH/PUT/DELETE (je Zweck begrenzt); url: https auf einen freigegebenen Host; body: JSON-Text oder Objekt (nicht bei GET). Jeder Aufruf zeigt Knut vorher eine Karte. Nie versuchen, den Wert anders zu bekommen (bw, .config/vw sind gesperrt). Nur mit WERKBANK_GEHEIMNIS=on.',
+      inputSchema: { type: 'object', properties: { zweck: { type: 'string' }, methode: { type: 'string', enum: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'] }, url: { type: 'string' }, body: {}, contentType: { type: 'string' }, grund: { type: 'string' } }, required: ['zweck', 'url'] },
+      run: async (a: any) => (await call('/internal/lead/geheimnis', { aktion: a }, 60_000)).text,
+    },
+    {
+      name: 'coolify_status',
+      description: 'Coolify lesen (ohne Klick) für eine freigegebene App (WERKBANK_COOLIFY_APPS, Vorgabe knut-olaf-bot-demo*): Zustand, Domain, Variablen NUR mit Namen, letzte Deployments. Nur mit WERKBANK_COOLIFY=on.',
+      inputSchema: { type: 'object', properties: { app: { type: 'string' } }, required: ['app'] },
+      run: async (a: any) => (await call('/internal/lead/coolify', { aktion: { art: 'status', app: a.app } }, 60_000)).text,
+    },
+    {
+      name: 'coolify',
+      description: 'Coolify SCHREIBEN für eine freigegebene App (WERKBANK_COOLIFY_APPS), je Aufruf nach Knuts Klick auf die Karte: art=variable_setzen (key, value; einzeilig — wirkt erst nach Neustart/Deploy), art=neustart (baut neu), art=deploy. Der Token bleibt in der Werkbank. curl an Coolify per Bash fragt immer nach; nimm dieses Werkzeug. Nur mit WERKBANK_COOLIFY=on.',
+      inputSchema: { type: 'object', properties: { art: { type: 'string', enum: ['variable_setzen', 'neustart', 'deploy'] }, app: { type: 'string' }, key: { type: 'string' }, value: { type: 'string' }, grund: { type: 'string' } }, required: ['art', 'app'] },
+      run: async (a: any) => (await call('/internal/lead/coolify', { aktion: a }, 120_000)).text,
+    },
+    {
+      name: 'datei_teilen',
+      description: 'Download-Link für Knut im Chat: pfad = absoluter Pfad einer Datei (pdf, Bilder, Text/Markdown, Office) im Arbeitsordner, im Hauptchat-Ordner oder in einem Review-Paket — oder id aus „Meine Dateien“. Kopiert nach „Meine Dateien“ (Paket-Dateien nicht) und gibt einen Link zurück, den du so in die Antwort übernimmst; er braucht Knuts Anmeldung. Keine Archive/Programme. Nur mit WERKBANK_DATEIEN_CHAT=on.',
+      inputSchema: { type: 'object', properties: { pfad: { type: 'string' }, id: { type: 'string' } } },
+      run: async (a: any) => (await call('/internal/lead/datei-teilen', { pfad: a.pfad ?? '', id: a.id ?? '', conv: process.env.WERKBANK_CONV_ID || '' })).text,
+    },
+    {
+      name: 'screenshot',
+      description: 'Screenshot einer Seite als PNG: url = Werkbank-Pfad wie „/heute“ (mit Knuts Anmeldung) oder eine http(s)-Adresse; geraet desktop (1440×900, Vorgabe) | handy (390×844) | beide; ganz=true für die ganze Seite. Gibt das Bild als Markdown (übernimm es so in die Antwort, dann sieht Knut es im Chat) und den Dateipfad zurück — sieh es dir mit Read selbst an, bevor du etwas darüber sagst. Nur mit WERKBANK_DATEIEN_CHAT=on.',
+      inputSchema: { type: 'object', properties: { url: { type: 'string' }, geraet: { type: 'string', enum: ['desktop', 'handy', 'beide'] }, ganz: { type: 'boolean' } }, required: ['url'] },
+      run: async (a: any) => (await call('/internal/lead/screenshot', { url: a.url, geraet: a.geraet ?? 'desktop', ganz: a.ganz === true, conv: process.env.WERKBANK_CONV_ID || '' }, 120_000)).text,
+    },
+  ] : []),
   // Push (Plan 154, S4): nur in Unter-Chats (WERKBANK_STRANG setzt die Brücke aus der Art der Unterhaltung).
   ...(process.env.WERKBANK_STRANG === '1' ? [{
     name: 'hauptchat_melden',
@@ -394,9 +440,13 @@ serve('werkbank', '0.1.0', [
     },
     {
       name: 'auslastung',
-      description: 'Claude-Auslastung (cswap: 5-Stunden- und Wochenfenster, Stufe grün/gelb/rot) und Melious-Rest — mit der Regel, was gerade an Melious geht.',
+      description: 'Claude-Auslastung (cswap: 5-Stunden- und Wochenfenster, Stufe grün/gelb/rot) und Kontingent (Melious-Rest in %, Claude je Konto erschöpft bis/frei mit Zügen heute, automatische Modellwahl) — mit der Regel, was gerade an Melious geht.',
       inputSchema: { type: 'object', properties: {} },
-      run: async () => bridge('/internal/auslastung', {}, 30_000),
+      // R31 Nachtrag 2: dazu die Kontingent-Zeile der Werkbank (Melious-Rest, Claude je Konto, auto-Wahl).
+      run: async () => {
+        const [b, k] = await Promise.all([bridge('/internal/auslastung', {}, 30_000), call('/internal/kontingent', {}, 15_000).then((j) => String(j.text ?? ''), () => '')]);
+        return k ? `${b}\n📦 ${k}` : b;
+      },
     },
   ] : []),
   // Gegenprüfung durch GLM 5.3 über Melious (Plan 162; Knut 15.10.: „Lead kann jeweils sowieso challengen mit GLM 5.3“).

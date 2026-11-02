@@ -716,3 +716,6 @@ ul.plain.h-liste { padding-left: 0; list-style: none; }
 .ck-einbett { padding: 0; background: transparent; }
 @media (max-width: 640px) { .ck { padding: 8px; } .ck-bilder img { height: 70px; } }
 .ck-review { display: grid; gap: 10px; }
+
+/* R31: Kontingent-Zeile oben (Melious-Rest, Claude je Konto, auto-Wahl) */
+.kontingent { gap: 6px; flex-wrap: wrap; padding: 6px 16px 0; font-size: 12px; }

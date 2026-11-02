@@ -37,6 +37,7 @@ export interface Account {
   vorrang?: boolean;
   chainModel?: string;   // nur in der Warteschlange: dieses Konto mit diesem Modell (Stufe der Ersatzkette)
   abo?: string[];        // Modelle im Abo (Werkbank-Einstellung); andere laufen auf Guthaben → Hinweis, keine Sperre
+  zuarbeit?: 'melious' | 'claude';   // R31 (WERKBANK_ZUARBEIT, Werkbank): lesende Teilagenten auf Melious oder auf Claude
 }
 export type Exhausted = Record<string, { until: number; fp?: string }>;
 
@@ -155,7 +156,7 @@ const rollenOf = (v: unknown): Record<string, string[]> => Object.fromEntries(Ob
   .filter(([k, l]) => /^[a-z]{1,20}$/.test(k) && Array.isArray(l)).map(([k, l]) => [k, (l as unknown[]).filter((m): m is string => typeof m === 'string' && MODEL_NAME.test(m)).slice(0, 20)]));
 
 /** Konten in Reihenfolge, ohne Doppelte; `chat` (token null) = der Schlüssel aus der Anfrage. Immer mindestens dieser. */
-export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?: unknown; kind?: unknown; model?: unknown; pool?: unknown; rollen?: unknown; faktoren?: unknown; taktS?: unknown; eco?: unknown; kette?: unknown; ketteModell?: unknown; vorrang?: unknown; abo?: unknown; rest?: unknown; fallback?: unknown; sperre?: unknown }[] | null | undefined, chatToken: string): Account[] {
+export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?: unknown; kind?: unknown; model?: unknown; pool?: unknown; rollen?: unknown; faktoren?: unknown; taktS?: unknown; eco?: unknown; kette?: unknown; ketteModell?: unknown; vorrang?: unknown; abo?: unknown; rest?: unknown; fallback?: unknown; sperre?: unknown; zuarbeit?: unknown }[] | null | undefined, chatToken: string): Account[] {
   const out: Account[] = [];
   const seen = new Set<string>();
   for (const a of list ?? []) {
@@ -165,7 +166,7 @@ export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?:
       if (id !== MELIOUS_ID || !MELIOUS_KEY.test(token) || seen.has(token) || out.some(isMelious)) continue;
       seen.add(token);
       const name = (v: unknown) => (typeof v === 'string' && /^[\w.:/-]{1,80}$/.test(v) ? v : undefined);
-      out.push({ id, label: MELIOUS_LABEL, token, kind: 'melious', model: name(a.model), pool: poolOf(a.pool), rollen: rollenOf(a.rollen), faktoren: faktorenOf(a.faktoren), taktS: Number(a.taktS) > 0 ? Math.min(86_400, Number(a.taktS)) : undefined, eco: a.eco === true, kette: a.kette === true, ketteModell: name(a.ketteModell), vorrang: a.vorrang === true, abo: Array.isArray(a.abo) ? (a.abo as unknown[]).filter((m): m is string => typeof m === 'string' && MODEL_NAME.test(m)).slice(0, 30) : undefined, rest: Math.max(0, Number(a.rest) || 0), fallback: a.fallback === true, sperre: typeof a.sperre === 'string' ? a.sperre.slice(0, 160) : undefined });
+      out.push({ id, label: MELIOUS_LABEL, token, kind: 'melious', model: name(a.model), pool: poolOf(a.pool), rollen: rollenOf(a.rollen), faktoren: faktorenOf(a.faktoren), taktS: Number(a.taktS) > 0 ? Math.min(86_400, Number(a.taktS)) : undefined, eco: a.eco === true, kette: a.kette === true, ketteModell: name(a.ketteModell), vorrang: a.vorrang === true, abo: Array.isArray(a.abo) ? (a.abo as unknown[]).filter((m): m is string => typeof m === 'string' && MODEL_NAME.test(m)).slice(0, 30) : undefined, rest: Math.max(0, Number(a.rest) || 0), fallback: a.fallback === true, sperre: typeof a.sperre === 'string' ? a.sperre.slice(0, 160) : undefined, ...(a.zuarbeit === 'claude' ? { zuarbeit: 'claude' as const } : {}) });
       continue;
     }
     const token = id === 'chat' ? chatToken : typeof a?.token === 'string' ? a.token : '';

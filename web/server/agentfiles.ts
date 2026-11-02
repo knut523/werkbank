@@ -30,15 +30,16 @@ export type Classified =
   | { kind: 'skip'; why: string };
 
 /** Was mit einer geschriebenen Datei passiert. Rein bis auf realpath/stat. */
-export function classifyWritten(u: User, path: string): Classified {
+export function classifyWritten(u: User, path: string, roots: string[] = [scratchDir(u)]): Classified {
   const abs = real(path);
   const vault = real(cfg.vaultDir);
   if (within(abs, vault)) {
     if (extname(abs).toLowerCase() !== '.md') return { kind: 'skip', why: 'im Vault, keine Notiz' };
     return { kind: 'vault', vaultPath: relative(vault, abs).split(sep).join('/') };
   }
-  const scratch = real(scratchDir(u));
-  if (!within(abs, scratch)) return { kind: 'skip', why: 'außerhalb des Arbeitsordners' };
+  // R31 (datei_teilen): weitere Wurzeln nur ausdrücklich (Hauptchat-Ordner); Vorgabe wie bisher nur der eigene Arbeitsordner.
+  const scratch = roots.map(real).find((r) => within(abs, r));
+  if (!scratch) return { kind: 'skip', why: 'außerhalb des Arbeitsordners' };
   const rel = relative(scratch, abs).split(sep).join('/');
   if (SENSITIVE.test(rel)) return { kind: 'skip', why: 'geschützter Pfad' };
   if (!ALLOWED_EXT[extname(abs).toLowerCase()]) return { kind: 'skip', why: 'Dateityp nicht erlaubt' };
@@ -52,8 +53,8 @@ export function classifyWritten(u: User, path: string): Classified {
 export interface RunContext { conv: string; key?: string | null; projectId?: string | null; runId?: string | null }
 
 /** Eine geschriebene Datei übernehmen. Liefert 'neu', 'aktualisiert', 'unverändert' oder den Grund fürs Auslassen. */
-export async function ingestOne(u: User, path: string, ctx: RunContext): Promise<string> {
-  const c = classifyWritten(u, path);
+export async function ingestOne(u: User, path: string, ctx: RunContext, roots?: string[]): Promise<string> {
+  const c = classifyWritten(u, path, roots);
   if (c.kind === 'skip') return c.why;
   const col = wb().collection('files');
   const sourcePath = c.kind === 'vault' ? `vault:${c.vaultPath}` : real(c.abs);
