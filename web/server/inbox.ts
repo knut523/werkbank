@@ -196,4 +196,5 @@ function mitStufe(e: InboxEintrag, ms: number) {
 
 /** Zähler für Leiste und Heute-Kopf (K11): nur sichtbare, nicht zurückgestellte Einträge; der Altbestand zählt als einer. */
 // Entscheidungsseite (19.10.): ein Bericht mit D1–D3 sind drei Fragen — Leiste, Kopf, ① und Seite zählen gleich.
-export const inboxZahl = (eintraege: InboxEintrag[]) => eintraege.reduce((n, e) => n + (e.art === 'entscheidung' ? Math.max(1, ((e.daten.entscheidungen as any[]) ?? []).length) : 1), 0);
+// R30b S5: (b)-Einträge (Aufgabe des Hauptchats, daten.klasse 'aktion') sind nichts für Knut — sie zählen nicht.
+export const inboxZahl = (eintraege: InboxEintrag[]) => eintraege.reduce((n, e) => n + (e.daten?.klasse === 'aktion' ? 0 : e.art === 'entscheidung' ? Math.max(1, ((e.daten.entscheidungen as any[]) ?? []).length) : 1), 0);

@@ -24,6 +24,7 @@ import { vienna } from './hygiene.ts';
 import { cleanThema, themaOf } from './themen.ts';
 import { meliousSettings, ausserhalbAbo } from './melious.ts';
 import { budgetVon } from './cosbudget.ts';   // zyklisch (cosbudget → orchestrator), nur zur Laufzeit im Rückfrage-Pfad benutzt
+import { budgetWirkung } from './braucht.ts';
 import { tiefeOf, istTiefe, tiefeStart, tiefeText, modellAusserhalbAbo, MELIOUS_ZUARBEIT_TEXT, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, GRUENDLICH_TEXT, type Tiefe } from './tiefe.ts';
 import { zustandAus, abweichung, nachfordern, statusNeu, NACHFORDER_TEXT, wienDatum, wienUm } from './zustand.ts';
 import { regelBestaetigen } from './regelquelle.ts';
@@ -1112,16 +1113,17 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
       if (option === 'Anhalten') { await reviewOrch(u, d.strand.id, 'angehalten nach dem Deckel der automatischen Fortsetzung'); action = 'angehalten'; }
     } catch (e: any) { action = `nicht ausgeführt: ${String(e.message ?? e).slice(0, 200)}`; }
   }
-  // Budget je Strang (Plan 209, S3.2): „Weiter mit +50 %“ hebt das Budget und setzt fort, „Anhalten“ legt den Strang ab.
+  // Budget je Strang (Plan 209, S3.2): „+50 % Budget“ (früher „Weiter mit +50 %“) hebt das Budget und setzt fort,
+  // „schließen“ (früher „Anhalten“) legt den Strang ab — budgetWirkung kennt beide Label-Generationen.
   if (d.kind === 'budget' && d.strand?.id && option) {
     try {
-      if (option.startsWith('Weiter')) {
+      if (budgetWirkung(option) === 'weiter') {
         const r: any = await runs().findOne({ _id: d.strand.id as any });
         const alt = budgetVon(r);   // dasselbe Budget, an dem der Strang angehalten hat (inkl. Faktor der Tiefe)
         await runs().updateOne({ _id: d.strand.id as any }, { $set: { budgetTokens: Math.ceil(alt * 1.5), autoStopped: null, 'budget.stopAt': null } });
         await sendOrch(u, d.strand.id, 'weiter (Budget um 50 % erhöht)'); action = 'fortgesetzt';
       }
-      if (option === 'Anhalten') { await reviewOrch(u, d.strand.id, 'angehalten: Budget erreicht'); action = 'angehalten'; }
+      if (budgetWirkung(option) === 'anhalten') { await reviewOrch(u, d.strand.id, 'angehalten: Budget erreicht'); action = 'angehalten'; }
     } catch (e: any) { action = `nicht ausgeführt: ${String(e.message ?? e).slice(0, 200)}`; }
   }
   // Regel-Vorschlag aus den Reviews (Plan 274, Zusatz A): „Übernehmen“ schreibt die Regel für das Pre-Push-Gate fest.

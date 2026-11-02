@@ -707,8 +707,14 @@ export function githubKarte(input: Record<string, unknown>): string {
     kopf = `**Soll ich auf GitHub einen ${input.entwurf === true ? 'Entwurfs-' : ''}PR in ${repo} öffnen?** (${short(input.head, 80)} → ${short(input.base, 60)})`;
     teile = `Titel: ${short(input.titel, 200)}\n\n${text(input.text)}`;
   } else if (input.art === 'push') {
-    kopf = `**Soll ich den Zweig ${short(input.zweig, 80)} nach ${repo} pushen?** (Kopf-Commit des Worktrees, ohne Force; vorher läuft das Pre-Push-Gate gegen ${short(input.base || 'dev', 60)} — nur bei grün wird gesendet)`;
-    teile = `Worktree: \`${short(input.klon, 200)}\``;
+    kopf = `**Soll ich den Zweig ${short(input.zweig, 80)} nach ${repo} pushen?** (Kopf-Commit des Worktrees, ohne Force; Ziel-Zweig und Gate-Basis kommen aus dem PR — nur bei grünem Gate und offenem PR wird gesendet)`;
+    teile = `Worktree: \`${short(input.klon, 200)}\`${input.nummer ? `\nPR: ${repo}#${short(input.nummer, 8)}` : ''}`;
+  } else if (input.art === 'fix_freigeben') {
+    kopf = `**Soll ich den @fix-Fix ${short(input.fix, 40)} in ${repo} freigeben?** (Stand \`${short(input.neu, 12)}\` — der Takt prüft Tests und Gate NEU und pusht dann an den Kopf-Zweig des PRs; Ergebnis kommt als Meldung)`;
+    teile = `Fix: \`${short(input.fix, 80)}\`\nGeprüfter Stand: \`${short(input.neu, 42)}\``;
+  } else if (input.art === 'fix_ablehnen') {
+    kopf = `**Soll ich den @fix-Fix ${short(input.fix, 40)} in ${repo} ablehnen?** (Kein Push; ein Kommentar-Entwurf landet im Paket${input.grund ? ` — Grund: ${short(input.grund, 300)}` : ''})`;
+    teile = `Fix: \`${short(input.fix, 80)}\`${input.grund ? `\nGrund: ${short(input.grund, 300)}` : ''}`;
   } else {
     kopf = `**Soll ich auf GitHub schreiben (${short(input.art, 30)})?**`;
     teile = fence(clip(JSON.stringify(input, null, 2), 1500), 'json');

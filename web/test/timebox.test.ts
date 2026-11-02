@@ -57,3 +57,13 @@ test('Runde 7: „im Sprint zuerst“ nach lokaler Mitgliedschaft', () => {
   const r = sortMyTickets([t('PM-1', ['sprint-2026-09-28']), t('PM-2')], 'sprint-2026-09-28', new Map(), (x) => members.has(x.key));
   assert.deepEqual(r.map((x) => x.key), ['PM-2', 'PM-1']);
 });
+
+test('R30b Tagesvorschlag: Block darf quelle „vorschlag“ tragen, sonst nichts; Übertrag behält die Herkunft nicht', () => {
+  const ok = cleanBlock({ date: '2026-11-02', start: 540, dur: 60, title: 'X', quelle: 'vorschlag' });
+  assert.ok('ok' in ok && ok.ok.quelle === 'vorschlag');
+  assert.ok('error' in cleanBlock({ date: '2026-11-02', start: 540, dur: 60, title: 'X', quelle: 'jira' }));
+  const ohne = cleanBlock({ date: '2026-11-02', start: 540, dur: 60, title: 'X' });
+  assert.ok('ok' in ohne && ohne.ok.quelle === undefined, 'ohne Angabe kein Feld');
+  const { copies } = carryOver([{ _id: 'a', userId: 'u', date: '2026-11-02', start: 540, dur: 60, title: 'X', state: 'geplant', quelle: 'vorschlag' } as any], '2026-11-02');
+  assert.equal((copies[0] as any).quelle, undefined, 'übertragen = jetzt Knuts Block');
+});

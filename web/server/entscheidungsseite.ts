@@ -28,6 +28,8 @@ export interface Frage {
   antworten: Antwort[];
   /** Wie viele Unter-Chats auf diese Antwort warten. */
   blockiert: number;
+  /** R30b S5: Klasse einer „Braucht Knut“-Zeile (nur mit WERKBANK_BRAUCHT_DICH), sonst null bzw. fehlt. */
+  klasse?: 'aktion' | 'entscheidung' | null;
   /** Kennung an der Quelle für Arten mit eigenem Weg: Vault-Sync-Frage (vaultId), Push (Strang). */
   ref: string | null;
 }
@@ -70,7 +72,11 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
     }
     const tw = titelUndWorum(e.frage);
     const kontext = ein(e.daten.kontext);
-    const worum = e.art === 'braucht' ? `${e.quelle.text} wartet auf dich (Abschnitt „Braucht Knut“ im Stand).${tw.rest ? ` ${tw.rest}` : ''}`
+    // R30b S5: klassifizierte „Braucht Knut“-Zeilen (nur mit WERKBANK_BRAUCHT_DICH gesetzt) sagen, was das für Knut heißt.
+    const klasse = e.art === 'braucht' && (e.daten.klasse === 'aktion' || e.daten.klasse === 'entscheidung') ? e.daten.klasse as 'aktion' | 'entscheidung' : null;
+    const worum = klasse === 'aktion' ? `${e.quelle.text} meldet: „${ein(e.daten.zeile)}“. Das kann der Hauptchat selbst ausführen (${ein(e.daten.aktion)}) — nichts für dich; er fragt nur, wenn eine Freigabe nötig ist.`
+      : klasse === 'entscheidung' ? `${e.quelle.text} braucht eine Entscheidung von dir.${tw.rest ? ` ${tw.rest}` : ''}`
+      : e.art === 'braucht' ? `${e.quelle.text} wartet auf dich (Abschnitt „Braucht Knut“ im Stand).${tw.rest ? ` ${tw.rest}` : ''}`
       : e.art === 'push' ? `Der Stand von ${e.quelle.text} ist geprüft und kann auf GitHub (Zweig ${ein(e.daten.zweig)}, Stand ${String(e.daten.commit ?? '').slice(0, 7)}). Ja öffnet die Freigabe mit dem gesehenen Stand.`
       : e.art === 'vaultfrage' ? `${e.daten.kurz ? `${ein(e.daten.kurz)} ` : ''}Offene Frage in ${e.quelle.text}${e.daten.section ? `, Abschnitt „${ein(e.daten.section)}“` : ''} — wichtig, weil: ${ein(e.daten.grund)}.${e.daten.beleg ? ` Stand laut Sichtung: ${ein(e.daten.beleg)}.` : ''} Deine Antwort kommt als Zeile „- Knut:“ in die Notiz.${tw.rest ? ` ${tw.rest}` : ''}`
       : e.art === 'vault' ? `Der Vault-Sync hat beim Abgleich etwas gefunden, das er nicht selbst entscheiden darf.${tw.rest ? ` ${tw.rest}` : ''}`
@@ -81,7 +87,8 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
     const alternativen = e.art === 'rueckfrage' && e.antworten.includes('anders') ? optionen.filter((o) => o !== rec && !/^(ja|nein)[.!]?$/i.test(o)).slice(0, 3) : [];
     fragen.push({ ...basis, id: e.id, teil: null, kennung: null, titel: tw.titel, worum, optionen, alternativen,
       empfehlung: e.empfehlung ? ein(e.empfehlung) : null, stufe: e.stufe === 'wichtig' ? 'wichtig' : 'normal', stufeGrund: e.stufeGrund ?? null,
-      antworten: (e.antworten as Antwort[]).filter((a) => a !== 'anders' || e.art !== 'vault') });
+      // (b): nur „Anders“ — falls es doch etwas für Knut ist, geht die Antwort an den Unter-Chat.
+      klasse, antworten: klasse === 'aktion' ? ['anders'] : (e.antworten as Antwort[]).filter((a) => a !== 'anders' || e.art !== 'vault') });
   }
   // Wichtige oben, sonst die Reihenfolge der Inbox (blockiert am meisten, wartet am längsten); Gruppen zusammenhalten.
   const rang = new Map<string, number>();

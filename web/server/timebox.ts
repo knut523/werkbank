@@ -7,7 +7,7 @@ import { ownGoals } from './goals.ts';
 
 export const DAY_START = 7 * 60, DAY_END = 20 * 60, STEP = 15;
 export type BlockState = 'geplant' | 'erledigt' | 'verschoben';
-export interface Block { _id?: string; userId: string; date: string; start: number; dur: number; title?: string; key?: string | null; state: BlockState; carriedFrom?: string; carriedTo?: string; prio?: 1 | 2 | 3 | null }
+export interface Block { _id?: string; userId: string; date: string; start: number; dur: number; title?: string; key?: string | null; state: BlockState; carriedFrom?: string; carriedTo?: string; prio?: 1 | 2 | 3 | null; quelle?: 'vorschlag' }
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -31,6 +31,8 @@ export function cleanBlock(b: any, partial = false): { ok: Partial<Block> } | { 
   if (b.key !== undefined) { const k = b.key ? String(b.key) : null; if (k && !/^[A-Z][A-Z0-9]+-\d+$/.test(k)) return { error: 'Ungültiger Ticket-Schlüssel.' }; out.key = k; }
   if (b.state !== undefined) { if (!['geplant', 'erledigt', 'verschoben'].includes(b.state)) return { error: 'Ungültiger Zustand.' }; out.state = b.state; }
   if (b.prio !== undefined) { if (b.prio !== null && ![1, 2, 3].includes(Number(b.prio))) return { error: 'Tagespriorität 1 (Muss), 2 (Soll), 3 (Kann) oder leer.' }; out.prio = b.prio === null ? null : (Number(b.prio) as 1 | 2 | 3); }
+  // R30b: aus dem Tagesvorschlag übernommen (nur Herkunft; sonst wie jeder Block).
+  if (b.quelle !== undefined && b.quelle !== null) { if (b.quelle !== 'vorschlag') return { error: 'Ungültige Quelle.' }; out.quelle = 'vorschlag'; }
   if (!partial && !out.title && !out.key) return { error: 'Titel oder Ticket angeben.' };
   return { ok: out };
 }
