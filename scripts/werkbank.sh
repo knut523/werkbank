@@ -140,8 +140,9 @@ case "${1:-}" in
     TM=$(mktemp -d); TP=${WERKBANK_TEST_MONGO_PORT:-27999}
     "$RT/bin/mongod" --dbpath "$TM" --bind_ip 127.0.0.1 --port "$TP" --quiet --wiredTigerCacheSizeGB 0.25 > "$TM.log" 2>&1 &
     MP=$!; for _ in $(seq 1 60); do (echo > "/dev/tcp/127.0.0.1/$TP") 2>/dev/null && break; sleep 0.5; done
-    (cd "$WB/claude-bridge" && npm test 2>&1 | grep -E '^# (pass|fail)') && (cd "$WB/web" && MONGO_URI_WERKBANK="mongodb://127.0.0.1:$TP" \
-      WERKBANK_TEST_PORT=${WERKBANK_TEST_PORT:-3571} WERKBANK_TEST_BRIDGE_PORT=${WERKBANK_TEST_BRIDGE_PORT:-3596} npm test 2>&1 | grep -E '^# (pass|fail|skipped)'); rc=$?
+    # sauber-env.sh: ohne WERKBANK_*/BRIDGE_*/LEITSTAND_*/GIT_CONFIG_GLOBAL der aufrufenden Sitzung (sonst z. B. Fix-Tests rot)
+    (cd "$WB/claude-bridge" && "$HERE/sauber-env.sh" npm test 2>&1 | grep -E '^# (pass|fail)') && (cd "$WB/web" && MONGO_URI_WERKBANK="mongodb://127.0.0.1:$TP" \
+      WERKBANK_TEST_PORT=${WERKBANK_TEST_PORT:-3571} WERKBANK_TEST_BRIDGE_PORT=${WERKBANK_TEST_BRIDGE_PORT:-3596} "$HERE/sauber-env.sh" npm test 2>&1 | grep -E '^# (pass|fail|skipped)'); rc=$?
     kill "$MP" 2>/dev/null; wait "$MP" 2>/dev/null; rm -rf "$TM" "$TM.log"; exit $rc ;;
   e2e) (cd "$WB/web" && node e2e/smoke.mjs) ;;
   stream-timing) (cd "$WB/web" && node e2e/stream-timing.mjs) ;;
