@@ -67,7 +67,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, type JiraAction } from './jirawrite.ts';
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
-import { syncGithub, livePrs, GH_ORG } from './github.ts';
+import { syncGithub, livePrs, GH_ORG, graphql } from './github.ts';
 import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol } from './prticker.ts';
 import { regelDir, regelVorschlaege } from './regelquelle.ts';
 import { klonPfad, reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
@@ -76,7 +76,7 @@ import { meliousPassC } from './gegenpruefung.ts';
 import { postReview, statusKommentar, schreibenAus, writeToken, erstelleDraftPr, prOeffnen, type ReviewEvent } from './githubwrite.ts';
 import { ketteModus, starteKette, ketteTick, ketten as ketteCol, publicKette, brichAb as ketteAbbrechen, repoAusTicket, AKTIV as KETTE_AKTIV, type KDeps } from './jirakette.ts';
 import { fuehreAus as githubAktion } from './githubaktion.ts';
-import { fixTick, fixOverview, prLageVia, pushVia, gateVia } from './prfix.ts';
+import { fixTick, fixOverview, prLageVia, pushVia, gateVia, freigabeSetzen, fixAblehnenSynchron } from './prfix.ts';
 import { paketIndex, paketZahlen } from './pakete.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
@@ -3561,8 +3561,9 @@ on('POST', /^\/internal\/lead\/github$/, async (req, res) => {
   send(res, 200, { status: r.status, text: githubLeseText(text) });
 });
 
-// GitHub schreiben aus dem Hauptchat (R29 D, S5): die Brücke hat die Aktion vorher als Karte gezeigt und Knuts Klick abgewartet.
-// Schalter WERKBANK_HAUPTCHAT_GITHUB (Vorgabe aus); nur Kommentar / PR öffnen / Branch pushen, nie Merge (githubaktion.ts).
+// GitHub schreiben aus dem Hauptchat (R29 D, S5; R30 @fix-Freigabe): die Brücke hat die Aktion vorher als Karte gezeigt
+// und Knuts Klick abgewartet. Schalter WERKBANK_HAUPTCHAT_GITHUB (Vorgabe aus); Kommentar / PR öffnen / Branch pushen /
+// @fix freigeben oder ablehnen, nie Merge (githubaktion.ts).
 on('POST', /^\/internal\/lead\/github-schreiben$/, async (req, res) => {
   const b = await body(req);
   const u = await orchPerson(req, b);
@@ -3587,6 +3588,21 @@ on('POST', /^\/internal\/lead\/github-schreiben$/, async (req, res) => {
         return skript && existsSync(skript) ? gateVia(skript, klon, zweig, base) : null;
       },
       origin: async (klon) => (await promisify(execFile)('git', ['-C', klon, 'remote', 'get-url', 'origin'], { timeout: 10_000, encoding: 'utf8' })).stdout.trim(),
+      // R30 (Punkt 4): PR-Lage mit dem Lesetoken — Push nur an den Kopf-Zweig eines offenen PRs, Gate-Basis aus dem PR.
+      pr: async (repo, nummer) => { const t = await githubReadToken(); return t ? prLageVia(t, repo, nummer) : null; },
+      // R30 (Punkt 4): Standard-Zweig (origin/HEAD) als Fallback für die Gate-Basis.
+      standard: async (repo) => {
+        try {
+          const t = await githubReadToken();
+          if (!t) return null;
+          const q = await graphql(t, 'query($o: String!, $r: String!) { repository(owner: $o, name: $r) { defaultBranchRef { name } } }', { o: repo.split('/')[0], r: repo.split('/')[1] });
+          return q?.repository?.defaultBranchRef?.name ?? null;
+        } catch { return null; }
+      },
+      // R30: @fix freigeben — Freigabe-Marke am Fix-Doc (billige Prüfung synchron, prfix.ts); Push im fixTick.
+      fixFreigabe: (fix, neu) => freigabeSetzen(fix, neu, u.id),
+      // R30: @fix ablehnen — Eintrag abschließen, Audit, Kommentar-Entwurf ins Paket (prfix.ts fixAblehnenSynchron).
+      fixAblehnen: (fix, grund) => fixAblehnenSynchron(fix, grund, u.id),
     });
   } catch (e: any) {
     log('lead github schreiben abgelehnt', { user: u.id, art: b.aktion?.art, repo: b.aktion?.repo, grund: String(e?.message ?? e).slice(0, 200) });

@@ -44,8 +44,25 @@ test('Karte Push: Zweig, Repo, Worktree, „ohne Force“', () => {
   const q = confirmQuestion(T, { art: 'push', repo: 'WirStrom1/x', zweig: 'feat/a', klon: '/work/wt' });
   assert.match(q, /feat\/a/);
   assert.match(q, /ohne Force/);
-  assert.match(q, /Pre-Push-Gate gegen dev — nur bei grün/);
+  // R30: Ziel-Zweig und Gate-Basis kommen aus dem PR, nicht mehr hart `dev`.
+  assert.match(q, /Gate-Basis kommen aus dem PR/);
   assert.match(q, /\/work\/wt/);
+});
+
+test('Karte @fix freigeben: Fix, Repo, geprüfter SHA, „Tests und Gate NEU“', () => {
+  const q = confirmQuestion(T, { art: 'fix_freigeben', repo: 'WirStrom1/x', fix: 'fix-abc', neu: 'a'.repeat(40) });
+  assert.match(q, /fix-abc/);
+  assert.match(q, /WirStrom1\/x/);
+  assert.match(q, /Tests und Gate NEU/);
+  assert.match(q, /freigeben\?/);
+});
+
+test('Karte @fix ablehnen: Fix, Grund, „Kein Push“', () => {
+  const q = confirmQuestion(T, { art: 'fix_ablehnen', repo: 'WirStrom1/x', fix: 'fix-abc', grund: 'falscher Ansatz' });
+  assert.match(q, /fix-abc/);
+  assert.match(q, /ablehnen\?/);
+  assert.match(q, /Kein Push/);
+  assert.match(q, /falscher Ansatz/);
 });
 
 test('Karte: Knopf-Anker im Text des Modells sind entschärft', () => {

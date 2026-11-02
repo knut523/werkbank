@@ -178,15 +178,34 @@ export async function meldeHauptchat(u: User, conv: string, art: string, text: s
  * Hinweis an den Hauptchat nach Knuts Freigabe (Plan 154, Council R3, Bedingung 4): ein Zustand, KEIN Auftrag — die Zeile sagt
  * das ausdrücklich. Gepusht wird nur von der Hauptsitzung nach der Push-Checkliste; der pre-push-Hook prüft die Freigabe.
  */
-/** Werkbank-eigene Meldung zu einem Strang an den Hauptchat (Plan 157, B: „alle Entscheidungen beantwortet“). Kein Agententext. */
+/** Werkbank-eigene Meldung zu einem Strang an den Hauptchat (Plan 157, B: „alle Entscheidungen beantwortet“). Kein Agententext.
+ *  R30 (Plan 376): Ist kein Hauptchat aktiv, wird die Meldung nicht mehr still verworfen, sondern als Rückfrage in die
+ *  Inbox gelegt (Muster capQuestion) — sie erscheint dort als „Braucht dich“-Eintrag und wartet auf Knut. */
 export async function meldeLeitstand(u: User, d: any, text: string, now = Date.now()) {
   const leit = await activeLeitstand(u);
-  if (!leit) return false;
+  if (!leit) { await meldeInbox(u, d, text, now); return false; }
   const key = `meldung:${d._id}:entscheidungen:${now}`;
   const at = new Date(now);
   await events().updateOne({ _id: `${u.id}:${key}` as any }, { $setOnInsert: {
     userId: u.id, leit: leit._id, kind: 'meldung', text, strand: { id: String(d._id), title: String(d.title ?? '') }, at, createdAt: at, status: 'offen', retries: 0, urgent: false } }, { upsert: true });
   return true;
+}
+
+/** Fallback für meldeLeitstand ohne aktiven Hauptchat: Rückfrage in „Heute“ (Inbox), höchstens eine offene je Quelle. */
+async function meldeInbox(u: User, d: any, text: string, now = Date.now()): Promise<void> {
+  try {
+    if (await questions().findOne({ userId: u.id, kind: 'leitstand-meldung', 'quelle.id': String(d?._id ?? '—'), status: 'offen' })) return;
+    let qid: string;
+    do { qid = 'q-' + randomUUID().slice(0, 6); } while (await questions().findOne({ _id: qid as any }));
+    await questions().insertOne({
+      _id: qid, userId: u.id, kind: 'leitstand-meldung', title: text.slice(0, 140),
+      context: 'Kein Hauptchat aktiv — diese Meldung wartet hier, bis du sie liest. Der nächste Hauptchat sieht sie in der Inbox.',
+      options: [{ label: 'Gelesen', consequence: 'Meldung gilt als zur Kenntnis genommen.' }],
+      recommendation: 'Paket/Strang ansehen und bei Bedarf im Hauptchat antworten.',
+      strand: d?.strand ?? (d?._id && d?.title) ? { id: String(d._id), title: String(d.title ?? '') } : null,
+      quelle: { id: String(d?._id ?? '—') }, link: null, plan: null, createdAt: new Date(now), status: 'offen', answer: null,
+    } as any);
+  } catch { /* Inbox-Fehler darf die Meldung nicht werfen — dann bleibt es beim stillen Verwerfen wie vorher. */ }
 }
 
 /** Offene Entscheidungen (D1…/E…) aus dem Bericht eines Strangs als Zeilen für die Hauptchat-Meldung — höchstens 6. */

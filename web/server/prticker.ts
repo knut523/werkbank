@@ -368,6 +368,8 @@ export const fixesCol = () => wb().collection('pr_fixes');
  *  `@fix` — der Fix läuft komplett (Strang, Tests, Pre-Push-Gate), aber es wird nie gepusht und nie an GitHub kommentiert.
  *  Reiner Umgebungsschalter, Vorgabe aus; das Ergebnis landet als Paket (s. prfix.ts). */
 export const fixTrocken = (env = process.env) => env.WERKBANK_FIX_DRYRUN === '1';
+/** R30 (Plan 376): Freigabe-Modus — der Fix endet in der Freigabe-Frage statt im Auto-Push; Marke beim Einreihen wie beim Trockenlauf. */
+export const fixFrage = (env = process.env) => env.WERKBANK_FIX_FREIGABE === '1' && env.WERKBANK_FIX_DRYRUN !== '1';
 
 export async function queueFixes(fresh: TickerEvent[], s: TickerSettings, now = new Date()): Promise<number> {
   let n = 0;
@@ -379,8 +381,9 @@ export async function queueFixes(fresh: TickerEvent[], s: TickerSettings, now = 
     try {
       // R29 A: Im Trockenlauf trägt der Eintrag die Marke von Anfang an — auch wenn der Schalter während des
       // Laufens wieder ausgeht, wird so ein Eintrag nie gepusht.
-      await fixesCol().insertOne({ _id: e._id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, quelle: e.url, headTag: e.head, by: e.actor, auftrag: e.fix.auftrag, art: e.fix.quelle, ort: e.fix.ort, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date, ...(fixTrocken() ? { trocken: true } : {}) });
-      await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: fixTrocken() ? 'Fix eingereiht (Trockenlauf)' : 'Fix eingereiht' } });
+      // R30: Dasselbe für den Freigabe-Modus — endet immer in der Frage, nie im Auto-Push. Trockenlauf hat Vorrang.
+      await fixesCol().insertOne({ _id: e._id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, quelle: e.url, headTag: e.head, by: e.actor, auftrag: e.fix.auftrag, art: e.fix.quelle, ort: e.fix.ort, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date, ...(fixTrocken() ? { trocken: true } : {}), ...(fixTrocken() ? {} : fixFrage() ? { frage: true } : {}) });
+      await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: fixTrocken() ? 'Fix eingereiht (Trockenlauf)' : fixFrage() ? 'Fix eingereiht (Freigabe-Modus)' : 'Fix eingereiht' } });
       n++;
     } catch (x: any) { if (x?.code !== 11000) throw x; }
   }
