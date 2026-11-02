@@ -146,7 +146,10 @@ test('R30 fix_freigeben: Validation — Kennung, SHA, Org; ohne Klick-Nachweis n
   assert.ok(!('fehler' in pruefeAktion(ok, ENV)), JSON.stringify(pruefeAktion(ok, ENV)));
   assert.ok('fehler' in pruefeAktion({ ...ok, fix: '' }, ENV), 'Kennung fehlt');
   assert.ok('fehler' in pruefeAktion({ ...ok, fix: 'a b' }, ENV), 'Kennung ungültig');
-  assert.ok('fehler' in pruefeAktion({ ...ok, fix: 'x'.repeat(81) }, ENV), 'Kennung zu lang');
+  assert.ok('fehler' in pruefeAktion({ ...ok, fix: 'x'.repeat(121) }, ENV), 'Kennung zu lang');
+  // echte Kennungen aus dem Ticker (Kommentar-Knoten bzw. Review:Inline-databaseId) gehen durch
+  for (const fix of ['fix:IC_kwDOMz4Hbs6Rk8nA', 'fix:PRR_kwDOMz4Hbs6bA1xY:1873465512']) assert.ok(!('fehler' in pruefeAktion({ ...ok, fix }, ENV)), fix);
+  assert.ok('fehler' in pruefeAktion({ ...ok, fix: 'fix:a/b' }, ENV), 'Schrägstrich bleibt ungültig');
   assert.ok('fehler' in pruefeAktion({ ...ok, neu: 'abc123' }, ENV), 'SHA zu kurz');
   assert.ok('fehler' in pruefeAktion({ ...ok, neu: 'z'.repeat(40) }, ENV), 'SHA nicht hex');
   assert.ok('fehler' in pruefeAktion({ ...ok, repo: 'evil/x' }, ENV), 'fremde Org');

@@ -149,6 +149,8 @@ test('E2E Freigabe: @fix → freigabe_frage (nichts gepusht, antwort.md ohne DRY
   assert.match(antwort, /Freigabe steht aus/); assert.doesNotMatch(antwort, /DRY RUN/);
   assert.ok(existsSync(join(process.env.WERKBANK_REVIEW_DIR!, f.paket, 'fix-diff.patch')), 'Diff im Paket');
   assert.match(calls.melde.at(-1)!, /freigeben\?/);
+  // Die Meldung trägt genau die Werte, mit denen der Hauptchat fix_freigeben aufruft (Kennung mit Doppelpunkt, voller SHA)
+  assert.ok(calls.melde.at(-1)!.includes(`fix=\`fix:fr1\` neu=\`${f.neu}\``), calls.melde.at(-1));
   // freigabeSetzen („@fix freigeben“ aus dem Hauptchat): billige Prüfung, SHA muss passen, idempotent
   assert.equal((await F.freigabeSetzen('fix:fr1', 'c'.repeat(40))).ok, false, 'falscher SHA abgelehnt');
   assert.equal((await F.freigabeSetzen('fix:gibtsnicht', f.neu)).ok, false, 'unbekannte Kennung');
@@ -159,6 +161,8 @@ test('E2E Freigabe: @fix → freigabe_frage (nichts gepusht, antwort.md ohne DRY
   assert.equal(f.status, 'fertig'); assert.equal(calls.push, 1); assert.equal(f.gepusht.nach, f.neu);
   assert.equal(gh.kopf(), f.neu, 'PR-Zweig hat den Fix');
   assert.ok(calls.kommentar.some((k) => /pushed/.test(k)), 'Antwort-Kommentar');
+  // nach Knuts Freigabe stimmt „not yet read by Knut“ nicht mehr
+  assert.ok(calls.kommentar.some((k) => /released by Knut in the workspace/.test(k) && !/not yet read/.test(k)), calls.kommentar.at(-1));
   const audits: any[] = await F.auditCol().find({ fix: 'fix:fr1' }).toArray();
   assert.ok(audits.some((a) => a.ergebnis === 'frage') && audits.some((a) => a.ergebnis === 'gepusht'));
 });
@@ -213,6 +217,7 @@ test('fixAblehnenSynchron: abgelehnt, Audit, Entwurf im Paket, kein Push; zweite
   assert.equal(f.status, 'abgelehnt'); assert.equal(f.ablehnGrund, 'passt nicht');
   const entwurf = readFileSync(join(process.env.WERKBANK_REVIEW_DIR!, f.paket, 'ablehnung.md'), 'utf8');
   assert.match(entwurf, /declined the fix/); assert.match(entwurf, /passt nicht/);
+  assert.match(entwurf, /declined by Knut in the workspace/); assert.doesNotMatch(entwurf, /not yet read/);
   const audit: any = await F.auditCol().findOne({ fix: 'fix:fr4', ergebnis: 'abgelehnt' });
   assert.ok(audit);
   assert.equal(calls.push, 0); assert.equal(gh.kopf(), f.head, 'nichts gepusht');
@@ -234,6 +239,7 @@ test('E2E Auto grün: @fix → direkt Push + Antwort-Kommentar OHNE Klick, Meldu
   assert.equal(calls.push, 1);
   assert.equal(gh.kopf(), f.neu, 'PR-Zweig hat den Fix');
   assert.ok(calls.kommentar.some((k) => /pushed/.test(k)), 'Antwort-Kommentar');
+  assert.ok(calls.kommentar.some((k) => /not yet read by Knut/.test(k)), 'Auto-Modus ohne Klick: Knut hat es nicht gesehen');
   assert.ok(calls.melde.some((m) => /Auto-Modus: gepusht/.test(m)), 'Meldung an den Hauptchat');
   const audits: any[] = await F.auditCol().find({ fix: 'fix:au1' }).toArray();
   assert.ok(audits.some((a) => a.ergebnis === 'gepusht'), 'Audit gepusht');

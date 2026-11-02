@@ -156,14 +156,31 @@ kein manueller Push von mir.
 
 ## E2E-Demo (DoD-Punkt 1)
 
-1. Isolierte Instanz per `scripts/isoliert.sh` — Achtung: `WERKBANK_NO_JOBS=1` unterbindet `backgroundJobs()` und
-   damit den fixTick. Für die Demo die Instanz **ohne** NO_JOBS starten, damit der fixTick im 60-s-Takt läuft
-   (eine Route wie `/api/leitstand/ticker/jetzt` gibt es für fix nicht).
-2. Spielrepo knut523/r30-demo o. ä. mit offenem PR; `WERKBANK_FIX_ORGS` der Instanz um die Demo-Org erweitern.
-3. Ablauf: `@fix`-Kommentar → fixTick → Strang → `freigabe_frage` (WERKBANK_FIX_FREIGABE=on) → Karte im Hauptchat
-   (Screenshot) → „@fix freigeben" → fixTick: Tests/Gate neu → pushPruefung → Push + Kommentar (Screenshot) →
-   Delta-Review eingereiht.
-4. Screenshots: Karte (Freigabe-Frage), gepushter Kommentar am PR.
+**Umgesetzt (02.11.):** `web/e2e/fix-freigabe-demo.mjs` — aus `web/`, nach `npx vite build`:
+`node e2e/fix-freigabe-demo.mjs <Ausgabeordner>` (Shell ohne `WERKBANK_*`-Variablen). Ergebnis: 18/18 Prüfungen.
+
+- Isoliert wie `kette-takt.ts`/`aktiv-test-372.mjs`: eigene Wegwerf-Mongo (:27946), Brücke im Mock-Modus, Web-App
+  **mit** Jobs (echter 60-s-Takt), eigenes HOME. Nichts geht ins Netz: Fake-GitHub (GraphQL-Suche, PR-Lage,
+  PR-Kontext, REST-Kommentare) über `WERKBANK_GITHUB_API`; das Repo `WirStrom1/olaf-demo` ist ein lokales Bare-Repo —
+  Lesen per `insteadOf` im HOME der Instanz, Push per neuem Schalter `WERKBANK_GIT_SCHREIB_ROOT` (nur Testinstanzen,
+  Vorgabe aus; `configSicher` prüft weiter die github.com-URL). Fake-LibreChat für Login und `messages`;
+  `MEILI_HOST` zeigt auf einen toten Port.
+- Ablauf: `@fix`-Kommentar am PR → Ticker reiht ein (Freigabe-Modus) → fixTick startet den Strang im Worktree →
+  Treiber spielt den Strang (Commit, `fix.json`, „fertig“) → `npm ci` + `npm test` und Gate grün → `freigabe_frage`,
+  nichts gepusht, nichts gepostet, Meldung an den Hauptchat → ohne Karte abgewiesen → Karte `fix_freigeben`, „ja“ →
+  Marke → Takt prüft NEU → fast-forward-Push auf den PR-Zweig, Antwort-Kommentar, Audit `frage,gepusht`, `develop`
+  unverändert.
+- Bilder: Ticker vorher/nachher (Desktop + Handy), Karte (Kartentext der Brücke, ohne LibreChat gerendert — ein
+  isoliertes LibreChat braucht `.env`-Werte, die dieser Strang nicht lesen darf), „GitHub“-Unterhaltung.
+
+**Befunde aus der Demo (behoben, mit Tests):**
+1. `fix_freigeben`/`fix_ablehnen` wiesen jede Live-Kennung ab: Die Fix-Kennung ist `fix:<Knoten>` (inline
+   `fix:<Review>:<databaseId>`), der Parser erlaubte keinen Doppelpunkt. Die Tests nutzten `fix-abc`.
+2. Die Hauptchat-Meldung nannte weder Kennung noch vollen SHA. Ohne diese Werte konnte der Hauptchat `fix_freigeben`
+   nicht aufrufen. Jetzt steht der fertige Aufruf in der Meldung.
+3. Die Antwort am PR trug nach Knuts Freigabe „not yet read by Knut“ (ebenso der Ablehnungsentwurf). Jetzt:
+   „released by Knut in the workspace“ / „declined by Knut in the workspace“; Auto-Modus ohne Klick unverändert.
+4. Ticker zeigte den Rohstatus `freigabe_frage` → „wartet auf Freigabe“.
 
 ## Schalter für die Live-Schaltung (für den Bericht)
 
@@ -172,6 +189,7 @@ kein manueller Push von mir.
 | `WERKBANK_FIX_FREIGABE` | `off` | `1`/`on`: `@fix` endet in `freigabe_frage` statt Trockenlauf/Push — Push erst nach „@fix freigeben". `auto` (R30a): grüner Lauf pusht und kommentiert ohne Klick; roter Lauf endet in der Freigabe-Frage statt in der Ablehnung |
 | `WERKBANK_LEITSTAND` | (bestehend) | `github_schreiben`-Tool (Lead) — nötig für die Freigabe-Karte |
 | `WERKBANK_HAUPTCHAT_GITHUB` | (bestehend) | github_schreiben-Route im Hauptchat |
+| `WERKBANK_GIT_SCHREIB_ROOT` | leer (aus) | **Nur Testinstanzen** (E2E-Demo): Push-Ziel `file://<root>/<repo>.git` statt github.com. Live nie setzen |
 
 Rangfolge: Trockenlauf (`WERKBANK_FIX_DRYRUN`) > Freigabe-Modus (`1`/`on`, bzw. `frage`-Marke am Eintrag) > Auto-Modus
 (`auto`, bzw. `auto`-Marke am Eintrag) > Vorgabemodus. Die Marken setzt `queueFixes` beim Einreihen; sie zählen

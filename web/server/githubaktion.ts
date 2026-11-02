@@ -55,7 +55,8 @@ export function pruefeAktion(a: Record<string, unknown>, env: Record<string, str
   // Marke gesetzt (prfix.ts freigabeSetzen) bzw. der Eintrag abgelehnt.
   if (a.art === 'fix_freigeben' || a.art === 'fix_ablehnen') {
     const fix = String(a.fix ?? '').trim();
-    if (!/^[A-Za-z0-9_-]{1,80}$/.test(fix)) return { fehler: 'fix: Kennung des Fix-Eintrags fehlt (aus der Freigabe-Frage).' };
+    // Live-Kennungen tragen Doppelpunkte: `fix:<GraphQL-Knoten>` bzw. inline `fix:<Review>:<databaseId>` (prticker.ts deriveEvents).
+    if (!/^[A-Za-z0-9_:-]{1,120}$/.test(fix)) return { fehler: 'fix: Kennung des Fix-Eintrags fehlt (aus der Freigabe-Frage).' };
     if (a.art === 'fix_freigeben') {
       const neu = String(a.neu ?? '').trim();
       if (!/^[0-9a-f]{40}$/.test(neu)) return { fehler: 'neu: SHA des geprüften Stands fehlt (aus der Freigabe-Frage).' };

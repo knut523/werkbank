@@ -177,8 +177,10 @@ const STAND: Record<FixPunkt['stand'], string> = { fixed: '✅ fixed', 'not-fixe
  * gepushten Bereich liegt (`commits` = volle SHAs start..neu); sonst „commit not in this push“.
  */
 export function antwortText(a: { by: string; quelle: string | null; start: string; neu: string | null; zweig: string; gepusht: boolean; gruende?: string[]; fix: FixJson | null;
-  commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: { exit: number; hart: number; warnungen?: number } | null; deltaReview: boolean }): string {
-  const z: string[] = [`**Automated fix (OLAF Workspace) — not yet read by Knut**`, ''];
+  commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: { exit: number; hart: number; warnungen?: number } | null; deltaReview: boolean;
+  /** R30: Knut hat im Workspace entschieden (Freigabe-Modus) — dann stimmt „not yet read by Knut“ nicht mehr. */
+  knut?: 'released' | 'declined' }): string {
+  const z: string[] = [`**Automated fix (OLAF Workspace) — ${a.knut ? `${a.knut} by Knut in the workspace` : 'not yet read by Knut'}**`, ''];
   const wo = a.quelle ? ` ([request](${a.quelle}))` : '';
   z.push(a.gepusht && a.neu
     ? `Fix for @${a.by}'s request${wo} on \`${a.start.slice(0, 7)}\` — pushed \`${a.start.slice(0, 7)}..${a.neu.slice(0, 7)}\` to \`${a.zweig}\`.`
@@ -332,7 +334,7 @@ export async function fixAblehnenSynchron(id: string, grund: string | null, von:
   const f = await fixesCol().findOne({ _id: id as any });
   if (!f) return { ok: false, grund: 'Fix nicht gefunden.' };
   if (f.status !== 'freigabe_frage' && f.status !== 'wartet' && f.status !== 'läuft' && f.status !== 'startet') return { ok: false, grund: `Fix ist nicht mehr offen (Status: ${f.status}).` };
-  const text = antwortText({ by: f.by, quelle: f.quelle ?? null, start: f.head, neu: f.neu ?? null, zweig: f.zweig, gepusht: false, gruende: ['Knut declined the fix in the workspace'], fix: null, commits: [], tests: null, gate: null, deltaReview: false })
+  const text = antwortText({ by: f.by, quelle: f.quelle ?? null, start: f.head, neu: f.neu ?? null, zweig: f.zweig, gepusht: false, gruende: ['Knut declined the fix in the workspace'], fix: null, commits: [], tests: null, gate: null, deltaReview: false, knut: 'declined' })
     + (grund ? `\n\nGrund (Knut): ${grund}` : '');
   let paketFehler: string | null = null;
   try { if (f.paket) writeFileSync(join(reviewDir(), f.paket, 'ablehnung.md'), `${text}\n`); } catch (e: any) { paketFehler = scrub(e?.message ?? e); }
@@ -621,9 +623,11 @@ async function frageStellen(f: any, p: { ok: boolean; gruende: string[] }, x: { 
   await audit(f, { ergebnis: 'frage', von: f.head, nach: x.neu, zweig: f.zweig, gate: x.gate, tests: x.tests, gruende: p.gruende }, now);
   deps.log?.('pr-fix freigabe-frage', { pr: `${f.repo}#${f.number}`, urteil: p.ok ? 'push möglich' : 'abgelehnt', modus: fixAuto(f) && !f.freigabe ? 'auto' : 'frage', paket: f.paket });
   // R30a: Im Auto-Modus heißt die Frage „gefallen, deswegen gefragt“ — die Gründe stehen drin, Knut kann trotzdem freigeben.
+  // Kennung und voller SHA stehen in der Meldung: genau damit ruft der Hauptchat github_schreiben (fix_freigeben/fix_ablehnen).
+  const aufruf = `github_schreiben art=fix_freigeben repo=${f.repo} fix=\`${f._id}\` neu=\`${x.neu}\` (oder art=fix_ablehnen)`;
   await melde(f, `${fixAuto(f) && !f.freigabe ? 'Auto-Modus, aber ' : ''}${p.ok
-    ? `Fix geprüft (${x.commits.length} Commit(s) \`${x.neu.slice(0, 7)}\`, Tests grün, Gate ohne harte Befunde) — freigeben? Antwort „@fix freigeben“ im Hauptchat, Paket ${f.paket}`
-    : `Fix geprüft, aber aktuell nicht freigabefähig: ${p.gruende.join('; ')}${fixAuto(f) && !f.freigabe ? ' — automatisch in die Freigabe-Frage statt abgelehnt' : ''} — freigeben? Antwort „@fix freigeben“ im Hauptchat, Paket ${f.paket}`}`, deps);
+    ? `Fix geprüft (${x.commits.length} Commit(s) \`${x.neu.slice(0, 7)}\`, Tests grün, Gate ohne harte Befunde) — freigeben? Antwort „@fix freigeben“ im Hauptchat, Paket ${f.paket} · ${aufruf}`
+    : `Fix geprüft, aber aktuell nicht freigabefähig: ${p.gruende.join('; ')}${fixAuto(f) && !f.freigabe ? ' — automatisch in die Freigabe-Frage statt abgelehnt' : ''} — freigeben? Antwort „@fix freigeben“ im Hauptchat, Paket ${f.paket} · ${aufruf}`}`, deps);
 }
 
 /**
@@ -706,7 +710,7 @@ async function pusheAbschluss(f: any, deps: FixDeps, now: Date, neu: string, x: 
     } catch (x: any) { if (x?.code === 11000) deltaReview = true; else deps.log?.('pr-fix delta', { error: scrub(x?.message ?? x) }); }
   }
   let url: string | null = null;
-  const text = zuGithub(antwortText({ by: f.by, quelle: f.quelle ?? null, start: f.head, neu, zweig: f.zweig, gepusht: true, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview }));
+  const text = zuGithub(antwortText({ by: f.by, quelle: f.quelle ?? null, start: f.head, neu, zweig: f.zweig, gepusht: true, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview, knut: f.freigabe ? 'released' : undefined }));
   if (text && deps.kommentar) url = (await deps.kommentar(f, text).catch((e: any) => { deps.log?.('pr-fix antwort', { error: scrub(e?.message ?? e) }); return null; }))?.url ?? null;
   await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'fertig', doneAt: now, neu, gepusht: { at: now, von: f.head, nach: neu }, antwort: url, deltaReview, note: text ? null : 'Antwort nicht gepostet (sah nach einem Geheimnis aus)' } });
   await setzeStatus(f, fixZeile({ art: 'pushed', zweig: f.zweig, von: f.head, nach: neu, url }), deps, now);
