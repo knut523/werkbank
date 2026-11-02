@@ -93,6 +93,7 @@ import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVo
 import { zaehle, statusNeu, autoSchliessenAn, navNeu, aufraeumenAn, einLogin, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
 import { themenAusStand } from './cos.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
+import { braucheBraucht, schliesseBraucht, archiviere as archiviereStrang, zurueckholen as brauchtZurueck, hauptchatAktionen, kartEingabe, paketLiveFakten, BRAUCHT_AN as brauchtAn } from './brauchtab.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
 import { autoAnnahmeAn, annahmeMs, stufeVon } from './stufe.ts';
 import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
@@ -3453,11 +3454,20 @@ async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
   return internalUser(req, { userId: d ? String(d._id) : '' });
 }
 
-on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich)$/, async (req, res, m) => {
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich|aktion)$/, async (req, res, m) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
   const id = String(b.id ?? '');
   switch (m[1]) {
+    case 'aktion': {
+      // „Braucht dich“ (R30b): Strang schließen/archivieren gab es noch nicht — (c)-Punkte und der Hauptchat können
+      // damit einen erledigten Strang aus der Knut-Sicht nehmen, ohne zu löschen (Compare-and-Set, Grund im Feld).
+      if (String(b.aktion ?? '') !== 'archivieren') throw new HttpError(400, 'Nur aktion=archivieren.');
+      if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+      const ok = await archiviereStrang(u.id, id, String(b.grund ?? 'archiviert (Hauptchat)'), { env: process.env });
+      log('strang archiviert', { user: u.id, id, ok });
+      return send(res, 200, { ok, id });
+    }
     case 'start': {
       const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null, budget: b.budget || null });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null, tiefe: r.tiefe });
@@ -3609,6 +3619,57 @@ on('POST', /^\/internal\/inbox\/antwort$/, async (req, res) => {
   const id = String(b.kennung ?? '');
   if (!KENNUNG_RE.test(id)) throw new HttpError(400, 'Unbekannte Kennung.');
   send(res, 200, await inboxAntworten(u, id, { antwort: b.antwort, text: b.text, weg: 'hauptchat' }));
+});
+
+// --- „Braucht dich“ (R30b, Knut 02.11.): klassifizierte offene Punkte für den Hauptchat, gebündelt je Strang ---
+// (a) echte Entscheidung für Knut · (b) Aktion des Hauptchats (z. B. Push nach Gate, Merge im Worktree) ·
+// (c) erledigt/veraltet — wird automatisch geschlossen (Log-Zeile + Nachricht an den Strang, nie still).
+// Fakten aus den bestehenden Quellen: Entscheidungs-Log und berichtskopf-antworten (beantwortet), releasestand.ts
+// (Paket im Live-Stand über Merge-Commit nach Nummer, nie nur Git-Abstammung), github_prs/prCheck (PR zu),
+// orchestrator_runs (neuerer Strang mit gleichem lauf). Schalter WERKBANK_BRAUCHT_DICH (Vorgabe aus).
+async function brauchtSicht(u: User, o: { schliessen?: boolean } = {}): Promise<any> {
+  const an = brauchtAn();
+  // Karten mit offener „Braucht Knut“-Zeile — derselbe Weg wie die Inbox (nicht running, keine Entscheidungen/Rückfragen).
+  const qs = await listQuestions(u, { open: true }).catch(() => [] as any[]);
+  const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(60).toArray()) as any[]).filter(offenFuerKnut);
+  const fgs: any[] = docs.length ? await freigaben().find({ strand: { $in: docs.map((d) => String(d._id)) }, revokedAt: null }).sort({ at: -1 }).toArray() : [];
+  const karten = docs.map((d) => { try { return uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), qs.filter((q: any) => q.strand && String(q.strand.id) === String(d._id)), paketBasis(), null); } catch { return null; } })
+    .filter(Boolean).filter((k: any) => k.braucht && !k.running) as any[];
+  if (!karten.length) return { an, punkte: [], geschlossen: [], aktionen: [] };
+
+  // Fakten (alles lesend aus den bestehenden Quellen; jede Prüfung braucht einen Beleg, sonst bleibt die Frage).
+  const logBeantwortet = new Set(((await wb().collection('entscheidungs_log').find({ userId: u.id }, { projection: { kennung: 1, ids: 1, _id: 0 } }).limit(2000).toArray()) as any[]).flatMap((z) => [String(z.kennung), ...(z.ids ?? []).map(String)]));
+  const antwortIds = new Set(karten.flatMap((k: any) => (k.entscheidungen ?? []).map((e: any) => String(e.id))));
+  const beantwortet = [...logBeantwortet, ...antwortIds];
+  // Paket im Live-Stand: Merge-Commit nach Paketnummer im Live-Zweig (releasestand.ts, 60-s-Cache; Inhalt, nie Abstammung).
+  const { liveIndex } = await import('./releasestand.ts');
+  const idx = await liveIndex(cfg.liveRoot, cfg.sourceRepo).catch(() => null);
+  const paketLiveFn = paketLiveFakten(idx);
+  const paketNummern = new Set(karten.map((k: any) => (k.paket ? Number(k.paket.split('-')[0]) || null : null)).filter((n: any) => n != null) as number[]);
+  const paketeLive: number[] = [];
+  for (const n of paketNummern) if (await paketLiveFn.live(n)) paketeLive.push(n);
+  // PR zu: nur wenn die Karte selbst einen gemergt/geschlossen PR nennt (github_prs-Kopie übernimmt die Karte).
+  const prsZu = karten.flatMap((k: any) => (k.prs ?? []).filter((z: any) => z.stand === 'gemergt' || z.stand === 'geschlossen').map((z: any) => prKennung(z.url)));
+  // Neuerer Strang mit gleichem lauf: gleicher lauf mehrfach in den letzten 30 Tagen (ohne Beleg bleibt die Frage).
+  const laufZahl = new Map<string, number>((await orchRuns().aggregate([{ $match: { userId: u.id, kind: 'strand', startedAt: { $gt: new Date(Date.now() - 30 * 86400_000) } } }, { $group: { _id: '$lauf', n: { $sum: 1 } } }]).toArray().catch(() => [] as any[])).map((r: any) => [String(r._id), r.n]));
+  const laeufeNeuer: string[] = [];
+  for (const d of docs) { const l = String(d.lauf ?? ''); if (l && (laufZahl.get(l) ?? 0) > 1 && String(d._id) !== String(docs.find((x: any) => x.lauf === l)?._id)) laeufeNeuer.push(String(d._id)); }
+
+  const sicht = braucheBraucht(karten.map((k: any) => kartEingabe({
+    strand: k.id, titel: k.titel, zeile: k.braucht,
+    paket: k.paket ? Number(k.paket.split('-')[0]) || null : null,
+    pr: (k.prs ?? []).filter((z: any) => z.stand === 'gemergt' || z.stand === 'geschlossen').map((z: any) => prKennung(z.url))[0] ?? null,
+    lauf: k.thema ?? null,
+  })), { beantwortet, paketeLive, prsZu, laeufeNeuer, aktionen: hauptchatAktionen() }, { an });
+  // (c) sofort schließen (der Takt ruft mit schliessen, GET ohne).
+  if (o.schliessen && sicht.geschlossen.length) await schliesseBraucht(u.id, sicht.geschlossen, { env: process.env });
+  return { an, ...sicht };
+}
+const prKennung = (url: string) => { const m = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/.exec(String(url ?? '')); return m ? `${m[1]}#${m[2]}` : String(url ?? ''); };
+on('POST', /^\/internal\/braucht$/, async (req, res) => {
+  const u = await internalUser(req, await body(req));
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  send(res, 200, await brauchtSicht(u));
 });
 
 // Claude-Konten der Person für die Brücke (Klartext nur über diesen Kanal; chat = Schlüssel aus der Anfrage).
@@ -4127,6 +4188,11 @@ startStatusTick(orchDeps);
 // Plan 213 S1b (K1, P3): fertige, gesehene Unter-Chats nach 24 h wegräumen — nur mit WERKBANK_AUTO_SCHLIESSEN=1 (mit der Inbox).
 if (process.env.ORCH_STATUS !== 'off') setInterval(() => {
   autoSchliessen().then((w) => { if (w.length) log('automatisch weggeräumt', { n: w.length, ids: w.map((x) => x.id) }); }).catch((e) => log('wegräumen fehler', { error: String(e?.message ?? e).slice(0, 160) }));
+  // „Braucht dich“ (R30b): veraltete Karten (schon beantwortet, Paket live, PR zu) automatisch schließen — nur mit
+  // WERKBANK_BRAUCHT_DICH=an, je Person mit offenen Punkten, nie still (Log + Nachricht an den Strang).
+  if (brauchtAn()) wb().collection('orchestrator_runs').distinct('userId', AUF_UEBERSICHT() as any).then(async (ids: any[]) => {
+    for (const id of ids) { const u = await userById(String(id)).catch(() => null); if (u && allowed(u.email) && u.role === 'ADMIN') await brauchtSicht(u, { schliessen: true }).catch((e) => log('braucht fehler', { user: String(id), error: String(e?.message ?? e).slice(0, 160) })); }
+  }).catch((e) => log('braucht fehler', { error: String(e?.message ?? e).slice(0, 160) }));
   // Knut 17.10.: normale Entscheidungen nach 24 h annehmen (WERKBANK_AUTO_ANNAHME=0 schaltet ab).
   annahmeTakt().catch((e) => log('annahme fehler', { error: String(e?.message ?? e).slice(0, 160) }));
 }, 10 * 60_000).unref();

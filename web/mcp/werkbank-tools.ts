@@ -240,6 +240,23 @@ serve('werkbank', '0.1.0', [
     },
   },
   {
+    name: 'braucht_dich',
+    description: 'Was die Unter-Chats von dir brauchen, klassifiziert (R30b): (a) echte Entscheidung für dich — mit Kontext, Optionen, Empfehlung; (b) Aktion, die DU als Hauptchat ausführen kannst (Push nach Gate, Merge im Worktree, Skill installieren, Strang neu starten, CLI laufen lassen) — führt sie aus, statt zu fragen; (c) erledigt/veraltet — automatisch geschlossen. (b)-Aktionen nur mit Freigabe (github_schreiben) bzw. orch-Aktionen. Der Schalter WERKBANK_BRAUCHT_DICH steuert das; ohne ihn bleibt alles eine Frage.',
+    inputSchema: { type: 'object', properties: {} },
+    run: async () => {
+      const j = await call('/internal/braucht', {});
+      if (!j.an) return 'Schalter aus — „Braucht Knut“ bleibt wie bisher Inbox-Frage.';
+      const p: any[] = j.punkte ?? [], a: any[] = j.aktionen ?? [], g: any[] = j.geschlossen ?? [];
+      const zeilen: string[] = [];
+      for (const x of p.filter((q) => q.art === 'entscheidung')) zeilen.push(`- [${x.kennung}] (Entscheidung) ${x.wasTun}${x.titel ? ` (${x.titel})` : ''}`);
+      for (const x of a) zeilen.push(`- [${x.kennung}] (Hauptchat-Aufgabe: ${x.aktion}) ${x.wasTun} — Strang ${x.strand}${x.titel ? ` (${x.titel})` : ''}`);
+      const mitKnoepfen = p.filter((x) => x.art === 'entscheidung').map((x) => ({ id: String(x.kennung), frage: String(x.wasTun), quelle: `Unter-Chat ${x.titel ?? x.strand}` }));
+      const zu = g.length ? `\nAutomatisch geschlossen: ${g.map((x) => `${x.titel ?? x.strand} (${x.grund})`).join('; ')}` : '';
+      return p.length + a.length === 0 && !g.length ? 'Nichts offen — keine Unter-Chat-Karte braucht dich.' :
+        `${p.length + a.length} offen:\n${zeilen.join('\n')}${zu}\n\nKNOEPFE ${JSON.stringify(mitKnoepfen)}`;
+    },
+  },
+  {
     name: 'inbox_antworten',
     description: 'Einen Inbox-Eintrag an seiner Quelle beantworten: kennung aus `inbox` (z. B. q-…, d-…, b-…), antwort ja | nein | anders (dann text = was stattdessen gelten soll). Für „Anders“ aus dem Chat; Ja/Nein gehen auch über die Knöpfe. Nie raten: nur mit der Kennung, die die Person gemeint hat.',
     inputSchema: { type: 'object', properties: { kennung: { type: 'string' }, antwort: { type: 'string', enum: ['ja', 'nein', 'anders'] }, text: { type: 'string' } }, required: ['kennung', 'antwort'] },
