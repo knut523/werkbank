@@ -746,8 +746,19 @@ export function pushEnv(token: string, repo: string, env = process.env): NodeJS.
   return { PATH: env.PATH || '/usr/bin:/bin', HOME: env.HOME || '/tmp', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false', SSH_ASKPASS: '/bin/false', GIT_SSH_COMMAND: 'false', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', WERKBANK_GIT_SCHREIBTOKEN: token, WERKBANK_GIT_SCHREIBPFAD: `${repo}.git` };
 }
 
+/**
+ * Ziel-URL des Push: github.com — oder, NUR für isolierte Testinstanzen (E2E-Demo), ein lokales Bare-Repo unter
+ * `WERKBANK_GIT_SCHREIB_ROOT` (z. B. file:///tmp/demo/knut523__r30-demo.git). Der Schalter ist aus, wenn nichts
+ * gesetzt ist; die lokale Clone-Config und die pushPruefung bleiben unverändert (remote.origin.url bleibt die
+ * github.com-Adresse, configSicher prüft genau die).
+ */
+export const schreibUrl = (repo: string, env = process.env): string => {
+  const root = String(env.WERKBANK_GIT_SCHREIB_ROOT || '').replace(/\/+$/, '');
+  return root && /^[\w.-]+\/[\w.-]+$/.test(repo) ? `file://${root}/${repo}.git` : `https://github.com/${repo}.git`;
+};
+
 /** Push ohne Force: `<sha>:refs/heads/<zweig>` an https://github.com/<repo>.git (Repo und Zweig noch einmal geprüft). */
-export async function pushVia(repo: string, klon: string, sha: string, zweig: string, token: () => Promise<string | null>): Promise<void> {
+export async function pushVia(repo: string, klon: string, sha: string, zweig: string, token: () => Promise<string | null>, env = process.env): Promise<void> {
   if (!fixRepoErlaubt(repo) || !SHA_RE.test(sha) || !ZWEIG_RE.test(zweig) || GESCHUETZT.test(zweig)) throw new Error('Push-Angaben ungültig.');
   const t = await token();
   if (!t) throw new Error('Kein Schreibtoken für dieses Repo (Credential-Helper antwortet nicht).');
@@ -757,7 +768,7 @@ export async function pushVia(repo: string, klon: string, sha: string, zweig: st
   if (!configSicher(cfg, repo)) throw new Error('lokale Git-Config des Klons verändert — kein Push');
   try {
     await run('git', [...GIT_SAFE, '-c', 'http.proxy=', '-c', 'https.proxy=', '-c', 'http.sslVerify=true', '-c', 'credential.helper=', '-c', `credential.helper=${SCHREIB_HELPER}`, '-c', 'credential.useHttpPath=true', '-c', 'credential.interactive=never', '-c', 'push.followTags=false',
-      'push', '--no-verify', '--porcelain', `https://github.com/${repo}.git`, `${sha}:refs/heads/${zweig}`], { cwd: klon, env: pushEnv(t, repo), timeout: 120_000, encoding: 'utf8' });
+      'push', '--no-verify', '--porcelain', schreibUrl(repo, env), `${sha}:refs/heads/${zweig}`], { cwd: klon, env: pushEnv(t, repo), timeout: 120_000, encoding: 'utf8' });
   } catch (e: any) { throw new Error(scrub(`${e?.stderr ?? ''} ${e?.stdout ?? ''} ${e?.message ?? e}`)); }
 }
 
