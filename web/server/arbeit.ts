@@ -17,14 +17,14 @@ const sicher = (u: unknown) => (/^https?:\/\//.test(String(u ?? '')) ? String(u)
 export const zustandVon = (d: any): Zustand => (d.reviewedAt && (d.reviewedBy === 'auto' || d.knutReviewedAt) ? 'erledigt' : (d.zustand as Zustand) ?? ALT[d.lastStatus] ?? 'laeuft');
 
 /** Chat-Status (Release 29, WERKBANK_CHAT_STATUS) eines Unter-Chats; `offeneFragen` aus der Inbox (offeneJeStrang). */
-export function chatStatusVon(d: any, offeneFragen = 0): { status: ChatStatus; text: string; ton: string; grund: string } {
+export function chatStatusVon(d: any, offeneFragen = 0, beimHauptchat = 0, veraltet: string | null = null): { status: ChatStatus; text: string; ton: string; grund: string } {
   const zustand = zustandVon(d);
-  const r = chatStatus({ zustand, offeneFragen, geprueft: !!d.knutReviewedAt });
+  const r = chatStatus({ zustand, offeneFragen, geprueft: !!d.knutReviewedAt, beimHauptchat, veraltet });
   return { status: r.status, text: CHAT_STATUS_TEXT[r.status], ton: CHAT_STATUS_TON[r.status], grund: r.grund };
 }
 
 /** Eine Zeile der Tabelle (rein). `offeneFragen` gesetzt = Chat-Status mitliefern (Schalter an). */
-export function zeile(d: any, o: { mediane?: Record<Tiefe, number | null> | null; now?: number; offeneFragen?: number } = {}) {
+export function zeile(d: any, o: { mediane?: Record<Tiefe, number | null> | null; now?: number; offeneFragen?: number; beimHauptchat?: number; veraltet?: string | null } = {}) {
   const zustand: Zustand = zustandVon(d);
   const fertig = etaFertig({ marke: d.marke, zustand });
   const eta = etaFuer(d, { fertig, mediane: o.mediane ?? null, now: o.now });
@@ -38,7 +38,7 @@ export function zeile(d: any, o: { mediane?: Record<Tiefe, number | null> | null
     autoWeg: d.reviewedBy === 'auto', abgehakt: !!d.knutReviewedAt,
     // Live-Modus (Plan 274, D1): Knopf „Jetzt gründlich“, solange der Durchlauf nicht nach der letzten Runde angestoßen ist.
     // gruendlichAt setzt nur eine neue Handnachricht zurück (nicht das automatische Nachsenden) — Pass C.
-    cs: o.offeneFragen === undefined ? null : { ...chatStatusVon(d, o.offeneFragen), offen: o.offeneFragen },
+    cs: o.offeneFragen === undefined ? null : { ...chatStatusVon(d, o.offeneFragen, o.beimHauptchat ?? 0, o.veraltet ?? null), offen: o.offeneFragen },
     gruendlich: d.tiefe === 'live' && zustand !== 'erledigt' ? { angestossen: !!d.gruendlichAt } : null,
   };
 }
