@@ -59,7 +59,7 @@ import { starte as claudeAnmeldungStarten, codeEinreichen as claudeCodeEinreiche
 import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungsseite.ts';
 import { abschlussTick, wocheTick } from './cosabschluss.ts';
 import { rueckstau as cosRueckstau, vorschlaege as cosVorschlaege } from './cosmeeting.ts';
-import { meetingTeams as cosMeetingTeams } from './cossammle.ts';
+import { meetingTeams as cosMeetingTeams, sammleEingabe as cosEingabe } from './cossammle.ts';
 const cosRueckstauZahl = () => { try { return cosRueckstau(cfg.vaultDir, cosMeetingTeams(), new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date())).length; } catch { return 0; } };
 import type { Quellen as CosQuellen } from './cossammle.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
@@ -91,7 +91,9 @@ import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, go
 import { istTiefe, tiefeOf, type Tiefe } from './tiefe.ts';
 import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
 import { zaehle, statusNeu, autoSchliessenAn, navNeu, aufraeumenAn, einLogin, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
-import { themenAusStand } from './cos.ts';
+import { themenAusStand, entscheide as cosEntscheide } from './cos.ts';
+import { vorschlag as tagesvorschlag, ausLage as vorschlagAusLage, TAGESVORSCHLAG_AN } from './tagesvorschlag.ts';
+import { ICS_AN } from './cosics.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 import { braucheBraucht, schliesseBraucht, archiviere as archiviereStrang, zurueckholen as brauchtZurueck, hauptchatAktionen, kartEingabe, paketLiveFakten, BRAUCHT_AN as brauchtAn } from './brauchtab.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
@@ -3118,7 +3120,17 @@ on('GET', /^\/api\/timebox$/, async (req, res, _m, url) => {
   const mine = sortMyTickets([...im.values()].filter((i) => i.type !== 'Workstream' && i.status !== 'Done' && i.statusCategory !== 'done' && isMine(i, who)), sl, dayPrio, cur ? (t) => inSprint(t, cur.date) : undefined);
   const tbKnown = knownGoals(goalsAll(im));
   const ticket = (k?: string | null) => { const i = k ? im.get(k) : undefined; return i ? { key: i.key, summary: i.summary, status: i.status, goals: ownGoals(i), inSprint: !!cur && inSprint(i, cur.date), noGoal: needsGoal(i, im, tbKnown), priority: i.priority } : null; };
+  // R30b Teil B: leerer Tag → Vorschlag (nur Tagesansicht, Schalter WERKBANK_TAGESVORSCHLAG); sonst nur der Hinweis.
+  let vorschlag: any = null;
+  if (TAGESVORSCHLAG_AN() && days === 1) {
+    const leer = !blocks.some((b) => b.date === from && b.state !== 'verschoben');
+    vorschlag = leer || url.searchParams.get('vorschlag') === '1'
+      ? { leer, ...(await vorschlagFuer(u, from, mine.slice(0, 80).map((i) => ({ key: i.key, summary: i.summary, duedate: i.duedate ?? null, inSprint: !!cur && inSprint(i, cur.date) })))) }
+      : { leer: false, hinweis: true };
+    if (vorschlag.bloecke) vorschlag.bloecke = vorschlag.bloecke.map((b: any) => ({ ...b, ticket: ticket(b.key) }));
+  }
   send(res, 200, {
+    vorschlag,
     dates, prioDay: pday, sprint: cur ? { id: cur.id, label: sl } : null,
     blocks: blocks.map((b) => ({ ...tbOut(b), ticket: ticket(b.key) })),
     summary: Object.fromEntries(dates.map((d) => [d, daySummary(blocks.filter((b) => b.date === d), im)])),
@@ -3165,6 +3177,42 @@ on('POST', /^\/api\/timebox\/prio$/, async (req, res) => {
   if (prio !== null && ![1, 2, 3].includes(prio)) throw new HttpError(400, 'Tagespriorität 1 (Muss), 2 (Soll), 3 (Kann) oder leer.');
   await wb().collection('timebox_prio').updateOne({ userId: u.id, date, key }, { $set: { prio, at: new Date() } }, { upsert: true });
   send(res, 200, { ok: true });
+});
+
+/** Tagesvorschlag (R30b Teil B): Eingabe aus Morgenlage (nur Admin mit Chief of Staff), Tickets und Übertrag von gestern. */
+async function vorschlagFuer(u: User, datum: string, tickets: { key: string; summary: string; duedate: string | null; inSprint: boolean }[]) {
+  const d = new Date(datum + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - 1);
+  const uebertrag = ((await tbCol().find({ userId: u.id, date: d.toISOString().slice(0, 10), state: { $ne: 'erledigt' }, carriedTo: { $exists: false } }).toArray()) as any[])
+    .map((b) => ({ title: b.title, key: b.key ?? null, dur: b.dur, prio: b.prio ?? null }));
+  let lage: any = { mine: { prs: [], tickets: [] }, register: { zusagen: [], personen: [] }, ich: firstName(u), termine: [] }, ents: any[] = [];
+  if (u.role === 'ADMIN' && process.env.COS_MORGENLAGE !== 'off') {
+    try { lage = await cosEingabe(u, cosQuellen(), new Date()); ents = cosEntscheide(lage); }
+    catch (e: any) { log('tagesvorschlag morgenlage', { error: String(e?.message ?? e).slice(0, 160) }); }
+  }
+  return tagesvorschlag(vorschlagAusLage(lage, ents, { datum, tickets, uebertrag, termine: ICS_AN() }));
+}
+
+// Vorschlag übernehmen (R30b Teil B): legt die gezeigten (nicht verworfenen) Blöcke an, mit quelle 'vorschlag'.
+// Einmal je Tag (zweiter Klick → 409); Verwerfen geschieht vorher in der Ansicht (bis dahin ist nichts gespeichert).
+on('POST', /^\/api\/timebox\/vorschlag$/, async (req, res) => {
+  const u = await needUser(req);
+  if (!TAGESVORSCHLAG_AN()) throw new HttpError(404, 'Tagesvorschlag ist aus.');
+  const b = await body(req);
+  const date = String(b.date ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, 'Datum im Format JJJJ-MM-TT.');
+  const roh: any[] = Array.isArray(b.bloecke) ? b.bloecke.slice(0, 30) : [];
+  if (!roh.length) throw new HttpError(400, 'Keine Blöcke.');
+  const im = await issueMap();
+  const docs: any[] = [];
+  for (const x of roh) {
+    const r = cleanBlock({ date, start: x.start, dur: x.dur, title: x.title, key: x.key && im.has(x.key) ? x.key : undefined, prio: x.prio ?? null, quelle: 'vorschlag' });
+    if ('error' in r) throw new HttpError(400, r.error);
+    docs.push({ ...r.ok, userId: u.id, state: 'geplant', createdAt: new Date() });
+  }
+  if (await tbCol().countDocuments({ userId: u.id, date, quelle: 'vorschlag' })) throw new HttpError(409, 'Der Vorschlag für diesen Tag ist schon übernommen.');
+  await tbCol().insertMany(docs);
+  log('tagesvorschlag übernommen', { user: u.id, date, n: docs.length });
+  send(res, 200, { ok: true, angelegt: docs.length });
 });
 
 on('POST', /^\/api\/timebox\/carry$/, async (req, res) => {
