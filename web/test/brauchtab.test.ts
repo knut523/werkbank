@@ -94,3 +94,24 @@ test('Pass C: Schließen ist idempotent — der 10-min-Takt schreibt Log-Zeile u
   const d: any = await R.findOne({ _id: 'dd100020' as any });
   assert.equal((d.meldungen ?? []).length, 1);
 });
+
+// R30b-Nachbesserung (Knut 02.11.): (b)-Karten müssen WIRKLICH beim Hauptchat ankommen — Meldung in dessen Warteschlange.
+test('(b) an den Hauptchat: ohne Hauptchat „kein-hauptchat“; mit Hauptchat genau eine Meldung je Kennung; zugestellt wird gelesen', async () => {
+  const R = wb().collection('orchestrator_runs');
+  const E = wb().collection('leitstand_events');
+  const env = { WERKBANK_BRAUCHT_DICH: 'an' };
+  const p = { strand: 'cc193000', titel: 'tariff-app #193', art: 'aktion' as const, wasTun: 'Nichts für dich', frage: 'Skill im Repo installieren', aktion: 'skill-installieren', antworten: [], kennung: 'b-cc193000-skill' };
+  assert.deepEqual(await T.meldeAktionen('u2', [p], { env: {} }), {}, 'Schalter aus: nichts');
+  assert.deepEqual(await T.meldeAktionen('u2', [p], { env, now }), { 'b-cc193000-skill': 'kein-hauptchat' });
+  assert.equal(await E.countDocuments({ userId: 'u2' }), 0, 'ohne Hauptchat keine Meldung');
+  await R.insertOne({ _id: 'leit0001', userId: 'u2', kind: 'leitstand', endedAt: null, startedAt: new Date(now - 60_000) } as any);
+  assert.deepEqual(await T.meldeAktionen('u2', [p], { env, now }), { 'b-cc193000-skill': 'gemeldet' });
+  await T.meldeAktionen('u2', [p], { env, now: now + 600_000 });   // nächster Takt
+  const ev: any[] = await E.find({ userId: 'u2' }).toArray();
+  assert.equal(ev.length, 1, 'genau eine Meldung, auch nach dem nächsten Takt');
+  assert.equal(ev[0].kind, 'meldung'); assert.equal(ev[0].status, 'offen'); assert.equal(ev[0].leit, 'leit0001');
+  assert.match(ev[0].text, /keine Frage an Knut/);
+  assert.equal(ev[0].excerpt, 'Skill im Repo installieren', 'die Zeile des Unter-Chats nur als Auszug (Daten)');
+  await E.updateOne({ _id: ev[0]._id }, { $set: { status: 'zugestellt' } });
+  assert.deepEqual(await T.zustellStand('u2', ['b-cc193000-skill', 'b-anders']), { 'b-cc193000-skill': 'zugestellt', 'b-anders': 'kein-hauptchat' });
+});

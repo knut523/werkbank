@@ -14,8 +14,8 @@ test('Schalter: Vorgabe aus', () => {
   assert.equal(chatStatusAn({ WERKBANK_CHAT_STATUS: '' }), false);
 });
 
-test('feste Menge: fünf Status, jeder mit Text und Rang', () => {
-  const s: ChatStatus[] = ['laeuft', 'braucht', 'review', 'fertig', 'haengt'];
+test('feste Menge: sechs Status (mit „beim Hauptchat“, Nachbesserung 02.11.), jeder mit Text und Rang', () => {
+  const s: ChatStatus[] = ['laeuft', 'braucht', 'review', 'fertig', 'haengt', 'hauptchat'];
   assert.deepEqual(Object.keys(CHAT_STATUS_TEXT).sort(), [...s].sort());
   assert.deepEqual(Object.keys(CHAT_STATUS_RANG).sort(), [...s].sort());
   assert.equal(CHAT_STATUS_TEXT.braucht, 'braucht Knut');

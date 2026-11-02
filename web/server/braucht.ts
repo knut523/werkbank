@@ -3,6 +3,9 @@
 //  (a) echte Entscheidung für Knut → Entscheidungsseite (Kontext · Optionen · Empfehlung · Knöpfe),
 //  (b) Aktion, die der Hauptchat selbst kann (Push nach Gate, Merge im Worktree, Skill installieren,
 //      CLI laufen lassen, Strang neu starten) → Aufgabe an den Hauptchat, keine Frage an Knut,
+//      ABER (R30b-Nachbesserung, echter Fall 574aa7bb, Knut 02.11.): Zugänge/Zugangsdaten/Tunnel, Prod- oder DEV-DB,
+//      Geld, Recht, externe Personen und offene D-Entscheidungen sind immer (a) — auch wenn die Zeile zusätzlich
+//      „Push“ sagt. Unsicher → (a).
 //  (c) erledigt/veraltet (schon beantwortet, Commit/Paket im Live-Stand, PR geschlossen/gemergt,
 //      neuerer Strang mit gleichem Ziel) → automatisch schließen mit Begründung.
 // Rein: alle Prüfungen kommen als Fakten herein (beantwortet, paketLive, prZu, laufNeuere), damit das ohne
@@ -30,6 +33,12 @@ export interface BrauchtKontext {
   paket?: number | null;
   pr?: string | null;
   lauf?: string | null;
+  /** Alle PRs, die Karte oder Zeile nennen (repo#nr) — Nachtrag 02.11. (tariff-app#193). */
+  prs?: string[];
+  /** Ist der PR offen UND konfliktfrei (GitHub mergeable)? Dann ist ein Merge-/Konflikt-Anlass weg. */
+  prKonfliktfrei?: (pr: string) => boolean;
+  /** Strang ist angehalten/abgebrochen/erledigt: ein Satz, warum — dann gilt keine Bitte mehr (null = läuft/wartet normal). */
+  strangZu?: string | null;
 }
 
 export interface BrauchtErgebnis {
@@ -40,9 +49,53 @@ export interface BrauchtErgebnis {
   aktion?: string;
   /** (a)/(b): ein Satz „Was du tun musst“ — nie Rohbericht. */
   wasTun: string;
+  /** (a) aus einer harten Regel: warum das nur Knut kann (zugang, datenbank, geld, recht, extern, entscheidung). */
+  nurKnut?: NurKnut;
+}
+
+export type NurKnut = 'zugang' | 'datenbank' | 'geld' | 'recht' | 'extern' | 'entscheidung';
+
+/** Was nur Knut kann — der Hauptchat hat dafür keine Werkzeuge und keine Zugangsdaten (Knut 02.11.: „Unsicher → (a)“).
+ *  Reihenfolge = Vorrang beim Text: die DB-Bitte („Zugang zu DEV … SQL“) ist eine Datenbank-Bitte, nicht nur ein Zugang. */
+/** Ganze Wörter auch mit Umlauten (\b kennt nur ASCII); `~` am Wortende = beliebige Buchstaben danach. */
+const wort = (alts: string[]) => new RegExp(`(?<![\\p{L}\\d])(?:${alts.map((x) => x.replace(/~$/, '\\p{L}*')).join('|')})(?![\\p{L}\\d])`, 'iu');
+const NUR_KNUT: { re: RegExp; art: NurKnut; warum: string }[] = [
+  { re: wort(['sql', 'select', 'datenbank~', 'db', 'query', 'abfrage~', 'ergebniszeile~', 'mongo~', 'postgres~', 'psql', '(prod|dev|uat)[- ]?(db|datenbank)']), art: 'datenbank', warum: 'Abfrage auf einer Datenbank (DEV/UAT/Prod) — dafür hat der Hauptchat keinen Zugang' },
+  { re: wort(['zugang', 'zugänge', 'zugangsdaten', 'credentials?', 'passw(o|ö)rt~', 'token', 'api[-_ ]?key~', '\\w*_key', 'schlüssel~', 'secrets?', 'tunnel~', 'vpn', 'ssh', 'login', 'lesende[nr]? rolle', 'berechtigung~', 'freischalt~']), art: 'zugang', warum: 'Zugang oder Zugangsdaten — die gibt nur du' },
+  { re: wort(['geld', 'zahlung~', 'bezahl~', 'überweis~', 'rechnung~', 'kosten~', 'budget~', 'euro', 'kauf~', 'bestell~', 'lizenz~', '€']), art: 'geld', warum: 'es geht um Geld' },
+  { re: wort(['vertr(a|ä)g~', 'avv', 'dsgvo', 'rechtlich~', 'jurist~', 'anwalt~', 'unterschr~', 'zeichn~', 'kündig~', 'datenschutz~', 'haftung~']), art: 'recht', warum: 'es geht um Recht oder Verträge' },
+  { re: wort(['extern~', 'kund(e|in|en)', 'partner~', 'anruf~', 'anrufen', 'e-?mail an', 'mail an', 'nachfragen bei', 'bei \\p{Lu}\\p{L}+ (nachfragen|anfragen|fragen)', 'ausführen lassen']), art: 'extern', warum: 'dafür braucht es eine andere Person' },
+];
+
+/** „Was du tun musst“ je Art — ein Satz, den Knut ohne den Strang versteht. */
+const WAS_TUN: Record<Exclude<NurKnut, 'entscheidung'>, string> = {
+  datenbank: 'DEV-Abfrage ausführen lassen (etwa Christoph) oder lesenden Zugang geben — oder die Zahlen selbst liefern.',
+  zugang: 'Zugang geben (oder jemanden bitten) — der Hauptchat hat keine Zugangsdaten.',
+  geld: 'Entscheiden, ob das Geld ausgegeben wird — der Hauptchat darf das nicht.',
+  recht: 'Rechtlich entscheiden oder freigeben — der Hauptchat darf das nicht.',
+  extern: 'Die genannte Person ansprechen — der Hauptchat kann niemanden außerhalb erreichen.',
+};
+
+/** Erster SQL-Block (```sql … ```) aus einem Text — für „zum Kopieren“ auf der Karte. Höchstens 4000 Zeichen. */
+export function sqlAus(text: string | null | undefined): string | null {
+  const m = /```sql[^\n]*\n([\s\S]*?)```/i.exec(String(text ?? ''));
+  const s = m?.[1]?.trim() ?? '';
+  return s ? s.slice(0, 4000) : null;
 }
 
 const ein = (s: string) => s.replace(/\s+/g, ' ').trim();
+/** Zeile hängt an einem Merge/Konflikt (dann zählt „PR konfliktfrei“ als erledigt). */
+const MERGE_ANLASS = /\b(merge\w*|konflikt\w*|conflict\w*|rebase\w*)\b/i;
+/** PR-Kennungen „repo#123“ (ohne Org) aus einem Text oder einer GitHub-Adresse — dieselbe Form wie github_prs (github.ts). */
+export function prsAus(...texte: (string | null | undefined)[]): string[] {
+  const out = new Set<string>();
+  for (const t of texte) {
+    const s = String(t ?? '');
+    for (const m of s.matchAll(/github\.com\/[\w.-]+\/([\w.-]+)\/pull\/(\d+)/g)) out.add(`${m[1]}#${m[2]}`);
+    for (const m of s.matchAll(/(?:[\w.-]+\/)?((?=[\w.-]*[a-z]{3})[\w.-]+)\s?#(\d{1,6})\b/gi)) out.add(`${m[1]}#${m[2]}`);
+  }
+  return [...out];
+}
 const D_RE = /\bD\d+\b/g;
 
 /** Aktionen des Hauptchats, die nie Knut selbst tun muss: Muster → Aktionsname. */
@@ -71,9 +124,21 @@ export function klassifiziere(zeile: string, k: BrauchtKontext): BrauchtErgebnis
   const ds = [...z.matchAll(D_RE)].map((m) => m[0]);
   if (k.beantwortet(k.kennung) || (ds.length > 0 && ds.every((d) => k.beantwortet(d)))) gruende.push('schon beantwortet (steht im Entscheidungs-Log bzw. als antwort im Kopf)');
   if (k.paket != null && k.paketLive(k.paket)) gruende.push(`Paket ${k.paket} ist im Live-Stand (Merge-Commit nach Paketnummer)`);
-  if (k.pr != null) { const zu = k.prZu(k.pr); if (zu === true) gruende.push(`PR ${k.pr} ist geschlossen oder gemergt`); }
+  // Nachtrag 02.11. (tariff-app#193 „Merge muss erlaubt werden“, heute konfliktfrei): Anlass weg → (c). Jeder genannte PR zählt.
+  const prs = [...new Set([k.pr, ...(k.prs ?? [])].filter((p): p is string => !!p))];
+  for (const pr of prs) {
+    if (k.prZu(pr) === true) gruende.push(`PR ${pr} ist geschlossen oder gemergt`);
+    else if (MERGE_ANLASS.test(z) && k.prKonfliktfrei?.(pr)) gruende.push(`PR ${pr} ist heute konfliktfrei (GitHub: mergeable) — der Merge-Anlass ist weg`);
+  }
+  if (k.strangZu) gruende.push(k.strangZu);
   if (k.lauf != null && k.laufNeuere(k.lauf)) gruende.push('ein neuerer Strang mit demselben Ziel hat das übernommen');
   if (gruende.length) return { art: 'veraltet', grund: gruende.join('; '), wasTun: '' };
+
+  // ---- (a) harte Regel: was nur Knut kann, schlägt jede erkannte Aktion (echter Fall 574aa7bb: „Zugang zu DEV … SQL“
+  //      war als push-nach-gate eingeordnet). Offene D-Entscheidungen in der Zeile ebenso. ----
+  const hart = NUR_KNUT.find((r) => r.re.test(z));
+  if (hart) return { art: 'entscheidung', nurKnut: hart.art, wasTun: `${WAS_TUN[hart.art as Exclude<NurKnut, 'entscheidung'>]} Warum du: ${hart.warum}. Bitte des Unter-Chats: „${t}“` };
+  if (ds.some((d) => !k.beantwortet(d)) || /\bentscheid/i.test(z)) return { art: 'entscheidung', nurKnut: 'entscheidung', wasTun: t };
 
   // ---- (b) Hauptchat-Aktion ----
   // Eine Frage mit Alternative („pushen oder warten?“) ist eine Entscheidung, keine Aufgabe (Pass C).

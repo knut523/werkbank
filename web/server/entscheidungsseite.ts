@@ -30,6 +30,12 @@ export interface Frage {
   blockiert: number;
   /** R30b S5: Klasse einer „Braucht Knut“-Zeile (nur mit WERKBANK_BRAUCHT_DICH), sonst null bzw. fehlt. */
   klasse?: 'aktion' | 'entscheidung' | null;
+  /** (a) aus harter Regel (Nachbesserung 02.11.): warum nur Knut (zugang, datenbank, geld, recht, extern, entscheidung). */
+  nurKnut?: string | null;
+  /** (a) Datenbank-Bitte: die SQL zum Kopieren (aus Stand, PR-Text oder Bericht). */
+  sql?: string | null;
+  /** (b): Zustellung beim Hauptchat — gemeldet · zugestellt · kein-hauptchat. */
+  hauptchat?: string | null;
   /** Kennung an der Quelle für Arten mit eigenem Weg: Vault-Sync-Frage (vaultId), Push (Strang). */
   ref: string | null;
 }
@@ -74,7 +80,10 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
     const kontext = ein(e.daten.kontext);
     // R30b S5: klassifizierte „Braucht Knut“-Zeilen (nur mit WERKBANK_BRAUCHT_DICH gesetzt) sagen, was das für Knut heißt.
     const klasse = e.art === 'braucht' && (e.daten.klasse === 'aktion' || e.daten.klasse === 'entscheidung') ? e.daten.klasse as 'aktion' | 'entscheidung' : null;
-    const worum = klasse === 'aktion' ? `${e.quelle.text} meldet: „${ein(e.daten.zeile)}“. Das kann der Hauptchat selbst ausführen (${ein(e.daten.aktion)}) — nichts für dich; er fragt nur, wenn eine Freigabe nötig ist.`
+    const beim = e.daten.hauptchat === 'zugestellt' ? 'Der Hauptchat hat die Aufgabe bekommen.' : e.daten.hauptchat === 'gemeldet' ? 'Die Aufgabe liegt in der Warteschlange des Hauptchats.' : 'Gerade ist kein Hauptchat aktiv — der nächste bekommt die Aufgabe.';
+    const worum = klasse === 'aktion' ? `${e.quelle.text} meldet: „${ein(e.daten.zeile)}“. Das kann der Hauptchat selbst ausführen (${ein(e.daten.aktion)}) — nichts für dich; er fragt nur, wenn eine Freigabe nötig ist. ${beim}`
+      // Harte Regel (Nachbesserung 02.11.): „Warum du“ und die Bitte des Unter-Chats zuerst — nicht hinter „mehr“.
+      : klasse === 'entscheidung' && e.daten.nurKnut && e.daten.nurKnut !== 'entscheidung' && tw.rest ? tw.rest
       : klasse === 'entscheidung' ? `${e.quelle.text} braucht eine Entscheidung von dir.${tw.rest ? ` ${tw.rest}` : ''}`
       : e.art === 'braucht' ? `${e.quelle.text} wartet auf dich (Abschnitt „Braucht Knut“ im Stand).${tw.rest ? ` ${tw.rest}` : ''}`
       : e.art === 'push' ? `Der Stand von ${e.quelle.text} ist geprüft und kann auf GitHub (Zweig ${ein(e.daten.zweig)}, Stand ${String(e.daten.commit ?? '').slice(0, 7)}). Ja öffnet die Freigabe mit dem gesehenen Stand.`
@@ -86,7 +95,10 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
     const rec = optionen.find((o) => o === ein(e.empfehlung)) ?? optionen.find((o) => ein(e.empfehlung).startsWith(o));
     const alternativen = e.art === 'rueckfrage' && e.antworten.includes('anders') ? optionen.filter((o) => o !== rec && !/^(ja|nein)[.!]?$/i.test(o)).slice(0, 3) : [];
     fragen.push({ ...basis, id: e.id, teil: null, kennung: null, titel: tw.titel, worum, optionen, alternativen,
-      empfehlung: e.empfehlung ? ein(e.empfehlung) : null, stufe: e.stufe === 'wichtig' ? 'wichtig' : 'normal', stufeGrund: e.stufeGrund ?? null,
+      // (b) nie „wichtig“ — es ist keine Frage an Knut (Nachbesserung 02.11.).
+      empfehlung: e.empfehlung ? ein(e.empfehlung) : null, stufe: e.stufe === 'wichtig' && klasse !== 'aktion' ? 'wichtig' : 'normal', stufeGrund: klasse === 'aktion' ? 'Aufgabe des Hauptchats' : e.stufeGrund ?? null,
+      ...(klasse === 'aktion' ? { autoAb: null, hauptchat: String(e.daten.hauptchat ?? 'kein-hauptchat') } : {}),
+      ...(klasse === 'entscheidung' && e.daten.nurKnut ? { nurKnut: String(e.daten.nurKnut), sql: e.daten.sql ? String(e.daten.sql) : null } : {}),
       // (b): nur „Anders“ — falls es doch etwas für Knut ist, geht die Antwort an den Unter-Chat.
       klasse, antworten: klasse === 'aktion' ? ['anders'] : (e.antworten as Antwort[]).filter((a) => a !== 'anders' || e.art !== 'vault') });
   }
