@@ -69,6 +69,9 @@ test('Hauptchat-Aufgaben bleiben (b), wenn nichts davon zutrifft', () => {
   assert.equal(klassifiziere('nach dem Deploy die CLI laufen lassen', ctx()).aktion, 'cli-lesen');
   // Wortgrenzen mit Umlauten: „Kontrolle“ ist keine „Rolle“, „Abo“ kein „DB“-Treffer, „Zeichen“ in „Kennzeichen“ zählt nicht.
   assert.equal(klassifiziere('Push nach Kontrolle des Kennzeichens', ctx()).art, 'aktion');
+  // Pass C: „entschieden“ (schon entschieden) ist keine offene Entscheidung; foreign_key ist kein Zugang.
+  assert.equal(klassifiziere('Knut hat entschieden: Skill im Repo installieren', ctx()).art, 'aktion');
+  assert.equal(klassifiziere('foreign_key ergänzen, dann Push', ctx()).nurKnut, undefined);
 });
 
 // --- die drei Beispiele des früheren Nachtrags (UAT = veraltet, Ticker-Fix = veraltet, #193-Merge = (b)) ---
@@ -147,15 +150,21 @@ test('Kopf: „n Fragen an dich“ zählt nur (a); ein Strang nur mit (b) steht 
 const KARTE_193 = 'Der Merge muss in diesem Strang erlaubt werden, oder der Hauptchat führt ihn selbst aus';
 
 test('#193 heute konfliktfrei (GitHub mergeable) → (c) veraltet, nicht (b) und schon gar nicht „braucht Knut“', () => {
-  const r = klassifiziere(KARTE_193, ctx({ prs: ['olaf-tariff-app#193'], prKonfliktfrei: (p) => p === 'olaf-tariff-app#193' }));
+  const ANLASS = 'tariff-app #193: Merge develop — Merge develop in olaf-tariff-app#193 (neun Konfliktdateien).';
+  const r = klassifiziere(KARTE_193, ctx({ prs: ['olaf-tariff-app#193'], prKonfliktfrei: (p) => p === 'olaf-tariff-app#193', anlassText: ANLASS }));
   assert.equal(r.art, 'veraltet');
   assert.match(r.grund!, /olaf-tariff-app#193 ist heute konfliktfrei/);
   // Noch Konflikte → bleibt (b) wie im früheren Nachtrag.
-  assert.equal(klassifiziere(KARTE_193, ctx({ prs: ['olaf-tariff-app#193'], prKonfliktfrei: () => false })).art, 'aktion');
+  assert.equal(klassifiziere(KARTE_193, ctx({ prs: ['olaf-tariff-app#193'], prKonfliktfrei: () => false, anlassText: ANLASS })).art, 'aktion');
+  // Pass C (Gegenprüfung): konfliktfrei ≠ gemergt — eine Bitte „PR mergen“ ohne Konflikt-Anlass bleibt offen.
+  assert.notEqual(klassifiziere('PR olaf-tariff-app#193 nach develop mergen', ctx({ prs: ['olaf-tariff-app#193'], prKonfliktfrei: () => true })).art, 'veraltet');
+  // … und eine harte Regel oder offene D-Frage in derselben Zeile schlägt „konfliktfrei“.
+  assert.equal(klassifiziere('Konflikt ist weg; jetzt Zugangsdaten für DEV schicken', ctx({ prs: ['olaf-tariff-app#193'], prKonfliktfrei: () => true, anlassText: ANLASS })).art, 'entscheidung');
+  assert.equal(klassifiziere('Konflikt gelöst, D3 entscheiden', ctx({ prs: ['olaf-tariff-app#193'], prKonfliktfrei: () => true, anlassText: ANLASS })).art, 'entscheidung');
   // Konfliktfrei zählt nur für Merge-/Konflikt-Bitten: eine Frage zum Inhalt bleibt offen.
   assert.equal(klassifiziere('Text der Preisseite freigeben?', ctx({ prs: ['olaf-tariff-app#193'], prKonfliktfrei: () => true })).art, 'entscheidung');
   // Über die Bündelung mit den Fakten des Servers.
-  const k = kartEingabe({ strand: 'cc193000', titel: 'tariff-app #193', zeile: KARTE_193, prs: ['olaf-tariff-app#193'] });
+  const k = kartEingabe({ strand: 'cc193000', titel: 'tariff-app #193', zeile: KARTE_193, prs: ['olaf-tariff-app#193'], anlassText: ANLASS });
   const b = braucheBraucht([k], fakten({ prsKonfliktfrei: ['olaf-tariff-app#193'] }), { an: true });
   assert.deepEqual(b.geschlossen.map((g) => g.strand), ['cc193000']);
   assert.equal(b.aktionen.length, 0);
@@ -171,9 +180,11 @@ test('Chat-Status: blockierter Unter-Chat, dessen Bitte veraltet ist, zeigt nie 
 });
 
 test('angehaltener/erledigter Strang: seine Bitte gilt nicht mehr → (c) mit Grund', () => {
-  const r = klassifiziere(ECHT, ctx({ strangZu: 'der Strang wurde angehalten (Deckel)' }));
+  const r = klassifiziere('Skill im Repo installieren', ctx({ strangZu: 'der Unter-Chat wurde angehalten (Deckel)' }));
   assert.equal(r.art, 'veraltet');
   assert.match(r.grund!, /angehalten/);
+  // Pass C: eine harte Regel bleibt Knuts Frage, auch wenn der Unter-Chat angehalten ist (nie still schließen).
+  assert.equal(klassifiziere(ECHT, ctx({ strangZu: 'angehalten' })).art, 'entscheidung');
 });
 
 test('prsAus: GitHub-Adresse, repo#nr, Org/Repo#nr und Kurzname mit Leerzeichen', () => {

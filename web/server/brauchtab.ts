@@ -17,7 +17,7 @@ const runs = () => wb().collection('orchestrator_runs');
 
 /** Eine Karte, wie die Übersicht sie liefert — nur was die Klassifikation braucht. */
 export interface BrauchtKarte { strand: string; titel: string; zeile: string; paket?: number | null; pr?: string | null; lauf?: string | null; /** erster ```sql-Block aus Stand/PR-Text/Bericht (zum Kopieren) */ sql?: string | null;
-  /** alle genannten PRs (repo#nr) und — falls angehalten/abgebrochen — warum (Nachtrag 02.11.) */ prs?: string[]; strangZu?: string | null }
+  /** alle genannten PRs (repo#nr) und — falls angehalten/abgebrochen — warum (Nachtrag 02.11.) */ prs?: string[]; strangZu?: string | null; /** Titel + Auftragsanfang (Konflikt-Anlass?) */ anlassText?: string | null }
 export const kartEingabe = (o: BrauchtKarte): BrauchtKarte => ({ ...o });
 
 /** Fakten, wie der Server sie sammelt (leer = nichts belegt). */
@@ -39,7 +39,7 @@ export interface BrauchtFakten {
 /** (a) Frage an Knut (mit Knöpfen) oder (b) Aufgabe des Hauptchats (ohne Knöpfe — nichts für Knut zu entscheiden). */
 export interface BrauchtPunkt { strand: string; titel: string; art: 'entscheidung' | 'aktion'; wasTun: string; frage: string; aktion?: string; antworten: string[]; kennung: string; nurKnut?: NurKnut; sql?: string | null }
 /** (b): wie weit die Aufgabe beim Hauptchat ist — gemeldet (in seiner Warteschlange), zugestellt (er hat sie bekommen), kein-hauptchat. */
-export type Zustellung = 'gemeldet' | 'zugestellt' | 'kein-hauptchat';
+export type Zustellung = 'gemeldet' | 'zugestellt' | 'kein-hauptchat' | 'fehlgeschlagen';
 /** (c): von der Knut-Sicht verschwunden, mit Begründung, die Knut wiedererkennt. */
 export interface BrauchtGeschlossen { strand: string; titel: string; kennung: string; frage: string; grund: string }
 export interface BrauchtErgebnis { punkte: BrauchtPunkt[]; geschlossen: BrauchtGeschlossen[]; aktionen: BrauchtPunkt[]; /** je (b)-Kennung */ zustellung?: Record<string, Zustellung> }
@@ -65,7 +65,7 @@ export function braucheBraucht(karten: BrauchtKarte[], fakten: BrauchtFakten, o:
       laufNeuere: (l) => fakten.laeufeNeuer.includes(l),
       hauptchatAktionen: fakten.aktionen,
       paket: k.paket ?? null, pr: k.pr ?? null, lauf: k.lauf ?? null,
-      prs: k.prs ?? [], prKonfliktfrei: (pr) => (fakten.prsKonfliktfrei ?? []).includes(pr), strangZu: k.strangZu ?? null,
+      prs: k.prs ?? [], prKonfliktfrei: (pr) => (fakten.prsKonfliktfrei ?? []).includes(pr), strangZu: k.strangZu ?? null, anlassText: k.anlassText ?? null,
     };
     const r = klassifiziere(k.zeile, ctx);
     if (r.art === 'veraltet') out.geschlossen.push({ strand: k.strand, titel: k.titel, kennung: ken, frage: k.zeile, grund: r.grund ?? '' });
@@ -171,8 +171,10 @@ export async function zustellStand(userId: string, kennungen: string[]): Promise
   if (!kennungen.length) return out;
   const leit = await aktiverHauptchat(userId);
   if (!leit) return out;
-  const ev: any[] = await events().find({ userId, leit: leit._id, brauchtKennung: { $in: kennungen }, status: { $ne: 'verworfen' } }, { projection: { brauchtKennung: 1, status: 1 } }).toArray();
-  for (const k of kennungen) out[k] = ev.some((e) => e.brauchtKennung === k && e.status === 'zugestellt') ? 'zugestellt' : ev.some((e) => e.brauchtKennung === k) ? 'gemeldet' : 'kein-hauptchat';
+  const ev: any[] = await events().find({ userId, leit: leit._id, brauchtKennung: { $in: kennungen } }, { projection: { brauchtKennung: 1, status: 1 } }).toArray();
+  // verworfen = der Hauptchat hat sie nach allen Versuchen nicht angenommen (leitstand.ts retryMax) — sichtbar, nicht „kein Hauptchat“ (Pass C).
+  const st = (k: string) => ev.find((e) => e.brauchtKennung === k)?.status;
+  for (const k of kennungen) { const s = st(k); out[k] = s === 'zugestellt' ? 'zugestellt' : s === 'verworfen' ? 'fehlgeschlagen' : s ? 'gemeldet' : 'kein-hauptchat'; }
   return out;
 }
 

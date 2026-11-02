@@ -22,7 +22,7 @@ const sicher = (u: string | null | undefined) => (u && (/^https?:\/\//.test(u) |
 
 /** Nachbesserung 02.11.: warum eine „Braucht dich“-Zeile nur Knut betrifft, und wo eine (b)-Aufgabe beim Hauptchat steht. */
 const NUR_KNUT: Record<string, string> = { datenbank: 'Abfrage auf einer Datenbank', zugang: 'Zugang oder Zugangsdaten', geld: 'es geht um Geld', recht: 'Recht oder Verträge', extern: 'braucht eine andere Person', entscheidung: 'offene Entscheidung' };
-const ZUSTELLUNG: Record<string, string> = { zugestellt: 'hat die Aufgabe bekommen', gemeldet: 'liegt in seiner Warteschlange', 'kein-hauptchat': 'kein Hauptchat aktiv — der nächste bekommt sie' };
+const ZUSTELLUNG: Record<string, string> = { zugestellt: 'hat die Aufgabe bekommen', gemeldet: 'liegt in seiner Warteschlange', 'kein-hauptchat': 'kein Hauptchat aktiv — der nächste bekommt sie', fehlgeschlagen: 'Meldung fehlgeschlagen — frag ihn direkt' };
 
 function SqlKopieren({ sql }: { sql: string }) {
   const toast = useToast();
@@ -66,7 +66,7 @@ export function Karte({ f, onDone, kurz = false }: { f: Frage; onDone: (id: stri
         ? <><b>Nur du:</b> {NUR_KNUT[f.nurKnut]}. Antwort über „Anders“ mit Notiz (Ergebnis oder wer es übernimmt) — sie geht an den Unter-Chat.</>
         : 'Was du tun musst: die Frage oben beantworten.'}</div>}
       {f.sql && <SqlKopieren sql={f.sql} />}
-      {f.klasse === 'aktion' && <div className="tiny" data-testid="hauptchat-aufgabe"><span className="chip ok">nichts für dich</span> Erledigt der Hauptchat ({ZUSTELLUNG[f.hauptchat ?? ''] ?? ZUSTELLUNG['kein-hauptchat']}). „Anders“ nur, wenn es doch etwas für dich ist.</div>}
+      {f.klasse === 'aktion' && <div className="tiny" data-testid="hauptchat-aufgabe"><span className="chip ok">nichts für dich</span> Erledigt der Hauptchat ({ZUSTELLUNG[f.hauptchat ?? ''] ?? `Stand unklar: ${f.hauptchat ?? 'unbekannt'}`}). „Anders“ nur, wenn es doch etwas für dich ist.</div>}
       <div><div className="e-lbl">Worum es geht</div>{kurz && f.worumKurz ? <>{f.worumKurz}{f.worum !== f.worumKurz && <details className="tiny"><summary>mehr</summary>{f.worum}</details>}</> : f.worum}</div>
       {f.optionen.length > 0 && <div><div className="e-lbl">Optionen</div><ul>{f.optionen.map((o) => <li key={o}>{o}</li>)}</ul></div>}
       {f.empfehlung && <div className="e-rec"><div className="e-lbl">Empfehlung</div>{f.empfehlung}

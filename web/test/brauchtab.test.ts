@@ -114,4 +114,7 @@ test('(b) an den Hauptchat: ohne Hauptchat „kein-hauptchat“; mit Hauptchat g
   assert.equal(ev[0].excerpt, 'Skill im Repo installieren', 'die Zeile des Unter-Chats nur als Auszug (Daten)');
   await E.updateOne({ _id: ev[0]._id }, { $set: { status: 'zugestellt' } });
   assert.deepEqual(await T.zustellStand('u2', ['b-cc193000-skill', 'b-anders']), { 'b-cc193000-skill': 'zugestellt', 'b-anders': 'kein-hauptchat' });
+  // Pass C: nach allen Versuchen verworfen → „fehlgeschlagen“, nicht „kein Hauptchat aktiv“.
+  await E.updateOne({ _id: ev[0]._id }, { $set: { status: 'verworfen' } });
+  assert.deepEqual(await T.zustellStand('u2', ['b-cc193000-skill']), { 'b-cc193000-skill': 'fehlgeschlagen' });
 });

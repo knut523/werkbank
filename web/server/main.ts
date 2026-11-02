@@ -3778,6 +3778,7 @@ async function brauchtSicht(u: User, o: { schliessen?: boolean; karten?: any[] }
     sql: sqlFuer(docs.find((d) => String(d._id) === k.id)),
     prs: prsJe.get(k.id) ?? [],
     strangZu: zuGrund(docs.find((d) => String(d._id) === k.id)),
+    anlassText: (() => { const d = docs.find((x) => String(x._id) === k.id); return `${d?.title ?? ''} ${String(d?.prompt ?? '').slice(0, 2000)}`; })(),
   })), { beantwortet, paketeLive, prsZu, prsKonfliktfrei, laeufeNeuer, aktionen: hauptchatAktionen() }, { an });
   // (c) sofort schließen (der Takt ruft mit schliessen, GET ohne).
   if (o.schliessen && sicht.geschlossen.length) await schliesseBraucht(u.id, sicht.geschlossen, { env: process.env });

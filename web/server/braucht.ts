@@ -39,6 +39,8 @@ export interface BrauchtKontext {
   prKonfliktfrei?: (pr: string) => boolean;
   /** Strang ist angehalten/abgebrochen/erledigt: ein Satz, warum — dann gilt keine Bitte mehr (null = läuft/wartet normal). */
   strangZu?: string | null;
+  /** Titel und Auftragsanfang des Unter-Chats — nur für die Frage „war der Anlass ein Konflikt?“. */
+  anlassText?: string | null;
 }
 
 export interface BrauchtErgebnis {
@@ -58,10 +60,10 @@ export type NurKnut = 'zugang' | 'datenbank' | 'geld' | 'recht' | 'extern' | 'en
 /** Was nur Knut kann — der Hauptchat hat dafür keine Werkzeuge und keine Zugangsdaten (Knut 02.11.: „Unsicher → (a)“).
  *  Reihenfolge = Vorrang beim Text: die DB-Bitte („Zugang zu DEV … SQL“) ist eine Datenbank-Bitte, nicht nur ein Zugang. */
 /** Ganze Wörter auch mit Umlauten (\b kennt nur ASCII); `~` am Wortende = beliebige Buchstaben danach. */
-const wort = (alts: string[]) => new RegExp(`(?<![\\p{L}\\d])(?:${alts.map((x) => x.replace(/~$/, '\\p{L}*')).join('|')})(?![\\p{L}\\d])`, 'iu');
+const wort = (alts: string[]) => new RegExp(`(?<![\\p{L}\\d_])(?:${alts.map((x) => x.replace(/~$/, '\\p{L}*')).join('|')})(?![\\p{L}\\d_])`, 'iu');
 const NUR_KNUT: { re: RegExp; art: NurKnut; warum: string }[] = [
   { re: wort(['sql', 'select', 'datenbank~', 'db', 'query', 'abfrage~', 'ergebniszeile~', 'mongo~', 'postgres~', 'psql', '(prod|dev|uat)[- ]?(db|datenbank)']), art: 'datenbank', warum: 'Abfrage auf einer Datenbank (DEV/UAT/Prod) — dafür hat der Hauptchat keinen Zugang' },
-  { re: wort(['zugang', 'zugänge', 'zugangsdaten', 'credentials?', 'passw(o|ö)rt~', 'token', 'api[-_ ]?key~', '\\w*_key', 'schlüssel~', 'secrets?', 'tunnel~', 'vpn', 'ssh', 'login', 'lesende[nr]? rolle', 'berechtigung~', 'freischalt~']), art: 'zugang', warum: 'Zugang oder Zugangsdaten — die gibt nur du' },
+  { re: wort(['zugang', 'zugänge', 'zugangsdaten', 'credentials?', 'passw(o|ö)rt~', 'token', 'api[-_ ]?key~', '(?!foreign|primary)[a-z0-9]+_(api_)?key', 'schlüssel~', 'secrets?', 'tunnel~', 'vpn', 'ssh', 'login', 'lesende[nr]? rolle', 'berechtigung~', 'freischalt~']), art: 'zugang', warum: 'Zugang oder Zugangsdaten — die gibt nur du' },
   { re: wort(['geld', 'zahlung~', 'bezahl~', 'überweis~', 'rechnung~', 'kosten~', 'budget~', 'euro', 'kauf~', 'bestell~', 'lizenz~', '€']), art: 'geld', warum: 'es geht um Geld' },
   { re: wort(['vertr(a|ä)g~', 'avv', 'dsgvo', 'rechtlich~', 'jurist~', 'anwalt~', 'unterschr~', 'zeichn~', 'kündig~', 'datenschutz~', 'haftung~']), art: 'recht', warum: 'es geht um Recht oder Verträge' },
   { re: wort(['extern~', 'kund(e|in|en)', 'partner~', 'anruf~', 'anrufen', 'e-?mail an', 'mail an', 'nachfragen bei', 'bei \\p{Lu}\\p{L}+ (nachfragen|anfragen|fragen)', 'ausführen lassen']), art: 'extern', warum: 'dafür braucht es eine andere Person' },
@@ -86,6 +88,8 @@ export function sqlAus(text: string | null | undefined): string | null {
 const ein = (s: string) => s.replace(/\s+/g, ' ').trim();
 /** Zeile hängt an einem Merge/Konflikt (dann zählt „PR konfliktfrei“ als erledigt). */
 const MERGE_ANLASS = /\b(merge\w*|konflikt\w*|conflict\w*|rebase\w*)\b/i;
+/** … und zwar ein Konflikt bzw. ein Merge von develop/main in den Zweig (Zeile, Titel oder Auftrag des Unter-Chats). */
+const KONFLIKT_ANLASS = /\b(konflikt\w*|conflict\w*|rebase\w*)\b|\bmerge\s+(origin\/)?(develop|main|dev)\b/i;
 /** PR-Kennungen „repo#123“ (ohne Org) aus einem Text oder einer GitHub-Adresse — dieselbe Form wie github_prs (github.ts). */
 export function prsAus(...texte: (string | null | undefined)[]): string[] {
   const out = new Set<string>();
@@ -126,19 +130,25 @@ export function klassifiziere(zeile: string, k: BrauchtKontext): BrauchtErgebnis
   if (k.paket != null && k.paketLive(k.paket)) gruende.push(`Paket ${k.paket} ist im Live-Stand (Merge-Commit nach Paketnummer)`);
   // Nachtrag 02.11. (tariff-app#193 „Merge muss erlaubt werden“, heute konfliktfrei): Anlass weg → (c). Jeder genannte PR zählt.
   const prs = [...new Set([k.pr, ...(k.prs ?? [])].filter((p): p is string => !!p))];
-  for (const pr of prs) {
-    if (k.prZu(pr) === true) gruende.push(`PR ${pr} ist geschlossen oder gemergt`);
-    else if (MERGE_ANLASS.test(z) && k.prKonfliktfrei?.(pr)) gruende.push(`PR ${pr} ist heute konfliktfrei (GitHub: mergeable) — der Merge-Anlass ist weg`);
-  }
-  if (k.strangZu) gruende.push(k.strangZu);
+  for (const pr of prs) if (k.prZu(pr) === true) gruende.push(`PR ${pr} ist geschlossen oder gemergt`);
   if (k.lauf != null && k.laufNeuere(k.lauf)) gruende.push('ein neuerer Strang mit demselben Ziel hat das übernommen');
   if (gruende.length) return { art: 'veraltet', grund: gruende.join('; '), wasTun: '' };
 
   // ---- (a) harte Regel: was nur Knut kann, schlägt jede erkannte Aktion (echter Fall 574aa7bb: „Zugang zu DEV … SQL“
   //      war als push-nach-gate eingeordnet). Offene D-Entscheidungen in der Zeile ebenso. ----
   const hart = NUR_KNUT.find((r) => r.re.test(z));
+  const offenD = ds.some((d) => !k.beantwortet(d)) || /\bentscheid(en|ung)\b/i.test(z);
+
+  // ---- (c) aus schwächeren Belegen (Pass C): nur, wenn keine harte Regel und keine offene D-Frage greift ----
+  if (!hart && !offenD) {
+    // Konfliktfrei heißt nur für einen Konflikt-/develop-Merge-Anlass „erledigt“ — eine Bitte „PR mergen“ bleibt (Pass C).
+    const konflikt = MERGE_ANLASS.test(z) && KONFLIKT_ANLASS.test(`${z} ${k.anlassText ?? ''}`);
+    for (const pr of prs) if (konflikt && k.prKonfliktfrei?.(pr)) gruende.push(`PR ${pr} ist heute konfliktfrei (GitHub: mergeable) — der Merge-Anlass ist weg`);
+    if (k.strangZu) gruende.push(k.strangZu);
+    if (gruende.length) return { art: 'veraltet', grund: gruende.join('; '), wasTun: '' };
+  }
   if (hart) return { art: 'entscheidung', nurKnut: hart.art, wasTun: `${WAS_TUN[hart.art as Exclude<NurKnut, 'entscheidung'>]} Warum du: ${hart.warum}. Bitte des Unter-Chats: „${t}“` };
-  if (ds.some((d) => !k.beantwortet(d)) || /\bentscheid/i.test(z)) return { art: 'entscheidung', nurKnut: 'entscheidung', wasTun: t };
+  if (offenD) return { art: 'entscheidung', nurKnut: 'entscheidung', wasTun: t };
 
   // ---- (b) Hauptchat-Aktion ----
   // Eine Frage mit Alternative („pushen oder warten?“) ist eine Entscheidung, keine Aufgabe (Pass C).

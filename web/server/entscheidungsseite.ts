@@ -80,7 +80,7 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
     const kontext = ein(e.daten.kontext);
     // R30b S5: klassifizierte „Braucht Knut“-Zeilen (nur mit WERKBANK_BRAUCHT_DICH gesetzt) sagen, was das für Knut heißt.
     const klasse = e.art === 'braucht' && (e.daten.klasse === 'aktion' || e.daten.klasse === 'entscheidung') ? e.daten.klasse as 'aktion' | 'entscheidung' : null;
-    const beim = e.daten.hauptchat === 'zugestellt' ? 'Der Hauptchat hat die Aufgabe bekommen.' : e.daten.hauptchat === 'gemeldet' ? 'Die Aufgabe liegt in der Warteschlange des Hauptchats.' : 'Gerade ist kein Hauptchat aktiv — der nächste bekommt die Aufgabe.';
+    const beim = e.daten.hauptchat === 'zugestellt' ? 'Der Hauptchat hat die Aufgabe bekommen.' : e.daten.hauptchat === 'gemeldet' ? 'Die Aufgabe liegt in der Warteschlange des Hauptchats.' : e.daten.hauptchat === 'fehlgeschlagen' ? 'Die Meldung an den Hauptchat ist fehlgeschlagen — frag ihn direkt oder antworte mit „Anders“.' : 'Gerade ist kein Hauptchat aktiv — der nächste bekommt die Aufgabe.';
     const worum = klasse === 'aktion' ? `${e.quelle.text} meldet: „${ein(e.daten.zeile)}“. Das kann der Hauptchat selbst ausführen (${ein(e.daten.aktion)}) — nichts für dich; er fragt nur, wenn eine Freigabe nötig ist. ${beim}`
       // Harte Regel (Nachbesserung 02.11.): „Warum du“ und die Bitte des Unter-Chats zuerst — nicht hinter „mehr“.
       : klasse === 'entscheidung' && e.daten.nurKnut && e.daten.nurKnut !== 'entscheidung' && tw.rest ? tw.rest
