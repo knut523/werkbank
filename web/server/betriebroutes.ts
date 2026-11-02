@@ -96,7 +96,7 @@ function neustartStarten(u: User, art: 'restart-web' | 'restart', was: string[])
   const skript = process.env.WERKBANK_BETRIEB_SKRIPT || join(WB_ROOT, 'scripts', 'werkbank.sh');
   if (!existsSync(skript)) throw new Error('werkbank.sh nicht gefunden.');
   mkdirSync(dirname(markeDatei()), { recursive: true });
-  writeFileSync(markeDatei(), JSON.stringify({ userId: u.id, art, was, at: Date.now() }));
+  writeFileSync(markeDatei(), JSON.stringify({ userId: u.id, art, was, at: Date.now(), pid: process.pid }));
   const logDatei = join(WB_ROOT, '.runtime', 'logs', 'betrieb-neustart.log');
   mkdirSync(dirname(logDatei), { recursive: true });
   const fd = openSync(logDatei, 'a');
@@ -111,9 +111,12 @@ function neustartStarten(u: User, art: 'restart-web' | 'restart', was: string[])
 export async function neustartMelden(personVon: (id: string) => Promise<User | null>, log: (m: string, d?: any) => void, now = Date.now()): Promise<void> {
   let roh: string;
   try { roh = readFileSync(markeDatei(), 'utf8'); } catch { return; }
-  rmSync(markeDatei(), { force: true });   // auch eine kaputte Marke weg (Gegenprüfung R31)
   let m: any;
-  try { m = JSON.parse(roh); } catch { return; }
+  try { m = JSON.parse(roh); } catch { m = null; }
+  // E2E R31: die Marke dieses Prozesses selbst (Neustart steht noch aus) bleibt liegen — sonst meldete er „neu gestartet“ zu früh.
+  if (m?.pid === process.pid) return;
+  rmSync(markeDatei(), { force: true });   // auch eine kaputte Marke weg (Gegenprüfung R31)
+  if (!m) return;
   if (!m?.userId || now - Number(m.at) > 60 * 60_000) return;
   const u = await personVon(String(m.userId));
   if (!u) return;
@@ -184,7 +187,7 @@ export function betriebRoutes(d: BetriebDeps) {
       send(res, 200, { text: `HTTP ${r.status} (Zweck ${p.zweck.name}, Wert geschwärzt)\n${r.text}` });
     } catch (e: any) {
       log('geheimnis fehler', { user: u.id, zweck: p.zweck.name, grund: String(e?.message ?? e).slice(0, 160) });
-      throw new HttpError(502, String(e?.message ?? e));
+      throw new HttpError(424, String(e?.message ?? e));
     }
   });
 
@@ -202,7 +205,7 @@ export function betriebRoutes(d: BetriebDeps) {
       send(res, 200, { text });
     } catch (e: any) {
       log('coolify fehler', { user: u.id, art: a.art, app: a.app, grund: String(e?.message ?? e).slice(0, 160) });
-      throw new HttpError(502, String(e?.message ?? e));
+      throw new HttpError(424, String(e?.message ?? e));
     }
   });
 
@@ -238,7 +241,7 @@ export function betriebRoutes(d: BetriebDeps) {
     const s = z.werkbank ? await kurzSitzung(u) : null;
     let pfade: string[];
     try { pfade = await aufnehmen(z, geraete, join(scratchDir(u), 'screenshots'), { ganz: b.ganz === true, cookie: s }); }
-    catch (e: any) { throw new HttpError(502, `Screenshot fehlgeschlagen: ${String(e?.message ?? e).slice(0, 200)}`); }
+    catch (e: any) { throw new HttpError(424, `Screenshot fehlgeschlagen: ${String(e?.message ?? e).slice(0, 200)}`); }
     finally { await s?.weg(); }
     const zeilen: string[] = [];
     for (const p of pfade) {

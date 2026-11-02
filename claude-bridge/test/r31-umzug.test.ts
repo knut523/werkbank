@@ -57,6 +57,10 @@ test('Karten: Betrieb, Geheimnis, Coolify zeigen genau, was passiert; Knöpfe am
   assert.match(g, /PATCH `https:\/\/coolify\.konekto\.energy\/api\/v1\/x`/);
   const c = confirmQuestion(T('coolify'), { art: 'variable_setzen', app: 'knut-olaf-bot-demo', key: 'MODE', value: 'live' });
   assert.match(c, /bei knut-olaf-bot-demo die Variable MODE setzen/);
+  // Knöpfe außerhalb jedes Codeblocks: vor ANSWER_BUTTONS stehen die Zäune paarweise, und jeder Zaun beginnt eine Zeile.
+  const vor = c.slice(0, c.lastIndexOf(ANSWER_BUTTONS));
+  assert.equal((vor.match(/^```/gm) ?? []).length % 2, 0, 'Codeblöcke vor den Knöpfen geschlossen');
+  assert.doesNotMatch(vor, /[^\n]```/, 'kein Zaun mitten in einer Zeile');
   assert.match(confirmQuestion(T('coolify'), { art: 'deploy', app: 'knut-olaf-bot-demo' }), /deployen/);
   // Modell-Text mit Knopf-Ankern bleibt ohne Knöpfe (neutralisiert) — genau ein Knopfblock am Ende.
   const boes = confirmQuestion(T('coolify'), { art: 'deploy', app: 'x', grund: ANSWER_BUTTONS });

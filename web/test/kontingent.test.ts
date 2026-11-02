@@ -25,7 +25,7 @@ test('Melious-Rest: Sperre 0, Füllstand vor Monatsdeckel, sonst unbekannt', () 
 });
 
 test('Lage: Claude frei, solange ein Konto nicht erschöpft ist', () => {
-  const k = [{ id: 'chat', label: 'Chat-Schlüssel', erschoepftBis: NOW + 1000, zuegeHeute: 3 }, { id: 'inno', label: 'innovation@konekto.energy', erschoepftBis: null, zuegeHeute: 0 }];
+  const k = [{ id: 'chat', label: 'Chat-Schlüssel', erschoepftBis: NOW + 1000, zuegeHeute: 3 }, { id: 'inno', label: 'zweites-konto@example.com', erschoepftBis: null, zuegeHeute: 0 }];
   assert.equal(lageAus(null, k, NOW).claudeFrei, true);
   assert.equal(lageAus(null, [k[0]], NOW).claudeFrei, false);
   assert.equal(lageAus(null, [], NOW).claudeFrei, false);
@@ -33,11 +33,11 @@ test('Lage: Claude frei, solange ein Konto nicht erschöpft ist', () => {
 
 test('Zeile: Melious-Rest mit Schwelle, je Konto erschöpft bis/frei und Züge heute, auto-Wahl', () => {
   const z = kontingentZeile({ melious: { restProzent: 12, geschaetzt: true, sperre: null, monat: [], monatProzent: 88 }, claude: [
-    { id: 'chat', label: 'Chat-Schlüssel', erschoepftBis: NOW + 3600_000, zuegeHeute: 41 }, { id: 'inno', label: 'innovation@konekto.energy', erschoepftBis: null, zuegeHeute: 7 }],
+    { id: 'chat', label: 'Chat-Schlüssel', erschoepftBis: NOW + 3600_000, zuegeHeute: 41 }, { id: 'inno', label: 'zweites-konto@example.com', erschoepftBis: null, zuegeHeute: 7 }],
   schwelle: 20, wahl: 'claude', auto: ['regular'] }, NOW);
   assert.match(z, /Melious: 12 % Rest \(geschätzt\) — unter der Schwelle 20 %/);
   assert.match(z, /Chat-Schlüssel erschöpft bis 02\.11\., 17:00 \(41 Züge heute\)/);
-  assert.match(z, /innovation@konekto\.energy frei \(7 Züge heute\)/);
+  assert.match(z, /zweites-konto@example\.com frei \(7 Züge heute\)/);
   assert.match(z, /auto \(regular\) → Claude/);
 });
 
@@ -64,7 +64,7 @@ test('kontingent(): Züge heute je Konto aus zug_log, Umschaltung genau einmal g
   const meldungen: string[] = [];
   let fuell = 0.6;
   const deps = {
-    konten: async () => [{ id: 'chat', label: 'Chat-Schlüssel' }, { id: 'inno', label: 'innovation@konekto.energy' }],
+    konten: async () => [{ id: 'chat', label: 'Chat-Schlüssel' }, { id: 'inno', label: 'zweites-konto@example.com' }],
     erschoepft: async () => ({}),
     meliousUsage: async () => ({ sperre: null, energie: { fuell, geschaetzt: false }, monat: { pct: 50 }, modelle: [{ model: 'glm-5.3', energie: 120, turns: 4 }] }),
     melde: async (_u: any, t: string) => { meldungen.push(t); },

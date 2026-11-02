@@ -771,7 +771,8 @@ export function r31Karte(tool: string, input: Record<string, unknown>): string {
       : input.art === 'neustart' ? `**Soll ich die Coolify-App ${app} neu starten?** (baut neu, einige Minuten nicht erreichbar)`
       : input.art === 'deploy' ? `**Soll ich die Coolify-App ${app} deployen?**`
       : `**Soll ich in Coolify (${short(input.art, 30)}) bei ${app} schreiben?**`;
-    teile = input.art === 'variable_setzen' ? `\`${short(input.key, 80)}\` = ${fence(clip(String(input.value ?? ''), 600))}` : '';
+    // E2E R31: der Codeblock braucht eine eigene Zeile — sonst rutschen die Knöpfe in den Block.
+    teile = input.art === 'variable_setzen' ? `\`${short(input.key, 80)}\` =\n\n${fence(clip(String(input.value ?? ''), 600))}` : '';
   }
   return `${neutralizeAnswerAnchors('', `${kopf}${teile ? `\n\n${teile}` : ''}${grund}`)}\n\n${ANSWER_BUTTONS}`;
 }

@@ -10,7 +10,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, chmodSync, existsSync, openSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { MongoClient, ObjectId } from 'mongodb';
@@ -87,7 +87,8 @@ procs.push(spawn(process.execPath, ['src/server.ts'], { cwd: join(WEB, '..', 'cl
   BRIDGE_MOCK: '1', BRIDGE_PORT: String(BP), BRIDGE_STATE_DIR: join(tmp, 'bridge'), BRIDGE_ALLOWED_EMAILS: '', BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_CLAUDE_HOMES: join(tmp, 'homes'),
   WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_URL: B, WERKBANK_ORCH_ROOTS: WORK, BRIDGE_VAULT_DIR: VAULT, WERKBANK_SKILLS_SOURCE: join(tmp, 'skills'), BRIDGE_SKILLS: '',
   BRIDGE_PERMISSION_MODE: 'auto', BRIDGE_AUTO_SCOPE: 'voll', BRIDGE_AUTO_EMAILS: knut.email, LEITSTAND_EMAILS: knut.email, BRIDGE_LEIT_VAULT_COMMIT: 'on' } }));
-const webEnv = { ...sauber, ...homeEnv,
+// Playwright sucht Chromium unter $HOME/.cache — die Instanz hat ein eigenes HOME, der Browser liegt beim Treiber.
+const webEnv = { ...sauber, ...homeEnv, PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || join(homedir(), '.cache', 'ms-playwright'),
   MONGO_URI_WERKBANK: `mongodb://127.0.0.1:${MP}`, WERKBANK_PORT: String(WP), WERKBANK_DEMO: '1', WERKBANK_INSECURE_COOKIES: '1', WERKBANK_VAULT_DIR: VAULT, WERKBANK_DB: DB, LIBRECHAT_DB: LCDB,
   LIBRECHAT_URL: `http://127.0.0.1:${LP}`, LIBRECHAT_PUBLIC_URL: 'https://chat.example', WERKBANK_PUBLIC_URL: B, BRIDGE_URL: BR, BRIDGE_STATE_DIR: join(tmp, 'bridge'),
   WERKBANK_ALLOWED_EMAILS: knut.email, WERKBANK_PILOT_EMAIL: knut.email, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_SECRET: randomBytes(16).toString('hex'), JWT_REFRESH_SECRET: randomBytes(16).toString('hex'),
@@ -160,8 +161,11 @@ try {
   check('Neustart abgelöst gestartet: restart-web, Drain ohne Hauptchat', /^restart-web WB_DRAIN_FELD=drainOhneLeit$/m.test(nl), nl.trim());
   const health = await fetch(`${BR}/health`).then((x) => x.json());
   check('Brücke meldet drainOhneLeit (Hauptchat zählt nicht)', typeof health.drainOhneLeit === 'number' && typeof health.startedAt === 'number', `drainLaufend ${health.drainLaufend}, drainOhneLeit ${health.drainOhneLeit}`);
+  const marke = join(DATA, 'betrieb-neustart.json');
+  check('Neustart-Marke liegt bereit', existsSync(marke), existsSync(marke) ? readFileSync(marke, 'utf8').slice(0, 120) : 'fehlt');
   // Neustart nachspielen: Web-App beenden und neu starten → Meldung „neu gestartet“ an den Hauptchat
   web.kill(); await sleep(800); await startWeb(); await sleep(6500);
+  check('Neustart-Marke nach dem Start verbraucht', !existsSync(marke));
   const meldung = await W.collection('leitstand_events').findOne({ kind: 'meldung', 'strand.id': 'betrieb' });
   check('nach dem Neustart: Meldung an den Hauptchat', !!meldung && /Werkbank neu gestartet \(restart-web; WERKBANK_ZUARBEIT: auto → claude\)/.test(meldung.text), meldung?.text?.slice(0, 160));
   // 4. verbotener Schalter — auch mit Klick nicht
@@ -176,7 +180,7 @@ try {
   check('geheimnis_nutzen an fremden Host: abgewiesen (vor dem Klick)', r.status === 400 && /nicht freigegeben/.test(r.j.error ?? ''));
   k = await mitKlick('geheimnis_nutzen', 'geheimnis_nutzen', G, '/internal/lead/geheimnis');
   check('Karte geheimnis_nutzen nennt Zweck, Methode, URL', /Zweck „coolify“/.test(k.karte) && /GET `https:\/\/coolify\.konekto\.energy/.test(k.karte));
-  check('nach „ja“ ohne Vaultwarden-Sitzung: klarer Fehler, kein Wert', k.r.status === 502 && /Kein Wert für „coolify“/.test(k.r.j.error ?? ''), k.r.j.error?.slice(0, 120));
+  check('nach „ja“ ohne Vaultwarden-Sitzung: klarer Fehler, kein Wert', k.r.status === 424 && /Kein Wert für „coolify“/.test(k.r.j.error ?? ''), k.r.j.error?.slice(0, 120));
 
   // 6. Coolify
   r = await intern(B, '/internal/lead/coolify', { aktion: { art: 'deploy', app: 'olaf-admin-prod' } });
@@ -185,7 +189,7 @@ try {
   check('coolify deploy ohne Klick: abgewiesen', r.status === 403);
   k = await mitKlick('coolify', 'coolify', { art: 'variable_setzen', app: 'knut-olaf-bot-demo', key: 'BOT_MODE', value: 'demo' }, '/internal/lead/coolify');
   check('Karte coolify nennt App, Variable und Wert', /knut-olaf-bot-demo die Variable BOT_MODE/.test(k.karte) && /demo/.test(k.karte));
-  check('nach „ja“ (ohne Token in der Testinstanz): Fehler aus dem Vermittler, nichts gesendet', k.r.status === 502 && /Kein Wert/.test(k.r.j.error ?? ''), k.r.j.error?.slice(0, 100));
+  check('nach „ja“ (ohne Token in der Testinstanz): Fehler aus dem Vermittler, nichts gesendet', k.r.status === 424 && /Kein Wert/.test(k.r.j.error ?? ''), k.r.j.error?.slice(0, 100));
   const bash = await chat(`mock-tool Bash ${JSON.stringify({ command: 'curl -s -X POST -H "Authorization: Bearer x" "https://coolify.konekto.energy/api/v1/deploy?uuid=abc"', description: 'Coolify direkt deployen' })}`);
   karten.push(['Bash an Coolify', bash]);
   check('Coolify per Bash: Rückfrage statt Durchwinken', /werkbank-antwort:ja/.test(bash) && /coolify\.konekto\.energy/.test(bash), bash.split('\n')[0].slice(0, 120));
