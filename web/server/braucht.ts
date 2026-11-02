@@ -87,10 +87,12 @@ export function klassifiziere(zeile: string, k: BrauchtKontext): BrauchtErgebnis
   return { art: 'entscheidung', wasTun: t };
 }
 
-/** Hauptchat-Aktionen dieser Instanz (für BrauchtKontext.hauptchatAktionen): GitHub-Weg frei + Strang-Aktionen immer. */
+/** Hauptchat-Aktionen dieser Instanz (für BrauchtKontext.hauptchatAktionen): GitHub-Weg frei + Strang-Aktionen immer.
+ *  Derselbe Wert wie githubAktionAn (githubaktion.ts) und githubAppend (Brücke, profil.ts): nur „on“ — hier kein Import,
+ *  damit die Klassifikation rein bleibt. */
 export function hauptchatAktionen(env: NodeJS.ProcessEnv = process.env): string[] {
   const basis = ['skill-installieren', 'strang-neustarten', 'cli-lesen'];
-  return env.WERKBANK_HAUPTCHAT_GITHUB === '1' ? [...basis, 'push-nach-gate', 'merge-im-worktree'] : basis;
+  return env.WERKBANK_HAUPTCHAT_GITHUB === 'on' ? [...basis, 'push-nach-gate', 'merge-im-worktree'] : basis;
 }
 
 // ---- Budget-Knöpfe (S3, Knut 30.10.): Knuts Wortlaut „schließen“ / „+50 % Budget“ -----------------

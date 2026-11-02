@@ -2,7 +2,7 @@
 // (b) Aktion des Hauptchats oder (c) erledigt/veraltet — drei reale Beispiele aus der Hauptsitzung 02.11. als Fixtures.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { klassifiziere, BRAUCHT_AN } from '../server/braucht.ts';
+import { klassifiziere, BRAUCHT_AN, hauptchatAktionen } from '../server/braucht.ts';
 
 // Beispiel 1 (Hauptsitzung 02.11.): Admin-UAT-Strang — Knut hatte schon geantwortet, Karte stand trotzdem offen.
 const B1_ZEILE = 'Liste mit Skill-Kopierpfad abarbeiten und D1–D3 entscheiden';
@@ -88,4 +88,11 @@ test('Veraltet schlägt Aktion: beides trifft zu → geschlossen mit beiden Grü
   const r = klassifiziere(B2_ZEILE, ctx({ beantwortet, paketLive: livePaket, hauptchatAktionen: aktionen }));
   assert.equal(r.art, 'veraltet');
   assert.match(r.grund, /beantwortet/);
+});
+
+test('hauptchatAktionen: GitHub-Weg frei mit demselben Wert wie githubaktion.ts/profil.ts (WERKBANK_HAUPTCHAT_GITHUB=on)', () => {
+  assert.ok(hauptchatAktionen({ WERKBANK_HAUPTCHAT_GITHUB: 'on' }).includes('push-nach-gate'));
+  assert.ok(hauptchatAktionen({ WERKBANK_HAUPTCHAT_GITHUB: 'on' }).includes('merge-im-worktree'));
+  assert.ok(!hauptchatAktionen({}).includes('push-nach-gate'));
+  assert.ok(!hauptchatAktionen({ WERKBANK_HAUPTCHAT_GITHUB: '1' }).includes('push-nach-gate'), 'githubAktionAn kennt nur „on“');
 });

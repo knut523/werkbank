@@ -1,7 +1,7 @@
 // Aktiver Test R30b (docs/plan-braucht-dich-tagesvorschlag.md): ISOLIERTE Web-Instanz (Port 3483, eigene Datenbanken, HOME =
 // Testordner, eigenes Git für den Live-Stand). Die drei Karten der Hauptsitzung vom 02.11. sind nachgebaut wie in den
 // Test-Fixtures (Admin-UAT e3ea4584 beantwortet, Ticker-Fix Paket 269 live, tariff-app#193 Merge), dazu eine echte
-// Entscheidung. Schalter an: WERKBANK_BRAUCHT_DICH=an, WERKBANK_TAGESVORSCHLAG=an, COS_ICS=an, WERKBANK_HAUPTCHAT_GITHUB=1.
+// Entscheidung. Schalter an: WERKBANK_BRAUCHT_DICH=an, WERKBANK_TAGESVORSCHLAG=an, COS_ICS=an, WERKBANK_HAUPTCHAT_GITHUB=on.
 // Nichts verlässt den Testordner; keine Brücke, kein Jira, kein GitHub.
 // Aufruf: SHOTS_MONGO=mongodb://127.0.0.1:<port> node e2e/r30b-shots.ts <Ausgabeordner>   (vorher: npx vite build)
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
@@ -86,7 +86,7 @@ try {
       WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: join(tmp, 'data'), WERKBANK_MEILI_INDEX: `werkbank_r30bshots_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_SECRET, JWT_REFRESH_SECRET: REFRESH,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'), WERKBANK_FORGE_MCP: '', WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vs'), WERKBANK_VAULT_SYNC_SCRIPT: '/bin/true', COS_OLAF_JIRA: 'off',
       WERKBANK_LIVE_ROOT: LIVE, WERKBANK_SOURCE_REPO: SRC,
-      WERKBANK_BRAUCHT_DICH: 'an', WERKBANK_TAGESVORSCHLAG: 'an', COS_ICS: 'an', WERKBANK_HAUPTCHAT_GITHUB: '1' } }));
+      WERKBANK_BRAUCHT_DICH: 'an', WERKBANK_TAGESVORSCHLAG: 'an', COS_ICS: 'an', WERKBANK_HAUPTCHAT_GITHUB: 'on' } }));
   for (let i = 0; i < 100; i++) { try { if ((await fetch(`${B}/api/health`)).status < 500) break; } catch { /* startet */ } await pause(150); }
 
   // --- API: die Hauptchat-Sicht (MCP braucht_dich) ---
