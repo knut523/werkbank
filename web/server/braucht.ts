@@ -88,3 +88,34 @@ export function hauptchatAktionen(env: NodeJS.ProcessEnv = process.env): string[
   const basis = ['skill-installieren', 'strang-neustarten', 'cli-lesen'];
   return env.WERKBANK_HAUPTCHAT_GITHUB === '1' ? [...basis, 'push-nach-gate', 'merge-im-worktree'] : basis;
 }
+
+// ---- Budget-Knöpfe (S3, Knut 30.10.): Knuts Wortlaut „schließen“ / „+50 % Budget“ -----------------
+
+/** Knöpfe einer Budget-Frage. Schalter aus: die alten („Weiter mit +50 %“, „Anhalten“) — Faktor 1,5 bleibt gleich. */
+export function budgetOptionen(budget: number, env: NodeJS.ProcessEnv = process.env): { label: string; consequence: string }[] {
+  if (!BRAUCHT_AN(env)) return [
+    { label: 'Weiter mit +50 %', consequence: `Hebt das Budget auf ${fmt(Math.ceil(budget * 1.5))} Tokens und schickt „weiter“.` },
+    { label: 'Anhalten', consequence: 'Der Unter-Chat gilt als geprüft und läuft nicht weiter.' },
+  ];
+  return [
+    { label: '+50 % Budget', consequence: `Hebt das Budget auf ${fmt(Math.ceil(budget * 1.5))} Tokens und schickt „weiter“.` },
+    { label: 'schließen', consequence: 'Schließt die Frage — der Unter-Chat gilt als geprüft und läuft nicht weiter.' },
+  ];
+}
+
+/** Wirkung eines gewählten Knopfes — neue und alte Labels, damit offene Fragen nach einem Schalterwechsel beantwortbar bleiben. */
+export function budgetWirkung(label: string): 'weiter' | 'anhalten' | null {
+  if (label === '+50 % Budget' || label === 'Weiter mit +50 %') return 'weiter';
+  if (label === 'schließen' || label === 'Anhalten') return 'anhalten';
+  return null;
+}
+
+/** Empfehlung einer Budget-Frage — Knöpfe und Empfehlung müssen dieselben Worte benutzen. */
+export function budgetEmpfehlung(env: NodeJS.ProcessEnv = process.env): string {
+  return BRAUCHT_AN(env)
+    ? 'Chat ansehen: kommt der Unter-Chat voran und der Rest ist klein, „+50 % Budget“; sonst „schließen“ und den Auftrag schärfen.'
+    : 'Chat ansehen: kommt der Unter-Chat voran und der Rest ist klein, „Weiter mit +50 %“; sonst „Anhalten“ und den Auftrag schärfen.';
+}
+
+const fmt = (n: number) => new Intl.NumberFormat('de-DE').format(n).replace(/ | /g, ' ');
+

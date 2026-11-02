@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { wb } from './db.ts';
 import { runs, questions, STRANDS, OPEN, injectBridge } from './orchestrator.ts';
 import { meldeLeitstand } from './leitstand.ts';
+import { budgetOptionen, budgetEmpfehlung } from './braucht.ts';
 import type { User } from './auth.ts';
 import { tiefeOf, type Tiefe } from './tiefe.ts';
 
@@ -59,7 +60,7 @@ export interface Ergebnis { gewarnt: string[]; gestoppt: string[]; angezeigt: nu
  * Plan 274 (D5, Knut 20.10.2026: „bei 100 % NICHT mitten im Zug abbrechen“): Nachricht an einen laufenden Zug, wenn das Budget erreicht
  * ist. Der Zug endet selbst — sauber, mit gesichertem Stand und Stand-Block; danach ruht der Strang bis zu Knuts Entscheidung.
  */
-export const BUDGET_ABSCHLUSS = 'Budget erreicht (Werkbank): Bring den laufenden Schritt sauber zu Ende — keinen neuen Arbeitsschritt anfangen. Sichere den Stand (lokaler WIP-Commit im Arbeitsordner, Bericht/Notizen nachziehen, was offen ist unter „Offen“) und beende den Zug mit dem Stand-Block und „Status: braucht Antwort“. Danach ruht der Strang, bis Knut über „Weiter mit +50 %“ oder „Anhalten“ entscheidet.';
+export const BUDGET_ABSCHLUSS = 'Budget erreicht (Werkbank): Bring den laufenden Schritt sauber zu Ende — keinen neuen Arbeitsschritt anfangen. Sichere den Stand (lokaler WIP-Commit im Arbeitsordner, Bericht/Notizen nachziehen, was offen ist unter „Offen“) und beende den Zug mit dem Stand-Block und „Status: braucht Antwort“. Danach ruht der Strang, bis Knut über die Budget-Frage entscheidet („+50 % Budget“ oder „schließen“).';
 
 /** Fertig nach der letzten Nachricht an den Strang (Antwort mit „Status: fertig“)? Dann pausiert nichts mehr (Vorfall b95d9cdd). */
 const fertigSeitSend = (d: any) => !!d.doneAt && new Date(d.doneAt).getTime() >= new Date(d.lastSentAt ?? d.startedAt).getTime() && d.lastStatus !== 'running';
@@ -95,8 +96,8 @@ export async function budgetTick(deps: { userById: (id: string) => Promise<User 
         try { await questions().insertOne({
           _id: qid, userId: u.id, kind: 'budget', title: `Budget erreicht: „${d.title}“ (${fmt(tokens)} von ${fmt(budget)} Tokens)`.slice(0, 140),
           context: `Der Unter-Chat ${d._id} hat sein Tokenbudget erreicht (Eingabe ohne Cache-Lesen + Ausgabe, mit Workern). Nichts wird mitten im Zug abgebrochen: ein laufender Zug bringt seinen Schritt zu Ende, sichert den Stand und meldet sich; danach ruht der Chat, bis du entscheidest. Arbeitsordner: ${d.cwd}.`,
-          options: [{ label: 'Weiter mit +50 %', consequence: `Hebt das Budget auf ${fmt(Math.ceil(budget * 1.5))} Tokens und schickt „weiter“.` }, { label: 'Anhalten', consequence: 'Der Unter-Chat gilt als geprüft und läuft nicht weiter.' }],
-          recommendation: 'Chat ansehen: kommt der Unter-Chat voran und der Rest ist klein, „Weiter mit +50 %“; sonst „Anhalten“ und den Auftrag schärfen.',
+          options: budgetOptionen(budget),
+          recommendation: budgetEmpfehlung(),
           strand: { id: String(d._id), title: d.title, url: d.url }, link: d.url, plan: d.plan ?? null, createdAt: at, status: 'offen', answer: null,
         } as any); } catch (e) { await runs().updateOne({ _id: d._id }, { $set: { autoStopped: null, 'budget.stopAt': null } }); throw e; }   // ohne Rückfrage keine Pause (sonst bliebe der Chat ohne Ausweg stehen)
         // Läuft der Zug noch: nicht abbrechen — er bekommt die Abschluss-Nachricht und endet selbst (einmal je Pause).
