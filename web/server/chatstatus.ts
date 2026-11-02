@@ -11,15 +11,16 @@ import { fragenAus } from './entscheidungsseite.ts';
 import type { InboxEintrag } from './inbox.ts';
 import type { Zustand } from './zustand.ts';
 
-export type ChatStatus = 'laeuft' | 'braucht' | 'review' | 'fertig' | 'haengt';
+// 'hauptchat' (Nachbesserung 02.11.): der Strang wartet nur noch auf eine Aufgabe des Hauptchats ((b) aus braucht.ts) — nichts für Knut.
+export type ChatStatus = 'laeuft' | 'braucht' | 'review' | 'fertig' | 'haengt' | 'hauptchat';
 
 export const chatStatusAn = (env = process.env) => env.WERKBANK_CHAT_STATUS === '1';
 
-export const CHAT_STATUS_TEXT: Record<ChatStatus, string> = { laeuft: 'läuft', braucht: 'braucht Knut', review: 'in Review', fertig: 'fertig', haengt: 'hängt' };
+export const CHAT_STATUS_TEXT: Record<ChatStatus, string> = { laeuft: 'läuft', braucht: 'braucht Knut', review: 'in Review', fertig: 'fertig', haengt: 'hängt', hauptchat: 'beim Hauptchat' };
 /** Sortierung in Listen: was dich braucht zuerst, fertig zuletzt. */
-export const CHAT_STATUS_RANG: Record<ChatStatus, number> = { braucht: 0, review: 1, haengt: 2, laeuft: 3, fertig: 4 };
+export const CHAT_STATUS_RANG: Record<ChatStatus, number> = { braucht: 0, review: 1, haengt: 2, hauptchat: 3, laeuft: 4, fertig: 5 };
 /** Ton für Chips: `warn` = du bist dran, `ok` = erledigt. */
-export const CHAT_STATUS_TON: Record<ChatStatus, 'warn' | 'info' | 'ok' | 'bad' | ''> = { braucht: 'warn', review: 'info', fertig: 'ok', haengt: 'bad', laeuft: '' };
+export const CHAT_STATUS_TON: Record<ChatStatus, 'warn' | 'info' | 'ok' | 'bad' | ''> = { braucht: 'warn', review: 'info', fertig: 'ok', haengt: 'bad', laeuft: '', hauptchat: 'info' };
 
 /** Abbildung Zustand (Plan 213) → Chat-Status, ohne offene Fragen und ohne Knuts Prüfung. Die Funktion unten nimmt genau diese Tabelle. */
 export const ABBILDUNG: Record<Zustand, { status: ChatStatus; warum: string }> = {
@@ -39,6 +40,10 @@ export interface ChatStatusEingang {
   offeneFragen: number;
   /** Knut hat „passt“ gesagt (knutReviewedAt oder abgehakt). */
   geprueft: boolean;
+  /** (b)-Aufgaben des Hauptchats zu diesem Strang (zählen nie als Frage an Knut). */
+  beimHauptchat?: number;
+  /** Die „Braucht Knut“-Bitte wurde als veraltet geschlossen (braucht.ts (c)): der Grund — dann wartet der Unter-Chat nicht mehr auf Knut. */
+  veraltet?: string | null;
 }
 
 export function chatStatus(e: ChatStatusEingang): { status: ChatStatus; grund: string } {
@@ -46,6 +51,10 @@ export function chatStatus(e: ChatStatusEingang): { status: ChatStatus; grund: s
   if (e.offeneFragen > 0) return { status: 'braucht', grund: `${e.offeneFragen} offene ${e.offeneFragen === 1 ? 'Frage' : 'Fragen'} an dich` };
   if (e.geprueft || e.zustand === 'erledigt') return { status: 'fertig', grund: e.geprueft ? 'von dir geprüft' : ABBILDUNG.erledigt.warum };
   const a = ABBILDUNG[e.zustand];
+  // Wartet der Strang nur noch auf den Hauptchat, braucht er Knut nicht (Kopf und Status widersprachen sich sonst).
+  if (a.status === 'braucht' && (e.beimHauptchat ?? 0) > 0) return { status: 'hauptchat', grund: 'nichts für dich — der Hauptchat erledigt das' };
+  // Bitte veraltet (Nachtrag 02.11., tariff-app#193 heute konfliktfrei): nie „braucht Knut“ — zur Durchsicht, archivieren oder weiterführen.
+  if (a.status === 'braucht' && e.veraltet) return { status: 'review', grund: `Bitte erledigt: ${e.veraltet} — archivieren oder weiterführen` };
   return { status: a.status, grund: a.warum };
 }
 
@@ -55,9 +64,17 @@ export function offeneJeStrang(eintraege: InboxEintrag[]): Map<string, number> {
   for (const e of eintraege) {
     const s = e.quelle?.strand;
     if (!s || (e.art !== 'entscheidung' && e.art !== 'rueckfrage' && e.art !== 'braucht')) continue;
+    if (e.daten?.klasse === 'aktion') continue;   // (b): Aufgabe des Hauptchats, keine Frage an Knut (Nachbesserung 02.11.)
     const n = e.art === 'entscheidung' ? ((e.daten?.entscheidungen as unknown[]) ?? []).length : 1;
     if (n) m.set(s, (m.get(s) ?? 0) + n);
   }
+  return m;
+}
+
+/** (b)-Aufgaben des Hauptchats je Unter-Chat (Gegenstück zu offeneJeStrang). */
+export function hauptchatJeStrang(eintraege: InboxEintrag[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const e of eintraege) if (e.art === 'braucht' && e.daten?.klasse === 'aktion' && e.quelle?.strand) m.set(e.quelle.strand, (m.get(e.quelle.strand) ?? 0) + 1);
   return m;
 }
 
@@ -73,7 +90,7 @@ export function ersterSatz(t: string): string {
 }
 
 export function zaehleChat(zs: ChatStatus[]): Record<ChatStatus, number> & { fuerDich: number } {
-  const z = { laeuft: 0, braucht: 0, review: 0, fertig: 0, haengt: 0 } as Record<ChatStatus, number>;
+  const z = { laeuft: 0, braucht: 0, review: 0, fertig: 0, haengt: 0, hauptchat: 0 } as Record<ChatStatus, number>;
   for (const s of zs) z[s]++;
   return { ...z, fuerDich: z.braucht + z.review };
 }

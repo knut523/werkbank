@@ -10,6 +10,7 @@ import { Skills } from './pages/Skills.tsx';
 import { Dateien } from './pages/Dateien.tsx';
 import { Timebox } from './pages/Timebox.tsx';
 import { Ziele } from './pages/Ziele.tsx';
+import { KontingentZeile } from './kontingent.tsx';
 import { Uebersicht } from './pages/Uebersicht.tsx';
 import { HeuteNeu } from './pages/HeuteNeu.tsx';
 import { Entscheidungen } from './pages/Entscheidungen.tsx';
@@ -281,7 +282,7 @@ export function App() {
           </div>
         </div>
       </aside>
-      <main className="main">{zustand}{umzug}{reiterLeiste}{page}</main>
+      <main className="main">{user?.role === 'ADMIN' && <KontingentZeile />}{zustand}{umzug}{reiterLeiste}{page}</main>
       {/* Plan 213 S3b: Handy-Tableiste Heute · Arbeit · Wissen · Chat (nur ≤ 760 px, nur neue Navigation; 185 B6). */}
       {neu && user && <nav className="tabbar" aria-label="Bereiche">
         {nav.map((n) => { const on = n.match.test(hash); return <a key={n.href} href={n.href} className={on ? 'active' : ''} aria-current={on ? 'page' : undefined}><span className="ico" aria-hidden>{n.ico}</span>{n.label}{n.href === zaehlHref && todayN ? <span className="nav-count" aria-label={`${todayN} offen`}>{todayN}</span> : null}</a>; })}

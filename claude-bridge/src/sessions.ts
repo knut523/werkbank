@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './profil.ts';
 import { freigabeMerken } from './freigabe.ts';
-import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK } from './tools.ts';
+import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
@@ -167,7 +167,8 @@ export function autoFor(req: { email?: string; readonly?: boolean }): Permission
 export function autoSettings(): { permissions: { deny: string[]; ask: string[]; disableBypassPermissionsMode: 'disable' } } {
   const homes = resolve(homesRoot());
   // ask: GitHub schreiben aus dem Hauptchat (R29 D, S5) fragt immer — der Klassifikator darf es nicht durchwinken.
-  return { permissions: { deny: [...AUTO_DENY, `Read(/${homes}/*/.credentials.json)`, `Edit(/${homes}/**)`], ask: ['mcp__werkbank__github_schreiben'], disableBypassPermissionsMode: 'disable' } };
+  // R31: Betrieb, Geheimnis-Vermittler, Coolify-Schreiben und Coolify per Bash ebenso — immer die Karte.
+  return { permissions: { deny: [...AUTO_DENY, `Read(/${homes}/*/.credentials.json)`, `Edit(/${homes}/**)`], ask: ['mcp__werkbank__github_schreiben', ...R31_KLICK, ...COOLIFY_ASK], disableBypassPermissionsMode: 'disable' } };
 }
 
 const ansi = (s: unknown) => String(s ?? '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -456,10 +457,19 @@ export function reapIdle(now = Date.now()): number {
 }
 setInterval(() => { try { reapIdle(); } catch (e: any) { log('leerlauf-prüfung fehlgeschlagen', { error: String(e?.message ?? e).slice(0, 120) }); } }, 60_000).unref();
 
+const STARTED_AT = Date.now();
+/** R31 (werkbank_stand): Wertklassen der Schalter dieses Prozesses — aufgezählte Werte bleiben, alles andere heißt „gesetzt“. */
+export function schalterKlassen(env: Record<string, string | undefined> = process.env): Record<string, string> {
+  return Object.fromEntries(Object.entries(env).filter(([k, v]) => /^(WERKBANK|BRIDGE)_[A-Z0-9_]{1,60}$/.test(k) && v !== undefined)
+    .map(([k, v]) => [k, /^(on|off|an|aus|auto|0|1|claude|melious(:[\w.-]{1,40})?|\d{1,3})$/.test(String(v)) ? String(v) : 'gesetzt']));
+}
+
 export function stats() {
   const pending = [...lives.values()].filter(l => l.pending).length;
   // laufend/schlange: für den Release-Neustart (scripts/werkbank.sh wartet, bis laufende Züge fertig sind — Plan 213 S1a).
-  return { live: lives.size, pending, drainLaufend: lives.size - pending, schlange: laenge(), sessions: Object.keys(sessionMap).length };
+  // R31 (werkbank_betrieb): Neustart aus dem Hauptchat wartet nicht auf dessen eigenen Zug (der ruft den Neustart ja gerade auf).
+  const drainOhneLeit = [...lives.values()].filter(l => !l.pending && !l.leit).length;
+  return { live: lives.size, pending, drainLaufend: lives.size - pending, drainOhneLeit, schlange: laenge(), sessions: Object.keys(sessionMap).length, startedAt: STARTED_AT };
 }
 
 /** S0 (Plan 126): Ordnergrenzen dieser Person für Datei-Werkzeuge und Bash. BRIDGE_PATH_GUARD=off nur zur Diagnose. */
@@ -608,6 +618,8 @@ const ORCH_APPEND = `Dieser Chat ist ein Orchestrator-Strang: Die Haupt-Sitzung 
 const RELEASE_APPEND = `Release-Strang: In deinem Arbeitsordner (einem Release-Worktree der Werkbank) darfst du lokal mergen — genau in der Form \`git -C <Arbeitsordner> merge …\` (auch --abort/--continue), als einzelner Befehl ohne && oder ;. Konflikte löst du mit Edit im Arbeitsordner, dann \`git -C <Arbeitsordner> add …\` und den Merge-Commit. Push, Live-Schalten (werkbank.sh, Live-Instanz, release-live-Skripte) und alles außerhalb des Arbeitsordners bleiben gesperrt — das macht die Hauptsitzung.`;
 /** Knut 19.10. (native Verteilung): wofür Melious, wofür Claude — gilt für Lead und Stränge. */
 const MEL_SUB_HINT = `Verteilung Claude ↔ Melious: Lesen, Suchen im Code, Recherche und Gegenprüfen gibst du mit dem Werkzeug melious_sub an Melious (jcode, nur lesend; modell „flash“ für Fan-out, „glm“ für Urteile) — mehrere Aufrufe dürfen parallel laufen. Das Ergebnis ist ein Kandidat: am Code nachprüfen, bevor du es übernimmst. Code schreiben, Entscheidungen und Antworten an Knut bleiben bei dir (Claude). Lesende Claude-Teilagenten (leser, strang-leser, ticket-pruefer, Explore) leitet der Workspace auf Melious um; nur wenn Melious nicht reicht, „[claude]“ in die description. Die Claude-Auslastung zeigt das Werkzeug auslastung.`;
+/** R31 (WERKBANK_ZUARBEIT=claude oder auto bei knappem Melious): die Zuarbeit bleibt auf Claude. */
+export const MEL_SUB_HINT_CLAUDE = `Verteilung Claude ↔ Melious: Melious ist gerade knapp oder für die Zuarbeit abgeschaltet (WERKBANK_ZUARBEIT). Lesen, Suchen und Recherche gibst du an lesende Claude-Teilagenten (leser, Explore) ab, gebündelt und sparsam; melious_sub und challenge nur, wenn es ausdrücklich verlangt ist. Kontingent und Wahl zeigt das Werkzeug auslastung.`;
 
 export function safeId(s: string): string {
   return /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : createHash('sha256').update(s).digest('hex').slice(0, 24);
@@ -1146,7 +1158,7 @@ function makeGuard(live: Live) {
       emitStatus(live, '✅ ' + statusLine(tool, toolInput));
       rememberWritten(live, tool, toolInput);
       // D2: Klick-Nachweis für die Schreib-Route der Web-App (nur im Hauptchat, nur genau diese Aktion).
-      if (tool === 'mcp__werkbank__github_schreiben' && live.leit) freigabeMerken(live.userId, toolInput);
+      if ((tool === 'mcp__werkbank__github_schreiben' || R31_KLICK.includes(tool)) && live.leit) freigabeMerken(live.userId, toolInput);
       return decide('allow', 'Von der Person im Chat bestätigt.');
     }
     emitStatus(live, '🚫 Nicht ausgeführt.');
@@ -1451,7 +1463,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const profil: Profil = live.orch ? orchMap[key]?.profil ?? 'voll' : 'voll';
   const melAcc = accounts.find(isMelious);
   // Knut 19.10.: lesende Teilagenten laufen auf Melious, wenn es für die Person frei ist (Wächter, melious_sub).
-  live.melFrei = !!melAcc && meliousUsable(melAcc, exhaustedOf(safeId(req.userId)), Date.now()) && melSubAn();
+  // R31 (WERKBANK_ZUARBEIT, Werkbank entscheidet inkl. `auto`): zuarbeit=claude → lesende Teilagenten bleiben auf Claude.
+  live.melFrei = !!melAcc && melAcc.zuarbeit !== 'claude' && meliousUsable(melAcc, exhaustedOf(safeId(req.userId)), Date.now()) && melSubAn();
   // Überlauf auf Melious nur bei niedrigem Risiko (Modellwahl v2): Hauptchat nie, Stränge nur mit Risiko „niedrig“, Chats ja.
   const risiko: Risiko = live.leit ? 'hoch' : orchMap[key]?.risiko ?? (live.orch ? 'mittel' : 'niedrig');
   // Energietopf nahe der Obergrenze (vorrang, Werkbank): niedrig-riskante Arbeit zuerst auf Melious, damit nichts verfällt.
@@ -1506,7 +1519,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.leit ? githubAppend() : '', live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}${profil === 'release' ? `\n\n${RELEASE_APPEND}` : ''}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melSubAn() ? MEL_SUB_HINT : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' && orchMap[key]?.tiefe !== 'live' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.leit ? githubAppend() : '', live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}${profil === 'release' ? `\n\n${RELEASE_APPEND}` : ''}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melSubAn() ? (melAcc?.zuarbeit === 'claude' ? MEL_SUB_HINT_CLAUDE : MEL_SUB_HINT) : '', (live.orch || live.leit) && !live.worker && melAcc && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' && orchMap[key]?.tiefe !== 'live' ? CHALLENGE_HINT : '', extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, isMelious(acct) ? req.token : acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim

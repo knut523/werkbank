@@ -49,6 +49,7 @@ import { listSkills, syncSkills } from './skills.ts';
 import { saveUpload, listFiles, fileFor, filePath, shareFile, deleteFile, copyToScratch, chatsSharedWithMe, chatsSharedByMe, copySharedChat, watchChatShares, readShareLog, logShare, scratchDir } from './sharing.ts';
 import { log } from './log.ts';
 import { cosRoutes } from './cosroutes.ts';
+import { betriebRoutes, neustartMelden } from './betriebroutes.ts';
 import { morgenTick, schnappschussTick } from './cosjob.ts';
 import { olafJira } from './cos-olafjira.ts';
 import { budgetTick, lebenszeichenTick } from './cosbudget.ts';
@@ -95,14 +96,15 @@ import { themenAusStand, entscheide as cosEntscheide } from './cos.ts';
 import { vorschlag as tagesvorschlag, ausLage as vorschlagAusLage, TAGESVORSCHLAG_AN } from './tagesvorschlag.ts';
 import { ICS_AN } from './cosics.ts';
 import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
-import { braucheBraucht, schliesseBraucht, archiviere as archiviereStrang, zurueckholen as brauchtZurueck, hauptchatAktionen, kartEingabe, paketLiveFakten, wendeAufInbox, BRAUCHT_AN as brauchtAn } from './brauchtab.ts';
+import { braucheBraucht, schliesseBraucht, archiviere as archiviereStrang, zurueckholen as brauchtZurueck, hauptchatAktionen, kartEingabe, paketLiveFakten, wendeAufInbox, meldeAktionen, zustellStand, BRAUCHT_AN as brauchtAn } from './brauchtab.ts';
+import { sqlAus, prsAus } from './braucht.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
 import { autoAnnahmeAn, annahmeMs, stufeVon } from './stufe.ts';
 import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
 import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
 import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
-import { chatStatusAn, offeneJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
+import { chatStatusAn, offeneJeStrang, hauptchatJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
 import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
 
 const DIST = join(WEB_DIR, 'dist');
@@ -1498,7 +1500,7 @@ async function inboxFuer(u: User, now = Date.now()) {
   // R30b S5: „Braucht Knut“-Einträge klassifiziert — (c) weg, (b) Statuszeile ohne Knöpfe, (a) „Was du tun musst“.
   if (admin && brauchtAn() && karten.some((k) => k.braucht && !k.running)) {
     const s = await brauchtSicht(u, { karten }).catch((e: any) => { log('braucht fehler', { user: u.id, error: String(e?.message ?? e).slice(0, 160) }); return null; });
-    if (s) ib.eintraege = wendeAufInbox(ib.eintraege, s, { an: true });
+    if (s) { ib.eintraege = wendeAufInbox(ib.eintraege, s, { an: true }); (ib as any).brauchtZu = new Map(s.geschlossen.map((g: any) => [g.strand, g.grund])); }
   }
   zahlCache.set(u.id, { at: Date.now(), n: inboxZahl(ib.eintraege) });   // jede frisch gebaute Inbox stellt auch den Zähler (Kopf = Leiste, 221)
   return ib;
@@ -1806,8 +1808,10 @@ on('GET', /^\/api\/arbeit\/unterchats$/, async (req, res, _m, url) => {
   const med = await etaMediane(u).catch(() => null);
   // Chat-Status (Release 29, Schalter): eine Frage-Quelle — dieselbe Inbox wie die Entscheidungsseite.
   const csAn = chatStatusAn();
-  const offenJe = csAn && !erledigt ? offeneJeStrang((await inboxFuer(u)).eintraege) : new Map<string, number>();
-  const zeilen = arbeitSortiere(docs.filter((d) => erledigt || offenFuerKnut(d)).map((d) => arbeitZeile(d, { mediane: med, offeneFragen: csAn ? offenJe.get(String(d._id)) ?? 0 : undefined })));
+  const ibV = csAn && !erledigt ? await inboxFuer(u) : null;
+  const ibA = ibV?.eintraege ?? [], zuJe: Map<string, string> = (ibV as any)?.brauchtZu ?? new Map();
+  const offenJe = offeneJeStrang(ibA), hcJe = hauptchatJeStrang(ibA);
+  const zeilen = arbeitSortiere(docs.filter((d) => erledigt || offenFuerKnut(d)).map((d) => arbeitZeile(d, { mediane: med, offeneFragen: csAn ? offenJe.get(String(d._id)) ?? 0 : undefined, beimHauptchat: hcJe.get(String(d._id)) ?? 0, veraltet: zuJe.get(String(d._id)) ?? null })));
   const offen = erledigt ? null : zeilen.length;
   const erledigtN = erledigt ? zeilen.length : await orchRuns().countDocuments({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: { $gte: new Date(Date.now() - 14 * 86400_000) }, $or: [{ reviewedBy: 'auto' }, { knutReviewedAt: { $ne: null } }] } as any);
   send(res, 200, { zeilen, offen, erledigt: erledigtN, zaehler: await zaehlerFuer(u), chatStatus: csAn, at: new Date() });
@@ -1818,14 +1822,25 @@ on('GET', /^\/api\/arbeit\/unterchats$/, async (req, res, _m, url) => {
 // „passt“ / „Änderung“ (die vorhandenen Endpunkte /api/leitstand/strands/<id>/passt|reply). Nur lesen.
 async function chatStatusListe(u: User) {
   const docs = ((await orchRuns().find({ userId: u.id, ...AUF_UEBERSICHT() }).sort({ startedAt: -1 }).limit(200).toArray()) as any[]).filter(offenFuerKnut);
-  const offenJe = offeneJeStrang((await inboxFuer(u)).eintraege);
-  const strange = docs.map((d) => { const n = offenJe.get(String(d._id)) ?? 0; return { id: String(d._id), conv: d.conv ?? null, titel: String(d.title ?? ''), offen: n, ...chatStatusVon(d, n) }; });
+  const ibV = await inboxFuer(u);
+  const ib = ibV.eintraege, zuJe: Map<string, string> = (ibV as any).brauchtZu ?? new Map();
+  const offenJe = offeneJeStrang(ib), hcJe = hauptchatJeStrang(ib);
+  const strange = docs.map((d) => { const n = offenJe.get(String(d._id)) ?? 0; return { id: String(d._id), conv: d.conv ?? null, titel: String(d.title ?? ''), offen: n, ...chatStatusVon(d, n, hcJe.get(String(d._id)) ?? 0, zuJe.get(String(d._id)) ?? null) }; });
   return { strange, zaehler: zaehleChat(strange.map((x) => x.status)) };
 }
 on('GET', /^\/api\/chatstatus$/, async (req, res) => {
   const u = await needAdmin(req);
   if (!chatStatusAn()) return send(res, 200, { an: false });
   send(res, 200, { an: true, ...(await chatStatusListe(u)), at: new Date() });
+});
+// R30b-Nachbesserung (Knut 02.11.): veralteten wartenden Strang per Knopf archivieren (brauchtab.ts, Compare-and-Set, nichts
+// gelöscht; nur mit WERKBANK_BRAUCHT_DICH=an). Zurückholen: der bestehende Knopf in Arbeit › Erledigt (reviewedBy 'auto').
+on('POST', /^\/api\/chatstatus\/([0-9a-f]{8})\/archivieren$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  if (!brauchtAn()) throw new HttpError(409, 'Archivieren gibt es nur mit WERKBANK_BRAUCHT_DICH=an.');
+  const ok = await archiviereStrang(u.id, m[1], 'von Knut als veraltet archiviert (Chat-Karte)', { env: process.env });
+  log('strang archiviert', { user: u.id, id: m[1], ok, via: 'karte' });
+  send(res, 200, { ok, id: m[1] });
 });
 /** Karte eines Chats; `key` = Strang-Kennung (8 Hex) oder die Unterhaltung (LibreChat-ID aus der Adresse /c/<id>). */
 on('GET', /^\/api\/chatstatus\/([0-9a-f]{8}|[0-9a-f-]{36})$/, async (req, res, m) => {
@@ -1837,7 +1852,7 @@ on('GET', /^\/api\/chatstatus\/([0-9a-f]{8}|[0-9a-f-]{36})$/, async (req, res, m
   const ib = await inboxFuer(u);
   const fragen = fragenJeStrang(ib.eintraege, id);
   const offen = offeneJeStrang(ib.eintraege).get(id) ?? 0;
-  const cs = chatStatusVon(d, offen);
+  const cs = chatStatusVon(d, offen, hauptchatJeStrang(ib.eintraege).get(id) ?? 0, (ib as any).brauchtZu?.get(id) ?? null);
   const qs = await listQuestions(u, { open: true }).catch(() => [] as any[]);
   const fgs: any[] = await freigaben().find({ strand: id, revokedAt: null }).sort({ at: -1 }).toArray().catch(() => []);
   const basis = paketBasis();
@@ -1845,10 +1860,12 @@ on('GET', /^\/api\/chatstatus\/([0-9a-f]{8}|[0-9a-f-]{36})$/, async (req, res, m
   const paket = k?.paket ? readPaket(reviewDir(), k.paket) : null;
   send(res, 200, {
     an: true, strang: true, id, conv: d.conv ?? null, titel: String(d.title ?? ''), status: cs.status, text: cs.text, ton: cs.ton, grund: cs.grund, offen,
+    // Archivieren-Knopf (Nachbesserung 02.11.): nur wartende/blockierte, nicht laufende, nicht von Knut geprüfte Stränge, nur mit Schalter.
+    archivierbar: brauchtAn() && d.lastStatus !== 'running' && !d.knutReviewedAt && (cs.status === 'braucht' || cs.status === 'hauptchat' || cs.status === 'haengt' || ((ib as any).brauchtZu?.has(id) ?? false)),
     seen: k?.seen ?? null, laeuft: d.lastStatus === 'running',
     fragen: fragen.map((f) => ({ ...f, worumKurz: ersterSatz(f.worum) })),
     // Blockiert/„braucht Antwort“ ohne einzelne Frage: der Grund und ein freies Antwortfeld (geht als Antwort an den Strang).
-    freitext: cs.status === 'braucht' && !fragen.length ? { grund: d.zustandGrund ?? d.lastReason ?? '', auszug: String(d.lastExcerpt ?? '').slice(0, 600) } : null,
+    freitext: cs.status === 'braucht' && !fragen.some((f) => f.klasse !== 'aktion') ? { grund: d.zustandGrund ?? d.lastReason ?? '', auszug: String(d.lastExcerpt ?? '').slice(0, 600) } : null,
     review: cs.status === 'review' && k ? { titel: k.titel, kurz: ersterSatz(k.kurz), links: k.links, bilder: /^\d{1,4}-[a-z0-9][a-z0-9-]*$/.test(k.paket ?? '') ? (paket?.files ?? []).filter((f: any) => /\.(png|jpe?g|gif|webp)$/i.test(f.rel)).slice(0, 4).map((f: any) => `api/files/agenten/${k.paket}/${f.rel.split('/').map(encodeURIComponent).join('/')}?inline=1`) : [], github: k.github, anders: k.anders, paket: k.paket } : null,
     at: new Date(),
   });
@@ -3310,12 +3327,18 @@ on('PUT', /^\/api\/files$/, async (req, res, _m, url) => {
   send(res, 200, { ok: true, id: f._id, name: f.name });
 });
 
-on('GET', /^\/api\/files\/([0-9a-f-]{36})\/download$/, async (req, res, m) => {
+on('GET', /^\/api\/files\/([0-9a-f-]{36})\/download$/, async (req, res, m, url) => {
   const u = await needUser(req);
   const f = await fileFor(u, m[1]);
   if (!f) throw new HttpError(404, 'Datei nicht gefunden.');
   // Eine verschobene Vault-Notiz (oder eine fehlende Kopie) ist ein 404, kein Absturz des Prozesses (Review B2).
   if (!existsSync(filePath(f))) throw new HttpError(404, f.kind === 'vault' ? 'Die Notiz liegt nicht mehr an dieser Stelle im Vault.' : 'Datei nicht mehr vorhanden.');
+  // R31 (screenshot): Bilder mit ?inline=1 im Chat anzeigen (wie die Paket-Bilder, BILD_MIME; Sandbox-CSP bleibt).
+  const bild = BILD_MIME[extname(String(f.name)).toLowerCase()];
+  if (bild && url.searchParams.get('inline') === '1') {
+    res.writeHead(200, { 'content-type': bild, 'x-content-type-options': 'nosniff', 'content-security-policy': "sandbox; default-src 'none'", 'cache-control': 'private, max-age=60' });
+    return void createReadStream(filePath(f)).on('error', () => res.destroy()).pipe(res);
+  }
   res.writeHead(200, {
     'content-type': 'application/octet-stream', 'x-content-type-options': 'nosniff',
     'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(f.name)}`,
@@ -3493,6 +3516,9 @@ cosRoutes({
     return themenAusStand(alle.filter((x) => x.type !== 'Workstream'), wsNamen, karten, wienDatum());
   },
 });
+
+// R31 S3+S4 (Umzug): werkbank_betrieb/_stand, Geheimnis-Vermittler, Coolify, datei_teilen, screenshot, Kontingent.
+betriebRoutes({ on, needUser, orchPerson: (req, b) => orchPerson(req, b), body, send, HttpError, log });
 
 // --- intern: nur für die Brücke und ihre Werkzeuge (Header mit WERKBANK_INTERNAL_TOKEN) ---
 
@@ -3738,15 +3764,47 @@ async function brauchtSicht(u: User, o: { schliessen?: boolean; karten?: any[] }
     if (juenger > 0) laeufeNeuer.push(String(d._id));
   }
 
+  // Nachtrag 02.11. (tariff-app#193): genannte PRs gegen die GitHub-Kopie (github_prs, nur offene) — offen und konfliktfrei
+  // (mergeable MERGEABLE) heißt: ein Merge-/Konflikt-Anlass ist weg. „Geschlossen“ wird daraus NICHT geschlossen (unbekannter
+  // Repo-Name ≠ zu); das bleibt beim Kartenstand (prsZu oben). Kurzname „tariff-app#193“ findet „olaf-tariff-app#193“, wenn eindeutig.
+  const gh = await livePrs().catch(() => null);
+  const ghKey = (pr: string) => { if (!gh) return null; if (gh.map.has(pr)) return pr; const t = [...gh.map.keys()].filter((x) => x.endsWith(`-${pr}`)); return t.length === 1 ? t[0] : null; };
+  const prsJe = new Map<string, string[]>();
+  for (const k of karten) {
+    const d = docs.find((x) => String(x._id) === k.id);
+    const imAuftrag = prsAus(String(d?.prompt ?? '').slice(0, 8000));
+    const roh = prsAus(...(k.prs ?? []).map((z: any) => z.url), k.braucht, k.titel, d?.title, ...(imAuftrag.length === 1 ? imAuftrag : []));
+    prsJe.set(k.id, [...new Set(roh.map((p) => ghKey(p) ?? p))]);
+  }
+  const prsKonfliktfrei = [...new Set([...prsJe.values()].flat())].filter((p) => gh?.map.get(p)?.mergeable === 'MERGEABLE');
+  // Strang angehalten/abgebrochen/erledigt: dann gilt keine „Braucht Knut“-Bitte mehr (Nachtrag 02.11.).
+  const zuGrund = (d: any) => (!d ? null : d.zustand === 'erledigt' ? 'der Unter-Chat ist erledigt' : d.endedAt ? 'der Unter-Chat ist beendet' : d.autoStopped && !d.reviewReadyAt ? `der Unter-Chat wurde angehalten (${String(d.autoStopped.reason ?? 'Deckel').slice(0, 80)})` : null);
+
   const sicht = braucheBraucht(karten.map((k: any) => kartEingabe({
     strand: k.id, titel: k.titel, zeile: k.braucht,
     paket: k.paket ? Number(k.paket.split('-')[0]) || null : null,
     pr: (k.prs ?? []).filter((z: any) => z.stand === 'gemergt' || z.stand === 'geschlossen').map((z: any) => prKennung(z.url))[0] ?? null,
     lauf: k.id,   // laeufeNeuer enthält Strang-Kennungen (Pass C)
-  })), { beantwortet, paketeLive, prsZu, laeufeNeuer, aktionen: hauptchatAktionen() }, { an });
+    sql: sqlFuer(docs.find((d) => String(d._id) === k.id)),
+    prs: prsJe.get(k.id) ?? [],
+    strangZu: zuGrund(docs.find((d) => String(d._id) === k.id)),
+    anlassText: (() => { const d = docs.find((x) => String(x._id) === k.id); return `${d?.title ?? ''} ${String(d?.prompt ?? '').slice(0, 2000)}`; })(),
+  })), { beantwortet, paketeLive, prsZu, prsKonfliktfrei, laeufeNeuer, aktionen: hauptchatAktionen() }, { an });
   // (c) sofort schließen (der Takt ruft mit schliessen, GET ohne).
   if (o.schliessen && sicht.geschlossen.length) await schliesseBraucht(u.id, sicht.geschlossen, { env: process.env });
-  return { an, ...sicht };
+  // (b) beim Hauptchat abliefern (Takt) bzw. den Stand der Zustellung lesen (Inbox/GET) — Nachbesserung 02.11.
+  const zustellung = o.schliessen ? await meldeAktionen(u.id, sicht.aktionen, { env: process.env }) : await zustellStand(u.id, sicht.aktionen.map((p) => p.kennung));
+  return { an, ...sicht, zustellung };
+}
+/** SQL zum Kopieren für eine DB-Bitte: erster ```sql-Block aus der letzten Antwort, sonst aus PR-Text oder Bericht des Pakets. */
+function sqlFuer(d: any): string | null {
+  if (!d) return null;
+  const aus = sqlAus(d.lastExcerpt);
+  if (aus) return aus;
+  const b = (() => { try { return paketDatei(d, 'bericht'); } catch { return null; } })();
+  if (!b) return null;
+  for (const f of [b.replace(/bericht\.md$/, 'pr.md'), b]) { try { const t = sqlAus(readBericht(f)); if (t) return t; } catch { /* nicht lesbar */ } }
+  return null;
 }
 const prKennung = (url: string) => { const m = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/.exec(String(url ?? '')); return m ? `${m[1]}#${m[2]}` : String(url ?? ''); };
 let brauchtTaktLaeuft = false;   // Takt-Schutz (Pass C): ein Durchgang zur Zeit
@@ -4252,6 +4310,8 @@ mkdirSync(cfg.dataDir, { recursive: true });
 migrateLegacy(log).catch((e) => log('ablage-umzug', { error: String(e?.message ?? e).slice(0, 200) }));
 server.listen(cfg.port, cfg.host, () => log('listening', { host: cfg.host, port: cfg.port, demo: cfg.demo, vault: cfg.vaultDir }));
 if (process.env.WERKBANK_NO_JOBS !== '1') backgroundJobs();
+// R31 (werkbank_betrieb): nach einem Neustart aus dem Hauptchat dort „fertig“ melden (Marke in cfg.dataDir).
+setTimeout(() => neustartMelden(async (id) => { const u = await userById(id); return u && allowed(u.email) ? u : null; }, log).catch(() => {}), 5000).unref();
 // Orchestrator-Stränge selbst fortsetzen (docs/plan-orchestrator-auto-weiter.md) — eigener Takt, auch ohne Hintergrundjobs.
 // „Konto frei“ nur mit Antwort der Brücke und mindestens zwei Konten (sonst wartet `rate_limit` die 30 min ab).
 const orchDeps = {

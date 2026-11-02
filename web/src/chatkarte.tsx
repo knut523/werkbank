@@ -64,6 +64,25 @@ function ReviewTeil({ d, onDone }: { d: any; onDone: () => void }) {
   </div>;
 }
 
+/** Veralteten Strang archivieren (Nachbesserung 02.11.): mit Sicherheitsabfrage, nichts wird gelöscht. */
+function Archivieren({ id, onDone }: { id: string; onDone: () => void }) {
+  const toast = useToast();
+  const [sicher, setSicher] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const los = async () => {
+    if (!sicher) { setSicher(true); return; }
+    setBusy(true); setErr(null);
+    try { const r: any = await api(`/api/chatstatus/${id}/archivieren`, { body: {} }); toast(r.ok ? 'Archiviert — zurückholen geht in Arbeit › Erledigt' : 'Nicht archiviert (schon erledigt oder geschützt)'); onDone(); }
+    catch (e) { setErr(e); } finally { setBusy(false); setSicher(false); }
+  };
+  return <div className="ub-row" data-testid="ck-archiv">
+    <button className="ub-btn ghost sm" disabled={busy} onClick={los} data-testid="ck-archivieren" title="Der Anlass ist weg (z. B. PR gemergt oder konfliktfrei) — Unter-Chat als erledigt ablegen, nichts wird gelöscht">{sicher ? 'Wirklich archivieren?' : 'Veraltet — archivieren'}</button>
+    {sicher && <button className="ub-btn ghost sm" onClick={() => setSicher(false)}>Abbrechen</button>}
+    <Err e={err} />
+  </div>;
+}
+
 export function ChatKarte({ id }: { id: string }) {
   const { data, error, reload } = useLoad<any>(() => api(`/api/chatstatus/${id}`), [id]);
   const wurzel = useRef<HTMLDivElement>(null);
@@ -80,7 +99,9 @@ export function ChatKarte({ id }: { id: string }) {
   if (error) return <div ref={wurzel}><Err e={error} /></div>;
   if (!data) return <div ref={wurzel}><Loading /></div>;
   if (!data.an || !data.strang) return <div ref={wurzel} data-testid="chatkarte-leer" />;
-  const offen: any[] = data.fragen ?? [];
+  // Nachbesserung 02.11.: die Kopfzeile „n Fragen an dich“ zählt nur (a); (b) steht darunter unter „Erledigt der Hauptchat“.
+  const offen: any[] = (data.fragen ?? []).filter((f: any) => f.klasse !== 'aktion');
+  const hauptchat: any[] = (data.fragen ?? []).filter((f: any) => f.klasse === 'aktion');
   const nachDer = () => reload();
   return (
     <div ref={wurzel} className={`ck ck-${data.status}`} data-testid="chatkarte" data-status={data.status}>
@@ -97,7 +118,12 @@ export function ChatKarte({ id }: { id: string }) {
           <Freitext id={data.id} seen={data.seen} art="antwort" vorgabe="Deine Antwort an den Chat" knopf="Antwort schicken" onDone={nachDer} />
         </div>}
       </>}
+      {(data.status === 'braucht' || data.status === 'hauptchat') && hauptchat.length > 0 && <div data-testid="ck-hauptchat">
+        <p className="small"><b>Erledigt der Hauptchat</b> — nichts für dich.</p>
+        {hauptchat.map((f) => <Karte key={f.id} f={f} kurz onDone={() => nachDer()} />)}
+      </div>}
       {data.status === 'review' && <ReviewTeil d={data} onDone={nachDer} />}
+      {data.archivierbar && <Archivieren id={data.id} onDone={nachDer} />}
     </div>
   );
 }
