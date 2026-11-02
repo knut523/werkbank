@@ -18,7 +18,7 @@ process.env.WERKBANK_DB = `werkbank_test_fix_${tag}`;
 process.env.WERKBANK_PR_REVIEW_DIR = join(T0, 'pr');
 process.env.WERKBANK_REVIEW_DIR = join(T0, 'pakete');
 mkdirSync(process.env.WERKBANK_REVIEW_DIR, { recursive: true });
-delete process.env.WERKBANK_FIX_ORGS; delete process.env.WERKBANK_FIX; delete process.env.WERKBANK_PR_TICKER;
+delete process.env.WERKBANK_FIX_ORGS; delete process.env.WERKBANK_FIX; delete process.env.WERKBANK_PR_TICKER; delete process.env.WERKBANK_GIT_SCHREIB_ROOT;
 const T = await import('../server/prticker.ts');
 const F = await import('../server/prfix.ts');
 const db = await import('../server/db.ts');
@@ -221,6 +221,26 @@ test('pushVia: geschützte Zweige, fremde Repos, ungültige SHAs werden vor jede
   await assert.rejects(F.pushVia('WirStrom1/olaf-admin', klon, B, 'feat/x', tok), /Git-Config des Klons verändert/);
   const env = F.pushEnv('geheim', 'WirStrom1/olaf-admin', { PATH: '/bin', HOME: '/h', GIT_VW_READ: '1', GH_TOKEN: 'x' } as any);
   assert.equal(env.GIT_VW_READ, undefined); assert.equal(env.GH_TOKEN, undefined); assert.equal(env.GIT_CONFIG_GLOBAL, '/dev/null'); assert.equal(env.GIT_SSH_COMMAND, 'false');
+});
+
+test('schreibUrl: Vorgabe github.com; WERKBANK_GIT_SCHREIB_ROOT (E2E-Demo) biegt nur den Push aufs lokale Bare-Repo', async () => {
+  assert.equal(F.schreibUrl('WirStrom1/olaf-admin'), 'https://github.com/WirStrom1/olaf-admin.git');
+  assert.equal(F.schreibUrl('WirStrom1/olaf-admin', { WERKBANK_GIT_SCHREIB_ROOT: '/tmp/demo/' }), 'file:///tmp/demo/WirStrom1/olaf-admin.git');
+  // Der echte pushVia mit Schalter pusht (ohne Force) ins lokale Bare-Repo — configSicher bleibt an der github.com-URL
+  // eigenes Bare-Repo (nicht <T0>/gh — das teilen sich die Ende-zu-Ende-Tests)
+  const root = mkdtempSync(join(tmpdir(), 'schreibroot-'));
+  const bare = join(root, 'WirStrom1', 'olaf-admin.git');
+  mkdirSync(bare, { recursive: true });
+  git(['init', '--bare', '-q'], bare);
+  const klon = mkdtempSync(join(tmpdir(), 'klon-p-'));
+  git(['init', '-q'], klon);
+  git(['remote', 'add', 'origin', 'https://github.com/WirStrom1/olaf-admin.git'], klon);
+  writeFileSync(join(klon, 'a.ts'), 'export const a = 1;\n'); git(['add', '.'], klon); git(['commit', '-qm', 'fix'], klon);
+  const sha = git(['rev-parse', 'HEAD'], klon);
+  const env = { ...process.env, WERKBANK_GIT_SCHREIB_ROOT: root } as any;
+  await F.pushVia('WirStrom1/olaf-admin', klon, sha, 'feat/x', async () => 'demo-token', env);
+  assert.equal(git(['rev-parse', 'refs/heads/feat/x'], bare), sha, 'Push ist im lokalen Bare-Repo angekommen');
+  await assert.rejects(F.pushVia('WirStrom1/olaf-admin', klon, sha, 'main', async () => 'demo-token', env), /ungültig/);
 });
 
 test('gateVia: Exit 0 grün, Exit 1 harter Befund, sonst Aufruffehler', async () => {
