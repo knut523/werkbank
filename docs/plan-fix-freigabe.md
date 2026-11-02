@@ -4,6 +4,11 @@ Auftrag Knut, 02.11.2026 („Release 30a“): „@fix … kannst du es laufen la
 postest dann, wenn es gut ist." Heute gibt es nur Trockenlauf (`WERKBANK_FIX_DRYRUN`, `trocknen` in prfix.ts) oder
 vollautomatischen Push. Neu: ein dritter Modus mit expliziter Freigabe.
 
+**Nachtrag Knut, 02.11.2026:** „Fixes sollten immer ok sein — besonders auf einem offenen PR — solange alle Regeln mechanisch
+geprüft sind." → vierter Modus `auto`: Alles Grüne pusht und kommentiert OHNE Klick; fällt eine mechanische Prüfung, geht der
+Fix in die Freigabe-Frage (statt abgelehnt zu werden). Der Hauptchat bekommt in beiden Fällen eine Meldung (Audit in
+`pr_fix_audit`). Welche Regeln heute NICHT mechanisch geprüft werden, steht im Bericht (Review-Paket).
+
 ## Ziel
 
 1. **Modus `WERKBANK_FIX_FREIGABE=on`** (Vorgabe aus): Statt des Trockenlaufs hält der Server den geprüften Stand fest
@@ -60,6 +65,11 @@ freigabe_frage → (Ablehnen) → abgelehnt
   (`f.freigabe.neu === neu`, sonst `freigabe_frage` zurücksetzen + melde „Stand hat sich geändert"), PR-Kopf seit der
   Freigabe unverändert (pr.headRefOid === f.freigabe.neu).
 - Reaper: `freigabe_frage` NICHT in `LAEUFT` — wird nie reapt, läuft nie neu an (Punkt 5).
+- **R30a (auto)**: `fixAuto(f)` (`WERKBANK_FIX_FREIGABE=auto` bzw. `auto`-Marke) ist der Bruder von `fixFreigabe`.
+  In `pruefeUndPushe` fragt auto nur bei gefallener Prüfung (`!p.ok` → frageStellen mit den Gründen); ein grüner
+  Lauf fällt in den normalen Push-Weg (Push, Audit `gepusht`, Delta-Review, Antwort-Kommentar, `fertig`) plus
+  Meldung „Auto-Modus: gepusht …" an den Hauptchat. Ein fehlender Push-Weg macht den Lauf rot („push is not
+  configured" → Frage), statt grün durchzufallen.
 
 ### Hauptchat-Aktionen (github_schreiben-Weg, kein neues MCP-Werkzeug)
 
@@ -159,9 +169,31 @@ kein manueller Push von mir.
 
 | Schalter | Vorgabe | Wirkung |
 |---|---|---|
-| `WERKBANK_FIX_FREIGABE` | `off` | Freigabe-Modus: `@fix` endet in `freigabe_frage` statt Trockenlauf/Push |
+| `WERKBANK_FIX_FREIGABE` | `off` | `1`/`on`: `@fix` endet in `freigabe_frage` statt Trockenlauf/Push — Push erst nach „@fix freigeben". `auto` (R30a): grüner Lauf pusht und kommentiert ohne Klick; roter Lauf endet in der Freigabe-Frage statt in der Ablehnung |
 | `WERKBANK_LEITSTAND` | (bestehend) | `github_schreiben`-Tool (Lead) — nötig für die Freigabe-Karte |
 | `WERKBANK_HAUPTCHAT_GITHUB` | (bestehend) | github_schreiben-Route im Hauptchat |
+
+Rangfolge: Trockenlauf (`WERKBANK_FIX_DRYRUN`) > Freigabe-Modus (`1`/`on`, bzw. `frage`-Marke am Eintrag) > Auto-Modus
+(`auto`, bzw. `auto`-Marke am Eintrag) > Vorgabemodus. Die Marken setzt `queueFixes` beim Einreihen; sie zählen
+weiter, wenn der Schalter während des Laufens ausgeht.
+
+### Auto-Modus im Detail (`WERKBANK_FIX_FREIGABE=auto`, R30a — Nachtrag Knut, 02.11.2026)
+
+- **Grüner Lauf** (pushPruefung ok): direkter Push auf den PR-Kopf-Zweig, Antwort-Kommentar, Delta-Review, Audit
+  `gepusht`, Status `fertig` — derselbe Weg wie der Vorgabemodus, ganz ohne Klick. Meldung an den Hauptchat:
+  „Auto-Modus: gepusht … alle mechanischen Prüfungen grün".
+- **Roter Lauf** (irgendeine Prüfung fällt): `freigabe_frage` mit den Gründen statt `abgelehnt` — Knut sieht die
+  Gründe (Meldung „Auto-Modus, aber … nicht freigabefähig: … — freigeben?") und kann freigeben; `freigabeLauf` prüft
+  danach alles NEU (Tests/Gate/frischer PR), die Freigabe ist kein Vertrauensvorschuss auf den alten Lauf.
+- **Mechanische Prüfungen** (alle aus `pushPruefung`, keine neue Logik): PR offen, kein Fork (`crossRepo`), Zweig
+  nicht geschützt (`GESCHUETZT`), Kopf unverändert/Fast-forward (kein Force), Tests im Worktree grün, Pre-Push-Gate
+  0 harte Befunde (`gate.hart === 0`), Git-Config des Klons unverändert (`configSicher`), kein Geheimnis im
+  Antwort-Text (`GEHEIM`), Commit-Regeln über die harten Gate-Regeln (kein `next-env.d.ts`, keine `.env`).
+- **Fehlender Push-Weg** im Auto-Modus: Der Strang startet trotzdem und endet mit Grund „push is not configured" in
+  der Frage (nicht still übersprungen).
+- Was dabei NICHT mechanisch geprüft wird (Checklisten-Punkte des Gates nur Warnung, Sprach-/Glossar-Regeln,
+  Co-Authored-By-Trailer, Geheimnis-Scanner nur für Kommentar-Text, secrets in Workflows nur Warnung): Liste im
+  Bericht — dort ist entschieden, was hart werden muss.
 
 Bestehende Schalter unverändert: `WERKBANK_FIX_DRYRUN`, `WERKBANK_FIX_ORGS`, `WERKBANK_FIX_MAX`, `autoFix`,
 `allow`-Liste des Tickers.

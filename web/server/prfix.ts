@@ -33,7 +33,15 @@ export const fixTrocken = (f: any, env = process.env) => f?.trocken === true || 
  * `trocken` schon beim Einreihen gesetzt: Geht der Schalter während des Laufens aus, endet der Lauf trotzdem in der
  * Frage, nie im Auto-Push. Trockenlauf hat Vorrang (beide Schalter an → Trockenlauf, das ist die sicherere Seite).
  */
-export const fixFreigabe = (f: any, env = process.env) => (f?.frage === true || env.WERKBANK_FIX_FREIGABE === '1') && !fixTrocken(f, env);
+export const fixFreigabe = (f: any, env = process.env) => (f?.frage === true || env.WERKBANK_FIX_FREIGABE === '1' || env.WERKBANK_FIX_FREIGABE === 'on') && !fixTrocken(f, env);
+/**
+ * R30a (Nachtrag Knut, 02.11.2026): Modus `WERKBANK_FIX_FREIGABE=auto` — „Fixes sollten immer ok sein, solange alle
+ * Regeln mechanisch geprüft sind“. Alles Grüne pusht und kommentiert OHNE Klick (wie der Vorgabemodus); fällt eine
+ * mechanische Prüfung, geht der Fix in die Freigabe-Frage (statt abgelehnt zu werden) — Knut kann ihn dort trotz der
+ * gesehenen Gründe freigeben. `auto` wird wie `frage` beim Einreihen markiert; Trockenlauf und der Frage-Modus haben
+ * Vorrang.
+ */
+export const fixAuto = (f: any, env = process.env) => (f?.auto === true || env.WERKBANK_FIX_FREIGABE === 'auto') && !fixTrocken(f, env) && !fixFreigabe(f, env);
 /** Höchstens so viele Fix-Stränge gleichzeitig (eigener Deckel neben den Reviews). */
 export const fixMax = (env = process.env) => { const n = Math.floor(Number(env.WERKBANK_FIX_MAX)); return n >= 1 && n <= 4 ? n : 1; };
 export const auditCol = () => wb().collection('pr_fix_audit');
@@ -278,7 +286,7 @@ export interface FixDeps {
 async function setzeStatus(f: any, zeile: string, deps: FixDeps, now: Date) {
   // R29 A: Im Trockenlauf keine Statuszeile an GitHub — die Zeile steht nur im Eintrag/Log.
   // R30: Im Freigabe-Modus ebenso — bis zur Freigabe passiert an GitHub nichts, die Frage geht an den Hauptchat.
-  if (fixTrocken(f) || fixFreigabe(f)) { deps.log?.('pr-fix status (ohne GitHub)', { pr: `${f.repo}#${f.number}`, zeile }); return; }
+  if (fixTrocken(f) || fixFreigabe(f) || fixAuto(f)) { deps.log?.('pr-fix status (ohne GitHub)', { pr: `${f.repo}#${f.number}`, zeile }); return; }
   if (!deps.status) return;
   try {
     const doc: any = await fixesCol().findOne({ _id: f._id }, { projection: { sk: 1 } });
@@ -441,7 +449,9 @@ async function starte(f: any, s: TickerSettings, deps: FixDeps, g: GitRun, now: 
   // R29 A: Im Trockenlauf wird nie gepusht — ein fehlender Push-Weg darf den Strang dann nicht verhindern.
   // R30: Dasselbe gilt für den Freigabe-Modus — der Push kommt erst nach Knuts Freigabe (freigabeLauf scheitert
   // dann sichtbar, wenn es ohne Push-Weg freigegeben wird; s. Test „ohne Push-Weg“).
-  const fehlt = [!deps.push && !fixTrocken(f) && !fixFreigabe(f) && 'pushing is switched off in the workspace', !deps.gate && 'the pre-push gate is not set up', !deps.tests && 'test execution is switched off'].filter(Boolean) as string[];
+  // R30a (auto): Der Auto-Modus will grün automatisch pushen — auch ohne Push-Weg startet der Strang (die
+  // Gründe stehen dann in der Frage; dort kann Knut nachrüsten oder freigeben).
+  const fehlt = [!deps.push && !fixTrocken(f) && !fixFreigabe(f) && !fixAuto(f) && 'pushing is switched off in the workspace', !deps.gate && 'the pre-push gate is not set up', !deps.tests && 'test execution is switched off'].filter(Boolean) as string[];
   const vorab = !s.autoFix ? ['@fix is switched off'] : [...vorabPruefung(f.repo, pr), ...fehlt];
   if (vorab.length) {
     await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'übersprungen', note: vorab.join('; '), doneAt: now } });
@@ -485,7 +495,11 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
     let url: string | null = null;
     // R29 A: Ohne fix.json wird kein Antwort-Kommentar geplant — nur im Paket vermerkt.
     const text = fix ? zuGithub(antwortText({ by: f.by, quelle: f.quelle ?? null, start: f.head, neu: null, zweig: f.zweig, gepusht: false, gruende: ['the fix produced no commits'], fix, commits: [], tests: null, gate: null, deltaReview: false })) : null;
-    if (fixTrocken(f)) { if (text) try { writeFileSync(join(dir, 'antwort.md'), `${text}\n`); } catch { /* s. o. */ } }
+    // R29 A/R30/R30a: Trockenlauf, Freigabe- und Auto-Modus posten den geplanten Kommentar nur ins Paket — bei
+    // einem leeren Strang gibt es nichts zu fragen oder freizugeben. Punkt 5: `nichts` ist ein abgeschlossener
+    // Zustand und läuft nie neu an; eine Frage würde unbeantwortet liegen bleiben.
+    const frageModus = fixTrocken(f) || fixFreigabe(f) || fixAuto(f);
+    if (frageModus) { if (text) try { writeFileSync(join(dir, 'antwort.md'), `${text}\n`); } catch { /* s. o. */ } }
     else if (text && deps.kommentar) url = (await deps.kommentar(f, text).catch(() => null))?.url ?? null;
     await setzeStatus(f, fixZeile({ art: 'nothing', grund: abgebrochen ? 'the fix run was interrupted' : fix?.kurz ? zeile1(fix.kurz).slice(0, 200) : undefined, url }), deps, now);
     await melde(f, `keine Änderungen${abgebrochen ? ' (Strang abgebrochen)' : ''} — Paket ${f.paket}`, deps);
@@ -514,6 +528,8 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
   const lage: PushLage = { repo: f.repo, ziel: f.zweig, pr, start: f.head, neu, commits: anzahl, fastForward: ff, gate: gate && { exit: gate.exit, hart: gate.hart }, tests: testsGruen(tests), autoFix: s2.autoFix, von: f.by, allow: s2.allow, configOk };
   const p = pushPruefung(lage);
   // Freigabe-Modus (R30): Ohne Push-Weg darf er bis zur Frage laufen — aber nie automatisch pushen.
+  // R30a (auto): Der Auto-Modus WILL pushen — fehlt der Push-Weg, geht der Fix mit Grund in die Frage (nicht
+  // grün durchfallen und dann am fehlenden Weg abstürzen).
   if (p.ok && !deps.push && !fixTrocken(f) && !fixFreigabe(f)) p.gruende.push('push is not configured'), (p.ok = false);
   const testsAudit = lage.tests;
   // R29 A (Trockenlauf): Tests und Gate sind gelaufen, das Urteil steht fest — jetzt wird das Paket geschrieben
@@ -521,7 +537,13 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
   if (fixTrocken(f)) return trocknen(f, p, { fix, neu, commits, tests, gate }, dir, klon, g, deps, now);
   // R30 (Freigabe): Gleicher Punkt — aber statt des Trockenlauf-Abschlusses wird der geprüfte Stand festgehalten und
   // im Hauptchat gefragt. `antwort.md` zeigt den geplanten Kommentar (ohne DRY-RUN-Kopf), der Push bleibt aus.
+  // R30a (auto): Ist alles grün, pusht und kommentiert der Lauf OHNE Klick (weiter unten wie im Vorgabemodus); fällt
+  // eine mechanische Prüfung, geht der Fix hier in die Frage statt in die Ablehnung — Knut sieht die Gründe und kann
+  // freigeben (freigabeLauf prüft alles NEU, deswegen ist das kein Vertrauensvorschuss auf den alten Lauf).
   if (fixFreigabe(f) && !f.freigabe) return frageStellen(f, p, { fix, neu, commits, tests, gate }, dir, g, deps, now);
+  // R30a (auto): Bei einer gefallenen Prüfung in die Frage (keine Ablehnung) — grün fällt weiter in den
+  // normalen Push-Weg unten (Push, Audit, Delta-Review, Antwort-Kommentar, fertig), ganz ohne Klick.
+  if (fixAuto(f) && !f.freigabe && !p.ok) return frageStellen(f, p, { fix, neu, commits, tests, gate }, dir, g, deps, now);
   if (!p.ok) {
     await audit(f, { ergebnis: 'abgelehnt', von: f.head, nach: neu, zweig: f.zweig, gate, tests: testsAudit, gruende: p.gruende }, now);
     return ablehnen(f, p.gruende, { fix, neu, commits, tests, gate }, deps, now);
@@ -549,6 +571,9 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
   await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'fertig', doneAt: now, neu, gepusht: { at: now, von: f.head, nach: neu }, antwort: url, deltaReview, note: text ? null : 'Antwort nicht gepostet (sah nach einem Geheimnis aus)' } });
   await setzeStatus(f, fixZeile({ art: 'pushed', zweig: f.zweig, von: f.head, nach: neu, url }), deps, now);
   if (!text) await melde(f, `gepusht ${f.head.slice(0, 7)}..${neu.slice(0, 7)}, Antwort-Kommentar zurückgehalten (sah nach einem Geheimnis aus) — Paket ${f.paket}`, deps);
+  // R30a (auto): Meldung auch im Grünen — der Hauptchat sieht jeden Auto-Push (Nachtrag Knut, 02.11.). Im
+  // Freigabe-Modus bleibt es still (die Frage kam ja schon), die Freigabe-Meldung macht freigabeLauf/pusheAbschluss.
+  else if (fixAuto(f) && !f.freigabe) await melde(f, `Auto-Modus: gepusht ${f.head.slice(0, 7)}..${neu.slice(0, 7)} auf ${f.zweig} — alle mechanischen Prüfungen grün — Paket ${f.paket}`, deps);
 }
 
 /**
@@ -594,10 +619,11 @@ async function frageStellen(f: any, p: { ok: boolean; gruende: string[] }, x: { 
   const note = `Freigabe-Frage: ${p.ok ? 'Tests, Gate und Push-Bedingungen grün' : `nicht freigabefähig (${p.gruende.join('; ')})`}${paketFehler ? ` — Paket unvollständig (Schreibfehler: ${paketFehler})` : ''} — Paket ${f.paket}`;
   await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'freigabe_frage', doneAt: null, neu: x.neu, frage: { at: now, neu: x.neu, zweig: f.zweig, pr: f.number, urteil: p.ok, gruende: p.ok ? [] : p.gruende, gate: x.gate ? { exit: x.gate.exit, hart: x.gate.hart } : null, tests: testsGruen(x.tests) }, note } });
   await audit(f, { ergebnis: 'frage', von: f.head, nach: x.neu, zweig: f.zweig, gate: x.gate, tests: x.tests, gruende: p.gruende }, now);
-  deps.log?.('pr-fix freigabe-frage', { pr: `${f.repo}#${f.number}`, urteil: p.ok ? 'push möglich' : 'abgelehnt', paket: f.paket });
-  await melde(f, `${p.ok
+  deps.log?.('pr-fix freigabe-frage', { pr: `${f.repo}#${f.number}`, urteil: p.ok ? 'push möglich' : 'abgelehnt', modus: fixAuto(f) && !f.freigabe ? 'auto' : 'frage', paket: f.paket });
+  // R30a: Im Auto-Modus heißt die Frage „gefallen, deswegen gefragt“ — die Gründe stehen drin, Knut kann trotzdem freigeben.
+  await melde(f, `${fixAuto(f) && !f.freigabe ? 'Auto-Modus, aber ' : ''}${p.ok
     ? `Fix geprüft (${x.commits.length} Commit(s) \`${x.neu.slice(0, 7)}\`, Tests grün, Gate ohne harte Befunde) — freigeben? Antwort „@fix freigeben“ im Hauptchat, Paket ${f.paket}`
-    : `Fix geprüft, aber aktuell nicht freigabefähig: ${p.gruende.join('; ')} — Paket ${f.paket}`}`, deps);
+    : `Fix geprüft, aber aktuell nicht freigabefähig: ${p.gruende.join('; ')}${fixAuto(f) && !f.freigabe ? ' — automatisch in die Freigabe-Frage statt abgelehnt' : ''} — freigeben? Antwort „@fix freigeben“ im Hauptchat, Paket ${f.paket}`}`, deps);
 }
 
 /**
@@ -685,6 +711,9 @@ async function pusheAbschluss(f: any, deps: FixDeps, now: Date, neu: string, x: 
   await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'fertig', doneAt: now, neu, gepusht: { at: now, von: f.head, nach: neu }, antwort: url, deltaReview, note: text ? null : 'Antwort nicht gepostet (sah nach einem Geheimnis aus)' } });
   await setzeStatus(f, fixZeile({ art: 'pushed', zweig: f.zweig, von: f.head, nach: neu, url }), deps, now);
   if (!text) await melde(f, `gepusht ${f.head.slice(0, 7)}..${neu.slice(0, 7)}, Antwort-Kommentar zurückgehalten (sah nach einem Geheimnis aus) — Paket ${f.paket}`, deps);
+  // R30 (Freigabe): Der Hauptchat hat freigegeben — er soll das Ergebnis sehen (Nachtrag Knut, 02.11.: Meldung
+  // in beiden Fällen). pusheAbschluss läuft nur nach einer Freigabe, also immer melden.
+  else await melde(f, `Freigabe ausgeführt: gepusht ${f.head.slice(0, 7)}..${neu.slice(0, 7)} auf ${f.zweig}${fixAuto(f) ? ' (Auto-Modus, nach Freigabe)' : ''} — Paket ${f.paket}`, deps);
 }
 
 async function ablehnen(f: any, gruende: string[], x: { fix: FixJson | null; neu: string; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any }, deps: FixDeps, now: Date) {

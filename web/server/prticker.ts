@@ -369,7 +369,9 @@ export const fixesCol = () => wb().collection('pr_fixes');
  *  Reiner Umgebungsschalter, Vorgabe aus; das Ergebnis landet als Paket (s. prfix.ts). */
 export const fixTrocken = (env = process.env) => env.WERKBANK_FIX_DRYRUN === '1';
 /** R30 (Plan 376): Freigabe-Modus — der Fix endet in der Freigabe-Frage statt im Auto-Push; Marke beim Einreihen wie beim Trockenlauf. */
-export const fixFrage = (env = process.env) => env.WERKBANK_FIX_FREIGABE === '1' && env.WERKBANK_FIX_DRYRUN !== '1';
+export const fixFrage = (env = process.env) => (env.WERKBANK_FIX_FREIGABE === '1' || env.WERKBANK_FIX_FREIGABE === 'on' || env.WERKBANK_FIX_FREIGABE === 'auto') && env.WERKBANK_FIX_DRYRUN !== '1';
+/** R30a: Auto-Modus (`WERKBANK_FIX_FREIGABE=auto`) — pusht ohne Klick, wenn alles grün ist; sonst in die Freigabe-Frage. */
+export const fixAuto = (env = process.env) => env.WERKBANK_FIX_FREIGABE === 'auto' && env.WERKBANK_FIX_DRYRUN !== '1';
 
 export async function queueFixes(fresh: TickerEvent[], s: TickerSettings, now = new Date()): Promise<number> {
   let n = 0;
@@ -382,8 +384,11 @@ export async function queueFixes(fresh: TickerEvent[], s: TickerSettings, now = 
       // R29 A: Im Trockenlauf trägt der Eintrag die Marke von Anfang an — auch wenn der Schalter während des
       // Laufens wieder ausgeht, wird so ein Eintrag nie gepusht.
       // R30: Dasselbe für den Freigabe-Modus — endet immer in der Frage, nie im Auto-Push. Trockenlauf hat Vorrang.
-      await fixesCol().insertOne({ _id: e._id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, quelle: e.url, headTag: e.head, by: e.actor, auftrag: e.fix.auftrag, art: e.fix.quelle, ort: e.fix.ort, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date, ...(fixTrocken() ? { trocken: true } : {}), ...(fixTrocken() ? {} : fixFrage() ? { frage: true } : {}) });
-      await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: fixTrocken() ? 'Fix eingereiht (Trockenlauf)' : fixFrage() ? 'Fix eingereiht (Freigabe-Modus)' : 'Fix eingereiht' } });
+      // R30a: `auto` trägt NUR die auto-Marke (nicht frage — fixFreigabe in prfix.ts triggert auf frage, dann wäre
+      // der Auto-Modus nie wirksam): grün pusht ohne Klick, rot endet in der Frage.
+      const modus = fixTrocken() ? 'trocken' : fixAuto() ? 'auto' : fixFrage() ? 'frage' : 'normal';
+      await fixesCol().insertOne({ _id: e._id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, quelle: e.url, headTag: e.head, by: e.actor, auftrag: e.fix.auftrag, art: e.fix.quelle, ort: e.fix.ort, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date, ...(modus === 'trocken' ? { trocken: true } : {}), ...(modus === 'frage' ? { frage: true } : {}), ...(modus === 'auto' ? { auto: true } : {}) });
+      await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: modus === 'trocken' ? 'Fix eingereiht (Trockenlauf)' : modus === 'auto' ? 'Fix eingereiht (Auto-Modus)' : modus === 'frage' ? 'Fix eingereiht (Freigabe-Modus)' : 'Fix eingereiht' } });
       n++;
     } catch (x: any) { if (x?.code !== 11000) throw x; }
   }

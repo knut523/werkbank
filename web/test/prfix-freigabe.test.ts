@@ -84,13 +84,21 @@ const setze = (o: any = {}) => raw.db(process.env.WERKBANK_DB).collection('meta'
 
 // ---------- Schalter und Marke ----------
 
-test('fixFreigabe/fixTrocken: Schalter-Tabelle — Trockenlauf hat Vorrang, Marke am Eintrag zählt mit', () => {
+test('fixFreigabe/fixTrocken/fixAuto: Schalter-Tabelle — Trockenlauf > Freigabe > Auto, Marken zählen mit', () => {
   assert.equal(F.fixFreigabe({}), false, 'Vorgabe aus');
   assert.equal(F.fixFreigabe({}, { WERKBANK_FIX_FREIGABE: '1' } as any), true);
+  assert.equal(F.fixFreigabe({}, { WERKBANK_FIX_FREIGABE: 'on' } as any), true, 'on-Wert');
   assert.equal(F.fixFreigabe({ frage: true } as any), true, 'Marke am Eintrag');
   assert.equal(F.fixFreigabe({}, { WERKBANK_FIX_FREIGABE: '1', WERKBANK_FIX_DRYRUN: '1' } as any), false, 'Trockenlauf schlägt Freigabe');
   assert.equal(F.fixFreigabe({ trocken: true } as any, { WERKBANK_FIX_FREIGABE: '1' } as any), false, 'Trocken-Marke schlägt Freigabe');
   assert.equal(F.fixTrocken({ frage: true } as any, { WERKBANK_FIX_DRYRUN: '1' } as any), true, 'Trockenlauf bleibt Trockenlauf');
+  // R30a: auto
+  assert.equal(F.fixAuto({}), false, 'auto: Vorgabe aus');
+  assert.equal(F.fixAuto({ auto: true } as any), true, 'auto-Marke am Eintrag');
+  assert.equal(F.fixAuto({}, { WERKBANK_FIX_FREIGABE: 'auto' } as any), true, 'env auto');
+  assert.equal(F.fixAuto({ auto: true } as any, { WERKBANK_FIX_DRYRUN: '1' } as any), false, 'Trockenlauf schlägt auto');
+  assert.equal(F.fixAuto({ frage: true } as any, { WERKBANK_FIX_FREIGABE: 'auto' } as any), false, 'Frage-Modus schlägt auto (env)');
+  assert.equal(F.fixAuto({}, { WERKBANK_FIX_FREIGABE: 'on' } as any), false, 'on ist nicht auto');
 });
 
 test('queueFixes (Freigabe-Modus): frage-Marke beim Einreihen, Trockenlauf hat Vorrang', async () => {
@@ -108,6 +116,20 @@ test('queueFixes (Freigabe-Modus): frage-Marke beim Einreihen, Trockenlauf hat V
     assert.equal(f2.frage, undefined, 'Trockenlauf: keine frage-Marke');
     assert.equal(f2.trocken, true, 'Trocken-Marke gesetzt');
   } finally { delete process.env.WERKBANK_FIX_FREIGABE; delete process.env.WERKBANK_FIX_DRYRUN; }
+  await T.fixesCol().deleteMany({}); await T.tickerCol().deleteMany({});
+});
+
+test('queueFixes (Auto-Modus): auto-Marke (NICHT frage) beim Einreihen', async () => {
+  await T.tickerCol().insertOne({ _id: 'fix:fm3' } as any);
+  process.env.WERKBANK_FIX_FREIGABE = 'auto';
+  try {
+    const ev = { _id: 'fix:fm3', kind: 'fix' as const, repo: 'WirStrom1/olaf-admin', number: 7, title: 'feat: x', url: 'https://github.com/x#c', prUrl: 'https://github.com/WirStrom1/olaf-admin/pull/7', actor: 'bizarrochris', text: '@fix', at: NOW.toISOString(), head: 'a'.repeat(40), fix: { auftrag: 'x', quelle: 'kommentar' as const, ort: null } };
+    assert.equal(await T.queueFixes([ev], S, NOW), 1);
+    const f: any = await T.fixesCol().findOne({ _id: 'fix:fm3' as any });
+    assert.equal(f.auto, true, 'auto-Marke gesetzt');
+    assert.equal(f.frage, undefined, 'KEINE frage-Marke (sonst wäre fixFreigabe wahr und auto nie wirksam)');
+    assert.match(((await T.tickerCol().findOne({ _id: 'fix:fm3' as any })) as any).note, /Auto-Modus/);
+  } finally { delete process.env.WERKBANK_FIX_FREIGABE; }
   await T.fixesCol().deleteMany({}); await T.tickerCol().deleteMany({});
 });
 
@@ -196,6 +218,51 @@ test('fixAblehnenSynchron: abgelehnt, Audit, Entwurf im Paket, kein Push; zweite
   assert.equal(calls.push, 0); assert.equal(gh.kopf(), f.head, 'nichts gepusht');
   assert.equal((await F.fixAblehnenSynchron('fix:fr4', 'nochmal', 'knut')).ok, false, 'zweites Mal rot (nicht mehr offen)');
   assert.equal((await F.fixAblehnenSynchron('fix:gibtsnicht', null, 'knut')).ok, false, 'unbekannte Kennung');
+});
+
+// ---------- R30a: Auto-Modus ----------
+
+test('E2E Auto grün: @fix → direkt Push + Antwort-Kommentar OHNE Klick, Meldung an den Hauptchat, Audit gepusht', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-au1', 'feat/au1', 41);
+  await einreihen('au1', 'olaf-au1', 41);
+  await T.fixesCol().updateOne({ _id: 'fix:au1' as any }, { $set: { auto: true } });
+  const { d, calls } = deps(gh, { zweig: 'feat/au1' });
+  await F.fixTick(d); await F.fixTick(d);   // startet, prüft → (alles grün) direkt Push
+  const f: any = await T.fixesCol().findOne({ _id: 'fix:au1' as any });
+  assert.equal(f.status, 'fertig', 'ohne Klick gepusht und fertig');
+  assert.equal(calls.push, 1);
+  assert.equal(gh.kopf(), f.neu, 'PR-Zweig hat den Fix');
+  assert.ok(calls.kommentar.some((k) => /pushed/.test(k)), 'Antwort-Kommentar');
+  assert.ok(calls.melde.some((m) => /Auto-Modus: gepusht/.test(m)), 'Meldung an den Hauptchat');
+  const audits: any[] = await F.auditCol().find({ fix: 'fix:au1' }).toArray();
+  assert.ok(audits.some((a) => a.ergebnis === 'gepusht'), 'Audit gepusht');
+  assert.ok(!audits.some((a) => a.ergebnis === 'frage'), 'kein Frage-Audit im grünen Auto-Lauf');
+});
+
+test('E2E Auto rot (Gate hart): in die Freigabe-Frage statt Ablehnung, Grund in der Meldung — danach freigeben möglich', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-au2', 'feat/au2', 42);
+  await einreihen('au2', 'olaf-au2', 42);
+  await T.fixesCol().updateOne({ _id: 'fix:au2' as any }, { $set: { auto: true } });
+  const { d, calls } = deps(gh, { zweig: 'feat/au2', gate: 1 });
+  await F.fixTick(d); await F.fixTick(d);
+  let f: any = await T.fixesCol().findOne({ _id: 'fix:au2' as any });
+  assert.equal(f.status, 'freigabe_frage', 'rot → Frage statt Ablehnung');
+  assert.equal(calls.push, 0); assert.equal(calls.kommentar.length, 0);
+  assert.ok(f.frage && f.frage.urteil === false, 'Urteil rot festgehalten');
+  assert.match(calls.melde.at(-1)!, /nicht freigabefähig.*— freigeben\?/);
+  assert.match(calls.melde.at(-1)!, /Auto-Modus/, 'Meldung nennt den Auto-Modus');
+  // Knut kann trotzdem freigeben — der Takt prüft NEU (hier weiterhin Gate hart → zurück in die Frage)
+  assert.equal((await F.freigabeSetzen('fix:au2', f.neu)).ok, true);
+  await F.fixTick(d);
+  f = await T.fixesCol().findOne({ _id: 'fix:au2' as any });
+  assert.equal(f.status, 'freigabe_frage', 'Freigabe reichte nicht (Gate weiterhin hart) → zurück in die Frage');
+  assert.equal(calls.push, 0); assert.equal(gh.kopf(), f.head, 'nichts gepusht');
+  assert.match(f.note, /gate/);
+  assert.ok(f.freigabe === undefined, 'Marke zurückgenommen');
+  const audits: any[] = await F.auditCol().find({ fix: 'fix:au2' }).toArray();
+  assert.ok(audits.some((a) => a.ergebnis === 'frage'), 'Frage-Audit');
 });
 
 // ---------- Punkt 5: Endlos-Schutz ----------
