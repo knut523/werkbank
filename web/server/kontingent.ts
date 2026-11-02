@@ -92,9 +92,14 @@ export async function kontingent(u: User, d: KontingentDeps, now = Date.now()): 
   const basis = { melious, claude, schwelle, wahl, auto: v.auto };
   if (v.auto.length) {
     const alt: any = await stand().findOne({ _id: u.id as any }).catch(() => null);
-    const text = umschaltText(alt?.wahl ?? null, wahl, lage, schwelle);
-    if (!alt || alt.wahl !== wahl) await stand().updateOne({ _id: u.id as any }, { $set: { wahl, at: new Date(now) } }, { upsert: true }).catch(() => {});
-    if (text) await d.melde(u, text).catch(() => {});
+    if (!alt || alt.wahl !== wahl) {
+      // Gegenprüfung R31: nur melden, wenn genau DIESER Wechsel gespeichert wurde (kein Endlos-Melden bei DB-Fehlern,
+      // keine Doppelmeldung bei parallelen Aufrufen — Bedingung auf den alten Wert).
+      const geschrieben = await stand().updateOne(alt ? { _id: u.id as any, wahl: alt.wahl } : { _id: u.id as any }, { $set: { wahl, at: new Date(now) } }, { upsert: !alt })
+        .then((r) => r.modifiedCount + r.upsertedCount > 0, () => false);
+      const text = umschaltText(alt?.wahl ?? null, wahl, lage, schwelle);
+      if (geschrieben && text) await d.melde(u, text).catch(() => {});
+    }
   }
   return { ...basis, zeile: kontingentZeile(basis, now) };
 }

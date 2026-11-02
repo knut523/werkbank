@@ -69,5 +69,9 @@ test('Ausführen: Header mit Wert, Antwort geschwärzt, keine Weiterleitung, ohn
   assert.equal(w.status, 302);
   assert.equal(gesehen.length, 2, 'der Weiterleitung wurde nicht gefolgt');
   await assert.rejects(fuehreAus({ zweck, aufruf: { zweck: 'coolify', methode: 'GET', url: `http://127.0.0.1:${port}/x` } }, { wert: async () => null }), /Kein Wert für „coolify“/);
+  const vorher = gesehen.length;
+  await assert.rejects(fuehreAus({ zweck, aufruf: { zweck: 'coolify', methode: 'GET', url: `http://127.0.0.1:${port}/x` } }, { wert: async () => 'kurz1' }), /kürzer als 8/);
+  assert.equal(gesehen.length, vorher, 'zu kurzer Wert: nichts gesendet');
+  assert.doesNotMatch(schwaerze(`x ${Buffer.from(GEHEIM).toString('hex')} y`, GEHEIM), /746f6b/, 'auch Hex');
   srv.close();
 });

@@ -63,9 +63,12 @@ drain() {
   while [ "$t" -lt "$max" ]; do
     # Brücke nicht erreichbar (n leer) = nichts zu unterbrechen. Gezählt sind alle laufenden Züge (auch Hauptchat, Worker);
     # R31: WB_DRAIN_FELD=drainOhneLeit (Neustart aus dem Hauptchat, werkbank_betrieb) zählt den Hauptchat nicht mit.
-    local feld=${WB_DRAIN_FELD:-drainLaufend}
+    local feld=${WB_DRAIN_FELD:-drainLaufend} h
     case "$feld" in drainLaufend|drainOhneLeit) ;; *) feld=drainLaufend ;; esac
-    n=$(curl -s --max-time 3 "http://127.0.0.1:$port/health" | sed -n "s/.*\"$feld\":\([0-9]*\).*/\1/p")
+    h=$(curl -s --max-time 3 "http://127.0.0.1:$port/health")
+    n=$(printf '%s' "$h" | sed -n "s/.*\"$feld\":\([0-9]*\).*/\1/p")
+    # Ältere Brücke ohne das Feld: nicht durchwinken, sondern wie bisher alle Züge zählen (Gegenprüfung R31).
+    [ -z "$n" ] && [ -n "$h" ] && n=$(printf '%s' "$h" | sed -n 's/.*"drainLaufend":\([0-9]*\).*/\1/p')
     [ -z "$n" ] || [ "$n" = 0 ] && return 0
     [ $((t % 60)) = 0 ] && echo "  … warte auf $n laufende Züge (höchstens $((max - t)) s, WB_DRAIN_S=0 überspringt)"
     sleep 10; t=$((t + 10))

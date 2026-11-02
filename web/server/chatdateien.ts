@@ -48,7 +48,7 @@ export function screenshotZiel(url: string, publicUrl: string): { url: string; w
 
 export const dateiname = (ziel: string, g: Geraet, now = Date.now()) => {
   const slug = ziel.replace(/^https?:\/\//, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'seite';
-  return `${new Date(now).toISOString().slice(0, 16).replace(/[-:T]/g, '')}_${slug}_${g}.png`;
+  return `${new Date(now).toISOString().slice(0, 19).replace(/[-:T]/g, '')}_${slug}_${g}.png`;
 };
 
 /** Screenshot(s) aufnehmen (Playwright der Web-App). Gibt die geschriebenen PNG-Pfade zurück. */

@@ -69,7 +69,7 @@ export function pruefeAufruf(a: Record<string, unknown>, zwecke: Zweck[]): { auf
 export function schwaerze(text: string, wert: string): string {
   if (!wert || wert.length < 6) return text;
   let t = text;
-  for (const v of new Set([wert, encodeURIComponent(wert), Buffer.from(wert).toString('base64'), Buffer.from(wert).toString('base64url')]))
+  for (const v of new Set([wert, encodeURIComponent(wert), Buffer.from(wert).toString('base64'), Buffer.from(wert).toString('base64url'), Buffer.from(wert).toString('hex')]))
     t = t.split(v).join('«geschwärzt»');
   return t;
 }
@@ -102,6 +102,8 @@ export interface Antwort { status: number; text: string }
 export async function fuehreAus(p: { aufruf: Aufruf; zweck: Zweck }, deps: { wert: (eintrag: string, feld: string) => Promise<string | null>; fetch?: typeof fetch } = { wert: vaultwardenWert }): Promise<Antwort> {
   const wert = await deps.wert(p.zweck.eintrag, p.zweck.feld);
   if (!wert) throw new Error(`Kein Wert für „${p.zweck.name}“ (Vaultwarden-Sitzung abgelaufen oder Eintrag/Feld fehlt) — Knut: bw unlock auf der VM.`);
+  // Gegenprüfung R31: zu kurze Werte ließen sich nicht verlässlich schwärzen — dann lieber gar nicht senden.
+  if (wert.length < 8) throw new Error(`Wert für „${p.zweck.name}“ ist kürzer als 8 Zeichen — nicht gesendet (Schwärzen wäre unsicher).`);
   const f = deps.fetch ?? fetch;
   const r = await f(p.aufruf.url, {
     method: p.aufruf.methode, redirect: 'manual', signal: AbortSignal.timeout(30_000),

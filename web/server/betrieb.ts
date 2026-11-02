@@ -61,6 +61,8 @@ export function envWert(text: string, name: string): string | null {
 
 /** Eine Zeile setzen: alle bisherigen Zeilen des Namens fallen weg, die neue steht an der Stelle der ersten (sonst am Ende). */
 export function envSetzen(text: string, name: string, wert: string): string {
+  // Eigene Prüfung unabhängig vom Aufrufer (Gegenprüfung R31): nur Variablennamen, Werte einzeilig.
+  if (!/^[A-Z][A-Z0-9_]{0,80}$/.test(name) || /[\r\n\0]/.test(wert)) throw new Error('envSetzen: ungültiger Name oder Wert.');
   const neu = `${name}=${wert}`;
   let gesetzt = false;
   const aus = text.replace(zeileVon(name), () => (gesetzt ? '\u0000' : ((gesetzt = true), neu))).split('\n').filter((l) => l !== '\u0000');
@@ -111,7 +113,9 @@ export interface SchalterStand { name: string; vorgabe: string; soll: string | n
 /** Je Schalter der Liste: Soll (.env.local), Ist (laufender Prozess), ob ein Neustart nötig ist (rein). */
 export function schalterStand(envText: string | null, istWeb: Record<string, string | undefined>, istBruecke: Record<string, string> | null): SchalterStand[] {
   return SCHALTER.map((s) => {
-    const soll = envText === null ? null : envWert(envText, s.name);
+    // Gegenprüfung R31: auch der Soll-Wert nur als Wertklasse — ein Geheimnis unter einem Schalternamen bleibt verborgen.
+    const roh = envText === null ? null : envWert(envText, s.name);
+    const soll = roh === null ? null : wertKlasse(roh);
     const effSoll = soll ?? s.vorgabe;
     const istW = wertKlasse(istWeb[s.name]);
     const istB = istBruecke ? wertKlasse(istBruecke[s.name]) : '?';

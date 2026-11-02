@@ -32,6 +32,6 @@ test('Paket-Link: nur Dateien in einem Paket-Ordner, Pfad kodiert', () => {
 });
 
 test('Dateiname und Größen', () => {
-  assert.equal(dateiname('http://127.0.0.1:3070/heute?x=1', 'handy', Date.parse('2026-11-02T15:04:00Z')), '202611021504_127-0-0-1-3070-heute-x-1_handy.png');
+  assert.equal(dateiname('http://127.0.0.1:3070/heute?x=1', 'handy', Date.parse('2026-11-02T15:04:00Z')), '20261102150400_127-0-0-1-3070-heute-x-1_handy.png');
   assert.deepEqual([GERAETE.desktop.width, GERAETE.handy.width, GERAETE.handy.dpr], [1440, 390, 2]);
 });

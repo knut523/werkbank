@@ -4,7 +4,7 @@
 // Geloggt werden nur Namen und Arten, nie Werte (Schalterwerte der Positivliste ausgenommen — sie sind aufgezählt).
 
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { cfg, WB_ROOT } from './config.ts';
@@ -100,14 +100,20 @@ function neustartStarten(u: User, art: 'restart-web' | 'restart', was: string[])
   const logDatei = join(WB_ROOT, '.runtime', 'logs', 'betrieb-neustart.log');
   mkdirSync(dirname(logDatei), { recursive: true });
   const fd = openSync(logDatei, 'a');
-  spawn('setsid', ['bash', '-c', 'sleep 3; exec "$0" "$1"', skript, art], { detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, WB_DRAIN_FELD: 'drainOhneLeit' } }).unref();
+  const c = spawn('setsid', ['bash', '-c', 'sleep 3; exec "$0" "$1"', skript, art], { detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, WB_DRAIN_FELD: 'drainOhneLeit' } });
+  // Gegenprüfung R31: ohne Handler risse ein fehlgeschlagener Start (setsid fehlt) die Web-App mit.
+  c.on('error', () => { rmSync(markeDatei(), { force: true }); });
+  c.unref();
+  closeSync(fd);
 }
 
 /** Nach dem Start der Web-App: offene Neustart-Marke → Meldung an den Hauptchat („fertig“), Marke weg. */
 export async function neustartMelden(personVon: (id: string) => Promise<User | null>, log: (m: string, d?: any) => void, now = Date.now()): Promise<void> {
+  let roh: string;
+  try { roh = readFileSync(markeDatei(), 'utf8'); } catch { return; }
+  rmSync(markeDatei(), { force: true });   // auch eine kaputte Marke weg (Gegenprüfung R31)
   let m: any;
-  try { m = JSON.parse(readFileSync(markeDatei(), 'utf8')); } catch { return; }
-  rmSync(markeDatei(), { force: true });
+  try { m = JSON.parse(roh); } catch { return; }
   if (!m?.userId || now - Number(m.at) > 60 * 60_000) return;
   const u = await personVon(String(m.userId));
   if (!u) return;

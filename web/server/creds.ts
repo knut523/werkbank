@@ -24,8 +24,10 @@ import { modellVorgaben, zuarbeitEinstellung, type Zuarbeit } from './tiefe.ts';
 async function zuarbeitFuer(u: User): Promise<Zuarbeit> {
   const z = zuarbeitEinstellung(process.env.WERKBANK_ZUARBEIT);
   if (z !== 'auto') return z;
-  const { lageFuer } = await import('./kontingent.ts');
-  return modellVorgaben(process.env, await lageFuer(u)).zuarbeit;
+  try {
+    const { lageFuer } = await import('./kontingent.ts');
+    return modellVorgaben(process.env, await lageFuer(u)).zuarbeit;
+  } catch { return 'melious'; }
 }
 
 export const CLAUDE_ENDPOINT = 'Claude Code';

@@ -48,6 +48,13 @@ test('.env.local: eine Zeile ersetzen/anhängen, Doppelte zusammenführen, Rest 
   assert.equal(envWert('S=on # an\n', 'S'), 'on');
 });
 
+test('Gegenprüfung: Soll nur als Wertklasse; envSetzen prüft selbst', () => {
+  const st = schalterStand('WERKBANK_QUICK_MODELL=postgres://u:geheim@h/db\n', {}, {});
+  assert.equal(st.find((s) => s.name === 'WERKBANK_QUICK_MODELL')!.soll, 'gesetzt');
+  assert.throws(() => envSetzen('', 'A\nB', 'on'));
+  assert.throws(() => envSetzen('', 'A_B', 'on\nX=1'));
+});
+
 test('Neustart-Art: nur Web-Schalter → restart-web, sonst restart', () => {
   assert.equal(neustartFuer(['WERKBANK_ZUARBEIT']), 'restart-web');
   assert.equal(neustartFuer(['WERKBANK_ZUARBEIT', 'BRIDGE_LEIT_VAULT_COMMIT']), 'restart');
