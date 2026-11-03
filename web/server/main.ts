@@ -3878,8 +3878,13 @@ on('POST', /^\/internal\/lead\/github-schreiben$/, async (req, res) => {
     r = await githubAktion(b.aktion ?? {}, process.env, {
       kommentar: (x, text) => statusKommentar(x, text, null),
       prOeffnen,
-      push: (repo, klon, sha, zweig) => pushVia(repo, klon, sha, zweig, () => writeToken(repo)),
+      push: (repo, klon, sha, zweig) => pushVia(repo, klon, sha, zweig, () => writeToken(repo), process.env, { docsMain: true }),
       kopf: async (klon) => (await promisify(execFile)('git', ['-C', klon, 'rev-parse', 'HEAD'], { timeout: 10_000, encoding: 'utf8' })).stdout.trim(),
+      vorfahre: async (klon, vorfahre, sha) => {
+        if (!(/^[0-9a-f]{40}$/.test(vorfahre) || vorfahre === 'origin/main') || !/^[0-9a-f]{40}$/.test(sha)) return false;
+        await promisify(execFile)('git', ['-C', klon, 'fetch', '--quiet', 'origin'], { timeout: 60_000 }).catch(() => {});
+        return promisify(execFile)('git', ['-C', klon, 'merge-base', '--is-ancestor', vorfahre, sha], { timeout: 10_000 }).then(() => true, () => false);
+      },
       // D2: Nachweis bei der Brücke (dort hat Knut die Karte bestätigt); Brücke weg oder anderer Fehler = kein Nachweis.
       nachweis: async (aktion) => {
         try {

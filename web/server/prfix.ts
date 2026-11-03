@@ -762,8 +762,10 @@ export const schreibUrl = (repo: string, env = process.env): string => {
 };
 
 /** Push ohne Force: `<sha>:refs/heads/<zweig>` an https://github.com/<repo>.git (Repo und Zweig noch einmal geprüft). */
-export async function pushVia(repo: string, klon: string, sha: string, zweig: string, token: () => Promise<string | null>, env = process.env): Promise<void> {
-  if (!fixRepoErlaubt(repo) || !SHA_RE.test(sha) || !ZWEIG_RE.test(zweig) || GESCHUETZT.test(zweig)) throw new Error('Push-Angaben ungültig.');
+export async function pushVia(repo: string, klon: string, sha: string, zweig: string, token: () => Promise<string | null>, env = process.env, opts: { docsMain?: boolean } = {}): Promise<void> {
+  // Einzige Ausnahme (Knut, 03.11.2026): olaf-docs main, nur über github_schreiben (Klick + Fast-Forward), nie über @fix.
+  const docsMainOk = opts.docsMain === true && repo.toLowerCase() === 'wirstrom1/olaf-docs' && zweig === 'main';
+  if (!fixRepoErlaubt(repo) || !SHA_RE.test(sha) || !ZWEIG_RE.test(zweig) || (GESCHUETZT.test(zweig) && !docsMainOk)) throw new Error('Push-Angaben ungültig.');
   const t = await token();
   if (!t) throw new Error('Kein Schreibtoken für dieses Repo (Credential-Helper antwortet nicht).');
   // Gegenprüfung (H1): die lokale Config des geteilten Klons unmittelbar vor dem Push noch einmal — zwischen der Prüfung in

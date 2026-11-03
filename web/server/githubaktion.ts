@@ -17,6 +17,8 @@ export type Aktion =
   | { art: 'fix_freigeben'; repo: string; fix: string; neu: string }
   | { art: 'fix_ablehnen'; repo: string; fix: string; grund?: string };
 
+/** Knut, 03.11.2026: einzige Ausnahme vom Schutz — Pläne gehen in olaf-docs direkt auf main (AGENTS.md, Christoph). Nur mit Klick, nur Fast-Forward. */
+export const docsMain = (repo: unknown, zweig: unknown) => String(repo).toLowerCase() === 'wirstrom1/olaf-docs' && zweig === 'main';
 const zweigOk = (z: unknown) => typeof z === 'string' && ZWEIG_RE.test(z);
 
 /** Geprüfte, bereinigte Aktion — oder der Grund der Ablehnung. */
@@ -41,7 +43,7 @@ export function pruefeAktion(a: Record<string, unknown>, env: Record<string, str
   }
   if (a.art === 'push') {
     const klon = String(a.klon ?? '');
-    if (!zweigOk(a.zweig) || GESCHUETZT.test(String(a.zweig))) return { fehler: 'zweig: ungültig oder geschützt (main/master/develop/dev/release/*).' };
+    if (!zweigOk(a.zweig) || (GESCHUETZT.test(String(a.zweig)) && !docsMain(repo, a.zweig))) return { fehler: 'zweig: ungültig oder geschützt (main/master/develop/dev/release/*; einzige Ausnahme: olaf-docs main).' };
     const wurzel = `${(env.WERKBANK_GITHUB_KLON_ROOT || `${env.HOME ?? '/nonexistent'}/work`).replace(/\/+$/, '')}/`;
     if (!klon.startsWith('/') || klon.includes('\0') || klon.split('/').includes('..')) return { fehler: 'klon: absoluter Pfad des Worktrees fehlt.' };
     if (!klon.startsWith(wurzel) || klon.length === wurzel.length) return { fehler: `klon: nur Worktrees unterhalb von ${wurzel} (WERKBANK_GITHUB_KLON_ROOT).` };
@@ -74,6 +76,8 @@ export interface Wege {
   push: (repo: string, klon: string, sha: string, zweig: string) => Promise<void>;
   /** Kopf-Commit (40 Hex) des Klons — der Push schickt genau diesen Stand. */
   kopf: (klon: string) => Promise<string>;
+  /** Hotfix 03.11.: ist `vorfahre` ein Vorfahre von `sha` im Klon (nach fetch)? Erlaubt einen echten Fix-Push als Fast-Forward. */
+  vorfahre?: (klon: string, vorfahre: string, sha: string) => Promise<boolean>;
   /** URL des Remotes „origin“ des Klons — er muss zum Repo der Aktion gehören (Gegenprüfung R29 D: kein fremdes lokales Repo publizieren). */
   origin: (klon: string) => Promise<string>;
   /** D2: hat Knut genau diese Aktion auf der Karte bestätigt? Verbraucht den Nachweis (Brücke, einmalig). */
@@ -130,7 +134,7 @@ export async function fuehreAus(roh: Record<string, unknown>, env: Record<string
   if (prLage) {
     if (prLage.state !== 'OPEN') throw new Error(`Der PR ${a.repo}#${prNummer} ist ${prLage.state === 'MERGED' ? 'gemergt' : 'geschlossen'} — nichts gepusht.`);
     if (a.zweig !== prLage.headRefName) throw new Error(`zweig \`${a.zweig}\` ist nicht der Kopf-Zweig des PRs (\`${prLage.headRefName}\`) — nichts gepusht.`);
-  } else if (w.pr) {
+  } else if (w.pr && !docsMain(a.repo, a.zweig)) {
     throw new Error('nummer: Der Push gehört zu einem offenen PR (Nummer fehlt oder PR nicht lesbar) — nichts gepusht.');
   }
   const base = prLage?.baseRefName || (await w.standard?.(a.repo).catch(() => null)) || a.base || 'dev';
@@ -141,7 +145,10 @@ export async function fuehreAus(roh: Record<string, unknown>, env: Record<string
   if (g.exit !== 0) throw new Error(`Das Pre-Push-Gate meldet ${g.exit === 1 ? 'harte Befunde' : 'einen Aufruffehler'} — nichts gepusht. Befunde beheben, dann neu fragen.\n${g.out.slice(-1500)}`);
   const sha = await w.kopf(a.klon);
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('Kein gültiger Kopf-Commit im Klon.');
-  if (prLage && sha !== prLage.headRefOid) throw new Error(`Der Kopf des Klons (${sha.slice(0, 7)}) ist nicht der Kopf des PR-Zweigs (${prLage.headRefOid.slice(0, 7)}) — der PR hat sich bewegt. Klon aktualisieren, dann neu fragen.`);
+  // Hotfix 03.11. (Knut): ein Fix liegt ÜBER dem PR-Kopf. Verlangt wird ein Fast-Forward (PR-Kopf ist Vorfahre des Klon-Kopfs),
+  // nicht Gleichheit — die lehnte jeden echten Fix ab. Hat sich der PR bewegt (Kopf nicht Vorfahre), bleibt es abgelehnt.
+  if (prLage && sha !== prLage.headRefOid && !(w.vorfahre && await w.vorfahre(a.klon, prLage.headRefOid, sha).catch(() => false))) throw new Error(`Der Kopf des Klons (${sha.slice(0, 7)}) liegt nicht über dem Kopf des PR-Zweigs (${prLage.headRefOid.slice(0, 7)}) — kein Fast-Forward, der PR hat sich bewegt. Klon aktualisieren, dann neu fragen.`);
+  if (!prLage && docsMain(a.repo, a.zweig) && !(w.vorfahre && await w.vorfahre(a.klon, 'origin/main', sha).catch(() => false))) throw new Error(`olaf-docs main: ${sha.slice(0, 7)} ist kein Fast-Forward auf origin/main — erst auf den aktuellen main setzen, dann neu fragen.`);
   await w.push(a.repo, a.klon, sha, a.zweig);
   return { url: null, text: `Gepusht: ${a.zweig} @ ${sha.slice(0, 7)} → ${a.repo} (ohne Force, Gate grün gegen ${base}${prLage ? `, PR #${prNummer}` : ''}).` };
 }
