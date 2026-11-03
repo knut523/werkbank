@@ -77,7 +77,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
         {stand && ziel === 'hauptchat' && !stand.hauptchat && <p className="hinweis">Gerade ist kein Hauptchat aktiv. Starte ihn in der alten Werkbank oder nimm „Neuer Chat“.</p>}
         {ohneZugang && (
           <div className="hinweis">
-            <p><b>Für den Chat brauchst du einen Claude-Zugang — alles andere geht ohne.</b> Frag Knut, wenn du einen brauchst.</p>
+            <p><b>Chatten geht nur mit einem Claude-Zugang — den hat dein Konto noch nicht.</b> Deshalb gibt es hier kein Eingabefeld, auch nicht über „Im Chat fragen“. Lesen, Suchen und Entscheiden gehen ohne. Frag Knut, wenn du einen Zugang brauchst.</p>
             <p><b>Was ist OLAF?</b> {OLAF_KURZ} <a href={OLAF_MEHR} onClick={schliessen}>Mehr dazu</a></p>
             <p>Weiter: <a href="v2/begriffe" onClick={schliessen}>Begriffe in Klartext</a> · <a href="v2/dokumente" onClick={schliessen}>Dokumente suchen</a></p>
           </div>

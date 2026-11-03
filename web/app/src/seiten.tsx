@@ -114,7 +114,7 @@ export function Entscheidungen() {
       <p className="unterzeile">Alles, was auf dich wartet. „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — an genau diese Karte.</p>
       <p className="zusammensetzung">Die Zahl oben rechts: {d.oben.length + d.rest.length} {d.oben.length + d.rest.length === 1 ? 'Frage' : 'Fragen und Freigaben'}{d.aufraeumen.length ? ` + ${d.aufraeumen.length} ${d.aufraeumen.length === 1 ? 'Sammelposten' : 'Sammelposten'} zum Aufräumen` : ''} = {d.zahl}.{d.geschlossen?.length ? <> <a href="#e-geschlossen">{mehrzahl(d.geschlossen.length, 'Frage hat', 'Fragen haben')} sich von selbst erledigt ↓</a></> : null}</p>
       <Abschnitt id="e-zuerst" titel="Zuerst" erklaerung="Dieselben fünf wie auf der Startseite: was einen Agenten anhält oder bald als angenommen gilt.">
-        {d.oben.length ? <div className="karten">{d.oben.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div> : <p className="leer">Gerade wartet nichts auf dich.</p>}
+        {d.oben.length ? <div className="karten">{d.oben.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div> : <p className="leer">{d.aufraeumen.length ? 'Keine Entscheidung offen — was trotzdem zählt, steht unten unter „Aufräumen“.' : 'Gerade wartet nichts auf dich.'}</p>}
       </Abschnitt>
       {d.rest.length > 0 && (
         <Abschnitt id="e-weitere" titel="Weitere, nach Thema" erklaerung="Alles andere, was auf dich wartet — nach Thema gruppiert. Passt bei einem Thema jede Empfehlung, beantwortest du alle auf einmal mit „Alle wie empfohlen“ (mit Rückfrage); Freigaben und Fragen ohne Empfehlung bleiben dabei stehen.">
@@ -509,7 +509,7 @@ export function AlleChats() {
         <ul className="liste">{liste.slice(0, 200).map((z) => z.art === 'chat2'
           ? <li key={z.id} className="zeile"><div className="zeile-haupt"><button type="button" className="zeile-titel knopf-link" onClick={() => z.conv && app.chatOeffnen(z.conv)}>{z.titel}</button><p className="zeile-satz">{ART_TEXT[z.art]} · {z.status}</p></div><div className="zeile-rechts"><span className="zeit">{wann(z.zuletzt)}</span></div></li>
           : <Zeile key={z.id} titel={z.titel} url={z.url ?? '#'} satz={`${ART_TEXT[z.art]} · ${z.status}${z.thema ? ` · ${z.thema}` : ''}${z.art !== 'unterchat' ? ' · öffnet im Chat (LibreChat)' : ''}`} rechts={wann(z.zuletzt)} />)}</ul>
-      ) : <p className="leer">Nichts gefunden — anderer Suchbegriff oder Filter?</p>}
+      ) : <p className="leer">{d.zeilen.length ? 'Nichts gefunden — anderer Suchbegriff oder Filter?' : 'Du hast noch keine Chats.'}</p>}
       {liste.length > 200 && <p className="klein gedimmt">Die ersten 200 — enger suchen, um den Rest zu sehen.</p>}
     </div>
   );

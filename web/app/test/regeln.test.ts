@@ -32,7 +32,7 @@ test('Begriffe: kein Strang/Leitstand/Orchestrator/Vault/Inbox/„Braucht Knut�
 
 test('Begriffe: die Begriffsliste selbst ist jargonfrei und erklärt die Kernwörter', () => {
   for (const b of BEGRIFFE) for (const re of VERBOTEN) assert.doesNotMatch(`${b.wort} ${b.heisst} ${b.beispiel}`, re, b.wort);
-  for (const w of ['Wartet auf dich', 'Unter-Chat', 'Chat (Hauptchat)', 'Entscheidung', 'Freigabe', 'Dokument']) assert.ok(BEGRIFFE.some((b) => b.wort === w), w);
+  for (const w of ['Wartet auf dich', 'Unter-Chat', 'Hauptchat', 'Chat', 'Entscheidung', 'Freigabe', 'Dokument']) assert.ok(BEGRIFFE.some((b) => b.wort === w), w);
 });
 
 test('Importregel (B6): nichts aus web/server, claude-bridge oder web/src', () => {
