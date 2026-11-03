@@ -7,7 +7,7 @@ import type { User } from './auth.ts';
 import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungsseite.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite } from './v2kern.ts';
+import { chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import * as librechat from './v2librechat.ts';
 
@@ -46,6 +46,10 @@ export interface V2Deps {
   wiederOeffnen: (u: User, id: string) => Promise<boolean>;
   /** S15: „Alle wie empfohlen“ — dieselbe Sammel-Logik wie die alte Werkbank (main.ts, POST /api/entscheidungen/fragen/alle). */
   alleEmpfohlen: (u: User, ids: string[], nur: (f: Frage) => boolean) => Promise<{ ok: number; fehler: string[] }>;
+  /** S12: alle Unter-Chats und Hauptchats der Person (auch alte), Kopfdaten; LibreChat-Unterhaltungen über den Adapter; LibreChat-Adresse. */
+  alleRuns: (u: User) => Promise<any[]>;
+  lcChats: (u: User) => Promise<any[]>;
+  lcUrl: string;
 }
 
 /** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
@@ -174,6 +178,15 @@ export function registerV2(on: On, d: V2Deps) {
     const [liste, er] = await Promise.all([d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })), d.erledigtDaten(u, tag)]);
     const zm = new Map(liste.zeilen.map((z: any) => [String(z.id), z]));
     send(d, res, { tag, heute: d.wienDatum(), erledigt: erledigtSicht(er.straenge, zm, new Set(er.straenge.map((s: any) => String(s.id)).filter((id: string) => !zm.has(id)))) });
+  });
+
+  // --- Alle Chats (S12, C4): Unter-Chats, Hauptchats, LibreChat- und 2.0-Chats — Suche und Filter macht die Oberfläche ---
+  on('GET', /^\/api\/v2\/chats$/, async (req, res) => {
+    const u = await d.needUser(req);
+    const fehlt: string[] = [];
+    const [runs, convs, eigene] = await Promise.all([admin(u) ? d.alleRuns(u) : Promise.resolve([]), d.lcChats(u).catch(() => { fehlt.push('LibreChat'); return []; }), eigen.meineChats(u, 200).catch(() => { fehlt.push('neue Chats'); return []; })]);
+    const zeilen = chatListe(runs, convs, eigene, { admin: admin(u), lcUrl: d.lcUrl });
+    send(d, res, { zeilen, themen: [...new Set(zeilen.map((z) => z.thema).filter(Boolean))].sort(), fehlt, at: new Date() });   // fehlt: Quelle nicht erreichbar — sichtbar statt still (Pass C)
   });
 
   // --- Arbeit: Unter-Chats in drei Gruppen, Zustand in einem Satz (nur Admin — Unter-Chats gehören Knut) ---

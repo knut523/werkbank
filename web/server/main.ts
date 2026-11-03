@@ -119,6 +119,7 @@ import { entwurfHash, postenErlaubt } from './befunde.ts';
 import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
 import { chatStatusAn, offeneJeStrang, hauptchatJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
 import { registerV2, appDist, v2Index } from './v2.ts';
+import { liste as v2lcListe } from './v2librechat.ts';
 import { abgebrochenMarkieren as v2Abgebrochen } from './v2chat.ts';
 import { githubNames } from './github.ts';
 import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
@@ -4268,6 +4269,8 @@ registerV2(on, {
   gesperrt: (u, f) => !!blockedFeature(u, f === 'wissen' ? '/api/vault/' : '/api/roadmap/'),
   geschlossen: (u) => automatischGeschlossen(u.id),
   alleEmpfohlen: alleWieEmpfohlen,
+  alleRuns: (u) => orchRuns().find({ userId: u.id }, { projection: { _id: 1, conv: 1, title: 1, thema: 1, zustand: 1, kind: 1, lastActivity: 1, doneAt: 1, startedAt: 1, reviewedAt: 1, knutReviewedAt: 1, startError: 1, endedAt: 1 } }).sort({ lastActivity: -1 }).limit(1000).toArray(),
+  lcChats: (u) => v2lcListe(u), lcUrl: cfg.librechatPublicUrl,
   wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },
 });
 const V2_DIST = appDist(WEB_DIR);

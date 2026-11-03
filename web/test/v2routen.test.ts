@@ -31,6 +31,8 @@ const deps: V2Deps = {
   gesperrt: () => gesperrt,
   geschlossen: async (u) => (u.id === 'k' ? [{ id: 'q-zu1', titel: 'Kohorte laufender Monat?', grund: 'im Bericht als entschieden vermerkt (D1): angenommen', at: new Date() }] : []),
   alleEmpfohlen: async (_u, ids, nur) => { assert.equal(nur({ art: 'push', klasse: 'freigabe' } as any), false, 'innen: Freigabe nie'); sammel.push(...ids); return { ok: ids.length, fehler: [] }; },
+  alleRuns: async () => [{ _id: 'abcd1234', conv: 'c1', title: 'Rechner', zustand: 'laeuft', lastActivity: '2026-11-03T08:00:00Z', thema: 'Tarife' }],
+  lcChats: async () => [{ conversationId: 'c1', title: 'x' }, { conversationId: 'c2', title: 'Alt', isArchived: true, updatedAt: '2026-01-01' }], lcUrl: 'https://lc',
   wiederOeffnen: async (u, id) => { geoeffnet.push(`${u.id}:${id}`); return u.id === 'k' && id === 'q-zu1'; },
 };
 registerV2(on, deps);
@@ -142,4 +144,12 @@ test('S14: Erledigt an einem gewählten Tag (nur Admin, Datum geprüft); ohne An
   for (const t of ['2026-02-31', '2026-04-31', '2026-11-04']) assert.equal((await rufe('GET', `/api/v2/erledigt?tag=${t}`, ADMIN)).status, 400, t);
   assert.equal((await rufe('GET', '/api/v2/erledigt?tag=2026-11-02', LISA)).b.nurAdmin, true);
   assert.ok(tage.includes('2026-11-02'));
+});
+
+test('S12: Alle Chats — Admin sieht Unter-Chats und eigene LibreChat-Chats je einmal, Lisa nur ihre Chats', async () => {
+  const k = await rufe('GET', '/api/v2/chats', ADMIN);
+  assert.deepEqual(k.b.zeilen.map((z: any) => z.art), ['unterchat', 'chat']);
+  assert.deepEqual(k.b.themen, ['Tarife']);
+  const l = await rufe('GET', '/api/v2/chats', LISA);
+  assert.ok(l.b.zeilen.every((z: any) => z.art !== 'unterchat'));
 });

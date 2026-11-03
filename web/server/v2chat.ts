@@ -39,8 +39,8 @@ export function pruefeText(t: unknown): string {
 export const istV2Conv = (c: unknown) => typeof c === 'string' && /^v2-[0-9a-f-]{36}$/.test(c);
 
 /** Liste meiner 2.0-Chats, neueste zuerst. */
-export async function meineChats(u: User) {
-  const l: any[] = await chats().find({ userId: u.id }).sort({ updatedAt: -1 }).limit(30).toArray();
+export async function meineChats(u: User, n = 30) {
+  const l: any[] = await chats().find({ userId: u.id }).sort({ updatedAt: -1 }).limit(Math.min(n, 500)).toArray();
   return l.map((c) => ({ conv: String(c._id), titel: String(c.titel ?? 'Chat'), at: c.updatedAt }));
 }
 

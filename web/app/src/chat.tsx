@@ -11,7 +11,7 @@ interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nac
 
 import { OLAF_KURZ, OLAF_MEHR } from './begriffe.ts';
 
-export function ChatLeiste({ offen, vorbereitet, schliessen }: { offen: boolean; vorbereitet: string; schliessen: () => void }) {
+export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen: boolean; vorbereitet: string; convWahl?: string; schliessen: () => void }) {
   const app = useApp();
   const [ziel, setZiel] = useState<'hauptchat' | 'eigen'>(app.ich.admin ? 'hauptchat' : 'eigen');
   const [conv, setConv] = useState<string | null>(null);
@@ -23,6 +23,9 @@ export function ChatLeiste({ offen, vorbereitet, schliessen }: { offen: boolean;
   const unten = useRef<HTMLDivElement>(null);
 
   useEffect(() => { if (vorbereitet) setText(vorbereitet); }, [vorbereitet]);
+  useEffect(() => { if (offen && convWahl) { setZiel('eigen'); setConv(convWahl); } }, [offen, convWahl]);   // S12: aus „Alle Chats“ geöffnet
+  // Geschlossen: beim nächsten Öffnen wieder der Normalfall (Hauptchat bzw. neuer Chat), nicht der zuletzt gewählte (Pass C).
+  useEffect(() => { if (!offen) { setConv(null); setZiel(app.ich.admin ? 'hauptchat' : 'eigen'); } }, [offen]);
 
   const abruf = useRef(0);
   async function laden() {

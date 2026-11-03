@@ -208,7 +208,7 @@ export function Arbeit() {
   if (!d) return <Laedt />;
   if (d.nurAdmin) return (
     <div className="seite"><h1>Arbeit</h1>
-      <div className="willkommen"><p><b>Hier stehen deine Unter-Chats.</b> Ein Unter-Chat ist ein Auftrag, an dem ein Agent selbstständig arbeitet und am Ende einen Bericht schreibt. Du hast gerade keine — Knut verteilt die Aufträge.</p><p className="klein"><a href="v2/begriffe">Begriffe in Klartext</a></p></div>
+      <div className="willkommen"><p><b>Hier stehen deine Unter-Chats.</b> Ein Unter-Chat ist ein Auftrag, an dem ein Agent selbstständig arbeitet und am Ende einen Bericht schreibt. Du hast gerade keine — Knut verteilt die Aufträge.</p><p className="klein"><a href="v2/chats">Deine Chats durchsuchen</a> · <a href="v2/begriffe">Begriffe in Klartext</a></p></div>
     </div>
   );
   const g = d.gruppen;
@@ -216,7 +216,7 @@ export function Arbeit() {
   return (
     <div className="seite">
       <h1>Arbeit</h1>
-      <p className="unterzeile">Deine Unter-Chats: Aufträge, an denen Agenten selbstständig arbeiten.</p>
+      <p className="unterzeile">Deine Unter-Chats: Aufträge, an denen Agenten selbstständig arbeiten. <a href="v2/chats">Alle Chats durchsuchen (auch alte) →</a></p>
       <Abschnitt id="w-wartet" titel="Wartet auf dich" erklaerung="Unter-Chats, die ohne dich nicht weiterkommen: eine offene Frage, ein Hänger oder kein Stand. Ein Klick zeigt, was genau.">{liste(g.wartet, 'Kein Unter-Chat wartet auf dich.')}</Abschnitt>
       <Abschnitt id="w-laeuft" titel="Läuft" erklaerung="Hier arbeitet gerade ein Agent. Du musst nichts tun.">{liste(g.laeuft, 'Gerade läuft nichts.')}</Abschnitt>
       <Abschnitt id="fertig" titel="Fertig" erklaerung="Fertige Unter-Chats, die du noch nicht abgenommen hast — der Bericht liegt bereit.">{liste(g.fertig, 'Nichts Fertiges offen.')}</Abschnitt>
@@ -458,6 +458,54 @@ export function Mehr() {
       <Abschnitt id="m-neu" titel="Schon in der neuen Oberfläche" erklaerung="Was du aus der alten Werkbank kennst und hier schon findest.">
         <ul className="liste">{v2.map((e) => <Zeile key={e.alt} titel={e.titel} url={e.url} satz={e.satz} />)}</ul>
       </Abschnitt>
+    </div>
+  );
+}
+
+// ---------- Alle Chats (S12, Knut 03.11. Punkt 3): suchen, nach Art/Status/Thema/Zeit filtern, von jeder Zeile in den Chat ----------
+
+interface ChatZeile { id: string; art: 'hauptchat' | 'unterchat' | 'chat' | 'chat2'; titel: string; thema: string | null; status: string; zuletzt: string | null; url: string | null; conv: string | null }
+const ART_TEXT: Record<ChatZeile['art'], string> = { hauptchat: 'Hauptchat', unterchat: 'Unter-Chat', chat: 'Chat', chat2: 'Chat (neu)' };
+const ZEIT: [string, number][] = [['7 Tage', 7], ['30 Tage', 30], ['90 Tage', 90], ['alle', 0]];
+
+export function AlleChats() {
+  const app = useApp();
+  const { d, fehler, neu } = useDaten<{ zeilen: ChatZeile[]; themen: string[]; fehlt?: string[] }>('api/v2/chats');
+  const [such, setSuch] = useState('');
+  const [art, setArt] = useState<'alle' | 'unterchat' | 'haupt' | 'chat'>('alle');
+  const [status, setStatus] = useState('alle');
+  const [thema, setThema] = useState('alle');
+  const [tage, setTage] = useState(0);
+  if (fehler) return <Fehler text={fehler} nochmal={neu} />;
+  if (!d) return <Laedt />;
+  const s = such.trim().toLowerCase();
+  const grenze = tage ? Date.now() - tage * 86400_000 : 0;
+  const liste = d.zeilen.filter((z) =>
+    (art === 'alle' || (art === 'unterchat' && z.art === 'unterchat') || (art === 'haupt' && z.art === 'hauptchat') || (art === 'chat' && (z.art === 'chat' || z.art === 'chat2')))
+    && (status === 'alle' || z.status === status) && (thema === 'alle' || z.thema === thema)
+    && (!grenze || (z.zuletzt && Date.parse(z.zuletzt) >= grenze))
+    && (!s || `${z.titel} ${z.thema ?? ''}`.toLowerCase().includes(s)));
+  const stati = [...new Set(d.zeilen.map((z) => z.status))].sort();
+  return (
+    <div className="seite">
+      <p className="zurueck"><a href="v2/arbeit">← Arbeit</a></p>
+      <h1>Alle Chats</h1>
+      <p className="unterzeile">Jeder Hauptchat, Unter-Chat und Chat — auch alte und archivierte. Ein Klick öffnet ihn.</p>
+      <div className="filter">
+        <input type="search" placeholder="Suchen (Titel, Thema)" value={such} onChange={(e) => setSuch(e.target.value)} aria-label="Chats durchsuchen" />
+        <select value={art} onChange={(e) => setArt(e.target.value as any)} aria-label="Art"><option value="alle">alle Arten</option><option value="unterchat">Unter-Chats</option><option value="haupt">Hauptchats</option><option value="chat">Chats</option></select>
+        <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status"><option value="alle">jeder Status</option>{stati.map((x) => <option key={x} value={x}>{x}</option>)}</select>
+        {d.themen.length > 0 && <select value={thema} onChange={(e) => setThema(e.target.value)} aria-label="Thema"><option value="alle">jedes Thema</option>{d.themen.map((x) => <option key={x} value={x}>{x}</option>)}</select>}
+        <select value={tage} onChange={(e) => setTage(Number(e.target.value))} aria-label="Zeitraum">{ZEIT.map(([t, n]) => <option key={n} value={n}>{n ? `letzte ${t}` : 'jede Zeit'}</option>)}</select>
+      </div>
+      {!!d.fehlt?.length && <p className="fehlertext klein">Nicht erreichbar: {d.fehlt.join(', ')} — diese Chats fehlen gerade in der Liste.</p>}
+      <p className="klein gedimmt">{mehrzahl(liste.length, 'Treffer', 'Treffer')} von {d.zeilen.length}</p>
+      {liste.length ? (
+        <ul className="liste">{liste.slice(0, 200).map((z) => z.art === 'chat2'
+          ? <li key={z.id} className="zeile"><div className="zeile-haupt"><button type="button" className="zeile-titel knopf-link" onClick={() => z.conv && app.chatOeffnen(z.conv)}>{z.titel}</button><p className="zeile-satz">{ART_TEXT[z.art]} · {z.status}</p></div><div className="zeile-rechts"><span className="zeit">{wann(z.zuletzt)}</span></div></li>
+          : <Zeile key={z.id} titel={z.titel} url={z.url ?? '#'} satz={`${ART_TEXT[z.art]} · ${z.status}${z.thema ? ` · ${z.thema}` : ''}${z.art !== 'unterchat' ? ' · öffnet im Chat (LibreChat)' : ''}`} rechts={wann(z.zuletzt)} />)}</ul>
+      ) : <p className="leer">Nichts gefunden — anderer Suchbegriff oder Filter?</p>}
+      {liste.length > 200 && <p className="klein gedimmt">Die ersten 200 — enger suchen, um den Rest zu sehen.</p>}
     </div>
   );
 }

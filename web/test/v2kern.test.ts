@@ -164,3 +164,37 @@ test('S13/C6: Rolle — Admin leitet, wer einen GitHub-Namen hat, prüft (Review
   assert.equal(rolle({ admin: false, vorname: 'Lisa' }, names), 'team');
   assert.equal(rolle({ admin: false, vorname: '' }, names), 'team');
 });
+
+test('S12/C4: Alle Chats — Unter-Chats, Hauptchats, LibreChat- und 2.0-Chats zusammen, jede Unterhaltung genau einmal', async () => {
+  const { chatListe } = await import('../server/v2kern.ts');
+  const runs = [
+    { _id: 'abcd1234', conv: 'c-strang', title: 'Netzentgelte', thema: 'Rechner', zustand: 'fertig', lastActivity: '2026-11-02T10:00:00Z', knutReviewedAt: '2026-11-02T12:00:00Z' },
+    { _id: 'beef0001', conv: 'c-laeuft', title: 'Umfrage', zustand: 'laeuft', lastActivity: '2026-11-03T09:00:00Z' },
+    { _id: 'hc000001', conv: 'c-haupt', title: 'Hauptchat', kind: 'leitstand', lastActivity: '2026-11-03T10:00:00Z' },
+  ];
+  const convs = [
+    { conversationId: 'c-strang', title: 'Netzentgelte (LibreChat)', updatedAt: '2026-11-02T10:00:00Z' },
+    { conversationId: 'c-haupt', title: 'Hauptchat', updatedAt: '2026-11-03T10:00:00Z' },
+    { conversationId: 'c-alt', title: 'Alter Chat zu Tarifen', updatedAt: '2026-09-01T10:00:00Z', isArchived: true },
+  ];
+  const eigene = [{ conv: 'v2-1111', titel: 'Frage zu OLAF', at: '2026-11-03T08:00:00Z' }];
+  const l = chatListe(runs as any, convs as any, eigene as any, { admin: true, lcUrl: 'https://lc' });
+  assert.equal(l.length, 5, JSON.stringify(l.map((x) => x.titel)));
+  assert.deepEqual(l.map((x) => x.art), ['hauptchat', 'unterchat', 'chat2', 'unterchat', 'chat'], 'neueste zuerst');
+  const n = l.find((x) => x.titel === 'Netzentgelte')!;
+  assert.equal(n.status, 'abgenommen'); assert.equal(n.thema, 'Rechner'); assert.equal(n.url, 'v2/arbeit/abcd1234');
+  assert.equal(l.find((x) => x.art === 'chat')!.status, 'archiviert');
+  assert.equal(l.find((x) => x.art === 'chat')!.url, 'https://lc/c/c-alt');
+  assert.equal(l.find((x) => x.art === 'chat2')!.conv, 'v2-1111');
+  const lisa = chatListe(runs as any, convs as any, eigene as any, { admin: false, lcUrl: 'https://lc' });
+  assert.ok(lisa.every((x) => x.art === 'chat' || x.art === 'chat2'), 'Unter-Chats und Hauptchat nur für Admin');
+});
+
+test('S12 (Pass C): kaputtes Datum legt die Liste nicht lahm, zwei Runs mit einer Unterhaltung erscheinen einmal, unsaubere IDs bekommen keinen Link', async () => {
+  const { chatListe } = await import('../server/v2kern.ts');
+  const l = chatListe([{ _id: 'a1', conv: 'c1', title: 'Eins', lastActivity: 'unbekannt' }, { _id: 'a2', conv: 'c1', title: 'Eins (neu gestartet)' }] as any,
+    [{ conversationId: '../x?next=//boese', title: 'Komisch', updatedAt: 'kaputt' }] as any, [], { admin: true, lcUrl: 'https://lc' });
+  assert.equal(l.filter((z) => z.conv === 'c1').length, 1);
+  assert.equal(l.find((z) => z.titel === 'Komisch')!.url, null);
+  assert.ok(l.every((z) => z.zuletzt === null));
+});

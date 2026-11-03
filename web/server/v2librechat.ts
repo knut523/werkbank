@@ -19,3 +19,9 @@ export async function lesen(u: User, conv: string, n = 30): Promise<ChatNachrich
 export async function senden(u: User, conv: string, text: string): Promise<Date> {
   return deliver(u, conv, text);
 }
+
+/** Alle LibreChat-Unterhaltungen der Person (auch archivierte), neueste zuerst — nur Kopfdaten (S12 „Alle Chats“). */
+export async function liste(u: User, n = 1000): Promise<{ conversationId: string; title: string; updatedAt: Date; createdAt: Date; isArchived: boolean }[]> {
+  return lc().collection('conversations').find({ user: u.id }, { projection: { _id: 0, conversationId: 1, title: 1, updatedAt: 1, createdAt: 1, isArchived: 1 } })
+    .sort({ updatedAt: -1 }).limit(Math.min(n, 2000)).toArray() as any;
+}

@@ -4,14 +4,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { hole } from './api.ts';
 import { Kontext, type AppKontext } from './kontext.ts';
 import { ChatLeiste } from './chat.tsx';
-import { Anmelden, Arbeit, ArbeitDetail, Begriffe, Dokument, Dokumente, Entscheidungen, Erledigt, Jetzt, Mehr, PrDetail, Prs } from './seiten.tsx';
+import { Anmelden, AlleChats, Arbeit, ArbeitDetail, Begriffe, Dokument, Dokumente, Entscheidungen, Erledigt, Jetzt, Mehr, PrDetail, Prs } from './seiten.tsx';
 import { Laedt, vergessen, vorab } from './teile.tsx';
 import { istIntern, logisch, rel } from './format.ts';
 
 const BEREICHE = [
   { url: 'v2/', label: 'Jetzt', ico: '◉', passt: (p: string) => p === 'v2/' || p === 'v2' },
   { url: 'v2/entscheidungen', label: 'Entscheidungen', ico: '✓', passt: (p: string) => p.startsWith('v2/entscheidungen') },
-  { url: 'v2/arbeit', label: 'Arbeit', ico: '⚙', passt: (p: string) => p.startsWith('v2/arbeit') },
+  { url: 'v2/arbeit', label: 'Arbeit', ico: '⚙', passt: (p: string) => p.startsWith('v2/arbeit') || p.startsWith('v2/chats') },
   { url: 'v2/prs', label: 'PRs', ico: '⇄', passt: (p: string) => p.startsWith('v2/prs') },
   { url: 'v2/dokumente', label: 'Dokumente', ico: '▤', passt: (p: string) => p.startsWith('v2/dokument') },
   { url: 'v2/mehr', label: 'Mehr', ico: '⋯', passt: (p: string) => p.startsWith('v2/mehr') || p.startsWith('v2/erledigt') },
@@ -53,6 +53,7 @@ function Seite({ pfad, such }: { pfad: string; such: string }) {
   if (pfad.startsWith('v2/dokumente')) return <Dokumente key={q.get('q') ?? ''} q={q.get('q') ?? ''} />;
   if (pfad.startsWith('v2/begriffe')) return <Begriffe />;
   if (pfad.startsWith('v2/mehr')) return <Mehr />;
+  if (pfad.startsWith('v2/chats')) return <AlleChats />;
   if (pfad.startsWith('v2/erledigt')) return <Erledigt key={such} tag={q.get('tag')} />;
   return <div className="seite"><h1>Seite nicht gefunden</h1><p><a href="v2/">Zur Startseite</a></p></div>;
 }
@@ -63,7 +64,7 @@ export function App() {
   const [alt, setAlt] = useState('');
   const [trocken, setTrocken] = useState(false);
   const [zahl, setZahl] = useState<number | null>(null);
-  const [chat, setChat] = useState<{ offen: boolean; text: string }>({ offen: false, text: '' });
+  const [chat, setChat] = useState<{ offen: boolean; text: string; conv?: string }>({ offen: false, text: '' });
   const [n, setN] = useState(0);
 
   const pruefen = () => hole<{ user: { name: string; role: string } | null; librechatUrl: string; dryRun?: boolean; vaultDryRun?: boolean }>('api/config')
@@ -82,6 +83,7 @@ export function App() {
   const kontext: AppKontext = useMemo(() => ({
     ich: konto ?? { name: '', admin: false }, alt,
     chat: (text = '') => setChat({ offen: true, text }),
+    chatOeffnen: (conv: string) => setChat({ offen: true, text: '', conv }),
     zahl: (x) => { if (x === null) setN((v) => v + 1); else setZahl(x); },
   }), [konto, alt]);
 
@@ -112,7 +114,7 @@ export function App() {
         {trocken && <p className="testband" role="note">Testbetrieb: Antworten an Notizen und Jira werden hier nicht wirklich geschrieben.</p>}
         <main className="inhalt"><Seite pfad={pfad} such={such} /></main>
         <button type="button" className="chat-fab" onClick={() => setChat({ offen: true, text: '' })} aria-label="Chat öffnen" hidden={chat.offen}>Chat</button>
-        <ChatLeiste offen={chat.offen} vorbereitet={chat.text} schliessen={() => setChat({ offen: false, text: '' })} />
+        <ChatLeiste offen={chat.offen} vorbereitet={chat.text} convWahl={chat.conv} schliessen={() => setChat({ offen: false, text: '' })} />
       </div>
     </Kontext.Provider>
   );

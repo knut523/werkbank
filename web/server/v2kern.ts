@@ -211,3 +211,36 @@ export function rolle(u: { admin: boolean; vorname: string }, names: Record<stri
   const v = u.vorname.trim().toLowerCase();
   return v && Object.values(names).some((n) => n.trim().toLowerCase() === v) ? 'reviewer' : 'team';
 }
+
+// ---------- Alle Chats (S12, Council C4) ----------
+
+export interface ChatZeile { id: string; art: 'hauptchat' | 'unterchat' | 'chat' | 'chat2'; titel: string; thema: string | null; status: string; zuletzt: string | null; url: string | null; conv: string | null }
+const iso = (d: unknown) => { if (!d) return null; const t = new Date(d as any); return Number.isNaN(t.getTime()) ? null : t.toISOString(); };   // kaputtes Datum ≠ 500 (Pass C)
+const convOk = (c: string) => /^[\w-]{1,80}$/.test(c);   // nur saubere IDs in Links (Pass C)
+/** Status eines Unter-Chats in einem Wort (abgenommen · fertig · läuft · wartet · abgebrochen). */
+function strangStatus(r: any): string {
+  if (r.knutReviewedAt || r.reviewedAt) return 'abgenommen';
+  if (r.startError) return 'abgebrochen';
+  return ({ fertig: 'fertig', laeuft: 'läuft', wartet: 'wartet', blockiert: 'wartet', haengt: 'wartet', 'stand-fehlt': 'wartet' } as Record<string, string>)[String(r.zustand ?? '')] ?? 'offen';
+}
+/** Eine Liste aus drei Quellen: Unter-Chats/Hauptchats (orchestrator_runs, nur Admin), LibreChat-Unterhaltungen (über den Adapter)
+ *  und 2.0-Chats. Jede Unterhaltung genau einmal — die LibreChat-Unterhaltung eines Unter-Chats erscheint als Unter-Chat. Neueste zuerst. */
+export function chatListe(runs: any[], convs: any[], eigene: { conv: string; titel: string; at: unknown }[], o: { admin: boolean; lcUrl: string }): ChatZeile[] {
+  const out: ChatZeile[] = [];
+  const belegt = new Set<string>();
+  for (const r of o.admin ? runs : []) {
+    if (r.conv) { if (belegt.has(String(r.conv))) continue; belegt.add(String(r.conv)); }   // zwei Runs, eine Unterhaltung: einmal (Pass C)
+    const haupt = r.kind === 'leitstand';
+    out.push({ id: String(r._id), art: haupt ? 'hauptchat' : 'unterchat', titel: kurz(String(r.title || (haupt ? 'Hauptchat' : 'Unter-Chat')), 140), thema: r.thema ? String(r.thema) : null,
+      status: haupt ? (r.endedAt ? 'beendet' : 'aktiv') : strangStatus(r), zuletzt: iso(r.lastActivity ?? r.doneAt ?? r.startedAt),
+      url: haupt ? (r.conv && convOk(String(r.conv)) ? `${o.lcUrl}/c/${r.conv}` : null) : `v2/arbeit/${r._id}`, conv: r.conv ? String(r.conv) : null });
+  }
+  for (const c of convs) {
+    const id = String(c.conversationId);
+    if (belegt.has(id)) continue;
+    belegt.add(id);
+    out.push({ id, art: 'chat', titel: kurz(String(c.title || 'Chat'), 140), thema: null, status: c.isArchived ? 'archiviert' : 'offen', zuletzt: iso(c.updatedAt ?? c.createdAt), url: convOk(id) ? `${o.lcUrl}/c/${id}` : null, conv: id });
+  }
+  for (const e of eigene) if (!belegt.has(e.conv)) out.push({ id: e.conv, art: 'chat2', titel: kurz(e.titel, 140), thema: null, status: 'offen', zuletzt: iso(e.at), url: null, conv: e.conv });
+  return out.sort((a, b) => String(b.zuletzt ?? '').localeCompare(String(a.zuletzt ?? '')));
+}

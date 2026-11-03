@@ -208,3 +208,10 @@ p { margin: 0 0 var(--s1); }
 .thema-kopf { display: flex; align-items: center; justify-content: space-between; gap: var(--s1); flex-wrap: wrap; }
 .bestaetigen { background: var(--karte); border: 1px solid var(--akzent); border-radius: var(--r); padding: var(--s2); margin: var(--s1) 0; }
 .bestaetigen ul { margin: 6px 0 10px; padding-left: 1.1rem; }
+
+/* S12: Alle Chats — Filterzeile, Knopf als Link */
+.filter { display: flex; flex-wrap: wrap; gap: 8px; margin: var(--s1) 0; }
+.filter input[type=search] { flex: 1 1 220px; min-width: 0; }
+.filter select { flex: 1 1 40%; min-width: 0; }
+@media (min-width: 900px) { .filter select { flex: 0 1 auto; } }
+.knopf-link { background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer; }
