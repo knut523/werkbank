@@ -83,7 +83,9 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
   if (o.strand) links.push({ label: o.strandTitel ? `Unter-Chat „${kurz(o.strandTitel, 60)}“` : 'Unter-Chat ansehen', url: `/v2/arbeit/${o.strand}` });
   if (f.quelle?.url && /^https?:\/\//.test(f.quelle.url) && !o.strand) links.push({ label: f.quelle.text || 'Quelle', url: f.quelle.url, extern: true });
   if (f.quelle?.url?.startsWith('#/wissen/')) links.push({ label: f.quelle.text || 'Notiz', url: `/v2/dokument?vault=${encodeURIComponent(f.quelle.url.slice('#/wissen/'.length))}` });
-  const voll = String(f.worum ?? '').replace(/\s+/g, ' ').trim();
+  // Agenten schreiben oft Dateipfade mit Zeilen („…/x.md:51“, „Z.56-59“) — für Menschen in „(Notiz)“ übersetzen (Persona Knut R2).
+  const ohnePfad = (t: string) => t.replace(/`?[\w./-]+\.(md|ts|tsx|json|ya?ml)(:\d+(-\d+)?)?`?/g, '(Notiz)').replace(/\bZ\.\s?\d+(-\d+)?/g, '').replace(/\(Notiz\)(\s*,?\s*\(Notiz\))+/g, '(Notiz)');
+  const voll = ohnePfad(String(f.worum ?? '').replace(/\s+/g, ' ').trim());
   const erklaerung: [string, string][] = [
     ...(voll && voll !== kurz(voll, 220) ? [['Worum es geht (ganz)', voll] as [string, string]] : []),
     ['Thema', f.gruppe],
@@ -98,7 +100,7 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
     ...(f.wartetSeit ? [['Wartet seit', new Date(f.wartetSeit).toLocaleDateString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' }) + ` ${uhrzeit(f.wartetSeit)}`] as [string, string]] : []),
   ];
   return {
-    id: f.id, art: freigabe ? 'freigabe' : 'entscheidung', titel: kurz(f.titel, 160), worum: kurz(f.worum, 220), grund: o.grund, empfehlung: f.empfehlung,
+    id: f.id, art: freigabe ? 'freigabe' : 'entscheidung', titel: kurz(f.titel, 160), worum: kurz(voll, 220), grund: o.grund, empfehlung: f.empfehlung,
     optionen: f.optionen ?? [], alternativen: f.alternativen ?? [], antworten, form: f.form, wichtig: f.stufe === 'wichtig', thema: f.gruppe, quelle: f.quelle?.text ?? '',
     links, erklaerung, alt: weg === 'alt' ? o.altUrl : null, wartetSeit: f.wartetSeit,
   };

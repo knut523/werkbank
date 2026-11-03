@@ -192,3 +192,6 @@ p { margin: 0 0 var(--s1); }
 .testband { margin: 0; padding: 6px var(--s2); background: var(--warn-hell); color: var(--warn); font-size: .85rem; text-align: center; border-bottom: 1px solid #f3d9ad; }
 @media (min-width: 900px) { .testband { margin-left: 220px; } }
 .gruppe-titel { font-size: .85rem; font-weight: 600; color: var(--gedimmt); margin: 12px 0 6px; }
+.sprung { display: flex; flex-wrap: wrap; gap: 8px; margin: -8px 0 var(--s3); }
+.sprung a { padding: 6px 12px; border-radius: 999px; background: var(--karte); border: 1px solid var(--linie); font-size: .85rem; }
+.abschnitt h2 { scroll-margin-top: calc(var(--kopf-h) + 16px); }

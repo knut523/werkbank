@@ -24,6 +24,7 @@ function useAdresse() {
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       const a = (e.target as HTMLElement).closest('a');
       const href = a?.getAttribute('href');
+      if (href?.startsWith('#') && a) { e.preventDefault(); document.getElementById(href.slice(1))?.scrollIntoView({ behavior: 'smooth' }); return; }   // Sprungmarken
       if (!a || !href || a.target || !(href === '/v2' || href.startsWith('/v2/'))) return;
       e.preventDefault();
       if (href !== location.pathname + location.search) { history.pushState(null, '', href); window.scrollTo(0, 0); }

@@ -47,6 +47,7 @@ export function Jetzt() {
   return (
     <div className="seite">
       {kopf}
+      <nav className="sprung" aria-label="Weiter unten">{d.admin && <a href="#a-laeuft">Läuft</a>}{d.admin && <a href="#a-erledigt">Heute erledigt</a>}<a href="#a-prs">PRs</a><a href="#a-dok">Dokumente</a></nav>
       {d.admin && (
         <Abschnitt id="a-laeuft" titel="Läuft gerade" erklaerung="Unter-Chats, an denen ein Agent gerade arbeitet — mit voraussichtlichem Ende. Du musst hier nichts tun."
           fuss={<a href="/v2/arbeit">Alle Unter-Chats →</a>}>

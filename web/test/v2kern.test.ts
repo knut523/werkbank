@@ -148,3 +148,9 @@ test('Uhrzeit in Wiener Zeit', () => {
   assert.equal(uhrzeit('2026-11-03T16:47:38Z'), '17:47');
   assert.equal(uhrzeit(null), '');
 });
+
+test('Karte: Dateipfade mit Zeilennummern aus Agententexten werden für Menschen ausgeblendet', () => {
+  const k = karteAusFrage(frage('q', { worum: 'Siehe `olaf/2-Areas/x/spec-a.md:51` und Z.56-59: soll das PDF die Texte holen?' }), { grund: '', strand: null, strandTitel: null, altUrl: 'x' });
+  assert.doesNotMatch(k.worum, /\.md|:51|Z\.56/);
+  assert.match(k.worum, /\(Notiz\)/);
+});
