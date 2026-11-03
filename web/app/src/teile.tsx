@@ -81,8 +81,8 @@ export function Zeile({ titel, url, satz, rechts, marke, links }: { titel: strin
 }
 
 /** Ladehinweis erst nach 400 ms — kurze Abrufe blitzen nicht als leere Seite auf (Persona Knut R2). */
-export function Laedt({ text = 'Lädt …' }: { text?: string }) {
-  const [zeigen, setZeigen] = useState(false);
+export function Laedt({ text = 'Lädt …', sofort = false }: { text?: string; sofort?: boolean }) {
+  const [zeigen, setZeigen] = useState(sofort);   // sofort: dort, wo der Text etwas verspricht (Reviewer-Start, Runde 4)
   useEffect(() => { const t = setTimeout(() => setZeigen(true), 400); return () => clearTimeout(t); }, []);
   return <p className="laedt" role="status" aria-busy="true">{zeigen ? text : '\u00a0'}</p>;
 }

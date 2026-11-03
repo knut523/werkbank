@@ -53,7 +53,7 @@ export function Jetzt() {
     </>
   );
   // Runde 3 (Christoph B1): für Reviewer stehen die PRs über „Was du jetzt tun musst“ — dort wartet ihre Arbeit.
-  if (!d) return <div className="seite">{kopf}{reviewer ? <Laedt text="Lädt deine PRs …" /> : jetztAbschnitt}{voll.fehler ? <Fehler text={voll.fehler} nochmal={voll.neu} /> : !reviewer && <Laedt text="Lädt Läuft, Heute erledigt, PRs …" />}</div>;
+  if (!d) return <div className="seite">{kopf}{reviewer ? <Laedt sofort text="Lädt die PRs, bei denen du dran bist …" /> : jetztAbschnitt}{voll.fehler ? <Fehler text={voll.fehler} nochmal={voll.neu} /> : !reviewer && <Laedt text="Lädt Läuft, Heute erledigt, PRs …" />}</div>;
   // S13: Reihenfolge je Rolle — Team (Lisa) liest zuerst Dokumente, Reviewer (Christoph) und Leitung sehen zuerst PRs.
   const prsAbschnitt = (
       <Abschnitt id="a-prs" titel="PRs, die auf dich warten (die neuesten)" erklaerung="Code-Vorschläge auf GitHub (Pull Requests), bei denen du gerade dran bist — zum Prüfen, Freigeben oder Nachbessern. Entwürfe zählen nicht mit. Unter „PRs“ siehst du alle und kannst auf jede andere Person umschalten."
@@ -130,7 +130,7 @@ const DokZeile = ({ x }: { x: Dok }) => <Zeile titel={x.titel} url={x.url} satz=
 const agentMarke = (r: PrZeile['review']) => !r ? undefined : r.empfehlung ? { text: EMPFEHLUNG[r.empfehlung] ?? `Agent: ${r.empfehlung}`, ton: r.empfehlung === 'approve' ? 'gruen' : '' } : r.status !== 'fertig' ? { text: 'Agent prüft …' } : { text: r.gepostet === false ? 'Agent: Entwurf' : 'Agent-Review' };
 const PrZeileView = ({ p }: { p: PrZeile }) => (
   <Zeile titel={`${p.pr} · ${p.titel}`} url={`v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}
-    marke={p.entwurf ? { text: 'Entwurf' } : agentMarke(p.review)} rechts={wann(p.geaendert)} />
+    marke={p.entwurf ? { text: 'Entwurf' } : agentMarke(p.review) ?? { text: 'noch kein Agenten-Review' }} rechts={wann(p.geaendert)} />
 );
 
 // ---------- Entscheidungen ----------
