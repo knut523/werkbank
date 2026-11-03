@@ -77,13 +77,15 @@ const arbeitKarte = (z: any) => ({ id: String(z.id), titel: kurz(z.titel, 140), 
 
 export function registerV2(on: On, d: V2Deps) {
   // --- Startseite „Jetzt“: eine Zahl, ≤ 5 Karten, Läuft, Heute erledigt, PRs, Dokumente — ein Abruf ---
-  on('GET', /^\/api\/v2\/start$/, async (req, res) => {
+  // `?teil=oben`: nur Zahl und Karten (≈ 0,1 s) — der erste Bildschirm am Handy wartet nicht auf Unter-Chats und PRs (Persona „unterwegs“).
+  on('GET', /^\/api\/v2\/start$/, async (req, res, _m, url) => {
     const u = await d.needUser(req);
     const ib = await d.inboxFuer(u);
     const { fragen, sonstiges } = fragenAus(ib.eintraege);
     const jetzt = karten(d, fragen, ib.eintraege, jetztAuswahl(fragen));
     const auf = aufraeumen(d, sonstiges);
     const ich = vorname(u);
+    if (url.searchParams.get('teil') === 'oben') return send(d, res, { teil: 'oben', zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), ich, admin: admin(u), at: new Date() });
     let laeuft: any[] = [], erledigt: any[] = [];
     if (admin(u)) {
       const [liste, er] = await Promise.all([d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })), d.erledigtDaten(u, d.wienDatum()).catch(() => ({ straenge: [] as any[] }))]);

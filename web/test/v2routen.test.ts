@@ -48,6 +48,13 @@ test('Start: eine Zahl = Summe aus Karten und Aufräumen; Freigabe unter den Ent
   assert.deepEqual(r.b.jetzt[1].antworten, []);
 });
 
+test('Start ?teil=oben: nur Zahl und Karten, dieselben wie im vollen Abruf', async () => {
+  const o = await rufe('GET', '/api/v2/start?teil=oben', ADMIN), v = await rufe('GET', '/api/v2/start', ADMIN);
+  assert.equal(o.b.teil, 'oben'); assert.equal(o.b.zahl, v.b.zahl);
+  assert.deepEqual(o.b.jetzt.map((k: any) => k.id), v.b.jetzt.map((k: any) => k.id));
+  assert.equal(o.b.prs, undefined, 'PRs erst im vollen Abruf');
+});
+
 test('B4: eine Freigabe lässt sich über die 2.0-API nicht beantworten — auch nicht mit „ja“ per Hand; Entscheidungen gehen über die bestehende Logik', async () => {
   const n = antworten.length;
   const f = await rufe('POST', '/api/v2/antwort', ADMIN, { id: 'p-abcd1234-1234567', antwort: 'ja' });

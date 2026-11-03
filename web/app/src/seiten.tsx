@@ -17,26 +17,37 @@ function gruss(name: string) {
 
 export function Jetzt() {
   const app = useApp();
-  const { d, fehler, neu } = useDaten<Start>('/api/v2/start');
-  useEffect(() => { if (d) app.zahl(d.zahl); }, [d]);
-  if (fehler) return <Fehler text={fehler} nochmal={neu} />;
-  if (!d) return <Laedt />;
-  const abgenommen = d.erledigt.filter((e) => e.stand === 'abgenommen'), zumLesen = d.erledigt.filter((e) => e.stand === 'zum-lesen');
-  return (
-    <div className="seite">
-      <h1>{gruss(d.ich)}</h1>
-      {!d.admin && (
+  // Erst Zahl und Karten (schnell), dann der Rest — der erste Bildschirm zeigt sofort, was zu tun ist.
+  const oben = useDaten<Pick<Start, 'zahl' | 'jetzt' | 'aufraeumen' | 'ich' | 'admin'>>('/api/v2/start?teil=oben');
+  const voll = useDaten<Start>('/api/v2/start');
+  const k = voll.d ?? oben.d;
+  useEffect(() => { if (k) app.zahl(k.zahl); }, [k]);
+  if (oben.fehler && !voll.d) return <Fehler text={oben.fehler} nochmal={oben.neu} />;
+  if (!k) return <Laedt />;
+  const d = voll.d;
+  const kopf = (
+    <>
+      <h1>{gruss(k.ich)}</h1>
+      {!k.admin && (
         <div className="willkommen">
           <p><b>So funktioniert der Workspace:</b> Agenten erledigen Aufträge (<b>Unter-Chats</b>) und fragen, wenn sie etwas nicht selbst entscheiden dürfen. Was davon an dich geht, steht hier ganz oben unter „Was du jetzt tun musst“.</p>
           <p className="klein">Unbekannte Wörter? <a href="/v2/begriffe">Begriffe in Klartext</a> · Jede Karte hat „Was ist das?“.</p>
         </div>
       )}
-      <Abschnitt id="a-jetzt" titel="Was du jetzt tun musst" erklaerung="Die wichtigsten Dinge, die ohne deine Antwort nicht weitergehen — höchstens fünf, wichtigste zuerst: zuerst Entscheidungen, die einen Agenten anhalten, darunter Freigaben. Die Zahl oben rechts zählt alles, was auf dich wartet."
-        fuss={d.zahl > d.jetzt.length + d.aufraeumen.length ? <a href="/v2/entscheidungen">Alles ansehen, was auf dich wartet →</a> : null}>
-        {d.jetzt.length > 0 && <div className="karten">{d.jetzt.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div>}
-        {d.aufraeumen.length > 0 && <AufraeumenListe l={d.aufraeumen} />}
-        {!d.jetzt.length && !d.aufraeumen.length && <p className="leer">Gerade wartet nichts auf dich.</p>}
+      <Abschnitt id="a-jetzt" titel="Was du jetzt tun musst" erklaerung="Die wichtigsten Dinge, die ohne deine Antwort nicht weitergehen — höchstens fünf, wichtigste zuerst: zuerst Entscheidungen, die einen Agenten anhalten, darunter Freigaben. Die Zahl oben rechts zählt alles, was auf dich wartet; unter „Entscheidungen“ steht, woraus sie sich zusammensetzt."
+        fuss={k.zahl > k.jetzt.length + k.aufraeumen.length ? <a href="/v2/entscheidungen">Alles ansehen, was auf dich wartet →</a> : null}>
+        {k.jetzt.length > 0 && <p className="klein gedimmt oben-hinweis">Wichtigste zuerst — die oberste hält am meisten Arbeit an.</p>}
+        {k.jetzt.length > 0 && <div className="karten">{k.jetzt.map((x) => <EntscheidungKarte key={x.id} k={x} beantwortet={() => app.zahl(null)} />)}</div>}
+        {k.aufraeumen.length > 0 && <AufraeumenListe l={k.aufraeumen} />}
+        {!k.jetzt.length && !k.aufraeumen.length && <p className="leer">Gerade wartet nichts auf dich.</p>}
       </Abschnitt>
+    </>
+  );
+  if (!d) return <div className="seite">{kopf}{voll.fehler ? <Fehler text={voll.fehler} nochmal={voll.neu} /> : <Laedt text="Lädt Läuft, Heute erledigt, PRs …" />}</div>;
+  const abgenommen = d.erledigt.filter((e) => e.stand === 'abgenommen'), zumLesen = d.erledigt.filter((e) => e.stand === 'zum-lesen');
+  return (
+    <div className="seite">
+      {kopf}
       {d.admin && (
         <Abschnitt id="a-laeuft" titel="Läuft gerade" erklaerung="Unter-Chats, an denen ein Agent gerade arbeitet — mit voraussichtlichem Ende. Du musst hier nichts tun."
           fuss={<a href="/v2/arbeit">Alle Unter-Chats →</a>}>
