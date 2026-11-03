@@ -376,7 +376,11 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
       if (/^orch_(list|show|questions|ask)$/.test(name)) return { cls: 'read' };
       if (name === 'orch_start' && ctx.workDir) {
         const cwd = realish(resolve(ctx.workDir, String(input.cwd ?? '')));
-        if (!within(cwd, realish(resolve(ctx.workDir)))) return { cls: 'confirm', why: 'Unter-Chat außerhalb des Hauptchat-Ordners' };
+        // Knut, 03.11.2026: mit `code: true` bekommt der Strang immer einen FRISCHEN eigenen Worktree (von origin/develop|dev|main,
+        // nie pushen) — er schreibt also nie in den angegebenen Ordner. Dann ohne Rückfrage, solange das Repo unter ~/work liegt.
+        const work = realish(resolve(process.env.HOME ?? '/nonexistent', 'work'));
+        const frischerWorktree = input.code === true && within(cwd, work);
+        if (!frischerWorktree && !within(cwd, realish(resolve(ctx.workDir)))) return { cls: 'confirm', why: 'Unter-Chat außerhalb des Hauptchat-Ordners' };
       }
       return ctx.workDir && ctx.scope === 'voll' ? { cls: 'auto' } : { cls: 'confirm' };
     }
