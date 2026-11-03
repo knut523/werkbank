@@ -100,7 +100,7 @@ export function App() {
   }), [konto, alt]);
 
   if (konto === undefined) return <Laedt />;
-  if (konto === null) return <Anmelden fertig={async () => { vergessen(); history.replaceState(null, '', 'v2/'); await vorab('api/v2/start?teil=oben'); await pruefen(); }} />;
+  if (konto === null) return <Anmelden fertig={async () => { vergessen(); history.replaceState(null, '', 'v2/'); window.dispatchEvent(new PopStateEvent('popstate')); /* Runde 4: nach dem Login immer „Jetzt“ */ await vorab('api/v2/start?teil=oben'); await pruefen(); }} />;
 
   return (
     <Kontext.Provider value={kontext}>
