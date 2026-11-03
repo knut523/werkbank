@@ -275,3 +275,13 @@ test('S22 Pass C: ganzeStelle schneidet nicht an „z. B.“, keine Zeilenumbrü
   assert.deepEqual(verlangtVon('CHANGES_REQUESTED', [{ author: 'fazl', state: 'APPROVED' }, { author: 'fazl', state: 'CHANGES_REQUESTED', submittedAt: '2026-11-01' }], {}), { wer: ['fazl'], unbekannt: false }, 'Review ohne Zeit überschreibt nichts');
   assert.equal(kurzurteil('Kurz.\n\n| # | Befund |\n|---|---|\n| 1 | --- siehe Zeile 42 |\n| 2 | zwei |').befunde, 2);
 });
+
+test('Runde 4: „Fertig — Bericht liegt bereit“ nur mit Bericht; Thema in der Erklärung wie auf der Karte', async () => {
+  const { zustandSatz, karteAusFrage } = await import('../server/v2kern.ts');
+  assert.match(zustandSatz({ zustand: 'fertig', bericht: true, paket: '416-x' } as any), /Bericht liegt bereit/);
+  assert.doesNotMatch(zustandSatz({ zustand: 'fertig', cs: { status: 'review' } } as any), /Bericht liegt bereit/);
+  const f: any = { id: 'q', klasse: 'entscheidung', titel: 'Release trocken?', worum: '', empfehlung: null, optionen: [], alternativen: [], antworten: ['anders'], gruppe: 'Workspace', quelle: { text: 'x' }, blockiert: 0, wartetSeit: null };
+  const k = karteAusFrage(f, { grund: '', strand: null, strandTitel: null, altUrl: 'http://alt' });
+  assert.equal(k.erklaerung.find(([a]) => a === 'Thema')![1], k.thema);
+  assert.equal(k.thema, 'Werkbank');
+});

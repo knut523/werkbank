@@ -95,7 +95,7 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
   const optionen = (f.optionen ?? []).map((x) => ohneFachwort(x, g));   // Alternativen bleiben roh: ihr Text geht beim Antippen als Antwort an den Agenten.
   const erklaerung: [string, string][] = [
     ...(worum && worum !== kurz(worum, 220) ? [['Worum es geht (ganz)', voll] as [string, string]] : []),   // gekürzt wird der übersetzte Text (Runde 3)
-    ['Thema', f.gruppe],
+    ['Thema', themaVon(f.gruppe, `${f.titel} ${f.quelle?.text ?? ''}`)],
     ['Woher', f.quelle?.text || '—'],
     ...(f.empfehlung ? [['Empfehlung', ohneFachwort(f.empfehlung, ge)] as [string, string]] : []),
     ...(f.optionen?.length ? [['Möglichkeiten', f.optionen.map((x) => ohneFachwort(x, ge)).join(' · ')] as [string, string]] : []),
@@ -139,7 +139,8 @@ export function zustandSatz(z: ArbeitZeile): string {
   if (z.zustand === 'blockiert') return `Kommt nicht weiter${grund ? `: ${grund}` : ''} — schau dir die Frage an.`;
   if (z.zustand === 'haengt') return `Hängt${grund ? `: ${grund}` : ''} — der Agent antwortet nicht mehr.`;
   if (z.zustand === 'stand-fehlt') return 'Ist stehen geblieben, ohne einen Stand zu melden.';
-  if (z.zustand === 'fertig') return cs === 'review' || z.bericht ? 'Fertig — der Bericht liegt bereit, lies ihn, wenn du Zeit hast.' : 'Fertig.';
+  // Runde 4 (Knut B1): „Bericht liegt bereit“ nur, wenn es einen gibt — sonst ehrlich sagen, dass er fehlt.
+  if (z.zustand === 'fertig') return z.bericht && z.paket ? 'Fertig — der Bericht liegt bereit, lies ihn, wenn du Zeit hast.' : 'Fertig gemeldet, aber ohne Bericht — schau in den Unter-Chat, ob noch etwas auf dich wartet.';
   return grund ? `${grund}.` : 'Stand unbekannt.';
 }
 
