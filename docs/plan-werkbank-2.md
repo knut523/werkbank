@@ -141,3 +141,83 @@ Stärkster Einwand, sichtbar gelassen: Solange 2.0 LibreChat-Unterhaltungen lies
 ## 6. Was 2.0 heute Nacht kann (und was nicht)
 
 Kann: Startseite mit einer Zahl, Entscheidungen mit „Ja, so“ / „Anders: …“ über die bestehenden Antwortwege, „Was ist das?“ sofort, Arbeit (Unter-Chats) lesen, Heute erledigt, PRs „wartet auf …“, Dokumente mit Suche, Hauptchat als Seitenleiste, Lesen ohne Claude-Zugang. Nicht: Freigaben nach außen (Push, Jira) — der Knopf führt in den Chat bzw. die alte Werkbank, die Schreibwege bleiben die bestehenden der Brücke mit denselben Prüfungen; Board, Sprint, Einrichtung.
+
+---
+
+# Teil 2 — Vollausbau der 2.0 (Knut 03.11. abends, Paket 436 Runde 2)
+
+**Quelle:** Knuts Feedback zur Test-Instanz (03.11. abends, 7 Punkte + Nachträge 1–4), Nutzungs-Audit Paket 437, Abnahme-Checkliste `nicht-verlieren.md` (Paket 436). **Jira:** keins (Werkbank-intern, Knut: keine Tickets ohne Auftrag).
+
+## 7. Ziel und Abgrenzung
+
+**Ziel:** Die 2.0 wird die Oberfläche, mit der Knut **und** das Team (Lisa neu, Christoph Reviews) ohne Erklärung arbeiten — und nichts aus der alten Werkbank geht stillschweigend verloren. „Jetzt“ (sortierte Top-Liste quer über alle Themen, sofort entscheiden) bleibt der Kern.
+
+**Drin (Knuts Punkte):**
+1. „Jetzt“ bleibt.
+2. **Themen-Cluster** zurück: Entscheidungen, Unter-Chats, Dokumente und PRs lassen sich nach Thema gruppieren und filtern; „Jetzt“ bleibt quer über alle Themen.
+3. **Alle Chats auffindbar:** alle Hauptchats (auch alte/beendete) und alle Unter-Chats (auch erledigt/archiviert), mit Suche, Thema, Datum, Status; von jeder Karte direkt in den zugehörigen Chat.
+4. **Vollständigkeit:** Inventar aller Funktionen der alten Werkbank (web/, claude-bridge/, LibreChat-Patches, MCP) gegen die Abnahme-Checkliste; je Zeile „in V2“ / „in V2 über Mehr erreichbar (alte Seite)“ / „unverändert im Chat/Agenten (Beleg)“ / „bewusst gestrichen (Grund, Knut bestätigt)“ / „fehlt noch“. Nutzungs-Audit 437: kaum Genutztes wird sichtbar gehoben oder zum Streichen vorgeschlagen — nie still.
+5. **Teammates:** eigene Startansicht je Rolle (Knut · Reviewer · neu im Team), Fachwörter ersetzt oder erklärt, Team-Freigaben respektiert.
+6. **Offene Punkte aus Runde 1:** /v2 unter /werkbank/… lauffähig; eine Wortwahl für die Zahl („warten auf dich“, auch am Handy); D5 bereits entschiedene Fragen schließen sich; Jargon in Empfehlungen raus; kurze Startseite am Handy.
+7. Persona-Runden (Knut Desktop/Handy, unterwegs, Lisa, Christoph) mit Vorher/Nachher.
+
+**Nicht drin (bewusst):** Neubau von Board, Sprint, Ziele, Mein Tag, Morgenlage, Roadmap-Pflege, Ablage/Teilen, Einrichtung in der 2.0 — sie bleiben **unverändert erreichbar** über „Mehr“ (dieselbe Anmeldung, derselbe Server); Streichen nur nach Knuts Entscheidung (D6). Agenten-Fähigkeiten (Jira schreiben, Push-Gate, Geheimnisse, Coolify, Skills, MCP, Delegation) werden nicht angefasst: die 2.0-Chats laufen über dieselbe Brücke und dieselben Werkzeuge. Kein Push, kein PR, kein Live-Neustart — Push und PR erst auf Knuts Go.
+
+## 8. Architektur-Entscheidungen (Teil 2)
+
+| # | Entscheidung | Begründung |
+|---|---|---|
+| A1 | Themen kommen aus den bestehenden Quellen: Unter-Chats `themaOf` (`web/server/themen.ts`), Fragen `gruppe` (Entscheidungsseite), PRs `repo`, Notizen erster Ordner + Bereich (`olaf · Produkt-OLAF › Datenschutz`), Berichte über den Unter-Chat ihres Pakets. Keine neue Themenliste. | eine Quelle je Datum, keine Doppelpflege |
+| A2 | Chats-Liste aus `orchestrator_runs` (kind leitstand = Hauptchat, sonst Unter-Chat), ohne Zeitgrenze und ohne Filter „offen“; Lesen des Verlaufs nur über den Adapter `v2librechat.ts` (B5). Schreiben an einen Unter-Chat über die bestehende `sendOrch` (nachreichen/zustellen), an den Hauptchat über `deliver`. | gleiche Wege wie heute, ein Schreiber je Unterhaltung |
+| A3 | Rolle aus Daten, nicht aus Schaltern: Admin = Knut; **Reviewer** = Person mit GitHub-Namen in `githubNames` oder mit PRs, die auf sie warten; sonst **neu im Team**. | ohne Konfiguration richtig für Christoph und Lisa |
+| A4 | Alte Seiten werden verlinkt, nicht eingebettet: „Mehr“ führt per Link auf `/#/<seite>` desselben Servers (gleiche Sitzung). | kein Doppelbau, nichts verloren |
+| A5 | /werkbank-Pfad: der Server liefert die App-`index.html` mit `<base href="<Präfix>/">` (Präfix aus `x-forwarded-prefix`); die App nutzt nur relative Pfade (`api/…`, `v2/…`). | ein Build für beide Wege |
+| A6 | D5: offene Fragen eines Fragenpakets schließen sich, wenn der Bericht-Kopf des Unter-Chats für das zugehörige Dn eine Antwort hat (Zuordnung über die Reihenfolge, nur bei gleicher Anzahl). Schließen wie `fragenAufraeumen` (zurückgezogen, auto, Log-Zeile), ohne Nachricht an den Agenten. | Knut: „damit die 58 schrumpfen“; nie raten |
+| A7 | Jargon in Empfehlungen: kleines Wörterbuch (`klartextWoerter`) für Bezeichner aus dem Code (z. B. `consentMarketing` → „Marketing-Einwilligung“), erweiterbar; unbekannte Bezeichner bleiben stehen (keine Erfindung). | kein Modell nötig, nachvollziehbar |
+| A8 | Eigene 2.0-Chats bekommen auf Wunsch eine **Vorlage** aus `librechat.yaml` (dieselben `promptPrefix` wie in LibreChat); die Brücke lädt Skills nach Person, Unterhaltung, Anweisungen und Text (`claude-bridge/src/skills.ts`) — also dieselben wie ein LibreChat-Chat. | Skill-Gleichheit (Nachtrag 2) |
+
+## 9. Entscheidungsrunde (Grilling, eine Runde)
+
+Selbst entschieden (Annahme, mit Zeile für Knut):
+- G1 Navigation: Jetzt · Entscheidungen · Arbeit (Reiter „Offen“ / „Alle Chats“) · PRs · Dokumente · Mehr. Am Handy 5 Symbole + „Mehr“.
+  - Knut:
+- G2 „Alle wie empfohlen“ nur je Thema, mit Bestätigung, nie für Freigaben, nie im Daumenbereich unten (428 W5).
+  - Knut:
+- G3 Antworten auch im Chat: jede Karte hat „Im Chat besprechen“ (Audit 437: Knut entscheidet meist im Chat).
+  - Knut:
+- G4 Rollen nach A3; Lisas Start: „Neu hier“, Dokumente, Begriffe; Christophs Start: PRs, die auf ihn warten, oben.
+  - Knut:
+
+An Knut (D-Fragen, im Bericht): D6 Streichen laut Audit (Ziele, Mein Tag, Sprint, Skills-Seite, Hygiene, Lage) oder behalten · D7 Handy-Benachrichtigung bauen (heute gibt es keine) · D2/D3/D4 aus Runde 1 bleiben offen.
+
+## 10. Definition of Done (wörtlich = Abnahme-Checkliste `nicht-verlieren.md`)
+
+Jede Zeile der Checkliste (Abschnitte: Jira/Ziele/Planung · Vault-Verbindung · Entscheiden · Stränge und Hauptchat · GitHub und Sicherheit · Dokumente und Tag · Team · Skills/Gedächtnis/Anbindungen · Nachtrag 3) steht im Bericht als Zeile mit **Stand V2** und **Beleg** (Test, Screenshot, Datei:Zeile). Ergänzt um alles, was das Code-Inventar zusätzlich findet. Kein Stand „ok“ ohne Beleg.
+
+## 11. Schnitte
+
+| S | Was | DoD |
+|---|---|---|
+| S10 | D5: entschiedene Paket-Fragen schließen (A6) | Test: schließt nur Entschiedenes, nur bei eindeutiger Zuordnung, idempotent, Log-Zeile; Lauf im 10-min-Takt neben `fragenAufraeumen`; Zahl sinkt in der Kopie messbar |
+| S11 | Themen überall (A1): Filter-Chips + Gruppen auf Entscheidungen, Arbeit, PRs, Dokumente | Test: Thema je Eintrag gesetzt; Filter ändert die Liste, „Jetzt“ bleibt quer; Screenshots |
+| S12 | Alle Chats (A2): Reiter „Alle Chats“ mit Suche/Thema/Status/Datum, Chat-Ansicht `/v2/chat/<id>` (lesen + an Unter-Chat/Hauptchat schreiben), von jeder Karte zum Chat | Test: findet beendeten Hauptchat und archivierten Unter-Chat; nur eigene; Schreiben nur über sendOrch/deliver |
+| S13 | Rollen-Startansicht (A3) + Klartext | Test: Rolle aus Daten; Lisa/Christoph sehen ihren Start; Begriffs-Test grün |
+| S14 | „Mehr“: alle alten Seiten mit Klartext + Kurzansichten (meine Jira-Tickets offen/überfällig, Heute erledigt mit Datum) | Test: jede Seite der alten Navigation hat einen Eintrag (Liste aus `web/src/App.tsx`); Jira-Liste aus der Kopie |
+| S15 | Entscheiden vollständig: „alle wie empfohlen“ je Thema, Notiz zu „Ja, so“, „Im Chat besprechen“, Jargon-Wörterbuch (A7) | Test: Sammelantwort nur Entscheidungen mit Empfehlung, nie Freigaben; Wörterbuch ersetzt bekannte Bezeichner |
+| S16 | /werkbank-Pfad (A5), eine Wortwahl für die Zahl, kurze Handy-Startseite | Test: `index.html` mit Präfix; Klick-Durchlauf unter `:3446/werkbank/v2/`; Screenshot 390 px |
+| S17 | Chat-Vorlagen und Skill-Nachweis (A8) | Test: Vorlage setzt die Anweisungen; Nachweis Skill-Gleichheit im Bericht |
+| S18 | Inventar + Abnahmetabelle, Persona-Runde, Pre-Push-Gate, PR-Text | Tabelle vollständig mit Belegen; Gate 0 harte Befunde; kein Push |
+
+## 12. Council zu Teil 2 (03.11. abends)
+
+Rollen: Befürworter, Fachprüfung, Advocatus Diaboli (zweites Modell GLM 5.3 über Melious, `challenge art=council`), Abschluss. **Urteil: HOLD — bauen mit diesen Bedingungen** (Zuversicht 0,7).
+
+- **C1** D5 schließt nur bei gleicher Anzahl **und** inhaltlicher Übereinstimmung je Paar (Titel der Frage ↔ Frage im Bericht, Wortüberlappung); sonst bleibt alles offen.
+- **C2** Automatisch Geschlossenes ist in V2 sichtbar (mit Grund) und mit einem Klick wieder offen (nur eigene, nur automatisch geschlossene).
+- **C3** /werkbank-Präfix nur aus fester Erlaubnisliste (`''` oder `/werkbank`); anderes wird ignoriert, nie ins HTML gespiegelt; Test mit manipuliertem Kopf.
+- **C4** „Alle Chats“ führt Unter-Chats/Hauptchats (`orchestrator_runs`) und alle LibreChat-Unterhaltungen der Person zusammen (nur über den Adapter); Test: jede Unterhaltung genau einmal.
+- **C5** Jeder Eintrag der alten Navigation hat einen „Mehr“-Eintrag (Test gegen `web/src/App.tsx`); in der Abnahmetabelle heißt das „erreichbar (alte Seite)“ plus D6 je Zeile, nie „in V2“.
+- **C6** Rolle Reviewer hängt am GitHub-Namen (`githubNames`), nicht an offenen PRs.
+- **C7** Skill-Gleichheit gemessen (gleicher erster Text in LibreChat-Chat und 2.0-Chat → gleiche Skill-Liste, Mock-Ausgabe); Wörterbuch-Deckung über die aktuell offenen Fragen im Bericht.
+
+Stärkster Einwand, sichtbar gelassen: Verlinken ist eine Option mit Ablaufdatum — vor Schritt 5 (LibreChat abschalten) muss jede verlinkte Seite neu entschieden sein.
