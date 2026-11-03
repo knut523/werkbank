@@ -1,5 +1,5 @@
 // Werkbank 2.0: gemeinsame Bausteine — jede Karte hat dieselben Teile: Titel · ein Satz · Links · „Was ist das?“.
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import MarkdownIt from 'markdown-it';
 import { schicke, hole, type Karte, type Link } from './api.ts';
 import { useApp } from './kontext.ts';
@@ -29,11 +29,13 @@ export function Verweise({ links }: { links: Link[] }) {
 export function WasIstDas({ zeilen, frage }: { zeilen: [string, string][]; frage: string }) {
   const [offen, setOffen] = useState(false);
   const app = useApp();
+  const feld = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (offen) feld.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [offen]);   // Handy: nicht unter dem Rand öffnen
   return (
     <div className="wid">
       <button type="button" className="knopf leise klein" aria-expanded={offen} onClick={() => setOffen(!offen)}>{offen ? 'Erklärung schließen' : 'Was ist das?'}</button>
       {offen && (
-        <div className="wid-text" role="region" aria-label="Erklärung">
+        <div className="wid-text" role="region" aria-label="Erklärung" ref={feld}>
           <dl>{zeilen.filter(([, t]) => t).map(([k, t]) => <div key={k}><dt>{k}</dt><dd>{t}</dd></div>)}</dl>
           <button type="button" className="knopf leise klein" onClick={() => app.chat(frage)}>Im Chat fragen</button>
         </div>
@@ -107,13 +109,15 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
   const [laeuft, setLaeuft] = useState(false);
   const [fehler, setFehler] = useState<string | null>(null);
   const [fertig, setFertig] = useState<string | null>(null);
+  const andersFeld = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (modus === 'anders') andersFeld.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, [modus]);
 
   async function antworten(antwort: 'ja' | 'nein' | 'anders' | 'spaeter', t = '') {
     if (antwort === 'anders' && !t.trim()) { setFehler('Schreib kurz, was stattdessen.'); return; }
     setLaeuft(true); setFehler(null);
     try {
       const r = await schicke<{ ziel: string | null; spaeter: boolean }>('/api/v2/antwort', { id: k.id, antwort, text: t.trim() });
-      setFertig(r.spaeter ? 'Zurückgestellt — kommt morgen wieder.' : `Ging an ${r.ziel ?? 'die Quelle'}.`);
+      setFertig(r.spaeter ? 'Zurückgestellt — kommt morgen wieder.' : `Ging an ${r.ziel ?? 'die Quelle'}: ${antwort === 'ja' ? `„Ja, so“${k.empfehlung ? ` (${k.empfehlung})` : ''}` : antwort === 'nein' ? '„Nein“' : `„${t.trim()}“`}`);
       beantwortet?.();
     } catch (e: any) { setFehler(e.message); } finally { setLaeuft(false); }
   }
@@ -137,7 +141,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
           <a className="knopf" href={k.alt ?? app.alt} target="_blank" rel="noopener noreferrer">{freigabe ? 'In der alten Werkbank freigeben ↗' : 'In der alten Werkbank öffnen ↗'}</a>
         </div>
       ) : modus === 'anders' ? (
-        <div className="anders">
+        <div className="anders" ref={andersFeld}>
           <label className="klein" htmlFor={`anders-${k.id}`}>Was stattdessen? (geht an {k.quelle || 'die Quelle'})</label>
           {k.alternativen.length > 0 && <div className="chips">{k.alternativen.map((a) => <button type="button" key={a} className="chip" onClick={() => setText(a)}>{a}</button>)}</div>}
           <textarea id={`anders-${k.id}`} rows={3} value={text} maxLength={4000} onChange={(e) => setText(e.target.value)} placeholder="Dein eigener Text" autoFocus />

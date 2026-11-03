@@ -21,6 +21,7 @@ export function Jetzt() {
   useEffect(() => { if (d) app.zahl(d.zahl); }, [d]);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
+  const abgenommen = d.erledigt.filter((e) => e.stand === 'abgenommen'), zumLesen = d.erledigt.filter((e) => e.stand === 'zum-lesen');
   return (
     <div className="seite">
       <h1>{gruss(d.ich)}</h1>
@@ -39,16 +40,17 @@ export function Jetzt() {
       {d.admin && (
         <Abschnitt id="a-laeuft" titel="Läuft gerade" erklaerung="Unter-Chats, an denen ein Agent gerade arbeitet — mit voraussichtlichem Ende. Du musst hier nichts tun."
           fuss={<a href="/v2/arbeit">Alle Unter-Chats →</a>}>
-          {d.laeuft.length ? <ul className="liste">{d.laeuft.map((z) => <Zeile key={z.id} titel={z.titel} url={`/v2/arbeit/${z.id}`} satz={z.satz} />)}</ul> : <p className="leer">Gerade läuft nichts.</p>}
+          {d.laeuft.length ? <ul className="liste">{d.laeuft.slice(0, 3).map((z) => <Zeile key={z.id} titel={z.titel} url={`/v2/arbeit/${z.id}`} satz={z.satz} />)}</ul> : <p className="leer">Gerade läuft nichts.</p>}
         </Abschnitt>
       )}
       {d.admin && (
-        <Abschnitt id="a-erledigt" titel="Heute erledigt" erklaerung="Was heute fertig geworden ist, mit der Uhrzeit, zu der es fertig wurde. „Zum Lesen“: fertig, der Bericht wartet auf deinen Blick — du musst nichts entscheiden. Was noch eine Antwort braucht, steht oben, nicht hier.">
-          {d.erledigt.length ? <ul className="liste">{d.erledigt.map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `/v2/arbeit/${e.id}`} rechts={e.uhr} marke={e.stand === 'zum-lesen' ? { text: 'zum Lesen' } : { text: 'abgenommen', ton: 'gruen' }} links={e.links.slice(1)} />)}</ul>
-            : <p className="leer">Heute ist noch nichts fertig geworden.</p>}
+        <Abschnitt id="a-erledigt" titel="Heute erledigt" erklaerung="Was heute erledigt ist: von dir abgenommen, mit der Uhrzeit. Was ein Agent fertig gemacht hat, dessen Bericht du aber noch nicht gelesen hast, steht unter Arbeit › Fertig. Was noch eine Antwort braucht, steht oben.">
+          {abgenommen.length ? <ul className="liste">{abgenommen.slice(0, 3).map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `/v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'abgenommen', ton: 'gruen' }} links={e.links.slice(1)} />)}</ul>
+            : <p className="leer">Heute hast du noch nichts abgenommen.</p>}
+          {zumLesen.length > 0 && <p className="abschnitt-fuss">Die Agenten sind außerdem mit {zumLesen.length === 1 ? 'einem Auftrag' : 'mehreren Aufträgen'} fertig, deren Bericht du noch nicht gelesen hast: <a href="/v2/arbeit#fertig">unter Arbeit › Fertig →</a></p>}
         </Abschnitt>
       )}
-      <Abschnitt id="a-prs" titel="PRs, die auf dich warten" erklaerung="Code-Vorschläge auf GitHub (Pull Requests), bei denen du gerade dran bist — zum Prüfen, Freigeben oder Nachbessern. Unter „PRs“ kannst du auf jede andere Person umschalten."
+      <Abschnitt id="a-prs" titel="PRs, die auf dich warten" erklaerung="Code-Vorschläge auf GitHub (Pull Requests), bei denen du gerade dran bist — zum Prüfen, Freigeben oder Nachbessern. Entwürfe zählen nicht mit. Unter „PRs“ siehst du alle und kannst auf jede andere Person umschalten."
         fuss={<a href="/v2/prs">Alle PRs →</a>}>
         {!d.prFrei ? <p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p>
           : d.prs === null ? <p className="leer">Die PR-Liste ist gerade nicht erreichbar.</p>
@@ -62,12 +64,12 @@ export function Jetzt() {
 }
 
 const AufraeumenListe = ({ l }: { l: Aufraeumen[] }) => (
-  <ul className="liste aufraeumen">{l.map((x) => <Zeile key={x.id} titel={x.titel} url={x.url} satz={`${x.worum} In der alten Werkbank.`} marke={{ text: 'Aufräumen' }} />)}</ul>
+  <ul className="liste aufraeumen">{l.map((x) => <Zeile key={x.id} titel={x.titel} url={x.url} satz={`${x.worum} Zählt als ein Posten. In der alten Werkbank.`} marke={{ text: 'Sammelposten' }} />)}</ul>
 );
 const DokZeile = ({ x }: { x: Dok }) => <Zeile titel={x.titel} url={x.url} satz={x.worum} marke={{ text: x.art === 'bericht' ? 'Bericht' : 'Notiz' }} rechts={wann(x.at)} />;
 const PrZeileView = ({ p }: { p: PrZeile }) => (
   <Zeile titel={`${p.pr} · ${p.titel}`} url={`/v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}
-    marke={p.review?.empfehlung ? { text: EMPFEHLUNG[p.review.empfehlung] ?? p.review.empfehlung, ton: p.review.empfehlung === 'approve' ? 'gruen' : '' } : p.entwurf ? { text: 'Entwurf' } : undefined} rechts={wann(p.geaendert)} />
+    marke={p.entwurf ? { text: 'Entwurf' } : p.review?.empfehlung ? { text: EMPFEHLUNG[p.review.empfehlung] ?? p.review.empfehlung, ton: p.review.empfehlung === 'approve' ? 'gruen' : '' } : undefined} rechts={wann(p.geaendert)} />
 );
 
 // ---------- Entscheidungen ----------
@@ -82,6 +84,7 @@ export function Entscheidungen() {
     <div className="seite">
       <h1>Entscheidungen</h1>
       <p className="unterzeile">Alles, was auf dich wartet. „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — an genau diese Karte.</p>
+      <p className="zusammensetzung">Die Zahl oben rechts: {d.oben.length + d.rest.length} {d.oben.length + d.rest.length === 1 ? 'Frage' : 'Fragen und Freigaben'}{d.aufraeumen.length ? ` + ${d.aufraeumen.length} ${d.aufraeumen.length === 1 ? 'Sammelposten' : 'Sammelposten'} zum Aufräumen` : ''} = {d.zahl}.</p>
       <Abschnitt id="e-zuerst" titel="Zuerst" erklaerung="Dieselben fünf wie auf der Startseite: was einen Agenten anhält oder bald als angenommen gilt.">
         {d.oben.length ? <div className="karten">{d.oben.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div> : <p className="leer">Gerade wartet nichts auf dich.</p>}
       </Abschnitt>
@@ -118,7 +121,7 @@ export function Arbeit() {
       <p className="unterzeile">Deine Unter-Chats: Aufträge, an denen Agenten selbstständig arbeiten.</p>
       <Abschnitt id="w-wartet" titel="Wartet auf dich" erklaerung="Unter-Chats, die ohne dich nicht weiterkommen: eine offene Frage, ein Hänger oder kein Stand. Ein Klick zeigt, was genau.">{liste(g.wartet, 'Kein Unter-Chat wartet auf dich.')}</Abschnitt>
       <Abschnitt id="w-laeuft" titel="Läuft" erklaerung="Hier arbeitet gerade ein Agent. Du musst nichts tun.">{liste(g.laeuft, 'Gerade läuft nichts.')}</Abschnitt>
-      <Abschnitt id="w-fertig" titel="Fertig" erklaerung="Fertige Unter-Chats, die du noch nicht abgenommen hast — der Bericht liegt bereit.">{liste(g.fertig, 'Nichts Fertiges offen.')}</Abschnitt>
+      <Abschnitt id="fertig" titel="Fertig" erklaerung="Fertige Unter-Chats, die du noch nicht abgenommen hast — der Bericht liegt bereit.">{liste(g.fertig, 'Nichts Fertiges offen.')}</Abschnitt>
     </div>
   );
 }
@@ -127,6 +130,7 @@ export function ArbeitDetail({ id }: { id: string }) {
   const app = useApp();
   const { d, fehler, neu } = useDaten<{ titel: string; satz: string; gruppe: string; zuletzt: string | null; stand: string; fragen: Karte[]; nachrichten: { id: string; rolle: string; text: string; at: string }[]; links: Link[] }>(`/api/v2/arbeit/${id}`);
   const [alle, setAlle] = useState(false);
+  const [verlauf, setVerlauf] = useState(false);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   const msgs = alle ? d.nachrichten : d.nachrichten.slice(-3);
@@ -136,13 +140,14 @@ export function ArbeitDetail({ id }: { id: string }) {
       <h1>{d.titel}</h1>
       <p className={`zustand ${d.gruppe}`}>{d.satz}</p>
       <div className="aktionen-zeile"><Verweise links={d.links} /><button type="button" className="knopf leise klein" onClick={() => app.chat(chatFrage(`Unter-Chat „${d.titel}“`, d.satz))}>Im Chat nachfragen</button></div>
+      {d.stand && <Abschnitt id="d-stand" titel="Was der Agent zuletzt gemeldet hat" erklaerung="Der letzte Stand in den Worten des Agenten — was erledigt ist, was offen ist, was er von dir braucht."><div className="kasten"><Md text={d.stand} /></div></Abschnitt>}
       {d.fragen.length > 0 && (
-        <Abschnitt id="d-fragen" titel={d.fragen.length === 1 ? 'Diese Frage wartet auf dich' : 'Diese Fragen warten auf dich'} erklaerung="Der Agent kommt ohne deine Antwort nicht weiter. Antworte direkt an der Karte.">
+        <Abschnitt id="d-fragen" titel={d.fragen.length === 1 ? 'Diese Frage ist in deiner Liste offen' : 'Diese Fragen sind in deiner Liste offen'} erklaerung="Fragen aus diesem Unter-Chat, die noch auf deine Antwort warten. Sagt der Agent oben etwas anderes, gilt deine Antwort hier — sie geht direkt an ihn.">
           <div className="karten">{d.fragen.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div>
         </Abschnitt>
       )}
-      {d.stand && <Abschnitt id="d-stand" titel="Letzter Stand" erklaerung="Was der Agent zuletzt gemeldet hat, in seinen Worten."><div className="kasten"><Md text={d.stand} /></div></Abschnitt>}
-      {d.nachrichten.length > 0 && (
+      {d.nachrichten.length > 0 && !verlauf && <p><button type="button" className="knopf leise klein" onClick={() => setVerlauf(true)}>Verlauf des Unter-Chats zeigen</button></p>}
+      {d.nachrichten.length > 0 && verlauf && (
         <Abschnitt id="d-verlauf" titel="Verlauf" erklaerung="Die letzten Nachrichten dieses Unter-Chats." fuss={d.nachrichten.length > 3 ? <button type="button" className="knopf leise klein" onClick={() => setAlle(!alle)}>{alle ? 'Nur die letzten 3' : `Alle ${d.nachrichten.length} zeigen`}</button> : null}>
           {msgs.map((n) => <div key={n.id} className={`blase ${n.rolle}`}><p className="klein gedimmt">{n.rolle === 'ich' ? 'Du / Auftrag' : 'Agent'} · {wann(n.at)}</p><Md text={n.text.length > 6000 ? `${n.text.slice(0, 6000)} …` : n.text} klein /></div>)}
         </Abschnitt>

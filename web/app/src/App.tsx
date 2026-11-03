@@ -87,7 +87,7 @@ export function App() {
         <header className="kopf">
           <a className="marke-name" href="/v2/">OLAF Workspace</a>
           <div className="kopf-rechts">
-            <a className="zahl" href="/v2/entscheidungen" aria-label={zahl === null ? 'Was auf dich wartet' : `${zahl} warten auf dich`} title="So viel wartet auf dich">
+            <a className="zahl" href="/v2/entscheidungen" title="So viel wartet auf dich — antippen für die Liste">
               <b>{zahl ?? '…'}</b><span className="zahl-text">warten auf dich</span><span className="zahl-kurz">offen</span>
             </a>
             <a className="knopf leise rund" href="/v2/begriffe" aria-label="Begriffe in Klartext" title="Begriffe in Klartext">?</a>

@@ -30,6 +30,7 @@ p { margin: 0 0 var(--s1); }
 .zahl { display: inline-flex; align-items: baseline; gap: 5px; padding: 6px 12px; border-radius: 999px; background: var(--akzent-hell); color: var(--akzent); white-space: nowrap; }
 .zahl b { font-size: 1.05rem; }
 .zahl:hover { text-decoration: none; background: #dbe7fb; }
+.zusammensetzung { font-size: .9rem; color: var(--gedimmt); background: var(--karte); border: 1px solid var(--linie); border-radius: 8px; padding: 8px 12px; }
 .leiste { position: fixed; z-index: 20; left: 0; right: 0; bottom: 0; height: calc(var(--leiste-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
   display: flex; background: var(--karte); border-top: 1px solid var(--linie); }
 .leiste > a { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: var(--gedimmt); font-size: .72rem; min-width: 0; }
@@ -40,7 +41,7 @@ p { margin: 0 0 var(--s1); }
 .inhalt { padding: var(--s2) var(--s2) calc(var(--leiste-h) + var(--s4) + 56px); max-width: 860px; }
 .kopf .chat-knopf { display: none; }
 .chat-fab { position: fixed; z-index: 25; right: var(--s2); bottom: calc(var(--leiste-h) + var(--s2) + env(safe-area-inset-bottom)); border: 0; border-radius: 999px;
-  padding: 10px 18px; background: var(--akzent); color: #fff; font: inherit; font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+  padding: 8px 14px; font-size: .9rem; background: var(--akzent); color: #fff; font: inherit; font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
 .zahl-text { display: none; }
 .zahl-kurz { display: inline; }
 @media (min-width: 420px) { .zahl-kurz { display: none; } }

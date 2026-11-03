@@ -67,7 +67,7 @@ function karten(d: V2Deps, fragen: Frage[], eintraege: InboxEintrag[], liste: { 
 function aufraeumen(d: V2Deps, sonstiges: InboxEintrag[]) {
   return sonstiges.map((e) => {
     const ziel = String(e.quelle?.url ?? '').match(/^#\/([\w/-]+)/)?.[1] ?? 'entscheidungen';
-    return { id: e.id, titel: kurz(String(e.frage ?? ''), 160), worum: e.art === 'altbestand' ? 'Alte Fragen, die niemand mehr braucht — durchsehen oder verwerfen.' : e.art === 'pflege' ? 'Aufräumen, damit Listen stimmen. Hält keinen Agenten an.' : 'Wartet auf dich, ist aber keine Entscheidung.',
+    return { id: e.id, titel: kurz(String(e.frage ?? ''), 160), sammel: true, worum: e.art === 'altbestand' ? 'Alte Fragen, die niemand mehr braucht — durchsehen oder verwerfen.' : e.art === 'pflege' ? 'Aufräumen, damit Listen stimmen. Hält keinen Agenten an.' : 'Wartet auf dich, ist aber keine Entscheidung.',
       url: `${d.altUrl}/${ziel}` };
   });
 }
@@ -88,12 +88,13 @@ export function registerV2(on: On, d: V2Deps) {
     if (admin(u)) {
       const [liste, er] = await Promise.all([d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })), d.erledigtDaten(u, d.wienDatum()).catch(() => ({ straenge: [] as any[] }))]);
       const zm = new Map(liste.zeilen.map((z: any) => [String(z.id), z]));
-      laeuft = liste.zeilen.filter((z: any) => arbeitGruppe(z) === 'laeuft').slice(0, 6).map(arbeitKarte);
-      erledigt = erledigtSicht(er.straenge, zm, new Set(er.straenge.map((s: any) => String(s.id)).filter((id: string) => !zm.has(id))));
+      laeuft = liste.zeilen.filter((z: any) => arbeitGruppe(z) === 'laeuft').map(arbeitKarte);
+      const offenJe = new Set(ib.eintraege.map((e) => (e.quelle?.strand ? String(e.quelle.strand) : '')).filter(Boolean));
+      erledigt = erledigtSicht(er.straenge.filter((s: any) => !offenJe.has(String(s.id))), zm, new Set(er.straenge.map((s: any) => String(s.id)).filter((id: string) => !zm.has(id))));
     }
     const prFrei = !d.gesperrt(u, 'roadmap');
-    const prs = prFrei ? await d.livePrs().then((g) => prSicht([...g.map.values()] as LivePrLite[], ich, d.githubNames()).slice(0, 5)).catch(() => null) : null;
-    send(d, res, { zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), aufraeumenGesamt: auf.length, laeuft, erledigt, prs, prFrei, notizenFrei: !d.gesperrt(u, 'wissen'), dokumente: dokumenteNeu(d, u, 5), ich: ich, admin: admin(u), at: new Date() });
+    const prs = prFrei ? await d.livePrs().then((g) => prSicht([...g.map.values()] as LivePrLite[], ich, d.githubNames()).filter((p) => !p.entwurf)).catch(() => null) : null;
+    send(d, res, { zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), aufraeumenGesamt: auf.length, laeuft: laeuft.slice(0, 3), laeuftGesamt: laeuft.length, erledigt, prs: prs ? prs.slice(0, 3) : null, prsGesamt: prs?.length ?? 0, prFrei, notizenFrei: !d.gesperrt(u, 'wissen'), dokumente: dokumenteNeu(d, u, 3), ich: ich, admin: admin(u), at: new Date() });
   });
 
   // --- Die eine Zahl (Kopf jeder Seite): dieselbe wie überall — `inboxZahl` ---
@@ -111,7 +112,7 @@ export function registerV2(on: On, d: V2Deps) {
     const obenIds = new Set(oben.map((x) => x.f.id));
     const rest = fragen.filter((f) => f.klasse !== 'aktion' && !obenIds.has(f.id)).map((f) => ({ f, grund: '' }));
     const alle = karten(d, fragen, ib.eintraege, [...oben, ...rest]);
-    send(d, res, { zahl: inboxZahl(ib.eintraege), oben: alle.slice(0, oben.length), rest: alle.slice(oben.length), aufraeumen: aufraeumen(d, sonstiges), at: new Date() });
+    send(d, res, { zahl: inboxZahl(ib.eintraege), oben: alle.slice(0, oben.length), rest: alle.slice(oben.length), aufraeumen: aufraeumen(d, sonstiges), at: new Date() });   // zahl = oben + rest + aufraeumen (Test)
   });
 
   // --- Antwort an DIESER Karte: nur Entscheidungen; Freigaben nach außen nie (B4) ---
@@ -127,7 +128,7 @@ export function registerV2(on: On, d: V2Deps) {
     if (antwortWeg(f) !== 'hier') throw err(403, 'Das gibst du in der alten Werkbank frei (Freigaben nach außen gehen in 2.0 nicht).');
     const r = await d.fragenAntwort(u, { id, antwort, text: String(b.text ?? '').slice(0, 4000) });
     d.log('v2 antwort', { user: u.id, id, antwort });
-    send(d, res, { ok: true, ziel: r?.ziel ?? null, spaeter: !!r?.spaeter });
+    send(d, res, { ok: true, ziel: r?.ziel ? String(r.ziel).replace(/Unter-Chat Unter-Chat/g, 'Unter-Chat') : null, spaeter: !!r?.spaeter });
   });
 
   // --- Arbeit: Unter-Chats in drei Gruppen, Zustand in einem Satz (nur Admin — Unter-Chats gehören Knut) ---
@@ -169,8 +170,9 @@ export function registerV2(on: On, d: V2Deps) {
     const rv = await d.letzteReviews().catch(() => []);
     const je = new Map<string, any>();
     for (const r of rv) { const k = `${String(r.repo).split('/').pop()}#${r.number}`; if (!je.has(k)) je.set(k, r); }
-    const zeilen = prSicht(live, wer, names).map((p) => { const r = je.get(p.pr); return { ...p, review: r ? { empfehlung: r.empfehlung ?? null, status: r.status, at: r.doneAt ?? r.createdAt } : null }; });
-    send(d, res, { wer, ich, personen: [...personen(live, ich, names), { name: 'alle', anzahl: live.length }], zeilen, stand: g.sync?.at ?? null, at: new Date() });
+    const zeilen = prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)).map((p) => { const r = je.get(p.pr); return { ...p, review: r ? { empfehlung: r.empfehlung ?? null, status: r.status, at: r.doneAt ?? r.createdAt } : null }; });
+    const ohneEntwurf = live.filter((p) => !p.isDraft);
+    send(d, res, { wer, ich, personen: [...personen(ohneEntwurf, ich, names), { name: 'alle', anzahl: ohneEntwurf.length }], zeilen, stand: g.sync?.at ?? null, at: new Date() });
   });
   on('GET', /^\/api\/v2\/prs\/([\w.-]{1,80})\/(\d{1,6})$/, async (req, res, m) => {
     const u = await d.needUser(req);
