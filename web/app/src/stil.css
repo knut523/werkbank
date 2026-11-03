@@ -154,7 +154,15 @@ p { margin: 0 0 var(--s1); }
 .md code { background: var(--grund); padding: 1px 4px; border-radius: 4px; font-size: .9em; }
 .md pre code { padding: 0; }
 .md table { border-collapse: collapse; display: block; overflow-x: auto; font-size: .9rem; }
-.md th, .md td { border: 1px solid var(--linie); padding: 4px 8px; text-align: left; vertical-align: top; min-width: 7rem; }
+@media (max-width: 700px) {
+  /* Handy: Tabellen (z. B. Befunde im Review) als Blöcke untereinander statt schmaler Spalten (Persona Christoph R2). */
+  .md table, .md tbody, .md tr, .md td { display: block; width: auto; }
+  .md thead { display: none; }
+  .md tr { border: 1px solid var(--linie); border-radius: 8px; margin-bottom: 8px; padding: 6px 8px; }
+  .md tr td { border: 0; padding: 2px 0; min-width: 0; max-width: none; }
+  .md td:first-child { font-weight: 600; }
+}
+.md th, .md td { border: 1px solid var(--linie); padding: 4px 8px; text-align: left; vertical-align: top; min-width: 6rem; max-width: 20rem; }
 .md th:first-child, .md td:first-child { min-width: 5rem; }
 .md td code { overflow-wrap: normal; word-break: break-all; }
 .md img { max-width: 100%; height: auto; border-radius: 8px; }

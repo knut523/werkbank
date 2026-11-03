@@ -177,13 +177,17 @@ export function Prs({ wer }: { wer: string | null }) {
   const [such, setSuch] = useState('');
   const [mitEntwurf, setMitEntwurf] = useState(false);
   const { d, fehler, neu } = useDaten<{ gesperrt?: boolean; wer: string; ich: string; personen: { name: string; anzahl: number }[]; zeilen: PrZeile[]; stand: string | null }>(pfad);
+  // Suche geht immer über alle offenen PRs (Persona Christoph R2: #268 stand nicht in „mich“).
+  const alle = useDaten<{ zeilen: PrZeile[] }>(such.trim() && wer !== 'alle' ? '/api/v2/prs?wer=alle' : null);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   if (d.gesperrt) return <div className="seite"><h1>PRs</h1><p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p></div>;
   const suche = such.trim().toLowerCase();
   const entwuerfe = d.zeilen.filter((p) => p.entwurf).length;
   const basis = mitEntwurf ? d.zeilen : d.zeilen.filter((p) => !p.entwurf);
-  const zeilen = suche ? basis.filter((p) => `${p.pr} ${p.titel}`.toLowerCase().includes(suche.replace(/^#/, ''))) : basis;
+  const passt = (p: PrZeile) => `${p.pr} ${p.titel}`.toLowerCase().includes(suche.replace(/^#/, ''));
+  const zeilen = suche ? basis.filter(passt) : basis;
+  const sonst = suche ? (alle.d?.zeilen ?? []).filter((p) => passt(p) && !zeilen.some((z) => z.pr === p.pr)) : [];
   const wahl = (n: string) => { const url = n === d.ich ? '/v2/prs' : `/v2/prs?wer=${encodeURIComponent(n)}`; history.pushState(null, '', url); window.dispatchEvent(new PopStateEvent('popstate')); };
   return (
     <div className="seite">
@@ -199,7 +203,9 @@ export function Prs({ wer }: { wer: string | null }) {
         {entwuerfe > 0 && <label className="klein"><input type="checkbox" checked={mitEntwurf} onChange={(e) => setMitEntwurf(e.target.checked)} /> Entwürfe zeigen ({entwuerfe})</label>}
       </div>
       {zeilen.length ? <ul className="liste">{zeilen.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul>
-        : suche ? <p className="leer">Kein PR in dieser Liste passt zu „{such}“ — schalte oben auf „alle“.</p> : <p className="leer">{d.wer === d.ich ? 'Kein PR wartet auf dich.' : `Kein PR wartet auf ${d.wer}.`}</p>}
+        : suche && sonst.length ? null
+        : suche ? <p className="leer">Kein offener PR passt zu „{such}“.</p> : <p className="leer">{d.wer === d.ich ? 'Kein PR wartet auf dich.' : `Kein PR wartet auf ${d.wer}.`}</p>}
+      {sonst.length > 0 && <><p className="gruppe-titel">In anderen Listen gefunden</p><ul className="liste">{sonst.slice(0, 10).map((p) => <PrZeileView key={p.pr} p={p} />)}</ul></>}
     </div>
   );
 }
