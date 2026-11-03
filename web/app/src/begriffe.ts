@@ -3,8 +3,13 @@
 
 export interface Begriff { wort: string; heisst: string; beispiel: string }
 
+/** „Was ist OLAF?“ ohne Chat (Persona Lisa): Quelle olaf/olaf-Home.md, Abschnitt „start here“. */
+export const OLAF_KURZ = 'OLAF ist ein Venture des MAXENERGY Inno Teams: Wir bauen ein Angebot rund um Energiegemeinschaften für Haushalte — gemeinsam mit den Partnern Enlion und Raiffeisen Energy Ventures.';
+export const OLAF_MEHR = '/v2/dokument?vault=' + encodeURIComponent('olaf/olaf-Home.md');
+
 export const BEGRIFFE: Begriff[] = [
-  { wort: 'Wartet auf dich', heisst: 'Etwas, das ohne deine Antwort nicht weitergeht. Die Zahl oben rechts zählt genau diese Dinge.', beispiel: 'Ein Agent fragt, welche Variante er bauen soll.' },
+  { wort: 'OLAF', heisst: OLAF_KURZ, beispiel: 'Der Rechner, die Anmeldestrecke und der Service für Energiegemeinschaften gehören dazu.' },
+  { wort: 'Wartet auf dich', heisst: 'Etwas, das ohne deine Antwort nicht weitergeht — eine Entscheidung, eine Freigabe oder ein Sammelposten zum Aufräumen (z. B. „8 Tickets brauchen Pflege“). Die Zahl oben rechts zählt genau diese Dinge; unter „Entscheidungen“ steht, woraus sie besteht.', beispiel: 'Ein Agent fragt, welche Variante er bauen soll.' },
   { wort: 'Entscheidung', heisst: 'Eine Frage mit Empfehlung. Du sagst „Ja, so“ (Empfehlung übernehmen) oder „Anders: …“ und schreibst, was stattdessen.', beispiel: '„Für alle Gemeinschaften regional rechnen?“ — Empfehlung: je Gemeinschaft hinterlegen.' },
   { wort: 'Freigabe', heisst: 'Eine Erlaubnis für einen Schritt nach außen, zum Beispiel Code auf GitHub hochladen. Freigaben gibst du (noch) in der alten Werkbank.', beispiel: '„Push freigeben: Kundenakte …“' },
   { wort: 'Unter-Chat', heisst: 'Ein Auftrag, an dem ein Agent selbstständig arbeitet — mit Bericht am Ende. Unter „Arbeit“ siehst du, was läuft, was wartet und was fertig ist.', beispiel: '„Netzentgelte 2027 recherchieren“' },

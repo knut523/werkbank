@@ -30,8 +30,7 @@ export function Jetzt() {
       <h1>{gruss(k.ich)}</h1>
       {!k.admin && (
         <div className="willkommen">
-          <p><b>So funktioniert der Workspace:</b> Agenten erledigen Aufträge (<b>Unter-Chats</b>) und fragen, wenn sie etwas nicht selbst entscheiden dürfen. Was davon an dich geht, steht hier ganz oben unter „Was du jetzt tun musst“.</p>
-          <p className="klein">Unbekannte Wörter? <a href="/v2/begriffe">Begriffe in Klartext</a> · Jede Karte hat „Was ist das?“.</p>
+          <p><b>Neu hier?</b> Agenten erledigen Aufträge und fragen, wenn sie etwas nicht selbst entscheiden dürfen — was an dich geht, steht gleich darunter. <a href="/v2/begriffe">Begriffe in Klartext</a></p>
         </div>
       )}
       <Abschnitt id="a-jetzt" titel="Was du jetzt tun musst" erklaerung="Die wichtigsten Dinge, die ohne deine Antwort nicht weitergehen — höchstens fünf, wichtigste zuerst: zuerst Entscheidungen, die einen Agenten anhalten, darunter Freigaben. Die Zahl oben rechts zählt alles, was auf dich wartet; unter „Entscheidungen“ steht, woraus sie sich zusammensetzt."

@@ -207,7 +207,7 @@ export function registerV2(on: On, d: V2Deps) {
     if (!q) return send(d, res, { q, frei, treffer: dokumenteNeu(d, u, 12) });
     const ql = q.toLowerCase();
     const berichte = admin(u) ? d.pakete().filter((p) => p.status !== 'archiv' && (p.name.toLowerCase().includes(ql) || p.titel.toLowerCase().includes(ql))).sort((a, b) => b.at - a.at).slice(0, 10).map(paketDok) : [];
-    const notizen = (d.gesperrt(u, 'wissen') ? [] : await d.vaultSuche(q).catch(() => [])).slice(0, 20).map((h) => ({ art: 'notiz', titel: h.title || h.path, worum: h.snippet ? kurz(h.snippet.replace(/<[^>]+>/g, ''), 160) : h.path, url: `/v2/dokument?vault=${encodeURIComponent(h.path)}`, at: null }));
+    const notizen = (d.gesperrt(u, 'wissen') ? [] : await d.vaultSuche(q).catch(() => [])).filter((h) => !ROH.test(h.path)).slice(0, 20).map((h) => ({ art: 'notiz', titel: h.title || h.path, worum: h.snippet ? kurz(h.snippet.replace(/<[^>]+>/g, ''), 160) : bereich(h.path), url: `/v2/dokument?vault=${encodeURIComponent(h.path)}`, at: null }));
     send(d, res, { q, frei, treffer: [...berichte, ...notizen] });
   });
 
@@ -250,10 +250,15 @@ export function registerV2(on: On, d: V2Deps) {
 const send = (d: V2Deps, res: ServerResponse, body: unknown) => d.send(res, 200, body);
 const paketDok = (p: { name: string; titel: string; at: number }) => ({ art: 'bericht', titel: p.titel || p.name.replace(/^\d+-/, '').replace(/-/g, ' '), worum: `Bericht ${p.name.split('-')[0]}`, url: `/v2/dokument?paket=${encodeURIComponent(p.name)}&datei=bericht.md`, at: new Date(p.at).toISOString() });
 
+/** Rohtranskripte und Agenten-Ablagen gehören nicht in die Dokumentliste für Menschen (Persona Lisa). */
+const ROH = /\/(raw|00-Inbox)\/|\/_meta\//;
+/** Statt Dateipfad ein Bereich in Klartext: „olaf · Product › Produkt-OLAF“. */
+const bereich = (p: string) => { const t = p.split('/'); return [t[0], t.slice(1, -1).filter((x) => !/^\d-/.test(x) && x !== '2-Areas').slice(-2).join(' › ')].filter(Boolean).join(' · '); };
+
 /** Neueste Dokumente: Berichte (nur Admin) und zuletzt geänderte Notizen. */
 function dokumenteNeu(d: V2Deps, u: User, n: number) {
   const berichte = admin(u) ? d.pakete().filter((p) => p.status !== 'archiv').sort((a, b) => b.at - a.at).slice(0, n).map(paketDok) : [];
-  const notizen = (d.gesperrt(u, 'wissen') ? [] : d.vaultNeu(n)).map((x) => ({ art: 'notiz', titel: x.title || x.path, worum: x.path.split('/').slice(0, -1).join(' › '), url: `/v2/dokument?vault=${encodeURIComponent(x.path)}`, at: new Date(x.mtime).toISOString() }));
+  const notizen = (d.gesperrt(u, 'wissen') ? [] : d.vaultNeu(n * 3).filter((x) => !ROH.test(x.path)).slice(0, n)).map((x) => ({ art: 'notiz', titel: x.title || x.path, worum: bereich(x.path), url: `/v2/dokument?vault=${encodeURIComponent(x.path)}`, at: new Date(x.mtime).toISOString() }));
   return [...berichte, ...notizen].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, n);
 }
 

@@ -9,7 +9,7 @@ import { Md } from './teile.tsx';
 interface Nachricht { id: string; rolle: 'ich' | 'assistent'; text: string; at: string; status: string; fehler?: string | null }
 interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string }[]; conv?: string | null }
 
-const ERKLAER_URL = '/v2/dokument?vault=' + encodeURIComponent('olaf/2-Areas/Product/Produkt-OLAF/produkt-olaf.md');
+import { OLAF_KURZ, OLAF_MEHR } from './begriffe.ts';
 
 export function ChatLeiste({ offen, vorbereitet, schliessen }: { offen: boolean; vorbereitet: string; schliessen: () => void }) {
   const app = useApp();
@@ -75,7 +75,8 @@ export function ChatLeiste({ offen, vorbereitet, schliessen }: { offen: boolean;
         {ohneZugang && (
           <div className="hinweis">
             <p><b>Für den Chat brauchst du einen Claude-Zugang — alles andere geht ohne.</b> Frag Knut, wenn du einen brauchst.</p>
-            <p>Bis dahin: <a href="/v2/begriffe" onClick={schliessen}>Begriffe in Klartext</a> · <a href={ERKLAER_URL} onClick={schliessen}>Was ist OLAF?</a> · <a href="/v2/dokumente" onClick={schliessen}>Dokumente suchen</a></p>
+            <p><b>Was ist OLAF?</b> {OLAF_KURZ} <a href={OLAF_MEHR} onClick={schliessen}>Mehr dazu</a></p>
+            <p>Weiter: <a href="/v2/begriffe" onClick={schliessen}>Begriffe in Klartext</a> · <a href="/v2/dokumente" onClick={schliessen}>Dokumente suchen</a></p>
           </div>
         )}
         {stand?.nachrichten.map((n) => (
