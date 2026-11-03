@@ -520,3 +520,20 @@ Knut ~23 Uhr: weiter bauen, Fokus UX und reibungslose Abläufe für Knut und all
 | S18b | Persona-Runde 4, unabhängige Läufe | Messlatte §7a je Rolle |
 
 D11 vorbereiten: Runbook (unten, §19) — eingerichtet wird nichts.
+
+## 19. Runbook Sandbox Stufe 2 (D11, nur vorbereitet — Knut richtet ein)
+
+Ziel: Unter-Chats laufen als eigener Unix-Nutzer `werkbank-agent`. Was im Home von Knut liegt (Schlüssel, Anmeldedateien, Tresor-Sitzung), ist für diesen Nutzer per Dateirecht unlesbar — nicht nur per Sperrregel. Stufe 1 (Umgebung ohne Zugänge, `claude-bridge/src/sandbox.ts`) bleibt zusätzlich.
+
+Schritte (mit sudo, einmalig je Box; nichts davon ist ausgeführt):
+1. Nutzer anlegen: `useradd --create-home --shell /usr/sbin/nologin werkbank-agent`.
+2. Gemeinsame Gruppe für die Arbeitsordner: `groupadd werkbank-arbeit`, beide Nutzer hinein; die Worktrees der Unter-Chats (`~/work/…`) bekommen Gruppe `werkbank-arbeit` und `g+rwX`, sonst nichts aus dem Home von Knut.
+3. Home von Knut auf `750` (Gruppe ohne `werkbank-arbeit`), Zugangsordner zusätzlich `700`.
+4. sudo-Regel nur für den Start des Agenten: `knut ALL=(werkbank-agent) NOPASSWD: /usr/bin/env CLAUDE_CONFIG_DIR=* /home/werkbank-agent/bin/claude *` (Pfad an die Installation anpassen); keine Shell, keine anderen Befehle.
+5. Brücke: neuer Startweg je Unter-Chat (`sudo -u werkbank-agent …`) hinter einem Schalter, Vorgabe aus; Claude-Konfiguration des Agenten unter `/home/werkbank-agent/.claude` (Skills per Link aus dem Vault, Token je Sitzung über die Umgebung wie heute).
+
+Prüfung (Test zum Einschalten): derselbe Köder-Test wie in Stufe 1, dazu ein Leseversuch mit absolutem Pfad auf eine Köder-Datei in einem `700`-Ordner von Knut — muss als `werkbank-agent` mit „Permission denied“ scheitern; Kontrolle als Knut klappt.
+
+Rückweg: Schalter aus — die Brücke startet wieder als Knut (Stufe 1). Nutzer und Gruppe können bleiben.
+
+Aufwand ≈ 2 PT (davon ½ PT Einrichtung durch Knut). Vor M2 (Hauptchat in 2.0).
