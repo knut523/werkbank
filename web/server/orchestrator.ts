@@ -26,7 +26,8 @@ import { meliousSettings, ausserhalbAbo } from './melious.ts';
 import { budgetVon } from './cosbudget.ts';   // zyklisch (cosbudget → orchestrator), nur zur Laufzeit im Rückfrage-Pfad benutzt
 import { budgetWirkung } from './braucht.ts';
 import { tiefeOf, istTiefe, tiefeStart, tiefeText, modellAusserhalbAbo, modellVorgaben, zuarbeitText, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, GRUENDLICH_TEXT, type Tiefe, type Zuarbeit } from './tiefe.ts';
-import { autoAktiv, lageFuer } from './kontingent.ts';
+import { autoAktiv, lageFuer, routingLageFuer, letzterAnbieter } from './kontingent.ts';
+import { klasseVon, route as routeVon, routingCfg, routingText, type Route } from './routing.ts';
 import { zustandAus, abweichung, nachfordern, statusNeu, NACHFORDER_TEXT, wienDatum, wienUm } from './zustand.ts';
 import { regelBestaetigen } from './regelquelle.ts';
 
@@ -132,6 +133,7 @@ export function orchBrief(b: BriefInput): string {
       '- Braucht Knut: … (oder „nichts“)',
       '- Regeln: AGENTS.md gelesen · olaf-feedback-check n/n mit Beleg · Checkliste: ohne Befund | Befunde …',
       ETA_ZEILE,
+      'Übergibst du etwas an den Hauptchat (oder eine Person), schreib im Stand-Block die Zeile „- Übergeben an: Hauptchat — was genau“ und setz Status: fertig — dann gilt dein Strang als übergeben und es bleibt keine „Braucht Knut“-Zeile stehen.',
       'Status: fertig | braucht Antwort | blockiert',
       '```',
       'Schreib den Abschnitt selbst als normales Markdown, nicht als Codeblock. Die ETA schätzt du schon in der ersten Antwort (Uhrzeit in Wiener Zeit oder Dauer ab jetzt) und ziehst sie bei jeder Antwort nach. Bei „Status: fertig“ lässt du die ETA-Zeile weg.',
@@ -383,7 +385,9 @@ export interface StartInput { title: string; prompt: string; cwd: string; plan?:
   /** Tokenbudget des Strangs (Plan 209, S3.2); leer = ORCH_BUDGET_TOKENS je Tiefe (Vorgabe 0 = aus). */
   budget?: number | null;
   /** Vorrang in der Warteschlange der Brücke (Plan 213 S1a: Reviews). */
-  vorrang?: boolean }
+  vorrang?: boolean;
+  /** R32 (Nachtrag 4): Knut übersteuert das Routing für diesen Strang (claude | melious); sonst entscheidet die Klasse. */
+  routing?: 'claude' | 'melious' | null }
 
 // Plan 162, S2: Hauptmodell und Risikostufe eines Strangs (vorbereitet für die smarte Modellwahl, Paket 163). Nur beim Start.
 const STRAND_MODEL = /^(claude:(opus|sonnet|haiku)|melious:[\w.:/-]{1,80})$/;
@@ -502,7 +506,17 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   // R31 (Nachträge Knut 02.11.): Vorgabe-Modelle und Zuarbeit per Schalter, `auto` nach Kontingent-Lage.
   const vorgaben = modellVorgaben(process.env, autoAktiv() ? await lageFuer(u) : null);
   const vor = tiefeStart(tiefe, { modell: inp.modell ? String(inp.modell) : null, risiko: inp.risiko && RISIKO.includes(inp.risiko) ? inp.risiko : null }, vorgaben);
-  const modell = vor.modell;
+  // R32 (Nachtrag 4): Routing nach Klassen — nur ohne ausdrückliches Modell; das Ergebnis steht fest im Strang (Modell wechselt nicht mitten drin).
+  let routing: Route | null = null;
+  if (routingCfg().an && !inp.modell) {
+    const lage = await routingLageFuer(u).catch(() => null);
+    if (lage) {
+      const kl = klasseVon({ tiefe, risiko: vor.risiko, titel: title, prompt, code: inp.code });
+      routing = routeVon(kl, lage, routingCfg(), await letzterAnbieter(u.id), inp.routing === 'claude' || inp.routing === 'melious' ? inp.routing : null);
+      await letzterAnbieter(u.id, routing.anbieter);
+    }
+  }
+  const modell = routing ? routing.modell : vor.modell;
   if (modell && !STRAND_MODEL.test(modell)) throw err(400, 'Modell: claude:opus|sonnet|haiku oder melious:<modell>.');
   const abo = modellAusserhalbAbo(modell);
   if (abo) throw err(400, abo);
@@ -523,6 +537,7 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   if (plan) { try { planText = readFileSync(plan, 'utf8').slice(0, 200_000); } catch { /* egal */ } }
   const doc: any = { _id: id, userId: u.id, conv, url: `${cfg.librechatPublicUrl}/c/${conv}`, title, cwd: rj.dir ?? real, plan, prompt: prompt.slice(0, 500), startedAt: new Date(), lastSentAt: new Date(), sends: 1, reviewedAt: null, knutReviewedAt: null, mode: rj.mode ?? null, startError: null, slug: g0?.slug ?? null, g0: g0?.public ?? null,
     lauf, laufExplicit: explicit, modell, risiko, profil, tiefe, shared: inp.shared === true,
+    ...(routing ? { routing: { klasse: routing.klasse, anbieter: routing.anbieter, wartet: routing.wartet, ersatz: routing.ersatz, grund: routing.grund, text: routingText(routing), at: new Date() } } : {}),
     // Plan 274 (D8): eigenes Paket (Arbeitsordner im Paket, „Paket …“, auftrag.md, genau ein Paket) — nie die Vorarbeit im Auftrag.
     ...paketFelder(rj.dir ?? real, [prompt, planText]),
     budgetTokens: Number(inp.budget) > 0 ? Math.round(Number(inp.budget)) : null,
@@ -539,6 +554,8 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   }
   // 3) Titel + Lesezeichen im Hintergrund (LibreChat speichert die Unterhaltung erst nach ein paar Sekunden).
   // Nacheinander: beide lesen sonst dieselbe leere Tag-Liste, und der zweite PUT überschreibt den ersten (Test Teil B).
+  // Jede Abweichung vom Bevorzugten (Ersatz, Warten, Knuts Übersteuern) geht als Meldung an den Hauptchat — nie still.
+  if (routing && (routing.ersatz || routing.wartet || inp.routing)) import('./leitstand.ts').then(async (m) => { if (await m.activeLeitstand(u)) await m.meldeLeitstand(u, { _id: id, title }, `Routing: Unter-Chat „${title}“ ${routingText(routing!)}.`); }).catch(() => {});
   decorateSoon(u, conv, title).then(() => (explicit ? decorateSoon(u, conv, title, 20, laufTag(lauf)) : undefined)).catch(() => {});
   const warnungen = [doc.mode && doc.mode !== 'auto' ? `Brücke läuft für dieses Konto im Modus „${doc.mode}“ — ohne Auto-Modus darf der Strang nur lesen.` : null, aboHinweis].filter(Boolean);
   return { id, conv, url: doc.url, cwd: doc.cwd, plan, mode: doc.mode, stand, g0: g0?.public ?? null, worktree: fresh.worktree, tiefe, modell, ...(warnungen.length ? { warning: warnungen.join(' ') } : {}) };

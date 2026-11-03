@@ -17,6 +17,7 @@ import { Morgenlage } from './Morgenlage.tsx';
 import { TagesKarte } from './TagesKarte.tsx';
 import { WasIstDas } from '../nachfrage.tsx';
 import { FangHierAn } from './FangHierAn.tsx';
+import { Dokumente } from './HeuteErledigt.tsx';
 
 const AMP: Record<string, string> = { push: 'u-push', review: 'u-dich', laeuft: 'u-run', blockiert: 'u-bad' };
 const PREFIX = 'wb-uebersicht:';
@@ -79,7 +80,7 @@ function Entscheiden({ k, onDone }: { k: any; onDone: () => void }) {
     setBusy(true);
     try {
       const r: any = await api(`/api/review/${k.id}/entscheidungen`, { body: { berichtHash: k.berichtHash, weiter: true, antworten } });
-      toast(`${antworten.map((a) => a.id).join(', ')} beantwortet — an den Strang „${k.titel}“ geschickt, im Bericht eingetragen${r.weiter ? ', er macht weiter' : ''}`);
+      toast(`${antworten.map((a) => a.id).join(', ')} beantwortet — an den Unter-Chat „${k.titel}“ geschickt, im Bericht eingetragen${r.weiter ? ', er macht weiter' : ''}`);
       onDone();
     } catch (e) { if (is409(e)) onDone(); throw e; } finally { setBusy(false); }
   };
@@ -121,7 +122,7 @@ export function Rueckfrage({ q, onDone, ohneTitel }: { q: any; onDone: () => voi
       : art === 'nein' ? { option: null, text: `Nein${q.recommendation ? ` (Empfehlung „${q.recommendation}“ abgelehnt)` : ''}` } : { option: wahl || null, text };
     await api(`/api/orchestrator/questions/${q.id}/answer`, { body });
     setWahl('');
-    toast(`Antwort gespeichert — an ${q.strand?.title ? `den Strang „${q.strand.title}“` : 'den Hauptchat'} geschickt${q.strand?.title ? '' : ' (er liest sie beim nächsten Abruf)'}`);
+    toast(`Antwort gespeichert — an ${q.strand?.title ? `den Unter-Chat „${q.strand.title}“` : 'den Hauptchat'} geschickt${q.strand?.title ? '' : ' (er liest sie beim nächsten Abruf)'}`);
     window.dispatchEvent(new Event('werkbank-questions'));
     onDone();
   };
@@ -143,7 +144,7 @@ function Braucht({ k, onDone }: { k: any; onDone: () => void }) {
   const send = async (art: Art, text: string) => {
     try {
       await api(`/api/leitstand/strands/${k.id}/reply`, { body: { kind: 'antwort', text: art === 'ja' ? 'Ja.' : art === 'nein' ? 'Nein.' : text, seen: k.seen } });
-      toast(`Antwort an den Strang „${k.titel}“ geschickt — er macht weiter`);
+      toast(`Antwort an den Unter-Chat „${k.titel}“ geschickt — er macht weiter`);
       onDone();
     } catch (e) { if (is409(e)) onDone(); throw e; }
   };
@@ -228,11 +229,15 @@ function Karte({ k, onDone, oeffne }: { k: any; onDone: () => void; oeffne: (k: 
       {(k.tiefe || k.eta?.at) && <p className="ub-etaz"><TiefeEta k={k} /></p>}
       {k.kurz && <p className="ub-kurz" data-testid="ub-kurz">{k.kurz}</p>}
       <div className="ub-chips">
-        {k.links.map((l: any) => l.art === 'bericht'
+        {k.links.filter((l: any) => l.art !== 'dokument').map((l: any) => l.art === 'bericht'
           ? <button key="bericht" className="ub-chip" onClick={() => oeffne(k, 'bericht')} data-testid="ub-bericht">Bericht</button>
           : <a key={l.url} className="ub-chip" href={l.url} target={l.art === 'chat' ? chatTarget : '_blank'} rel="noreferrer" data-art={l.art}>{l.label}{l.art === 'vorschau' ? ' ↗' : ''}</a>)}
         {k.github?.length > 0 && <button className="ub-chip" onClick={() => oeffne(k, 'aenderungen')}>Änderungen</button>}
       </div>
+      {k.routing && (k.routingWartet || /Ersatz|von Knut/.test(k.routing)) && <p className="tiny ub-warn" data-testid="ub-routing">{k.routing}</p>}
+      <Dokumente liste={k.links.filter((l: any) => l.art === 'dokument')} />
+      {k.laufGrund && <p className="tiny ub-warn" data-testid="ub-lauf-grund">Läuft nicht mehr: {k.laufGrund}</p>}
+      {k.uebergabe && <p className="small" data-testid="ub-uebergabe"><span className="chip ok">übergeben</span> an {k.uebergabe.an}{k.uebergabe.was ? `: ${k.uebergabe.was}` : ''} — nichts mehr für dich.</p>}
       {k.commitWarnung && <p className="tiny ub-warn">⚠ {k.commitWarnung}</p>}
       {k.kopfFehler && <p className="tiny ub-warn" data-testid="ub-kopf-fehler">⚠ Bericht-Kopf unlesbar: {k.kopfFehler}</p>}
       <div className="ub-von">
@@ -259,6 +264,7 @@ function Karte({ k, onDone, oeffne }: { k: any; onDone: () => void; oeffne: (k: 
       {(g || k.zusatz) && <p className="ub-gh">{g && <>{g.repo.split('/').pop()} <code>{g.zweig}</code>{g.commit && <> · <code>{g.commit}</code></>}</>}{k.zusatz && <span className="ub-zusatz" data-testid="ub-zusatz">{k.zusatz}</span>}</p>}
       <details className="ub-tech tiny" data-testid="ub-tech">
         <summary className="mut">Technische Details</summary>
+        {k.routing && <p data-testid="strand-routing" title="Routing nach Klasse (kritisch / bauen / lesen) — das Modell steht fest für diesen Unter-Chat">{k.routing}</p>}
         <p data-testid="strand-modell">Modell: {k.modellText ?? (k.modell ? k.modell : k.modellPlan ? `${k.modellPlan} (geplant)` : 'noch kein Zug gelaufen')}</p>
         {(k.gegenpruefung > 0 || k.reviewReady) && <p data-testid="strand-gegenpruefung">{k.gegenpruefung > 0 ? `Gegenprüfung ${k.gegenpruefung}×` : '⚠️ ohne Gegenprüfung'}</p>}
         <p className="mono" title="Kennung des Unter-Chats (für Support und Logs)">Kennung {k.id}</p>

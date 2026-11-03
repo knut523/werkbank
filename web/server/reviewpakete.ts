@@ -10,7 +10,7 @@ import { extname, join, posix, resolve, sep } from 'node:path';
 import MarkdownIt from 'markdown-it';
 
 export const PAKET_RE = /^\d{1,4}-[a-z0-9][a-z0-9-]*$/;
-export const PAKET_EXT = new Set(['.md', '.txt', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.csv', '.json', '.html', '.patch', '.diff']);
+export const PAKET_EXT = new Set(['.md', '.txt', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.csv', '.json', '.html', '.patch', '.diff', '.pptx', '.docx', '.xlsx', '.zip']);
 export const BILD_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
 const SKIP_DIR = new Set(['node_modules', '.git', '__pycache__', 'dist', 'build', '.next', 'coverage']);
 const MAX_FILES = 60, MAX_VISIT = 3000, MAX_DEPTH = 3;

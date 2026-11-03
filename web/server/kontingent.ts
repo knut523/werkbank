@@ -130,3 +130,15 @@ export const autoAktiv = (env: Record<string, string | undefined> = process.env)
 export async function lageFuer(u: User, d: KontingentDeps = standardDeps(), now = Date.now()): Promise<KontingentLage | null> {
   try { const k = await kontingent(u, d, now); return lageAus(k.melious, k.claude, now); } catch { return null; }
 }
+
+/** R32 (Nachtrag 4): Lage für das Routing nach Klassen — mit Sperre und echt/geschätzt; null bei Fehlern (dann gilt die alte Vorgabe). */
+export async function routingLageFuer(u: User, d: KontingentDeps = standardDeps(), now = Date.now()): Promise<{ meliousRest: number | null; claudeFrei: boolean; meliousSperre: boolean; geschaetzt: boolean } | null> {
+  try { const k = await kontingent(u, d, now); const l = lageAus(k.melious, k.claude, now); return { meliousRest: l.meliousRest, claudeFrei: l.claudeFrei, meliousSperre: !!k.melious?.sperre, geschaetzt: !!k.melious?.geschaetzt }; } catch { return null; }
+}
+/** Letzter Anbieter je Person für die Hysterese (Lesen) — wird bei jeder Routing-Entscheidung festgehalten. */
+export async function letzterAnbieter(userId: string, neu?: 'claude' | 'melious'): Promise<'claude' | 'melious' | null> {
+  const col = wb().collection('routing_zuletzt');
+  if (neu) { await col.updateOne({ _id: userId as any }, { $set: { anbieter: neu, at: new Date() } }, { upsert: true }).catch(() => {}); return neu; }
+  const d: any = await col.findOne({ _id: userId as any }).catch(() => null);
+  return d?.anbieter === 'claude' || d?.anbieter === 'melious' ? d.anbieter : null;
+}

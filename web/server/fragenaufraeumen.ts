@@ -15,6 +15,7 @@ export function schliessGrund(q: { kind?: string | null; strand?: { id?: string 
   if (strand.zustand === 'erledigt') return 'Der Strang ist abgeschlossen oder archiviert.';
   if (strand.knutReviewedAt) return 'Du hast den Strang geprüft (abgehakt) — die Frage hat sich damit erledigt.';
   if (strand.reviewedAt) return 'Der Strang wurde abgelegt oder angehalten.';
+  if (strand.uebergabe) return `Der Unter-Chat hat an ${strand.uebergabe.an ?? 'den Hauptchat'} übergeben.`;
   if (strand.startError) return 'Der Strang ist nie gestartet.';
   return null;
 }
@@ -26,7 +27,7 @@ export async function fragenAufraeumen(userId: string, o: { now?: number; dry?: 
   const offen: any[] = await col.find({ userId, status: 'offen', 'strand.id': { $exists: true, $ne: null }, paket: null }).limit(300).toArray();
   const out: { id: string; titel: string; grund: string }[] = [];
   for (const q of offen) {
-    const s: any = await wb().collection('orchestrator_runs').findOne({ _id: q.strand.id as any }, { projection: { zustand: 1, knutReviewedAt: 1, reviewedAt: 1, startError: 1 } });
+    const s: any = await wb().collection('orchestrator_runs').findOne({ _id: q.strand.id as any }, { projection: { zustand: 1, knutReviewedAt: 1, reviewedAt: 1, startError: 1, uebergabe: 1 } });
     const grund = schliessGrund(q, s, now);
     if (!grund) continue;
     if (!o.dry) {

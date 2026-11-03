@@ -74,8 +74,8 @@ const kurzPr = (pr: string) => pr.replace(/^[^/]+\//, '');
 export function fertigHeute(karten: LageKarte[], erledigtHeute: { id: string; titel: string; at: any; chat: string | null }[], seit: string) {
   const bekannt = new Set<string>();
   return [
-    ...karten.filter((k) => istFertig(k, seit)).map((k) => ({ id: k.id, satz: k.titel, strang: k.strangTitel, thema: k.thema, at: iso(k.statusAt), link: k.links.find((l) => l.art === 'bericht')?.url ?? k.chat ?? null, ampel: k.ampel })),
-    ...erledigtHeute.filter((x) => iso(x.at) >= seit).map((x) => ({ id: x.id, satz: x.titel, strang: x.titel, thema: '', at: iso(x.at), link: x.chat, ampel: 'geprüft' })),
+    ...karten.filter((k) => istFertig(k, seit)).map((k) => ({ id: k.id, satz: k.titel, strang: k.strangTitel, thema: k.thema, at: iso(k.statusAt), link: k.links.find((l) => l.art === 'bericht')?.url ?? k.chat ?? null, ampel: k.ampel, dokumente: k.links.filter((l) => l.art === 'dokument').map((l) => ({ label: l.label, url: l.url })) })),
+    ...erledigtHeute.filter((x) => iso(x.at) >= seit).map((x) => ({ id: x.id, satz: x.titel, strang: x.titel, thema: '', at: iso(x.at), link: x.chat, ampel: 'geprüft', dokumente: [] as { label: string; url: string }[] })),
   ].filter((f) => (bekannt.has(f.id) ? false : (bekannt.add(f.id), true))).sort((a, b) => b.at.localeCompare(a.at));
 }
 

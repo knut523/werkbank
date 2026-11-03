@@ -191,8 +191,8 @@ export function brauchtSumme(eintraege: InboxEintrag[], now = Date.now()) {
 /** R32 (Nachtrag A): Wohin geht die Antwort? Ein Satz für die Bestätigung („an Strang „X“ geschickt“). */
 export function zielText(e: Pick<InboxEintrag, 'art' | 'quelle' | 'daten'>): string {
   const strang = ein(e.daten?.strangTitel) || (e.quelle?.strand ? ein(e.quelle.text) : '');
-  if (e.art === 'rueckfrage') return e.quelle?.strand ? `den Strang ${ein(e.quelle.text)}` : 'den Hauptchat';
-  if (e.art === 'braucht' || e.art === 'entscheidung' || e.art === 'push') return strang ? `den Strang „${strang.replace(/^Unter-Chat „(.*)“$/, '$1')}“` : 'den Unter-Chat';
+  if (e.art === 'rueckfrage') return e.quelle?.strand ? `den Unter-Chat ${ein(e.quelle.text)}` : 'den Hauptchat';
+  if (e.art === 'braucht' || e.art === 'entscheidung' || e.art === 'push') return strang ? `den Unter-Chat „${strang.replace(/^Unter-Chat „(.*)“$/, '$1')}“` : 'den Unter-Chat';
   if (e.art === 'vaultfrage') return `die Notiz ${ein(e.quelle?.text)}`;
   if (e.art === 'vault') return 'den Vault-Sync';
   return ein(e.quelle?.text) || 'die Quelle';

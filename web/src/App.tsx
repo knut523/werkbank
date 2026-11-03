@@ -9,6 +9,7 @@ import { Roadmap } from './pages/Roadmap.tsx';
 import { Skills } from './pages/Skills.tsx';
 import { Dateien } from './pages/Dateien.tsx';
 import { Timebox } from './pages/Timebox.tsx';
+import { HeuteErledigt } from './pages/HeuteErledigt.tsx';
 import { Ziele } from './pages/Ziele.tsx';
 import { KontingentZeile } from './kontingent.tsx';
 import { Uebersicht } from './pages/Uebersicht.tsx';
@@ -77,6 +78,7 @@ const HEUTE: Nav = { href: '#/', label: 'Heute', ico: '☀️', match: /^#\/?(\?
 // der Kalender bzw. der Vault erledigen den Job) steht nicht mehr in der Leiste; die Adressen bleiben gültig.
 const LEAD: Nav = { href: '#/lead', label: 'Lead', ico: '🧭', match: /^#\/lead/, f: 'leitstand' };
 // Release 31 (WERKBANK_LAGE): „Was ist offen?“ auf einen Blick — nur Admins, nur mit Schalter (cfg.lage).
+const ERLEDIGT: Nav = { href: '#/erledigt', label: 'Heute erledigt', ico: '✅', match: /^#\/erledigt/, f: 'leitstand' };
 const LAGE: Nav = { href: '#/lage', label: 'Lage', ico: '📡', match: /^#\/lage/, f: 'leitstand' };
 const ENTSCHEIDUNGEN: Nav = { href: '#/entscheidungen', label: 'Entscheidungen', ico: '✅', match: /^#\/(entscheidungen|inbox)/, f: 'heute' };
 const BEREICHE_NEU: { id: string; label: string; ico: string; reiter: Reiter[] }[] = [
@@ -205,7 +207,7 @@ export function App() {
   const inLeiste = (r: Reiter) => vis(r);
   const bereiche = (neu ? BEREICHE_NEU : BEREICHE).map((b) => ({ ...b, reiter: b.reiter.filter(inLeiste) })).filter((b) => b.reiter.length > 0);
   const alsNav = (b: (typeof bereiche)[number]): Nav => ({ href: letzterReiter(b), label: b.label, ico: b.ico, match: new RegExp(b.reiter.map((r) => r.match.source).join('|')), f: '' });
-  const lage = cfg.lage ? [LAGE] : [];
+  const lage = [...(cfg.lage ? [LAGE] : []), ...(user?.role === 'ADMIN' ? [ERLEDIGT] : [])];
   const nav: Nav[] = (neu
     ? [...lage, LEAD, ENTSCHEIDUNGEN, ...bereiche.filter((b) => b.id === 'arbeit').map(alsNav), HEUTE, ...bereiche.filter((b) => b.id === 'mehr').map(alsNav)]
     : [START, ...lage, ...bereiche.map(alsNav)]).filter(vis);
@@ -238,6 +240,7 @@ export function App() {
     : /^#\/wissen/.test(hash) ? <Wissen cfg={cfg} hash={hash} />
     : /^#\/board/.test(hash) ? <Board cfg={cfg} hash={hash} />
     : /^#\/sprint/.test(hash) ? <Sprint cfg={cfg} hash={hash} />
+    : /^#\/erledigt/.test(hash) ? <HeuteErledigt />
     : /^#\/timebox/.test(hash) ? <Timebox cfg={cfg} />
     : /^#\/ziele/.test(hash) ? <Ziele cfg={cfg} hash={hash} />
     : /^#\/roadmap/.test(hash) ? <Roadmap cfg={cfg} hash={hash} />

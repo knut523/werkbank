@@ -72,9 +72,9 @@ import { zielText, optionAusAnders } from '../server/entscheidungsseite.ts';
 import { frageEventText } from '../server/leitstand.ts';
 
 test('Nachtrag A: die Bestätigung nennt das Ziel; ein Wahl-Knopf wird zur echten Option; langer Text kommt wörtlich beim Hauptchat an', () => {
-  assert.equal(zielText({ art: 'braucht', quelle: { text: 'Unter-Chat „Kalender-Abgleich“', strand: 's', url: null }, daten: {} } as any), 'den Strang „Kalender-Abgleich“');
+  assert.equal(zielText({ art: 'braucht', quelle: { text: 'Unter-Chat „Kalender-Abgleich“', strand: 's', url: null }, daten: {} } as any), 'den Unter-Chat „Kalender-Abgleich“');
   assert.equal(zielText({ art: 'rueckfrage', quelle: { text: 'Hauptchat', strand: null, url: null }, daten: {} } as any), 'den Hauptchat');
-  assert.equal(zielText({ art: 'entscheidung', quelle: { text: 'Bericht 500', strand: 's', url: null }, daten: { strangTitel: 'Bot v5' } } as any), 'den Strang „Bot v5“');
+  assert.equal(zielText({ art: 'entscheidung', quelle: { text: 'Bericht 500', strand: 's', url: null }, daten: { strangTitel: 'Bot v5' } } as any), 'den Unter-Chat „Bot v5“');
   assert.deepEqual(optionAusAnders(['flash', 'glm'], 'Anders: flash'), { option: 'flash', notiz: '' });
   assert.deepEqual(optionAusAnders(['flash', 'glm'], 'Anders: glm — weil schneller'), { option: 'glm', notiz: 'weil schneller' });
   assert.equal(optionAusAnders(['flash', 'glm'], 'Anders: sonnet'), null, 'unbekannte Option bleibt Freitext');

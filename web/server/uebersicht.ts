@@ -15,6 +15,7 @@ import { themaOf } from './themen.ts';
 import { etaFertig, etaFuer, istTiefe, QUELLE_TEXT, type Tiefe } from './tiefe.ts';
 import { knutDone, statusWord, kopfFelder } from './leitstand.ts';
 import { klassifiziere, hauptchatAktionen } from './braucht.ts';
+import { uebergabeAus } from './strangwahrheit.ts';
 import { OPEN } from './orchestrator.ts';   // in der Abfrage, damit .limit() nicht Geprüfte zählt
 
 export type Ampel = 'laeuft' | 'blockiert' | 'push' | 'review';
@@ -22,7 +23,7 @@ export const AMPEL_TEXT: Record<Ampel, string> = { push: 'bereit zum Push', revi
 const RANG: Record<Ampel, number> = { blockiert: 0, review: 0, push: 1, laeuft: 2 };
 
 export interface OffeneEntscheidung { id: string; frage: string; empfehlung: string; optionen: string; quelle: 'bericht' | 'kopf'; stufe?: 'wichtig' | 'normal'; worum?: string; optionenListe?: string[]; alternativen?: string[] }
-export interface Link { art: 'bericht' | 'folien' | 'bilder' | 'vorschau' | 'chat' | 'pr'; label: string; url: string }
+export interface Link { art: 'bericht' | 'folien' | 'bilder' | 'vorschau' | 'chat' | 'pr' | 'dokument'; label: string; url: string }
 
 const sicher = (u: unknown): u is string => typeof u === 'string' && /^https?:\/\/[^\s"'<>]+$/i.test(u);
 
@@ -151,6 +152,16 @@ export function paketBasis(env = process.env, read: () => string | null = () => 
 const enc = (rel: string) => rel.split('/').map(encodeURIComponent).join('/');
 const BILD = /\.(png|jpe?g|gif|webp)$/i;
 
+
+const DOKUMENT = /\.(pdf|pptx|docx|xlsx|zip|html)$/i;
+/** R32 (Nachtrag 5): was ein Strang als Ergebnis ablegt, ist IMMER erreichbar — je Dokument ein Download-Link über die Dateiroute der Werkbank
+ *  (kein Pfad, auch ohne Adresse des Paketdienstes). index.html und Vorbild-Seiten zählen nicht als Dokument. */
+export function dokumentLinks(paket: string, dateien: PaketDatei[]): Link[] {
+  return dateien.filter((f) => DOKUMENT.test(f.rel) && !/(^|\/)index\.html$/i.test(f.rel) && !/^vorbild/i.test(f.rel.split('/').pop()!))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, 8)
+    .map((f) => ({ art: 'dokument' as const, label: f.rel.split('/').pop()!, url: `/api/files/agenten/${paket}/${f.rel.split('/').map(encodeURIComponent).join('/')}` }));
+}
+
 /** Links einer Karte: Bericht · Folien · Bilder · Vorschau/Bot (Kopf, nur http(s)) · Chat. */
 export function kartenLinks(o: { id: string; bericht: boolean; paket: string | null; dateien: PaketDatei[]; basis: string | null; kopf: Kopf | null; chat?: string | null }): Link[] {
   const out: Link[] = [];
@@ -165,12 +176,13 @@ export function kartenLinks(o: { id: string; bericht: boolean; paket: string | n
       out.push({ art: 'bilder', label: `Bilder (${bilder.length})`, url: `${o.basis}/${encodeURIComponent(o.paket)}/${ordner ? enc(ordner) + '/' : enc(bilder[0].rel)}` });
     }
   }
+  if (o.paket) out.push(...dokumentLinks(o.paket, o.dateien));
   for (const r of o.kopf?.review ?? []) {
     const url = sicher(r.login) ? r.login : sicher(r.url) ? r.url : null;
     if (url && !out.some((x) => x.url === url)) out.push({ art: 'vorschau', label: r.titel || 'Vorschau', url });
   }
   if (sicher(o.chat)) out.push({ art: 'chat', label: 'Chat', url: o.chat });
-  return out.slice(0, 10);
+  return out.slice(0, 16);
 }
 
 /** Karte eines Strangs (rein bis auf das Lesen von Bericht, Plan und Paketliste). */
@@ -187,7 +199,8 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null, med: 
   const aufGithub = (felder.prs ?? []).some((z: any) => z.stand === 'offen' || z.stand === 'gemergt');
   const a = ampel({ running, wort: statusWord(d), kopf, offen: offen.length + qs.length, excerpt: d.lastExcerpt });
   const kannFreigeben = !running && (kopf?.github?.length ?? 0) > 0 && (!fg || !!fg.veraltet) && !aufGithub;
-  const braucht = kopf ? null : brauchtKnut(d.lastExcerpt);
+  const uebergabe = uebergabeAus(d.lastExcerpt);   // R32 (Nachtrag 5): übergeben = eigener Zustand, keine offene „Braucht Knut“-Zeile
+  const braucht = kopf || uebergabe ? null : brauchtKnut(d.lastExcerpt);
   const paket = felder.paket ?? (d.paket || null);
   const p = paket ? readPaket(reviewDir(), paket) : null;
   const kurz = (kopf?.worum || worumGeht({ title: d.title, prompt: [d.zielLine, d.prompt].filter(Boolean).join('\n'), planText: readPlan(d.plan), berichtText: text })).slice(0, 600);
@@ -203,11 +216,13 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null, med: 
     github: (kopf?.github ?? []).map((g) => ({ repo: String(g.repo ?? ''), zweig: String(g.zweig ?? ''), commit: String(g.commit ?? '').slice(0, 7), pr: sicher(g.pr) ? g.pr : null })),
     prs: (felder.prs ?? []).filter((z: any) => sicher(z.url)).map((z: any) => ({ label: z.label, url: z.url, stand: z.stand })),
     links: kartenLinks({ id: String(d._id), bericht: !!text, paket, dateien: p?.files ?? [], basis, kopf, chat: d.url }),
-    vonDir: vonDir({ ampel: a, freigabeOffen: !!fg && !fg.pushedAt && !fg.veraltet, kannFreigeben, entscheidungen: offen.map((e) => e.id), rueckfragen: qs.length, braucht, gepusht: !!fg?.pushedAt }),
+    vonDir: uebergabe ? `nichts — übergeben an ${uebergabe.an}` : vonDir({ ampel: a, freigabeOffen: !!fg && !fg.pushedAt && !fg.veraltet, kannFreigeben, entscheidungen: offen.map((e) => e.id), rueckfragen: qs.length, braucht, gepusht: !!fg?.pushedAt }),
     entscheidungen: offen, berichtHash: text ? berichtHash(text) : null, rueckfragen: qs, braucht,
     kannFreigeben, freigabe: fg, weitereRepos: felder.weitereRepos ?? [], commitWarnung: felder.commitWarnung ?? null,
     kopfFehler: kopf ? null : felder.kopfFehler ?? (roh && 'fehler' in roh ? roh.fehler : null),   // wie Heute: unlesbaren Kopf zeigen
     modell: d.lastModell ?? null, modellPlan: d.modell ?? null, modellText: modellText({ modell: d.lastModell ?? null, modellPlan: d.modell ?? null, gesendet: !!(d.lastSentAt ?? d.startedAt) }),
+    uebergabe, laufGrund: d.laufKorrektur ?? null,
+    routing: d.routing?.text ?? null, routingWartet: !!d.routing?.wartet,
     blockiert: a === 'blockiert' ? blockiertSatz({ excerpt: d.lastExcerpt, braucht: brauchtKnut(d.lastExcerpt), grund: (kopf?.offen ?? [])[0] ?? d.lastReason ?? null }, hauptchatAktionen()) : null,
     gegenpruefung: d.gegenpruefung?.n ?? 0, reviewReady: !!d.reviewReadyAt,   // Karte › Technische Details (Paket 187, S4)
     tiefe: istTiefe(d.tiefe) ? d.tiefe : null, eta: fertig ? null : { text: eta.text, ueberfaellig: eta.ueberfaellig, at: eta.at, quelle: eta.quelle ? QUELLE_TEXT[eta.quelle] : null },

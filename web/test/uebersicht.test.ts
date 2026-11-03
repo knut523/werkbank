@@ -95,13 +95,15 @@ test('Council 1/6: Links nur http(s); Folien und Bilder nur mit Paketdienst', ()
     ['bericht', 'Bericht', '#/leitstand?bericht=abc'],
     ['folien', 'Folien', 'https://8098--h/184-x/2026-10-15_bericht_x.html'],
     ['bilder', 'Bilder (2)', 'https://8098--h/184-x/screenshots/'],
+    ['dokument', '2026-10-15_bericht_x.html', '/api/files/agenten/184-x/2026-10-15_bericht_x.html'],   // R32: jedes Dokument zusätzlich zum Download
     ['vorschau', 'Admin-Vorschau', 'https://3064--x/login'],
     ['vorschau', 'Bot', 'http://bot'],
   ]);
   const gemischt = kartenLinks({ id: 'abc', bericht: false, paket: '184-x', dateien: [{ rel: 'a/1.png', size: 1, mtimeMs: 1 }, { rel: 'b/2.png', size: 1, mtimeMs: 1 }], basis: 'https://8098--h', kopf: null });
   assert.equal(gemischt[0].url, 'https://8098--h/184-x/a/1.png', 'verschiedene Ordner → erstes Bild statt eines Ordners');
   const ohne = kartenLinks({ id: 'abc', bericht: false, paket: '184-x', dateien, basis: null, kopf: null, chat: 'https://chat/c/1' });
-  assert.deepEqual(ohne.map((x) => x.art), ['chat']);
+  // R32: auch ohne Paketdienst-Adresse bleibt jedes Dokument über die Dateiroute der Werkbank erreichbar
+  assert.deepEqual(ohne.map((x) => x.art), ['dokument', 'chat']);
 });
 
 test('Basis des Paketdienstes: Umgebung, sonst Dienste-Register; nur http(s)', () => {

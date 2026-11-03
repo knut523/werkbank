@@ -2,6 +2,7 @@
 // Immer live berechnet (GET /api/cos/lage), mit eigener Uhrzeit (K19). Antworten gehen über die vorhandenen Wege: Rückfragen an Strang
 // (`/api/orchestrator/questions/:id/answer`), Bericht-Entscheidungen (`/api/review/:id/entscheidungen`), Meeting-Vorschläge (`/api/cos/triage`).
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Dokumente } from './HeuteErledigt.tsx';
 import { api, chatTarget } from '../api.ts';
 import { Err, useToast } from '../ui.tsx';
 import { JaNeinAnders, Rueckfrage, useStored, type Art } from './Uebersicht.tsx';
@@ -311,10 +312,10 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide, heuteFertig = []
           {l.berichte.length > 0 && <div><h4>Berichte von heute</h4><ul>{l.berichte.map((b: any) => <li key={b.art} className="small" data-testid={`cos-bericht-${b.art}`}><b>{b.label}:</b> {b.link ? <a href={note(b.link)} title="Bericht im Wissen öffnen — dort stehen die Tickets hinter den Zahlen">{b.zeile}</a> : b.zeile}</li>)}</ul></div>}
         </details>
         <div className="cos-block" data-testid="cos-fertig">
-          <h3>Heute fertig <span className="ub-amp u-done">{heuteFertig.length}</span></h3>
+          <h3>Heute fertig <span className="ub-amp u-done">{heuteFertig.length}</span> <a className="tiny" href="#/erledigt" data-testid="cos-erledigt-link">alles Erledigte, auch frühere Tage →</a></h3>
           {heuteFertig.length ? <ul>{heuteFertig.map((f: any) => <li key={f.id} className="small" data-testid="cos-fertig-zeile">
             {f.link ? <a href={f.link} target={/^https?:/.test(f.link) ? '_blank' : undefined} rel="noreferrer"><b>{f.satz}</b></a> : <b>{f.satz}</b>}
-            <span className="tiny mut"> · {hm(f.at)} · {f.ampel === 'geprüft' ? 'von dir geprüft' : f.ampel === 'push' ? 'bereit zum Push' : 'wartet auf dein Review'}{f.thema ? ` · ${f.thema}` : ''}</span></li>)}</ul>
+            <span className="tiny mut"> · {hm(f.at)} · {f.ampel === 'geprüft' ? 'von dir geprüft' : f.ampel === 'push' ? 'bereit zum Push' : 'wartet auf dein Review'}{f.thema ? ` · ${f.thema}` : ''}</span><Dokumente liste={f.dokumente ?? []} /></li>)}</ul>
             : <p className="small mut">Seit heute früh ist noch nichts fertig geworden.</p>}
         </div>
         <div className="cos-block" data-testid="cos-schulden">

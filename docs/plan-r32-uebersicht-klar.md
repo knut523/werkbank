@@ -28,6 +28,9 @@ Morgenlage, und jede Zahl führt auf eine Liste mit genau so vielen Einträgen.
 | C — Aufräumen | `schliessGrund()`/`fragenAufraeumen()` schließen Fragen erledigter/abgelegter/nie gestarteter Stränge mit Grund (Takt alle 10 min, Log-Zeile); alte Deckel-Fragen (> 7 Tage, Strang läuft nicht mehr) = EIN Sammel-Eintrag mit Knopf | `server/fragenaufraeumen.ts`, `server/inbox.ts`, `server/main.ts` |
 | 2 — Was ist das? | `nachfrageText()` + `POST/GET /api/nachfrage`: der Hauptchat bekommt Frage, Strang, letzten Stand, Optionen, Empfehlung und antwortet in Klartext (lesend, „So entscheiden: …“); Antwort steht an der Karte; Entscheiden bleibt der Klick an der Karte | `server/nachfrage.ts`, `server/main.ts`, `src/nachfrage.tsx` |
 
+| 4 — Routing | `routing.ts`: Klasse (kritisch / bauen / lesen) → Anbieter; kritisch immer Claude und bei Erschöpfung WARTEN; bauen Claude bevorzugt, Melious als Ersatz; lesen Melious bevorzugt, knapp → Claude Haiku; Hysterese (Spanne 10 %); Modell fest je Strang beim Start; „läuft auf X, weil …“ an der Karte, Meldung an den Hauptchat bei Ersatz/Warten/Übersteuern; `routing: claude\|melious` übersteuert je Strang (orch_start) | `server/routing.ts`, `server/orchestrator.ts`, `server/kontingent.ts`, `r32-routing` |
+| 5 — Wahrheit | `wahrerLauf()`: „läuft“ nur mit Zug in der Brücke, sonst „Läuft nicht mehr: Grund“; Dokumente (PDF/PPTX/DOCX/XLSX/HTML) als Download-Links in Karte, Heute fertig, Lage; Übergabe (`- Übergeben an: …`) = eigener Zustand, keine „Braucht Knut“-Zeile; Seite „Heute erledigt“ (`#/erledigt`, `/api/erledigt?datum=`) | `server/strangwahrheit.ts`, `server/erledigt.ts`, `src/pages/HeuteErledigt.tsx`, `r32-wahrheit` |
+
 ## Schalter
 
 Keine neuen Pflicht-Schalter. Vorgaben, damit es nach Live sofort wirkt:
@@ -35,6 +38,7 @@ Keine neuen Pflicht-Schalter. Vorgaben, damit es nach Live sofort wirkt:
 | Schalter | Vorgabe | Wirkung |
 |---|---|---|
 | `WERKBANK_FRAGEN_AUFRAEUMEN` | an (nur `0` schaltet ab) | Takt schließt Fragen erledigter Stränge |
+| `WERKBANK_ROUTING` | an (nur `aus` schaltet ab); `_LESEN` 5, `_BAUEN` 20, `_SPANNE` 10 | Routing nach Klassen statt reiner Prozent-Schwelle |
 | `WERKBANK_BRAUCHT_DICH` | wie R31b (`an`) | „Was du tun sollst“ auf blockierten Karten nutzt dieselbe Einordnung |
 | `WERKBANK_TAGESVORSCHLAG` | wie R31b | ohne ihn zeigt die Karte „Mein Tag“ nur „Tag planen“ |
 | `WERKBANK_LAGE` | wie R31b | Lage-Seite (bekommt ebenfalls „Was ist das?“) |

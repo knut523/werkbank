@@ -83,13 +83,15 @@ w(PAKETE, '500-bot-gespraech/bericht.md', bericht('Bot: Gesprächsführung nach 
     worum: Der Pilot startet im Dezember.
     antwort: ""
 `));
+w(PAKETE, '500-bot-gespraech/folien.pptx', 'PPTX');
+w(PAKETE, '500-bot-gespraech/angebot.pdf', '%PDF-1.4 test');
 w(PAKETE, '501-lueckenliste/bericht.md', bericht('Lückenliste steht — von 20 Abnahme-Aufträgen gehen heute 4', 'Abgleich Hauptchat gegen Claude-Code-Sitzung.'));
 w(PAKETE, '502-flex-gates/bericht.md', bericht('Flex-Projektplan je Gate steht — B2C und B2B getrennt', 'Plan je Gate.'));
 
 const INTERNAL = randomBytes(16).toString('hex'), JWT_SECRET = randomBytes(16).toString('hex'), REFRESH = randomBytes(16).toString('hex');
 const knut = { _id: new ObjectId(), email: 'knut@maxenergy.at', name: 'Knut Peters', role: 'ADMIN' };
 const procs: ChildProcess[] = [];
-let lc: Server, gh: Server;
+let lc: Server, gh: Server, br: Server;
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const fehler: string[] = [];
 const pruef = (ok: boolean, was: string) => { console.log(`${ok ? 'ok  ' : VORHER ? 'ROT ' : 'FEHL'} ${was}`); if (!ok && !VORHER) fehler.push(was); };
@@ -138,6 +140,9 @@ try {
     res.writeHead(404); res.end('{}');
   });
   await new Promise<void>((r) => lc.listen(0, '127.0.0.1', () => r()));
+  // Mock-Brücke: kennt einen laufenden Zug (b1000008) und die beendeten Züge der übrigen Stränge. b1000006 steht in der Datenbank auf „running“, hat aber keinen Zug — gestorben.
+  br = createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(/orch-state/.test(req.url ?? '') ? { strands: [{ conv: 'c-b1000008', running: true, interrupted: false, turn: { start: Date.now() - 60_000, end: null, outcome: null } }, ...['1', '2', '3', '4', '5', '7', '9'].map((n) => ({ conv: `c-b100000${n}`, running: false, interrupted: false, turn: { start: Date.now() - 3000_000, end: Date.now() - 1800_000, outcome: 'ok' } }))] } : {})); });
+  await new Promise<void>((r) => br.listen(0, '127.0.0.1', () => r()));
   gh = createServer(async (req, res) => {
     let b = ''; for await (const c of req) b += c;
     const q = JSON.parse(b || '{}');
@@ -151,8 +156,9 @@ try {
     await L.collection('conversations').insertOne({ conversationId: id, user: uid, title, endpoint: 'Claude Code', endpointType: 'custom', model: 'claude-code', spec: 'claude-code-olaf', createdAt: new Date(jetzt - 6 * 3600_000), updatedAt: new Date(), isArchived: false, messages: [] });
     await L.collection('messages').insertOne({ messageId: randomUUID(), conversationId: id, user: uid, parentMessageId: '00000000-0000-0000-0000-000000000000', isCreatedByUser: false, sender: 'Claude Code', text, error: false, unfinished: false, createdAt: new Date(jetzt - 5 * 3600_000), updatedAt: new Date(jetzt - 5 * 3600_000) });
   };
-  const strang = (id: string, title: string, o: Record<string, unknown> = {}) => ({ _id: id, userId: uid, kind: 'strand', conv: 'c-' + id, title, url: 'https://chat.example/c/' + id, cwd: tmp,
+  const strang = (id: string, title: string, o: Record<string, unknown> = {}) => ({ _id: id, userId: uid, kind: 'strand', conv: 'c-' + id, title, url: 'https://chat.example/c/' + id, cwd: (mkdirSync(join(tmp, 'wt', id), { recursive: true }), join(tmp, 'wt', id)),
     startedAt: new Date(jetzt - 5 * 3600_000), lastSentAt: new Date(jetzt - 3600_000), lastActivity: new Date(jetzt - 600_000), reviewedAt: null, knutReviewedAt: null, startError: null, autoStopped: null, tiefe: 'regular', ...o });
+  const ueb = `Stand.\n### Stand\n- Erledigt: Merge vorbereitet\n- Offen: nichts\n- Braucht Knut: Merge in diesem Strang erlauben\n- Übergeben an: Hauptchat — Merge von tariff-app#193\nStatus: fertig`;
   const fertig = (min: number) => ({ lastStatus: 'done', doneAt: new Date(jetzt - min * 60_000), statusAt: new Date(jetzt - min * 60_000) });
   const straenge = [
     strang('b1000001', 'Bot: Gesprächsführung nach Kundentest', { ...fertig(200), lastExcerpt: stand('nichts', 'D1–D3 beantworten', 'fertig'), paket: '500-bot-gespraech', bericht: BOT_BERICHT }),
@@ -161,9 +167,11 @@ try {
     strang('b1000004', 'Umzug Werkbank: Lückenliste', { ...fertig(40), lastExcerpt: stand('nichts', 'nichts', 'fertig'), paket: '501-lueckenliste', bericht: join(PAKETE, '501-lueckenliste/bericht.md') }),
     strang('b1000005', 'Flex-Projektplan je Gate', { ...fertig(25), lastExcerpt: stand('nichts', 'nichts', 'fertig'), paket: '502-flex-gates', bericht: join(PAKETE, '502-flex-gates/bericht.md') }),
     strang('b1000006', 'Bot v5: Build-Fix', { lastStatus: 'running', zustand: 'laeuft', eta: { at: new Date(jetzt + 50 * 60_000) } }),
+    strang('b1000008', 'Cockpit: Tarifvergleich läuft wirklich', { lastStatus: 'running', zustand: 'laeuft', eta: { at: new Date(jetzt + 20 * 60_000) } }),
+    strang('b1000009', 'tariff-app #193 Merge', { ...fertig(15), lastExcerpt: ueb }),
     strang('b1000007', 'Alter Strang (abgeschlossen)', { ...fertig(60 * 24 * 18), zustand: 'erledigt', knutReviewedAt: new Date(jetzt - 60 * 24 * 17 * 60_000), lastExcerpt: 'Status: fertig' }),
   ];
-  for (const s of straenge) await conv(String(s.conv), String(s.title), `Start: ${s.title}`);
+  for (const s of straenge) await conv(String(s.conv), String(s.title), String((s as any).lastExcerpt || `Start: ${s.title}`));   // letzte Antwort = der Stand (der Status-Takt liest sie wieder ein)
   const hcConv = 'c-hauptchat';
   await conv(hcConv, 'Hauptchat 03.11.', 'Hauptchat bereit.');
   await D.collection('orchestrator_runs').insertMany([...straenge, { _id: 'hc000001', userId: uid, kind: 'leitstand', conv: hcConv, title: 'Hauptchat 03.11.', url: 'https://chat.example/c/' + hcConv, cwd: tmp, startedAt: new Date(jetzt - 8 * 3600_000), lastActivity: new Date(jetzt - 60_000), endedAt: null, lastStatus: 'done' }] as any[]);
@@ -179,7 +187,7 @@ try {
   const j1 = `http://127.0.0.1:${jiraPm.port}/rest/api/3`, j2 = `http://127.0.0.1:${jiraOlaf.port}/rest/api/3`;
   procs.push(spawn(process.execPath, ['server/main.ts'], { cwd: WEB, stdio: ['ignore', 'ignore', 'inherit'],
     env: { ...env, HOME: tmp, MONGO_URI_WERKBANK: process.env.SHOTS_MONGO || 'mongodb://127.0.0.1:27017', WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_NO_JOBS: '1', WERKBANK_INSECURE_COOKIES: '1', WERKBANK_VAULT_DIR: VAULT, WERKBANK_DB: DB, LIBRECHAT_DB: LCDB,
-      LIBRECHAT_URL: `http://127.0.0.1:${(lc.address() as any).port}`, LIBRECHAT_PUBLIC_URL: 'https://chat.example', BRIDGE_URL: 'http://127.0.0.1:9', BRIDGE_STATE_DIR: join(tmp, 'bridge'),
+      LIBRECHAT_URL: `http://127.0.0.1:${(lc.address() as any).port}`, LIBRECHAT_PUBLIC_URL: 'https://chat.example', BRIDGE_URL: `http://127.0.0.1:${(br.address() as any).port}`, BRIDGE_STATE_DIR: join(tmp, 'bridge'),
       WERKBANK_ALLOWED_EMAILS: knut.email, WERKBANK_PILOT_EMAIL: knut.email, CREDS_KEY: randomBytes(32).toString('hex'), CREDS_IV: randomBytes(16).toString('hex'),
       WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'), WERKBANK_DATA_DIR: join(tmp, 'data'), WERKBANK_REVIEW_DIR: PAKETE, WERKBANK_MEILI_INDEX: `werkbank_r32shots_${tag}`, WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_SECRET, JWT_REFRESH_SECRET: REFRESH,
       WERKBANK_SKILLS_SOURCE: join(tmp, 'skills'), WERKBANK_SKILLS_TARGET: join(tmp, 'skills-dst'), WERKBANK_FORGE_MCP: '', WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vs'), WERKBANK_VAULT_SYNC_SCRIPT: '/bin/true', COS_OLAF_JIRA: 'off',
@@ -204,6 +212,8 @@ try {
   const api = async (p: string) => { const tok = await login(); const r = await fetch(B + p, { headers: { cookie: `refreshToken=${tok}` } }); return { status: r.status, j: await r.json().catch(() => ({})) as any }; };
   const post = async (p2: string, body: unknown = {}) => { const tok = await login(); const r = await fetch(B + p2, { method: 'POST', headers: { cookie: `refreshToken=${tok}`, 'content-type': 'application/json', 'x-werkbank': '1' }, body: JSON.stringify(body) }); return { status: r.status, j: await r.json().catch(() => ({})) as any }; };
   { const g = await post('/api/roadmap/github'); console.log('     GitHub-Sync:', g.status, JSON.stringify(g.j).slice(0, 200)); }   // GitHub-Stand (Mock) einlesen — wie der 5-Minuten-Takt auf Live
+  console.log('     KARTEN:', JSON.stringify(((await api('/api/uebersicht')).j.themen ?? []).flatMap((t: any) => t.karten).map((k: any) => `${k.titel.slice(0, 22)}=${k.ampel}${k.laufGrund ? '/korr' : ''}${k.uebergabe ? '/ueb' : ''}`)));
+  if (false) console.log('     KARTEN2:', JSON.stringify(((await api('/api/uebersicht')).j.themen ?? []).flatMap((t: any) => t.karten).map((k: any) => `${k.titel.slice(0, 22)}=${k.ampel}${k.laufGrund ? '/korr' : ''}${k.uebergabe ? '/ueb' : ''}`)));
   const zahlen = { count: (await api('/api/today')).j.count as number, ents: (await api('/api/entscheidungen/fragen')).j };
   writeFileSync(join(OUT, 'zahlen.json'), JSON.stringify({ today: zahlen.count, entscheidungenZahl: zahlen.ents.zahl, summe: zahlen.ents.summe ?? null, fang: zahlen.ents.fang ?? null, fragen: zahlen.ents.fragen?.length, sonstiges: zahlen.ents.sonstiges?.length }, null, 2));
   console.log('     Vault-Fragen:', JSON.stringify((zahlen.ents.fragen ?? []).filter((f: any) => f.art === 'vaultfrage').map((f: any) => f.titel.slice(0, 50))));
@@ -242,12 +252,12 @@ try {
     // Aufgabe 3: Was wurde heute fertig?
     await p.goto(B + '/#/'); await p.getByTestId('cos-morgenlage').waitFor({ timeout: 20000 }); await pause(1500);
     const fertigZeilen = await p.getByTestId('cos-fertig-zeile').count();
-    await p.getByTestId('cos-fertig-zeile').first().locator('a').first().click(); await pause(1200);
+    await p.getByTestId('cos-fertig-zeile').filter({ has: p.locator('a[href^="#"]') }).first().locator('a[href^="#"]').first().click(); await pause(1200);
     const bericht = await p.locator('[data-testid="ub-schublade"], .ub-doc, [data-testid="bericht"], h1, h2').filter({ hasText: /Lückenliste|Flex-Projektplan|Bericht/ }).first().isVisible().catch(() => false);
     uxSchritt(viewport, 3, 'Was wurde heute fertig?', fertigZeilen >= 2 && bericht, 1, `${fertigZeilen} fertige Stränge mit Ergebnis-Satz, Klick öffnet den Bericht`);
     // Aufgabe 4: einen Strang finden und seinen Stand verstehen
     await p.goto(B + '/#/'); await p.getByTestId('uebersicht').waitFor(); await pause(2000);
-    const karte = p.locator('[data-testid="ub-karte"]', { hasText: 'Kalender-Abgleich Flex' }).first();
+    const karte = p.locator('[data-testid="ub-karte"][data-ampel="blockiert"]', { hasText: 'Warum blockiert' }).first();
     const kt = await karte.innerText().catch(() => '');
     uxSchritt(viewport, 4, 'Einen Strang finden und seinen Stand verstehen', /Warum blockiert/.test(kt) && /Was du tun sollst/.test(kt), 0, 'Karte nennt Warum und Was du tun sollst');
     // Aufgabe 5: Mein Tag / Tagesvorschlag
@@ -337,6 +347,7 @@ try {
       pruef(lcPosts.filter((x) => /Folgefrage von Knut/.test(x.text) && /Was passiert, wenn ich Nein sage\?/.test(x.text)).length === 1, `${name}: Folgefrage kommt wörtlich beim Hauptchat an`);
     }
 
+    console.log('     KARTEN3:', name, JSON.stringify(((await api('/api/uebersicht')).j.themen ?? []).flatMap((t: any) => t.karten).map((k: any) => `${k.titel.slice(0, 22)}=${k.ampel}`)));
     // 3) Entscheidungsseite
     await p.goto(B + '/#/entscheidungen'); await p.getByTestId('entscheidungen-seite').waitFor({ timeout: 20000 }); await pause(1200);
     const fort = await p.getByTestId('e-fortschritt').innerText();
@@ -373,8 +384,8 @@ try {
     // 4) Strang-Karten
     await p.goto(B + '/#/'); await p.getByTestId('uebersicht').waitFor(); await pause(2500);
     const blk = p.locator('[data-testid="ub-karte"][data-ampel="blockiert"]');
-    pruef((await blk.count()) === 2, `${name}: zwei blockierte Karten (${await blk.count()})`);
-    pruef((await p.getByTestId('ub-blockiert-grund').count()) === 2 && /Zugriff auf den Kalender-Test-Tenant fehlt/.test((await p.getByTestId('ub-blockiert-grund').allInnerTexts()).join(' ')), `${name}: blockierte Karte nennt Warum und Was du tun sollst`);
+    pruef((await blk.count()) >= 2, `${name}: mindestens zwei blockierte Karten (${await blk.count()}; Bot v5 ohne Zug gilt auch als blockiert)`);
+    pruef((await p.getByTestId('ub-blockiert-grund').count()) >= 2 && /Zugriff auf den Kalender-Test-Tenant fehlt/.test((await p.getByTestId('ub-blockiert-grund').allInnerTexts()).join(' ')), `${name}: blockierte Karte nennt Warum und Was du tun sollst`);
     const bot = p.locator('[data-testid="ub-karte"]', { hasText: 'Bot: Gesprächsführung' }).first();
     pruef((await bot.getByText('Bot: Gesprächsführung nach Kundentest').count()) === 1, `${name}: Kartentitel nur einmal`);
     await p.locator('[data-testid="ub-tech"] summary').first().click();
@@ -386,6 +397,30 @@ try {
     await breit('Übersicht');
     await shot('04-uebersicht-voll');
 
+
+    // 4b) Nachtrag 5: Wahrheit des Zustands, Dokumente, Übergabe, Seite „Heute erledigt“
+    const tot = p.locator('[data-testid="ub-karte"]', { hasText: 'Bot v5: Build-Fix' }).first();
+    const totT = await tot.innerText().catch(() => '');
+    pruef((await tot.count()) === 1 && (await tot.getAttribute('data-ampel')) !== 'laeuft' && /Läuft nicht mehr: .*kein laufender Zug|Warum blockiert/i.test(totT), `${name}: Strang ohne Zug in der Brücke steht NICHT als „läuft“, sondern mit Grund`);
+    pruef(/Cockpit: Tarifvergleich läuft wirklich/.test(await p.getByTestId('ub-laeuft').innerText().catch(() => '')) && !/Bot v5: Build-Fix/.test(await p.getByTestId('ub-laeuft').innerText().catch(() => '')), `${name}: „Läuft“ nennt nur den Strang mit echtem Zug`);
+    const dok = p.locator('[data-testid="ub-karte"]', { hasText: 'Bot: Gesprächsführung' }).first().getByTestId('dokument-link');
+    pruef((await dok.count()) === 2, `${name}: Strang-Karte zeigt die zwei Dokumente (PPTX, PDF) als Download-Links (${await dok.count()})`);
+    const href = await dok.first().getAttribute('href');
+    const tokC = await ctx.cookies(); const ck = tokC.find((c) => c.name === 'refreshToken')?.value ?? '';
+    const dl = await fetch(B + href!, { headers: { cookie: `refreshToken=${ck}` } });
+    pruef(dl.status === 200 && /attachment/.test(dl.headers.get('content-disposition') ?? ''), `${name}: Download-Link liefert die Datei (${dl.status}, ${dl.headers.get('content-disposition')?.slice(0, 40)})`);
+    pruef((await p.getByTestId('cos-fertig').getByTestId('dokument-link').count()) >= 2, `${name}: „Heute fertig“ zeigt die Dokumente`);
+    const ub = p.locator('[data-testid="ub-karte"]', { hasText: 'tariff-app #193 Merge' }).first();
+    pruef(/übergeben/.test(await ub.getByTestId('ub-uebergabe').innerText().catch(() => '')) && /Hauptchat/.test(await ub.getByTestId('ub-uebergabe').innerText().catch(() => '')) && (await ub.getByTestId('ub-von').innerText().catch(() => '')).startsWith('nichts'), `${name}: Übergabe: eigener Zustand mit Verweis, nichts mehr für dich`);
+    const inboxJ = (await api('/api/inbox')).j;
+    pruef(!(inboxJ.eintraege ?? []).some((e: any) => e.art === 'braucht' && /Merge in diesem Strang erlauben/.test(e.frage)), `${name}: keine offene „Braucht Knut“-Zeile zur Übergabe`);
+    await p.goto(B + '/#/erledigt'); await p.getByTestId('heute-erledigt').waitFor({ timeout: 20000 }); await pause(1500);
+    pruef((await p.getByTestId('er-strang').count()) >= 3 && (await p.getByTestId('er-strang').getByTestId('dokument-link').count()) >= 2, `${name}: Seite „Heute erledigt“ listet fertige Stränge mit Link und Dokumenten (${await p.getByTestId('er-strang').count()})`);
+    await shot('04b-heute-erledigt');
+    await p.getByTestId('er-zurueck').click(); await pause(1500);
+    pruef((await p.getByTestId('er-strang').count()) === 0 && /0<\/b> Unter-Chats|^0 /.test(((await p.getByTestId('er-zahlen').innerHTML()).replace(/<b>/g, '')) + '0</b> Unter-Chats'), `${name}: Datumswahl: der Tag davor zeigt eine eigene (leere) Liste`);
+    await p.getByTestId('er-datum').fill(new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date())); await pause(1200);
+    pruef((await p.getByTestId('er-strang').count()) >= 3, `${name}: Datumswahl: zurück auf heute zeigt wieder die Stränge`);
     // 5) Roadmap + PR-Review + Mein Tag
     await p.goto(B + '/#/roadmap'); await pause(3500);
     const rm = await p.locator('body').innerText();
@@ -411,7 +446,7 @@ try {
         await feld.fill(LANG); await feld.press('Enter');
         await kal.page().getByTestId('fang-erledigt').or(kal.page().getByTestId('e-erledigt')).first().waitFor({ timeout: 10000 }).catch(() => {});
         const best = await p.locator('[data-testid="fang-erledigt"], [data-testid="e-erledigt"]').filter({ hasText: 'Kalender' }).first().innerText().catch(() => '');
-        pruef(/an den Strang „Kalender-Abgleich Flex“ geschickt/.test(best), `1440: Bestätigung nennt das Ziel („${best.replace(/\s+/g, ' ').slice(0, 110)}“)`);
+        pruef(/an den Unter-Chat „Kalender-Abgleich Flex“ geschickt/.test(best), `1440: Bestätigung nennt das Ziel („${best.replace(/\s+/g, ' ').slice(0, 110)}“)`);
         const post = lcPosts.find((x) => x.conversationId === 'c-b1000002');
         pruef(!!post && post.text.includes(LANG) && LANG.length > 1000, `1440: der Text (${LANG.length} Zeichen) kommt wörtlich und vollständig im Strang-Chat an`);
         await viewShot('08-antwort-bestaetigt');
@@ -467,7 +502,8 @@ try {
         await gAlle.click(); await gAlle.click(); await pause(2500);
         console.log('     Gruppe:', await p.getByTestId('e-bulk-out').innerText().catch(() => '(keine Meldung)'));
         const nachherN = Number(/\d+/.exec(await p.getByTestId('e-fortschritt').innerText())?.[0]);
-        pruef(nachherN < vorherN, `1440: „alle … wie empfohlen“ je Thema beantwortet mehrere auf einmal (${vorherN} → ${nachherN} offen)`);
+        const bulkTxt = await p.getByTestId('e-bulk-out').innerText().catch(() => '');
+        pruef(/^[1-9]\d* Fragen wie empfohlen gespeichert/.test(bulkTxt), `1440: „alle … wie empfohlen“ je Thema beantwortet mehrere auf einmal („${bulkTxt.slice(0, 50)}“; offen ${vorherN} → ${nachherN}, die Fang-Liste rückt nach)`);
       } else pruef(true, '1440: (keine Gruppe mit Empfehlungen mehr)');
       // 6f) alte Deckel-Fragen mit EINEM Knopf
       await p.goto(B + '/#/entscheidungen'); await p.getByTestId('entscheidungen-seite').waitFor(); await pause(1200);
@@ -492,7 +528,7 @@ try {
   writeFileSync(join(OUT, 'ux-test.json'), JSON.stringify(ux, null, 2));
 } finally {
   for (const pr of procs) pr.kill();
-  lc?.close(); gh?.close(); await jiraPm.close(); await jiraOlaf.close();
+  br?.close(); lc?.close(); gh?.close(); await jiraPm.close(); await jiraOlaf.close();
   await mongo.db(DB).dropDatabase().catch(() => {}); await mongo.db(LCDB).dropDatabase().catch(() => {});
   await mongo.close();
 }

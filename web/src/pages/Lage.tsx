@@ -7,6 +7,7 @@ import { api, fmtDateTime } from '../api.ts';
 import { Err, Loading, useLoad } from '../ui.tsx';
 import { Karte, type Frage } from './Entscheidungen.tsx';
 import { WasIstDas } from '../nachfrage.tsx';
+import { Dokumente } from './HeuteErledigt.tsx';
 
 const SOFORT = 1;   // die wichtigste Entscheidung mit Knöpfen direkt in der Lage; der Rest als eine Zeile mit Empfehlung (auf einen Blick)
 const sicher = (u: string | null | undefined) => (u && (/^https?:\/\//.test(u) || /^#\//.test(u) || /^\/#\//.test(u)) ? u : null);
@@ -77,7 +78,7 @@ export function Lage() {
           {l.fertig.map((f: any) => (
             <li key={f.id}>
               {sicher(f.link) ? <a href={sicher(f.link)!}>{f.satz}</a> : f.satz}
-              <div className="tiny">{uhr(f.at)} · {f.ampel === 'geprüft' ? 'von dir geprüft' : f.ampel === 'push' ? 'bereit zum Push' : 'dein Review'}{f.strang && f.strang !== f.satz ? ` · ${f.strang}` : ''}</div>
+              <div className="tiny">{uhr(f.at)} · {f.ampel === 'geprüft' ? 'von dir geprüft' : f.ampel === 'push' ? 'bereit zum Push' : 'dein Review'}{f.strang && f.strang !== f.satz ? ` · ${f.strang}` : ''}</div><Dokumente liste={f.dokumente ?? []} />
             </li>
           ))}
         </ul>

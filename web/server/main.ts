@@ -5,7 +5,7 @@
 // Bestätigungsdialog setzt. Ohne confirm liefern sie nur die Vorschau.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch, realpathSync, renameSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, statSync, createReadStream, writeFileSync, mkdirSync, watch, realpathSync, renameSync } from 'node:fs';
 import { join, extname, resolve, normalize, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -27,6 +27,8 @@ import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, setzeLeseQuelle, 
 import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
 import { fragenAufraeumenAn, fragenAufraeumen } from './fragenaufraeumen.ts';
+import { wahrerLauf } from './strangwahrheit.ts';
+import { baueErledigt } from './erledigt.ts';
 import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand, activeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
@@ -84,6 +86,7 @@ import { fixTick, fixOverview, prLageVia, pushVia, gateVia, freigabeSetzen, fixA
 import { prLage as holePrLage, prLageText, PR_LAGE_AN as prLageAn } from './prlage.ts';
 import { ZWEI_SEITEN_AN as zweiSeitenAn, anlegenEingabe } from './jiraanlegen.ts';
 import { FRAGENPAKET_AN as fragenpaketAn, paketEingabe, paketeCol, neueKennung, paketStand } from './fragenpaket.ts';
+import { tagGrenzen } from './erledigt.ts';
 import { LAGE_AN as lageAn, baueLage, fertigHeute, standSatz, THEMEN_LAGE } from './lage.ts';
 import { heuteFrueh } from './prlage.ts';
 import { parseThemen, registerRel } from './cosregister.ts';
@@ -2501,10 +2504,23 @@ async function uebersichtDaten(u: User) {
   const qs = await listQuestions(u, { open: true }).catch((e: any) => { fragenFehler = true; log('uebersicht fragen', { err: String(e?.message ?? e) }); return []; });
   const basis = paketBasis();
   const med = await etaMediane(u).catch(() => null);   // Plan 205: Rückfall-ETA je Tiefe
+  // R32 (Nachtrag 5): „läuft“ gilt nur, wenn die Brücke einen Zug hat — der Status aus der Datenbank kann Minuten alt sein.
+  let bruecke: Map<string, any> | null = null;
+  try { bruecke = await strandStates(u); } catch { bruecke = null; }
+  for (const d of docs) {
+    if (d.zustand === 'abgebrochen' && d.lastStatus !== 'running' && d.zustandGrund) d.laufKorrektur = d.zustandGrund;   // bleibt sichtbar, bis der Strang wieder arbeitet
+    const w = wahrerLauf(d, bruecke?.get(d.conv), !!bruecke);
+    if (d.lastStatus === 'running' && !w.running && w.korrektur) {
+      d.lastStatus = 'waiting'; d.laufKorrektur = w.korrektur.grund;
+      orchRuns().updateOne({ _id: d._id, lastStatus: 'running' }, { $set: { lastStatus: 'waiting', zustand: w.korrektur.zustand, zustandGrund: w.korrektur.grund, statusAt: new Date() } }).catch(() => {});
+    }
+  }
   const karten = docs.map((d) => {
     try { return uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), qs.filter((q: any) => q.strand && String(q.strand.id) === String(d._id)), basis, med); }
     catch (e: any) { log('uebersicht karte', { id: d._id, err: String(e?.message ?? e) }); return null; }   // eine kaputte Karte reißt die anderen nicht mit
   }).filter(Boolean) as any[];
+  // R32 (Nachtrag 5): Übergabe aus dem Stand festhalten — eigener Zustand „übergeben“, damit auch die Fragen-Aufräumung und andere Ansichten ihn kennen.
+  for (const k of karten) if (k.uebergabe) { const d = docs.find((x) => String(x._id) === k.id); if (d && !d.uebergabe) orchRuns().updateOne({ _id: d._id, uebergabe: { $exists: false } }, { $set: { uebergabe: { ...k.uebergabe, at: new Date() }, zustand: 'uebergeben', zustandGrund: `übergeben an ${k.uebergabe.an}` } }).catch(() => {}); }
   const imStrang = new Set(karten.map((k) => k.id));
   const lose = qs.filter((q: any) => !q.strand || !imStrang.has(String(q.strand.id)));
   return { docs, karten, qs, lose, fragenFehler, basis };
@@ -2527,6 +2543,30 @@ on('GET', /^\/api\/uebersicht$/, async (req, res) => {
   const heuteSeit = heuteFrueh(new Date());
   const heuteFertig = fertigHeute(karten, erledigt.map((x: any) => ({ id: x.id, titel: x.titel, at: x.at, chat: x.chat })), heuteSeit);
   send(res, 200, { ...gruppieren(karten, lose), at: new Date(), dryRun: dryRun(), paketDienst: !!basis, fragenFehler, hauptchat, erledigt, heuteFertig, prLage });
+});
+
+
+// --- „Heute erledigt“ (R32, Nachtrag 5): alles, was an einem Tag fertig wurde — Datumswahl für frühere Tage ---
+on('GET', /^\/api\/erledigt$/, async (req, res, _m, url) => {
+  const u = await needAdmin(req);
+  const tag = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('datum') ?? '') ? url.searchParams.get('datum')! : wienDatum();
+  const { von, bis } = tagGrenzen(tag);
+  const iso = (d: any) => (d ? new Date(d).toISOString() : '');
+  const bas = paketBasis();
+  const strangDocs: any[] = await orchRuns().find({ userId: u.id, kind: { $ne: 'leitstand' }, $or: [{ doneAt: { $gte: new Date(von), $lt: new Date(bis) } }, { knutReviewedAt: { $gte: new Date(von), $lt: new Date(bis) } }] }).limit(200).toArray().catch(() => []);
+  const fgs: any[] = strangDocs.length ? await (await import('./freigabe.ts')).freigaben().find({ strand: { $in: strangDocs.map((d) => String(d._id)) }, revokedAt: null }).toArray().catch(() => []) : [];
+  const straenge = strangDocs.map((d) => {
+    let k: any = null; try { k = uebersichtKarte(d, fgs.filter((f) => f.strand === String(d._id)), [], bas, null); } catch { /* ohne Karte */ }
+    return { id: String(d._id), titel: k?.titel ?? d.title ?? '', strang: d.title ?? '', thema: themaOf(d), at: iso(d.knutReviewedAt && new Date(d.knutReviewedAt) >= new Date(von) ? d.knutReviewedAt : d.doneAt),
+      link: k?.links?.find((l: any) => l.art === 'bericht')?.url ?? (/^https?:\/\//.test(String(d.url ?? '')) ? d.url : null), dokumente: (k?.links ?? []).filter((l: any) => l.art === 'dokument').map((l: any) => ({ label: l.label, url: l.url })) };
+  });
+  const pushRows: any[] = await (await import('./freigabe.ts')).freigaben().find({ pushedAt: { $gte: new Date(von), $lt: new Date(bis) }, revokedAt: null }).limit(100).toArray().catch(() => []);
+  const pushes = pushRows.map((f) => ({ strang: String(f.strand ?? ''), repo: String(f.repo ?? f.github?.[0]?.repo ?? ''), zweig: String(f.zweig ?? f.branch ?? ''), commit: String(f.head ?? f.commit ?? ''), at: iso(f.pushedAt), pr: /^https?:\/\//.test(String(f.prUrl ?? '')) ? f.prUrl : null }));
+  const logRows: any[] = await logCol().find({ userId: u.id, at: { $gte: new Date(von), $lt: new Date(bis) } }).sort({ at: -1 }).limit(300).toArray().catch(() => []);
+  const entscheidungen = logRows.map((r) => ({ titel: String(r.frage ?? r.titel ?? '').slice(0, 200), antwort: String(r.antwort ?? '').slice(0, 200), at: iso(r.at), auto: !!r.auto }));
+  // Releases: Review-Pakete mit „release“ im Namen, die an diesem Tag fertig wurden (Ordner-Änderungszeit).
+  const releases = (() => { try { return readdirSync(cfg.reviewDir).filter((n) => /release/i.test(n)).map((n) => ({ name: n.replace(/^\d+-/, '').replace(/-/g, ' '), at: statSync(join(cfg.reviewDir, n)).mtime.toISOString() })); } catch { return []; } })();
+  send(res, 200, { ...baueErledigt(tag, { straenge, pushes, entscheidungen, releases }), heute: wienDatum() });
 });
 
 // Lage (Release 31): „Was ist offen?“ auf einen Blick — Für dich · Läuft · Fertig seit heute früh · Erledigt der Hauptchat ·
@@ -3675,7 +3715,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
       return send(res, 200, { ok, id });
     }
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null, budget: b.budget || null });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, routing: b.routing === 'claude' || b.routing === 'melious' ? b.routing : null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null, budget: b.budget || null });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null, tiefe: r.tiefe });
       return send(res, 200, { ...r, schaetzung: await schaetzungFuer(u, { tiefe: r.tiefe, profil: b.profil || null, budget: Number(b.budget) || null }) });
     }

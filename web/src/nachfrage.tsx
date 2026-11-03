@@ -79,7 +79,7 @@ export function WasIstDas({ art, id, kompakt = false, aktionen = [] }: { art: Nf
           <Err e={err} />
           {aktionen.length > 0 && zeilen.some((z) => z.wer === 'hauptchat' && z.text) && <div className="nf-schnell" data-testid="nf-entscheiden" role="group" aria-label="So entscheiden">
             {aktionen.map((a) => <button key={a.label} type="button" className={`ub-btn sm${a.pri ? ' pri' : ''}`} onClick={a.onClick}>{a.label}</button>)}</div>}
-          <p className="tiny mut">Der Hauptchat erklärt und empfiehlt — entscheiden tust du mit den Knöpfen (hier oder an der Karte); die Antwort geht wie jede andere an den Strang.</p>
+          <p className="tiny mut">Der Hauptchat erklärt und empfiehlt — entscheiden tust du mit den Knöpfen (hier oder an der Karte); die Antwort geht wie jede andere an den Unter-Chat.</p>
         </div>
       )}
     </span>
