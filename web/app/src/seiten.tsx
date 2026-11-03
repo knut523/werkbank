@@ -73,7 +73,7 @@ export function Jetzt() {
     <div className="seite">
       {kopf}
       {reviewer ? <>{prsAbschnitt}{jetztAbschnitt}</> : jetztAbschnitt}
-      <nav className="sprung" aria-label="Weiter unten">{d.admin && <a href="#a-laeuft">Läuft</a>}{d.admin && <a href="#a-erledigt">Heute erledigt</a>}{d.rolle === 'team' ? <><a href="#a-dok">Dokumente</a><a href="#a-prs">PRs</a></> : <><a href="#a-prs">PRs</a><a href="#a-dok">Dokumente</a></>}</nav>
+      <nav className="sprung" aria-label="Weiter unten">{d.admin && <a href="#a-laeuft">Läuft</a>}{d.admin && <a href="#a-erledigt">Heute erledigt</a>}{d.rolle === 'team' ? <><a href="#a-dok">Dokumente</a><a href="#a-prs">PRs</a></> : <><a href="#a-prs">PRs</a><a href="#a-dok">Dokumente</a></>}<a href="v2/themen">Themen</a></nav>
       {d.admin && (
         <Abschnitt id="a-laeuft" titel="Läuft gerade" erklaerung="Unter-Chats, an denen ein Agent gerade arbeitet — mit voraussichtlichem Ende. Du musst hier nichts tun."
           fuss={<a href="v2/arbeit">Alle Unter-Chats →</a>}>
@@ -196,7 +196,7 @@ function ThemaGruppe({ thema, karten, fertig }: { thema: string; karten: Karte[]
   return (
     <div className="thema-gruppe">
       <div className="thema-kopf">
-        <p className="gruppe-titel">{thema} · {karten.length}</p>
+        <p className="gruppe-titel">{thema} · {karten.length} <a className="klein" href={`v2/thema?name=${encodeURIComponent(thema)}`}>Alles zu {thema} →</a></p>
         {passend.length > 1 && !frage && <button type="button" className="knopf leise klein" onClick={() => setFrage(true)}>Alle {passend.length} wie empfohlen …</button>}
       </div>
       {frage && (
@@ -491,6 +491,9 @@ export function Mehr() {
     <div className="seite">
       <h1>Mehr</h1>
       <p className="unterzeile">Alles, was die alte Werkbank kann, findest du hier — entweder schon in der neuen Oberfläche oder mit einem Klick in der alten.</p>
+      <Abschnitt id="m-themen" titel="Themen" erklaerung="Alles zu einem Thema auf einer Seite: Entscheidungen, Unter-Chats, Dokumente, PRs.">
+        <ul className="liste"><Zeile titel="Themen" url="v2/themen" satz="Flex, Rechner, Admin, Werkbank … — je Thema alles beisammen." /></ul>
+      </Abschnitt>
       <Abschnitt id="m-alt" titel="In der alten Werkbank" erklaerung="Diese Seiten gibt es (noch) nur in der alten Werkbank. Ein Klick öffnet sie in einem neuen Tab; die Anmeldung gilt dort auch.">
         <ul className="liste">{alt.map((e) => <Zeile key={e.alt} titel={e.titel} url={app.alt ? `${app.alt}/${e.url}` : '#'} satz={e.satz} />)}</ul>
       </Abschnitt>
@@ -548,6 +551,50 @@ export function AlleChats() {
           : <Zeile key={z.id} titel={z.titel} url={z.url ?? '#'} satz={`${ART_TEXT[z.art]} · ${z.status}${z.thema ? ` · ${z.thema}` : ''}${z.art !== 'unterchat' ? ' · öffnet im Chat (LibreChat)' : ''}`} rechts={wann(z.zuletzt)} />)}</ul>
       ) : <p className="leer">{d.zeilen.length ? 'Nichts gefunden — anderer Suchbegriff oder Filter?' : 'Du hast noch keine Chats.'}</p>}
       {liste.length > 200 && <p className="klein gedimmt">Die ersten 200 — enger suchen, um den Rest zu sehen.</p>}
+    </div>
+  );
+}
+
+// ---------- Themen quer über alles (S11) ----------
+
+interface ThemaZeile { thema: string; entscheidungen: number; unterchats: number; dokumente: number; prs: number; summe: number }
+const zaehl = (z: ThemaZeile) => [z.entscheidungen && mehrzahl(z.entscheidungen, 'Entscheidung', 'Entscheidungen'), z.unterchats && mehrzahl(z.unterchats, 'Unter-Chat', 'Unter-Chats'), z.dokumente && mehrzahl(z.dokumente, 'Dokument', 'Dokumente'), z.prs && mehrzahl(z.prs, 'PR', 'PRs')].filter(Boolean).join(' · ');
+
+export function Themen() {
+  const { d, fehler, neu } = useDaten<{ themen: ThemaZeile[] }>('api/v2/themen');
+  if (fehler) return <Fehler text={fehler} nochmal={neu} />;
+  if (!d) return <Laedt />;
+  return (
+    <div className="seite">
+      <h1>Themen</h1>
+      <p className="unterzeile">Alles zu einem Thema auf einer Seite: Entscheidungen, Unter-Chats, Dokumente und PRs. Das Thema kommt aus dem Unter-Chat (von Hand gesetzt) oder wird aus Titel und Ablage erkannt.</p>
+      <ul className="liste">{d.themen.map((z) => <Zeile key={z.thema} titel={z.thema} url={`v2/thema?name=${encodeURIComponent(z.thema)}`} satz={zaehl(z)} rechts={z.entscheidungen ? `${z.entscheidungen} offen` : undefined} />)}</ul>
+    </div>
+  );
+}
+
+export function Thema({ name }: { name: string }) {
+  const app = useApp();
+  const { d, fehler, neu } = useDaten<{ thema: string; entscheidungen: Karte[]; unterchats: { id: string; titel: string; zuletzt: string | null; offen: boolean }[]; unterchatsGesamt: number; dokumente: Dok[]; prs: { pr: string; titel: string; url: string }[]; notizenFrei: boolean; prFrei: boolean }>(`api/v2/thema?name=${encodeURIComponent(name)}`);
+  if (fehler) return <Fehler text={fehler} nochmal={neu} />;
+  if (!d) return <Laedt />;
+  return (
+    <div className="seite">
+      <p className="zurueck"><a href="v2/themen">← Themen</a></p>
+      <h1>{d.thema}</h1>
+      <nav className="sprung" aria-label="Auf dieser Seite"><a href="#t-entscheidungen">Entscheidungen</a><a href="#t-unterchats">Unter-Chats</a><a href="#t-dokumente">Dokumente</a><a href="#t-prs">PRs</a></nav>
+      <Abschnitt id="t-entscheidungen" titel={`Entscheidungen (${d.entscheidungen.length})`} erklaerung="Was zu diesem Thema auf dich wartet — du kannst gleich hier antworten.">
+        {d.entscheidungen.length ? <div className="karten">{d.entscheidungen.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div> : <p className="leer">Zu diesem Thema wartet nichts auf dich.</p>}
+      </Abschnitt>
+      <Abschnitt id="t-unterchats" titel={`Unter-Chats (${d.unterchatsGesamt})`} erklaerung="Aufträge zu diesem Thema, neueste zuerst — offene und abgenommene." fuss={d.unterchatsGesamt > d.unterchats.length ? <a href="v2/chats">Alle in „Alle Chats“ →</a> : null}>
+        {d.unterchats.length ? <ul className="liste">{d.unterchats.map((z) => <Zeile key={z.id} titel={z.titel} url={`v2/arbeit/${z.id}`} rechts={wann(z.zuletzt)} marke={z.offen ? undefined : { text: 'abgenommen', ton: 'gruen' }} />)}</ul> : <p className="leer">Keine Unter-Chats zu diesem Thema.</p>}
+      </Abschnitt>
+      <Abschnitt id="t-dokumente" titel={`Dokumente (${d.dokumente.length})`} erklaerung="Notizen zu diesem Thema, zuletzt geänderte zuerst.">
+        {!d.notizenFrei ? <p className="leer">Notizen sind für dich noch nicht freigegeben — frag Knut.</p> : d.dokumente.length ? <ul className="liste">{d.dokumente.map((x) => <DokZeile key={x.url} x={x} />)}</ul> : <p className="leer">Keine Notizen zu diesem Thema.</p>}
+      </Abschnitt>
+      <Abschnitt id="t-prs" titel={`PRs (${d.prs.length})`} erklaerung="Offene Code-Änderungen zu diesem Thema.">
+        {!d.prFrei ? <p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p> : d.prs.length ? <ul className="liste">{d.prs.map((p) => <Zeile key={p.pr} titel={`${p.pr} · ${p.titel}`} url={p.url} />)}</ul> : <p className="leer">Keine offenen PRs zu diesem Thema.</p>}
+      </Abschnitt>
     </div>
   );
 }

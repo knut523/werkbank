@@ -171,3 +171,16 @@ test('S21: alte Deckel-Fragen lassen sich in 2.0 gesammelt schließen (bestehend
   assert.equal((await rufe('POST', '/api/v2/sammel-schliessen', ADMIN, { id: 'altbestand' })).status, 400, 'Altbestand bleibt Knuts Entscheidung');
   assert.deepEqual(sammelZu, ['altbestand-deckel']);
 });
+
+test('S11: Themen — Übersicht und Seite je Thema; ohne „Wissen“ keine Notizen, ohne „Roadmap“ keine PRs', async () => {
+  const t = await rufe('GET', '/api/v2/themen', ADMIN);
+  assert.equal(t.status, 200);
+  assert.ok(t.b.themen.some((x: any) => x.thema === 'Tarife' && x.unterchats === 1), 'von Hand gesetztes Thema gilt: ' + JSON.stringify(t.b.themen));
+  const r = await rufe('GET', '/api/v2/thema?name=Tarife', ADMIN);
+  assert.deepEqual(r.b.unterchats.map((x: any) => x.id), ['abcd1234']);
+  gesperrt = true;
+  const g = await rufe('GET', '/api/v2/thema?name=Tarife', LISA);
+  assert.deepEqual([g.b.dokumente, g.b.prs, g.b.notizenFrei, g.b.prFrei], [[], [], false, false]);
+  gesperrt = false;
+  assert.equal((await rufe('GET', '/api/v2/thema', ADMIN)).status, 400);
+});

@@ -5,9 +5,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import type { User } from './auth.ts';
 import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungsseite.ts';
+import { themaOf } from './themen.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite } from './v2kern.ts';
+import { themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import * as librechat from './v2librechat.ts';
 
@@ -195,6 +196,40 @@ export function registerV2(on: On, d: V2Deps) {
     const [liste, er] = await Promise.all([d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })), d.erledigtDaten(u, tag)]);
     const zm = new Map(liste.zeilen.map((z: any) => [String(z.id), z]));
     send(d, res, { tag, heute: d.wienDatum(), erledigt: erledigtSicht(er.straenge, zm, new Set(er.straenge.map((s: any) => String(s.id)).filter((id: string) => !zm.has(id)))) });
+  });
+
+  // --- Themen quer über Entscheidungen, Unter-Chats, Dokumente, PRs (S11) — Team-Freigaben gelten wie überall ---
+  const themenQuellen = async (u: User) => {
+    const ib = await d.inboxFuer(u);
+    const { fragen } = fragenAus(ib.eintraege);
+    const auswahl = jetztAuswahl(fragen), obenIds = new Set(auswahl.map((x) => x.f.id));
+    const kartenAlle = karten(d, fragen, ib.eintraege, [...auswahl, ...fragen.filter((f) => f.klasse !== 'aktion' && !obenIds.has(f.id)).map((f) => ({ f, grund: '' }))]);
+    const runs = admin(u) ? await d.alleRuns(u).catch(() => []) : [];
+    const notizen = d.gesperrt(u, 'wissen') ? [] : d.vaultNeu(5000).filter((n) => !ROH.test(`/${n.path}`));
+    const prs = d.gesperrt(u, 'roadmap') ? [] : await d.livePrs().then((g) => [...g.map.values()] as any[]).catch(() => []);
+    return { kartenAlle, runs, notizen, prs };
+  };
+  on('GET', /^\/api\/v2\/themen$/, async (req, res) => {
+    const u = await d.needUser(req);
+    const q = await themenQuellen(u);
+    send(d, res, { themen: themenUebersicht({ karten: q.kartenAlle, runs: q.runs, notizen: q.notizen, prs: q.prs.map((p) => ({ repo: String(p.repo ?? ''), title: String(p.title ?? '') })) }) });
+  });
+  on('GET', /^\/api\/v2\/thema$/, async (req, res, _m, url) => {
+    const u = await d.needUser(req);
+    const name = String(url.searchParams.get('name') ?? '');
+    if (!name || name.length > 200) throw err(400, 'Welches Thema?');
+    const q = await themenQuellen(u);
+    const runs = q.runs.filter((r) => r.kind !== 'leitstand' && themaVon(themaOf(r), String(r.title ?? '')) === name)
+      .sort((a, b) => String(b.lastActivity ?? b.startedAt ?? '').localeCompare(String(a.lastActivity ?? a.startedAt ?? '')));
+    send(d, res, {
+      thema: name,
+      entscheidungen: q.kartenAlle.filter((k) => k.thema === name),
+      unterchats: runs.slice(0, 30).map((r) => ({ id: String(r._id), titel: kurz(String(r.title ?? ''), 140), zuletzt: r.lastActivity ?? r.startedAt ?? null, offen: !(r.knutReviewedAt || r.reviewedAt) })),
+      unterchatsGesamt: runs.length,
+      dokumente: q.notizen.filter((n) => themaVon(null, `${n.path} ${n.title}`) === name).slice(0, 20).map((n) => ({ art: 'notiz', titel: n.title, worum: bereich(n.path), url: `/v2/dokument?vault=${encodeURIComponent(n.path)}`, at: n.mtime ? new Date(n.mtime).toISOString() : null })),
+      prs: q.prs.filter((p) => themaVon(null, `${p.repo} ${p.title}`) === name).slice(0, 20).map((p) => ({ pr: String(p.pr), titel: kurz(String(p.title ?? ''), 140), url: `/v2/prs/${encodeURIComponent(String(p.repo))}/${p.number}` })),
+      notizenFrei: !d.gesperrt(u, 'wissen'), prFrei: !d.gesperrt(u, 'roadmap'),
+    });
   });
 
   // --- Alle Chats (S12, C4): Unter-Chats, Hauptchats, LibreChat- und 2.0-Chats — Suche und Filter macht die Oberfläche ---

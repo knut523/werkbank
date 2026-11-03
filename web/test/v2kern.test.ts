@@ -209,3 +209,29 @@ test('S20 (D8 persönliche Instanzen): Rolle der Besitzerin aus der Einrichtung,
   assert.equal(rolle({ admin: false, vorname: 'Lisa', zugang: false, einstellung: 'leitung' }, names), 'team', 'Einstellung gilt nur für die Besitzerin (Admin), nie für Gäste');
   assert.equal(rolle({ admin: true, vorname: 'X', zugang: true, einstellung: 'quatsch' }, names), 'leitung', 'unbekannte Einstellung = Ableitung');
 });
+
+test('S11: themaVon — ein Thema für alles: bestehende Regeln (themen.ts), Lage-Themen, Hilfsnamen werden aus dem Text erkannt', async () => {
+  const { themaVon } = await import('../server/v2kern.ts');
+  assert.equal(themaVon('Admin', ''), 'Admin');
+  assert.equal(themaVon('Workspace', ''), 'Werkbank', 'Workspace heißt in der Oberfläche Werkbank');
+  assert.equal(themaVon('Service-View', ''), 'Service');
+  assert.equal(themaVon('Fragenpaket: Netzentgelte 2027 und ehrlicher Rechner (Pre-Plan 416)', ''), 'Rechner');
+  assert.equal(themaVon('Hauptchat', 'Push freigeben: olaf-tariff-app Flex-Umfragen'), 'Flex');
+  assert.equal(themaVon(null, 'Anmeldestrecke: Zählpunkt prüfen'), 'Anmeldestrecke');
+  assert.equal(themaVon('Unter-Chats', 'irgendwas ohne Thema'), 'Sonstiges');
+  assert.equal(themaVon(null, 'olaf/2-Areas/Product/Produkt-OLAF/1-Roadmap/Bot/0-bot-uebersicht.md Bot'), 'Bot');
+});
+
+test('S11: themenUebersicht — je Thema Entscheidungen, Unter-Chats, Dokumente, PRs; größte zuerst, Sonstiges zuletzt', async () => {
+  const { themenUebersicht } = await import('../server/v2kern.ts');
+  const t = themenUebersicht({
+    karten: [{ id: 'k1', titel: 'Flex-Umfrage live?', thema: 'Flex' }, { id: 'k2', titel: 'Werkbank-Release', thema: 'Workspace' }],
+    runs: [{ _id: 'a1', title: 'Flex: Umfrage-Editor', zustand: 'laeuft' }, { _id: 'a2', title: 'irgendwas' }],
+    notizen: [{ path: 'olaf/2-Areas/Neue-Geschaeftsfelder/Flexibilitaeten/0-flexibilitaeten-uebersicht.md', title: 'Flexibilitäten Übersicht' }],
+    prs: [{ pr: 'WirStrom1/olaf-tariff-app#240', repo: 'olaf-tariff-app', title: 'Flex: Umfrage speichern' }],
+  });
+  const flex = t.find((x) => x.thema === 'Flex')!;
+  assert.deepEqual([flex.entscheidungen, flex.unterchats, flex.dokumente, flex.prs], [1, 1, 1, 1]);
+  assert.equal(t[0].thema, 'Flex');
+  assert.equal(t[t.length - 1].thema, 'Sonstiges');
+});

@@ -2,6 +2,7 @@
 // der Zustand eines Unter-Chats in einem Satz, „Heute erledigt“ nur mit Fertigem, „wartet auf“ je Person. Ohne Datenbank.
 import { fangHierAn, type Frage } from './entscheidungsseite.ts';
 import { ohneFachwort } from './woerterbuch.ts';
+import { THEMEN, themaOf } from './themen.ts';
 
 export type V2Antwort = 'ja' | 'nein' | 'anders' | 'spaeter';
 export interface V2Link { label: string; url: string; extern?: boolean }
@@ -107,7 +108,7 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
   ];
   return {
     id: f.id, art: freigabe ? 'freigabe' : 'entscheidung', titel: kurz(titel, 160), worum: kurz(worum, 220), grund: o.grund, empfehlung,
-    optionen, alternativen: f.alternativen ?? [], antworten, form: f.form, wichtig: f.stufe === 'wichtig', thema: f.gruppe, quelle: f.quelle?.text ?? '',
+    optionen, alternativen: f.alternativen ?? [], antworten, form: f.form, wichtig: f.stufe === 'wichtig', thema: themaVon(f.gruppe, `${f.titel} ${f.quelle?.text ?? ''}`), quelle: f.quelle?.text ?? '',
     links, erklaerung, alt: weg === 'alt' ? o.altUrl : null, wartetSeit: f.wartetSeit,
   };
 }
@@ -237,7 +238,7 @@ export function chatListe(runs: any[], convs: any[], eigene: { conv: string; tit
   for (const r of o.admin ? runs : []) {
     if (r.conv) { if (belegt.has(String(r.conv))) continue; belegt.add(String(r.conv)); }   // zwei Runs, eine Unterhaltung: einmal (Pass C)
     const haupt = r.kind === 'leitstand';
-    out.push({ id: String(r._id), art: haupt ? 'hauptchat' : 'unterchat', titel: kurz(String(r.title || (haupt ? 'Hauptchat' : 'Unter-Chat')), 140), thema: r.thema ? String(r.thema) : null,
+    out.push({ id: String(r._id), art: haupt ? 'hauptchat' : 'unterchat', titel: kurz(String(r.title || (haupt ? 'Hauptchat' : 'Unter-Chat')), 140), thema: haupt ? null : themaVon(themaOf(r), String(r.title ?? '')),
       status: haupt ? (r.endedAt ? 'beendet' : 'aktiv') : strangStatus(r), zuletzt: iso(r.lastActivity ?? r.doneAt ?? r.startedAt),
       url: haupt ? (r.conv && convOk(String(r.conv)) ? `${o.lcUrl}/c/${r.conv}` : null) : `v2/arbeit/${r._id}`, conv: r.conv ? String(r.conv) : null });
   }
@@ -249,4 +250,38 @@ export function chatListe(runs: any[], convs: any[], eigene: { conv: string; tit
   }
   for (const e of eigene) if (!belegt.has(e.conv)) out.push({ id: e.conv, art: 'chat2', titel: kurz(e.titel, 140), thema: null, status: 'offen', zuletzt: iso(e.at), url: null, conv: e.conv });
   return out.sort((a, b) => String(b.zuletzt ?? '').localeCompare(String(a.zuletzt ?? '')));
+}
+
+// ---------- Themen quer über alles (S11, Knut 03.11. Punkt 2) ----------
+
+/** Namen, die nur sagen, woher etwas kommt — kein Thema; dann wird das Thema aus dem Text erkannt. */
+const HILFSNAME = /^(Hauptchat|Unter-Chats?|Push-Freigaben|Vault-Sync|Vault|Übersicht|Sonstiges|Inbox)$/i;
+const SYNONYM: Record<string, string> = { Workspace: 'Werkbank', 'Service-View': 'Service' };
+/** Zusätzlich zu den Regeln der Seitenleiste (themen.ts): die Lage-Themen und Datenschutz. */
+const EXTRA_THEMEN: { thema: string; re: RegExp }[] = [
+  { thema: 'Anmeldestrecke', re: /anmelde/i },
+  { thema: 'Service', re: /\bservice/i },
+  { thema: 'Datenschutz', re: /datenschutz|dsgvo|einwilligung|\bdsb\b/i },
+];
+/** Ein Thema für alles (Entscheidungen, Unter-Chats, Dokumente, PRs): ein gesetztes Thema gilt, Hilfsnamen nicht; sonst die erste
+ *  passende Regel (themen.ts, dann Lage-Themen) über den Text. Eine Quelle — dieselbe Zuordnung auf jeder Seite. */
+export function themaVon(roh: string | null | undefined, text: string): string {
+  let r = String(roh ?? '').trim();
+  let t = String(text ?? '');
+  if (/^Fragenpaket:/i.test(r)) { t = `${r} ${t}`; r = ''; }
+  if (r && !HILFSNAME.test(r)) return SYNONYM[r] ?? r;
+  const hit = THEMEN.find((x) => x.re.test(t)) ?? EXTRA_THEMEN.find((x) => x.re.test(t));
+  return hit ? SYNONYM[hit.thema] ?? hit.thema : 'Sonstiges';
+}
+
+export interface ThemaZeile { thema: string; entscheidungen: number; unterchats: number; dokumente: number; prs: number; summe: number }
+/** Je Thema, was dazu da ist — größte zuerst, „Sonstiges“ zuletzt. */
+export function themenUebersicht(q: { karten: { titel: string; thema?: string | null }[]; runs: any[]; notizen: { path: string; title: string }[]; prs: { repo: string; title: string }[] }): ThemaZeile[] {
+  const m = new Map<string, ThemaZeile>();
+  const zu = (th: string, f: 'entscheidungen' | 'unterchats' | 'dokumente' | 'prs') => { const z = m.get(th) ?? { thema: th, entscheidungen: 0, unterchats: 0, dokumente: 0, prs: 0, summe: 0 }; z[f]++; z.summe++; m.set(th, z); };
+  for (const k of q.karten) zu(themaVon(k.thema, k.titel), 'entscheidungen');
+  for (const r of q.runs) if (r.kind !== 'leitstand') zu(themaVon(themaOf(r), String(r.title ?? '')), 'unterchats');
+  for (const n of q.notizen) zu(themaVon(null, `${n.path} ${n.title}`), 'dokumente');
+  for (const p of q.prs) zu(themaVon(null, `${p.repo} ${p.title}`), 'prs');
+  return [...m.values()].sort((a, b) => (a.thema === 'Sonstiges' ? 1 : 0) - (b.thema === 'Sonstiges' ? 1 : 0) || b.summe - a.summe || a.thema.localeCompare(b.thema, 'de'));
 }
