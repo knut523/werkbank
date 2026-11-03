@@ -202,3 +202,9 @@ p { margin: 0 0 var(--s1); }
 .sprung { display: flex; flex-wrap: wrap; gap: 8px; margin: -8px 0 var(--s3); }
 .sprung a { padding: 6px 12px; border-radius: 999px; background: var(--karte); border: 1px solid var(--linie); font-size: .85rem; }
 .abschnitt h2 { scroll-margin-top: calc(var(--kopf-h) + 16px); }
+
+/* S15: Entscheidungen nach Thema, „Alle wie empfohlen“ mit Rückfrage */
+.thema-gruppe { margin-bottom: var(--s3); }
+.thema-kopf { display: flex; align-items: center; justify-content: space-between; gap: var(--s1); flex-wrap: wrap; }
+.bestaetigen { background: var(--karte); border: 1px solid var(--akzent); border-radius: var(--r); padding: var(--s2); margin: var(--s1) 0; }
+.bestaetigen ul { margin: 6px 0 10px; padding-left: 1.1rem; }

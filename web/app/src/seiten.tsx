@@ -115,8 +115,8 @@ export function Entscheidungen() {
         {d.oben.length ? <div className="karten">{d.oben.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div> : <p className="leer">Gerade wartet nichts auf dich.</p>}
       </Abschnitt>
       {d.rest.length > 0 && (
-        <Abschnitt id="e-weitere" titel="Weitere" erklaerung="Alles andere, was auf dich wartet — nach Thema sortiert, wie es kommt.">
-          <div className="karten">{d.rest.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div>
+        <Abschnitt id="e-weitere" titel="Weitere, nach Thema" erklaerung="Alles andere, was auf dich wartet — nach Thema gruppiert. Passt bei einem Thema jede Empfehlung, beantwortest du alle auf einmal mit „Alle wie empfohlen“ (mit Rückfrage); Freigaben und Fragen ohne Empfehlung bleiben dabei stehen.">
+          {themen(d.rest).map(([thema, ks]) => <ThemaGruppe key={thema} thema={thema} karten={ks} fertig={() => { neu(); app.zahl(null); }} />)}
         </Abschnitt>
       )}
       {d.aufraeumen.length > 0 && (
@@ -129,6 +129,50 @@ export function Entscheidungen() {
           <GeschlossenListe l={d.geschlossen} geoeffnet={() => { neu(); app.zahl(null); }} />
         </Abschnitt>
       )}
+    </div>
+  );
+}
+
+/** Karten nach Thema, größte Gruppe zuerst; ohne Thema unter „Sonstiges“. */
+function themen(ks: Karte[]): [string, Karte[]][] {
+  const m = new Map<string, Karte[]>();
+  for (const k of ks) { const t = k.thema?.trim() || 'Sonstiges'; m.set(t, [...(m.get(t) ?? []), k]); }
+  return [...m].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], 'de'));
+}
+const wieEmpfohlenMoeglich = (k: Karte) => k.art === 'entscheidung' && !k.alt && !!k.empfehlung && k.antworten.includes('ja');
+
+function ThemaGruppe({ thema, karten, fertig }: { thema: string; karten: Karte[]; fertig: () => void }) {
+  const app = useApp();
+  const passend = karten.filter(wieEmpfohlenMoeglich);
+  const [frage, setFrage] = useState(false);
+  const [laeuft, setLaeuft] = useState(false);
+  const [meldung, setMeldung] = useState<string | null>(null);
+  const alle = async () => {
+    setLaeuft(true); setMeldung(null);
+    try {
+      const r = await schicke<{ ok: number; fehler: string[]; uebersprungen: number }>('/api/v2/alle-empfohlen', { ids: passend.map((k) => k.id) });
+      setMeldung(`✓ ${mehrzahl(r.ok, 'Antwort', 'Antworten')} wie empfohlen verschickt.${r.uebersprungen ? ` ${r.uebersprungen} übersprungen — die beantwortest du einzeln.` : ''}${r.fehler.length ? ` Nicht geklappt: ${r.fehler.join('; ')}` : ''}`);
+      setFrage(false); fertig();
+    } catch (x: any) { setMeldung(x.message); } finally { setLaeuft(false); }
+  };
+  return (
+    <div className="thema-gruppe">
+      <div className="thema-kopf">
+        <p className="gruppe-titel">{thema} · {karten.length}</p>
+        {passend.length > 1 && !frage && <button type="button" className="knopf leise klein" onClick={() => setFrage(true)}>Alle {passend.length} wie empfohlen …</button>}
+      </div>
+      {frage && (
+        <div className="bestaetigen" role="alertdialog" aria-label={`Alle ${passend.length} wie empfohlen beantworten?`}>
+          <p>{mehrzahl(passend.length, 'Frage', 'Fragen')} zu „{thema}“ mit der jeweiligen Empfehlung beantworten? Jede Antwort geht an ihre Quelle (meist den Unter-Chat, der gefragt hat).</p>
+          <ul className="klein">{passend.map((k) => <li key={k.id}>{k.titel} — <i>{k.empfehlung}</i></li>)}</ul>
+          <div className="antworten">
+            <button type="button" className="knopf haupt" disabled={laeuft} onClick={alle}>{laeuft ? 'Sendet …' : 'Ja, alle so'}</button>
+            <button type="button" className="knopf leise" disabled={laeuft} onClick={() => setFrage(false)}>Abbrechen</button>
+          </div>
+        </div>
+      )}
+      {meldung && <p className="ok" role="status">{meldung}</p>}
+      <div className="karten">{karten.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div>
     </div>
   );
 }

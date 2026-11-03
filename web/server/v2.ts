@@ -4,7 +4,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import type { User } from './auth.ts';
-import { fragenAus, type Frage } from './entscheidungsseite.ts';
+import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungsseite.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
 import { rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite } from './v2kern.ts';
@@ -44,6 +44,8 @@ export interface V2Deps {
   /** D5/C2: automatisch Geschlossenes der letzten 7 Tage (sichtbar) und wieder öffnen (nur eigene, nur automatisch geschlossene). */
   geschlossen: (u: User) => Promise<{ id: string; titel: string; grund: string; at: Date }[]>;
   wiederOeffnen: (u: User, id: string) => Promise<boolean>;
+  /** S15: „Alle wie empfohlen“ — dieselbe Sammel-Logik wie die alte Werkbank (main.ts, POST /api/entscheidungen/fragen/alle). */
+  alleEmpfohlen: (u: User, ids: string[], nur: (f: Frage) => boolean) => Promise<{ ok: number; fehler: string[] }>;
 }
 
 /** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
@@ -120,6 +122,19 @@ export function registerV2(on: On, d: V2Deps) {
     const alle = karten(d, fragen, ib.eintraege, [...oben, ...rest]);
     const geschlossen = (await d.geschlossen(u).catch((e) => { d.log('v2 geschlossen fehler', { user: u.id, error: String(e?.message ?? e).slice(0, 160) }); return []; })).map((g) => ({ id: g.id, titel: kurz(g.titel, 140), grund: kurz(g.grund, 240), wann: g.at }));
     send(d, res, { zahl: inboxZahl(ib.eintraege), oben: alle.slice(0, oben.length), rest: alle.slice(oben.length), aufraeumen: aufraeumen(d, sonstiges), geschlossen, at: new Date() });   // zahl = oben + rest + aufraeumen (Test); geschlossen zählt nicht
+  });
+
+  // --- Alle wie empfohlen (S15): nur gesehene Entscheidungen mit Empfehlung, die hier beantwortet werden (nie Freigaben, B4) ---
+  on('POST', /^\/api\/v2\/alle-empfohlen$/, async (req, res) => {
+    const u = await d.needUser(req);
+    const b = await d.body(req, 64 * 1024);
+    const gesehen = new Set<string>((Array.isArray(b.ids) ? b.ids : []).map(String).slice(0, 100));
+    if (!gesehen.size) throw err(400, 'Keine Fragen gewählt.');
+    const fragen = fragenAus((await d.inboxFuer(u)).eintraege).fragen.filter((f) => gesehen.has(f.id) && antwortWeg(f) === 'hier' && empfohlenBeantwortbar(f));
+    if (!fragen.length) throw err(400, 'Keine dieser Fragen lässt sich wie empfohlen beantworten — bitte einzeln.');
+    const r = await d.alleEmpfohlen(u, fragen.map((f) => f.id), (f) => antwortWeg(f) === 'hier');   // innen nochmal geprüft (Pass C)
+    d.log('v2 alle wie empfohlen', { user: u.id, n: r.ok, ids: fragen.map((f) => f.id) });
+    send(d, res, { ok: r.ok, fehler: r.fehler, uebersprungen: gesehen.size - fragen.length });
   });
 
   // --- Wieder öffnen (C2): eine automatisch geschlossene Frage zurück in die Liste ---

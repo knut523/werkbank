@@ -1782,9 +1782,13 @@ async function fragenAntwort(u: User, b: any): Promise<any> {
 on('POST', /^\/api\/entscheidungen\/fragen\/alle$/, async (req, res) => {
   const u = await needUser(req);
   const b = await body(req, 64 * 1024);
-  const gesehen = new Set<string>((Array.isArray(b.ids) ? b.ids : []).map(String).slice(0, 200));
+  send(res, 200, await alleWieEmpfohlen(u, (Array.isArray(b.ids) ? b.ids : []).map(String)));
+});
+/** Rumpf von „Alle wie empfohlen“ — auch für 2.0 (S15), damit es genau eine Sammel-Logik gibt. */
+async function alleWieEmpfohlen(u: User, ids: string[], nur: (f: Frage) => boolean = () => true): Promise<{ ok: number; fehler: string[] }> {
+  const gesehen = new Set<string>(ids.slice(0, 200));
   const ib = await inboxFuer(u);
-  const fragen = fragenAus(ib.eintraege).fragen.filter((f) => gesehen.has(f.id) && empfohlenBeantwortbar(f));
+  const fragen = fragenAus(ib.eintraege).fragen.filter((f) => gesehen.has(f.id) && empfohlenBeantwortbar(f) && nur(f));
   let ok = 0; const fehler: string[] = [];
   const je = new Map<string, Frage[]>();
   for (const f of fragen) je.set(f.eintrag, [...(je.get(f.eintrag) ?? []), f]);
@@ -1795,8 +1799,8 @@ on('POST', /^\/api\/entscheidungen\/fragen\/alle$/, async (req, res) => {
       ok += fs.length;
     } catch (x: any) { fehler.push(`${fs.map((f) => f.kennung ?? f.titel.slice(0, 40)).join(', ')}: ${x?.message ?? x}`); }
   }
-  send(res, 200, { ok, fehler });
-});
+  return { ok, fehler };
+}
 const logCol = () => wb().collection('entscheidungs_log');
 async function logEntscheidung(u: User, e: any, antwort: string, durch: string, auto = false, ids: string[] = []) {
   await logCol().insertOne(logZeile(u.id, e, { antwort, durch, auto, ids }) as any);
@@ -4263,6 +4267,7 @@ registerV2(on, {
   claudeToken: getClaudeToken, bridgeUrl: cfg.bridgeUrl, altUrl: `${cfg.librechatPublicUrl}/wb`,
   gesperrt: (u, f) => !!blockedFeature(u, f === 'wissen' ? '/api/vault/' : '/api/roadmap/'),
   geschlossen: (u) => automatischGeschlossen(u.id),
+  alleEmpfohlen: alleWieEmpfohlen,
   wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },
 });
 const V2_DIST = appDist(WEB_DIR);

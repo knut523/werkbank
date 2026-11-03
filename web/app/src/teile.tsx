@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import MarkdownIt from 'markdown-it';
 import { schicke, hole, type Karte, type Link } from './api.ts';
 import { useApp } from './kontext.ts';
-import { chatFrage, istIntern } from './format.ts';
+import { chatBesprechen, chatFrage, istIntern } from './format.ts';
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
 const linkOpen = md.renderer.rules.link_open ?? ((t, i, o, _e, s) => s.renderToken(t, i, o));
@@ -118,6 +118,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
   const app = useApp();
   const [modus, setModus] = useState<'zu' | 'anders'>('zu');
   const [text, setText] = useState('');
+  const [notiz, setNotiz] = useState<string | null>(null);   // S15: „Ja, so“ mit kurzer Notiz
   const [laeuft, setLaeuft] = useState(false);
   const [fehler, setFehler] = useState<string | null>(null);
   const [fertig, setFertig] = useState<string | null>(null);
@@ -129,7 +130,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
     setLaeuft(true); setFehler(null);
     try {
       const r = await schicke<{ ziel: string | null; spaeter: boolean }>('/api/v2/antwort', { id: k.id, antwort, text: t.trim() });
-      setFertig(r.spaeter ? 'Zurückgestellt — kommt morgen wieder.' : `Ging an ${r.ziel ?? 'die Quelle'}: ${antwort === 'ja' ? `„Ja, so“${k.empfehlung ? ` (${k.empfehlung})` : ''}` : antwort === 'nein' ? '„Nein“' : `„${t.trim()}“`}`);
+      setFertig(r.spaeter ? 'Zurückgestellt — kommt morgen wieder.' : `Ging an ${r.ziel ?? 'die Quelle'}: ${antwort === 'ja' ? `„Ja, so“${k.empfehlung ? ` (${k.empfehlung})` : ''}${t.trim() ? ` mit Notiz „${t.trim()}“` : ''}` : antwort === 'nein' ? '„Nein“' : `„${t.trim()}“`}`);
       beantwortet?.();
     } catch (e: any) { setFehler(e.message); } finally { setLaeuft(false); }
   }
@@ -163,12 +164,22 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
           </div>
         </div>
       ) : (
-        <div className="antworten">
-          {k.antworten.filter((a) => a !== 'spaeter').map((a) => (
-            <button type="button" key={a} className={`knopf${a === 'ja' ? ' haupt' : ''}`} disabled={laeuft} onClick={() => (a === 'anders' ? setModus('anders') : antworten(a))}>{a === 'ja' && laeuft ? 'Sendet …' : ANTWORT_TEXT[a]}</button>
-          ))}
-          {k.antworten.includes('spaeter') && <button type="button" className="knopf leise klein" disabled={laeuft} onClick={() => antworten('spaeter')}>Später</button>}
-        </div>
+        <>
+          {notiz !== null && (
+            <div className="anders">
+              <label className="klein" htmlFor={`notiz-${k.id}`}>Notiz zu „Ja, so“ (geht mit an {k.quelle || 'die Quelle'})</label>
+              <textarea id={`notiz-${k.id}`} rows={2} value={notiz} maxLength={2000} onChange={(e) => setNotiz(e.target.value)} placeholder="z. B. „aber erst nach dem Release“" autoFocus />
+            </div>
+          )}
+          <div className="antworten">
+            {k.antworten.filter((a) => a !== 'spaeter').map((a) => (
+              <button type="button" key={a} className={`knopf${a === 'ja' ? ' haupt' : ''}`} disabled={laeuft} onClick={() => (a === 'anders' ? setModus('anders') : antworten(a, a === 'ja' ? notiz ?? '' : ''))}>{a === 'ja' && laeuft ? 'Sendet …' : a === 'ja' && notiz?.trim() ? 'Ja, so — mit Notiz' : ANTWORT_TEXT[a]}</button>
+            ))}
+            {k.antworten.includes('ja') && notiz === null && <button type="button" className="knopf leise klein" disabled={laeuft} onClick={() => setNotiz('')}>+ Notiz</button>}
+            {k.antworten.includes('spaeter') && <button type="button" className="knopf leise klein" disabled={laeuft} onClick={() => antworten('spaeter')}>Später</button>}
+            <button type="button" className="knopf leise klein" onClick={() => app.chat(chatBesprechen(k.titel, k.empfehlung, k.id))}>Im Chat besprechen</button>
+          </div>
+        </>
       )}
       {fehler && <p className="fehlertext" role="alert">{fehler}</p>}
       <div className="karte-fuss">

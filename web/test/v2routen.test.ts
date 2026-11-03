@@ -16,6 +16,7 @@ const eintraege = [
 const antworten: any[] = [];
 let gesperrt = false;
 const geoeffnet: string[] = [];
+const sammel: string[] = [];
 const deps: V2Deps = {
   needUser: async (req: any) => req.u, body: async (req: any) => req.b, send: (res: any, status, b) => { res.status = status; res.b = b; },
   inboxFuer: async () => ({ eintraege }), unterchatListe: async () => ({ zeilen: [] }), erledigtDaten: async () => ({ straenge: [] }),
@@ -28,6 +29,7 @@ const deps: V2Deps = {
   wienDatum: () => '2026-11-03', claudeToken: async () => null, bridgeUrl: 'http://b', altUrl: 'http://alt/wb', log: () => {},
   gesperrt: () => gesperrt,
   geschlossen: async (u) => (u.id === 'k' ? [{ id: 'q-zu1', titel: 'Kohorte laufender Monat?', grund: 'im Bericht als entschieden vermerkt (D1): angenommen', at: new Date() }] : []),
+  alleEmpfohlen: async (_u, ids, nur) => { assert.equal(nur({ art: 'push', klasse: 'freigabe' } as any), false, 'innen: Freigabe nie'); sammel.push(...ids); return { ok: ids.length, fehler: [] }; },
   wiederOeffnen: async (u, id) => { geoeffnet.push(`${u.id}:${id}`); return u.id === 'k' && id === 'q-zu1'; },
 };
 registerV2(on, deps);
@@ -112,4 +114,20 @@ test('S13: Startansicht je Rolle — Knut leitet, Christoph prüft (mehr PRs), L
   assert.equal((await rufe('GET', '/api/v2/start?teil=oben', LISA)).b.rolle, 'team');
   const c = await rufe('GET', '/api/v2/start', CHRISTOPH);
   assert.equal(c.b.rolle, 'reviewer'); assert.equal(c.b.admin, false);
+});
+
+test('S15: „Alle wie empfohlen“ nimmt nur gesehene Entscheidungen mit Empfehlung, die hier beantwortet werden — nie Freigaben, nie Unbekanntes', async () => {
+  const r = await rufe('POST', '/api/v2/alle-empfohlen', ADMIN, { ids: ['q-aaaaaa', 'p-abcd1234-1234567', 'gibtsnicht'] });
+  assert.equal(r.status, 200);
+  assert.deepEqual(sammel, ['q-aaaaaa'], 'nur die Entscheidung mit Empfehlung');
+  assert.equal(r.b.ok, 1); assert.equal(r.b.uebersprungen, 2);
+  assert.equal((await rufe('POST', '/api/v2/alle-empfohlen', ADMIN, { ids: [] })).status, 400);
+  assert.equal((await rufe('POST', '/api/v2/alle-empfohlen', ADMIN, { ids: ['p-abcd1234-1234567'] })).status, 400, 'nur Freigaben: nichts zu tun');
+});
+
+test('S15: „Ja, so“ mit Notiz — der Text geht mit der Ja-Antwort an die bestehende Antwortlogik', async () => {
+  const n = antworten.length;
+  const r = await rufe('POST', '/api/v2/antwort', ADMIN, { id: 'q-aaaaaa', antwort: 'ja', text: 'aber erst nach dem Release' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(antworten.slice(n), [{ id: 'q-aaaaaa', antwort: 'ja', text: 'aber erst nach dem Release' }]);
 });

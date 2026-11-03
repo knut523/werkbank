@@ -33,3 +33,8 @@ export const mehrzahl = (n: number, eins: string, viele: string) => (n === 1 ? `
 export function chatFrage(titel: string, worum: string): string {
   return `Was ist das, und was soll ich tun? „${titel}“${worum ? ` — ${worum}` : ''}`.slice(0, 1500);
 }
+
+/** Vorbelegung „Im Chat besprechen“ an einer Entscheidung (S15): der Chat kennt Titel, Empfehlung und Kennung. */
+export function chatBesprechen(titel: string, empfehlung: string | null, id: string): string {
+  return `Lass uns diese Entscheidung besprechen, bevor ich antworte (${id}): „${titel}“${empfehlung ? ` — Empfehlung: ${empfehlung}` : ''}. Was spricht dafür, was dagegen?`.slice(0, 1500);
+}
