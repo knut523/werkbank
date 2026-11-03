@@ -267,7 +267,14 @@ Aufwand in Personentagen eines Agenten-Strangs (PT); Risiko = was bricht, wenn e
 
 **Empfehlung a)** für Lesen und Entscheiden; b) bleibt als Weg für Personen mit eigener Agentenarbeit.
 
+**Entschieden (Knut 03.11. ~23 Uhr, D8): b) persönlich.** Jede Person hat ihre eigene Instanz, keine geteilte; das System richtet nur ein (`scripts/team-install.sh`). Das Gemeinsame — Wissen, Entscheidungen, Register — liegt im Vault. Lesen ohne eigenes Claude-Abo bleibt in der eigenen Instanz möglich. Folgen für den Bau:
+- Die Rolle (Startansicht) hängt nicht am Admin-Flag — in der eigenen Instanz ist jede Person Admin. Reihenfolge: Einstellung `WERKBANK_ROLLE` (setzt team-install: `leitung` · `reviewer` · `team`) → sonst aus den Daten: Admin **mit** Claude-Zugang = leitung, GitHub-Name bekannt = reviewer, sonst team.
+- Team-Freigaben (`WERKBANK_TEAM_FEATURES`) bleiben für Gast-Konten in einer Instanz gültig (Test-Instanz), verlieren aber an Gewicht.
+- Option a) (gemeinsame Instanz mit Rechten je Rolle) entfällt; C8/E9 bleiben je Instanz.
+
 ### E7 Modellzugang (Abo-Token-Risiko) — **Knuts Entscheidung, Halt**
+
+**Entschieden (Knut 03.11.): bleibt wie er ist (a).** Keine Umstellung, nichts dazu bauen.
 
 | Option | Aufwand | Risiko |
 |---|---|---|
@@ -331,7 +338,7 @@ An Knut — **angenommen, Knut kann widersprechen** (gebaut wird mit der Empfehl
 - D1–D4 aus Runde 1 (Bericht 436): Grundsätze, Team-Freigaben, Live-Ausrollen, Hauptchat-Umstieg — Empfehlungen gelten.
 - D6 Alte Funktionen: **verlinken (E8 a)**, nichts streichen ohne Knut.
 - D7 Handy-Benachrichtigung (gibt es heute nicht): **nicht in M0b**, Vorschlag M2.
-- D8 Team: **gemeinsame Instanz für Lesen und Entscheiden (E6 a)**, Instanz je Person bleibt möglich.
+- D8 Team: ~~gemeinsame Instanz (E6 a)~~ → **Knut: eigene Instanz je Person (E6 b), Gemeinsames im Vault**.
 - D9 Chat-Weg: **schrittweise (E1 b)**.
 - D10 Paketschnitt und Datenmodell: **E2 a in M3, E3 a in M4**.
 
@@ -490,11 +497,26 @@ Legende: **V2** = in der 2.0 gebaut (Schnitt) · **alt** = erreichbar über Mehr
 
 | D | Frage | Empfehlung (angenommen) |
 |---|---|---|
-| D1–D5 | aus Runde 1 (Grundsätze, Team-Freigaben, Live-Ausrollen, Hauptchat-Umstieg, Fragen aus dem Bericht schließen) | **Knut 03.11.: D1, D2, D3, D5 akzeptiert**; D4 offen |
-| D6 | Alte Funktionen streichen oder verlinken? | verlinken (E8 a); Streichen nach C12 |
-| D7 | Handy-Benachrichtigung bauen? | ja, in M2 |
-| D8 | Team: gemeinsame Instanz oder je Person? | gemeinsame für Lesen/Entscheiden (E6 a) |
-| D9 | Chat-Weg | schrittweise (E1 b) |
-| D10 | Paketschnitt, Datenmodell | E2 a in M3, E3 a in M4 |
-| D11 | Sandbox Stufe 2: eigener Unix-Nutzer (Box-Einrichtung) oder Container? | eigener Unix-Nutzer (E13 a), vor M2 |
-| E7 | Modellzugang (Abo/API/Bedrock EU) | **keine Annahme — Halt, Knut entscheidet** |
+| D1–D5 | aus Runde 1 (Grundsätze, Team-Freigaben, Live-Ausrollen, Hauptchat-Umstieg, Fragen aus dem Bericht schließen) | **Knut 03.11.: alle akzeptiert** (D4 ~23 Uhr) |
+| D6 | Alte Funktionen streichen oder verlinken? | verlinken (E8 a); Streichen nach C12 — **Knut: akzeptiert** |
+| D7 | Handy-Benachrichtigung bauen? | ja, in M2 — **Knut: akzeptiert** |
+| D8 | Team: gemeinsame Instanz oder je Person? | **Knut: je Person, persönlich (E6 b); Gemeinsames im Vault** |
+| D9 | Chat-Weg | schrittweise (E1 b) — **Knut: akzeptiert** |
+| D10 | Paketschnitt, Datenmodell | E2 a in M3, E3 a in M4 — **Knut: akzeptiert** |
+| D11 | Sandbox Stufe 2: eigener Unix-Nutzer (Box-Einrichtung) oder Container? | eigener Unix-Nutzer (E13 a), vor M2 — **Knut: akzeptiert, nur vorbereiten, nicht einrichten** |
+| E7 / D12 | Modellzugang (Abo/API/Bedrock EU) | **Knut: bleibt wie er ist, nichts bauen** |
+
+## 18. Nacht 03./04.11. — Auftrag und Schnitte (nach Knuts Antworten)
+
+Knut ~23 Uhr: weiter bauen, Fokus UX und reibungslose Abläufe für Knut und alle anderen. Reihenfolge:
+
+| Schnitt | Was | DoD |
+|---|---|---|
+| S20 | Rolle aus Einrichtung/Daten statt Admin-Flag (D8), team-install setzt `WERKBANK_ROLLE` | Test: Admin ohne Claude-Zugang = team, Admin mit Zugang = leitung, Einstellung schlägt Ableitung |
+| S21 | Zahl ehrlich klein: D5 erkennt erledigte/überholte Fragen sicher (mit Nachweis), alte Budget-/Deckel-Fragen gesammelt | Test je Regel, Trockenlauf auf der Datenkopie mit Liste „würde schließen + Grund“, nichts fälschlich (Stichprobe von Hand) |
+| S11 | Themen quer über Entscheidungen, Chats, Dokumente, PRs | eine Seite je Thema, Test, Screenshot |
+| S22 | Befunde Runde 3: Christoph B2–B5, Knut B1/B6/B7/B10, Lisa „Mehr dazu“ deutsch, Vorlagen im 2.0-Chat | je Befund Test oder Screenshot-Beleg |
+| S23 | Kern-Abläufe end-to-end gemessen (entscheiden, Unter-Chat starten/verfolgen, PR-Lage/Review, Dokument finden/teilen, Tag) | Schritte und Sekunden vorher/nachher (Messskript) |
+| S18b | Persona-Runde 4, unabhängige Läufe | Messlatte §7a je Rolle |
+
+D11 vorbereiten: Runbook (unten, §19) — eingerichtet wird nichts.
