@@ -164,6 +164,7 @@ export interface LivePrLite { pr: string; repo: string; number: number; title: s
 export function wartetAuf(p: LivePrLite, names: Record<string, string>): string[] {
   const out: string[] = [];
   const add = (n: string) => { const v = names[n.toLowerCase()] ?? n; if (v && !out.includes(v)) out.push(v); };
+  if (p.turn?.role === 'merge') return [];   // freigegeben: wartet auf den Merge, nicht mehr auf angefragte Reviewer (Persona Christoph)
   const who = String(p.turn?.who ?? '').trim();
   if (who && !/\(/.test(who) && p.turn?.role !== 'merge') for (const n of who.split(/\s*,\s*/)) add(n);
   for (const r of p.requested ?? []) add(String(r));

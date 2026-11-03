@@ -121,6 +121,7 @@ test('Heute erledigt: nur Fertiges — was noch auf eine Antwort wartet, fehlt; 
 test('wartet auf: Person aus turn und angefragten Reviewern; Merge/niemand sind keine Personen', () => {
   assert.deepEqual(wartetAuf({ turn: { who: 'Knut', role: 'reviewer', why: 'Review angefragt' }, requested: ['bizarrochris'] } as any, { bizarrochris: 'Christoph' }), ['Knut', 'Christoph']);
   assert.deepEqual(wartetAuf({ turn: { who: 'Merge (Mensch)', role: 'merge', why: 'freigegeben' }, requested: [] } as any, {}), []);
+  assert.deepEqual(wartetAuf({ turn: { who: 'Merge (Mensch)', role: 'merge', why: 'freigegeben' }, requested: ['bizarrochris'] } as any, { bizarrochris: 'Christoph' }), [], 'freigegeben + noch angefragt: wartet nicht auf Christoph');
   assert.deepEqual(wartetAuf({ turn: { who: 'Reviewer (niemand angefragt)', role: 'reviewer', why: '' }, requested: [] } as any, {}), []);
   assert.deepEqual(wartetAuf({ turn: { who: 'Knut, Christoph', role: 'reviewer', why: '' }, requested: [] } as any, {}), ['Knut', 'Christoph']);
 });

@@ -170,10 +170,13 @@ export function ArbeitDetail({ id }: { id: string }) {
 
 export function Prs({ wer }: { wer: string | null }) {
   const pfad = `/api/v2/prs${wer ? `?wer=${encodeURIComponent(wer)}` : ''}`;
+  const [such, setSuch] = useState('');
   const { d, fehler, neu } = useDaten<{ gesperrt?: boolean; wer: string; ich: string; personen: { name: string; anzahl: number }[]; zeilen: PrZeile[]; stand: string | null }>(pfad);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   if (d.gesperrt) return <div className="seite"><h1>PRs</h1><p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p></div>;
+  const suche = such.trim().toLowerCase();
+  const zeilen = suche ? d.zeilen.filter((p) => `${p.pr} ${p.titel}`.toLowerCase().includes(suche.replace(/^#/, ''))) : d.zeilen;
   const wahl = (n: string) => { const url = n === d.ich ? '/v2/prs' : `/v2/prs?wer=${encodeURIComponent(n)}`; history.pushState(null, '', url); window.dispatchEvent(new PopStateEvent('popstate')); };
   return (
     <div className="seite">
@@ -184,8 +187,11 @@ export function Prs({ wer }: { wer: string | null }) {
         <select id="wer" value={d.wer} onChange={(e) => wahl(e.target.value)}>
           {d.personen.map((p) => <option key={p.name} value={p.name}>{p.name === 'alle' ? 'alle (offen)' : p.name === d.ich ? `mich (${p.name})` : p.name} · {p.anzahl}</option>)}
         </select>
+        <label htmlFor="pr-such" className="unsichtbar">PR suchen</label>
+        <input id="pr-such" type="search" value={such} onChange={(e) => setSuch(e.target.value)} placeholder="Nummer oder Titel, z. B. 268" />
       </div>
-      {d.zeilen.length ? <ul className="liste">{d.zeilen.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul> : <p className="leer">{d.wer === d.ich ? 'Kein PR wartet auf dich.' : `Kein PR wartet auf ${d.wer}.`}</p>}
+      {zeilen.length ? <ul className="liste">{zeilen.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul>
+        : suche ? <p className="leer">Kein PR in dieser Liste passt zu „{such}“ — schalte oben auf „alle“.</p> : <p className="leer">{d.wer === d.ich ? 'Kein PR wartet auf dich.' : `Kein PR wartet auf ${d.wer}.`}</p>}
     </div>
   );
 }
@@ -207,6 +213,11 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
         {d.agent?.bericht && <a className="verweis" href={d.agent.bericht}>Bericht des Reviews</a>}
         <button type="button" className="knopf leise klein" onClick={() => app.chat(chatFrage(`PR ${d.pr}`, d.titel))}>Im Chat nachfragen</button>
       </div>
+      <Abschnitt id="p-menschen" titel="Reviews von Menschen" erklaerung="Wer den PR auf GitHub geprüft hat und mit welchem Ergebnis.">
+        {d.reviews.length ? <ul className="liste">{d.reviews.map((r, i) => <li key={i} className="zeile"><div className="zeile-haupt"><b>{r.wer}</b> · {ZUSTAND[r.zustand] ?? r.zustand}</div><div className="zeile-rechts"><span className="zeit">{wann(r.at)}</span></div></li>)}</ul> : <p className="leer">Noch kein Review von einem Menschen.</p>}
+        {d.offeneThreads > 0 && <p className="klein">{mehrzahl(d.offeneThreads, 'offener Kommentar-Faden', 'offene Kommentar-Fäden')} auf GitHub.</p>}
+        {d.autor && <p className="klein gedimmt">Geschrieben von {d.autor}.</p>}
+      </Abschnitt>
       <Abschnitt id="p-agent" titel="Review des Agenten" erklaerung="Was der Review-Agent zu diesem PR geschrieben hat — derselbe Text, der auf GitHub steht. Du brauchst dafür kein GitHub-Konto.">
         {d.agent?.text ? (
           <div className="kasten">
@@ -215,11 +226,6 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
             {d.agent.gepostet && <p className="klein"><a href={d.agent.gepostet} target="_blank" rel="noopener noreferrer">So steht es auf GitHub ↗</a></p>}
           </div>
         ) : <p className="leer">{!d.agent ? 'Für diesen PR gibt es noch kein Review des Agenten.' : d.agent.status !== 'fertig' ? `Das Review läuft noch (${d.agent.status}).` : d.agent.entwurf ? 'Das Review ist fertig, aber noch nicht auf GitHub veröffentlicht — Knut gibt es frei.' : 'Das Review ist fertig, aber ohne Text.'}</p>}
-      </Abschnitt>
-      <Abschnitt id="p-menschen" titel="Reviews von Menschen" erklaerung="Wer den PR auf GitHub geprüft hat und mit welchem Ergebnis.">
-        {d.reviews.length ? <ul className="liste">{d.reviews.map((r, i) => <li key={i} className="zeile"><div className="zeile-haupt"><b>{r.wer}</b> · {ZUSTAND[r.zustand] ?? r.zustand}</div><div className="zeile-rechts"><span className="zeit">{wann(r.at)}</span></div></li>)}</ul> : <p className="leer">Noch kein Review von einem Menschen.</p>}
-        {d.offeneThreads > 0 && <p className="klein">{mehrzahl(d.offeneThreads, 'offener Kommentar-Faden', 'offene Kommentar-Fäden')} auf GitHub.</p>}
-        {d.autor && <p className="klein gedimmt">Geschrieben von {d.autor}.</p>}
       </Abschnitt>
     </div>
   );

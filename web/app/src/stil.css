@@ -137,6 +137,8 @@ p { margin: 0 0 var(--s1); }
 .filter { display: flex; align-items: center; gap: var(--s1); margin-bottom: var(--s2); }
 .filter label { white-space: nowrap; font-weight: 600; }
 .filter select { max-width: 320px; }
+.filter { flex-wrap: wrap; }
+.filter input { flex: 1 1 180px; font: inherit; padding: 10px 12px; border: 1px solid #cdd3da; border-radius: 10px; }
 .suche { margin-bottom: var(--s2); }
 .begriffe { display: grid; gap: 12px; margin: 0; }
 .begriffe dt { font-weight: 700; margin-bottom: 4px; }
@@ -152,7 +154,9 @@ p { margin: 0 0 var(--s1); }
 .md code { background: var(--grund); padding: 1px 4px; border-radius: 4px; font-size: .9em; }
 .md pre code { padding: 0; }
 .md table { border-collapse: collapse; display: block; overflow-x: auto; font-size: .9rem; }
-.md th, .md td { border: 1px solid var(--linie); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md th, .md td { border: 1px solid var(--linie); padding: 4px 8px; text-align: left; vertical-align: top; min-width: 7rem; }
+.md th:first-child, .md td:first-child { min-width: 5rem; }
+.md td code { overflow-wrap: normal; word-break: break-all; }
 .md img { max-width: 100%; height: auto; border-radius: 8px; }
 .md blockquote { margin: 0 0 .6em; padding-left: 12px; border-left: 3px solid var(--linie); color: var(--gedimmt); }
 .md.klein { font-size: .92rem; }
