@@ -41,3 +41,13 @@ test('istIntern, mehrzahl, chatFrage', () => {
   assert.equal(mehrzahl(3, 'Frage', 'Fragen'), '3 Fragen');
   assert.match(chatFrage('Titel', 'Worum'), /^Was ist das.*„Titel“ — Worum$/);
 });
+
+test('S22 (B5): Tabellenzellen bekommen ihren Spaltennamen für die Handy-Ansicht', async () => {
+  const { tabellenBeschriften } = await import('../src/format.ts');
+  const h = '<table>\n<thead>\n<tr>\n<th>#</th>\n<th>Befund</th>\n<th style="text-align:right">Schwere</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>1</td>\n<td>Status <code>x</code></td>\n<td style="text-align:right">mittel</td>\n</tr>\n</tbody>\n</table>';
+  const o = tabellenBeschriften(h);
+  assert.match(o, /<td data-label="#">1<\/td>/);
+  assert.match(o, /<td data-label="Befund">Status <code>x<\/code><\/td>/);
+  assert.match(o, /<td style="text-align:right" data-label="Schwere">mittel<\/td>/);
+  assert.equal(tabellenBeschriften('<p>keine Tabelle</p>'), '<p>keine Tabelle</p>');
+});

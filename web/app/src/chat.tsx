@@ -7,7 +7,7 @@ import { useApp } from './kontext.ts';
 import { Md } from './teile.tsx';
 
 interface Nachricht { id: string; rolle: 'ich' | 'assistent'; text: string; at: string; status: string; fehler?: string | null }
-interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string }[]; conv?: string | null }
+interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string; vorlage?: string | null }[]; conv?: string | null; vorlagen?: { name: string; label: string; beschreibung: string }[] }
 
 import { OLAF_KURZ, OLAF_MEHR } from './begriffe.ts';
 
@@ -17,6 +17,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
   const [conv, setConv] = useState<string | null>(null);
   const [stand, setStand] = useState<Stand | null>(null);
   const [text, setText] = useState('');
+  const [vorlage, setVorlage] = useState('');   // S22: Vorlage für einen neuen 2.0-Chat
   const [sendet, setSendet] = useState(false);
   const [fehler, setFehler] = useState<string | null>(null);
   const [warten, setWarten] = useState(0);   // > 0: nach dem Senden nachlesen, bis die Antwort da ist (Hauptchat)
@@ -47,7 +48,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
     if (!t) return;
     setSendet(true); setFehler(null);
     try {
-      const r = await schicke<{ conv?: string }>('api/v2/chat', { ziel, text: t, conv: ziel === 'eigen' ? conv : undefined });
+      const r = await schicke<{ conv?: string }>('api/v2/chat', { ziel, text: t, conv: ziel === 'eigen' ? conv : undefined, ...(ziel === 'eigen' && !conv && vorlage ? { vorlage } : {}) });
       setText('');
       if (ziel === 'eigen' && r.conv) setConv(r.conv);
       setWarten(ziel === 'hauptchat' ? 80 : 4);
@@ -95,6 +96,13 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
 
       {!ohneZugang && !(ziel === 'hauptchat' && stand && !stand.hauptchat) && (
         <form className="chat-eingabe" onSubmit={(e) => { e.preventDefault(); void senden(); }}>
+          {ziel === 'eigen' && !conv && !!stand?.vorlagen?.length && (
+            <label className="klein vorlage-wahl">Vorlage (wie in LibreChat, optional): <select value={vorlage} onChange={(e) => setVorlage(e.target.value)}>
+              <option value="">keine — freier Chat</option>
+              {stand.vorlagen.map((v) => <option key={v.name} value={v.name} title={v.beschreibung}>{v.label}</option>)}
+            </select></label>
+          )}
+          {ziel === 'eigen' && conv && stand?.chats?.find((c) => c.conv === conv)?.vorlage && <p className="klein gedimmt">Vorlage: {stand.vorlagen?.find((v) => v.name === stand.chats?.find((c) => c.conv === conv)?.vorlage)?.label ?? 'gewählt'}</p>}
           <label htmlFor="chat-text" className="unsichtbar">Nachricht</label>
           <textarea id="chat-text" rows={3} value={text} maxLength={8000} onChange={(e) => setText(e.target.value)} placeholder="Frag etwas …"
             onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void senden(); } }} />

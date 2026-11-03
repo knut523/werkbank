@@ -92,3 +92,21 @@ test('Adapter (B5): nur v2librechat.ts greift auf LibreChats Datenbank zu; kein 
     assert.doesNotMatch(t, /createLibreChat|from '\.\/orchestrator\.ts'/, `${f}: Schreiben in LibreChat nur über den Adapter`);
   }
 });
+
+test('S22: Vorlage im 2.0-Chat — gewählter Vorlagentext geht als System-Nachricht an die Brücke, bei jedem Zug dieses Chats', async () => {
+  const uv = { ...u, id: 'u-vorlage' };
+  const b = bruecke(); b.los();
+  const deps = { bridgeUrl: 'http://bruecke', token: async () => 'sk-ant-oat01-test', fetch: b.f };
+  const r = await chat.senden(uv, { text: 'Plan für den Rechner', vorlage: { name: 'vorlage-spec', prefix: 'Nutze den Skill `plan-to-pr`.' } }, deps);
+  assert.deepEqual(b.aufrufe[0].body.messages.map((m: any) => m.role), ['system', 'user']);
+  assert.equal(b.aufrufe[0].body.messages[0].content, 'Nutze den Skill `plan-to-pr`.');
+  await bis(async () => (await chat.verlauf(uv, r.conv)).some((n) => n.status === 'fertig' && n.rolle === 'assistent'));
+  const b2 = bruecke(); b2.los();
+  await chat.senden(uv, { text: 'weiter', conv: r.conv }, { ...deps, fetch: b2.f });
+  assert.equal(b2.aufrufe[0].body.messages[0].role, 'system', 'auch im zweiten Zug');
+  const b3 = bruecke(); b3.los();
+  const r3 = await chat.senden({ ...u, id: 'u-ohne' }, { text: 'ohne Vorlage' }, { ...deps, fetch: b3.f });
+  assert.deepEqual(b3.aufrufe[0].body.messages.map((m: any) => m.role), ['user']);
+  assert.ok((await chat.meineChats({ ...u, id: 'u-vorlage' } as any)).some((c: any) => c.vorlage === 'vorlage-spec'));
+  void r3;
+});

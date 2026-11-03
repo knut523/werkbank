@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import MarkdownIt from 'markdown-it';
 import { schicke, hole, type Karte, type Link } from './api.ts';
 import { useApp } from './kontext.ts';
-import { chatBesprechen, chatFrage, istIntern, rel } from './format.ts';
+import { chatBesprechen, chatFrage, istIntern, rel, tabellenBeschriften } from './format.ts';
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
 const linkOpen = md.renderer.rules.link_open ?? ((t, i, o, _e, s) => s.renderToken(t, i, o));
@@ -11,7 +11,7 @@ md.renderer.rules.link_open = (t, i, o, e, s) => { const h = t[i].attrGet('href'
 
 /** Markdown sicher rendern (kein Roh-HTML). */
 export function Md({ text, klein }: { text: string; klein?: boolean }) {
-  return <div className={`md${klein ? ' klein' : ''}`} dangerouslySetInnerHTML={{ __html: md.render(text || '') }} />;
+  return <div className={`md${klein ? ' klein' : ''}`} dangerouslySetInnerHTML={{ __html: tabellenBeschriften(md.render(text || '')) }} />;
 }
 
 export function Verweis({ l }: { l: Link }) {
@@ -26,17 +26,22 @@ export function Verweise({ links }: { links: Link[] }) {
 }
 
 /** „Was ist das?“ — klappt sofort eine Erklärung aus den Daten auf; „Im Chat fragen“ öffnet den Chat mit vorbereitetem Text. */
-export function WasIstDas({ zeilen, frage }: { zeilen: [string, string][]; frage: string }) {
+export function WasIstDas({ zeilen, frage, strang }: { zeilen: [string, string][]; frage: string; strang?: string | null }) {
   const [offen, setOffen] = useState(false);
+  const [stand, setStand] = useState<{ titel: string; stand: string } | null | 'laedt'>(null);
   const app = useApp();
   const feld = useRef<HTMLDivElement>(null);
   useEffect(() => { if (offen) feld.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [offen]);   // Handy: nicht unter dem Rand öffnen
+  // S22 (Knut B1): Substanz — der letzte Stand des Unter-Chats, erst beim Aufklappen geladen.
+  useEffect(() => { if (offen && strang && stand === null && app.ich.admin) { setStand('laedt'); hole<{ titel: string; stand: string }>(`api/v2/stand/${strang}`).then(setStand).catch(() => setStand({ titel: '', stand: '' })); } }, [offen, strang, app.ich.admin]);
   return (
     <div className="wid">
       <button type="button" className="knopf leise klein" aria-expanded={offen} onClick={() => setOffen(!offen)}>{offen ? 'Erklärung schließen' : 'Was ist das?'}</button>
       {offen && (
         <div className="wid-text" role="region" aria-label="Erklärung" ref={feld}>
           <dl>{zeilen.filter(([, t]) => t).map(([k, t]) => <div key={k}><dt>{k}</dt><dd>{t}</dd></div>)}</dl>
+          {stand === 'laedt' && <p className="klein gedimmt">Lädt den Stand des Unter-Chats …</p>}
+          {stand && stand !== 'laedt' && stand.stand && <div className="wid-stand"><p className="klein"><b>Zuletzt im Unter-Chat{stand.titel ? ` „${stand.titel}“` : ''}:</b></p><Md text={stand.stand} klein /></div>}
           <button type="button" className="knopf leise klein" onClick={() => app.chat(frage)}>Im Chat fragen</button>
         </div>
       )}
@@ -185,7 +190,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
       {fehler && <p className="fehlertext" role="alert">{fehler}</p>}
       <div className="karte-fuss">
         <Verweise links={k.links} />
-        <WasIstDas zeilen={k.erklaerung} frage={chatFrage(k.titel, k.erklaerung.find(([a]) => a === 'Worum es geht (ganz)')?.[1] ?? k.worum)} />
+        <WasIstDas zeilen={k.erklaerung} frage={chatFrage(k.titel, k.erklaerung.find(([a]) => a === 'Worum es geht (ganz)')?.[1] ?? k.worum)} strang={k.links.map((l) => /\/v2\/arbeit\/([0-9a-f]{8})$/.exec(l.url)?.[1]).find(Boolean) ?? null} />
       </div>
     </article>
   );

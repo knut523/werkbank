@@ -5,7 +5,7 @@ import { useApp } from './kontext.ts';
 import { Abschnitt, EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweise, Zeile } from './teile.tsx';
 import { BEGRIFFE, OLAF_KURZ } from './begriffe.ts';
 import { MEHR } from './mehr.ts';
-import { chatFrage, htmlFuerV2, mehrzahl, rel, wann } from './format.ts';
+import { chatFrage, htmlFuerV2, mehrzahl, rel, tabellenBeschriften, wann } from './format.ts';
 
 const EMPFEHLUNG: Record<string, string> = { approve: 'Agent: freigeben', 'request-changes': 'Agent: Änderungen nötig', comment: 'Agent: Anmerkungen' };
 
@@ -126,9 +126,11 @@ function SammelSchliessen({ x, fertig }: { x: Aufraeumen; fertig?: () => void })
 
 interface Ueberholt { id: string; titel: string; grund: string; beleg: string }
 const DokZeile = ({ x }: { x: Dok }) => <Zeile titel={x.titel} url={x.url} satz={x.worum} marke={{ text: x.art === 'bericht' ? 'Bericht' : 'Notiz' }} rechts={wann(x.at)} />;
+// S22 (Christoph B3): in der Liste sieht man, ob und wie der Prüf-Agent geurteilt hat — auch „prüft noch“ und „fertig, noch nicht veröffentlicht“.
+const agentMarke = (r: PrZeile['review']) => !r ? undefined : r.empfehlung ? { text: EMPFEHLUNG[r.empfehlung] ?? `Agent: ${r.empfehlung}`, ton: r.empfehlung === 'approve' ? 'gruen' : '' } : r.status !== 'fertig' ? { text: 'Agent prüft …' } : { text: r.gepostet === false ? 'Agent: Entwurf' : 'Agent-Review' };
 const PrZeileView = ({ p }: { p: PrZeile }) => (
   <Zeile titel={`${p.pr} · ${p.titel}`} url={`v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}
-    marke={p.entwurf ? { text: 'Entwurf' } : p.review?.empfehlung ? { text: EMPFEHLUNG[p.review.empfehlung] ?? p.review.empfehlung, ton: p.review.empfehlung === 'approve' ? 'gruen' : '' } : undefined} rechts={wann(p.geaendert)} />
+    marke={p.entwurf ? { text: 'Entwurf' } : agentMarke(p.review)} rechts={wann(p.geaendert)} />
 );
 
 // ---------- Entscheidungen ----------
@@ -336,7 +338,7 @@ export function Prs({ wer }: { wer: string | null }) {
 export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
   const app = useApp();
   const { d, fehler, neu } = useDaten<{ pr: string; titel: string; url: string | null; autor: string | null; offen: boolean; merge: boolean; wartetAuf: string[]; warum: string; entscheidung: string | null; offeneThreads: number; reviews: { wer: string; zustand: string; at: string }[];
-    agent: { status: string; empfehlung: string | null; text: string | null; gepostet: string | null; entwurf: boolean; at: string; bericht: string | null } | null }>(`api/v2/prs/${encodeURIComponent(repo)}/${nummer}`);
+    verlangt?: { wer: string[]; unbekannt: boolean }; agent: { status: string; empfehlung: string | null; text: string | null; kurz?: { satz: string; befunde: number } | null; gepostet: string | null; entwurf: boolean; at: string; bericht: string | null } | null }>(`api/v2/prs/${encodeURIComponent(repo)}/${nummer}`);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   const ZUSTAND: Record<string, string> = { APPROVED: 'freigegeben', CHANGES_REQUESTED: 'Änderungen verlangt', COMMENTED: 'kommentiert', DISMISSED: 'zurückgezogen' };
@@ -345,6 +347,13 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
       <p className="zurueck"><a href={(() => { try { return sessionStorage.getItem('v2-prs-liste') || 'v2/prs'; } catch { return 'v2/prs'; } })()}>← PRs</a></p>
       <h1>{d.pr} · {d.titel}</h1>
       <p className="zustand">{!d.offen ? 'Nicht mehr offen — gemergt oder geschlossen.' : d.merge ? 'Freigegeben — wartet auf den Merge (macht ein Mensch auf GitHub).' : d.wartetAuf.length ? `Wartet auf ${d.wartetAuf.join(', ')} — ${d.warum}.` : `${d.warum || 'Wartet auf niemanden'}.`}</p>
+      {d.entscheidung === 'CHANGES_REQUESTED' && <p className="zustand">Änderungen verlangt {d.verlangt?.wer.length ? `von ${d.verlangt.wer.join(', ')}` : '— laut GitHub; wer, steht nicht in unserer Kopie (älteres Review)'}.</p>}
+      {d.agent?.text && d.agent.kurz?.satz && (
+        <div className="kasten kurzurteil">
+          <p><b>Urteil des Prüf-Agenten:</b> <span className={`marke ${d.agent.empfehlung === 'approve' ? 'gruen' : 'warn'}`}>{(EMPFEHLUNG[d.agent.empfehlung ?? ''] ?? 'Agent').replace(/^Agent: /, '')}</span>{d.agent.kurz.befunde ? ` · ${mehrzahl(d.agent.kurz.befunde, 'Befund', 'Befunde')}` : ''}</p>
+          <p>{d.agent.kurz.satz} <a href="#p-agent">Ganzes Review ↓</a></p>
+        </div>
+      )}
       <div className="aktionen-zeile">
         {d.url && <a className="verweis" href={d.url} target="_blank" rel="noopener noreferrer">Auf GitHub öffnen ↗</a>}
         {d.agent?.bericht && <a className="verweis" href={rel(d.agent.bericht)}>Bericht des Reviews</a>}
@@ -409,8 +418,9 @@ export function Dokument({ vault, paket, datei }: { vault: string | null; paket:
       <div className="aktionen-zeile">
         {d.mtime ? <span className="klein gedimmt">geändert {wann(new Date(d.mtime).toISOString())}</span> : null}
         <button type="button" className="knopf leise klein" onClick={() => app.chat(`Fass mir das Dokument „${titel}“ in drei Sätzen zusammen und sag, was daran offen ist.`)}>Im Chat fragen</button>
+        <Teilen key={vault ?? `${paket}/${datei}`} titel={titel} vault={vault} />
       </div>
-      <article className="kasten md" dangerouslySetInnerHTML={{ __html: htmlFuerV2(d.html ?? `<pre>${(d.text ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!))}</pre>`) }} />
+      <article className="kasten md" dangerouslySetInnerHTML={{ __html: tabellenBeschriften(htmlFuerV2(d.html ?? `<pre>${(d.text ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!))}</pre>`)) }} />
       {d.backlinks && d.backlinks.length > 0 && (
         <Abschnitt id="d-verweise" titel="Wird erwähnt in" erklaerung="Andere Notizen, die auf diese verweisen.">
           <ul className="liste">{d.backlinks.slice(0, 12).map((b) => <Zeile key={b.path} titel={b.title} url={`v2/dokument?vault=${encodeURIComponent(b.path)}`} />)}</ul>
@@ -596,5 +606,23 @@ export function Thema({ name }: { name: string }) {
         {!d.prFrei ? <p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p> : d.prs.length ? <ul className="liste">{d.prs.map((p) => <Zeile key={p.pr} titel={`${p.pr} · ${p.titel}`} url={p.url} />)}</ul> : <p className="leer">Keine offenen PRs zu diesem Thema.</p>}
       </Abschnitt>
     </div>
+  );
+}
+
+/** S23 (Ablauf „Dokument teilen“): Link kopieren — mit Vault-Pfad, denn jede Person hat ihre eigene Instanz (D8); der Pfad gilt überall. */
+function Teilen({ titel, vault }: { titel: string; vault: string | null }) {
+  const [text, setText] = useState<string | null>(null);
+  const [ok, setOk] = useState(false);
+  const teilen = async () => {
+    const t = `${titel}\n${location.href}${vault ? `\nPfad in der Wissenssammlung: ${vault}` : ''}`;
+    setText(t);
+    try { await navigator.clipboard.writeText(t); setOk(true); } catch { setOk(false); }
+  };
+  return (
+    <>
+      <button type="button" className="knopf leise klein" onClick={teilen}>Link kopieren</button>
+      {text && (ok ? <span className="ok klein" role="status">✓ Kopiert — Titel, Link{vault ? ' und Pfad in der Wissenssammlung (gilt in jeder Werkbank)' : ''}.</span>
+        : <textarea className="teilen-text" readOnly rows={3} value={text} aria-label="Zum Kopieren markieren" onFocus={(e) => e.currentTarget.select()} />)}
+    </>
   );
 }

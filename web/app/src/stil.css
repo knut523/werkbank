@@ -160,6 +160,8 @@ p { margin: 0 0 var(--s1); }
   .md tr { border: 1px solid var(--linie); border-radius: 8px; margin-bottom: 8px; padding: 6px 8px; }
   .md tr td { border: 0; padding: 2px 0; min-width: 0; max-width: none; }
   .md td:first-child { font-weight: 600; }
+  /* S22 (Christoph B5): Spaltenname vor jedem Wert, weil der Tabellenkopf am Handy fehlt */
+  .md td[data-label]:not([data-label=""])::before { content: attr(data-label) ": "; font-weight: 600; color: var(--gedimmt); }
 }
 .md th, .md td { border: 1px solid var(--linie); padding: 4px 8px; text-align: left; vertical-align: top; min-width: 6rem; max-width: 20rem; }
 .md th:first-child, .md td:first-child { min-width: 5rem; }
@@ -215,3 +217,11 @@ p { margin: 0 0 var(--s1); }
 .filter select { flex: 1 1 40%; min-width: 0; }
 @media (min-width: 900px) { .filter select { flex: 0 1 auto; } }
 .knopf-link { background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer; }
+
+/* S22 (Knut B10): Sprungziele nicht unter den festen Kopf schieben (die Seite „rutschte“ nach Sprung-Chips) */
+[id] { scroll-margin-top: calc(var(--kopf-h) + 12px); }
+
+/* S22: Vorlagen-Wahl im 2.0-Chat */
+.vorlage-wahl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+.vorlage-wahl select { flex: 1 1 12rem; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid #cdd3da; border-radius: 8px; background: #fff; }
+.teilen-text { width: 100%; font: inherit; font-size: .85rem; margin-top: 6px; }

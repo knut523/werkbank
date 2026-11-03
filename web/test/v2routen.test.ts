@@ -24,7 +24,7 @@ const deps: V2Deps = {
   needUser: async (req: any) => req.u, body: async (req: any) => req.b, send: (res: any, status, b) => { res.status = status; res.b = b; },
   inboxFuer: async () => ({ eintraege }), unterchatListe: async () => ({ zeilen: [] }), erledigtDaten: async (_u, tag) => { tage.push(tag); return { straenge: tag === '2026-11-02' ? [{ id: 'abcd1234', titel: 'Netzentgelte', at: '2026-11-02T15:00:00Z', link: null, dokumente: [] }] : [] }; },
   fragenAntwort: async (_u, b) => { antworten.push(b); return { ok: true, ziel: 'den Unter-Chat „Rechner“' }; },
-  strang: async () => null, hauptchat: async () => null, laeuftChat: async () => false,
+  strang: async (u: any, id: string) => (u.id === 'k' && id === 'abcd1234' ? { _id: id, title: 'Rechner', lastExcerpt: 'Stand: D1 bis D3 entschieden, D4 offen — Empfehlung: regional rechnen, weil die Netzbetreiber …', paket: null } : null), hauptchat: async () => null, laeuftChat: async () => false,
   livePrs: async () => ({ map: new Map([['a#1', { pr: 'a#1', repo: 'a', number: 1, title: 'Eins', url: 'https://github.com/o/a/pull/1', turn: { who: 'Lisa', role: 'reviewer', why: 'Review angefragt' }, requested: [] }]]) }),
   githubNames: () => ({ bizarrochris: 'Christoph', knut523: 'Knut' }), letzteReviews: async () => [], reviewKommentar: () => null,
   pakete: () => [{ name: '435-x', titel: 'Bericht X', status: 'wartet', at: Date.now() }],
@@ -33,6 +33,7 @@ const deps: V2Deps = {
   gesperrt: () => gesperrt,
   geschlossen: async (u) => (u.id === 'k' ? [{ id: 'q-zu1', titel: 'Kohorte laufender Monat?', grund: 'im Bericht als entschieden vermerkt (D1): angenommen', at: new Date() }] : []),
   alleEmpfohlen: async (_u, ids, nur) => { assert.equal(nur({ art: 'push', klasse: 'freigabe' } as any), false, 'innen: Freigabe nie'); sammel.push(...ids); return { ok: ids.length, fehler: [] }; },
+  vorlagen: () => [{ name: 'vorlage-spec', label: 'Spec schreiben', beschreibung: 'x', prefix: 'Nutze plan-to-pr.' }],
   sammelSchliessen: async (_u, id) => { sammelZu.push(id); return { ok: true }; },
   alleRuns: async () => [{ _id: 'abcd1234', conv: 'c1', title: 'Rechner', zustand: 'laeuft', lastActivity: '2026-11-03T08:00:00Z', thema: 'Tarife' }],
   lcChats: async () => [{ conversationId: 'c1', title: 'x' }, { conversationId: 'c2', title: 'Alt', isArchived: true, updatedAt: '2026-01-01' }], lcUrl: 'https://lc',
@@ -183,4 +184,15 @@ test('S11: Themen — Übersicht und Seite je Thema; ohne „Wissen“ keine Not
   assert.deepEqual([g.b.dokumente, g.b.prs, g.b.notizenFrei, g.b.prFrei], [[], [], false, false]);
   gesperrt = false;
   assert.equal((await rufe('GET', '/api/v2/thema', ADMIN)).status, 400);
+});
+
+test('S22 (Knut B1): „Was ist das?“ lädt den letzten Stand des Unter-Chats nach — nur eigene, nur Admin', async () => {
+  const r = await rufe('GET', '/api/v2/stand/abcd1234', ADMIN);
+  assert.equal(r.status, 200); assert.match(r.b.stand, /D4 offen/); assert.equal(r.b.titel, 'Rechner');
+  assert.equal((await rufe('GET', '/api/v2/stand/abcd1234', LISA)).status, 403);
+  assert.equal((await rufe('GET', '/api/v2/stand/ffffffff', ADMIN)).status, 404);
+});
+
+test('S22: Vorlagen — nur bekannte Namen, der Text kommt vom Server; Liste ohne Vorgabetext an die Oberfläche', async () => {
+  assert.equal((await rufe('POST', '/api/v2/chat', LISA, { ziel: 'eigen', text: 'hi', vorlage: 'erfunden' })).status, 400);
 });

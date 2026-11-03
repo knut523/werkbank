@@ -41,7 +41,7 @@ export const istV2Conv = (c: unknown) => typeof c === 'string' && /^v2-[0-9a-f-]
 /** Liste meiner 2.0-Chats, neueste zuerst. */
 export async function meineChats(u: User, n = 30) {
   const l: any[] = await chats().find({ userId: u.id }).sort({ updatedAt: -1 }).limit(Math.min(n, 500)).toArray();
-  return l.map((c) => ({ conv: String(c._id), titel: String(c.titel ?? 'Chat'), at: c.updatedAt }));
+  return l.map((c) => ({ conv: String(c._id), titel: String(c.titel ?? 'Chat'), at: c.updatedAt, vorlage: c.vorlage ?? null }));
 }
 
 export async function verlauf(u: User, conv: string, seit?: string) {
@@ -54,7 +54,7 @@ export async function verlauf(u: User, conv: string, seit?: string) {
 }
 
 /** Eine Nachricht schicken: speichern, Zug auf der Brücke starten (im Hintergrund), sofort antworten. */
-export async function senden(u: User, b: { text: unknown; conv?: unknown }, d: ZugDeps): Promise<{ conv: string; frage: string; antwort: string }> {
+export async function senden(u: User, b: { text: unknown; conv?: unknown; vorlage?: { name: string; prefix: string } | null }, d: ZugDeps): Promise<{ conv: string; frage: string; antwort: string }> {
   const text = pruefeText(b.text);
   const token = await d.token(u);
   if (!token) throw err(412, 'Für den Chat brauchst du einen Claude-Zugang — alles andere geht ohne. Frag Knut, wenn du einen brauchst.');
@@ -66,22 +66,29 @@ export async function senden(u: User, b: { text: unknown; conv?: unknown }, d: Z
     let conv = istV2Conv(b.conv) ? String(b.conv) : null;
     if (conv && !(await chats().findOne({ _id: conv as any, userId: u.id }))) throw err(404, 'Diesen Chat gibt es nicht.');
     const now = new Date();
+    let prefix: string | null = null;
     if (!conv) {
       conv = `v2-${randomUUID()}`;
-      await chats().insertOne({ _id: conv as any, userId: u.id, titel: text.replace(/\s+/g, ' ').slice(0, 60), createdAt: now, updatedAt: now });
-    } else await chats().updateOne({ _id: conv as any }, { $set: { updatedAt: now } });
+      // S22: Vorlage (LibreChat-modelSpecs) wird am Chat gemerkt und geht bei jedem Zug als System-Nachricht mit — wie in LibreChat.
+      const v = b.vorlage && typeof b.vorlage.prefix === 'string' ? { vorlage: String(b.vorlage.name).slice(0, 80), prefix: b.vorlage.prefix.slice(0, 4000) } : {};
+      await chats().insertOne({ _id: conv as any, userId: u.id, titel: text.replace(/\s+/g, ' ').slice(0, 60), createdAt: now, updatedAt: now, ...v });
+      prefix = (v as any).prefix ?? null;
+    } else {
+      const c: any = await chats().findOneAndUpdate({ _id: conv as any, userId: u.id }, { $set: { updatedAt: now } }, { returnDocument: 'after' });
+      prefix = c?.prefix ?? c?.value?.prefix ?? null;
+    }
     const frage = randomUUID(), antwort = randomUUID();
     await nachrichten().insertMany([
       { _id: frage as any, conv, userId: u.id, rolle: 'ich', text, status: 'fertig', at: now, geaendert: now },
       { _id: antwort as any, conv, userId: u.id, rolle: 'assistent', text: '', status: 'laeuft', at: new Date(now.getTime() + 1), geaendert: now },
     ]);
-    void zug(u, conv, antwort, text, token, d).finally(() => laufend.delete(u.id));
+    void zug(u, conv, antwort, text, token, d, prefix).finally(() => laufend.delete(u.id));
     return { conv, frage, antwort };
   } catch (e) { laufend.delete(u.id); throw e; }
 }
 
 /** Der Zug: SSE der Brücke lesen, Text alle ~1 s in die Datenbank, am Ende fertig/fehler. */
-async function zug(u: User, conv: string, id: string, text: string, token: string, d: ZugDeps) {
+async function zug(u: User, conv: string, id: string, text: string, token: string, d: ZugDeps, prefix: string | null = null) {
   const f = d.fetch ?? fetch;
   let out = '', last = 0;
   const set = (x: Record<string, unknown>) => nachrichten().updateOne({ _id: id as any }, { $set: { ...x, geaendert: new Date() } });
@@ -89,7 +96,7 @@ async function zug(u: User, conv: string, id: string, text: string, token: strin
     const r = await f(`${d.bridgeUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'x-librechat-user-id': u.id, 'x-librechat-user-email': u.email, 'x-librechat-conversation-id': conv },
-      body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: text }] }),
+      body: JSON.stringify({ model: 'claude-code', stream: true, messages: [...(prefix ? [{ role: 'system', content: prefix }] : []), { role: 'user', content: text }] }),
       signal: AbortSignal.timeout(ZUG_MAX_MS),
     });
     if (!r.ok || !r.body) throw new Error(`Der Assistent antwortet gerade nicht (${r.status}).`);

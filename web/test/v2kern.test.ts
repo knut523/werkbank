@@ -235,3 +235,43 @@ test('S11: themenUebersicht — je Thema Entscheidungen, Unter-Chats, Dokumente,
   assert.equal(t[0].thema, 'Flex');
   assert.equal(t[t.length - 1].thema, 'Sonstiges');
 });
+
+test('S22 (Christoph B2/B4): wer hat Änderungen verlangt; Kurzurteil des Agenten oben', async () => {
+  const { verlangtVon, kurzurteil } = await import('../server/v2kern.ts');
+  const names = { bizarrochris: 'Christoph' };
+  assert.deepEqual(verlangtVon('CHANGES_REQUESTED', [{ author: 'bizarrochris', state: 'COMMENTED', submittedAt: '2026-11-01' }, { author: 'fazl', state: 'CHANGES_REQUESTED', submittedAt: '2026-11-02' }], names), { wer: ['fazl'], unbekannt: false });
+  assert.deepEqual(verlangtVon('CHANGES_REQUESTED', [{ author: 'bizarrochris', state: 'COMMENTED' }], names), { wer: [], unbekannt: true }, 'GitHub sagt es, die Kopie kennt den Urheber nicht');
+  assert.deepEqual(verlangtVon('CHANGES_REQUESTED', [{ author: 'fazl', state: 'CHANGES_REQUESTED', submittedAt: '2026-11-01' }, { author: 'fazl', state: 'APPROVED', submittedAt: '2026-11-02' }], names), { wer: [], unbekannt: true }, 'später freigegeben zählt nicht mehr');
+  assert.deepEqual(verlangtVon('APPROVED', [], names), { wer: [], unbekannt: false });
+  const k = kurzurteil('## Review\n\n**Kurz:** Solide Änderung, ein Punkt zum Statusabgleich.\n\n| # | Befund | Schwere |\n|---|---|---|\n| 1 | Status | mittel |\n| 2 | Typo | niedrig |\n');
+  assert.equal(k.satz, 'Kurz: Solide Änderung, ein Punkt zum Statusabgleich.');
+  assert.equal(k.befunde, 2);
+  assert.equal(kurzurteil(null).satz, '');
+});
+
+test('S22 (Knut B7): schwache Chat-Titel („ja“, „Ok?“, „New Chat“) werden durch den Anfang der ersten eigenen Nachricht ersetzt', async () => {
+  const { schwacherTitel, besserTitel } = await import('../server/v2kern.ts');
+  for (const t of ['ja', 'Ok?', 'New Chat', 'Neuer Chat', '', 'weiter']) assert.equal(schwacherTitel(t), true, t);
+  assert.equal(schwacherTitel('Umfrage-Editor: Rechte prüfen'), false);
+  const b = besserTitel('ok', 'Kannst du mir die **Umfrage**-Ergebnisse vom Oktober zusammenfassen und als Tabelle geben?');
+  assert.ok(b.startsWith('Kannst du mir die Umfrage-Ergebnisse vom Oktober') && b.endsWith('…') && b.length <= 73, b);
+  assert.equal(besserTitel('Umfrage prüfen', 'egal'), 'Umfrage prüfen');
+  assert.equal(besserTitel('ja', ''), 'ja', 'ohne Nachricht bleibt der Titel');
+});
+
+test('S22 (Knut B6): gekürzte Meldungen enden nicht mitten im Satz — Schnitt an der letzten ganzen Stelle, Hinweis auf den Stand', async () => {
+  const { zustandSatz } = await import('../server/v2kern.ts');
+  const s = zustandSatz({ zustand: 'wartet', cs: { status: 'braucht', grund: 'Nur D4 ist offen. Entscheidung zum Vorteil (Empfehlung: b⋯' } } as any);
+  assert.equal(s, 'Wartet auf dich: Nur D4 ist offen — ganzer Text unten im Stand.');
+  const t = zustandSatz({ zustand: 'wartet', cs: { status: 'braucht', grund: 'Eine sehr lange Zeile ohne Punkt die irgendwo abbricht und weitergeht⋯' } } as any);
+  assert.match(t, /^Wartet auf dich: Eine sehr lange Zeile ohne Punkt die irgendwo abbricht und weitergeht … — ganzer Text unten im Stand\.$/);
+  assert.equal(zustandSatz({ zustand: 'wartet', cs: { status: 'braucht', grund: 'Frage zur Umfrage' } } as any), 'Wartet auf dich: Frage zur Umfrage.');
+});
+
+test('S22 Pass C: ganzeStelle schneidet nicht an „z. B.“, keine Zeilenumbrüche; verlangtVon ohne Zeitstempel; Befundzähler mit verankerter Trennzeile', async () => {
+  const { zustandSatz, verlangtVon, kurzurteil } = await import('../server/v2kern.ts');
+  assert.equal(zustandSatz({ zustand: 'wartet', cs: { status: 'braucht', grund: 'Siehe z. B. den PR zu Auth und die Notiz (Empfehlung: b⋯' } } as any), 'Wartet auf dich: Siehe z. B. den PR zu Auth und die Notiz — ganzer Text unten im Stand.');
+  assert.doesNotMatch(zustandSatz({ zustand: 'wartet', cs: { status: 'braucht', grund: '1. Punkt eins.\n2. Punkt zwei (offen⋯' } } as any), /\n/);
+  assert.deepEqual(verlangtVon('CHANGES_REQUESTED', [{ author: 'fazl', state: 'APPROVED' }, { author: 'fazl', state: 'CHANGES_REQUESTED', submittedAt: '2026-11-01' }], {}), { wer: ['fazl'], unbekannt: false }, 'Review ohne Zeit überschreibt nichts');
+  assert.equal(kurzurteil('Kurz.\n\n| # | Befund |\n|---|---|\n| 1 | --- siehe Zeile 42 |\n| 2 | zwei |').befunde, 2);
+});

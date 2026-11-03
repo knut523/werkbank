@@ -118,8 +118,18 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
 export interface ArbeitZeile { id?: string; zustand: string; zustandText?: string; grund?: string; eta?: { text: string; ueberfaellig: boolean } | null; cs?: { status: string; grund?: string; offen?: number } | null; paket?: string | null; bericht?: boolean }
 
 /** Der Zustand eines Unter-Chats in einem Klartext-Satz (428 W12: kein rohes Markdown, keine ETA in der Vergangenheit). */
+/** S22 (Knut B6): eine an der Quelle gekürzte Meldung („… (Empfehlung: b⋯“) an der letzten ganzen Stelle schneiden und auf den Stand verweisen. */
+function ganzeStelle(g: string): string {
+  if (!/[⋯…]$/.test(g)) return g;
+  const roh = g.replace(/[⋯…]+$/, '').trimEnd();
+  // Satzende nur nach einem Wort mit ≥ 3 Zeichen und vor einem Großbuchstaben/einer Ziffer (nicht an „z. B.“); Zeilenumbrüche zu Leerzeichen (Pass C).
+  const satz = roh.match(/^([\s\S]*[\p{L}\d)]{3}[.!?])[ \t\n]+(?=[A-ZÄÖÜ0-9„«])/u)?.[1];
+  const stelle = satz ?? roh.match(/^([\s\S]*?)\s*[(;—]/)?.[1];
+  return `${(stelle && stelle.length >= 8 ? stelle.replace(/[.!?]$/, '') : `${roh} …`).replace(/\s+/g, ' ').trim()} — ganzer Text unten im Stand`;
+}
+
 export function zustandSatz(z: ArbeitZeile): string {
-  const grund = String(z.cs?.grund ?? z.grund ?? '').trim();
+  const grund = ganzeStelle(String(z.cs?.grund ?? z.grund ?? '').trim());
   const eta = z.eta?.text ? (z.eta.ueberfaellig ? 'dauert länger als geschätzt' : z.eta.text) : '';
   const cs = z.cs?.status;
   if (z.zustand === 'laeuft') return `Läuft${eta ? ` — ${eta}` : ''}.`;
@@ -284,4 +294,43 @@ export function themenUebersicht(q: { karten: { titel: string; thema?: string | 
   for (const n of q.notizen) zu(themaVon(null, `${n.path} ${n.title}`), 'dokumente');
   for (const p of q.prs) zu(themaVon(null, `${p.repo} ${p.title}`), 'prs');
   return [...m.values()].sort((a, b) => (a.thema === 'Sonstiges' ? 1 : 0) - (b.thema === 'Sonstiges' ? 1 : 0) || b.summe - a.summe || a.thema.localeCompare(b.thema, 'de'));
+}
+
+// ---------- PR-Seite (S22, Christoph Runde 3 B2/B4) ----------
+
+/** Wer hat „Änderungen verlangt“? Je Person zählt ihr letztes Review; steht es noch auf CHANGES_REQUESTED, ist sie es.
+ *  `unbekannt`: GitHub meldet „Änderungen verlangt“, aber die Kopie kennt den Urheber nicht (z. B. älteres Review). */
+export function verlangtVon(entscheidung: string | null | undefined, reviews: { author?: string; state?: string; submittedAt?: string }[], names: Record<string, string>): { wer: string[]; unbekannt: boolean } {
+  const letzte = new Map<string, { state: string; at: string }>();
+  for (const r of reviews ?? []) {
+    const a = String(r.author ?? ''); if (!a || r.state === 'COMMENTED') continue;
+    const at = String(r.submittedAt ?? '');
+    if (!at) continue;   // ohne Zeitstempel kein Vergleich möglich — überschreibt nichts (Pass C)
+    if (!letzte.has(a) || at >= letzte.get(a)!.at) letzte.set(a, { state: String(r.state), at });
+  }
+  const wer = [...letzte].filter(([, v]) => v.state === 'CHANGES_REQUESTED').map(([a]) => names[a.toLowerCase()] ?? a);
+  return { wer, unbekannt: entscheidung === 'CHANGES_REQUESTED' && !wer.length };
+}
+
+/** Kurzurteil aus dem Agenten-Text: erster Satz/Absatz ohne Überschriften und Markdown, dazu die Zahl der Befundzeilen (Tabelle). */
+export function kurzurteil(text: string | null | undefined): { satz: string; befunde: number } {
+  const t = String(text ?? '');
+  const absatz = t.split(/\n\s*\n/).map((x) => x.trim()).find((x) => x && !/^#/.test(x) && !/^\|/.test(x)) ?? '';
+  const satz = kurz(absatz.replace(/\*\*|__|`/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim(), 240);
+  const zeilen = t.split('\n').filter((l) => /^\s*\|/.test(l));
+  const befunde = Math.max(0, zeilen.filter((l) => !/^\s*\|[\s|:-]*$/.test(l)).length - 1);
+  return { satz, befunde };
+}
+
+// ---------- Titel alter Chats (S22, Knut Runde 3 B7) ----------
+
+/** Sagt der Titel nichts (LibreChat nimmt oft die erste kurze Antwort: „ja“, „Ok?“)? */
+export function schwacherTitel(t: string | null | undefined): boolean {
+  const s = String(t ?? '').trim();
+  return s.length < 12 || /^(new chat|neuer chat|chat|ja|nein|ok|okay|weiter|danke|passt)\W*$/i.test(s);
+}
+/** Schwacher Titel → Anfang der ersten eigenen Nachricht (ohne Markdown), sonst der Titel. */
+export function besserTitel(titel: string, ersteNachricht: string | null | undefined): string {
+  const m = String(ersteNachricht ?? '').replace(/[*_`#>]/g, '').replace(/\s+/g, ' ').trim();
+  return schwacherTitel(titel) && m.length >= 8 ? kurz(m, 72) : titel;
 }

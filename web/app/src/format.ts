@@ -45,3 +45,19 @@ export function chatFrage(titel: string, worum: string): string {
 export function chatBesprechen(titel: string, empfehlung: string | null, id: string): string {
   return `Lass uns diese Entscheidung besprechen, bevor ich antworte (${id}): „${titel}“${empfehlung ? ` — Empfehlung: ${empfehlung}` : ''}. Was spricht dafür, was dagegen?`.slice(0, 1500);
 }
+
+/** S22 (Christoph B5): am Handy werden Tabellen zu Blöcken und der Kopf verschwindet — deshalb bekommt jede Zelle ihren Spaltennamen
+ *  (`data-label`), den das CSS dort davor zeigt. Rein über den HTML-Text (markdown-it erzeugt einfache Tabellen ohne Attribute). */
+export function tabellenBeschriften(html: string): string {
+  return html.replace(/<table>([\s\S]*?)<\/table>/g, (ganz, inhalt: string) => {
+    const kopf = /<thead>([\s\S]*?)<\/thead>/.exec(inhalt)?.[1] ?? '';
+    const namen = [...kopf.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => m[1].replace(/<[^>]+>/g, '').replace(/"/g, '&quot;').trim());
+    if (!namen.length || !inhalt.includes('</tr>')) return ganz;   // ohne geschlossene Zeilen nichts anfassen (Pass C)
+    const koerper = inhalt.replace(/<tr>([\s\S]*?)<\/tr>/g, (zeile, z: string) => {
+      if (z.includes('<th')) return zeile;
+      let i = 0;
+      return `<tr>${z.replace(/<td(\s[^>]*)?>/g, (_m, attr = '') => `<td${attr} data-label="${namen[i++] ?? ''}">`)}</tr>`;
+    });
+    return `<table>${koerper}</table>`;
+  });
+}

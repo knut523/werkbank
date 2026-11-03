@@ -8,7 +8,7 @@ import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungssei
 import { themaOf } from './themen.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite } from './v2kern.ts';
+import { verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import * as librechat from './v2librechat.ts';
 
@@ -55,6 +55,8 @@ export interface V2Deps {
   lcUrl: string;
   /** S20 (D8): Rolle der Besitzerin aus der Einrichtung (WERKBANK_ROLLE, von team-install gesetzt) — sonst abgeleitet. */
   rolleEinstellung?: string | null;
+  /** S22: Vorlagen aus librechat.yaml (modelSpecs mit promptPrefix) für den 2.0-Chat. */
+  vorlagen?: () => { name: string; label: string; beschreibung: string; prefix: string }[];
 }
 
 /** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
@@ -268,6 +270,15 @@ export function registerV2(on: On, d: V2Deps) {
       stand: kurz(String(doc.lastExcerpt ?? ''), 4000), fragen, nachrichten, links, at: new Date() });
   });
 
+  // --- Letzter Stand eines Unter-Chats für „Was ist das?“ (S22, Knut B1) — beim Aufklappen nachgeladen, nicht für jede Karte ---
+  on('GET', /^\/api\/v2\/stand\/([0-9a-f]{8})$/, async (req, res, m) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) throw err(403, 'Unter-Chats sieht nur, wem sie gehören.');
+    const doc = await d.strang(u, m[1]);
+    if (!doc) throw err(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
+    send(d, res, { id: m[1], titel: String(doc.title ?? ''), stand: kurz(String(doc.lastExcerpt ?? ''), 1200) });
+  });
+
   // --- PRs: „wartet auf: <Person>“, Vorgabe ich, umschaltbar ---
   on('GET', /^\/api\/v2\/prs$/, async (req, res, _m, url) => {
     const u = await d.needUser(req);
@@ -280,7 +291,7 @@ export function registerV2(on: On, d: V2Deps) {
     const rv = await d.letzteReviews().catch(() => []);
     const je = new Map<string, any>();
     for (const r of rv) { const k = `${String(r.repo).split('/').pop()}#${r.number}`; if (!je.has(k)) je.set(k, r); }
-    const zeilen = prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)).map((p) => { const r = je.get(p.pr); return { ...p, review: r ? { empfehlung: r.empfehlung ?? null, status: r.status, at: r.doneAt ?? r.createdAt } : null }; });
+    const zeilen = prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)).map((p) => { const r = je.get(p.pr); return { ...p, review: r ? { empfehlung: admin(u) || r.posted?.url ? r.empfehlung ?? null : null, status: r.status, gepostet: !!r.posted?.url, at: r.doneAt ?? r.createdAt } : null }; });   // Entwurfs-Urteil nur für Admins (wie auf der PR-Seite)
     const ohneEntwurf = live.filter((p) => !p.isDraft);
     send(d, res, { wer, ich, personen: [...personen(ohneEntwurf, ich, names), { name: 'alle', anzahl: ohneEntwurf.length }], zeilen, stand: g.sync?.at ?? null, at: new Date() });
   });
@@ -300,8 +311,9 @@ export function registerV2(on: On, d: V2Deps) {
     send(d, res, {
       pr: key, titel: p?.title ?? r?.title ?? key, url: p?.url ?? r?.url ?? null, autor: p ? (names[String(p.author ?? '').toLowerCase()] ?? p.author ?? null) : null,
       offen: !!p, merge: p?.turn?.role === 'merge', wartetAuf: wa?.wartetAuf ?? [], warum: wa?.warum ?? '', entscheidung: p?.reviewDecision ?? null, offeneThreads: p?.openThreads ?? 0,
+      verlangt: verlangtVon(p?.reviewDecision, p?.reviews ?? [], names),   // S22 (Christoph B2): wer hat Änderungen verlangt
       reviews: (p?.reviews ?? []).map((x: any) => ({ wer: names[String(x.author ?? '').toLowerCase()] ?? x.author, zustand: x.state, at: x.submittedAt })),
-      agent: r ? { status: r.status, empfehlung: sichtbar ? k?.empfehlung ?? r.empfehlung ?? null : null, text: k?.text ?? null, gepostet: r.posted?.url ?? null, entwurf: !r.posted?.url, at: r.doneAt ?? r.createdAt,
+      agent: r ? { status: r.status, empfehlung: sichtbar ? k?.empfehlung ?? r.empfehlung ?? null : null, text: k?.text ?? null, kurz: k?.text ? kurzurteil(k.text) : null, gepostet: r.posted?.url ?? null, entwurf: !r.posted?.url, at: r.doneAt ?? r.createdAt,
         bericht: admin(u) && r.paket ? `/v2/dokument?paket=${encodeURIComponent(r.paket)}&datei=bericht.md` : null } : null,
       at: new Date(),
     });
@@ -333,7 +345,7 @@ export function registerV2(on: On, d: V2Deps) {
     const conv = url.searchParams.get('conv');
     const liste = await eigen.meineChats(u);
     const nachrichten = conv ? await eigen.verlauf(u, conv, url.searchParams.get('seit') ?? undefined) : [];
-    send(d, res, { ziel, zugang, chats: liste, conv: conv ?? null, nachrichten, laeuft: nachrichten.some((x) => x.status === 'laeuft') });
+    send(d, res, { ziel, zugang, chats: liste, conv: conv ?? null, nachrichten, laeuft: nachrichten.some((x) => x.status === 'laeuft'), vorlagen: (d.vorlagen?.() ?? []).map((v) => ({ name: v.name, label: v.label, beschreibung: v.beschreibung })) });
   });
   on('POST', /^\/api\/v2\/chat$/, async (req, res) => {
     const u = await d.needUser(req);
@@ -350,7 +362,10 @@ export function registerV2(on: On, d: V2Deps) {
       d.log('v2 hauptchat', { user: u.id });
       return send(d, res, { ok: true, ziel: 'hauptchat', at });
     }
-    const r = await eigen.senden(u, b, { bridgeUrl: d.bridgeUrl, token: d.claudeToken, log: d.log });
+    // S22: Vorlage nur per Name — der Text kommt vom Server (librechat.yaml), nie vom Client.
+    const v = b.vorlage ? (d.vorlagen?.() ?? []).find((x) => x.name === String(b.vorlage)) : null;
+    if (b.vorlage && !v) throw err(400, 'Diese Vorlage gibt es nicht.');
+    const r = await eigen.senden(u, { text: b.text, conv: b.conv, vorlage: v ? { name: v.name, prefix: v.prefix } : null }, { bridgeUrl: d.bridgeUrl, token: d.claudeToken, log: d.log });
     send(d, res, { ok: true, ziel: 'eigen', ...r });
   });
 }

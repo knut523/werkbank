@@ -5,7 +5,8 @@ export interface Begriff { wort: string; heisst: string; beispiel: string }
 
 /** „Was ist OLAF?“ ohne Chat (Persona Lisa): Quelle olaf/olaf-Home.md, Abschnitt „start here“. */
 export const OLAF_KURZ = 'OLAF ist ein Venture des MAXENERGY Inno Teams: Wir bauen ein Angebot rund um Energiegemeinschaften für Haushalte — gemeinsam mit den Partnern Enlion und Raiffeisen Energy Ventures.';
-export const OLAF_MEHR = 'v2/dokument?vault=' + encodeURIComponent('olaf/olaf-Home.md');
+// Lisa R3: die Startnotiz olaf-Home ist englisch und technisch — die deutsche Management-Übersicht erklärt OLAF in Klartext.
+export const OLAF_MEHR = 'v2/dokument?vault=' + encodeURIComponent('olaf/2-Areas/Product/Produkt-OLAF/Architektur/0-architecture-management-overview.md');
 
 export const BEGRIFFE: Begriff[] = [
   { wort: 'OLAF', heisst: OLAF_KURZ, beispiel: 'Der Rechner, die Anmeldestrecke und der Service für Energiegemeinschaften gehören dazu.' },
