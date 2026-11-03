@@ -5,7 +5,7 @@ import { hole } from './api.ts';
 import { Kontext, type AppKontext } from './kontext.ts';
 import { ChatLeiste } from './chat.tsx';
 import { Anmelden, Arbeit, ArbeitDetail, Begriffe, Dokument, Dokumente, Entscheidungen, Jetzt, PrDetail, Prs } from './seiten.tsx';
-import { Laedt } from './teile.tsx';
+import { Laedt, vergessen, vorab } from './teile.tsx';
 
 const BEREICHE = [
   { url: '/v2/', label: 'Jetzt', ico: '◉', passt: (p: string) => p === '/v2/' || p === '/v2' },
@@ -64,7 +64,7 @@ export function App() {
   const pruefen = () => hole<{ user: { name: string; role: string } | null; librechatUrl: string; dryRun?: boolean; vaultDryRun?: boolean }>('/api/config')
     .then((c) => { if (typeof c.librechatUrl === 'string') setAlt(`${c.librechatUrl}/wb`); setTrocken(!!(c.dryRun || c.vaultDryRun)); setKonto(c.user ? { name: c.user.name.split(/\s+/)[0], admin: c.user.role === 'ADMIN' } : null); })
     .catch(() => setKonto(null));
-  useEffect(() => { void pruefen(); const ab = () => setKonto(null); window.addEventListener('v2-abgemeldet', ab); return () => window.removeEventListener('v2-abgemeldet', ab); }, []);
+  useEffect(() => { void pruefen(); const ab = () => { vergessen(); setKonto(null); }; window.addEventListener('v2-abgemeldet', ab); return () => window.removeEventListener('v2-abgemeldet', ab); }, []);
   // Die eine Zahl: beim Start, alle 60 s und nach jeder Antwort neu (null = neu holen).
   useEffect(() => {
     if (!konto) return;
@@ -81,7 +81,7 @@ export function App() {
   }), [konto, alt]);
 
   if (konto === undefined) return <Laedt />;
-  if (konto === null) return <Anmelden fertig={() => { history.replaceState(null, '', '/v2/'); void pruefen(); }} />;
+  if (konto === null) return <Anmelden fertig={async () => { vergessen(); history.replaceState(null, '', '/v2/'); await Promise.all([vorab('/api/v2/start?teil=oben'), pruefen()]); }} />;
 
   return (
     <Kontext.Provider value={kontext}>
@@ -101,7 +101,7 @@ export function App() {
           <div className="leiste-unten">
             <span className="klein gedimmt">Angemeldet als {konto.name}</span>
             {alt && <a className="klein" href={`${alt}/heute`} target="_blank" rel="noopener noreferrer">Alte Werkbank ↗</a>}
-            <button type="button" className="knopf leise klein" onClick={() => fetch('/api/logout', { method: 'POST', headers: { 'x-werkbank': '1' } }).finally(() => setKonto(null))}>Abmelden</button>
+            <button type="button" className="knopf leise klein" onClick={() => fetch('/api/logout', { method: 'POST', headers: { 'x-werkbank': '1' } }).finally(() => { vergessen(); setKonto(null); })}>Abmelden</button>
           </div>
         </nav>
         {trocken && <p className="testband" role="note">Testbetrieb: Antworten an Notizen und Jira werden hier nicht wirklich geschrieben.</p>}

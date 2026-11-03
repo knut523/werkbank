@@ -305,14 +305,14 @@ export function Begriffe() {
 
 // ---------- Anmelden ----------
 
-export function Anmelden({ fertig }: { fertig: () => void }) {
+export function Anmelden({ fertig }: { fertig: () => void | Promise<void> }) {
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
   const [fehler, setFehler] = useState<string | null>(null);
   const [laeuft, setLaeuft] = useState(false);
   async function los(e: React.FormEvent) {
     e.preventDefault(); setLaeuft(true); setFehler(null);
-    try { await schicke('/api/login', { email, password: pw }); fertig(); } catch (x: any) { setFehler(x.status === 401 || x.status === 400 ? 'E-Mail oder Passwort stimmt nicht.' : x.message); } finally { setLaeuft(false); }
+    try { await schicke('/api/login', { email, password: pw }); await fertig(); } catch (x: any) { setFehler(x.status === 401 || x.status === 400 ? 'E-Mail oder Passwort stimmt nicht.' : x.message); } finally { setLaeuft(false); }
   }
   return (
     <div className="anmelden">

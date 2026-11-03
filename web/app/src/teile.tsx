@@ -85,17 +85,24 @@ export function Fehler({ text, nochmal }: { text: string; nochmal?: () => void }
   return <div className="fehler" role="alert"><p>{text}</p>{nochmal && <button type="button" className="knopf klein" onClick={nochmal}>Noch einmal</button>}</div>;
 }
 
+/** Zuletzt gesehener Stand je Adresse: sofort zeigen, im Hintergrund nachladen (kein leeres „Lädt …“ beim Zurückblättern). */
+const zuletzt = new Map<string, unknown>();
+/** Beim Abmelden/Anmelden leeren — nie Daten einer anderen Person zeigen. */
+export function vergessen() { zuletzt.clear(); }
+/** Vorab holen (z. B. direkt nach dem Login), damit der erste Bildschirm sofort steht. */
+export function vorab(pfad: string) { return hole(pfad).then((x) => { zuletzt.set(pfad, x); }).catch(() => {}); }
+
 /** Daten holen mit Laden/Fehler; `neu()` lädt erneut. */
 export function useDaten<T>(pfad: string | null): { d: T | null; fehler: string | null; neu: () => void } {
-  const [d, setD] = useState<T | null>(null);
+  const [d, setD] = useState<T | null>(() => (pfad ? (zuletzt.get(pfad) as T) ?? null : null));
   const [fehler, setFehler] = useState<string | null>(null);
   const [n, setN] = useState(0);
   useEffect(() => {
     if (!pfad) return;
     let aus = false;
     setFehler(null);
-    setD(null);   // kein Inhalt der vorigen Adresse unter der neuen (Pass C)
-    hole<T>(pfad).then((x) => { if (!aus) setD(x); }).catch((e) => { if (!aus) { if (e.status === 401) window.dispatchEvent(new Event('v2-abgemeldet')); setFehler(e.message); } });
+    setD((zuletzt.get(pfad) as T) ?? null);   // nie Inhalt einer anderen Adresse (Pass C), aber den eigenen letzten Stand sofort
+    hole<T>(pfad).then((x) => { zuletzt.set(pfad, x); if (!aus) setD(x); }).catch((e) => { if (!aus) { if (e.status === 401) window.dispatchEvent(new Event('v2-abgemeldet')); setFehler(e.message); } });
     return () => { aus = true; };
   }, [pfad, n]);
   return { d, fehler, neu: () => setN((x) => x + 1) };
