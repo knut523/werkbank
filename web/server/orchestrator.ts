@@ -1144,6 +1144,12 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
     await runs().updateOne({ userId: u.id, kind: 'leitstand', endedAt: null }, { $set: d.kind === 'leitstand-deckel' ? { capResetAt: new Date() } : { weiterStreak: 0, weiterStopped: null } });
     action = 'fortgesetzt';
   }
+  // R32 (Nachtrag A): eine freie Antwort auf eine Deckel-/Budget-Frage („Anders“ mit Text) ging bisher nirgends hin — der Strang erfuhr nichts.
+  // Jetzt geht Knuts Text wörtlich an den Strang (eine Handnachricht: der Deckel beginnt neu, wie bei jeder Nachricht von Hand).
+  if ((d.kind === 'auto-weiter' || d.kind === 'budget') && d.strand?.id && !option && text) {
+    try { await sendOrch(u, d.strand.id, `Antwort von Knut auf deine Rückfrage „${String(d.title ?? '').slice(0, 120)}“:\n\n${text}`); action = 'an den Strang gesendet'; }
+    catch (e: any) { action = `nicht ausgeführt: ${String(e.message ?? e).slice(0, 200)}`; }
+  }
   if (d.paket?.id) await paketNachAntwort(u, String(d.paket.id));
   return { ...publicQuestion({ ...d, status: 'beantwortet', answer }), ...(action ? { action } : {}) };
 }
@@ -1159,11 +1165,12 @@ export async function paketNachAntwort(u: User, id: string) {
   } catch (e: any) { console.error(`fragenpaket ${id}: Abschluss fehlgeschlagen — ${String(e?.message ?? e).slice(0, 200)} (fragenpaket_stand versucht es erneut)`); }
 }
 
-export async function withdrawQuestion(u: User, id: string) {
+/** `durchKnut`: Knut selbst schließt (Knopf „alte Deckel-Fragen schließen“ in der Oberfläche) — nur dann dürfen Deckel-Fragen zu. */
+export async function withdrawQuestion(u: User, id: string, o: { durchKnut?: boolean } = {}) {
   // Deckel-Fragen entscheidet nur Knut (Council-Diff R1): der Leitstand darf sie nicht über orch_questions wegräumen.
   const q: any = await questions().findOne({ _id: id as any, userId: u.id });
-  if (q && /^(auto-weiter|budget|leitstand-)/.test(String(q.kind ?? ''))) throw err(409, 'Diese Rückfrage entscheidet nur Knut (Deckel) — zurückziehen nicht möglich.');
-  const r = await questions().updateOne({ _id: id as any, userId: u.id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() }, $unset: { keyActive: '' } });
+  if (q && !o.durchKnut && /^(auto-weiter|budget|leitstand-)/.test(String(q.kind ?? ''))) throw err(409, 'Diese Rückfrage entscheidet nur Knut (Deckel) — zurückziehen nicht möglich.');
+  const r = await questions().updateOne({ _id: id as any, userId: u.id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date(), ...(o.durchKnut ? { withdrawnBy: u.email, withdrawnReason: 'Alte Deckel-Frage von Knut geschlossen' } : {}) }, $unset: { keyActive: '' } });
   if (!r.matchedCount) throw err(409, 'Keine offene Rückfrage mit dieser Kennung.');
   if (q?.paket?.id) await paketNachAntwort(u, String(q.paket.id));
   return { id, status: 'zurückgezogen' };

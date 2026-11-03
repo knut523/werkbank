@@ -20,11 +20,13 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, mirrorOf, mirrorSites, siteByPrefix, siteColumns, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
-import { paketNachAntwort } from './orchestrator.ts';
+import { paketNachAntwort, deliver as deliverOrch, messageText } from './orchestrator.ts';
+import { nachfrageText, nidAus, type NachfrageKontext, type NachfrageArt } from './nachfrage.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane, statusSchatten, sendWarteMs, gruendlichOrch, worktreeBelegt, questions as orchQuestions } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, setzeLeseQuelle, type VorbauErgebnis } from './vorbau.ts';
 import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
+import { fragenAufraeumenAn, fragenAufraeumen } from './fragenaufraeumen.ts';
 import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand, activeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
@@ -58,14 +60,14 @@ import { boxTick } from './boxwaechter.ts';
 import { startSchaetzung, laufMediane } from './startschaetzung.ts';
 import { ladeSichtung, waehle as waehleSichtung } from './vaultsichtung.ts';
 import { starte as claudeAnmeldungStarten, codeEinreichen as claudeCodeEinreichen } from './claudeverbinden.ts';
-import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungsseite.ts';
+import { fragenAus, empfohlenBeantwortbar, brauchtSumme, fangHierAn, zielText, optionAusAnders, type Frage } from './entscheidungsseite.ts';
 import { abschlussTick, wocheTick } from './cosabschluss.ts';
 import { rueckstau as cosRueckstau, vorschlaege as cosVorschlaege } from './cosmeeting.ts';
 import { meetingTeams as cosMeetingTeams, sammleEingabe as cosEingabe } from './cossammle.ts';
 const cosRueckstauZahl = () => { try { return cosRueckstau(cfg.vaultDir, cosMeetingTeams(), new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Vienna' }).format(new Date())).length; } catch { return 0; } };
 import type { Quellen as CosQuellen } from './cossammle.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, randomBytes } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, duplikateSuchen, anlegenJira, type JiraAction } from './jirawrite.ts';
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
@@ -82,7 +84,7 @@ import { fixTick, fixOverview, prLageVia, pushVia, gateVia, freigabeSetzen, fixA
 import { prLage as holePrLage, prLageText, PR_LAGE_AN as prLageAn } from './prlage.ts';
 import { ZWEI_SEITEN_AN as zweiSeitenAn, anlegenEingabe } from './jiraanlegen.ts';
 import { FRAGENPAKET_AN as fragenpaketAn, paketEingabe, paketeCol, neueKennung, paketStand } from './fragenpaket.ts';
-import { LAGE_AN as lageAn, baueLage, standSatz, THEMEN_LAGE } from './lage.ts';
+import { LAGE_AN as lageAn, baueLage, fertigHeute, standSatz, THEMEN_LAGE } from './lage.ts';
 import { heuteFrueh } from './prlage.ts';
 import { parseThemen, registerRel } from './cosregister.ts';
 import { paketIndex, paketZahlen } from './pakete.ts';
@@ -1423,10 +1425,11 @@ async function todayCount(u: User) {
   // Der Zähler fragt alle 60 s — die ganze Inbox (Karten, Berichte) höchstens alle 30 s je Person neu bauen (Pass C).
   const c = zahlCache.get(u.id);
   if (c && Date.now() - c.at < 30_000) return c.n;
-  const n = inboxZahl((await inboxFuer(u)).eintraege);
-  zahlCache.set(u.id, { at: Date.now(), n });
-  return n;
+  const n = inboxZahl((await inboxFuer(u)).eintraege);   // inboxFuer stellt den Zähler (samt Zusammensetzung) selbst
+  return zahlCache.get(u.id)?.n ?? n;
 }
+/** R32: die Zusammensetzung der Zahl („20 offen = 2 heute fällig + 13 Fragen + 5 Sonstiges“) — für Tooltip und Untertitel. */
+const todayText = (u: User) => zahlCache.get(u.id)?.text ?? '';
 
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
@@ -1448,10 +1451,10 @@ on('GET', /^\/api\/today$/, async (req, res) => {
   const g0 = await g0Blocked(u).catch(() => []);   // Nachtbau: von G0 gestoppte Stränge (blocked_g0)
   const memory = u.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null;   // nur Admins (RAM-Plan 125)
   const leitstand = await leitstandLine(u).catch(() => null);   // nur Admins (Plan 132)
-  send(res, 200, { queue, strands: cards, mine, day, today, orchOpen, orchAuto, g0, leitstand, memory, count: await todayCount(u), dryRun: dryRun() });
+  send(res, 200, { queue, strands: cards, mine, day, today, orchOpen, orchAuto, g0, leitstand, memory, count: await todayCount(u), countText: todayText(u), dryRun: dryRun() });
 });
 
-on('GET', /^\/api\/today\/count$/, async (req, res) => send(res, 200, { count: await todayCount(await needUser(req)) }));
+on('GET', /^\/api\/today\/count$/, async (req, res) => { const u = await needUser(req); send(res, 200, { count: await todayCount(u), text: todayText(u) }); });
 
 // --- Eine Statusquelle (Plan 213 S1b): Zähler für alle Ansichten, Schattenvergleich, Wegräumen/Zurückholen ---
 /** Zustand der offenen Unter-Chats einer Person, gezählt (K11). Ohne neuen Zustand (alte Läufe) aus dem alten Status abgeleitet. */
@@ -1468,7 +1471,12 @@ on('GET', /^\/api\/status$/, async (req, res) => {
 });
 // --- Eine Inbox (Plan 213 S2): alle Fragearten an einer Stelle, Antwort an der Quelle, Chat-Knöpfe mit Kennung ---
 const spaeterCol = () => wb().collection('inbox_spaeter');
-const zahlCache = new Map<string, { at: number; n: number }>();
+/** R32 (Nachtrag 3): unbekannter @-Tag einer erlaubten Person → Meldung an den Hauptchat des Ticker-Besitzers (ohne Hauptchat: Eintrag in „Heute“). */
+const tickerMelde = async (e: { _id: string; repo: string; number: number; text: string }, besitzer: string | null) => {
+  const u = besitzer ? await userById(besitzer).catch(() => null) : null;
+  if (u) await meldeLeitstand(u, { _id: `ticker:${e._id}`, title: `${e.repo.split('/').pop()}#${e.number}` }, `PR-Ticker: ${e.text}`);
+};
+const zahlCache = new Map<string, { at: number; n: number; text: string }>();
 async function inboxFuer(u: User, now = Date.now()) {
   const admin = u.role === 'ADMIN';
   const qs = await listQuestions(u, { open: true }).catch(() => [] as any[]);
@@ -1509,7 +1517,7 @@ async function inboxFuer(u: User, now = Date.now()) {
     const s = await brauchtSicht(u, { karten }).catch((e: any) => { log('braucht fehler', { user: u.id, error: String(e?.message ?? e).slice(0, 160) }); return null; });
     if (s) { ib.eintraege = wendeAufInbox(ib.eintraege, s, { an: true }); (ib as any).brauchtZu = new Map(s.geschlossen.map((g: any) => [g.strand, g.grund])); }
   }
-  zahlCache.set(u.id, { at: Date.now(), n: inboxZahl(ib.eintraege) });   // jede frisch gebaute Inbox stellt auch den Zähler (Kopf = Leiste, 221)
+  zahlCache.set(u.id, { at: Date.now(), n: inboxZahl(ib.eintraege), text: brauchtSumme(ib.eintraege).text });   // jede frisch gebaute Inbox stellt auch den Zähler (Kopf = Leiste, 221)
   return ib;
 }
 const anwesenheitCol = () => wb().collection('anwesenheit');
@@ -1528,7 +1536,7 @@ function vaultFragenFuerInbox(now = Date.now()) {
     const wichtige = offen.map((q) => ({ ...q, st: stufeVon({ text: `${q.head} ${q.question} ${q.section}` }) })).filter((q) => q.st.stufe === 'wichtig');
     const sicht = ladeSichtung(join(cfg.dataDir, 'vault-sichtung.json'));
     const { einzeln: wahl } = waehleSichtung(wichtige, sicht?.eintraege ?? null);
-    const einzeln = wahl.map((q) => ({ path: q.path, line: q.line, hash: q.hash, head: q.head, section: q.section, title: q.title, topic: q.topic, since: q.since, grund: q.st.grund,
+    const einzeln = wahl.map((q) => ({ path: q.path, line: q.line, hash: q.hash, head: q.head, frage: q.question, section: q.section, title: q.title, topic: q.topic, since: q.since, grund: q.st.grund,
       prio: q.sichtung?.prio ?? null, kurz: q.sichtung?.kurz ?? null, beleg: q.sichtung?.beleg ?? null }));
     v = { einzeln, rest: offen.length - einzeln.length };
   } catch { /* Vault nicht lesbar: keine Vault-Fragen */ }
@@ -1538,7 +1546,7 @@ function vaultFragenFuerInbox(now = Date.now()) {
 on('GET', /^\/api\/inbox$/, async (req, res) => {
   const u = await needUser(req);
   const r = await inboxFuer(u);
-  send(res, 200, { ...r, zahl: inboxZahl(r.eintraege), at: new Date() });
+  send(res, 200, { ...r, zahl: inboxZahl(r.eintraege), summe: brauchtSumme(r.eintraege), at: new Date() });
 });
 /** Heute (Plan 213 S3): Entscheide (Inbox) · Blockiert/hängt · Geändert seit gestern 18:00 — ein Abruf für die Startseite. */
 on('GET', /^\/api\/heute$/, async (req, res) => {
@@ -1562,7 +1570,7 @@ on('GET', /^\/api\/heute$/, async (req, res) => {
     const prs = await wb().collection('pr_ticker').countDocuments({ at: { $gte: gesternAbend } }).catch(() => 0);
     geaendert = { seit: gesternAbend, fertig, gepusht, weggeraeumt: weg, prMeldungen: prs };
   }
-  send(res, 200, { ...inbox, zahl: inboxZahl(inbox.eintraege), blockiert, geaendert, at: jetzt, admin, navNeu: navNeu() });
+  send(res, 200, { ...inbox, zahl: inboxZahl(inbox.eintraege), summe: brauchtSumme(inbox.eintraege), blockiert, geaendert, at: jetzt, admin, navNeu: navNeu() });
 });
 on('POST', /^\/api\/inbox\/([\w-]{1,90})\/spaeter$/, async (req, res, m) => {
   const u = await needUser(req);
@@ -1591,23 +1599,24 @@ async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
   if (e.art === 'rueckfrage') {
     const opts = (e.daten.optionen as string[]) ?? [];
     const rec = opts.find((o) => o === e.empfehlung) ?? opts.find((o) => String(e.empfehlung ?? '').startsWith(o));
-    const a = art === 'ja' ? (rec ? { option: rec, text: '' } : { option: null, text: janein('ja', e.empfehlung) }) : art === 'nein' ? { option: null, text: janein('nein', e.empfehlung) } : { option: null, text };
+    const wahl = art === 'anders' ? optionAusAnders(opts, text) : null;   // Knopf einer Wahlfrage → echte Option, nicht „Anders: …“-Text
+    const a = art === 'ja' ? (rec ? { option: rec, text } : { option: null, text: `${janein('ja', e.empfehlung)}${text ? ` — ${text}` : ''}` }) : art === 'nein' ? { option: null, text: `${janein('nein', e.empfehlung)}${text ? ` — ${text}` : ''}` } : wahl ? { option: wahl.option, text: wahl.notiz } : { option: null, text };
     await answerQuestion(u, String(e.daten.qid), a);
     roadmapChanged('orchestrator-antwort');
   } else if (e.art === 'braucht') {
     if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
-    await sendOrch(u, String(e.daten.strand), replyText('antwort', art === 'ja' ? 'Ja.' : art === 'nein' ? 'Nein.' : text));
+    await sendOrch(u, String(e.daten.strand), replyText('antwort', art === 'ja' ? `Ja.${text ? ` ${text}` : ''}` : art === 'nein' ? `Nein.${text ? ` ${text}` : ''}` : text));
   } else if (e.art === 'entscheidung') {
     if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
     const liste = (e.daten.entscheidungen as any[]) ?? [];
     if (liste.length > 1 && art !== 'ja') throw new HttpError(400, 'Mehrere Entscheidungen: „Ja“ übernimmt alle Empfehlungen; einzeln in der Inbox entscheiden.');
-    const antworten = art === 'ja' ? liste.map((x) => ({ id: x.id, art: 'akzeptiert' })) : [{ id: liste[0].id, art: art === 'nein' ? 'abgelehnt' : 'eigene', text }];
+    const antworten = art === 'ja' ? liste.map((x) => ({ id: x.id, art: 'akzeptiert', ...(liste.length === 1 && text ? { text } : {}) })) : [{ id: liste[0].id, art: art === 'nein' ? 'abgelehnt' : 'eigene', text }];
     const d = await reviewStrand(u, String(e.daten.strand));
     const sperre = String(d._id);
     if (entscheidSperre.has(sperre)) throw new HttpError(409, 'Gerade wird schon eine Antwort eingetragen — gleich noch einmal.');
     entscheidSperre.add(sperre);
     antwortGezaehlt('inbox', weg);
-    try { const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }); await logEntscheidung(u, e, art === 'ja' ? 'ja (Empfehlungen übernommen)' : art === 'nein' ? 'nein' : andersLog(text), u.email).catch(() => {}); return r; } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
+    try { const r = await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, antworten }); await logEntscheidung(u, e, art === 'ja' ? 'ja (Empfehlungen übernommen)' : art === 'nein' ? 'nein' : andersLog(text), u.email).catch(() => {}); return { ...r, ziel: zielText(e) }; } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
   } else if (e.art === 'push') {
     if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
     if (art !== 'ja') throw new HttpError(400, 'Push: nur „Ja“ (freigeben) oder „Später“.');
@@ -1624,7 +1633,7 @@ async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
     if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
     const abs = vaultPath(String(e.daten.path));
     if (!abs.includes(`/${ROADMAP_BASE}/`)) throw new HttpError(400, 'Nur Roadmap-Notizen.');
-    const zeile = art === 'anders' ? text : `${art}${text ? ` — ${text}` : ''}`;
+    const zeile = art === 'anders' ? text : art === 'ja' && e.empfehlung ? `${e.empfehlung} (Empfehlung übernommen)${text ? ` — ${text}` : ''}` : `${art}${text ? ` — ${text}` : ''}`;
     let r;
     try { r = fillDecision(readFileSync(abs, 'utf8'), Number(e.daten.line), zeile, String(e.daten.hash)); }
     catch (x: any) { throw new HttpError(/geändert/.test(x.message) ? 409 : 400, x.message); }
@@ -1634,8 +1643,10 @@ async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
     if (art !== 'nein') throw new HttpError(400, 'Altbestand: „Nein“ verwirft alle, sonst einzeln durchsehen.');
     let fehler = 0;
     for (const x of (e.daten.eintraege as any[]) ?? []) {
-      if (x.art === 'rueckfrage') await withdrawQuestion(u, String(x.daten.qid)).catch(() => { fehler++; });
-      else await spaeterCol().updateOne({ _id: `${u.id}:${x.id}` as any }, { $set: { userId: u.id, id: x.id, bis: new Date(Date.now() + 30 * 86400_000), at: new Date() } }, { upsert: true });
+      // R32: „alte Deckel-Fragen schließen“ — Knut selbst schließt, deshalb dürfen hier auch Deckel-Fragen zu (jede mit Zeile im Log).
+      if (x.art === 'rueckfrage') {
+        await withdrawQuestion(u, String(x.daten.qid), { durchKnut: e.daten.deckel === true }).then(() => e.daten.deckel === true ? logEntscheidung(u, x, 'geschlossen: alte Deckel-Frage', u.email).catch(() => {}) : null).catch(() => { fehler++; });
+      } else await spaeterCol().updateOne({ _id: `${u.id}:${x.id}` as any }, { $set: { userId: u.id, id: x.id, bis: new Date(Date.now() + 30 * 86400_000), at: new Date() } }, { upsert: true });
     }
     if (fehler) throw new HttpError(409, `${fehler} Rückfrage(n) ließen sich nicht verwerfen — Inbox neu laden und einzeln ansehen.`);
   } else throw new HttpError(400, 'Diese Frage beantwortest du in ihrer Ansicht (Vault-Sync, Pflege, Schlange).');
@@ -1643,7 +1654,7 @@ async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
   if (e.art !== 'altbestand') await logEntscheidung(u, e, art === 'ja' ? `ja${e.empfehlung ? ` (${e.empfehlung})` : ''}` : art === 'nein' ? 'nein' : andersLog(text), u.email).catch(() => {});
   zahlCache.delete(u.id);
   if (e.art !== 'push') antwortGezaehlt(e.art === 'rueckfrage' ? 'rueckfrage' : e.art === 'braucht' ? 'braucht' : 'inbox', weg);
-  return { ok: true, art: e.art };
+  return { ok: true, art: e.art, ziel: zielText(e) };
 }
 
 // --- Entscheidungen nach Wichtigkeit (Knut 17.10.): Annahme nach 24 h, Entscheidungs-Log, Widerruf mit „Anders“ ---
@@ -1653,8 +1664,74 @@ on('GET', /^\/api\/entscheidungen\/fragen$/, async (req, res) => {
   const ib = await inboxFuer(u);
   const { fragen, sonstiges } = fragenAus(ib.eintraege);
   const heute = await logCol().countDocuments({ userId: u.id, auto: { $ne: true }, at: { $gte: wienUm(wienDatum(), 0) } }).catch(() => 0);
-  send(res, 200, { fragen, sonstiges, beantwortetHeute: heute, zurueckgestellt: ib.zurueckgestellt, zahl: inboxZahl(ib.eintraege), at: new Date() });
+  send(res, 200, { fragen, sonstiges, beantwortetHeute: heute, zurueckgestellt: ib.zurueckgestellt, zahl: inboxZahl(ib.eintraege), summe: brauchtSumme(ib.eintraege), fang: fangHierAn(fragen.filter((f) => f.klasse !== 'aktion')), at: new Date() });
 });
+
+// --- „Was ist das?“ (R32, Nachtrag 2): Nachfrage an den Hauptchat mit Kontext, Antwort direkt an der Karte ---
+const NACHFRAGE_ARTEN: NachfrageArt[] = ['frage', 'strang', 'pr', 'eintrag'];
+/** Kontext einer Karte/Frage für den Hauptchat — aus denselben Quellen wie die Seite (Inbox, Karten, PR-Lage). */
+async function nachfrageKontext(u: User, art: NachfrageArt, id: string): Promise<NachfrageKontext | null> {
+  const stand = async (strandId: string | null | undefined): Promise<[string, string][]> => {
+    if (!strandId) return [];
+    const d: any = await orchRuns().findOne({ _id: strandId as any, userId: u.id }, { projection: { title: 1, lastExcerpt: 1, zustand: 1, lastStatus: 1, paket: 1, tiefe: 1 } }).catch(() => null);
+    return d ? [['Strang', `„${d.title ?? ''}“ (${d.zustand ?? d.lastStatus ?? 'Stand unbekannt'}, Kennung ${strandId})`], ['Letzter Stand des Strangs', String(d.lastExcerpt ?? '')], ['Bericht', d.paket ? `Review-Paket ${d.paket} (bericht.md)` : '']] : [];
+  };
+  if (art === 'frage' || art === 'eintrag') {
+    const ib = await inboxFuer(u);
+    const f = fragenAus(ib.eintraege).fragen.find((x) => x.id === id);
+    const e = ib.eintraege.find((x) => x.id === (f?.eintrag ?? id));
+    if (!f && !e) return null;
+    const strandId = e?.quelle?.strand ?? null;
+    if (f) return { art: 'frage', id, titel: f.titel, zeilen: [['Thema', f.gruppe], ['Worum es geht', f.worum], ['Optionen', f.optionen.join(' | ')], ['Empfehlung', f.empfehlung ?? 'keine'], ['Quelle', f.quelle.text], ['Wartet seit', f.wartetSeit ?? ''],
+      ['Blockiert', f.blockiert > 0 ? `${f.blockiert} Unter-Chat(s) warten auf die Antwort` : ''], ['Antwortknöpfe an der Karte', f.form === 'janein' ? 'Ja / Nein / Anders / Später' : f.form === 'wahl' ? 'je Option ein Knopf, Anders, Später' : 'Freitext, Später'], ...(await stand(strandId))] };
+    return { art: 'eintrag', id, titel: e!.frage, zeilen: [['Art', e!.art], ['Empfehlung', e!.empfehlung ?? 'keine'], ['Quelle', e!.quelle.text], ['Wartet seit', e!.wartetSeit ?? ''], ...(await stand(strandId))] };
+  }
+  if (art === 'strang') {
+    const { karten } = await uebersichtDaten(u);
+    const k: any = karten.find((x: any) => x.id === id);
+    if (!k) return null;
+    return { art, id, titel: k.titel, zeilen: [['Thema', k.thema], ['Ampel', k.ampelText], ['Worum es geht', k.kurz], ['Von dir verlangt', k.vonDir], ['Warum blockiert', k.blockiert?.warum ?? ''], ['Was Knut tun soll', k.blockiert?.tun ?? ''],
+      ['Offene Entscheidungen', (k.entscheidungen ?? []).map((e: any) => `${e.id}: ${e.frage}`).join(' | ')], ['Strang', `Kennung ${k.id}`], ...(await stand(k.id)).filter(([l]) => l === 'Letzter Stand des Strangs' || l === 'Bericht')] };
+  }
+  if (art === 'pr') {
+    const l = await holePrLage(githubReadToken).catch(() => null);
+    const z = l?.zeilen.find((x) => x.pr === id);
+    if (!z) return null;
+    return { art, id, titel: `${z.pr} „${z.title}“`, zeilen: [['Autor', z.author ?? ''], ['Zweig', `${z.head} → ${z.base}`], ['Review-Stand', z.entscheidung ?? ''], ['Merge', z.mergeHinweis], ['Reviews', z.reviews.map((r) => `${r.wer}: ${r.zustand}`).join(', ')], ['Offene Threads', String(z.offeneThreads)], ['Link', z.url]] };
+  }
+  return null;
+}
+on('POST', /^\/api\/nachfrage$/, async (req, res) => {
+  const u = await needAdmin(req);
+  const b = await body(req, 64 * 1024);
+  const art = String(b.art ?? '') as NachfrageArt, id = String(b.id ?? '').slice(0, 200), text = String(b.text ?? '').trim().slice(0, 2000);
+  const folge = typeof b.nid === 'string' && /^[a-z0-9]{6,20}$/.test(b.nid);
+  if (!NACHFRAGE_ARTEN.includes(art) || !id) throw new HttpError(400, 'Art und Kennung der Karte fehlen.');
+  const leit = await activeLeitstand(u).catch(() => null);
+  if (!leit) throw new HttpError(409, 'Kein Hauptchat aktiv — in der Übersicht „Hauptchat starten“, dann noch einmal fragen.');
+  const ls: any = await strandStates(u).then((m) => m.get(leit.conv)).catch(() => null);
+  if (ls?.running) throw new HttpError(409, 'Der Hauptchat arbeitet gerade an etwas anderem — in einer Minute noch einmal fragen (dein Text bleibt stehen).');
+  const nid = folge ? String(b.nid) : randomBytes(4).toString('hex');
+  const kontext = folge ? null : await nachfrageKontext(u, art, id);
+  if (!folge && !kontext) throw new HttpError(409, 'Diese Karte gibt es nicht mehr (schon beantwortet?) — Seite neu laden.');
+  const sentAt = await deliverOrch(u, leit.conv, nachfrageText({ nid, frage: text, kontext, folge }));
+  log('nachfrage', { user: u.id, art, id, nid, folge });
+  send(res, 200, { nid, sentAt, hauptchat: leit.url });
+});
+/** Antworten des Hauptchats zu einer Nachfrage: je Frage von Knut (Marke #nachfrage-<nid>) die Antwort danach, null = noch keine. */
+on('GET', /^\/api\/nachfrage\/([a-z0-9]{6,20})$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const leit = await activeLeitstand(u).catch(() => null);
+  if (!leit) throw new HttpError(409, 'Kein Hauptchat aktiv.');
+  const msgs: any[] = await lc().collection('messages').find({ conversationId: leit.conv, user: u.id }).sort({ createdAt: -1 }).limit(200).toArray();
+  msgs.reverse();
+  const antworten = msgs.filter((x) => x.isCreatedByUser && nidAus(messageText(x)) === m[1]).map((q) => {
+    const a = msgs.find((x) => !x.isCreatedByUser && String(x.parentMessageId) === String(q.messageId) && !x.unfinished);
+    return { text: a ? messageText(a) : null, fertig: !!a && !a.error };
+  });
+  send(res, 200, { nid: m[1], antworten, hauptchat: leit.url });
+});
+
 /** Eine Bericht-Entscheidung (D…) einzeln: in den Bericht eintragen; der Unter-Chat arbeitet weiter, wenn alle beantwortet sind. */
 async function teilAntworten(u: User, e: any, teile: { id: string; antwort: string; text: string }[]) {
   if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
@@ -1669,7 +1746,7 @@ async function teilAntworten(u: User, e: any, teile: { id: string; antwort: stri
       const x = ((e.daten.entscheidungen as any[]) ?? []).find((y) => String(y.id) === t.id) ?? {};
       await logEntscheidung(u, { ...e, frage: `${t.id}: ${x.frage ?? ''}`, empfehlung: x.empfehlung ?? null, stufe: x.stufe ?? e.stufe }, t.antwort === 'ja' ? `ja${x.empfehlung ? ` (${x.empfehlung})` : ''}` : t.antwort === 'nein' ? 'nein' : andersLog(t.text), u.email, false, [t.id]).catch(() => {});
     }
-    return r;
+    return { ...r, ziel: zielText(e) };
   } finally { entscheidSperre.delete(sperre); zahlCache.delete(u.id); }
 }
 on('POST', /^\/api\/entscheidungen\/fragen\/antwort$/, async (req, res) => {
@@ -2143,7 +2220,7 @@ on('POST', /^\/api\/leitstand\/ticker\/einstellungen$/, async (req, res) => {
 });
 on('POST', /^\/api\/leitstand\/ticker\/jetzt$/, async (req, res) => {
   await needAdmin(req);
-  const r = await tickerTick(githubReadToken, new Date(), { force: true }).catch((e: any) => { throw new HttpError(502, e.message); });
+  const r = await tickerTick(githubReadToken, new Date(), { force: true, melde: tickerMelde }).catch((e: any) => { throw new HttpError(502, e.message); });
   send(res, 200, r);
 });
 // Eintrag mit Deckel/Fehler von Hand wieder in die Warteschlange (Deckel des Tages gilt weiter).
@@ -2254,8 +2331,8 @@ async function entscheidungenEintragen(u: User, d: any, b: any): Promise<Record<
     const id = String(a?.id ?? ''), e = bekannt.get(id);
     // Plan 184, Teil B: „abgelehnt“ = Nein auf der Übersicht (die Empfehlung gilt nicht).
     const art = a?.art === 'akzeptiert' || a?.art === 'nachpruefen' || a?.art === 'abgelehnt' ? a.art : 'eigene';
-    const frei = String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000);
-    const t = art === 'akzeptiert' ? (e?.empfehlung ? `${b.auto ? 'nach 24 h automatisch angenommen (Stufe normal)' : 'akzeptiert'} (Empfehlung: ${e.empfehlung.slice(0, 200)})` : 'ja') : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}`
+    const frei = String(a?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 4000);   // R32: Knuts Wortlaut, nicht bei 1000 abschneiden
+    const t = art === 'akzeptiert' ? `${e?.empfehlung ? `${b.auto ? 'nach 24 h automatisch angenommen (Stufe normal)' : 'akzeptiert'} (Empfehlung: ${e.empfehlung.slice(0, 200)})` : 'ja'}${frei ? `: ${frei}` : ''}` : art === 'nachpruefen' ? `nachprüfen${frei ? `: ${frei}` : ''}`
       : art === 'abgelehnt' ? `nein — Empfehlung abgelehnt${e?.empfehlung ? ` (${e.empfehlung.slice(0, 200)})` : ''}${frei ? `: ${frei}` : ''}` : frei;
     return { id, art, text: t };
   }).filter((a: any) => a.text && bekannt.has(a.id) && !bekannt.get(a.id)!.knut);
@@ -2442,7 +2519,14 @@ on('GET', /^\/api\/uebersicht$/, async (req, res) => {
   const erledigt = ((await orchRuns().find({ userId: u.id, kind: { $ne: 'leitstand' }, $or: [{ knutReviewedAt: { $gte: seit } }, { reviewedAt: { $gte: seit }, reviewedBy: null }] },
     { projection: { title: 1, thema: 1, paket: 1, cwd: 1, lauf: 1, url: 1, knutReviewedAt: 1, reviewedAt: 1 } }).sort({ knutReviewedAt: -1, reviewedAt: -1 }).limit(40).toArray().catch(() => [])) as any[])
     .map((d) => ({ id: String(d._id), titel: d.title ?? '', thema: themaOf(d), at: d.knutReviewedAt ?? d.reviewedAt, chat: /^https?:\/\//.test(String(d.url ?? '')) ? d.url : null }));
-  send(res, 200, { ...gruppieren(karten, lose), at: new Date(), dryRun: dryRun(), paketDienst: !!basis, fragenFehler, hauptchat, erledigt });
+  // R32 (Befund 8): PR-Lage in einer Zeile — offene PRs (GitHub-Kopie), Konflikte, wer dran ist; der Link führt auf PR-Review.
+  const prLage = await livePrs().then((g) => {
+    const ich = firstName(u).toLowerCase(), live = [...g.map.values()];
+    return { offen: live.length, konflikt: live.filter((p: any) => p.mergeable === 'CONFLICTING').length, wartenAufDich: live.filter((p: any) => String(p.turn?.who ?? '').toLowerCase().split(/\s+/)[0] === ich).length, at: g.sync?.at ?? null, fehler: g.sync?.error ?? null };
+  }).catch(() => null);
+  const heuteSeit = heuteFrueh(new Date());
+  const heuteFertig = fertigHeute(karten, erledigt.map((x: any) => ({ id: x.id, titel: x.titel, at: x.at, chat: x.chat })), heuteSeit);
+  send(res, 200, { ...gruppieren(karten, lose), at: new Date(), dryRun: dryRun(), paketDienst: !!basis, fragenFehler, hauptchat, erledigt, heuteFertig, prLage });
 });
 
 // Lage (Release 31): „Was ist offen?“ auf einen Blick — Für dich · Läuft · Fertig seit heute früh · Erledigt der Hauptchat ·
@@ -4226,7 +4310,7 @@ async function backgroundJobs() {
   // PR-Ticker + Auto-Review (Plan 157): jede Minute nachsehen; der Ticker selbst hält seinen Takt (Einstellung „minutes“).
   const prTick = async () => {
     let regelNeu = 0;
-    try { const r = await tickerTick(githubReadToken); regelNeu = r.regel ?? 0; if (r.events || r.reviews || r.regel) log('pr-ticker', { ...r }); }
+    try { const r = await tickerTick(githubReadToken, new Date(), { melde: tickerMelde }); regelNeu = r.regel ?? 0; if (r.events || r.reviews || r.regel) log('pr-ticker', { ...r }); }
     catch (e: any) { log('pr-ticker', { error: String(e.message).slice(0, 200) }); }
     // Plan 274 (Zusatz A): neue Reviews → regel-vorschlag.sh (sonst einmal am Tag) → Vorschläge als Rückfrage + Hauptchat-Meldung.
     try { await regelVorschlagTakt(regelNeu); } catch (e: any) { log('regel-vorschlag', { error: String(e?.message ?? e).slice(0, 200) }); }
@@ -4458,6 +4542,10 @@ if (process.env.ORCH_STATUS !== 'off') setInterval(() => {
       for (const id of ids) { const u = await userById(String(id)).catch(() => null); if (u && allowed(u.email) && u.role === 'ADMIN') await brauchtSicht(u, { schliessen: true }).catch((e) => log('braucht fehler', { user: String(id), error: String(e?.message ?? e).slice(0, 160) })); }
     }).catch((e) => log('braucht fehler', { error: String(e?.message ?? e).slice(0, 160) })).finally(() => { brauchtTaktLaeuft = false; });
   }
+  // R32 (Nachtrag C): Fragen erledigter/abgebrochener/archivierter Stränge schließen sich selbst (mit Grund); WERKBANK_FRAGEN_AUFRAEUMEN=0 schaltet ab.
+  if (fragenAufraeumenAn()) wb().collection('orchestrator_questions').distinct('userId', { status: 'offen' }).then(async (ids: any[]) => {
+    for (const id of ids) { const z = await fragenAufraeumen(String(id)).catch(() => []); if (z.length) { zahlCache.delete(String(id)); log('fragen aufgeräumt', { user: String(id), n: z.length, ids: z.map((x) => x.id) }); } }
+  }).catch((e) => log('fragen aufräumen fehler', { error: String(e?.message ?? e).slice(0, 160) }));
   // Knut 17.10.: normale Entscheidungen nach 24 h annehmen (WERKBANK_AUTO_ANNAHME=0 schaltet ab).
   annahmeTakt().catch((e) => log('annahme fehler', { error: String(e?.message ?? e).slice(0, 160) }));
 }, 10 * 60_000).unref();

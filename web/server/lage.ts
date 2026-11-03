@@ -68,6 +68,17 @@ const istLaufend = (k: LageKarte) => k.running || k.ampel === 'laeuft' || k.ampe
 const istFertig = (k: LageKarte, seit: string) => !istLaufend(k) && (k.ampel === 'review' || k.ampel === 'push') && iso(k.statusAt) >= seit;
 const kurzPr = (pr: string) => pr.replace(/^[^/]+\//, '');
 
+
+/** „Heute fertig“ (R32, Befund 6): Karten, die seit heute früh fertig gemeldet wurden (dein Review / bereit zum Push), plus die heute von dir
+ *  geprüften — je mit Ergebnis-Satz (Titel aus dem Bericht-Kopf) und Link zum Bericht, neueste zuerst. Eine Quelle für Lage und Übersicht. */
+export function fertigHeute(karten: LageKarte[], erledigtHeute: { id: string; titel: string; at: any; chat: string | null }[], seit: string) {
+  const bekannt = new Set<string>();
+  return [
+    ...karten.filter((k) => istFertig(k, seit)).map((k) => ({ id: k.id, satz: k.titel, strang: k.strangTitel, thema: k.thema, at: iso(k.statusAt), link: k.links.find((l) => l.art === 'bericht')?.url ?? k.chat ?? null, ampel: k.ampel })),
+    ...erledigtHeute.filter((x) => iso(x.at) >= seit).map((x) => ({ id: x.id, satz: x.titel, strang: x.titel, thema: '', at: iso(x.at), link: x.chat, ampel: 'geprüft' })),
+  ].filter((f) => (bekannt.has(f.id) ? false : (bekannt.add(f.id), true))).sort((a, b) => b.at.localeCompare(a.at));
+}
+
 export function baueLage(e: LageEingabe) {
   // ---- Für dich zu tun ----
   const fragen = e.fragen.filter((f) => f.klasse !== 'aktion')
@@ -81,10 +92,7 @@ export function baueLage(e: LageEingabe) {
 
   // ---- Läuft / Fertig ----
   const laeuft = e.karten.filter(istLaufend).map((k) => ({ id: k.id, titel: k.strangTitel || k.titel, thema: k.thema, eta: k.eta?.text ?? null, ueberfaellig: !!k.eta?.ueberfaellig, blockiert: k.ampel === 'blockiert', chat: k.chat }));
-  const fertig = [
-    ...e.karten.filter((k) => istFertig(k, e.seit)).map((k) => ({ id: k.id, satz: k.titel, strang: k.strangTitel, thema: k.thema, at: iso(k.statusAt), link: k.links.find((l) => l.art === 'bericht')?.url ?? k.chat ?? null, ampel: k.ampel })),
-    ...(e.erledigtHeute ?? []).filter((x) => iso(x.at) >= e.seit).map((x) => ({ id: x.id, satz: x.titel, strang: x.titel, thema: '', at: iso(x.at), link: x.chat, ampel: 'geprüft' })),
-  ].sort((a, b) => b.at.localeCompare(a.at));
+  const fertig = fertigHeute(e.karten, e.erledigtHeute ?? [], e.seit);
   const hauptchat = e.aktionen.map((a) => ({ kennung: a.kennung, strand: a.strand, titel: a.titel ?? a.strand, aktion: a.aktion ?? '', wasTun: a.wasTun }));
 
   // ---- PR-Lage ----

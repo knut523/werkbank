@@ -186,7 +186,8 @@ export function App() {
   }, []);
 
   if (err) return <div className="page"><Err e={err} /></div>;
-  if (!cfg) return <div className="page"><Loading /></div>;
+  // R32 (Befund 2): beim Laden steht schon das Gerüst (Leiste und Hauptfläche an ihrem Platz) — sonst springt die ganze Seite, sobald die Konfiguration da ist.
+  if (!cfg) return embedded ? <div className="page"><Loading /></div> : <div className="shell"><aside className="side" aria-hidden="true" /><main className="main"><div className="page"><Loading /></div></main></div>;
   const user = cfg.user;
   if (embedded && !user) {
     return <div className="page"><h1>OLAF Workspace</h1><p className="muted">Dein Chat-Konto ist für den OLAF Workspace noch nicht freigeschaltet (Pilot) — oder die Anmeldung ist abgelaufen. Seite neu laden; hilft das nicht, frag Knut.</p></div>;
@@ -199,8 +200,9 @@ export function App() {
   // Bereiche mit ihren freigegebenen Reitern; ein Bereich ohne freigegebenen Reiter fehlt ganz.
   const neu = !!cfg.navNeu;
   const START = neu ? HEUTE : UEBERSICHT;
-  // D6/F2 (Knut 19.10.): „Mein Tag“ steht nie in der Leiste (der Kalender erledigt den Job) — die Adresse #/timebox bleibt erreichbar.
-  const inLeiste = (r: Reiter) => vis(r) && r.f !== 'timebox';
+  // R32 (Befund 7, Knut 03.11.): „Mein Tag“ ist wieder auffindbar — Reiter unter Planen (die Entscheidung vom 19.10., es nie zu zeigen, ist damit
+  // abgelöst; der Tagesvorschlag steht zusätzlich als Karte in der Übersicht).
+  const inLeiste = (r: Reiter) => vis(r);
   const bereiche = (neu ? BEREICHE_NEU : BEREICHE).map((b) => ({ ...b, reiter: b.reiter.filter(inLeiste) })).filter((b) => b.reiter.length > 0);
   const alsNav = (b: (typeof bereiche)[number]): Nav => ({ href: letzterReiter(b), label: b.label, ico: b.ico, match: new RegExp(b.reiter.map((r) => r.match.source).join('|')), f: '' });
   const lage = cfg.lage ? [LAGE] : [];

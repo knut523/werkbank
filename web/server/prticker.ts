@@ -129,7 +129,7 @@ export async function fetchTicker(token: string, since: Date, env = process.env)
 
 // ---------- Ereignisse (rein) ----------
 
-export type Kind = 'neu' | 'stand' | 'zu' | 'kommentar' | 'review' | 'anfrage' | 'tag' | 'erledigt' | 'fix';
+export type Kind = 'neu' | 'stand' | 'zu' | 'kommentar' | 'review' | 'anfrage' | 'tag' | 'erledigt' | 'fix' | 'unbekannt';
 export interface TickerEvent { _id: string; kind: Kind; repo: string; number: number; title: string; url: string; prUrl: string; actor: string | null; text: string; at: string; head: string;
   /** nur `fix`: Auftrag (Text nach @fix, leer = offene Punkte des letzten Reviews), Art und Ort (Inline: Datei:Zeile) */
   fix?: { auftrag: string; quelle: 'kommentar' | 'review' | 'inline'; ort: string | null } }
@@ -145,9 +145,22 @@ export const UEBERLAPPUNG_MIN = 15;
  *  ist Markdown-Kursiv und zählt (daher Lookahead statt \b, denn `_` ist \w und \b fände keine Grenze). Verschärfung
  *  gegen die Basis: `-` direkt dahinter zählt nicht mehr (`@review-tickets` war in der Basis ein Tag) — ein Tag heißt
  *  `@review`, sonst nichts (Gegenprüfung 26.10.); `_` davor bleibt erlaubt (Kursiv), `pfad_zu_@review` matcht also. */
-export const TAG = /(?<![a-z\d@])@review(?=$|[^-\w]|_(?![\w-]))/i;
-/** `@review deep` → Tiefe deep (Knut 17.10.). */
-export const TAG_DEEP = /(?<![a-z\d@])@review\s+deep(?=$|[^-\w]|_(?![\w-]))/i;
+const DAVOR = String.raw`(?<![a-z\d@])`, NACH = String.raw`(?=$|[^-\w]|_(?![\w-]))`;
+/** R32 (Nachtrag 3, 03.11.: „@deep review“ auf olaf-admin#373 löste nichts aus): tiefes Review in allen gängigen Schreibweisen —
+ *  `@review deep`, `@deep review`, `@deepreview`, `@review-deep`, `@review_deep`, `@review: deep` (Groß/Klein egal). */
+export const TAG_DEEP = new RegExp(`${DAVOR}@(?:review[\\s:_\\-–—]*deep|deep[\\s:_\\-–—]*review|deepreview)${NACH}`, 'i');
+export const TAG = new RegExp(`${DAVOR}@review${NACH}|${TAG_DEEP.source}`, 'i');
+/** `@word`, das wie ein Werkbank-Tag aussieht (review/deep/fix-Familie), aber keiner ist (`@deep`, `@revew`, `@fix-it`, `@fixen`, `@review-please`).
+ *  Liefert das erste solche Wort samt Vorschlag, sonst null — der Ticker meldet es dem Hauptchat statt zu schweigen. */
+export function unbekannterTag(body: string | null | undefined): { wort: string; vorschlag: string } | null {
+  const t = String(body ?? '');
+  if (TAG.test(t) || FIX_TAG.test(t)) return null;
+  const m = /(?<![a-z\d@])@(deep\w*|review[\w-]*|rev\w*|fix[\w-]*)(?![\w@])/i.exec(t);
+  if (!m) return null;
+  const w = m[1].toLowerCase();
+  if (/^reviewer/.test(w)) return null;   // @reviewer ist eine Erwähnung, kein Tag-Versuch
+  return { wort: `@${m[1]}`, vorschlag: /^fix/.test(w) ? '@fix' : /deep/.test(w) ? '@review deep' : '@review' };
+}
 /** Ereignistext eines Tags: „deep“ muss erhalten bleiben, sonst sieht queueReviews es nie (Fehler 19.10.). */
 /** Plan 286: `@fix` — eigene Regex, Wortgrenze wie `@review` (`@fixes`, `@fix-it`, `mail@fix.de` zählen nicht). */
 export const FIX_TAG = /(?<![a-z\d@])@fix(?=$|[^-\w]|_(?![\w-]))/i;
@@ -215,10 +228,17 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
       const auftrag = fixAuftrag(body);
       events.push({ _id: `fix:${id}`, kind: 'fix', at, actor: who, text: `@fix von ${who}${ort ? ` (${ort})` : ''}${auftrag ? `: ${kurz(auftrag, 100)}` : ' (offene Punkte des letzten Reviews)'}`, url, ...base, fix: { auftrag, quelle, ort } });
     };
+    // R32 (Nachtrag 3): sieht ein @-Wort einer erlaubten Person wie ein Tag aus, wird aber nicht erkannt → Meldung statt Schweigen.
+    const unbekannt = (id: string, at: string, who: string, body: string, url: string) => {
+      const u = unbekannterTag(body);
+      if (!u || !allowSet.has(who) || state !== 'OPEN' || (who === ME && body.includes(MARKE_TICKER))) return;
+      ev(`unbekannt:${id}`, 'unbekannt', at, who, `unbekannter Tag ${u.wort} auf ${repo.split('/').pop()}#${p.number} (von ${who}) — gemeint ${u.vorschlag}?`, url);
+    };
     for (const c of p.comments?.nodes ?? []) {
       const who = (c.author?.login ?? '').toLowerCase();
       if (!c.id || c.createdAt < ab) continue;
       fix(c.id, c.createdAt, who, c.body ?? '', c.url ?? p.url, 'kommentar');
+      unbekannt(c.id, c.createdAt, who, c.body ?? '', c.url ?? p.url);
       // R29 A: Eigene Workspace-Kommentare (OLAF Workspace) unter Knuts Konto lösen auch als Tag nie aus — Knuts eigenes @review schon.
       if (TAG.test(c.body ?? '') && allowSet.has(who) && state === 'OPEN' && !(who === ME && (c.body ?? '').includes(MARKE_TICKER))) ev(`tag:${c.id}`, 'tag', c.createdAt, who, tagText(c.body, who), c.url);
       else if (who && who === author && who !== ME && allowSet.has(who) && state === 'OPEN' && meldetErledigt(c.body)) ev(`erledigt:${c.id}`, 'erledigt', c.createdAt, who, `${who} meldet erledigt: ${kurz(c.body, 100)}`, c.url);
@@ -230,6 +250,7 @@ export function deriveEvents(prs: any[], known: Map<string, PrMem>, since: strin
       // R29 A (Gegenprüfung 26.10.): Inline-Kommentare kennzeichnet die databaseId, nicht der Listenindex —
       // GitHub sortiert nicht stabil (Löschen verschiebt Indizes), ein Index würde Tags verschieben statt auslösen.
       const inlineId = (ic: any, i: number) => ic?.databaseId ? String(ic.databaseId) : `${i}`;
+      unbekannt(r.id, r.submittedAt, who, r.body ?? '', r.url ?? p.url);
       if (FIX_TAG.test(r.body ?? '')) fix(r.id, r.submittedAt, who, r.body ?? '', r.url ?? p.url, 'review');
       else (r.comments?.nodes ?? []).forEach((ic: any, i: number) => fix(`${r.id}:${inlineId(ic, i)}`, r.submittedAt, who, ic?.body ?? '', r.url ?? p.url, 'inline', ic?.path ? `${ic.path}:${ic.line ?? ic.originalLine ?? '?'}` : null));
       // R29 A: @review auch in den Inline-Zeilenkommentaren des Reviews — eigene Kennung `tag:<rid>:<inlineId>`, eigener Text
@@ -287,7 +308,7 @@ export interface TickResult { events: number; reviews: number; prs: number; skip
  * Ein Durchgang: Abruf ab dem letzten erfolgreichen Lauf (UEBERLAPPUNG_MIN Überlappung), Ereignisse speichern, Auslöser in die
  * Review-Warteschlange. Erster Lauf: ab jetzt − 1 h; PRs, die er nur kennenlernt, melden nichts (T5).
  */
-export async function tickerTick(getToken: () => Promise<string | null>, now = new Date(), opts: { force?: boolean } = {}): Promise<TickResult> {
+export async function tickerTick(getToken: () => Promise<string | null>, now = new Date(), opts: { force?: boolean; melde?: (e: TickerEvent, besitzer: string | null) => Promise<void> } = {}): Promise<TickResult> {
   if (tickerAus()) return { events: 0, reviews: 0, prs: 0, skipped: 'WERKBANK_PR_TICKER=off' };
   const s = await tickerSettings();
   if (!s.ticker) return { events: 0, reviews: 0, prs: 0, skipped: 'aus' };
@@ -319,6 +340,7 @@ export async function tickerTick(getToken: () => Promise<string | null>, now = n
       catch (x: any) { if (x?.code !== 11000) throw x; }   // schon gesehen
     }
     if (mem.length) await prState().bulkWrite(mem.map((m) => ({ replaceOne: { filter: { _id: m._id as any }, replacement: { ...m, at: now }, upsert: true } })));
+    for (const e of fresh) if (e.kind === 'unbekannt' && opts.melde) await opts.melde(e, s.ownerId ?? null).catch(() => {});   // Hauptchat erfährt vom unbekannten Tag
     const reviews = await queueReviews(fresh, s, now);
     await queueFixes(fresh, s, now);
     // Plan 274 (Zusatz A): Reviews/Kommentare der Erlaubtliste als Regel-Quelle für das Pre-Push-Gate (nur mit WERKBANK_REGEL_DIR).

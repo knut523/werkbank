@@ -14,6 +14,7 @@ import { worumGeht } from './heutekarte.ts';
 import { themaOf } from './themen.ts';
 import { etaFertig, etaFuer, istTiefe, QUELLE_TEXT, type Tiefe } from './tiefe.ts';
 import { knutDone, statusWord, kopfFelder } from './leitstand.ts';
+import { klassifiziere, hauptchatAktionen } from './braucht.ts';
 import { OPEN } from './orchestrator.ts';   // in der Abfrage, damit .limit() nicht Geprüfte zählt
 
 export type Ampel = 'laeuft' | 'blockiert' | 'push' | 'review';
@@ -53,6 +54,42 @@ export function offeneEntscheidungen(text: string | null, beantwortet: { bericht
   // Im Kopf beantwortet (antwort gesetzt) gilt auch für einen gleichnamigen Textblock.
   const kopfFertig = new Set(imKopf.filter((f) => f.antwort).map((f) => f.id));
   return out.filter((x) => !kopfFertig.has(x.id));
+}
+
+
+const erster = (t: string, n = 200) => { const x = t.replace(/\s+/g, ' ').trim(); const m = /^(.{20,}?[.!?])(\s|$)/.exec(x); const s = (m ? m[1] : x); return s.length > n ? `${s.slice(0, n - 1).replace(/\s+\S*$/, '')}…` : s; };
+const KEIN_KONTEXT = { kennung: '', beantwortet: () => false, paketLive: () => false, prZu: () => null, laufNeuere: () => false } as const;
+
+/** R32 (Befund 5): bei „blockiert“ ein Satz WARUM (aus „Offen“ bzw. „Braucht Knut“ im Stand) und ein Satz WAS DU TUN SOLLST (aus der
+ *  Braucht-dich-Einordnung: nur Knut / Hauptchat kann es selbst / sonst im Chat nachsehen). Rein. */
+export function blockiertSatz(o: { excerpt?: string | null; braucht: string | null; grund?: string | null }, hauptchatAktionen: string[] = []): { warum: string; tun: string } {
+  const offen = /^\s*-\s*Offen:\s*(.+)$/im.exec(o.excerpt ?? '')?.[1]?.trim().replace(/^\*+|\*+$/g, '').trim() ?? '';
+  const quelle = (offen && !/^[„"“]?(nichts|keins?|keine)[“"”]?\.?$/i.test(offen) ? offen : '') || o.braucht || o.grund || '';
+  const warum = quelle ? erster(quelle) : 'Der Unter-Chat meldet „blockiert“, nennt aber keinen Grund.';
+  let tun = 'Im Chat nachsehen und dem Unter-Chat geben, was fehlt — der Grund steht oben.';
+  if (o.braucht) {
+    const k = klassifiziere(o.braucht, { ...KEIN_KONTEXT, hauptchatAktionen });
+    if (k.art === 'aktion') tun = 'Nichts für dich — der Hauptchat führt das aus.';
+    else if (k.art === 'entscheidung' && k.wasTun) tun = erster(k.wasTun.replace(/\s*Warum du:.*$/, ''), 220);
+  }
+  return { warum, tun };
+}
+
+/** Untertitel einer Karte ohne die Wiederholung des Kartentitels („Bot: …“ stand zweimal untereinander). */
+export function ohneDoppel(titel: string, kurz: string): string {
+  const n = (x: string) => x.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const t = n(titel), k = n(kurz);
+  if (!k || k === t) return '';
+  if (t && k.startsWith(t)) {
+    const rest = kurz.slice(Math.min(kurz.length, titel.length)).replace(/^[\s.:\-–—]+/, '').trim();
+    return rest.length >= 12 ? rest : '';
+  }
+  return kurz;
+}
+
+/** „Technische Details“ › Modell: das gelaufene, sonst das geplante; ohne beides ein ehrlicher Satz statt „unbekannt“. */
+export function modellText(o: { modell: string | null; modellPlan: string | null; gesendet: boolean }): string {
+  return o.modell ? o.modell : o.modellPlan ? `${o.modellPlan} (geplant)` : o.gesendet ? 'Standardmodell der Brücke (der Zug hat noch keins gemeldet)' : 'noch kein Zug gelaufen';
 }
 
 /** Ampel mit fester Reihenfolge (Council 4). */
@@ -162,7 +199,7 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null, med: 
   const seen = String(new Date(d.reviewReadyAt ?? d.doneAt ?? 0).getTime()) + ':' + String(new Date(d.lastSentAt ?? d.startedAt).getTime());
   return {
     id: String(d._id), titel: kopf?.titel || d.title || '(ohne Titel)', strangTitel: d.title ?? '', thema: themaOf(d), ampel: a, ampelText: a === 'push' && fg?.pushedAt ? 'gepusht' : AMPEL_TEXT[a],
-    zusatz: freigabeZusatz(fg), kurz, anders: (kopf?.anders ?? []).slice(0, 4),
+    zusatz: freigabeZusatz(fg), kurz: ohneDoppel(kopf?.titel || d.title || '', kurz), anders: (kopf?.anders ?? []).slice(0, 4),
     github: (kopf?.github ?? []).map((g) => ({ repo: String(g.repo ?? ''), zweig: String(g.zweig ?? ''), commit: String(g.commit ?? '').slice(0, 7), pr: sicher(g.pr) ? g.pr : null })),
     prs: (felder.prs ?? []).filter((z: any) => sicher(z.url)).map((z: any) => ({ label: z.label, url: z.url, stand: z.stand })),
     links: kartenLinks({ id: String(d._id), bericht: !!text, paket, dateien: p?.files ?? [], basis, kopf, chat: d.url }),
@@ -170,7 +207,9 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null, med: 
     entscheidungen: offen, berichtHash: text ? berichtHash(text) : null, rueckfragen: qs, braucht,
     kannFreigeben, freigabe: fg, weitereRepos: felder.weitereRepos ?? [], commitWarnung: felder.commitWarnung ?? null,
     kopfFehler: kopf ? null : felder.kopfFehler ?? (roh && 'fehler' in roh ? roh.fehler : null),   // wie Heute: unlesbaren Kopf zeigen
-    modell: d.lastModell ?? null, modellPlan: d.modell ?? null, gegenpruefung: d.gegenpruefung?.n ?? 0, reviewReady: !!d.reviewReadyAt,   // Karte › Technische Details (Paket 187, S4)
+    modell: d.lastModell ?? null, modellPlan: d.modell ?? null, modellText: modellText({ modell: d.lastModell ?? null, modellPlan: d.modell ?? null, gesendet: !!(d.lastSentAt ?? d.startedAt) }),
+    blockiert: a === 'blockiert' ? blockiertSatz({ excerpt: d.lastExcerpt, braucht: brauchtKnut(d.lastExcerpt), grund: (kopf?.offen ?? [])[0] ?? d.lastReason ?? null }, hauptchatAktionen()) : null,
+    gegenpruefung: d.gegenpruefung?.n ?? 0, reviewReady: !!d.reviewReadyAt,   // Karte › Technische Details (Paket 187, S4)
     tiefe: istTiefe(d.tiefe) ? d.tiefe : null, eta: fertig ? null : { text: eta.text, ueberfaellig: eta.ueberfaellig, at: eta.at, quelle: eta.quelle ? QUELLE_TEXT[eta.quelle] : null },
     running, wartet: wort === 'wartet', seen, paket, chat: sicher(d.url) ? d.url : null, statusAt: d.statusAt ?? d.lastActivity ?? d.startedAt,
   };
@@ -221,7 +260,7 @@ export function kopfAntwortEintragen(md: string, antworten: { id: string; text: 
     let stop = item + 1;
     while (stop < end && !new RegExp(`^\\s{${dash}}-\\s`).test(lines[stop]) && (lines[stop].trim() === '' || lines[stop].search(/\S/) > dash)) stop++;
     // An einer Zeichengrenze kürzen (Pass C: kein halbes Surrogatpaar im YAML).
-    const zeile = `${' '.repeat(dash + 2)}antwort: ${JSON.stringify(Array.from(a.text.replace(/\s+/g, ' ').trim()).slice(0, 600).join(''))}`;
+    const zeile = `${' '.repeat(dash + 2)}antwort: ${JSON.stringify(Array.from(a.text.replace(/\s+/g, ' ').trim()).slice(0, 4000).join(''))}`;   // R32: Knuts Wortlaut (vorher bei 600 abgeschnitten)
     const hit = lines.slice(item + 1, stop).findIndex((l) => new RegExp(`^\\s{${dash + 2}}antwort:`).test(l));
     if (hit >= 0) {
       const at = item + 1 + hit;

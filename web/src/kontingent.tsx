@@ -10,14 +10,16 @@ const uhr = (t: number) => new Date(t).toLocaleString('de-AT', { timeZone: 'Euro
 
 export function KontingentZeile() {
   const [k, setK] = useState<K | null>(null);
+  const [fertig, setFertig] = useState(false);
   useEffect(() => {
     let weg = false;
-    const laden = () => api<K>('/api/kontingent').then((x) => { if (!weg) setK(x); }).catch(() => {});
+    const laden = () => api<K>('/api/kontingent').then((x) => { if (!weg) setK(x); }).catch(() => {}).finally(() => { if (!weg) setFertig(true); });
     laden();
     const t = setInterval(laden, 5 * 60_000);
     return () => { weg = true; clearInterval(t); };
   }, []);
-  if (!k) return null;
+  // R32 (Befund 2): beim Laden den Platz der Zeile freihalten — sonst springt die ganze Seite nach unten, wenn sie kommt.
+  if (!k) return fertig ? null : <div className="kontingent row" style={{ minHeight: 32 }} aria-hidden="true" />;
   const m = k.melious;
   const knapp = !!m && (m.sperre !== null || (m.restProzent !== null && m.restProzent < k.schwelle));
   const jetzt = Date.now();

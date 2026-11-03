@@ -44,7 +44,7 @@ const fid = (f: FrageDoc) => String(f.id ?? f._id);
 function antwort(f: FrageDoc): string {
   if (f.status === 'zurückgezogen') return 'zurückgezogen';
   if (f.status !== 'beantwortet' || !f.answer) return 'offen';
-  return [f.answer.option ? `Option „${f.answer.option}“` : '', ein(f.answer.text, 1000)].filter(Boolean).join(' — ') || '(ohne Text)';
+  return [f.answer.option ? `Option „${f.answer.option}“` : '', ein(f.answer.text, 4000)].filter(Boolean).join(' — ') || '(ohne Text)';
 }
 
 export const vollstaendig = (fragen: Pick<FrageDoc, 'status'>[]) => fragen.length > 0 && fragen.every((f) => f.status !== 'offen');

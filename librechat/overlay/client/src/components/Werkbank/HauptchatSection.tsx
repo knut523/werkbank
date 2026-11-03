@@ -176,8 +176,8 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
   const datei = (s: Strand, art: 'auftrag' | 'bericht') => {
     const Icon = art === 'auftrag' ? FileText : FileCheck;
     const name = art === 'auftrag' ? 'Auftrag' : 'Bericht';
-    const box = 'flex h-8 w-8 items-center justify-center rounded-md';
-    if (!s[art]) return <span className={cn(box, 'text-text-tertiary opacity-40')} title={`${name}: noch keiner`} aria-hidden="true"><Icon className="h-4 w-4" /></span>;
+    const box = 'flex h-8 min-w-8 items-center justify-center gap-1 rounded-md px-1';
+    if (!s[art]) return <span className={cn(box, 'text-text-tertiary opacity-40')} title={`${name}: noch keiner`} aria-hidden="true"><Icon className="h-4 w-4" /></span>;   // R32: am Handy steht der Name dabei (sonst nur Tooltip)
     const to = `/wb/leitstand?h=${encodeURIComponent(`#/leitstand?${art}=${s.id}`)}`;
     return (
       <a
@@ -189,6 +189,7 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
         onClick={(e) => { if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(to); toggleNav?.(); }}
       >
         <Icon className="h-4 w-4" aria-hidden="true" />
+        <span className="text-xs md:hidden">{name}</span>
       </a>
     );
   };
@@ -279,7 +280,8 @@ function HauptchatSection({ toggleNav }: { toggleNav?: () => void }) {
               const fertig = g.strands.filter((x) => x.status === 'fertig' || x.status === 'erledigt');
               const parts = (['wartet', 'gestoppt', 'läuft', 'fertig'] as const).filter((w) => g.counts[w]).map((w) => `${g.counts[w]} ${WORD[w]}`);
               const first = (['wartet', 'gestoppt', 'läuft', 'fertig'] as const).find((w) => g.counts[w]);
-              const fAuf = auf.fertig?.[g.thema] ?? false;
+              // R32 (Befund 6): „Fertig“ nicht zugeklappt verstecken — bis drei fertige Unter-Chats stehen sie offen da (mehr: zugeklappt, die Zahl steht daneben).
+              const fAuf = auf.fertig?.[g.thema] ?? (fertig.length > 0 && fertig.length <= 3);
               const fid = `${gid}-fertig`;
               return (
                 <li key={g.thema} data-testid="hauptchat-thema-gruppe">

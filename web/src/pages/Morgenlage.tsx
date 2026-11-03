@@ -155,7 +155,7 @@ function SchuldZeile({ s, onChange, kurz }: { s: any; onChange?: () => void; kur
   };
   return (
     <li className={`cos-s${s.ueberfaellig ? ' ueber' : ''}`} data-testid="cos-schuld" data-id={s.id ?? ''}>
-      <span className="small">{s.id && <b>{s.id} </b>}{kurz ? null : <>{s.wer ?? 'Wer: offen'} → {s.an}: </>}{s.link ? <a href={s.link} target="_blank" rel="noreferrer" data-testid="cos-schuld-link">{s.was}</a> : s.was}</span>
+      <span className="small">{s.id && <b title="Kennung der Zusage im Register (Zusagen-Datei)">{s.id} </b>}{kurz ? null : <>{s.wer ?? 'Wer: offen'} → {s.an}: </>}{s.link ? <a href={s.link} target="_blank" rel="noreferrer" data-testid="cos-schuld-link">{s.was}</a> : s.was}</span>
       {' '}{s.ueberfaellig ? <span className="ub-amp u-bad">überfällig{s.tage > 0 ? ` (${s.tage} T.)` : ''}</span> : s.bis ? <span className="tiny mut">bis {datumKurz(s.bis)}</span> : s.fristUnklar && !s.abgeleitet ? <span className="tiny mut">Frist unklar</span> : null}
       {s.veraltet && <> <span className="ub-amp" title="Über 14 Tage ohne Änderung in Jira — vermutlich erledigt oder überholt" data-testid="cos-veraltet">vermutlich veraltet</span></>}
       {s.jira && <JiraAktion k={s.jira.key} onDone={onChange} />}
@@ -230,7 +230,7 @@ function Einwurf({ onClose, vorgabe }: { onClose: () => void; vorgabe?: string }
 }
 
 /** Die Karte. `alle` = Vollansicht der Entscheide (Freigabe-Inbox, S3.1). */
-export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: () => void; onAktiv?: (aktiv: boolean) => void; ohneEntscheide?: boolean }) {
+export function Morgenlage({ onChange, onAktiv, ohneEntscheide, heuteFertig = [], strangKarten = false }: { onChange: () => void; onAktiv?: (aktiv: boolean) => void; ohneEntscheide?: boolean; heuteFertig?: any[]; strangKarten?: boolean }) {
   const [l, setL] = useState<any>(null);
   const [err, setErr] = useState<unknown>(null);
   const [zu, setZu] = useStored<boolean>('cos:zu', false);
@@ -239,8 +239,6 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
   // ① kommt aus der Inbox — dieselbe Quelle wie der Zähler in der Leiste und im Kopf (Walkthrough 221: „6 brauchen dich“ vs. „0“).
   const [ib, setIb] = useState<any>(null);
   // U4 (Knut 19.10.): „Mein Tag“ nur noch als eine Zeile hier — Blöcke von heute, Klick öffnet die Seite.
-  const [tag, setTag] = useState<any[] | null>(null);
-  useEffect(() => { api('/api/timebox').then((t: any) => setTag(t.blocks ?? [])).catch(() => setTag(null)); }, []);
   const lade = () => Promise.all([api('/api/cos/lage'), api('/api/inbox').catch(() => null)]).then(([x, i]: any[]) => { setL(x); setIb(i); setErr(null); onAktiv?.(!x.aus); }).catch((e) => { setErr(e); onAktiv?.(false); });
   useEffect(() => {
     lade();
@@ -251,6 +249,8 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
   }, []);
   const fertig = () => { lade(); onChange(); };
   if (err) return <div className="ub-card soft cos" data-testid="cos-fehler"><Err e={err} /></div>;
+  // R32 (Befund 2): beim Laden steht ein Platzhalter fester Höhe da — die Seite springt nicht, wenn die Morgenlage nach Sekunden kommt.
+  if (!l && !err) return <section className="ub-card cos cos-lade" data-testid="cos-platzhalter" aria-busy="true" aria-label="Morgenlage lädt"><div className="ub-row"><h2>Morgenlage</h2><span className="tiny mut">lädt …</span></div><div className="cos-skel" /><div className="cos-skel" /><div className="cos-skel" /></section>;
   if (!l || l.aus) return null;
   const s = l.schulden, n = l.nacht;
   const nachtN = n.pr.gesamt + n.jira.gesamt + n.olafjira.gesamt + n.strang.gesamt + n.meeting.gesamt;
@@ -281,18 +281,23 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
       {zu ? <p className="small mut">{entN} Entscheide · {l.blockiert.gesamt} blockiert · {nachtN} über Nacht · {s.ueberfaellig} überfällig</p> : <>
         {l.leer && <RegisterAnlegen onDone={fertig} />}
         {!ohneEntscheide && <div className="cos-block" data-testid="cos-entscheide">
-          <h3>① Entscheide heute <span className="ub-amp u-dich" data-testid="cos-entscheide-zahl">{entN}</span> <a className="tiny" href="#/entscheidungen" data-testid="cos-entscheidungen-link">alle als Karten →</a></h3>
+          <h3>① Entscheide heute <span className="ub-amp u-dich" data-testid="cos-entscheide-zahl">{entN}</span> <a className="tiny" href="#/entscheidungen" data-testid="cos-entscheidungen-link" title={ib?.summe?.text ?? 'alle offenen Fragen als Karten'}>alle {entN} als Karten →</a></h3>
           {ib ? (gezeigt.length ? <div className="h-inbox">{gezeigt.map(inboxZeile)}</div> : <p className="small mut">Nichts wartet auf dich.</p>)
             : (l.entscheide.items.length ? l.entscheide.items.map((e: any) => <EntscheidZeile key={e.id} e={e} onDone={fertig} />) : <p className="small mut">Nichts wartet auf dich.</p>)}
           {ib && eintraege.length > 7 && <button className="linklike tiny" aria-expanded={alle} onClick={() => setAlle(!alle)} data-testid="cos-inbox-auf">{alle ? 'nur die ersten 7 zeigen' : `… und ${eintraege.length - 7} weitere zeigen`}</button>}
           {ib?.zurueckgestellt > 0 && <p className="tiny mut">{ib.zurueckgestellt} bis morgen 07:00 zurückgestellt.</p>}
           {l.roadmapFragen > 0 && <p className="tiny mut">{l.roadmapFragen} offene Roadmap-Fragen → <a href="#/roadmap">Planen</a></p>}
         </div>}
-        <div className="cos-block" data-testid="cos-blockiert">
-          <h3>② Blockiert <span className="ub-amp u-bad">{l.blockiert.gesamt}</span></h3>
-          {l.blockiert.items.length ? <ul>{l.blockiert.items.map(blockZeile)}</ul> : <p className="small mut">Nichts blockiert.</p>}
-          <Mehr liste={l.blockiert} zeile={blockZeile} />
-        </div>
+        {/* R32 (Befund 6): „Blockiert“ stand dreimal (Leiste, ②, Karten). Zeigen die Karten darunter die blockierten Unter-Chats schon, nennt ② nur noch den Rest. */}
+        {(() => {
+          const bl = strangKarten ? l.blockiert.items.filter((b: any) => b.art !== 'strang') : l.blockiert.items;
+          if (strangKarten && !bl.length) return null;
+          return <div className="cos-block" data-testid="cos-blockiert">
+            <h3>② Blockiert <span className="ub-amp u-bad">{strangKarten ? bl.length : l.blockiert.gesamt}</span>{strangKarten && l.blockiert.gesamt > bl.length && <span className="tiny mut"> · {l.blockiert.gesamt - bl.length} Unter-Chats: siehe Karten unten</span>}</h3>
+            {bl.length ? <ul>{bl.map(blockZeile)}</ul> : <p className="small mut">Nichts blockiert.</p>}
+            {!strangKarten && <Mehr liste={l.blockiert} zeile={blockZeile} />}
+          </div>;
+        })()}
         {(l.budgets?.items ?? []).length > 0 && <div className="cos-block" data-testid="cos-budget">
           <h3>Budget je Unter-Chat</h3>
           <ul>{l.budgets.items.map((b: any) => <li key={b.id} className="small" data-stufe={b.stufe}><b>{b.titel}</b>: {b.prozent} % ({b.tokens.toLocaleString('de-AT')} von {b.budget.toLocaleString('de-AT')} Tokens){b.stufe === 'stopp' ? <span className="ub-amp u-bad"> Pause — Rückfrage steht unter ①</span> : b.stufe === 'warn' ? <span className="ub-amp u-dich"> ab 80 %</span> : null}{b.energie > 0 && <span className="tiny mut"> · Melious {b.energie} Energie</span>}</li>)}</ul>
@@ -305,7 +310,13 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
           {nachtN === 0 && <p className="small mut">Seit {hm(l.stand.stichzeit)} ist nichts passiert, was Aufmerksamkeit braucht.</p>}
           {l.berichte.length > 0 && <div><h4>Berichte von heute</h4><ul>{l.berichte.map((b: any) => <li key={b.art} className="small" data-testid={`cos-bericht-${b.art}`}><b>{b.label}:</b> {b.link ? <a href={note(b.link)} title="Bericht im Wissen öffnen — dort stehen die Tickets hinter den Zahlen">{b.zeile}</a> : b.zeile}</li>)}</ul></div>}
         </details>
-        {tag && <p className="small" data-testid="cos-mein-tag"><a href="#/timebox">Mein Tag</a>: {tag.length ? `${tag.length} ${tag.length === 1 ? 'Block' : 'Blöcke'} — als Nächstes ${tag.find((b: any) => !b.done)?.title ?? tag[0].title ?? tag[0].key ?? ''}`.trim() : 'nichts geplant'}</p>}
+        <div className="cos-block" data-testid="cos-fertig">
+          <h3>Heute fertig <span className="ub-amp u-done">{heuteFertig.length}</span></h3>
+          {heuteFertig.length ? <ul>{heuteFertig.map((f: any) => <li key={f.id} className="small" data-testid="cos-fertig-zeile">
+            {f.link ? <a href={f.link} target={/^https?:/.test(f.link) ? '_blank' : undefined} rel="noreferrer"><b>{f.satz}</b></a> : <b>{f.satz}</b>}
+            <span className="tiny mut"> · {hm(f.at)} · {f.ampel === 'geprüft' ? 'von dir geprüft' : f.ampel === 'push' ? 'bereit zum Push' : 'wartet auf dein Review'}{f.thema ? ` · ${f.thema}` : ''}</span></li>)}</ul>
+            : <p className="small mut">Seit heute früh ist noch nichts fertig geworden.</p>}
+        </div>
         <div className="cos-block" data-testid="cos-schulden">
           <h3>④ Wer schuldet was {s.ueberfaellig > 0 && (l.zusagenDatei ? <a className="ub-amp u-bad" href={note(l.zusagenDatei)} title="Register der Zusagen öffnen" data-testid="cos-ueberfaellig">{s.ueberfaellig} überfällig</a> : <span className="ub-amp u-bad">{s.ueberfaellig} überfällig</span>)}</h3>
           <div className="cos-spalten">{spalte('Knut', s.knut, 'knut')}{spalte('Team', s.team, 'team')}{spalte('Partner', s.partner, 'partner')}</div>
@@ -329,7 +340,7 @@ export function Morgenlage({ onChange, onAktiv, ohneEntscheide }: { onChange: ()
         </div>
         <Kalender />
         <Nutzung />
-        <Nachmittag onChange={fertig} />
+        <Nachmittag onChange={fertig} fertigN={heuteFertig.length} />
         {l.unlesbar.length > 0 && <p className="tiny mut" data-testid="cos-unlesbar">Nicht lesbar im Register ({l.unlesbar.length}): {l.unlesbar.slice(0, 3).map((u: any) => `Zeile ${u.zeile}`).join(', ')} — bleibt unverändert, bitte von Hand prüfen.</p>}
       </>}
     </section>
@@ -372,7 +383,7 @@ function Nutzung() {
 const AKTION_LABEL: Record<string, string> = { triage: 'Triage', einwurf: 'Einwurf', nachfassen: 'Nachfassen (Entwurf)', 'nachfassen-senden': 'Nachfassen gesendet', 'register-anlegen': 'Register angelegt', rueckstau: 'Rückstau archiviert', 'rueckstau-zurueck': 'Rückstau zurück', 'ics-link': 'Kalender-Link', zusage: 'Zusage geändert', thema: 'Thema geändert' };
 
 /** Nachmittagskarte (S3.4): ab 15 Uhr der Tagesabschluss, freitags die Wochendurchsicht mit Rückstau — live berechnet; die Vault-Seiten schreibt der Takt. */
-function Nachmittag({ onChange }: { onChange: () => void }) {
+function Nachmittag({ onChange, fertigN = 0 }: { onChange: () => void; fertigN?: number }) {
   const jetzt = new Date();
   const wien = new Intl.DateTimeFormat('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', hourCycle: 'h23', weekday: 'short' }).formatToParts(jetzt);
   const h = Number(wien.find((p) => p.type === 'hour')?.value ?? 0), freitag = /^fr/i.test(wien.find((p) => p.type === 'weekday')?.value ?? '');
@@ -402,7 +413,10 @@ function Nachmittag({ onChange }: { onChange: () => void }) {
   return (
     <div className="cos-block" data-testid="cos-nachmittag">
       {a && h >= 15 && <div data-testid="cos-abschluss"><h3>Tagesabschluss</h3>
-        <p className="small">Heute entschieden: <b>{a.entschieden.length}</b> · Zusagen erledigt <b>{a.erledigt.length}</b>, neu <b>{a.neu.length}</b>, überfällig <b>{a.ueberfaellig}</b> · läuft über Nacht: <b>{a.laeuft.length}</b></p>
+        <p className="small">Heute fertig: <b>{fertigN}</b> · entschieden: <b>{a.entschieden.length}</b> · Zusagen erledigt <b>{a.erledigt.length}</b>, neu <b>{a.neu.length}</b>, überfällig <b>{a.ueberfaellig}</b> · läuft über Nacht: <b>{a.laeuft.length}</b></p>
+        {a.entschieden.length > 0 && <p className="small" data-testid="cos-abschluss-entschieden">Entschieden: {a.entschieden.slice(0, 5).map((e: any) => `${e.titel} → ${e.antwort}`).join(' · ')}</p>}
+        {a.erledigt.length > 0 && <p className="small">Zusagen erledigt: {a.erledigt.slice(0, 5).map((z: any) => `${z.id} ${z.was}`).join(' · ')}</p>}
+        {a.laeuft.length > 0 && <p className="small">Läuft über Nacht: {a.laeuft.slice(0, 5).map((z: any) => z.titel).join(' · ')}</p>}
         {a.morgen.length > 0 && <p className="small">Morgen fällig: {a.morgen.map((z: any) => `${z.id} ${z.was}`).join(' · ')}</p>}
         <p className="tiny mut">Um 17:30 entsteht dazu die Seite im Vault und setzt die Stichzeit für „über Nacht“.</p></div>}
       {w && <div data-testid="cos-woche"><h3>Wochendurchsicht</h3>

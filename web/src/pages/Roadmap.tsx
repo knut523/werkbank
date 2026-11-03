@@ -7,7 +7,7 @@ import { api, type Config, viaLabel } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast, StateChip, useJiraLive } from '../ui.tsx';
 import { Md, note } from '../beimir.tsx';
 import { PrTickerMeldungen, ReviewLog } from '../prticker.tsx';
-import { topicBuckets } from '../buckets.ts';
+import { topicBuckets, titelKurz, prKopf, prIstOffen } from '../buckets.ts';
 
 // Tabs (Council-Bedingung 11): Überblick · Rangliste · PR-Review · Pflege ⋯ (Konsistenz, Ordnung). Die alten Adressen
 // (#/roadmap/kanban, /entscheidungen, /check, /ordnung) gehen weiter; „Für mich offen“ steht jetzt unter „Heute“.
@@ -156,25 +156,31 @@ function Kanban({ d }: { d: any }) {
 
 const ago = (s?: string | null) => { if (!s) return '—'; const d = Math.floor((Date.now() - new Date(s).getTime()) / 864e5); return d <= 0 ? 'heute' : d === 1 ? '1 Tag' : `${d} Tage`; };
 
-function PrReview({ d, reload, ticker }: { d: any; reload: () => void; ticker: boolean }) {
+function PrReview({ d, reload, ticker, ich = [] }: { d: any; reload: () => void; ticker: boolean; ich?: string[] }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const [onlyOpen, setOnlyOpen] = useState(true);
   const gh = d.github ?? {};
-  const list = d.prs.filter((p: any) => !onlyOpen || p.live || !['nicht mehr offen', 'gemergt'].includes(p.review));
+  const [nur, setNur] = useState<'' | 'konflikt' | 'dich'>('');
+  const kopf = prKopf(d.prs, ich);
+  const alt = gh.at ? (Date.now() - new Date(gh.at).getTime()) / 3600_000 : null;   // R32: Stand älter als 24 h = rot
+  const list = d.prs.filter((p: any) => (!onlyOpen || prIstOffen(p)) && (nur === 'konflikt' ? p.live?.mergeable === 'CONFLICTING' : nur === 'dich' ? !!p.live && ich.includes(String(p.live.turn?.who ?? '').toLowerCase().split(/\s+/)[0]) : true));
   return (
     <>
       {ticker && <PrTickerMeldungen />}
       {ticker && <ReviewLog />}
       <p className="small muted">Live von GitHub (<b>{gh.org ?? 'WirStrom1'}</b>, alle offenen PRs, alle 5 Minuten, <b>nur lesend</b>) plus <a href={note(d.hub.register)}>PR-Register</a> und PR-Links in den Specs (Spec ↔ PR, Deploy-Gates). Review, Merge und Deploy passieren auf GitHub bzw. durch Menschen.</p>
       <div className="row small" style={{ marginBottom: 8 }}>
-        {gh.error ? <span className="chip bad" data-testid="gh-error">GitHub: {gh.error}</span> : gh.at ? <span className="chip ok">GitHub-Stand {new Date(gh.at).toLocaleString('de-AT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {gh.count} offen</span> : <span className="chip warn">GitHub noch nicht abgerufen</span>}
+        {gh.error ? <span className="chip bad" data-testid="gh-error">GitHub: {gh.error}</span> : gh.at ? <span className={`chip ${alt != null && alt > 24 ? 'bad' : 'ok'}`} data-testid="gh-stand" title={alt != null && alt > 24 ? 'Der GitHub-Stand ist älter als 24 Stunden — „jetzt abrufen“ drücken.' : undefined}>GitHub-Stand {new Date(gh.at).toLocaleString('de-AT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {gh.count} offen</span> : <span className="chip warn">GitHub noch nicht abgerufen</span>}
         <button className="btn small" disabled={busy} onClick={async () => { setBusy(true); setErr(null); try { await api('/api/roadmap/github', { method: 'POST' }); reload(); } catch (e) { setErr(e); } finally { setBusy(false); } }}>{busy ? 'Frage GitHub …' : '↻ jetzt abrufen'}</button>
         <label className="row small"><input type="checkbox" checked={onlyOpen} onChange={(e) => setOnlyOpen(e.target.checked)} /> nur offene</label>
-        <span className="tiny">{list.length} PRs · {list.filter((p: any) => p.live?.mergeable === 'CONFLICTING').length} mit Konflikt</span>
+        <span className="small" data-testid="pr-kopf"><button className={`linklike${nur === '' ? ' on' : ''}`} onClick={() => setNur('')} title="alle offenen PRs">{kopf.offen} offen</button>
+          {' · '}<button className={`linklike${nur === 'konflikt' ? ' on' : ''}`} onClick={() => setNur(nur === 'konflikt' ? '' : 'konflikt')} title="nur PRs mit Merge-Konflikt">{kopf.konflikt} Konflikt</button>
+          {ich.length > 0 && <>{' · '}<button className={`linklike${nur === 'dich' ? ' on' : ''}`} onClick={() => setNur(nur === 'dich' ? '' : 'dich')} title="nur PRs, bei denen du dran bist">{kopf.wartenAufDich} warten auf dich</button></>}
+          <span className="tiny muted"> · {kopf.erledigt} erledigt (mit „nur offene“ ausgeblendet){nur ? ` · Filter: ${list.length} gezeigt` : ''}</span></span>
       </div>
       <Err e={err} />
-      <table className="t small" data-testid="pr-table">
+      <div style={{ overflowX: 'auto' }}><table className="t small" data-testid="pr-table">
         <thead><tr><th>PR</th><th>Zustand</th><th>Review</th><th>wer ist dran</th><th>Alter · zuletzt</th><th>Specs</th><th>Jira</th><th>Deploy-Gates / Hinweise</th><th>Register</th></tr></thead>
         <tbody>{list.map((p: any) => {
           const l = p.live;
@@ -195,7 +201,7 @@ function PrReview({ d, reload, ticker }: { d: any; reload: () => void; ticker: b
             <td className="tiny">{p.rows.map((r: any, i: number) => <div key={i} title={Object.entries(r.cols).map(([k, v]) => `${k}: ${v}`).join('\n')}>{r.section.slice(0, 50)}</div>)}</td>
           </tr>);
         })}</tbody>
-      </table>
+      </table></div>
     </>
   );
 }
@@ -410,8 +416,9 @@ function Check({ d: rd }: { d: any }) {
 function Overview({ d }: { d: any }) {
   const [openLane, setOpenLane] = useState<string | null>(null);
   const rows = useMemo(() => topicBuckets(d.lanes.map((l: any) => ({ name: l.topic, states: l.states })), d.admin ? d.decisions : [], d.agents ?? {}), [d]);
-  const waitLabel = d.admin ? 'Braucht dich' : 'Braucht eine Entscheidung';
-  const specLink = (s: any) => <a href={note(s.path)}>{s.title}</a>;
+  // R32 (Befund 1): hier stehen offene „- Knut:“-Zeilen der Specs, nicht die Fragen, die dich heute brauchen (Übersicht/Entscheidungen) — anderer Name, damit die Zahlen nicht verwechselt werden.
+  const waitLabel = d.admin ? 'Offene Fragen in Specs' : 'Offene Fragen in Specs (Entscheidung nötig)';
+  const specLink = (s: any) => <a href={note(s.path)}>{titelKurz(s.title)}</a>;
   const empty = <span className="muted">—</span>;
   return (
     <div data-testid="overview">
@@ -426,9 +433,9 @@ function Overview({ d }: { d: any }) {
             </div>
             <div className="buckets">
               <div className={`bucket wait${t.waiting.count ? ' has' : ''}`}>
-                <div className="bucket-label">{waitLabel} <span className="chip tiny-chip">{t.waiting.count}</span></div>
-                {t.waiting.count ? <ul className="plain">{t.waiting.items.map((q: any) => <li key={q.path + q.line}><a href={note(q.path)}>{q.title ?? q.spec}</a>{q.question ? <span className="tiny muted">: <Md text={q.question} max={80} /></span> : null}</li>)}
-                  {t.waiting.count > t.waiting.items.length && <li><a className="tiny" href="#/roadmap/entscheidungen">alle {t.waiting.count}</a></li>}</ul> : empty}
+                <div className="bucket-label" title={`${t.waiting.count} offene Fragen in ${t.waiting.specs} ${t.waiting.specs === 1 ? 'Spec' : 'Specs'} (Zeilen „- Knut:“ ohne Antwort). Die wichtigsten stehen unter Entscheidungen.`}>{waitLabel} <span className="chip tiny-chip">{t.waiting.count}</span></div>
+                {t.waiting.count ? <ul className="plain">{t.waiting.items.map((q: any) => <li key={q.path}><a href={note(q.path)}>{titelKurz(q.title ?? q.spec)}</a>{(q.n ?? 1) > 1 ? <span className="tiny muted"> · {q.n} Fragen</span> : q.question ? <span className="tiny muted">: <Md text={q.question} max={80} /></span> : null}</li>)}
+                  {t.waiting.specs > t.waiting.items.length && <li><a className="tiny" href="#/roadmap/entscheidungen">alle {t.waiting.count} Fragen in {t.waiting.specs} Specs</a></li>}</ul> : empty}
               </div>
               <div className="bucket">
                 <div className="bucket-label">In Arbeit <span className="chip tiny-chip">{t.inWork.count}</span></div>
@@ -438,7 +445,7 @@ function Overview({ d }: { d: any }) {
               </div>
               <div className="bucket">
                 <div className="bucket-label">Als Nächstes <span className="chip tiny-chip">{t.next.count}</span></div>
-                {t.next.count ? <ul className="plain">{t.next.items.map((s: any) => <li key={s.path}>{s.rank ? <span className="chip tiny-chip rank">#{s.rank}</span> : null} {specLink(s)}{s.open > 0 && <span className="chip tiny-chip warn" title="erst entscheiden">❓ {s.open}</span>}{s.state === '3-Plan' && !s.open && <> <AnsetzenButton path={s.path} state={s.state} open={s.open} admin={!!d.admin} /></>}</li>)}</ul> : empty}
+                {t.next.count ? <ul className="plain">{t.next.items.map((s: any) => <li key={s.path}>{s.rank ? <span className="chip tiny-chip rank" title={`Rang ${s.rank} in der Priorisierung (1 = zuerst)`}>#{s.rank}</span> : null} {specLink(s)}{s.open > 0 && <span className="chip tiny-chip warn" title={`${s.open} offene ${s.open === 1 ? 'Frage' : 'Fragen'} — erst entscheiden, dann bauen`}>❓ {s.open} {s.open === 1 ? 'Frage' : 'Fragen'}</span>}{s.state === '3-Plan' && !s.open && <> <AnsetzenButton path={s.path} state={s.state} open={s.open} admin={!!d.admin} /></>}</li>)}</ul> : empty}
               </div>
               <div className="bucket">
                 <div className="bucket-label">Erledigt <span className="chip tiny-chip">{t.done.count}</span></div>
@@ -472,18 +479,18 @@ export function Roadmap({ cfg, hash }: { cfg: Config; hash: string }) {
       <div className="head">
         <div>
           <h1>Roadmap · Produkt OLAF</h1>
-          <p className="muted" style={{ margin: 0 }}>Je Thema: was auf dich wartet, was läuft, was als Nächstes kommt, was erledigt ist — aus dem Vault (<code>{d?.base ?? '…'}</code>). Verknüpft: Spec ↔ Jira ↔ PR.</p>
+          <p className="muted" style={{ margin: 0 }}>Je Thema: offene Fragen in Specs, was läuft, was als Nächstes kommt, was erledigt ist — <span title={d?.base ?? ''}>aus dem Vault</span>. Verknüpft: Spec ↔ Jira ↔ PR.</p>
         </div>
         {d && <a className="btn" href={note(d.hub.path)}>Roadmap-Hub öffnen</a>}
       </div>
       <div className="tabs" role="tablist">
-        {TABS.map(([id, label]) => <a key={id} role="tab" aria-selected={activeTab === id} className={activeTab === id ? 'active' : ''} href={`#/roadmap/${id}`}>{label}{d && id === 'prs' ? ` (${d.prs.length})` : d && id === 'prio' ? ` (${d.ranking.length})` : ''}</a>)}
+        {TABS.map(([id, label]) => <a key={id} role="tab" aria-selected={activeTab === id} className={activeTab === id ? 'active' : ''} href={`#/roadmap/${id}`}>{label}{d && id === 'prs' ? ` (${prKopf(d.prs).offen})` : d && id === 'prio' ? ` (${d.ranking.length})` : ''}</a>)}
       </div>
       {activeTab === 'pflege' && <div className="subtabs small" role="tablist" aria-label="Pflege">
         {[['check', 'Konsistenz'], ['ordnung', 'Ordnung']].map(([id, label]) => { const on = (tab === 'pflege' ? 'check' : tab) === id; return <a key={id} role="tab" aria-selected={on} className={on ? 'active' : ''} href={`#/roadmap/${id}`}>{label}</a>; })}
       </div>}
       {r.error && <Err e={r.error} />}
-      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} ticker={cfg.features?.leitstand !== false} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' || tab === 'pflege' ? <Check d={d} /> : tab === 'prio' ? <Prio d={d} reload={r.reload} admin={cfg.user?.role === 'ADMIN'} /> : <Overview d={d} />}
+      {!d ? <Loading /> : tab === 'kanban' ? <Kanban d={d} /> : tab === 'ordnung' ? <Order /> : tab === 'prs' ? <PrReview d={d} reload={r.reload} ticker={cfg.features?.leitstand !== false} ich={cfg.user?.name ? [cfg.user.name.split(' ')[0].toLowerCase()] : []} /> : tab === 'entscheidungen' ? <Decisions d={d} reload={r.reload} user={cfg.user?.name.split(' ')[0] ?? ''} /> : tab === 'check' || tab === 'pflege' ? <Check d={d} /> : tab === 'prio' ? <Prio d={d} reload={r.reload} admin={cfg.user?.role === 'ADMIN'} /> : <Overview d={d} />}
     </div>
   );
 }

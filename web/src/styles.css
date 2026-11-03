@@ -734,3 +734,28 @@ ul.plain.h-liste { padding-left: 0; list-style: none; }
 .lage .e-karte { margin-bottom: 10px; }
 .linkish { background: none; border: 0; padding: 0; color: var(--link, inherit); text-decoration: underline; cursor: pointer; font: inherit; }
 @media (max-width: 520px) { .page.lage { padding: 14px 12px 48px; } .lage-h { font-size: 16px; } }
+
+/* R32 „Übersicht klar“ */
+.cos-lade { min-height: 260px; }
+.fang-lade { min-height: 85vh; }
+.cos-skel { height: 44px; margin-top: 10px; border-radius: 8px; background: linear-gradient(90deg, var(--surface-secondary, #eee) 25%, var(--surface-tertiary, #f6f6f6) 50%, var(--surface-secondary, #eee) 75%); background-size: 200% 100%; animation: cos-skel 1.4s linear infinite; }
+@keyframes cos-skel { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .cos-skel { animation: none; } }
+.ub-tag.ub-skel { min-height: 76px; }
+.ub-blk p { margin: 0 0 4px; }
+.ub-zahltext { flex-basis: 100%; }
+.ub-sum a.ub-amp { text-decoration: none; }
+.e-ttl { overflow-wrap: anywhere; }
+.linklike.on { font-weight: 700; text-decoration: underline; }
+.nf { display: contents; }
+.nf-panel { display: block; flex-basis: 100%; width: 100%; margin-top: 8px; padding: 10px; border: 1px solid var(--border-light); border-radius: 10px; background: var(--surface-secondary, #fafafa); }
+.nf-zeile { margin-bottom: 8px; }
+.nf-zeile.hauptchat { border-left: 3px solid var(--ub-run, #2b7); padding-left: 8px; }
+.nf-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.nf-schnell { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.nf-panel textarea { flex: 1; min-width: 0; }
+.e-fang { border-left-color: var(--amber-500); }
+.e-fang .e-btns button.pri { background: var(--ub-run, #1d6fe5); color: #fff; border-color: transparent; }
+.e-gruppe-auf { margin-bottom: 10px; }
+.e-gruppe-auf > summary { cursor: pointer; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 0; }
+.e-gruppe-auf[open] > summary { border-bottom: 1px solid var(--border-light); margin-bottom: 8px; }

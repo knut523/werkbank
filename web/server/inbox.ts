@@ -6,6 +6,8 @@
 // Chat beantwortet ist, verschwindet überall (209 K8). Stichtag: Einträge älter als 14 Tage erscheinen als ein Sammel-Eintrag
 // „Altbestand“. Freitext im Hauptchat wird nie automatisch zugeordnet; die Chat-Knöpfe tragen die Kennung.
 
+import { klartext, empfehlungAus } from './klartext.ts';
+import { DECKEL_KIND } from './fragenaufraeumen.ts';
 import { wienDatum, wienUm, naechsterTag } from './zustand.ts';
 import { stufeVon, autoAb, autoFaehig, ANNAHME_MS, type Stufe } from './stufe.ts';
 
@@ -34,6 +36,8 @@ export interface InboxEintrag {
 }
 
 export const ALTBESTAND_TAGE = 14;
+/** Deckel-/Budget-Fragen, die älter sind als so viele Tage (und deren Strang nicht mehr läuft), stehen als ein Sammel-Eintrag. */
+export const DECKEL_ALT_TAGE = 7;
 export const ART_TEXT: Record<InboxArt, string> = { rueckfrage: 'Rückfrage', entscheidung: 'Entscheidung', braucht: 'Frage im Stand', push: 'Push', vault: 'Vault-Sync', pflege: 'Pflege', schlange: 'Schlange', altbestand: 'Altbestand', triage: 'Meeting', vaultfrage: 'Vault-Frage' };
 
 /** Kennung bleibt gleich, solange sich die Frage nicht ändert (Chat-Knöpfe und „Später“ hängen daran). */
@@ -79,7 +83,7 @@ export interface InboxQuellen {
   /** Meeting-Vorschläge der Morgenlage (cosmeeting.ts → vorschlaege), nur Admin mit Morgenlage — damit ① und der Zähler dieselbe Liste zählen (221). */
   triage?: Array<{ id: string; datei: string; titel: string; zusagen: number; entscheidungen: number; datum: string | null }>;
   /** F10 (Knut 19.10.: „muss halt viel einfacher sein“): aktuelle wichtige „- Knut:“-Zeilen aus dem Vault einzeln … */
-  vaultFragen?: Array<{ path: string; line: number; hash: string; head: string; section: string; title: string; topic: string; since: string | null; grund: string; prio?: number | null; kurz?: string | null; beleg?: string | null }>;
+  vaultFragen?: Array<{ path: string; line: number; hash: string; head: string; frage?: string; section: string; title: string; topic: string; since: string | null; grund: string; prio?: number | null; kurz?: string | null; beleg?: string | null }>;
   /** … der Rest als ein Sammeleintrag. */
   vaultRest?: number;
 }
@@ -127,7 +131,7 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
       wartetSeit: iso(t.datum), blockiert: 0, antworten: ['spaeter'], daten: { triageId: t.id, datei: t.datei, zusagen: t.zusagen, entscheidungen: t.entscheidungen } });
   }
   for (const v of q.vaultFragen ?? []) {
-    out.push({ id: kennung.vaultfrage(v.path, v.line), art: 'vaultfrage', frage: v.head, empfehlung: null,
+    out.push({ id: kennung.vaultfrage(v.path, v.line), art: 'vaultfrage', frage: klartext(v.frage || v.head), empfehlung: empfehlungAus(klartext(v.frage || v.head)),
       quelle: { text: `Spec „${v.title}“`, strand: null, url: '#/wissen/' + v.path.split('/').map(encodeURIComponent).join('/') }, wartetSeit: iso(v.since),
       blockiert: v.prio === 1 ? 1 : 0,   // Priorität 1 aus der Sichtung (U6) = hält Arbeit an → steht unter „Heute“
       antworten: ['ja', 'nein', 'anders', 'spaeter'], daten: { path: v.path, line: v.line, hash: v.hash, section: v.section, markiert: 'wichtig', grund: v.grund, prio: v.prio ?? null, kurz: v.kurz ?? null, beleg: v.beleg ?? null }, thema: v.topic });
@@ -148,7 +152,14 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
   for (const e of out) mitStufe(e, o.annahmeMs ?? ANNAHME_MS);
   // Später zurückgestellt
   const spaeter = o.spaeter ?? new Map<string, number>();
-  const sichtbar = out.filter((e) => !((spaeter.get(e.id) ?? 0) > now));
+  let sichtbar = out.filter((e) => !((spaeter.get(e.id) ?? 0) > now));
+  // R32 (Nachtrag C): alte Deckel-/Budget-Fragen (> 7 Tage, der Strang läuft nicht mehr) sind EIN Eintrag mit einem Knopf „alle schließen“
+  // (nur Knut darf Deckel-Fragen schließen). Sie zählen einmal, nicht je Frage — sonst stünden 20 Fragen von vor drei Wochen in der Zahl.
+  const laufend = new Set(q.karten.filter((k) => k.running).map((k) => k.id));
+  const deckelAlt = sichtbar.filter((e) => e.art === 'rueckfrage' && DECKEL_KIND.test(String(e.daten.kind ?? '')) && e.wartetSeit && now - new Date(e.wartetSeit).getTime() > DECKEL_ALT_TAGE * 86400_000
+    && !(e.quelle.strand && laufend.has(e.quelle.strand)));
+  const sichtbar0 = sichtbar;
+  sichtbar = sichtbar.filter((e) => !deckelAlt.includes(e));
   // Altbestand (Stichtag): älter als 14 Tage → ein Sammel-Eintrag (Push und Schlange nie).
   const grenze = now - ALTBESTAND_TAGE * 86400_000;
   const alt = sichtbar.filter((e) => e.art !== 'push' && e.art !== 'schlange' && e.wartetSeit && new Date(e.wartetSeit).getTime() < grenze);
@@ -156,6 +167,10 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
   if (alt.length) frisch.push({ id: 'altbestand', art: 'altbestand', frage: `Altbestand: ${alt.length} ${alt.length === 1 ? 'Frage ist' : 'Fragen sind'} älter als ${ALTBESTAND_TAGE} Tage — durchsehen oder alle verwerfen`, empfehlung: 'alle verwerfen',
     quelle: { text: 'Inbox', strand: null, url: null }, wartetSeit: alt.map((e) => e.wartetSeit!).sort()[0], blockiert: alt.reduce((s, e) => s + e.blockiert, 0), antworten: ['nein', 'spaeter'], daten: { eintraege: alt },
     stufe: alt.some((e) => e.stufe === 'wichtig') ? 'wichtig' : 'normal', stufeGrund: 'Sammel-Eintrag', autoAb: null });
+  if (deckelAlt.length) frisch.push({ id: 'altbestand-deckel', art: 'altbestand', frage: `${deckelAlt.length} alte Deckel-Fragen („automatisch fortgesetzt“, Budget, Weckdeckel) — älter als ${DECKEL_ALT_TAGE} Tage, der Strang läuft nicht mehr`, empfehlung: 'alle schließen',
+    quelle: { text: 'Deckel-Fragen', strand: null, url: null }, wartetSeit: deckelAlt.map((e) => e.wartetSeit!).sort()[0], blockiert: 0, antworten: ['nein', 'spaeter'], daten: { eintraege: deckelAlt, deckel: true },
+    stufe: 'normal', stufeGrund: 'Sammel-Eintrag', autoAb: null });
+  void sichtbar0;
   // Wichtige oben (Knut 17.10.), darin wie bisher: blockiert am meisten, dann wartet am längsten.
   const rang = (e: InboxEintrag) => (e.stufe === 'wichtig' ? 0 : 1);
   frisch.sort((a, b) => rang(a) - rang(b) || b.blockiert - a.blockiert || (a.wartetSeit ?? '9').localeCompare(b.wartetSeit ?? '9'));
@@ -166,7 +181,7 @@ function rueckfrageEintrag(r: InboxQuellen['lose'][number], quelle: InboxEintrag
   const opts = r.options ?? [];
   const g0 = /#G0$/.test(String(r.key ?? ''));
   return { id: kennung.rueckfrage(r.id), art: 'rueckfrage', frage: r.title, empfehlung: r.recommendation ?? null, quelle, wartetSeit: iso(r.createdAt), blockiert: quelle.strand || g0 ? 1 : 0,
-    antworten: ['ja', 'nein', 'anders', 'spaeter'], daten: { qid: r.id, optionen: opts.map((o) => o.label), kontext: r.context ?? null,
+    antworten: ['ja', 'nein', 'anders', 'spaeter'], daten: { qid: r.id, kind: r.kind ?? null, optionen: opts.map((o) => o.label), kontext: r.context ?? null,
       // Deckel- und G0-Fragen entscheidet immer Knut selbst (Bau-Tor, Fortsetzen) — nie automatisch.
       markiert: g0 || /^(auto-weiter|leitstand-)/.test(String(r.kind ?? '')) ? 'wichtig' : r.stufe ?? null },
     // Release 31: Fragen eines Fragenpakets stehen als eigene Gruppe auf der Entscheidungsseite.

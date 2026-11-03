@@ -8,6 +8,7 @@ import { api, fmtDateTime, chatTarget, type Config } from '../api.ts';
 import { Err, Loading, useConfirm, useLoad, useToast } from '../ui.tsx';
 import { usePushFreigeben } from '../freigabe.tsx';
 import { Morgenlage } from './Morgenlage.tsx';
+import { WasIstDas } from '../nachfrage.tsx';
 
 const ABGEBROCHEN = Symbol('abgebrochen');
 /** Nur Workspace-Adressen (#/…) und http(s) werden verlinkt — nie `javascript:` o. ä. (Pass C). */
@@ -36,13 +37,13 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
   const [err, setErr] = useState<unknown>(null);
   const [auf, setAuf] = useState(false);
   const confirm = useConfirm();
-  const run = async (fn: () => Promise<unknown>, meldung: string) => {
+  const run = async (fn: () => Promise<unknown>, meldung: string | ((r: any) => string)) => {
     setBusy(true); setErr(null);
-    try { if ((await fn()) !== ABGEBROCHEN) { toast(meldung); onDone(); } }
+    try { const r: any = await fn(); if (r !== ABGEBROCHEN) { toast(typeof meldung === 'function' ? meldung(r) : meldung); onDone(); } }
     catch (x: any) { if (x?.status === 409) { onDone(); toast(x?.message ?? 'Schon beantwortet oder geändert — neu geladen'); } else setErr(x); }
     finally { setBusy(false); }
   };
-  const antworten = (antwort: string, text = '') => run(() => api(`/api/inbox/${e.id}/antwort`, { body: { antwort, text, weg: 'ui' } }), 'Eingetragen — an der Quelle beantwortet');
+  const antworten = (antwort: string, text = '') => run(() => api(`/api/inbox/${e.id}/antwort`, { body: { antwort, text, weg: 'ui' } }), (r) => r?.ziel ? `Gespeichert — an ${r.ziel} geschickt` : 'Eingetragen — an der Quelle beantwortet');
   const spaeter = () => run(() => api(`/api/inbox/${e.id}/spaeter`, { method: 'POST', body: {} }), 'Zurückgestellt bis morgen 07:00');
   const vault = (antwort: 'ja' | 'nein') => run(() => api('/api/roadmap/question', { body: { id: e.daten.vaultId, answer: antwort } }), 'Für den Vault-Sync eingetragen');
   const pri = erste ? 'ub-btn pri sm' : 'ub-btn sm';
@@ -64,7 +65,8 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
         {e.art === 'altbestand' && auf && <ul className="tiny h-liste">{(e.daten.eintraege ?? []).map((x: Eintrag) => <li key={x.id}>{x.frage} <span className="mut">({ART[x.art]}, {seit(x.wartetSeit)})</span></li>)}</ul>}
         {e.art === 'pflege' && e.daten.berichte && <ul className="tiny h-liste">{e.daten.berichte.map((b: any) => <li key={b.id}><a href={`#/leitstand?bericht=${b.id}`}>{b.titel}</a></li>)}</ul>}
         {anders !== null && <div className="ub-anders">
-          <textarea rows={2} value={anders} placeholder="Deine Antwort" aria-label="Deine Antwort" onChange={(x) => setAnders(x.target.value)} />
+          <textarea rows={2} value={anders} placeholder="Deine Antwort — Enter sendet" aria-label="Deine Antwort" onChange={(x) => setAnders(x.target.value)}
+            onKeyDown={(ev) => { if (ev.key === 'Enter' && !ev.shiftKey && !ev.nativeEvent.isComposing && anders.trim() && !busy) { ev.preventDefault(); void antworten('anders', anders); } }} />
           <div className="ub-row"><button className="ub-btn pri sm" disabled={busy || !anders.trim()} onClick={() => antworten('anders', anders)}>Senden</button><button className="ub-btn ghost sm" onClick={() => setAnders(null)}>Abbrechen</button></div>
         </div>}
         <Err e={err} />
@@ -79,11 +81,14 @@ export function InboxZeile({ e, erste, onDone }: { e: Eintrag; erste: boolean; o
           <button className="ub-btn ghost sm" disabled={busy} aria-expanded={anders !== null} onClick={() => setAnders(anders === null ? '' : null)}>Anders …</button>
         </> : null}
         {e.art === 'braucht' && e.daten?.klasse === 'aktion' && <button className="ub-btn ghost sm" disabled={busy} aria-expanded={anders !== null} title="Doch etwas für dich? Antwort geht an den Unter-Chat" onClick={() => setAnders(anders === null ? '' : null)}>Anders …</button>}
-        {e.art === 'altbestand' && <><button className={pri} disabled={busy} onClick={async () => {
-          if (await confirm({ title: 'Altbestand verwerfen?', confirmLabel: 'Alle verwerfen', body: <p className="small">{(e.daten.eintraege ?? []).length} Fragen, älter als 14 Tage. Rückfragen werden zurückgezogen, alles andere ist 30 Tage zurückgestellt.</p> })) await antworten('nein');
-        }}>Alle verwerfen</button><button className="ub-btn sm" aria-expanded={auf} onClick={() => setAuf(!auf)}>Durchsehen</button></>}
+        {e.art === 'altbestand' && <><button className={pri} disabled={busy} data-testid={e.daten.deckel ? 'deckel-schliessen' : 'altbestand-verwerfen'} onClick={async () => {
+          if (e.daten.deckel
+            ? await confirm({ title: 'Alte Deckel-Fragen schließen?', confirmLabel: 'Alle schließen', body: <p className="small">{(e.daten.eintraege ?? []).length} Fragen („automatisch fortgesetzt“, Budget, Weckdeckel), älter als 7 Tage — der jeweilige Strang läuft nicht mehr. Sie werden geschlossen und im Entscheidungs-Log vermerkt; nichts wird an die Stränge geschickt.</p> })
+            : await confirm({ title: 'Altbestand verwerfen?', confirmLabel: 'Alle verwerfen', body: <p className="small">{(e.daten.eintraege ?? []).length} Fragen, älter als 14 Tage. Rückfragen werden zurückgezogen, alles andere ist 30 Tage zurückgestellt.</p> })) await antworten('nein');
+        }}>{e.daten.deckel ? 'Alle alten Deckel-Fragen schließen' : 'Alle verwerfen'}</button><button className="ub-btn sm" aria-expanded={auf} onClick={() => setAuf(!auf)}>Durchsehen</button></>}
         {(e.art === 'pflege' || e.art === 'schlange' || (e.art === 'vault' && e.daten.vaultId === 'entwurf')) && sicher(e.quelle.url) && <a className="ub-btn sm" href={sicher(e.quelle.url)!}>Ansehen</a>}
         {e.antworten.includes('spaeter') && <button className="ub-btn ghost sm" disabled={busy} onClick={spaeter}>Später</button>}
+        {!['pflege', 'schlange', 'altbestand'].includes(e.art) && <WasIstDas art="eintrag" id={e.id} />}
       </div>
     </div>
   );

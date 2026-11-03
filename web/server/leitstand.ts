@@ -122,6 +122,10 @@ export function wakeText(list: { kind: string; text: string; excerpt?: string; s
   return lines.join('\n');
 }
 
+/** R32 (Nachtrag A): Knuts Antwort kommt WÖRTLICH beim Hauptchat an (bisher bei 600 Zeichen abgeschnitten) — bis 4000 Zeichen wie die Antwort selbst. */
+export const frageEventText = (q: { _id?: unknown; id?: unknown; title: string; answer?: { option?: string | null; text?: string | null } | null }) =>
+  `Knut hat ${q._id ?? q.id} „${q.title}“ beantwortet: ${[q.answer?.option ? `Option „${q.answer.option}“` : '', q.answer?.text ?? ''].filter(Boolean).join(' — ').slice(0, 4000)}`;
+
 /** Knuts „Fortsetzen“ auf einen Leitstand-Deckel geht sofort raus; „Anhalten“ und alles andere nicht (Review A). */
 export const urgentAnswer = (q: any) => (q.kind === 'leitstand-deckel' || q.kind === 'leitstand-weiter') && q.answer?.option === 'Fortsetzen';
 
@@ -460,7 +464,7 @@ async function tickOne(u: User, leit: any, deps: LeitDeps) {
   const answered: any[] = await questions().find({ userId: u.id, status: 'beantwortet', paket: null, 'answer.at': { $gte: new Date(Math.max(since, now - c.stale)) } }).toArray();
   for (const q of answered) {
     const a = q.answer ?? {};
-    await add({ key: `frage:${q._id}`, kind: 'frage', at: new Date(a.at).getTime(), text: `Knut hat ${q._id} „${q.title}“ beantwortet: ${[a.option ? `Option „${a.option}“` : '', a.text ?? ''].filter(Boolean).join(' — ').slice(0, 600)}` },
+    await add({ key: `frage:${q._id}`, kind: 'frage', at: new Date(a.at).getTime(), text: frageEventText(q) },
       urgentAnswer(q));
   }
   // Knut hat einen Strang geprüft oder zur Nacharbeit geschickt (Teil B, B4/F3).

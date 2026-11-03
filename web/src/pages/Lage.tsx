@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { api, fmtDateTime } from '../api.ts';
 import { Err, Loading, useLoad } from '../ui.tsx';
 import { Karte, type Frage } from './Entscheidungen.tsx';
+import { WasIstDas } from '../nachfrage.tsx';
 
 const SOFORT = 1;   // die wichtigste Entscheidung mit Knöpfen direkt in der Lage; der Rest als eine Zeile mit Empfehlung (auf einen Blick)
 const sicher = (u: string | null | undefined) => (u && (/^https?:\/\//.test(u) || /^#\//.test(u) || /^\/#\//.test(u)) ? u : null);
@@ -52,6 +53,7 @@ export function Lage() {
               <span className={`chip${x.art === 'approve' ? ' warn' : ''}`}>{x.art === 'frage' ? (x.stufe === 'wichtig' ? 'wichtig' : 'Frage') : x.art === 'approve' ? 'Review' : 'Jira'}</span>{' '}
               {sicher(x.link) ? <a href={sicher(x.link)!} target={/^https?:/.test(x.link) ? '_blank' : undefined} rel="noreferrer">{x.titel}</a> : x.titel}
               {x.empfehlung && <div className="tiny">{x.art === 'frage' ? 'Empfehlung: ' : ''}{x.empfehlung}</div>}
+              {x.art === 'frage' ? <WasIstDas art="frage" id={x.id} kompakt /> : x.art === 'approve' ? <WasIstDas art="pr" id={String(x.id).replace(/^pr:/, '')} kompakt /> : null}
             </li>
           ))}
         </ul>
@@ -96,7 +98,7 @@ export function Lage() {
               <ul className="lage-liste">
                 {g.zeilen.slice(0, 8).map((z: any) => (
                   <li key={z.pr} data-testid="lage-pr">
-                    {sicher(z.url) ? <a href={sicher(z.url)!} target="_blank" rel="noreferrer">{kurzPr(z.pr)}</a> : kurzPr(z.pr)} {z.titel}
+                    {sicher(z.url) ? <a href={sicher(z.url)!} target="_blank" rel="noreferrer">{kurzPr(z.pr)}</a> : kurzPr(z.pr)} {z.titel} <WasIstDas art="pr" id={z.pr} kompakt />
                     <div className="tiny">{z.autor ?? '?'} · {z.merge ? `merge: ${z.mergeHinweis}` : z.entscheidung ?? '—'}{z.reviews.length ? ` · ${z.reviews.map((r: any) => `${r.wer} ${r.zustand}`).join(', ')}` : ''}{z.tags.length ? ` · ${z.tags.map((t: any) => `${t.tag} ${t.wer}`).join(', ')}` : ''}{z.ticker?.review ? ` · Ticker: ${z.ticker.review}` : ''}</div>
                   </li>
                 ))}

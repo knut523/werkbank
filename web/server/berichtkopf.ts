@@ -45,7 +45,7 @@ export function berichtKopf(text: string | null | undefined): Kopf | { fehler: s
     // „Ja (wie empfohlen)“; Inline- (["a", "b"]) und Block-Liste liest der YAML-Parser gleich. Höchstens 3, kurz, ohne die Empfehlung selbst.
     const empfehlung = str(f.empfehlung, 600);
     const alternativen = [...new Set(list(f.alternativen).map((o: unknown) => str(o, 120)).filter((o) => o && o !== empfehlung))].slice(0, 3);
-    return { id, frage, empfehlung, antwort: str(f.antwort, 600), ...(f.stufe === 'wichtig' || f.stufe === 'normal' ? { stufe: f.stufe } : {}), ...(worum ? { worum } : {}), ...(optionen.length ? { optionen } : {}), ...(alternativen.length ? { alternativen } : {}) };
+    return { id, frage, empfehlung, antwort: str(f.antwort, 4000), ...(f.stufe === 'wichtig' || f.stufe === 'normal' ? { stufe: f.stufe } : {}), ...(worum ? { worum } : {}), ...(optionen.length ? { optionen } : {}), ...(alternativen.length ? { alternativen } : {}) };
   }).filter((x): x is KopfFrage => !!x);
   const github: KopfGithub[] = list(y.github).slice(0, 6).map((g: any) => {
     if (!g || typeof g !== 'object') return null;

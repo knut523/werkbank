@@ -2,10 +2,11 @@
 // Wartet auf dich → In Arbeit → Als Nächstes → Erledigt. Rein, ohne React — läuft auch in den Tests.
 
 export interface BucketSpec { path: string; name: string; title: string; topic: string; state: string; rank?: number | null; open: number; tickets: { key: string; status: string | null }[]; prLive?: any[]; verified?: string | null }
-export interface Decision { path: string; spec?: string; title?: string; topic: string; question?: string }
+export interface Decision { path: string; spec?: string; title?: string; topic: string; question?: string; n?: number }
 export interface TopicBuckets {
   topic: string;
-  waiting: { count: number; items: Decision[] };
+  /** count = offene Fragen, specs = in wie vielen Specs; items = je Spec EINE Zeile (n Fragen), nicht dieselbe Spec zweimal (R32, Befund 9). */
+  waiting: { count: number; specs: number; items: Decision[] };
   inWork: { count: number; items: (BucketSpec & { agent?: string | null })[] };
   next: { count: number; items: BucketSpec[] };
   done: { count: number; items: BucketSpec[] };
@@ -21,17 +22,30 @@ export function topicBuckets(topics: { name: string; states: Record<string, Buck
     const specs = Object.values(t.states).flat().filter(Boolean);
     const agentOf = (s: BucketSpec) => s.tickets.map((x) => agents[x.key]).find(Boolean) ?? null;
     const waiting = decisions.filter((d) => d.topic === t.name);
+    const jeSpec = [...waiting.reduce((m, d) => m.set(d.path, m.has(d.path) ? { ...m.get(d.path)!, n: (m.get(d.path)!.n ?? 1) + 1 } : { ...d, n: 1 }), new Map<string, Decision>()).values()];
     const inWork = specs.filter((s) => s.state === '4-Review' || (s.state !== '5-Live' && agentOf(s))).sort(byRank).map((s) => ({ ...s, agent: agentOf(s) }));
     const next = specs.filter((s) => (s.state === '3-Plan' || s.state === '2-Pre-Plan') && !agentOf(s) && !s.tickets.some((x) => DONE.test(x.status ?? '') || ACTIVE.test(x.status ?? '')))
       .sort((a, b) => (a.state === b.state ? 0 : a.state === '3-Plan' ? -1 : 1) || byRank(a, b));
     const done = specs.filter((s) => s.state === '5-Live').sort((a, b) => String(b.verified ?? '').localeCompare(String(a.verified ?? '')) || byRank(a, b));
     return {
       topic: t.name,
-      waiting: { count: waiting.length, items: waiting.slice(0, 2) },
+      waiting: { count: waiting.length, specs: jeSpec.length, items: jeSpec.slice(0, 2) },
       inWork: { count: inWork.length, items: inWork.slice(0, 3) },
       next: { count: next.length, items: next.slice(0, 3) },
       done: { count: done.length, items: done.slice(0, 3) },
       best: Math.min(1e9, ...specs.map((s) => s.rank ?? 1e9)),
     };
   }).sort((a, b) => b.waiting.count - a.waiting.count || a.best - b.best || a.topic.localeCompare(b.topic, 'de'));
+}
+
+/** Titel ohne den Präfix aus der Vault-Notiz („olaf — Spec: …“, „olaf — Roadmap: …“) — im Thema steht das schon. */
+export const titelKurz = (t: string | null | undefined) => String(t ?? '').replace(/^\s*[\p{L}-]+\s+[—–-]\s+(?:Spec|Roadmap|Entscheidung|Plan)\s*:\s*/iu, '').trim();
+
+/** PR-Reiter und PR-Tabelle zählen dieselben: offen = live offen oder nicht als „nicht mehr offen/gemergt“ geführt (R32, Befund 8: 27 statt 249). */
+export const prIstOffen = (p: { live?: unknown; review?: string }) => !!p.live || !['nicht mehr offen', 'gemergt'].includes(p.review ?? '');
+export function prKopf(prs: { live?: any; review?: string }[], ich: string[] = []) {
+  const offen = prs.filter(prIstOffen);
+  const konflikt = offen.filter((p) => p.live?.mergeable === 'CONFLICTING').length;
+  const wartenAufDich = offen.filter((p) => p.live && ich.includes(String(p.live.turn?.who ?? '').toLowerCase().split(/\s+/)[0])).length;
+  return { offen: offen.length, erledigt: prs.length - offen.length, konflikt, wartenAufDich };
 }
