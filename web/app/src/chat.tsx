@@ -24,9 +24,11 @@ export function ChatLeiste({ offen, vorbereitet, schliessen }: { offen: boolean;
 
   useEffect(() => { if (vorbereitet) setText(vorbereitet); }, [vorbereitet]);
 
+  const abruf = useRef(0);
   async function laden() {
+    const mein = ++abruf.current;   // nur die jüngste Antwort zählt (Umschalten Hauptchat/Neuer Chat)
     const q = ziel === 'hauptchat' ? 'ziel=hauptchat' : `ziel=eigen${conv ? `&conv=${encodeURIComponent(conv)}` : ''}`;
-    try { const s = await hole<Stand>(`/api/v2/chat?${q}`); setStand(s); setFehler(null); return s; } catch (e: any) { setFehler(e.message); return null; }
+    try { const s = await hole<Stand>(`/api/v2/chat?${q}`); if (mein === abruf.current) { setStand(s); setFehler(null); } return s; } catch (e: any) { if (mein === abruf.current) setFehler(e.message); return null; }
   }
 
   useEffect(() => { if (offen) void laden(); }, [offen, ziel, conv]);

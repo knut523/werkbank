@@ -43,6 +43,8 @@ export interface V2Deps {
   gesperrt: (u: User, funktion: 'wissen' | 'roadmap') => boolean;
 }
 
+/** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
+const hauptchatSendet = new Set<string>();
 const vorname = (u: User) => u.name.trim().split(/\s+/)[0] ?? u.name;
 const admin = (u: User) => u.role === 'ADMIN';
 
@@ -229,8 +231,10 @@ export function registerV2(on: On, d: V2Deps) {
       const text = eigen.pruefeText(b.text);
       const h = await d.hauptchat(u);
       if (!h) throw err(409, 'Kein Hauptchat aktiv — in der alten Werkbank „Hauptchat starten“.');
-      if (await d.laeuftChat(u, h.conv).catch(() => false)) throw err(409, 'Der Hauptchat arbeitet gerade — dein Text bleibt stehen, schick ihn gleich noch einmal.');
-      const at = await librechat.senden(u, h.conv, text);
+      if (hauptchatSendet.has(u.id) || (await d.laeuftChat(u, h.conv).catch(() => true))) throw err(409, 'Der Hauptchat arbeitet gerade — dein Text bleibt stehen, schick ihn gleich noch einmal.');
+      hauptchatSendet.add(u.id);
+      let at: Date;
+      try { at = await librechat.senden(u, h.conv, text); } finally { hauptchatSendet.delete(u.id); }
       d.log('v2 hauptchat', { user: u.id });
       return send(d, res, { ok: true, ziel: 'hauptchat', at });
     }

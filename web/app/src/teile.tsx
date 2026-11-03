@@ -15,6 +15,7 @@ export function Md({ text, klein }: { text: string; klein?: boolean }) {
 }
 
 export function Verweis({ l }: { l: Link }) {
+  if (!/^(https?:\/\/|\/)/i.test(l.url)) return <span className="verweis">{l.label}</span>;   // nur http(s) und eigene Pfade als Link
   const extern = l.extern || !istIntern(l.url);
   return <a className="verweis" href={l.url} {...(extern ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>{l.label}{extern ? ' ↗' : ''}</a>;
 }
@@ -86,6 +87,7 @@ export function useDaten<T>(pfad: string | null): { d: T | null; fehler: string 
     if (!pfad) return;
     let aus = false;
     setFehler(null);
+    setD(null);   // kein Inhalt der vorigen Adresse unter der neuen (Pass C)
     hole<T>(pfad).then((x) => { if (!aus) setD(x); }).catch((e) => { if (!aus) { if (e.status === 401) window.dispatchEvent(new Event('v2-abgemeldet')); setFehler(e.message); } });
     return () => { aus = true; };
   }, [pfad, n]);

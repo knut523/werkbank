@@ -41,6 +41,11 @@ test('Chat: Zug läuft auf dem Server mit eigener v2-Kennung; zweiter Zug dersel
   const r = await chat.senden(u, { text: 'Was ist OLAF?' }, deps);
   assert.match(r.conv, /^v2-[0-9a-f-]{36}$/);
   await assert.rejects(chat.senden(u, { text: 'noch eine', conv: r.conv }, deps), (e: any) => e.status === 409);
+  // zwei Klicks im selben Augenblick (ohne await dazwischen): genau einer kommt durch
+  const uz = { ...u, id: 'u-zwei' };
+  const bz = bruecke(); bz.los();
+  const zwei = await Promise.allSettled([chat.senden(uz, { text: 'eins' }, { ...deps, fetch: bz.f }), chat.senden(uz, { text: 'zwei' }, { ...deps, fetch: bz.f })]);
+  assert.deepEqual(zwei.map((x) => x.status).sort(), ['fulfilled', 'rejected']);
   assert.equal(b.aufrufe[0].headers['x-librechat-conversation-id'], r.conv, 'eigene Unterhaltungs-ID, nie eine LibreChat-ID');
   assert.equal(b.aufrufe[0].body.messages[0].content, 'Was ist OLAF?');
   b.los();

@@ -46,7 +46,7 @@ function Seite({ pfad, such }: { pfad: string; such: string }) {
   if ((m = pfad.match(/^\/v2\/prs\/([^/]+)\/(\d+)$/))) return <PrDetail key={pfad} repo={decodeURIComponent(m[1])} nummer={m[2]} />;
   if (pfad.startsWith('/v2/prs')) return <Prs key={such} wer={q.get('wer')} />;
   if (pfad === '/v2/dokument') return <Dokument key={such} vault={q.get('vault')} paket={q.get('paket')} datei={q.get('datei')} />;
-  if (pfad.startsWith('/v2/dokumente')) return <Dokumente q={q.get('q') ?? ''} />;
+  if (pfad.startsWith('/v2/dokumente')) return <Dokumente key={q.get('q') ?? ''} q={q.get('q') ?? ''} />;
   if (pfad.startsWith('/v2/begriffe')) return <Begriffe />;
   return <div className="seite"><h1>Seite nicht gefunden</h1><p><a href="/v2/">Zur Startseite</a></p></div>;
 }

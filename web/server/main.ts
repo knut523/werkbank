@@ -4582,7 +4582,7 @@ async function backgroundJobs() {
 await connect();
 mkdirSync(cfg.dataDir, { recursive: true });
 // 2.0 (Council B2): Chat-Züge, die beim letzten Neustart offen waren, sichtbar als abgebrochen markieren.
-v2Abgebrochen().then((n) => { if (n) log('v2 chat abgebrochen', { n }); }).catch(() => {});
+v2Abgebrochen().then((n) => { if (n) log('v2 chat abgebrochen', { n }); }).catch((e) => log('v2 chat abgebrochen fehler', { error: String(e?.message ?? e).slice(0, 200) }));
 // Plan 81, Schnitt 1: alter Speicher → Ablage, einmalig und idempotent (nur Einträge ohne `path`).
 migrateLegacy(log).catch((e) => log('ablage-umzug', { error: String(e?.message ?? e).slice(0, 200) }));
 server.listen(cfg.port, cfg.host, () => log('listening', { host: cfg.host, port: cfg.port, demo: cfg.demo, vault: cfg.vaultDir }));

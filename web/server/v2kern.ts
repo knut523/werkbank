@@ -115,8 +115,8 @@ export function zustandSatz(z: ArbeitZeile): string {
   const cs = z.cs?.status;
   if (z.zustand === 'laeuft') return `Läuft${eta ? ` — ${eta}` : ''}.`;
   if (z.zustand === 'schlange') return 'Wartet auf einen freien Platz und startet von selbst.';
-  if (cs === 'braucht' || z.zustand === 'wartet') return `Wartet auf dich${grund ? `: ${grund}` : ''}.`;
   if (cs === 'hauptchat') return 'Wartet auf den Hauptchat — du musst nichts tun.';
+  if (cs === 'braucht' || z.zustand === 'wartet') return `Wartet auf dich${grund ? `: ${grund}` : ''}.`;
   if (z.zustand === 'blockiert') return `Kommt nicht weiter${grund ? `: ${grund}` : ''} — schau dir die Frage an.`;
   if (z.zustand === 'haengt') return `Hängt${grund ? `: ${grund}` : ''} — der Agent antwortet nicht mehr.`;
   if (z.zustand === 'stand-fehlt') return 'Ist stehen geblieben, ohne einen Stand zu melden.';
@@ -127,6 +127,7 @@ export function zustandSatz(z: ArbeitZeile): string {
 /** Gruppe in der Arbeit-Ansicht. */
 export function arbeitGruppe(z: ArbeitZeile): 'wartet' | 'laeuft' | 'fertig' {
   const cs = z.cs?.status;
+  if (cs === 'hauptchat') return 'laeuft';   // wartet auf den Hauptchat, nicht auf dich
   if (cs === 'braucht' || ['wartet', 'blockiert', 'haengt', 'stand-fehlt'].includes(z.zustand)) return 'wartet';
   if (z.zustand === 'laeuft' || z.zustand === 'schlange') return 'laeuft';
   return 'fertig';

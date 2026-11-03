@@ -98,6 +98,9 @@ test('Arbeit-Gruppe: wartet auf dich · läuft · fertig', () => {
   assert.equal(arbeitGruppe({ zustand: 'schlange' } as any), 'laeuft');
   assert.equal(arbeitGruppe({ zustand: 'fertig', cs: { status: 'review' } } as any), 'fertig');
   assert.equal(arbeitGruppe({ zustand: 'fertig', cs: { status: 'braucht' } } as any), 'wartet');
+  // wartet auf den Hauptchat: nicht „wartet auf dich“ (Pass C)
+  assert.equal(arbeitGruppe({ zustand: 'wartet', cs: { status: 'hauptchat' } } as any), 'laeuft');
+  assert.match(zustandSatz({ zustand: 'wartet', cs: { status: 'hauptchat' } } as any), /du musst nichts tun/);
 });
 
 test('Heute erledigt: nur Fertiges — was noch auf eine Antwort wartet, fehlt; „zum Lesen“ ist als solches markiert; echte Uhrzeit', () => {

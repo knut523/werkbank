@@ -6,6 +6,9 @@ import { wb } from './db.ts';
 import type { User } from './auth.ts';
 
 export const TEXT_MAX = 8000;
+/** Längster Zug; danach gilt er als hängend (abgebrochen), damit niemand dauerhaft gesperrt bleibt. */
+export const ZUG_MAX_MS = 30 * 60_000;
+const BESETZT = 'Es läuft schon eine Antwort — warte kurz, dann kannst du weiterschreiben.';
 export const chats = () => wb().collection('v2_chats');
 export const nachrichten = () => wb().collection('v2_nachrichten');
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
@@ -55,9 +58,11 @@ export async function senden(u: User, b: { text: unknown; conv?: unknown }, d: Z
   const text = pruefeText(b.text);
   const token = await d.token(u);
   if (!token) throw err(412, 'Für den Chat brauchst du einen Claude-Zugang — alles andere geht ohne. Frag Knut, wenn du einen brauchst.');
-  if (laufend.has(u.id) || (await nachrichten().findOne({ userId: u.id, status: 'laeuft' }))) throw err(409, 'Es läuft schon eine Antwort — warte kurz, dann kannst du weiterschreiben.');
+  // Sperre synchron belegen, bevor irgendein await kommt (sonst kommen zwei gleichzeitige Klicks beide durch — Pass C).
+  if (laufend.has(u.id)) throw err(409, BESETZT);
   laufend.add(u.id);
   try {
+    if (await nachrichten().findOne({ userId: u.id, status: 'laeuft', geaendert: { $gt: new Date(Date.now() - ZUG_MAX_MS) } })) throw err(409, BESETZT);
     let conv = istV2Conv(b.conv) ? String(b.conv) : null;
     if (conv && !(await chats().findOne({ _id: conv as any, userId: u.id }))) throw err(404, 'Diesen Chat gibt es nicht.');
     const now = new Date();
@@ -85,6 +90,7 @@ async function zug(u: User, conv: string, id: string, text: string, token: strin
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'x-librechat-user-id': u.id, 'x-librechat-user-email': u.email, 'x-librechat-conversation-id': conv },
       body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content: text }] }),
+      signal: AbortSignal.timeout(ZUG_MAX_MS),
     });
     if (!r.ok || !r.body) throw new Error(`Der Assistent antwortet gerade nicht (${r.status}).`);
     const dec = new TextDecoder();
@@ -103,6 +109,7 @@ async function zug(u: User, conv: string, id: string, text: string, token: strin
     await set({ text: out, status: 'fertig', fertigAt: new Date() });
   } catch (e: any) {
     d.log?.('v2 chat fehler', { user: u.id, conv, error: String(e?.message ?? e).slice(0, 200) });
-    await set({ text: out, status: 'fehler', fehler: String(e?.message ?? e).slice(0, 300), fertigAt: new Date() }).catch(() => {});
+    const fehler = e?.name === 'TimeoutError' ? 'Die Antwort hat zu lange gedauert und wurde abgebrochen — frag noch einmal.' : String(e?.message ?? e).slice(0, 300);
+    await set({ text: out, status: 'fehler', fehler, fertigAt: new Date() }).catch((x) => d.log?.('v2 chat status', { conv, error: String(x?.message ?? x).slice(0, 120) }));
   }
 }
