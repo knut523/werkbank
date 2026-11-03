@@ -61,6 +61,9 @@ export async function fremdesTicket(creds: JiraCreds | null, key: string, now = 
   return issue ? { ...issue, site: s.site } : null;
 }
 
+/** Nach einem Schreibzugriff (Release 31): Zwischenspeicher eines Tickets der zweiten Seite für alle Personen verwerfen. */
+export function fremdVergessen(key: string) { for (const k of [...fremdCache.keys()]) if (k.endsWith(`|${key}`)) fremdCache.delete(k); }
+
 /** Mehrere Schlüssel: nur die der anderen Seiten, parallel; Fehler je Schlüssel werden zu „nicht lesbar“. */
 export async function fremdeTickets(creds: JiraCreds | null, keys: string[]): Promise<Map<string, Issue & { site: string }>> {
   const want = [...new Set(keys)].filter((k) => !siteFor(k).main).slice(0, 30);
@@ -450,8 +453,9 @@ export async function addComment(creds: JiraCreds, key: string, text: string) {
   return jiraFetch(creds, 'POST', `/issue/${encodeURIComponent(key)}/comment`, { body: adfDoc(text) });
 }
 
-export async function transitions(creds: JiraCreds, key: string): Promise<{ id: string; name: string; to: string }[]> {
-  const r = await jiraFetch(creds, 'GET', `/issue/${encodeURIComponent(key)}/transitions`);
+/** Übergänge eines Tickets; `site` für Tickets der zweiten Seite (Release 31), sonst die Hauptseite. */
+export async function transitions(creds: JiraCreds, key: string, site?: JiraSite): Promise<{ id: string; name: string; to: string }[]> {
+  const r = await jiraFetch(creds, 'GET', `/issue/${encodeURIComponent(key)}/transitions`, undefined, site);
   return (r.transitions ?? []).map((t: any) => ({ id: String(t.id), name: t.name, to: t.to?.name ?? t.name }));
 }
 

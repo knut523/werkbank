@@ -20,6 +20,7 @@ import { reindex, search, searchState } from './search.ts';
 import { syncMirror, syncIncremental, recordSyncError, boardModel, refreshIssue, addComment, transitionTo, transitions, setDueDate, jiraFetch, isOverdue, isRecurring, JiraError, fremdesTicket, fremdeTickets, jiraSitesPublic, siteLesen, mirrorOf, mirrorSites, siteByPrefix, siteColumns, type Issue } from './jira.ts';
 import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, replyInChat } from './agent.ts';
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
+import { paketNachAntwort } from './orchestrator.ts';
 import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane, statusSchatten, sendWarteMs, gruendlichOrch, worktreeBelegt, questions as orchQuestions } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, setzeLeseQuelle, type VorbauErgebnis } from './vorbau.ts';
 import { themaOf, THEMEN } from './themen.ts';
@@ -65,7 +66,7 @@ const cosRueckstauZahl = () => { try { return cosRueckstau(cfg.vaultDir, cosMeet
 import type { Quellen as CosQuellen } from './cossammle.ts';
 import { hygieneOf, snoozeItem, sessionStart, contextStats, proposeFromAnswer, applyActions, hygieneAll, allIssues, recordMeasure } from './assist.ts';
 import { timingSafeEqual } from 'node:crypto';
-import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, type JiraAction } from './jirawrite.ts';
+import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, duplikateSuchen, anlegenJira, type JiraAction } from './jirawrite.ts';
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG, graphql } from './github.ts';
@@ -78,6 +79,12 @@ import { postReview, statusKommentar, schreibenAus, writeToken, erstelleDraftPr,
 import { ketteModus, starteKette, ketteTick, ketten as ketteCol, publicKette, brichAb as ketteAbbrechen, repoAusTicket, AKTIV as KETTE_AKTIV, type KDeps } from './jirakette.ts';
 import { fuehreAus as githubAktion } from './githubaktion.ts';
 import { fixTick, fixOverview, prLageVia, pushVia, gateVia, freigabeSetzen, fixAblehnenSynchron } from './prfix.ts';
+import { prLage as holePrLage, prLageText, PR_LAGE_AN as prLageAn } from './prlage.ts';
+import { ZWEI_SEITEN_AN as zweiSeitenAn, anlegenEingabe } from './jiraanlegen.ts';
+import { FRAGENPAKET_AN as fragenpaketAn, paketEingabe, paketeCol, neueKennung, paketStand } from './fragenpaket.ts';
+import { LAGE_AN as lageAn, baueLage, standSatz, THEMEN_LAGE } from './lage.ts';
+import { heuteFrueh } from './prlage.ts';
+import { parseThemen, registerRel } from './cosregister.ts';
 import { paketIndex, paketZahlen } from './pakete.ts';
 import { attachLocal, setGoal, resetGoal, setSprint, goalHistory, assignments, goalsToJira, autoSetGoal } from './local.ts';
 import { moveActions, describeMove } from '../src/boardMove.ts';
@@ -420,7 +427,7 @@ on('GET', /^\/api\/config$/, async (req, res) => {
   send(res, 200, {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: false,   // Plan 213 S6: forge abgeschaltet (172 D1/D5)
     jiraSite: cfg.jiraSite, jiraSites: jiraSitesPublic(), project: cfg.jiraProject, vault: cfg.vaultDir,
-    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u), navNeu: navNeu(), teamInstanz: teamInstanz(), aufraeumen: aufraeumenAn(), einLogin: einLogin(),
+    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u), navNeu: navNeu(), teamInstanz: teamInstanz(), aufraeumen: aufraeumenAn(), einLogin: einLogin(), lage: lageAn() && u?.role === 'ADMIN',
     // P4: eine Zustandszeile oben statt verstreuter Hinweise — Speicher nur für Admins (RAM-Plan 125).
     speicher: u?.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null,
   });
@@ -2438,6 +2445,35 @@ on('GET', /^\/api\/uebersicht$/, async (req, res) => {
   send(res, 200, { ...gruppieren(karten, lose), at: new Date(), dryRun: dryRun(), paketDienst: !!basis, fragenFehler, hauptchat, erledigt });
 });
 
+// Lage (Release 31): „Was ist offen?“ auf einen Blick — Für dich · Läuft · Fertig seit heute früh · Erledigt der Hauptchat ·
+// PR-Lage · Themen. Nur lesen, Schalter WERKBANK_LAGE=on; jede Quelle darf einzeln ausfallen (dann steht es in `fehler`).
+on('GET', /^\/api\/lage$/, async (req, res) => {
+  const u = await needAdmin(req);
+  if (!lageAn()) throw new HttpError(404, 'Lage ist aus (WERKBANK_LAGE).');
+  const now = new Date();
+  const seit = heuteFrueh(now);
+  const fehler: string[] = [];
+  const weich = async <T>(name: string, f: () => Promise<T>, leer: T): Promise<T> => { try { return await f(); } catch (e: any) { fehler.push(`${name}: ${String(e?.message ?? e).slice(0, 160)}`); return leer; } };
+  const [fragen, daten, aktionen, prl, hyg] = await Promise.all([
+    weich('Entscheidungen', async () => fragenAus((await inboxFuer(u)).eintraege).fragen, [] as any[]),
+    weich('Unter-Chats', () => uebersichtDaten(u), { karten: [] as any[] } as any),
+    weich('Braucht dich', async () => (brauchtAn() ? (await brauchtSicht(u)).aktionen ?? [] : []), [] as any[]),
+    weich('PR-Lage', async () => (prLageAn() ? await holePrLage(githubReadToken) : null), null),
+    weich('Jira', () => hygieneOf(u), { items: [] as any[], snoozed: [] as string[] } as any),
+  ]);
+  const erledigtHeute = await weich('Geprüft', async () => ((await orchRuns().find({ userId: u.id, kind: { $ne: 'leitstand' }, knutReviewedAt: { $gte: new Date(seit) } }, { projection: { title: 1, url: 1, knutReviewedAt: 1 } }).limit(30).toArray()) as any[])
+    .map((d) => ({ id: String(d._id), titel: d.title ?? '', at: d.knutReviewedAt, chat: /^https?:\/\//.test(String(d.url ?? '')) ? d.url : null })), [] as any[]);
+  const reg = (() => { try { return parseThemen(readVault(registerRel('themen'))).themen; } catch { return []; } })();
+  const themen = THEMEN_LAGE.map((t) => {
+    const r = reg.find((x) => t.register.test(x.name));
+    const md = t.notiz ? readVault(t.notiz) : '';
+    return { thema: t.thema, register: r?.stand ? `${r.stand}${r.naechster ? ` Nächster Schritt: ${r.naechster}` : ''}` : null, notiz: md ? standSatz(md) : null, link: md && t.notiz ? t.notiz : null };
+  });
+  const items: any[] = hyg.items ?? [];
+  const jira = { ueberfaellig: items.filter((i) => i.rule === 'überfällig').length, ohneDatum: items.filter((i) => i.rule === 'ohne Datum').length };
+  send(res, 200, { ...baueLage({ seit, now: now.toISOString(), fragen, karten: daten.karten ?? [], aktionen, erledigtHeute, prLage: prl, themen, jira }), fehler, schalter: { prLage: prLageAn(), brauchtDich: brauchtAn() } });
+});
+
 // Rückfragen des Orchestrators (Knut antwortet hier; nur die eigenen).
 on('GET', /^\/api\/orchestrator\/questions$/, async (req, res, _m, url) => {
   const u = await needUser(req);
@@ -3642,6 +3678,55 @@ on('POST', /^\/internal\/lead\/pr-review$/, async (req, res) => {
   if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
   send(res, 200, await reviewStarten(u, b.pr, b.stufe));
 });
+// PR-Lage (Release 31, Schnitt 1): offene PRs aller freigegebenen Orgs mit Reviews, Christophs Kommentaren, Tags,
+// mergeStateStatus, Ticker-Stand und „von uns gepusht“ — nur lesen, Schalter WERKBANK_PR_LAGE=on.
+on('POST', /^\/internal\/lead\/pr-lage$/, async (req, res) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  if (!prLageAn()) { send(res, 200, { an: false, text: 'Schalter aus (WERKBANK_PR_LAGE) — PR-Lage gibt es noch nicht; github_lesen geht weiter.' }); return; }
+  const l = await holePrLage(githubReadToken, { frisch: b.frisch === true });
+  log('lead pr-lage', { user: u.id, n: l.zeilen.length, quelle: l.quelle });
+  send(res, 200, { an: true, text: prLageText(l), lage: l });
+});
+
+// Fragenpaket (Release 31, Schnitt 2): n Fragen als eine Gruppe auf der Entscheidungsseite; Antworten gebündelt zurück.
+on('POST', /^\/internal\/fragenpaket$/, async (req, res) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  if (!fragenpaketAn()) throw new HttpError(409, 'Schalter aus (WERKBANK_FRAGENPAKET) — Fragen einzeln mit orch_ask stellen.');
+  let e;
+  try { e = paketEingabe(b); } catch (x: any) { throw new HttpError(400, String(x.message)); }
+  const id = await neueKennung();
+  const ids: string[] = [];
+  // Erst das Paket (offen, ohne Fragen), dann die Fragen — ein Fehler mittendrin zieht die schon angelegten zurück.
+  await paketeCol().insertOne({ _id: id as any, userId: u.id, titel: e.titel, status: 'offen', fragen: [], createdAt: new Date() } as any);
+  try {
+    for (const f of e.fragen) {
+      const q = await askKnut(u, { title: f.frage, context: f.worum, options: f.optionen, recommendation: f.empfehlung, strand: f.strang, stufe: f.stufe, paket: { id, titel: e.titel } });
+      ids.push(q.id);
+      await paketeCol().updateOne({ _id: id as any }, { $push: { fragen: q.id } as any });   // sofort, kein Fenster mit leerer Liste
+    }
+  } catch (x: any) {
+    for (const q of ids) await withdrawQuestion(u, q).catch(() => {});
+    await paketeCol().deleteOne({ _id: id as any });
+    throw new HttpError(x?.status ?? 400, `Fragenpaket nicht angelegt: ${x?.message ?? x}`);
+  }
+  roadmapChanged('orchestrator-frage');
+  log('fragenpaket angelegt', { user: u.id, id, n: ids.length });
+  send(res, 200, { id, fragen: ids, url: `${cfg.publicUrl}/#/entscheidungen` });
+});
+on('POST', /^\/internal\/fragenpaket\/stand$/, async (req, res) => {
+  const b = await body(req);
+  const u = await orchPerson(req, b);
+  if (!fragenpaketAn()) throw new HttpError(409, 'Schalter aus (WERKBANK_FRAGENPAKET).');
+  // Nachholen (Gegenprüfung 02.11.): vollständige, aber nicht abgeschlossene/zugestellte Pakete hier noch einmal versuchen.
+  for (const p of await paketeCol().find({ userId: u.id, status: { $in: ['offen', 'zustellen'] } }, { projection: { _id: 1 } }).limit(20).toArray()) await paketNachAntwort(u, String(p._id));
+  try { send(res, 200, { pakete: await paketStand(u, b.id ? String(b.id) : null) }); }
+  catch (x: any) { throw new HttpError(x?.status ?? 500, String(x.message)); }
+});
+
 on('POST', /^\/internal\/lead\/github$/, async (req, res) => {
   const b = await body(req);
   const u = await orchPerson(req, b);
@@ -3896,14 +3981,43 @@ function titleMismatch(shown: unknown, actual: string): boolean {
   return !(b === a || (a.length >= 12 && b.startsWith(a)));
 }
 
+/** Ticket für ein Update aus dem Chat: Kopie (Hauptseite); mit WERKBANK_JIRA_ZWEI_SEITEN Tickets der zweiten Seite live. */
+async function ticketFuerUpdate(u: User, key: string, all: Issue[]): Promise<Issue | null> {
+  const k = all.find((i) => i.key === key);
+  if (k || isMainSite(key) || !zweiSeitenAn()) return k ?? null;
+  return await fremdesTicket(await jiraCreds(u).catch(() => null), key);
+}
+
+// Jira anlegen auf beiden Seiten (Release 31, Schnitt 2): Duplikatsuche (lesend) und Anlegen (nach Klick auf die Karte).
+on('POST', /^\/internal\/jira-duplikate$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  if (!zweiSeitenAn()) throw new HttpError(409, 'Schalter aus (WERKBANK_JIRA_ZWEI_SEITEN) — Duplikatsuche und Anlegen gibt es noch nicht.');
+  send(res, 200, await duplikateSuchen(u, String(b.projekt ?? '').toUpperCase(), String(b.titel ?? '')));
+});
+on('POST', /^\/internal\/jira-anlegen$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  if (!zweiSeitenAn()) throw new HttpError(409, 'Schalter aus (WERKBANK_JIRA_ZWEI_SEITEN) — neue Tickets legt die Werkbank noch nicht an.');
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  let e;
+  try { e = anlegenEingabe(b); } catch (x: any) { throw new HttpError(400, String(x.message)); }
+  const r = await jiraWrite(u, () => anlegenJira(u, e));
+  log('jira anlegen (chat)', { user: u.id, projekt: e.projekt, key: r.key, dryRun: !!r.dryRun });
+  send(res, 200, r);
+});
+
 on('POST', /^\/internal\/jira-update$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
   const key = String(b.key ?? '');
   if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) throw new HttpError(400, 'Ungültiger Schlüssel.');
-  const cur = (await allIssues()).find((i) => i.key === key);
+  const all = await allIssues();
+  const cur = await ticketFuerUpdate(u, key, all);
   if (!cur) throw nichtInKopie(key, 'Ticket nicht in der Jira-Kopie (nur bestehende Tickets, keine neuen).');
   if (titleMismatch(b.summary, cur.summary)) throw new HttpError(409, `${key} heißt „${cur.summary}“, nicht „${String(b.summary).slice(0, 80)}“ — nichts geschrieben. Bitte mit dem richtigen Titel neu fragen.`);
+  // Release 31 (Befund aus Paket 400): mit WERKBANK_JIRA_ZWEI_SEITEN prüft auch das Einzel-Update den Owner wie der Stapel.
+  if (zweiSeitenAn() && !isMine(cur, resolveIdentity(await jiraIdentity(u), all))) throw new HttpError(403, `${key} gehört nicht dir (Owner: ${cur.assignee ?? 'niemand'}) — nur eigene Tickets; nichts geschrieben.`);
   const actions: any[] = [];
   if (b.comment) actions.push({ type: 'comment', text: String(b.comment) });
   if (b.status) actions.push({ type: 'status', to: String(b.status) });
@@ -3925,6 +4039,8 @@ on('POST', /^\/internal\/jira-update-many$/, async (req, res) => {
   if (changes.length > 25) throw new HttpError(400, 'Höchstens 25 Tickets auf einmal.');
   const all = await allIssues();
   const byKey = new Map(all.map((i) => [i.key, i]));
+  // Release 31: Tickets der zweiten Seite (OLAF-…) live lesen, damit Titel- und Owner-Prüfung für sie genauso greifen.
+  if (zweiSeitenAn()) for (const [k, i] of await fremdeTickets(await jiraCreds(u).catch(() => null), changes.map((c) => String(c?.key ?? '')))) byKey.set(k, i);
   // Nur eigene Tickets (Tagesabschluss = Durchgang über die eigenen): ein fremdes im Stapel → nichts geschrieben.
   // Schutz gegen Anweisungen aus Ticket-Texten, die das Modell beim Lesen gesehen hat (Council 09.10.2026).
   const who = resolveIdentity(await jiraIdentity(u), all);

@@ -138,6 +138,7 @@ export const ORCH_MCP_TOOLS: string[] = [
   'mcp__werkbank__hauptchat_melden', 'mcp__werkbank__challenge',
   'mcp__werkbank__werkbank_betrieb', 'mcp__werkbank__werkbank_stand', 'mcp__werkbank__geheimnis_nutzen', 'mcp__werkbank__coolify',
   'mcp__werkbank__coolify_status', 'mcp__werkbank__datei_teilen', 'mcp__werkbank__screenshot',
+  'mcp__werkbank__pr_lage', 'mcp__werkbank__jira_duplikate', 'mcp__werkbank__jira_anlegen', 'mcp__werkbank__fragenpaket', 'mcp__werkbank__fragenpaket_stand',
   'mcp__atlassian__addCommentToJiraIssue', 'mcp__atlassian__editJiraIssue', 'mcp__atlassian__transitionJiraIssue',
   'mcp__atlassian__createJiraIssue', 'mcp__atlassian__updateJiraIssue', 'mcp__atlassian__deleteJiraIssue',
   'mcp__atlassian__addWorklogToJiraIssue', 'mcp__atlassian__createIssueLink', 'mcp__atlassian__editIssueLink',
@@ -343,6 +344,13 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     if (server === 'werkbank' && HAUPTCHAT_R31.has(name)) {
       if (!ctx.leit) return { cls: 'blocked', why: 'Betrieb, Geheimnisse, Coolify und Dateien gibt es nur im Hauptchat' };
       return R31_KLICK.includes(`mcp__werkbank__${name}`) ? { cls: 'confirm' } : { cls: 'read' };
+    }
+    // Release 31 (Schnitt 2): Ticket anlegen (beide Jira-Seiten) immer erst nach Klick auf die Karte; Duplikatsuche liest nur.
+    if (server === 'werkbank' && name === 'jira_anlegen') return { cls: 'confirm' };
+    if (server === 'werkbank' && name === 'jira_duplikate') return { cls: 'read' };
+    // Release 31: PR-Lage lesen und Fragenpakete (wie orch_ask: Fragen an Knut, ändert nur Werkbank-Zustand) — nur im Hauptchat.
+    if (server === 'werkbank' && (name === 'pr_lage' || name === 'fragenpaket' || name === 'fragenpaket_stand')) {
+      return ctx.leit ? { cls: 'read' } : { cls: 'blocked', why: 'PR-Lage und Fragenpakete gibt es nur im Hauptchat' };
     }
     // GitHub schreiben aus dem Hauptchat (R29 D, S5): immer erst nach Klick auf die Karte, auch im Auto-Modus „voll“; in Strängen gesperrt.
     if (server === 'werkbank' && name === 'github_schreiben') return ctx.leit ? { cls: 'confirm' } : { cls: 'blocked', why: 'GitHub schreiben nur im Hauptchat nach Knuts Klick' };
@@ -635,6 +643,12 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
       if (name === 'coolify_status') return `🚢 Coolify-Stand: ${short(input.app, 50)}`;
       if (name === 'datei_teilen') return `📎 Datei geteilt: ${short(input.pfad || input.id, 80)}`;
       if (name === 'screenshot') return `📸 Screenshot (${short(input.geraet ?? 'desktop', 10)}): ${short(input.url, 70)}`;
+      // R31 Lage/Jira
+      if (name === 'pr_lage') return '🔀 PR-Lage gelesen';
+      if (name === 'jira_duplikate') return `🔎 Jira-Duplikatsuche: ${short(input.projekt ?? '', 12)} „${short(input.titel ?? '', 60)}“`;
+      if (name === 'jira_anlegen') return `🎫 Jira-Ticket angelegt: ${short(input.projekt ?? '', 12)} „${short(input.titel ?? '', 60)}“`;
+      if (name === 'fragenpaket') return `🗳️ Fragenpaket angelegt: „${short(input.titel ?? '', 60)}“ (${Array.isArray(input.fragen) ? input.fragen.length : 0} Fragen)`;
+      if (name === 'fragenpaket_stand') return `🗳️ Stand Fragenpaket ${short(input.id ?? '', 20)}`;
       return name === 'hygiene_snooze' ? `⏰ Später nachfragen: ${input.key}` : '🧹 Task-Hygiene angesehen';
     }
     const icon = server === 'atlassian' ? '🎫 Jira' : server === 'compartment' ? '🧠 Gedächtnis' : `🔌 ${server}`;
@@ -717,6 +731,25 @@ export function inboxKnoepfe(ergebnis: string): string {
   if (!rows.length) return '';
   const mehr = gueltig.length > INBOX_MAX ? `\n\n_${gueltig.length - INBOX_MAX} weitere unter Heute › Inbox_` : '';
   return `**Zum Antworten:**\n\n${rows.join('\n')}${mehr}\n\n_Anders? Schreib einfach, was stattdessen gelten soll — ich trage es an der Quelle ein._`;
+}
+
+/**
+ * Karte vor „Jira-Ticket anlegen“ (Release 31, Schnitt 2): Seite nach Projekt-Präfix (PM → maxenergy, OLAF → max-energy),
+ * Typ, Titel, Beschreibung und die gesehenen Duplikat-Kandidaten. Die Werkbank sucht nach dem Klick noch einmal und legt
+ * nichts an, wenn ein Treffer nicht unter „gesehen“ steht. Texte vom Modell: keine Knöpfe darin, Beschreibung im Codezaun.
+ */
+export function jiraAnlegenKarte(input: Record<string, unknown>): string {
+  const projekt = short(String(input.projekt ?? '').toUpperCase(), 12);
+  const seite = projekt === 'OLAF' ? 'max-energy (Entwicklungs-Jira)' : projekt === 'PM' ? 'maxenergy (PM-Board)' : 'Seite nach Präfix (die Werkbank prüft)';
+  const gesehen = Array.isArray(input.duplikate_gesehen) ? (input.duplikate_gesehen as unknown[]).map((k) => short(k, 20)) : [];
+  const teile = [
+    `Seite: ${seite}`,
+    `Typ: ${short(input.typ ?? 'Task', 30)}${input.faellig ? ` · fällig ${short(input.faellig, 12)}` : ''}`,
+    `Titel: **${short(input.titel, 200)}**`,
+    `Duplikatsuche: ${gesehen.length ? `gesehen und bewusst trotzdem neu: ${gesehen.join(', ')}` : 'keine Treffer gemeldet'} (die Werkbank sucht vor dem Anlegen noch einmal)`,
+    input.beschreibung ? `Beschreibung:\n${fence(clip(String(input.beschreibung), 3000))}` : '',
+  ].filter(Boolean);
+  return `${neutralizeAnswerAnchors('', `**Soll ich im Jira-Projekt ${projekt} ein neues Ticket anlegen?** (mit deinem Jira-Zugang)\n\n${teile.join('\n\n')}`)}\n\n${ANSWER_BUTTONS}`;
 }
 
 /**
@@ -810,6 +843,7 @@ export function confirmQuestion(tool: string, input: Record<string, unknown>): s
       }
       if (tool === 'mcp__werkbank__github_schreiben') return githubKarte(input);
       if (R31_KLICK.includes(tool)) return r31Karte(tool, input);
+      if (tool === 'mcp__werkbank__jira_anlegen') return jiraAnlegenKarte(input);
       if (tool === 'mcp__werkbank__agent_start') {
         return `${neutralizeAnswerAnchors('', `**Soll ich für ${input.key} einen neuen Chat mit einem Agenten starten?** Er arbeitet das Ticket vor und fragt vor jedem Schreiben nach.${input.note ? `\n\nAuftrag: „${short(input.note, 300)}“` : ''}`)}\n\n${ANSWER_BUTTONS}`;
       }

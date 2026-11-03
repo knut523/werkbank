@@ -5,10 +5,11 @@
 // MCP-Anmeldung). Bestätigt ist die Aktion zu diesem Zeitpunkt schon (Dialog in der Oberfläche).
 // WERKBANK_JIRA_WRITE=rest schreibt wie bisher per REST mit dem eigenen Token (nur mit write:jira-work).
 
-import { cfg } from './config.ts';
+import { cfg, siteFor, jiraSites, type JiraSite } from './config.ts';
 import { wb } from './db.ts';
 import { jiraCreds, getClaudeToken } from './creds.ts';
-import { addComment, transitionTo, transitions, setDueDate, refreshIssue, jiraFetch } from './jira.ts';
+import { addComment, transitionTo, transitions, setDueDate, refreshIssue, jiraFetch, adfDoc, fremdVergessen, fetchPages } from './jira.ts';
+import { projektSeite, jqlDuplikate, duplikatKandidaten, ungesehen, schluesselAus, type AnlegenEingabe, type Kandidat } from './jiraanlegen.ts';
 import { log } from './log.ts';
 import { sameLevelRemovals } from './goals.ts';
 import type { User } from './auth.ts';
@@ -120,6 +121,10 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
   const via = writeMode();
   const calls: { tool: string; input: unknown }[] = [];
   const dry = dryRun();
+  // Release 31 (Schnitt 2): Seite nach Präfix — Tickets der zweiten Seite (OLAF-…) mit deren cloudId; die Aufrufer lassen
+  // fremde Schlüssel nur mit WERKBANK_JIRA_ZWEI_SEITEN=on durch. REST schreibt nur auf die Hauptseite.
+  const site = siteFor(key);
+  if (!site.main && via === 'rest' && !dry) throw new JiraWriteError(409, 'rest_site', `${key} liegt auf ${site.site.replace(/^https:\/\//, '')} — dort schreibt die Werkbank nur über den Jira-MCP (WERKBANK_JIRA_WRITE=rest gilt nur für die Hauptseite).`);
   for (const a of actions) {
     if (a.type === 'comment' && !a.text?.trim()) continue;
     if (a.type === 'labels') {
@@ -128,13 +133,13 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
     }
     if (a.type === 'parent' && !/^[A-Z][A-Z0-9]+-\d+$/.test(a.key)) throw new JiraWriteError(400, 'bad_parent', 'Ungültiger Parent-Schlüssel.');
     if (a.type === 'due' && a.date && !/^\d{4}-\d{2}-\d{2}$/.test(a.date)) throw new JiraWriteError(400, 'bad_date', 'Datum im Format JJJJ-MM-TT.');
-    const base = { cloudId: cfg.jiraCloudId, issueIdOrKey: key };
+    const base = { cloudId: site.cloudId, issueIdOrKey: key };
     // Aktuelle Labels frisch lesen (Lesezugang), damit nichts überschrieben wird, was inzwischen dazukam.
     // Ohne frische Liste wird nicht geschrieben (die Kopie kann 15 min alt sein → Labels würden überschrieben).
     const currentLabels = async (): Promise<string[]> => {
       if (!read && dry) { const d: any = await wb().collection('jira_issues').findOne({ key }); return d?.labels ?? []; }   // nur Anzeige
       if (!read) throw new JiraWriteError(412, 'jira_missing', 'Für Label-Änderungen braucht der OLAF Workspace den Jira-Lesezugang (aktuelle Labels lesen).');
-      try { const r = await jiraFetch(read, 'GET', `/issue/${encodeURIComponent(key)}?fields=labels`); return r?.fields?.labels ?? []; }
+      try { const r = await jiraFetch(read, 'GET', `/issue/${encodeURIComponent(key)}?fields=labels`, undefined, site); return r?.fields?.labels ?? []; }
       catch (e: any) { throw new JiraWriteError(502, 'labels_read', `Aktuelle Labels von ${key} nicht lesbar — nichts geschrieben (${String(e.message).slice(0, 120)}).`); }
     };
     // Ziel ersetzen: die zu entfernenden Labels derselben Ebene aus der FRISCH gelesenen Liste (nicht aus der Kopie).
@@ -147,7 +152,7 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
       if (a.type === 'comment') calls.push({ tool: 'mcp__atlassian__addCommentToJiraIssue', input: { ...base, commentBody: a.text.trim(), contentFormat: 'markdown' } });
       if (a.type === 'status') {
         let t: any = null;
-        if (read) { try { const ts = await transitions(read, key); t = ts.find((x) => x.to.toLowerCase() === a.to.toLowerCase()) ?? ts.find((x) => x.name.toLowerCase() === a.to.toLowerCase()); if (!t) throw new JiraWriteError(400, 'no_transition', `Von hier aus gibt es keinen Übergang nach „${a.to}“ (möglich: ${ts.map((x) => x.to).join(', ') || '—'}).`); } catch (e) { if (e instanceof JiraWriteError) throw e; } }
+        if (read) { try { const ts = await transitions(read, key, site); t = ts.find((x) => x.to.toLowerCase() === a.to.toLowerCase()) ?? ts.find((x) => x.name.toLowerCase() === a.to.toLowerCase()); if (!t) throw new JiraWriteError(400, 'no_transition', `Von hier aus gibt es keinen Übergang nach „${a.to}“ (möglich: ${ts.map((x) => x.to).join(', ') || '—'}).`); } catch (e) { if (e instanceof JiraWriteError) throw e; } }
         calls.push({ tool: 'mcp__atlassian__transitionJiraIssue', input: { ...base, transition: { id: t?.id ?? `(Übergang nach ${a.to})` } } });
       }
       if (a.type === 'due') calls.push({ tool: 'mcp__atlassian__editJiraIssue', input: { ...base, fields: { duedate: a.date || null } } });
@@ -166,7 +171,7 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
       if (a.type === 'comment') await mcpWrite(u, 'mcp__atlassian__addCommentToJiraIssue', { ...base, commentBody: a.text.trim(), contentFormat: 'markdown' });
       if (a.type === 'status') {
         if (!read) throw new JiraWriteError(412, 'jira_missing', 'Für die Übergänge braucht der OLAF Workspace den Jira-Lesezugang (Einrichtung).');
-        const ts = await transitions(read, key);
+        const ts = await transitions(read, key, site);
         const t = ts.find((x) => x.to.toLowerCase() === a.to.toLowerCase()) ?? ts.find((x) => x.name.toLowerCase() === a.to.toLowerCase());
         if (!t) throw new JiraWriteError(400, 'no_transition', `Von hier aus gibt es keinen Übergang nach „${a.to}“ (möglich: ${ts.map((x) => x.to).join(', ') || '—'}).`);
         await mcpWrite(u, 'mcp__atlassian__transitionJiraIssue', { ...base, transition: { id: t.id } });
@@ -186,9 +191,64 @@ export async function writeJira(u: User, key: string, actions: JiraAction[]): Pr
   if (via === 'mcp') await setMcpState(u, null);
   log('jira write', { user: u.id, key, via, n: done.length });
   // Sofort nachziehen (Kopie + offene Boards). Ohne eigenen Lesezugang mit dem der Kopie (Entscheidung 3: Knuts Token).
+  if (!site.main) { fremdVergessen(key); return { done, via }; }   // zweite Seite: keine Kopie, nur der Lese-Zwischenspeicher
   const mirror = read ?? (await jiraCreds(null));
   if (mirror) { try { await refreshIssue(mirror, key); } catch { /* nächster Sync */ } }
   return { done, via };
+}
+
+// ---------- Anlegen auf beiden Seiten (Release 31, Schnitt 2) ----------
+
+/** Seite eines Projekts oder ein klarer Fehler (kein stiller Rückfall auf die Hauptseite). */
+export function seiteVonProjekt(projekt: string, sites = jiraSites()): JiraSite {
+  const s = projektSeite(projekt, sites) as JiraSite | null;
+  if (!s) throw new JiraWriteError(400, 'bad_project', `Projekt ${projekt} ist keiner Jira-Seite zugeordnet (bekannt: ${sites.map((x) => x.prefix).join(', ')}).`);
+  return s;
+}
+
+/** Duplikatsuche im Projekt über den Lesezugang (JQL, Volltext auf den Titel); Kandidaten ab der Schwelle. */
+export async function duplikateSuchen(u: User, projekt: string, titel: string): Promise<{ site: string; jql: string; kandidaten: Kandidat[] }> {
+  const site = seiteVonProjekt(projekt);
+  const read = await jiraCreds(u);
+  if (!read) throw new JiraWriteError(412, 'jira_missing', 'Für die Duplikatsuche braucht der OLAF Workspace deinen Jira-Lesezugang (Einrichtung).');
+  let jql: string;
+  try { jql = jqlDuplikate(projekt, titel); } catch (e: any) { throw new JiraWriteError(400, 'bad_title', String(e.message)); }
+  const r = await fetchPages(read, jql, 50, site.main ? undefined : site, ['summary', 'status']);
+  return { site: site.site, jql, kandidaten: duplikatKandidaten(titel, r.issues) };
+}
+
+/**
+ * Ticket anlegen (nach Klick auf die Karte der Brücke). Vorher sucht die Werkbank selbst noch einmal nach Duplikaten: ein
+ * Treffer, der nicht unter `gesehen` steht → nichts angelegt (409 mit den Kandidaten). Trockenlauf: nur protokollieren.
+ */
+export async function anlegenJira(u: User, e: AnlegenEingabe): Promise<{ key: string | null; site: string; via: 'mcp' | 'rest'; dryRun?: boolean; kandidaten: Kandidat[] }> {
+  const site = seiteVonProjekt(e.projekt);
+  const via = writeMode();
+  const dup = await duplikateSuchen(u, e.projekt, e.titel);
+  const neu = ungesehen(dup.kandidaten, e.gesehen);
+  if (neu.length) throw Object.assign(new JiraWriteError(409, 'duplikat', `Nichts angelegt — mögliche Duplikate, die noch nicht als gesehen gemeldet sind: ${neu.map((k) => `${k.key} „${k.summary}“ (${k.status})`).join('; ')}. Erst prüfen; ist es trotzdem neu, mit duplikate_gesehen = [${neu.map((k) => k.key).join(', ')}] noch einmal.`), { kandidaten: neu });
+  const input = { cloudId: site.cloudId, projectKey: e.projekt, issueTypeName: e.typ, summary: e.titel, ...(e.beschreibung ? { description: e.beschreibung } : {}), contentFormat: 'markdown', ...(e.faellig ? { additional_fields: { duedate: e.faellig } } : {}) };
+  if (dryRun()) {
+    await wb().collection('jira_dryrun').insertOne({ at: new Date(), userId: u.id, user: u.name, key: `${e.projekt}-(neu)`, done: ['Anlegen'], calls: [{ tool: 'mcp__atlassian__createJiraIssue', input }], gesehen: e.gesehen } as any);
+    log('jira trockenlauf (anlegen)', { user: u.id, projekt: e.projekt });
+    return { key: null, site: site.site, via, dryRun: true, kandidaten: dup.kandidaten };
+  }
+  let key: string | null;
+  if (via === 'rest') {
+    if (!site.main) throw new JiraWriteError(409, 'rest_site', `Projekt ${e.projekt} liegt auf ${site.site.replace(/^https:\/\//, '')} — dort legt die Werkbank nur über den Jira-MCP an.`);
+    const read = await jiraCreds(u);
+    if (!read) throw new JiraWriteError(412, 'jira_missing', 'Kein Jira-Zugang hinterlegt — unter „Einrichtung“ verbinden.');
+    const r = await jiraFetch(read, 'POST', '/issue', { fields: { project: { key: e.projekt }, issuetype: { name: e.typ }, summary: e.titel, ...(e.beschreibung ? { description: adfDoc(e.beschreibung) } : {}), ...(e.faellig ? { duedate: e.faellig } : {}) } });
+    key = r?.key ?? null;
+  } else {
+    key = schluesselAus(await mcpWrite(u, 'mcp__atlassian__createJiraIssue', input), e.projekt);
+    await setMcpState(u, null);
+  }
+  log('jira angelegt', { user: u.id, projekt: e.projekt, key, via });
+  // Angelegt, aber kein Schlüssel erkannt: nicht als Erfolg melden (Gegenprüfung 02.11.) — sonst legt ein zweiter Versuch doppelt an.
+  if (!key) throw new JiraWriteError(502, 'kein_schluessel', `Jira hat das Anlegen angenommen, der neue Schlüssel war aber nicht zu erkennen. NICHT erneut anlegen — erst jira_duplikate mit demselben Titel, das Ticket ist vermutlich da.`);
+  if (key && site.main) { const mirror = (await jiraCreds(u)) ?? (await jiraCreds(null)); if (mirror) { try { await refreshIssue(mirror, key); } catch { /* nächster Sync */ } } }
+  return { key, site: site.site, via, kandidaten: dup.kandidaten };
 }
 
 /** Einmaliger Hinweis im Chat, wenn Pflegefragen wegen fehlendem Jira-MCP ausfallen (true = jetzt zeigen). */

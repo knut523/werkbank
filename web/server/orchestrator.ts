@@ -1039,7 +1039,9 @@ export interface AskInput { title: string; context: string; options?: { label: s
   quelle?: string | null;
   g0?: { kriterien: string[]; ergebnis: string; belege?: string[] } | null;
   /** Wichtigkeit (Knut 17.10.): „wichtig“ = Knut muss selbst entscheiden; „normal“ stuft eine Regel-Einstufung nie herunter (stufe.ts). */
-  stufe?: 'wichtig' | 'normal' | null }
+  stufe?: 'wichtig' | 'normal' | null;
+  /** Release 31: Teil eines Fragenpakets (fragenpaket.ts) — Antworten gehen gebündelt zurück, nicht je Frage. */
+  paket?: { id: string; titel: string } | null }
 
 export const AUTO_PRO_TAG = 5;
 
@@ -1074,18 +1076,20 @@ export async function askKnut(u: User, inp: AskInput) {
   let id: string;
   do { id = 'q-' + randomUUID().slice(0, 6); } while (await questions().findOne({ _id: id as any }));
   const doc: any = { _id: id, userId: u.id, title, context, options, recommendation, strand, link, plan: inp.plan ? String(inp.plan).slice(0, 500) : null, createdAt: new Date(), status: 'offen', answer: null,
-    ...(key ? { key, keyActive: key } : {}), ...(quelle ? { quelle, day: vienna().date } : {}), ...(inp.g0 ? { g0: inp.g0 } : {}), ...(inp.stufe === 'wichtig' || inp.stufe === 'normal' ? { stufe: inp.stufe } : {}) };
+    ...(key ? { key, keyActive: key } : {}), ...(quelle ? { quelle, day: vienna().date } : {}), ...(inp.g0 ? { g0: inp.g0 } : {}), ...(inp.stufe === 'wichtig' || inp.stufe === 'normal' ? { stufe: inp.stufe } : {}),
+    ...(inp.paket?.id ? { paket: { id: String(inp.paket.id), titel: String(inp.paket.titel ?? '').slice(0, 120) } } : {}) };
   try { await questions().insertOne(doc); }
   catch (e: any) { if (e?.code === 11000) throw err(409, `Schlüssel ${key} ist schon vergeben — keine zweite Frage.`); throw e; }
   return publicQuestion(doc);
 }
 
 export function publicQuestion(d: any) {
-  return { id: String(d._id), kind: d.kind ?? 'frage', title: d.title, context: d.context, options: d.options ?? [], recommendation: d.recommendation, strand: d.strand ?? null, link: d.link ?? null, plan: d.plan ?? null, createdAt: d.createdAt, status: d.status, answer: d.answer ?? null, key: d.key ?? null, quelle: d.quelle ?? null, stufe: d.stufe ?? null };
+  return { id: String(d._id), kind: d.kind ?? 'frage', title: d.title, context: d.context, options: d.options ?? [], recommendation: d.recommendation, strand: d.strand ?? null, link: d.link ?? null, plan: d.plan ?? null, createdAt: d.createdAt, status: d.status, answer: d.answer ?? null, key: d.key ?? null, quelle: d.quelle ?? null, stufe: d.stufe ?? null, paket: d.paket ?? null };
 }
 
 export async function listQuestions(u: User, opts: { open?: boolean; limit?: number } = {}) {
-  const docs = await questions().find({ userId: u.id, ...(opts.open ? { status: 'offen' } : {}) }).sort({ createdAt: -1 }).limit(opts.limit ?? 50).toArray();
+  // Offene bis 200 (Release 31: ein Fragenpaket hat bis 60 Fragen — bei 50 fehlten sie auf der Entscheidungsseite).
+  const docs = await questions().find({ userId: u.id, ...(opts.open ? { status: 'offen' } : {}) }).sort({ createdAt: -1 }).limit(opts.limit ?? (opts.open ? 200 : 50)).toArray();
   return docs.map(publicQuestion);
 }
 
@@ -1140,7 +1144,19 @@ export async function answerQuestion(u: User, id: string, a: { option?: string |
     await runs().updateOne({ userId: u.id, kind: 'leitstand', endedAt: null }, { $set: d.kind === 'leitstand-deckel' ? { capResetAt: new Date() } : { weiterStreak: 0, weiterStopped: null } });
     action = 'fortgesetzt';
   }
+  if (d.paket?.id) await paketNachAntwort(u, String(d.paket.id));
   return { ...publicQuestion({ ...d, status: 'beantwortet', answer }), ...(action ? { action } : {}) };
+}
+
+/** Release 31: nach Antwort/Rücknahme einer Paket-Frage prüfen, ob das Fragenpaket fertig ist (dann gebündelt zustellen).
+ *  Dynamischer Import: fragenpaket.ts und leitstand.ts hängen selbst an diesem Modul. Ein Fehler hält die Antwort nicht auf. */
+export async function paketNachAntwort(u: User, id: string) {
+  try {
+    const { abschliessen } = await import('./fragenpaket.ts');
+    const { meldeLeitstand } = await import('./leitstand.ts');
+    const p: any = await wb().collection('fragenpakete').findOne({ _id: id as any, userId: u.id }, { projection: { titel: 1 } });
+    await abschliessen(u, id, { send: (s, t) => sendOrch(u, s, t), melde: (t) => meldeLeitstand(u, { _id: `fragenpaket:${id}`, title: `Fragenpaket „${p?.titel ?? id}“` }, t) });
+  } catch (e: any) { console.error(`fragenpaket ${id}: Abschluss fehlgeschlagen — ${String(e?.message ?? e).slice(0, 200)} (fragenpaket_stand versucht es erneut)`); }
 }
 
 export async function withdrawQuestion(u: User, id: string) {
@@ -1149,6 +1165,7 @@ export async function withdrawQuestion(u: User, id: string) {
   if (q && /^(auto-weiter|budget|leitstand-)/.test(String(q.kind ?? ''))) throw err(409, 'Diese Rückfrage entscheidet nur Knut (Deckel) — zurückziehen nicht möglich.');
   const r = await questions().updateOne({ _id: id as any, userId: u.id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() }, $unset: { keyActive: '' } });
   if (!r.matchedCount) throw err(409, 'Keine offene Rückfrage mit dieser Kennung.');
+  if (q?.paket?.id) await paketNachAntwort(u, String(q.paket.id));
   return { id, status: 'zurückgezogen' };
 }
 

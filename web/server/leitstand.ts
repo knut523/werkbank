@@ -456,7 +456,8 @@ async function tickOne(u: User, leit: any, deps: LeitDeps) {
     const e = strandEvent(d, orchStatus(d, s, last, now), s, last, now);
     if (e) await add(e);
   }
-  const answered: any[] = await questions().find({ userId: u.id, status: 'beantwortet', 'answer.at': { $gte: new Date(Math.max(since, now - c.stale)) } }).toArray();
+  // Release 31: Fragen eines Fragenpakets wecken nicht einzeln — das Paket meldet sich gebündelt (fragenpaket.ts).
+  const answered: any[] = await questions().find({ userId: u.id, status: 'beantwortet', paket: null, 'answer.at': { $gte: new Date(Math.max(since, now - c.stale)) } }).toArray();
   for (const q of answered) {
     const a = q.answer ?? {};
     await add({ key: `frage:${q._id}`, kind: 'frage', at: new Date(a.at).getTime(), text: `Knut hat ${q._id} „${q.title}“ beantwortet: ${[a.option ? `Option „${a.option}“` : '', a.text ?? ''].filter(Boolean).join(' — ').slice(0, 600)}` },

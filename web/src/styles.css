@@ -719,3 +719,18 @@ ul.plain.h-liste { padding-left: 0; list-style: none; }
 
 /* R31: Kontingent-Zeile oben (Melious-Rest, Claude je Konto, auto-Wahl) */
 .kontingent { gap: 6px; flex-wrap: wrap; padding: 6px 16px 0; font-size: 12px; }
+
+/* Lage (Release 31): eine Spalte, auf dem Handy lesbar. */
+.page.lage { max-width: 760px; }
+.lage-kopf h1 { margin-bottom: 4px; }
+.lage-summe { font-size: 15px; margin: 6px 0 14px; }
+.lage-sec { margin-bottom: 14px; }
+.lage-h { font-size: 17px; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+.lage-h3 { font-size: 14px; margin: 10px 0 4px; }
+.lage-liste { list-style: none; padding: 0; margin: 0; }
+.lage-liste > li { padding: 7px 0; border-top: 1px solid var(--border-light); overflow-wrap: anywhere; }
+.lage-liste > li:first-child { border-top: 0; }
+.lage-warn { color: var(--chip-warn-text); }
+.lage .e-karte { margin-bottom: 10px; }
+.linkish { background: none; border: 0; padding: 0; color: var(--link, inherit); text-decoration: underline; cursor: pointer; font: inherit; }
+@media (max-width: 520px) { .page.lage { padding: 14px 12px 48px; } .lage-h { font-size: 16px; } }

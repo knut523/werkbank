@@ -65,7 +65,7 @@ export interface InboxQuellen {
   karten: Array<{ id: string; titel: string; strangTitel?: string; thema?: string | null; running: boolean; entscheidungen: { id: string; frage: string; empfehlung: string | null; optionen?: string; stufe?: string | null; alternativen?: string[] }[]; berichtHash: string | null; rueckfragen: any[];
     braucht: string | null; kannFreigeben: boolean; freigabe: any; github: { repo: string; zweig: string; commit: string }[]; statusAt: any; chat: string | null; paket: string | null; seen?: string }>;
   /** Offene Rückfragen ohne Karte (Hauptchat, Drift, G0 …). */
-  lose: Array<{ id: string; title: string; recommendation?: string | null; options?: { label: string }[]; createdAt: any; strand?: { id: string; title?: string; url?: string } | null; quelle?: string | null; key?: string | null; context?: string | null; kind?: string | null; stufe?: string | null }>;
+  lose: Array<{ id: string; title: string; recommendation?: string | null; options?: { label: string }[]; createdAt: any; strand?: { id: string; title?: string; url?: string } | null; quelle?: string | null; key?: string | null; context?: string | null; kind?: string | null; stufe?: string | null; paket?: { id: string; titel: string } | null }>;
   /** Fragen des Vault-Syncs (mineFor → questions/pendingApprovals). */
   vault: Array<{ id: string; text: string; at?: any }>;
   /** Offene Ticketpflege (Hygiene) — nur die Zahl, als ein Sammel-Eintrag. */
@@ -112,7 +112,7 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
         quelle: { ...quelle, text: `${g.repo.split('/').pop()}${k.github.length > 1 ? ` + ${k.github.length - 1}` : ''}` }, wartetSeit: seit, blockiert: 1, antworten: ['ja', 'spaeter'],
         daten: { strand: k.id, repo: g.repo, zweig: g.zweig, commit: g.commit } });
     }
-    for (const e of out.slice(vorher)) e.thema = k.thema ?? null;
+    for (const e of out.slice(vorher)) e.thema = e.thema ?? k.thema ?? null;   // Fragenpaket (R31) behält seine Gruppe
   }
   for (const r of q.lose) {
     if (r.strand && kartenIds.has(String(r.strand.id))) continue;   // steht schon bei seiner Karte
@@ -168,7 +168,9 @@ function rueckfrageEintrag(r: InboxQuellen['lose'][number], quelle: InboxEintrag
   return { id: kennung.rueckfrage(r.id), art: 'rueckfrage', frage: r.title, empfehlung: r.recommendation ?? null, quelle, wartetSeit: iso(r.createdAt), blockiert: quelle.strand || g0 ? 1 : 0,
     antworten: ['ja', 'nein', 'anders', 'spaeter'], daten: { qid: r.id, optionen: opts.map((o) => o.label), kontext: r.context ?? null,
       // Deckel- und G0-Fragen entscheidet immer Knut selbst (Bau-Tor, Fortsetzen) — nie automatisch.
-      markiert: g0 || /^(auto-weiter|leitstand-)/.test(String(r.kind ?? '')) ? 'wichtig' : r.stufe ?? null } };
+      markiert: g0 || /^(auto-weiter|leitstand-)/.test(String(r.kind ?? '')) ? 'wichtig' : r.stufe ?? null },
+    // Release 31: Fragen eines Fragenpakets stehen als eigene Gruppe auf der Entscheidungsseite.
+    ...(r.paket?.titel ? { thema: `Fragenpaket: ${r.paket.titel}` } : {}) };
 }
 
 /** Stufe, Grund und „gilt ab … als angenommen“ je Eintrag. Automatisch nur Rückfragen und Bericht-Entscheidungen. */

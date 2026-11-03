@@ -461,8 +461,15 @@ function mcpList(options: Record<string, any>) {
 }
 
 /** createJiraIssue gegen den Jira-Nachbau (POST /issue). Ohne Nachbau: fester Schlüssel PM-9000. */
+/** Basis des Jira-Nachbaus für einen Aufruf: je cloudId aus BRIDGE_MOCK_JIRA_BASES (JSON {cloudId: base}, Release 31 — zweite
+ *  Jira-Seite), sonst BRIDGE_MOCK_JIRA_BASE. */
+function mockBase(inp: any): string | undefined {
+  try { const m = JSON.parse(process.env.BRIDGE_MOCK_JIRA_BASES || '{}'); if (inp?.cloudId && typeof m[inp.cloudId] === 'string') return m[inp.cloudId]; } catch { /* Vorgabe */ }
+  return process.env.BRIDGE_MOCK_JIRA_BASE;
+}
+
 async function replayCreate(inp: any): Promise<{ ok: boolean; text: string }> {
-  const base = process.env.BRIDGE_MOCK_JIRA_BASE;
+  const base = mockBase(inp);
   if (!base) return { ok: true, text: JSON.stringify({ id: '9000', key: 'PM-9000', self: 'mock' }) };
   const fields: any = { project: { key: inp.projectKey }, issuetype: { name: inp.issueTypeName }, summary: inp.summary, description: inp.description, ...(inp.parent ? { parent: { key: inp.parent } } : {}), ...(inp.assignee_account_id ? { assignee: { accountId: inp.assignee_account_id } } : {}), ...(inp.additional_fields ?? {}) };
   const r = await fetch(base + '/issue', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Basic ' + Buffer.from('mcp:mock').toString('base64') }, body: JSON.stringify({ fields }) });
@@ -472,7 +479,7 @@ async function replayCreate(inp: any): Promise<{ ok: boolean; text: string }> {
 
 /** Mit BRIDGE_MOCK_JIRA_BASE spielt der Mock den Atlassian-MCP gegen einen Jira-Nachbau (REST) nach. Fehlertext oder ''. */
 async function replayJira(tool: string, inp: any): Promise<string> {
-  const base = process.env.BRIDGE_MOCK_JIRA_BASE;
+  const base = mockBase(inp);
   if (!base) return '';
   const k = encodeURIComponent(String(inp.issueIdOrKey));
   const [method, path, body] = tool.endsWith('addCommentToJiraIssue') ? ['POST', `/issue/${k}/comment`, { body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: inp.commentBody }] }] } }]

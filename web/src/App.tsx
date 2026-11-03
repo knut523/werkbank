@@ -12,6 +12,7 @@ import { Timebox } from './pages/Timebox.tsx';
 import { Ziele } from './pages/Ziele.tsx';
 import { KontingentZeile } from './kontingent.tsx';
 import { Uebersicht } from './pages/Uebersicht.tsx';
+import { Lage } from './pages/Lage.tsx';
 import { HeuteNeu } from './pages/HeuteNeu.tsx';
 import { Entscheidungen } from './pages/Entscheidungen.tsx';
 import { LeadSeite } from './pages/Lead.tsx';
@@ -75,6 +76,8 @@ const HEUTE: Nav = { href: '#/', label: 'Heute', ico: '☀️', match: /^#\/?(\?
 // Zielbild F1 (Knut 19.10.): Lead · Entscheidungen · Arbeit · Heute, alles andere unter „Mehr“. Geparktes (Mein Tag, Ziele — F2:
 // der Kalender bzw. der Vault erledigen den Job) steht nicht mehr in der Leiste; die Adressen bleiben gültig.
 const LEAD: Nav = { href: '#/lead', label: 'Lead', ico: '🧭', match: /^#\/lead/, f: 'leitstand' };
+// Release 31 (WERKBANK_LAGE): „Was ist offen?“ auf einen Blick — nur Admins, nur mit Schalter (cfg.lage).
+const LAGE: Nav = { href: '#/lage', label: 'Lage', ico: '📡', match: /^#\/lage/, f: 'leitstand' };
 const ENTSCHEIDUNGEN: Nav = { href: '#/entscheidungen', label: 'Entscheidungen', ico: '✅', match: /^#\/(entscheidungen|inbox)/, f: 'heute' };
 const BEREICHE_NEU: { id: string; label: string; ico: string; reiter: Reiter[] }[] = [
   { id: 'arbeit', label: 'Arbeit', ico: '🛠️', reiter: [
@@ -200,9 +203,10 @@ export function App() {
   const inLeiste = (r: Reiter) => vis(r) && r.f !== 'timebox';
   const bereiche = (neu ? BEREICHE_NEU : BEREICHE).map((b) => ({ ...b, reiter: b.reiter.filter(inLeiste) })).filter((b) => b.reiter.length > 0);
   const alsNav = (b: (typeof bereiche)[number]): Nav => ({ href: letzterReiter(b), label: b.label, ico: b.ico, match: new RegExp(b.reiter.map((r) => r.match.source).join('|')), f: '' });
+  const lage = cfg.lage ? [LAGE] : [];
   const nav: Nav[] = (neu
-    ? [LEAD, ENTSCHEIDUNGEN, ...bereiche.filter((b) => b.id === 'arbeit').map(alsNav), HEUTE, ...bereiche.filter((b) => b.id === 'mehr').map(alsNav)]
-    : [START, ...bereiche.map(alsNav)]).filter(vis);
+    ? [...lage, LEAD, ENTSCHEIDUNGEN, ...bereiche.filter((b) => b.id === 'arbeit').map(alsNav), HEUTE, ...bereiche.filter((b) => b.id === 'mehr').map(alsNav)]
+    : [START, ...lage, ...bereiche.map(alsNav)]).filter(vis);
   const more: Nav[] = neu ? [] : [EINRICHTUNG];
   const alle = [START, ...(neu ? [LEAD, ENTSCHEIDUNGEN] : []), ...(neu ? BEREICHE_NEU : BEREICHE).flatMap((b) => b.reiter)];
   // Der Zähler steht dort, wo die Fragen stehen: neu an „Entscheidungen“, sonst an der Übersicht (eine Zahl, eine Quelle).
@@ -222,6 +226,7 @@ export function App() {
     // Plan 213 S3: neue Seiten der Navigation Heute · Arbeit · Wissen (alte Adressen führen weiter zu ihren Seiten).
     // Inbox mit Entscheidungs-Log auch in der alten Leiste (Stufen/Annahme nach 24 h gehen mit Bündel A live, Knut 17.10.).
     // Entscheidungen (Knut 19.10., Muster entscheidungen-site): eine Karte je Frage; #/inbox führt dorthin.
+    : cfg.lage && /^#\/lage/.test(hash) ? <Lage />
     : /^#\/(inbox|entscheidungen)/.test(hash) ? <Entscheidungen />
     : /^#\/lead/.test(hash) ? <LeadSeite cfg={cfg} />
     : neu && HEUTE.match.test(hash) ? <HeuteNeu cfg={cfg} />

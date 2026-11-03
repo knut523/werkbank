@@ -105,7 +105,7 @@ export function startJiraMock(port = 0, opts: { readOnly?: boolean; truncate?: b
     if (req.method === 'POST' && p === '/issue') {
       if (faults.createBefore) { faults.createBefore = false; return send(500, { errorMessages: ['Mock: Fehler vor dem Anlegen'] }); }
       const f = body?.fields ?? {};
-      const key = `PM-${nextKey++}`;
+      const key = `${/^[A-Z][A-Z0-9]{0,9}$/.test(String(f.project?.key ?? '')) ? f.project.key : 'PM'}-${nextKey++}`;   // Release 31: zweite Seite legt OLAF-… an
       const drop = new Set(faults.dropFields ?? []); faults.dropFields = undefined;
       const issue = { key, fields: {
         summary: f.summary, status: status('To Do'), issuetype: { name: f.issuetype?.name ?? 'Task' },
