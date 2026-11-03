@@ -460,6 +460,9 @@ export function Mehr() {
       <Abschnitt id="m-neu" titel="Schon in der neuen Oberfläche" erklaerung="Was du aus der alten Werkbank kennst und hier schon findest.">
         <ul className="liste">{v2.map((e) => <Zeile key={e.alt} titel={e.titel} url={e.url} satz={e.satz} />)}</ul>
       </Abschnitt>
+      <Abschnitt id="m-konto" titel="Konto" erklaerung="Wer angemeldet ist; Abmelden gilt für dieses Gerät.">
+        <p>Angemeldet als <b>{app.ich.name}</b>. <button type="button" className="knopf leise klein" onClick={() => fetch('api/logout', { method: 'POST', headers: { 'x-werkbank': '1' } }).finally(() => window.dispatchEvent(new Event('v2-abgemeldet')))}>Abmelden</button></p>
+      </Abschnitt>
     </div>
   );
 }

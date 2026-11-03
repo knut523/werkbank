@@ -148,7 +148,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
       {k.empfehlung && <p className="empfehlung"><b>Empfehlung:</b> {k.empfehlung}</p>}
 
       {fertig ? (
-        <p className="ok" role="status">✓ {fertig}</p>
+        <p className="ok" role="status" ref={(el) => el?.scrollIntoView({ block: 'center', behavior: 'smooth' })}>✓ {fertig}</p>
       ) : freigabe || k.alt ? (
         <div className="antworten">
           <p className="klein gedimmt">{freigabe ? 'Freigaben nach außen gibst du in der alten Werkbank — dort siehst du den genauen Stand.' : 'Das beantwortest du in der alten Werkbank.'}</p>
