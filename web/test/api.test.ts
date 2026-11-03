@@ -1899,6 +1899,25 @@ test('2.0: Startseite — eine Zahl (= /api/inbox), ≤ 5 Karten, Antwort an DIE
   }
 });
 
+test('2.0: bestehende Team-Freigaben gelten auch hier (Notizen = Wissen, PRs = Roadmap); Review-Entwurf nur für Admins', async () => {
+  // Diese Suite gibt dem Team u. a. „roadmap“ und „wissen“ frei — dann sieht Bernd Notizen und PRs.
+  await bernd.login(users.b);
+  const s = await bernd.req('/api/v2/start');
+  assert.equal(s.j.prFrei, true); assert.equal(s.j.notizenFrei, true);
+  assert.notEqual((await bernd.req('/api/v2/prs')).j.gesperrt, true);
+  const R = mongo.db(DB).collection('pr_reviews');
+  mkdirSync(join(PAKETE, '901-review-a-7'), { recursive: true });
+  writeFileSync(join(PAKETE, '901-review-a-7', 'kommentar.md'), 'Empfehlung: approve\n\nGEHEIMER ENTWURF des Agenten');
+  try {
+    await R.insertOne({ _id: 'WirStrom1/a#7@x' as any, repo: 'WirStrom1/a', number: 7, title: 'PR sieben', status: 'fertig', paket: '901-review-a-7', createdAt: new Date() });
+    const b1 = await bernd.req('/api/v2/prs/a/7');
+    assert.equal(b1.status, 200); assert.equal(b1.j.agent.text, null, 'nicht geposteter Entwurf: nicht für das Team'); assert.equal(b1.j.agent.entwurf, true);
+    await R.updateOne({ _id: 'WirStrom1/a#7@x' as any }, { $set: { posted: { url: 'https://github.com/WirStrom1/a/pull/7#r', at: new Date() } } });
+    const b2 = await bernd.req('/api/v2/prs/a/7');
+    assert.match(b2.j.agent.text, /GEHEIMER ENTWURF/, 'gepostet: lesbar ohne GitHub'); assert.equal(b2.j.agent.empfehlung, 'approve');
+  } finally { await R.deleteMany({ _id: 'WirStrom1/a#7@x' as any }); rmSync(join(PAKETE, '901-review-a-7'), { recursive: true, force: true }); }
+});
+
 test('2.0: Chat — ohne Claude-Zugang Klartext, Hauptchat nur Admin, Text ≤ 8 000', async () => {
   await bernd.login(users.b); await anna.login(users.a);
   await mongo.db(LCDB).collection('keys').deleteMany({ userId: users.b._id });

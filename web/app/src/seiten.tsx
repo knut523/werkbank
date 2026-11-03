@@ -50,7 +50,8 @@ export function Jetzt() {
       )}
       <Abschnitt id="a-prs" titel="PRs, die auf dich warten" erklaerung="Code-Vorschläge auf GitHub (Pull Requests), bei denen du gerade dran bist — zum Prüfen, Freigeben oder Nachbessern. Unter „PRs“ kannst du auf jede andere Person umschalten."
         fuss={<a href="/v2/prs">Alle PRs →</a>}>
-        {d.prs === null ? <p className="leer">Die PR-Liste ist gerade nicht erreichbar.</p>
+        {!d.prFrei ? <p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p>
+          : d.prs === null ? <p className="leer">Die PR-Liste ist gerade nicht erreichbar.</p>
           : d.prs.length ? <ul className="liste">{d.prs.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul> : <p className="leer">Kein PR wartet auf dich.</p>}
       </Abschnitt>
       <Abschnitt id="a-dok" titel="Neue Dokumente" erklaerung="Die zuletzt geänderten Berichte und Notizen. Alles Lesbare findest du unter „Dokumente“ — mit Suche." fuss={<a href="/v2/dokumente">Alle Dokumente →</a>}>
@@ -154,9 +155,10 @@ export function ArbeitDetail({ id }: { id: string }) {
 
 export function Prs({ wer }: { wer: string | null }) {
   const pfad = `/api/v2/prs${wer ? `?wer=${encodeURIComponent(wer)}` : ''}`;
-  const { d, fehler, neu } = useDaten<{ wer: string; ich: string; personen: { name: string; anzahl: number }[]; zeilen: PrZeile[]; stand: string | null }>(pfad);
+  const { d, fehler, neu } = useDaten<{ gesperrt?: boolean; wer: string; ich: string; personen: { name: string; anzahl: number }[]; zeilen: PrZeile[]; stand: string | null }>(pfad);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
+  if (d.gesperrt) return <div className="seite"><h1>PRs</h1><p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p></div>;
   const wahl = (n: string) => { const url = n === d.ich ? '/v2/prs' : `/v2/prs?wer=${encodeURIComponent(n)}`; history.pushState(null, '', url); window.dispatchEvent(new PopStateEvent('popstate')); };
   return (
     <div className="seite">
@@ -176,7 +178,7 @@ export function Prs({ wer }: { wer: string | null }) {
 export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
   const app = useApp();
   const { d, fehler, neu } = useDaten<{ pr: string; titel: string; url: string | null; autor: string | null; offen: boolean; merge: boolean; wartetAuf: string[]; warum: string; entscheidung: string | null; offeneThreads: number; reviews: { wer: string; zustand: string; at: string }[];
-    agent: { status: string; empfehlung: string | null; text: string | null; gepostet: string | null; at: string; bericht: string | null } | null }>(`/api/v2/prs/${encodeURIComponent(repo)}/${nummer}`);
+    agent: { status: string; empfehlung: string | null; text: string | null; gepostet: string | null; entwurf: boolean; at: string; bericht: string | null } | null }>(`/api/v2/prs/${encodeURIComponent(repo)}/${nummer}`);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   const ZUSTAND: Record<string, string> = { APPROVED: 'freigegeben', CHANGES_REQUESTED: 'Änderungen verlangt', COMMENTED: 'kommentiert', DISMISSED: 'zurückgezogen' };
@@ -193,11 +195,11 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
       <Abschnitt id="p-agent" titel="Review des Agenten" erklaerung="Was der Review-Agent zu diesem PR geschrieben hat — derselbe Text, der auf GitHub steht. Du brauchst dafür kein GitHub-Konto.">
         {d.agent?.text ? (
           <div className="kasten">
-            <p><span className={`marke ${d.agent.empfehlung === 'approve' ? 'gruen' : 'warn'}`}>{EMPFEHLUNG[d.agent.empfehlung ?? ''] ?? 'Agent'}</span> <span className="klein gedimmt">{wann(d.agent.at)}</span></p>
+            <p><span className={`marke ${d.agent.empfehlung === 'approve' ? 'gruen' : 'warn'}`}>{EMPFEHLUNG[d.agent.empfehlung ?? ''] ?? 'Agent'}</span> <span className="klein gedimmt">{wann(d.agent.at)}</span>{d.agent.entwurf && <> <span className="marke">Entwurf — noch nicht auf GitHub</span></>}</p>
             <Md text={d.agent.text} />
             {d.agent.gepostet && <p className="klein"><a href={d.agent.gepostet} target="_blank" rel="noopener noreferrer">So steht es auf GitHub ↗</a></p>}
           </div>
-        ) : <p className="leer">{d.agent ? `Review ${d.agent.status === 'fertig' ? 'fertig, aber ohne Text' : `läuft (${d.agent.status})`}.` : 'Für diesen PR gibt es noch kein Review des Agenten.'}</p>}
+        ) : <p className="leer">{!d.agent ? 'Für diesen PR gibt es noch kein Review des Agenten.' : d.agent.status !== 'fertig' ? `Das Review läuft noch (${d.agent.status}).` : d.agent.entwurf ? 'Das Review ist fertig, aber noch nicht auf GitHub veröffentlicht — Knut gibt es frei.' : 'Das Review ist fertig, aber ohne Text.'}</p>}
       </Abschnitt>
       <Abschnitt id="p-menschen" titel="Reviews von Menschen" erklaerung="Wer den PR auf GitHub geprüft hat und mit welchem Ergebnis.">
         {d.reviews.length ? <ul className="liste">{d.reviews.map((r, i) => <li key={i} className="zeile"><div className="zeile-haupt"><b>{r.wer}</b> · {ZUSTAND[r.zustand] ?? r.zustand}</div><div className="zeile-rechts"><span className="zeit">{wann(r.at)}</span></div></li>)}</ul> : <p className="leer">Noch kein Review von einem Menschen.</p>}
@@ -215,7 +217,7 @@ export function Dokumente({ q: q0 }: { q: string }) {
   const [suche, setSuche] = useState(q0);
   useEffect(() => { const t = setTimeout(() => setSuche(q.trim()), 300); return () => clearTimeout(t); }, [q]);
   useEffect(() => { history.replaceState(null, '', suche ? `/v2/dokumente?q=${encodeURIComponent(suche)}` : '/v2/dokumente'); }, [suche]);
-  const { d, fehler, neu } = useDaten<{ q: string; treffer: Dok[] }>(`/api/v2/dokumente${suche ? `?q=${encodeURIComponent(suche)}` : ''}`);
+  const { d, fehler, neu } = useDaten<{ q: string; frei?: { notizen: boolean; berichte: boolean }; treffer: Dok[] }>(`/api/v2/dokumente${suche ? `?q=${encodeURIComponent(suche)}` : ''}`);
   return (
     <div className="seite">
       <h1>Dokumente</h1>
@@ -226,7 +228,8 @@ export function Dokumente({ q: q0 }: { q: string }) {
       </form>
       {fehler ? <Fehler text={fehler} nochmal={neu} /> : !d ? <Laedt /> : (
         <Abschnitt id="d-liste" titel={d.q ? `Treffer für „${d.q}“` : 'Zuletzt geändert'} erklaerung="Berichte sind Ergebnisse von Unter-Chats; Notizen stammen aus unserer gemeinsamen Wissenssammlung. Die Suche findet Wörter im Titel und im Pfad.">
-          {d.treffer.length ? <ul className="liste">{d.treffer.map((x) => <DokZeile key={x.url} x={x} />)}</ul> : <p className="leer">Nichts gefunden. Versuch ein anderes Wort (z. B. kürzer oder englisch).</p>}
+          {d.frei && !d.frei.notizen && !d.frei.berichte ? <p className="leer">Dokumente sind für dich noch nicht freigegeben — frag Knut.</p>
+            : d.treffer.length ? <ul className="liste">{d.treffer.map((x) => <DokZeile key={x.url} x={x} />)}</ul> : <p className="leer">Nichts gefunden. Versuch ein anderes Wort (z. B. kürzer oder englisch).</p>}
         </Abschnitt>
       )}
     </div>

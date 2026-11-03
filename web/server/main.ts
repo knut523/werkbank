@@ -4260,6 +4260,7 @@ registerV2(on, {
   vaultSuche: async (q) => { try { return await search(q); } catch { return titelSuche(vaultIdx(), q); } },
   vaultNeu: (n) => [...vaultIdx().notes.values()].sort((a, b) => b.mtime - a.mtime).slice(0, n),
   claudeToken: getClaudeToken, bridgeUrl: cfg.bridgeUrl, altUrl: `${cfg.librechatPublicUrl}/wb`,
+  gesperrt: (u, f) => !!blockedFeature(u, f === 'wissen' ? '/api/vault/' : '/api/roadmap/'),
 });
 const V2_DIST = appDist(WEB_DIR);
 

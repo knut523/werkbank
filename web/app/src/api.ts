@@ -39,5 +39,5 @@ export interface Aufraeumen { id: string; titel: string; worum: string; url: str
 export interface Dok { art: 'bericht' | 'notiz'; titel: string; worum: string; url: string; at: string | null }
 export interface Start {
   zahl: number; jetzt: Karte[]; aufraeumen: Aufraeumen[]; aufraeumenGesamt: number; laeuft: ArbeitKarte[]; erledigt: { id: string; titel: string; uhr: string; stand: 'abgenommen' | 'zum-lesen'; links: Link[] }[];
-  prs: PrZeile[] | null; dokumente: Dok[]; ich: string; admin: boolean;
+  prs: PrZeile[] | null; prFrei: boolean; notizenFrei: boolean; dokumente: Dok[]; ich: string; admin: boolean;
 }

@@ -39,6 +39,8 @@ export interface V2Deps {
   /** Wurzel der alten Werkbank (über LibreChat, z. B. https://…/wb). */
   altUrl: string;
   log: (msg: string, data: Record<string, unknown>) => void;
+  /** Bestehende Team-Freigabe je Funktion (features.ts): true = für diese Person gesperrt. 2.0 umgeht sie nie. */
+  gesperrt: (u: User, funktion: 'wissen' | 'roadmap') => boolean;
 }
 
 const vorname = (u: User) => u.name.trim().split(/\s+/)[0] ?? u.name;
@@ -87,8 +89,9 @@ export function registerV2(on: On, d: V2Deps) {
       laeuft = liste.zeilen.filter((z: any) => arbeitGruppe(z) === 'laeuft').slice(0, 6).map(arbeitKarte);
       erledigt = erledigtSicht(er.straenge, zm, new Set(er.straenge.map((s: any) => String(s.id)).filter((id: string) => !zm.has(id))));
     }
-    const prs = await d.livePrs().then((g) => prSicht([...g.map.values()] as LivePrLite[], ich, d.githubNames()).slice(0, 5)).catch(() => null);
-    send(d, res, { zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), aufraeumenGesamt: auf.length, laeuft, erledigt, prs, dokumente: dokumenteNeu(d, u, 5), ich: ich, admin: admin(u), at: new Date() });
+    const prFrei = !d.gesperrt(u, 'roadmap');
+    const prs = prFrei ? await d.livePrs().then((g) => prSicht([...g.map.values()] as LivePrLite[], ich, d.githubNames()).slice(0, 5)).catch(() => null) : null;
+    send(d, res, { zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), aufraeumenGesamt: auf.length, laeuft, erledigt, prs, prFrei, notizenFrei: !d.gesperrt(u, 'wissen'), dokumente: dokumenteNeu(d, u, 5), ich: ich, admin: admin(u), at: new Date() });
   });
 
   // --- Die eine Zahl (Kopf jeder Seite): dieselbe wie überall — `inboxZahl` ---
@@ -157,6 +160,7 @@ export function registerV2(on: On, d: V2Deps) {
     const u = await d.needUser(req);
     const ich = vorname(u);
     const wer = (url.searchParams.get('wer') ?? ich).slice(0, 60) || ich;
+    if (d.gesperrt(u, 'roadmap')) return send(d, res, { gesperrt: true, wer, ich, personen: [], zeilen: [], stand: null });
     const g = await d.livePrs();
     const live = [...g.map.values()] as LivePrLite[];
     const names = d.githubNames();
@@ -169,18 +173,21 @@ export function registerV2(on: On, d: V2Deps) {
   on('GET', /^\/api\/v2\/prs\/([\w.-]{1,80})\/(\d{1,6})$/, async (req, res, m) => {
     const u = await d.needUser(req);
     const key = `${m[1]}#${m[2]}`;
+    if (d.gesperrt(u, 'roadmap')) throw err(403, 'PRs sind für dich noch nicht freigegeben — frag Knut.');
     const p: any = (await d.livePrs()).map.get(key);
     const rv = (await d.letzteReviews().catch(() => [])).filter((r) => String(r.repo).split('/').pop() === m[1] && Number(r.number) === Number(m[2]));
     if (!p && !rv.length) throw err(404, 'Diesen PR gibt es nicht in der Liste offener PRs.');
     const r = rv.find((x) => x.status === 'fertig' && x.paket) ?? rv[0] ?? null;
-    const k = r?.paket && /^\d{1,4}-[a-z0-9][a-z0-9-]*$/.test(r.paket) ? d.reviewKommentar(r.paket) : null;
+    // Der Text des Agenten: für alle, sobald er auf GitHub steht; ein nicht geposteter Entwurf nur für Admins (Freigabe bleibt bei Knut).
+    const sichtbar = !!r && (admin(u) || !!r.posted?.url);
+    const k = sichtbar && r.paket && /^\d{1,4}-[a-z0-9][a-z0-9-]*$/.test(r.paket) ? d.reviewKommentar(r.paket) : null;
     const names = d.githubNames();
     const wa = p ? prSicht([p], 'alle', names)[0] : null;
     send(d, res, {
       pr: key, titel: p?.title ?? r?.title ?? key, url: p?.url ?? r?.url ?? null, autor: p ? (names[String(p.author ?? '').toLowerCase()] ?? p.author ?? null) : null,
       offen: !!p, merge: p?.turn?.role === 'merge', wartetAuf: wa?.wartetAuf ?? [], warum: wa?.warum ?? '', entscheidung: p?.reviewDecision ?? null, offeneThreads: p?.openThreads ?? 0,
       reviews: (p?.reviews ?? []).map((x: any) => ({ wer: names[String(x.author ?? '').toLowerCase()] ?? x.author, zustand: x.state, at: x.submittedAt })),
-      agent: r ? { status: r.status, empfehlung: k?.empfehlung ?? r.empfehlung ?? null, text: k?.text ?? null, gepostet: r.posted?.url ?? null, at: r.doneAt ?? r.createdAt,
+      agent: r ? { status: r.status, empfehlung: sichtbar ? k?.empfehlung ?? r.empfehlung ?? null : null, text: k?.text ?? null, gepostet: r.posted?.url ?? null, entwurf: !r.posted?.url, at: r.doneAt ?? r.createdAt,
         bericht: admin(u) && r.paket ? `/v2/dokument?paket=${encodeURIComponent(r.paket)}&datei=bericht.md` : null } : null,
       at: new Date(),
     });
@@ -190,11 +197,12 @@ export function registerV2(on: On, d: V2Deps) {
   on('GET', /^\/api\/v2\/dokumente$/, async (req, res, _m, url) => {
     const u = await d.needUser(req);
     const q = String(url.searchParams.get('q') ?? '').trim().slice(0, 80);
-    if (!q) return send(d, res, { q, treffer: dokumenteNeu(d, u, 12) });
+    const frei = { notizen: !d.gesperrt(u, 'wissen'), berichte: admin(u) };
+    if (!q) return send(d, res, { q, frei, treffer: dokumenteNeu(d, u, 12) });
     const ql = q.toLowerCase();
     const berichte = admin(u) ? d.pakete().filter((p) => p.status !== 'archiv' && (p.name.toLowerCase().includes(ql) || p.titel.toLowerCase().includes(ql))).sort((a, b) => b.at - a.at).slice(0, 10).map(paketDok) : [];
-    const notizen = (await d.vaultSuche(q).catch(() => [])).slice(0, 20).map((h) => ({ art: 'notiz', titel: h.title || h.path, worum: h.snippet ? kurz(h.snippet.replace(/<[^>]+>/g, ''), 160) : h.path, url: `/v2/dokument?vault=${encodeURIComponent(h.path)}`, at: null }));
-    send(d, res, { q, treffer: [...berichte, ...notizen] });
+    const notizen = (d.gesperrt(u, 'wissen') ? [] : await d.vaultSuche(q).catch(() => [])).slice(0, 20).map((h) => ({ art: 'notiz', titel: h.title || h.path, worum: h.snippet ? kurz(h.snippet.replace(/<[^>]+>/g, ''), 160) : h.path, url: `/v2/dokument?vault=${encodeURIComponent(h.path)}`, at: null }));
+    send(d, res, { q, frei, treffer: [...berichte, ...notizen] });
   });
 
   // --- Chat (Seitenleiste): Hauptchat (Admin, LibreChat-Adapter) oder eigene 2.0-Chats (direkt auf der Brücke) ---
@@ -237,7 +245,7 @@ const paketDok = (p: { name: string; titel: string; at: number }) => ({ art: 'be
 /** Neueste Dokumente: Berichte (nur Admin) und zuletzt geänderte Notizen. */
 function dokumenteNeu(d: V2Deps, u: User, n: number) {
   const berichte = admin(u) ? d.pakete().filter((p) => p.status !== 'archiv').sort((a, b) => b.at - a.at).slice(0, n).map(paketDok) : [];
-  const notizen = d.vaultNeu(n).map((x) => ({ art: 'notiz', titel: x.title || x.path, worum: x.path.split('/').slice(0, -1).join(' › '), url: `/v2/dokument?vault=${encodeURIComponent(x.path)}`, at: new Date(x.mtime).toISOString() }));
+  const notizen = (d.gesperrt(u, 'wissen') ? [] : d.vaultNeu(n)).map((x) => ({ art: 'notiz', titel: x.title || x.path, worum: x.path.split('/').slice(0, -1).join(' › '), url: `/v2/dokument?vault=${encodeURIComponent(x.path)}`, at: new Date(x.mtime).toISOString() }));
   return [...berichte, ...notizen].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, n);
 }
 
