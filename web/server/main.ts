@@ -27,6 +27,7 @@ import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, setzeLeseQuelle, 
 import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
 import { fragenAufraeumenAn, fragenAufraeumen } from './fragenaufraeumen.ts';
+import { fragenAusBericht, automatischGeschlossen, wiederOeffnen } from './fragenbericht.ts';
 import { wahrerLauf } from './strangwahrheit.ts';
 import { baueErledigt } from './erledigt.ts';
 import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
@@ -4261,6 +4262,8 @@ registerV2(on, {
   vaultNeu: (n) => [...vaultIdx().notes.values()].sort((a, b) => b.mtime - a.mtime).slice(0, n),
   claudeToken: getClaudeToken, bridgeUrl: cfg.bridgeUrl, altUrl: `${cfg.librechatPublicUrl}/wb`,
   gesperrt: (u, f) => !!blockedFeature(u, f === 'wissen' ? '/api/vault/' : '/api/roadmap/'),
+  geschlossen: (u) => automatischGeschlossen(u.id),
+  wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },
 });
 const V2_DIST = appDist(WEB_DIR);
 
@@ -4622,6 +4625,9 @@ if (process.env.ORCH_STATUS !== 'off') setInterval(() => {
   // R32 (Nachtrag C): Fragen erledigter/abgebrochener/archivierter Stränge schließen sich selbst (mit Grund); WERKBANK_FRAGEN_AUFRAEUMEN=0 schaltet ab.
   if (fragenAufraeumenAn()) wb().collection('orchestrator_questions').distinct('userId', { status: 'offen' }).then(async (ids: any[]) => {
     for (const id of ids) { const z = await fragenAufraeumen(String(id)).catch(() => []); if (z.length) { zahlCache.delete(String(id)); log('fragen aufgeräumt', { user: String(id), n: z.length, ids: z.map((x) => x.id) }); } }
+    // Paket 436 D5: Fragen eines Fragenpakets, die der Bericht schon entschieden hat (nur bei eindeutiger Zuordnung, C1), schließen sich auch.
+    // Absichtlich am selben Schalter wie R32 (Schalterbereinigung, Plan §10 E5): „Fragen räumen sich selbst weg“ ist eine Funktion.
+    for (const id of ids) { const z = await fragenAusBericht(String(id), cfg.reviewDir).catch(() => []); if (z.length) { zahlCache.delete(String(id)); log('fragen aus bericht geschlossen', { user: String(id), n: z.length, ids: z.map((x) => `${x.id}=${x.d}`) }); } }
   }).catch((e) => log('fragen aufräumen fehler', { error: String(e?.message ?? e).slice(0, 160) }));
   // Knut 17.10.: normale Entscheidungen nach 24 h annehmen (WERKBANK_AUTO_ANNAHME=0 schaltet ab).
   annahmeTakt().catch((e) => log('annahme fehler', { error: String(e?.message ?? e).slice(0, 160) }));

@@ -15,6 +15,7 @@ const eintraege = [
 ] as any[];
 const antworten: any[] = [];
 let gesperrt = false;
+const geoeffnet: string[] = [];
 const deps: V2Deps = {
   needUser: async (req: any) => req.u, body: async (req: any) => req.b, send: (res: any, status, b) => { res.status = status; res.b = b; },
   inboxFuer: async () => ({ eintraege }), unterchatListe: async () => ({ zeilen: [] }), erledigtDaten: async () => ({ straenge: [] }),
@@ -26,6 +27,8 @@ const deps: V2Deps = {
   vaultSuche: async () => [{ path: 'olaf/datenschutz.md', title: 'Datenschutz' }], vaultNeu: () => [{ path: 'olaf/a.md', title: 'A', mtime: Date.now() }],
   wienDatum: () => '2026-11-03', claudeToken: async () => null, bridgeUrl: 'http://b', altUrl: 'http://alt/wb', log: () => {},
   gesperrt: () => gesperrt,
+  geschlossen: async (u) => (u.id === 'k' ? [{ id: 'q-zu1', titel: 'Kohorte laufender Monat?', grund: 'im Bericht als entschieden vermerkt (D1): angenommen', at: new Date() }] : []),
+  wiederOeffnen: async (u, id) => { geoeffnet.push(`${u.id}:${id}`); return u.id === 'k' && id === 'q-zu1'; },
 };
 registerV2(on, deps);
 async function rufe(method: string, pfad: string, u: any, b?: any) {
@@ -91,4 +94,14 @@ test('Unter-Chats und Hauptchat nur für Admin; Chat ohne Zugang: Klartext', asy
   assert.equal((await rufe('POST', '/api/v2/chat', LISA, { ziel: 'hauptchat', text: 'x' })).status, 403);
   const c = await rufe('POST', '/api/v2/chat', LISA, { ziel: 'eigen', text: 'Was ist OLAF?' });
   assert.equal(c.status, 412); assert.match(c.b.error, /alles andere geht ohne/);
+});
+
+test('C2: automatisch Geschlossenes steht sichtbar auf der Entscheidungsseite (zählt nicht mit) und lässt sich wieder öffnen', async () => {
+  const r = await rufe('GET', '/api/v2/entscheidungen', ADMIN);
+  assert.equal(r.b.geschlossen.length, 1); assert.match(r.b.geschlossen[0].grund, /D1/);
+  assert.equal(r.b.oben.length + r.b.rest.length + r.b.aufraeumen.length, r.b.zahl, 'die Zahl bleibt die Summe des Offenen');
+  assert.equal((await rufe('POST', '/api/v2/wieder-oeffnen', ADMIN, { id: 'q-zu1' })).status, 200);
+  assert.equal((await rufe('POST', '/api/v2/wieder-oeffnen', LISA, { id: 'q-zu1' })).status, 409, 'nur eigene');
+  assert.equal((await rufe('POST', '/api/v2/wieder-oeffnen', ADMIN, { id: '../x' })).status, 400);
+  assert.deepEqual(geoeffnet, ['k:q-zu1', 'l:q-zu1']);
 });

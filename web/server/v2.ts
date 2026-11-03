@@ -41,6 +41,9 @@ export interface V2Deps {
   log: (msg: string, data: Record<string, unknown>) => void;
   /** Bestehende Team-Freigabe je Funktion (features.ts): true = für diese Person gesperrt. 2.0 umgeht sie nie. */
   gesperrt: (u: User, funktion: 'wissen' | 'roadmap') => boolean;
+  /** D5/C2: automatisch Geschlossenes der letzten 7 Tage (sichtbar) und wieder öffnen (nur eigene, nur automatisch geschlossene). */
+  geschlossen: (u: User) => Promise<{ id: string; titel: string; grund: string; at: Date }[]>;
+  wiederOeffnen: (u: User, id: string) => Promise<boolean>;
 }
 
 /** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
@@ -114,7 +117,18 @@ export function registerV2(on: On, d: V2Deps) {
     const obenIds = new Set(oben.map((x) => x.f.id));
     const rest = fragen.filter((f) => f.klasse !== 'aktion' && !obenIds.has(f.id)).map((f) => ({ f, grund: '' }));
     const alle = karten(d, fragen, ib.eintraege, [...oben, ...rest]);
-    send(d, res, { zahl: inboxZahl(ib.eintraege), oben: alle.slice(0, oben.length), rest: alle.slice(oben.length), aufraeumen: aufraeumen(d, sonstiges), at: new Date() });   // zahl = oben + rest + aufraeumen (Test)
+    const geschlossen = (await d.geschlossen(u).catch((e) => { d.log('v2 geschlossen fehler', { user: u.id, error: String(e?.message ?? e).slice(0, 160) }); return []; })).map((g) => ({ id: g.id, titel: kurz(g.titel, 140), grund: kurz(g.grund, 240), wann: g.at }));
+    send(d, res, { zahl: inboxZahl(ib.eintraege), oben: alle.slice(0, oben.length), rest: alle.slice(oben.length), aufraeumen: aufraeumen(d, sonstiges), geschlossen, at: new Date() });   // zahl = oben + rest + aufraeumen (Test); geschlossen zählt nicht
+  });
+
+  // --- Wieder öffnen (C2): eine automatisch geschlossene Frage zurück in die Liste ---
+  on('POST', /^\/api\/v2\/wieder-oeffnen$/, async (req, res) => {
+    const u = await d.needUser(req);
+    const id = String((await d.body(req, 4 * 1024)).id ?? '');
+    if (!/^[\w-]{1,40}$/.test(id)) throw err(400, 'Unbekannte Frage.');
+    if (!(await d.wiederOeffnen(u, id))) throw err(409, 'Diese Frage ist nicht (mehr) automatisch geschlossen.');
+    d.log('v2 wieder geöffnet', { user: u.id, id });
+    send(d, res, { ok: true });
   });
 
   // --- Antwort an DIESER Karte: nur Entscheidungen; Freigaben nach außen nie (B4) ---

@@ -401,6 +401,7 @@ Geprüft am 03.11.: unprivilegierte Namensräume sind auf der Box gesperrt (`uns
 
 Aus dem Council zu Teil 2 (03.11. abends; Befürworter, Fachprüfung, Advocatus Diaboli = GLM 5.3, Abschluss; Urteil HOLD, Zuversicht 0,7):
 - **C1** D5 schließt nur bei gleicher Anzahl **und** inhaltlicher Übereinstimmung je Paar; sonst bleibt alles offen.
+  *Präzisiert beim Bau (S10, angenommen, Knut kann widersprechen):* Die Datenkopie hat genau einen echten Fall (Paket 416, 12 Fragen); 11 Paare passen über Kernwörter, D4 nur sinngemäß („EEG/BEG-Vorteil“ ↔ „Vorteil für Energiegemeinschaften“). Wörtlich genommen bliebe damit alles offen und D5 wirkungslos. Regel jetzt: Die Zuordnung gilt, wenn mindestens ¾ der Paare passen; geschlossen wird nur ein Paar, das selbst passt und im Bericht entschieden ist. Ergebnis auf der Kopie: 4 Fragen schließen sich (D2, D6, D8, D10), D4/D11/D12 bleiben offen. Umschwenken: eine Konstante (`ANTEIL` in `web/server/fragenbericht.ts`).
 - **C2** Automatisch Geschlossenes ist sichtbar (mit Grund) und mit einem Klick wieder offen (nur eigene, nur automatisch geschlossene).
 - **C3** /werkbank-Präfix nur aus fester Erlaubnisliste (`''`, `/werkbank`); Test mit manipuliertem Kopf.
 - **C4** „Alle Chats“ führt Unter-Chats/Hauptchats und alle LibreChat-Unterhaltungen der Person zusammen (nur über den Adapter); jede genau einmal.

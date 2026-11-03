@@ -90,7 +90,7 @@ const PrZeileView = ({ p }: { p: PrZeile }) => (
 
 export function Entscheidungen() {
   const app = useApp();
-  const { d, fehler, neu } = useDaten<{ zahl: number; oben: Karte[]; rest: Karte[]; aufraeumen: Aufraeumen[] }>('/api/v2/entscheidungen');
+  const { d, fehler, neu } = useDaten<{ zahl: number; oben: Karte[]; rest: Karte[]; aufraeumen: Aufraeumen[]; geschlossen?: Geschlossen[] }>('/api/v2/entscheidungen');
   useEffect(() => { if (d) app.zahl(d.zahl); }, [d]);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
@@ -112,7 +112,33 @@ export function Entscheidungen() {
           <AufraeumenListe l={d.aufraeumen} />
         </Abschnitt>
       )}
+      {!!d.geschlossen?.length && (
+        <Abschnitt id="e-geschlossen" titel="Von selbst geschlossen" erklaerung="Fragen der letzten 7 Tage, die sich erledigt haben — der Unter-Chat ist fertig oder hat die Frage in seinem Bericht schon entschieden. Zählt nicht mit. Stimmt etwas nicht, holst du die Frage mit „Wieder öffnen“ zurück.">
+          <GeschlossenListe l={d.geschlossen} geoeffnet={() => { neu(); app.zahl(null); }} />
+        </Abschnitt>
+      )}
     </div>
+  );
+}
+
+interface Geschlossen { id: string; titel: string; grund: string; wann: string }
+function GeschlossenListe({ l, geoeffnet }: { l: Geschlossen[]; geoeffnet: () => void }) {
+  const [laeuft, setLaeuft] = useState<string | null>(null);
+  const [fehler, setFehler] = useState<string | null>(null);
+  const oeffnen = async (id: string) => {
+    setLaeuft(id); setFehler(null);
+    try { await schicke('/api/v2/wieder-oeffnen', { id }); geoeffnet(); } catch (x: any) { setFehler(x.message); } finally { setLaeuft(null); }
+  };
+  return (
+    <>
+      {fehler && <p className="fehlertext klein">{fehler}</p>}
+      <ul className="liste">{l.map((g) => (
+        <li key={g.id} className="zeile">
+          <div className="zeile-haupt"><span className="zeile-titel">{g.titel || 'Frage'}</span><p className="zeile-satz">{g.grund}</p></div>
+          <div className="zeile-rechts"><span className="zeit">{wann(g.wann)}</span><button type="button" className="knopf leise klein" disabled={laeuft === g.id} onClick={() => oeffnen(g.id)}>{laeuft === g.id ? 'Öffne …' : 'Wieder öffnen'}</button></div>
+        </li>
+      ))}</ul>
+    </>
   );
 }
 

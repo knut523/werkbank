@@ -1,6 +1,6 @@
 // Fragen räumen sich selbst weg (R32, Nachtrag C): eine offene Rückfrage eines Strangs, den es nicht mehr gibt / der abgeschlossen, archiviert,
 // von Knut geprüft oder nie gestartet ist, ist erledigt — sie schließt sich mit Grund (Log + Zeile im Entscheidungs-Log). Nie: Fragen laufender
-// oder auf Knut wartender Stränge, Deckel-/Budget-Fragen (die entscheidet nur Knut — dafür der Sammel-Knopf) und Fragenpakete.
+// oder auf Knut wartender Stränge, von Knut wieder geöffnete (autoOffen, Paket 436 C2), Deckel-/Budget-Fragen (die entscheidet nur Knut — dafür der Sammel-Knopf) und Fragenpakete.
 // Schalter WERKBANK_FRAGEN_AUFRAEUMEN=0 (Vorgabe an: wirkt nach Live sofort).
 import { wb } from './db.ts';
 
@@ -24,7 +24,7 @@ export function schliessGrund(q: { kind?: string | null; strand?: { id?: string 
 export async function fragenAufraeumen(userId: string, o: { now?: number; dry?: boolean } = {}): Promise<{ id: string; titel: string; grund: string }[]> {
   const now = o.now ?? Date.now();
   const col = wb().collection('orchestrator_questions');
-  const offen: any[] = await col.find({ userId, status: 'offen', 'strand.id': { $exists: true, $ne: null }, paket: null }).limit(300).toArray();
+  const offen: any[] = await col.find({ userId, status: 'offen', autoOffen: { $ne: true }, 'strand.id': { $exists: true, $ne: null }, paket: null }).limit(300).toArray();
   const out: { id: string; titel: string; grund: string }[] = [];
   for (const q of offen) {
     const s: any = await wb().collection('orchestrator_runs').findOne({ _id: q.strand.id as any }, { projection: { zustand: 1, knutReviewedAt: 1, reviewedAt: 1, startError: 1, uebergabe: 1 } });
