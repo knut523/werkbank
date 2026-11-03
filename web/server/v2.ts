@@ -59,6 +59,15 @@ function karten(d: V2Deps, fragen: Frage[], eintraege: InboxEintrag[], liste: { 
   return liste.map(({ f, grund }) => { const s = sj.get(f.eintrag); return karteAusFrage(f, { grund, strand: s?.id ?? null, strandTitel: s?.titel ?? null, altUrl: `${d.altUrl}/entscheidungen` }); });
 }
 
+/** Was keine Frage ist (Pflege, Altbestand, Schlange …) zählt in die eine Zahl — also auch zeigen, mit Link in die alte Werkbank. */
+function aufraeumen(d: V2Deps, sonstiges: InboxEintrag[]) {
+  return sonstiges.map((e) => {
+    const ziel = String(e.quelle?.url ?? '').match(/^#\/([\w/-]+)/)?.[1] ?? 'entscheidungen';
+    return { id: e.id, titel: kurz(String(e.frage ?? ''), 160), worum: e.art === 'altbestand' ? 'Alte Fragen, die niemand mehr braucht — durchsehen oder verwerfen.' : e.art === 'pflege' ? 'Aufräumen, damit Listen stimmen. Hält keinen Agenten an.' : 'Wartet auf dich, ist aber keine Entscheidung.',
+      url: `${d.altUrl}/${ziel}` };
+  });
+}
+
 const arbeitKarte = (z: any) => ({ id: String(z.id), titel: kurz(z.titel, 140), thema: z.thema ?? '', satz: zustandSatz(z as ArbeitZeile), gruppe: arbeitGruppe(z as ArbeitZeile), zuletzt: z.zuletzt ?? null, uhr: uhrzeit(z.zuletzt),
   offen: z.cs?.offen ?? 0, links: [...(z.paket && z.bericht ? [{ label: 'Bericht', url: `/v2/dokument?paket=${encodeURIComponent(z.paket)}&datei=bericht.md` }] : [])] });
 
@@ -67,8 +76,9 @@ export function registerV2(on: On, d: V2Deps) {
   on('GET', /^\/api\/v2\/start$/, async (req, res) => {
     const u = await d.needUser(req);
     const ib = await d.inboxFuer(u);
-    const { fragen } = fragenAus(ib.eintraege);
+    const { fragen, sonstiges } = fragenAus(ib.eintraege);
     const jetzt = karten(d, fragen, ib.eintraege, jetztAuswahl(fragen));
+    const auf = aufraeumen(d, sonstiges);
     const ich = vorname(u);
     let laeuft: any[] = [], erledigt: any[] = [];
     if (admin(u)) {
@@ -78,7 +88,7 @@ export function registerV2(on: On, d: V2Deps) {
       erledigt = erledigtSicht(er.straenge, zm, new Set(er.straenge.map((s: any) => String(s.id)).filter((id: string) => !zm.has(id))));
     }
     const prs = await d.livePrs().then((g) => prSicht([...g.map.values()] as LivePrLite[], ich, d.githubNames()).slice(0, 5)).catch(() => null);
-    send(d, res, { zahl: inboxZahl(ib.eintraege), jetzt, laeuft, erledigt, prs, dokumente: dokumenteNeu(d, u, 5), ich: ich, admin: admin(u), at: new Date() });
+    send(d, res, { zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), aufraeumenGesamt: auf.length, laeuft, erledigt, prs, dokumente: dokumenteNeu(d, u, 5), ich: ich, admin: admin(u), at: new Date() });
   });
 
   // --- Die eine Zahl (Kopf jeder Seite): dieselbe wie überall — `inboxZahl` ---
@@ -91,12 +101,12 @@ export function registerV2(on: On, d: V2Deps) {
   on('GET', /^\/api\/v2\/entscheidungen$/, async (req, res) => {
     const u = await d.needUser(req);
     const ib = await d.inboxFuer(u);
-    const { fragen } = fragenAus(ib.eintraege);
+    const { fragen, sonstiges } = fragenAus(ib.eintraege);
     const oben = jetztAuswahl(fragen);
     const obenIds = new Set(oben.map((x) => x.f.id));
     const rest = fragen.filter((f) => f.klasse !== 'aktion' && !obenIds.has(f.id)).map((f) => ({ f, grund: '' }));
     const alle = karten(d, fragen, ib.eintraege, [...oben, ...rest]);
-    send(d, res, { zahl: inboxZahl(ib.eintraege), oben: alle.slice(0, oben.length), rest: alle.slice(oben.length), at: new Date() });
+    send(d, res, { zahl: inboxZahl(ib.eintraege), oben: alle.slice(0, oben.length), rest: alle.slice(oben.length), aufraeumen: aufraeumen(d, sonstiges), at: new Date() });
   });
 
   // --- Antwort an DIESER Karte: nur Entscheidungen; Freigaben nach außen nie (B4) ---

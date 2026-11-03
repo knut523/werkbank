@@ -1890,6 +1890,7 @@ test('2.0: Startseite — eine Zahl (= /api/inbox), ≤ 5 Karten, Antwort an DIE
     assert.equal((await anna.req('/api/v2/antwort', { body: { id: k.id, antwort: 'ja' } })).status, 409, 'zweimal antworten geht nicht');
     const e = await anna.req('/api/v2/entscheidungen');
     assert.equal(e.j.zahl, s.j.zahl - 1); assert.ok(e.j.oben.length <= 5); assert.ok(![...e.j.oben, ...e.j.rest].some((x: any) => x.id === k.id));
+    assert.equal(e.j.oben.length + e.j.rest.length + e.j.aufraeumen.length, e.j.zahl, 'die Zahl = Summe der gezeigten Posten');
     const arbeit = await anna.req('/api/v2/arbeit');
     assert.equal(arbeit.j.nurAdmin, true);
     assert.equal((await anna.req('/api/v2/arbeit/abcd1234')).status, 403);

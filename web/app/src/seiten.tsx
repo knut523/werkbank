@@ -1,6 +1,6 @@
 // Werkbank 2.0: die Seiten. Eine Startseite („Jetzt“) und vier Bereiche; jede Seite liest genau einen Endpunkt der 2.0-API.
 import { useEffect, useState } from 'react';
-import { schicke, type ArbeitKarte, type Dok, type Karte, type Link, type PrZeile, type Start } from './api.ts';
+import { schicke, type Aufraeumen, type ArbeitKarte, type Dok, type Karte, type Link, type PrZeile, type Start } from './api.ts';
 import { useApp } from './kontext.ts';
 import { Abschnitt, EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweise, Zeile } from './teile.tsx';
 import { BEGRIFFE } from './begriffe.ts';
@@ -31,9 +31,10 @@ export function Jetzt() {
         </div>
       )}
       <Abschnitt id="a-jetzt" titel="Was du jetzt tun musst" erklaerung="Die wichtigsten Dinge, die ohne deine Antwort nicht weitergehen — höchstens fünf, wichtigste zuerst: zuerst Entscheidungen, die einen Agenten anhalten, darunter Freigaben. Die Zahl oben rechts zählt alles, was auf dich wartet."
-        fuss={d.zahl > d.jetzt.length ? <a href="/v2/entscheidungen">Alle Entscheidungen ansehen →</a> : null}>
-        {d.jetzt.length ? <div className="karten">{d.jetzt.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div>
-          : <p className="leer">Gerade wartet nichts auf dich.</p>}
+        fuss={d.zahl > d.jetzt.length + d.aufraeumen.length ? <a href="/v2/entscheidungen">Alles ansehen, was auf dich wartet →</a> : null}>
+        {d.jetzt.length > 0 && <div className="karten">{d.jetzt.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div>}
+        {d.aufraeumen.length > 0 && <AufraeumenListe l={d.aufraeumen} />}
+        {!d.jetzt.length && !d.aufraeumen.length && <p className="leer">Gerade wartet nichts auf dich.</p>}
       </Abschnitt>
       {d.admin && (
         <Abschnitt id="a-laeuft" titel="Läuft gerade" erklaerung="Unter-Chats, an denen ein Agent gerade arbeitet — mit voraussichtlichem Ende. Du musst hier nichts tun."
@@ -59,6 +60,9 @@ export function Jetzt() {
   );
 }
 
+const AufraeumenListe = ({ l }: { l: Aufraeumen[] }) => (
+  <ul className="liste aufraeumen">{l.map((x) => <Zeile key={x.id} titel={x.titel} url={x.url} satz={`${x.worum} In der alten Werkbank.`} marke={{ text: 'Aufräumen' }} />)}</ul>
+);
 const DokZeile = ({ x }: { x: Dok }) => <Zeile titel={x.titel} url={x.url} satz={x.worum} marke={{ text: x.art === 'bericht' ? 'Bericht' : 'Notiz' }} rechts={wann(x.at)} />;
 const PrZeileView = ({ p }: { p: PrZeile }) => (
   <Zeile titel={`${p.pr} · ${p.titel}`} url={`/v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}
@@ -69,20 +73,25 @@ const PrZeileView = ({ p }: { p: PrZeile }) => (
 
 export function Entscheidungen() {
   const app = useApp();
-  const { d, fehler, neu } = useDaten<{ zahl: number; oben: Karte[]; rest: Karte[] }>('/api/v2/entscheidungen');
+  const { d, fehler, neu } = useDaten<{ zahl: number; oben: Karte[]; rest: Karte[]; aufraeumen: Aufraeumen[] }>('/api/v2/entscheidungen');
   useEffect(() => { if (d) app.zahl(d.zahl); }, [d]);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   return (
     <div className="seite">
       <h1>Entscheidungen</h1>
-      <p className="unterzeile">Fragen mit Empfehlung. „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — an genau diese Karte.</p>
+      <p className="unterzeile">Alles, was auf dich wartet. „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — an genau diese Karte.</p>
       <Abschnitt id="e-zuerst" titel="Zuerst" erklaerung="Dieselben fünf wie auf der Startseite: was einen Agenten anhält oder bald als angenommen gilt.">
         {d.oben.length ? <div className="karten">{d.oben.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div> : <p className="leer">Gerade wartet nichts auf dich.</p>}
       </Abschnitt>
       {d.rest.length > 0 && (
         <Abschnitt id="e-weitere" titel="Weitere" erklaerung="Alles andere, was auf dich wartet — nach Thema sortiert, wie es kommt.">
           <div className="karten">{d.rest.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div>
+        </Abschnitt>
+      )}
+      {d.aufraeumen.length > 0 && (
+        <Abschnitt id="e-aufraeumen" titel="Aufräumen" erklaerung="Zählt mit, weil es auf dich wartet — ist aber keine Entscheidung und hält keinen Agenten an. Das erledigst du (noch) in der alten Werkbank.">
+          <AufraeumenListe l={d.aufraeumen} />
         </Abschnitt>
       )}
     </div>

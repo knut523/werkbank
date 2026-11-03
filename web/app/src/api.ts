@@ -35,8 +35,9 @@ export interface Karte {
 }
 export interface ArbeitKarte { id: string; titel: string; thema: string; satz: string; gruppe: 'wartet' | 'laeuft' | 'fertig'; zuletzt: string | null; uhr: string; offen: number; links: Link[] }
 export interface PrZeile { pr: string; repo: string; number: number; titel: string; url: string | null; wartetAuf: string[]; warum: string; entwurf: boolean; geaendert: string | null; review?: { empfehlung: string | null; status: string } | null }
+export interface Aufraeumen { id: string; titel: string; worum: string; url: string }
 export interface Dok { art: 'bericht' | 'notiz'; titel: string; worum: string; url: string; at: string | null }
 export interface Start {
-  zahl: number; jetzt: Karte[]; laeuft: ArbeitKarte[]; erledigt: { id: string; titel: string; uhr: string; stand: 'abgenommen' | 'zum-lesen'; links: Link[] }[];
+  zahl: number; jetzt: Karte[]; aufraeumen: Aufraeumen[]; aufraeumenGesamt: number; laeuft: ArbeitKarte[]; erledigt: { id: string; titel: string; uhr: string; stand: 'abgenommen' | 'zum-lesen'; links: Link[] }[];
   prs: PrZeile[] | null; dokumente: Dok[]; ich: string; admin: boolean;
 }
