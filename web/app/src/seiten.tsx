@@ -396,6 +396,7 @@ export function Dokumente({ q: q0 }: { q: string }) {
         <label htmlFor="such" className="unsichtbar">Dokumente durchsuchen</label>
         <input id="such" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Suchen, z. B. Datenschutz, Tarif …" />
       </form>
+      {q.trim() && (q.trim() !== suche || (d && (d.q ?? '') !== suche)) && <p className="klein gedimmt" role="status">Sucht „{q.trim()}“ …</p>}
       {fehler ? <Fehler text={fehler} nochmal={neu} /> : !d ? <Laedt /> : (
         <Abschnitt id="d-liste" titel={d.q ? `Treffer für „${d.q}“` : 'Zuletzt geändert'} erklaerung="Berichte sind Ergebnisse von Unter-Chats; Notizen stammen aus unserer gemeinsamen Wissenssammlung. Die Suche findet Wörter im Titel und im Pfad.">
           {d.frei && !d.frei.notizen && !d.frei.berichte ? <p className="leer">Dokumente sind für dich noch nicht freigegeben — frag Knut.</p>
