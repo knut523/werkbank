@@ -490,7 +490,7 @@ Legende: **V2** = in der 2.0 gebaut (Schnitt) · **alt** = erreichbar über Mehr
 
 | D | Frage | Empfehlung (angenommen) |
 |---|---|---|
-| D1–D4 | aus Runde 1 (Grundsätze, Team-Freigaben, Live-Ausrollen, Hauptchat-Umstieg) | wie im Bericht 436 |
+| D1–D5 | aus Runde 1 (Grundsätze, Team-Freigaben, Live-Ausrollen, Hauptchat-Umstieg, Fragen aus dem Bericht schließen) | **Knut 03.11.: D1, D2, D3, D5 akzeptiert**; D4 offen |
 | D6 | Alte Funktionen streichen oder verlinken? | verlinken (E8 a); Streichen nach C12 |
 | D7 | Handy-Benachrichtigung bauen? | ja, in M2 |
 | D8 | Team: gemeinsame Instanz oder je Person? | gemeinsame für Lesen/Entscheiden (E6 a) |
