@@ -206,10 +206,16 @@ export type Rolle = 'leitung' | 'reviewer' | 'team';
  *  Hängt am GitHub-Namen, nie an gerade offenen PRs (sonst wechselt die Startseite mit der PR-Lage).
  *  ponytail: Vergleich über den Vornamen, weil die Namensliste (github.ts) nur Vornamen kennt; zwei Personen mit gleichem Vornamen
  *  bekämen dieselbe Ansicht — nur Anordnung, keine Rechte. Upgrade: GitHub-Login am Konto speichern (E9, M3). */
-export function rolle(u: { admin: boolean; vorname: string }, names: Record<string, string>): Rolle {
-  if (u.admin) return 'leitung';
+export function rolle(u: { admin: boolean; vorname: string; zugang?: boolean; einstellung?: string | null }, names: Record<string, string>): Rolle {
   const v = u.vorname.trim().toLowerCase();
-  return v && Object.values(names).some((n) => n.trim().toLowerCase() === v) ? 'reviewer' : 'team';
+  const github = !!v && Object.values(names).some((n) => n.trim().toLowerCase() === v);
+  // S20 (Knut 03.11., D8): jede Person hat ihre eigene Instanz und ist dort Admin — also nie bloß das Admin-Flag. Die Einrichtung
+  // (WERKBANK_ROLLE, setzt team-install) gilt nur für die Besitzerin; sonst aus den Daten: mit eigenem Claude-Zugang leitet sie Agenten.
+  if (u.admin) {
+    if (u.einstellung === 'leitung' || u.einstellung === 'reviewer' || u.einstellung === 'team') return u.einstellung;
+    if (u.zugang ?? true) return 'leitung';
+  }
+  return github ? 'reviewer' : 'team';
 }
 
 // ---------- Alle Chats (S12, Council C4) ----------

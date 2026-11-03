@@ -19,3 +19,11 @@ test('Aufruf: nur Team-Adressen; Trockenlauf zeigt Instanz-Profil team, nur dies
     assert.ok(r.stdout.includes(z), z);
   assert.equal(existsSync(join(r.wb, '.env.local')), false, 'Trockenlauf schreibt keine .env.local');
 });
+
+test('S20 (Plan v2 D8): --rolle setzt die Startansicht der eigenen Instanz; ohne Angabe keine Zeile; Unsinn wird abgelehnt', () => {
+  const r = lauf('christoph@maxenergy.at', '--rolle', 'reviewer', '--trocken');
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.stdout.includes('WERKBANK_ROLLE=reviewer'), r.stdout);
+  assert.ok(!lauf('lisa@maxenergy.at', '--trocken').stdout.includes('WERKBANK_ROLLE'));
+  assert.notEqual(lauf('lisa@maxenergy.at', '--rolle', 'chefin', '--trocken').status, 0);
+});

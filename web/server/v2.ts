@@ -50,6 +50,8 @@ export interface V2Deps {
   alleRuns: (u: User) => Promise<any[]>;
   lcChats: (u: User) => Promise<any[]>;
   lcUrl: string;
+  /** S20 (D8): Rolle der Besitzerin aus der Einrichtung (WERKBANK_ROLLE, von team-install gesetzt) — sonst abgeleitet. */
+  rolleEinstellung?: string | null;
 }
 
 /** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
@@ -94,7 +96,7 @@ export function registerV2(on: On, d: V2Deps) {
     const jetzt = karten(d, fragen, ib.eintraege, jetztAuswahl(fragen));
     const auf = aufraeumen(d, sonstiges);
     const ich = vorname(u);
-    const r = rolle({ admin: admin(u), vorname: ich }, d.githubNames());
+    const r = rolle({ admin: admin(u), vorname: ich, zugang: admin(u) && !d.rolleEinstellung ? !!(await d.claudeToken(u).catch(() => null)) : undefined, einstellung: d.rolleEinstellung }, d.githubNames());
     if (url.searchParams.get('teil') === 'oben') return send(d, res, { teil: 'oben', zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), ich, admin: admin(u), rolle: r, at: new Date() });
     let laeuft: any[] = [], erledigt: any[] = [];
     if (admin(u)) {

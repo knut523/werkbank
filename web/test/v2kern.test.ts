@@ -198,3 +198,14 @@ test('S12 (Pass C): kaputtes Datum legt die Liste nicht lahm, zwei Runs mit eine
   assert.equal(l.find((z) => z.titel === 'Komisch')!.url, null);
   assert.ok(l.every((z) => z.zuletzt === null));
 });
+
+test('S20 (D8 persönliche Instanzen): Rolle der Besitzerin aus der Einrichtung, sonst aus den Daten — nie bloß aus dem Admin-Flag', () => {
+  const names = { knut523: 'Knut', bizarrochris: 'Christoph' };
+  assert.equal(rolle({ admin: true, vorname: 'Lisa', zugang: false }, names), 'team', 'Lisa in ihrer eigenen Instanz, ohne Claude-Abo');
+  assert.equal(rolle({ admin: true, vorname: 'Christoph', zugang: false }, names), 'reviewer', 'Christoph in seiner Instanz');
+  assert.equal(rolle({ admin: true, vorname: 'Knut', zugang: true }, names), 'leitung', 'mit eigenem Zugang: leitet eigene Agenten');
+  assert.equal(rolle({ admin: true, vorname: 'Christoph', zugang: true, einstellung: 'reviewer' }, names), 'reviewer', 'Einstellung schlägt Ableitung');
+  assert.equal(rolle({ admin: true, vorname: 'Knut', zugang: false, einstellung: 'leitung' }, names), 'leitung', 'Test-Instanz: Knut ohne Zugang, Einstellung leitung');
+  assert.equal(rolle({ admin: false, vorname: 'Lisa', zugang: false, einstellung: 'leitung' }, names), 'team', 'Einstellung gilt nur für die Besitzerin (Admin), nie für Gäste');
+  assert.equal(rolle({ admin: true, vorname: 'X', zugang: true, einstellung: 'quatsch' }, names), 'leitung', 'unbekannte Einstellung = Ableitung');
+});

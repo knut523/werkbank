@@ -4270,7 +4270,7 @@ registerV2(on, {
   geschlossen: (u) => automatischGeschlossen(u.id),
   alleEmpfohlen: alleWieEmpfohlen,
   alleRuns: (u) => orchRuns().find({ userId: u.id }, { projection: { _id: 1, conv: 1, title: 1, thema: 1, zustand: 1, kind: 1, lastActivity: 1, doneAt: 1, startedAt: 1, reviewedAt: 1, knutReviewedAt: 1, startError: 1, endedAt: 1 } }).sort({ lastActivity: -1 }).limit(1000).toArray(),
-  lcChats: (u) => v2lcListe(u), lcUrl: cfg.librechatPublicUrl,
+  lcChats: (u) => v2lcListe(u), lcUrl: cfg.librechatPublicUrl, rolleEinstellung: process.env.WERKBANK_ROLLE ?? null,
   wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },
 });
 const V2_DIST = appDist(WEB_DIR);

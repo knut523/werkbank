@@ -3,7 +3,7 @@
 # Zugang/eine eigene Instanz, alles individuell“). Läuft in der EIGENEN Coder-Umgebung der Person (eigene 16 GB), aus einem Checkout
 # des Werkbank-Repos. Idempotent — darf beliebig oft laufen; Updates danach wie überall mit `scripts/werkbank.sh update`.
 #
-#   scripts/team-install.sh <email> [--vault <git-url>] [--trocken]
+#   scripts/team-install.sh <email> [--vault <git-url>] [--rolle leitung|reviewer|team] [--trocken]
 #   scripts/team-install.sh pruefen <email>        # nach der ersten Anmeldung: ist die Person Admin ihrer Instanz?
 #
 # Was es tut:
@@ -37,11 +37,13 @@ fi
 
 EMAIL="${1:-}"; shift || true
 [[ "$EMAIL" =~ ^[^@[:space:]]+@(maxenergy\.at|konekto\.energy)$ ]] || { echo "✗ Aufruf: scripts/team-install.sh <name@maxenergy.at|name@konekto.energy> [--vault <git-url>] [--trocken]"; exit 1; }
-VAULT_URL=""; TROCKEN=0
+VAULT_URL=""; TROCKEN=0; ROLLE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --vault) VAULT_URL="${2:?git-URL fehlt}"; shift 2 ;;
     --trocken) TROCKEN=1; shift ;;
+    # Startansicht der 2.0 (Plan v2 E6/D8: eigene Instanz je Person); ohne Angabe aus Claude-Zugang und GitHub-Namen abgeleitet.
+    --rolle) ROLLE="${2:?Rolle fehlt}"; [[ "$ROLLE" =~ ^(leitung|reviewer|team)$ ]] || { echo "✗ --rolle: leitung, reviewer oder team"; exit 1; }; shift 2 ;;
     *) echo "✗ Unbekannt: $1"; exit 1 ;;
   esac
 done
@@ -69,7 +71,8 @@ WERKBANK_SKILLS_SOURCE=$VAULT_DIR/_meta/dist-skill
 WERKBANK_VAULT_DRYRUN=1
 WERKBANK_ROADMAP_AUTOSYNC=0
 WERKBANK_VAULT_SYNC_SCRIPT=/bin/false
-# <<< werkbank-team
+${ROLLE:+WERKBANK_ROLLE=$ROLLE
+}# <<< werkbank-team
 EOT
 }
 if [ $TROCKEN = 1 ]; then say "Trockenlauf — dieser Block käme nach .env.local:"; block; exit 0; fi

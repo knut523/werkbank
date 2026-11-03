@@ -113,7 +113,11 @@ test('C2: automatisch Geschlossenes steht sichtbar auf der Entscheidungsseite (z
 
 test('S13: Startansicht je Rolle — Knut leitet, Christoph prüft (mehr PRs), Lisa ist Team (mehr Dokumente)', async () => {
   const CHRISTOPH = { id: 'c', email: 'c@x', name: 'Christoph Muster', role: 'USER' } as any;
-  assert.equal((await rufe('GET', '/api/v2/start', ADMIN)).b.rolle, 'leitung');
+  assert.equal((await rufe('GET', '/api/v2/start', ADMIN)).b.rolle, 'reviewer', 'D8: Besitzer ohne Claude-Zugang, mit GitHub-Namen = Reviewer');
+  deps.rolleEinstellung = 'leitung';
+  assert.equal((await rufe('GET', '/api/v2/start', ADMIN)).b.rolle, 'leitung', 'Einrichtung (WERKBANK_ROLLE) gilt für die Besitzerin');
+  assert.equal((await rufe('GET', '/api/v2/start?teil=oben', LISA)).b.rolle, 'team', '… nie für Gäste');
+  deps.rolleEinstellung = null;
   assert.equal((await rufe('GET', '/api/v2/start?teil=oben', LISA)).b.rolle, 'team');
   const c = await rufe('GET', '/api/v2/start', CHRISTOPH);
   assert.equal(c.b.rolle, 'reviewer'); assert.equal(c.b.admin, false);
