@@ -3,11 +3,11 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import MarkdownIt from 'markdown-it';
 import { schicke, hole, type Karte, type Link } from './api.ts';
 import { useApp } from './kontext.ts';
-import { chatBesprechen, chatFrage, istIntern } from './format.ts';
+import { chatBesprechen, chatFrage, istIntern, rel } from './format.ts';
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
 const linkOpen = md.renderer.rules.link_open ?? ((t, i, o, _e, s) => s.renderToken(t, i, o));
-md.renderer.rules.link_open = (t, i, o, e, s) => { const h = t[i].attrGet('href') ?? ''; if (/^https?:/i.test(h)) { t[i].attrSet('target', '_blank'); t[i].attrSet('rel', 'noopener noreferrer'); } return linkOpen(t, i, o, e, s); };
+md.renderer.rules.link_open = (t, i, o, e, s) => { const h = t[i].attrGet('href') ?? ''; if (rel(h) !== h) t[i].attrSet('href', rel(h));   /* S16: eigene Pfade relativ (auch im neuen Tab unter /werkbank) */ if (/^https?:/i.test(h)) { t[i].attrSet('target', '_blank'); t[i].attrSet('rel', 'noopener noreferrer'); } return linkOpen(t, i, o, e, s); };
 
 /** Markdown sicher rendern (kein Roh-HTML). */
 export function Md({ text, klein }: { text: string; klein?: boolean }) {
@@ -17,7 +17,7 @@ export function Md({ text, klein }: { text: string; klein?: boolean }) {
 export function Verweis({ l }: { l: Link }) {
   if (!/^(https?:\/\/|\/)/i.test(l.url)) return <span className="verweis">{l.label}</span>;   // nur http(s) und eigene Pfade als Link
   const extern = l.extern || !istIntern(l.url);
-  return <a className="verweis" href={l.url} {...(extern ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>{l.label}{extern ? ' ↗' : ''}</a>;
+  return <a className="verweis" href={rel(l.url)} {...(extern ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>{l.label}{extern ? ' ↗' : ''}</a>;
 }
 
 export function Verweise({ links }: { links: Link[] }) {
@@ -66,7 +66,7 @@ export function Zeile({ titel, url, satz, rechts, marke, links }: { titel: strin
   return (
     <li className="zeile">
       <div className="zeile-haupt">
-        <a className="zeile-titel" href={url} {...(extern ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>{titel}{extern ? ' ↗' : ''}</a>
+        <a className="zeile-titel" href={rel(url)} {...(extern ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>{titel}{extern ? ' ↗' : ''}</a>
         {satz && <p className="zeile-satz">{satz}</p>}
         {links && links.length > 0 && <Verweise links={links} />}
       </div>
@@ -129,7 +129,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
     if (antwort === 'anders' && !t.trim()) { setFehler('Schreib kurz, was stattdessen.'); return; }
     setLaeuft(true); setFehler(null);
     try {
-      const r = await schicke<{ ziel: string | null; spaeter: boolean }>('/api/v2/antwort', { id: k.id, antwort, text: t.trim() });
+      const r = await schicke<{ ziel: string | null; spaeter: boolean }>('api/v2/antwort', { id: k.id, antwort, text: t.trim() });
       setFertig(r.spaeter ? 'Zurückgestellt — kommt morgen wieder.' : `Ging an ${r.ziel ?? 'die Quelle'}: ${antwort === 'ja' ? `„Ja, so“${k.empfehlung ? ` (${k.empfehlung})` : ''}${t.trim() ? ` mit Notiz „${t.trim()}“` : ''}` : antwort === 'nein' ? '„Nein“' : `„${t.trim()}“`}`);
       beantwortet?.();
     } catch (e: any) { setFehler(e.message); } finally { setLaeuft(false); }

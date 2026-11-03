@@ -118,7 +118,7 @@ import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
 import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
 import { chatStatusAn, offeneJeStrang, hauptchatJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
-import { registerV2, appDist } from './v2.ts';
+import { registerV2, appDist, v2Index } from './v2.ts';
 import { abgebrochenMarkieren as v2Abgebrochen } from './v2chat.ts';
 import { githubNames } from './github.ts';
 import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
@@ -4285,9 +4285,12 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, path: string) {
     'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
     'cache-control': file.includes('/assets/') || file.startsWith(FONTS) ? 'public, max-age=31536000, immutable' : 'no-cache',
     'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'SAMEORIGIN',
-    'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'",
+    // base-uri: 2.0 setzt <base href> auf den eigenen Ursprung (S16); die alte Oberfläche bleibt bei 'none'.
+    'content-security-policy': `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri ${base === V2_DIST ? "'self'" : "'none'"}`,
   });
   if (req.method === 'HEAD') return res.end();
+  // 2.0 (S16): die Seite selbst mit <base href> fürs Präfix (/werkbank über den LibreChat-Proxy) — nur aus der Erlaubnisliste (C3).
+  if (base === V2_DIST && file === index) return res.end(v2Index(readFileSync(file, 'utf8'), req.headers['x-forwarded-prefix']));
   createReadStream(file).pipe(res);
 }
 

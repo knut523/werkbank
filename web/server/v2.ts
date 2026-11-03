@@ -294,3 +294,17 @@ function dokumenteNeu(d: V2Deps, u: User, n: number) {
 
 /** Pfad im Repo der 2.0-App (Auslieferung unter /v2/). */
 export const appDist = (webDir: string) => join(webDir, 'app', 'dist');
+
+// ---------- Auslieferung unter einem Präfix (S16, Council C3) ----------
+
+/** Präfixe, unter denen die Werkbank erreichbar ist: direkt (:3070) und über den LibreChat-Proxy (/werkbank). Alles andere → direkt. */
+export const PRAEFIXE = ['', '/werkbank'] as const;
+export const praefix = (kopf: unknown): string => { const k = String(kopf ?? ''); return (PRAEFIXE as readonly string[]).includes(k) ? k : ''; };
+
+/** index.html der App für ein Präfix: <base href> (die App nutzt nur relative Pfade) und Asset-Pfade mit Präfix. */
+export function v2Index(html: string, kopf: unknown): string {
+  const p = praefix(kopf);
+  const basis = `<base href="${p}/" />`;
+  const h = html.replace(/(src|href)="\/v2\//g, `$1="${p}/v2/`);
+  return /<base\b[^>]*>/i.test(h) ? h.replace(/<base\b[^>]*>/i, basis) : h.replace(/<head>/i, `<head>\n    ${basis}`);
+}

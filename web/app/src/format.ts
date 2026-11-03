@@ -15,15 +15,22 @@ export function wann(iso: string | null | undefined, now = Date.now()): string {
   return new Date(t).toLocaleDateString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' }).replace(/\.?$/, '.');
 }
 
+/** S16: Präfix der App aus <base href> (vom Server gesetzt): '' direkt, '/werkbank' über den LibreChat-Proxy. */
+export const praefix = (): string => (typeof document === 'undefined' ? '' : (document.querySelector('base')?.getAttribute('href') ?? '/').replace(/\/$/, ''));
+/** Logischer Pfad ohne Präfix und ohne führenden Schrägstrich: '/werkbank/v2/arbeit' → 'v2/arbeit'. */
+export const logisch = (pathname: string, p = praefix()): string => (p && pathname.startsWith(p + '/') ? pathname.slice(p.length + 1) : pathname.replace(/^\//, ''));
+/** Vom Server gelieferte Adressen ('/v2/…', '/api/…') relativ machen, damit sie unter jedem Präfix gehen; alles andere bleibt. */
+export const rel = (u: string): string => (/^\/(v2|api)(\/|\?|$)/.test(u) ? u.slice(1) : u);
+
 /** Interne 2.0-Adresse? (dann ohne Neuladen navigieren, sonst neuer Tab) */
-export const istIntern = (url: string) => url.startsWith('/v2/') || url === '/v2';
+export const istIntern = (url: string) => { const r = rel(url); return r === 'v2' || r.startsWith('v2/') || r.startsWith('v2?'); };
 
 /** Gerendertes HTML (Notiz oder Bericht) auf die 2.0-Adressen umbiegen: Notiz-Links, Bericht-Dateien, Bilder. */
 export function htmlFuerV2(html: string): string {
   return html
-    .replace(/href="#\/wissen\/([^"]+)"/g, (_m, p) => `href="/v2/dokument?vault=${encodeURIComponent(decodeURIComponent(p))}"`)
-    .replace(/href="api\/files\/agenten\/([^/"]+)\/([^"?]+\.md)"/g, (_m, paket, rel) => `href="/v2/dokument?paket=${paket}&amp;datei=${encodeURIComponent(decodeURIComponent(rel))}"`)
-    .replace(/(src|href)="api\//g, '$1="/api/');
+    .replace(/href="#\/wissen\/([^"]+)"/g, (_m, p) => `href="v2/dokument?vault=${encodeURIComponent(decodeURIComponent(p))}"`)
+    .replace(/href="\/?api\/files\/agenten\/([^/"]+)\/([^"?]+\.md)"/g, (_m, paket, datei) => `href="v2/dokument?paket=${paket}&amp;datei=${encodeURIComponent(decodeURIComponent(datei))}"`)
+    .replace(/(src|href)="\/(api|v2)\//g, '$1="$2/');   // S16: relativ, damit Bilder und Links unter /werkbank gehen
 }
 
 /** Zahl in Worten für kleine Zahlen in Sätzen („eine Frage“, „3 Fragen“). */

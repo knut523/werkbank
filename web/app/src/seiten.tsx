@@ -4,7 +4,7 @@ import { schicke, type Aufraeumen, type ArbeitKarte, type Dok, type Karte, type 
 import { useApp } from './kontext.ts';
 import { Abschnitt, EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweise, Zeile } from './teile.tsx';
 import { BEGRIFFE, OLAF_KURZ } from './begriffe.ts';
-import { chatFrage, htmlFuerV2, mehrzahl, wann } from './format.ts';
+import { chatFrage, htmlFuerV2, mehrzahl, rel, wann } from './format.ts';
 
 const EMPFEHLUNG: Record<string, string> = { approve: 'Agent: freigeben', 'request-changes': 'Agent: Änderungen nötig', comment: 'Agent: Anmerkungen' };
 
@@ -18,8 +18,8 @@ function gruss(name: string) {
 export function Jetzt() {
   const app = useApp();
   // Erst Zahl und Karten (schnell), dann der Rest — der erste Bildschirm zeigt sofort, was zu tun ist.
-  const oben = useDaten<Pick<Start, 'zahl' | 'jetzt' | 'aufraeumen' | 'ich' | 'admin' | 'rolle'>>('/api/v2/start?teil=oben');
-  const voll = useDaten<Start>('/api/v2/start');
+  const oben = useDaten<Pick<Start, 'zahl' | 'jetzt' | 'aufraeumen' | 'ich' | 'admin' | 'rolle'>>('api/v2/start?teil=oben');
+  const voll = useDaten<Start>('api/v2/start');
   const k = voll.d ?? oben.d;
   useEffect(() => { if (k) app.zahl(k.zahl); }, [k]);
   if (oben.fehler && !voll.d) return <Fehler text={oben.fehler} nochmal={oben.neu} />;
@@ -30,17 +30,17 @@ export function Jetzt() {
       <h1>{gruss(k.ich)}</h1>
       {k.rolle === 'reviewer' && (
         <div className="willkommen">
-          <p><b>Du prüfst Code.</b> Gleich darunter steht, was eine Antwort von dir braucht; danach die PRs, bei denen du dran bist — ein Klick zeigt den Stand und was der Prüf-Agent dazu sagt, ohne GitHub. <a href="/v2/begriffe">Begriffe in Klartext</a></p>
+          <p><b>Du prüfst Code.</b> Gleich darunter steht, was eine Antwort von dir braucht; danach die PRs, bei denen du dran bist — ein Klick zeigt den Stand und was der Prüf-Agent dazu sagt, ohne GitHub. <a href="v2/begriffe">Begriffe in Klartext</a></p>
         </div>
       )}
       {!k.admin && k.rolle !== 'reviewer' && (
         <div className="willkommen">
           <p><b>Neu hier?</b> {OLAF_KURZ}</p>
-          <p>In der Werkbank arbeiten Agenten (KI-Assistenten) an Aufträgen und fragen, wenn sie etwas nicht selbst entscheiden dürfen. Was an dich geht, steht gleich darunter; Berichte und Notizen findest du unter „Dokumente“. <a href="/v2/begriffe">Begriffe in Klartext</a></p>
+          <p>In der Werkbank arbeiten Agenten (KI-Assistenten) an Aufträgen und fragen, wenn sie etwas nicht selbst entscheiden dürfen. Was an dich geht, steht gleich darunter; Berichte und Notizen findest du unter „Dokumente“. <a href="v2/begriffe">Begriffe in Klartext</a></p>
         </div>
       )}
       <Abschnitt id="a-jetzt" titel="Was du jetzt tun musst" erklaerung="Die wichtigsten Dinge, die ohne deine Antwort nicht weitergehen — höchstens fünf, wichtigste zuerst: zuerst Entscheidungen, die einen Agenten anhalten, darunter Freigaben. Die Zahl oben rechts zählt alles, was auf dich wartet; unter „Entscheidungen“ steht, woraus sie sich zusammensetzt."
-        fuss={k.zahl > k.jetzt.length + k.aufraeumen.length ? <a href="/v2/entscheidungen">Alles ansehen, was auf dich wartet →</a> : null}>
+        fuss={k.zahl > k.jetzt.length + k.aufraeumen.length ? <a href="v2/entscheidungen">Alles ansehen, was auf dich wartet →</a> : null}>
         {k.jetzt.length > 0 && <p className="klein gedimmt oben-hinweis">Wichtigste zuerst — die oberste hält am meisten Arbeit an.</p>}
         {k.jetzt.length > 0 && <div className="karten">{k.jetzt.map((x) => <EntscheidungKarte key={x.id} k={x} beantwortet={() => app.zahl(null)} />)}</div>}
         {k.aufraeumen.length > 0 && <AufraeumenListe l={k.aufraeumen} />}
@@ -52,14 +52,14 @@ export function Jetzt() {
   // S13: Reihenfolge je Rolle — Team (Lisa) liest zuerst Dokumente, Reviewer (Christoph) und Leitung sehen zuerst PRs.
   const prsAbschnitt = (
       <Abschnitt id="a-prs" titel="PRs, die auf dich warten (die neuesten)" erklaerung="Code-Vorschläge auf GitHub (Pull Requests), bei denen du gerade dran bist — zum Prüfen, Freigeben oder Nachbessern. Entwürfe zählen nicht mit. Unter „PRs“ siehst du alle und kannst auf jede andere Person umschalten."
-        fuss={<a href="/v2/prs">Alle PRs →</a>}>
+        fuss={<a href="v2/prs">Alle PRs →</a>}>
         {!d.prFrei ? <p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p>
           : d.prs === null ? <p className="leer">Die PR-Liste ist gerade nicht erreichbar.</p>
           : d.prs.length ? <ul className="liste">{d.prs.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul> : <p className="leer">Kein PR wartet auf dich.</p>}
       </Abschnitt>
   );
   const dokAbschnitt = (
-      <Abschnitt id="a-dok" titel="Neue Dokumente" erklaerung="Die zuletzt geänderten Berichte und Notizen. Alles Lesbare findest du unter „Dokumente“ — mit Suche." fuss={<a href="/v2/dokumente">Alle Dokumente →</a>}>
+      <Abschnitt id="a-dok" titel="Neue Dokumente" erklaerung="Die zuletzt geänderten Berichte und Notizen. Alles Lesbare findest du unter „Dokumente“ — mit Suche." fuss={<a href="v2/dokumente">Alle Dokumente →</a>}>
         {d.dokumente.length ? <ul className="liste">{d.dokumente.map((x) => <DokZeile key={x.url} x={x} />)}</ul> : <p className="leer">Keine neuen Dokumente.</p>}
       </Abschnitt>
   );
@@ -70,18 +70,18 @@ export function Jetzt() {
       <nav className="sprung" aria-label="Weiter unten">{d.admin && <a href="#a-laeuft">Läuft</a>}{d.admin && <a href="#a-erledigt">Heute erledigt</a>}{d.rolle === 'team' ? <><a href="#a-dok">Dokumente</a><a href="#a-prs">PRs</a></> : <><a href="#a-prs">PRs</a><a href="#a-dok">Dokumente</a></>}</nav>
       {d.admin && (
         <Abschnitt id="a-laeuft" titel="Läuft gerade" erklaerung="Unter-Chats, an denen ein Agent gerade arbeitet — mit voraussichtlichem Ende. Du musst hier nichts tun."
-          fuss={<a href="/v2/arbeit">Alle Unter-Chats →</a>}>
-          {d.laeuft.length ? <ul className="liste">{d.laeuft.slice(0, 3).map((z) => <Zeile key={z.id} titel={z.titel} url={`/v2/arbeit/${z.id}`} satz={z.satz} />)}</ul> : <p className="leer">Gerade läuft nichts.</p>}
+          fuss={<a href="v2/arbeit">Alle Unter-Chats →</a>}>
+          {d.laeuft.length ? <ul className="liste">{d.laeuft.slice(0, 3).map((z) => <Zeile key={z.id} titel={z.titel} url={`v2/arbeit/${z.id}`} satz={z.satz} />)}</ul> : <p className="leer">Gerade läuft nichts.</p>}
         </Abschnitt>
       )}
       {d.admin && (
         <Abschnitt id="a-erledigt" titel="Heute erledigt" erklaerung="Was heute fertig geworden ist, mit der Uhrzeit — getrennt: was du schon abgenommen hast, und was ein Agent fertig gemacht hat, dessen Bericht du noch nicht gelesen hast. Was noch eine Antwort von dir braucht, steht oben, nicht hier.">
           {!abgenommen.length && !zumLesen.length && <p className="leer">Heute ist noch nichts fertig geworden.</p>}
           {abgenommen.length > 0 && <><p className="gruppe-titel">Von dir abgenommen</p>
-            <ul className="liste">{abgenommen.slice(0, 3).map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `/v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'abgenommen', ton: 'gruen' }} links={e.links.slice(1)} />)}</ul></>}
+            <ul className="liste">{abgenommen.slice(0, 3).map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'abgenommen', ton: 'gruen' }} links={e.links.slice(1)} />)}</ul></>}
           {zumLesen.length > 0 && <><p className="gruppe-titel">Fertig, Bericht noch nicht gelesen</p>
-            <ul className="liste">{zumLesen.slice(0, 3).map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `/v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'zum Lesen' }} />)}</ul>
-            {zumLesen.length > 3 && <p className="abschnitt-fuss"><a href="/v2/arbeit#fertig">Alle fertigen unter Arbeit →</a></p>}</>}
+            <ul className="liste">{zumLesen.slice(0, 3).map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'zum Lesen' }} />)}</ul>
+            {zumLesen.length > 3 && <p className="abschnitt-fuss"><a href="v2/arbeit#fertig">Alle fertigen unter Arbeit →</a></p>}</>}
         </Abschnitt>
       )}
       {d.rolle === 'team' ? <>{dokAbschnitt}{prsAbschnitt}</> : <>{prsAbschnitt}{dokAbschnitt}</>}
@@ -94,7 +94,7 @@ const AufraeumenListe = ({ l }: { l: Aufraeumen[] }) => (
 );
 const DokZeile = ({ x }: { x: Dok }) => <Zeile titel={x.titel} url={x.url} satz={x.worum} marke={{ text: x.art === 'bericht' ? 'Bericht' : 'Notiz' }} rechts={wann(x.at)} />;
 const PrZeileView = ({ p }: { p: PrZeile }) => (
-  <Zeile titel={`${p.pr} · ${p.titel}`} url={`/v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}
+  <Zeile titel={`${p.pr} · ${p.titel}`} url={`v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}
     marke={p.entwurf ? { text: 'Entwurf' } : p.review?.empfehlung ? { text: EMPFEHLUNG[p.review.empfehlung] ?? p.review.empfehlung, ton: p.review.empfehlung === 'approve' ? 'gruen' : '' } : undefined} rechts={wann(p.geaendert)} />
 );
 
@@ -102,7 +102,7 @@ const PrZeileView = ({ p }: { p: PrZeile }) => (
 
 export function Entscheidungen() {
   const app = useApp();
-  const { d, fehler, neu } = useDaten<{ zahl: number; oben: Karte[]; rest: Karte[]; aufraeumen: Aufraeumen[]; geschlossen?: Geschlossen[] }>('/api/v2/entscheidungen');
+  const { d, fehler, neu } = useDaten<{ zahl: number; oben: Karte[]; rest: Karte[]; aufraeumen: Aufraeumen[]; geschlossen?: Geschlossen[] }>('api/v2/entscheidungen');
   useEffect(() => { if (d) app.zahl(d.zahl); }, [d]);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
@@ -150,7 +150,7 @@ function ThemaGruppe({ thema, karten, fertig }: { thema: string; karten: Karte[]
   const alle = async () => {
     setLaeuft(true); setMeldung(null);
     try {
-      const r = await schicke<{ ok: number; fehler: string[]; uebersprungen: number }>('/api/v2/alle-empfohlen', { ids: passend.map((k) => k.id) });
+      const r = await schicke<{ ok: number; fehler: string[]; uebersprungen: number }>('api/v2/alle-empfohlen', { ids: passend.map((k) => k.id) });
       setMeldung(`✓ ${mehrzahl(r.ok, 'Antwort', 'Antworten')} wie empfohlen verschickt.${r.uebersprungen ? ` ${r.uebersprungen} übersprungen — die beantwortest du einzeln.` : ''}${r.fehler.length ? ` Nicht geklappt: ${r.fehler.join('; ')}` : ''}`);
       setFrage(false); fertig();
     } catch (x: any) { setMeldung(x.message); } finally { setLaeuft(false); }
@@ -183,7 +183,7 @@ function GeschlossenListe({ l, geoeffnet }: { l: Geschlossen[]; geoeffnet: () =>
   const [fehler, setFehler] = useState<string | null>(null);
   const oeffnen = async (id: string) => {
     setLaeuft(id); setFehler(null);
-    try { await schicke('/api/v2/wieder-oeffnen', { id }); geoeffnet(); } catch (x: any) { setFehler(x.message); } finally { setLaeuft(null); }
+    try { await schicke('api/v2/wieder-oeffnen', { id }); geoeffnet(); } catch (x: any) { setFehler(x.message); } finally { setLaeuft(null); }
   };
   return (
     <>
@@ -201,16 +201,16 @@ function GeschlossenListe({ l, geoeffnet }: { l: Geschlossen[]; geoeffnet: () =>
 // ---------- Arbeit ----------
 
 export function Arbeit() {
-  const { d, fehler, neu } = useDaten<{ gruppen: Record<'wartet' | 'laeuft' | 'fertig', ArbeitKarte[]>; nurAdmin?: boolean }>('/api/v2/arbeit');
+  const { d, fehler, neu } = useDaten<{ gruppen: Record<'wartet' | 'laeuft' | 'fertig', ArbeitKarte[]>; nurAdmin?: boolean }>('api/v2/arbeit');
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   if (d.nurAdmin) return (
     <div className="seite"><h1>Arbeit</h1>
-      <div className="willkommen"><p><b>Hier stehen deine Unter-Chats.</b> Ein Unter-Chat ist ein Auftrag, an dem ein Agent selbstständig arbeitet und am Ende einen Bericht schreibt. Du hast gerade keine — Knut verteilt die Aufträge.</p><p className="klein"><a href="/v2/begriffe">Begriffe in Klartext</a></p></div>
+      <div className="willkommen"><p><b>Hier stehen deine Unter-Chats.</b> Ein Unter-Chat ist ein Auftrag, an dem ein Agent selbstständig arbeitet und am Ende einen Bericht schreibt. Du hast gerade keine — Knut verteilt die Aufträge.</p><p className="klein"><a href="v2/begriffe">Begriffe in Klartext</a></p></div>
     </div>
   );
   const g = d.gruppen;
-  const liste = (l: ArbeitKarte[], leer: string) => (l.length ? <ul className="liste">{l.map((z) => <Zeile key={z.id} titel={z.titel} url={`/v2/arbeit/${z.id}`} satz={z.satz} rechts={wann(z.zuletzt)} links={z.links} />)}</ul> : <p className="leer">{leer}</p>);
+  const liste = (l: ArbeitKarte[], leer: string) => (l.length ? <ul className="liste">{l.map((z) => <Zeile key={z.id} titel={z.titel} url={`v2/arbeit/${z.id}`} satz={z.satz} rechts={wann(z.zuletzt)} links={z.links} />)}</ul> : <p className="leer">{leer}</p>);
   return (
     <div className="seite">
       <h1>Arbeit</h1>
@@ -224,7 +224,7 @@ export function Arbeit() {
 
 export function ArbeitDetail({ id }: { id: string }) {
   const app = useApp();
-  const { d, fehler, neu } = useDaten<{ titel: string; satz: string; gruppe: string; zuletzt: string | null; stand: string; fragen: Karte[]; nachrichten: { id: string; rolle: string; text: string; at: string }[]; links: Link[] }>(`/api/v2/arbeit/${id}`);
+  const { d, fehler, neu } = useDaten<{ titel: string; satz: string; gruppe: string; zuletzt: string | null; stand: string; fragen: Karte[]; nachrichten: { id: string; rolle: string; text: string; at: string }[]; links: Link[] }>(`api/v2/arbeit/${id}`);
   const [alle, setAlle] = useState(false);
   const [verlauf, setVerlauf] = useState(false);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
@@ -232,7 +232,7 @@ export function ArbeitDetail({ id }: { id: string }) {
   const msgs = alle ? d.nachrichten : d.nachrichten.slice(-3);
   return (
     <div className="seite">
-      <p className="zurueck"><a href="/v2/arbeit">← Arbeit</a></p>
+      <p className="zurueck"><a href="v2/arbeit">← Arbeit</a></p>
       <h1>{d.titel}</h1>
       <p className={`zustand ${d.gruppe}`}>{d.satz}</p>
       <div className="aktionen-zeile"><Verweise links={d.links} /><button type="button" className="knopf leise klein" onClick={() => app.chat(chatFrage(`Unter-Chat „${d.titel}“`, d.satz))}>Im Chat nachfragen</button></div>
@@ -255,12 +255,12 @@ export function ArbeitDetail({ id }: { id: string }) {
 // ---------- PRs ----------
 
 export function Prs({ wer }: { wer: string | null }) {
-  const pfad = `/api/v2/prs${wer ? `?wer=${encodeURIComponent(wer)}` : ''}`;
+  const pfad = `api/v2/prs${wer ? `?wer=${encodeURIComponent(wer)}` : ''}`;
   const [such, setSuch] = useState('');
   const [mitEntwurf, setMitEntwurf] = useState(false);
   const { d, fehler, neu } = useDaten<{ gesperrt?: boolean; wer: string; ich: string; personen: { name: string; anzahl: number }[]; zeilen: PrZeile[]; stand: string | null }>(pfad);
   // Suche geht immer über alle offenen PRs (Persona Christoph R2: #268 stand nicht in „mich“).
-  const alle = useDaten<{ zeilen: PrZeile[] }>(such.trim() && wer !== 'alle' ? '/api/v2/prs?wer=alle' : null);
+  const alle = useDaten<{ zeilen: PrZeile[] }>(such.trim() && wer !== 'alle' ? 'api/v2/prs?wer=alle' : null);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   if (d.gesperrt) return <div className="seite"><h1>PRs</h1><p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p></div>;
@@ -270,7 +270,7 @@ export function Prs({ wer }: { wer: string | null }) {
   const passt = (p: PrZeile) => `${p.pr} ${p.titel}`.toLowerCase().includes(suche.replace(/^#/, ''));
   const zeilen = suche ? basis.filter(passt) : basis;
   const sonst = suche ? (alle.d?.zeilen ?? []).filter((p) => passt(p) && !zeilen.some((z) => z.pr === p.pr)) : [];
-  const wahl = (n: string) => { const url = n === d.ich ? '/v2/prs' : `/v2/prs?wer=${encodeURIComponent(n)}`; history.pushState(null, '', url); window.dispatchEvent(new PopStateEvent('popstate')); };
+  const wahl = (n: string) => { const url = n === d.ich ? 'v2/prs' : `v2/prs?wer=${encodeURIComponent(n)}`; history.pushState(null, '', url); window.dispatchEvent(new PopStateEvent('popstate')); };
   return (
     <div className="seite">
       <h1>PRs</h1>
@@ -295,18 +295,18 @@ export function Prs({ wer }: { wer: string | null }) {
 export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
   const app = useApp();
   const { d, fehler, neu } = useDaten<{ pr: string; titel: string; url: string | null; autor: string | null; offen: boolean; merge: boolean; wartetAuf: string[]; warum: string; entscheidung: string | null; offeneThreads: number; reviews: { wer: string; zustand: string; at: string }[];
-    agent: { status: string; empfehlung: string | null; text: string | null; gepostet: string | null; entwurf: boolean; at: string; bericht: string | null } | null }>(`/api/v2/prs/${encodeURIComponent(repo)}/${nummer}`);
+    agent: { status: string; empfehlung: string | null; text: string | null; gepostet: string | null; entwurf: boolean; at: string; bericht: string | null } | null }>(`api/v2/prs/${encodeURIComponent(repo)}/${nummer}`);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   const ZUSTAND: Record<string, string> = { APPROVED: 'freigegeben', CHANGES_REQUESTED: 'Änderungen verlangt', COMMENTED: 'kommentiert', DISMISSED: 'zurückgezogen' };
   return (
     <div className="seite">
-      <p className="zurueck"><a href="/v2/prs">← PRs</a></p>
+      <p className="zurueck"><a href="v2/prs">← PRs</a></p>
       <h1>{d.pr} · {d.titel}</h1>
       <p className="zustand">{!d.offen ? 'Nicht mehr offen — gemergt oder geschlossen.' : d.merge ? 'Freigegeben — wartet auf den Merge (macht ein Mensch auf GitHub).' : d.wartetAuf.length ? `Wartet auf ${d.wartetAuf.join(', ')} — ${d.warum}.` : `${d.warum || 'Wartet auf niemanden'}.`}</p>
       <div className="aktionen-zeile">
         {d.url && <a className="verweis" href={d.url} target="_blank" rel="noopener noreferrer">Auf GitHub öffnen ↗</a>}
-        {d.agent?.bericht && <a className="verweis" href={d.agent.bericht}>Bericht des Reviews</a>}
+        {d.agent?.bericht && <a className="verweis" href={rel(d.agent.bericht)}>Bericht des Reviews</a>}
         <button type="button" className="knopf leise klein" onClick={() => app.chat(chatFrage(`PR ${d.pr}`, d.titel))}>Im Chat nachfragen</button>
       </div>
       <Abschnitt id="p-menschen" titel="Reviews von Menschen" erklaerung="Wer den PR auf GitHub geprüft hat und mit welchem Ergebnis.">
@@ -333,8 +333,8 @@ export function Dokumente({ q: q0 }: { q: string }) {
   const [q, setQ] = useState(q0);
   const [suche, setSuche] = useState(q0);
   useEffect(() => { const t = setTimeout(() => setSuche(q.trim()), 300); return () => clearTimeout(t); }, [q]);
-  useEffect(() => { history.replaceState(null, '', suche ? `/v2/dokumente?q=${encodeURIComponent(suche)}` : '/v2/dokumente'); }, [suche]);
-  const { d, fehler, neu } = useDaten<{ q: string; frei?: { notizen: boolean; berichte: boolean }; treffer: Dok[] }>(`/api/v2/dokumente${suche ? `?q=${encodeURIComponent(suche)}` : ''}`);
+  useEffect(() => { history.replaceState(null, '', suche ? `v2/dokumente?q=${encodeURIComponent(suche)}` : 'v2/dokumente'); }, [suche]);
+  const { d, fehler, neu } = useDaten<{ q: string; frei?: { notizen: boolean; berichte: boolean }; treffer: Dok[] }>(`api/v2/dokumente${suche ? `?q=${encodeURIComponent(suche)}` : ''}`);
   return (
     <div className="seite">
       <h1>Dokumente</h1>
@@ -355,7 +355,7 @@ export function Dokumente({ q: q0 }: { q: string }) {
 
 export function Dokument({ vault, paket, datei }: { vault: string | null; paket: string | null; datei: string | null }) {
   const app = useApp();
-  const pfad = vault ? `/api/vault/note?path=${encodeURIComponent(vault)}` : paket ? `/api/files/agenten/${encodeURIComponent(paket)}/${(datei ?? 'bericht.md').split('/').map(encodeURIComponent).join('/')}?vorschau=1` : null;
+  const pfad = vault ? `api/vault/note?path=${encodeURIComponent(vault)}` : paket ? `api/files/agenten/${encodeURIComponent(paket)}/${(datei ?? 'bericht.md').split('/').map(encodeURIComponent).join('/')}?vorschau=1` : null;
   const { d, fehler, neu } = useDaten<{ title?: string; name?: string; html: string | null; text?: string | null; mtime?: number; backlinks?: { path: string; title: string }[] }>(pfad);
   if (!pfad) return <Fehler text="Kein Dokument angegeben." />;
   if (fehler) return <Fehler text={fehler.includes('Admins') ? 'Dieses Dokument kann nur Knut öffnen.' : fehler} nochmal={neu} />;
@@ -363,7 +363,7 @@ export function Dokument({ vault, paket, datei }: { vault: string | null; paket:
   const titel = d.title ?? (paket ? `Bericht ${paket.split('-')[0]} · ${paket.replace(/^\d+-/, '').replace(/-/g, ' ')}` : d.name ?? '');
   return (
     <div className="seite dokument">
-      <p className="zurueck"><a href="/v2/dokumente">← Dokumente</a></p>
+      <p className="zurueck"><a href="v2/dokumente">← Dokumente</a></p>
       <h1>{titel}</h1>
       <div className="aktionen-zeile">
         {d.mtime ? <span className="klein gedimmt">geändert {wann(new Date(d.mtime).toISOString())}</span> : null}
@@ -372,7 +372,7 @@ export function Dokument({ vault, paket, datei }: { vault: string | null; paket:
       <article className="kasten md" dangerouslySetInnerHTML={{ __html: htmlFuerV2(d.html ?? `<pre>${(d.text ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!))}</pre>`) }} />
       {d.backlinks && d.backlinks.length > 0 && (
         <Abschnitt id="d-verweise" titel="Wird erwähnt in" erklaerung="Andere Notizen, die auf diese verweisen.">
-          <ul className="liste">{d.backlinks.slice(0, 12).map((b) => <Zeile key={b.path} titel={b.title} url={`/v2/dokument?vault=${encodeURIComponent(b.path)}`} />)}</ul>
+          <ul className="liste">{d.backlinks.slice(0, 12).map((b) => <Zeile key={b.path} titel={b.title} url={`v2/dokument?vault=${encodeURIComponent(b.path)}`} />)}</ul>
         </Abschnitt>
       )}
     </div>
@@ -400,7 +400,7 @@ export function Anmelden({ fertig }: { fertig: () => void | Promise<void> }) {
   const [laeuft, setLaeuft] = useState(false);
   async function los(e: React.FormEvent) {
     e.preventDefault(); setLaeuft(true); setFehler(null);
-    try { await schicke('/api/login', { email, password: pw }); await fertig(); } catch (x: any) { setFehler(x.status === 401 || x.status === 400 ? 'E-Mail oder Passwort stimmt nicht.' : x.message); } finally { setLaeuft(false); }
+    try { await schicke('api/login', { email, password: pw }); await fertig(); } catch (x: any) { setFehler(x.status === 401 || x.status === 400 ? 'E-Mail oder Passwort stimmt nicht.' : x.message); } finally { setLaeuft(false); }
   }
   return (
     <div className="anmelden">

@@ -51,6 +51,7 @@ test('Importregel (B6): nichts aus web/server, claude-bridge oder web/src', () =
 
 test('Freigaben (B4): die App ruft keine Freigabe-, Push- oder Merge-Endpunkte auf; Antworten nur über /api/v2/antwort', () => {
   const alle = quellen.map((p) => readFileSync(p, 'utf8')).join('\n');
-  for (const re of [/\/api\/[\w/-]*freigabe/i, /\/api\/[\w/-]*push/i, /\/api\/[\w/-]*merge/i, /\/api\/inbox\/[^'"`]*\/antwort/, /\/api\/entscheidungen\/fragen\/(antwort|alle)/]) assert.doesNotMatch(alle, re, String(re));
-  assert.match(alle, /\/api\/v2\/antwort/);
+  // S16: Pfade sind relativ ('api/…') — die Muster erkennen beide Schreibweisen.
+  for (const re of [/\bapi\/[\w/-]*freigabe/i, /\bapi\/[\w/-]*push/i, /\bapi\/[\w/-]*merge/i, /\bapi\/inbox\/[^'"`]*\/antwort/, /\bapi\/entscheidungen\/fragen\/(antwort|alle)/]) assert.doesNotMatch(alle, re, String(re));
+  assert.match(alle, /\bapi\/v2\/antwort/);
 });
