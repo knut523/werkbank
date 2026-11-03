@@ -4,6 +4,7 @@ import { schicke, type Aufraeumen, type ArbeitKarte, type Dok, type Karte, type 
 import { useApp } from './kontext.ts';
 import { Abschnitt, EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweise, Zeile } from './teile.tsx';
 import { BEGRIFFE, OLAF_KURZ } from './begriffe.ts';
+import { MEHR } from './mehr.ts';
 import { chatFrage, htmlFuerV2, mehrzahl, rel, wann } from './format.ts';
 
 const EMPFEHLUNG: Record<string, string> = { approve: 'Agent: freigeben', 'request-changes': 'Agent: Änderungen nötig', comment: 'Agent: Anmerkungen' };
@@ -82,6 +83,7 @@ export function Jetzt() {
           {zumLesen.length > 0 && <><p className="gruppe-titel">Fertig, Bericht noch nicht gelesen</p>
             <ul className="liste">{zumLesen.slice(0, 3).map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'zum Lesen' }} />)}</ul>
             {zumLesen.length > 3 && <p className="abschnitt-fuss"><a href="v2/arbeit#fertig">Alle fertigen unter Arbeit →</a></p>}</>}
+          <p className="abschnitt-fuss"><a href="v2/erledigt">Andere Tage ansehen →</a></p>
         </Abschnitt>
       )}
       {d.rolle === 'team' ? <>{dokAbschnitt}{prsAbschnitt}</> : <>{prsAbschnitt}{dokAbschnitt}</>}
@@ -418,3 +420,44 @@ export function Anmelden({ fertig }: { fertig: () => void | Promise<void> }) {
   );
 }
 
+
+// ---------- Erledigt an einem Tag (S14) ----------
+
+type ErledigtEintrag = Start['erledigt'][number];
+export function Erledigt({ tag }: { tag: string | null }) {
+  const { d, fehler, neu } = useDaten<{ tag: string; heute: string; erledigt: ErledigtEintrag[]; nurAdmin?: boolean }>(`api/v2/erledigt${tag ? `?tag=${encodeURIComponent(tag)}` : ''}`);
+  if (fehler) return <Fehler text={fehler} nochmal={neu} />;
+  if (!d) return <Laedt />;
+  if (d.nurAdmin) return <div className="seite"><h1>Erledigt</h1><p className="leer">Hier steht, was Agenten in Knuts Unter-Chats fertig gemacht haben — das sieht nur Knut.</p></div>;
+  const waehlen = (t: string) => { history.pushState(null, '', t && t !== d.heute ? `v2/erledigt?tag=${t}` : 'v2/erledigt'); window.dispatchEvent(new PopStateEvent('popstate')); };
+  const abgenommen = d.erledigt.filter((e) => e.stand === 'abgenommen'), zumLesen = d.erledigt.filter((e) => e.stand === 'zum-lesen');
+  const datum = new Date(`${d.tag}T12:00:00`).toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' });
+  return (
+    <div className="seite">
+      <h1>{d.tag === d.heute ? 'Heute erledigt' : `Erledigt am ${datum}`}</h1>
+      <p className="unterzeile"><label htmlFor="erledigt-tag">Tag: </label><input id="erledigt-tag" type="date" value={d.tag} max={d.heute} onChange={(e) => waehlen(e.target.value)} /></p>
+      {!d.erledigt.length && <p className="leer">An diesem Tag ist nichts fertig geworden.</p>}
+      {abgenommen.length > 0 && <Abschnitt id="e-abgenommen" titel="Von dir abgenommen" erklaerung="Unter-Chats, die du an diesem Tag geprüft und abgehakt hast."><ul className="liste">{abgenommen.map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'abgenommen', ton: 'gruen' }} links={e.links.slice(1)} />)}</ul></Abschnitt>}
+      {zumLesen.length > 0 && <Abschnitt id="e-zumlesen" titel="Fertig, Bericht noch nicht gelesen" erklaerung="Ein Agent hat an diesem Tag fertig gemeldet; den Bericht hast du noch nicht abgenommen."><ul className="liste">{zumLesen.map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'zum Lesen' }} links={e.links.slice(1)} />)}</ul></Abschnitt>}
+    </div>
+  );
+}
+
+// ---------- Mehr (S14, C5): alles aus der alten Werkbank hat hier einen Platz ----------
+
+export function Mehr() {
+  const app = useApp();
+  const v2 = MEHR.filter((e) => e.ziel === 'v2'), alt = MEHR.filter((e) => e.ziel === 'alt');
+  return (
+    <div className="seite">
+      <h1>Mehr</h1>
+      <p className="unterzeile">Alles, was die alte Werkbank kann, findest du hier — entweder schon in der neuen Oberfläche oder mit einem Klick in der alten.</p>
+      <Abschnitt id="m-alt" titel="In der alten Werkbank" erklaerung="Diese Seiten gibt es (noch) nur in der alten Werkbank. Ein Klick öffnet sie in einem neuen Tab; die Anmeldung gilt dort auch.">
+        <ul className="liste">{alt.map((e) => <Zeile key={e.alt} titel={e.titel} url={app.alt ? `${app.alt}/${e.url}` : '#'} satz={e.satz} />)}</ul>
+      </Abschnitt>
+      <Abschnitt id="m-neu" titel="Schon in der neuen Oberfläche" erklaerung="Was du aus der alten Werkbank kennst und hier schon findest.">
+        <ul className="liste">{v2.map((e) => <Zeile key={e.alt} titel={e.titel} url={e.url} satz={e.satz} />)}</ul>
+      </Abschnitt>
+    </div>
+  );
+}

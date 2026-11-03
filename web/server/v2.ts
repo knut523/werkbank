@@ -163,6 +163,19 @@ export function registerV2(on: On, d: V2Deps) {
     send(d, res, { ok: true, ziel: r?.ziel ? String(r.ziel).replace(/Unter-Chat Unter-Chat/g, 'Unter-Chat') : null, spaeter: !!r?.spaeter });
   });
 
+  // --- Erledigt an einem Tag (S14, Abnahme „Heute erledigt mit Datumsauswahl“): wie „Heute erledigt“ auf Jetzt, für jeden Tag ---
+  on('GET', /^\/api\/v2\/erledigt$/, async (req, res, _m, url) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) return send(d, res, { nurAdmin: true, erledigt: [] });
+    const tag = url.searchParams.get('tag') || d.wienDatum();
+    const echt = /^\d{4}-\d{2}-\d{2}$/.test(tag) && new Date(`${tag}T12:00:00Z`).toISOString().slice(0, 10) === tag;   // auch 31.02. abweisen (Pass C)
+    if (!echt) throw err(400, 'Datum bitte als JJJJ-MM-TT.');
+    if (tag > d.wienDatum()) throw err(400, 'Für einen Tag in der Zukunft gibt es noch nichts Erledigtes.');
+    const [liste, er] = await Promise.all([d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })), d.erledigtDaten(u, tag)]);
+    const zm = new Map(liste.zeilen.map((z: any) => [String(z.id), z]));
+    send(d, res, { tag, heute: d.wienDatum(), erledigt: erledigtSicht(er.straenge, zm, new Set(er.straenge.map((s: any) => String(s.id)).filter((id: string) => !zm.has(id)))) });
+  });
+
   // --- Arbeit: Unter-Chats in drei Gruppen, Zustand in einem Satz (nur Admin — Unter-Chats gehören Knut) ---
   on('GET', /^\/api\/v2\/arbeit$/, async (req, res) => {
     const u = await d.needUser(req);

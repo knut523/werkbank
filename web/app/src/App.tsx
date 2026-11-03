@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { hole } from './api.ts';
 import { Kontext, type AppKontext } from './kontext.ts';
 import { ChatLeiste } from './chat.tsx';
-import { Anmelden, Arbeit, ArbeitDetail, Begriffe, Dokument, Dokumente, Entscheidungen, Jetzt, PrDetail, Prs } from './seiten.tsx';
+import { Anmelden, Arbeit, ArbeitDetail, Begriffe, Dokument, Dokumente, Entscheidungen, Erledigt, Jetzt, Mehr, PrDetail, Prs } from './seiten.tsx';
 import { Laedt, vergessen, vorab } from './teile.tsx';
 import { istIntern, logisch, rel } from './format.ts';
 
@@ -14,6 +14,7 @@ const BEREICHE = [
   { url: 'v2/arbeit', label: 'Arbeit', ico: '⚙', passt: (p: string) => p.startsWith('v2/arbeit') },
   { url: 'v2/prs', label: 'PRs', ico: '⇄', passt: (p: string) => p.startsWith('v2/prs') },
   { url: 'v2/dokumente', label: 'Dokumente', ico: '▤', passt: (p: string) => p.startsWith('v2/dokument') },
+  { url: 'v2/mehr', label: 'Mehr', ico: '⋯', passt: (p: string) => p.startsWith('v2/mehr') || p.startsWith('v2/erledigt') },
 ];
 
 function useAdresse() {
@@ -51,6 +52,8 @@ function Seite({ pfad, such }: { pfad: string; such: string }) {
   if (pfad === 'v2/dokument') return <Dokument key={such} vault={q.get('vault')} paket={q.get('paket')} datei={q.get('datei')} />;
   if (pfad.startsWith('v2/dokumente')) return <Dokumente key={q.get('q') ?? ''} q={q.get('q') ?? ''} />;
   if (pfad.startsWith('v2/begriffe')) return <Begriffe />;
+  if (pfad.startsWith('v2/mehr')) return <Mehr />;
+  if (pfad.startsWith('v2/erledigt')) return <Erledigt key={such} tag={q.get('tag')} />;
   return <div className="seite"><h1>Seite nicht gefunden</h1><p><a href="v2/">Zur Startseite</a></p></div>;
 }
 

@@ -55,3 +55,17 @@ test('Freigaben (B4): die App ruft keine Freigabe-, Push- oder Merge-Endpunkte a
   for (const re of [/\bapi\/[\w/-]*freigabe/i, /\bapi\/[\w/-]*push/i, /\bapi\/[\w/-]*merge/i, /\bapi\/inbox\/[^'"`]*\/antwort/, /\bapi\/entscheidungen\/fragen\/(antwort|alle)/]) assert.doesNotMatch(alle, re, String(re));
   assert.match(alle, /\bapi\/v2\/antwort/);
 });
+
+test('C5 (S14): jeder Eintrag der alten Navigation hat unter „Mehr“ einen Platz — in 2.0 gebaut oder als Link in die alte Werkbank', async () => {
+  const { MEHR } = await import('../src/mehr.ts');
+  const alt = readFileSync(join(SRC, '..', '..', 'src', 'App.tsx'), 'utf8');
+  const hrefs = [...new Set([...alt.matchAll(/href: '(#\/[^']*)'/g)].map((m) => m[1]))];
+  assert.ok(hrefs.length >= 15, `alte Navigation gefunden (${hrefs.length})`);
+  const da = new Set(MEHR.map((e) => e.alt));
+  assert.deepEqual(hrefs.filter((h) => !da.has(h)), [], 'fehlt unter „Mehr“');
+  for (const e of MEHR) {
+    if (e.ziel === 'v2') assert.match(e.url, /^v2\//, e.titel);
+    else assert.match(e.url, /^[a-z]+$/, e.titel);
+    assert.ok(e.satz.length > 15, `Klartext-Satz für ${e.titel}`);
+  }
+});

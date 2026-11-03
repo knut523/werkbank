@@ -17,9 +17,10 @@ const antworten: any[] = [];
 let gesperrt = false;
 const geoeffnet: string[] = [];
 const sammel: string[] = [];
+const tage: string[] = [];
 const deps: V2Deps = {
   needUser: async (req: any) => req.u, body: async (req: any) => req.b, send: (res: any, status, b) => { res.status = status; res.b = b; },
-  inboxFuer: async () => ({ eintraege }), unterchatListe: async () => ({ zeilen: [] }), erledigtDaten: async () => ({ straenge: [] }),
+  inboxFuer: async () => ({ eintraege }), unterchatListe: async () => ({ zeilen: [] }), erledigtDaten: async (_u, tag) => { tage.push(tag); return { straenge: tag === '2026-11-02' ? [{ id: 'abcd1234', titel: 'Netzentgelte', at: '2026-11-02T15:00:00Z', link: null, dokumente: [] }] : [] }; },
   fragenAntwort: async (_u, b) => { antworten.push(b); return { ok: true, ziel: 'den Unter-Chat „Rechner“' }; },
   strang: async () => null, hauptchat: async () => null, laeuftChat: async () => false,
   livePrs: async () => ({ map: new Map([['a#1', { pr: 'a#1', repo: 'a', number: 1, title: 'Eins', url: 'https://github.com/o/a/pull/1', turn: { who: 'Lisa', role: 'reviewer', why: 'Review angefragt' }, requested: [] }]]) }),
@@ -130,4 +131,15 @@ test('S15: „Ja, so“ mit Notiz — der Text geht mit der Ja-Antwort an die be
   const r = await rufe('POST', '/api/v2/antwort', ADMIN, { id: 'q-aaaaaa', antwort: 'ja', text: 'aber erst nach dem Release' });
   assert.equal(r.status, 200);
   assert.deepEqual(antworten.slice(n), [{ id: 'q-aaaaaa', antwort: 'ja', text: 'aber erst nach dem Release' }]);
+});
+
+test('S14: Erledigt an einem gewählten Tag (nur Admin, Datum geprüft); ohne Angabe heute', async () => {
+  const r = await rufe('GET', '/api/v2/erledigt?tag=2026-11-02', ADMIN);
+  assert.equal(r.status, 200); assert.equal(r.b.tag, '2026-11-02');
+  assert.deepEqual(r.b.erledigt.map((e: any) => e.titel), ['Netzentgelte']);
+  assert.equal((await rufe('GET', '/api/v2/erledigt', ADMIN)).b.tag, '2026-11-03', 'Vorgabe heute (Wien)');
+  assert.equal((await rufe('GET', '/api/v2/erledigt?tag=2026-13-40x', ADMIN)).status, 400);
+  for (const t of ['2026-02-31', '2026-04-31', '2026-11-04']) assert.equal((await rufe('GET', `/api/v2/erledigt?tag=${t}`, ADMIN)).status, 400, t);
+  assert.equal((await rufe('GET', '/api/v2/erledigt?tag=2026-11-02', LISA)).b.nurAdmin, true);
+  assert.ok(tage.includes('2026-11-02'));
 });
