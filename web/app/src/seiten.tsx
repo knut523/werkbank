@@ -26,12 +26,22 @@ export function Jetzt() {
   if (oben.fehler && !voll.d) return <Fehler text={oben.fehler} nochmal={oben.neu} />;
   if (!k) return <Laedt />;
   const d = voll.d;
+  const jetztAbschnitt = (
+      <Abschnitt id="a-jetzt" titel="Was du jetzt tun musst" erklaerung="Die wichtigsten Dinge, die ohne deine Antwort nicht weitergehen — höchstens fünf, wichtigste zuerst: zuerst Entscheidungen, die einen Agenten anhalten, darunter Freigaben. Die Zahl oben rechts zählt alles, was auf dich wartet; unter „Entscheidungen“ steht, woraus sie sich zusammensetzt."
+        fuss={k.zahl > k.jetzt.length + k.aufraeumen.length ? <a href="v2/entscheidungen">Alles ansehen, was auf dich wartet →</a> : null}>
+        {k.jetzt.length > 0 && <p className="klein gedimmt oben-hinweis">Wichtigste zuerst — die oberste hält am meisten Arbeit an.</p>}
+        {k.jetzt.length > 0 && <div className="karten">{k.jetzt.map((x) => <EntscheidungKarte key={x.id} k={x} beantwortet={() => app.zahl(null)} />)}</div>}
+        {k.aufraeumen.length > 0 && <AufraeumenListe l={k.aufraeumen} />}
+        {!k.jetzt.length && !k.aufraeumen.length && <p className="leer">Gerade wartet nichts auf dich.</p>}
+      </Abschnitt>
+  );
+  const reviewer = k.rolle === 'reviewer';
   const kopf = (
     <>
       <h1>{gruss(k.ich)}</h1>
       {k.rolle === 'reviewer' && (
         <div className="willkommen">
-          <p><b>Du prüfst Code.</b> Gleich darunter steht, was eine Antwort von dir braucht; danach die PRs, bei denen du dran bist — ein Klick zeigt den Stand und was der Prüf-Agent dazu sagt, ohne GitHub. <a href="v2/begriffe">Begriffe in Klartext</a></p>
+          <p><b>Du prüfst Code.</b> Gleich darunter stehen die PRs, bei denen du dran bist — ein Klick zeigt den Stand und was der Prüf-Agent dazu sagt, ohne GitHub. Darunter, was eine Antwort von dir braucht (nur das zählt die Zahl oben rechts). <a href="v2/begriffe">Begriffe in Klartext</a></p>
         </div>
       )}
       {!k.admin && k.rolle !== 'reviewer' && (
@@ -40,16 +50,10 @@ export function Jetzt() {
           <p>In der Werkbank arbeiten Agenten (KI-Assistenten) an Aufträgen und fragen, wenn sie etwas nicht selbst entscheiden dürfen. Was an dich geht, steht gleich darunter; Berichte und Notizen findest du unter „Dokumente“. <a href="v2/begriffe">Begriffe in Klartext</a></p>
         </div>
       )}
-      <Abschnitt id="a-jetzt" titel="Was du jetzt tun musst" erklaerung="Die wichtigsten Dinge, die ohne deine Antwort nicht weitergehen — höchstens fünf, wichtigste zuerst: zuerst Entscheidungen, die einen Agenten anhalten, darunter Freigaben. Die Zahl oben rechts zählt alles, was auf dich wartet; unter „Entscheidungen“ steht, woraus sie sich zusammensetzt."
-        fuss={k.zahl > k.jetzt.length + k.aufraeumen.length ? <a href="v2/entscheidungen">Alles ansehen, was auf dich wartet →</a> : null}>
-        {k.jetzt.length > 0 && <p className="klein gedimmt oben-hinweis">Wichtigste zuerst — die oberste hält am meisten Arbeit an.</p>}
-        {k.jetzt.length > 0 && <div className="karten">{k.jetzt.map((x) => <EntscheidungKarte key={x.id} k={x} beantwortet={() => app.zahl(null)} />)}</div>}
-        {k.aufraeumen.length > 0 && <AufraeumenListe l={k.aufraeumen} />}
-        {!k.jetzt.length && !k.aufraeumen.length && <p className="leer">Gerade wartet nichts auf dich.</p>}
-      </Abschnitt>
     </>
   );
-  if (!d) return <div className="seite">{kopf}{voll.fehler ? <Fehler text={voll.fehler} nochmal={voll.neu} /> : <Laedt text="Lädt Läuft, Heute erledigt, PRs …" />}</div>;
+  // Runde 3 (Christoph B1): für Reviewer stehen die PRs über „Was du jetzt tun musst“ — dort wartet ihre Arbeit.
+  if (!d) return <div className="seite">{kopf}{reviewer ? <Laedt text="Lädt deine PRs …" /> : jetztAbschnitt}{voll.fehler ? <Fehler text={voll.fehler} nochmal={voll.neu} /> : !reviewer && <Laedt text="Lädt Läuft, Heute erledigt, PRs …" />}</div>;
   // S13: Reihenfolge je Rolle — Team (Lisa) liest zuerst Dokumente, Reviewer (Christoph) und Leitung sehen zuerst PRs.
   const prsAbschnitt = (
       <Abschnitt id="a-prs" titel="PRs, die auf dich warten (die neuesten)" erklaerung="Code-Vorschläge auf GitHub (Pull Requests), bei denen du gerade dran bist — zum Prüfen, Freigeben oder Nachbessern. Entwürfe zählen nicht mit. Unter „PRs“ siehst du alle und kannst auf jede andere Person umschalten."
@@ -68,6 +72,7 @@ export function Jetzt() {
   return (
     <div className="seite">
       {kopf}
+      {reviewer ? <>{prsAbschnitt}{jetztAbschnitt}</> : jetztAbschnitt}
       <nav className="sprung" aria-label="Weiter unten">{d.admin && <a href="#a-laeuft">Läuft</a>}{d.admin && <a href="#a-erledigt">Heute erledigt</a>}{d.rolle === 'team' ? <><a href="#a-dok">Dokumente</a><a href="#a-prs">PRs</a></> : <><a href="#a-prs">PRs</a><a href="#a-dok">Dokumente</a></>}</nav>
       {d.admin && (
         <Abschnitt id="a-laeuft" titel="Läuft gerade" erklaerung="Unter-Chats, an denen ein Agent gerade arbeitet — mit voraussichtlichem Ende. Du musst hier nichts tun."
@@ -86,7 +91,7 @@ export function Jetzt() {
           <p className="abschnitt-fuss"><a href="v2/erledigt">Andere Tage ansehen →</a></p>
         </Abschnitt>
       )}
-      {d.rolle === 'team' ? <>{dokAbschnitt}{prsAbschnitt}</> : <>{prsAbschnitt}{dokAbschnitt}</>}
+      {d.rolle === 'team' ? <>{dokAbschnitt}{prsAbschnitt}</> : reviewer ? dokAbschnitt : <>{prsAbschnitt}{dokAbschnitt}</>}
     </div>
   );
 }
@@ -260,6 +265,7 @@ export function ArbeitDetail({ id }: { id: string }) {
 
 export function Prs({ wer }: { wer: string | null }) {
   const pfad = `api/v2/prs${wer ? `?wer=${encodeURIComponent(wer)}` : ''}`;
+  useEffect(() => { try { sessionStorage.setItem('v2-prs-liste', `v2/prs${wer ? `?wer=${encodeURIComponent(wer)}` : ''}`); } catch { /* egal */ } }, [wer]);   // Runde 3 (B6): „← PRs“ kommt zur selben Auswahl zurück
   const [such, setSuch] = useState('');
   const [mitEntwurf, setMitEntwurf] = useState(false);
   const { d, fehler, neu } = useDaten<{ gesperrt?: boolean; wer: string; ich: string; personen: { name: string; anzahl: number }[]; zeilen: PrZeile[]; stand: string | null }>(pfad);
@@ -305,7 +311,7 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
   const ZUSTAND: Record<string, string> = { APPROVED: 'freigegeben', CHANGES_REQUESTED: 'Änderungen verlangt', COMMENTED: 'kommentiert', DISMISSED: 'zurückgezogen' };
   return (
     <div className="seite">
-      <p className="zurueck"><a href="v2/prs">← PRs</a></p>
+      <p className="zurueck"><a href={(() => { try { return sessionStorage.getItem('v2-prs-liste') || 'v2/prs'; } catch { return 'v2/prs'; } })()}>← PRs</a></p>
       <h1>{d.pr} · {d.titel}</h1>
       <p className="zustand">{!d.offen ? 'Nicht mehr offen — gemergt oder geschlossen.' : d.merge ? 'Freigegeben — wartet auf den Merge (macht ein Mensch auf GitHub).' : d.wartetAuf.length ? `Wartet auf ${d.wartetAuf.join(', ')} — ${d.warum}.` : `${d.warum || 'Wartet auf niemanden'}.`}</p>
       <div className="aktionen-zeile">
