@@ -341,3 +341,14 @@ test('Abmelden (DoD 1/27): beendeter Leitstand startet keinen Zug mehr, Zustand 
   assert.equal(st.kind, 'beendet');
   assert.deepEqual(st.turn, before, 'kein neuer Zug');
 });
+
+test('Paket 436 S17 (Nachtrag 2): Hauptchat, Unter-Chat, normaler Chat und 2.0-Chat starten mit denselben Skills und Einstellungsquellen', async () => {
+  const haupt = randomUUID(), v2 = `v2-${randomUUID()}`;
+  assert.equal((await internal('/internal/orchestrate', { userId: 'ul', email: MAIL, conv: haupt, dir: LEIT, kind: 'leitstand' })).status, 200);
+  const sicht = async (c: string) => { const t = await send(c, 'mock-optionen'); const o = JSON.parse(t.match(/OPTIONEN (\{.*\})/)![1]); return { namen: t.match(/Skills: \d+ \[([^\]]*)\]/)?.[1] ?? null, quellen: o.settingSources, art: o.leitstand ? 'haupt' : o.strang ? 'strang' : 'chat' }; };
+  const [h, s, n, z] = [await sicht(haupt), await sicht(C_STRAND), await sicht(C_NORMAL), await sicht(v2)];
+  assert.deepEqual([h.art, s.art, n.art, z.art], ['haupt', 'strang', 'chat', 'chat'], 'die vier Arten sind wirklich verschieden gestartet');
+  assert.ok(n.namen && n.namen.split(',').length >= 5, `Skills geladen: ${n.namen}`);
+  assert.deepEqual([h.namen, s.namen, z.namen], [n.namen, n.namen, n.namen], 'gleiche Skills (Namen) in allen vier');
+  assert.deepEqual([h.quellen, s.quellen, z.quellen], [n.quellen, n.quellen, n.quellen], 'gleiche Einstellungsquellen (CLAUDE.md, Regeln)');
+});
