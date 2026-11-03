@@ -169,6 +169,10 @@ export const HAUPTCHAT_R31 = new Set(['werkbank_betrieb', 'werkbank_stand', 'geh
 export const R31_KLICK = ['mcp__werkbank__werkbank_betrieb', 'mcp__werkbank__geheimnis_nutzen', 'mcp__werkbank__coolify'];
 /** Coolify direkt (Bash/curl) — die Lücke aus Paket 400: ein POST ginge sonst ohne Klick durch den Klassifikator. */
 const COOLIFY_HOST = /coolify\.konekto\.energy|159\.195\.34\.21/i;
+/** Jira ohne Klick (Knut, 03.11.2026): nur im Hauptchat, nur mit Schalter; Löschen bleibt mit Klick, GitHub ist davon unberührt. */
+export const JIRA_WERKBANK_SCHREIBEN = new Set(['jira_update', 'jira_update_many', 'jira_anlegen']);
+export const JIRA_OHNE_KLICK_ASK = ['mcp__werkbank__jira_anlegen', 'mcp__werkbank__jira_update', 'mcp__werkbank__jira_update_many'];
+export function jiraOhneKlick(ctx: { leit?: unknown }): boolean { return !!ctx.leit && process.env.WERKBANK_JIRA_OHNE_KLICK === 'on'; }
 export const COOLIFY_ASK = ['Bash(*coolify.konekto.energy*)', 'Bash(*159.195.34.21*)'];
 
 /** Echter Pfad: realpath des tiefsten vorhandenen Vorfahren + Rest (ein Symlink auf den Vault zählt als Vault). */
@@ -337,6 +341,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // hauptchat_melden (Plan 154, S4): Meldung an den Hauptchat — ändert nur Werkbank-Zustand, gedeckelt in der Werkbank.
     // delegieren/delegation_*/phase_wechseln (Plan 165): Steuerung durch die Brücke; Worker arbeiten unter ihrem eigenen Wächter.
     if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'melious_sub' || name === 'auslastung' || name === 'github_lesen' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
+    // Jira ohne Klick (Knut, 03.11.2026): WERKBANK_JIRA_OHNE_KLICK=on → im Hauptchat schreibt Jira direkt (nicht löschen); Stränge unverändert.
+    if (server === 'werkbank' && JIRA_WERKBANK_SCHREIBEN.has(name) && jiraOhneKlick(ctx)) return { cls: 'auto' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
     if (server === 'werkbank' && (name === 'jira_update' || name === 'jira_update_many' || name === 'agent_start')) return { cls: 'confirm' };
     // R31 S3+S4: nur im Hauptchat. Lesen (Stand, Coolify-Stand, Datei teilen, Screenshot) frei; Betrieb, Geheimnis und Coolify-Schreiben
@@ -391,6 +397,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // eigene OAuth-Anmeldung in die eigene Claude-Konfiguration — ohne Rückfrage.
     if (name === 'authenticate' || name === 'complete_authentication') return { cls: 'read' };
     if (MCP_READ.test(name)) return { cls: 'read' };
+    // Jira ohne Klick (Knut, 03.11.2026): Schalter an und Hauptchat → Jira-Schreiben direkt; Löschen bleibt mit Klick.
+    if (server === 'atlassian' && jiraOhneKlick(ctx) && /jira|issuelink|worklog/i.test(name) && !/delete|remove/i.test(name)) return { cls: 'auto' };
     // Voller Auto-Modus: Jira-Schreiben bleibt beim „ja“ (jira_update steht oben), der Rest geht an den Klassifikator.
     if (ctx.workDir && ctx.scope === 'voll' && server !== 'atlassian') return { cls: 'auto' };
     return { cls: 'confirm' };

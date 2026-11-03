@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './profil.ts';
 import { freigabeMerken } from './freigabe.ts';
-import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK } from './tools.ts';
+import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
@@ -169,7 +169,7 @@ export function autoSettings(): { permissions: { deny: string[]; ask: string[]; 
   // ask: GitHub schreiben aus dem Hauptchat (R29 D, S5) fragt immer — der Klassifikator darf es nicht durchwinken.
   // R31: Betrieb, Geheimnis-Vermittler, Coolify-Schreiben und Coolify per Bash ebenso — immer die Karte;
   // ebenso Jira schreiben über die Werkbank (anlegen auf beiden Seiten, nachziehen einzeln/gesammelt).
-  return { permissions: { deny: [...AUTO_DENY, `Read(/${homes}/*/.credentials.json)`, `Edit(/${homes}/**)`], ask: ['mcp__werkbank__github_schreiben', ...R31_KLICK, ...COOLIFY_ASK, 'mcp__werkbank__jira_anlegen', 'mcp__werkbank__jira_update', 'mcp__werkbank__jira_update_many'], disableBypassPermissionsMode: 'disable' } };
+  return { permissions: { deny: [...AUTO_DENY, `Read(/${homes}/*/.credentials.json)`, `Edit(/${homes}/**)`], ask: ['mcp__werkbank__github_schreiben', ...R31_KLICK, ...COOLIFY_ASK, ...(process.env.WERKBANK_JIRA_OHNE_KLICK === 'on' ? [] : JIRA_OHNE_KLICK_ASK)], disableBypassPermissionsMode: 'disable' } };
 }
 
 const ansi = (s: unknown) => String(s ?? '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
