@@ -1,0 +1,12 @@
+{
+  "name": "werkbank-app",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Werkbank 2.0 — eine Oberfläche (Jetzt · Entscheidungen · Arbeit · PRs · Dokumente + Chat), ausgeliefert unter /v2/. Abhängigkeiten aus web/node_modules.",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "test": "node --test test/*.test.ts"
+  }
+}

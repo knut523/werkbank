@@ -1,0 +1,35 @@
+// Werkbank 2.0: reine Formathilfen der Oberfläche (getestet in test/format.test.ts).
+
+/** „vor 5 Min.“, „heute 14:05“, „gestern 09:10“, „28.10.“ — immer Wiener Zeit. */
+export function wann(iso: string | null | undefined, now = Date.now()): string {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '';
+  const min = Math.round((now - t) / 60_000);
+  if (min >= 0 && min < 1) return 'gerade eben';
+  if (min >= 1 && min < 60) return `vor ${min} Min.`;
+  const tag = (x: number) => new Date(x).toLocaleDateString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit', year: 'numeric' });
+  const uhr = new Date(t).toLocaleTimeString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', minute: '2-digit', hour12: false });
+  if (tag(t) === tag(now)) return `heute ${uhr}`;
+  if (tag(t) === tag(now - 86400_000)) return `gestern ${uhr}`;
+  return new Date(t).toLocaleDateString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' }).replace(/\.?$/, '.');
+}
+
+/** Interne 2.0-Adresse? (dann ohne Neuladen navigieren, sonst neuer Tab) */
+export const istIntern = (url: string) => url.startsWith('/v2/') || url === '/v2';
+
+/** Gerendertes HTML (Notiz oder Bericht) auf die 2.0-Adressen umbiegen: Notiz-Links, Bericht-Dateien, Bilder. */
+export function htmlFuerV2(html: string): string {
+  return html
+    .replace(/href="#\/wissen\/([^"]+)"/g, (_m, p) => `href="/v2/dokument?vault=${encodeURIComponent(decodeURIComponent(p))}"`)
+    .replace(/href="api\/files\/agenten\/([^/"]+)\/([^"?]+\.md)"/g, (_m, paket, rel) => `href="/v2/dokument?paket=${paket}&amp;datei=${encodeURIComponent(decodeURIComponent(rel))}"`)
+    .replace(/(src|href)="api\//g, '$1="/api/');
+}
+
+/** Zahl in Worten für kleine Zahlen in Sätzen („eine Frage“, „3 Fragen“). */
+export const mehrzahl = (n: number, eins: string, viele: string) => (n === 1 ? `1 ${eins}` : `${n} ${viele}`);
+
+/** Vorbereiteter Text für „Im Chat fragen“. */
+export function chatFrage(titel: string, worum: string): string {
+  return `Was ist das, und was soll ich tun? „${titel}“${worum ? ` — ${worum}` : ''}`.slice(0, 1500);
+}

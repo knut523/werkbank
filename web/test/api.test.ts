@@ -1853,3 +1853,68 @@ test('Review-Log (17c): Tabelle neueste oben, Filter über die Adresse; nur Admi
     await mongo.db(LCDB).collection('users').updateOne({ _id: users.a._id }, { $unset: { role: '' } });
   }
 });
+
+// ---------- Werkbank 2.0 (Paket 436): /api/v2 hinter der bestehenden Anmeldung, Antworten nur über die bestehende Logik ----------
+test('2.0: alle v2-Routen brauchen eine Sitzung; POST ohne Werkbank-Header → 403', async () => {
+  const anon = new Client();
+  for (const p of ['/api/v2/start', '/api/v2/zahl', '/api/v2/entscheidungen', '/api/v2/arbeit', '/api/v2/prs', '/api/v2/dokumente', '/api/v2/chat']) assert.equal((await anon.req(p)).status, 401, p);
+  assert.equal((await anon.req('/api/v2/antwort', { body: { id: 'q-1', antwort: 'ja' } })).status, 401);
+  await anna.login(users.a);
+  assert.equal((await anna.req('/api/v2/antwort', { body: { id: 'q-1', antwort: 'ja' }, csrf: false })).status, 403);
+  assert.equal((await anna.req('/api/v2/chat', { body: { ziel: 'eigen', text: 'x' }, csrf: false })).status, 403);
+});
+
+test('2.0: Startseite — eine Zahl (= /api/inbox), ≤ 5 Karten, Antwort an DIESER Karte über die bestehende Logik; Unter-Chats nur für Admin', async () => {
+  await anna.login(users.a); await bernd.login(users.b);
+  const ids: string[] = [];
+  try {
+    for (let n = 0; n < 7; n++) { const a = await intern('/internal/orchestrator/questions/ask', { title: 'v2-Frage ' + n, context: 'Worum es geht ' + n, options: [{ label: 'Ja' }, { label: 'Nein' }], recommendation: 'Ja' }); ids.push(a.j.id); }
+    const s = await anna.req('/api/v2/start');
+    assert.equal(s.status, 200);
+    const ib = await anna.req('/api/inbox');
+    assert.equal(s.j.zahl, ib.j.zahl, 'dieselbe Zahl wie überall');
+    assert.equal((await anna.req('/api/v2/zahl')).j.zahl, s.j.zahl);
+    assert.ok(s.j.jetzt.length <= 5 && s.j.jetzt.length >= 1);
+    assert.ok(s.j.jetzt.filter((k: any) => k.art === 'freigabe').length <= 2);
+    assert.deepEqual(s.j.laeuft, []); assert.deepEqual(s.j.erledigt, [], 'Unter-Chats nur für Admin');
+    const k = s.j.jetzt.find((x: any) => /^v2-Frage/.test(x.titel));
+    assert.ok(k, 'eigene Frage oben'); assert.ok(k.antworten.includes('ja') && k.antworten.includes('anders')); assert.ok(k.erklaerung.length >= 3, '„Was ist das?“ aus den Daten');
+    assert.equal((await anna.req('/api/v2/antwort', { body: { id: k.id, antwort: 'anders', text: '' } })).status, 400, 'Anders braucht Text');
+    assert.equal((await anna.req('/api/v2/antwort', { body: { id: k.id, antwort: 'vielleicht' } })).status, 400);
+    assert.equal((await bernd.req('/api/v2/antwort', { body: { id: k.id, antwort: 'ja' } })).status, 409, 'fremde Frage: nicht gefunden');
+    const a = await anna.req('/api/v2/antwort', { body: { id: k.id, antwort: 'anders', text: 'Lieber erst nächste Woche' } });
+    assert.equal(a.status, 200, JSON.stringify(a.j)); assert.ok(a.j.ziel);
+    const q: any = await mongo.db(DB).collection('orchestrator_questions').findOne({ _id: k.id });
+    assert.equal(q.status, 'beantwortet'); assert.match(JSON.stringify(q.answer), /nächste Woche/);
+    assert.equal((await anna.req('/api/v2/zahl')).j.zahl, s.j.zahl - 1, 'die Zahl geht um eins runter');
+    assert.equal((await anna.req('/api/v2/antwort', { body: { id: k.id, antwort: 'ja' } })).status, 409, 'zweimal antworten geht nicht');
+    const e = await anna.req('/api/v2/entscheidungen');
+    assert.equal(e.j.zahl, s.j.zahl - 1); assert.ok(e.j.oben.length <= 5); assert.ok(![...e.j.oben, ...e.j.rest].some((x: any) => x.id === k.id));
+    const arbeit = await anna.req('/api/v2/arbeit');
+    assert.equal(arbeit.j.nurAdmin, true);
+    assert.equal((await anna.req('/api/v2/arbeit/abcd1234')).status, 403);
+  } finally {
+    for (const id of ids) await anna.req(`/api/orchestrator/questions/${id}/answer`, { body: { option: 'Ja' } }).catch(() => {});
+  }
+});
+
+test('2.0: Chat — ohne Claude-Zugang Klartext, Hauptchat nur Admin, Text ≤ 8 000', async () => {
+  await bernd.login(users.b); await anna.login(users.a);
+  await mongo.db(LCDB).collection('keys').deleteMany({ userId: users.b._id });
+  const g = await bernd.req('/api/v2/chat');
+  assert.equal(g.status, 200); assert.equal(g.j.ziel, 'eigen'); assert.equal(g.j.zugang, false);
+  const s = await bernd.req('/api/v2/chat', { body: { ziel: 'eigen', text: 'Was ist OLAF?' } });
+  assert.equal(s.status, 412); assert.match(s.j.error, /Claude-Zugang — alles andere geht ohne/);
+  assert.equal((await bernd.req('/api/v2/chat', { body: { ziel: 'hauptchat', text: 'hallo' } })).status, 403);
+  assert.equal((await anna.req('/api/v2/chat', { body: { ziel: 'eigen', text: 'x'.repeat(8001) } })).status, 413);
+});
+
+test('2.0: Auslieferung unter /v2 — eigene App (oder Klartext „nicht gebaut“), kein Weg aus dem Ordner, /api unberührt', async () => {
+  for (const p of ['/v2/', '/v2/arbeit', '/v2/prs/olaf-admin/1']) {
+    const r = await fetch(B + p); const t = await r.text();
+    assert.ok((r.status === 200 && /<div id="app">/.test(t) && /\/v2\/assets\//.test(t)) || (r.status === 503 && /Werkbank 2\.0 nicht gebaut/.test(t)), `${p}: ${r.status}`);
+  }
+  for (const p of ['/v2/../server/main.ts', '/v2/%2e%2e/server/main.ts', '/v2/..%2f..%2fpackage.json']) { const t = await (await fetch(B + p)).text(); assert.doesNotMatch(t, /registerV2|"name": "werkbank-web"/, p); }
+  assert.equal((await fetch(B + '/api/v2/gibtsnicht')).status, 404);
+  assert.equal((await fetch(B + '/api/health')).status, 200);
+});

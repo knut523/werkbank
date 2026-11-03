@@ -117,6 +117,9 @@ import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
 import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
 import { chatStatusAn, offeneJeStrang, hauptchatJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
+import { registerV2, appDist } from './v2.ts';
+import { abgebrochenMarkieren as v2Abgebrochen } from './v2chat.ts';
+import { githubNames } from './github.ts';
 import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
 
 const DIST = join(WEB_DIR, 'dist');
@@ -1754,7 +1757,10 @@ async function teilAntworten(u: User, e: any, teile: { id: string; antwort: stri
 }
 on('POST', /^\/api\/entscheidungen\/fragen\/antwort$/, async (req, res) => {
   const u = await needUser(req);
-  const b = await body(req);
+  send(res, 200, await fragenAntwort(u, await body(req)));
+});
+/** Antwort auf eine Karte der Entscheidungsseite — auch der einzige Antwortweg der Werkbank 2.0 (v2.ts, Council B4). */
+async function fragenAntwort(u: User, b: any): Promise<any> {
   const [eintrag, teil = null] = String(b.id ?? '').split('~');
   const antwort = String(b.antwort ?? '');
   const text = String(b.text ?? '').trim().slice(0, 4000);
@@ -1764,13 +1770,13 @@ on('POST', /^\/api\/entscheidungen\/fragen\/antwort$/, async (req, res) => {
   if (antwort === 'spaeter') {
     await spaeterCol().updateOne({ _id: `${u.id}:${eintrag}` as any }, { $set: { userId: u.id, id: eintrag, bis: spaeterBis(), at: new Date(), notiz: text || null } }, { upsert: true });
     zahlCache.delete(u.id);
-    return send(res, 200, { ok: true, spaeter: true });
+    return { ok: true, spaeter: true };
   }
-  if (teil === null) return send(res, 200, await inboxAntworten(u, eintrag, { antwort, text, weg: 'ui' }));
+  if (teil === null) return inboxAntworten(u, eintrag, { antwort, text, weg: 'ui' });
   const e = (await inboxFuer(u)).eintraege.find((x) => x.id === eintrag && x.art === 'entscheidung');
   if (!e || !((e.daten.entscheidungen as any[]) ?? []).some((x) => String(x.id) === teil)) throw new HttpError(409, 'Diese Frage ist schon beantwortet oder hat sich geändert — Seite neu laden.');
-  send(res, 200, await teilAntworten(u, e, [{ id: teil, antwort, text }]));
-});
+  return teilAntworten(u, e, [{ id: teil, antwort, text }]);
+}
 /** „Alle offenen wie empfohlen beantworten“ (mit Sicherheitsabfrage in der Oberfläche): nur die gesehenen Fragen mit Empfehlung. */
 on('POST', /^\/api\/entscheidungen\/fragen\/alle$/, async (req, res) => {
   const u = await needUser(req);
@@ -1887,7 +1893,10 @@ on('POST', /^\/api\/entscheidungen\/lauf$/, async (req, res) => {
 // --- Arbeit › Unter-Chats (Plan 213 S4a): Tabelle aus der einen Statusquelle, „Neuer Unter-Chat“ aus der Oberfläche ---
 on('GET', /^\/api\/arbeit\/unterchats$/, async (req, res, _m, url) => {
   const u = await needAdmin(req);
-  const erledigt = url.searchParams.get('filter') === 'erledigt';
+  send(res, 200, await unterchatListe(u, url.searchParams.get('filter') === 'erledigt'));
+});
+/** Die Unter-Chat-Tabelle (Arbeit) — auch für die Werkbank 2.0 (v2.ts), damit beide dieselbe Statusquelle lesen. */
+async function unterchatListe(u: User, erledigt: boolean) {
   const filter = erledigt
     ? { userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: { $gte: new Date(Date.now() - 14 * 86400_000) }, $or: [{ reviewedBy: 'auto' }, { knutReviewedAt: { $ne: null } }] }
     : { userId: u.id, ...AUF_UEBERSICHT() };
@@ -1901,8 +1910,8 @@ on('GET', /^\/api\/arbeit\/unterchats$/, async (req, res, _m, url) => {
   const zeilen = arbeitSortiere(docs.filter((d) => erledigt || offenFuerKnut(d)).map((d) => arbeitZeile(d, { mediane: med, offeneFragen: csAn ? offenJe.get(String(d._id)) ?? 0 : undefined, beimHauptchat: hcJe.get(String(d._id)) ?? 0, veraltet: zuJe.get(String(d._id)) ?? null })));
   const offen = erledigt ? null : zeilen.length;
   const erledigtN = erledigt ? zeilen.length : await orchRuns().countDocuments({ userId: u.id, kind: { $ne: 'leitstand' }, reviewedAt: { $gte: new Date(Date.now() - 14 * 86400_000) }, $or: [{ reviewedBy: 'auto' }, { knutReviewedAt: { $ne: null } }] } as any);
-  send(res, 200, { zeilen, offen, erledigt: erledigtN, zaehler: await zaehlerFuer(u), chatStatus: csAn, at: new Date() });
-});
+  return { zeilen, offen, erledigt: erledigtN, zaehler: await zaehlerFuer(u), chatStatus: csAn, at: new Date() };
+}
 // --- Chat-Status und Karte am Chat (Release 29, Strang B; Schalter WERKBANK_CHAT_STATUS, Vorgabe aus) ---
 // Ein Status je Chat (läuft · braucht Knut · in Review · fertig · hängt), dazu die Karte oben im Chat: bei „braucht Knut“ genau die
 // offenen Fragen (dieselben Karten wie die Entscheidungsseite, beantwortet wird über deren Endpunkt), bei „in Review“ das Paket mit
@@ -2549,7 +2558,9 @@ on('GET', /^\/api\/uebersicht$/, async (req, res) => {
 // --- „Heute erledigt“ (R32, Nachtrag 5): alles, was an einem Tag fertig wurde — Datumswahl für frühere Tage ---
 on('GET', /^\/api\/erledigt$/, async (req, res, _m, url) => {
   const u = await needAdmin(req);
-  const tag = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('datum') ?? '') ? url.searchParams.get('datum')! : wienDatum();
+  send(res, 200, await erledigtDaten(u, /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('datum') ?? '') ? url.searchParams.get('datum')! : wienDatum()));
+});
+async function erledigtDaten(u: User, tag: string) {
   const { von, bis } = tagGrenzen(tag);
   const iso = (d: any) => (d ? new Date(d).toISOString() : '');
   const bas = paketBasis();
@@ -2566,8 +2577,8 @@ on('GET', /^\/api\/erledigt$/, async (req, res, _m, url) => {
   const entscheidungen = logRows.map((r) => ({ titel: String(r.frage ?? r.titel ?? '').slice(0, 200), antwort: String(r.antwort ?? '').slice(0, 200), at: iso(r.at), auto: !!r.auto }));
   // Releases: Review-Pakete mit „release“ im Namen, die an diesem Tag fertig wurden (Ordner-Änderungszeit).
   const releases = (() => { try { return readdirSync(cfg.reviewDir).filter((n) => /release/i.test(n)).map((n) => ({ name: n.replace(/^\d+-/, '').replace(/-/g, ' '), at: statSync(join(cfg.reviewDir, n)).mtime.toISOString() })); } catch { return []; } })();
-  send(res, 200, { ...baueErledigt(tag, { straenge, pushes, entscheidungen, releases }), heute: wienDatum() });
-});
+  return { ...baueErledigt(tag, { straenge, pushes, entscheidungen, releases }), heute: wienDatum() };
+}
 
 // Lage (Release 31): „Was ist offen?“ auf einen Blick — Für dich · Läuft · Fertig seit heute früh · Erledigt der Hauptchat ·
 // PR-Lage · Themen. Nur lesen, Schalter WERKBANK_LAGE=on; jede Quelle darf einzeln ausfallen (dann steht es in `fehler`).
@@ -4236,13 +4247,31 @@ on('POST', /^\/internal\/jira-touched$/, async (req, res) => {
 
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
 
+// ---------- Werkbank 2.0 (Paket 436): eigene App unter /v2/, schmale API /api/v2/* auf den bestehenden Funktionen ----------
+registerV2(on, {
+  needUser, body, send, inboxFuer, unterchatListe, erledigtDaten, fragenAntwort, wienDatum, log,
+  strang: (u, id) => orchRuns().findOne({ _id: id as any, userId: u.id, kind: { $ne: 'leitstand' } }),
+  hauptchat: async (u) => { if (u.role !== 'ADMIN') return null; const l = await activeLeitstand(u).catch(() => null); return l?.conv ? { conv: String(l.conv), url: /^https?:\/\//.test(String(l.url ?? '')) ? String(l.url) : null } : null; },
+  laeuftChat: async (u, conv) => !!(await strandStates(u)).get(conv)?.running,
+  livePrs, githubNames,
+  letzteReviews: () => reviewsCol().find({ createdAt: { $gte: new Date(Date.now() - 30 * 86400_000) } }).sort({ createdAt: -1 }).limit(300).toArray(),
+  reviewKommentar: (paket) => parseKommentar(readBerichtDatei(join(reviewDir(), paket, 'kommentar.md'))),
+  pakete: () => paketIndex(cfg.reviewDir),
+  vaultSuche: async (q) => { try { return await search(q); } catch { return titelSuche(vaultIdx(), q); } },
+  vaultNeu: (n) => [...vaultIdx().notes.values()].sort((a, b) => b.mtime - a.mtime).slice(0, n),
+  claudeToken: getClaudeToken, bridgeUrl: cfg.bridgeUrl, altUrl: `${cfg.librechatPublicUrl}/wb`,
+});
+const V2_DIST = appDist(WEB_DIR);
+
 function serveStatic(req: IncomingMessage, res: ServerResponse, path: string) {
-  let base = DIST, rel = path;
+  let base = DIST, rel = path, index = join(DIST, 'index.html');
   if (path.startsWith('/fonts/')) { base = FONTS; rel = path.slice(6); }
+  // 2.0: /v2 und /v2/<seite> → App (SPA-Rückfall auf ihre index.html); die alte Oberfläche bleibt unberührt.
+  if (path === '/v2' || path.startsWith('/v2/')) { base = V2_DIST; rel = path.slice(3) || '/'; index = join(V2_DIST, 'index.html'); }
   const abs = resolve(base, '.' + normalize(decodeURIComponent(rel)));
-  const ok = abs.startsWith(base) && existsSync(abs) && statSync(abs).isFile();
-  const file = ok ? abs : join(DIST, 'index.html');
-  if (!existsSync(file)) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' }); res.end('Oberfläche nicht gebaut: cd web && npm run build'); return; }
+  const ok = abs.startsWith(base + '/') && existsSync(abs) && statSync(abs).isFile();
+  const file = ok ? abs : index;
+  if (!existsSync(file)) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' }); res.end(base === V2_DIST ? 'Werkbank 2.0 nicht gebaut: cd web/app && npm run build' : 'Oberfläche nicht gebaut: cd web && npm run build'); return; }
   res.writeHead(200, {
     'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
     'cache-control': file.includes('/assets/') || file.startsWith(FONTS) ? 'public, max-age=31536000, immutable' : 'no-cache',
@@ -4551,6 +4580,8 @@ async function backgroundJobs() {
 
 await connect();
 mkdirSync(cfg.dataDir, { recursive: true });
+// 2.0 (Council B2): Chat-Züge, die beim letzten Neustart offen waren, sichtbar als abgebrochen markieren.
+v2Abgebrochen().then((n) => { if (n) log('v2 chat abgebrochen', { n }); }).catch(() => {});
 // Plan 81, Schnitt 1: alter Speicher → Ablage, einmalig und idempotent (nur Einträge ohne `path`).
 migrateLegacy(log).catch((e) => log('ablage-umzug', { error: String(e?.message ?? e).slice(0, 200) }));
 server.listen(cfg.port, cfg.host, () => log('listening', { host: cfg.host, port: cfg.port, demo: cfg.demo, vault: cfg.vaultDir }));
