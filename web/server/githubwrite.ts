@@ -21,6 +21,7 @@ export function writeToken(repo: string): Promise<string | null> {
   if (process.env.WERKBANK_GITHUB_WRITE_TOKEN) return Promise.resolve(process.env.WERKBANK_GITHUB_WRITE_TOKEN);
   const env: Record<string, string | undefined> = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false' };
   delete env.GIT_VW_READ;
+  env.GIT_VW_WRITE = '1'; // 03.11.: der Helper liefert sonst nur das Lesetoken
   // Asynchron: der Helper fragt Vaultwarden (bis zu 20 s) — der Web-Server bleibt bedienbar.
   return new Promise((resolve) => {
     const c = execFile('git', ['-c', 'credential.useHttpPath=true', '-c', 'credential.interactive=never', 'credential', 'fill'], { env, timeout: 20_000, encoding: 'utf8' },
