@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { schicke, type Aufraeumen, type ArbeitKarte, type Dok, type Karte, type Link, type PrZeile, type Start } from './api.ts';
 import { useApp } from './kontext.ts';
 import { Abschnitt, EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweise, Zeile } from './teile.tsx';
-import { BEGRIFFE } from './begriffe.ts';
+import { BEGRIFFE, OLAF_KURZ } from './begriffe.ts';
 import { chatFrage, htmlFuerV2, mehrzahl, wann } from './format.ts';
 
 const EMPFEHLUNG: Record<string, string> = { approve: 'Agent: freigeben', 'request-changes': 'Agent: Änderungen nötig', comment: 'Agent: Anmerkungen' };
@@ -18,7 +18,7 @@ function gruss(name: string) {
 export function Jetzt() {
   const app = useApp();
   // Erst Zahl und Karten (schnell), dann der Rest — der erste Bildschirm zeigt sofort, was zu tun ist.
-  const oben = useDaten<Pick<Start, 'zahl' | 'jetzt' | 'aufraeumen' | 'ich' | 'admin'>>('/api/v2/start?teil=oben');
+  const oben = useDaten<Pick<Start, 'zahl' | 'jetzt' | 'aufraeumen' | 'ich' | 'admin' | 'rolle'>>('/api/v2/start?teil=oben');
   const voll = useDaten<Start>('/api/v2/start');
   const k = voll.d ?? oben.d;
   useEffect(() => { if (k) app.zahl(k.zahl); }, [k]);
@@ -28,9 +28,15 @@ export function Jetzt() {
   const kopf = (
     <>
       <h1>{gruss(k.ich)}</h1>
-      {!k.admin && (
+      {k.rolle === 'reviewer' && (
         <div className="willkommen">
-          <p><b>Neu hier?</b> Agenten erledigen Aufträge und fragen, wenn sie etwas nicht selbst entscheiden dürfen — was an dich geht, steht gleich darunter. <a href="/v2/begriffe">Begriffe in Klartext</a></p>
+          <p><b>Du prüfst Code.</b> Gleich darunter steht, was eine Antwort von dir braucht; danach die PRs, bei denen du dran bist — ein Klick zeigt den Stand und was der Prüf-Agent dazu sagt, ohne GitHub. <a href="/v2/begriffe">Begriffe in Klartext</a></p>
+        </div>
+      )}
+      {!k.admin && k.rolle !== 'reviewer' && (
+        <div className="willkommen">
+          <p><b>Neu hier?</b> {OLAF_KURZ}</p>
+          <p>In der Werkbank arbeiten Agenten (KI-Assistenten) an Aufträgen und fragen, wenn sie etwas nicht selbst entscheiden dürfen. Was an dich geht, steht gleich darunter; Berichte und Notizen findest du unter „Dokumente“. <a href="/v2/begriffe">Begriffe in Klartext</a></p>
         </div>
       )}
       <Abschnitt id="a-jetzt" titel="Was du jetzt tun musst" erklaerung="Die wichtigsten Dinge, die ohne deine Antwort nicht weitergehen — höchstens fünf, wichtigste zuerst: zuerst Entscheidungen, die einen Agenten anhalten, darunter Freigaben. Die Zahl oben rechts zählt alles, was auf dich wartet; unter „Entscheidungen“ steht, woraus sie sich zusammensetzt."
@@ -43,11 +49,25 @@ export function Jetzt() {
     </>
   );
   if (!d) return <div className="seite">{kopf}{voll.fehler ? <Fehler text={voll.fehler} nochmal={voll.neu} /> : <Laedt text="Lädt Läuft, Heute erledigt, PRs …" />}</div>;
+  // S13: Reihenfolge je Rolle — Team (Lisa) liest zuerst Dokumente, Reviewer (Christoph) und Leitung sehen zuerst PRs.
+  const prsAbschnitt = (
+      <Abschnitt id="a-prs" titel="PRs, die auf dich warten (die neuesten)" erklaerung="Code-Vorschläge auf GitHub (Pull Requests), bei denen du gerade dran bist — zum Prüfen, Freigeben oder Nachbessern. Entwürfe zählen nicht mit. Unter „PRs“ siehst du alle und kannst auf jede andere Person umschalten."
+        fuss={<a href="/v2/prs">Alle PRs →</a>}>
+        {!d.prFrei ? <p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p>
+          : d.prs === null ? <p className="leer">Die PR-Liste ist gerade nicht erreichbar.</p>
+          : d.prs.length ? <ul className="liste">{d.prs.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul> : <p className="leer">Kein PR wartet auf dich.</p>}
+      </Abschnitt>
+  );
+  const dokAbschnitt = (
+      <Abschnitt id="a-dok" titel="Neue Dokumente" erklaerung="Die zuletzt geänderten Berichte und Notizen. Alles Lesbare findest du unter „Dokumente“ — mit Suche." fuss={<a href="/v2/dokumente">Alle Dokumente →</a>}>
+        {d.dokumente.length ? <ul className="liste">{d.dokumente.map((x) => <DokZeile key={x.url} x={x} />)}</ul> : <p className="leer">Keine neuen Dokumente.</p>}
+      </Abschnitt>
+  );
   const abgenommen = d.erledigt.filter((e) => e.stand === 'abgenommen'), zumLesen = d.erledigt.filter((e) => e.stand === 'zum-lesen');
   return (
     <div className="seite">
       {kopf}
-      <nav className="sprung" aria-label="Weiter unten">{d.admin && <a href="#a-laeuft">Läuft</a>}{d.admin && <a href="#a-erledigt">Heute erledigt</a>}<a href="#a-prs">PRs</a><a href="#a-dok">Dokumente</a></nav>
+      <nav className="sprung" aria-label="Weiter unten">{d.admin && <a href="#a-laeuft">Läuft</a>}{d.admin && <a href="#a-erledigt">Heute erledigt</a>}{d.rolle === 'team' ? <><a href="#a-dok">Dokumente</a><a href="#a-prs">PRs</a></> : <><a href="#a-prs">PRs</a><a href="#a-dok">Dokumente</a></>}</nav>
       {d.admin && (
         <Abschnitt id="a-laeuft" titel="Läuft gerade" erklaerung="Unter-Chats, an denen ein Agent gerade arbeitet — mit voraussichtlichem Ende. Du musst hier nichts tun."
           fuss={<a href="/v2/arbeit">Alle Unter-Chats →</a>}>
@@ -64,15 +84,7 @@ export function Jetzt() {
             {zumLesen.length > 3 && <p className="abschnitt-fuss"><a href="/v2/arbeit#fertig">Alle fertigen unter Arbeit →</a></p>}</>}
         </Abschnitt>
       )}
-      <Abschnitt id="a-prs" titel="PRs, die auf dich warten (die neuesten)" erklaerung="Code-Vorschläge auf GitHub (Pull Requests), bei denen du gerade dran bist — zum Prüfen, Freigeben oder Nachbessern. Entwürfe zählen nicht mit. Unter „PRs“ siehst du alle und kannst auf jede andere Person umschalten."
-        fuss={<a href="/v2/prs">Alle PRs →</a>}>
-        {!d.prFrei ? <p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p>
-          : d.prs === null ? <p className="leer">Die PR-Liste ist gerade nicht erreichbar.</p>
-          : d.prs.length ? <ul className="liste">{d.prs.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul> : <p className="leer">Kein PR wartet auf dich.</p>}
-      </Abschnitt>
-      <Abschnitt id="a-dok" titel="Neue Dokumente" erklaerung="Die zuletzt geänderten Berichte und Notizen. Alles Lesbare findest du unter „Dokumente“ — mit Suche." fuss={<a href="/v2/dokumente">Alle Dokumente →</a>}>
-        {d.dokumente.length ? <ul className="liste">{d.dokumente.map((x) => <DokZeile key={x.url} x={x} />)}</ul> : <p className="leer">Keine neuen Dokumente.</p>}
-      </Abschnitt>
+      {d.rolle === 'team' ? <>{dokAbschnitt}{prsAbschnitt}</> : <>{prsAbschnitt}{dokAbschnitt}</>}
     </div>
   );
 }

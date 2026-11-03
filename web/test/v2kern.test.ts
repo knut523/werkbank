@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, wartetAuf, prSicht, personen, uhrzeit, kurz } from '../server/v2kern.ts';
+import { rolle } from '../server/v2kern.ts';
 
 const NOW = Date.parse('2026-11-03T18:00:00Z');
 const frage = (id: string, o: Record<string, any> = {}) => ({
@@ -153,4 +154,13 @@ test('Karte: Dateipfade mit Zeilennummern aus Agententexten werden für Menschen
   const k = karteAusFrage(frage('q', { worum: 'Siehe `olaf/2-Areas/x/spec-a.md:51` und Z.56-59: soll das PDF die Texte holen?' }), { grund: '', strand: null, strandTitel: null, altUrl: 'x' });
   assert.doesNotMatch(k.worum, /\.md|:51|Z\.56/);
   assert.match(k.worum, /\(Notiz\)/);
+});
+
+test('S13/C6: Rolle — Admin leitet, wer einen GitHub-Namen hat, prüft (Reviewer), alle anderen sind Team; nie über offene PRs', () => {
+  const names = { knut523: 'Knut', bizarrochris: 'Christoph' };
+  assert.equal(rolle({ admin: true, vorname: 'Knut' }, names), 'leitung');
+  assert.equal(rolle({ admin: false, vorname: 'Christoph' }, names), 'reviewer');
+  assert.equal(rolle({ admin: false, vorname: 'christoph' }, names), 'reviewer', 'Groß-/Kleinschreibung egal');
+  assert.equal(rolle({ admin: false, vorname: 'Lisa' }, names), 'team');
+  assert.equal(rolle({ admin: false, vorname: '' }, names), 'team');
 });

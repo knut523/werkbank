@@ -1,6 +1,7 @@
 // Werkbank 2.0 (Paket 436): reine Regeln der neuen Oberfläche — welche fünf Dinge oben stehen, wie eine Karte aussieht,
 // der Zustand eines Unter-Chats in einem Satz, „Heute erledigt“ nur mit Fertigem, „wartet auf“ je Person. Ohne Datenbank.
 import { fangHierAn, type Frage } from './entscheidungsseite.ts';
+import { ohneFachwort } from './woerterbuch.ts';
 
 export type V2Antwort = 'ja' | 'nein' | 'anders' | 'spaeter';
 export interface V2Link { label: string; url: string; extern?: boolean }
@@ -85,13 +86,18 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
   if (f.quelle?.url?.startsWith('#/wissen/')) links.push({ label: f.quelle.text || 'Notiz', url: `/v2/dokument?vault=${encodeURIComponent(f.quelle.url.slice('#/wissen/'.length))}` });
   // Agenten schreiben oft Dateipfade mit Zeilen („…/x.md:51“, „Z.56-59“) — für Menschen in „(Notiz)“ übersetzen (Persona Knut R2).
   const ohnePfad = (t: string) => t.replace(/`?[\w./-]+\.(md|ts|tsx|json|ya?ml)(:\d+(-\d+)?)?`?/g, '(Notiz)').replace(/\bZ\.\s?\d+(-\d+)?/g, '').replace(/\(Notiz\)(\s*,?\s*\(Notiz\))+/g, '(Notiz)');
-  const voll = ohnePfad(String(f.worum ?? '').replace(/\s+/g, ' ').trim());
+  // S13: Code-Namen und Abkürzungen in Klartext (woerterbuch.ts) — nur die Anzeige; die Antwort nimmt der Server aus der Frage selbst.
+  const g = new Set<string>(), ge = new Set<string>();
+  const voll = ohneFachwort(ohnePfad(String(f.worum ?? '').replace(/\s+/g, ' ').trim()), new Set());
+  const titel = ohneFachwort(f.titel, g), worum = ohneFachwort(ohnePfad(String(f.worum ?? '').replace(/\s+/g, ' ').trim()), g);
+  const empfehlung = f.empfehlung ? ohneFachwort(f.empfehlung, g) : f.empfehlung;
+  const optionen = (f.optionen ?? []).map((x) => ohneFachwort(x, g));   // Alternativen bleiben roh: ihr Text geht beim Antippen als Antwort an den Agenten.
   const erklaerung: [string, string][] = [
     ...(voll && voll !== kurz(voll, 220) ? [['Worum es geht (ganz)', voll] as [string, string]] : []),
     ['Thema', f.gruppe],
     ['Woher', f.quelle?.text || '—'],
-    ...(f.empfehlung ? [['Empfehlung', f.empfehlung] as [string, string]] : []),
-    ...(f.optionen?.length ? [['Möglichkeiten', f.optionen.join(' · ')] as [string, string]] : []),
+    ...(f.empfehlung ? [['Empfehlung', ohneFachwort(f.empfehlung, ge)] as [string, string]] : []),
+    ...(f.optionen?.length ? [['Möglichkeiten', f.optionen.map((x) => ohneFachwort(x, ge)).join(' · ')] as [string, string]] : []),
     ['Was passiert bei „Ja, so“', freigabe ? 'Hier nichts — Freigaben nach außen (z. B. auf GitHub) gibst du in der alten Werkbank, mit dem gesehenen Stand.'
       : f.empfehlung ? `Die Empfehlung geht als deine Antwort an ${o.strand ? 'den Unter-Chat' : f.quelle?.text || 'die Quelle'}; der Agent arbeitet damit weiter.`
         : 'Deine Antwort geht an die Quelle; der Agent arbeitet damit weiter.'],
@@ -100,8 +106,8 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
     ...(f.wartetSeit ? [['Wartet seit', new Date(f.wartetSeit).toLocaleDateString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit' }) + ` ${uhrzeit(f.wartetSeit)}`] as [string, string]] : []),
   ];
   return {
-    id: f.id, art: freigabe ? 'freigabe' : 'entscheidung', titel: kurz(f.titel, 160), worum: kurz(voll, 220), grund: o.grund, empfehlung: f.empfehlung,
-    optionen: f.optionen ?? [], alternativen: f.alternativen ?? [], antworten, form: f.form, wichtig: f.stufe === 'wichtig', thema: f.gruppe, quelle: f.quelle?.text ?? '',
+    id: f.id, art: freigabe ? 'freigabe' : 'entscheidung', titel: kurz(titel, 160), worum: kurz(worum, 220), grund: o.grund, empfehlung,
+    optionen, alternativen: f.alternativen ?? [], antworten, form: f.form, wichtig: f.stufe === 'wichtig', thema: f.gruppe, quelle: f.quelle?.text ?? '',
     links, erklaerung, alt: weg === 'alt' ? o.altUrl : null, wartetSeit: f.wartetSeit,
   };
 }
@@ -191,4 +197,17 @@ export function personen(prs: LivePrLite[], ich: string, names: Record<string, s
   for (const p of prs) for (const x of wartetAuf(p, names)) n.set(x, (n.get(x) ?? 0) + 1);
   const [mich, ...rest] = [...n.entries()].map(([name, anzahl]) => ({ name, anzahl }));
   return [mich, ...rest.sort((a, b) => b.anzahl - a.anzahl || a.name.localeCompare(b.name))];
+}
+
+// ---------- Rolle (S13, Council C6) ----------
+
+export type Rolle = 'leitung' | 'reviewer' | 'team';
+/** Startansicht je Rolle: Admin leitet; wer in der GitHub-Namensliste steht, prüft Code (Reviewer); alle anderen sind Team.
+ *  Hängt am GitHub-Namen, nie an gerade offenen PRs (sonst wechselt die Startseite mit der PR-Lage).
+ *  ponytail: Vergleich über den Vornamen, weil die Namensliste (github.ts) nur Vornamen kennt; zwei Personen mit gleichem Vornamen
+ *  bekämen dieselbe Ansicht — nur Anordnung, keine Rechte. Upgrade: GitHub-Login am Konto speichern (E9, M3). */
+export function rolle(u: { admin: boolean; vorname: string }, names: Record<string, string>): Rolle {
+  if (u.admin) return 'leitung';
+  const v = u.vorname.trim().toLowerCase();
+  return v && Object.values(names).some((n) => n.trim().toLowerCase() === v) ? 'reviewer' : 'team';
 }

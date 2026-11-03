@@ -22,7 +22,7 @@ const deps: V2Deps = {
   fragenAntwort: async (_u, b) => { antworten.push(b); return { ok: true, ziel: 'den Unter-Chat „Rechner“' }; },
   strang: async () => null, hauptchat: async () => null, laeuftChat: async () => false,
   livePrs: async () => ({ map: new Map([['a#1', { pr: 'a#1', repo: 'a', number: 1, title: 'Eins', url: 'https://github.com/o/a/pull/1', turn: { who: 'Lisa', role: 'reviewer', why: 'Review angefragt' }, requested: [] }]]) }),
-  githubNames: () => ({}), letzteReviews: async () => [], reviewKommentar: () => null,
+  githubNames: () => ({ bizarrochris: 'Christoph', knut523: 'Knut' }), letzteReviews: async () => [], reviewKommentar: () => null,
   pakete: () => [{ name: '435-x', titel: 'Bericht X', status: 'wartet', at: Date.now() }],
   vaultSuche: async () => [{ path: 'olaf/datenschutz.md', title: 'Datenschutz' }], vaultNeu: () => [{ path: 'olaf/a.md', title: 'A', mtime: Date.now() }],
   wienDatum: () => '2026-11-03', claudeToken: async () => null, bridgeUrl: 'http://b', altUrl: 'http://alt/wb', log: () => {},
@@ -104,4 +104,12 @@ test('C2: automatisch Geschlossenes steht sichtbar auf der Entscheidungsseite (z
   assert.equal((await rufe('POST', '/api/v2/wieder-oeffnen', LISA, { id: 'q-zu1' })).status, 409, 'nur eigene');
   assert.equal((await rufe('POST', '/api/v2/wieder-oeffnen', ADMIN, { id: '../x' })).status, 400);
   assert.deepEqual(geoeffnet, ['k:q-zu1', 'l:q-zu1']);
+});
+
+test('S13: Startansicht je Rolle — Knut leitet, Christoph prüft (mehr PRs), Lisa ist Team (mehr Dokumente)', async () => {
+  const CHRISTOPH = { id: 'c', email: 'c@x', name: 'Christoph Muster', role: 'USER' } as any;
+  assert.equal((await rufe('GET', '/api/v2/start', ADMIN)).b.rolle, 'leitung');
+  assert.equal((await rufe('GET', '/api/v2/start?teil=oben', LISA)).b.rolle, 'team');
+  const c = await rufe('GET', '/api/v2/start', CHRISTOPH);
+  assert.equal(c.b.rolle, 'reviewer'); assert.equal(c.b.admin, false);
 });

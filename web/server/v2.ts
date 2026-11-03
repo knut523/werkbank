@@ -7,7 +7,7 @@ import type { User } from './auth.ts';
 import { fragenAus, type Frage } from './entscheidungsseite.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite } from './v2kern.ts';
+import { rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import * as librechat from './v2librechat.ts';
 
@@ -88,7 +88,8 @@ export function registerV2(on: On, d: V2Deps) {
     const jetzt = karten(d, fragen, ib.eintraege, jetztAuswahl(fragen));
     const auf = aufraeumen(d, sonstiges);
     const ich = vorname(u);
-    if (url.searchParams.get('teil') === 'oben') return send(d, res, { teil: 'oben', zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), ich, admin: admin(u), at: new Date() });
+    const r = rolle({ admin: admin(u), vorname: ich }, d.githubNames());
+    if (url.searchParams.get('teil') === 'oben') return send(d, res, { teil: 'oben', zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), ich, admin: admin(u), rolle: r, at: new Date() });
     let laeuft: any[] = [], erledigt: any[] = [];
     if (admin(u)) {
       const [liste, er] = await Promise.all([d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })), d.erledigtDaten(u, d.wienDatum()).catch(() => ({ straenge: [] as any[] }))]);
@@ -99,7 +100,7 @@ export function registerV2(on: On, d: V2Deps) {
     }
     const prFrei = !d.gesperrt(u, 'roadmap');
     const prs = prFrei ? await d.livePrs().then((g) => prSicht([...g.map.values()] as LivePrLite[], ich, d.githubNames()).filter((p) => !p.entwurf)).catch(() => null) : null;
-    send(d, res, { zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), aufraeumenGesamt: auf.length, laeuft: laeuft.slice(0, 3), laeuftGesamt: laeuft.length, erledigt, prs: prs ? prs.slice(0, 3) : null, prsGesamt: prs?.length ?? 0, prFrei, notizenFrei: !d.gesperrt(u, 'wissen'), dokumente: dokumenteNeu(d, u, 3), ich: ich, admin: admin(u), at: new Date() });
+    send(d, res, { zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), aufraeumenGesamt: auf.length, laeuft: laeuft.slice(0, 3), laeuftGesamt: laeuft.length, erledigt, prs: prs ? prs.slice(0, r === 'reviewer' ? 5 : 3) : null, prsGesamt: prs?.length ?? 0, prFrei, notizenFrei: !d.gesperrt(u, 'wissen'), dokumente: dokumenteNeu(d, u, r === 'team' ? 5 : 3), ich: ich, admin: admin(u), rolle: r, at: new Date() });
   });
 
   // --- Die eine Zahl (Kopf jeder Seite): dieselbe wie überall — `inboxZahl` ---

@@ -87,10 +87,10 @@ export function App() {
     <Kontext.Provider value={kontext}>
       <div className={`huelle${chat.offen ? ' mit-chat' : ''}`}>
         <header className="kopf">
-          <a className="marke-name" href="/v2/">OLAF Workspace</a>
+          <a className="marke-name" href="/v2/">OLAF<span className="marke-lang"> Workspace</span></a>
           <div className="kopf-rechts">
             <a className="zahl" href="/v2/entscheidungen" title="So viel wartet auf dich — antippen für die Liste">
-              <b>{zahl ?? '…'}</b><span className="zahl-text">warten auf dich</span><span className="zahl-kurz">offen</span>
+              <b>{zahl ?? '…'}</b><span>warten auf dich</span>
             </a>
             <a className="knopf leise rund" href="/v2/begriffe" aria-label="Begriffe in Klartext" title="Begriffe in Klartext">?</a>
             <button type="button" className="knopf chat-knopf" onClick={() => setChat({ offen: !chat.offen, text: '' })} aria-expanded={chat.offen}>Chat</button>
