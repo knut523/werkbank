@@ -55,12 +55,13 @@ export function App() {
   const { pfad, such } = useAdresse();
   const [konto, setKonto] = useState<{ name: string; admin: boolean } | null | undefined>(undefined);
   const [alt, setAlt] = useState('');
+  const [trocken, setTrocken] = useState(false);
   const [zahl, setZahl] = useState<number | null>(null);
   const [chat, setChat] = useState<{ offen: boolean; text: string }>({ offen: false, text: '' });
   const [n, setN] = useState(0);
 
-  const pruefen = () => hole<{ user: { name: string; role: string } | null; librechatUrl: string }>('/api/config')
-    .then((c) => { setAlt(`${c.librechatUrl}/wb`); setKonto(c.user ? { name: c.user.name.split(/\s+/)[0], admin: c.user.role === 'ADMIN' } : null); })
+  const pruefen = () => hole<{ user: { name: string; role: string } | null; librechatUrl: string; dryRun?: boolean; vaultDryRun?: boolean }>('/api/config')
+    .then((c) => { if (typeof c.librechatUrl === 'string') setAlt(`${c.librechatUrl}/wb`); setTrocken(!!(c.dryRun || c.vaultDryRun)); setKonto(c.user ? { name: c.user.name.split(/\s+/)[0], admin: c.user.role === 'ADMIN' } : null); })
     .catch(() => setKonto(null));
   useEffect(() => { void pruefen(); const ab = () => setKonto(null); window.addEventListener('v2-abgemeldet', ab); return () => window.removeEventListener('v2-abgemeldet', ab); }, []);
   // Die eine Zahl: beim Start, alle 60 s und nach jeder Antwort neu (null = neu holen).
@@ -102,6 +103,7 @@ export function App() {
             <button type="button" className="knopf leise klein" onClick={() => fetch('/api/logout', { method: 'POST', headers: { 'x-werkbank': '1' } }).finally(() => setKonto(null))}>Abmelden</button>
           </div>
         </nav>
+        {trocken && <p className="testband" role="note">Testbetrieb: Antworten an Notizen und Jira werden hier nicht wirklich geschrieben.</p>}
         <main className="inhalt"><Seite pfad={pfad} such={such} /></main>
         <button type="button" className="chat-fab" onClick={() => setChat({ offen: true, text: '' })} aria-label="Chat öffnen" hidden={chat.offen}>Chat</button>
         <ChatLeiste offen={chat.offen} vorbereitet={chat.text} schliessen={() => setChat({ offen: false, text: '' })} />

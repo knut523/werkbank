@@ -54,13 +54,16 @@ export function Jetzt() {
         </Abschnitt>
       )}
       {d.admin && (
-        <Abschnitt id="a-erledigt" titel="Heute erledigt" erklaerung="Was heute erledigt ist: von dir abgenommen, mit der Uhrzeit. Was ein Agent fertig gemacht hat, dessen Bericht du aber noch nicht gelesen hast, steht unter Arbeit › Fertig. Was noch eine Antwort braucht, steht oben.">
-          {abgenommen.length ? <ul className="liste">{abgenommen.slice(0, 3).map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `/v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'abgenommen', ton: 'gruen' }} links={e.links.slice(1)} />)}</ul>
-            : <p className="leer">Heute hast du noch nichts abgenommen.</p>}
-          {zumLesen.length > 0 && <p className="abschnitt-fuss">Die Agenten sind außerdem mit {zumLesen.length === 1 ? 'einem Auftrag' : 'mehreren Aufträgen'} fertig, deren Bericht du noch nicht gelesen hast: <a href="/v2/arbeit#fertig">unter Arbeit › Fertig →</a></p>}
+        <Abschnitt id="a-erledigt" titel="Heute erledigt" erklaerung="Was heute fertig geworden ist, mit der Uhrzeit — getrennt: was du schon abgenommen hast, und was ein Agent fertig gemacht hat, dessen Bericht du noch nicht gelesen hast. Was noch eine Antwort von dir braucht, steht oben, nicht hier.">
+          {!abgenommen.length && !zumLesen.length && <p className="leer">Heute ist noch nichts fertig geworden.</p>}
+          {abgenommen.length > 0 && <><p className="gruppe-titel">Von dir abgenommen</p>
+            <ul className="liste">{abgenommen.slice(0, 3).map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `/v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'abgenommen', ton: 'gruen' }} links={e.links.slice(1)} />)}</ul></>}
+          {zumLesen.length > 0 && <><p className="gruppe-titel">Fertig, Bericht noch nicht gelesen</p>
+            <ul className="liste">{zumLesen.slice(0, 3).map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `/v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'zum Lesen' }} />)}</ul>
+            {zumLesen.length > 3 && <p className="abschnitt-fuss"><a href="/v2/arbeit#fertig">Alle fertigen unter Arbeit →</a></p>}</>}
         </Abschnitt>
       )}
-      <Abschnitt id="a-prs" titel="PRs, die auf dich warten" erklaerung="Code-Vorschläge auf GitHub (Pull Requests), bei denen du gerade dran bist — zum Prüfen, Freigeben oder Nachbessern. Entwürfe zählen nicht mit. Unter „PRs“ siehst du alle und kannst auf jede andere Person umschalten."
+      <Abschnitt id="a-prs" titel="PRs, die auf dich warten (die neuesten)" erklaerung="Code-Vorschläge auf GitHub (Pull Requests), bei denen du gerade dran bist — zum Prüfen, Freigeben oder Nachbessern. Entwürfe zählen nicht mit. Unter „PRs“ siehst du alle und kannst auf jede andere Person umschalten."
         fuss={<a href="/v2/prs">Alle PRs →</a>}>
         {!d.prFrei ? <p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p>
           : d.prs === null ? <p className="leer">Die PR-Liste ist gerade nicht erreichbar.</p>
@@ -171,12 +174,15 @@ export function ArbeitDetail({ id }: { id: string }) {
 export function Prs({ wer }: { wer: string | null }) {
   const pfad = `/api/v2/prs${wer ? `?wer=${encodeURIComponent(wer)}` : ''}`;
   const [such, setSuch] = useState('');
+  const [mitEntwurf, setMitEntwurf] = useState(false);
   const { d, fehler, neu } = useDaten<{ gesperrt?: boolean; wer: string; ich: string; personen: { name: string; anzahl: number }[]; zeilen: PrZeile[]; stand: string | null }>(pfad);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   if (d.gesperrt) return <div className="seite"><h1>PRs</h1><p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p></div>;
   const suche = such.trim().toLowerCase();
-  const zeilen = suche ? d.zeilen.filter((p) => `${p.pr} ${p.titel}`.toLowerCase().includes(suche.replace(/^#/, ''))) : d.zeilen;
+  const entwuerfe = d.zeilen.filter((p) => p.entwurf).length;
+  const basis = mitEntwurf ? d.zeilen : d.zeilen.filter((p) => !p.entwurf);
+  const zeilen = suche ? basis.filter((p) => `${p.pr} ${p.titel}`.toLowerCase().includes(suche.replace(/^#/, ''))) : basis;
   const wahl = (n: string) => { const url = n === d.ich ? '/v2/prs' : `/v2/prs?wer=${encodeURIComponent(n)}`; history.pushState(null, '', url); window.dispatchEvent(new PopStateEvent('popstate')); };
   return (
     <div className="seite">
@@ -189,6 +195,7 @@ export function Prs({ wer }: { wer: string | null }) {
         </select>
         <label htmlFor="pr-such" className="unsichtbar">PR suchen</label>
         <input id="pr-such" type="search" value={such} onChange={(e) => setSuch(e.target.value)} placeholder="Nummer oder Titel, z. B. 268" />
+        {entwuerfe > 0 && <label className="klein"><input type="checkbox" checked={mitEntwurf} onChange={(e) => setMitEntwurf(e.target.checked)} /> Entwürfe zeigen ({entwuerfe})</label>}
       </div>
       {zeilen.length ? <ul className="liste">{zeilen.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul>
         : suche ? <p className="leer">Kein PR in dieser Liste passt zu „{such}“ — schalte oben auf „alle“.</p> : <p className="leer">{d.wer === d.ich ? 'Kein PR wartet auf dich.' : `Kein PR wartet auf ${d.wer}.`}</p>}

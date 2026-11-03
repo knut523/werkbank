@@ -138,7 +138,7 @@ p { margin: 0 0 var(--s1); }
 .filter label { white-space: nowrap; font-weight: 600; }
 .filter select { max-width: 320px; }
 .filter { flex-wrap: wrap; }
-.filter input { flex: 1 1 180px; font: inherit; padding: 10px 12px; border: 1px solid #cdd3da; border-radius: 10px; }
+.filter input[type=search] { flex: 1 1 180px; font: inherit; padding: 10px 12px; border: 1px solid #cdd3da; border-radius: 10px; }
 .suche { margin-bottom: var(--s2); }
 .begriffe { display: grid; gap: 12px; margin: 0; }
 .begriffe dt { font-weight: 700; margin-bottom: 4px; }
@@ -187,3 +187,8 @@ p { margin: 0 0 var(--s1); }
 .anmelden form { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 6px; padding: var(--s3); }
 .anmelden label { font-weight: 600; font-size: .9rem; margin-top: 6px; }
 .anmelden button { margin-top: var(--s2); }
+
+/* Testbetrieb (Trockenlauf) — wie das Band der alten Werkbank */
+.testband { margin: 0; padding: 6px var(--s2); background: var(--warn-hell); color: var(--warn); font-size: .85rem; text-align: center; border-bottom: 1px solid #f3d9ad; }
+@media (min-width: 900px) { .testband { margin-left: 220px; } }
+.gruppe-titel { font-size: .85rem; font-weight: 600; color: var(--gedimmt); margin: 12px 0 6px; }

@@ -75,7 +75,12 @@ export function Zeile({ titel, url, satz, rechts, marke, links }: { titel: strin
   );
 }
 
-export function Laedt({ text = 'Lädt …' }: { text?: string }) { return <p className="laedt" role="status">{text}</p>; }
+/** Ladehinweis erst nach 400 ms — kurze Abrufe blitzen nicht als leere Seite auf (Persona Knut R2). */
+export function Laedt({ text = 'Lädt …' }: { text?: string }) {
+  const [zeigen, setZeigen] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setZeigen(true), 400); return () => clearTimeout(t); }, []);
+  return <p className="laedt" role="status" aria-busy="true">{zeigen ? text : '\u00a0'}</p>;
+}
 export function Fehler({ text, nochmal }: { text: string; nochmal?: () => void }) {
   return <div className="fehler" role="alert"><p>{text}</p>{nochmal && <button type="button" className="knopf klein" onClick={nochmal}>Noch einmal</button>}</div>;
 }
