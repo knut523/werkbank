@@ -93,7 +93,7 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
   const empfehlung = f.empfehlung ? ohneFachwort(f.empfehlung, g) : f.empfehlung;
   const optionen = (f.optionen ?? []).map((x) => ohneFachwort(x, g));   // Alternativen bleiben roh: ihr Text geht beim Antippen als Antwort an den Agenten.
   const erklaerung: [string, string][] = [
-    ...(voll && voll !== kurz(voll, 220) ? [['Worum es geht (ganz)', voll] as [string, string]] : []),
+    ...(worum && worum !== kurz(worum, 220) ? [['Worum es geht (ganz)', voll] as [string, string]] : []),   // gekürzt wird der übersetzte Text (Runde 3)
     ['Thema', f.gruppe],
     ['Woher', f.quelle?.text || '—'],
     ...(f.empfehlung ? [['Empfehlung', ohneFachwort(f.empfehlung, ge)] as [string, string]] : []),

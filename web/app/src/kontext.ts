@@ -8,6 +8,8 @@ export interface AppKontext {
   chatOeffnen: (conv: string) => void;
   /** Die eine Zahl im Kopf nachziehen (nach einer Antwort oder einem frischen Abruf). */
   zahl: (n: number | null) => void;
+  /** Testbetrieb (Trockenlauf): Antworten an Notizen und Jira werden nicht geschrieben — die Fragen bleiben offen (Runde 3, B2/B3). */
+  testbetrieb?: boolean;
   /** Adresse der alten Werkbank (für „Alte Werkbank“ und Freigaben). */
   alt: string;
 }

@@ -112,7 +112,7 @@ export function Entscheidungen() {
     <div className="seite">
       <h1>Entscheidungen</h1>
       <p className="unterzeile">Alles, was auf dich wartet. „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — an genau diese Karte.</p>
-      <p className="zusammensetzung">Die Zahl oben rechts: {d.oben.length + d.rest.length} {d.oben.length + d.rest.length === 1 ? 'Frage' : 'Fragen und Freigaben'}{d.aufraeumen.length ? ` + ${d.aufraeumen.length} ${d.aufraeumen.length === 1 ? 'Sammelposten' : 'Sammelposten'} zum Aufräumen` : ''} = {d.zahl}.</p>
+      <p className="zusammensetzung">Die Zahl oben rechts: {d.oben.length + d.rest.length} {d.oben.length + d.rest.length === 1 ? 'Frage' : 'Fragen und Freigaben'}{d.aufraeumen.length ? ` + ${d.aufraeumen.length} ${d.aufraeumen.length === 1 ? 'Sammelposten' : 'Sammelposten'} zum Aufräumen` : ''} = {d.zahl}.{d.geschlossen?.length ? <> <a href="#e-geschlossen">{mehrzahl(d.geschlossen.length, 'Frage hat', 'Fragen haben')} sich von selbst erledigt ↓</a></> : null}</p>
       <Abschnitt id="e-zuerst" titel="Zuerst" erklaerung="Dieselben fünf wie auf der Startseite: was einen Agenten anhält oder bald als angenommen gilt.">
         {d.oben.length ? <div className="karten">{d.oben.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div> : <p className="leer">Gerade wartet nichts auf dich.</p>}
       </Abschnitt>
@@ -153,7 +153,7 @@ function ThemaGruppe({ thema, karten, fertig }: { thema: string; karten: Karte[]
     setLaeuft(true); setMeldung(null);
     try {
       const r = await schicke<{ ok: number; fehler: string[]; uebersprungen: number }>('api/v2/alle-empfohlen', { ids: passend.map((k) => k.id) });
-      setMeldung(`✓ ${mehrzahl(r.ok, 'Antwort', 'Antworten')} wie empfohlen verschickt.${r.uebersprungen ? ` ${r.uebersprungen} übersprungen — die beantwortest du einzeln.` : ''}${r.fehler.length ? ` Nicht geklappt: ${r.fehler.join('; ')}` : ''}`);
+      setMeldung(`✓ ${mehrzahl(r.ok, 'Antwort', 'Antworten')} wie empfohlen verschickt.${app.testbetrieb ? ' Testbetrieb: Fragen aus Notizen bleiben hier offen.' : ''}${r.uebersprungen ? ` ${r.uebersprungen} übersprungen — die beantwortest du einzeln.` : ''}${r.fehler.length ? ` Nicht geklappt: ${r.fehler.join('; ')}` : ''}`);
       setFrage(false); fertig();
     } catch (x: any) { setMeldung(x.message); } finally { setLaeuft(false); }
   };
@@ -166,7 +166,7 @@ function ThemaGruppe({ thema, karten, fertig }: { thema: string; karten: Karte[]
       {frage && (
         <div className="bestaetigen" role="alertdialog" aria-label={`Alle ${passend.length} wie empfohlen beantworten?`}>
           <p>{mehrzahl(passend.length, 'Frage', 'Fragen')} zu „{thema}“ mit der jeweiligen Empfehlung beantworten? Jede Antwort geht an ihre Quelle (meist den Unter-Chat, der gefragt hat).</p>
-          <ul className="klein">{passend.map((k) => <li key={k.id}>{k.titel} — <i>{k.empfehlung}</i></li>)}</ul>
+          <ul className="klein">{passend.map((k) => <li key={k.id}>{k.titel}{k.quelle ? ` (aus ${k.quelle})` : ''} — <i>{k.empfehlung}</i></li>)}</ul>
           <div className="antworten">
             <button type="button" className="knopf haupt" disabled={laeuft} onClick={alle}>{laeuft ? 'Sendet …' : 'Ja, alle so'}</button>
             <button type="button" className="knopf leise" disabled={laeuft} onClick={() => setFrage(false)}>Abbrechen</button>
@@ -183,13 +183,15 @@ interface Geschlossen { id: string; titel: string; grund: string; wann: string }
 function GeschlossenListe({ l, geoeffnet }: { l: Geschlossen[]; geoeffnet: () => void }) {
   const [laeuft, setLaeuft] = useState<string | null>(null);
   const [fehler, setFehler] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
   const oeffnen = async (id: string) => {
     setLaeuft(id); setFehler(null);
-    try { await schicke('api/v2/wieder-oeffnen', { id }); geoeffnet(); } catch (x: any) { setFehler(x.message); } finally { setLaeuft(null); }
+    try { await schicke('api/v2/wieder-oeffnen', { id }); setOk('✓ Wieder offen — die Frage steht jetzt oben unter „Weitere“ und zählt wieder mit.'); geoeffnet(); } catch (x: any) { setFehler(x.message); } finally { setLaeuft(null); }
   };
   return (
     <>
       {fehler && <p className="fehlertext klein">{fehler}</p>}
+      {ok && <p className="ok" role="status">{ok}</p>}
       <ul className="liste">{l.map((g) => (
         <li key={g.id} className="zeile">
           <div className="zeile-haupt"><span className="zeile-titel">{g.titel || 'Frage'}</span><p className="zeile-satz">{g.grund}</p></div>

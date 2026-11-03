@@ -30,3 +30,12 @@ test('Karte: Titel, Worum, Empfehlung und Möglichkeiten in Klartext; die Antwor
   assert.deepEqual(k.optionen, ['Marketing-Einwilligung', 'nichts']);
   assert.equal(f.empfehlung, 'Ja, consentMarketing setzen', 'Frage-Objekt unverändert');
 });
+
+test('wird der Text erst durch die Erklärungen zu lang, steht er unter „Was ist das?“ ganz', () => {
+  const worum = 'Die DSB und die AVV und die BEG und die EEG sind zu klären. ' + 'x'.repeat(150);
+  assert.ok(worum.length <= 220, 'ohne Erklärungen nicht gekürzt');
+  const f: any = { id: 'q-2', klasse: 'entscheidung', titel: 'T', worum, empfehlung: null, optionen: [], alternativen: [], antworten: ['anders'], gruppe: 'G', quelle: { text: 'x' }, blockiert: 0, wartetSeit: null };
+  const k = karteAusFrage(f, { grund: '', strand: null, strandTitel: null, altUrl: 'http://alt' });
+  assert.ok(k.worum.endsWith('…') || k.worum.length < (k.erklaerung.find(([a]) => a === 'Worum es geht (ganz)')?.[1] ?? '').length);
+  assert.ok(k.erklaerung.some(([a]) => a === 'Worum es geht (ganz)'), JSON.stringify(k.erklaerung.map(([a]) => a)));
+});

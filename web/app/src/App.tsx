@@ -17,6 +17,13 @@ const BEREICHE = [
   { url: 'v2/mehr', label: 'Mehr', ico: '⋯', passt: (p: string) => p.startsWith('v2/mehr') || p.startsWith('v2/erledigt') },
 ];
 
+/** Zu einer Sprungmarke scrollen, sobald der Abschnitt gerendert ist (Daten laden nach) — höchstens 3 s warten. */
+function springZu(hash: string) {
+  if (!hash || hash.length < 2) return;
+  let n = 0;
+  const t = setInterval(() => { const el = document.getElementById(decodeURIComponent(hash.slice(1))); if (el || ++n > 30) { clearInterval(t); el?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 100);
+}
+
 function useAdresse() {
   const [a, setA] = useState(() => ({ pfad: logisch(location.pathname), such: location.search }));
   useEffect(() => {
@@ -30,9 +37,11 @@ function useAdresse() {
       if (!a || !href || a.target || !istIntern(href)) return;
       e.preventDefault();
       const ziel = new URL(rel(href), document.baseURI);   // relativ zu <base href> (S16)
-      if (ziel.pathname + ziel.search !== location.pathname + location.search) { history.pushState(null, '', ziel.pathname + ziel.search); window.scrollTo(0, 0); }
+      if (ziel.pathname + ziel.search + ziel.hash !== location.pathname + location.search + location.hash) { history.pushState(null, '', ziel.pathname + ziel.search + ziel.hash); window.scrollTo(0, 0); }
+      springZu(ziel.hash);   // Runde 3 (B4): Sprungmarke auf der Zielseite, sobald sie geladen ist
       neu();
     };
+    springZu(location.hash);   // auch beim direkten Aufruf mit #…
     window.addEventListener('popstate', neu);
     document.addEventListener('click', klick);
     return () => { window.removeEventListener('popstate', neu); document.removeEventListener('click', klick); };
@@ -84,6 +93,7 @@ export function App() {
     ich: konto ?? { name: '', admin: false }, alt,
     chat: (text = '') => setChat({ offen: true, text }),
     chatOeffnen: (conv: string) => setChat({ offen: true, text: '', conv }),
+    testbetrieb: trocken,
     zahl: (x) => { if (x === null) setN((v) => v + 1); else setZahl(x); },
   }), [konto, alt]);
 

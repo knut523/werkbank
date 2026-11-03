@@ -131,6 +131,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
     try {
       const r = await schicke<{ ziel: string | null; spaeter: boolean }>('api/v2/antwort', { id: k.id, antwort, text: t.trim() });
       setFertig(r.spaeter ? 'Zurückgestellt — kommt morgen wieder.' : `Ging an ${r.ziel ?? 'die Quelle'}: ${antwort === 'ja' ? `„Ja, so“${k.empfehlung ? ` (${k.empfehlung})` : ''}${t.trim() ? ` mit Notiz „${t.trim()}“` : ''}` : antwort === 'nein' ? '„Nein“' : `„${t.trim()}“`}`);
+      if (app.testbetrieb && !r.spaeter) setFertig((x) => `${x} — Testbetrieb: Fragen aus Notizen bleiben hier offen und tauchen nach dem Neuladen wieder auf.`);
       beantwortet?.();
     } catch (e: any) { setFehler(e.message); } finally { setLaeuft(false); }
   }
@@ -184,7 +185,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
       {fehler && <p className="fehlertext" role="alert">{fehler}</p>}
       <div className="karte-fuss">
         <Verweise links={k.links} />
-        <WasIstDas zeilen={k.erklaerung} frage={chatFrage(k.titel, k.worum)} />
+        <WasIstDas zeilen={k.erklaerung} frage={chatFrage(k.titel, k.erklaerung.find(([a]) => a === 'Worum es geht (ganz)')?.[1] ?? k.worum)} />
       </div>
     </article>
   );
