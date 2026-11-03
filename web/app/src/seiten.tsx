@@ -257,6 +257,9 @@ export function Arbeit() {
     <div className="seite">
       <h1>Arbeit</h1>
       <p className="unterzeile">Deine Unter-Chats: Aufträge, an denen Agenten selbstständig arbeiten. <a href="v2/chats">Alle Chats durchsuchen (auch alte) →</a></p>
+      <form className="suche" role="search" onSubmit={(e) => { e.preventDefault(); const q = String(new FormData(e.currentTarget).get('q') ?? '').trim(); history.pushState(null, '', q ? `v2/chats?q=${encodeURIComponent(q)}` : 'v2/chats'); window.dispatchEvent(new PopStateEvent('popstate')); }}>
+        <input type="search" name="q" placeholder="Chat suchen — auch alte (Titel, Thema)" aria-label="Chats durchsuchen" />
+      </form>
       <Abschnitt id="w-wartet" titel="Wartet auf dich" erklaerung="Unter-Chats, die ohne dich nicht weiterkommen: eine offene Frage, ein Hänger oder kein Stand. Ein Klick zeigt, was genau.">{liste(g.wartet, 'Kein Unter-Chat wartet auf dich.')}</Abschnitt>
       <Abschnitt id="w-laeuft" titel="Läuft" erklaerung="Hier arbeitet gerade ein Agent. Du musst nichts tun.">{liste(g.laeuft, 'Gerade läuft nichts.')}</Abschnitt>
       <Abschnitt id="fertig" titel="Fertig" erklaerung="Fertige Unter-Chats, die du noch nicht abgenommen hast — der Bericht liegt bereit.">{liste(g.fertig, 'Nichts Fertiges offen.')}</Abschnitt>
@@ -523,10 +526,10 @@ interface ChatZeile { id: string; art: 'hauptchat' | 'unterchat' | 'chat' | 'cha
 const ART_TEXT: Record<ChatZeile['art'], string> = { hauptchat: 'Hauptchat', unterchat: 'Unter-Chat', chat: 'Chat', chat2: 'Chat (neu)' };
 const ZEIT: [string, number][] = [['7 Tage', 7], ['30 Tage', 30], ['90 Tage', 90], ['alle', 0]];
 
-export function AlleChats() {
+export function AlleChats({ q = '' }: { q?: string }) {
   const app = useApp();
   const { d, fehler, neu } = useDaten<{ zeilen: ChatZeile[]; themen: string[]; fehlt?: string[] }>('api/v2/chats');
-  const [such, setSuch] = useState('');
+  const [such, setSuch] = useState(q);
   const [art, setArt] = useState<'alle' | 'unterchat' | 'haupt' | 'chat'>('alle');
   const [status, setStatus] = useState('alle');
   const [thema, setThema] = useState('alle');

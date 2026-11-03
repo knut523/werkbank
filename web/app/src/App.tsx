@@ -62,7 +62,7 @@ function Seite({ pfad, such }: { pfad: string; such: string }) {
   if (pfad.startsWith('v2/dokumente')) return <Dokumente key={q.get('q') ?? ''} q={q.get('q') ?? ''} />;
   if (pfad.startsWith('v2/begriffe')) return <Begriffe />;
   if (pfad.startsWith('v2/mehr')) return <Mehr />;
-  if (pfad.startsWith('v2/chats')) return <AlleChats />;
+  if (pfad.startsWith('v2/chats')) return <AlleChats key={such} q={q.get('q') ?? ''} />;
   if (pfad === 'v2/themen') return <Themen />;
   if (pfad === 'v2/thema') return <Thema key={such} name={q.get('name') ?? ''} />;
   if (pfad.startsWith('v2/erledigt')) return <Erledigt key={such} tag={q.get('tag')} />;
