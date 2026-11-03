@@ -28,6 +28,7 @@ import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
 import { fragenAufraeumenAn, fragenAufraeumen } from './fragenaufraeumen.ts';
 import { fragenAusBericht, automatischGeschlossen, wiederOeffnen } from './fragenbericht.ts';
+import { ueberholteFreigaben } from './ueberholt.ts';
 import { wahrerLauf } from './strangwahrheit.ts';
 import { baueErledigt } from './erledigt.ts';
 import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
@@ -1524,6 +1525,13 @@ async function inboxFuer(u: User, now = Date.now()) {
   if (admin && brauchtAn() && karten.some((k) => k.braucht && !k.running)) {
     const s = await brauchtSicht(u, { karten }).catch((e: any) => { log('braucht fehler', { user: u.id, error: String(e?.message ?? e).slice(0, 160) }); return null; });
     if (s) { ib.eintraege = wendeAufInbox(ib.eintraege, s, { an: true }); (ib as any).brauchtZu = new Map(s.geschlossen.map((g: any) => [g.strand, g.grund])); }
+  }
+  // Paket 436 S21: Freigaben, deren Stand auf GitHub schon gemergt ist, zählen nicht mehr — mit Beleg, jedes Mal neu gerechnet (ueberholt.ts).
+  if (admin) {
+    const prs = ((await wb().collection('pr_ticker_prs').find({ state: 'MERGED' }, { projection: { head: 1, state: 1, at: 1 } }).sort({ at: -1 }).limit(2000).toArray().catch((e: any) => { log('ueberholt fehler', { error: String(e?.message ?? e).slice(0, 160) }); return []; })) as any[]).map((d) => ({ pr: String(d._id), head: String(d.head ?? ''), state: String(d.state), at: d.at }));
+    const ueb = ueberholteFreigaben(ib.eintraege, prs);
+    if (ueb.length) { const weg = new Set(ueb.map((x) => x.id)); ib.eintraege = ib.eintraege.filter((e) => !weg.has(e.id)); }
+    (ib as any).ueberholt = ueb;
   }
   zahlCache.set(u.id, { at: Date.now(), n: inboxZahl(ib.eintraege), text: brauchtSumme(ib.eintraege).text });   // jede frisch gebaute Inbox stellt auch den Zähler (Kopf = Leiste, 221)
   return ib;
@@ -4269,6 +4277,7 @@ registerV2(on, {
   gesperrt: (u, f) => !!blockedFeature(u, f === 'wissen' ? '/api/vault/' : '/api/roadmap/'),
   geschlossen: (u) => automatischGeschlossen(u.id),
   alleEmpfohlen: alleWieEmpfohlen,
+  sammelSchliessen: (u, id) => inboxAntworten(u, id, { antwort: 'nein', weg: 'ui' }),
   alleRuns: (u) => orchRuns().find({ userId: u.id }, { projection: { _id: 1, conv: 1, title: 1, thema: 1, zustand: 1, kind: 1, lastActivity: 1, doneAt: 1, startedAt: 1, reviewedAt: 1, knutReviewedAt: 1, startError: 1, endedAt: 1 } }).sort({ lastActivity: -1 }).limit(1000).toArray(),
   lcChats: (u) => v2lcListe(u), lcUrl: cfg.librechatPublicUrl, rolleEinstellung: process.env.WERKBANK_ROLLE ?? null,
   wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },

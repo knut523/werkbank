@@ -96,9 +96,35 @@ export function Jetzt() {
   );
 }
 
-const AufraeumenListe = ({ l }: { l: Aufraeumen[] }) => (
-  <ul className="liste aufraeumen">{l.map((x) => <Zeile key={x.id} titel={x.titel} url={x.url} satz={`${x.worum} Zählt als ein Posten. In der alten Werkbank.`} marke={{ text: 'Sammelposten' }} />)}</ul>
-);
+function AufraeumenListe({ l, fertig }: { l: Aufraeumen[]; fertig?: () => void }) {
+  return <ul className="liste aufraeumen">{l.map((x) => x.schliessbar ? <SammelSchliessen key={x.id} x={x} fertig={fertig} /> : <Zeile key={x.id} titel={x.titel} url={x.url} satz={`${x.worum} Zählt als ein Posten. In der alten Werkbank.`} marke={{ text: 'Sammelposten' }} />)}</ul>;
+}
+
+/** S21: alte Deckel-Fragen mit einem Klick schließen — mit Rückfrage, derselbe Weg wie in der alten Werkbank. */
+function SammelSchliessen({ x, fertig }: { x: Aufraeumen; fertig?: () => void }) {
+  const app = useApp();
+  const [frage, setFrage] = useState(false);
+  const [laeuft, setLaeuft] = useState(false);
+  const [meldung, setMeldung] = useState<string | null>(null);
+  const zu = async () => {
+    setLaeuft(true);
+    try { await schicke('api/v2/sammel-schliessen', { id: x.id }); setMeldung(`✓ ${mehrzahl(x.schliessbar!, 'Frage', 'Fragen')} geschlossen — jede steht mit Grund im Entscheidungs-Log.`); app.zahl(null); fertig?.(); }
+    catch (e: any) { setMeldung(e.message); } finally { setLaeuft(false); setFrage(false); }
+  };
+  return (
+    <li className="zeile">
+      <div className="zeile-haupt">
+        <span className="zeile-titel">{x.titel}</span>
+        <p className="zeile-satz">{x.worum}</p>
+        {frage && <p className="klein"><b>{mehrzahl(x.schliessbar!, 'Frage', 'Fragen')} schließen?</b> Die Unter-Chats laufen nicht mehr; niemand bekommt eine Nachricht. <button type="button" className="knopf haupt klein" disabled={laeuft} onClick={zu}>{laeuft ? 'Schließt …' : 'Ja, schließen'}</button> <button type="button" className="knopf leise klein" onClick={() => setFrage(false)}>Abbrechen</button></p>}
+        {meldung && <p className="ok" role="status">{meldung}</p>}
+      </div>
+      <div className="zeile-rechts">{!frage && !meldung?.startsWith('✓') && <button type="button" className="knopf leise klein" onClick={() => { setMeldung(null); setFrage(true); }}>Alle {x.schliessbar} schließen …</button>}</div>
+    </li>
+  );
+}
+
+interface Ueberholt { id: string; titel: string; grund: string; beleg: string }
 const DokZeile = ({ x }: { x: Dok }) => <Zeile titel={x.titel} url={x.url} satz={x.worum} marke={{ text: x.art === 'bericht' ? 'Bericht' : 'Notiz' }} rechts={wann(x.at)} />;
 const PrZeileView = ({ p }: { p: PrZeile }) => (
   <Zeile titel={`${p.pr} · ${p.titel}`} url={`v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}
@@ -109,7 +135,7 @@ const PrZeileView = ({ p }: { p: PrZeile }) => (
 
 export function Entscheidungen() {
   const app = useApp();
-  const { d, fehler, neu } = useDaten<{ zahl: number; oben: Karte[]; rest: Karte[]; aufraeumen: Aufraeumen[]; geschlossen?: Geschlossen[] }>('api/v2/entscheidungen');
+  const { d, fehler, neu } = useDaten<{ zahl: number; oben: Karte[]; rest: Karte[]; aufraeumen: Aufraeumen[]; geschlossen?: Geschlossen[]; ueberholt?: Ueberholt[] }>('api/v2/entscheidungen');
   useEffect(() => { if (d) app.zahl(d.zahl); }, [d]);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
@@ -117,7 +143,7 @@ export function Entscheidungen() {
     <div className="seite">
       <h1>Entscheidungen</h1>
       <p className="unterzeile">Alles, was auf dich wartet. „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — an genau diese Karte.</p>
-      <p className="zusammensetzung">Die Zahl oben rechts: {d.oben.length + d.rest.length} {d.oben.length + d.rest.length === 1 ? 'Frage' : 'Fragen und Freigaben'}{d.aufraeumen.length ? ` + ${d.aufraeumen.length} ${d.aufraeumen.length === 1 ? 'Sammelposten' : 'Sammelposten'} zum Aufräumen` : ''} = {d.zahl}.{d.geschlossen?.length ? <> <a href="#e-geschlossen">{mehrzahl(d.geschlossen.length, 'Frage hat', 'Fragen haben')} sich von selbst erledigt ↓</a></> : null}</p>
+      <p className="zusammensetzung">Die Zahl oben rechts: {d.oben.length + d.rest.length} {d.oben.length + d.rest.length === 1 ? 'Frage' : 'Fragen und Freigaben'}{d.aufraeumen.length ? ` + ${d.aufraeumen.length} ${d.aufraeumen.length === 1 ? 'Sammelposten' : 'Sammelposten'} zum Aufräumen` : ''} = {d.zahl}.{d.ueberholt?.length ? <> <a href="#e-ueberholt">{mehrzahl(d.ueberholt.length, 'Freigabe ist', 'Freigaben sind')} überholt und zählt nicht ↓</a></> : null}{d.geschlossen?.length ? <> <a href="#e-geschlossen">{mehrzahl(d.geschlossen.length, 'Frage hat', 'Fragen haben')} sich von selbst erledigt ↓</a></> : null}</p>
       <Abschnitt id="e-zuerst" titel="Zuerst" erklaerung="Dieselben fünf wie auf der Startseite: was einen Agenten anhält oder bald als angenommen gilt.">
         {d.oben.length ? <div className="karten">{d.oben.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div> : <p className="leer">{d.aufraeumen.length ? 'Keine Entscheidung offen — was trotzdem zählt, steht unten unter „Aufräumen“.' : 'Gerade wartet nichts auf dich.'}</p>}
       </Abschnitt>
@@ -128,7 +154,12 @@ export function Entscheidungen() {
       )}
       {d.aufraeumen.length > 0 && (
         <Abschnitt id="e-aufraeumen" titel="Aufräumen" erklaerung="Zählt mit, weil es auf dich wartet — ist aber keine Entscheidung und hält keinen Agenten an. Das erledigst du (noch) in der alten Werkbank.">
-          <AufraeumenListe l={d.aufraeumen} />
+          <AufraeumenListe l={d.aufraeumen} fertig={neu} />
+        </Abschnitt>
+      )}
+      {!!d.ueberholt?.length && (
+        <Abschnitt id="e-ueberholt" titel="Überholt — zählt nicht mit" erklaerung="Freigaben, deren Stand auf GitHub schon gemergt ist: entweder genau dieser Stand oder ein neuerer auf demselben Zweig. Daran wartet nichts mehr auf dich. Das wird bei jedem Laden neu geprüft — ändert sich etwas, steht die Freigabe wieder oben.">
+          <ul className="liste">{d.ueberholt.map((u) => <li key={u.id} className="zeile"><div className="zeile-haupt"><span className="zeile-titel">{u.titel}</span><p className="zeile-satz">{u.grund}</p></div><div className="zeile-rechts"><span className="zeit">{u.beleg.split('/').pop()}</span></div></li>)}</ul>
         </Abschnitt>
       )}
       {!!d.geschlossen?.length && (

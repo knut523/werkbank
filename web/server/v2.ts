@@ -19,7 +19,7 @@ export interface V2Deps {
   needUser: (req: IncomingMessage) => Promise<User>;
   body: (req: IncomingMessage, max?: number) => Promise<any>;
   send: (res: ServerResponse, status: number, body: unknown) => void;
-  inboxFuer: (u: User) => Promise<{ eintraege: InboxEintrag[] }>;
+  inboxFuer: (u: User) => Promise<{ eintraege: InboxEintrag[]; ueberholt?: { id: string; titel: string; grund: string; beleg: string }[] }>;
   unterchatListe: (u: User, erledigt: boolean) => Promise<{ zeilen: any[] }>;
   erledigtDaten: (u: User, tag: string) => Promise<{ straenge: any[] }>;
   fragenAntwort: (u: User, b: any) => Promise<any>;
@@ -47,6 +47,8 @@ export interface V2Deps {
   /** S15: „Alle wie empfohlen“ — dieselbe Sammel-Logik wie die alte Werkbank (main.ts, POST /api/entscheidungen/fragen/alle). */
   alleEmpfohlen: (u: User, ids: string[], nur: (f: Frage) => boolean) => Promise<{ ok: number; fehler: string[] }>;
   /** S12: alle Unter-Chats und Hauptchats der Person (auch alte), Kopfdaten; LibreChat-Unterhaltungen über den Adapter; LibreChat-Adresse. */
+  /** S21: Sammelposten schließen — derselbe Weg wie „Nein“ in der alten Werkbank (inboxAntworten). */
+  sammelSchliessen: (u: User, id: string) => Promise<unknown>;
   alleRuns: (u: User) => Promise<any[]>;
   lcChats: (u: User) => Promise<any[]>;
   lcUrl: string;
@@ -75,11 +77,14 @@ function karten(d: V2Deps, fragen: Frage[], eintraege: InboxEintrag[], liste: { 
 }
 
 /** Was keine Frage ist (Pflege, Altbestand, Schlange …) zählt in die eine Zahl — also auch zeigen, mit Link in die alte Werkbank. */
+/** S21: in 2.0 lässt sich nur dieser Sammelposten schließen — alte Deckel-Fragen nicht mehr laufender Unter-Chats (bestehender Weg). */
+const SAMMEL_SCHLIESSBAR = 'altbestand-deckel';
 function aufraeumen(d: V2Deps, sonstiges: InboxEintrag[]) {
   return sonstiges.map((e) => {
     const ziel = String(e.quelle?.url ?? '').match(/^#\/([\w/-]+)/)?.[1] ?? 'entscheidungen';
-    return { id: e.id, titel: kurz(String(e.frage ?? ''), 160), sammel: true, worum: e.art === 'altbestand' ? 'Alte Fragen, die niemand mehr braucht — durchsehen oder verwerfen.' : e.art === 'pflege' ? 'Aufräumen, damit Listen stimmen. Hält keinen Agenten an.' : 'Wartet auf dich, ist aber keine Entscheidung.',
-      url: `${d.altUrl}/${ziel}` };
+    const deckel = e.id === SAMMEL_SCHLIESSBAR;
+    return { id: e.id, titel: kurz(String(e.frage ?? ''), 160), sammel: true, worum: deckel ? 'Fragen von Unter-Chats, die nicht mehr laufen („automatisch fortgesetzt“, Budget, Weckdeckel). Schließen geht hier mit einem Klick.' : e.art === 'altbestand' ? 'Alte Fragen, die niemand mehr braucht — durchsehen oder verwerfen.' : e.art === 'pflege' ? 'Aufräumen, damit Listen stimmen. Hält keinen Agenten an.' : 'Wartet auf dich, ist aber keine Entscheidung.',
+      url: `${d.altUrl}/${ziel}`, ...(deckel ? { schliessbar: (e.daten?.eintraege ?? []).length } : {}) };
   });
 }
 
@@ -127,7 +132,7 @@ export function registerV2(on: On, d: V2Deps) {
     const rest = fragen.filter((f) => f.klasse !== 'aktion' && !obenIds.has(f.id)).map((f) => ({ f, grund: '' }));
     const alle = karten(d, fragen, ib.eintraege, [...oben, ...rest]);
     const geschlossen = (await d.geschlossen(u).catch((e) => { d.log('v2 geschlossen fehler', { user: u.id, error: String(e?.message ?? e).slice(0, 160) }); return []; })).map((g) => ({ id: g.id, titel: kurz(g.titel, 140), grund: kurz(g.grund, 240), wann: g.at }));
-    send(d, res, { zahl: inboxZahl(ib.eintraege), oben: alle.slice(0, oben.length), rest: alle.slice(oben.length), aufraeumen: aufraeumen(d, sonstiges), geschlossen, at: new Date() });   // zahl = oben + rest + aufraeumen (Test); geschlossen zählt nicht
+    send(d, res, { zahl: inboxZahl(ib.eintraege), oben: alle.slice(0, oben.length), rest: alle.slice(oben.length), aufraeumen: aufraeumen(d, sonstiges), geschlossen, ueberholt: (ib.ueberholt ?? []).map((x: any) => ({ id: x.id, titel: kurz(String(x.titel).replace(/^Push freigeben: /, ''), 140), grund: x.grund, beleg: x.beleg })), at: new Date() });   // zahl = oben + rest + aufraeumen (Test); geschlossen zählt nicht
   });
 
   // --- Alle wie empfohlen (S15): nur gesehene Entscheidungen mit Empfehlung, die hier beantwortet werden (nie Freigaben, B4) ---
@@ -141,6 +146,16 @@ export function registerV2(on: On, d: V2Deps) {
     const r = await d.alleEmpfohlen(u, fragen.map((f) => f.id), (f) => antwortWeg(f) === 'hier');   // innen nochmal geprüft (Pass C)
     d.log('v2 alle wie empfohlen', { user: u.id, n: r.ok, ids: fragen.map((f) => f.id) });
     send(d, res, { ok: r.ok, fehler: r.fehler, uebersprungen: gesehen.size - fragen.length });
+  });
+
+  // --- Alte Deckel-Fragen gesammelt schließen (S21) — nur dieser Sammelposten, nie der Altbestand ---
+  on('POST', /^\/api\/v2\/sammel-schliessen$/, async (req, res) => {
+    const u = await d.needUser(req);
+    const id = String((await d.body(req, 4 * 1024)).id ?? '');
+    if (id !== SAMMEL_SCHLIESSBAR) throw err(400, 'Das schließt du einzeln oder in der alten Werkbank.');
+    await d.sammelSchliessen(u, id);
+    d.log('v2 sammel geschlossen', { user: u.id, id });
+    send(d, res, { ok: true });
   });
 
   // --- Wieder öffnen (C2): eine automatisch geschlossene Frage zurück in die Liste ---

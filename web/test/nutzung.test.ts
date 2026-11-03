@@ -55,14 +55,17 @@ test('Zählen und auswerten: Summen je Seite, Rolle, Zugang und je Antwortweg; �
   const roh = await wb().collection('nutzung').find({}, { projection: { _id: 0 } }).toArray();
   for (const z of roh) assert.deepEqual(Object.keys(z).filter((k) => !['tag', 'art', 'seite', 'rolle', 'zugang', 'frage', 'weg', 'n'].includes(k)), []);
   // 14 Tage mit Daten → genug
-  const tage = Array.from({ length: 14 }, (_, i) => new Date(Date.now() - i * 86_400_000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }));
+  // Verankert auf 11:00 UTC: in Sommer- und Winterzeit derselbe Wiener Tag — sonst fällt zwischen 22 und 23 Uhr UTC über eine
+  // Zeitumstellung hinweg ein Tag doppelt und einer aus (Test schlug am 03.11. um 22:29 UTC fehl).
+  const mittag = new Date(new Date().toISOString().slice(0, 10) + 'T11:00:00Z').getTime();
+  const tage = Array.from({ length: 14 }, (_, i) => new Date(mittag - i * 86_400_000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }));
   await wb().collection('nutzung').insertMany(tage.map((tag) => ({ tag, art: 'seite', seite: 'board', rolle: 'team', zugang: 'direkt', n: 1 })));
-  const b = await N.auswertung(14);
+  const b = await N.auswertung(14, new Date(mittag));
   assert.equal(b.genug, true);
   assert.equal(b.seiten.board.team, 14);
   // Ältere Tage zählen nicht mit
   await wb().collection('nutzung').insertOne({ tag: '2020-01-01', art: 'seite', seite: 'board', rolle: 'team', zugang: 'direkt', n: 99 });
-  assert.equal((await N.auswertung(14)).seiten.board.team, 14);
+  assert.equal((await N.auswertung(14, new Date(mittag))).seiten.board.team, 14);
 });
 
 test('CoS (Paket 374): Morgenlage als Seite, Aktionen nur aus der festen Liste, Auswertung summiert', async () => {

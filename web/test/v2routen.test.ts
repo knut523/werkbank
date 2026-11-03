@@ -12,12 +12,14 @@ const eintraege = [
   { id: 'p-abcd1234-1234567', art: 'push', frage: 'Push freigeben: Kundenakte', empfehlung: null, quelle: { text: 'olaf-admin', strand: 'abcd1234', url: null }, wartetSeit: '2026-11-01T10:00:00Z', blockiert: 1, antworten: ['ja', 'spaeter'], daten: { strand: 'abcd1234', commit: '1234567' } },
   { id: 'q-aaaaaa', art: 'rueckfrage', frage: 'Welche Variante?', empfehlung: 'A', quelle: { text: 'Unter-Chat „Rechner“', strand: 'abcd1234', url: null }, wartetSeit: '2026-11-02T10:00:00Z', blockiert: 1, antworten: ['ja', 'nein', 'anders', 'spaeter'], daten: { qid: 'q-aaaaaa', optionen: ['A', 'B'], kontext: 'Worum es geht.' } },
   { id: 'pflege', art: 'pflege', frage: '8 Tickets brauchen Pflege', empfehlung: null, quelle: { text: 'Pflege', strand: null, url: '#/board' }, wartetSeit: null, blockiert: 0, antworten: ['spaeter'], daten: {} },
+  { id: 'altbestand-deckel', art: 'altbestand', frage: '3 alte Deckel-Fragen', empfehlung: 'alle schließen', quelle: { text: 'Deckel-Fragen', strand: null, url: null }, wartetSeit: null, blockiert: 0, antworten: ['nein', 'spaeter'], daten: { eintraege: [{}, {}, {}], deckel: true } },
 ] as any[];
 const antworten: any[] = [];
 let gesperrt = false;
 const geoeffnet: string[] = [];
 const sammel: string[] = [];
 const tage: string[] = [];
+const sammelZu: string[] = [];
 const deps: V2Deps = {
   needUser: async (req: any) => req.u, body: async (req: any) => req.b, send: (res: any, status, b) => { res.status = status; res.b = b; },
   inboxFuer: async () => ({ eintraege }), unterchatListe: async () => ({ zeilen: [] }), erledigtDaten: async (_u, tag) => { tage.push(tag); return { straenge: tag === '2026-11-02' ? [{ id: 'abcd1234', titel: 'Netzentgelte', at: '2026-11-02T15:00:00Z', link: null, dokumente: [] }] : [] }; },
@@ -31,6 +33,7 @@ const deps: V2Deps = {
   gesperrt: () => gesperrt,
   geschlossen: async (u) => (u.id === 'k' ? [{ id: 'q-zu1', titel: 'Kohorte laufender Monat?', grund: 'im Bericht als entschieden vermerkt (D1): angenommen', at: new Date() }] : []),
   alleEmpfohlen: async (_u, ids, nur) => { assert.equal(nur({ art: 'push', klasse: 'freigabe' } as any), false, 'innen: Freigabe nie'); sammel.push(...ids); return { ok: ids.length, fehler: [] }; },
+  sammelSchliessen: async (_u, id) => { sammelZu.push(id); return { ok: true }; },
   alleRuns: async () => [{ _id: 'abcd1234', conv: 'c1', title: 'Rechner', zustand: 'laeuft', lastActivity: '2026-11-03T08:00:00Z', thema: 'Tarife' }],
   lcChats: async () => [{ conversationId: 'c1', title: 'x' }, { conversationId: 'c2', title: 'Alt', isArchived: true, updatedAt: '2026-01-01' }], lcUrl: 'https://lc',
   wiederOeffnen: async (u, id) => { geoeffnet.push(`${u.id}:${id}`); return u.id === 'k' && id === 'q-zu1'; },
@@ -48,7 +51,7 @@ async function rufe(method: string, pfad: string, u: any, b?: any) {
 test('Start: eine Zahl = Summe aus Karten und Aufräumen; Freigabe unter den Entscheidungen; Pflege als Aufräum-Zeile mit Link in die alte Werkbank', async () => {
   const r = await rufe('GET', '/api/v2/start', ADMIN);
   assert.equal(r.status, 200);
-  assert.equal(r.b.zahl, 3);
+  assert.equal(r.b.zahl, 4);
   assert.deepEqual(r.b.jetzt.map((k: any) => k.art), ['entscheidung', 'freigabe']);
   assert.equal(r.b.jetzt.length + r.b.aufraeumen.length, r.b.zahl);
   assert.equal(r.b.aufraeumen[0].url, 'http://alt/wb/board');
@@ -156,4 +159,15 @@ test('S12: Alle Chats — Admin sieht Unter-Chats und eigene LibreChat-Chats je 
   assert.deepEqual(k.b.themen, ['Tarife']);
   const l = await rufe('GET', '/api/v2/chats', LISA);
   assert.ok(l.b.zeilen.every((z: any) => z.art !== 'unterchat'));
+});
+
+test('S21: alte Deckel-Fragen lassen sich in 2.0 gesammelt schließen (bestehender Weg) — andere Sammelposten nicht', async () => {
+  const e = await rufe('GET', '/api/v2/entscheidungen', ADMIN);
+  const deckel = e.b.aufraeumen.find((a: any) => a.id === 'altbestand-deckel');
+  assert.equal(deckel.schliessbar, 3, 'Anzahl am Sammelposten');
+  assert.equal(e.b.aufraeumen.find((a: any) => a.id === 'pflege').schliessbar, undefined);
+  assert.equal((await rufe('POST', '/api/v2/sammel-schliessen', ADMIN, { id: 'altbestand-deckel' })).status, 200);
+  assert.equal((await rufe('POST', '/api/v2/sammel-schliessen', ADMIN, { id: 'pflege' })).status, 400);
+  assert.equal((await rufe('POST', '/api/v2/sammel-schliessen', ADMIN, { id: 'altbestand' })).status, 400, 'Altbestand bleibt Knuts Entscheidung');
+  assert.deepEqual(sammelZu, ['altbestand-deckel']);
 });
