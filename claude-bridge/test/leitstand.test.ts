@@ -258,6 +258,7 @@ test('Leitstand ist kein Strang (DoD 3/4/5/20): Grenzen, Systemtext, Monitor ges
   assert.ok(o.mcp.includes('compartment') && o.mcp.includes('posthog'), JSON.stringify(o.mcp));
   const s = await opts(C_STRAND);
   assert.equal(s.leitstand, false); assert.equal(s.strang, true); assert.equal(s.gitConfig, true);
+  assert.equal(s.sandbox, true, 'Unter-Chat in der Sandbox (Paket 436, E13)'); assert.equal(o.sandbox, false, 'Hauptchat nicht — Knut arbeitet dort mit seinen Zugängen');
   assert.ok(!s.disallowed.includes('Monitor'));
   assert.ok(!s.mcp.includes('compartment') && !s.mcp.includes('posthog'));
   assert.equal(s.werkbankLeit, null);

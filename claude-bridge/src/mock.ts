@@ -344,7 +344,7 @@ export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<
       yield text('OPTIONEN ' + JSON.stringify({ maxTurns: options.maxTurns, disallowed: options.disallowedTools, mcp: Object.keys(options.mcpServers ?? {}).sort(),
         leitstand: append.includes('Dieser Chat ist der HAUPTCHAT') || append.includes('Dieser Chat ist der LEITSTAND'), strang: append.includes('Orchestrator-Strang'), werkbankLeit: options.mcpServers?.werkbank?.env?.WERKBANK_LEITSTAND ?? null, werkbankStrang: options.mcpServers?.werkbank?.env?.WERKBANK_STRANG ?? null,
         tools: options.tools ?? null, skills: Array.isArray(options.skills) ? options.skills.length : null, agents: Object.keys(options.agents ?? {}).sort(), settingSources: options.settingSources ?? null,
-        gitConfig: !!options.env?.GIT_CONFIG_GLOBAL }));
+        gitConfig: !!options.env?.GIT_CONFIG_GLOBAL, sandbox: !!options.env?.GH_CONFIG_DIR && !!options.env?.GIT_SSH_COMMAND && !Object.keys(options.env ?? {}).some((k) => /^(SSH_AUTH_SOCK|BW_SESSION)$/.test(k)) }));
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 5 } };
       return;
     }

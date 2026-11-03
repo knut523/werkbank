@@ -7,6 +7,7 @@
 // weiter und schreibt in die neue Antwort.
 
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, realpathSync, statSync, mkdtempSync, rmSync } from 'node:fs';
+import { strangSandbox } from './sandbox.ts';
 import { tmpdir, homedir } from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:path';
@@ -1429,7 +1430,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // „auto“ hat im ersten echten Zug nichts zurückgestellt (Werkzeuge 66 805 Tokens, deferred 0) —
   // deshalb „true“: MCP-Schemas immer erst bei Bedarf (kürzerer Prompt, schnellerer erster Token).
   env.ENABLE_TOOL_SEARCH = process.env.BRIDGE_TOOL_SEARCH || 'true';
-  if (live.orch) orchGitEnv(env);
+  // Unter-Chats in der Sandbox (Paket 436, Nachtrag 7 / Plan E13): kein SSH-Agent, keine Vaultwarden-Sitzung, kein Schreib-Token.
+  if (live.orch) { strangSandbox(env, { stateDir: cfg.stateDir, leseToken: process.env.WERKBANK_GITHUB_TOKEN || null }); orchGitEnv(env); }
   // C8 (Plan 165): Kompaktierung als Zahlen — Worker kleines Fenster, Strang-Leads etwas früher als die Vorgabe des CLI.
   if (live.worker) { env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(KAPPUNG.workerFenster); env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(KAPPUNG.workerKompakt); }
   else if (live.orch) env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(KAPPUNG.leadKompakt);

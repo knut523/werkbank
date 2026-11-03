@@ -416,6 +416,9 @@ Aus der Plan-Gegenprüfung (GLM 5.3, art=plan, 03.11. nachts) — übernommen na
 - **C11** Der Terminal-Weg bleibt intern (`/internal/*`, Token, nur lokal), ohne Freigaben nach außen.
 - **C12** Streichen nur bei 0 Nutzung über 90 Tage **und** kein periodischer/Krisen-Fall (Sprint, Einrichtung) — und nur auf Knuts Wort.
 - **C13** Sandbox-Regel E13: Stufe 1 heute mit Test, Stufe 2 vor M2.
+  *Stand Stufe 1 (S19, `claude-bridge/src/sandbox.ts`, Test `claude-bridge/test/sandbox.test.ts`):* Ein Unter-Chat bekommt keinen SSH-Agenten, keine Vaultwarden-Sitzung, kein GitHub-Token aus der Umgebung, keine `gh`-Anmeldung (leere eigene Konfiguration, höchstens das Lesetoken `WERKBANK_GITHUB_TOKEN`), keinen Credential-Helfer (auch nicht eingeschleust über `GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_COUNT`), keinen Session-Bus zum Schlüsselbund und Git über SSH ohne Schlüssel. Jeder Versuch läuft im Test zweimal: mit der Brücken-Umgebung (Köder greifbar) und im Unter-Chat (scheitert). Der Hauptchat bleibt ohne Sandbox (Knut arbeitet dort mit seinen Zugängen).
+  *Grenze (ehrlich):* gleicher Unix-Nutzer — Dateien im Home (Schlüsselordner, gh-Anmeldedatei) bleiben per Shell mit absolutem Pfad lesbar; dagegen stehen nur Deny-Regeln und Klassifikator. Auf der Box fehlen Docker-Daemon, User-systemd und unprivilegierte Namensräume (geprüft 03.11.) — die echte Trennung ist Stufe 2 (eigener Unix-Nutzer, D11, Box-Änderung durch Knut).
+  *Prüfpunkt für Knut:* `WERKBANK_GITHUB_TOKEN` muss das Nur-Lesen-Token sein (so im Code beschrieben, `web/server/vorbau.ts:323`); ist es das Push-Token, darf es nicht in Unter-Chats.
 - **C14** Nachtumfang gekürzt (§12 neu): erst fertige Schnitte, dann weitere.
 
 Nicht übernommen (geprüft und widerlegt): „S12 braucht eine Identität, die es vor M3 nicht gibt“ — die Anmeldung besteht heute (`needUser` über die LibreChat-Sitzung, `web/server/main.ts:148`), „nur eigene“ ist heute testbar.
