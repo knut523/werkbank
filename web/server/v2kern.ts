@@ -8,6 +8,9 @@ export type V2Antwort = 'ja' | 'nein' | 'anders' | 'spaeter';
 export interface V2Link { label: string; url: string; extern?: boolean }
 export interface V2Karte {
   id: string;
+  /** Runde 5 (Knut B1): Sammelkarte („D1–D3 aus dem Bericht …“) — die gemeinten Entscheidungen aus dem Bericht und der Bericht selbst. */
+  bezug?: { id: string; frage: string; empfehlung: string | null; antwort: string | null }[];
+  bericht?: string | null;
   art: 'entscheidung' | 'freigabe';
   titel: string;
   /** Ein, zwei Sätze — passt aufs Handy; der volle Text steht in `erklaerung`. */
@@ -111,6 +114,15 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
     optionen, alternativen: f.alternativen ?? [], antworten, form: f.form, wichtig: f.stufe === 'wichtig', thema: themaVon(f.gruppe, `${f.titel} ${f.quelle?.text ?? ''}`), quelle: f.quelle?.text ?? '',
     links, erklaerung, alt: weg === 'alt' ? o.altUrl : null, wartetSeit: f.wartetSeit,
   };
+}
+
+/** Runde 5 (Knut B1): welche D-Fragen meint eine Karte? „D1–D3“, „D1 bis D8“, „D1, D2 und D4“ — erst ab zwei, sonst null. */
+export function bezugIds(t: string): string[] | null {
+  const ids = new Set<number>();
+  const bereiche = [...String(t ?? '').matchAll(/\bD(\d{1,2})\s*(?:–|-|bis)\s*D(\d{1,2})\b/g)];
+  for (const m of bereiche) { const [a, b] = [Number(m[1]), Number(m[2])]; if (a < b && b - a < 20) for (let i = a; i <= b; i++) ids.add(i); }
+  if (!bereiche.length) for (const m of String(t ?? '').matchAll(/\bD(\d{1,2})\b/g)) ids.add(Number(m[1]));
+  return ids.size >= 2 ? [...ids].sort((a, b) => a - b).map((i) => `D${i}`) : null;
 }
 
 // ---------- Arbeit (Unter-Chats) ----------

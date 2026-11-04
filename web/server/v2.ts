@@ -8,7 +8,7 @@ import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungssei
 import { themaOf } from './themen.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite } from './v2kern.ts';
+import { bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import type { Abgleich } from './fragenbericht.ts';
 import * as librechat from './v2librechat.ts';
@@ -62,6 +62,8 @@ export interface V2Deps {
   vorlagen?: () => { name: string; label: string; beschreibung: string; prefix: string }[];
   /** Runde 4 (Knut B2): Abgleich deiner Liste mit Bericht und letztem Stand eines Unter-Chats (fragenbericht.ts). */
   abgleich?: (u: User, strandId: string, stand: string) => Promise<Abgleich | null>;
+  /** Runde 5 (Knut B1): Paket und Fragen-Kopf des Berichts eines Unter-Chats (für Sammelkarten). */
+  berichtVon?: (u: User, strandId: string) => Promise<{ paket: string; fragen: any[] } | null>;
 }
 
 /** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
@@ -82,6 +84,27 @@ function strangJe(eintraege: InboxEintrag[]) {
 function karten(d: V2Deps, fragen: Frage[], eintraege: InboxEintrag[], liste: { f: Frage; grund: string }[]) {
   const sj = strangJe(eintraege);
   return liste.map(({ f, grund }) => { const s = sj.get(f.eintrag); return karteAusFrage(f, { grund, strand: s?.id ?? null, strandTitel: s?.titel ?? null, altUrl: `${d.altUrl}/entscheidungen` }); });
+}
+
+/** Runde 5 (Knut B1): Sammelkarten tragen die gemeinten D-Fragen (Frage, Empfehlung, schon entschieden?) und den Bericht — sonst
+ *  bestätigt „Ja, so“ Entscheidungen, die man nicht sieht. Nur für Karten mit mindestens zwei D-Kennungen und einem Unter-Chat mit Bericht. */
+async function mitBezug(d: V2Deps, u: User, ks: V2Karte[]): Promise<V2Karte[]> {
+  if (!d.berichtVon) return ks;
+  const je = new Map<string, Promise<{ paket: string; fragen: any[] } | null>>();
+  for (const k of ks) {
+    const ids = bezugIds(`${k.titel} ${k.worum}`);
+    const strand = k.links.map((l) => /\/v2\/arbeit\/([0-9a-f]{8})$/.exec(l.url)?.[1]).find(Boolean);
+    if (!ids || !strand) continue;
+    if (!je.has(strand)) je.set(strand, d.berichtVon(u, strand).catch(() => null));
+    const b = await je.get(strand)!;
+    if (!b) continue;
+    const bezug = ids.map((id) => b.fragen.find((f) => String(f?.id ?? '').trim().toUpperCase() === id)).filter(Boolean)
+      .map((f: any) => ({ id: String(f.id), frage: kurz(String(f.frage ?? ''), 200), empfehlung: f.empfehlung ? kurz(String(f.empfehlung), 200) : null, antwort: String(f.antwort ?? '').trim() ? kurz(String(f.antwort), 160) : null }));
+    k.bericht = `/v2/dokument?paket=${encodeURIComponent(b.paket)}&datei=bericht.md`;
+    if (bezug.length) k.bezug = bezug;
+    if (!k.links.some((l) => l.url === k.bericht)) k.links = [{ label: 'Bericht', url: k.bericht }, ...k.links];
+  }
+  return ks;
 }
 
 /** Was keine Frage ist (Pflege, Altbestand, Schlange …) zählt in die eine Zahl — also auch zeigen, mit Link in die alte Werkbank. */
@@ -106,7 +129,7 @@ export function registerV2(on: On, d: V2Deps) {
     const u = await d.needUser(req);
     const ib = await d.inboxFuer(u);
     const { fragen, sonstiges } = fragenAus(ib.eintraege);
-    const jetzt = karten(d, fragen, ib.eintraege, jetztAuswahl(fragen));
+    const jetzt = await mitBezug(d, u, karten(d, fragen, ib.eintraege, jetztAuswahl(fragen)));
     const auf = aufraeumen(d, sonstiges);
     const ich = vorname(u);
     const r = rolle({ admin: admin(u), vorname: ich, zugang: admin(u) && !d.rolleEinstellung ? !!(await d.claudeToken(u).catch(() => null)) : undefined, einstellung: d.rolleEinstellung }, d.githubNames());
@@ -153,7 +176,7 @@ export function registerV2(on: On, d: V2Deps) {
     const oben = jetztAuswahl(fragen);
     const obenIds = new Set(oben.map((x) => x.f.id));
     const rest = fragen.filter((f) => f.klasse !== 'aktion' && !obenIds.has(f.id)).map((f) => ({ f, grund: '' }));
-    const alle = karten(d, fragen, ib.eintraege, [...oben, ...rest]);
+    const alle = await mitBezug(d, u, karten(d, fragen, ib.eintraege, [...oben, ...rest]));
     const geschlossen = (await d.geschlossen(u).catch((e) => { d.log('v2 geschlossen fehler', { user: u.id, error: String(e?.message ?? e).slice(0, 160) }); return []; })).map((g) => ({ id: g.id, titel: kurz(g.titel, 140), grund: kurz(g.grund, 240), wann: g.at }));
     send(d, res, { zahl: inboxZahl(ib.eintraege), oben: alle.slice(0, oben.length), rest: alle.slice(oben.length), aufraeumen: aufraeumen(d, sonstiges), geschlossen, ueberholt: (ib.ueberholt ?? []).map((x: any) => ({ id: x.id, titel: kurz(String(x.titel).replace(/^Push freigeben: /, ''), 140), grund: x.grund, beleg: x.beleg })), at: new Date() });   // zahl = oben + rest + aufraeumen (Test); geschlossen zählt nicht
   });
@@ -245,7 +268,7 @@ export function registerV2(on: On, d: V2Deps) {
       .sort((a, b) => String(b.lastActivity ?? b.startedAt ?? '').localeCompare(String(a.lastActivity ?? a.startedAt ?? '')));
     send(d, res, {
       thema: name,
-      entscheidungen: q.kartenAlle.filter((k) => k.thema === name),
+      entscheidungen: await mitBezug(d, u, q.kartenAlle.filter((k) => k.thema === name)),
       unterchats: runs.slice(0, 30).map((r) => ({ id: String(r._id), titel: kurz(String(r.title ?? ''), 140), zuletzt: r.lastActivity ?? r.startedAt ?? null, offen: !(r.knutReviewedAt || r.reviewedAt) })),
       unterchatsGesamt: runs.length,
       dokumenteGesamt: q.notizen.filter((n) => themaVon(null, `${n.path} ${n.title}`) === name).length,
@@ -285,7 +308,7 @@ export function registerV2(on: On, d: V2Deps) {
     const stand = standVoll(nachrichten, String(doc.standVoll || doc.lastExcerpt || ''));
     const abgleich = d.abgleich ? await d.abgleich(u, m[1], stand).catch(() => null) : null;
     const jeFrage = new Map((abgleich?.zeilen ?? []).map((z) => [z.qid, `${z.d} · ${z.bericht ? (z.wiederOffen ? 'im Bericht schon entschieden, von dir wieder geöffnet' : 'im Bericht schon entschieden') : 'auch im Bericht offen'}`]));
-    const fragen = karten(d, alleFragen, ib.eintraege, alleFragen.filter((f) => eigeneIds.has(f.id) && f.klasse !== 'aktion').map((f) => ({ f, grund: jeFrage.get(f.id) ?? 'aus diesem Unter-Chat' })));
+    const fragen = await mitBezug(d, u, karten(d, alleFragen, ib.eintraege, alleFragen.filter((f) => eigeneIds.has(f.id) && f.klasse !== 'aktion').map((f) => ({ f, grund: jeFrage.get(f.id) ?? 'aus diesem Unter-Chat' }))));
     const links = [
       ...(doc.paket ? [{ label: 'Bericht', url: `/v2/dokument?paket=${encodeURIComponent(doc.paket)}&datei=bericht.md` }] : []),
       ...(/^https?:\/\//.test(String(doc.url ?? '')) ? [{ label: 'In der alten Werkbank öffnen', url: String(doc.url), extern: true }] : []),

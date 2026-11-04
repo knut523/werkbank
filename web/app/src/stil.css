@@ -232,3 +232,12 @@ p { margin: 0 0 var(--s1); }
 .hinweis-warn { color: var(--warn); background: var(--warn-hell); padding: 6px 10px; border-radius: 8px; }
 .teilen-hand { display: block; width: 100%; }
 .diagramm { overflow-x: auto; margin: var(--s2) 0; } .diagramm svg { max-width: 100%; height: auto; }
+
+.meldung-band { position: sticky; top: var(--kopf-h); z-index: 15; display: flex; gap: var(--s1); align-items: center; justify-content: space-between; padding: 8px var(--s2); background: var(--rot-hell); color: var(--rot); border-bottom: 1px solid var(--linie); }
+.meldung-band.ok { background: var(--gruen-hell); color: var(--gruen); }
+@media (min-width: 900px) { .meldung-band { margin-left: 220px; } }
+.chat-fab { transition: transform .2s ease, opacity .2s ease; }
+.chat-fab.weg { transform: translateY(140%); opacity: 0; pointer-events: none; }
+.ok.unterwegs { color: var(--gedimmt); background: var(--grund); }
+.bezug { background: var(--grund); border-radius: 8px; padding: 8px 12px; margin: 6px 0; }
+.bezug ul { margin: 4px 0; padding-left: 1.2em; }

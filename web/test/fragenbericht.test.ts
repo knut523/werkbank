@@ -110,3 +110,15 @@ test('Pass C: „Braucht Knut“ als Liste über mehrere Zeilen — alle D-Numme
   assert.equal(brauchtBlock('- Braucht Knut: D4 in der Inbox; D11/D12 schließen\n- Regeln: x'), 'D4 in der Inbox; D11/D12 schließen');
   assert.equal(brauchtBlock('kein Stand'), '');
 });
+
+test('Runde 5: Fragen-Kopf auch lesbar, wenn der Bericht-Kopf an anderer Stelle kein gültiges YAML ist', async () => {
+  const { berichtFragen } = await import('../server/fragenbericht.ts');
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'bf-'));
+  mkdirSync(join(dir, '378-test'));
+  writeFileSync(join(dir, '378-test', 'bericht.md'), '---\nstatus: x\nworum: Eine Kundin hat bei „X" erwartet. Ziel: Vorauswahl\nfragen:\n  - id: D1\n    frage: "Erste?"\n  - id: D2\n    frage: "Zweite?"\ngithub:\n  - a\n---\n# T\n');
+  assert.deepEqual(berichtFragen(dir, '378-test')?.map((f) => f.id), ['D1', 'D2']);
+  assert.equal(berichtFragen(dir, '../etc'), null, 'Name wird weiter geprüft');
+});

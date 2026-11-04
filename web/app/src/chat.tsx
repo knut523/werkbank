@@ -103,6 +103,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
               {stand.vorlagen.map((v) => <option key={v.name} value={v.name} title={v.beschreibung}>{v.label}</option>)}
             </select></label>
           )}
+          {ziel === 'eigen' && !conv && vorlage && <p className="klein gedimmt">{stand?.vorlagen?.find((v) => v.name === vorlage)?.beschreibung || 'Die Vorlage gibt dem Assistenten eine Arbeitsweise vor, wie in LibreChat.'}</p>}
           {ziel === 'eigen' && conv && stand?.chats?.find((c) => c.conv === conv)?.vorlage && <p className="klein gedimmt">Vorlage: {stand.vorlagen?.find((v) => v.name === stand.chats?.find((c) => c.conv === conv)?.vorlage)?.label ?? 'gewählt'}</p>}
           <label htmlFor="chat-text" className="unsichtbar">Nachricht</label>
           <textarea id="chat-text" rows={3} value={text} maxLength={8000} onChange={(e) => setText(e.target.value)} placeholder="Frag etwas …"

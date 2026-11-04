@@ -241,3 +241,19 @@ test('Runde 4 (Christoph B1): Reviewer-Start zeigt veröffentlichte Agenten-Revi
   deps.rolleEinstellung = null;
   deps.letzteReviews = vorher;
 });
+
+test('Runde 5 (Knut B1): Sammelkarte („D1–D2 …“) trägt die gemeinten Entscheidungen aus dem Bericht und den Bericht-Link', async () => {
+  const q = eintraege.find((e) => e.id === 'q-aaaaaa');
+  const alt = q.frage;
+  q.frage = 'D1–D2 aus dem Bericht wie empfohlen?';
+  deps.berichtVon = async (_u, id) => (id === 'abcd1234' ? { paket: '416-netz', fragen: [{ id: 'D1', frage: 'Ab wann rechnen?', empfehlung: 'Ab 2027', antwort: '' }, { id: 'D2', frage: 'Welcher Rabatt?', empfehlung: 'Je Gemeinschaft', antwort: 'nach 24 h angenommen' }, { id: 'D3', frage: 'x' }] } : null);
+  try {
+    const r = await rufe('GET', '/api/v2/entscheidungen', ADMIN);
+    const k = [...r.b.oben, ...r.b.rest].find((x: any) => x.id === 'q-aaaaaa');
+    assert.deepEqual(k.bezug.map((b: any) => [b.id, b.empfehlung, b.antwort]), [['D1', 'Ab 2027', null], ['D2', 'Je Gemeinschaft', 'nach 24 h angenommen']]);
+    assert.equal(k.bericht, '/v2/dokument?paket=416-netz&datei=bericht.md');
+    assert.equal(k.links[0].label, 'Bericht');
+    deps.berichtVon = async () => { throw new Error('kaputt'); };
+    assert.equal((await rufe('GET', '/api/v2/entscheidungen', ADMIN)).status, 200, 'Bericht nicht lesbar: Seite lädt trotzdem');
+  } finally { q.frage = alt; delete deps.berichtVon; }
+});

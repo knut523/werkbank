@@ -156,6 +156,8 @@ export function Entscheidungen() {
       <h1>Entscheidungen</h1>
       <p className="unterzeile">Alles, was auf dich wartet. „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — an genau diese Karte.</p>
       <p className="zusammensetzung">Die Zahl oben rechts: {d.oben.length + d.rest.length} {d.oben.length + d.rest.length === 1 ? 'Frage' : 'Fragen und Freigaben'}{d.aufraeumen.length ? ` + ${d.aufraeumen.length} ${d.aufraeumen.length === 1 ? 'Sammelposten' : 'Sammelposten'} zum Aufräumen` : ''} = {d.zahl}.{d.ueberholt?.length ? <> <a href="#e-ueberholt">{mehrzahl(d.ueberholt.length, 'Freigabe ist überholt und zählt', 'Freigaben sind überholt und zählen')} nicht ↓</a></> : null}{d.geschlossen?.length ? <> <a href="#e-geschlossen">{mehrzahl(d.geschlossen.length, 'Frage hat', 'Fragen haben')} sich von selbst erledigt ↓</a></> : null}</p>
+      {(() => { const s = themen(d.rest).map(([t, ks]) => [t, ks.filter(wieEmpfohlenMoeglich).length] as const).filter(([, n]) => n > 1);
+        return s.length ? <p className="klein sammel-sprung">Alle Empfehlungen eines Themas auf einmal annehmen: {s.map(([t, n]) => <a key={t} className="chip" href={`#thema-${themaAnker(t)}`}>{t} ({n})</a>)}</p> : null; })()}
       <Abschnitt id="e-zuerst" titel="Zuerst" erklaerung="Dieselben fünf wie auf der Startseite: was einen Agenten anhält oder bald als angenommen gilt.">
         {d.oben.length ? <div className="karten">{d.oben.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div> : <p className="leer">{d.aufraeumen.length ? 'Keine Entscheidung offen — was trotzdem zählt, steht unten unter „Aufräumen“.' : 'Gerade wartet nichts auf dich.'}</p>}
       </Abschnitt>
@@ -189,6 +191,7 @@ function themen(ks: Karte[]): [string, Karte[]][] {
   for (const k of ks) { const t = k.thema?.trim() || 'Sonstiges'; m.set(t, [...(m.get(t) ?? []), k]); }
   return [...m].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], 'de'));
 }
+const themaAnker = (t: string) => t.toLowerCase().replace(/[^a-z0-9äöüß]+/g, '-');
 const wieEmpfohlenMoeglich = (k: Karte) => k.art === 'entscheidung' && !k.alt && !!k.empfehlung && k.antworten.includes('ja');
 
 function ThemaGruppe({ thema, karten, fertig }: { thema: string; karten: Karte[]; fertig: () => void }) {
@@ -203,11 +206,14 @@ function ThemaGruppe({ thema, karten, fertig }: { thema: string; karten: Karte[]
     try {
       const r = await schicke<{ ok: number; fehler: string[]; uebersprungen: number }>('api/v2/alle-empfohlen', { ids: passend.map((k) => k.id) });
       setMeldung(`✓ ${mehrzahl(r.ok, 'Antwort', 'Antworten')} wie empfohlen verschickt.${app.testbetrieb ? ' Testbetrieb: Fragen aus Notizen bleiben hier offen.' : ''}${r.uebersprungen ? ` ${r.uebersprungen} übersprungen — die beantwortest du einzeln.` : ''}${r.fehler.length ? ` Nicht geklappt: ${r.fehler.join('; ')}` : ''}`);
-      setFrage(false); if (!r.fehler.length) setGesendet(passend.map((k) => k.id).join()); fertig();   // bei Teilfehlern bleibt der Knopf (Pass C)
+      setFrage(false); if (!r.fehler.length) setGesendet(passend.map((k) => k.id).join());   // bei Teilfehlern bleibt der Knopf (Pass C)
+      // Runde 5 (Knut B7): nach dem Neuladen ist die Gruppe oft weg — die Bestätigung steht deshalb oben auf der Seite.
+      if (r.ok) window.dispatchEvent(new CustomEvent('v2-meldung', { detail: { ok: !r.fehler.length, text: `✓ ${thema}: ${mehrzahl(r.ok, 'Antwort', 'Antworten')} wie empfohlen verschickt — jede an ihre Quelle.${r.fehler.length ? ` Nicht geklappt: ${r.fehler.join('; ')}` : ''}` } }));
+      fertig();
     } catch (x: any) { setMeldung(x.message); } finally { setLaeuft(false); }
   };
   return (
-    <div className="thema-gruppe">
+    <div className="thema-gruppe" id={`thema-${themaAnker(thema)}`}>
       <div className="thema-kopf">
         <p className="gruppe-titel">{thema} · {karten.length} <a className="klein" href={`v2/thema?name=${encodeURIComponent(thema)}`}>Alles zu {thema} →</a></p>
         {passend.length > 1 && !frage && gesendet !== passend.map((k) => k.id).join() && <button type="button" className="knopf leise klein" onClick={() => setFrage(true)} title={passend.map((k) => k.titel).join(' · ')}>{passend.length < karten.length ? `Die ${passend.length} mit Empfehlung so beantworten …` : `Alle ${passend.length} wie empfohlen …`}</button>}
@@ -282,7 +288,8 @@ export function Arbeit() {
         <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Unter-Chat suchen — Enter sucht auch in alten Chats" aria-label="Chats durchsuchen" />
       </form>
       {such && <p className="klein"><a href={`v2/chats?q=${encodeURIComponent(q.trim())}`}>„{q.trim()}“ in allen Chats suchen, auch alten und archivierten →</a></p>}
-      <nav className="sprung" aria-label="Auf dieser Seite"><a href="#w-wartet">Wartet ({g.wartet.length})</a><a href="#w-laeuft">Läuft ({g.laeuft.length})</a><a href="#fertig">Fertig ({g.fertig.length})</a><a href="v2/erledigt">Heute fertig{heuteFertig ? ` (${heuteFertig})` : ''}</a></nav>
+      <nav className="sprung" aria-label="Auf dieser Seite"><a href="#w-wartet">Wartet ({g.wartet.length})</a><a href="#w-laeuft">Läuft ({g.laeuft.length})</a><a href="#fertig">Fertig ({g.fertig.length})</a><a href="v2/erledigt">Heute fertig ({heuteFertig})</a></nav>
+      {!such && g.wartet.length > 0 && (() => { const frage = g.wartet.filter((z) => /^Wartet auf dich/.test(z.satz)).length; return <p className="klein gedimmt">Davon {frage} mit einer Frage an dich (die zählen in der Zahl oben mit, zusammen mit Freigaben und Fragen aus Notizen) und {g.wartet.length - frage}, die hängen oder keinen Stand gemeldet haben.</p>; })()}
       <Abschnitt id="w-wartet" titel={`Wartet auf dich (${g.wartet.length})`} erklaerung="Unter-Chats, die ohne dich nicht weiterkommen: eine offene Frage, ein Hänger oder kein Stand. Neueste zuerst; ein Klick zeigt, was genau."
         fuss={!such && g.wartet.length > KURZ ? <button type="button" className="knopf leise klein" onClick={() => setAlleWartet(!alleWartet)}>{alleWartet ? `Nur die neuesten ${KURZ}` : `Alle ${g.wartet.length} zeigen`}</button> : null}>{liste(g.wartet, 'Kein Unter-Chat wartet auf dich.', alleWartet || such ? 0 : KURZ)}</Abschnitt>
       <Abschnitt id="w-laeuft" titel={`Läuft (${g.laeuft.length})`} erklaerung="Hier arbeitet gerade ein Agent. Du musst nichts tun.">{liste(g.laeuft, 'Gerade läuft nichts.')}</Abschnitt>
@@ -546,6 +553,8 @@ export function Anmelden({ fertig }: { fertig: () => void | Promise<void> }) {
 // ---------- Erledigt an einem Tag (S14) ----------
 
 type ErledigtEintrag = Start['erledigt'][number];
+/** Runde 5 (Knut B4): ein Tag zurück (JJJJ-MM-TT, Kalendertag — Mittag, damit keine Zeitumstellung dazwischenfunkt). */
+const vortag = (t: string) => { const x = new Date(`${t}T12:00:00Z`); x.setUTCDate(x.getUTCDate() - 1); return x.toISOString().slice(0, 10); };
 export function Erledigt({ tag }: { tag: string | null }) {
   const { d, fehler, neu } = useDaten<{ tag: string; heute: string; erledigt: ErledigtEintrag[]; nurAdmin?: boolean }>(`api/v2/erledigt${tag ? `?tag=${encodeURIComponent(tag)}` : ''}`);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
@@ -557,8 +566,8 @@ export function Erledigt({ tag }: { tag: string | null }) {
   return (
     <div className="seite">
       <h1>{d.tag === d.heute ? 'Heute erledigt' : `Erledigt am ${datum}`}</h1>
-      <p className="unterzeile"><label htmlFor="erledigt-tag">Tag: </label><input id="erledigt-tag" type="date" value={d.tag} max={d.heute} onChange={(e) => waehlen(e.target.value)} /></p>
-      {!d.erledigt.length && <p className="leer">An diesem Tag ist nichts fertig geworden.</p>}
+      <p className="unterzeile"><button type="button" className="knopf leise klein" onClick={() => waehlen(vortag(d.tag))}>← Vortag</button> <label htmlFor="erledigt-tag">Tag: </label><input id="erledigt-tag" type="date" value={d.tag} max={d.heute} onChange={(e) => waehlen(e.target.value)} />{d.tag !== d.heute && <> <button type="button" className="knopf leise klein" onClick={() => waehlen(d.heute)}>Heute</button></>}</p>
+      {!d.erledigt.length && <p className="leer">{d.tag === d.heute ? <>Heute ist noch nichts fertig geworden. <button type="button" className="knopf leise klein" onClick={() => waehlen(vortag(d.tag))}>Gestern ansehen</button></> : 'An diesem Tag ist nichts fertig geworden.'}</p>}
       {abgenommen.length > 0 && <Abschnitt id="e-abgenommen" titel="Von dir abgenommen" erklaerung="Unter-Chats, die du an diesem Tag geprüft und abgehakt hast."><ul className="liste">{abgenommen.map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'abgenommen', ton: 'gruen' }} links={e.links.slice(1)} />)}</ul></Abschnitt>}
       {zumLesen.length > 0 && <Abschnitt id="e-zumlesen" titel="Fertig, Bericht noch nicht gelesen" erklaerung="Ein Agent hat an diesem Tag fertig gemeldet; den Bericht hast du noch nicht abgenommen."><ul className="liste">{zumLesen.map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'zum Lesen' }} links={e.links.slice(1)} />)}</ul></Abschnitt>}
     </div>
@@ -701,7 +710,7 @@ function Teilen({ titel, vault }: { titel: string; vault: string | null }) {
   return (
     <>
       <button type="button" className="knopf leise klein" onClick={teilen}>Link kopieren</button>
-      {text && (ok ? <span className="ok klein" role="status">✓ Kopiert — Titel, Link{vault ? ' und Pfad in der Wissenssammlung (gilt in jeder Werkbank)' : ''}.</span>
+      {text && (ok ? <span className="ok klein" role="status">✓ Kopiert: „{titel}“, der Link <code>{location.href.replace(/^https?:\/\//, '')}</code>{vault ? <> und der Pfad <code>{vault}</code> (gilt in jeder Werkbank, auch bei Kolleg:innen)</> : null}.</span>
         : <span className="teilen-hand"><span className="klein">Kopieren ging nicht automatisch — markiert, jetzt Strg+C (am Handy: lange tippen):</span><textarea className="teilen-text" readOnly autoFocus rows={3} value={text} aria-label="Zum Kopieren markieren" onFocus={(e) => e.currentTarget.select()} /></span>)}
     </>
   );

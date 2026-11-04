@@ -83,7 +83,7 @@ export function Zeile({ titel, url, satz, rechts, marke, links }: { titel: strin
 /** Ladehinweis erst nach 400 ms — kurze Abrufe blitzen nicht als leere Seite auf (Persona Knut R2). */
 export function Laedt({ text = 'Lädt …', sofort = false }: { text?: string; sofort?: boolean }) {
   const [zeigen, setZeigen] = useState(sofort);   // sofort: dort, wo der Text etwas verspricht (Reviewer-Start, Runde 4)
-  useEffect(() => { const t = setTimeout(() => setZeigen(true), 400); return () => clearTimeout(t); }, []);
+  useEffect(() => { const t = setTimeout(() => setZeigen(true), 200); return () => clearTimeout(t); }, []);   // Runde 5 (Knut B3): früher sichtbar, aber kein Blitzen bei schnellen Abrufen
   return <p className="laedt" role="status" aria-busy="true">{zeigen ? text : '\u00a0'}</p>;
 }
 export function Fehler({ text, nochmal }: { text: string; nochmal?: () => void }) {
@@ -130,18 +130,26 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
   const [laeuft, setLaeuft] = useState(false);
   const [fehler, setFehler] = useState<string | null>(null);
   const [fertig, setFertig] = useState<string | null>(null);
+  const [unterwegs, setUnterwegs] = useState(false);
   const andersFeld = useRef<HTMLDivElement>(null);
   useEffect(() => { if (modus === 'anders') andersFeld.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, [modus]);
 
+  const lebt = useRef(true);
+  useEffect(() => () => { lebt.current = false; }, []);
   async function antworten(antwort: 'ja' | 'nein' | 'anders' | 'spaeter', t = '') {
     if (antwort === 'anders' && !t.trim()) { setFehler('Schreib kurz, was stattdessen.'); return; }
     setLaeuft(true); setFehler(null);
+    // Runde 5 (Knut B2): das Zustellen an einen Unter-Chat dauert Sekunden — gleich sagen, dass es unterwegs ist und man weitermachen kann.
+    const zuweilen = setTimeout(() => { if (lebt.current) setUnterwegs(true); }, 700);
     try {
       const r = await schicke<{ ziel: string | null; spaeter: boolean }>('api/v2/antwort', { id: k.id, antwort, text: t.trim() });
       setFertig(r.spaeter ? 'Zurückgestellt — kommt morgen wieder.' : `Ging an ${r.ziel ?? 'die Quelle'}: ${antwort === 'ja' ? `„Ja, so“${k.empfehlung ? ` (${k.empfehlung})` : ''}${t.trim() ? ` mit Notiz „${t.trim()}“` : ''}` : antwort === 'nein' ? '„Nein“' : `„${t.trim()}“`}`);
       if (app.testbetrieb && !r.spaeter) setFertig((x) => `${x} — Testbetrieb: Fragen aus Notizen bleiben hier offen und tauchen nach dem Neuladen wieder auf.`);
       beantwortet?.();
-    } catch (e: any) { setFehler(e.message); } finally { setLaeuft(false); }
+    } catch (e: any) {
+      if (lebt.current) setFehler(e.message);
+      else window.dispatchEvent(new CustomEvent('v2-meldung', { detail: `Deine Antwort zu „${k.titel.slice(0, 80)}“ kam nicht an: ${e.message}` }));   // Seite schon verlassen: trotzdem sagen
+    } finally { clearTimeout(zuweilen); if (lebt.current) { setLaeuft(false); setUnterwegs(false); } }
   }
 
   const freigabe = k.art === 'freigabe';
@@ -154,7 +162,13 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
       <h3 className="karte-titel">{k.titel}</h3>
       {k.worum && <p className="karte-worum">{k.worum}</p>}
       {k.empfehlung && <p className="empfehlung"><b>Empfehlung:</b> {k.empfehlung}{/[⋯…]$/.test(k.empfehlung) && <span className="klein gedimmt"> (an der Quelle gekürzt — ganz unter „Was ist das?“)</span>}</p>}
-      {sammelKarte(`${k.titel} ${k.worum}`) && !freigabe && <p className="klein hinweis-warn">Diese Karte fasst mehrere Entscheidungen zusammen, die hier nicht einzeln stehen. Lies sie im Bericht, bevor du „Ja, so“ sagst — „Ja, so“ bestätigt alle.</p>}
+      {k.bezug?.length ? (
+        <div className="bezug">
+          <p className="klein"><b>Gemeint sind {k.bezug.length} Entscheidungen aus dem Bericht</b> — „Ja, so“ bestätigt jede Empfehlung:</p>
+          <ul className="klein">{k.bezug.map((b) => <li key={b.id}><b>{b.id}</b> {b.frage}{b.empfehlung ? <> — <i>Empfehlung: {b.empfehlung}</i></> : null}{b.antwort ? <span className="gedimmt"> (im Bericht: {b.antwort})</span> : null}</li>)}</ul>
+          {k.bericht && <p className="klein"><a href={rel(k.bericht)}>Ganzen Bericht lesen</a></p>}
+        </div>
+      ) : sammelKarte(`${k.titel} ${k.worum}`) && !freigabe ? <p className="klein hinweis-warn">Diese Karte fasst mehrere Entscheidungen zusammen, die hier nicht einzeln stehen. Lies sie im Bericht, bevor du „Ja, so“ sagst — „Ja, so“ bestätigt alle.{k.bericht ? <> <a href={rel(k.bericht)}>Bericht öffnen</a></> : null}</p> : null}
 
       {fertig ? (
         <p className="ok" role="status" ref={(el) => el?.scrollIntoView({ block: 'center', behavior: 'smooth' })}>✓ {fertig}</p>
@@ -191,6 +205,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
           </div>
         </>
       )}
+      {unterwegs && !fertig && <p className="ok unterwegs" role="status">⏳ Wird an {k.quelle || 'die Quelle'} zugestellt — das dauert ein paar Sekunden. Du kannst schon weitermachen; klappt es nicht, sagen wir es dir.</p>}
       {fehler && <p className="fehlertext" role="alert">{fehler}</p>}
       <div className="karte-fuss">
         <Verweise links={k.links} />

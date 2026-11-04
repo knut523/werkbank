@@ -32,6 +32,7 @@ export interface Link { label: string; url: string; extern?: boolean }
 export interface Karte {
   id: string; art: 'entscheidung' | 'freigabe'; titel: string; worum: string; grund: string; empfehlung: string | null; optionen: string[]; alternativen: string[];
   antworten: ('ja' | 'nein' | 'anders' | 'spaeter')[]; form: string; wichtig: boolean; thema: string; quelle: string; links: Link[]; erklaerung: [string, string][]; alt: string | null; wartetSeit: string | null;
+  bezug?: { id: string; frage: string; empfehlung: string | null; antwort: string | null }[]; bericht?: string | null;
 }
 export interface ArbeitKarte { id: string; titel: string; thema: string; satz: string; gruppe: 'wartet' | 'laeuft' | 'fertig'; zuletzt: string | null; uhr: string; offen: number; links: Link[] }
 export interface PrZeile { pr: string; repo: string; number: number; titel: string; url: string | null; wartetAuf: string[]; warum: string; entwurf: boolean; geaendert: string | null; review?: { empfehlung: string | null; status: string; gepostet?: boolean } | null; fix?: { offen: number; gesamt: number; lesbar?: boolean } | null }

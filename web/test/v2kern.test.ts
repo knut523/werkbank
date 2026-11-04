@@ -296,3 +296,12 @@ test('Runde 4 (Knut B3): standVoll — ganzer Stand-Abschnitt der letzten Agente
   assert.equal(standVoll([{ rolle: 'assistent', text: 'kurz ohne Stand' }], 'x'), 'kurz ohne Stand');
   assert.ok(standVoll([{ rolle: 'assistent', text: `### Stand\n${'y'.repeat(9000)}` }], '').length <= 8000);
 });
+
+test('Runde 5 (Knut B1): bezugIds — welche D-Fragen eine Sammelkarte meint (Bereich, „bis“, Aufzählung; erst ab zwei)', async () => {
+  const { bezugIds } = await import('../server/v2kern.ts');
+  assert.deepEqual(bezugIds('D1–D3 aus dem Bericht und das Go für Push und PR'), ['D1', 'D2', 'D3']);
+  assert.deepEqual(bezugIds('D1 bis D8, jede mit Empfehlung'), ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8']);
+  assert.deepEqual(bezugIds('D2, D4 und D11 bitte'), ['D2', 'D4', 'D11']);
+  assert.equal(bezugIds('D4 in der Inbox entscheiden'), null, 'eine einzelne Frage ist keine Sammelkarte');
+  assert.equal(bezugIds('Schalter D3–D1'), null, 'verkehrter Bereich: nichts raten');
+});

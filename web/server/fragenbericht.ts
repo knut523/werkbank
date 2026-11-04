@@ -92,11 +92,14 @@ export function berichtFragen(reviewDir: string, paket: string): BerichtFrage[] 
   if (!/^\d{1,4}-[a-z0-9][a-z0-9-]*$/.test(paket)) return null;
   const p = join(reviewDir, paket, 'bericht.md');
   if (!existsSync(p)) return null;
-  try {
-    const m = readFileSync(p, 'utf8').match(/^---\n([\s\S]*?)\n---/);
-    const h = m ? YAML.parse(m[1]) : null;
-    return Array.isArray(h?.fragen) ? h.fragen : null;
-  } catch { return null; }
+  const m = (() => { try { return readFileSync(p, 'utf8').match(/^---\n([\s\S]*?)\n---/); } catch { return null; } })();
+  if (!m) return null;
+  try { const h = YAML.parse(m[1]); return Array.isArray(h?.fragen) ? h.fragen : null; }
+  catch {
+    // Runde 5: ein Kopf mit einem Fehler an anderer Stelle (z. B. Doppelpunkt in „worum:“) — dann nur den Block „fragen:“ lesen.
+    const block = /^fragen:[ \t]*\n((?:[ \t]+.*\n?|[ \t]*\n)+)/m.exec(m[1]);
+    try { const f = block ? YAML.parse(`fragen:\n${block[1]}`)?.fragen : null; return Array.isArray(f) ? f : null; } catch { return null; }
+  }
 }
 
 /** Ein Durchgang für eine Person: offene Paket-Fragen schließen, die der Bericht schon entschieden hat. Liefert die geschlossenen. */

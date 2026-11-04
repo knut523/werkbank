@@ -27,7 +27,7 @@ import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, setzeLeseQuelle, 
 import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
 import { fragenAufraeumenAn, fragenAufraeumen } from './fragenaufraeumen.ts';
-import { fragenAusBericht, automatischGeschlossen, wiederOeffnen, abgleichFuer } from './fragenbericht.ts';
+import { fragenAusBericht, automatischGeschlossen, wiederOeffnen, abgleichFuer, berichtFragen } from './fragenbericht.ts';
 import { ueberholteFreigaben } from './ueberholt.ts';
 import { wahrerLauf } from './strangwahrheit.ts';
 import { baueErledigt } from './erledigt.ts';
@@ -4297,6 +4297,14 @@ registerV2(on, {
   lcChats: (u) => v2lcListe(u), lcUrl: cfg.librechatPublicUrl, rolleEinstellung: process.env.WERKBANK_ROLLE ?? null, vorlagen: vorlagenFuerV2,
   wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },
   abgleich: (u, id, stand) => abgleichFuer(u.id, id, cfg.reviewDir, stand),
+  // Paket aus dem Feld oder — bei Unter-Chats ohne eigenes Paket — aus dem Pfad des gefundenen Berichts (…/<paket>/bericht.md im Review-Ordner).
+  berichtVon: async (u, id) => {
+    const r: any = await orchRuns().findOne({ _id: id as any, userId: u.id }, { projection: { paket: 1, bericht: 1 } });
+    const ausPfad = /^(.*)\/([^/]+)\/bericht\.md$/.exec(String(r?.bericht ?? ''));
+    const paket = r?.paket ? String(r.paket) : ausPfad && basename(ausPfad[1]) === basename(resolve(cfg.reviewDir)) ? ausPfad[2] : null;   // gelesen wird nur im eigenen Review-Ordner (berichtFragen prüft den Namen)
+    const f = paket ? berichtFragen(cfg.reviewDir, paket) : null;
+    return f ? { paket, fragen: f } : null;
+  },
 });
 const V2_DIST = appDist(WEB_DIR);
 

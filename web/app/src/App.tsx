@@ -82,6 +82,12 @@ export function App() {
   const [trocken, setTrocken] = useState(false);
   const [zahl, setZahl] = useState<number | null>(null);
   const [chat, setChat] = useState<{ offen: boolean; text: string; conv?: string }>({ offen: false, text: '' });
+  // Runde 5 (Knut B2/B7): Meldungen, die die Seite überdauern (Antwort kam nicht an; Sammelantwort verschickt, Block ist weg).
+  const [meldung, setMeldung] = useState<{ text: string; ok: boolean } | null>(null);
+  useEffect(() => { const m = (e: Event) => { const d = (e as CustomEvent).detail; setMeldung(typeof d === 'string' ? { text: d, ok: false } : d); }; window.addEventListener('v2-meldung', m); return () => window.removeEventListener('v2-meldung', m); }, []);
+  // Runde 5 (Knut B9): der schwebende Chat-Knopf geht beim Lesen nach unten aus dem Weg und kommt beim Hochwischen wieder.
+  const [fabWeg, setFabWeg] = useState(false);
+  useEffect(() => { let y = scrollY; const s = () => { const n = scrollY; if (Math.abs(n - y) > 8) { setFabWeg(n > y && n > 120); y = n; } }; addEventListener('scroll', s, { passive: true }); return () => removeEventListener('scroll', s); }, []);
   const [n, setN] = useState(0);
 
   const pruefen = () => hole<{ user: { name: string; role: string } | null; librechatUrl: string; dryRun?: boolean; vaultDryRun?: boolean }>('api/config')
@@ -130,8 +136,9 @@ export function App() {
           </div>
         </nav>
         {trocken && <p className="testband" role="note">Testbetrieb: Antworten an Notizen und Jira werden hier nicht wirklich geschrieben.</p>}
+        {meldung && <div className={`meldung-band${meldung.ok ? ' ok' : ''}`} role={meldung.ok ? 'status' : 'alert'}><span>{meldung.text}</span><button type="button" className="knopf leise klein" onClick={() => setMeldung(null)}>Schließen</button></div>}
         <main className="inhalt"><Seite pfad={pfad} such={such} /></main>
-        <button type="button" className="chat-fab" onClick={() => setChat({ offen: true, text: '' })} aria-label="Chat öffnen" hidden={chat.offen}>Chat</button>
+        <button type="button" className={`chat-fab${fabWeg ? ' weg' : ''}`} onClick={() => setChat({ offen: true, text: '' })} aria-label="Chat öffnen" hidden={chat.offen}>Chat</button>
         <ChatLeiste offen={chat.offen} vorbereitet={chat.text} convWahl={chat.conv} schliessen={() => setChat({ offen: false, text: '' })} />
       </div>
     </Kontext.Provider>
