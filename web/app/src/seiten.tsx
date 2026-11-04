@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useDiagramme } from './diagramm.ts';
 import { schicke, type Aufraeumen, type ArbeitKarte, type Dok, type Karte, type Link, type PrZeile, type Start } from './api.ts';
 import { useApp } from './kontext.ts';
-import { Abschnitt, EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweise, Zeile } from './teile.tsx';
+import { Abschnitt, EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweis, Verweise, Zeile } from './teile.tsx';
 import { BEGRIFFE, OLAF_KURZ } from './begriffe.ts';
 import { MEHR } from './mehr.ts';
 import { chatFrage, htmlFuerV2, mehrzahl, ohneStatuszeilen, rel, tabellenBeschriften, wann } from './format.ts';
@@ -294,7 +294,7 @@ export function Arbeit() {
 export function ArbeitDetail({ id }: { id: string }) {
   const app = useApp();
   const { d, fehler, neu } = useDaten<{ titel: string; satz: string; gruppe: string; zuletzt: string | null; stand: string; fragen: Karte[]; nachrichten: { id: string; rolle: string; text: string; at: string }[]; links: Link[];
-    abgleich?: { offenListe: string[]; offenBericht: string[]; agentNennt: string[]; zeilen: { d: string; bericht: string | null; wiederOffen: boolean }[] } | null }>(`api/v2/arbeit/${id}`);
+    abgleich?: { offenListe: string[]; offenBericht: string[]; agentNennt: string[]; zeilen: { d: string; bericht: string | null; wiederOffen: boolean }[] } | null; steckbrief?: Steckbrief }>(`api/v2/arbeit/${id}`);
   const [alle, setAlle] = useState(false);
   const [verlauf, setVerlauf] = useState(false);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
@@ -308,7 +308,8 @@ export function ArbeitDetail({ id }: { id: string }) {
       {d.abgleich && !d.abgleich.offenListe.length && !d.fragen.length
         ? <p className="zustand fertig">Für dich ist hier nichts offen — deine Antworten sind beim Agenten; Bericht und Stand zieht er beim nächsten Zug nach.</p>
         : <p className={`zustand ${d.gruppe}`}>{d.satz}</p>}
-      <div className="aktionen-zeile"><Verweise links={d.links.filter((l) => !l.extern)} /><button type="button" className="knopf leise klein" onClick={() => app.chat(chatFrage(`Unter-Chat „${d.titel}“`, d.satz))}>Im Chat nachfragen</button></div>
+      {d.steckbrief && <SteckbriefKasten s={d.steckbrief} titel={d.titel} id={id} />}
+      <div className="aktionen-zeile"><Verweise links={d.links.filter((l) => !l.extern)} /></div>
       {d.abgleich && d.abgleich.offenListe.length > 0 && <Abgleich a={d.abgleich} />}
       {d.fragen.length > 0 && (
         <Abschnitt id="d-fragen" titel={d.fragen.length === 1 ? 'Diese Frage ist in deiner Liste offen' : 'Diese Fragen sind in deiner Liste offen'} erklaerung="Fragen aus diesem Unter-Chat, die noch auf deine Antwort warten. Sagt der Agent unten etwas anderes, gilt deine Antwort hier — sie geht direkt an ihn.">
@@ -322,6 +323,34 @@ export function ArbeitDetail({ id }: { id: string }) {
           {msgs.map((n) => <div key={n.id} className={`blase ${n.rolle}`}><p className="klein gedimmt">{n.rolle === 'ich' ? 'Du / Auftrag' : 'Agent'} · {wann(n.at)}</p><Md text={(n.rolle === 'ich' ? n.text : ohneStatuszeilen(n.text)).slice(0, 6000)} klein /></div>)}
         </Abschnitt>
       )}
+    </div>
+  );
+}
+
+interface Steckbrief { wofuer: string; gestartet: string | null; ueber: string | null; jetzt: string | null; laeuft: boolean; seit: number | null; schritte: { text: string; stand: 'fertig' | 'offen' }[]; eta: { text: string; ueberfaellig: boolean } | null;
+  wartetAuf: { wer: string; was: string }[]; ergebnisse: Link[]; beruehrt: { repos: string[]; text: string | null; ordner: string | null; dateien: string[] }; modell: string | null; laufzeitMin: number | null; zugTokens: number | null }
+
+const dauer = (min: number) => (min < 90 ? `${min} min` : min < 60 * 48 ? `${Math.round(min / 60)} h` : `${Math.round(min / 1440)} Tage`);
+/** Runde 7 (Knut: „Unterchats sind halt etwas intransparent“): in 10 Sekunden sehen, was ein Unter-Chat gerade tut — ohne den Chat
+ *  zu öffnen. Wofür · Jetzt gerade · Fortschritt · Wartet auf · Ergebnisse · Berührt · Modell/Laufzeit · „Was macht der gerade?“. */
+function SteckbriefKasten({ s, titel, id }: { s: Steckbrief; titel: string; id: string }) {
+  const app = useApp();
+  const fertig = s.schritte.filter((x) => x.stand === 'fertig').length;
+  return (
+    <div className="kasten steckbrief">
+      <dl>
+        <div><dt>Wofür</dt><dd>{s.wofuer}{s.gestartet ? <span className="klein gedimmt"> — gestartet {wann(s.gestartet)}{s.ueber ? ` über „${s.ueber}“` : ''}</span> : null}</dd></div>
+        <div><dt>Jetzt gerade</dt><dd>{s.laeuft && <span className="live" aria-label="läuft">● </span>}{s.jetzt ?? (s.laeuft ? 'arbeitet' : 'ruht gerade — kein Zug läuft')}{s.seit ? <span className="klein gedimmt"> (seit {dauer(Math.max(1, Math.round((Date.now() - s.seit) / 60000)))})</span> : null}</dd></div>
+        {s.schritte.length > 0 && <div><dt>Fortschritt</dt><dd>
+          <p className="klein gedimmt">{fertig} von {s.schritte.length} Schritten{s.eta && s.laeuft ? ` · ${s.eta.ueberfaellig ? 'überfällig — dauert länger als geschätzt' : `fertig ${s.eta.text}`}` : ''}</p>
+          <ul className="schritte">{s.schritte.map((x, i) => <li key={i} className={x.stand}>{x.stand === 'fertig' ? '✓' : '○'} {x.text}</li>)}</ul>
+        </dd></div>}
+        <div><dt>Wartet auf</dt><dd>{s.wartetAuf.length ? s.wartetAuf.map((w, i) => <p key={i} className="klein"><b>{w.wer}:</b> {w.was}</p>) : 'niemanden'}</dd></div>
+        {s.ergebnisse.length > 0 && <div><dt>Ergebnisse</dt><dd className="verweise">{s.ergebnisse.map((l, i) => l.url ? <Verweis key={i} l={l} /> : <span key={i} className="verweis">{l.label}</span>)}</dd></div>}
+        {(s.beruehrt.repos.length > 0 || s.beruehrt.text || s.beruehrt.dateien.length > 0) && <div><dt>Berührt</dt><dd className="klein">{[s.beruehrt.repos.join(', '), s.beruehrt.text, s.beruehrt.dateien.length ? `zuletzt geschrieben: ${s.beruehrt.dateien.join(', ')}` : ''].filter(Boolean).join(' · ')}</dd></div>}
+        <div><dt>Modell · Laufzeit</dt><dd className="klein">{[s.modell, s.laufzeitMin != null ? `läuft seit ${dauer(s.laufzeitMin)}` : null, s.zugTokens ? `dieser Zug ≈ ${Math.round(s.zugTokens / 1000)}k Tokens` : null].filter(Boolean).join(' · ') || '—'}</dd></div>
+      </dl>
+      <button type="button" className="knopf klein" onClick={() => app.chat(`Was macht der Unter-Chat „${titel}“ (${id}) gerade? Fass in drei Sätzen zusammen: was er tut, was fertig ist, was er von mir braucht.`)}>Was macht der gerade?</button>
     </div>
   );
 }

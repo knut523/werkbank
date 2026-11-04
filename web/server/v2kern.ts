@@ -178,7 +178,7 @@ export function standVoll(nachrichten: { rolle: string; text: string }[], ersatz
   const agent = [...nachrichten].reverse().filter((m) => m.rolle !== 'ich' && String(m.text ?? '').trim());
   // Runde 5: die letzte Antwort MIT Stand-Abschnitt — eine kurze Antwort danach („ok, mache ich“) verdrängt den Stand nicht.
   const t = (agent.find((m) => m.text.includes('### Stand')) ?? agent[0])?.text ?? '';
-  if (!t) return kurz(ersatz, n);
+  if (!t) { const e = String(ersatz ?? '').trim(); return e.length > n ? `${e.slice(0, n - 1)}…` : e; }   // Zeilen behalten (Schritte, Braucht Knut)
   const i = t.lastIndexOf('### Stand');
   const s = (i >= 0 ? t.slice(i) : t.slice(-n)).replace(/^\s*\*[^*\n]*\*\s*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
@@ -373,4 +373,51 @@ export function schwacherTitel(t: string | null | undefined): boolean {
 export function besserTitel(titel: string, ersteNachricht: string | null | undefined): string {
   const m = String(ersteNachricht ?? '').replace(/[*_`#>]/g, '').replace(/\s+/g, ' ').trim();
   return schwacherTitel(titel) && m.length >= 8 ? kurz(m, 72) : titel;
+}
+
+// ---------- Steckbrief eines Unter-Chats (Runde 7, Knut: „Unterchats sind halt etwas intransparent“) ----------
+
+/** Statuszeile der Brücke („📄 Datei gelesen: web/x.ts“) als Klartext ohne Zeichen und Pfade — „liest x.ts“. */
+export function jetztSatz(zeile: string | null | undefined): string | null {
+  const z = String(zeile ?? '').replace(/^[*\s]+|[*\s]+$/g, '').replace(/^\p{Extended_Pictographic}️?\s*/u, '').replace(/^↳\s*/, '').replace(/\\([\\*_[\]<>])/g, '$1').trim();
+  if (!z || /^Claude arbeitet/i.test(z)) return null;
+  const datei = (p: string) => p.split(/[\\/]/).pop()?.replace(/[`„“]/g, '') ?? p;
+  const regeln: [RegExp, (m: RegExpExecArray) => string][] = [
+    [/^Datei gelesen: (.+)$/, (m) => `liest ${datei(m[1])}`],
+    [/^Datei (?:geschrieben|geändert): (.+)$/, (m) => `schreibt an ${datei(m[1])}`],
+    [/^Suche(?: Dateien)?(?: im Vault)?: (.+)$/, (m) => `sucht ${m[1]}`],
+    [/^Websuche: (.+)$/, (m) => `recherchiert im Web: ${m[1]}`],
+    [/^Seite geladen: (.+)$/, () => 'liest eine Webseite'],
+    [/^Befehl: (.+)$/, (m) => `führt aus: ${m[1]}`],
+    [/^Teilagent: (.+)$/, (m) => `lässt einen Teilagenten arbeiten: ${m[1]}`],
+    [/^denkt nach/, () => 'denkt nach'],
+    [/^Kontext wird verdichtet/, () => 'räumt seinen Arbeitsspeicher auf (Kontext verdichten)'],
+    [/^automatisch erlaubt: (.+)$/, (m) => jetztSatz(m[1]) ?? m[1]],
+  ];
+  for (const [re, f] of regeln) { const m = re.exec(z); if (m) return kurz(f(m), 140); }
+  return kurz(z, 140);
+}
+
+export interface Schritt { text: string; stand: 'fertig' | 'offen' }
+/** Schritte aus dem Stand-Block: „- Schritte: [x] A · [ ] B“ (strukturiert), sonst Erledigt/Offen als Haken/offen. */
+export function schritteAus(stand: string): Schritt[] {
+  const s = String(stand ?? '');
+  const zeile = (name: string) => {
+    const z = s.split('\n'); const i = z.findIndex((l) => new RegExp(`^\\s*[-*]\\s*\\**${name}:?\\**:?`, 'i').test(l));
+    if (i < 0) return [] as string[];
+    const kopf = z[i].replace(new RegExp(`^\\s*[-*]\\s*\\**${name}:?\\**:?\\s*`, 'i'), '').trim();
+    const unter: string[] = [];
+    for (const l of z.slice(i + 1)) { if (!/^\s{2,}[-*]\s+/.test(l)) break; unter.push(l.replace(/^\s+[-*]\s+/, '').trim()); }
+    return [...(kopf && !/^(nichts|—|-)$/i.test(kopf) ? (unter.length ? [kopf] : kopf.split(/\s*;\s*/)) : []), ...unter].filter(Boolean);
+  };
+  const strukturiert = zeile('Schritte').flatMap((t) => t.split(/\s+·\s+/));
+  if (strukturiert.length) return strukturiert.map((t) => ({ text: kurz(t.replace(/^\[[ xX✓]\]\s*/, ''), 160), stand: /^\[[xX✓]\]/.test(t) ? 'fertig' : 'offen' }));
+  return [...zeile('Erledigt').map((t) => ({ text: kurz(t, 160), stand: 'fertig' as const })), ...zeile('Offen').map((t) => ({ text: kurz(t, 160), stand: 'offen' as const }))].slice(0, 12);
+}
+
+/** Eine Zeile aus dem Stand-Block („- Jetzt: …“, „- Berührt: …“). */
+export function standZeile(stand: string, name: string): string | null {
+  const m = new RegExp(`^\\s*[-*]\\s*\\**${name}:?\\**:?\\s*(.+)$`, 'im').exec(String(stand ?? ''));
+  const t = m?.[1]?.trim() ?? '';
+  return t && !/^(nichts|—|-)$/i.test(t) ? kurz(t, 200) : null;
 }

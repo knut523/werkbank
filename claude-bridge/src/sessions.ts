@@ -571,6 +571,9 @@ export function orchStateOf(userId: string) {
       // Start ohne Ende und keine laufende Sitzung: die Brücke wurde mitten im Zug neu gestartet.
       interrupted: !l && !inSchlange(k) && !!e.turn && e.turn.end === null,
       resumable: !!sessionMap[k], turns: seen?.turns ?? null, written: seen?.written ?? [],
+      // Paket 436 (Runde 7, Knut: „Unterchats sind intransparent“): die letzte Statuszeile des laufenden Zugs — was er gerade tut.
+      jetzt: l?.lastStatus ?? null,
+      zugTokens: l ? (l.usage.input ?? 0) + (l.usage.output ?? 0) : null,   // grob, nur der laufende Zug
     };
   });
 }

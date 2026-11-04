@@ -131,6 +131,10 @@ export function orchBrief(b: BriefInput): string {
       '- Erledigt: …',
       '- Offen: …',
       '- Braucht Knut: … (oder „nichts“)',
+      // Paket 436 (Runde 7): Knut soll ohne den Chat zu öffnen sehen, was der Strang tut — kurz und strukturiert statt geraten.
+      '- Jetzt: … (ein Satz in Klartext, was du gerade bzw. als Nächstes tust — z. B. „baut die PDF-Vorschau“)',
+      '- Schritte: [x] … · [ ] … (dein Plan als kurze Schrittliste, erledigte mit [x])',
+      '- Berührt: Repo, Zweig, Bereiche/Dateien (damit sichtbar ist, wer sich in die Quere kommen könnte)',
       '- Regeln: AGENTS.md gelesen · olaf-feedback-check n/n mit Beleg · Checkliste: ohne Befund | Befunde …',
       ETA_ZEILE,
       'Übergibst du etwas an den Hauptchat (oder eine Person), schreib im Stand-Block die Zeile „- Übergeben an: Hauptchat — was genau“ und setz Status: fertig — dann gilt dein Strang als übergeben und es bleibt keine „Braucht Knut“-Zeile stehen.',

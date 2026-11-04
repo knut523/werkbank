@@ -321,3 +321,18 @@ test('Runde 7: neue Themen — Rechnung, Leads, OCR, Partner-API; Roadmap-Ordner
   assert.equal(themaVon('Roadmap', 'Spec „olaf — Roadmap: offene Fragen“ Zählpunkt'), 'Sonstiges', 'Roadmap/Sprint sind keine Themen');
   assert.equal(themaVon('PR-Reviews', 'olaf-admin: Kundenakte'), 'Admin');
 });
+
+test('Runde 7 (Knut: Unter-Chats transparent): jetztSatz, schritteAus, standZeile', async () => {
+  const { jetztSatz, schritteAus, standZeile } = await import('../server/v2kern.ts');
+  assert.equal(jetztSatz('*📄 Datei gelesen: web/server/v2.ts*  '), 'liest v2.ts');
+  assert.equal(jetztSatz('📝 Datei geändert: `web/app/src/seiten.tsx`'), 'schreibt an seiten.tsx');
+  assert.equal(jetztSatz('💻 Befehl: Tests laufen lassen'), 'führt aus: Tests laufen lassen');
+  assert.equal(jetztSatz('🤖 automatisch erlaubt: 📄 Datei gelesen: a/b.md'), 'liest b.md');
+  assert.equal(jetztSatz('⏳ Claude arbeitet …'), null, 'kein Inhalt');
+  const stand = '### Stand\n- Erledigt: Plan geschrieben; Tests rot\n- Offen: Fix bauen\n- Braucht Knut: nichts';
+  assert.deepEqual(schritteAus(stand), [{ text: 'Plan geschrieben', stand: 'fertig' }, { text: 'Tests rot', stand: 'fertig' }, { text: 'Fix bauen', stand: 'offen' }]);
+  assert.deepEqual(schritteAus('- Schritte: [x] Plan · [ ] Bauen · [ ] Prüfen').map((x) => x.stand), ['fertig', 'offen', 'offen'], 'strukturiert hat Vorrang');
+  assert.deepEqual(schritteAus('- **Erledigt:**\n  - A\n  - B\n- Offen: nichts').map((x) => x.text), ['A', 'B']);
+  assert.equal(standZeile('- Jetzt: baut die PDF-Vorschau\n', 'Jetzt'), 'baut die PDF-Vorschau');
+  assert.equal(standZeile('- Berührt: nichts', 'Berührt'), null);
+});

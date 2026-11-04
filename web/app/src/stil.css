@@ -251,3 +251,13 @@ p { margin: 0 0 var(--s1); }
 .chip.an { background: var(--akzent); color: #fff; border-color: var(--akzent); }
 .chip.leise { border-style: dashed; }
 .karte-thema { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--gedimmt); margin: 0 0 2px; }
+
+/* Runde 7: Steckbrief eines Unter-Chats */
+.steckbrief dl { margin: 0 0 var(--s1); }
+.steckbrief dl > div { display: grid; grid-template-columns: 9.5em 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--linie); }
+.steckbrief dt { color: var(--gedimmt); font-size: .875rem; }
+.steckbrief dd { margin: 0; }
+.steckbrief .live { color: var(--gruen); }
+.steckbrief .schritte { list-style: none; margin: 4px 0 0; padding: 0; font-size: .9rem; }
+.steckbrief .schritte .fertig { color: var(--gedimmt); }
+@media (max-width: 600px) { .steckbrief dl > div { grid-template-columns: 1fr; gap: 0; } }

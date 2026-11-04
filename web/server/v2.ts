@@ -8,7 +8,7 @@ import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungssei
 import { themaOf } from './themen.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
+import { jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import type { Abgleich } from './fragenbericht.ts';
 import * as librechat from './v2librechat.ts';
@@ -65,6 +65,8 @@ export interface V2Deps {
   /** Runde 5 (Knut B1): Paket und Fragen-Kopf des Berichts eines Unter-Chats (für Sammelkarten). */
   berichtVon?: (u: User, strandId: string) => Promise<{ paket: string; fragen: any[] } | null>;
   /** Runde 7: Roadmap-Items (Spec-Seiten im olaf-Vault, roadmapitems.ts), schon mit Thema. */
+  /** Runde 7 (Knut: Unter-Chats transparent): Zustand der Stränge bei der Brücke, je Unterhaltung (strandStates). */
+  zustaende?: (u: User) => Promise<Map<string, any>>;
   roadmap?: () => { thema: string; titel: string; path: string; stand: string; standNr: number; mtime: number }[];
 }
 
@@ -270,7 +272,7 @@ export function registerV2(on: On, d: V2Deps) {
     const u = await d.needUser(req);
     const name = String(url.searchParams.get('name') ?? '');
     if (!name || name.length > 200) throw err(400, 'Welches Thema?');
-    const [q, liste] = await Promise.all([themenQuellen(u), admin(u) ? d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })) : Promise.resolve({ zeilen: [] as any[] })]);
+    const [q, liste, st] = await Promise.all([themenQuellen(u), admin(u) ? d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })) : Promise.resolve({ zeilen: [] as any[] }), admin(u) && d.zustaende ? d.zustaende(u).catch(() => null) : Promise.resolve(null)]);
     const zm = new Map(liste.zeilen.map((z: any) => [String(z.id), z]));
     const runs = q.runs.filter((r) => r.kind !== 'leitstand' && themaVon(themaOf(r), String(r.title ?? '')) === name)
       .sort((a, b) => String(b.lastActivity ?? b.startedAt ?? '').localeCompare(String(a.lastActivity ?? a.startedAt ?? '')));
@@ -278,7 +280,8 @@ export function registerV2(on: On, d: V2Deps) {
       thema: name,
       entscheidungen: await mitBezug(d, u, q.kartenAlle.filter((k) => k.thema === name)),
       // Runde 7 (Knut): je Unter-Chat sein Zustand — wartet · läuft · fertig · abgenommen — mit dem Satz wie unter „Arbeit“.
-      unterchats: runs.slice(0, 40).map((r) => { const z = zm.get(String(r._id)); return { id: String(r._id), titel: kurz(String(r.title ?? ''), 140), zuletzt: r.lastActivity ?? r.startedAt ?? null, offen: !(r.knutReviewedAt || r.reviewedAt), gruppe: z ? arbeitGruppe(z) : 'abgenommen', satz: z ? zustandSatz(z) : 'Abgenommen.' }; }),
+      unterchats: runs.slice(0, 40).map((r) => { const z = zm.get(String(r._id)); const lauf = st?.get(String(r.conv ?? '')); const jetzt = lauf?.running ? jetztSatz(lauf.jetzt) : null;   // Runde 7: auch in der Themenansicht, was er gerade tut
+        return { id: String(r._id), titel: kurz(String(r.title ?? ''), 140), zuletzt: r.lastActivity ?? r.startedAt ?? null, offen: !(r.knutReviewedAt || r.reviewedAt), gruppe: z ? arbeitGruppe(z) : 'abgenommen', satz: jetzt ? `Jetzt: ${jetzt}` : z ? zustandSatz(z) : 'Abgenommen.' }; }),
       unterchatsGesamt: runs.length,
       dokumenteGesamt: q.notizen.filter((n) => themaVon(null, `${n.path} ${n.title}`) === name).length,
       dokumente: q.notizen.filter((n) => themaVon(null, `${n.path} ${n.title}`) === name).slice(0, 20).map((n) => ({ art: 'notiz', titel: n.title, worum: bereich(n.path), url: `/v2/dokument?vault=${encodeURIComponent(n.path)}`, at: n.mtime ? new Date(n.mtime).toISOString() : null })),
@@ -301,8 +304,10 @@ export function registerV2(on: On, d: V2Deps) {
   on('GET', /^\/api\/v2\/arbeit$/, async (req, res) => {
     const u = await d.needUser(req);
     if (!admin(u)) return send(d, res, { gruppen: { wartet: [], laeuft: [], fertig: [] }, nurAdmin: true });
-    const liste = await d.unterchatListe(u, false);
-    const k = liste.zeilen.map(arbeitKarte);
+    const [liste, st, runs] = await Promise.all([d.unterchatListe(u, false), d.zustaende ? d.zustaende(u).catch(() => null) : Promise.resolve(null), d.zustaende ? d.alleRuns(u).catch(() => []) : Promise.resolve([])]);
+    const convVon = new Map(runs.map((r: any) => [String(r._id), String(r.conv ?? '')]));
+    // Runde 7: was ein laufender Unter-Chat gerade tut, in Klartext — ohne den Chat zu öffnen.
+    const k = liste.zeilen.map(arbeitKarte).map((x) => { const s = st?.get(convVon.get(x.id) ?? ''); const j = s?.running ? jetztSatz(s.jetzt) : null; return j ? { ...x, satz: `Jetzt: ${j}` } : s?.queued ? { ...x, satz: `Wartet in der Schlange (Platz ${s.queued.pos}) und startet von selbst.` } : x; });
     send(d, res, { gruppen: { wartet: k.filter((x) => x.gruppe === 'wartet'), laeuft: k.filter((x) => x.gruppe === 'laeuft'), fertig: k.filter((x) => x.gruppe === 'fertig').slice(0, 30) }, at: new Date() });
   });
   on('GET', /^\/api\/v2\/arbeit\/([0-9a-f]{8})$/, async (req, res, m) => {
@@ -323,10 +328,31 @@ export function registerV2(on: On, d: V2Deps) {
       ...(doc.paket ? [{ label: 'Bericht', url: `/v2/dokument?paket=${encodeURIComponent(doc.paket)}&datei=bericht.md` }] : []),
       ...(/^https?:\/\//.test(String(doc.url ?? '')) ? [{ label: 'In der alten Werkbank öffnen', url: String(doc.url), extern: true }] : []),
     ];
+    // Runde 7 (Knut: „Unterchats sind halt etwas intransparent“): der Steckbrief — wofür, jetzt gerade, Fortschritt, wartet auf,
+    // Ergebnisse, berührt, Modell/Laufzeit. Quelle: was Brücke und Strang schon melden (Zustand, Stand-Block, Bericht-Kopf).
+    const s = d.zustaende && doc.conv ? (await d.zustaende(u).catch(() => null))?.get(String(doc.conv)) ?? null : null;
+    const kopf: any = doc.berichtKopf ?? null;
+    const auftrag = String(doc.zielLine || String(doc.prompt ?? '').split('\n').map((l: string) => l.replace(/^[#>*\s-]+/, '').trim()).find((l: string) => l.length > 15) || doc.title || '');
+    const gh: any[] = Array.isArray(kopf?.github) ? kopf.github : [];
+    const steckbrief = {
+      wofuer: kurz(auftrag.replace(/\s+/g, ' '), 220), gestartet: doc.startedAt ?? null, ueber: doc.lauf ?? null,
+      jetzt: s?.running ? (jetztSatz(s.jetzt) ?? standZeile(stand, 'Jetzt') ?? 'arbeitet gerade') : s?.queued ? `wartet in der Schlange (Platz ${s.queued.pos}) und startet von selbst` : standZeile(stand, 'Jetzt'),
+      laeuft: !!s?.running, seit: s?.running ? s?.turn?.start ?? null : null,
+      schritte: schritteAus(stand), eta: z?.eta ?? null,
+      wartetAuf: [...(standZeile(stand, 'Braucht Knut') ? [{ wer: 'dich', was: standZeile(stand, 'Braucht Knut')! }] : []), ...(s?.queued ? [{ wer: 'einen freien Platz', was: `Platz ${s.queued.pos} in der Schlange` }] : [])],
+      ergebnisse: [
+        ...(doc.paket ? [{ label: 'Bericht', url: `/v2/dokument?paket=${encodeURIComponent(doc.paket)}&datei=bericht.md` }] : []),
+        ...(Array.isArray(kopf?.review) ? kopf.review.filter((r: any) => r?.screenshot).slice(0, 6).map((r: any) => ({ label: `Bild: ${String(r.screenshot).split('/').pop()}`, url: doc.paket ? `/api/files/agenten/${encodeURIComponent(doc.paket)}/${String(r.screenshot).split('/').map(encodeURIComponent).join('/')}` : '' })).filter((x: any) => x.url) : []),
+        ...gh.filter((g) => /^https:\/\/github\.com\//.test(String(g?.pr ?? ''))).map((g) => ({ label: `PR ${String(g.pr).split('/').slice(-3).join(' ').replace(' pull ', '#')}`, url: String(g.pr), extern: true })),
+        ...gh.filter((g) => g?.commit).map((g) => ({ label: `Commit ${String(g.commit).slice(0, 7)} (${String(g.repo ?? '').split('/').pop()})`, url: '' })),
+      ].slice(0, 12),
+      beruehrt: { repos: gh.map((g) => `${String(g.repo ?? '').split('/').pop()}${g.zweig ? ` · ${g.zweig}` : ''}`).filter(Boolean), text: standZeile(stand, 'Berührt'), ordner: doc.cwd ? String(doc.cwd).split('/').filter(Boolean).slice(-2).join('/') : null, dateien: ((s?.written ?? []) as string[]).slice(-6).map((f) => f.split('/').pop()) },
+      modell: s?.turn?.modell ?? doc.lastModell ?? doc.modell ?? null, laufzeitMin: doc.startedAt ? Math.round((Date.now() - new Date(doc.startedAt).getTime()) / 60000) : null, zugTokens: s?.zugTokens ?? null,
+    };
     // Runde 5 (Knut B1): ist deine Nachricht die letzte im Verlauf, wartet der Unter-Chat auf den Agenten, nicht auf dich.
     const zuletztIch = nachrichten.length > 0 && nachrichten[nachrichten.length - 1].rolle === 'ich' && (!z || !['laeuft', 'schlange'].includes(z.zustand));
     send(d, res, { id: m[1], titel: String(doc.title ?? ''), satz: zuletztIch ? `Deine Nachricht ist zugestellt (${wann2(nachrichten[nachrichten.length - 1].at)}) — der Agent hat noch nicht geantwortet. Du musst nichts tun.` : z ? zustandSatz(z) : 'Fertig und von dir abgenommen.', gruppe: z ? arbeitGruppe(z) : 'fertig', zuletzt: z?.zuletzt ?? doc.statusAt ?? null,
-      stand, abgleich: abgleich?.widerspruch ? abgleich : null, fragen, nachrichten, links, at: new Date() });
+      stand, steckbrief, abgleich: abgleich?.widerspruch ? abgleich : null, fragen, nachrichten, links, at: new Date() });
   });
 
   // --- Letzter Stand eines Unter-Chats für „Was ist das?“ (S22, Knut B1) — beim Aufklappen nachgeladen, nicht für jede Karte ---
