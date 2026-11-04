@@ -12,6 +12,19 @@ interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nac
 
 import { OLAF_KURZ, OLAF_MEHR } from './begriffe.ts';
 
+/** Runde 7 (Abgleich: „Hauptchat starten“ fehlte in 2.0, 1 004 Züge hängen am Hauptchat): derselbe Weg wie in der alten Werkbank. */
+function HauptchatStarten({ fertig }: { fertig: () => void }) {
+  const [laeuft, setLaeuft] = useState(false);
+  const [fehler, setFehler] = useState<string | null>(null);
+  return (
+    <div className="hinweis">
+      <p>Gerade ist kein Hauptchat aktiv.</p>
+      <button type="button" className="knopf haupt klein" disabled={laeuft} onClick={async () => { setLaeuft(true); setFehler(null); try { await schicke('api/leitstand/start', {}); fertig(); } catch (e: any) { setFehler(e.message); } finally { setLaeuft(false); } }}>{laeuft ? 'Startet …' : 'Hauptchat starten'}</button>
+      {fehler && <p className="fehlertext klein">{fehler}</p>}
+    </div>
+  );
+}
+
 export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen: boolean; vorbereitet: string; convWahl?: string; schliessen: () => void }) {
   const app = useApp();
   const [ziel, setZiel] = useState<'hauptchat' | 'eigen'>(app.ich.admin ? 'hauptchat' : 'eigen');
@@ -76,7 +89,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
       <div className="chat-verlauf" aria-live="polite">
         {fehler && <p className="fehlertext" role="alert">{fehler}</p>}
         {!stand && !fehler && <p className="laedt">Lädt …</p>}
-        {stand && ziel === 'hauptchat' && !stand.hauptchat && <p className="hinweis">Gerade ist kein Hauptchat aktiv. Starte ihn in der alten Werkbank oder nimm „Neuer Chat“.</p>}
+        {stand && ziel === 'hauptchat' && !stand.hauptchat && <HauptchatStarten fertig={() => void laden()} />}
         {ohneZugang && (
           <div className="hinweis">
             <p><b>Chatten geht nur mit einem Claude-Zugang — den hat dein Konto noch nicht.</b> Deshalb gibt es hier kein Eingabefeld, auch nicht über „Im Chat fragen“. Lesen, Suchen und Entscheiden gehen ohne. Frag Knut, wenn du einen Zugang brauchst.</p>

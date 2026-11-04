@@ -116,7 +116,8 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
   ];
   return {
     id: f.id, art: freigabe ? 'freigabe' : 'entscheidung', titel: kurz(titel, 160), worum: kurz(worum, 220), grund: o.grund, empfehlung,
-    optionen, alternativen: f.alternativen ?? [], antworten, form: f.form, wichtig: f.stufe === 'wichtig', thema: themaVon(f.gruppe, `${f.titel} ${f.quelle?.text ?? ''}`), quelle: f.quelle?.text ?? '',
+    // Reibungs-Log 04.11.: liefert eine Frage nur „optionen“ (keine „alternativen“), sind sie trotzdem klickbar.
+    optionen, alternativen: f.alternativen?.length ? f.alternativen : (f.optionen ?? []).filter((x) => x && x !== f.empfehlung && !/^(ja|nein)\b/i.test(x)), antworten, form: f.form, wichtig: f.stufe === 'wichtig', thema: themaVon(f.gruppe, `${f.titel} ${f.quelle?.text ?? ''}`), quelle: f.quelle?.text ?? '',
     links, erklaerung, alt: weg === 'alt' ? o.altUrl : null, wartetSeit: f.wartetSeit,
   };
 }

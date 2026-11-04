@@ -309,6 +309,7 @@ export function ArbeitDetail({ id }: { id: string }) {
         ? <p className="zustand fertig">Für dich ist hier nichts offen — deine Antworten sind beim Agenten; Bericht und Stand zieht er beim nächsten Zug nach.</p>
         : <p className={`zustand ${d.gruppe}`}>{d.satz}</p>}
       {d.steckbrief && <SteckbriefKasten s={d.steckbrief} titel={d.titel} id={id} />}
+      <Nachreichen id={id} />
       <div className="aktionen-zeile"><Verweise links={d.links.filter((l) => !l.extern)} /></div>
       {d.abgleich && d.abgleich.offenListe.length > 0 && <Abgleich a={d.abgleich} />}
       {d.fragen.length > 0 && (
@@ -323,6 +324,25 @@ export function ArbeitDetail({ id }: { id: string }) {
           {msgs.map((n) => <div key={n.id} className={`blase ${n.rolle}`}><p className="klein gedimmt">{n.rolle === 'ich' ? 'Du / Auftrag' : 'Agent'} · {wann(n.at)}</p><Md text={(n.rolle === 'ich' ? n.text : ohneStatuszeilen(n.text)).slice(0, 6000)} klein /></div>)}
         </Abschnitt>
       )}
+    </div>
+  );
+}
+
+/** Runde 7 (Abgleich: „Nachreichen an einen laufenden Unter-Chat“ fehlte in 2.0, 148× genutzt). Läuft er, liest er es im Zug. */
+function Nachreichen({ id }: { id: string }) {
+  const [offen, setOffen] = useState(false);
+  const [text, setText] = useState('');
+  const [laeuft, setLaeuft] = useState(false);
+  const [meldung, setMeldung] = useState<string | null>(null);
+  if (!offen) return <p><button type="button" className="knopf leise klein" onClick={() => { setOffen(true); setMeldung(null); }}>Dem Unter-Chat etwas schreiben …</button>{meldung && <span className="ok klein" role="status"> {meldung}</span>}</p>;
+  return (
+    <div className="anders">
+      <label className="klein" htmlFor={`nach-${id}`}>Nachricht an den Unter-Chat — läuft er gerade, liest er sie noch in diesem Zug</label>
+      <textarea id={`nach-${id}`} rows={3} value={text} maxLength={8000} onChange={(e) => setText(e.target.value)} placeholder="z. B. „Bitte zuerst die Tests, dann der Bericht.“" autoFocus />
+      <div className="antworten">
+        <button type="button" className="knopf haupt" disabled={laeuft || !text.trim()} onClick={async () => { setLaeuft(true); try { await schicke(`api/v2/arbeit/${id}/nachricht`, { text }); setText(''); setOffen(false); setMeldung('✓ Zugestellt.'); } catch (e: any) { setMeldung(e.message); setOffen(false); } finally { setLaeuft(false); } }}>{laeuft ? 'Sendet …' : 'Senden'}</button>
+        <button type="button" className="knopf leise" onClick={() => setOffen(false)}>Abbrechen</button>
+      </div>
     </div>
   );
 }
@@ -606,6 +626,17 @@ export function Erledigt({ tag }: { tag: string | null }) {
 
 // ---------- Mehr (S14, C5): alles aus der alten Werkbank hat hier einen Platz ----------
 
+/** Runde 7 (Abgleich: Kontingentzeile fehlte in 2.0): Melious-Rest und Claude-Konten — nur hier, nicht als zweite Zahl im Kopf. */
+function Kontingent() {
+  const { d } = useDaten<{ melious: { restProzent: number | null; geschaetzt: boolean; sperre: string | null } | null; claude: { id: string; label: string; erschoepftBis: number | null; zuegeHeute: number }[]; schwelle: number }>('api/kontingent');
+  if (!d) return null;
+  const m = d.melious;
+  const knapp = !!m && (m.sperre !== null || (m.restProzent !== null && m.restProzent < d.schwelle));
+  const teile = [`Melious ${!m ? 'aus' : m.sperre ? 'gesperrt' : m.restProzent === null ? '?' : `${m.restProzent} % übrig${m.geschaetzt ? ' (geschätzt)' : ''}`}`,
+    ...d.claude.map((c) => `${c.label} ${c.erschoepftBis && c.erschoepftBis > Date.now() ? `erschöpft bis ${new Date(c.erschoepftBis).toLocaleTimeString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', minute: '2-digit' })}` : 'frei'}`)];
+  return <p className={`klein ${knapp ? 'hinweis-warn' : 'gedimmt'}`} role="status">Kontingent: {teile.join(' · ')}</p>;
+}
+
 export function Mehr() {
   const app = useApp();
   const alt = MEHR.filter((e) => e.ziel === 'alt');
@@ -621,6 +652,7 @@ export function Mehr() {
   return (
     <div className="seite">
       <h1>Mehr</h1>
+      {app.ich.admin && <Kontingent />}
       <ul className="liste">{SEITEN.map(([t, u, satz]) => <Zeile key={u} titel={t} url={u} satz={satz} />)}</ul>
       <Abschnitt id="m-alt" titel="In der alten Werkbank" erklaerung="Diese Seiten gibt es (noch) nur in der alten Werkbank. Ein Klick öffnet sie in einem neuen Tab; die Anmeldung gilt dort auch.">
         <ul className="liste">{alt.map((e) => <Zeile key={e.alt} titel={e.titel} url={app.alt ? `${app.alt}/${e.url}` : '#'} satz={e.satz} />)}</ul>

@@ -67,6 +67,10 @@ export interface V2Deps {
   /** Runde 7: Roadmap-Items (Spec-Seiten im olaf-Vault, roadmapitems.ts), schon mit Thema. */
   /** Runde 7 (Knut: Unter-Chats transparent): Zustand der Stränge bei der Brücke, je Unterhaltung (strandStates). */
   zustaende?: (u: User) => Promise<Map<string, any>>;
+  /** Runde 7 (Abgleich: Nachreichen fehlte, 148× genutzt): Nachricht an einen Unter-Chat — läuft er, wird sie nachgereicht. */
+  nachreichen?: (u: User, strandId: string, text: string) => Promise<unknown>;
+  /** Runde 7 (Abgleich): alle Dateien eines Review-Pakets, nicht nur bericht.md. */
+  paketDateien?: (paket: string) => { rel: string; size: number }[];
   roadmap?: () => { thema: string; titel: string; path: string; stand: string; standNr: number; mtime: number }[];
 }
 
@@ -326,7 +330,7 @@ export function registerV2(on: On, d: V2Deps) {
     const fragen = await mitBezug(d, u, karten(d, alleFragen, ib.eintraege, alleFragen.filter((f) => eigeneIds.has(f.id) && f.klasse !== 'aktion').map((f) => ({ f, grund: jeFrage.get(f.id) ?? 'aus diesem Unter-Chat' }))));
     const links = [
       ...(doc.paket ? [{ label: 'Bericht', url: `/v2/dokument?paket=${encodeURIComponent(doc.paket)}&datei=bericht.md` }] : []),
-      ...(/^https?:\/\//.test(String(doc.url ?? '')) ? [{ label: 'In der alten Werkbank öffnen', url: String(doc.url), extern: true }] : []),
+      ...(/^https?:\/\//.test(String(doc.url ?? '')) ? [{ label: 'Chat in LibreChat öffnen', url: String(doc.url), extern: true }] : []),
     ];
     // Runde 7 (Knut: „Unterchats sind halt etwas intransparent“): der Steckbrief — wofür, jetzt gerade, Fortschritt, wartet auf,
     // Ergebnisse, berührt, Modell/Laufzeit. Quelle: was Brücke und Strang schon melden (Zustand, Stand-Block, Bericht-Kopf).
@@ -345,7 +349,9 @@ export function registerV2(on: On, d: V2Deps) {
         ...(Array.isArray(kopf?.review) ? kopf.review.filter((r: any) => r?.screenshot).slice(0, 6).map((r: any) => ({ label: `Bild: ${String(r.screenshot).split('/').pop()}`, url: doc.paket ? `/api/files/agenten/${encodeURIComponent(doc.paket)}/${String(r.screenshot).split('/').map(encodeURIComponent).join('/')}` : '' })).filter((x: any) => x.url) : []),
         ...gh.filter((g) => /^https:\/\/github\.com\//.test(String(g?.pr ?? ''))).map((g) => ({ label: `PR ${String(g.pr).split('/').slice(-3).join(' ').replace(' pull ', '#')}`, url: String(g.pr), extern: true })),
         ...gh.filter((g) => g?.commit).map((g) => ({ label: `Commit ${String(g.commit).slice(0, 7)} (${String(g.repo ?? '').split('/').pop()})`, url: '' })),
-      ].slice(0, 12),
+        // Runde 7 (Abgleich): alle Dateien des Pakets — Markdown in der Leseansicht, der Rest als Datei.
+        ...(doc.paket && d.paketDateien ? d.paketDateien(String(doc.paket)).filter((f) => f.rel !== 'bericht.md' && !/(^|\/)\./.test(f.rel)).slice(0, 15).map((f) => ({ label: f.rel, url: /\.md$/i.test(f.rel) ? `/v2/dokument?paket=${encodeURIComponent(doc.paket)}&datei=${encodeURIComponent(f.rel)}` : `/api/files/agenten/${encodeURIComponent(doc.paket)}/${f.rel.split('/').map(encodeURIComponent).join('/')}` })) : []),
+      ].slice(0, 30),
       beruehrt: { repos: gh.map((g) => `${String(g.repo ?? '').split('/').pop()}${g.zweig ? ` · ${g.zweig}` : ''}`).filter(Boolean), text: standZeile(stand, 'Berührt'), ordner: doc.cwd ? String(doc.cwd).split('/').filter(Boolean).slice(-2).join('/') : null, dateien: ((s?.written ?? []) as string[]).slice(-6).map((f) => f.split('/').pop()) },
       modell: s?.turn?.modell ?? doc.lastModell ?? doc.modell ?? null, laufzeitMin: doc.startedAt ? Math.round((Date.now() - new Date(doc.startedAt).getTime()) / 60000) : null, zugTokens: s?.zugTokens ?? null,
     };
@@ -353,6 +359,21 @@ export function registerV2(on: On, d: V2Deps) {
     const zuletztIch = nachrichten.length > 0 && nachrichten[nachrichten.length - 1].rolle === 'ich' && (!z || !['laeuft', 'schlange'].includes(z.zustand));
     send(d, res, { id: m[1], titel: String(doc.title ?? ''), satz: zuletztIch ? `Deine Nachricht ist zugestellt (${wann2(nachrichten[nachrichten.length - 1].at)}) — der Agent hat noch nicht geantwortet. Du musst nichts tun.` : z ? zustandSatz(z) : 'Fertig und von dir abgenommen.', gruppe: z ? arbeitGruppe(z) : 'fertig', zuletzt: z?.zuletzt ?? doc.statusAt ?? null,
       stand, steckbrief, abgleich: abgleich?.widerspruch ? abgleich : null, fragen, nachrichten, links, at: new Date() });
+  });
+
+  // --- Runde 7: Nachricht an einen Unter-Chat (nur eigene, nur Admin) — läuft er gerade, wird sie in den Zug nachgereicht ---
+  on('POST', /^\/api\/v2\/arbeit\/([0-9a-f]{8})\/nachricht$/, async (req, res, m) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) throw err(403, 'Unter-Chats sieht nur, wem sie gehören.');
+    const b = await d.body(req, 64 * 1024);
+    const text = String(b.text ?? '').trim();
+    if (!text) throw err(400, 'Was soll der Unter-Chat bekommen?');
+    if (text.length > 8000) throw err(400, 'Höchstens 8000 Zeichen.');
+    if (!d.nachreichen) throw err(501, 'Nachreichen ist hier nicht eingerichtet.');
+    if (!(await d.strang(u, m[1]))) throw err(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
+    await d.nachreichen(u, m[1], text);
+    d.log('v2 nachricht', { user: u.id, strand: m[1], zeichen: text.length });
+    send(d, res, { ok: true });
   });
 
   // --- Letzter Stand eines Unter-Chats für „Was ist das?“ (S22, Knut B1) — beim Aufklappen nachgeladen, nicht für jede Karte ---

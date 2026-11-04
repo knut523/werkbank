@@ -336,3 +336,10 @@ test('Runde 7 (Knut: Unter-Chats transparent): jetztSatz, schritteAus, standZeil
   assert.equal(standZeile('- Jetzt: baut die PDF-Vorschau\n', 'Jetzt'), 'baut die PDF-Vorschau');
   assert.equal(standZeile('- Berührt: nichts', 'Berührt'), null);
 });
+
+test('Reibungs-Log 04.11.: liefert eine Frage nur „optionen“, werden die nicht empfohlenen trotzdem zu Knöpfen', () => {
+  const k = karteAusFrage(frage('q', { optionen: ['Bookings', 'Calendly', 'Ja'], alternativen: [], empfehlung: 'Bookings' }), { grund: '', strand: null, strandTitel: null, altUrl: 'x' });
+  assert.deepEqual(k.alternativen, ['Calendly']);
+  const m = karteAusFrage(frage('q', { optionen: ['A', 'B'], alternativen: ['Eigene'], empfehlung: 'A' }), { grund: '', strand: null, strandTitel: null, altUrl: 'x' });
+  assert.deepEqual(m.alternativen, ['Eigene'], 'vorhandene Alternativen haben Vorrang');
+});

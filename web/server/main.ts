@@ -4307,6 +4307,8 @@ registerV2(on, {
   // Paket aus dem Feld oder — bei Unter-Chats ohne eigenes Paket — aus dem Pfad des gefundenen Berichts (…/<paket>/bericht.md im Review-Ordner).
   // Runde 7: Roadmap-Items je Thema (Spec-Seiten im Vault), höchstens einmal je Minute gelesen. Thema = Ordnername (gesetzt, wie ein Hand-Thema).
   zustaende: (u) => strandStates(u) as Promise<Map<string, any>>,
+  nachreichen: (u, id, text) => sendOrch(u, id, text),
+  paketDateien: (paket) => (/^\d{1,4}-[a-z0-9][a-z0-9-]*$/.test(paket) ? readPaket(cfg.reviewDir, paket)?.files ?? [] : []),
   roadmap: () => { const jetzt = Date.now(); if (!roadmapCache || jetzt - roadmapCache.at > 60_000) roadmapCache = { at: jetzt, l: roadmapItems(cfg.vaultDir, (o) => themaVon(o, '')) }; return roadmapCache.l; },
   berichtVon: async (u, id) => {
     const r: any = await orchRuns().findOne({ _id: id as any, userId: u.id }, { projection: { paket: 1, bericht: 1 } });

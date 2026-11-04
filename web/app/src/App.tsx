@@ -1,7 +1,7 @@
 // Werkbank 2.0: die Hülle — Kopf (Name, EINE Zahl, „?“, Chat), links fünf Bereiche (Handy: Leiste unten), Chat als Seitenleiste
 // auf jeder Seite. Nach dem Login landet man immer auf „Jetzt“, nie im leeren Chat (428 D2).
 import { useEffect, useMemo, useState } from 'react';
-import { hole } from './api.ts';
+import { hole, schicke } from './api.ts';
 import { Kontext, type AppKontext } from './kontext.ts';
 import { ChatLeiste } from './chat.tsx';
 import { Anmelden, AlleChats, Themen, Thema, Arbeit, ArbeitDetail, Begriffe, Dokument, Dokumente, Entscheidungen, Erledigt, Jetzt, Mehr, PrDetail, Prs, Suche } from './seiten.tsx';
@@ -84,6 +84,8 @@ export function App() {
   // Runde 5 (Knut B2/B7): Meldungen, die die Seite überdauern (Antwort kam nicht an; Sammelantwort verschickt, Block ist weg).
   const [meldung, setMeldung] = useState<{ text: string; ok: boolean } | null>(null);
   useEffect(() => { setMeldung(null); }, [pfad]);   // Runde 6 (B8): die Meldung gehört zur Seite, auf der sie entstand
+  // Runde 7 (Abgleich, D2): auch 2.0 zählt geöffnete Seiten — dieselbe Auswertung wie die alte Werkbank (Nutzungs-Audit).
+  useEffect(() => { if (konto) schicke('api/nutzung/seite', { seite: `v2/${pfad.replace(/^v2\/?/, '')}`.replace(/\/$/, '') || 'v2' }).catch(() => {}); }, [pfad, konto]);
   useEffect(() => { const m = (e: Event) => { const d = (e as CustomEvent).detail; setMeldung(typeof d === 'string' ? { text: d, ok: false } : d); }; window.addEventListener('v2-meldung', m); return () => window.removeEventListener('v2-meldung', m); }, []);
   // Runde 5 (Knut B9): der schwebende Chat-Knopf geht beim Lesen nach unten aus dem Weg und kommt beim Hochwischen wieder.
   const [fabWeg, setFabWeg] = useState(false);

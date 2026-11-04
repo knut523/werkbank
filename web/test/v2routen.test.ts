@@ -294,3 +294,15 @@ test('Runde 7 (Knut: Unter-Chats transparent): Steckbrief mit Wofür, Jetzt gera
     assert.ok(s.ergebnisse.some((x: any) => /Commit abc1234/.test(x.label)));
   } finally { deps.strang = altStrang; }
 });
+
+test('Runde 7 (Abgleich): Nachricht an einen Unter-Chat — nur Admin, nur eigene, nicht leer', async () => {
+  const gesendet: string[] = [];
+  deps.nachreichen = async (_u, id, text) => { gesendet.push(`${id}:${text}`); };
+  try {
+    assert.equal((await rufe('POST', '/api/v2/arbeit/abcd1234/nachricht', ADMIN, { text: 'Erst die Tests.' })).status, 200);
+    assert.deepEqual(gesendet, ['abcd1234:Erst die Tests.']);
+    assert.equal((await rufe('POST', '/api/v2/arbeit/abcd1234/nachricht', LISA, { text: 'x' })).status, 403);
+    assert.equal((await rufe('POST', '/api/v2/arbeit/abcd1234/nachricht', ADMIN, { text: '  ' })).status, 400);
+    assert.equal((await rufe('POST', '/api/v2/arbeit/ffffffff/nachricht', ADMIN, { text: 'x' })).status, 404);
+  } finally { delete deps.nachreichen; }
+});

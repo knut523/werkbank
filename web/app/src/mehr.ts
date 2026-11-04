@@ -30,5 +30,7 @@ export const MEHR: MehrEintrag[] = [
   { alt: '#/ziele', titel: 'Ziele', satz: 'Ziele und Schlüsselergebnisse mit Fälligkeit.', ziel: 'alt', url: 'ziele' },
   { alt: '#/timebox', titel: 'Mein Tag', satz: 'Tagesvorschlag mit Zeitblöcken.', ziel: 'alt', url: 'timebox' },
   { alt: '#/skills', titel: 'Skills', satz: 'Welche Fähigkeiten die Agenten haben und welche für dich gelten.', ziel: 'alt', url: 'skills' },
+  // Runde 7 (Abgleich): Morgenlage, Tagesabschluss, Hygiene hingen an der alten Übersicht — ohne Link waren sie weg.
+  { alt: '#/heute', titel: 'Morgenlage, Tagesabschluss, Hygiene', satz: 'Die alte Übersicht mit Morgenlage, Tagesabschluss und Hygiene-Liste.', ziel: 'alt', url: 'heute' },
   { alt: '#/einrichtung', titel: 'Einrichtung', satz: 'Claude verbinden, Jira und Melious einrichten, Team-Freigaben, Dienste.', ziel: 'alt', url: 'einrichtung' },
 ];
