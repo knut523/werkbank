@@ -31,6 +31,8 @@ export interface V2Deps {
   livePrs: () => Promise<{ map: Map<string, any>; sync?: any }>;
   githubNames: () => Record<string, string>;
   letzteReviews: () => Promise<any[]>;
+  /** Paket 436 (Knut 04.11.): Prüfschritt vor dem Fix-Push — je Fix-Lauf die abgehakten offenen Punkte (pr_fixes.punkte), neueste zuerst. */
+  fixPunkte?: () => Promise<any[]>;
   reviewKommentar: (paket: string) => { empfehlung: string; text: string } | null;
   pakete: () => { name: string; titel: string; status: string; at: number }[];
   vaultSuche: (q: string) => Promise<{ path: string; title: string; team?: string; snippet?: string }[]>;
@@ -129,10 +131,12 @@ export function registerV2(on: On, d: V2Deps) {
   });
 
   /** Je PR das neueste Agenten-Review (letzteReviews ist neueste zuerst). Entwurfs-Urteil nur für Admins (wie auf der PR-Seite). */
-  function mitReview<T extends { pr: string }>(zeilen: T[], rv: any[], istAdmin: boolean): (T & { review: { empfehlung: string | null; status: string; gepostet: boolean; at: any } | null })[] {
-    const je = new Map<string, any>();
+  function mitReview<T extends { pr: string }>(zeilen: T[], rv: any[], istAdmin: boolean, fx: any[] = []): (T & { review: { empfehlung: string | null; status: string; gepostet: boolean; at: any } | null; fix: { offen: number; gesamt: number; at: any } | null })[] {
+    const je = new Map<string, any>(), fixJe = new Map<string, any>();
     for (const r of rv) { const k = `${String(r.repo).split('/').pop()}#${r.number}`; if (!je.has(k)) je.set(k, r); }
-    return zeilen.map((p) => { const r = je.get(p.pr); return { ...p, review: r ? { empfehlung: istAdmin || r.posted?.url ? r.empfehlung ?? null : null, status: r.status, gepostet: !!r.posted?.url, at: r.doneAt ?? r.createdAt } : null }; });
+    for (const f of fx) { const k = `${String(f.repo).split('/').pop()}#${f.number}`; if (!fixJe.has(k) && f.punkte) fixJe.set(k, f); }
+    return zeilen.map((p) => { const r = je.get(p.pr), f = fixJe.get(p.pr); return { ...p, review: r ? { empfehlung: istAdmin || r.posted?.url ? r.empfehlung ?? null : null, status: r.status, gepostet: !!r.posted?.url, at: r.doneAt ?? r.createdAt } : null,
+      fix: f ? { offen: Number(f.punkte.offen ?? 0), gesamt: Number(f.punkte.gesamt ?? 0), at: f.punkte.at ?? null, lesbar: f.punkte.lesbar !== false } : null }; });
   }
 
   // --- Die eine Zahl (Kopf jeder Seite): dieselbe wie überall — `inboxZahl` ---
@@ -309,8 +313,8 @@ export function registerV2(on: On, d: V2Deps) {
     const g = await d.livePrs();
     const live = [...g.map.values()] as LivePrLite[];
     const names = d.githubNames();
-    const rv = await d.letzteReviews().catch(() => []);
-    const zeilen = mitReview(prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)), rv, admin(u));
+    const [rv, fx] = await Promise.all([d.letzteReviews().catch(() => []), d.fixPunkte ? d.fixPunkte().catch(() => []) : Promise.resolve([])]);
+    const zeilen = mitReview(prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)), rv, admin(u), fx);
     const ohneEntwurf = live.filter((p) => !p.isDraft);
     send(d, res, { wer, ich, personen: [...personen(ohneEntwurf, ich, names), { name: 'alle', anzahl: ohneEntwurf.length }], zeilen, stand: g.sync?.at ?? null, at: new Date() });
   });
@@ -327,7 +331,11 @@ export function registerV2(on: On, d: V2Deps) {
     const k = sichtbar && r.paket && /^\d{1,4}-[a-z0-9][a-z0-9-]*$/.test(r.paket) ? d.reviewKommentar(r.paket) : null;
     const names = d.githubNames();
     const wa = p ? prSicht([p], 'alle', names)[0] : null;
+    // Paket 436 (Knut 04.11.): was nach dem letzten Fix offen geblieben ist — von jedem Reviewer, mit Grund.
+    const fx = d.fixPunkte ? (await d.fixPunkte().catch(() => [])).find((f) => String(f.repo).split('/').pop() === m[1] && Number(f.number) === Number(m[2]) && f.punkte) : null;
     send(d, res, {
+      fix: fx ? { at: fx.punkte.at ?? null, lesbar: fx.punkte.lesbar !== false, gesamt: Number(fx.punkte.gesamt ?? 0), status: fx.status ?? null,
+        offen: (fx.punkte.liste ?? []).filter((x: any) => x.stand === 'offen').map((x: any) => ({ wer: names[String(x.wer ?? '').toLowerCase()] ?? x.wer, art: x.art, wo: x.wo ?? null, text: kurz(String(x.text ?? ''), 300), grund: x.grund ?? null, notiz: x.notiz ?? null })) } : null,
       pr: key, titel: p?.title ?? r?.title ?? key, url: p?.url ?? r?.url ?? null, autor: p ? (names[String(p.author ?? '').toLowerCase()] ?? p.author ?? null) : null,
       offen: !!p, merge: p?.turn?.role === 'merge', wartetAuf: wa?.wartetAuf ?? [], warum: wa?.warum ?? '', entscheidung: p?.reviewDecision ?? null, offeneThreads: p?.openThreads ?? 0,
       verlangt: verlangtVon(p?.reviewDecision, p?.reviews ?? [], names),   // S22 (Christoph B2): wer hat Änderungen verlangt

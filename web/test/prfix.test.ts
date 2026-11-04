@@ -641,3 +641,44 @@ test('D2: jede Statuszeile englisch (auch checking, nothing, failed)', () => {
   for (const art of ['queued', 'running', 'checking', 'pushed', 'refused', 'nothing', 'failed', 'skipped'] as const)
     assert.doesNotMatch(F.fixZeile({ art, gruende: ['tests not green'], grund: 'x', zweig: 'feat/x', von: A, nach: B }), /[äöüßÄÖÜ]/, `art=${art}: keine deutschen Umlaute`);
 });
+
+test('Paket 436 (Knut 04.11.): vor dem Push alle offenen Punkte JEDES Reviewers einsammeln und abhaken — Offenes steht im Kommentar und am Eintrag', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-punkte', 'feat/p', 31);
+  await einreihen('p436a', 'olaf-punkte', 31);
+  const { d, calls } = deps(gh, { zweig: 'feat/p' });
+  const k = (extra: any[] = []) => ({ title: 'feat: x', body: '', baseRefName: 'develop', headRefName: 'feat/x', headRefOid: gh.kopf(), additions: 1, deletions: 0, changedFiles: 1, author: 'knut523', comments: [],
+    reviews: [{ author: 'bizarrochris', state: 'CHANGES_REQUESTED', body: 'Bitte auch den Export prüfen', at: '2026-10-20T10:00:00Z', commit: null }],
+    threads: [{ resolved: false, outdated: false, path: 'a.ts', line: 1, comments: [{ author: 'fazlomar9', body: 'foo heißt sonst überall bar', at: '2026-10-20T11:00:00Z' }] }, ...extra] });
+  d.kontext = async () => k();
+  assert.deepEqual(await F.fixTick(d), { started: 1, done: 0 });
+  let f: any = await T.fixesCol().findOne({ _id: 'fix:p436a' as any });
+  const auftrag = readFileSync(join(process.env.WERKBANK_REVIEW_DIR!, f.paket, 'auftrag.md'), 'utf8');
+  assert.match(auftrag, /Alle offenen Punkte am PR \(jeder Reviewer\)/);
+  assert.match(auftrag, /von fazlomar9: foo heißt/); assert.match(auftrag, /Review von bizarrochris/);
+  // Bis zum Abschluss ist ein weiterer Thread dazugekommen — er wird frisch eingesammelt (nicht der Stand vom Start).
+  d.kontext = async () => k([{ resolved: false, outdated: false, path: 'b.ts', line: 2, comments: [{ author: 'lisa', body: 'Typo', at: '2026-10-21T11:00:00Z' }] }]);
+  assert.deepEqual(await F.fixTick(d), { started: 0, done: 1 });
+  f = await T.fixesCol().findOne({ _id: 'fix:p436a' as any });
+  assert.equal(f.status, 'fertig', 'offene Punkte halten den Abschluss nicht an');
+  assert.deepEqual([f.punkte.gesamt, f.punkte.offen], [3, 3], 'die Fake-fix.json führt keine Kennungen → alles offen');
+  assert.deepEqual(f.punkte.liste.map((p: any) => [p.wer, p.grund]), [['bizarrochris', 'nicht-behandelt'], ['fazlomar9', 'nicht-behandelt'], ['lisa', 'nicht-behandelt']]);
+  const antwort = calls.kommentar.at(-1)!;
+  assert.match(antwort, /All open review items \(every reviewer\)\*\* — 0 of 3 addressed by this fix, 3 still open/);
+  assert.match(antwort, /thread at `b\.ts:2` by lisa/);
+  assert.equal(JSON.parse(readFileSync(join(process.env.WERKBANK_REVIEW_DIR!, f.paket, 'punkte.json'), 'utf8')).offen, 3, 'Beleg im Paket');
+});
+
+test('Paket 436: fix.json führt Punkte mit Kennung (nur gültige); ohne lesbaren PR-Kontext „nicht lesbar“ statt „alles erledigt“', async () => {
+  const j: any = F.liesFixJson(JSON.stringify({ punkte: [{ id: 'p-0123abcd', punkt: 'x', stand: 'fixed', commit: 'ABC1234' }, { id: 'p-kaputt', punkt: 'y', stand: 'fixed' }] }));
+  assert.deepEqual(j.punkte.map((p: any) => p.id), ['p-0123abcd', null]);
+  await setze();
+  const gh = fakeGithub('olaf-punkte2', 'feat/q', 32);
+  await einreihen('p436b', 'olaf-punkte2', 32);
+  const { d } = deps(gh, { zweig: 'feat/q' });
+  await F.fixTick(d);
+  d.kontext = async () => null;
+  await F.fixTick(d);
+  const f: any = await T.fixesCol().findOne({ _id: 'fix:p436b' as any });
+  assert.equal(f.punkte.lesbar, false);
+});

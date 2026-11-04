@@ -135,8 +135,11 @@ interface Ueberholt { id: string; titel: string; grund: string; beleg: string }
 const DokZeile = ({ x }: { x: Dok }) => <Zeile titel={x.titel} url={x.url} satz={x.worum} marke={{ text: x.art === 'bericht' ? 'Bericht' : 'Notiz' }} rechts={wann(x.at)} />;
 // S22 (Christoph B3): in der Liste sieht man, ob und wie der Prüf-Agent geurteilt hat — auch „prüft noch“ und „fertig, noch nicht veröffentlicht“.
 const agentMarke = (r: PrZeile['review']) => !r ? undefined : r.empfehlung ? { text: EMPFEHLUNG[r.empfehlung] ?? `Agent: ${r.empfehlung}`, ton: r.empfehlung === 'approve' ? 'gruen' : '' } : r.status !== 'fertig' ? { text: 'Agent prüft …' } : { text: r.gepostet === false ? 'Agent: Entwurf' : 'Agent-Review' };
+/** Paket 436 (Knut 04.11.): was nach dem letzten automatischen Fix an offenen Punkten (jeder Reviewer) geblieben ist — an der Karte. */
+const fixSatz = (f: PrZeile['fix']) => (!f ? '' : f.lesbar === false ? ' · letzter Fix: offene Punkte nicht prüfbar (PR nicht lesbar)' : f.offen ? ` · nach dem letzten Fix ${f.offen === 1 ? '1 Punkt' : `${f.offen} Punkte`} offen` : f.gesamt ? ' · letzter Fix: alle Punkte abgehakt' : '');
+const GRUND: Record<string, string> = { 'nicht-behandelt': 'vom Fix nicht behandelt', frage: 'Rückfrage des Fixes', 'nicht-behoben': 'nicht behoben', 'ohne-commit': 'als behoben gemeldet, aber ohne Commit in diesem Push' };
 const PrZeileView = ({ p }: { p: PrZeile }) => (
-  <Zeile titel={`${p.pr} · ${p.titel}`} url={`v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}
+  <Zeile titel={`${p.pr} · ${p.titel}`} url={`v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={`${p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}${fixSatz(p.fix)}`}
     marke={p.entwurf ? { text: 'Entwurf' } : agentMarke(p.review) ?? { text: 'noch kein Agenten-Review' }} rechts={wann(p.geaendert)} />
 );
 
@@ -384,7 +387,7 @@ const englisch = (t: string) => (t.match(/\b(the|and|was|were|with|on|of|tests?|
 export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
   const app = useApp();
   const { d, fehler, neu } = useDaten<{ pr: string; titel: string; url: string | null; autor: string | null; offen: boolean; merge: boolean; wartetAuf: string[]; warum: string; entscheidung: string | null; offeneThreads: number; reviews: { wer: string; zustand: string; at: string }[];
-    verlangt?: { wer: string[]; unbekannt: boolean }; agent: { status: string; empfehlung: string | null; text: string | null; kurz?: { satz: string; befunde: number } | null; gepostet: string | null; entwurf: boolean; at: string; bericht: string | null } | null }>(`api/v2/prs/${encodeURIComponent(repo)}/${nummer}`);
+    verlangt?: { wer: string[]; unbekannt: boolean }; fix?: { at: string | null; lesbar: boolean; gesamt: number; status: string | null; offen: { wer: string; art: string; wo: string | null; text: string; grund: string | null; notiz: string | null }[] } | null; agent: { status: string; empfehlung: string | null; text: string | null; kurz?: { satz: string; befunde: number } | null; gepostet: string | null; entwurf: boolean; at: string; bericht: string | null } | null }>(`api/v2/prs/${encodeURIComponent(repo)}/${nummer}`);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   const ZUSTAND: Record<string, string> = { APPROVED: 'freigegeben', CHANGES_REQUESTED: 'Änderungen verlangt', COMMENTED: 'kommentiert', DISMISSED: 'zurückgezogen' };
@@ -405,6 +408,14 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
         {d.agent?.bericht && <a className="verweis" href={rel(d.agent.bericht)}>Bericht des Reviews</a>}
         <button type="button" className="knopf leise klein" onClick={() => app.chat(chatFrage(`PR ${d.pr}`, d.titel))}>Im Chat nachfragen</button>
       </div>
+      {d.fix && (
+        <Abschnitt id="p-fix" titel={!d.fix.lesbar ? 'Letzter Fix: offene Punkte nicht prüfbar' : d.fix.offen.length ? `Nach dem letzten Fix offen (${d.fix.offen.length} von ${d.fix.gesamt})` : 'Letzter Fix: alle offenen Punkte abgehakt'}
+          erklaerung="Vor jedem Push eines automatischen Fixes sammelt der Workspace alle offenen Kommentare und ungelösten Threads von jedem Reviewer ein und hakt sie gegen den Fix ab. Was danach offen ist, steht hier — und im Kommentar am PR.">
+          {!d.fix.lesbar ? <p className="leer">Der PR war beim Push nicht lesbar — die offenen Punkte bitte auf GitHub prüfen.</p>
+            : d.fix.offen.length ? <ul className="liste">{d.fix.offen.map((x, i) => <li key={i} className="zeile"><div className="zeile-haupt"><b>{x.wer}</b>{x.wo ? <> · <code>{x.wo}</code></> : x.art === 'review' ? ' · Review' : ' · Kommentar'}<p className="zeile-satz">{x.text}</p><p className="klein gedimmt">{GRUND[x.grund ?? ''] ?? 'offen'}{x.notiz ? `: ${x.notiz}` : ''}</p></div><div className="zeile-rechts"><span className="zeit">{wann(d.fix!.at)}</span></div></li>)}</ul>
+            : <p className="leer">Alle {d.fix.gesamt} Punkte hat der Fix erledigt (mit Commit im Push).</p>}
+        </Abschnitt>
+      )}
       <Abschnitt id="p-menschen" titel="Reviews von Menschen" erklaerung="Wer den PR auf GitHub geprüft hat und mit welchem Ergebnis.">
         {d.reviews.length ? <ul className="liste">{d.reviews.map((r, i) => <li key={i} className="zeile"><div className="zeile-haupt"><b>{r.wer}</b> · {ZUSTAND[r.zustand] ?? r.zustand}</div><div className="zeile-rechts"><span className="zeit">{wann(r.at)}</span></div></li>)}</ul> : <p className="leer">Noch kein Review von einem Menschen.</p>}
         {d.offeneThreads > 0 && <p className="klein">{mehrzahl(d.offeneThreads, 'offener Kommentar-Faden', 'offene Kommentar-Fäden')} auf GitHub.</p>}

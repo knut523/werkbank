@@ -537,3 +537,16 @@ Prüfung (Test zum Einschalten): derselbe Köder-Test wie in Stufe 1, dazu ein L
 Rückweg: Schalter aus — die Brücke startet wieder als Knut (Stufe 1). Nutzer und Gruppe können bleiben.
 
 Aufwand ≈ 2 PT (davon ½ PT Einrichtung durch Knut). Vor M2 (Hauptchat in 2.0).
+
+## 20. Tag 04.11. — Messlatte für Knut (Desktop, Handy) und Christoph (Desktop)
+
+Auftrag Knut (04.11. vormittags): offene Befunde aus Runde 4, Knuts Aufgaben einzeln (Reibung → Ursache → Fix → Test), danach Persona-Runde 5 für die drei Rollen ohne Messlatte. Nachtrag Knut (04.11.): fester Prüfschritt vor jedem Fix-Push (alle offenen Kommentare jedes Reviewers, Offenes an der PR-Karte).
+
+| Schnitt | Was | Befund (Runde 4) | Ursache |
+|---|---|---|---|
+| S24 | Unter-Chat sagt, was gilt: Abgleich Liste ↔ Bericht ↔ Agent, voller Stand | Knut B2/B3 (Netzentgelte 5 offen vs. „nur D4“; „Was ist das?“ ohne Inhalt) | Stand an der Quelle auf 600 Zeichen gekürzt (`excerpt`), dadurch fehlte „D11/D12“; Fragen ohne D-Nummer |
+| S25 | Knuts Reibung einzeln, Christoph am Desktop | Knut B4–B15, Christoph B1–B7 | siehe Bericht, Tabelle „Reibung → Ursache → Fix“ |
+| S26 | Prüfschritt vor jedem Fix-Push: alle offenen Punkte jedes Reviewers einsammeln, abhaken, Offenes an der PR-Karte | Nachtrag Knut 04.11. | Auftrag an den Fix-Strang enthielt nur die Punkte des @fix-Autors (`offenePunkte`); vor dem Push wurde nichts abgehakt |
+| S18c | Persona-Runde 5 (unabhängig): Knut Desktop + Handy, Christoph Desktop | Messlatte §7a | — |
+
+Annahmen (Knut kann widersprechen): Automatische Texte des Workspace (Marke „(OLAF Workspace)“: Fix-Antworten, Status, Agenten-Review) zählen im Prüfschritt nicht als offener Punkt — die Befunde des Agenten stehen im Review selbst. Ein offener Punkt hält den Push nicht an; er steht im Antwort-Kommentar und an der PR-Karte (Knut: „was offen bleibt, sichtbar an der PR-Karte“).

@@ -212,6 +212,21 @@ test('Runde 4 (Knut B2): Unter-Chat-Seite sagt, was gilt — Abgleich nur bei Wi
   delete deps.abgleich;
 });
 
+test('Paket 436 (Knut 04.11.): PR-Karte und PR-Seite zeigen, was nach dem letzten Fix offen geblieben ist (jeder Reviewer)', async () => {
+  deps.fixPunkte = async () => [
+    { repo: 'o/a', number: 1, status: 'fertig', punkte: { at: '2026-11-04T09:00:00Z', gesamt: 2, offen: 1, liste: [
+      { wer: 'bizarrochris', art: 'thread', wo: 'a.ts:3', text: 'Null-Fall fehlt', stand: 'offen', grund: 'nicht-behandelt', notiz: null },
+      { wer: 'fazlomar9', art: 'review', wo: null, text: 'Name', stand: 'erledigt', grund: null, notiz: null }] } },
+    { repo: 'o/a', number: 1, status: 'fertig', punkte: { at: '2026-11-01T09:00:00Z', gesamt: 5, offen: 5, liste: [] } },
+  ];
+  const l = await rufe('GET', '/api/v2/prs?wer=alle', ADMIN);
+  assert.deepEqual(l.b.zeilen.find((z: any) => z.pr === 'a#1').fix, { offen: 1, gesamt: 2, at: '2026-11-04T09:00:00Z', lesbar: true }, 'der neueste Fix-Lauf zählt');
+  const p = await rufe('GET', '/api/v2/prs/a/1', ADMIN);
+  assert.deepEqual(p.b.fix.offen.map((x: any) => [x.wer, x.wo, x.grund]), [['Christoph', 'a.ts:3', 'nicht-behandelt']]);
+  delete deps.fixPunkte;
+  assert.equal((await rufe('GET', '/api/v2/prs/a/1', ADMIN)).b.fix, null);
+});
+
 test('Runde 4 (Christoph B1): Reviewer-Start zeigt veröffentlichte Agenten-Reviews offener PRs; PR-Zeilen auf „Jetzt“ tragen das Review', async () => {
   const CHRISTOPH = { id: 'c', email: 'c@x', name: 'Christoph Muster', role: 'USER' } as any;
   const vorher = deps.letzteReviews;

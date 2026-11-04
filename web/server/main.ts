@@ -76,7 +76,7 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG, graphql } from './github.ts';
-import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol } from './prticker.ts';
+import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol, fixesCol } from './prticker.ts';
 import { regelDir, regelVorschlaege } from './regelquelle.ts';
 import { klonPfad, reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
@@ -4282,6 +4282,7 @@ registerV2(on, {
   hauptchat: async (u) => { if (u.role !== 'ADMIN') return null; const l = await activeLeitstand(u).catch(() => null); return l?.conv ? { conv: String(l.conv), url: /^https?:\/\//.test(String(l.url ?? '')) ? String(l.url) : null } : null; },
   laeuftChat: async (u, conv) => !!(await strandStates(u)).get(conv)?.running,
   livePrs, githubNames,
+  fixPunkte: () => fixesCol().find({ punkte: { $exists: true } }, { projection: { repo: 1, number: 1, punkte: 1, status: 1, createdAt: 1, neu: 1 } }).sort({ createdAt: -1 }).limit(300).toArray(),
   letzteReviews: () => reviewsCol().find({ createdAt: { $gte: new Date(Date.now() - 30 * 86400_000) } }).sort({ createdAt: -1 }).limit(300).toArray(),
   reviewKommentar: (paket) => parseKommentar(readBerichtDatei(join(reviewDir(), paket, 'kommentar.md'))),
   pakete: () => paketIndex(cfg.reviewDir),
