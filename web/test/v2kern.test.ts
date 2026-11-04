@@ -342,4 +342,12 @@ test('Reibungs-Log 04.11.: liefert eine Frage nur „optionen“, werden die nic
   assert.deepEqual(k.alternativen, ['Calendly']);
   const m = karteAusFrage(frage('q', { optionen: ['A', 'B'], alternativen: ['Eigene'], empfehlung: 'A' }), { grund: '', strand: null, strandTitel: null, altUrl: 'x' });
   assert.deepEqual(m.alternativen, ['Eigene'], 'vorhandene Alternativen haben Vorrang');
+  const n = karteAusFrage(frage('q', { optionen: ['A', 'Ja, aber nur lesend', 'Nein.'], alternativen: [], empfehlung: 'A' }), { grund: '', strand: null, strandTitel: null, altUrl: 'x' });
+  assert.deepEqual(n.alternativen, ['Ja, aber nur lesend'], 'Gegenprüfung R7: nur nacktes Ja/Nein fällt weg');
+});
+
+test('Gegenprüfung R7: Stand-Zeilen brauchen eine Wortgrenze („Offene Fragen“ ist nicht „Offen“)', async () => {
+  const { schritteAus, standZeile } = await import('../server/v2kern.ts');
+  assert.deepEqual(schritteAus('- Erledigt: A\n- Offene Fragen: Zugang\n- Offen: B').map((x) => x.text), ['A', 'B']);
+  assert.equal(standZeile('- Jetztige Punkte: x\n- Jetzt: baut', 'Jetzt'), 'baut');
 });

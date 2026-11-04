@@ -28,3 +28,11 @@ test('Liegen gebliebene Enden quer über fertige Stränge; laufende zählen nich
   assert.deepEqual(e.map((x) => [x.strand, x.text, x.besitzer, x.art]), [['a', 'Push/PR', 'Knut', 'dod'], ['a', 'Register nachgezogen (Beleg fehlt)', null, 'dod'], ['a', 'Bericht ins Vault legen', 'Hauptchat', 'folge']]);
   assert.ok(DOD_PFLICHT.code.includes('Pre-Push-Gate 0 hart'));
 });
+
+test('Gegenprüfung R7: „und/oder“ ist kein Beleg, „- Folgen:“ ist keine Folge-Zeile', () => {
+  assert.equal(dodAus('- DoD: [x] Register — im Chat und/oder erledigt').zeilen[0].erledigt, false);
+  assert.equal(dodAus('- DoD: [x] Register — olaf/0-Overview/pr-stand.md').zeilen[0].erledigt, true);
+  assert.equal(dodAus('- DoD: [x] Bericht — bericht.md').zeilen[0].erledigt, true);
+  assert.deepEqual(dodAus('- Folgen: keine Ahnung\n- DoDs: x').folgen, []);
+  assert.deepEqual(dodAus('- DoDs: x').zeilen, []);
+});

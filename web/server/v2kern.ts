@@ -117,7 +117,7 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
   return {
     id: f.id, art: freigabe ? 'freigabe' : 'entscheidung', titel: kurz(titel, 160), worum: kurz(worum, 220), grund: o.grund, empfehlung,
     // Reibungs-Log 04.11.: liefert eine Frage nur „optionen“ (keine „alternativen“), sind sie trotzdem klickbar.
-    optionen, alternativen: f.alternativen?.length ? f.alternativen : (f.optionen ?? []).filter((x) => x && x !== f.empfehlung && !/^(ja|nein)\b/i.test(x)), antworten, form: f.form, wichtig: f.stufe === 'wichtig', thema: themaVon(f.gruppe, `${f.titel} ${f.quelle?.text ?? ''}`), quelle: f.quelle?.text ?? '',
+    optionen, alternativen: f.alternativen?.length ? f.alternativen : (f.optionen ?? []).filter((x) => x && x !== f.empfehlung && !/^(ja|nein)\s*[.!]?$/i.test(x)), antworten, form: f.form, wichtig: f.stufe === 'wichtig', thema: themaVon(f.gruppe, `${f.titel} ${f.quelle?.text ?? ''}`), quelle: f.quelle?.text ?? '',
     links, erklaerung, alt: weg === 'alt' ? o.altUrl : null, wartetSeit: f.wartetSeit,
   };
 }
@@ -404,9 +404,9 @@ export interface Schritt { text: string; stand: 'fertig' | 'offen' }
 export function schritteAus(stand: string): Schritt[] {
   const s = String(stand ?? '');
   const zeile = (name: string) => {
-    const z = s.split('\n'); const i = z.findIndex((l) => new RegExp(`^\\s*[-*]\\s*\\**${name}:?\\**:?`, 'i').test(l));
+    const z = s.split('\n'); const i = z.findIndex((l) => new RegExp(`^\\s*[-*]\\s*\\**${name}(?=$|[\\s:*]):?\\**:?`, 'i').test(l));
     if (i < 0) return [] as string[];
-    const kopf = z[i].replace(new RegExp(`^\\s*[-*]\\s*\\**${name}:?\\**:?\\s*`, 'i'), '').trim();
+    const kopf = z[i].replace(new RegExp(`^\\s*[-*]\\s*\\**${name}(?=$|[\\s:*]):?\\**:?\\s*`, 'i'), '').trim();
     const unter: string[] = [];
     for (const l of z.slice(i + 1)) { if (!/^\s{2,}[-*]\s+/.test(l)) break; unter.push(l.replace(/^\s+[-*]\s+/, '').trim()); }
     return [...(kopf && !/^(nichts|—|-)$/i.test(kopf) ? (unter.length ? [kopf] : kopf.split(/\s*;\s*/)) : []), ...unter].filter(Boolean);
@@ -418,7 +418,8 @@ export function schritteAus(stand: string): Schritt[] {
 
 /** Eine Zeile aus dem Stand-Block („- Jetzt: …“, „- Berührt: …“). */
 export function standZeile(stand: string, name: string): string | null {
-  const m = new RegExp(`^\\s*[-*]\\s*\\**${name}:?\\**:?\\s*(.+)$`, 'im').exec(String(stand ?? ''));
+  // Wortgrenze hinter dem Namen: „Offene Fragen“ ist nicht „Offen“, „Jetztige …“ nicht „Jetzt“ (Gegenprüfung R7)
+  const m = new RegExp(`^\\s*[-*]\\s*\\**${name}(?=$|[\\s:*]):?\\**:?\\s*(.+)$`, 'im').exec(String(stand ?? ''));
   const t = m?.[1]?.trim() ?? '';
   return t && !/^(nichts|—|-)$/i.test(t) ? kurz(t, 200) : null;
 }

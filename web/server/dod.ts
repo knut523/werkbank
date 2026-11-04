@@ -16,12 +16,12 @@ export const DOD_PFLICHT: Record<'code' | 'dokument' | 'release', string[]> = {
 };
 
 const BESITZER = /\((?:Besitzer|wer|für):\s*([^)]+)\)/i;
-/** Ein Beleg: Link, Commit-SHA, Zahl/Zahl, Pfad oder Datei — kein bloßes „ja“. */
-const IST_BELEG = /https?:\/\/|\b[0-9a-f]{7,40}\b|\d+\s*\/\s*\d+|[\w.-]+\/[\w./-]+|\.(png|md|pdf|html|txt|json)\b|#\d+|\b\d+\s*(hart|Befunde?|Tests?)\b/i;
+/** Ein Beleg: Link, Commit-SHA, Zahl/Zahl, Pfad (zwei Ebenen oder mit Endung) oder Datei — kein bloßes „ja“, kein „und/oder“. */
+const IST_BELEG = /https?:\/\/|\b[0-9a-f]{7,40}\b|\d+\s*\/\s*\d+|[\w.-]+\/[\w.-]+\/[\w./-]+|[\w.-]+\/[\w.-]+\.\w{1,5}\b|\.(png|md|pdf|html|txt|json)\b|#\d+|\b\d+\s*(hart|Befunde?|Tests?)\b/i;
 
 function block(stand: string, name: string): string[] {
   const z = String(stand ?? '').split('\n');
-  const re = new RegExp(`^\\s*[-*]\\s*\\**${name}:?\\**:?\\s*`, 'i');
+  const re = new RegExp(`^\\s*[-*]\\s*\\**${name}(?=$|[\\s:*]):?\\**:?\\s*`, 'i');   // Wortgrenze: „Folgen:“ ist keine Folge-Zeile
   const out: string[] = [];
   z.forEach((l, i) => {
     if (!re.test(l)) return;

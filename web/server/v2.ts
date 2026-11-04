@@ -121,9 +121,9 @@ async function mitBezug(d: V2Deps, u: User, ks: V2Karte[]): Promise<V2Karte[]> {
 }
 
 /** Runde 7 (Knut: DoD): fertig gemeldete Unter-Chats mit offener DoD-Zeile oder Folge-Aufgabe sind „fast fertig“ — je id der Satz. */
-async function fastFertigJe(d: V2Deps, u: User, ids: string[]): Promise<Map<string, { satz: string; stand: string; titel: string }>> {
+async function fastFertigJe(d: V2Deps, u: User, ids: string[], max = 40): Promise<Map<string, { satz: string; stand: string; titel: string }>> {
   const out = new Map<string, { satz: string; stand: string; titel: string }>();
-  await Promise.all(ids.slice(0, 40).map(async (id) => {
+  await Promise.all(ids.slice(0, max).map(async (id) => {
     const doc = await d.strang(u, id).catch(() => null);
     const stand = String(doc?.standVoll || doc?.lastExcerpt || '');
     const f = doc ? fastFertig(dodAus(stand)) : null;
@@ -337,7 +337,7 @@ export function registerV2(on: On, d: V2Deps) {
     if (!admin(u)) return send(d, res, { enden: [] });
     const liste = await d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] }));
     const ids = liste.zeilen.filter((z: any) => arbeitGruppe(z) === 'fertig').map((z: any) => String(z.id));
-    const ff = await fastFertigJe(d, u, ids);
+    const ff = await fastFertigJe(d, u, ids, 200);   // Enden: nicht bei 40 abschneiden (Gegenprüfung R7)
     send(d, res, { enden: endenAus([...ff].map(([id, x]) => ({ id, titel: x.titel, stand: x.stand, fertig: true }))) });
   });
   on('GET', /^\/api\/v2\/arbeit\/([0-9a-f]{8})$/, async (req, res, m) => {
@@ -378,7 +378,7 @@ export function registerV2(on: On, d: V2Deps) {
         // Runde 7 (Abgleich): alle Dateien des Pakets — Markdown in der Leseansicht, der Rest als Datei.
         ...(doc.paket && d.paketDateien ? d.paketDateien(String(doc.paket)).filter((f) => f.rel !== 'bericht.md' && !/(^|\/)\./.test(f.rel)).slice(0, 15).map((f) => ({ label: f.rel, url: /\.md$/i.test(f.rel) ? `/v2/dokument?paket=${encodeURIComponent(doc.paket)}&datei=${encodeURIComponent(f.rel)}` : `/api/files/agenten/${encodeURIComponent(doc.paket)}/${f.rel.split('/').map(encodeURIComponent).join('/')}` })) : []),
       ].slice(0, 30),
-      beruehrt: { repos: gh.map((g) => `${String(g.repo ?? '').split('/').pop()}${g.zweig ? ` · ${g.zweig}` : ''}`).filter(Boolean), text: standZeile(stand, 'Berührt'), ordner: doc.cwd ? String(doc.cwd).split('/').filter(Boolean).slice(-2).join('/') : null, dateien: ((s?.written ?? []) as string[]).slice(-6).map((f) => f.split('/').pop()) },
+      beruehrt: { repos: gh.map((g) => `${String(g.repo ?? '').split('/').pop()}${g.zweig ? ` · ${g.zweig}` : ''}`).filter(Boolean), text: standZeile(stand, 'Berührt'), ordner: doc.cwd ? String(doc.cwd).split('/').filter(Boolean).slice(-2).join('/') : null, dateien: (Array.isArray(s?.written) ? s.written as string[] : []).slice(-6).map((f) => f.split('/').pop()) },
       dod: dodAus(stand), fast: z && arbeitGruppe(z) === 'fertig' ? fastFertig(dodAus(stand)) : null,
       modell: s?.turn?.modell ?? doc.lastModell ?? doc.modell ?? null, laufzeitMin: doc.startedAt ? Math.round((Date.now() - new Date(doc.startedAt).getTime()) / 60000) : null, zugTokens: s?.zugTokens ?? null,
     };
@@ -397,7 +397,7 @@ export function registerV2(on: On, d: V2Deps) {
     if (!text) throw err(400, 'Was soll der Unter-Chat bekommen?');
     if (text.length > 8000) throw err(400, 'Höchstens 8000 Zeichen.');
     if (!d.nachreichen) throw err(501, 'Nachreichen ist hier nicht eingerichtet.');
-    if (!(await d.strang(u, m[1]))) throw err(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
+    if (!(await d.strang(u, m[1]).catch(() => null))) throw err(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
     await d.nachreichen(u, m[1], text);
     d.log('v2 nachricht', { user: u.id, strand: m[1], zeichen: text.length });
     send(d, res, { ok: true });
