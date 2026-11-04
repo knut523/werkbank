@@ -196,3 +196,18 @@ test('S22 (Knut B1): „Was ist das?“ lädt den letzten Stand des Unter-Chats 
 test('S22: Vorlagen — nur bekannte Namen, der Text kommt vom Server; Liste ohne Vorgabetext an die Oberfläche', async () => {
   assert.equal((await rufe('POST', '/api/v2/chat', LISA, { ziel: 'eigen', text: 'hi', vorlage: 'erfunden' })).status, 400);
 });
+
+test('Runde 4 (Knut B2): Unter-Chat-Seite sagt, was gilt — Abgleich nur bei Widerspruch, voller Stand statt Auszug', async () => {
+  const a = { zeilen: [{ qid: 'q-x', d: 'D4', bericht: null, wiederOffen: false }], offenListe: ['D4', 'D11'], offenBericht: ['D4', 'D11'], agentNennt: ['D4'], widerspruch: true };
+  let gefragt = '';
+  deps.abgleich = async (_u, id, stand) => { gefragt = `${id}|${stand}`; return a; };
+  const r = await rufe('GET', '/api/v2/arbeit/abcd1234', ADMIN);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.b.abgleich.offenListe, ['D4', 'D11']);
+  assert.match(gefragt, /^abcd1234\|Stand: D1 bis D3/, 'ohne Verlauf: der gespeicherte Auszug geht in den Abgleich');
+  deps.abgleich = async () => ({ ...a, widerspruch: false });
+  assert.equal((await rufe('GET', '/api/v2/arbeit/abcd1234', ADMIN)).b.abgleich, null, 'stimmen alle überein: kein Kasten');
+  deps.abgleich = async () => { throw new Error('kaputt'); };
+  assert.equal((await rufe('GET', '/api/v2/arbeit/abcd1234', ADMIN)).status, 200, 'Abgleich kaputt: Seite lädt trotzdem');
+  delete deps.abgleich;
+});

@@ -982,7 +982,9 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
           const last = await lastMessage(u, d.conv);
           const st = orchStatus(d, s, last, now);
           const set: Record<string, unknown> = { lastStatus: st.status, lastReason: st.reason, statusAt: new Date(now),
-            lastActivity: new Date(Math.max(s?.turn?.end ?? 0, s?.turn?.start ?? 0, last?.at ?? 0) || now), lastExcerpt: last && !last.fromUser ? excerpt(last.text, 600) : '' };
+            lastActivity: new Date(Math.max(s?.turn?.end ?? 0, s?.turn?.start ?? 0, last?.at ?? 0) || now), lastExcerpt: last && !last.fromUser ? excerpt(last.text, 600) : '',
+            // Paket 436 (Runde 4, Knut B3): der ganze Stand daneben — „Braucht Knut“ und Empfehlungen nicht mitten im Satz abgeschnitten. Alte Leser nehmen weiter lastExcerpt.
+            standVoll: last && !last.fromUser ? excerpt(last.text, 6000) : '' };
           // Tatsächlich gelaufenes Modell des letzten Zugs (Plan 162, S4) für den Strang-Kopf.
           if (typeof s?.turn?.modell === 'string') set.lastModell = s.turn.modell.slice(0, 100);
           // Plan 205: zuletzt gemeldete ETA festhalten — eine Antwort ohne ETA-Zeile löscht sie nicht.

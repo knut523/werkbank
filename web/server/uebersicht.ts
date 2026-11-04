@@ -200,7 +200,7 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null, med: 
   const a = ampel({ running, wort: statusWord(d), kopf, offen: offen.length + qs.length, excerpt: d.lastExcerpt });
   const kannFreigeben = !running && (kopf?.github?.length ?? 0) > 0 && (!fg || !!fg.veraltet) && !aufGithub;
   const uebergabe = uebergabeAus(d.lastExcerpt);   // R32 (Nachtrag 5): übergeben = eigener Zustand, keine offene „Braucht Knut“-Zeile
-  const braucht = kopf || uebergabe ? null : brauchtKnut(d.lastExcerpt);
+  const braucht = kopf || uebergabe ? null : brauchtKnut(d.standVoll || d.lastExcerpt);   // Paket 436: ganzer Stand, sonst der 600-Zeichen-Auszug
   const paket = felder.paket ?? (d.paket || null);
   const p = paket ? readPaket(reviewDir(), paket) : null;
   const kurz = (kopf?.worum || worumGeht({ title: d.title, prompt: [d.zielLine, d.prompt].filter(Boolean).join('\n'), planText: readPlan(d.plan), berichtText: text })).slice(0, 600);
@@ -223,7 +223,7 @@ export function karte(d: any, fgs: any[], qs: any[], basis: string | null, med: 
     modell: d.lastModell ?? null, modellPlan: d.modell ?? null, modellText: modellText({ modell: d.lastModell ?? null, modellPlan: d.modell ?? null, gesendet: !!(d.lastSentAt ?? d.startedAt) }),
     uebergabe, laufGrund: d.laufKorrektur ?? null,
     routing: d.routing?.text ?? null, routingWartet: !!d.routing?.wartet,
-    blockiert: a === 'blockiert' ? blockiertSatz({ excerpt: d.lastExcerpt, braucht: brauchtKnut(d.lastExcerpt), grund: (kopf?.offen ?? [])[0] ?? d.lastReason ?? null }, hauptchatAktionen()) : null,
+    blockiert: a === 'blockiert' ? blockiertSatz({ excerpt: d.lastExcerpt, braucht: brauchtKnut(d.standVoll || d.lastExcerpt), grund: (kopf?.offen ?? [])[0] ?? d.lastReason ?? null }, hauptchatAktionen()) : null,
     gegenpruefung: d.gegenpruefung?.n ?? 0, reviewReady: !!d.reviewReadyAt,   // Karte › Technische Details (Paket 187, S4)
     tiefe: istTiefe(d.tiefe) ? d.tiefe : null, eta: fertig ? null : { text: eta.text, ueberfaellig: eta.ueberfaellig, at: eta.at, quelle: eta.quelle ? QUELLE_TEXT[eta.quelle] : null },
     running, wartet: wort === 'wartet', seen, paket, chat: sicher(d.url) ? d.url : null, statusAt: d.statusAt ?? d.lastActivity ?? d.startedAt,

@@ -285,3 +285,14 @@ test('Runde 4: „Fertig — Bericht liegt bereit“ nur mit Bericht; Thema in d
   assert.equal(k.erklaerung.find(([a]) => a === 'Thema')![1], k.thema);
   assert.equal(k.thema, 'Werkbank');
 });
+
+test('Runde 4 (Knut B3): standVoll — ganzer Stand-Abschnitt der letzten Agenten-Antwort, nicht der 600-Zeichen-Auszug', async () => {
+  const { standVoll } = await import('../server/v2kern.ts');
+  const lang = 'x'.repeat(900);
+  const msgs = [{ rolle: 'ich', text: 'Auftrag' }, { rolle: 'assistent', text: `Viel davor\n### Stand\n- Erledigt: ${lang}\n- Braucht Knut: D1 — Schalter auf trocken oder live. Empfehlung: erst trocken, dann live nach dem ersten Lauf.` }, { rolle: 'ich', text: 'danke' }];
+  const s = standVoll(msgs, 'alt…');
+  assert.match(s, /^### Stand/); assert.match(s, /dann live nach dem ersten Lauf\.$/); assert.ok(s.length > 900);
+  assert.equal(standVoll([], 'gespeicherter Auszug'), 'gespeicherter Auszug', 'ohne Verlauf: der gespeicherte Auszug');
+  assert.equal(standVoll([{ rolle: 'assistent', text: 'kurz ohne Stand' }], 'x'), 'kurz ohne Stand');
+  assert.ok(standVoll([{ rolle: 'assistent', text: `### Stand\n${'y'.repeat(9000)}` }], '').length <= 8000);
+});

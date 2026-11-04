@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 process.env.MONGO_URI_WERKBANK = TEST_MONGO;
 process.env.WERKBANK_DB = `werkbank_fragenbericht_${randomBytes(4).toString('hex')}`;
 const { connect, closeDb, wb } = await import('../server/db.ts');
-const { entschiedeneFragen, istEntschieden, fragenAusBericht, passtInhalt, automatischGeschlossen, wiederOeffnen } = await import('../server/fragenbericht.ts');
+const { entschiedeneFragen, istEntschieden, fragenAusBericht, passtInhalt, automatischGeschlossen, wiederOeffnen, fragenAbgleich } = await import('../server/fragenbericht.ts');
 let client: any;
 before(async () => { client = await connect(); });
 after(async () => { await client.db(process.env.WERKBANK_DB).dropDatabase(); await closeDb(); await client.close(); });
@@ -78,4 +78,28 @@ test('C2: automatisch Geschlossenes ist sichtbar und lässt sich wieder öffnen 
   mkdirSync(join(dir, '416-netz'));
   writeFileSync(join(dir, '416-netz', 'bericht.md'), '---\nfragen:\n  - id: D1\n    frage: Kohorte im laufenden Monat?\n    antwort: angenommen\n  - id: D2\n    frage: Welcher Port für die Testinstanz?\n    antwort: ""\n  - id: D3\n    frage: Farbe vom Knopf?\n    antwort: ""\n---\n');
   assert.deepEqual(await fragenAusBericht('u1', dir), [], 'wieder geöffnet: schließt sich nicht erneut');
+});
+
+test('Runde 4 (Knut B2): Abgleich Liste ↔ Bericht ↔ Agent — deine Liste gilt, der Widerspruch wird sichtbar', () => {
+  const paket = [
+    { id: 'q1', text: 'Kohorte laufender Monat', status: 'zurückgezogen' },
+    { id: 'q2', text: 'Port der Testinstanz', status: 'offen', autoOffen: true },
+    { id: 'q3', text: 'Farbe des Knopfes', status: 'offen' },
+    { id: 'q4', text: 'Name der neuen Seite', status: 'offen' },
+  ];
+  const bericht = [
+    { id: 'D1', frage: 'Kohorte im laufenden Monat?', antwort: 'nach 24 h angenommen' },
+    { id: 'D2', frage: 'Welcher Port für die Testinstanz?', antwort: 'nach 24 h angenommen' },
+    { id: 'D3', frage: 'Farbe vom Knopf?', antwort: 'offen — liegt in Knuts Inbox (D3)' },
+    { id: 'D4', frage: 'Name der neuen Seite?', antwort: '' },
+  ];
+  const a = fragenAbgleich(paket, bericht, '### Stand\n- Erledigt: D1, D2\n- Braucht Knut: D3 in der Inbox entscheiden (Empfehlung: b…')!;
+  assert.deepEqual(a.offenListe, ['D2', 'D3', 'D4']);
+  assert.deepEqual(a.offenBericht, ['D3', 'D4']);
+  assert.deepEqual(a.agentNennt, ['D3']);
+  assert.equal(a.widerspruch, true);
+  assert.deepEqual(a.zeilen.map((z) => [z.qid, z.d, !!z.bericht, z.wiederOffen]), [['q2', 'D2', true, true], ['q3', 'D3', false, false], ['q4', 'D4', false, false]]);
+  const einig = fragenAbgleich(paket.map((q, i) => ({ ...q, status: i >= 2 ? 'offen' : 'beantwortet', autoOffen: false })), bericht, '- Braucht Knut: D3 und D4');
+  assert.equal(einig!.widerspruch, false, 'alle drei nennen dasselbe');
+  assert.equal(fragenAbgleich(paket.slice(0, 3), bericht, ''), null, 'ohne gültige Zuordnung: kein Abgleich (nie raten)');
 });

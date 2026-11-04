@@ -8,8 +8,9 @@ import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungssei
 import { themaOf } from './themen.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite } from './v2kern.ts';
+import { standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
+import type { Abgleich } from './fragenbericht.ts';
 import * as librechat from './v2librechat.ts';
 
 type Handler = (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray, url: URL) => Promise<void>;
@@ -57,6 +58,8 @@ export interface V2Deps {
   rolleEinstellung?: string | null;
   /** S22: Vorlagen aus librechat.yaml (modelSpecs mit promptPrefix) für den 2.0-Chat. */
   vorlagen?: () => { name: string; label: string; beschreibung: string; prefix: string }[];
+  /** Runde 4 (Knut B2): Abgleich deiner Liste mit Bericht und letztem Stand eines Unter-Chats (fragenbericht.ts). */
+  abgleich?: (u: User, strandId: string, stand: string) => Promise<Abgleich | null>;
 }
 
 /** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
@@ -260,14 +263,17 @@ export function registerV2(on: On, d: V2Deps) {
     const z = liste.zeilen.find((x: any) => String(x.id) === m[1]);
     const alleFragen = fragenAus(ib.eintraege).fragen;
     const eigeneIds = new Set(fragenJeStrang(ib.eintraege, m[1]).map((f: any) => f.id));
-    const fragen = karten(d, alleFragen, ib.eintraege, alleFragen.filter((f) => eigeneIds.has(f.id) && f.klasse !== 'aktion').map((f) => ({ f, grund: 'aus diesem Unter-Chat' })));
     const nachrichten = doc.conv ? await librechat.lesen(u, String(doc.conv), 20).catch(() => []) : [];
+    const stand = standVoll(nachrichten, String(doc.standVoll || doc.lastExcerpt || ''));
+    const abgleich = d.abgleich ? await d.abgleich(u, m[1], stand).catch(() => null) : null;
+    const jeFrage = new Map((abgleich?.zeilen ?? []).map((z) => [z.qid, `${z.d} · ${z.bericht ? (z.wiederOffen ? 'im Bericht schon entschieden, von dir wieder geöffnet' : 'im Bericht schon entschieden') : 'auch im Bericht offen'}`]));
+    const fragen = karten(d, alleFragen, ib.eintraege, alleFragen.filter((f) => eigeneIds.has(f.id) && f.klasse !== 'aktion').map((f) => ({ f, grund: jeFrage.get(f.id) ?? 'aus diesem Unter-Chat' })));
     const links = [
       ...(doc.paket ? [{ label: 'Bericht', url: `/v2/dokument?paket=${encodeURIComponent(doc.paket)}&datei=bericht.md` }] : []),
       ...(/^https?:\/\//.test(String(doc.url ?? '')) ? [{ label: 'In der alten Werkbank öffnen', url: String(doc.url), extern: true }] : []),
     ];
     send(d, res, { id: m[1], titel: String(doc.title ?? ''), satz: z ? zustandSatz(z) : 'Fertig und von dir abgenommen.', gruppe: z ? arbeitGruppe(z) : 'fertig', zuletzt: z?.zuletzt ?? doc.statusAt ?? null,
-      stand: kurz(String(doc.lastExcerpt ?? ''), 4000), fragen, nachrichten, links, at: new Date() });
+      stand, abgleich: abgleich?.widerspruch ? abgleich : null, fragen, nachrichten, links, at: new Date() });
   });
 
   // --- Letzter Stand eines Unter-Chats für „Was ist das?“ (S22, Knut B1) — beim Aufklappen nachgeladen, nicht für jede Karte ---
@@ -276,7 +282,8 @@ export function registerV2(on: On, d: V2Deps) {
     if (!admin(u)) throw err(403, 'Unter-Chats sieht nur, wem sie gehören.');
     const doc = await d.strang(u, m[1]);
     if (!doc) throw err(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
-    send(d, res, { id: m[1], titel: String(doc.title ?? ''), stand: kurz(String(doc.lastExcerpt ?? ''), 1200) });
+    const nachrichten = doc.conv ? await librechat.lesen(u, String(doc.conv), 6).catch(() => []) : [];
+    send(d, res, { id: m[1], titel: String(doc.title ?? ''), stand: standVoll(nachrichten, String(doc.standVoll || doc.lastExcerpt || ''), 6000) });
   });
 
   // --- PRs: „wartet auf: <Person>“, Vorgabe ich, umschaltbar ---

@@ -27,7 +27,7 @@ import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, setzeLeseQuelle, 
 import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
 import { fragenAufraeumenAn, fragenAufraeumen } from './fragenaufraeumen.ts';
-import { fragenAusBericht, automatischGeschlossen, wiederOeffnen } from './fragenbericht.ts';
+import { fragenAusBericht, automatischGeschlossen, wiederOeffnen, abgleichFuer } from './fragenbericht.ts';
 import { ueberholteFreigaben } from './ueberholt.ts';
 import { wahrerLauf } from './strangwahrheit.ts';
 import { baueErledigt } from './erledigt.ts';
@@ -1703,8 +1703,8 @@ const NACHFRAGE_ARTEN: NachfrageArt[] = ['frage', 'strang', 'pr', 'eintrag'];
 async function nachfrageKontext(u: User, art: NachfrageArt, id: string): Promise<NachfrageKontext | null> {
   const stand = async (strandId: string | null | undefined): Promise<[string, string][]> => {
     if (!strandId) return [];
-    const d: any = await orchRuns().findOne({ _id: strandId as any, userId: u.id }, { projection: { title: 1, lastExcerpt: 1, zustand: 1, lastStatus: 1, paket: 1, tiefe: 1 } }).catch(() => null);
-    return d ? [['Strang', `„${d.title ?? ''}“ (${d.zustand ?? d.lastStatus ?? 'Stand unbekannt'}, Kennung ${strandId})`], ['Letzter Stand des Strangs', String(d.lastExcerpt ?? '')], ['Bericht', d.paket ? `Review-Paket ${d.paket} (bericht.md)` : '']] : [];
+    const d: any = await orchRuns().findOne({ _id: strandId as any, userId: u.id }, { projection: { title: 1, lastExcerpt: 1, standVoll: 1, zustand: 1, lastStatus: 1, paket: 1, tiefe: 1 } }).catch(() => null);
+    return d ? [['Strang', `„${d.title ?? ''}“ (${d.zustand ?? d.lastStatus ?? 'Stand unbekannt'}, Kennung ${strandId})`], ['Letzter Stand des Strangs', String(d.standVoll || d.lastExcerpt || '')], ['Bericht', d.paket ? `Review-Paket ${d.paket} (bericht.md)` : '']] : [];
   };
   if (art === 'frage' || art === 'eintrag') {
     const ib = await inboxFuer(u);
@@ -4295,6 +4295,7 @@ registerV2(on, {
   alleRuns: (u) => orchRuns().find({ userId: u.id }, { projection: { _id: 1, conv: 1, title: 1, thema: 1, zustand: 1, kind: 1, lastActivity: 1, doneAt: 1, startedAt: 1, reviewedAt: 1, knutReviewedAt: 1, startError: 1, endedAt: 1 } }).sort({ lastActivity: -1 }).limit(1000).toArray(),
   lcChats: (u) => v2lcListe(u), lcUrl: cfg.librechatPublicUrl, rolleEinstellung: process.env.WERKBANK_ROLLE ?? null, vorlagen: vorlagenFuerV2,
   wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },
+  abgleich: (u, id, stand) => abgleichFuer(u.id, id, cfg.reviewDir, stand),
 });
 const V2_DIST = appDist(WEB_DIR);
 

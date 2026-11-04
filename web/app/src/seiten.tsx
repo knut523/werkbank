@@ -269,7 +269,8 @@ export function Arbeit() {
 
 export function ArbeitDetail({ id }: { id: string }) {
   const app = useApp();
-  const { d, fehler, neu } = useDaten<{ titel: string; satz: string; gruppe: string; zuletzt: string | null; stand: string; fragen: Karte[]; nachrichten: { id: string; rolle: string; text: string; at: string }[]; links: Link[] }>(`api/v2/arbeit/${id}`);
+  const { d, fehler, neu } = useDaten<{ titel: string; satz: string; gruppe: string; zuletzt: string | null; stand: string; fragen: Karte[]; nachrichten: { id: string; rolle: string; text: string; at: string }[]; links: Link[];
+    abgleich?: { offenListe: string[]; offenBericht: string[]; agentNennt: string[]; zeilen: { d: string; bericht: string | null; wiederOffen: boolean }[] } | null }>(`api/v2/arbeit/${id}`);
   const [alle, setAlle] = useState(false);
   const [verlauf, setVerlauf] = useState(false);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
@@ -281,18 +282,37 @@ export function ArbeitDetail({ id }: { id: string }) {
       <h1>{d.titel}</h1>
       <p className={`zustand ${d.gruppe}`}>{d.satz}</p>
       <div className="aktionen-zeile"><Verweise links={d.links} /><button type="button" className="knopf leise klein" onClick={() => app.chat(chatFrage(`Unter-Chat „${d.titel}“`, d.satz))}>Im Chat nachfragen</button></div>
-      {d.stand && <Abschnitt id="d-stand" titel="Was der Agent zuletzt gemeldet hat" erklaerung="Der letzte Stand in den Worten des Agenten — was erledigt ist, was offen ist, was er von dir braucht."><div className="kasten"><Md text={d.stand} /></div></Abschnitt>}
+      {d.abgleich && <Abgleich a={d.abgleich} />}
       {d.fragen.length > 0 && (
-        <Abschnitt id="d-fragen" titel={d.fragen.length === 1 ? 'Diese Frage ist in deiner Liste offen' : 'Diese Fragen sind in deiner Liste offen'} erklaerung="Fragen aus diesem Unter-Chat, die noch auf deine Antwort warten. Sagt der Agent oben etwas anderes, gilt deine Antwort hier — sie geht direkt an ihn.">
+        <Abschnitt id="d-fragen" titel={d.fragen.length === 1 ? 'Diese Frage ist in deiner Liste offen' : 'Diese Fragen sind in deiner Liste offen'} erklaerung="Fragen aus diesem Unter-Chat, die noch auf deine Antwort warten. Sagt der Agent unten etwas anderes, gilt deine Antwort hier — sie geht direkt an ihn.">
           <div className="karten">{d.fragen.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div>
         </Abschnitt>
       )}
+      {d.stand && <Abschnitt id="d-stand" titel="Was der Agent zuletzt gemeldet hat" erklaerung="Der letzte Stand in den Worten des Agenten, ungekürzt — was erledigt ist, was offen ist, was er von dir braucht."><div className="kasten"><Md text={d.stand} /></div></Abschnitt>}
       {d.nachrichten.length > 0 && !verlauf && <p><button type="button" className="knopf leise klein" onClick={() => setVerlauf(true)}>Verlauf des Unter-Chats zeigen</button></p>}
       {d.nachrichten.length > 0 && verlauf && (
         <Abschnitt id="d-verlauf" titel="Verlauf" erklaerung="Die letzten Nachrichten dieses Unter-Chats." fuss={d.nachrichten.length > 3 ? <button type="button" className="knopf leise klein" onClick={() => setAlle(!alle)}>{alle ? 'Nur die letzten 3' : `Alle ${d.nachrichten.length} zeigen`}</button> : null}>
           {msgs.map((n) => <div key={n.id} className={`blase ${n.rolle}`}><p className="klein gedimmt">{n.rolle === 'ich' ? 'Du / Auftrag' : 'Agent'} · {wann(n.at)}</p><Md text={n.text.length > 6000 ? `${n.text.slice(0, 6000)} …` : n.text} klein /></div>)}
         </Abschnitt>
       )}
+    </div>
+  );
+}
+
+/** Runde 4 (Knut B2): Liste, Bericht und Agent nennen verschiedene offene Fragen — sagen, was gilt, und woher der Unterschied kommt. */
+function Abgleich({ a }: { a: NonNullable<{ offenListe: string[]; offenBericht: string[]; agentNennt: string[]; zeilen: { d: string; bericht: string | null; wiederOffen: boolean }[] }> }) {
+  const liste = (l: string[]) => (l.length ? l.join(', ') : 'keine');
+  const wieder = a.zeilen.filter((z) => z.bericht && z.wiederOffen).map((z) => z.d), schon = a.zeilen.filter((z) => z.bericht && !z.wiederOffen).map((z) => z.d);
+  const fehlt = a.offenBericht.filter((x) => a.offenListe.includes(x) && !a.agentNennt.includes(x));
+  return (
+    <div className="kasten abgleich" role="note">
+      <p><b>Was gilt:</b> deine Liste — {mehrzahl(a.offenListe.length, 'Frage', 'Fragen')} offen ({liste(a.offenListe)}). Nur eine Antwort hier erreicht den Agenten.</p>
+      <ul className="klein">
+        <li>Der Bericht nennt als offen: {liste(a.offenBericht)}.</li>
+        <li>Der Agent nennt in seinem letzten Stand: {liste(a.agentNennt)}{fehlt.length && a.agentNennt.length ? ` — ${fehlt.join(', ')} hat er dort nicht erwähnt, sie sind aber auch im Bericht offen` : ''}.</li>
+        {wieder.length > 0 && <li>{wieder.join(', ')}: im Bericht schon entschieden, du hast sie wieder geöffnet — beantworte sie unten oder lass sie stehen.</li>}
+        {schon.length > 0 && <li>{schon.join(', ')}: im Bericht schon entschieden, in deiner Liste noch offen — „Ja, so“ bestätigt die Entscheidung.</li>}
+      </ul>
     </div>
   );
 }

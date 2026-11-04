@@ -225,3 +225,5 @@ p { margin: 0 0 var(--s1); }
 .vorlage-wahl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
 .vorlage-wahl select { flex: 1 1 12rem; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid #cdd3da; border-radius: 8px; background: #fff; }
 .teilen-text { width: 100%; font: inherit; font-size: .85rem; margin-top: 6px; }
+.abgleich { border-left: 4px solid var(--warn); background: var(--warn-hell); }
+.abgleich ul { margin: 0; padding-left: 1.2em; }

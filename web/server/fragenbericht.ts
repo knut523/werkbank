@@ -38,13 +38,42 @@ export function passtInhalt(berichtFrage: string, frageText: string): boolean {
  *  der Paare inhaltlich passen (die Zuordnung stimmt). Geschlossen wird nur ein Paar, das selbst passt — ein unpassendes bleibt offen.
  *  ponytail: C1 präzisiert nach der Datenkopie (Paket 416: 11 von 12 passen, D4 nur sinngemäß „EEG/BEG“ = „Energiegemeinschaften“); Schwelle ANTEIL. */
 export function entschiedeneFragen(paketFragen: { id: string; text: string }[], berichtFragen: BerichtFrage[]): { qid: string; d: string; antwort: string }[] {
-  if (!paketFragen.length || paketFragen.length !== berichtFragen.length) return [];
-  if (!berichtFragen.every((f, i) => String(f.id).trim().toUpperCase() === `D${i + 1}`)) return [];
-  const passt = berichtFragen.map((f, i) => passtInhalt(String(f.frage ?? ''), paketFragen[i].text));
-  if (passt.filter(Boolean).length < Math.ceil(passt.length * ANTEIL)) return [];
+  const passt = zuordnung(paketFragen, berichtFragen);
+  if (!passt) return [];
   const out: { qid: string; d: string; antwort: string }[] = [];
   berichtFragen.forEach((f, i) => { const a = istEntschieden(f.antwort); if (a && passt[i]) out.push({ qid: paketFragen[i].id, d: `D${i + 1}`, antwort: a }); });
   return out;
+}
+
+/** Gilt die Zuordnung Fragenpaket[i] ↔ Bericht D(i+1)? Gleiche Anzahl, D1…Dn fortlaufend, ≥ ¾ der Paare passen inhaltlich (C1).
+ *  Liefert je Paar „passt“ — oder null, wenn die Zuordnung nicht gilt. */
+export function zuordnung(paketFragen: { id: string; text: string }[], berichtFragen: BerichtFrage[]): boolean[] | null {
+  if (!paketFragen.length || paketFragen.length !== berichtFragen.length) return null;
+  if (!berichtFragen.every((f, i) => String(f.id).trim().toUpperCase() === `D${i + 1}`)) return null;
+  const passt = berichtFragen.map((f, i) => passtInhalt(String(f.frage ?? ''), paketFragen[i].text));
+  return passt.filter(Boolean).length < Math.ceil(passt.length * ANTEIL) ? null : passt;
+}
+
+export interface AbgleichZeile { qid: string; d: string; bericht: string | null; wiederOffen: boolean }
+export interface Abgleich { zeilen: AbgleichZeile[]; offenListe: string[]; offenBericht: string[]; agentNennt: string[]; widerspruch: boolean }
+
+/** Paket 436, Runde 4 (Knut B2 „Netzentgelte: Seite 5 offen, Agent nur D4 — wem glaube ich?“): Quelle der Wahrheit ist deine Liste —
+ *  nur dorthin geht eine Antwort an den Agenten. Daneben, was der Bericht und der letzte Stand des Agenten als offen nennen, damit ein
+ *  Widerspruch sichtbar ist statt still. Nur bei gültiger Zuordnung (wie D5); sonst null (nie raten). Rein. */
+export function fragenAbgleich(paket: { id: string; text: string; status: string; autoOffen?: boolean }[], bericht: BerichtFrage[], stand: string): Abgleich | null {
+  if (!zuordnung(paket, bericht)) return null;
+  const zeilen: AbgleichZeile[] = [], offenListe: string[] = [], offenBericht: string[] = [];
+  paket.forEach((q, i) => {
+    const d = `D${i + 1}`, a = istEntschieden(bericht[i]?.antwort);
+    if (!a) offenBericht.push(d);
+    if (q.status !== 'offen') return;
+    offenListe.push(d);
+    zeilen.push({ qid: q.id, d, bericht: a, wiederOffen: !!q.autoOffen });
+  });
+  const zeile = /^\s*[-*]?\s*\**Braucht Knut:?\**:?\s*(.+)$/im.exec(stand ?? '')?.[1] ?? '';
+  const agentNennt = [...new Set([...zeile.matchAll(/\bD(\d{1,2})\b/g)].map((m) => `D${m[1]}`))];
+  const gleich = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+  return { zeilen, offenListe, offenBericht, agentNennt, widerspruch: !gleich(offenListe, offenBericht) || (!!zeile && !gleich(offenListe, agentNennt)) };
 }
 
 /** Fragen-Kopf eines Berichts lesen; null, wenn nicht da oder unlesbar. */
@@ -87,6 +116,22 @@ export async function fragenAusBericht(userId: string, reviewDir: string, o: { d
     }
   }
   return out;
+}
+
+/** Abgleich für einen Unter-Chat: sein Fragenpaket (das mit den meisten Fragen dieses Unter-Chats), Status je Frage, Bericht-Kopf. */
+export async function abgleichFuer(userId: string, strandId: string, reviewDir: string, stand: string): Promise<Abgleich | null> {
+  const col = wb().collection('orchestrator_questions');
+  const qs: any[] = await col.find({ userId, 'strand.id': strandId, 'paket.id': { $exists: true, $ne: null } }, { projection: { paket: 1 } }).limit(200).toArray();
+  if (!qs.length) return null;
+  const n = new Map<string, number>();
+  for (const q of qs) n.set(String(q.paket.id), (n.get(String(q.paket.id)) ?? 0) + 1);
+  const pid = [...n].sort((a, b) => b[1] - a[1])[0][0];
+  const [fp, run]: any[] = await Promise.all([wb().collection('fragenpakete').findOne({ _id: pid as any, userId }), wb().collection('orchestrator_runs').findOne({ _id: strandId as any, userId }, { projection: { paket: 1 } })]);
+  const bf = fp && Array.isArray(fp.fragen) && run?.paket ? berichtFragen(reviewDir, String(run.paket)) : null;
+  if (!bf) return null;
+  const ids = fp.fragen.map(String);
+  const je = new Map((await col.find({ _id: { $in: ids as any[] }, userId }, { projection: { title: 1, context: 1, status: 1, autoOffen: 1 } }).toArray()).map((q: any) => [String(q._id), q]));
+  return fragenAbgleich(ids.map((id: string) => { const q: any = je.get(id) ?? {}; return { id, text: `${q.title ?? ''} ${String(q.context ?? '').slice(0, 300)}`, status: String(q.status ?? ''), autoOffen: q.autoOffen === true }; }), bf, stand);
 }
 
 /** C2: was in den letzten Tagen automatisch geschlossen wurde (beide Wege: R32 und Bericht), neueste zuerst. */

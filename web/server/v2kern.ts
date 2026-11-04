@@ -153,6 +153,17 @@ export function arbeitGruppe(z: ArbeitZeile): 'wartet' | 'laeuft' | 'fertig' {
   return 'fertig';
 }
 
+/** Runde 4 (Knut B3, „Stand an der Quelle auf 600 Zeichen gekürzt“): der ganze Stand-Abschnitt der letzten Antwort des Agenten —
+ *  aus dem Verlauf, wie der Status-Takt ihn liest (orchestrator.ts `excerpt`), nur ohne die 600-Zeichen-Grenze. Ohne Verlauf: der
+ *  gespeicherte Auszug. */
+export function standVoll(nachrichten: { rolle: string; text: string }[], ersatz: string, n = 8000): string {
+  const t = [...nachrichten].reverse().find((m) => m.rolle !== 'ich' && String(m.text ?? '').trim())?.text ?? '';
+  if (!t) return kurz(ersatz, n);
+  const i = t.lastIndexOf('### Stand');
+  const s = (i >= 0 ? t.slice(i) : t.slice(-n)).replace(/^\s*\*[^*\n]*\*\s*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+
 // ---------- Heute erledigt ----------
 
 export interface ErledigtZeile { id: string; titel: string; uhr: string; at: string; stand: 'abgenommen' | 'zum-lesen'; links: V2Link[] }
