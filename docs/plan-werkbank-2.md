@@ -578,7 +578,7 @@ Auftrag: „time to result wichtig, aber auch die Quali.“ Grundlagen im Paket:
 | Messgröße | Definition | Vorher |
 |---|---|---|
 | Zeit bis Ergebnis | Start → erstes review_ready/fertig, Median | 9 min (65 von 90 Strängen mit Ergebnis) |
-| Nacharbeit nach Prüfung | Anteil mit Nacharbeit, zweitem review_ready oder Nachfassen nach dem Ergebnis | 54 % |
+| Nacharbeit nach Prüfung | Anteil mit Nacharbeit, zweitem review_ready oder Nachfassen nach dem Ergebnis (obere Schranke: auch ein „danke“ nach dem Ergebnis zählt) | 54 % |
 | Fertig ohne Nachfassen (DoD, §23) | fertig gemeldet und nie wieder angeschrieben | 12 % |
 | Schlange nach Grund | Dauer und Grund je Wartefall (Box/Host/Obergrenze) | nicht messbar (104 Einträge ohne Dauer) → ab S32 erfasst |
 | Worktree-Konflikte | 409 beim Senden + stilles Warten des „weiter“ | nicht messbar → ab S32 erfasst |
