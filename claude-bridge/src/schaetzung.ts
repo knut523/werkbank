@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 export interface Schaetzung { speicherGb: number; dauerMin: number; tokens: number }
 export interface SpeicherStand { echtGb: number; hostFreiGb: number }
 
-export const GRENZE = { echtStartGb: 9, hostMinGb: 3 } as const;
+export const GRENZE = { echtStartGb: 12, hostMinGb: 3 } as const;
 const TIEFE: Record<string, { dauerMin: number; tokens: number }> = {
   quick: { dauerMin: 10, tokens: 200_000 }, regular: { dauerMin: 45, tokens: 1_200_000 }, deep: { dauerMin: 120, tokens: 3_000_000 },
   live: { dauerMin: 10, tokens: 200_000 },   // Plan 274: eine Live-Runde ist wie quick
@@ -21,7 +21,7 @@ export function schaetze(o: { kind?: string; profil?: string | null; tiefe?: str
   if (o.kind !== 'strand') return { speicherGb: 0.4, dauerMin: 5, tokens: 100_000 };
   const t = TIEFE[o.tiefe ?? 'regular'] ?? TIEFE.regular;
   const baut = !o.profil || ['voll', 'bauer', 'release'].includes(o.profil);
-  return { speicherGb: baut ? 1.6 : 0.4, ...t };
+  return { speicherGb: baut ? 0.8 : 0.4, ...t };
 }
 
 /** Passt ein weiterer Zug jetzt in die Box? `frisch` = geschätzter Speicher eben gestarteter Züge, die der Stand noch nicht zeigt.
