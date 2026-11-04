@@ -29,12 +29,14 @@ export function alleOffenenPunkte(k: PrKontext | null): OffenerPunkt[] {
     if (t.resolved || !t.comments.length) continue;
     const c0 = t.comments[0], echte = t.comments.filter((c) => !eigen(c.body));
     if (!echte.length) continue;   // nur eigene automatische Texte im Thread
-    out.push({ id: kennung('thread', t.path, String(t.line ?? ''), c0.at, c0.author ?? ''), art: 'thread', wer: echte[0].author ?? '?', wo: `${t.path}${t.line ? `:${t.line}` : ''}`,
+    // Kennung ohne Zeilennummer: wird ein Thread nach dem Push „veraltet“, ändert sich die Zeile (Pass C).
+    out.push({ id: kennung('thread', t.path, c0.at, c0.author ?? ''), art: 'thread', wer: echte[0].author ?? '?', wo: `${t.path}${t.line ? `:${t.line}` : ''}`,
       text: kurz([echte[0].body, ...echte.slice(1).map((c) => `${c.author ?? '?'}: ${c.body}`)].join(' / ')), at: c0.at, ...(t.outdated ? { veraltet: true } : {}) });
   }
   // Letztes Review je Person (nicht die Autorin): mit Text, und danach kein „approved“ derselben Person.
   const jeWer = new Map<string, PrKontext['reviews']>();
-  for (const r of [...k.reviews].sort((a, b) => a.at.localeCompare(b.at))) { const w = (r.author ?? '').toLowerCase(); if (w && w !== autor) jeWer.set(w, [...(jeWer.get(w) ?? []), r]); }
+  // PENDING = eigener, noch nicht abgeschickter Entwurf (nur für das lesende Konto sichtbar) — nie in einen öffentlichen Kommentar (Pass C).
+  for (const r of [...k.reviews].filter((r) => r.state !== 'PENDING').sort((a, b) => a.at.localeCompare(b.at))) { const w = (r.author ?? '').toLowerCase(); if (w && w !== autor) jeWer.set(w, [...(jeWer.get(w) ?? []), r]); }
   for (const rs of jeWer.values()) {
     const letzt = rs.at(-1)!;
     if (letzt.state === 'APPROVED' || letzt.state === 'DISMISSED') continue;
@@ -43,7 +45,7 @@ export function alleOffenenPunkte(k: PrKontext | null): OffenerPunkt[] {
     out.push({ id: kennung('review', mitText.author ?? '', mitText.at), art: 'review', wer: mitText.author ?? '?', wo: null, text: kurz(mitText.body), at: mitText.at });
   }
   // Kommentare anderer, nach denen die Autorin nicht mehr geschrieben hat (Kommentar oder Review).
-  const autorZuletzt = [...k.comments, ...k.reviews].filter((c) => (c.author ?? '').toLowerCase() === autor).map((c) => c.at).sort().at(-1) ?? '';
+  const autorZuletzt = [...k.comments, ...k.reviews.filter((r) => r.state !== 'PENDING'), ...k.threads.flatMap((t) => t.comments)].filter((c) => (c.author ?? '').toLowerCase() === autor).map((c) => c.at).sort().at(-1) ?? '';
   for (const c of k.comments) {
     const w = (c.author ?? '').toLowerCase();
     if (!w || w === autor || eigen(c.body) || nurBefehl(c.body) || c.at <= autorZuletzt) continue;
@@ -57,7 +59,8 @@ export function alleOffenenPunkte(k: PrKontext | null): OffenerPunkt[] {
 export function abhaken(punkte: OffenerPunkt[], fix: { punkte: { id?: string | null; stand: string; commit: string | null; notiz: string | null; punkt: string }[] } | null, commits: { sha: string }[]): AbgehakterPunkt[] {
   return punkte.map((p) => {
     const f = fix?.punkte.find((x) => x.id && x.id === p.id);
-    const c = f?.commit && /^[0-9a-f]{7,40}$/.test(f.commit) ? commits.find((x) => x.sha.startsWith(f.commit!))?.sha ?? null : null;
+    const sha = String(f?.commit ?? '').trim().toLowerCase();
+    const c = /^[0-9a-f]{7,40}$/.test(sha) ? commits.find((x) => x.sha.toLowerCase().startsWith(sha))?.sha ?? null : null;
     const erledigt = f?.stand === 'fixed' && !!c;
     const grund: OffenGrund | null = erledigt ? null : !f ? 'nicht-behandelt' : f.stand === 'question' ? 'frage' : f.stand === 'fixed' ? 'ohne-commit' : 'nicht-behoben';
     return { ...p, stand: erledigt ? 'erledigt' : 'offen', grund, commit: erledigt ? c!.slice(0, 7) : null, notiz: !erledigt && f?.notiz ? kurz(f.notiz, 300) : null };
@@ -71,10 +74,14 @@ export function punkteFuerAuftrag(punkte: OffenerPunkt[]): string {
 }
 
 /** Englischer Abschnitt für den Antwort-Kommentar am PR: was nach dem Fix offen bleibt. Leer, wenn nichts offen ist. */
-export function offenText(a: AbgehakterPunkt[]): string[] {
+export function offenText(a: AbgehakterPunkt[] | 'unlesbar'): string[] {
+  // Nie still: war der PR vor dem Push nicht lesbar, steht das im Kommentar (Pass C).
+  if (a === 'unlesbar') return ['**All open review items (every reviewer):** could not be read before this push — please check the open threads and comments on the PR.', ''];
   const offen = a.filter((p) => p.stand === 'offen');
   if (!a.length) return [];
   const z = [`**All open review items (every reviewer)** — ${a.length - offen.length} of ${a.length} addressed by this fix${offen.length ? `, ${offen.length} still open:` : '.'}`];
-  for (const p of offen) z.push(`- ${p.art === 'thread' ? `thread at \`${p.wo}\`` : p.art} by ${p.wer}: ${p.text.replace(/@(?=[\w-])/g, '@​').slice(0, 160)}${p.grund ? ` — ${GRUND_EN[p.grund]}` : ''}${p.notiz ? `: ${p.notiz.replace(/@(?=[\w-])/g, '@​')}` : ''}`);
+  const MAX = 30;   // GitHub-Kommentare haben eine Längengrenze (Pass C)
+  for (const p of offen.slice(0, MAX)) z.push(`- ${p.art === 'thread' ? `thread at \`${p.wo}\`` : p.art} by ${p.wer}: ${p.text.replace(/@(?=[\w-])/g, '@​').slice(0, 160)}${p.grund ? ` — ${GRUND_EN[p.grund]}` : ''}${p.notiz ? `: ${p.notiz.replace(/@(?=[\w-])/g, '@​')}` : ''}`);
+  if (offen.length > MAX) z.push(`- … and ${offen.length - MAX} more (see the workspace).`);
   return [...z, ''];
 }

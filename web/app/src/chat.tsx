@@ -86,7 +86,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
         )}
         {stand?.nachrichten.map((n) => (
           <div key={n.id} className={`blase ${n.rolle}`}>
-            {n.rolle === 'assistent' && !n.text && n.status === 'laeuft' ? <p className="gedimmt">schreibt …</p> : <Md text={n.status === 'laeuft' ? n.text : ohneStatuszeilen(n.text)} klein />}
+            {n.rolle === 'assistent' && !n.text && n.status === 'laeuft' ? <p className="gedimmt">schreibt …</p> : <Md text={n.rolle === 'assistent' && n.status !== 'laeuft' ? ohneStatuszeilen(n.text) : n.text} klein />}
             {n.status === 'abgebrochen' && <p className="fehlertext klein">Abgebrochen: {n.fehler ?? 'die Antwort lief nicht zu Ende.'}</p>}
             {n.status === 'fehler' && <p className="fehlertext klein">{n.fehler ?? 'Die Antwort kam nicht an.'}</p>}
           </div>

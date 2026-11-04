@@ -203,7 +203,7 @@ function ThemaGruppe({ thema, karten, fertig }: { thema: string; karten: Karte[]
     try {
       const r = await schicke<{ ok: number; fehler: string[]; uebersprungen: number }>('api/v2/alle-empfohlen', { ids: passend.map((k) => k.id) });
       setMeldung(`✓ ${mehrzahl(r.ok, 'Antwort', 'Antworten')} wie empfohlen verschickt.${app.testbetrieb ? ' Testbetrieb: Fragen aus Notizen bleiben hier offen.' : ''}${r.uebersprungen ? ` ${r.uebersprungen} übersprungen — die beantwortest du einzeln.` : ''}${r.fehler.length ? ` Nicht geklappt: ${r.fehler.join('; ')}` : ''}`);
-      setFrage(false); setGesendet(passend.map((k) => k.id).join()); fertig();
+      setFrage(false); if (!r.fehler.length) setGesendet(passend.map((k) => k.id).join()); fertig();   // bei Teilfehlern bleibt der Knopf (Pass C)
     } catch (x: any) { setMeldung(x.message); } finally { setLaeuft(false); }
   };
   return (
@@ -272,7 +272,8 @@ export function Arbeit() {
   const KURZ = 8;
   const liste = (l: ArbeitKarte[], leer: string, max = 0) => (l.length ? <ul className="liste">{(max ? l.slice(0, max) : l).map((z) => <Zeile key={z.id} titel={z.titel} url={`v2/arbeit/${z.id}`} satz={z.satz} rechts={wann(z.zuletzt)} links={z.links} />)}</ul> : <p className="leer">{such ? `Nichts zu „${q.trim()}“ in dieser Gruppe.` : leer}</p>);
   const heute = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' });
-  const heuteFertig = g.fertig.filter((z) => z.zuletzt && new Date(z.zuletzt).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }) === heute).length;
+  const heuteFertig = d.gruppen.fertig.filter(   // ungefiltert — der Sprung führt auf die ungefilterte Seite (Pass C)
+  (z) => z.zuletzt && new Date(z.zuletzt).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }) === heute).length;
   return (
     <div className="seite">
       <h1>Arbeit</h1>
@@ -382,7 +383,7 @@ export function Prs({ wer }: { wer: string | null }) {
 }
 
 /** Grob: ist der Satz englisch? (Der Prüf-Agent schreibt auf GitHub englisch — dann sagen wir es, statt es mitten ins Deutsche zu setzen.) */
-const englisch = (t: string) => (t.match(/\b(the|and|was|were|with|on|of|tests?|executed|applied)\b/gi) ?? []).length >= 3;
+const englisch = (t: string) => (t.match(/\b(the|and|were|with|of|executed|applied|which|this)\b/g) ?? []).length >= 3;   // keine deutsch-englischen Wörter wie „was“, „Test“ (Pass C)
 
 export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
   const app = useApp();
@@ -492,13 +493,14 @@ export function Dokument({ vault, paket, datei }: { vault: string | null; paket:
 }
 
 /** Runde 4 (Knut B5): „← zurück“ dorthin, woher man kam (Arbeit, Thema, Jetzt …) — sonst zu den Dokumenten. */
-const HERKUNFT: [RegExp, string][] = [[/\/v2\/arbeit\//, 'Unter-Chat'], [/\/v2\/arbeit/, 'Arbeit'], [/\/v2\/thema/, 'Thema'], [/\/v2\/themen/, 'Themen'], [/\/v2\/entscheidungen/, 'Entscheidungen'], [/\/v2\/prs/, 'PRs'], [/\/v2\/erledigt/, 'Erledigt'], [/\/v2\/chats/, 'Alle Chats'], [/\/v2\/dokumente/, 'Dokumente'], [/\/v2\/?$/, 'Jetzt']];
+const HERKUNFT: [RegExp, string][] = [[/\/v2\/arbeit\//, 'Unter-Chat'], [/\/v2\/arbeit/, 'Arbeit'], [/\/v2\/themen/, 'Themen'], [/\/v2\/thema/, 'Thema'], [/\/v2\/entscheidungen/, 'Entscheidungen'], [/\/v2\/prs/, 'PRs'], [/\/v2\/erledigt/, 'Erledigt'], [/\/v2\/chats/, 'Alle Chats'], [/\/v2\/dokumente/, 'Dokumente'], [/\/v2\/?$/, 'Jetzt']];
 function herkunft(): { url: string; text: string } {
   let v = '';
   try { v = sessionStorage.getItem('v2-vorher') ?? ''; } catch { /* egal */ }
   const t = HERKUNFT.find(([re]) => re.test(v.split('?')[0]))?.[1];
   const i = v.indexOf('/v2/');
-  return t && i >= 0 ? { url: v.slice(i + 1), text: t } : { url: 'v2/dokumente', text: 'Dokumente' };
+  const hier = v === location.pathname + location.search;   // nach „Zurück“ im Browser kann die Herkunft die Seite selbst sein (Pass C)
+  return t && i >= 0 && !hier ? { url: v.slice(i + 1), text: t } : { url: 'v2/dokumente', text: 'Dokumente' };
 }
 
 // ---------- Begriffe ----------

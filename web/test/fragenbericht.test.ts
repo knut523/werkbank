@@ -103,3 +103,10 @@ test('Runde 4 (Knut B2): Abgleich Liste ↔ Bericht ↔ Agent — deine Liste gi
   assert.equal(einig!.widerspruch, false, 'alle drei nennen dasselbe');
   assert.equal(fragenAbgleich(paket.slice(0, 3), bericht, ''), null, 'ohne gültige Zuordnung: kein Abgleich (nie raten)');
 });
+
+test('Pass C: „Braucht Knut“ als Liste über mehrere Zeilen — alle D-Nummern zählen, der nächste Punkt der obersten Ebene beendet den Block', async () => {
+  const { brauchtBlock } = await import('../server/fragenbericht.ts');
+  assert.equal(brauchtBlock('- Erledigt: D9\n- **Braucht Knut:**\n  - D1 Netzentgelte\n  - D3 Speicher\n- Regeln: D7 nicht'), '- D1 Netzentgelte   - D3 Speicher');
+  assert.equal(brauchtBlock('- Braucht Knut: D4 in der Inbox; D11/D12 schließen\n- Regeln: x'), 'D4 in der Inbox; D11/D12 schließen');
+  assert.equal(brauchtBlock('kein Stand'), '');
+});

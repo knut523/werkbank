@@ -57,3 +57,8 @@ test('Runde 4 (Knut B12): Statuszeilen der Brücke fallen aus der fertigen Antwo
   const t = '*⏳ Claude arbeitet …*  \n*🔧 Read datei.ts*  \n\nHier die Antwort.\n**Wichtig:** bleibt\n* Punkt bleibt\n*a* und *b* bleiben';
   assert.equal(ohneStatuszeilen(t), 'Hier die Antwort.\n**Wichtig:** bleibt\n* Punkt bleibt\n*a* und *b* bleiben');
 });
+
+test('Pass C: echte kursive Zeilen einer Antwort bleiben — nur Statuszeilen mit Symbol am Anfang fallen weg', async () => {
+  const { ohneStatuszeilen } = await import('../src/format.ts');
+  assert.equal(ohneStatuszeilen('*Siehe Abschnitt 3.*\n*⏱️ Das Ergebnis steht …*\nText'), '*Siehe Abschnitt 3.*\nText');
+});

@@ -64,4 +64,5 @@ export function tabellenBeschriften(html: string): string {
 
 /** Runde 4 (Knut B12): Statuszeilen der Brücke („*⏳ Claude arbeitet …*“, eine kursive Zeile je Werkzeug) gehören zum Laufen —
  *  in der fertigen Antwort stehen sie nicht mehr. Wie der Status-Takt (orchestrator `excerpt`): nur ganze kursive Zeilen. */
-export const ohneStatuszeilen = (t: string): string => t.replace(/^[ \t]*\*[^*\n]+\*[ \t]*$\n?/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+// Pass C: nur Zeilen, die mit einem Symbol/Emoji beginnen (so schreibt die Brücke sie) — echte kursive Zeilen einer Antwort bleiben.
+export const ohneStatuszeilen = (t: string): string => t.replace(/^[ \t]*\*[\p{Extended_Pictographic}\u23e9-\u23fa\u2600-\u27bf][^*\n]*\*[ \t]*$\n?/gmu, '').replace(/\n{3,}/g, '\n\n').trim();

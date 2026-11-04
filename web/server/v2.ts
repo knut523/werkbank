@@ -126,7 +126,7 @@ export function registerV2(on: On, d: V2Deps) {
     const prs = live ? mitReview(prSicht(live, ich, d.githubNames()).filter((p) => !p.entwurf), rv, admin(u)) : null;
     // Runde 4 (Christoph B1): Reviewer sehen die neuesten veröffentlichten Agenten-Reviews offener PRs — der Weg zum Review-Stand in einem Klick.
     const reviews = r === 'reviewer' && live ? mitReview(prSicht(live, 'alle', d.githubNames()).filter((p) => !p.entwurf), rv, false)
-      .filter((p) => p.review?.gepostet && p.review.status === 'fertig').sort((a, b) => String(b.review!.at ?? '').localeCompare(String(a.review!.at ?? ''))).slice(0, 3) : [];
+      .filter((p) => p.review?.gepostet && p.review.status === 'fertig').sort((a, b) => new Date(b.review!.at ?? 0).getTime() - new Date(a.review!.at ?? 0).getTime()).slice(0, 3) : [];   // at kann ein Date sein (Pass C)
     send(d, res, { reviews, zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), aufraeumenGesamt: auf.length, laeuft: laeuft.slice(0, 3), laeuftGesamt: laeuft.length, erledigt, prs: prs ? prs.slice(0, r === 'reviewer' ? 5 : 3) : null, prsGesamt: prs?.length ?? 0, prFrei, notizenFrei: !d.gesperrt(u, 'wissen'), dokumente: dokumenteNeu(d, u, r === 'team' ? 5 : 3), ich: ich, admin: admin(u), rolle: r, at: new Date() });
   });
 

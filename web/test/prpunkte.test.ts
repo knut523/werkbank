@@ -58,3 +58,18 @@ test('Abhaken: erledigt nur mit Kennung, „fixed“ und Commit im Push — sons
   assert.deepEqual(offenText([]), [], 'ohne Punkte kein Abschnitt');
   assert.match(punkteFuerAuftrag(p), new RegExp(p[3].id));
 });
+
+test('Pass C: eigener Review-Entwurf (PENDING) nie; Thread-Kennung bleibt, wenn der Thread veraltet; Antwort der Autorin im Thread zählt; SHA in Großbuchstaben', () => {
+  const k = kontext({
+    reviews: [{ author: 'knut523', state: 'PENDING', body: 'Entwurf, noch geheim', at: '2026-11-01T10:00:00Z', commit: null }],
+    comments: [{ author: 'fazlomar9', body: 'Und die Feiertage?', at: '2026-11-01T10:00:00Z' }],
+    threads: [{ resolved: false, outdated: false, path: 'a.ts', line: 3, comments: [{ author: 'r', body: 'x', at: '2026-11-01T09:00:00Z' }, { author: 'autorin', body: 'erledigt im Thread', at: '2026-11-01T11:00:00Z' }] }],
+  });
+  const p = alleOffenenPunkte(k);
+  assert.deepEqual(p.map((x) => x.art), ['thread'], 'kein PENDING-Review; der Kommentar ist nach der Thread-Antwort der Autorin beantwortet');
+  const veraltet = alleOffenenPunkte(kontext({ threads: [{ ...k.threads[0], outdated: true, line: null }] }));
+  assert.equal(veraltet[0].id, p[0].id, 'gleiche Kennung trotz anderer Zeile');
+  const a = abhaken(p, { punkte: [{ id: p[0].id, punkt: 'x', stand: 'fixed', commit: 'ABC1234', notiz: null }] }, [{ sha: 'abc1234' + '0'.repeat(33) }]);
+  assert.equal(a[0].stand, 'erledigt');
+  assert.match(offenText('unlesbar').join('\n'), /could not be read before this push/);
+});

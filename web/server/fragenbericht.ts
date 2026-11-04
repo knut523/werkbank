@@ -54,6 +54,17 @@ export function zuordnung(paketFragen: { id: string; text: string }[], berichtFr
   return passt.filter(Boolean).length < Math.ceil(passt.length * ANTEIL) ? null : passt;
 }
 
+/** „Braucht Knut: …“ — die Zeile selbst und, als Liste geschrieben, die eingerückten Folgezeilen bis zum nächsten Punkt der obersten
+ *  Ebene („- Regeln: …“) oder einer Leerzeile (Pass C: „**Braucht Knut:**“ mit Unterpunkten D1/D3). */
+export function brauchtBlock(stand: string): string {
+  const z = String(stand ?? '').split('\n');
+  const i = z.findIndex((l) => /^\s*[-*]?\s*\**Braucht Knut\b/i.test(l));
+  if (i < 0) return '';
+  const out = [z[i].replace(/^.*?Braucht Knut\**:?\**:?/i, '')];
+  for (const l of z.slice(i + 1)) { if (!l.trim() || /^[-*]\s+\**[A-ZÄÖÜ][\wäöüß ]{1,30}:/.test(l)) break; out.push(l); }
+  return out.join(' ').trim();
+}
+
 export interface AbgleichZeile { qid: string; d: string; bericht: string | null; wiederOffen: boolean }
 export interface Abgleich { zeilen: AbgleichZeile[]; offenListe: string[]; offenBericht: string[]; agentNennt: string[]; widerspruch: boolean }
 
@@ -70,7 +81,7 @@ export function fragenAbgleich(paket: { id: string; text: string; status: string
     offenListe.push(d);
     zeilen.push({ qid: q.id, d, bericht: a, wiederOffen: !!q.autoOffen });
   });
-  const zeile = /^\s*[-*]?\s*\**Braucht Knut:?\**:?\s*(.+)$/im.exec(stand ?? '')?.[1] ?? '';
+  const zeile = brauchtBlock(stand);
   const agentNennt = [...new Set([...zeile.matchAll(/\bD(\d{1,2})\b/g)].map((m) => `D${m[1]}`))];
   const gleich = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
   return { zeilen, offenListe, offenBericht, agentNennt, widerspruch: !gleich(offenListe, offenBericht) || (!!zeile && !gleich(offenListe, agentNennt)) };
@@ -121,7 +132,7 @@ export async function fragenAusBericht(userId: string, reviewDir: string, o: { d
 /** Abgleich für einen Unter-Chat: sein Fragenpaket (das mit den meisten Fragen dieses Unter-Chats), Status je Frage, Bericht-Kopf. */
 export async function abgleichFuer(userId: string, strandId: string, reviewDir: string, stand: string): Promise<Abgleich | null> {
   const col = wb().collection('orchestrator_questions');
-  const qs: any[] = await col.find({ userId, 'strand.id': strandId, 'paket.id': { $exists: true, $ne: null } }, { projection: { paket: 1 } }).limit(200).toArray();
+  const qs: any[] = await col.find({ userId, 'strand.id': strandId, 'paket.id': { $exists: true, $ne: null } }, { projection: { paket: 1 } }).sort({ createdAt: -1 }).limit(200).toArray();
   if (!qs.length) return null;
   const n = new Map<string, number>();
   for (const q of qs) n.set(String(q.paket.id), (n.get(String(q.paket.id)) ?? 0) + 1);
