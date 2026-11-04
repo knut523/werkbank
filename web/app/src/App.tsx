@@ -83,6 +83,7 @@ export function App() {
   const [chat, setChat] = useState<{ offen: boolean; text: string; conv?: string }>({ offen: false, text: '' });
   // Runde 5 (Knut B2/B7): Meldungen, die die Seite überdauern (Antwort kam nicht an; Sammelantwort verschickt, Block ist weg).
   const [meldung, setMeldung] = useState<{ text: string; ok: boolean } | null>(null);
+  useEffect(() => { setMeldung(null); }, [pfad]);   // Runde 6 (B8): die Meldung gehört zur Seite, auf der sie entstand
   useEffect(() => { const m = (e: Event) => { const d = (e as CustomEvent).detail; setMeldung(typeof d === 'string' ? { text: d, ok: false } : d); }; window.addEventListener('v2-meldung', m); return () => window.removeEventListener('v2-meldung', m); }, []);
   // Runde 5 (Knut B9): der schwebende Chat-Knopf geht beim Lesen nach unten aus dem Weg und kommt beim Hochwischen wieder.
   const [fabWeg, setFabWeg] = useState(false);

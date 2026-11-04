@@ -6,7 +6,7 @@ import { useApp } from './kontext.ts';
 import { Abschnitt, EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweise, Zeile } from './teile.tsx';
 import { BEGRIFFE, OLAF_KURZ } from './begriffe.ts';
 import { MEHR } from './mehr.ts';
-import { chatFrage, htmlFuerV2, mehrzahl, rel, tabellenBeschriften, wann } from './format.ts';
+import { chatFrage, htmlFuerV2, mehrzahl, ohneStatuszeilen, rel, tabellenBeschriften, wann } from './format.ts';
 
 // Radikal simpel: „Prüfung“ statt „Agent/Review“ in Marken.
 const EMPFEHLUNG: Record<string, string> = { approve: 'Prüfung: in Ordnung', 'request-changes': 'Prüfung: Änderungen nötig', comment: 'Prüfung: Anmerkungen' };
@@ -259,7 +259,8 @@ export function Arbeit() {
   );
   const such = q.trim().toLowerCase();
   const sortiert = (l: ArbeitKarte[]) => [...l].filter((z) => !such || z.titel.toLowerCase().includes(such)).sort((a, b) => String(b.zuletzt ?? '').localeCompare(String(a.zuletzt ?? '')));
-  const l = sortiert(d.gruppen[reiter]);
+  // Runde 6 (B3): mit Suchwort über alle drei Reiter — sonst findet „Netzentgelt“ im Reiter „Fertig“ nichts, obwohl es den Unter-Chat gibt.
+  const l = sortiert(such ? [...d.gruppen.wartet, ...d.gruppen.laeuft, ...d.gruppen.fertig] : d.gruppen[reiter]);
   const heute = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' });
   const istHeute = (z: ArbeitKarte) => !!z.zuletzt && new Date(z.zuletzt).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }) === heute;
   // Unter „Fertig“ derselbe Satz in jeder Zeile ist Lärm — nur zeigen, was abweicht (z. B. „ohne Bericht“).
@@ -272,7 +273,7 @@ export function Arbeit() {
         <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Unter-Chat suchen — Enter sucht auch in alten Chats" aria-label="Unter-Chats durchsuchen" />
       </form>
       <div className="reiter" role="tablist" aria-label="Unter-Chats">{REITER.map(([r, t]) => <button key={r} type="button" role="tab" aria-selected={reiter === r} className={reiter === r ? 'an' : ''} onClick={() => setReiter(r)}>{t}</button>)}</div>
-      {reiter === 'fertig' ? (
+      {such ? (l.length ? <ul className="liste">{l.map(zeile)}</ul> : <p className="leer">Nichts zu „{q.trim()}“ in deinen Unter-Chats.</p>) : reiter === 'fertig' ? (
         <>
           {!l.length ? <p className="leer">{such ? `Nichts zu „${q.trim()}“.` : 'Nichts Fertiges offen.'}</p> : <>
             <p className="gruppe-titel">Heute</p>
@@ -315,7 +316,7 @@ export function ArbeitDetail({ id }: { id: string }) {
       {d.nachrichten.length > 0 && !verlauf && <p><button type="button" className="knopf leise klein" onClick={() => setVerlauf(true)}>Verlauf des Unter-Chats zeigen</button></p>}
       {d.nachrichten.length > 0 && verlauf && (
         <Abschnitt id="d-verlauf" titel="Verlauf" erklaerung="Die letzten Nachrichten dieses Unter-Chats." fuss={d.nachrichten.length > 3 ? <button type="button" className="knopf leise klein" onClick={() => setAlle(!alle)}>{alle ? 'Nur die letzten 3' : `Alle ${d.nachrichten.length} zeigen`}</button> : null}>
-          {msgs.map((n) => <div key={n.id} className={`blase ${n.rolle}`}><p className="klein gedimmt">{n.rolle === 'ich' ? 'Du / Auftrag' : 'Agent'} · {wann(n.at)}</p><Md text={n.text.length > 6000 ? `${n.text.slice(0, 6000)} …` : n.text} klein /></div>)}
+          {msgs.map((n) => <div key={n.id} className={`blase ${n.rolle}`}><p className="klein gedimmt">{n.rolle === 'ich' ? 'Du / Auftrag' : 'Agent'} · {wann(n.at)}</p><Md text={(n.rolle === 'ich' ? n.text : ohneStatuszeilen(n.text)).slice(0, 6000)} klein /></div>)}
         </Abschnitt>
       )}
     </div>

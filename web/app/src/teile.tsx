@@ -104,6 +104,9 @@ export function useDaten<T>(pfad: string | null): { d: T | null; fehler: string 
 }
 
 /** Runde 4 (Knut B10): „D1 bis D8, jede mit Empfehlung …“ — eine Karte für mehrere Entscheidungen, die auf der Karte nicht stehen. */
+/** Erster Satz (höchstens 180 Zeichen) — für den einen Inhaltssatz auf der Karte. */
+const ersterSatz = (t: string) => { const s = (/^[\s\S]{20,180}?[.!?](?=\s|$)/.exec(t)?.[0] ?? t).trim(); return s.length > 180 ? `${s.slice(0, 178)}…` : s; };
+
 export const sammelKarte = (t: string) => /\bD\d{1,2}\s*(?:bis|–|-)\s*D\d{1,2}\b/.test(t);
 
 /**
@@ -151,6 +154,8 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
   return (
     <article className={`karte${fertig ? ' erledigt' : ''}${freigabe ? ' freigabe' : ''}`} aria-label={k.titel}>
       <h3 className="karte-titel">{k.titel}</h3>
+      {/* Runde 6 (Knut B1): ist der Titel keine Frage („PDF/Mail sagen bei Einspeisung …“), braucht es einen Satz, worum es geht. */}
+      {!/\?\s*$/.test(k.titel) && k.worum && !fertig && <p className="karte-worum klein">{ersterSatz(k.worum)}</p>}
       {sammelKarte(`${k.titel} ${k.worum}`) && !n && !freigabe && !fertig && <p className="klein hinweis-warn">Fasst mehrere Entscheidungen zusammen, die hier nicht einzeln stehen — „Ja, so“ bestätigt alle.{k.bericht ? <> <a href={rel(k.bericht)}>Im Bericht lesen</a></> : null}</p>}
 
       {fertig ? (
@@ -190,7 +195,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
               {k.bericht && <p className="klein"><a href={rel(k.bericht)}>Ganzen Bericht lesen</a></p>}
             </div>
           )}
-          <Erklaerung zeilen={k.erklaerung.filter(([t]) => !['Empfehlung', 'Warum oben', 'Hält an'].includes(t))} strang={strang} />   {/* steht schon in der Grund-Zeile */}
+          <Erklaerung zeilen={k.erklaerung.filter(([t]) => !['Empfehlung', 'Warum oben', 'Hält an', 'Woher'].includes(t))} strang={strang} />   {/* steht schon in der Grund-Zeile */}
           {!fertig && !freigabe && !k.alt && (
             <div className="antworten">
               {ja && <label className="klein notiz">Notiz zu „Ja“: <input value={notiz} maxLength={2000} onChange={(e) => setNotiz(e.target.value)} placeholder="z. B. „aber erst nach dem Release“" /></label>}
