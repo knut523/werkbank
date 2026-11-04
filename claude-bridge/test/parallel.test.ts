@@ -25,16 +25,17 @@ test('Sperre (F7, Knut 19.10.): keine Zahl-Grenze — die Schätzung entscheidet
   const strang = schaetze({ kind: 'strand', profil: 'bauer', tiefe: 'regular' });
   const viele = Array.from({ length: 6 }, () => chat());
   assert.equal(mod.lockFor(viele, chat()), 'ok', 'ohne Box-Abgleich keine Zahl-Grenze');
-  const luft = { echtGb: 3, hostFreiGb: 15 }, eng = { echtGb: 8.5, hostFreiGb: 10 };
+  const luft = { echtGb: 3, hostFreiGb: 15 }, eng = { echtGb: 11.5, hostFreiGb: 10 };
   assert.equal(mod.lockFor(viele, chat(), { neu: strang, stand: luft }), 'ok', 'passt in die Box');
-  assert.equal(mod.lockFor([chat()], chat(), { neu: strang, stand: eng }), 'chat-busy', '8,5 + 1,6 GB > 9 GB');
+  assert.equal(mod.lockFor([chat()], chat(), { neu: strang, stand: eng }), 'chat-busy', '11,5 + 0,8 GB > 12 GB');
   assert.match(mod.lockGrund, /passt gerade nicht in die Box/);
   assert.equal(mod.lockFor([chat(true)], chat(), { neu: strang, stand: eng }), 'ok', 'erster laufender Zug startet, wartende zählen nicht');
   // Eben gestartete Züge zählen mit ihrer Schätzung, bis der Speicherstand sie zeigt.
   const jetzt = Date.now();
+  const mittel = { echtGb: 9, hostFreiGb: 15 };
   const frisch = [1, 2, 3].map(() => ({ ...chat(), schaetzung: strang, t0: jetzt - 30_000 }));
-  assert.equal(mod.lockFor(frisch, chat(), { neu: strang, stand: luft, now: jetzt }), 'chat-busy', '3 + 3×1,6 + 1,6 GB > 9 GB');
-  assert.equal(mod.lockFor(frisch, chat(), { neu: strang, stand: luft, now: jetzt + 5 * 60_000 }), 'ok', 'nach 3 min zählt der echte Stand');
+  assert.equal(mod.lockFor(frisch, chat(), { neu: strang, stand: mittel, now: jetzt }), 'chat-busy', '9 + 3×0,8 + 0,8 GB > 12 GB');
+  assert.equal(mod.lockFor(frisch, chat(), { neu: strang, stand: mittel, now: jetzt + 5 * 60_000 }), 'ok', 'nach 3 min zählt der echte Stand');
   assert.equal(mod.lockFor([board(), board()], board()), 'board-full');
 });
 
