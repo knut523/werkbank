@@ -566,3 +566,39 @@ Auftrag: „Klick durch, mach es RADIKAL simpel.“ Alles weglassen, was Knuts s
 | Unter-Chat | Zustand, Abgleich, Fragen, Stand offen | Zustand, offene Fragen; Stand des Agenten aufklappbar und mit Zeit |
 
 Bleibt erreichbar (unter „Mehr“), nichts gelöscht: Themen, Dokumente, Alle Chats, Erledigt (Tage), Begriffe, alte Werkbank. Messung: `werkzeug/kern.mjs` (Klicks, Sekunden), `werkzeug/fuelle.mjs` (Bedienelemente, Abschnitte, Abzeichen, Wörter), Ergebnisse in `kern/` des Pakets.
+
+## 22. Parallelisieren — Zielbild und Plan (Knut 04.11., Runde 7 B)
+
+Auftrag: „time to result wichtig, aber auch die Quali.“ Grundlagen im Paket: `recherche-multiagent.md` (belegt, Quellen A1–W1) und `ist-analyse-parallel.md` (Code und Logs 21.10.–04.11.).
+
+**Befund in drei Sätzen.** Zeit geht nicht beim Rechnen verloren, sondern **zwischen** den Zügen: Median 11 min Lücke, 90 von 287 Lücken über 1 h, der Hauptchat ist ein serieller Router mit Weckdeckel (an 4 Tagen erreicht). Paralleles **Schreiben** im selben Code lohnt laut Recherche nicht (Koordination, ~15× Tokens); paralleles **Lesen**, ein Worktree je Strang, Contract-first und ein unabhängiger Prüfer lohnen. Auf der Box begrenzt RAM, nicht die Token-Menge: faktisch 3–4 bauende Stränge.
+
+**Messgrößen** (`web/server/parallelmessung.ts`, Ausgangswert `kern/parallel-vorher.json`, Test-Kopie, 14 Tage):
+
+| Messgröße | Definition | Vorher |
+|---|---|---|
+| Zeit bis Ergebnis | Start → erstes review_ready/fertig, Median | 9 min (65 von 90 Strängen mit Ergebnis) |
+| Nacharbeit nach Prüfung | Anteil mit Nacharbeit, zweitem review_ready oder Nachfassen nach dem Ergebnis | 54 % |
+| Fertig ohne Nachfassen (DoD, §23) | fertig gemeldet und nie wieder angeschrieben | 12 % |
+| Schlange nach Grund | Dauer und Grund je Wartefall (Box/Host/Obergrenze) | nicht messbar (104 Einträge ohne Dauer) → ab S32 erfasst |
+| Worktree-Konflikte | 409 beim Senden + stilles Warten des „weiter“ | nicht messbar → ab S32 erfasst |
+| Wer schickte | je Sendung hand/leitstand/auto/nachgereicht | nicht messbar → ab S32 erfasst |
+
+**Zielbild.** Ein Auftrag läuft als kleiner Graph: ein **Planer** (Phase plan) schreibt die Teile mit Abhängigkeiten und den berührten Bereichen (Contract-first); jeder bauende Teil bekommt einen eigenen Worktree; Lesen geht breit (Melious/Teilagenten), Schreiben gezielt (ein Schreiber je Bereich); ein **Prüfer** läuft auf jedem fertigen Teil, nicht erst am Ende; Übergaben zwischen Teilen eines Auftrags laufen ohne den Hauptchat, nur Knut-Entscheidungen gehen über ihn.
+
+| # | Baustein | Beleg | Stand | Empfehlung |
+|---|---|---|---|---|
+| P1 | Messen (diese Tabelle) | Ist-Analyse §3 „fehlt heute“ | **gebaut (S32)**, Tests zuerst | eine Woche laufen lassen, dann P3/P5 nach Zahlen entscheiden |
+| P2 | Auftragskennung und Abhängigkeit am Strang (`auftrag`, `wartetAuf: <Strang>`) — die schlanke Aufgabentafel; Claims = berührte Bereiche aus dem Plan | Recherche 1.3/1.4 (Agent Teams nur bedingt, Blackboard schlank lohnt) | Plan | ja, als Felder an `orchestrator_runs`, sichtbar auf der Thema-Seite; kein eigener Tafel-Dienst |
+| P3 | Übergabe Strang → Strang ohne Hauptchat: Folgeauftrag startet, wenn der Vorgänger review_ready meldet | Ist-Analyse Zeile 5 (Router, Deckel 60/Tag) | Plan, **Entscheidung E1** | ja, nur innerhalb eines Auftrags (P2); Weckdeckel nur noch für Knut-Meldungen |
+| P4 | Konfliktprüfung vor Start und bei review_ready: `git merge-tree` gegen die Zweige offener Stränge im selben Repo, dazu Überschneidung der berührten Dateien | Recherche 1.8 (lohnt, fast keine Kosten) | Plan | als **Warnung** an Karte und Steckbrief, keine Sperre |
+| P5 | Schlange: Profil ehrlich setzen (lesend 0,4 GB statt pauschal 1,6), kleinere Züge vorlassen, Nachlauf 600 → 120 s | Ist-Analyse Zeile 3/4 (≈ 10–12 h Wartezeit in 14 Tagen) | Plan, **Entscheidung E2** | Profil und Nachlauf sofort; Vorlassen erst nach einer Woche P1-Zahlen |
+| P6 | Prüfer früh: Prüfbefehle je Commit während des Baus, `fixMax` 1 → 2 | Recherche 1.9/1.10; Ist-Analyse Zeile 7 (32 von 49 Reviews Delta) | Plan, **Entscheidung E3** | ja; Messgröße Nacharbeit soll von 54 % sinken |
+| P7 | Schrittlimit bauender Stränge 40 → 80, Fortsetzung in der Brücke ohne 20-s-Takt | Ist-Analyse Zeile 2 (23× Limit) | Plan | ja, nur Phase bau |
+| P8 | Drain: während des Drains neue Züge in die Schlange; Schlange beim Neustart sichern | Ist-Analyse Zeile 8 (16 Züge unterbrochen) | Plan | ja, klein |
+| — | Mehrere Agenten schreiben im selben Code | Recherche 1.2, Kernaussage 2 | **nicht** | bewusst nicht |
+
+**Entscheidungen für Knut** (je mit Empfehlung; Arbeitsannahme = Empfehlung):
+- **E1 Übergabe ohne Hauptchat.** Heute weckt jeder fertige Teil den Hauptchat, der den nächsten Strang anschreibt — mindestens 1 min plus ein Hauptchat-Zug je Übergabe, ab 60 Weckungen am Tag bleibt es liegen. Optionen: (a) so lassen; (b) Folgeauftrag startet von selbst, wenn der Vorgänger fertig meldet, der Hauptchat bekommt nur eine Zeile. Empfehlung (b), nur innerhalb eines Auftrags mit Planer-Graph.
+- **E2 Schlange.** Heute zählt fast jeder Strang als „bauend“ (1,6 GB), die Schlange ist strikt in Reihenfolge. Optionen: (a) Profil ehrlich setzen; (b) zusätzlich kleinere Züge vorlassen. Empfehlung (a) jetzt, (b) erst mit einer Woche Messung der Gründe.
+- **E3 Prüfer früh und zwei Fixes gleichzeitig.** Kostet RAM (ein zweiter Fix-Strang ≈ 1,6 GB) und Tokens. Empfehlung ja, solange die Box-Schätzung Platz meldet.

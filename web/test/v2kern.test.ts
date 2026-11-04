@@ -139,6 +139,7 @@ test('PR-Sicht: Vorgabe ich, umschaltbar; Personenliste enthält mich auch ohne 
   assert.deepEqual(prSicht(prs, 'FazlOmar9', {}).map((x) => x.pr), ['a#2']);
   assert.equal(prSicht(prs, 'alle', {}).length, 3);
   assert.equal(prSicht(prs, 'alle', {})[0].pr, 'a#3', 'neueste zuerst');
+  assert.deepEqual(prSicht([{ ...prs[0], mergeable: 'CONFLICTING' }, prs[1]], 'alle', {}).map((x) => x.konflikt), [false, true], 'Abgleich (f), neueste zuerst: Merge-Konflikt an der PR-Zeile');
   const p = personen(prs, 'Christoph', {});
   assert.equal(p[0].name, 'Christoph');
   assert.equal(p[0].anzahl, 0);

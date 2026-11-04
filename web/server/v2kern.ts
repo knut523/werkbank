@@ -223,7 +223,7 @@ export function wartetAuf(p: LivePrLite, names: Record<string, string>): string[
   return out;
 }
 
-export interface PrZeile { pr: string; repo: string; number: number; titel: string; url: string | null; wartetAuf: string[]; warum: string; entwurf: boolean; geaendert: string | null; entscheidung: string | null }
+export interface PrZeile { pr: string; repo: string; number: number; titel: string; url: string | null; wartetAuf: string[]; warum: string; entwurf: boolean; geaendert: string | null; entscheidung: string | null; konflikt: boolean }
 
 /** PR-Liste für eine Person (`alle` = alle offenen), neueste Änderung zuerst. */
 export function prSicht(prs: LivePrLite[], wer: string, names: Record<string, string>): PrZeile[] {
@@ -231,7 +231,7 @@ export function prSicht(prs: LivePrLite[], wer: string, names: Record<string, st
   return prs.map((p) => ({ p, wa: wartetAuf(p, names) }))
     .filter(({ wa }) => w === 'alle' || wa.some((x) => x.toLowerCase() === w))
     .map(({ p, wa }) => ({ pr: p.pr, repo: p.repo, number: p.number, titel: p.title, url: /^https:\/\/github\.com\//.test(String(p.url)) ? p.url : null, wartetAuf: wa,
-      warum: wa.length ? String(p.turn?.why ?? 'Review angefragt') : String(p.turn?.why ?? ''), entwurf: !!p.isDraft, geaendert: p.updatedAt ?? null, entscheidung: p.reviewDecision ?? null }))
+      warum: wa.length ? String(p.turn?.why ?? 'Review angefragt') : String(p.turn?.why ?? ''), entwurf: !!p.isDraft, geaendert: p.updatedAt ?? null, entscheidung: p.reviewDecision ?? null, konflikt: p.mergeable === 'CONFLICTING' }))
     .sort((a, b) => String(b.geaendert ?? '').localeCompare(String(a.geaendert ?? '')));
 }
 

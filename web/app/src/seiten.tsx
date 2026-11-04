@@ -125,7 +125,7 @@ const fixSatz = (f: PrZeile['fix']) => (!f ? '' : f.lesbar === false ? ' · letz
 const GRUND: Record<string, string> = { 'nicht-behandelt': 'vom Fix nicht behandelt', frage: 'Rückfrage des Fixes', 'nicht-behoben': 'nicht behoben', 'ohne-commit': 'als behoben gemeldet, aber ohne Commit in diesem Push' };
 const PrZeileView = ({ p }: { p: PrZeile }) => (
   <Zeile titel={`${p.pr} · ${p.titel}`} url={`v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={`${p.thema && p.thema !== 'Sonstiges' ? `${p.thema} · ` : ''}${p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}${fixSatz(p.fix)}`}
-    marke={p.entwurf ? { text: 'Entwurf' } : agentMarke(p.review) ?? { text: 'noch nicht geprüft' }} rechts={wann(p.geaendert)} />
+    marke={p.konflikt ? { text: 'Merge-Konflikt' } : p.entwurf ? { text: 'Entwurf' } : agentMarke(p.review) ?? { text: 'noch nicht geprüft' }} rechts={wann(p.geaendert)} />
 );
 
 // ---------- Entscheidungen ----------
