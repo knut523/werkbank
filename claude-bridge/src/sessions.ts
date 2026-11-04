@@ -1329,6 +1329,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     }
     if (orchMap[key]) setTurn(key, { start: Date.now(), end: null, outcome: null });
     let erst = true;
+    const grund0 = lockGrund, warteAb = Date.now();   // Runde 7 B (Plan §22): Grund und Dauer der Wartezeit fürs Log
     const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang }, {
       frei: () => !lives.has(key) && lockFor(meine(), { readonly: !!req.readonly, mode }, box()) === 'ok',
       geschlossen: () => req.sink.closed,
@@ -1337,7 +1338,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         erst = false;
       },
     });
-    log('schlange', { conv: key, ergebnis: r });
+    log('schlange', { conv: key, ergebnis: r, grund: grund0 || 'unbekannt', wartetMs: Date.now() - warteAb, laufend: meine().length, profil: orchMap[key]?.profil ?? null });
     if (r === 'zu') { if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'aborted' }); return; }
     if (lives.has(key)) {
       req.sink.write('Diese Unterhaltung arbeitet noch an der vorigen Nachricht. Bitte kurz warten.');

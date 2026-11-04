@@ -661,6 +661,12 @@ export async function showOrch(u: User, id: string, verlauf = 0) {
   return { ...item, conv: d.conv, prompt: d.prompt, bericht: d.bericht ?? null, modell: d.modell ?? null, risiko: d.risiko ?? null, lastModell: d.lastModell ?? null, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null, meldungen: (d.meldungen ?? []).slice(-5).map((m: any) => ({ at: m.at, art: String(m.art ?? ''), text: String(m.text ?? '').slice(0, 500) })), ...(hist ? { verlauf: hist } : {}) };
 }
 
+/** Runde 7 B (Messgröße, Plan §22): wer eine Nachricht an den Strang geschickt hat und wann — vorher wurde lastSentAt nur
+ *  überschrieben, Hand- und Hauptchat-Sendungen waren im Log nicht zu trennen. Hängt an ein updateOne-Update an (letzte 30). */
+export function mitSendung<T extends Record<string, any>>(update: T, von: 'hand' | 'leitstand' | 'auto' | 'nachgereicht', at: Date = new Date()): T {
+  return { ...update, $push: { ...(update.$push ?? {}), sendungen: { $each: [{ at, von }], $slice: -30 } } };
+}
+
 export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 'leitstand' = 'hand', o: { warteMs?: number } = {}) {
   const msg = String(text ?? '').trim();
   if (!msg) throw err(400, 'Nachricht fehlt.');
@@ -677,24 +683,24 @@ export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 
     if (!r.ok) throw err(409, `Strang ${id} arbeitet noch (${item.reason}) und nimmt gerade nichts an (${r.error}) — gleich noch einmal.`);
     // Plan 274 (D4b): jede Nachreichung verfolgen (vorher nur die letzte — eine frühere ging so unbemerkt verloren).
     const eintrag = { id: r.id, text: msg.slice(0, 20_000), at: new Date(), via, done: false };
-    await runs().updateOne({ _id: d._id }, { $set: { lastInject: eintrag }, $push: { nachreichungen: { $each: [eintrag], $slice: -10 } } as any, $inc: { injects: 1 } });
+    await runs().updateOne({ _id: d._id }, mitSendung({ $set: { lastInject: eintrag }, $push: { nachreichungen: { $each: [eintrag], $slice: -10 } } as any, $inc: { injects: 1 } }, 'nachgereicht', eintrag.at));
     return { id, conv: d.conv, url: d.url, injected: true, zustellung: 'nachgereicht (zugestellt; gelesen wird beim nächsten Schritt — ungelesen kommt sie nach dem Zug noch einmal als normale Nachricht)' };
   }
   // Plan 274 (D4a): ein anderer Strang arbeitet gerade im selben Worktree → nicht jetzt (sonst blockieren sich beide).
   if (!d.shared) {
     const k = worktreeKonflikt([worktreeVon(d.cwd)], (await belegte(u, id)).filter((a) => a.status === 'running'));
-    if (k) throw err(409, `${konfliktText(k)} Die Nachricht an ${id} später noch einmal senden.`);
+    if (k) { await runs().updateOne({ _id: d._id }, { $inc: { konflikte: 1 } }); throw err(409, `${konfliktText(k)} Die Nachricht an ${id} später noch einmal senden.`); }   // Runde 7 B: Konflikte zählen
   }
   const sentAt = await deliver(u, d.conv, msg);
   if (via === 'leitstand') {
     // Teil B, G3: review_ready-Stand wandert nach prevReview (Auto-Fortsetzen und Wecken laufen wieder); Knuts Karte bleibt
     // (doneAt/knutReviewedAt unberührt); eine Ablage durch den Leitstand selbst hebt er damit auf.
-    await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: sentAt, lastSentText: msg.slice(0, 40_000), reviewReadyAt: null, review: null, ...(d.review ? { prevReview: { review: d.review, at: d.reviewReadyAt ?? new Date() } } : {}), ...(d.reviewedBy === 'leitstand' ? { reviewedAt: null, reviewedBy: null } : {}) }, $inc: { sends: 1, autoStreak: 1 } });
+    await runs().updateOne({ _id: d._id }, mitSendung({ $set: { lastSentAt: sentAt, lastSentText: msg.slice(0, 40_000), reviewReadyAt: null, review: null, ...(d.review ? { prevReview: { review: d.review, at: d.reviewReadyAt ?? new Date() } } : {}), ...(d.reviewedBy === 'leitstand' ? { reviewedAt: null, reviewedBy: null } : {}) }, $inc: { sends: 1, autoStreak: 1 } }, 'leitstand', sentAt));
     return { id, conv: d.conv, url: d.url, ...(await bestaetigen(u, d.conv, sentAt, o.warteMs)) };
   }
   // Handnachricht: der Deckel beginnt neu, Stopp und review_ready sind aufgehoben (Council R1, Bedingung 4).
   // Teil B, F6: auch Karte, DoD-Tabellen und Knuts Prüfung sind damit weg (nach erneutem „fertig“ keine alte Tabelle).
-  await runs().updateOne({ _id: d._id }, { $set: { lastSentAt: sentAt, lastSentText: msg.slice(0, 40_000), gruendlichAt: null, reviewedAt: null, reviewedBy: null, knutReviewedAt: null, reviewReadyAt: null, review: null, prevReview: null, doneAt: null, autoStreak: 0, autoStopped: null, ...(/^Nacharbeit nach Review:/.test(msg) ? { reworkAt: new Date(), reworkText: msg.slice(0, 500) } : {}) }, $inc: { sends: 1 } });
+  await runs().updateOne({ _id: d._id }, mitSendung({ $set: { lastSentAt: sentAt, lastSentText: msg.slice(0, 40_000), gruendlichAt: null, reviewedAt: null, reviewedBy: null, knutReviewedAt: null, reviewReadyAt: null, review: null, prevReview: null, doneAt: null, autoStreak: 0, autoStopped: null, ...(/^Nacharbeit nach Review:/.test(msg) ? { reworkAt: new Date(), reworkText: msg.slice(0, 500) } : {}) }, $inc: { sends: 1 } }, 'hand', sentAt));
   await questions().updateMany({ userId: u.id, kind: 'auto-weiter', 'strand.id': d._id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() } });
   return { id, conv: d.conv, url: d.url, ...(await bestaetigen(u, d.conv, sentAt, o.warteMs)) };
 }
@@ -900,14 +906,21 @@ async function autoOne(u: User, d: any, s: any, deps: AutoDeps) {
   }
   if (dec.action !== 'send') return;
   // Plan 274 (D4a): arbeitet gerade ein anderer Strang im selben Worktree, wartet das „weiter“ (eingereiht bis zum nächsten Takt).
-  if (!d.shared && deps.belegt && await deps.belegt(u, d)) return;
+  if (!d.shared && deps.belegt && await deps.belegt(u, d)) {
+    // Runde 7 B: das stille Warten festhalten (einmal je Zug) — vorher stand es nirgends (Ist-Analyse: „nicht messbar“).
+    if (d.autoHold?.why !== 'worktree belegt' || d.autoHold?.turn !== (s?.turn?.start ?? null)) {
+      await runs().updateOne({ _id: d._id }, { $set: { autoHold: { why: 'worktree belegt', cause: st.cause, at: new Date(), turn: s?.turn?.start ?? null } } });
+      deps.log?.('orch-auto-weiter halt', { id: d._id, cause: st.cause, why: 'worktree belegt' });
+    }
+    return;
+  }
   // Anspruch (atomar, überlebt den Neustart) — mit lastSentAt: kommt die Nachricht nie an, greift nach 3 min „lost“ (Bedingung 2).
   const n = (d.autoStreak ?? 0) + 1;
   // lastSentAt unverändert (Council 154, Bedingung 5): hat inzwischen der Hauptchat oder Knut geschrieben, kein zweites „weiter“.
   // Plan 274 (D4b): „nicht angekommen“ → derselbe Text noch einmal (vorher nur „weiter“ — die eigentliche Nachricht war dann weg).
   const text = fortsetzText(st.cause, d.lastSentText, n, max);
   const r = await runs().updateOne({ _id: d._id, autoFor: d.autoFor ?? null, autoStopped: null, lastSentAt: d.lastSentAt ?? null },
-    { $set: { autoFor: dec.key, lastSentAt: new Date(), lastSentText: text.slice(0, 40_000), autoLastAt: new Date(), autoLastCause: st.cause }, $inc: { autoTotal: 1, autoStreak: 1, sends: 1 } });
+    mitSendung({ $set: { autoFor: dec.key, lastSentAt: new Date(), lastSentText: text.slice(0, 40_000), autoLastAt: new Date(), autoLastCause: st.cause }, $inc: { autoTotal: 1, autoStreak: 1, sends: 1 } }, 'auto'));
   if (!r.modifiedCount) return;
   deps.log?.('orch-auto-weiter', { id: d._id, cause: st.cause, n });
   await deliver(u, d.conv, text);
