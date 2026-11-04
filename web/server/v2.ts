@@ -81,6 +81,9 @@ function strangJe(eintraege: InboxEintrag[]) {
   return m;
 }
 
+/** Uhrzeit (Wien) für Sätze. */
+const wann2 = (iso: string) => new Date(iso).toLocaleString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
 function karten(d: V2Deps, fragen: Frage[], eintraege: InboxEintrag[], liste: { f: Frage; grund: string }[]) {
   const sj = strangJe(eintraege);
   return liste.map(({ f, grund }) => { const s = sj.get(f.eintrag); return karteAusFrage(f, { grund, strand: s?.id ?? null, strandTitel: s?.titel ?? null, altUrl: `${d.altUrl}/entscheidungen` }); });
@@ -314,7 +317,9 @@ export function registerV2(on: On, d: V2Deps) {
       ...(doc.paket ? [{ label: 'Bericht', url: `/v2/dokument?paket=${encodeURIComponent(doc.paket)}&datei=bericht.md` }] : []),
       ...(/^https?:\/\//.test(String(doc.url ?? '')) ? [{ label: 'In der alten Werkbank öffnen', url: String(doc.url), extern: true }] : []),
     ];
-    send(d, res, { id: m[1], titel: String(doc.title ?? ''), satz: z ? zustandSatz(z) : 'Fertig und von dir abgenommen.', gruppe: z ? arbeitGruppe(z) : 'fertig', zuletzt: z?.zuletzt ?? doc.statusAt ?? null,
+    // Runde 5 (Knut B1): ist deine Nachricht die letzte im Verlauf, wartet der Unter-Chat auf den Agenten, nicht auf dich.
+    const zuletztIch = nachrichten.length > 0 && nachrichten[nachrichten.length - 1].rolle === 'ich' && (!z || !['laeuft', 'schlange'].includes(z.zustand));
+    send(d, res, { id: m[1], titel: String(doc.title ?? ''), satz: zuletztIch ? `Deine Nachricht ist zugestellt (${wann2(nachrichten[nachrichten.length - 1].at)}) — der Agent hat noch nicht geantwortet. Du musst nichts tun.` : z ? zustandSatz(z) : 'Fertig und von dir abgenommen.', gruppe: z ? arbeitGruppe(z) : 'fertig', zuletzt: z?.zuletzt ?? doc.statusAt ?? null,
       stand, abgleich: abgleich?.widerspruch ? abgleich : null, fragen, nachrichten, links, at: new Date() });
   });
 

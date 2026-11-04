@@ -338,7 +338,8 @@ function Abgleich({ a }: { a: NonNullable<{ offenListe: string[]; offenBericht: 
   const fehlt = a.offenBericht.filter((x) => a.offenListe.includes(x) && !a.agentNennt.includes(x));
   return (
     <div className="kasten abgleich" role="note">
-      <p><b>Was gilt:</b> deine Liste — {mehrzahl(a.offenListe.length, 'Frage', 'Fragen')} offen ({liste(a.offenListe)}). Nur eine Antwort hier erreicht den Agenten.</p>
+      {a.offenListe.length ? <p><b>Was gilt:</b> deine Liste — {mehrzahl(a.offenListe.length, 'Frage', 'Fragen')} offen ({liste(a.offenListe)}). Nur eine Antwort hier erreicht den Agenten.</p>
+        : <p><b>Was gilt:</b> In deiner Liste ist zu diesem Unter-Chat nichts mehr offen — deine Antworten sind beim Agenten. Du musst hier nichts tun; Bericht und Stand zieht der Agent beim nächsten Zug nach.</p>}
       <ul className="klein">
         <li>Der Bericht nennt als offen: {liste(a.offenBericht)}.</li>
         <li>Der Agent nennt in seinem letzten Stand: {liste(a.agentNennt)}{fehlt.length && a.agentNennt.length ? ` — ${fehlt.join(', ')} hat er dort nicht erwähnt, sie sind aber auch im Bericht offen` : ''}.</li>

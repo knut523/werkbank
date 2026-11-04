@@ -31,8 +31,14 @@ export async function liste(u: User, n = 1000): Promise<{ conversationId: string
     const erste = new Map<string, string>();
     const msgs: any[] = await lc().collection('messages').find({ conversationId: { $in: schwach }, user: u.id, isCreatedByUser: true }, { projection: { conversationId: 1, text: 1, content: 1, createdAt: 1 } })
       .sort({ createdAt: 1 }).limit(3000).toArray().catch(() => []);
-    for (const m of msgs) if (!erste.has(String(m.conversationId))) erste.set(String(m.conversationId), messageText(m));
-    for (const c of convs) if (erste.has(String(c.conversationId))) c.title = besserTitel(String(c.title ?? ''), erste.get(String(c.conversationId)));
+    // Runde 5 (Knut B7): die erste eigene Nachricht mit Inhalt (≥ 8 Zeichen) — „ok?“ als erste Nachricht hilft nicht weiter.
+    for (const m of msgs) { const t = messageText(m); if (!erste.has(String(m.conversationId)) && t.replace(/[*_`#>\s]/g, '').length >= 8) erste.set(String(m.conversationId), t); }
+    for (const c of convs) {
+      if (!schwacherTitel(c.title)) continue;
+      const besser = erste.has(String(c.conversationId)) ? besserTitel(String(c.title ?? ''), erste.get(String(c.conversationId))) : String(c.title ?? '');
+      // Ohne brauchbare Nachricht: wenigstens das Datum, damit sich alte Chats unterscheiden lassen.
+      c.title = schwacherTitel(besser) ? `Chat vom ${new Date(c.createdAt ?? c.updatedAt ?? Date.now()).toLocaleDateString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit', year: 'numeric' })}${String(c.title ?? '').trim() ? ` („${String(c.title).trim().slice(0, 20)}“)` : ''}` : besser;
+    }
   }
   return convs;
 }

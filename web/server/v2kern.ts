@@ -119,7 +119,8 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
 /** Runde 5 (Knut B1): welche D-Fragen meint eine Karte? „D1–D3“, „D1 bis D8“, „D1, D2 und D4“ — erst ab zwei, sonst null. */
 export function bezugIds(t: string): string[] | null {
   const ids = new Set<number>();
-  const bereiche = [...String(t ?? '').matchAll(/\bD(\d{1,2})\s*(?:–|-|bis)\s*D(\d{1,2})\b/g)];
+  // „D1–D3“, „D1 bis D8“ und — Runde 5 (Knut B2) — „Fragen 1–5“ (die Fragen des Berichts heißen D1…Dn)
+  const bereiche = [...String(t ?? '').matchAll(/\b(?:D|Fragen?\s+)(\d{1,2})\s*(?:–|-|bis)\s*D?(\d{1,2})\b/g)];
   for (const m of bereiche) { const [a, b] = [Number(m[1]), Number(m[2])]; if (!(a < b && b - a < 30)) return null; for (let i = a; i <= b; i++) ids.add(i); }   // verkehrt/zu groß: nicht raten
   for (const m of String(t ?? '').matchAll(/\bD(\d{1,2})\b/g)) ids.add(Number(m[1]));   // dazu Einzelne: „D1–D3, D5 und D7“ (Pass C)
   return ids.size >= 2 ? [...ids].sort((a, b) => a - b).map((i) => `D${i}`) : null;
@@ -150,7 +151,7 @@ export function zustandSatz(z: ArbeitZeile): string {
   if (cs === 'braucht' || z.zustand === 'wartet') return `Wartet auf dich${grund ? `: ${grund}` : ''}.`;
   if (z.zustand === 'blockiert') return `Kommt nicht weiter${grund ? `: ${grund}` : ''} — schau dir die Frage an.`;
   if (z.zustand === 'haengt') return `Hängt${grund ? `: ${grund}` : ''} — der Agent antwortet nicht mehr.`;
-  if (z.zustand === 'stand-fehlt') return 'Ist stehen geblieben, ohne einen Stand zu melden.';
+  if (z.zustand === 'stand-fehlt') return 'Hat zuletzt ohne Stand geantwortet — „Im Chat nachfragen“ holt ihn.';   // Runde 5: sagen, was hilft
   // Runde 4 (Knut B1): „Bericht liegt bereit“ nur, wenn es einen gibt — sonst ehrlich sagen, dass er fehlt.
   if (z.zustand === 'fertig') return z.bericht && z.paket ? 'Fertig — der Bericht liegt bereit, lies ihn, wenn du Zeit hast.' : 'Fertig gemeldet, aber ohne Bericht — schau in den Unter-Chat, ob noch etwas auf dich wartet.';
   return grund ? `${grund}.` : 'Stand unbekannt.';
@@ -169,7 +170,9 @@ export function arbeitGruppe(z: ArbeitZeile): 'wartet' | 'laeuft' | 'fertig' {
  *  aus dem Verlauf, wie der Status-Takt ihn liest (orchestrator.ts `excerpt`), nur ohne die 600-Zeichen-Grenze. Ohne Verlauf: der
  *  gespeicherte Auszug. */
 export function standVoll(nachrichten: { rolle: string; text: string }[], ersatz: string, n = 8000): string {
-  const t = [...nachrichten].reverse().find((m) => m.rolle !== 'ich' && String(m.text ?? '').trim())?.text ?? '';
+  const agent = [...nachrichten].reverse().filter((m) => m.rolle !== 'ich' && String(m.text ?? '').trim());
+  // Runde 5: die letzte Antwort MIT Stand-Abschnitt — eine kurze Antwort danach („ok, mache ich“) verdrängt den Stand nicht.
+  const t = (agent.find((m) => m.text.includes('### Stand')) ?? agent[0])?.text ?? '';
   if (!t) return kurz(ersatz, n);
   const i = t.lastIndexOf('### Stand');
   const s = (i >= 0 ? t.slice(i) : t.slice(-n)).replace(/^\s*\*[^*\n]*\*\s*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();

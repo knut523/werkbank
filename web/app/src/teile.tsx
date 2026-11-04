@@ -144,7 +144,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
     try {
       const r = await schicke<{ ziel: string | null; spaeter: boolean }>('api/v2/antwort', { id: k.id, antwort, text: t.trim() });
       setFertig(r.spaeter ? 'Zurückgestellt — kommt morgen wieder.' : `Ging an ${r.ziel ?? 'die Quelle'}: ${antwort === 'ja' ? `„Ja, so“${k.empfehlung ? ` (${k.empfehlung})` : ''}${t.trim() ? ` mit Notiz „${t.trim()}“` : ''}` : antwort === 'nein' ? '„Nein“' : `„${t.trim()}“`}`);
-      if (app.testbetrieb && !r.spaeter) setFertig((x) => `${x} — Testbetrieb: Fragen aus Notizen bleiben hier offen und tauchen nach dem Neuladen wieder auf.`);
+      if (app.testbetrieb && !r.spaeter && !/^(Unter-Chat|Hauptchat)/.test(k.quelle)) setFertig((x) => `${x} — Testbetrieb: Fragen aus Notizen bleiben hier offen und tauchen nach dem Neuladen wieder auf.`);   // nur dort stimmt der Satz (Runde 5)
       beantwortet?.();
     } catch (e: any) {
       if (lebt.current) setFehler(e.message);

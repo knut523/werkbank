@@ -293,6 +293,7 @@ test('Runde 4 (Knut B3): standVoll — ganzer Stand-Abschnitt der letzten Agente
   const s = standVoll(msgs, 'alt…');
   assert.match(s, /^### Stand/); assert.match(s, /dann live nach dem ersten Lauf\.$/); assert.ok(s.length > 900);
   assert.equal(standVoll([], 'gespeicherter Auszug'), 'gespeicherter Auszug', 'ohne Verlauf: der gespeicherte Auszug');
+  assert.match(standVoll([...msgs, { rolle: 'assistent', text: 'Ok, mache ich.' }], ''), /^### Stand/, 'eine kurze Antwort danach verdrängt den Stand nicht');
   assert.equal(standVoll([{ rolle: 'assistent', text: 'kurz ohne Stand' }], 'x'), 'kurz ohne Stand');
   assert.ok(standVoll([{ rolle: 'assistent', text: `### Stand\n${'y'.repeat(9000)}` }], '').length <= 8000);
 });
@@ -304,5 +305,7 @@ test('Runde 5 (Knut B1): bezugIds — welche D-Fragen eine Sammelkarte meint (Be
   assert.deepEqual(bezugIds('D2, D4 und D11 bitte'), ['D2', 'D4', 'D11']);
   assert.equal(bezugIds('D4 in der Inbox entscheiden'), null, 'eine einzelne Frage ist keine Sammelkarte');
   assert.equal(bezugIds('Schalter D3–D1'), null, 'verkehrter Bereich: nichts raten');
+  assert.deepEqual(bezugIds('Antworten auf die Fragen 1–5.'), ['D1', 'D2', 'D3', 'D4', 'D5'], 'Runde 5: „Fragen 1–5“');
+  assert.equal(bezugIds('Befunde 1–5'), null, 'andere Zählungen nicht');
   assert.deepEqual(bezugIds('D1–D3, D5 und D7'), ['D1', 'D2', 'D3', 'D5', 'D7'], 'Bereich und Einzelne zusammen (Pass C)');
 });

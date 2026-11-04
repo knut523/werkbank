@@ -1636,6 +1636,10 @@ async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
   } else if (e.art === 'braucht') {
     if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
     await sendOrch(u, String(e.daten.strand), replyText('antwort', art === 'ja' ? `Ja.${text ? ` ${text}` : ''}` : art === 'nein' ? `Nein.${text ? ` ${text}` : ''}` : text));
+    // Paket 436 (Runde 5, Knut B3): beantwortet — dieselbe Frage (Kennung = Hash ihres Texts) taucht bis zum nächsten Stand nicht wieder auf.
+    // Schreibt der Agent eine neue „Braucht Knut“-Zeile, hat sie eine neue Kennung und steht wieder da. Wie verworfener Altbestand (30 Tage).
+    await spaeterCol().updateOne({ _id: `${u.id}:${e.id}` as any }, { $set: { userId: u.id, id: e.id, bis: new Date(Date.now() + 30 * 86400_000), at: new Date(), beantwortet: true } }, { upsert: true }).catch(() => {});
+    zahlCache.delete(u.id);
   } else if (e.art === 'entscheidung') {
     if (u.role !== 'ADMIN') throw new HttpError(403, 'Das dürfen nur Admins.');
     const liste = (e.daten.entscheidungen as any[]) ?? [];
