@@ -794,12 +794,16 @@ export function Thema({ name }: { name: string }) {
  *  (offen · läuft · fertig · Dokumente · PRs · Roadmap) oder filtert die Liste, wenn `wahl` gesetzt ist. „Sonstiges“ steht hinten. */
 export function ThemenLeiste({ aktiv, wahl }: { aktiv?: string | null; wahl?: (t: string | null) => void }) {
   const { d } = useDaten<{ themen: { thema: string; summe: number }[] }>('api/v2/themen');
-  const l = (d?.themen ?? []).filter((t) => t.thema !== 'Sonstiges').slice(0, 12);
+  const alle = (d?.themen ?? []).filter((t) => t.thema !== 'Sonstiges');
+  // Persona R7: das aktive Thema immer zeigen (auch jenseits der ersten 12) und auf dem Handy in den sichtbaren Bereich holen.
+  const l = [...alle.slice(0, 12), ...alle.slice(12).filter((t) => t.thema === aktiv)];
+  const leiste = useRef<HTMLElement>(null);
+  useEffect(() => { leiste.current?.querySelector('.chip.an')?.scrollIntoView({ block: 'nearest', inline: 'center' }); }, [aktiv, l.length]);
   if (!l.length) return null;
   const knopf = (t: string | null, text: string) => wahl
     ? <button key={text} type="button" className={`chip${(aktiv ?? null) === t ? ' an' : ''}`} aria-pressed={(aktiv ?? null) === t} onClick={() => wahl(t)}>{text}</button>
     : <a key={text} className={`chip${aktiv === t ? ' an' : ''}`} href={t ? `v2/thema?name=${encodeURIComponent(t)}` : 'v2/'}>{text}</a>;
-  return <nav className="themen-leiste" aria-label="Themen">{wahl && knopf(null, 'Alle Themen')}{l.map((t) => knopf(t.thema, t.thema))}{!wahl && <a className="chip leise" href="v2/themen">Alle Themen →</a>}</nav>;
+  return <nav ref={leiste} className="themen-leiste" aria-label="Themen">{wahl && knopf(null, 'Alle Themen')}{l.map((t) => knopf(t.thema, t.thema))}{!wahl && <a className="chip leise" href="v2/themen">Alle Themen →</a>}</nav>;
 }
 
 /** S23 (Ablauf „Dokument teilen“): Link kopieren — mit Vault-Pfad, denn jede Person hat ihre eigene Instanz (D8); der Pfad gilt überall. */

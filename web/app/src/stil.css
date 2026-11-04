@@ -248,6 +248,7 @@ p { margin: 0 0 var(--s1); }
 /* Runde 7: Themen als tragende Ordnung — eine Leiste, quer scrollbar, die gewählte hervorgehoben */
 .themen-leiste { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 var(--s1); margin-bottom: var(--s1); scrollbar-width: none; }
 .themen-leiste .chip { white-space: nowrap; flex: 0 0 auto; }
+@media (min-width: 900px) { .themen-leiste { flex-wrap: wrap; overflow-x: visible; } }   /* Persona R7: am Desktop umbrechen statt abschneiden */
 .chip.an { background: var(--akzent); color: #fff; border-color: var(--akzent); }
 .chip.leise { border-style: dashed; }
 .karte-thema { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--gedimmt); margin: 0 0 2px; }
