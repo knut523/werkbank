@@ -380,7 +380,7 @@ export function registerV2(on: On, d: V2Deps) {
       ].slice(0, 30),
       beruehrt: { repos: gh.map((g) => `${String(g.repo ?? '').split('/').pop()}${g.zweig ? ` · ${g.zweig}` : ''}`).filter(Boolean), text: standZeile(stand, 'Berührt'), ordner: doc.cwd ? String(doc.cwd).split('/').filter(Boolean).slice(-2).join('/') : null, dateien: (Array.isArray(s?.written) ? s.written as string[] : []).slice(-6).map((f) => f.split('/').pop()) },
       dod: dodAus(stand), fast: z && arbeitGruppe(z) === 'fertig' ? fastFertig(dodAus(stand)) : null,
-      modell: s?.turn?.modell ?? doc.lastModell ?? doc.modell ?? null, laufzeitMin: doc.startedAt ? Math.round((Date.now() - new Date(doc.startedAt).getTime()) / 60000) : null, zugTokens: s?.zugTokens ?? null,
+      modell: s?.turn?.modell ?? doc.lastModell ?? doc.modell ?? null, laufzeitMin: doc.startedAt ? Math.round((Date.now() - new Date(doc.startedAt).getTime()) / 60000) : null, ruhtMin: !s?.running && doc.lastActivity ? Math.max(0, Math.round((Date.now() - new Date(doc.lastActivity).getTime()) / 60000)) : null, zugTokens: s?.zugTokens ?? null,
     };
     // Runde 5 (Knut B1): ist deine Nachricht die letzte im Verlauf, wartet der Unter-Chat auf den Agenten, nicht auf dich.
     const zuletztIch = nachrichten.length > 0 && nachrichten[nachrichten.length - 1].rolle === 'ich' && (!z || !['laeuft', 'schlange'].includes(z.zustand));

@@ -280,7 +280,7 @@ test('Runde 7 (Knut: Themen als tragende Ordnung): Thema-Seite mit Roadmap-Items
 
 test('Runde 7 (Knut: Unter-Chats transparent): Steckbrief mit Wofür, Jetzt gerade, Schritten, Wartet auf; Liste zeigt „Jetzt: …“', async () => {
   const altStrang = deps.strang;
-  deps.strang = async (u: any, id: string) => (u.id === 'k' && id === 'abcd1234' ? { _id: id, conv: null, title: 'Rechner', prompt: '# Auftrag\nBaue die PDF-Vorschau für den Rechner neu.', startedAt: new Date(Date.now() - 30 * 60000), lastModell: 'opus', paket: null,
+  deps.strang = async (u: any, id: string) => (u.id === 'k' && id === 'abcd1234' ? { _id: id, conv: null, title: 'Rechner', prompt: '# Auftrag\nBaue die PDF-Vorschau für den Rechner neu.', startedAt: new Date(Date.now() - 30 * 60000), lastActivity: new Date(Date.now() - 12 * 60000), lastModell: 'opus', paket: null,
     lastExcerpt: '### Stand\n- Erledigt: Plan\n- Offen: Vorschau bauen\n- Braucht Knut: D4 entscheiden\n- Berührt: tariff-app, feat/pdf', berichtKopf: { github: [{ repo: 'WirStrom1/olaf-tariff-app', zweig: 'feat/pdf', commit: 'abc1234def' }] } } : null);
   try {
     const r = await rufe('GET', '/api/v2/arbeit/abcd1234', ADMIN);
@@ -291,6 +291,7 @@ test('Runde 7 (Knut: Unter-Chats transparent): Steckbrief mit Wofür, Jetzt gera
     assert.deepEqual(s.beruehrt.repos, ['olaf-tariff-app · feat/pdf']);
     assert.equal(s.beruehrt.text, 'tariff-app, feat/pdf');
     assert.equal(s.modell, 'opus'); assert.ok(s.laufzeitMin >= 29);
+    assert.equal(s.laeuft, false); assert.ok(s.ruhtMin >= 11 && s.ruhtMin <= 13, 'Persona R7: ruht seit dem letzten Zug (nicht „läuft seit 24 h“)');
     assert.ok(s.ergebnisse.some((x: any) => /Commit abc1234/.test(x.label)));
   } finally { deps.strang = altStrang; }
 });
