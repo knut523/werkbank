@@ -157,13 +157,13 @@ export function Entscheidungen() {
       <p className="unterzeile">Alles, was auf dich wartet. „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — an genau diese Karte.</p>
       <p className="zusammensetzung">Die Zahl oben rechts: {d.oben.length + d.rest.length} {d.oben.length + d.rest.length === 1 ? 'Frage' : 'Fragen und Freigaben'}{d.aufraeumen.length ? ` + ${d.aufraeumen.length} ${d.aufraeumen.length === 1 ? 'Sammelposten' : 'Sammelposten'} zum Aufräumen` : ''} = {d.zahl}.{d.ueberholt?.length ? <> <a href="#e-ueberholt">{mehrzahl(d.ueberholt.length, 'Freigabe ist überholt und zählt', 'Freigaben sind überholt und zählen')} nicht ↓</a></> : null}{d.geschlossen?.length ? <> <a href="#e-geschlossen">{mehrzahl(d.geschlossen.length, 'Frage hat', 'Fragen haben')} sich von selbst erledigt ↓</a></> : null}</p>
       {(() => { const s = themen(d.rest).map(([t, ks]) => [t, ks.filter(wieEmpfohlenMoeglich).length] as const).filter(([, n]) => n > 1);
-        return s.length ? <p className="klein sammel-sprung">Alle Empfehlungen eines Themas auf einmal annehmen: {s.map(([t, n]) => <a key={t} className="chip" href={`#thema-${themaAnker(t)}`}>{t} ({n})</a>)}</p> : null; })()}
+        return s.length ? <p className="klein sammel-sprung">Alle Empfehlungen eines Themas auf einmal annehmen: {s.map(([t, n]) => <a key={t} className="chip" href={`#thema-${themaAnker(t, themen(d.rest).map(([x]) => x))}`}>{t} ({n})</a>)}</p> : null; })()}
       <Abschnitt id="e-zuerst" titel="Zuerst" erklaerung="Dieselben fünf wie auf der Startseite: was einen Agenten anhält oder bald als angenommen gilt.">
         {d.oben.length ? <div className="karten">{d.oben.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div> : <p className="leer">{d.aufraeumen.length ? 'Keine Entscheidung offen — was trotzdem zählt, steht unten unter „Aufräumen“.' : 'Gerade wartet nichts auf dich.'}</p>}
       </Abschnitt>
       {d.rest.length > 0 && (
         <Abschnitt id="e-weitere" titel="Weitere, nach Thema" erklaerung="Alles andere, was auf dich wartet — nach Thema gruppiert. Passt bei einem Thema jede Empfehlung, beantwortest du alle auf einmal mit „Alle wie empfohlen“ (mit Rückfrage); Freigaben und Fragen ohne Empfehlung bleiben dabei stehen.">
-          {themen(d.rest).map(([thema, ks]) => <ThemaGruppe key={thema} thema={thema} karten={ks} fertig={() => { neu(); app.zahl(null); }} />)}
+          {themen(d.rest).map(([thema, ks], _i, alle) => <ThemaGruppe key={thema} thema={thema} karten={ks} alleThemen={alle.map(([x]) => x)} fertig={() => { neu(); app.zahl(null); }} />)}
         </Abschnitt>
       )}
       {d.aufraeumen.length > 0 && (
@@ -191,10 +191,11 @@ function themen(ks: Karte[]): [string, Karte[]][] {
   for (const k of ks) { const t = k.thema?.trim() || 'Sonstiges'; m.set(t, [...(m.get(t) ?? []), k]); }
   return [...m].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], 'de'));
 }
-const themaAnker = (t: string) => t.toLowerCase().replace(/[^a-z0-9äöüß]+/g, '-');
+/** Anker je Thema — mit Platz in der Liste, damit „A B“ und „A-B“ nie denselben bekommen (Pass C). */
+const themaAnker = (t: string, alle: string[]) => `${alle.indexOf(t)}-${t.toLowerCase().replace(/[^a-z0-9äöüß]+/g, '-')}`;
 const wieEmpfohlenMoeglich = (k: Karte) => k.art === 'entscheidung' && !k.alt && !!k.empfehlung && k.antworten.includes('ja');
 
-function ThemaGruppe({ thema, karten, fertig }: { thema: string; karten: Karte[]; fertig: () => void }) {
+function ThemaGruppe({ thema, karten, fertig, alleThemen }: { thema: string; karten: Karte[]; fertig: () => void; alleThemen: string[] }) {
   const app = useApp();
   const passend = karten.filter(wieEmpfohlenMoeglich);
   const [frage, setFrage] = useState(false);
@@ -208,12 +209,12 @@ function ThemaGruppe({ thema, karten, fertig }: { thema: string; karten: Karte[]
       setMeldung(`✓ ${mehrzahl(r.ok, 'Antwort', 'Antworten')} wie empfohlen verschickt.${app.testbetrieb ? ' Testbetrieb: Fragen aus Notizen bleiben hier offen.' : ''}${r.uebersprungen ? ` ${r.uebersprungen} übersprungen — die beantwortest du einzeln.` : ''}${r.fehler.length ? ` Nicht geklappt: ${r.fehler.join('; ')}` : ''}`);
       setFrage(false); if (!r.fehler.length) setGesendet(passend.map((k) => k.id).join());   // bei Teilfehlern bleibt der Knopf (Pass C)
       // Runde 5 (Knut B7): nach dem Neuladen ist die Gruppe oft weg — die Bestätigung steht deshalb oben auf der Seite.
-      if (r.ok) window.dispatchEvent(new CustomEvent('v2-meldung', { detail: { ok: !r.fehler.length, text: `✓ ${thema}: ${mehrzahl(r.ok, 'Antwort', 'Antworten')} wie empfohlen verschickt — jede an ihre Quelle.${r.fehler.length ? ` Nicht geklappt: ${r.fehler.join('; ')}` : ''}` } }));
+      if (r.ok) window.dispatchEvent(new CustomEvent('v2-meldung', { detail: { ok: !r.fehler.length, text: `${r.fehler.length ? `${thema}: ${r.ok} von ${passend.length} wie empfohlen verschickt. Nicht geklappt: ${r.fehler.join('; ')}` : `✓ ${thema}: ${mehrzahl(r.ok, 'Antwort', 'Antworten')} wie empfohlen verschickt — jede an ihre Quelle.`}${app.testbetrieb ? ' Testbetrieb: Fragen aus Notizen werden nicht wirklich beantwortet.' : ''}` } }));
       fertig();
     } catch (x: any) { setMeldung(x.message); } finally { setLaeuft(false); }
   };
   return (
-    <div className="thema-gruppe" id={`thema-${themaAnker(thema)}`}>
+    <div className="thema-gruppe" id={`thema-${themaAnker(thema, alleThemen)}`}>
       <div className="thema-kopf">
         <p className="gruppe-titel">{thema} · {karten.length} <a className="klein" href={`v2/thema?name=${encodeURIComponent(thema)}`}>Alles zu {thema} →</a></p>
         {passend.length > 1 && !frage && gesendet !== passend.map((k) => k.id).join() && <button type="button" className="knopf leise klein" onClick={() => setFrage(true)} title={passend.map((k) => k.titel).join(' · ')}>{passend.length < karten.length ? `Die ${passend.length} mit Empfehlung so beantworten …` : `Alle ${passend.length} wie empfohlen …`}</button>}

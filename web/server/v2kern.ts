@@ -120,8 +120,8 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
 export function bezugIds(t: string): string[] | null {
   const ids = new Set<number>();
   const bereiche = [...String(t ?? '').matchAll(/\bD(\d{1,2})\s*(?:–|-|bis)\s*D(\d{1,2})\b/g)];
-  for (const m of bereiche) { const [a, b] = [Number(m[1]), Number(m[2])]; if (a < b && b - a < 20) for (let i = a; i <= b; i++) ids.add(i); }
-  if (!bereiche.length) for (const m of String(t ?? '').matchAll(/\bD(\d{1,2})\b/g)) ids.add(Number(m[1]));
+  for (const m of bereiche) { const [a, b] = [Number(m[1]), Number(m[2])]; if (!(a < b && b - a < 30)) return null; for (let i = a; i <= b; i++) ids.add(i); }   // verkehrt/zu groß: nicht raten
+  for (const m of String(t ?? '').matchAll(/\bD(\d{1,2})\b/g)) ids.add(Number(m[1]));   // dazu Einzelne: „D1–D3, D5 und D7“ (Pass C)
   return ids.size >= 2 ? [...ids].sort((a, b) => a - b).map((i) => `D${i}`) : null;
 }
 

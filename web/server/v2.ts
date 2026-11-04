@@ -91,6 +91,7 @@ function karten(d: V2Deps, fragen: Frage[], eintraege: InboxEintrag[], liste: { 
 async function mitBezug(d: V2Deps, u: User, ks: V2Karte[]): Promise<V2Karte[]> {
   if (!d.berichtVon) return ks;
   const je = new Map<string, Promise<{ paket: string; fragen: any[] } | null>>();
+  ks = ks.map((k) => ({ ...k, links: [...k.links] }));   // nie geteilte Kartenobjekte verändern (Pass C)
   for (const k of ks) {
     const ids = bezugIds(`${k.titel} ${k.worum}`);
     const strand = k.links.map((l) => /\/v2\/arbeit\/([0-9a-f]{8})$/.exec(l.url)?.[1]).find(Boolean);
@@ -101,7 +102,7 @@ async function mitBezug(d: V2Deps, u: User, ks: V2Karte[]): Promise<V2Karte[]> {
     const bezug = ids.map((id) => b.fragen.find((f) => String(f?.id ?? '').trim().toUpperCase() === id)).filter(Boolean)
       .map((f: any) => ({ id: String(f.id), frage: kurz(String(f.frage ?? ''), 200), empfehlung: f.empfehlung ? kurz(String(f.empfehlung), 200) : null, antwort: String(f.antwort ?? '').trim() ? kurz(String(f.antwort), 160) : null }));
     k.bericht = `/v2/dokument?paket=${encodeURIComponent(b.paket)}&datei=bericht.md`;
-    if (bezug.length) k.bezug = bezug;
+    if (bezug.length === ids.length) k.bezug = bezug;   // nur vollständig — sonst bestätigt „Ja, so“ mehr, als die Karte zeigt (Pass C); dann Hinweis + Bericht
     if (!k.links.some((l) => l.url === k.bericht)) k.links = [{ label: 'Bericht', url: k.bericht }, ...k.links];
   }
   return ks;

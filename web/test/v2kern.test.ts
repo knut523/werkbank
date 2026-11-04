@@ -304,4 +304,5 @@ test('Runde 5 (Knut B1): bezugIds — welche D-Fragen eine Sammelkarte meint (Be
   assert.deepEqual(bezugIds('D2, D4 und D11 bitte'), ['D2', 'D4', 'D11']);
   assert.equal(bezugIds('D4 in der Inbox entscheiden'), null, 'eine einzelne Frage ist keine Sammelkarte');
   assert.equal(bezugIds('Schalter D3–D1'), null, 'verkehrter Bereich: nichts raten');
+  assert.deepEqual(bezugIds('D1–D3, D5 und D7'), ['D1', 'D2', 'D3', 'D5', 'D7'], 'Bereich und Einzelne zusammen (Pass C)');
 });

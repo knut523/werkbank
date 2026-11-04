@@ -253,6 +253,10 @@ test('Runde 5 (Knut B1): Sammelkarte („D1–D2 …“) trägt die gemeinten En
     assert.deepEqual(k.bezug.map((b: any) => [b.id, b.empfehlung, b.antwort]), [['D1', 'Ab 2027', null], ['D2', 'Je Gemeinschaft', 'nach 24 h angenommen']]);
     assert.equal(k.bericht, '/v2/dokument?paket=416-netz&datei=bericht.md');
     assert.equal(k.links[0].label, 'Bericht');
+    deps.berichtVon = async () => ({ paket: '416-netz', fragen: [{ id: 'D1', frage: 'Ab wann?' }] });
+    const halb = [...(await rufe('GET', '/api/v2/entscheidungen', ADMIN)).b.oben, ...(await rufe('GET', '/api/v2/entscheidungen', ADMIN)).b.rest].find((x: any) => x.id === 'q-aaaaaa');
+    assert.equal(halb.bezug, undefined, 'unvollständig (D2 fehlt im Bericht): keine halbe Liste, nur Hinweis + Bericht');
+    assert.equal(halb.bericht, '/v2/dokument?paket=416-netz&datei=bericht.md');
     deps.berichtVon = async () => { throw new Error('kaputt'); };
     assert.equal((await rufe('GET', '/api/v2/entscheidungen', ADMIN)).status, 200, 'Bericht nicht lesbar: Seite lädt trotzdem');
   } finally { q.frage = alt; delete deps.berichtVon; }
