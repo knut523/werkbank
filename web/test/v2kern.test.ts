@@ -215,6 +215,8 @@ test('S11: themaVon — ein Thema für alles: bestehende Regeln (themen.ts), Lag
   assert.equal(themaVon('Admin', ''), 'Admin');
   assert.equal(themaVon('Workspace', ''), 'Werkbank', 'Workspace heißt in der Oberfläche Werkbank');
   assert.equal(themaVon('Service-View', ''), 'Service');
+  assert.equal(themaVon('Roadmap', 'Spec „olaf — Roadmap: offene Fragen“ Zählpunkt'), 'Sonstiges', 'Roadmap/Sprint sind keine Themen');
+  assert.equal(themaVon('PR-Reviews', 'olaf-admin: Kundenakte'), 'Admin');
   assert.equal(themaVon('Fragenpaket: Netzentgelte 2027 und ehrlicher Rechner (Pre-Plan 416)', ''), 'Rechner');
   assert.equal(themaVon('Hauptchat', 'Push freigeben: olaf-tariff-app Flex-Umfragen'), 'Flex');
   assert.equal(themaVon(null, 'Anmeldestrecke: Zählpunkt prüfen'), 'Anmeldestrecke');
@@ -308,4 +310,14 @@ test('Runde 5 (Knut B1): bezugIds — welche D-Fragen eine Sammelkarte meint (Be
   assert.deepEqual(bezugIds('Antworten auf die Fragen 1–5.'), ['D1', 'D2', 'D3', 'D4', 'D5'], 'Runde 5: „Fragen 1–5“');
   assert.equal(bezugIds('Befunde 1–5'), null, 'andere Zählungen nicht');
   assert.deepEqual(bezugIds('D1–D3, D5 und D7'), ['D1', 'D2', 'D3', 'D5', 'D7'], 'Bereich und Einzelne zusammen (Pass C)');
+});
+
+test('Runde 7: neue Themen — Rechnung, Leads, OCR, Partner-API; Roadmap-Ordner als gesetztes Thema', async () => {
+  const { themaVon } = await import('../server/v2kern.ts');
+  assert.equal(themaVon(null, 'Netzkostenabrechnung: Projektplan'), 'Rechnung');
+  assert.equal(themaVon(null, 'Rechner: Netzentgelte'), 'Rechner', 'Rechner bleibt Rechner');
+  assert.equal(themaVon('Partner-API', ''), 'Partner-API', 'Ordnername gilt wie ein gesetztes Thema');
+  assert.equal(themaVon('Service-View', ''), 'Service');
+  assert.equal(themaVon('Roadmap', 'Spec „olaf — Roadmap: offene Fragen“ Zählpunkt'), 'Sonstiges', 'Roadmap/Sprint sind keine Themen');
+  assert.equal(themaVon('PR-Reviews', 'olaf-admin: Kundenakte'), 'Admin');
 });

@@ -153,6 +153,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
   const strang = k.links.map((l) => /\/v2\/arbeit\/([0-9a-f]{8})$/.exec(l.url)?.[1]).find(Boolean) ?? null;
   return (
     <article className={`karte${fertig ? ' erledigt' : ''}${freigabe ? ' freigabe' : ''}`} aria-label={k.titel}>
+      {k.thema && k.thema !== 'Sonstiges' && <p className="karte-thema">{k.thema}</p>}
       <h3 className="karte-titel">{k.titel}</h3>
       {/* Runde 6 (Knut B1): ist der Titel keine Frage („PDF/Mail sagen bei Einspeisung …“), braucht es einen Satz, worum es geht. */}
       {!/\?\s*$/.test(k.titel) && k.worum && !fertig && <p className="karte-worum klein">{ersterSatz(k.worum)}</p>}

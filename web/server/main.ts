@@ -28,6 +28,9 @@ import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
 import { fragenAufraeumenAn, fragenAufraeumen } from './fragenaufraeumen.ts';
 import { fragenAusBericht, automatischGeschlossen, wiederOeffnen, abgleichFuer, berichtFragen } from './fragenbericht.ts';
+import { roadmapItems, type RoadmapItem } from './roadmapitems.ts';
+import { themaVon } from './v2kern.ts';
+let roadmapCache: { at: number; l: RoadmapItem[] } | null = null;
 import { ueberholteFreigaben } from './ueberholt.ts';
 import { wahrerLauf } from './strangwahrheit.ts';
 import { baueErledigt } from './erledigt.ts';
@@ -4302,6 +4305,8 @@ registerV2(on, {
   wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },
   abgleich: (u, id, stand) => abgleichFuer(u.id, id, cfg.reviewDir, stand),
   // Paket aus dem Feld oder — bei Unter-Chats ohne eigenes Paket — aus dem Pfad des gefundenen Berichts (…/<paket>/bericht.md im Review-Ordner).
+  // Runde 7: Roadmap-Items je Thema (Spec-Seiten im Vault), höchstens einmal je Minute gelesen. Thema = Ordnername (gesetzt, wie ein Hand-Thema).
+  roadmap: () => { const jetzt = Date.now(); if (!roadmapCache || jetzt - roadmapCache.at > 60_000) roadmapCache = { at: jetzt, l: roadmapItems(cfg.vaultDir, (o) => themaVon(o, '')) }; return roadmapCache.l; },
   berichtVon: async (u, id) => {
     const r: any = await orchRuns().findOne({ _id: id as any, userId: u.id }, { projection: { paket: 1, bericht: 1 } });
     const ausPfad = /^(.*)\/([^/]+)\/bericht\.md$/.exec(String(r?.bericht ?? ''));

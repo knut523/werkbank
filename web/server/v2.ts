@@ -64,6 +64,8 @@ export interface V2Deps {
   abgleich?: (u: User, strandId: string, stand: string) => Promise<Abgleich | null>;
   /** Runde 5 (Knut B1): Paket und Fragen-Kopf des Berichts eines Unter-Chats (für Sammelkarten). */
   berichtVon?: (u: User, strandId: string) => Promise<{ paket: string; fragen: any[] } | null>;
+  /** Runde 7: Roadmap-Items (Spec-Seiten im olaf-Vault, roadmapitems.ts), schon mit Thema. */
+  roadmap?: () => { thema: string; titel: string; path: string; stand: string; standNr: number; mtime: number }[];
 }
 
 /** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
@@ -123,7 +125,7 @@ function aufraeumen(d: V2Deps, sonstiges: InboxEintrag[]) {
   });
 }
 
-const arbeitKarte = (z: any) => ({ id: String(z.id), titel: kurz(z.titel, 140), thema: z.thema ?? '', satz: zustandSatz(z as ArbeitZeile), gruppe: arbeitGruppe(z as ArbeitZeile), zuletzt: z.zuletzt ?? null, uhr: uhrzeit(z.zuletzt),
+const arbeitKarte = (z: any) => ({ id: String(z.id), titel: kurz(z.titel, 140), thema: themaVon(z.thema ?? null, String(z.titel ?? '')), satz: zustandSatz(z as ArbeitZeile), gruppe: arbeitGruppe(z as ArbeitZeile), zuletzt: z.zuletzt ?? null, uhr: uhrzeit(z.zuletzt),
   offen: z.cs?.offen ?? 0, links: [...(z.paket && z.bericht ? [{ label: 'Bericht', url: `/v2/dokument?paket=${encodeURIComponent(z.paket)}&datei=bericht.md` }] : [])] });
 
 export function registerV2(on: On, d: V2Deps) {
@@ -256,28 +258,32 @@ export function registerV2(on: On, d: V2Deps) {
     const runs = admin(u) ? await d.alleRuns(u).catch(() => []) : [];
     const notizen = d.gesperrt(u, 'wissen') ? [] : d.vaultNeu(5000).filter((n) => !ROH.test(`/${n.path}`));
     const prs = d.gesperrt(u, 'roadmap') ? [] : await d.livePrs().then((g) => [...g.map.values()] as any[]).catch(() => []);
-    return { kartenAlle, runs, notizen, prs };
+    const roadmap = d.gesperrt(u, 'wissen') || !d.roadmap ? [] : d.roadmap();
+    return { kartenAlle, runs, notizen, prs, roadmap };
   };
   on('GET', /^\/api\/v2\/themen$/, async (req, res) => {
     const u = await d.needUser(req);
     const q = await themenQuellen(u);
-    send(d, res, { themen: themenUebersicht({ karten: q.kartenAlle, runs: q.runs, notizen: q.notizen, prs: q.prs.map((p) => ({ repo: String(p.repo ?? ''), title: String(p.title ?? '') })) }) });
+    send(d, res, { themen: themenUebersicht({ karten: q.kartenAlle, runs: q.runs, notizen: q.notizen, prs: q.prs.map((p) => ({ repo: String(p.repo ?? ''), title: String(p.title ?? '') })), roadmap: q.roadmap }) });
   });
   on('GET', /^\/api\/v2\/thema$/, async (req, res, _m, url) => {
     const u = await d.needUser(req);
     const name = String(url.searchParams.get('name') ?? '');
     if (!name || name.length > 200) throw err(400, 'Welches Thema?');
-    const q = await themenQuellen(u);
+    const [q, liste] = await Promise.all([themenQuellen(u), admin(u) ? d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })) : Promise.resolve({ zeilen: [] as any[] })]);
+    const zm = new Map(liste.zeilen.map((z: any) => [String(z.id), z]));
     const runs = q.runs.filter((r) => r.kind !== 'leitstand' && themaVon(themaOf(r), String(r.title ?? '')) === name)
       .sort((a, b) => String(b.lastActivity ?? b.startedAt ?? '').localeCompare(String(a.lastActivity ?? a.startedAt ?? '')));
     send(d, res, {
       thema: name,
       entscheidungen: await mitBezug(d, u, q.kartenAlle.filter((k) => k.thema === name)),
-      unterchats: runs.slice(0, 30).map((r) => ({ id: String(r._id), titel: kurz(String(r.title ?? ''), 140), zuletzt: r.lastActivity ?? r.startedAt ?? null, offen: !(r.knutReviewedAt || r.reviewedAt) })),
+      // Runde 7 (Knut): je Unter-Chat sein Zustand — wartet · läuft · fertig · abgenommen — mit dem Satz wie unter „Arbeit“.
+      unterchats: runs.slice(0, 40).map((r) => { const z = zm.get(String(r._id)); return { id: String(r._id), titel: kurz(String(r.title ?? ''), 140), zuletzt: r.lastActivity ?? r.startedAt ?? null, offen: !(r.knutReviewedAt || r.reviewedAt), gruppe: z ? arbeitGruppe(z) : 'abgenommen', satz: z ? zustandSatz(z) : 'Abgenommen.' }; }),
       unterchatsGesamt: runs.length,
       dokumenteGesamt: q.notizen.filter((n) => themaVon(null, `${n.path} ${n.title}`) === name).length,
       dokumente: q.notizen.filter((n) => themaVon(null, `${n.path} ${n.title}`) === name).slice(0, 20).map((n) => ({ art: 'notiz', titel: n.title, worum: bereich(n.path), url: `/v2/dokument?vault=${encodeURIComponent(n.path)}`, at: n.mtime ? new Date(n.mtime).toISOString() : null })),
-      prs: q.prs.filter((p) => themaVon(null, `${p.repo} ${p.title}`) === name).slice(0, 20).map((p) => ({ pr: String(p.pr), titel: kurz(String(p.title ?? ''), 140), url: `/v2/prs/${encodeURIComponent(String(p.repo))}/${p.number}` })),
+      prs: q.prs.filter((p) => themaVon(null, `${p.repo} ${p.title}`) === name).slice(0, 20).map((p) => { const s = prSicht([p], 'alle', d.githubNames())[0]; return { pr: String(p.pr), titel: kurz(String(p.title ?? ''), 140), url: `/v2/prs/${encodeURIComponent(String(p.repo))}/${p.number}`, satz: s ? (s.wartetAuf.length ? `wartet auf ${s.wartetAuf.join(', ')} — ${s.warum}` : s.warum) : '' }; }),
+      roadmap: q.roadmap.filter((x) => x.thema === name).map((x) => ({ titel: x.titel, stand: x.stand, url: `/v2/dokument?vault=${encodeURIComponent(x.path)}` })),
       notizenFrei: !d.gesperrt(u, 'wissen'), prFrei: !d.gesperrt(u, 'roadmap'),
     });
   });
@@ -343,7 +349,7 @@ export function registerV2(on: On, d: V2Deps) {
     const live = [...g.map.values()] as LivePrLite[];
     const names = d.githubNames();
     const [rv, fx] = await Promise.all([d.letzteReviews().catch(() => []), d.fixPunkte ? d.fixPunkte().catch(() => []) : Promise.resolve([])]);
-    const zeilen = mitReview(prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)), rv, admin(u), fx);
+    const zeilen = mitReview(prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)), rv, admin(u), fx).map((p) => ({ ...p, thema: themaVon(null, `${p.repo} ${p.titel}`) }));   // Runde 7: jedes Ding trägt sein Thema
     const ohneEntwurf = live.filter((p) => !p.isDraft);
     send(d, res, { wer, ich, personen: [...personen(ohneEntwurf, ich, names), { name: 'alle', anzahl: ohneEntwurf.length }], zeilen, stand: g.sync?.at ?? null, at: new Date() });
   });
@@ -383,7 +389,7 @@ export function registerV2(on: On, d: V2Deps) {
     if (!q) return send(d, res, { q, frei, treffer: dokumenteNeu(d, u, 12) });
     const ql = q.toLowerCase();
     const berichte = admin(u) ? d.pakete().filter((p) => p.status !== 'archiv' && (p.name.toLowerCase().includes(ql) || p.titel.toLowerCase().includes(ql))).sort((a, b) => b.at - a.at).slice(0, 10).map(paketDok) : [];
-    const notizen = (d.gesperrt(u, 'wissen') ? [] : await d.vaultSuche(q).catch(() => [])).filter((h) => !ROH.test(h.path)).slice(0, 20).map((h) => ({ art: 'notiz', titel: h.title || h.path, worum: h.snippet ? kurz(h.snippet.replace(/<[^>]+>/g, ''), 160) : bereich(h.path), url: `/v2/dokument?vault=${encodeURIComponent(h.path)}`, at: null }));
+    const notizen = (d.gesperrt(u, 'wissen') ? [] : await d.vaultSuche(q).catch(() => [])).filter((h) => !ROH.test(h.path)).slice(0, 20).map((h) => ({ art: 'notiz', thema: themaVon(null, `${h.path} ${h.title}`), titel: h.title || h.path, worum: h.snippet ? kurz(h.snippet.replace(/<[^>]+>/g, ''), 160) : bereich(h.path), url: `/v2/dokument?vault=${encodeURIComponent(h.path)}`, at: null }));
     send(d, res, { q, frei, treffer: [...berichte, ...notizen] });
   });
 
@@ -427,7 +433,7 @@ export function registerV2(on: On, d: V2Deps) {
 }
 
 const send = (d: V2Deps, res: ServerResponse, body: unknown) => d.send(res, 200, body);
-const paketDok = (p: { name: string; titel: string; at: number }) => ({ art: 'bericht', titel: p.titel || p.name.replace(/^\d+-/, '').replace(/-/g, ' '), worum: `Bericht ${p.name.split('-')[0]}`, url: `/v2/dokument?paket=${encodeURIComponent(p.name)}&datei=bericht.md`, at: new Date(p.at).toISOString() });
+const paketDok = (p: { name: string; titel: string; at: number }) => ({ art: 'bericht', thema: themaVon(null, `${p.name} ${p.titel}`), titel: p.titel || p.name.replace(/^\d+-/, '').replace(/-/g, ' '), worum: `Bericht ${p.name.split('-')[0]}`, url: `/v2/dokument?paket=${encodeURIComponent(p.name)}&datei=bericht.md`, at: new Date(p.at).toISOString() });
 
 /** Rohtranskripte und Agenten-Ablagen gehören nicht in die Dokumentliste für Menschen (Persona Lisa). */
 const ROH = /\/(raw|00-Inbox)\/|\/_meta\//;
@@ -437,7 +443,7 @@ const bereich = (p: string) => { const t = p.split('/'); return [t[0], t.slice(1
 /** Neueste Dokumente: Berichte (nur Admin) und zuletzt geänderte Notizen. */
 function dokumenteNeu(d: V2Deps, u: User, n: number) {
   const berichte = admin(u) ? d.pakete().filter((p) => p.status !== 'archiv').sort((a, b) => b.at - a.at).slice(0, n).map(paketDok) : [];
-  const notizen = (d.gesperrt(u, 'wissen') ? [] : d.vaultNeu(n * 3).filter((x) => !ROH.test(x.path)).slice(0, n)).map((x) => ({ art: 'notiz', titel: x.title || x.path, worum: bereich(x.path), url: `/v2/dokument?vault=${encodeURIComponent(x.path)}`, at: new Date(x.mtime).toISOString() }));
+  const notizen = (d.gesperrt(u, 'wissen') ? [] : d.vaultNeu(n * 3).filter((x) => !ROH.test(x.path)).slice(0, n)).map((x) => ({ art: 'notiz', thema: themaVon(null, `${x.path} ${x.title}`), titel: x.title || x.path, worum: bereich(x.path), url: `/v2/dokument?vault=${encodeURIComponent(x.path)}`, at: new Date(x.mtime).toISOString() }));
   return [...berichte, ...notizen].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, n);
 }
 

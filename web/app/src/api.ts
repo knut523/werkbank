@@ -35,9 +35,9 @@ export interface Karte {
   bezug?: { id: string; frage: string; empfehlung: string | null; antwort: string | null }[]; bericht?: string | null;
 }
 export interface ArbeitKarte { id: string; titel: string; thema: string; satz: string; gruppe: 'wartet' | 'laeuft' | 'fertig'; zuletzt: string | null; uhr: string; offen: number; links: Link[] }
-export interface PrZeile { pr: string; repo: string; number: number; titel: string; url: string | null; wartetAuf: string[]; warum: string; entwurf: boolean; geaendert: string | null; review?: { empfehlung: string | null; status: string; gepostet?: boolean } | null; fix?: { offen: number; gesamt: number; lesbar?: boolean } | null }
+export interface PrZeile { thema?: string; pr: string; repo: string; number: number; titel: string; url: string | null; wartetAuf: string[]; warum: string; entwurf: boolean; geaendert: string | null; review?: { empfehlung: string | null; status: string; gepostet?: boolean } | null; fix?: { offen: number; gesamt: number; lesbar?: boolean } | null }
 export interface Aufraeumen { id: string; titel: string; worum: string; url: string; sammel?: boolean; /** S21: hier mit einem Klick zu schließen (Anzahl) */ schliessbar?: number }
-export interface Dok { art: 'bericht' | 'notiz'; titel: string; worum: string; url: string; at: string | null }
+export interface Dok { thema?: string; art: 'bericht' | 'notiz'; titel: string; worum: string; url: string; at: string | null }
 export interface Start {
   zahl: number; jetzt: Karte[]; aufraeumen: Aufraeumen[]; aufraeumenGesamt: number; laeuft: ArbeitKarte[]; erledigt: { id: string; titel: string; uhr: string; stand: 'abgenommen' | 'zum-lesen'; links: Link[] }[];
   prs: PrZeile[] | null; prsGesamt: number; reviews?: PrZeile[]; laeuftGesamt: number; prFrei: boolean; notizenFrei: boolean; dokumente: Dok[]; ich: string; admin: boolean;

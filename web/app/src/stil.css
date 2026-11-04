@@ -244,3 +244,10 @@ p { margin: 0 0 var(--s1); }
 .reiter { display: flex; gap: 4px; margin: var(--s1) 0 var(--s2); border-bottom: 1px solid var(--linie); }
 .reiter button { border: 0; background: none; font: inherit; padding: 8px 12px; color: var(--gedimmt); border-bottom: 3px solid transparent; cursor: pointer; }
 .reiter button.an { color: var(--akzent); border-bottom-color: var(--akzent); font-weight: 600; }
+
+/* Runde 7: Themen als tragende Ordnung — eine Leiste, quer scrollbar, die gewählte hervorgehoben */
+.themen-leiste { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 var(--s1); margin-bottom: var(--s1); scrollbar-width: none; }
+.themen-leiste .chip { white-space: nowrap; flex: 0 0 auto; }
+.chip.an { background: var(--akzent); color: #fff; border-color: var(--akzent); }
+.chip.leise { border-style: dashed; }
+.karte-thema { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--gedimmt); margin: 0 0 2px; }

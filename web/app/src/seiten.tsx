@@ -33,6 +33,7 @@ export function Jetzt() {
   return (
     <div className="seite">
       <SuchFeld />
+      <ThemenLeiste />
       {!k.admin && !reviewer && <p className="klein gedimmt">Neu hier? <a href="v2/begriffe">Begriffe in Klartext</a> — und oben suchst du Dokumente, Chats und PRs.</p>}
       {reviewer && (
         <section className="abschnitt" aria-labelledby="a-prs">
@@ -115,14 +116,14 @@ function SammelSchliessen({ x, fertig }: { x: Aufraeumen; fertig?: () => void })
 }
 
 interface Ueberholt { id: string; titel: string; grund: string; beleg: string }
-const DokZeile = ({ x }: { x: Dok }) => <Zeile titel={x.titel} url={x.url} satz={x.worum} marke={{ text: x.art === 'bericht' ? 'Bericht' : 'Notiz' }} rechts={wann(x.at)} />;
+const DokZeile = ({ x }: { x: Dok }) => <Zeile titel={x.titel} url={x.url} satz={x.thema && x.thema !== 'Sonstiges' ? `${x.thema} · ${x.worum}` : x.worum} marke={{ text: x.art === 'bericht' ? 'Bericht' : 'Notiz' }} rechts={wann(x.at)} />;
 // S22 (Christoph B3): in der Liste sieht man, ob und wie der Prüf-Agent geurteilt hat — auch „prüft noch“ und „fertig, noch nicht veröffentlicht“.
 const agentMarke = (r: PrZeile['review']) => !r ? undefined : r.empfehlung ? { text: EMPFEHLUNG[r.empfehlung] ?? `Prüfung: ${r.empfehlung}`, ton: r.empfehlung === 'approve' ? 'gruen' : '' } : r.status !== 'fertig' ? { text: 'wird geprüft …' } : { text: r.gepostet === false ? 'Prüfung noch nicht veröffentlicht' : 'geprüft' };
 /** Paket 436 (Knut 04.11.): was nach dem letzten automatischen Fix an offenen Punkten (jeder Reviewer) geblieben ist — an der Karte. */
 const fixSatz = (f: PrZeile['fix']) => (!f ? '' : f.lesbar === false ? ' · letzter Fix: offene Punkte nicht prüfbar (PR nicht lesbar)' : f.offen ? ` · nach dem letzten Fix ${f.offen === 1 ? '1 Punkt' : `${f.offen} Punkte`} offen` : f.gesamt ? ' · letzter Fix: alle Punkte abgehakt' : '');
 const GRUND: Record<string, string> = { 'nicht-behandelt': 'vom Fix nicht behandelt', frage: 'Rückfrage des Fixes', 'nicht-behoben': 'nicht behoben', 'ohne-commit': 'als behoben gemeldet, aber ohne Commit in diesem Push' };
 const PrZeileView = ({ p }: { p: PrZeile }) => (
-  <Zeile titel={`${p.pr} · ${p.titel}`} url={`v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={`${p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}${fixSatz(p.fix)}`}
+  <Zeile titel={`${p.pr} · ${p.titel}`} url={`v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={`${p.thema && p.thema !== 'Sonstiges' ? `${p.thema} · ` : ''}${p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}${fixSatz(p.fix)}`}
     marke={p.entwurf ? { text: 'Entwurf' } : agentMarke(p.review) ?? { text: 'noch nicht geprüft' }} rechts={wann(p.geaendert)} />
 );
 
@@ -247,6 +248,7 @@ function GeschlossenListe({ l, geoeffnet }: { l: Geschlossen[]; geoeffnet: () =>
 export function Arbeit() {
   const { d, fehler, neu } = useDaten<{ gruppen: Record<'wartet' | 'laeuft' | 'fertig', ArbeitKarte[]>; nurAdmin?: boolean }>('api/v2/arbeit');
   const [q, setQ] = useState('');
+  const [thema, setThema] = useState<string | null>(null);   // Runde 7: nach Thema filtern
   // Radikal simpel: drei Reiter statt drei langer Abschnitte; „Fertig“ direkt erreichbar (Knut: „heute fertig“). Merkt sich die Wahl.
   const [reiter, setReiter] = useState<'wartet' | 'laeuft' | 'fertig'>(() => (location.hash === '#fertig' ? 'fertig' : (sessionStorage.getItem('v2-arbeit-reiter') as any) || 'wartet'));
   useEffect(() => { try { sessionStorage.setItem('v2-arbeit-reiter', reiter); } catch { /* egal */ } }, [reiter]);
@@ -258,13 +260,13 @@ export function Arbeit() {
     </div>
   );
   const such = q.trim().toLowerCase();
-  const sortiert = (l: ArbeitKarte[]) => [...l].filter((z) => !such || z.titel.toLowerCase().includes(such)).sort((a, b) => String(b.zuletzt ?? '').localeCompare(String(a.zuletzt ?? '')));
+  const sortiert = (l: ArbeitKarte[]) => [...l].filter((z) => (!such || z.titel.toLowerCase().includes(such)) && (!thema || z.thema === thema)).sort((a, b) => String(b.zuletzt ?? '').localeCompare(String(a.zuletzt ?? '')));
   // Runde 6 (B3): mit Suchwort über alle drei Reiter — sonst findet „Netzentgelt“ im Reiter „Fertig“ nichts, obwohl es den Unter-Chat gibt.
   const l = sortiert(such ? [...d.gruppen.wartet, ...d.gruppen.laeuft, ...d.gruppen.fertig] : d.gruppen[reiter]);
   const heute = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' });
   const istHeute = (z: ArbeitKarte) => !!z.zuletzt && new Date(z.zuletzt).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }) === heute;
   // Unter „Fertig“ derselbe Satz in jeder Zeile ist Lärm — nur zeigen, was abweicht (z. B. „ohne Bericht“).
-  const zeile = (z: ArbeitKarte) => <Zeile key={z.id} titel={z.titel} url={`v2/arbeit/${z.id}`} satz={reiter === 'fertig' && z.satz.startsWith('Fertig — der Bericht liegt bereit') ? undefined : z.satz} rechts={wann(z.zuletzt)} />;
+  const zeile = (z: ArbeitKarte) => <Zeile key={z.id} titel={z.titel} url={`v2/arbeit/${z.id}`} satz={[thema ? '' : z.thema, reiter === 'fertig' && z.satz.startsWith('Fertig — der Bericht liegt bereit') ? '' : z.satz].filter(Boolean).join(' · ')} rechts={wann(z.zuletzt)} />;
   const REITER: [typeof reiter, string][] = [['wartet', 'Wartet auf dich'], ['laeuft', 'Läuft'], ['fertig', 'Fertig']];
   return (
     <div className="seite">
@@ -272,6 +274,7 @@ export function Arbeit() {
       <form className="suche" role="search" onSubmit={(e) => { e.preventDefault(); history.pushState(null, '', q.trim() ? `v2/chats?q=${encodeURIComponent(q.trim())}` : 'v2/chats'); window.dispatchEvent(new PopStateEvent('popstate')); }}>
         <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Unter-Chat suchen — Enter sucht auch in alten Chats" aria-label="Unter-Chats durchsuchen" />
       </form>
+      <ThemenLeiste aktiv={thema} wahl={setThema} />
       <div className="reiter" role="tablist" aria-label="Unter-Chats">{REITER.map(([r, t]) => <button key={r} type="button" role="tab" aria-selected={reiter === r} className={reiter === r ? 'an' : ''} onClick={() => setReiter(r)}>{t}</button>)}</div>
       {such ? (l.length ? <ul className="liste">{l.map(zeile)}</ul> : <p className="leer">Nichts zu „{q.trim()}“ in deinen Unter-Chats.</p>) : reiter === 'fertig' ? (
         <>
@@ -349,6 +352,7 @@ export function Prs({ wer }: { wer: string | null }) {
   useEffect(() => { try { sessionStorage.setItem('v2-prs-liste', `v2/prs${wer ? `?wer=${encodeURIComponent(wer)}` : ''}`); } catch { /* egal */ } }, [wer]);   // Runde 3 (B6): „← PRs“ kommt zur selben Auswahl zurück
   const [such, setSuch] = useState('');
   const [mitEntwurf, setMitEntwurf] = useState(false);
+  const [thema, setThema] = useState<string | null>(null);
   const { d, fehler, neu } = useDaten<{ gesperrt?: boolean; wer: string; ich: string; personen: { name: string; anzahl: number }[]; zeilen: PrZeile[]; stand: string | null }>(pfad);
   // Suche geht immer über alle offenen PRs (Persona Christoph R2: #268 stand nicht in „mich“).
   const alle = useDaten<{ zeilen: PrZeile[] }>(such.trim() && wer !== 'alle' ? 'api/v2/prs?wer=alle' : null);
@@ -359,13 +363,14 @@ export function Prs({ wer }: { wer: string | null }) {
   const entwuerfe = d.zeilen.filter((p) => p.entwurf).length;
   const basis = mitEntwurf ? d.zeilen : d.zeilen.filter((p) => !p.entwurf);
   const passt = (p: PrZeile) => `${p.pr} ${p.titel}`.toLowerCase().includes(suche.replace(/^#/, ''));
-  const zeilen = suche ? basis.filter(passt) : basis;
+  const zeilen = (suche ? basis.filter(passt) : basis).filter((p) => !thema || p.thema === thema);
   const sonst = suche ? (alle.d?.zeilen ?? []).filter((p) => passt(p) && !zeilen.some((z) => z.pr === p.pr)) : [];
   const wahl = (n: string) => { const url = n === d.ich ? 'v2/prs' : `v2/prs?wer=${encodeURIComponent(n)}`; history.pushState(null, '', url); window.dispatchEvent(new PopStateEvent('popstate')); };
   return (
     <div className="seite">
       <h1>PRs</h1>
       <p className="unterzeile">Code-Vorschläge auf GitHub und wer gerade dran ist.{d.stand ? ` Stand: ${wann(d.stand)}` : ''}</p>
+      <ThemenLeiste aktiv={thema} wahl={setThema} />
       <div className="filter">
         <label htmlFor="wer">Wartet auf</label>
         <select id="wer" value={d.wer} onChange={(e) => wahl(e.target.value)}>
@@ -444,6 +449,7 @@ export function Dokumente({ q: q0 }: { q: string }) {
   useEffect(() => { const t = setTimeout(() => setSuche(q.trim()), 300); return () => clearTimeout(t); }, [q]);
   useEffect(() => { history.replaceState(null, '', suche ? `v2/dokumente?q=${encodeURIComponent(suche)}` : 'v2/dokumente'); }, [suche]);
   const { d, fehler, neu } = useDaten<{ q: string; frei?: { notizen: boolean; berichte: boolean }; treffer: Dok[] }>(`api/v2/dokumente${suche ? `?q=${encodeURIComponent(suche)}` : ''}`);
+  const [thema, setThema] = useState<string | null>(null);   // Runde 7: nach Thema filtern
   return (
     <div className="seite">
       <h1>Dokumente</h1>
@@ -452,11 +458,12 @@ export function Dokumente({ q: q0 }: { q: string }) {
         <label htmlFor="such" className="unsichtbar">Dokumente durchsuchen</label>
         <input id="such" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Suchen, z. B. Datenschutz, Tarif …" />
       </form>
+      <ThemenLeiste aktiv={thema} wahl={setThema} />
       {q.trim() && (q.trim() !== suche || (d && (d.q ?? '') !== suche)) && <p className="klein gedimmt" role="status">Sucht „{q.trim()}“ …</p>}
       {fehler ? <Fehler text={fehler} nochmal={neu} /> : !d ? <Laedt /> : (
         <Abschnitt id="d-liste" titel={d.q ? `Treffer für „${d.q}“` : 'Zuletzt geändert'} erklaerung="Berichte sind Ergebnisse von Unter-Chats; Notizen stammen aus unserer gemeinsamen Wissenssammlung. Die Suche findet Wörter im Titel und im Pfad.">
           {d.frei && !d.frei.notizen && !d.frei.berichte ? <p className="leer">Dokumente sind für dich noch nicht freigegeben — frag Knut.</p>
-            : d.treffer.length ? <ul className="liste">{d.treffer.map((x) => <DokZeile key={x.url} x={x} />)}</ul> : <p className="leer">Nichts gefunden. Versuch ein anderes Wort (z. B. kürzer oder englisch).</p>}
+            : d.treffer.filter((x) => !thema || x.thema === thema).length ? <ul className="liste">{d.treffer.filter((x) => !thema || x.thema === thema).map((x) => <DokZeile key={x.url} x={x} />)}</ul> : <p className="leer">Nichts gefunden. Versuch ein anderes Wort (z. B. kürzer oder englisch).</p>}
         </Abschnitt>
       )}
     </div>
@@ -663,28 +670,51 @@ export function Themen() {
 
 export function Thema({ name }: { name: string }) {
   const app = useApp();
-  const { d, fehler, neu } = useDaten<{ thema: string; entscheidungen: Karte[]; unterchats: { id: string; titel: string; zuletzt: string | null; offen: boolean }[]; unterchatsGesamt: number; dokumente: Dok[]; dokumenteGesamt?: number; prs: { pr: string; titel: string; url: string }[]; notizenFrei: boolean; prFrei: boolean }>(`api/v2/thema?name=${encodeURIComponent(name)}`);
+  type UC = { id: string; titel: string; zuletzt: string | null; offen: boolean; gruppe?: string; satz?: string };
+  const { d, fehler, neu } = useDaten<{ thema: string; entscheidungen: Karte[]; unterchats: UC[]; unterchatsGesamt: number; dokumente: Dok[]; dokumenteGesamt?: number; prs: { pr: string; titel: string; url: string; satz?: string }[]; roadmap?: { titel: string; stand: string; url: string }[]; notizenFrei: boolean; prFrei: boolean }>(`api/v2/thema?name=${encodeURIComponent(name)}`);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
+  // Runde 7 (Knut): je Thema offen · läuft · fertig · Dokumente · PRs · Roadmap-Items — die Unter-Chats nach ihrem Zustand.
+  const GRUPPE: [string, string][] = [['wartet', 'Wartet auf dich'], ['laeuft', 'Läuft'], ['fertig', 'Fertig'], ['abgenommen', 'Abgenommen']];
+  const uc = (g: string) => d.unterchats.filter((z) => (z.gruppe ?? (z.offen ? 'wartet' : 'abgenommen')) === g);
+  const rm = d.roadmap ?? [];
+  const staende = [...new Set(rm.map((x) => x.stand))];
   return (
     <div className="seite">
-      <p className="zurueck"><a href="v2/themen">← Themen</a></p>
+      <ThemenLeiste aktiv={d.thema} />
       <h1>{d.thema}</h1>
-      <nav className="sprung" aria-label="Auf dieser Seite"><a href="#t-entscheidungen">Entscheidungen</a><a href="#t-unterchats">Unter-Chats</a><a href="#t-dokumente">Dokumente</a><a href="#t-prs">PRs</a></nav>
-      <Abschnitt id="t-entscheidungen" titel={`Entscheidungen (${d.entscheidungen.length})`} erklaerung="Was zu diesem Thema auf dich wartet — du kannst gleich hier antworten.">
+      <nav className="sprung" aria-label="Auf dieser Seite"><a href="#t-offen">Offen</a><a href="#t-unterchats">Unter-Chats</a><a href="#t-dokumente">Dokumente</a><a href="#t-prs">PRs</a>{rm.length > 0 && <a href="#t-roadmap">Roadmap</a>}</nav>
+      <section className="abschnitt"><h2 id="t-offen">Offen für dich</h2>
         {d.entscheidungen.length ? <div className="karten">{d.entscheidungen.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div> : <p className="leer">Zu diesem Thema wartet nichts auf dich.</p>}
-      </Abschnitt>
-      <Abschnitt id="t-unterchats" titel={`Unter-Chats (${d.unterchatsGesamt})`} erklaerung="Aufträge zu diesem Thema, neueste zuerst — offene und abgenommene." fuss={d.unterchatsGesamt > d.unterchats.length ? <a href="v2/chats">Alle in „Alle Chats“ →</a> : null}>
-        {d.unterchats.length ? <ul className="liste">{d.unterchats.map((z) => <Zeile key={z.id} titel={z.titel} url={`v2/arbeit/${z.id}`} rechts={wann(z.zuletzt)} marke={z.offen ? undefined : { text: 'abgenommen', ton: 'gruen' }} />)}</ul> : <p className="leer">Keine Unter-Chats zu diesem Thema.</p>}
-      </Abschnitt>
-      <Abschnitt id="t-dokumente" titel={`Dokumente (${d.dokumenteGesamt ?? d.dokumente.length})`} fuss={(d.dokumenteGesamt ?? 0) > d.dokumente.length ? <a href={`v2/dokumente?q=${encodeURIComponent(d.thema)}`}>Die neuesten {d.dokumente.length} — alle in „Dokumente“ suchen →</a> : null} erklaerung="Notizen zu diesem Thema, zuletzt geänderte zuerst.">
+      </section>
+      <section className="abschnitt"><h2 id="t-unterchats">Unter-Chats</h2>
+        {!d.unterchats.length ? <p className="leer">Keine Unter-Chats zu diesem Thema.</p> : GRUPPE.map(([g, t]) => uc(g).length ? <div key={g}><p className="gruppe-titel">{t}</p><ul className="liste">{uc(g).map((z) => <Zeile key={z.id} titel={z.titel} url={`v2/arbeit/${z.id}`} satz={g === 'abgenommen' ? undefined : z.satz} rechts={wann(z.zuletzt)} />)}</ul></div> : null)}
+        {d.unterchatsGesamt > d.unterchats.length && <p className="abschnitt-fuss"><a href="v2/chats">Ältere in „Alle Chats“ →</a></p>}
+      </section>
+      <section className="abschnitt"><h2 id="t-dokumente">Dokumente</h2>
         {!d.notizenFrei ? <p className="leer">Notizen sind für dich noch nicht freigegeben — frag Knut.</p> : d.dokumente.length ? <ul className="liste">{d.dokumente.map((x) => <DokZeile key={x.url} x={x} />)}</ul> : <p className="leer">Keine Notizen zu diesem Thema.</p>}
-      </Abschnitt>
-      <Abschnitt id="t-prs" titel={`PRs (${d.prs.length})`} erklaerung="Offene Code-Änderungen zu diesem Thema.">
-        {!d.prFrei ? <p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p> : d.prs.length ? <ul className="liste">{d.prs.map((p) => <Zeile key={p.pr} titel={`${p.pr} · ${p.titel}`} url={p.url} />)}</ul> : <p className="leer">Keine offenen PRs zu diesem Thema.</p>}
-      </Abschnitt>
+        {(d.dokumenteGesamt ?? 0) > d.dokumente.length && <p className="abschnitt-fuss"><a href={`v2/dokumente?q=${encodeURIComponent(d.thema)}`}>Ältere in „Dokumente“ suchen →</a></p>}
+      </section>
+      <section className="abschnitt"><h2 id="t-prs">PRs</h2>
+        {!d.prFrei ? <p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p> : d.prs.length ? <ul className="liste">{d.prs.map((p) => <Zeile key={p.pr} titel={`${p.pr} · ${p.titel}`} url={p.url} satz={p.satz} />)}</ul> : <p className="leer">Keine offenen PRs zu diesem Thema.</p>}
+      </section>
+      {rm.length > 0 && <section className="abschnitt"><h2 id="t-roadmap">Roadmap</h2>
+        {staende.map((st) => <div key={st}><p className="gruppe-titel">{st}</p><ul className="liste">{rm.filter((x) => x.stand === st).map((x) => <Zeile key={x.url} titel={x.titel} url={x.url} />)}</ul></div>)}
+      </section>}
     </div>
   );
+}
+
+/** Runde 7 (Knut: „Themen als tragende Ordnung“): eine Leiste mit den Themen — auf jeder Hauptseite gleich, ein Tipp öffnet das Thema
+ *  (offen · läuft · fertig · Dokumente · PRs · Roadmap) oder filtert die Liste, wenn `wahl` gesetzt ist. „Sonstiges“ steht hinten. */
+export function ThemenLeiste({ aktiv, wahl }: { aktiv?: string | null; wahl?: (t: string | null) => void }) {
+  const { d } = useDaten<{ themen: { thema: string; summe: number }[] }>('api/v2/themen');
+  const l = (d?.themen ?? []).filter((t) => t.thema !== 'Sonstiges').slice(0, 12);
+  if (!l.length) return null;
+  const knopf = (t: string | null, text: string) => wahl
+    ? <button key={text} type="button" className={`chip${(aktiv ?? null) === t ? ' an' : ''}`} aria-pressed={(aktiv ?? null) === t} onClick={() => wahl(t)}>{text}</button>
+    : <a key={text} className={`chip${aktiv === t ? ' an' : ''}`} href={t ? `v2/thema?name=${encodeURIComponent(t)}` : 'v2/'}>{text}</a>;
+  return <nav className="themen-leiste" aria-label="Themen">{wahl && knopf(null, 'Alle Themen')}{l.map((t) => knopf(t.thema, t.thema))}{!wahl && <a className="chip leise" href="v2/themen">Alle Themen →</a>}</nav>;
 }
 
 /** S23 (Ablauf „Dokument teilen“): Link kopieren — mit Vault-Pfad, denn jede Person hat ihre eigene Instanz (D8); der Pfad gilt überall. */

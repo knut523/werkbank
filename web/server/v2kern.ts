@@ -297,13 +297,20 @@ export function chatListe(runs: any[], convs: any[], eigene: { conv: string; tit
 // ---------- Themen quer über alles (S11, Knut 03.11. Punkt 2) ----------
 
 /** Namen, die nur sagen, woher etwas kommt — kein Thema; dann wird das Thema aus dem Text erkannt. */
-const HILFSNAME = /^(Hauptchat|Unter-Chats?|Push-Freigaben|Vault-Sync|Vault|Übersicht|Sonstiges|Inbox)$/i;
+// Runde 7: „Roadmap“, „Sprint“, „PR-Reviews“ sind Arbeitsweisen, keine Themen (Knut: Anmeldestrecke, Service, Bot, Flex, Rechnung, Werkbank, Admin …).
+const HILFSNAME = /^(Hauptchat|Unter-Chats?|Push-Freigaben|Vault-Sync|Vault|Übersicht|Sonstiges|Inbox|Roadmap|Sprint|PR-Reviews?|Reviews?)$/i;
+const KEIN_THEMA = new Set(['Roadmap', 'Sprint']);
 const SYNONYM: Record<string, string> = { Workspace: 'Werkbank', 'Service-View': 'Service' };
 /** Zusätzlich zu den Regeln der Seitenleiste (themen.ts): die Lage-Themen und Datenschutz. */
 const EXTRA_THEMEN: { thema: string; re: RegExp }[] = [
   { thema: 'Anmeldestrecke', re: /anmelde/i },
   { thema: 'Service', re: /\bservice/i },
   { thema: 'Datenschutz', re: /datenschutz|dsgvo|einwilligung|\bdsb\b/i },
+  // Runde 7 (Knut: Anmeldestrecke, Service, Bot, Flex, Rechnung, Werkbank, Admin …; dazu die Roadmap-Ordner Leads, OCR, Partner-API)
+  { thema: 'Rechnung', re: /rechnung|abrechnung|netzkosten/i },
+  { thema: 'Leads', re: /\bleads?\b/i },
+  { thema: 'OCR', re: /\bocr\b/i },
+  { thema: 'Partner-API', re: /partner-?api/i },
 ];
 /** Ein Thema für alles (Entscheidungen, Unter-Chats, Dokumente, PRs): ein gesetztes Thema gilt, Hilfsnamen nicht; sonst die erste
  *  passende Regel (themen.ts, dann Lage-Themen) über den Text. Eine Quelle — dieselbe Zuordnung auf jeder Seite. */
@@ -312,19 +319,20 @@ export function themaVon(roh: string | null | undefined, text: string): string {
   let t = String(text ?? '');
   if (/^Fragenpaket:/i.test(r)) { t = `${r} ${t}`; r = ''; }
   if (r && !HILFSNAME.test(r)) return SYNONYM[r] ?? r;
-  const hit = THEMEN.find((x) => x.re.test(t)) ?? EXTRA_THEMEN.find((x) => x.re.test(t));
+  const hit = THEMEN.find((x) => !KEIN_THEMA.has(x.thema) && x.re.test(t)) ?? EXTRA_THEMEN.find((x) => x.re.test(t));
   return hit ? SYNONYM[hit.thema] ?? hit.thema : 'Sonstiges';
 }
 
-export interface ThemaZeile { thema: string; entscheidungen: number; unterchats: number; dokumente: number; prs: number; summe: number }
+export interface ThemaZeile { thema: string; entscheidungen: number; unterchats: number; dokumente: number; prs: number; roadmap: number; summe: number }
 /** Je Thema, was dazu da ist — größte zuerst, „Sonstiges“ zuletzt. */
-export function themenUebersicht(q: { karten: { titel: string; thema?: string | null }[]; runs: any[]; notizen: { path: string; title: string }[]; prs: { repo: string; title: string }[] }): ThemaZeile[] {
+export function themenUebersicht(q: { karten: { titel: string; thema?: string | null }[]; runs: any[]; notizen: { path: string; title: string }[]; prs: { repo: string; title: string }[]; roadmap?: { thema: string }[] }): ThemaZeile[] {
   const m = new Map<string, ThemaZeile>();
-  const zu = (th: string, f: 'entscheidungen' | 'unterchats' | 'dokumente' | 'prs') => { const z = m.get(th) ?? { thema: th, entscheidungen: 0, unterchats: 0, dokumente: 0, prs: 0, summe: 0 }; z[f]++; z.summe++; m.set(th, z); };
+  const zu = (th: string, f: 'entscheidungen' | 'unterchats' | 'dokumente' | 'prs' | 'roadmap') => { const z = m.get(th) ?? { thema: th, entscheidungen: 0, unterchats: 0, dokumente: 0, prs: 0, roadmap: 0, summe: 0 }; z[f]++; z.summe++; m.set(th, z); };
   for (const k of q.karten) zu(themaVon(k.thema, k.titel), 'entscheidungen');
   for (const r of q.runs) if (r.kind !== 'leitstand') zu(themaVon(themaOf(r), String(r.title ?? '')), 'unterchats');
   for (const n of q.notizen) zu(themaVon(null, `${n.path} ${n.title}`), 'dokumente');
   for (const p of q.prs) zu(themaVon(null, `${p.repo} ${p.title}`), 'prs');
+  for (const r of q.roadmap ?? []) zu(r.thema, 'roadmap');
   return [...m.values()].sort((a, b) => (a.thema === 'Sonstiges' ? 1 : 0) - (b.thema === 'Sonstiges' ? 1 : 0) || b.summe - a.summe || a.thema.localeCompare(b.thema, 'de'));
 }
 

@@ -261,3 +261,19 @@ test('Runde 5 (Knut B1): Sammelkarte („D1–D2 …“) trägt die gemeinten En
     assert.equal((await rufe('GET', '/api/v2/entscheidungen', ADMIN)).status, 200, 'Bericht nicht lesbar: Seite lädt trotzdem');
   } finally { q.frage = alt; delete deps.berichtVon; }
 });
+
+test('Runde 7 (Knut: Themen als tragende Ordnung): Thema-Seite mit Roadmap-Items, Zustand je Unter-Chat, PRs mit „wartet auf“; PR-Zeilen tragen ihr Thema', async () => {
+  deps.roadmap = () => [{ thema: 'Tarife', titel: 'Netzentgelte 2027', path: 'olaf/x/3-Plan/a.md', stand: 'geplant', standNr: 3, mtime: 1 }, { thema: 'Bot', titel: 'Übergabe', path: 'olaf/y.md', stand: 'Backlog', standNr: 1, mtime: 1 }];
+  try {
+    const r = await rufe('GET', '/api/v2/thema?name=Tarife', ADMIN);
+    assert.deepEqual(r.b.roadmap.map((x: any) => [x.titel, x.stand]), [['Netzentgelte 2027', 'geplant']]);
+    assert.ok(r.b.unterchats.every((u: any) => typeof u.gruppe === 'string' && typeof u.satz === 'string'), 'jeder Unter-Chat mit Zustand');
+    const t = await rufe('GET', '/api/v2/themen', ADMIN);
+    assert.equal(t.b.themen.find((x: any) => x.thema === 'Bot')?.roadmap, 1);
+    const p = await rufe('GET', '/api/v2/prs?wer=alle', ADMIN);
+    assert.ok(p.b.zeilen.every((z: any) => typeof z.thema === 'string' && z.thema.length > 0));
+    gesperrt = true;
+    assert.deepEqual((await rufe('GET', '/api/v2/thema?name=Tarife', LISA)).b.roadmap, [], 'ohne Freigabe „wissen“ keine Roadmap-Items');
+    gesperrt = false;
+  } finally { delete deps.roadmap; }
+});
