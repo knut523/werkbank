@@ -241,3 +241,6 @@ p { margin: 0 0 var(--s1); }
 .ok.unterwegs { color: var(--gedimmt); background: var(--grund); }
 .bezug { background: var(--grund); border-radius: 8px; padding: 8px 12px; margin: 6px 0; }
 .bezug ul { margin: 4px 0; padding-left: 1.2em; }
+.reiter { display: flex; gap: 4px; margin: var(--s1) 0 var(--s2); border-bottom: 1px solid var(--linie); }
+.reiter button { border: 0; background: none; font: inherit; padding: 8px 12px; color: var(--gedimmt); border-bottom: 3px solid transparent; cursor: pointer; }
+.reiter button.an { color: var(--akzent); border-bottom-color: var(--akzent); font-weight: 600; }

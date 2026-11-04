@@ -4,19 +4,17 @@ import { useEffect, useMemo, useState } from 'react';
 import { hole } from './api.ts';
 import { Kontext, type AppKontext } from './kontext.ts';
 import { ChatLeiste } from './chat.tsx';
-import { Anmelden, AlleChats, Themen, Thema, Arbeit, ArbeitDetail, Begriffe, Dokument, Dokumente, Entscheidungen, Erledigt, Jetzt, Mehr, PrDetail, Prs } from './seiten.tsx';
+import { Anmelden, AlleChats, Themen, Thema, Arbeit, ArbeitDetail, Begriffe, Dokument, Dokumente, Entscheidungen, Erledigt, Jetzt, Mehr, PrDetail, Prs, Suche } from './seiten.tsx';
 import { Laedt, vergessen, vorab } from './teile.tsx';
 import { istIntern, logisch, rel } from './format.ts';
 
+// Radikal simpel (Knut 04.11.): vier Bereiche. Entscheidungen erreicht man über die Zahl oben und „Alles, was auf dich wartet“ auf
+// „Jetzt“; Dokumente, Themen, alle Chats, Erledigt und Begriffe stehen unter „Mehr“ (und die Suche auf „Jetzt“ findet alles).
 const BEREICHE = [
-  { url: 'v2/', label: 'Jetzt', ico: '◉', passt: (p: string) => p === 'v2/' || p === 'v2' },
-  { url: 'v2/entscheidungen', label: 'Entscheidungen', ico: '✓', passt: (p: string) => p.startsWith('v2/entscheidungen') },
-  { url: 'v2/arbeit', label: 'Arbeit', ico: '⚙', passt: (p: string) => p.startsWith('v2/arbeit') || p.startsWith('v2/chats') },
+  { url: 'v2/', label: 'Jetzt', ico: '◉', passt: (p: string) => p === 'v2/' || p === 'v2' || p.startsWith('v2/entscheidungen') || p.startsWith('v2/suche') },
+  { url: 'v2/arbeit', label: 'Arbeit', ico: '⚙', passt: (p: string) => p.startsWith('v2/arbeit') || p.startsWith('v2/chats') || p.startsWith('v2/erledigt') },
   { url: 'v2/prs', label: 'PRs', ico: '⇄', passt: (p: string) => p.startsWith('v2/prs') },
-  { url: 'v2/dokumente', label: 'Dokumente', ico: '▤', passt: (p: string) => p.startsWith('v2/dokument') },
-  // Runde 4 (Knut B15): Themen am Desktop direkt in der Leiste; am Handy bleibt die untere Leiste bei sechs Einträgen (Themen unter „Mehr“).
-  { url: 'v2/themen', label: 'Themen', ico: '◇', passt: (p: string) => p.startsWith('v2/them'), breit: true },
-  { url: 'v2/mehr', label: 'Mehr', ico: '⋯', passt: (p: string) => p.startsWith('v2/mehr') || p.startsWith('v2/erledigt') || (p.startsWith('v2/them') && innerWidth < 900) },
+  { url: 'v2/mehr', label: 'Mehr', ico: '⋯', passt: (p: string) => p.startsWith('v2/mehr') || p.startsWith('v2/dokument') || p.startsWith('v2/them') || p.startsWith('v2/begriffe') },
 ];
 
 /** Zu einer Sprungmarke scrollen, sobald der Abschnitt gerendert ist (Daten laden nach) — höchstens 3 s warten. */
@@ -60,6 +58,7 @@ function Seite({ pfad, such }: { pfad: string; such: string }) {
   let m: RegExpMatchArray | null;
   if (pfad === 'v2' || pfad === 'v2/') return <Jetzt />;
   if (pfad.startsWith('v2/entscheidungen')) return <Entscheidungen />;
+  if (pfad.startsWith('v2/suche')) return <Suche key={such} q={q.get('q') ?? ''} />;
   if ((m = pfad.match(/^v2\/arbeit\/([0-9a-f]{8})$/))) return <ArbeitDetail key={m[1]} id={m[1]} />;
   if (pfad.startsWith('v2/arbeit')) return <Arbeit />;
   if ((m = pfad.match(/^v2\/prs\/([^/]+)\/(\d+)$/))) return <PrDetail key={pfad} repo={decodeURIComponent(m[1])} nummer={m[2]} />;
@@ -123,12 +122,11 @@ export function App() {
             <a className="zahl" href="v2/entscheidungen" title="So viel wartet auf dich — antippen für die Liste">
               <b>{zahl ?? '…'}</b><span>warten auf dich</span>
             </a>
-            <a className="knopf leise rund" href="v2/begriffe" aria-label="Begriffe in Klartext" title="Begriffe in Klartext">?</a>
             <button type="button" className="knopf chat-knopf" onClick={() => setChat({ offen: !chat.offen, text: '' })} aria-expanded={chat.offen}>Chat</button>
           </div>
         </header>
         <nav className="leiste" aria-label="Bereiche">
-          {BEREICHE.map((b) => <a key={b.url} href={b.url} className={`${b.passt(pfad) ? 'an' : ''}${'breit' in b ? ' nur-breit' : ''}`} aria-current={b.passt(pfad) ? 'page' : undefined}><span className="ico" aria-hidden="true">{b.ico}</span><span>{b.label}</span></a>)}
+          {BEREICHE.map((b) => <a key={b.url} href={b.url} className={b.passt(pfad) ? 'an' : ''} aria-current={b.passt(pfad) ? 'page' : undefined}><span className="ico" aria-hidden="true">{b.ico}</span><span>{b.label}</span></a>)}
           <div className="leiste-unten">
             <span className="klein gedimmt">Angemeldet als {konto.name}</span>
             {alt && <a className="klein" href={`${alt}/heute`} target="_blank" rel="noopener noreferrer">Alte Werkbank ↗</a>}

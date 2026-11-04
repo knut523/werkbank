@@ -93,7 +93,12 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
   // S13: Code-Namen und Abkürzungen in Klartext (woerterbuch.ts) — nur die Anzeige; die Antwort nimmt der Server aus der Frage selbst.
   const g = new Set<string>(), ge = new Set<string>();
   const voll = ohneFachwort(ohnePfad(String(f.worum ?? '').replace(/\s+/g, ' ').trim()), new Set());
-  const titel = ohneFachwort(f.titel, g), worum = ohneFachwort(ohnePfad(String(f.worum ?? '').replace(/\s+/g, ' ').trim()), g);
+  // Radikal simpel (Knut 04.11.): eine Frage aus dem Stand eines Unter-Chats ist oft ein Satzfetzen („den Merge-Schritt …“, „Antworten auf
+  // die Fragen 1–5.“) — als ganzer Satz: wer braucht was.
+  // … ohne Kennungen vorne („D4 · …“) und ohne „Push“: das sagt Knut nichts — die D-Nummer steht unter „Was ist das?“.
+  const roh = ohneFachwort(f.titel, g).replace(/^D\d{1,2}\s*[·:]\s*/, '').replace(/^Push freigeben:\s*/, 'Freigeben: ');
+  const strangKurz = o.strandTitel ? kurz(o.strandTitel.replace(/\s*[(:–—].*$/, '').trim() || o.strandTitel, 50) : '';
+  const titel = f.art === 'braucht' && strangKurz ? `„${strangKurz}“ braucht: ${roh.replace(/^[„"]|[“"]$/g, '')}` : roh, worum = ohneFachwort(ohnePfad(String(f.worum ?? '').replace(/\s+/g, ' ').trim()), g);
   const empfehlung = f.empfehlung ? ohneFachwort(f.empfehlung, g) : f.empfehlung;
   const optionen = (f.optionen ?? []).map((x) => ohneFachwort(x, g));   // Alternativen bleiben roh: ihr Text geht beim Antippen als Antwort an den Agenten.
   const erklaerung: [string, string][] = [

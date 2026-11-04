@@ -1,5 +1,5 @@
 // Werkbank 2.0: die Seiten. Eine Startseite („Jetzt“) und vier Bereiche; jede Seite liest genau einen Endpunkt der 2.0-API.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useDiagramme } from './diagramm.ts';
 import { schicke, type Aufraeumen, type ArbeitKarte, type Dok, type Karte, type Link, type PrZeile, type Start } from './api.ts';
 import { useApp } from './kontext.ts';
@@ -8,7 +8,8 @@ import { BEGRIFFE, OLAF_KURZ } from './begriffe.ts';
 import { MEHR } from './mehr.ts';
 import { chatFrage, htmlFuerV2, mehrzahl, rel, tabellenBeschriften, wann } from './format.ts';
 
-const EMPFEHLUNG: Record<string, string> = { approve: 'Agent: freigeben', 'request-changes': 'Agent: Änderungen nötig', comment: 'Agent: Anmerkungen' };
+// Radikal simpel: „Prüfung“ statt „Agent/Review“ in Marken.
+const EMPFEHLUNG: Record<string, string> = { approve: 'Prüfung: in Ordnung', 'request-changes': 'Prüfung: Änderungen nötig', comment: 'Prüfung: Anmerkungen' };
 
 function gruss(name: string) {
   const h = Number(new Date().toLocaleTimeString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', hour12: false }));
@@ -19,86 +20,68 @@ function gruss(name: string) {
 
 export function Jetzt() {
   const app = useApp();
-  // Erst Zahl und Karten (schnell), dann der Rest — der erste Bildschirm zeigt sofort, was zu tun ist.
+  // Radikal simpel (Knut 04.11.): Start = Suche + höchstens fünf Karten. Alles andere liegt unter „Arbeit“, „PRs“ und „Mehr“.
   const oben = useDaten<Pick<Start, 'zahl' | 'jetzt' | 'aufraeumen' | 'ich' | 'admin' | 'rolle'>>('api/v2/start?teil=oben');
-  const voll = useDaten<Start>('api/v2/start');
-  const k = voll.d ?? oben.d;
+  const reviewer = oben.d?.rolle === 'reviewer';
+  const voll = useDaten<Start>(reviewer ? 'api/v2/start' : null);   // nur Reviewer brauchen die PR-Liste auf dem Start
+  const k = oben.d;
   useEffect(() => { if (k) app.zahl(k.zahl); }, [k]);
-  if (oben.fehler && !voll.d) return <Fehler text={oben.fehler} nochmal={oben.neu} />;
+  if (oben.fehler) return <Fehler text={oben.fehler} nochmal={oben.neu} />;
   if (!k) return <Laedt />;
+  const karten = k.jetzt.slice(0, 5);
   const d = voll.d;
-  const jetztAbschnitt = (
-      <Abschnitt id="a-jetzt" titel="Was du jetzt tun musst" erklaerung="Die wichtigsten Dinge, die ohne deine Antwort nicht weitergehen — höchstens fünf, wichtigste zuerst: zuerst Entscheidungen, die einen Agenten anhalten, darunter Freigaben. Die Zahl oben rechts zählt alles, was auf dich wartet; unter „Entscheidungen“ steht, woraus sie sich zusammensetzt."
-        fuss={k.zahl > k.jetzt.length + k.aufraeumen.length ? <a href="v2/entscheidungen">Alles ansehen, was auf dich wartet →</a> : null}>
-        {k.jetzt.length > 0 && <p className="klein gedimmt oben-hinweis">Wichtigste zuerst — die oberste hält am meisten Arbeit an.</p>}
-        {k.jetzt.length > 0 && <div className="karten">{k.jetzt.map((x) => <EntscheidungKarte key={x.id} k={x} beantwortet={() => app.zahl(null)} />)}</div>}
-        {k.aufraeumen.length > 0 && <AufraeumenListe l={k.aufraeumen} />}
-        {!k.jetzt.length && !k.aufraeumen.length && <p className="leer">Gerade wartet nichts auf dich.</p>}
-      </Abschnitt>
-  );
-  const reviewer = k.rolle === 'reviewer';
-  const kopf = (
-    <>
-      <h1>{gruss(k.ich)}</h1>
-      {k.rolle === 'reviewer' && (
-        <div className="willkommen">
-          <p><b>Du prüfst Code.</b> Gleich darunter stehen die PRs, bei denen du dran bist — ein Klick zeigt den Stand und was der Prüf-Agent dazu sagt, ohne GitHub. Darunter, was eine Antwort von dir braucht (nur das zählt die Zahl oben rechts). <a href="v2/begriffe">Begriffe in Klartext</a></p>
-        </div>
-      )}
-      {!k.admin && k.rolle !== 'reviewer' && (
-        <div className="willkommen">
-          <p><b>Neu hier?</b> {OLAF_KURZ}</p>
-          <p>In der Werkbank arbeiten Agenten (KI-Assistenten) an Aufträgen und fragen, wenn sie etwas nicht selbst entscheiden dürfen. Was an dich geht, steht gleich darunter; Berichte und Notizen findest du unter „Dokumente“. <a href="v2/begriffe">Begriffe in Klartext</a></p>
-        </div>
-      )}
-    </>
-  );
-  // Runde 3 (Christoph B1): für Reviewer stehen die PRs über „Was du jetzt tun musst“ — dort wartet ihre Arbeit.
-  if (!d) return <div className="seite">{kopf}{reviewer ? <Laedt sofort text="Lädt die PRs, bei denen du dran bist …" /> : jetztAbschnitt}{voll.fehler ? <Fehler text={voll.fehler} nochmal={voll.neu} /> : !reviewer && <Laedt text="Lädt Läuft, Heute erledigt, PRs …" />}</div>;
-  // S13: Reihenfolge je Rolle — Team (Lisa) liest zuerst Dokumente, Reviewer (Christoph) und Leitung sehen zuerst PRs.
-  const prsAbschnitt = (
-      <Abschnitt id="a-prs" titel={d.prs && d.prsGesamt > d.prs.length ? `PRs, die auf dich warten (die neuesten ${d.prs.length} von ${d.prsGesamt})` : 'PRs, die auf dich warten'} erklaerung="Code-Vorschläge auf GitHub (Pull Requests), bei denen du gerade dran bist — zum Prüfen, Freigeben oder Nachbessern. Entwürfe zählen nicht mit. Unter „PRs“ siehst du alle und kannst auf jede andere Person umschalten."
-        fuss={<>{d.prs && d.prs.length > 0 && d.prsGesamt <= d.prs.length && <span className="klein gedimmt">Das sind alle. </span>}<a href="v2/prs">Alle PRs →</a></>}>
-        {!d.prFrei ? <p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p>
-          : d.prs === null ? <p className="leer">Die PR-Liste ist gerade nicht erreichbar.</p>
-          : d.prs.length ? <ul className="liste">{d.prs.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul> : <p className="leer">Kein PR wartet auf dich.</p>}
-      </Abschnitt>
-  );
-  // Runde 4 (Christoph B1): Reviewer sehen gleich, wo ein Agenten-Review zu lesen ist — auch wenn die eigenen PRs noch keins haben.
-  const reviewsAbschnitt = reviewer && d.reviews?.length ? (
-      <Abschnitt id="a-reviews" titel="Zuletzt vom Prüf-Agenten geprüft" erklaerung="Offene PRs mit einem fertigen Review des Prüf-Agenten, neueste zuerst — ein Klick zeigt Urteil, Befunde und wie getestet wurde, ohne GitHub." fuss={<a href="v2/prs?wer=alle">Alle offenen PRs →</a>}>
-        <ul className="liste">{d.reviews.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul>
-      </Abschnitt>
-  ) : null;
-  const dokAbschnitt = (
-      <Abschnitt id="a-dok" titel="Neue Dokumente" erklaerung="Die zuletzt geänderten Berichte und Notizen. Alles Lesbare findest du unter „Dokumente“ — mit Suche." fuss={<a href="v2/dokumente">Alle Dokumente →</a>}>
-        {d.dokumente.length ? <ul className="liste">{d.dokumente.map((x) => <DokZeile key={x.url} x={x} />)}</ul> : <p className="leer">Keine neuen Dokumente.</p>}
-      </Abschnitt>
-  );
-  const abgenommen = d.erledigt.filter((e) => e.stand === 'abgenommen'), zumLesen = d.erledigt.filter((e) => e.stand === 'zum-lesen');
   return (
     <div className="seite">
-      {kopf}
-      {reviewer ? <>{prsAbschnitt}{reviewsAbschnitt}{jetztAbschnitt}</> : jetztAbschnitt}
-      <nav className="sprung" aria-label="Weiter unten">{d.admin && <a href="#a-laeuft">Läuft</a>}{d.admin && <a href="#a-erledigt">Heute erledigt</a>}{d.rolle === 'team' ? <><a href="#a-dok">Dokumente</a><a href="#a-prs">PRs</a></> : <><a href="#a-prs">PRs</a><a href="#a-dok">Dokumente</a></>}<a href="v2/themen">Themen</a></nav>
-      {d.admin && (
-        <Abschnitt id="a-laeuft" titel="Läuft gerade" erklaerung="Unter-Chats, an denen ein Agent gerade arbeitet — mit voraussichtlichem Ende. Du musst hier nichts tun."
-          fuss={<a href="v2/arbeit">Alle Unter-Chats →</a>}>
-          {d.laeuft.length ? <ul className="liste">{d.laeuft.slice(0, 3).map((z) => <Zeile key={z.id} titel={z.titel} url={`v2/arbeit/${z.id}`} satz={z.satz} />)}</ul> : <p className="leer">Gerade läuft nichts.</p>}
-        </Abschnitt>
+      <SuchFeld />
+      {!k.admin && !reviewer && <p className="klein gedimmt">Neu hier? <a href="v2/begriffe">Begriffe in Klartext</a> — und oben suchst du Dokumente, Chats und PRs.</p>}
+      {reviewer && (
+        <section className="abschnitt" aria-labelledby="a-prs">
+          <h2 id="a-prs">PRs, die auf dich warten</h2>
+          {!d ? <Laedt sofort text="Lädt die PRs, bei denen du dran bist …" /> : !d.prFrei ? <p className="leer">PRs sind für dich noch nicht freigegeben — frag Knut.</p>
+            : d.prs?.length ? <ul className="liste">{d.prs.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul> : <p className="leer">Kein PR wartet auf dich.</p>}
+          {!!d?.reviews?.length && <><p className="gruppe-titel">Zuletzt vom Prüf-Agenten geprüft</p><ul className="liste">{d.reviews.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul></>}
+          <p className="abschnitt-fuss"><a href="v2/prs">Alle PRs →</a></p>
+        </section>
       )}
-      {d.admin && (
-        <Abschnitt id="a-erledigt" titel="Heute erledigt" erklaerung="Was heute fertig geworden ist, mit der Uhrzeit — getrennt: was du schon abgenommen hast, und was ein Agent fertig gemacht hat, dessen Bericht du noch nicht gelesen hast. Was noch eine Antwort von dir braucht, steht oben, nicht hier.">
-          {!abgenommen.length && !zumLesen.length && <p className="leer">Heute ist noch nichts fertig geworden.</p>}
-          {abgenommen.length > 0 && <><p className="gruppe-titel">Von dir abgenommen</p>
-            <ul className="liste">{abgenommen.slice(0, 3).map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'abgenommen', ton: 'gruen' }} links={e.links.slice(1)} />)}</ul></>}
-          {zumLesen.length > 0 && <><p className="gruppe-titel">Fertig, Bericht noch nicht gelesen</p>
-            <ul className="liste">{zumLesen.slice(0, 3).map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'zum Lesen' }} />)}</ul>
-            {zumLesen.length > 3 && <p className="abschnitt-fuss"><a href="v2/arbeit#fertig">Alle fertigen unter Arbeit →</a></p>}</>}
-          <p className="abschnitt-fuss"><a href="v2/erledigt">Andere Tage ansehen →</a></p>
-        </Abschnitt>
-      )}
-      {d.rolle === 'team' ? <>{dokAbschnitt}{prsAbschnitt}</> : reviewer ? dokAbschnitt : <>{prsAbschnitt}{dokAbschnitt}</>}
+      <section className="abschnitt" aria-labelledby="a-jetzt">
+        <h2 id="a-jetzt">{karten.length ? 'Was du jetzt tun musst' : 'Jetzt'}</h2>
+        {karten.length ? <div className="karten">{karten.map((x) => <EntscheidungKarte key={x.id} k={x} beantwortet={() => app.zahl(null)} />)}</div>
+          : <p className="leer">Gerade wartet nichts auf dich.</p>}
+        {k.zahl > karten.length && <p className="abschnitt-fuss"><a href="v2/entscheidungen">Alles, was auf dich wartet →</a></p>}
+      </section>
+    </div>
+  );
+}
+
+/** Radikal simpel: eine Suche über Unter-Chats und Chats, Dokumente und PRs — Enter öffnet die Treffer. */
+function SuchFeld({ q = '' }: { q?: string }) {
+  return (
+    <form className="suche" role="search" onSubmit={(e) => { e.preventDefault(); const t = String(new FormData(e.currentTarget).get('q') ?? '').trim(); if (!t) return; history.pushState(null, '', `v2/suche?q=${encodeURIComponent(t)}`); window.dispatchEvent(new PopStateEvent('popstate')); }}>
+      <label htmlFor="such-alles" className="unsichtbar">Suchen</label>
+      <input id="such-alles" name="q" type="search" defaultValue={q} placeholder="Suchen: Chat, Dokument, PR …" />
+    </form>
+  );
+}
+
+/** Treffer der einen Suche, nach Art — je höchstens acht, dahinter der Weg zur vollen Liste. */
+export function Suche({ q }: { q: string }) {
+  const s = q.trim().toLowerCase();
+  const chats = useDaten<{ zeilen: ChatZeile[] }>(s ? 'api/v2/chats' : null);
+  const doks = useDaten<{ treffer: Dok[]; frei?: { notizen: boolean; berichte: boolean } }>(s ? `api/v2/dokumente?q=${encodeURIComponent(q.trim())}` : null);
+  const prs = useDaten<{ gesperrt?: boolean; zeilen: PrZeile[] }>(s ? 'api/v2/prs?wer=alle' : null);
+  const c = (chats.d?.zeilen ?? []).filter((z) => `${z.titel} ${z.thema ?? ''}`.toLowerCase().includes(s));
+  const p = (prs.d?.zeilen ?? []).filter((z) => `${z.pr} ${z.titel}`.toLowerCase().includes(s.replace(/^#/, '')));
+  const gruppe = (titel: string, laedt: boolean, n: number, inhalt: ReactNode, mehr: string | null) => (
+    <section className="abschnitt"><h2>{titel}</h2>{laedt ? <Laedt /> : n ? inhalt : <p className="leer">Nichts gefunden.</p>}{mehr && n > 8 && <p className="abschnitt-fuss"><a href={mehr}>Alle ansehen →</a></p>}</section>
+  );
+  return (
+    <div className="seite">
+      <SuchFeld q={q} />
+      {!s ? <p className="leer">Gib oben ein Wort ein.</p> : <>
+        {gruppe('Unter-Chats und Chats', !chats.d && !chats.fehler, c.length, <ul className="liste">{c.slice(0, 8).map((z) => <Zeile key={z.id} titel={z.titel} url={z.url ?? (z.art === 'unterchat' ? `v2/arbeit/${z.id}` : '#')} satz={ART_TEXT[z.art]} rechts={wann(z.zuletzt)} />)}</ul>, `v2/chats?q=${encodeURIComponent(q.trim())}`)}
+        {gruppe('Dokumente', !doks.d && !doks.fehler, doks.d?.treffer.length ?? 0, <ul className="liste">{(doks.d?.treffer ?? []).slice(0, 8).map((x) => <DokZeile key={x.url} x={x} />)}</ul>, `v2/dokumente?q=${encodeURIComponent(q.trim())}`)}
+        {!prs.d?.gesperrt && gruppe('PRs', !prs.d && !prs.fehler, p.length, <ul className="liste">{p.slice(0, 8).map((z) => <PrZeileView key={z.pr} p={z} />)}</ul>, 'v2/prs?wer=alle')}
+      </>}
     </div>
   );
 }
@@ -134,13 +117,13 @@ function SammelSchliessen({ x, fertig }: { x: Aufraeumen; fertig?: () => void })
 interface Ueberholt { id: string; titel: string; grund: string; beleg: string }
 const DokZeile = ({ x }: { x: Dok }) => <Zeile titel={x.titel} url={x.url} satz={x.worum} marke={{ text: x.art === 'bericht' ? 'Bericht' : 'Notiz' }} rechts={wann(x.at)} />;
 // S22 (Christoph B3): in der Liste sieht man, ob und wie der Prüf-Agent geurteilt hat — auch „prüft noch“ und „fertig, noch nicht veröffentlicht“.
-const agentMarke = (r: PrZeile['review']) => !r ? undefined : r.empfehlung ? { text: EMPFEHLUNG[r.empfehlung] ?? `Agent: ${r.empfehlung}`, ton: r.empfehlung === 'approve' ? 'gruen' : '' } : r.status !== 'fertig' ? { text: 'Agent prüft …' } : { text: r.gepostet === false ? 'Agent: Entwurf' : 'Agent-Review' };
+const agentMarke = (r: PrZeile['review']) => !r ? undefined : r.empfehlung ? { text: EMPFEHLUNG[r.empfehlung] ?? `Prüfung: ${r.empfehlung}`, ton: r.empfehlung === 'approve' ? 'gruen' : '' } : r.status !== 'fertig' ? { text: 'wird geprüft …' } : { text: r.gepostet === false ? 'Prüfung noch nicht veröffentlicht' : 'geprüft' };
 /** Paket 436 (Knut 04.11.): was nach dem letzten automatischen Fix an offenen Punkten (jeder Reviewer) geblieben ist — an der Karte. */
 const fixSatz = (f: PrZeile['fix']) => (!f ? '' : f.lesbar === false ? ' · letzter Fix: offene Punkte nicht prüfbar (PR nicht lesbar)' : f.offen ? ` · nach dem letzten Fix ${f.offen === 1 ? '1 Punkt' : `${f.offen} Punkte`} offen` : f.gesamt ? ' · letzter Fix: alle Punkte abgehakt' : '');
 const GRUND: Record<string, string> = { 'nicht-behandelt': 'vom Fix nicht behandelt', frage: 'Rückfrage des Fixes', 'nicht-behoben': 'nicht behoben', 'ohne-commit': 'als behoben gemeldet, aber ohne Commit in diesem Push' };
 const PrZeileView = ({ p }: { p: PrZeile }) => (
   <Zeile titel={`${p.pr} · ${p.titel}`} url={`v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={`${p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}${fixSatz(p.fix)}`}
-    marke={p.entwurf ? { text: 'Entwurf' } : agentMarke(p.review) ?? { text: 'noch kein Agenten-Review' }} rechts={wann(p.geaendert)} />
+    marke={p.entwurf ? { text: 'Entwurf' } : agentMarke(p.review) ?? { text: 'noch nicht geprüft' }} rechts={wann(p.geaendert)} />
 );
 
 // ---------- Entscheidungen ----------
@@ -264,7 +247,9 @@ function GeschlossenListe({ l, geoeffnet }: { l: Geschlossen[]; geoeffnet: () =>
 export function Arbeit() {
   const { d, fehler, neu } = useDaten<{ gruppen: Record<'wartet' | 'laeuft' | 'fertig', ArbeitKarte[]>; nurAdmin?: boolean }>('api/v2/arbeit');
   const [q, setQ] = useState('');
-  const [alleWartet, setAlleWartet] = useState(false);
+  // Radikal simpel: drei Reiter statt drei langer Abschnitte; „Fertig“ direkt erreichbar (Knut: „heute fertig“). Merkt sich die Wahl.
+  const [reiter, setReiter] = useState<'wartet' | 'laeuft' | 'fertig'>(() => (location.hash === '#fertig' ? 'fertig' : (sessionStorage.getItem('v2-arbeit-reiter') as any) || 'wartet'));
+  useEffect(() => { try { sessionStorage.setItem('v2-arbeit-reiter', reiter); } catch { /* egal */ } }, [reiter]);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   if (d.nurAdmin) return (
@@ -272,29 +257,32 @@ export function Arbeit() {
       <div className="willkommen"><p><b>Hier stehen deine Unter-Chats.</b> Ein Unter-Chat ist ein Auftrag, an dem ein Agent selbstständig arbeitet und am Ende einen Bericht schreibt. Du hast gerade keine — Knut verteilt die Aufträge.</p><p className="klein"><a href="v2/chats">Deine Chats durchsuchen</a> · <a href="v2/begriffe">Begriffe in Klartext</a></p></div>
     </div>
   );
-  // Runde 4 (Knut B4/B6): neueste zuerst; das Suchfeld filtert beim Tippen; „Wartet“ gekürzt, damit „Fertig“ nicht 40 Zeilen tiefer steht.
   const such = q.trim().toLowerCase();
   const sortiert = (l: ArbeitKarte[]) => [...l].filter((z) => !such || z.titel.toLowerCase().includes(such)).sort((a, b) => String(b.zuletzt ?? '').localeCompare(String(a.zuletzt ?? '')));
-  const g = { wartet: sortiert(d.gruppen.wartet), laeuft: sortiert(d.gruppen.laeuft), fertig: sortiert(d.gruppen.fertig) };
-  const KURZ = 8;
-  const liste = (l: ArbeitKarte[], leer: string, max = 0) => (l.length ? <ul className="liste">{(max ? l.slice(0, max) : l).map((z) => <Zeile key={z.id} titel={z.titel} url={`v2/arbeit/${z.id}`} satz={z.satz} rechts={wann(z.zuletzt)} links={z.links} />)}</ul> : <p className="leer">{such ? `Nichts zu „${q.trim()}“ in dieser Gruppe.` : leer}</p>);
+  const l = sortiert(d.gruppen[reiter]);
   const heute = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' });
-  const heuteFertig = d.gruppen.fertig.filter(   // ungefiltert — der Sprung führt auf die ungefilterte Seite (Pass C)
-  (z) => z.zuletzt && new Date(z.zuletzt).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }) === heute).length;
+  const istHeute = (z: ArbeitKarte) => !!z.zuletzt && new Date(z.zuletzt).toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' }) === heute;
+  // Unter „Fertig“ derselbe Satz in jeder Zeile ist Lärm — nur zeigen, was abweicht (z. B. „ohne Bericht“).
+  const zeile = (z: ArbeitKarte) => <Zeile key={z.id} titel={z.titel} url={`v2/arbeit/${z.id}`} satz={reiter === 'fertig' && z.satz.startsWith('Fertig — der Bericht liegt bereit') ? undefined : z.satz} rechts={wann(z.zuletzt)} />;
+  const REITER: [typeof reiter, string][] = [['wartet', 'Wartet auf dich'], ['laeuft', 'Läuft'], ['fertig', 'Fertig']];
   return (
     <div className="seite">
       <h1>Arbeit</h1>
-      <p className="unterzeile">Deine Unter-Chats: Aufträge, an denen Agenten selbstständig arbeiten. <a href="v2/chats">Alle Chats durchsuchen (auch alte) →</a></p>
       <form className="suche" role="search" onSubmit={(e) => { e.preventDefault(); history.pushState(null, '', q.trim() ? `v2/chats?q=${encodeURIComponent(q.trim())}` : 'v2/chats'); window.dispatchEvent(new PopStateEvent('popstate')); }}>
-        <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Unter-Chat suchen — Enter sucht auch in alten Chats" aria-label="Chats durchsuchen" />
+        <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Unter-Chat suchen — Enter sucht auch in alten Chats" aria-label="Unter-Chats durchsuchen" />
       </form>
-      {such && <p className="klein"><a href={`v2/chats?q=${encodeURIComponent(q.trim())}`}>„{q.trim()}“ in allen Chats suchen, auch alten und archivierten →</a></p>}
-      <nav className="sprung" aria-label="Auf dieser Seite"><a href="#w-wartet">Wartet ({g.wartet.length})</a><a href="#w-laeuft">Läuft ({g.laeuft.length})</a><a href="#fertig">Fertig ({g.fertig.length})</a><a href="v2/erledigt">Heute fertig ({heuteFertig})</a></nav>
-      {!such && g.wartet.length > 0 && (() => { const frage = g.wartet.filter((z) => /^Wartet auf dich/.test(z.satz)).length; return <p className="klein gedimmt">Davon {frage} mit einer Frage an dich (die zählen in der Zahl oben mit, zusammen mit Freigaben und Fragen aus Notizen) und {g.wartet.length - frage}, die hängen oder keinen Stand gemeldet haben.</p>; })()}
-      <Abschnitt id="w-wartet" titel={`Wartet auf dich (${g.wartet.length})`} erklaerung="Unter-Chats, die ohne dich nicht weiterkommen: eine offene Frage, ein Hänger oder kein Stand. Neueste zuerst; ein Klick zeigt, was genau."
-        fuss={!such && g.wartet.length > KURZ ? <button type="button" className="knopf leise klein" onClick={() => setAlleWartet(!alleWartet)}>{alleWartet ? `Nur die neuesten ${KURZ}` : `Alle ${g.wartet.length} zeigen`}</button> : null}>{liste(g.wartet, 'Kein Unter-Chat wartet auf dich.', alleWartet || such ? 0 : KURZ)}</Abschnitt>
-      <Abschnitt id="w-laeuft" titel={`Läuft (${g.laeuft.length})`} erklaerung="Hier arbeitet gerade ein Agent. Du musst nichts tun.">{liste(g.laeuft, 'Gerade läuft nichts.')}</Abschnitt>
-      <Abschnitt id="fertig" titel={`Fertig (${g.fertig.length})`} erklaerung="Fertige Unter-Chats, die du noch nicht abgenommen hast — neueste zuerst. Was heute fertig wurde, steht auch unter „Heute fertig“." fuss={<a href="v2/erledigt">Heute fertig, mit Uhrzeit →</a>}>{liste(g.fertig, 'Nichts Fertiges offen.')}</Abschnitt>
+      <div className="reiter" role="tablist" aria-label="Unter-Chats">{REITER.map(([r, t]) => <button key={r} type="button" role="tab" aria-selected={reiter === r} className={reiter === r ? 'an' : ''} onClick={() => setReiter(r)}>{t}</button>)}</div>
+      {reiter === 'fertig' ? (
+        <>
+          {!l.length ? <p className="leer">{such ? `Nichts zu „${q.trim()}“.` : 'Nichts Fertiges offen.'}</p> : <>
+            <p className="gruppe-titel">Heute</p>
+            {l.some(istHeute) ? <ul className="liste">{l.filter(istHeute).map(zeile)}</ul> : <p className="leer">Heute ist noch nichts fertig geworden.</p>}
+            {l.some((z) => !istHeute(z)) && <><p className="gruppe-titel">Früher (noch nicht abgenommen)</p><ul className="liste">{l.filter((z) => !istHeute(z)).map(zeile)}</ul></>}
+          </>}
+          <p className="abschnitt-fuss"><a href="v2/erledigt">Andere Tage ansehen →</a></p>
+        </>
+      ) : l.length ? <ul className="liste">{l.map(zeile)}</ul> : <p className="leer">{such ? `Nichts zu „${q.trim()}“ in dieser Liste.` : reiter === 'wartet' ? 'Kein Unter-Chat wartet auf dich.' : 'Gerade läuft nichts.'}</p>}
+      {such && <p className="klein"><a href={`v2/chats?q=${encodeURIComponent(q.trim())}`}>„{q.trim()}“ in allen Chats suchen, auch alten →</a></p>}
     </div>
   );
 }
@@ -312,15 +300,18 @@ export function ArbeitDetail({ id }: { id: string }) {
     <div className="seite">
       <p className="zurueck"><a href="v2/arbeit">← Arbeit</a></p>
       <h1>{d.titel}</h1>
-      <p className={`zustand ${d.gruppe}`}>{d.satz}</p>
-      <div className="aktionen-zeile"><Verweise links={d.links} /><button type="button" className="knopf leise klein" onClick={() => app.chat(chatFrage(`Unter-Chat „${d.titel}“`, d.satz))}>Im Chat nachfragen</button></div>
-      {d.abgleich && <Abgleich a={d.abgleich} />}
+      {/* Radikal simpel: ist für dich nichts mehr offen, steht genau das da — ein Satz, kein zweiter Kasten. */}
+      {d.abgleich && !d.abgleich.offenListe.length && !d.fragen.length
+        ? <p className="zustand fertig">Für dich ist hier nichts offen — deine Antworten sind beim Agenten; Bericht und Stand zieht er beim nächsten Zug nach.</p>
+        : <p className={`zustand ${d.gruppe}`}>{d.satz}</p>}
+      <div className="aktionen-zeile"><Verweise links={d.links.filter((l) => !l.extern)} /><button type="button" className="knopf leise klein" onClick={() => app.chat(chatFrage(`Unter-Chat „${d.titel}“`, d.satz))}>Im Chat nachfragen</button></div>
+      {d.abgleich && d.abgleich.offenListe.length > 0 && <Abgleich a={d.abgleich} />}
       {d.fragen.length > 0 && (
         <Abschnitt id="d-fragen" titel={d.fragen.length === 1 ? 'Diese Frage ist in deiner Liste offen' : 'Diese Fragen sind in deiner Liste offen'} erklaerung="Fragen aus diesem Unter-Chat, die noch auf deine Antwort warten. Sagt der Agent unten etwas anderes, gilt deine Antwort hier — sie geht direkt an ihn.">
           <div className="karten">{d.fragen.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div>
         </Abschnitt>
       )}
-      {d.stand && <Abschnitt id="d-stand" titel="Was der Agent zuletzt gemeldet hat" erklaerung="Der letzte Stand in den Worten des Agenten, ungekürzt — was erledigt ist, was offen ist, was er von dir braucht."><div className="kasten"><Md text={d.stand} /></div></Abschnitt>}
+      {d.stand && <details className="kasten stand-auf" open={!d.fragen.length && !d.abgleich}><summary>Letzter Stand des Agenten{d.abgleich && !d.abgleich.offenListe.length ? ' — geschrieben vor deinen Antworten' : ''}</summary><Md text={d.stand} /></details>}
       {d.nachrichten.length > 0 && !verlauf && <p><button type="button" className="knopf leise klein" onClick={() => setVerlauf(true)}>Verlauf des Unter-Chats zeigen</button></p>}
       {d.nachrichten.length > 0 && verlauf && (
         <Abschnitt id="d-verlauf" titel="Verlauf" erklaerung="Die letzten Nachrichten dieses Unter-Chats." fuss={d.nachrichten.length > 3 ? <button type="button" className="knopf leise klein" onClick={() => setAlle(!alle)}>{alle ? 'Nur die letzten 3' : `Alle ${d.nachrichten.length} zeigen`}</button> : null}>
@@ -377,11 +368,11 @@ export function Prs({ wer }: { wer: string | null }) {
       <div className="filter">
         <label htmlFor="wer">Wartet auf</label>
         <select id="wer" value={d.wer} onChange={(e) => wahl(e.target.value)}>
-          {d.personen.map((p) => <option key={p.name} value={p.name}>{p.name === 'alle' ? 'alle (offen)' : p.name === d.ich ? `mich (${p.name})` : p.name} · {p.anzahl}</option>)}
+          {d.personen.map((p) => <option key={p.name} value={p.name}>{p.name === 'alle' ? 'alle (offen)' : p.name === d.ich ? `mich (${p.name})` : p.name}</option>)}
         </select>
         <label htmlFor="pr-such" className="unsichtbar">PR suchen</label>
         <input id="pr-such" type="search" value={such} onChange={(e) => setSuch(e.target.value)} placeholder="Nummer oder Titel, z. B. 268" />
-        {entwuerfe > 0 && <label className="klein"><input type="checkbox" checked={mitEntwurf} onChange={(e) => setMitEntwurf(e.target.checked)} /> Entwürfe zeigen ({entwuerfe})</label>}
+        {entwuerfe > 0 && <label className="klein"><input type="checkbox" checked={mitEntwurf} onChange={(e) => setMitEntwurf(e.target.checked)} /> Entwürfe zeigen</label>}
       </div>
       {zeilen.length ? <ul className="liste">{zeilen.map((p) => <PrZeileView key={p.pr} p={p} />)}</ul>
         : suche && sonst.length ? null
@@ -409,7 +400,7 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
       {d.entscheidung === 'CHANGES_REQUESTED' && <p className="zustand">{d.verlangt?.wer.length ? `Änderungen verlangt von ${d.verlangt.wer.join(', ')}.` : 'GitHub meldet „Änderungen verlangt“. Wer das verlangt hat, steht nicht in unserer Kopie — das Review ist älter als die letzten, die wir lesen; auf GitHub steht es.'}</p>}
       {d.agent?.text && d.agent.kurz?.satz && (
         <div className="kasten kurzurteil">
-          <p><b>Urteil des Prüf-Agenten:</b> <span className={`marke ${d.agent.empfehlung === 'approve' ? 'gruen' : 'warn'}`}>{(EMPFEHLUNG[d.agent.empfehlung ?? ''] ?? 'Agent').replace(/^Agent: /, '')}</span>{d.agent.kurz.befunde ? ` · ${mehrzahl(d.agent.kurz.befunde, 'Befund', 'Befunde')}` : ''}</p>
+          <p><b>Urteil des Prüf-Agenten:</b> <span className={`marke ${d.agent.empfehlung === 'approve' ? 'gruen' : 'warn'}`}>{(EMPFEHLUNG[d.agent.empfehlung ?? ''] ?? 'Prüfung').replace(/^Prüfung: /, '')}</span>{d.agent.kurz.befunde ? ` · ${mehrzahl(d.agent.kurz.befunde, 'Befund', 'Befunde')}` : ''}</p>
           <p>{englisch(d.agent.kurz.satz) && <span className="klein gedimmt">Wie getestet (Originaltext, englisch): </span>}{d.agent.kurz.satz} <a href="#p-agent">Ganzes Review ↓</a></p>
         </div>
       )}
@@ -580,23 +571,24 @@ export function Erledigt({ tag }: { tag: string | null }) {
 
 export function Mehr() {
   const app = useApp();
-  const v2 = MEHR.filter((e) => e.ziel === 'v2'), alt = MEHR.filter((e) => e.ziel === 'alt');
+  const alt = MEHR.filter((e) => e.ziel === 'alt');
+  // Radikal simpel: was nicht in die vier Bereiche gehört, steht hier — nichts ist weg.
+  const SEITEN: [string, string, string][] = [
+    ['Alles, was auf dich wartet', 'v2/entscheidungen', 'Jede offene Frage und Freigabe, nach Thema — auch „Alle wie empfohlen“.'],
+    ['Dokumente', 'v2/dokumente', 'Berichte der Agenten und Notizen aus der Wissenssammlung.'],
+    ['Themen', 'v2/themen', 'Alles zu Flex, Rechner, Admin, Werkbank … auf einer Seite.'],
+    ['Alle Chats', 'v2/chats', 'Jeder Chat und Unter-Chat, auch alte — mit Suche und Filtern.'],
+    ['Erledigt', 'v2/erledigt', 'Was an einem Tag fertig wurde — mit Datumswahl.'],
+    ['Begriffe in Klartext', 'v2/begriffe', 'Was Unter-Chat, Hauptchat und „wartet auf dich“ heißen.'],
+  ];
   return (
     <div className="seite">
       <h1>Mehr</h1>
-      <p className="unterzeile">Alles, was die alte Werkbank kann, findest du hier — entweder schon in der neuen Oberfläche oder mit einem Klick in der alten.</p>
-      <Abschnitt id="m-themen" titel="Themen" erklaerung="Alles zu einem Thema auf einer Seite: Entscheidungen, Unter-Chats, Dokumente, PRs.">
-        <ul className="liste"><Zeile titel="Themen" url="v2/themen" satz="Flex, Rechner, Admin, Werkbank … — je Thema alles beisammen." /></ul>
-      </Abschnitt>
+      <ul className="liste">{SEITEN.map(([t, u, satz]) => <Zeile key={u} titel={t} url={u} satz={satz} />)}</ul>
       <Abschnitt id="m-alt" titel="In der alten Werkbank" erklaerung="Diese Seiten gibt es (noch) nur in der alten Werkbank. Ein Klick öffnet sie in einem neuen Tab; die Anmeldung gilt dort auch.">
         <ul className="liste">{alt.map((e) => <Zeile key={e.alt} titel={e.titel} url={app.alt ? `${app.alt}/${e.url}` : '#'} satz={e.satz} />)}</ul>
       </Abschnitt>
-      <Abschnitt id="m-neu" titel="Schon in der neuen Oberfläche" erklaerung="Was du aus der alten Werkbank kennst und hier schon findest.">
-        <ul className="liste">{v2.map((e) => <Zeile key={e.alt} titel={e.titel} url={e.url} satz={e.satz} />)}</ul>
-      </Abschnitt>
-      <Abschnitt id="m-konto" titel="Konto" erklaerung="Wer angemeldet ist; Abmelden gilt für dieses Gerät.">
-        <p>Angemeldet als <b>{app.ich.name}</b>. <button type="button" className="knopf leise klein" onClick={() => fetch('api/logout', { method: 'POST', headers: { 'x-werkbank': '1' } }).finally(() => window.dispatchEvent(new Event('v2-abgemeldet')))}>Abmelden</button></p>
-      </Abschnitt>
+      <p className="klein gedimmt">Angemeldet als <b>{app.ich.name}</b>. <button type="button" className="knopf leise klein" onClick={() => fetch('api/logout', { method: 'POST', headers: { 'x-werkbank': '1' } }).finally(() => window.dispatchEvent(new Event('v2-abgemeldet')))}>Abmelden</button></p>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import MarkdownIt from 'markdown-it';
 import { schicke, hole, type Karte, type Link } from './api.ts';
 import { useApp } from './kontext.ts';
-import { chatBesprechen, chatFrage, istIntern, rel, tabellenBeschriften } from './format.ts';
+import { chatBesprechen, istIntern, rel, tabellenBeschriften } from './format.ts';
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
 const linkOpen = md.renderer.rules.link_open ?? ((t, i, o, _e, s) => s.renderToken(t, i, o));
@@ -25,26 +25,16 @@ export function Verweise({ links }: { links: Link[] }) {
   return <div className="verweise">{links.map((l, i) => <Verweis key={i} l={l} />)}</div>;
 }
 
-/** „Was ist das?“ — klappt sofort eine Erklärung aus den Daten auf; „Im Chat fragen“ öffnet den Chat mit vorbereitetem Text. */
-export function WasIstDas({ zeilen, frage, strang }: { zeilen: [string, string][]; frage: string; strang?: string | null }) {
-  const [offen, setOffen] = useState(false);
+/** „Was ist das?“ an einer Karte — Erklärung aus den Daten und, bei Unter-Chats, ihr letzter Stand (erst beim Aufklappen geladen). */
+function Erklaerung({ zeilen, strang }: { zeilen: [string, string][]; strang?: string | null }) {
   const [stand, setStand] = useState<{ titel: string; stand: string } | null | 'laedt'>(null);
   const app = useApp();
-  const feld = useRef<HTMLDivElement>(null);
-  useEffect(() => { if (offen) feld.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [offen]);   // Handy: nicht unter dem Rand öffnen
-  // S22 (Knut B1): Substanz — der letzte Stand des Unter-Chats, erst beim Aufklappen geladen.
-  useEffect(() => { if (offen && strang && stand === null && app.ich.admin) { setStand('laedt'); hole<{ titel: string; stand: string }>(`api/v2/stand/${strang}`).then(setStand).catch(() => setStand({ titel: '', stand: '' })); } }, [offen, strang, app.ich.admin]);
+  useEffect(() => { if (strang && stand === null && app.ich.admin) { setStand('laedt'); hole<{ titel: string; stand: string }>(`api/v2/stand/${strang}`).then(setStand).catch(() => setStand({ titel: '', stand: '' })); } }, [strang, app.ich.admin]);
   return (
-    <div className="wid">
-      <button type="button" className="knopf leise klein" aria-expanded={offen} onClick={() => setOffen(!offen)}>{offen ? 'Erklärung schließen' : 'Was ist das?'}</button>
-      {offen && (
-        <div className="wid-text" role="region" aria-label="Erklärung" ref={feld}>
-          <dl>{zeilen.filter(([, t]) => t).map(([k, t]) => <div key={k}><dt>{k}</dt><dd>{t}</dd></div>)}</dl>
-          {stand === 'laedt' && <p className="klein gedimmt">Lädt den Stand des Unter-Chats …</p>}
-          {stand && stand !== 'laedt' && stand.stand && <div className="wid-stand"><p className="klein"><b>Zuletzt im Unter-Chat{stand.titel ? ` „${stand.titel}“` : ''}:</b></p><Md text={stand.stand} klein /></div>}
-          <button type="button" className="knopf leise klein" onClick={() => app.chat(frage)}>Im Chat fragen</button>
-        </div>
-      )}
+    <div className="wid-text" role="region" aria-label="Erklärung">
+      <dl>{zeilen.filter(([, t]) => t).map(([k, t]) => <div key={k}><dt>{k}</dt><dd>{t}</dd></div>)}</dl>
+      {stand === 'laedt' && <p className="klein gedimmt">Lädt den Stand des Unter-Chats …</p>}
+      {stand && stand !== 'laedt' && stand.stand && <details className="wid-stand"><summary className="klein">Letzter Stand des Unter-Chats{stand.titel ? ` „${stand.titel}“` : ''}</summary><Md text={stand.stand} klein /></details>}
     </div>
   );
 }
@@ -116,26 +106,26 @@ export function useDaten<T>(pfad: string | null): { d: T | null; fehler: string 
 /** Runde 4 (Knut B10): „D1 bis D8, jede mit Empfehlung …“ — eine Karte für mehrere Entscheidungen, die auf der Karte nicht stehen. */
 export const sammelKarte = (t: string) => /\bD\d{1,2}\s*(?:bis|–|-)\s*D\d{1,2}\b/.test(t);
 
-const ANTWORT_TEXT: Record<string, string> = { ja: 'Ja, so', nein: 'Nein', anders: 'Anders …', spaeter: 'Später' };
-
 /**
- * Entscheidung als Karte: Empfehlung hervorgehoben · „Ja, so“ · „Anders: …“ (Textfeld an DIESER Karte). Nach der Antwort bleibt die
- * Karte stehen und zeigt „✓ Ging an …“ (428 W9: kein Springen, kein zweiter Tipp auf die nächste Karte). Freigaben: nur der Link.
+ * Entscheidung als Karte — radikal simpel (Knut 04.11.): ein Satz und EIN Hauptknopf („Ja, so: <Empfehlung>“), leise „Anders …“ und
+ * „Was ist das?“. Dort steht alles Übrige: worum es geht, die gemeinten Entscheidungen, Nein, Später, Notiz, Chat, Links. Nach der Antwort
+ * bleibt die Karte stehen und zeigt „✓ Ging an …“ (428 W9). Freigaben: nur der Link in die alte Werkbank.
  */
 export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: () => void }) {
   const app = useApp();
   const [modus, setModus] = useState<'zu' | 'anders'>('zu');
+  const [mehr, setMehr] = useState(false);
   const [text, setText] = useState('');
-  const [notiz, setNotiz] = useState<string | null>(null);   // S15: „Ja, so“ mit kurzer Notiz
+  const [notiz, setNotiz] = useState('');
   const [laeuft, setLaeuft] = useState(false);
   const [fehler, setFehler] = useState<string | null>(null);
   const [fertig, setFertig] = useState<string | null>(null);
   const [unterwegs, setUnterwegs] = useState(false);
   const andersFeld = useRef<HTMLDivElement>(null);
   useEffect(() => { if (modus === 'anders') andersFeld.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, [modus]);
-
   const lebt = useRef(true);
   useEffect(() => () => { lebt.current = false; }, []);
+
   async function antworten(antwort: 'ja' | 'nein' | 'anders' | 'spaeter', t = '') {
     if (antwort === 'anders' && !t.trim()) { setFehler('Schreib kurz, was stattdessen.'); return; }
     setLaeuft(true); setFehler(null);
@@ -143,40 +133,30 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
     const zuweilen = setTimeout(() => { if (lebt.current) setUnterwegs(true); }, 700);
     try {
       const r = await schicke<{ ziel: string | null; spaeter: boolean }>('api/v2/antwort', { id: k.id, antwort, text: t.trim() });
+      vergessen();   // Runde 5c (Knut B2): kein zwischengespeicherter Stand, in dem die beantwortete Karte noch steht
       setFertig(r.spaeter ? 'Zurückgestellt — kommt morgen wieder.' : `Ging an ${r.ziel ?? 'die Quelle'}: ${antwort === 'ja' ? `„Ja, so“${k.empfehlung ? ` (${k.empfehlung})` : ''}${t.trim() ? ` mit Notiz „${t.trim()}“` : ''}` : antwort === 'nein' ? '„Nein“' : `„${t.trim()}“`}`);
-      if (app.testbetrieb && !r.spaeter && !/^(Unter-Chat|Hauptchat)/.test(k.quelle)) setFertig((x) => `${x} — Testbetrieb: Fragen aus Notizen bleiben hier offen und tauchen nach dem Neuladen wieder auf.`);   // nur dort stimmt der Satz (Runde 5)
+      if (app.testbetrieb && !r.spaeter && !/^(Unter-Chat|Hauptchat)/.test(k.quelle)) setFertig((x) => `${x} — Testbetrieb: Fragen aus Notizen bleiben hier offen.`);
       beantwortet?.();
     } catch (e: any) {
       if (lebt.current) setFehler(e.message);
-      else window.dispatchEvent(new CustomEvent('v2-meldung', { detail: `Deine Antwort zu „${k.titel.slice(0, 80)}“ kam nicht an: ${e.message}` }));   // Seite schon verlassen: trotzdem sagen
+      else window.dispatchEvent(new CustomEvent('v2-meldung', { detail: `Deine Antwort zu „${k.titel.slice(0, 80)}“ kam nicht an: ${e.message}` }));
     } finally { clearTimeout(zuweilen); if (lebt.current) { setLaeuft(false); setUnterwegs(false); } }
   }
 
   const freigabe = k.art === 'freigabe';
+  const ja = k.antworten.includes('ja');
+  const n = k.bezug?.length ?? 0;
+  const jaText = n ? `Ja, alle ${n} wie empfohlen` : k.empfehlung ? `Ja, so: ${k.empfehlung.length > 70 ? `${k.empfehlung.slice(0, 68)}…` : k.empfehlung}` : 'Ja';
+  const strang = k.links.map((l) => /\/v2\/arbeit\/([0-9a-f]{8})$/.exec(l.url)?.[1]).find(Boolean) ?? null;
   return (
     <article className={`karte${fertig ? ' erledigt' : ''}${freigabe ? ' freigabe' : ''}`} aria-label={k.titel}>
-      <div className="karte-meta">
-        <span className={`marke ${freigabe ? 'blau' : k.wichtig ? 'warn' : ''}`}>{freigabe ? 'Freigabe' : 'Entscheidung'}</span>
-        {k.grund && <span className="grund">{k.grund}</span>}
-      </div>
       <h3 className="karte-titel">{k.titel}</h3>
-      {k.worum && <p className="karte-worum">{k.worum}</p>}
-      {k.empfehlung && <p className="empfehlung"><b>Empfehlung:</b> {k.empfehlung}{/[⋯…]$/.test(k.empfehlung) && <span className="klein gedimmt"> (an der Quelle gekürzt — ganz unter „Was ist das?“)</span>}</p>}
-      {k.bezug?.length ? (
-        <div className="bezug">
-          <p className="klein"><b>Gemeint sind {k.bezug.length} Entscheidungen aus dem Bericht</b> — „Ja, so“ bestätigt jede Empfehlung:</p>
-          <ul className="klein">{k.bezug.map((b) => <li key={b.id}><b>{b.id}</b> {b.frage}{b.empfehlung ? <> — <i>Empfehlung: {b.empfehlung}</i></> : null}{b.antwort ? <span className="gedimmt"> (im Bericht: {b.antwort})</span> : null}</li>)}</ul>
-          {k.bericht && <p className="klein"><a href={rel(k.bericht)}>Ganzen Bericht lesen</a></p>}
-        </div>
-      ) : sammelKarte(`${k.titel} ${k.worum}`) && !freigabe ? <p className="klein hinweis-warn">Diese Karte fasst mehrere Entscheidungen zusammen, die hier nicht einzeln stehen. Lies sie im Bericht, bevor du „Ja, so“ sagst — „Ja, so“ bestätigt alle.{k.bericht ? <> <a href={rel(k.bericht)}>Bericht öffnen</a></> : null}</p> : null}
+      {sammelKarte(`${k.titel} ${k.worum}`) && !n && !freigabe && !fertig && <p className="klein hinweis-warn">Fasst mehrere Entscheidungen zusammen, die hier nicht einzeln stehen — „Ja, so“ bestätigt alle.{k.bericht ? <> <a href={rel(k.bericht)}>Im Bericht lesen</a></> : null}</p>}
 
       {fertig ? (
-        <p className="ok" role="status" ref={(el) => el?.scrollIntoView({ block: 'center', behavior: 'smooth' })}>✓ {fertig}</p>
+        <p className="ok" role="status" ref={(el) => el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })}>✓ {fertig}</p>
       ) : freigabe || k.alt ? (
-        <div className="antworten">
-          <p className="klein gedimmt">{freigabe ? 'Freigaben nach außen gibst du in der alten Werkbank — dort siehst du den genauen Stand.' : 'Das beantwortest du in der alten Werkbank.'}</p>
-          <a className="knopf" href={k.alt ?? app.alt} target="_blank" rel="noopener noreferrer">{freigabe ? 'In der alten Werkbank freigeben ↗' : 'In der alten Werkbank öffnen ↗'}</a>
-        </div>
+        <div className="antworten"><a className="knopf haupt" href={k.alt ?? app.alt} target="_blank" rel="noopener noreferrer">{freigabe ? 'In der alten Werkbank freigeben ↗' : 'In der alten Werkbank öffnen ↗'}</a><button type="button" className="knopf leise klein" aria-expanded={mehr} onClick={() => setMehr(!mehr)}>Was ist das?</button></div>
       ) : modus === 'anders' ? (
         <div className="anders" ref={andersFeld}>
           <label className="klein" htmlFor={`anders-${k.id}`}>Was stattdessen? (geht an {k.quelle || 'die Quelle'})</label>
@@ -188,29 +168,40 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
           </div>
         </div>
       ) : (
-        <>
-          {notiz !== null && (
-            <div className="anders">
-              <label className="klein" htmlFor={`notiz-${k.id}`}>Notiz zu „Ja, so“ (geht mit an {k.quelle || 'die Quelle'})</label>
-              <textarea id={`notiz-${k.id}`} rows={2} value={notiz} maxLength={2000} onChange={(e) => setNotiz(e.target.value)} placeholder="z. B. „aber erst nach dem Release“" autoFocus />
+        <div className="antworten">
+          {ja ? <button type="button" className="knopf haupt" disabled={laeuft} onClick={() => antworten('ja', notiz)}>{laeuft ? 'Sendet …' : notiz.trim() ? `${jaText} — mit Notiz` : jaText}</button>
+            : <button type="button" className="knopf haupt" onClick={() => setModus('anders')}>Antworten …</button>}
+          {ja && k.antworten.includes('anders') && <button type="button" className="knopf leise klein" disabled={laeuft} onClick={() => setModus('anders')}>Anders …</button>}
+          <button type="button" className="knopf leise klein" aria-expanded={mehr} onClick={() => setMehr(!mehr)}>{mehr ? 'Weniger' : 'Was ist das?'}</button>
+        </div>
+      )}
+      {unterwegs && !fertig && <p className="ok unterwegs" role="status">⏳ Wird an {k.quelle || 'die Quelle'} zugestellt — dauert ein paar Sekunden, du kannst weitermachen.</p>}
+      {fehler && <p className="fehlertext" role="alert">{fehler}</p>}
+
+      {mehr && (
+        <div className="karte-mehr">
+          {k.grund && <p className="klein gedimmt">{freigabe ? 'Freigabe' : 'Entscheidung'} · {k.grund}</p>}
+          {k.worum && <p className="karte-worum">{k.worum}</p>}
+          {k.empfehlung && <p className="empfehlung"><b>Empfehlung:</b> {k.empfehlung}</p>}
+          {n > 0 && (
+            <div className="bezug">
+              <p className="klein"><b>Gemeint sind {n} Entscheidungen aus dem Bericht</b> — „Ja“ bestätigt jede Empfehlung:</p>
+              <ul className="klein">{k.bezug!.map((b) => <li key={b.id}><b>{b.id}</b> {b.frage}{b.empfehlung ? <> — <i>Empfehlung: {b.empfehlung}</i></> : null}{b.antwort ? <span className="gedimmt"> (im Bericht: {b.antwort})</span> : null}</li>)}</ul>
+              {k.bericht && <p className="klein"><a href={rel(k.bericht)}>Ganzen Bericht lesen</a></p>}
             </div>
           )}
-          <div className="antworten">
-            {k.antworten.filter((a) => a !== 'spaeter').map((a) => (
-              <button type="button" key={a} className={`knopf${a === 'ja' ? ' haupt' : ''}`} disabled={laeuft} onClick={() => (a === 'anders' ? setModus('anders') : antworten(a, a === 'ja' ? notiz ?? '' : ''))}>{a === 'ja' && laeuft ? 'Sendet …' : a === 'ja' && notiz?.trim() ? 'Ja, so — mit Notiz' : ANTWORT_TEXT[a]}</button>
-            ))}
-            {k.antworten.includes('ja') && notiz === null && <button type="button" className="knopf leise klein" disabled={laeuft} onClick={() => setNotiz('')}>+ Notiz</button>}
-            {k.antworten.includes('spaeter') && <button type="button" className="knopf leise klein" disabled={laeuft} onClick={() => antworten('spaeter')}>Später</button>}
-            <button type="button" className="knopf leise klein" onClick={() => app.chat(chatBesprechen(k.titel, k.empfehlung, k.id))}>Im Chat besprechen</button>
-          </div>
-        </>
+          <Erklaerung zeilen={k.erklaerung.filter(([t]) => !['Empfehlung', 'Warum oben', 'Hält an'].includes(t))} strang={strang} />   {/* steht schon in der Grund-Zeile */}
+          {!fertig && !freigabe && !k.alt && (
+            <div className="antworten">
+              {ja && <label className="klein notiz">Notiz zu „Ja“: <input value={notiz} maxLength={2000} onChange={(e) => setNotiz(e.target.value)} placeholder="z. B. „aber erst nach dem Release“" /></label>}
+              {k.antworten.includes('nein') && <button type="button" className="knopf leise klein" disabled={laeuft} onClick={() => antworten('nein')}>Nein</button>}
+              {k.antworten.includes('spaeter') && <button type="button" className="knopf leise klein" disabled={laeuft} onClick={() => antworten('spaeter')}>Später</button>}
+              <button type="button" className="knopf leise klein" onClick={() => app.chat(chatBesprechen(k.titel, k.empfehlung, k.id))}>Im Chat besprechen</button>
+            </div>
+          )}
+          <Verweise links={k.links} />
+        </div>
       )}
-      {unterwegs && !fertig && <p className="ok unterwegs" role="status">⏳ Wird an {k.quelle || 'die Quelle'} zugestellt — das dauert ein paar Sekunden. Du kannst schon weitermachen; klappt es nicht, sagen wir es dir.</p>}
-      {fehler && <p className="fehlertext" role="alert">{fehler}</p>}
-      <div className="karte-fuss">
-        <Verweise links={k.links} />
-        <WasIstDas zeilen={k.erklaerung} frage={chatFrage(k.titel, k.erklaerung.find(([a]) => a === 'Worum es geht (ganz)')?.[1] ?? k.worum)} strang={k.links.map((l) => /\/v2\/arbeit\/([0-9a-f]{8})$/.exec(l.url)?.[1]).find(Boolean) ?? null} />
-      </div>
     </article>
   );
 }

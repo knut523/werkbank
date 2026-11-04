@@ -550,3 +550,19 @@ Auftrag Knut (04.11. vormittags): offene Befunde aus Runde 4, Knuts Aufgaben ein
 | S18c | Persona-Runde 5 (unabhängig): Knut Desktop + Handy, Christoph Desktop | Messlatte §7a | — |
 
 Annahmen (Knut kann widersprechen): Automatische Texte des Workspace (Marke „(OLAF Workspace)“: Fix-Antworten, Status, Agenten-Review) zählen im Prüfschritt nicht als offener Punkt — die Befunde des Agenten stehen im Review selbst. Ein offener Punkt hält den Push nicht an; er steht im Antwort-Kommentar und an der PR-Karte (Knut: „was offen bleibt, sichtbar an der PR-Karte“).
+
+## 21. „Radikal simpel“ (Knut 04.11.)
+
+Auftrag: „Klick durch, mach es RADIKAL simpel.“ Alles weglassen, was Knuts sechs Kernaufgaben (was ist offen · anders antworten · Was ist das? · heute fertig · Stand Unter-Chat · PRs) nicht brauchen; Start = nur „Jetzt“ (höchstens 5 Karten) + Suche; höchstens 4 Bereiche, Rest unter „Mehr“; keine Zahlen-Abzeichen außer einer; jede Karte ein Satz + 1 Hauptknopf; Fachwörter raus. Danach selbst wie Knut durchklicken (Desktop + Handy), fixen, nachtesten; Klicks und Sekunden je Aufgabe vorher/nachher.
+
+| Teil | Vorher | Nachher |
+|---|---|---|
+| Navigation | Jetzt · Entscheidungen · Arbeit · PRs · Dokumente · (Themen) · Mehr | **Jetzt · Arbeit · PRs · Mehr**; Entscheidungen über die Zahl oben, Dokumente/Themen/Chats/Erledigt/Begriffe unter „Mehr“ |
+| Start | Gruß, Hinweise, 5 Karten, Aufräumen, Sprungleiste, Läuft, Heute erledigt, PRs, Dokumente | **Suche + höchstens 5 Karten** + „Alles, was auf dich wartet →“ |
+| Suche | je Seite eigene Suche | **eine Suche** über Unter-Chats/Chats, Dokumente, PRs (`v2/suche`) |
+| Karte | Marke, Grund, Titel, Worum, Empfehlung, bis zu 7 Knöpfe, Links, „Was ist das?“ | **ein Satz + „Ja, so“** (Empfehlung im Knopf); leise „Anders …“ und „Was ist das?“ — dort alles Übrige (Worum, gemeinte D-Fragen, Nein, Später, Notiz, Chat, Links) |
+| Zahlen | Zähler an Sprüngen, Filtern, Gruppen | **nur die eine Zahl oben** |
+| Arbeit | drei lange Abschnitte untereinander | **drei Reiter** (Wartet auf dich · Läuft · Fertig), eine Liste sichtbar, Fertig mit Uhrzeit |
+| Unter-Chat | Zustand, Abgleich, Fragen, Stand offen | Zustand, offene Fragen; Stand des Agenten aufklappbar und mit Zeit |
+
+Bleibt erreichbar (unter „Mehr“), nichts gelöscht: Themen, Dokumente, Alle Chats, Erledigt (Tage), Begriffe, alte Werkbank. Messung: `werkzeug/kern.mjs` (Klicks, Sekunden), `werkzeug/fuelle.mjs` (Bedienelemente, Abschnitte, Abzeichen, Wörter), Ergebnisse in `kern/` des Pakets.
