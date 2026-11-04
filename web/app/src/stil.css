@@ -38,6 +38,7 @@ p { margin: 0 0 var(--s1); }
 .leiste > a.an { color: var(--akzent); font-weight: 600; }
 .leiste > a:hover { text-decoration: none; }
 .leiste-unten { display: none; }
+.leiste > a.nur-breit { display: none; }
 .inhalt { padding: var(--s2) var(--s2) calc(var(--leiste-h) + var(--s4) + 56px); max-width: 860px; }
 .kopf .chat-knopf { display: none; }
 .chat-fab { position: fixed; z-index: 25; right: var(--s2); bottom: calc(var(--leiste-h) + var(--s2) + env(safe-area-inset-bottom)); border: 0; border-radius: 999px;
@@ -50,6 +51,7 @@ p { margin: 0 0 var(--s1); }
   .leiste { top: var(--kopf-h); bottom: 0; right: auto; width: 220px; height: auto; flex-direction: column; padding: var(--s2) var(--s1); border-top: 0; border-right: 1px solid var(--linie); gap: 2px; }
   .leiste > a { flex: 0 0 auto; flex-direction: row; justify-content: flex-start; gap: 12px; padding: 10px 12px; border-radius: 8px; font-size: .95rem; color: var(--text); }
   .leiste > a.an { background: var(--akzent-hell); color: var(--akzent); }
+  .leiste > a.nur-breit { display: flex; }
   .leiste-unten { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: auto; padding: 12px; }
   .leiste-unten .knopf { padding-left: 0; }
   .inhalt { margin-left: 220px; padding: var(--s3) var(--s4) var(--s4); }
@@ -227,3 +229,6 @@ p { margin: 0 0 var(--s1); }
 .teilen-text { width: 100%; font: inherit; font-size: .85rem; margin-top: 6px; }
 .abgleich { border-left: 4px solid var(--warn); background: var(--warn-hell); }
 .abgleich ul { margin: 0; padding-left: 1.2em; }
+.hinweis-warn { color: var(--warn); background: var(--warn-hell); padding: 6px 10px; border-radius: 8px; }
+.teilen-hand { display: block; width: 100%; }
+.diagramm { overflow-x: auto; margin: var(--s2) 0; } .diagramm svg { max-width: 100%; height: auto; }

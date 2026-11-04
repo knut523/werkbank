@@ -118,9 +118,22 @@ export function registerV2(on: On, d: V2Deps) {
       erledigt = erledigtSicht(er.straenge.filter((s: any) => !offenJe.has(String(s.id))), zm, new Set(er.straenge.map((s: any) => String(s.id)).filter((id: string) => !zm.has(id))));
     }
     const prFrei = !d.gesperrt(u, 'roadmap');
-    const prs = prFrei ? await d.livePrs().then((g) => prSicht([...g.map.values()] as LivePrLite[], ich, d.githubNames()).filter((p) => !p.entwurf)).catch(() => null) : null;
-    send(d, res, { zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), aufraeumenGesamt: auf.length, laeuft: laeuft.slice(0, 3), laeuftGesamt: laeuft.length, erledigt, prs: prs ? prs.slice(0, r === 'reviewer' ? 5 : 3) : null, prsGesamt: prs?.length ?? 0, prFrei, notizenFrei: !d.gesperrt(u, 'wissen'), dokumente: dokumenteNeu(d, u, r === 'team' ? 5 : 3), ich: ich, admin: admin(u), rolle: r, at: new Date() });
+    const live = prFrei ? await d.livePrs().then((g) => [...g.map.values()] as LivePrLite[]).catch(() => null) : null;
+    const rv = live ? await d.letzteReviews().catch(() => []) : [];
+    // Pass Runde 4: auch die Zeilen auf „Jetzt“ tragen das Agenten-Review (sonst stand dort immer „noch kein Agenten-Review“).
+    const prs = live ? mitReview(prSicht(live, ich, d.githubNames()).filter((p) => !p.entwurf), rv, admin(u)) : null;
+    // Runde 4 (Christoph B1): Reviewer sehen die neuesten veröffentlichten Agenten-Reviews offener PRs — der Weg zum Review-Stand in einem Klick.
+    const reviews = r === 'reviewer' && live ? mitReview(prSicht(live, 'alle', d.githubNames()).filter((p) => !p.entwurf), rv, false)
+      .filter((p) => p.review?.gepostet && p.review.status === 'fertig').sort((a, b) => String(b.review!.at ?? '').localeCompare(String(a.review!.at ?? ''))).slice(0, 3) : [];
+    send(d, res, { reviews, zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), aufraeumenGesamt: auf.length, laeuft: laeuft.slice(0, 3), laeuftGesamt: laeuft.length, erledigt, prs: prs ? prs.slice(0, r === 'reviewer' ? 5 : 3) : null, prsGesamt: prs?.length ?? 0, prFrei, notizenFrei: !d.gesperrt(u, 'wissen'), dokumente: dokumenteNeu(d, u, r === 'team' ? 5 : 3), ich: ich, admin: admin(u), rolle: r, at: new Date() });
   });
+
+  /** Je PR das neueste Agenten-Review (letzteReviews ist neueste zuerst). Entwurfs-Urteil nur für Admins (wie auf der PR-Seite). */
+  function mitReview<T extends { pr: string }>(zeilen: T[], rv: any[], istAdmin: boolean): (T & { review: { empfehlung: string | null; status: string; gepostet: boolean; at: any } | null })[] {
+    const je = new Map<string, any>();
+    for (const r of rv) { const k = `${String(r.repo).split('/').pop()}#${r.number}`; if (!je.has(k)) je.set(k, r); }
+    return zeilen.map((p) => { const r = je.get(p.pr); return { ...p, review: r ? { empfehlung: istAdmin || r.posted?.url ? r.empfehlung ?? null : null, status: r.status, gepostet: !!r.posted?.url, at: r.doneAt ?? r.createdAt } : null }; });
+  }
 
   // --- Die eine Zahl (Kopf jeder Seite): dieselbe wie überall — `inboxZahl` ---
   on('GET', /^\/api\/v2\/zahl$/, async (req, res) => {
@@ -231,6 +244,7 @@ export function registerV2(on: On, d: V2Deps) {
       entscheidungen: q.kartenAlle.filter((k) => k.thema === name),
       unterchats: runs.slice(0, 30).map((r) => ({ id: String(r._id), titel: kurz(String(r.title ?? ''), 140), zuletzt: r.lastActivity ?? r.startedAt ?? null, offen: !(r.knutReviewedAt || r.reviewedAt) })),
       unterchatsGesamt: runs.length,
+      dokumenteGesamt: q.notizen.filter((n) => themaVon(null, `${n.path} ${n.title}`) === name).length,
       dokumente: q.notizen.filter((n) => themaVon(null, `${n.path} ${n.title}`) === name).slice(0, 20).map((n) => ({ art: 'notiz', titel: n.title, worum: bereich(n.path), url: `/v2/dokument?vault=${encodeURIComponent(n.path)}`, at: n.mtime ? new Date(n.mtime).toISOString() : null })),
       prs: q.prs.filter((p) => themaVon(null, `${p.repo} ${p.title}`) === name).slice(0, 20).map((p) => ({ pr: String(p.pr), titel: kurz(String(p.title ?? ''), 140), url: `/v2/prs/${encodeURIComponent(String(p.repo))}/${p.number}` })),
       notizenFrei: !d.gesperrt(u, 'wissen'), prFrei: !d.gesperrt(u, 'roadmap'),
@@ -296,9 +310,7 @@ export function registerV2(on: On, d: V2Deps) {
     const live = [...g.map.values()] as LivePrLite[];
     const names = d.githubNames();
     const rv = await d.letzteReviews().catch(() => []);
-    const je = new Map<string, any>();
-    for (const r of rv) { const k = `${String(r.repo).split('/').pop()}#${r.number}`; if (!je.has(k)) je.set(k, r); }
-    const zeilen = prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)).map((p) => { const r = je.get(p.pr); return { ...p, review: r ? { empfehlung: admin(u) || r.posted?.url ? r.empfehlung ?? null : null, status: r.status, gepostet: !!r.posted?.url, at: r.doneAt ?? r.createdAt } : null }; });   // Entwurfs-Urteil nur für Admins (wie auf der PR-Seite)
+    const zeilen = mitReview(prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)), rv, admin(u));
     const ohneEntwurf = live.filter((p) => !p.isDraft);
     send(d, res, { wer, ich, personen: [...personen(ohneEntwurf, ich, names), { name: 'alle', anzahl: ohneEntwurf.length }], zeilen, stand: g.sync?.at ?? null, at: new Date() });
   });

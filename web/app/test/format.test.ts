@@ -51,3 +51,9 @@ test('S22 (B5): Tabellenzellen bekommen ihren Spaltennamen für die Handy-Ansich
   assert.match(o, /<td style="text-align:right" data-label="Schwere">mittel<\/td>/);
   assert.equal(tabellenBeschriften('<p>keine Tabelle</p>'), '<p>keine Tabelle</p>');
 });
+
+test('Runde 4 (Knut B12): Statuszeilen der Brücke fallen aus der fertigen Antwort — Fett, Listen und Text bleiben', async () => {
+  const { ohneStatuszeilen } = await import('../src/format.ts');
+  const t = '*⏳ Claude arbeitet …*  \n*🔧 Read datei.ts*  \n\nHier die Antwort.\n**Wichtig:** bleibt\n* Punkt bleibt\n*a* und *b* bleiben';
+  assert.equal(ohneStatuszeilen(t), 'Hier die Antwort.\n**Wichtig:** bleibt\n* Punkt bleibt\n*a* und *b* bleiben');
+});

@@ -39,7 +39,7 @@ export interface Aufraeumen { id: string; titel: string; worum: string; url: str
 export interface Dok { art: 'bericht' | 'notiz'; titel: string; worum: string; url: string; at: string | null }
 export interface Start {
   zahl: number; jetzt: Karte[]; aufraeumen: Aufraeumen[]; aufraeumenGesamt: number; laeuft: ArbeitKarte[]; erledigt: { id: string; titel: string; uhr: string; stand: 'abgenommen' | 'zum-lesen'; links: Link[] }[];
-  prs: PrZeile[] | null; prsGesamt: number; laeuftGesamt: number; prFrei: boolean; notizenFrei: boolean; dokumente: Dok[]; ich: string; admin: boolean;
+  prs: PrZeile[] | null; prsGesamt: number; reviews?: PrZeile[]; laeuftGesamt: number; prFrei: boolean; notizenFrei: boolean; dokumente: Dok[]; ich: string; admin: boolean;
   /** S13: Startansicht je Rolle (Server: v2kern.rolle) — leitung, reviewer (hat GitHub-Namen), team. */
   rolle?: 'leitung' | 'reviewer' | 'team';
 }

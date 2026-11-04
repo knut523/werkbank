@@ -14,14 +14,16 @@ const BEREICHE = [
   { url: 'v2/arbeit', label: 'Arbeit', ico: '⚙', passt: (p: string) => p.startsWith('v2/arbeit') || p.startsWith('v2/chats') },
   { url: 'v2/prs', label: 'PRs', ico: '⇄', passt: (p: string) => p.startsWith('v2/prs') },
   { url: 'v2/dokumente', label: 'Dokumente', ico: '▤', passt: (p: string) => p.startsWith('v2/dokument') },
-  { url: 'v2/mehr', label: 'Mehr', ico: '⋯', passt: (p: string) => p.startsWith('v2/mehr') || p.startsWith('v2/erledigt') || p.startsWith('v2/them') },
+  // Runde 4 (Knut B15): Themen am Desktop direkt in der Leiste; am Handy bleibt die untere Leiste bei sechs Einträgen (Themen unter „Mehr“).
+  { url: 'v2/themen', label: 'Themen', ico: '◇', passt: (p: string) => p.startsWith('v2/them'), breit: true },
+  { url: 'v2/mehr', label: 'Mehr', ico: '⋯', passt: (p: string) => p.startsWith('v2/mehr') || p.startsWith('v2/erledigt') || (p.startsWith('v2/them') && innerWidth < 900) },
 ];
 
 /** Zu einer Sprungmarke scrollen, sobald der Abschnitt gerendert ist (Daten laden nach) — höchstens 3 s warten. */
 function springZu(hash: string) {
   if (!hash || hash.length < 2) return;
   let n = 0;
-  const t = setInterval(() => { const el = document.getElementById(decodeURIComponent(hash.slice(1))); if (el || ++n > 30) { clearInterval(t); el?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 100);
+  const t = setInterval(() => { const el = document.getElementById(decodeURIComponent(hash.slice(1))); if (el || ++n > 30) { clearInterval(t); el?.scrollIntoView({ block: 'start' }); } }, 100);
 }
 
 function useAdresse() {
@@ -33,11 +35,15 @@ function useAdresse() {
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       const a = (e.target as HTMLElement).closest('a');
       const href = a?.getAttribute('href');
-      if (href?.startsWith('#') && a) { e.preventDefault(); document.getElementById(href.slice(1))?.scrollIntoView({ behavior: 'smooth' }); return; }   // Sprungmarken
+      // Sprungmarken springen sofort (Runde 4, Christoph B3): während einer weichen Animation ging der nächste Tipp ins Leere.
+      if (href?.startsWith('#') && a) { e.preventDefault(); document.getElementById(href.slice(1))?.scrollIntoView({ block: 'start' }); return; }
       if (!a || !href || a.target || !istIntern(href)) return;
       e.preventDefault();
       const ziel = new URL(rel(href), document.baseURI);   // relativ zu <base href> (S16)
-      if (ziel.pathname + ziel.search + ziel.hash !== location.pathname + location.search + location.hash) { history.pushState(null, '', ziel.pathname + ziel.search + ziel.hash); window.scrollTo(0, 0); }
+      if (ziel.pathname + ziel.search + ziel.hash !== location.pathname + location.search + location.hash) {
+        try { sessionStorage.setItem('v2-vorher', location.pathname + location.search); } catch { /* egal */ }   // Runde 4 (Knut B5): „← zurück“ dorthin, woher man kam
+        history.pushState(null, '', ziel.pathname + ziel.search + ziel.hash); window.scrollTo(0, 0);
+      }
       springZu(ziel.hash);   // Runde 3 (B4): Sprungmarke auf der Zielseite, sobald sie geladen ist
       neu();
     };
@@ -116,7 +122,7 @@ export function App() {
           </div>
         </header>
         <nav className="leiste" aria-label="Bereiche">
-          {BEREICHE.map((b) => <a key={b.url} href={b.url} className={b.passt(pfad) ? 'an' : ''} aria-current={b.passt(pfad) ? 'page' : undefined}><span className="ico" aria-hidden="true">{b.ico}</span><span>{b.label}</span></a>)}
+          {BEREICHE.map((b) => <a key={b.url} href={b.url} className={`${b.passt(pfad) ? 'an' : ''}${'breit' in b ? ' nur-breit' : ''}`} aria-current={b.passt(pfad) ? 'page' : undefined}><span className="ico" aria-hidden="true">{b.ico}</span><span>{b.label}</span></a>)}
           <div className="leiste-unten">
             <span className="klein gedimmt">Angemeldet als {konto.name}</span>
             {alt && <a className="klein" href={`${alt}/heute`} target="_blank" rel="noopener noreferrer">Alte Werkbank ↗</a>}

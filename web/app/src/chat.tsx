@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { hole, schicke } from './api.ts';
 import { useApp } from './kontext.ts';
 import { Md } from './teile.tsx';
+import { ohneStatuszeilen } from './format.ts';
 
 interface Nachricht { id: string; rolle: 'ich' | 'assistent'; text: string; at: string; status: string; fehler?: string | null }
 interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string; vorlage?: string | null }[]; conv?: string | null; vorlagen?: { name: string; label: string; beschreibung: string }[] }
@@ -85,7 +86,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
         )}
         {stand?.nachrichten.map((n) => (
           <div key={n.id} className={`blase ${n.rolle}`}>
-            {n.rolle === 'assistent' && !n.text && n.status === 'laeuft' ? <p className="gedimmt">schreibt …</p> : <Md text={n.text} klein />}
+            {n.rolle === 'assistent' && !n.text && n.status === 'laeuft' ? <p className="gedimmt">schreibt …</p> : <Md text={n.status === 'laeuft' ? n.text : ohneStatuszeilen(n.text)} klein />}
             {n.status === 'abgebrochen' && <p className="fehlertext klein">Abgebrochen: {n.fehler ?? 'die Antwort lief nicht zu Ende.'}</p>}
             {n.status === 'fehler' && <p className="fehlertext klein">{n.fehler ?? 'Die Antwort kam nicht an.'}</p>}
           </div>
@@ -97,7 +98,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
       {!ohneZugang && !(ziel === 'hauptchat' && stand && !stand.hauptchat) && (
         <form className="chat-eingabe" onSubmit={(e) => { e.preventDefault(); void senden(); }}>
           {ziel === 'eigen' && !conv && !!stand?.vorlagen?.length && (
-            <label className="klein vorlage-wahl">Vorlage (wie in LibreChat, optional): <select value={vorlage} onChange={(e) => setVorlage(e.target.value)}>
+            <label className="klein vorlage-wahl">Vorlage (optional): <select value={vorlage} onChange={(e) => setVorlage(e.target.value)}>
               <option value="">keine — freier Chat</option>
               {stand.vorlagen.map((v) => <option key={v.name} value={v.name} title={v.beschreibung}>{v.label}</option>)}
             </select></label>

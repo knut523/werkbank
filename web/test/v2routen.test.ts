@@ -211,3 +211,18 @@ test('Runde 4 (Knut B2): Unter-Chat-Seite sagt, was gilt — Abgleich nur bei Wi
   assert.equal((await rufe('GET', '/api/v2/arbeit/abcd1234', ADMIN)).status, 200, 'Abgleich kaputt: Seite lädt trotzdem');
   delete deps.abgleich;
 });
+
+test('Runde 4 (Christoph B1): Reviewer-Start zeigt veröffentlichte Agenten-Reviews offener PRs; PR-Zeilen auf „Jetzt“ tragen das Review', async () => {
+  const CHRISTOPH = { id: 'c', email: 'c@x', name: 'Christoph Muster', role: 'USER' } as any;
+  const vorher = deps.letzteReviews;
+  deps.letzteReviews = async () => [{ repo: 'o/a', number: 1, status: 'fertig', empfehlung: 'comment', posted: { url: 'https://github.com/o/a/pull/1#r' }, doneAt: '2026-11-03T10:00:00Z' }];
+  const c = await rufe('GET', '/api/v2/start', CHRISTOPH);
+  assert.deepEqual(c.b.reviews.map((p: any) => [p.pr, p.review.empfehlung]), [['a#1', 'comment']]);
+  deps.letzteReviews = async () => [{ repo: 'o/a', number: 1, status: 'fertig', empfehlung: 'approve', posted: null }];
+  assert.deepEqual((await rufe('GET', '/api/v2/start', CHRISTOPH)).b.reviews, [], 'Entwurf (nicht veröffentlicht): nicht auf dem Reviewer-Start');
+  deps.rolleEinstellung = 'leitung';
+  const k = await rufe('GET', '/api/v2/start', ADMIN);
+  assert.deepEqual(k.b.reviews, [], 'nur für Reviewer');
+  deps.rolleEinstellung = null;
+  deps.letzteReviews = vorher;
+});

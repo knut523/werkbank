@@ -113,6 +113,9 @@ export function useDaten<T>(pfad: string | null): { d: T | null; fehler: string 
   return { d, fehler, neu: () => setN((x) => x + 1) };
 }
 
+/** Runde 4 (Knut B10): „D1 bis D8, jede mit Empfehlung …“ — eine Karte für mehrere Entscheidungen, die auf der Karte nicht stehen. */
+export const sammelKarte = (t: string) => /\bD\d{1,2}\s*(?:bis|–|-)\s*D\d{1,2}\b/.test(t);
+
 const ANTWORT_TEXT: Record<string, string> = { ja: 'Ja, so', nein: 'Nein', anders: 'Anders …', spaeter: 'Später' };
 
 /**
@@ -150,7 +153,8 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
       </div>
       <h3 className="karte-titel">{k.titel}</h3>
       {k.worum && <p className="karte-worum">{k.worum}</p>}
-      {k.empfehlung && <p className="empfehlung"><b>Empfehlung:</b> {k.empfehlung}</p>}
+      {k.empfehlung && <p className="empfehlung"><b>Empfehlung:</b> {k.empfehlung}{/[⋯…]$/.test(k.empfehlung) && <span className="klein gedimmt"> (an der Quelle gekürzt — ganz unter „Was ist das?“)</span>}</p>}
+      {sammelKarte(`${k.titel} ${k.worum}`) && !freigabe && <p className="klein hinweis-warn">Diese Karte fasst mehrere Entscheidungen zusammen, die hier nicht einzeln stehen. Lies sie im Bericht, bevor du „Ja, so“ sagst — „Ja, so“ bestätigt alle.</p>}
 
       {fertig ? (
         <p className="ok" role="status" ref={(el) => el?.scrollIntoView({ block: 'center', behavior: 'smooth' })}>✓ {fertig}</p>
