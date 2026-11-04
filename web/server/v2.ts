@@ -10,6 +10,7 @@ import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
 import { jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
+import { dodAus, fastFertig, endenAus } from './dod.ts';
 import type { Abgleich } from './fragenbericht.ts';
 import * as librechat from './v2librechat.ts';
 
@@ -117,6 +118,18 @@ async function mitBezug(d: V2Deps, u: User, ks: V2Karte[]): Promise<V2Karte[]> {
     if (!k.links.some((l) => l.url === k.bericht)) k.links = [{ label: 'Bericht', url: k.bericht }, ...k.links];
   }
   return ks;
+}
+
+/** Runde 7 (Knut: DoD): fertig gemeldete Unter-Chats mit offener DoD-Zeile oder Folge-Aufgabe sind „fast fertig“ — je id der Satz. */
+async function fastFertigJe(d: V2Deps, u: User, ids: string[]): Promise<Map<string, { satz: string; stand: string; titel: string }>> {
+  const out = new Map<string, { satz: string; stand: string; titel: string }>();
+  await Promise.all(ids.slice(0, 40).map(async (id) => {
+    const doc = await d.strang(u, id).catch(() => null);
+    const stand = String(doc?.standVoll || doc?.lastExcerpt || '');
+    const f = doc ? fastFertig(dodAus(stand)) : null;
+    if (f) out.set(id, { satz: `Fast fertig — fehlt: ${f.fehlt.slice(0, 3).join('; ')}${f.fehlt.length > 3 ? ' …' : ''}${f.wartetAuf.length ? `; wartet auf: ${f.wartetAuf.join(', ')}` : ''}.`, stand, titel: String(doc.title ?? '') });
+  }));
+  return out;
 }
 
 /** Was keine Frage ist (Pflege, Altbestand, Schlange …) zählt in die eine Zahl — also auch zeigen, mit Link in die alte Werkbank. */
@@ -278,6 +291,7 @@ export function registerV2(on: On, d: V2Deps) {
     if (!name || name.length > 200) throw err(400, 'Welches Thema?');
     const [q, liste, st] = await Promise.all([themenQuellen(u), admin(u) ? d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })) : Promise.resolve({ zeilen: [] as any[] }), admin(u) && d.zustaende ? d.zustaende(u).catch(() => null) : Promise.resolve(null)]);
     const zm = new Map(liste.zeilen.map((z: any) => [String(z.id), z]));
+    const ffThema = await fastFertigJe(d, u, liste.zeilen.filter((z: any) => arbeitGruppe(z) === 'fertig' && themaVon(themaOf(z), String(z.titel ?? '')) === name).map((z: any) => String(z.id)));
     const runs = q.runs.filter((r) => r.kind !== 'leitstand' && themaVon(themaOf(r), String(r.title ?? '')) === name)
       .sort((a, b) => String(b.lastActivity ?? b.startedAt ?? '').localeCompare(String(a.lastActivity ?? a.startedAt ?? '')));
     send(d, res, {
@@ -285,7 +299,7 @@ export function registerV2(on: On, d: V2Deps) {
       entscheidungen: await mitBezug(d, u, q.kartenAlle.filter((k) => k.thema === name)),
       // Runde 7 (Knut): je Unter-Chat sein Zustand — wartet · läuft · fertig · abgenommen — mit dem Satz wie unter „Arbeit“.
       unterchats: runs.slice(0, 40).map((r) => { const z = zm.get(String(r._id)); const lauf = st?.get(String(r.conv ?? '')); const jetzt = lauf?.running ? jetztSatz(lauf.jetzt) : null;   // Runde 7: auch in der Themenansicht, was er gerade tut
-        return { id: String(r._id), titel: kurz(String(r.title ?? ''), 140), zuletzt: r.lastActivity ?? r.startedAt ?? null, offen: !(r.knutReviewedAt || r.reviewedAt), gruppe: z ? arbeitGruppe(z) : 'abgenommen', satz: jetzt ? `Jetzt: ${jetzt}` : z ? zustandSatz(z) : 'Abgenommen.' }; }),
+        return { id: String(r._id), titel: kurz(String(r.title ?? ''), 140), zuletzt: r.lastActivity ?? r.startedAt ?? null, offen: !(r.knutReviewedAt || r.reviewedAt), gruppe: z ? arbeitGruppe(z) : 'abgenommen', satz: jetzt ? `Jetzt: ${jetzt}` : ffThema.get(String(r._id))?.satz ?? (z ? zustandSatz(z) : 'Abgenommen.') }; }),
       unterchatsGesamt: runs.length,
       dokumenteGesamt: q.notizen.filter((n) => themaVon(null, `${n.path} ${n.title}`) === name).length,
       dokumente: q.notizen.filter((n) => themaVon(null, `${n.path} ${n.title}`) === name).slice(0, 20).map((n) => ({ art: 'notiz', titel: n.title, worum: bereich(n.path), url: `/v2/dokument?vault=${encodeURIComponent(n.path)}`, at: n.mtime ? new Date(n.mtime).toISOString() : null })),
@@ -312,7 +326,19 @@ export function registerV2(on: On, d: V2Deps) {
     const convVon = new Map(runs.map((r: any) => [String(r._id), String(r.conv ?? '')]));
     // Runde 7: was ein laufender Unter-Chat gerade tut, in Klartext — ohne den Chat zu öffnen.
     const k = liste.zeilen.map(arbeitKarte).map((x) => { const s = st?.get(convVon.get(x.id) ?? ''); const j = s?.running ? jetztSatz(s.jetzt) : null; return j ? { ...x, satz: `Jetzt: ${j}` } : s?.queued ? { ...x, satz: `Wartet in der Schlange (Platz ${s.queued.pos}) und startet von selbst.` } : x; });
-    send(d, res, { gruppen: { wartet: k.filter((x) => x.gruppe === 'wartet'), laeuft: k.filter((x) => x.gruppe === 'laeuft'), fertig: k.filter((x) => x.gruppe === 'fertig').slice(0, 30) }, at: new Date() });
+    const fertig = k.filter((x) => x.gruppe === 'fertig').slice(0, 30);
+    const ff = await fastFertigJe(d, u, fertig.map((x) => x.id));   // Runde 7: „fertig“ nur mit DoD-Beleg, sonst „fast fertig“
+    send(d, res, { gruppen: { wartet: k.filter((x) => x.gruppe === 'wartet'), laeuft: k.filter((x) => x.gruppe === 'laeuft'), fertig: fertig.map((x) => (ff.has(x.id) ? { ...x, satz: ff.get(x.id)!.satz, fast: true } : x)) }, at: new Date() });
+  });
+
+  // --- Runde 7 (Knut: DoD): liegen gebliebene Enden — offene DoD-Zeilen und Folge-Aufgaben fertig gemeldeter Unter-Chats, mit Besitzer ---
+  on('GET', /^\/api\/v2\/enden$/, async (req, res) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) return send(d, res, { enden: [] });
+    const liste = await d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] }));
+    const ids = liste.zeilen.filter((z: any) => arbeitGruppe(z) === 'fertig').map((z: any) => String(z.id));
+    const ff = await fastFertigJe(d, u, ids);
+    send(d, res, { enden: endenAus([...ff].map(([id, x]) => ({ id, titel: x.titel, stand: x.stand, fertig: true }))) });
   });
   on('GET', /^\/api\/v2\/arbeit\/([0-9a-f]{8})$/, async (req, res, m) => {
     const u = await d.needUser(req);
@@ -353,11 +379,12 @@ export function registerV2(on: On, d: V2Deps) {
         ...(doc.paket && d.paketDateien ? d.paketDateien(String(doc.paket)).filter((f) => f.rel !== 'bericht.md' && !/(^|\/)\./.test(f.rel)).slice(0, 15).map((f) => ({ label: f.rel, url: /\.md$/i.test(f.rel) ? `/v2/dokument?paket=${encodeURIComponent(doc.paket)}&datei=${encodeURIComponent(f.rel)}` : `/api/files/agenten/${encodeURIComponent(doc.paket)}/${f.rel.split('/').map(encodeURIComponent).join('/')}` })) : []),
       ].slice(0, 30),
       beruehrt: { repos: gh.map((g) => `${String(g.repo ?? '').split('/').pop()}${g.zweig ? ` · ${g.zweig}` : ''}`).filter(Boolean), text: standZeile(stand, 'Berührt'), ordner: doc.cwd ? String(doc.cwd).split('/').filter(Boolean).slice(-2).join('/') : null, dateien: ((s?.written ?? []) as string[]).slice(-6).map((f) => f.split('/').pop()) },
+      dod: dodAus(stand), fast: z && arbeitGruppe(z) === 'fertig' ? fastFertig(dodAus(stand)) : null,
       modell: s?.turn?.modell ?? doc.lastModell ?? doc.modell ?? null, laufzeitMin: doc.startedAt ? Math.round((Date.now() - new Date(doc.startedAt).getTime()) / 60000) : null, zugTokens: s?.zugTokens ?? null,
     };
     // Runde 5 (Knut B1): ist deine Nachricht die letzte im Verlauf, wartet der Unter-Chat auf den Agenten, nicht auf dich.
     const zuletztIch = nachrichten.length > 0 && nachrichten[nachrichten.length - 1].rolle === 'ich' && (!z || !['laeuft', 'schlange'].includes(z.zustand));
-    send(d, res, { id: m[1], titel: String(doc.title ?? ''), satz: zuletztIch ? `Deine Nachricht ist zugestellt (${wann2(nachrichten[nachrichten.length - 1].at)}) — der Agent hat noch nicht geantwortet. Du musst nichts tun.` : z ? zustandSatz(z) : 'Fertig und von dir abgenommen.', gruppe: z ? arbeitGruppe(z) : 'fertig', zuletzt: z?.zuletzt ?? doc.statusAt ?? null,
+    send(d, res, { id: m[1], titel: String(doc.title ?? ''), satz: zuletztIch ? `Deine Nachricht ist zugestellt (${wann2(nachrichten[nachrichten.length - 1].at)}) — der Agent hat noch nicht geantwortet. Du musst nichts tun.` : steckbrief.fast ? `Fast fertig — fehlt: ${steckbrief.fast.fehlt.join('; ')}${steckbrief.fast.wartetAuf.length ? `; wartet auf: ${steckbrief.fast.wartetAuf.join(', ')}` : ''}.` : z ? zustandSatz(z) : 'Fertig und von dir abgenommen.', gruppe: z ? arbeitGruppe(z) : 'fertig', zuletzt: z?.zuletzt ?? doc.statusAt ?? null,
       stand, steckbrief, abgleich: abgleich?.widerspruch ? abgleich : null, fragen, nachrichten, links, at: new Date() });
   });
 

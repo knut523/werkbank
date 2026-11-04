@@ -8,6 +8,7 @@
 // Schreiben, keine Rückfragen. Status kommt aus dem ausdrücklichen Zustand der Brücke (Zug läuft / Ausgang) und —
 // nur bei normalem Ende — aus der Status-Marke der letzten Antwort.
 
+import { DOD_PFLICHT } from './dod.ts';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -135,11 +136,15 @@ export function orchBrief(b: BriefInput): string {
       '- Jetzt: … (ein Satz in Klartext, was du gerade bzw. als Nächstes tust — z. B. „baut die PDF-Vorschau“)',
       '- Schritte: [x] … · [ ] … (dein Plan als kurze Schrittliste, erledigte mit [x])',
       '- Berührt: Repo, Zweig, Bereiche/Dateien (damit sichtbar ist, wer sich in die Quere kommen könnte)',
+      // Paket 436 (Knut 04.11.: „Sachen dann wirklich zu Ende machen“): DoD-Liste mit Beleg je Zeile, Restpunkte mit Besitzer.
+      '- DoD: [x] Zeile — Beleg (Link/SHA/Zahl/Screenshot) · [ ] Zeile (Besitzer: Knut|Hauptchat|…)',
+      '- Folge: … (Besitzer: …) — je Restpunkt eine Zeile, statt Fließtext im Bericht',
       '- Regeln: AGENTS.md gelesen · olaf-feedback-check n/n mit Beleg · Checkliste: ohne Befund | Befunde …',
       ETA_ZEILE,
       'Übergibst du etwas an den Hauptchat (oder eine Person), schreib im Stand-Block die Zeile „- Übergeben an: Hauptchat — was genau“ und setz Status: fertig — dann gilt dein Strang als übergeben und es bleibt keine „Braucht Knut“-Zeile stehen.',
       'Status: fertig | braucht Antwort | blockiert',
       '```',
+      `DoD: Leg die Liste in deiner ERSTEN Antwort an — wörtlich aus Plan/Spec, sonst aus dem Auftrag abgeleitet — und führ sie bis zum Ende mit. Pflichtzeilen je Art: Code: ${DOD_PFLICHT.code.join(' · ')}; Dokument: ${DOD_PFLICHT.dokument.join(' · ')}; Release: ${DOD_PFLICHT.release.join(' · ')}. „Status: fertig“ nur, wenn JEDE Zeile [x] mit Beleg hat; was du nicht selbst erledigen darfst (z. B. Push), bekommt einen Besitzer und wird eine „Folge:“-Zeile — dann heißt der Strang in der Werkbank „fast fertig“, nicht „fertig“.`,
       'Schreib den Abschnitt selbst als normales Markdown, nicht als Codeblock. Die ETA schätzt du schon in der ersten Antwort (Uhrzeit in Wiener Zeit oder Dauer ab jetzt) und ziehst sie bei jeder Antwort nach. Bei „Status: fertig“ lässt du die ETA-Zeile weg.',
     ].join('\n'),
     BERICHT_PFLICHT,

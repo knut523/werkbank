@@ -306,3 +306,20 @@ test('Runde 7 (Abgleich): Nachricht an einen Unter-Chat — nur Admin, nur eigen
     assert.equal((await rufe('POST', '/api/v2/arbeit/ffffffff/nachricht', ADMIN, { text: 'x' })).status, 404);
   } finally { delete deps.nachreichen; }
 });
+
+test('Runde 7 (Knut: DoD): fertig ohne Beleg je Zeile heißt „fast fertig“ — in Arbeit, im Steckbrief und als liegen gebliebene Enden', async () => {
+  const altListe = deps.unterchatListe, altStrang = deps.strang;
+  const stand = '### Stand\n- DoD: [x] Tests grün — 12/0 · [ ] Push/PR (Besitzer: Knut)\n- Folge: Vault nachziehen (Besitzer: Hauptchat)\nStatus: fertig';
+  deps.unterchatListe = async () => ({ zeilen: [{ id: 'abcd1234', titel: 'Rechner', zustand: 'fertig', bericht: true, paket: 'p' }] });
+  deps.strang = async (u: any, id: string) => (u.id === 'k' && id === 'abcd1234' ? { _id: id, title: 'Rechner', lastExcerpt: stand, paket: null } : null);
+  try {
+    const a = await rufe('GET', '/api/v2/arbeit', ADMIN);
+    assert.match(a.b.gruppen.fertig[0].satz, /^Fast fertig — fehlt: Push\/PR; Vault nachziehen; wartet auf: Knut, Hauptchat\./);
+    const e = await rufe('GET', '/api/v2/enden', ADMIN);
+    assert.deepEqual(e.b.enden.map((x: any) => [x.text, x.besitzer]), [['Push/PR', 'Knut'], ['Vault nachziehen', 'Hauptchat']]);
+    const det = await rufe('GET', '/api/v2/arbeit/abcd1234', ADMIN);
+    assert.match(det.b.satz, /^Fast fertig/);
+    assert.equal(det.b.steckbrief.dod.zeilen.length, 2);
+    assert.deepEqual((await rufe('GET', '/api/v2/enden', LISA)).b.enden, [], 'nur Admin');
+  } finally { deps.unterchatListe = altListe; deps.strang = altStrang; }
+});

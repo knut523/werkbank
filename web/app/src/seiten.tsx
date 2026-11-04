@@ -34,6 +34,7 @@ export function Jetzt() {
     <div className="seite">
       <SuchFeld />
       <ThemenLeiste />
+      {k.admin && <Enden kurz />}
       {!k.admin && !reviewer && <p className="klein gedimmt">Neu hier? <a href="v2/begriffe">Begriffe in Klartext</a> — und oben suchst du Dokumente, Chats und PRs.</p>}
       {reviewer && (
         <section className="abschnitt" aria-labelledby="a-prs">
@@ -278,10 +279,12 @@ export function Arbeit() {
       <div className="reiter" role="tablist" aria-label="Unter-Chats">{REITER.map(([r, t]) => <button key={r} type="button" role="tab" aria-selected={reiter === r} className={reiter === r ? 'an' : ''} onClick={() => setReiter(r)}>{t}</button>)}</div>
       {such ? (l.length ? <ul className="liste">{l.map(zeile)}</ul> : <p className="leer">Nichts zu „{q.trim()}“ in deinen Unter-Chats.</p>) : reiter === 'fertig' ? (
         <>
+          <Enden />
           {!l.length ? <p className="leer">{such ? `Nichts zu „${q.trim()}“.` : 'Nichts Fertiges offen.'}</p> : <>
-            <p className="gruppe-titel">Heute</p>
-            {l.some(istHeute) ? <ul className="liste">{l.filter(istHeute).map(zeile)}</ul> : <p className="leer">Heute ist noch nichts fertig geworden.</p>}
-            {l.some((z) => !istHeute(z)) && <><p className="gruppe-titel">Früher (noch nicht abgenommen)</p><ul className="liste">{l.filter((z) => !istHeute(z)).map(zeile)}</ul></>}
+            {l.some((z) => z.fast) && <><p className="gruppe-titel">Fast fertig — es fehlt noch etwas</p><ul className="liste">{l.filter((z) => z.fast).map(zeile)}</ul></>}
+            <p className="gruppe-titel">Heute fertig</p>
+            {l.some((z) => !z.fast && istHeute(z)) ? <ul className="liste">{l.filter((z) => !z.fast && istHeute(z)).map(zeile)}</ul> : <p className="leer">Heute ist noch nichts ganz fertig geworden.</p>}
+            {l.some((z) => !z.fast && !istHeute(z)) && <><p className="gruppe-titel">Früher (noch nicht abgenommen)</p><ul className="liste">{l.filter((z) => !z.fast && !istHeute(z)).map(zeile)}</ul></>}
           </>}
           <p className="abschnitt-fuss"><a href="v2/erledigt">Andere Tage ansehen →</a></p>
         </>
@@ -328,6 +331,21 @@ export function ArbeitDetail({ id }: { id: string }) {
   );
 }
 
+/** Runde 7 (Knut: DoD): liegen gebliebene Enden — was fertig gemeldete Unter-Chats noch offen lassen, je mit Besitzer. */
+function Enden({ kurz = false }: { kurz?: boolean }) {
+  const app = useApp();
+  const { d } = useDaten<{ enden: { strand: string; titel: string; text: string; besitzer: string | null }[] }>(app.ich.admin ? 'api/v2/enden' : null);
+  const l = d?.enden ?? [];
+  if (!l.length) return null;
+  if (kurz) return <p className="klein hinweis-warn"><a href="v2/arbeit#fertig">{l.length === 1 ? 'Ein Ende ist' : `${l.length} Enden sind`} liegen geblieben — fertig gemeldet, aber noch nicht ganz zu Ende →</a></p>;
+  return (
+    <div className="kasten enden">
+      <p className="gruppe-titel">Liegen gebliebene Enden</p>
+      <ul className="klein">{l.slice(0, 15).map((e, i) => <li key={i}>{e.besitzer ? <b>{e.besitzer}: </b> : null}{e.text} — <a href={`v2/arbeit/${e.strand}`}>{e.titel}</a></li>)}</ul>
+    </div>
+  );
+}
+
 /** Runde 7 (Abgleich: „Nachreichen an einen laufenden Unter-Chat“ fehlte in 2.0, 148× genutzt). Läuft er, liest er es im Zug. */
 function Nachreichen({ id }: { id: string }) {
   const [offen, setOffen] = useState(false);
@@ -348,7 +366,8 @@ function Nachreichen({ id }: { id: string }) {
 }
 
 interface Steckbrief { wofuer: string; gestartet: string | null; ueber: string | null; jetzt: string | null; laeuft: boolean; seit: number | null; schritte: { text: string; stand: 'fertig' | 'offen' }[]; eta: { text: string; ueberfaellig: boolean } | null;
-  wartetAuf: { wer: string; was: string }[]; ergebnisse: Link[]; beruehrt: { repos: string[]; text: string | null; ordner: string | null; dateien: string[] }; modell: string | null; laufzeitMin: number | null; zugTokens: number | null }
+  wartetAuf: { wer: string; was: string }[]; ergebnisse: Link[];
+  dod?: { zeilen: { text: string; haken: boolean; beleg: string | null; besitzer: string | null; erledigt: boolean }[]; folgen: { text: string; besitzer: string | null }[] }; fast?: { fehlt: string[]; wartetAuf: string[] } | null; beruehrt: { repos: string[]; text: string | null; ordner: string | null; dateien: string[] }; modell: string | null; laufzeitMin: number | null; zugTokens: number | null }
 
 const dauer = (min: number) => (min < 90 ? `${min} min` : min < 60 * 48 ? `${Math.round(min / 60)} h` : `${Math.round(min / 1440)} Tage`);
 /** Runde 7 (Knut: „Unterchats sind halt etwas intransparent“): in 10 Sekunden sehen, was ein Unter-Chat gerade tut — ohne den Chat
@@ -364,6 +383,11 @@ function SteckbriefKasten({ s, titel, id }: { s: Steckbrief; titel: string; id: 
         {s.schritte.length > 0 && <div><dt>Fortschritt</dt><dd>
           <p className="klein gedimmt">{fertig} von {s.schritte.length} Schritten{s.eta && s.laeuft ? ` · ${s.eta.ueberfaellig ? 'überfällig — dauert länger als geschätzt' : `fertig ${s.eta.text}`}` : ''}</p>
           <ul className="schritte">{s.schritte.map((x, i) => <li key={i} className={x.stand}>{x.stand === 'fertig' ? '✓' : '○'} {x.text}</li>)}</ul>
+        </dd></div>}
+        {s.dod && s.dod.zeilen.length > 0 && <div><dt>Fertig, wenn</dt><dd>
+          {s.fast && <p className="klein hinweis-warn">Fast fertig — fehlt: {s.fast.fehlt.join('; ')}{s.fast.wartetAuf.length ? `; wartet auf: ${s.fast.wartetAuf.join(', ')}` : ''}</p>}
+          <ul className="schritte">{s.dod.zeilen.map((z, i) => <li key={i} className={z.erledigt ? 'fertig' : 'offen'}>{z.erledigt ? '✓' : '○'} {z.text}{z.beleg ? <span className="gedimmt"> — {z.beleg}</span> : z.haken ? <span className="gedimmt"> — Beleg fehlt</span> : null}{z.besitzer ? <b> ({z.besitzer})</b> : null}</li>)}</ul>
+          {s.dod.folgen.length > 0 && <p className="klein">Folge-Aufgaben: {s.dod.folgen.map((f) => `${f.text}${f.besitzer ? ` (${f.besitzer})` : ''}`).join(' · ')}</p>}
         </dd></div>}
         <div><dt>Wartet auf</dt><dd>{s.wartetAuf.length ? s.wartetAuf.map((w, i) => <p key={i} className="klein"><b>{w.wer}:</b> {w.was}</p>) : 'niemanden'}</dd></div>
         {s.ergebnisse.length > 0 && <div><dt>Ergebnisse</dt><dd className="verweise">{s.ergebnisse.map((l, i) => l.url ? <Verweis key={i} l={l} /> : <span key={i} className="verweis">{l.label}</span>)}</dd></div>}
