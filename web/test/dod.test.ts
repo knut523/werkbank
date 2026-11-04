@@ -36,3 +36,10 @@ test('Gegenprüfung R7: „und/oder“ ist kein Beleg, „- Folgen:“ ist keine
   assert.deepEqual(dodAus('- Folgen: keine Ahnung\n- DoDs: x').folgen, []);
   assert.deepEqual(dodAus('- DoDs: x').zeilen, []);
 });
+
+test('Persona R7: alte DoD-Prosa ohne Kästchen ist Altbestand, keine offenen Enden', () => {
+  const alt = '- DoD:\n  - Suite: **754 pass / 0 fail**\n  - **K31 „Aktiv getestet"** (29.10.)\nStatus: fertig';
+  assert.deepEqual(dodAus(alt).zeilen, []);
+  assert.equal(fastFertig(dodAus(alt)), null);
+  assert.deepEqual(dodAus('- DoD: [x] Tests — 3/0 · Hinweis ohne Kästchen').zeilen.map((z) => z.text), ['Tests']);
+});

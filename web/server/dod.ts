@@ -33,7 +33,8 @@ function block(stand: string, name: string): string[] {
 }
 
 export function dodAus(stand: string): Dod {
-  const zeilen = block(stand, 'DoD').map((roh) => {
+  // Nur Zeilen mit Kästchen sind DoD-Zeilen — ältere Stände führen unter „- DoD:“ freie Prosa (Persona R7: Fehltreffer als „Enden“).
+  const zeilen = block(stand, 'DoD').filter((roh) => /^\[[ xX✓]\]/.test(roh)).map((roh) => {
     const haken = /^\[[xX✓]\]/.test(roh);
     const ohne = roh.replace(/^\[[ xX✓]\]\s*/, '');
     const besitzer = BESITZER.exec(ohne)?.[1]?.trim() ?? null;
