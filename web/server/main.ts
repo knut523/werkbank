@@ -1885,25 +1885,34 @@ async function gebaut(u: User, z: any): Promise<boolean> {
   return new Promise((resolve) => execFile('git', ['-C', String(d.cwd), 'log', `--since=@${Math.floor(seit / 1000)}`, '--format=%H', '-1'], { timeout: 5000 }, (err, out) => resolve(!err && String(out).trim().length > 0)));
 }
 const logOeffentlich = (z: any, w: { ok: boolean; grund: string | null }) => ({ id: String(z._id), kennung: z.kennung, art: z.art, ids: z.ids ?? [], frage: z.frage, empfehlung: z.empfehlung, stufe: z.stufe, grund: z.grund,
-  antwort: z.antwort, durch: z.auto ? 'auto' : 'knut', at: z.at, strand: z.strand ?? null, widerruf: z.widerruf ?? null, widerrufbar: w.ok, widerrufGrund: w.grund });
-on('GET', /^\/api\/entscheidungen$/, async (req, res, _m, url) => {
-  const u = await needUser(req);
-  const tage = Math.min(90, Math.max(1, Number(url.searchParams.get('tage') ?? 30) || 30));
+  antwort: z.antwort, durch: z.auto ? 'auto' : 'knut', at: z.at, strand: z.strand ?? null, widerruf: z.widerruf ?? null, widerrufbar: w.ok, widerrufGrund: w.grund,
+  council: z.council ?? null });
+/** Entscheidungs-Log der Person (auch für 2.0, Plan §23 T5). */
+async function logListe(u: User, o: { tage?: number; durch?: string | null; stufe?: string | null } = {}) {
+  const tage = Math.min(90, Math.max(1, Number(o.tage ?? 30) || 30));
   const q: any = { userId: u.id, at: { $gte: new Date(Date.now() - tage * 86400_000) } };
-  const durch = url.searchParams.get('durch');
-  if (durch === 'auto') q.auto = true; else if (durch === 'knut') q.auto = false;
-  const st = url.searchParams.get('stufe');
-  if (st === 'wichtig' || st === 'normal') q.stufe = st;
+  if (o.durch === 'auto') q.auto = true; else if (o.durch === 'knut') q.auto = false;
+  if (o.stufe === 'wichtig' || o.stufe === 'normal') q.stufe = o.stufe;
   const zeilen: any[] = await logCol().find(q).sort({ at: -1 }).limit(200).toArray();
   const out = [];
   for (const z of zeilen) out.push(logOeffentlich(z, widerrufbar(z, { gebaut: z.auto && !z.widerruf ? await gebaut(u, z) : false })));
+  return out;
+}
+on('GET', /^\/api\/entscheidungen$/, async (req, res, _m, url) => {
+  const u = await needUser(req);
+  const out = await logListe(u, { tage: Number(url.searchParams.get('tage') ?? 30), durch: url.searchParams.get('durch'), stufe: url.searchParams.get('stufe') });
   send(res, 200, { zeilen: out, autoAnnahme: autoAnnahmeAn(), stunden: annahmeMs() / 3600_000 });
 });
 on('POST', /^\/api\/entscheidungen\/([\w:.-]{1,200})\/anders$/, async (req, res, m) => {
   const u = await needUser(req);
-  const text = String((await body(req)).text ?? '').trim().slice(0, 2000);
+  await logUmkehren(u, m[1], String((await body(req)).text ?? ''));
+  send(res, 200, { ok: true });
+});
+/** Widerruf eines automatisch angenommenen Eintrags (auch 2.0 „Umkehren“, Plan §23 T5) — geht an den Unter-Chat bzw. Hauptchat. */
+async function logUmkehren(u: User, id: string, roh: string) {
+  const text = String(roh ?? '').trim().slice(0, 2000);
   if (!text) throw new HttpError(400, 'Schreib kurz, was stattdessen gelten soll.');
-  const z: any = await logCol().findOne({ _id: m[1] as any, userId: u.id });
+  const z: any = await logCol().findOne({ _id: id as any, userId: u.id });
   if (!z) throw new HttpError(404, 'Diesen Eintrag im Entscheidungs-Log gibt es nicht.');
   const w = widerrufbar(z, { gebaut: await gebaut(u, z) });
   if (!w.ok) throw new HttpError(409, w.grund!);
@@ -1918,8 +1927,7 @@ on('POST', /^\/api\/entscheidungen\/([\w:.-]{1,200})\/anders$/, async (req, res,
     if (z.art === 'rueckfrage' && !(await meldeLeitstand(u, { _id: z.kennung, title: z.frage }, msg)) && !z.strand?.id) throw new HttpError(409, 'Kein Hauptchat aktiv — die Korrektur könnte niemand empfangen. Hauptchat starten und noch einmal.');
   } catch (e) { await logCol().updateOne({ _id: z._id }, { $set: { widerruf: null } }).catch(() => {}); throw e; }
   log('annahme widerrufen', { user: u.id, id: z._id });
-  send(res, 200, { ok: true });
-});
+}
 // Lauf sofort (statt im 10-min-Takt): nimmt nur eigene, schon fällige Einträge an — nichts früher als nach der Frist.
 on('POST', /^\/api\/entscheidungen\/lauf$/, async (req, res) => {
   const u = await needUser(req);
@@ -4310,7 +4318,7 @@ registerV2(on, {
   alleEmpfohlen: alleWieEmpfohlen,
   sammelSchliessen: (u, id) => inboxAntworten(u, id, { antwort: 'nein', weg: 'ui' }),
   alleRuns: (u) => orchRuns().find({ userId: u.id }, { projection: { _id: 1, conv: 1, title: 1, thema: 1, zustand: 1, kind: 1, lastActivity: 1, doneAt: 1, startedAt: 1, reviewedAt: 1, knutReviewedAt: 1, startError: 1, endedAt: 1 } }).sort({ lastActivity: -1 }).limit(1000).toArray(),
-  lcChats: (u) => v2lcListe(u), lcVolltext: (u, q) => v2lcVolltext(u, q), lcUrl: cfg.librechatPublicUrl, rolleEinstellung: process.env.WERKBANK_ROLLE ?? null, vorlagen: vorlagenFuerV2,
+  lcChats: (u) => v2lcListe(u), lcVolltext: (u, q) => v2lcVolltext(u, q), entschiedenLog: (u) => logListe(u, { tage: 30 }), umkehren: (u, id, text) => logUmkehren(u, id, text), lcUrl: cfg.librechatPublicUrl, rolleEinstellung: process.env.WERKBANK_ROLLE ?? null, vorlagen: vorlagenFuerV2,
   wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },
   abgleich: (u, id, stand) => abgleichFuer(u.id, id, cfg.reviewDir, stand),
   // Paket aus dem Feld oder — bei Unter-Chats ohne eigenes Paket — aus dem Pfad des gefundenen Berichts (…/<paket>/bericht.md im Review-Ordner).

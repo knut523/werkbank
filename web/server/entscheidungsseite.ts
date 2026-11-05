@@ -144,7 +144,8 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
   for (const f of fragen) {
     const markiert = f.stufe === 'wichtig' && /markiert/.test(f.stufeGrund ?? '') ? 'wichtig' : null;
     f.triage = f.klasse === 'aktion' ? { klasse: 'technisch', grund: 'Aufgabe des Hauptchats' }
-      : klasseVon({ text: [f.titel, f.worum, ...f.optionen].join(' '), markiert, art: f.art, empfehlung: f.empfehlung });
+      // Nur Frage, Empfehlung und Optionen — der Kontext („worum“) nennt bei OLAF fast immer Kunden/Verträge und machte jede Frage zur Knut-Frage.
+      : klasseVon({ text: [f.titel, f.empfehlung ?? '', ...f.optionen].join(' '), markiert, art: f.art, empfehlung: f.empfehlung });
   }
   // Wichtige oben, sonst die Reihenfolge der Inbox (blockiert am meisten, wartet am längsten); Gruppen zusammenhalten.
   const rang = new Map<string, number>();

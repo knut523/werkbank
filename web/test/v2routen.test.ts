@@ -374,3 +374,25 @@ test('Plan §23 T4: „Für dich“ — Entscheidungen, Jetzt und die Zahl zeige
     assert.equal([...aus.oben, ...aus.rest].length, 3, 'Schalter aus: alle wie bisher');
   } finally { deps.inboxFuer = altInbox; delete process.env.WERKBANK_TRIAGE; }
 });
+
+test('Plan §23 T5: Protokoll „Von Claude entschieden“ — gesamt und je Unter-Chat, Umkehren mit einem Klick geht an den Unter-Chat', async () => {
+  const zeilen = [
+    { id: 'l1', frage: 'Liste nach Datum sortieren?', antwort: 'von Claude entschieden (technisch) (D1)', durch: 'auto', at: '2026-11-05T09:00:00Z', strand: { id: 's1', titel: 'Rechner' }, widerruf: null, widerrufbar: true, widerrufGrund: null, council: null },
+    { id: 'l2', frage: 'Datenmodell migrieren?', antwort: 'ja', durch: 'auto', at: '2026-11-05T09:05:00Z', strand: { id: 's2', titel: 'Bot' }, widerruf: null, widerrufbar: true, widerrufGrund: null, council: { urteil: 'HALTEN', satz: 'Migration mit Rückweg' } },
+    { id: 'l3', frage: 'Budget?', antwort: 'Ja', durch: 'knut', at: '2026-11-05T08:00:00Z', strand: null, widerruf: null, widerrufbar: false, widerrufGrund: 'Von Knut selbst beantwortet', council: null },
+  ];
+  const umgekehrt: string[] = [];
+  deps.entschiedenLog = async () => zeilen as any;
+  deps.umkehren = async (_u: any, id: string, text: string) => { umgekehrt.push(`${id}:${text}`); };
+  try {
+    const g = (await rufe('GET', '/api/v2/entschieden', ADMIN)).b;
+    assert.deepEqual(g.zeilen.map((z: any) => z.id), ['l2', 'l1'], 'nur von Claude entschiedene, neueste zuerst');
+    assert.equal(g.zeilen[0].council.urteil, 'HALTEN');
+    assert.deepEqual((await rufe('GET', '/api/v2/entschieden?strand=s1', ADMIN)).b.zeilen.map((z: any) => z.id), ['l1']);
+    const r = await rufe('POST', '/api/v2/entschieden/l1/umkehren', ADMIN, {});
+    assert.equal(r.status, 200);
+    assert.match(umgekehrt[0], /^l1:Umkehren/);
+    assert.equal((await rufe('POST', '/api/v2/entschieden/l1/umkehren', LISA, {})).status, 403, 'nur Admin');
+    assert.match((await rufe('POST', '/api/v2/entschieden/l1/umkehren', ADMIN, { text: 'Lieber nach Name' })).b.ok ? umgekehrt[1] : '', /Lieber nach Name/);
+  } finally { delete deps.entschiedenLog; delete deps.umkehren; }
+});

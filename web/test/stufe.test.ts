@@ -96,7 +96,12 @@ test('T1: Klasse knut — Geld, Recht, Zugang, Außenwirkung, Release/nach auße
   assert.equal(k('Text der Website-Startseite so übernehmen?'), 'knut');
   assert.equal(k('PR öffnen und pushen?'), 'knut');
   assert.equal(k('Release 33 heute ausrollen?'), 'knut');
-  assert.equal(k('Reihenfolge der Tests egal', { markiert: 'wichtig' }), 'knut');
+  // Datenkopie 05.11.: 9 von 20 „Knut-Fragen“ waren nur vom Strang hochgestuft (Abschnitt „Braucht Knut“), inhaltlich technisch —
+  // eine Hochstufung allein geht deshalb an den Council (gewichtig, AN KNUT möglich), nicht direkt zu Knut.
+  assert.deepEqual(klasseVon({ text: 'Reihenfolge der Tests egal', empfehlung: 'A', markiert: 'wichtig' }), { klasse: 'gewichtig', grund: 'vom Strang hochgestuft — Council prüft' });
+  assert.equal(k('E3: Woher kommt das Lieferende? (Abschnitt „Braucht Knut“ im Stand)'), 'technisch', '„Braucht Knut“ als Abschnittsname zählt nicht');
+  assert.equal(k('E3: Woher kommt „Vertragsende“?'), 'knut', 'vorsichtig: das Wort „Vertrag“ zählt als Recht — lieber Knut fragen');
+  assert.equal(k('Budget freigeben?', { markiert: 'wichtig' }), 'knut', 'Inhalt schlägt Hochstufung');
   assert.equal(k('Welche Bibliothek für die PDF-Vorschau?', { empfehlung: null }), 'knut', 'ohne Empfehlung kann niemand außer Knut entscheiden');
   assert.equal(k('x', { art: 'push' }), 'knut');
 });

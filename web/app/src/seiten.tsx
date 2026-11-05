@@ -403,6 +403,48 @@ function SteckbriefKasten({ s, titel, id }: { s: Steckbrief; titel: string; id: 
         <div><dt>Modell · Laufzeit</dt><dd className="klein">{[s.modell, s.laufzeitMin != null ? `gestartet vor ${dauer(s.laufzeitMin)}` : null, s.zugTokens ? `dieser Zug ≈ ${Math.round(s.zugTokens / 1000)}k Tokens` : null].filter(Boolean).join(' · ') || '—'}</dd></div>
       </dl>
       <button type="button" className="knopf klein" onClick={() => app.chat(`Was macht der Unter-Chat „${titel}“ (${id}) gerade? Fass in drei Sätzen zusammen: was er tut, was fertig ist, was er von mir braucht.`)}>Was macht der gerade?</button>
+      <EntschiedenListe strand={id} kurz />
+    </div>
+  );
+}
+
+// ---------- Plan §23 T5: „Von Claude entschieden“ — sichtbar und mit einem Klick umkehrbar ----------
+
+interface EntschiedenZeile { id: string; frage: string; antwort: string; at: string; strand: { id: string; titel: string } | null; widerruf: { at: string; text: string } | null; widerrufbar: boolean; widerrufGrund: string | null; council: { urteil: string; satz?: string } | null }
+
+function EntschiedenListe({ strand, kurz: knapp }: { strand?: string; kurz?: boolean }) {
+  const { d, fehler, neu } = useDaten<{ zeilen: EntschiedenZeile[] }>(`api/v2/entschieden${strand ? `?strand=${encodeURIComponent(strand)}` : ''}`);
+  const [meldung, setMeldung] = useState<string | null>(null);
+  if (fehler) return knapp ? null : <Fehler text={fehler} nochmal={neu} />;
+  if (!d) return knapp ? null : <Laedt />;
+  if (!d.zeilen.length) return knapp ? null : <p className="leer">Claude hat in den letzten 30 Tagen nichts selbst entschieden.</p>;
+  const umkehren = async (z: EntschiedenZeile) => {
+    try { await schicke(`api/v2/entschieden/${encodeURIComponent(z.id)}/umkehren`, {}); setMeldung(`Umgekehrt — „${z.frage}“ geht an ${z.strand ? `den Unter-Chat „${z.strand.titel}“` : 'den Hauptchat'}.`); neu(); }
+    catch (e: any) { setMeldung(String(e?.message ?? e)); }
+  };
+  return (
+    <section className={knapp ? 'entschieden kurz' : 'entschieden'}>
+      {knapp && <h3>Von Claude entschieden ({d.zeilen.length})</h3>}
+      {meldung && <p className="hinweis" role="status">{meldung}</p>}
+      <ul className="liste">{d.zeilen.slice(0, knapp ? 5 : 200).map((z) => (
+        <li key={z.id} className="zeile">
+          <p className="zeile-titel">{z.frage}</p>
+          <p className="klein">{z.antwort}{z.council ? ` · Council: ${z.council.urteil}${z.council.satz ? ` — ${z.council.satz}` : ''}` : ''}{!strand && z.strand ? ` · ${z.strand.titel}` : ''} · {wann(z.at)}</p>
+          {z.widerruf ? <p className="klein gedimmt">Umgekehrt {wann(z.widerruf.at)}: {z.widerruf.text}</p>
+            : z.widerrufbar ? <button type="button" className="knopf klein" onClick={() => umkehren(z)}>Umkehren</button>
+            : <p className="klein gedimmt">{z.widerrufGrund}</p>}
+        </li>))}</ul>
+    </section>
+  );
+}
+
+export function Entschieden() {
+  return (
+    <div className="seite">
+      <p><a href="v2/entscheidungen">← Für dich</a></p>
+      <h1>Von Claude entschieden</h1>
+      <p className="unterzeile">Technische und interne Fragen entscheidet Claude nach Empfehlung, gewichtige erst nach einem Council-Check. Alles hier ist umkehrbar: „Umkehren“ schickt es an den Unter-Chat zurück.</p>
+      <EntschiedenListe />
     </div>
   );
 }

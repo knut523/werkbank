@@ -78,12 +78,15 @@ const GEWICHTIG: [RegExp, string][] = [
 
 export function klasseVon(e: StufeEingabe & { empfehlung?: string | null }): { klasse: Klasse; grund: string } {
   if (e.art === 'push') return { klasse: 'knut', grund: 'Push/Release/Merge' };
-  if (e.markiert === 'wichtig') return { klasse: 'knut', grund: 'vom Strang als „Knut muss“ markiert' };
-  for (const [re, grund] of REGELN) if (grund !== 'Architektur/Migration' && re.test(e.text)) return { klasse: 'knut', grund };
-  if (ZUGANG.test(e.text)) return { klasse: 'knut', grund: 'Zugang/Berechtigung' };
-  if (NACH_AUSSEN.test(e.text)) return { klasse: 'knut', grund: 'geht nach außen' };
+  // Der Inhalt entscheidet. „Knut muss“ (Hochstufung oder der Abschnittsname „Braucht Knut“) allein macht keine Knut-Frage —
+  // Datenkopie 05.11.: 9 von 20 so markierten Fragen waren technisch; sie gehen an den Council (gewichtig, AN KNUT möglich).
+  const text = String(e.text ?? '').replace(/braucht knut/gi, '');
+  for (const [re, grund] of REGELN) if (grund !== 'Architektur/Migration' && !/markiert/.test(grund) && re.test(text)) return { klasse: 'knut', grund };
+  if (ZUGANG.test(text)) return { klasse: 'knut', grund: 'Zugang/Berechtigung' };
+  if (NACH_AUSSEN.test(text)) return { klasse: 'knut', grund: 'geht nach außen' };
   if (!String(e.empfehlung ?? '').trim()) return { klasse: 'knut', grund: 'keine Empfehlung' };
-  for (const [re, grund] of GEWICHTIG) if (re.test(e.text)) return { klasse: 'gewichtig', grund };
+  if (e.markiert === 'wichtig' || REGELN.some(([re, grund]) => /markiert/.test(grund) && re.test(text))) return { klasse: 'gewichtig', grund: 'vom Strang hochgestuft — Council prüft' };
+  for (const [re, grund] of GEWICHTIG) if (re.test(text)) return { klasse: 'gewichtig', grund };
   return { klasse: 'technisch', grund: 'technisch/intern mit Empfehlung' };
 }
 

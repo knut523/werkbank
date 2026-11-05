@@ -61,6 +61,9 @@ export interface V2Deps {
   lcChats: (u: User) => Promise<any[]>;
   /** Abgleich (h): Volltextsuche in den eigenen Chat-Nachrichten (v2librechat.volltext). */
   lcVolltext?: (u: User, q: string) => Promise<{ conv: string; text: string; at: Date | string }[]>;
+  /** Plan §23 T5: Entscheidungs-Log der Person (main.ts logListe), Umkehr über den bestehenden Widerruf (an den Unter-Chat). */
+  entschiedenLog?: (u: User) => Promise<{ id: string; durch: string; at: string | Date; strand: { id: string; titel: string } | null; [k: string]: any }[]>;
+  umkehren?: (u: User, id: string, text: string) => Promise<void>;
   lcUrl: string;
   /** S20 (D8): Rolle der Besitzerin aus der Einrichtung (WERKBANK_ROLLE, von team-install gesetzt) — sonst abgeleitet. */
   rolleEinstellung?: string | null;
@@ -332,6 +335,27 @@ export function registerV2(on: On, d: V2Deps) {
   });
 
   // --- Alle Chats (S12, C4): Unter-Chats, Hauptchats, LibreChat- und 2.0-Chats — Suche und Filter macht die Oberfläche ---
+  // Plan §23 T5: „Von Claude entschieden“ — gesamt und je Unter-Chat (?strand=), neueste zuerst; mit Council-Urteil, wenn es eines gab.
+  on('GET', /^\/api\/v2\/entschieden$/, async (req, res, _m, url) => {
+    const u = await d.needUser(req);
+    if (!d.entschiedenLog) return send(d, res, { zeilen: [] });
+    const strand = url.searchParams.get('strand');
+    const zeilen = (await d.entschiedenLog(u)).filter((z) => z.durch === 'auto' && (!strand || z.strand?.id === strand))
+      .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+    send(d, res, { zeilen });
+  });
+  // Umkehren mit einem Klick: ohne eigenen Text ein fester Satz; geht über den bestehenden Widerruf an den Unter-Chat (bzw. den Hauptchat).
+  on('POST', /^\/api\/v2\/entschieden\/([\w:.-]{1,200})\/umkehren$/, async (req, res, m) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) throw err(403, 'Umkehren kann nur, wer die Unter-Chats führt.');
+    if (!d.umkehren) throw err(501, 'Umkehren ist hier nicht eingerichtet.');
+    const b = await d.body(req, 16 * 1024);
+    const eigen = String(b.text ?? '').trim().slice(0, 2000);
+    await d.umkehren(u, m[1], eigen ? `Umkehren: ${eigen}` : 'Umkehren: Knut nimmt diese Entscheidung zurück — nicht so umsetzen; schon Gebautes zurücknehmen und die Frage an Knut stellen.');
+    d.log('v2 umgekehrt', { user: u.id, id: m[1] });
+    send(d, res, { ok: true });
+  });
+
   // Abgleich (h): Volltext über die eigenen Chats — die Seite verbindet die Treffer über `conv` mit „Alle Chats“ (Titel, Link).
   on('GET', /^\/api\/v2\/chats\/suche$/, async (req, res, _m, url) => {
     const u = await d.needUser(req);

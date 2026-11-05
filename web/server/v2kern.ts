@@ -7,6 +7,7 @@ import { THEMEN, themaOf } from './themen.ts';
 export type V2Antwort = 'ja' | 'nein' | 'anders' | 'spaeter';
 export interface V2Link { label: string; url: string; extern?: boolean }
 export interface V2Karte {
+  triage?: { klasse: string; grund: string } | null;
   id: string;
   /** Runde 5 (Knut B1): Sammelkarte („D1–D3 aus dem Bericht …“) — die gemeinten Entscheidungen aus dem Bericht und der Bericht selbst. */
   bezug?: { id: string; frage: string; empfehlung: string | null; antwort: string | null }[];
@@ -119,6 +120,8 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
     // Reibungs-Log 04.11.: liefert eine Frage nur „optionen“ (keine „alternativen“), sind sie trotzdem klickbar.
     optionen, alternativen: f.alternativen?.length ? f.alternativen : (f.optionen ?? []).filter((x) => x && x !== f.empfehlung && !/^(ja|nein)\s*[.!]?$/i.test(x)), antworten, form: f.form, wichtig: f.stufe === 'wichtig', thema: themaVon(f.gruppe, `${f.titel} ${f.quelle?.text ?? ''}`), quelle: f.quelle?.text ?? '',
     links, erklaerung, alt: weg === 'alt' ? o.altUrl : null, wartetSeit: f.wartetSeit,
+    // Plan §23 T1/T4: Klasse und Grund an der Karte („Warum du: Geld/Budget“).
+    triage: f.triage ?? null,
   };
 }
 
