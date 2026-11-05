@@ -682,13 +682,48 @@ export async function showOrch(u: User, id: string, verlauf = 0) {
     }
     hist.reverse();
   }
-  return { ...item, conv: d.conv, prompt: d.prompt, bericht: d.bericht ?? null, modell: d.modell ?? null, risiko: d.risiko ?? null, lastModell: d.lastModell ?? null, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null, meldungen: (d.meldungen ?? []).slice(-5).map((m: any) => ({ at: m.at, art: String(m.art ?? ''), text: String(m.text ?? '').slice(0, 500) })), ...(hist ? { verlauf: hist } : {}) };
+  return { ...item, conv: d.conv, prompt: d.prompt, bericht: d.bericht ?? null,
+    // Plan §24 A1: eingereihte Nachrichten (Zustellung beim nächsten freien Zug).
+    ausstehend: ((d.ausstehend ?? []) as Ausstehend[]).map((x) => ({ id: x.id, at: x.at, via: x.via, grund: x.grund, text: String(x.text).slice(0, 200) })), modell: d.modell ?? null, risiko: d.risiko ?? null, lastModell: d.lastModell ?? null, lastMessage: last ? { fromUser: last.fromUser, at: new Date(last.at), text: last.text.slice(-20_000) } : null, meldungen: (d.meldungen ?? []).slice(-5).map((m: any) => ({ at: m.at, art: String(m.art ?? ''), text: String(m.text ?? '').slice(0, 500) })), ...(hist ? { verlauf: hist } : {}) };
 }
 
 /** Runde 7 B (Messgröße, Plan §22): wer eine Nachricht an den Strang geschickt hat und wann — vorher wurde lastSentAt nur
  *  überschrieben, Hand- und Hauptchat-Sendungen waren im Log nicht zu trennen. Hängt an ein updateOne-Update an (letzte 30). */
 export function mitSendung<T extends Record<string, any>>(update: T, von: 'hand' | 'leitstand' | 'auto' | 'nachgereicht', at: Date = new Date()): T {
   return { ...update, $push: { ...(update.$push ?? {}), sendungen: { $each: [{ at, von }], $slice: -30 } } };
+}
+
+// ---------- Plan §24 A1: einreihen statt 409 (Knut 05.11.: „Alle Nudges und Nachsendungen sollen automatisch laufen“) ----------
+export interface Ausstehend { id: string; text: string; via: 'hand' | 'leitstand'; at: Date; grund: string }
+export const AUSSTEHEND_MAX = 20;
+export function ausstehendEintrag(text: string, via: 'hand' | 'leitstand', grund: string, at: Date = new Date()): Ausstehend {
+  return { id: randomUUID().slice(0, 8).replace(/-/g, '0'), text: String(text).slice(0, 40_000), via, at, grund: String(grund).slice(0, 300) };
+}
+/** Was beim nächsten freien Zug zugestellt wird: eine Nachricht unverändert, mehrere gebündelt (älteste zuerst). */
+export function ausstehendText(l: Ausstehend[]): string {
+  const s = [...l].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+  if (s.length <= 1) return s[0]?.text ?? '';
+  return `(Werkbank: ${s.length} Nachrichten kamen, während du beschäftigt warst — hier gesammelt, älteste zuerst.)\n\n${s.map((x) => x.text).join('\n\n---\n\n')}`;
+}
+async function einreihen(d: any, msg: string, via: 'hand' | 'leitstand', grund: string) {
+  const e = ausstehendEintrag(msg, via, grund);
+  await runs().updateOne({ _id: d._id }, { $push: { ausstehend: { $each: [e], $slice: -AUSSTEHEND_MAX } } as any });
+  return { id: String(d._id), conv: d.conv, url: d.url, eingereiht: true, ausstehendId: e.id, zustellung: `eingereiht (${grund}) — die Werkbank stellt sie beim nächsten freien Zug von selbst zu` };
+}
+/** Takt: eingereihte Nachrichten eines freien Strangs zustellen — atomar herausnehmen, bei Fehler zurücklegen. */
+export async function ausstehendZustellen(u: User, d: any, deps: { log?: AutoDeps['log'] } = {}) {
+  const vorher: any = await runs().findOneAndUpdate({ _id: d._id, 'ausstehend.0': { $exists: true } }, { $set: { ausstehend: [] } }, { returnDocument: 'before' });
+  const liste: Ausstehend[] = (vorher?.value ?? vorher)?.ausstehend ?? [];
+  if (!liste.length) return null;
+  try {
+    const r = await sendOrch(u, String(d._id), ausstehendText(liste), liste.some((x) => x.via === 'hand') ? 'hand' : 'leitstand');
+    deps.log?.('orch ausstehend zugestellt', { id: d._id, n: liste.length, erneut: !!(r as any).eingereiht });
+    return r;
+  } catch (e: any) {
+    await runs().updateOne({ _id: d._id }, { $push: { ausstehend: { $each: liste, $position: 0, $slice: AUSSTEHEND_MAX } } as any });
+    deps.log?.('orch ausstehend fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) });
+    return null;
+  }
 }
 
 export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 'leitstand' = 'hand', o: { warteMs?: number } = {}) {
@@ -704,7 +739,8 @@ export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 
     // Plan 154 (G13): in den laufenden Zug nachreichen — der Agent sieht es beim nächsten Schritt. Kein lastSentAt (sonst gälte
     // der Zug nach seinem Ende als „Nachricht nicht angekommen“), zählt nicht gegen den Deckel (Council R1, Bedingung 5).
     const r = await injectBridge(u, d.conv, msg);
-    if (!r.ok) throw err(409, `Strang ${id} arbeitet noch (${item.reason}) und nimmt gerade nichts an (${r.error}) — gleich noch einmal.`);
+    // Plan §24 A1: nicht mehr 409 nach außen — einreihen, der Takt stellt beim nächsten freien Zug zu.
+    if (!r.ok) return einreihen(d, msg, via, `arbeitet noch, nimmt gerade nichts an: ${r.error}`);
     // Plan 274 (D4b): jede Nachreichung verfolgen (vorher nur die letzte — eine frühere ging so unbemerkt verloren).
     const eintrag = { id: r.id, text: msg.slice(0, 20_000), at: new Date(), via, done: false };
     await runs().updateOne({ _id: d._id }, mitSendung({ $set: { lastInject: eintrag }, $push: { nachreichungen: { $each: [eintrag], $slice: -10 } } as any, $inc: { injects: 1 } }, 'nachgereicht', eintrag.at));
@@ -713,7 +749,8 @@ export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 
   // Plan 274 (D4a): ein anderer Strang arbeitet gerade im selben Worktree → nicht jetzt (sonst blockieren sich beide).
   if (!d.shared) {
     const k = worktreeKonflikt([worktreeVon(d.cwd)], (await belegte(u, id)).filter((a) => a.status === 'running'));
-    if (k) { await runs().updateOne({ _id: d._id }, { $inc: { konflikte: 1 } }); throw err(409, `${konfliktText(k)} Die Nachricht an ${id} später noch einmal senden.`); }   // Runde 7 B: Konflikte zählen
+    // Runde 7 B: Konflikte zählen; Plan §24 A1: einreihen statt 409.
+    if (k) { await runs().updateOne({ _id: d._id }, { $inc: { konflikte: 1 } }); return einreihen(d, msg, via, konfliktText(k)); }
   }
   const sentAt = await deliver(u, d.conv, msg);
   if (via === 'leitstand') {
@@ -881,6 +918,18 @@ export async function autoWeiterTick(deps: AutoDeps) {
   if (ticking) return;
   ticking = true;
   try {
+    // Plan §24 A1: eingereihte Nachrichten zuerst — an jeden Strang, der frei ist (auch fertige/gestoppte).
+    const warten: any[] = await runs().find({ ...STRANDS, 'ausstehend.0': { $exists: true }, conv: { $ne: null } }).toArray();
+    for (const d of warten) {
+      try {
+        const u = await deps.userById(d.userId).catch(() => null);
+        if (!u) continue;
+        const s = (await strandStates(u).catch(() => null))?.get(d.conv);
+        if (s?.running || s?.queued) continue;
+        if (!d.shared && deps.belegt && await deps.belegt(u, d)) continue;
+        await ausstehendZustellen(u, d, deps);
+      } catch (e: any) { deps.log?.('orch ausstehend fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 200) }); }
+    }
     const docs: any[] = await runs().find({ ...STRANDS, reviewedAt: null, reviewReadyAt: null, startError: null, autoStopped: null, conv: { $ne: null }, status: { $ne: 'blocked_g0' }, startedAt: { $gt: new Date(Date.now() - 14 * 86400_000) } }).toArray();
     const byUser = new Map<string, any[]>();
     for (const d of docs) byUser.set(d.userId, [...(byUser.get(d.userId) ?? []), d]);

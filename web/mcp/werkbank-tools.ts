@@ -135,7 +135,7 @@ const ORCH_TOOLS = [
     name: 'orch_send',
     description: 'Nachricht an einen Strang schicken (Antwort, nächster Auftrag, „weiter“). Arbeitet der Strang gerade, wird sie in den laufenden Zug nachgereicht — er sieht sie beim nächsten Schritt; ungelesen kommt sie nach dem Zug noch einmal. Sonst wartet das Werkzeug bis 15 s auf die Bestätigung der Brücke („Zustellung: angekommen“); „nicht bestätigt“ heißt: die Werkbank schickt nach 3 min denselben Text noch einmal — NICHT selbst erneut senden. Setzt den Deckel der automatischen Fortsetzung NICHT zurück; hat ein Strang seinen Deckel erreicht, entscheidet Knut in „Heute“.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string' } }, required: ['id', 'text'] },
-    run: async (a: any) => { const j = await call('/internal/orchestrator/send', { id: a.id, text: a.text, via: 'leitstand' }, 45_000); return `${j.injected ? `nachgereicht (Strang arbeitet, sieht es beim nächsten Schritt): ${j.id} ${j.url}` : `gesendet: ${j.id} ${j.url}`}${j.zustellung ? `\nZustellung: ${j.zustellung}` : ''}`; },
+    run: async (a: any) => { const j = await call('/internal/orchestrator/send', { id: a.id, text: a.text, via: 'leitstand' }, 45_000); return `${j.eingereiht ? `eingereiht (kommt beim nächsten freien Zug von selbst an — nicht noch einmal senden): ${j.id} ${j.url}` : j.injected ? `nachgereicht (Strang arbeitet, sieht es beim nächsten Schritt): ${j.id} ${j.url}` : `gesendet: ${j.id} ${j.url}`}${j.zustellung ? `\nZustellung: ${j.zustellung}` : ''}`; },
   },
   {
     name: 'orch_gruendlich',

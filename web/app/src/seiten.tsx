@@ -394,7 +394,7 @@ function Nachreichen({ id }: { id: string }) {
 
 interface Steckbrief { wofuer: string; gestartet: string | null; ueber: string | null; jetzt: string | null; laeuft: boolean; seit: number | null; schritte: { text: string; stand: 'fertig' | 'offen' }[]; eta: { text: string; ueberfaellig: boolean } | null;
   wartetAuf: { wer: string; was: string }[]; ergebnisse: Link[];
-  dod?: { zeilen: { text: string; haken: boolean; beleg: string | null; besitzer: string | null; erledigt: boolean }[]; folgen: { text: string; besitzer: string | null }[] }; fast?: { fehlt: string[]; wartetAuf: string[] } | null; ruhtMin?: number | null; beruehrt: { repos: string[]; text: string | null; ordner: string | null; dateien: string[] }; modell: string | null; laufzeitMin: number | null; zugTokens: number | null }
+  dod?: { zeilen: { text: string; haken: boolean; beleg: string | null; besitzer: string | null; erledigt: boolean }[]; folgen: { text: string; besitzer: string | null }[] }; fast?: { fehlt: string[]; wartetAuf: string[] } | null; ruhtMin?: number | null; eingereiht?: { at: string; grund: string }[]; beruehrt: { repos: string[]; text: string | null; ordner: string | null; dateien: string[] }; modell: string | null; laufzeitMin: number | null; zugTokens: number | null }
 
 const dauer = (min: number) => (min < 90 ? `${min} min` : min < 60 * 48 ? `${Math.round(min / 60)} h` : `${Math.round(min / 1440)} Tage`);
 /** Runde 7 (Knut: „Unterchats sind halt etwas intransparent“): in 10 Sekunden sehen, was ein Unter-Chat gerade tut — ohne den Chat
@@ -417,6 +417,8 @@ function SteckbriefKasten({ s, titel, id }: { s: Steckbrief; titel: string; id: 
           {s.dod.folgen.length > 0 && <p className="klein">Folge-Aufgaben: {s.dod.folgen.map((f) => `${f.text}${f.besitzer ? ` (${f.besitzer})` : ''}`).join(' · ')}</p>}
         </dd></div>}
         <div><dt>Wartet auf</dt><dd>{s.wartetAuf.length ? s.wartetAuf.map((w, i) => <p key={i} className="klein"><b>{w.wer}:</b> {w.was}</p>) : 'niemanden'}</dd></div>
+        {/* Plan §24 A1: Nachrichten, die warten mussten — die Werkbank stellt sie beim nächsten freien Zug selbst zu. */}
+        {!!s.eingereiht?.length && <div><dt>Eingereiht</dt><dd className="klein">{s.eingereiht.length === 1 ? 'Eine Nachricht' : `${s.eingereiht.length} Nachrichten`} seit {wann(s.eingereiht[0].at)} — kommt beim nächsten freien Zug an ({s.eingereiht[0].grund})</dd></div>}
         {s.ergebnisse.length > 0 && <div><dt>Ergebnisse</dt><dd className="verweise">{s.ergebnisse.map((l, i) => l.url ? <Verweis key={i} l={l} /> : <span key={i} className="verweis">{l.label}</span>)}</dd></div>}
         {(s.beruehrt.repos.length > 0 || s.beruehrt.text || s.beruehrt.dateien.length > 0) && <div><dt>Berührt</dt><dd className="klein">{[s.beruehrt.repos.join(', '), s.beruehrt.text, s.beruehrt.dateien.length ? `zuletzt geschrieben: ${s.beruehrt.dateien.join(', ')}` : ''].filter(Boolean).join(' · ')}</dd></div>}
         <div><dt>Modell · Laufzeit</dt><dd className="klein">{[s.modell, s.laufzeitMin != null ? `gestartet vor ${dauer(s.laufzeitMin)}` : null, s.zugTokens ? `dieser Zug ≈ ${Math.round(s.zugTokens / 1000)}k Tokens` : null].filter(Boolean).join(' · ') || '—'}</dd></div>
