@@ -352,3 +352,13 @@ test('Gegenprüfung R7: Stand-Zeilen brauchen eine Wortgrenze („Offene Fragen�
   assert.deepEqual(schritteAus('- Erledigt: A\n- Offene Fragen: Zugang\n- Offen: B').map((x) => x.text), ['A', 'B']);
   assert.equal(standZeile('- Jetztige Punkte: x\n- Jetzt: baut', 'Jetzt'), 'baut');
 });
+
+test('Abgleich (h): auszugUm schneidet um den Treffer, markiert Kürzungen, ohne Markdown-Lärm', async () => {
+  const { auszugUm } = await import('../server/v2kern.ts');
+  const t = `${'a '.repeat(200)}Hier steht **Netzentgelte** im Satz${' b'.repeat(200)}`;
+  const a = auszugUm(t, 'netzentgelte', 80);
+  assert.ok(a.startsWith('…') && a.endsWith('…'));
+  assert.match(a, /Netzentgelte im Satz/);
+  assert.ok(a.length <= 84);
+  assert.equal(auszugUm('kurz', 'x', 80), 'kurz');
+});

@@ -324,3 +324,16 @@ test('Runde 7 (Knut: DoD): fertig ohne Beleg je Zeile heißt „fast fertig“ �
     assert.deepEqual((await rufe('GET', '/api/v2/enden', LISA)).b.enden, [], 'nur Admin');
   } finally { deps.unterchatListe = altListe; deps.strang = altStrang; }
 });
+
+test('Abgleich (h): Volltextsuche über die eigenen Chat-Nachrichten — Auszug um den Treffer, mindestens 3 Zeichen, eigene Chats', async () => {
+  const gefragt: string[] = [];
+  deps.lcVolltext = async (u: any, q: string) => { gefragt.push(`${u.id}:${q}`); return [{ conv: 'c1', text: 'Vorher langer Text über Netzentgelte 2027 und danach noch mehr', at: new Date('2026-11-04T10:00:00Z') }]; };
+  try {
+    const r = await rufe('GET', '/api/v2/chats/suche?q=netzentgelte', LISA);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.b.treffer.map((t: any) => t.conv), ['c1']);
+    assert.match(r.b.treffer[0].auszug, /Netzentgelte 2027/);
+    assert.deepEqual(gefragt, ['l:netzentgelte'], 'sucht nur in den Chats der angemeldeten Person');
+    assert.deepEqual((await rufe('GET', '/api/v2/chats/suche?q=ab', LISA)).b.treffer, [], 'unter 3 Zeichen: nichts');
+  } finally { delete deps.lcVolltext; }
+});

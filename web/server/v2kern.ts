@@ -423,3 +423,12 @@ export function standZeile(stand: string, name: string): string | null {
   const t = m?.[1]?.trim() ?? '';
   return t && !/^(nichts|—|-)$/i.test(t) ? kurz(t, 200) : null;
 }
+
+/** Abgleich (h), Volltextsuche über Chats: ein Auszug von höchstens `n` Zeichen um den ersten Treffer, ohne Markdown-Zeichen. */
+export function auszugUm(text: string, q: string, n = 160): string {
+  const t = String(text ?? '').replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim();
+  if (t.length <= n) return t;
+  const i = Math.max(0, t.toLowerCase().indexOf(String(q ?? '').toLowerCase()));
+  const start = Math.max(0, Math.min(i - Math.floor(n / 3), t.length - n));
+  return `${start > 0 ? '…' : ''}${t.slice(start, start + n).trim()}${start + n < t.length ? '…' : ''}`;
+}

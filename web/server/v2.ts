@@ -8,7 +8,7 @@ import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungssei
 import { themaOf } from './themen.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
+import { auszugUm, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import { dodAus, fastFertig, endenAus } from './dod.ts';
 import type { Abgleich } from './fragenbericht.ts';
@@ -56,6 +56,8 @@ export interface V2Deps {
   sammelSchliessen: (u: User, id: string) => Promise<unknown>;
   alleRuns: (u: User) => Promise<any[]>;
   lcChats: (u: User) => Promise<any[]>;
+  /** Abgleich (h): Volltextsuche in den eigenen Chat-Nachrichten (v2librechat.volltext). */
+  lcVolltext?: (u: User, q: string) => Promise<{ conv: string; text: string; at: Date | string }[]>;
   lcUrl: string;
   /** S20 (D8): Rolle der Besitzerin aus der Einrichtung (WERKBANK_ROLLE, von team-install gesetzt) — sonst abgeleitet. */
   rolleEinstellung?: string | null;
@@ -310,6 +312,15 @@ export function registerV2(on: On, d: V2Deps) {
   });
 
   // --- Alle Chats (S12, C4): Unter-Chats, Hauptchats, LibreChat- und 2.0-Chats — Suche und Filter macht die Oberfläche ---
+  // Abgleich (h): Volltext über die eigenen Chats — die Seite verbindet die Treffer über `conv` mit „Alle Chats“ (Titel, Link).
+  on('GET', /^\/api\/v2\/chats\/suche$/, async (req, res, _m, url) => {
+    const u = await d.needUser(req);
+    const q = String(url.searchParams.get('q') ?? '').trim().slice(0, 100);
+    if (q.length < 3 || !d.lcVolltext) return send(d, res, { treffer: [] });
+    const l = await d.lcVolltext(u, q).catch(() => null);
+    if (!l) return send(d, res, { treffer: [], fehlt: ['LibreChat'] });
+    send(d, res, { treffer: l.map((t) => ({ conv: t.conv, auszug: auszugUm(t.text, q), at: new Date(t.at).toISOString() })) });
+  });
   on('GET', /^\/api\/v2\/chats$/, async (req, res) => {
     const u = await d.needUser(req);
     const fehlt: string[] = [];

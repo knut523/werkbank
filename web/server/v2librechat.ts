@@ -42,3 +42,13 @@ export async function liste(u: User, n = 1000): Promise<{ conversationId: string
   }
   return convs;
 }
+
+/** Abgleich (h): Volltextsuche in den eigenen Chat-Nachrichten (nur `user: u.id`), je Unterhaltung der neueste Treffer, höchstens `n`. */
+export async function volltext(u: User, q: string, n = 30): Promise<{ conv: string; text: string; at: Date }[]> {
+  const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  const msgs: any[] = await lc().collection('messages').find({ user: u.id, $or: [{ text: re }, { 'content.text': re }] }, { projection: { conversationId: 1, text: 1, content: 1, createdAt: 1 } })
+    .sort({ createdAt: -1 }).limit(300).maxTimeMS(4000).toArray();
+  const out = new Map<string, { conv: string; text: string; at: Date }>();
+  for (const m of msgs) { const c = String(m.conversationId); if (!out.has(c)) out.set(c, { conv: c, text: messageText(m), at: new Date(m.createdAt ?? 0) }); if (out.size >= n) break; }
+  return [...out.values()];
+}

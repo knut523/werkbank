@@ -72,6 +72,10 @@ export function Suche({ q }: { q: string }) {
   const doks = useDaten<{ treffer: Dok[]; frei?: { notizen: boolean; berichte: boolean } }>(s ? `api/v2/dokumente?q=${encodeURIComponent(q.trim())}` : null);
   const prs = useDaten<{ gesperrt?: boolean; zeilen: PrZeile[] }>(s ? 'api/v2/prs?wer=alle' : null);
   const c = (chats.d?.zeilen ?? []).filter((z) => `${z.titel} ${z.thema ?? ''}`.toLowerCase().includes(s));
+  // Abgleich (h): Volltext in den Nachrichten — Treffer über `conv` mit „Alle Chats“ verbinden (Titel, Link), Titel-Treffer zuerst.
+  const voll = useDaten<{ treffer: { conv: string; auszug: string; at: string }[] }>(s.length >= 3 ? `api/v2/chats/suche?q=${encodeURIComponent(q.trim())}` : null);
+  const schon = new Set(c.map((z) => z.conv));
+  const imText = (voll.d?.treffer ?? []).filter((t) => !schon.has(t.conv)).map((t) => ({ t, z: (chats.d?.zeilen ?? []).find((z) => z.conv === t.conv) }));
   const p = (prs.d?.zeilen ?? []).filter((z) => `${z.pr} ${z.titel}`.toLowerCase().includes(s.replace(/^#/, '')));
   const gruppe = (titel: string, laedt: boolean, n: number, inhalt: ReactNode, mehr: string | null) => (
     <section className="abschnitt"><h2>{titel}</h2>{laedt ? <Laedt /> : n ? inhalt : <p className="leer">Nichts gefunden.</p>}{mehr && n > 8 && <p className="abschnitt-fuss"><a href={mehr}>Alle ansehen →</a></p>}</section>
@@ -81,6 +85,7 @@ export function Suche({ q }: { q: string }) {
       <SuchFeld q={q} />
       {!s ? <p className="leer">Gib oben ein Wort ein.</p> : <>
         {gruppe('Unter-Chats und Chats', !chats.d && !chats.fehler, c.length, <ul className="liste">{c.slice(0, 8).map((z) => <Zeile key={z.id} titel={z.titel} url={z.url ?? (z.art === 'unterchat' ? `v2/arbeit/${z.id}` : '#')} satz={ART_TEXT[z.art]} rechts={wann(z.zuletzt)} />)}</ul>, `v2/chats?q=${encodeURIComponent(q.trim())}`)}
+        {s.length >= 3 && gruppe('In Chat-Nachrichten gefunden', !voll.d && !voll.fehler, imText.length, <ul className="liste">{imText.slice(0, 8).map(({ t, z }) => <Zeile key={t.conv} titel={z?.titel ?? 'Chat'} url={z?.url ?? (z?.art === 'unterchat' ? `v2/arbeit/${z.id}` : '#')} satz={`„${t.auszug}“`} rechts={wann(t.at)} />)}</ul>, null)}
         {gruppe('Dokumente', !doks.d && !doks.fehler, doks.d?.treffer.length ?? 0, <ul className="liste">{(doks.d?.treffer ?? []).slice(0, 8).map((x) => <DokZeile key={x.url} x={x} />)}</ul>, `v2/dokumente?q=${encodeURIComponent(q.trim())}`)}
         {!prs.d?.gesperrt && gruppe('PRs', !prs.d && !prs.fehler, p.length, <ul className="liste">{p.slice(0, 8).map((z) => <PrZeileView key={z.pr} p={z} />)}</ul>, 'v2/prs?wer=alle')}
       </>}
