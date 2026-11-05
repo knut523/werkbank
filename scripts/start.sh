@@ -52,7 +52,9 @@ start claude-bridge 3090 "$WB/claude-bridge" env BRIDGE_PORT=3090 BRIDGE_HOST=12
   BRIDGE_PERMISSION_MODE="${BRIDGE_PERMISSION_MODE-auto}" \
   BRIDGE_AUTO_SCOPE="${BRIDGE_AUTO_SCOPE-voll}" \
   BRIDGE_AUTO_EMAILS="${BRIDGE_AUTO_EMAILS-knut.peters@maxenergy.at}" \
-  BRIDGE_MAX_PARALLEL_CHATS="${BRIDGE_MAX_PARALLEL_CHATS-4}" node src/server.ts
+  BRIDGE_MAX_PARALLEL_CHATS="${BRIDGE_MAX_PARALLEL_CHATS-}" node src/server.ts
+# Audit 05.11. (3): keine feste Zahl-Grenze mehr (vorher 4) — ob ein Zug startet, entscheidet die Speicher-Schätzung gegen die
+# Box (claude-bridge/src/schaetzung.ts); BRIDGE_MAX_PARALLEL_CHATS bleibt als Notgrenze, wenn man ihn ausdrücklich setzt.
 start librechat 3080 "$RT/librechat" env CONFIG_PATH="$WB/librechat/librechat.yaml" node api/server/index.js
 # Freigabe wie bei der Brücke: dieselbe Liste, solange die Sitzungen als VM-Nutzer laufen.
 start werkbank-web 3070 "$WB/web" env WERKBANK_PORT=3070 WERKBANK_HOST=127.0.0.1 BRIDGE_STATE_DIR="$RT/bridge" \

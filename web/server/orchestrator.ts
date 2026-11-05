@@ -167,7 +167,7 @@ export function statusMark(text: string): 'fertig' | 'braucht Antwort' | 'blocki
   return v === 'fertig' ? 'fertig' : v === 'braucht antwort' ? 'braucht Antwort' : v === 'blockiert' ? 'blockiert' : v === 'läuft' ? 'läuft' : null;
 }
 
-export interface StrandState { running: boolean; interrupted: boolean; queued?: { pos: number; since: number } | null; turn: { start: number; end: number | null; outcome: string | null; modell?: string } | null }
+export interface StrandState { running: boolean; interrupted: boolean; queued?: { pos: number; since: number; grund?: string } | null; turn: { start: number; end: number | null; outcome: string | null; modell?: string; schlange?: boolean; grund?: string } | null }
 export interface LastMsg { fromUser: boolean; text: string; error: boolean; at: number }
 
 /**
@@ -180,7 +180,7 @@ export function orchStatus(run: { startError?: string | null; startedAt: Date | 
   if (run.startError) return { status: 'failed', reason: `Start fehlgeschlagen: ${run.startError}` };
   if (s?.running) return { status: 'running', reason: 'Zug läuft' };
   // Plan 213 S1a: wartet in der Schlange der Brücke (Parallelgrenze) — kein Fehlschlag, startet von selbst.
-  if (s?.queued) return { status: 'running', reason: `in der Schlange (Platz ${s.queued.pos}, seit ${Math.max(0, Math.round((now - s.queued.since) / 60_000))} min)` };
+  if (s?.queued) return { status: 'running', reason: `in der Schlange (Platz ${s.queued.pos}, seit ${Math.max(0, Math.round((now - s.queued.since) / 60_000))} min${s.queued.grund ? ` — ${s.queued.grund}` : ''})` };
   // Kein Fehler: das automatische „weiter“ übernimmt; greift es nicht, meldet der Hauptchat „hängt“ (Plan 154, G10).
   if (s?.interrupted) return { status: 'waiting', reason: 'Zug abgebrochen (Brücke neu gestartet) — wird automatisch fortgesetzt, sonst `send <id> weiter`', cause: 'interrupted' };
   const sent = new Date(run.lastSentAt ?? run.startedAt).getTime();
@@ -198,7 +198,8 @@ export function orchStatus(run: { startError?: string | null; startedAt: Date | 
   const ABBRUCH: Record<string, string> = { busy: 'Parallelgrenze', limit: 'Schrittlimit', timeout: 'Zeitlimit', rate_limit: 'Kontingent', error: 'Fehler in der Claude-Sitzung', aborted: 'Zug abgebrochen' };
   if (s.turn.outcome && ABBRUCH[s.turn.outcome] && fertigNachSend && last!.at >= s.turn.start - 5000) return { status: 'done', reason: `fertig (danach abgebrochen: ${ABBRUCH[s.turn.outcome]})` };
   switch (s.turn.outcome) {
-    case 'busy': return { status: 'failed', reason: 'Parallelgrenze der Brücke (BRIDGE_MAX_PARALLEL_CHATS) — später `send <id> weiter`', cause: 'busy' };
+    // Audit 05.11. (3): mit Grund der Brücke; nach dem Zeitdeckel der Schlange stellt das Auto-weiter gleich neu an.
+    case 'busy': return { status: 'failed', reason: s.turn.schlange ? `zu lange in der Schlange (${s.turn.grund || 'kein Platz'}) — wird gleich neu angestellt, der Platz bleibt` : `kein Platz in der Brücke${s.turn.grund ? ` (${s.turn.grund})` : ''} — wird automatisch fortgesetzt, sonst \`send <id> weiter\``, cause: 'busy' };
     case 'limit': return { status: 'waiting', reason: 'Schrittlimit des Zuges erreicht — `send <id> weiter`', cause: 'limit' };
     case 'timeout': return { status: 'waiting', reason: 'Zeitlimit des Zuges erreicht — `send <id> weiter`', cause: 'timeout' };
     case 'rate_limit': return { status: 'failed', reason: 'Claude-Kontingent ausgeschöpft', cause: 'rate_limit' };
@@ -329,7 +330,7 @@ export function autoWeiter(run: AutoRun, st: { cause?: AutoCause }, s: StrandSta
   if (ctx.now - Math.max(end, sent) > AUTO_STALE_MS) return { action: 'none', why: 'Zugende länger als 6 h her — von Hand fortsetzen' };
   // Council 15.10., C5: Parallelgrenze → wachsender Abstand (2, 4, 8, 16, 32 min) statt alle 2 min neu (jeder Neustart lädt den vollen Kontext).
   const busyMs = AUTO_BUSY_MS * 2 ** Math.min(4, Math.max(0, Number(run.autoStreak ?? 0)));
-  if (cause === 'busy' && ctx.now - end < busyMs) return { action: 'wait', key, why: `Parallelgrenze — erneut nach ${Math.round(busyMs / 60_000)} min` };
+  if (cause === 'busy' && !t?.schlange && ctx.now - end < busyMs) return { action: 'wait', key, why: `Parallelgrenze — erneut nach ${Math.round(busyMs / 60_000)} min` };
   if (cause === 'rate_limit' && ctx.now - end < AUTO_RATE_MS && !ctx.accountFree) return { action: 'wait', key, why: 'Kontingent — erneut nach 30 min oder bei freiem Konto' };
   // Council R1, Bedingung 1: erst wenn LibreChat die Antwort des Zuges gespeichert hat (sonst falsche Elternnachricht).
   if ((cause === 'limit' || cause === 'timeout') && t && !(last && !last.fromUser && last.at >= t.start - 5000) && ctx.now - end < AUTO_SAVE_MS) return { action: 'wait', key, why: 'Antwort wird gespeichert' };

@@ -2,7 +2,10 @@
 // Verbindung weg, Zeitdeckel, Aufrücken nach dem Ende eines Zugs.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { reihe, position, warte, wecke, inSchlange, laenge, angemeldet, maxWarteMs, _leeren, type Platz } from '../src/schlange.ts';
+import { reihe, position, warte, wecke, inSchlange, laenge, angemeldet, maxWarteMs, merkeIn, _leeren, type Platz } from '../src/schlange.ts';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 beforeEach(() => _leeren());
 
@@ -80,6 +83,55 @@ test('Pass C: zwei Wartende, ein freier Platz, im selben Takt geweckt — der zw
   laufend = 2; wecke();
   assert.equal(await b, 'start');
   angemeldet();
+});
+
+test('Audit 05.11. (3): Wartegrund steht am Platz; jcode hat eine eigene Reihe', async () => {
+  let g = 'Box voll (11,9 GB)';
+  let zu = false;
+  const a = warte({ key: 'a', userId: 'u', vorrang: false }, { frei: () => false, grund: () => g, geschlossen: () => zu, melde: () => {}, takt: 5 });
+  await new Promise((r) => setTimeout(r, 3));
+  const j = warte({ key: 'j', userId: 'u', vorrang: false, topf: 'jcode' }, { frei: () => false, geschlossen: () => zu, melde: () => {}, takt: 5 });
+  await new Promise((r) => setTimeout(r, 15));
+  assert.equal(inSchlange('a')?.grund, 'Box voll (11,9 GB)');
+  assert.equal(inSchlange('j')?.pos, 1, 'jcode wartet nicht hinter Claude');
+  g = 'Host knapp'; await new Promise((r) => setTimeout(r, 15));
+  assert.equal(inSchlange('a')?.grund, 'Host knapp');
+  zu = true; wecke();
+  assert.equal(await a, 'zu'); assert.equal(await j, 'zu');
+});
+
+test('Audit 05.11. (3): Schlange übersteht Neustart und Zeitdeckel — wer wiederkommt, behält seinen Platz (since)', async () => {
+  const datei = join(mkdtempSync(join(tmpdir(), 'schlange-')), 'schlange.json');
+  merkeIn(datei);
+  let t = 1_000, zu = false;
+  const o = () => ({ frei: () => false, geschlossen: () => zu, melde: () => {}, now: () => t, takt: 5 });
+  const x = warte({ key: 'x', userId: 'u', vorrang: false }, o());
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(JSON.parse(readFileSync(datei, 'utf8')).plaetze[0].key, 'x', 'auf Platte');
+  // „Neustart“: der Prozess ist weg — die Datei bleibt; der neue Prozess liest sie beim Start.
+  _leeren(); merkeIn(datei);
+  t = 5_000;
+  const y = warte({ key: 'y', userId: 'u', vorrang: false }, o());
+  await new Promise((r) => setTimeout(r, 3));
+  const x2 = warte({ key: 'x', userId: 'u', vorrang: false }, o());
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(inSchlange('x')?.since, 1_000, 'alter Platz');
+  assert.equal(inSchlange('x')?.pos, 1, 'vor y, das erst nach dem Neustart kam');
+  zu = true; wecke();
+  await Promise.all([y, x2]); void x;
+  // Zeitdeckel: der Platz bleibt gemerkt (für das automatische Fortsetzen der Werkbank)
+  _leeren(); merkeIn(datei); zu = false;
+  const alt = process.env.BRIDGE_QUEUE_MAX_MIN; process.env.BRIDGE_QUEUE_MAX_MIN = '1';
+  t = 100_000;
+  const z = warte({ key: 'z', userId: 'u', vorrang: false }, { ...o(), melde: () => { t += 61_000; } });
+  assert.equal(await z, 'zeit');
+  if (alt === undefined) delete process.env.BRIDGE_QUEUE_MAX_MIN; else process.env.BRIDGE_QUEUE_MAX_MIN = alt;
+  _leeren(); merkeIn(datei);
+  const z2 = warte({ key: 'z', userId: 'u', vorrang: false }, o());
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(inSchlange('z')?.since, 100_000);
+  zu = true; wecke(); await z2;
+  _leeren(); merkeIn(null);
 });
 
 test('Pass C: ungültige Wartezeit fällt auf 45 min zurück (nie ewig warten)', () => {

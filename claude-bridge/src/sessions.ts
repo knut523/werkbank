@@ -22,8 +22,8 @@ import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
-import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet } from './schlange.ts';
-import { schaetze, passt, schaetzungText, speicherStand, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
+import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn } from './schlange.ts';
+import { schaetze, passt, passtJcode, schaetzungText, speicherStand, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 
@@ -206,6 +206,8 @@ try { homeMap = JSON.parse(readFileSync(homeFile, 'utf8')); } catch { /* keine *
 const cwdFile = join(cfg.stateDir, 'cwd.json');
 let cwdMap: Record<string, string> = {};
 try { cwdMap = JSON.parse(readFileSync(cwdFile, 'utf8')); } catch { /* keine */ }
+// Audit 05.11. (3): die Warteschlange auf Platte — nach einem Neustart bekommt ein Zug, der wiederkommt, seinen Platz zurück.
+merkeIn(join(cfg.stateDir, 'schlange.json'));
 
 // Orchestrator-Stränge (Knut, 09.10.2026): Unterhaltung → Arbeitsordner, Anmeldezeit und Ausgang des letzten Zuges.
 // Angemeldet über den internen Kanal VOR dem ersten Zug (die Web-App wählt die Unterhaltungs-ID); dauerhaft.
@@ -234,7 +236,9 @@ const LESER_TOOLS = ['Read', 'Grep', 'Glob'];
 const BAUER_MCP = ['vault-search', 'werkbank'];
 const LESER_MCP = ['vault-search', 'werkbank'];   // Suche im Vault (Lesen); review_ready / hauptchat_melden für Stränge
 export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte auf Deutsch, knapp und in Markdown. Du kannst nur lesen (Read, Grep, Glob) — schreibe und ändere nichts. Belege jede Aussage mit Datei:Zeile. Was du nicht findest, sagst du offen, statt zu raten.';
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string };
+// laeufer: 'jcode' = Strang läuft über jcode (Konzept J1; eigener Speicher-Topf). turn.schlange/grund: Zug endete nach dem
+// Zeitdeckel der Schlange (Audit 05.11. (3)) — die Werkbank stellt ihn ohne Abstand neu an, der Platz bleibt.
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; laeufer?: 'jcode'; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; schlange?: boolean; grund?: string };
   // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
   // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
   auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string };
@@ -407,12 +411,20 @@ export let lockGrund = '';
 export function lockFor(mine: ZugLite[], next: { readonly: boolean; mode: PermissionMode }, box?: { neu: Schaetzung; stand: SpeicherStand | null; now?: number; vorrang?: boolean }): 'ok' | 'chat-busy' | 'board-full' {
   lockGrund = '';
   if (isBoardRun(next)) return mine.filter(isBoardRun).length >= MAX_BOARD_RUNS ? 'board-full' : 'ok';
-  const aktiv = mine.filter((l) => !isBoardRun(l) && !l.pending);
+  const alle = mine.filter((l) => !isBoardRun(l) && !l.pending);
+  // Audit 05.11. (3): jcode-Stränge haben ihren eigenen Topf — sie zählen weder gegen die Zahl-Grenze noch als laufende Claude-Züge.
+  const jc = (l: ZugLite) => l.schaetzung?.topf === 'jcode';
+  const aktiv = alle.filter((l) => !jc(l));
+  // Eben gestartete Züge zeigt der Speicherstand noch nicht: ihre Schätzung zählt die ersten 3 Minuten mit.
+  const now = box?.now ?? Date.now();
+  const frisch = alle.filter((l) => l.t0 && now - l.t0 < 3 * 60_000).reduce((n, l) => n + (l.schaetzung?.speicherGb ?? 0), 0);
+  if (box?.neu.topf === 'jcode') {
+    const r = passtJcode(box.neu, { stand: box.stand, frisch, belegt: alle.filter(jc).reduce((n, l) => n + (l.schaetzung?.speicherGb ?? 0), 0) });
+    lockGrund = r.grund;
+    return r.ok ? 'ok' : 'chat-busy';
+  }
   if (aktiv.length >= maxParallelChats()) { lockGrund = `es laufen schon ${aktiv.length} Chats gleichzeitig`; return 'chat-busy'; }
   if (!box) return 'ok';
-  // Eben gestartete Züge zeigt der Speicherstand noch nicht: ihre Schätzung zählt die ersten 3 Minuten mit.
-  const now = box.now ?? Date.now();
-  const frisch = aktiv.filter((l) => l.t0 && now - l.t0 < 3 * 60_000).reduce((n, l) => n + (l.schaetzung?.speicherGb ?? 0), 0);
   const r = passt(box.neu, { stand: box.stand, frisch, laufend: aktiv.length, vorrang: box.vorrang });
   lockGrund = r.grund;
   return r.ok ? 'ok' : 'chat-busy';
@@ -1318,7 +1330,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const meine = () => [...lives.values()].filter((l) => l.userId === req.userId && !l.leit && !l.worker);
   let mine = meine();
   const mode = autoFor(req);
-  const schaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe });
+  const schaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe, jcode: orchMap[key]?.laeufer === 'jcode' });
   const box = () => ({ neu: schaetzung, stand: speicherStand(), vorrang: !!orchMap[key]?.vorrang });
   let lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode }, box());
   // Warteschlange statt Fehlschlag (Plan 213 S1a, K3): der Zug wartet, bis ein Platz frei ist; der Chat zeigt den Platz.
@@ -1331,8 +1343,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     if (orchMap[key]) setTurn(key, { start: Date.now(), end: null, outcome: null });
     let erst = true;
     const grund0 = lockGrund, warteAb = Date.now();   // Runde 7 B (Plan §22): Grund und Dauer der Wartezeit fürs Log
-    const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang }, {
+    const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang, ...(schaetzung.topf ? { topf: schaetzung.topf } : {}) }, {
       frei: () => !lives.has(key) && lockFor(meine(), { readonly: !!req.readonly, mode }, box()) === 'ok',
+      grund: () => lockGrund || 'gerade kein Platz',
       geschlossen: () => req.sink.closed,
       melde: (pos) => {
         req.sink.write(erst ? `⏳ In der Schlange: Platz ${pos} — ${lockGrund || 'gerade kein Platz'} (${schaetzungText(schaetzung)}). Startet von selbst, sobald es passt.\n\n` : `⏳ Jetzt Platz ${pos} …\n\n`);
@@ -1348,6 +1361,15 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     }
     mine = meine();
     lock = r === 'start' ? 'ok' : lock;
+    // Audit 05.11. (3): Zeitdeckel bei einem Strang ist kein stilles Aus — Grund in den Chat und an den Zug; die Werkbank stellt
+    // ihn gleich neu an (ohne den wachsenden Abstand der Parallelgrenze), die Schlange gibt ihm seinen alten Platz zurück.
+    if (r === 'zeit' && orchMap[key]) {
+      const g = lockGrund || grund0 || 'gerade kein Platz';
+      setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'busy', schlange: true, grund: g.slice(0, 200) });
+      req.sink.write(`⏳ Wartet schon ${Math.round((Date.now() - warteAb) / 60_000)} min in der Schlange — ${g}. Die Werkbank stellt den Zug gleich von selbst neu an; der Platz bleibt erhalten.`);
+      req.sink.finish();
+      return;
+    }
   }
   if (lock !== 'ok') {
     if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'busy' });

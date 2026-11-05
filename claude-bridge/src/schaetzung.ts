@@ -6,7 +6,7 @@
 // Dauer und Tokens je Tiefe aus den Strang-Läufen der letzten Wochen gerundet. Rein bis auf den Speicher-Leser.
 import { readFileSync } from 'node:fs';
 
-export interface Schaetzung { speicherGb: number; dauerMin: number; tokens: number }
+export interface Schaetzung { speicherGb: number; dauerMin: number; tokens: number; topf?: 'jcode' }
 export interface SpeicherStand { echtGb: number; hostFreiGb: number }
 
 // vorrangExtraGb: Spielraum über echtStartGb für Züge mit Vorrang (@review einer erlaubten Person, Knut 05.11.: #390 startete erst
@@ -19,11 +19,20 @@ const TIEFE: Record<string, { dauerMin: number; tokens: number }> = {
 
 /** Was ein Zug voraussichtlich braucht. Chat-Zug: kurz; Strang nach Tiefe; bauende Profile mit Platz für Tests/Builds. */
 export function schaetze(o: { kind?: string; profil?: string | null; tiefe?: string | null; jcode?: boolean } = {}): Schaetzung {
-  if (o.jcode) return { speicherGb: 0.15, dauerMin: 10, tokens: 0 };   // Melious: Energie statt Claude-Tokens
+  if (o.jcode) return { speicherGb: 0.15, dauerMin: 10, tokens: 0, topf: 'jcode' };   // Melious: Energie statt Claude-Tokens
   if (o.kind !== 'strand') return { speicherGb: 0.4, dauerMin: 5, tokens: 100_000 };
   const t = TIEFE[o.tiefe ?? 'regular'] ?? TIEFE.regular;
   const baut = !o.profil || ['voll', 'bauer', 'release'].includes(o.profil);
   return { speicherGb: baut ? 0.8 : 0.4, ...t };
+}
+
+/** Audit 05.11. (3): eigener Topf der jcode-Stränge (BRIDGE_JCODE_TOPF_GB, Vorgabe 2 GB ≈ 13 Stränge zu 0,15 GB). */
+export const jcodeTopfGb = () => { const g = Number(process.env.BRIDGE_JCODE_TOPF_GB || 2); return Number.isFinite(g) && g > 0 ? g : 2; };
+/** jcode-Strang: zählt nicht gegen die Startgrenze der Claude-Züge, nur gegen seinen Topf und den Host-Boden. */
+export function passtJcode(neu: Schaetzung, o: { stand: SpeicherStand | null; frisch: number; belegt: number }): { ok: boolean; grund: string } {
+  if (o.belegt + neu.speicherGb > jcodeTopfGb() + 1e-9) return { ok: false, grund: `jcode-Topf voll (${o.belegt.toFixed(2)} von ${jcodeTopfGb()} GB)` };
+  if (o.stand && o.stand.hostFreiGb - o.frisch - neu.speicherGb < GRENZE.hostMinGb) return { ok: false, grund: `Host zu knapp (frei ${o.stand.hostFreiGb.toFixed(1)} GB)` };
+  return { ok: true, grund: '' };
 }
 
 /** Passt ein weiterer Zug jetzt in die Box? `frisch` = geschätzter Speicher eben gestarteter Züge, die der Stand noch nicht zeigt.

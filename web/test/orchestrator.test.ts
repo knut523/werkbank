@@ -86,6 +86,13 @@ test('Auto-weiter (DoD 1/2): limit, timeout, interrupted, lost sofort; busy nach
   assert.deepEqual(autoWeiter(run, lost, null, null, ctx({ now: T0 + 400_000 })), { action: 'send', key: `s:${T0}`, why: 'Nachricht nicht angekommen' });
   assert.equal(decide('busy', {}, { now: T0 + 60_000 + AUTO_BUSY_MS - 1 }).action, 'wait');
   assert.equal(decide('busy', {}, { now: T0 + 60_000 + AUTO_BUSY_MS }).action, 'send');
+  // Audit 05.11. (3): Zeitdeckel der Schlange → sofort neu anstellen (die Brücke gibt den alten Platz zurück), Grund im Status.
+  const zeit = { running: false, interrupted: false, turn: { start: T0 + 1000, end: T0 + 60_000, outcome: 'busy', schlange: true, grund: 'passt gerade nicht in die Box (echt 11,8 GB …)' } };
+  assert.equal(autoWeiter(run, orchStatus(run, zeit, null), zeit, null, ctx({ now: T0 + 61_000 })).action, 'send');
+  assert.match(orchStatus(run, zeit, null).reason, /Box \(echt 11,8 GB/);
+  assert.doesNotMatch(orchStatus(run, zeit, null).reason, /BRIDGE_MAX_PARALLEL_CHATS/);
+  const q = { running: false, interrupted: false, queued: { pos: 2, since: T0, grund: 'Host zu knapp (frei 3,2 GB)' }, turn: null };
+  assert.match(orchStatus(run, q, null, T0 + 600_000).reason, /Platz 2, seit 10 min — Host zu knapp/);
   assert.equal(decide('rate_limit', {}, { now: T0 + 60_000 + AUTO_RATE_MS - 1 }).action, 'wait', 'frühestens nach 30 min …');
   assert.equal(decide('rate_limit', {}, { now: T0 + 60_000 + AUTO_RATE_MS }).action, 'send');
   assert.equal(decide('rate_limit', {}, { now: T0 + 61_000, accountFree: true }).action, 'send', '… oder bei freiem zweiten Konto');
