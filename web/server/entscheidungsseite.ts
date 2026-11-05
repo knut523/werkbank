@@ -4,7 +4,7 @@
 // Was keine Frage ist (Pflege, Schlange, Altbestand, Meeting-Vorschläge), bleibt eine Inbox-Zeile unter „Sonstiges“. Rein.
 import type { InboxEintrag } from './inbox.ts';
 import { klartext, frageForm, empfehlungAus, type Form } from './klartext.ts';
-import { klasseVon, type Klasse } from './stufe.ts';
+import { klasseVon, councilWirkung, type Klasse, type Council } from './stufe.ts';
 
 export type Antwort = 'ja' | 'nein' | 'anders' | 'spaeter';
 export interface Frage {
@@ -39,6 +39,8 @@ export interface Frage {
   triage?: { klasse: Klasse; grund: string };
   /** Unter-Chat, aus dem die Frage kommt (null: Hauptchat, Vault …). */
   strand?: string | null;
+  /** Plan §23 T3: Ergebnis des Council-Checks des Hauptchats (nur gewichtige Fragen). */
+  council?: Council | null;
   /** R30b S5: Klasse einer „Braucht Knut“-Zeile (nur mit WERKBANK_BRAUCHT_DICH), sonst null bzw. fehlt. */
   klasse?: 'aktion' | 'entscheidung' | null;
   /** (a) aus harter Regel (Nachbesserung 02.11.): warum nur Knut (zugang, datenbank, geld, recht, extern, entscheidung). */
@@ -89,7 +91,7 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
   for (const e of eintraege) {
     if (!FRAGE_ARTEN.has(e.art)) { sonstiges.push(e); continue; }
     const ref = e.art === 'vault' ? String(e.daten.vaultId ?? '') || null : e.art === 'push' ? String(e.daten.strand ?? '') || null : null;
-    const basis = { eintrag: e.id, ref, art: e.art, gruppe: gruppeVon(e), strand: e.quelle.strand ?? null, quelle: { text: e.quelle.text, url: e.quelle.url }, wartetSeit: e.wartetSeit, autoAb: e.autoAb ?? null, blockiert: e.blockiert };
+    const basis = { eintrag: e.id, ref, art: e.art, gruppe: gruppeVon(e), strand: e.quelle.strand ?? null, council: (e.daten.council as Council | undefined) ?? null, quelle: { text: e.quelle.text, url: e.quelle.url }, wartetSeit: e.wartetSeit, autoAb: e.autoAb ?? null, blockiert: e.blockiert };
     if (e.art === 'entscheidung') {
       for (const x of (e.daten.entscheidungen as any[]) ?? []) {
         const tw = titelUndWorum(x.frage);
@@ -100,7 +102,7 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
         const alt = Array.isArray(x.alternativen) ? [...new Set<string>(x.alternativen.map(ein).filter(Boolean))].filter((o) => o !== empfehlung).slice(0, 3) : [];
         fragen.push({ ...basis, id: `${e.id}~${x.id}`, teil: String(x.id), kennung: String(x.id), titel: tw.titel, worum, form,
           optionen, empfehlung, alternativen: form === 'wahl' ? [...new Set([...wahlKnoepfe(form, optionen, empfehlung), ...alt])].slice(0, 6) : alt,
-          stufe: x.stufe === 'wichtig' ? 'wichtig' : 'normal', stufeGrund: x.stufeGrund ?? null, autoAb: x.auto ? e.autoAb ?? null : null,
+          stufe: x.stufe === 'wichtig' ? 'wichtig' : 'normal', stufeGrund: x.stufeGrund ?? null, autoAb: x.auto ? e.autoAb ?? null : null, council: x.council ?? null,
           antworten: antwortenFuer(form, ['ja', 'nein', 'anders', 'spaeter'], empfehlung) });
       }
       continue;
@@ -143,7 +145,9 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
   // Plan §23 T1: Klasse je Frage (Aufgaben des Hauptchats sind nie Knut-Fragen; „vom Strang als Knut muss markiert“ stuft hoch).
   for (const f of fragen) {
     const markiert = f.stufe === 'wichtig' && /markiert/.test(f.stufeGrund ?? '') ? 'wichtig' : null;
-    f.triage = f.klasse === 'aktion' ? { klasse: 'technisch', grund: 'Aufgabe des Hauptchats' }
+    // T3: der Council hat „AN KNUT“ gesagt → Knut-Frage, mit dem Grund des Councils.
+    f.triage = f.council?.urteil === 'AN_KNUT' ? { klasse: 'knut', grund: `Council: ${councilWirkung(f.council).anzeige}` }
+      : f.klasse === 'aktion' ? { klasse: 'technisch', grund: 'Aufgabe des Hauptchats' }
       // Nur Frage, Empfehlung und Optionen — der Kontext („worum“) nennt bei OLAF fast immer Kunden/Verträge und machte jede Frage zur Knut-Frage.
       : klasseVon({ text: [f.titel, f.empfehlung ?? '', ...f.optionen].join(' '), markiert, art: f.art, empfehlung: f.empfehlung });
   }

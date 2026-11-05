@@ -114,3 +114,17 @@ test('T1: Klasse gewichtig (Council) und technisch; Grund wird mitgeliefert', as
   assert.equal(klasseVon({ text: 'Regex mit Wortgrenze oder Lookahead?', empfehlung: 'Lookahead' }).klasse, 'technisch');
   assert.equal(klasseVon({ text: 'Variablenname umbenennen?', empfehlung: 'ja', markiert: 'normal' }).klasse, 'technisch');
 });
+
+test('Plan §23 T3: Council-Urteil — AN_KNUT stuft hoch, HALTEN/AENDERN schließen mit Text an den Unter-Chat', async () => {
+  const { councilWirkung } = await import('../server/stufe.ts');
+  assert.deepEqual(councilWirkung({ urteil: 'AN_KNUT', grund: 'Datenverlust möglich' }), { klasse: 'knut', schliessen: false, text: null, anzeige: 'AN KNUT — Datenverlust möglich' });
+  const h = councilWirkung({ urteil: 'HALTEN', grund: 'Migration mit Rückweg', empfehlung: 'Ja, migrieren' });
+  assert.equal(h.schliessen, true); assert.equal(h.klasse, null);
+  assert.match(h.text!, /^Council-Check: HALTEN — Migration mit Rückweg\. Es gilt die Empfehlung: Ja, migrieren/);
+  const a = councilWirkung({ urteil: 'AENDERN', grund: 'Erst sichern', bedingung: 'Backup vor der Migration, Test für den Rückweg', empfehlung: 'Ja' });
+  assert.match(a.text!, /ÄNDERN — Erst sichern\. Es gilt die Empfehlung mit diesen Bedingungen: Backup vor der Migration, Test für den Rückweg/);
+  assert.equal(a.anzeige, 'ÄNDERN — Erst sichern (Bedingung: Backup vor der Migration, Test für den Rückweg)');
+  assert.throws(() => councilWirkung({ urteil: 'VIELLEICHT' as any, grund: 'x' }), /HALTEN, AENDERN oder AN_KNUT/);
+  assert.throws(() => councilWirkung({ urteil: 'HALTEN', grund: ' ' }), /Grund/);
+  assert.throws(() => councilWirkung({ urteil: 'AENDERN', grund: 'x' }), /Bedingung/);
+});

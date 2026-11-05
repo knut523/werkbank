@@ -155,6 +155,8 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
     <article className={`karte${fertig ? ' erledigt' : ''}${freigabe ? ' freigabe' : ''}`} aria-label={k.titel}>
       {k.thema && k.thema !== 'Sonstiges' && <p className="karte-thema">{k.thema}</p>}
       <h3 className="karte-titel">{k.titel}</h3>
+      {/* Plan §23 T4/T3: warum gerade du — die Regel oder das Urteil des Council-Checks. */}
+      {k.triage?.klasse === 'knut' && !fertig && <p className="karte-warum klein gedimmt">Warum du: {k.triage.grund}</p>}
       {/* Runde 6 (Knut B1): ist der Titel keine Frage („PDF/Mail sagen bei Einspeisung …“), braucht es einen Satz, worum es geht. */}
       {!/\?\s*$/.test(k.titel) && k.worum && !fertig && <p className="karte-worum klein">{ersterSatz(k.worum)}</p>}
       {sammelKarte(`${k.titel} ${k.worum}`) && !n && !freigabe && !fertig && <p className="klein hinweis-warn">Fasst mehrere Entscheidungen zusammen, die hier nicht einzeln stehen — „Ja, so“ bestätigt alle.{k.bericht ? <> <a href={rel(k.bericht)}>Im Bericht lesen</a></> : null}</p>}

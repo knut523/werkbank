@@ -116,7 +116,7 @@ import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 import { braucheBraucht, schliesseBraucht, archiviere as archiviereStrang, zurueckholen as brauchtZurueck, hauptchatAktionen, kartEingabe, paketLiveFakten, wendeAufInbox, meldeAktionen, zustellStand, BRAUCHT_AN as brauchtAn } from './brauchtab.ts';
 import { sqlAus, prsAus } from './braucht.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
-import { autoAnnahmeAn, annahmeMs, stufeVon, triageAn } from './stufe.ts';
+import { autoAnnahmeAn, annahmeMs, stufeVon, triageAn, type Council, type councilWirkung } from './stufe.ts';
 import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
 import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
@@ -1533,6 +1533,14 @@ async function inboxFuer(u: User, now = Date.now()) {
   const vf = knutsFragen(u) ? vaultFragenFuerInbox(now) : { einzeln: [], rest: 0 };
   const ib = baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe, triage, vaultFragen: vf.einzeln, vaultRest: vf.rest,
     kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now, annahmeMs: annahmeMs(), triage: triageAn() });
+  // Plan §23 T3: Council-Urteile an die Fragen hängen (Bericht-Entscheidung: je Teil; sonst am Eintrag).
+  if (triageAn()) {
+    const urteile = new Map((await councilCol().find({ userId: u.id }).toArray().catch(() => [] as any[])).map((x: any) => [String(x.frage), { urteil: x.urteil, grund: x.grund, bedingung: x.bedingung ?? null, at: x.at }]));
+    if (urteile.size) for (const e of ib.eintraege) {
+      if (e.art === 'entscheidung') for (const x of (e.daten.entscheidungen as any[]) ?? []) { const c = urteile.get(`${e.id}~${x.id}`); if (c) x.council = c; }
+      else if (urteile.has(e.id)) e.daten.council = urteile.get(e.id);
+    }
+  }
   // Abwesenheits-Bremse (F4a): nach einer Rückkehr gilt „angenommen ab“ frühestens eine volle Frist später.
   if (bremseAn()) {
     const fr = anwesenheitFrei(await anwesenheitCol().findOne({ _id: u.id as any }) as any, now, annahmeMs());
@@ -1834,6 +1842,18 @@ async function alleWieEmpfohlen(u: User, ids: string[], nur: (f: Frage) => boole
 const logCol = () => wb().collection('entscheidungs_log');
 async function logEntscheidung(u: User, e: any, antwort: string, durch: string, auto = false, ids: string[] = []) {
   await logCol().insertOne(logZeile(u.id, e, { antwort, durch, auto, ids }) as any);
+}
+// Plan §23 T3: Council-Urteile des Hauptchats zu gewichtigen Fragen. Gespeichert je Person und Frage; die Inbox hängt sie an.
+const councilCol = () => wb().collection('council_urteile');
+async function councilAnwenden(u: User, f: Frage, c: Council, w: ReturnType<typeof councilWirkung>) {
+  await councilCol().updateOne({ _id: `${u.id}:${f.id}` as any }, { $set: { userId: u.id, frage: f.id, titel: f.titel, ...c } }, { upsert: true });
+  zahlCache.delete(u.id);
+  if (!w.schliessen) return;   // AN_KNUT: die Frage steht ab jetzt in „Für dich“
+  // HALTEN/ÄNDERN: an der Quelle beantworten (geht an den Unter-Chat) — der Antwortweg schreibt das Log; diesen Eintrag als
+  // Council-Entscheidung markieren (auto → sichtbar und umkehrbar unter „Von Claude entschieden“).
+  const start = new Date();
+  await fragenAntwort(u, { id: f.id, antwort: 'anders', text: w.text });
+  await logCol().findOneAndUpdate({ userId: u.id, at: { $gte: start } }, { $set: { auto: true, durch: 'council', council: c, antwort: `Council: ${w.anzeige}` } }, { sort: { at: -1 } });
 }
 /** Normale Einträge, deren 24 h um sind: Empfehlung annehmen — an derselben Quelle wie eine Antwort von Knut, dann ins Log. */
 async function annahmeLauf(u: User, now = Date.now()): Promise<string[]> {
@@ -4318,7 +4338,7 @@ registerV2(on, {
   alleEmpfohlen: alleWieEmpfohlen,
   sammelSchliessen: (u, id) => inboxAntworten(u, id, { antwort: 'nein', weg: 'ui' }),
   alleRuns: (u) => orchRuns().find({ userId: u.id }, { projection: { _id: 1, conv: 1, title: 1, thema: 1, zustand: 1, kind: 1, lastActivity: 1, doneAt: 1, startedAt: 1, reviewedAt: 1, knutReviewedAt: 1, startError: 1, endedAt: 1 } }).sort({ lastActivity: -1 }).limit(1000).toArray(),
-  lcChats: (u) => v2lcListe(u), lcVolltext: (u, q) => v2lcVolltext(u, q), entschiedenLog: (u) => logListe(u, { tage: 30 }), umkehren: (u, id, text) => logUmkehren(u, id, text), lcUrl: cfg.librechatPublicUrl, rolleEinstellung: process.env.WERKBANK_ROLLE ?? null, vorlagen: vorlagenFuerV2,
+  lcChats: (u) => v2lcListe(u), lcVolltext: (u, q) => v2lcVolltext(u, q), entschiedenLog: (u) => logListe(u, { tage: 30 }), umkehren: (u, id, text) => logUmkehren(u, id, text), councilAnwenden: (u, f, c, w) => councilAnwenden(u, f, c, w), lcUrl: cfg.librechatPublicUrl, rolleEinstellung: process.env.WERKBANK_ROLLE ?? null, vorlagen: vorlagenFuerV2,
   wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },
   abgleich: (u, id, stand) => abgleichFuer(u.id, id, cfg.reviewDir, stand),
   // Paket aus dem Feld oder — bei Unter-Chats ohne eigenes Paket — aus dem Pfad des gefundenen Berichts (…/<paket>/bericht.md im Review-Ordner).

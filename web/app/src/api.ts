@@ -30,6 +30,8 @@ export async function schicke<T = any>(pfad: string, body: unknown): Promise<T> 
 
 export interface Link { label: string; url: string; extern?: boolean }
 export interface Karte {
+  /** Plan §23: Klasse und Grund („Warum du: Geld/Budget“, „Council: AN KNUT — …“). */
+  triage?: { klasse: string; grund: string } | null;
   id: string; art: 'entscheidung' | 'freigabe'; titel: string; worum: string; grund: string; empfehlung: string | null; optionen: string[]; alternativen: string[];
   antworten: ('ja' | 'nein' | 'anders' | 'spaeter')[]; form: string; wichtig: boolean; thema: string; quelle: string; links: Link[]; erklaerung: [string, string][]; alt: string | null; wartetSeit: string | null;
   bezug?: { id: string; frage: string; empfehlung: string | null; antwort: string | null }[]; bericht?: string | null;

@@ -92,3 +92,25 @@ export function klasseVon(e: StufeEingabe & { empfehlung?: string | null }): { k
 
 /** Plan §23: Triage an? Schalter WERKBANK_TRIAGE=1 (Vorgabe aus bis zum Release; Test-Instanz an). Rückweg: aus → Annahme nach 24 h. */
 export const triageAn = (env = process.env) => env.WERKBANK_TRIAGE === '1';
+
+// ---------- Plan §23 T3: Council-Check für gewichtige Fragen (Hauptsitzung 05.11.) ----------
+// Der Hauptchat prüft eine gewichtige Frage mit dem Council (Gegenrollen + Finalizer) und meldet das Ergebnis:
+//   AN_KNUT  — die Frage wird zur Knut-Frage (steht dann in „Für dich“, mit dem Grund)
+//   HALTEN   — die Empfehlung gilt; die Frage schließt mit Protokolleintrag, der Text geht an den Unter-Chat
+//   AENDERN  — die Empfehlung gilt nur mit den Bedingungen; sonst wie HALTEN
+export type CouncilUrteil = 'HALTEN' | 'AENDERN' | 'AN_KNUT';
+export interface Council { urteil: CouncilUrteil; grund: string; bedingung?: string | null; at?: string }
+
+export function councilWirkung(c: { urteil: CouncilUrteil; grund: string; bedingung?: string | null; empfehlung?: string | null }): { klasse: 'knut' | null; schliessen: boolean; text: string | null; anzeige: string } {
+  if (!['HALTEN', 'AENDERN', 'AN_KNUT'].includes(c.urteil)) throw new Error('Urteil muss HALTEN, AENDERN oder AN_KNUT sein.');
+  const grund = String(c.grund ?? '').trim();
+  if (!grund) throw new Error('Ein Grund gehört dazu (--grund).');
+  const bed = String(c.bedingung ?? '').trim();
+  if (c.urteil === 'AENDERN' && !bed) throw new Error('ÄNDERN braucht eine Bedingung (--bedingung).');
+  const name = c.urteil === 'AN_KNUT' ? 'AN KNUT' : c.urteil === 'AENDERN' ? 'ÄNDERN' : 'HALTEN';
+  const anzeige = `${name} — ${grund}${bed ? ` (Bedingung: ${bed})` : ''}`;
+  if (c.urteil === 'AN_KNUT') return { klasse: 'knut', schliessen: false, text: null, anzeige };
+  const empf = String(c.empfehlung ?? '').trim();
+  const text = `Council-Check: ${name} — ${grund}. ${c.urteil === 'AENDERN' ? `Es gilt die Empfehlung mit diesen Bedingungen: ${bed}` : 'Es gilt die Empfehlung'}${empf ? `: ${empf}` : ''}. Umkehrbar über „Von Claude entschieden“.`;
+  return { klasse: null, schliessen: true, text, anzeige };
+}

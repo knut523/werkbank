@@ -11,7 +11,7 @@ import { fragenJeStrang } from './chatstatus.ts';
 import { auszugUm, knutOffenJe, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import { dodAus, fastFertig, endenAus } from './dod.ts';
-import { triageAn } from './stufe.ts';
+import { triageAn, councilWirkung, type Council, type CouncilUrteil } from './stufe.ts';
 import type { Abgleich } from './fragenbericht.ts';
 import * as librechat from './v2librechat.ts';
 
@@ -64,6 +64,8 @@ export interface V2Deps {
   /** Plan §23 T5: Entscheidungs-Log der Person (main.ts logListe), Umkehr über den bestehenden Widerruf (an den Unter-Chat). */
   entschiedenLog?: (u: User) => Promise<{ id: string; durch: string; at: string | Date; strand: { id: string; titel: string } | null; [k: string]: any }[]>;
   umkehren?: (u: User, id: string, text: string) => Promise<void>;
+  /** Plan §23 T3: Council-Urteil des Hauptchats speichern und wirken lassen (main.ts councilAnwenden). */
+  councilAnwenden?: (u: User, f: Frage, c: Council, w: ReturnType<typeof councilWirkung>) => Promise<void>;
   lcUrl: string;
   /** S20 (D8): Rolle der Besitzerin aus der Einrichtung (WERKBANK_ROLLE, von team-install gesetzt) — sonst abgeleitet. */
   rolleEinstellung?: string | null;
@@ -354,6 +356,23 @@ export function registerV2(on: On, d: V2Deps) {
     await d.umkehren(u, m[1], eigen ? `Umkehren: ${eigen}` : 'Umkehren: Knut nimmt diese Entscheidung zurück — nicht so umsetzen; schon Gebautes zurücknehmen und die Frage an Knut stellen.');
     d.log('v2 umgekehrt', { user: u.id, id: m[1] });
     send(d, res, { ok: true });
+  });
+
+  // Plan §23 T3: der Hauptchat meldet das Ergebnis seines Council-Checks zu einer gewichtigen Frage (CLI `orch council …` ruft das).
+  on('POST', /^\/api\/v2\/council$/, async (req, res) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) throw err(403, 'Nur wer die Unter-Chats führt.');
+    if (!d.councilAnwenden) throw err(501, 'Council-Check ist hier nicht eingerichtet.');
+    const b = await d.body(req, 16 * 1024);
+    const f = fragenAus((await d.inboxFuer(u)).eintraege).fragen.find((x) => x.id === String(b.frage ?? ''));
+    if (!f) throw err(404, 'Diese Frage ist nicht (mehr) offen.');
+    if (f.triage?.klasse !== 'gewichtig') throw err(409, `Council nur für gewichtige Fragen — diese ist ${f.triage?.klasse ?? 'ohne Klasse'} (${f.triage?.grund ?? ''}).`);
+    const c: Council = { urteil: String(b.urteil ?? '') as CouncilUrteil, grund: String(b.grund ?? '').slice(0, 2000), bedingung: b.bedingung ? String(b.bedingung).slice(0, 2000) : null, at: new Date().toISOString() };
+    let w: ReturnType<typeof councilWirkung>;
+    try { w = councilWirkung({ ...c, empfehlung: f.empfehlung }); } catch (e: any) { throw err(400, String(e?.message ?? e)); }
+    await d.councilAnwenden(u, f, c, w);
+    d.log('v2 council', { user: u.id, frage: f.id, urteil: c.urteil });
+    send(d, res, { ok: true, anzeige: w.anzeige, geschlossen: w.schliessen });
   });
 
   // Abgleich (h): Volltext über die eigenen Chats — die Seite verbindet die Treffer über `conv` mit „Alle Chats“ (Titel, Link).

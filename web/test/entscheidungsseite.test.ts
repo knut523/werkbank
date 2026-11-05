@@ -119,3 +119,12 @@ test('Plan §23 T1: jede Frage trägt ihre Triage-Klasse mit Grund', () => {
   assert.equal(k('D3').klasse, 'gewichtig');
   assert.deepEqual(k('D4'), { klasse: 'knut', grund: 'keine Empfehlung' });
 });
+
+test('Plan §23 T3: ein angehängtes Council-Urteil AN_KNUT macht die gewichtige Frage zur Knut-Frage und steht an der Frage', () => {
+  const ib = baueInbox({ ...leer, karten: [karte('t3', 'Bot', [{ id: 'D1', frage: 'Datenmodell migrieren?', empfehlung: 'Ja', council: { urteil: 'AN_KNUT', grund: 'Datenverlust möglich', at: '2026-11-05T10:00:00Z' } }, { id: 'D2', frage: 'Schema umbauen?', empfehlung: 'Ja' }])] }, { now });
+  const { fragen } = fragenAus(ib.eintraege);
+  const d1 = fragen.find((f) => f.teil === 'D1')!;
+  assert.deepEqual(d1.triage, { klasse: 'knut', grund: 'Council: AN KNUT — Datenverlust möglich' });
+  assert.equal(d1.council?.urteil, 'AN_KNUT');
+  assert.equal(fragen.find((f) => f.teil === 'D2')!.triage?.klasse, 'gewichtig');
+});

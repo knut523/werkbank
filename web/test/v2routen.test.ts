@@ -396,3 +396,20 @@ test('Plan §23 T5: Protokoll „Von Claude entschieden“ — gesamt und je Unt
     assert.match((await rufe('POST', '/api/v2/entschieden/l1/umkehren', ADMIN, { text: 'Lieber nach Name' })).b.ok ? umgekehrt[1] : '', /Lieber nach Name/);
   } finally { delete deps.entschiedenLog; delete deps.umkehren; }
 });
+
+test('Plan §23 T3: POST /api/v2/council — nur gewichtige Fragen, Urteil geprüft, nur Admin; Wirkung über councilAnwenden', async () => {
+  const altInbox = deps.inboxFuer;
+  const angewandt: any[] = [];
+  const karte = { id: 'd-g1-x', art: 'entscheidung', frage: '', empfehlung: null, quelle: { text: 'Unter-Chat „g1“', strand: 'g1', url: null }, wartetSeit: '2026-11-05T08:00:00Z', blockiert: 1, antworten: ['ja'], daten: { strand: 'g1', entscheidungen: [{ id: 'D1', frage: 'Datenmodell migrieren?', empfehlung: 'Ja' }, { id: 'D2', frage: 'Liste sortieren?', empfehlung: 'Ja' }] } };
+  deps.inboxFuer = async () => ({ eintraege: [karte] }) as any;
+  deps.councilAnwenden = async (_u: any, f: any, c: any, w: any) => { angewandt.push([f.id, c.urteil, w.schliessen]); };
+  try {
+    const ok = await rufe('POST', '/api/v2/council', ADMIN, { frage: 'd-g1-x~D1', urteil: 'HALTEN', grund: 'Migration mit Rückweg' });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(angewandt, [['d-g1-x~D1', 'HALTEN', true]]);
+    assert.equal((await rufe('POST', '/api/v2/council', ADMIN, { frage: 'd-g1-x~D2', urteil: 'HALTEN', grund: 'x' })).status, 409, 'technische Frage: kein Council');
+    assert.equal((await rufe('POST', '/api/v2/council', ADMIN, { frage: 'd-g1-x~D1', urteil: 'AENDERN', grund: 'x' })).status, 400, 'ÄNDERN ohne Bedingung');
+    assert.equal((await rufe('POST', '/api/v2/council', ADMIN, { frage: 'gibt-es-nicht', urteil: 'HALTEN', grund: 'x' })).status, 404);
+    assert.equal((await rufe('POST', '/api/v2/council', LISA, { frage: 'd-g1-x~D1', urteil: 'HALTEN', grund: 'x' })).status, 403);
+  } finally { deps.inboxFuer = altInbox; delete deps.councilAnwenden; }
+});
