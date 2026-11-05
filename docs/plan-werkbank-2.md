@@ -601,7 +601,7 @@ Auftrag: „time to result wichtig, aber auch die Quali.“ Grundlagen im Paket:
 | P8 | Drain: während des Drains neue Züge in die Schlange; Schlange beim Neustart sichern | Ist-Analyse Zeile 8 (16 Züge unterbrochen) | Plan | ja, klein |
 | — | Mehrere Agenten schreiben im selben Code | Recherche 1.2, Kernaussage 2 | **nicht** | bewusst nicht |
 
-**Entscheidungen für Knut** (je mit Empfehlung; Arbeitsannahme = Empfehlung):
+**Entschieden am 05.11. durch die Hauptsitzung nach Knuts Triage-Regel** (intern, umkehrbar, im Protokoll): **E1 ja** — ein Folgeauftrag startet innerhalb eines Auftrags von selbst; **E2 ja** — lesende Stränge zählen 0,4 GB, kleinere Züge vorlassen erst nach einer Woche Messung; **E3 ja**, solange die Speicherschätzung Platz meldet. Die Fragen dazu:
 - **E1 Übergabe ohne Hauptchat.** Heute weckt jeder fertige Teil den Hauptchat, der den nächsten Strang anschreibt — mindestens 1 min plus ein Hauptchat-Zug je Übergabe, ab 60 Weckungen am Tag bleibt es liegen. Optionen: (a) so lassen; (b) Folgeauftrag startet von selbst, wenn der Vorgänger fertig meldet, der Hauptchat bekommt nur eine Zeile. Empfehlung (b), nur innerhalb eines Auftrags mit Planer-Graph.
 - **E2 Schlange.** Heute zählt fast jeder Strang als „bauend“ (1,6 GB), die Schlange ist strikt in Reihenfolge. Optionen: (a) Profil ehrlich setzen; (b) zusätzlich kleinere Züge vorlassen. Empfehlung (a) jetzt, (b) erst mit einer Woche Messung der Gründe.
 - **E3 Prüfer früh und zwei Fixes gleichzeitig.** Kostet RAM (ein zweiter Fix-Strang ≈ 1,6 GB) und Tokens. Empfehlung ja, solange die Box-Schätzung Platz meldet.
