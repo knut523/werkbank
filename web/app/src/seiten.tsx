@@ -545,7 +545,7 @@ function Nachreichen({ id }: { id: string }) {
 
 interface Steckbrief { wofuer: string; gestartet: string | null; ueber: string | null; jetzt: string | null; laeuft: boolean; seit: number | null; schritte: { text: string; stand: 'fertig' | 'offen' }[]; eta: { text: string; ueberfaellig: boolean } | null;
   wartetAuf: { wer: string; was: string }[]; ergebnisse: Link[];
-  dod?: { zeilen: { text: string; haken: boolean; beleg: string | null; besitzer: string | null; erledigt: boolean }[]; folgen: { text: string; besitzer: string | null }[] }; fast?: { fehlt: string[]; wartetAuf: string[] } | null; ruhtMin?: number | null; eingereiht?: { at: string; grund: string }[]; beruehrt: { repos: string[]; text: string | null; ordner: string | null; dateien: string[] }; modell: string | null; laufzeitMin: number | null; zugTokens: number | null }
+  dod?: { zeilen: { text: string; haken: boolean; beleg: string | null; besitzer: string | null; erledigt: boolean }[]; folgen: { text: string; besitzer: string | null }[] }; fast?: { fehlt: string[]; wartetAuf: string[] } | null; ruhtMin?: number | null; eingereiht?: { at: string; grund: string }[]; beruehrt: { repos: string[]; text: string | null; ordner: string | null; dateien: string[] }; modell: string | null; laufzeitMin: number | null; zugTokens: number | null; laeufer?: { wer: string; grund: string | null } | null }
 
 const dauer = (min: number) => (min < 90 ? `${min} min` : min < 60 * 48 ? `${Math.round(min / 60)} h` : `${Math.round(min / 1440)} Tage`);
 /** Runde 7 (Knut: „Unterchats sind halt etwas intransparent“): in 10 Sekunden sehen, was ein Unter-Chat gerade tut — ohne den Chat
@@ -557,6 +557,7 @@ function SteckbriefKasten({ s, titel, id }: { s: Steckbrief; titel: string; id: 
     <div className="kasten steckbrief">
       <dl>
         <div><dt>Wofür</dt><dd>{s.wofuer}{s.gestartet ? <span className="klein gedimmt"> — gestartet {wann(s.gestartet)}{s.ueber ? ` über „${s.ueber}“` : ''}</span> : null}</dd></div>
+        {s.laeufer && <div><dt>Läuft mit</dt><dd>{s.laeufer.wer}{s.laeufer.grund ? <span className="klein gedimmt"> — {s.laeufer.grund}</span> : null}</dd></div>}
         <div><dt>Jetzt gerade</dt><dd>{s.laeuft && <span className="live" aria-label="läuft">● </span>}{s.jetzt ?? (s.laeuft ? 'arbeitet' : s.ruhtMin != null ? `ruht seit ${dauer(s.ruhtMin)} — kein Zug läuft` : 'ruht gerade — kein Zug läuft')}{s.seit ? <span className="klein gedimmt"> (seit {dauer(Math.max(1, Math.round((Date.now() - s.seit) / 60000)))})</span> : null}</dd></div>
         {s.schritte.length > 0 && <div><dt>Fortschritt</dt><dd>
           <p className="klein gedimmt">{fertig} von {s.schritte.length} Schritten{s.eta && s.laeuft ? ` · ${s.eta.ueberfaellig ? 'überfällig — dauert länger als geschätzt' : `fertig ${s.eta.text}`}` : ''}</p>

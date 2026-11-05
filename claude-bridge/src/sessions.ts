@@ -238,7 +238,7 @@ const LESER_MCP = ['vault-search', 'werkbank'];   // Suche im Vault (Lesen); rev
 export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte auf Deutsch, knapp und in Markdown. Du kannst nur lesen (Read, Grep, Glob) — schreibe und ändere nichts. Belege jede Aussage mit Datei:Zeile. Was du nicht findest, sagst du offen, statt zu raten.';
 // laeufer: 'jcode' = Strang läuft über jcode (Konzept J1; eigener Speicher-Topf). turn.schlange/grund: Zug endete nach dem
 // Zeitdeckel der Schlange (Audit 05.11. (3)) — die Werkbank stellt ihn ohne Abstand neu an, der Platz bleibt.
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; laeufer?: 'jcode'; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; schlange?: boolean; grund?: string };
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; laeufer?: 'jcode'; laeuferFallback?: { at: number; grund: string }; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; schlange?: boolean; grund?: string };
   // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
   // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
   auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string };
@@ -527,12 +527,12 @@ export function workDirFor(userId: string, convId: string): string {
  * Meldet eine neue Unterhaltung als Orchestrator-Strang an: Arbeitsordner = dir (vorher geprüft, siehe server.ts),
  * strengere Sperren. Nur für Unterhaltungen ohne Sitzung und ohne Ordner — eine bestehende wird nie umgebogen.
  */
-export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; vorrang?: boolean } = {}): void {
+export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; vorrang?: boolean; laeufer?: 'jcode' } = {}): void {
   const key = `${safeId(userId)}:${safeId(convId)}`;
   if (sessionMap[key] || cwdMap[key] || orchMap[key] || lives.has(key)) throw Object.assign(new Error('Unterhaltung gibt es schon.'), { status: 409 });
   if (o.profil === 'release') { const p = kind === 'strand' ? releaseWorktreeProblem(dir) : 'Profil release nur für Stränge.'; if (p) throw Object.assign(new Error(p), { status: 400 }); }
   cwdMap[key] = dir;
-  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}), ...(o.tiefe && o.tiefe !== 'regular' && TIEFEN.includes(o.tiefe) ? { tiefe: o.tiefe } : {}), ...(o.vorrang ? { vorrang: true } : {}) };
+  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}), ...(o.tiefe && o.tiefe !== 'regular' && TIEFEN.includes(o.tiefe) ? { tiefe: o.tiefe } : {}), ...(o.vorrang ? { vorrang: true } : {}), ...(o.laeufer === 'jcode' && kind === 'strand' ? { laeufer: 'jcode' as const } : {}) };
   saveMap();
 }
 
@@ -589,6 +589,8 @@ export function orchStateOf(userId: string) {
       // Start ohne Ende und keine laufende Sitzung: die Brücke wurde mitten im Zug neu gestartet.
       interrupted: !l && !inSchlange(k) && !!e.turn && e.turn.end === null,
       resumable: !!sessionMap[k], turns: seen?.turns ?? null, written: seen?.written ?? [],
+      // Konzept J, J1: Läufer und — nach einem leeren jcode-Zug — der Rückfall auf Claude (sichtbar im Steckbrief).
+      laeufer: e.laeufer ?? 'claude', laeuferFallback: e.laeuferFallback ?? null,
       // Paket 436 (Runde 7, Knut: „Unterchats sind intransparent“): die letzte Statuszeile des laufenden Zugs — was er gerade tut.
       jetzt: l?.lastStatus ?? null,
       zugTokens: l ? (l.usage.input ?? 0) + (l.usage.output ?? 0) : null,   // grob, nur der laufende Zug
@@ -1452,6 +1454,22 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   };
   let prompt = resume ? req.prompt : freshPrompt();
 
+  // Konzept J, J1: jcode-Strang — eigener Zugweg (Verlauf aus LibreChat + neue Nachricht, wie eine neue Sitzung). Nur wenn jcode kein
+  // brauchbares Ergebnis liefert, läuft dieser Zug mit Claude weiter — sichtbar im Chat und im Steckbrief (laeuferFallback).
+  if (live.orch && !live.worker && orchMap[key]?.laeufer === 'jcode') {
+    const r = await strangJcode(live, req, freshPrompt()).catch((e: any) => ({ ok: false, grund: String(e?.message ?? e).slice(0, 200), modell: undefined }));
+    if (r.ok || live.abort.signal.aborted) {
+      if (r.ok && orchMap[key]?.laeuferFallback) delete orchMap[key].laeuferFallback;
+      mark(live, 'ende');
+      if (orchMap[key]) setTurn(key, { ...orchMap[key].turn, start: orchMap[key].turn?.start ?? live.t0, end: Date.now(), outcome: r.ok ? 'ok' : 'aborted', ...(r.modell ? { modell: r.modell } : {}) });
+      log('turn end', { conv: key, laeufer: 'jcode', ok: r.ok, usage: live.usage });
+      end(live);
+      return;
+    }
+    if (orchMap[key]) { orchMap[key].laeuferFallback = { at: Date.now(), grund: r.grund.slice(0, 200) }; saveMap(); }
+    emitStatus(live, `jcode lieferte kein brauchbares Ergebnis (${r.grund}) — dieser Zug läuft mit Claude weiter.`);
+  }
+
   // Die Sitzung (und ihre Bash-Befehle) bekommt keine Geheimnisse der Werkbank mit.
   const env: Record<string, string | undefined> = { ...process.env };
   for (const k of Object.keys(env)) if (SECRET_ENV.test(k)) delete env[k];
@@ -2098,6 +2116,75 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   if (draussen.length) { log('worker jcode ausserhalb', { delegation: d.id, pfade: draussen.slice(0, 10) }); return `jcode-Ergebnis verworfen: Der Worker hat außerhalb des Arbeitsordners geschrieben (${draussen.slice(0, 5).join(', ')}). Bitte prüfen und ggf. zurücksetzen.`; }
   if (out.code !== 0 || !j) return `jcode-Lauf fehlgeschlagen (Exit ${out.code}). ${String(out.stderr).split('\n').filter(Boolean).slice(-3).join(' · ').slice(0, 600)}`;
   return String(j.text ?? '');
+}
+
+// ---------- Konzept J, J1 (Knut 05.11., Go): jcode-Strang ----------
+// Ein Strang mit `laeufer: 'jcode'` läuft nicht über Claude, sondern über jcode (Melious EU) — eigener Strang mit eigenem Zug, ohne
+// Claude-Kontingent, 0,15 GB (eigener Topf, schaetzung.ts). Nur lesend: Shell über den Wächter (shim/bash), pre_tool-Hook vor jedem
+// Werkzeug, geschrieben wird nur im Arbeitsordner (sonst verworfen). Gleicher Auftragstext und gleiche Status-Zeile wie bei Claude.
+// Ergebnis ohne Status-Zeile oder leer → einmal neu, dann opencode (falls installiert), dann läuft der Zug mit Claude weiter.
+const STATUS_ZEILE = /^[\s*_]*Status:?[\s*_]*(fertig|braucht Antwort|blockiert)\b/im;
+export function jcodeStrangErgebnis(o: { code: number | null; j: any; draussen: string[] }): { ok: boolean; text: string; grund: string } {
+  const text = String(o.j?.text ?? '').trim();
+  if (o.draussen.length) return { ok: false, text, grund: `außerhalb des Arbeitsordners geschrieben (${o.draussen.slice(0, 3).join(', ')})` };
+  if (o.code !== 0 || !o.j) return { ok: false, text, grund: `Exit ${o.code}` };
+  if (!text) return { ok: false, text, grund: 'leeres Ergebnis' };
+  if (!STATUS_ZEILE.test(text)) return { ok: false, text, grund: 'keine Status-Zeile' };
+  return { ok: true, text, grund: '' };
+}
+export const OPENCODE_BIN = () => process.env.BRIDGE_OPENCODE_BIN || join(homedir(), '.local', 'bin', 'opencode');
+/** Versuche eines jcode-Zugs: jcode, einmal neu, dann opencode — nur ausdrücklich (BRIDGE_JCODE_OPENCODE=on) und installiert:
+ *  opencode läuft ohne den pre_tool-Wächter von jcode und mit seinem eigenen Zugang (ggf. MiniMax, nicht EU) — Gegenprüfung im
+ *  Test 05.11.: auf der Box ist opencode installiert und lief sonst still an. Danach übernimmt Claude. */
+export const opencodeAn = () => process.env.BRIDGE_JCODE_OPENCODE === 'on' && existsSync(OPENCODE_BIN());
+export const jcodeReihe = (opencode = opencodeAn()): ('jcode' | 'opencode')[] => (opencode ? ['jcode', 'jcode', 'opencode'] : ['jcode', 'jcode']);
+function opencodeSpawn(o: { cwd: string; prompt: string; timeoutS: number; abbruch: () => boolean }): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  // ponytail: opencode ohne eigenes Profil und ohne Buchung — nur der letzte Rückfall vor Claude; Ausgabe = Antworttext.
+  return new Promise((res) => {
+    const c = spawn(OPENCODE_BIN(), ['run', o.prompt], { cwd: o.cwd, env: { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8' } });
+    let so = '', se = '';
+    c.stdout.on('data', (b) => { so = (so + b).slice(-400_000); });
+    c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
+    const timer = setTimeout(() => c.kill('SIGTERM'), o.timeoutS * 1000);
+    const stopper = setInterval(() => { if (o.abbruch()) c.kill('SIGTERM'); }, 2000);
+    c.on('close', (code) => { clearTimeout(timer); clearInterval(stopper); res({ code, stdout: so, stderr: se }); });
+    c.on('error', () => { clearTimeout(timer); clearInterval(stopper); res({ code: -1, stdout: so, stderr: se }); });
+  });
+}
+
+/** Ein Zug eines jcode-Strangs. ok → Antwort ist geschrieben und gebucht; sonst Grund (der Zug läuft dann mit Claude weiter). */
+async function strangJcode(live: Live, req: TurnRequest, prompt: string): Promise<{ ok: boolean; grund: string; modell?: string }> {
+  const e = orchMap[live.key];
+  if (!e) return { ok: false, grund: 'Strang unbekannt' };
+  if (!existsSync(JCODE_BIN())) return { ok: false, grund: 'jcode nicht installiert' };
+  const mel = await melKonto(live, req.userId);
+  if (!mel) return { ok: false, grund: 'kein nutzbares Melious-Konto' };
+  const fest = typeof e.modell === 'string' && e.modell.startsWith('melious:') ? e.modell.slice(8) : null;
+  const rolle = mel.rollen?.leser?.[0];
+  const gewaehlt = fest ?? (rolle && rolle !== 'auto' ? rolle : 'glm-5.3');
+  const model = mel.faktoren && !mel.faktoren[gewaehlt] ? null : gewaehlt;
+  let grund = '';
+  for (const [i, art] of jcodeReihe().entries()) {
+    if (live.abort.signal.aborted) return { ok: false, grund: 'abgebrochen' };
+    emitStatus(live, `⏳ ${art === 'jcode' ? 'jcode (Melious)' : 'opencode'} arbeitet …${i ? ` (Versuch ${i + 1}: ${grund})` : ''}`);
+    const t0 = Date.now();
+    const timeoutS = envZahl('BRIDGE_JCODE_STRANG_TIMEOUT_S', 3600, 60);
+    const out = art === 'opencode'
+      ? await opencodeSpawn({ cwd: e.dir, prompt, timeoutS, abbruch: () => live.abort.signal.aborted })
+      : await jcodeSpawn({ cwd: e.dir, prompt, model, tools: 'read,bash,agentgrep,write,edit', key: mel.token, timeoutS, abbruch: () => live.abort.signal.aborted });
+    const a = art === 'opencode' ? { j: out.code === 0 ? { text: out.stdout } : null, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as MeliousUsage, draussen: [] as string[], gelaufen: 'opencode' } : jcodeAuswerten(out, e.dir, model);
+    const energie = art === 'jcode' && mel.faktoren ? energieOf(a.usage, a.gelaufen, mel.faktoren) : 0;
+    live.usage.input += a.usage.input + a.usage.cacheRead; live.usage.output += a.usage.output;
+    if (art === 'jcode') {
+      try { req.onMeliousUsage?.(a.usage, a.gelaufen); } catch { /* egal */ }
+      try { req.onTurnLog?.({ conv: req.convId, art: 'strang', phase: null, konto: mel.id, anbieter: 'melious', modell: `${a.gelaufen} (jcode)`, input: a.usage.input + a.usage.cacheRead, output: a.usage.output, cacheRead: a.usage.cacheRead, energie, outcome: out.code === 0 ? 'ok' : 'fehler', ms: Date.now() - t0 } as ZugLog); } catch { /* egal */ }
+    }
+    const r = jcodeStrangErgebnis({ code: out.code, j: a.j, draussen: a.draussen });
+    log('strang jcode', { conv: live.key, art, versuch: i + 1, exit: out.code, ok: r.ok, grund: r.grund || null, modell: a.gelaufen, ms: Date.now() - t0, energie: Math.round(energie) });
+    if (r.ok) { emitModelText(live, r.text); return { ok: true, grund: '', modell: `${a.gelaufen} (${art})` }; }
+    grund = r.grund;
+  }
+  return { ok: false, grund };
 }
 
 // ---------- melious_sub (Knut 19.10.: „nativ mehr auf Melious und Claude verteilen“) ----------

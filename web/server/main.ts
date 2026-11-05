@@ -3803,7 +3803,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
       return send(res, 200, { ok, id });
     }
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, routing: b.routing === 'claude' || b.routing === 'melious' ? b.routing : null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null, budget: b.budget || null });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, routing: b.routing === 'claude' || b.routing === 'melious' ? b.routing : null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null, budget: b.budget || null, laeufer: typeof b.laeufer === 'string' ? b.laeufer : null });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null, tiefe: r.tiefe });
       return send(res, 200, { ...r, schaetzung: await schaetzungFuer(u, { tiefe: r.tiefe, profil: b.profil || null, budget: Number(b.budget) || null }) });
     }

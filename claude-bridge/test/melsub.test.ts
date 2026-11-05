@@ -22,7 +22,7 @@ const key = (s: string) => `sk-mel-${s}-${'y'.repeat(24)}`;
 const MEL = { id: 'melious', label: 'Melious', token: key('gut'), kind: 'melious', rest: 150_000, fallback: false, rollen: { leser: ['glm-5.3-flash'], schreiber: ['glm-5.3-flash'], niedrig: ['glm-5.3-flash'] }, faktoren: { 'glm-5.3-flash': { input: 1, output: 4, cacheRead: 0.1 }, 'glm-5.3': { input: 3, output: 12, cacheRead: 0.3 } } };
 const ACCOUNTS: Record<string, unknown[]> = { knut: [{ id: 'chat', label: 'Chat', token: null }, MEL], ohne: [{ id: 'chat', label: 'Chat', token: null }] };
 // jcode-Nachbau: merkt sich Argumente und Schlüssel-Umgebung, antwortet mit JSON wie `jcode run --json`.
-writeFileSync(join(BIN, 'jcode'), `#!/bin/sh\nprintf '%s\\n' "$@" > ${ARGS}\n[ -n "$JCODE_PROVIDER_MELIOUS_API_KEY" ] && echo schluessel-da >> ${ARGS}\necho '{"text":"Antwort aus jcode: src/a.ts:12","model":"glm-5.3-flash","usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":400}}'\n`);
+writeFileSync(join(BIN, 'jcode'), `#!/bin/sh\nprintf '%s\\n' "$@" > ${ARGS}\n[ -n "$JCODE_PROVIDER_MELIOUS_API_KEY" ] && echo schluessel-da >> ${ARGS}\ngrep -q MITSTATUS ${ARGS} && { echo '{"text":"Review aus jcode-Strang\\\\n### Stand\\\\n- Erledigt: Review\\\\nStatus: fertig","model":"glm-5.3","usage":{"input_tokens":500,"output_tokens":100,"cache_read_input_tokens":0}}'; exit 0; }\necho '{"text":"Antwort aus jcode: src/a.ts:12","model":"glm-5.3-flash","usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":400}}'\n`);
 writeFileSync(join(BIN, 'cswap'), `#!/bin/sh\necho '{"accounts":[{"number":1,"alias":"knut","active":true,"usage":{"fiveHour":{"pct":72,"clock":"14:00"},"sevenDay":{"pct":40,"aheadOfPace":false}}},{"number":2,"active":false,"usage":{"fiveHour":{"pct":10}}}]}'\n`);
 chmodSync(join(BIN, 'jcode'), 0o755); chmodSync(join(BIN, 'cswap'), 0o755);
 
@@ -46,7 +46,7 @@ before(async () => {
     env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
       WERKBANK_URL: wurl, WERKBANK_INTERNAL_TOKEN: 'geheim', MELIOUS_BASE_URL: wurl, BRIDGE_CLAUDE_HOMES: HOMES, WERKBANK_ORCH_ROOTS: ORCH, WERKBANK_SKILLS_SOURCE: SKILLS,
       BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: 'auto', BRIDGE_AUTO_SCOPE: 'voll', BRIDGE_AUTO_EMAILS: 'knut@maxenergy.at',
-      BRIDGE_JCODE_BIN: join(BIN, 'jcode'), BRIDGE_CSWAP_BIN: join(BIN, 'cswap') },
+      BRIDGE_JCODE_BIN: join(BIN, 'jcode'), BRIDGE_CSWAP_BIN: join(BIN, 'cswap'), BRIDGE_OPENCODE_BIN: join(BIN, 'opencode-gibt-es-nicht') },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.stdout!.on('data', (d) => { out += d; });
@@ -135,4 +135,24 @@ test('melious_sub nur im laufenden Zug und nicht für fremde Unterhaltungen', as
   assert.equal(r.status, 409);
   assert.equal((await fetch(`http://127.0.0.1:${PORT}/internal/mel-sub`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 403);
   assert.ok(existsSync(ARGS));
+});
+
+test('Konzept J, J1: jcode-Strang — eigener Zug über jcode mit Status-Zeile; ohne Status-Zeile zweimal versucht, dann Claude (sichtbar)', async () => {
+  const zustand = async (c: string) => ((await (await fetch(`http://127.0.0.1:${PORT}/internal/orch-state?user=knut`, { headers: { 'x-werkbank-internal': 'geheim' } })).json()) as any).strands.find((x: any) => x.conv === c);
+  const c = conv(40);
+  await register('knut', c, { laeufer: 'jcode', profil: 'leser' });
+  const t = await send(c, 'Bitte den PR prüfen MITSTATUS');
+  assert.match(t, /Review aus jcode-Strang/); assert.match(t, /Status: fertig/);
+  const a = readFileSync(ARGS, 'utf8');
+  assert.match(a, /^read,bash,agentgrep,write,edit$/m, 'Werkzeuge des Strangs'); assert.ok(!a.includes(key('gut')), 'Schlüssel nie auf der Kommandozeile');
+  const s1 = await zustand(c);
+  assert.equal(s1.laeufer, 'jcode'); assert.equal(s1.laeuferFallback, null); assert.equal(s1.turn.outcome, 'ok'); assert.match(String(s1.turn.modell), /jcode/);
+  // ohne Status-Zeile: zwei jcode-Versuche, dann übernimmt Claude (Mock) — mit Grund im Chat und im Zustand
+  const c2 = conv(41);
+  await register('knut', c2, { laeufer: 'jcode' });
+  const t2 = await send(c2, 'mock-antwort Claude hat übernommen.\\nStatus: fertig');
+  assert.match(t2, /jcode lieferte kein brauchbares Ergebnis \(keine Status-Zeile\) — dieser Zug läuft mit Claude weiter/);
+  assert.match(t2, /Claude hat übernommen/);
+  assert.match((await zustand(c2)).laeuferFallback.grund, /Status-Zeile/);
+  assert.ok((out.match(/strang jcode/g) ?? []).length >= 3, 'ein Versuch für c, zwei für c2');
 });

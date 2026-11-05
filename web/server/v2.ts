@@ -545,6 +545,8 @@ export function registerV2(on: On, d: V2Deps) {
     const gh: any[] = Array.isArray(kopf?.github) ? kopf.github : [];
     const steckbrief = {
       wofuer: kurz(auftrag.replace(/\s+/g, ' '), 220), gestartet: doc.startedAt ?? null, ueber: doc.lauf ?? null,
+      // Konzept J, J1: wer den Unter-Chat ausführt und warum (sichtbar); fiel jcode auf Claude zurück, steht das hier.
+      laeufer: doc.laeufer === 'jcode' ? { wer: s?.laeuferFallback ? 'Claude (jcode lieferte nichts)' : 'jcode (Melious)', grund: s?.laeuferFallback?.grund ?? doc.laeuferGrund ?? null } : null,
       jetzt: s?.running ? (jetztSatz(s.jetzt) ?? standZeile(stand, 'Jetzt') ?? 'arbeitet gerade') : s?.queued ? `wartet in der Schlange (Platz ${s.queued.pos}) und startet von selbst` : standZeile(stand, 'Jetzt'),
       laeuft: !!s?.running, seit: s?.running ? s?.turn?.start ?? null : null,
       schritte: schritteAus(stand), eta: z?.eta ?? null,
