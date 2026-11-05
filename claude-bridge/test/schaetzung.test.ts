@@ -21,3 +21,12 @@ test('Abgleich: passt, Box zu voll, Host zu knapp, erster Zug läuft außer bei 
   assert.equal(passt(s, { stand: { echtGb: 3, hostFreiGb: 3.5 }, frisch: 0, laufend: 0 }).ok, false, 'Host fast voll');
   assert.equal(passt(s, { stand: null, frisch: 0, laufend: 5 }).ok, true);
 });
+
+test('Vorrang (@review einer erlaubten Person): darf die Startgrenze der Box um den Vorrang-Spielraum überschreiten, nie den Host-Boden', () => {
+  const s = schaetze({ kind: 'strand', profil: 'leser' });
+  const voll = { stand: { echtGb: GRENZE.echtStartGb - 0.1, hostFreiGb: 12 }, frisch: 0, laufend: 3 };
+  assert.equal(passt(s, voll).ok, false, 'ohne Vorrang wartet er');
+  assert.equal(passt(s, { ...voll, vorrang: true }).ok, true, 'mit Vorrang startet er');
+  assert.equal(passt(s, { ...voll, stand: { echtGb: GRENZE.echtStartGb + GRENZE.vorrangExtraGb, hostFreiGb: 12 }, vorrang: true }).ok, false, 'Spielraum ist begrenzt');
+  assert.match(passt(s, { stand: { echtGb: 4, hostFreiGb: 3.2 }, frisch: 0, laufend: 1, vorrang: true }).grund, /Host zu knapp/);
+});

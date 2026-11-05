@@ -403,7 +403,7 @@ type ZugLite = { readonly: boolean; mode: PermissionMode; pending: unknown; scha
 export let lockGrund = '';
 /** Darf ein neuer Zug starten? Chats: wenn die Schätzung in die Box passt (und unter einer gesetzten Obergrenze); Board-Läufe:
  *  bis MAX_BOARD_RUNS daneben. Ohne `box` gilt nur die Obergrenze (alte Aufrufer, Tests). */
-export function lockFor(mine: ZugLite[], next: { readonly: boolean; mode: PermissionMode }, box?: { neu: Schaetzung; stand: SpeicherStand | null; now?: number }): 'ok' | 'chat-busy' | 'board-full' {
+export function lockFor(mine: ZugLite[], next: { readonly: boolean; mode: PermissionMode }, box?: { neu: Schaetzung; stand: SpeicherStand | null; now?: number; vorrang?: boolean }): 'ok' | 'chat-busy' | 'board-full' {
   lockGrund = '';
   if (isBoardRun(next)) return mine.filter(isBoardRun).length >= MAX_BOARD_RUNS ? 'board-full' : 'ok';
   const aktiv = mine.filter((l) => !isBoardRun(l) && !l.pending);
@@ -412,7 +412,7 @@ export function lockFor(mine: ZugLite[], next: { readonly: boolean; mode: Permis
   // Eben gestartete Züge zeigt der Speicherstand noch nicht: ihre Schätzung zählt die ersten 3 Minuten mit.
   const now = box.now ?? Date.now();
   const frisch = aktiv.filter((l) => l.t0 && now - l.t0 < 3 * 60_000).reduce((n, l) => n + (l.schaetzung?.speicherGb ?? 0), 0);
-  const r = passt(box.neu, { stand: box.stand, frisch, laufend: aktiv.length });
+  const r = passt(box.neu, { stand: box.stand, frisch, laufend: aktiv.length, vorrang: box.vorrang });
   lockGrund = r.grund;
   return r.ok ? 'ok' : 'chat-busy';
 }
@@ -1314,7 +1314,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   let mine = meine();
   const mode = autoFor(req);
   const schaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe });
-  const box = () => ({ neu: schaetzung, stand: speicherStand() });
+  const box = () => ({ neu: schaetzung, stand: speicherStand(), vorrang: !!orchMap[key]?.vorrang });
   let lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode }, box());
   // Warteschlange statt Fehlschlag (Plan 213 S1a, K3): der Zug wartet, bis ein Platz frei ist; der Chat zeigt den Platz.
   if (lock === 'chat-busy' && schlangeAn() && !req.sink.closed) {

@@ -9,7 +9,9 @@ import { readFileSync } from 'node:fs';
 export interface Schaetzung { speicherGb: number; dauerMin: number; tokens: number }
 export interface SpeicherStand { echtGb: number; hostFreiGb: number }
 
-export const GRENZE = { echtStartGb: 12, hostMinGb: 3 } as const;
+// vorrangExtraGb: Spielraum über echtStartGb für Züge mit Vorrang (@review einer erlaubten Person, Knut 05.11.: #390 startete erst
+// 1 h nach dem Tag, weil Bau-Stränge die Box bis zur Startgrenze füllten) — der Host-Boden gilt auch für sie.
+export const GRENZE = { echtStartGb: 12, hostMinGb: 3, vorrangExtraGb: 1 } as const;
 const TIEFE: Record<string, { dauerMin: number; tokens: number }> = {
   quick: { dauerMin: 10, tokens: 200_000 }, regular: { dauerMin: 45, tokens: 1_200_000 }, deep: { dauerMin: 120, tokens: 3_000_000 },
   live: { dauerMin: 10, tokens: 200_000 },   // Plan 274: eine Live-Runde ist wie quick
@@ -26,12 +28,12 @@ export function schaetze(o: { kind?: string; profil?: string | null; tiefe?: str
 
 /** Passt ein weiterer Zug jetzt in die Box? `frisch` = geschätzter Speicher eben gestarteter Züge, die der Stand noch nicht zeigt.
  *  Der erste Zug einer Person läuft immer an, außer der Host ist fast voll (sonst wartete sie auf Speicher, den andere belegen). */
-export function passt(neu: Schaetzung, o: { stand: SpeicherStand | null; frisch: number; laufend: number }): { ok: boolean; grund: string } {
+export function passt(neu: Schaetzung, o: { stand: SpeicherStand | null; frisch: number; laufend: number; vorrang?: boolean }): { ok: boolean; grund: string } {
   if (!o.stand) return { ok: true, grund: '' };
   const echt = o.stand.echtGb + o.frisch + neu.speicherGb;
   const host = o.stand.hostFreiGb - o.frisch - neu.speicherGb;
   if (o.laufend === 0) return host >= GRENZE.hostMinGb ? { ok: true, grund: '' } : { ok: false, grund: `Host fast voll (frei ${o.stand.hostFreiGb.toFixed(1)} GB)` };
-  if (echt > GRENZE.echtStartGb) return { ok: false, grund: `passt gerade nicht in die Box (echt ${o.stand.echtGb.toFixed(1)} GB + ${(o.frisch + neu.speicherGb).toFixed(1)} GB geschätzt > ${GRENZE.echtStartGb} GB)` };
+  if (echt > GRENZE.echtStartGb + (o.vorrang ? GRENZE.vorrangExtraGb : 0)) return { ok: false, grund: `passt gerade nicht in die Box (echt ${o.stand.echtGb.toFixed(1)} GB + ${(o.frisch + neu.speicherGb).toFixed(1)} GB geschätzt > ${GRENZE.echtStartGb} GB)` };
   if (host < GRENZE.hostMinGb) return { ok: false, grund: `Host zu knapp (frei ${o.stand.hostFreiGb.toFixed(1)} GB, geschätzt ${neu.speicherGb.toFixed(1)} GB)` };
   return { ok: true, grund: '' };
 }

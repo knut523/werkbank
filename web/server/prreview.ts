@@ -29,7 +29,7 @@ import { graphql } from './github.ts';
 import { jiraSites } from './config.ts';
 import { wb } from './db.ts';
 import { execErlaubt, execMinuten, schreibeErgebnis, type ExecErgebnis, type ExecJob } from './reviewexec.ts';
-import { reviewsCol, tickerSettings, tickerAus, reviewErlaubt, ME, type TickerSettings } from './prticker.ts';
+import { reviewsCol, nachNeuemKopf, tickerSettings, tickerAus, reviewErlaubt, ME, type TickerSettings } from './prticker.ts';
 import { vorlauf, basisVon, motorAbschnitt, motorAn } from './reviewmotor.ts';
 import { pruefeBefunde, kommentarAusBefunden, entwurfHash, postenErlaubt, KOMMENTAR_FORM } from './befunde.ts';
 import { gedaechtnisFuer, gedaechtnisMd, type AlterKommentar } from './prgedaechtnis.ts';
@@ -64,7 +64,7 @@ export async function prepareWorktree(repo: string, n: number, head: string, g: 
     got = String(await g(['rev-parse', `refs/remotes/pr/${n}`], klon)).trim();
   } catch (e: any) { throw new Error(`PR-Stand nicht geholt: ${scrub(e.stderr?.toString() || e.message)}`); }
   // Review prüft genau den getaggten Stand; ist der PR weiter, neu taggen (Review A6).
-  if (got !== head) throw Object.assign(new Error(`neuer Stand ${got.slice(0, 7)} seit dem Tag — für den neuen Stand neu taggen`), { skip: true });
+  if (got !== head) throw Object.assign(new Error(`neuer Stand ${got.slice(0, 7)} seit dem Tag — wird für den neuen Stand automatisch erneut eingereiht`), { skip: true, neuerKopf: got });
   const wt = join(base, `${repo.replace('/', '__')}-${n}-${head.slice(0, 7)}`);
   try {
     // Nie einen alten Worktree (mit Änderungen eines früheren Strangs) wiederverwenden (Review A14).
@@ -727,7 +727,14 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
     if (pe.art === 'zu' || pe.art === 'neu' || pe.art === 'aus') await reviewsCol().updateOne({ _id: r._id }, { $set: { ohnePost: pe.art } });
     if (pe.art === 'gepostet') await meldeStatus(r, statusZeile({ art: 'done', gepostet: true, url: pe.url ?? null, empfehlung: k.empfehlung }), deps, now);
     else if (pe.art === 'hand') { /* Knut postet gerade selbst — keine Statuszeile „not posted“, keine Meldung (Re-Pass) */ }
-    else if (pe.art === 'zu' || pe.art === 'neu') await meldeStatus(r, statusZeile({ art: 'skipped', grund: pe.art === 'neu' ? 'new commits since the review — tag @review again for the new head' : 'PR was merged or closed before the review was posted' }), deps, now);
+    else if (pe.art === 'zu' || pe.art === 'neu') {
+      // Neuer Kopf seit dem Review: für den aktuellen Kopf von selbst neu einreihen (höchstens NEU_MAX_JE_TAG je PR und Tag).
+      const neu = pe.art === 'neu' && pe.head ? await nachNeuemKopf({ ...r, ...set }, pe.head, s, now).catch(() => 'aus' as const) : null;
+      const grund = pe.art !== 'neu' ? 'PR was merged or closed before the review was posted'
+        : neu === 'eingereiht' || neu === 'vorhanden' ? `new commits since the review — re-running on ${String(pe.head).slice(0, 7)}`
+        : 'new commits since the review — tag @review again for the new head';
+      await meldeStatus(r, statusZeile({ art: 'skipped', grund }), deps, now);
+    }
     else {
       await meldeStatus(r, statusZeile({ art: 'done', gepostet: false, empfehlung: k.empfehlung }), deps, now);
       if (pe.art !== 'aus') await meldeKnut({ ...r, ...set }, `nicht gepostet: ${pe.grund}${r.nb ? ' (auch nach dem Nachfass)' : ''}`, deps, now);
@@ -742,7 +749,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
     const frei = Math.max(0, s.maxParallel - (await belegungJetzt()).rechnen);
     for (const [i, r] of schlange.entries()) {
       // Auto-Delta im Bündel-Fenster: noch keine Rückmeldung am PR (ein weiterer Push kann es ersetzen).
-      if (r.sk || !reviewErlaubt(r.repo) || (r.trigger === 'delta' && r.retryAt && new Date(r.retryAt) > now)) continue;
+      if (r.sk || !reviewErlaubt(r.repo) || ((r.trigger === 'delta' || r.nachNeu) && r.retryAt && new Date(r.retryAt) > now)) continue;
       const k = deps.kontext ? await deps.kontext(r.repo, r.number).catch(() => null) : null;
       const zeilen = k ? k.additions + k.deletions : null;
       const tiefe = tiefeFuer(zeilen, !!r.deep);
@@ -851,7 +858,8 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
     } catch (e: any) {
       if (e?.skip) {
         await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'übersprungen', note: scrub(e.message ?? e), doneAt: now, startDay: null } });
-        await meldeStatus(r, statusZeile({ art: 'skipped', grund: 'new commits since the tag — tag @review again for the new head' }), deps, now);
+        const neu = e.neuerKopf ? await nachNeuemKopf(r, String(e.neuerKopf), s, now).catch(() => 'aus' as const) : 'aus';
+        await meldeStatus(r, statusZeile({ art: 'skipped', grund: neu === 'eingereiht' || neu === 'vorhanden' ? `new commits since the tag — re-running on ${String(e.neuerKopf).slice(0, 7)}` : 'new commits since the tag — tag @review again for the new head' }), deps, now);
         continue;
       }
       if (e?.endgueltig) {
@@ -866,7 +874,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
 }
 
 /** Automatisch posten (Ergänzung A): nur COMMENT, nur wenn PR offen und Kopf unverändert, nur wenn die Textregeln passen. */
-export type PostErgebnis = { art: 'gepostet' | 'regel' | 'zu' | 'neu' | 'fehler' | 'aus' | 'hand'; grund: string; url?: string | null };
+export type PostErgebnis = { art: 'gepostet' | 'regel' | 'zu' | 'neu' | 'fehler' | 'aus' | 'hand'; grund: string; url?: string | null; head?: string };
 export async function autoPost(r: any, k: { empfehlung: string; text: string }, deps: ReviewDeps, now = new Date()): Promise<PostErgebnis> {
   // Ergebnis für Statuszeile und Meldung (Paket 223): jeder Ausgang ohne Posten hat einen Grund.
   const nicht = async (art: PostErgebnis['art'], note: string, grund = note): Promise<PostErgebnis> => { await reviewsCol().updateOne({ _id: r._id }, { $set: { note } }); return { art, grund }; };
@@ -886,7 +894,7 @@ export async function autoPost(r: any, k: { empfehlung: string; text: string }, 
   const pr = deps.prNow ? await deps.prNow(r.repo, r.number).catch(() => null) : null;
   if (!pr) return nicht('fehler', 'nicht gepostet: PR-Stand nicht lesbar');
   if (pr.state !== 'OPEN') return nicht('zu', `nicht gepostet: PR ${pr.state === 'MERGED' ? 'gemergt' : 'geschlossen'}`);
-  if (pr.head !== r.head) return nicht('neu', `nicht gepostet: neuer Stand ${pr.head.slice(0, 7)} seit dem Review`);
+  if (pr.head !== r.head) return { ...(await nicht('neu', `nicht gepostet: neuer Stand ${pr.head.slice(0, 7)} seit dem Review`)), head: pr.head };
   // Pass C: atomarer Anspruch vor dem Posten — Knuts „Verwerfen“ oder „Kommentar posten“ in denselben Sekunden gewinnt oder verliert
   // sauber, nie beides. Ein hängengebliebener Anspruch (Absturz mitten im Posten) gilt nach POSTEN_MIN als frei.
   const frei = { $or: [{ posting: { $in: [null] } }, { posting: { $lt: new Date(now.getTime() - POSTEN_MIN * 60_000) } }] };
