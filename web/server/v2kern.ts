@@ -134,7 +134,9 @@ export function bezugIds(t: string): string[] | null {
 
 // ---------- Arbeit (Unter-Chats) ----------
 
-export interface ArbeitZeile { id?: string; zustand: string; zustandText?: string; grund?: string; eta?: { text: string; ueberfaellig: boolean } | null; cs?: { status: string; grund?: string; offen?: number } | null; paket?: string | null; bericht?: boolean }
+export interface ArbeitZeile { id?: string; zustand: string; zustandText?: string; grund?: string; eta?: { text: string; ueberfaellig: boolean } | null; cs?: { status: string; grund?: string; offen?: number } | null; paket?: string | null; bericht?: boolean;
+  /** Plan §23 T6: offene Fragen der Klasse „knut“ an diesem Unter-Chat — nur gesetzt, wenn die Triage an ist. */
+  knutOffen?: number }
 
 /** Der Zustand eines Unter-Chats in einem Klartext-Satz (428 W12: kein rohes Markdown, keine ETA in der Vergangenheit). */
 /** S22 (Knut B6): eine an der Quelle gekürzte Meldung („… (Empfehlung: b⋯“) an der letzten ganzen Stelle schneiden und auf den Stand verweisen. */
@@ -154,6 +156,9 @@ export function zustandSatz(z: ArbeitZeile): string {
   if (z.zustand === 'laeuft') return `Läuft${eta ? ` — ${eta}` : ''}.`;
   if (z.zustand === 'schlange') return 'Wartet auf einen freien Platz und startet von selbst.';
   if (cs === 'hauptchat') return 'Wartet auf den Hauptchat — du musst nichts tun.';
+  // Plan §23 T6: mit Triage wartet er nur auf Knut, wenn eine Knut-Frage offen ist.
+  if ((cs === 'braucht' || z.zustand === 'wartet') && z.knutOffen === 0) return 'Arbeitet — keine Frage an dich; technische Fragen entscheidet der Hauptchat nach Empfehlung.';
+  if ((cs === 'braucht' || z.zustand === 'wartet') && z.knutOffen) return `Wartet auf dich: ${z.knutOffen === 1 ? 'eine Entscheidung' : `${z.knutOffen} Entscheidungen`}${grund ? ` — ${grund}` : ''}.`;
   if (cs === 'braucht' || z.zustand === 'wartet') return `Wartet auf dich${grund ? `: ${grund}` : ''}.`;
   if (z.zustand === 'blockiert') return `Kommt nicht weiter${grund ? `: ${grund}` : ''} — schau dir die Frage an.`;
   if (z.zustand === 'haengt') return `Hängt${grund ? `: ${grund}` : ''} — der Agent antwortet nicht mehr.`;
@@ -167,6 +172,7 @@ export function zustandSatz(z: ArbeitZeile): string {
 export function arbeitGruppe(z: ArbeitZeile): 'wartet' | 'laeuft' | 'fertig' {
   const cs = z.cs?.status;
   if (cs === 'hauptchat') return 'laeuft';   // wartet auf den Hauptchat, nicht auf dich
+  if ((cs === 'braucht' || z.zustand === 'wartet') && z.knutOffen === 0) return 'laeuft';   // Plan §23 T6
   if (cs === 'braucht' || ['wartet', 'blockiert', 'haengt', 'stand-fehlt'].includes(z.zustand)) return 'wartet';
   if (z.zustand === 'laeuft' || z.zustand === 'schlange') return 'laeuft';
   return 'fertig';
@@ -431,4 +437,11 @@ export function auszugUm(text: string, q: string, n = 160): string {
   const i = Math.max(0, t.toLowerCase().indexOf(String(q ?? '').toLowerCase()));
   const start = Math.max(0, Math.min(i - Math.floor(n / 3), t.length - n));
   return `${start > 0 ? '…' : ''}${t.slice(start, start + n).trim()}${start + n < t.length ? '…' : ''}`;
+}
+
+/** Plan §23 T6: je Unter-Chat die Zahl offener Knut-Fragen (Fragen ohne Unter-Chat zählen nicht). */
+export function knutOffenJe(fragen: { strand?: string | null; triage?: { klasse: string } }[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const f of fragen) if (f.strand) m.set(f.strand, (m.get(f.strand) ?? 0) + (f.triage?.klasse === 'knut' ? 1 : 0));
+  return m;
 }

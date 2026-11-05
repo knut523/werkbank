@@ -86,3 +86,6 @@ export function klasseVon(e: StufeEingabe & { empfehlung?: string | null }): { k
   for (const [re, grund] of GEWICHTIG) if (re.test(e.text)) return { klasse: 'gewichtig', grund };
   return { klasse: 'technisch', grund: 'technisch/intern mit Empfehlung' };
 }
+
+/** Plan §23: Triage an? Schalter WERKBANK_TRIAGE=1 (Vorgabe aus bis zum Release; Test-Instanz an). Rückweg: aus → Annahme nach 24 h. */
+export const triageAn = (env = process.env) => env.WERKBANK_TRIAGE === '1';

@@ -8,9 +8,10 @@ import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungssei
 import { themaOf } from './themen.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { auszugUm, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
+import { auszugUm, knutOffenJe, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import { dodAus, fastFertig, endenAus } from './dod.ts';
+import { triageAn } from './stufe.ts';
 import type { Abgleich } from './fragenbericht.ts';
 import * as librechat from './v2librechat.ts';
 
@@ -152,6 +153,14 @@ const arbeitKarte = (z: any) => ({ id: String(z.id), titel: kurz(z.titel, 140), 
   offen: z.cs?.offen ?? 0, links: [...(z.paket && z.bericht ? [{ label: 'Bericht', url: `/v2/dokument?paket=${encodeURIComponent(z.paket)}&datei=bericht.md` }] : [])] });
 
 export function registerV2(on: On, d: V2Deps) {
+  // Plan §23 T6: mit Triage trägt jede Zeile die Zahl ihrer offenen Knut-Fragen — „wartet“ nur, wenn Knut gebraucht wird.
+  const ucListe = async (u: User) => {
+    const l = await d.unterchatListe(u, false);
+    if (!triageAn()) return l;
+    const m = knutOffenJe(fragenAus((await d.inboxFuer(u)).eintraege).fragen);
+    for (const z of l.zeilen as any[]) z.knutOffen = m.get(String(z.id)) ?? 0;
+    return l;
+  };
   // --- Startseite „Jetzt“: eine Zahl, ≤ 5 Karten, Läuft, Heute erledigt, PRs, Dokumente — ein Abruf ---
   // `?teil=oben`: nur Zahl und Karten (≈ 0,1 s) — der erste Bildschirm am Handy wartet nicht auf Unter-Chats und PRs (Persona „unterwegs“).
   on('GET', /^\/api\/v2\/start$/, async (req, res, _m, url) => {
@@ -165,7 +174,7 @@ export function registerV2(on: On, d: V2Deps) {
     if (url.searchParams.get('teil') === 'oben') return send(d, res, { teil: 'oben', zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), ich, admin: admin(u), rolle: r, at: new Date() });
     let laeuft: any[] = [], erledigt: any[] = [];
     if (admin(u)) {
-      const [liste, er] = await Promise.all([d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })), d.erledigtDaten(u, d.wienDatum()).catch(() => ({ straenge: [] as any[] }))]);
+      const [liste, er] = await Promise.all([ucListe(u).catch(() => ({ zeilen: [] as any[] })), d.erledigtDaten(u, d.wienDatum()).catch(() => ({ straenge: [] as any[] }))]);
       const zm = new Map(liste.zeilen.map((z: any) => [String(z.id), z]));
       laeuft = liste.zeilen.filter((z: any) => arbeitGruppe(z) === 'laeuft').map(arbeitKarte);
       const offenJe = new Set(ib.eintraege.map((e) => (e.quelle?.strand ? String(e.quelle.strand) : '')).filter(Boolean));
@@ -268,7 +277,7 @@ export function registerV2(on: On, d: V2Deps) {
     const echt = /^\d{4}-\d{2}-\d{2}$/.test(tag) && new Date(`${tag}T12:00:00Z`).toISOString().slice(0, 10) === tag;   // auch 31.02. abweisen (Pass C)
     if (!echt) throw err(400, 'Datum bitte als JJJJ-MM-TT.');
     if (tag > d.wienDatum()) throw err(400, 'Für einen Tag in der Zukunft gibt es noch nichts Erledigtes.');
-    const [liste, er] = await Promise.all([d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })), d.erledigtDaten(u, tag)]);
+    const [liste, er] = await Promise.all([ucListe(u).catch(() => ({ zeilen: [] as any[] })), d.erledigtDaten(u, tag)]);
     const zm = new Map(liste.zeilen.map((z: any) => [String(z.id), z]));
     send(d, res, { tag, heute: d.wienDatum(), erledigt: erledigtSicht(er.straenge, zm, new Set(er.straenge.map((s: any) => String(s.id)).filter((id: string) => !zm.has(id)))) });
   });
@@ -294,7 +303,7 @@ export function registerV2(on: On, d: V2Deps) {
     const u = await d.needUser(req);
     const name = String(url.searchParams.get('name') ?? '');
     if (!name || name.length > 200) throw err(400, 'Welches Thema?');
-    const [q, liste, st] = await Promise.all([themenQuellen(u), admin(u) ? d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })) : Promise.resolve({ zeilen: [] as any[] }), admin(u) && d.zustaende ? d.zustaende(u).catch(() => null) : Promise.resolve(null)]);
+    const [q, liste, st] = await Promise.all([themenQuellen(u), admin(u) ? ucListe(u).catch(() => ({ zeilen: [] as any[] })) : Promise.resolve({ zeilen: [] as any[] }), admin(u) && d.zustaende ? d.zustaende(u).catch(() => null) : Promise.resolve(null)]);
     const zm = new Map(liste.zeilen.map((z: any) => [String(z.id), z]));
     const ffThema = await fastFertigJe(d, u, liste.zeilen.filter((z: any) => arbeitGruppe(z) === 'fertig' && themaVon(themaOf(z), String(z.titel ?? '')) === name).map((z: any) => String(z.id)));
     const runs = q.runs.filter((r) => r.kind !== 'leitstand' && themaVon(themaOf(r), String(r.title ?? '')) === name)
@@ -336,7 +345,7 @@ export function registerV2(on: On, d: V2Deps) {
   on('GET', /^\/api\/v2\/arbeit$/, async (req, res) => {
     const u = await d.needUser(req);
     if (!admin(u)) return send(d, res, { gruppen: { wartet: [], laeuft: [], fertig: [] }, nurAdmin: true });
-    const [liste, st, runs] = await Promise.all([d.unterchatListe(u, false), d.zustaende ? d.zustaende(u).catch(() => null) : Promise.resolve(null), d.zustaende ? d.alleRuns(u).catch(() => []) : Promise.resolve([])]);
+    const [liste, st, runs] = await Promise.all([ucListe(u), d.zustaende ? d.zustaende(u).catch(() => null) : Promise.resolve(null), d.zustaende ? d.alleRuns(u).catch(() => []) : Promise.resolve([])]);
     const convVon = new Map(runs.map((r: any) => [String(r._id), String(r.conv ?? '')]));
     // Runde 7: was ein laufender Unter-Chat gerade tut, in Klartext — ohne den Chat zu öffnen.
     const k = liste.zeilen.map(arbeitKarte).map((x) => { const s = st?.get(convVon.get(x.id) ?? ''); const j = s?.running ? jetztSatz(s.jetzt) : null; return j ? { ...x, satz: `Jetzt: ${j}` } : s?.queued ? { ...x, satz: `Wartet in der Schlange (Platz ${s.queued.pos}) und startet von selbst.` } : x; });
@@ -349,7 +358,7 @@ export function registerV2(on: On, d: V2Deps) {
   on('GET', /^\/api\/v2\/enden$/, async (req, res) => {
     const u = await d.needUser(req);
     if (!admin(u)) return send(d, res, { enden: [] });
-    const liste = await d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] }));
+    const liste = await ucListe(u).catch(() => ({ zeilen: [] as any[] }));
     const ids = liste.zeilen.filter((z: any) => arbeitGruppe(z) === 'fertig').map((z: any) => String(z.id));
     const ff = await fastFertigJe(d, u, ids, 200);   // Enden: nicht bei 40 abschneiden (Gegenprüfung R7)
     send(d, res, { enden: endenAus([...ff].map(([id, x]) => ({ id, titel: x.titel, stand: x.stand, fertig: true }))) });
@@ -359,7 +368,7 @@ export function registerV2(on: On, d: V2Deps) {
     if (!admin(u)) throw err(403, 'Unter-Chats sieht nur, wem sie gehören.');
     const doc = await d.strang(u, m[1]);
     if (!doc) throw err(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
-    const [liste, ib] = await Promise.all([d.unterchatListe(u, false).catch(() => ({ zeilen: [] as any[] })), d.inboxFuer(u)]);
+    const [liste, ib] = await Promise.all([ucListe(u).catch(() => ({ zeilen: [] as any[] })), d.inboxFuer(u)]);
     const z = liste.zeilen.find((x: any) => String(x.id) === m[1]);
     const alleFragen = fragenAus(ib.eintraege).fragen;
     const eigeneIds = new Set(fragenJeStrang(ib.eintraege, m[1]).map((f: any) => f.id));

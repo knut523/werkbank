@@ -337,3 +337,20 @@ test('Abgleich (h): Volltextsuche über die eigenen Chat-Nachrichten — Auszug 
     assert.deepEqual((await rufe('GET', '/api/v2/chats/suche?q=ab', LISA)).b.treffer, [], 'unter 3 Zeichen: nichts');
   } finally { delete deps.lcVolltext; }
 });
+
+test('Plan §23 T6 (Schalter WERKBANK_TRIAGE): ein Unter-Chat mit nur technischen Fragen steht unter „Läuft“, mit Knut-Frage unter „Wartet“', async () => {
+  const altListe = deps.unterchatListe, altInbox = deps.inboxFuer;
+  deps.unterchatListe = async () => ({ zeilen: [{ id: 'tech1', titel: 'Nur Technik', zustand: 'wartet', cs: { status: 'braucht' } }, { id: 'knut1', titel: 'Mit Geldfrage', zustand: 'wartet', cs: { status: 'braucht' } }] }) as any;
+  const karte = (id: string, frage: string) => ({ id: `d-${id}-x`, art: 'entscheidung', frage: '', empfehlung: null, quelle: { text: `Unter-Chat „${id}“`, strand: id, url: null }, wartetSeit: null, blockiert: 1, antworten: ['ja'], daten: { strand: id, entscheidungen: [{ id: 'D1', frage, empfehlung: 'Ja' }] } });
+  deps.inboxFuer = async () => ({ eintraege: [karte('tech1', 'Liste nach Datum sortieren?'), karte('knut1', 'Budget für Anzeigen freigeben?')] }) as any;
+  try {
+    process.env.WERKBANK_TRIAGE = '1';
+    const an = (await rufe('GET', '/api/v2/arbeit', ADMIN)).b.gruppen;
+    assert.deepEqual(an.laeuft.map((z: any) => z.id), ['tech1']);
+    assert.deepEqual(an.wartet.map((z: any) => z.id), ['knut1']);
+    assert.match(an.wartet[0].satz, /eine Entscheidung/);
+    delete process.env.WERKBANK_TRIAGE;
+    const aus = (await rufe('GET', '/api/v2/arbeit', ADMIN)).b.gruppen;
+    assert.deepEqual(aus.wartet.map((z: any) => z.id).sort(), ['knut1', 'tech1'], 'Schalter aus: wie bisher');
+  } finally { deps.unterchatListe = altListe; deps.inboxFuer = altInbox; delete process.env.WERKBANK_TRIAGE; }
+});

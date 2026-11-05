@@ -362,3 +362,16 @@ test('Abgleich (h): auszugUm schneidet um den Treffer, markiert Kürzungen, ohne
   assert.ok(a.length <= 84);
   assert.equal(auszugUm('kurz', 'x', 80), 'kurz');
 });
+
+test('Plan §23 T6: „wartet“ nur, wenn eine Knut-Frage offen ist — sonst arbeitet er (technische Fragen entscheidet der Hauptchat)', async () => {
+  const { knutOffenJe } = await import('../server/v2kern.ts');
+  const m = knutOffenJe([{ strand: 'a', triage: { klasse: 'knut' } }, { strand: 'a', triage: { klasse: 'technisch' } }, { strand: 'b', triage: { klasse: 'technisch' } }, { strand: null, triage: { klasse: 'knut' } }] as any);
+  assert.deepEqual([...m.entries()], [['a', 1], ['b', 0]]);
+  const ohne = { zustand: 'wartet', cs: { status: 'braucht', grund: 'D3 offen' }, knutOffen: 0 } as any;
+  assert.equal(arbeitGruppe(ohne), 'laeuft');
+  assert.match(zustandSatz(ohne), /keine Frage an dich.*nach Empfehlung/);
+  assert.equal(arbeitGruppe({ ...ohne, knutOffen: 2 }), 'wartet');
+  assert.match(zustandSatz({ ...ohne, knutOffen: 2 }), /Wartet auf dich: 2 Entscheidungen/);
+  assert.equal(arbeitGruppe({ zustand: 'wartet', cs: { status: 'braucht' } } as any), 'wartet', 'ohne Triage (knutOffen fehlt) wie bisher');
+  assert.equal(arbeitGruppe({ zustand: 'haengt', knutOffen: 0 } as any), 'wartet', 'hängt bleibt ein Problem');
+});

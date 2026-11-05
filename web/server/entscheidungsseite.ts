@@ -37,6 +37,8 @@ export interface Frage {
   blockiert: number;
   /** Plan §23 T1 (Knut 05.11.): knut → „Für dich“; gewichtig → Hauptchat nach Council; technisch → sofort nach Empfehlung. */
   triage?: { klasse: Klasse; grund: string };
+  /** Unter-Chat, aus dem die Frage kommt (null: Hauptchat, Vault …). */
+  strand?: string | null;
   /** R30b S5: Klasse einer „Braucht Knut“-Zeile (nur mit WERKBANK_BRAUCHT_DICH), sonst null bzw. fehlt. */
   klasse?: 'aktion' | 'entscheidung' | null;
   /** (a) aus harter Regel (Nachbesserung 02.11.): warum nur Knut (zugang, datenbank, geld, recht, extern, entscheidung). */
@@ -87,7 +89,7 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
   for (const e of eintraege) {
     if (!FRAGE_ARTEN.has(e.art)) { sonstiges.push(e); continue; }
     const ref = e.art === 'vault' ? String(e.daten.vaultId ?? '') || null : e.art === 'push' ? String(e.daten.strand ?? '') || null : null;
-    const basis = { eintrag: e.id, ref, art: e.art, gruppe: gruppeVon(e), quelle: { text: e.quelle.text, url: e.quelle.url }, wartetSeit: e.wartetSeit, autoAb: e.autoAb ?? null, blockiert: e.blockiert };
+    const basis = { eintrag: e.id, ref, art: e.art, gruppe: gruppeVon(e), strand: e.quelle.strand ?? null, quelle: { text: e.quelle.text, url: e.quelle.url }, wartetSeit: e.wartetSeit, autoAb: e.autoAb ?? null, blockiert: e.blockiert };
     if (e.art === 'entscheidung') {
       for (const x of (e.daten.entscheidungen as any[]) ?? []) {
         const tw = titelUndWorum(x.frage);
