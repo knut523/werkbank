@@ -605,3 +605,22 @@ Auftrag: „time to result wichtig, aber auch die Quali.“ Grundlagen im Paket:
 - **E1 Übergabe ohne Hauptchat.** Heute weckt jeder fertige Teil den Hauptchat, der den nächsten Strang anschreibt — mindestens 1 min plus ein Hauptchat-Zug je Übergabe, ab 60 Weckungen am Tag bleibt es liegen. Optionen: (a) so lassen; (b) Folgeauftrag startet von selbst, wenn der Vorgänger fertig meldet, der Hauptchat bekommt nur eine Zeile. Empfehlung (b), nur innerhalb eines Auftrags mit Planer-Graph.
 - **E2 Schlange.** Heute zählt fast jeder Strang als „bauend“ (1,6 GB), die Schlange ist strikt in Reihenfolge. Optionen: (a) Profil ehrlich setzen; (b) zusätzlich kleinere Züge vorlassen. Empfehlung (a) jetzt, (b) erst mit einer Woche Messung der Gründe.
 - **E3 Prüfer früh und zwei Fixes gleichzeitig.** Kostet RAM (ein zweiter Fix-Strang ≈ 1,6 GB) und Tokens. Empfehlung ja, solange die Box-Schätzung Platz meldet.
+
+## 23. Triage statt Warteschlange (Knut 05.11.)
+
+Befund (reibungen.md, 05.11.): 18 Unter-Chats standen auf „wartet“ mit rund 90 offenen Fragen. Nach Durchsicht blieben 14 echte Entscheidungen für Knut (Geld, Recht, Zugang, Außenwirkung, Release). Der Rest war technisch oder intern und hatte eine klare Empfehlung. Dazu kamen zwei Fehler: Die Fragen von b65de461 fehlten, weil der Bericht über den Arbeitsordner (ein Repo) gesucht wurde und nicht über das Review-Paket. Und Stränge blieben über Nacht stehen, weil ein Zug ohne Status-Block als „wartet auf Antwort“ geparkt wurde.
+
+**Bestand, auf dem das aufsetzt:** `stufe.ts` (feste Regel-Einstufung wichtig/normal, „nach außen“ wird nie automatisch angenommen), `annahme.ts` (Annahme nach 24 h, Entscheidungs-Log, Widerruf mit Zustellung an den Unter-Chat).
+
+| # | Baustein | Umsetzung | Abnahme |
+|---|---|---|---|
+| T1 | Jede Frage bekommt eine Klasse | `klasseVon` (rein, Regel wie `stufeVon`): **knut** = Geld, Recht, Zugang/Berechtigung, Außenwirkung, Release/Push/nach außen, „Knut muss“, keine Empfehlung; **gewichtig** = technisch mit großer Wirkung (Architektur, Migration, Datenmodell, Löschen) → Hauptchat nach Council-Check; **technisch** = alles andere mit Empfehlung | Test je Klasse und Grenzfall |
+| T2 | Technisches wird entschieden statt geparkt | Klasse technisch: Empfehlung gilt **sofort** (bestehender Annahme-Weg mit Frist 0, Zustellung an den Unter-Chat), Log-Eintrag „von Claude entschieden“ | Strang läuft weiter; Eintrag im Log |
+| T3 | Gewichtige Fragen gehen durch einen Council-Check | Der Hauptchat ruft vor der Entscheidung den Council (Gegenrollen + Finalizer, zweites Modell). Das Ergebnis **HALTEN / ÄNDERN / AN KNUT** steht mit Begründung am Log-Eintrag; AN KNUT verschiebt die Frage in „Für dich“ | Anzeige je Eintrag; AN KNUT taucht in „Für dich“ auf |
+| T4 | Übersicht „Für dich“ | Nur Klasse knut (und AN KNUT), nach Thema gruppiert, mit Empfehlung, Alternativen per Klick, „alle wie empfohlen“ je Thema; Antwort geht automatisch an den richtigen Unter-Chat (bestehender Weg) | Persona „Knut morgens: in 2 Minuten wissen, was er entscheiden muss“ |
+| T5 | Protokoll „Von Claude entschieden“ | Je Unter-Chat (Steckbrief) und gesamt (Seite unter „Für dich“), nach dem Vorbild `2026-11-05_von-claude-entschieden.html`; „Umkehren“ mit einem Klick, die Umkehr geht automatisch an den Unter-Chat (bestehender Widerruf) | Umkehr kommt im Unter-Chat an |
+| T6 | „wartet“ nur, wenn Knut gebraucht wird | `arbeitGruppe`: wartend nur mit offener Frage der Klasse knut; sonst „arbeitet“ bzw. „fertig“ | Test; Zahl „warten auf dich“ sinkt |
+| T7 | Bericht über das Review-Paket finden | Suche zuerst über das Paket des Strangs (`paket`/Auftrag), erst dann über den Arbeitsordner | Fragen von b65de461 erscheinen (Test mit Repo als Arbeitsordner) |
+| T8 | Zug ohne Status-Block parkt nicht | Automatisches „weiter“ (höchstens 2-mal) mit der Bitte um den Status-Block; erst danach eine Frage an Knut; nachts stehende Stränge stehen in der Morgenlage | Test im Auto-Weiter-Takt |
+
+Schalter: `WERKBANK_TRIAGE` (Vorgabe an in der Test-Instanz, aus bis zum Release). Rückweg: Schalter aus, dann gilt wieder die Annahme nach 24 h. Reihenfolge: T1 → T6 → T7 → T2 → T4 → T5 → T3 → T8, je mit Tests zuerst.
