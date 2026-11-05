@@ -7,7 +7,7 @@ import { wb } from './db.ts';
 import { log } from './log.ts';
 
 export type Rolle = 'admin' | 'team';
-export type Weg = 'ui' | 'chat-knopf' | 'unterchat' | 'hauptchat';
+export type Weg = 'ui' | 'chat-knopf' | 'unterchat' | 'hauptchat' | 'v2';
 export type Zugang = 'chat' | 'direkt';
 
 /** Seiten, die gezählt werden — alles andere fällt unter „andere“, damit keine freien Texte in die Zählung kommen.
@@ -65,7 +65,16 @@ export function antwortGezaehlt(art: string, weg: Weg) { const a = String(art).t
 export const COS_AKTIONEN = new Set(['triage', 'einwurf', 'nachfassen', 'nachfassen-senden', 'register-anlegen', 'rueckstau', 'rueckstau-zurueck', 'ics-link', 'zusage', 'thema']);
 export function cosAktion(aktion: string) { const a = String(aktion).toLowerCase(); merke('aktion', { aktion: COS_AKTIONEN.has(a) ? a : 'andere' }); }
 
-export interface NutzungsZeile { tag: string; art: string; n: number; seite?: string; rolle?: Rolle; zugang?: Zugang; frage?: string; weg?: Weg; aktion?: string }
+// --- Werkzeug-Aufrufe der Hauptchat-Werkzeuge (Nutzungs-Audit 437, D2): feste Liste, nur der Name, nie Argumente ---
+export const WERKZEUGE = new Set(['delegieren', 'delegation_stand', 'delegation_urteil', 'phase_wechseln', 'orch_start', 'orch_list', 'orch_show', 'orch_send', 'orch_gruendlich',
+  'orch_thema', 'orch_review', 'orch_archivieren', 'orch_ask', 'orch_questions', 'zusagen', 'zusage_eintragen', 'zusage_aendern', 'thema_setzen', 'hygiene_list', 'inbox',
+  'braucht_dich', 'inbox_antworten', 'hygiene_snooze', 'skills_list', 'review_ready', 'jira_update', 'jira_update_many', 'agent_start', 'pr_review_starten', 'fragenpaket',
+  'fragenpaket_stand', 'jira_duplikate', 'jira_anlegen', 'pr_lage', 'github_lesen', 'github_schreiben', 'werkbank_betrieb', 'werkbank_stand', 'geheimnis_nutzen',
+  'coolify_status', 'coolify', 'datei_teilen', 'screenshot', 'hauptchat_melden', 'melious_sub', 'auslastung', 'challenge']);
+/** Ein Aufruf eines Werkbank-Werkzeugs (vom MCP-Server gemeldet). Unbekannte Namen landen unter „andere“. */
+export function werkzeugGenutzt(name: string) { const n = String(name); merke('werkzeug', { werkzeug: WERKZEUGE.has(n) ? n : 'andere' }); }
+
+export interface NutzungsZeile { tag: string; art: string; n: number; seite?: string; rolle?: Rolle; zugang?: Zugang; frage?: string; weg?: Weg; aktion?: string; werkzeug?: string }
 
 /** Auswertung der letzten `tage` Tage: Summen je Seite/Rolle/Zugang, je Antwortweg und je CoS-Aktion, dazu die Zahl der Tage mit Daten. */
 export async function auswertung(tage = 14, now = new Date()) {
@@ -75,6 +84,7 @@ export async function auswertung(tage = 14, now = new Date()) {
   const seiten: Record<string, { admin: number; team: number; chat: number; direkt: number }> = {};
   const antworten: Record<string, Partial<Record<Weg, number>>> = {};
   const aktionen: Record<string, number> = {};
+  const werkzeuge: Record<string, number> = {};
   for (const z of zeilen) {
     if (z.art === 'seite' && z.seite) {
       const s = (seiten[z.seite] ??= { admin: 0, team: 0, chat: 0, direkt: 0 });
@@ -84,8 +94,10 @@ export async function auswertung(tage = 14, now = new Date()) {
       a[z.weg] = (a[z.weg] ?? 0) + z.n;
     } else if (z.art === 'aktion' && z.aktion) {
       aktionen[z.aktion] = (aktionen[z.aktion] ?? 0) + z.n;
+    } else if (z.art === 'werkzeug' && z.werkzeug) {
+      werkzeuge[z.werkzeug] = (werkzeuge[z.werkzeug] ?? 0) + z.n;
     }
   }
   const tageMitDaten = new Set(zeilen.map((z) => z.tag)).size;
-  return { ab, tage, tageMitDaten, genug: tageMitDaten >= 14, seiten, antworten, aktionen };
+  return { ab, tage, tageMitDaten, genug: tageMitDaten >= 14, seiten, antworten, aktionen, werkzeuge };
 }

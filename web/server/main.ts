@@ -107,7 +107,7 @@ import { collectDecisions, todayQuestions, todayPayload } from './fragen.ts';
 import { parseDecisions, fillDecision, parseRankTable, parseReasons, prRefs, parsePrRegister, parseCheck, addRankProposal, roadmapInsights, KANBAN_STATES, specChecks, specTemplate } from './roadmap.ts';
 import { inSprint, goalsOf, sprintLabel, goalLabel, labelCfg, parseGoalsFile, goalTree, sprintGoalsFromOutcomes, sprintTag, valueOf, GOAL_ID, needsGoal, effectiveGoals, exemptLabel, goalLevel, sameLevelRemovals, ownGoals, rule1Goals, specProposals, autoEligible, type GoalNode } from './goals.ts';
 import { istTiefe, tiefeOf, type Tiefe } from './tiefe.ts';
-import { seiteGesehen, antwortGezaehlt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
+import { seiteGesehen, antwortGezaehlt, werkzeugGenutzt, auswertung as nutzungAuswertung, rolleVon, zugangVon, schreibe as nutzungSchreiben } from './nutzung.ts';
 import { zaehle, statusNeu, autoSchliessenAn, navNeu, aufraeumenAn, einLogin, wienDatum, wienUm, vorigerTag, type Zustand } from './zustand.ts';
 import { themenAusStand, entscheide as cosEntscheide } from './cos.ts';
 import { vorschlag as tagesvorschlag, ausLage as vorschlagAusLage, TAGESVORSCHLAG_AN } from './tagesvorschlag.ts';
@@ -2168,6 +2168,14 @@ on('POST', /^\/internal\/hauptchat-meldung$/, async (req, res) => {
   const r = await meldeHauptchat(u, String(b.conv ?? ''), String(b.art ?? ''), String(b.text ?? ''));
   log('hauptchat-meldung', { user: u.id, id: r.id, art: r.art, hauptchat: r.hauptchat });
   send(res, 200, r);
+});
+
+// Nutzungs-Audit 437: der MCP-Server meldet jeden Werkzeug-Aufruf (nur den Namen).
+on('POST', /^\/internal\/nutzung\/werkzeug$/, async (req, res) => {
+  const b = await body(req);
+  await internalUser(req, b);
+  werkzeugGenutzt(String(b.name ?? ''));
+  send(res, 200, { ok: true });
 });
 
 on('POST', /^\/internal\/review-ready$/, async (req, res) => {
@@ -4288,7 +4296,7 @@ registerV2(on, {
   strang: (u, id) => orchRuns().findOne({ _id: id as any, userId: u.id, kind: { $ne: 'leitstand' } }),
   hauptchat: async (u) => { if (u.role !== 'ADMIN') return null; const l = await activeLeitstand(u).catch(() => null); return l?.conv ? { conv: String(l.conv), url: /^https?:\/\//.test(String(l.url ?? '')) ? String(l.url) : null } : null; },
   laeuftChat: async (u, conv) => !!(await strandStates(u)).get(conv)?.running,
-  livePrs, githubNames,
+  livePrs, githubNames, antwortGezaehlt,
   fixPunkte: () => fixesCol().find({ punkte: { $exists: true } }, { projection: { repo: 1, number: 1, punkte: 1, status: 1, createdAt: 1, neu: 1 } }).sort({ createdAt: -1 }).limit(300).toArray(),
   letzteReviews: () => reviewsCol().find({ createdAt: { $gte: new Date(Date.now() - 30 * 86400_000) } }).sort({ createdAt: -1 }).limit(300).toArray(),
   reviewKommentar: (paket) => parseKommentar(readBerichtDatei(join(reviewDir(), paket, 'kommentar.md'))),

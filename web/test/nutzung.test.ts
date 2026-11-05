@@ -83,3 +83,15 @@ test('CoS (Paket 374): Morgenlage als Seite, Aktionen nur aus der festen Liste, 
   const roh = await wb().collection('nutzung').find({ art: 'aktion' }, { projection: { _id: 0 } }).toArray();
   assert.ok(roh.every((z) => N.COS_AKTIONEN.has(z.aktion) || z.aktion === 'andere'));
 });
+
+test('Werkzeug-Aufrufe: nur feste Namen, nie freier Text; Antwortweg „v2“ zählt mit (Nutzungs-Audit 437)', async () => {
+  N.werkzeugGenutzt('orch_send'); N.werkzeugGenutzt('orch_send'); N.werkzeugGenutzt('inbox');
+  N.werkzeugGenutzt('geheim-PM-123');   // frei → „andere“
+  N.antwortGezaehlt('inbox', 'v2');
+  const a = await N.auswertung(14);
+  assert.equal(a.werkzeuge.orch_send, 2);
+  assert.equal(a.werkzeuge.inbox, 1);
+  assert.equal(a.werkzeuge.andere, 1);
+  assert.equal(a.werkzeuge['geheim-PM-123'], undefined);
+  assert.equal(a.antworten.inbox.v2, 1);
+});

@@ -26,6 +26,8 @@ export interface V2Deps {
   unterchatListe: (u: User, erledigt: boolean) => Promise<{ zeilen: any[] }>;
   erledigtDaten: (u: User, tag: string) => Promise<{ straenge: any[] }>;
   fragenAntwort: (u: User, b: any) => Promise<any>;
+  /** Nutzungs-Audit 437: Antwort an der 2.0-Karte zählen (feste Arten, kein Text). */
+  antwortGezaehlt?: (art: string, weg: 'v2') => void;
   strang: (u: User, id: string) => Promise<any | null>;
   hauptchat: (u: User) => Promise<{ conv: string; url: string | null } | null>;
   laeuftChat: (u: User, conv: string) => Promise<boolean>;
@@ -253,6 +255,7 @@ export function registerV2(on: On, d: V2Deps) {
     if (!f) throw err(409, 'Diese Frage ist schon beantwortet oder hat sich geändert — Seite neu laden.');
     if (antwortWeg(f) !== 'hier') throw err(403, 'Das gibst du in der alten Werkbank frei (Freigaben nach außen gehen in 2.0 nicht).');
     const r = await d.fragenAntwort(u, { id, antwort, text: String(b.text ?? '').slice(0, 4000) });
+    d.antwortGezaehlt?.(f.art === 'rueckfrage' ? 'rueckfrage' : f.art === 'braucht' ? 'braucht' : 'inbox', 'v2');
     d.log('v2 antwort', { user: u.id, id, antwort });
     send(d, res, { ok: true, ziel: r?.ziel ? String(r.ziel).replace(/Unter-Chat Unter-Chat/g, 'Unter-Chat') : null, spaeter: !!r?.spaeter });
   });

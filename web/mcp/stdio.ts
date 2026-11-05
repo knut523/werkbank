@@ -10,7 +10,7 @@ export interface Tool {
   run: (args: any) => Promise<string> | string;
 }
 
-export function serve(name: string, version: string, tools: Tool[], opts: { input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream } = {}) {
+export function serve(name: string, version: string, tools: Tool[], opts: { input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream; onCall?: (name: string) => void } = {}) {
   const out = opts.output ?? process.stdout;
   const send = (msg: unknown) => out.write(JSON.stringify(msg) + '\n');
   const rl = createInterface({ input: opts.input ?? process.stdin });
@@ -30,6 +30,7 @@ export function serve(name: string, version: string, tools: Tool[], opts: { inpu
         case 'tools/call': {
           const t = tools.find((x) => x.name === m.params?.name);
           if (!t) return fail(-32602, `Unbekanntes Werkzeug: ${m.params?.name}`);
+          try { opts.onCall?.(t.name); } catch { /* Zählen darf nie stören */ }
           try { return reply({ content: [{ type: 'text', text: await t.run(m.params?.arguments ?? {}) }] }); }
           catch (e: any) { return reply({ content: [{ type: 'text', text: `Fehler: ${e.message ?? e}` }], isError: true }); }
         }

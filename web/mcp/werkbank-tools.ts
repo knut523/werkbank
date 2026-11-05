@@ -220,6 +220,9 @@ const COS_TOOLS = [
   },
 ];
 
+// Nutzungs-Audit 437: jeder Aufruf wird (nur mit Namen) gezählt — fire-and-forget, ein Fehler stört den Aufruf nie.
+const zaehle = (name: string) => { void call('/internal/nutzung/werkzeug', { name }, 3_000).catch(() => {}); };
+
 serve('werkbank', '0.1.0', [
   ...COS_TOOLS,
   {
@@ -506,4 +509,4 @@ serve('werkbank', '0.1.0', [
       return `Gegenprüfung ${j.modell ?? 'GLM'} (Melious, Open-Weight — Ergebnis prüfen; ${j.teile > 1 ? `${j.teile} Teile${j.leer ? `, ${j.leer} ohne Antwort` : ''}; ` : ''}≈ ${j.energie ?? '?'} Energie${j.bezahlt === 'credits' ? ', bezahlt mit Guthaben' : ''}):\n\n${j.text}`;
     },
   },
-]);
+], { onCall: zaehle });
