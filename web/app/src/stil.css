@@ -269,3 +269,7 @@ p { margin: 0 0 var(--s1); }
 .ueberblick-kopf { margin: 10px 0 2px; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--gedimmt); }
 .ueberblick ul { margin: 0; padding-left: 18px; }
 .ueberblick li { margin: 3px 0; font-size: .92rem; line-height: 1.35; }
+
+/* Knut 05.11. 19:00: „Zum Ansehen“ — Notiz je Karte */
+.karte.ansehen textarea.notiz { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid #cdd3da; border-radius: 10px; background: #fff; margin: 8px 0; }
+.karte.ansehen .knoepfe { display: flex; gap: 8px; flex-wrap: wrap; }

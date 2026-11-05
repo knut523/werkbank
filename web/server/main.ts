@@ -4355,6 +4355,19 @@ registerV2(on, {
   sammelSchliessen: (u, id) => inboxAntworten(u, id, { antwort: 'nein', weg: 'ui' }),
   alleRuns: (u) => orchRuns().find({ userId: u.id }, { projection: { _id: 1, conv: 1, title: 1, thema: 1, zustand: 1, kind: 1, lastActivity: 1, doneAt: 1, startedAt: 1, reviewedAt: 1, knutReviewedAt: 1, startError: 1, endedAt: 1 } }).sort({ lastActivity: -1 }).limit(1000).toArray(),
   lcChats: (u) => v2lcListe(u), lcVolltext: (u, q) => v2lcVolltext(u, q), entschiedenLog: (u) => logListe(u, { tage: 30 }), umkehren: (u, id, text) => logUmkehren(u, id, text), councilAnwenden: (u, f, c, w) => councilAnwenden(u, f, c, w),
+  // Knut 05.11. 19:00 „Zum Ansehen“: Antwort je Strang — Notiz als Nachricht an den Strang (sendOrch, bei Bedarf eingereiht, A1),
+  // „Passt“ nimmt danach ab (die Nachricht hebt eine Abnahme auf, deshalb zuerst senden), „Später“ blendet 24 h aus; immer ins Log.
+  ansehenSpaeter: async (u) => new Set((await wb().collection('ansehen_spaeter').find({ userId: u.id, bis: { $gt: new Date() } }).toArray()).map((x: any) => String(x.strand))),
+  ansehenAntwort: async (u, id, art, notiz, titel) => {
+    const was = art === 'passt' ? 'Passt' : art === 'aendern' ? 'Ändern' : 'Später ansehen';
+    if (notiz || art === 'aendern') await sendOrch(u, id, `Knut (Zum Ansehen): ${was}.${notiz ? ` ${art === 'aendern' ? '' : 'Notiz: '}${notiz}` : ''}`, 'hand');
+    if (art === 'passt') await reviewOrch(u, id, notiz, 'knut');
+    if (art === 'spaeter') await wb().collection('ansehen_spaeter').updateOne({ _id: `${u.id}:${id}` as any }, { $set: { userId: u.id, strand: id, bis: new Date(Date.now() + 24 * 3600_000) } }, { upsert: true });
+    const at = new Date();
+    await logCol().insertOne({ _id: `${u.id}-ansehen-${id}-${at.getTime()}`, userId: u.id, kennung: `ansehen-${id}`, art: 'ansehen', ids: [], frage: `Zum Ansehen: ${titel}`, empfehlung: null, stufe: null, grund: null,
+      antwort: `${was}${notiz ? ` — ${notiz.slice(0, 500)}` : ''}`, durch: 'knut', auto: false, at, strand: { id, titel }, zugestelltAt: notiz || art === 'aendern' ? at : null, widerruf: null } as any);
+    zahlCache.delete(u.id);
+  },
   // Plan §24 A4: Haken der „Braucht Hauptsitzung“-Punkte je Person.
   hauptsitzungHaken: {
     lesen: async (u) => new Set((await wb().collection('hauptsitzung_haken').find({ userId: u.id }).toArray()).map((x: any) => String(x.key))),

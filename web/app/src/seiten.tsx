@@ -162,6 +162,8 @@ export function Entscheidungen() {
           {themen(d.rest).map(([thema, ks], _i, alle) => <ThemaGruppe key={thema} thema={thema} karten={ks} alleThemen={alle.map(([x]) => x)} fertig={() => { neu(); app.zahl(null); }} />)}
         </Abschnitt>
       )}
+      {/* Knut 05.11. 19:00: zu jedem fertigen Strang etwas schreiben — die Notiz geht von selbst an den Strang. */}
+      <ZumAnsehen />
       {d.aufraeumen.length > 0 && (
         <Abschnitt id="e-aufraeumen" titel="Aufräumen" erklaerung="Zählt mit, weil es auf dich wartet — ist aber keine Entscheidung und hält keinen Agenten an. Das erledigst du (noch) in der alten Werkbank.">
           <AufraeumenListe l={d.aufraeumen} fertig={neu} />
@@ -182,6 +184,42 @@ export function Entscheidungen() {
 }
 
 /** Karten nach Thema, größte Gruppe zuerst; ohne Thema unter „Sonstiges“. */
+/** Knut 05.11. 19:00 „Eine Seite, auf der ich zu jedem Punkt etwas schreiben kann“: je fertigem Strang Stand, Links, Passt/Ändern/Später + Notiz. */
+function ZumAnsehen() {
+  const { d, neu } = useDaten<{ karten: { id: string; titel: string; thema: string; uhr: string | null; satz: string; links: Link[] }[] }>('api/v2/ansehen');
+  if (!d?.karten.length) return null;
+  return (
+    <Abschnitt id="e-ansehen" titel={`Zum Ansehen (${d.karten.length})`} erklaerung="Fertige Unter-Chats. Schreib zu jedem etwas — die Notiz geht von selbst an den Unter-Chat (auch wenn er gerade beschäftigt ist) und steht im Entscheidungs-Log.">
+      <div className="karten">{d.karten.map((k) => <AnsehenKarte key={k.id} k={k} fertig={neu} />)}</div>
+    </Abschnitt>
+  );
+}
+
+function AnsehenKarte({ k, fertig }: { k: { id: string; titel: string; thema: string; uhr: string | null; satz: string; links: Link[] }; fertig: () => void }) {
+  const [notiz, setNotiz] = useState('');
+  const [meldung, setMeldung] = useState<string | null>(null);
+  const antworten = async (art: 'passt' | 'aendern' | 'spaeter') => {
+    if (art === 'aendern' && !notiz.trim()) { setMeldung('Bei „Ändern“ bitte kurz schreiben, was.'); return; }
+    try { await schicke(`api/v2/ansehen/${encodeURIComponent(k.id)}`, { art, notiz }); setMeldung(art === 'passt' ? 'Abgenommen.' : art === 'aendern' ? 'Geht an den Unter-Chat.' : 'Für 24 h ausgeblendet.'); setTimeout(fertig, 800); }
+    catch (e: any) { setMeldung(String(e?.message ?? e)); }
+  };
+  return (
+    <article id={`ansehen-${k.id}`} className="karte ansehen" aria-label={k.titel}>
+      {k.thema && k.thema !== 'Sonstiges' && <p className="karte-thema">{k.thema}</p>}
+      <h3 className="karte-titel">{k.titel}</h3>
+      <p className="klein">{k.satz}{k.uhr ? ` · ${k.uhr}` : ''}</p>
+      {k.links.length > 0 && <Verweise links={k.links} />}
+      <textarea className="notiz" rows={2} placeholder="Deine Notiz an den Unter-Chat (optional, bei „Ändern“ nötig)" value={notiz} onChange={(e) => setNotiz(e.target.value)} />
+      <div className="knoepfe">
+        <button type="button" className="knopf haupt" onClick={() => antworten('passt')}>Passt</button>
+        <button type="button" className="knopf" onClick={() => antworten('aendern')}>Ändern</button>
+        <button type="button" className="knopf leise" onClick={() => antworten('spaeter')}>Später</button>
+      </div>
+      {meldung && <p className="hinweis klein" role="status">{meldung}</p>}
+    </article>
+  );
+}
+
 /** Persona R7: alle Entscheidungen auf einen Blick — Thema, Anzahl, je Frage eine Zeile (gekürzt) mit Sprung zur Karte. */
 function Ueberblick({ karten }: { karten: Karte[] }) {
   if (karten.length < 4) return null;

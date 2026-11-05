@@ -68,6 +68,9 @@ export interface V2Deps {
   councilAnwenden?: (u: User, f: Frage, c: Council, w: ReturnType<typeof councilWirkung>) => Promise<void>;
   /** Plan §24 A4: Haken der „Braucht Hauptsitzung“-Punkte (main.ts, Sammlung hauptsitzung_haken). */
   hauptsitzungHaken?: { lesen: (u: User) => Promise<Set<string>>; setzen: (u: User, key: string, an: boolean) => Promise<void> };
+  /** Knut 05.11. 19:00 „Zum Ansehen“: ausgeblendete Stränge („Später“) und die Antwort an den Strang (main.ts). */
+  ansehenSpaeter?: (u: User) => Promise<Set<string>>;
+  ansehenAntwort?: (u: User, id: string, art: 'passt' | 'aendern' | 'spaeter', notiz: string, titel: string) => Promise<void>;
   lcUrl: string;
   /** S20 (D8): Rolle der Besitzerin aus der Einrichtung (WERKBANK_ROLLE, von team-install gesetzt) — sonst abgeleitet. */
   rolleEinstellung?: string | null;
@@ -357,6 +360,40 @@ export function registerV2(on: On, d: V2Deps) {
     const eigen = String(b.text ?? '').trim().slice(0, 2000);
     await d.umkehren(u, m[1], eigen ? `Umkehren: ${eigen}` : 'Umkehren: Knut nimmt diese Entscheidung zurück — nicht so umsetzen; schon Gebautes zurücknehmen und die Frage an Knut stellen.');
     d.log('v2 umgekehrt', { user: u.id, id: m[1] });
+    send(d, res, { ok: true });
+  });
+
+  // Knut 05.11. 19:00: „Eine Seite, auf der ich zu jedem Punkt etwas schreiben kann“ — je fertigem Strang eine Karte „Zum Ansehen“.
+  on('GET', /^\/api\/v2\/ansehen$/, async (req, res) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) return send(d, res, { karten: [] });
+    const [liste, weg] = await Promise.all([ucListe(u).catch(() => ({ zeilen: [] as any[] })), d.ansehenSpaeter ? d.ansehenSpaeter(u).catch(() => new Set<string>()) : Promise.resolve(new Set<string>())]);
+    const fertig = liste.zeilen.filter((z: any) => arbeitGruppe(z) === 'fertig' && !weg.has(String(z.id))).slice(0, 20);
+    const karten = await Promise.all(fertig.map(async (z: any) => {
+      const k = arbeitKarte(z);
+      const doc: any = await d.strang(u, String(z.id)).catch(() => null);
+      const kopf = doc?.berichtKopf ?? {};
+      const prs = (Array.isArray(kopf.github) ? kopf.github : []).filter((g: any) => g?.pr || /\/pull\/\d+/.test(String(g?.url ?? '')))
+        .map((g: any) => { const pr = String(g.pr ?? `${g.repo}#${String(g.url).match(/\/pull\/(\d+)/)?.[1]}`); return { label: `PR ${pr.split('/').pop()}`, url: /^https:\/\/github\.com\//.test(String(g.url ?? '')) ? g.url : `https://github.com/${pr.replace('#', '/pull/')}` }; });
+      const weitere = (Array.isArray(kopf.review) ? kopf.review : []).filter((r: any) => r?.url && /^https:\/\//.test(String(r.url))).slice(0, 4).map((r: any) => ({ label: kurz(String(r.titel ?? 'Link'), 40), url: String(r.url) }));
+      const f = doc ? fastFertig(dodAus(String(doc.standVoll || doc.lastExcerpt || ''))) : null;
+      return { id: k.id, titel: k.titel, thema: k.thema, uhr: k.uhr, satz: f ? `Fast fertig — fehlt: ${f.fehlt.slice(0, 3).join('; ')}.` : k.satz, links: [...k.links, ...prs, ...weitere] };
+    }));
+    send(d, res, { karten });
+  });
+  on('POST', /^\/api\/v2\/ansehen\/([\w-]{1,40})$/, async (req, res, m) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) throw err(403, 'Nur wer die Unter-Chats führt.');
+    if (!d.ansehenAntwort) throw err(501, 'Antworten ist hier nicht eingerichtet.');
+    const b = await d.body(req, 16 * 1024);
+    const art = String(b?.art ?? '');
+    if (!['passt', 'aendern', 'spaeter'].includes(art)) throw err(400, 'Antwort ist Passt, Ändern oder Später.');
+    const notiz = String(b?.notiz ?? '').trim().slice(0, 4000);
+    if (art === 'aendern' && !notiz) throw err(400, 'Bei „Ändern“ bitte kurz schreiben, was.');
+    const z = (await ucListe(u).catch(() => ({ zeilen: [] as any[] }))).zeilen.find((x: any) => String(x.id) === m[1]);
+    if (!z) throw err(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
+    await d.ansehenAntwort(u, m[1], art as any, notiz, String(z.titel ?? ''));
+    d.log('v2 ansehen', { user: u.id, strand: m[1], art, notiz: notiz.length });
     send(d, res, { ok: true });
   });
 

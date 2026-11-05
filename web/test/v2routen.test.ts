@@ -431,3 +431,24 @@ test('Plan §24 A4: Aufgabenliste „Braucht Hauptsitzung“ — offen/erledigt,
     assert.equal((await rufe('POST', '/api/v2/hauptsitzung/irgendwas', ADMIN, {})).status, 400, 'nur Kennungen der Form strang:hash');
   } finally { deps.unterchatListe = altListe; deps.strang = altStrang; delete deps.hauptsitzungHaken; }
 });
+
+test('Knut 05.11. 19:00 „Zum Ansehen“: Karte je fertigem Strang mit Stand und Links; Passt/Ändern/Später + Notiz gehen an den Strang', async () => {
+  const altListe = deps.unterchatListe, altStrang = deps.strang;
+  const antworten: any[] = [];
+  deps.unterchatListe = async () => ({ zeilen: [{ id: 'f1', titel: 'Netzentgelte-Deck', zustand: 'fertig', paket: '480-deck', bericht: true }, { id: 'l1', titel: 'Läuft noch', zustand: 'laeuft' }, { id: 'f2', titel: 'Später', zustand: 'fertig' }] }) as any;
+  deps.strang = async (_u: any, id: string) => ({ _id: id, title: id, standVoll: '### Stand\n- Erledigt: x\nStatus: fertig', berichtKopf: { github: [{ repo: 'WirStrom1/olaf-admin', pr: 'WirStrom1/olaf-admin#393', url: 'https://github.com/WirStrom1/olaf-admin/pull/393' }], review: [{ titel: 'Deck', url: 'https://example.org/deck' }] } }) as any;
+  deps.ansehenSpaeter = async () => new Set(['f2']);
+  deps.ansehenAntwort = async (_u: any, id: string, art: string, notiz: string, titel: string) => { antworten.push([id, art, notiz, titel]); };
+  try {
+    const g = (await rufe('GET', '/api/v2/ansehen', ADMIN)).b;
+    assert.deepEqual(g.karten.map((k: any) => k.id), ['f1'], 'nur fertige, „Später“ ausgeblendet');
+    const labels = g.karten[0].links.map((l: any) => l.label);
+    assert.ok(labels.includes('Bericht') && labels.includes('PR olaf-admin#393') && labels.includes('Deck'), labels.join(','));
+    assert.equal((await rufe('POST', '/api/v2/ansehen/f1', ADMIN, { art: 'aendern', notiz: 'Folie 3 kürzen' })).status, 200);
+    assert.deepEqual(antworten[0], ['f1', 'aendern', 'Folie 3 kürzen', 'Netzentgelte-Deck']);
+    assert.equal((await rufe('POST', '/api/v2/ansehen/f1', ADMIN, { art: 'aendern', notiz: ' ' })).status, 400, 'Ändern braucht eine Notiz');
+    assert.equal((await rufe('POST', '/api/v2/ansehen/f1', ADMIN, { art: 'egal' })).status, 400);
+    assert.equal((await rufe('POST', '/api/v2/ansehen/f1', LISA, { art: 'passt' })).status, 403);
+    assert.deepEqual((await rufe('GET', '/api/v2/ansehen', LISA)).b.karten, []);
+  } finally { deps.unterchatListe = altListe; deps.strang = altStrang; delete deps.ansehenSpaeter; delete deps.ansehenAntwort; }
+});
