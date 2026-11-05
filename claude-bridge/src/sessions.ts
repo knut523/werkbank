@@ -478,12 +478,18 @@ export function schalterKlassen(env: Record<string, string | undefined> = proces
     .map(([k, v]) => [k, /^(on|off|an|aus|auto|0|1|claude|melious(:[\w.-]{1,40})?|\d{1,3})$/.test(String(v)) ? String(v) : 'gesetzt']));
 }
 
-export function stats() {
+/** Für den Neustart: laufende Züge (ohne die, die nur auf „ja“ warten); mit `seit` nur die, die vorher begonnen haben —
+ *  Reibung #3 (Paket 436): sonst hielten Züge, die während des Wartens starten, den Neustart bis zur Höchstzeit auf. */
+export function drainZahlen(ls: { pending: unknown; leit?: boolean; t0?: number }[], seit?: number) {
+  const z = ls.filter((l) => !l.pending && (!seit || (l.t0 ?? 0) < seit));
+  return { drainLaufend: z.length, drainOhneLeit: z.filter((l) => !l.leit).length };
+}
+
+export function stats(seit?: number) {
   const pending = [...lives.values()].filter(l => l.pending).length;
   // laufend/schlange: für den Release-Neustart (scripts/werkbank.sh wartet, bis laufende Züge fertig sind — Plan 213 S1a).
   // R31 (werkbank_betrieb): Neustart aus dem Hauptchat wartet nicht auf dessen eigenen Zug (der ruft den Neustart ja gerade auf).
-  const drainOhneLeit = [...lives.values()].filter(l => !l.pending && !l.leit).length;
-  return { live: lives.size, pending, drainLaufend: lives.size - pending, drainOhneLeit, schlange: laenge(), sessions: Object.keys(sessionMap).length, startedAt: STARTED_AT };
+  return { live: lives.size, pending, ...drainZahlen([...lives.values()], seit), schlange: laenge(), sessions: Object.keys(sessionMap).length, startedAt: STARTED_AT };
 }
 
 /** S0 (Plan 126): Ordnergrenzen dieser Person für Datei-Werkzeuge und Bash. BRIDGE_PATH_GUARD=off nur zur Diagnose. */

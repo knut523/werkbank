@@ -328,7 +328,7 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://x');
   try {
-    if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, mock: MOCK, ...stats(), konten: balanceStats() });
+    if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, mock: MOCK, ...stats(Number(url.searchParams.get('seit')) || undefined), konten: balanceStats() });
     // Sitzungen einer Person (nur für Werkbank-Web, mit internem Token; ohne Inhalte außer dem Kurztitel).
     if (req.method === 'GET' && url.pathname === '/sessions') {
       if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });

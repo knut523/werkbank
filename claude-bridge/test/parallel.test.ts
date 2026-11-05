@@ -65,6 +65,13 @@ test('Audit 05.11. (3): Live-Start setzt keine Zahl-Grenze mehr (scripts/start.s
   assert.doesNotMatch(sh, /BRIDGE_MAX_PARALLEL_CHATS="\$\{BRIDGE_MAX_PARALLEL_CHATS-\d/);
 });
 
+test('Reibung #3: Drain zählt mit `seit` nur Züge, die vorher begonnen haben; Wartende auf „ja“ nie', () => {
+  const ls = [{ pending: null, t0: 100 }, { pending: null, t0: 300, leit: true }, { pending: {}, t0: 50 }, { pending: null, t0: 500 }];
+  assert.deepEqual(mod.drainZahlen(ls), { drainLaufend: 3, drainOhneLeit: 2 });
+  assert.deepEqual(mod.drainZahlen(ls, 400), { drainLaufend: 2, drainOhneLeit: 1 }, 'der Zug ab 500 startete während des Wartens');
+  assert.equal(mod.stats(1).drainLaufend, 0);
+});
+
 test('Sperre: BRIDGE_MAX_PARALLEL_CHATS=1 ist das alte Verhalten', () => {
   process.env.BRIDGE_MAX_PARALLEL_CHATS = '1';
   try {

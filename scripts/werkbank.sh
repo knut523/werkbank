@@ -60,12 +60,14 @@ drain() {
   local max=${WB_DRAIN_S:-600} t=0 n
   [ "$max" -gt 0 ] || return 0
   local port; port=$(load_env >/dev/null 2>&1; echo "${BRIDGE_PORT:-3090}")
+  # Reibung #3 (Paket 436): nur Züge zählen, die schon vor dem Warten liefen (neue Starts verlängern es nicht mehr).
+  local seit; seit=$(date +%s%3N)
   while [ "$t" -lt "$max" ]; do
     # Brücke nicht erreichbar (n leer) = nichts zu unterbrechen. Gezählt sind alle laufenden Züge (auch Hauptchat, Worker);
     # R31: WB_DRAIN_FELD=drainOhneLeit (Neustart aus dem Hauptchat, werkbank_betrieb) zählt den Hauptchat nicht mit.
     local feld=${WB_DRAIN_FELD:-drainLaufend} h
     case "$feld" in drainLaufend|drainOhneLeit) ;; *) feld=drainLaufend ;; esac
-    h=$(curl -s --max-time 3 "http://127.0.0.1:$port/health")
+    h=$(curl -s --max-time 3 "http://127.0.0.1:$port/health?seit=$seit")
     n=$(printf '%s' "$h" | sed -n "s/.*\"$feld\":\([0-9]*\).*/\1/p")
     # Ältere Brücke ohne das Feld: nicht durchwinken, sondern wie bisher alle Züge zählen (Gegenprüfung R31).
     [ -z "$n" ] && [ -n "$h" ] && n=$(printf '%s' "$h" | sed -n 's/.*"drainLaufend":\([0-9]*\).*/\1/p')
