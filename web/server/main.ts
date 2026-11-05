@@ -1846,14 +1846,16 @@ async function logEntscheidung(u: User, e: any, antwort: string, durch: string, 
 // Plan §23 T3: Council-Urteile des Hauptchats zu gewichtigen Fragen. Gespeichert je Person und Frage; die Inbox hängt sie an.
 const councilCol = () => wb().collection('council_urteile');
 async function councilAnwenden(u: User, f: Frage, c: Council, w: ReturnType<typeof councilWirkungFn>) {
-  await councilCol().updateOne({ _id: `${u.id}:${f.id}` as any }, { $set: { userId: u.id, frage: f.id, titel: f.titel, ...c } }, { upsert: true });
+  const speichern = () => councilCol().updateOne({ _id: `${u.id}:${f.id}` as any }, { $set: { userId: u.id, frage: f.id, titel: f.titel, ...c } }, { upsert: true });
   zahlCache.delete(u.id);
-  if (!w.schliessen) return;   // AN_KNUT: die Frage steht ab jetzt in „Für dich“
-  // HALTEN/ÄNDERN: an der Quelle beantworten (geht an den Unter-Chat) — der Antwortweg schreibt das Log; diesen Eintrag als
-  // Council-Entscheidung markieren (auto → sichtbar und umkehrbar unter „Von Claude entschieden“).
+  if (!w.schliessen) { await speichern(); return; }   // AN_KNUT: die Frage steht ab jetzt in „Für dich“
+  // HALTEN/ÄNDERN: an der Quelle beantworten (geht an den Unter-Chat) — der Antwortweg schreibt das Log; genau DIESEN Eintrag
+  // (Kennung + Teil, Gegenprüfung: nicht bloß „der jüngste“) als Council-Entscheidung markieren. Urteil erst nach der Antwort speichern.
   const start = new Date();
   await fragenAntwort(u, { id: f.id, antwort: 'anders', text: w.text });
-  await logCol().findOneAndUpdate({ userId: u.id, at: { $gte: start } }, { $set: { auto: true, durch: 'council', council: c, antwort: `Council: ${w.anzeige}` } }, { sort: { at: -1 } });
+  await speichern();
+  const teil = f.teil ? { frage: { $regex: `^${f.teil.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:` } } : {};
+  await logCol().findOneAndUpdate({ userId: u.id, kennung: f.eintrag, at: { $gte: start }, ...teil }, { $set: { auto: true, durch: 'council', council: c, antwort: `Council: ${w.anzeige}` } }, { sort: { at: -1 } });
 }
 /** Normale Einträge, deren 24 h um sind: Empfehlung annehmen — an derselben Quelle wie eine Antwort von Knut, dann ins Log. */
 async function annahmeLauf(u: User, now = Date.now()): Promise<string[]> {

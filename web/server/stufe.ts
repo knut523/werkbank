@@ -70,7 +70,7 @@ export const annahmeMs = (env = process.env) => { const h = Number(env.WERKBANK_
 // Wie stufeVon eine feste Regel, kein Modell; ein Strang kann zu „knut“ hochstufen, nie herunter.
 export type Klasse = 'knut' | 'gewichtig' | 'technisch';
 
-const ZUGANG = wort(String.raw`zugang|zugänge|zugriff|berechtigung|freigeb|freischalt|zugangsdaten|passwort|token(?![\p{L}])|schlüssel|konto|account|admin-recht|rolle(?:n)? vergeb`);
+const ZUGANG = wort(String.raw`zugang|zugänge|zugriff|berechtigung|freigeb|freigab|freischalt|zugangsdaten|passwort|tokens?(?![\p{L}])|schlüssel|konto|account|admin-recht|rolle(?:n)? vergeb`);
 const GEWICHTIG: [RegExp, string][] = [
   [wort(String.raw`architektur|migration|migrier|schema|datenmodell|datenbank|breaking`), 'Architektur/Migration'],
   [wort(String.raw`lösch|entfern\w* (?:endgültig|dauerhaft)|endgültig|unwiderruflich|datenverlust|zurücksetz|force[\s-]?push`), 'Löschen/nicht umkehrbar'],

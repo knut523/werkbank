@@ -123,3 +123,11 @@ test('Plan §23 T2: mit Triage gelten technische Fragen sofort (autoAb = seit), 
   const aus = baueInbox(q, { now }).eintraege.find((e) => e.art === 'entscheidung')!;
   assert.notEqual(aus.autoAb, aus.wartetSeit, 'ohne Triage: 24 h wie bisher');
 });
+
+test('Gegenprüfung T2: steht das Signalwort nur in der Empfehlung (Geld), wird nichts automatisch beantwortet — wie die Anzeige', () => {
+  const q: InboxQuellen = { ...leer, karten: [karte({ entscheidungen: [{ id: 'D1', frage: 'Welche Variante nehmen wir?', empfehlung: 'Variante B für 500 € im Monat' }] as any })],
+    lose: [{ id: 'q9', title: 'Wie gehen wir vor?', recommendation: 'Lisa die Freigabe für das Repo geben', options: [], createdAt: new Date(now - 3600_000) }] };
+  const ib = baueInbox(q, { now, triage: true }).eintraege;
+  assert.deepEqual(ib.find((e) => e.art === 'entscheidung')!.daten.autoIds, []);
+  assert.equal(ib.find((e) => e.art === 'rueckfrage')!.autoAb, null, '„Freigabe“ ist Zugang');
+});

@@ -54,8 +54,13 @@ for n in "$KNUT" "$AGENT"; do
 done
 if [ -n "$ARBEIT" ]; then
   [ -d "$ARBEIT" ] || { echo "Ordner $ARBEIT fehlt" >&2; exit 2; }
-  tu "Arbeitsordner $ARBEIT der Gruppe $GRUPPE geben (g+rwX, neue Dateien erben die Gruppe)" \
-    sh -c "chgrp -R '$GRUPPE' '$ARBEIT' && chmod -R g+rwX '$ARBEIT' && find '$ARBEIT' -type d -exec chmod g+s {} +"
+  ARBEIT=$(realpath "$ARBEIT")
+  # Gegenprüfung: nie das ganze Home oder / (sonst würde die Gruppe — also der Agent — Knuts Zugänge lesen können).
+  case "$ARBEIT" in /|"$KNUT_HOME"|"$KNUT_HOME"/.*) echo "--arbeit $ARBEIT ist zu weit (Home, / oder ein Punkt-Ordner) — einen Arbeitsordner darunter angeben" >&2; exit 2 ;; esac
+  # Ohne sh -c (Gegenprüfung: kein Einschleusen über den Ordnernamen).
+  tu "Arbeitsordner $ARBEIT der Gruppe $GRUPPE geben" chgrp -R "$GRUPPE" "$ARBEIT"
+  tu "… Gruppe darf lesen und schreiben (g+rwX)" chmod -R g+rwX "$ARBEIT"
+  tu "… neue Dateien erben die Gruppe (setgid auf Ordnern)" find "$ARBEIT" -type d -exec chmod g+s {} +
 else
   echo "  (Arbeitsordner nicht angefasst — mit --arbeit <ordner> nachholen, sobald die Brücke als $AGENT startet)"
 fi
@@ -65,6 +70,9 @@ echo "3. Knuts Home und Zugänge"
 # Arbeitsordnern; Auflisten bleibt verboten. Geschützt wird über die Rechte der Zugänge selbst (700/600) — genau das prüft
 # der Negativtest.
 modus() { stat -c '%a' "$1"; }
+# Gegenprüfung: 711 gilt für ALLE Nutzer der Box — weitere Menschen-Konten nennen, damit Knut abwägen kann.
+andere=$(getent passwd | awk -F: -v k="$KNUT" -v a="$AGENT" '$3>=1000 && $3<60000 && $1!=k && $1!=a {print $1}' | tr '\n' ' ')
+[ -n "$andere" ] && echo "  ! weitere Konten auf der Box: $andere— sie könnten Dateien mit bekanntem Pfad in $KNUT_HOME lesen, wenn diese für andere lesbar sind"
 if [ "$(modus "$KNUT_HOME")" = 711 ]; then ok "$KNUT_HOME steht auf 711"
 else tu "$KNUT_HOME auf 711 (durchgehen ja, auflisten nein; war $(modus "$KNUT_HOME"))" chmod 711 "$KNUT_HOME"; fi
 for d in .claude .config/vw .config/gh; do

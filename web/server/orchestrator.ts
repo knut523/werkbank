@@ -267,7 +267,7 @@ export const ERNEUT = '(Werkbank: Diese Nachricht kam beim ersten Versuch nicht 
 
 /** Text des automatischen Fortsetzens: „nicht angekommen“ → dieselbe Nachricht noch einmal (sonst ginge sie verloren), sonst „weiter“. */
 export function fortsetzText(cause: AutoCause, lastSentText: string | null | undefined, n: number, max: number): string {
-  if (cause === 'ohne_status') return `weiter (automatisch fortgesetzt: dein letzter Zug endete ohne Status-Zeile — mach weiter und schließ jeden Zug mit genau einer Zeile „Status: fertig | braucht Antwort | blockiert“ ab, ${n}/${OHNE_STATUS_MAX})`;
+  if (cause === 'ohne_status') return `weiter (automatisch fortgesetzt: dein letzter Zug endete ohne Status-Zeile oder mit „Status: läuft“ — mach weiter; wenn du fertig bist oder etwas brauchst, schließ mit genau einer Zeile „Status: fertig | braucht Antwort | blockiert“ ab, ${n}/${OHNE_STATUS_MAX})`;
   const weiter = `weiter (automatisch fortgesetzt: ${CAUSE_TEXT[cause]}, ${n}/${max})`;
   const t = String(lastSentText ?? '').trim();
   if (cause !== 'lost' || !t || /^weiter \(automatisch fortgesetzt/.test(t)) return weiter;

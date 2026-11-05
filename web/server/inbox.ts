@@ -198,7 +198,9 @@ function mitStufe(e: InboxEintrag, ms: number, triage = false) {
       const s = stufeVon({ text: `${x.frage} ${x.empfehlung ?? ''} ${x.optionen ?? ''}`, markiert: x.stufe ?? null });
       x.stufe = s.stufe; x.stufeGrund = s.grund;
       x.auto = triage
-        ? klasseVon({ text: `${x.frage} ${x.optionen ?? ''}`, markiert: x.stufe === 'wichtig' && /markiert/.test(s.grund) ? 'wichtig' : null, empfehlung: x.empfehlung }).klasse === 'technisch'
+        // Text mit Empfehlung (Gegenprüfung T2): mindestens so viel wie die Anzeige prüft — sonst würde automatisch beantwortet,
+        // was „Für dich“ als Knut-Frage zeigt (Signalwort nur in der Empfehlung, z. B. „500 €“).
+        ? klasseVon({ text: `${x.frage} ${x.empfehlung ?? ''} ${x.optionen ?? ''}`, markiert: x.stufe === 'wichtig' && /markiert/.test(s.grund) ? 'wichtig' : null, empfehlung: x.empfehlung }).klasse === 'technisch'
         : autoFaehig({ stufe: s.stufe, empfehlung: x.empfehlung, text: `${x.frage} ${x.optionen ?? ''}` });
     }
     const wichtig = liste.find((x) => x.stufe === 'wichtig');
