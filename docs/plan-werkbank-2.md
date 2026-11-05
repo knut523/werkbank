@@ -422,7 +422,7 @@ Aus der Plan-Gegenprüfung (GLM 5.3, art=plan, 03.11. nachts) — übernommen na
 - **C10** M4 erst nach einer geübten Wiederherstellung (E10), M5 erst danach.
 - **C11** Der Terminal-Weg bleibt intern (`/internal/*`, Token, nur lokal), ohne Freigaben nach außen.
 - **C12** Streichen nur bei 0 Nutzung über 90 Tage **und** kein periodischer/Krisen-Fall (Sprint, Einrichtung) — und nur auf Knuts Wort.
-- **C13** Sandbox-Regel E13: Stufe 1 heute mit Test, Stufe 2 vor M2.
+- **C13** Sandbox-Regel E13: Stufe 1 heute mit Test, Stufe 2 vor M2. Bestätigt im Council-Check der Hauptsitzung 05.11.: Stufe 2 schaltet erst ein, wenn der Negativtest `sandbox2.test.ts` nicht übersprungen und grün ist (§19).
   *Stand Stufe 1 (S19, `claude-bridge/src/sandbox.ts`, Test `claude-bridge/test/sandbox.test.ts`):* Ein Unter-Chat bekommt keinen SSH-Agenten, keine Vaultwarden-Sitzung, kein GitHub-Token aus der Umgebung, keine `gh`-Anmeldung (leere eigene Konfiguration, höchstens das Lesetoken `WERKBANK_GITHUB_TOKEN`), keinen Credential-Helfer (auch nicht eingeschleust über `GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_COUNT`), keinen Session-Bus zum Schlüsselbund und Git über SSH ohne Schlüssel. Jeder Versuch läuft im Test zweimal: mit der Brücken-Umgebung (Köder greifbar) und im Unter-Chat (scheitert). Der Hauptchat bleibt ohne Sandbox (Knut arbeitet dort mit seinen Zugängen).
   *Grenze (ehrlich):* gleicher Unix-Nutzer — Dateien im Home (Schlüsselordner, gh-Anmeldedatei) bleiben per Shell mit absolutem Pfad lesbar; dagegen stehen nur Deny-Regeln und Klassifikator. Auf der Box fehlen Docker-Daemon, User-systemd und unprivilegierte Namensräume (geprüft 03.11.) — die echte Trennung ist Stufe 2 (eigener Unix-Nutzer, D11, Box-Änderung durch Knut).
   *Prüfpunkt für Knut:* `WERKBANK_GITHUB_TOKEN` muss das Nur-Lesen-Token sein (so im Code beschrieben, `web/server/vorbau.ts:323`); ist es das Push-Token, darf es nicht in Unter-Chats.
@@ -528,9 +528,12 @@ Ziel: Unter-Chats laufen als eigener Unix-Nutzer `werkbank-agent`. Was im Home v
 Schritte (mit sudo, einmalig je Box; nichts davon ist ausgeführt):
 1. Nutzer anlegen: `useradd --create-home --shell /usr/sbin/nologin werkbank-agent`.
 2. Gemeinsame Gruppe für die Arbeitsordner: `groupadd werkbank-arbeit`, beide Nutzer hinein; die Worktrees der Unter-Chats (`~/work/…`) bekommen Gruppe `werkbank-arbeit` und `g+rwX`, sonst nichts aus dem Home von Knut.
-3. Home von Knut auf `750` (Gruppe ohne `werkbank-arbeit`), Zugangsordner zusätzlich `700`.
+3. Home von Knut auf `750` (Gruppe ohne `werkbank-arbeit`), Zugangsordner zusätzlich `700`: mindestens `~/.claude`, `~/.claude.json`, `~/.config/vw` (Sitzung des Vaultwarden-Helfers), `~/.config/gh` und die Git-Anmeldedaten (`~/.git-credentials`, `~/.config/git/credentials`).
+4b. Für den Negativtest eine zweite, harmlose Regel: `knut ALL=(werkbank-agent) NOPASSWD: /usr/bin/test` (prüft nur Rechte, liest nichts).
 4. sudo-Regel nur für den Start des Agenten: `knut ALL=(werkbank-agent) NOPASSWD: /usr/bin/env CLAUDE_CONFIG_DIR=* /home/werkbank-agent/bin/claude *` (Pfad an die Installation anpassen); keine Shell, keine anderen Befehle.
 5. Brücke: neuer Startweg je Unter-Chat (`sudo -u werkbank-agent …`) hinter einem Schalter, Vorgabe aus; Claude-Konfiguration des Agenten unter `/home/werkbank-agent/.claude` (Skills per Link aus dem Vault, Token je Sitzung über die Umgebung wie heute).
+
+**Abnahme vor dem Einschalten (bindend, Council-Check der Hauptsitzung 05.11. zu C13):** `claude-bridge/test/sandbox2.test.ts` läuft als Knut **nicht übersprungen** und grün. Er zeigt: `werkbank-agent` kann den Vaultwarden-Helfer (`~/.config/vw`), die Git-Anmeldedaten und `~/.claude` nicht lesen. Die Kontrolle im selben Test zeigt, dass Knut sie lesen kann, der Test schlägt also an. Weitere Pfade gehen über `SANDBOX2_ZIELE`. Ohne diesen Lauf bleibt der Schalter aus.
 
 Prüfung (Test zum Einschalten): derselbe Köder-Test wie in Stufe 1, dazu ein Leseversuch mit absolutem Pfad auf eine Köder-Datei in einem `700`-Ordner von Knut — muss als `werkbank-agent` mit „Permission denied“ scheitern; Kontrolle als Knut klappt.
 
