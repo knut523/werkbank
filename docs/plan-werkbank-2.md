@@ -626,3 +626,17 @@ Befund (reibungen.md, 05.11.): 18 Unter-Chats standen auf „wartet“ mit rund 
 | T8 | Zug ohne Status-Block parkt nicht | Automatisches „weiter“ (höchstens 2-mal) mit der Bitte um den Status-Block; erst danach eine Frage an Knut; nachts stehende Stränge stehen in der Morgenlage | Test im Auto-Weiter-Takt |
 
 Schalter: `WERKBANK_TRIAGE` (Vorgabe an in der Test-Instanz, aus bis zum Release). Rückweg: Schalter aus, dann gilt wieder die Annahme nach 24 h. Reihenfolge: T1 → T6 → T7 → T2 → T4 → T5 → T3 → T8, je mit Tests zuerst.
+
+## 24. Nudges und Nachsendungen automatisch (Knut 05.11.)
+
+Auftrag: „Alle Nudges und Nachsendungen sollen automatisch laufen.“ Heute hat die Hauptsitzung von Hand angeschubst (4× „weiter“), mit acht Schleifen-Skripten an beschäftigte Stränge nachgesendet, auf Strang-Enden gewartet, nach einem Fix live geschaltet und übersprungene Reviews neu angestoßen (reibungen.md, 05.11.). Abnahme: **ein Tag ohne manuelle Nachsende-Skripte**.
+
+| # | Baustein | Umsetzung (Bestand, auf dem es aufsetzt) | Abnahme |
+|---|---|---|---|
+| A1 | Senden an einen beschäftigten Strang wird eingereiht | `sendOrch`: statt 409 (Worktree belegt, Nachreichen abgelehnt) kommt die Nachricht in `ausstehend` am Strang; der Auto-Weiter-Takt stellt sie beim nächsten freien Zug zu; Zustand abrufbar (`orch show`, Steckbrief: „eingereiht seit …“, „zugestellt …“) | Test: 409-Fälle liefern `eingereiht`, der Takt stellt genau einmal zu |
+| A2 | T8 für alle Stränge | ohne Schalter: Zug ohne Status-Block → bis zu 2× „weiter“ mit Hinweis; danach Zustand **hängt** (nicht „wartet“) und eine Meldung an den Hauptchat | Test: drei Züge ohne Marke → 2× weiter, dann „hängt“ + Meldung |
+| A3 | Ereignis an den Hauptchat statt Abfragen | bestehendes Wecken (Leitstand-Meldungen) bei fertig/wartet/hängt; Meldung trägt die Felder **Braucht Knut** und **Braucht Hauptsitzung** aus dem Stand-Block | Test: Meldung mit beiden Feldern |
+| A4 | „Braucht Hauptsitzung“ als Aufgabenliste | Zeilen „- Braucht Hauptsitzung: …“ aus den Stand-Blöcken (wie die DoD-Folgen) → Liste im Hauptchat-Bereich der 2.0 und in der Lage des Hauptchats, abhakbar (Haken gespeichert je Strang und Zeile) | Test: Zeile erscheint, Haken bleibt |
+| A5 | Übersprungene Reviews nachholen | einmal täglich: PRs, deren Review übersprungen wurde (kein neuer Kopf seit dem letzten Lauf, z. B. #393 heute 09:17), noch einmal anstoßen — höchstens einmal je PR und Tag | Test: übersprungener PR wird am nächsten Tag genau einmal angestoßen |
+
+Reihenfolge: A2 → A1 → A3 → A4 → A5, je mit Tests zuerst. A2 hebt den Triage-Schalter nur für T8 auf (Knut: „alle“). Live schalten nach einem Fix (d) bleibt ein Schritt mit Knuts Go; er erscheint als „Braucht Hauptsitzung“-Punkt (A4) statt im Kopf der Hauptsitzung.
