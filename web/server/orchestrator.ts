@@ -9,6 +9,7 @@
 // nur bei normalem Ende — aus der Status-Marke der letzten Antwort.
 
 import { DOD_PFLICHT } from './dod.ts';
+import { triageAn } from './stufe.ts';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -160,10 +161,11 @@ export function messageText(m: any): string {
 }
 
 /** Status-Marke der letzten Antwort („Status: fertig | braucht Antwort | blockiert“), die letzte zählt. */
-export function statusMark(text: string): 'fertig' | 'braucht Antwort' | 'blockiert' | null {
-  const all = [...text.matchAll(/^[\s>*_-]*Status[*_]*\s*:\s*[*_]*\s*(fertig|braucht Antwort|blockiert)\b/gim)];
+export function statusMark(text: string): 'fertig' | 'braucht Antwort' | 'blockiert' | 'läuft' | null {
+  // Plan §23 T8: „läuft“ heißt „Zwischenstand, ich mache weiter“ — wird automatisch fortgesetzt statt geparkt.
+  const all = [...text.matchAll(/^[\s>*_-]*Status[*_]*\s*:\s*[*_]*\s*(fertig|braucht Antwort|blockiert|läuft)(?![\p{L}])/gimu)];
   const v = all.at(-1)?.[1]?.toLowerCase();
-  return v === 'fertig' ? 'fertig' : v === 'braucht antwort' ? 'braucht Antwort' : v === 'blockiert' ? 'blockiert' : null;
+  return v === 'fertig' ? 'fertig' : v === 'braucht antwort' ? 'braucht Antwort' : v === 'blockiert' ? 'blockiert' : v === 'läuft' ? 'läuft' : null;
 }
 
 export interface StrandState { running: boolean; interrupted: boolean; queued?: { pos: number; since: number } | null; turn: { start: number; end: number | null; outcome: string | null; modell?: string } | null }
@@ -173,7 +175,7 @@ export interface LastMsg { fromUser: boolean; text: string; error: boolean; at: 
  * Status eines Strangs (rein, testbar). Reihenfolge: Startfehler → läuft (Brücke) → abgebrochen (Neustart) → letzte
  * Nachricht noch nicht bei der Brücke → Ausgang des Zuges → Status-Marke der Antwort.
  */
-export type AutoCause = 'limit' | 'timeout' | 'interrupted' | 'lost' | 'busy' | 'rate_limit';
+export type AutoCause = 'limit' | 'timeout' | 'interrupted' | 'lost' | 'busy' | 'rate_limit' | 'ohne_status';
 
 export function orchStatus(run: { startError?: string | null; startedAt: Date | number; lastSentAt?: Date | number | null }, s: StrandState | null | undefined, last: LastMsg | null, now = Date.now()): { status: OrchStatus; reason: string; cause?: AutoCause } {
   if (run.startError) return { status: 'failed', reason: `Start fehlgeschlagen: ${run.startError}` };
@@ -214,7 +216,11 @@ export function orchStatus(run: { startError?: string | null; startedAt: Date | 
   if (mark === 'fertig') return { status: 'done', reason: 'Agent meldet „fertig“' };
   if (mark === 'blockiert') return { status: 'failed', reason: 'Agent meldet „blockiert“' };
   if (mark === 'braucht Antwort') return { status: 'waiting', reason: 'Agent braucht eine Antwort' };
-  return { status: 'waiting', reason: 'Antwort ohne Status-Marke — lesen und antworten' };
+  // Plan §23 T8: ohne Marke oder „läuft“ → automatisch weiter (höchstens OHNE_STATUS_MAX-mal), statt über Nacht zu parken.
+  // Hinter dem Triage-Schalter (wie §23 insgesamt): ohne ihn bleibt es beim Parken wie bisher.
+  const t8 = triageAn() ? { cause: 'ohne_status' as const } : {};
+  if (mark === 'läuft') return { status: 'waiting', reason: t8.cause ? 'Agent meldet „läuft“ — wird automatisch fortgesetzt' : 'Agent meldet „läuft“ — lesen und antworten', ...t8 };
+  return { status: 'waiting', reason: 'Antwort ohne Status-Marke — lesen und antworten', ...t8 };
 }
 
 /**
@@ -239,7 +245,9 @@ export function mitDeckel(st: { status: OrchStatus; reason: string; cause?: Auto
 
 export const AUTO_BUSY_MS = 2 * 60_000, AUTO_RATE_MS = 30 * 60_000, AUTO_SAVE_MS = 30_000, AUTO_STALE_MS = 6 * 3600_000;
 export const autoMax = () => Math.max(1, Math.floor(Number(process.env.ORCH_AUTO_WEITER_MAX)) || 30);
-export const CAUSE_TEXT: Record<AutoCause, string> = { limit: 'Schrittlimit', timeout: 'Zeitlimit', interrupted: 'Brücke neu gestartet', lost: 'Nachricht nicht angekommen', busy: 'Parallelgrenze', rate_limit: 'Kontingent' };
+export const CAUSE_TEXT: Record<AutoCause, string> = { limit: 'Schrittlimit', timeout: 'Zeitlimit', interrupted: 'Brücke neu gestartet', lost: 'Nachricht nicht angekommen', busy: 'Parallelgrenze', rate_limit: 'Kontingent', ohne_status: 'Zug endete ohne Status-Zeile' };
+/** Plan §23 T8: so oft höchstens „weiter“ nach einem Zug ohne Status-Marke (oder mit „läuft“) — danach entscheidet Knut. */
+export const OHNE_STATUS_MAX = 2;
 
 // ---------- Zustellung mit Bestätigung und Wiederholung (Plan 274, D4b; Vorfall e422ab42, 20.10.) ----------
 
@@ -259,6 +267,7 @@ export const ERNEUT = '(Werkbank: Diese Nachricht kam beim ersten Versuch nicht 
 
 /** Text des automatischen Fortsetzens: „nicht angekommen“ → dieselbe Nachricht noch einmal (sonst ginge sie verloren), sonst „weiter“. */
 export function fortsetzText(cause: AutoCause, lastSentText: string | null | undefined, n: number, max: number): string {
+  if (cause === 'ohne_status') return `weiter (automatisch fortgesetzt: dein letzter Zug endete ohne Status-Zeile — mach weiter und schließ jeden Zug mit genau einer Zeile „Status: fertig | braucht Antwort | blockiert“ ab, ${n}/${OHNE_STATUS_MAX})`;
   const weiter = `weiter (automatisch fortgesetzt: ${CAUSE_TEXT[cause]}, ${n}/${max})`;
   const t = String(lastSentText ?? '').trim();
   if (cause !== 'lost' || !t || /^weiter \(automatisch fortgesetzt/.test(t)) return weiter;
@@ -307,6 +316,7 @@ export function autoWeiter(run: AutoRun, st: { cause?: AutoCause }, s: StrandSta
   // Council R1, Bedingung 1: erst wenn LibreChat die Antwort des Zuges gespeichert hat (sonst falsche Elternnachricht).
   if ((cause === 'limit' || cause === 'timeout') && t && !(last && !last.fromUser && last.at >= t.start - 5000) && ctx.now - end < AUTO_SAVE_MS) return { action: 'wait', key, why: 'Antwort wird gespeichert' };
   if ((run.autoStreak ?? 0) >= ctx.max) return { action: 'stop', key, why: `${ctx.max}× automatisch fortgesetzt — Chat ansehen` };
+  if (cause === 'ohne_status' && (run.autoStreak ?? 0) >= OHNE_STATUS_MAX) return { action: 'stop', key, why: `${OHNE_STATUS_MAX}× ohne Status-Zeile fortgesetzt — Chat ansehen` };
   return { action: 'send', key, why: CAUSE_TEXT[cause] };
 }
 

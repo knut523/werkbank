@@ -814,3 +814,21 @@ test('Knut 17.10.: Stufen — wichtig oben und offen, normal nach Frist angenomm
   // Ein zweiter Lauf nimmt nichts doppelt an.
   assert.ok(!(await post('/api/entscheidungen/lauf', {})).j.angenommen.includes(von(normal).id));
 });
+
+test('Plan §23 T8 (05.11.: Stränge standen über Nacht): Zug ohne Status-Marke oder mit „läuft“ → höchstens 2× automatisch weiter, dann Knut', async () => {
+  const { fortsetzText } = await import('../server/orchestrator.ts');
+  assert.equal(statusMark('…\nStatus: läuft'), 'läuft');
+  assert.equal(orchStatus(run, turn('ok'), ai('ohne Marke')).cause, undefined, 'ohne Triage-Schalter: parken wie bisher');
+  process.env.WERKBANK_TRIAGE = '1';
+  try {
+  const ohne = orchStatus(run, turn('ok'), ai('Zwischenstand ohne Marke'));
+  assert.equal(ohne.status, 'waiting'); assert.equal(ohne.cause, 'ohne_status'); assert.match(ohne.reason, /ohne Status-Marke/, 'Zustand „stand-fehlt“ bleibt erkennbar');
+  const laeuft = orchStatus(run, turn('ok'), ai('Teil A fertig.\nStatus: läuft'));
+  assert.equal(laeuft.cause, 'ohne_status'); assert.match(laeuft.reason, /läuft/);
+  assert.equal(decide('ok', {}, {}, ai('ohne Marke')).action, 'send');
+  assert.equal(decide('ok', { autoStreak: 1 }, {}, ai('ohne Marke')).action, 'send');
+  assert.equal(decide('ok', { autoStreak: 2 }, {}, ai('ohne Marke')).action, 'stop', 'nach 2× ohne Marke: Knut');
+  assert.equal(decide('ok', {}, {}, ai('Status: braucht Antwort')).action, 'none', 'echte Frage: kein automatisches weiter');
+  assert.match(fortsetzText('ohne_status', null, 1, 2), /ohne Status-Zeile.*Status: fertig \| braucht Antwort \| blockiert.*1\/2/);
+  } finally { delete process.env.WERKBANK_TRIAGE; }
+});
