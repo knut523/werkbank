@@ -1068,7 +1068,13 @@ export async function reviewOrch(u: User, id: string, note = '', by: 'knut' | 'l
 // review_ready- und gedeckelter), unabhängig vom Auto-Fortsetzen. Brücke oder LibreChat weg → nichts überschreiben.
 
 let statusTicking = false;
-export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now = Date.now()) {
+/** Reibung #6 (Paket 436): der Bericht liegt schon vor, der Zug läuft noch — einmal je Zug an den Hauptchat melden (vorher kam das
+ *  Ergebnis erst mit dem Zugende, gemessen 10 min später). */
+export function zwischenMelden(o: { running: boolean; berichtMtime: number | null; lastSentAt: number; gemeldetFuer: number | null }): boolean {
+  return o.running && o.berichtMtime !== null && o.berichtMtime > o.lastSentAt && o.gemeldetFuer !== o.lastSentAt;
+}
+
+export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'> & { melde?: AutoDeps['melde'] }, now = Date.now()) {
   if (statusTicking) return;
   statusTicking = true;
   try {
@@ -1099,6 +1105,17 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
         try { const ks = await kopfPflege(d, now); if (Object.keys(ks).length) { await runs().updateOne({ _id: d._id }, { $set: ks }); Object.assign(d, ks); } }
         catch (e: any) { deps.log?.('bericht-kopf fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
         const sd = states.get(d.conv);
+        // Reibung #6: Zwischenergebnis melden, sobald der Bericht im laufenden Zug geschrieben ist.
+        if (deps.melde && d.bericht && sd?.running) {
+          let mt: number | null = null;
+          try { mt = statSync(String(d.bericht)).mtimeMs; } catch { /* noch nicht da */ }
+          const ls = new Date(d.lastSentAt ?? d.startedAt).getTime();
+          if (zwischenMelden({ running: true, berichtMtime: mt, lastSentAt: ls, gemeldetFuer: d.zwischenGemeldetFuer ?? null })) {
+            await runs().updateOne({ _id: d._id }, { $set: { zwischenGemeldetFuer: ls } });
+            await deps.melde(u, d, `Zwischenergebnis: der Bericht von „${d.title}“ (${d._id}) liegt vor — der Unter-Chat arbeitet noch. ${String(d.bericht).replace(/^.*\/review-pakete\//, 'review-pakete/')}`).catch(() => false);
+            deps.log?.('orch zwischenergebnis gemeldet', { id: d._id });
+          }
+        }
         if (d.lastStatus === 'done' && d.doneAt && d.bericht && new Date(d.doneAt).getTime() > new Date(d.lastSentAt ?? d.startedAt).getTime() && !sd?.running && (sd?.turn?.end ?? 0) <= new Date(d.doneAt).getTime()) {
           // Plan 213 S1b: „done“ heißt Marke „fertig“ — der Zustand fehlt nur bei Unter-Chats von vor der Umstellung.
           // Eine später gestellte Rückfrage macht aus „fertig“ wieder „wartet“ (und umgekehrt) — je Takt neu, nicht eingefroren (Pass C).
@@ -1166,7 +1183,7 @@ export async function statusSchatten(tage = 7, now = Date.now()) {
 }
 
 /** Takt für statusTick (aus main.ts), unabhängig von ORCH_AUTO_WEITER; ORCH_STATUS=off schaltet ab. */
-export function startStatusTick(deps: Pick<AutoDeps, 'userById' | 'log'>) {
+export function startStatusTick(deps: Pick<AutoDeps, 'userById' | 'log'> & { melde?: AutoDeps['melde'] }) {
   if (process.env.ORCH_STATUS === 'off') return null;
   const ms = Math.max(200, Number(process.env.ORCH_AUTO_WEITER_TICK_MS) || 20_000);
   return setInterval(() => { statusTick(deps).catch((e) => deps.log?.('orch-status fehler', { error: String(e?.message ?? e).slice(0, 200) })); }, ms);

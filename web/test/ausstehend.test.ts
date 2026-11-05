@@ -2,7 +2,7 @@
 // eingereiht statt mit 409 abgelehnt; der Auto-Weiter-Takt stellt beim nächsten freien Zug zu — gebündelt, genau einmal.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ausstehendEintrag, ausstehendText, ausstehendVia, AUSSTEHEND_MAX } from '../server/orchestrator.ts';
+import { ausstehendEintrag, ausstehendText, ausstehendVia, AUSSTEHEND_MAX, zwischenMelden } from '../server/orchestrator.ts';
 
 const at = new Date('2026-11-05T17:00:00Z');
 
@@ -29,4 +29,13 @@ test('Audit 05.11. (2): gebündelt zählt der stärkste Absender — eine einger
   assert.equal(ausstehendVia([n]), 'notiz');
   assert.equal(ausstehendVia([n, l]), 'leitstand');
   assert.equal(ausstehendVia([n, l, h]), 'hand');
+});
+
+test('Reibung #6: Zwischenmeldung, sobald der Bericht im laufenden Zug geschrieben ist — einmal je Zug, nicht bei altem Bericht', () => {
+  const zug = { running: true, berichtMtime: 2_000, lastSentAt: 1_000, gemeldetFuer: null as number | null };
+  assert.equal(zwischenMelden(zug), true);
+  assert.equal(zwischenMelden({ ...zug, gemeldetFuer: 1_000 }), false, 'für diesen Zug schon gemeldet');
+  assert.equal(zwischenMelden({ ...zug, berichtMtime: 900 }), false, 'Bericht von vor der letzten Nachricht');
+  assert.equal(zwischenMelden({ ...zug, running: false }), false, 'Zug zu Ende: die normale Fertig-Meldung übernimmt');
+  assert.equal(zwischenMelden({ ...zug, berichtMtime: null }), false, 'kein Bericht');
 });
