@@ -33,6 +33,7 @@ test('Plan §24 A3: Meldung an den Hauptchat trägt „Braucht Knut“ und „Br
   assert.match(f.text, /Braucht Knut: D2 Budget freigeben/); assert.match(f.text, /Braucht Hauptsitzung: Live-Gang nach Commit abc1234/);
   assert.match(ev(run, turn('ok'), ai(`${stand}Status: braucht Antwort`))!.text, /Braucht Knut: D2/);
   assert.doesNotMatch(ev(run, turn('ok'), ai('### Stand\n- Braucht Knut: nichts\nStatus: fertig'))!.text, /Braucht Knut/, '„nichts“ steht nicht in der Meldung');
+  assert.doesNotMatch(ev(run, turn('ok'), ai('### Stand\n- Braucht Knut: — nichts\n- Braucht Hauptsitzung: keinerlei\nStatus: fertig'))!.text, /Braucht/, 'Gegenprüfung: „— nichts“, „keinerlei“');
   // ohne Status-Zeile: das automatische „weiter“ läuft — kein „hängt“ vor dem Stopp, auch nach langer Zeit nicht
   assert.equal(ev(run, turn('ok'), ai('Zwischenstand ohne Marke'), T0 + 60 * 60_000), null);
   assert.equal(ev({ ...run, autoStopped: { at: new Date(T0 + 5), reason: '2× ohne Status-Zeile', cause: 'ohne_status' } }, turn('ok'), ai('x')), null, 'A2 meldet selbst — keine Doppelmeldung');

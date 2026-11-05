@@ -427,5 +427,7 @@ test('Plan §24 A4: Aufgabenliste „Braucht Hauptsitzung“ — offen/erledigt,
     assert.equal((await rufe('GET', '/api/v2/hauptsitzung', ADMIN)).b.punkte[0].erledigt, true);
     assert.deepEqual((await rufe('GET', '/api/v2/hauptsitzung', LISA)).b.punkte, []);
     assert.equal((await rufe('POST', `/api/v2/hauptsitzung/${encodeURIComponent(a.punkte[0].key)}`, LISA, { erledigt: true })).status, 403);
+    assert.equal((await rufe('POST', '/api/v2/hauptsitzung/a%zz', ADMIN, {})).status, 400, 'Gegenprüfung: kaputte Kodierung → 400');
+    assert.equal((await rufe('POST', '/api/v2/hauptsitzung/irgendwas', ADMIN, {})).status, 400, 'nur Kennungen der Form strang:hash');
   } finally { deps.unterchatListe = altListe; deps.strang = altStrang; delete deps.hauptsitzungHaken; }
 });

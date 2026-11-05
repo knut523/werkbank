@@ -376,7 +376,11 @@ export function registerV2(on: On, d: V2Deps) {
     if (!admin(u)) throw err(403, 'Nur wer die Unter-Chats führt.');
     if (!d.hauptsitzungHaken) throw err(501, 'Abhaken ist hier nicht eingerichtet.');
     const b = await d.body(req, 4 * 1024);
-    await d.hauptsitzungHaken.setzen(u, decodeURIComponent(m[1]), b.erledigt !== false);
+    // Gegenprüfung: nur Kennungen der Form <strang>:<hash>, kaputte Kodierung → 400 statt 500.
+    let key = '';
+    try { key = decodeURIComponent(m[1]); } catch { throw err(400, 'Unbekannte Kennung.'); }
+    if (!/^[\w-]{1,40}:[0-9a-z]{1,13}$/.test(key)) throw err(400, 'Unbekannte Kennung.');
+    await d.hauptsitzungHaken.setzen(u, key, b?.erledigt !== false);
     send(d, res, { ok: true });
   });
 

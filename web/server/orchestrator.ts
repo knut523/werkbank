@@ -258,9 +258,14 @@ export function echteFrage(text: string): boolean {
   const t = String(text ?? '');
   const i = t.lastIndexOf('### Stand');
   if (i < 0) return true;
-  const zeilen = t.slice(i).split('\n').filter((l) => /^\s*[-*]\s*\**(Braucht Knut|Braucht Hauptsitzung|Braucht Hauptchat|Entscheidungen|Fragen|Offene Fragen)\b/i.test(l));
-  return zeilen.some((l) => { const inhalt = l.replace(/^\s*[-*]\s*\**[^:]*:\**\s*/, '').trim(); return !!inhalt && !/^(nichts|keine?|—|-|n\/a)\b/i.test(inhalt); });
+  // Gegenprüfung (A2): in der gefährlichen Richtung eng — nur „keine echte Frage“, wenn es passende Zeilen gibt und ALLE leer sind.
+  // Spiegelstrich und Fettdruck sind beliebig; gibt es keine passende Zeile, gilt die Frage als echt.
+  const zeilen = t.slice(i).split('\n').filter((l) => /^\s*(?:[-*]\s*)?\**(Braucht Knut|Braucht Hauptsitzung|Braucht Hauptchat|Entscheidungen|Fragen|Offene Fragen)\b/i.test(l));
+  if (!zeilen.length) return true;
+  return zeilen.some((l) => !istLeer(l.replace(/^\s*(?:[-*]\s*)?\**[^:]*:\**\s*/, '')));
 }
+/** „nichts“, „keine“, „keinerlei“, „—“, „-“, „— nichts“, „n/a“ — leer (Gegenprüfung: \b greift hinter Strichen nicht). */
+export const istLeer = (s: string) => /^[\s—–-]*(?:(?:nichts|kein\w*|n\/a)(?![\p{L}])[\s.!]*)?$/iu.test(String(s ?? '').trim());
 
 // ---------- Zustellung mit Bestätigung und Wiederholung (Plan 274, D4b; Vorfall e422ab42, 20.10.) ----------
 
@@ -707,21 +712,29 @@ export function ausstehendText(l: Ausstehend[]): string {
 }
 async function einreihen(d: any, msg: string, via: 'hand' | 'leitstand', grund: string) {
   const e = ausstehendEintrag(msg, via, grund);
-  await runs().updateOne({ _id: d._id }, { $push: { ausstehend: { $each: [e], $slice: -AUSSTEHEND_MAX } } as any });
+  // Neue Nachricht: der Fehlversuchszähler beginnt neu (Knut oder der Hauptchat hat sich gekümmert).
+  await runs().updateOne({ _id: d._id }, { $push: { ausstehend: { $each: [e], $slice: -AUSSTEHEND_MAX } } as any, $set: { ausstehendFehler: 0 } });
   return { id: String(d._id), conv: d.conv, url: d.url, eingereiht: true, ausstehendId: e.id, zustellung: `eingereiht (${grund}) — die Werkbank stellt sie beim nächsten freien Zug von selbst zu` };
 }
 /** Takt: eingereihte Nachrichten eines freien Strangs zustellen — atomar herausnehmen, bei Fehler zurücklegen. */
-export async function ausstehendZustellen(u: User, d: any, deps: { log?: AutoDeps['log'] } = {}) {
+export const AUSSTEHEND_VERSUCHE = 5;
+export async function ausstehendZustellen(u: User, d: any, deps: { log?: AutoDeps['log']; melde?: AutoDeps['melde'] } = {}) {
+  if (Number(d.ausstehendFehler ?? 0) >= AUSSTEHEND_VERSUCHE) return null;   // gemeldet — erst nach Eingriff (oder neuer Nachricht) weiter
   const vorher: any = await runs().findOneAndUpdate({ _id: d._id, 'ausstehend.0': { $exists: true } }, { $set: { ausstehend: [] } }, { returnDocument: 'before' });
   const liste: Ausstehend[] = (vorher?.value ?? vorher)?.ausstehend ?? [];
   if (!liste.length) return null;
   try {
     const r = await sendOrch(u, String(d._id), ausstehendText(liste), liste.some((x) => x.via === 'hand') ? 'hand' : 'leitstand');
+    if (d.ausstehendFehler) await runs().updateOne({ _id: d._id }, { $set: { ausstehendFehler: 0 } });
     deps.log?.('orch ausstehend zugestellt', { id: d._id, n: liste.length, erneut: !!(r as any).eingereiht });
     return r;
   } catch (e: any) {
-    await runs().updateOne({ _id: d._id }, { $push: { ausstehend: { $each: liste, $position: 0, $slice: AUSSTEHEND_MAX } } as any });
-    deps.log?.('orch ausstehend fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) });
+    // Gegenprüfung: ohne $slice zurücklegen (sonst fielen inzwischen neu eingereihte weg); Fehlversuche zählen — nach
+    // AUSSTEHEND_VERSUCHE lässt der Takt den Strang in Ruhe und der Hauptchat bekommt eine Meldung.
+    const r: any = await runs().findOneAndUpdate({ _id: d._id }, { $push: { ausstehend: { $each: liste, $position: 0 } } as any, $inc: { ausstehendFehler: 1 } }, { returnDocument: 'after' });
+    const n = Number((r?.value ?? r)?.ausstehendFehler ?? 0);
+    deps.log?.('orch ausstehend fehler', { id: d._id, n, error: String(e?.message ?? e).slice(0, 160) });
+    if (n === AUSSTEHEND_VERSUCHE) await deps.melde?.(u, d, `Strang „${d.title}“ (${d._id}): ${liste.length} eingereihte Nachricht(en) ließen sich ${n}× nicht zustellen (${String(e?.message ?? e).slice(0, 120)}). Bitte ansehen.`).catch(() => false);
     return null;
   }
 }

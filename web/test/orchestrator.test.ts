@@ -842,6 +842,12 @@ test('Plan §23 T8 (05.11.: Stränge standen über Nacht): Zug ohne Status-Marke
   const echt = orchStatus(run, turn('ok'), ai('### Stand\n- Erledigt: A\n- Braucht Knut: D2 Budget freigeben\nStatus: braucht Antwort'));
   assert.equal(echt.cause, undefined); assert.equal(echt.status, 'waiting');
   assert.equal(orchStatus(run, turn('ok'), ai('Soll ich A oder B nehmen?\nStatus: braucht Antwort')).cause, undefined, 'ohne Stand-Block: als echte Frage nehmen');
+  // Gegenprüfung A2: in der gefährlichen Richtung eng — fett ohne Spiegelstrich, unbekannter Name oder gar keine passende Zeile = echt
+  const { echteFrage } = await import('../server/orchestrator.ts');
+  assert.equal(echteFrage('### Stand\n**Braucht Knut:** Wie ist X?\n'), true);
+  assert.equal(echteFrage('### Stand\n- Erledigt: A\n- Rückfrage an Knut: B oder C?\n'), true, 'keine bekannte Zeile → echt');
+  assert.equal(echteFrage('### Stand\n- Braucht Knut: — nichts\n- Braucht Hauptsitzung: keinerlei\n'), false, '„— nichts“ und „keinerlei“ sind leer');
+  assert.equal(echteFrage('### Stand\n- Braucht Knut: nichts\n- Entscheidungen: D2 Budget\n'), true);
   assert.match(fortsetzText('ohne_status', null, 1, 2), /ohne Status-Zeile.*Status: fertig \| braucht Antwort \| blockiert.*1\/2/);
   } finally { delete process.env.ORCH_OHNE_STATUS; }
 });

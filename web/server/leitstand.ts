@@ -28,7 +28,7 @@ import { createLibreChat } from './agent.ts';
 import { parseKommentar } from './prreview.ts';
 import { entscheidungen } from './freigabe.ts';
 import { uebergabeLesbarAn, meldungsZeilen, standZeilen } from './uebergabe.ts';
-import { runs, STRANDS, OPEN, laufName, LEIT_TAG, questions, orchStatus, excerpt, lastMessage, strandStates, deliver, decorateSoon, AUTO_RATE_MS, AUTO_BUSY_MS, type LastMsg, type StrandState } from './orchestrator.ts';
+import { runs, STRANDS, OPEN, laufName, LEIT_TAG, questions, orchStatus, excerpt, lastMessage, strandStates, deliver, decorateSoon, AUTO_RATE_MS, AUTO_BUSY_MS, istLeer, type LastMsg, type StrandState } from './orchestrator.ts';
 
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 const internalHeaders = () => ({ 'content-type': 'application/json', 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' });
@@ -75,7 +75,7 @@ export function brauchtFelder(text: string | null | undefined): string {
   for (const name of ['Braucht Knut', 'Braucht Hauptsitzung']) {
     const m = t.slice(i).match(new RegExp(`^\\s*[-*]\\s*\\**${name}(?=$|[\\s:*]):?\\**:?\\s*(.+)$`, 'im'));
     const inhalt = (m?.[1] ?? '').trim();
-    if (inhalt && !/^(nichts|keine?|—|-|n\/a)\b/i.test(inhalt)) teile.push(`${name}: ${inhalt.slice(0, 300)}`);
+    if (inhalt && !istLeer(inhalt)) teile.push(`${name}: ${inhalt.slice(0, 300)}`);
   }
   return teile.length ? ` · ${teile.join(' · ')}` : '';
 }
