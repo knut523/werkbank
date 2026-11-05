@@ -132,7 +132,7 @@ export function Einrichtung() {
 }
 
 // ---------- Meine Dateien ----------
-interface Datei { id: string; name: string; kind?: string; size?: number; at?: string; sharedWithNames?: string[] }
+interface Datei { id: string; name: string; kind?: string; size?: number; createdAt?: string; sharedWithNames?: string[] }
 export function Dateien() {
   const { d, fehler, neu } = useDaten<{ mine: Datei[]; shared: (Datei & { from?: string })[]; maxMb: number }>('api/files');
   const [meldung, setMeldung] = useState<string | null>(null);
@@ -149,7 +149,7 @@ export function Dateien() {
       setMeldung(`„${f.name}“ hochgeladen.`); neu();
     } catch (e: any) { setMeldung(String(e?.message ?? e)); } finally { setLaeuft(false); }
   };
-  const zeile = (x: Datei & { from?: string }) => <li key={x.id} className="klein"><a href={`api/files/${encodeURIComponent(x.id)}/download`}>{x.name}</a>{x.at ? ` · ${wann(x.at)}` : ''}{x.from ? ` · von ${x.from}` : ''}{x.sharedWithNames?.length ? ` · geteilt mit ${x.sharedWithNames.join(', ')}` : ''}</li>;
+  const zeile = (x: Datei & { from?: string }) => <li key={x.id} className="klein"><a href={`api/files/${encodeURIComponent(x.id)}/download`}>{x.name}</a>{x.createdAt ? ` · ${wann(x.createdAt)}` : ''}{x.from ? ` · von ${x.from}` : ''}{x.sharedWithNames?.length ? ` · geteilt mit ${x.sharedWithNames.join(', ')}` : ''}</li>;
   return (
     <div className="seite">
       <h1>Meine Dateien</h1>
@@ -184,7 +184,7 @@ export function Sprint() {
   const { d: c, fehler, neu } = useDaten<{ cycles: { id: string; date: string; archived?: boolean }[] }>('api/sprint/cycles');
   const [id, setId] = useState<string | null>(null);
   const aktiv = id ?? c?.cycles.filter((x) => !x.archived).sort((a, b) => b.date.localeCompare(a.date))[0]?.id ?? null;
-  const { d } = useDaten<{ cycle: { id: string; date: string }; files: Record<string, { title?: string; status?: string; goal?: string; outcomes?: { text?: string; title?: string }[] } | null>; overdue?: unknown[]; undated?: unknown[] }>(aktiv ? `api/sprint/${aktiv}` : null as any);
+  const { d } = useDaten<{ cycle: { id: string; date: string }; files: Record<string, { title?: string; status?: string | null; goal?: { goal?: string } | null; outcomes?: { id?: string; title?: string; owner?: string; date?: string }[] } | null>; overdue?: unknown[]; undated?: unknown[] }>(aktiv ? `api/sprint/${aktiv}` : null as any);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!c) return <Laedt />;
   const NAME: Record<string, string> = { planning: 'Planung', review: 'Review', summary: 'Zusammenfassung' };
@@ -195,8 +195,8 @@ export function Sprint() {
       {!d ? (aktiv ? <Laedt /> : <p className="leer">Noch kein Sprint angelegt.</p>) : <>
         {Object.entries(d.files ?? {}).filter(([, f]) => f).map(([k, f]) => (
           <Abschnitt key={k} id={`sp-${k}`} titel={NAME[k] ?? k} erklaerung={f!.status ? `Stand: ${f!.status}` : 'Datei des Sprints in der Wissenssammlung.'}>
-            {f!.goal && <p><b>Ziel:</b> {f!.goal}</p>}
-            {!!f!.outcomes?.length && <ul className="liste">{f!.outcomes.slice(0, 15).map((o, i) => <li key={i} className="klein">{o.text ?? o.title ?? ''}</li>)}</ul>}
+            {f!.goal?.goal && <p><b>Ziel:</b> {f!.goal.goal}</p>}
+            {!!f!.outcomes?.length && <ul className="liste">{f!.outcomes.slice(0, 15).map((o, i) => <li key={i} className="klein">{o.id ? <b>{o.id}</b> : null} {o.title ?? ''}{o.owner ? ` · ${o.owner}` : ''}{o.date ? ` · ${o.date}` : ''}</li>)}</ul>}
           </Abschnitt>))}
         <p className="klein gedimmt">{mehrzahl(d.overdue?.length ?? 0, 'überfälliges Ticket', 'überfällige Tickets')} · {mehrzahl(d.undated?.length ?? 0, 'Ticket ohne Datum', 'Tickets ohne Datum')}</p>
       </>}
@@ -233,7 +233,7 @@ export function Lage() {
   return (
     <div className="seite">
       <h1>Lage</h1>
-      <p>{Object.entries(d.zahlen ?? {}).map(([k, v]) => `${v} ${NAME[k] ?? k}`).join(' · ')}</p>
+      <p>{Object.entries(d.zahlen ?? {}).filter(([, v]) => v != null).map(([k, v]) => `${v} ${NAME[k] ?? k}`).join(' · ')}</p>
       {!!d.fehler?.length && <p className="fehlertext klein">{d.fehler.join(' · ')}</p>}
       <AltLink seite="lage" text="Ganze Lage in der alten Werkbank" />
     </div>
