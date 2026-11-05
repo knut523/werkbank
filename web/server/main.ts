@@ -4354,7 +4354,12 @@ registerV2(on, {
   alleEmpfohlen: alleWieEmpfohlen,
   sammelSchliessen: (u, id) => inboxAntworten(u, id, { antwort: 'nein', weg: 'ui' }),
   alleRuns: (u) => orchRuns().find({ userId: u.id }, { projection: { _id: 1, conv: 1, title: 1, thema: 1, zustand: 1, kind: 1, lastActivity: 1, doneAt: 1, startedAt: 1, reviewedAt: 1, knutReviewedAt: 1, startError: 1, endedAt: 1 } }).sort({ lastActivity: -1 }).limit(1000).toArray(),
-  lcChats: (u) => v2lcListe(u), lcVolltext: (u, q) => v2lcVolltext(u, q), entschiedenLog: (u) => logListe(u, { tage: 30 }), umkehren: (u, id, text) => logUmkehren(u, id, text), councilAnwenden: (u, f, c, w) => councilAnwenden(u, f, c, w), lcUrl: cfg.librechatPublicUrl, rolleEinstellung: process.env.WERKBANK_ROLLE ?? null, vorlagen: vorlagenFuerV2,
+  lcChats: (u) => v2lcListe(u), lcVolltext: (u, q) => v2lcVolltext(u, q), entschiedenLog: (u) => logListe(u, { tage: 30 }), umkehren: (u, id, text) => logUmkehren(u, id, text), councilAnwenden: (u, f, c, w) => councilAnwenden(u, f, c, w),
+  // Plan §24 A4: Haken der „Braucht Hauptsitzung“-Punkte je Person.
+  hauptsitzungHaken: {
+    lesen: async (u) => new Set((await wb().collection('hauptsitzung_haken').find({ userId: u.id }).toArray()).map((x: any) => String(x.key))),
+    setzen: async (u, key, an) => { const c = wb().collection('hauptsitzung_haken'); if (an) await c.updateOne({ _id: `${u.id}:${key}` as any }, { $set: { userId: u.id, key, at: new Date() } }, { upsert: true }); else await c.deleteOne({ _id: `${u.id}:${key}` as any }); },
+  }, lcUrl: cfg.librechatPublicUrl, rolleEinstellung: process.env.WERKBANK_ROLLE ?? null, vorlagen: vorlagenFuerV2,
   wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },
   abgleich: (u, id, stand) => abgleichFuer(u.id, id, cfg.reviewDir, stand),
   // Paket aus dem Feld oder — bei Unter-Chats ohne eigenes Paket — aus dem Pfad des gefundenen Berichts (…/<paket>/bericht.md im Review-Ordner).

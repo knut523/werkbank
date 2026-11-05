@@ -37,6 +37,16 @@ test('Gegenprüfung R7: „und/oder“ ist kein Beleg, „- Folgen:“ ist keine
   assert.deepEqual(dodAus('- DoDs: x').zeilen, []);
 });
 
+test('Plan §24 A4: „Braucht Hauptsitzung“-Punkte quer über Stränge, mit stabiler Kennung; „nichts“ fällt weg', async () => {
+  const { hauptsitzungPunkte } = await import('../server/dod.ts');
+  const a = '### Stand\n- Erledigt: x\n- Braucht Hauptsitzung: Live-Gang nach Commit abc1234 · Deploy-Go für Rechner\nStatus: fertig';
+  const b = '### Stand\n- Braucht Hauptsitzung: nichts\nStatus: fertig';
+  const p = hauptsitzungPunkte([{ id: 's1', titel: 'Werkbank-Fix', stand: a }, { id: 's2', titel: 'Bot', stand: b }]);
+  assert.deepEqual(p.map((x) => [x.strand, x.text]), [['s1', 'Live-Gang nach Commit abc1234'], ['s1', 'Deploy-Go für Rechner']]);
+  assert.match(p[0].key, /^s1:[0-9a-z]+$/);
+  assert.equal(hauptsitzungPunkte([{ id: 's1', titel: 'x', stand: a }])[0].key, p[0].key, 'gleiche Zeile → gleiche Kennung (Haken bleibt)');
+});
+
 test('Persona R7: alte DoD-Prosa ohne Kästchen ist Altbestand, keine offenen Enden', () => {
   const alt = '- DoD:\n  - Suite: **754 pass / 0 fail**\n  - **K31 „Aktiv getestet"** (29.10.)\nStatus: fertig';
   assert.deepEqual(dodAus(alt).zeilen, []);

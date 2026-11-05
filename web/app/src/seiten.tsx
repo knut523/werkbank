@@ -35,6 +35,7 @@ export function Jetzt() {
       <SuchFeld />
       <ThemenLeiste />
       {k.admin && <Enden kurz />}
+      {k.admin && <HauptsitzungListe />}
       {!k.admin && !reviewer && <p className="klein gedimmt">Neu hier? <a href="v2/begriffe">Begriffe in Klartext</a> — und oben suchst du Dokumente, Chats und PRs.</p>}
       {reviewer && (
         <section className="abschnitt" aria-labelledby="a-prs">
@@ -359,6 +360,22 @@ export function ArbeitDetail({ id }: { id: string }) {
 }
 
 /** Runde 7 (Knut: DoD): liegen gebliebene Enden — was fertig gemeldete Unter-Chats noch offen lassen, je mit Besitzer. */
+/** Plan §24 A4: was die Hauptsitzung erledigen muss (Live-Gang nach Commit, Deploy-Go …) — aus den Stand-Blöcken, abhakbar. */
+function HauptsitzungListe() {
+  const { d, neu } = useDaten<{ punkte: { key: string; strand: string; titel: string; text: string; erledigt: boolean }[] }>('api/v2/hauptsitzung');
+  const offen = (d?.punkte ?? []).filter((p) => !p.erledigt);
+  if (!offen.length) return null;
+  const haken = async (key: string) => { await schicke(`api/v2/hauptsitzung/${encodeURIComponent(key)}`, { erledigt: true }).catch(() => null); neu(); };
+  return (
+    <section className="abschnitt hauptsitzung">
+      <h2>Für die Hauptsitzung ({offen.length})</h2>
+      <ul className="liste">{offen.map((p) => (
+        <li key={p.key} className="zeile"><label><input type="checkbox" onChange={() => haken(p.key)} /> {p.text}</label> <a className="klein gedimmt" href={`v2/arbeit/${p.strand}`}>{p.titel}</a></li>
+      ))}</ul>
+    </section>
+  );
+}
+
 function Enden({ kurz = false }: { kurz?: boolean }) {
   const app = useApp();
   const { d } = useDaten<{ enden: { strand: string; titel: string; text: string; besitzer: string | null }[] }>(app.ich.admin ? 'api/v2/enden' : null);

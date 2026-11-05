@@ -10,7 +10,7 @@ import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
 import { auszugUm, knutOffenJe, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
-import { dodAus, fastFertig, endenAus } from './dod.ts';
+import { dodAus, fastFertig, endenAus, hauptsitzungPunkte } from './dod.ts';
 import { triageAn, councilWirkung, type Council, type CouncilUrteil } from './stufe.ts';
 import type { Abgleich } from './fragenbericht.ts';
 import * as librechat from './v2librechat.ts';
@@ -66,6 +66,8 @@ export interface V2Deps {
   umkehren?: (u: User, id: string, text: string) => Promise<void>;
   /** Plan §23 T3: Council-Urteil des Hauptchats speichern und wirken lassen (main.ts councilAnwenden). */
   councilAnwenden?: (u: User, f: Frage, c: Council, w: ReturnType<typeof councilWirkung>) => Promise<void>;
+  /** Plan §24 A4: Haken der „Braucht Hauptsitzung“-Punkte (main.ts, Sammlung hauptsitzung_haken). */
+  hauptsitzungHaken?: { lesen: (u: User) => Promise<Set<string>>; setzen: (u: User, key: string, an: boolean) => Promise<void> };
   lcUrl: string;
   /** S20 (D8): Rolle der Besitzerin aus der Einrichtung (WERKBANK_ROLLE, von team-install gesetzt) — sonst abgeleitet. */
   rolleEinstellung?: string | null;
@@ -355,6 +357,26 @@ export function registerV2(on: On, d: V2Deps) {
     const eigen = String(b.text ?? '').trim().slice(0, 2000);
     await d.umkehren(u, m[1], eigen ? `Umkehren: ${eigen}` : 'Umkehren: Knut nimmt diese Entscheidung zurück — nicht so umsetzen; schon Gebautes zurücknehmen und die Frage an Knut stellen.');
     d.log('v2 umgekehrt', { user: u.id, id: m[1] });
+    send(d, res, { ok: true });
+  });
+
+  // Plan §24 A4: „Braucht Hauptsitzung“ (Live-Gang nach Commit, Deploy-Go …) als abhakbare Liste aus den Stand-Blöcken.
+  on('GET', /^\/api\/v2\/hauptsitzung$/, async (req, res) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) return send(d, res, { punkte: [] });
+    const liste = await ucListe(u).catch(() => ({ zeilen: [] as any[] }));
+    const docs = (await Promise.all(liste.zeilen.slice(0, 80).map((z: any) => d.strang(u, String(z.id)).catch(() => null)))).filter(Boolean) as any[];
+    const haken = d.hauptsitzungHaken ? await d.hauptsitzungHaken.lesen(u).catch(() => new Set<string>()) : new Set<string>();
+    const punkte = hauptsitzungPunkte(docs.map((x) => ({ id: String(x._id), titel: String(x.title ?? ''), stand: String(x.standVoll || x.lastExcerpt || '') })))
+      .map((p) => ({ ...p, erledigt: haken.has(p.key) }));
+    send(d, res, { punkte });
+  });
+  on('POST', /^\/api\/v2\/hauptsitzung\/([\w:.%-]{1,160})$/, async (req, res, m) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) throw err(403, 'Nur wer die Unter-Chats führt.');
+    if (!d.hauptsitzungHaken) throw err(501, 'Abhaken ist hier nicht eingerichtet.');
+    const b = await d.body(req, 4 * 1024);
+    await d.hauptsitzungHaken.setzen(u, decodeURIComponent(m[1]), b.erledigt !== false);
     send(d, res, { ok: true });
   });
 

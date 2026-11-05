@@ -385,7 +385,10 @@ export async function handoverDraft(u: User, now = new Date()) {
     naechste = z.naechste;
   }
   // Paket 436 (Knut 04.11.: DoD): liegen gebliebene Enden — offene DoD-Zeilen und Folge-Aufgaben fertig gemeldeter Unter-Chats, je mit Besitzer.
-  const { endenAus } = await import('./dod.ts');
+  const { endenAus, hauptsitzungPunkte } = await import('./dod.ts');
+  // Plan §24 A4: „Braucht Hauptsitzung“ (Live-Gang, Deploy-Go …) als Aufgabenliste in der Lage.
+  const hs = hauptsitzungPunkte(docs.map((d) => ({ id: String(d._id), titel: String(d.title ?? ''), stand: String(d.standVoll || d.lastExcerpt || '') })));
+  const hsZeilen = hs.length ? ['', '## Braucht Hauptsitzung', ...hs.slice(0, 20).map((p) => `- [ ] ${p.text} — „${p.titel}“ (${p.strand})`)] : [];
   const enden = endenAus(docs.map((d) => ({ id: String(d._id), titel: String(d.title ?? ''), stand: String(d.standVoll || d.lastExcerpt || ''), fertig: d.lastStatus === 'done' || d.zustand === 'fertig' || d.marke === 'fertig' })));
   const endenZeilen = enden.length ? ['', '## Liegen gebliebene Enden', ...enden.slice(0, 20).map((e) => `- ${e.besitzer ? `**${e.besitzer}:** ` : ''}${e.text} — „${e.titel}“ (${e.strand})`)] : [];
   // S1 (Paket 159 V1): Meldungen der letzten 3 Tage, auch die ohne aktiven Hauptchat — sonst sieht sie niemand.
@@ -402,7 +405,7 @@ export async function handoverDraft(u: User, now = new Date()) {
     lines.push('| ID | Lauf | Titel | Status | Arbeitsordner |', '|---|---|---|---|---|');
     for (const d of docs) lines.push(`| ${cell(d._id)} | ${cell(d.lauf ?? laufName(d.title ?? '').lauf)} | ${cell(d.title)} | ${word(d)} | \`${cell(d.cwd)}\` |`);
   }
-  lines.push(...endenZeilen);
+  lines.push(...endenZeilen, ...hsZeilen);
   const teile = uebergabeTeile();
   lines.push('', `## ${teile.fragenAn}`);
   if (!qs.length) lines.push('Keine offenen Rückfragen.');

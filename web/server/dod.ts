@@ -57,6 +57,19 @@ export function fastFertig(d: Dod): { fehlt: string[]; wartetAuf: string[] } | n
   return { fehlt, wartetAuf };
 }
 
+/** Plan §24 A4 (Knut 05.11.): „- Braucht Hauptsitzung: …“ (z. B. Live-Gang nach lokalem Commit, Deploy-Go) als Aufgabenliste —
+ *  je Punkt eine stabile Kennung (Strang + Text), damit ein Haken beim nächsten Stand bleibt. */
+export function hauptsitzungPunkte(straenge: { id: string; titel: string; stand: string }[]): { key: string; strand: string; titel: string; text: string }[] {
+  const out: ReturnType<typeof hauptsitzungPunkte> = [];
+  for (const s of straenge) for (const roh of block(s.stand, 'Braucht Hauptsitzung')) {
+    const text = roh.replace(/^\[[ xX✓]\]\s*/, '').trim().slice(0, 300);
+    if (!text) continue;
+    let h = 0; for (const c of text) h = (h * 31 + c.codePointAt(0)!) >>> 0;
+    out.push({ key: `${s.id}:${h.toString(36)}`, strand: s.id, titel: s.titel, text });
+  }
+  return out;
+}
+
 /** Liegen gebliebene Enden quer über Stränge: je offene DoD-Zeile und Folge-Aufgabe eine Zeile mit Besitzer. */
 export function endenAus(straenge: { id: string; titel: string; stand: string; fertig: boolean }[]): { strand: string; titel: string; text: string; besitzer: string | null; art: 'dod' | 'folge' }[] {
   const out: ReturnType<typeof endenAus> = [];

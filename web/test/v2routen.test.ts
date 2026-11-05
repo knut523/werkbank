@@ -413,3 +413,19 @@ test('Plan §23 T3: POST /api/v2/council — nur gewichtige Fragen, Urteil gepr�
     assert.equal((await rufe('POST', '/api/v2/council', LISA, { frage: 'd-g1-x~D1', urteil: 'HALTEN', grund: 'x' })).status, 403);
   } finally { deps.inboxFuer = altInbox; delete deps.councilAnwenden; }
 });
+
+test('Plan §24 A4: Aufgabenliste „Braucht Hauptsitzung“ — offen/erledigt, abhaken bleibt, nur Admin', async () => {
+  const altListe = deps.unterchatListe, altStrang = deps.strang;
+  const haken = new Set<string>();
+  deps.unterchatListe = async () => ({ zeilen: [{ id: 'h1', titel: 'Werkbank-Fix', zustand: 'fertig' }] }) as any;
+  deps.strang = async (_u: any, id: string) => (id === 'h1' ? { _id: 'h1', title: 'Werkbank-Fix', standVoll: '### Stand\n- Braucht Hauptsitzung: Live-Gang nach Commit abc1234\nStatus: fertig' } : null) as any;
+  deps.hauptsitzungHaken = { lesen: async () => haken, setzen: async (_u: any, key: string, an: boolean) => { if (an) haken.add(key); else haken.delete(key); } };
+  try {
+    const a = (await rufe('GET', '/api/v2/hauptsitzung', ADMIN)).b;
+    assert.deepEqual(a.punkte.map((p: any) => [p.text, p.erledigt]), [['Live-Gang nach Commit abc1234', false]]);
+    assert.equal((await rufe('POST', `/api/v2/hauptsitzung/${encodeURIComponent(a.punkte[0].key)}`, ADMIN, { erledigt: true })).status, 200);
+    assert.equal((await rufe('GET', '/api/v2/hauptsitzung', ADMIN)).b.punkte[0].erledigt, true);
+    assert.deepEqual((await rufe('GET', '/api/v2/hauptsitzung', LISA)).b.punkte, []);
+    assert.equal((await rufe('POST', `/api/v2/hauptsitzung/${encodeURIComponent(a.punkte[0].key)}`, LISA, { erledigt: true })).status, 403);
+  } finally { deps.unterchatListe = altListe; deps.strang = altStrang; delete deps.hauptsitzungHaken; }
+});
