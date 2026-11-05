@@ -9,7 +9,7 @@
 import { klartext, empfehlungAus } from './klartext.ts';
 import { DECKEL_KIND } from './fragenaufraeumen.ts';
 import { wienDatum, wienUm, naechsterTag } from './zustand.ts';
-import { stufeVon, autoAb, autoFaehig, ANNAHME_MS, type Stufe } from './stufe.ts';
+import { stufeVon, klasseVon, autoAb, autoFaehig, ANNAHME_MS, type Stufe } from './stufe.ts';
 
 export type InboxArt ='rueckfrage' | 'entscheidung' | 'braucht' | 'push' | 'vault' | 'pflege' | 'schlange' | 'altbestand' | 'triage' | 'vaultfrage';
 export type Antwort = 'ja' | 'nein' | 'anders' | 'spaeter';
@@ -91,7 +91,7 @@ export interface InboxQuellen {
 const iso = (v: unknown): string | null => { const t = v ? new Date(v as any).getTime() : NaN; return Number.isFinite(t) ? new Date(t).toISOString() : null; };
 
 /** Einträge aus allen Quellen (rein). `spaeter`: Kennung → bis; `now` für Altbestand und Schlange. */
-export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; now?: number; schlangeAlarmMs?: number; annahmeMs?: number } = {}): { eintraege: InboxEintrag[]; zurueckgestellt: number } {
+export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; now?: number; schlangeAlarmMs?: number; annahmeMs?: number; triage?: boolean } = {}): { eintraege: InboxEintrag[]; zurueckgestellt: number } {
   const now = o.now ?? Date.now();
   const out: InboxEintrag[] = [];
   const kartenIds = new Set(q.karten.map((k) => k.id));
@@ -149,7 +149,7 @@ export function baueInbox(q: InboxQuellen, o: { spaeter?: Map<string, number>; n
     out.push({ id: 'schlange', art: 'schlange', frage: `Die Schlange steht: ${lang.length} Unter-Chat${lang.length > 1 ? 's warten' : ' wartet'} seit ${Math.round((now - aelteste) / 60_000)} min auf einen freien Platz`,
       empfehlung: 'einen laufenden Unter-Chat anhalten oder abwarten', quelle: { text: 'Brücke', strand: null, url: null }, wartetSeit: new Date(aelteste).toISOString(), blockiert: lang.length, antworten: ['spaeter'], daten: { unterchats: lang } });
   }
-  for (const e of out) mitStufe(e, o.annahmeMs ?? ANNAHME_MS);
+  for (const e of out) mitStufe(e, o.annahmeMs ?? ANNAHME_MS, !!o.triage);
   // Später zurückgestellt
   const spaeter = o.spaeter ?? new Map<string, number>();
   let sichtbar = out.filter((e) => !((spaeter.get(e.id) ?? 0) > now));
@@ -189,25 +189,34 @@ function rueckfrageEintrag(r: InboxQuellen['lose'][number], quelle: InboxEintrag
 }
 
 /** Stufe, Grund und „gilt ab … als angenommen“ je Eintrag. Automatisch nur Rückfragen und Bericht-Entscheidungen. */
-function mitStufe(e: InboxEintrag, ms: number) {
+// Plan §23 T2 (Triage an): automatisch nur noch Klasse „technisch“ — und zwar sofort (Frist 0); „knut“ nie, „gewichtig“
+// entscheidet der Hauptchat nach dem Council-Check (T3). Die Stufe bleibt für Sortierung und Anzeige.
+function mitStufe(e: InboxEintrag, ms: number, triage = false) {
   if (e.art === 'entscheidung') {
     const liste = (e.daten.entscheidungen as any[]) ?? [];
     for (const x of liste) {
       const s = stufeVon({ text: `${x.frage} ${x.empfehlung ?? ''} ${x.optionen ?? ''}`, markiert: x.stufe ?? null });
       x.stufe = s.stufe; x.stufeGrund = s.grund;
-      x.auto = autoFaehig({ stufe: s.stufe, empfehlung: x.empfehlung, text: `${x.frage} ${x.optionen ?? ''}` });
+      x.auto = triage
+        ? klasseVon({ text: `${x.frage} ${x.optionen ?? ''}`, markiert: x.stufe === 'wichtig' && /markiert/.test(s.grund) ? 'wichtig' : null, empfehlung: x.empfehlung }).klasse === 'technisch'
+        : autoFaehig({ stufe: s.stufe, empfehlung: x.empfehlung, text: `${x.frage} ${x.optionen ?? ''}` });
     }
     const wichtig = liste.find((x) => x.stufe === 'wichtig');
     e.stufe = wichtig ? 'wichtig' : 'normal';
     e.stufeGrund = wichtig ? `${liste.length > 1 ? `${wichtig.id}: ` : ''}${wichtig.stufeGrund}` : 'normal: Empfehlung gilt nach 24 h';
     const auto = liste.filter((x) => x.auto).map((x) => x.id);
     e.daten.autoIds = auto;
-    e.autoAb = auto.length && e.wartetSeit ? new Date(new Date(e.wartetSeit).getTime() + ms).toISOString() : null;
+    e.autoAb = auto.length && e.wartetSeit ? new Date(new Date(e.wartetSeit).getTime() + (triage ? 0 : ms)).toISOString() : null;
     return;
   }
   const text = `${e.frage} ${e.empfehlung ?? ''} ${(e.daten.kontext as string) ?? ''} ${((e.daten.optionen as string[]) ?? []).join(' ')}`;
   const s = stufeVon({ text, markiert: (e.daten.markiert as string) ?? null, art: e.art });
   e.stufe = s.stufe; e.stufeGrund = s.grund;
+  if (triage) {
+    const k = klasseVon({ text, markiert: (e.daten.markiert as string) ?? null, art: e.art, empfehlung: e.empfehlung });
+    e.autoAb = e.art === 'rueckfrage' && k.klasse === 'technisch' ? e.wartetSeit : null;
+    return;
+  }
   e.autoAb = e.art === 'rueckfrage' ? autoAb({ stufe: s.stufe, empfehlung: e.empfehlung, text, seit: e.wartetSeit }, ms) : null;
 }
 

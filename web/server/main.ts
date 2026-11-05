@@ -116,7 +116,7 @@ import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 import { braucheBraucht, schliesseBraucht, archiviere as archiviereStrang, zurueckholen as brauchtZurueck, hauptchatAktionen, kartEingabe, paketLiveFakten, wendeAufInbox, meldeAktionen, zustellStand, BRAUCHT_AN as brauchtAn } from './brauchtab.ts';
 import { sqlAus, prsAus } from './braucht.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
-import { autoAnnahmeAn, annahmeMs, stufeVon } from './stufe.ts';
+import { autoAnnahmeAn, annahmeMs, stufeVon, triageAn } from './stufe.ts';
 import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
 import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
@@ -1532,7 +1532,7 @@ async function inboxFuer(u: User, now = Date.now()) {
   // U5: die „- Knut:“-Zeilen der Roadmap sind an Knut gerichtet — in einer Team-Instanz (F6) keine davon, auch kein Sammeleintrag.
   const vf = knutsFragen(u) ? vaultFragenFuerInbox(now) : { einzeln: [], rest: 0 };
   const ib = baueInbox({ karten, lose: qs, vault, pflege: h.items.filter((i: any) => !h.snoozed.includes(i.key)).length, schlange, laeufe, triage, vaultFragen: vf.einzeln, vaultRest: vf.rest,
-    kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now, annahmeMs: annahmeMs() });
+    kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now, annahmeMs: annahmeMs(), triage: triageAn() });
   // Abwesenheits-Bremse (F4a): nach einer Rückkehr gilt „angenommen ab“ frühestens eine volle Frist später.
   if (bremseAn()) {
     const fr = anwesenheitFrei(await anwesenheitCol().findOne({ _id: u.id as any }) as any, now, annahmeMs());
@@ -1839,7 +1839,8 @@ async function logEntscheidung(u: User, e: any, antwort: string, durch: string, 
 async function annahmeLauf(u: User, now = Date.now()): Promise<string[]> {
   if (!autoAnnahmeAn()) return [];
   // Abwesenheits-Bremse (Council-Bedingung 3, F4a): wer nicht da war, dem wird nichts automatisch angenommen.
-  if (bremseAn()) {
+  // Plan §23 T2: mit Triage nicht — technische Fragen entscheidet Claude nach Empfehlung, auch wenn Knut nicht da ist (umkehrbar).
+  if (bremseAn() && !triageAn()) {
     const fr = anwesenheitFrei(await anwesenheitCol().findOne({ _id: u.id as any }) as any, now, annahmeMs());
     if (!fr.frei) return [];
   }
@@ -1850,7 +1851,7 @@ async function annahmeLauf(u: User, now = Date.now()): Promise<string[]> {
       if (e.art === 'rueckfrage') {
         const opts = (e.daten.optionen as string[]) ?? [];
         const rec = opts.find((o) => o === e.empfehlung) ?? opts.find((o) => String(e.empfehlung ?? '').startsWith(o)) ?? null;
-        await answerQuestion(u, String(e.daten.qid), { option: rec, text: `Nach 24 h ohne Antwort automatisch angenommen (Stufe normal): ${e.empfehlung}`, by: 'auto' });
+        await answerQuestion(u, String(e.daten.qid), { option: rec, text: triageAn() ? `Von Claude entschieden (technische Frage, nach Empfehlung, umkehrbar): ${e.empfehlung}` : `Nach 24 h ohne Antwort automatisch angenommen (Stufe normal): ${e.empfehlung}`, by: 'auto' });
       } else {
         if (u.role !== 'ADMIN') continue;
         const d = await reviewStrand(u, String(e.daten.strand));
@@ -1859,7 +1860,7 @@ async function annahmeLauf(u: User, now = Date.now()): Promise<string[]> {
         entscheidSperre.add(sperre);
         try { await entscheidungenEintragen(u, d, { berichtHash: e.daten.berichtHash, weiter: true, auto: true, antworten: f.ids.map((id) => ({ id, art: 'akzeptiert' })) }); } finally { entscheidSperre.delete(sperre); }
       }
-      await logEntscheidung(u, e, `angenommen wie empfohlen${f.ids.length && e.art === 'entscheidung' ? ` (${f.ids.join(', ')})` : ''}`, 'auto', true, f.ids);
+      await logEntscheidung(u, e, `${triageAn() ? 'von Claude entschieden (technisch)' : 'angenommen wie empfohlen'}${f.ids.length && e.art === 'entscheidung' ? ` (${f.ids.join(', ')})` : ''}`, 'auto', true, f.ids);
       done.push(e.id);
     } catch (err: any) { log('annahme fehler', { user: u.id, id: e.id, error: String(err?.message ?? err).slice(0, 160) }); }
   }

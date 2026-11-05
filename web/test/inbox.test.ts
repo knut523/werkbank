@@ -105,3 +105,21 @@ test('Meeting-Vorschläge (Walkthrough 221): eigene Einträge mit fester Kennung
   assert.equal(e.autoAb, null, 'Meeting-Vorschläge werden nie automatisch angenommen');
   assert.match(e.frage, /2 Zusagen, 1 Entscheidung/);
 });
+
+test('Plan §23 T2: mit Triage gelten technische Fragen sofort (autoAb = seit), Knut-Fragen nie, gewichtige nicht automatisch', () => {
+  const q: InboxQuellen = { ...leer, karten: [karte({ entscheidungen: [
+    { id: 'D1', frage: 'Liste nach Datum sortieren?', empfehlung: 'Ja' },
+    { id: 'D2', frage: 'Anzeigen-Budget erhöhen?', empfehlung: 'Ja' },
+    { id: 'D3', frage: 'Datenmodell migrieren?', empfehlung: 'Ja' }] as any })],
+    lose: [{ id: 'q1', title: 'Regex mit Lookahead?', recommendation: 'Lookahead', options: [{ label: 'Lookahead' }, { label: 'Wortgrenze' }], createdAt: new Date(now - 3600_000) },
+      { id: 'q2', title: 'Christoph Zugriff geben?', recommendation: 'Ja', options: [{ label: 'Ja' }, { label: 'Nein' }], createdAt: new Date(now - 3600_000) }] };
+  const an = baueInbox(q, { now, triage: true }).eintraege;
+  const ent = an.find((e) => e.art === 'entscheidung')!;
+  assert.deepEqual(ent.daten.autoIds, ['D1']);
+  assert.equal(ent.autoAb, ent.wartetSeit, 'sofort');
+  const r = (t: string) => an.find((e) => e.art === 'rueckfrage' && e.frage === t)!;
+  assert.equal(r('Regex mit Lookahead?').autoAb, r('Regex mit Lookahead?').wartetSeit);
+  assert.equal(r('Christoph Zugriff geben?').autoAb, null);
+  const aus = baueInbox(q, { now }).eintraege.find((e) => e.art === 'entscheidung')!;
+  assert.notEqual(aus.autoAb, aus.wartetSeit, 'ohne Triage: 24 h wie bisher');
+});
