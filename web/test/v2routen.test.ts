@@ -354,3 +354,23 @@ test('Plan §23 T6 (Schalter WERKBANK_TRIAGE): ein Unter-Chat mit nur technische
     assert.deepEqual(aus.wartet.map((z: any) => z.id).sort(), ['knut1', 'tech1'], 'Schalter aus: wie bisher');
   } finally { deps.unterchatListe = altListe; deps.inboxFuer = altInbox; delete process.env.WERKBANK_TRIAGE; }
 });
+
+test('Plan §23 T4: „Für dich“ — Entscheidungen, Jetzt und die Zahl zeigen mit Triage nur Knut-Fragen; was Claude/Council entscheidet, steht als Zeile', async () => {
+  const altInbox = deps.inboxFuer;
+  const karte = (id: string, ents: any[]) => ({ id: `d-${id}-x`, art: 'entscheidung', frage: '', empfehlung: null, quelle: { text: `Unter-Chat „${id}“`, strand: id, url: null }, wartetSeit: '2026-11-05T08:00:00Z', blockiert: 1, antworten: ['ja'], daten: { strand: id, entscheidungen: ents } });
+  deps.inboxFuer = async () => ({ eintraege: [karte('s1', [{ id: 'D1', frage: 'Liste nach Datum sortieren?', empfehlung: 'Ja' }, { id: 'D2', frage: 'Anzeigen-Budget erhöhen?', empfehlung: 'Ja, auf 500 €' }, { id: 'D3', frage: 'Datenmodell migrieren?', empfehlung: 'Ja' }])] }) as any;
+  try {
+    process.env.WERKBANK_TRIAGE = '1';
+    const e = (await rufe('GET', '/api/v2/entscheidungen', ADMIN)).b;
+    const titel = [...e.oben, ...e.rest].map((k: any) => k.titel);
+    assert.equal(titel.length, 1); assert.match(titel[0], /Budget/);
+    assert.equal(e.zahl, 1);
+    assert.deepEqual(e.beiClaude, { technisch: 1, gewichtig: 1 });
+    assert.equal((await rufe('GET', '/api/v2/zahl', ADMIN)).b.zahl, 1);
+    const s = (await rufe('GET', '/api/v2/start?teil=oben', ADMIN)).b;
+    assert.equal(s.jetzt.length, 1); assert.equal(s.zahl, 1);
+    delete process.env.WERKBANK_TRIAGE;
+    const aus = (await rufe('GET', '/api/v2/entscheidungen', ADMIN)).b;
+    assert.equal([...aus.oben, ...aus.rest].length, 3, 'Schalter aus: alle wie bisher');
+  } finally { deps.inboxFuer = altInbox; delete process.env.WERKBANK_TRIAGE; }
+});

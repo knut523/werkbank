@@ -137,14 +137,17 @@ const PrZeileView = ({ p }: { p: PrZeile }) => (
 
 export function Entscheidungen() {
   const app = useApp();
-  const { d, fehler, neu } = useDaten<{ zahl: number; oben: Karte[]; rest: Karte[]; aufraeumen: Aufraeumen[]; geschlossen?: Geschlossen[]; ueberholt?: Ueberholt[] }>('api/v2/entscheidungen');
+  const { d, fehler, neu } = useDaten<{ zahl: number; oben: Karte[]; rest: Karte[]; aufraeumen: Aufraeumen[]; geschlossen?: Geschlossen[]; ueberholt?: Ueberholt[]; beiClaude?: { technisch: number; gewichtig: number } | null }>('api/v2/entscheidungen');
   useEffect(() => { if (d) app.zahl(d.zahl); }, [d]);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
+  const bc = d.beiClaude;
   return (
     <div className="seite">
-      <h1>Entscheidungen</h1>
-      <p className="unterzeile">Alles, was auf dich wartet. „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — an genau diese Karte.</p>
+      <h1>{bc ? 'Für dich' : 'Entscheidungen'}</h1>
+      <p className="unterzeile">{bc ? 'Nur, was wirklich du entscheiden musst: Geld, Recht, Zugang, Außenwirkung, Release.' : 'Alles, was auf dich wartet.'} „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — die Antwort geht an den richtigen Unter-Chat.</p>
+      {/* Plan §23 T4/T5: was nicht hier steht, entscheidet Claude (technisch) bzw. der Hauptchat nach Council (gewichtig) — sichtbar und umkehrbar. */}
+      {bc && (bc.technisch > 0 || bc.gewichtig > 0) && <p className="klein bei-claude">Nicht für dich: {bc.technisch ? `${bc.technisch} technische ${bc.technisch === 1 ? 'Frage entscheidet' : 'Fragen entscheidet'} Claude nach Empfehlung` : ''}{bc.technisch && bc.gewichtig ? ', ' : ''}{bc.gewichtig ? `${bc.gewichtig} gewichtige ${bc.gewichtig === 1 ? 'geht' : 'gehen'} vorher durch einen Council-Check` : ''}. <a href="v2/entschieden">Von Claude entschieden →</a></p>}
       <p className="zusammensetzung">Die Zahl oben rechts: {d.oben.length + d.rest.length} {d.oben.length + d.rest.length === 1 ? 'Frage' : 'Fragen und Freigaben'}{d.aufraeumen.length ? ` + ${d.aufraeumen.length} ${d.aufraeumen.length === 1 ? 'Sammelposten' : 'Sammelposten'} zum Aufräumen` : ''} = {d.zahl}.{d.ueberholt?.length ? <> <a href="#e-ueberholt">{mehrzahl(d.ueberholt.length, 'Freigabe ist überholt und zählt', 'Freigaben sind überholt und zählen')} nicht ↓</a></> : null}{d.geschlossen?.length ? <> <a href="#e-geschlossen">{mehrzahl(d.geschlossen.length, 'Frage hat', 'Fragen haben')} sich von selbst erledigt ↓</a></> : null}</p>
       {(() => { const s = themen(d.rest).map(([t, ks]) => [t, ks.filter(wieEmpfohlenMoeglich).length] as const).filter(([, n]) => n > 1);
         return s.length ? <p className="klein sammel-sprung">Alle Empfehlungen eines Themas auf einmal annehmen: {s.map(([t, n]) => <a key={t} className="chip" href={`#thema-${themaAnker(t, themen(d.rest).map(([x]) => x))}`}>{t} ({n})</a>)}</p> : null; })()}

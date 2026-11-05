@@ -98,6 +98,12 @@ function strangJe(eintraege: InboxEintrag[]) {
 /** Uhrzeit (Wien) für Sätze. */
 const wann2 = (iso: string) => new Date(iso).toLocaleString('de-AT', { timeZone: 'Europe/Vienna', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
+/** Plan §23 T4 („Für dich“): mit Triage nur Knut-Fragen — technische entscheidet Claude, gewichtige der Hauptchat nach Council. */
+const fuerKnut = (fragen: Frage[]) => (triageAn() ? fragen.filter((f) => f.triage?.klasse === 'knut') : fragen);
+const beiClaude = (fragen: Frage[]) => (triageAn() ? { technisch: fragen.filter((f) => f.triage?.klasse === 'technisch').length, gewichtig: fragen.filter((f) => f.triage?.klasse === 'gewichtig').length } : null);
+/** Die eine Zahl: mit Triage die Zahl der Knut-Fragen, sonst wie bisher. */
+const zahlVon = (eintraege: InboxEintrag[]) => (triageAn() ? fuerKnut(fragenAus(eintraege).fragen).length : inboxZahl(eintraege));
+
 function karten(d: V2Deps, fragen: Frage[], eintraege: InboxEintrag[], liste: { f: Frage; grund: string }[]) {
   const sj = strangJe(eintraege);
   return liste.map(({ f, grund }) => { const s = sj.get(f.eintrag); return karteAusFrage(f, { grund, strand: s?.id ?? null, strandTitel: s?.titel ?? null, altUrl: `${d.altUrl}/entscheidungen` }); });
@@ -166,12 +172,13 @@ export function registerV2(on: On, d: V2Deps) {
   on('GET', /^\/api\/v2\/start$/, async (req, res, _m, url) => {
     const u = await d.needUser(req);
     const ib = await d.inboxFuer(u);
-    const { fragen, sonstiges } = fragenAus(ib.eintraege);
+    const { fragen: alleFragen, sonstiges } = fragenAus(ib.eintraege);
+    const fragen = fuerKnut(alleFragen);
     const jetzt = await mitBezug(d, u, karten(d, fragen, ib.eintraege, jetztAuswahl(fragen)));
     const auf = aufraeumen(d, sonstiges);
     const ich = vorname(u);
     const r = rolle({ admin: admin(u), vorname: ich, zugang: admin(u) && !d.rolleEinstellung ? !!(await d.claudeToken(u).catch(() => null)) : undefined, einstellung: d.rolleEinstellung }, d.githubNames());
-    if (url.searchParams.get('teil') === 'oben') return send(d, res, { teil: 'oben', zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), ich, admin: admin(u), rolle: r, at: new Date() });
+    if (url.searchParams.get('teil') === 'oben') return send(d, res, { teil: 'oben', zahl: zahlVon(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), ich, admin: admin(u), rolle: r, at: new Date() });
     let laeuft: any[] = [], erledigt: any[] = [];
     if (admin(u)) {
       const [liste, er] = await Promise.all([ucListe(u).catch(() => ({ zeilen: [] as any[] })), d.erledigtDaten(u, d.wienDatum()).catch(() => ({ straenge: [] as any[] }))]);
@@ -188,7 +195,7 @@ export function registerV2(on: On, d: V2Deps) {
     // Runde 4 (Christoph B1): Reviewer sehen die neuesten veröffentlichten Agenten-Reviews offener PRs — der Weg zum Review-Stand in einem Klick.
     const reviews = r === 'reviewer' && live ? mitReview(prSicht(live, 'alle', d.githubNames()).filter((p) => !p.entwurf), rv, false)
       .filter((p) => p.review?.gepostet && p.review.status === 'fertig').sort((a, b) => new Date(b.review!.at ?? 0).getTime() - new Date(a.review!.at ?? 0).getTime()).slice(0, 3) : [];   // at kann ein Date sein (Pass C)
-    send(d, res, { reviews, zahl: inboxZahl(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), aufraeumenGesamt: auf.length, laeuft: laeuft.slice(0, 3), laeuftGesamt: laeuft.length, erledigt, prs: prs ? prs.slice(0, r === 'reviewer' ? 5 : 3) : null, prsGesamt: prs?.length ?? 0, prFrei, notizenFrei: !d.gesperrt(u, 'wissen'), dokumente: dokumenteNeu(d, u, r === 'team' ? 5 : 3), ich: ich, admin: admin(u), rolle: r, at: new Date() });
+    send(d, res, { reviews, zahl: zahlVon(ib.eintraege), jetzt, aufraeumen: auf.slice(0, Math.max(0, 5 - jetzt.length)), aufraeumenGesamt: auf.length, laeuft: laeuft.slice(0, 3), laeuftGesamt: laeuft.length, erledigt, prs: prs ? prs.slice(0, r === 'reviewer' ? 5 : 3) : null, prsGesamt: prs?.length ?? 0, prFrei, notizenFrei: !d.gesperrt(u, 'wissen'), dokumente: dokumenteNeu(d, u, r === 'team' ? 5 : 3), ich: ich, admin: admin(u), rolle: r, at: new Date() });
   });
 
   /** Je PR das neueste Agenten-Review (letzteReviews ist neueste zuerst). Entwurfs-Urteil nur für Admins (wie auf der PR-Seite). */
@@ -203,20 +210,21 @@ export function registerV2(on: On, d: V2Deps) {
   // --- Die eine Zahl (Kopf jeder Seite): dieselbe wie überall — `inboxZahl` ---
   on('GET', /^\/api\/v2\/zahl$/, async (req, res) => {
     const u = await d.needUser(req);
-    send(d, res, { zahl: inboxZahl((await d.inboxFuer(u)).eintraege) });
+    send(d, res, { zahl: zahlVon((await d.inboxFuer(u)).eintraege) });
   });
 
   // --- Entscheidungen: alle offenen, wichtigste zuerst (dieselbe Zahl wie oben) ---
   on('GET', /^\/api\/v2\/entscheidungen$/, async (req, res) => {
     const u = await d.needUser(req);
     const ib = await d.inboxFuer(u);
-    const { fragen, sonstiges } = fragenAus(ib.eintraege);
+    const { fragen: alleFragen, sonstiges } = fragenAus(ib.eintraege);
+    const fragen = fuerKnut(alleFragen);
     const oben = jetztAuswahl(fragen);
     const obenIds = new Set(oben.map((x) => x.f.id));
     const rest = fragen.filter((f) => f.klasse !== 'aktion' && !obenIds.has(f.id)).map((f) => ({ f, grund: '' }));
     const alle = await mitBezug(d, u, karten(d, fragen, ib.eintraege, [...oben, ...rest]));
     const geschlossen = (await d.geschlossen(u).catch((e) => { d.log('v2 geschlossen fehler', { user: u.id, error: String(e?.message ?? e).slice(0, 160) }); return []; })).map((g) => ({ id: g.id, titel: kurz(g.titel, 140), grund: kurz(g.grund, 240), wann: g.at }));
-    send(d, res, { zahl: inboxZahl(ib.eintraege), oben: alle.slice(0, oben.length), rest: alle.slice(oben.length), aufraeumen: aufraeumen(d, sonstiges), geschlossen, ueberholt: (ib.ueberholt ?? []).map((x: any) => ({ id: x.id, titel: kurz(String(x.titel).replace(/^Push freigeben: /, ''), 140), grund: x.grund, beleg: x.beleg })), at: new Date() });   // zahl = oben + rest + aufraeumen (Test); geschlossen zählt nicht
+    send(d, res, { zahl: zahlVon(ib.eintraege), beiClaude: beiClaude(alleFragen), oben: alle.slice(0, oben.length), rest: alle.slice(oben.length), aufraeumen: aufraeumen(d, sonstiges), geschlossen, ueberholt: (ib.ueberholt ?? []).map((x: any) => ({ id: x.id, titel: kurz(String(x.titel).replace(/^Push freigeben: /, ''), 140), grund: x.grund, beleg: x.beleg })), at: new Date() });   // zahl = oben + rest + aufraeumen (Test); geschlossen zählt nicht
   });
 
   // --- Alle wie empfohlen (S15): nur gesehene Entscheidungen mit Empfehlung, die hier beantwortet werden (nie Freigaben, B4) ---
