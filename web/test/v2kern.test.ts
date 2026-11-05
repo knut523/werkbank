@@ -381,3 +381,20 @@ test('Persona R7 (Daten 05.11.): ein Fragenpaket ist sein eigenes Thema — nich
   assert.equal(themaVon('Fragenpaket: Speicher+ (Rückfragen RBI)', 'Muss man für Speicher+ WirStrom-Kund:in sein? Hauptchat'), 'Speicher+ (Rückfragen RBI)');
   assert.equal(themaVon('Fragenpaket: Bot-Übergabe an den Service', 'x'), 'Bot', 'bekannte Themen greifen weiter');
 });
+
+test('Knut 05.11. abends (2): welcher Strang arbeitet an einem PR — prReview, Berichtskopf, Titel, Auftrag; Zustand läuft/wartet/steckt', async () => {
+  const { strangZuPr } = await import('../server/v2kern.ts');
+  const s = [
+    { _id: 'a1', title: 'PR-Review olaf-admin#393', zustand: 'laeuft', prReview: { repo: 'WirStrom1/olaf-admin', number: 393 } },
+    { _id: 'b2', title: 'Fix Bestätigungslink', zustand: 'wartet', berichtKopf: { github: [{ repo: 'WirStrom1/olaf-admin', pr: 'WirStrom1/olaf-admin#394' }] } },
+    { _id: 'c3', title: 'Rechner: Tarif-Seite (tariff-app #180)', zustand: 'haengt' },
+    { _id: 'd4', title: 'Irgendwas', zustand: 'laeuft', prompt: 'Bitte https://github.com/WirStrom1/olaf-umbrella/pull/12 prüfen' },
+    { _id: 'e5', title: 'olaf-admin#3930 anderer', zustand: 'laeuft' },
+  ] as any;
+  const z = (repo: string, n: number) => strangZuPr(s, repo, n).map((x) => `${x.id}:${x.zustand}`);
+  assert.deepEqual(z('WirStrom1/olaf-admin', 393), ['a1:läuft'], 'nicht #3930');
+  assert.deepEqual(z('WirStrom1/olaf-admin', 394), ['b2:wartet']);
+  assert.deepEqual(z('WirStrom1/olaf-tariff-app', 180), ['c3:steckt'], 'Titel mit Repo-Kurzname und Nummer');
+  assert.deepEqual(z('WirStrom1/olaf-umbrella', 12), ['d4:läuft'], 'PR-Link im Auftrag');
+  assert.deepEqual(z('WirStrom1/olaf-admin', 1), []);
+});

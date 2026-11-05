@@ -452,3 +452,22 @@ test('Knut 05.11. 19:00 „Zum Ansehen“: Karte je fertigem Strang mit Stand un
     assert.deepEqual((await rufe('GET', '/api/v2/ansehen', LISA)).b.karten, []);
   } finally { deps.unterchatListe = altListe; deps.strang = altStrang; delete deps.ansehenSpaeter; delete deps.ansehenAntwort; }
 });
+
+test('Knut 05.11. abends (1)+(2): PR-Zeile zeigt „Strang arbeitet daran“; Aktionen Review/Tief/Fixen/Auftrag nur für Admin, geprüft', async () => {
+  const aktionen: any[] = [];
+  deps.prStraenge = async () => [{ _id: 's9', title: 'PR-Review a#1', zustand: 'laeuft', prReview: { repo: 'a', number: 1 } }] as any;
+  deps.prAktion = async (_u: any, pr: string, art: string, text: string) => { aktionen.push([pr, art, text]); return { hinweis: 'eingereiht' }; };
+  try {
+    const z = (await rufe('GET', '/api/v2/prs?wer=alle', ADMIN)).b.zeilen[0];
+    assert.deepEqual(z.straenge, [{ id: 's9', titel: 'PR-Review a#1', zustand: 'läuft' }]);
+    for (const art of ['review', 'tief', 'fixen']) assert.equal((await rufe('POST', '/api/v2/pr-aktion', ADMIN, { pr: 'a#1', art })).status, 200, art);
+    assert.equal((await rufe('POST', '/api/v2/pr-aktion', ADMIN, { pr: 'a#1', art: 'auftrag', text: 'Tests für den Rechner ergänzen' })).status, 200);
+    assert.deepEqual(aktionen.map((a) => a[1]), ['review', 'tief', 'fixen', 'auftrag']);
+    assert.equal(aktionen[3][2], 'Tests für den Rechner ergänzen');
+    assert.equal((await rufe('POST', '/api/v2/pr-aktion', ADMIN, { pr: 'a#1', art: 'auftrag', text: ' ' })).status, 400, 'Auftrag braucht Text');
+    assert.equal((await rufe('POST', '/api/v2/pr-aktion', ADMIN, { pr: 'a#1', art: 'mergen' })).status, 400, 'nie mergen');
+    assert.equal((await rufe('POST', '/api/v2/pr-aktion', ADMIN, { pr: 'a#99', art: 'review' })).status, 404, 'nur offene PRs');
+    assert.equal((await rufe('POST', '/api/v2/pr-aktion', LISA, { pr: 'a#1', art: 'review' })).status, 403);
+    assert.equal((await rufe('GET', '/api/v2/prs?wer=alle', LISA)).b.zeilen[0]?.straenge, undefined, 'Nicht-Admin sieht keine Stränge');
+  } finally { delete deps.prStraenge; delete deps.prAktion; }
+});

@@ -79,7 +79,7 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG, graphql } from './github.ts';
-import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol, fixesCol, reviewsNachholen, tickerAus } from './prticker.ts';
+import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol, fixesCol, reviewsNachholen, tickerAus, fixEinreihen } from './prticker.ts';
 import { regelDir, regelVorschlaege } from './regelquelle.ts';
 import { klonPfad, reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
@@ -4367,6 +4367,25 @@ registerV2(on, {
     await logCol().insertOne({ _id: `${u.id}-ansehen-${id}-${at.getTime()}`, userId: u.id, kennung: `ansehen-${id}`, art: 'ansehen', ids: [], frage: `Zum Ansehen: ${titel}`, empfehlung: null, stufe: null, grund: null,
       antwort: `${was}${notiz ? ` — ${notiz.slice(0, 500)}` : ''}`, durch: 'knut', auto: false, at, strand: { id, titel }, zugestelltAt: notiz || art === 'aendern' ? at : null, widerruf: null } as any);
     zahlCache.delete(u.id);
+  },
+  // Knut 05.11. abends (2): offene Stränge mit PR-Bezug; Fix-Stränge tragen kein prReview — der Bezug kommt aus pr_fixes.strand.
+  prStraenge: async (u) => {
+    const runs: any[] = await orchRuns().find({ userId: u.id, knutReviewedAt: null, endedAt: null, startedAt: { $gt: new Date(Date.now() - 30 * 86400_000) } },
+      { projection: { _id: 1, title: 1, zustand: 1, prReview: 1, 'berichtKopf.github': 1, prompt: 1 } }).toArray();
+    const fixe: any[] = await fixesCol().find({ strand: { $ne: null }, status: { $nin: ['fertig', 'abgelehnt', 'fehler', 'nichts', 'übersprungen'] } }, { projection: { strand: 1, repo: 1, number: 1 } }).toArray();
+    const fixJe = new Map(fixe.map((f) => [String(f.strand), { repo: f.repo, number: f.number }]));
+    return runs.map((r) => ({ ...r, prompt: String(r.prompt ?? '').slice(0, 2000), prReview: r.prReview ?? fixJe.get(String(r._id)) ?? null }));
+  },
+  // Knut 05.11. abends (1): Aktionen je PR — Review/Tiefes Review in die Review-Schlange, Fixen/Auftrag in die Fix-Schlange.
+  prAktion: async (u, pr, art, text) => {
+    if (art === 'review' || art === 'tief') { const r = await reviewStarten(u, pr, art === 'tief' ? 'deep' : 'quick'); return { hinweis: r.hinweis }; }
+    const live = (await livePrs()).map.get(pr);
+    if (!live) throw new HttpError(404, 'PR nicht in der Liste offener PRs.');
+    try {
+      const f = await fixEinreihen({ repo: live.repo, number: live.number, title: live.title, url: live.url, by: u.name, auftrag: art === 'auftrag' ? text : '' });
+      log('fix eingereiht (workspace)', { user: u.id, pr, art, modus: f.modus });
+      return { hinweis: `In der Fix-Schlange (${f.modus === 'trocken' ? 'Trockenlauf' : f.modus === 'frage' ? 'Push erst nach deiner Freigabe' : f.modus === 'auto' ? 'grün → Push ohne Klick' : 'wie @fix'}) — startet mit dem nächsten Takt.` };
+    } catch (e: any) { throw new HttpError(e?.status ?? 400, String(e?.message ?? e)); }
   },
   // Plan §24 A4: Haken der „Braucht Hauptsitzung“-Punkte je Person.
   hauptsitzungHaken: {

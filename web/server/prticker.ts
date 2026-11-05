@@ -395,6 +395,20 @@ export const fixFrage = (env = process.env) => (env.WERKBANK_FIX_FREIGABE === '1
 /** R30a: Auto-Modus (`WERKBANK_FIX_FREIGABE=auto`) — pusht ohne Klick, wenn alles grün ist; sonst in die Freigabe-Frage. */
 export const fixAuto = (env = process.env) => env.WERKBANK_FIX_FREIGABE === 'auto' && env.WERKBANK_FIX_DRYRUN !== '1';
 
+/** Knut 05.11. abends (1): „Fixen“/„Auftrag …“ an einem PR aus der 2.0 — derselbe Eintrag wie ein @fix aus GitHub (gleiche
+ *  Modi: Trockenlauf/Auto/Freigabe, gleiche Repo-Regel), nur ohne Kommentar. Ohne Auftrag behebt der Fix-Strang die offenen
+ *  Review-Punkte. Gepusht wird nur über den bestehenden Weg (Prüfung + Freigabe), nie gemergt. */
+export async function fixEinreihen(p: { repo: string; number: number; title: string; url: string; by: string; auftrag: string }, now = new Date()): Promise<{ id: string; modus: string }> {
+  if (!fixRepoErlaubt(p.repo)) throw Object.assign(new Error('Fixen ist für dieses Repo nicht freigegeben (WERKBANK_FIX_ORGS).'), { status: 403 });
+  if (await fixesCol().findOne({ repo: p.repo, number: p.number, status: { $in: ['wartet', 'startet', 'läuft', 'prüft', 'freigabe_frage'] } })) throw Object.assign(new Error('Für diesen PR läuft schon ein Fix.'), { status: 409 });
+  const s = await tickerSettings();
+  const modus = fixTrocken() ? 'trocken' : fixAuto() ? 'auto' : fixFrage() ? 'frage' : 'normal';
+  const id = `hand-fix-${p.repo.replace('/', '-')}-${p.number}-${now.getTime().toString(36)}`;
+  await fixesCol().insertOne({ _id: id as any, repo: p.repo, number: p.number, title: p.title, url: p.url, quelle: p.url, headTag: null, by: p.by, auftrag: p.auftrag, art: 'hand', ort: null, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date,
+    ...(modus === 'trocken' ? { trocken: true } : modus === 'auto' ? { auto: true } : modus === 'frage' ? { frage: true } : {}) });
+  return { id, modus };
+}
+
 export async function queueFixes(fresh: TickerEvent[], s: TickerSettings, now = new Date()): Promise<number> {
   let n = 0;
   for (const e of fresh) {

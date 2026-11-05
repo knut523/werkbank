@@ -8,7 +8,7 @@ import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungssei
 import { themaOf } from './themen.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { auszugUm, knutOffenJe, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
+import { auszugUm, knutOffenJe, strangZuPr, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import { dodAus, fastFertig, endenAus, hauptsitzungPunkte } from './dod.ts';
 import { triageAn, councilWirkung, type Council, type CouncilUrteil } from './stufe.ts';
@@ -70,6 +70,10 @@ export interface V2Deps {
   hauptsitzungHaken?: { lesen: (u: User) => Promise<Set<string>>; setzen: (u: User, key: string, an: boolean) => Promise<void> };
   /** Knut 05.11. 19:00 „Zum Ansehen“: ausgeblendete Stränge („Später“) und die Antwort an den Strang (main.ts). */
   ansehenSpaeter?: (u: User) => Promise<Set<string>>;
+  /** Knut 05.11. abends (2): offene Stränge mit PR-Bezug (Titel, Auftrag, prReview, Berichtskopf, Zustand). */
+  prStraenge?: (u: User) => Promise<any[]>;
+  /** Knut 05.11. abends (1): Aktion je PR — review/tief (Review-Schlange), fixen/auftrag (Fix-Schlange); nie Push/Merge. */
+  prAktion?: (u: User, pr: string, art: 'review' | 'tief' | 'fixen' | 'auftrag', text: string) => Promise<{ hinweis: string }>;
   ansehenAntwort?: (u: User, id: string, art: 'passt' | 'aendern' | 'spaeter', notiz: string, titel: string) => Promise<void>;
   lcUrl: string;
   /** S20 (D8): Rolle der Besitzerin aus der Einrichtung (WERKBANK_ROLLE, von team-install gesetzt) — sonst abgeleitet. */
@@ -562,9 +566,29 @@ export function registerV2(on: On, d: V2Deps) {
     const live = [...g.map.values()] as LivePrLite[];
     const names = d.githubNames();
     const [rv, fx] = await Promise.all([d.letzteReviews().catch(() => []), d.fixPunkte ? d.fixPunkte().catch(() => []) : Promise.resolve([])]);
-    const zeilen = mitReview(prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)), rv, admin(u), fx).map((p) => ({ ...p, thema: themaVon(null, `${p.repo} ${p.titel}`) }));   // Runde 7: jedes Ding trägt sein Thema
+    // Knut 05.11. abends (2): „Strang … arbeitet daran“ je PR (nur Admin — Stränge sind Knuts).
+    const straenge = admin(u) && d.prStraenge ? await d.prStraenge(u).catch(() => []) : null;
+    const zeilen = mitReview(prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)), rv, admin(u), fx).map((p) => ({ ...p, thema: themaVon(null, `${p.repo} ${p.titel}`),   // Runde 7: jedes Ding trägt sein Thema
+      ...(straenge ? { straenge: strangZuPr(straenge, p.repo, p.number) } : {}) }));
     const ohneEntwurf = live.filter((p) => !p.isDraft);
     send(d, res, { wer, ich, personen: [...personen(ohneEntwurf, ich, names), { name: 'alle', anzahl: ohneEntwurf.length }], zeilen, stand: g.sync?.at ?? null, at: new Date() });
+  });
+  // Knut 05.11. abends (1): Aktion an einem offenen PR — reiht in die Review- bzw. Fix-Schlange ein (Strang startet von selbst).
+  // Nie Push/Merge: es gibt nur diese vier Arten; der Fix-Strang pusht wie bisher nur über Prüfung und Freigabe.
+  on('POST', /^\/api\/v2\/pr-aktion$/, async (req, res) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) throw err(403, 'Nur wer die Unter-Chats führt.');
+    if (!d.prAktion) throw err(501, 'PR-Aktionen sind hier nicht eingerichtet.');
+    const b = await d.body(req, 16 * 1024);
+    const art = String(b?.art ?? '');
+    if (!['review', 'tief', 'fixen', 'auftrag'].includes(art)) throw err(400, 'Aktion ist Review, Tiefes Review, Fixen oder Auftrag.');
+    const text = String(b?.text ?? '').trim().slice(0, 4000);
+    if (art === 'auftrag' && !text) throw err(400, 'Schreib kurz, was an diesem PR gemacht werden soll.');
+    const pr = String(b?.pr ?? '');
+    if (!(await d.livePrs()).map.has(pr)) throw err(404, 'Diesen PR gibt es nicht (mehr) in der Liste offener PRs.');
+    const r = await d.prAktion(u, pr, art as any, text);
+    d.log('v2 pr-aktion', { user: u.id, pr, art });
+    send(d, res, { ok: true, ...r });
   });
   on('GET', /^\/api\/v2\/prs\/([\w.-]{1,80})\/(\d{1,6})$/, async (req, res, m) => {
     const u = await d.needUser(req);
