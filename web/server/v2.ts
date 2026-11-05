@@ -99,6 +99,8 @@ export interface V2Deps {
 
 /** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
 const hauptchatSendet = new Set<string>();
+/** Audit 05.11. (5): wie zustandSatz — „fertig“ zählt als Bericht nur mit Bericht UND Paket. */
+const ohneBericht = (z: { zustand?: string; bericht?: unknown; paket?: unknown }) => z.zustand === 'fertig' && !(z.bericht && z.paket);
 
 /** Audit 05.11. (4): Takt — Eingereihtes an den Hauptchat zustellen, sobald er frei ist (gebündelt, älteste zuerst; bei Fehler
  *  zurücklegen). Ergebnis: wie viele Texte zugestellt wurden. */
@@ -405,7 +407,7 @@ export function registerV2(on: On, d: V2Deps) {
         .map((g: any) => { const pr = String(g.pr ?? `${g.repo}#${String(g.url).match(/\/pull\/(\d+)/)?.[1]}`); return { label: `PR ${pr.split('/').pop()}`, url: /^https:\/\/github\.com\//.test(String(g.url ?? '')) ? g.url : `https://github.com/${pr.replace('#', '/pull/')}` }; });
       const weitere = (Array.isArray(kopf.review) ? kopf.review : []).filter((r: any) => r?.url && /^https:\/\//.test(String(r.url))).slice(0, 4).map((r: any) => ({ label: kurz(String(r.titel ?? 'Link'), 40), url: String(r.url) }));
       const f = doc ? fastFertig(dodAus(String(doc.standVoll || doc.lastExcerpt || ''))) : null;
-      return { id: k.id, titel: k.titel, thema: k.thema, uhr: k.uhr, satz: f ? `Fast fertig — fehlt: ${f.fehlt.slice(0, 3).join('; ')}.` : k.satz, links: [...k.links, ...prs, ...weitere] };
+      return { id: k.id, titel: k.titel, thema: k.thema, uhr: k.uhr, satz: f ? `Fast fertig — fehlt: ${f.fehlt.slice(0, 3).join('; ')}.` : k.satz, links: [...k.links, ...prs, ...weitere], ohneBericht: ohneBericht(z) };
     }));
     send(d, res, { karten });
   });
@@ -420,6 +422,8 @@ export function registerV2(on: On, d: V2Deps) {
     if (art === 'aendern' && !notiz) throw err(400, 'Bei „Ändern“ bitte kurz schreiben, was.');
     const z = (await ucListe(u).catch(() => ({ zeilen: [] as any[] }))).zeilen.find((x: any) => String(x.id) === m[1]);
     if (!z) throw err(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
+    // Audit 05.11. (5): „fertig“ ohne Bericht ist kein abnehmbarer Stand — nur, wenn Knut es ausdrücklich trotzdem will.
+    if (art === 'passt' && ohneBericht(z) && b?.ohneBericht !== true) throw err(409, 'Fertig gemeldet, aber ohne Bericht — erst „Bericht anfordern“, oder ausdrücklich „Trotzdem abnehmen“.');
     await d.ansehenAntwort(u, m[1], art as any, notiz, String(z.titel ?? ''));
     d.log('v2 ansehen', { user: u.id, strand: m[1], art, notiz: notiz.length });
     send(d, res, { ok: true });

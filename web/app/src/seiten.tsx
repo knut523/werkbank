@@ -188,7 +188,7 @@ export function Entscheidungen() {
 /** Karten nach Thema, größte Gruppe zuerst; ohne Thema unter „Sonstiges“. */
 /** Knut 05.11. 19:00 „Eine Seite, auf der ich zu jedem Punkt etwas schreiben kann“: je fertigem Strang Stand, Links, Passt/Ändern/Später + Notiz. */
 function ZumAnsehen() {
-  const { d, neu } = useDaten<{ karten: { id: string; titel: string; thema: string; uhr: string | null; satz: string; links: Link[] }[] }>('api/v2/ansehen');
+  const { d, neu } = useDaten<{ karten: { id: string; titel: string; thema: string; uhr: string | null; satz: string; links: Link[]; ohneBericht?: boolean }[] }>('api/v2/ansehen');
   if (!d?.karten.length) return null;
   return (
     <Abschnitt id="e-ansehen" titel={`Zum Ansehen (${d.karten.length})`} erklaerung="Fertige Unter-Chats. Schreib zu jedem etwas — die Notiz geht von selbst an den Unter-Chat (auch wenn er gerade beschäftigt ist) und steht im Entscheidungs-Log.">
@@ -197,14 +197,17 @@ function ZumAnsehen() {
   );
 }
 
-function AnsehenKarte({ k, fertig }: { k: { id: string; titel: string; thema: string; uhr: string | null; satz: string; links: Link[] }; fertig: () => void }) {
+function AnsehenKarte({ k, fertig }: { k: { id: string; titel: string; thema: string; uhr: string | null; satz: string; links: Link[]; ohneBericht?: boolean }; fertig: () => void }) {
   const [notiz, setNotiz] = useState('');
   const [meldung, setMeldung] = useState<string | null>(null);
-  const antworten = async (art: 'passt' | 'aendern' | 'spaeter') => {
-    if (art === 'aendern' && !notiz.trim()) { setMeldung('Bei „Ändern“ bitte kurz schreiben, was.'); return; }
-    try { await schicke(`api/v2/ansehen/${encodeURIComponent(k.id)}`, { art, notiz }); setMeldung(art === 'passt' ? 'Abgenommen.' : art === 'aendern' ? 'Geht an den Unter-Chat.' : 'Für 24 h ausgeblendet.'); setTimeout(fertig, 800); }
+  const antworten = async (art: 'passt' | 'aendern' | 'spaeter', o: { text?: string; trotzdem?: boolean } = {}) => {
+    const n = o.text ?? notiz;
+    if (art === 'aendern' && !n.trim()) { setMeldung('Bei „Ändern“ bitte kurz schreiben, was.'); return; }
+    try { await schicke(`api/v2/ansehen/${encodeURIComponent(k.id)}`, { art, notiz: n, ...(o.trotzdem ? { ohneBericht: true } : {}) }); setMeldung(art === 'passt' ? 'Abgenommen.' : art === 'aendern' ? 'Geht an den Unter-Chat.' : 'Für 24 h ausgeblendet.'); setTimeout(fertig, 800); }
     catch (e: any) { setMeldung(String(e?.message ?? e)); }
   };
+  // Audit 05.11. (5): ohne Bericht ist „fertig“ kein abnehmbarer Stand — zuerst den Bericht anfordern; abnehmen nur ausdrücklich.
+  const BERICHT = 'Bitte schreib den Bericht (Abschnitte wie im Auftrag) und melde dich dann mit „### Stand“ und „Status: fertig“.';
   return (
     <article id={`ansehen-${k.id}`} className="karte ansehen" aria-label={k.titel}>
       {k.thema && k.thema !== 'Sonstiges' && <p className="karte-thema">{k.thema}</p>}
@@ -213,8 +216,15 @@ function AnsehenKarte({ k, fertig }: { k: { id: string; titel: string; thema: st
       {k.links.length > 0 && <Verweise links={k.links} />}
       <textarea className="notiz" rows={2} placeholder="Deine Notiz an den Unter-Chat (optional, bei „Ändern“ nötig)" value={notiz} onChange={(e) => setNotiz(e.target.value)} />
       <div className="knoepfe">
-        <button type="button" className="knopf haupt" onClick={() => antworten('passt')}>Passt</button>
-        <button type="button" className="knopf" onClick={() => antworten('aendern')}>Ändern</button>
+        {k.ohneBericht
+          ? <>
+            <button type="button" className="knopf haupt" onClick={() => antworten('aendern', { text: notiz.trim() ? `${notiz.trim()}\n\n${BERICHT}` : BERICHT })}>Bericht anfordern</button>
+            <button type="button" className="knopf leise" title="Fertig ohne Bericht abnehmen — nur, wenn es wirklich keinen braucht" onClick={() => antworten('passt', { trotzdem: true })}>Trotzdem abnehmen</button>
+          </>
+          : <>
+            <button type="button" className="knopf haupt" onClick={() => antworten('passt')}>Passt</button>
+            <button type="button" className="knopf" onClick={() => antworten('aendern')}>Ändern</button>
+          </>}
         <button type="button" className="knopf leise" onClick={() => antworten('spaeter')}>Später</button>
       </div>
       {meldung && <p className="hinweis klein" role="status">{meldung}</p>}

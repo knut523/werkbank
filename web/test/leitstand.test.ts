@@ -675,7 +675,8 @@ test('Audit 05.11. (2): „Passt“ mit Notiz → Notiz kommt an, die Abnahme bl
   const st = await doneStrand('Audit: Passt mit Notiz', 'wt-b2n');
   await until(() => cardOf(st.id), (c: any) => !!c);
   const vorher: any = await W().collection('orchestrator_runs').findOne({ _id: st.id as any });
-  const r = await post(`/api/v2/ansehen/${st.id}`, { art: 'passt', notiz: 'Schön, danke' });
+  assert.equal((await post(`/api/v2/ansehen/${st.id}`, { art: 'passt', notiz: 'Schön, danke' })).status, 409, 'Audit (5): ohne Bericht nur ausdrücklich');
+  const r = await post(`/api/v2/ansehen/${st.id}`, { art: 'passt', notiz: 'Schön, danke', ohneBericht: true });
   assert.equal(r.status, 200, await r.clone().text());
   await until(() => msgsOf(st.conv), (ms: any[]) => ms.some((m) => /Zum Ansehen\): Passt\. Notiz: Schön, danke/.test(textOf(m))));
   await pause(800);

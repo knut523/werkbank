@@ -491,6 +491,27 @@ test('Knut 05.11. 19:00 „Zum Ansehen“: Karte je fertigem Strang mit Stand un
   } finally { deps.unterchatListe = altListe; deps.strang = altStrang; delete deps.ansehenSpaeter; delete deps.ansehenAntwort; }
 });
 
+test('Audit 05.11. (5): „fertig“ ohne Bericht ist nicht abnehmbar — Karte sagt es, „Passt“ nur ausdrücklich trotzdem', async () => {
+  const altListe = deps.unterchatListe, altStrang = deps.strang;
+  const antworten: any[] = [];
+  deps.unterchatListe = async () => ({ zeilen: [{ id: 'm1', titel: 'Mit Bericht', zustand: 'fertig', paket: '480-deck', bericht: true }, { id: 'o1', titel: 'Ohne Bericht', zustand: 'fertig', paket: null, bericht: false }] }) as any;
+  deps.strang = async (_u: any, id: string) => ({ _id: id, title: id, standVoll: '' }) as any;
+  deps.ansehenAntwort = async (_u: any, id: string, art: string, notiz: string) => { antworten.push([id, art, notiz]); };
+  try {
+    const g = (await rufe('GET', '/api/v2/ansehen', ADMIN)).b;
+    const o = g.karten.find((k: any) => k.id === 'o1'), m = g.karten.find((k: any) => k.id === 'm1');
+    assert.equal(o.ohneBericht, true); assert.equal(m.ohneBericht, false);
+    assert.match(o.satz, /ohne Bericht/);
+    const r = await rufe('POST', '/api/v2/ansehen/o1', ADMIN, { art: 'passt' });
+    assert.equal(r.status, 409); assert.match(r.b.error, /ohne Bericht/);
+    assert.equal(antworten.length, 0);
+    assert.equal((await rufe('POST', '/api/v2/ansehen/o1', ADMIN, { art: 'passt', ohneBericht: true })).status, 200, 'ausdrücklich trotzdem');
+    assert.equal((await rufe('POST', '/api/v2/ansehen/m1', ADMIN, { art: 'passt' })).status, 200);
+    assert.equal((await rufe('POST', '/api/v2/ansehen/o1', ADMIN, { art: 'aendern', notiz: 'Bitte Bericht schreiben' })).status, 200, 'Ändern geht immer');
+    assert.deepEqual(antworten.map((a) => a[0] + ':' + a[1]), ['o1:passt', 'm1:passt', 'o1:aendern']);
+  } finally { deps.unterchatListe = altListe; deps.strang = altStrang; delete deps.ansehenAntwort; }
+});
+
 test('Knut 05.11. abends (1)+(2): PR-Zeile zeigt „Strang arbeitet daran“; Aktionen Review/Tief/Fixen/Auftrag nur für Admin, geprüft', async () => {
   const aktionen: any[] = [];
   deps.prStraenge = async () => [{ _id: 's9', title: 'PR-Review a#1', zustand: 'laeuft', prReview: { repo: 'a', number: 1 } }] as any;
