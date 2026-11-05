@@ -79,7 +79,7 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG, graphql } from './github.ts';
-import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol, fixesCol } from './prticker.ts';
+import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol, fixesCol, reviewsNachholen, tickerAus } from './prticker.ts';
 import { regelDir, regelVorschlaege } from './regelquelle.ts';
 import { klonPfad, reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
@@ -4746,6 +4746,8 @@ if (process.env.ORCH_STATUS !== 'off') setInterval(() => {
   }).catch((e) => log('fragen aufräumen fehler', { error: String(e?.message ?? e).slice(0, 160) }));
   // Knut 17.10.: normale Entscheidungen nach 24 h annehmen (WERKBANK_AUTO_ANNAHME=0 schaltet ab).
   annahmeTakt().catch((e) => log('annahme fehler', { error: String(e?.message ?? e).slice(0, 160) }));
+  // Plan §24 A5: übersprungene Reviews einmal täglich nachholen (nur mit PR-Ticker; der Tageslauf sperrt sich selbst).
+  if (!tickerAus()) reviewsNachholen().then((n) => { if (n) log('reviews nachgeholt', { n }); }).catch((e) => log('reviews nachholen fehler', { error: String(e?.message ?? e).slice(0, 160) }));
 }, 10 * 60_000).unref();
 // Leitstand wecken (Plan 132, S2): eigener Durchgang im selben Takt; LEITSTAND_WAKE=off schaltet ab.
 startLeitstandTick(orchDeps);

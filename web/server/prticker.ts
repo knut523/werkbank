@@ -425,6 +425,43 @@ export const DELTA_BUENDEL_MS = 10 * 60_000;
  * anderen Kopf → Delta-Review (`trigger: 'delta'`), Start erst nach DELTA_BUENDEL_MS. Ein noch wartendes Auto-Delta desselben PRs
  * geht in diesem auf (übersprungen, „zusammengefasst“). null = trifft nicht zu (dann gilt die Nachprüfung wie bisher).
  */
+// ---------- Plan §24 A5 (Knut 05.11.): übersprungene Reviews einmal täglich nachholen ----------
+// Ein Review, das wegen „neuer Stand seit dem Tag/seit dem Review“ übersprungen wurde, wartete bisher auf ein neues @review —
+// das niemand gab (z. B. #393 um 09:17). Gemergt/geschlossen und „zusammengefasst“ (ein neueres Delta läuft) holen wir nicht nach.
+const NICHT_NACHHOLEN = /gemergt|geschlossen|merged|closed|zusammengefasst/i;
+export function nachholKandidaten(reviews: { repo: string; number: number; head: string; status: string; note?: string | null; createdAt: Date | string; trigger?: string; day?: string }[], heute: string): { repo: string; number: number; alterHead: string }[] {
+  const je = new Map<string, typeof reviews>();
+  for (const r of reviews) je.set(prKey(r.repo, r.number), [...(je.get(prKey(r.repo, r.number)) ?? []), r]);
+  const out: { repo: string; number: number; alterHead: string }[] = [];
+  for (const l of je.values()) {
+    if (l.some((r) => r.trigger === 'nachholen' && r.day === heute)) continue;
+    const letzte = [...l].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    if (letzte.status !== 'übersprungen' || NICHT_NACHHOLEN.test(String(letzte.note ?? ''))) continue;
+    out.push({ repo: letzte.repo, number: letzte.number, alterHead: letzte.head });
+  }
+  return out;
+}
+/** Einmal je Tag (Wiener Datum): für jeden Kandidaten den neuesten bekannten Kopf (Ticker) als Review einreihen. */
+export async function reviewsNachholen(now = new Date()): Promise<number> {
+  const heute = vienna(now).date;
+  const lauf = await wb().collection('pr_nachholen').updateOne({ _id: heute as any }, { $setOnInsert: { at: now } }, { upsert: true });
+  if (!lauf.upsertedCount) return 0;   // heute schon gelaufen
+  const s = await tickerSettings();
+  const seit = new Date(now.getTime() - 14 * 86400_000);
+  const reviews: any[] = await reviewsCol().find({ createdAt: { $gte: seit } }).toArray();
+  let n = 0;
+  for (const k of nachholKandidaten(reviews, heute)) {
+    if (!reviewErlaubt(k.repo)) continue;
+    const e: any = (await tickerCol().find({ repo: k.repo, number: k.number, head: { $nin: [null, k.alterHead] } }).sort({ at: -1 }).limit(1).toArray())[0];
+    if (!e?.head) continue;
+    try {
+      await reviewsCol().insertOne({ _id: `${prKey(k.repo, k.number)}@${e.head}` as any, repo: k.repo, number: k.number, title: e.title, url: e.prUrl, head: e.head, trigger: 'nachholen', by: null, event: e._id, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: heute, deep: false });
+      n++;
+    } catch (x: any) { if (x?.code !== 11000) throw x; }   // diesen Stand gibt es schon als Review
+  }
+  return n;
+}
+
 async function autoDelta(e: TickerEvent, s: TickerSettings, now: Date): Promise<number | null> {
   const autor = String(e.actor ?? '').toLowerCase();
   if (!autor || autor === ME || !s.allow.map((a) => a.toLowerCase()).includes(autor)) return null;
