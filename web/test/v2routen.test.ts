@@ -128,9 +128,12 @@ test('Audit 05.11. (4): Takt stellt Eingereihtes zu, sobald der Hauptchat frei i
   let laeuft = true, fehler = false;
   const liegt: any[] = [{ id: 'a', text: 'Erste', at: new Date(1) }, { id: 'b', text: 'Zweite', at: new Date(2) }];
   const gesendet: string[] = [];
+  const quittiert: string[] = [];
   const z = {
     hauptchat: async () => ({ conv: 'h1', url: null }), laeuftChat: async () => laeuft,
     nehmen: async () => liegt.splice(0), zuruecklegen: async (_u: any, l: any[]) => { liegt.unshift(...l); },
+    // Gegenprüfung 05.11. (Teil 9/11): erst nach erfolgreicher Zustellung endgültig weg (vorher nur „unterwegs“)
+    quittieren: async (_u: any, ids: string[]) => { quittiert.push(...ids); },
     senden: async (_u: any, _c: string, t: string) => { if (fehler) throw new Error('LibreChat weg'); gesendet.push(t); return new Date(); }, log: () => {},
   };
   assert.equal(await hauptchatZustellen(z, ADMIN), 0, 'arbeitet noch');
@@ -140,7 +143,9 @@ test('Audit 05.11. (4): Takt stellt Eingereihtes zu, sobald der Hauptchat frei i
   fehler = false;
   assert.equal(await hauptchatZustellen(z, ADMIN), 2);
   assert.equal(gesendet.length, 1); assert.match(gesendet[0], /2 Nachrichten[\s\S]*Erste[\s\S]*Zweite/);
+  assert.doesNotMatch(gesendet[0], /von Knut/, 'neutral: wer geschrieben hat, steht nicht fest');
   assert.equal(liegt.length, 0);
+  assert.deepEqual(quittiert, ['a', 'b'], 'erst nach dem Senden quittiert');
 });
 
 test('C2: automatisch Geschlossenes steht sichtbar auf der Entscheidungsseite (zählt nicht mit) und lässt sich wieder öffnen', async () => {

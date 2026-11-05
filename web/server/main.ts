@@ -4349,8 +4349,16 @@ const hauptchatTakt = async () => {
     if (!u || !allowed(u.email)) continue;
     await hauptchatZustellen({
       hauptchat: v2Hauptchat, laeuftChat: v2LaeuftChat, senden: v2lcSenden, log,
-      nehmen: async (x) => { const l: any[] = await hauptchatAus().find({ userId: x.id }).sort({ at: 1 }).limit(20).toArray(); await hauptchatAus().deleteMany({ _id: { $in: l.map((d) => d._id) } }); return l.map((d) => ({ id: String(d._id), text: String(d.text), at: d.at })); },
-      zuruecklegen: async (x, l) => { await hauptchatAus().insertMany(l.map((d) => ({ _id: d.id as any, userId: x.id, text: d.text, at: d.at }))).catch(() => {}); },
+      // Gegenprüfung 05.11.: nicht löschen, sondern als „unterwegs“ markieren — gelöscht wird erst nach dem Senden (quittieren);
+      // stürzt die Web-App dazwischen ab, ist der Eintrag nach 5 min wieder dran (lieber doppelt als verloren).
+      nehmen: async (x) => {
+        const frei = { userId: x.id, $or: [{ unterwegs: null }, { unterwegs: { $lt: new Date(Date.now() - 5 * 60_000) } }] };
+        const l: any[] = await hauptchatAus().find(frei).sort({ at: 1 }).limit(20).toArray();
+        if (l.length) await hauptchatAus().updateMany({ _id: { $in: l.map((d) => d._id) } }, { $set: { unterwegs: new Date() } });
+        return l.map((d) => ({ id: String(d._id), text: String(d.text), at: d.at }));
+      },
+      zuruecklegen: async (x, l) => { await hauptchatAus().updateMany({ _id: { $in: l.map((d) => d.id as any) }, userId: x.id }, { $set: { unterwegs: null } }); },
+      quittieren: async (x, ids) => { await hauptchatAus().deleteMany({ _id: { $in: ids as any[] }, userId: x.id }); },
     }, u).catch((e) => log('v2 hauptchat takt fehler', { user: String(id), error: String(e?.message ?? e).slice(0, 160) }));
   }
 };

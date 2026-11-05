@@ -202,11 +202,14 @@ function ZumAnsehen() {
 function AnsehenKarte({ k, fertig }: { k: { id: string; titel: string; thema: string; uhr: string | null; satz: string; links: Link[]; ohneBericht?: boolean }; fertig: () => void }) {
   const [notiz, setNotiz] = useState('');
   const [meldung, setMeldung] = useState<string | null>(null);
+  const [laeuft, setLaeuft] = useState(false);   // Gegenprüfung 05.11. (Teil 7): kein Doppelklick → keine doppelte Notiz
   const antworten = async (art: 'passt' | 'aendern' | 'spaeter', o: { text?: string; trotzdem?: boolean } = {}) => {
     const n = o.text ?? notiz;
     if (art === 'aendern' && !n.trim()) { setMeldung('Bei „Ändern“ bitte kurz schreiben, was.'); return; }
+    if (laeuft) return;
+    setLaeuft(true);
     try { await schicke(`api/v2/ansehen/${encodeURIComponent(k.id)}`, { art, notiz: n, ...(o.trotzdem ? { ohneBericht: true } : {}) }); setMeldung(art === 'passt' ? 'Abgenommen.' : art === 'aendern' ? 'Geht an den Unter-Chat.' : 'Für 24 h ausgeblendet.'); setTimeout(fertig, 800); }
-    catch (e: any) { setMeldung(String(e?.message ?? e)); }
+    catch (e: any) { setMeldung(String(e?.message ?? e)); setLaeuft(false); }
   };
   // Audit 05.11. (5): ohne Bericht ist „fertig“ kein abnehmbarer Stand — zuerst den Bericht anfordern; abnehmen nur ausdrücklich.
   const BERICHT = 'Bitte schreib den Bericht (Abschnitte wie im Auftrag) und melde dich dann mit „### Stand“ und „Status: fertig“.';
@@ -217,17 +220,17 @@ function AnsehenKarte({ k, fertig }: { k: { id: string; titel: string; thema: st
       <p className="klein">{k.satz}{k.uhr ? ` · ${k.uhr}` : ''}</p>
       {k.links.length > 0 && <Verweise links={k.links} />}
       <textarea className="notiz" rows={2} placeholder="Deine Notiz an den Unter-Chat (optional, bei „Ändern“ nötig)" value={notiz} onChange={(e) => setNotiz(e.target.value)} />
-      <div className="knoepfe">
+      <div className="knoepfe" aria-busy={laeuft}>
         {k.ohneBericht
           ? <>
-            <button type="button" className="knopf haupt" onClick={() => antworten('aendern', { text: notiz.trim() ? `${notiz.trim()}\n\n${BERICHT}` : BERICHT })}>Bericht anfordern</button>
-            <button type="button" className="knopf leise" title="Fertig ohne Bericht abnehmen — nur, wenn es wirklich keinen braucht" onClick={() => antworten('passt', { trotzdem: true })}>Trotzdem abnehmen</button>
+            <button type="button" className="knopf haupt" disabled={laeuft} onClick={() => antworten('aendern', { text: notiz.trim() ? `${notiz.trim()}\n\n${BERICHT}` : BERICHT })}>Bericht anfordern</button>
+            <button type="button" className="knopf leise" disabled={laeuft} title="Fertig ohne Bericht abnehmen — nur, wenn es wirklich keinen braucht" onClick={() => antworten('passt', { trotzdem: true })}>Trotzdem abnehmen</button>
           </>
           : <>
-            <button type="button" className="knopf haupt" onClick={() => antworten('passt')}>Passt</button>
-            <button type="button" className="knopf" onClick={() => antworten('aendern')}>Ändern</button>
+            <button type="button" className="knopf haupt" disabled={laeuft} onClick={() => antworten('passt')}>Passt</button>
+            <button type="button" className="knopf" disabled={laeuft} onClick={() => antworten('aendern')}>Ändern</button>
           </>}
-        <button type="button" className="knopf leise" onClick={() => antworten('spaeter')}>Später</button>
+        <button type="button" className="knopf leise" disabled={laeuft} onClick={() => antworten('spaeter')}>Später</button>
       </div>
       {meldung && <p className="hinweis klein" role="status">{meldung}</p>}
     </article>

@@ -114,7 +114,7 @@ const ohneBericht = (z: { zustand?: string; bericht?: unknown; paket?: unknown }
 
 /** Audit 05.11. (4): Takt — Eingereihtes an den Hauptchat zustellen, sobald er frei ist (gebündelt, älteste zuerst; bei Fehler
  *  zurücklegen). Ergebnis: wie viele Texte zugestellt wurden. */
-export async function hauptchatZustellen(z: { hauptchat: V2Deps['hauptchat']; laeuftChat: V2Deps['laeuftChat']; nehmen: (u: User) => Promise<{ id: string; text: string; at: Date }[]>; zuruecklegen: (u: User, l: { id: string; text: string; at: Date }[]) => Promise<void>; senden: (u: User, conv: string, text: string) => Promise<Date>; log: V2Deps['log'] }, u: User): Promise<number> {
+export async function hauptchatZustellen(z: { hauptchat: V2Deps['hauptchat']; laeuftChat: V2Deps['laeuftChat']; nehmen: (u: User) => Promise<{ id: string; text: string; at: Date }[]>; zuruecklegen: (u: User, l: { id: string; text: string; at: Date }[]) => Promise<void>; quittieren?: (u: User, ids: string[]) => Promise<void>; senden: (u: User, conv: string, text: string) => Promise<Date>; log: V2Deps['log'] }, u: User): Promise<number> {
   const h = await z.hauptchat(u);
   if (!h || hauptchatSendet.has(u.id) || (await z.laeuftChat(u, h.conv).catch(() => true))) return 0;
   hauptchatSendet.add(u.id);
@@ -122,12 +122,13 @@ export async function hauptchatZustellen(z: { hauptchat: V2Deps['hauptchat']; la
     const l = await z.nehmen(u);
     if (!l.length) return 0;
     const s = [...l].sort((a, b) => +new Date(a.at) - +new Date(b.at));
-    const text = s.length === 1 ? s[0].text : `(Werkbank: ${s.length} Nachrichten von Knut kamen, während du gearbeitet hast — hier gesammelt, älteste zuerst.)\n\n${s.map((x) => x.text).join('\n\n---\n\n')}`;
+    const text = s.length === 1 ? s[0].text : `(Werkbank: ${s.length} Nachrichten aus der Werkbank 2.0 kamen, während du gearbeitet hast — hier gesammelt, älteste zuerst.)\n\n${s.map((x) => x.text).join('\n\n---\n\n')}`;
     try { await z.senden(u, h.conv, text); } catch (e: any) {
       await z.zuruecklegen(u, l);
       z.log('v2 hauptchat eingereiht fehler', { user: u.id, n: l.length, error: String(e?.message ?? e).slice(0, 160) });
       return 0;
     }
+    await z.quittieren?.(u, l.map((x) => x.id)).catch(() => {});
     z.log('v2 hauptchat eingereiht zugestellt', { user: u.id, n: l.length });
     return l.length;
   } finally { hauptchatSendet.delete(u.id); }

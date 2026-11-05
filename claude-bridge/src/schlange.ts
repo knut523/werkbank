@@ -75,7 +75,8 @@ export function wecke(): void {
 export async function warte(p: Omit<Platz, 'since' | 'grund'>, o: { frei: () => boolean; grund?: () => string; geschlossen: () => boolean; melde: (pos: number) => void; now?: () => number; takt?: number }): Promise<'start' | 'zu' | 'zeit'> {
   const now = o.now ?? Date.now;
   const alt = frueher.get(p.key);
-  const platz: Platz = { ...p, since: alt && alt.bis > Date.now() ? alt.since : now() };
+  const ankunft = now();
+  const platz: Platz = { ...p, since: alt && alt.bis > Date.now() ? alt.since : ankunft };
   frueher.delete(p.key);
   schlange.push(platz);
   speichern();
@@ -88,7 +89,7 @@ export async function warte(p: Omit<Platz, 'since' | 'grund'>, o: { frei: () => 
       if (pos === 1 && !startSperre && o.frei()) { gestartet = true; startSperre = true; return 'start'; }
       const g = o.grund?.() ?? platz.grund;
       if (g !== platz.grund) { platz.grund = g; speichern(); }
-      if (now() - platz.since > maxWarteMs()) return 'zeit';
+      if (now() - ankunft > maxWarteMs()) return 'zeit';   // Deckel je Verbindung, nicht ab dem gemerkten Platz (Gegenprüfung 05.11.)
       if (pos !== zuletzt) { zuletzt = pos; o.melde(pos); }
       await new Promise<void>((r) => {
         const f = () => { clearTimeout(t); wecker.delete(f); r(); };

@@ -127,9 +127,15 @@ test('Audit 05.11. (3): Schlange übersteht Neustart und Zeitdeckel — wer wied
   assert.equal(await z, 'zeit');
   if (alt === undefined) delete process.env.BRIDGE_QUEUE_MAX_MIN; else process.env.BRIDGE_QUEUE_MAX_MIN = alt;
   _leeren(); merkeIn(datei);
+  // Gegenprüfung 05.11. (Teil 1, B2): der alte Platz zählt für die Reihenfolge, NICHT für den Zeitdeckel — sonst liefe der
+  // Deckel beim Wiederkommen sofort ab (Schleife mit dem Auto-weiter ohne Abstand).
+  process.env.BRIDGE_QUEUE_MAX_MIN = '1';
+  t = 200_000;
   const z2 = warte({ key: 'z', userId: 'u', vorrang: false }, o());
-  await new Promise((r) => setTimeout(r, 10));
+  await new Promise((r) => setTimeout(r, 15));
   assert.equal(inSchlange('z')?.since, 100_000);
+  assert.ok(inSchlange('z'), 'wartet noch — kein sofortiger Zeitdeckel');
+  if (alt === undefined) delete process.env.BRIDGE_QUEUE_MAX_MIN; else process.env.BRIDGE_QUEUE_MAX_MIN = alt;
   zu = true; wecke(); await z2;
   _leeren(); merkeIn(null);
 });

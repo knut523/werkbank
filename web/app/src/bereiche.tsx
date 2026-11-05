@@ -26,12 +26,16 @@ export function MeinTag() {
   const [tag, setTag] = useState(heute());
   const { d, fehler, neu } = useDaten<{ blocks: TbBlock[]; tickets: { key: string; summary: string; status: string; duedate: string | null; overdue: boolean }[]; sprint: { label: string | null } | null; summary: Record<string, any> }>(`api/timebox?from=${tag}&days=1`);
   const [meldung, setMeldung] = useState<string | null>(null);
+  const [inArbeit, setInArbeit] = useState<string | null>(null);   // Gegenprüfung 05.11. (Teil 5): kein Umschalten aus altem Stand
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   const bl = d.blocks.filter((b) => b.date === tag).sort((a, b) => a.start - b.start);
   const erledigt = async (b: TbBlock) => {
+    if (inArbeit) return;
+    setInArbeit(b.id);
     try { await fetch(`api/timebox/${encodeURIComponent(b.id)}`, { method: 'PATCH', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-werkbank': '1' }, body: JSON.stringify({ state: b.state === 'erledigt' ? 'geplant' : 'erledigt' }) }).then((r) => { if (!r.ok) throw new Error(`Fehler ${r.status}`); }); neu(); }
     catch (e: any) { setMeldung(String(e?.message ?? e)); }
+    finally { setTimeout(() => setInArbeit(null), 600); }
   };
   const aufMorgen = async () => {
     try { await schicke('api/timebox/carry', { date: tag }); setMeldung('Offene Blöcke liegen jetzt auf morgen.'); neu(); } catch (e: any) { setMeldung(String(e?.message ?? e)); }
@@ -43,7 +47,7 @@ export function MeinTag() {
       <Abschnitt id="t-bloecke" titel={`Zeitblöcke (${bl.length})`} erklaerung="Dein Plan für den Tag. Abhaken geht hier; Blöcke anlegen und verschieben in der alten Werkbank.">
         {bl.length ? <ul className="liste">{bl.map((b) => (
           <li key={b.id} className="zeile">
-            <label><input type="checkbox" checked={b.state === 'erledigt'} onChange={() => void erledigt(b)} /> <b>{uhr(b.start)}–{uhr(b.start + b.dur)}</b> {b.ticket ? `${b.ticket.key} · ${b.ticket.summary}` : b.title ?? '—'}</label>
+            <label><input type="checkbox" checked={b.state === 'erledigt'} disabled={!!inArbeit} onChange={() => void erledigt(b)} /> <b>{uhr(b.start)}–{uhr(b.start + b.dur)}</b> {b.ticket ? `${b.ticket.key} · ${b.ticket.summary}` : b.title ?? '—'}</label>
           </li>))}</ul> : <p className="leer">Für diesen Tag ist nichts geplant.</p>}
         {bl.some((b) => b.state === 'geplant' || !b.state) && <p><button type="button" className="knopf leise" onClick={() => void aufMorgen()}>Offenes auf morgen</button></p>}
         {meldung && <p className="hinweis klein" role="status">{meldung}</p>}
@@ -61,6 +65,7 @@ interface Karte { key: string; summary: string; status: string; assignee?: strin
 export function Board() {
   const [wer, setWer] = useState('');
   const [q, setQ] = useState('');
+  const [eingabe, setEingabe] = useState('');   // Gegenprüfung 05.11. (Teil 5): gesucht wird bei Enter, nicht je Taste
   const { d, fehler, neu } = useDaten<{ statuses: string[]; lanes: { key: string; name: string; columns: Record<string, Karte[]>; count: number }[]; owners: string[]; totals: { cards: number; overdue: number }; site?: string | null; sync?: { at?: string } | null }>(`api/board?owner=${encodeURIComponent(wer)}&q=${encodeURIComponent(q)}`);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
@@ -71,7 +76,7 @@ export function Board() {
       <p className="klein gedimmt">{mehrzahl(d.totals.cards, 'Ticket', 'Tickets')} · {d.totals.overdue} überfällig{d.sync?.at ? ` · Stand ${wann(d.sync.at)}` : ''} · nur lesend — ändern in Jira oder der alten Werkbank</p>
       <p className="klein">
         <label>Wer <select value={wer} onChange={(e) => setWer(e.target.value)}><option value="">alle</option>{d.owners.map((o) => <option key={o} value={o}>{o}</option>)}</select></label>{' '}
-        <label>Suche <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Key oder Titel" /></label>
+        <label>Suche <input type="search" value={eingabe} onChange={(e) => setEingabe(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') setQ(eingabe.trim()); }} onBlur={() => setQ(eingabe.trim())} placeholder="Key oder Titel, Enter" /></label>
       </p>
       {d.lanes.filter((l) => l.count).map((l) => (
         <Abschnitt key={l.key} id={`b-${l.key}`} titel={`${l.name} (${l.count})`} erklaerung="Ein Workstream mit seinen Tickets, nach Status.">
@@ -184,7 +189,7 @@ export function Sprint() {
   const { d: c, fehler, neu } = useDaten<{ cycles: { id: string; date: string; archived?: boolean }[] }>('api/sprint/cycles');
   const [id, setId] = useState<string | null>(null);
   const aktiv = id ?? c?.cycles.filter((x) => !x.archived).sort((a, b) => b.date.localeCompare(a.date))[0]?.id ?? null;
-  const { d } = useDaten<{ cycle: { id: string; date: string }; files: Record<string, { title?: string; status?: string | null; goal?: { goal?: string } | null; outcomes?: { id?: string; title?: string; owner?: string; date?: string }[] } | null>; overdue?: unknown[]; undated?: unknown[] }>(aktiv ? `api/sprint/${aktiv}` : null as any);
+  const { d, fehler: f2, neu: neu2 } = useDaten<{ cycle: { id: string; date: string }; files: Record<string, { title?: string; status?: string | null; goal?: { goal?: string } | null; outcomes?: { id?: string; title?: string; owner?: string; date?: string }[] } | null>; overdue?: unknown[]; undated?: unknown[] }>(aktiv ? `api/sprint/${aktiv}` : null);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!c) return <Laedt />;
   const NAME: Record<string, string> = { planning: 'Planung', review: 'Review', summary: 'Zusammenfassung' };
@@ -192,7 +197,7 @@ export function Sprint() {
     <div className="seite">
       <h1>Sprint</h1>
       <p className="klein"><label>Sprint <select value={aktiv ?? ''} onChange={(e) => setId(e.target.value)}>{c.cycles.map((x) => <option key={x.id} value={x.id}>{x.date}{x.archived ? ' (archiviert)' : ''}</option>)}</select></label></p>
-      {!d ? (aktiv ? <Laedt /> : <p className="leer">Noch kein Sprint angelegt.</p>) : <>
+      {f2 ? <Fehler text={f2} nochmal={neu2} /> : !d ? (aktiv ? <Laedt /> : <p className="leer">Noch kein Sprint angelegt.</p>) : <>
         {Object.entries(d.files ?? {}).filter(([, f]) => f).map(([k, f]) => (
           <Abschnitt key={k} id={`sp-${k}`} titel={NAME[k] ?? k} erklaerung={f!.status ? `Stand: ${f!.status}` : 'Datei des Sprints in der Wissenssammlung.'}>
             {f!.goal?.goal && <p><b>Ziel:</b> {f!.goal.goal}</p>}

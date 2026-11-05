@@ -1116,9 +1116,11 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'> & { me
           try { mt = statSync(String(d.bericht)).mtimeMs; } catch { /* noch nicht da */ }
           const ls = new Date(d.lastSentAt ?? d.startedAt).getTime();
           if (zwischenMelden({ running: true, berichtMtime: mt, lastSentAt: ls, gemeldetFuer: d.zwischenGemeldetFuer ?? null })) {
-            await runs().updateOne({ _id: d._id }, { $set: { zwischenGemeldetFuer: ls } });
-            await deps.melde(u, d, `Zwischenergebnis: der Bericht von „${d.title}“ (${d._id}) liegt vor — der Unter-Chat arbeitet noch. ${String(d.bericht).replace(/^.*\/review-pakete\//, 'review-pakete/')}`).catch(() => false);
-            deps.log?.('orch zwischenergebnis gemeldet', { id: d._id });
+            // Gegenprüfung 05.11. (Teil 10): erst nach erfolgreicher Meldung vermerken — sonst ginge sie bei einem Fehler still verloren.
+            // false heißt „ohne Hauptchat in die Inbox gelegt“ — auch das ist gemeldet; nur ein Fehler (throw) lässt es offen.
+            const ok = await deps.melde(u, d, `Zwischenergebnis: der Bericht von „${d.title}“ (${d._id}) liegt vor — der Unter-Chat arbeitet noch. ${String(d.bericht).replace(/^.*\/review-pakete\//, 'review-pakete/')}`).then(() => true, () => false);
+            if (ok) await runs().updateOne({ _id: d._id }, { $set: { zwischenGemeldetFuer: ls } });
+            deps.log?.('orch zwischenergebnis', { id: d._id, gemeldet: ok });
           }
         }
         if (d.lastStatus === 'done' && d.doneAt && d.bericht && new Date(d.doneAt).getTime() > new Date(d.lastSentAt ?? d.startedAt).getTime() && !sd?.running && (sd?.turn?.end ?? 0) <= new Date(d.doneAt).getTime()) {
