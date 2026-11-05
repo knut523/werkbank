@@ -480,7 +480,8 @@ async function autoDelta(e: TickerEvent, s: TickerSettings, now: Date): Promise<
   const autor = String(e.actor ?? '').toLowerCase();
   if (!autor || autor === ME || !s.allow.map((a) => a.toLowerCase()).includes(autor)) return null;
   const letzte: any = (await reviewsCol().find({ repo: e.repo, number: e.number, status: 'fertig' }).sort({ doneAt: -1 }).limit(1).toArray())[0];
-  if (!letzte?.posted || letzte.head === e.head) return null;
+  // „Ungepostet wegen veraltetem Kopf“ (ohnePost 'neu') zählt wie gepostet: das Review ist nie am PR angekommen und soll nachgeholt werden.
+  if (!(letzte?.posted || letzte?.ohnePost === 'neu') || letzte.head === e.head) return null;
   // Hat der Autor seit dem letzten Review „erledigt“ gemeldet, gilt die Nachprüfung (Paket 223, sofort, ohne Bündeln).
   if (await tickerCol().findOne({ kind: 'erledigt', repo: e.repo, number: e.number, at: { $gte: new Date(letzte.doneAt ?? letzte.createdAt ?? 0).toISOString() } })) return null;
   const id = `${prKey(e.repo, e.number)}@${e.head}`;
@@ -488,9 +489,34 @@ async function autoDelta(e: TickerEvent, s: TickerSettings, now: Date): Promise<
   try {
     await reviewsCol().insertOne({ _id: id as any, repo: e.repo, number: e.number, title: e.title, url: e.prUrl, head: e.head, trigger: 'delta', by: autor, event: e._id, ownerId: s.ownerId, status: 'wartet', createdAt: now, day: vienna(now).date, deep: false, retryAt: start, vorherHead: letzte.head });
   } catch (x: any) { if (x?.code !== 11000) throw x; return 0; }
-  const alt = await reviewsCol().updateMany({ repo: e.repo, number: e.number, trigger: 'delta', status: 'wartet', _id: { $ne: id as any } }, { $set: { status: 'übersprungen', note: `zusammengefasst: neuer Stand ${e.head.slice(0, 7)} kam innerhalb von ${DELTA_BUENDEL_MS / 60_000} min` } });
+  const alt = await reviewsCol().updateMany({ repo: e.repo, number: e.number, status: 'wartet', $or: [{ trigger: 'delta' }, { nachNeu: { $gte: 1 } }], _id: { $ne: id as any } }, { $set: { status: 'übersprungen', note: `zusammengefasst: neuer Stand ${e.head.slice(0, 7)} kam innerhalb von ${DELTA_BUENDEL_MS / 60_000} min` } });
   await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: `Delta-Review eingereiht (seit Stand ${String(letzte.head).slice(0, 7)}; startet frühestens in ${DELTA_BUENDEL_MS / 60_000} min${alt.modifiedCount ? ', vorige Pushes zusammengefasst' : ''})` } });
   return 1;
+}
+
+/** Höchstens so viele automatische Wiederholungen je PR und Tag nach „neuer Stand seit dem Review“ (gegen Endlosschleifen bei Dauer-Pushes). */
+export const NEU_MAX_JE_TAG = 3;
+
+/**
+ * Ein fertiges Review wurde nicht gepostet, weil der PR inzwischen einen neuen Kopf hat (prreview.ts: PostErgebnis 'neu', oder der
+ * Start fand den Kopf verschoben): für den aktuellen Kopf automatisch einen neuen Lauf einreihen (Knut 05.11.: admin#390, durable-func#118,
+ * admin#393 blieben sonst ohne Review, bis neu getaggt wurde). Auslöser und Person bleiben (tag → tag, delta → delta), Start erst nach
+ * DELTA_BUENDEL_MS, ein noch wartender früherer Wiederholungslauf desselben PRs geht darin auf. 'eingereiht' | 'vorhanden' (Kopf schon
+ * eingereiht) | 'gedeckelt' (NEU_MAX_JE_TAG erreicht) | 'aus' (Auto-Review aus / Repo nicht freigegeben).
+ */
+export async function nachNeuemKopf(r: any, headNeu: string, s: Pick<TickerSettings, 'autoReview' | 'ownerId'>, now = new Date()): Promise<'eingereiht' | 'vorhanden' | 'gedeckelt' | 'aus'> {
+  if (!s.autoReview || !(r.ownerId ?? s.ownerId) || !headNeu || headNeu === r.head || !reviewErlaubt(r.repo)) return 'aus';
+  const id = `${prKey(r.repo, r.number)}@${headNeu}`;
+  if (await reviewsCol().findOne({ _id: id as any }, { projection: { _id: 1 } })) return 'vorhanden';
+  const tag = vienna(now).date;
+  if (await reviewsCol().countDocuments({ repo: r.repo, number: r.number, nachNeu: { $gte: 1 }, day: tag }) >= NEU_MAX_JE_TAG) return 'gedeckelt';
+  const delta = r.trigger === 'delta';
+  const von = delta ? 'Delta-Review' : `@review von ${r.by ?? '?'}`;
+  try {
+    await reviewsCol().insertOne({ _id: id as any, repo: r.repo, number: r.number, title: r.title ?? '', url: r.url ?? `https://github.com/${r.repo}/pull/${r.number}`, head: headNeu, trigger: delta ? 'delta' : 'tag', by: r.by ?? null, event: r.event ?? null, ownerId: r.ownerId ?? s.ownerId, status: 'wartet', createdAt: now, day: tag, deep: !!r.deep, retryAt: new Date(now.getTime() + DELTA_BUENDEL_MS), nachNeu: Number(r.nachNeu ?? 0) + 1, vorherHead: r.head, note: `neuer Stand nach ${von} — automatisch erneut eingereiht (Kopf ${headNeu.slice(0, 7)}, vorher ${String(r.head).slice(0, 7)})` });
+  } catch (x: any) { if (x?.code !== 11000) throw x; return 'vorhanden'; }
+  await reviewsCol().updateMany({ repo: r.repo, number: r.number, status: 'wartet', nachNeu: { $gte: 1 }, _id: { $ne: id as any } }, { $set: { status: 'übersprungen', note: `zusammengefasst: neuer Stand ${headNeu.slice(0, 7)}` } });
+  return 'eingereiht';
 }
 
 /**
