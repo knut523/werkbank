@@ -4,6 +4,7 @@
 // Was keine Frage ist (Pflege, Schlange, Altbestand, Meeting-Vorschläge), bleibt eine Inbox-Zeile unter „Sonstiges“. Rein.
 import type { InboxEintrag } from './inbox.ts';
 import { klartext, frageForm, empfehlungAus, type Form } from './klartext.ts';
+import { klasseVon, type Klasse } from './stufe.ts';
 
 export type Antwort = 'ja' | 'nein' | 'anders' | 'spaeter';
 export interface Frage {
@@ -34,6 +35,8 @@ export interface Frage {
   antworten: Antwort[];
   /** Wie viele Unter-Chats auf diese Antwort warten. */
   blockiert: number;
+  /** Plan §23 T1 (Knut 05.11.): knut → „Für dich“; gewichtig → Hauptchat nach Council; technisch → sofort nach Empfehlung. */
+  triage?: { klasse: Klasse; grund: string };
   /** R30b S5: Klasse einer „Braucht Knut“-Zeile (nur mit WERKBANK_BRAUCHT_DICH), sonst null bzw. fehlt. */
   klasse?: 'aktion' | 'entscheidung' | null;
   /** (a) aus harter Regel (Nachbesserung 02.11.): warum nur Knut (zugang, datenbank, geld, recht, extern, entscheidung). */
@@ -134,6 +137,12 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
     const haengt = f.stufe === 'wichtig' && f.klasse !== 'aktion' && f.blockiert > 0;
     f.zeigWichtig = haengt;
     f.wichtigGrund = haengt ? `${f.blockiert === 1 ? 'ein Unter-Chat wartet' : `${f.blockiert} Unter-Chats warten`} auf die Antwort${f.wartetSeit ? ` (seit ${new Date(f.wartetSeit).toLocaleDateString('de-AT', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Vienna' })})` : ''}` : null;
+  }
+  // Plan §23 T1: Klasse je Frage (Aufgaben des Hauptchats sind nie Knut-Fragen; „vom Strang als Knut muss markiert“ stuft hoch).
+  for (const f of fragen) {
+    const markiert = f.stufe === 'wichtig' && /markiert/.test(f.stufeGrund ?? '') ? 'wichtig' : null;
+    f.triage = f.klasse === 'aktion' ? { klasse: 'technisch', grund: 'Aufgabe des Hauptchats' }
+      : klasseVon({ text: [f.titel, f.worum, ...f.optionen].join(' '), markiert, art: f.art, empfehlung: f.empfehlung });
   }
   // Wichtige oben, sonst die Reihenfolge der Inbox (blockiert am meisten, wartet am längsten); Gruppen zusammenhalten.
   const rang = new Map<string, number>();

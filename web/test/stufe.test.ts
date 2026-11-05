@@ -83,3 +83,29 @@ test('Log und Widerruf: nur automatische Annahmen, einmal, nicht nach einem Comm
   assert.equal(widerrufbar({ ...z, auto: false }, { gebaut: false }).ok, false);
   assert.match(widerrufText(z, 'Blau'), /Korrektur von Knut: .*q-a.*Stattdessen: Blau/s);
 });
+
+// Plan §23 T1 (Knut 05.11., „Triage statt Warteschlange“): drei Klassen. Nur „knut“ landet bei Knut; „gewichtig“ entscheidet der
+// Hauptchat nach einem Council-Check; „technisch“ wird sofort nach Empfehlung entschieden.
+test('T1: Klasse knut — Geld, Recht, Zugang, Außenwirkung, Release/nach außen, „Knut muss“, ohne Empfehlung', async () => {
+  const { klasseVon } = await import('../server/stufe.ts');
+  const k = (text: string, o: any = {}) => klasseVon({ text, empfehlung: 'A', ...o }).klasse;
+  assert.equal(k('Welches Budget für die Kampagne?'), 'knut');
+  assert.equal(k('AVV mit dem Dienstleister unterschreiben?'), 'knut');
+  assert.equal(k('Christoph Zugriff auf das Repo geben?'), 'knut');
+  assert.equal(k('Lisa eine Berechtigung für die Roadmap freigeben?'), 'knut');
+  assert.equal(k('Text der Website-Startseite so übernehmen?'), 'knut');
+  assert.equal(k('PR öffnen und pushen?'), 'knut');
+  assert.equal(k('Release 33 heute ausrollen?'), 'knut');
+  assert.equal(k('Reihenfolge der Tests egal', { markiert: 'wichtig' }), 'knut');
+  assert.equal(k('Welche Bibliothek für die PDF-Vorschau?', { empfehlung: null }), 'knut', 'ohne Empfehlung kann niemand außer Knut entscheiden');
+  assert.equal(k('x', { art: 'push' }), 'knut');
+});
+
+test('T1: Klasse gewichtig (Council) und technisch; Grund wird mitgeliefert', async () => {
+  const { klasseVon } = await import('../server/stufe.ts');
+  assert.deepEqual(klasseVon({ text: 'Datenmodell der Fragen umbauen (Migration)?', empfehlung: 'ja' }), { klasse: 'gewichtig', grund: 'Architektur/Migration' });
+  assert.equal(klasseVon({ text: 'Alte Testdaten endgültig löschen?', empfehlung: 'ja' }).klasse, 'gewichtig');
+  assert.deepEqual(klasseVon({ text: 'Soll die Liste nach Datum oder Name sortiert werden?', empfehlung: 'nach Datum' }), { klasse: 'technisch', grund: 'technisch/intern mit Empfehlung' });
+  assert.equal(klasseVon({ text: 'Regex mit Wortgrenze oder Lookahead?', empfehlung: 'Lookahead' }).klasse, 'technisch');
+  assert.equal(klasseVon({ text: 'Variablenname umbenennen?', empfehlung: 'ja', markiert: 'normal' }).klasse, 'technisch');
+});

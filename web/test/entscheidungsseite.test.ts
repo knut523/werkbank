@@ -107,3 +107,15 @@ test('R30b S5: „Braucht dich“ auf der Entscheidungsseite — (b) „nichts f
   assert.equal(a.klasse, 'entscheidung'); assert.match(a.worum, /Entscheidung von dir/);
   assert.equal(alt.klasse, null); assert.match(alt.worum, /wartet auf dich/, 'Schalter aus: wie bisher');
 });
+
+test('Plan §23 T1: jede Frage trägt ihre Triage-Klasse mit Grund', () => {
+  const ib = baueInbox({ ...leer,
+    karten: [karte('t1', 'Flex', [{ id: 'D1', frage: 'Liste nach Datum sortieren?', empfehlung: 'Ja' }, { id: 'D2', frage: 'Budget für Anzeigen freigeben?', empfehlung: 'Ja, 500 €' },
+      { id: 'D3', frage: 'Datenmodell migrieren?', empfehlung: 'Ja' }, { id: 'D4', frage: 'Tooltip zeigen?', empfehlung: null }])] }, { now });
+  const { fragen } = fragenAus(ib.eintraege);
+  const k = (teil: string) => fragen.find((f) => f.teil === teil)!.triage;
+  assert.deepEqual(k('D1'), { klasse: 'technisch', grund: 'technisch/intern mit Empfehlung' });
+  assert.equal(k('D2').klasse, 'knut');
+  assert.equal(k('D3').klasse, 'gewichtig');
+  assert.deepEqual(k('D4'), { klasse: 'knut', grund: 'keine Empfehlung' });
+});

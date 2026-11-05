@@ -60,3 +60,29 @@ export function autoAb(o: { stufe: Stufe; empfehlung: string | null | undefined;
 export const autoAnnahmeAn = (env = process.env) => env.WERKBANK_AUTO_ANNAHME !== '0';
 /** Frist in Stunden (Vorgabe 24; nur für Tests/Notfälle anders). */
 export const annahmeMs = (env = process.env) => { const h = Number(env.WERKBANK_AUTO_ANNAHME_H ?? 24); return (Number.isFinite(h) && h >= 0 ? h : 24) * 3600_000; };
+
+// ---------- Plan §23 T1 (Knut 05.11., „Triage statt Warteschlange“): drei Klassen ----------
+// knut       — Geld, Recht, Zugang/Berechtigung, Außenwirkung, Release/Push/nach außen, „Knut muss“, oder ohne Empfehlung.
+//              Nur diese landen in „Für dich“; der Unter-Chat wartet darauf.
+// gewichtig  — technisch, aber mit großer Wirkung (Architektur, Migration, Datenmodell, Löschen): der Hauptchat entscheidet
+//              nach einem Council-Check (HALTEN/ÄNDERN/AN KNUT).
+// technisch  — alles andere mit Empfehlung: gilt sofort, steht im Protokoll, umkehrbar.
+// Wie stufeVon eine feste Regel, kein Modell; ein Strang kann zu „knut“ hochstufen, nie herunter.
+export type Klasse = 'knut' | 'gewichtig' | 'technisch';
+
+const ZUGANG = wort(String.raw`zugang|zugänge|zugriff|berechtigung|freigeb|freischalt|zugangsdaten|passwort|token(?![\p{L}])|schlüssel|konto|account|admin-recht|rolle(?:n)? vergeb`);
+const GEWICHTIG: [RegExp, string][] = [
+  [wort(String.raw`architektur|migration|migrier|schema|datenmodell|datenbank|breaking`), 'Architektur/Migration'],
+  [wort(String.raw`lösch|entfern\w* (?:endgültig|dauerhaft)|endgültig|unwiderruflich|datenverlust|zurücksetz|force[\s-]?push`), 'Löschen/nicht umkehrbar'],
+];
+
+export function klasseVon(e: StufeEingabe & { empfehlung?: string | null }): { klasse: Klasse; grund: string } {
+  if (e.art === 'push') return { klasse: 'knut', grund: 'Push/Release/Merge' };
+  if (e.markiert === 'wichtig') return { klasse: 'knut', grund: 'vom Strang als „Knut muss“ markiert' };
+  for (const [re, grund] of REGELN) if (grund !== 'Architektur/Migration' && re.test(e.text)) return { klasse: 'knut', grund };
+  if (ZUGANG.test(e.text)) return { klasse: 'knut', grund: 'Zugang/Berechtigung' };
+  if (NACH_AUSSEN.test(e.text)) return { klasse: 'knut', grund: 'geht nach außen' };
+  if (!String(e.empfehlung ?? '').trim()) return { klasse: 'knut', grund: 'keine Empfehlung' };
+  for (const [re, grund] of GEWICHTIG) if (re.test(e.text)) return { klasse: 'gewichtig', grund };
+  return { klasse: 'technisch', grund: 'technisch/intern mit Empfehlung' };
+}
