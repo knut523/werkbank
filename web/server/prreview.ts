@@ -325,9 +325,17 @@ export function grundEn(g: string): string {
   return 'temporary error';
 }
 
+/** Kurzer englischer Grund für die Statuszeile, wenn das Posten an GitHub scheitert (kein GitHub-Rohtext im PR). */
+export function postGrundEn(g: string): string {
+  const http = /GitHub antwortet mit (\d{3})/.exec(g)?.[1];
+  if (/Rate-Limit|rate limit|abuse/i.test(g)) return `GitHub rate limit${http ? ` (HTTP ${http})` : ''}`;
+  if (http) return `GitHub refused the post (HTTP ${http})`;
+  return 'posting failed';
+}
+
 export type StatusArt = 'queued' | 'running' | 'retry' | 'failed' | 'skipped' | 'done';
 /** Rein: die eine Zeile der Statusmeldung (englisch). */
-export function statusZeile(a: { art: StatusArt; position?: number; tiefe?: string; eta?: number; grund?: string; minuten?: number; versuch?: number; empfehlung?: string | null; url?: string | null; gepostet?: boolean;
+export function statusZeile(a: { art: StatusArt; position?: number; tiefe?: string; eta?: number; grund?: string; minuten?: number; versuch?: number; empfehlung?: string | null; url?: string | null; gepostet?: boolean; postGrund?: string;
   /** nur bei deep: true = Tests laufen auf der VM, Text = Grund für statisch */ tests?: true | string }): string {
   const deep = a.tiefe !== 'deep' || a.tests === undefined ? '' : a.tests === true ? ' (tests run on the workspace VM, not network-isolated)' : ` (static deep review — ${a.tests})`;
   const tiefe = `depth ${a.tiefe ?? 'by size'}${deep}`;
@@ -339,6 +347,7 @@ export function statusZeile(a: { art: StatusArt; position?: number; tiefe?: stri
     case 'skipped': return `⏭️ Automated review skipped — ${a.grund ?? 'PR already merged'} ${MARKE}`;
     case 'done': return a.gepostet
       ? `✅ Automated review done · recommendation: ${a.empfehlung ?? 'comment'}${a.url ? ` · ${a.url}` : ''} ${MARKE}`
+      : a.postGrund ? `✅ Automated review done — but it could not be posted: ${a.postGrund}; Knut will follow up ${MARKE}`
       : `✅ Automated review done — the result waits for Knut's check before it is posted ${MARKE}`;
   }
 }
@@ -736,7 +745,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       await meldeStatus(r, statusZeile({ art: 'skipped', grund }), deps, now);
     }
     else {
-      await meldeStatus(r, statusZeile({ art: 'done', gepostet: false, empfehlung: k.empfehlung }), deps, now);
+      await meldeStatus(r, statusZeile({ art: 'done', gepostet: false, empfehlung: k.empfehlung, ...(pe.art === 'fehler' ? { postGrund: postGrundEn(pe.grund) } : {}) }), deps, now);
       if (pe.art !== 'aus') await meldeKnut({ ...r, ...set }, `nicht gepostet: ${pe.grund}${r.nb ? ' (auch nach dem Nachfass)' : ''}`, deps, now);
     }
   }

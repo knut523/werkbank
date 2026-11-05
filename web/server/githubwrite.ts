@@ -14,6 +14,45 @@ export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
 const API = () => (process.env.WERKBANK_GITHUB_API || 'https://api.github.com').replace(/\/$/, '');
 const REPO_RE = /^[\w.-]{1,100}\/[\w.-]{1,100}$/;
 
+
+// Folgefix 05.11.2026 (#388: 08:5x 403, derselbe Token 11:4x 200 → sekundäres Rate-Limit): GitHubs Fehlertext bleibt erhalten, ein
+// Rate-Limit-403/429 wird einmal nach `retry-after` (bzw. Reset, sonst 60 s; höchstens 5 min) wiederholt. Alles andere scheitert
+// sofort mit dem echten Grund.
+const RETRY_MAX_S = 300, RETRY_STANDARD_S = 60;
+let schlaf = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+/** Nur für Tests: Wartefunktion ersetzen. */
+export const setzeSchlaf = (f: (ms: number) => Promise<void>) => { schlaf = f; };
+
+async function ghFehler(res: Response, vorgabe: string): Promise<{ text: string; wartenS: number | null }> {
+  const j: any = await res.json().catch(() => ({}));
+  const msg = typeof j?.message === 'string' ? j.message.replace(/\s+/g, ' ').slice(0, 300) : '';
+  const doku = typeof j?.documentation_url === 'string' ? j.documentation_url.slice(0, 200) : '';
+  const ra = Number(res.headers.get('retry-after'));
+  const rest = res.headers.get('x-ratelimit-remaining'), reset = Number(res.headers.get('x-ratelimit-reset'));
+  const limit = (res.status === 403 || res.status === 429) && (Number.isFinite(ra) && res.headers.has('retry-after') || rest === '0' || /rate limit|abuse/i.test(msg));
+  let wartenS: number | null = null;
+  const teile: string[] = [];
+  if (limit) {
+    wartenS = res.headers.has('retry-after') && Number.isFinite(ra) ? Math.max(0, Math.ceil(ra)) : Number.isFinite(reset) && reset > 0 && rest === '0' ? Math.max(0, Math.ceil(reset - Date.now() / 1000)) : RETRY_STANDARD_S;
+    if (res.headers.has('retry-after')) teile.push(`retry-after ${Math.ceil(ra)} s`);
+    else if (rest === '0' && Number.isFinite(reset)) teile.push(`x-ratelimit-reset in ${wartenS} s`);
+  }
+  const kopf = limit ? 'Rate-Limit: ' : '';
+  const text = `GitHub antwortet mit ${res.status} (${kopf}${msg || vorgabe}${teile.length ? ` · ${teile.join(' · ')}` : ''}${doku ? ` · ${doku}` : ''})`;
+  return { text, wartenS };
+}
+
+/** fetch mit GitHub-Fehlertext und einer Wiederholung bei Rate-Limit. `vorgabe` = Hinweis, falls GitHub keinen Text liefert. */
+async function senden(url: string, init: RequestInit, vorgabe: (status: number) => string): Promise<Response> {
+  for (let versuch = 0; ; versuch++) {
+    const res = await fetch(url, init);
+    if (res.ok) return res;
+    const f = await ghFehler(res, vorgabe(res.status));
+    if (versuch === 0 && f.wartenS !== null && f.wartenS <= RETRY_MAX_S) { await schlaf(f.wartenS * 1000); continue; }
+    throw new Error(f.text);
+  }
+}
+
 export const schreibenAus = (env = process.env) => env.WERKBANK_GITHUB_KOMMENTAR === 'off';
 
 // Plan 286: auch der `@fix`-Push (prfix.ts, nur WirStrom1 nach pushPruefung) holt sein Token hier — nur im Speicher.
@@ -37,12 +76,11 @@ export async function postReview(r: { repo: string; number: number; head: string
   if (!body.trim()) throw new Error('Kein Text.');
   const token = await writeToken(r.repo);
   if (!token) throw new Error('Kein Schreibtoken für dieses Repo (Credential-Helper antwortet nicht).');
-  const res = await fetch(`${API()}/repos/${r.repo}/pulls/${r.number}/reviews`, {
+  const res = await senden(`${API()}/repos/${r.repo}/pulls/${r.number}/reviews`, {
     method: 'POST', signal: AbortSignal.timeout(30_000), redirect: 'error',
     headers: { authorization: `bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'olaf-werkbank' },
     body: JSON.stringify({ commit_id: r.head, body, event }),
-  });
-  if (!res.ok) throw new Error(`GitHub antwortet mit ${res.status}${res.status === 422 ? ' (Stand passt nicht mehr oder eigener PR)' : res.status === 403 || res.status === 404 ? ' (keine Schreibrechte auf dieses Repo)' : ''}`);
+  }, (st) => st === 422 ? 'Stand passt nicht mehr oder eigener PR' : 'ohne Fehlertext');
   const j: any = await res.json().catch(() => ({}));
   return { url: typeof j.html_url === 'string' ? j.html_url : null };
 }
@@ -55,12 +93,11 @@ export async function statusKommentar(r: { repo: string; number: number }, body:
   const token = await writeToken(r.repo);
   if (!token) throw new Error('Kein Schreibtoken für dieses Repo (Credential-Helper antwortet nicht).');
   const url = id === null ? `${API()}/repos/${r.repo}/issues/${r.number}/comments` : `${API()}/repos/${r.repo}/issues/comments/${id}`;
-  const res = await fetch(url, {
+  const res = await senden(url, {
     method: id === null ? 'POST' : 'PATCH', signal: AbortSignal.timeout(30_000), redirect: 'error',
     headers: { authorization: `bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'olaf-werkbank' },
     body: JSON.stringify({ body }),
-  });
-  if (!res.ok) throw new Error(`GitHub antwortet mit ${res.status}${res.status === 403 || res.status === 404 ? ' (keine Schreibrechte auf dieses Repo)' : ''}`);
+  }, () => 'ohne Fehlertext');
   const j: any = await res.json().catch(() => ({}));
   if (!Number.isInteger(j.id)) throw new Error('GitHub lieferte keine Kommentar-Kennung.');
   return { id: j.id, url: typeof j.html_url === 'string' ? j.html_url : null };
