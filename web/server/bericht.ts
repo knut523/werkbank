@@ -7,7 +7,9 @@ import { homedir } from 'node:os';
 
 export const reviewDir = () => process.env.WERKBANK_REVIEW_DIR || join(process.env.HOME || homedir(), 'work', 'knut', 'review-pakete');
 const MAX = 200 * 1024;
-const RE = /(?:(?:~|\/home\/[^/\s`'"]+)\/work\/knut\/)?review-pakete\/(\d{2,4}-[\w.-]+)\/bericht\.md/g;
+// Plan §23 T7 (Fall b65de461, 05.11.): auch Pakete ohne Nummer (`bot-lisa-1029`) und eine Ebene tiefer (`…/cs0511/bericht.md`) —
+// weiterhin ohne „..“, ohne Punkt am Anfang, höchstens eine Unterebene; gelesen wird ohnehin nur unter reviewDir (openSafe).
+const RE = /(?:(?:~|\/home\/[^/\s`'"]+)\/work\/knut\/)?review-pakete\/((?:\d{2,4}-[\w.-]+|[a-z][a-z0-9-]*)(?:\/[a-z0-9][\w-]*)?)\/bericht\.md/g;
 
 /** Erster (letzter = true: letzter) Bericht-Pfad in den Texten, als absoluter Pfad unter reviewDir — oder null. */
 export function findBericht(texts: (string | null | undefined)[], letzter = false): string | null {

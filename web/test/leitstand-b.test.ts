@@ -105,3 +105,10 @@ test('Gruppierung (G6, B-4, B-27): gleicher Name = eine Gruppe, neue nach > 14 T
   assert.deepEqual(g.erledigt.map((x) => x.lauf), ['Alt']);
   assert.deepEqual(groupStrands([s({ id: 'z', lauf: 'Uralt', day: 0, knutReviewedAt: new Date() })], T0 + 40 * D).erledigt, [], 'Erledigt nur 14 Tage');
 });
+
+test('Plan §23 T7 (Fall b65de461): Bericht auch in Paketen ohne Nummer und eine Ebene tiefer — weiter ohne „..“', () => {
+  assert.equal(findBericht(['Bericht: ~/work/knut/review-pakete/bot-lisa-1029/cs0511/bericht.md']), join(DIR, 'bot-lisa-1029', 'cs0511', 'bericht.md'));
+  assert.equal(findBericht(['review-pakete/436-werkbank-2/runde7/bericht.md']), join(DIR, '436-werkbank-2', 'runde7', 'bericht.md'));
+  assert.equal(findBericht(['review-pakete/bot-lisa-1029/bericht.md']), join(DIR, 'bot-lisa-1029', 'bericht.md'));
+  assert.equal(findBericht(['review-pakete/bot/../../etc/bericht.md', 'review-pakete/a/b/c/bericht.md', 'review-pakete/.x/bericht.md']), null, 'kein .., höchstens eine Ebene, kein Punkt am Anfang');
+});
