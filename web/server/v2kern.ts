@@ -78,7 +78,11 @@ export function jetztAuswahl(fragen: Frage[], now = Date.now()): { f: Frage; gru
 const ANTWORT_REIHE: V2Antwort[] = ['ja', 'anders', 'nein', 'spaeter'];
 
 /** Eine Frage als Karte der 2.0. `strand` = Unter-Chat, aus dem sie kommt (Link auf seine Ansicht). */
-export function karteAusFrage(f: Frage, o: { grund: string; strand: string | null; strandTitel: string | null; altUrl: string }): V2Karte {
+/** Audit 05.11. (7): Push-Freigabe in der 2.0 (Seite mit Commits/Diff, gebunden an den gesehenen Stand) — löst Council B4 ab, darum
+ *  nur mit WERKBANK_V2_FREIGABE=1 (Knut entscheidet). Der Push selbst bleibt beim Agenten über das Gate. */
+export const v2FreigabeAn = (env = process.env) => env.WERKBANK_V2_FREIGABE === '1';
+
+export function karteAusFrage(f: Frage, o: { grund: string; strand: string | null; strandTitel: string | null; altUrl: string; v2Freigabe?: boolean }): V2Karte {
   const weg = antwortWeg(f);
   const freigabe = istFreigabe(f);
   let antworten: V2Antwort[] = weg === 'hier' ? ANTWORT_REIHE.filter((a) => (f.antworten as string[]).includes(a) || a === 'anders') : [];
@@ -86,6 +90,8 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
   // „Nein“ nur bei echten Ja/Nein-Fragen — sonst ist „Anders: …“ der Weg (Knut: Empfehlung + Ja + eigener Text).
   if (f.form !== 'janein') antworten = antworten.filter((a) => a !== 'nein');
   const links: V2Link[] = [];
+  const hierFrei = freigabe && !!o.v2Freigabe && !!o.strand;
+  if (hierFrei) links.push({ label: 'Ansehen und freigeben', url: `/v2/freigabe/${o.strand}` });
   if (o.strand) links.push({ label: o.strandTitel ? `Unter-Chat „${kurz(o.strandTitel, 60)}“` : 'Unter-Chat ansehen', url: `/v2/arbeit/${o.strand}` });
   if (f.quelle?.url && /^https?:\/\//.test(f.quelle.url) && !o.strand) links.push({ label: f.quelle.text || 'Quelle', url: f.quelle.url, extern: true });
   if (f.quelle?.url?.startsWith('#/wissen/')) links.push({ label: f.quelle.text || 'Notiz', url: `/v2/dokument?vault=${encodeURIComponent(f.quelle.url.slice('#/wissen/'.length))}` });
@@ -108,7 +114,8 @@ export function karteAusFrage(f: Frage, o: { grund: string; strand: string | nul
     ['Woher', f.quelle?.text || '—'],
     ...(f.empfehlung ? [['Empfehlung', ohneFachwort(f.empfehlung, ge)] as [string, string]] : []),
     ...(f.optionen?.length ? [['Möglichkeiten', f.optionen.map((x) => ohneFachwort(x, ge)).join(' · ')] as [string, string]] : []),
-    ['Was passiert bei „Ja, so“', freigabe ? 'Hier nichts — Freigaben nach außen (z. B. auf GitHub) gibst du in der alten Werkbank, mit dem gesehenen Stand.'
+    ['Was passiert bei „Ja, so“', hierFrei ? 'Auf der Freigabe-Seite siehst du Commits und Änderungen; „Push freigeben“ gilt nur für genau diesen Stand — gepusht wird danach vom Agenten über das Gate, nie gemergt.'
+      : freigabe ? 'Hier nichts — Freigaben nach außen (z. B. auf GitHub) gibst du in der alten Werkbank, mit dem gesehenen Stand.'
       : f.empfehlung ? `Die Empfehlung geht als deine Antwort an ${o.strand ? 'den Unter-Chat' : f.quelle?.text || 'die Quelle'}; der Agent arbeitet damit weiter.`
         : 'Deine Antwort geht an die Quelle; der Agent arbeitet damit weiter.'],
     ['Warum oben', o.grund || 'wartet auf dich'],

@@ -410,6 +410,51 @@ function UnterChatStarten({ fertig }: { fertig: () => void }) {
   );
 }
 
+/** Audit 05.11. (7): Push-Freigabe in der 2.0 — derselbe Weg wie in der alten Werkbank (GET /api/review/:id, POST …/freigabe mit dem
+ *  gesehenen Kopf und Patch-Id). Freigegeben wird nur genau dieser Stand; pushen tut danach der Agent über das Gate, nie mergen. */
+interface RepoStand { branch: string | null; baseRef: string | null; head: string; clean: boolean; dirty: string[]; commits: { sha: string; subject: string }[]; more: number; stat: string; patchId: string | null; key: string | null; fehler?: undefined }
+export function Freigabe({ id }: { id: string }) {
+  const { d, fehler, neu } = useDaten<{ title: string; running: boolean; repo: RepoStand | { fehler: string }; freigaben: { id: string; head: string; branch: string; at: string; by: string; aktiv: boolean; pushedAt: string | null; revokedAt: string | null }[] }>(`api/review/${id}`);
+  const [meldung, setMeldung] = useState<string | null>(null);
+  const [laeuft, setLaeuft] = useState(false);
+  if (fehler) return <Fehler text={fehler} nochmal={neu} />;
+  if (!d) return <Laedt />;
+  const r = d.repo;
+  const frei = async () => {
+    if (r.fehler !== undefined) return;
+    setLaeuft(true); setMeldung(null);
+    try { await schicke(`api/review/${id}/freigabe`, { head: r.head, patchId: r.patchId }); setMeldung('Freigegeben — der Unter-Chat pusht jetzt über das Gate.'); neu(); }
+    catch (e: any) { setMeldung(String(e?.message ?? e)); } finally { setLaeuft(false); }
+  };
+  const zurueck = async (fid: string) => {
+    try { await schicke(`api/review/${id}/freigabe/${fid}/zurueck`, {}); setMeldung('Freigabe zurückgezogen.'); neu(); } catch (e: any) { setMeldung(String(e?.message ?? e)); }
+  };
+  const aktiv = d.freigaben.find((f) => f.aktiv && !f.pushedAt && r.fehler === undefined && f.head === r.head);
+  return (
+    <div className="seite">
+      <h1>Freigeben: {d.title}</h1>
+      <p className="klein"><a href={`v2/arbeit/${id}`}>← Unter-Chat</a></p>
+      {r.fehler !== undefined ? <p className="fehlertext">{r.fehler}</p> : <>
+        <Abschnitt id="f-stand" titel="Was gepusht würde" erklaerung="Genau dieser Stand: Zweig, Commits und geänderte Dateien gegenüber der Basis. Ändert sich der Stand, gilt die Freigabe nicht mehr.">
+          <p><b>{r.key ?? '?'}</b> · Zweig <code>{r.branch ?? '—'}</code> → Basis <code>{r.baseRef ?? '—'}</code> · Kopf <code>{r.head.slice(0, 7)}</code></p>
+          {!r.clean && <p className="fehlertext">Ungespeicherte Änderungen im Arbeitsordner ({r.dirty.length}) — erst committen lassen.</p>}
+          {d.running && <p className="hinweis">Der Unter-Chat arbeitet gerade — freigeben geht erst, wenn er fertig ist.</p>}
+          <ul className="liste">{r.commits.map((c) => <li key={c.sha}><code>{c.sha.slice(0, 7)}</code> {c.subject}</li>)}{r.more > 0 && <li className="gedimmt">… und {r.more} weitere</li>}</ul>
+          {r.stat && <pre className="kasten diffstat">{r.stat}</pre>}
+        </Abschnitt>
+        <div className="knoepfe">
+          {aktiv ? <p className="hinweis klein">Schon freigegeben ({wann(aktiv.at)}) — wartet auf den Push. <button type="button" className="knopf leise klein" onClick={() => void zurueck(aktiv.id)}>Zurückziehen</button></p>
+            : <button type="button" className="knopf haupt" disabled={laeuft || !r.clean || d.running || !r.patchId} onClick={() => void frei()}>{laeuft ? 'Gibt frei …' : `Push freigeben (${r.head.slice(0, 7)})`}</button>}
+        </div>
+      </>}
+      {meldung && <p className="hinweis klein" role="status">{meldung}</p>}
+      {d.freigaben.length > 0 && <Abschnitt id="f-frueher" titel="Frühere Freigaben" erklaerung="Was zu diesem Unter-Chat schon freigegeben oder gepusht wurde.">
+        <ul className="liste">{d.freigaben.map((f) => <li key={f.id} className="klein"><code>{f.head.slice(0, 7)}</code> {f.branch} · {wann(f.at)} · {f.pushedAt ? 'gepusht' : f.revokedAt ? 'zurückgezogen' : 'wartet auf den Push'}</li>)}</ul>
+      </Abschnitt>}
+    </div>
+  );
+}
+
 export function ArbeitDetail({ id }: { id: string }) {
   const app = useApp();
   const { d, fehler, neu } = useDaten<{ titel: string; satz: string; gruppe: string; zuletzt: string | null; stand: string; fragen: Karte[]; nachrichten: { id: string; rolle: string; text: string; at: string }[]; links: Link[];

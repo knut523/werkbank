@@ -8,7 +8,7 @@ import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungssei
 import { themaOf } from './themen.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { auszugUm, knutOffenJe, strangZuPr, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
+import { v2FreigabeAn, auszugUm, knutOffenJe, strangZuPr, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import { dodAus, fastFertig, endenAus, hauptsitzungPunkte } from './dod.ts';
 import { triageAn, councilWirkung, type Council, type CouncilUrteil } from './stufe.ts';
@@ -156,7 +156,7 @@ const zahlVon = (eintraege: InboxEintrag[]) => (triageAn() ? fuerKnut(fragenAus(
 
 function karten(d: V2Deps, fragen: Frage[], eintraege: InboxEintrag[], liste: { f: Frage; grund: string }[]) {
   const sj = strangJe(eintraege);
-  return liste.map(({ f, grund }) => { const s = sj.get(f.eintrag); return karteAusFrage(f, { grund, strand: s?.id ?? null, strandTitel: s?.titel ?? null, altUrl: `${d.altUrl}/entscheidungen` }); });
+  return liste.map(({ f, grund }) => { const s = sj.get(f.eintrag); return karteAusFrage(f, { grund, strand: s?.id ?? null, strandTitel: s?.titel ?? null, altUrl: `${d.altUrl}/entscheidungen`, v2Freigabe: v2FreigabeAn() }); });
 }
 
 /** Runde 5 (Knut B1): Sammelkarten tragen die gemeinten D-Fragen (Frage, Empfehlung, schon entschieden?) und den Bericht — sonst

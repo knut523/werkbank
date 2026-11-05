@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { hole, schicke } from './api.ts';
 import { Kontext, type AppKontext } from './kontext.ts';
 import { ChatLeiste } from './chat.tsx';
-import { Anmelden, AlleChats, Themen, Thema, Arbeit, ArbeitDetail, Begriffe, Dokument, Dokumente, Entscheidungen, Entschieden, Erledigt, Jetzt, Mehr, PrDetail, Prs, Suche } from './seiten.tsx';
+import { Anmelden, AlleChats, Themen, Thema, Arbeit, ArbeitDetail, Begriffe, Dokument, Dokumente, Entscheidungen, Entschieden, Erledigt, Jetzt, Mehr, PrDetail, Prs, Suche, Freigabe } from './seiten.tsx';
 import { Laedt, vergessen, vorab } from './teile.tsx';
 import { istIntern, logisch, rel } from './format.ts';
 
@@ -61,6 +61,7 @@ function Seite({ pfad, such }: { pfad: string; such: string }) {
   if (pfad.startsWith('v2/entschieden')) return <Entschieden />;
   if (pfad.startsWith('v2/suche')) return <Suche key={such} q={q.get('q') ?? ''} />;
   if ((m = pfad.match(/^v2\/arbeit\/([0-9a-f]{8})$/))) return <ArbeitDetail key={m[1]} id={m[1]} />;
+  if ((m = pfad.match(/^v2\/freigabe\/([0-9a-f]{8})$/))) return <Freigabe key={m[1]} id={m[1]} />;
   if (pfad.startsWith('v2/arbeit')) return <Arbeit />;
   if ((m = pfad.match(/^v2\/prs\/([^/]+)\/(\d+)$/))) return <PrDetail key={pfad} repo={decodeURIComponent(m[1])} nummer={m[2]} />;
   if (pfad.startsWith('v2/prs')) return <Prs key={such} wer={q.get('wer')} />;

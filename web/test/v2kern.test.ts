@@ -54,6 +54,17 @@ test('Karte: Freigabe hat keine Antwortknöpfe, sondern den Link in die alte Wer
   assert.ok(k.links.some((l) => l.url === '/v2/arbeit/abcd1234'));
 });
 
+test('Audit 05.11. (7): mit WERKBANK_V2_FREIGABE=1 führt die Freigabe-Karte auf die 2.0-Freigabeseite (Diff, gesehener Stand) — nie Antwortknöpfe', () => {
+  const f = frage('p', { art: 'push', antworten: ['ja', 'spaeter'], empfehlung: null });
+  const o = { grund: 'Freigabe wartet', strand: 'abcd1234', strandTitel: 'X', altUrl: 'http://alt/wb/entscheidungen' };
+  assert.ok(!karteAusFrage(f, o).links.some((l) => l.url.startsWith('/v2/freigabe/')), 'aus: wie bisher');
+  const k = karteAusFrage(f, { ...o, v2Freigabe: true });
+  assert.equal(k.links[0].url, '/v2/freigabe/abcd1234');
+  assert.match(k.links[0].label, /freigeben/i);
+  assert.deepEqual(k.antworten, [], 'kein Ja-Knopf an der Karte — nur auf der Seite mit dem Stand');
+  assert.match(k.erklaerung.find(([a]) => a.startsWith('Was passiert'))![1], /Freigabe-Seite/);
+});
+
 test('Karte: Entscheidung mit Empfehlung bietet „Ja, so“ und „Anders“, nie „Später“ als einzigen Weg', () => {
   const k = karteAusFrage(frage('q'), { grund: 'wartet auf dich', strand: null, strandTitel: null, altUrl: 'x' });
   assert.equal(k.art, 'entscheidung');
