@@ -491,6 +491,23 @@ test('Knut 05.11. 19:00 „Zum Ansehen“: Karte je fertigem Strang mit Stand un
   } finally { deps.unterchatListe = altListe; deps.strang = altStrang; delete deps.ansehenSpaeter; delete deps.ansehenAntwort; }
 });
 
+test('Audit 05.11. (6): Review-zu-Kopf — ein Review zu einem älteren Commit ist als veraltet markiert (Liste und Detail)', async () => {
+  const vorher = deps.letzteReviews;
+  deps.letzteReviews = async () => [{ repo: 'o/a', number: 1, status: 'fertig', empfehlung: 'approve', head: 'aaaaaaa1111', posted: { url: 'https://github.com/o/a/pull/1#r' }, doneAt: '2026-11-03T10:00:00Z' }];
+  deps.prKoepfe = async () => [{ _id: 'o/a#1', head: 'bbbbbbb2222' }];
+  try {
+    const z = (await rufe('GET', '/api/v2/prs?wer=alle', ADMIN)).b.zeilen[0];
+    assert.equal(z.review.aktuell, false);
+    assert.equal(z.review.kopf, 'aaaaaaa'); assert.equal(z.review.neuerKopf, 'bbbbbbb');
+    const p = (await rufe('GET', '/api/v2/prs/a/1', ADMIN)).b;
+    assert.equal(p.agent.aktuell, false); assert.equal(p.agent.neuerKopf, 'bbbbbbb');
+    deps.prKoepfe = async () => [{ _id: 'o/a#1', head: 'aaaaaaa1111' }];
+    assert.equal((await rufe('GET', '/api/v2/prs?wer=alle', ADMIN)).b.zeilen[0].review.aktuell, true);
+    delete deps.prKoepfe;
+    assert.equal((await rufe('GET', '/api/v2/prs?wer=alle', ADMIN)).b.zeilen[0].review.aktuell, null, 'ohne Kopf-Wissen: unbekannt');
+  } finally { deps.letzteReviews = vorher; delete deps.prKoepfe; }
+});
+
 test('Audit 05.11. (5): „fertig“ ohne Bericht ist nicht abnehmbar — Karte sagt es, „Passt“ nur ausdrücklich trotzdem', async () => {
   const altListe = deps.unterchatListe, altStrang = deps.strang;
   const antworten: any[] = [];

@@ -38,6 +38,8 @@ export interface V2Deps {
   livePrs: () => Promise<{ map: Map<string, any>; sync?: any }>;
   githubNames: () => Record<string, string>;
   letzteReviews: () => Promise<any[]>;
+  /** Audit 05.11. (6): aktueller Kopf je PR (pr_ticker_prs, Schlüssel „owner/repo#n“) — fürs Review-zu-Kopf. */
+  prKoepfe?: () => Promise<{ _id: string; head: string }[]>;
   /** Paket 436 (Knut 04.11.): Prüfschritt vor dem Fix-Push — je Fix-Lauf die abgehakten offenen Punkte (pr_fixes.punkte), neueste zuerst. */
   fixPunkte?: () => Promise<any[]>;
   reviewKommentar: (paket: string) => { empfehlung: string; text: string } | null;
@@ -99,6 +101,14 @@ export interface V2Deps {
 
 /** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
 const hauptchatSendet = new Set<string>();
+/** Audit 05.11. (6): passt das Review zum aktuellen Kopf? null = unbekannt (kein Kopf-Wissen oder Review ohne Commit). */
+function zuKopf(r: { head?: unknown }, jetzt: string | null, bekannt: boolean): { aktuell: boolean | null; kopf: string | null; neuerKopf: string | null } {
+  const h = typeof r.head === 'string' && r.head ? r.head : null;
+  if (!bekannt || !h || !jetzt) return { aktuell: null, kopf: h?.slice(0, 7) ?? null, neuerKopf: null };
+  return { aktuell: h === jetzt, kopf: h.slice(0, 7), neuerKopf: h === jetzt ? null : jetzt.slice(0, 7) };
+}
+/** Kopf je PR, geschlüsselt nach Kurznamen wie die PR-Liste („repo#n“). */
+const koepfeVon = async (d: V2Deps) => (d.prKoepfe ? new Map((await d.prKoepfe().catch(() => [])).map((x) => [`${String(x._id).split('#')[0].split('/').pop()}#${String(x._id).split('#')[1]}`, String(x.head ?? '')] as [string, string]).filter(([, h]) => !!h)) : null);
 /** Audit 05.11. (5): wie zustandSatz — „fertig“ zählt als Bericht nur mit Bericht UND Paket. */
 const ohneBericht = (z: { zustand?: string; bericht?: unknown; paket?: unknown }) => z.zustand === 'fertig' && !(z.bericht && z.paket);
 
@@ -239,11 +249,11 @@ export function registerV2(on: On, d: V2Deps) {
   });
 
   /** Je PR das neueste Agenten-Review (letzteReviews ist neueste zuerst). Entwurfs-Urteil nur für Admins (wie auf der PR-Seite). */
-  function mitReview<T extends { pr: string }>(zeilen: T[], rv: any[], istAdmin: boolean, fx: any[] = []): (T & { review: { empfehlung: string | null; status: string; gepostet: boolean; at: any } | null; fix: { offen: number; gesamt: number; at: any } | null })[] {
+  function mitReview<T extends { pr: string }>(zeilen: T[], rv: any[], istAdmin: boolean, fx: any[] = [], koepfe: Map<string, string> | null = null): (T & { review: { empfehlung: string | null; status: string; gepostet: boolean; at: any } | null; fix: { offen: number; gesamt: number; at: any } | null })[] {
     const je = new Map<string, any>(), fixJe = new Map<string, any>();
     for (const r of rv) { const k = `${String(r.repo).split('/').pop()}#${r.number}`; if (!je.has(k)) je.set(k, r); }
     for (const f of fx) { const k = `${String(f.repo).split('/').pop()}#${f.number}`; if (!fixJe.has(k) && f.punkte) fixJe.set(k, f); }
-    return zeilen.map((p) => { const r = je.get(p.pr), f = fixJe.get(p.pr); return { ...p, review: r ? { empfehlung: istAdmin || r.posted?.url ? r.empfehlung ?? null : null, status: r.status, gepostet: !!r.posted?.url, at: r.doneAt ?? r.createdAt } : null,
+    return zeilen.map((p) => { const r = je.get(p.pr), f = fixJe.get(p.pr); return { ...p, review: r ? { empfehlung: istAdmin || r.posted?.url ? r.empfehlung ?? null : null, status: r.status, gepostet: !!r.posted?.url, at: r.doneAt ?? r.createdAt, ...zuKopf(r, koepfe?.get(p.pr) ?? null, !!koepfe) } : null,
       fix: f ? { offen: Number(f.punkte.offen ?? 0), gesamt: Number(f.punkte.gesamt ?? 0), at: f.punkte.at ?? null, lesbar: f.punkte.lesbar !== false } : null }; });
   }
 
@@ -596,7 +606,7 @@ export function registerV2(on: On, d: V2Deps) {
     const [rv, fx] = await Promise.all([d.letzteReviews().catch(() => []), d.fixPunkte ? d.fixPunkte().catch(() => []) : Promise.resolve([])]);
     // Knut 05.11. abends (2): „Strang … arbeitet daran“ je PR (nur Admin — Stränge sind Knuts).
     const straenge = admin(u) && d.prStraenge ? await d.prStraenge(u).catch(() => []) : null;
-    const zeilen = mitReview(prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)), rv, admin(u), fx).map((p) => ({ ...p, thema: themaVon(null, `${p.repo} ${p.titel}`),   // Runde 7: jedes Ding trägt sein Thema
+    const zeilen = mitReview(prSicht(live, wer, names).sort((a, b) => Number(a.entwurf) - Number(b.entwurf)), rv, admin(u), fx, await koepfeVon(d)).map((p) => ({ ...p, thema: themaVon(null, `${p.repo} ${p.titel}`),   // Runde 7: jedes Ding trägt sein Thema
       ...(straenge ? { straenge: strangZuPr(straenge, p.repo, p.number) } : {}) }));
     const ohneEntwurf = live.filter((p) => !p.isDraft);
     send(d, res, { wer, ich, personen: [...personen(ohneEntwurf, ich, names), { name: 'alle', anzahl: ohneEntwurf.length }], zeilen, stand: g.sync?.at ?? null, at: new Date() });
@@ -640,8 +650,10 @@ export function registerV2(on: On, d: V2Deps) {
       offen: !!p, merge: p?.turn?.role === 'merge', wartetAuf: wa?.wartetAuf ?? [], warum: wa?.warum ?? '', entscheidung: p?.reviewDecision ?? null, offeneThreads: p?.openThreads ?? 0,
       verlangt: verlangtVon(p?.reviewDecision, p?.reviews ?? [], names),   // S22 (Christoph B2): wer hat Änderungen verlangt
       reviews: (p?.reviews ?? []).map((x: any) => ({ wer: names[String(x.author ?? '').toLowerCase()] ?? x.author, zustand: x.state, at: x.submittedAt })),
-      agent: r ? { status: r.status, empfehlung: sichtbar ? k?.empfehlung ?? r.empfehlung ?? null : null, text: k?.text ?? null, kurz: k?.text ? kurzurteil(k.text) : null, gepostet: r.posted?.url ?? null, entwurf: !r.posted?.url, at: r.doneAt ?? r.createdAt,
+      agent: r ? { ...zuKopf(r, (await koepfeVon(d))?.get(key) ?? null, !!d.prKoepfe), status: r.status, empfehlung: sichtbar ? k?.empfehlung ?? r.empfehlung ?? null : null, text: k?.text ?? null, kurz: k?.text ? kurzurteil(k.text) : null, gepostet: r.posted?.url ?? null, entwurf: !r.posted?.url, at: r.doneAt ?? r.createdAt,
         bericht: admin(u) && r.paket ? `/v2/dokument?paket=${encodeURIComponent(r.paket)}&datei=bericht.md` : null } : null,
+      // Knut 05.11. abends (2): „Unter-Chat arbeitet daran“ auch auf der Detailseite (nur Admin).
+      ...(admin(u) && d.prStraenge ? { straenge: strangZuPr(await d.prStraenge(u).catch(() => []), String(p?.repo ?? m[1]), Number(m[2])) } : {}),
       at: new Date(),
     });
   });

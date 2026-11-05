@@ -74,6 +74,7 @@ p { margin: 0 0 var(--s1); }
 .fehler { background: var(--rot-hell); color: var(--rot); border-radius: var(--r); padding: var(--s2); margin: var(--s2); }
 .fehlertext { color: var(--rot); font-size: .9rem; margin: var(--s1) 0 0; }
 .kasten { background: var(--karte); border: 1px solid var(--linie); border-radius: var(--r); padding: var(--s2); }
+.start-form label { display: block; margin: 6px 0; } .start-form textarea, .start-form input[type=text] { width: 100%; }
 .zustand { font-size: 1.05rem; font-weight: 600; padding: 12px var(--s2); border-radius: var(--r); background: var(--karte); border: 1px solid var(--linie); }
 .zustand.wartet { background: var(--warn-hell); border-color: #f3d9ad; }
 .zustand.laeuft { background: var(--akzent-hell); border-color: #c9dbf8; }

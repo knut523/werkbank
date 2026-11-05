@@ -1,7 +1,7 @@
 // Werkbank 2.0: die Seiten. Eine Startseite („Jetzt“) und vier Bereiche; jede Seite liest genau einen Endpunkt der 2.0-API.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useDiagramme } from './diagramm.ts';
-import { schicke, type Aufraeumen, type ArbeitKarte, type Dok, type Karte, type Link, type PrZeile, type Start } from './api.ts';
+import { hole, schicke, type Aufraeumen, type ArbeitKarte, type Dok, type Karte, type Link, type PrZeile, type Start } from './api.ts';
 import { useApp } from './kontext.ts';
 import { Abschnitt, EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweis, Verweise, Zeile } from './teile.tsx';
 import { BEGRIFFE, OLAF_KURZ } from './begriffe.ts';
@@ -125,7 +125,8 @@ function SammelSchliessen({ x, fertig }: { x: Aufraeumen; fertig?: () => void })
 interface Ueberholt { id: string; titel: string; grund: string; beleg: string }
 const DokZeile = ({ x }: { x: Dok }) => <Zeile titel={x.titel} url={x.url} satz={x.thema && x.thema !== 'Sonstiges' ? `${x.thema} · ${x.worum}` : x.worum} marke={{ text: x.art === 'bericht' ? 'Bericht' : 'Notiz' }} rechts={wann(x.at)} />;
 // S22 (Christoph B3): in der Liste sieht man, ob und wie der Prüf-Agent geurteilt hat — auch „prüft noch“ und „fertig, noch nicht veröffentlicht“.
-const agentMarke = (r: PrZeile['review']) => !r ? undefined : r.empfehlung ? { text: EMPFEHLUNG[r.empfehlung] ?? `Prüfung: ${r.empfehlung}`, ton: r.empfehlung === 'approve' ? 'gruen' : '' } : r.status !== 'fertig' ? { text: 'wird geprüft …' } : { text: r.gepostet === false ? 'Prüfung noch nicht veröffentlicht' : 'geprüft' };
+// Audit 05.11. (6): ein Review zu einem älteren Commit ist veraltet — das sagt die Marke zuerst.
+const agentMarke = (r: PrZeile['review']) => !r ? undefined : (r as any).aktuell === false && r.status === 'fertig' ? { text: `Review zu altem Stand (${(r as any).kopf}) — neuer Stand ${(r as any).neuerKopf}`, ton: 'warn' } : r.empfehlung ? { text: EMPFEHLUNG[r.empfehlung] ?? `Prüfung: ${r.empfehlung}`, ton: r.empfehlung === 'approve' ? 'gruen' : '' } : r.status !== 'fertig' ? { text: 'wird geprüft …' } : { text: r.gepostet === false ? 'Prüfung noch nicht veröffentlicht' : 'geprüft' };
 /** Paket 436 (Knut 04.11.): was nach dem letzten automatischen Fix an offenen Punkten (jeder Reviewer) geblieben ist — an der Karte. */
 const fixSatz = (f: PrZeile['fix']) => (!f ? '' : f.lesbar === false ? ' · letzter Fix: offene Punkte nicht prüfbar (PR nicht lesbar)' : f.offen ? ` · nach dem letzten Fix ${f.offen === 1 ? '1 Punkt' : `${f.offen} Punkte`} offen` : f.gesamt ? ' · letzter Fix: alle Punkte abgehakt' : '');
 const GRUND: Record<string, string> = { 'nicht-behandelt': 'vom Fix nicht behandelt', frage: 'Rückfrage des Fixes', 'nicht-behoben': 'nicht behoben', 'ohne-commit': 'als behoben gemeldet, aber ohne Commit in diesem Push' };
@@ -350,6 +351,7 @@ export function Arbeit() {
   return (
     <div className="seite">
       <h1>Arbeit</h1>
+      <UnterChatStarten fertig={neu} />
       <form className="suche" role="search" onSubmit={(e) => { e.preventDefault(); history.pushState(null, '', q.trim() ? `v2/chats?q=${encodeURIComponent(q.trim())}` : 'v2/chats'); window.dispatchEvent(new PopStateEvent('popstate')); }}>
         <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Unter-Chat suchen — Enter sucht auch in alten Chats" aria-label="Unter-Chats durchsuchen" />
       </form>
@@ -369,6 +371,42 @@ export function Arbeit() {
       ) : l.length ? <ul className="liste">{l.map(zeile)}</ul> : <p className="leer">{such ? `Nichts zu „${q.trim()}“ in dieser Liste.` : reiter === 'wartet' ? 'Kein Unter-Chat wartet auf dich.' : 'Gerade läuft nichts.'}</p>}
       {such && <p className="klein"><a href={`v2/chats?q=${encodeURIComponent(q.trim())}`}>„{q.trim()}“ in allen Chats suchen, auch alten →</a></p>}
     </div>
+  );
+}
+
+/** Audit 05.11. (6): Unter-Chat direkt aus der 2.0 starten (vorher nur alte Werkbank oder Hauptchat) — dieselbe Route wie
+ *  Workspace › Arbeit › Neuer Unter-Chat (Repo, Tiefe, Auftrag; Paket und G0 macht der Server). */
+function UnterChatStarten({ fertig }: { fertig: () => void }) {
+  const [offen, setOffen] = useState(false);
+  const [opt, setOpt] = useState<{ repos: { name: string }[]; tiefen: string[]; dryRun: boolean } | null>(null);
+  const [f, setF] = useState({ repo: '', tiefe: 'regular', titel: '', auftrag: '' });
+  const [laeuft, setLaeuft] = useState(false);
+  const [meldung, setMeldung] = useState<{ text: string; url?: string } | null>(null);
+  useEffect(() => { if (offen && !opt) hole<typeof opt>('api/arbeit/start').then((o) => { setOpt(o); setF((x) => ({ ...x, repo: x.repo || o?.repos[0]?.name || '' })); }).catch((e) => setMeldung({ text: String(e?.message ?? e) })); }, [offen]);
+  const TIEFE: Record<string, string> = { quick: 'Kurz (~10 min)', regular: 'Normal (~45 min)', deep: 'Gründlich (~2 h)', live: 'Live-Runde' };
+  if (!offen) return <p><button type="button" className="knopf" onClick={() => setOffen(true)}>Neuer Unter-Chat</button></p>;
+  const starten = async () => {
+    setLaeuft(true); setMeldung(null);
+    try {
+      const r = await schicke<{ id: string; warning?: string; g0?: { ergebnis: string } | null }>('api/arbeit/start', f);
+      setMeldung({ text: r.g0 && r.g0.ergebnis !== 'ok' ? 'Gestoppt vor dem Bau (G0) — die Rückfrage steht unter Entscheidungen.' : `Gestartet${r.warning ? ` — ${r.warning}` : ''}.`, url: r.id ? `v2/arbeit/${r.id}` : undefined });
+      setF((x) => ({ ...x, titel: '', auftrag: '' })); fertig();
+    } catch (e: any) { setMeldung({ text: String(e?.message ?? e) }); } finally { setLaeuft(false); }
+  };
+  return (
+    <form className="kasten start-form" aria-label="Neuer Unter-Chat" onSubmit={(e) => { e.preventDefault(); void starten(); }}>
+      <p className="gruppe-titel">Neuer Unter-Chat</p>
+      {opt?.dryRun && <p className="hinweis klein">Vorschau: hier startet kein Unter-Chat.</p>}
+      <label className="klein">Repo <select value={f.repo} onChange={(e) => setF({ ...f, repo: e.target.value })}>{(opt?.repos ?? []).map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}</select></label>{' '}
+      <label className="klein">Tiefe <select value={f.tiefe} onChange={(e) => setF({ ...f, tiefe: e.target.value })}>{(opt?.tiefen ?? ['regular']).map((t) => <option key={t} value={t}>{TIEFE[t] ?? t}</option>)}</select></label>
+      <label className="klein">Titel (optional) <input type="text" value={f.titel} maxLength={100} onChange={(e) => setF({ ...f, titel: e.target.value })} /></label>
+      <label className="klein">Auftrag <textarea rows={4} value={f.auftrag} maxLength={8000} placeholder="In ein, zwei Sätzen: was soll am Ende fertig sein?" onChange={(e) => setF({ ...f, auftrag: e.target.value })} /></label>
+      <div className="knoepfe">
+        <button type="submit" className="knopf haupt" disabled={laeuft || f.auftrag.trim().length < 10 || !f.repo}>{laeuft ? 'Startet …' : 'Starten'}</button>
+        <button type="button" className="knopf leise" onClick={() => setOffen(false)}>Abbrechen</button>
+      </div>
+      {meldung && <p className="hinweis klein" role="status">{meldung.text}{meldung.url && <> · <a href={meldung.url}>Ansehen</a></>}</p>}
+    </form>
   );
 }
 
@@ -652,6 +690,7 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
         <button type="button" className="knopf leise klein" onClick={() => app.chat(chatFrage(`PR ${d.pr}`, d.titel))}>Im Chat nachfragen</button>
       </div>
       {/* Knut 05.11. abends (1): Aktionen je PR — jede reiht einen Strang ein; Push/Merge gibt es hier nicht. */}
+      {!!(d as any).straenge?.length && <p className="hinweis klein" role="status">{((d as any).straenge as { id: string; titel: string; zustand: string }[]).map((s, i) => <span key={s.id}>{i ? ' · ' : ''}Unter-Chat <a href={`v2/arbeit/${s.id}`}>„{s.titel}“</a> arbeitet daran — {s.zustand}</span>)}</p>}
       {d.offen && <PrAktionen pr={d.pr} fertig={neu} />}
       <div className="aktionen-zeile">
       </div>
@@ -669,6 +708,7 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
         {d.autor && <p className="klein gedimmt">Geschrieben von {d.autor}.</p>}
       </Abschnitt>
       <Abschnitt id="p-agent" titel="Review des Agenten" erklaerung="Was der Review-Agent zu diesem PR geschrieben hat — derselbe Text, der auf GitHub steht. Du brauchst dafür kein GitHub-Konto.">
+        {(d.agent as any)?.aktuell === false && <p className="hinweis klein" role="note">Dieses Review gilt für Commit {(d.agent as any).kopf}; der PR steht inzwischen auf {(d.agent as any).neuerKopf}. Ein neues Review stellt die Werkbank von selbst an (höchstens 3 am Tag){app.ich.admin ? ' — oder oben „Review“ drücken' : ''}.</p>}
         {d.agent?.text ? (
           <div className="kasten">
             <p><span className={`marke ${d.agent.empfehlung === 'approve' ? 'gruen' : 'warn'}`}>{EMPFEHLUNG[d.agent.empfehlung ?? ''] ?? 'Agent'}</span> <span className="klein gedimmt">{wann(d.agent.at)}</span>{d.agent.entwurf && <> <span className="marke">Entwurf — noch nicht auf GitHub</span></>}</p>

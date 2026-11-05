@@ -79,7 +79,7 @@ import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, descr
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
 import { syncGithub, livePrs, GH_ORG, graphql } from './github.ts';
-import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol, fixesCol, reviewsNachholen, tickerAus, fixEinreihen } from './prticker.ts';
+import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol, fixesCol, reviewsNachholen, tickerAus, fixEinreihen, prState } from './prticker.ts';
 import { regelDir, regelVorschlaege } from './regelquelle.ts';
 import { klonPfad, reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
@@ -4369,6 +4369,7 @@ registerV2(on, {
   livePrs, githubNames, antwortGezaehlt,
   fixPunkte: () => fixesCol().find({ punkte: { $exists: true } }, { projection: { repo: 1, number: 1, punkte: 1, status: 1, createdAt: 1, neu: 1 } }).sort({ createdAt: -1 }).limit(300).toArray(),
   letzteReviews: () => reviewsCol().find({ createdAt: { $gte: new Date(Date.now() - 30 * 86400_000) } }).sort({ createdAt: -1 }).limit(300).toArray(),
+  prKoepfe: () => prState().find({ state: 'OPEN' }, { projection: { head: 1 } }).limit(2000).toArray() as any,
   reviewKommentar: (paket) => parseKommentar(readBerichtDatei(join(reviewDir(), paket, 'kommentar.md'))),
   pakete: () => paketIndex(cfg.reviewDir),
   vaultSuche: async (q) => { try { return await search(q); } catch { return titelSuche(vaultIdx(), q); } },
