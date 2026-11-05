@@ -54,7 +54,11 @@ test('Kontrolle: als Knut sind die vorhandenen Ziele lesbar — der Test erkennt
   for (const z of da) assert.equal(lesbarIch(z.pfad), true, `${z.art} (${z.pfad}) sollte für Knut lesbar sein`);
 });
 
-test(`Negativtest Stufe 2: ${AGENT} kann Vaultwarden-Helfer, Git-Anmeldedaten und ~/.claude nicht lesen`, { skip: agentDa() ? false : `Nutzer ${AGENT} ist nicht eingerichtet (Runbook §19 — macht Knut)` }, () => {
+// Ohne eingerichteten Nutzer: nicht übersprungen, sondern als offener Punkt „wartet auf Einrichtung“ (node:test „todo“ — läuft,
+// zählt aber nicht als Fehlschlag). Sobald der Nutzer da ist, entfällt die Markierung und der Test muss grün sein.
+const WARTET = agentDa() ? false : `wartet auf Einrichtung: Nutzer ${AGENT} fehlt — Knut führt scripts/sandbox2-einrichten.sh --ausfuehren aus`;
+test(`Negativtest Stufe 2: ${AGENT} kann Vaultwarden-Helfer, Git-Anmeldedaten und ~/.claude nicht lesen`, { todo: WARTET }, () => {
+  assert.ok(agentDa(), `Nutzer ${AGENT} ist nicht eingerichtet`);
   // Ohne sudo-Regel wäre jedes „nicht lesbar“ ein Scheintreffer: erst beweisen, dass der Aufruf als Agent überhaupt geht.
   try { execFileSync('sudo', ['-n', '-u', AGENT, '/usr/bin/test', '-d', '/'], { stdio: 'ignore' }); }
   catch { assert.fail(`sudo -u ${AGENT} /usr/bin/test geht nicht — sudo-Regel aus Runbook §19, Schritt 4b fehlt`); }

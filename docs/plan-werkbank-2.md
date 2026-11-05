@@ -525,6 +525,8 @@ D11 vorbereiten: Runbook (unten, §19) — eingerichtet wird nichts.
 
 Ziel: Unter-Chats laufen als eigener Unix-Nutzer `werkbank-agent`. Was im Home von Knut liegt (Schlüssel, Anmeldedateien, Tresor-Sitzung), ist für diesen Nutzer per Dateirecht unlesbar — nicht nur per Sperrregel. Stufe 1 (Umgebung ohne Zugänge, `claude-bridge/src/sandbox.ts`) bleibt zusätzlich.
 
+**Skript:** `scripts/sandbox2-einrichten.sh` richtet die Schritte 1–4b ein. Es ist idempotent, die Vorgabe ist ein Trockenlauf; ausgeführt wird erst mit `sudo … --ausfuehren` (Knut, mit `!`). Abweichung von Schritt 3, begründet: Knuts Home kommt auf **711** statt 750. Auf der Box gibt es keine ACL-Werkzeuge, und ohne Durchgangsrecht käme der Agent nicht zu den Arbeitsordnern. Auflisten bleibt verboten; geschützt wird über die Rechte der Zugänge selbst (700/600), und genau das prüft der Negativtest. Hinweis zu Schritt 4: Der Platzhalter `*` in der Startregel lässt auch andere Befehle **als `werkbank-agent`** zu. Das ist hingenommen, weil der Agent weniger darf als Knut. Eine engere Regel kommt mit Schritt 5, wenn der Startweg der Brücke feststeht.
+
 Schritte (mit sudo, einmalig je Box; nichts davon ist ausgeführt):
 1. Nutzer anlegen: `useradd --create-home --shell /usr/sbin/nologin werkbank-agent`.
 2. Gemeinsame Gruppe für die Arbeitsordner: `groupadd werkbank-arbeit`, beide Nutzer hinein; die Worktrees der Unter-Chats (`~/work/…`) bekommen Gruppe `werkbank-arbeit` und `g+rwX`, sonst nichts aus dem Home von Knut.
