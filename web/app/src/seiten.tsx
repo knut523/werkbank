@@ -129,8 +129,10 @@ const agentMarke = (r: PrZeile['review']) => !r ? undefined : r.empfehlung ? { t
 /** Paket 436 (Knut 04.11.): was nach dem letzten automatischen Fix an offenen Punkten (jeder Reviewer) geblieben ist — an der Karte. */
 const fixSatz = (f: PrZeile['fix']) => (!f ? '' : f.lesbar === false ? ' · letzter Fix: offene Punkte nicht prüfbar (PR nicht lesbar)' : f.offen ? ` · nach dem letzten Fix ${f.offen === 1 ? '1 Punkt' : `${f.offen} Punkte`} offen` : f.gesamt ? ' · letzter Fix: alle Punkte abgehakt' : '');
 const GRUND: Record<string, string> = { 'nicht-behandelt': 'vom Fix nicht behandelt', frage: 'Rückfrage des Fixes', 'nicht-behoben': 'nicht behoben', 'ohne-commit': 'als behoben gemeldet, aber ohne Commit in diesem Push' };
+// Knut 05.11. abends (2): „Strang … arbeitet daran — läuft/wartet/steckt“ direkt in der PR-Zeile.
+const strangSatz = (s?: { titel: string; zustand: string }[]) => (s?.length ? ` · Unter-Chat „${s[0].titel}“ arbeitet daran — ${s[0].zustand}${s.length > 1 ? ` (+${s.length - 1})` : ''}` : '');
 const PrZeileView = ({ p }: { p: PrZeile }) => (
-  <Zeile titel={`${p.pr} · ${p.titel}`} url={`v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={`${p.thema && p.thema !== 'Sonstiges' ? `${p.thema} · ` : ''}${p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}${fixSatz(p.fix)}`}
+  <Zeile titel={`${p.pr} · ${p.titel}`} url={`v2/prs/${encodeURIComponent(p.repo)}/${p.number}`} satz={`${p.thema && p.thema !== 'Sonstiges' ? `${p.thema} · ` : ''}${p.wartetAuf.length ? `wartet auf ${p.wartetAuf.join(', ')} — ${p.warum}` : p.warum || 'wartet auf niemanden'}${fixSatz(p.fix)}${strangSatz(p.straenge)}`}
     marke={p.konflikt ? { text: 'Merge-Konflikt' } : p.entwurf ? { text: 'Entwurf' } : agentMarke(p.review) ?? { text: 'noch nicht geprüft' }} rechts={wann(p.geaendert)} />
 );
 
@@ -590,6 +592,31 @@ export function Prs({ wer }: { wer: string | null }) {
 /** Grob: ist der Satz englisch? (Der Prüf-Agent schreibt auf GitHub englisch — dann sagen wir es, statt es mitten ins Deutsche zu setzen.) */
 const englisch = (t: string) => (t.match(/\b(the|and|were|with|of|executed|applied|which|this)\b/g) ?? []).length >= 3;   // keine deutsch-englischen Wörter wie „was“, „Test“ (Pass C)
 
+/** Knut 05.11. abends (1): Review · Tiefes Review · Fixen · Auftrag … — reiht in die Review- bzw. Fix-Schlange ein. */
+function PrAktionen({ pr, fertig }: { pr: string; fertig: () => void }) {
+  const app = useApp();
+  const [auftrag, setAuftrag] = useState<string | null>(null);
+  const [meldung, setMeldung] = useState<string | null>(null);
+  if (!app.ich.admin) return null;
+  const los = async (art: 'review' | 'tief' | 'fixen' | 'auftrag', text = '') => {
+    try { const r = await schicke<{ hinweis: string }>('api/v2/pr-aktion', { pr, art, text }); setMeldung(r.hinweis); setAuftrag(null); setTimeout(fertig, 1500); }
+    catch (e: any) { setMeldung(String(e?.message ?? e)); }
+  };
+  return (
+    <div className="kasten pr-aktionen">
+      <p className="klein"><b>Ein Unter-Chat soll ran:</b></p>
+      <div className="knoepfe">
+        <button type="button" className="knopf" onClick={() => los('review')}>Review</button>
+        <button type="button" className="knopf" onClick={() => los('tief')} title="mehrere Durchgänge, Council, zweites Modell">Tiefes Review</button>
+        <button type="button" className="knopf" onClick={() => los('fixen')} title="offene Review-Punkte beheben; Push nur über Prüfung und Freigabe">Fixen</button>
+        <button type="button" className="knopf leise" onClick={() => setAuftrag(auftrag === null ? '' : null)}>Auftrag …</button>
+      </div>
+      {auftrag !== null && <div className="anders"><textarea rows={2} placeholder="Was soll an diesem PR passieren?" value={auftrag} onChange={(e) => setAuftrag(e.target.value)} /><button type="button" className="knopf haupt klein" onClick={() => los('auftrag', auftrag)}>Unter-Chat starten</button></div>}
+      {meldung && <p className="hinweis klein" role="status">{meldung}</p>}
+    </div>
+  );
+}
+
 export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
   const app = useApp();
   const { d, fehler, neu } = useDaten<{ pr: string; titel: string; url: string | null; autor: string | null; offen: boolean; merge: boolean; wartetAuf: string[]; warum: string; entscheidung: string | null; offeneThreads: number; reviews: { wer: string; zustand: string; at: string }[];
@@ -613,6 +640,10 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
         {d.url && <a className="verweis" href={d.url} target="_blank" rel="noopener noreferrer">Auf GitHub öffnen ↗</a>}
         {d.agent?.bericht && <a className="verweis" href={rel(d.agent.bericht)}>Bericht des Reviews</a>}
         <button type="button" className="knopf leise klein" onClick={() => app.chat(chatFrage(`PR ${d.pr}`, d.titel))}>Im Chat nachfragen</button>
+      </div>
+      {/* Knut 05.11. abends (1): Aktionen je PR — jede reiht einen Strang ein; Push/Merge gibt es hier nicht. */}
+      {d.offen && <PrAktionen pr={d.pr} fertig={neu} />}
+      <div className="aktionen-zeile">
       </div>
       {d.fix && (
         <Abschnitt id="p-fix" titel={!d.fix.lesbar ? 'Letzter Fix: offene Punkte nicht prüfbar' : d.fix.offen.length ? `Nach dem letzten Fix offen (${d.fix.offen.length} von ${d.fix.gesamt})` : 'Letzter Fix: alle offenen Punkte abgehakt'}

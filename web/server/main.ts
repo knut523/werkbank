@@ -2089,7 +2089,10 @@ async function reviewStarten(u: User, prText: unknown, stufe: unknown) {
   if (!pr) throw new HttpError(400, 'PR als „owner/repo#123“ oder GitHub-Link angeben.');
   const deep = stufe === 'deep';
   if (!reviewErlaubt(pr.repo)) throw new HttpError(403, `Für ${pr.repo} sind Reviews nicht freigegeben.`);
-  const live = (await livePrs()).map.get(`${pr.repo}#${pr.number}`);
+  // Die Liste offener PRs ist nach Kurznamen geschlüsselt („olaf-admin#393“, github.ts mapPr) — mit dem vollen Namen fand der
+  // Hand-Start den PR nie (Paket 436, beim Bau der PR-Knöpfe gefunden).
+  const g = (await livePrs()).map;
+  const live = g.get(`${pr.repo}#${pr.number}`) ?? g.get(`${pr.repo.split('/').pop()}#${pr.number}`);
   if (!live) throw new HttpError(404, 'PR nicht in der Liste offener PRs (Abgleich mit GitHub abwarten oder „jetzt abrufen“).');
   if (await reviewsCol().findOne({ repo: pr.repo, number: pr.number, status: { $in: ['wartet', 'startet', 'führt aus', 'läuft'] } })) throw new HttpError(409, 'Für diesen PR läuft schon ein Review.');
   const id = `hand-${pr.repo.replace('/', '-')}-${pr.number}-${Date.now().toString(36)}`;
@@ -4378,11 +4381,13 @@ registerV2(on, {
   },
   // Knut 05.11. abends (1): Aktionen je PR — Review/Tiefes Review in die Review-Schlange, Fixen/Auftrag in die Fix-Schlange.
   prAktion: async (u, pr, art, text) => {
-    if (art === 'review' || art === 'tief') { const r = await reviewStarten(u, pr, art === 'tief' ? 'deep' : 'quick'); return { hinweis: r.hinweis }; }
     const live = (await livePrs()).map.get(pr);
     if (!live) throw new HttpError(404, 'PR nicht in der Liste offener PRs.');
+    // Die Liste kennt Kurznamen; Review- und Fix-Schlange arbeiten mit owner/repo (wie der Ticker).
+    const voll = live.repo.includes('/') ? live.repo : `${GH_ORG}/${live.repo}`;
+    if (art === 'review' || art === 'tief') { const r = await reviewStarten(u, `${voll}#${live.number}`, art === 'tief' ? 'deep' : 'quick'); return { hinweis: r.hinweis }; }
     try {
-      const f = await fixEinreihen({ repo: live.repo, number: live.number, title: live.title, url: live.url, by: u.name, auftrag: art === 'auftrag' ? text : '' });
+      const f = await fixEinreihen({ repo: voll, number: live.number, title: live.title, url: live.url, by: u.name, auftrag: art === 'auftrag' ? text : '' });
       log('fix eingereiht (workspace)', { user: u.id, pr, art, modus: f.modus });
       return { hinweis: `In der Fix-Schlange (${f.modus === 'trocken' ? 'Trockenlauf' : f.modus === 'frage' ? 'Push erst nach deiner Freigabe' : f.modus === 'auto' ? 'grün → Push ohne Klick' : 'wie @fix'}) — startet mit dem nächsten Takt.` };
     } catch (e: any) { throw new HttpError(e?.status ?? 400, String(e?.message ?? e)); }
