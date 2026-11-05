@@ -671,6 +671,22 @@ test('Teil B (B-7/B-18/B-19/B-10): Passt nur auf den gesehenen Stand; danach kei
   assert.match((await r.json()).error, /hat Knut geprüft/);
 });
 
+test('Audit 05.11. (2): „Passt“ mit Notiz → Notiz kommt an, die Abnahme bleibt (kein knutReviewedAt/doneAt-Reset)', async () => {
+  const st = await doneStrand('Audit: Passt mit Notiz', 'wt-b2n');
+  await until(() => cardOf(st.id), (c: any) => !!c);
+  const vorher: any = await W().collection('orchestrator_runs').findOne({ _id: st.id as any });
+  const r = await post(`/api/v2/ansehen/${st.id}`, { art: 'passt', notiz: 'Schön, danke' });
+  assert.equal(r.status, 200, await r.clone().text());
+  await until(() => msgsOf(st.conv), (ms: any[]) => ms.some((m) => /Zum Ansehen\): Passt\. Notiz: Schön, danke/.test(textOf(m))));
+  await pause(800);
+  const d: any = await W().collection('orchestrator_runs').findOne({ _id: st.id as any });
+  assert.ok(d.knutReviewedAt && d.reviewedAt, 'abgenommen');
+  assert.equal(d.reviewedBy, 'knut');
+  assert.ok(d.doneAt, 'fertig bleibt fertig');
+  assert.equal(d.sends, vorher.sends + 1);
+  assert.equal(await cardOf(st.id), undefined, 'keine Karte mehr');
+});
+
 test('Teil B (B-7/B-17/B-23): Nacharbeit → Nachricht im Strang, Karte weg; wieder fertig → Karte ohne alte DoD-Tabelle', async () => {
   const st = await doneStrand('Teil B: Nacharbeit', 'wt-b3');
   await until(() => cardOf(st.id), (c: any) => !!c);

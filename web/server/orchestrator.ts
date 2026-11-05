@@ -694,14 +694,15 @@ export async function showOrch(u: User, id: string, verlauf = 0) {
 
 /** Runde 7 B (Messgröße, Plan §22): wer eine Nachricht an den Strang geschickt hat und wann — vorher wurde lastSentAt nur
  *  überschrieben, Hand- und Hauptchat-Sendungen waren im Log nicht zu trennen. Hängt an ein updateOne-Update an (letzte 30). */
-export function mitSendung<T extends Record<string, any>>(update: T, von: 'hand' | 'leitstand' | 'auto' | 'nachgereicht', at: Date = new Date()): T {
+export function mitSendung<T extends Record<string, any>>(update: T, von: 'hand' | 'leitstand' | 'notiz' | 'auto' | 'nachgereicht', at: Date = new Date()): T {
   return { ...update, $push: { ...(update.$push ?? {}), sendungen: { $each: [{ at, von }], $slice: -30 } } };
 }
 
 // ---------- Plan §24 A1: einreihen statt 409 (Knut 05.11.: „Alle Nudges und Nachsendungen sollen automatisch laufen“) ----------
-export interface Ausstehend { id: string; text: string; via: 'hand' | 'leitstand'; at: Date; grund: string }
+export type SendVia = 'hand' | 'leitstand' | 'notiz';
+export interface Ausstehend { id: string; text: string; via: SendVia; at: Date; grund: string }
 export const AUSSTEHEND_MAX = 20;
-export function ausstehendEintrag(text: string, via: 'hand' | 'leitstand', grund: string, at: Date = new Date()): Ausstehend {
+export function ausstehendEintrag(text: string, via: SendVia, grund: string, at: Date = new Date()): Ausstehend {
   return { id: randomUUID().slice(0, 8).replace(/-/g, '0'), text: String(text).slice(0, 40_000), via, at, grund: String(grund).slice(0, 300) };
 }
 /** Was beim nächsten freien Zug zugestellt wird: eine Nachricht unverändert, mehrere gebündelt (älteste zuerst). */
@@ -710,11 +711,15 @@ export function ausstehendText(l: Ausstehend[]): string {
   if (s.length <= 1) return s[0]?.text ?? '';
   return `(Werkbank: ${s.length} Nachrichten kamen, während du beschäftigt warst — hier gesammelt, älteste zuerst.)\n\n${s.map((x) => x.text).join('\n\n---\n\n')}`;
 }
-async function einreihen(d: any, msg: string, via: 'hand' | 'leitstand', grund: string) {
+async function einreihen(d: any, msg: string, via: SendVia, grund: string) {
   const e = ausstehendEintrag(msg, via, grund);
   // Neue Nachricht: der Fehlversuchszähler beginnt neu (Knut oder der Hauptchat hat sich gekümmert).
   await runs().updateOne({ _id: d._id }, { $push: { ausstehend: { $each: [e], $slice: -AUSSTEHEND_MAX } } as any, $set: { ausstehendFehler: 0 } });
   return { id: String(d._id), conv: d.conv, url: d.url, eingereiht: true, ausstehendId: e.id, zustellung: `eingereiht (${grund}) — die Werkbank stellt sie beim nächsten freien Zug von selbst zu` };
+}
+/** Gebündelt zählt der stärkste Absender: Knut (hand) vor dem Hauptchat (leitstand) vor einer reinen Notiz nach „Passt“. */
+export function ausstehendVia(l: Ausstehend[]): SendVia {
+  return l.some((x) => x.via === 'hand') ? 'hand' : l.some((x) => x.via === 'leitstand') ? 'leitstand' : 'notiz';
 }
 /** Takt: eingereihte Nachrichten eines freien Strangs zustellen — atomar herausnehmen, bei Fehler zurücklegen. */
 export const AUSSTEHEND_VERSUCHE = 5;
@@ -724,7 +729,7 @@ export async function ausstehendZustellen(u: User, d: any, deps: { log?: AutoDep
   const liste: Ausstehend[] = (vorher?.value ?? vorher)?.ausstehend ?? [];
   if (!liste.length) return null;
   try {
-    const r = await sendOrch(u, String(d._id), ausstehendText(liste), liste.some((x) => x.via === 'hand') ? 'hand' : 'leitstand');
+    const r = await sendOrch(u, String(d._id), ausstehendText(liste), ausstehendVia(liste));
     if (d.ausstehendFehler) await runs().updateOne({ _id: d._id }, { $set: { ausstehendFehler: 0 } });
     deps.log?.('orch ausstehend zugestellt', { id: d._id, n: liste.length, erneut: !!(r as any).eingereiht });
     return r;
@@ -739,7 +744,7 @@ export async function ausstehendZustellen(u: User, d: any, deps: { log?: AutoDep
   }
 }
 
-export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 'leitstand' = 'hand', o: { warteMs?: number } = {}) {
+export async function sendOrch(u: User, id: string, text: string, via: SendVia = 'hand', o: { warteMs?: number } = {}) {
   const msg = String(text ?? '').trim();
   if (!msg) throw err(400, 'Nachricht fehlt.');
   const d = await ownRun(u, id);
@@ -766,6 +771,12 @@ export async function sendOrch(u: User, id: string, text: string, via: 'hand' | 
     if (k) { await runs().updateOne({ _id: d._id }, { $inc: { konflikte: 1 } }); return einreihen(d, msg, via, konfliktText(k)); }
   }
   const sentAt = await deliver(u, d.conv, msg);
+  if (via === 'notiz') {
+    // Audit 05.11. (2): Knuts Notiz zu „Passt“ — nur zur Kenntnis. Abnahme, doneAt, Deckel und lastSentAt bleiben (sonst
+    // höbe die Notiz die Abnahme still auf und die Antwort darauf gälte als neuer Stand).
+    await runs().updateOne({ _id: d._id }, mitSendung({ $set: { lastNotizAt: sentAt }, $inc: { sends: 1 } }, 'notiz', sentAt));
+    return { id, conv: d.conv, url: d.url, zustellung: 'zugestellt (nur zur Kenntnis — die Abnahme bleibt)' };
+  }
   if (via === 'leitstand') {
     // Teil B, G3: review_ready-Stand wandert nach prevReview (Auto-Fortsetzen und Wecken laufen wieder); Knuts Karte bleibt
     // (doneAt/knutReviewedAt unberührt); eine Ablage durch den Leitstand selbst hebt er damit auf.

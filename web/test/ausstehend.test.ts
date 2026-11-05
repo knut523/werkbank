@@ -2,7 +2,7 @@
 // eingereiht statt mit 409 abgelehnt; der Auto-Weiter-Takt stellt beim nächsten freien Zug zu — gebündelt, genau einmal.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ausstehendEintrag, ausstehendText, AUSSTEHEND_MAX } from '../server/orchestrator.ts';
+import { ausstehendEintrag, ausstehendText, ausstehendVia, AUSSTEHEND_MAX } from '../server/orchestrator.ts';
 
 const at = new Date('2026-11-05T17:00:00Z');
 
@@ -21,4 +21,12 @@ test('A1: eine Nachricht geht unverändert raus, mehrere gebündelt in Reihenfol
   assert.match(t, /^\(Werkbank: 2 Nachrichten kamen, während du beschäftigt warst — hier gesammelt, älteste zuerst\.\)/);
   assert.ok(t.indexOf('Erste') < t.indexOf('Zweite'));
   assert.equal(ausstehendText([]), '');
+});
+
+test('Audit 05.11. (2): gebündelt zählt der stärkste Absender — eine eingereihte Notiz nach „Passt“ hebt die Abnahme nicht auf', () => {
+  const at = new Date(0);
+  const n = ausstehendEintrag('Notiz', 'notiz', 'g', at), l = ausstehendEintrag('L', 'leitstand', 'g', at), h = ausstehendEintrag('H', 'hand', 'g', at);
+  assert.equal(ausstehendVia([n]), 'notiz');
+  assert.equal(ausstehendVia([n, l]), 'leitstand');
+  assert.equal(ausstehendVia([n, l, h]), 'hand');
 });
