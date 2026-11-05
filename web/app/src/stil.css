@@ -262,3 +262,10 @@ p { margin: 0 0 var(--s1); }
 .steckbrief .schritte { list-style: none; margin: 4px 0 0; padding: 0; font-size: .9rem; }
 .steckbrief .schritte .fertig { color: var(--gedimmt); }
 @media (max-width: 600px) { .steckbrief dl > div { grid-template-columns: 1fr; gap: 0; } }
+
+/* Persona R7 „Knut morgens“: Überblick über alle Entscheidungen auf „Für dich“ */
+.ueberblick { background: var(--karte, #fff); border: 1px solid var(--linie, #e3e3e3); border-radius: 10px; padding: 10px 14px; margin: 10px 0 16px; }
+.ueberblick summary { font-weight: 600; cursor: pointer; }
+.ueberblick-kopf { margin: 10px 0 2px; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--gedimmt); }
+.ueberblick ul { margin: 0; padding-left: 18px; }
+.ueberblick li { margin: 3px 0; font-size: .92rem; line-height: 1.35; }

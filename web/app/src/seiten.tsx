@@ -145,10 +145,12 @@ export function Entscheidungen() {
   return (
     <div className="seite">
       <h1>{bc ? 'Für dich' : 'Entscheidungen'}</h1>
-      <p className="unterzeile">{bc ? 'Nur, was wirklich du entscheiden musst: Geld, Recht, Zugang, Außenwirkung, Release.' : 'Alles, was auf dich wartet.'} „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — die Antwort geht an den richtigen Unter-Chat.</p>
+      <p className="unterzeile">{bc ? `${d.oben.length + d.rest.length} Entscheidungen, die nur du treffen kannst (Geld, Recht, Zugang, Außenwirkung, Release).` : 'Alles, was auf dich wartet. „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — die Antwort geht an den richtigen Unter-Chat.'}</p>
       {/* Plan §23 T4/T5: was nicht hier steht, entscheidet Claude (technisch) bzw. der Hauptchat nach Council (gewichtig) — sichtbar und umkehrbar. */}
-      {bc && (bc.technisch > 0 || bc.gewichtig > 0) && <p className="klein bei-claude">Nicht für dich: {bc.technisch ? `${bc.technisch} technische ${bc.technisch === 1 ? 'Frage entscheidet' : 'Fragen entscheidet'} Claude nach Empfehlung` : ''}{bc.technisch && bc.gewichtig ? ', ' : ''}{bc.gewichtig ? `${bc.gewichtig} gewichtige ${bc.gewichtig === 1 ? 'geht' : 'gehen'} vorher durch einen Council-Check` : ''}. <a href="v2/entschieden">Von Claude entschieden →</a></p>}
-      <p className="zusammensetzung">Die Zahl oben rechts: {d.oben.length + d.rest.length} {d.oben.length + d.rest.length === 1 ? 'Frage' : 'Fragen und Freigaben'}{d.aufraeumen.length ? ` + ${d.aufraeumen.length} ${d.aufraeumen.length === 1 ? 'Sammelposten' : 'Sammelposten'} zum Aufräumen` : ''} = {d.zahl}.{d.ueberholt?.length ? <> <a href="#e-ueberholt">{mehrzahl(d.ueberholt.length, 'Freigabe ist überholt und zählt', 'Freigaben sind überholt und zählen')} nicht ↓</a></> : null}{d.geschlossen?.length ? <> <a href="#e-geschlossen">{mehrzahl(d.geschlossen.length, 'Frage hat', 'Fragen haben')} sich von selbst erledigt ↓</a></> : null}</p>
+      {bc && <p className="klein bei-claude">{bc.technisch || bc.gewichtig ? <>Nicht für dich: {bc.technisch ? `${bc.technisch} technische ${bc.technisch === 1 ? 'Frage entscheidet' : 'Fragen entscheidet'} Claude nach Empfehlung` : ''}{bc.technisch && bc.gewichtig ? ', ' : ''}{bc.gewichtig ? `${bc.gewichtig} gewichtige ${bc.gewichtig === 1 ? 'geht' : 'gehen'} vorher durch einen Council-Check` : ''}. </> : null}<a href="v2/entschieden">Von Claude entschieden →</a></p>}
+      {/* Persona R7 „Knut morgens, 2 Minuten“: erst der Überblick — je Thema eine kurze Zeile je Entscheidung, Klick springt zur Karte. */}
+      {bc && <Ueberblick karten={[...d.oben, ...d.rest]} />}
+      {!bc && <p className="zusammensetzung">Die Zahl oben rechts: {d.oben.length + d.rest.length} {d.oben.length + d.rest.length === 1 ? 'Frage' : 'Fragen und Freigaben'}{d.aufraeumen.length ? ` + ${d.aufraeumen.length} ${d.aufraeumen.length === 1 ? 'Sammelposten' : 'Sammelposten'} zum Aufräumen` : ''} = {d.zahl}.{d.ueberholt?.length ? <> <a href="#e-ueberholt">{mehrzahl(d.ueberholt.length, 'Freigabe ist überholt und zählt', 'Freigaben sind überholt und zählen')} nicht ↓</a></> : null}{d.geschlossen?.length ? <> <a href="#e-geschlossen">{mehrzahl(d.geschlossen.length, 'Frage hat', 'Fragen haben')} sich von selbst erledigt ↓</a></> : null}</p>}
       {(() => { const s = themen(d.rest).map(([t, ks]) => [t, ks.filter(wieEmpfohlenMoeglich).length] as const).filter(([, n]) => n > 1);
         return s.length ? <p className="klein sammel-sprung">Alle Empfehlungen eines Themas auf einmal annehmen: {s.map(([t, n]) => <a key={t} className="chip" href={`#thema-${themaAnker(t, themen(d.rest).map(([x]) => x))}`}>{t} ({n})</a>)}</p> : null; })()}
       <Abschnitt id="e-zuerst" titel="Zuerst" erklaerung="Dieselben fünf wie auf der Startseite: was einen Agenten anhält oder bald als angenommen gilt.">
@@ -179,6 +181,23 @@ export function Entscheidungen() {
 }
 
 /** Karten nach Thema, größte Gruppe zuerst; ohne Thema unter „Sonstiges“. */
+/** Persona R7: alle Entscheidungen auf einen Blick — Thema, Anzahl, je Frage eine Zeile (gekürzt) mit Sprung zur Karte. */
+function Ueberblick({ karten }: { karten: Karte[] }) {
+  if (karten.length < 4) return null;
+  const kurzTitel = (t: string) => (t.length > 70 ? `${t.slice(0, 68).replace(/\s+\S*$/, '')} …` : t);
+  return (
+    <details className="ueberblick" open>
+      <summary>Überblick: {karten.length} Entscheidungen in {themen(karten).length} Themen</summary>
+      {themen(karten).map(([thema, ks]) => (
+        <div key={thema} className="ueberblick-thema">
+          <p className="ueberblick-kopf">{thema} · {ks.length}</p>
+          <ul>{ks.map((k) => <li key={k.id}><a href={`#karte-${k.id}`} onClick={(e) => { e.preventDefault(); document.getElementById(`karte-${k.id}`)?.scrollIntoView({ block: 'start' }); }}>{kurzTitel(k.titel)}</a></li>)}</ul>
+        </div>
+      ))}
+    </details>
+  );
+}
+
 function themen(ks: Karte[]): [string, Karte[]][] {
   const m = new Map<string, Karte[]>();
   for (const k of ks) { const t = k.thema?.trim() || 'Sonstiges'; m.set(t, [...(m.get(t) ?? []), k]); }

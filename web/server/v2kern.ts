@@ -327,7 +327,15 @@ const EXTRA_THEMEN: { thema: string; re: RegExp }[] = [
 export function themaVon(roh: string | null | undefined, text: string): string {
   let r = String(roh ?? '').trim();
   let t = String(text ?? '');
-  if (/^Fragenpaket:/i.test(r)) { t = `${r} ${t}`; r = ''; }
+  // Persona R7 (Daten 05.11.): ein Fragenpaket — bekanntes Thema aus seinem Namen, sonst sein Name selbst (nicht über die Quelle
+  // „Hauptchat“ bei „Werkbank“ landen).
+  if (/^Fragenpaket:/i.test(r)) {
+    const name = r.replace(/^Fragenpaket:\s*/i, '').trim();
+    const imNamen = THEMEN.find((x) => !KEIN_THEMA.has(x.thema) && x.re.test(name)) ?? EXTRA_THEMEN.find((x) => x.re.test(name));
+    if (imNamen) return SYNONYM[imNamen.thema] ?? imNamen.thema;
+    if (name) return name;
+    r = '';
+  }
   if (r && !HILFSNAME.test(r)) return SYNONYM[r] ?? r;
   const hit = THEMEN.find((x) => !KEIN_THEMA.has(x.thema) && x.re.test(t)) ?? EXTRA_THEMEN.find((x) => x.re.test(t));
   return hit ? SYNONYM[hit.thema] ?? hit.thema : 'Sonstiges';

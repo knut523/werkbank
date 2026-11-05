@@ -375,3 +375,9 @@ test('Plan §23 T6: „wartet“ nur, wenn eine Knut-Frage offen ist — sonst a
   assert.equal(arbeitGruppe({ zustand: 'wartet', cs: { status: 'braucht' } } as any), 'wartet', 'ohne Triage (knutOffen fehlt) wie bisher');
   assert.equal(arbeitGruppe({ zustand: 'haengt', knutOffen: 0 } as any), 'wartet', 'hängt bleibt ein Problem');
 });
+
+test('Persona R7 (Daten 05.11.): ein Fragenpaket ist sein eigenes Thema — nicht „Werkbank“ über die Quelle „Hauptchat“', async () => {
+  const { themaVon } = await import('../server/v2kern.ts');
+  assert.equal(themaVon('Fragenpaket: Speicher+ (Rückfragen RBI)', 'Muss man für Speicher+ WirStrom-Kund:in sein? Hauptchat'), 'Speicher+ (Rückfragen RBI)');
+  assert.equal(themaVon('Fragenpaket: Bot-Übergabe an den Service', 'x'), 'Bot', 'bekannte Themen greifen weiter');
+});

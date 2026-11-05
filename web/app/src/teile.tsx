@@ -152,7 +152,7 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
   const jaText = n ? `Ja, alle ${n} wie empfohlen` : k.empfehlung ? `Ja, so: ${k.empfehlung.length > 70 ? `${k.empfehlung.slice(0, 68)}…` : k.empfehlung}` : 'Ja';
   const strang = k.links.map((l) => /\/v2\/arbeit\/([0-9a-f]{8})$/.exec(l.url)?.[1]).find(Boolean) ?? null;
   return (
-    <article className={`karte${fertig ? ' erledigt' : ''}${freigabe ? ' freigabe' : ''}`} aria-label={k.titel}>
+    <article id={`karte-${k.id}`} className={`karte${fertig ? ' erledigt' : ''}${freigabe ? ' freigabe' : ''}`} aria-label={k.titel}>
       {k.thema && k.thema !== 'Sonstiges' && <p className="karte-thema">{k.thema}</p>}
       <h3 className="karte-titel">{k.titel}</h3>
       {/* Plan §23 T4/T3: warum gerade du — die Regel oder das Urteil des Council-Checks. */}
