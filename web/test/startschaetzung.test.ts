@@ -8,7 +8,7 @@ test('Vorgabe ohne eigene Läufe; eigene Mediane, sobald da; Hinweise für Box u
   assert.equal(v.quelle, 'Vorgabe'); assert.match(v.text, /~10 min.*\(Vorgabe\)/); assert.deepEqual(v.hinweise, []);
   const e = startSchaetzung({ tiefe: 'regular', profil: 'bauer', dauerMs: 30 * 60_000, tokens: 800_000 });
   assert.equal(e.schaetzung.dauerMin, 30); assert.equal(e.schaetzung.tokens, 800_000); assert.match(e.text, /aus deinen letzten Läufen/);
-  const voll = startSchaetzung({ tiefe: 'regular', profil: 'bauer', box: { echtGb: 8.5, hostFreiGb: 10 } });
+  const voll = startSchaetzung({ tiefe: 'regular', profil: 'bauer', box: { echtGb: 11.5, hostFreiGb: 10 } });   // 0e3a7ce: Startgrenze 12 GB (vorher 9)
   assert.match(voll.hinweise[0], /wartet in der Schlange/);
   const budget = startSchaetzung({ tiefe: 'deep', profil: 'bauer', budget: 500_000 });
   assert.match(budget.hinweise.join(' '), /über dem Budget/);
