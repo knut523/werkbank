@@ -5,6 +5,7 @@ import { hole, schicke } from './api.ts';
 import { Kontext, type AppKontext } from './kontext.ts';
 import { ChatLeiste } from './chat.tsx';
 import { Anmelden, AlleChats, Themen, Thema, Arbeit, ArbeitDetail, Begriffe, Dokument, Dokumente, Entscheidungen, Entschieden, Erledigt, Jetzt, Mehr, PrDetail, Prs, Suche, Freigabe } from './seiten.tsx';
+import { MeinTag, Board, Skills, Einrichtung, Dateien, Roadmap, Sprint, Ziele, Lage } from './bereiche.tsx';
 import { Laedt, vergessen, vorab } from './teile.tsx';
 import { istIntern, logisch, rel } from './format.ts';
 
@@ -73,6 +74,16 @@ function Seite({ pfad, such }: { pfad: string; such: string }) {
   if (pfad === 'v2/themen') return <Themen />;
   if (pfad === 'v2/thema') return <Thema key={such} name={q.get('name') ?? ''} />;
   if (pfad.startsWith('v2/erledigt')) return <Erledigt key={such} tag={q.get('tag')} />;
+  // Audit 05.11. (8): Bereiche der alten Werkbank (bereiche.tsx)
+  if (pfad === 'v2/tag') return <MeinTag />;
+  if (pfad === 'v2/board') return <Board />;
+  if (pfad === 'v2/skills') return <Skills />;
+  if (pfad === 'v2/einrichtung') return <Einrichtung />;
+  if (pfad === 'v2/dateien') return <Dateien />;
+  if (pfad === 'v2/roadmap') return <Roadmap />;
+  if (pfad === 'v2/sprint') return <Sprint />;
+  if (pfad === 'v2/ziele') return <Ziele />;
+  if (pfad === 'v2/lage') return <Lage />;
   return <div className="seite"><h1>Seite nicht gefunden</h1><p><a href="v2/">Zur Startseite</a></p></div>;
 }
 
