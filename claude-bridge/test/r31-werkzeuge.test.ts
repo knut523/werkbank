@@ -49,3 +49,10 @@ test('Aktivitätszeilen', () => {
   assert.match(statusLine(W('fragenpaket'), { titel: 'X', fragen: [1, 2] }) ?? '', /Fragenpaket angelegt: „X“ \(2 Fragen\)/);
   assert.match(statusLine(W('jira_anlegen'), { projekt: 'OLAF', titel: 'T' }) ?? '', /Jira-Ticket angelegt: OLAF „T“/);
 });
+
+test('Plan §23 T3: orch_council gibt es nur im Hauptchat — Unter-Chats melden keine Council-Urteile', () => {
+  assert.equal(classify(W('orch_council'), { frage: 'x', urteil: 'HALTEN', grund: 'y' }, {}).cls, 'blocked');
+  assert.notEqual(classify(W('orch_council'), { frage: 'x', urteil: 'HALTEN', grund: 'y' }, { leit: true }).cls, 'blocked');
+  assert.ok(ORCH_MCP_TOOLS.includes(W('orch_council')));
+  assert.ok(mcpDenyForStrang().includes(W('orch_council')), 'im Strang als Deny-Regel');
+});

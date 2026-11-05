@@ -116,7 +116,7 @@ import { autoSchliessen, zurueckholen } from './aufraeumen.ts';
 import { braucheBraucht, schliesseBraucht, archiviere as archiviereStrang, zurueckholen as brauchtZurueck, hauptchatAktionen, kartEingabe, paketLiveFakten, wendeAufInbox, meldeAktionen, zustellStand, BRAUCHT_AN as brauchtAn } from './brauchtab.ts';
 import { sqlAus, prsAus } from './braucht.ts';
 import { faellig, logZeile, widerrufbar, widerrufText } from './annahme.ts';
-import { autoAnnahmeAn, annahmeMs, stufeVon, triageAn, type Council, type councilWirkung } from './stufe.ts';
+import { autoAnnahmeAn, annahmeMs, stufeVon, triageAn, councilWirkung as councilWirkungFn, type Council } from './stufe.ts';
 import { bremseAn, frei as anwesenheitFrei, merkeDa } from './anwesenheit.ts';
 import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
@@ -1845,7 +1845,7 @@ async function logEntscheidung(u: User, e: any, antwort: string, durch: string, 
 }
 // Plan §23 T3: Council-Urteile des Hauptchats zu gewichtigen Fragen. Gespeichert je Person und Frage; die Inbox hängt sie an.
 const councilCol = () => wb().collection('council_urteile');
-async function councilAnwenden(u: User, f: Frage, c: Council, w: ReturnType<typeof councilWirkung>) {
+async function councilAnwenden(u: User, f: Frage, c: Council, w: ReturnType<typeof councilWirkungFn>) {
   await councilCol().updateOne({ _id: `${u.id}:${f.id}` as any }, { $set: { userId: u.id, frage: f.id, titel: f.titel, ...c } }, { upsert: true });
   zahlCache.delete(u.id);
   if (!w.schliessen) return;   // AN_KNUT: die Frage steht ab jetzt in „Für dich“
@@ -3783,7 +3783,7 @@ async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
   return internalUser(req, { userId: d ? String(d._id) : '' });
 }
 
-on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich|aktion)$/, async (req, res, m) => {
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich|aktion|council)$/, async (req, res, m) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
   const id = String(b.id ?? '');
@@ -3817,8 +3817,22 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
     case 'gruendlich': return send(res, 200, await gruendlichOrch(u, id, b.via === 'leitstand' ? 'leitstand' : 'hand'));   // Plan 274 (D1)
     case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? '', b.via === 'leitstand' ? 'leitstand' : 'knut'));
     case 'thema': return send(res, 200, await setThema(u, id, b.thema));   // Plan 154, S2: Themen-Gruppe von Hand
+    case 'council': return send(res, 200, await councilMelden(u, b));   // Plan §23 T3: Hauptchat-Werkzeug orch_council
   }
 });
+/** Plan §23 T3: Council-Urteil des Hauptchats zu einer gewichtigen Frage (dieselben Prüfungen wie POST /api/v2/council). */
+async function councilMelden(u: User, b: any) {
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  const f = fragenAus((await inboxFuer(u)).eintraege).fragen.find((x) => x.id === String(b.frage ?? ''));
+  if (!f) throw new HttpError(404, 'Diese Frage ist nicht (mehr) offen.');
+  if (f.triage?.klasse !== 'gewichtig') throw new HttpError(409, `Council nur für gewichtige Fragen — diese ist ${f.triage?.klasse ?? 'ohne Klasse'} (${f.triage?.grund ?? ''}).`);
+  const c: Council = { urteil: String(b.urteil ?? '') as Council['urteil'], grund: String(b.grund ?? '').slice(0, 2000), bedingung: b.bedingung ? String(b.bedingung).slice(0, 2000) : null, at: new Date().toISOString() };
+  let w: ReturnType<typeof councilWirkungFn>;
+  try { w = councilWirkungFn({ ...c, empfehlung: f.empfehlung }); } catch (e: any) { throw new HttpError(400, String(e?.message ?? e)); }
+  await councilAnwenden(u, f, c, w);
+  log('council', { user: u.id, frage: f.id, urteil: c.urteil });
+  return { ok: true, frage: f.id, anzeige: w.anzeige, geschlossen: w.schliessen };
+}
 
 // Leitstand (docs/plan-leitstand.md): Start nur über den internen Kanal, nur für Admins (startLeitstand prüft die Rolle).
 // Freigaben für die Hauptsitzung (Plan 154 §9): lesen, prüfen (pre-push-Hook), „gepusht“ melden. Anlegen/Zurückziehen gibt es

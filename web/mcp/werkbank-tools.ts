@@ -150,6 +150,13 @@ const ORCH_TOOLS = [
     run: async (a: any) => { const j = await call('/internal/orchestrator/thema', { id: a.id, thema: a.thema }); return `Thema: ${j.id} → ${j.thema}${j.hand ? ' (von Hand)' : ' (automatisch)'}`; },
   },
   {
+    // Plan §23 T3 (Knut 05.11.): gewichtige Fragen entscheidet der Hauptchat erst nach einem Council-Check.
+    name: 'orch_council',
+    description: 'Ergebnis deines Council-Checks zu einer GEWICHTIGEN Frage melden (Klasse „gewichtig“: Architektur, Migration, Löschen, vom Strang hochgestuft). Vorher den Council laufen lassen (Befürworter, Fachprüfer, Advocatus Diaboli mit challenge art=council, Finalizer). urteil: HALTEN = Empfehlung gilt; AENDERN = gilt nur mit bedingung (Pflicht); AN_KNUT = Knut entscheidet (steht dann in „Für dich“). HALTEN/AENDERN schließen die Frage, der Text geht an den Unter-Chat, Eintrag unter „Von Claude entschieden“ (umkehrbar). frage: Kennung aus der Entscheidungsseite (z. B. d-<strang>-<hash>~D3).',
+    inputSchema: { type: 'object', properties: { frage: { type: 'string' }, urteil: { type: 'string', enum: ['HALTEN', 'AENDERN', 'AN_KNUT'] }, grund: { type: 'string' }, bedingung: { type: 'string' } }, required: ['frage', 'urteil', 'grund'] },
+    run: async (a: any) => { const j = await call('/internal/orchestrator/council', { frage: a.frage, urteil: a.urteil, grund: a.grund, bedingung: a.bedingung ?? null }); return `Council: ${j.frage} → ${j.anzeige}${j.geschlossen ? ' (geschlossen, an den Unter-Chat)' : ' (liegt jetzt bei Knut)'}`; },
+  },
+  {
     name: 'orch_review',
     description: 'Strang ablegen (wird nicht mehr automatisch fortgesetzt). Ersetzt NICHT Knuts Prüfung: ein fertiger Strang bleibt in Knuts Review-Schlange auf „Heute“, bis Knut „Passt“ klickt.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' }, note: { type: 'string' } }, required: ['id'] },
