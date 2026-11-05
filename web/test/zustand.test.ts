@@ -86,3 +86,10 @@ test('S8/D6: Aufräumen und „Mein Tag“ aus der Leiste nur per Schalter (Vorg
   const { aufraeumenAn } = await import('../server/zustand.ts');
   assert.equal(aufraeumenAn({}), false); assert.equal(aufraeumenAn({ WERKBANK_AUFRAEUMEN: '1' }), true);
 });
+
+test('Plan §24 A2: ohne Status-Zeile — erst „läuft“ (wird automatisch fortgesetzt), nach dem Stopp „hängt“ (nicht „wartet“)', () => {
+  const e = { status: 'waiting', reason: 'Antwort ohne Status-Marke — lesen und antworten', cause: 'ohne_status', queued: null, marke: null, offeneFragen: 0 } as any;
+  assert.deepEqual(zustandAus(e), { zustand: 'laeuft', grund: 'wird automatisch fortgesetzt (ohne Status-Zeile)' });
+  assert.deepEqual(zustandAus({ ...e, gestoppt: true }), { zustand: 'haengt', grund: '2× ohne Status-Zeile fortgesetzt — der Hauptchat ist informiert' });
+  assert.equal(zustandAus({ ...e, offeneFragen: 1 }).zustand, 'wartet', 'echte Rückfrage geht vor');
+});

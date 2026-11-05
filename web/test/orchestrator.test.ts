@@ -225,7 +225,9 @@ before(async () => {
     CREDS_KEY: randomBytes(32).toString('hex'), CREDS_IV: randomBytes(16).toString('hex'), WERKBANK_CREDS_KEY: randomBytes(32).toString('hex'),
     WERKBANK_VAULT_SYNC_DIR: join(tmp, 'vault-sync'), WERKBANK_MEILI_INDEX: `werkbank_orch_test_${tag}`, WERKBANK_FORGE_MCP: '',
     // Automatisch fortsetzen: schneller Takt, kleiner Deckel (Plan auto-weiter).
-    ORCH_AUTO_WEITER_TICK_MS: '300', ORCH_AUTO_WEITER_MAX: '2', ...g0Env };
+    ORCH_AUTO_WEITER_TICK_MS: '300', ORCH_AUTO_WEITER_MAX: '2', ...g0Env,
+    // Die Mock-Antworten dieser Abläufe tragen keine Status-Marke; A2 (automatisch „weiter“) hat eigene Tests.
+    ORCH_OHNE_STATUS: 'aus' };
   startWeb();
   await waitFor(`http://127.0.0.1:${BRIDGE_PORT}/health`);
   await waitFor(`${B}/api/health`);
@@ -818,17 +820,28 @@ test('Knut 17.10.: Stufen — wichtig oben und offen, normal nach Frist angenomm
 test('Plan §23 T8 (05.11.: Stränge standen über Nacht): Zug ohne Status-Marke oder mit „läuft“ → höchstens 2× automatisch weiter, dann Knut', async () => {
   const { fortsetzText } = await import('../server/orchestrator.ts');
   assert.equal(statusMark('…\nStatus: läuft'), 'läuft');
-  assert.equal(orchStatus(run, turn('ok'), ai('ohne Marke')).cause, undefined, 'ohne Triage-Schalter: parken wie bisher');
-  process.env.WERKBANK_TRIAGE = '1';
+  // Plan §24 A2: für alle Stränge (nicht mehr am Triage-Schalter); ORCH_OHNE_STATUS=aus schaltet ab.
+  process.env.ORCH_OHNE_STATUS = 'aus';
+  assert.equal(orchStatus(run, turn('ok'), ai('ohne Marke')).cause, undefined, 'abgeschaltet: parken wie bisher');
+  delete process.env.ORCH_OHNE_STATUS;
   try {
   const ohne = orchStatus(run, turn('ok'), ai('Zwischenstand ohne Marke'));
   assert.equal(ohne.status, 'waiting'); assert.equal(ohne.cause, 'ohne_status'); assert.match(ohne.reason, /ohne Status-Marke/, 'Zustand „stand-fehlt“ bleibt erkennbar');
   const laeuft = orchStatus(run, turn('ok'), ai('Teil A fertig.\nStatus: läuft'));
   assert.equal(laeuft.cause, 'ohne_status'); assert.match(laeuft.reason, /läuft/);
-  assert.equal(decide('ok', {}, {}, ai('ohne Marke')).action, 'send');
-  assert.equal(decide('ok', { autoStreak: 1 }, {}, ai('ohne Marke')).action, 'send');
-  assert.equal(decide('ok', { autoStreak: 2 }, {}, ai('ohne Marke')).action, 'stop', 'nach 2× ohne Marke: Knut');
-  assert.equal(decide('ok', {}, {}, ai('Status: braucht Antwort')).action, 'none', 'echte Frage: kein automatisches weiter');
+  // Hauptsitzung 05.11. 17:20: der Anstoß kommt erst 5 min nach dem Zugende (Zeit zum Lesen), dann höchstens 2×.
+  assert.equal(decide('ok', {}, {}, ai('ohne Marke')).action, 'wait', 'erst nach 5 min');
+  const spaet = { now: T0 + 6 * 60_000 };
+  assert.equal(decide('ok', {}, spaet, ai('ohne Marke')).action, 'send');
+  assert.equal(decide('ok', { autoStreak: 1 }, spaet, ai('ohne Marke')).action, 'send');
+  assert.equal(decide('ok', { autoStreak: 2 }, spaet, ai('ohne Marke')).action, 'stop', 'nach 2× ohne Marke: hängt');
+  assert.equal(decide('ok', {}, spaet, ai('Status: braucht Antwort')).action, 'none', 'echte Frage: kein automatisches weiter');
+  // „braucht Antwort“ ohne etwas an Knut/Hauptchat im Stand-Block (Fall ba444b36) gilt wie ohne Marke.
+  const leer = orchStatus(run, turn('ok'), ai('### Stand\n- Erledigt: A\n- Braucht Knut: nichts\nStatus: braucht Antwort'));
+  assert.equal(leer.cause, 'ohne_status');
+  const echt = orchStatus(run, turn('ok'), ai('### Stand\n- Erledigt: A\n- Braucht Knut: D2 Budget freigeben\nStatus: braucht Antwort'));
+  assert.equal(echt.cause, undefined); assert.equal(echt.status, 'waiting');
+  assert.equal(orchStatus(run, turn('ok'), ai('Soll ich A oder B nehmen?\nStatus: braucht Antwort')).cause, undefined, 'ohne Stand-Block: als echte Frage nehmen');
   assert.match(fortsetzText('ohne_status', null, 1, 2), /ohne Status-Zeile.*Status: fertig \| braucht Antwort \| blockiert.*1\/2/);
-  } finally { delete process.env.WERKBANK_TRIAGE; }
+  } finally { delete process.env.ORCH_OHNE_STATUS; }
 });

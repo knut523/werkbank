@@ -9,7 +9,6 @@
 // nur bei normalem Ende — aus der Status-Marke der letzten Antwort.
 
 import { DOD_PFLICHT } from './dod.ts';
-import { triageAn } from './stufe.ts';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -215,10 +214,10 @@ export function orchStatus(run: { startError?: string | null; startedAt: Date | 
   const mark = statusMark(last.text);
   if (mark === 'fertig') return { status: 'done', reason: 'Agent meldet „fertig“' };
   if (mark === 'blockiert') return { status: 'failed', reason: 'Agent meldet „blockiert“' };
-  if (mark === 'braucht Antwort') return { status: 'waiting', reason: 'Agent braucht eine Antwort' };
-  // Plan §23 T8: ohne Marke oder „läuft“ → automatisch weiter (höchstens OHNE_STATUS_MAX-mal), statt über Nacht zu parken.
-  // Hinter dem Triage-Schalter (wie §23 insgesamt): ohne ihn bleibt es beim Parken wie bisher.
-  const t8 = triageAn() ? { cause: 'ohne_status' as const } : {};
+  // Plan §23 T8 / §24 A2 (für alle Stränge; ORCH_OHNE_STATUS=aus schaltet ab): ohne Marke, mit „läuft“ oder mit „braucht Antwort“
+  // ohne etwas an Knut/Hauptchat im Stand-Block → automatisch weiter (höchstens OHNE_STATUS_MAX-mal), statt über Nacht zu parken.
+  const t8 = ohneStatusAn() ? { cause: 'ohne_status' as const } : {};
+  if (mark === 'braucht Antwort') return t8.cause && !echteFrage(last.text) ? { status: 'waiting', reason: 'meldet „braucht Antwort“, aber nichts an Knut oder den Hauptchat — wird automatisch fortgesetzt', ...t8 } : { status: 'waiting', reason: 'Agent braucht eine Antwort' };
   if (mark === 'läuft') return { status: 'waiting', reason: t8.cause ? 'Agent meldet „läuft“ — wird automatisch fortgesetzt' : 'Agent meldet „läuft“ — lesen und antworten', ...t8 };
   return { status: 'waiting', reason: 'Antwort ohne Status-Marke — lesen und antworten', ...t8 };
 }
@@ -246,8 +245,22 @@ export function mitDeckel(st: { status: OrchStatus; reason: string; cause?: Auto
 export const AUTO_BUSY_MS = 2 * 60_000, AUTO_RATE_MS = 30 * 60_000, AUTO_SAVE_MS = 30_000, AUTO_STALE_MS = 6 * 3600_000;
 export const autoMax = () => Math.max(1, Math.floor(Number(process.env.ORCH_AUTO_WEITER_MAX)) || 30);
 export const CAUSE_TEXT: Record<AutoCause, string> = { limit: 'Schrittlimit', timeout: 'Zeitlimit', interrupted: 'Brücke neu gestartet', lost: 'Nachricht nicht angekommen', busy: 'Parallelgrenze', rate_limit: 'Kontingent', ohne_status: 'Zug endete ohne Status-Zeile' };
-/** Plan §23 T8: so oft höchstens „weiter“ nach einem Zug ohne Status-Marke (oder mit „läuft“) — danach entscheidet Knut. */
+/** Plan §23 T8: so oft höchstens „weiter“ nach einem Zug ohne Status-Marke (oder mit „läuft“) — danach „hängt“ + Hauptchat. */
 export const OHNE_STATUS_MAX = 2;
+/** Hauptsitzung 05.11. 17:20: Anstoß erst so lange nach dem Zugende (Zeit, die Antwort zu lesen). */
+export const OHNE_STATUS_WARTE_MS = 5 * 60_000;
+/** Plan §24 A2: an für alle Stränge; ORCH_OHNE_STATUS=aus schaltet ab (Rückweg). */
+export const ohneStatusAn = (env = process.env) => env.ORCH_OHNE_STATUS !== 'aus';
+
+/** „braucht Antwort“ echt? Nur, wenn der Stand-Block etwas an Knut oder den Hauptchat richtet (Braucht Knut, Braucht Hauptsitzung,
+ *  Entscheidungen, Fragen). Ohne Stand-Block: als echte Frage nehmen (lieber einmal zu viel fragen). */
+export function echteFrage(text: string): boolean {
+  const t = String(text ?? '');
+  const i = t.lastIndexOf('### Stand');
+  if (i < 0) return true;
+  const zeilen = t.slice(i).split('\n').filter((l) => /^\s*[-*]\s*\**(Braucht Knut|Braucht Hauptsitzung|Braucht Hauptchat|Entscheidungen|Fragen|Offene Fragen)\b/i.test(l));
+  return zeilen.some((l) => { const inhalt = l.replace(/^\s*[-*]\s*\**[^:]*:\**\s*/, '').trim(); return !!inhalt && !/^(nichts|keine?|—|-|n\/a)\b/i.test(inhalt); });
+}
 
 // ---------- Zustellung mit Bestätigung und Wiederholung (Plan 274, D4b; Vorfall e422ab42, 20.10.) ----------
 
@@ -317,6 +330,7 @@ export function autoWeiter(run: AutoRun, st: { cause?: AutoCause }, s: StrandSta
   if ((cause === 'limit' || cause === 'timeout') && t && !(last && !last.fromUser && last.at >= t.start - 5000) && ctx.now - end < AUTO_SAVE_MS) return { action: 'wait', key, why: 'Antwort wird gespeichert' };
   if ((run.autoStreak ?? 0) >= ctx.max) return { action: 'stop', key, why: `${ctx.max}× automatisch fortgesetzt — Chat ansehen` };
   if (cause === 'ohne_status' && (run.autoStreak ?? 0) >= OHNE_STATUS_MAX) return { action: 'stop', key, why: `${OHNE_STATUS_MAX}× ohne Status-Zeile fortgesetzt — Chat ansehen` };
+  if (cause === 'ohne_status' && ctx.now - end < OHNE_STATUS_WARTE_MS) return { action: 'wait', key, why: 'ohne Status-Zeile — Anstoß 5 min nach dem Zugende' };
   return { action: 'send', key, why: CAUSE_TEXT[cause] };
 }
 
@@ -856,7 +870,9 @@ async function deliverNow(u: User, conv: string, msg: string): Promise<Date> {
 
 export interface AutoDeps { userById: (id: string) => Promise<User | null>; accountFree: (u: User) => Promise<boolean>; log?: (msg: string, data: Record<string, unknown>) => void;
   /** Plan 274 (D4a): läuft ein anderer Strang im selben Worktree? Dann wartet das automatische „weiter“. */
-  belegt?: (u: User, d: any) => Promise<boolean> }
+  belegt?: (u: User, d: any) => Promise<boolean>;
+  /** Plan §24 A2/A3: Meldung an den Hauptchat (leitstand.meldeLeitstand). */
+  melde?: (u: User, d: any, text: string) => Promise<boolean> }
 
 let ticking = false;
 
@@ -895,6 +911,13 @@ async function autoOne(u: User, d: any, s: any, deps: AutoDeps) {
     const at = new Date();
     const r = await runs().updateOne({ _id: d._id, autoStopped: null }, { $set: { autoStopped: { at, reason: dec.why, cause: st.cause } } });
     if (!r.modifiedCount) return;
+    // Plan §24 A2: ohne Status-Zeile ist es kein Fall für Knut — „hängt“ und der Hauptchat bekommt eine Meldung (ohne Hauptchat
+    // legt meldeLeitstand selbst eine Rückfrage an).
+    if (st.cause === 'ohne_status' && deps.melde) {
+      await deps.melde(u, d, `Strang „${d.title}“ (${d._id}) hängt: ${OHNE_STATUS_MAX}× automatisch fortgesetzt, aber keine Status-Zeile. Bitte Chat ansehen, Stand holen oder anhalten.`).catch((e) => deps.log?.('orch-auto-weiter meldung fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }));
+      deps.log?.('orch-auto-weiter hängt', { id: d._id });
+      return;
+    }
     // Eintrag in „Heute“: eine Rückfrage zum Strang (zählt in „Heute (n)“, blockiert weitere Fortsetzungen).
     let qid: string;
     do { qid = 'q-' + randomUUID().slice(0, 6); } while (await questions().findOne({ _id: qid as any }));
@@ -1032,7 +1055,7 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'>, now =
           // Nachgefordert und seitdem keine Antwort MIT Marke → offen (zählt für „hängt?“ nach 30 min und gegen eine zweite Nachforderung).
           const offenNach = !!d.standNachgefordert && !marke;
           const nachAt = offenNach ? new Date(d.standNachgefordert.at).getTime() : null;
-          const z = zustandAus({ status: st.status, reason: st.reason, cause: st.cause, queued: s?.queued ?? null, marke, offeneFragen: fragenJe.get(String(d._id)) ?? 0, nachgefordertAt: nachAt }, now);
+          const z = zustandAus({ status: st.status, reason: st.reason, cause: st.cause, gestoppt: d.autoStopped?.cause === 'ohne_status', queued: s?.queued ?? null, marke, offeneFragen: fragenJe.get(String(d._id)) ?? 0, nachgefordertAt: nachAt }, now);
           set.zustand = z.zustand; set.zustandGrund = z.grund; set.marke = marke;
           if (marke && d.standNachgefordert) set.standNachgefordert = null;   // wieder eine Marke: nächste Lücke darf nachgefordert werden
           const ab = abweichung(st.status, z.zustand);

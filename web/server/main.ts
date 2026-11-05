@@ -4715,6 +4715,7 @@ const orchDeps = {
   },
   log,
   belegt: worktreeBelegt,   // Plan 274 (D4a): „weiter“ wartet, solange ein anderer Strang im selben Worktree läuft
+  melde: (u: User, d: any, text: string) => meldeLeitstand(u, d, text),   // Plan §24 A2: „hängt“ ohne Status-Zeile → Hauptchat
 };
 startAutoWeiter(orchDeps);
 // Stand je Strang festschreiben (Teil B, G1) — unabhängig vom Auto-Fortsetzen; ORCH_STATUS=off schaltet ab.

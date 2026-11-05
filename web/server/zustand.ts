@@ -35,6 +35,8 @@ export interface ZustandEingang {
   status: 'running' | 'waiting' | 'done' | 'failed' | 'blocked_g0';
   reason: string;
   cause?: string;
+  /** Plan §24 A2: das automatische „weiter“ hat ohne Status-Zeile aufgegeben (autoStopped mit cause ohne_status). */
+  gestoppt?: boolean;
   queued?: { pos: number; since: number } | null;
   /** Status-Marke der letzten Antwort (null = keine). */
   marke: 'fertig' | 'braucht Antwort' | 'blockiert' | null;
@@ -60,6 +62,8 @@ export function zustandAus(e: ZustandEingang, now = Date.now()): { zustand: Zust
     return { zustand: 'haengt', grund: e.reason };
   }
   // waiting
+  // Plan §24 A2: ohne Status-Zeile — erst wird automatisch fortgesetzt („läuft“), nach dem Stopp „hängt“ (nicht „wartet auf Knut“).
+  if (e.cause === 'ohne_status') return e.gestoppt ? { zustand: 'haengt', grund: '2× ohne Status-Zeile fortgesetzt — der Hauptchat ist informiert' } : { zustand: 'laeuft', grund: 'wird automatisch fortgesetzt (ohne Status-Zeile)' };
   if (e.marke === 'braucht Antwort') return { zustand: 'wartet', grund: 'braucht eine Antwort' };
   if (e.cause === 'interrupted' || e.cause === 'limit' || e.cause === 'timeout') return { zustand: 'laeuft', grund: 'wird automatisch fortgesetzt' };
   if (e.marke === null && /ohne Status-Marke/.test(e.reason)) {
