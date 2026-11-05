@@ -26,6 +26,18 @@ const turn = (outcome: string | null, end: number | null = T0 + 60_000) => ({ ru
 const ai = (text: string) => ({ fromUser: false, text, error: false, at: T0 + 61_000 });
 const ev = (r: any, s: any, last: any, now = T0 + 70_000) => strandEvent(r, orchStatus(r, s, last, now), s, last, now);
 
+test('Plan §24 A3: Meldung an den Hauptchat trägt „Braucht Knut“ und „Braucht Hauptsitzung“; ohne Status-Zeile meldet erst der Stopp', () => {
+  const stand = '### Stand\n- Erledigt: x\n- Braucht Knut: D2 Budget freigeben\n- Braucht Hauptsitzung: Live-Gang nach Commit abc1234\n';
+  const f = ev(run, turn('ok'), ai(`${stand}Status: fertig`))!;
+  assert.equal(f.kind, 'fertig');
+  assert.match(f.text, /Braucht Knut: D2 Budget freigeben/); assert.match(f.text, /Braucht Hauptsitzung: Live-Gang nach Commit abc1234/);
+  assert.match(ev(run, turn('ok'), ai(`${stand}Status: braucht Antwort`))!.text, /Braucht Knut: D2/);
+  assert.doesNotMatch(ev(run, turn('ok'), ai('### Stand\n- Braucht Knut: nichts\nStatus: fertig'))!.text, /Braucht Knut/, '„nichts“ steht nicht in der Meldung');
+  // ohne Status-Zeile: das automatische „weiter“ läuft — kein „hängt“ vor dem Stopp, auch nach langer Zeit nicht
+  assert.equal(ev(run, turn('ok'), ai('Zwischenstand ohne Marke'), T0 + 60 * 60_000), null);
+  assert.equal(ev({ ...run, autoStopped: { at: new Date(T0 + 5), reason: '2× ohne Status-Zeile', cause: 'ohne_status' } }, turn('ok'), ai('x')), null, 'A2 meldet selbst — keine Doppelmeldung');
+});
+
 test('Ereignisse eines Strangs (S2): fertig, braucht Antwort, blockiert, Deckel, review_ready; technische Zugenden nicht', () => {
   const done = ev(run, turn('ok'), ai('…\n### Stand\n- Erledigt: x\nStatus: fertig'))!;
   assert.equal(done.kind, 'fertig'); assert.equal(done.key, `fertig:abc12345:${T0 + 1000}`);

@@ -66,15 +66,33 @@ export function prReviewText(p: { repo: string; number: number; paket?: string }
   return `Neues Review fertig: ${p.repo.split('/')[1] ?? p.repo}#${p.number} — Empfehlung: ${k ? e[k.empfehlung] : 'kein Entwurf (Review-Ansicht prüfen)'}`;
 }
 
+/** Plan §24 A3: die Felder „Braucht Knut“ und „Braucht Hauptsitzung“ aus dem Stand-Block der letzten Antwort (leer/„nichts“ fällt weg). */
+export function brauchtFelder(text: string | null | undefined): string {
+  const t = String(text ?? '');
+  const i = t.lastIndexOf('### Stand');
+  if (i < 0) return '';
+  const teile: string[] = [];
+  for (const name of ['Braucht Knut', 'Braucht Hauptsitzung']) {
+    const m = t.slice(i).match(new RegExp(`^\\s*[-*]\\s*\\**${name}(?=$|[\\s:*]):?\\**:?\\s*(.+)$`, 'im'));
+    const inhalt = (m?.[1] ?? '').trim();
+    if (inhalt && !/^(nichts|keine?|—|-|n\/a)\b/i.test(inhalt)) teile.push(`${name}: ${inhalt.slice(0, 300)}`);
+  }
+  return teile.length ? ` · ${teile.join(' · ')}` : '';
+}
+
 export function strandEvent(run: any, st: { status: string; reason: string; cause?: string }, s: StrandState | null | undefined, last: LastMsg | null, now = Date.now()): LeitEvent | null {
   const strand = { id: String(run._id), title: String(run.title ?? '') };
+  const felder = last && !last.fromUser ? brauchtFelder(last.text) : '';
   const turnKey = s?.turn?.start ?? new Date(run.lastSentAt ?? run.startedAt).getTime();
   const ex = last && !last.fromUser ? excerpt(last.text, 400) : '';
+  if (run.autoStopped?.cause === 'ohne_status') return null;   // Plan §24 A2 meldet „hängt“ selbst (keine Doppelmeldung)
   if (run.autoStopped) return { key: `deckel:${strand.id}:${new Date(run.autoStopped.at).getTime()}`, kind: 'deckel', at: new Date(run.autoStopped.at).getTime(), text: String(run.autoStopped.reason ?? 'Deckel erreicht'), strand };
-  if (run.reviewReadyAt) return { key: `review:${strand.id}:${new Date(run.reviewReadyAt).getTime()}`, kind: 'review', at: new Date(run.reviewReadyAt).getTime(), text: (run.prReview ? prReviewText(run.prReview) : 'meldet review_ready') + offeneEntscheidungenText(run), excerpt: ex, strand };
+  if (run.reviewReadyAt) return { key: `review:${strand.id}:${new Date(run.reviewReadyAt).getTime()}`, kind: 'review', at: new Date(run.reviewReadyAt).getTime(), text: (run.prReview ? prReviewText(run.prReview) : 'meldet review_ready') + offeneEntscheidungenText(run) + felder, excerpt: ex, strand };
   if (st.status === 'running') return null;
   // Sicherheitsnetz (Plan 154, G9): normal setzt das automatische „weiter“ binnen 20–40 s fort. Steht der Strang nach hangMs()
   // noch an der Grenze, meldet er „hängt“ — einmal je Zug — mit dem Grund, warum nicht fortgesetzt wurde (autoHold).
+  // Plan §24 A2: ohne Status-Zeile setzt das automatische „weiter“ fort; nach dem Stopp meldet es selbst („hängt“) — hier nichts.
+  if (st.cause === 'ohne_status') return null;
   if (st.cause) {
     const endAt = s?.turn?.end ?? s?.turn?.start ?? new Date(run.lastSentAt ?? run.startedAt).getTime();
     // Gewollte Wartezeiten des Auto-weiter zuerst abwarten (Council R1, Bedingung 6): Parallelgrenze 2 min, Kontingent 30 min.
@@ -85,8 +103,8 @@ export function strandEvent(run: any, st: { status: string; reason: string; caus
     return { key: `haengt:${strand.id}:${turnKey}`, kind: 'haengt', at: endAt, text: `hängt seit ${Math.round((now - endAt) / 60_000)} min: ${st.reason}${why}`, excerpt: ex, strand };
   }
   const at =s?.turn?.end ?? last?.at ?? turnKey;
-  if (st.status === 'done') return { key: `fertig:${strand.id}:${turnKey}`, kind: 'fertig', at, text: 'meldet „fertig“' + offeneEntscheidungenText(run), excerpt: ex, strand };
-  if (st.status === 'waiting') return { key: `antwort:${strand.id}:${turnKey}`, kind: 'antwort', at, text: `wartet: ${st.reason}`, excerpt: ex, strand };
+  if (st.status === 'done') return { key: `fertig:${strand.id}:${turnKey}`, kind: 'fertig', at, text: 'meldet „fertig“' + offeneEntscheidungenText(run) + felder, excerpt: ex, strand };
+  if (st.status === 'waiting') return { key: `antwort:${strand.id}:${turnKey}`, kind: 'antwort', at, text: `wartet: ${st.reason}${felder}`, excerpt: ex, strand };
   if (st.status === 'failed') return { key: `blockiert:${strand.id}:${turnKey}`, kind: 'blockiert', at, text: st.reason, excerpt: ex, strand };
   return null;
 }
