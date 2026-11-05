@@ -105,6 +105,44 @@ test('Unter-Chats und Hauptchat nur für Admin; Chat ohne Zugang: Klartext', asy
   assert.equal(c.status, 412); assert.match(c.b.error, /alles andere geht ohne/);
 });
 
+test('Audit 05.11. (4): Hauptchat arbeitet → Text wird eingereiht statt 409; GET zeigt, was wartet', async () => {
+  const rein: string[] = [];
+  const alt = { hauptchat: deps.hauptchat, laeuftChat: deps.laeuftChat };
+  deps.hauptchat = async () => ({ conv: 'h1', url: null }); deps.laeuftChat = async () => true;
+  deps.hauptchatEinreihen = async (_u, t) => { rein.push(t); return rein.length; };
+  deps.hauptchatEingereiht = async () => rein.map((t) => ({ text: t, at: new Date(0) }));
+  try {
+    const r = await rufe('POST', '/api/v2/chat', ADMIN, { ziel: 'hauptchat', text: 'Bitte PR 393 ansehen' });
+    assert.equal(r.status, 200, JSON.stringify(r.b));
+    assert.equal(r.b.eingereiht, true); assert.equal(r.b.wartend, 1);
+    assert.deepEqual(rein, ['Bitte PR 393 ansehen']);
+    const g = await rufe('GET', '/api/v2/chat?ziel=hauptchat', ADMIN);
+    assert.equal(g.b.eingereiht.length, 1); assert.match(g.b.eingereiht[0].text, /PR 393/);
+    delete deps.hauptchatEinreihen;
+    assert.equal((await rufe('POST', '/api/v2/chat', ADMIN, { ziel: 'hauptchat', text: 'x' })).status, 409, 'ohne Schlange wie bisher');
+  } finally { deps.hauptchat = alt.hauptchat; deps.laeuftChat = alt.laeuftChat; delete deps.hauptchatEinreihen; delete deps.hauptchatEingereiht; }
+});
+
+test('Audit 05.11. (4): Takt stellt Eingereihtes zu, sobald der Hauptchat frei ist — gebündelt, bei Fehler zurück', async () => {
+  const { hauptchatZustellen } = await import('../server/v2.ts');
+  let laeuft = true, fehler = false;
+  const liegt: any[] = [{ id: 'a', text: 'Erste', at: new Date(1) }, { id: 'b', text: 'Zweite', at: new Date(2) }];
+  const gesendet: string[] = [];
+  const z = {
+    hauptchat: async () => ({ conv: 'h1', url: null }), laeuftChat: async () => laeuft,
+    nehmen: async () => liegt.splice(0), zuruecklegen: async (_u: any, l: any[]) => { liegt.unshift(...l); },
+    senden: async (_u: any, _c: string, t: string) => { if (fehler) throw new Error('LibreChat weg'); gesendet.push(t); return new Date(); }, log: () => {},
+  };
+  assert.equal(await hauptchatZustellen(z, ADMIN), 0, 'arbeitet noch');
+  assert.equal(liegt.length, 2);
+  laeuft = false; fehler = true;
+  assert.equal(await hauptchatZustellen(z, ADMIN), 0); assert.equal(liegt.length, 2, 'zurückgelegt');
+  fehler = false;
+  assert.equal(await hauptchatZustellen(z, ADMIN), 2);
+  assert.equal(gesendet.length, 1); assert.match(gesendet[0], /2 Nachrichten[\s\S]*Erste[\s\S]*Zweite/);
+  assert.equal(liegt.length, 0);
+});
+
 test('C2: automatisch Geschlossenes steht sichtbar auf der Entscheidungsseite (zählt nicht mit) und lässt sich wieder öffnen', async () => {
   const r = await rufe('GET', '/api/v2/entscheidungen', ADMIN);
   assert.equal(r.b.geschlossen.length, 1); assert.match(r.b.geschlossen[0].grund, /D1/);

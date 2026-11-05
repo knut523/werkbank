@@ -186,6 +186,7 @@ p { margin: 0 0 var(--s1); }
 .blase { border-radius: 12px; padding: 10px 12px; max-width: 100%; }
 .blase.ich { background: var(--akzent-hell); align-self: flex-end; max-width: 90%; }
 .blase.assistent { background: var(--grund); }
+.blase.wartet { opacity: .75; border: 1px dashed var(--linie, #bbb); }
 .seite .blase { margin-bottom: 10px; }
 .chat-eingabe { border-top: 1px solid var(--linie); padding: var(--s1) var(--s2) var(--s2); }
 .chat-aktionen { display: flex; justify-content: flex-end; align-items: center; gap: var(--s1); margin-top: var(--s1); }

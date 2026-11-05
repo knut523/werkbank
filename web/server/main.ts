@@ -122,8 +122,8 @@ import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
 import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
 import { chatStatusAn, offeneJeStrang, hauptchatJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
-import { registerV2, appDist, v2Index } from './v2.ts';
-import { liste as v2lcListe, volltext as v2lcVolltext } from './v2librechat.ts';
+import { registerV2, appDist, v2Index, hauptchatZustellen } from './v2.ts';
+import { liste as v2lcListe, volltext as v2lcVolltext, senden as v2lcSenden } from './v2librechat.ts';
 import { abgebrochenMarkieren as v2Abgebrochen } from './v2chat.ts';
 import { githubNames } from './github.ts';
 import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
@@ -4339,11 +4339,33 @@ on('POST', /^\/internal\/jira-touched$/, async (req, res) => {
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
 
 // ---------- Werkbank 2.0 (Paket 436): eigene App unter /v2/, schmale API /api/v2/* auf den bestehenden Funktionen ----------
+const v2Hauptchat = async (u: User) => { if (u.role !== 'ADMIN') return null; const l = await activeLeitstand(u).catch(() => null); return l?.conv ? { conv: String(l.conv), url: /^https?:\/\//.test(String(l.url ?? '')) ? String(l.url) : null } : null; };
+const v2LaeuftChat = async (u: User, conv: string) => !!(await strandStates(u)).get(conv)?.running;
+// Audit 05.11. (4): Texte an den Hauptchat, während er arbeitet — eingereiht (höchstens 20 je Person), der Takt stellt sie zu.
+const hauptchatAus = () => wb().collection('v2_hauptchat_ausstehend');
+const hauptchatTakt = async () => {
+  for (const id of await hauptchatAus().distinct('userId')) {
+    const u = await userById(String(id)).catch(() => null);
+    if (!u || !allowed(u.email)) continue;
+    await hauptchatZustellen({
+      hauptchat: v2Hauptchat, laeuftChat: v2LaeuftChat, senden: v2lcSenden, log,
+      nehmen: async (x) => { const l: any[] = await hauptchatAus().find({ userId: x.id }).sort({ at: 1 }).limit(20).toArray(); await hauptchatAus().deleteMany({ _id: { $in: l.map((d) => d._id) } }); return l.map((d) => ({ id: String(d._id), text: String(d.text), at: d.at })); },
+      zuruecklegen: async (x, l) => { await hauptchatAus().insertMany(l.map((d) => ({ _id: d.id as any, userId: x.id, text: d.text, at: d.at }))).catch(() => {}); },
+    }, u).catch((e) => log('v2 hauptchat takt fehler', { user: String(id), error: String(e?.message ?? e).slice(0, 160) }));
+  }
+};
 registerV2(on, {
   needUser, body, send, inboxFuer, unterchatListe, erledigtDaten, fragenAntwort, wienDatum, log,
   strang: (u, id) => orchRuns().findOne({ _id: id as any, userId: u.id, kind: { $ne: 'leitstand' } }),
-  hauptchat: async (u) => { if (u.role !== 'ADMIN') return null; const l = await activeLeitstand(u).catch(() => null); return l?.conv ? { conv: String(l.conv), url: /^https?:\/\//.test(String(l.url ?? '')) ? String(l.url) : null } : null; },
-  laeuftChat: async (u, conv) => !!(await strandStates(u)).get(conv)?.running,
+  hauptchat: v2Hauptchat,
+  laeuftChat: v2LaeuftChat,
+  hauptchatEinreihen: async (u, text) => {
+    if ((await hauptchatAus().countDocuments({ userId: u.id })) >= 20) throw new HttpError(429, 'Schon 20 Nachrichten warten auf den Hauptchat — bitte warten, bis er sie bekommen hat.');
+    await hauptchatAus().insertOne({ _id: `${u.id}-${Date.now()}-${randomBytes(3).toString('hex')}` as any, userId: u.id, text, at: new Date() });
+    setTimeout(() => { hauptchatTakt().catch(() => {}); }, 1500).unref();   // falls der Zug gerade endet
+    return hauptchatAus().countDocuments({ userId: u.id });
+  },
+  hauptchatEingereiht: async (u) => (await hauptchatAus().find({ userId: u.id }).sort({ at: 1 }).limit(20).toArray()).map((d: any) => ({ text: String(d.text), at: d.at })),
   livePrs, githubNames, antwortGezaehlt,
   fixPunkte: () => fixesCol().find({ punkte: { $exists: true } }, { projection: { repo: 1, number: 1, punkte: 1, status: 1, createdAt: 1, neu: 1 } }).sort({ createdAt: -1 }).limit(300).toArray(),
   letzteReviews: () => reviewsCol().find({ createdAt: { $gte: new Date(Date.now() - 30 * 86400_000) } }).sort({ createdAt: -1 }).limit(300).toArray(),
@@ -4762,6 +4784,8 @@ const orchDeps = {
   melde: (u: User, d: any, text: string) => meldeLeitstand(u, d, text),   // Plan §24 A2: „hängt“ ohne Status-Zeile → Hauptchat
 };
 startAutoWeiter(orchDeps);
+// Audit 05.11. (4): eingereihte Texte an den Hauptchat zustellen, sobald er frei ist.
+setInterval(() => { hauptchatTakt().catch(() => {}); }, 20_000).unref();
 // Stand je Strang festschreiben (Teil B, G1) — unabhängig vom Auto-Fortsetzen; ORCH_STATUS=off schaltet ab.
 startStatusTick(orchDeps);
 // Plan 213 S1b (K1, P3): fertige, gesehene Unter-Chats nach 24 h wegräumen — nur mit WERKBANK_AUTO_SCHLIESSEN=1 (mit der Inbox).

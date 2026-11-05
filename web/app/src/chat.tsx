@@ -8,7 +8,7 @@ import { Md } from './teile.tsx';
 import { ohneStatuszeilen } from './format.ts';
 
 interface Nachricht { id: string; rolle: 'ich' | 'assistent'; text: string; at: string; status: string; fehler?: string | null }
-interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string; vorlage?: string | null }[]; conv?: string | null; vorlagen?: { name: string; label: string; beschreibung: string }[] }
+interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string; vorlage?: string | null }[]; conv?: string | null; vorlagen?: { name: string; label: string; beschreibung: string }[]; eingereiht?: { text: string; at: string }[] }
 
 import { OLAF_KURZ, OLAF_MEHR } from './begriffe.ts';
 
@@ -105,6 +105,12 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
           </div>
         ))}
         {stand?.laeuft && <p className="klein gedimmt">Der Assistent arbeitet …</p>}
+        {!!stand?.eingereiht?.length && (
+          <div className="blase ich wartet">
+            <p className="klein gedimmt">{stand.eingereiht.length === 1 ? 'Wartet — geht raus, sobald der Hauptchat frei ist:' : `${stand.eingereiht.length} Nachrichten warten — gehen gesammelt raus, sobald der Hauptchat frei ist:`}</p>
+            {stand.eingereiht.map((x, i) => <p key={i} className="klein">{x.text}</p>)}
+          </div>
+        )}
         <div ref={unten} />
       </div>
 

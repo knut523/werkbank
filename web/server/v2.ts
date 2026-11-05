@@ -32,6 +32,9 @@ export interface V2Deps {
   strang: (u: User, id: string) => Promise<any | null>;
   hauptchat: (u: User) => Promise<{ conv: string; url: string | null } | null>;
   laeuftChat: (u: User, conv: string) => Promise<boolean>;
+  /** Audit 05.11. (4): Text für den Hauptchat einreihen, solange er arbeitet (Ergebnis: wie viele jetzt warten). */
+  hauptchatEinreihen?: (u: User, text: string) => Promise<number>;
+  hauptchatEingereiht?: (u: User) => Promise<{ text: string; at: Date }[]>;
   livePrs: () => Promise<{ map: Map<string, any>; sync?: any }>;
   githubNames: () => Record<string, string>;
   letzteReviews: () => Promise<any[]>;
@@ -96,6 +99,27 @@ export interface V2Deps {
 
 /** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
 const hauptchatSendet = new Set<string>();
+
+/** Audit 05.11. (4): Takt — Eingereihtes an den Hauptchat zustellen, sobald er frei ist (gebündelt, älteste zuerst; bei Fehler
+ *  zurücklegen). Ergebnis: wie viele Texte zugestellt wurden. */
+export async function hauptchatZustellen(z: { hauptchat: V2Deps['hauptchat']; laeuftChat: V2Deps['laeuftChat']; nehmen: (u: User) => Promise<{ id: string; text: string; at: Date }[]>; zuruecklegen: (u: User, l: { id: string; text: string; at: Date }[]) => Promise<void>; senden: (u: User, conv: string, text: string) => Promise<Date>; log: V2Deps['log'] }, u: User): Promise<number> {
+  const h = await z.hauptchat(u);
+  if (!h || hauptchatSendet.has(u.id) || (await z.laeuftChat(u, h.conv).catch(() => true))) return 0;
+  hauptchatSendet.add(u.id);
+  try {
+    const l = await z.nehmen(u);
+    if (!l.length) return 0;
+    const s = [...l].sort((a, b) => +new Date(a.at) - +new Date(b.at));
+    const text = s.length === 1 ? s[0].text : `(Werkbank: ${s.length} Nachrichten von Knut kamen, während du gearbeitet hast — hier gesammelt, älteste zuerst.)\n\n${s.map((x) => x.text).join('\n\n---\n\n')}`;
+    try { await z.senden(u, h.conv, text); } catch (e: any) {
+      await z.zuruecklegen(u, l);
+      z.log('v2 hauptchat eingereiht fehler', { user: u.id, n: l.length, error: String(e?.message ?? e).slice(0, 160) });
+      return 0;
+    }
+    z.log('v2 hauptchat eingereiht zugestellt', { user: u.id, n: l.length });
+    return l.length;
+  } finally { hauptchatSendet.delete(u.id); }
+}
 const vorname = (u: User) => u.name.trim().split(/\s+/)[0] ?? u.name;
 const admin = (u: User) => u.role === 'ADMIN';
 
@@ -638,8 +662,8 @@ export function registerV2(on: On, d: V2Deps) {
     if (ziel === 'hauptchat') {
       const h = await d.hauptchat(u);
       if (!h) return send(d, res, { ziel, zugang, hauptchat: null, nachrichten: [], laeuft: false });
-      const [nachrichten, laeuft] = await Promise.all([librechat.lesen(u, h.conv, 30).catch(() => []), d.laeuftChat(u, h.conv).catch(() => false)]);
-      return send(d, res, { ziel, zugang, hauptchat: { url: h.url }, nachrichten, laeuft });
+      const [nachrichten, laeuft, eingereiht] = await Promise.all([librechat.lesen(u, h.conv, 30).catch(() => []), d.laeuftChat(u, h.conv).catch(() => false), d.hauptchatEingereiht?.(u).catch(() => []) ?? []]);
+      return send(d, res, { ziel, zugang, hauptchat: { url: h.url }, nachrichten, laeuft, eingereiht: eingereiht.map((x) => ({ text: x.text.slice(0, 300), at: x.at })) });
     }
     const conv = url.searchParams.get('conv');
     const liste = await eigen.meineChats(u);
@@ -654,7 +678,13 @@ export function registerV2(on: On, d: V2Deps) {
       const text = eigen.pruefeText(b.text);
       const h = await d.hauptchat(u);
       if (!h) throw err(409, 'Kein Hauptchat aktiv — in der alten Werkbank „Hauptchat starten“.');
-      if (hauptchatSendet.has(u.id) || (await d.laeuftChat(u, h.conv).catch(() => true))) throw err(409, 'Der Hauptchat arbeitet gerade — dein Text bleibt stehen, schick ihn gleich noch einmal.');
+      if (hauptchatSendet.has(u.id) || (await d.laeuftChat(u, h.conv).catch(() => true))) {
+        // Audit 05.11. (4): einreihen statt 409 — der Takt stellt zu, sobald der Hauptchat frei ist.
+        if (!d.hauptchatEinreihen) throw err(409, 'Der Hauptchat arbeitet gerade — dein Text bleibt stehen, schick ihn gleich noch einmal.');
+        const wartend = await d.hauptchatEinreihen(u, text);
+        d.log('v2 hauptchat eingereiht', { user: u.id, wartend });
+        return send(d, res, { ok: true, ziel: 'hauptchat', eingereiht: true, wartend });
+      }
       hauptchatSendet.add(u.id);
       let at: Date;
       try { at = await librechat.senden(u, h.conv, text); } finally { hauptchatSendet.delete(u.id); }

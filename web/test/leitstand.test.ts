@@ -687,6 +687,21 @@ test('Audit 05.11. (2): „Passt“ mit Notiz → Notiz kommt an, die Abnahme bl
   assert.equal(await cardOf(st.id), undefined, 'keine Karte mehr');
 });
 
+test('Audit 05.11. (4): Hauptchat arbeitet → Text aus der 2.0 wird eingereiht und nach dem Zug zugestellt (kein 409)', async () => {
+  const r1 = await post('/api/v2/chat', { ziel: 'hauptchat', text: 'langsam 3000' });
+  assert.equal(r1.status, 200, await r1.clone().text());
+  await pause(700);
+  const r2 = await post('/api/v2/chat', { ziel: 'hauptchat', text: 'Audit-Vier: bitte danach lesen' });
+  assert.equal(r2.status, 200, await r2.clone().text());
+  const j2 = await r2.json();
+  assert.equal(j2.eingereiht, true);
+  const g = await (await fetch(B + '/api/v2/chat?ziel=hauptchat', { headers: { cookie: await cookie(knut) } })).json();
+  assert.match(g.eingereiht.map((x: any) => x.text).join(' '), /Audit-Vier/);
+  await until(() => msgsOf(leit.conv), (ms: any[]) => ms.some((m) => m.isCreatedByUser && /Audit-Vier: bitte danach lesen/.test(textOf(m))), 40_000);
+  const g2 = await (await fetch(B + '/api/v2/chat?ziel=hauptchat', { headers: { cookie: await cookie(knut) } })).json();
+  assert.deepEqual(g2.eingereiht, []);
+});
+
 test('Teil B (B-7/B-17/B-23): Nacharbeit → Nachricht im Strang, Karte weg; wieder fertig → Karte ohne alte DoD-Tabelle', async () => {
   const st = await doneStrand('Teil B: Nacharbeit', 'wt-b3');
   await until(() => cardOf(st.id), (c: any) => !!c);
