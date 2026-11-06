@@ -455,6 +455,10 @@ export async function reviewsNachholen(now = new Date()): Promise<number> {
   const heute = vienna(now).date;
   const lauf = await wb().collection('pr_nachholen').updateOne({ _id: heute as any }, { $setOnInsert: { at: now } }, { upsert: true });
   if (!lauf.upsertedCount) return 0;   // heute schon gelaufen
+  // Phase 4: scheitert der Lauf (Mongo kurz weg), gibt er den Tag wieder frei — sonst wäre er bis morgen verbraucht.
+  try { return await nachholen(now, heute); } catch (e) { await wb().collection('pr_nachholen').deleteOne({ _id: heute as any }).catch(() => {}); throw e; }
+}
+async function nachholen(now: Date, heute: string): Promise<number> {
   const s = await tickerSettings();
   const seit = new Date(now.getTime() - 14 * 86400_000);
   const reviews: any[] = await reviewsCol().find({ createdAt: { $gte: seit } }).toArray();
