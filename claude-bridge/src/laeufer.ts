@@ -28,7 +28,9 @@ const leer = (): LaeuferNutzung => ({ input: 0, output: 0, cacheRead: 0, cacheWr
 
 /** Antworttext aus der Nachrichtenliste (neueste zuerst): die Text-Teile der neuesten Assistenten-Nachricht. */
 export function oc2Antwort(nachrichten: any[]): string {
-  const a = (nachrichten ?? []).find((m) => m?.type === 'assistant' && Array.isArray(m.content) && m.content.some((c: any) => c?.type === 'text'));
+  // Neueste nach Zeitstempel (die API liefert neueste zuerst; ohne Zeitstempel bleibt diese Reihenfolge).
+  const mitText = (nachrichten ?? []).filter((m) => m?.type === 'assistant' && Array.isArray(m.content) && m.content.some((c: any) => c?.type === 'text'));
+  const a = mitText.reduce<any>((best, m) => (best && Number(best.time?.created ?? 0) >= Number(m.time?.created ?? 0) ? best : m), null);
   return a ? a.content.filter((c: any) => c?.type === 'text').map((c: any) => String(c.text ?? '')).join('\n').trim() : '';
 }
 /** Nutzung aus den Sitzungsdaten (tokens.input ist frisch, cache.read aus dem Prompt-Cache). */
@@ -79,7 +81,11 @@ export function opencode2Laeufer(o: { base: string; passwort: string; fetchFn?: 
           }
           s = neu;
           // Bedingung 1: nach einem Ausfall läuft die Sitzung nicht von selbst weiter — einmal neu anstoßen.
-          if (wegSeit !== null && !s?.outcome && !angestossen) { angestossen = true; await call('POST', `/api/session/${sid}/prompt`, { text: OC2_WEITER }); }
+          // Gegenprüfung 06.11.: schlägt das Anstoßen direkt nach dem Neustart fehl, im nächsten Takt erneut (nicht den Lauf abbrechen).
+          if (wegSeit !== null && !s?.outcome && !angestossen) {
+            angestossen = await call('POST', `/api/session/${sid}/prompt`, { text: OC2_WEITER }).then(() => true, () => false);
+            if (!angestossen) continue;
+          }
           wegSeit = null;
           if (oc2Fertig(s)) break;
         }
@@ -97,15 +103,22 @@ export function opencode2Laeufer(o: { base: string; passwort: string; fetchFn?: 
 export function opencode2Pool(o: { urls: string[]; passwort: string; fetchFn?: typeof fetch; taktMs?: number; jetzt?: () => number; wiederMs?: number }): Laeufer & { aktiv: () => Record<string, number> } {
   const aktiv = new Map(o.urls.map((u) => [u, 0]));
   const einzeln = new Map(o.urls.map((u) => [u, opencode2Laeufer({ ...o, base: u })]));
+  // Gegenprüfung 06.11.: ein nicht erreichbarer Server pausiert 60 s, statt weiter jeden zweiten Lauf zu bekommen.
+  const pause = new Map<string, number>(), jetzt = o.jetzt ?? Date.now;
+  const NICHT_DA = /antwortet nicht|fetch failed|ECONNREFUSED|ECONNRESET|socket/i;
   return {
     name: 'opencode2',
     aktiv: () => Object.fromEntries(aktiv),
     async zug(a) {
-      const url = [...aktiv.entries()].sort((x, y) => x[1] - y[1])[0]?.[0];
+      const frei = [...aktiv.entries()].filter(([u]) => (pause.get(u) ?? 0) <= jetzt());
+      const url = (frei.length ? frei : [...aktiv.entries()]).sort((x, y) => x[1] - y[1])[0]?.[0];
       if (!url) return { code: -1, text: '', usage: leer(), gelaufen: a.model ?? '', draussen: [], grund: 'kein opencode-2-Server eingetragen' };
       aktiv.set(url, aktiv.get(url)! + 1);
-      try { const r = await einzeln.get(url)!.zug(a); return r.grund ? { ...r, grund: `${r.grund} (Server ${url})` } : r; }
-      finally { aktiv.set(url, aktiv.get(url)! - 1); }
+      try {
+        const r = await einzeln.get(url)!.zug(a);
+        if (r.code !== 0 && NICHT_DA.test(String(r.grund))) pause.set(url, jetzt() + 60_000);
+        return r.grund ? { ...r, grund: `${r.grund} (Server ${url})` } : r;
+      } finally { aktiv.set(url, aktiv.get(url)! - 1); }
     },
   };
 }

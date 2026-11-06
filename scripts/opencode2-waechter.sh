@@ -44,12 +44,14 @@ pruefen() {
   [ -n "${MELIOUS_API_KEY:-}" ] && echo "  ✓ MELIOUS_API_KEY gesetzt (Wert nicht gezeigt)" || { echo "  ✗ MELIOUS_API_KEY nicht gesetzt"; ok=0; }
   [ "$ok" = 1 ]
 }
-antwortet() { [ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' -u "opencode:$(cat "$PWDATEI")" "http://127.0.0.1:$1/api/session?limit=1" || true)" = 200 ]; }
+# Passwort über die Konfiguration auf stdin, nie als Argument (sonst stünde es in der Prozessliste — Gegenprüfung 06.11.).
+antwortet() { [ "$(printf 'user = "opencode:%s"\n' "$(cat "$PWDATEI")" | curl -s -m 5 -o /dev/null -w '%{http_code}' -K - "http://127.0.0.1:$1/api/session?limit=1" || true)" = 200 ]; }
+sperre() { exec 9> "$RUN/lock"; flock -w "${1:-30}" 9 || { echo "ABBRUCH: ein anderer Wächter oder Start läuft gerade ($RUN/lock)"; exit 3; }; }
 laeuft() { [ -f "$RUN/$1.pid" ] && kill -0 "$(cat "$RUN/$1.pid")" 2>/dev/null; }
 start_one() {
   local p=$1
   umgebung
-  OPENCODE_SERVER_PASSWORD="$(cat "$PWDATEI")" setsid "$OC2" serve --hostname 127.0.0.1 --port "$p" < /dev/null >> "$RUN/$p.log" 2>&1 &
+  OPENCODE_SERVER_PASSWORD="$(cat "$PWDATEI")" setsid "$OC2" serve --hostname 127.0.0.1 --port "$p" < /dev/null >> "$RUN/$p.log" 2>&1 9>&- &   # 9>&-: Server erben die Sperre nicht
   echo $! > "$RUN/$p.pid"
   for _ in $(seq 1 30); do antwortet "$p" && { log "server $p gestartet (pid $(cat "$RUN/$p.pid"))"; return 0; }; sleep 1; done
   log "server $p antwortet nach dem Start nicht"; return 1
@@ -58,9 +60,14 @@ stop_one() { local p=$1; laeuft "$p" && { kill "$(cat "$RUN/$p.pid")" 2>/dev/nul
 
 case "${1:-status}" in
   pruefen) pruefen ;;
-  start) pruefen > /dev/null || { pruefen || true; echo "ABBRUCH: erst pruefen grün machen"; exit 1; }; for p in $PORTS; do laeuft "$p" && antwortet "$p" && echo "  = $p läuft" || { stop_one "$p"; start_one "$p" && echo "  ✓ $p" || echo "  ✗ $p"; }; done ;;
+  start)
+    pruefen > /dev/null || { pruefen || true; echo "ABBRUCH: erst pruefen grün machen"; exit 1; }
+    sperre 30; fehl=0
+    for p in $PORTS; do laeuft "$p" && antwortet "$p" && echo "  = $p läuft" || { stop_one "$p"; start_one "$p" && echo "  ✓ $p" || { echo "  ✗ $p"; fehl=1; }; }; done
+    exit "$fehl" ;;
   wache)
     pruefen > /dev/null || { pruefen || true; echo "ABBRUCH: erst pruefen grün machen"; exit 1; }
+    sperre 0   # höchstens ein Wächter
     log "wächter an ($PORTS, Takt $TAKT s)"
     while :; do
       [ "$(version)" = "$VERSION" ] || { log "version geändert — wächter hält an (Bedingung 2)"; for p in $PORTS; do stop_one "$p"; done; exit 2; }
@@ -71,8 +78,9 @@ case "${1:-status}" in
   status) for p in $PORTS; do laeuft "$p" && { antwortet "$p" && echo "  ✓ $p läuft und antwortet" || echo "  ! $p läuft, antwortet nicht"; } || echo "  ✗ $p läuft nicht"; done ;;
   netz)   # Bedingung 2: nach jedem Update — entfernte Ziele aller Server-Prozesse (erlaubt: nur api.melious.ai)
     for p in $PORTS; do laeuft "$p" || continue; pid=$(cat "$RUN/$p.pid")
-      ss -tnpH 2>/dev/null | grep "pid=$pid," | awk '{print $5}' | grep -v '^127\.0\.0\.1:' | sort -u | sed "s/^/  $p → /" || true
+      ss -tnpH 2>/dev/null | grep "pid=$pid," | awk '{print $5}' | grep -Ev '^(127\.0\.0\.1|\[::1\]):' | sort -u | sed "s/^/  $p → /" || true
     done
+    ss -tnpH 2>/dev/null | grep -q 'pid=' || echo "  ! ss liefert keine Prozesse (Rechte?) — leere Liste heißt dann nichts"
     echo "  (erwartet: nur die Adresse von api.melious.ai, z. B. 162.19.136.184:443)" ;;
   *) sed -n 2,19p "$0"; exit 1 ;;
 esac

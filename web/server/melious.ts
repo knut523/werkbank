@@ -47,7 +47,7 @@ export const ROLLEN_VORGABE: Record<string, string[]> = {
 export const ROLLEN = ['leser', 'schreiber', 'niedrig'];
 // Im PRO-Abo enthalten (Hotfix 15.10., Knut: „bei Melious nur die Modelle nutzen, die auch im Abo drin sind“); Einstellung „abo“.
 // PRO-Plan laut Knut 06.11.: glm-5.3, glm-5.3-flash, glm-5.2, deepseek-v4.1-flash-1017 (minimax-m3 über Melious nicht verfügbar).
-export const MELIOUS_ABO = ['glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'deepseek-v4.1-flash-1017'];
+export const MELIOUS_ABO = ['glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'deepseek-v4.1-flash-1017', 'deepseek-v4.1-flash'];   // ohne Suffix: gespeicherte Rollen nennen es noch (Gegenprüfung 06.11.)
 /** Modellnamen, die nicht im Abo sind (`:eco` zählt wie das Modell), ohne Doppelte. */
 export const ausserhalbAbo = (modelle: (string | null | undefined)[], abo: string[]) =>
   [...new Set(modelle.filter((m): m is string => !!m).map((m) => m.replace(/:eco$/, '')))].filter((m) => !abo.includes(m));

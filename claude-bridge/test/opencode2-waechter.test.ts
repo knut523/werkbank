@@ -40,6 +40,8 @@ test('start: zwei Server antworten; wache: abgestürzter Server wird neu gestart
   assert.match(lauf('start'), re(`✓ ${P1}[\\s\\S]*✓ ${P2}`));
   assert.match(lauf('status'), re(`${P1} läuft und antwortet[\\s\\S]*${P2} läuft und antwortet`));
   wache = spawn('bash', [SKRIPT, 'wache'], { env: ENV, stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 500));
+  assert.match(lauf('wache'), /ABBRUCH: ein anderer Wächter oder Start läuft gerade/, 'höchstens ein Wächter (flock)');
   const pid = readFileSync(join(R, `waechter/${P1}.pid`), 'utf8').trim();
   process.kill(Number(pid), 'SIGKILL');   // Absturz
   let neu = pid;

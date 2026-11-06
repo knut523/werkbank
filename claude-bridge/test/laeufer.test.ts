@@ -84,6 +84,24 @@ test('Bedingung 3: mehrere Server — jeder Lauf geht an den mit den wenigsten a
   assert.match(String(leer.grund), /kein opencode-2-Server/);
 });
 
+test('Gegenprüfung 06.11.: toter Server pausiert 60 s (nächster Lauf geht an den lebenden); Anstoßen nach Neustart fehlgeschlagen → nächster Takt', async () => {
+  const lebt = server({ fertigNach: 1 });
+  const tot = (async () => { throw new TypeError('fetch failed'); }) as unknown as typeof fetch;
+  const f = (async (url: string, init: any) => (url.startsWith('http://127.0.0.1:1/') ? tot(url, init) : lebt.fetchFn(url, init))) as unknown as typeof fetch;
+  const pool = opencode2Pool({ urls: ['http://127.0.0.1:1', 'http://127.0.0.1:2'], passwort: 'pw', fetchFn: f, taktMs: 1 });
+  const a = await pool.zug(auftrag());   // beide 0 aktiv → der erste (tote) wird genommen
+  assert.equal(a.code, -1); assert.match(String(a.grund), /fetch failed \(Server http:\/\/127\.0\.0\.1:1\)/);
+  const b = await pool.zug(auftrag());
+  assert.equal(b.code, 0, 'der tote Server pausiert, der lebende übernimmt');
+  // Anstoßen: erster POST nach dem Ausfall scheitert, der zweite gelingt
+  let prompts = 0;
+  const s = server({ wegBei: [2], fertigNach: 6 });
+  const f2 = (async (url: string, init: any) => { if (url.endsWith('/prompt') && ++prompts === 2) throw new TypeError('fetch failed'); return s.fetchFn(url, init); }) as unknown as typeof fetch;
+  const r = await opencode2Laeufer({ base: 'http://x', passwort: 'pw', fetchFn: f2, taktMs: 1 }).zug(auftrag());
+  assert.equal(r.code, 0, String(r.grund));
+  assert.equal(s.aufrufe.filter((x) => x.body?.text === OC2_WEITER).length, 1, 'beim zweiten Versuch angestoßen');
+});
+
 test('Schalter: an nur mit BRIDGE_OPENCODE2=an, Schwelle 5 (einstellbar), nur Server auf dieser Maschine; Antwort und Fertig-Erkennung', async () => {
   assert.equal(opencode2An({}), false); assert.equal(opencode2An({ BRIDGE_OPENCODE2: 'an' }), true);
   assert.equal(opencode2Ab({}), 5); assert.equal(opencode2Ab({ BRIDGE_OPENCODE2_AB: '0' }), 0); assert.equal(opencode2Ab({ BRIDGE_OPENCODE2_AB: 'x' }), 5);

@@ -65,7 +65,8 @@ test('Vorgaben = Knuts Setup (15.10.): 8 000 je Takt (256 000/Tag), Deckel 1,5×
   assert.deepEqual(d.faktoren['glm-5.3'], { in: 10_000, out: 30_000 });
   // Verteilung über alle vier PRO-Modelle je Rolle.
   // Seit 15.10. abends (Knut: „per default flash“): nur die drei kleinen Modelle, glm-5.3 in keiner Worker-Rolle.
-  for (const r of ['leser', 'schreiber', 'niedrig']) { assert.equal(d.rollen[r].length, 3, r); assert.ok(!d.rollen[r].includes('glm-5.3'), r); }
+  // Modelltest 06.11.: Flash und deepseek-v4.1-flash-1017 (0731 ersetzt); die Verteilung je Lauf macht die Brücke (modellwahl.ts).
+  for (const r of ['leser', 'schreiber', 'niedrig']) { assert.deepEqual(d.rollen[r], ['glm-5.3-flash', 'deepseek-v4.1-flash-1017'], r); assert.ok(!d.rollen[r].includes('glm-5.3'), r); }
   assert.equal(d.rollen.schreiber[0], 'glm-5.3-flash');
 });
 
@@ -78,7 +79,8 @@ test('Echte Preisliste (15.10.) → Faktoren: € je Mio. × 10.000 inkl. Cache-
   assert.deepEqual(r(f['deepseek-v4.1-flash']), { in: 2000, out: 10_000, cache: 100 });
   assert.deepEqual(r(f['deepseek-v4-flash-0731']), { in: 1000, out: 2500, cache: 200 });
   // Kalibrierung des Orchestrators (in/out) stimmt mit der Preisliste überein.
-  for (const [m, k] of Object.entries(M.FAKTOREN_VORGABE)) assert.deepEqual([Math.round(f[m].in), Math.round(f[m].out)], [k.in, k.out], m);
+  // glm-5.2 und deepseek-v4.1-flash-1017 (06.11.) sind Schätzungen bis zur nächsten Preisliste — nicht Teil dieser vom 15.10.
+  for (const [m, k] of Object.entries(M.FAKTOREN_VORGABE)) if (m in PREISE) assert.deepEqual([Math.round(f[m].in), Math.round(f[m].out)], [k.in, k.out], m);
   assert.equal(f['usd-modell'], undefined);
   assert.equal(f.x, undefined);
 });
@@ -142,7 +144,7 @@ test('Erlaubt → Konto an die Brücke: Rest in Energie, Faktoren, Takt, eco, Ro
   assert.deepEqual(mel.pool.map((p: any) => p.model).sort(), ['deepseek-v4-flash-0731', 'deepseek-v4.1-flash', 'glm-5.3', 'glm-5.3-flash']);
   // Topf (geschätzt, ohne Verbrauch) voll → Vorrang und Qualitäts-Reihenfolge, Hinweis „Energie verfällt bald“.
   assert.equal(mel.vorrang, true);
-  assert.deepEqual(mel.rollen.niedrig, ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731']);   // seit 15.10. abends ohne glm-5.3
+  assert.deepEqual(mel.rollen.niedrig, ['glm-5.3-flash', 'deepseek-v4.1-flash-1017']);   // seit 15.10. abends ohne glm-5.3; 06.11.: 0731 ersetzt
   const use = await M.meliousUsage(u);
   assert.equal(use.energie.topfMax, 1_024_000);
   assert.ok(use.energie.hinweise.some((h: string) => /Energie verfällt bald/.test(h)));
@@ -163,7 +165,8 @@ test('Gegenprüfer GLM 5.3 (challenge): Diff an glm-5.3 mit Review-Auftrag, Antw
 
 test('Hotfix 15.10.: Abo-Liste (Vorgabe die vier PRO-Modelle) an die Brücke; Modelle außerhalb → Warnung „läuft auf Guthaben“, keine Sperre', async () => {
   let s = await M.meliousSettings(u);
-  assert.deepEqual(s.abo, ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731']);
+  assert.deepEqual(s.abo, M.MELIOUS_ABO);
+  assert.deepEqual(M.MELIOUS_ABO, ['glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'deepseek-v4.1-flash-1017', 'deepseek-v4.1-flash']);   // PRO-Plan 06.11.
   assert.deepEqual(s.warnungen, []);
   s = await M.setMelious(u, { model: 'mistral-large:eco', ketteModell: 'kimi-k3' });
   assert.deepEqual(s.warnungen, ['„mistral-large“ ist nicht im Abo und läuft auf Guthaben.', '„kimi-k3“ ist nicht im Abo und läuft auf Guthaben.']);

@@ -424,11 +424,16 @@ const server = createServer(async (req, res) => {
       if (deleg[1] === 'mel-sub') {
         // Ein Melious-Teilagent läuft bis 15 min; der Aufrufer (fetch/undici) bricht ohne Kopfzeilen oder ohne Daten nach 300 s ab
         // („fetch failed“, gemessen 06.11.). Deshalb sofort 200 und alle 30 s ein Leerzeichen (vor JSON erlaubt); Fehler im Feld error.
+        // Gegenprüfung 06.11.: Schreiben auf eine schon getrennte Verbindung meldet sich später als 'error'-Ereignis — ohne Zuhörer
+        // brächte das die Brücke zum Absturz. Daher Zuhörer, und nur schreiben, solange die Verbindung steht.
+        res.on('error', () => {});
+        const offen = () => !res.destroyed && !res.writableEnded;
         res.writeHead(200, { 'content-type': 'application/json' });
         res.write(' ');
-        const halten = setInterval(() => { try { res.write(' '); } catch { /* Verbindung weg */ } }, 30_000);
-        try { const r = await fn(userId, conv, b); res.end(JSON.stringify(r.ok ? r : { error: r.error, status: r.status })); }
-        catch (e: any) { res.end(JSON.stringify({ error: String(e?.message ?? e).slice(0, 300), status: 500 })); }
+        const halten = setInterval(() => { if (offen()) res.write(' '); }, 30_000);
+        res.on('close', () => clearInterval(halten));
+        try { const r = await fn(userId, conv, b); if (offen()) res.end(JSON.stringify(r.ok ? r : { error: r.error, status: r.status })); }
+        catch (e: any) { if (offen()) res.end(JSON.stringify({ error: String(e?.message ?? e).slice(0, 300), status: 500 })); }
         finally { clearInterval(halten); }
         return;
       }

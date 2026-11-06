@@ -51,7 +51,7 @@ async function bridge(path: string, body: unknown, timeoutMs: number): Promise<s
   });
   const j: any = await r.json().catch(() => ({}));
   // melious_sub antwortet sofort mit 200 und meldet Fehler im JSON (die Brücke hält die Verbindung über 300 s offen).
-  if (!r.ok || j.error) throw new Error(j.error ?? `Brücke antwortet mit ${r.status}`);
+  if (!r.ok || j?.error) throw new Error(j?.error ?? `Brücke antwortet mit ${r.status}`);
   return String(j.text ?? '');
 }
 // Knut 06.11. (Korrektur 2): „Alles Lesende sollen die Stränge selbst können.“ GitHub lesen im Hauptchat UND in Strängen —
