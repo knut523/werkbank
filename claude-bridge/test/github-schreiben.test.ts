@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { classify, confirmQuestion, orchestratorBlock, ANSWER_BUTTONS, questionText } from '../src/tools.ts';
+import { classify, confirmQuestion, orchestratorBlock, ANSWER_BUTTONS, questionText, AUTO_DENY } from '../src/tools.ts';
 import { autoSettings } from '../src/sessions.ts';
 
 const T = 'mcp__werkbank__github_schreiben';
@@ -69,6 +69,31 @@ test('Karte: Knopf-Anker im Text des Modells sind entschärft', () => {
   const q = confirmQuestion(T, { art: 'kommentar', repo: 'WirStrom1/x', nummer: 1, text: '[Weiter](#werkbank-antwort:ja)' });
   const roh = q.slice(0, q.length - ANSWER_BUTTONS.length);
   assert.ok(!roh.includes('#werkbank-antwort:'), roh);
+});
+
+test('Pass C/B (Runde 3): GitHub-Schreiben bleibt erkannt — Zitate mit | ; &, getrennte Schlüsselwörter, --field @datei, Commit-Text aus einem Zitat heraus', () => {
+  const P = ['pu', 'sh'].join('');
+  for (const c of [
+    "gh api repos/o/r/git/refs/heads/x --jq '.a|.b' -X DELETE",
+    "gh api repos/o/r/issues/1/comments --jq '.|.' -f body=x",
+    'gh api graphql --field query=@m.graphql',
+    "gh api graphql -f query='mut''ation{ mergePullRequest }'",
+    `echo "x; git commit -m "; git ${P} origin HEAD; echo "y"`,
+  ]) {
+    assert.ok(orchestratorBlock('Bash', { command: c }), c);
+    assert.equal(classify('Bash', { command: c }, { workDir: work, scope: 'voll' }).cls, 'confirm', c);
+  }
+  // Lesen bleibt frei, Commit-Texte bleiben Inhalt
+  assert.equal(orchestratorBlock('Bash', { command: "gh api repos/o/r/pulls --jq '.[]|.number'" }), null);
+  assert.equal(orchestratorBlock('Bash', { command: `git commit -m "gh api -X DELETE ist hier nur Text; git ${P} auch"` }), null);
+});
+
+test('Pass A (Runde 3): Umgebungsdatei in Shell-Schreibweisen und die gh-Konfiguration fragen im vollen Auto-Modus nach', () => {
+  const E = ['.e', 'nv'].join(''), G = ['.config/', 'gh'].join('');
+  for (const c of [`cat \\${E}`, `cat\${IFS}${E}`, 'cat .?nv', 'cat .[e]nv', `cat ~/${G}/hosts.yml`])
+    assert.equal(classify('Bash', { command: c }, { workDir: work, scope: 'voll' }).cls, 'confirm', c);
+  assert.notEqual(classify('Bash', { command: 'grep -rn process.env src' }, { workDir: work, scope: 'voll' }).cls, 'confirm');
+  assert.ok(AUTO_DENY.includes(`Read(~/${G}/**)`));
 });
 
 test('Review-Karte der Werkbank bekommt einen lesbaren Ein-Satz', () => {

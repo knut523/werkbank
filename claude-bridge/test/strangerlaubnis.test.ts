@@ -114,3 +114,11 @@ test('Phase 4 (Pass A/B): Sperr-Log schwärzt Zugangsdaten; .env-Globs fragen; G
     assert.equal(orchestratorBlock('Bash', { command: c }), null, c);
   assert.equal(classify('mcp__werkbank__ensemble_review', {}, { scope: 'aus' } as any).cls, 'read');
 });
+
+test('Pass C (Runde 3): ein weiteres cd (relativ) führt nicht am olaf-docs-Schutz vorbei; relatives cd gilt ab dem vorigen Ordner', () => {
+  const D = '/home/knut/work/olaf-docs';
+  for (const c of [`cd ${D} && cd . && git restore .`, `cd ${D} && cd plans && git checkout -- .`, `cd ${D} && cd . && git add -A && git commit -m x`, `cd ${D} && cd . && git stash push -m x && git stash pop`])
+    assert.equal(strangLokal(c, o), null, c);
+  assert.ok(strangLokal(`cd ${D} && cd plans && git add 094-x.md`, o), 'ausdrücklicher Pfad bleibt erlaubt');
+  assert.equal(strangLokal(`cd ${D} && cd ../werkbank-dev && git status`, o), null, 'relativ zu olaf-docs aus allen Ordnern hinaus');
+});

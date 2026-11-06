@@ -108,6 +108,7 @@ export function opencode2Server(o: {
       // Pass C (S2): nach 10 min stabilem Lauf zählt ein Absturz wieder als erster — sonst wäre ein Server nach fünf Abstürzen in
       // Wochen für immer weg. Aufgegeben bleibt aufgegeben (sichern startet ihn nicht wieder, Pass B D4).
       if (k.seit && Date.now() - k.seit > 600_000) k.neustarts = 0;
+      k.seit = undefined;   // Pass A (Runde 3): der stabile Lauf zählt nur einmal — ein danach sofort sterbender Server wird sonst nie aufgegeben
       if (k.neustarts >= (o.maxNeustarts ?? 5)) { k.aufgegeben = true; log('opencode2 server aufgegeben', { port: p, code, sig }); return; }
       k.neustarts++;
       log('opencode2 server weg — neustart', { port: p, code, sig, neustarts: k.neustarts });

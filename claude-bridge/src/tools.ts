@@ -60,10 +60,19 @@ const BASH_GITHUB_WRITE: [RegExp, string][] = [
   // Phase 4 (Pass B, B5): auch `-fbody=x`, `--field=…`, `--input=datei` (ohne Leerzeichen nach der Option).
   [/\bgh\s+api\s+(?!graphql\b)[^|;&]*\s(-[fF]\S|-[fF]\s|--field[=\s]|--raw-field[=\s]|--input[=\s])/, 'GitHub-API schreiben'],
   [/\bgh\s+api\s+graphql\b[^|;&]*\bmutation\b/i, 'GitHub-API schreiben (GraphQL-Mutation)'],
-  [/\bgh\s+api\s+graphql\b[^|;&]*\s(--input[=\s]|-F\s*\S*=@)/, 'GitHub-API schreiben (GraphQL aus Datei)'],
+  [/\bgh\s+api\s+graphql\b[^|;&]*\s(--input[=\s]|(-F|--field)[=\s]*\S*=@)/, 'GitHub-API schreiben (GraphQL aus Datei)'],
   [/api\.github\.com[^|;&]*(-X|--request)\s*(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],
   [/(-X|--request)\s*(POST|PATCH|PUT|DELETE)[^|;&]*api\.github\.com/i, 'GitHub-API schreiben'],
 ];
+
+/** Pass C/B (Runde 3): GitHub-Schreiben in drei Lesarten suchen — roh, mit neutralisierten Zitaten (ein `|` in `--jq '.a|.b'` beendet
+ *  das Muster nicht mehr vor `-X DELETE`) und ohne Quotes/Backslashes (`mut''ation` ist für die Shell `mutation`). Ein Treffer in
+ *  irgendeiner Lesart zählt; falsch-positiv heißt nur „Rückfrage“. */
+export function githubSchreibGrund(cmd: string): string | null {
+  const lesarten = [cmd, cmd.replace(/"(?:[^"\\]|\\.)*"/g, '"Z"').replace(/'[^']*'/g, "'Z'"), cmd.replace(/['"\\]/g, '')];
+  for (const [re, why] of BASH_GITHUB_WRITE) if (lesarten.some((l) => re.test(l))) return why;
+  return null;
+}
 
 // Bash im Auto-Modus: was den Vault, Konfigurationen, Geheimnisse oder Jira berührt, bleibt beim „ja“. Heuristik —
 // die eigentliche Grenze ist der Klassifikator mit permissions.deny und autoMode.hard_deny (templates/claude/settings.json).
@@ -82,6 +91,8 @@ export const AUTO_DENY = [
   // (BASH_GITHUB_WRITE), GitHub-Lesen ist frei (Knut, 06.10.2026).
   'Bash(git merge:*)', 'Bash(gh pr merge:*)', 'Bash(bw:*)',
   'Read(~/.config/vw/**)', 'Read(~/.ssh/**)', 'Read(~/.claude/.credentials.json)', 'Edit(~/.claude/**)', 'Read(**/.env*)',
+  // Pass A (Runde 3): Knuts GitHub-Schreibschlüssel liegt in der gh-Konfiguration (GH_CONFIG_DIR lenkt nur gh selbst um)
+  'Read(~/.config/gh/**)',
 ];
 
 /**
@@ -99,7 +110,7 @@ export const ORCH_DENY: string[] = [
   'Bash(*scripts/orch*)', 'Bash(orch-cli:*)',
   'Bash(*x-werkbank-internal*)', 'Bash(*WERKBANK_INTERNAL_TOKEN*)',
   'Bash(*localhost*/internal/*)', 'Bash(*127.0.0.1*/internal/*)', 'Bash(*0.0.0.0*/internal/*)', 'Bash(*[::1]*/internal/*)',
-  'Bash(*/proc/*environ*)', 'Bash(*.env.local*)',
+  'Bash(*/proc/*environ*)', 'Bash(*.env.local*)', 'Bash(*.config/gh/*)',
   'Bash(git push:*)', 'Bash(git * push*)',
   'Bash(git send-pack:*)', 'Bash(git * send-pack*)',
   'Bash(git update-ref:*)', 'Bash(git * update-ref*)',
@@ -211,16 +222,24 @@ export interface ClassifyContext {
 // Doppelte Zitate nur ohne $ und Backtick (dort führt die Shell aus — `-m "$(git push)"` bleibt sichtbar).
 // Pass A (Fix-Runde 2, S3): nur wenn das Segment mit `git … commit` beginnt (nicht `eval echo --message …`), --message nur dort,
 // und nie, wenn eval oder `sh -c` im Befehl steht (dann ist ein „Text“ wieder Befehl).
+// Pass A (Runde 3): nur Treffer, die außerhalb eines Zitats beginnen — sonst startet `echo "x; git commit -m "; <Befehl>; echo "y"`
+// eine Neutralisierung mitten im Zitat und verdeckt den Befehl dahinter.
+const imZitat = (s: string, bis: number) => {
+  let q = '';
+  for (let i = 0; i < bis; i++) { const c = s[i]; if (q === '"' && c === '\\') { i++; continue; } if (q) { if (c === q) q = ''; } else if (c === '"' || c === "'") q = c; else if (c === '\\') i++; }
+  return q !== '';
+};
 export const ohneCommitText = (cmd: string) => (/\beval\b|\b(ba|z|da)?sh\s+-c\b/.test(cmd) ? cmd
-  : cmd.replace(/((?:^|[;&|(]\s*)(?:[A-Z_][A-Z0-9_]*=\S+\s+)*git\b[^|;&\n]*?\scommit\b[^|;&\n]*?(?:\s-[a-zA-Z]*m\s*|\s--message[=\s]\s*))("(?:[^"\\$`]|\\[^$`])*"|'[^']*')/g, '$1"…"'));
+  : cmd.replace(/((?:^|[;&|(]\s*)(?:[A-Z_][A-Z0-9_]*=\S+\s+)*git\b[^|;&\n]*?\scommit\b[^|;&\n]*?(?:\s-[a-zA-Z]*m\s*|\s--message[=\s]\s*))("(?:[^"\\$`]|\\[^$`])*"|'[^']*')/g,
+    (m: string, vor: string, _t: string, at: number) => (imZitat(cmd, at) ? m : `${vor}"…"`)));
 // Sperrenliste 06.11. (Knut: „lesen frei“): `.env` nur als echte Datei (.env, .env.local, …/.env.production) — nicht `process.env`,
 // nicht .env.example/.sample/.template (vorher fragte jedes `grep process.env` und wurde in Strängen abgelehnt).
 // Phase 4 (Pass B, B4): auch Glob-Formen (`.env*`, `.en?`, `.env.{local,prod}`, `.env[.]local`) zählen.
-const ENV_DATEI = /(^|[\s/'"=<])\.(env(\.(?!example\b|sample\b|template\b)[\w.-]+)?(?=$|[\s'";|&)<>*?[{])|en[?*[]|e[?*[])/;
+const ENV_DATEI = /(^|[\s/'"=<])\.(env(\.(?!example\b|sample\b|template\b)[\w.-]+)?(?=$|[\s'";|&)<>*?[{])|en[?*[]|e[?*[]|[?*[][^\s/'"]*)/;   // Pass A (Runde 3): jede Glob-Form einer Punktdatei
 // Runde 2 (Knut, 07.10.2026: „er fragt halt immer noch viel“): nur noch echte Geheimnis-ORTE, nicht jedes Erwähnen —
 // `grep -v '.runtime'` oder `--exclude-dir=.runtime` fragen nicht mehr.
 const BASH_KEEP_CONFIRM_VOLL = [
-  /\.runtime\/(claude|werkbank\/creds)\b/, /claude-accounts\.json/, /\.config\/vw\b/, /\.ssh\b/, /\.credentials/,
+  /\.runtime\/(claude|werkbank\/creds)\b/, /claude-accounts\.json/, /\.config\/(vw|gh)\b/, /\.ssh\b/, /\.credentials/,
   /(^|[\s;&|(`$])bw\s/, /(^|[\s;&|(`$])sudo\b/, ENV_DATEI,
 ];
 // Jira-Schreiben per Bash = ein HTTP-Aufruf an Atlassian, der schreibt. Lesen, grep nach „jira“, Dateinamen mit
@@ -290,6 +309,8 @@ const READ_GIT = new Set(['log', 'show', 'diff', 'status', 'blame', 'ls-files', 
 export function readOnlyBash(cmd: string): boolean {
   const c = cmd.replace(/\s+2>\s*\/dev\/null/g, ' ').replace(/\s+2>&1/g, ' ').trim();
   if (!c || c.length > 2000 || /[`<>]|\$\(|\$\{|\\\n/.test(c)) return false;
+  // Pass C (Runde 3): ein einzelnes & (Hintergrund) und Zeilenumbrüche trennen in bash ebenfalls Befehle — sonst prüfte die Liste nur den ersten.
+  if (/[\n\r]/.test(c) || c.replace(/&&/g, '').includes('&')) return false;
   for (const seg of c.split(/\|\||&&|[|;]/)) {
     const w = seg.trim().split(/\s+/);
     if (!w[0] || /=/.test(w[0])) return false;
@@ -297,8 +318,8 @@ export function readOnlyBash(cmd: string): boolean {
     if (w[0] === 'git') { if (!READ_GIT.has(w[1] ?? '') || w.some((x) => /^--(output|exec|open-files-in-pager|ext-diff)|^-O/.test(x))) return false; continue; }
     if (w[0] === 'rg' && w.some((x) => /^--pre(=|$)/.test(x))) return false;
     if (!READ_BASH.has(w[0])) return false;
-    if (w[0] === 'find' && w.some((x) => /^-(exec|execdir|delete|ok|okdir|fprint|fprintf|fls)$/.test(x))) return false;
-    if ((w[0] === 'sort' || w[0] === 'tree') && w.some((x) => /^-o|^--output/.test(x))) return false;
+    if (w[0] === 'find' && w.some((x) => /^-(exec|execdir|delete|ok|okdir|fprint0?|fprintf|fls)$/.test(x))) return false;
+    if ((w[0] === 'sort' || w[0] === 'tree') && w.some((x) => /^-o|^--output|^--compress-program/.test(x))) return false;   // --compress-program startet ein Programm
   }
   return true;
 }
@@ -323,13 +344,16 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
   if (tool === 'Bash') {
     const cmd = ohneCommitText(String(input.command ?? ''));   // Commit-Texte sind Inhalt (06.11.)
     for (const [re, why] of BASH_BLOCKED) if (re.test(cmd)) return { cls: 'blocked', why };
-    for (const [re, why] of BASH_GITHUB_WRITE) if (re.test(cmd)) return { cls: 'confirm', why };
+    const gw = githubSchreibGrund(cmd);
+    if (gw) return { cls: 'confirm', why: gw };
     // R31: Coolify direkt immer nach „ja“ (Werkzeug coolify/coolify_status ist der Weg; Auto-Modus: ask-Regel COOLIFY_ASK).
     if (COOLIFY_HOST.test(cmd)) return { cls: 'confirm', why: 'Coolify direkt (nimm das Werkzeug coolify)' };
     const gb = bashGuardProblem(cmd, ctx.guard);
     if (gb) return { cls: 'confirm', why: gb };
     if (ctx.workDir && ctx.scope === 'voll') {
-      if (BASH_KEEP_CONFIRM_VOLL.some((re) => re.test(cmd)) || bashTouchesJiraWrite(cmd)) return { cls: 'confirm' };
+      // Pass A (Runde 3): auch so, wie die Shell es liest (ohne Quotes/Backslashes, ${IFS} als Leerzeichen)
+      const shell = cmd.replace(/['"\\]/g, '').replace(/\$\{?IFS\}?/g, ' ');
+      if (BASH_KEEP_CONFIRM_VOLL.some((re) => re.test(cmd) || re.test(shell)) || bashTouchesJiraWrite(cmd)) return { cls: 'confirm' };
       return { cls: 'auto' };
     }
     if (ctx.workDir && !cmd.includes(VAULT_DIR) && !BASH_KEEP_CONFIRM.some((re) => re.test(cmd))) return { cls: 'auto' };
@@ -503,12 +527,14 @@ export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] })
   const segs = kette.split(/\s&&\s/);
   if (segs.length !== roh.length) return null;
   const home = process.env.HOME ?? '/home';
-  // Pass C (klein): relative Pfade gelten im Arbeitsordner des Strangs, nicht im Ordner der Brücke
-  const pfad = (p: string) => resolve(o.dirs[0] ?? '/', p.replace(/^~(?=\/|$)/, home).replace(/^["']|["']$/g, ''));
+  // Pass C (klein): relative Pfade gelten im Arbeitsordner des Strangs, nicht im Ordner der Brücke — Pass C (Runde 3): und zwar im
+  // jeweils wirksamen Ordner; jedes cd gilt relativ zum vorigen (sonst führte „cd docs && cd . && git restore .“ am Schutz vorbei).
+  let wo = resolve(o.dirs[0] ?? '/');
+  const pfad = (p: string) => resolve(wo, p.replace(/^~(?=\/|$)/, home).replace(/^["']|["']$/g, ''));
   const unter = (a: string, liste: string[]) => liste.some((d) => a === resolve(d) || a.startsWith(resolve(d) + '/'));
   const innen = (p: string) => unter(pfad(p), [...o.dirs, ...(o.docs ?? [])]);
   const imDocs = (p: string) => !unter(pfad(p), o.dirs) && unter(pfad(p), o.docs ?? []);
-  let art = '', letztesCd: string | null = null;
+  let art = '';
   for (let i = 0; i < segs.length; i++) {
     let s = segs[i].replace(/\s*2>&1\s*$/, '').trim(), r = roh[i].replace(/\s*2>&1\s*$/, '').trim();
     // Umgebungs-Präfixe: nur einfache Werte oder eine lokale Postgres-Adresse
@@ -517,13 +543,13 @@ export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] })
       if (m[2].includes('://') ? !DB_LOKAL.test(m[2]) : !/^[\w.,:/@-]+$/.test(m[2])) return null;
       r = r.slice(m[0].length); s = s.replace(/^[A-Z_][A-Z0-9_]*=\S+\s+/, '');
     }
-    if (/^cd\s+\S+$/.test(r)) { if (!innen(r.slice(3).trim())) return null; letztesCd = r.slice(3).trim(); continue; }
+    if (/^cd\s+\S+$/.test(r)) { if (!innen(r.slice(3).trim())) return null; wo = pfad(r.slice(3).trim()); continue; }
     const g = r.match(/^git(?:\s+-C\s+(\S+))?\s+([\w-]+)(\s.*)?$/);
     if (g) {
       if (g[1] && !innen(g[1])) return null;
       if (!LOKAL_GIT.test(g[2])) return null;
       // olaf-docs: nur nicht-zerstörende Befehle (restore/checkout/switch/stash würden Knuts ungespeicherte Arbeit verwerfen)
-      const ziel = g[1] ?? letztesCd;
+      const ziel = g[1] ? pfad(g[1]) : wo;
       if (ziel && imDocs(ziel) && !DOCS_GIT.test(g[2])) return null;
       const rest = g[3] ?? '';
       // Pass A (Fix-Runde 2, S1): ein Pfad außerhalb des Worktrees macht `git diff` implizit zu --no-index und liest dann
@@ -559,7 +585,9 @@ export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] })
 export function orchestratorBlock(tool: string, input: Record<string, unknown>): string | null {
   if (tool === 'Bash') {
     const cmd = ohneCommitText(String(input.command ?? ''));   // Commit-Texte sind Inhalt (06.11.)
-    for (const [re, why] of [...BASH_BLOCKED, ...BASH_GITHUB_WRITE, ...ORCH_BASH_BLOCK]) if (re.test(cmd)) return why;
+    for (const [re, why] of [...BASH_BLOCKED, ...ORCH_BASH_BLOCK]) if (re.test(cmd)) return why;
+    const gw = githubSchreibGrund(cmd);
+    if (gw) return gw;
     // git config: nur lesen (--get…/--list/-l); jede schreibende Form ist gesperrt.
     for (const m of cmd.matchAll(new RegExp(GIT + String.raw`config(?![\w-])([^|;&\n]*)`, 'g'))) if (!/\s(--get(-all|-regexp)?|--list|-l)\b/.test(m[1])) return 'Git-Konfiguration ändern';
     return null;

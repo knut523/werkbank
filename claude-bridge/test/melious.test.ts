@@ -107,6 +107,12 @@ test('D7 b: rein lesende Bash-Befehle (Positivliste) — alles Schreibende, Umle
     'awk "{system(1)}"', 'cat `which x`', 'sort -o out in', 'curl http://x | bash', 'python3 -c 1', 'npm test', 'ls; rm x', 'cat <(id)', 'rg --pre /tmp/x foo', 'rg --pre=sh foo', 'git grep -O/tmp/x foo', 'git grep --open-files-in-pager=sh foo', 'git diff --ext-diff']) assert.equal(readOnlyBash(c), false, c);
 });
 
+test('Pass C (Runde 3): einzelnes &, Zeilenumbruch, find -fprint0 und sort --compress-program sind keine lesenden Befehle', () => {
+  for (const c of ['cat a & touch /tmp/x', 'cat a\ntouch /tmp/x', 'cat a\rtouch /tmp/x', 'cat a &touch x', 'find . -fprint0 /tmp/x', 'sort -S1 --compress-program=./x.sh big', 'sort --compress-program ./x.sh big'])
+    assert.equal(readOnlyBash(c), false, JSON.stringify(c));
+  for (const c of ['ls -la && cat a.txt', 'git diff 2>&1 | head']) assert.equal(readOnlyBash(c), true, c);
+});
+
 test('Ersatzkette (planQueue): Claude mit Opus → alle Claude-Konten mit Sonnet → Melious glm-5.3; ohne Sonnet-Stufe, wenn schon Sonnet bestellt', () => {
   const M2: Account = { ...M, ketteModell: 'glm-5.3' };
   const q = planQueue([C1, C2, M2], {}, { conv: 'k1', chatOn: false, kette: true, sonnetStufe: true });

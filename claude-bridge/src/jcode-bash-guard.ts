@@ -51,5 +51,10 @@ if (!cmd || !readOnlyBash(cmd) || gesperrt()) {
 // Der Shell (und allem darunter) den Schlüssel gar nicht erst mitgeben; -f: keine Glob-Expansion.
 const env = { ...process.env };
 delete env.JCODE_PROVIDER_MELIOUS_API_KEY;
+// Pass C (Runde 3): lesende git-Befehle starten sonst Programme aus einer untergeschobenen Konfiguration (core.fsmonitor über
+// eine selbst geschriebene .git-Datei, Pager, externes Diff). Diese Einträge gelten vor jeder Repo-Konfiguration.
+const GIT_FEST: [string, string][] = [['core.fsmonitor', 'false'], ['core.pager', 'cat'], ['diff.external', ''], ['core.hooksPath', '/dev/null']];
+Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_PAGER: 'cat', GIT_CONFIG_COUNT: String(GIT_FEST.length) });
+GIT_FEST.forEach(([k, v], n) => { env[`GIT_CONFIG_KEY_${n}`] = k; env[`GIT_CONFIG_VALUE_${n}`] = v; });
 const r = spawnSync('/bin/bash', ['-f', ...args], { stdio: 'inherit', env });
 process.exit(r.status ?? 1);

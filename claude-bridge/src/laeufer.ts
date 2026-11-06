@@ -26,7 +26,9 @@ export const opencode2Ab = (env: Env = process.env) => { const n = Math.floor(Nu
 // danach ausdrücklich verboten: außerhalb des Arbeitsordners lesen, Prozess-Umgebung, Umgebungs- und Zugangsdateien.
 // ponytail: Muster wie beim jcode-Hook; ob opencode 2.2.5 jede Pfadform darauf abbildet, belegt erst ein echter Lauf (Bericht).
 export const GEHEIM_MUSTER = ['/proc/**', '**/environ', '**/.env', '**/.env.*', '**/.ssh/**', '**/.claude/**', '**/.claude.json', '**/.melious/**', '**/.jcode/**',
-  '**/.config/vw/**', '**/.config/gh/**', '**/.aws/**', '**/.netrc', '**/.git-credentials', '**/testkonten*', '**/.local/opencode2/**', '**/.runtime/**'];
+  '**/.config/vw/**', '**/.config/gh/**', '**/.aws/**', '**/.netrc', '**/.git-credentials', '**/testkonten*', '**/.local/opencode2/**', '**/.runtime/**',
+  // Pass C (Runde 3): wie GEHEIM im jcode-Hook
+  '**/.config/coderv2/**', '**/.npmrc', '**/.pgpass', '**/.docker/config.json', '**/.kube/**', '**/Bitwarden CLI/**', '**/*_history', '**/.envrc'];
 export const NUR_LESEN = [
   { action: '*', resource: '*', effect: 'deny' },
   ...['read', 'glob', 'grep'].map((action) => ({ action, resource: '*', effect: 'allow' })),

@@ -41,3 +41,21 @@ test('Echter Hook-Aufruf über das Wrapper-Skript: Exit 2 mit Grund, Exit 0 bei 
   assert.equal(lauf('read', { file_path: 'src/main.ts' }).status, 0);
   assert.equal(lauf('read', {}, '{kaputt').status, 2);
 });
+
+test('Pass C (Runde 3): Schreiben folgt keinem Symlink nach draußen; node_modules und Git-Verwaltung sind tabu; weitere Zugangs-Orte gesperrt', async () => {
+  const { mkdtempSync, mkdirSync, symlinkSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const r = mkdtempSync(join(tmpdir(), 'jpt-')), wt = join(r, 'wt'), aussen = join(r, 'aussen');
+  mkdirSync(wt); mkdirSync(join(aussen, 'pkg'), { recursive: true });
+  symlinkSync(aussen, join(wt, 'verweis'));
+  assert.match(jcodeEntscheid('write', { file_path: 'verweis/pkg/index.js' }, wt) ?? '', /Arbeitsordner/, 'Symlink nach draußen');
+  assert.match(jcodeEntscheid('write', { file_path: 'verweis/neu/datei.js' }, wt) ?? '', /Arbeitsordner/, 'neuer Pfad unter Symlink');
+  assert.ok(jcodeEntscheid('write', { file_path: 'node_modules/x/index.js' }, wt), 'node_modules');
+  const G = ['.g', 'it'].join('');
+  assert.ok(jcodeEntscheid('write', { file_path: G }, wt), 'Git-Datei');
+  assert.ok(jcodeEntscheid('edit', { file_path: `sub/${G}/HEAD` }, wt), 'Git-Ordner');
+  assert.equal(jcodeEntscheid('write', { file_path: 'src/neu.ts' }, wt), null, 'normales Schreiben bleibt erlaubt');
+  const H = '/home/knut';
+  for (const f of [`${H}/.config/coderv2/session`, `${H}/.npmrc`, `${H}/.bash_history`, `${H}/.config/Bitwarden CLI/data.json`, '/x/.envrc', `${H}/.pgpass`, `${H}/.docker/config.json`, `${H}/.kube/config`])
+    assert.ok(jcodeEntscheid('read', { file_path: f }, WT), f);
+});

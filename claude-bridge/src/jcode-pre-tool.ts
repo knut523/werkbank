@@ -4,7 +4,8 @@
 // nur die Shell — `read`/`agentgrep` hatten keine Grenze, ein Strang hätte über melious_sub .env.local oder /proc/*/environ lesen
 // lassen können (an den Deny-Regeln von 17e vorbei).
 // ponytail: Muster statt Sandbox wie beim Bash-Shim; Schreiben nur im Arbeitsordner. Im Zweifel (kaputte Eingabe) gesperrt.
-import { resolve } from 'node:path';
+import { resolve, dirname, basename, join, relative } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
 
 // Was nie gelesen oder geschrieben werden darf: Umgebungsdateien, Prozess-Umgebung, Zugangsdaten der Werkzeuge.
 export const GEHEIM = [
@@ -15,7 +16,24 @@ export const GEHEIM = [
   // Pass C (Claude, Fix-Runde 2, S3): dieselben Orte wie GEHEIM_MUSTER der opencode-2-Läufer — GitHub-Schreibschlüssel, Vaultwarden-
   // Sitzung, Konten der Brücke, Daten der opencode-2-Server (Prompts und Diffs aller Personen)
   /\.config\/gh\//i, /\.config\/vw\//i, /\.runtime\//i, /claude-accounts\.json/i, /\.local\/opencode2\//i,
+  // Pass C (Runde 3): weitere Zugangs-Orte auf dieser Box (Coder-Sitzung, npm/Postgres/Docker/Kubernetes, Bitwarden-CLI, Shell-Verlauf, direnv)
+  /\.config\/coderv2\//i, /\.npmrc/i, /\.pgpass/i, /\.docker\/config\.json/i, /\.kube\//i, /Bitwarden CLI/i, /_history($|[\/\s'"])/i, /\.envrc/i,
 ];
+
+/** Pass C (Runde 3): echter Pfad eines (evtl. noch nicht vorhandenen) Ziels — der nächste vorhandene Vorfahr wird aufgelöst, damit ein
+ *  Symlink im Arbeitsordner (z. B. node_modules der Delegation) nicht nach draußen führt. */
+export function echterPfad(p: string): string {
+  let kopf = p; const rest: string[] = [];
+  while (!existsSync(kopf)) { const o = dirname(kopf); if (o === kopf) break; rest.unshift(basename(kopf)); kopf = o; }
+  try { return join(realpathSync(kopf), ...rest); } catch { return p; }
+}
+/** Schreibziel prüfen: null = im Arbeitsordner und erlaubt. node_modules (geteilt per Symlink) und die Git-Verwaltung sind nie Ziel. */
+export function schreibzielProblem(p: string, cwd: string): string | null {
+  const wurzel = echterPfad(resolve(cwd)), ziel = echterPfad(resolve(cwd, p));
+  if (ziel !== wurzel && !ziel.startsWith(wurzel + '/')) return `Abgelehnt (Werkbank-Wächter): Schreiben nur im Arbeitsordner (${resolve(cwd)}).`;
+  if (/(^|\/)(node_modules|\.git)(\/|$)/.test(relative(wurzel, ziel))) return 'Abgelehnt (Werkbank-Wächter): node_modules und die Git-Verwaltung werden nicht direkt beschrieben.';
+  return null;
+}
 const SCHREIBEND = new Set(['write', 'edit', 'multiedit', 'patch', 'apply_patch']);
 
 const texte = (v: unknown, out: string[] = []): string[] => {
@@ -38,8 +56,7 @@ export function jcodeEntscheid(tool: string, input: unknown, cwd: string): strin
     const pfade = [o.file_path, o.path, o.filePath, ...String(o.patch ?? o.input ?? '').matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)]
       .map((x: any) => (Array.isArray(x) ? x[1] : x)).filter((x): x is string => typeof x === 'string' && !!x);
     if (!pfade.length) return 'Abgelehnt (Werkbank-Wächter): Schreiben ohne Pfad.';
-    const wurzel = resolve(cwd);
-    for (const p of pfade) { const ziel = resolve(cwd, p); if (ziel !== wurzel && !ziel.startsWith(wurzel + '/')) return `Abgelehnt (Werkbank-Wächter): Schreiben nur im Arbeitsordner (${wurzel}).`; }
+    for (const p of pfade) { const grund = schreibzielProblem(p, cwd); if (grund) return grund; }
   }
   return null;
 }

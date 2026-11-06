@@ -8,6 +8,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, realpathSync, statSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
 import { strangSandbox } from './sandbox.ts';
+import { schreibzielProblem } from './jcode-pre-tool.ts';
 import { tmpdir, homedir } from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:path';
@@ -1582,8 +1583,18 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       return;
     }
     // Rückfall auf Claude: der Zug zählt ab jetzt wie ein Claude-Strang (nicht mehr im jcode-Topf, Pass B A4).
-    live.schaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe });
+    const claudeSchaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe });
     if (orchMap[key]) { orchMap[key].laeuferFallback = { at: Date.now(), grund: r.grund.slice(0, 200) }; saveMap(); }
+    // Pass A (Runde 3): zugelassen war der Zug nur gegen den jcode-Topf — vor dem Claude-Lauf dieselbe Box-Grenze wie jeder Claude-Zug
+    // (sonst starten bei gestörtem Melious alle jcode-Stränge zugleich Claude-Prozesse). Kein Platz: warten, bis einer frei wird.
+    const passt = () => lockFor(meine().filter((l) => l !== live), { readonly: !!req.readonly, mode }, { neu: claudeSchaetzung, stand: speicherStand(), vorrang: !!orchMap[key]?.vorrang, jcodeBelegt: jcodeBelegt() }) === 'ok';
+    if (!passt()) {
+      emitStatus(live, `jcode lieferte kein brauchbares Ergebnis (${r.grund}) — der Zug wartet auf einen freien Platz für Claude (${lockGrund || 'gerade kein Platz'}).`);
+      const wachW = wachHalten(live);
+      try { while (!passt() && !live.abort.signal.aborted) await new Promise((res) => setTimeout(res, 5000)); } finally { wachW(); }
+      if (live.abort.signal.aborted) { mark(live, 'ende'); end(live); return; }
+    }
+    live.schaetzung = claudeSchaetzung;
     emitStatus(live, `jcode lieferte kein brauchbares Ergebnis (${r.grund}) — dieser Zug läuft mit Claude weiter.`);
   }
 
@@ -2192,7 +2203,7 @@ export function jcodeWritesOutside(sessionJson: any, cwd: string): string[] {
     if (b?.type !== 'tool_use' || !/^(write|edit|multiedit|apply_patch|patch)$/i.test(String(b.name))) continue;
     const i = b.input ?? {};
     const paths = [i.file_path, i.path, i.filePath, ...String(i.patch ?? i.input ?? '').matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((x: any) => Array.isArray(x) ? x[1] : x).filter((x) => typeof x === 'string' && x);
-    for (const p of paths) { const abs = resolve(root, p); if (abs !== root && !abs.startsWith(root + '/')) out.push(abs); }
+    for (const p of paths) if (schreibzielProblem(p, root)) out.push(resolve(root, p));   // Pass C (Runde 3): dieselbe Regel wie der Hook (Symlinks)
   }
   return out;
 }
@@ -2207,9 +2218,12 @@ export function jcodePromptArg(p: string): string {
   while (Buffer.byteLength(s) > JCODE_PROMPT_MAX - 200) s = s.slice(0, Math.floor(s.length * 0.95));
   return `${s}\n\n[… Auftrag hier gekürzt (Grenze der Befehlszeile) — lies fehlende Teile im Arbeitsordner nach.]`;
 }
+const JCODE_GH_LEER = () => { const d = join(tmpdir(), 'werkbank-jcode-gh-leer'); mkdirSync(d, { recursive: true, mode: 0o700 }); return d; };
 function jcodeSpawn(o: { cwd: string; prompt: string; model: string | null; tools: string; key: string; timeoutS: number; abbruch?: () => boolean; extra?: Record<string, string> }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key,
-    JCODE_HOOK_PRE_TOOL: JCODE_HOOK, JCODE_HOOK_PRE_TOOL_TIMEOUT_MS: '10000', ...o.extra };
+    JCODE_HOOK_PRE_TOOL: JCODE_HOOK, JCODE_HOOK_PRE_TOOL_TIMEOUT_MS: '10000',
+    // Pass C (Runde 3): zweite Linie hinter dem Shell-Wächter — gh ohne Konto, git ohne SSH-Schlüssel und ohne Passwortabfrage
+    GH_CONFIG_DIR: JCODE_GH_LEER(), GIT_SSH_COMMAND: 'ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=/dev/null -o BatchMode=yes', GIT_TERMINAL_PROMPT: '0', ...o.extra };
   return new Promise((res) => {
     const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', jcodePromptArg(o.prompt)], { cwd: o.cwd, env });
     let so = '', se = '';
