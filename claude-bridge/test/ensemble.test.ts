@@ -80,3 +80,13 @@ test('Pass A (Fix-Runde 2, S4): jcode-Prompt bleibt unter der Grenze eines Befeh
   const lang = jcodePromptArg('ä'.repeat(200_000));
   assert.ok(Buffer.byteLength(lang) < 128 * 1024 && Buffer.byteLength(lang) <= JCODE_PROMPT_MAX + 200); assert.match(lang, /gekürzt/);
 });
+
+test('Pass A (Runde 3, AB4): beim größten Verifizierer-Prompt überlebt die Aufgabe die Kürzung auf die Befehlszeilen-Grenze', async () => {
+  const { jcodePromptArg } = await import('../src/sessions.ts');
+  const p = (m: string): EnsLauf => ({ rolle: m, modell: m, ok: true, text: 'z'.repeat(30_000), s: 1, usage: leer, laeufer: 'jcode', gelaufen: m });
+  const vp = verifiziererPrompt('Review PR 1', diffBlock('a..b', 'd'.repeat(90_000)), [p('a'), p('b'), p('c')], ['--- s:1-1\n' + 's'.repeat(39_000)], true);
+  const arg = jcodePromptArg(vp);
+  assert.ok(arg.length < vp.length, 'Prompt wird gekürzt');
+  assert.match(arg, /Deine Aufgabe: Führe die Befunde zusammen/);
+  assert.match(arg, /Knapp: je Befund höchstens 3 Sätze/);
+});

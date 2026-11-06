@@ -1060,6 +1060,24 @@ export function fremderWorktree(datei: string, andere: { key: string; dir?: stri
   return null;
 }
 
+/** Pass C (Runde 3, C7): erste Zugangsdatei (.env, .env.local …) irgendwo unter `wurzel` (relativer Pfad) oder null. node_modules und
+ *  .git werden übersprungen, Symlinks nicht verfolgt; über 50 000 Einträge zählt der Ordner als zu groß (lieber einen Unterordner). */
+export function zugangsdateiIn(wurzel: string): string | null {
+  const offen = [''];
+  let n = 0;
+  while (offen.length) {
+    const rel = offen.pop()!;
+    let eintraege; try { eintraege = readdirSync(join(wurzel, rel), { withFileTypes: true }); } catch { continue; }
+    for (const d of eintraege) {
+      if (++n > 50_000) return `${rel || '.'} … (zu groß zum Prüfen — einen Unterordner freigeben)`;
+      const p = rel ? `${rel}/${d.name}` : d.name;
+      if (/^\.env(\.(?!example$|sample$|template$)[\w.-]+)?$/.test(d.name)) return p;
+      if (d.isDirectory() && d.name !== 'node_modules' && d.name !== '.git') offen.push(p);
+    }
+  }
+  return null;
+}
+
 /** Bedarfskanal (Knut 06.11.): erteilter Zugang eines Strangs zu einem Ordner außerhalb seines Worktrees, bis `bis` (≤ 24 h). */
 export function strangFreigabe(userId: string, convId: string, pfad: string, bis: number): { pfad: string; bis: number; neu: boolean } {
   const key = `${safeId(userId)}:${safeId(convId)}`;
@@ -1075,7 +1093,8 @@ export function strangFreigabe(userId: string, convId: string, pfad: string, bis
   // (.env, .env.local …) — den Zugang kann auch der Hauptchat erteilen, auf Bitte eines Strangs, den PR-Text steuern könnte.
   const unterWurzel = [...orchRoots(), ...docsOrdner()].some((r) => { try { const w = realpathSync(r); return real === w || real.startsWith(w + '/'); } catch { return false; } });
   if (!unterWurzel) throw Object.assign(new Error(`Zugang nur unter den Arbeitsordnern der Stränge (${orchRoots().join(', ')}) oder olaf-docs.`), { status: 400 });
-  if (readdirSync(real).some((n) => /^\.env(\.(?!example$|sample$|template$)[\w.-]+)?$/.test(n))) throw Object.assign(new Error('Ordner mit Umgebungsdateien (.env*) gibt es nicht als Zugang.'), { status: 400 });
+  const envDatei = zugangsdateiIn(real);
+  if (envDatei) throw Object.assign(new Error(`Ordner mit Umgebungsdateien (.env*) gibt es nicht als Zugang (${envDatei}).`), { status: 400 });
   // Pass B (Fix-Runde 2): neu = es gab für den Pfad noch keinen gültigen Zugang — nur dann darf die Werkbank ihn beim Rollback entziehen
   const neu = !(e.freigaben ?? []).some((f) => f.bis > Date.now() && f.pfad === real);
   e.freigaben = [...(e.freigaben ?? []).filter((f) => f.bis > Date.now() && f.pfad !== real), { pfad: real, bis }];

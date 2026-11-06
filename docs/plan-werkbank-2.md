@@ -640,3 +640,20 @@ Auftrag: „Alle Nudges und Nachsendungen sollen automatisch laufen.“ Heute ha
 | A5 | Übersprungene Reviews nachholen | einmal täglich: PRs, deren Review übersprungen wurde (kein neuer Kopf seit dem letzten Lauf, z. B. #393 heute 09:17), noch einmal anstoßen — höchstens einmal je PR und Tag | Test: übersprungener PR wird am nächsten Tag genau einmal angestoßen |
 
 Reihenfolge: A2 → A1 → A3 → A4 → A5, je mit Tests zuerst. A2 hebt den Triage-Schalter nur für T8 auf (Knut: „alle“). Live schalten nach einem Fix (d) bleibt ein Schritt mit Knuts Go; er erscheint als „Braucht Hauptsitzung“-Punkt (A4) statt im Kopf der Hauptsitzung.
+
+## 25. Bausteine vom 06.11. (Parität, Strang-Bedarf, Konzept J, Zeitschätzungen)
+
+Am 06.11. kamen Bausteine dazu, die keine eigene Plan-Nummer hatten (Pass A Runde 3: „Plan ohne Abschnitt“). Maßgeblich bleiben die Entscheidungen im Bericht des Review-Pakets; hier steht, was gebaut ist, wo es liegt und wie man es zurücknimmt.
+
+| # | Baustein (Auftrag) | Umsetzung | Schalter / Rückweg |
+|---|---|---|---|
+| P1 | Parität mit der alten Werkbank (Knut: kein Bereich schlechter, bis dahin kein Release) | Unter-Chat-Seite als Chat (Verlauf, Chatleiste, Steuerung); Board, Sprint, Ziele, Roadmap, Lage, Mein Tag, Skills, Einrichtung, Dateien sind die alten Seiten, in der 2.0-Hülle eingehängt (`alt.tsx`) | alte Werkbank läuft weiter; Release erst nach dem Vergleich der eigenen 2.0-Seiten |
+| P2 | Freigabe-Ansicht in der 2.0 (löst §5.5 Punkt 4 ab) | „Ansehen und freigeben“ gibt nur den gezeigten Kopf frei; Push weiter über `gitsafe`/`githubwrite` | `WERKBANK_V2_FREIGABE` (ohne: Hinweis auf die alte Werkbank) |
+| B1 | Strang-Bedarf („lesen frei, lokal frei, nach außen Hauptsitzung“) | `bedarf_melden` → Hauptchat und „Für die Hauptsitzung“, `orch_bedarf` antwortet; erteilter Ordnerzugang ≤ 24 h, nur unter den Arbeitswurzeln, nie mit Zugangsdateien im Baum (`strangFreigabe`); `github_lesen` für Stränge; Commit-Texte sind Inhalt (`ohneCommitText`) | Zugang läuft ab oder wird entzogen; Basis-Merges bleiben bei der Hauptsitzung |
+| J1 | Review-Ensemble (Konzept J, Entscheidung Hauptsitzung) | drei Prüfläufe parallel, Verifizierer `glm-5.2`, Schatten `glm-5.3-flash` bis 20.11., danach prüft Claude jeden Befund am Code (`ensemble.ts`, `ensemble_review`); Rückfall je Lauf auf jcode | `WERKBANK_REVIEW_ENSEMBLE=aus`, `BRIDGE_ENSEMBLE_SCHATTEN` |
+| J2 | Läufer-Abstraktion | Schnittstelle `Laeufer`, Adapter jcode und opencode 2 (HTTP, nur lesend: `NUR_LESEN`, `GEHEIM_MUSTER`); der opencode-2-Server wird von der Brücke gestartet und überwacht (`oc2server.ts`) | `BRIDGE_OPENCODE2=an` (sonst jcode), `BRIDGE_OPENCODE2_AB` |
+| J3 | RAM-Grenze und Klickwerkzeug | eigener jcode-Topf (0,1 GB je Lauf, gemeinsam für Stränge und Leser); Klickwerkzeug für jcode-Leser nur gegen Test-Instanz und Vorschau mit Testkonten (`klick.ts`) | `BRIDGE_JCODE_TOPF_GB` (Live-Gang: 3) |
+| Z1 | Zeitschätzungen gegen Ist | Messung je Arbeitsabschnitt (`etamessung.ts`, Sammlung `eta_messungen`), Auswertung auf „Jetzt“ und im Steckbrief, Lernen aus vergleichbaren Läufen, „überfällig“ erst nach dem Puffer | ohne Messdaten gilt die Vorgabe wie vorher |
+| M1 | Melious-Schlüssel | gespeicherter Schlüssel → Server-Einstellung (nur Pilotkonto) → Vaultwarden-Element (nur Pilotkonto); `bwSecret` mit schmaler Umgebung | Schlüssel in der Einrichtung entfernen |
+
+Offen und bewusst nicht gebaut: `orch council` (Council-Check aus dem Hauptchat; §23 T3 nutzt den bestehenden Weg) und echte Läufe über Melious (Belege für opencode 2, Ensemble und J3 auf Melious warten auf die Melious-Freigabe).

@@ -65,13 +65,16 @@ export function verifiziererPrompt(auftrag: string, dblock: string, pruefer: Ens
   // Pass C (K5): nur ganze Stellen bis STELLEN_MAX, nicht mitten in einem Block abschneiden
   let s = '';
   for (const x of st) { if ((s ? s.length + 2 : 0) + x.length > STELLEN_MAX) break; s += (s ? '\n\n' : '') + x; }
-  return `Drei unabhängige Prüfer haben denselben Auftrag bearbeitet. Auftrag: ${auftrag}${dblock}\n\n`
-    + pruefer.map((r) => `=== Prüfer ${r.modell} ===\n${r.ok ? (r.text.length > PRUEFER_MAX ? r.text.slice(0, PRUEFER_MAX) + '\n[… gekürzt]' : r.text) : `(kein Ergebnis: ${r.grund ?? 'leer'})`}\n\n`).join('')
-    + (s ? `Zitierte Stellen (Arbeitsstand, mit Zeilennummern):\n\`\`\`\`\n${s}\n\`\`\`\`\n\n` : '')
-    + 'Deine Aufgabe: Führe die Befunde zusammen (Doppelte vereinen) und prüfe JEDEN Befund an den mitgegebenen Stellen und am Diff. '
+  // Pass A (Runde 3, AB4): die Aufgabe steht vor dem Material — Diff, Prüfergebnisse und Stellen zusammen können über JCODE_PROMPT_MAX
+  // liegen, und jcodePromptArg kürzt am Ende.
+  const aufgabe = 'Deine Aufgabe: Führe die Befunde zusammen (Doppelte vereinen) und prüfe JEDEN Befund an den mitgegebenen Stellen und am Diff. '
     + 'Lies selbst nur nach, wenn eine Stelle fehlt oder nicht reicht. Gib nur bestätigte Befunde aus, sortiert nach Schwere '
     + '(blockierend / sollte / klein), je mit Beleg Datei:Zeile, Begründung, welcher Prüfer ihn fand, und verworfene Befunde kurz mit Grund. Nichts ändern.'
     + (knapp ? ' Knapp: je Befund höchstens 3 Sätze, keine Nacherzählung des Deltas.' : '');
+  return `Drei unabhängige Prüfer haben denselben Auftrag bearbeitet. Auftrag: ${auftrag}\n\n${aufgabe}${dblock}\n\n`
+    + pruefer.map((r) => `=== Prüfer ${r.modell} ===\n${r.ok ? (r.text.length > PRUEFER_MAX ? r.text.slice(0, PRUEFER_MAX) + '\n[… gekürzt]' : r.text) : `(kein Ergebnis: ${r.grund ?? 'leer'})`}\n\n`).join('')
+    + (s ? `Zitierte Stellen (Arbeitsstand, mit Zeilennummern):\n\`\`\`\`\n${s}\n\`\`\`\`\n\n` : '')
+    + aufgabe;
 }
 
 export interface EnsErgebnis { ok: boolean; text: string; pruefer: EnsLauf[]; verifizierer: EnsLauf; schatten: EnsLauf | null; sPruefer: number; sVerifizierer: number; stellen: number; grund?: string }

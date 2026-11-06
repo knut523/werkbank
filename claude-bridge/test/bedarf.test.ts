@@ -27,6 +27,11 @@ test('Zugang: nur bestehende Ordner, keine Geheimnis-Orte, höchstens 24 h, unbe
   assert.throws(() => mod.strangFreigabe('u2', C, mitEnv, jetzt + 1000), /Umgebungsdateien/);
   const mitBeispiel = realpathSync(mkdtempSync(join(tmpdir(), 'mit-bsp-'))); writeFileSync(join(mitBeispiel, '.env.example'), 'X=');
   assert.equal(mod.strangFreigabe('u2', C, mitBeispiel, jetzt + 3600_000).pfad, mitBeispiel, '.env.example ist keine Zugangsdatei');
+  // Pass C (Runde 3, C7): auch eine Zugangsdatei tiefer im Ordner zählt; in node_modules und .git wird nicht gesucht
+  const tief = realpathSync(mkdtempSync(join(tmpdir(), 'mit-env-tief-'))); mkdirSync(join(tief, 'web', 'app'), { recursive: true }); writeFileSync(join(tief, 'web', 'app', '.env'), 'X=1');
+  assert.throws(() => mod.strangFreigabe('u2', C, tief, jetzt + 1000), /Umgebungsdateien.*web\/app\/\.env/);
+  const nm = realpathSync(mkdtempSync(join(tmpdir(), 'mit-env-nm-'))); mkdirSync(join(nm, 'node_modules', 'x'), { recursive: true }); writeFileSync(join(nm, 'node_modules', 'x', '.env'), 'X=1');
+  assert.equal(mod.strangFreigabe('u2', C, nm, jetzt + 3600_000).pfad, nm, 'node_modules wird nicht durchsucht');
   if (existsSync('/usr/share')) assert.throws(() => mod.strangFreigabe('u2', C, '/usr/share', jetzt + 1000), /Arbeitsordnern/);
   assert.throws(() => mod.strangFreigabe('u2', '33333333-3333-3333-3333-333333333333', ANDERS, jetzt + 1000), /Strang/);
 });
