@@ -83,11 +83,11 @@ export function jetztAuswahl(fragen: Frage[], now = Date.now()): { f: Frage; gru
 
 const ANTWORT_REIHE: V2Antwort[] = ['ja', 'anders', 'nein', 'spaeter'];
 
-/** Eine Frage als Karte der 2.0. `strand` = Unter-Chat, aus dem sie kommt (Link auf seine Ansicht). */
 /** Audit 05.11. (7): Push-Freigabe in der 2.0 (Seite mit Commits/Diff, gebunden an den gesehenen Stand) — löst Council B4 ab, darum
  *  nur mit WERKBANK_V2_FREIGABE=1 (Knut entscheidet). Der Push selbst bleibt beim Agenten über das Gate. */
 export const v2FreigabeAn = (env = process.env) => env.WERKBANK_V2_FREIGABE === '1';
 
+/** Eine Frage als Karte der 2.0. `strand` = Unter-Chat, aus dem sie kommt (Link auf seine Ansicht). */
 export function karteAusFrage(f: Frage, o: { grund: string; strand: string | null; strandTitel: string | null; altUrl: string; v2Freigabe?: boolean }): V2Karte {
   const weg = antwortWeg(f);
   const freigabe = istFreigabe(f);
@@ -154,7 +154,6 @@ export interface ArbeitZeile { id?: string; zustand: string; zustandText?: strin
   /** Plan §23 T6: offene Fragen der Klasse „knut“ an diesem Unter-Chat — nur gesetzt, wenn die Triage an ist. */
   knutOffen?: number }
 
-/** Der Zustand eines Unter-Chats in einem Klartext-Satz (428 W12: kein rohes Markdown, keine ETA in der Vergangenheit). */
 /** S22 (Knut B6): eine an der Quelle gekürzte Meldung („… (Empfehlung: b⋯“) an der letzten ganzen Stelle schneiden und auf den Stand verweisen. */
 function ganzeStelle(g: string): string {
   if (!/[⋯…]$/.test(g)) return g;
@@ -165,6 +164,7 @@ function ganzeStelle(g: string): string {
   return `${(stelle && stelle.length >= 8 ? stelle.replace(/[.!?]$/, '') : `${roh} …`).replace(/\s+/g, ' ').trim()} — ganzer Text unten im Stand`;
 }
 
+/** Der Zustand eines Unter-Chats in einem Klartext-Satz (428 W12: kein rohes Markdown, keine ETA in der Vergangenheit). */
 export function zustandSatz(z: ArbeitZeile): string {
   const grund = ganzeStelle(String(z.cs?.grund ?? z.grund ?? '').trim());
   const eta = z.eta?.text ? (z.eta.ueberfaellig ? 'dauert länger als geschätzt' : z.eta.text) : '';

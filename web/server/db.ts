@@ -38,6 +38,9 @@ export async function connect(): Promise<MongoClient> {
       db.collection('files_ignored').createIndex({ owner: 1, sourcePath: 1 }, { unique: true }),
       // Orchestrator-Stränge (docs/plan-orchestrator-agents.md)
       db.collection('orchestrator_runs').createIndex({ userId: 1, startedAt: -1 }),
+      // Pass C (Fix-Runde 2): Abfragen des 20-s-Takts (eingereiht, unterwegs) — sparse, nur Stränge mit solchen Feldern
+      db.collection('orchestrator_runs').createIndex({ 'ausstehend.0': 1 }, { sparse: true }),
+      db.collection('orchestrator_runs').createIndex({ 'ausstehendUnterwegs.seit': 1 }, { sparse: true }),
       db.collection('orchestrator_questions').createIndex({ userId: 1, status: 1, createdAt: -1 }),
       // G0 (docs/plan-vorbau-check.md): ein Schlüssel `<slug>#G0` ist höchstens einmal offen oder beantwortet.
       db.collection('orchestrator_questions').createIndex({ userId: 1, keyActive: 1 }, { unique: true, partialFilterExpression: { keyActive: { $exists: true } } }),

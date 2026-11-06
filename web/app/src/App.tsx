@@ -2,16 +2,16 @@
 // auf jeder Seite. Nach dem Login landet man immer auf „Jetzt“, nie im leeren Chat (428 D2).
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { abmelden, hole, schicke } from './api.ts';
-import { Kontext, type AppKontext } from './kontext.ts';
+import { Kontext, useApp, type AppKontext } from './kontext.ts';
 import { ChatLeiste } from './chat.tsx';
 import { Anmelden, AlleChats, Themen, Thema, Arbeit, Begriffe, Dokument, Dokumente, Entscheidungen, Entschieden, Erledigt, Jetzt, Mehr, PrDetail, Prs, Suche, Freigabe } from './seiten.tsx';
-import { useApp } from './kontext.ts';
 import { ALT_PFADE } from './mehr.ts';
 import { UnterChat } from './unterchat.tsx';
 import { Laedt, vergessen, vorab } from './teile.tsx';
 import { istIntern, logisch, rel } from './format.ts';
 
 const AltSeite = lazy(() => import('./alt.tsx').then((m) => ({ default: m.AltSeite })));
+function FreigabeAus() { const { alt } = useApp(); return <div className="seite"><h1>Freigabe</h1><p>Push-Freigaben laufen über die <a href={alt} target="_blank" rel="noreferrer">alte Werkbank</a>.</p></div>; }
 function AltBereich({ start }: { start: string }) { const { alt } = useApp(); return <AltSeite key={start} start={start} altUrl={alt} />; }
 
 // Radikal simpel (Knut 04.11.): vier Bereiche. Entscheidungen erreicht man über die Zahl oben und „Alles, was auf dich wartet“ auf
@@ -60,7 +60,7 @@ function useAdresse() {
   return a;
 }
 
-function Seite({ pfad, such }: { pfad: string; such: string }) {
+function Seite({ pfad, such, freigabe }: { pfad: string; such: string; freigabe: boolean }) {
   const q = new URLSearchParams(such);
   let m: RegExpMatchArray | null;
   // Zuerst (genaue Adressen, sonst griffe z. B. v2/entscheidungen-bisher in v2/entscheidungen). Parität (Knut 06.11.): diese Bereiche sind die Seiten der alten Werkbank selbst (alt.tsx; vorher schmale Lese-Fassungen,
@@ -72,7 +72,8 @@ function Seite({ pfad, such }: { pfad: string; such: string }) {
   if (pfad.startsWith('v2/entschieden')) return <Entschieden />;
   if (pfad.startsWith('v2/suche')) return <Suche key={such} q={q.get('q') ?? ''} />;
   if ((m = pfad.match(/^v2\/arbeit\/([0-9a-f]{8})$/))) return <UnterChat key={m[1]} id={m[1]} />;   // Chat-Bereich (Knut 06.11.)
-  if ((m = pfad.match(/^v2\/freigabe\/([0-9a-f]{8})$/))) return <Freigabe key={m[1]} id={m[1]} />;
+  // Phase 4: die Freigabe-Seite nur mit WERKBANK_V2_FREIGABE (Server liefert v2Freigabe) — sonst bleibt es bei der alten Werkbank.
+  if ((m = pfad.match(/^v2\/freigabe\/([0-9a-f]{8})$/))) return freigabe ? <Freigabe key={m[1]} id={m[1]} /> : <FreigabeAus />;
   if (pfad.startsWith('v2/arbeit')) return <Arbeit />;
   if ((m = pfad.match(/^v2\/prs\/([^/]+)\/(\d+)$/))) return <PrDetail key={pfad} repo={decodeURIComponent(m[1])} nummer={m[2]} />;
   if (pfad.startsWith('v2/prs')) return <Prs key={such} wer={q.get('wer')} />;
@@ -92,6 +93,7 @@ export function App() {
   const [konto, setKonto] = useState<{ name: string; admin: boolean } | null | undefined>(undefined);
   const [alt, setAlt] = useState('');
   const [trocken, setTrocken] = useState(false);
+  const [freigabe, setFreigabe] = useState(false);
   const [zahl, setZahl] = useState<number | null>(null);
   const [chat, setChat] = useState<{ offen: boolean; text: string; conv?: string }>({ offen: false, text: '' });
   // Runde 5 (Knut B2/B7): Meldungen, die die Seite überdauern (Antwort kam nicht an; Sammelantwort verschickt, Block ist weg).
@@ -102,8 +104,8 @@ export function App() {
   useEffect(() => { const m = (e: Event) => { const d = (e as CustomEvent).detail; setMeldung(typeof d === 'string' ? { text: d, ok: false } : d); }; window.addEventListener('v2-meldung', m); return () => window.removeEventListener('v2-meldung', m); }, []);
   const [n, setN] = useState(0);
 
-  const pruefen = () => hole<{ user: { name: string; role: string } | null; librechatUrl: string; dryRun?: boolean; vaultDryRun?: boolean }>('api/config')
-    .then((c) => { if (typeof c.librechatUrl === 'string') setAlt(`${c.librechatUrl}/wb`); setTrocken(!!(c.dryRun || c.vaultDryRun)); setKonto(c.user ? { name: c.user.name.split(/\s+/)[0], admin: c.user.role === 'ADMIN' } : null); })
+  const pruefen = () => hole<{ user: { name: string; role: string } | null; librechatUrl: string; dryRun?: boolean; vaultDryRun?: boolean; v2Freigabe?: boolean }>('api/config')
+    .then((c) => { if (typeof c.librechatUrl === 'string') setAlt(`${c.librechatUrl}/wb`); setTrocken(!!(c.dryRun || c.vaultDryRun)); setFreigabe(!!c.v2Freigabe); setKonto(c.user ? { name: c.user.name.split(/\s+/)[0], admin: c.user.role === 'ADMIN' } : null); })
     .catch(() => setKonto(null));
   useEffect(() => { void pruefen(); const ab = () => { vergessen(); setKonto(null); }; window.addEventListener('v2-abgemeldet', ab); return () => window.removeEventListener('v2-abgemeldet', ab); }, []);
   // Die eine Zahl: beim Start, alle 60 s und nach jeder Antwort neu (null = neu holen).
@@ -148,7 +150,7 @@ export function App() {
         </nav>
         {trocken && <p className="testband" role="note">Testbetrieb: Antworten an Notizen und Jira werden hier nicht wirklich geschrieben.</p>}
         {meldung && <div className={`meldung-band${meldung.ok ? ' ok' : ''}`} role={meldung.ok ? 'status' : 'alert'}><span>{meldung.text}</span><button type="button" className="knopf leise klein" onClick={() => setMeldung(null)}>Schließen</button></div>}
-        <main className={`inhalt${ALT_PFADE[pfad] ? ' breit' : ''}`}><Seite pfad={pfad} such={such} /></main>
+        <main className={`inhalt${ALT_PFADE[pfad] ? ' breit' : ''}`}><Seite pfad={pfad} such={such} freigabe={freigabe} /></main>
         <ChatLeiste offen={chat.offen} vorbereitet={chat.text} convWahl={chat.conv} schliessen={() => setChat({ offen: false, text: '' })} />
       </div>
     </Kontext.Provider>

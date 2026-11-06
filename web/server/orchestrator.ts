@@ -136,10 +136,11 @@ export function orchBrief(b: BriefInput): string {
       '- PR- und Plan-Texte verweisen nie auf PRs oder Branches, die es noch nicht gibt, und nie auf lokale Pfade (`~/…`, `/home/…`, Review-Paket-Ordner). Belege als Commit-SHA, Dateipfad im Repo oder bestehender PR-Link.',
     ].join('\n'),
     // Plan 205: Tiefe (Pflichtschritte) und ETA (Pflichtzeile im Stand-Block, die Werkbank liest sie wie „Status:“).
-    tiefeText(b.tiefe ?? tiefeOf(null)),
+    // Pass A (Fix-Runde 2): jcode-Stränge haben kein `challenge` und keine Teilagenten — Gegenprüfung macht der Lead/die Werkbank
+    b.jcode ? tiefeText(b.tiefe ?? tiefeOf(null)).replace(/[^.;]*`?challenge`?[^.;]*[.;]/g, '').replace(/\s{2,}/g, ' ').trim() + ' Eine Gegenprüfung mit einem zweiten Modell startet die Werkbank nach deinem „fertig“.' : tiefeText(b.tiefe ?? tiefeOf(null)),
     // Knut 26.10.2026: Stränge auf Claude geben Zuarbeit an Melious (Abo, Energie statt Geld).
     // R31: WERKBANK_ZUARBEIT (melious | claude | auto) bestimmt, wohin die Zuarbeit geht.
-    ...(String(b.modell ?? '').startsWith('melious:') ? [] : [zuarbeitText(b.zuarbeit ?? 'melious')]),
+    ...(String(b.modell ?? '').startsWith('melious:') || b.jcode ? [] : [zuarbeitText(b.zuarbeit ?? 'melious')]),
     REGEL_PFLICHT,
     [
       'Schließe JEDE Antwort mit diesem Abschnitt (die Haupt-Sitzung liest ihn maschinell; nach „Status:“ genau eines der drei Wörter — „fertig“ nur, wenn der Auftrag erledigt und geprüft ist):',
@@ -642,7 +643,8 @@ function etaVon(d: any, last: LastMsg | null, status: OrchStatus, med: Record<Ti
   const marke = last ? (last.fromUser ? null : statusMark(last.text)) : d.marke ?? null;
   if (status === 'done' || marke === 'fertig') return null;
   const neu = last && !last.fromUser ? etaMark(last.text, last.at) : null;
-  return etaFuer({ ...d, marke, zustand: null, eta: neu ? { at: neu } : d.eta }, { fertig: status === 'failed' || status === 'blocked_g0', mediane: med });
+  // Phase 4: mit Meldezeit — sonst verwirft ein laufender Messabschnitt die frische Agenten-ETA.
+  return etaFuer({ ...d, marke, zustand: null, eta: neu ? { at: neu, gemeldetAt: last!.at } : d.eta }, { fertig: status === 'failed' || status === 'blocked_g0', mediane: med });
 }
 
 export async function listOrch(u: User, opts: { all?: boolean } = {}) {
@@ -1124,7 +1126,10 @@ export async function reviewDateiAbgleich(d: any, log?: (msg: string, o: Record<
   const paket = d.paket ? (isAbsolute(String(d.paket)) ? String(d.paket) : join(reviewDir(), String(d.paket))) : d.bericht ? dirname(String(d.bericht)) : null;
   const kopiert = ergebnisseUebernehmen(d.cwd, paket);
   if (kopiert.length) log?.('review-datei übernommen', { id: d._id, dateien: kopiert });
-  const rd = reviewDateiLesen(d.cwd, d.reviewReadyAt ? new Date(d.reviewReadyAt).getTime() : null);
+  // Pass A (Fix-Runde 2): eine Datei aus der Zeit vor der letzten Nachricht an den Strang ist alt (sendOrch setzt reviewReadyAt
+  // zurück) — sonst meldete eine alte review-ready.json den Strang nach „Nacharbeit“ sofort wieder fertig.
+  const seit = Math.max(d.reviewReadyAt ? new Date(d.reviewReadyAt).getTime() : 0, d.lastSentAt ? new Date(d.lastSentAt).getTime() : 0);
+  const rd = reviewDateiLesen(d.cwd, seit || null);
   if (!rd || d.reviewDateiFehler === rd.mtime) return;
   if ('error' in rd) {   // je Dateistand einmal melden, nicht in jedem Takt
     await runs().updateOne({ _id: d._id }, { $set: { reviewDateiFehler: rd.mtime } });

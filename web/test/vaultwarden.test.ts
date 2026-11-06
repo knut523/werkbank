@@ -87,9 +87,10 @@ test('Melious: Reihenfolge gespeichert → Env → Vaultwarden; Env nur mit gül
   process.env.MELIOUS_API_KEY = 'kein-schluessel';
   assert.equal((await M.meliousSettings(lisa)).configured, false);
   process.env.MELIOUS_API_KEY = `sk-mel-${'e'.repeat(24)}env1`;
-  let s = await M.meliousSettings(lisa);
-  assert.equal(s.quelle, 'env'); assert.equal(s.last4, 'env1'); assert.equal(s.enabled, false);
-  assert.equal((await M.meliousSettings(knut)).quelle, 'env', 'Env vor Vaultwarden');
+  // Pass A/C (Fix-Runde 2): der Server-Schlüssel gilt nur für Knuts Konto, nicht für andere Personen
+  assert.equal((await M.meliousSettings(lisa)).configured, false, 'andere Personen: kein Server-Schlüssel');
+  let s = await M.meliousSettings(knut);
+  assert.equal(s.quelle, 'env', 'Env vor Vaultwarden'); assert.equal(s.last4, 'env1');
   await M.setMelious(knut, { token: `sk-mel-${'g'.repeat(24)}gesp` });
   s = await M.meliousSettings(knut);
   assert.equal(s.quelle, 'gespeichert'); assert.equal(s.last4, 'gesp');

@@ -3,7 +3,8 @@
 // (Council B4, auch alle-empfohlen/sammel-schliessen/wieder-öffnen/umkehren) und der Chat (v2chat.ts, Hauptchat über v2librechat.ts)
 // für alle; nur für Admins (admin(u)): Unter-Chats steuern (abbrechen, anhalten, weiter), PR-Aktionen (Review/Fix einreihen),
 // Anhänge (Datei ins Paket), Bedarfe beantworten (inkl. befristeter Ordnerfreigabe in der Brücke), Council-Urteile, Haken der
-// Hauptsitzung, Antworten auf „Zum Ansehen“. Kein Push, kein Merge, keine Freigabe nach außen — die verweisen auf die alte Werkbank.
+// Hauptsitzung, Antworten auf „Zum Ansehen“. Kein Push, kein Merge. Die Push-Freigabe der Freigabe-Ansicht (Schalter
+// WERKBANK_V2_FREIGABE, Knut 06.11.) geht über die bestehende Admin-Route der alten Werkbank; Jira-Freigaben bleiben dort.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import type { User } from './auth.ts';
@@ -215,9 +216,9 @@ async function fastFertigJe(d: V2Deps, u: User, ids: string[], max = 40): Promis
   return out;
 }
 
-/** Was keine Frage ist (Pflege, Altbestand, Schlange …) zählt in die eine Zahl — also auch zeigen, mit Link in die alte Werkbank. */
 /** S21: in 2.0 lässt sich nur dieser Sammelposten schließen — alte Deckel-Fragen nicht mehr laufender Unter-Chats (bestehender Weg). */
 const SAMMEL_SCHLIESSBAR = 'altbestand-deckel';
+/** Was keine Frage ist (Pflege, Altbestand, Schlange …) zählt in die eine Zahl — also auch zeigen, mit Link in die alte Werkbank. */
 function aufraeumen(d: V2Deps, sonstiges: InboxEintrag[]) {
   return sonstiges.map((e) => {
     const ziel = String(e.quelle?.url ?? '').match(/^#\/([\w/-]+)/)?.[1] ?? 'entscheidungen';

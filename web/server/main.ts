@@ -29,7 +29,7 @@ import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwor
 import { fragenAufraeumenAn, fragenAufraeumen } from './fragenaufraeumen.ts';
 import { fragenAusBericht, automatischGeschlossen, wiederOeffnen, abgleichFuer, berichtFragen } from './fragenbericht.ts';
 import { roadmapItems, type RoadmapItem } from './roadmapitems.ts';
-import { themaVon, prKurz, prVoll } from './v2kern.ts';
+import { themaVon, prKurz, prVoll, v2FreigabeAn } from './v2kern.ts';
 import { ueberholteFreigaben } from './ueberholt.ts';
 import { wahrerLauf } from './strangwahrheit.ts';
 import { baueErledigt } from './erledigt.ts';
@@ -126,8 +126,8 @@ import { bedarfPruefen, bedarfMelden, bedarfListe, bedarfAntworten, BEDARF_NAME 
 import { liste as v2lcListe, volltext as v2lcVolltext, senden as v2lcSenden } from './v2librechat.ts';
 import { abgebrochenMarkieren as v2Abgebrochen } from './v2chat.ts';
 import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
-let roadmapCache: { at: number; l: RoadmapItem[] } | null = null;
 import { kalibTabelle, auswertung as etaGruppen, genauigkeitSatz, gruppeText, steckbriefSatz } from './etamessung.ts';
+let roadmapCache: { at: number; l: RoadmapItem[] } | null = null;
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -456,7 +456,7 @@ on('GET', /^\/api\/config$/, async (req, res) => {
   send(res, 200, {
     librechatUrl: cfg.librechatPublicUrl, publicUrl: cfg.publicUrl, demo: cfg.demo, user: u, forge: false,   // Plan 213 S6: forge abgeschaltet (172 D1/D5)
     jiraSite: cfg.jiraSite, jiraSites: jiraSitesPublic(), project: cfg.jiraProject, vault: cfg.vaultDir,
-    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u), navNeu: navNeu(), teamInstanz: teamInstanz(), aufraeumen: aufraeumenAn(), einLogin: einLogin(), lage: lageAn() && u?.role === 'ADMIN',
+    dryRun: dryRun(), vaultDryRun: vaultDry(), specCreate: specCreate(), features: featuresFor(u), navNeu: navNeu(), teamInstanz: teamInstanz(), aufraeumen: aufraeumenAn(), einLogin: einLogin(), v2Freigabe: v2FreigabeAn(), lage: lageAn() && u?.role === 'ADMIN',
     // P4: eine Zustandszeile oben statt verstreuter Hinweise — Speicher nur für Admins (RAM-Plan 125).
     speicher: u?.role === 'ADMIN' ? memoryWarning(log)?.warn ?? null : null,
   });
@@ -1538,7 +1538,7 @@ async function inboxFuer(u: User, now = Date.now()) {
     kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now, annahmeMs: annahmeMs(), triage: triageAn() });
   // Plan §23 T3: Council-Urteile an die Fragen hängen (Bericht-Entscheidung: je Teil; sonst am Eintrag).
   if (triageAn()) {
-    const urteile = new Map((await councilCol().find({ userId: u.id }).sort({ at: -1 }).limit(500).toArray().catch(() => [] as any[])).map((x: any) => [String(x.frage), { urteil: x.urteil, grund: x.grund, bedingung: x.bedingung ?? null, at: x.at }]));
+    const urteile = new Map((await councilCol().find({ userId: u.id }).sort({ at: -1 }).limit(500).toArray().catch((e: any) => { log('council fehler', { user: u.id, error: String(e?.message ?? e).slice(0, 160) }); return [] as any[]; })).map((x: any) => [String(x.frage), { urteil: x.urteil, grund: x.grund, bedingung: x.bedingung ?? null, at: x.at }]));
     if (urteile.size) for (const e of ib.eintraege) {
       if (e.art === 'entscheidung') for (const x of (e.daten.entscheidungen as any[]) ?? []) { const c = urteile.get(`${e.id}~${x.id}`); if (c) x.council = c; }
       else if (urteile.has(e.id)) e.daten.council = urteile.get(e.id);

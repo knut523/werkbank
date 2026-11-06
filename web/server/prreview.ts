@@ -198,7 +198,7 @@ export function tiefeFuer(zeilen: number | null, deep: boolean, autoDelta = fals
   return autoDelta && zeilen != null && zeilen <= QUICK_BIS ? 'quick' : 'regular';
 }
 /**
- * Erwartete Dauer in Minuten (Review + Melious-Gegenprüfung + Abgleich). Kalibriert an echten Läufen: olaf-admin#354 mit
+ * Erwartete Dauer in Minuten (Review + Gegenprüfung + Abgleich). Kalibriert an echten Läufen: olaf-admin#354 mit
  * 35 Dateien und ≈ 2 900 Zeilen, regular → 14 min Review (die alte ETA sagte 40). ponytail: grobe Formel — mit mehr Läufen
  * aus pr_reviews (zeilen, startedAt, doneAt) nachschärfen.
  */
@@ -216,7 +216,8 @@ export const REVIEW_MODELL = 'claude:opus';
 // Falsches durchkommt. WERKBANK_REVIEW_ENSEMBLE=aus schaltet zurück auf den einzelnen Claude-Pass.
 export const ensembleAn = (env: Record<string, string | undefined> = process.env) => env.WERKBANK_REVIEW_ENSEMBLE !== 'aus';
 // Knut 06.11. („OpenCode 2 ist die Antwort.“, D1/D2): Standard für Review, Tiefes Review und Gegenprüfung ist das opencode-2-Ensemble
-// der Brücke (Werkzeug ensemble_review: eigener Server je Review, drei Prüfläufe, Verifizierer glm-5.2); Rückfall jcode-Ensemble.
+// der Brücke (Werkzeug ensemble_review: eigener Server je Review, drei Prüfläufe, Verifizierer glm-5.2); Rückfall je Lauf auf jcode in der Brücke —
+// scheitert das Werkzeug ganz, drei Läufe über `delegieren` (Text unten; Pass A Fix-Runde 2: vorher widersprachen sich die Angaben).
 // Vor dem Abschluss prüft der Claude-Strang jeden Befund am Code (Claude-Endprüfung).
 export const ensembleText = (bereich: string | null) => [
   'ENSEMBLE (Knut 06.11., Standard): Rufe nach den Pre-Checks (Basis, Diff-Umfang) als ersten Prüfschritt das Werkzeug `ensemble_review` auf —',
@@ -266,7 +267,7 @@ export function reviewPrompt(r: { repo: string; number: number; title: string; u
     // Merge-Basis (dort gleich „...“). Die Gegenprüfung nimmt „basis...HEAD“, weil ihre Basis ein Commit der Zielbranch sein kann.
     ...(ensembleAn() ? ensembleText(delta ? `${delta.von}..${r.head}` : dm?.basis ? `${dm.basis}..${r.head}` : null) : []),
     'Arbeite nach plan-to-pr, NUR Phase 4 (Review): Pre-Checks (Basis, Diff-Umfang, Migrations/Secrets/Lizenzen), Pass A (Korrektheit),',
-    'Pass B (Sicherheit, Daten, Fehlerfälle), Pass C (Einfachheit, Tests, Lesbarkeit). Die Gegenprüfung über Melious startet der Ticker danach selbst.',
+    'Pass B (Sicherheit, Daten, Fehlerfälle), Pass C (Einfachheit, Tests, Lesbarkeit). Die Gegenprüfung (zweites Modell) startet der Ticker danach selbst.',
     // Knut 15.10. (D5): PR-Code wird auf dieser Maschine NICHT ausgeführt, bis der geführte Lauf entschieden ist.
     'KEINE Befehle aus dem PR ausführen: kein npm ci/install, kein npm test/build, keine Skripte des Repos. Statisch prüfen; die Testbefehle des Repos nur nennen (im Bericht).',
     ...(o.tests ? [o.tests] : []),
@@ -293,7 +294,7 @@ export function reviewPrompt(r: { repo: string; number: number; title: string; u
     '   Der Kommentar wird automatisch als Review-Kommentar (COMMENT) gepostet — auch bei deep. Die Empfehlung wählst du selbst; keine Rückfrage an Knut (Approve/Request-Changes entscheidet er ohnehin).',
     '   Verweise auf andere Repos als `owner/repo#N`; Testfall-/Schritt-Nummern ohne `#`.',
     '2. `bericht.md` (Deutsch): Pre-Checks, Pass A/B/C, welche Tests es gibt und was sie abdecken (nicht ausgeführt), offene Punkte.',
-    '3. Zum Schluss review_ready aufrufen. Danach kommt die Melious-Gegenprüfung als Nachricht — dann die Befunde im Code prüfen und abgleichen.',
+    '3. Zum Schluss review_ready aufrufen. Danach kommt die Gegenprüfung als Nachricht — dann die Befunde im Code prüfen und abgleichen.',
   ].filter((x) => x !== '').join('\n');
 }
 

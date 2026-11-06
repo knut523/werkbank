@@ -66,6 +66,7 @@ test('Marke, Nachrichtentext, Auszug, Auftrag', () => {
   assert.match(j, /Nie pushen/); assert.match(j, /gibt es für dich nicht/);
   assert.doesNotMatch(j, /Meld es sofort mit \*\*bedarf_melden|über das Werkzeug github_lesen|nimm dafür bedarf_melden/);
   assert.match(j, /`bericht\.md` in deinem Arbeitsordner/); assert.doesNotMatch(j, /review-pakete\/NNN/);
+  for (const t of ['regular', 'deep', 'quick'] as const) { const x = orchBrief({ title: 'L', prompt: 'P', cwd: '/w/x', person: 'Knut', jcode: true, tiefe: t }); assert.doesNotMatch(x, /challenge|Teilagent/, t); }
   assert.match(b, /review-pakete\/NNN-<slug>\/bericht\.md/, 'Claude-Stränge: Bericht im Paket wie bisher');
 });
 
@@ -357,6 +358,10 @@ test('Plan 205: --tiefe deep → Auftrag mit Pflichtschritten und ETA-Zeile, Ris
   assert.equal(s.eta.quelle, 'agent');
   assert.match(s.eta.text, /^fertig ca\. (\d\d\.\d\d\. )?\d\d:\d\d$/);
   assert.ok(Math.abs(s.eta.at - (Date.now() + 30 * 60_000)) < 3 * 60_000, 'ETA ≈ Antwortzeit + 30 min');
+  // Phase 4: läuft schon ein Messabschnitt (Start vor der Antwort), zählt die ETA der letzten Antwort trotzdem als Agenten-ETA
+  await mongo.db(DB).collection('orchestrator_runs').updateOne({ _id: j.id }, { $set: { 'etaMessung.start': new Date(Date.now() - 60 * 60_000) } });
+  const sm = (await listJson()).find((x: any) => x.id === j.id);
+  assert.equal(sm.eta.quelle, 'agent', JSON.stringify(sm.eta));
   const show = await orch(['show', j.id]);
   assert.match(show.out, /Tiefe deep · fertig ca\. .*\(ETA: Agent\)/);
   const list = await orch(['list']);

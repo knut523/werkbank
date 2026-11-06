@@ -105,9 +105,11 @@ async function schluessel(u: User, e?: Stored | null): Promise<{ token: string; 
   const s = e === undefined ? await einstellungen(u) : e;
   // Phase 4: ein nicht mehr entschlüsselbarer Schlüssel (anderer WERKBANK_CREDS_KEY) fällt auf Env/Vaultwarden zurück statt auf „keiner“
   if (s?.token) { try { const t = unseal(s.token); return { token: t, quelle: 'gespeichert', last4: s.last4 || t.slice(-4) }; } catch { /* weiter unten */ } }
+  // Pass A/C (Fix-Runde 2): Server-Schlüssel (Umgebung) wie Vaultwarden nur für Knuts Konto — sonst verbrauchte jedes angemeldete
+  // Konto (auch Gäste einer Test-Instanz) über seinen Schlüssel. Für alle freigeben ist Knuts Entscheidung (Bericht).
+  if (String(u.email ?? '').toLowerCase() !== cfg.pilotEmail) return null;
   const env = String(process.env.MELIOUS_API_KEY ?? '').trim();
   if (MELIOUS_KEY.test(env)) return { token: env, quelle: 'env', last4: env.slice(-4) };
-  if (String(u.email ?? '').toLowerCase() !== cfg.pilotEmail) return null;
   const item = meliousBwItem();
   if (Date.now() - (bwLeer.get(item) ?? 0) < 5 * 60_000) return null;
   const t = await bwSecret(item, /sk-mel-[\w-]+/).catch(() => null);
