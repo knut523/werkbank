@@ -23,7 +23,7 @@ import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn } from './schlange.ts';
-import { laeuferName, opencode2Laeufer, type Laeufer } from './laeufer.ts';
+import { opencode2An, opencode2Ab, opencode2Urls, opencode2Pool } from './laeufer.ts';
 import { modellReihe, ensembleLauf } from './modellwahl.ts';
 import { schaetze, passt, passtJcode, schaetzungText, speicherStand, jcodeTopfGb, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
@@ -2178,7 +2178,26 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   const alsModell = (m: string) => (m === 'auto' || (mel!.faktoren && !mel!.faktoren[m]) ? null : m);
   const tools = d.rolle === 'leser' ? 'read,bash,agentgrep' : 'read,bash,write,edit,agentgrep';
   const t0 = Date.now();
+  // Läufer (Pilot, Hauptsitzung 06.11.): lesende Worker ab opencode2Ab() gleichzeitigen Lesern auf einem opencode-2-Server; fällt er
+  // aus, läuft derselbe Auftrag über jcode weiter (unten).
+  if (d.rolle === 'leser') {
+    const oc2 = opencode2Jetzt();
+    if (oc2) {
+      lesendLaufend++;
+      const r = await oc2.zug({ cwd: d.cwd, prompt, model: reihe[0] ?? 'glm-5.3-flash', timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted, titel: `worker ${d.id}` }).finally(() => { lesendLaufend--; });
+      const energie = mel.faktoren ? energieOf(r.usage, r.gelaufen, mel.faktoren) : 0;
+      d.input += r.usage.input + r.usage.cacheRead; d.output += r.usage.output; d.energie += energie;
+      try { d.req.onMeliousUsage?.(r.usage, r.gelaufen); } catch { /* egal */ }
+      try { d.req.onTurnLog?.({ conv: d.workerConv, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${r.gelaufen} (opencode2)`, input: r.usage.input + r.usage.cacheRead, output: r.usage.output, cacheRead: r.usage.cacheRead, energie, outcome: r.code === 0 ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: d.id, parent: d.parent }); } catch { /* egal */ }
+      log('worker opencode2', { delegation: d.id, modell: r.gelaufen, code: r.code, grund: r.grund ?? null, ms: Date.now() - t0, energie: Math.round(energie) });
+      if (r.code === 0 && r.text) { d.modell = `Melious ${r.gelaufen} (opencode 2)`; d.konto = mel.id; d.anbieter = 'melious'; return r.text; }
+      if (d.aborted) return 'abgebrochen';
+      d.abweichungen.push(`opencode 2 lieferte nichts (${r.grund ?? `Code ${r.code}`}) — derselbe Auftrag über jcode`);
+    }
+  }
+  if (d.rolle === 'leser') lesendLaufend++;
   let model = alsModell(reihe[0] ?? 'glm-5.3-flash'), out!: { code: number | null; stdout: string; stderr: string }, ausw!: ReturnType<typeof jcodeAuswerten>;
+  try {
   for (const [i, m] of (reihe.length ? reihe : ['glm-5.3-flash']).slice(0, 3).entries()) {
     model = alsModell(m);
     out = await jcodeSpawn({ cwd: d.cwd, prompt, model, tools, key: mel.token, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted });
@@ -2187,6 +2206,7 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
     log('worker jcode rückfall', { delegation: d.id, modell: m, exit: out.code, naechstes: reihe[i + 1] ?? null });
     if (i + 1 < reihe.length) d.abweichungen.push(`Modell ${m} lieferte nichts (Exit ${out.code}) — Rückfall auf ${reihe[i + 1]}`);
   }
+  } finally { if (d.rolle === 'leser') lesendLaufend--; }
   const { j, usage, draussen, gelaufen } = ausw;
   const energie = mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0;
   d.input += usage.input + usage.cacheRead; d.output += usage.output; d.energie += energie;
@@ -2278,13 +2298,23 @@ const MEL_SUB_MODELL: Record<string, string> = { flash: 'glm-5.3-flash', glm: 'g
 /** Rollen der Teilagenten, die nur lesen — die gehen standardmäßig an Melious. */
 export const LESE_TEILAGENTEN = new Set(['leser', 'strang-leser', 'ticket-pruefer', 'Explore']);
 
-/** opencode-2-Server (Läufer-Abstraktion): nur mit BRIDGE_LAEUFER=opencode2, BRIDGE_OPENCODE2_URL und Passwortdatei (Inhalt nie im Log). */
-export function opencode2Fuer(env: Record<string, string | undefined> = process.env): Laeufer | null {
-  if (laeuferName(env) !== 'opencode2' || !env.BRIDGE_OPENCODE2_URL || !env.BRIDGE_OPENCODE2_PW_DATEI) return null;
+/** opencode-2-Server (Pilot, Hauptsitzung 06.11.): nur mit BRIDGE_OPENCODE2=an, Server-Adressen und Passwortdatei (Inhalt nie im Log).
+ *  Derselbe Pool über alle Aufrufe, damit die Verteilung die aktiven Sitzungen je Server kennt. */
+let oc2Pool: { schluessel: string; pool: ReturnType<typeof opencode2Pool> } | null = null;
+export function opencode2Fuer(env: Record<string, string | undefined> = process.env): ReturnType<typeof opencode2Pool> | null {
+  const urls = opencode2Urls(env);
+  if (!opencode2An(env) || !urls.length || !env.BRIDGE_OPENCODE2_PW_DATEI) return null;
   let passwort = '';
   try { passwort = readFileSync(env.BRIDGE_OPENCODE2_PW_DATEI, 'utf8').trim(); } catch { return null; }
-  return passwort ? opencode2Laeufer({ base: env.BRIDGE_OPENCODE2_URL, passwort }) : null;
+  if (!passwort) return null;
+  const schluessel = `${urls.join(',')}|${env.BRIDGE_OPENCODE2_PW_DATEI}`;
+  if (oc2Pool?.schluessel !== schluessel) oc2Pool = { schluessel, pool: opencode2Pool({ urls, passwort }) };
+  return oc2Pool.pool;
 }
+/** Gerade laufende lesende Melious-Aufträge (melious_sub, lesende Worker) — ab opencode2Ab() übernimmt opencode 2. */
+let lesendLaufend = 0;
+export const lesendeLaeufe = () => lesendLaufend;
+export const opencode2Jetzt = (env: Record<string, string | undefined> = process.env) => (lesendLaufend >= opencode2Ab(env) ? opencode2Fuer(env) : null);
 
 async function melKonto(live: Live, userId: string): Promise<Account | null> {
   try {
@@ -2311,18 +2341,27 @@ export async function melSub(userId: string, convId: string, b: { auftrag?: unkn
   let model = reihe[0] ?? MEL_SUB_MODELL[String(b.modell ?? 'flash')] ?? MEL_SUB_MODELL.flash;
   const cwd = orchMap[key]?.dir ?? live.workDir ?? cwdMap[key] ?? homedir();
   const t0 = Date.now();
-  const oc2 = opencode2Fuer();   // Läufer-Abstraktion (Konzept J): opencode-2-Server, wenn eingerichtet und gewählt — sonst jcode
+  // Läufer (Pilot, Hauptsitzung 06.11.): ab opencode2Ab() gleichzeitigen lesenden Aufträgen ein opencode-2-Server, darunter jcode.
+  let oc2 = opencode2Jetzt();
   emitStatus(live, `🇪🇺 Melious-Teilagent (${model}, ${oc2 ? 'opencode 2' : 'jcode'}): ${auftrag.replace(/\s+/g, ' ').slice(0, 80)}${auftrag.length > 80 ? '…' : ''}`);
   const prompt = `${auftrag}\n\n(Nur lesen: nichts ändern, nichts installieren, keine Repo-Skripte ausführen.)`;
   const timeoutS = envZahl('BRIDGE_MEL_SUB_TIMEOUT_S', 900, 60), abbruch = () => live.abort.signal.aborted;
   const lauf = (m: string) => (oc2
-    ? oc2.zug({ cwd, prompt, model: m, timeoutS, abbruch, titel: `mel-sub ${key}` }).then((r) => ({ out: { code: r.code }, j: r.code === 0 ? { text: r.text } : null, usage: r.usage, gelaufen: r.gelaufen }))
-    : jcodeSpawn({ cwd, prompt, model: m, tools: 'read,bash,agentgrep', key: mel.token, timeoutS, abbruch }).then((o) => ({ out: o as { code: number | null }, ...jcodeAuswerten(o, cwd, m) })));
-  let r1 = await lauf(model);
-  if ((r1.out.code !== 0 || !r1.j) && !abbruch() && reihe[1]) {   // Rückfall: einmal mit dem nächsten PRO-Modell
-    log('mel-sub rückfall', { conv: key, modell: model, exit: r1.out.code, naechstes: reihe[1] });
-    model = reihe[1]; r1 = await lauf(model);
-  }
+    ? oc2.zug({ cwd, prompt, model: m, timeoutS, abbruch, titel: `mel-sub ${key}` }).then((r) => ({ out: { code: r.code }, j: r.code === 0 ? { text: r.text } : null, usage: r.usage, gelaufen: r.gelaufen, grund: r.grund }))
+    : jcodeSpawn({ cwd, prompt, model: m, tools: 'read,bash,agentgrep', key: mel.token, timeoutS, abbruch }).then((o) => ({ out: o as { code: number | null }, ...jcodeAuswerten(o, cwd, m), grund: undefined as string | undefined })));
+  lesendLaufend++;
+  let r1: Awaited<ReturnType<typeof lauf>>;
+  try {
+    r1 = await lauf(model);
+    if ((r1.out.code !== 0 || !r1.j) && !abbruch() && oc2) {   // opencode 2 fiel aus (Server weg, Sitzung verloren) → derselbe Auftrag über jcode
+      log('mel-sub opencode2 rückfall', { conv: key, modell: model, grund: r1.grund ?? null });
+      oc2 = null; r1 = await lauf(model);
+    }
+    if ((r1.out.code !== 0 || !r1.j) && !abbruch() && reihe[1]) {   // Rückfall: einmal mit dem nächsten PRO-Modell
+      log('mel-sub rückfall', { conv: key, modell: model, exit: r1.out.code, naechstes: reihe[1] });
+      model = reihe[1]; r1 = await lauf(model);
+    }
+  } finally { lesendLaufend--; }
   const { out, j, usage, gelaufen } = r1;
   const energie = mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0;
   try { live.req.onMeliousUsage?.(usage, gelaufen); } catch { /* egal */ }
