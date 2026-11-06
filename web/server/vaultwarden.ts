@@ -30,10 +30,14 @@ function holen(item: string, muster: RegExp): Promise<string | null> {
   // Phase 4: eine unlesbare Sitzungsdatei ist „keine Sitzung“, kein synchroner Wurf aus einer Promise-Funktion
   try { if (!existsSync(datei)) return Promise.resolve(null); session = readFileSync(datei, 'utf8').trim(); } catch { return Promise.resolve(null); }
   return new Promise((resolve) => {
-    execFile(process.env.WERKBANK_BW_BIN || 'bw', ['get', 'item', item], { env: { ...process.env, BW_SESSION: session }, timeout: 20_000, maxBuffer: 1 << 20 }, (err, stdout) => {
+    // Phase 4: bw bekommt nur, was es braucht — nicht die Schlüssel des Servers aus dessen Umgebung.
+    const env: Record<string, string> = { BW_SESSION: session };
+    for (const n of ['PATH', 'HOME', 'LANG', 'BITWARDENCLI_APPDATA_DIR', 'NODE_EXTRA_CA_CERTS']) { const v = process.env[n]; if (v) env[n] = v; }
+    execFile(process.env.WERKBANK_BW_BIN || 'bw', ['get', 'item', item], { env, timeout: 20_000, maxBuffer: 1 << 20 }, (err, stdout) => {
       if (err) return resolve(null);
       let pw = '';
-      try { pw = String(JSON.parse(String(stdout)).login?.password ?? ''); } catch { return resolve(null); }
+      // `bw get item` sucht auch nach Teilnamen — nur das Element mit genau diesem Namen zählt.
+      try { const j = JSON.parse(String(stdout)); if (j.name !== item) return resolve(null); pw = String(j.login?.password ?? ''); } catch { return resolve(null); }
       const t = pw.match(muster)?.[0] ?? '';
       if (!t) return resolve(null);
       cache.set(item, { wert: t, at: Date.now() });

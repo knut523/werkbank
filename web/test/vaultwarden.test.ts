@@ -17,9 +17,11 @@ writeFileSync(join(R, 'bw'), `#!/usr/bin/env node
 const fs = require('fs'), item = process.argv[4];
 fs.appendFileSync(${JSON.stringify(LOG)}, item + '\\n');
 if (process.env.BW_SESSION !== 'sitzung-test') process.exit(1);
-const w = { 'View only github API': 'token: ghp_LESEtest123', 'melious ai API Key': 'Schlüssel ${SCHLUESSEL}', 'leer': 'nichts' }[item];
+if (process.env.WERKBANK_CREDS_KEY) process.exit(7);   // Phase 4: die Server-Umgebung kommt nicht bei bw an
+const w = { 'View only github API': 'token: ghp_LESEtest123', 'melious ai API Key': 'Schlüssel ${SCHLUESSEL}', 'leer': 'nichts', 'melious': 'Schlüssel ${SCHLUESSEL}' }[item];
 if (!w) process.exit(4);
-console.log(JSON.stringify({ login: { password: w } }));
+// bw sucht auch nach Teilnamen: „melious“ liefert hier das Element „melious ai API Key“
+console.log(JSON.stringify({ name: item === 'melious' ? 'melious ai API Key' : item, login: { password: w } }));
 `);
 chmodSync(join(R, 'bw'), 0o755);
 writeFileSync(join(R, 'session'), 'sitzung-test\n');
@@ -43,6 +45,7 @@ const aufrufe = () => (existsSync(LOG) ? readFileSync(LOG, 'utf8').trim().split(
 test('bwSecret: Muster aus dem Passwortfeld, 10 min im Speicher, ohne Sitzung oder ohne Treffer null', async () => {
   assert.equal(await V.bwSecret('leer', /sk-mel-\S+/), null);
   assert.equal(await V.bwSecret('fehlt', /x/), null);
+  assert.equal(await V.bwSecret('melious', /sk-mel-[\w-]+/), null, 'Teiltreffer mit anderem Namen zählt nicht');
   assert.equal(await V.bwSecret('melious ai API Key', /sk-mel-[\w-]+/), SCHLUESSEL);
   const n = aufrufe().length;
   assert.equal(await V.bwSecret('melious ai API Key', /sk-mel-[\w-]+/), SCHLUESSEL);
