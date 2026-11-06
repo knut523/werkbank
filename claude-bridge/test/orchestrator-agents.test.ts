@@ -72,12 +72,12 @@ test('Sperre im Strang: GitHub- und Jira-Schreiben in allen naheliegenden Formen
     'git push', 'git push origin feat/x', 'git -C /w/x push', 'git -c http.extraHeader=x push origin', 'cd /w && git push -u origin HEAD',
     'git send-pack origin', 'git config alias.ship push', 'git -c alias.p=push p', 'git config --global credential.helper store',
     'git config user.email a@b', 'echo x > .git/hooks/pre-commit', 'git config core.hooksPath /tmp/h',
-    'gh pr create --fill', 'gh api repos/x/y/pulls', 'gh issue comment 1 -b hi', 'curl -d \'{"a":1}\' https://api.github.com/repos/x/y/issues',
+    'gh pr create --fill', 'gh api -X POST repos/x/y/pulls', 'gh issue comment 1 -b hi', 'curl -d \'{"a":1}\' https://api.github.com/repos/x/y/issues',
     'curl -X POST https://maxenergy.atlassian.net/rest/api/3/issue', 'git push --force',
   ];
   for (const c of blocked) assert.ok(orchestratorBlock('Bash', { command: c }), `gesperrt: ${c}`);
   const free = ['git status', 'git commit -m "fix config handling"', 'git -C /w/x log --oneline', 'git config --get user.name', 'git config --list',
-    'npm test', 'echo "push it" > notes.txt', 'grep -r jira src/'];   // gh lesen: seit Knut 06.11. gesperrt (strangerlaubnis.test.ts)
+    'npm test', 'gh pr view 12', 'gh pr list', 'gh pr diff 3', 'gh api repos/x/y/pulls', 'echo "push it" > notes.txt', 'grep -r jira src/'];   // gh api GET: Knut 06.11. (Korrektur 2)
   for (const c of free) assert.equal(orchestratorBlock('Bash', { command: c }), null, `frei: ${c}`);
   assert.ok(orchestratorBlock('mcp__atlassian__createJiraIssue', {}));
   assert.ok(orchestratorBlock('mcp__atlassian__addCommentToJiraIssue', {}));

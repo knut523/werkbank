@@ -117,6 +117,7 @@ import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
 import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
 import { chatStatusAn, offeneJeStrang, hauptchatJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
+import { bedarfPruefen, bedarfMelden, bedarfListe, bedarfAntworten, BEDARF_NAME } from './bedarf.ts';
 import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
 
 const DIST = join(WEB_DIR, 'dist');
@@ -2126,6 +2127,43 @@ on('POST', /^\/internal\/hauptchat-meldung$/, async (req, res) => {
   send(res, 200, r);
 });
 
+// Bedarfskanal (Knut 06.11.): bedarf_melden aus einem Strang → gespeichert, sofort an den Hauptchat; Antwort aus der 2.0 oder dem
+// Hauptchat (orch_bedarf) geht als Nachricht an den Strang, „zugang“ als zeitlich begrenzte Freigabe in der Brücke.
+on('POST', /^\/internal\/bedarf$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const conv = String(b.conv ?? '');
+  const d: any = conv ? await orchRuns().findOne({ userId: u.id, conv, kind: { $nin: ['leitstand', 'worker'] } }) : null;
+  if (!d) throw new HttpError(409, 'bedarf_melden gibt es nur in Unter-Chats.');
+  const p = bedarfPruefen(b);
+  if ('fehler' in p) throw new HttpError(400, p.fehler);
+  let r;
+  try { r = await bedarfMelden(u, d, p); } catch (e: any) { throw new HttpError(e.status ?? 500, e.message); }
+  const hauptchat = r.neu ? await meldeLeitstand(u, d, `meldet Bedarf (${BEDARF_NAME[p.art]}): ${p.text}${p.pfad ? ` — ${p.pfad}` : ''} · Kennung ${r.id} · erteilen: orch_bedarf oder 2.0 „Braucht Hauptsitzung“`).catch(() => false) : true;
+  zahlCache.delete(u.id);
+  log('bedarf gemeldet', { user: u.id, strand: String(d._id), id: r.id, art: p.art, neu: r.neu });
+  send(res, 200, { id: r.id, neu: r.neu, hauptchat });
+});
+const bedarfDeps = {
+  senden: async (u: User, strand: string, text: string) => {
+    // Antwort als Hauptchat-Nachricht. Live-Zweig: ein abgenommener/gedeckelter Strang (409) braucht sie nicht mehr — nur ins Log.
+    try { await sendOrch(u, strand, text, 'leitstand'); } catch (e: any) { if (e?.status === 409) log('bedarf antwort nicht zugestellt', { strand, grund: String(e.message).slice(0, 120) }); else throw e; }
+  },
+  freigabe: async (u: User, strand: string, pfad: string, bis: Date) => {
+    const d: any = await orchRuns().findOne({ _id: strand as any, userId: u.id });
+    if (!d?.conv) throw new HttpError(404, 'Strang ohne Unterhaltung.');
+    const r = await fetch(`${cfg.bridgeUrl}/internal/orch-freigabe`, { method: 'POST', headers: { ...bridgeInternal, 'content-type': 'application/json' }, body: JSON.stringify({ userId: u.id, conv: d.conv, pfad, bis: bis.getTime() }), signal: AbortSignal.timeout(5000) });
+    if (!r.ok) throw new HttpError(502, `Brücke: ${((await r.json().catch(() => ({}))) as any).error ?? r.status}`);
+  },
+};
+async function bedarfAntwortRoute(u: User, id: string, b: any) {
+  if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
+  const antwort = String(b.antwort ?? '');
+  if (!['erteilt', 'erledigt', 'abgelehnt'].includes(antwort)) throw new HttpError(400, 'antwort: erteilt, erledigt oder abgelehnt.');
+  try { const r = await bedarfAntworten(u, id, { antwort: antwort as any, notiz: String(b.notiz ?? '').trim(), dauerMin: Number(b.dauerMin) || undefined }, bedarfDeps); zahlCache.delete(u.id); log('bedarf beantwortet', { user: u.id, id, antwort }); return r; }
+  catch (e: any) { throw new HttpError(e.status ?? 500, e.message); }
+}
+
 on('POST', /^\/internal\/review-ready$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
@@ -3700,7 +3738,7 @@ async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
   return internalUser(req, { userId: d ? String(d._id) : '' });
 }
 
-on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich|aktion)$/, async (req, res, m) => {
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich|aktion|bedarf)$/, async (req, res, m) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
   const id = String(b.id ?? '');
@@ -3734,6 +3772,8 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
     case 'gruendlich': return send(res, 200, await gruendlichOrch(u, id, b.via === 'leitstand' ? 'leitstand' : 'hand'));   // Plan 274 (D1)
     case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? '', b.via === 'leitstand' ? 'leitstand' : 'knut'));
     case 'thema': return send(res, 200, await setThema(u, id, b.thema));   // Plan 154, S2: Themen-Gruppe von Hand
+    // Bedarfskanal (Knut 06.11.): Hauptchat-Werkzeug orch_bedarf — ohne bedarf: Liste der offenen, mit bedarf + antwort: beantworten.
+    case 'bedarf': return send(res, 200, b.bedarf ? await bedarfAntwortRoute(u, String(b.bedarf), b) : { offen: (await bedarfListe(u)).map((x: any) => ({ id: x._id, art: x.art, text: x.text, pfad: x.pfad ?? null, strang: x.strand, at: x.at })) });
   }
 });
 

@@ -658,6 +658,32 @@ test('Teil B (B-7/B-18/B-19/B-10): Passt nur auf den gesehenen Stand; danach kei
   assert.match((await r.json()).error, /hat Knut geprüft/);
 });
 
+test('Bedarfskanal (Knut 06.11.): Strang meldet Bedarf → sofort beim Hauptchat (orch_bedarf); Erledigt geht als Nachricht an den Strang; Zugang mit Frist', async () => {
+  const s = await doneStrand('Bedarf-Strang', 'wt-bedarf');
+  const ip = (path: string, b: unknown) => fetch(B + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId: String(knut._id), ...(b as object) }) });
+  const r = await ip('/internal/bedarf', { conv: s.conv, art: 'github', text: 'Push von feat/bedarf, Gate grün auf abc1234' });
+  assert.equal(r.status, 200, await r.clone().text());
+  const j = await r.json();
+  assert.match(j.id, /^b-[0-9a-f]{8}$/); assert.equal(j.neu, true);
+  assert.equal((await (await ip('/internal/bedarf', { conv: s.conv, art: 'github', text: 'Push von feat/bedarf, Gate grün auf abc1234' })).json()).neu, false, 'Doppel zählt einmal');
+  assert.equal((await ip('/internal/bedarf', { conv: s.conv, art: 'push', text: 'x' })).status, 400);
+  assert.equal((await ip('/internal/bedarf', { conv: leit.conv, art: 'datei', text: 'x' })).status, 409, 'nur aus Unter-Chats');
+  await until(() => wakesOf(leit.conv), (w) => w.some((m) => /meldet Bedarf \(GitHub schreiben\): Push von feat\/bedarf/.test(textOf(m))), 20_000);
+  // Live-Zweig ohne 2.0: Liste und Antwort über das Hauptchat-Werkzeug orch_bedarf (gleiche Prüfungen).
+  const h = await (await ip('/internal/orchestrator/bedarf', {})).json();
+  assert.ok(h.offen.some((x: any) => x.id === j.id && x.strang.id === s.id));
+  const a = await ip('/internal/orchestrator/bedarf', { bedarf: j.id, antwort: 'erledigt', notiz: 'gepusht: https://github.com/WirStrom1/x/commit/abc1234' });
+  assert.equal(a.status, 200, await a.clone().text());
+  assert.equal((await ip('/internal/orchestrator/bedarf', { bedarf: j.id, antwort: 'erledigt' })).status, 409, 'schon beantwortet');
+  await until(() => msgsOf(s.conv), (ms: any[]) => ms.some((m) => /Hauptsitzung zu deinem Bedarf \(GitHub schreiben\) — erledigt: .*gepusht: https/.test(textOf(m))), 20_000);
+  // Zugang: Frist in der Brücke
+  const z = await (await ip('/internal/bedarf', { conv: s.conv, art: 'zugang', text: 'olaf-docs committen', pfad: WT('wt-bedarf-zugang') })).json();
+  const ze = await ip('/internal/orchestrator/bedarf', { bedarf: z.id, antwort: 'erteilt', dauerMin: 60 });
+  assert.equal(ze.status, 200, await ze.clone().text());
+  assert.ok((await ze.json()).bis);
+  await until(() => msgsOf(s.conv), (ms: any[]) => ms.some((m) => /erteilt: Zugang zu .*wt-bedarf-zugang bis/.test(textOf(m))), 20_000);
+});
+
 test('Teil B (B-7/B-17/B-23): Nacharbeit → Nachricht im Strang, Karte weg; wieder fertig → Karte ohne alte DoD-Tabelle', async () => {
   const st = await doneStrand('Teil B: Nacharbeit', 'wt-b3');
   await until(() => cardOf(st.id), (c: any) => !!c);

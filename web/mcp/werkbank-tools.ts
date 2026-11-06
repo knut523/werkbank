@@ -53,6 +53,26 @@ async function bridge(path: string, body: unknown, timeoutMs: number): Promise<s
   if (!r.ok) throw new Error(j.error ?? `Brücke antwortet mit ${r.status}`);
   return String(j.text ?? '');
 }
+// Knut 06.11. (Korrektur 2): „Alles Lesende sollen die Stränge selbst können.“ GitHub lesen im Hauptchat UND in Strängen —
+// das Lesetoken bleibt im Server (nur GET, nur freigegebene Orgs).
+const GITHUB_LESEN = {
+  name: 'github_lesen',
+  description: 'Privates GitHub NUR LESEN über den Lesetoken des Workspace (REST, freigegebene Orgs): pfad z. B. „repos/WirStrom1/olaf-admin/pulls/354“, „…/pulls/354/files“, „…/contents/src/a.ts?ref=main“, „…/compare/main...feat/x“, „…/actions/runs“. Schreiben geht nur über den Freigabeweg.',
+  inputSchema: { type: 'object', properties: { pfad: { type: 'string' } }, required: ['pfad'] },
+  run: async (a: any) => { const j = await call('/internal/lead/github', { pfad: a.pfad }); return `HTTP ${j.status}\n${j.text}`; },
+};
+// Bedarfskanal (Knut 06.11.: „Gib den Strängen, was sie brauchen — oder sie danach fragen können.“): alles, was über Lesen und
+// Lokales hinausgeht, meldet der Strang hier. Die Hauptsitzung bekommt es sofort (Hauptchat-Meldung + 2.0 „Braucht Hauptsitzung“
+// mit Erteilen/Erledigt/Ablehnen); der Strang wartet nicht, sondern arbeitet am Rest weiter. Kein Abstand wie bei hauptchat_melden.
+const BEDARF_MELDEN = {
+  name: 'bedarf_melden',
+  description: 'Bedarf an die Hauptsitzung melden — für alles, was du nicht selbst darfst (Lesen und Lokales darfst du: Code/Doku im eigenen Worktree ändern, lokal committen, Tests inkl. DB-Tests, GitHub/Jira/Vault/Logs lesen). art: github (schreiben: push, Kommentar, Review, PR anlegen/ändern), merge (Basis einmergen; bereite die Konfliktlösung je Datei vor), jira (schreiben), deploy, zugang (Ordner/Repo außerhalb deines Worktrees, zeitlich begrenzt), recht (ein gesperrter Befehl), geheimnis, datei, entscheidung, sonstiges. text: genau was und warum (z. B. „Push von feat/x nach origin, Gate grün auf abc1234“). Danach NICHT warten: am Rest weiterarbeiten; die Antwort kommt als Nachricht.',
+  inputSchema: { type: 'object', properties: { art: { type: 'string', enum: ['github', 'merge', 'jira', 'deploy', 'zugang', 'recht', 'geheimnis', 'datei', 'entscheidung', 'sonstiges'] }, text: { type: 'string' }, pfad: { type: 'string', description: 'nur bei art=zugang: absoluter Ordner' } }, required: ['art', 'text'] },
+  run: async (a: any) => {
+    const j = await call('/internal/bedarf', { art: a.art, text: a.text, pfad: a.pfad ?? null, conv: process.env.WERKBANK_CONV_ID || '' });
+    return `Gemeldet (${j.id}) — ${j.hauptchat ? 'die Hauptsitzung hat es sofort' : 'gerade kein Hauptchat aktiv; es steht unter „Braucht Hauptsitzung“'}. Arbeite am Rest weiter; die Antwort kommt als Nachricht.`;
+  },
+};
 const DELEG_TOOLS = [
   {
     name: 'delegieren',
@@ -148,6 +168,17 @@ const ORCH_TOOLS = [
     description: 'Themen-Gruppe eines Unter-Chats in der Chat-Seitenleiste setzen (z. B. Rechner, Flex, Cockpit, Admin, Bot, Workspace, Sprint, Roadmap oder ein neues Thema); thema="auto" stellt die automatische Zuordnung wieder her. Nur auf Knuts Wunsch oder bei klarer Fehlzuordnung.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' }, thema: { type: 'string' } }, required: ['id', 'thema'] },
     run: async (a: any) => { const j = await call('/internal/orchestrator/thema', { id: a.id, thema: a.thema }); return `Thema: ${j.id} → ${j.thema}${j.hand ? ' (von Hand)' : ' (automatisch)'}`; },
+  },
+  {
+    // Bedarfskanal (Knut 06.11.): was Stränge mit bedarf_melden brauchen. Ohne bedarf: Liste der offenen; mit bedarf + antwort beantworten.
+    name: 'orch_bedarf',
+    description: 'Bedarfe der Stränge (bedarf_melden): ohne Argumente die offenen auflisten (Kennung, Art, Text, Strang). Beantworten: bedarf=<Kennung>, antwort=erteilt|erledigt|abgelehnt, notiz (was du getan hast oder warum nicht; bei GitHub/Merge/Jira: tu es selbst nach den üblichen Regeln und antworte dann erledigt mit Beleg). art=zugang + erteilt gibt dem Strang den Ordner für dauerMin Minuten (Vorgabe 240, höchstens 1440). Die Antwort geht als Nachricht an den Strang.',
+    inputSchema: { type: 'object', properties: { bedarf: { type: 'string' }, antwort: { type: 'string', enum: ['erteilt', 'erledigt', 'abgelehnt'] }, notiz: { type: 'string' }, dauerMin: { type: 'number' } } },
+    run: async (a: any) => {
+      const j = await call('/internal/orchestrator/bedarf', { bedarf: a.bedarf ?? null, antwort: a.antwort ?? null, notiz: a.notiz ?? '', dauerMin: a.dauerMin ?? null });
+      if (!a.bedarf) return j.offen?.length ? j.offen.map((x: any) => `${x.id} · ${x.art} · „${x.strang?.title ?? ''}“ (${x.strang?.id ?? ''}): ${x.text}${x.pfad ? ` — ${x.pfad}` : ''}`).join('\n') : 'Keine offenen Bedarfe.';
+      return `${j.id}: ${j.status}${j.bis ? ` bis ${t(j.bis)}` : ''} — Antwort an den Strang geschickt.`;
+    },
   },
   {
     name: 'orch_review',
@@ -399,12 +430,7 @@ serve('werkbank', '0.1.0', [
       inputSchema: { type: 'object', properties: { frisch: { type: 'boolean' } } },
       run: async (a: any) => (await call('/internal/lead/pr-lage', { frisch: a.frisch === true }, 90_000)).text,
     },
-    {
-      name: 'github_lesen',
-      description: 'Privates GitHub NUR LESEN über den Lesetoken des Workspace (REST, freigegebene Orgs): pfad z. B. „repos/WirStrom1/olaf-admin/pulls/354“, „…/pulls/354/files“, „…/contents/src/a.ts?ref=main“, „…/compare/main...feat/x“, „…/actions/runs“. Schreiben geht nur über den Freigabeweg.',
-      inputSchema: { type: 'object', properties: { pfad: { type: 'string' } }, required: ['pfad'] },
-      run: async (a: any) => { const j = await call('/internal/lead/github', { pfad: a.pfad }); return `HTTP ${j.status}\n${j.text}`; },
-    },
+    GITHUB_LESEN,
     {
       name: 'github_schreiben',
       description: 'GitHub SCHREIBEN, genau diese Aktionen: art=kommentar (repo, nummer, text), art=pr_oeffnen (repo, head, base, titel, text, entwurf?) oder art=push (repo, nummer, zweig, klon = absoluter Pfad des Worktrees; pusht dessen Kopf-Commit ohne Force an den Kopf-Zweig des offenen PRs, nur wenn das Pre-Push-Gate grün ist — die Gate-Basis kommt aus dem PR bzw. origin/HEAD, base nur als Hinweis). R30: art=fix_freigeben (repo, fix = Kennung aus der Freigabe-Frage, neu = geprüfter SHA) — genau diesen Stand freigeben; der Takt prüft Tests und Gate NEU und pusht dann; art=fix_ablehnen (repo, fix, grund?) — Fix ablehnen, kein Push. Texte für GitHub auf Englisch, ohne lokale Pfade und ohne Verweise auf noch nicht existierende PRs. Die Brücke zeigt Knut vorher eine Karte mit Ja/Nein — erst nach „Ja“ läuft der Aufruf. Nie mergen, nie auf main/develop/dev/release. Nur wenn WERKBANK_HAUPTCHAT_GITHUB an ist.',
@@ -470,6 +496,8 @@ serve('werkbank', '0.1.0', [
   }] : []),
   // Delegieren und Phasen-Lead (Plan 165): nur in Strängen; die Brücke kennt Person und Strang aus dieser Umgebung.
   ...(process.env.WERKBANK_STRANG === '1' && process.env.WERKBANK_BRIDGE_URL ? DELEG_TOOLS : []),
+  // Knut 06.11.: Stränge lesen GitHub selbst (github_lesen) und melden alles darüber hinaus über den Bedarfskanal.
+  ...(process.env.WERKBANK_STRANG === '1' ? [GITHUB_LESEN, BEDARF_MELDEN] : []),
   // Native Verteilung Claude ↔ Melious (Knut 19.10.): Lead und Stränge.
   ...(process.env.WERKBANK_BRIDGE_URL ? [
     {

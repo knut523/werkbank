@@ -10,7 +10,7 @@
 import { freigabeVerbrauchen } from './freigabe.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, strangFreigabe, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -364,6 +364,13 @@ const server = createServer(async (req, res) => {
       try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil, tiefe, vorrang: b.vorrang === true }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
       log(kind === 'leitstand' ? 'leitstand angemeldet' : 'strang angemeldet', { user: userId, conv });
       return json(res, 200, { ok: true, dir: real, mode: autoFor({ email }) });
+    }
+    // Bedarfskanal (Knut 06.11.): ein erteilter Zugang — Ordner außerhalb des Worktrees, zeitlich begrenzt (höchstens 24 h).
+    if (req.method === 'POST' && url.pathname === '/internal/orch-freigabe') {
+      if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
+      const b = await readBody(req);
+      try { return json(res, 200, { ok: true, ...strangFreigabe(String(b.userId ?? ''), String(b.conv ?? ''), String(b.pfad ?? ''), Number(b.bis)) }); }
+      catch (e: any) { return json(res, e.status ?? 400, { error: e.message }); }
     }
     if (req.method === 'POST' && url.pathname === '/internal/orchestrate/end') {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
