@@ -1,5 +1,5 @@
 // Werkbank 2.0: gemeinsame Bausteine — jede Karte hat dieselben Teile: Titel · ein Satz · Links · „Was ist das?“.
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import MarkdownIt from 'markdown-it';
 import { schicke, hole, type Karte, type Link } from './api.ts';
 import { useApp } from './kontext.ts';
@@ -100,7 +100,8 @@ export function useDaten<T>(pfad: string | null): { d: T | null; fehler: string 
     hole<T>(pfad).then((x) => { zuletzt.set(pfad, x); if (!aus) setD(x); }).catch((e) => { if (!aus) { if (e.status === 401) window.dispatchEvent(new Event('v2-abgemeldet')); setFehler(e.message); } });
     return () => { aus = true; };
   }, [pfad, n]);
-  return { d, fehler, neu: () => setN((x) => x + 1) };
+  const neu = useCallback(() => setN((x) => x + 1), []);   // stabil: Intervalle mit neu in den Abhängigkeiten laufen sonst bei jedem Render neu an
+  return { d, fehler, neu };
 }
 
 /** Runde 4 (Knut B10): „D1 bis D8, jede mit Empfehlung …“ — eine Karte für mehrere Entscheidungen, die auf der Karte nicht stehen. */

@@ -66,3 +66,22 @@ export function tabellenBeschriften(html: string): string {
  *  in der fertigen Antwort stehen sie nicht mehr. Wie der Status-Takt (orchestrator `excerpt`): nur ganze kursive Zeilen. */
 // Pass C: nur Zeilen, die mit einem Symbol/Emoji beginnen (so schreibt die Brücke sie) — echte kursive Zeilen einer Antwort bleiben.
 export const ohneStatuszeilen = (t: string): string => t.replace(/^[ \t]*\*[\p{Extended_Pictographic}\u23e9-\u23fa\u2600-\u27bf][^*\n]*\*[ \t]*$\n?/gmu, '').replace(/\n{3,}/g, '\n\n').trim();
+
+/** Chat-Bereich (Knut 06.11.: „wirklich der normale Chatverlauf“): Text und Werkzeug-Schritte trennen — Statuszeilen der Brücke
+ *  (dieselbe Erkennung wie ohneStatuszeilen) werden zu einklappbaren Gruppen, der übrige Text bleibt, wie er ist. */
+const STATUSZEILE = /^[ \t]*\*([\p{Extended_Pictographic}⏩-⏺☀-➿][^*\n]*)\*[ \t]*$/u;
+export type VerlaufTeil = { art: 'text'; text: string; zeilen: string[] } | { art: 'schritte'; text: string; zeilen: string[] };
+export function verlaufTeile(t: string): VerlaufTeil[] {
+  const out: VerlaufTeil[] = [];
+  let text: string[] = [], schritte: string[] = [];
+  const textAus = () => { const s = text.join('\n').trim(); if (s) out.push({ art: 'text', text: s, zeilen: [] }); text = []; };
+  const schritteAus = () => { if (schritte.length) out.push({ art: 'schritte', text: '', zeilen: schritte }); schritte = []; };
+  for (const z of String(t ?? '').split('\n')) {
+    const m = z.match(STATUSZEILE);
+    if (m) { textAus(); schritte.push(m[1].replace(/\\([\\*_\[\]<>])/g, '$1').trim()); }
+    else if (!z.trim() && schritte.length) continue;   // Leerzeilen zwischen Schritten gehören dazu
+    else { schritteAus(); text.push(z); }
+  }
+  textAus(); schritteAus();
+  return out;
+}

@@ -33,6 +33,10 @@ export interface V2Deps {
   strang: (u: User, id: string) => Promise<any | null>;
   hauptchat: (u: User) => Promise<{ conv: string; url: string | null } | null>;
   laeuftChat: (u: User, conv: string) => Promise<boolean>;
+  /** Chat-Bereich (Knut 06.11.): Datei als Anhang an einen Unter-Chat (ablegen und Pfad als Nachricht schicken). */
+  anhang?: (u: User, id: string, name: string, buf: Buffer, text: string) => Promise<{ pfad: string }>;
+  /** Chat-Bereich (Knut 06.11.): Unter-Chat steuern (Weiter/Fortsetzen, Anhalten, Abbrechen, Gründlich, Zurückholen). */
+  steuern?: (u: User, id: string, aktion: SteuerAktion) => Promise<{ zustellung?: string | null; hinweis?: string }>;
   /** Bedarfskanal (Knut 06.11.): offene Bedarfe der Stränge und die Antwort darauf (erteilt / erledigt / abgelehnt). */
   bedarfListe?: (u: User) => Promise<any[]>;
   bedarfAntwort?: (u: User, id: string, b: { antwort: string; notiz: string; dauerMin?: number }) => Promise<unknown>;
@@ -102,6 +106,13 @@ export interface V2Deps {
   paketDateien?: (paket: string) => { rel: string; size: number }[];
   roadmap?: () => { thema: string; titel: string; path: string; stand: string; standNr: number; mtime: number }[];
 }
+
+/** Chat-Bereich (Knut 06.11.): Steuerknöpfe eines Unter-Chats. weiter/fortsetzen = Handnachricht „weiter“ (hebt Deckel und Stopp auf),
+ *  anhalten = geprüft, läuft nicht weiter (wie „Anhalten“ der alten Werkbank), abbrechen = laufenden Zug in der Brücke beenden. */
+export const STEUER_AKTIONEN = ['weiter', 'fortsetzen', 'anhalten', 'abbrechen', 'gruendlich', 'zurueckholen'] as const;
+export type SteuerAktion = typeof STEUER_AKTIONEN[number];
+/** Dateiname eines Anhangs: nur der letzte Teil, sichere Zeichen, höchstens 120 Zeichen. */
+export const anhangName = (n: string) => (n.split(/[\\/]/).pop() || 'anhang').replace(/[^\w.-]+/g, '_').replace(/^\.+/, '').slice(0, 120) || 'anhang';
 
 /** Eine Zustellung an den Hauptchat je Person zur selben Zeit (Pass C: zwei schnelle Klicks). */
 const hauptchatSendet = new Set<string>();
@@ -546,7 +557,8 @@ export function registerV2(on: On, d: V2Deps) {
     const z = liste.zeilen.find((x: any) => String(x.id) === m[1]);
     const alleFragen = fragenAus(ib.eintraege).fragen;
     const eigeneIds = new Set(fragenJeStrang(ib.eintraege, m[1]).map((f: any) => f.id));
-    const nachrichten = doc.conv ? await librechat.lesen(u, String(doc.conv), 20).catch(() => []) : [];
+    // Chat-Bereich (Knut 06.11.: „wirklich der normale Chatverlauf“): bis 100 Nachrichten statt 20.
+    const nachrichten = doc.conv ? await librechat.lesen(u, String(doc.conv), 100).catch(() => []) : [];
     const stand = standVoll(nachrichten, String(doc.standVoll || doc.lastExcerpt || ''));
     const abgleich = d.abgleich ? await d.abgleich(u, m[1], stand).catch(() => null) : null;
     const jeFrage = new Map((abgleich?.zeilen ?? []).map((z) => [z.qid, `${z.d} · ${z.bericht ? (z.wiederOffen ? 'im Bericht schon entschieden, von dir wieder geöffnet' : 'im Bericht schon entschieden') : 'auch im Bericht offen'}`]));
@@ -586,6 +598,8 @@ export function registerV2(on: On, d: V2Deps) {
     // Runde 5 (Knut B1): ist deine Nachricht die letzte im Verlauf, wartet der Unter-Chat auf den Agenten, nicht auf dich.
     const zuletztIch = nachrichten.length > 0 && nachrichten[nachrichten.length - 1].rolle === 'ich' && (!z || !['laeuft', 'schlange'].includes(z.zustand));
     send(d, res, { id: m[1], titel: String(doc.title ?? ''), satz: zuletztIch ? `Deine Nachricht ist zugestellt (${wann2(nachrichten[nachrichten.length - 1].at)}) — der Agent hat noch nicht geantwortet. Du musst nichts tun.` : steckbrief.fast ? `Fast fertig — fehlt: ${steckbrief.fast.fehlt.join('; ')}${steckbrief.fast.wartetAuf.length ? `; wartet auf: ${steckbrief.fast.wartetAuf.join(', ')}` : ''}.` : z ? zustandSatz(z) : 'Fertig und von dir abgenommen.', gruppe: z ? arbeitGruppe(z) : 'fertig', zuletzt: z?.zuletzt ?? doc.statusAt ?? null,
+      // Chat-Bereich (Knut 06.11.): was die Steuerknöpfe brauchen — läuft, Schlange mit Grund, Deckel, abgenommen, weggeräumt.
+      steuer: { laeuft: !!s?.running, schlange: s?.queued ? { pos: s.queued.pos, grund: String(s.queued.grund ?? '') } : null, gedeckelt: doc.autoStopped ? String(doc.autoStopped.reason ?? 'Deckel erreicht') : null, abgenommen: !!doc.knutReviewedAt, weggeraeumt: doc.reviewedBy === 'auto', ohneBericht: z?.zustand === 'fertig' && !(doc.paket && doc.bericht), modell: doc.lastModell ?? doc.modell ?? null, laeufer: doc.laeufer ?? 'claude' },
       stand, steckbrief, abgleich: abgleich?.widerspruch ? abgleich : null, fragen, nachrichten, links, at: new Date() });
   });
 
@@ -602,6 +616,35 @@ export function registerV2(on: On, d: V2Deps) {
     await d.nachreichen(u, m[1], text);
     d.log('v2 nachricht', { user: u.id, strand: m[1], zeichen: text.length });
     send(d, res, { ok: true });
+  });
+
+  // Chat-Bereich (Knut 06.11.: „die Möglichkeit, den Unterchat zu steuern“): dieselben Wege wie die alte Werkbank (Heute/Lead).
+  on('POST', /^\/api\/v2\/arbeit\/([0-9a-f]{8})\/steuern$/, async (req, res, m) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) throw err(403, 'Unter-Chats steuern nur Admins.');
+    if (!d.steuern) throw err(501, 'Steuern ist hier nicht eingerichtet.');
+    const aktion = String((await d.body(req, 4 * 1024))?.aktion ?? '');
+    if (!STEUER_AKTIONEN.includes(aktion as any)) throw err(400, `Aktion ist eine von: ${STEUER_AKTIONEN.join(', ')}.`);
+    if (!(await d.strang(u, m[1]).catch(() => null))) throw err(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
+    const r = await d.steuern(u, m[1], aktion as SteuerAktion);
+    d.log('v2 steuern', { user: u.id, strand: m[1], aktion });
+    send(d, res, { ok: true, ...r });
+  });
+
+  // Chat-Bereich (Knut 06.11.: „Anhänge/Datei“): Datei ins Paket des Unter-Chats, der Pfad geht als Nachricht an ihn.
+  on('POST', /^\/api\/v2\/arbeit\/([0-9a-f]{8})\/anhang$/, async (req, res, m) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) throw err(403, 'Unter-Chats bekommen Dateien nur von dem, dem sie gehören.');
+    if (!d.anhang) throw err(501, 'Anhänge sind hier nicht eingerichtet.');
+    const b = await d.body(req, 12 * 1024 * 1024);
+    const buf = Buffer.from(String(b?.inhalt ?? ''), 'base64');
+    if (!buf.length) throw err(400, 'Die Datei ist leer.');
+    if (buf.length > 8 * 1024 * 1024) throw err(413, 'Höchstens 8 MB je Anhang — größere Dateien in „Meine Dateien“ hochladen.');
+    const name = anhangName(String(b?.name ?? ''));
+    if (!(await d.strang(u, m[1]).catch(() => null))) throw err(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
+    const r = await d.anhang(u, m[1], name, buf, String(b?.text ?? '').trim().slice(0, 4000));
+    d.log('v2 anhang', { user: u.id, strand: m[1], name, bytes: buf.length });
+    send(d, res, { ok: true, ...r });
   });
 
   // --- Letzter Stand eines Unter-Chats für „Was ist das?“ (S22, Knut B1) — beim Aufklappen nachgeladen, nicht für jede Karte ---

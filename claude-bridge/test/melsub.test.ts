@@ -137,6 +137,21 @@ test('melious_sub nur im laufenden Zug und nicht für fremde Unterhaltungen', as
   assert.ok(existsSync(ARGS));
 });
 
+test('Chat-Bereich (Knut 06.11.): laufenden Zug eines Unter-Chats abbrechen — Zug endet als „aborted“; ohne laufenden Zug: false', async () => {
+  const c = conv(60);
+  await register('knut', c);
+  const zug = send(c, 'langsam 8000');
+  await new Promise((r) => setTimeout(r, 800));
+  const ab = async () => fetch(`http://127.0.0.1:${PORT}/internal/orch-abbrechen`, { method: 'POST', headers: { 'x-werkbank-internal': 'geheim', 'content-type': 'application/json' }, body: JSON.stringify({ userId: 'knut', conv: c }) });
+  const r = await ab();
+  assert.equal(r.status, 200, await r.clone().text());
+  assert.equal((await r.json()).abgebrochen, true);
+  await zug;
+  const st: any = ((await (await fetch(`http://127.0.0.1:${PORT}/internal/orch-state?user=knut`, { headers: { 'x-werkbank-internal': 'geheim' } })).json()) as any).strands.find((x: any) => x.conv === c);
+  assert.equal(st.running, false); assert.equal(st.turn.outcome, 'aborted');
+  assert.equal((await (await ab()).json()).abgebrochen, false, 'kein laufender Zug mehr');
+});
+
 test('Knut 06.11.: im Strang lokaler Commit und GitHub-Lesen erlaubt, GitHub-Schreiben gesperrt — jede Sperre mit Grund im Log', async () => {
   const c = conv(50);
   await register('knut', c);

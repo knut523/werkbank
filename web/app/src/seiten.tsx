@@ -581,14 +581,14 @@ function Nachreichen({ id }: { id: string }) {
   );
 }
 
-interface Steckbrief { wofuer: string; gestartet: string | null; ueber: string | null; jetzt: string | null; laeuft: boolean; seit: number | null; schritte: { text: string; stand: 'fertig' | 'offen' }[]; eta: { text: string; ueberfaellig: boolean } | null;
+export interface Steckbrief { wofuer: string; gestartet: string | null; ueber: string | null; jetzt: string | null; laeuft: boolean; seit: number | null; schritte: { text: string; stand: 'fertig' | 'offen' }[]; eta: { text: string; ueberfaellig: boolean } | null;
   wartetAuf: { wer: string; was: string }[]; ergebnisse: Link[];
   dod?: { zeilen: { text: string; haken: boolean; beleg: string | null; besitzer: string | null; erledigt: boolean }[]; folgen: { text: string; besitzer: string | null }[] }; fast?: { fehlt: string[]; wartetAuf: string[] } | null; ruhtMin?: number | null; eingereiht?: { at: string; grund: string }[]; beruehrt: { repos: string[]; text: string | null; ordner: string | null; dateien: string[] }; modell: string | null; laufzeitMin: number | null; zugTokens: number | null; laeufer?: { wer: string; grund: string | null } | null }
 
 const dauer = (min: number) => (min < 90 ? `${min} min` : min < 60 * 48 ? `${Math.round(min / 60)} h` : `${Math.round(min / 1440)} Tage`);
 /** Runde 7 (Knut: „Unterchats sind halt etwas intransparent“): in 10 Sekunden sehen, was ein Unter-Chat gerade tut — ohne den Chat
  *  zu öffnen. Wofür · Jetzt gerade · Fortschritt · Wartet auf · Ergebnisse · Berührt · Modell/Laufzeit · „Was macht der gerade?“. */
-function SteckbriefKasten({ s, titel, id }: { s: Steckbrief; titel: string; id: string }) {
+export function SteckbriefKasten({ s, titel, id }: { s: Steckbrief; titel: string; id: string }) {
   const app = useApp();
   const fertig = s.schritte.filter((x) => x.stand === 'fertig').length;
   return (
@@ -661,7 +661,7 @@ export function Entschieden() {
 }
 
 /** Runde 4 (Knut B2): Liste, Bericht und Agent nennen verschiedene offene Fragen — sagen, was gilt, und woher der Unterschied kommt. */
-function Abgleich({ a }: { a: NonNullable<{ offenListe: string[]; offenBericht: string[]; agentNennt: string[]; zeilen: { d: string; bericht: string | null; wiederOffen: boolean }[] }> }) {
+export function Abgleich({ a }: { a: NonNullable<{ offenListe: string[]; offenBericht: string[]; agentNennt: string[]; zeilen: { d: string; bericht: string | null; wiederOffen: boolean }[] }> }) {
   const liste = (l: string[]) => (l.length ? l.join(', ') : 'keine');
   const wieder = a.zeilen.filter((z) => z.bericht && z.wiederOffen).map((z) => z.d), schon = a.zeilen.filter((z) => z.bericht && !z.wiederOffen).map((z) => z.d);
   const fehlt = a.offenBericht.filter((x) => a.offenListe.includes(x) && !a.agentNennt.includes(x));

@@ -276,3 +276,24 @@ p { margin: 0 0 var(--s1); }
 /* Knut 05.11. 19:00: „Zum Ansehen“ — Notiz je Karte */
 .karte.ansehen textarea.notiz { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid #cdd3da; border-radius: 10px; background: #fff; margin: 8px 0; }
 .karte.ansehen .knoepfe { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Chat-Bereich (Knut 06.11.): Unter-Chat als Chat — Kopf, Verlauf, Leiste */
+.unterchat { display: flex; flex-direction: column; gap: var(--s2); }
+/* Handy: Kopf scrollt mit, Leiste sitzt über der unteren Navigation und bleibt schmal — der Verlauf ist der Hauptinhalt. */
+.uc-kopf { z-index: 2; background: var(--grund); padding-bottom: var(--s1); border-bottom: 1px solid var(--linie); }
+.uc-kopf h1 { margin-bottom: 4px; }
+.uc-steuer { flex-wrap: wrap; gap: 6px; }
+.uc-steckbrief summary, .uc-schritte summary { cursor: pointer; font-size: .85rem; color: var(--gedimmt); }
+.uc-verlauf { display: flex; flex-direction: column; gap: 10px; }
+.uc-schritte ul { margin: 4px 0 0 1em; padding: 0; }
+.uc-leiste { position: sticky; bottom: var(--leiste-h); z-index: 2; background: var(--karte); border: 1px solid var(--linie); border-radius: var(--r); padding: var(--s1) var(--s2); }
+.uc-leiste textarea { width: 100%; }
+.uc-vorlagen { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 6px; margin-bottom: 6px; }
+.uc-vorlagen .knopf { flex: 0 0 auto; }
+.uc-leiste textarea { min-height: 2.6em; height: 2.6em; }
+@media (min-width: 900px) {
+  .uc-kopf { position: sticky; top: var(--kopf-h); }
+  .uc-leiste { bottom: 0; }
+  .uc-leiste textarea { height: auto; min-height: 5em; }
+  .uc-vorlagen { flex-wrap: wrap; }
+}

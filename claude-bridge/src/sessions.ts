@@ -1058,6 +1058,20 @@ export function strangFreigabe(userId: string, convId: string, pfad: string, bis
   log('strang freigabe', { conv: key, pfad: real, bis: new Date(bis).toISOString() });
   return { pfad: real, bis };
 }
+/** Chat-Bereich (Knut 06.11.): laufenden Zug eines Strangs abbrechen (Knopf „Abbrechen“ der 2.0). Wie der Zeitdeckel: Signal
+ *  setzen, der Zug endet als „aborted“; reagiert die CLI nicht, nach 5 s hart (nachlaufBeenden). false = kein laufender Zug. */
+const schlangeAbbruch = new Set<string>();   // Gegenprüfung 06.11.: Abbrechen trifft auch einen Zug, der noch in der Schlange wartet
+export function strangAbbrechen(userId: string, convId: string): boolean {
+  const key = `${safeId(userId)}:${safeId(convId)}`;
+  if (!orchMap[key] || orchMap[key].kind === 'leitstand') return false;
+  if (inSchlange(key)) { schlangeAbbruch.add(key); wecke(); log('strang aus der schlange', { conv: key }); return true; }
+  const l = lives.get(key);
+  if (!l || l.outcome) return false;   // schon mit Ausgang beendet: nicht nachträglich als abgebrochen überschreiben
+  log('strang abgebrochen', { conv: key });
+  l.outcome = 'aborted';
+  void nachlaufBeenden(l, 'von Knut abgebrochen (2.0)');
+  return true;
+}
 /** Gültige Zugänge eines Strangs (abgelaufene fallen weg). */
 export function strangFreigaben(userId: string, convId: string): string[] {
   const e = orchMap[`${safeId(userId)}:${safeId(convId)}`];
@@ -1396,14 +1410,19 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang, ...(schaetzung.topf ? { topf: schaetzung.topf } : {}) }, {
       frei: () => !lives.has(key) && lockFor(meine(), { readonly: !!req.readonly, mode }, box()) === 'ok',
       grund: () => lockGrund || 'gerade kein Platz',
-      geschlossen: () => req.sink.closed,
+      geschlossen: () => req.sink.closed || schlangeAbbruch.has(key),
       melde: (pos) => {
         req.sink.write(erst ? `⏳ In der Schlange: Platz ${pos} — ${lockGrund || 'gerade kein Platz'} (${schaetzungText(schaetzung)}). Startet von selbst, sobald es passt.\n\n` : `⏳ Jetzt Platz ${pos} …\n\n`);
         erst = false;
       },
     });
     log('schlange', { conv: key, ergebnis: r, grund: grund0 || 'unbekannt', wartetMs: Date.now() - warteAb, laufend: meine().length, profil: orchMap[key]?.profil ?? null });
-    if (r === 'zu') { if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'aborted' }); return; }
+    const vonKnut = schlangeAbbruch.delete(key);
+    if (r === 'zu') {
+      if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'aborted' });
+      if (vonKnut && !req.sink.closed) { req.sink.write('Von Knut aus der Schlange genommen — dieser Zug startet nicht.'); req.sink.finish(); }
+      return;
+    }
     if (lives.has(key)) {
       req.sink.write('Diese Unterhaltung arbeitet noch an der vorigen Nachricht. Bitte kurz warten.');
       req.sink.finish();

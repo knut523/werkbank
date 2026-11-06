@@ -4410,6 +4410,27 @@ registerV2(on, {
   strang: (u, id) => orchRuns().findOne({ _id: id as any, userId: u.id, kind: { $ne: 'leitstand' } }),
   hauptchat: v2Hauptchat,
   laeuftChat: v2LaeuftChat,
+  // Chat-Bereich (Knut 06.11.): Steuerknöpfe im Unter-Chat — dieselben Wege wie Heute/Lead der alten Werkbank.
+  steuern: async (u, id, aktion) => {
+    zahlCache.delete(u.id);
+    if (aktion === 'weiter' || aktion === 'fortsetzen') { const r: any = await sendOrch(u, id, aktion === 'weiter' ? 'weiter' : 'weiter — Knut setzt fort (Deckel aufgehoben).', 'hand'); return { zustellung: r.zustellung ?? null }; }
+    if (aktion === 'gruendlich') { const r: any = await gruendlichOrch(u, id, 'hand'); return { zustellung: r.zustellung ?? null }; }
+    if (aktion === 'zurueckholen') { if (!(await zurueckholen(u.id, id))) throw new HttpError(409, 'Nur automatisch weggeräumte Unter-Chats lassen sich zurückholen.'); return { hinweis: 'Zurückgeholt.' }; }
+    const d: any = await orchRuns().findOne({ _id: id as any, userId: u.id });
+    const abbrechen = async () => {
+      if (!d?.conv) return false;
+      const r = await fetch(`${cfg.bridgeUrl}/internal/orch-abbrechen`, { method: 'POST', headers: { ...bridgeInternal, 'content-type': 'application/json' }, body: JSON.stringify({ userId: u.id, conv: d.conv }), signal: AbortSignal.timeout(5000) })
+        .catch(() => { throw new HttpError(502, 'Die Brücke antwortet gerade nicht — nichts angehalten. Bitte gleich noch einmal.'); });
+      return r.ok && !!((await r.json().catch(() => ({}))) as any).abgebrochen;
+    };
+    if (aktion === 'abbrechen') { const ok = await abbrechen(); log('strang abbrechen', { user: u.id, id, ok }); return { hinweis: ok ? 'Der laufende Zug wird beendet — schreib einfach weiter, der Unter-Chat bleibt erhalten.' : 'Gerade läuft kein Zug.' }; }
+    // anhalten: laufenden Zug beenden und als geprüft markieren — läuft nicht weiter (wie „Anhalten“ der alten Werkbank).
+    // Gegenprüfung 06.11.: ist die Brücke nicht erreichbar, wirft abbrechen() 502 — dann nicht als angehalten markieren.
+    const lief = await abbrechen();
+    await reviewOrch(u, id, 'Angehalten (2.0)', 'knut');
+    log('strang angehalten', { user: u.id, id, lief });
+    return { hinweis: 'Angehalten — der Unter-Chat läuft nicht weiter. „Weiter“ setzt ihn wieder in Gang.' };
+  },
   bedarfListe: (u) => bedarfListe(u),
   bedarfAntwort: (u, id, b) => bedarfAntwortRoute(u, id, b),
   hauptchatEinreihen: async (u, text) => {
@@ -4481,6 +4502,26 @@ registerV2(on, {
   // Runde 7: Roadmap-Items je Thema (Spec-Seiten im Vault), höchstens einmal je Minute gelesen. Thema = Ordnername (gesetzt, wie ein Hand-Thema).
   zustaende: (u) => strandStates(u) as Promise<Map<string, any>>,
   nachreichen: (u, id, text) => sendOrch(u, id, text),
+  // Chat-Bereich (Knut 06.11.): Anhang ins Paket des Unter-Chats (ohne Paket: Ordner .werkbank-anhaenge im Arbeitsordner), Pfad als Nachricht.
+  anhang: async (u, id, name, buf, text) => {
+    const d: any = await orchRuns().findOne({ _id: id as any, userId: u.id });
+    if (!d) throw new HttpError(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
+    // Gegenprüfung 06.11.: Paketname so streng wie überall (kein „..“), ohne Paket nur mit Arbeitsordner; gleichnamige
+    // Anhänge bekommen einen Zeitstempel — auch wenn zwei gleichzeitig ankommen (wx statt vorher nachsehen).
+    const paket = /^\d{1,4}-[a-z0-9][a-z0-9-]*$/.test(String(d.paket ?? '')) ? String(d.paket) : null;
+    if (!paket && !d.cwd) throw new HttpError(409, 'Dieser Unter-Chat hat weder Review-Paket noch Arbeitsordner — Anhang nicht möglich.');
+    const ordner = paket ? join(reviewDir(), paket, 'anhaenge') : join(String(d.cwd), '.werkbank-anhaenge');
+    mkdirSync(ordner, { recursive: true });
+    let pfad = join(ordner, name);
+    try { writeFileSync(pfad, buf, { flag: 'wx' }); } catch (e: any) {
+      if (e?.code !== 'EEXIST') throw e;
+      pfad = join(ordner, `${Date.now()}-${randomBytes(2).toString('hex')}-${name}`);
+      writeFileSync(pfad, buf, { flag: 'wx' });
+    }
+    await sendOrch(u, id, `Anhang von Knut: \`${pfad}\`${text ? `\n\n${text}` : ''}`);
+    log('v2 anhang abgelegt', { user: u.id, strand: id, pfad, bytes: buf.length });
+    return { pfad };
+  },
   paketDateien: (paket) => (/^\d{1,4}-[a-z0-9][a-z0-9-]*$/.test(paket) ? readPaket(cfg.reviewDir, paket)?.files ?? [] : []),
   roadmap: () => { const jetzt = Date.now(); if (!roadmapCache || jetzt - roadmapCache.at > 60_000) roadmapCache = { at: jetzt, l: roadmapItems(cfg.vaultDir, (o) => themaVon(o, '')) }; return roadmapCache.l; },
   berichtVon: async (u, id) => {

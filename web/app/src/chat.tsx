@@ -4,8 +4,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { hole, schicke } from './api.ts';
 import { useApp } from './kontext.ts';
-import { Md } from './teile.tsx';
-import { ohneStatuszeilen } from './format.ts';
+import { Md, useDaten } from './teile.tsx';
+import { ohneStatuszeilen, wann } from './format.ts';
 
 interface Nachricht { id: string; rolle: 'ich' | 'assistent'; text: string; at: string; status: string; fehler?: string | null }
 interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string; vorlage?: string | null }[]; conv?: string | null; vorlagen?: { name: string; label: string; beschreibung: string }[]; eingereiht?: { text: string; at: string }[] }
@@ -28,6 +28,7 @@ function HauptchatStarten({ fertig }: { fertig: () => void }) {
 export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen: boolean; vorbereitet: string; convWahl?: string; schliessen: () => void }) {
   const app = useApp();
   const [ziel, setZiel] = useState<'hauptchat' | 'eigen'>(app.ich.admin ? 'hauptchat' : 'eigen');
+  const [unter, setUnter] = useState(false);   // Chat-Bereich (Knut 06.11.): dritter Einstieg „Unterchats“
   const [conv, setConv] = useState<string | null>(null);
   const [stand, setStand] = useState<Stand | null>(null);
   const [text, setText] = useState('');
@@ -75,18 +76,20 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
   return (
     <aside className="chat" role="dialog" aria-label="Chat" aria-modal="false">
       <div className="chat-kopf">
-        <strong>{ziel === 'hauptchat' ? 'Hauptchat' : 'Chat'}</strong>
+        <strong>{unter ? 'Unterchats' : ziel === 'hauptchat' ? 'Hauptchat' : 'Chat'}</strong>
         {app.ich.admin && (
           <div className="umschalter" role="tablist">
-            <button type="button" role="tab" aria-selected={ziel === 'hauptchat'} className={ziel === 'hauptchat' ? 'an' : ''} onClick={() => setZiel('hauptchat')}>Hauptchat</button>
-            <button type="button" role="tab" aria-selected={ziel === 'eigen'} className={ziel === 'eigen' ? 'an' : ''} onClick={() => { setZiel('eigen'); setConv(null); }}>Neuer Chat</button>
+            <button type="button" role="tab" aria-selected={!unter && ziel === 'hauptchat'} className={!unter && ziel === 'hauptchat' ? 'an' : ''} onClick={() => { setUnter(false); setZiel('hauptchat'); }}>Hauptchat</button>
+            <button type="button" role="tab" aria-selected={!unter && ziel === 'eigen'} className={!unter && ziel === 'eigen' ? 'an' : ''} onClick={() => { setUnter(false); setZiel('eigen'); setConv(null); }}>Neuer Chat</button>
+            <button type="button" role="tab" aria-selected={unter} className={unter ? 'an' : ''} onClick={() => setUnter(true)}>Unterchats</button>
           </div>
         )}
         <button type="button" className="knopf leise klein" onClick={schliessen} aria-label="Chat schließen">Schließen</button>
       </div>
-      <p className="chat-hinweis klein gedimmt">{ziel === 'hauptchat' ? 'Dein Gespräch mit dem Assistenten, der die Arbeit verteilt. Antworten kommen hier an, auch wenn du die Seite wechselst.' : 'Ein neues Gespräch mit dem Assistenten — für Fragen zwischendurch.'}</p>
+      {unter && <UnterchatListe schliessen={schliessen} />}
+      {!unter && <p className="chat-hinweis klein gedimmt">{ziel === 'hauptchat' ? 'Dein Gespräch mit dem Assistenten, der die Arbeit verteilt. Antworten kommen hier an, auch wenn du die Seite wechselst.' : 'Ein neues Gespräch mit dem Assistenten — für Fragen zwischendurch.'}</p>}
 
-      <div className="chat-verlauf" aria-live="polite">
+      {!unter && <div className="chat-verlauf" aria-live="polite">
         {fehler && <p className="fehlertext" role="alert">{fehler}</p>}
         {!stand && !fehler && <p className="laedt">Lädt …</p>}
         {stand && ziel === 'hauptchat' && !stand.hauptchat && <HauptchatStarten fertig={() => void laden()} />}
@@ -112,9 +115,9 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
           </div>
         )}
         <div ref={unten} />
-      </div>
+      </div>}
 
-      {!ohneZugang && !(ziel === 'hauptchat' && stand && !stand.hauptchat) && (
+      {!unter && !ohneZugang && !(ziel === 'hauptchat' && stand && !stand.hauptchat) && (
         <form className="chat-eingabe" onSubmit={(e) => { e.preventDefault(); void senden(); }}>
           {ziel === 'eigen' && !conv && !!stand?.vorlagen?.length && (
             <label className="klein vorlage-wahl">Vorlage (optional): <select value={vorlage} onChange={(e) => setVorlage(e.target.value)}>
@@ -134,5 +137,26 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
         </form>
       )}
     </aside>
+  );
+}
+
+/** Chat-Bereich (Knut 06.11.): dritter Einstieg — die Unter-Chats, laufende und wartende zuerst; ein Klick öffnet den vollen Chat. */
+function UnterchatListe({ schliessen }: { schliessen: () => void }) {
+  const { d, fehler } = useDaten<{ gruppen?: Record<'wartet' | 'laeuft' | 'fertig', { id: string; titel: string; satz: string; zuletzt: string | null }[]> }>('api/v2/arbeit');
+  if (fehler) return <p className="fehlertext">{fehler}</p>;
+  if (!d) return <p className="laedt">Lädt …</p>;
+  const g = d.gruppen ?? { wartet: [], laeuft: [], fertig: [] };
+  const zeile = (z: { id: string; titel: string; satz: string; zuletzt: string | null }) => (
+    <li key={z.id}><a href={`v2/arbeit/${z.id}`} onClick={schliessen}><b>{z.titel}</b></a><br /><span className="klein gedimmt">{z.satz}{z.zuletzt ? ` · ${wann(z.zuletzt)}` : ''}</span></li>
+  );
+  const teil = (titel: string, l: typeof g.wartet) => l.length > 0 && <><p className="gruppe-titel">{titel} ({l.length})</p><ul className="chat-unterchats">{l.map(zeile)}</ul></>;
+  return (
+    <div className="chat-verlauf">
+      {teil('Wartet auf dich', g.wartet)}
+      {teil('Läuft', g.laeuft)}
+      {teil('Fertig', g.fertig.slice(0, 15))}
+      {!g.laeuft.length && !g.wartet.length && !g.fertig.length && <p className="leer">Keine Unter-Chats.</p>}
+      <p className="klein"><a href="v2/arbeit" onClick={schliessen}>Alle Unter-Chats unter „Arbeit“ →</a></p>
+    </div>
   );
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { wann, htmlFuerV2, istIntern, mehrzahl, chatFrage, rel, logisch } from '../src/format.ts';
+import { wann, htmlFuerV2, istIntern, mehrzahl, chatFrage, rel, logisch, verlaufTeile } from '../src/format.ts';
 
 const NOW = Date.parse('2026-11-03T18:00:00Z');   // 19:00 Wien
 
@@ -61,4 +61,14 @@ test('Runde 4 (Knut B12): Statuszeilen der Brücke fallen aus der fertigen Antwo
 test('Pass C: echte kursive Zeilen einer Antwort bleiben — nur Statuszeilen mit Symbol am Anfang fallen weg', async () => {
   const { ohneStatuszeilen } = await import('../src/format.ts');
   assert.equal(ohneStatuszeilen('*Siehe Abschnitt 3.*\n*⏱️ Das Ergebnis steht …*\nText'), '*Siehe Abschnitt 3.*\nText');
+});
+
+test('Chat-Bereich (Knut 06.11.): Werkzeug-Schritte (kursive Statuszeilen der Brücke) einklappbar, Text bleibt Text', () => {
+  const t = 'Ich schaue nach.\n\n*⏳ Claude arbeitet …*  \n*📖 Lese src/a.ts*  \n*🔍 Suche „limit“*  \n\nGefunden: Zeile 12.\n\n*✏️ Ändere src/a.ts*  \n\nFertig.';
+  const teile = verlaufTeile(t);
+  assert.deepEqual(teile.map((x) => x.art), ['text', 'schritte', 'text', 'schritte', 'text']);
+  assert.equal(teile[1].zeilen.length, 3); assert.equal(teile[1].zeilen[1], '📖 Lese src/a.ts');
+  assert.match(teile[2].text, /Gefunden: Zeile 12/);
+  assert.deepEqual(verlaufTeile('Nur Text mit *kursiv* mitten drin.').map((x) => x.art), ['text'], 'Kursiv im Satz ist kein Schritt');
+  assert.deepEqual(verlaufTeile(''), []);
 });

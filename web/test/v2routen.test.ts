@@ -496,6 +496,30 @@ test('Knut 05.11. 19:00 „Zum Ansehen“: Karte je fertigem Strang mit Stand un
   } finally { deps.unterchatListe = altListe; deps.strang = altStrang; delete deps.ansehenSpaeter; delete deps.ansehenAntwort; }
 });
 
+test('Chat-Bereich (Knut 06.11.): Unter-Chat steuern — Weiter, Fortsetzen, Anhalten, Abbrechen, Gründlich, Zurückholen; nur Admin, nur bekannte Aktionen', async () => {
+  const aktionen: string[] = [];
+  deps.steuern = async (_u, id, aktion) => { aktionen.push(`${id}:${aktion}`); return { zustellung: 'zugestellt' }; };
+  try {
+    for (const a of ['weiter', 'fortsetzen', 'anhalten', 'abbrechen', 'gruendlich', 'zurueckholen']) assert.equal((await rufe('POST', '/api/v2/arbeit/abcd1234/steuern', ADMIN, { aktion: a })).status, 200, a);
+    assert.deepEqual(aktionen, ['abcd1234:weiter', 'abcd1234:fortsetzen', 'abcd1234:anhalten', 'abcd1234:abbrechen', 'abcd1234:gruendlich', 'abcd1234:zurueckholen']);
+    assert.equal((await rufe('POST', '/api/v2/arbeit/abcd1234/steuern', ADMIN, { aktion: 'loeschen' })).status, 400);
+    assert.equal((await rufe('POST', '/api/v2/arbeit/abcd1234/steuern', LISA, { aktion: 'weiter' })).status, 403);
+    assert.equal((await rufe('POST', '/api/v2/arbeit/ffff0000/steuern', ADMIN, { aktion: 'weiter' })).status, 404, 'fremder/unbekannter Unter-Chat');
+  } finally { delete deps.steuern; }
+});
+
+test('Chat-Bereich (Knut 06.11.): Anhang an einen Unter-Chat — sauberer Dateiname, Größe begrenzt, nur Admin', async () => {
+  const abgelegt: any[] = [];
+  deps.anhang = async (_u, id, name, buf, text) => { abgelegt.push([id, name, buf.length, text]); return { pfad: `/pakete/x/anhaenge/${name}` }; };
+  try {
+    const r = await rufe('POST', '/api/v2/arbeit/abcd1234/anhang', ADMIN, { name: '../../Angebot Joules (v2).pdf', inhalt: Buffer.from('hallo').toString('base64'), text: 'Bitte einarbeiten' });
+    assert.equal(r.status, 200, JSON.stringify(r.b));
+    assert.deepEqual(abgelegt[0], ['abcd1234', 'Angebot_Joules_v2_.pdf', 5, 'Bitte einarbeiten']);
+    assert.equal((await rufe('POST', '/api/v2/arbeit/abcd1234/anhang', ADMIN, { name: 'x.txt', inhalt: '' })).status, 400, 'leer');
+    assert.equal((await rufe('POST', '/api/v2/arbeit/abcd1234/anhang', LISA, { name: 'x.txt', inhalt: 'aGFsbG8=' })).status, 403);
+  } finally { delete deps.anhang; }
+});
+
 test('Bedarfskanal (Knut 06.11.): „Braucht Hauptsitzung“ zeigt die Bedarfe der Stränge; Erteilen/Erledigt/Ablehnen nur Admin, geprüft', async () => {
   const antworten: any[] = [];
   deps.bedarfListe = async () => [{ _id: 'b-0000abcd', art: 'github', text: 'Push von feat/x, Gate grün', pfad: null, strand: { id: 'abcd1234', title: 'Rechner' }, at: new Date(0) }];
