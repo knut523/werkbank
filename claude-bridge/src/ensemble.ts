@@ -93,6 +93,14 @@ export async function ensemble(o: { auftrag: string; bereich: string; diff: stri
   const t0 = jetzt();
   const pruefer = await Promise.all(PRUEFER.map((m) => o.lauf(m, o.auftrag + db + pruefHinweis(!!db, knapp), `pruefer-${m}`)));
   const sPruefer = (jetzt() - t0) / 1000;
+  // Pass C (Claude, Fix-Runde 2, S4): mit weniger als zwei Prüfergebnissen kein Verifizierer — sonst käme „nichts bestätigt“ als
+  // Erfolg zurück, obwohl kaum jemand geprüft hat; der Aufrufer fällt dann zurück (Gegenprüfung: bisheriger Weg).
+  const gut = pruefer.filter((r) => r.ok).length;
+  if (gut < 2) {
+    const grund = `nur ${gut} von ${PRUEFER.length} Prüfläufen lieferten (${pruefer.filter((r) => !r.ok).map((r) => `${r.modell}: ${r.grund ?? 'leer'}`).join('; ')})`;
+    const leer: EnsLauf = { rolle: `verifizierer-${VERIFIZIERER}`, modell: VERIFIZIERER, ok: false, text: '', s: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, laeufer: 'jcode', gelaufen: VERIFIZIERER, grund: 'nicht gestartet' };
+    return { ok: false, text: `— Ensemble abgebrochen: ${grund}\n`, pruefer, verifizierer: leer, schatten: null, sPruefer, sVerifizierer: 0, stellen: 0, grund };
+  }
   const st = stellen(pruefer.filter((r) => r.ok).map((r) => r.text), o.dateien, o.lies);
   const vp = verifiziererPrompt(o.auftrag, db, pruefer, st, knapp);
   const t1 = jetzt();

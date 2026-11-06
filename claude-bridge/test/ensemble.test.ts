@@ -40,6 +40,11 @@ test('fehlt ein Prüflauf, steht das sichtbar da (keiner verzichtbar); ohne Veri
   assert.equal(e.ok, false); assert.match(e.text, /Prüflauf fehlt: glm-5\.2/); assert.equal(e.schatten, null);
   const f = await ensemble({ auftrag: 'R', bereich: '', diff: '', dateien: [], lies: () => null, schatten: false, lauf: lauf('opencode2', (_m, _p, r) => (r.startsWith('verifizierer') ? null : 'x'), []) });
   assert.equal(f.ok, false); assert.match(String(f.grund), /Verifizierer glm-5\.2/);
+  // Pass C (Fix-Runde 2, S4): nur ein Prüfergebnis → kein Verifizierer, kein Schein-Erfolg
+  const b: any[] = [];
+  const g = await ensemble({ auftrag: 'R', bereich: '', diff: '', dateien: [], lies: () => null, schatten: true, lauf: lauf('opencode2', (m, _p, r) => (r.startsWith('pruefer') && m !== 'glm-5.2' ? null : 'nichts bestätigt'), b) });
+  assert.equal(g.ok, false); assert.equal(g.verifizierer.ok, false); assert.match(String(g.grund), /nur 1 von 3 Prüfläufen/);
+  assert.ok(!b.some((x) => String(x.rolle).startsWith('verifizierer') || String(x.rolle).startsWith('schatten')), 'Verifizierer und Schatten nicht gestartet');
 });
 
 test('Rückfall: liefert opencode 2 nichts, läuft derselbe Auftrag über jcode; ohne Server alles über jcode', async () => {

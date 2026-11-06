@@ -2448,18 +2448,21 @@ export async function ensembleLaufen(o: EnsAufruf): Promise<EnsErgebnis & { prot
         oc2 = async (m, p, rolle) => {
           const t0 = Date.now();
           const r = await l.zug({ cwd: o.cwd, prompt: p, model: m, timeoutS, abbruch: o.abbruch, titel: rolle });
-          buche(r.usage, r.gelaufen, r.out.code === 0 && !!r.j);
+          buche(r.usage, r.gelaufen);
           return { rolle, modell: m, ok: r.code === 0 && !!r.text.trim(), text: r.text.trim(), s: (Date.now() - t0) / 1000, usage: r.usage, laeufer: 'opencode2', gelaufen: r.gelaufen, ...(r.code === 0 && r.text.trim() ? {} : { grund: r.grund ?? 'leer' }) };
         };
       } else oc2Grund ||= srv.grund() ?? 'Server startet nicht';
     } else oc2Grund = 'BRIDGE_ENSEMBLE_OC2=aus';
     const schatten = schattenAn();
-    const e = await ensemble({ auftrag: o.auftrag, bereich: o.bereich, diff: d.out, dateien, lies, lauf: mitRueckfall(oc2, jcode, o.abbruch), schatten, knapp: o.knapp });
+    // Pass C (Claude, Fix-Runde 2, S9): die Prüfer haben den Schlüssel in ihrer Umgebung — ein PR-Text könnte sie `env` ausgeben
+    // lassen. Jeder Lauftext wird geschwärzt, bevor er in den Verifizierer-Prompt, ins Protokoll oder zurück an Strang/PR geht.
+    const ohneSchluessel = (l: Lauf): Lauf => async (m, p, r) => { const x = await l(m, p, r); return { ...x, text: x.text.split(o.mel.token).join('***'), ...(x.grund ? { grund: x.grund.split(o.mel.token).join('***') } : {}) }; };
+    const e = await ensemble({ auftrag: o.auftrag, bereich: o.bereich, diff: d.out, dateien, lies, lauf: ohneSchluessel(mitRueckfall(oc2, jcode, o.abbruch)), schatten, knapp: o.knapp });
     // D1: beide Urteile protokollieren (Vergleich glm-5.2 gegen den Schatten glm-5.3-flash nach zwei Wochen im Bericht).
     const ordner = join(cfg.stateDir, 'ensemble'); mkdirSync(ordner, { recursive: true });
     const protokoll = join(ordner, `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 6)}.json`);
     const kurz = (r: EnsLauf | null) => r && { modell: r.modell, gelaufen: r.gelaufen, laeufer: r.laeufer, ok: r.ok, s: Math.round(r.s), grund: r.grund ?? null, usage: r.usage };
-    try { writeFileSync(protokoll, JSON.stringify({ zeit: new Date().toISOString(), kontext: o.kontext, bereich: o.bereich, oc2: oc2 ? 'an' : oc2Grund, pruefer: e.pruefer.map(kurz), sPruefer: Math.round(e.sPruefer), sVerifizierer: Math.round(e.sVerifizierer), stellen: e.stellen, verifizierer: { ...kurz(e.verifizierer), text: e.verifizierer.text }, schatten: e.schatten ? { ...kurz(e.schatten), text: e.schatten.text } : null }, null, 1)); } catch { /* Protokoll ist Zusatz */ }
+    try { writeFileSync(protokoll, JSON.stringify({ zeit: new Date().toISOString(), kontext: o.kontext, bereich: o.bereich, oc2: oc2 ? 'an' : oc2Grund, pruefer: e.pruefer.map(kurz), sPruefer: Math.round(e.sPruefer), sVerifizierer: Math.round(e.sVerifizierer), stellen: e.stellen, verifizierer: { ...kurz(e.verifizierer), text: e.verifizierer.text }, schatten: e.schatten ? { ...kurz(e.schatten), text: e.schatten.text } : null }, null, 1)); } catch (err: any) { log('ensemble-protokoll fehler', { kontext: o.kontext, error: String(err?.message ?? err).slice(0, 160) }); }   // D1 verlangt das Protokoll (Pass A S10)
     log('ensemble-review', { kontext: o.kontext, oc2: oc2 ? 'an' : oc2Grund, ok: e.ok, sPruefer: Math.round(e.sPruefer), sVerifizierer: Math.round(e.sVerifizierer), stellen: e.stellen, laeufer: e.pruefer.map((r) => `${r.modell}:${r.laeufer}:${r.ok ? 'ok' : 'fehlt'}`), verifizierer: e.verifizierer.ok, schatten: e.schatten ? (e.schatten.ok ? e.schatten.text.length : 'fehlt') : null, protokoll });
     return { ...e, text: e.text + (oc2 ? '' : `\n  ⚠ opencode 2 nicht verfügbar (${oc2Grund}) — alle Läufe über jcode.`), protokoll };
   } finally {
@@ -2566,7 +2569,7 @@ export async function melSub(userId: string, convId: string, b: { auftrag?: unkn
       const r = oc2
         ? await oc2.zug({ cwd, prompt, model: m, timeoutS, abbruch, titel: `mel-sub ${key}` }).then((x) => ({ out: { code: x.code }, j: x.code === 0 ? { text: x.text } : null, usage: x.usage, gelaufen: x.gelaufen, grund: x.grund }))
         : await jcodeSpawn({ cwd, prompt, model: m, tools: 'read,bash,agentgrep', key: mel.token, timeoutS, abbruch }).then((o) => ({ out: o as { code: number | null }, ...jcodeAuswerten(o, cwd, m), grund: undefined as string | undefined }));
-      buche(r.usage, r.gelaufen);
+      buche(r.usage, r.gelaufen, r.out.code === 0 && !!r.j);
       return r;
     };
     let r1 = await lauf(model);
