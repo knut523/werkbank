@@ -4,6 +4,7 @@
 // den 2.0-Seiten — eingehängt in die 2.0-Hülle. Ihr Stylesheet gilt nur innerhalb von
 // .alt-seite (scopeCss), die alte Hash-Adresse (#/board?site=DEV …) steht hinter der 2.0-Adresse (v2/board#/board?site=DEV).
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
+import { klartext } from './api.ts';
 import altCss from '../../src/styles.css?inline';
 import { api, setChatOrigin, type Config } from '../../src/api.ts';
 import { Providers } from '../../src/ui.tsx';
@@ -40,7 +41,7 @@ export function AltSeite({ start, altUrl }: { start: string; altUrl: string }) {
   const [cfg, setCfg] = useState<Config | null>(null);
   const [fehler, setFehler] = useState<string | null>(null);
   const [hash, setHash] = useState(() => (seiteVon(location.hash)?.hash === start ? location.hash : start));
-  useEffect(() => { stilEinhaengen(); api<Config>('/api/config').then((c) => { setChatOrigin(c.librechatUrl); setCfg(c); }, (e) => setFehler(String(e?.message ?? e))); }, []);
+  useEffect(() => { stilEinhaengen(); api<Config>('/api/config').then((c) => { setChatOrigin(c.librechatUrl); setCfg(c); }, (e) => setFehler(klartext(Number(e?.status ?? 500), String(e?.message ?? '')))); }, []);
   useEffect(() => {
     const f = () => setHash(seiteVon(location.hash)?.hash === start ? location.hash : start);
     window.addEventListener('hashchange', f);
@@ -55,8 +56,10 @@ export function AltSeite({ start, altUrl }: { start: string; altUrl: string }) {
     const a = (e.target as HTMLElement).closest('a');
     const href = a?.getAttribute('href');
     if (!href?.startsWith('#/') || a?.target) return;
-    e.preventDefault();
     const z = seiteVon(href);
+    // Pass A (Spec 5): ohne Adresse der alten Werkbank nicht abfangen, sonst passierte beim Klick nichts
+    if (!z && !altUrl) return;
+    e.preventDefault();
     if (z?.hash === start) { location.hash = href; return; }
     if (z) { history.pushState(null, '', new URL(z.pfad + href, document.baseURI).pathname + href); window.dispatchEvent(new PopStateEvent('popstate')); window.scrollTo(0, 0); return; }
     if (altUrl) window.open(`${altUrl}/${encodeURIComponent(href.slice(2).split(/[?/]/)[0] || 'heute')}?h=${encodeURIComponent(href)}`, '_blank', 'noopener');

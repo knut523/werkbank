@@ -37,7 +37,7 @@ export interface Karte {
   bezug?: { id: string; frage: string; empfehlung: string | null; antwort: string | null }[]; bericht?: string | null;
 }
 export interface ArbeitKarte { fast?: boolean; id: string; titel: string; thema: string; satz: string; gruppe: 'wartet' | 'laeuft' | 'fertig'; zuletzt: string | null; uhr: string; offen: number; links: Link[] }
-export interface PrZeile { thema?: string; konflikt?: boolean; straenge?: { id: string; titel: string; zustand: string }[]; pr: string; repo: string; number: number; titel: string; url: string | null; wartetAuf: string[]; warum: string; entwurf: boolean; geaendert: string | null; review?: { empfehlung: string | null; status: string; gepostet?: boolean } | null; fix?: { offen: number; gesamt: number; lesbar?: boolean } | null }
+export interface PrZeile { thema?: string; konflikt?: boolean; straenge?: { id: string; titel: string; zustand: string }[]; pr: string; repo: string; number: number; titel: string; url: string | null; wartetAuf: string[]; warum: string; entwurf: boolean; geaendert: string | null; review?: { empfehlung: string | null; status: string; gepostet?: boolean; aktuell?: boolean | null; kopf?: string | null; neuerKopf?: string | null } | null; fix?: { offen: number; gesamt: number; lesbar?: boolean } | null }
 export interface Aufraeumen { id: string; titel: string; worum: string; url: string; sammel?: boolean; /** S21: hier mit einem Klick zu schließen (Anzahl) */ schliessbar?: number }
 export interface Dok { thema?: string; art: 'bericht' | 'notiz'; titel: string; worum: string; url: string; at: string | null }
 export interface Start {
@@ -46,3 +46,6 @@ export interface Start {
   /** S13: Startansicht je Rolle (Server: v2kern.rolle) — leitung, reviewer (hat GitHub-Namen), team. */
   rolle?: 'leitung' | 'reviewer' | 'team';
 }
+
+/** Abmelden (Pass A UI 4: eine Stelle für Leiste und Mehr): die App hört auf „v2-abgemeldet“, leert den Speicher und zeigt die Anmeldung. */
+export const abmelden = () => fetch('api/logout', { method: 'POST', headers: { 'x-werkbank': '1' } }).catch(() => null).finally(() => window.dispatchEvent(new Event('v2-abgemeldet')));

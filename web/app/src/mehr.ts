@@ -17,7 +17,7 @@ export const MEHR: MehrEintrag[] = [
   { alt: '#/', titel: 'Übersicht / Heute', satz: 'Was jetzt auf dich wartet, was läuft und was heute fertig wurde.', ziel: 'v2', url: 'v2/' },
   { alt: '#/entscheidungen', titel: 'Entscheidungen', satz: 'Alle offenen Fragen mit Empfehlung, nach Thema.', ziel: 'v2', url: 'v2/entscheidungen' },
   { alt: '#/arbeit', titel: 'Unter-Chats', satz: 'Aufträge, an denen Agenten arbeiten, mit Stand und Fragen.', ziel: 'v2', url: 'v2/arbeit' },
-  { alt: '#/lead', titel: 'Hauptchat und Unter-Chats (Lead)', satz: 'Den Hauptchat erreichst du über den Knopf „Chat“, die Unter-Chats unter „Arbeit“.', ziel: 'v2', url: 'v2/arbeit' },
+  { alt: '#/lead', titel: 'Hauptchat und Unter-Chats', satz: 'Den Hauptchat erreichst du über den Knopf „Chat“, die Unter-Chats unter „Arbeit“.', ziel: 'v2', url: 'v2/arbeit' },
   { alt: '#/arbeit/reviews', titel: 'Reviews und PRs', satz: 'Code-Änderungen zur Prüfung, wer dran ist, was der Prüf-Agent sagt.', ziel: 'v2', url: 'v2/prs' },
   { alt: '#/erledigt', titel: 'Heute erledigt', satz: 'Was an einem Tag fertig wurde — mit Datumswahl.', ziel: 'v2', url: 'v2/erledigt' },
   { alt: '#/wissen', titel: 'Wissen (Notizen)', satz: 'Notizen und Berichte lesen und suchen.', ziel: 'v2', url: 'v2/dokumente' },
@@ -31,7 +31,7 @@ export const MEHR: MehrEintrag[] = [
   { alt: '#/timebox', titel: 'Mein Tag', satz: 'Tagesvorschlag mit Zeitblöcken.', ziel: 'v2', url: 'v2/tag' },
   { alt: '#/skills', titel: 'Skills', satz: 'Welche Fähigkeiten die Agenten haben und welche für dich gelten.', ziel: 'v2', url: 'v2/skills' },
   // Runde 7 (Abgleich): Morgenlage, Tagesabschluss, Hygiene hingen an der alten Übersicht — ohne Link waren sie weg.
-  { alt: '#/heute', titel: 'Übersicht wie bisher', satz: 'Die alte Übersicht: Morgenlage, Tagesabschluss, Mein Tag, Hauptchat-Status, Push freigeben mit Kopf und Diff.', ziel: 'v2', url: 'v2/uebersicht' },
+  { alt: '#/heute', titel: 'Übersicht wie bisher', satz: 'Die alte Übersicht: Morgenlage, Tagesabschluss, Mein Tag, Hauptchat-Status, Freigaben mit Stand und Änderungen.', ziel: 'v2', url: 'v2/uebersicht' },
   { alt: '#/inbox', titel: 'Entscheidungen wie bisher', satz: 'Alle offenen Fragen mit Themenfilter, „Alle wie empfohlen“, Log mit Filtern.', ziel: 'v2', url: 'v2/entscheidungen-bisher' },
   { alt: '#/erledigt?alt', titel: 'Erledigt wie bisher', satz: 'Der Tag mit Zählerzeile, gepushten PRs, Entscheidungen und Releases.', ziel: 'v2', url: 'v2/erledigt-bisher' },
   { alt: '#/wissen?alt', titel: 'Wissenssammlung wie bisher', satz: 'Ordnerbaum, Team-Übersicht, Tickets, Verweise und Graph je Notiz.', ziel: 'v2', url: 'v2/wissen' },

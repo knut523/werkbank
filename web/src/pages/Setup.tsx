@@ -277,7 +277,7 @@ function MeliousAccount() {
       {d.configured ? (
         <>
           <div className="row small" style={{ gap: 12, flexWrap: 'wrap' }}>
-            <span>Schlüssel <code>••••{d.last4}</code>{d.quelle === 'vaultwarden' ? ' aus Vaultwarden' : d.quelle === 'env' ? ' aus der Server-Einstellung' : ''}</span>
+            <span>Schlüssel <code>••••{d.last4}</code>{d.quelle === 'vaultwarden' ? ' aus Vaultwarden' : d.quelle === 'env' ? ' aus der Server-Einstellung' : ' in deinem Konto gespeichert'}</span>
             {d.exhaustedUntil && <span className="chip warn">aus dem Wechsel bis {fmtDateTime(d.exhaustedUntil)}</span>}
             {d.exhaustedUntil && <button className="btn small" data-testid="melious-reset" disabled={!!busy} onClick={() => run('reset', async () => { await api('/api/setup/melious/reset', { method: 'POST' }); toast('Melious ist wieder im Wechsel'); })}>Vermerk zurücksetzen</button>}
             {u.sperre ? <span className="chip warn">gesperrt: {u.sperre}</span> : d.enabled ? <span className="chip ok">erlaubt</span> : <span className="chip">aus</span>}

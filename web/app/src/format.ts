@@ -85,3 +85,6 @@ export function verlaufTeile(t: string): VerlaufTeil[] {
   textAus(); schritteAus();
   return out;
 }
+
+/** Text „Bericht anfordern“ — eine Stelle für die Abnahme auf „Zum Ansehen“ und im Unter-Chat (Pass A UI 4; vorher zwei Fassungen). */
+export const BERICHT_ANFORDERN = 'Bitte schreib den Bericht (Abschnitte wie im Auftrag) und melde dich dann mit „### Stand“ und „Status: fertig“.';

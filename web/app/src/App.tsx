@@ -1,18 +1,18 @@
-// Werkbank 2.0: die Hülle — Kopf (Name, EINE Zahl, „?“, Chat), links fünf Bereiche (Handy: Leiste unten), Chat als Seitenleiste
+// Werkbank 2.0: die Hülle — Kopf (Name, EINE Zahl, „?“, Chat), links vier Bereiche (Handy: Leiste unten), Chat als Seitenleiste
 // auf jeder Seite. Nach dem Login landet man immer auf „Jetzt“, nie im leeren Chat (428 D2).
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { hole, schicke } from './api.ts';
+import { abmelden, hole, schicke } from './api.ts';
 import { Kontext, type AppKontext } from './kontext.ts';
 import { ChatLeiste } from './chat.tsx';
 import { Anmelden, AlleChats, Themen, Thema, Arbeit, Begriffe, Dokument, Dokumente, Entscheidungen, Entschieden, Erledigt, Jetzt, Mehr, PrDetail, Prs, Suche, Freigabe } from './seiten.tsx';
 import { useApp } from './kontext.ts';
 import { ALT_PFADE } from './mehr.ts';
-
-const AltSeite = lazy(() => import('./alt.tsx').then((m) => ({ default: m.AltSeite })));
-function AltBereich({ start }: { start: string }) { const { alt } = useApp(); return <AltSeite key={start} start={start} altUrl={alt} />; }
 import { UnterChat } from './unterchat.tsx';
 import { Laedt, vergessen, vorab } from './teile.tsx';
 import { istIntern, logisch, rel } from './format.ts';
+
+const AltSeite = lazy(() => import('./alt.tsx').then((m) => ({ default: m.AltSeite })));
+function AltBereich({ start }: { start: string }) { const { alt } = useApp(); return <AltSeite key={start} start={start} altUrl={alt} />; }
 
 // Radikal simpel (Knut 04.11.): vier Bereiche. Entscheidungen erreicht man über die Zahl oben und „Alles, was auf dich wartet“ auf
 // „Jetzt“; Dokumente, Themen, alle Chats, Erledigt und Begriffe stehen unter „Mehr“ (und die Suche auf „Jetzt“ findet alles).
@@ -20,7 +20,8 @@ const BEREICHE = [
   { url: 'v2/', label: 'Jetzt', ico: '◉', passt: (p: string) => p === 'v2/' || p === 'v2' || p.startsWith('v2/entscheidungen') || p.startsWith('v2/suche') },
   { url: 'v2/arbeit', label: 'Arbeit', ico: '⚙', passt: (p: string) => p.startsWith('v2/arbeit') || p.startsWith('v2/chats') || p.startsWith('v2/erledigt') },
   { url: 'v2/prs', label: 'PRs', ico: '⇄', passt: (p: string) => p.startsWith('v2/prs') },
-  { url: 'v2/mehr', label: 'Mehr', ico: '⋯', passt: (p: string) => p.startsWith('v2/mehr') || p.startsWith('v2/dokument') || p.startsWith('v2/them') || p.startsWith('v2/begriffe') },
+  // Pass A (UI 22): die eingehängten alten Seiten (Board, Übersicht, Wissen …) gehören zu „Mehr“
+  { url: 'v2/mehr', label: 'Mehr', ico: '⋯', passt: (p: string) => p.startsWith('v2/mehr') || p.startsWith('v2/dokument') || p.startsWith('v2/them') || p.startsWith('v2/begriffe') || p in ALT_PFADE },
 ];
 
 /** Zu einer Sprungmarke scrollen, sobald der Abschnitt gerendert ist (Daten laden nach) — höchstens 3 s warten. */
@@ -99,9 +100,6 @@ export function App() {
   // Runde 7 (Abgleich, D2): auch 2.0 zählt geöffnete Seiten — dieselbe Auswertung wie die alte Werkbank (Nutzungs-Audit).
   useEffect(() => { if (konto) schicke('api/nutzung/seite', { seite: `v2/${pfad.replace(/^v2\/?/, '')}`.replace(/\/$/, '') || 'v2' }).catch(() => {}); }, [pfad, konto]);
   useEffect(() => { const m = (e: Event) => { const d = (e as CustomEvent).detail; setMeldung(typeof d === 'string' ? { text: d, ok: false } : d); }; window.addEventListener('v2-meldung', m); return () => window.removeEventListener('v2-meldung', m); }, []);
-  // Runde 5 (Knut B9): der schwebende Chat-Knopf geht beim Lesen nach unten aus dem Weg und kommt beim Hochwischen wieder.
-  const [fabWeg, setFabWeg] = useState(false);
-  useEffect(() => { let y = scrollY; const s = () => { const n = scrollY; if (Math.abs(n - y) > 8) { setFabWeg(n > y && n > 120); y = n; } }; addEventListener('scroll', s, { passive: true }); return () => removeEventListener('scroll', s); }, []);
   const [n, setN] = useState(0);
 
   const pruefen = () => hole<{ user: { name: string; role: string } | null; librechatUrl: string; dryRun?: boolean; vaultDryRun?: boolean }>('api/config')
@@ -123,7 +121,7 @@ export function App() {
     chatOeffnen: (conv: string) => setChat({ offen: true, text: '', conv }),
     testbetrieb: trocken,
     zahl: (x) => { if (x === null) setN((v) => v + 1); else setZahl(x); },
-  }), [konto, alt]);
+  }), [konto, alt, trocken]);   // Pass A (UI 19): testbetrieb hängt an trocken
 
   if (konto === undefined) return <Laedt />;
   if (konto === null) return <Anmelden fertig={async () => { vergessen(); history.replaceState(null, '', 'v2/'); window.dispatchEvent(new PopStateEvent('popstate')); /* Runde 4: nach dem Login immer „Jetzt“ */ await vorab('api/v2/start?teil=oben'); await pruefen(); }} />;
@@ -145,13 +143,12 @@ export function App() {
           <div className="leiste-unten">
             <span className="klein gedimmt">Angemeldet als {konto.name}</span>
             {alt && <a className="klein" href={`${alt}/heute`} target="_blank" rel="noopener noreferrer">Alte Werkbank ↗</a>}
-            <button type="button" className="knopf leise klein" onClick={() => fetch('api/logout', { method: 'POST', headers: { 'x-werkbank': '1' } }).finally(() => { vergessen(); setKonto(null); })}>Abmelden</button>
+            <button type="button" className="knopf leise klein" onClick={() => void abmelden()}>Abmelden</button>
           </div>
         </nav>
         {trocken && <p className="testband" role="note">Testbetrieb: Antworten an Notizen und Jira werden hier nicht wirklich geschrieben.</p>}
         {meldung && <div className={`meldung-band${meldung.ok ? ' ok' : ''}`} role={meldung.ok ? 'status' : 'alert'}><span>{meldung.text}</span><button type="button" className="knopf leise klein" onClick={() => setMeldung(null)}>Schließen</button></div>}
         <main className={`inhalt${ALT_PFADE[pfad] ? ' breit' : ''}`}><Seite pfad={pfad} such={such} /></main>
-        <button type="button" className={`chat-fab${fabWeg ? ' weg' : ''}`} onClick={() => setChat({ offen: true, text: '' })} aria-label="Chat öffnen" hidden={chat.offen}>Chat</button>
         <ChatLeiste offen={chat.offen} vorbereitet={chat.text} convWahl={chat.conv} schliessen={() => setChat({ offen: false, text: '' })} />
       </div>
     </Kontext.Provider>

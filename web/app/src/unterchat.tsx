@@ -7,7 +7,7 @@ import { schicke, type Karte, type Link } from './api.ts';
 import { useApp } from './kontext.ts';
 import { EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweise } from './teile.tsx';
 import { Abgleich, SteckbriefKasten, type Steckbrief } from './seiten.tsx';
-import { verlaufTeile, wann } from './format.ts';
+import { BERICHT_ANFORDERN, verlaufTeile, wann } from './format.ts';
 
 interface Steuer { laeuft: boolean; schlange: { pos: number; grund: string } | null; gedeckelt: string | null; abgenommen: boolean; weggeraeumt: boolean; ohneBericht: boolean; modell: string | null; laeufer: string }
 interface Daten {
@@ -16,10 +16,10 @@ interface Daten {
   abgleich?: any; steckbrief?: Steckbrief; steuer?: Steuer;
 }
 
+// Pass A (Spec 4): kein „Weiter“ hier — der Knopf im Kopf kennt die Bedingungen (läuft nicht, nicht angehalten); die Vorlage umging sie.
 const VORLAGEN: [string, string][] = [
-  ['Weiter', 'weiter'],
   ['Stand bitte', 'Bitte gib mir jetzt einen kurzen Stand: was fertig ist, was offen ist, was du von mir brauchst.'],
-  ['Bericht schreiben', 'Bitte schreib den Bericht (Abschnitte wie im Auftrag) und melde dich mit „### Stand“ und „Status: fertig“.'],
+  ['Bericht schreiben', BERICHT_ANFORDERN],
   ['Tests laufen lassen', 'Bitte lass die Tests und Prüfungen des Repos laufen und nenne das Ergebnis.'],
 ];
 
@@ -51,7 +51,7 @@ export function UnterChat({ id }: { id: string }) {
   const anhaengen = async (f: File | undefined) => {
     if (!f) return;
     if (laeuft) { setMeldung('Einen Moment — die vorige Aktion läuft noch. Datei bitte gleich noch einmal wählen.'); if (datei.current) datei.current.value = ''; return; }
-    if (f.size > 8 * 1024 * 1024) { setMeldung('Höchstens 8 MB je Anhang — größere Dateien unter „Meine Dateien“.'); return; }
+    if (f.size > 8 * 1024 * 1024) { setMeldung('Höchstens 8 MB je Anhang — größere Dateien unter „Meine Dateien“.'); if (datei.current) datei.current.value = ''; return; }   // dieselbe Datei erneut wählbar (Pass A UI 10)
     await tu('anhang', async () => {
       const inhalt = await new Promise<string>((ok, nein) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] ?? ''); r.onerror = () => nein(new Error(`„${f.name}“ ließ sich nicht lesen.`)); r.readAsDataURL(f); });
       const r = await schicke(`api/v2/arbeit/${id}/anhang`, { name: f.name, inhalt, text: text.trim() }); setText(''); return r; }, `„${f.name}“ angehängt und geschickt.`);
@@ -69,25 +69,27 @@ export function UnterChat({ id }: { id: string }) {
       <p className="zurueck"><a href="v2/arbeit">← Arbeit</a></p>
       <header className="uc-kopf">
         <h1>{d.titel}</h1>
-        <p className={`zustand ${d.gruppe}`}>{s?.laeuft && <span className="live" aria-label="läuft">● </span>}{d.satz}</p>
+        <p className={`zustand ${d.gruppe}`}>{s?.laeuft && <><span className="live" aria-hidden="true">● </span><span className="unsichtbar">läuft: </span></>}{d.satz}</p>
         <p className="klein gedimmt">
           {s?.schlange ? <>In der Schlange (Platz {s.schlange.pos}{s.schlange.grund ? ` — ${s.schlange.grund}` : ''}) · </> : null}
           {s?.gedeckelt ? <>Angehalten: {s.gedeckelt} · </> : null}
-          Läufer: {s?.laeufer === 'jcode' ? 'jcode (Melious)' : 'Claude'}{s?.modell ? ` · Modell ${s.modell.replace(/^Claude /, '')}` : ''}{d.zuletzt ? ` · zuletzt ${wann(d.zuletzt)}` : ''}
+          Läuft mit: {s?.laeufer === 'jcode' ? 'EU-Modell (Melious)' : 'Claude'}{s?.modell ? ` · Modell ${s.modell.replace(/^Claude /, '')}` : ''}{d.zuletzt ? ` · zuletzt ${wann(d.zuletzt)}` : ''}
         </p>
         <div className="knoepfe uc-steuer" aria-busy={!!laeuft}>
           {s?.weggeraeumt && knopf({ aktion: 'zurueckholen', label: 'Zurückholen', haupt: true, gut: 'Zurückgeholt.' })}
-          {(s?.laeuft || s?.schlange) && knopf({ aktion: 'abbrechen', label: 'Zug abbrechen', gut: 'Wird beendet.' })}
+          {(s?.laeuft || s?.schlange) && knopf({ aktion: 'abbrechen', label: 'Jetzt abbrechen', gut: 'Wird beendet.' })}
           {s?.gedeckelt && !s.laeuft && knopf({ aktion: 'fortsetzen', label: 'Fortsetzen', haupt: true, gut: 'Fortgesetzt.' })}
           {!s?.laeuft && !s?.gedeckelt && knopf({ aktion: 'weiter', label: 'Weiter', gut: '„weiter“ geschickt.' })}
           {!s?.laeuft && knopf({ aktion: 'gruendlich', label: 'Gründlich', gut: 'Geht gründlicher weiter.' })}
-          {!s?.abgenommen && knopf({ aktion: 'anhalten', label: 'Anhalten', gut: 'Angehalten.' })}
+          {!s?.abgenommen && !s?.gedeckelt && knopf({ aktion: 'anhalten', label: 'Anhalten', gut: 'Angehalten.' })}
         </div>
         {d.steckbrief && <details className="uc-steckbrief"><summary>Steckbrief: wofür, Fortschritt, Ergebnisse</summary><SteckbriefKasten s={d.steckbrief} titel={d.titel} id={id} /></details>}
         {d.links.length > 0 && <Verweise links={d.links.filter((l) => !l.extern)} />}
       </header>
 
-      <section className="uc-verlauf" aria-label="Verlauf" aria-live="polite">
+      {/* Pass A (UI 8): vorgelesen wird nur die Statuszeile, nicht der alle 3 s nachgeladene Verlauf */}
+      <p className="unsichtbar" aria-live="polite">{s?.laeuft ? 'Der Agent arbeitet …' : ''}</p>
+      <section className="uc-verlauf" aria-label="Verlauf">
         {d.nachrichten.length === 0 && <p className="leer">Noch keine Nachrichten.</p>}
         {d.nachrichten.map((n) => (
           <div key={n.id} className={`blase ${n.rolle}`}>
@@ -106,7 +108,7 @@ export function UnterChat({ id }: { id: string }) {
       {d.fragen.length > 0 && <div className="karten uc-fragen">{d.fragen.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => { app.zahl(null); neu(); }} />)}</div>}
 
       <form className="chat-eingabe uc-leiste" onSubmit={(e) => { e.preventDefault(); senden(); }}>
-        <div className="uc-vorlagen" role="group" aria-label="Vorlagen">{VORLAGEN.map(([l, t]) => <button key={l} type="button" className="knopf leise klein" disabled={!!laeuft} onClick={() => (l === 'Weiter' ? void steuern('weiter', '„weiter“ geschickt.') : setText(t))}>{l}</button>)}</div>
+        <div className="uc-vorlagen" role="group" aria-label="Vorlagen">{VORLAGEN.map(([l, t]) => <button key={l} type="button" className="knopf leise klein" disabled={!!laeuft} onClick={() => setText(t)}>{l}</button>)}</div>
         <label htmlFor="uc-text" className="unsichtbar">Nachricht an den Unter-Chat</label>
         <textarea id="uc-text" rows={3} value={text} maxLength={8000} placeholder={arbeitet ? 'Er arbeitet gerade — deine Nachricht wird nachgereicht.' : 'Nachricht an den Unter-Chat …'} onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); senden(); } }} />
@@ -122,7 +124,7 @@ export function UnterChat({ id }: { id: string }) {
           <p className="klein"><b>Abnehmen:</b> {s?.ohneBericht ? 'fertig gemeldet, aber ohne Bericht.' : 'der Unter-Chat meldet „fertig“.'} Eine Notiz aus dem Feld oben geht mit.</p>
           <div className="knoepfe">
             {s?.ohneBericht
-              ? <><button type="button" className="knopf haupt" disabled={!!laeuft} onClick={() => void abnehmen('aendern', { notiz: `${text.trim() ? `${text.trim()}\n\n` : ''}${VORLAGEN[2][1]}` })}>Bericht anfordern</button>
+              ? <><button type="button" className="knopf haupt" disabled={!!laeuft} onClick={() => void abnehmen('aendern', { notiz: `${text.trim() ? `${text.trim()}\n\n` : ''}${BERICHT_ANFORDERN}` })}>Bericht anfordern</button>
                 <button type="button" className="knopf leise" disabled={!!laeuft} onClick={() => void abnehmen('passt', { trotzdem: true })}>Trotzdem abnehmen</button></>
               : <><button type="button" className="knopf haupt" disabled={!!laeuft} onClick={() => void abnehmen('passt')}>Passt</button>
                 <button type="button" className="knopf" disabled={!!laeuft || !text.trim()} onClick={() => void abnehmen('aendern')}>Ändern</button></>}

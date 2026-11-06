@@ -23,7 +23,7 @@ function sichtbar(src: string): string {
 
 test('Begriffe: kein Strang/Leitstand/Orchestrator/Vault/Inbox/„Braucht Knut“ in sichtbaren Texten', () => {
   const funde: string[] = [];
-  for (const p of quellen.filter((x) => /\.tsx$/.test(x))) {
+  for (const p of quellen.filter((x) => /\.tsx$|\/mehr\.ts$/.test(x))) {   // Pass A (UI 6): auch die sichtbaren Texte aus mehr.ts
     const t = sichtbar(readFileSync(p, 'utf8'));
     for (const re of VERBOTEN) for (const zeile of t.split('\n')) if (re.test(zeile)) funde.push(`${p.slice(SRC.length + 1)}: ${zeile.trim().slice(0, 80)}`);
   }
@@ -53,10 +53,17 @@ test('Importregel (B6): nichts aus web/server, claude-bridge oder web/src (auße
   assert.deepEqual(funde, []);
 });
 
-test('Freigaben (B4): die App ruft keine Freigabe-, Push- oder Merge-Endpunkte auf; Antworten nur über /api/v2/antwort', () => {
+test('Freigaben (B4, abgelöst Knut 06.11.): Push-Freigabe nur über die Freigabe-Ansicht (Erlaubnisliste); kein Push/Merge; Antworten nur über /api/v2/antwort', () => {
+  // Phase 4: Pfade mit ${…} zählen mit (vorher griff das Muster dort nicht und der Test war grün, obwohl der Aufruf da war).
+  const ERLAUBT = new Set(['seiten.tsx api/review/:x/freigabe', 'seiten.tsx api/review/:x/freigabe/:x/zurueck']);
+  const funde: string[] = [];
+  for (const p of quellen) {
+    for (const m of readFileSync(p, 'utf8').matchAll(/\bapi\/[^'"`\s)]*?(freigabe|push|merge)[^'"`\s)]*/gi)) funde.push(`${p.slice(SRC.length + 1)} ${m[0].replace(/\$\{[^}]*\}/g, ':x')}`);
+  }
+  assert.deepEqual(funde.filter((f) => !ERLAUBT.has(f)), [], 'Freigabe-, Push- oder Merge-Aufruf außerhalb der Erlaubnisliste');
+  assert.ok(funde.length > 0, 'das Muster erkennt die Aufrufe der Freigabe-Ansicht');
   const alle = quellen.map((p) => readFileSync(p, 'utf8')).join('\n');
-  // S16: Pfade sind relativ ('api/…') — die Muster erkennen beide Schreibweisen.
-  for (const re of [/\bapi\/[\w/-]*freigabe/i, /\bapi\/[\w/-]*push/i, /\bapi\/[\w/-]*merge/i, /\bapi\/inbox\/[^'"`]*\/antwort/, /\bapi\/entscheidungen\/fragen\/(antwort|alle)/]) assert.doesNotMatch(alle, re, String(re));
+  for (const re of [/\bapi\/inbox\/[^'"`]*\/antwort/, /\bapi\/entscheidungen\/fragen\/(antwort|alle)/]) assert.doesNotMatch(alle, re, String(re));
   assert.match(alle, /\bapi\/v2\/antwort/);
 });
 

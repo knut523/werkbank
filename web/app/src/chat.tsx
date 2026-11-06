@@ -6,11 +6,10 @@ import { hole, schicke } from './api.ts';
 import { useApp } from './kontext.ts';
 import { Md, useDaten } from './teile.tsx';
 import { ohneStatuszeilen, wann } from './format.ts';
+import { OLAF_KURZ, OLAF_MEHR } from './begriffe.ts';
 
 interface Nachricht { id: string; rolle: 'ich' | 'assistent'; text: string; at: string; status: string; fehler?: string | null }
 interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string; vorlage?: string | null }[]; conv?: string | null; vorlagen?: { name: string; label: string; beschreibung: string }[]; eingereiht?: { text: string; at: string }[] }
-
-import { OLAF_KURZ, OLAF_MEHR } from './begriffe.ts';
 
 /** Runde 7 (Abgleich: „Hauptchat starten“ fehlte in 2.0, 1 004 Züge hängen am Hauptchat): derselbe Weg wie in der alten Werkbank. */
 function HauptchatStarten({ fertig }: { fertig: () => void }) {
@@ -28,7 +27,7 @@ function HauptchatStarten({ fertig }: { fertig: () => void }) {
 export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen: boolean; vorbereitet: string; convWahl?: string; schliessen: () => void }) {
   const app = useApp();
   const [ziel, setZiel] = useState<'hauptchat' | 'eigen'>(app.ich.admin ? 'hauptchat' : 'eigen');
-  const [unter, setUnter] = useState(false);   // Chat-Bereich (Knut 06.11.): dritter Einstieg „Unterchats“
+  const [unter, setUnter] = useState(false);   // Chat-Bereich (Knut 06.11.): dritter Einstieg „Unter-Chats“ (wie Arbeit nur für Admins)
   const [conv, setConv] = useState<string | null>(null);
   const [stand, setStand] = useState<Stand | null>(null);
   const [text, setText] = useState('');
@@ -38,10 +37,11 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
   const [warten, setWarten] = useState(0);   // > 0: nach dem Senden nachlesen, bis die Antwort da ist (Hauptchat)
   const unten = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { if (vorbereitet) setText(vorbereitet); }, [vorbereitet]);
-  useEffect(() => { if (offen && convWahl) { setZiel('eigen'); setConv(convWahl); } }, [offen, convWahl]);   // S12: aus „Alle Chats“ geöffnet
+  // Pass A (UI 2): ein vorbereiteter Text oder ein gewählter Chat zeigt den Chat, nicht die Liste der Unter-Chats
+  useEffect(() => { if (vorbereitet) { setText(vorbereitet); setUnter(false); } }, [vorbereitet]);
+  useEffect(() => { if (offen && convWahl) { setUnter(false); setZiel('eigen'); setConv(convWahl); } }, [offen, convWahl]);   // S12: aus „Alle Chats“ geöffnet
   // Geschlossen: beim nächsten Öffnen wieder der Normalfall (Hauptchat bzw. neuer Chat), nicht der zuletzt gewählte (Pass C).
-  useEffect(() => { if (!offen) { setConv(null); setZiel(app.ich.admin ? 'hauptchat' : 'eigen'); } }, [offen]);
+  useEffect(() => { if (!offen) { setConv(null); setUnter(false); setZiel(app.ich.admin ? 'hauptchat' : 'eigen'); } }, [offen]);
 
   const abruf = useRef(0);
   async function laden() {
@@ -50,7 +50,14 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
     try { const s = await hole<Stand>(`api/v2/chat?${q}`); if (mein === abruf.current) { setStand(s); setFehler(null); } return s; } catch (e: any) { if (mein === abruf.current) setFehler(e.message); return null; }
   }
 
-  useEffect(() => { if (offen) void laden(); }, [offen, ziel, conv]);
+  // Pass A (UI 7): beim Wechsel des Reiters oder des Chats nicht kurz den alten Stand zeigen (sonst blitzte „Hauptchat starten“ auf);
+  // ein neu angelegter Chat (null → Kennung nach dem Senden) behält seinen Verlauf.
+  const vorher = useRef<{ ziel: string; conv: string | null }>({ ziel, conv });
+  useEffect(() => {
+    if (vorher.current.ziel !== ziel || (vorher.current.conv !== null && vorher.current.conv !== conv)) setStand(null);
+    vorher.current = { ziel, conv };
+    if (offen) void laden();
+  }, [offen, ziel, conv]);
   useEffect(() => {
     if (!offen || !(stand?.laeuft || warten > 0)) return;
     const t = setTimeout(async () => { await laden(); setWarten((w) => Math.max(0, w - 1)); }, 1500);
@@ -76,12 +83,12 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
   return (
     <aside className="chat" role="dialog" aria-label="Chat" aria-modal="false">
       <div className="chat-kopf">
-        <strong>{unter ? 'Unterchats' : ziel === 'hauptchat' ? 'Hauptchat' : 'Chat'}</strong>
+        <strong>{unter ? 'Unter-Chats' : ziel === 'hauptchat' ? 'Hauptchat' : 'Chat'}</strong>
         {app.ich.admin && (
           <div className="umschalter" role="tablist">
             <button type="button" role="tab" aria-selected={!unter && ziel === 'hauptchat'} className={!unter && ziel === 'hauptchat' ? 'an' : ''} onClick={() => { setUnter(false); setZiel('hauptchat'); }}>Hauptchat</button>
             <button type="button" role="tab" aria-selected={!unter && ziel === 'eigen'} className={!unter && ziel === 'eigen' ? 'an' : ''} onClick={() => { setUnter(false); setZiel('eigen'); setConv(null); }}>Neuer Chat</button>
-            <button type="button" role="tab" aria-selected={unter} className={unter ? 'an' : ''} onClick={() => setUnter(true)}>Unterchats</button>
+            <button type="button" role="tab" aria-selected={unter} className={unter ? 'an' : ''} onClick={() => setUnter(true)}>Unter-Chats</button>
           </div>
         )}
         <button type="button" className="knopf leise klein" onClick={schliessen} aria-label="Chat schließen">Schließen</button>
@@ -89,7 +96,9 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
       {unter && <UnterchatListe schliessen={schliessen} />}
       {!unter && <p className="chat-hinweis klein gedimmt">{ziel === 'hauptchat' ? 'Dein Gespräch mit dem Assistenten, der die Arbeit verteilt. Antworten kommen hier an, auch wenn du die Seite wechselst.' : 'Ein neues Gespräch mit dem Assistenten — für Fragen zwischendurch.'}</p>}
 
-      {!unter && <div className="chat-verlauf" aria-live="polite">
+      {/* Pass A (UI 8): vorgelesen wird nur die kurze Statuszeile, nicht der ganze, ständig nachgeladene Verlauf */}
+      {!unter && <p className="unsichtbar" aria-live="polite">{stand?.laeuft ? 'Die Antwort kommt …' : ''}</p>}
+      {!unter && <div className="chat-verlauf">
         {fehler && <p className="fehlertext" role="alert">{fehler}</p>}
         {!stand && !fehler && <p className="laedt">Lädt …</p>}
         {stand && ziel === 'hauptchat' && !stand.hauptchat && <HauptchatStarten fertig={() => void laden()} />}

@@ -56,12 +56,13 @@ export function Abschnitt({ titel, erklaerung, children, fuss, id }: { titel: st
 }
 
 /** Eine Zeile in einer Liste (Unter-Chat, PR, Dokument): Titel als Link, ein Satz, rechts eine Zeit oder Marke. */
-export function Zeile({ titel, url, satz, rechts, marke, links }: { titel: string; url: string; satz?: string; rechts?: string; marke?: { text: string; ton?: string }; links?: Link[] }) {
-  const extern = !istIntern(url);
+/** Eine Listenzeile; ohne Adresse (url leer/null) steht der Titel als Text da — kein toter „#“-Link (Pass A UI 13). */
+export function Zeile({ titel, url, satz, rechts, marke, links }: { titel: string; url?: string | null; satz?: string; rechts?: string; marke?: { text: string; ton?: string }; links?: Link[] }) {
+  const extern = !!url && !istIntern(url);
   return (
     <li className="zeile">
       <div className="zeile-haupt">
-        <a className="zeile-titel" href={rel(url)} {...(extern ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>{titel}{extern ? ' ↗' : ''}</a>
+        {url ? <a className="zeile-titel" href={rel(url)} {...(extern ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>{titel}{extern ? ' ↗' : ''}</a> : <span className="zeile-titel">{titel}</span>}
         {satz && <p className="zeile-satz">{satz}</p>}
         {links && links.length > 0 && <Verweise links={links} />}
       </div>
@@ -70,7 +71,7 @@ export function Zeile({ titel, url, satz, rechts, marke, links }: { titel: strin
   );
 }
 
-/** Ladehinweis erst nach 400 ms — kurze Abrufe blitzen nicht als leere Seite auf (Persona Knut R2). */
+/** Ladehinweis erst nach 200 ms — kurze Abrufe blitzen nicht als leere Seite auf (Persona Knut R2, Runde 5 B3). */
 export function Laedt({ text = 'Lädt …', sofort = false }: { text?: string; sofort?: boolean }) {
   const [zeigen, setZeigen] = useState(sofort);   // sofort: dort, wo der Text etwas verspricht (Reviewer-Start, Runde 4)
   useEffect(() => { const t = setTimeout(() => setZeigen(true), 200); return () => clearTimeout(t); }, []);   // Runde 5 (Knut B3): früher sichtbar, aber kein Blitzen bei schnellen Abrufen
@@ -113,7 +114,7 @@ export const sammelKarte = (t: string) => /\bD\d{1,2}\s*(?:bis|–|-)\s*D\d{1,2}
 /**
  * Entscheidung als Karte — radikal simpel (Knut 04.11.): ein Satz und EIN Hauptknopf („Ja, so: <Empfehlung>“), leise „Anders …“ und
  * „Was ist das?“. Dort steht alles Übrige: worum es geht, die gemeinten Entscheidungen, Nein, Später, Notiz, Chat, Links. Nach der Antwort
- * bleibt die Karte stehen und zeigt „✓ Ging an …“ (428 W9). Freigaben: nur der Link in die alte Werkbank.
+ * bleibt die Karte stehen und zeigt „✓ Ging an …“ (428 W9). Freigaben: die Freigabe-Ansicht der 2.0, wenn eingeschaltet, sonst die alte Werkbank.
  */
 export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: () => void }) {
   const app = useApp();
@@ -127,6 +128,10 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
   const [unterwegs, setUnterwegs] = useState(false);
   const andersFeld = useRef<HTMLDivElement>(null);
   useEffect(() => { if (modus === 'anders') andersFeld.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, [modus]);
+  // Pass A (UI 1): einmal zur Bestätigung scrollen, wenn sie erscheint — eine Inline-Ref lief bei jedem Neu-Render (Zahl, Nachladen)
+  // und zog die Ansicht immer wieder zurück.
+  const fertigZeile = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { if (fertig) fertigZeile.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [fertig]);
   const lebt = useRef(true);
   useEffect(() => () => { lebt.current = false; }, []);
 
@@ -152,6 +157,8 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
   const n = k.bezug?.length ?? 0;
   const jaText = n ? `Ja, alle ${n} wie empfohlen` : k.empfehlung ? `Ja, so: ${k.empfehlung.length > 70 ? `${k.empfehlung.slice(0, 68)}…` : k.empfehlung}` : 'Ja';
   const strang = k.links.map((l) => /\/v2\/arbeit\/([0-9a-f]{8})$/.exec(l.url)?.[1]).find(Boolean) ?? null;
+  // Knut 06.11. (Freigabe-Ansicht in der 2.0 ja, Schalter WERKBANK_V2_FREIGABE): gibt es sie, ist sie der Hauptknopf der Freigabekarte.
+  const hierFreigeben = freigabe ? k.links.find((l) => /^\/v2\/freigabe\//.test(l.url)) ?? null : null;
   return (
     <article id={`karte-${k.id}`} className={`karte${fertig ? ' erledigt' : ''}${freigabe ? ' freigabe' : ''}`} aria-label={k.titel}>
       {k.thema && k.thema !== 'Sonstiges' && <p className="karte-thema">{k.thema}</p>}
@@ -163,9 +170,9 @@ export function EntscheidungKarte({ k, beantwortet }: { k: Karte; beantwortet?: 
       {sammelKarte(`${k.titel} ${k.worum}`) && !n && !freigabe && !fertig && <p className="klein hinweis-warn">Fasst mehrere Entscheidungen zusammen, die hier nicht einzeln stehen — „Ja, so“ bestätigt alle.{k.bericht ? <> <a href={rel(k.bericht)}>Im Bericht lesen</a></> : null}</p>}
 
       {fertig ? (
-        <p className="ok" role="status" ref={(el) => el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })}>✓ {fertig}</p>
+        <p className="ok" role="status" ref={fertigZeile}>✓ {fertig}</p>
       ) : freigabe || k.alt ? (
-        <div className="antworten"><a className="knopf haupt" href={k.alt ?? app.alt} target="_blank" rel="noopener noreferrer">{freigabe ? 'In der alten Werkbank freigeben ↗' : 'In der alten Werkbank öffnen ↗'}</a><button type="button" className="knopf leise klein" aria-expanded={mehr} onClick={() => setMehr(!mehr)}>Was ist das?</button></div>
+        <div className="antworten">{hierFreigeben ? <a className="knopf haupt" href={rel(hierFreigeben.url)}>{hierFreigeben.label}</a> : <a className="knopf haupt" href={k.alt ?? app.alt} target="_blank" rel="noopener noreferrer">{freigabe ? 'In der alten Werkbank freigeben ↗' : 'In der alten Werkbank öffnen ↗'}</a>}<button type="button" className="knopf leise klein" aria-expanded={mehr} onClick={() => setMehr(!mehr)}>Was ist das?</button></div>
       ) : modus === 'anders' ? (
         <div className="anders" ref={andersFeld}>
           <label className="klein" htmlFor={`anders-${k.id}`}>Was stattdessen? (geht an {k.quelle || 'die Quelle'})</label>

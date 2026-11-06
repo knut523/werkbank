@@ -1,12 +1,12 @@
 // Werkbank 2.0: die Seiten. Eine Startseite („Jetzt“) und vier Bereiche; jede Seite liest genau einen Endpunkt der 2.0-API.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useDiagramme } from './diagramm.ts';
-import { hole, schicke, type Aufraeumen, type ArbeitKarte, type Dok, type Karte, type Link, type PrZeile, type Start } from './api.ts';
+import { abmelden, hole, schicke, type Aufraeumen, type ArbeitKarte, type Dok, type Karte, type Link, type PrZeile, type Start } from './api.ts';
 import { useApp } from './kontext.ts';
 import { Abschnitt, EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweis, Verweise, Zeile } from './teile.tsx';
 import { BEGRIFFE, OLAF_KURZ } from './begriffe.ts';
 import { MEHR, ALT_PFADE } from './mehr.ts';
-import { chatFrage, htmlFuerV2, mehrzahl, ohneStatuszeilen, rel, tabellenBeschriften, wann } from './format.ts';
+import { BERICHT_ANFORDERN, chatFrage, htmlFuerV2, mehrzahl, ohneStatuszeilen, rel, tabellenBeschriften, wann } from './format.ts';
 
 // Radikal simpel: „Prüfung“ statt „Agent/Review“ in Marken.
 const EMPFEHLUNG: Record<string, string> = { approve: 'Prüfung: in Ordnung', 'request-changes': 'Prüfung: Änderungen nötig', comment: 'Prüfung: Anmerkungen' };
@@ -92,8 +92,8 @@ export function Suche({ q }: { q: string }) {
     <div className="seite">
       <SuchFeld q={q} />
       {!s ? <p className="leer">Gib oben ein Wort ein.</p> : <>
-        {gruppe('Unter-Chats und Chats', !chats.d && !chats.fehler, c.length, <ul className="liste">{c.slice(0, 8).map((z) => <Zeile key={z.id} titel={z.titel} url={z.url ?? (z.art === 'unterchat' ? `v2/arbeit/${z.id}` : '#')} satz={ART_TEXT[z.art]} rechts={wann(z.zuletzt)} />)}</ul>, `v2/chats?q=${encodeURIComponent(q.trim())}`)}
-        {s.length >= 3 && gruppe('In Chat-Nachrichten gefunden', !voll.d && !voll.fehler, imText.length, <ul className="liste">{imText.slice(0, 8).map(({ t, z }) => <Zeile key={t.conv} titel={z?.titel ?? 'Chat'} url={z?.url ?? (z?.art === 'unterchat' ? `v2/arbeit/${z.id}` : '#')} satz={`„${t.auszug}“`} rechts={wann(t.at)} />)}</ul>, null)}
+        {gruppe('Unter-Chats und Chats', !chats.d && !chats.fehler, c.length, <ul className="liste">{c.slice(0, 8).map((z) => <Zeile key={z.id} titel={z.titel} url={z.url ?? (z.art === 'unterchat' ? `v2/arbeit/${z.id}` : null)} satz={ART_TEXT[z.art]} rechts={wann(z.zuletzt)} />)}</ul>, `v2/chats?q=${encodeURIComponent(q.trim())}`)}
+        {s.length >= 3 && gruppe('In Chat-Nachrichten gefunden', !voll.d && !voll.fehler, imText.length, <ul className="liste">{imText.slice(0, 8).map(({ t, z }) => <Zeile key={t.conv} titel={z?.titel ?? 'Chat'} url={z?.url ?? (z?.art === 'unterchat' ? `v2/arbeit/${z.id}` : null)} satz={`„${t.auszug}“`} rechts={wann(t.at)} />)}</ul>, null)}
         {gruppe('Dokumente', !doks.d && !doks.fehler, doks.d?.treffer.length ?? 0, <ul className="liste">{(doks.d?.treffer ?? []).slice(0, 8).map((x) => <DokZeile key={x.url} x={x} />)}</ul>, `v2/dokumente?q=${encodeURIComponent(q.trim())}`)}
         {!prs.d?.gesperrt && gruppe('PRs', !prs.d && !prs.fehler, p.length, <ul className="liste">{p.slice(0, 8).map((z) => <PrZeileView key={z.pr} p={z} />)}</ul>, 'v2/prs?wer=alle')}
       </>}
@@ -133,7 +133,7 @@ interface Ueberholt { id: string; titel: string; grund: string; beleg: string }
 const DokZeile = ({ x }: { x: Dok }) => <Zeile titel={x.titel} url={x.url} satz={x.thema && x.thema !== 'Sonstiges' ? `${x.thema} · ${x.worum}` : x.worum} marke={{ text: x.art === 'bericht' ? 'Bericht' : 'Notiz' }} rechts={wann(x.at)} />;
 // S22 (Christoph B3): in der Liste sieht man, ob und wie der Prüf-Agent geurteilt hat — auch „prüft noch“ und „fertig, noch nicht veröffentlicht“.
 // Audit 05.11. (6): ein Review zu einem älteren Commit ist veraltet — das sagt die Marke zuerst.
-const agentMarke = (r: PrZeile['review']) => !r ? undefined : (r as any).aktuell === false && r.status === 'fertig' ? { text: `Review zu altem Stand (${(r as any).kopf}) — neuer Stand ${(r as any).neuerKopf}`, ton: 'warn' } : r.empfehlung ? { text: EMPFEHLUNG[r.empfehlung] ?? `Prüfung: ${r.empfehlung}`, ton: r.empfehlung === 'approve' ? 'gruen' : '' } : r.status !== 'fertig' ? { text: 'wird geprüft …' } : { text: r.gepostet === false ? 'Prüfung noch nicht veröffentlicht' : 'geprüft' };
+const agentMarke = (r: PrZeile['review']) => !r ? undefined : r.aktuell === false && r.status === 'fertig' ? { text: `Review zu altem Stand (${r.kopf}) — neuer Stand ${r.neuerKopf}`, ton: 'warn' } : r.empfehlung ? { text: EMPFEHLUNG[r.empfehlung] ?? `Prüfung: ${r.empfehlung}`, ton: r.empfehlung === 'approve' ? 'gruen' : '' } : r.status !== 'fertig' ? { text: 'wird geprüft …' } : { text: r.gepostet === false ? 'Prüfung noch nicht veröffentlicht' : 'geprüft' };
 /** Paket 436 (Knut 04.11.): was nach dem letzten automatischen Fix an offenen Punkten (jeder Reviewer) geblieben ist — an der Karte. */
 const fixSatz = (f: PrZeile['fix']) => (!f ? '' : f.lesbar === false ? ' · letzter Fix: offene Punkte nicht prüfbar (PR nicht lesbar)' : f.offen ? ` · nach dem letzten Fix ${f.offen === 1 ? '1 Punkt' : `${f.offen} Punkte`} offen` : f.gesamt ? ' · letzter Fix: alle Punkte abgehakt' : '');
 const GRUND: Record<string, string> = { 'nicht-behandelt': 'vom Fix nicht behandelt', frage: 'Rückfrage des Fixes', 'nicht-behoben': 'nicht behoben', 'ohne-commit': 'als behoben gemeldet, aber ohne Commit in diesem Push' };
@@ -159,7 +159,7 @@ export function Entscheidungen() {
       <p className="unterzeile">{bc ? `${d.oben.length + d.rest.length} Entscheidungen, die nur du treffen kannst (Geld, Recht, Zugang, Außenwirkung, Release).` : 'Alles, was auf dich wartet. „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — die Antwort geht an den richtigen Unter-Chat.'}</p>
       <WieBisher href="v2/entscheidungen-bisher" text="Entscheidungen wie bisher: Themenfilter, „Alle wie empfohlen“, Log mit Filtern, Später" />
       {/* Plan §23 T4/T5: was nicht hier steht, entscheidet Claude (technisch) bzw. der Hauptchat nach Council (gewichtig) — sichtbar und umkehrbar. */}
-      {bc && <p className="klein bei-claude">{bc.technisch || bc.gewichtig ? <>Nicht für dich: {bc.technisch ? `${bc.technisch} technische ${bc.technisch === 1 ? 'Frage entscheidet' : 'Fragen entscheidet'} Claude nach Empfehlung` : ''}{bc.technisch && bc.gewichtig ? ', ' : ''}{bc.gewichtig ? `${bc.gewichtig} gewichtige ${bc.gewichtig === 1 ? 'geht' : 'gehen'} vorher durch einen Council-Check` : ''}. </> : null}<a href="v2/entschieden">Von Claude entschieden →</a></p>}
+      {bc && <p className="klein bei-claude">{bc.technisch || bc.gewichtig ? <>Nicht für dich: {bc.technisch ? `${bc.technisch} technische ${bc.technisch === 1 ? 'Frage entscheidet' : 'Fragen entscheidet'} Claude nach Empfehlung` : ''}{bc.technisch && bc.gewichtig ? ', ' : ''}{bc.gewichtig ? `${bc.gewichtig} gewichtige ${bc.gewichtig === 1 ? 'geht' : 'gehen'} vorher durch eine Prüfrunde mit Gegenstimmen` : ''}. </> : null}<a href="v2/entschieden">Von Claude entschieden →</a></p>}
       {/* Persona R7 „Knut morgens, 2 Minuten“: erst der Überblick — je Thema eine kurze Zeile je Entscheidung, Klick springt zur Karte. */}
       {bc && <Ueberblick karten={[...d.oben, ...d.rest]} />}
       {!bc && <p className="zusammensetzung">Die Zahl oben rechts: {d.oben.length + d.rest.length} {d.oben.length + d.rest.length === 1 ? 'Frage' : 'Fragen und Freigaben'}{d.aufraeumen.length ? ` + ${d.aufraeumen.length} ${d.aufraeumen.length === 1 ? 'Sammelposten' : 'Sammelposten'} zum Aufräumen` : ''} = {d.zahl}.{d.ueberholt?.length ? <> <a href="#e-ueberholt">{mehrzahl(d.ueberholt.length, 'Freigabe ist überholt und zählt', 'Freigaben sind überholt und zählen')} nicht ↓</a></> : null}{d.geschlossen?.length ? <> <a href="#e-geschlossen">{mehrzahl(d.geschlossen.length, 'Frage hat', 'Fragen haben')} sich von selbst erledigt ↓</a></> : null}</p>}
@@ -219,7 +219,7 @@ function AnsehenKarte({ k, fertig }: { k: { id: string; titel: string; thema: st
     catch (e: any) { setMeldung(String(e?.message ?? e)); setLaeuft(false); }
   };
   // Audit 05.11. (5): ohne Bericht ist „fertig“ kein abnehmbarer Stand — zuerst den Bericht anfordern; abnehmen nur ausdrücklich.
-  const BERICHT = 'Bitte schreib den Bericht (Abschnitte wie im Auftrag) und melde dich dann mit „### Stand“ und „Status: fertig“.';
+  const BERICHT = BERICHT_ANFORDERN;
   return (
     <article id={`ansehen-${k.id}`} className="karte ansehen" aria-label={k.titel}>
       {k.thema && k.thema !== 'Sonstiges' && <p className="karte-thema">{k.thema}</p>}
@@ -400,7 +400,7 @@ function UnterChatStarten({ fertig }: { fertig: () => void }) {
     setLaeuft(true); setMeldung(null);
     try {
       const r = await schicke<{ id: string; warning?: string; g0?: { ergebnis: string } | null }>('api/arbeit/start', f);
-      setMeldung({ text: r.g0 && r.g0.ergebnis !== 'ok' ? 'Gestoppt vor dem Bau (G0) — die Rückfrage steht unter Entscheidungen.' : `Gestartet${r.warning ? ` — ${r.warning}` : ''}.`, url: r.id ? `v2/arbeit/${r.id}` : undefined });
+      setMeldung({ text: r.g0 && r.g0.ergebnis !== 'ok' ? 'Vor dem Start angehalten (Vorab-Prüfung) — die Rückfrage steht unter Entscheidungen.' : `Gestartet${r.warning ? ` — ${r.warning}` : ''}.`, url: r.id ? `v2/arbeit/${r.id}` : undefined });
       setF((x) => ({ ...x, titel: '', auftrag: '' })); fertig();
     } catch (e: any) { setMeldung({ text: String(e?.message ?? e) }); } finally { setLaeuft(false); }
   };
@@ -408,7 +408,7 @@ function UnterChatStarten({ fertig }: { fertig: () => void }) {
     <form className="kasten start-form" aria-label="Neuer Unter-Chat" onSubmit={(e) => { e.preventDefault(); void starten(); }}>
       <p className="gruppe-titel">Neuer Unter-Chat</p>
       {opt?.dryRun && <p className="hinweis klein">Vorschau: hier startet kein Unter-Chat.</p>}
-      <label className="klein">Repo <select value={f.repo} onChange={(e) => setF({ ...f, repo: e.target.value })}>{(opt?.repos ?? []).map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}</select></label>{' '}
+      <label className="klein">Code-Projekt <select value={f.repo} onChange={(e) => setF({ ...f, repo: e.target.value })}>{(opt?.repos ?? []).map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}</select></label>{' '}
       <label className="klein">Tiefe <select value={f.tiefe} onChange={(e) => setF({ ...f, tiefe: e.target.value })}>{(opt?.tiefen ?? ['regular']).map((t) => <option key={t} value={t}>{TIEFE[t] ?? t}</option>)}</select></label>
       <label className="klein">Titel (optional) <input type="text" value={f.titel} maxLength={100} onChange={(e) => setF({ ...f, titel: e.target.value })} /></label>
       <label className="klein">Auftrag <textarea rows={4} value={f.auftrag} maxLength={8000} placeholder="In ein, zwei Sätzen: was soll am Ende fertig sein?" onChange={(e) => setF({ ...f, auftrag: e.target.value })} /></label>
@@ -434,7 +434,7 @@ export function Freigabe({ id }: { id: string }) {
   const frei = async () => {
     if (r.fehler !== undefined) return;
     setLaeuft(true); setMeldung(null);
-    try { await schicke(`api/review/${id}/freigabe`, { head: r.head, patchId: r.patchId }); setMeldung('Freigegeben — der Unter-Chat pusht jetzt über das Gate.'); neu(); }
+    try { await schicke(`api/review/${id}/freigabe`, { head: r.head, patchId: r.patchId }); setMeldung('Freigegeben — der Unter-Chat lädt genau diesen Stand jetzt nach GitHub hoch (nach einer letzten Prüfung).'); neu(); }
     catch (e: any) { setMeldung(String(e?.message ?? e)); } finally { setLaeuft(false); }
   };
   const zurueck = async (fid: string) => {
@@ -466,43 +466,6 @@ export function Freigabe({ id }: { id: string }) {
   );
 }
 
-export function ArbeitDetail({ id }: { id: string }) {
-  const app = useApp();
-  const { d, fehler, neu } = useDaten<{ titel: string; satz: string; gruppe: string; zuletzt: string | null; stand: string; fragen: Karte[]; nachrichten: { id: string; rolle: string; text: string; at: string }[]; links: Link[];
-    abgleich?: { offenListe: string[]; offenBericht: string[]; agentNennt: string[]; zeilen: { d: string; bericht: string | null; wiederOffen: boolean }[] } | null; steckbrief?: Steckbrief }>(`api/v2/arbeit/${id}`);
-  const [alle, setAlle] = useState(false);
-  const [verlauf, setVerlauf] = useState(false);
-  if (fehler) return <Fehler text={fehler} nochmal={neu} />;
-  if (!d) return <Laedt />;
-  const msgs = alle ? d.nachrichten : d.nachrichten.slice(-3);
-  return (
-    <div className="seite">
-      <p className="zurueck"><a href="v2/arbeit">← Arbeit</a></p>
-      <h1>{d.titel}</h1>
-      {/* Radikal simpel: ist für dich nichts mehr offen, steht genau das da — ein Satz, kein zweiter Kasten. */}
-      {d.abgleich && !d.abgleich.offenListe.length && !d.fragen.length
-        ? <p className="zustand fertig">Für dich ist hier nichts offen — deine Antworten sind beim Agenten; Bericht und Stand zieht er beim nächsten Zug nach.</p>
-        : <p className={`zustand ${d.gruppe}`}>{d.satz}</p>}
-      {d.steckbrief && <SteckbriefKasten s={d.steckbrief} titel={d.titel} id={id} />}
-      <Nachreichen id={id} />
-      <div className="aktionen-zeile"><Verweise links={d.links.filter((l) => !l.extern)} /></div>
-      {d.abgleich && d.abgleich.offenListe.length > 0 && <Abgleich a={d.abgleich} />}
-      {d.fragen.length > 0 && (
-        <Abschnitt id="d-fragen" titel={d.fragen.length === 1 ? 'Diese Frage ist in deiner Liste offen' : 'Diese Fragen sind in deiner Liste offen'} erklaerung="Fragen aus diesem Unter-Chat, die noch auf deine Antwort warten. Sagt der Agent unten etwas anderes, gilt deine Antwort hier — sie geht direkt an ihn.">
-          <div className="karten">{d.fragen.map((k) => <EntscheidungKarte key={k.id} k={k} beantwortet={() => app.zahl(null)} />)}</div>
-        </Abschnitt>
-      )}
-      {d.stand && <details className="kasten stand-auf" open={!d.fragen.length && !d.abgleich}><summary>Letzter Stand des Agenten{d.abgleich && !d.abgleich.offenListe.length ? ' — geschrieben vor deinen Antworten' : ''}</summary><Md text={d.stand} /></details>}
-      {d.nachrichten.length > 0 && !verlauf && <p><button type="button" className="knopf leise klein" onClick={() => setVerlauf(true)}>Verlauf des Unter-Chats zeigen</button></p>}
-      {d.nachrichten.length > 0 && verlauf && (
-        <Abschnitt id="d-verlauf" titel="Verlauf" erklaerung="Die letzten Nachrichten dieses Unter-Chats." fuss={d.nachrichten.length > 3 ? <button type="button" className="knopf leise klein" onClick={() => setAlle(!alle)}>{alle ? 'Nur die letzten 3' : `Alle ${d.nachrichten.length} zeigen`}</button> : null}>
-          {msgs.map((n) => <div key={n.id} className={`blase ${n.rolle}`}><p className="klein gedimmt">{n.rolle === 'ich' ? 'Du / Auftrag' : 'Agent'} · {wann(n.at)}</p><Md text={(n.rolle === 'ich' ? n.text : ohneStatuszeilen(n.text)).slice(0, 6000)} klein /></div>)}
-        </Abschnitt>
-      )}
-    </div>
-  );
-}
-
 /** Runde 7 (Knut: DoD): liegen gebliebene Enden — was fertig gemeldete Unter-Chats noch offen lassen, je mit Besitzer. */
 /** Plan §24 A4: was die Hauptsitzung erledigen muss (Live-Gang nach Commit, Deploy-Go …) — aus den Stand-Blöcken, abhakbar. */
 interface Bedarf { id: string; art: string; artName: string; text: string; pfad: string | null; strang: { id: string; titel: string }; at: string }
@@ -510,15 +473,23 @@ function HauptsitzungListe() {
   const { d, neu } = useDaten<{ punkte: { key: string; strand: string; titel: string; text: string; erledigt: boolean }[]; bedarf?: Bedarf[] }>('api/v2/hauptsitzung');
   const offen = (d?.punkte ?? []).filter((p) => !p.erledigt);
   const bedarf = d?.bedarf ?? [];
+  const [fehler, setFehler] = useState<string | null>(null);
+  const [gesetzt, setGesetzt] = useState<Set<string>>(new Set());
   if (!offen.length && !bedarf.length) return null;
-  const haken = async (key: string) => { await schicke(`api/v2/hauptsitzung/${encodeURIComponent(key)}`, { erledigt: true }).catch(() => null); neu(); };
+  // Pass A (UI 14): Fehler sichtbar und die Checkbox gesteuert — sonst blieb sie angehakt, obwohl nichts gespeichert war
+  const haken = async (key: string) => {
+    setFehler(null); setGesetzt((g) => new Set(g).add(key));
+    try { await schicke(`api/v2/hauptsitzung/${encodeURIComponent(key)}`, { erledigt: true }); neu(); }
+    catch (e: any) { setGesetzt((g) => { const n = new Set(g); n.delete(key); return n; }); setFehler(`Nicht gespeichert: ${e?.message ?? e}`); }
+  };
   return (
     <section className="abschnitt hauptsitzung">
       <h2>Für die Hauptsitzung ({offen.length + bedarf.length})</h2>
       {/* Bedarfskanal (Knut 06.11.): was Unter-Chats brauchen — sie arbeiten inzwischen am Rest weiter. */}
       {bedarf.length > 0 && <ul className="liste">{bedarf.map((b) => <BedarfZeile key={b.id} b={b} fertig={neu} />)}</ul>}
+      {fehler && <p className="fehlertext klein" role="alert">{fehler}</p>}
       <ul className="liste">{offen.map((p) => (
-        <li key={p.key} className="zeile"><label><input type="checkbox" onChange={() => haken(p.key)} /> {p.text}</label> <a className="klein gedimmt" href={`v2/arbeit/${p.strand}`}>{p.titel}</a></li>
+        <li key={p.key} className="zeile"><label><input type="checkbox" checked={gesetzt.has(p.key)} disabled={gesetzt.has(p.key)} onChange={() => void haken(p.key)} /> {p.text}</label> <a className="klein gedimmt" href={`v2/arbeit/${p.strand}`}>{p.titel}</a></li>
       ))}</ul>
     </section>
   );
@@ -569,25 +540,6 @@ function Enden({ kurz = false }: { kurz?: boolean }) {
   );
 }
 
-/** Runde 7 (Abgleich: „Nachreichen an einen laufenden Unter-Chat“ fehlte in 2.0, 148× genutzt). Läuft er, liest er es im Zug. */
-function Nachreichen({ id }: { id: string }) {
-  const [offen, setOffen] = useState(false);
-  const [text, setText] = useState('');
-  const [laeuft, setLaeuft] = useState(false);
-  const [meldung, setMeldung] = useState<string | null>(null);
-  if (!offen) return <p><button type="button" className="knopf leise klein" onClick={() => { setOffen(true); setMeldung(null); }}>Dem Unter-Chat etwas schreiben …</button>{meldung && <span className="ok klein" role="status"> {meldung}</span>}</p>;
-  return (
-    <div className="anders">
-      <label className="klein" htmlFor={`nach-${id}`}>Nachricht an den Unter-Chat — läuft er gerade, liest er sie noch in diesem Zug</label>
-      <textarea id={`nach-${id}`} rows={3} value={text} maxLength={8000} onChange={(e) => setText(e.target.value)} placeholder="z. B. „Bitte zuerst die Tests, dann der Bericht.“" autoFocus />
-      <div className="antworten">
-        <button type="button" className="knopf haupt" disabled={laeuft || !text.trim()} onClick={async () => { setLaeuft(true); try { await schicke(`api/v2/arbeit/${id}/nachricht`, { text }); setText(''); setOffen(false); setMeldung('✓ Zugestellt.'); } catch (e: any) { setMeldung(e.message); setOffen(false); } finally { setLaeuft(false); } }}>{laeuft ? 'Sendet …' : 'Senden'}</button>
-        <button type="button" className="knopf leise" onClick={() => setOffen(false)}>Abbrechen</button>
-      </div>
-    </div>
-  );
-}
-
 export interface Steckbrief { wofuer: string; gestartet: string | null; ueber: string | null; jetzt: string | null; laeuft: boolean; seit: number | null; schritte: { text: string; stand: 'fertig' | 'offen' }[]; eta: { text: string; ueberfaellig: boolean } | null; genauigkeit?: string | null;
   wartetAuf: { wer: string; was: string }[]; ergebnisse: Link[];
   dod?: { zeilen: { text: string; haken: boolean; beleg: string | null; besitzer: string | null; erledigt: boolean }[]; folgen: { text: string; besitzer: string | null }[] }; fast?: { fehlt: string[]; wartetAuf: string[] } | null; ruhtMin?: number | null; eingereiht?: { at: string; grund: string }[]; beruehrt: { repos: string[]; text: string | null; ordner: string | null; dateien: string[] }; modell: string | null; laufzeitMin: number | null; zugTokens: number | null; laeufer?: { wer: string; grund: string | null } | null }
@@ -618,7 +570,7 @@ export function SteckbriefKasten({ s, titel, id }: { s: Steckbrief; titel: strin
       <dl>
         <div><dt>Wofür</dt><dd>{s.wofuer}{s.gestartet ? <span className="klein gedimmt"> — gestartet {wann(s.gestartet)}{s.ueber ? ` über „${s.ueber}“` : ''}</span> : null}</dd></div>
         {s.laeufer && <div><dt>Läuft mit</dt><dd>{s.laeufer.wer}{s.laeufer.grund ? <span className="klein gedimmt"> — {s.laeufer.grund}</span> : null}</dd></div>}
-        <div><dt>Jetzt gerade</dt><dd>{s.laeuft && <span className="live" aria-label="läuft">● </span>}{s.jetzt ?? (s.laeuft ? 'arbeitet' : s.ruhtMin != null ? `ruht seit ${dauer(s.ruhtMin)} — kein Zug läuft` : 'ruht gerade — kein Zug läuft')}{s.seit ? <span className="klein gedimmt"> (seit {dauer(Math.max(1, Math.round((Date.now() - s.seit) / 60000)))})</span> : null}</dd></div>
+        <div><dt>Jetzt gerade</dt><dd>{s.laeuft && <><span className="live" aria-hidden="true">● </span><span className="unsichtbar">läuft: </span></>}{s.jetzt ?? (s.laeuft ? 'arbeitet' : s.ruhtMin != null ? `ruht seit ${dauer(s.ruhtMin)} — kein Zug läuft` : 'ruht gerade — kein Zug läuft')}{s.seit ? <span className="klein gedimmt"> (seit {dauer(Math.max(1, Math.round((Date.now() - s.seit) / 60000)))})</span> : null}</dd></div>
         {(s.eta && s.laeuft || s.genauigkeit) && <div><dt>Zeitschätzung</dt><dd>{s.eta && s.laeuft ? (s.eta.ueberfaellig ? 'überfällig — dauert länger als geschätzt' : s.eta.text) : 'kein Lauf gerade'}{s.genauigkeit ? <span className="klein gedimmt"> — {s.genauigkeit}</span> : null}</dd></div>}
         {s.schritte.length > 0 && <div><dt>Fortschritt</dt><dd>
           <p className="klein gedimmt">{fertig} von {s.schritte.length} Schritten{s.eta && s.laeuft ? ` · ${s.eta.ueberfaellig ? 'überfällig — dauert länger als geschätzt' : `fertig ${s.eta.text}`}` : ''}</p>
@@ -634,7 +586,7 @@ export function SteckbriefKasten({ s, titel, id }: { s: Steckbrief; titel: strin
         {!!s.eingereiht?.length && <div><dt>Eingereiht</dt><dd className="klein">{s.eingereiht.length === 1 ? 'Eine Nachricht' : `${s.eingereiht.length} Nachrichten`} seit {wann(s.eingereiht[0].at)} — kommt beim nächsten freien Zug an ({s.eingereiht[0].grund})</dd></div>}
         {s.ergebnisse.length > 0 && <div><dt>Ergebnisse</dt><dd className="verweise">{s.ergebnisse.map((l, i) => l.url ? <Verweis key={i} l={l} /> : <span key={i} className="verweis">{l.label}</span>)}</dd></div>}
         {(s.beruehrt.repos.length > 0 || s.beruehrt.text || s.beruehrt.dateien.length > 0) && <div><dt>Berührt</dt><dd className="klein">{[s.beruehrt.repos.join(', '), s.beruehrt.text, s.beruehrt.dateien.length ? `zuletzt geschrieben: ${s.beruehrt.dateien.join(', ')}` : ''].filter(Boolean).join(' · ')}</dd></div>}
-        <div><dt>Modell · Laufzeit</dt><dd className="klein">{[s.modell, s.laufzeitMin != null ? `gestartet vor ${dauer(s.laufzeitMin)}` : null, s.zugTokens ? `dieser Zug ≈ ${Math.round(s.zugTokens / 1000)}k Tokens` : null].filter(Boolean).join(' · ') || '—'}</dd></div>
+        <div><dt>Modell · Laufzeit</dt><dd className="klein">{[s.modell, s.laufzeitMin != null ? `gestartet vor ${dauer(s.laufzeitMin)}` : null, s.zugTokens ? `diese Runde ≈ ${Math.round(s.zugTokens / 1000)}k Tokens` : null].filter(Boolean).join(' · ') || '—'}</dd></div>
       </dl>
       <button type="button" className="knopf klein" onClick={() => app.chat(`Was macht der Unter-Chat „${titel}“ (${id}) gerade? Fass in drei Sätzen zusammen: was er tut, was fertig ist, was er von mir braucht.`)}>Was macht der gerade?</button>
       <EntschiedenListe strand={id} kurz />
@@ -663,7 +615,7 @@ function EntschiedenListe({ strand, kurz: knapp }: { strand?: string; kurz?: boo
       <ul className="liste">{d.zeilen.slice(0, knapp ? 5 : 200).map((z) => (
         <li key={z.id} className="zeile">
           <p className="zeile-titel">{z.frage}</p>
-          <p className="klein">{z.antwort}{z.council ? ` · Council: ${z.council.urteil}${z.council.satz ? ` — ${z.council.satz}` : ''}` : ''}{!strand && z.strand ? ` · ${z.strand.titel}` : ''} · {wann(z.at)}</p>
+          <p className="klein">{z.antwort}{z.council ? ` · Prüfrunde: ${z.council.urteil}${z.council.satz ? ` — ${z.council.satz}` : ''}` : ''}{!strand && z.strand ? ` · ${z.strand.titel}` : ''} · {wann(z.at)}</p>
           {z.widerruf ? <p className="klein gedimmt">Umgekehrt {wann(z.widerruf.at)}: {z.widerruf.text}</p>
             : z.widerrufbar ? <button type="button" className="knopf klein" onClick={() => umkehren(z)}>Umkehren</button>
             : <p className="klein gedimmt">{z.widerrufGrund}</p>}
@@ -677,7 +629,7 @@ export function Entschieden() {
     <div className="seite">
       <p><a href="v2/entscheidungen">← Für dich</a></p>
       <h1>Von Claude entschieden</h1>
-      <p className="unterzeile">Technische und interne Fragen entscheidet Claude nach Empfehlung, gewichtige erst nach einem Council-Check. Alles hier ist umkehrbar: „Umkehren“ schickt es an den Unter-Chat zurück.</p>
+      <p className="unterzeile">Technische und interne Fragen entscheidet Claude nach Empfehlung, gewichtige erst nach einer Prüfrunde mit Gegenstimmen. Alles hier ist umkehrbar: „Umkehren“ schickt es an den Unter-Chat zurück.</p>
       <EntschiedenListe />
     </div>
   );
@@ -754,21 +706,28 @@ function PrAktionen({ pr, fertig }: { pr: string; fertig: () => void }) {
   const app = useApp();
   const [auftrag, setAuftrag] = useState<string | null>(null);
   const [meldung, setMeldung] = useState<string | null>(null);
+  const [laeuft, setLaeuft] = useState(false);   // Pass A (UI 3): kein Doppelklick — sonst zwei Unter-Chats für denselben PR
   if (!app.ich.admin) return null;
   const los = async (art: 'review' | 'tief' | 'fixen' | 'auftrag', text = '') => {
+    if (laeuft) return;
+    setLaeuft(true);
     try { const r = await schicke<{ hinweis: string }>('api/v2/pr-aktion', { pr, art, text }); setMeldung(r.hinweis); setAuftrag(null); setTimeout(fertig, 1500); }
     catch (e: any) { setMeldung(String(e?.message ?? e)); }
+    finally { setLaeuft(false); }
   };
+  const genugAuftrag = (auftrag ?? '').trim().length >= 10;
   return (
     <div className="kasten pr-aktionen">
       <p className="klein"><b>Ein Unter-Chat soll ran:</b></p>
       <div className="knoepfe">
-        <button type="button" className="knopf" onClick={() => los('review')} title="drei Prüfmodelle und ein Verifizierer (Melious, EU), danach prüft Claude jeden Befund">Review</button>
-        <button type="button" className="knopf" onClick={() => los('tief')} title="wie Review, dazu mehr Durchgänge, Council und Tests">Tiefes Review</button>
-        <button type="button" className="knopf" onClick={() => los('fixen')} title="offene Review-Punkte beheben; Push nur über Prüfung und Freigabe">Fixen</button>
-        <button type="button" className="knopf leise" onClick={() => setAuftrag(auftrag === null ? '' : null)}>Auftrag …</button>
+        <button type="button" className="knopf" disabled={laeuft} onClick={() => los('review')}>Review</button>
+        <button type="button" className="knopf" disabled={laeuft} onClick={() => los('tief')}>Tiefes Review</button>
+        <button type="button" className="knopf" disabled={laeuft} onClick={() => los('fixen')}>Fixen</button>
+        <button type="button" className="knopf leise" disabled={laeuft} onClick={() => setAuftrag(auftrag === null ? '' : null)}>Auftrag …</button>
       </div>
-      {auftrag !== null && <div className="anders"><textarea rows={2} placeholder="Was soll an diesem PR passieren?" value={auftrag} onChange={(e) => setAuftrag(e.target.value)} /><button type="button" className="knopf haupt klein" onClick={() => los('auftrag', auftrag)}>Unter-Chat starten</button></div>}
+      {/* Pass A (Spec 2): der Hinweis sichtbar statt nur als Tooltip (Handy, Tastatur, Vorlesen) */}
+      <p className="klein gedimmt">Review: drei Prüfmodelle aus der EU (Melious) und eines, das ihre Befunde gegenprüft — danach prüft Claude jeden Befund. Tiefes Review: dazu mehr Durchgänge, eine Prüfrunde mit Gegenstimmen und Tests. Fixen: offene Review-Punkte beheben; hochgeladen wird nur nach Prüfung und Freigabe.</p>
+      {auftrag !== null && <div className="anders"><textarea rows={2} placeholder="Was soll an diesem PR passieren? (mindestens ein Satz)" value={auftrag} onChange={(e) => setAuftrag(e.target.value)} /><button type="button" className="knopf haupt klein" disabled={laeuft || !genugAuftrag} onClick={() => los('auftrag', auftrag)}>{laeuft ? 'Startet …' : 'Unter-Chat starten'}</button></div>}
       {meldung && <p className="hinweis klein" role="status">{meldung}</p>}
     </div>
   );
@@ -777,7 +736,7 @@ function PrAktionen({ pr, fertig }: { pr: string; fertig: () => void }) {
 export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
   const app = useApp();
   const { d, fehler, neu } = useDaten<{ pr: string; titel: string; url: string | null; autor: string | null; offen: boolean; merge: boolean; wartetAuf: string[]; warum: string; entscheidung: string | null; offeneThreads: number; reviews: { wer: string; zustand: string; at: string }[];
-    verlangt?: { wer: string[]; unbekannt: boolean }; fix?: { at: string | null; lesbar: boolean; gesamt: number; status: string | null; offen: { wer: string; art: string; wo: string | null; text: string; grund: string | null; notiz: string | null }[] } | null; agent: { status: string; empfehlung: string | null; text: string | null; kurz?: { satz: string; befunde: number } | null; gepostet: string | null; entwurf: boolean; at: string; bericht: string | null } | null }>(`api/v2/prs/${encodeURIComponent(repo)}/${nummer}`);
+    verlangt?: { wer: string[]; unbekannt: boolean }; straenge?: { id: string; titel: string; zustand: string }[]; fix?: { at: string | null; lesbar: boolean; gesamt: number; status: string | null; offen: { wer: string; art: string; wo: string | null; text: string; grund: string | null; notiz: string | null }[] } | null; agent: { status: string; empfehlung: string | null; text: string | null; kurz?: { satz: string; befunde: number } | null; aktuell?: boolean | null; kopf?: string | null; neuerKopf?: string | null; gepostet: string | null; entwurf: boolean; at: string; bericht: string | null } | null }>(`api/v2/prs/${encodeURIComponent(repo)}/${nummer}`);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   const ZUSTAND: Record<string, string> = { APPROVED: 'freigegeben', CHANGES_REQUESTED: 'Änderungen verlangt', COMMENTED: 'kommentiert', DISMISSED: 'zurückgezogen' };
@@ -799,10 +758,8 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
         <button type="button" className="knopf leise klein" onClick={() => app.chat(chatFrage(`PR ${d.pr}`, d.titel))}>Im Chat nachfragen</button>
       </div>
       {/* Knut 05.11. abends (1): Aktionen je PR — jede reiht einen Strang ein; Push/Merge gibt es hier nicht. */}
-      {!!(d as any).straenge?.length && <p className="hinweis klein" role="status">{((d as any).straenge as { id: string; titel: string; zustand: string }[]).map((s, i) => <span key={s.id}>{i ? ' · ' : ''}Unter-Chat <a href={`v2/arbeit/${s.id}`}>„{s.titel}“</a> arbeitet daran — {s.zustand}</span>)}</p>}
+      {!!d.straenge?.length && <p className="hinweis klein" role="status">{d.straenge!.map((s, i) => <span key={s.id}>{i ? ' · ' : ''}Unter-Chat <a href={`v2/arbeit/${s.id}`}>„{s.titel}“</a> arbeitet daran — {s.zustand}</span>)}</p>}
       {d.offen && <PrAktionen pr={d.pr} fertig={neu} />}
-      <div className="aktionen-zeile">
-      </div>
       {d.fix && (
         <Abschnitt id="p-fix" titel={!d.fix.lesbar ? 'Letzter Fix: offene Punkte nicht prüfbar' : d.fix.offen.length ? `Nach dem letzten Fix offen (${d.fix.offen.length} von ${d.fix.gesamt})` : 'Letzter Fix: alle offenen Punkte abgehakt'}
           erklaerung="Vor jedem Push eines automatischen Fixes sammelt der Workspace alle offenen Kommentare und ungelösten Threads von jedem Reviewer ein und hakt sie gegen den Fix ab. Was danach offen ist, steht hier — und im Kommentar am PR.">
@@ -817,7 +774,7 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
         {d.autor && <p className="klein gedimmt">Geschrieben von {d.autor}.</p>}
       </Abschnitt>
       <Abschnitt id="p-agent" titel="Review des Agenten" erklaerung="Was der Review-Agent zu diesem PR geschrieben hat — derselbe Text, der auf GitHub steht. Du brauchst dafür kein GitHub-Konto.">
-        {(d.agent as any)?.aktuell === false && <p className="hinweis klein" role="note">Dieses Review gilt für Commit {(d.agent as any).kopf}; der PR steht inzwischen auf {(d.agent as any).neuerKopf}. Ein neues Review stellt die Werkbank von selbst an (höchstens 3 am Tag){app.ich.admin ? ' — oder oben „Review“ drücken' : ''}.</p>}
+        {d.agent?.aktuell === false && <p className="hinweis klein" role="note">Dieses Review gilt für Commit {d.agent.kopf}; der PR steht inzwischen auf {d.agent.neuerKopf}. Ein neues Review stellt die Werkbank von selbst an (höchstens 3 am Tag){app.ich.admin ? ' — oder oben „Review“ drücken' : ''}.</p>}
         {d.agent?.text ? (
           <div className="kasten">
             <p><span className={`marke ${d.agent.empfehlung === 'approve' ? 'gruen' : 'warn'}`}>{EMPFEHLUNG[d.agent.empfehlung ?? ''] ?? 'Agent'}</span> <span className="klein gedimmt">{wann(d.agent.at)}</span>{d.agent.entwurf && <> <span className="marke">Entwurf — noch nicht auf GitHub</span></>}</p>
@@ -1001,10 +958,10 @@ export function Mehr() {
       <Abschnitt id="m-bereiche" titel="Weitere Bereiche" erklaerung="Die Seiten der alten Werkbank, hier eingebaut — mit allem, was sie dort können (Jira-Board mit PM/DEV-Umschalter, Tickets ziehen, Mein Tag planen …).">
         <ul className="liste">{MEHR.filter((e) => e.ziel === 'v2' && e.url in ALT_PFADE).map((e) => <Zeile key={e.alt} titel={e.titel} url={e.url} satz={e.satz} />)}</ul>
       </Abschnitt>
-      <Abschnitt id="m-alt" titel="In der alten Werkbank" erklaerung="Diese Seiten gibt es (noch) nur in der alten Werkbank. Ein Klick öffnet sie in einem neuen Tab; die Anmeldung gilt dort auch.">
-        <ul className="liste">{alt.map((e) => <Zeile key={e.alt} titel={e.titel} url={app.alt ? `${app.alt}/${e.url}` : '#'} satz={e.satz} />)}</ul>
-      </Abschnitt>
-      <p className="klein gedimmt">Angemeldet als <b>{app.ich.name}</b>. <button type="button" className="knopf leise klein" onClick={() => fetch('api/logout', { method: 'POST', headers: { 'x-werkbank': '1' } }).finally(() => window.dispatchEvent(new Event('v2-abgemeldet')))}>Abmelden</button></p>
+      {alt.length > 0 && <Abschnitt id="m-alt" titel="In der alten Werkbank" erklaerung="Diese Seiten gibt es (noch) nur in der alten Werkbank. Ein Klick öffnet sie in einem neuen Tab; die Anmeldung gilt dort auch.">
+        <ul className="liste">{alt.map((e) => <Zeile key={e.alt} titel={e.titel} url={app.alt ? `${app.alt}/${e.url}` : null} satz={e.satz} />)}</ul>
+      </Abschnitt>}
+      <p className="klein gedimmt">Angemeldet als <b>{app.ich.name}</b>. <button type="button" className="knopf leise klein" onClick={() => void abmelden()}>Abmelden</button></p>
     </div>
   );
 }
@@ -1051,7 +1008,7 @@ export function AlleChats({ q = '' }: { q?: string }) {
       {liste.length ? (
         <ul className="liste">{liste.slice(0, 200).map((z) => z.art === 'chat2'
           ? <li key={z.id} className="zeile"><div className="zeile-haupt"><button type="button" className="zeile-titel knopf-link" onClick={() => z.conv && app.chatOeffnen(z.conv)}>{z.titel}</button><p className="zeile-satz">{ART_TEXT[z.art]} · {z.status}</p></div><div className="zeile-rechts"><span className="zeit">{wann(z.zuletzt)}</span></div></li>
-          : <Zeile key={z.id} titel={z.titel} url={z.url ?? '#'} satz={`${ART_TEXT[z.art]} · ${z.status}${z.thema ? ` · ${z.thema}` : ''}${z.art !== 'unterchat' ? ' · öffnet im Chat (LibreChat)' : ''}`} rechts={wann(z.zuletzt)} />)}</ul>
+          : <Zeile key={z.id} titel={z.titel} url={z.url} satz={`${ART_TEXT[z.art]} · ${z.status}${z.thema ? ` · ${z.thema}` : ''}${z.art !== 'unterchat' ? ' · öffnet im alten Chatfenster' : ''}`} rechts={wann(z.zuletzt)} />)}</ul>
       ) : <p className="leer">{d.zeilen.length ? 'Nichts gefunden — anderer Suchbegriff oder Filter?' : 'Du hast noch keine Chats.'}</p>}
       {liste.length > 200 && <p className="klein gedimmt">Die ersten 200 — enger suchen, um den Rest zu sehen.</p>}
     </div>

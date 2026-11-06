@@ -20,6 +20,7 @@ p { margin: 0 0 var(--s1); }
 .gedimmt { color: var(--gedimmt); }
 .unsichtbar { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 :focus-visible { outline: 3px solid var(--akzent); outline-offset: 2px; }
+.knopf:has(> input:focus-visible) { outline: 3px solid var(--akzent); outline-offset: 2px; }   /* „Datei anhängen“: das Input ist unsichtbar (Pass A UI 11) */
 
 /* Hülle */
 .huelle { min-height: 100vh; }
@@ -38,11 +39,8 @@ p { margin: 0 0 var(--s1); }
 .leiste > a.an { color: var(--akzent); font-weight: 600; }
 .leiste > a:hover { text-decoration: none; }
 .leiste-unten { display: none; }
-.leiste > a.nur-breit { display: none; }
 .inhalt { padding: var(--s2) var(--s2) calc(var(--leiste-h) + var(--s4) + 56px); max-width: 860px; }
 .kopf .chat-knopf { display: inline-flex; }   /* Runde 6 (B6): auch am Handy oben, kein schwebender Knopf über dem Inhalt */
-.chat-fab { display: none !important; position: fixed; z-index: 25; right: var(--s2); bottom: calc(var(--leiste-h) + var(--s2) + env(safe-area-inset-bottom)); border: 0; border-radius: 999px;
-  padding: 8px 14px; font-size: .9rem; background: var(--akzent); color: #fff; font: inherit; font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
 /* Eine Wortwahl für die Zahl überall („warten auf dich“, Knut 03.11. Punkt 6) — am Handy wird dafür die Marke kürzer. */
 .marke-lang { display: none; }
 @media (min-width: 420px) { .marke-lang { display: inline; } }
@@ -51,11 +49,9 @@ p { margin: 0 0 var(--s1); }
   .leiste { top: var(--kopf-h); bottom: 0; right: auto; width: 220px; height: auto; flex-direction: column; padding: var(--s2) var(--s1); border-top: 0; border-right: 1px solid var(--linie); gap: 2px; }
   .leiste > a { flex: 0 0 auto; flex-direction: row; justify-content: flex-start; gap: 12px; padding: 10px 12px; border-radius: 8px; font-size: .95rem; color: var(--text); }
   .leiste > a.an { background: var(--akzent-hell); color: var(--akzent); }
-  .leiste > a.nur-breit { display: flex; }
   .leiste-unten { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: auto; padding: 12px; }
   .leiste-unten .knopf { padding-left: 0; }
   .inhalt { margin-left: 220px; padding: var(--s3) var(--s4) var(--s4); }
-  .chat-fab { display: none; }
   .kopf .chat-knopf { display: inline-flex; }
   .huelle.mit-chat .inhalt { margin-right: 420px; }
 }
@@ -90,7 +86,6 @@ p { margin: 0 0 var(--s1); }
 .knopf.haupt { background: var(--akzent); border-color: var(--akzent); color: #fff; }
 .knopf.leise { border-color: transparent; background: transparent; color: var(--akzent); font-weight: 500; padding: 6px 8px; }
 .knopf.klein { min-height: 36px; font-size: .875rem; }
-.knopf.rund { width: 36px; min-height: 36px; padding: 0; border-radius: 999px; border: 1px solid var(--linie); color: var(--text); font-weight: 700; }
 .knopf.breit { width: 100%; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
 .chip { border: 1px solid var(--linie); background: var(--grund); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: .875rem; cursor: pointer; text-align: left; }
@@ -100,13 +95,11 @@ p { margin: 0 0 var(--s1); }
 .marke { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: .75rem; font-weight: 600; background: var(--grund); color: var(--gedimmt); white-space: nowrap; }
 .marke.warn { background: var(--warn-hell); color: var(--warn); }
 .marke.gruen { background: var(--gruen-hell); color: var(--gruen); }
-.marke.blau { background: var(--akzent-hell); color: var(--akzent); }
 
 /* Karten (Entscheidungen) */
 .karten { display: flex; flex-direction: column; gap: 12px; }
 .karte { background: var(--karte); border: 1px solid var(--linie); border-radius: var(--r); padding: var(--s2); }
 .karte.erledigt { border-color: #bfe3cd; background: #fbfefc; }
-.karte-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 6px; }
 .grund { font-size: .8rem; color: var(--gedimmt); }
 .karte-titel { font-size: 1.02rem; line-height: 1.35; margin-bottom: 6px; }
 .karte-worum { color: #353b43; font-size: .95rem; }
@@ -116,11 +109,9 @@ p { margin: 0 0 var(--s1); }
 .anders { margin-top: var(--s1); }
 .anders textarea, .chat-eingabe textarea, .suche input, .anmelden input, .filter select { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid #cdd3da; border-radius: 10px; background: #fff; }
 .ok { color: var(--gruen); font-weight: 600; margin: var(--s1) 0 0; }
-.karte-fuss { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 4px var(--s1); margin-top: var(--s1); border-top: 1px solid var(--linie); padding-top: 6px; }
 .verweise { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .9rem; }
 .wid { order: -1; }
 .wid-text { flex-basis: 100%; background: var(--grund); border-radius: 8px; padding: 12px; margin-top: 6px; font-size: .9rem; }
-.karte-fuss .wid-text { width: 100%; }
 .wid:has(.wid-text) { flex-basis: 100%; }
 .wid dl { margin: 0 0 6px; }
 .wid dl > div { margin-bottom: 6px; }
@@ -137,11 +128,10 @@ p { margin: 0 0 var(--s1); }
 .zeile-satz { color: var(--gedimmt); font-size: .9rem; margin: 2px 0 0; }
 .zeile-rechts { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
 .zeit { font-size: .8rem; color: var(--gedimmt); white-space: nowrap; }
-.filter { display: flex; align-items: center; gap: var(--s1); margin-bottom: var(--s2); }
+.filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: var(--s1) 0; }   /* Pass A (UI 15): eine Regel statt drei */
 .filter label { white-space: nowrap; font-weight: 600; }
-.filter select { max-width: 320px; }
-.filter { flex-wrap: wrap; }
-.filter input[type=search] { flex: 1 1 180px; font: inherit; padding: 10px 12px; border: 1px solid #cdd3da; border-radius: 10px; }
+.filter select { max-width: 320px; flex: 1 1 40%; min-width: 0; }
+.filter input[type=search] { flex: 1 1 220px; min-width: 0; font: inherit; padding: 10px 12px; border: 1px solid #cdd3da; border-radius: 10px; }
 .suche { margin-bottom: var(--s2); }
 .begriffe { display: grid; gap: 12px; margin: 0; }
 .begriffe dt { font-weight: 700; margin-bottom: 4px; }
@@ -217,9 +207,6 @@ p { margin: 0 0 var(--s1); }
 .bestaetigen ul { margin: 6px 0 10px; padding-left: 1.1rem; }
 
 /* S12: Alle Chats — Filterzeile, Knopf als Link */
-.filter { display: flex; flex-wrap: wrap; gap: 8px; margin: var(--s1) 0; }
-.filter input[type=search] { flex: 1 1 220px; min-width: 0; }
-.filter select { flex: 1 1 40%; min-width: 0; }
 @media (min-width: 900px) { .filter select { flex: 0 1 auto; } }
 .knopf-link { background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer; }
 
@@ -239,8 +226,6 @@ p { margin: 0 0 var(--s1); }
 .meldung-band { position: sticky; top: var(--kopf-h); z-index: 15; display: flex; gap: var(--s1); align-items: center; justify-content: space-between; padding: 8px var(--s2); background: var(--rot-hell); color: var(--rot); border-bottom: 1px solid var(--linie); }
 .meldung-band.ok { background: var(--gruen-hell); color: var(--gruen); }
 @media (min-width: 900px) { .meldung-band { margin-left: 220px; } }
-.chat-fab { transition: transform .2s ease, opacity .2s ease; }
-.chat-fab.weg { transform: translateY(140%); opacity: 0; pointer-events: none; }
 .ok.unterwegs { color: var(--gedimmt); background: var(--grund); }
 .bezug { background: var(--grund); border-radius: 8px; padding: 8px 12px; margin: 6px 0; }
 .bezug ul { margin: 4px 0; padding-left: 1.2em; }
@@ -286,11 +271,10 @@ p { margin: 0 0 var(--s1); }
 .uc-steckbrief summary, .uc-schritte summary { cursor: pointer; font-size: .85rem; color: var(--gedimmt); }
 .uc-verlauf { display: flex; flex-direction: column; gap: 10px; }
 .uc-schritte ul { margin: 4px 0 0 1em; padding: 0; }
-.uc-leiste { position: sticky; bottom: var(--leiste-h); z-index: 2; background: var(--karte); border: 1px solid var(--linie); border-radius: var(--r); padding: var(--s1) var(--s2); }
-.uc-leiste textarea { width: 100%; }
+.uc-leiste { position: sticky; bottom: calc(var(--leiste-h) + env(safe-area-inset-bottom)); z-index: 2; background: var(--karte); border: 1px solid var(--linie); border-radius: var(--r); padding: var(--s1) var(--s2); }
 .uc-vorlagen { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 6px; margin-bottom: 6px; }
 .uc-vorlagen .knopf { flex: 0 0 auto; }
-.uc-leiste textarea { min-height: 2.6em; height: 2.6em; }
+.uc-leiste textarea { width: 100%; min-height: 2.6em; height: 2.6em; }
 @media (min-width: 900px) {
   .uc-kopf { position: sticky; top: var(--kopf-h); }
   .uc-leiste { bottom: 0; }

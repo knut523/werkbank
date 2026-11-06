@@ -1,3 +1,4 @@
+// Werkbank 2.0: was jede Seite von der Hülle braucht (Person, Adresse der alten Werkbank, Chat öffnen, die Zahl, Testbetrieb).
 import { createContext, useContext } from 'react';
 
 export interface AppKontext {
