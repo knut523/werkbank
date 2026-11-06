@@ -103,8 +103,10 @@ test('Leser + Bauer: zuerst Melious, über die Abo-Modelle verteilt; Bauer im Un
   assert.match(t, /\(Mock-Lead\) .*Werkzeuge ja; Kompakt 80/);
   const [l1, l2, b] = ids(t);
   assert.ok(l1 && l2 && b, t);
-  // J2: lesende Worker haben eine eigene Grenze (hier BRIDGE_MAX_LESER=2) — der Bauer startet trotzdem, der dritte Leser nicht.
-  assert.match(t, /\[delegieren\] FEHLER 429: Schon 2 lesende Worker laufen/);
+  // Phase 4 (B1): ohne jcode-Worker laufen Leser als normale Worker — sie zählen gegen die Grenze je Strang (3), nicht gegen
+  // die große Leser-Grenze (BRIDGE_MAX_LESER, gilt nur mit jcode: worker-jcode.test.ts).
+  assert.match(t, /\[delegieren\] FEHLER 429: Schon 3 Worker laufen in diesem Strang/);
+  assert.doesNotMatch(t, /lesende Worker laufen/);
   assert.match(t, new RegExp(`### ${l1} · leser · Risiko niedrig · fertig`));
   // Verteilung: die beiden Leser laufen auf verschiedenen Abo-Modellen.
   const m1 = t.match(new RegExp(`### ${l1}[^\\n]*\\nModell: Melious ([\\w.-]+)`))?.[1];
