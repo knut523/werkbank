@@ -529,7 +529,7 @@ function BedarfZeile({ b, fertig }: { b: Bedarf; fertig: () => void }) {
     try { await schicke(`api/v2/bedarf/${encodeURIComponent(b.id)}`, { antwort, notiz, ...(b.art === 'zugang' ? { dauerMin: dauer } : {}) }); setMeldung('Geht an den Unter-Chat.'); setTimeout(fertig, 700); }
     catch (e: any) { setMeldung(String(e?.message ?? e)); setLaeuft(false); }
   };
-  const erteilbar = b.art === 'zugang' || b.art === 'recht' || b.art === 'entscheidung' || b.art === 'datei' || b.art === 'sonstiges';
+  const erteilbar = b.art === 'zugang' || b.art === 'entscheidung';   // wie ERTEILBAR (bedarf.ts): sonst selbst erledigen oder ablehnen
   return (
     <li className="zeile bedarf">
       <div className="zeile-haupt">

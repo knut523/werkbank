@@ -69,6 +69,8 @@ test('Korrektur 2 Knut 06.11.: GitHub lesen frei (gh view/list/diff/checks, gh a
   for (const c of ['gh pr view 380', 'gh pr diff 380', 'gh pr list', 'gh api repos/WirStrom1/olaf-admin/pulls/380/comments', 'gh pr checks 380', 'gh run view 1', 'gh run list'])
     assert.equal(orchestratorBlock('Bash', { command: c }), null, c);
   for (const c of ['gh pr comment 380 -b x', 'gh pr review 380 --approve', 'gh pr create --fill', 'gh pr merge 380', 'gh api -X POST repos/x/y/issues/1/comments -f body=x',
-    'gh api repos/x/y/issues/1/comments -f body=x', 'gh issue create -t x', 'gh run rerun 1', 'gh workflow run x'])
+    'gh api repos/x/y/issues/1/comments -f body=x', 'gh issue create -t x', 'gh run rerun 1', 'gh workflow run x',
+    // Gegenprüfung 06.11.: Methode mit Gleichheitszeichen
+    'gh api --method=POST repos/x/y/issues', 'gh api --method=DELETE repos/x/y/git/refs/heads/x', 'gh api -XPATCH repos/x/y'])
     assert.ok(orchestratorBlock('Bash', { command: c }), c);
 });
