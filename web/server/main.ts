@@ -4518,15 +4518,15 @@ registerV2(on, {
     return { zeilen: zeilen.map((z) => ({ schluessel: z.schluessel, text: gruppeText(z), satz: genauigkeitSatz(z), n: z.n })), steckbrief: (doc) => steckbriefSatz(zeilen, doc) };
   },
   nachreichen: (u, id, text) => sendOrch(u, id, text),
-  // Chat-Bereich (Knut 06.11.): Anhang ins Paket des Unter-Chats (ohne Paket: Ordner .werkbank-anhaenge im Arbeitsordner), Pfad als Nachricht.
+  // Chat-Bereich (Knut 06.11.): Anhang ins Paket des Unter-Chats (ohne Paket: review-pakete/_anhaenge/<Strang>), Pfad als Nachricht.
+  // Phase 4: nie in den Arbeitsordner — ein `git add -A` des Strangs nähme ihn sonst in Commit und PR mit.
   anhang: async (u, id, name, buf, text) => {
     const d: any = await orchRuns().findOne({ _id: id as any, userId: u.id });
     if (!d) throw new HttpError(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
     // Gegenprüfung 06.11.: Paketname so streng wie überall (kein „..“), ohne Paket nur mit Arbeitsordner; gleichnamige
     // Anhänge bekommen einen Zeitstempel — auch wenn zwei gleichzeitig ankommen (wx statt vorher nachsehen).
     const paket = /^\d{1,4}-[a-z0-9][a-z0-9-]*$/.test(String(d.paket ?? '')) ? String(d.paket) : null;
-    if (!paket && !d.cwd) throw new HttpError(409, 'Dieser Unter-Chat hat weder Review-Paket noch Arbeitsordner — Anhang nicht möglich.');
-    const ordner = paket ? join(reviewDir(), paket, 'anhaenge') : join(String(d.cwd), '.werkbank-anhaenge');
+    const ordner = paket ? join(reviewDir(), paket, 'anhaenge') : join(reviewDir(), '_anhaenge', String(d._id));
     mkdirSync(ordner, { recursive: true });
     let pfad = join(ordner, name);
     try { writeFileSync(pfad, buf, { flag: 'wx' }); } catch (e: any) {

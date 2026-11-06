@@ -60,6 +60,11 @@ test('Marke, Nachrichtentext, Auszug, Auftrag', () => {
   assert.match(b, /Nie pushen/);
   assert.match(b, /nie auf PRs oder Branches, die es noch nicht gibt, und nie auf lokale Pfade/, 'Knut 13.10.');
   assert.match(b, /Auftrag:\nBaue X$/, 'Auftrag steht am Ende');
+  assert.match(b, /bedarf_melden/);
+  // Phase 4: ein jcode-Strang bekommt keine Werkzeuge genannt, die er nicht hat
+  const j = orchBrief({ title: 'Lesen', prompt: 'Lies X', cwd: '/w/x', person: 'Knut', jcode: true });
+  assert.match(j, /Nie pushen/); assert.match(j, /gibt es für dich nicht/);
+  assert.doesNotMatch(j, /Meld es sofort mit \*\*bedarf_melden|über das Werkzeug github_lesen|nimm dafür bedarf_melden/);
 });
 
 // ---------- Automatisch fortsetzen (docs/plan-orchestrator-auto-weiter.md), reine Entscheidung ----------

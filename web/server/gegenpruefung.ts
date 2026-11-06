@@ -121,5 +121,8 @@ export async function ensemblePassC(u: User, o: { wt: string; basis: string; zwe
     try { energie += (await recordMeliousUsage(u, n.usage, Date.now(), String(n.modell))).energie; } catch { /* Buchung ist Zusatz */ }
   }
   if (!j || j.error || !j.text) { const r = await rueckfall(String(j?.error ?? 'leere Antwort').slice(0, 200)); return { ...r, energie: r.energie + Math.round(energie) }; }
-  return { ok: true, text: `# Gegenprüfung (Ensemble über opencode 2: glm-5.3-flash, deepseek-v4.1-flash-1017, glm-5.2; Verifizierer glm-5.2)\n\n${String(j.text)}\n`, energie: Math.round(energie), ms: Date.now() - t0 };
+  // Phase 4: die Kopfzeile nennt die Modelle, die wirklich liefen (Rückfall jcode, fehlender Schatten) — Läufer und Urteile stehen im
+  // Fuß des Ensemble-Texts aus der Brücke.
+  const modelle = [...new Set((Array.isArray(j.nutzung) ? j.nutzung : []).map((n: any) => String(n?.modell ?? '')).filter(Boolean))];
+  return { ok: true, text: `# Gegenprüfung (Ensemble${modelle.length ? `: ${modelle.join(', ')}` : ''})\n\n${String(j.text)}\n`, energie: Math.round(energie), ms: Date.now() - t0 };
 }

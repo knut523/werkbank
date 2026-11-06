@@ -42,7 +42,7 @@ export const internalHeaders = () => ({ 'content-type': 'application/json', 'x-w
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 OLAF-Werkbank';
 
-export interface BriefInput { title: string; prompt: string; cwd: string; plan?: string | null; person?: string; stand?: string | null; tiefe?: Tiefe | null; modell?: string | null; zuarbeit?: Zuarbeit }
+export interface BriefInput { title: string; prompt: string; cwd: string; plan?: string | null; person?: string; stand?: string | null; tiefe?: Tiefe | null; modell?: string | null; zuarbeit?: Zuarbeit; jcode?: boolean }
 
 // Berichtsvorlage für jeden Strang (docs/plan-leitstand.md, Teil C, C8; Knut 14.10.2026): fester Kopf, den „Heute“ liest, und
 // Pflicht-Visualisierung neben Screenshots. Vollständiges Muster: docs/bericht-vorlage.md, Folien: docs/bericht-folien-vorlage.html.
@@ -100,6 +100,20 @@ export const REGEL_PFLICHT = [
   'Fehlt eine Datei, der Skill oder der Modus `--checkliste`, schreib das so in die Zeile „Regeln:“ — nicht still überspringen. Reine Recherche ohne Änderung: „Regeln: nicht betroffen (keine Änderung)“.',
 ].join('\n');
 
+// Knut 06.11.: „Gib den Strängen, was sie brauchen — oder sie danach fragen können.“ Lesen und Lokales frei, alles nach außen über den Bedarfskanal.
+const WERKZEUG_REGELN = [
+  '- **Was du selbst darfst:** alles lesen (Repos, Vault, Logs, Jira, GitHub über das Werkzeug github_lesen oder `gh pr view/diff/checks`, `gh api` lesend; Datenbanken lesend) und lokal arbeiten: Code und Doku/Pläne im Arbeitsordner (und in olaf-docs) ändern, lokal committen, Tests inklusive DB-Tests gegen das lokale Postgres (127.0.0.1:55433).',
+  '- **Nie pushen, nie mergen — was über die Hauptsitzung geht:** GitHub schreiben (Push, Kommentar, Review, PR), Merge (auch develop/main in deinen Zweig einmergen — bereite die Konfliktlösung je Datei vor), Jira schreiben, Deploy, Zugang zu Ordnern außerhalb deines Arbeitsordners, Geheimnisse. Meld es sofort mit **bedarf_melden** (art und genau was), dann **nicht warten**, sondern am Rest weiterarbeiten — die Antwort kommt als Nachricht. Gesperrtes nie umgehen.',
+  '- Es gibt keine Rückfragen im Chat: was eine Freigabe bräuchte, wird abgelehnt — nimm dafür bedarf_melden. Entscheidungen, die nur Knut treffen kann, stehen unter „Braucht Knut“.',
+];
+// Phase 4: ein jcode-Strang hat keine Werkbank-Werkzeuge (kein bedarf_melden, kein github_lesen) — nur die Shell (lesend, lokale Commits)
+// und Dateien im Arbeitsordner; Bedarf geht in „Braucht Knut“, „fertig“ über die Review-Datei (REVIEW_DATEI_HINWEIS).
+const JCODE_REGELN = [
+  '- **Was du selbst darfst:** alles lesen (Repos, Vault, Logs; GitHub nur über `gh pr view/diff/checks`) und im Arbeitsordner Dateien ändern und lokal committen. Werkbank-Werkzeuge (bedarf_melden, github_lesen, review_ready) gibt es für dich nicht.',
+  '- **Nie pushen, nie mergen:** GitHub schreiben, Merge, Jira, Deploy, Zugang außerhalb des Arbeitsordners, Geheimnisse — schreib genau, was gebraucht wird, unter „Braucht Knut“ und arbeite am Rest weiter. Gesperrtes nie umgehen.',
+  '- Es gibt keine Rückfragen im Chat; Entscheidungen, die nur Knut treffen kann, stehen unter „Braucht Knut“.',
+];
+
 /** Erster Text des Strangs. Erste Zeile = Titel; der Auftrag steht am Ende. */
 export function orchBrief(b: BriefInput): string {
   const first = (b.person || 'Knut').split(/\s+/)[0];
@@ -111,10 +125,7 @@ export function orchBrief(b: BriefInput): string {
       'Regeln:',
       `- Arbeitsordner: \`${b.cwd}\` (dein aktuelles Verzeichnis). Arbeite dort; andere Repos und den Vault nur lesen, außer der Auftrag sagt ausdrücklich etwas anderes.`,
       b.plan ? `- Plandatei: \`${b.plan}\` — lies sie zuerst vollständig und arbeite danach (Definition of Done wörtlich nehmen).` : '- Gibt es keine Plandatei und ist der Auftrag nicht trivial: erst kurz planen (plan-to-pr), dann umsetzen.',
-      // Knut 06.11.: „Gib den Strängen, was sie brauchen — oder sie danach fragen können.“ Lesen und Lokales frei, alles nach außen über den Bedarfskanal.
-      '- **Was du selbst darfst:** alles lesen (Repos, Vault, Logs, Jira, GitHub über das Werkzeug github_lesen oder `gh pr view/diff/checks`, `gh api` lesend; Datenbanken lesend) und lokal arbeiten: Code und Doku/Pläne im Arbeitsordner (und in olaf-docs) ändern, lokal committen, Tests inklusive DB-Tests gegen das lokale Postgres (127.0.0.1:55433).',
-      '- **Nie pushen, nie mergen — was über die Hauptsitzung geht:** GitHub schreiben (Push, Kommentar, Review, PR), Merge (auch develop/main in deinen Zweig einmergen — bereite die Konfliktlösung je Datei vor), Jira schreiben, Deploy, Zugang zu Ordnern außerhalb deines Arbeitsordners, Geheimnisse. Meld es sofort mit **bedarf_melden** (art und genau was), dann **nicht warten**, sondern am Rest weiterarbeiten — die Antwort kommt als Nachricht. Gesperrtes nie umgehen.',
-      '- Es gibt keine Rückfragen im Chat: was eine Freigabe bräuchte, wird abgelehnt — nimm dafür bedarf_melden. Entscheidungen, die nur Knut treffen kann, stehen unter „Braucht Knut“.',
+      ...(b.jcode ? JCODE_REGELN : WERKZEUG_REGELN),
       '- Offene inhaltliche Entscheidungen sammelst du und stellst sie am Ende gesammelt (je Kontext · Optionen · Empfehlung). Nichts still annehmen, was wirklich Knuts Entscheidung ist.',
       '- Tests und Prüfungen des Repos laufen lassen, bevor du „fertig“ meldest.',
       // Plan 274 (Knut 20.10.2026, Rechner-Runden): Grundregeln zuerst als Test, nicht erst im Review.
@@ -579,7 +590,7 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   if (!reg.ok) throw err(reg.status === 400 || reg.status === 409 || reg.status === 403 ? reg.status : 502, rj.error ?? `Brücke antwortet mit ${reg.status}`);
   const stand = [fresh.status, g0 ? g0.text : null].filter(Boolean).join('\n') || null;
   // Konzept J1: ein jcode-Strang hat kein review_ready-Werkzeug — er meldet „fertig“ über eine Datei im Arbeitsordner (reviewdatei.ts).
-  const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand, tiefe, modell, zuarbeit: vorgaben.zuarbeit }) + (lw.laeufer === 'jcode' ? `\n\n${REVIEW_DATEI_HINWEIS}` : '');
+  const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand, tiefe, modell, zuarbeit: vorgaben.zuarbeit, jcode: lw.laeufer === 'jcode' }) +(lw.laeufer === 'jcode' ? `\n\n${REVIEW_DATEI_HINWEIS}` : '');
   const { lauf, explicit } = laufName(title, inp.lauf);
   // Bericht-Pfad aus dem VOLLEN Auftrag und der Plandatei (F7) — der gespeicherte Auftrag ist gekürzt.
   let planText = '';

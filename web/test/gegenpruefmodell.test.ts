@@ -25,8 +25,10 @@ test('Knut 06.11. (D2): Gegenprüfung über das Ensemble der Brücke (Bereich ba
   const antwort = (j: unknown) => (async (url: string, init: any) => { gesendet.push({ url, body: JSON.parse(init.body), kopf: init.headers }); return new Response(' ' + JSON.stringify(j)); }) as any;
   let passC = 0;
   const alt = (async () => { passC++; return { ok: true, text: 'alt', energie: 5, ms: 1 }; }) as any;
-  const r = await ensemblePassC(u, { wt, basis, zweck: 'Review a/b#1', fetchFn: antwort({ ok: true, text: 'Bestätigt: a.ts:2', nutzung: [] }), bridgeUrl: 'http://bruecke', passC: alt });
-  assert.equal(r.ok, true); assert.match(r.text, /^# Gegenprüfung \(Ensemble über opencode 2/); assert.match(r.text, /Bestätigt: a\.ts:2/);
+  const nutz = (modell: string) => ({ modell, usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } });
+  const r = await ensemblePassC(u, { wt, basis, zweck: 'Review a/b#1', fetchFn: antwort({ ok: true, text: 'Bestätigt: a.ts:2', nutzung: [nutz('glm-5.3-flash'), nutz('glm-5.2'), nutz('glm-5.2')] }), bridgeUrl: 'http://bruecke', passC: alt });
+  // Phase 4: die Kopfzeile nennt die Modelle, die wirklich liefen
+  assert.equal(r.ok, true); assert.match(r.text, /^# Gegenprüfung \(Ensemble: glm-5\.3-flash, glm-5\.2\)/); assert.match(r.text, /Bestätigt: a\.ts:2/);
   assert.equal(gesendet[0].url, 'http://bruecke/internal/ensemble-web');
   assert.deepEqual([gesendet[0].body.userId, gesendet[0].body.cwd, gesendet[0].body.bereich], ['u1', wt, `${basis}...HEAD`]);
   assert.equal(passC, 0);
