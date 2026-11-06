@@ -848,8 +848,10 @@ test('Plan §23 T8 (05.11.: Stränge standen über Nacht): Zug ohne Status-Marke
   assert.equal(decide('ok', {}, {}, ai('ohne Marke')).action, 'wait', 'erst nach 5 min');
   const spaet = { now: T0 + 6 * 60_000 };
   assert.equal(decide('ok', {}, spaet, ai('ohne Marke')).action, 'send');
-  assert.equal(decide('ok', { autoStreak: 1 }, spaet, ai('ohne Marke')).action, 'send');
-  assert.equal(decide('ok', { autoStreak: 2 }, spaet, ai('ohne Marke')).action, 'stop', 'nach 2× ohne Marke: hängt');
+  assert.equal(decide('ok', { ohneStatusStreak: 1, autoStreak: 1 }, spaet, ai('ohne Marke')).action, 'send');
+  assert.equal(decide('ok', { ohneStatusStreak: 2, autoStreak: 2 }, spaet, ai('ohne Marke')).action, 'stop', 'nach 2× ohne Marke: hängt');
+  // Pass C (Fix-Runde 2): zweimal vom Hauptchat angeschrieben (autoStreak 2) ist kein „2× ohne Status-Zeile fortgesetzt“
+  assert.equal(decide('ok', { autoStreak: 2 }, spaet, ai('ohne Marke')).action, 'send');
   assert.equal(decide('ok', {}, spaet, ai('Status: braucht Antwort')).action, 'none', 'echte Frage: kein automatisches weiter');
   // „braucht Antwort“ ohne etwas an Knut/Hauptchat im Stand-Block (Fall ba444b36) gilt wie ohne Marke.
   const leer = orchStatus(run, turn('ok'), ai('### Stand\n- Erledigt: A\n- Braucht Knut: nichts\nStatus: braucht Antwort'));

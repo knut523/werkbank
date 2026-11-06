@@ -45,7 +45,9 @@ async function ghFehler(res: Response, vorgabe: string): Promise<{ text: string;
 /** fetch mit GitHub-Fehlertext und einer Wiederholung bei Rate-Limit. `vorgabe` = Hinweis, falls GitHub keinen Text liefert. */
 async function senden(url: string, init: RequestInit, vorgabe: (status: number) => string): Promise<Response> {
   for (let versuch = 0; ; versuch++) {
-    const res = await fetch(url, init);
+    // Pass C (Fix-Runde 2, S7): je Versuch ein frisches Zeitlimit — das mitgegebene Signal wäre nach dem Warten (retry-after)
+    // schon abgelaufen und der zweite Versuch bräche sofort ab.
+    const res = await fetch(url, { ...init, signal: AbortSignal.timeout(30_000) });
     if (res.ok) return res;
     const f = await ghFehler(res, vorgabe(res.status));
     if (versuch === 0 && f.wartenS !== null && f.wartenS <= RETRY_MAX_S) { await schlaf(f.wartenS * 1000); continue; }

@@ -321,7 +321,7 @@ export function injectsVon(d: { nachreichungen?: unknown; lastInject?: any }): a
 export const nachsenden = (state: string | null | undefined) => state === 'ungelesen' || state == null;
 export const NACHGEREICHT_HINWEIS = '(Werkbank: Diese Nachricht wurde dir während deines letzten Zugs nachgereicht und kommt jetzt noch einmal als normale Nachricht — falls du sie schon umgesetzt hast, bestätige das nur kurz.)';
 
-export interface AutoRun { startedAt: Date | number; lastSentAt?: Date | number | null; reviewedAt?: unknown; reviewReadyAt?: unknown; autoStopped?: unknown; autoStreak?: number; autoFor?: string | null }
+export interface AutoRun { startedAt: Date | number; lastSentAt?: Date | number | null; reviewedAt?: unknown; reviewReadyAt?: unknown; autoStopped?: unknown; autoStreak?: number; ohneStatusStreak?: number; autoFor?: string | null }
 export interface AutoCtx { now: number; openQuestion: boolean; accountFree: boolean; max: number }
 export type AutoDecision = { action: 'none' | 'wait' | 'send' | 'stop'; key?: string; why: string };
 
@@ -352,7 +352,8 @@ export function autoWeiter(run: AutoRun, st: { cause?: AutoCause }, s: StrandSta
   // Council R1, Bedingung 1: erst wenn LibreChat die Antwort des Zuges gespeichert hat (sonst falsche Elternnachricht).
   if ((cause === 'limit' || cause === 'timeout') && t && !(last && !last.fromUser && last.at >= t.start - 5000) && ctx.now - end < AUTO_SAVE_MS) return { action: 'wait', key, why: 'Antwort wird gespeichert' };
   if ((run.autoStreak ?? 0) >= ctx.max) return { action: 'stop', key, why: `${ctx.max}× automatisch fortgesetzt — Chat ansehen` };
-  if (cause === 'ohne_status' && (run.autoStreak ?? 0) >= OHNE_STATUS_MAX) return { action: 'stop', key, why: `${OHNE_STATUS_MAX}× ohne Status-Zeile fortgesetzt — Chat ansehen` };
+  // Pass C (Fix-Runde 2, A2): eigener Zähler — autoStreak zählen auch Hauptchat-Sendungen und andere Fortsetzungen mit
+  if (cause === 'ohne_status' && (run.ohneStatusStreak ?? 0) >= OHNE_STATUS_MAX) return { action: 'stop', key, why: `${OHNE_STATUS_MAX}× ohne Status-Zeile fortgesetzt — Chat ansehen` };
   if (cause === 'ohne_status' && ctx.now - end < OHNE_STATUS_WARTE_MS) return { action: 'wait', key, why: 'ohne Status-Zeile — Anstoß 5 min nach dem Zugende' };
   return { action: 'send', key, why: CAUSE_TEXT[cause] };
 }
@@ -758,12 +759,9 @@ export async function ausstehendZustellen(u: User, d: any, deps: { log?: AutoDep
     [{ $set: { ausstehendUnterwegs: { liste: '$ausstehend', seit: new Date() }, ausstehend: [] } }], { returnDocument: 'before' });
   const liste: Ausstehend[] = (vorher?.value ?? vorher)?.ausstehend ?? [];
   if (!liste.length) return null;
-  try {
-    const r = await sendOrch(u, String(d._id), ausstehendText(liste), ausstehendVia(liste));
-    await runs().updateOne({ _id: d._id }, { $unset: { ausstehendUnterwegs: '' }, ...(d.ausstehendFehler ? { $set: { ausstehendFehler: 0 } } : {}) });
-    deps.log?.('orch ausstehend zugestellt', { id: d._id, n: liste.length, erneut: !!(r as any).eingereiht });
-    return r;
-  } catch (e: any) {
+  let r: Awaited<ReturnType<typeof sendOrch>>;
+  try { r = await sendOrch(u, String(d._id), ausstehendText(liste), ausstehendVia(liste)); }
+  catch (e: any) {
     // Gegenprüfung: ohne $slice zurücklegen (sonst fielen inzwischen neu eingereihte weg); Fehlversuche zählen — nach
     // AUSSTEHEND_VERSUCHE lässt der Takt den Strang in Ruhe und der Hauptchat bekommt eine Meldung.
     const r: any = await runs().findOneAndUpdate({ _id: d._id }, { $push: { ausstehend: { $each: liste, $position: 0 } } as any, $inc: { ausstehendFehler: 1 }, $unset: { ausstehendUnterwegs: '' } }, { returnDocument: 'after' });
@@ -772,6 +770,14 @@ export async function ausstehendZustellen(u: User, d: any, deps: { log?: AutoDep
     if (n === AUSSTEHEND_VERSUCHE) await deps.melde?.(u, d, `Strang „${d.title}“ (${d._id}): ${liste.length} eingereihte Nachricht(en) ließen sich ${n}× nicht zustellen (${String(e?.message ?? e).slice(0, 120)}). Bitte ansehen.`).catch(() => false);
     return null;
   }
+  // Pass C (Fix-Runde 2, Web 1): das Quittieren steht außerhalb des catch — ein Fehler danach legte die schon zugestellte Liste sonst
+  // zurück, und der nächste Takt schickte sie doppelt. Scheitert nur das Quittieren (Mongo weg), bleibt der Merker stehen und
+  // ausstehendZurueckholen stellt nach 15 min noch einmal zu — selten und im Log sichtbar; lieber doppelt als verloren.
+  // ponytail: Fehler in sendOrch NACH dem Senden (Mongo-Nacharbeit) gelten weiter als Fehlschlag; „genau einmal“ gilt bis dahin.
+  await runs().updateOne({ _id: d._id }, { $unset: { ausstehendUnterwegs: '' }, ...(d.ausstehendFehler ? { $set: { ausstehendFehler: 0 } } : {}) })
+    .catch((e: any) => deps.log?.('orch ausstehend quittung fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }));
+  deps.log?.('orch ausstehend zugestellt', { id: d._id, n: liste.length, erneut: !!(r as any).eingereiht });
+  return r;
 }
 
 /** Phase 4: Nachrichten, die länger als `alterMs` „unterwegs“ liegen (Prozess starb beim Senden; sendOrch wartet höchstens
@@ -823,7 +829,7 @@ export async function sendOrch(u: User, id: string, text: string, via: SendVia =
   }
   // Handnachricht: der Deckel beginnt neu, Stopp und review_ready sind aufgehoben (Council R1, Bedingung 4).
   // Teil B, F6: auch Karte, DoD-Tabellen und Knuts Prüfung sind damit weg (nach erneutem „fertig“ keine alte Tabelle).
-  await runs().updateOne({ _id: d._id }, mitSendung({ $set: { lastSentAt: sentAt, lastSentText: msg.slice(0, 40_000), gruendlichAt: null, reviewedAt: null, reviewedBy: null, knutReviewedAt: null, reviewReadyAt: null, review: null, prevReview: null, doneAt: null, autoStreak: 0, autoStopped: null, ...(/^Nacharbeit nach Review:/.test(msg) ? { reworkAt: new Date(), reworkText: msg.slice(0, 500) } : {}) }, $inc: { sends: 1 } }, 'hand', sentAt));
+  await runs().updateOne({ _id: d._id }, mitSendung({ $set: { lastSentAt: sentAt, lastSentText: msg.slice(0, 40_000), gruendlichAt: null, reviewedAt: null, reviewedBy: null, knutReviewedAt: null, reviewReadyAt: null, review: null, prevReview: null, doneAt: null, autoStreak: 0, ohneStatusStreak: 0, autoStopped: null, ...(/^Nacharbeit nach Review:/.test(msg) ? { reworkAt: new Date(), reworkText: msg.slice(0, 500) } : {}) }, $inc: { sends: 1 } }, 'hand', sentAt));
   await questions().updateMany({ userId: u.id, kind: 'auto-weiter', 'strand.id': d._id, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date() } });
   return { id, conv: d.conv, url: d.url, ...(await bestaetigen(u, d.conv, sentAt, o.warteMs)) };
 }
@@ -1066,7 +1072,7 @@ async function autoOne(u: User, d: any, s: any, deps: AutoDeps) {
   // Plan 274 (D4b): „nicht angekommen“ → derselbe Text noch einmal (vorher nur „weiter“ — die eigentliche Nachricht war dann weg).
   const text = fortsetzText(st.cause, d.lastSentText, n, max);
   const r = await runs().updateOne({ _id: d._id, autoFor: d.autoFor ?? null, autoStopped: null, lastSentAt: d.lastSentAt ?? null },
-    mitSendung({ $set: { autoFor: dec.key, lastSentAt: new Date(), lastSentText: text.slice(0, 40_000), autoLastAt: new Date(), autoLastCause: st.cause }, $inc: { autoTotal: 1, autoStreak: 1, sends: 1 } }, 'auto'));
+    mitSendung({ $set: { autoFor: dec.key, lastSentAt: new Date(), lastSentText: text.slice(0, 40_000), autoLastAt: new Date(), autoLastCause: st.cause }, $inc: { autoTotal: 1, autoStreak: 1, sends: 1, ...(st.cause === 'ohne_status' ? { ohneStatusStreak: 1 } : {}) }, ...(st.cause === 'ohne_status' ? {} : { $unset: { ohneStatusStreak: '' } }) } as any, 'auto'));
   if (!r.modifiedCount) return;
   deps.log?.('orch-auto-weiter', { id: d._id, cause: st.cause, n });
   await deliver(u, d.conv, text);

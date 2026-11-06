@@ -31,6 +31,18 @@ test('403 mit retry-after: einmal nach der angegebenen Zeit erneut, dann geposte
   assert.equal(calls, 2); assert.deepEqual(warten, [7000]); assert.match(r.url!, /github\.com/);
 });
 
+test('Pass C (Fix-Runde 2): jeder Versuch hat ein eigenes Zeitlimit — sonst wäre es nach retry-after schon abgelaufen', async () => {
+  const W = await import('../server/githubwrite.ts');
+  const signale: (AbortSignal | undefined)[] = [];
+  const orig = globalThis.fetch;
+  globalThis.fetch = ((u: any, i: any) => { signale.push(i?.signal); return orig(u, i); }) as any;
+  try {
+    antworten = [{ status: 403, headers: { 'retry-after': '1' }, body: SEK }];
+    await W.postReview(rev, 'text', 'COMMENT');
+  } finally { globalThis.fetch = orig; }
+  assert.equal(signale.length, 2); assert.ok(signale[0] && signale[1] && signale[0] !== signale[1], 'zwei verschiedene Signale');
+});
+
 test('403 „secondary rate limit“ ohne Header: 60 s Vorgabe, einmal; schlägt es wieder fehl → Fehler mit GitHubs Text, Link und Wartezeit', async () => {
   const W = await import('../server/githubwrite.ts');
   antworten = [{ status: 403, body: SEK }, { status: 403, body: SEK }];
