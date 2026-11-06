@@ -3,10 +3,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { zielErlaubt, anfrageErlaubt, wsErlaubt, aktionen, ausgabeOrdner, klick, KLICK_ZIELE } from '../src/klick.ts';
+import { zielErlaubt, anfrageErlaubt, wsErlaubt, aktionen, ausgabeOrdner, klick, KLICK_ZIELE, zieleText, testkontoNamen, testkonto } from '../src/klick.ts';
 import { jcodeEntscheid } from '../src/jcode-pre-tool.ts';
 
 test('Allowlist im Code: nur 127.0.0.1/localhost auf 3436, 8110, 8111 — keine Live-Ports, nichts außerhalb', () => {
@@ -49,6 +49,8 @@ test('jcode-Wächter: klick nur mit WERKBANK_KLICK=1, ohne Shell-Zeichen; Ziele 
     assert.equal(s.status, 126, c); assert.match(s.stderr, /Werkbank-Wächter/);
   }
   assert.match(String(jcodeEntscheid('read', { file_path: '/home/x/.cache/p436/testkonten.txt' }, '/tmp')), /gesperrt/, 'Passwörter der Testkonten sieht jcode nicht');
+  assert.match(String(jcodeEntscheid('bash', { command: 'cat ~/.cache/p436/testkonten-basic.txt' }, '/tmp')), /gesperrt/);
+  assert.equal(jcodeEntscheid('write', { file_path: '/tmp/bericht.md', content: 'Persona-Runde mit den Testkonten Lisa und Knut' }, '/tmp'), null, 'das Wort allein sperrt nicht (Pass C S3)');
 });
 
 const testInstanz = await fetch('http://127.0.0.1:3436/v2/', { signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false);
@@ -60,4 +62,16 @@ test('echter Klicklauf gegen die Test-Instanz als Lisa (Handy): Anmeldung mit Te
   assert.ok(existsSync(join(aus, 'klick', 'start.png')));
   assert.equal(readdirSync(join(aus, 'klick')).filter((f) => f.endsWith('.png')).length, 2);
   assert.ok(!/@|passwort/i.test(r.stdout.split('\n').filter((l) => !l.startsWith('text ')).join('\n')), 'keine Zugangsdaten in der Ausgabe');
+});
+
+test('Pass 4: Nur-lesen-Ziele nur ansehen, Hinweistext aus der Allowlist, Testkonten aus einer Datei', async () => {
+  const aus = mkdtempSync(join(tmpdir(), 'k-'));
+  for (const a of ['klick:Speichern', 'tippe:#x=1', 'rolle:button=OK']) assert.equal((await klick(['-', 'd', 'https://olaf-bot-admin.konekto.energy/', a], aus)).code, 2, a);
+  for (const z of KLICK_ZIELE) assert.ok(zieleText().includes(z.nurLesen ? z.host : String(z.port)), z.host);
+  const f = join(aus, 'konten.txt');
+  writeFileSync(f, 'Lisa\tl@x\tpw\nkaputt\nKnut\tk@x\tpw2\n');
+  assert.deepEqual(testkontoNamen(f), ['Lisa', 'Knut']);
+  assert.deepEqual(testkonto('Knut', f), { email: 'k@x', pw: 'pw2' });
+  assert.equal(testkonto('kaputt', f), null);
+  assert.deepEqual(testkontoNamen(join(aus, 'fehlt')), []);
 });

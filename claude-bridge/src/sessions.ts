@@ -24,6 +24,7 @@ import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agen
 import { skillsFor } from './skills.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn } from './schlange.ts';
 import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer } from './laeufer.ts';
+import { testkontoNamen, zieleText } from './klick.ts';
 import { ensemble, mitRueckfall, schattenAn, VERIFIZIERER, type Lauf, type EnsLauf, type EnsErgebnis } from './ensemble.ts';
 import { createServer as netServer } from 'node:net';
 import { opencode2Server, oc2Home, oc2Ports, oc2Version, type Oc2Server } from './oc2server.ts';
@@ -2184,9 +2185,10 @@ function jcodeAuswerten(out: { stdout: string }, cwd: string, model: string | nu
   return { j, usage, draussen, gelaufen: String(j?.model ?? model ?? 'glm-5.3-flash') };
 }
 
-const KLICK_HINWEIS = `\n\nKlickwerkzeug (Persona-/Klicktest): in der Shell \`klick <persona|-> <d|m> <url> [aktion …]\` — persona Knut, Lisa oder Christoph
-(Testkonten der Test-Instanz, du siehst die Passwörter nicht), d = Desktop, m = Handy. Nur http://127.0.0.1:3436 (Werkbank-Test-Instanz)
-und die Vorschau-Ports 8110/8111 (dort persona „-“). Aktionen: warte:<ms> · klick:<sichtbarer Text> · rolle:<rolle>=<name> ·
+// A-B6: Ziele und Personas aus klick.ts (KLICK_ZIELE, Testkonten-Datei), damit der Hinweis nicht von der Allowlist abweicht.
+const klickHinweis = () => `\n\nKlickwerkzeug (Persona-/Klicktest): in der Shell \`klick <persona|-> <d|m> <url> [aktion …]\` — persona ${testkontoNamen().join(', ') || '„-“ (keine Testkonten eingetragen)'}
+(Testkonten der Test-Instanz, du siehst die Passwörter nicht), d = Desktop, m = Handy. Ziele: ${zieleText()}; angemeldet wird nur an 3436,
+sonst persona „-“. Aktionen: warte:<ms> · klick:<sichtbarer Text> · rolle:<rolle>=<name> ·
 tippe:<selektor>=<text> · text:<selektor> · bild:<name> · voll. Mehrteilige Aktionen in Anführungszeichen. Jeder Aufruf liefert die
 Ladezeit, Texte, Fehler und die Pfade der Bildschirmfotos — nenne sie im Ergebnis je Befund.`;
 
@@ -2232,7 +2234,7 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   try {
   for (const [i, m] of (reihe.length ? reihe : ['glm-5.3-flash']).slice(0, 3).entries()) {
     model = alsModell(m);
-    out = await jcodeSpawn({ cwd: d.cwd, prompt: d.klick ? prompt + KLICK_HINWEIS : prompt, model, tools, key: mel.token, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted, extra: d.klick ? { WERKBANK_KLICK: '1', WERKBANK_KLICK_AUS: d.klick } : undefined });
+    out = await jcodeSpawn({ cwd: d.cwd, prompt: d.klick ? prompt + klickHinweis() : prompt, model, tools, key: mel.token, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted, extra: d.klick ? { WERKBANK_KLICK: '1', WERKBANK_KLICK_AUS: d.klick } : undefined });
     ausw = jcodeAuswerten(out, d.cwd, model);
     if ((out.code === 0 && ausw.j) || d.aborted || ausw.draussen.length || d.rolle !== 'leser') break;
     log('worker jcode rückfall', { delegation: d.id, modell: m, exit: out.code, naechstes: reihe[i + 1] ?? null });

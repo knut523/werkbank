@@ -63,31 +63,51 @@ export function ausgabeOrdner(aus: string | undefined): string | null {
   } catch { return null; }
 }
 
-/** Testkonten der Test-Instanz (Datei der Persona-Abnahme, Tab-getrennt: Name, E-Mail, Passwort) — nie ausgegeben. */
-/** Basic-Auth der Nur-lesen-Ziele (traefik): Testkonto je Host aus einer Datei, die Knut füllt (Host, Nutzer, Passwort,
- *  Tab-getrennt) — nie ausgegeben, für jcode gesperrt wie die Testkonten (Pre-Tool-Hook „testkonten“). */
-export function basicKonto(host: string, datei = join(homedir(), '.cache', 'p436', 'testkonten-basic.txt')): { username: string; password: string } | null {
-  try {
-    const z = readFileSync(datei, 'utf8').split('\n').map((l) => l.split('\t')).find((x) => x[0] === host && x.length >= 3);
-    return z ? { username: z[1], password: z[2] } : null;
-  } catch { return null; }
+/** Erste Tab-getrennte Zeile mit `schluessel` vorn und mindestens drei Feldern (Dateien, die Knut füllt; nie ausgegeben). */
+function tabZeile(datei: string, schluessel: string): string[] | null {
+  try { return readFileSync(datei, 'utf8').split('\n').map((l) => l.split('\t')).find((x) => x[0] === schluessel && x.length >= 3) ?? null; }
+  catch { return null; }
 }
 
-export function testkonto(name: string, datei = join(homedir(), '.cache', 'p436', 'testkonten.txt')): { email: string; pw: string } | null {
-  try {
-    const z = readFileSync(datei, 'utf8').split('\n').map((l) => l.split('\t')).find((x) => x[0] === name && x.length >= 3);
-    return z ? { email: z[1], pw: z[2] } : null;
-  } catch { return null; }
+/** Basic-Auth der Nur-lesen-Ziele (traefik): Testkonto je Host (Host, Nutzer, Passwort) — für jcode gesperrt wie die Testkonten
+ *  (Pre-Tool-Hook, Dateiname testkonten*.txt). */
+export function basicKonto(host: string, datei = join(homedir(), '.cache', 'p436', 'testkonten-basic.txt')): { username: string; password: string } | null {
+  const z = tabZeile(datei, host);
+  return z ? { username: z[1], password: z[2] } : null;
 }
+
+/** Testkonten der Test-Instanz (Datei der Persona-Abnahme: Name, E-Mail, Passwort). */
+export function testkonto(name: string, datei = join(homedir(), '.cache', 'p436', 'testkonten.txt')): { email: string; pw: string } | null {
+  const z = tabZeile(datei, name);
+  return z ? { email: z[1], pw: z[2] } : null;
+}
+
+/** Namen der Testkonten (erste Spalte) für den Auftragshinweis — ohne E-Mail und Passwort. */
+export function testkontoNamen(datei = join(homedir(), '.cache', 'p436', 'testkonten.txt')): string[] {
+  try { return readFileSync(datei, 'utf8').split('\n').map((l) => l.split('\t')).filter((x) => x.length >= 3 && x[0]).map((x) => x[0]); }
+  catch { return []; }
+}
+
+/** Ziele als Klartext für Fehlermeldung und Auftragshinweis — aus KLICK_ZIELE, damit beides nicht von der Liste abweicht (A-B6). */
+export function zieleText(): string {
+  const lokal = [...new Set(KLICK_ZIELE.filter((z) => !z.nurLesen).map((z) => z.port))].join(', ');
+  const lesend = KLICK_ZIELE.filter((z) => z.nurLesen).map((z) => `${z.proto}//${z.host}`).join(', ');
+  return `127.0.0.1/localhost auf ${lokal} (Test-Instanz 3436, Vorschau) sowie ${lesend} (nur lesend: nur ansehen, nicht klicken oder tippen)`;
+}
+/** Auf Nur-lesen-Zielen nur Aktionen, die nichts auslösen (A-B7): auch ein Klick auf einen Link kann ein GET mit Wirkung sein. */
+const NUR_ANSEHEN = new Set(['warte', 'text', 'bild', 'voll']);
+/** Obergrenze der Ausgabe (K9): sie landet im Kontext des Modells. */
+const AUSGABE_MAX = 20_000;
 
 const PLAYWRIGHT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'node_modules', 'playwright', 'index.mjs');
 
 export async function klick(argv: string[], aus: string | undefined): Promise<{ code: number; text: string }> {
   const [persona, geraet, url, ...rest] = argv;
   if (!persona || !['d', 'm'].includes(geraet) || !url) return { code: 2, text: 'Aufruf: klick <persona|-> <d|m> <url> [aktion …]' };
-  if (!zielErlaubt(url)) return { code: 3, text: `Ziel nicht erlaubt: nur 127.0.0.1/localhost auf 3436, 8110, 8111 (Test-Instanz, Vorschau) sowie ${KLICK_ZIELE.filter((z) => z.nurLesen).map((z) => z.host).join(', ')} (nur lesend) — nie Produktion.` };
+  if (!zielErlaubt(url)) return { code: 3, text: `Ziel nicht erlaubt: nur ${zieleText()} — nie Produktion.` };
   const akt = aktionen(rest);
   if (typeof akt === 'string') return { code: 2, text: akt };
+  if (zielVon(url)?.nurLesen && akt.some((a) => !NUR_ANSEHEN.has(a.art))) return { code: 2, text: 'Auf Nur-lesen-Zielen nur warte, text, bild und voll.' };
   const ordner = ausgabeOrdner(aus);
   if (!ordner) return { code: 4, text: 'Kein Ausgabeordner (das Klickwerkzeug läuft nur in einem Worker mit klick=true).' };
   const ziel = new URL(url);
@@ -119,7 +139,7 @@ export async function klick(argv: string[], aus: string | undefined): Promise<{ 
     await p.goto(url);
     await p.waitForSelector('.karte, .leer, .zeile, main', { timeout: 20_000 }).catch(() => null);
     zeilen.push(`geladen in ${Date.now() - t0} ms: ${p.url()}`);
-    let voll = false, n = 0;
+    let voll = false;
     for (const a of akt) {
       try {
         if (a.art === 'warte') await p.waitForTimeout(Number(a.wert));
@@ -131,17 +151,19 @@ export async function klick(argv: string[], aus: string | undefined): Promise<{ 
         else if (a.art === 'voll') voll = true;
       } catch (e: any) { zeilen.push(`FEHLER bei ${a.art}:${a.wert.slice(0, 60)} — ${String(e?.message ?? e).split('\n')[0].slice(0, 200)}`); }
       await p.waitForTimeout(300);
-      n++;
     }
     const f = join(ordner, `${Date.now()}-${geraet}.png`);
     await p.screenshot({ path: f, fullPage: voll });
     zeilen.push(`bild ${f}`, `seite ${p.url()}`, ...(geblockt ? [`${geblockt} Anfrage(n) an andere Ziele blockiert`] : []));
-    return { code: 0, text: zeilen.join('\n') };
+    const text = zeilen.join('\n');
+    return { code: 0, text: text.length > AUSGABE_MAX ? `${text.slice(0, AUSGABE_MAX)}\n… gekürzt (${text.length} Zeichen)` : text };
   } finally { process.removeListener('SIGTERM', zu); await b.close(); }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const r = await klick(process.argv.slice(2), process.env.WERKBANK_KLICK_AUS);
+  // Pass C (S4): Startfehler (Playwright fehlt, Browser startet nicht) als kurze Meldung statt unbehandelter Zurückweisung
+  const r = await klick(process.argv.slice(2), process.env.WERKBANK_KLICK_AUS)
+    .catch((e: any) => ({ code: 1, text: `klick fehlgeschlagen: ${String(e?.message ?? e).split('\n')[0].slice(0, 300)}` }));
   (r.code ? process.stderr : process.stdout).write(r.text + '\n');
   process.exit(r.code);
 }
