@@ -107,5 +107,10 @@ test('Phase 4 (Pass A/B): Sperr-Log schwärzt Zugangsdaten; .env-Globs fragen; G
   // Pass A (Fix-Runde 2, S3): ein „Commit-Text“ außerhalb von git commit oder mit eval ist Befehl
   for (const c of ["eval echo --message ';git push origin x'", 'eval git commit -m "x; git push origin x"', "bash -c \"git commit -m 'a'; git push\""]) assert.ok(orchestratorBlock('Bash', { command: c }), c);
   assert.equal(orchestratorBlock('Bash', { command: 'git commit -m "Doku: gh api pulls kommentieren geht über die Hauptsitzung"' }), null, 'echter Commit-Text bleibt Inhalt');
+  // Pass C (Fix-Runde 2, S2): Methoden-Umgehungen
+  for (const c of ['gh api -iXDELETE repos/o/r/git/refs/heads/x', 'gh api -X DEL\\ETE repos/o/r', 'gh api -X "$M" repos/o/r', 'gh api --method PUT repos/o/r'])
+    assert.ok(orchestratorBlock('Bash', { command: c }), c);
+  for (const c of ['gh api -X GET repos/o/r/pulls', 'gh api --method=GET repos/o/r', 'gh api repos/o/r/pulls --paginate'])
+    assert.equal(orchestratorBlock('Bash', { command: c }), null, c);
   assert.equal(classify('mcp__werkbank__ensemble_review', {}, { scope: 'aus' } as any).cls, 'read');
 });

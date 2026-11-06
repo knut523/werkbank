@@ -73,3 +73,10 @@ test('Stellen: nur Dateien des Repos, höchstens 60 Zeilen, ± 4; Schatten bis 2
   assert.equal(schattenAn({ BRIDGE_ENSEMBLE_SCHATTEN: 'aus' }, '2026-11-07'), false); assert.equal(schattenAn({ BRIDGE_ENSEMBLE_SCHATTEN: 'an' }, '2027-01-01'), true);
   assert.match(diffBlock('a..b', 'x'.repeat(90_000)), /\[… Diff gekürzt\]/); assert.equal(diffBlock('a..b', '  '), '');
 });
+
+test('Pass A (Fix-Runde 2, S4): jcode-Prompt bleibt unter der Grenze eines Befehlszeilen-Arguments', async () => {
+  const { jcodePromptArg, JCODE_PROMPT_MAX } = await import('../src/sessions.ts');
+  assert.equal(jcodePromptArg('kurz'), 'kurz');
+  const lang = jcodePromptArg('ä'.repeat(200_000));
+  assert.ok(Buffer.byteLength(lang) < 128 * 1024 && Buffer.byteLength(lang) <= JCODE_PROMPT_MAX + 200); assert.match(lang, /gekürzt/);
+});

@@ -16,6 +16,7 @@ export interface Oc2Server { sichern(key: string): Promise<Oc2Zugang | null>; st
 
 export const oc2Home = (env: Env = process.env) => env.BRIDGE_OPENCODE2_HOME || join(homedir(), '.local', 'opencode2');
 export const oc2Ports = (env: Env = process.env) => (env.BRIDGE_OPENCODE2_PORTS ?? '47811 47812').split(/[\s,]+/).map(Number).filter((p) => Number.isInteger(p) && p > 1024 && p < 65536);
+// ponytail (Pass A S13): übersteuerbar nur, um eine neue Version auf der Test-Brücke zu prüfen, bevor die feste Version wechselt.
 export const oc2Version = (env: Env = process.env) => env.BRIDGE_OPENCODE2_VERSION || '2.2.5';
 
 /** Bedingung 2: Version und Konfiguration (nur Melious, keine Updates, kein Teilen). Leer = in Ordnung, sonst der Grund. */

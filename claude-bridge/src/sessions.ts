@@ -1070,6 +1070,11 @@ export function strangFreigabe(userId: string, convId: string, pfad: string, bis
   // Phase 4 (A-S2/S6): auch jeder Punkt-Ordner direkt im Home (.config, .local, .cache, .melious …) und jeder Ordner über dem Home
   const imHome = real.startsWith(homedir() + '/') ? real.slice(homedir().length + 1) : null;
   if (/(^|\/)(\.ssh|\.claude|\.runtime|\.gnupg)(\/|$)|\/\.config\/vw(\/|$)/.test(real) || imHome?.startsWith('.') || (homedir() + '/').startsWith(real === '/' ? '/' : real + '/')) throw Object.assign(new Error('Geheimnis-Orte und das ganze Home gibt es nicht als Zugang.'), { status: 400 });
+  // Pass A/C (Fix-Runde 2, P2/S11): nur unter den Arbeitswurzeln der Stränge (oder olaf-docs) und nie ein Ordner mit Zugangsdateien
+  // (.env, .env.local …) — den Zugang kann auch der Hauptchat erteilen, auf Bitte eines Strangs, den PR-Text steuern könnte.
+  const unterWurzel = [...orchRoots(), ...docsOrdner()].some((r) => { try { const w = realpathSync(r); return real === w || real.startsWith(w + '/'); } catch { return false; } });
+  if (!unterWurzel) throw Object.assign(new Error(`Zugang nur unter den Arbeitsordnern der Stränge (${orchRoots().join(', ')}) oder olaf-docs.`), { status: 400 });
+  if (readdirSync(real).some((n) => /^\.env(\.(?!example$|sample$|template$)[\w.-]+)?$/.test(n))) throw Object.assign(new Error('Ordner mit Umgebungsdateien (.env*) gibt es nicht als Zugang.'), { status: 400 });
   // Pass B (Fix-Runde 2): neu = es gab für den Pfad noch keinen gültigen Zugang — nur dann darf die Werkbank ihn beim Rollback entziehen
   const neu = !(e.freigaben ?? []).some((f) => f.bis > Date.now() && f.pfad === real);
   e.freigaben = [...(e.freigaben ?? []).filter((f) => f.bis > Date.now() && f.pfad !== real), { pfad: real, bis }];
@@ -1138,7 +1143,11 @@ function makeGuard(live: Live) {
   return async (input: any, toolUseId?: unknown, _opts?: unknown, escalated?: { reason?: string }) => {
     const tool: string = input.tool_name;
     const toolInput: Record<string, unknown> = input.tool_input ?? {};
-    const c0 = classify(tool, toolInput, { workDir: live.workDir, scope: autoScope(), guard: live.guard, leit: live.leit });
+    // Pass A/C (Fix-Runde 2, P1/S5): ein erteilter Ordnerzugang gilt auch für Datei-Werkzeuge — nicht nur für Git und Tests
+    // (strangLokal). Nur Strang-Leads, die schreiben dürfen; lesende Läufe und Worker bekommen keine Freigaben.
+    const fg = live.orch && !live.worker && !live.readonly && live.profil !== 'leser' && live.guard ? freigabenVon(live.key) : [];
+    const guard = fg.length && live.guard ? { ...live.guard, allowed: [...live.guard.allowed, ...fg] } : live.guard;
+    const c0 = classify(tool, toolInput, { workDir: live.workDir, scope: autoScope(), guard, leit: live.leit });
     // Leitstand (Plan 132, C7/D4): eigene Prüfung VOR Lese-Freigabe, Arbeitsordner-Regel und Auto-Ausgang.
     const lc = live.leit ? leitstandCheck(tool, toolInput, { workDir: live.workDir ?? live.guard?.allowed[0], scratch: live.guard?.ownScratch }) : null;
     const { cls, why } = lc && c0.cls !== 'blocked' ? lc : c0;
@@ -2188,11 +2197,21 @@ export function jcodeWritesOutside(sessionJson: any, cwd: string): string[] {
   return out;
 }
 /** jcode einmal laufen lassen (Melious-Profil). Wächter (Pilot 183): shim/bash vorn in PATH lässt nur lesende Shell-Befehle durch. */
+/** Pass A (Fix-Runde 2, S4): jcode bekommt den Prompt als ein argv-Argument — Linux begrenzt das auf 128 KiB (MAX_ARG_STRLEN), darüber
+ *  scheitert spawn mit E2BIG (gerade beim Verifizierer großer Diffs). Sichtbar kürzen statt scheitern.
+ *  ponytail: Übergabe über eine Datei, sobald jcode das kann; bis dahin hat der gekürzte Teil (Ende des Diffs) das Nachsehen. */
+export const JCODE_PROMPT_MAX = 120_000;
+export function jcodePromptArg(p: string): string {
+  if (Buffer.byteLength(p) <= JCODE_PROMPT_MAX) return p;
+  let s = p.slice(0, JCODE_PROMPT_MAX);
+  while (Buffer.byteLength(s) > JCODE_PROMPT_MAX - 200) s = s.slice(0, Math.floor(s.length * 0.95));
+  return `${s}\n\n[… Auftrag hier gekürzt (Grenze der Befehlszeile) — lies fehlende Teile im Arbeitsordner nach.]`;
+}
 function jcodeSpawn(o: { cwd: string; prompt: string; model: string | null; tools: string; key: string; timeoutS: number; abbruch?: () => boolean; extra?: Record<string, string> }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key,
     JCODE_HOOK_PRE_TOOL: JCODE_HOOK, JCODE_HOOK_PRE_TOOL_TIMEOUT_MS: '10000', ...o.extra };
   return new Promise((res) => {
-    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', o.prompt], { cwd: o.cwd, env });
+    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', jcodePromptArg(o.prompt)], { cwd: o.cwd, env });
     let so = '', se = '';
     c.stdout.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
     c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
@@ -2295,7 +2314,7 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
 // ---------- Konzept J, J1 (Knut 05.11., Go): jcode-Strang ----------
 // Ein Strang mit `laeufer: 'jcode'` läuft nicht über Claude, sondern über jcode (Melious EU) — eigener Strang mit eigenem Zug, ohne
 // Claude-Kontingent, ≈ 0,1 GB (eigener Topf, schaetzung.ts). Schreibt im Arbeitsordner (Werkzeuge write/edit), sonst wird das Ergebnis
-// verworfen; Shell nur über den Wächter (shim/bash, lesende Befehle und lokale Commits), pre_tool-Hook vor jedem Werkzeug. Gleicher Auftragstext und gleiche Status-Zeile wie bei Claude.
+// verworfen; Shell nur über den Wächter (shim/bash, nur lesende Befehle — jcode-Stränge committen nicht, das macht der Lead), pre_tool-Hook vor jedem Werkzeug. Gleicher Auftragstext und gleiche Status-Zeile wie bei Claude.
 // Ergebnis ohne Status-Zeile oder leer → einmal neu, dann opencode (falls installiert), dann läuft der Zug mit Claude weiter.
 const STATUS_ZEILE = /^[\s*_]*Status:?[\s*_]*(fertig|braucht Antwort|blockiert)\b/im;
 export function jcodeStrangErgebnis(o: { code: number | null; j: any; draussen: string[] }): { ok: boolean; text: string; grund: string } {
@@ -2766,7 +2785,8 @@ export async function startDelegation(userId: string, convId: string, b: { rolle
   // ohne jcode-Worker laufen sie als Claude-Prozesse und zählen wie alle anderen Worker.
   if (rolle === 'leser' && jcodeAn()) {
     if (runningOf(parent).filter(istLeser).length >= maxLeser()) return { ok: false, status: 429, error: `Schon ${maxLeser()} lesende Worker laufen in diesem Strang — erst delegation_stand abwarten.` };
-    if (alleLauf.filter(istLeser).length >= maxLeserBox()) return { ok: false, status: 429, error: `Gerade laufen ${maxLeserBox()} lesende Worker auf der Maschine (jcode-Topf) — erst delegation_stand abwarten.` };
+    // Pass A (Fix-Runde 2, S9): der Topf gilt gemeinsam für jcode-Stränge und lesende Worker (jcodeBelegt), nicht nur als Zahl der Worker
+    if (alleLauf.filter(istLeser).length >= maxLeserBox() || jcodeBelegt() + schaetze({ jcode: true }).speicherGb > jcodeTopfGb() + 1e-9) return { ok: false, status: 429, error: `Der jcode-Topf der Maschine ist voll (${jcodeTopfGb()} GB, Stränge und lesende Worker zusammen) — erst delegation_stand abwarten.` };
   } else {
     const zaehlt = (d: Deleg) => !istLeser(d) || !jcodeAn() || !!d.claude;
     if (runningOf(parent).filter(zaehlt).length >= KAPPUNG.maxWorker) return { ok: false, status: 429, error: `Schon ${KAPPUNG.maxWorker} Worker laufen in diesem Strang — erst delegation_stand abwarten.` };

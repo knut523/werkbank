@@ -54,7 +54,9 @@ const BASH_GITHUB_WRITE: [RegExp, string][] = [
   [git('push'), 'git push'],
   [/\bgh\s+pr\s+(create|comment|review|edit|close|reopen|ready)\b/, 'GitHub-PR schreiben'],
   [/\bgh\s+(issue|release|repo|label|secret|variable|workflow|gist)\s+(create|edit|close|delete|comment|reopen|set|run|enable|disable|fork|rename|archive|upload)\b/, 'GitHub schreiben'],
-  [/\bgh\s+api\b[^|;&]*(-X|--method)[\s=]*['"]?(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],   // auch --method=POST (Gegenprüfung 06.11.)
+  // Pass C (Fix-Runde 2, S2): jede Methode außer einem wörtlichen GET ist Schreiben — auch in Kurzoptionsgruppen (-iXDELETE),
+  // mit Escapes (DEL\ETE) oder aus einer Variable (-X "$M"); --method=POST wie bisher (Gegenprüfung 06.11.).
+  [/\bgh\s+api\b[^|;&]*\s(-[a-zA-Z]*X|--method)(?![\s=]*['"]?(GET|get|Get)['"]?(\s|$))/, 'GitHub-API schreiben'],
   // Phase 4 (Pass B, B5): auch `-fbody=x`, `--field=…`, `--input=datei` (ohne Leerzeichen nach der Option).
   [/\bgh\s+api\s+(?!graphql\b)[^|;&]*\s(-[fF]\S|-[fF]\s|--field[=\s]|--raw-field[=\s]|--input[=\s])/, 'GitHub-API schreiben'],
   [/\bgh\s+api\s+graphql\b[^|;&]*\bmutation\b/i, 'GitHub-API schreiben (GraphQL-Mutation)'],

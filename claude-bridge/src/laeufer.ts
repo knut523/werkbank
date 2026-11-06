@@ -93,6 +93,9 @@ export function opencode2Laeufer(o: { base: string; passwort: string; fetchFn?: 
           s = neu;
           // Bedingung 1: nach einem Ausfall läuft die Sitzung nicht von selbst weiter — einmal neu anstoßen.
           // Gegenprüfung 06.11.: schlägt das Anstoßen direkt nach dem Neustart fehl, im nächsten Takt erneut (nicht den Lauf abbrechen).
+          // ponytail (Pass A S7): ein langsamer GET zählt hier wie ein Ausfall und stößt einmal an. Nach einem echten Neustart steht
+          // die Sitzung weiter auf „busy“ (Test 06.11.), „ruhig“ unterscheidet die Fälle also nicht — dafür bräuchte es die Prozessnummer
+          // des Servers aus oc2server; bis dahin lieber einmal zu viel anstoßen als eine Sitzung liegen lassen.
           if (wegSeit !== null && !s?.outcome && !angestossen) {
             angestossen = await call('POST', `/api/session/${sid}/prompt`, { text: OC2_WEITER }).then(() => true, () => false);
             if (!angestossen) continue;
