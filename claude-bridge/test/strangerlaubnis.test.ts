@@ -81,6 +81,12 @@ test('Phase 4 (Pass B, C1–C3): keine Pipe in eine Shell, keine GIT_*/PATH-Prä
     'GIT_WORK_TREE=/home/knut/work/olaf-admin git checkout -- .', 'GIT_DIR=/home/knut/work/x/.git git status', `PATH=${WT}/bin:/usr/bin git status`,
     'git -C /home/knut/work/olaf-docs restore .', 'cd /home/knut/work/olaf-docs && git checkout -- .', 'git -C /home/knut/work/olaf-docs stash pop',
     'git diff --output=/tmp/x', 'git diff --no-index /home/knut/.ssh/id_rsa /dev/null',
+    // Pass A (Fix-Runde 2, S1): ein Pfad außerhalb des Worktrees macht git diff implizit zu --no-index (liest beliebige Dateien)
+    'git diff /dev/null /home/knut/.claude/.credentials.json', 'git diff /dev/null ~/.ssh/id_rsa', 'git diff /dev/null "/home/knut/.config/vw/session"',
+    'git diff HEAD -- ../../../.ssh/id_rsa', "git log -p -- '/etc/passwd'", 'git diff --relative=/etc x', 'git commit -F /home/knut/.ssh/id_rsa',
+    // Pass C (Claude, B1/B2/S6): angehängte Kurzoption, Editor als Shell, fremde Stashes
+    'git commit --allow-empty -F/home/knut/.ssh/id_ed25519', 'EDITOR=/bin/sh git commit -e -m "id > /tmp/x"', 'VISUAL=/bin/sh git commit -m x --edit',
+    'git commit -e -m x', 'git stash pop', 'git stash apply', 'git stash', 'cd /home/knut/work/olaf-docs && git add -A && git commit -m x', 'git -C /home/knut/work/olaf-docs commit -am x',
   ]) assert.equal(strangLokal(c, o), null, c);
   // weiterhin erlaubt: Ausgabefilter, Test-Variablen, olaf-docs commit, restore im eigenen Worktree
   for (const c of ['npm test 2>&1 | tail -40', 'git log --oneline | head -5', 'DATABASE_URL=postgresql://olaf:olaf@localhost:55433/olaf_test npm test', 'git -C /home/knut/work/olaf-docs commit -m "Plan"', `git -C ${WT} restore src/a.ts`])
@@ -98,5 +104,8 @@ test('Phase 4 (Pass A/B): Sperr-Log schwärzt Zugangsdaten; .env-Globs fragen; G
   for (const c of ['gh api repos/a/b/issues/1/comments -fbody=x', 'gh api repos/a/b/issues --field=title=x', 'gh api repos/a/b --input=d.json', 'gh api graphql -F query=@m.graphql'])
     assert.ok(orchestratorBlock('Bash', { command: c }), c);
   assert.equal(orchestratorBlock('Bash', { command: 'gh api repos/a/b/pulls/1' }), null, 'Lesen bleibt frei');
+  // Pass A (Fix-Runde 2, S3): ein „Commit-Text“ außerhalb von git commit oder mit eval ist Befehl
+  for (const c of ["eval echo --message ';git push origin x'", 'eval git commit -m "x; git push origin x"', "bash -c \"git commit -m 'a'; git push\""]) assert.ok(orchestratorBlock('Bash', { command: c }), c);
+  assert.equal(orchestratorBlock('Bash', { command: 'git commit -m "Doku: gh api pulls kommentieren geht über die Hauptsitzung"' }), null, 'echter Commit-Text bleibt Inhalt');
   assert.equal(classify('mcp__werkbank__ensemble_review', {}, { scope: 'aus' } as any).cls, 'read');
 });

@@ -19,6 +19,8 @@ export interface Messung extends Gruppe {
 }
 
 export const N_LETZTE = 20, MIN_N = 3, KORREKTUR_N = 5;
+/** Ab hier gilt ein offener Abschnitt ohne Strang-Verweis als verwaist (ein Takt dauert Sekunden). */
+export const VERWAIST_MS = 15 * 60_000;
 const klemme = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 
 /** Auftragsart aus dem Strang (rein). */
@@ -104,14 +106,21 @@ export async function kalibTabelle(userId: string, now = Date.now()): Promise<Ka
  * im Abschnitt die erste ETA des Agenten festhalten; „läuft“ verlassen → Ende, Dauer, Faktor. Gibt die Felder für den Strang zurück.
  */
 export async function messTakt(d: any, zustand: string, o: { now: number; agentEta: number | null; agentGemeldet: number | null; tab: KalibTabelle; medianMs: number | null }): Promise<Record<string, unknown>> {
-  const offen = d.etaMessung as { id: string; start: string | Date; etaAt: string | Date; agent?: boolean } | null | undefined;
+  let offen = d.etaMessung as { id: string; start: string | Date; etaAt: string | Date; agent?: boolean } | null | undefined;
   if (!d?.userId) return {};
+  // Pass A (Fix-Runde 2): zeigt der Strang auf einen schon beendeten Abschnitt (Strang-Update ging verloren), gilt er als ohne Abschnitt —
+  // sonst begänne nie wieder einer und jedes weitere Ende würde verworfen.
+  if (offen && zustand === 'laeuft' && (await messungen().findOne({ _id: oid(offen.id) }, { projection: { ende: 1 } }))?.ende) offen = null;
   // In der Schlange zählt der Abschnitt weiter (Knut wartet genauso) — sonst zerfiele er in Kurzabschnitte (Gegenprüfung 06.11.).
   const imAbschnitt = zustand === 'laeuft' || (zustand === 'schlange' && !!offen);
   if (zustand === 'laeuft' && !offen) {
     // Idempotent: ging das Strang-Update im letzten Takt verloren (lastSentAt-Bedingung), den offenen Abschnitt weiterverwenden.
     const schon = await messungen().findOne({ strand: String(d._id), ende: null }, { sort: { start: -1 } });
-    if (schon) return { etaMessung: { id: String((schon as any)._id), start: schon.start, etaAt: schon.etaAt, dauerMs: schon.etaDauerMin * 60_000, quelle: schon.etaQuelle, ...(schon.agentEtaAt ? { agent: true } : {}) } };
+    // Pass A (Fix-Runde 2): nur ein eben begonnener Abschnitt wird weiterverwendet. Ein alter offener (Strang abgenommen, angehalten oder
+    // aus dem 14-Tage-Fenster gefallen, ohne dass der Takt ihn schloss) wird als „verwaist“ ohne Faktor geschlossen — sonst ergäbe der
+    // alte Start einen riesigen Faktor und verfälschte die Kalibrierung.
+    if (schon && o.now - new Date(schon.start).getTime() > VERWAIST_MS) await messungen().updateOne({ _id: (schon as any)._id }, { $set: { ende: new Date(o.now), dauerMin: null, faktor: null, faktorAgent: null, endzustand: 'verwaist' } });
+    else if (schon) return { etaMessung: { id: String((schon as any)._id), start: schon.start, etaAt: schon.etaAt, dauerMs: schon.etaDauerMin * 60_000, quelle: schon.etaQuelle, ...(schon.agentEtaAt ? { agent: true } : {}) } };
     const g = gruppeVon(d), k = kalibFuer(o.tab, g), s = startSchaetzung(g, k, o.medianMs);
     const m: Messung = { ...g, strand: String(d._id), titel: String(d.title ?? '').slice(0, 200), userId: String(d.userId), start: new Date(o.now), etaAt: new Date(o.now + s.dauerMs), etaQuelle: s.quelle, etaDauerMin: Math.round(s.dauerMs / 6000) / 10, ende: null };
     const r = await messungen().insertOne(m as any);

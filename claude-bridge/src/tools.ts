@@ -207,7 +207,10 @@ export interface ClassifyContext {
  *  Commit-Ablehnungen in Strängen (06.11. auf der Live-Brücke beobachtet: ein Commit-Text mit „gh api …“ wurde als GitHub-
  *  Zugriff gesperrt). Was nach dem Zitat kommt (&& git push …), bleibt Befehl und wird weiter geprüft. */
 // Doppelte Zitate nur ohne $ und Backtick (dort führt die Shell aus — `-m "$(git push)"` bleibt sichtbar).
-export const ohneCommitText = (cmd: string) => cmd.replace(/(\bgit\b[^|;&\n]*?\scommit\b[^|;&\n]*?\s-[a-zA-Z]*m\s*|\s--message[=\s]\s*)("(?:[^"\\$`]|\\[^$`])*"|'[^']*')/g, '$1"…"');
+// Pass A (Fix-Runde 2, S3): nur wenn das Segment mit `git … commit` beginnt (nicht `eval echo --message …`), --message nur dort,
+// und nie, wenn eval oder `sh -c` im Befehl steht (dann ist ein „Text“ wieder Befehl).
+export const ohneCommitText = (cmd: string) => (/\beval\b|\b(ba|z|da)?sh\s+-c\b/.test(cmd) ? cmd
+  : cmd.replace(/((?:^|[;&|(]\s*)(?:[A-Z_][A-Z0-9_]*=\S+\s+)*git\b[^|;&\n]*?\scommit\b[^|;&\n]*?(?:\s-[a-zA-Z]*m\s*|\s--message[=\s]\s*))("(?:[^"\\$`]|\\[^$`])*"|'[^']*')/g, '$1"…"'));
 // Sperrenliste 06.11. (Knut: „lesen frei“): `.env` nur als echte Datei (.env, .env.local, …/.env.production) — nicht `process.env`,
 // nicht .env.example/.sample/.template (vorher fragte jedes `grep process.env` und wurde in Strängen abgelehnt).
 // Phase 4 (Pass B, B4): auch Glob-Formen (`.env*`, `.en?`, `.env.{local,prod}`, `.env[.]local`) zählen.
@@ -477,8 +480,9 @@ export const schwaerzeBefehl = (cmd: string) => cmd
   .replace(/\b([A-Z0-9_]*(TOKEN|KEY|SECRET|PASSWORD|PASS|PWD)[A-Z0-9_]*)=\S+/gi, '$1=***')
   .replace(/\b(Bearer|token)\s+[\w.~+/=-]{8,}/gi, '$1 ***');
 
-// Phase 4 (Pass B, C2): Umgebungs-Präfixe nur für Test-Variablen — nie GIT_* (anderes Repo) oder PATH (eigenes „git“).
-const LOKAL_ENV_VERBOTEN = /^(GIT_\w*|PATH|LD_\w+|NODE_OPTIONS|BASH_ENV|ENV|HOME)$/;
+// Phase 4 (Pass B, C2; Pass C B2): Umgebungs-Präfixe nur aus einer Erlaubnisliste für Tests — eine Sperrliste ließ EDITOR=/bin/sh
+// durch (git commit -e führte dann den Commit-Text als Shell aus), ebenso VISUAL, PAGER, GIT_*, PATH, LD_*.
+const LOKAL_ENV_ERLAUBT = /^(\w*DATABASE_URL|PG\w*|MONGO_URI\w*|NODE_ENV|TZ|CI|DEBUG|NO_COLOR|FORCE_COLOR|TEST_\w*|\w+_TEST_\w+)$/;
 // Phase 4 (Pass B, C3): in olaf-docs-Klonen (Knuts eigene Arbeitskopien) nur nicht-zerstörende Git-Befehle.
 const DOCS_GIT = /^(add|commit|status|diff|log|show|rev-parse|ls-files|blame)$/;
 
@@ -497,7 +501,8 @@ export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] })
   const segs = kette.split(/\s&&\s/);
   if (segs.length !== roh.length) return null;
   const home = process.env.HOME ?? '/home';
-  const pfad = (p: string) => resolve(p.replace(/^~(?=\/|$)/, home).replace(/^["']|["']$/g, ''));
+  // Pass C (klein): relative Pfade gelten im Arbeitsordner des Strangs, nicht im Ordner der Brücke
+  const pfad = (p: string) => resolve(o.dirs[0] ?? '/', p.replace(/^~(?=\/|$)/, home).replace(/^["']|["']$/g, ''));
   const unter = (a: string, liste: string[]) => liste.some((d) => a === resolve(d) || a.startsWith(resolve(d) + '/'));
   const innen = (p: string) => unter(pfad(p), [...o.dirs, ...(o.docs ?? [])]);
   const imDocs = (p: string) => !unter(pfad(p), o.dirs) && unter(pfad(p), o.docs ?? []);
@@ -506,7 +511,7 @@ export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] })
     let s = segs[i].replace(/\s*2>&1\s*$/, '').trim(), r = roh[i].replace(/\s*2>&1\s*$/, '').trim();
     // Umgebungs-Präfixe: nur einfache Werte oder eine lokale Postgres-Adresse
     for (let m = r.match(/^([A-Z_][A-Z0-9_]*)=(\S+)\s+/); m; m = r.match(/^([A-Z_][A-Z0-9_]*)=(\S+)\s+/)) {
-      if (LOKAL_ENV_VERBOTEN.test(m[1])) return null;
+      if (!LOKAL_ENV_ERLAUBT.test(m[1])) return null;
       if (m[2].includes('://') ? !DB_LOKAL.test(m[2]) : !/^[\w.,:/@-]+$/.test(m[2])) return null;
       r = r.slice(m[0].length); s = s.replace(/^[A-Z_][A-Z0-9_]*=\S+\s+/, '');
     }
@@ -519,8 +524,26 @@ export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] })
       const ziel = g[1] ?? letztesCd;
       if (ziel && imDocs(ziel) && !DOCS_GIT.test(g[2])) return null;
       const rest = g[3] ?? '';
+      // Pass A (Fix-Runde 2, S1): ein Pfad außerhalb des Worktrees macht `git diff` implizit zu --no-index und liest dann
+      // beliebige Dateien; dasselbe gilt für -F <Datei>. Jedes Argument (auch in Zitaten, auch nach „--x=“), das absolut ist, mit ~
+      // beginnt oder ein „..“-Glied hat, muss im eigenen Worktree oder in olaf-docs liegen. Commit-Texte nach -m bleiben frei.
+      let text = false;
+      for (const t of rest.matchAll(/"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g)) {
+        const v = t[1] ?? t[2] ?? t[3] ?? '';
+        if (text) { text = false; continue; }
+        if (!t[1] && !t[2] && /^(-m|--message)$/.test(v)) { text = true; continue; }
+        if (!t[1] && !t[2] && /^(-m.|--message=)/.test(v)) continue;
+        // „--opt=Wert“ und angehängte Kurzoptionen („-F/pfad“, Pass C B1) prüfen den Wert
+        const wert = !t[1] && !t[2] && v.startsWith('-') ? (v.includes('=') ? v.slice(v.indexOf('=') + 1) : /^-[a-zA-Z][/~.]/.test(v) ? v.slice(2) : '') : v;
+        if (/^[/~]|(^|\/)\.\.(\/|$)/.test(wert) && !innen(wert)) return null;
+      }
       if (g[2] === 'branch' && /\s-[a-zA-Z]*[dDmMcCf]|--(delete|move|copy|force|set-upstream)/.test(rest)) return null;
-      if (g[2] === 'stash' && /\s(drop|clear)\b/.test(rest)) return null;
+      // Pass C (S6): der Stash-Stapel gilt für alle Worktrees — nur eigene Einträge anlegen und ansehen, nie pop/apply/drop
+      if (g[2] === 'stash' && !/^\s+(push\s+(-m|--message)\s|list\b|show\b)/.test(rest)) return null;
+      // Pass C (B2): kein Editor-Aufruf beim Commit
+      if (g[2] === 'commit' && /\s(-e|--edit)(\s|$)|\s-[a-zA-Z]*e[a-zA-Z]*(\s|$)/.test(` ${rest}`.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'))) return null;
+      // Pass C (klein): in Knuts olaf-docs-Klonen nur ausdrückliche Pfade — „add -A/.“ oder „commit -a“ nähme seine ungespeicherte Arbeit mit
+      if (ziel && imDocs(ziel) && (g[2] === 'add' && /\s(-A|--all|\.|-u|--update)(\s|$)/.test(` ${rest}`) || g[2] === 'commit' && /\s-[a-zA-Z]*a[a-zA-Z]*(\s|$)|\s--all(\s|$)/.test(` ${rest}`.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""')))) return null;
       art ||= 'lokaler Git-Befehl';
       continue;
     }

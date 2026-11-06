@@ -34,8 +34,8 @@ export const zielErlaubt = (url: string) => !!zielVon(url);
 /** Anfrage erlaubt? Auf Nur-lesen-Zielen nur GET/HEAD (kein Absenden, kein Ändern). */
 export const anfrageErlaubt = (url: string, methode: string) => { const z = zielVon(url); return !!z && (!z.nurLesen || ['GET', 'HEAD'].includes(methode.toUpperCase())); };
 
-/** WebSocket-Ziele wie HTTP-Ziele (ws → http, wss → https). */
-export const wsErlaubt = (url: string) => zielErlaubt(url.replace(/^ws/, 'http'));
+/** WebSocket-Ziele wie HTTP-Ziele, aber nie auf Nur-lesen-Zielen (ein WebSocket kann schreiben; Pass A Fix-Runde 2). */
+export const wsErlaubt = (url: string) => { const z = zielVon(url.replace(/^ws/, 'http')); return !!z && !z.nurLesen; };
 
 export type Aktion = { art: 'warte' | 'klick' | 'rolle' | 'tippe' | 'text' | 'bild'; wert: string } | { art: 'voll'; wert: '' };
 export function aktionen(roh: string[]): Aktion[] | string {
@@ -128,7 +128,12 @@ export async function klick(argv: string[], aus: string | undefined): Promise<{ 
     const ctx = await b.newContext({ ...(geraet === 'm' ? { ...devices['iPhone 13'], viewport: { width: 390, height: 844 } } : { viewport: { width: 1440, height: 900 } }), locale: 'de-DE', serviceWorkers: 'block', ...(basic ? { httpCredentials: { ...basic, origin: ziel.origin } } : {}) });
     let geblockt = 0;
     // Jede Anfrage der Seite (auch Weiterleitungen, Bilder, fetch) nur an erlaubte Ziele; WebSockets ebenso.
-    await ctx.route('**/*', (r: any) => (anfrageErlaubt(r.request().url(), r.request().method()) ? r.continue() : (geblockt++, r.abort())));
+    // Pass A (Fix-Runde 2, S5): route sieht bei einer Weiterleitung nur die erste Adresse — darum selbst abrufen ohne Folgen und die
+    // Antwort (auch 30x) an den Browser geben; folgt er der Weiterleitung, läuft die neue Adresse wieder durch diese Prüfung.
+    await ctx.route('**/*', async (r: any) => {
+      if (!anfrageErlaubt(r.request().url(), r.request().method())) { geblockt++; return r.abort(); }
+      try { await r.fulfill({ response: await r.fetch({ maxRedirects: 0 }) }); } catch { await r.abort().catch(() => null); }
+    });
     await ctx.routeWebSocket(() => true, (ws: any) => { if (wsErlaubt(String(ws.url()))) ws.connectToServer(); else { geblockt++; ws.close(); } });
     const p = await ctx.newPage();
     p.on('pageerror', (e: any) => zeilen.push(`SEITENFEHLER ${String(e).slice(0, 300)}`));

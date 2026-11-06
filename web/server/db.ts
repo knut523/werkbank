@@ -44,6 +44,9 @@ export async function connect(): Promise<MongoClient> {
       // Phase 4: Sammlungen der 2.0 und dieses Pakets — je eine Abfrageform, die im Takt oder bei jedem Seitenaufruf läuft.
       db.collection('eta_messungen').createIndex({ userId: 1, ende: 1, start: -1 }),
       db.collection('eta_messungen').createIndex({ strand: 1, ende: 1 }),
+      db.collection('eta_messungen').createIndex({ strand: 1 }, { name: 'ein_offener_abschnitt', unique: true, partialFilterExpression: { ende: null } }),
+      db.collection('ansehen_spaeter').createIndex({ userId: 1, bis: 1 }),
+      db.collection('pr_ticker_prs').createIndex({ state: 1, at: -1 }),
       db.collection('strang_bedarf').createIndex({ userId: 1, 'strand.id': 1, status: 1 }),
       db.collection('strang_bedarf').createIndex({ userId: 1, 'strand.id': 1, art: 1, text: 1 }, { unique: true, partialFilterExpression: { status: 'offen' } }),
       db.collection('council_urteile').createIndex({ userId: 1 }),

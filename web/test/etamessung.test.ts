@@ -105,3 +105,18 @@ test('Gegenprüfung 06.11.: Schlange gehört zum Abschnitt; verlorenes Strang-Up
   const alt = T.etaFuer({ tiefe: 'regular', startedAt: new Date(T0), eta: { at: new Date(T0 + 99 * MIN) }, etaMessung: { start: new Date(T0 + MIN), etaAt: new Date(T0 + 61 * MIN), quelle: 'median' } }, { fertig: false, mediane: null, now: T0 + 2 * MIN });
   assert.equal(alt.quelle, 'median', 'Agenten-ETA ohne Meldezeit sticht den laufenden Abschnitt nicht');
 });
+
+test('Pass A (Fix-Runde 2): alter offener Abschnitt wird als verwaist geschlossen, nicht wieder aufgenommen; Verweis auf beendeten Abschnitt startet neu', async () => {
+  const d: any = { _id: 'alt00001', userId: 'u3', title: 'Alt', tiefe: 'regular' };
+  const s1: any = await E.messTakt(d, 'laeuft', { now: T0, agentEta: null, agentGemeldet: null, tab: [], medianMs: null });
+  // Strang wurde abgenommen, der Takt sah ihn nie wieder; zwei Tage später läuft er erneut — ohne Verweis am Strang
+  const s2: any = await E.messTakt(d, 'laeuft', { now: T0 + 2 * 86400_000, agentEta: null, agentGemeldet: null, tab: [], medianMs: null });
+  assert.notEqual(s2.etaMessung.id, s1.etaMessung.id, 'neuer Abschnitt');
+  const alt: any = await E.messungen().findOne({ _id: new (await import('mongodb')).ObjectId(s1.etaMessung.id) });
+  assert.equal(alt.endzustand, 'verwaist'); assert.equal(alt.faktor, null, 'kein Riesenfaktor');
+  // Verweis zeigt auf einen inzwischen beendeten Abschnitt → neuer Abschnitt statt Stillstand
+  await E.messungen().updateOne({ _id: new (await import('mongodb')).ObjectId(s2.etaMessung.id) }, { $set: { ende: new Date(T0 + 2 * 86400_000 + 60_000) } });
+  d.etaMessung = s2.etaMessung;
+  const s3: any = await E.messTakt(d, 'laeuft', { now: T0 + 2 * 86400_000 + 120_000, agentEta: null, agentGemeldet: null, tab: [], medianMs: null });
+  assert.ok(s3.etaMessung?.id && s3.etaMessung.id !== s2.etaMessung.id);
+});
