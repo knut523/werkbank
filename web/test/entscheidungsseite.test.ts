@@ -127,6 +127,12 @@ test('Pass A (Runde 3, AW2): Anzeige und Automatik nutzen dieselbe Klasse — ke
   const { fragen } = fragenAus(ib.eintraege);
   assert.equal(fragen.length, 2);
   for (const f of fragen) assert.notEqual(f.triage!.klasse === 'knut', !!f.autoAb, `${f.id}: genau eins von „Für dich“ und „automatisch“ (${f.triage!.klasse}, autoAb ${f.autoAb})`);
+  // Gegenprüfung Runde 3 (W1): der Kontext zählt für die Klasse — ein Zugang oder eine Außenwirkung nur im Kontext wird nie automatisch
+  const q = fragen.find((f) => f.art === 'rueckfrage')!;
+  assert.equal(q.triage!.klasse, 'knut'); assert.equal(q.autoAb, null);
+  const ib2 = baueInbox({ ...leer, lose: [{ id: 'q8', title: 'Variante A oder B?', recommendation: 'A', options: [{ label: 'A' }, { label: 'B' }], createdAt: new Date(now - 7200_000), context: 'A trägt das Prod-Token in die Config ein und schickt die Mail an die Partner' }] }, { now, triage: true });
+  const q8 = fragenAus(ib2.eintraege).fragen[0];
+  assert.equal(q8.autoAb, null, 'nicht automatisch'); assert.equal(q8.triage!.klasse, 'knut', 'und bei Knut');
 });
 
 test('Plan §23 T3: ein angehängtes Council-Urteil AN_KNUT macht die gewichtige Frage zur Knut-Frage und steht an der Frage', () => {

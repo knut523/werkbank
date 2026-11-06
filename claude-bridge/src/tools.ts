@@ -68,9 +68,10 @@ const BASH_GITHUB_WRITE: [RegExp, string][] = [
 /** Pass C/B (Runde 3): GitHub-Schreiben in drei Lesarten suchen — roh, mit neutralisierten Zitaten (ein `|` in `--jq '.a|.b'` beendet
  *  das Muster nicht mehr vor `-X DELETE`) und ohne Quotes/Backslashes (`mut''ation` ist für die Shell `mutation`). Ein Treffer in
  *  irgendeiner Lesart zählt; falsch-positiv heißt nur „Rückfrage“. */
+export const ohneZitate = (cmd: string) => cmd.replace(/"(?:[^"\\]|\\.)*"/g, '"Z"').replace(/'[^']*'/g, "'Z'");
+export const lesarten = (cmd: string) => [cmd, ohneZitate(cmd), cmd.replace(/['"\\]/g, '')];
 export function githubSchreibGrund(cmd: string): string | null {
-  const lesarten = [cmd, cmd.replace(/"(?:[^"\\]|\\.)*"/g, '"Z"').replace(/'[^']*'/g, "'Z'"), cmd.replace(/['"\\]/g, '')];
-  for (const [re, why] of BASH_GITHUB_WRITE) if (lesarten.some((l) => re.test(l))) return why;
+  for (const [re, why] of BASH_GITHUB_WRITE) if (lesarten(cmd).some((l) => re.test(l))) return why;
   return null;
 }
 
@@ -224,9 +225,19 @@ export interface ClassifyContext {
 // und nie, wenn eval oder `sh -c` im Befehl steht (dann ist ein „Text“ wieder Befehl).
 // Pass A (Runde 3): nur Treffer, die außerhalb eines Zitats beginnen — sonst startet `echo "x; git commit -m "; <Befehl>; echo "y"`
 // eine Neutralisierung mitten im Zitat und verdeckt den Befehl dahinter.
+// Gegenprüfung (B3): auch `$'…'` (Backslash schützt das Hochkomma) und Kommentare (`#` am Wortanfang bis Zeilenende — ein Hochkomma
+// darin öffnet kein Zitat); ein Treffer im Kommentar zählt als „im Zitat“ (wird nicht neutralisiert).
 const imZitat = (s: string, bis: number) => {
   let q = '';
-  for (let i = 0; i < bis; i++) { const c = s[i]; if (q === '"' && c === '\\') { i++; continue; } if (q) { if (c === q) q = ''; } else if (c === '"' || c === "'") q = c; else if (c === '\\') i++; }
+  for (let i = 0; i < bis; i++) {
+    const c = s[i];
+    if (q === '"' || q === "$'") { if (c === '\\') { i++; continue; } if (c === (q === '"' ? '"' : "'")) q = ''; continue; }
+    if (q === "'") { if (c === "'") q = ''; continue; }
+    if (c === '\\') { i++; continue; }
+    if (c === '$' && s[i + 1] === "'") { q = "$'"; i++; continue; }
+    if (c === '"' || c === "'") { q = c; continue; }
+    if (c === '#' && (i === 0 || /\s/.test(s[i - 1]))) { const nl = s.indexOf('\n', i); if (nl < 0 || nl >= bis) return true; i = nl; }
+  }
   return q !== '';
 };
 export const ohneCommitText = (cmd: string) => (/\beval\b|\b(ba|z|da)?sh\s+-c\b/.test(cmd) ? cmd
@@ -235,7 +246,23 @@ export const ohneCommitText = (cmd: string) => (/\beval\b|\b(ba|z|da)?sh\s+-c\b/
 // Sperrenliste 06.11. (Knut: „lesen frei“): `.env` nur als echte Datei (.env, .env.local, …/.env.production) — nicht `process.env`,
 // nicht .env.example/.sample/.template (vorher fragte jedes `grep process.env` und wurde in Strängen abgelehnt).
 // Phase 4 (Pass B, B4): auch Glob-Formen (`.env*`, `.en?`, `.env.{local,prod}`, `.env[.]local`) zählen.
-const ENV_DATEI = /(^|[\s/'"=<])\.(env(\.(?!example\b|sample\b|template\b)[\w.-]+)?(?=$|[\s'";|&)<>*?[{])|en[?*[]|e[?*[]|[?*[][^\s/'"]*)/;   // Pass A (Runde 3): jede Glob-Form einer Punktdatei
+const ENV_DATEI = /(^|[\s/'"=<])\.(env(\.(?!example\b|sample\b|template\b)[\w.-]+)?(?=$|[\s'";|&)<>*?[{])|en[?*[]|e[?*[])/;
+/** Gegenprüfung (B8): Glob-Formen einer Punktdatei nur, wenn sie eine Umgebungsdatei treffen können — und nur außerhalb von Zitaten
+ *  (dort expandiert die Shell nicht: `--jq '.[].n'`, ein sed-Ausdruck in Hochkommas); Stern-Punkt bleibt eine Rückfrage, `jq .[0]` nicht. */
+const ENV_NAMEN = ['env', 'env.local', 'env.production', 'env.development'];
+export function envGlob(cmd: string): boolean {
+  for (const m of ohneZitate(cmd).matchAll(/(?:^|[\s/=<])\.([^\s/'"]*[?*[][^\s/'"]*)/g)) {
+    const g = m[1]; let re = '';
+    for (let i = 0; i < g.length; i++) {
+      const c = g[i];
+      if (c === '*') re += '.*'; else if (c === '?') re += '.';
+      else if (c === '[') { const j = g.indexOf(']', i + 2); if (j < 0) { re += '\\['; continue; } re += `[${g.slice(i + 1, j).replace(/^!/, '^').replace(/\\/g, '\\\\')}]`; i = j; }
+      else re += c.replace(/[.+^${}()|\\\]]/g, '\\$&');
+    }
+    try { if (ENV_NAMEN.some((n) => new RegExp(`^${re}$`).test(n))) return true; } catch { return true; }
+  }
+  return false;
+}
 // Runde 2 (Knut, 07.10.2026: „er fragt halt immer noch viel“): nur noch echte Geheimnis-ORTE, nicht jedes Erwähnen —
 // `grep -v '.runtime'` oder `--exclude-dir=.runtime` fragen nicht mehr.
 const BASH_KEEP_CONFIRM_VOLL = [
@@ -308,7 +335,7 @@ const READ_BASH = new Set(['rg', 'grep', 'egrep', 'fgrep', 'ls', 'cat', 'head', 
 const READ_GIT = new Set(['log', 'show', 'diff', 'status', 'blame', 'ls-files', 'grep', 'rev-parse', 'describe', 'shortlog', 'ls-tree', 'cat-file']);
 export function readOnlyBash(cmd: string): boolean {
   const c = cmd.replace(/\s+2>\s*\/dev\/null/g, ' ').replace(/\s+2>&1/g, ' ').trim();
-  if (!c || c.length > 2000 || /[`<>]|\$\(|\$\{|\\\n/.test(c)) return false;
+  if (!c || c.length > 2000 || /[`<>]|\$\(|\$\{|\$['"]|\\\n/.test(c)) return false;   // Gegenprüfung (B2): auch `$'…'`/`$"…"`
   // Pass C (Runde 3): ein einzelnes & (Hintergrund) und Zeilenumbrüche trennen in bash ebenfalls Befehle — sonst prüfte die Liste nur den ersten.
   if (/[\n\r]/.test(c) || c.replace(/&&/g, '').includes('&')) return false;
   for (const seg of c.split(/\|\||&&|[|;]/)) {
@@ -343,7 +370,7 @@ export function bashGuardProblem(cmd: string, g: PathGuard | undefined): string 
 export function classify(tool: string, input: Record<string, unknown>, ctx: ClassifyContext = {}): { cls: ToolClass; why?: string } {
   if (tool === 'Bash') {
     const cmd = ohneCommitText(String(input.command ?? ''));   // Commit-Texte sind Inhalt (06.11.)
-    for (const [re, why] of BASH_BLOCKED) if (re.test(cmd)) return { cls: 'blocked', why };
+    for (const [re, why] of BASH_BLOCKED) if (lesarten(cmd).some((l) => re.test(l))) return { cls: 'blocked', why };   // Gegenprüfung (B9): drei Lesarten
     const gw = githubSchreibGrund(cmd);
     if (gw) return { cls: 'confirm', why: gw };
     // R31: Coolify direkt immer nach „ja“ (Werkzeug coolify/coolify_status ist der Weg; Auto-Modus: ask-Regel COOLIFY_ASK).
@@ -353,7 +380,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     if (ctx.workDir && ctx.scope === 'voll') {
       // Pass A (Runde 3): auch so, wie die Shell es liest (ohne Quotes/Backslashes, ${IFS} als Leerzeichen)
       const shell = cmd.replace(/['"\\]/g, '').replace(/\$\{?IFS\}?/g, ' ');
-      if (BASH_KEEP_CONFIRM_VOLL.some((re) => re.test(cmd) || re.test(shell)) || bashTouchesJiraWrite(cmd)) return { cls: 'confirm' };
+      // Gegenprüfung (B2/B8): `$'…'` (ANSI-C-Quoting baut Pfade aus Escapes) fragt; Glob-Formen über envGlob
+      if (BASH_KEEP_CONFIRM_VOLL.some((re) => re.test(cmd) || re.test(shell)) || envGlob(cmd) || /\$['"]/.test(cmd) || bashTouchesJiraWrite(cmd)) return { cls: 'confirm' };
       return { cls: 'auto' };
     }
     if (ctx.workDir && !cmd.includes(VAULT_DIR) && !BASH_KEEP_CONFIRM.some((re) => re.test(cmd))) return { cls: 'auto' };
@@ -513,7 +541,7 @@ const LOKAL_ENV_ERLAUBT = /^(\w*DATABASE_URL|PG\w*|MONGO_URI\w*|NODE_ENV|TZ|CI|D
 const DOCS_GIT = /^(add|commit|status|diff|log|show|rev-parse|ls-files|blame)$/;
 
 export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] }): string | null {
-  if (/[`\n]|\$\(|\$\{/.test(cmd)) return null;
+  if (/[`\n]|\$\(|\$\{|\$['"]/.test(cmd)) return null;
   // Phase 4 (Pass B, C1): eine Pipe nur als „ | “ in einen Ausgabefilter — `|sh`, `| bash` usw. nie (auch nicht ohne Leerzeichen).
   if (/\|(?!\|)/.test(cmd.replace(/"(?:[^"\\]|\\.)*"/g, '"Z"').replace(/'[^']*'/g, "'Z'").replace(/\s\|\s(?=(tail|head|grep|wc|sort|uniq)\b)/g, ' '))) return null;
   // Phase 4 (Pass B, C3): `git diff --output=…` schreibt, `--no-index` liest beliebige Dateien.
@@ -543,7 +571,8 @@ export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] })
       if (m[2].includes('://') ? !DB_LOKAL.test(m[2]) : !/^[\w.,:/@-]+$/.test(m[2])) return null;
       r = r.slice(m[0].length); s = s.replace(/^[A-Z_][A-Z0-9_]*=\S+\s+/, '');
     }
-    if (/^cd\s+\S+$/.test(r)) { if (!innen(r.slice(3).trim())) return null; wo = pfad(r.slice(3).trim()); continue; }
+    // Gegenprüfung (B6): cd-Ziel nur als schlichter Pfad — `cd -`, `cd ~-`, `cd $OLDPWD` springen dorthin, wo bash vorher war
+    if (/^cd\s+\S+$/.test(r)) { const z = r.slice(3).trim(); if (!/^(~(\/[\w./-]*)?|[\w./][\w./-]*)$/.test(z) || !innen(z)) return null; wo = pfad(z); continue; }
     const g = r.match(/^git(?:\s+-C\s+(\S+))?\s+([\w-]+)(\s.*)?$/);
     if (g) {
       if (g[1] && !innen(g[1])) return null;
@@ -585,7 +614,7 @@ export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] })
 export function orchestratorBlock(tool: string, input: Record<string, unknown>): string | null {
   if (tool === 'Bash') {
     const cmd = ohneCommitText(String(input.command ?? ''));   // Commit-Texte sind Inhalt (06.11.)
-    for (const [re, why] of [...BASH_BLOCKED, ...ORCH_BASH_BLOCK]) if (re.test(cmd)) return why;
+    for (const [re, why] of [...BASH_BLOCKED, ...ORCH_BASH_BLOCK]) if (lesarten(cmd).some((l) => re.test(l))) return why;   // Gegenprüfung (B9)
     const gw = githubSchreibGrund(cmd);
     if (gw) return gw;
     // git config: nur lesen (--get…/--list/-l); jede schreibende Form ist gesperrt.

@@ -1069,9 +1069,10 @@ export function zugangsdateiIn(wurzel: string): string | null {
     const rel = offen.pop()!;
     let eintraege; try { eintraege = readdirSync(join(wurzel, rel), { withFileTypes: true }); } catch { continue; }
     for (const d of eintraege) {
-      if (++n > 50_000) return `${rel || '.'} … (zu groß zum Prüfen — einen Unterordner freigeben)`;
+      // Gegenprüfung (B10): eigener Fehlertext statt „Ordner mit Umgebungsdateien“; dieselben Punktdateien wie GEHEIM
+      if (++n > 50_000) throw Object.assign(new Error('Ordner zu groß zum Prüfen (über 50 000 Einträge) — einen Unterordner freigeben.'), { status: 400 });
       const p = rel ? `${rel}/${d.name}` : d.name;
-      if (/^\.env(\.(?!example$|sample$|template$)[\w.-]+)?$/.test(d.name)) return p;
+      if (/^\.env(\.(?!example$|sample$|template$)[\w.-]+)?$|^\.(envrc|npmrc|pgpass)$/.test(d.name)) return p;
       if (d.isDirectory() && d.name !== 'node_modules' && d.name !== '.git') offen.push(p);
     }
   }
@@ -1609,9 +1610,19 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const passt = () => lockFor(meine().filter((l) => l !== live), { readonly: !!req.readonly, mode }, { neu: claudeSchaetzung, stand: speicherStand(), vorrang: !!orchMap[key]?.vorrang, jcodeBelegt: jcodeBelegt() }) === 'ok';
     if (!passt()) {
       emitStatus(live, `jcode lieferte kein brauchbares Ergebnis (${r.grund}) — der Zug wartet auf einen freien Platz für Claude (${lockGrund || 'gerade kein Platz'}).`);
+      live.schaetzung = undefined;   // Gegenprüfung (B4): beim Warten weder im jcode-Topf noch schon als Claude-Zug zählen
       const wachW = wachHalten(live);
       try { while (!passt() && !live.abort.signal.aborted) await new Promise((res) => setTimeout(res, 5000)); } finally { wachW(); }
-      if (live.abort.signal.aborted) { mark(live, 'ende'); end(live); return; }
+      if (live.abort.signal.aborted) {
+        // Gegenprüfung (B4): dasselbe Ende wie oben — sonst stand der Zug für immer auf „läuft“ und Nachgereichtes in einer offenen Inbox
+        mark(live, 'ende');
+        if (orchMap[key]) setTurn(key, { ...orchMap[key].turn, start: orchMap[key].turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? 'aborted' });
+        log('turn end', { conv: key, laeufer: 'jcode→claude', ok: false, wartend: true });
+        if (live.inbox?.open) closeInbox(live.inbox);
+        live.inbox = null;
+        end(live);
+        return;
+      }
     }
     live.schaetzung = claudeSchaetzung;
     emitStatus(live, `jcode lieferte kein brauchbares Ergebnis (${r.grund}) — dieser Zug läuft mit Claude weiter.`);
@@ -2237,7 +2248,9 @@ export function jcodePromptArg(p: string): string {
   while (Buffer.byteLength(s) > JCODE_PROMPT_MAX - 200) s = s.slice(0, Math.floor(s.length * 0.95));
   return `${s}\n\n[… Auftrag hier gekürzt (Grenze der Befehlszeile) — lies fehlende Teile im Arbeitsordner nach.]`;
 }
-const JCODE_GH_LEER = () => { const d = join(tmpdir(), 'werkbank-jcode-gh-leer'); mkdirSync(d, { recursive: true, mode: 0o700 }); return d; };
+// Gegenprüfung (B10): je Prozess frisch (mkdtemp, 0700) statt eines festen, vorhersagbaren Pfads in /tmp
+let ghLeer: string | null = null;
+const JCODE_GH_LEER = () => (ghLeer ??= mkdtempSync(join(tmpdir(), 'werkbank-jcode-gh-')));
 function jcodeSpawn(o: { cwd: string; prompt: string; model: string | null; tools: string; key: string; timeoutS: number; abbruch?: () => boolean; extra?: Record<string, string> }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key,
     JCODE_HOOK_PRE_TOOL: JCODE_HOOK, JCODE_HOOK_PRE_TOOL_TIMEOUT_MS: '10000',

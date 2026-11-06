@@ -4,8 +4,8 @@
 // nur die Shell — `read`/`agentgrep` hatten keine Grenze, ein Strang hätte über melious_sub .env.local oder /proc/*/environ lesen
 // lassen können (an den Deny-Regeln von 17e vorbei).
 // ponytail: Muster statt Sandbox wie beim Bash-Shim; Schreiben nur im Arbeitsordner. Im Zweifel (kaputte Eingabe) gesperrt.
-import { resolve, dirname, basename, join, relative } from 'node:path';
-import { existsSync, realpathSync } from 'node:fs';
+import { resolve, dirname, basename, join, relative, posix } from 'node:path';
+import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
 
 // Was nie gelesen oder geschrieben werden darf: Umgebungsdateien, Prozess-Umgebung, Zugangsdaten der Werkzeuge.
 export const GEHEIM = [
@@ -17,15 +17,21 @@ export const GEHEIM = [
   // Sitzung, Konten der Brücke, Daten der opencode-2-Server (Prompts und Diffs aller Personen)
   /\.config\/gh\//i, /\.config\/vw\//i, /\.runtime\//i, /claude-accounts\.json/i, /\.local\/opencode2\//i,
   // Pass C (Runde 3): weitere Zugangs-Orte auf dieser Box (Coder-Sitzung, npm/Postgres/Docker/Kubernetes, Bitwarden-CLI, Shell-Verlauf, direnv)
-  /\.config\/coderv2\//i, /\.npmrc/i, /\.pgpass/i, /\.docker\/config\.json/i, /\.kube\//i, /Bitwarden CLI/i, /_history($|[\/\s'"])/i, /\.envrc/i,
+  /\.config\/coderv2\//i, /\.npmrc/i, /\.pgpass/i, /\.docker\/config\.json/i, /\.kube\//i, /Bitwarden CLI/i, /\.\w*_history($|[\/\s'"])/i, /fish_history/i, /\.envrc/i,   // Gegenprüfung (B7): Verlauf nur als Punktdatei, nicht jedes chat_history
 ];
 
 /** Pass C (Runde 3): echter Pfad eines (evtl. noch nicht vorhandenen) Ziels — der nächste vorhandene Vorfahr wird aufgelöst, damit ein
  *  Symlink im Arbeitsordner (z. B. node_modules der Delegation) nicht nach draußen führt. */
-export function echterPfad(p: string): string {
+export function echterPfad(p: string, tiefe = 0): string {
+  // Gegenprüfung (B5): lstat statt exists — ein hängender Symlink „existiert“ für exists nicht, writeFile folgt ihm aber nach draußen
+  const da = (x: string) => { try { lstatSync(x); return true; } catch { return false; } };
   let kopf = p; const rest: string[] = [];
-  while (!existsSync(kopf)) { const o = dirname(kopf); if (o === kopf) break; rest.unshift(basename(kopf)); kopf = o; }
-  try { return join(realpathSync(kopf), ...rest); } catch { return p; }
+  while (!da(kopf)) { const o = dirname(kopf); if (o === kopf) break; rest.unshift(basename(kopf)); kopf = o; }
+  try { return join(realpathSync(kopf), ...rest); } catch {
+    // kopf ist ein hängender Symlink: seinem Ziel folgen (Tiefe begrenzt gegen Link-Zyklen)
+    if (tiefe < 20) { try { return echterPfad(join(resolve(dirname(kopf), readlinkSync(kopf)), ...rest), tiefe + 1); } catch { /* unten */ } }
+    return '/';   // unauflösbar: als „außerhalb“ werten
+  }
 }
 /** Schreibziel prüfen: null = im Arbeitsordner und erlaubt. node_modules (geteilt per Symlink) und die Git-Verwaltung sind nie Ziel. */
 export function schreibzielProblem(p: string, cwd: string): string | null {
@@ -36,19 +42,28 @@ export function schreibzielProblem(p: string, cwd: string): string | null {
 }
 const SCHREIBEND = new Set(['write', 'edit', 'multiedit', 'patch', 'apply_patch']);
 
-const texte = (v: unknown, out: string[] = []): string[] => {
+// Gegenprüfung (B7): was ein Werkzeug schreibt (Inhalt, Ersetzung), ist kein Zugriff — nur Pfade und Befehle prüfen; aus einem Patch
+// nur die Dateizeilen (sonst sperrte `const chat_history = []` oder `COPY .npmrc` im Dockerfile).
+const INHALT = new Set(['content', 'contents', 'new_string', 'old_string', 'newString', 'oldString']);
+const texte = (v: unknown, out: string[] = [], schreibend = false): string[] => {
   if (typeof v === 'string') out.push(v);
-  else if (Array.isArray(v)) for (const x of v) texte(x, out);
-  else if (v && typeof v === 'object') for (const x of Object.values(v)) texte(x, out);
+  else if (Array.isArray(v)) for (const x of v) texte(x, out, schreibend);
+  else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) {
+    if (schreibend && INHALT.has(k)) continue;
+    if (schreibend && (k === 'patch' || k === 'input') && typeof x === 'string') { out.push(...[...x.matchAll(/^\*\*\* (?:Add|Update|Delete|Move to) File: (.+)$|^\*\*\* Move to: (.+)$/gm)].map((m) => m[1] ?? m[2])); continue; }
+    texte(x, out, schreibend);
+  }
   return out;
 };
+/** Gegenprüfung (B1): Pfad-Wörter normalisieren (`//`, `/./`, `x/../`), damit `~/.config//gh/hosts.yml` die Sperre trifft. */
+export const normPfade = (s: string) => s.split(/(\s+)/).map((w) => (w.includes('/') && !/^\s+$/.test(w) ? posix.normalize(w) : w)).join('');
 // wie im Bash-Shim: so prüfen, wie die Shell es sähe (ohne Quotes, Backslashes, $VAR)
 const flach = (s: string) => s.replace(/['"\\]/g, '').replace(/\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^}]*\}/g, '');
 
 /** Entscheidung für einen Werkzeugaufruf: null = erlaubt, sonst der Grund. */
 export function jcodeEntscheid(tool: string, input: unknown, cwd: string): string | null {
   const t = tool.toLowerCase();
-  const alle = texte(input).map(flach);
+  const alle = texte(input, [], SCHREIBEND.has(t)).flatMap((s) => [s, normPfade(flach(s))]);
   if (alle.some((s) => GEHEIM.some((re) => re.test(s)))) return 'Abgelehnt (Werkbank-Wächter): Umgebungs- und Zugangsdateien (.env*, /proc, Schlüssel) sind für Melious-Teilagenten gesperrt.';
   if (SCHREIBEND.has(t)) {
     const o = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;

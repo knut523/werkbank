@@ -2233,7 +2233,8 @@ async function brueckenFreigabe(u: User, strand: string, b: { pfad: string; bis?
   const r = await fetch(`${cfg.bridgeUrl}/internal/orch-freigabe`, { method: 'POST', headers: { ...bridgeInternal, 'content-type': 'application/json' }, body: JSON.stringify({ userId: u.id, conv: d.conv, ...b }), signal: AbortSignal.timeout(5000) });
   const j: any = await r.json().catch(() => ({}));
   // Pass A (Runde 3, AW-S3): eine Ablehnung der Brücke (Geheimnis-Ort, Zugangsdatei, Frist) ist kein Ausfall — 4xx mit ihrem Grund weiterreichen
-  if (!r.ok) throw new HttpError(r.status >= 400 && r.status < 500 ? r.status : 502, `Brücke: ${j.error ?? r.status}`);
+  // Gegenprüfung (W5): 401/403 heißt falsche interne Anmeldung — ein Ausfall, kein Ablehnungsgrund für den Browser
+  if (!r.ok) throw new HttpError([400, 404, 409, 422].includes(r.status) ? r.status : 502, `Brücke: ${j.error ?? r.status}`);
   return j;
 }
 const bedarfDeps = {
@@ -3869,7 +3870,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
     case 'list': return send(res, 200, { strands: await listOrch(u, { all: b.all === true }) });
     case 'show': return send(res, 200, await showOrch(u, id, Number(b.verlauf) || 0));
     // Plan 274 (D4b): CLI und Hauptchat warten kurz auf die Bestätigung der Brücke und lesen sie in der Antwort.
-    case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand', { warteMs: sendWarteMs() }));
+    case 'send': return send(res, 200, await sendOrch(u, id, b.text, b.via === 'leitstand' ? 'leitstand' : 'hand', { warteMs: sendWarteMs(), anschieben: b.via === 'leitstand' }));   // orch_send des Hauptchats darf „hängt“ anschieben
     case 'gruendlich': return send(res, 200, await gruendlichOrch(u, id, b.via === 'leitstand' ? 'leitstand' : 'hand'));   // Plan 274 (D1)
     case 'review': return send(res, 200, await reviewOrch(u, id, b.note ?? '', b.via === 'leitstand' ? 'leitstand' : 'knut'));
     case 'thema': return send(res, 200, await setThema(u, id, b.thema));   // Plan 154, S2: Themen-Gruppe von Hand

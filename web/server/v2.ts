@@ -803,16 +803,19 @@ export function registerV2(on0: On, d: V2Deps) {
       const text = eigen.pruefeText(b.text);
       const h = await d.hauptchat(u);
       if (!h) throw err(409, 'Kein Hauptchat aktiv — in der alten Werkbank „Hauptchat starten“.');
-      if (hauptchatSendet.has(u.id) || (await d.laeuftChat(u, h.conv).catch(() => true))) {
+      // Gegenprüfung Runde 3 (W4): wie im Takt die Sperre vor dem ersten await — sonst senden Takt und Knopf zugleich
+      let at: Date | null = null;
+      if (!hauptchatSendet.has(u.id)) {
+        hauptchatSendet.add(u.id);
+        try { if (!(await d.laeuftChat(u, h.conv).catch(() => true))) at = await librechat.senden(u, h.conv, text); } finally { hauptchatSendet.delete(u.id); }
+      }
+      if (!at) {
         // Audit 05.11. (4): einreihen statt 409 — der Takt stellt zu, sobald der Hauptchat frei ist.
         if (!d.hauptchatEinreihen) throw err(409, 'Der Hauptchat arbeitet gerade — dein Text bleibt stehen, schick ihn gleich noch einmal.');
         const wartend = await d.hauptchatEinreihen(u, text);
         d.log('v2 hauptchat eingereiht', { user: u.id, wartend });
         return send(d, res, { ok: true, ziel: 'hauptchat', eingereiht: true, wartend });
       }
-      hauptchatSendet.add(u.id);
-      let at: Date;
-      try { at = await librechat.senden(u, h.conv, text); } finally { hauptchatSendet.delete(u.id); }
       d.log('v2 hauptchat', { user: u.id });
       return send(d, res, { ok: true, ziel: 'hauptchat', at });
     }

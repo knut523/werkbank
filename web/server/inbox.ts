@@ -216,9 +216,9 @@ function mitStufe(e: InboxEintrag, ms: number, triage = false) {
   const s = stufeVon({ text, markiert: (e.daten.markiert as string) ?? null, art: e.art });
   e.stufe = s.stufe; e.stufeGrund = s.grund;
   if (triage) {
-    // Pass A (Runde 3, AW2): ohne den Kontext wie die Anzeige (er nennt bei OLAF fast immer Kunden/Verträge) und als eine Quelle
-    // abgelegt — vorher stufte die Automatik mit Kontext als Knut-Frage ein, die Anzeige ohne als technisch: die Frage stand nirgends.
-    const k = klasseVon({ text: `${e.frage} ${e.empfehlung ?? ''} ${((e.daten.optionen as string[]) ?? []).join(' ')}`, markiert: (e.daten.markiert as string) ?? null, art: e.art, empfehlung: e.empfehlung });
+    // Pass A (Runde 3, AW2): eine Quelle — vorher stufte die Automatik mit Kontext als Knut-Frage ein, die Anzeige ohne als technisch:
+    // die Frage stand nirgends. Gegenprüfung (W1): mit Kontext (Zugang, Außenwirkung, Geld stehen oft nur dort) — lieber bei Knut als still entschieden.
+    const k = klasseVon({ text, markiert: (e.daten.markiert as string) ?? null, art: e.art, empfehlung: e.empfehlung });
     e.daten.triage = k;
     e.autoAb = e.art === 'rueckfrage' && k.klasse === 'technisch' ? e.wartetSeit : null;
     return;

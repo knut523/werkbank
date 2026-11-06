@@ -5,7 +5,7 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { readOnlyBash } from './tools.ts';
-import { GEHEIM } from './jcode-pre-tool.ts';
+import { GEHEIM, normPfade } from './jcode-pre-tool.ts';
 
 const args = process.argv.slice(2);
 const i = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
@@ -19,7 +19,7 @@ const cmd = roh === JCODE_HUELLE ? process.env.JCODE_RELOAD_DETACH_COMMAND ?? ''
 // ihn sähe: ohne Quotes, Backslashes und $VAR (aus `/pr''oc` oder `/pr$Xoc` macht bash den echten Pfad); Globs schaltet die
 // Shell unten ab (-f), damit ein Muster wie `/pro?/*` nicht expandiert. Rekursive Suche, die bei / landet, ist gesperrt.
 // ponytail: weiter Muster statt Sandbox — die Shell bekommt den Schlüssel gar nicht, das Ergebnis wird zusätzlich bereinigt.
-const flach = cmd.replace(/['"\\]/g, '').replace(/\$[A-Za-z_][A-Za-z0-9_]*|\$\d|\$[@*#?$!-]/g, '');
+const flach = normPfade(cmd.replace(/['"\\]/g, '').replace(/\$[A-Za-z_][A-Za-z0-9_]*|\$\d|\$[@*#?$!-]/g, ''));   // Gegenprüfung (B1): Pfade normalisiert
 const UMGEBUNG = ['env', 'printenv', 'export', 'set', 'declare', 'compgen'];
 const REKURSIV = ['rg', 'grep', 'egrep', 'fgrep', 'find', 'tree', 'du'];
 const SYSTEM = new RegExp(['pr', 'oc|envi', 'ron'].join(''), 'i');   // Prozess-Dateisystem und Umgebungsdateien
@@ -52,8 +52,9 @@ if (!cmd || !readOnlyBash(cmd) || gesperrt()) {
 const env = { ...process.env };
 delete env.JCODE_PROVIDER_MELIOUS_API_KEY;
 // Pass C (Runde 3): lesende git-Befehle starten sonst Programme aus einer untergeschobenen Konfiguration (core.fsmonitor über
-// eine selbst geschriebene .git-Datei, Pager, externes Diff). Diese Einträge gelten vor jeder Repo-Konfiguration.
-const GIT_FEST: [string, string][] = [['core.fsmonitor', 'false'], ['core.pager', 'cat'], ['diff.external', ''], ['core.hooksPath', '/dev/null']];
+// eine selbst geschriebene .git-Datei, Pager). Diese Einträge gelten vor jeder Repo-Konfiguration. Gegenprüfung (B10): kein leeres
+// diff.external (hieße „Programm ''“) — --ext-diff lehnt readOnlyBash ab, .git/config beschreibt jcode nicht (Schreibwächter).
+const GIT_FEST: [string, string][] = [['core.fsmonitor', 'false'], ['core.pager', 'cat'],['core.hooksPath', '/dev/null']];
 Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_PAGER: 'cat', GIT_CONFIG_COUNT: String(GIT_FEST.length) });
 GIT_FEST.forEach(([k, v], n) => { env[`GIT_CONFIG_KEY_${n}`] = k; env[`GIT_CONFIG_VALUE_${n}`] = v; });
 const r = spawnSync('/bin/bash', ['-f', ...args], { stdio: 'inherit', env });
