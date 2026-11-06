@@ -235,7 +235,11 @@ export function orchStatus(run: { startError?: string | null; startedAt: Date | 
   if (mark === 'blockiert') return { status: 'failed', reason: 'Agent meldet „blockiert“' };
   // Plan §23 T8 / §24 A2 (für alle Stränge; ORCH_OHNE_STATUS=aus schaltet ab): ohne Marke, mit „läuft“ oder mit „braucht Antwort“
   // ohne etwas an Knut/Hauptchat im Stand-Block → automatisch weiter (höchstens OHNE_STATUS_MAX-mal), statt über Nacht zu parken.
-  const t8 = ohneStatusAn() ? { cause: 'ohne_status' as const } : {};
+  // Pass B (Runde 5, C2): nur, wenn das automatische „weiter“ auch wirklich kommt (Takt an, Zugende < 6 h, Strang < 14 Tage) — sonst
+  // stand ein solcher Strang für immer auf „läuft“, und weder Knut noch der Hauptchat erfuhren davon.
+  const zugEnde = Number(s?.turn?.end ?? last.at);
+  const fortsetzbar = process.env.ORCH_AUTO_WEITER !== 'off' && now - zugEnde < AUTO_STALE_MS && now - +new Date(run.startedAt) < 14 * 86400_000;
+  const t8 = ohneStatusAn() && fortsetzbar ? { cause: 'ohne_status' as const } : {};
   if (mark === 'braucht Antwort') return t8.cause && !echteFrage(last.text) ? { status: 'waiting', reason: 'meldet „braucht Antwort“, aber nichts an Knut oder den Hauptchat — wird automatisch fortgesetzt', ...t8 } : { status: 'waiting', reason: 'Agent braucht eine Antwort' };
   if (mark === 'läuft') return { status: 'waiting', reason: t8.cause ? 'Agent meldet „läuft“ — wird automatisch fortgesetzt' : 'Agent meldet „läuft“ — lesen und antworten', ...t8 };
   return { status: 'waiting', reason: 'Antwort ohne Status-Marke — lesen und antworten', ...t8 };
@@ -743,6 +747,8 @@ export function ausstehendText(l: Ausstehend[]): string {
   return `(Werkbank: ${s.length} Nachrichten kamen, während du beschäftigt warst — hier gesammelt, älteste zuerst.)\n\n${s.map((x) => x.text).join('\n\n---\n\n')}`;
 }
 async function einreihen(d: any, msg: string, via: SendVia, grund: string) {
+  // Pass B (Runde 5, C1): zugestellt wird nur im Auto-Takt — ist er aus, wie früher 409 statt „kommt von selbst an“ (sie käme nie an).
+  if (process.env.ORCH_AUTO_WEITER === 'off') throw err(409, `Strang ${String(d._id)}: ${grund} — die automatische Zustellung ist aus; bitte gleich noch einmal senden.`);
   const e = ausstehendEintrag(msg, via, grund);
   // Neue Nachricht: der Fehlversuchszähler beginnt neu (Knut oder der Hauptchat hat sich gekümmert).
   await runs().updateOne({ _id: d._id }, { $push: { ausstehend: { $each: [e], $slice: -AUSSTEHEND_MAX } } as any, $set: { ausstehendFehler: 0 } });
@@ -1047,7 +1053,13 @@ async function autoOne(u: User, d: any, s: any, deps: AutoDeps) {
     // Plan §24 A2: ohne Status-Zeile ist es kein Fall für Knut — „hängt“ und der Hauptchat bekommt eine Meldung (ohne Hauptchat
     // legt meldeLeitstand selbst eine Rückfrage an).
     if (ohneStatusStopp && deps.melde) {
-      await deps.melde(u, d, `Strang „${d.title}“ (${d._id}) hängt: ${OHNE_STATUS_MAX}× automatisch fortgesetzt, aber keine Status-Zeile. Bitte Chat ansehen, Stand holen oder anhalten.`).catch((e) => deps.log?.('orch-auto-weiter meldung fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }));
+      await deps.melde(u, d, `Strang „${d.title}“ (${d._id}) hängt: ${OHNE_STATUS_MAX}× automatisch fortgesetzt, aber keine Status-Zeile. Bitte Chat ansehen, Stand holen oder anhalten.`).then(() => true, async (e) => {
+        // Pass B (Runde 5, C5): Meldung nicht angekommen — den Stopp zurücknehmen, damit der nächste Takt erneut stoppt und meldet
+        // (sonst stand „der Hauptchat ist informiert“, und niemand wusste davon).
+        deps.log?.('orch-auto-weiter meldung fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) });
+        await runs().updateOne({ _id: d._id, 'autoStopped.at': at }, { $set: { autoStopped: null } });
+        return false;
+      });
       deps.log?.('orch-auto-weiter hängt', { id: d._id });
       return;
     }

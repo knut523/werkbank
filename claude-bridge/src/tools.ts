@@ -60,6 +60,8 @@ const BASH_GITHUB_WRITE: [RegExp, string][] = [
   // Phase 4 (Pass B, B5): auch `-fbody=x`, `--field=…`, `--input=datei` (ohne Leerzeichen nach der Option).
   [/\bgh\s+api\s+(?!graphql\b)[^|;&]*\s(-[fF]\S|-[fF]\s|--field[=\s]|--raw-field[=\s]|--input[=\s])/, 'GitHub-API schreiben'],
   [/\bgh\s+api\s+graphql\b[^|;&]*\bmutation\b/i, 'GitHub-API schreiben (GraphQL-Mutation)'],
+  // Pass B (Runde 5, A2): ein Feld, dessen Wert erst die Shell erzeugt ($(…), Backtick, $VAR) — „mutation“ ist dann nicht zu sehen
+  [/\bgh\s+api\s+graphql\b[^;&]*\s(-[fF]|--(?:raw-)?field)[=\s]*[\w.-]*=["']?[$`]/, 'GitHub-API schreiben (GraphQL mit erzeugtem Text)'],
   [/\bgh\s+api\s+graphql\b[^|;&]*\s(--input[=\s]|(-F|--field)[=\s]*\S*=@)/, 'GitHub-API schreiben (GraphQL aus Datei)'],
   [/api\.github\.com[^|;&]*(-X|--request)\s*(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],
   [/(-X|--request)\s*(POST|PATCH|PUT|DELETE)[^|;&]*api\.github\.com/i, 'GitHub-API schreiben'],

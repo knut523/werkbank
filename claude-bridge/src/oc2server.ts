@@ -146,6 +146,8 @@ export function opencode2Server(o: {
       key = neu; fp = fingerabdruck(neu);
       // Alle Adressen an den Pool, sobald einer antwortet: ein Server im Neustart pausiert dort, offene Sitzungen warten auf ihn.
       const zugang = () => ([...kinder.values()].some((k) => k.bereit) ? { urls: [...kinder.keys()].map((p) => `http://127.0.0.1:${p}`), passwort } : null);
+      // Pass B (Runde 5, A3): ein Server, der erst nach der Startfrist antwortet, lebt weiter — beim nächsten Bedarf nachfragen
+      for (const [p, k] of kinder) if (k.c && !k.bereit && !k.startend && (await antwortet(p))) { k.bereit = true; k.seit = Date.now(); log('opencode2 server bereit (nach der Startfrist)', { port: p, pid: k.c.pid }); }
       if ([...kinder.values()].every((k) => k.c || k.aufgegeben)) return start ?? zugang();
       start ??= (async () => {
         await Promise.all([...kinder].filter(([, k]) => !k.c && !k.aufgegeben).map(([p]) => starte(p)));

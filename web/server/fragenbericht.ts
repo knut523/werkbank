@@ -9,6 +9,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import YAML from 'yaml';
 import { wb } from './db.ts';
+import { klasseVon } from './stufe.ts';
 
 export interface BerichtFrage { id: string; frage?: string; antwort?: unknown }
 
@@ -119,6 +120,8 @@ export async function fragenAusBericht(userId: string, reviewDir: string, o: { d
     const ids = fp.fragen.map(String);
     const texte = new Map((await col.find({ _id: { $in: ids as any[] }, userId }, { projection: { title: 1, context: 1 } }).toArray()).map((q: any) => [String(q._id), `${q.title ?? ''} ${String(q.context ?? '').slice(0, 300)}`]));
     for (const e of entschiedeneFragen(ids.map((id: string) => ({ id, text: texte.get(id) ?? '' })), bf).filter((x) => offenIds.has(x.qid))) {
+      // Pass B (Runde 5, C3): was Knut entscheiden muss (Geld, Recht, Zugang, Außenwirkung, Release), schließt keine Behauptung des Agenten
+      if (klasseVon({ text: texte.get(e.qid) ?? '', empfehlung: e.antwort }).klasse === 'knut') continue;
       if (!o.dry) {
         const grund = `im Bericht als entschieden vermerkt (${e.d}): ${e.antwort}`;
         const r = await col.updateOne({ _id: e.qid as any, userId, status: 'offen' }, { $set: { status: 'zurückgezogen', withdrawnAt: new Date(o.now ?? Date.now()), withdrawnBy: 'auto', withdrawnReason: grund.slice(0, 400) }, $unset: { keyActive: '' } });

@@ -75,12 +75,13 @@ andere=$(getent passwd | awk -F: -v k="$KNUT" -v a="$AGENT" '$3>=1000 && $3<6000
 [ -n "$andere" ] && echo "  ! weitere Konten auf der Box: $andere— sie könnten Dateien mit bekanntem Pfad in $KNUT_HOME lesen, wenn diese für andere lesbar sind"
 if [ "$(modus "$KNUT_HOME")" = 711 ]; then ok "$KNUT_HOME steht auf 711"
 else tu "$KNUT_HOME auf 711 (durchgehen ja, auflisten nein; war $(modus "$KNUT_HOME"))" chmod 711 "$KNUT_HOME"; fi
-for d in .claude .config/vw .config/gh; do
+# Pass B (Runde 5, A4): dieselben Zugangs-Orte wie GEHEIM im jcode-Wächter (Melious, jcode, opencode 2, SSH, Coder, Kubernetes, Docker)
+for d in .claude .config/vw .config/gh .melious .jcode .local/opencode2 .ssh .config/coderv2 .kube .docker; do
   p=$KNUT_HOME/$d
   [ -e "$p" ] || { ok "$p gibt es nicht"; continue; }
   if [ "$(modus "$p")" = 700 ]; then ok "$p steht auf 700"; else tu "$p auf 700 (war $(modus "$p"))" chmod 700 "$p"; fi
 done
-for f in .claude.json .git-credentials .config/git/credentials; do
+for f in .claude.json .git-credentials .config/git/credentials .npmrc .pgpass .netrc; do
   p=$KNUT_HOME/$f
   [ -e "$p" ] || { ok "$p gibt es nicht"; continue; }
   if [ "$(modus "$p")" = 600 ]; then ok "$p steht auf 600"; else tu "$p auf 600 (war $(modus "$p"))" chmod 600 "$p"; fi

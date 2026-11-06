@@ -61,6 +61,17 @@ test('Lauf: schließt entschiedene, lässt offene und fremde stehen, schreibt Lo
   assert.deepEqual(await fragenAusBericht('u1', dir), [], 'idempotent');
 });
 
+test('Pass B (Runde 5, C3): eine Knut-Frage (Geld) schließt der Bericht des Agenten nie automatisch', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fb-geld-'));
+  mkdirSync(join(dir, '417-geld'), { recursive: true });
+  writeFileSync(join(dir, '417-geld', 'bericht.md'), '---\nstatus: wartet_auf_knut\nfragen:\n  - id: D1\n    frage: Budget von 500 € für Anzeigen freigeben?\n    antwort: "Empfehlung angenommen"\n---\n# x\n');
+  await wb().collection('orchestrator_runs').insertOne({ _id: 'geld1234' as any, userId: 'u3', paket: '417-geld' });
+  await wb().collection('fragenpakete').insertOne({ _id: 'fp-geld' as any, userId: 'u3', fragen: ['g1'], status: 'offen' });
+  await wb().collection('orchestrator_questions').insertOne({ _id: 'g1' as any, userId: 'u3', status: 'offen', title: 'Budget von 500 € für Anzeigen freigeben?', context: 'x', paket: { id: 'fp-geld' }, strand: { id: 'geld1234' } } as any);
+  assert.deepEqual(await fragenAusBericht('u3', dir), []);
+  assert.equal(((await wb().collection('orchestrator_questions').findOne({ _id: 'g1' as any })) as any).status, 'offen');
+});
+
 test('C2: automatisch Geschlossenes ist sichtbar und lässt sich wieder öffnen (nur eigene, nur automatisch geschlossene)', async () => {
   const g = await automatischGeschlossen('u1', { tage: 7 });
   assert.deepEqual(g.map((x) => x.id), ['q1']);

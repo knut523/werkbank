@@ -68,7 +68,7 @@ export function jcodeEntscheid(tool: string, input: unknown, cwd: string): strin
   if (SCHREIBEND.has(t)) {
     const o = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
     // wie jcodeWritesOutside (sessions.ts): Pfad-Felder und die Dateizeilen eines Patches
-    const pfade = [o.file_path, o.path, o.filePath, ...String(o.patch ?? o.input ?? '').matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)]
+    const pfade = [o.file_path, o.path, o.filePath, ...String(o.patch ?? o.input ?? '').matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/gm)]
       .map((x: any) => (Array.isArray(x) ? x[1] : x)).filter((x): x is string => typeof x === 'string' && !!x);
     if (!pfade.length) return 'Abgelehnt (Werkbank-Wächter): Schreiben ohne Pfad.';
     for (const p of pfade) { const grund = schreibzielProblem(p, cwd); if (grund) return grund; }

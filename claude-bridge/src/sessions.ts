@@ -2232,7 +2232,7 @@ export function jcodeWritesOutside(sessionJson: any, cwd: string): string[] {
   for (const m of sessionJson?.messages ?? []) for (const b of Array.isArray(m?.content) ? m.content : []) {
     if (b?.type !== 'tool_use' || !/^(write|edit|multiedit|apply_patch|patch)$/i.test(String(b.name))) continue;
     const i = b.input ?? {};
-    const paths = [i.file_path, i.path, i.filePath, ...String(i.patch ?? i.input ?? '').matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((x: any) => Array.isArray(x) ? x[1] : x).filter((x) => typeof x === 'string' && x);
+    const paths = [i.file_path, i.path, i.filePath, ...String(i.patch ?? i.input ?? '').matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/gm)].map((x: any) => Array.isArray(x) ? x[1] : x).filter((x) => typeof x === 'string' && x);
     for (const p of paths) if (schreibzielProblem(p, root)) out.push(resolve(root, p));   // Pass C (Runde 3): dieselbe Regel wie der Hook (Symlinks)
   }
   return out;

@@ -842,13 +842,18 @@ test('Plan §23 T8 (05.11.: Stränge standen über Nacht): Zug ohne Status-Marke
   assert.equal(statusMark('…\nStatus: läuft'), 'läuft');
   // Plan §24 A2: für alle Stränge (nicht mehr am Triage-Schalter); ORCH_OHNE_STATUS=aus schaltet ab.
   process.env.ORCH_OHNE_STATUS = 'aus';
-  assert.equal(orchStatus(run, turn('ok'), ai('ohne Marke')).cause, undefined, 'abgeschaltet: parken wie bisher');
+  assert.equal(orchStatus(run, turn('ok'), ai('ohne Marke'), T0 + 120_000).cause, undefined, 'abgeschaltet: parken wie bisher');
   delete process.env.ORCH_OHNE_STATUS;
   try {
-  const ohne = orchStatus(run, turn('ok'), ai('Zwischenstand ohne Marke'));
+  const ohne = orchStatus(run, turn('ok'), ai('Zwischenstand ohne Marke'), T0 + 120_000);
   assert.equal(ohne.status, 'waiting'); assert.equal(ohne.cause, 'ohne_status'); assert.match(ohne.reason, /ohne Status-Marke/, 'Zustand „stand-fehlt“ bleibt erkennbar');
-  const laeuft = orchStatus(run, turn('ok'), ai('Teil A fertig.\nStatus: läuft'));
+  const laeuft = orchStatus(run, turn('ok'), ai('Teil A fertig.\nStatus: läuft'), T0 + 120_000);
   assert.equal(laeuft.cause, 'ohne_status'); assert.match(laeuft.reason, /läuft/);
+  // Pass B (Runde 5, C2): kommt kein automatisches „weiter“ (Zugende > 6 h, Takt aus), wartet der Strang wie früher sichtbar
+  const alt = orchStatus(run, turn('ok'), ai('ohne Marke'), Number(turn('ok')!.turn!.end) + 7 * 3600_000);
+  assert.equal(alt.cause, undefined); assert.match(alt.reason, /lesen und antworten/);
+  process.env.ORCH_AUTO_WEITER = 'off';
+  try { assert.equal(orchStatus(run, turn('ok'), ai('ohne Marke'), T0 + 120_000).cause, undefined, 'Takt aus'); } finally { delete process.env.ORCH_AUTO_WEITER; }
   // Hauptsitzung 05.11. 17:20: der Anstoß kommt erst 5 min nach dem Zugende (Zeit zum Lesen), dann höchstens 2×.
   assert.equal(decide('ok', {}, {}, ai('ohne Marke')).action, 'wait', 'erst nach 5 min');
   const spaet = { now: T0 + 6 * 60_000 };
@@ -859,11 +864,11 @@ test('Plan §23 T8 (05.11.: Stränge standen über Nacht): Zug ohne Status-Marke
   assert.equal(decide('ok', { autoStreak: 2 }, spaet, ai('ohne Marke')).action, 'send');
   assert.equal(decide('ok', {}, spaet, ai('Status: braucht Antwort')).action, 'none', 'echte Frage: kein automatisches weiter');
   // „braucht Antwort“ ohne etwas an Knut/Hauptchat im Stand-Block (Fall ba444b36) gilt wie ohne Marke.
-  const leer = orchStatus(run, turn('ok'), ai('### Stand\n- Erledigt: A\n- Braucht Knut: nichts\nStatus: braucht Antwort'));
+  const leer = orchStatus(run, turn('ok'), ai('### Stand\n- Erledigt: A\n- Braucht Knut: nichts\nStatus: braucht Antwort'), T0 + 120_000);
   assert.equal(leer.cause, 'ohne_status');
-  const echt = orchStatus(run, turn('ok'), ai('### Stand\n- Erledigt: A\n- Braucht Knut: D2 Budget freigeben\nStatus: braucht Antwort'));
+  const echt = orchStatus(run, turn('ok'), ai('### Stand\n- Erledigt: A\n- Braucht Knut: D2 Budget freigeben\nStatus: braucht Antwort'), T0 + 120_000);
   assert.equal(echt.cause, undefined); assert.equal(echt.status, 'waiting');
-  assert.equal(orchStatus(run, turn('ok'), ai('Soll ich A oder B nehmen?\nStatus: braucht Antwort')).cause, undefined, 'ohne Stand-Block: als echte Frage nehmen');
+  assert.equal(orchStatus(run, turn('ok'), ai('Soll ich A oder B nehmen?\nStatus: braucht Antwort'), T0 + 120_000).cause, undefined, 'ohne Stand-Block: als echte Frage nehmen');
   // Gegenprüfung A2: in der gefährlichen Richtung eng — fett ohne Spiegelstrich, unbekannter Name oder gar keine passende Zeile = echt
   const { echteFrage } = await import('../server/orchestrator.ts');
   assert.equal(echteFrage('### Stand\n**Braucht Knut:** Wie ist X?\n'), true);

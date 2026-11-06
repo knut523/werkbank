@@ -91,3 +91,15 @@ test('Gegenprüfung 06.11.: besitzt eine andere, lebende Brücke die Server, sta
   s2.stop();
   assert.ok(!existsSync(join(h, 'waechter/bruecke.pid')), 'Sperre mit stop freigegeben');
 });
+
+test('Pass B (Runde 5, A3): antwortet ein Server erst nach der Startfrist, ist er beim nächsten Bedarf bereit (nicht für den ganzen Lauf aus)', async () => {
+  const h = installation(), f = falscherStart();
+  let wach = false;
+  const fetchFn: any = async () => (wach ? new Response('{}', { status: 200 }) : Promise.reject(new Error('noch nicht')));
+  const s = opencode2Server({ home: h, ports: [47910], version: '2.2.5', versionVon: () => '2.2.5', spawnFn: f.spawnFn, fetchFn, log: () => {}, startMs: 300 });
+  assert.equal(await s.sichern('sk-eins'), null, 'Start dauert länger als die Frist');
+  wach = true;
+  assert.deepEqual((await s.sichern('sk-eins'))?.urls, ['http://127.0.0.1:47910']);
+  assert.equal(f.kinder.length, 1, 'kein zweiter Prozess');
+  s.stop();
+});

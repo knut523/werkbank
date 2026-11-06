@@ -69,3 +69,16 @@ test('B10: Ordnerzugang kennt dieselben Punktdateien wie GEHEIM', () => {
   const d = realpathSync(mkdtempSync(join(tmpdir(), 'gp-r3-npmrc-'))); mkdirSync(join(d, 'web')); writeFileSync(join(d, 'web', '.npmrc'), 'x');
   assert.equal(zugangsdateiIn(d), 'web/.npmrc');
 });
+
+test('Pass B (Runde 5, A6): ein Patch, der eine Datei nach draußen verschiebt, wird abgelehnt', () => {
+  const patch = '*** Begin Patch\n*** Update File: src/a.ts\n*** Move to: ../../anderes-repo/x.ts\n@@\n-a\n+b\n*** End Patch';
+  assert.ok(jcodeEntscheid('apply_patch', { patch }, wt));
+});
+
+test('Pass B (Runde 5, A2): GraphQL mit Text aus der Shell gilt als Schreiben; wörtliche Abfrage bleibt lesend', async () => {
+  const { githubSchreibGrund } = await import('../src/tools.ts');
+  for (const c of ['gh api graphql -f query="$(cat q.graphql)"', 'gh api graphql -f query=$Q', 'gh api graphql --raw-field query=`cat q`'])
+    assert.ok(githubSchreibGrund(c), c);
+  assert.equal(githubSchreibGrund("gh api graphql -f query='{ viewer { login } }'"), null);
+  assert.equal(githubSchreibGrund("gh api graphql -f query='{ repository(owner:\"o\", name:\"r\") { id } }' -F n=3"), null);
+});

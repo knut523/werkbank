@@ -807,7 +807,11 @@ export function registerV2(on0: On, d: V2Deps) {
       let at: Date | null = null;
       if (!hauptchatSendet.has(u.id)) {
         hauptchatSendet.add(u.id);
-        try { if (!(await d.laeuftChat(u, h.conv).catch(() => true))) at = await librechat.senden(u, h.conv, text); } finally { hauptchatSendet.delete(u.id); }
+        try {
+          // Pass B (Runde 5, B2): liegt schon etwas in der Schlange, hinten anstellen — sonst überholt die neue Nachricht die ältere
+          const wartet = ((await d.hauptchatEingereiht?.(u).catch(() => [])) ?? []).length > 0;
+          if (!wartet && !(await d.laeuftChat(u, h.conv).catch(() => true))) at = await librechat.senden(u, h.conv, text);
+        } finally { hauptchatSendet.delete(u.id); }
       }
       if (!at) {
         // Audit 05.11. (4): einreihen statt 409 — der Takt stellt zu, sobald der Hauptchat frei ist.

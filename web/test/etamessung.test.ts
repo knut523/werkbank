@@ -120,3 +120,11 @@ test('Pass A (Fix-Runde 2): alter offener Abschnitt wird als verwaist geschlosse
   const s3: any = await E.messTakt(d, 'laeuft', { now: T0 + 2 * 86400_000 + 120_000, agentEta: null, agentGemeldet: null, tab: [], medianMs: null });
   assert.ok(s3.etaMessung?.id && s3.etaMessung.id !== s2.etaMessung.id);
 });
+
+test('Pass B (Runde 5, C4): Kurzabschnitte (unter 1 min, faktor null) zählen nicht in die Kalibrierung', () => {
+  const g = E.gruppeVon({ tiefe: 'regular', modell: 'claude:opus' });
+  const tab = [60, 60, 60].map((m, i) => mess({ dauerMin: m, start: new Date(T0 - i * MIN) }));
+  const kurz = [0.3, 0.4, 0.5].map((m, i) => mess({ dauerMin: m, faktor: null, start: new Date(T0 + (i + 1) * MIN) }));
+  assert.equal(E.kalibFuer([...tab, ...kurz], g)!.n, 3);
+  assert.equal(Math.round(E.kalibFuer([...tab, ...kurz], g)!.dauerMs! / MIN), 60);
+});

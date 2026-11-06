@@ -118,6 +118,11 @@ test('Audit 05.11. (4): Hauptchat arbeitet → Text wird eingereiht statt 409; G
     assert.deepEqual(rein, ['Bitte PR 393 ansehen']);
     const g = await rufe('GET', '/api/v2/chat?ziel=hauptchat', ADMIN);
     assert.equal(g.b.eingereiht.length, 1); assert.match(g.b.eingereiht[0].text, /PR 393/);
+    // Pass B (Runde 5, B2): Hauptchat frei, aber noch etwas in der Schlange → hinten anstellen statt überholen
+    deps.laeuftChat = async () => false;
+    const b2 = await rufe('POST', '/api/v2/chat', ADMIN, { ziel: 'hauptchat', text: 'Korrektur dazu' });
+    assert.equal(b2.b.eingereiht, true); assert.deepEqual(rein, ['Bitte PR 393 ansehen', 'Korrektur dazu']);
+    deps.laeuftChat = async () => true;
     delete deps.hauptchatEinreihen;
     assert.equal((await rufe('POST', '/api/v2/chat', ADMIN, { ziel: 'hauptchat', text: 'x' })).status, 409, 'ohne Schlange wie bisher');
   } finally { deps.hauptchat = alt.hauptchat; deps.laeuftChat = alt.laeuftChat; delete deps.hauptchatEinreihen; delete deps.hauptchatEingereiht; }

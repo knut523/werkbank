@@ -4429,7 +4429,9 @@ registerV2(on, {
       if (!d?.conv) return false;
       const r = await fetch(`${cfg.bridgeUrl}/internal/orch-abbrechen`, { method: 'POST', headers: { ...bridgeInternal, 'content-type': 'application/json' }, body: JSON.stringify({ userId: u.id, conv: d.conv }), signal: AbortSignal.timeout(5000) })
         .catch(() => { throw new HttpError(502, 'Die Brücke antwortet gerade nicht — nichts angehalten. Bitte gleich noch einmal.'); });
-      return r.ok && !!((await r.json().catch(() => ({}))) as any).abgebrochen;
+      // Pass B (Runde 5, B1): eine Ablehnung der Brücke (401/403/5xx) ist kein „gerade läuft kein Zug“ — sonst meldete „Anhalten“ Erfolg
+      if (!r.ok) throw new HttpError(502, `Die Brücke hat abgelehnt (${r.status}) — nichts angehalten. Bitte gleich noch einmal.`);
+      return !!((await r.json().catch(() => ({}))) as any).abgebrochen;
     };
     if (aktion === 'abbrechen') { const ok = await abbrechen(); log('strang abbrechen', { user: u.id, id, ok }); return { hinweis: ok ? 'Der laufende Zug wird beendet — schreib einfach weiter, der Unter-Chat bleibt erhalten.' : 'Gerade läuft kein Zug.' }; }
     // anhalten: laufenden Zug beenden und als geprüft markieren — läuft nicht weiter (wie „Anhalten“ der alten Werkbank).

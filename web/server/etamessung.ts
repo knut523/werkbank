@@ -52,7 +52,8 @@ export function kalibFuer(tab: KalibTabelle | null | undefined, g: Gruppe): Kali
     ['Tiefe', (m) => m.tiefe === g.tiefe],
   ];
   for (const [ebene, passt] of ebenen) {
-    const v = tab.filter((m) => passt(m) && Number(m.dauerMin) > 0).sort((a, b) => new Date(b.start).getTime() - new Date(a.start).getTime()).slice(0, N_LETZTE);
+    // Pass B (Runde 5, C4): Abschnitte unter 1 min (faktor null) zählen nicht — sonst zögen Zustandswechsel den Median herunter
+    const v = tab.filter((m) => passt(m) && Number(m.dauerMin) > 0 && Number(m.faktor) > 0).sort((a, b) => new Date(b.start).getTime() - new Date(a.start).getTime()).slice(0, N_LETZTE);
     if (v.length < MIN_N) continue;
     const fak = v.map((m) => Number(m.faktor)).filter((x) => x > 0);
     const dauer = v.map((m) => Number(m.dauerMin)), alle = median(dauer)!;

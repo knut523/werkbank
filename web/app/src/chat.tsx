@@ -33,6 +33,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
   const [text, setText] = useState('');
   const [vorlage, setVorlage] = useState('');   // S22: Vorlage für einen neuen 2.0-Chat
   const [sendet, setSendet] = useState(false);
+  const unterwegs = useRef(false);
   const [fehler, setFehler] = useState<string | null>(null);
   const [warten, setWarten] = useState(0);   // > 0: nach dem Senden nachlesen, bis die Antwort da ist (Hauptchat)
   const unten = useRef<HTMLDivElement>(null);
@@ -67,15 +68,17 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
 
   async function senden() {
     const t = text.trim();
-    if (!t) return;
+    // Pass B (Runde 5, D1): Strg+Enter umging die Sperre des Knopfs — eine Ref (nicht der Zustand, der im Closure veraltet sein kann)
+    if (!t || unterwegs.current || (ziel === 'eigen' && stand?.laeuft)) return;
+    unterwegs.current = true;
     setSendet(true); setFehler(null);
     try {
       const r = await schicke<{ conv?: string }>('api/v2/chat', { ziel, text: t, conv: ziel === 'eigen' ? conv : undefined, ...(ziel === 'eigen' && !conv && vorlage ? { vorlage } : {}) });
-      setText('');
+      setText((jetzt) => (jetzt.trim() === t ? '' : jetzt));   // D3: was während des Sendens getippt wurde, bleibt stehen
       if (ziel === 'eigen' && r.conv) setConv(r.conv);
       setWarten(ziel === 'hauptchat' ? 80 : 4);
       await laden();
-    } catch (e: any) { setFehler(e.message); } finally { setSendet(false); }
+    } catch (e: any) { setFehler(e.message); } finally { unterwegs.current = false; setSendet(false); }
   }
 
   if (!offen) return null;

@@ -132,7 +132,7 @@ Rollen: Befürworter, Fachprüfung, Advocatus Diaboli (zweites Modell: GLM 5.3 �
 3. **Alle v2-Routen hinter der bestehenden Anmeldung** (`needUser`, Freigabeliste, `x-werkbank`-Kopf bei POST); Chat: höchstens ein laufender Zug je Person, Text ≤ 8 000 Zeichen; Hauptchat nur für Admin.
 4. **Keine Freigabe nach außen in 2.0.** *(Abgelöst Knut 06.11.: „Freigabe-Ansicht in der 2.0 ja“ — Push-Freigabe über die Ansicht „Ansehen und freigeben“ hinter dem Schalter `WERKBANK_V2_FREIGABE=1`, nur Admin, genau der gezeigte Kopf; Jira bleibt in der alten Werkbank. Der Regeltest prüft eine ausdrückliche Erlaubnisliste.)* Push-/Jira-Karten erscheinen mit Link „in der alten Werkbank freigeben“; Antworten auf Fragen gehen über die bestehende Route `POST /api/entscheidungen/fragen/antwort` — mit Test.
 5. **LibreChat-Zugriff nur in einem Modul** (Adapter); kein anderes v2-Modul liest LibreChats Datenbank.
-6. **Importregel als Test:** `web/app` importiert nichts aus `web/server`, `claude-bridge` oder `web/src`.
+6. **Importregel als Test:** `web/app` importiert nichts aus `web/server`, `claude-bridge` oder `web/src`. *(Ausnahme seit 06.11., Parität §25 P1: nur `alt.tsx` hängt Seiten der alten Werkbank aus `web/src` ein — Seiten, ihre Hülle `ui.tsx`/`api.ts` und das Stylesheet; nie `web/server` oder die Brücke. Der Test `web/app/test/regeln.test.ts` erlaubt genau das.)*
 7. **Handy wird gemessen**, nicht behauptet: Persona-Test auf 390 px ist Teil von Schritt 0.
 8. **Kein Verschieben** von Verzeichnissen, Skripten oder Live-Pfaden heute Nacht.
 

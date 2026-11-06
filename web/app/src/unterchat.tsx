@@ -33,7 +33,9 @@ export function UnterChat({ id }: { id: string }) {
   const anzahl = d?.nachrichten.length ?? 0;
   const arbeitet = !!d?.steuer?.laeuft || !!d?.steuer?.schlange || d?.nachrichten.at(-1)?.status === 'laeuft';
   // Live-Aktualisierung: während der Unter-Chat arbeitet alle 3 s, sonst alle 20 s.
-  useEffect(() => { const t = setInterval(neu, arbeitet ? 3000 : 20000); return () => clearInterval(t); }, [arbeitet, neu]);
+  // Pass B (Runde 5, D2): die nächste Abfrage erst nach der Antwort der vorigen planen (d/fehler ändern sich je Antwort) — ein festes
+  // 3-s-Intervall verwarf bei langsamer Antwort jede und stapelte Anfragen auf dem Server; im versteckten Tab nur alle 20 s.
+  useEffect(() => { const t = setTimeout(neu, arbeitet && !document.hidden ? 3000 : 20000); return () => clearTimeout(t); }, [d, fehler, arbeitet, neu]);
   // Ans Seitenende statt an die letzte Nachricht: die feste Leiste liegt sonst über der neuesten Nachricht (Abnahme 06.11.).
   // Phase 4: nur nachziehen, wenn man schon unten war — wer hochgescrollt hat, um etwas nachzulesen, bleibt dort (der erste Stand springt immer).
   const unten = useRef(true), erst = useRef(true);
@@ -49,19 +51,22 @@ export function UnterChat({ id }: { id: string }) {
     try { const r: any = await fn(); setMeldung(r?.hinweis ?? (r?.zustellung ? `${gut} — ${r.zustellung}` : gut)); neu(); }
     catch (e: any) { setMeldung(String(e?.message ?? e)); } finally { setLaeuft(null); }
   };
+  // Pass B (Runde 5, D3): nur den gesendeten Text leeren — was während des Sendens weitergetippt wurde, bleibt stehen
+  const leeren = (gesendet: string) => setText((jetzt) => (jetzt.trim() === gesendet.trim() ? '' : jetzt));
   const steuern = (aktion: string, gut: string) => tu(aktion, () => schicke(`api/v2/arbeit/${id}/steuern`, { aktion }), gut);
-  const senden = (t = text) => { const v = t.trim(); if (!v) return; void tu('senden', async () => { const r = await schicke(`api/v2/arbeit/${id}/nachricht`, { text: v }); setText(''); return r; }, arbeitet ? 'Nachgereicht — er sieht es beim nächsten Schritt (oder bekommt es nach dem Zug).' : 'Gesendet.'); };
+  const senden = (t = text) => { const v = t.trim(); if (!v) return; void tu('senden', async () => { const r = await schicke(`api/v2/arbeit/${id}/nachricht`, { text: v }); leeren(v); return r; }, arbeitet ? 'Nachgereicht — er sieht es beim nächsten Schritt (oder bekommt es nach dem Zug).' : 'Gesendet.'); };
   const anhaengen = async (f: File | undefined) => {
     if (!f) return;
     if (laeuft) { setMeldung('Einen Moment — die vorige Aktion läuft noch. Datei bitte gleich noch einmal wählen.'); if (datei.current) datei.current.value = ''; return; }
     if (f.size > 8 * 1024 * 1024) { setMeldung('Höchstens 8 MB je Anhang — größere Dateien unter „Meine Dateien“.'); if (datei.current) datei.current.value = ''; return; }   // dieselbe Datei erneut wählbar (Pass A UI 10)
     await tu('anhang', async () => {
       const inhalt = await new Promise<string>((ok, nein) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] ?? ''); r.onerror = () => nein(new Error(`„${f.name}“ ließ sich nicht lesen.`)); r.readAsDataURL(f); });
-      const r = await schicke(`api/v2/arbeit/${id}/anhang`, { name: f.name, inhalt, text: text.trim() }); setText(''); return r; }, `„${f.name}“ angehängt und geschickt.`);
+      const r = await schicke(`api/v2/arbeit/${id}/anhang`, { name: f.name, inhalt, text: text.trim() }); leeren(text); return r; }, `„${f.name}“ angehängt und geschickt.`);
     if (datei.current) datei.current.value = '';
   };
   const abnehmen = (art: 'passt' | 'aendern' | 'spaeter', o: { trotzdem?: boolean; notiz?: string } = {}) =>
-    tu(art, () => schicke(`api/v2/ansehen/${id}`, { art, notiz: o.notiz ?? text.trim(), ...(o.trotzdem ? { ohneBericht: true } : {}) }), art === 'passt' ? 'Abgenommen.' : art === 'aendern' ? 'Geht an den Unter-Chat.' : 'Für 24 h ausgeblendet.');
+    // Pass B (Runde 5, D4): nach „Ändern“/„Passt“ ist die Notiz geschickt — Feld leeren, sonst ginge sie mit „Senden“ ein zweites Mal raus
+    tu(art, async () => { const notiz = o.notiz ?? text.trim(); const r = await schicke(`api/v2/ansehen/${id}`, { art, notiz, ...(o.trotzdem ? { ohneBericht: true } : {}) }); if (art !== 'spaeter' && !o.notiz && notiz) leeren(notiz); return r; }, art === 'passt' ? 'Abgenommen.' : art === 'aendern' ? 'Geht an den Unter-Chat.' : 'Für 24 h ausgeblendet.');
 
   // als Funktion, nicht als Komponente: sonst baut jedes Neuladen (alle 3 s) die Knöpfe neu auf und der Fokus springt weg
   const knopf = ({ aktion, label, haupt, gut }: { aktion: string; label: string; haupt?: boolean; gut: string }) => (
