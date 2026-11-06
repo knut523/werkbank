@@ -1,6 +1,7 @@
 // Parität (Knut 06.11.: „kein Bereich der 2.0 schlechter als der alte — lieber die alte Komponente 1:1 übernehmen“): die
 // Bereiche Jira-Board (mit PM/DEV-Seitenwahl), Sprint, Ziele, Roadmap, Lage, Mein Tag, Skills, Einrichtung und Meine Dateien
-// sind hier die Seiten der alten Werkbank selbst, eingehängt in die 2.0-Hülle. Ihr Stylesheet gilt nur innerhalb von
+// sind hier die Seiten der alten Werkbank selbst; Übersicht, Entscheidungen, Erledigt, Vault und Ablage stehen „wie bisher“ neben
+// den 2.0-Seiten — eingehängt in die 2.0-Hülle. Ihr Stylesheet gilt nur innerhalb von
 // .alt-seite (scopeCss), die alte Hash-Adresse (#/board?site=DEV …) steht hinter der 2.0-Adresse (v2/board#/board?site=DEV).
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import altCss from '../../src/styles.css?inline';
@@ -16,9 +17,15 @@ import { Skills } from '../../src/pages/Skills.tsx';
 import { Setup } from '../../src/pages/Setup.tsx';
 import { Dateien } from '../../src/pages/Dateien.tsx';
 import { scopeCss } from './altcss.ts';
-import { ALT_SEITEN } from './mehr.ts';
+import { ALT_SEITEN, ALT_GLEICH } from './mehr.ts';
+import { Uebersicht } from '../../src/pages/Uebersicht.tsx';
+import { Entscheidungen } from '../../src/pages/Entscheidungen.tsx';
+import { HeuteErledigt } from '../../src/pages/HeuteErledigt.tsx';
+import { Wissen } from '../../src/pages/Wissen.tsx';
+import { Ablage } from '../../src/pages/Ablage.tsx';
 
-const seiteVon = (hash: string) => ALT_SEITEN.find((s) => hash === s.hash || hash.startsWith(s.hash + '?') || hash.startsWith(s.hash + '/'));
+const gleich = (hash: string) => { const k = Object.keys(ALT_GLEICH).find((g) => hash === g || hash.startsWith(g + '?') || hash.startsWith(g + '/')); return k ? ALT_GLEICH[k] + hash.slice(k.length) : hash; };
+const seiteVon = (roh: string) => { const hash = gleich(roh); return ALT_SEITEN.find((s) => hash === s.hash || hash.startsWith(s.hash + '?') || (s.hash !== '#/' && hash.startsWith(s.hash + '/'))); };
 
 let stil: HTMLStyleElement | null = null;
 function stilEinhaengen() {
@@ -70,6 +77,11 @@ export function AltSeite({ start, altUrl }: { start: string; altUrl: string }) {
     : start === '#/skills' ? <Skills cfg={cfg} />
     : start === '#/einrichtung' ? <Setup cfg={cfg} onLogin={() => location.reload()} />
     : start === '#/dateien' ? <Dateien cfg={cfg} />
+    : start === '#/' ? <Uebersicht cfg={cfg} hash={gleich(hash)} />
+    : start === '#/entscheidungen' ? <Entscheidungen />
+    : start === '#/erledigt' ? (cfg.user.role === 'ADMIN' ? <HeuteErledigt /> : <div className="page"><p>Nur für Admins.</p></div>)
+    : start === '#/wissen' ? <Wissen cfg={cfg} hash={hash} />
+    : start === '#/ablage' ? <Ablage cfg={cfg} />
     : null;
   return <div className="alt-seite" onClick={klick}><Providers>{seite}</Providers></div>;
 }

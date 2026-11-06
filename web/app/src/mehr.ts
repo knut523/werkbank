@@ -21,7 +21,7 @@ export const MEHR: MehrEintrag[] = [
   { alt: '#/arbeit/reviews', titel: 'Reviews und PRs', satz: 'Code-Änderungen zur Prüfung, wer dran ist, was der Prüf-Agent sagt.', ziel: 'v2', url: 'v2/prs' },
   { alt: '#/erledigt', titel: 'Heute erledigt', satz: 'Was an einem Tag fertig wurde — mit Datumswahl.', ziel: 'v2', url: 'v2/erledigt' },
   { alt: '#/wissen', titel: 'Wissen (Notizen)', satz: 'Notizen und Berichte lesen und suchen.', ziel: 'v2', url: 'v2/dokumente' },
-  { alt: '#/ablage', titel: 'Berichte und Ablage', satz: 'Berichte liest du unter „Dokumente“; Dateien ablegen (mit Namensvorschlag) geht in der alten Werkbank.', ziel: 'alt', url: 'ablage' },
+  { alt: '#/ablage', titel: 'Berichte und Ablage', satz: 'Review-Pakete nach Stand (wartet, bereit für GitHub, blockiert, Archiv) mit Bericht, Decks und Downloads.', ziel: 'v2', url: 'v2/ablage' },
   { alt: '#/dateien', titel: 'Meine Dateien', satz: 'Dateien der Agenten, Downloads und Datensicherung.', ziel: 'v2', url: 'v2/dateien' },
   { alt: '#/lage', titel: 'Lage', satz: 'Gesamtbild über alle Unter-Chats, Dienste und Fristen.', ziel: 'v2', url: 'v2/lage' },
   { alt: '#/roadmap', titel: 'Roadmap', satz: 'Woran das Team arbeitet, nach Bereich und Stand.', ziel: 'v2', url: 'v2/roadmap' },
@@ -31,7 +31,10 @@ export const MEHR: MehrEintrag[] = [
   { alt: '#/timebox', titel: 'Mein Tag', satz: 'Tagesvorschlag mit Zeitblöcken.', ziel: 'v2', url: 'v2/tag' },
   { alt: '#/skills', titel: 'Skills', satz: 'Welche Fähigkeiten die Agenten haben und welche für dich gelten.', ziel: 'v2', url: 'v2/skills' },
   // Runde 7 (Abgleich): Morgenlage, Tagesabschluss, Hygiene hingen an der alten Übersicht — ohne Link waren sie weg.
-  { alt: '#/heute', titel: 'Morgenlage, Tagesabschluss, Hygiene', satz: 'Die alte Übersicht mit Morgenlage, Tagesabschluss und Hygiene-Liste.', ziel: 'alt', url: 'heute' },
+  { alt: '#/heute', titel: 'Übersicht wie bisher', satz: 'Die alte Übersicht: Morgenlage, Tagesabschluss, Mein Tag, Hauptchat-Status, Push freigeben mit Kopf und Diff.', ziel: 'v2', url: 'v2/uebersicht' },
+  { alt: '#/inbox', titel: 'Entscheidungen wie bisher', satz: 'Alle offenen Fragen mit Themenfilter, „Alle wie empfohlen“, Log mit Filtern.', ziel: 'v2', url: 'v2/entscheidungen-bisher' },
+  { alt: '#/erledigt?alt', titel: 'Erledigt wie bisher', satz: 'Der Tag mit Zählerzeile, gepushten PRs, Entscheidungen und Releases.', ziel: 'v2', url: 'v2/erledigt-bisher' },
+  { alt: '#/wissen?alt', titel: 'Wissenssammlung wie bisher', satz: 'Ordnerbaum, Team-Übersicht, Tickets, Verweise und Graph je Notiz.', ziel: 'v2', url: 'v2/wissen' },
   { alt: '#/einrichtung', titel: 'Einrichtung', satz: 'Claude verbinden, Jira und Melious einrichten, Team-Freigaben, Dienste.', ziel: 'v2', url: 'v2/einrichtung' },
 ];
 
@@ -47,5 +50,14 @@ export const ALT_SEITEN: { hash: string; pfad: string; f: string }[] = [
   { hash: '#/skills', pfad: 'v2/skills', f: 'skills' },
   { hash: '#/einrichtung', pfad: 'v2/einrichtung', f: '' },
   { hash: '#/dateien', pfad: 'v2/dateien', f: 'dateien' },
+  // Parität Teil 2 (Inventur 06.11.): diese 2.0-Seiten sind neu gebaut, aber schmaler als alt — die alte Seite steht einen Klick
+  // daneben, vollständig (Morgenlage, Tagesabschluss, „Alle wie empfohlen“, Log, Ticker, Ordnerbaum, Paket-Status …).
+  { hash: '#/entscheidungen', pfad: 'v2/entscheidungen-bisher', f: 'heute' },
+  { hash: '#/erledigt', pfad: 'v2/erledigt-bisher', f: 'leitstand' },
+  { hash: '#/wissen', pfad: 'v2/wissen', f: 'wissen' },
+  { hash: '#/ablage', pfad: 'v2/ablage', f: 'dateien' },
+  { hash: '#/', pfad: 'v2/uebersicht', f: 'heute' },   // zuletzt: passt nur genau auf „#/“ bzw. „#/?…“
 ];
+/** Alte Adressen, die dieselbe Seite meinen (Router der alten Werkbank). */
+export const ALT_GLEICH: Record<string, string> = { '#/heute': '#/', '#/uebersicht': '#/', '#/leitstand': '#/', '#/inbox': '#/entscheidungen' };
 export const ALT_PFADE: Record<string, string> = Object.fromEntries(ALT_SEITEN.map((s) => [s.pfad, s.hash]));

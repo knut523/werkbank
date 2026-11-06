@@ -34,7 +34,8 @@ test('ALT_SEITEN: jede eingehängte alte Seite gibt es im Router der alten Werkb
   const { ALT_SEITEN, MEHR } = await import('../src/mehr.ts');
   const router = readFileSync(new URL('../../src/App.tsx', import.meta.url), 'utf8');
   for (const s of ALT_SEITEN) {
-    assert.ok(router.includes(`/^#\\/${s.hash.slice(2)}/.test(hash)`), `${s.hash} im alten Router`);
-    assert.ok(MEHR.some((e) => e.url === s.pfad && e.alt === s.hash), `${s.pfad} im Mehr-Menü`);
+    // „#/“ ist die Vorgabe am Ende des alten Routers; sonst steht der Name in einer Route (/^#\/name/ oder /^#\/(…|name)/).
+    if (s.hash !== '#/') assert.match(router, new RegExp(`/\\^#\\\\/(\\([a-z|]*)?${s.hash.slice(2)}\\b`), `${s.hash} im alten Router`);
+    assert.ok(MEHR.some((e) => e.url === s.pfad), `${s.pfad} im Mehr-Menü`);
   }
 });

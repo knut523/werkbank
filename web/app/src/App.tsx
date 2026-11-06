@@ -62,6 +62,10 @@ function useAdresse() {
 function Seite({ pfad, such }: { pfad: string; such: string }) {
   const q = new URLSearchParams(such);
   let m: RegExpMatchArray | null;
+  // Zuerst (genaue Adressen, sonst griffe z. B. v2/entscheidungen-bisher in v2/entscheidungen). Parität (Knut 06.11.): diese Bereiche sind die Seiten der alten Werkbank selbst (alt.tsx; vorher schmale Lese-Fassungen,
+  // Audit 05.11. (8)) — erst geladen, wenn man hingeht.
+  const altSeite = ALT_PFADE[pfad];
+  if (altSeite) return <Suspense fallback={<Laedt />}><AltBereich start={altSeite} /></Suspense>;
   if (pfad === 'v2' || pfad === 'v2/') return <Jetzt />;
   if (pfad.startsWith('v2/entscheidungen')) return <Entscheidungen />;
   if (pfad.startsWith('v2/entschieden')) return <Entschieden />;
@@ -79,10 +83,6 @@ function Seite({ pfad, such }: { pfad: string; such: string }) {
   if (pfad === 'v2/themen') return <Themen />;
   if (pfad === 'v2/thema') return <Thema key={such} name={q.get('name') ?? ''} />;
   if (pfad.startsWith('v2/erledigt')) return <Erledigt key={such} tag={q.get('tag')} />;
-  // Parität (Knut 06.11.): diese Bereiche sind die Seiten der alten Werkbank selbst (alt.tsx; vorher schmale Lese-Fassungen,
-  // Audit 05.11. (8)) — erst geladen, wenn man hingeht.
-  const altSeite = ALT_PFADE[pfad];
-  if (altSeite) return <Suspense fallback={<Laedt />}><AltBereich start={altSeite} /></Suspense>;
   return <div className="seite"><h1>Seite nicht gefunden</h1><p><a href="v2/">Zur Startseite</a></p></div>;
 }
 

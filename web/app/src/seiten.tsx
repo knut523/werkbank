@@ -16,6 +16,11 @@ function gruss(name: string) {
   return `${h < 11 ? 'Guten Morgen' : h < 18 ? 'Hallo' : 'Guten Abend'}, ${name}`;
 }
 
+// Parität (Knut 06.11.): neben jeder schmaleren 2.0-Seite die alte Seite vollständig, einen Klick entfernt (alt.tsx).
+function WieBisher({ href, text }: { href: string; text: string }) {
+  return <p className="klein wie-bisher"><a href={href}>{text} →</a></p>;
+}
+
 // ---------- Jetzt ----------
 
 export function Jetzt() {
@@ -34,6 +39,7 @@ export function Jetzt() {
     <div className="seite">
       <SuchFeld />
       <ThemenLeiste />
+      <WieBisher href="v2/uebersicht" text="Übersicht wie bisher: Morgenlage, Tagesabschluss, Mein Tag, Hauptchat, Push freigeben" />
       {k.admin && <Enden kurz />}
       {k.admin && <HauptsitzungListe />}
       {!k.admin && !reviewer && <p className="klein gedimmt">Neu hier? <a href="v2/begriffe">Begriffe in Klartext</a> — und oben suchst du Dokumente, Chats und PRs.</p>}
@@ -150,6 +156,7 @@ export function Entscheidungen() {
     <div className="seite">
       <h1>{bc ? 'Für dich' : 'Entscheidungen'}</h1>
       <p className="unterzeile">{bc ? `${d.oben.length + d.rest.length} Entscheidungen, die nur du treffen kannst (Geld, Recht, Zugang, Außenwirkung, Release).` : 'Alles, was auf dich wartet. „Ja, so“ übernimmt die Empfehlung, „Anders …“ schickt deinen eigenen Text — die Antwort geht an den richtigen Unter-Chat.'}</p>
+      <WieBisher href="v2/entscheidungen-bisher" text="Entscheidungen wie bisher: Themenfilter, „Alle wie empfohlen“, Log mit Filtern, Später" />
       {/* Plan §23 T4/T5: was nicht hier steht, entscheidet Claude (technisch) bzw. der Hauptchat nach Council (gewichtig) — sichtbar und umkehrbar. */}
       {bc && <p className="klein bei-claude">{bc.technisch || bc.gewichtig ? <>Nicht für dich: {bc.technisch ? `${bc.technisch} technische ${bc.technisch === 1 ? 'Frage entscheidet' : 'Fragen entscheidet'} Claude nach Empfehlung` : ''}{bc.technisch && bc.gewichtig ? ', ' : ''}{bc.gewichtig ? `${bc.gewichtig} gewichtige ${bc.gewichtig === 1 ? 'geht' : 'gehen'} vorher durch einen Council-Check` : ''}. </> : null}<a href="v2/entschieden">Von Claude entschieden →</a></p>}
       {/* Persona R7 „Knut morgens, 2 Minuten“: erst der Überblick — je Thema eine kurze Zeile je Entscheidung, Klick springt zur Karte. */}
@@ -703,6 +710,7 @@ export function Prs({ wer }: { wer: string | null }) {
     <div className="seite">
       <h1>PRs</h1>
       <p className="unterzeile">Code-Vorschläge auf GitHub und wer gerade dran ist.{d.stand ? ` Stand: ${wann(d.stand)}` : ''}</p>
+      <WieBisher href="v2/roadmap#/roadmap/prs" text="Review-Betrieb wie bisher: Ticker, Review-Log, Posten, Approve, Gegenprüfung, Review für jeden PR" />
       <ThemenLeiste aktiv={thema} wahl={setThema} />
       <div className="filter">
         <label htmlFor="wer">Wartet auf</label>
@@ -818,6 +826,8 @@ export function Dokumente({ q: q0 }: { q: string }) {
     <div className="seite">
       <h1>Dokumente</h1>
       <p className="unterzeile">Berichte der Agenten und Notizen aus unserer Wissenssammlung.</p>
+      <WieBisher href="v2/wissen" text="Wissenssammlung wie bisher: Ordnerbaum, Team-Übersicht, Tickets, Verweise, Graph" />
+      <WieBisher href="v2/ablage" text="Berichte & Ablage wie bisher: Review-Pakete nach Stand, Decks, Downloads" />
       <form className="suche" role="search" onSubmit={(e) => { e.preventDefault(); setSuche(q.trim()); }}>
         <label htmlFor="such" className="unsichtbar">Dokumente durchsuchen</label>
         <input id="such" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Suchen, z. B. Datenschutz, Tarif …" />
@@ -932,6 +942,7 @@ export function Erledigt({ tag }: { tag: string | null }) {
     <div className="seite">
       <h1>{d.tag === d.heute ? 'Heute erledigt' : `Erledigt am ${datum}`}</h1>
       <p className="unterzeile"><button type="button" className="knopf leise klein" onClick={() => waehlen(vortag(d.tag))}>← Vortag</button> <label htmlFor="erledigt-tag">Tag: </label><input id="erledigt-tag" type="date" value={d.tag} max={d.heute} onChange={(e) => waehlen(e.target.value)} />{d.tag !== d.heute && <> <button type="button" className="knopf leise klein" onClick={() => waehlen(d.heute)}>Heute</button></>}</p>
+      <WieBisher href="v2/erledigt-bisher" text="Erledigt wie bisher: Zählerzeile, gepushte PRs, Entscheidungen, Releases" />
       {!d.erledigt.length && <p className="leer">{d.tag === d.heute ? <>Heute ist noch nichts fertig geworden. <button type="button" className="knopf leise klein" onClick={() => waehlen(vortag(d.tag))}>Gestern ansehen</button></> : 'An diesem Tag ist nichts fertig geworden.'}</p>}
       {abgenommen.length > 0 && <Abschnitt id="e-abgenommen" titel="Von dir abgenommen" erklaerung="Unter-Chats, die du an diesem Tag geprüft und abgehakt hast."><ul className="liste">{abgenommen.map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'abgenommen', ton: 'gruen' }} links={e.links.slice(1)} />)}</ul></Abschnitt>}
       {zumLesen.length > 0 && <Abschnitt id="e-zumlesen" titel="Fertig, Bericht noch nicht gelesen" erklaerung="Ein Agent hat an diesem Tag fertig gemeldet; den Bericht hast du noch nicht abgenommen."><ul className="liste">{zumLesen.map((e) => <Zeile key={e.id} titel={e.titel} url={e.links[0]?.url ?? `v2/arbeit/${e.id}`} rechts={e.uhr} marke={{ text: 'zum Lesen' }} links={e.links.slice(1)} />)}</ul></Abschnitt>}

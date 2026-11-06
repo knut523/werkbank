@@ -300,3 +300,4 @@ p { margin: 0 0 var(--s1); }
 /* Parität (Knut 06.11.): eingehängte Seiten der alten Werkbank (alt.tsx) — volle Breite wie dort (Board, Roadmap), sonst ihr eigenes Stylesheet. */
 .inhalt.breit { max-width: none; }
 .alt-seite { font-size: 14px; }
+.wie-bisher { margin: 4px 0 var(--s1); }
