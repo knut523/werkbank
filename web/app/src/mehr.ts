@@ -34,3 +34,18 @@ export const MEHR: MehrEintrag[] = [
   { alt: '#/heute', titel: 'Morgenlage, Tagesabschluss, Hygiene', satz: 'Die alte Übersicht mit Morgenlage, Tagesabschluss und Hygiene-Liste.', ziel: 'alt', url: 'heute' },
   { alt: '#/einrichtung', titel: 'Einrichtung', satz: 'Claude verbinden, Jira und Melious einrichten, Team-Freigaben, Dienste.', ziel: 'v2', url: 'v2/einrichtung' },
 ];
+
+/** Parität (Knut 06.11.): Seiten der alten Werkbank, die selbst in der 2.0 eingehängt sind (alt.tsx) — alte Hash-Route (wie im
+ * Router von web/src/App.tsx), 2.0-Adresse und Freigabe-Schlüssel (web/server/features.ts; '' = immer). Eine Liste, eine Quelle. */
+export const ALT_SEITEN: { hash: string; pfad: string; f: string }[] = [
+  { hash: '#/board', pfad: 'v2/board', f: 'board' },
+  { hash: '#/sprint', pfad: 'v2/sprint', f: 'sprint' },
+  { hash: '#/ziele', pfad: 'v2/ziele', f: 'ziele' },
+  { hash: '#/roadmap', pfad: 'v2/roadmap', f: 'roadmap' },
+  { hash: '#/lage', pfad: 'v2/lage', f: 'leitstand' },
+  { hash: '#/timebox', pfad: 'v2/tag', f: 'timebox' },
+  { hash: '#/skills', pfad: 'v2/skills', f: 'skills' },
+  { hash: '#/einrichtung', pfad: 'v2/einrichtung', f: '' },
+  { hash: '#/dateien', pfad: 'v2/dateien', f: 'dateien' },
+];
+export const ALT_PFADE: Record<string, string> = Object.fromEntries(ALT_SEITEN.map((s) => [s.pfad, s.hash]));

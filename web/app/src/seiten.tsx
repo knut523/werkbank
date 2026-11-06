@@ -5,8 +5,7 @@ import { hole, schicke, type Aufraeumen, type ArbeitKarte, type Dok, type Karte,
 import { useApp } from './kontext.ts';
 import { Abschnitt, EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweis, Verweise, Zeile } from './teile.tsx';
 import { BEGRIFFE, OLAF_KURZ } from './begriffe.ts';
-import { MEHR } from './mehr.ts';
-import { BEREICHE } from './bereiche.tsx';
+import { MEHR, ALT_PFADE } from './mehr.ts';
 import { chatFrage, htmlFuerV2, mehrzahl, ohneStatuszeilen, rel, tabellenBeschriften, wann } from './format.ts';
 
 // Radikal simpel: „Prüfung“ statt „Agent/Review“ in Marken.
@@ -970,9 +969,9 @@ export function Mehr() {
       <h1>Mehr</h1>
       {app.ich.admin && <Kontingent />}
       <ul className="liste">{SEITEN.map(([t, u, satz]) => <Zeile key={u} titel={t} url={u} satz={satz} />)}</ul>
-      {/* Audit 05.11. (8): die aus der alten Werkbank geholten Bereiche (Lesen und das Nötigste; Ändern verlinkt jede Seite) */}
-      <Abschnitt id="m-bereiche" titel="Weitere Bereiche" erklaerung="Aus der alten Werkbank geholt. Lesen geht hier; was Jira, Zugänge oder Konten ändert, verlinkt jede Seite in die alte Werkbank.">
-        <ul className="liste">{MEHR.filter((e) => e.ziel === 'v2' && BEREICHE.includes(e.url as any)).map((e) => <Zeile key={e.alt} titel={e.titel} url={e.url} satz={e.satz} />)}</ul>
+      {/* Parität (Knut 06.11.): die Seiten der alten Werkbank selbst, eingehängt (alt.tsx) — alles wie dort, auch Ändern */}
+      <Abschnitt id="m-bereiche" titel="Weitere Bereiche" erklaerung="Die Seiten der alten Werkbank, hier eingebaut — mit allem, was sie dort können (Jira-Board mit PM/DEV-Umschalter, Tickets ziehen, Mein Tag planen …).">
+        <ul className="liste">{MEHR.filter((e) => e.ziel === 'v2' && e.url in ALT_PFADE).map((e) => <Zeile key={e.alt} titel={e.titel} url={e.url} satz={e.satz} />)}</ul>
       </Abschnitt>
       <Abschnitt id="m-alt" titel="In der alten Werkbank" erklaerung="Diese Seiten gibt es (noch) nur in der alten Werkbank. Ein Klick öffnet sie in einem neuen Tab; die Anmeldung gilt dort auch.">
         <ul className="liste">{alt.map((e) => <Zeile key={e.alt} titel={e.titel} url={app.alt ? `${app.alt}/${e.url}` : '#'} satz={e.satz} />)}</ul>

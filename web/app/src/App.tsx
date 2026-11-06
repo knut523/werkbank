@@ -1,11 +1,15 @@
 // Werkbank 2.0: die Hülle — Kopf (Name, EINE Zahl, „?“, Chat), links fünf Bereiche (Handy: Leiste unten), Chat als Seitenleiste
 // auf jeder Seite. Nach dem Login landet man immer auf „Jetzt“, nie im leeren Chat (428 D2).
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { hole, schicke } from './api.ts';
 import { Kontext, type AppKontext } from './kontext.ts';
 import { ChatLeiste } from './chat.tsx';
 import { Anmelden, AlleChats, Themen, Thema, Arbeit, Begriffe, Dokument, Dokumente, Entscheidungen, Entschieden, Erledigt, Jetzt, Mehr, PrDetail, Prs, Suche, Freigabe } from './seiten.tsx';
-import { MeinTag, Board, Skills, Einrichtung, Dateien, Roadmap, Sprint, Ziele, Lage } from './bereiche.tsx';
+import { useApp } from './kontext.ts';
+import { ALT_PFADE } from './mehr.ts';
+
+const AltSeite = lazy(() => import('./alt.tsx').then((m) => ({ default: m.AltSeite })));
+function AltBereich({ start }: { start: string }) { const { alt } = useApp(); return <AltSeite key={start} start={start} altUrl={alt} />; }
 import { UnterChat } from './unterchat.tsx';
 import { Laedt, vergessen, vorab } from './teile.tsx';
 import { istIntern, logisch, rel } from './format.ts';
@@ -75,16 +79,10 @@ function Seite({ pfad, such }: { pfad: string; such: string }) {
   if (pfad === 'v2/themen') return <Themen />;
   if (pfad === 'v2/thema') return <Thema key={such} name={q.get('name') ?? ''} />;
   if (pfad.startsWith('v2/erledigt')) return <Erledigt key={such} tag={q.get('tag')} />;
-  // Audit 05.11. (8): Bereiche der alten Werkbank (bereiche.tsx)
-  if (pfad === 'v2/tag') return <MeinTag />;
-  if (pfad === 'v2/board') return <Board />;
-  if (pfad === 'v2/skills') return <Skills />;
-  if (pfad === 'v2/einrichtung') return <Einrichtung />;
-  if (pfad === 'v2/dateien') return <Dateien />;
-  if (pfad === 'v2/roadmap') return <Roadmap />;
-  if (pfad === 'v2/sprint') return <Sprint />;
-  if (pfad === 'v2/ziele') return <Ziele />;
-  if (pfad === 'v2/lage') return <Lage />;
+  // Parität (Knut 06.11.): diese Bereiche sind die Seiten der alten Werkbank selbst (alt.tsx; vorher schmale Lese-Fassungen,
+  // Audit 05.11. (8)) — erst geladen, wenn man hingeht.
+  const altSeite = ALT_PFADE[pfad];
+  if (altSeite) return <Suspense fallback={<Laedt />}><AltBereich start={altSeite} /></Suspense>;
   return <div className="seite"><h1>Seite nicht gefunden</h1><p><a href="v2/">Zur Startseite</a></p></div>;
 }
 
@@ -152,7 +150,7 @@ export function App() {
         </nav>
         {trocken && <p className="testband" role="note">Testbetrieb: Antworten an Notizen und Jira werden hier nicht wirklich geschrieben.</p>}
         {meldung && <div className={`meldung-band${meldung.ok ? ' ok' : ''}`} role={meldung.ok ? 'status' : 'alert'}><span>{meldung.text}</span><button type="button" className="knopf leise klein" onClick={() => setMeldung(null)}>Schließen</button></div>}
-        <main className="inhalt"><Seite pfad={pfad} such={such} /></main>
+        <main className={`inhalt${ALT_PFADE[pfad] ? ' breit' : ''}`}><Seite pfad={pfad} such={such} /></main>
         <button type="button" className={`chat-fab${fabWeg ? ' weg' : ''}`} onClick={() => setChat({ offen: true, text: '' })} aria-label="Chat öffnen" hidden={chat.offen}>Chat</button>
         <ChatLeiste offen={chat.offen} vorbereitet={chat.text} convWahl={chat.conv} schliessen={() => setChat({ offen: false, text: '' })} />
       </div>

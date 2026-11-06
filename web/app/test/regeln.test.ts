@@ -35,7 +35,10 @@ test('Begriffe: die Begriffsliste selbst ist jargonfrei und erklärt die Kernwö
   for (const w of ['Wartet auf dich', 'Unter-Chat', 'Hauptchat', 'Chat', 'Entscheidung', 'Freigabe', 'Dokument']) assert.ok(BEGRIFFE.some((b) => b.wort === w), w);
 });
 
-test('Importregel (B6): nichts aus web/server, claude-bridge oder web/src', () => {
+// Ausnahme (Parität, Knut 06.11. „lieber die alte Komponente 1:1 übernehmen“): nur alt.tsx hängt Seiten der alten Werkbank
+// aus web/src ein — und zwar nur Seiten, ihre Hülle (ui/api) und das Stylesheet; nie web/server oder die Brücke.
+const ALT_ERLAUBT = /^\.\.\/\.\.\/src\/(pages\/[A-Za-z]+\.tsx|ui\.tsx|api\.ts|styles\.css\?inline)$/;
+test('Importregel (B6): nichts aus web/server, claude-bridge oder web/src (außer alt.tsx → alte Seiten)', () => {
   const funde: string[] = [];
   for (const p of quellen) {
     const t = readFileSync(p, 'utf8');
@@ -43,6 +46,7 @@ test('Importregel (B6): nichts aus web/server, claude-bridge oder web/src', () =
       const ziel = m[1];
       // erlaubt: Pakete (react, markdown-it …) und Dateien innerhalb von web/app/src
       const erlaubt = ziel.startsWith('./') ? join(dirname(p), ziel).startsWith(SRC) : !ziel.startsWith('.') && !ziel.startsWith('/');
+      if (p.endsWith('/alt.tsx') && ALT_ERLAUBT.test(ziel)) continue;
       if (!erlaubt || /(^|\/)(server|claude-bridge)(\/|$)/.test(ziel)) funde.push(`${p.slice(SRC.length + 1)}: ${ziel}`);
     }
   }
