@@ -15,6 +15,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { findBericht, eigenesPaket, reviewDir } from './bericht.ts';
 import { laeuferWahl } from './jstrang.ts';
+import { ergebnisseUebernehmen, reviewDateiLesen, REVIEW_DATEI_HINWEIS } from './reviewdatei.ts';
 import { kopfPflege } from './berichtstand.ts';
 import { cfg } from './config.ts';
 import { wb, lc } from './db.ts';
@@ -576,7 +577,8 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   const rj: any = await reg.json().catch(() => ({}));
   if (!reg.ok) throw err(reg.status === 400 || reg.status === 409 || reg.status === 403 ? reg.status : 502, rj.error ?? `Brücke antwortet mit ${reg.status}`);
   const stand = [fresh.status, g0 ? g0.text : null].filter(Boolean).join('\n') || null;
-  const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand, tiefe, modell, zuarbeit: vorgaben.zuarbeit });
+  // Konzept J1: ein jcode-Strang hat kein review_ready-Werkzeug — er meldet „fertig“ über eine Datei im Arbeitsordner (reviewdatei.ts).
+  const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand, tiefe, modell, zuarbeit: vorgaben.zuarbeit }) + (lw.laeufer === 'jcode' ? `\n\n${REVIEW_DATEI_HINWEIS}` : '');
   const { lauf, explicit } = laufName(title, inp.lauf);
   // Bericht-Pfad aus dem VOLLEN Auftrag und der Plandatei (F7) — der gespeicherte Auftrag ist gekürzt.
   let planText = '';
@@ -1081,6 +1083,24 @@ export function zwischenMelden(o: { running: boolean; berichtMtime: number | nul
   return o.running && o.berichtMtime !== null && o.berichtMtime > o.lastSentAt && o.gemeldetFuer !== o.lastSentAt;
 }
 
+/** Konzept J, J1: review_ready per Datei — Ergebnisse eines jcode-Strangs aus seinem Arbeitsordner ins Paket, Fertig-Marke setzen. */
+export async function reviewDateiAbgleich(d: any, log?: (msg: string, o: Record<string, unknown>) => void): Promise<void> {
+  const paket = d.paket ? (isAbsolute(String(d.paket)) ? String(d.paket) : join(reviewDir(), String(d.paket))) : d.bericht ? dirname(String(d.bericht)) : null;
+  const kopiert = ergebnisseUebernehmen(d.cwd, paket);
+  if (kopiert.length) log?.('review-datei übernommen', { id: d._id, dateien: kopiert });
+  const rd = reviewDateiLesen(d.cwd, d.reviewReadyAt ? new Date(d.reviewReadyAt).getTime() : null);
+  if (!rd || d.reviewDateiFehler === rd.mtime) return;
+  if ('error' in rd) {   // je Dateistand einmal melden, nicht in jedem Takt
+    await runs().updateOne({ _id: d._id }, { $set: { reviewDateiFehler: rd.mtime } });
+    log?.('review-datei ungültig', { id: d._id, error: rd.error.slice(0, 160) });
+    return;
+  }
+  const set = { reviewReadyAt: new Date(rd.mtime), review: rd.review, reviewDateiFehler: null };
+  await runs().updateOne({ _id: d._id }, { $set: set });
+  Object.assign(d, set);
+  log?.('review bereit (strang, datei)', { id: d._id, dod: rd.review.dod.length });
+}
+
 export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'> & { melde?: AutoDeps['melde'] }, now = Date.now()) {
   if (statusTicking) return;
   statusTicking = true;
@@ -1111,6 +1131,7 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'> & { me
         if (heil && (await runs().updateOne({ _id: d._id }, { $set: heil }).catch(() => null))?.modifiedCount) { Object.assign(d, heil); deps.log?.('bericht neu zugeordnet', { id: d._id, paket: heil.paket }); }
         try { const ks = await kopfPflege(d, now); if (Object.keys(ks).length) { await runs().updateOne({ _id: d._id }, { $set: ks }); Object.assign(d, ks); } }
         catch (e: any) { deps.log?.('bericht-kopf fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
+        if (d.laeufer === 'jcode') await reviewDateiAbgleich(d, deps.log).catch((e: any) => deps.log?.('review-datei fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }));
         const sd = states.get(d.conv);
         // Reibung #6: Zwischenergebnis melden, sobald der Bericht im laufenden Zug geschrieben ist.
         if (deps.melde && d.bericht && sd?.running) {
