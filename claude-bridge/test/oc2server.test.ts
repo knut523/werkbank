@@ -60,6 +60,9 @@ test('ein Schlüssel je Brückenlauf: ein anderes Konto bekommt jcode statt frem
   f.kinder[2].emit('exit', 1, null);   // zweiter Absturz: Obergrenze 1 erreicht
   await new Promise((r) => setTimeout(r, 1300));
   assert.equal(f.kinder.length, 3, 'aufgegeben'); assert.ok(logs.includes('opencode2 server aufgegeben'));
+  // Pass B D4: ein aufgegebener Port wird beim nächsten Bedarf nicht wieder gestartet; der andere Server bleibt im Zugang
+  assert.deepEqual((await s.sichern('sk-eins'))?.urls, ['http://127.0.0.1:47900', 'http://127.0.0.1:47901']);
+  assert.equal(f.kinder.length, 3, 'kein neuer Start des aufgegebenen Ports');
   s.stop();
   assert.equal(await s.sichern('sk-eins'), null, 'nach stop nichts mehr');
 });

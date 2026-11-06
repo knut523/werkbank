@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './profil.ts';
 import { freigabeMerken } from './freigabe.ts';
-import { orchRoots, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
+import { orchRoots, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
@@ -711,6 +711,14 @@ export function turnDeadline(now: number, start: number, idleMs: number, maxMs: 
 }
 
 /** (Neu) gestellt bei jedem Anhängen und bei jeder SDK-Nachricht: ein arbeitender Zug läuft weiter. */
+/** Hält die Leerlaufgrenze eines Zugs während langer Brücken-Läufe ohne SDK-Nachrichten wach (jcode-Strang, Ensemble, melious_sub);
+ *  die Höchstdauer (turnMaxMs) gilt weiter. Gibt die Stopp-Funktion zurück. Wie phaseWechseln („Pass B, 10“). */
+function wachHalten(live: Live, ms = 60_000): () => void {
+  armTurnTimer(live);
+  const t = setInterval(() => { if (!live.abort.signal.aborted) armTurnTimer(live); }, ms);
+  return () => clearInterval(t);
+}
+
 function armTurnTimer(live: Live) {
   if (live.turnTimer) clearTimeout(live.turnTimer);
   const idle = live.leit ? leitTimeoutMs() : cfg.turnTimeoutMs;
@@ -1127,7 +1135,7 @@ function makeGuard(live: Live) {
     const decide = (permissionDecision: 'allow' | 'deny', reason: string) => {
       // Knut 06.11. (Sperrenliste): jede Sperre in einem Strang mit Grund ins Log — vorher stand dort nur „denials: [Bash]“, und
       // niemand konnte belegen, woran ein Commit oder ein DB-Test scheiterte. Zugangsdaten in Adressen geschwärzt.
-      if (live.orch && permissionDecision === 'deny') log('strang gesperrt', { conv: live.key, tool, grund: reason.slice(0, 160), befehl: tool === 'Bash' ? String(toolInput.command ?? '').replace(/(:\/\/)[^@\s/]+@/g, '$1***@').slice(0, 200) : undefined, eskaliert: !!escalated });
+      if (live.orch && permissionDecision === 'deny') log('strang gesperrt', { conv: live.key, tool, grund: reason.slice(0, 160), befehl: tool === 'Bash' ? schwaerzeBefehl(String(toolInput.command ?? '')).slice(0, 200) : undefined, eskaliert: !!escalated });
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason } };
     };
     // Profil „release“ (Plan 213): Live-Schalten zusätzlich gesperrt; `git -C <Worktree> merge …` erlaubt — vor den Strang-Sperren,
@@ -1154,7 +1162,9 @@ function makeGuard(live: Live) {
       }
       // Knut 06.11.: lokale Commits (eigener Worktree, olaf-docs) und Tests gegen das lokale Postgres ausdrücklich erlauben — sonst
       // eskaliert der Klassifikator und der Strang (ohne Rückfragen) bekommt eine Ablehnung (strangLokal, tools.ts).
-      if (tool === 'Bash') {
+      // Phase 4 (Pass B, B3): nie für lesende Kontexte — Teilagenten, Leser-Profil, nur-lesende Läufe, Leser-/Prüfer-Worker.
+      const lesend = !!role || live.readonly || live.profil === 'leser' || (live.worker && ['leser', 'pruefer'].includes(String(orchMap[live.key]?.rolle ?? 'leser')));
+      if (tool === 'Bash' && !lesend) {
         const art = strangLokal(String(toolInput.command ?? ''), { dirs: [orchMap[live.key]?.dir, ...(live.guard?.allowed ?? []), ...freigabenVon(live.key)].filter((x): x is string => !!x), docs: docsOrdner() });
         if (art) return decide('allow', `Strang: ${art} — erlaubt (Knut 06.11.: lokal ist ok; Push, Merge und GitHub bleiben bei der Hauptsitzung).`);
       }
@@ -1523,15 +1533,23 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Konzept J, J1: jcode-Strang — eigener Zugweg (Verlauf aus LibreChat + neue Nachricht, wie eine neue Sitzung). Nur wenn jcode kein
   // brauchbares Ergebnis liefert, läuft dieser Zug mit Claude weiter — sichtbar im Chat und im Steckbrief (laeuferFallback).
   if (live.orch && !live.worker && orchMap[key]?.laeufer === 'jcode') {
-    const r = await strangJcode(live, req, freshPrompt()).catch((e: any) => ({ ok: false, grund: String(e?.message ?? e).slice(0, 200), modell: undefined }));
+    // Phase 4 (Pass B, A1): der jcode-Lauf schickt keine SDK-Nachrichten — ohne Nachstellen beendete der Leerlauf-Timer jeden
+    // Strang-Zug nach 15 min (BRIDGE_JCODE_STRANG_TIMEOUT_S wirkte nie).
+    const wach = wachHalten(live);
+    const r = await strangJcode(live, req, freshPrompt()).catch((e: any) => ({ ok: false, grund: String(e?.message ?? e).slice(0, 200), modell: undefined })).finally(wach);
     if (r.ok || live.abort.signal.aborted) {
-      if (r.ok && orchMap[key]?.laeuferFallback) delete orchMap[key].laeuferFallback;
+      if (r.ok && orchMap[key]?.laeuferFallback) { delete orchMap[key].laeuferFallback; saveMap(); }
       mark(live, 'ende');
-      if (orchMap[key]) setTurn(key, { ...orchMap[key].turn, start: orchMap[key].turn?.start ?? live.t0, end: Date.now(), outcome: r.ok ? 'ok' : 'aborted', ...(r.modell ? { modell: r.modell } : {}) });
+      // Ein Zeitlimit bleibt ein Zeitlimit (der Hauptchat setzt dann mit „weiter“ fort), nicht „abgebrochen“.
+      if (orchMap[key]) setTurn(key, { ...orchMap[key].turn, start: orchMap[key].turn?.start ?? live.t0, end: Date.now(), outcome: r.ok ? 'ok' : live.outcome ?? 'aborted', ...(r.modell ? { modell: r.modell } : {}) });
       log('turn end', { conv: key, laeufer: 'jcode', ok: r.ok, usage: live.usage });
+      if (live.inbox?.open) closeInbox(live.inbox);   // Nachgereichtes hat jcode nicht gesehen → „ungelesen“, der Client sendet neu
+      live.inbox = null;
       end(live);
       return;
     }
+    // Rückfall auf Claude: der Zug zählt ab jetzt wie ein Claude-Strang (nicht mehr im jcode-Topf, Pass B A4).
+    live.schaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe });
     if (orchMap[key]) { orchMap[key].laeuferFallback = { at: Date.now(), grund: r.grund.slice(0, 200) }; saveMap(); }
     emitStatus(live, `jcode lieferte kein brauchbares Ergebnis (${r.grund}) — dieser Zug läuft mit Claude weiter.`);
   }
@@ -2033,6 +2051,7 @@ interface Deleg {
   text: string; span?: [number, number] | null; sub?: string; gemeldet?: boolean; diffDatei?: string; abschluss?: Abschluss; abschlussFehler?: string; reparatur?: boolean; git?: GitStand; pruef?: { eingerichtet: boolean; ref: string | null; ergebnisse: PruefErgebnis[] };
   abweichungen: string[]; pruefer?: string; modell: string | null; konto: string | null; anbieter: string | null; input: number; output: number; energie: number;
   urteil?: string; notiz?: string; aborted?: boolean; hinweis?: string; protokoll?: string; done: Promise<void>; req: TurnRequest;
+  claude?: boolean;   // läuft über Claude Code (nicht jcode/opencode 2) — zählt gegen die Claude-Grenzen
   klick?: string;   // J3: Ausgabeordner des Klickwerkzeugs (nur lesende jcode-Worker mit klick=true)
 }
 const delegs = new Map<string, Deleg>();
@@ -2307,7 +2326,7 @@ async function strangJcode(live: Live, req: TurnRequest, prompt: string): Promis
 // mit dem Melious-Konto der Person und gebucht wie ein Worker. Synchron, nur lesend (shim/bash), im Arbeitsordner des Zugs.
 // Code schreiben und entscheiden bleibt auf Claude. BRIDGE_MEL_SUB=off schaltet ab (dann wieder Claude-Teilagenten).
 export const melSubAn = () => process.env.BRIDGE_MEL_SUB !== 'off' && existsSync(JCODE_BIN());
-const MEL_SUB_MODELL: Record<string, string> = { flash: 'glm-5.3-flash', glm: 'glm-5.3' };
+const MEL_SUB_MODELL: Record<string, string> = { flash: 'glm-5.3-flash', glm: 'glm-5.2' };   // nur Rückfall, falls modellReihe leer bleibt
 /** Rollen der Teilagenten, die nur lesen — die gehen standardmäßig an Melious. */
 export const LESE_TEILAGENTEN = new Set(['leser', 'strang-leser', 'ticket-pruefer', 'Explore']);
 
@@ -2331,7 +2350,8 @@ export async function opencode2Fuer(key: string | undefined, env: Record<string,
   return oc2Pool.pool;
 }
 /** Die Server der Brücke enden mit ihr. */
-export const opencode2Stop = () => { oc2Srv?.srv.stop(); oc2Srv = null; oc2Pool = null; };
+const reviewServer = new Set<Oc2Server>();
+export const opencode2Stop = () => { oc2Srv?.srv.stop(); oc2Srv = null; oc2Pool = null; for (const s of reviewServer) s.stop(); reviewServer.clear(); };
 process.once('exit', opencode2Stop);
 /** Gerade laufende lesende Melious-Aufträge (melious_sub, lesende Worker) — ab opencode2Ab() übernimmt opencode 2. */
 let lesendLaufend = 0;
@@ -2379,7 +2399,8 @@ export async function ensembleLaufen(o: EnsAufruf): Promise<EnsErgebnis & { prot
   try {
     if (ensembleOc2An()) {
       srv = opencode2Server({ home: oc2Home(), ports: [await freierPort()], version: oc2Version(), lauf: join(tmp, 'lauf'), daten: tmp, log: (m, x) => log(m, { ...(x ?? {}), ensemble: o.kontext }) });
-      const z = await srv.sichern(o.mel.token).catch(() => null);
+      reviewServer.add(srv);   // Pass A/B: endet auch, wenn die Brücke mitten im Review beendet wird (opencode2Stop)
+      const z = await srv.sichern(o.mel.token).catch((err: any) => { oc2Grund = String(err?.message ?? err).slice(0, 160); return null; });
       if (z) {
         const l = opencode2Laeufer({ base: z.urls[0], passwort: z.passwort });
         oc2 = async (m, p, rolle) => {
@@ -2388,7 +2409,7 @@ export async function ensembleLaufen(o: EnsAufruf): Promise<EnsErgebnis & { prot
           buche(r.usage, r.gelaufen);
           return { rolle, modell: m, ok: r.code === 0 && !!r.text.trim(), text: r.text.trim(), s: (Date.now() - t0) / 1000, usage: r.usage, laeufer: 'opencode2', gelaufen: r.gelaufen, ...(r.code === 0 && r.text.trim() ? {} : { grund: r.grund ?? 'leer' }) };
         };
-      } else oc2Grund = srv.grund() ?? 'Server startet nicht';
+      } else oc2Grund ||= srv.grund() ?? 'Server startet nicht';
     } else oc2Grund = 'BRIDGE_ENSEMBLE_OC2=aus';
     const schatten = schattenAn();
     const e = await ensemble({ auftrag: o.auftrag, bereich: o.bereich, diff: d.out, dateien, lies, lauf: mitRueckfall(oc2, jcode, o.abbruch), schatten, knapp: o.knapp });
@@ -2400,8 +2421,9 @@ export async function ensembleLaufen(o: EnsAufruf): Promise<EnsErgebnis & { prot
     log('ensemble-review', { kontext: o.kontext, oc2: oc2 ? 'an' : oc2Grund, ok: e.ok, sPruefer: Math.round(e.sPruefer), sVerifizierer: Math.round(e.sVerifizierer), stellen: e.stellen, laeufer: e.pruefer.map((r) => `${r.modell}:${r.laeufer}:${r.ok ? 'ok' : 'fehlt'}`), verifizierer: e.verifizierer.ok, schatten: e.schatten ? (e.schatten.ok ? e.schatten.text.length : 'fehlt') : null, protokoll });
     return { ...e, text: e.text + (oc2 ? '' : `\n  ⚠ opencode 2 nicht verfügbar (${oc2Grund}) — alle Läufe über jcode.`), protokoll };
   } finally {
-    srv?.stop();
-    try { rmSync(tmp, { recursive: true, force: true }); } catch { /* egal */ }
+    if (srv) { srv.stop(); reviewServer.delete(srv); }
+    // Pass C (K12): erst nach der SIGKILL-Frist des Servers (3 s) aufräumen, sonst schreibt er noch in den gelöschten Ordner.
+    setTimeout(() => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* egal */ } }, 3500).unref();
   }
 }
 
@@ -2422,7 +2444,8 @@ export async function ensembleReview(userId: string, convId: string, b: { auftra
   if (!cwd) return { ok: false, status: 409, error: 'Kein Arbeitsordner für diesen Zug — ensemble_review läuft nur im Worktree des Strangs.' };
   emitStatus(live, `🇪🇺 Review-Ensemble (opencode 2, 3 Prüfer + Verifizierer ${VERIFIZIERER})${bereich ? `: ${bereich}` : ''}`);
   try {
-    const e = await ensembleLaufen({ mel, cwd, auftrag, bereich, knapp: b.knapp === true, abbruch: () => live.abort.signal.aborted, kontext: key, buchen: (u, m) => live.req!.onMeliousUsage?.(u, m) });
+    const wach = wachHalten(live);   // Pass B, A2: das Ensemble läuft bis ~30 min im MCP-Aufruf des Leads
+    const e = await ensembleLaufen({ mel, cwd, auftrag, bereich, knapp: b.knapp === true, abbruch: () => live.abort.signal.aborted, kontext: key, buchen: (u, m) => live.req!.onMeliousUsage?.(u, m) }).finally(wach);
     return e.ok || e.verifizierer.ok ? { ok: true, text: e.text } : { ok: false, status: 502, error: `Ensemble ohne Ergebnis: ${e.grund ?? 'unbekannt'}\n${e.text}` };
   } catch (err: any) {
     if (err?.leer) return { ok: true, text: String(err.message) };
@@ -2464,23 +2487,37 @@ export async function melSub(userId: string, convId: string, b: { auftrag?: unkn
   const mel = await melKonto(live, userId);
   if (!mel) return { ok: false, status: 409, error: 'Melious ist für dich gerade nicht verfügbar (kein Konto, erschöpft oder gesperrt) — nimm einen Teilagenten über Claude ([claude] in der description).' };
   live.melSubs = (live.melSubs ?? 0) + 1;
-  // Knut 06.11.: „flash“ = lesen (Flash/DeepSeek gewichtet), „glm“ = prüfen (glm-5.3 zuerst); Rückfall auf das nächste PRO-Modell.
+  // Knut 06.11.: „flash“ = lesen (Flash/DeepSeek gewichtet), „glm“ = prüfen (glm-5.2 zuerst, modellwahl.ts); Rückfall auf das nächste PRO-Modell.
   const reihe = modellReihe({ art: String(b.modell) === 'glm' ? 'pruefen' : 'lesen', erlaubt: mel.abo?.length ? mel.abo : Object.keys(mel.faktoren ?? {}), frei: Object.fromEntries((mel.pool ?? []).map((p) => [p.model, p.frei])) });
   let model = reihe[0] ?? MEL_SUB_MODELL[String(b.modell ?? 'flash')] ?? MEL_SUB_MODELL.flash;
-  const cwd = orchMap[key]?.dir ?? live.workDir ?? cwdMap[key] ?? homedir();
+  // Phase 4 (Pass B, B2): ohne Arbeitsordner nie das Home-Verzeichnis (dort liegen Zugangsdaten) — dann der leere Scratch-Ordner.
+  const cwd = orchMap[key]?.dir ?? live.workDir ?? cwdMap[key] ?? scratchFor(userId);
   const t0 = Date.now();
-  // Läufer (Pilot, Hauptsitzung 06.11.): ab opencode2Ab() gleichzeitigen lesenden Aufträgen ein opencode-2-Server, darunter jcode.
-  let oc2 = await opencode2Jetzt(mel.token);
-  emitStatus(live, `🇪🇺 Melious-Teilagent (${model}, ${oc2 ? 'opencode 2' : 'jcode'}): ${auftrag.replace(/\s+/g, ' ').slice(0, 80)}${auftrag.length > 80 ? '…' : ''}`);
-  const prompt = `${auftrag}\n\n(Nur lesen: nichts ändern, nichts installieren, keine Repo-Skripte ausführen.)`;
-  const timeoutS = envZahl('BRIDGE_MEL_SUB_TIMEOUT_S', 900, 60), abbruch = () => live.abort.signal.aborted;
-  const lauf = (m: string) => (oc2
-    ? oc2.zug({ cwd, prompt, model: m, timeoutS, abbruch, titel: `mel-sub ${key}` }).then((r) => ({ out: { code: r.code }, j: r.code === 0 ? { text: r.text } : null, usage: r.usage, gelaufen: r.gelaufen, grund: r.grund }))
-    : jcodeSpawn({ cwd, prompt, model: m, tools: 'read,bash,agentgrep', key: mel.token, timeoutS, abbruch }).then((o) => ({ out: o as { code: number | null }, ...jcodeAuswerten(o, cwd, m), grund: undefined as string | undefined })));
+  // Läufer (Pilot, Hauptsitzung 06.11.): ab opencode2Ab() gleichzeitigen lesenden Aufträgen — dieser mitgezählt, darum zuerst
+  // hochzählen (Pass B, K2) — ein opencode-2-Server, darunter jcode.
   lesendLaufend++;
-  let r1: Awaited<ReturnType<typeof lauf>>;
+  const wach = wachHalten(live);   // Pass B, A2: bis zu drei Läufe à 15 min — der Lead-Zug darf derweil nicht am Leerlauf enden
   try {
-    r1 = await lauf(model);
+    let oc2 = await opencode2Jetzt(mel.token);
+    emitStatus(live, `🇪🇺 Melious-Teilagent (${model}, ${oc2 ? 'opencode 2' : 'jcode'}): ${auftrag.replace(/\s+/g, ' ').slice(0, 80)}${auftrag.length > 80 ? '…' : ''}`);
+    const prompt = `${auftrag}\n\n(Nur lesen: nichts ändern, nichts installieren, keine Repo-Skripte ausführen.)`;
+    const timeoutS = envZahl('BRIDGE_MEL_SUB_TIMEOUT_S', 900, 60), abbruch = () => live.abort.signal.aborted;
+    let energie = 0, laeufer = oc2 ? 'opencode2' : 'jcode';
+    // Pass B, A3: jeder Versuch wird gebucht (auch ein fehlgeschlagener verbraucht Energie), nicht nur der letzte.
+    const buche = (usage: MeliousUsage, gelaufen: string) => {
+      energie += mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0;
+      try { live.req!.onMeliousUsage?.(usage, gelaufen); } catch { /* egal */ }
+      try { live.req!.onTurnLog?.({ conv: convId, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${gelaufen} (${laeufer}, melious_sub)`, input: usage.input + usage.cacheRead, output: usage.output, cacheRead: usage.cacheRead, energie: mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0, outcome: 'ok', ms: Date.now() - t0 }); } catch { /* egal */ }
+    };
+    const lauf = async (m: string) => {
+      laeufer = oc2 ? 'opencode2' : 'jcode';
+      const r = oc2
+        ? await oc2.zug({ cwd, prompt, model: m, timeoutS, abbruch, titel: `mel-sub ${key}` }).then((x) => ({ out: { code: x.code }, j: x.code === 0 ? { text: x.text } : null, usage: x.usage, gelaufen: x.gelaufen, grund: x.grund }))
+        : await jcodeSpawn({ cwd, prompt, model: m, tools: 'read,bash,agentgrep', key: mel.token, timeoutS, abbruch }).then((o) => ({ out: o as { code: number | null }, ...jcodeAuswerten(o, cwd, m), grund: undefined as string | undefined }));
+      buche(r.usage, r.gelaufen);
+      return r;
+    };
+    let r1 = await lauf(model);
     if ((r1.out.code !== 0 || !r1.j) && !abbruch() && oc2) {   // opencode 2 fiel aus (Server weg, Sitzung verloren) → derselbe Auftrag über jcode
       log('mel-sub opencode2 rückfall', { conv: key, modell: model, grund: r1.grund ?? null });
       oc2 = null; r1 = await lauf(model);
@@ -2489,15 +2526,11 @@ export async function melSub(userId: string, convId: string, b: { auftrag?: unkn
       log('mel-sub rückfall', { conv: key, modell: model, exit: r1.out.code, naechstes: reihe[1] });
       model = reihe[1]; r1 = await lauf(model);
     }
-  } finally { lesendLaufend--; }
-  const { out, j, usage, gelaufen } = r1;
-  const energie = mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0;
-  try { live.req.onMeliousUsage?.(usage, gelaufen); } catch { /* egal */ }
-  // Gebucht wie ein Worker des Zugs (Budget und Messung zählen ihn beim Strang bzw. Hauptchat).
-  try { live.req.onTurnLog?.({ conv: convId, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${gelaufen} (${oc2 ? 'opencode2' : 'jcode'}, melious_sub)`, input: usage.input + usage.cacheRead, output: usage.output, cacheRead: usage.cacheRead, energie, outcome: out.code === 0 && j ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: 'mel-sub', parent: key } as ZugLog); } catch { /* egal */ }
-  log('mel-sub', { conv: key, laeufer: oc2 ? 'opencode2' : 'jcode', modell: gelaufen, exit: out.code, ms: Date.now() - t0, ...usage, energie: Math.round(energie) });
-  if (out.code !== 0 || !j) return { ok: true, text: `melious_sub fehlgeschlagen (Exit ${out.code}) — nimm denselben Auftrag als Teilagent über Claude ([claude] in der description).` };
-  return { ok: true, text: `${String(j.text ?? '(keine Antwort)')}\n\n— melious_sub · ${gelaufen} · ${oc2 ? 'opencode 2' : 'jcode'} · ≈ ${Math.round(energie)} Energie · Ergebnis ist ein Kandidat: am Code nachprüfen.` };
+    const { out, j, usage, gelaufen } = r1;
+    log('mel-sub', { conv: key, laeufer, modell: gelaufen, exit: out.code, ms: Date.now() - t0, ...usage, energie: Math.round(energie) });
+    if (out.code !== 0 || !j) return { ok: true, text: `melious_sub fehlgeschlagen (Exit ${out.code}) — nimm denselben Auftrag als Teilagent über Claude ([claude] in der description).` };
+    return { ok: true, text: `${String(j.text ?? '(keine Antwort)')}\n\n— melious_sub · ${gelaufen} · ${laeufer === 'opencode2' ? 'opencode 2' : 'jcode'} · ≈ ${Math.round(energie)} Energie · Ergebnis ist ein Kandidat: am Code nachprüfen.` };
+  } finally { lesendLaufend--; wach(); }
 }
 
 /** Auslastung für das Werkzeug `auslastung` (Lead): cswap + Melious-Rest des Kontos der Person. */
@@ -2514,6 +2547,14 @@ async function runWorker(d: Deleg, prompt: string): Promise<string> {
   if (jc !== null) return jc;
   // J3: das Klickwerkzeug gibt es nur im jcode-Worker — ohne Melious kein stiller Claude-Lauf ohne Klicks.
   if (d.klick) return 'Klick-Auftrag nicht gestartet: Melious/jcode gerade nicht verfügbar (das Klickwerkzeug gibt es nur dort). Später erneut delegieren oder selbst mit Playwright prüfen.';
+  // Phase 4 (Pass B, B1): ein Leser, der unter der jcode-Grenze zugelassen wurde, fällt hier auf Claude — dann gelten die
+  // Claude-Grenzen (3 je Strang, maxWorkers auf der Maschine), sonst liefen bis zu 60 Claude-Prozesse.
+  if (istLeser(d) && jcodeAn()) {
+    const claudeLauf = [...delegs.values()].filter((x) => x.status === 'laeuft' && x !== d && (!istLeser(x) || x.claude));
+    if (claudeLauf.filter((x) => x.parent === d.parent).length >= KAPPUNG.maxWorker || claudeLauf.length >= maxWorkers())
+      return `Leser nicht gestartet: Melious/jcode gerade nicht verfügbar, und für einen Claude-Leser ist kein Platz frei (höchstens ${KAPPUNG.maxWorker} je Strang, ${maxWorkers()} auf der Maschine). Später erneut delegieren oder selbst lesen.`;
+  }
+  d.claude = true;
   const chunks: string[] = [];
   let closed = false;
   const fns: (() => void)[] = [];
@@ -2666,12 +2707,15 @@ export async function startDelegation(userId: string, convId: string, b: { rolle
   if (!aufgabe && rolle !== 'pruefer') return { ok: false, status: 400, error: 'aufgabe fehlt.' };
   if (aufgabe.length > KAPPUNG.auftrag) return { ok: false, status: 400, error: `aufgabe ist ${aufgabe.length} Zeichen lang, höchstens ${KAPPUNG.auftrag} (C8) — kürzen oder auf mehrere Worker verteilen.` };
   const alleLauf = [...delegs.values()].filter((d) => d.status === 'laeuft');
-  if (rolle === 'leser') {
+  // Phase 4 (Pass B, B1): die großen Leser-Grenzen (10 je Strang, Topf auf der Maschine) gelten nur, wenn Leser über jcode laufen;
+  // ohne jcode-Worker laufen sie als Claude-Prozesse und zählen wie alle anderen Worker.
+  if (rolle === 'leser' && jcodeAn()) {
     if (runningOf(parent).filter(istLeser).length >= maxLeser()) return { ok: false, status: 429, error: `Schon ${maxLeser()} lesende Worker laufen in diesem Strang — erst delegation_stand abwarten.` };
     if (alleLauf.filter(istLeser).length >= maxLeserBox()) return { ok: false, status: 429, error: `Gerade laufen ${maxLeserBox()} lesende Worker auf der Maschine (jcode-Topf) — erst delegation_stand abwarten.` };
   } else {
-    if (runningOf(parent).filter((d) => !istLeser(d)).length >= KAPPUNG.maxWorker) return { ok: false, status: 429, error: `Schon ${KAPPUNG.maxWorker} Worker laufen in diesem Strang — erst delegation_stand abwarten.` };
-    if (alleLauf.filter((d) => !istLeser(d)).length >= maxWorkers()) return { ok: false, status: 429, error: `Gerade laufen ${maxWorkers()} Worker auf der Maschine (Arbeitsspeicher) — erst delegation_stand abwarten oder selbst machen.` };
+    const zaehlt = (d: Deleg) => !istLeser(d) || !jcodeAn() || !!d.claude;
+    if (runningOf(parent).filter(zaehlt).length >= KAPPUNG.maxWorker) return { ok: false, status: 429, error: `Schon ${KAPPUNG.maxWorker} Worker laufen in diesem Strang — erst delegation_stand abwarten.` };
+    if (alleLauf.filter(zaehlt).length >= maxWorkers()) return { ok: false, status: 429, error: `Gerade laufen ${maxWorkers()} Worker auf der Maschine (Arbeitsspeicher) — erst delegation_stand abwarten oder selbst machen.` };
   }
   const risiko = risikoMin(b.risiko, e.risiko ?? 'mittel') as Risiko;
   // Ein Strang mit Profil „leser“ bekommt über Worker keine Schreibrechte (Pass B, 4).

@@ -55,9 +55,10 @@ const BASH_GITHUB_WRITE: [RegExp, string][] = [
   [/\bgh\s+pr\s+(create|comment|review|edit|close|reopen|ready)\b/, 'GitHub-PR schreiben'],
   [/\bgh\s+(issue|release|repo|label|secret|variable|workflow|gist)\s+(create|edit|close|delete|comment|reopen|set|run|enable|disable|fork|rename|archive|upload)\b/, 'GitHub schreiben'],
   [/\bgh\s+api\b[^|;&]*(-X|--method)[\s=]*['"]?(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],   // auch --method=POST (Gegenprüfung 06.11.)
-  [/\bgh\s+api\s+(?!graphql\b)[^|;&]*\s(-f|-F|--field|--raw-field|--input)\s/, 'GitHub-API schreiben'],
+  // Phase 4 (Pass B, B5): auch `-fbody=x`, `--field=…`, `--input=datei` (ohne Leerzeichen nach der Option).
+  [/\bgh\s+api\s+(?!graphql\b)[^|;&]*\s(-[fF]\S|-[fF]\s|--field[=\s]|--raw-field[=\s]|--input[=\s])/, 'GitHub-API schreiben'],
   [/\bgh\s+api\s+graphql\b[^|;&]*\bmutation\b/i, 'GitHub-API schreiben (GraphQL-Mutation)'],
-  [/\bgh\s+api\s+graphql\b[^|;&]*\s--input\s/, 'GitHub-API schreiben (GraphQL aus Datei)'],
+  [/\bgh\s+api\s+graphql\b[^|;&]*\s(--input[=\s]|-F\s*\S*=@)/, 'GitHub-API schreiben (GraphQL aus Datei)'],
   [/api\.github\.com[^|;&]*(-X|--request)\s*(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],
   [/(-X|--request)\s*(POST|PATCH|PUT|DELETE)[^|;&]*api\.github\.com/i, 'GitHub-API schreiben'],
 ];
@@ -209,7 +210,8 @@ export interface ClassifyContext {
 export const ohneCommitText = (cmd: string) => cmd.replace(/(\bgit\b[^|;&\n]*?\scommit\b[^|;&\n]*?\s-[a-zA-Z]*m\s*|\s--message[=\s]\s*)("(?:[^"\\$`]|\\[^$`])*"|'[^']*')/g, '$1"…"');
 // Sperrenliste 06.11. (Knut: „lesen frei“): `.env` nur als echte Datei (.env, .env.local, …/.env.production) — nicht `process.env`,
 // nicht .env.example/.sample/.template (vorher fragte jedes `grep process.env` und wurde in Strängen abgelehnt).
-const ENV_DATEI = /(^|[\s/'"=<])\.env(\.(?!example\b|sample\b|template\b)[\w.-]+)?(?=$|[\s'";|&)<>])/;
+// Phase 4 (Pass B, B4): auch Glob-Formen (`.env*`, `.en?`, `.env.{local,prod}`, `.env[.]local`) zählen.
+const ENV_DATEI = /(^|[\s/'"=<])\.(env(\.(?!example\b|sample\b|template\b)[\w.-]+)?(?=$|[\s'";|&)<>*?[{])|en[?*[]|e[?*[])/;
 // Runde 2 (Knut, 07.10.2026: „er fragt halt immer noch viel“): nur noch echte Geheimnis-ORTE, nicht jedes Erwähnen —
 // `grep -v '.runtime'` oder `--exclude-dir=.runtime` fragen nicht mehr.
 const BASH_KEEP_CONFIRM_VOLL = [
@@ -348,7 +350,7 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // review_ready ändert nur Werkbank-Zustand (Fertig-Marke am eigenen Lauf) → ohne Rückfrage.
     // hauptchat_melden (Plan 154, S4): Meldung an den Hauptchat — ändert nur Werkbank-Zustand, gedeckelt in der Werkbank.
     // delegieren/delegation_*/phase_wechseln (Plan 165): Steuerung durch die Brücke; Worker arbeiten unter ihrem eigenen Wächter.
-    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'melious_sub' || name === 'auslastung' || name === 'github_lesen' || name === 'bedarf_melden' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'melious_sub' || name === 'ensemble_review' || name === 'auslastung' || name === 'github_lesen' || name === 'bedarf_melden' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
     // Jira ohne Klick (Knut, 03.11.2026): WERKBANK_JIRA_OHNE_KLICK=on → im Hauptchat schreibt Jira direkt (nicht löschen); Stränge unverändert.
     if (server === 'werkbank' && JIRA_WERKBANK_SCHREIBEN.has(name) && jiraOhneKlick(ctx)) return { cls: 'auto' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
@@ -469,8 +471,23 @@ const LOKAL_TEST = [
 const LOKAL_PIPE = /^(tail|head|grep|wc|sort|uniq)(\s+[^|]*)?$/;
 const DB_LOKAL = /^postgres(ql)?:\/\/[^@\s/]+@(localhost|127\.0\.0\.1)(:\d+)?\/[\w-]+$/;
 
+/** Befehlstext fürs Log (Phase 4, Pass A): Zugangsdaten in Adressen, VAR=… mit TOKEN/KEY/SECRET/PASS und Bearer geschwärzt. */
+export const schwaerzeBefehl = (cmd: string) => cmd
+  .replace(/(:\/\/)[^@\s/]+@/g, '$1***@')
+  .replace(/\b([A-Z0-9_]*(TOKEN|KEY|SECRET|PASSWORD|PASS|PWD)[A-Z0-9_]*)=\S+/gi, '$1=***')
+  .replace(/\b(Bearer|token)\s+[\w.~+/=-]{8,}/gi, '$1 ***');
+
+// Phase 4 (Pass B, C2): Umgebungs-Präfixe nur für Test-Variablen — nie GIT_* (anderes Repo) oder PATH (eigenes „git“).
+const LOKAL_ENV_VERBOTEN = /^(GIT_\w*|PATH|LD_\w+|NODE_OPTIONS|BASH_ENV|ENV|HOME)$/;
+// Phase 4 (Pass B, C3): in olaf-docs-Klonen (Knuts eigene Arbeitskopien) nur nicht-zerstörende Git-Befehle.
+const DOCS_GIT = /^(add|commit|status|diff|log|show|rev-parse|ls-files|blame)$/;
+
 export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] }): string | null {
   if (/[`\n]|\$\(|\$\{/.test(cmd)) return null;
+  // Phase 4 (Pass B, C1): eine Pipe nur als „ | “ in einen Ausgabefilter — `|sh`, `| bash` usw. nie (auch nicht ohne Leerzeichen).
+  if (/\|(?!\|)/.test(cmd.replace(/"(?:[^"\\]|\\.)*"/g, '"Z"').replace(/'[^']*'/g, "'Z'").replace(/\s\|\s(?=(tail|head|grep|wc|sort|uniq)\b)/g, ' '))) return null;
+  // Phase 4 (Pass B, C3): `git diff --output=…` schreibt, `--no-index` liest beliebige Dateien.
+  if (/(^|\s)--(output|no-index)\b/.test(cmd)) return null;
   // Zitate für die Strukturprüfung neutralisieren (Commit-Texte dürfen ; & > enthalten); doppelte Zitate ohne $ (oben geprüft).
   const flach = cmd.replace(/"(?:[^"\\]|\\.)*"/g, '"Z"').replace(/'[^']*'/g, "'Z'");
   if (/;|\|\||(^|[^&])&($|[^&])|<|>(?!&1)/.test(flach.replace(/2>&1/g, ''))) return null;
@@ -480,20 +497,27 @@ export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] })
   const segs = kette.split(/\s&&\s/);
   if (segs.length !== roh.length) return null;
   const home = process.env.HOME ?? '/home';
-  const innen = (p: string) => { const a = resolve(p.replace(/^~(?=\/|$)/, home).replace(/^["']|["']$/g, '')); return [...o.dirs, ...(o.docs ?? [])].some((d) => a === resolve(d) || a.startsWith(resolve(d) + '/')); };
-  let art = '';
+  const pfad = (p: string) => resolve(p.replace(/^~(?=\/|$)/, home).replace(/^["']|["']$/g, ''));
+  const unter = (a: string, liste: string[]) => liste.some((d) => a === resolve(d) || a.startsWith(resolve(d) + '/'));
+  const innen = (p: string) => unter(pfad(p), [...o.dirs, ...(o.docs ?? [])]);
+  const imDocs = (p: string) => !unter(pfad(p), o.dirs) && unter(pfad(p), o.docs ?? []);
+  let art = '', letztesCd: string | null = null;
   for (let i = 0; i < segs.length; i++) {
     let s = segs[i].replace(/\s*2>&1\s*$/, '').trim(), r = roh[i].replace(/\s*2>&1\s*$/, '').trim();
     // Umgebungs-Präfixe: nur einfache Werte oder eine lokale Postgres-Adresse
     for (let m = r.match(/^([A-Z_][A-Z0-9_]*)=(\S+)\s+/); m; m = r.match(/^([A-Z_][A-Z0-9_]*)=(\S+)\s+/)) {
+      if (LOKAL_ENV_VERBOTEN.test(m[1])) return null;
       if (m[2].includes('://') ? !DB_LOKAL.test(m[2]) : !/^[\w.,:/@-]+$/.test(m[2])) return null;
       r = r.slice(m[0].length); s = s.replace(/^[A-Z_][A-Z0-9_]*=\S+\s+/, '');
     }
-    if (/^cd\s+\S+$/.test(r)) { if (!innen(r.slice(3).trim())) return null; continue; }
+    if (/^cd\s+\S+$/.test(r)) { if (!innen(r.slice(3).trim())) return null; letztesCd = r.slice(3).trim(); continue; }
     const g = r.match(/^git(?:\s+-C\s+(\S+))?\s+([\w-]+)(\s.*)?$/);
     if (g) {
       if (g[1] && !innen(g[1])) return null;
       if (!LOKAL_GIT.test(g[2])) return null;
+      // olaf-docs: nur nicht-zerstörende Befehle (restore/checkout/switch/stash würden Knuts ungespeicherte Arbeit verwerfen)
+      const ziel = g[1] ?? letztesCd;
+      if (ziel && imDocs(ziel) && !DOCS_GIT.test(g[2])) return null;
       const rest = g[3] ?? '';
       if (g[2] === 'branch' && /\s-[a-zA-Z]*[dDmMcCf]|--(delete|move|copy|force|set-upstream)/.test(rest)) return null;
       if (g[2] === 'stash' && /\s(drop|clear)\b/.test(rest)) return null;

@@ -13,7 +13,8 @@ export const VERIFIZIERER = 'glm-5.2';
 export const SCHATTEN = 'glm-5.3-flash';
 /** Schatten bis einschließlich 20.11.2026 (zwei Wochen ab Knuts Entscheidung 06.11.); BRIDGE_ENSEMBLE_SCHATTEN=aus/an übersteuert. */
 export const SCHATTEN_BIS = '2026-11-20';
-export const schattenAn = (env: Record<string, string | undefined> = process.env, heute = new Date().toISOString().slice(0, 10)) =>
+// Der Tag zählt in Wien (pre-push-gate docs-datum-wien): sonst endete der Schatten am 20.11. schon um 01:00 Wiener Zeit.
+export const schattenAn = (env: Record<string, string | undefined> = process.env, heute = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Vienna' })) =>
   env.BRIDGE_ENSEMBLE_SCHATTEN === 'aus' ? false : env.BRIDGE_ENSEMBLE_SCHATTEN === 'an' ? true : heute <= SCHATTEN_BIS;
 
 export interface EnsLauf { rolle: string; modell: string; ok: boolean; text: string; s: number; usage: LaeuferNutzung; laeufer: 'opencode2' | 'jcode'; gelaufen: string; grund?: string }

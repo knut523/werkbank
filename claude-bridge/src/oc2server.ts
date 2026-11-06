@@ -53,7 +53,7 @@ export function opencode2Server(o: {
   const passwort = randomBytes(24).toString('base64url');
   const auth = `Basic ${Buffer.from(`opencode:${passwort}`).toString('base64')}`;
   const run = o.lauf ?? join(o.home, 'waechter');
-  const kinder = new Map<number, { c: ChildProcess | null; bereit: boolean; neustarts: number }>(o.ports.map((p) => [p, { c: null, bereit: false, neustarts: 0 }]));
+  const kinder = new Map<number, { c: ChildProcess | null; bereit: boolean; neustarts: number; seit?: number; aufgegeben?: boolean }>(o.ports.map((p) => [p, { c: null, bereit: false, neustarts: 0 }]));
   let besitzt = false, key: string | null = null, fp: string | null = null, gestoppt = false, grund: string | null = null, geprueft = false, start: Promise<Oc2Zugang | null> | null = null;
 
   const antwortet = async (p: number) => { try { return (await f(`http://127.0.0.1:${p}/api/session?limit=1`, { headers: { authorization: auth }, signal: AbortSignal.timeout(3000) })).status === 200; } catch { return false; } };
@@ -61,7 +61,7 @@ export function opencode2Server(o: {
   // aber nur, wenn die Prozessdatei wirklich auf einen opencode-Server dieses Ports zeigt.
   const istServer = (pid: number, p: number) => {
     let cmd = ''; try { cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' '); } catch { return false; }
-    return pid > 1 && /opencode/.test(cmd) && cmd.includes(' serve ') && cmd.includes(`--port ${p}`);
+    return pid > 1 && /opencode/.test(cmd) && cmd.includes(' serve ') && new RegExp(`--port ${p}( |$)`).test(cmd);   // genau dieser Port (Pass C K2)
   };
   const altenBeenden = async (p: number) => {
     let pid = 0; try { pid = Number(readFileSync(join(run, `${p}.pid`), 'utf8').trim()); } catch { return; }
@@ -99,14 +99,17 @@ export function opencode2Server(o: {
       k.c = null; k.bereit = false;
       if (gestoppt) return;
       // Bedingung 1: ein abgestürzter Server startet neu — offene Sitzungen stößt der Läufer danach an (laeufer.ts, OC2_WEITER).
-      if (k.neustarts >= (o.maxNeustarts ?? 5)) { log('opencode2 server aufgegeben', { port: p, code, sig }); return; }
+      // Pass C (S2): nach 10 min stabilem Lauf zählt ein Absturz wieder als erster — sonst wäre ein Server nach fünf Abstürzen in
+      // Wochen für immer weg. Aufgegeben bleibt aufgegeben (sichern startet ihn nicht wieder, Pass B D4).
+      if (k.seit && Date.now() - k.seit > 600_000) k.neustarts = 0;
+      if (k.neustarts >= (o.maxNeustarts ?? 5)) { k.aufgegeben = true; log('opencode2 server aufgegeben', { port: p, code, sig }); return; }
       k.neustarts++;
       log('opencode2 server weg — neustart', { port: p, code, sig, neustarts: k.neustarts });
       setTimeout(() => { if (!gestoppt && !k.c && key) void starte(p); }, 1000).unref();
     });
     const bis = Date.now() + (o.startMs ?? 30_000);
     while (Date.now() < bis) {
-      if (await antwortet(p)) { k.bereit = k.c === c; log('opencode2 server gestartet', { port: p, pid: c.pid }); return k.bereit; }
+      if (await antwortet(p)) { k.bereit = k.c === c; k.seit = Date.now(); log('opencode2 server gestartet', { port: p, pid: c.pid }); return k.bereit; }
       if (k.c !== c) return false;
       await new Promise((r) => setTimeout(r, 300));
     }
@@ -136,9 +139,9 @@ export function opencode2Server(o: {
       key = neu; fp = fingerabdruck(neu);
       // Alle Adressen an den Pool, sobald einer antwortet: ein Server im Neustart pausiert dort, offene Sitzungen warten auf ihn.
       const zugang = () => ([...kinder.values()].some((k) => k.bereit) ? { urls: [...kinder.keys()].map((p) => `http://127.0.0.1:${p}`), passwort } : null);
-      if ([...kinder.values()].every((k) => k.c)) return start ?? zugang();
+      if ([...kinder.values()].every((k) => k.c || k.aufgegeben)) return start ?? zugang();
       start ??= (async () => {
-        await Promise.all([...kinder].filter(([, k]) => !k.c).map(([p]) => starte(p)));
+        await Promise.all([...kinder].filter(([, k]) => !k.c && !k.aufgegeben).map(([p]) => starte(p)));
         start = null;
         return zugang();
       })();

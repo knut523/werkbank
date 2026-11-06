@@ -20,7 +20,17 @@ export const opencode2Ab = (env: Env = process.env) => { const n = Math.floor(Nu
 // Nur lesen: alles verboten, dann read/glob/grep erlaubt (die letzte passende Regel gewinnt) — verbotene Werkzeuge bietet der
 // Server dem Modell gar nicht erst an (Test „Schreibverbot“). ponytail: opencode 2 bedient nur lesende Aufträge; schreibende
 // bleiben bei jcode (dort prüft die Brücke Schreibzugriffe außerhalb des Ordners über die Sitzungsdatei).
-export const NUR_LESEN = [{ action: '*', resource: '*', effect: 'deny' }, ...['read', 'glob', 'grep'].map((action) => ({ action, resource: '*', effect: 'allow' }))];
+// Phase 4 (Pass A/B): der Melious-Schlüssel steht in der Umgebung des Servers — wie beim jcode-Hook (jcode-pre-tool.ts, GEHEIM)
+// danach ausdrücklich verboten: außerhalb des Arbeitsordners lesen, Prozess-Umgebung, Umgebungs- und Zugangsdateien.
+// ponytail: Muster wie beim jcode-Hook; ob opencode 2.2.5 jede Pfadform darauf abbildet, belegt erst ein echter Lauf (Bericht).
+export const GEHEIM_MUSTER = ['/proc/**', '**/environ', '**/.env', '**/.env.*', '**/.ssh/**', '**/.claude/**', '**/.claude.json', '**/.melious/**', '**/.jcode/**',
+  '**/.config/vw/**', '**/.config/gh/**', '**/.aws/**', '**/.netrc', '**/.git-credentials', '**/testkonten*', '**/.local/opencode2/**', '**/.runtime/**'];
+export const NUR_LESEN = [
+  { action: '*', resource: '*', effect: 'deny' },
+  ...['read', 'glob', 'grep'].map((action) => ({ action, resource: '*', effect: 'allow' })),
+  { action: 'external_directory', resource: '*', effect: 'deny' },
+  ...['read', 'glob', 'grep'].flatMap((action) => GEHEIM_MUSTER.map((resource) => ({ action, resource, effect: 'deny' }))),
+];
 
 const leer = (): LaeuferNutzung => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 
@@ -73,6 +83,7 @@ export function opencode2Laeufer(o: { base: string; passwort: string; fetchFn?: 
           catch (e: any) {
             // Sitzung weg (404) → verloren; Server nicht erreichbar → auf den Neustart (Wächter) warten, höchstens wiederMs.
             if (/HTTP 404/.test(String(e?.message))) return fehler(s, 'Sitzung nach Server-Neustart verloren');
+            if (wegSeit === null) angestossen = false;   // Pass C (S1): jeder neue Ausfall wird nach dem Neustart wieder angestoßen
             wegSeit ??= jetzt();
             if (jetzt() - wegSeit > wiederMs) return fehler(s, `Server antwortet nicht mehr (${Math.round(wiederMs / 1000)} s)`);
             continue;

@@ -115,3 +115,23 @@ test('Schalter: an nur mit BRIDGE_OPENCODE2=an, Schwelle 5 (einstellbar), nur Se
   const d = mkdtempSync(join(tmpdir(), 'oc2-'));
   assert.equal(await opencode2Fuer('sk-x', { BRIDGE_OPENCODE2: 'an', BRIDGE_OPENCODE2_HOME: d }), null, 'ohne Installation kein opencode 2 (Rückfall jcode)');
 });
+
+test('Phase 4 (Pass C S1): zwei Server-Ausfälle in derselben Sitzung — nach jedem Neustart wird angestoßen', async () => {
+  const s = server({ wegBei: [2, 4], fertigNach: 7 });
+  const r = await opencode2Laeufer({ base: 'http://x', passwort: 'pw', fetchFn: s.fetchFn, taktMs: 1 }).zug(auftrag());
+  assert.equal(r.code, 0, String(r.grund));
+  assert.equal(s.aufrufe.filter((x) => x.body?.text === OC2_WEITER).length, 2, 'zweimal angestoßen');
+});
+
+test('Phase 4 (Pass A/B): Rechte der opencode-2-Läufer — nach dem Lesen-Erlauben gewinnen Verbote für fremde Ordner und Zugangsdateien', async () => {
+  const { GEHEIM_MUSTER } = await import('../src/laeufer.ts');
+  // die letzte passende Regel gewinnt: Verbote müssen NACH den Erlaubnissen stehen
+  const erst = (pred: (r: any) => boolean) => NUR_LESEN.findIndex(pred);
+  const letzteErlaubnis = NUR_LESEN.map((r) => r.effect).lastIndexOf('allow');
+  assert.ok(erst((r) => r.action === 'external_directory' && r.effect === 'deny') > letzteErlaubnis, 'außerhalb des Arbeitsordners verboten');
+  for (const m of ['/proc/**', '**/.env', '**/.ssh/**', '**/.melious/**', '**/testkonten*', '**/.local/opencode2/**']) {
+    assert.ok(GEHEIM_MUSTER.includes(m), m);
+    for (const a of ['read', 'glob', 'grep']) assert.ok(erst((r) => r.action === a && r.resource === m && r.effect === 'deny') > letzteErlaubnis, `${a} ${m}`);
+  }
+  assert.ok(!NUR_LESEN.some((r) => r.effect === 'allow' && !['read', 'glob', 'grep'].includes(r.action)), 'nichts außer lesen erlaubt');
+});
