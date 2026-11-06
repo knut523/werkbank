@@ -90,6 +90,7 @@ doctor() {
   [ -x "$RT/bin/meilisearch" ] && ok "Meilisearch-Binärdatei" || bad "Meilisearch fehlt"
   [ -d "$RT/librechat/client/dist" ] && ok "LibreChat gebaut ($(git -C "$RT/librechat" tag --points-at HEAD | grep '^v' | head -1))" || bad "LibreChat nicht gebaut"
   [ -f "$WB/web/dist/index.html" ] && ok "Web-App gebaut" || bad "Web-App nicht gebaut"
+  [ -f "$WB/web/app/dist/index.html" ] && ok "Werkbank 2.0 gebaut" || bad "Werkbank 2.0 nicht gebaut (/v2)"
   echo "Geheimnisse (.env.local, nur Namen)"
   if [ -f "$WB/.env.local" ]; then
     perm=$(stat -c %a "$WB/.env.local"); [ "$perm" = 600 ] && ok ".env.local (600)" || warn ".env.local hat Rechte $perm (erwartet 600)"
@@ -128,7 +129,7 @@ case "${1:-}" in
   status) "$HERE/status.sh" ;;
   update)
     echo "OLAF Workspace: auffrischen"
-    rm -f "$WB/web/dist/index.html"   # erzwingt den Neubau der Oberfläche
+    rm -f "$WB/web/dist/index.html" "$WB/web/app/dist/index.html"   # erzwingt den Neubau der Oberflächen (alt und 2.0)
     "$HERE/setup.sh" || exit 1
     drain; "$HERE/stop.sh"; "$HERE/start.sh" || exit 1
     (load_env; cd "$WB/web" && node server/reindex-cli.ts)

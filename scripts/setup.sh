@@ -91,6 +91,10 @@ if need_ci "$WB/web"; then say "Web-App installieren"; (cd "$WB/web" && npm ci -
 if [ ! -f "$WB/web/dist/index.html" ] || [ -n "$(find "$WB/web/src" "$WB/web/index.html" -newer "$WB/web/dist/index.html" -print -quit)" ]; then
   say "Web-App bauen"; (cd "$WB/web" && npx vite build --logLevel error)
 fi
+# Werkbank 2.0 (/v2, Paket 436): eigener Bau in web/app/dist — auch neu, wenn sich die alten Seiten ändern (alt.tsx hängt web/src ein).
+if [ ! -f "$WB/web/app/dist/index.html" ] || [ -n "$(find "$WB/web/app/src" "$WB/web/app/index.html" "$WB/web/src" -newer "$WB/web/app/dist/index.html" -print -quit)" ]; then
+  say "Werkbank 2.0 bauen"; (cd "$WB/web/app" && npx vite build --logLevel error)
+fi
 
 # 8) Skills aus dem Vault (fehlende verlinken, nichts überschreiben)
 if [ -d "${WERKBANK_SKILLS_SOURCE:-/vault/_meta/dist-skill}" ]; then
