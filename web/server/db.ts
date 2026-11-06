@@ -41,6 +41,18 @@ export async function connect(): Promise<MongoClient> {
       db.collection('orchestrator_questions').createIndex({ userId: 1, status: 1, createdAt: -1 }),
       // G0 (docs/plan-vorbau-check.md): ein Schlüssel `<slug>#G0` ist höchstens einmal offen oder beantwortet.
       db.collection('orchestrator_questions').createIndex({ userId: 1, keyActive: 1 }, { unique: true, partialFilterExpression: { keyActive: { $exists: true } } }),
+      // Phase 4: Sammlungen der 2.0 und dieses Pakets — je eine Abfrageform, die im Takt oder bei jedem Seitenaufruf läuft.
+      db.collection('eta_messungen').createIndex({ userId: 1, ende: 1, start: -1 }),
+      db.collection('eta_messungen').createIndex({ strand: 1, ende: 1 }),
+      db.collection('strang_bedarf').createIndex({ userId: 1, 'strand.id': 1, status: 1 }),
+      db.collection('council_urteile').createIndex({ userId: 1 }),
+      db.collection('hauptsitzung_haken').createIndex({ userId: 1 }),
+      db.collection('pr_reviews').createIndex({ repo: 1, number: 1, status: 1 }),
+      db.collection('pr_reviews').createIndex({ createdAt: -1 }),
+      db.collection('v2_chats').createIndex({ userId: 1 }),
+      db.collection('v2_nachrichten').createIndex({ conv: 1, userId: 1, at: 1 }),
+      db.collection('v2_nachrichten').createIndex({ userId: 1, status: 1 }),
+      db.collection('v2_hauptchat_ausstehend').createIndex({ userId: 1, at: 1 }),
     ]);
   }
   return client;

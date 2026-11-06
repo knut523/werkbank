@@ -170,6 +170,7 @@ const wann2 = (iso: string) => new Date(iso).toLocaleString('de-AT', { timeZone:
 const fuerKnut = (fragen: Frage[]) => (triageAn() ? fragen.filter((f) => f.triage?.klasse === 'knut') : fragen);
 const beiClaude = (fragen: Frage[]) => (triageAn() ? { technisch: fragen.filter((f) => f.triage?.klasse === 'technisch').length, gewichtig: fragen.filter((f) => f.triage?.klasse === 'gewichtig').length } : null);
 /** Die eine Zahl: mit Triage die Zahl der Knut-Fragen, sonst wie bisher. */
+const zahlCache = new Map<string, { n: Promise<number>; at: number }>();
 const zahlVon = (eintraege: InboxEintrag[]) => (triageAn() ? fuerKnut(fragenAus(eintraege).fragen).length : inboxZahl(eintraege));
 
 function karten(d: V2Deps, fragen: Frage[], eintraege: InboxEintrag[], liste: { f: Frage; grund: string }[]) {
@@ -226,7 +227,9 @@ function aufraeumen(d: V2Deps, sonstiges: InboxEintrag[]) {
 const arbeitKarte = (z: any) => ({ id: String(z.id), titel: kurz(z.titel, 140), thema: themaVon(z.thema ?? null, String(z.titel ?? '')), satz: zustandSatz(z as ArbeitZeile), gruppe: arbeitGruppe(z as ArbeitZeile), zuletzt: z.zuletzt ?? null, uhr: uhrzeit(z.zuletzt),
   offen: z.cs?.offen ?? 0, links: [...(z.paket && z.bericht ? [{ label: 'Bericht', url: `/v2/dokument?paket=${encodeURIComponent(z.paket)}&datei=bericht.md` }] : [])] });
 
-export function registerV2(on: On, d: V2Deps) {
+export function registerV2(on0: On, d: V2Deps) {
+  // Jeder schreibende Aufruf der 2.0 (Antwort, Haken, Start …) kann die Zahl ändern → Zahl-Cache leeren.
+  const on: On = (m, re, fn) => on0(m, re, m === 'GET' ? fn : (req, res, mm, url) => { zahlCache.clear(); return fn(req, res, mm, url); });
   // Plan §23 T6: mit Triage trägt jede Zeile die Zahl ihrer offenen Knut-Fragen — „wartet“ nur, wenn Knut gebraucht wird.
   const ucListe = async (u: User) => {
     const l = await d.unterchatListe(u, false);
@@ -276,9 +279,16 @@ export function registerV2(on: On, d: V2Deps) {
   }
 
   // --- Die eine Zahl (Kopf jeder Seite): dieselbe wie überall — `inboxZahl` ---
+  // Phase 4: der Kopf fragt jede Minute je Tab — die ganze Inbox höchstens alle 30 s je Person bauen (wie todayCount der alten Leiste);
+  // gleichzeitige Abrufe teilen sich einen Aufbau. Seiten mit Inhalt (Entscheidungen, Jetzt) rechnen weiter frisch.
   on('GET', /^\/api\/v2\/zahl$/, async (req, res) => {
     const u = await d.needUser(req);
-    send(d, res, { zahl: zahlVon((await d.inboxFuer(u)).eintraege) });
+    const c = zahlCache.get(u.id);
+    if (c && Date.now() - c.at < 30_000) return send(d, res, { zahl: await c.n });
+    const n = d.inboxFuer(u).then((ib) => zahlVon(ib.eintraege));
+    zahlCache.set(u.id, { n, at: Date.now() });
+    n.catch(() => zahlCache.delete(u.id));
+    send(d, res, { zahl: await n });
   });
 
   // --- Entscheidungen: alle offenen, wichtigste zuerst (dieselbe Zahl wie oben) ---

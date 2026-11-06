@@ -95,9 +95,7 @@ export function auswertung(ms: KalibTabelle): AuswertungZeile[] {
 export const messungen = () => wb().collection<Messung>('eta_messungen');
 
 /** Abgeschlossene Abschnitte der letzten 60 Tage (für Kalibrierung und Auswertung). */
-let indexDa = false;
-export async function kalibTabelle(userId: string, now = Date.now()): Promise<KalibTabelle> {
-  if (!indexDa) { indexDa = true; await messungen().createIndex({ userId: 1, ende: 1, start: -1 }).catch(() => { indexDa = false; }); await messungen().createIndex({ strand: 1, ende: 1 }).catch(() => {}); }
+export async function kalibTabelle(userId: string, now = Date.now()): Promise<KalibTabelle> {   // Indizes: db.ts
   return (await messungen().find({ userId, ende: { $ne: null }, start: { $gt: new Date(now - 60 * 86400_000) } }, { projection: { art: 1, profil: 1, modell: 1, tiefe: 1, dauerMin: 1, faktor: 1, faktorAgent: 1, start: 1 } }).sort({ start: -1 }).limit(1000).toArray()) as any;
 }
 
