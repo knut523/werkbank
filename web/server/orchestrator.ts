@@ -163,7 +163,8 @@ export function orchBrief(b: BriefInput): string {
       `DoD: Leg die Liste in deiner ERSTEN Antwort an — wörtlich aus Plan/Spec, sonst aus dem Auftrag abgeleitet — und führ sie bis zum Ende mit. Pflichtzeilen je Art: Code: ${DOD_PFLICHT.code.join(' · ')}; Dokument: ${DOD_PFLICHT.dokument.join(' · ')}; Release: ${DOD_PFLICHT.release.join(' · ')}. „Status: fertig“ nur, wenn JEDE Zeile [x] mit Beleg hat; was du nicht selbst erledigen darfst (z. B. Push), bekommt einen Besitzer und wird eine „Folge:“-Zeile — dann heißt der Strang in der Werkbank „fast fertig“, nicht „fertig“.`,
       'Schreib den Abschnitt selbst als normales Markdown, nicht als Codeblock. Die ETA schätzt du schon in der ersten Antwort (Uhrzeit in Wiener Zeit oder Dauer ab jetzt) und ziehst sie bei jeder Antwort nach. Bei „Status: fertig“ lässt du die ETA-Zeile weg.',
     ].join('\n'),
-    BERICHT_PFLICHT,
+    // Phase 4: ein jcode-Strang schreibt nur im Arbeitsordner — die Werkbank übernimmt bericht.md ins Paket (reviewdatei.ts).
+    b.jcode ? BERICHT_PFLICHT.replace(/`~\/work\/knut\/review-pakete\/NNN-<slug>\/bericht\.md` \(das Paket nennt der Auftrag\)/, '`bericht.md` in deinem Arbeitsordner (die Werkbank übernimmt ihn ins Review-Paket)') : BERICHT_PFLICHT,
     `---\n\nAuftrag:\n${b.prompt.trim()}`,
   ].join('\n\n');
 }

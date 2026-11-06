@@ -65,6 +65,8 @@ test('Marke, Nachrichtentext, Auszug, Auftrag', () => {
   const j = orchBrief({ title: 'Lesen', prompt: 'Lies X', cwd: '/w/x', person: 'Knut', jcode: true });
   assert.match(j, /Nie pushen/); assert.match(j, /gibt es für dich nicht/);
   assert.doesNotMatch(j, /Meld es sofort mit \*\*bedarf_melden|über das Werkzeug github_lesen|nimm dafür bedarf_melden/);
+  assert.match(j, /`bericht\.md` in deinem Arbeitsordner/); assert.doesNotMatch(j, /review-pakete\/NNN/);
+  assert.match(b, /review-pakete\/NNN-<slug>\/bericht\.md/, 'Claude-Stränge: Bericht im Paket wie bisher');
 });
 
 // ---------- Automatisch fortsetzen (docs/plan-orchestrator-auto-weiter.md), reine Entscheidung ----------

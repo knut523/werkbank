@@ -45,7 +45,14 @@ export async function bedarfMelden(u: User, d: { _id: unknown; title?: string },
   if (da) return { id: String(da._id), neu: false };
   if ((await bedarfCol().countDocuments({ userId: u.id, 'strand.id': String(d._id), status: 'offen' })) >= 15) throw Object.assign(new Error('Schon 15 offene Bedarfe — erst die Antworten abwarten, am Rest weiterarbeiten.'), { status: 429 });
   const id = `b-${randomUUID().slice(0, 8)}`;
-  await bedarfCol().insertOne({ _id: id as any, userId: u.id, strand: { id: String(d._id), title: String(d.title ?? '') }, ...p, status: 'offen', at: now });
+  try { await bedarfCol().insertOne({ _id: id as any, userId: u.id, strand: { id: String(d._id), title: String(d.title ?? '') }, ...p, status: 'offen', at: now }); }
+  catch (e: any) {
+    // Phase 4: zwei gleichzeitige Meldungen desselben Bedarfs — der eindeutige Index (db.ts) lässt nur eine zu; die zweite ist „schon da“.
+    if (e?.code !== 11000) throw e;
+    const schon: any = await bedarfCol().findOne({ userId: u.id, 'strand.id': String(d._id), art: p.art, text: p.text, status: 'offen' });
+    if (schon) return { id: String(schon._id), neu: false };
+    throw e;
+  }
   return { id, neu: true };
 }
 

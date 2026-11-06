@@ -45,6 +45,7 @@ export async function connect(): Promise<MongoClient> {
       db.collection('eta_messungen').createIndex({ userId: 1, ende: 1, start: -1 }),
       db.collection('eta_messungen').createIndex({ strand: 1, ende: 1 }),
       db.collection('strang_bedarf').createIndex({ userId: 1, 'strand.id': 1, status: 1 }),
+      db.collection('strang_bedarf').createIndex({ userId: 1, 'strand.id': 1, art: 1, text: 1 }, { unique: true, partialFilterExpression: { status: 'offen' } }),
       db.collection('council_urteile').createIndex({ userId: 1 }),
       db.collection('hauptsitzung_haken').createIndex({ userId: 1 }),
       db.collection('pr_reviews').createIndex({ repo: 1, number: 1, status: 1 }),

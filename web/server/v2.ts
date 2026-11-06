@@ -1,6 +1,9 @@
-// Werkbank 2.0 (Paket 436, Schritt 0): eine schmale API für die neue Oberfläche (web/app, /v2/) auf den bestehenden Funktionen.
-// Nur lesen — einziger Schreibweg sind Antworten auf Fragen über die bestehende Antwortlogik (Council B4) und der Chat (v2chat.ts,
-// Hauptchat über den Adapter v2librechat.ts). Alle Routen hinter der bestehenden Anmeldung (B3). Freigaben nach außen gibt es hier nicht.
+// Werkbank 2.0 (Paket 436): eine schmale API für die neue Oberfläche (web/app, /v2/) auf den bestehenden Funktionen. Alle Routen
+// hinter der bestehenden Anmeldung (B3). Schreibwege (Phase 4, Stand des PRs): Antworten auf Fragen über die bestehende Antwortlogik
+// (Council B4, auch alle-empfohlen/sammel-schliessen/wieder-öffnen/umkehren) und der Chat (v2chat.ts, Hauptchat über v2librechat.ts)
+// für alle; nur für Admins (admin(u)): Unter-Chats steuern (abbrechen, anhalten, weiter), PR-Aktionen (Review/Fix einreihen),
+// Anhänge (Datei ins Paket), Bedarfe beantworten (inkl. befristeter Ordnerfreigabe in der Brücke), Council-Urteile, Haken der
+// Hauptsitzung, Antworten auf „Zum Ansehen“. Kein Push, kein Merge, keine Freigabe nach außen — die verweisen auf die alte Werkbank.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import type { User } from './auth.ts';
@@ -226,6 +229,18 @@ function aufraeumen(d: V2Deps, sonstiges: InboxEintrag[]) {
 
 const arbeitKarte = (z: any) => ({ id: String(z.id), titel: kurz(z.titel, 140), thema: themaVon(z.thema ?? null, String(z.titel ?? '')), satz: zustandSatz(z as ArbeitZeile), gruppe: arbeitGruppe(z as ArbeitZeile), zuletzt: z.zuletzt ?? null, uhr: uhrzeit(z.zuletzt),
   offen: z.cs?.offen ?? 0, links: [...(z.paket && z.bericht ? [{ label: 'Bericht', url: `/v2/dokument?paket=${encodeURIComponent(z.paket)}&datei=bericht.md` }] : [])] });
+
+/** Plan §23 T3: Council-Urteil zu einer offenen gewichtigen Frage prüfen (rein; 2.0-Route und CLI-Weg in main.ts, Phase 4: eine Stelle).
+ *  Wirft mit status 404 (Frage nicht offen), 409 (nicht gewichtig) oder 400 (Urteil ungültig). */
+export function councilPruefen(fragen: Frage[], b: { frage?: unknown; urteil?: unknown; grund?: unknown; bedingung?: unknown }) {
+  const f = fragen.find((x) => x.id === String(b.frage ?? ''));
+  if (!f) throw err(404, 'Diese Frage ist nicht (mehr) offen.');
+  if (f.triage?.klasse !== 'gewichtig') throw err(409, `Council nur für gewichtige Fragen — diese ist ${f.triage?.klasse ?? 'ohne Klasse'} (${f.triage?.grund ?? ''}).`);
+  const c: Council = { urteil: String(b.urteil ?? '') as CouncilUrteil, grund: String(b.grund ?? '').slice(0, 2000), bedingung: b.bedingung ? String(b.bedingung).slice(0, 2000) : null, at: new Date().toISOString() };
+  let w: ReturnType<typeof councilWirkung>;
+  try { w = councilWirkung({ ...c, empfehlung: f.empfehlung }); } catch (e: any) { throw err(400, String(e?.message ?? e)); }
+  return { f, c, w };
+}
 
 export function registerV2(on0: On, d: V2Deps) {
   // Jeder schreibende Aufruf der 2.0 (Antwort, Haken, Start …) kann die Zahl ändern → Zahl-Cache leeren.
@@ -510,12 +525,7 @@ export function registerV2(on0: On, d: V2Deps) {
     if (!admin(u)) throw err(403, 'Nur wer die Unter-Chats führt.');
     if (!d.councilAnwenden) throw err(501, 'Council-Check ist hier nicht eingerichtet.');
     const b = await d.body(req, 16 * 1024);
-    const f = fragenAus((await d.inboxFuer(u)).eintraege).fragen.find((x) => x.id === String(b.frage ?? ''));
-    if (!f) throw err(404, 'Diese Frage ist nicht (mehr) offen.');
-    if (f.triage?.klasse !== 'gewichtig') throw err(409, `Council nur für gewichtige Fragen — diese ist ${f.triage?.klasse ?? 'ohne Klasse'} (${f.triage?.grund ?? ''}).`);
-    const c: Council = { urteil: String(b.urteil ?? '') as CouncilUrteil, grund: String(b.grund ?? '').slice(0, 2000), bedingung: b.bedingung ? String(b.bedingung).slice(0, 2000) : null, at: new Date().toISOString() };
-    let w: ReturnType<typeof councilWirkung>;
-    try { w = councilWirkung({ ...c, empfehlung: f.empfehlung }); } catch (e: any) { throw err(400, String(e?.message ?? e)); }
+    const { f, c, w } = councilPruefen(fragenAus((await d.inboxFuer(u)).eintraege).fragen, b);
     await d.councilAnwenden(u, f, c, w);
     d.log('v2 council', { user: u.id, frage: f.id, urteil: c.urteil });
     send(d, res, { ok: true, anzeige: w.anzeige, geschlossen: w.schliessen });

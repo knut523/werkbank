@@ -122,7 +122,7 @@ import { githubLesePfad, githubLeseText } from './githublesen.ts';
 import { entwurfHash, postenErlaubt } from './befunde.ts';
 import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
 import { chatStatusAn, offeneJeStrang, hauptchatJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
-import { registerV2, appDist, v2Index, hauptchatZustellen } from './v2.ts';
+import { registerV2, appDist, v2Index, hauptchatZustellen, councilPruefen } from './v2.ts';
 import { bedarfPruefen, bedarfMelden, bedarfListe, bedarfAntworten, BEDARF_NAME } from './bedarf.ts';
 import { liste as v2lcListe, volltext as v2lcVolltext, senden as v2lcSenden } from './v2librechat.ts';
 import { abgebrochenMarkieren as v2Abgebrochen } from './v2chat.ts';
@@ -3879,12 +3879,9 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
 /** Plan §23 T3: Council-Urteil des Hauptchats zu einer gewichtigen Frage (dieselben Prüfungen wie POST /api/v2/council). */
 async function councilMelden(u: User, b: any) {
   if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
-  const f = fragenAus((await inboxFuer(u)).eintraege).fragen.find((x) => x.id === String(b.frage ?? ''));
-  if (!f) throw new HttpError(404, 'Diese Frage ist nicht (mehr) offen.');
-  if (f.triage?.klasse !== 'gewichtig') throw new HttpError(409, `Council nur für gewichtige Fragen — diese ist ${f.triage?.klasse ?? 'ohne Klasse'} (${f.triage?.grund ?? ''}).`);
-  const c: Council = { urteil: String(b.urteil ?? '') as Council['urteil'], grund: String(b.grund ?? '').slice(0, 2000), bedingung: b.bedingung ? String(b.bedingung).slice(0, 2000) : null, at: new Date().toISOString() };
-  let w: ReturnType<typeof councilWirkungFn>;
-  try { w = councilWirkungFn({ ...c, empfehlung: f.empfehlung }); } catch (e: any) { throw new HttpError(400, String(e?.message ?? e)); }
+  let p: ReturnType<typeof councilPruefen>;
+  try { p = councilPruefen(fragenAus((await inboxFuer(u)).eintraege).fragen, b); } catch (e: any) { throw new HttpError(e?.status ?? 400, String(e?.message ?? e)); }
+  const { f, c, w } = p;
   await councilAnwenden(u, f, c, w);
   log('council', { user: u.id, frage: f.id, urteil: c.urteil });
   return { ok: true, frage: f.id, anzeige: w.anzeige, geschlossen: w.schliessen };
