@@ -7,10 +7,11 @@
 //     Wochen als Schatten auf denselben Prüfergebnissen mit — beide Urteile werden protokolliert. Vor Pushes prüft Claude zusätzlich.
 // Hier nur der Ablauf (rein bis auf die übergebenen Läufer); Server, Schlüssel und Buchung macht sessions.ts.
 import type { LaeuferNutzung } from './laeufer.ts';
+import { FLASH, DEEPSEEK, GLM52 } from './modellwahl.ts';
 
-export const PRUEFER = ['glm-5.3-flash', 'deepseek-v4.1-flash-1017', 'glm-5.2'] as const;
-export const VERIFIZIERER = 'glm-5.2';
-export const SCHATTEN = 'glm-5.3-flash';
+export const PRUEFER = [FLASH, DEEPSEEK, GLM52] as const;
+export const VERIFIZIERER = GLM52;
+export const SCHATTEN = FLASH;
 /** Schatten bis einschließlich 20.11.2026 (zwei Wochen ab Knuts Entscheidung 06.11.); BRIDGE_ENSEMBLE_SCHATTEN=aus/an übersteuert. */
 export const SCHATTEN_BIS = '2026-11-20';
 // Der Tag zählt in Wien (pre-push-gate docs-datum-wien): sonst endete der Schatten am 20.11. schon um 01:00 Wiener Zeit.

@@ -2381,6 +2381,8 @@ async function melKonto(live: Live, userId: string): Promise<Account | null> {
 
 // ---------- Review-Ensemble über opencode 2 (Knut 06.11., D1/D2; Ablauf in ensemble.ts) ----------
 const BEREICH = /^(?!-)[\w./^~-]{1,120}\.{2,3}(?!-)[\w./^~-]{1,120}$/;
+// ponytail (A-S10): zwischen Schließen und dem Start des Servers kann ein anderer Prozess den Port nehmen — dann scheitert der Start
+// und das Ensemble läuft über jcode (mitRueckfall); erst bei gehäuften Fällen den Port vom Server selbst wählen lassen.
 const freierPort = () => new Promise<number>((res, rej) => { const s = netServer(); s.once('error', rej); s.listen(0, '127.0.0.1', () => { const p = (s.address() as any).port; s.close(() => res(p)); }); });
 /** BRIDGE_ENSEMBLE_OC2=aus: alle Läufe über jcode (Rückweg). Unabhängig von BRIDGE_OPENCODE2 und der 5er-Schwelle (D2). */
 export const ensembleOc2An = () => process.env.BRIDGE_ENSEMBLE_OC2 !== 'aus';

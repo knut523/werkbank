@@ -6,6 +6,8 @@
 // Brücke, oc2server.ts), (2) feste Version 2.2.5 (oc2server.ts prüft), (3) mehrere Server, verteilt (opencode2Pool).
 // Schalter: BRIDGE_OPENCODE2=an, BRIDGE_OPENCODE2_PORTS (47811 47812), BRIDGE_OPENCODE2_HOME, BRIDGE_OPENCODE2_AB (5). Rein bis auf fetch.
 
+import { FLASH } from './modellwahl.ts';
+
 export interface LaeuferAuftrag { cwd: string; prompt: string; model: string | null; timeoutS: number; abbruch: () => boolean; titel?: string }
 export interface LaeuferNutzung { input: number; output: number; cacheRead: number; cacheWrite: number }
 /** code: 0 = sauber zu Ende, sonst Fehler/Abbruch/Zeit; text: Antwort; gelaufen: tatsächliches Modell. */
@@ -63,7 +65,7 @@ export function opencode2Laeufer(o: { base: string; passwort: string; fetchFn?: 
   return {
     name: 'opencode2',
     async zug(a) {
-      const modell = a.model ?? 'glm-5.3-flash';
+      const modell = a.model ?? FLASH;
       let sid: string | null = null;
       const fehler = (s: any, grund: string): LaeuferErgebnis => ({ code: -1, text: '', usage: oc2Nutzung(s), gelaufen: modell, draussen: [], grund });
       try {
