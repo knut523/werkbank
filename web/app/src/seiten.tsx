@@ -58,6 +58,7 @@ export function Jetzt() {
           : <p className="leer">Gerade wartet nichts auf dich.</p>}
         {k.zahl > karten.length && <p className="abschnitt-fuss"><a href="v2/entscheidungen">Alles, was auf dich wartet →</a></p>}
       </section>
+      {k.admin && <Schaetzgenauigkeit />}
     </div>
   );
 }
@@ -587,13 +588,28 @@ function Nachreichen({ id }: { id: string }) {
   );
 }
 
-export interface Steckbrief { wofuer: string; gestartet: string | null; ueber: string | null; jetzt: string | null; laeuft: boolean; seit: number | null; schritte: { text: string; stand: 'fertig' | 'offen' }[]; eta: { text: string; ueberfaellig: boolean } | null;
+export interface Steckbrief { wofuer: string; gestartet: string | null; ueber: string | null; jetzt: string | null; laeuft: boolean; seit: number | null; schritte: { text: string; stand: 'fertig' | 'offen' }[]; eta: { text: string; ueberfaellig: boolean } | null; genauigkeit?: string | null;
   wartetAuf: { wer: string; was: string }[]; ergebnisse: Link[];
   dod?: { zeilen: { text: string; haken: boolean; beleg: string | null; besitzer: string | null; erledigt: boolean }[]; folgen: { text: string; besitzer: string | null }[] }; fast?: { fehlt: string[]; wartetAuf: string[] } | null; ruhtMin?: number | null; eingereiht?: { at: string; grund: string }[]; beruehrt: { repos: string[]; text: string | null; ordner: string | null; dateien: string[] }; modell: string | null; laufzeitMin: number | null; zugTokens: number | null; laeufer?: { wer: string; grund: string | null } | null }
 
 const dauer = (min: number) => (min < 90 ? `${min} min` : min < 60 * 48 ? `${Math.round(min / 60)} h` : `${Math.round(min / 1440)} Tage`);
 /** Runde 7 (Knut: „Unterchats sind halt etwas intransparent“): in 10 Sekunden sehen, was ein Unter-Chat gerade tut — ohne den Chat
  *  zu öffnen. Wofür · Jetzt gerade · Fortschritt · Wartet auf · Ergebnisse · Berührt · Modell/Laufzeit · „Was macht der gerade?“. */
+/** Knut 06.11.: wie gut die Zeitschätzungen der Unter-Chats stimmen (gemessen je Arbeitsabschnitt, die Schätzung lernt daraus). */
+function Schaetzgenauigkeit() {
+  const r = useDaten<{ zeilen: { schluessel: string; text: string; satz: string; n: number }[] }>('api/v2/eta');
+  const z = r.d?.zeilen ?? [];
+  if (!z.length) return null;
+  return (
+    <details className="kasten schaetzung">
+      <summary>Zeitschätzungen: {z[0].satz}</summary>
+      <p className="klein gedimmt">Gemessen je Arbeitsabschnitt eines Unter-Chats (vom Start, bis er nicht mehr arbeitet — Warten in der Schlange zählt mit). Die Schätzung lernt aus den letzten 20 vergleichbaren Läufen; „überfällig“ erscheint erst nach dem üblichen Spielraum.</p>
+      <table className="tabelle klein"><thead><tr><th>Art · Profil · Modell</th><th>Ergebnis</th></tr></thead>
+        <tbody>{z.slice(1, 15).map((x) => <tr key={x.schluessel}><td>{x.text}</td><td>{x.satz}</td></tr>)}</tbody></table>
+    </details>
+  );
+}
+
 export function SteckbriefKasten({ s, titel, id }: { s: Steckbrief; titel: string; id: string }) {
   const app = useApp();
   const fertig = s.schritte.filter((x) => x.stand === 'fertig').length;
@@ -603,6 +619,7 @@ export function SteckbriefKasten({ s, titel, id }: { s: Steckbrief; titel: strin
         <div><dt>Wofür</dt><dd>{s.wofuer}{s.gestartet ? <span className="klein gedimmt"> — gestartet {wann(s.gestartet)}{s.ueber ? ` über „${s.ueber}“` : ''}</span> : null}</dd></div>
         {s.laeufer && <div><dt>Läuft mit</dt><dd>{s.laeufer.wer}{s.laeufer.grund ? <span className="klein gedimmt"> — {s.laeufer.grund}</span> : null}</dd></div>}
         <div><dt>Jetzt gerade</dt><dd>{s.laeuft && <span className="live" aria-label="läuft">● </span>}{s.jetzt ?? (s.laeuft ? 'arbeitet' : s.ruhtMin != null ? `ruht seit ${dauer(s.ruhtMin)} — kein Zug läuft` : 'ruht gerade — kein Zug läuft')}{s.seit ? <span className="klein gedimmt"> (seit {dauer(Math.max(1, Math.round((Date.now() - s.seit) / 60000)))})</span> : null}</dd></div>
+        {(s.eta && s.laeuft || s.genauigkeit) && <div><dt>Zeitschätzung</dt><dd>{s.eta && s.laeuft ? (s.eta.ueberfaellig ? 'überfällig — dauert länger als geschätzt' : s.eta.text) : 'kein Lauf gerade'}{s.genauigkeit ? <span className="klein gedimmt"> — {s.genauigkeit}</span> : null}</dd></div>}
         {s.schritte.length > 0 && <div><dt>Fortschritt</dt><dd>
           <p className="klein gedimmt">{fertig} von {s.schritte.length} Schritten{s.eta && s.laeuft ? ` · ${s.eta.ueberfaellig ? 'überfällig — dauert länger als geschätzt' : `fertig ${s.eta.text}`}` : ''}</p>
           <ul className="schritte">{s.schritte.map((x, i) => <li key={i} className={x.stand}>{x.stand === 'fertig' ? '✓' : '○'} {x.text}</li>)}</ul>

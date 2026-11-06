@@ -100,6 +100,8 @@ export interface V2Deps {
   /** Runde 7: Roadmap-Items (Spec-Seiten im olaf-Vault, roadmapitems.ts), schon mit Thema. */
   /** Runde 7 (Knut: Unter-Chats transparent): Zustand der Stränge bei der Brücke, je Unterhaltung (strandStates). */
   zustaende?: (u: User) => Promise<Map<string, any>>;
+  /** Knut 06.11.: ETA gegen Ist — Auswertung je Auftragsart/Profil/Modell (etamessung.ts). */
+  etaAuswertung?: (u: User) => Promise<{ zeilen: { schluessel: string; text: string; satz: string; n: number }[]; steckbrief: (doc: any) => string | null }>;
   /** Runde 7 (Abgleich: Nachreichen fehlte, 148× genutzt): Nachricht an einen Unter-Chat — läuft er, wird sie nachgereicht. */
   nachreichen?: (u: User, strandId: string, text: string) => Promise<unknown>;
   /** Runde 7 (Abgleich): alle Dateien eines Review-Pakets, nicht nur bericht.md. */
@@ -540,6 +542,13 @@ export function registerV2(on: On, d: V2Deps) {
   });
 
   // --- Runde 7 (Knut: DoD): liegen gebliebene Enden — offene DoD-Zeilen und Folge-Aufgaben fertig gemeldeter Unter-Chats, mit Besitzer ---
+  // Knut 06.11.: Schätzgenauigkeit der Unter-Chats (ETA gegen Ist) — für „Jetzt“.
+  on('GET', /^\/api\/v2\/eta$/, async (req, res) => {
+    const u = await d.needUser(req);
+    if (!admin(u) || !d.etaAuswertung) return send(d, res, { zeilen: [] });
+    const r = await d.etaAuswertung(u).catch(() => null);
+    send(d, res, { zeilen: r?.zeilen ?? [] });
+  });
   on('GET', /^\/api\/v2\/enden$/, async (req, res) => {
     const u = await d.needUser(req);
     if (!admin(u)) return send(d, res, { enden: [] });
@@ -580,6 +589,7 @@ export function registerV2(on: On, d: V2Deps) {
       jetzt: s?.running ? (jetztSatz(s.jetzt) ?? standZeile(stand, 'Jetzt') ?? 'arbeitet gerade') : s?.queued ? `wartet in der Schlange (Platz ${s.queued.pos}) und startet von selbst` : standZeile(stand, 'Jetzt'),
       laeuft: !!s?.running, seit: s?.running ? s?.turn?.start ?? null : null,
       schritte: schritteAus(stand), eta: z?.eta ?? null,
+      genauigkeit: d.etaAuswertung ? (await d.etaAuswertung(u).catch(() => null))?.steckbrief(doc) ?? null : null,
       wartetAuf: [...(standZeile(stand, 'Braucht Knut') ? [{ wer: 'dich', was: standZeile(stand, 'Braucht Knut')! }] : []), ...(s?.queued ? [{ wer: 'einen freien Platz', was: `Platz ${s.queued.pos} in der Schlange` }] : [])],
       ergebnisse: [
         ...(doc.paket ? [{ label: 'Bericht', url: `/v2/dokument?paket=${encodeURIComponent(doc.paket)}&datei=bericht.md` }] : []),

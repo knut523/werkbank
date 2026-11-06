@@ -546,6 +546,8 @@ on('DELETE', /^\/api\/setup\/claude$/, async (req, res) => { const u = await nee
 // --- Mehrere Claude-Konten (Knut, 06.10.2026): bei ausgeschöpftem Kontingent übernimmt das nächste ---
 // Nie Tokens an den Browser oder ins Log: nur Name, die letzten 4 Zeichen, Herkunft und der Zustand aus der Brücke.
 
+/** Knut 06.11.: Auswertung der ETA-Messungen je Person, 60 s zwischengespeichert (etaAuswertung). */
+const etaCache = new Map<string, { at: number; zeilen: any[] }>();
 const bridgeInternal = { 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' };
 
 async function accountsView(u: User) {
@@ -4501,6 +4503,14 @@ registerV2(on, {
   // Paket aus dem Feld oder — bei Unter-Chats ohne eigenes Paket — aus dem Pfad des gefundenen Berichts (…/<paket>/bericht.md im Review-Ordner).
   // Runde 7: Roadmap-Items je Thema (Spec-Seiten im Vault), höchstens einmal je Minute gelesen. Thema = Ordnername (gesetzt, wie ein Hand-Thema).
   zustaende: (u) => strandStates(u) as Promise<Map<string, any>>,
+  etaAuswertung: async (u) => {
+    const { kalibTabelle, auswertung, genauigkeitSatz, gruppeText, steckbriefSatz } = await import('./etamessung.ts');
+    // 60 s je Person zwischengespeichert — die Auswertung ist Geschichte, kein Live-Wert.
+    const c = etaCache.get(u.id);
+    const zeilen = c && Date.now() - c.at < 60_000 ? c.zeilen : auswertung(await kalibTabelle(u.id));
+    if (!c || c.zeilen !== zeilen) etaCache.set(u.id, { at: Date.now(), zeilen });
+    return { zeilen: zeilen.map((z) => ({ schluessel: z.schluessel, text: gruppeText(z), satz: genauigkeitSatz(z), n: z.n })), steckbrief: (doc) => steckbriefSatz(zeilen, doc) };
+  },
   nachreichen: (u, id, text) => sendOrch(u, id, text),
   // Chat-Bereich (Knut 06.11.): Anhang ins Paket des Unter-Chats (ohne Paket: Ordner .werkbank-anhaenge im Arbeitsordner), Pfad als Nachricht.
   anhang: async (u, id, name, buf, text) => {

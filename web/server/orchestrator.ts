@@ -28,7 +28,8 @@ import { cleanThema, themaOf } from './themen.ts';
 import { meliousSettings, ausserhalbAbo } from './melious.ts';
 import { budgetVon } from './cosbudget.ts';   // zyklisch (cosbudget → orchestrator), nur zur Laufzeit im Rückfrage-Pfad benutzt
 import { budgetWirkung } from './braucht.ts';
-import { tiefeOf, istTiefe, tiefeStart, tiefeText, modellAusserhalbAbo, modellVorgaben, zuarbeitText, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, GRUENDLICH_TEXT, type Tiefe, type Zuarbeit } from './tiefe.ts';
+import { tiefeOf, istTiefe, tiefeStart, tiefeText, modellAusserhalbAbo, modellVorgaben, zuarbeitText, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, GRUENDLICH_TEXT, type Tiefe, type Zuarbeit, type EtaMediane } from './tiefe.ts';
+import { kalibTabelle, kalibFuer, gruppeVon, messTakt, type KalibTabelle } from './etamessung.ts';
 import { autoAktiv, lageFuer, routingLageFuer, letzterAnbieter } from './kontingent.ts';
 import { klasseVon, route as routeVon, routingCfg, routingText, type Route } from './routing.ts';
 import { zustandAus, abweichung, nachfordern, statusNeu, NACHFORDER_TEXT, wienDatum, wienUm } from './zustand.ts';
@@ -610,11 +611,16 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
 }
 
 /** Median-Dauer je Tiefe aus den erledigten Strängen der Person (Plan 205: Rückfall-ETA ohne Agentenangabe). */
-export async function etaMediane(u: User, now = Date.now()) {
+export async function etaMediane(u: User, now = Date.now()): Promise<EtaMediane> {
+  const tab = await kalibTabelle(u.id, now).catch(() => [] as KalibTabelle);
   const docs = await runs().find({ userId: u.id, ...STRANDS, doneAt: { $ne: null }, startedAt: { $gt: new Date(now - 60 * 86400_000) } }, { projection: { tiefe: 1, startedAt: 1, doneAt: 1 } }).sort({ doneAt: -1 }).limit(600).toArray();
   // Je Tiefe höchstens die letzten 50.
   const n: Record<string, number> = {};
-  return mediane(docs.filter((d: any) => (n[tiefeOf(d.tiefe)] = (n[tiefeOf(d.tiefe)] ?? 0) + 1) <= 50));
+  const med: EtaMediane = mediane(docs.filter((d: any) => (n[tiefeOf(d.tiefe)] = (n[tiefeOf(d.tiefe)] ?? 0) + 1) <= 50));
+  // Knut 06.11.: Kalibrierung aus den gemessenen Abschnitten (etamessung.ts) reist mit den Medianen zu etaFuer.
+  med.kalib = (d: any) => kalibFuer(tab, gruppeVon(d));
+  med.tabelle = tab;
+  return med;
 }
 
 /** ETA eines Strangs für list/show: die ETA-Zeile der letzten Antwort, sonst die zuletzt gemeldete, sonst Median/Vorgabe. */
@@ -1122,6 +1128,7 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'> & { me
       const tagBeginn = wienUm(heuteWien, 0);   // Wiener Mitternacht, nicht die Zeitzone des Servers (Pass C)
       let nachgefordertHeute = statusNeu() ? await runs().countDocuments({ userId, 'standNachgefordert.at': { $gte: tagBeginn } }).catch(() => 0) : 0;
       const seit = statusNeu() ? await statusNeuSeit(now) : now;
+      let mess: EtaMediane | null = null;
       for (const d of list) {
         // Schon fertig nach der letzten Nachricht an den Strang: ohne neue Nachricht ändert sich nichts (Last, Council Teil B).
         // … aber nur, wenn seitdem kein Zug lief (Knut schreibt direkt im Chat) und der Bericht schon gefunden ist (Council-Diff B R2).
@@ -1150,6 +1157,8 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'> & { me
           // Plan 213 S1b: „done“ heißt Marke „fertig“ — der Zustand fehlt nur bei Unter-Chats von vor der Umstellung.
           // Eine später gestellte Rückfrage macht aus „fertig“ wieder „wartet“ (und umgekehrt) — je Takt neu, nicht eingefroren (Pass C).
           const soll = (fragenJe.get(String(d._id)) ?? 0) > 0 ? 'wartet' : 'fertig';
+          // Knut 06.11.: ein noch offener Messabschnitt endet hier (Gegenprüfung: der fertig-Zweig übersprang sonst messTakt).
+          if (d.etaMessung) await messTakt(d, soll, { now, agentEta: null, agentGemeldet: null, tab: [], medianMs: null }).then((x) => runs().updateOne({ _id: d._id }, { $set: x })).catch(() => {});
           if (d.zustand !== soll && d.zustand !== 'erledigt') await runs().updateOne({ _id: d._id, zustand: d.zustand ?? null }, { $set: { zustand: soll, zustandGrund: soll === 'wartet' ? 'Rückfrage an dich' : 'Agent meldet „fertig“', marke: 'fertig' } }).catch(() => {});
           continue;
         }
@@ -1178,6 +1187,12 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'> & { me
           const nachAt = offenNach ? new Date(d.standNachgefordert.at).getTime() : null;
           const z = zustandAus({ status: st.status, reason: st.reason, cause: st.cause, gestoppt: d.autoStopped?.cause === 'ohne_status', queued: s?.queued ?? null, marke, offeneFragen: fragenJe.get(String(d._id)) ?? 0, nachgefordertAt: nachAt }, now);
           set.zustand = z.zustand; set.zustandGrund = z.grund; set.marke = marke;
+          // Knut 06.11.: ETA gegen Ist — Abschnitt beginnen/abschließen (etamessung.ts); Fehler hier halten den Takt nicht auf.
+          try {
+            mess ??= await etaMediane(u, now);
+            const agent = eta ?? (d.eta?.at ? new Date(d.eta.at).getTime() : null), agentAm = eta && last ? last.at : d.eta?.gemeldetAt ? new Date(d.eta.gemeldetAt).getTime() : null;
+            Object.assign(set, await messTakt({ ...d, lastModell: set.lastModell ?? d.lastModell }, z.zustand, { now, agentEta: agent, agentGemeldet: agentAm, tab: mess.tabelle ?? [], medianMs: mess[tiefeOf(d.tiefe)] ?? null }));
+          } catch (e: any) { deps.log?.('eta-messung fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
           if (marke && d.standNachgefordert) set.standNachgefordert = null;   // wieder eine Marke: nächste Lücke darf nachgefordert werden
           const ab = abweichung(st.status, z.zustand);
           if (ab) await wb().collection('meta').updateOne({ _id: `status_schatten:${heuteWien}` as any }, { $addToSet: { [`paare.${ab}`]: String(d._id) } }, { upsert: true }).catch(() => {});
