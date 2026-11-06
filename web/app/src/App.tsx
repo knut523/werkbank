@@ -25,10 +25,12 @@ const BEREICHE = [
 ];
 
 /** Zu einer Sprungmarke scrollen, sobald der Abschnitt gerendert ist (Daten laden nach) — höchstens 3 s warten. */
+let sprung: ReturnType<typeof setInterval> | undefined;   // Phase 4: nur eine Sprungmarke wartet — ein neuer Klick bricht die alte ab
 function springZu(hash: string) {
+  clearInterval(sprung);
   if (!hash || hash.length < 2) return;
   let n = 0;
-  const t = setInterval(() => { const el = document.getElementById(decodeURIComponent(hash.slice(1))); if (el || ++n > 30) { clearInterval(t); el?.scrollIntoView({ block: 'start' }); } }, 100);
+  const t = sprung = setInterval(() => { const el = document.getElementById(decodeURIComponent(hash.slice(1))); if (el || ++n > 30) { clearInterval(t); el?.scrollIntoView({ block: 'start' }); } }, 100);
 }
 
 function useAdresse() {
@@ -41,7 +43,7 @@ function useAdresse() {
       const a = (e.target as HTMLElement).closest('a');
       const href = a?.getAttribute('href');
       // Sprungmarken springen sofort (Runde 4, Christoph B3): während einer weichen Animation ging der nächste Tipp ins Leere.
-      if (href?.startsWith('#') && a) { e.preventDefault(); document.getElementById(href.slice(1))?.scrollIntoView({ block: 'start' }); return; }
+      if (href?.startsWith('#') && a) { e.preventDefault(); history.replaceState(null, '', location.pathname + location.search + href); document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ block: 'start' }); return; }   // Phase 4: Adresse mitführen (Neuladen, Teilen)
       if (!a || !href || a.target || !istIntern(href)) return;
       e.preventDefault();
       const ziel = new URL(rel(href), document.baseURI);   // relativ zu <base href> (S16)

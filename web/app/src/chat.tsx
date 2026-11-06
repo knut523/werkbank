@@ -116,11 +116,11 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
             {n.status === 'fehler' && <p className="fehlertext klein">{n.fehler ?? 'Die Antwort kam nicht an.'}</p>}
           </div>
         ))}
-        {stand?.laeuft && <p className="klein gedimmt">Der Assistent arbeitet …</p>}
+        {stand?.laeuft && <p className="klein gedimmt">Der Assistent arbeitet …{ziel === 'hauptchat' ? ' Du kannst trotzdem schreiben — die Nachricht wartet und geht raus, sobald er frei ist.' : ''}</p>}
         {!!stand?.eingereiht?.length && (
           <div className="blase ich wartet">
             <p className="klein gedimmt">{stand.eingereiht.length === 1 ? 'Wartet — geht raus, sobald der Hauptchat frei ist:' : `${stand.eingereiht.length} Nachrichten warten — gehen gesammelt raus, sobald der Hauptchat frei ist:`}</p>
-            {stand.eingereiht.map((x, i) => <p key={i} className="klein">{x.text}</p>)}
+            {stand.eingereiht.map((x, i) => <p key={i} className="klein">{x.text}{x.at && <span className="gedimmt"> · wartet seit {wann(x.at)}</span>}</p>)}
           </div>
         )}
         <div ref={unten} />
@@ -141,7 +141,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
             onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void senden(); } }} />
           <div className="chat-aktionen">
             {text.length > 7000 && <span className="klein gedimmt">{text.length} / 8000</span>}
-            <button type="submit" className="knopf haupt" disabled={sendet || !text.trim() || !!stand?.laeuft}>{sendet ? 'Sendet …' : 'Senden'}</button>
+            <button type="submit" className="knopf haupt" disabled={sendet || !text.trim() || (ziel === 'eigen' && !!stand?.laeuft)}>{sendet ? 'Sendet …' : ziel === 'hauptchat' && stand?.laeuft ? 'Einreihen' : 'Senden'}</button>
           </div>
         </form>
       )}

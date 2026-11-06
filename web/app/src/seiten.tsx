@@ -219,7 +219,6 @@ function AnsehenKarte({ k, fertig }: { k: { id: string; titel: string; thema: st
     catch (e: any) { setMeldung(String(e?.message ?? e)); setLaeuft(false); }
   };
   // Audit 05.11. (5): ohne Bericht ist „fertig“ kein abnehmbarer Stand — zuerst den Bericht anfordern; abnehmen nur ausdrücklich.
-  const BERICHT = BERICHT_ANFORDERN;
   return (
     <article id={`ansehen-${k.id}`} className="karte ansehen" aria-label={k.titel}>
       {k.thema && k.thema !== 'Sonstiges' && <p className="karte-thema">{k.thema}</p>}
@@ -230,7 +229,7 @@ function AnsehenKarte({ k, fertig }: { k: { id: string; titel: string; thema: st
       <div className="knoepfe" aria-busy={laeuft}>
         {k.ohneBericht
           ? <>
-            <button type="button" className="knopf haupt" disabled={laeuft} onClick={() => antworten('aendern', { text: notiz.trim() ? `${notiz.trim()}\n\n${BERICHT}` : BERICHT })}>Bericht anfordern</button>
+            <button type="button" className="knopf haupt" disabled={laeuft} onClick={() => antworten('aendern', { text: notiz.trim() ? `${notiz.trim()}\n\n${BERICHT_ANFORDERN}` : BERICHT_ANFORDERN })}>Bericht anfordern</button>
             <button type="button" className="knopf leise" disabled={laeuft} title="Fertig ohne Bericht abnehmen — nur, wenn es wirklich keinen braucht" onClick={() => antworten('passt', { trotzdem: true })}>Trotzdem abnehmen</button>
           </>
           : <>
@@ -341,7 +340,7 @@ export function Arbeit() {
   const [q, setQ] = useState('');
   const [thema, setThema] = useState<string | null>(null);   // Runde 7: nach Thema filtern
   // Radikal simpel: drei Reiter statt drei langer Abschnitte; „Fertig“ direkt erreichbar (Knut: „heute fertig“). Merkt sich die Wahl.
-  const [reiter, setReiter] = useState<'wartet' | 'laeuft' | 'fertig'>(() => (location.hash === '#fertig' ? 'fertig' : (sessionStorage.getItem('v2-arbeit-reiter') as any) || 'wartet'));
+  const [reiter, setReiter] = useState<'wartet' | 'laeuft' | 'fertig'>(() => (location.hash === '#fertig' ? 'fertig' : (gemerkt('v2-arbeit-reiter') as 'wartet' | 'laeuft' | 'fertig' | null) || 'wartet'));
   useEffect(() => { try { sessionStorage.setItem('v2-arbeit-reiter', reiter); } catch { /* egal */ } }, [reiter]);
   if (fehler) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
@@ -438,7 +437,9 @@ export function Freigabe({ id }: { id: string }) {
     catch (e: any) { setMeldung(String(e?.message ?? e)); } finally { setLaeuft(false); }
   };
   const zurueck = async (fid: string) => {
-    try { await schicke(`api/review/${id}/freigabe/${fid}/zurueck`, {}); setMeldung('Freigabe zurückgezogen.'); neu(); } catch (e: any) { setMeldung(String(e?.message ?? e)); }
+    if (laeuft) return;   // Phase 4: kein zweiter Klick, solange der erste läuft
+    setLaeuft(true); setMeldung(null);
+    try { await schicke(`api/review/${id}/freigabe/${fid}/zurueck`, {}); setMeldung('Freigabe zurückgezogen.'); neu(); } catch (e: any) { setMeldung(String(e?.message ?? e)); } finally { setLaeuft(false); }
   };
   const aktiv = d.freigaben.find((f) => f.aktiv && !f.pushedAt && r.fehler === undefined && f.head === r.head);
   return (
@@ -454,7 +455,7 @@ export function Freigabe({ id }: { id: string }) {
           {r.stat && <pre className="kasten diffstat">{r.stat}</pre>}
         </Abschnitt>
         <div className="knoepfe">
-          {aktiv ? <p className="hinweis klein">Schon freigegeben ({wann(aktiv.at)}) — wartet auf den Push. <button type="button" className="knopf leise klein" onClick={() => void zurueck(aktiv.id)}>Zurückziehen</button></p>
+          {aktiv ? <p className="hinweis klein">Schon freigegeben ({wann(aktiv.at)}) — wartet auf den Push. <button type="button" className="knopf leise klein" disabled={laeuft} onClick={() => void zurueck(aktiv.id)}>{laeuft ? 'Zieht zurück …' : 'Zurückziehen'}</button></p>
             : <button type="button" className="knopf haupt" disabled={laeuft || !r.clean || d.running || !r.patchId} onClick={() => void frei()}>{laeuft ? 'Gibt frei …' : `Push freigeben (${r.head.slice(0, 7)})`}</button>}
         </div>
       </>}
@@ -742,7 +743,7 @@ export function PrDetail({ repo, nummer }: { repo: string; nummer: string }) {
   const ZUSTAND: Record<string, string> = { APPROVED: 'freigegeben', CHANGES_REQUESTED: 'Änderungen verlangt', COMMENTED: 'kommentiert', DISMISSED: 'zurückgezogen' };
   return (
     <div className="seite">
-      <p className="zurueck"><a href={(() => { try { return sessionStorage.getItem('v2-prs-liste') || 'v2/prs'; } catch { return 'v2/prs'; } })()}>← PRs</a></p>
+      <p className="zurueck"><a href={gemerkt('v2-prs-liste') || 'v2/prs'}>← PRs</a></p>
       <h1>{d.pr} · {d.titel}</h1>
       <p className="zustand">{!d.offen ? 'Nicht mehr offen — gemergt oder geschlossen.' : d.merge ? 'Freigegeben — wartet auf den Merge (macht ein Mensch auf GitHub).' : d.wartetAuf.length ? `Wartet auf ${d.wartetAuf.join(', ')} — ${d.warum}.` : `${d.warum || 'Wartet auf niemanden'}.`}</p>
       {d.entscheidung === 'CHANGES_REQUESTED' && <p className="zustand">{d.verlangt?.wer.length ? `Änderungen verlangt von ${d.verlangt.wer.join(', ')}.` : 'GitHub meldet „Änderungen verlangt“. Wer das verlangt hat, steht nicht in unserer Kopie — das Review ist älter als die letzten, die wir lesen; auf GitHub steht es.'}</p>}
@@ -848,11 +849,13 @@ export function Dokument({ vault, paket, datei }: { vault: string | null; paket:
   );
 }
 
+/** sessionStorage lesen; gesperrter Speicher (privates Fenster, Richtlinie) ergibt null statt eines Absturzes. */
+function gemerkt(k: string): string | null { try { return sessionStorage.getItem(k); } catch { return null; } }
+
 /** Runde 4 (Knut B5): „← zurück“ dorthin, woher man kam (Arbeit, Thema, Jetzt …) — sonst zu den Dokumenten. */
 const HERKUNFT: [RegExp, string][] = [[/\/v2\/arbeit\//, 'Unter-Chat'], [/\/v2\/arbeit/, 'Arbeit'], [/\/v2\/themen/, 'Themen'], [/\/v2\/thema/, 'Thema'], [/\/v2\/entscheidungen/, 'Entscheidungen'], [/\/v2\/prs/, 'PRs'], [/\/v2\/erledigt/, 'Erledigt'], [/\/v2\/chats/, 'Alle Chats'], [/\/v2\/dokumente/, 'Dokumente'], [/\/v2\/?$/, 'Jetzt']];
 function herkunft(): { url: string; text: string } {
-  let v = '';
-  try { v = sessionStorage.getItem('v2-vorher') ?? ''; } catch { /* egal */ }
+  const v = gemerkt('v2-vorher') ?? '';
   const t = HERKUNFT.find(([re]) => re.test(v.split('?')[0]))?.[1];
   const i = v.indexOf('/v2/');
   const hier = v === location.pathname + location.search;   // nach „Zurück“ im Browser kann die Herkunft die Seite selbst sein (Pass C)

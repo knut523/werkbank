@@ -35,7 +35,10 @@ export function UnterChat({ id }: { id: string }) {
   // Live-Aktualisierung: während der Unter-Chat arbeitet alle 3 s, sonst alle 20 s.
   useEffect(() => { const t = setInterval(neu, arbeitet ? 3000 : 20000); return () => clearInterval(t); }, [arbeitet, neu]);
   // Ans Seitenende statt an die letzte Nachricht: die feste Leiste liegt sonst über der neuesten Nachricht (Abnahme 06.11.).
-  useEffect(() => { if (anzahl) document.scrollingElement?.scrollTo({ top: document.scrollingElement.scrollHeight }); }, [anzahl]);
+  // Phase 4: nur nachziehen, wenn man schon unten war — wer hochgescrollt hat, um etwas nachzulesen, bleibt dort (der erste Stand springt immer).
+  const unten = useRef(true), erst = useRef(true);
+  useEffect(() => { const f = () => { const e = document.scrollingElement; if (e) unten.current = e.scrollHeight - e.scrollTop - e.clientHeight < 120; }; window.addEventListener('scroll', f, { passive: true }); return () => window.removeEventListener('scroll', f); }, []);
+  useEffect(() => { if (anzahl && (erst.current || unten.current)) { erst.current = false; document.scrollingElement?.scrollTo({ top: document.scrollingElement.scrollHeight }); } }, [anzahl]);
   if (fehler && !d) return <Fehler text={fehler} nochmal={neu} />;   // ein Aussetzer beim Neuladen ersetzt nicht den Chat (und den angefangenen Text)
   if (!d) return <Laedt />;
   const s = d.steuer;
