@@ -2242,7 +2242,7 @@ const bedarfDeps = {
   },
   freigabe: async (u: User, strand: string, pfad: string, bis: Date) => {
     const j = await brueckenFreigabe(u, strand, { pfad, bis: bis.getTime() });
-    return String(j.pfad ?? pfad);   // echter Pfad (Symlinks aufgelöst) — so steht es in der Antwort an den Strang
+    return { pfad: String(j.pfad ?? pfad), neu: j.neu !== false };   // echter Pfad (Symlinks aufgelöst) — so steht es in der Antwort an den Strang
   },
   entziehen: (u: User, strand: string, pfad: string) => brueckenFreigabe(u, strand, { pfad, entziehen: true }),
 };

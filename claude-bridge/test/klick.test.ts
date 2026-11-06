@@ -51,6 +51,10 @@ test('jcode-Wächter: klick nur mit WERKBANK_KLICK=1, ohne Shell-Zeichen; Ziele 
   assert.match(String(jcodeEntscheid('read', { file_path: '/home/x/.cache/p436/testkonten.txt' }, '/tmp')), /gesperrt/, 'Passwörter der Testkonten sieht jcode nicht');
   assert.match(String(jcodeEntscheid('bash', { command: 'cat ~/.cache/p436/testkonten-basic.txt' }, '/tmp')), /gesperrt/);
   assert.equal(jcodeEntscheid('write', { file_path: '/tmp/bericht.md', content: 'Persona-Runde mit den Testkonten Lisa und Knut' }, '/tmp'), null, 'das Wort allein sperrt nicht (Pass C S3)');
+  // Pass C (Claude, Fix-Runde 2, S3): GitHub-Schlüssel, Vaultwarden-Sitzung, Brücken-Konten, opencode-2-Daten — Hook und Shell
+  for (const f of ['/home/x/.config/gh/hosts.yml', '/home/x/.config/vw/session', '/home/x/.local/opencode2/xdg/data/s.json', '/w/.runtime/bridge/claude-accounts.json'])
+    assert.match(String(jcodeEntscheid('read', { file_path: f }, '/tmp')), /gesperrt/, f);
+  assert.equal(shell('cat ~/.config/gh/hosts.yml').status, 126, 'Shell sperrt dieselben Orte');
 });
 
 const testInstanz = await fetch('http://127.0.0.1:3436/v2/', { signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false);

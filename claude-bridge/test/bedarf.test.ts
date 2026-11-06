@@ -26,9 +26,11 @@ test('Zugang: nur bestehende Ordner, keine Geheimnis-Orte, höchstens 24 h, unbe
 });
 
 test('Phase 4: ein erteilter Zugang lässt sich wieder entziehen (Rollback der Werkbank)', () => {
-  mod.strangFreigabe('u2', C, ANDERS, Date.now() + 3600_000);
+  assert.equal(mod.strangFreigabe('u2', C, ANDERS, Date.now() + 3600_000).neu, false, 'war aus dem ersten Test noch gültig');
   assert.ok(mod.strangFreigaben('u2', C).includes(ANDERS));
   assert.equal(mod.strangFreigabeEntziehen('u2', C, ANDERS), true);
+  assert.equal(mod.strangFreigabe('u2', C, ANDERS, Date.now() + 3600_000).neu, true, 'nach dem Entziehen neu');
+  mod.strangFreigabeEntziehen('u2', C, ANDERS);
   assert.ok(!mod.strangFreigaben('u2', C).includes(ANDERS));
   assert.equal(mod.strangFreigabeEntziehen('u2', C, ANDERS), false, 'zweimal: nichts mehr da');
 });

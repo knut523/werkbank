@@ -1060,7 +1060,7 @@ export function fremderWorktree(datei: string, andere: { key: string; dir?: stri
 }
 
 /** Bedarfskanal (Knut 06.11.): erteilter Zugang eines Strangs zu einem Ordner außerhalb seines Worktrees, bis `bis` (≤ 24 h). */
-export function strangFreigabe(userId: string, convId: string, pfad: string, bis: number): { pfad: string; bis: number } {
+export function strangFreigabe(userId: string, convId: string, pfad: string, bis: number): { pfad: string; bis: number; neu: boolean } {
   const key = `${safeId(userId)}:${safeId(convId)}`;
   const e = orchMap[key];
   if (!e || e.kind === 'leitstand' || e.kind === 'worker') throw Object.assign(new Error('Strang unbekannt.'), { status: 404 });
@@ -1070,10 +1070,12 @@ export function strangFreigabe(userId: string, convId: string, pfad: string, bis
   // Phase 4 (A-S2/S6): auch jeder Punkt-Ordner direkt im Home (.config, .local, .cache, .melious …) und jeder Ordner über dem Home
   const imHome = real.startsWith(homedir() + '/') ? real.slice(homedir().length + 1) : null;
   if (/(^|\/)(\.ssh|\.claude|\.runtime|\.gnupg)(\/|$)|\/\.config\/vw(\/|$)/.test(real) || imHome?.startsWith('.') || (homedir() + '/').startsWith(real === '/' ? '/' : real + '/')) throw Object.assign(new Error('Geheimnis-Orte und das ganze Home gibt es nicht als Zugang.'), { status: 400 });
+  // Pass B (Fix-Runde 2): neu = es gab für den Pfad noch keinen gültigen Zugang — nur dann darf die Werkbank ihn beim Rollback entziehen
+  const neu = !(e.freigaben ?? []).some((f) => f.bis > Date.now() && f.pfad === real);
   e.freigaben = [...(e.freigaben ?? []).filter((f) => f.bis > Date.now() && f.pfad !== real), { pfad: real, bis }];
   saveMap();
-  log('strang freigabe', { conv: key, pfad: real, bis: new Date(bis).toISOString() });
-  return { pfad: real, bis };
+  log('strang freigabe', { conv: key, pfad: real, bis: new Date(bis).toISOString(), neu });
+  return { pfad: real, bis, neu };
 }
 /** Phase 4: einen erteilten Zugang wieder entziehen (die Werkbank rollt eine Antwort zurück, deren Nachricht nicht ankam).
  *  true = es gab ihn. Pfad wie bei der Freigabe zurückgegeben (aufgelöst) oder wie angefragt. */
@@ -2446,7 +2448,7 @@ export async function ensembleLaufen(o: EnsAufruf): Promise<EnsErgebnis & { prot
         oc2 = async (m, p, rolle) => {
           const t0 = Date.now();
           const r = await l.zug({ cwd: o.cwd, prompt: p, model: m, timeoutS, abbruch: o.abbruch, titel: rolle });
-          buche(r.usage, r.gelaufen);
+          buche(r.usage, r.gelaufen, r.out.code === 0 && !!r.j);
           return { rolle, modell: m, ok: r.code === 0 && !!r.text.trim(), text: r.text.trim(), s: (Date.now() - t0) / 1000, usage: r.usage, laeufer: 'opencode2', gelaufen: r.gelaufen, ...(r.code === 0 && r.text.trim() ? {} : { grund: r.grund ?? 'leer' }) };
         };
       } else oc2Grund ||= srv.grund() ?? 'Server startet nicht';
@@ -2553,10 +2555,11 @@ export async function melSub(userId: string, convId: string, b: { auftrag?: unkn
     const timeoutS = envZahl('BRIDGE_MEL_SUB_TIMEOUT_S', 900, 60), abbruch = () => live.abort.signal.aborted;
     let energie = 0, laeufer = oc2 ? 'opencode2' : 'jcode';
     // Pass B, A3: jeder Versuch wird gebucht (auch ein fehlgeschlagener verbraucht Energie), nicht nur der letzte.
-    const buche = (usage: MeliousUsage, gelaufen: string) => {
+    // Pass B (Fix-Runde 2): parent/delegation wie seit e2969f2 (Token-Budget und Messung je Strang), Ausgang je Versuch
+    const buche = (usage: MeliousUsage, gelaufen: string, ok: boolean) => {
       energie += mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0;
       try { live.req!.onMeliousUsage?.(usage, gelaufen); } catch { /* egal */ }
-      try { live.req!.onTurnLog?.({ conv: convId, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${gelaufen} (${laeufer}, melious_sub)`, input: usage.input + usage.cacheRead, output: usage.output, cacheRead: usage.cacheRead, energie: mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0, outcome: 'ok', ms: Date.now() - t0 }); } catch { /* egal */ }
+      try { live.req!.onTurnLog?.({ conv: convId, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${gelaufen} (${laeufer}, melious_sub)`, input: usage.input + usage.cacheRead, output: usage.output, cacheRead: usage.cacheRead, energie: mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0, outcome: ok ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: 'mel-sub', parent: key }); } catch { /* egal */ }
     };
     const lauf = async (m: string) => {
       laeufer = oc2 ? 'opencode2' : 'jcode';

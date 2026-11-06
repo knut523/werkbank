@@ -46,6 +46,10 @@ test('Gegenprüfung 06.11.: Brücke weg beim Erteilen → Bedarf bleibt offen (W
   await assert.rejects(bedarfAntworten(U, 'b-00000004', { antwort: 'erteilt', notiz: '' }, { senden: async () => { throw new Error('LibreChat weg'); }, freigabe: async () => '/real/b', entziehen: async (_u, s, p) => { entzogen.push(`${s} ${p}`); }, col: () => col3 as any }), /LibreChat/);
   assert.equal(col3.docs[0].status, 'offen');
   assert.deepEqual(entzogen, ['s2 /real/b']);
+  // Pass B (Fix-Runde 2): gab es den Zugang schon (zweiter Bedarf, verlorener Doppelklick), bleibt er beim Rollback bestehen
+  const col4 = sammlung([{ _id: 'b-00000005', userId: 'k', art: 'zugang', text: 'y', pfad: '/w/b', strand: { id: 's2' }, status: 'offen' }]);
+  await assert.rejects(bedarfAntworten(U, 'b-00000005', { antwort: 'erteilt', notiz: '' }, { senden: async () => { throw new Error('LibreChat weg'); }, freigabe: async () => ({ pfad: '/real/b', neu: false }), entziehen: async (_u, s, p) => { entzogen.push(`${s} ${p}`); }, col: () => col4 as any }), /LibreChat/);
+  assert.deepEqual(entzogen, ['s2 /real/b'], 'kein zweites Entziehen');
 });
 
 test('Gegenprüfung 06.11.: „Erteilen“ nur für Zugang und Entscheidung — sonst Erledigt (selbst getan) oder Ablehnen', async () => {

@@ -68,7 +68,8 @@ export const ERTEILBAR = new Set(['zugang', 'entscheidung']);
  *  (scheitert sie, bleibt der Bedarf offen), dann der Status, dann die Nachricht (scheitert sie, wieder offen — Wiederholen geht). */
 export async function bedarfAntworten(u: User, id: string, a: { antwort: BedarfAntwort; notiz: string; dauerMin?: number }, deps: {
   senden: (u: User, strand: string, text: string) => Promise<unknown>;
-  freigabe: (u: User, strand: string, pfad: string, bis: Date) => Promise<string | void>;
+  /** Ergebnis: echter Pfad, oder { pfad, neu } (neu = vorher kein gültiger Zugang für den Pfad). */
+  freigabe: (u: User, strand: string, pfad: string, bis: Date) => Promise<string | { pfad: string; neu: boolean } | void>;
   /** Phase 4: Zugang wieder entziehen, wenn die Antwort zurückgerollt wird (sonst bliebe er bis zur Frist, auch nach „Ablehnen“). */
   entziehen?: (u: User, strand: string, pfad: string) => Promise<unknown>;
   col?: () => ReturnType<typeof bedarfCol>;
@@ -79,8 +80,12 @@ export async function bedarfAntworten(u: User, id: string, a: { antwort: BedarfA
   if (b.status !== 'offen') throw Object.assign(new Error('Schon beantwortet — Seite neu laden.'), { status: 409 });
   if (a.antwort === 'erteilt' && !ERTEILBAR.has(b.art)) throw Object.assign(new Error('Erteilen gibt es nur für Zugang und Entscheidung — sonst selbst erledigen („Erledigt“ mit Beleg) oder „Ablehnen“.'), { status: 400 });
   const bis = b.art === 'zugang' && a.antwort === 'erteilt' ? zugangBis(a.dauerMin ?? 240, now) : null;
-  const real = bis ? (await deps.freigabe(u, b.strand.id, b.pfad, bis)) || b.pfad : b.pfad;
-  const entziehen = async () => { if (bis) await deps.entziehen?.(u, b.strand.id, real).catch(() => null); };
+  const fr = bis ? await deps.freigabe(u, b.strand.id, b.pfad, bis) : null;
+  const real = (typeof fr === 'string' ? fr : fr?.pfad) || b.pfad;
+  // Pass B / Pass C (Fix-Runde 2): nur einen Zugang entziehen, den diese Antwort neu angelegt hat — sonst nähme ein verlorener Doppelklick
+  // oder ein zweiter Bedarf für denselben Ordner einen gültigen Zugang still weg.
+  const neu = typeof fr === 'object' && fr ? fr.neu : true;
+  const entziehen = async () => { if (bis && neu) await deps.entziehen?.(u, b.strand.id, real).catch(() => null); };
   const r = await col().updateOne({ _id: id as any, status: 'offen' }, { $set: { status: a.antwort, notiz: a.notiz.slice(0, 1000), antwortAt: new Date(now), ...(bis ? { bis, pfadReal: real } : {}) } });
   if (!r.modifiedCount) { await entziehen(); throw Object.assign(new Error('Schon beantwortet — Seite neu laden.'), { status: 409 }); }
   try { await deps.senden(u, b.strand.id, bedarfAntwortText({ ...b, pfad: real }, a.antwort, a.notiz, bis)); }

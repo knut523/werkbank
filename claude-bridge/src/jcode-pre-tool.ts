@@ -7,11 +7,14 @@
 import { resolve } from 'node:path';
 
 // Was nie gelesen oder geschrieben werden darf: Umgebungsdateien, Prozess-Umgebung, Zugangsdaten der Werkzeuge.
-const GEHEIM = [
+export const GEHEIM = [
   /(^|[\/\s'"=:])\.env(\.[\w.-]+)?($|[\/\s'"])/i,          // .env, .env.local, librechat/.env …
   /\/proc\//i, /environ(?![a-z])/i,                         // nicht „environment“
   /\.claude\/\.credentials/i, /\.claude\.json/i, /\.melious\//i, /\.jcode\/(auth|config|servers)/i,
   /\.ssh\//i, /id_(rsa|ed25519|ecdsa)/i, /\.netrc/i, /\.git-credentials/i, /werkbank\.creds/i, /\.aws\//i, /testkonten(-basic)?\.txt/i,   // J3: Passwörter der Testkonten nur für das Klickwerkzeug selbst (Dateiname, nicht jedes Erwähnen — Pass C S3)
+  // Pass C (Claude, Fix-Runde 2, S3): dieselben Orte wie GEHEIM_MUSTER der opencode-2-Läufer — GitHub-Schreibschlüssel, Vaultwarden-
+  // Sitzung, Konten der Brücke, Daten der opencode-2-Server (Prompts und Diffs aller Personen)
+  /\.config\/gh\//i, /\.config\/vw\//i, /\.runtime\//i, /claude-accounts\.json/i, /\.local\/opencode2\//i,
 ];
 const SCHREIBEND = new Set(['write', 'edit', 'multiedit', 'patch', 'apply_patch']);
 
