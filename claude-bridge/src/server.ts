@@ -10,7 +10,7 @@
 import { freigabeVerbrauchen } from './freigabe.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, strangFreigabe, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, strangFreigabe, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -413,15 +413,15 @@ const server = createServer(async (req, res) => {
       return st ? json(res, 200, { id: inj[1], ...st }) : json(res, 404, { error: 'unbekannt' });
     }
     // Plan 165: Werkzeuge der Strang-Leads (Werkbank-MCP mit Person und Unterhaltung aus seiner Umgebung, nie aus Argumenten).
-    const deleg = req.method === 'POST' ? url.pathname.match(/^\/internal\/(delegate|delegate-stand|delegate-urteil|phase|mel-sub|auslastung)$/) : null;
+    const deleg = req.method === 'POST' ? url.pathname.match(/^\/internal\/(delegate|delegate-stand|delegate-urteil|phase|mel-sub|ensemble|auslastung)$/) : null;
     if (deleg) {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
       const b = await readBody(req);
       const userId = String(b.userId ?? ''), conv = String(b.conv ?? '');
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId) || !/^[A-Za-z0-9_-]{1,64}$/.test(conv)) return json(res, 400, { error: 'Ungültige Person oder Unterhaltung.' });
       // Knut 19.10.: melious_sub und auslastung auch für den Lead (native Verteilung Claude ↔ Melious).
-      const fn = { delegate: startDelegation, 'delegate-stand': delegationStand, 'delegate-urteil': delegationUrteil, phase: phaseWechseln, 'mel-sub': melSub, auslastung: (u: string, c: string) => auslastungFuer(u, c) }[deleg[1] as 'delegate'];
-      if (deleg[1] === 'mel-sub') {
+      const fn = { delegate: startDelegation, 'delegate-stand': delegationStand, 'delegate-urteil': delegationUrteil, phase: phaseWechseln, 'mel-sub': melSub, ensemble: ensembleReview, auslastung: (u: string, c: string) => auslastungFuer(u, c) }[deleg[1] as 'delegate'];
+      if (deleg[1] === 'mel-sub' || deleg[1] === 'ensemble') {
         // Ein Melious-Teilagent läuft bis 15 min; der Aufrufer (fetch/undici) bricht ohne Kopfzeilen oder ohne Daten nach 300 s ab
         // („fetch failed“, gemessen 06.11.). Deshalb sofort 200 und alle 30 s ein Leerzeichen (vor JSON erlaubt); Fehler im Feld error.
         // Gegenprüfung 06.11.: Schreiben auf eine schon getrennte Verbindung meldet sich später als 'error'-Ereignis — ohne Zuhörer
@@ -439,6 +439,24 @@ const server = createServer(async (req, res) => {
       }
       const r = await fn(userId, conv, b);
       return r.ok ? json(res, 200, r) : json(res, r.status, { error: r.error });
+    }
+    // Knut 06.11. (D2): Gegenprüfung der Werkbank über dasselbe Ensemble — die Brücke holt das Melious-Konto der Person selbst.
+    if (req.method === 'POST' && url.pathname === '/internal/ensemble-web') {
+      if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
+      const b = await readBody(req);
+      const userId = String(b.userId ?? '');
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId)) return json(res, 400, { error: 'Ungültige Person.' });
+      res.on('error', () => {});
+      const offen = () => !res.destroyed && !res.writableEnded;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write(' ');
+      const halten = setInterval(() => { if (offen()) res.write(' '); }, 30_000);
+      res.on('close', () => clearInterval(halten));
+      let weg = false; res.on('close', () => { weg = !res.writableEnded; });   // Aufrufer weg → Läufe abbrechen
+      try { const r = await ensembleFuerWeb(await claudeAccounts(userId), userId, b, () => weg); if (offen()) res.end(JSON.stringify(r.ok ? r : { error: r.error, status: r.status, nutzung: r.nutzung ?? [] })); }
+      catch (e: any) { if (offen()) res.end(JSON.stringify({ error: String(e?.message ?? e).slice(0, 300), status: 500 })); }
+      finally { clearInterval(halten); }
+      return;
     }
     if (req.method === 'GET' && url.pathname === '/internal/orch-state') {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });

@@ -436,12 +436,19 @@ test('S4 Gegenprüfung: nach zwei Neustarts der Web-App ohne sie abschließen st
   assert.equal(d.status, 'fertig'); assert.match(d.gp.fehler, /zwei Neustarts/); assert.equal(f.posts.length, 1);
 });
 
-test('Konzept J1 (Hauptsitzung 06.11.): Ensemble — drei jcode-Läufe über delegieren, jeder Befund am Code geprüft; abschaltbar', async () => {
+test('Knut 06.11. (D2): Review und Tiefes Review rufen das opencode-2-Ensemble (ensemble_review) mit dem Diff-Bereich; Claude prüft danach; Rückfall delegieren', async () => {
   const R = await import('../server/prreview.ts');
-  const t = R.reviewPrompt({ repo: 'a/b', number: 1, title: 't', url: 'u', head: SHA, by: null, trigger: 'tag' }, '/wt', '1-x');
-  assert.match(t, /ENSEMBLE \(Pass 1 über jcode\): Starte ZUERST drei unabhängige Läufe mit dem Werkzeug `delegieren`/);
-  assert.match(t, /JEDEN am Code nachprüfen/);
-  assert.match(t, /gefunden in Lauf A\/B\/C/);
+  const dm = { basis: 'b'.repeat(40), zeilen: 10, delta: null, dateien: {}, hinweis: [] };
+  for (const tiefe of ['regular', 'deep']) {
+    const t = R.reviewPrompt({ repo: 'a/b', number: 1, title: 't', url: 'u', head: SHA, by: null, trigger: 'tag' }, '/wt', '1-x', { tiefe, dm });
+    assert.match(t, /Rufe nach den Pre-Checks \(Basis, Diff-Umfang\) als ersten Prüfschritt das Werkzeug `ensemble_review` auf/, tiefe);
+    assert.ok(t.includes(`bereich: \`${'b'.repeat(40)}..${SHA}\``), 'Diff gegen die Basis');
+    assert.match(t, /JEDEN bestätigten Befund selbst am Code nachprüfen \(Claude-Endprüfung/);
+    assert.match(t, /Rückfall drei Läufe mit `delegieren`/);
+  }
+  const delta = R.reviewPrompt({ repo: 'a/b', number: 1, title: 't', url: 'u', head: SHA, by: null, trigger: 'delta' }, '/wt', '1-x', { dm: { ...dm, delta: { von: 'c'.repeat(40), zeilen: 3 } }, vorher: { head: 'c'.repeat(40), paket: 'p' } });
+  assert.ok(delta.includes(`bereich: \`${'c'.repeat(40)}..${SHA}\``), 'Delta-Review: nur das Delta');
+  assert.match(R.reviewPrompt({ repo: 'a/b', number: 1, title: 't', url: 'u', head: SHA, by: null, trigger: 'tag' }, '/wt', '1-x'), /<merge-base>\.\.HEAD` — bestimme die Basis vorher selbst/, 'ohne Basis selbst bestimmen');
   assert.equal(R.ensembleAn({}), true, 'Vorgabe an');
   assert.equal(R.ensembleAn({ WERKBANK_REVIEW_ENSEMBLE: 'aus' }), false);
 });

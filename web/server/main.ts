@@ -83,7 +83,7 @@ import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsC
 import { regelDir, regelVorschlaege } from './regelquelle.ts';
 import { klonPfad, reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
 import { execModus, lokalAdapter } from './reviewexec.ts';
-import { meliousPassC } from './gegenpruefung.ts';
+import { ensemblePassC } from './gegenpruefung.ts';
 import { postReview, statusKommentar, schreibenAus, writeToken, erstelleDraftPr, prOeffnen, type ReviewEvent } from './githubwrite.ts';
 import { ketteModus, starteKette, ketteTick, ketten as ketteCol, publicKette, brichAb as ketteAbbrechen, repoAusTicket, AKTIV as KETTE_AKTIV, type KDeps } from './jirakette.ts';
 import { fuehreAus as githubAktion } from './githubaktion.ts';
@@ -4677,7 +4677,7 @@ async function backgroundJobs() {
           if (!u) return null;
           const basis = r.delta?.von ?? r.basis;
           if (!r.worktree || !basis) return { ok: false, text: '', fehler: 'keine Basis für den Diff' };
-          return meliousPassC(u, { wt: r.worktree, basis, zweck: `Review ${r.repo}#${r.number}: ${r.title ?? ''}${r.delta ? ' (nur Änderungen seit dem letzten Review)' : ''}` });
+          return ensemblePassC(u, { wt: r.worktree, basis, zweck: `Review ${r.repo}#${r.number}: ${r.title ?? ''}${r.delta ? ' (nur Änderungen seit dem letzten Review)' : ''}` });
         },
         sendStrand: async (r, text) => { const u = await userById(r.ownerId); if (!u) throw new Error('Besitzer nicht gefunden'); return sendOrch(u, r.strand, text, 'leitstand'); },
         // Paket 223: nicht gepostet / Wache / Ticker-Lücke → Hauptchat des Auto-Review-Besitzers, mit Link zum Handeln.

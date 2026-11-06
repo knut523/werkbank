@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './profil.ts';
 import { freigabeMerken } from './freigabe.ts';
-import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
+import { orchRoots, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
@@ -23,7 +23,9 @@ import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn } from './schlange.ts';
-import { opencode2An, opencode2Ab, opencode2Pool } from './laeufer.ts';
+import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer } from './laeufer.ts';
+import { ensemble, mitRueckfall, schattenAn, VERIFIZIERER, type Lauf, type EnsLauf, type EnsErgebnis } from './ensemble.ts';
+import { createServer as netServer } from 'node:net';
 import { opencode2Server, oc2Home, oc2Ports, oc2Version, type Oc2Server } from './oc2server.ts';
 import { modellReihe, ensembleLauf } from './modellwahl.ts';
 import { schaetze, passt, passtJcode, schaetzungText, speicherStand, jcodeTopfGb, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
@@ -2341,6 +2343,112 @@ async function melKonto(live: Live, userId: string): Promise<Account | null> {
     const mel = normalizeAccounts(live.req?.accounts ? await live.req.accounts() : [], live.req?.token).find(isMelious);
     return mel && meliousUsable(mel, exhaustedOf(safeId(userId)), Date.now()) ? mel : null;
   } catch { return null; }
+}
+
+// ---------- Review-Ensemble über opencode 2 (Knut 06.11., D1/D2; Ablauf in ensemble.ts) ----------
+const BEREICH = /^(?!-)[\w./^~-]{1,120}\.{2,3}(?!-)[\w./^~-]{1,120}$/;
+const freierPort = () => new Promise<number>((res, rej) => { const s = netServer(); s.once('error', rej); s.listen(0, '127.0.0.1', () => { const p = (s.address() as any).port; s.close(() => res(p)); }); });
+/** BRIDGE_ENSEMBLE_OC2=aus: alle Läufe über jcode (Rückweg). Unabhängig von BRIDGE_OPENCODE2 und der 5er-Schwelle (D2). */
+export const ensembleOc2An = () => process.env.BRIDGE_ENSEMBLE_OC2 !== 'aus';
+
+export interface EnsAufruf { mel: Account; cwd: string; auftrag: string; bereich: string; knapp?: boolean; abbruch: () => boolean; kontext: string; buchen?: (u: MeliousUsage, modell: string) => void }
+/** Ein Review-Ensemble: eigener opencode-2-Server (nur für dieses Review), drei Prüfer, Verifizierer + Schatten; Rückfall jcode. */
+export async function ensembleLaufen(o: EnsAufruf): Promise<EnsErgebnis & { protokoll: string }> {
+  const timeoutS = envZahl('BRIDGE_ENSEMBLE_TIMEOUT_S', 900, 60);
+  const d = o.bereich ? await runCmd('git', ['-C', o.cwd, 'diff', o.bereich], { cwd: o.cwd, timeoutMs: 60_000 }) : { code: 0, out: '' };
+  if (d.code !== 0) throw new Error(`Diff ${o.bereich} nicht lesbar: ${d.out.trim().slice(0, 200)}`);
+  // Gegenprüfung 06.11.: leerer Bereich (z. B. Delta ohne neue Änderungen) — nichts zu prüfen, statt drei leerer Läufe.
+  if (o.bereich && !d.out.trim()) throw Object.assign(new Error(`Keine Änderungen in ${o.bereich} — nichts zu prüfen, kein Ensemble gelaufen.`), { leer: true });
+  const lf = await runCmd('git', ['-C', o.cwd, 'ls-files'], { cwd: o.cwd, timeoutMs: 30_000 });
+  if (lf.code !== 0) throw new Error('Arbeitsordner ist kein Git-Worktree.');
+  const dateien = lf.out.split('\n').filter(Boolean);
+  const wurzel = realpathSync(o.cwd);
+  const lies = (f: string) => { try { const p = realpathSync(join(wurzel, f)); return p.startsWith(wurzel + '/') ? readFileSync(p, 'utf8') : null; } catch { return null; } };
+  const buche = (u: MeliousUsage, m: string) => { try { o.buchen?.(u, m); } catch { /* egal */ } };
+  const jcode: Lauf = async (m, p, rolle) => {
+    const t0 = Date.now();
+    const out = await jcodeSpawn({ cwd: o.cwd, prompt: p, model: m, tools: 'read,bash,agentgrep', key: o.mel.token, timeoutS, abbruch: o.abbruch });
+    const a = jcodeAuswerten(out, o.cwd, m);
+    buche(a.usage, a.gelaufen);
+    const text = String(a.j?.text ?? '').trim();
+    return { rolle, modell: m, ok: out.code === 0 && !!text, text, s: (Date.now() - t0) / 1000, usage: a.usage, laeufer: 'jcode', gelaufen: a.gelaufen, ...(out.code === 0 && text ? {} : { grund: `jcode Exit ${out.code}` }) };
+  };
+  // D2: je Review ein eigener Server — eigener Port, eigene Sitzungsdaten, eigenes Passwort; ein Absturz trifft nur dieses Review.
+  const tmp = mkdtempSync(join(tmpdir(), 'ens-oc2-'));
+  let srv: Oc2Server | null = null, oc2: Lauf | null = null, oc2Grund = '';
+  try {
+    if (ensembleOc2An()) {
+      srv = opencode2Server({ home: oc2Home(), ports: [await freierPort()], version: oc2Version(), lauf: join(tmp, 'lauf'), daten: tmp, log: (m, x) => log(m, { ...(x ?? {}), ensemble: o.kontext }) });
+      const z = await srv.sichern(o.mel.token).catch(() => null);
+      if (z) {
+        const l = opencode2Laeufer({ base: z.urls[0], passwort: z.passwort });
+        oc2 = async (m, p, rolle) => {
+          const t0 = Date.now();
+          const r = await l.zug({ cwd: o.cwd, prompt: p, model: m, timeoutS, abbruch: o.abbruch, titel: rolle });
+          buche(r.usage, r.gelaufen);
+          return { rolle, modell: m, ok: r.code === 0 && !!r.text.trim(), text: r.text.trim(), s: (Date.now() - t0) / 1000, usage: r.usage, laeufer: 'opencode2', gelaufen: r.gelaufen, ...(r.code === 0 && r.text.trim() ? {} : { grund: r.grund ?? 'leer' }) };
+        };
+      } else oc2Grund = srv.grund() ?? 'Server startet nicht';
+    } else oc2Grund = 'BRIDGE_ENSEMBLE_OC2=aus';
+    const schatten = schattenAn();
+    const e = await ensemble({ auftrag: o.auftrag, bereich: o.bereich, diff: d.out, dateien, lies, lauf: mitRueckfall(oc2, jcode, o.abbruch), schatten, knapp: o.knapp });
+    // D1: beide Urteile protokollieren (Vergleich glm-5.2 gegen den Schatten glm-5.3-flash nach zwei Wochen im Bericht).
+    const ordner = join(cfg.stateDir, 'ensemble'); mkdirSync(ordner, { recursive: true });
+    const protokoll = join(ordner, `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 6)}.json`);
+    const kurz = (r: EnsLauf | null) => r && { modell: r.modell, gelaufen: r.gelaufen, laeufer: r.laeufer, ok: r.ok, s: Math.round(r.s), grund: r.grund ?? null, usage: r.usage };
+    try { writeFileSync(protokoll, JSON.stringify({ zeit: new Date().toISOString(), kontext: o.kontext, bereich: o.bereich, oc2: oc2 ? 'an' : oc2Grund, pruefer: e.pruefer.map(kurz), sPruefer: Math.round(e.sPruefer), sVerifizierer: Math.round(e.sVerifizierer), stellen: e.stellen, verifizierer: { ...kurz(e.verifizierer), text: e.verifizierer.text }, schatten: e.schatten ? { ...kurz(e.schatten), text: e.schatten.text } : null }, null, 1)); } catch { /* Protokoll ist Zusatz */ }
+    log('ensemble-review', { kontext: o.kontext, oc2: oc2 ? 'an' : oc2Grund, ok: e.ok, sPruefer: Math.round(e.sPruefer), sVerifizierer: Math.round(e.sVerifizierer), stellen: e.stellen, laeufer: e.pruefer.map((r) => `${r.modell}:${r.laeufer}:${r.ok ? 'ok' : 'fehlt'}`), verifizierer: e.verifizierer.ok, schatten: e.schatten ? (e.schatten.ok ? e.schatten.text.length : 'fehlt') : null, protokoll });
+    return { ...e, text: e.text + (oc2 ? '' : `\n  ⚠ opencode 2 nicht verfügbar (${oc2Grund}) — alle Läufe über jcode.`), protokoll };
+  } finally {
+    srv?.stop();
+    try { rmSync(tmp, { recursive: true, force: true }); } catch { /* egal */ }
+  }
+}
+
+/** MCP-Werkzeug ensemble_review (Strang-Lead): Auftrag + Diff-Bereich → bestätigte Befunde des Verifizierers. */
+export async function ensembleReview(userId: string, convId: string, b: { auftrag?: unknown; bereich?: unknown; knapp?: unknown }): Promise<Res> {
+  const key = `${safeId(userId)}:${safeId(convId)}`;
+  const live = lives.get(key);
+  if (!live?.req) return { ok: false, status: 409, error: 'ensemble_review geht nur während eines laufenden Zugs.' };
+  if (live.worker) return { ok: false, status: 403, error: 'Worker rufen ensemble_review nicht auf.' };
+  const auftrag = String(b.auftrag ?? '').trim(), bereich = String(b.bereich ?? '').trim();
+  if (!auftrag) return { ok: false, status: 400, error: 'auftrag fehlt.' };
+  if (auftrag.length > KAPPUNG.auftrag) return { ok: false, status: 400, error: `auftrag ist ${auftrag.length} Zeichen lang, höchstens ${KAPPUNG.auftrag}.` };
+  if (bereich && !BEREICH.test(bereich)) return { ok: false, status: 400, error: 'bereich: <basis>..<kopf> oder <basis>...<kopf> (Commits oder Refs).' };
+  const mel = await melKonto(live, userId);
+  if (!mel) return { ok: false, status: 409, error: 'Melious ist für dich gerade nicht verfügbar — Review ohne Ensemble weiter und das im Bericht nennen.' };
+  // Gegenprüfung 06.11.: kein Rückfall auf das Home-Verzeichnis — das Ensemble läuft nur im Arbeitsordner des Strangs.
+  const cwd = orchMap[key]?.dir ?? live.workDir ?? cwdMap[key];
+  if (!cwd) return { ok: false, status: 409, error: 'Kein Arbeitsordner für diesen Zug — ensemble_review läuft nur im Worktree des Strangs.' };
+  emitStatus(live, `🇪🇺 Review-Ensemble (opencode 2, 3 Prüfer + Verifizierer ${VERIFIZIERER})${bereich ? `: ${bereich}` : ''}`);
+  try {
+    const e = await ensembleLaufen({ mel, cwd, auftrag, bereich, knapp: b.knapp === true, abbruch: () => live.abort.signal.aborted, kontext: key, buchen: (u, m) => live.req!.onMeliousUsage?.(u, m) });
+    return e.ok || e.verifizierer.ok ? { ok: true, text: e.text } : { ok: false, status: 502, error: `Ensemble ohne Ergebnis: ${e.grund ?? 'unbekannt'}\n${e.text}` };
+  } catch (err: any) {
+    if (err?.leer) return { ok: true, text: String(err.message) };
+    return { ok: false, status: 500, error: String(err?.message ?? err).replaceAll(mel.token, '***').slice(0, 400) };
+  }
+}
+
+/** Gegenprüfung aus der Werkbank (Ticker, kein laufender Zug): dieselbe Ensemble-Strecke mit dem Melious-Konto der Person. */
+export async function ensembleFuerWeb(accounts: unknown, userId: string, b: { cwd?: unknown; auftrag?: unknown; bereich?: unknown }, abbruch: () => boolean = () => false): Promise<Res & { nutzung?: { modell: string; usage: MeliousUsage }[] }> {
+  const cwd = String(b.cwd ?? ''), auftrag = String(b.auftrag ?? '').trim(), bereich = String(b.bereich ?? '').trim();
+  if (!cwd || !isAbsolute(cwd) || !existsSync(cwd)) return { ok: false, status: 400, error: 'cwd: Worktree des Reviews.' };
+  // Gegenprüfung 06.11.: nur unter den erlaubten Wurzeln der Stränge (Review-Worktrees liegen unter ~/work/knut/pr-reviews).
+  const echt = realpathSync(cwd);
+  if (!orchRoots().some((r) => { try { const w = realpathSync(r); return echt === w || echt.startsWith(w + '/'); } catch { return false; } })) return { ok: false, status: 403, error: 'cwd liegt nicht unter den erlaubten Arbeitsordnern.' };
+  if (!auftrag || auftrag.length > KAPPUNG.auftrag) return { ok: false, status: 400, error: 'auftrag fehlt oder zu lang.' };
+  if (!BEREICH.test(bereich)) return { ok: false, status: 400, error: 'bereich: <basis>..<kopf>.' };
+  const mel = normalizeAccounts(accounts as any, undefined).find(isMelious);
+  if (!mel || !meliousUsable(mel, exhaustedOf(safeId(userId)), Date.now())) return { ok: false, status: 409, error: 'Melious nicht verfügbar.' };
+  const nutzung: { modell: string; usage: MeliousUsage }[] = [];
+  try {
+    const e = await ensembleLaufen({ mel, cwd: echt, auftrag, bereich, abbruch, kontext: `web:${safeId(userId)}`, buchen: (usage, modell) => nutzung.push({ modell, usage }) });
+    return e.verifizierer.ok ? { ok: true, text: e.text, nutzung } : { ok: false, status: 502, error: `Ensemble ohne Ergebnis: ${e.grund ?? 'unbekannt'}`, nutzung };
+  } catch (err: any) {
+    if (err?.leer) return { ok: true, text: String(err.message), nutzung };
+    return { ok: false, status: 500, error: String(err?.message ?? err).replaceAll(mel.token, '***').slice(0, 400), nutzung };
+  }
 }
 
 export async function melSub(userId: string, convId: string, b: { auftrag?: unknown; modell?: unknown }): Promise<Res> {

@@ -746,8 +746,8 @@ function PrAktionen({ pr, fertig }: { pr: string; fertig: () => void }) {
     <div className="kasten pr-aktionen">
       <p className="klein"><b>Ein Unter-Chat soll ran:</b></p>
       <div className="knoepfe">
-        <button type="button" className="knopf" onClick={() => los('review')}>Review</button>
-        <button type="button" className="knopf" onClick={() => los('tief')} title="mehrere Durchgänge, Council, zweites Modell">Tiefes Review</button>
+        <button type="button" className="knopf" onClick={() => los('review')} title="drei Prüfmodelle und ein Verifizierer (Melious, EU), danach prüft Claude jeden Befund">Review</button>
+        <button type="button" className="knopf" onClick={() => los('tief')} title="wie Review, dazu mehr Durchgänge, Council und Tests">Tiefes Review</button>
         <button type="button" className="knopf" onClick={() => los('fixen')} title="offene Review-Punkte beheben; Push nur über Prüfung und Freigabe">Fixen</button>
         <button type="button" className="knopf leise" onClick={() => setAuftrag(auftrag === null ? '' : null)}>Auftrag …</button>
       </div>
