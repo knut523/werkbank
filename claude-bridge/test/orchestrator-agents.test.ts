@@ -77,7 +77,7 @@ test('Sperre im Strang: GitHub- und Jira-Schreiben in allen naheliegenden Formen
   ];
   for (const c of blocked) assert.ok(orchestratorBlock('Bash', { command: c }), `gesperrt: ${c}`);
   const free = ['git status', 'git commit -m "fix config handling"', 'git -C /w/x log --oneline', 'git config --get user.name', 'git config --list',
-    'npm test', 'gh pr view 12', 'gh pr list', 'gh pr diff 3', 'echo "push it" > notes.txt', 'grep -r jira src/'];
+    'npm test', 'echo "push it" > notes.txt', 'grep -r jira src/'];   // gh lesen: seit Knut 06.11. gesperrt (strangerlaubnis.test.ts)
   for (const c of free) assert.equal(orchestratorBlock('Bash', { command: c }), null, `frei: ${c}`);
   assert.ok(orchestratorBlock('mcp__atlassian__createJiraIssue', {}));
   assert.ok(orchestratorBlock('mcp__atlassian__addCommentToJiraIssue', {}));

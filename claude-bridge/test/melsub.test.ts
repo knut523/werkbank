@@ -136,3 +136,14 @@ test('melious_sub nur im laufenden Zug und nicht für fremde Unterhaltungen', as
   assert.equal((await fetch(`http://127.0.0.1:${PORT}/internal/mel-sub`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 403);
   assert.ok(existsSync(ARGS));
 });
+
+test('Knut 06.11.: im Strang lokaler Commit erlaubt, gh (auch lesend) gesperrt — jede Sperre mit Grund im Log', async () => {
+  const c = conv(50);
+  await register('knut', c);
+  const ok = await send(c, tool('Bash', { command: `git -C ${WT} commit -m "Plan 94: Entwurf (Jira PM-1)"` }));
+  assert.match(ok, /Bash ausgeführt/, ok);
+  const nein = await send(c, tool('Bash', { command: 'gh pr view 380' }));
+  assert.match(nein, /nicht ausgeführt|gesperrt/, nein);
+  assert.match(out, /"strang gesperrt"[^\n]*gh pr view 380/);
+});
+

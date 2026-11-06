@@ -427,7 +427,9 @@ const ORCH_BASH_BLOCK: [RegExp, string][] = [
   [/\balias\.[\w-]+/, 'Git-Alias (könnte pushen)'],
   [/\bgit-(send-pack|receive-pack)\b/, 'git push'],
   [/\bcore\.hooksPath\b|\.git\/(hooks|config)\b/, 'Git-Hooks/-Konfiguration'],
-  [/\bgh\s+(pr|issue|release|repo|label|secret|variable|workflow|gist|api)\b(?!\s+(view|list|diff|status|checks)\b)/, 'GitHub-CLI (nur lesen erlaubt: view/list/diff/status/checks)'],
+  // Knut 06.11. (Korrektur): kein GitHub-Zugang für Stränge, auch nicht lesend — GitHub läuft über den Hauptchat (Bedarfskanal:
+  // bedarf_melden art=github, die Hauptsitzung liefert den Inhalt als Datei ins Paket).
+  [/(^|[\s;&|(`$])gh\s+\w/, 'GitHub (auch lesend nur über den Hauptchat — bedarf_melden art=github)'],
   [/api\.github\.com|github\.com\/[^\s]*\.git\b/, 'GitHub direkt ansprechen'],
   [/(atlassian\.net|api\.atlassian\.com)/i, 'Atlassian/Jira direkt ansprechen'],
   // Plan 132 (B7/C8): Wege zum internen Schlüssel der Werkbank — sonst könnte ein Strang Stränge starten oder den Leitstand
@@ -444,6 +446,57 @@ const READ_PATH_TOOLS: Record<string, string> = { Read: 'file_path', Grep: 'path
 
 /** Worker (Plan 165): Paket-Installation/-Änderung als eigener Befehl (nicht in Commit-Texten o. ä.) — node_modules ist verlinkt. */
 export const WORKER_PAKETE = /(?:^|[;&|(]\s*)(?:npm|pnpm|yarn|bun)\b(?:[^|;&\n]*\s(?:i|install|ci|add|update|up|remove|rm|uninstall|link)(?=\s|$|[;&|)])|\s*(?=$|[;&|)]))/;
+
+// ---------- Lokales, das Stränge brauchen (Knut 06.11.: „Gib den Strängen, was sie brauchen.“) ----------
+// Lokale Commits (eigener Worktree, olaf-docs) und Tests gegen das lokale Postgres scheiterten in Strängen an der Eskalation des
+// Klassifikators: eskaliert er, käme eine Rückfrage — die gibt es in Strängen nicht, also abgelehnt (Live-Log: 220× „auto
+// abgelehnt“). strangLokal erkennt genau diese Befehle; der Wächter erlaubt sie dann ausdrücklich (nach orchestratorBlock — Push,
+// Merge, GitHub bleiben vorher gesperrt). Bewusst eng: nur && und eine Ausgabe-Pipe (tail/head/grep/wc/sort), keine Befehls-
+// ersetzung, keine Umleitung außer 2>&1, Pfade nur im eigenen Worktree oder in olaf-docs, Datenbank nur localhost/127.0.0.1.
+const LOKAL_GIT = /^(add|commit|status|diff|log|show|restore|stash|switch|rev-parse|ls-files|blame)$|^checkout$|^branch$/;
+const LOKAL_TEST = [
+  /^npm (test|t)(\s|$)/, /^npm run ([\w.-]+:)*(test|typecheck|lint|check)(:[\w.-]+)*(\s|$)/,
+  /^npx tsx --test(\s|$)/, /^node --test(\s|$)/, /^npx tsc --noEmit(\s|$)/, /^npx vitest run(\s|$)/,
+];
+const LOKAL_PIPE = /^(tail|head|grep|wc|sort|uniq)(\s+[^|]*)?$/;
+const DB_LOKAL = /^postgres(ql)?:\/\/[^@\s/]+@(localhost|127\.0\.0\.1)(:\d+)?\/[\w-]+$/;
+
+export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] }): string | null {
+  if (/[`\n]|\$\(|\$\{/.test(cmd)) return null;
+  // Zitate für die Strukturprüfung neutralisieren (Commit-Texte dürfen ; & > enthalten); doppelte Zitate ohne $ (oben geprüft).
+  const flach = cmd.replace(/"(?:[^"\\]|\\.)*"/g, '"Z"').replace(/'[^']*'/g, "'Z'");
+  if (/;|\|\||(^|[^&])&($|[^&])|<|>(?!&1)/.test(flach.replace(/2>&1/g, ''))) return null;
+  const [kette, ...pipes] = flach.split(/\s\|\s/);
+  if (pipes.some((p) => !LOKAL_PIPE.test(p.trim()))) return null;
+  const roh = cmd.split(/\s\|\s/)[0].split(/\s&&\s/);
+  const segs = kette.split(/\s&&\s/);
+  if (segs.length !== roh.length) return null;
+  const home = process.env.HOME ?? '/home';
+  const innen = (p: string) => { const a = resolve(p.replace(/^~(?=\/|$)/, home).replace(/^["']|["']$/g, '')); return [...o.dirs, ...(o.docs ?? [])].some((d) => a === resolve(d) || a.startsWith(resolve(d) + '/')); };
+  let art = '';
+  for (let i = 0; i < segs.length; i++) {
+    let s = segs[i].replace(/\s*2>&1\s*$/, '').trim(), r = roh[i].replace(/\s*2>&1\s*$/, '').trim();
+    // Umgebungs-Präfixe: nur einfache Werte oder eine lokale Postgres-Adresse
+    for (let m = r.match(/^([A-Z_][A-Z0-9_]*)=(\S+)\s+/); m; m = r.match(/^([A-Z_][A-Z0-9_]*)=(\S+)\s+/)) {
+      if (m[2].includes('://') ? !DB_LOKAL.test(m[2]) : !/^[\w.,:/@-]+$/.test(m[2])) return null;
+      r = r.slice(m[0].length); s = s.replace(/^[A-Z_][A-Z0-9_]*=\S+\s+/, '');
+    }
+    if (/^cd\s+\S+$/.test(r)) { if (!innen(r.slice(3).trim())) return null; continue; }
+    const g = r.match(/^git(?:\s+-C\s+(\S+))?\s+([\w-]+)(\s.*)?$/);
+    if (g) {
+      if (g[1] && !innen(g[1])) return null;
+      if (!LOKAL_GIT.test(g[2])) return null;
+      const rest = g[3] ?? '';
+      if (g[2] === 'branch' && /\s-[a-zA-Z]*[dDmMcCf]|--(delete|move|copy|force|set-upstream)/.test(rest)) return null;
+      if (g[2] === 'stash' && /\s(drop|clear)\b/.test(rest)) return null;
+      art ||= 'lokaler Git-Befehl';
+      continue;
+    }
+    if (LOKAL_TEST.some((re) => re.test(s))) { art = 'lokaler Test'; continue; }
+    return null;
+  }
+  return art || null;
+}
 
 /** Grund, warum ein Aufruf in einem Orchestrator-Strang gesperrt ist — oder null. */
 export function orchestratorBlock(tool: string, input: Record<string, unknown>): string | null {

@@ -6,7 +6,7 @@
 // nächste Nachricht in derselben Unterhaltung kommt ("ja"/"nein"). Dann läuft dieselbe Sitzung
 // weiter und schreibt in die neue Antwort.
 
-import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, realpathSync, statSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, realpathSync, statSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:path';
@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './profil.ts';
 import { freigabeMerken } from './freigabe.ts';
-import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
+import { classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
@@ -1018,6 +1018,17 @@ export function fremderWorktree(datei: string, andere: { key: string; dir?: stri
   return null;
 }
 
+/** Knut 06.11.: Doku-/Plan-Änderungen in olaf-docs lokal committen dürfen Stränge auch außerhalb ihres Worktrees — alle Klone und
+ *  Worktrees namens olaf-docs* unter ~/work und ~/work/knut (BRIDGE_DOCS_DIRS übersteuert, Komma-getrennt). */
+export function docsOrdner(): string[] {
+  if (process.env.BRIDGE_DOCS_DIRS !== undefined) return process.env.BRIDGE_DOCS_DIRS.split(',').map((s) => s.trim()).filter(Boolean);
+  const out: string[] = [];
+  for (const basis of [join(homedir(), 'work'), join(homedir(), 'work', 'knut')]) {
+    try { for (const n of readdirSync(basis)) if (/^olaf-docs/.test(n)) out.push(join(basis, n)); } catch { /* fehlt */ }
+  }
+  return out;
+}
+
 /** Andere laufende Stränge derselben Person (ohne Worker, ohne Hauptchat) mit Arbeitsordner und geschriebenen Dateien. */
 function andereLaufende(live: Live) {
   // Gleicher Arbeitsordner = bewusst geteilt (orch start --shared; ohne es lehnt die Werkbank den Start ab) — nicht sperren (Pass C).
@@ -1047,9 +1058,12 @@ function makeGuard(live: Live) {
       if (cls === 'auto' && live.mode === 'auto' && !escalated) live.autoCalls.set(toolUseId, live.autoCalls.get(toolUseId) ?? { name: tool, input: toolInput, sub: false });
       else live.autoCalls.delete(toolUseId);
     }
-    const decide = (permissionDecision: 'allow' | 'deny', reason: string) => ({
-      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason },
-    });
+    const decide = (permissionDecision: 'allow' | 'deny', reason: string) => {
+      // Knut 06.11. (Sperrenliste): jede Sperre in einem Strang mit Grund ins Log — vorher stand dort nur „denials: [Bash]“, und
+      // niemand konnte belegen, woran ein Commit oder ein DB-Test scheiterte. Zugangsdaten in Adressen geschwärzt.
+      if (live.orch && permissionDecision === 'deny') log('strang gesperrt', { conv: live.key, tool, grund: reason.slice(0, 160), befehl: tool === 'Bash' ? String(toolInput.command ?? '').replace(/(:\/\/)[^@\s/]+@/g, '$1***@').slice(0, 200) : undefined, eskaliert: !!escalated });
+      return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason } };
+    };
     // Profil „release“ (Plan 213): Live-Schalten zusätzlich gesperrt; `git -C <Worktree> merge …` erlaubt — vor den Strang-Sperren,
     // die `git merge` sonst immer ablehnen. Nur im eigenen Worktree, nur als einzelner Befehl (releaseMerge).
     if (live.orch && live.profil === 'release' && tool === 'Bash') {
@@ -1070,7 +1084,13 @@ function makeGuard(live: Live) {
       const why = orchestratorBlock(tool, toolInput) ?? (live.worker && tool === 'Bash' && WORKER_PAKETE.test(String(toolInput.command ?? '')) ? 'Pakete installieren/ändern (Worker)' : null);
       if (why) {
         emitStatus(live, `⛔ Orchestrator-Strang: ${why} gesperrt — ${statusLine(tool, toolInput)}`);
-        return decide('deny', `In einem Orchestrator-Strang gesperrt (${why}). Nicht erneut versuchen, nicht umgehen; schreib unter „### Stand“ → „Braucht Knut“, was zu tun wäre.`);
+        return decide('deny', `In einem Orchestrator-Strang gesperrt (${why}). Nicht erneut versuchen, nicht umgehen; meld den Bedarf mit bedarf_melden (art und Text) und arbeite am Rest weiter.`);
+      }
+      // Knut 06.11.: lokale Commits (eigener Worktree, olaf-docs) und Tests gegen das lokale Postgres ausdrücklich erlauben — sonst
+      // eskaliert der Klassifikator und der Strang (ohne Rückfragen) bekommt eine Ablehnung (strangLokal, tools.ts).
+      if (tool === 'Bash') {
+        const art = strangLokal(String(toolInput.command ?? ''), { dirs: [orchMap[live.key]?.dir, ...(live.guard?.allowed ?? [])].filter((x): x is string => !!x), docs: docsOrdner() });
+        if (art) return decide('allow', `Strang: ${art} — erlaubt (Knut 06.11.: lokal ist ok; Push, Merge und GitHub bleiben bei der Hauptsitzung).`);
       }
       // Plan 274 (D4a): höchstens ein Strang je Worktree — nicht in einen Worktree schreiben, in dem gerade ein anderer Strang arbeitet.
       const datei = toolInput.file_path ?? toolInput.notebook_path;
@@ -1121,7 +1141,7 @@ function makeGuard(live: Live) {
     // Orchestrator-Strang: keine Rückfragen (niemand soll „ja“ in Knuts Namen sagen) — ablehnen und aufschreiben lassen.
     if (live.orch) {
       emitStatus(live, `🔒 Orchestrator-Strang ohne Rückfragen: ${statusLine(tool, toolInput)} nicht ausgeführt`);
-      return decide('deny', 'In einem Orchestrator-Strang gibt es keine Rückfragen. Nicht ausgeführt. Mach ohne diesen Schritt weiter, so weit es geht, und schreib unter „### Stand“ → „Braucht Knut“, was Knut freigeben oder selbst tun muss.');
+      return decide('deny', 'In einem Orchestrator-Strang gibt es keine Rückfragen. Nicht ausgeführt. Meld den Bedarf mit bedarf_melden (art: zugang, recht, datei, entscheidung, github, merge — und was genau) und arbeite am Rest weiter; die Hauptsitzung bekommt die Meldung sofort.');
     }
     // confirm: Rückfrage stellen, Antwort schließen, auf die nächste Nachricht warten.
     // Parallele Schreibaufrufe werden nacheinander abgefragt.
