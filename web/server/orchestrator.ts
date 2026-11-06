@@ -8,11 +8,11 @@
 // Schreiben, keine Rückfragen. Status kommt aus dem ausdrücklichen Zustand der Brücke (Zug läuft / Ausgang) und —
 // nur bei normalem Ende — aus der Status-Marke der letzten Antwort.
 
-import { DOD_PFLICHT } from './dod.ts';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
+import { DOD_PFLICHT } from './dod.ts';
 import { findBericht, eigenesPaket, reviewDir } from './bericht.ts';
 import { laeuferWahl } from './jstrang.ts';
 import { ergebnisseUebernehmen, reviewDateiLesen, REVIEW_DATEI_HINWEIS } from './reviewdatei.ts';

@@ -409,3 +409,12 @@ test('Knut 05.11. abends (2): welcher Strang arbeitet an einem PR — prReview, 
   assert.deepEqual(z('WirStrom1/olaf-umbrella', 12), ['d4:läuft'], 'PR-Link im Auftrag');
   assert.deepEqual(z('WirStrom1/olaf-admin', 1), []);
 });
+
+test('Pass A (Web 16): PR-Kennungen an einer Stelle — Kurzname der Liste, voller Name der Schlangen', async () => {
+  const K = await import('../server/v2kern.ts');
+  assert.equal(K.prKurz('WirStrom1/olaf-admin', 393), 'olaf-admin#393');
+  assert.equal(K.prKurz('olaf-admin', '7'), 'olaf-admin#7');
+  assert.equal(K.repoKurz('a/b'), 'b');
+  assert.equal(K.prVoll('olaf-admin', 'WirStrom1'), 'WirStrom1/olaf-admin');
+  assert.equal(K.prVoll('x/olaf-admin', 'WirStrom1'), 'x/olaf-admin');
+});

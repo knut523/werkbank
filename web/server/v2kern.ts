@@ -4,6 +4,12 @@ import { fangHierAn, type Frage } from './entscheidungsseite.ts';
 import { ohneFachwort } from './woerterbuch.ts';
 import { THEMEN, themaOf } from './themen.ts';
 
+/** PR-Kennungen (Pass A Web 16): die Liste offener PRs (github.ts mapPr) ist nach Kurznamen „repo#n“ geschlüsselt, Review- und
+ *  Fix-Schlange arbeiten mit „owner/repo“ — eine Stelle für beide Richtungen (c7e8d82: Hand-Review fand PRs mit vollem Namen nie). */
+export const repoKurz = (repo: unknown) => String(repo ?? '').split('/').pop() ?? '';
+export const prKurz = (repo: unknown, nummer: unknown) => `${repoKurz(repo)}#${nummer}`;
+export const prVoll = (repo: string, org: string) => (repo.includes('/') ? repo : `${org}/${repo}`);
+
 export type V2Antwort = 'ja' | 'nein' | 'anders' | 'spaeter';
 export interface V2Link { label: string; url: string; extern?: boolean }
 export interface V2Karte {

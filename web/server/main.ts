@@ -29,8 +29,7 @@ import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwor
 import { fragenAufraeumenAn, fragenAufraeumen } from './fragenaufraeumen.ts';
 import { fragenAusBericht, automatischGeschlossen, wiederOeffnen, abgleichFuer, berichtFragen } from './fragenbericht.ts';
 import { roadmapItems, type RoadmapItem } from './roadmapitems.ts';
-import { themaVon } from './v2kern.ts';
-let roadmapCache: { at: number; l: RoadmapItem[] } | null = null;
+import { themaVon, prKurz, prVoll } from './v2kern.ts';
 import { ueberholteFreigaben } from './ueberholt.ts';
 import { wahrerLauf } from './strangwahrheit.ts';
 import { baueErledigt } from './erledigt.ts';
@@ -78,7 +77,7 @@ import { timingSafeEqual, randomBytes } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, duplikateSuchen, anlegenJira, type JiraAction } from './jirawrite.ts';
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
-import { syncGithub, livePrs, GH_ORG, graphql } from './github.ts';
+import { syncGithub, livePrs, GH_ORG, graphql, githubNames } from './github.ts';
 import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol, fixesCol, reviewsNachholen, tickerAus, fixEinreihen, prState } from './prticker.ts';
 import { regelDir, regelVorschlaege } from './regelquelle.ts';
 import { klonPfad, reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
@@ -126,8 +125,9 @@ import { registerV2, appDist, v2Index, hauptchatZustellen, councilPruefen } from
 import { bedarfPruefen, bedarfMelden, bedarfListe, bedarfAntworten, BEDARF_NAME } from './bedarf.ts';
 import { liste as v2lcListe, volltext as v2lcVolltext, senden as v2lcSenden } from './v2librechat.ts';
 import { abgebrochenMarkieren as v2Abgebrochen } from './v2chat.ts';
-import { githubNames } from './github.ts';
 import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
+let roadmapCache: { at: number; l: RoadmapItem[] } | null = null;
+import { kalibTabelle, auswertung as etaGruppen, genauigkeitSatz, gruppeText, steckbriefSatz } from './etamessung.ts';
 
 const DIST = join(WEB_DIR, 'dist');
 // Vorschau-Instanz: WERKBANK_DRYRUN=1 schaltet Jira- und Vault-Schreiben auf Trockenlauf (zeigen statt schreiben).
@@ -2096,7 +2096,7 @@ async function reviewStarten(u: User, prText: unknown, stufe: unknown) {
   // Die Liste offener PRs ist nach Kurznamen geschlüsselt („olaf-admin#393“, github.ts mapPr) — mit dem vollen Namen fand der
   // Hand-Start den PR nie (Paket 436, beim Bau der PR-Knöpfe gefunden).
   const g = (await livePrs()).map;
-  const live = g.get(`${pr.repo}#${pr.number}`) ?? g.get(`${pr.repo.split('/').pop()}#${pr.number}`);
+  const live = g.get(`${pr.repo}#${pr.number}`) ?? g.get(prKurz(pr.repo, pr.number));
   if (!live) throw new HttpError(404, 'PR nicht in der Liste offener PRs (Abgleich mit GitHub abwarten oder „jetzt abrufen“).');
   if (await reviewsCol().findOne({ repo: pr.repo, number: pr.number, status: { $in: ['wartet', 'startet', 'führt aus', 'läuft'] } })) throw new HttpError(409, 'Für diesen PR läuft schon ein Review.');
   const id = `hand-${pr.repo.replace('/', '-')}-${pr.number}-${Date.now().toString(36)}`;
@@ -4489,7 +4489,7 @@ registerV2(on, {
     const live = (await livePrs()).map.get(pr);
     if (!live) throw new HttpError(404, 'PR nicht in der Liste offener PRs.');
     // Die Liste kennt Kurznamen; Review- und Fix-Schlange arbeiten mit owner/repo (wie der Ticker).
-    const voll = live.repo.includes('/') ? live.repo : `${GH_ORG}/${live.repo}`;
+    const voll = prVoll(live.repo, GH_ORG);
     if (art === 'review' || art === 'tief') { const r = await reviewStarten(u, `${voll}#${live.number}`, art === 'tief' ? 'deep' : 'quick'); return { hinweis: r.hinweis }; }
     try {
       const f = await fixEinreihen({ repo: voll, number: live.number, title: live.title, url: live.url, by: u.name, auftrag: art === 'auftrag' ? text : '' });
@@ -4504,14 +4504,11 @@ registerV2(on, {
   }, lcUrl: cfg.librechatPublicUrl, rolleEinstellung: process.env.WERKBANK_ROLLE ?? null, vorlagen: vorlagenFuerV2,
   wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },
   abgleich: (u, id, stand) => abgleichFuer(u.id, id, cfg.reviewDir, stand),
-  // Paket aus dem Feld oder — bei Unter-Chats ohne eigenes Paket — aus dem Pfad des gefundenen Berichts (…/<paket>/bericht.md im Review-Ordner).
-  // Runde 7: Roadmap-Items je Thema (Spec-Seiten im Vault), höchstens einmal je Minute gelesen. Thema = Ordnername (gesetzt, wie ein Hand-Thema).
   zustaende: (u) => strandStates(u) as Promise<Map<string, any>>,
   etaAuswertung: async (u) => {
-    const { kalibTabelle, auswertung, genauigkeitSatz, gruppeText, steckbriefSatz } = await import('./etamessung.ts');
     // 60 s je Person zwischengespeichert — die Auswertung ist Geschichte, kein Live-Wert.
     const c = etaCache.get(u.id);
-    const zeilen = c && Date.now() - c.at < 60_000 ? c.zeilen : auswertung(await kalibTabelle(u.id));
+    const zeilen = c && Date.now() - c.at < 60_000 ? c.zeilen : etaGruppen(await kalibTabelle(u.id));
     if (!c || c.zeilen !== zeilen) etaCache.set(u.id, { at: Date.now(), zeilen });
     return { zeilen: zeilen.map((z) => ({ schluessel: z.schluessel, text: gruppeText(z), satz: genauigkeitSatz(z), n: z.n })), steckbrief: (doc) => steckbriefSatz(zeilen, doc) };
   },
@@ -4537,7 +4534,9 @@ registerV2(on, {
     return { pfad };
   },
   paketDateien: (paket) => (/^\d{1,4}-[a-z0-9][a-z0-9-]*$/.test(paket) ? readPaket(cfg.reviewDir, paket)?.files ?? [] : []),
+  // Runde 7: Roadmap-Items je Thema (Spec-Seiten im Vault), höchstens einmal je Minute gelesen. Thema = Ordnername (gesetzt, wie ein Hand-Thema).
   roadmap: () => { const jetzt = Date.now(); if (!roadmapCache || jetzt - roadmapCache.at > 60_000) roadmapCache = { at: jetzt, l: roadmapItems(cfg.vaultDir, (o) => themaVon(o, '')) }; return roadmapCache.l; },
+  // Paket aus dem Feld oder — bei Unter-Chats ohne eigenes Paket — aus dem Pfad des gefundenen Berichts (…/<paket>/bericht.md im Review-Ordner).
   berichtVon: async (u, id) => {
     const r: any = await orchRuns().findOne({ _id: id as any, userId: u.id }, { projection: { paket: 1, bericht: 1 } });
     const ausPfad = /^(.*)\/([^/]+)\/bericht\.md$/.exec(String(r?.bericht ?? ''));

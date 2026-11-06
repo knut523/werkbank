@@ -11,7 +11,7 @@ import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungssei
 import { themaOf } from './themen.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { v2FreigabeAn, auszugUm, knutOffenJe, strangZuPr, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
+import { v2FreigabeAn, auszugUm, knutOffenJe, strangZuPr, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, prKurz, repoKurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import { dodAus, fastFertig, endenAus, hauptsitzungPunkte } from './dod.ts';
 import { triageAn, councilWirkung, type Council, type CouncilUrteil } from './stufe.ts';
@@ -70,9 +70,9 @@ export interface V2Deps {
   wiederOeffnen: (u: User, id: string) => Promise<boolean>;
   /** S15: „Alle wie empfohlen“ — dieselbe Sammel-Logik wie die alte Werkbank (main.ts, POST /api/entscheidungen/fragen/alle). */
   alleEmpfohlen: (u: User, ids: string[], nur: (f: Frage) => boolean) => Promise<{ ok: number; fehler: string[] }>;
-  /** S12: alle Unter-Chats und Hauptchats der Person (auch alte), Kopfdaten; LibreChat-Unterhaltungen über den Adapter; LibreChat-Adresse. */
   /** S21: Sammelposten schließen — derselbe Weg wie „Nein“ in der alten Werkbank (inboxAntworten). */
   sammelSchliessen: (u: User, id: string) => Promise<unknown>;
+  /** S12: alle Unter-Chats und Hauptchats der Person (auch alte), Kopfdaten; LibreChat-Unterhaltungen über den Adapter; LibreChat-Adresse. */
   alleRuns: (u: User) => Promise<any[]>;
   lcChats: (u: User) => Promise<any[]>;
   /** Abgleich (h): Volltextsuche in den eigenen Chat-Nachrichten (v2librechat.volltext). */
@@ -100,7 +100,6 @@ export interface V2Deps {
   abgleich?: (u: User, strandId: string, stand: string) => Promise<Abgleich | null>;
   /** Runde 5 (Knut B1): Paket und Fragen-Kopf des Berichts eines Unter-Chats (für Sammelkarten). */
   berichtVon?: (u: User, strandId: string) => Promise<{ paket: string; fragen: any[] } | null>;
-  /** Runde 7: Roadmap-Items (Spec-Seiten im olaf-Vault, roadmapitems.ts), schon mit Thema. */
   /** Runde 7 (Knut: Unter-Chats transparent): Zustand der Stränge bei der Brücke, je Unterhaltung (strandStates). */
   zustaende?: (u: User) => Promise<Map<string, any>>;
   /** Knut 06.11.: ETA gegen Ist — Auswertung je Auftragsart/Profil/Modell (etamessung.ts). */
@@ -109,6 +108,7 @@ export interface V2Deps {
   nachreichen?: (u: User, strandId: string, text: string) => Promise<unknown>;
   /** Runde 7 (Abgleich): alle Dateien eines Review-Pakets, nicht nur bericht.md. */
   paketDateien?: (paket: string) => { rel: string; size: number }[];
+  /** Runde 7: Roadmap-Items (Spec-Seiten im olaf-Vault, roadmapitems.ts), schon mit Thema. */
   roadmap?: () => { thema: string; titel: string; path: string; stand: string; standNr: number; mtime: number }[];
 }
 
@@ -128,7 +128,7 @@ function zuKopf(r: { head?: unknown }, jetzt: string | null, bekannt: boolean): 
   return { aktuell: h === jetzt, kopf: h.slice(0, 7), neuerKopf: h === jetzt ? null : jetzt.slice(0, 7) };
 }
 /** Kopf je PR, geschlüsselt nach Kurznamen wie die PR-Liste („repo#n“). */
-const koepfeVon = async (d: V2Deps) => (d.prKoepfe ? new Map((await d.prKoepfe().catch(() => [])).map((x) => [`${String(x._id).split('#')[0].split('/').pop()}#${String(x._id).split('#')[1]}`, String(x.head ?? '')] as [string, string]).filter(([, h]) => !!h)) : null);
+const koepfeVon = async (d: V2Deps) => (d.prKoepfe ? new Map((await d.prKoepfe().catch(() => [])).map((x) => [prKurz(String(x._id).split('#')[0], String(x._id).split('#')[1]), String(x.head ?? '')] as [string, string]).filter(([, h]) => !!h)) : null);
 /** Audit 05.11. (5): wie zustandSatz — „fertig“ zählt als Bericht nur mit Bericht UND Paket. */
 const ohneBericht = (z: { zustand?: string; bericht?: unknown; paket?: unknown }) => z.zustand === 'fertig' && !(z.bericht && z.paket);
 
@@ -300,8 +300,8 @@ export function registerV2(on0: On, d: V2Deps) {
   /** Je PR das neueste Agenten-Review (letzteReviews ist neueste zuerst). Entwurfs-Urteil nur für Admins (wie auf der PR-Seite). */
   function mitReview<T extends { pr: string }>(zeilen: T[], rv: any[], istAdmin: boolean, fx: any[] = [], koepfe: Map<string, string> | null = null): (T & { review: { empfehlung: string | null; status: string; gepostet: boolean; at: any } | null; fix: { offen: number; gesamt: number; at: any } | null })[] {
     const je = new Map<string, any>(), fixJe = new Map<string, any>();
-    for (const r of rv) { const k = `${String(r.repo).split('/').pop()}#${r.number}`; if (!je.has(k)) je.set(k, r); }
-    for (const f of fx) { const k = `${String(f.repo).split('/').pop()}#${f.number}`; if (!fixJe.has(k) && f.punkte) fixJe.set(k, f); }
+    for (const r of rv) { const k = prKurz(r.repo, r.number); if (!je.has(k)) je.set(k, r); }
+    for (const f of fx) { const k = prKurz(f.repo, f.number); if (!fixJe.has(k) && f.punkte) fixJe.set(k, f); }
     return zeilen.map((p) => { const r = je.get(p.pr), f = fixJe.get(p.pr); return { ...p, review: r ? { empfehlung: istAdmin || r.posted?.url ? r.empfehlung ?? null : null, status: r.status, gepostet: !!r.posted?.url, at: r.doneAt ?? r.createdAt, ...zuKopf(r, koepfe?.get(p.pr) ?? null, !!koepfe) } : null,
       fix: f ? { offen: Number(f.punkte.offen ?? 0), gesamt: Number(f.punkte.gesamt ?? 0), at: f.punkte.at ?? null, lesbar: f.punkte.lesbar !== false } : null }; });
   }
@@ -437,7 +437,6 @@ export function registerV2(on0: On, d: V2Deps) {
     });
   });
 
-  // --- Alle Chats (S12, C4): Unter-Chats, Hauptchats, LibreChat- und 2.0-Chats — Suche und Filter macht die Oberfläche ---
   // Plan §23 T5: „Von Claude entschieden“ — gesamt und je Unter-Chat (?strand=), neueste zuerst; mit Council-Urteil, wenn es eines gab.
   on('GET', /^\/api\/v2\/entschieden$/, async (req, res, _m, url) => {
     const u = await d.needUser(req);
@@ -553,6 +552,7 @@ export function registerV2(on0: On, d: V2Deps) {
     if (!l) return send(d, res, { treffer: [], fehlt: ['LibreChat'] });
     send(d, res, { treffer: l.map((t) => ({ conv: t.conv, auszug: auszugUm(t.text, q), at: new Date(t.at).toISOString() })) });
   });
+  // --- Alle Chats (S12, C4): Unter-Chats, Hauptchats, LibreChat- und 2.0-Chats — Suche und Filter macht die Oberfläche ---
   on('GET', /^\/api\/v2\/chats$/, async (req, res) => {
     const u = await d.needUser(req);
     const fehlt: string[] = [];
@@ -574,7 +574,6 @@ export function registerV2(on0: On, d: V2Deps) {
     send(d, res, { gruppen: { wartet: k.filter((x) => x.gruppe === 'wartet'), laeuft: k.filter((x) => x.gruppe === 'laeuft'), fertig: fertig.map((x) => (ff.has(x.id) ? { ...x, satz: ff.get(x.id)!.satz, fast: true } : x)) }, at: new Date() });
   });
 
-  // --- Runde 7 (Knut: DoD): liegen gebliebene Enden — offene DoD-Zeilen und Folge-Aufgaben fertig gemeldeter Unter-Chats, mit Besitzer ---
   // Knut 06.11.: Schätzgenauigkeit der Unter-Chats (ETA gegen Ist) — für „Jetzt“.
   on('GET', /^\/api\/v2\/eta$/, async (req, res) => {
     const u = await d.needUser(req);
@@ -582,6 +581,7 @@ export function registerV2(on0: On, d: V2Deps) {
     const r = await d.etaAuswertung(u).catch(() => null);
     send(d, res, { zeilen: r?.zeilen ?? [] });
   });
+  // --- Runde 7 (Knut: DoD): liegen gebliebene Enden — offene DoD-Zeilen und Folge-Aufgaben fertig gemeldeter Unter-Chats, mit Besitzer ---
   on('GET', /^\/api\/v2\/enden$/, async (req, res) => {
     const u = await d.needUser(req);
     if (!admin(u)) return send(d, res, { enden: [] });
@@ -739,7 +739,7 @@ export function registerV2(on0: On, d: V2Deps) {
     const key = `${m[1]}#${m[2]}`;
     if (d.gesperrt(u, 'roadmap')) throw err(403, 'PRs sind für dich noch nicht freigegeben — frag Knut.');
     const p: any = (await d.livePrs()).map.get(key);
-    const rv = (await d.letzteReviews().catch(() => [])).filter((r) => String(r.repo).split('/').pop() === m[1] && Number(r.number) === Number(m[2]));
+    const rv = (await d.letzteReviews().catch(() => [])).filter((r) => repoKurz(r.repo) === m[1] && Number(r.number) === Number(m[2]));
     if (!p && !rv.length) throw err(404, 'Diesen PR gibt es nicht in der Liste offener PRs.');
     const r = rv.find((x) => x.status === 'fertig' && x.paket) ?? rv[0] ?? null;
     // Der Text des Agenten: für alle, sobald er auf GitHub steht; ein nicht geposteter Entwurf nur für Admins (Freigabe bleibt bei Knut).
@@ -748,7 +748,7 @@ export function registerV2(on0: On, d: V2Deps) {
     const names = d.githubNames();
     const wa = p ? prSicht([p], 'alle', names)[0] : null;
     // Paket 436 (Knut 04.11.): was nach dem letzten Fix offen geblieben ist — von jedem Reviewer, mit Grund.
-    const fx = d.fixPunkte ? (await d.fixPunkte().catch(() => [])).find((f) => String(f.repo).split('/').pop() === m[1] && Number(f.number) === Number(m[2]) && f.punkte) : null;
+    const fx = d.fixPunkte ? (await d.fixPunkte().catch(() => [])).find((f) => repoKurz(f.repo) === m[1] && Number(f.number) === Number(m[2]) && f.punkte) : null;
     send(d, res, {
       fix: fx ? { at: fx.punkte.at ?? null, lesbar: fx.punkte.lesbar !== false, gesamt: Number(fx.punkte.gesamt ?? 0), status: fx.status ?? null,
         offen: (fx.punkte.liste ?? []).filter((x: any) => x.stand === 'offen').map((x: any) => ({ wer: names[String(x.wer ?? '').toLowerCase()] ?? x.wer, art: x.art, wo: x.wo ?? null, text: kurz(String(x.text ?? ''), 300), grund: x.grund ?? null, notiz: x.notiz ?? null })) } : null,

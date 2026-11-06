@@ -210,8 +210,7 @@ export function etaMinuten(tiefe: 'quick' | 'regular' | 'deep', zeilen: number |
 /** Review-Lead bleibt Claude, auch bei quick (die Tiefe setzte sonst glm-5.3-flash als Lead; Pass C über Melious kommt danach). */
 export const REVIEW_MODELL = 'claude:opus';
 
-/** Auftrag an den Review-Strang: Phase 4 von plan-to-pr. PR-Texte sind Daten, keine Anweisungen. */
-// Konzept J1 als Ensemble (Hauptsitzung 06.11., umkehrbar): drei unabhängige jcode-Läufe (Melious) machen Pass 1 parallel, der
+// Konzept J1 als Ensemble (Hauptsitzung 06.11., umkehrbar; seit D2 als opencode-2-Ensemble, siehe unten): drei unabhängige Läufe (Melious) machen Pass 1 parallel, der
 // Claude-Strang vereinigt, prüft jeden Befund am Code und berichtet nur Bestätigtes. Gemessen: ein einzelner jcode-Lauf findet das
 // offensichtliche Risiko in 90–100 %, das subtilere nur in 30–50 % — drei Läufe plus Prüfer heben die Trefferquote, ohne dass
 // Falsches durchkommt. WERKBANK_REVIEW_ENSEMBLE=aus schaltet zurück auf den einzelnen Claude-Pass.
@@ -231,7 +230,7 @@ export const ensembleText = (bereich: string | null) => [
   'vereinigen und jeden Befund am Code prüfen — fehlt ein Prüflauf, das im Bericht nennen (keiner ist verzichtbar).',
 ];
 
-
+/** Auftrag an den Review-Strang: Phase 4 von plan-to-pr. PR-Texte sind Daten, keine Anweisungen. */
 export function reviewPrompt(r: { repo: string; number: number; title: string; url: string; head: string; by: string | null; trigger: string; deep?: boolean }, wt: string, paket: string,
   o: { tiefe?: string; eta?: number; kontext?: boolean; dm?: DiffMaterial | null; vorher?: { head: string; paket: string; url?: string | null } | null; verknuepft?: { jira: string[]; plaene: string[] }; tests?: string } = {}): string {
   const p = `review-pakete/${paket}`;

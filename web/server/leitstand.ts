@@ -29,6 +29,7 @@ import { parseKommentar } from './prreview.ts';
 import { entscheidungen } from './freigabe.ts';
 import { uebergabeLesbarAn, meldungsZeilen, standZeilen } from './uebergabe.ts';
 import { runs, STRANDS, OPEN, laufName, LEIT_TAG, questions, orchStatus, excerpt, lastMessage, strandStates, deliver, decorateSoon, AUTO_RATE_MS, AUTO_BUSY_MS, istLeer, type LastMsg, type StrandState } from './orchestrator.ts';
+import { endenAus, hauptsitzungPunkte } from './dod.ts';
 
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 const internalHeaders = () => ({ 'content-type': 'application/json', 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' });
@@ -396,7 +397,6 @@ export async function handoverDraft(u: User, now = new Date()) {
     naechste = z.naechste;
   }
   // Paket 436 (Knut 04.11.: DoD): liegen gebliebene Enden — offene DoD-Zeilen und Folge-Aufgaben fertig gemeldeter Unter-Chats, je mit Besitzer.
-  const { endenAus, hauptsitzungPunkte } = await import('./dod.ts');
   // Plan §24 A4: „Braucht Hauptsitzung“ (Live-Gang, Deploy-Go …) als Aufgabenliste in der Lage.
   const hs = hauptsitzungPunkte(docs.map((d) => ({ id: String(d._id), titel: String(d.title ?? ''), stand: String(d.standVoll || d.lastExcerpt || '') })));
   const hsZeilen = hs.length ? ['', '## Braucht Hauptsitzung', ...hs.slice(0, 20).map((p) => `- [ ] ${p.text} — „${p.titel}“ (${p.strand})`)] : [];

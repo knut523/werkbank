@@ -33,12 +33,12 @@ export function jcodePrompt(basis: string, auftrag: string): string {
 
 export interface PassCErgebnis { ok: boolean; text: string; energie: number; ms: number; fehler?: string }
 
-/** Pass C im Worktree `wt` gegen `basis` (Commit). Nie werfend: Fehler kommen als ok=false mit Grund. */
 /** Modell der nächsten Gegenprüfung: DeepSeek und glm-5.3 im Wechsel (je Prozess gezählt). */
 export const GEGENPRUEF_MODELLE = ['deepseek-v4.1-flash-1017', 'glm-5.3'] as const;
 let gegenpruefNr = 0;
 export const gegenpruefModell = () => GEGENPRUEF_MODELLE[gegenpruefNr++ % GEGENPRUEF_MODELLE.length];
 
+/** Pass C im Worktree `wt` gegen `basis` (Commit), bisheriger Weg (Prüfauftrag + jcode). Nie werfend: Fehler kommen als ok=false mit Grund. */
 export async function meliousPassC(u: User, o: { wt: string; basis: string; zweck: string; timeoutS?: number }): Promise<PassCErgebnis> {
   const t0 = Date.now();
   const nein = (fehler: string, energie = 0): PassCErgebnis => ({ ok: false, text: '', energie, ms: Date.now() - t0, fehler });

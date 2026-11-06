@@ -434,11 +434,6 @@ export async function queueFixes(fresh: TickerEvent[], s: TickerSettings, now = 
 /** Mehrere Pushes in diesem Fenster → ein Review auf den letzten Kopf (jeder Push schiebt den Start nach hinten). */
 export const DELTA_BUENDEL_MS = 10 * 60_000;
 
-/**
- * Auto-Delta (Release 20b): Autor auf der Erlaubtliste (nicht wir selbst), letztes Review dieses PRs fertig UND gepostet, an einem
- * anderen Kopf → Delta-Review (`trigger: 'delta'`), Start erst nach DELTA_BUENDEL_MS. Ein noch wartendes Auto-Delta desselben PRs
- * geht in diesem auf (übersprungen, „zusammengefasst“). null = trifft nicht zu (dann gilt die Nachprüfung wie bisher).
- */
 // ---------- Plan §24 A5 (Knut 05.11.): übersprungene Reviews einmal täglich nachholen ----------
 // Ein Review, das wegen „neuer Stand seit dem Tag/seit dem Review“ übersprungen wurde, wartete bisher auf ein neues @review —
 // das niemand gab (z. B. #393 um 09:17). Gemergt/geschlossen und „zusammengefasst“ (ein neueres Delta läuft) holen wir nicht nach.
@@ -476,6 +471,11 @@ export async function reviewsNachholen(now = new Date()): Promise<number> {
   return n;
 }
 
+/**
+ * Auto-Delta (Release 20b): Autor auf der Erlaubtliste (nicht wir selbst), letztes Review dieses PRs fertig UND gepostet, an einem
+ * anderen Kopf → Delta-Review (`trigger: 'delta'`), Start erst nach DELTA_BUENDEL_MS. Ein noch wartendes Auto-Delta desselben PRs
+ * geht in diesem auf (übersprungen, „zusammengefasst“). null = trifft nicht zu (dann gilt die Nachprüfung wie bisher).
+ */
 async function autoDelta(e: TickerEvent, s: TickerSettings, now: Date): Promise<number | null> {
   const autor = String(e.actor ?? '').toLowerCase();
   if (!autor || autor === ME || !s.allow.map((a) => a.toLowerCase()).includes(autor)) return null;
