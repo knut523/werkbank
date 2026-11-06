@@ -2188,6 +2188,10 @@ function jcodeAuswerten(out: { stdout: string }, cwd: string, model: string | nu
   return { j, usage, draussen, gelaufen: String(j?.model ?? model ?? FLASH) };
 }
 
+/** Modell für jcode: „auto“ oder ein Name ohne Preis (bei vorhandener Preisliste) → null, jcode nimmt den Profil-Standard; gebucht
+ *  wird mit dem Modell, das jcode meldet (Live-Test 15.10.). Eine leere Preisliste verbietet nichts (A-S8: eine Regel für Strang und Worker). */
+const jcodeModell = (mel: Account, m: string | undefined) => (!m || m === 'auto' || (mel.faktoren && Object.keys(mel.faktoren).length && !mel.faktoren[m]) ? null : m);
+
 /** Modellreihe eines Melious-Laufs aus Abo/Preisliste und freiem Monatsanteil des Kontos (A-S6: an einer Stelle). */
 function reiheFuer(mel: Account, art: Art, lauf: 'A' | 'B' | 'C' | null = null): string[] {
   return modellReihe({ art, lauf, erlaubt: mel.abo?.length ? mel.abo : Object.keys(mel.faktoren ?? {}), frei: Object.fromEntries((mel.pool ?? []).map((p) => [p.model, p.frei])) });
@@ -2214,9 +2218,6 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   const reihe = fest ? [fest] : d.rolle === 'leser'
     ? reiheFuer(mel, ensembleLauf(d.aufgabe) ? 'ensemble' : 'lesen', ensembleLauf(d.aufgabe))
     : [mel.rollen?.schreiber?.[0] ?? FLASH];
-  // Live-Test 15.10.: die Rolle lieferte „auto“ → jcode lief auf dem Profil-Standard, gebucht wurden 0 Energie (kein Preis für „auto“).
-  // „auto“ (oder ein Name ohne Preis) → kein --model, jcode nimmt den Profil-Standard; gebucht wird mit dem Modell, das jcode meldet.
-  const alsModell = (m: string) => (m === 'auto' || (mel!.faktoren && !mel!.faktoren[m]) ? null : m);
   const tools = d.rolle === 'leser' ? 'read,bash,agentgrep' : 'read,bash,write,edit,agentgrep';
   const t0 = Date.now();
   // A3: jeder Versuch wird gebucht (auch ein Rückfall verbraucht Energie), nicht nur der letzte.
@@ -2246,7 +2247,7 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
     const versuche = (reihe.length ? reihe : [FLASH]).slice(0, 3);
     let out!: { code: number | null; stdout: string; stderr: string }, ausw!: ReturnType<typeof jcodeAuswerten>;
     for (const [i, m] of versuche.entries()) {
-      const model = alsModell(m);
+      const model = jcodeModell(mel, m);
       out = await jcodeSpawn({ cwd: d.cwd, prompt: d.klick ? prompt + klickHinweis() : prompt, model, tools, key: mel.token, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted, extra: d.klick ? { WERKBANK_KLICK: '1', WERKBANK_KLICK_AUS: d.klick } : undefined });
       ausw = jcodeAuswerten(out, d.cwd, model);
       const energie = buche(ausw.usage, ausw.gelaufen, out.code === 0 && !!ausw.j, 'jcode');
@@ -2267,8 +2268,8 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
 
 // ---------- Konzept J, J1 (Knut 05.11., Go): jcode-Strang ----------
 // Ein Strang mit `laeufer: 'jcode'` läuft nicht über Claude, sondern über jcode (Melious EU) — eigener Strang mit eigenem Zug, ohne
-// Claude-Kontingent, 0,15 GB (eigener Topf, schaetzung.ts). Nur lesend: Shell über den Wächter (shim/bash), pre_tool-Hook vor jedem
-// Werkzeug, geschrieben wird nur im Arbeitsordner (sonst verworfen). Gleicher Auftragstext und gleiche Status-Zeile wie bei Claude.
+// Claude-Kontingent, ≈ 0,1 GB (eigener Topf, schaetzung.ts). Schreibt im Arbeitsordner (Werkzeuge write/edit), sonst wird das Ergebnis
+// verworfen; Shell nur über den Wächter (shim/bash, lesende Befehle und lokale Commits), pre_tool-Hook vor jedem Werkzeug. Gleicher Auftragstext und gleiche Status-Zeile wie bei Claude.
 // Ergebnis ohne Status-Zeile oder leer → einmal neu, dann opencode (falls installiert), dann läuft der Zug mit Claude weiter.
 const STATUS_ZEILE = /^[\s*_]*Status:?[\s*_]*(fertig|braucht Antwort|blockiert)\b/im;
 export function jcodeStrangErgebnis(o: { code: number | null; j: any; draussen: string[] }): { ok: boolean; text: string; grund: string } {
@@ -2309,17 +2310,16 @@ async function strangJcode(live: Live, req: TurnRequest, prompt: string): Promis
   const fest = typeof e.modell === 'string' && e.modell.startsWith('melious:') ? e.modell.slice(8) : null;
   // Knut 06.11.: lesende Stränge verteilt auf die PRO-Modelle; der zweite Versuch nimmt das nächste Modell (Rückfall bei Fehler/Limit).
   const reihe = fest ? [fest] : reiheFuer(mel, 'lesen');
-  const alsModell = (m: string | undefined) => (!m || m === 'auto' || (mel.faktoren && Object.keys(mel.faktoren).length && !mel.faktoren[m]) ? null : m);
   let grund = '';
   for (const [i, art] of jcodeReihe().entries()) {
     if (live.abort.signal.aborted) return { ok: false, grund: 'abgebrochen' };
     emitStatus(live, `⏳ ${art === 'jcode' ? 'jcode (Melious)' : 'opencode'} arbeitet …${i ? ` (Versuch ${i + 1}: ${grund})` : ''}`);
     const t0 = Date.now();
     const timeoutS = envZahl('BRIDGE_JCODE_STRANG_TIMEOUT_S', 3600, 60);
+    const model = jcodeModell(mel, reihe[i] ?? reihe[0]);
     const out = art === 'opencode'
       ? await opencodeSpawn({ cwd: e.dir, prompt, timeoutS, abbruch: () => live.abort.signal.aborted })
-      : await jcodeSpawn({ cwd: e.dir, prompt, model: alsModell(reihe[i] ?? reihe[0]), tools: 'read,bash,agentgrep,write,edit', key: mel.token, timeoutS, abbruch: () => live.abort.signal.aborted });
-    const model = alsModell(reihe[i] ?? reihe[0]);
+      : await jcodeSpawn({ cwd: e.dir, prompt, model, tools: 'read,bash,agentgrep,write,edit', key: mel.token, timeoutS, abbruch: () => live.abort.signal.aborted });
     const a = art === 'opencode' ? { j: out.code === 0 ? { text: out.stdout } : null, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as MeliousUsage, draussen: [] as string[], gelaufen: 'opencode' } : jcodeAuswerten(out, e.dir, model);
     const energie = art === 'jcode' && mel.faktoren ? energieOf(a.usage, a.gelaufen, mel.faktoren) : 0;
     live.usage.input += a.usage.input + a.usage.cacheRead; live.usage.output += a.usage.output;

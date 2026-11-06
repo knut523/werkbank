@@ -33,7 +33,8 @@ before(async () => {
   web = createServer(async (req, res) => {
     let b = ''; for await (const c of req) b += c;
     if (req.headers['x-werkbank-internal'] !== 'geheim') { res.statusCode = 403; res.end('{}'); return; }
-    if (req.url === '/internal/claude-accounts') { res.end(JSON.stringify({ accounts: [{ id: 'chat', label: 'Chat', token: null }, MEL] })); return; }
+    // Person „ohnepreis“: Konto ohne Preisliste (A-S8: dann gilt die Modellreihe trotzdem)
+    if (req.url === '/internal/claude-accounts') { const { userId } = JSON.parse(b); res.end(JSON.stringify({ accounts: [{ id: 'chat', label: 'Chat', token: null }, userId === 'ohnepreis' ? { ...MEL, faktoren: undefined } : MEL] })); return; }
     if (req.url === '/internal/zug-log') { zuege.push(JSON.parse(b).zug); res.end('{"ok":true}'); return; }
     if (req.url === '/internal/session-start') { res.end(JSON.stringify({ text: '' })); return; }
     res.end('{}');
@@ -57,19 +58,19 @@ before(async () => {
 });
 after(() => { proc.kill(); web.close(); });
 
-async function send(c: string, content: string) {
+async function send(c: string, content: string, user = 'knut') {
   const res = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${tok('knut')}`, 'content-type': 'application/json', 'x-librechat-user-id': 'knut', 'x-librechat-conversation-id': c },
+    headers: { authorization: `Bearer ${tok(user)}`, 'content-type': 'application/json', 'x-librechat-user-id': user, 'x-librechat-conversation-id': c },
     body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content }] }),
   });
   return (await res.text()).split('\n').filter((l) => l.startsWith('data: {')).map((l) => JSON.parse(l.slice(6)).choices[0]?.delta?.content ?? '').join('');
 }
 const lead = (schritte: unknown[]) => `MOCK-LEAD ${JSON.stringify({ schritte })}`;
 
-const strang = async (n: number) => {
+const strang = async (n: number, user = 'knut') => {
   const c = `00000000-0000-4000-9400-${String(n).padStart(12, '0')}`;
-  const r = await fetch(`http://127.0.0.1:${PORT}/internal/orchestrate`, { method: 'POST', headers: { 'x-werkbank-internal': 'geheim', 'content-type': 'application/json' }, body: JSON.stringify({ userId: 'knut', conv: c, dir: repo(ORCH, `wj${n}`), email: 'knut@x', risiko: 'niedrig' }) });
+  const r = await fetch(`http://127.0.0.1:${PORT}/internal/orchestrate`, { method: 'POST', headers: { 'x-werkbank-internal': 'geheim', 'content-type': 'application/json' }, body: JSON.stringify({ userId: user, conv: c, dir: repo(ORCH, `wj${n}`), email: 'knut@x', risiko: 'niedrig' }) });
   assert.equal(r.status, 200, await r.text());
   return c;
 };
@@ -88,4 +89,10 @@ test('J2: mit jcode gilt die eigene Leser-Grenze (hier 4), nicht die Worker-Gren
   const t = await send(c, lead([...[1, 2, 3, 4, 5].map((n) => ({ tool: 'delegieren', args: { rolle: 'leser', aufgabe: `Lies ${n} LANGSAM` } })), { tool: 'delegation_stand', args: { warten_s: 30 } }]));
   assert.equal((t.match(/Delegation d-[0-9a-f]{6} gestartet/g) ?? []).length, 4, t);
   assert.match(t, /\[delegieren\] FEHLER 429: Schon 4 lesende Worker laufen/);
+});
+
+test('A-S8: ohne Preisliste gilt die Modellreihe trotzdem (Rückfall auf das nächste Modell, nicht Profil-Standard)', async () => {
+  const c = await strang(3, 'ohnepreis');
+  const t = await send(c, lead([{ tool: 'delegieren', args: { rolle: 'leser', aufgabe: 'Lies README.md' } }, { tool: 'delegation_stand', args: { warten_s: 30 } }]), 'ohnepreis');
+  assert.match(t, /Modell: Melious deepseek-v4\.1-flash-1017 \(jcode\)/, t);
 });

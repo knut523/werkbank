@@ -325,6 +325,23 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
   });
 }
 
+/** Lange Brücken-Läufe (melious_sub, Ensemble, bis 15 min): der Aufrufer (fetch/undici) bricht ohne Kopfzeilen oder ohne Daten nach
+ *  300 s ab („fetch failed“, gemessen 06.11.). Deshalb sofort 200 und alle 30 s ein Leerzeichen (vor JSON erlaubt); Fehler im Feld
+ *  error. Gegenprüfung 06.11.: Schreiben auf eine getrennte Verbindung meldet sich später als 'error' — ohne Zuhörer stürzte die
+ *  Brücke ab; geschrieben wird nur, solange die Verbindung steht. `weg()` meldet, dass der Aufrufer gegangen ist (A-S3: eine Stelle). */
+async function langeAntwort(res: ServerResponse, lauf: (weg: () => boolean) => Promise<object>): Promise<void> {
+  res.on('error', () => {});
+  let weg = false; res.on('close', () => { weg = !res.writableEnded; });
+  const offen = () => !res.destroyed && !res.writableEnded;
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.write(' ');
+  const halten = setInterval(() => { if (offen()) res.write(' '); }, 30_000);
+  res.on('close', () => clearInterval(halten));
+  try { const r = await lauf(() => weg); if (offen()) res.end(JSON.stringify(r)); }
+  catch (e: any) { if (offen()) res.end(JSON.stringify({ error: String(e?.message ?? e).slice(0, 300), status: 500 })); }
+  finally { clearInterval(halten); }
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://x');
   try {
@@ -421,22 +438,7 @@ const server = createServer(async (req, res) => {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId) || !/^[A-Za-z0-9_-]{1,64}$/.test(conv)) return json(res, 400, { error: 'Ungültige Person oder Unterhaltung.' });
       // Knut 19.10.: melious_sub und auslastung auch für den Lead (native Verteilung Claude ↔ Melious).
       const fn = { delegate: startDelegation, 'delegate-stand': delegationStand, 'delegate-urteil': delegationUrteil, phase: phaseWechseln, 'mel-sub': melSub, ensemble: ensembleReview, auslastung: (u: string, c: string) => auslastungFuer(u, c) }[deleg[1] as 'delegate'];
-      if (deleg[1] === 'mel-sub' || deleg[1] === 'ensemble') {
-        // Ein Melious-Teilagent läuft bis 15 min; der Aufrufer (fetch/undici) bricht ohne Kopfzeilen oder ohne Daten nach 300 s ab
-        // („fetch failed“, gemessen 06.11.). Deshalb sofort 200 und alle 30 s ein Leerzeichen (vor JSON erlaubt); Fehler im Feld error.
-        // Gegenprüfung 06.11.: Schreiben auf eine schon getrennte Verbindung meldet sich später als 'error'-Ereignis — ohne Zuhörer
-        // brächte das die Brücke zum Absturz. Daher Zuhörer, und nur schreiben, solange die Verbindung steht.
-        res.on('error', () => {});
-        const offen = () => !res.destroyed && !res.writableEnded;
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.write(' ');
-        const halten = setInterval(() => { if (offen()) res.write(' '); }, 30_000);
-        res.on('close', () => clearInterval(halten));
-        try { const r = await fn(userId, conv, b); if (offen()) res.end(JSON.stringify(r.ok ? r : { error: r.error, status: r.status })); }
-        catch (e: any) { if (offen()) res.end(JSON.stringify({ error: String(e?.message ?? e).slice(0, 300), status: 500 })); }
-        finally { clearInterval(halten); }
-        return;
-      }
+      if (deleg[1] === 'mel-sub' || deleg[1] === 'ensemble') return langeAntwort(res, async () => { const r = await fn(userId, conv, b); return r.ok ? r : { error: r.error, status: r.status }; });
       const r = await fn(userId, conv, b);
       return r.ok ? json(res, 200, r) : json(res, r.status, { error: r.error });
     }
@@ -446,17 +448,7 @@ const server = createServer(async (req, res) => {
       const b = await readBody(req);
       const userId = String(b.userId ?? '');
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId)) return json(res, 400, { error: 'Ungültige Person.' });
-      res.on('error', () => {});
-      const offen = () => !res.destroyed && !res.writableEnded;
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.write(' ');
-      const halten = setInterval(() => { if (offen()) res.write(' '); }, 30_000);
-      res.on('close', () => clearInterval(halten));
-      let weg = false; res.on('close', () => { weg = !res.writableEnded; });   // Aufrufer weg → Läufe abbrechen
-      try { const r = await ensembleFuerWeb(await claudeAccounts(userId), userId, b, () => weg); if (offen()) res.end(JSON.stringify(r.ok ? r : { error: r.error, status: r.status, nutzung: r.nutzung ?? [] })); }
-      catch (e: any) { if (offen()) res.end(JSON.stringify({ error: String(e?.message ?? e).slice(0, 300), status: 500 })); }
-      finally { clearInterval(halten); }
-      return;
+      return langeAntwort(res, async (weg) => { const r = await ensembleFuerWeb(await claudeAccounts(userId), userId, b, weg); return r.ok ? r : { error: r.error, status: r.status, nutzung: r.nutzung ?? [] }; });
     }
     if (req.method === 'GET' && url.pathname === '/internal/orch-state') {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });

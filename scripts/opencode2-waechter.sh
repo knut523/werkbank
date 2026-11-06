@@ -9,10 +9,11 @@
 #   opencode2-waechter.sh status      je Port: läuft ein Server der Brücke?
 #   opencode2-waechter.sh netz        entfernte Ziele der Server-Prozesse (nach einem Update: nur Melious erlaubt)
 set -euo pipefail
-R=${OC2_HOME:-$HOME/.local/opencode2}
+# A-S7: dieselben Namen wie die Brücke (BRIDGE_OPENCODE2_HOME/_PORTS), OC2_* bleiben als ältere Form
+R=${BRIDGE_OPENCODE2_HOME:-${OC2_HOME:-$HOME/.local/opencode2}}
 OC2=${OC2_BIN:-$R/bin/opencode2}
 VERSION=${OC2_VERSION:-2.2.5}
-PORTS=${OC2_PORTS:-"47811 47812"}
+PORTS=${BRIDGE_OPENCODE2_PORTS:-${OC2_PORTS:-"47811 47812"}}
 KONFIG=${OC2_KONFIG:-$R/xdg/config/opencode/opencode.jsonc}
 RUN=$R/waechter
 

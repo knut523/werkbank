@@ -90,8 +90,11 @@ echo "4. sudo-Regeln (nur Start des Agenten und /usr/bin/test für den Negativte
 neu=$(mktemp); trap 'rm -f "$neu"' EXIT
 cat > "$neu" <<REGELN
 # Werkbank Sandbox Stufe 2 (Plan §19) — von scripts/sandbox2-einrichten.sh, nicht von Hand ändern.
-# 4: nur der Start des Agenten, keine Shell, keine anderen Befehle
-$KNUT ALL=($AGENT) NOPASSWD: /usr/bin/env CLAUDE_CONFIG_DIR=* $CLAUDE_BIN *
+# 4: nur der Start des Agenten. Phase 4 (A-S4): kein „/usr/bin/env CLAUDE_CONFIG_DIR=* …“ — ein * in sudo-Argumenten passt
+#    auch auf Leerzeichen, env hätte damit jeden Befehl gestartet. Stattdessen nur das Programm; CLAUDE_CONFIG_DIR reicht sudo
+#    aus der Umgebung des Aufrufers durch (sudo -u $AGENT $CLAUDE_BIN …).
+Defaults>$AGENT env_keep += "CLAUDE_CONFIG_DIR"
+$KNUT ALL=($AGENT) NOPASSWD: $CLAUDE_BIN
 # 4b: Negativtest — prüft nur Rechte, liest nichts
 $KNUT ALL=($AGENT) NOPASSWD: /usr/bin/test
 REGELN
