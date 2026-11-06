@@ -23,6 +23,7 @@ import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn } from './schlange.ts';
+import { laeuferName, opencode2Laeufer, type Laeufer } from './laeufer.ts';
 import { schaetze, passt, passtJcode, schaetzungText, speicherStand, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
@@ -2258,6 +2259,14 @@ const MEL_SUB_MODELL: Record<string, string> = { flash: 'glm-5.3-flash', glm: 'g
 /** Rollen der Teilagenten, die nur lesen — die gehen standardmäßig an Melious. */
 export const LESE_TEILAGENTEN = new Set(['leser', 'strang-leser', 'ticket-pruefer', 'Explore']);
 
+/** opencode-2-Server (Läufer-Abstraktion): nur mit BRIDGE_LAEUFER=opencode2, BRIDGE_OPENCODE2_URL und Passwortdatei (Inhalt nie im Log). */
+export function opencode2Fuer(env: Record<string, string | undefined> = process.env): Laeufer | null {
+  if (laeuferName(env) !== 'opencode2' || !env.BRIDGE_OPENCODE2_URL || !env.BRIDGE_OPENCODE2_PW_DATEI) return null;
+  let passwort = '';
+  try { passwort = readFileSync(env.BRIDGE_OPENCODE2_PW_DATEI, 'utf8').trim(); } catch { return null; }
+  return passwort ? opencode2Laeufer({ base: env.BRIDGE_OPENCODE2_URL, passwort }) : null;
+}
+
 async function melKonto(live: Live, userId: string): Promise<Account | null> {
   try {
     const mel = normalizeAccounts(live.req?.accounts ? await live.req.accounts() : [], live.req?.token).find(isMelious);
@@ -2281,17 +2290,20 @@ export async function melSub(userId: string, convId: string, b: { auftrag?: unkn
   const model = MEL_SUB_MODELL[String(b.modell ?? 'flash')] ?? MEL_SUB_MODELL.flash;
   const cwd = orchMap[key]?.dir ?? live.workDir ?? cwdMap[key] ?? homedir();
   const t0 = Date.now();
-  emitStatus(live, `🇪🇺 Melious-Teilagent (${model}, jcode): ${auftrag.replace(/\s+/g, ' ').slice(0, 80)}${auftrag.length > 80 ? '…' : ''}`);
-  const out = await jcodeSpawn({ cwd, prompt: `${auftrag}\n\n(Nur lesen: nichts ändern, nichts installieren, keine Repo-Skripte ausführen.)`, model, tools: 'read,bash,agentgrep', key: mel.token,
-    timeoutS: envZahl('BRIDGE_MEL_SUB_TIMEOUT_S', 900, 60), abbruch: () => live.abort.signal.aborted });
-  const { j, usage, gelaufen } = jcodeAuswerten(out, cwd, model);
+  const oc2 = opencode2Fuer();   // Läufer-Abstraktion (Konzept J): opencode-2-Server, wenn eingerichtet und gewählt — sonst jcode
+  emitStatus(live, `🇪🇺 Melious-Teilagent (${model}, ${oc2 ? 'opencode 2' : 'jcode'}): ${auftrag.replace(/\s+/g, ' ').slice(0, 80)}${auftrag.length > 80 ? '…' : ''}`);
+  const prompt = `${auftrag}\n\n(Nur lesen: nichts ändern, nichts installieren, keine Repo-Skripte ausführen.)`;
+  const timeoutS = envZahl('BRIDGE_MEL_SUB_TIMEOUT_S', 900, 60), abbruch = () => live.abort.signal.aborted;
+  const { out, j, usage, gelaufen } = oc2
+    ? await oc2.zug({ cwd, prompt, model, timeoutS, abbruch, titel: `mel-sub ${key}` }).then((r) => ({ out: { code: r.code }, j: r.code === 0 ? { text: r.text } : null, usage: r.usage, gelaufen: r.gelaufen }))
+    : await jcodeSpawn({ cwd, prompt, model, tools: 'read,bash,agentgrep', key: mel.token, timeoutS, abbruch }).then((o) => ({ out: o, ...jcodeAuswerten(o, cwd, model) }));
   const energie = mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0;
   try { live.req.onMeliousUsage?.(usage, gelaufen); } catch { /* egal */ }
   // Gebucht wie ein Worker des Zugs (Budget und Messung zählen ihn beim Strang bzw. Hauptchat).
-  try { live.req.onTurnLog?.({ conv: convId, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${gelaufen} (jcode, melious_sub)`, input: usage.input + usage.cacheRead, output: usage.output, cacheRead: usage.cacheRead, energie, outcome: out.code === 0 && j ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: 'mel-sub', parent: key } as ZugLog); } catch { /* egal */ }
-  log('mel-sub', { conv: key, modell: gelaufen, exit: out.code, ms: Date.now() - t0, ...usage, energie: Math.round(energie) });
+  try { live.req.onTurnLog?.({ conv: convId, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${gelaufen} (${oc2 ? 'opencode2' : 'jcode'}, melious_sub)`, input: usage.input + usage.cacheRead, output: usage.output, cacheRead: usage.cacheRead, energie, outcome: out.code === 0 && j ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: 'mel-sub', parent: key } as ZugLog); } catch { /* egal */ }
+  log('mel-sub', { conv: key, laeufer: oc2 ? 'opencode2' : 'jcode', modell: gelaufen, exit: out.code, ms: Date.now() - t0, ...usage, energie: Math.round(energie) });
   if (out.code !== 0 || !j) return { ok: true, text: `melious_sub fehlgeschlagen (Exit ${out.code}) — nimm denselben Auftrag als Teilagent über Claude ([claude] in der description).` };
-  return { ok: true, text: `${String(j.text ?? '(keine Antwort)')}\n\n— melious_sub · ${gelaufen} · jcode · ≈ ${Math.round(energie)} Energie · Ergebnis ist ein Kandidat: am Code nachprüfen.` };
+  return { ok: true, text: `${String(j.text ?? '(keine Antwort)')}\n\n— melious_sub · ${gelaufen} · ${oc2 ? 'opencode 2' : 'jcode'} · ≈ ${Math.round(energie)} Energie · Ergebnis ist ein Kandidat: am Code nachprüfen.` };
 }
 
 /** Auslastung für das Werkzeug `auslastung` (Lead): cswap + Melious-Rest des Kontos der Person. */
