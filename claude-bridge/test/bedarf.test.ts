@@ -2,9 +2,9 @@
 // Geheimnis-Orte; danach erlaubt der Wächter dort lokale Commits (strangLokal) wie im eigenen Worktree.
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdtempSync, mkdirSync, realpathSync, existsSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
+import { join, dirname } from 'node:path';
 
 let mod: typeof import('../src/sessions.ts');
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-bedarf-'));
@@ -19,6 +19,8 @@ test('Zugang: nur bestehende Ordner, keine Geheimnis-Orte, höchstens 24 h, unbe
   assert.ok(mod.strangFreigaben('u2', C).includes(ANDERS));
   assert.throws(() => mod.strangFreigabe('u2', C, join(ANDERS, 'gibt-es-nicht'), jetzt + 1000), /gibt es nicht/);
   assert.throws(() => mod.strangFreigabe('u2', C, join(process.env.HOME ?? '/home', '.ssh'), jetzt + 1000), /Geheimnis|gibt es nicht/);
+  // Phase 4 (A-S2/S6): jeder Punkt-Ordner direkt im Home und alles über dem Home
+  for (const p of [join(homedir(), '.cache'), join(homedir(), '.local'), dirname(homedir()), '/'].filter((p) => existsSync(p))) assert.throws(() => mod.strangFreigabe('u2', C, p, jetzt + 1000), /Geheimnis/, p);
   assert.throws(() => mod.strangFreigabe('u2', C, ANDERS, jetzt + 30 * 3600_000), /24/);
   assert.throws(() => mod.strangFreigabe('u2', '33333333-3333-3333-3333-333333333333', ANDERS, jetzt + 1000), /Strang/);
 });

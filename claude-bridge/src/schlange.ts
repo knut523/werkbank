@@ -109,6 +109,9 @@ export async function warte(p: Omit<Platz, 'since' | 'grund'>, o: { frei: () => 
   }
 }
 
+/** Abbruch durch Knut (A8/K6): kein gemerkter Platz — wer später neu schreibt, stellt sich hinten an. */
+export function vergiss(key: string): void { frueher.delete(key); }
+
 /** Der gestartete Zug ist als laufend eingetragen: Sperre lösen, die Nächsten prüfen erneut. */
 export function angemeldet(): void {
   if (!startSperre) return;

@@ -2,7 +2,7 @@
 // Verbindung weg, Zeitdeckel, Aufrücken nach dem Ende eines Zugs.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { reihe, position, warte, wecke, inSchlange, laenge, angemeldet, maxWarteMs, merkeIn, _leeren, type Platz } from '../src/schlange.ts';
+import { reihe, position, warte, wecke, inSchlange, laenge, angemeldet, maxWarteMs, merkeIn, vergiss, _leeren, type Platz } from '../src/schlange.ts';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -147,4 +147,17 @@ test('Pass C: ungültige Wartezeit fällt auf 45 min zurück (nie ewig warten)',
   process.env.BRIDGE_QUEUE_MAX_MIN = '0.5';
   assert.equal(maxWarteMs(), 60_000);
   if (alt === undefined) delete process.env.BRIDGE_QUEUE_MAX_MIN; else process.env.BRIDGE_QUEUE_MAX_MIN = alt;
+});
+
+test('Phase 4 (A8/K6): von Knut aus der Schlange genommen → kein gemerkter Platz, später hinten an', async () => {
+  let t = 1_000, zu = false;
+  const o = () => ({ frei: () => false, geschlossen: () => zu, melde: () => {}, now: () => t, takt: 5 });
+  const x = warte({ key: 'x', userId: 'u', vorrang: false }, o());
+  await new Promise((r) => setTimeout(r, 10));
+  zu = true; wecke(); assert.equal(await x, 'zu');
+  vergiss('x'); zu = false; t = 9_000;
+  const x2 = warte({ key: 'x', userId: 'u', vorrang: false }, o());
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(inSchlange('x')?.since, 9_000, 'neuer Platz, nicht der alte');
+  zu = true; wecke(); await x2;
 });

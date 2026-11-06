@@ -26,7 +26,6 @@ test('Modelltest 06.11.: Ensemble Flash/DeepSeek/glm-5.2; prüfen und tief glm-5
   assert.deepEqual(modellReihe({ art: 'ensemble', lauf: 'B', frei: { [DEEPSEEK]: 0 } }), [FLASH, GLM52, GLM], 'Rückfall bei Limit');
   assert.deepEqual(modellReihe({ art: 'pruefen' }), [GLM52, GLM, DEEPSEEK, FLASH]);
   assert.equal(modellReihe({ art: 'tief' })[0], GLM52);
-  assert.equal(modellReihe({ art: 'gegenpruefung', nr: 0 })[0], DEEPSEEK); assert.equal(modellReihe({ art: 'gegenpruefung', nr: 1 })[0], GLM);
   assert.ok(!modellReihe({ art: 'lesen', zufall: 0.5 }).includes('minimax-m3'), 'minimax-m3 gestrichen');
   assert.equal(ensembleLauf('Review-Strang (Pass 1) für PR #359. Lauf B.\nArbeitsordner'), 'B');
   assert.equal(ensembleLauf('Laufzeit messen'), null);

@@ -28,5 +28,6 @@ test('Vorrang (@review einer erlaubten Person): darf die Startgrenze der Box um 
   assert.equal(passt(s, voll).ok, false, 'ohne Vorrang wartet er');
   assert.equal(passt(s, { ...voll, vorrang: true }).ok, true, 'mit Vorrang startet er');
   assert.equal(passt(s, { ...voll, stand: { echtGb: GRENZE.echtStartGb + GRENZE.vorrangExtraGb, hostFreiGb: 12 }, vorrang: true }).ok, false, 'Spielraum ist begrenzt');
+  assert.match(passt(s, { ...voll, stand: { echtGb: GRENZE.echtStartGb + GRENZE.vorrangExtraGb, hostFreiGb: 12 }, vorrang: true }).grund, new RegExp(`> ${GRENZE.echtStartGb + GRENZE.vorrangExtraGb} GB`), 'Meldung nennt die wirksame Grenze');
   assert.match(passt(s, { stand: { echtGb: 4, hostFreiGb: 3.2 }, frisch: 0, laufend: 1, vorrang: true }).grund, /Host zu knapp/);
 });

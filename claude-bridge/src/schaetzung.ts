@@ -1,7 +1,8 @@
 // Schätzung vor dem Start statt Zahl-Grenze (Knut 19.10., F7: „Stränge nicht zahlenmäßig limitieren — je Strang schätzen, wie viel er
 // braucht, und vor dem Start abgleichen, ob das realistisch in die Box passt; sonst warten oder Hinweis“). Der Speicherwächter bleibt
-// die Notbremse. Grenzen wie ~/bin/speicher-waechter: Abbruch bei echt > 11 GB oder Host frei < 3 GB — ein Start muss danach noch
-// 2 GB unter der Abbruchgrenze bleiben (echt ≤ 9) und den Host nicht unter 3 GB drücken.
+// die Notbremse. Startgrenze echt ≤ 12 GB (Knut 04.11., vorher 9: Stränge warteten bei 6 GB frei unnötig) und Host frei ≥ 3 GB.
+// ponytail: ~/bin/speicher-waechter bricht schon bei echt > 11 GB ab (WB_MAX_GB) — die Startgrenze liegt darüber; der Host-Boden
+// ist die eigentliche Bremse. Angleichen (Wächter 13 oder Start 10) entscheidet Knut (Bericht, Phase 4 S5).
 // Startwerte (gemessen grob: ~0,3–0,4 GB je Claude-Prozess, jcode deutlich weniger; Tests/Builds im Strang kurzzeitig 1–1,5 GB);
 // Dauer und Tokens je Tiefe aus den Strang-Läufen der letzten Wochen gerundet. Rein bis auf den Speicher-Leser.
 import { readFileSync } from 'node:fs';
@@ -43,7 +44,8 @@ export function passt(neu: Schaetzung, o: { stand: SpeicherStand | null; frisch:
   const echt = o.stand.echtGb + o.frisch + neu.speicherGb;
   const host = o.stand.hostFreiGb - o.frisch - neu.speicherGb;
   if (o.laufend === 0) return host >= GRENZE.hostMinGb ? { ok: true, grund: '' } : { ok: false, grund: `Host fast voll (frei ${o.stand.hostFreiGb.toFixed(1)} GB)` };
-  if (echt > GRENZE.echtStartGb + (o.vorrang ? GRENZE.vorrangExtraGb : 0)) return { ok: false, grund: `passt gerade nicht in die Box (echt ${o.stand.echtGb.toFixed(1)} GB + ${(o.frisch + neu.speicherGb).toFixed(1)} GB geschätzt > ${GRENZE.echtStartGb} GB)` };
+  const grenze = GRENZE.echtStartGb + (o.vorrang ? GRENZE.vorrangExtraGb : 0);   // A-S9: die Meldung nennt die wirksame Grenze
+  if (echt > grenze) return { ok: false, grund: `passt gerade nicht in die Box (echt ${o.stand.echtGb.toFixed(1)} GB + ${(o.frisch + neu.speicherGb).toFixed(1)} GB geschätzt > ${grenze} GB)` };
   if (host < GRENZE.hostMinGb) return { ok: false, grund: `Host zu knapp (frei ${o.stand.hostFreiGb.toFixed(1)} GB, geschätzt ${neu.speicherGb.toFixed(1)} GB)` };
   return { ok: true, grund: '' };
 }

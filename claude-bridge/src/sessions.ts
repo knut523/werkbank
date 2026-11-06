@@ -22,13 +22,13 @@ import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
-import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn } from './schlange.ts';
-import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer } from './laeufer.ts';
+import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn, vergiss } from './schlange.ts';
+import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer, type LaeuferNutzung } from './laeufer.ts';
 import { testkontoNamen, zieleText } from './klick.ts';
 import { ensemble, mitRueckfall, schattenAn, VERIFIZIERER, type Lauf, type EnsLauf, type EnsErgebnis } from './ensemble.ts';
 import { createServer as netServer } from 'node:net';
 import { opencode2Server, oc2Home, oc2Ports, oc2Version, type Oc2Server } from './oc2server.ts';
-import { modellReihe, ensembleLauf } from './modellwahl.ts';
+import { modellReihe, ensembleLauf, FLASH, GLM52, type Art } from './modellwahl.ts';
 import { schaetze, passt, passtJcode, schaetzungText, speicherStand, jcodeTopfGb, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
@@ -1066,7 +1066,9 @@ export function strangFreigabe(userId: string, convId: string, pfad: string, bis
   if (!Number.isFinite(bis) || bis <= Date.now() || bis > Date.now() + 24 * 3600_000 + 60_000) throw Object.assign(new Error('Frist: höchstens 24 h.'), { status: 400 });
   let real: string;
   try { real = realpathSync(pfad); if (!statSync(real).isDirectory()) throw new Error(); } catch { throw Object.assign(new Error(`Ordner ${pfad} gibt es nicht.`), { status: 400 }); }
-  if (/(^|\/)(\.ssh|\.claude|\.runtime|\.gnupg)(\/|$)|\/\.config\/vw(\/|$)/.test(real) || real === homedir() || real === '/') throw Object.assign(new Error('Geheimnis-Orte und das ganze Home gibt es nicht als Zugang.'), { status: 400 });
+  // Phase 4 (A-S2/S6): auch jeder Punkt-Ordner direkt im Home (.config, .local, .cache, .melious …) und jeder Ordner über dem Home
+  const imHome = real.startsWith(homedir() + '/') ? real.slice(homedir().length + 1) : null;
+  if (/(^|\/)(\.ssh|\.claude|\.runtime|\.gnupg)(\/|$)|\/\.config\/vw(\/|$)/.test(real) || imHome?.startsWith('.') || (homedir() + '/').startsWith(real === '/' ? '/' : real + '/')) throw Object.assign(new Error('Geheimnis-Orte und das ganze Home gibt es nicht als Zugang.'), { status: 400 });
   e.freigaben = [...(e.freigaben ?? []).filter((f) => f.bis > Date.now() && f.pfad !== real), { pfad: real, bis }];
   saveMap();
   log('strang freigabe', { conv: key, pfad: real, bis: new Date(bis).toISOString() });
@@ -1434,6 +1436,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     });
     log('schlange', { conv: key, ergebnis: r, grund: grund0 || 'unbekannt', wartetMs: Date.now() - warteAb, laufend: meine().length, profil: orchMap[key]?.profil ?? null });
     const vonKnut = schlangeAbbruch.delete(key);
+    if (vonKnut) vergiss(key);
     if (r === 'zu') {
       if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'aborted' });
       if (vonKnut && !req.sink.closed) { req.sink.write('Von Knut aus der Schlange genommen — dieser Zug startet nicht.'); req.sink.finish(); }
@@ -2182,7 +2185,12 @@ function jcodeAuswerten(out: { stdout: string }, cwd: string, model: string | nu
     try { const sj = JSON.parse(readFileSync(join(homedir(), '.jcode', 'sessions', `${j.session_id}.json`), 'utf8')); usage = jcodeUsage(sj); draussen = jcodeWritesOutside(sj, cwd); } catch { /* ohne Sitzungsdatei */ }
   }
   if (!usageTotal(usage) && j?.usage) usage = { input: Math.max(0, (j.usage.input_tokens || 0) - (j.usage.cache_read_input_tokens || 0)), output: j.usage.output_tokens || 0, cacheRead: j.usage.cache_read_input_tokens || 0, cacheWrite: 0 };
-  return { j, usage, draussen, gelaufen: String(j?.model ?? model ?? 'glm-5.3-flash') };
+  return { j, usage, draussen, gelaufen: String(j?.model ?? model ?? FLASH) };
+}
+
+/** Modellreihe eines Melious-Laufs aus Abo/Preisliste und freiem Monatsanteil des Kontos (A-S6: an einer Stelle). */
+function reiheFuer(mel: Account, art: Art, lauf: 'A' | 'B' | 'C' | null = null): string[] {
+  return modellReihe({ art, lauf, erlaubt: mel.abo?.length ? mel.abo : Object.keys(mel.faktoren ?? {}), frei: Object.fromEntries((mel.pool ?? []).map((p) => [p.model, p.frei])) });
 }
 
 // A-B6: Ziele und Personas aus klick.ts (KLICK_ZIELE, Testkonten-Datei), damit der Hinweis nicht von der Allowlist abweicht.
@@ -2204,53 +2212,57 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   // Knut 06.11.: Leser verteilt auf die PRO-Modelle (Flash/DeepSeek gewichtet, Ensemble A/B/C gemischt), Rückfall auf das nächste
   // bei Fehler oder Limit (modellwahl.ts). Schreiber wie bisher nach der Rolle der Einrichtung.
   const reihe = fest ? [fest] : d.rolle === 'leser'
-    ? modellReihe({ art: ensembleLauf(d.aufgabe) ? 'ensemble' : 'lesen', lauf: ensembleLauf(d.aufgabe), erlaubt: mel.abo?.length ? mel.abo : Object.keys(mel.faktoren ?? {}), frei: Object.fromEntries((mel.pool ?? []).map((p) => [p.model, p.frei])) })
-    : [mel.rollen?.schreiber?.[0] ?? 'glm-5.3-flash'];
+    ? reiheFuer(mel, ensembleLauf(d.aufgabe) ? 'ensemble' : 'lesen', ensembleLauf(d.aufgabe))
+    : [mel.rollen?.schreiber?.[0] ?? FLASH];
   // Live-Test 15.10.: die Rolle lieferte „auto“ → jcode lief auf dem Profil-Standard, gebucht wurden 0 Energie (kein Preis für „auto“).
   // „auto“ (oder ein Name ohne Preis) → kein --model, jcode nimmt den Profil-Standard; gebucht wird mit dem Modell, das jcode meldet.
   const alsModell = (m: string) => (m === 'auto' || (mel!.faktoren && !mel!.faktoren[m]) ? null : m);
   const tools = d.rolle === 'leser' ? 'read,bash,agentgrep' : 'read,bash,write,edit,agentgrep';
   const t0 = Date.now();
-  // Läufer (Pilot, Hauptsitzung 06.11.): lesende Worker ab opencode2Ab() gleichzeitigen Lesern auf einem opencode-2-Server; fällt er
-  // aus, läuft derselbe Auftrag über jcode weiter (unten).
-  // J3: Klick-Aufträge brauchen die Shell (klick) — opencode 2 hat keine, also immer jcode.
-  if (d.rolle === 'leser' && !d.klick) {
-    const oc2 = await opencode2Jetzt(mel.token);
+  // A3: jeder Versuch wird gebucht (auch ein Rückfall verbraucht Energie), nicht nur der letzte.
+  const buche = (usage: LaeuferNutzung, gelaufen: string, ok: boolean, laeufer: 'jcode' | 'opencode2') => {
+    const energie = mel!.faktoren ? energieOf(usage, gelaufen, mel!.faktoren) : 0;
+    d.input += usage.input + usage.cacheRead; d.output += usage.output; d.energie += energie;
+    try { d.req.onMeliousUsage?.(usage, gelaufen); } catch { /* egal */ }
+    try { d.req.onTurnLog?.({ conv: d.workerConv, art: 'worker', phase: null, konto: mel!.id, anbieter: 'melious', modell: `${gelaufen} (${laeufer})`, input: usage.input + usage.cacheRead, output: usage.output, cacheRead: usage.cacheRead, energie, outcome: ok ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: d.id, parent: d.parent }); } catch { /* egal */ }
+    return energie;
+  };
+  const leser = d.rolle === 'leser';
+  if (leser) lesendLaufend++;   // K2: vor der Wahl des Läufers mitzählen (wie melSub) — sonst sieht opencode2Jetzt einen Leser zu wenig
+  try {
+    // Läufer (Pilot, Hauptsitzung 06.11.): lesende Worker ab opencode2Ab() gleichzeitigen Lesern auf einem opencode-2-Server; fällt er
+    // aus, läuft derselbe Auftrag über jcode weiter (unten).
+    // J3: Klick-Aufträge brauchen die Shell (klick) — opencode 2 hat keine, also immer jcode.
+    const oc2 = leser && !d.klick ? await opencode2Jetzt(mel.token) : null;
     if (oc2) {
-      lesendLaufend++;
-      const r = await oc2.zug({ cwd: d.cwd, prompt, model: reihe[0] ?? 'glm-5.3-flash', timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted, titel: `worker ${d.id}` }).finally(() => { lesendLaufend--; });
-      const energie = mel.faktoren ? energieOf(r.usage, r.gelaufen, mel.faktoren) : 0;
-      d.input += r.usage.input + r.usage.cacheRead; d.output += r.usage.output; d.energie += energie;
-      try { d.req.onMeliousUsage?.(r.usage, r.gelaufen); } catch { /* egal */ }
-      try { d.req.onTurnLog?.({ conv: d.workerConv, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${r.gelaufen} (opencode2)`, input: r.usage.input + r.usage.cacheRead, output: r.usage.output, cacheRead: r.usage.cacheRead, energie, outcome: r.code === 0 ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: d.id, parent: d.parent }); } catch { /* egal */ }
+      const r = await oc2.zug({ cwd: d.cwd, prompt, model: reihe[0] ?? FLASH, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted, titel: `worker ${d.id}` });
+      const energie = buche(r.usage, r.gelaufen, r.code === 0, 'opencode2');
       log('worker opencode2', { delegation: d.id, modell: r.gelaufen, code: r.code, grund: r.grund ?? null, ms: Date.now() - t0, energie: Math.round(energie) });
       if (r.code === 0 && r.text) { d.modell = `Melious ${r.gelaufen} (opencode 2)`; d.konto = mel.id; d.anbieter = 'melious'; return r.text; }
       if (d.aborted) return 'abgebrochen';
       d.abweichungen.push(`opencode 2 lieferte nichts (${r.grund ?? `Code ${r.code}`}) — derselbe Auftrag über jcode`);
     }
-  }
-  if (d.rolle === 'leser') lesendLaufend++;
-  let model = alsModell(reihe[0] ?? 'glm-5.3-flash'), out!: { code: number | null; stdout: string; stderr: string }, ausw!: ReturnType<typeof jcodeAuswerten>;
-  try {
-  for (const [i, m] of (reihe.length ? reihe : ['glm-5.3-flash']).slice(0, 3).entries()) {
-    model = alsModell(m);
-    out = await jcodeSpawn({ cwd: d.cwd, prompt: d.klick ? prompt + klickHinweis() : prompt, model, tools, key: mel.token, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted, extra: d.klick ? { WERKBANK_KLICK: '1', WERKBANK_KLICK_AUS: d.klick } : undefined });
-    ausw = jcodeAuswerten(out, d.cwd, model);
-    if ((out.code === 0 && ausw.j) || d.aborted || ausw.draussen.length || d.rolle !== 'leser') break;
-    log('worker jcode rückfall', { delegation: d.id, modell: m, exit: out.code, naechstes: reihe[i + 1] ?? null });
-    if (i + 1 < reihe.length) d.abweichungen.push(`Modell ${m} lieferte nichts (Exit ${out.code}) — Rückfall auf ${reihe[i + 1]}`);
-  }
-  } finally { if (d.rolle === 'leser') lesendLaufend--; }
-  const { j, usage, draussen, gelaufen } = ausw;
-  const energie = mel.faktoren ? energieOf(usage, gelaufen, mel.faktoren) : 0;
-  d.input += usage.input + usage.cacheRead; d.output += usage.output; d.energie += energie;
-  d.modell = `Melious ${gelaufen} (jcode)`; d.konto = mel.id; d.anbieter = 'melious';
-  try { d.req.onMeliousUsage?.(usage, gelaufen); } catch { /* egal */ }
-  try { d.req.onTurnLog?.({ conv: d.workerConv, art: 'worker', phase: null, konto: mel.id, anbieter: 'melious', modell: `${gelaufen} (jcode)`, input: usage.input + usage.cacheRead, output: usage.output, cacheRead: usage.cacheRead, energie, outcome: out.code === 0 ? 'ok' : 'fehler', ms: Date.now() - t0, delegation: d.id, parent: d.parent }); } catch { /* egal */ }
-  log('worker jcode', { delegation: d.id, modell: gelaufen, exit: out.code, ms: Date.now() - t0, ...usage, energie: Math.round(energie) });
-  if (draussen.length) { log('worker jcode ausserhalb', { delegation: d.id, pfade: draussen.slice(0, 10) }); return `jcode-Ergebnis verworfen: Der Worker hat außerhalb des Arbeitsordners geschrieben (${draussen.slice(0, 5).join(', ')}). Bitte prüfen und ggf. zurücksetzen.`; }
-  if (out.code !== 0 || !j) return `jcode-Lauf fehlgeschlagen (Exit ${out.code}). ${String(out.stderr).split('\n').filter(Boolean).slice(-3).join(' · ').slice(0, 600)}`;
-  return String(j.text ?? '');
+    // ponytail: höchstens drei Modelle je Auftrag (Laufzeit); weitere der Reihe bleiben ungenutzt.
+    const versuche = (reihe.length ? reihe : [FLASH]).slice(0, 3);
+    let out!: { code: number | null; stdout: string; stderr: string }, ausw!: ReturnType<typeof jcodeAuswerten>;
+    for (const [i, m] of versuche.entries()) {
+      const model = alsModell(m);
+      out = await jcodeSpawn({ cwd: d.cwd, prompt: d.klick ? prompt + klickHinweis() : prompt, model, tools, key: mel.token, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted, extra: d.klick ? { WERKBANK_KLICK: '1', WERKBANK_KLICK_AUS: d.klick } : undefined });
+      ausw = jcodeAuswerten(out, d.cwd, model);
+      const energie = buche(ausw.usage, ausw.gelaufen, out.code === 0 && !!ausw.j, 'jcode');
+      log('worker jcode', { delegation: d.id, modell: ausw.gelaufen, exit: out.code, ms: Date.now() - t0, ...ausw.usage, energie: Math.round(energie) });
+      if ((out.code === 0 && ausw.j) || d.aborted || ausw.draussen.length || !leser) break;
+      // A7: „Rückfall auf …“ nur, wenn es wirklich einen weiteren Versuch gibt
+      const naechstes = versuche[i + 1] ?? null;
+      log('worker jcode rückfall', { delegation: d.id, modell: m, exit: out.code, naechstes });
+      d.abweichungen.push(naechstes ? `Modell ${m} lieferte nichts (Exit ${out.code}) — Rückfall auf ${naechstes}` : `Modell ${m} lieferte nichts (Exit ${out.code}) — kein weiterer Versuch`);
+    }
+    const { j, draussen, gelaufen } = ausw;
+    d.modell = `Melious ${gelaufen} (jcode)`; d.konto = mel.id; d.anbieter = 'melious';
+    if (draussen.length) { log('worker jcode ausserhalb', { delegation: d.id, pfade: draussen.slice(0, 10) }); return `jcode-Ergebnis verworfen: Der Worker hat außerhalb des Arbeitsordners geschrieben (${draussen.slice(0, 5).join(', ')}). Bitte prüfen und ggf. zurücksetzen.`; }
+    if (out.code !== 0 || !j) return `jcode-Lauf fehlgeschlagen (Exit ${out.code}). ${String(out.stderr).split('\n').filter(Boolean).slice(-3).join(' · ').slice(0, 600)}`;
+    return String(j.text ?? '');
+  } finally { if (leser) lesendLaufend--; }
 }
 
 // ---------- Konzept J, J1 (Knut 05.11., Go): jcode-Strang ----------
@@ -2296,7 +2308,7 @@ async function strangJcode(live: Live, req: TurnRequest, prompt: string): Promis
   if (!mel) return { ok: false, grund: 'kein nutzbares Melious-Konto' };
   const fest = typeof e.modell === 'string' && e.modell.startsWith('melious:') ? e.modell.slice(8) : null;
   // Knut 06.11.: lesende Stränge verteilt auf die PRO-Modelle; der zweite Versuch nimmt das nächste Modell (Rückfall bei Fehler/Limit).
-  const reihe = fest ? [fest] : modellReihe({ art: 'lesen', erlaubt: mel.abo?.length ? mel.abo : Object.keys(mel.faktoren ?? {}), frei: Object.fromEntries((mel.pool ?? []).map((p) => [p.model, p.frei])) });
+  const reihe = fest ? [fest] : reiheFuer(mel, 'lesen');
   const alsModell = (m: string | undefined) => (!m || m === 'auto' || (mel.faktoren && Object.keys(mel.faktoren).length && !mel.faktoren[m]) ? null : m);
   let grund = '';
   for (const [i, art] of jcodeReihe().entries()) {
@@ -2328,7 +2340,7 @@ async function strangJcode(live: Live, req: TurnRequest, prompt: string): Promis
 // mit dem Melious-Konto der Person und gebucht wie ein Worker. Synchron, nur lesend (shim/bash), im Arbeitsordner des Zugs.
 // Code schreiben und entscheiden bleibt auf Claude. BRIDGE_MEL_SUB=off schaltet ab (dann wieder Claude-Teilagenten).
 export const melSubAn = () => process.env.BRIDGE_MEL_SUB !== 'off' && existsSync(JCODE_BIN());
-const MEL_SUB_MODELL: Record<string, string> = { flash: 'glm-5.3-flash', glm: 'glm-5.2' };   // nur Rückfall, falls modellReihe leer bleibt
+const MEL_SUB_MODELL: Record<string, string> = { flash: FLASH, glm: GLM52 };   // nur Rückfall, falls modellReihe leer bleibt
 /** Rollen der Teilagenten, die nur lesen — die gehen standardmäßig an Melious. */
 export const LESE_TEILAGENTEN = new Set(['leser', 'strang-leser', 'ticket-pruefer', 'Explore']);
 
@@ -2490,7 +2502,7 @@ export async function melSub(userId: string, convId: string, b: { auftrag?: unkn
   if (!mel) return { ok: false, status: 409, error: 'Melious ist für dich gerade nicht verfügbar (kein Konto, erschöpft oder gesperrt) — nimm einen Teilagenten über Claude ([claude] in der description).' };
   live.melSubs = (live.melSubs ?? 0) + 1;
   // Knut 06.11.: „flash“ = lesen (Flash/DeepSeek gewichtet), „glm“ = prüfen (glm-5.2 zuerst, modellwahl.ts); Rückfall auf das nächste PRO-Modell.
-  const reihe = modellReihe({ art: String(b.modell) === 'glm' ? 'pruefen' : 'lesen', erlaubt: mel.abo?.length ? mel.abo : Object.keys(mel.faktoren ?? {}), frei: Object.fromEntries((mel.pool ?? []).map((p) => [p.model, p.frei])) });
+  const reihe = reiheFuer(mel, String(b.modell) === 'glm' ? 'pruefen' : 'lesen');
   let model = reihe[0] ?? MEL_SUB_MODELL[String(b.modell ?? 'flash')] ?? MEL_SUB_MODELL.flash;
   // Phase 4 (Pass B, B2): ohne Arbeitsordner nie das Home-Verzeichnis (dort liegen Zugangsdaten) — dann der leere Scratch-Ordner.
   const cwd = orchMap[key]?.dir ?? live.workDir ?? cwdMap[key] ?? scratchFor(userId);
