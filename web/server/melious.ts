@@ -19,6 +19,7 @@ import { seal, unseal } from './crypto.ts';
 import type { User } from './auth.ts';
 import { cfg } from './config.ts';
 import { bwSecret } from './vaultwarden.ts';
+import { MELIOUS_ABO } from './tiefe.ts';
 
 export const MELIOUS_ID = 'melious';
 export const MELIOUS_KEY = /^sk-mel-[\w-]{8,200}$/;
@@ -48,8 +49,8 @@ export const ROLLEN_VORGABE: Record<string, string[]> = {
 };
 export const ROLLEN = ['leser', 'schreiber', 'niedrig'];
 // Im PRO-Abo enthalten (Hotfix 15.10., Knut: „bei Melious nur die Modelle nutzen, die auch im Abo drin sind“); Einstellung „abo“.
-// PRO-Plan laut Knut 06.11.: glm-5.3, glm-5.3-flash, glm-5.2, deepseek-v4.1-flash-1017 (minimax-m3 über Melious nicht verfügbar).
-export const MELIOUS_ABO = ['glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'deepseek-v4.1-flash-1017', 'deepseek-v4.1-flash'];   // ohne Suffix: gespeicherte Rollen nennen es noch (Gegenprüfung 06.11.)
+// Die Liste selbst steht in tiefe.ts (rein, auch für den Strang-Start).
+export { MELIOUS_ABO };
 /** Gespeicherte Abo-Liste plus fehlende PRO-Modelle (Hauptsitzung 06.11.: alte Listen beim Laden ergänzen statt sie wegzulassen). */
 export const aboMitPro = (abo?: string[] | null) => (abo ? [...new Set([...abo, ...MELIOUS_ABO])] : MELIOUS_ABO);
 /** Modellnamen, die nicht im Abo sind (`:eco` zählt wie das Modell), ohne Doppelte. */

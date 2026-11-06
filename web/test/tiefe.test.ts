@@ -134,4 +134,6 @@ test('Fertig = keine ETA: Marke „fertig“, Zustand fertig/erledigt, CLI ohne 
 test('Melious-Abo: nur Abo-Modelle (Energie statt Guthaben), Claude und melious:auto frei', () => {
   for (const m of ['melious:glm-5.3', 'melious:glm-5.3-flash', 'melious:deepseek-v4.1-flash', 'melious:auto', 'claude:sonnet', null]) assert.equal(modellAusserhalbAbo(m), null, String(m));
   assert.match(String(modellAusserhalbAbo('melious:kimi-k2')), /nicht im Melious-Abo/);
+  // Phase 4: dieselbe Liste wie die Einstellungen — der PRO-Plan (glm-5.2, DeepSeek mit Suffix) startet
+  for (const m of ['melious:glm-5.2', 'melious:deepseek-v4.1-flash-1017']) assert.equal(modellAusserhalbAbo(m), null, m);
 });

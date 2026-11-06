@@ -39,20 +39,34 @@ const wecker = new Set<() => void>();
 // Nach einem Start bis zum nächsten Takt niemanden starten: der Gestartete ist erst danach als laufend eingetragen.
 let startSperre = false;
 
-/** Reihenfolge einer Person: Vorrang zuerst, dann nach Ankunft. */
-export function reihe(q: readonly Platz[], userId: string, topf?: string): Platz[] {
-  return q.filter((p) => p.userId === userId && (p.topf ?? '') === (topf ?? '')).sort((a, b) => Number(b.vorrang) - Number(a.vorrang) || a.since - b.since);
+/** Alterungszeit (Fehlervariante 2, 06.11.2026, aus Strang e1ea43fa übernommen): ab hier rückt ein normaler Zug vor die
+ *  Vorrang-Züge, damit Vorrang (PR-Reviews) nichts verhungern lässt — 83021050 rutschte hinter Reviews von Platz 2 auf 4 und
+ *  endete nach dem Zeitdeckel mit „busy“. Vorgabe 20 min, mit `BRIDGE_QUEUE_ALTER_MIN` einstellbar. */
+export const alterMs = () => { const m = Number(process.env.BRIDGE_QUEUE_ALTER_MIN || 20); return Number.isFinite(m) && m > 0 ? m * 60_000 : 20 * 60_000; };
+
+/** Reihenfolge einer Person je Topf: gealterte Züge zuerst (ältester zuerst), sonst Vorrang, dann Ankunft. `jetzt` für Tests. */
+export function reihe(q: readonly Platz[], userId: string, topf?: string, jetzt: number = Date.now()): Platz[] {
+  const altertAb = jetzt - alterMs();
+  return q.filter((p) => p.userId === userId && (p.topf ?? '') === (topf ?? '')).sort((a, b) =>
+    Number(b.since <= altertAb) - Number(a.since <= altertAb)   // gealterte Züge zuerst (negativ = a vorn)
+    || (a.since <= altertAb ? 0 : Number(b.vorrang) - Number(a.vorrang))   // sonst Vorrang
+    || a.since - b.since);
 }
 
 /** Platz in der Schlange (1 = als Nächster dran), 0 = nicht in der Schlange. */
-export function position(q: readonly Platz[], key: string): number {
+export function position(q: readonly Platz[], key: string, jetzt: number = Date.now()): number {
   const p = q.find((x) => x.key === key);
   if (!p) return 0;
-  return reihe(q, p.userId, p.topf).findIndex((x) => x.key === key) + 1;
+  return reihe(q, p.userId, p.topf, jetzt).findIndex((x) => x.key === key) + 1;
 }
 
 export const schlangeAn = () => process.env.BRIDGE_QUEUE !== '0';
 export const maxWarteMs = () => { const m = Number(process.env.BRIDGE_QUEUE_MAX_MIN || 45); return Number.isFinite(m) ? Math.max(60_000, m * 60_000) : 45 * 60_000; };
+
+/** Lebenszeichen in der Schlange (Schlangen-Fehler 06.11.2026): LibreChat räumt eine Antwort ab, die 20 min keinen Chunk
+ *  geschickt hat (InMemoryJobStore, staleJobTimeout) — dann schloss die Senke und der wartende Zug endete „aborted“.
+ *  Darum spätestens alle 10 min eine Zeile, auch wenn sich der Platz nicht ändert. `BRIDGE_QUEUE_LEBENSZEICHEN_S`. */
+export const lebenszeichenMs = () => { const s = Number(process.env.BRIDGE_QUEUE_LEBENSZEICHEN_S || 600); return Number.isFinite(s) && s > 0 ? s * 1000 : 600_000; };
 
 export function inSchlange(key: string): { pos: number; since: number; grund: string } | null {
   const p = schlange.find((x) => x.key === key);
@@ -70,9 +84,12 @@ export function wecke(): void {
 
 /**
  * Wartet, bis dieser Zug dran ist und `frei()` einen Platz meldet. Ergebnis: 'start' | 'zu' (Verbindung weg) | 'zeit'
- * (länger als maxWarteMs). `melde(pos)` wird bei jeder Positionsänderung aufgerufen (Statuszeile im Chat).
+ * (länger als maxWarteMs). `melde(pos)` wird bei jeder Positionsänderung aufgerufen (Statuszeile im Chat); ändert sich der
+ * Platz lebenszeichenMs() lang nicht, kommt `melde(pos, minuten)` erneut (Lebenszeichen, siehe dort).
+ * `ohneDeckel`: Strang- und Worker-Züge enden nie mit 'zeit' (Fehlervariante 2, 06.11.2026) — sie warten, bis sie dran sind;
+ * die Verbindungskontrolle (`geschlossen`) bleibt die einzige Abbruchbedingung.
  */
-export async function warte(p: Omit<Platz, 'since' | 'grund'>, o: { frei: () => boolean; grund?: () => string; geschlossen: () => boolean; melde: (pos: number) => void; now?: () => number; takt?: number }): Promise<'start' | 'zu' | 'zeit'> {
+export async function warte(p: Omit<Platz, 'since' | 'grund'>, o: { frei: () => boolean; grund?: () => string; geschlossen: () => boolean; melde: (pos: number, minuten?: number) => void; now?: () => number; takt?: number; ohneDeckel?: boolean }): Promise<'start' | 'zu' | 'zeit'> {
   const now = o.now ?? Date.now;
   const alt = frueher.get(p.key);
   const ankunft = now();
@@ -80,20 +97,21 @@ export async function warte(p: Omit<Platz, 'since' | 'grund'>, o: { frei: () => 
   frueher.delete(p.key);
   schlange.push(platz);
   speichern();
-  let zuletzt = -1;
+  let zuletzt = -1, gemeldet = now();
   let gestartet = false;
   try {
     for (;;) {
       if (o.geschlossen()) return 'zu';
-      const pos = position(schlange, p.key);
+      const pos = position(schlange, p.key, now());
       if (pos === 1 && !startSperre && o.frei()) { gestartet = true; startSperre = true; return 'start'; }
       const g = o.grund?.() ?? platz.grund;
       if (g !== platz.grund) { platz.grund = g; speichern(); }
-      if (now() - ankunft > maxWarteMs()) return 'zeit';   // Deckel je Verbindung, nicht ab dem gemerkten Platz (Gegenprüfung 05.11.)
-      if (pos !== zuletzt) { zuletzt = pos; o.melde(pos); }
+      if (!o.ohneDeckel && now() - ankunft > maxWarteMs()) return 'zeit';   // Deckel je Verbindung, nicht ab dem gemerkten Platz (Gegenprüfung 05.11.)
+      if (pos !== zuletzt) { zuletzt = pos; gemeldet = now(); o.melde(pos); }
+      else if (now() - gemeldet >= lebenszeichenMs()) { gemeldet = now(); o.melde(pos, Math.floor((now() - platz.since) / 60_000)); }
       await new Promise<void>((r) => {
         const f = () => { clearTimeout(t); wecker.delete(f); r(); };
-        const t = setTimeout(f, o.takt ?? 5_000);
+        const t = setTimeout(f, Math.min(o.takt ?? 5_000, Math.max(1, gemeldet + lebenszeichenMs() - now())));
         wecker.add(f);
       });
     }

@@ -219,6 +219,19 @@ export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<
     }
     if (/limit/.test(tok)) { yield* limited(); return; }
     if (/acct/.test(tok)) yield text(`(Mock) Konto: …${tok.slice(-4)}. `);
+    // Schlange (06.11.2026): „mock-dauer <ms>“ belegt den Platz so lange (abbrechbar), dann normales Ende.
+    const dauer = prompt.match(/mock-dauer (\d+)/);
+    if (dauer) {
+      // Streamt alle 500 ms wie ein arbeitendes Modell (LibreChat räumt stille Antworten ab).
+      for (const bis = Date.now() + Number(dauer[1]); Date.now() < bis && !signal?.aborted;) {
+        await new Promise<void>((r) => { const t = setTimeout(r, Math.min(500, bis - Date.now())); signal?.addEventListener('abort', () => { clearTimeout(t); r(); }, { once: true }); });
+        if (Date.now() < bis && !signal?.aborted) yield text('.');
+      }
+      if (signal?.aborted) return;
+      yield text(`(Mock) fertig nach ${dauer[1]} ms. `);
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 1, output_tokens: 1 } };
+      return;
+    }
     if (prompt === 'Antworte nur mit: ok') { yield text('ok'); yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 5, output_tokens: 1 } }; return; }
     if (prompt.startsWith('WERKBANK-MCP-AUFRUF')) {
       // Ein bestätigter MCP-Aufruf: Werkzeug + Argumente aus dem Prompt, Ergebnis ins Protokoll (für Tests).

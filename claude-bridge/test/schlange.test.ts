@@ -2,7 +2,7 @@
 // Verbindung weg, Zeitdeckel, Aufrücken nach dem Ende eines Zugs.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { reihe, position, warte, wecke, inSchlange, laenge, angemeldet, maxWarteMs, merkeIn, vergiss, _leeren, type Platz } from '../src/schlange.ts';
+import { reihe, position, warte, wecke, inSchlange, laenge, angemeldet, maxWarteMs, alterMs, lebenszeichenMs, merkeIn, vergiss, _leeren, type Platz } from '../src/schlange.ts';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,11 +16,12 @@ test('Reihenfolge je Person: Vorrang zuerst, dann wer zuerst kam; andere Persone
     { key: 'c', userId: 'v', since: 0, vorrang: false },
     { key: 'd', userId: 'u', since: 3, vorrang: false },
   ];
-  assert.deepEqual(reihe(q, 'u').map((p) => p.key), ['b', 'a', 'd']);
-  assert.equal(position(q, 'b'), 1);
-  assert.equal(position(q, 'a'), 2);
-  assert.equal(position(q, 'c'), 1);
-  assert.equal(position(q, 'x'), 0);
+  // seit=1..3 „ms nach Basis 0“: mit jetzt=60_000 ist nichts gealtert (Alterung beginnt erst nach alterMs)
+  assert.deepEqual(reihe(q, 'u', undefined, 60_000).map((p) => p.key), ['b', 'a', 'd']);
+  assert.equal(position(q, 'b', 60_000), 1);
+  assert.equal(position(q, 'a', 60_000), 2);
+  assert.equal(position(q, 'c', 60_000), 1);
+  assert.equal(position(q, 'x', 60_000), 0);
 });
 
 test('Fünf Starts bei Grenze 3: zwei warten (Platz 1 und 2), keiner schlägt fehl; nach dem Ende rücken sie auf', async () => {
@@ -138,6 +139,59 @@ test('Audit 05.11. (3): Schlange übersteht Neustart und Zeitdeckel — wer wied
   if (alt === undefined) delete process.env.BRIDGE_QUEUE_MAX_MIN; else process.env.BRIDGE_QUEUE_MAX_MIN = alt;
   zu = true; wecke(); await z2;
   _leeren(); merkeIn(null);
+});
+
+// Aus Strang e1ea43fa übernommen (Schlangen-Fehler 06.11.2026): Alterung, Strang-Züge ohne Zeitdeckel, Lebenszeichen.
+test('Alterung: nach der Alterungszeit rückt ein normaler Zug vor die Vorrang-Züge (kein Verhungern)', () => {
+  const alt = process.env.BRIDGE_QUEUE_ALTER_MIN; process.env.BRIDGE_QUEUE_ALTER_MIN = '20';
+  const m = 60_000;   // eine Minute in ms; since-Werte als „Minuten seit Basis“
+  const q: Platz[] = [
+    { key: 'alt', userId: 'u', since: 0, vorrang: false },
+    { key: 'rev1', userId: 'u', since: 1 * m, vorrang: true },
+    { key: 'rev2', userId: 'u', since: 2 * m, vorrang: true },
+  ];
+  // frisch (jetzt = 5 min): Vorrang vorn (bisheriges Verhalten)
+  assert.deepEqual(reihe(q, 'u', undefined, 5 * m).map((p) => p.key), ['rev1', 'rev2', 'alt']);
+  // nach 20+ min Wartezeit (jetzt = 25 min): der Alte rückt vor die Reviews (83021050 verhungerte hinter Reviews)
+  assert.deepEqual(reihe(q, 'u', undefined, 25 * m).map((p) => p.key), ['alt', 'rev1', 'rev2']);
+  assert.equal(position(q, 'alt', 25 * m), 1);
+  assert.equal(position(q, 'rev1', 25 * m), 2);
+  // zwei gealterte Züge: wer länger wartet, ist vorn; ein frischer normaler bleibt hinter den Reviews
+  q.push({ key: 'neu', userId: 'u', since: 24 * m, vorrang: false });
+  assert.deepEqual(reihe(q, 'u', undefined, 25 * m).map((p) => p.key), ['alt', 'rev1', 'rev2', 'neu']);
+  // je Person und je Topf: andere Personen und der jcode-Topf unberührt
+  q.push({ key: 'andere', userId: 'v', since: 0, vorrang: false }, { key: 'jc', userId: 'u', since: 0, vorrang: false, topf: 'jcode' });
+  assert.deepEqual(reihe(q, 'v', undefined, 25 * m).map((p) => p.key), ['andere']);
+  assert.deepEqual(reihe(q, 'u', 'jcode', 25 * m).map((p) => p.key), ['jc']);
+  // ungültiger Wert → Vorgabe 20 min
+  process.env.BRIDGE_QUEUE_ALTER_MIN = 'x';
+  assert.equal(alterMs(), 20 * m);
+  if (alt === undefined) delete process.env.BRIDGE_QUEUE_ALTER_MIN; else process.env.BRIDGE_QUEUE_ALTER_MIN = alt;
+});
+
+test('Strang-Zug wartet über den Zeitdeckel hinaus (ohneDeckel) — er endet nie mit „busy“', async () => {
+  let t = 0, frei = false;
+  const z = warte({ key: 's', userId: 'u', vorrang: false }, { frei: () => frei, geschlossen: () => false, melde: () => { t += 61_000; }, now: () => t, takt: 5, ohneDeckel: true });
+  await new Promise((r) => setTimeout(r, 250));
+  assert.ok(inSchlange('s'), 'wartet über den 45-min-Deckel hinaus');
+  frei = true; wecke();
+  assert.equal(await z, 'start');
+  angemeldet();
+});
+
+test('Lebenszeichen: wer auf demselben Platz wartet, meldet sich spätestens nach lebenszeichenMs wieder (LibreChat räumt nach 20 min ohne Chunk ab)', async () => {
+  assert.equal(lebenszeichenMs(), 10 * 60_000, 'Vorgabe 10 min — unter LibreChats 20 min');
+  let t = 0, zu = false;
+  const gemeldet: [number, number | undefined][] = [];
+  const z = warte({ key: 'l', userId: 'u', vorrang: false }, { frei: () => false, geschlossen: () => zu, melde: (p, min) => gemeldet.push([p, min]), now: () => t, takt: 5, ohneDeckel: true });
+  await new Promise((r) => setTimeout(r, 20));
+  t = 9 * 60_000; await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(gemeldet, [[1, undefined]], 'vor 10 min nur die erste Meldung');
+  t = 10 * 60_000 + 1; await new Promise((r) => setTimeout(r, 20));
+  t = 21 * 60_000; await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(gemeldet, [[1, undefined], [1, 10], [1, 21]], 'Lebenszeichen mit Wartezeit in Minuten');
+  zu = true; wecke();
+  assert.equal(await z, 'zu');
 });
 
 test('Pass C: ungültige Wartezeit fällt auf 45 min zurück (nie ewig warten)', () => {

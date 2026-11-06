@@ -22,7 +22,7 @@ import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
-import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn, vergiss } from './schlange.ts';
+import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn, vergiss, maxWarteMs } from './schlange.ts';
 import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer, type LaeuferNutzung } from './laeufer.ts';
 import { testkontoNamen, zieleText } from './klick.ts';
 import { ensemble, mitRueckfall, schattenAn, VERIFIZIERER, type Lauf, type EnsLauf, type EnsErgebnis } from './ensemble.ts';
@@ -242,9 +242,9 @@ const LESER_TOOLS = ['Read', 'Grep', 'Glob'];
 const BAUER_MCP = ['vault-search', 'werkbank'];
 const LESER_MCP = ['vault-search', 'werkbank'];   // Suche im Vault (Lesen); review_ready / hauptchat_melden für Stränge
 export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte auf Deutsch, knapp und in Markdown. Du kannst nur lesen (Read, Grep, Glob) — schreibe und ändere nichts. Belege jede Aussage mit Datei:Zeile. Was du nicht findest, sagst du offen, statt zu raten.';
-// laeufer: 'jcode' = Strang läuft über jcode (Konzept J1; eigener Speicher-Topf). turn.schlange/grund: Zug endete nach dem
-// Zeitdeckel der Schlange (Audit 05.11. (3)) — die Werkbank stellt ihn ohne Abstand neu an, der Platz bleibt.
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; laeufer?: 'jcode'; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; schlange?: boolean; grund?: string };
+// laeufer: 'jcode' = Strang läuft über jcode (Konzept J1; eigener Speicher-Topf). turn.grund: warum ein Zug mit „busy“ endete
+// (Grund der Parallelgrenze; Stränge warten seit dem Schlangen-Fix 06.11. ohne Zeitdeckel und enden dort nie mit „busy“).
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; laeufer?: 'jcode'; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; grund?: string };
   // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
   // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
   auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string };
@@ -1416,6 +1416,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const schaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe, jcode: orchMap[key]?.laeufer === 'jcode' });
   const box = () => ({ neu: schaetzung, stand: speicherStand(), vorrang: !!orchMap[key]?.vorrang, jcodeBelegt: jcodeBelegt() });
   let lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode }, box());
+  let gewartet = false;   // die Wartezeit zählt nicht gegen die Zug-Obergrenze (t0; Strang e1ea43fa, Pass B)
   // Warteschlange statt Fehlschlag (Plan 213 S1a, K3): der Zug wartet, bis ein Platz frei ist; der Chat zeigt den Platz.
   if (lock === 'chat-busy' && schlangeAn() && !req.sink.closed) {
     if (inSchlange(key)) {   // zweite Nachricht derselben Unterhaltung: kein zweiter Platz
@@ -1432,8 +1433,11 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       frei: () => { if (lives.has(key)) return false; const r = lockFor(meine(), { readonly: !!req.readonly, mode }, box()); meinGrund = lockGrund; return r === 'ok'; },
       grund: () => meinGrund || 'gerade kein Platz',
       geschlossen: () => req.sink.closed || schlangeAbbruch.has(key),
-      melde: (pos) => {
-        req.sink.write(erst ? `⏳ In der Schlange: Platz ${pos} — ${meinGrund || 'gerade kein Platz'} (${schaetzungText(schaetzung)}). Startet von selbst, sobald es passt.\n\n` : `⏳ Jetzt Platz ${pos} …\n\n`);
+      ohneDeckel: kind === 'strand',   // Strang-Züge enden nie mit „busy“ (Fehlervariante 2, 06.11.2026, Strang e1ea43fa)
+      melde: (pos, minuten) => {
+        // Lebenszeichen alle 10 min (schlange.ts): LibreChat räumt Antworten nach 20 min ohne Chunk ab
+        req.sink.write(erst ? `⏳ In der Schlange: Platz ${pos} — ${meinGrund || 'gerade kein Platz'} (${schaetzungText(schaetzung)}). Startet von selbst, sobald es passt.\n\n`
+          : minuten !== undefined ? `⏳ Wartet weiter: Platz ${pos} (seit ${minuten} min) …\n\n` : `⏳ Jetzt Platz ${pos} …\n\n`);
         erst = false;
       },
     });
@@ -1452,18 +1456,16 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     }
     mine = meine();
     lock = r === 'start' ? 'ok' : lock;
-    // Audit 05.11. (3): Zeitdeckel bei einem Strang ist kein stilles Aus — Grund in den Chat und an den Zug; die Werkbank stellt
-    // ihn gleich neu an (ohne den wachsenden Abstand der Parallelgrenze), die Schlange gibt ihm seinen alten Platz zurück.
-    if (r === 'zeit' && orchMap[key]) {
-      const g = meinGrund || 'gerade kein Platz';
-      setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'busy', schlange: true, grund: g.slice(0, 200) });
-      req.sink.write(`⏳ Wartet schon ${Math.round((Date.now() - warteAb) / 60_000)} min in der Schlange — ${g}. Die Werkbank stellt den Zug gleich von selbst neu an; der Platz bleibt erhalten.`);
+    gewartet = true;
+    if (r === 'zeit') {
+      // Nur noch normale Chats (Stränge warten ohne Deckel): kein „busy“, ehrlich sagen, dass die Schlange zu lang war.
+      req.sink.write(`⏳ Nach ${Math.round(maxWarteMs() / 60_000)} min in der Schlange nicht drangekommen (${meinGrund || 'gerade kein Platz'}) — bitte erneut senden.`);
       req.sink.finish();
       return;
     }
   }
   if (lock !== 'ok') {
-    if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'busy' });
+    if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'busy', ...(lockGrund ? { grund: lockGrund.slice(0, 200) } : {}) });
     req.sink.write(lock === 'board-full'
       ? `Bei dir laufen schon ${MAX_BOARD_RUNS} Board-Agenten. Bitte warte, bis einer fertig ist.`
       : maxParallelChats() === 1
@@ -1486,7 +1488,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const live: Live = {
     key, userId: req.userId, abort: new AbortController(), sink: null, buffer: [], pending: null,
     lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0, cacheRead: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
-    readonly: !!req.readonly, t0: req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
+    readonly: !!req.readonly, t0: gewartet ? Date.now() : req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
     jiraCalls: new Map(), inboxCalls: new Set(), onJiraWrite: req.onJiraWrite, home: '',
     mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false, schaetzung,
     subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: kind === 'strand' || kind === 'worker', leit: kind === 'leitstand', worker: kind === 'worker', ...(kind === 'strand' || kind === 'leitstand' ? { req } : {}),   // Lead auch: melious_sub braucht Konten und Buchung des Zugs

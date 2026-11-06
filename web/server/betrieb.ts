@@ -7,7 +7,7 @@
 // Schalter dieser Werkzeuge selbst (Betrieb, Geheimnis, Coolify) stehen bewusst NICHT auf der Liste — der Hauptchat kann sich keine
 // Rechte freischalten. Aus `.env.local` wird nie etwas anderes zurückgegeben als die Werte der Liste.
 
-import { MELIOUS_ABO_MODELLE } from './tiefe.ts';
+import { MELIOUS_ABO } from './tiefe.ts';
 
 export const betriebAn = (env: Record<string, string | undefined> = process.env) => env.WERKBANK_HAUPTCHAT_BETRIEB === 'on';
 
@@ -15,7 +15,7 @@ export type Prozess = 'web' | 'bruecke' | 'beide';
 export interface Schalter { name: string; werte: readonly string[] | 'prozent'; prozess: Prozess; vorgabe: string; text: string }
 
 const ONOFF = ['on', 'off'] as const;
-const MODELLE = ['claude', 'auto', ...MELIOUS_ABO_MODELLE.map((m) => `melious:${m}`)];
+const MODELLE = ['claude', 'auto', ...MELIOUS_ABO.map((m) => `melious:${m}`)];
 
 /** Positivliste (Paket 400, Schnitt 1 + Nachträge). Neue Einträge nur per Review/Release. */
 export const SCHALTER: readonly Schalter[] = [

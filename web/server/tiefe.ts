@@ -16,13 +16,16 @@ export const tiefeOf = (x: unknown): Tiefe => (istTiefe(x) ? x : TIEFE_VORGABE);
 
 /** Lead-Modell eines regular-Strangs mit niedrigem Risiko ohne ausdrückliches --modell (Knut 26.10.2026: Melious als Standard). */
 export const REGULAR_MODELL = 'melious:glm-5.3';
-/** Melious-Modelle im Coder-Abo: laufen über Energie statt Guthaben (Knut 26.10.: „beim Coder-Plan bleiben, Energie, kein Geld“). */
-export const MELIOUS_ABO_MODELLE = ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'];
+/** Melious-Modelle im Abo: laufen über Energie statt Guthaben (Knut 26.10.: „beim Coder-Plan bleiben, Energie, kein Geld“).
+ *  PRO-Plan laut Knut 06.11.: glm-5.3, glm-5.3-flash, glm-5.2, deepseek-v4.1-flash-1017 (minimax-m3 über Melious nicht verfügbar);
+ *  „deepseek-v4.1-flash“ ohne Suffix nennen gespeicherte Rollen noch (Gegenprüfung 06.11.). Phase 4: die eine Liste für
+ *  Strang-Start (modellAusserhalbAbo), Einstellungen (melious.ts) und Betriebsseite — vorher lehnte der Start glm-5.2 ab. */
+export const MELIOUS_ABO = ['glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'deepseek-v4.1-flash-1017', 'deepseek-v4.1-flash'];
 /** Fehlertext für ein Melious-Modell außerhalb des Abos, sonst null. */
 export function modellAusserhalbAbo(modell: string | null | undefined): string | null {
   const m = /^melious:(.+)$/.exec(String(modell ?? ''));
-  if (!m || m[1] === 'auto' || MELIOUS_ABO_MODELLE.includes(m[1])) return null;
-  return `„${m[1]}“ ist nicht im Melious-Abo und liefe auf Guthaben. Erlaubt: ${MELIOUS_ABO_MODELLE.join(', ')}.`;
+  if (!m || m[1] === 'auto' || MELIOUS_ABO.includes(m[1])) return null;
+  return `„${m[1]}“ ist nicht im Melious-Abo und liefe auf Guthaben. Erlaubt: ${MELIOUS_ABO.join(', ')}.`;
 }
 
 /** Modell und Risiko beim Start: ausdrückliche Angaben schlagen die Vorgabe der Tiefe.
