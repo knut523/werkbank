@@ -33,17 +33,21 @@ export type Faktor = { in: number; out: number; cache?: number };
 export const ENERGIE_JE_EURO = 10_000;
 export const FAKTOREN_VORGABE: Record<string, Faktor> = {
   'glm-5.3': { in: 10_000, out: 30_000 }, 'glm-5.3-flash': { in: 1000, out: 4000 }, 'deepseek-v4.1-flash': { in: 2000, out: 10_000 }, 'deepseek-v4-flash-0731': { in: 1000, out: 2500 },
+  // PRO-Plan (Modelltest der Hauptsitzung 06.11.): Schätzung wie die nächstverwandten, bis die Preisliste die echten Preise liefert.
+  'glm-5.2': { in: 10_000, out: 30_000 }, 'deepseek-v4.1-flash-1017': { in: 2000, out: 10_000 },
 };
 // Rollen in Wunsch-Reihenfolge — nur die kleinen Modelle (Knut 15.10. abends: „per default flash und nur bei qualitativ
 // hochwertigen Aufgaben das GLM-Modell“). glm-5.3 nur noch: challenge mit hoch/council und Ersatz im Hauptchat.
 export const ROLLEN_VORGABE: Record<string, string[]> = {
-  leser: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'],
-  schreiber: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'],
-  niedrig: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'],
+  // Modelltest 06.11.: deepseek-v4-flash-0731 ersetzt durch deepseek-v4.1-flash-1017 (Verteilung im Läufer: claude-bridge/src/modellwahl.ts).
+  leser: ['glm-5.3-flash', 'deepseek-v4.1-flash-1017'],
+  schreiber: ['glm-5.3-flash', 'deepseek-v4.1-flash-1017'],
+  niedrig: ['glm-5.3-flash', 'deepseek-v4.1-flash-1017'],
 };
 export const ROLLEN = ['leser', 'schreiber', 'niedrig'];
 // Im PRO-Abo enthalten (Hotfix 15.10., Knut: „bei Melious nur die Modelle nutzen, die auch im Abo drin sind“); Einstellung „abo“.
-export const MELIOUS_ABO = ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-0731'];
+// PRO-Plan laut Knut 06.11.: glm-5.3, glm-5.3-flash, glm-5.2, deepseek-v4.1-flash-1017 (minimax-m3 über Melious nicht verfügbar).
+export const MELIOUS_ABO = ['glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'deepseek-v4.1-flash-1017'];
 /** Modellnamen, die nicht im Abo sind (`:eco` zählt wie das Modell), ohne Doppelte. */
 export const ausserhalbAbo = (modelle: (string | null | undefined)[], abo: string[]) =>
   [...new Set(modelle.filter((m): m is string => !!m).map((m) => m.replace(/:eco$/, '')))].filter((m) => !abo.includes(m));

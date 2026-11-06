@@ -43,7 +43,7 @@ before(async () => {
   await new Promise<void>((r) => web.listen(0, '127.0.0.1', () => r()));
   const wurl = `http://127.0.0.1:${(web.address() as any).port}`;
   proc = spawn(process.execPath, ['src/server.ts'], {
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_MODELL_GEWICHTE: 'glm-5.3-flash:1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
       WERKBANK_URL: wurl, WERKBANK_INTERNAL_TOKEN: 'geheim', MELIOUS_BASE_URL: wurl, BRIDGE_CLAUDE_HOMES: HOMES, WERKBANK_ORCH_ROOTS: ORCH, WERKBANK_SKILLS_SOURCE: SKILLS,
       BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: 'auto', BRIDGE_AUTO_SCOPE: 'voll', BRIDGE_AUTO_EMAILS: 'knut@maxenergy.at',
       BRIDGE_JCODE_BIN: join(BIN, 'jcode'), BRIDGE_CSWAP_BIN: join(BIN, 'cswap'), BRIDGE_OPENCODE_BIN: join(BIN, 'opencode-gibt-es-nicht') },
@@ -101,9 +101,9 @@ test('Strang: melious_sub läuft auf jcode (nur lesend, Flash, Schlüssel nur in
   let z: any;
   for (let i = 0; i < 30 && !z; i++) { z = zuege.find((x) => x.zug?.modell?.includes('melious_sub') || x.modell?.includes?.('melious_sub')); if (!z) await new Promise((r) => setTimeout(r, 100)); }
   assert.ok(z, `Zug gebucht: ${JSON.stringify(zuege.slice(-3))}`);
-  // Urteil: glm
+  // Urteil: „glm“ = prüfen → glm-5.2 (Modelltest der Hauptsitzung 06.11.: gründlichstes Modell)
   const t2 = await send(c, lead([{ tool: 'melious_sub', args: { auftrag: 'Bricht das?', modell: 'glm' } }]));
-  assert.match(readFileSync(ARGS, 'utf8'), /^glm-5\.3$/m); assert.match(t2, /Antwort aus jcode/);
+  assert.match(readFileSync(ARGS, 'utf8'), /^glm-5\.2$/m); assert.match(t2, /Antwort aus jcode/);
 });
 
 test('Lesende Claude-Teilagenten → Melious; „[claude]“ erzwingt Claude; ohne Melious-Konto bleibt es Claude', async () => {

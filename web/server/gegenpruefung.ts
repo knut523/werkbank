@@ -34,6 +34,11 @@ export function jcodePrompt(basis: string, auftrag: string): string {
 export interface PassCErgebnis { ok: boolean; text: string; energie: number; ms: number; fehler?: string }
 
 /** Pass C im Worktree `wt` gegen `basis` (Commit). Nie werfend: Fehler kommen als ok=false mit Grund. */
+/** Modell der nächsten Gegenprüfung: DeepSeek und glm-5.3 im Wechsel (je Prozess gezählt). */
+export const GEGENPRUEF_MODELLE = ['deepseek-v4.1-flash-1017', 'glm-5.3'] as const;
+let gegenpruefNr = 0;
+export const gegenpruefModell = () => GEGENPRUEF_MODELLE[gegenpruefNr++ % GEGENPRUEF_MODELLE.length];
+
 export async function meliousPassC(u: User, o: { wt: string; basis: string; zweck: string; timeoutS?: number }): Promise<PassCErgebnis> {
   const t0 = Date.now();
   const nein = (fehler: string, energie = 0): PassCErgebnis => ({ ok: false, text: '', energie, ms: Date.now() - t0, fehler });
@@ -48,10 +53,13 @@ export async function meliousPassC(u: User, o: { wt: string; basis: string; zwec
   if (!brief) return nein('glm-5.3 lieferte keinen Prüfauftrag');
   const key = await meliousKey(u);
   if (!key) return nein('kein Melious-Schlüssel', brief.energie);
+  // Modelltest 06.11. (Hauptsitzung): Gegenprüfungen laufen im Wechsel auf DeepSeek (anderer Blick als GLM) und glm-5.3 (zuverlässig beim
+  // Hauptrisiko) — nicht mehr fest auf Flash. Das Modell steht in gegenpruefung.md.
+  const modell = gegenpruefModell();
   const env: Record<string, string> = { PATH: `${SHIM()}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: key };
   const out = await new Promise<{ code: number | null; stdout: string; stderr: string }>((res) => {
     // stdin zu (nichts wartet auf Eingabe); nach dem Zeitlimit SIGTERM, 30 s später SIGKILL und spätestens dann fertig.
-    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', '--model', 'glm-5.3-flash', '--tools', 'read,bash,agentgrep', 'run', '--json', jcodePrompt(o.basis, brief.text)], { cwd: o.wt, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });   // eigene Prozessgruppe
+    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', '--model', modell, '--tools', 'read,bash,agentgrep', 'run', '--json', jcodePrompt(o.basis, brief.text)], { cwd: o.wt, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });   // eigene Prozessgruppe
     let so = '', se = '', fertig = false;
     const ende = (code: number | null) => { if (fertig) return; fertig = true; clearTimeout(t1); clearTimeout(t2); res({ code, stdout: so, stderr: se }); };
     c.stdout!.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
@@ -71,11 +79,11 @@ export async function meliousPassC(u: User, o: { wt: string; basis: string; zwec
       const u2 = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
       for (const m of sj.messages ?? []) { const t = m?.token_usage; if (!t || typeof t !== 'object') continue; u2.input += t.input_tokens || 0; u2.cacheRead += t.cache_read_input_tokens || 0; u2.output += t.output_tokens || 0; }
       u2.input = Math.max(0, u2.input - u2.cacheRead);
-      energie += (await recordMeliousUsage(u, u2, Date.now(), String(j.model ?? 'glm-5.3-flash'))).energie;
+      energie += (await recordMeliousUsage(u, u2, Date.now(), String(j.model ?? modell))).energie;
     } catch { /* ohne Sitzungsdatei: nur der Prüfauftrag gebucht */ }
   }
   if (out.code !== 0 || !j?.text) return nein(`jcode-Lauf fehlgeschlagen (Exit ${out.code})`, energie);
   // Der Schlüssel darf nie im Ergebnis stehen (es geht an den Strang und von dort ggf. in einen Kommentar).
-  const text = `# Prüfauftrag (glm-5.3)\n\n${brief.text}\n\n# Review (jcode + glm-5.3-flash)\n\n${String(j.text)}\n`.split(key).join('***');
+  const text = `# Prüfauftrag (glm-5.3)\n\n${brief.text}\n\n# Review (jcode + ${String(j.model ?? modell)})\n\n${String(j.text)}\n`.split(key).join('***');
   return { ok: true, text, energie: Math.round(energie), ms: Date.now() - t0 };
 }
