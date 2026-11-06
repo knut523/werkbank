@@ -17,6 +17,8 @@
 import { wb } from './db.ts';
 import { seal, unseal } from './crypto.ts';
 import type { User } from './auth.ts';
+import { cfg } from './config.ts';
+import { bwSecret } from './vaultwarden.ts';
 
 export const MELIOUS_ID = 'melious';
 export const MELIOUS_KEY = /^sk-mel-[\w-]{8,200}$/;
@@ -83,19 +85,42 @@ interface Stored {
   kette?: boolean; ketteModell?: string | null; abo?: string[] | null;
 }
 
-async function stored(u: User): Promise<Stored | null> {
+/** Gespeicherte Einstellungen — auch ohne gespeicherten Schlüssel (Schlüssel aus Env oder Vaultwarden). */
+async function einstellungen(u: User): Promise<Stored | null> {
   const doc: any = await wb().collection('creds').findOne({ userId: u.id }, { projection: { melious: 1 } });
-  return doc?.melious?.token ? doc.melious : null;
+  return doc?.melious ?? null;
+}
+
+// Hauptsitzung 06.11. (Knut: „U have the melious key in the vault just connect it to the vault“): Reihenfolge gespeicherter
+// Schlüssel der Person → MELIOUS_API_KEY → Vaultwarden-Element WERKBANK_MELIOUS_BW_ITEM (Vorgabe Knuts „melious ai API Key“), das
+// nur für Knuts Konto (WERKBANK_PILOT_EMAIL). Andere Personen über eine Zuordnung Element ↔ Person: noch nicht gebaut.
+// Ein Schlüssel aus Env oder Vaultwarden schaltet nichts ein („erlaubt“ bleibt aus, bis es jemand einschaltet). Nie ausgegeben.
+export type SchluesselQuelle = 'gespeichert' | 'env' | 'vaultwarden';
+export const meliousBwItem = () => process.env.WERKBANK_MELIOUS_BW_ITEM || 'melious ai API Key';
+const bwLeer = new Map<string, number>();   // kein Treffer im Vault: 5 min nicht erneut fragen (bw braucht bis zu 20 s)
+async function schluessel(u: User, e?: Stored | null): Promise<{ token: string; quelle: SchluesselQuelle; last4: string } | null> {
+  const s = e === undefined ? await einstellungen(u) : e;
+  if (s?.token) { try { const t = unseal(s.token); return { token: t, quelle: 'gespeichert', last4: s.last4 || t.slice(-4) }; } catch { return null; } }
+  const env = String(process.env.MELIOUS_API_KEY ?? '').trim();
+  if (MELIOUS_KEY.test(env)) return { token: env, quelle: 'env', last4: env.slice(-4) };
+  if (String(u.email ?? '').toLowerCase() !== cfg.pilotEmail) return null;
+  const item = meliousBwItem();
+  if (Date.now() - (bwLeer.get(item) ?? 0) < 5 * 60_000) return null;
+  const t = await bwSecret(item, /sk-mel-[\w-]+/).catch(() => null);
+  if (!t || !MELIOUS_KEY.test(t)) { bwLeer.set(item, Date.now()); return null; }
+  return { token: t, quelle: 'vaultwarden', last4: t.slice(-4) };
 }
 
 /** Einstellungen ohne Schlüssel (für Browser und Brücke). */
 export async function meliousSettings(u: User) {
-  const s = await stored(u);
+  const s = await einstellungen(u);
+  const q = await schluessel(u, s);
   const d = meliousDefaults();
   return {
-    configured: !!s, last4: s?.last4 ?? null, addedAt: s?.addedAt ?? null,
+    configured: !!q, last4: q?.last4 ?? null, addedAt: s?.addedAt ?? null, quelle: q?.quelle ?? null,
     // model: festes Modell für alles (überstimmt die Verteilung); leer = Lastverteilung nach Rolle und Energie.
-    enabled: s?.enabled ?? d.enabled, fallback: s?.fallback ?? d.fallback, kette: s?.kette ?? d.kette, ketteModell: s?.ketteModell ?? d.ketteModell, model: s?.model ?? null, eco: s?.eco ?? d.eco,
+    // Schlüssel aus Env/Vaultwarden: „erlaubt“ nur, wenn es jemand eingeschaltet hat (Vorgabe aus).
+    enabled: s?.enabled ?? (q && q.quelle !== 'gespeichert' ? false : d.enabled), fallback: s?.fallback ?? d.fallback, kette: s?.kette ?? d.kette, ketteModell: s?.ketteModell ?? d.ketteModell, model: s?.model ?? null, eco: s?.eco ?? d.eco,
     // Deckel: gesetzt, sonst Notbremse aus der Nachfüllung (Tag 1,5 ×, Monat 31 ×), sonst die Vorgabe.
     dayLimit: s?.dayLimit ?? (s?.proTakt ? Math.round(s.proTakt * (TAG_S / (s?.taktS ?? d.taktS)) * 1.5) : d.dayLimit),
     monthLimit: s?.monthLimit ?? (s?.proTakt ? Math.round(s.proTakt * (TAG_S / (s?.taktS ?? d.taktS)) * 31) : d.monthLimit),
@@ -256,9 +281,8 @@ export async function meliousChallenge(u: User, art: string, text: string, frage
 
 /** Preisliste höchstens einmal am Tag holen (kostet keine Energie) und speichern. Fehler: alte Faktoren bleiben. */
 export async function preiseAktualisieren(u: User, now = Date.now(), force = false): Promise<boolean> {
-  const s = await stored(u);
-  if (!s) return false;
-  if (!force && s.preise?.stand && now - new Date(s.preise.stand).getTime() < 24 * 3600_000) return false;
+  const s = await einstellungen(u);
+  if (!force && s?.preise?.stand && now - new Date(s.preise.stand).getTime() < 24 * 3600_000) return false;
   const key = await meliousKey(u);
   if (!key) return false;
   try {
@@ -266,7 +290,7 @@ export async function preiseAktualisieren(u: User, now = Date.now(), force = fal
     if (!r.ok) return false;
     const faktoren = faktorenAusPreisliste(((await r.json()) as any).data);
     if (!Object.keys(faktoren).length) return false;
-    await wb().collection('creds').updateOne({ userId: u.id }, { $set: { 'melious.preise': { stand: new Date(now), faktoren } } });
+    await wb().collection('creds').updateOne({ userId: u.id }, { $set: { userId: u.id, 'melious.preise': { stand: new Date(now), faktoren } } }, { upsert: true });
     return true;
   } catch { return false; }
 }
@@ -300,9 +324,7 @@ export async function dashboardStand(now = Date.now()): Promise<{ energy: number
 }
 
 export async function meliousKey(u: User): Promise<string | null> {
-  const s = await stored(u);
-  if (!s) return null;
-  try { return unseal(s.token); } catch { return null; }
+  return (await schluessel(u))?.token ?? null;
 }
 
 /** Schlüssel und/oder Einstellungen setzen. Ein neuer Schlüssel schaltet nichts ein (Standard aus). */
@@ -311,11 +333,11 @@ export async function setMelious(u: User, b: Record<string, unknown>) {
   if (b.token !== undefined) {
     const t = String(b.token ?? '').trim();
     if (!MELIOUS_KEY.test(t)) throw httpErr(400, 'Das sieht nicht wie ein Melious-Schlüssel aus (beginnt mit sk-mel-…).');
-    const prev: any = await stored(u);
+    const prev: any = await einstellungen(u);
     const { token: _t, last4: _l, addedAt: _a, enabled: _e, ...rest } = prev ?? {};
     // Neuer Schlüssel: Schalter wie bisher gesetzt, sonst die Vorgabe (Knuts Setup: an; MELIOUS_STANDARD=aus: aus).
     set.melious = { ...rest, token: seal(t), last4: t.slice(-4), addedAt: new Date() };
-  } else if (!(await stored(u))) throw httpErr(400, 'Zuerst einen Melious-Schlüssel hinterlegen.');
+  } else if (!(await schluessel(u))) throw httpErr(400, 'Zuerst einen Melious-Schlüssel hinterlegen.');
   const f = (k: string, v: unknown) => { if (set.melious) (set.melious as any)[k] = v; else set[`melious.${k}`] = v; };
   for (const k of ['enabled', 'fallback', 'eco', 'kette'] as const) if (b[k] !== undefined) f(k, b[k] === true);
   if (b.ketteModell !== undefined) { const m = String(b.ketteModell ?? '').trim(); if (m && !MODEL.test(m)) throw httpErr(400, 'Ketten-Modell: gültiger Modellname.'); f('ketteModell', m || null); }

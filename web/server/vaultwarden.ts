@@ -1,0 +1,30 @@
+// Geheimnisse aus Vaultwarden (Hauptsitzung 06.11., aus githubReadToken herausgelöst): `bw get item <Element>` mit der Sitzung aus
+// ~/.config/vw/session, das Muster aus dem Passwortfeld. Nur im Speicher, 10 Minuten; nie ins Frontend, nie ins Log.
+// WERKBANK_BW_BIN / WERKBANK_VW_SESSION_DATEI nur für Tests und abweichende Installationen.
+import { execFile } from 'node:child_process';
+import { readFileSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+const cache = new Map<string, { wert: string; at: number }>();
+export const vwSitzungsDatei = () => process.env.WERKBANK_VW_SESSION_DATEI || join(homedir(), '.config/vw/session');
+
+/** Erster Treffer von `muster` im Passwortfeld des Elements `item`; null ohne Sitzung, bei Fehler oder ohne Treffer. */
+export function bwSecret(item: string, muster: RegExp): Promise<string | null> {
+  const c = cache.get(item);
+  if (c && Date.now() - c.at < 600_000) { const t = c.wert.match(muster)?.[0]; if (t) return Promise.resolve(t); }
+  const datei = vwSitzungsDatei();
+  if (!existsSync(datei)) return Promise.resolve(null);
+  const session = readFileSync(datei, 'utf8').trim();
+  return new Promise((resolve) => {
+    execFile(process.env.WERKBANK_BW_BIN || 'bw', ['get', 'item', item], { env: { ...process.env, BW_SESSION: session }, timeout: 20_000, maxBuffer: 1 << 20 }, (err, stdout) => {
+      if (err) return resolve(null);
+      let pw = '';
+      try { pw = String(JSON.parse(String(stdout)).login?.password ?? ''); } catch { return resolve(null); }
+      const t = pw.match(muster)?.[0] ?? '';
+      if (!t) return resolve(null);
+      cache.set(item, { wert: t, at: Date.now() });
+      resolve(t);
+    });
+  });
+}
