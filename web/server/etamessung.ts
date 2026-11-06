@@ -145,7 +145,7 @@ const ART_TEXT: Record<string, string> = { review: 'Reviews', fix: 'Fixes', stra
 export function genauigkeitSatz(z: AuswertungZeile): string {
   const f = z.medianFaktor;
   const wie = f === null ? 'ohne Messung' : Math.abs(f - 1) < 0.05 ? 'im Median so lang wie geschätzt' : `im Median ${zahl(f)} × so lang wie geschätzt`;
-  return `${wie} · pünktlich ${z.puenktlich === null ? '–' : `${Math.round(z.puenktlich * 100)} %`} · ${z.n} ${z.n === 1 ? 'Lauf' : 'Läufe'}${z.medianFaktorAgent ? ` · Agenten-Schätzungen ${zahl(z.medianFaktorAgent)} ×` : ''}`;
+  return `${wie} · pünktlich ${z.puenktlich === null ? '–' : `${Math.round(z.puenktlich * 100)} %`} · ${z.n} ${z.n === 1 ? 'Lauf' : 'Läufe'}${z.medianFaktorAgent ? ` · die eigenen Schätzungen der Agenten dauern ${zahl(z.medianFaktorAgent)} × so lang` : ''}`;
 }
 export const gruppeText = (z: AuswertungZeile) => z.schluessel === 'alle|alle|alle' ? 'Alle Unter-Chats' : `${ART_TEXT[z.art] ?? z.art} · ${z.profil} · ${z.modell}`;
 /** Für den Steckbrief: die Zeile der eigenen Gruppe, sonst die Gesamtzeile (rein). */
