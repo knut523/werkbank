@@ -40,6 +40,12 @@ test('Gegenprüfung 06.11.: Brücke weg beim Erteilen → Bedarf bleibt offen (W
   const col2 = sammlung([{ _id: 'b-00000002', userId: 'k', art: 'github', text: 'x', pfad: null, strand: { id: 's1' }, status: 'offen' }]);
   await assert.rejects(bedarfAntworten(U, 'b-00000002', { antwort: 'erledigt', notiz: 'ok' }, { senden: async () => { throw new Error('LibreChat weg'); }, freigabe: async () => '', col: () => col2 as any }), /LibreChat/);
   assert.equal(col2.docs[0].status, 'offen');
+  // Phase 4: Zugang erteilt, Nachricht scheitert → wieder offen UND der Zugang in der Brücke wieder entzogen
+  const col3 = sammlung([{ _id: 'b-00000004', userId: 'k', art: 'zugang', text: 'x', pfad: '/w/b', strand: { id: 's2' }, status: 'offen' }]);
+  const entzogen: string[] = [];
+  await assert.rejects(bedarfAntworten(U, 'b-00000004', { antwort: 'erteilt', notiz: '' }, { senden: async () => { throw new Error('LibreChat weg'); }, freigabe: async () => '/real/b', entziehen: async (_u, s, p) => { entzogen.push(`${s} ${p}`); }, col: () => col3 as any }), /LibreChat/);
+  assert.equal(col3.docs[0].status, 'offen');
+  assert.deepEqual(entzogen, ['s2 /real/b']);
 });
 
 test('Gegenprüfung 06.11.: „Erteilen“ nur für Zugang und Entscheidung — sonst Erledigt (selbst getan) oder Ablehnen', async () => {

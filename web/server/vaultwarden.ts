@@ -9,13 +9,26 @@ import { join } from 'node:path';
 const cache = new Map<string, { wert: string; at: number }>();
 export const vwSitzungsDatei = () => process.env.WERKBANK_VW_SESSION_DATEI || join(homedir(), '.config/vw/session');
 
-/** Erster Treffer von `muster` im Passwortfeld des Elements `item`; null ohne Sitzung, bei Fehler oder ohne Treffer. */
+/** Laufende Abfragen je Element+Muster: gleichzeitige Aufrufe (Einstellungen, Läufe, Preise) teilen sich einen `bw`-Prozess. */
+const laufend = new Map<string, Promise<string | null>>();
+
+/** Erster Treffer von `muster` im Passwortfeld des Elements `item`; null ohne Sitzung, bei Fehler oder ohne Treffer. Wirft nie. */
 export function bwSecret(item: string, muster: RegExp): Promise<string | null> {
   const c = cache.get(item);
   if (c && Date.now() - c.at < 600_000) { const t = c.wert.match(muster)?.[0]; if (t) return Promise.resolve(t); }
+  const k = `${item}\t${muster.source}`;
+  const l = laufend.get(k);
+  if (l) return l;
+  const p = holen(item, muster).finally(() => laufend.delete(k));
+  laufend.set(k, p);
+  return p;
+}
+
+function holen(item: string, muster: RegExp): Promise<string | null> {
   const datei = vwSitzungsDatei();
-  if (!existsSync(datei)) return Promise.resolve(null);
-  const session = readFileSync(datei, 'utf8').trim();
+  let session: string;
+  // Phase 4: eine unlesbare Sitzungsdatei ist „keine Sitzung“, kein synchroner Wurf aus einer Promise-Funktion
+  try { if (!existsSync(datei)) return Promise.resolve(null); session = readFileSync(datei, 'utf8').trim(); } catch { return Promise.resolve(null); }
   return new Promise((resolve) => {
     execFile(process.env.WERKBANK_BW_BIN || 'bw', ['get', 'item', item], { env: { ...process.env, BW_SESSION: session }, timeout: 20_000, maxBuffer: 1 << 20 }, (err, stdout) => {
       if (err) return resolve(null);

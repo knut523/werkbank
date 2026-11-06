@@ -10,7 +10,7 @@
 import { freigabeVerbrauchen } from './freigabe.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, strangFreigabe, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
+import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -393,6 +393,7 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/internal/orch-freigabe') {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
       const b = await readBody(req);
+      if (b.entziehen === true) return json(res, 200, { ok: true, entzogen: strangFreigabeEntziehen(String(b.userId ?? ''), String(b.conv ?? ''), String(b.pfad ?? '')) });
       try { return json(res, 200, { ok: true, ...strangFreigabe(String(b.userId ?? ''), String(b.conv ?? ''), String(b.pfad ?? ''), Number(b.bis)) }); }
       catch (e: any) { return json(res, e.status ?? 400, { error: e.message }); }
     }

@@ -49,7 +49,14 @@ test('bwSecret: Muster aus dem Passwortfeld, 10 min im Speicher, ohne Sitzung od
   assert.equal(aufrufe().length, n, 'aus dem Speicher, kein zweiter bw-Aufruf');
   process.env.WERKBANK_VW_SESSION_DATEI = join(R, 'gibt-es-nicht');
   assert.equal(await V.bwSecret('anderes', /x/), null, 'ohne Sitzungsdatei kein bw');
+  // Phase 4: eine unlesbare Sitzung (hier ein Ordner) ergibt null statt eines synchronen Wurfs
+  process.env.WERKBANK_VW_SESSION_DATEI = R;
+  assert.equal(await V.bwSecret('anderes', /x/), null, 'unlesbare Sitzung → null');
   process.env.WERKBANK_VW_SESSION_DATEI = join(R, 'session');
+  // Phase 4: gleichzeitige Abfragen desselben Elements teilen sich einen bw-Aufruf
+  const m = aufrufe().length;
+  assert.deepEqual(await Promise.all([V.bwSecret('View only github API', /ghp_\w+/), V.bwSecret('View only github API', /ghp_\w+/)]), ['ghp_LESEtest123', 'ghp_LESEtest123']);
+  assert.equal(aufrufe().length, m + 1, 'ein bw-Aufruf für zwei gleichzeitige Abfragen');
 });
 
 test('GitHub-Lesetoken unverändert: Env zuerst, sonst Vaultwarden „View only github API“ mit ghp_/github_pat_', async () => {

@@ -1075,6 +1075,19 @@ export function strangFreigabe(userId: string, convId: string, pfad: string, bis
   log('strang freigabe', { conv: key, pfad: real, bis: new Date(bis).toISOString() });
   return { pfad: real, bis };
 }
+/** Phase 4: einen erteilten Zugang wieder entziehen (die Werkbank rollt eine Antwort zurück, deren Nachricht nicht ankam).
+ *  true = es gab ihn. Pfad wie bei der Freigabe zurückgegeben (aufgelöst) oder wie angefragt. */
+export function strangFreigabeEntziehen(userId: string, convId: string, pfad: string): boolean {
+  const e = orchMap[`${safeId(userId)}:${safeId(convId)}`];
+  if (!e?.freigaben?.length) return false;
+  let real = pfad; try { real = realpathSync(pfad); } catch { /* Ordner weg: dann der angefragte Pfad */ }
+  const vorher = e.freigaben.length;
+  e.freigaben = e.freigaben.filter((f) => f.pfad !== real && f.pfad !== pfad);
+  if (e.freigaben.length === vorher) return false;
+  saveMap();
+  log('strang freigabe entzogen', { conv: `${safeId(userId)}:${safeId(convId)}`, pfad: real });
+  return true;
+}
 /** Chat-Bereich (Knut 06.11.): laufenden Zug eines Strangs abbrechen (Knopf „Abbrechen“ der 2.0). Wie der Zeitdeckel: Signal
  *  setzen, der Zug endet als „aborted“; reagiert die CLI nicht, nach 5 s hart (nachlaufBeenden). false = kein laufender Zug. */
 const schlangeAbbruch = new Set<string>();   // Gegenprüfung 06.11.: Abbrechen trifft auch einen Zug, der noch in der Schlange wartet

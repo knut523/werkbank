@@ -741,23 +741,33 @@ export function ausstehendVia(l: Ausstehend[]): SendVia {
 export const AUSSTEHEND_VERSUCHE = 5;
 export async function ausstehendZustellen(u: User, d: any, deps: { log?: AutoDeps['log']; melde?: AutoDeps['melde'] } = {}) {
   if (Number(d.ausstehendFehler ?? 0) >= AUSSTEHEND_VERSUCHE) return null;   // gemeldet — erst nach Eingriff (oder neuer Nachricht) weiter
-  const vorher: any = await runs().findOneAndUpdate({ _id: d._id, 'ausstehend.0': { $exists: true } }, { $set: { ausstehend: [] } }, { returnDocument: 'before' });
+  // Phase 4: herausnehmen heißt „unterwegs“ ablegen — stirbt der Prozess während des Sendens, holt ausstehendZurueckholen sie zurück.
+  const vorher: any = await runs().findOneAndUpdate({ _id: d._id, 'ausstehend.0': { $exists: true }, ausstehendUnterwegs: null },
+    [{ $set: { ausstehendUnterwegs: { liste: '$ausstehend', seit: new Date() }, ausstehend: [] } }], { returnDocument: 'before' });
   const liste: Ausstehend[] = (vorher?.value ?? vorher)?.ausstehend ?? [];
   if (!liste.length) return null;
   try {
     const r = await sendOrch(u, String(d._id), ausstehendText(liste), ausstehendVia(liste));
-    if (d.ausstehendFehler) await runs().updateOne({ _id: d._id }, { $set: { ausstehendFehler: 0 } });
+    await runs().updateOne({ _id: d._id }, { $unset: { ausstehendUnterwegs: '' }, ...(d.ausstehendFehler ? { $set: { ausstehendFehler: 0 } } : {}) });
     deps.log?.('orch ausstehend zugestellt', { id: d._id, n: liste.length, erneut: !!(r as any).eingereiht });
     return r;
   } catch (e: any) {
     // Gegenprüfung: ohne $slice zurücklegen (sonst fielen inzwischen neu eingereihte weg); Fehlversuche zählen — nach
     // AUSSTEHEND_VERSUCHE lässt der Takt den Strang in Ruhe und der Hauptchat bekommt eine Meldung.
-    const r: any = await runs().findOneAndUpdate({ _id: d._id }, { $push: { ausstehend: { $each: liste, $position: 0 } } as any, $inc: { ausstehendFehler: 1 } }, { returnDocument: 'after' });
+    const r: any = await runs().findOneAndUpdate({ _id: d._id }, { $push: { ausstehend: { $each: liste, $position: 0 } } as any, $inc: { ausstehendFehler: 1 }, $unset: { ausstehendUnterwegs: '' } }, { returnDocument: 'after' });
     const n = Number((r?.value ?? r)?.ausstehendFehler ?? 0);
     deps.log?.('orch ausstehend fehler', { id: d._id, n, error: String(e?.message ?? e).slice(0, 160) });
     if (n === AUSSTEHEND_VERSUCHE) await deps.melde?.(u, d, `Strang „${d.title}“ (${d._id}): ${liste.length} eingereihte Nachricht(en) ließen sich ${n}× nicht zustellen (${String(e?.message ?? e).slice(0, 120)}). Bitte ansehen.`).catch(() => false);
     return null;
   }
+}
+
+/** Phase 4: Nachrichten, die länger als `alterMs` „unterwegs“ liegen (Prozess starb beim Senden; sendOrch wartet höchstens
+ *  ~15 s), wieder vorn in die Schlange — ältere zuerst wie beim Zurücklegen nach einem Fehler. */
+export async function ausstehendZurueckholen(alterMs = 15 * 60_000, jetzt = Date.now()) {
+  const r = await runs().updateMany({ 'ausstehendUnterwegs.seit': { $lt: new Date(jetzt - alterMs) } },
+    [{ $set: { ausstehend: { $concatArrays: ['$ausstehendUnterwegs.liste', { $ifNull: ['$ausstehend', []] }] } } }, { $unset: 'ausstehendUnterwegs' }]);
+  return r.modifiedCount;
 }
 
 export async function sendOrch(u: User, id: string, text: string, via: SendVia = 'hand', o: { warteMs?: number } = {}) {
@@ -959,6 +969,8 @@ export async function autoWeiterTick(deps: AutoDeps) {
   ticking = true;
   try {
     // Plan §24 A1: eingereihte Nachrichten zuerst — an jeden Strang, der frei ist (auch fertige/gestoppte).
+    const zurueck = await ausstehendZurueckholen().catch(() => 0);
+    if (zurueck) deps.log?.('orch ausstehend zurückgeholt', { n: zurueck });
     const warten: any[] = await runs().find({ ...STRANDS, 'ausstehend.0': { $exists: true }, conv: { $ne: null } }).toArray();
     for (const d of warten) {
       try {

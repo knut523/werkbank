@@ -2225,19 +2225,25 @@ on('POST', /^\/internal\/bedarf$/, async (req, res) => {
   log('bedarf gemeldet', { user: u.id, strand: String(d._id), id: r.id, art: p.art, neu: r.neu });
   send(res, 200, { id: r.id, neu: r.neu, hauptchat });
 });
+/** Zugang eines Strangs in der Brücke erteilen oder (entziehen: true) wieder wegnehmen. */
+async function brueckenFreigabe(u: User, strand: string, b: { pfad: string; bis?: number; entziehen?: boolean }): Promise<any> {
+  const d: any = await orchRuns().findOne({ _id: strand as any, userId: u.id });
+  if (!d?.conv) throw new HttpError(404, 'Strang ohne Unterhaltung.');
+  const r = await fetch(`${cfg.bridgeUrl}/internal/orch-freigabe`, { method: 'POST', headers: { ...bridgeInternal, 'content-type': 'application/json' }, body: JSON.stringify({ userId: u.id, conv: d.conv, ...b }), signal: AbortSignal.timeout(5000) });
+  const j: any = await r.json().catch(() => ({}));
+  if (!r.ok) throw new HttpError(502, `Brücke: ${j.error ?? r.status}`);
+  return j;
+}
 const bedarfDeps = {
   senden: async (u: User, strand: string, text: string) => {
     // Antwort als Hauptchat-Nachricht (eingereiht, wenn der Strang arbeitet); ein abgenommener/gedeckelter Strang bekommt sie als Notiz.
     try { await sendOrch(u, strand, text, 'leitstand'); } catch (e: any) { if (e?.status === 409) await sendOrch(u, strand, text, 'notiz'); else throw e; }
   },
   freigabe: async (u: User, strand: string, pfad: string, bis: Date) => {
-    const d: any = await orchRuns().findOne({ _id: strand as any, userId: u.id });
-    if (!d?.conv) throw new HttpError(404, 'Strang ohne Unterhaltung.');
-    const r = await fetch(`${cfg.bridgeUrl}/internal/orch-freigabe`, { method: 'POST', headers: { ...bridgeInternal, 'content-type': 'application/json' }, body: JSON.stringify({ userId: u.id, conv: d.conv, pfad, bis: bis.getTime() }), signal: AbortSignal.timeout(5000) });
-    const j: any = await r.json().catch(() => ({}));
-    if (!r.ok) throw new HttpError(502, `Brücke: ${j.error ?? r.status}`);
+    const j = await brueckenFreigabe(u, strand, { pfad, bis: bis.getTime() });
     return String(j.pfad ?? pfad);   // echter Pfad (Symlinks aufgelöst) — so steht es in der Antwort an den Strang
   },
+  entziehen: (u: User, strand: string, pfad: string) => brueckenFreigabe(u, strand, { pfad, entziehen: true }),
 };
 async function bedarfAntwortRoute(u: User, id: string, b: any) {
   if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
