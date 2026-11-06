@@ -796,7 +796,8 @@ export async function sendOrch(u: User, id: string, text: string, via: SendVia =
   const d = await ownRun(u, id);
   if (d.status === 'blocked_g0') throw err(409, `Strang ${id} wurde von G0 vor dem Bau gestoppt — erst die Rückfrage ${d.question ?? ''} im OLAF Workspace beantworten.`);
   // Leitstand (Plan 132, E3/B3): setzt den Deckel nicht zurück und hebt keinen Stopp auf — das entscheidet nur Knut.
-  if (via === 'leitstand' && d.autoStopped) throw err(409, `Strang ${id} hat seinen Deckel erreicht — Knut entscheidet in „Heute“ (Fortsetzen/Anhalten).`);
+  // Pass A (Runde 3, AW1): „hängt“ ohne Status-Zeile (Plan §24 A2) ist kein Fall für Knut — der Hauptchat bekommt die Meldung und darf anschieben.
+  if (via === 'leitstand' && d.autoStopped && d.autoStopped.cause !== 'ohne_status') throw err(409, `Strang ${id} hat seinen Deckel erreicht — Knut entscheidet in „Heute“ (Fortsetzen/Anhalten).`);
   if (via === 'leitstand' && d.knutReviewedAt) throw err(409, `Strang ${id} hat Knut geprüft — nicht weiterführen; einen neuen Strang starten oder Knut fragen.`);
   const item = (await listOrch(u, { all: true })).find((r) => r.id === id);
   if (item?.status === 'running') {
@@ -826,7 +827,8 @@ export async function sendOrch(u: User, id: string, text: string, via: SendVia =
   if (via === 'leitstand') {
     // Teil B, G3: review_ready-Stand wandert nach prevReview (Auto-Fortsetzen und Wecken laufen wieder); Knuts Karte bleibt
     // (doneAt/knutReviewedAt unberührt); eine Ablage durch den Leitstand selbst hebt er damit auf.
-    await runs().updateOne({ _id: d._id }, mitSendung({ $set: { lastSentAt: sentAt, lastSentText: msg.slice(0, 40_000), reviewReadyAt: null, review: null, ...(d.review ? { prevReview: { review: d.review, at: d.reviewReadyAt ?? new Date() } } : {}), ...(d.reviewedBy === 'leitstand' ? { reviewedAt: null, reviewedBy: null } : {}) }, $inc: { sends: 1, autoStreak: 1 } }, 'leitstand', sentAt));
+    // Pass A (Runde 3, AW1/AW4): eine Sendung des Hauptchats beginnt die Zählung ohne Status-Zeile neu und hebt deren Stopp auf.
+    await runs().updateOne({ _id: d._id }, mitSendung({ $set: { lastSentAt: sentAt, lastSentText: msg.slice(0, 40_000), ohneStatusStreak: 0, ...(d.autoStopped?.cause === 'ohne_status' ? { autoStopped: null } : {}), reviewReadyAt: null, review: null, ...(d.review ? { prevReview: { review: d.review, at: d.reviewReadyAt ?? new Date() } } : {}), ...(d.reviewedBy === 'leitstand' ? { reviewedAt: null, reviewedBy: null } : {}) }, $inc: { sends: 1, autoStreak: 1 } }, 'leitstand', sentAt));
     return { id, conv: d.conv, url: d.url, ...(await bestaetigen(u, d.conv, sentAt, o.warteMs)) };
   }
   // Handnachricht: der Deckel beginnt neu, Stopp und review_ready sind aufgehoben (Council R1, Bedingung 4).
@@ -1021,7 +1023,12 @@ async function autoOne(u: User, d: any, s: any, deps: AutoDeps) {
   if (s?.running) return;
   const last = await lastMessage(u, d.conv);
   const st = orchStatus(d, s, last);
-  if (!st.cause) return;
+  if (!st.cause) {
+    // Pass A (Runde 3, AW4): ein Zug mit Status-Zeile beendet die Folge ohne Status-Zeile — sonst stoppte ein Strang nach zwei vereinzelten Fällen über Tage.
+    const m = last && !last.fromUser ? statusMark(last.text) : null;
+    if (d.ohneStatusStreak && m && m !== 'läuft') await runs().updateOne({ _id: d._id }, { $set: { ohneStatusStreak: 0 } });
+    return;
+  }
   // Nur die Deckel-Frage hält an (Plan 154, G8). Sammel-Rückfragen des Hauptchats zum Strang nicht: ein technisches Zugende
   // heißt „mitten in der Arbeit“, Stränge warten nie auf eine Rückfrage (am 12.10. standen so vier Stränge still).
   const openQuestion = (await questions().countDocuments({ userId: u.id, 'strand.id': d._id, kind: 'auto-weiter', status: 'offen' })) > 0;

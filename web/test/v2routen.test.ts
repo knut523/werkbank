@@ -148,6 +148,21 @@ test('Audit 05.11. (4): Takt stellt Eingereihtes zu, sobald der Hauptchat frei i
   assert.deepEqual(quittiert, ['a', 'b'], 'erst nach dem Senden quittiert');
 });
 
+test('Pass C (Runde 3, C6): zwei gleichzeitige Takte stellen dieselben Nachrichten nur einmal zu', async () => {
+  const { hauptchatZustellen } = await import('../server/v2.ts');
+  const warte = () => new Promise((r) => setTimeout(r, 10));
+  let liegt: any[] = [{ id: 'a', text: 'Eins', at: new Date(1) }];
+  const gesendet: string[] = [];
+  const z = {
+    hauptchat: async () => { await warte(); return { conv: 'h1', url: null }; }, laeuftChat: async () => { await warte(); return false; },
+    nehmen: async () => { const l = [...liegt]; await warte(); return l; }, zuruecklegen: async () => {},
+    quittieren: async () => { liegt = []; }, senden: async (_u: any, _c: string, t: string) => { gesendet.push(t); return new Date(); }, log: () => {},
+  };
+  const n = await Promise.all([hauptchatZustellen(z, ADMIN), hauptchatZustellen(z, ADMIN)]);
+  assert.equal(gesendet.length, 1, 'nur ein Takt sendet');
+  assert.deepEqual(n.sort(), [0, 1]);
+});
+
 test('C2: automatisch Geschlossenes steht sichtbar auf der Entscheidungsseite (zählt nicht mit) und lässt sich wieder öffnen', async () => {
   const r = await rufe('GET', '/api/v2/entscheidungen', ADMIN);
   assert.equal(r.b.geschlossen.length, 1); assert.match(r.b.geschlossen[0].grund, /D1/);

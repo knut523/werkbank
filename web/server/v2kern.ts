@@ -476,10 +476,11 @@ export function strangZuPr(straenge: { _id: string; title?: string; zustand?: st
   const name = String(repo).split('/').pop() ?? '';
   const namen = [...new Set([name, name.replace(/^olaf-/, '')])].filter(Boolean).map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const imTitel = new RegExp(`(?<![\\w-])(?:${namen.join('|')})\\s*#${number}(?!\\d)`, 'i');
-  const imText = new RegExp(`${repo.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(?:#|\\/pull\\/)${number}(?!\\d)`, 'i');
+  // Pass A (Runde 3, AW5): Kurz- und Vollname vergleichen (Live-Liste: Kurzname; prReview/Berichtskopf: voll); nicht in einem längeren Namen
+  const imText = new RegExp(`(?<![\\w.-])${repo.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(?:#|\\/pull\\/)${number}(?!\\d)`, 'i');
   const zu = (z?: string) => (z === 'laeuft' || z === 'schlange' ? 'läuft' : z === 'wartet' ? 'wartet' : z === 'fertig' || z === 'erledigt' ? 'fertig' : 'steckt') as 'läuft' | 'wartet' | 'steckt' | 'fertig';
-  return straenge.filter((s) => (s.prReview?.repo === repo && Number(s.prReview?.number) === number)
-    || (s.berichtKopf?.github ?? []).some((g) => imText.test(String(g?.pr ?? '')) || imText.test(String(g?.url ?? '')) || (g?.repo === repo && new RegExp(`#${number}(?!\\d)`).test(String(g?.pr ?? ''))))
+  return straenge.filter((s) => (repoKurz(s.prReview?.repo) === repoKurz(repo) && Number(s.prReview?.number) === number)
+    || (s.berichtKopf?.github ?? []).some((g) => imText.test(String(g?.pr ?? '')) || imText.test(String(g?.url ?? '')) || (repoKurz(g?.repo) === repoKurz(repo) && new RegExp(`#${number}(?!\\d)`).test(String(g?.pr ?? ''))))
     || imTitel.test(String(s.title ?? '')) || imText.test(String(s.title ?? '')) || imText.test(String(s.prompt ?? '')))
     .map((s) => ({ id: String(s._id), titel: kurz(String(s.title ?? ''), 120), zustand: zu(s.zustand) }));
 }

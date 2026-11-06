@@ -120,6 +120,15 @@ test('Plan §23 T1: jede Frage trägt ihre Triage-Klasse mit Grund', () => {
   assert.deepEqual(k('D4'), { klasse: 'knut', grund: 'keine Empfehlung' });
 });
 
+test('Pass A (Runde 3, AW2): Anzeige und Automatik nutzen dieselbe Klasse — keine Frage, die weder entschieden wird noch bei Knut steht', () => {
+  const ib = baueInbox({ ...leer,
+    lose: [{ id: 'q9', title: 'Liste nach Datum oder Name sortieren?', recommendation: 'nach Datum', options: [{ label: 'nach Datum' }, { label: 'nach Name' }], createdAt: new Date(now - 7200_000), context: 'betrifft die Kundenakte' }],
+    karten: [karte('t9', 'Flex', [{ id: 'D1', frage: 'Sortierung? Gilt für alle Verträge der Kunden im Portal.', empfehlung: 'nach Datum' }])] }, { now, triage: true });
+  const { fragen } = fragenAus(ib.eintraege);
+  assert.equal(fragen.length, 2);
+  for (const f of fragen) assert.notEqual(f.triage!.klasse === 'knut', !!f.autoAb, `${f.id}: genau eins von „Für dich“ und „automatisch“ (${f.triage!.klasse}, autoAb ${f.autoAb})`);
+});
+
 test('Plan §23 T3: ein angehängtes Council-Urteil AN_KNUT macht die gewichtige Frage zur Knut-Frage und steht an der Frage', () => {
   const ib = baueInbox({ ...leer, karten: [karte('t3', 'Bot', [{ id: 'D1', frage: 'Datenmodell migrieren?', empfehlung: 'Ja', council: { urteil: 'AN_KNUT', grund: 'Datenverlust möglich', at: '2026-11-05T10:00:00Z' } }, { id: 'D2', frage: 'Schema umbauen?', empfehlung: 'Ja' }])] }, { now });
   const { fragen } = fragenAus(ib.eintraege);

@@ -337,11 +337,14 @@ export async function freigabeSetzen(id: string, neu: string, von: string | null
  * geschrieben und ein Kommentar-Entwurf ins Paket gelegt (`ablehnung.md`) — gepostet wird nichts, gepusht nichts. Der
  * Grund (optional) steht im Eintrag und im Entwurf. `von` = Kennung der ablehnenden Person (Audit).
  */
+/** Pass A (Runde 3, AW6): offene Punkte für den Antworttext — `punkteStand` lebt nur im Speicher des Laufs; aus der DB geladen
+ *  zählt `punkte.lesbar: false` als „unlesbar“, damit der Text es sagt statt zu schweigen. */
+const punkteFuer = (f: any) => f.punkteStand ?? (f.punkte?.lesbar === false ? 'unlesbar' : f.punkte?.liste ?? null);
 export async function fixAblehnenSynchron(id: string, grund: string | null, von: string | null, now = new Date()): Promise<{ ok: boolean; grund?: string }> {
   const f = await fixesCol().findOne({ _id: id as any });
   if (!f) return { ok: false, grund: 'Fix nicht gefunden.' };
   if (f.status !== 'freigabe_frage' && f.status !== 'wartet' && f.status !== 'läuft' && f.status !== 'startet') return { ok: false, grund: `Fix ist nicht mehr offen (Status: ${f.status}).` };
-  const text = antwortText({ punkte: f.punkteStand ?? f.punkte?.liste ?? null, by: f.by, quelle: f.quelle ?? null, start: f.head, neu: f.neu ?? null, zweig: f.zweig, gepusht: false, gruende: ['Knut declined the fix in the workspace'], fix: null, commits: [], tests: null, gate: null, deltaReview: false, knut: 'declined' })
+  const text = antwortText({ punkte: punkteFuer(f), by: f.by, quelle: f.quelle ?? null, start: f.head, neu: f.neu ?? null, zweig: f.zweig, gepusht: false, gruende: ['Knut declined the fix in the workspace'], fix: null, commits: [], tests: null, gate: null, deltaReview: false, knut: 'declined' })
     + (grund ? `\n\nGrund (Knut): ${grund}` : '');
   let paketFehler: string | null = null;
   try { if (f.paket) writeFileSync(join(reviewDir(), f.paket, 'ablehnung.md'), `${text}\n`); } catch (e: any) { paketFehler = scrub(e?.message ?? e); }
@@ -518,7 +521,7 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
     await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'nichts', doneAt: now, neu, note: abgebrochen ? 'Strang abgebrochen, keine Commits' : 'keine Commits' } });
     let url: string | null = null;
     // R29 A: Ohne fix.json wird kein Antwort-Kommentar geplant — nur im Paket vermerkt.
-    const text = fix ? zuGithub(antwortText({ punkte: f.punkteStand ?? f.punkte?.liste ?? null, by: f.by, quelle: f.quelle ?? null, start: f.head, neu: null, zweig: f.zweig, gepusht: false, gruende: ['the fix produced no commits'], fix, commits: [], tests: null, gate: null, deltaReview: false })) : null;
+    const text = fix ? zuGithub(antwortText({ punkte: punkteFuer(f), by: f.by, quelle: f.quelle ?? null, start: f.head, neu: null, zweig: f.zweig, gepusht: false, gruende: ['the fix produced no commits'], fix, commits: [], tests: null, gate: null, deltaReview: false })) : null;
     // R29 A/R30/R30a: Trockenlauf, Freigabe- und Auto-Modus posten den geplanten Kommentar nur ins Paket — bei
     // einem leeren Strang gibt es nichts zu fragen oder freizugeben. Punkt 5: `nichts` ist ein abgeschlossener
     // Zustand und läuft nie neu an; eine Frage würde unbeantwortet liegen bleiben.
@@ -591,7 +594,7 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
     } catch (x: any) { if (x?.code === 11000) deltaReview = true; else deps.log?.('pr-fix delta', { error: scrub(x?.message ?? x) }); }
   }
   let url: string | null = null;
-  const text = zuGithub(antwortText({ punkte: f.punkteStand ?? f.punkte?.liste ?? null, by: f.by, quelle: f.quelle ?? null, start: f.head, neu, zweig: f.zweig, gepusht: true, fix, commits, tests, gate, deltaReview }));
+  const text = zuGithub(antwortText({ punkte: punkteFuer(f), by: f.by, quelle: f.quelle ?? null, start: f.head, neu, zweig: f.zweig, gepusht: true, fix, commits, tests, gate, deltaReview }));
   if (text && deps.kommentar) url = (await deps.kommentar(f, text).catch((e: any) => { deps.log?.('pr-fix antwort', { error: scrub(e?.message ?? e) }); return null; }))?.url ?? null;
   await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'fertig', doneAt: now, neu, gepusht: { at: now, von: f.head, nach: neu }, antwort: url, deltaReview, note: text ? null : 'Antwort nicht gepostet (sah nach einem Geheimnis aus)' } });
   await setzeStatus(f, fixZeile({ art: 'pushed', zweig: f.zweig, von: f.head, nach: neu, url }), deps, now);
@@ -609,7 +612,7 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
  */
 async function trocknen(f: any, p: { ok: boolean; gruende: string[] }, x: { fix: FixJson | null; neu: string; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any }, dir: string, klon: string, g: GitRun, deps: FixDeps, now: Date) {
   // Gegenprüfung 26.10.: Der Trockenlauf-Text kennzeichnet sich selbst — sonst hält der Leser `antwort.md` für einen echten Push.
-  const text = antwortText({ punkte: f.punkteStand ?? f.punkte?.liste ?? null, by: f.by, quelle: f.quelle ?? null, start: f.head, neu: x.neu, zweig: f.zweig, gepusht: p.ok, gruende: p.ok ? undefined : p.gruende, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview: false }).replace('**Automated fix (OLAF Workspace) — not yet read by Knut**', `**DRY RUN — nothing was pushed and nothing was posted** (planned comment; verdict: ${p.ok ? 'push would have gone ahead' : `push would have been refused: ${p.gruende.join('; ')}`})\n\n**Automated fix (OLAF Workspace) — not yet read by Knut**`);
+  const text = antwortText({ punkte: punkteFuer(f), by: f.by, quelle: f.quelle ?? null, start: f.head, neu: x.neu, zweig: f.zweig, gepusht: p.ok, gruende: p.ok ? undefined : p.gruende, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview: false }).replace('**Automated fix (OLAF Workspace) — not yet read by Knut**', `**DRY RUN — nothing was pushed and nothing was posted** (planned comment; verdict: ${p.ok ? 'push would have gone ahead' : `push would have been refused: ${p.gruende.join('; ')}`})\n\n**Automated fix (OLAF Workspace) — not yet read by Knut**`);
   const kappen = (t: string) => (t.length > 400_000 ? `${t.slice(0, 400_000)}\n\n[… abgeschnitten — Rest im Worktree mit git diff]\n` : t);
   let paketFehler: string | null = null;
   try {
@@ -633,7 +636,7 @@ async function trocknen(f: any, p: { ok: boolean; gruende: string[] }, x: { fix:
 async function frageStellen(f: any, p: { ok: boolean; gruende: string[] }, x: { fix: FixJson | null; neu: string; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any }, dir: string, g: GitRun, deps: FixDeps, now: Date) {
   // Die Frage muss einen geprüften Stand zeigen: Ohne die Push-Bedingungen gibt es nichts, was Knut freigeben könnte —
   // die Gründe stehen dann in der Meldung (und der Eintrag bleibt in der Frage, solange nichts freigegeben wurde).
-  const text = antwortText({ punkte: f.punkteStand ?? f.punkte?.liste ?? null, by: f.by, quelle: f.quelle ?? null, start: f.head, neu: x.neu, zweig: f.zweig, gepusht: p.ok, gruende: p.ok ? undefined : p.gruende, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview: false })
+  const text = antwortText({ punkte: punkteFuer(f), by: f.by, quelle: f.quelle ?? null, start: f.head, neu: x.neu, zweig: f.zweig, gepusht: p.ok, gruende: p.ok ? undefined : p.gruende, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview: false })
     .replace('**Automated fix (OLAF Workspace) — not yet read by Knut**', `**Freigabe steht aus — nichts wurde gepusht, nichts gepostet** (planned comment; ${p.ok ? 'everything green, push ready' : `verdict on the current state: ${p.gruende.join('; ')}`})\n\n**Automated fix (OLAF Workspace) — not yet read by Knut**`);
   const kappen = (t: string) => (t.length > 400_000 ? `${t.slice(0, 400_000)}\n\n[… abgeschnitten — Rest im Worktree mit git diff]\n` : t);
   let paketFehler: string | null = null;
@@ -734,7 +737,7 @@ async function pusheAbschluss(f: any, deps: FixDeps, now: Date, neu: string, x: 
     } catch (x: any) { if (x?.code === 11000) deltaReview = true; else deps.log?.('pr-fix delta', { error: scrub(x?.message ?? x) }); }
   }
   let url: string | null = null;
-  const text = zuGithub(antwortText({ punkte: f.punkteStand ?? f.punkte?.liste ?? null, by: f.by, quelle: f.quelle ?? null, start: f.head, neu, zweig: f.zweig, gepusht: true, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview, knut: f.freigabe ? 'released' : undefined }));
+  const text = zuGithub(antwortText({ punkte: punkteFuer(f), by: f.by, quelle: f.quelle ?? null, start: f.head, neu, zweig: f.zweig, gepusht: true, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview, knut: f.freigabe ? 'released' : undefined }));
   if (text && deps.kommentar) url = (await deps.kommentar(f, text).catch((e: any) => { deps.log?.('pr-fix antwort', { error: scrub(e?.message ?? e) }); return null; }))?.url ?? null;
   await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'fertig', doneAt: now, neu, gepusht: { at: now, von: f.head, nach: neu }, antwort: url, deltaReview, note: text ? null : 'Antwort nicht gepostet (sah nach einem Geheimnis aus)' } });
   await setzeStatus(f, fixZeile({ art: 'pushed', zweig: f.zweig, von: f.head, nach: neu, url }), deps, now);
@@ -746,7 +749,7 @@ async function pusheAbschluss(f: any, deps: FixDeps, now: Date, neu: string, x: 
 
 async function ablehnen(f: any, gruende: string[], x: { fix: FixJson | null; neu: string; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any }, deps: FixDeps, now: Date) {
   let url: string | null = null;
-  const text = antwortText({ punkte: f.punkteStand ?? f.punkte?.liste ?? null, by: f.by, quelle: f.quelle ?? null, start: f.head, neu: x.neu, zweig: f.zweig, gepusht: false, gruende, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview: false });
+  const text = antwortText({ punkte: punkteFuer(f), by: f.by, quelle: f.quelle ?? null, start: f.head, neu: x.neu, zweig: f.zweig, gepusht: false, gruende, fix: x.fix, commits: x.commits, tests: x.tests, gate: x.gate, deltaReview: false });
   // R29 A: Ablehnung im Trockenlauf: Antwort-Text nur ins Paket, kein GitHub-Kommentar.
   if (fixTrocken(f)) { try { writeFileSync(join(reviewDir(), f.paket, 'antwort.md'), `${text}\n`); } catch { /* s. o. */ } }
   else if (!GEHEIM.test(text) && deps.kommentar) url = (await deps.kommentar(f, text).catch(() => null))?.url ?? null;

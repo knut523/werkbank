@@ -401,6 +401,9 @@ test('Knut 05.11. abends (2): welcher Strang arbeitet an einem PR — prReview, 
     { _id: 'c3', title: 'Rechner: Tarif-Seite (tariff-app #180)', zustand: 'haengt' },
     { _id: 'd4', title: 'Irgendwas', zustand: 'laeuft', prompt: 'Bitte https://github.com/WirStrom1/olaf-umbrella/pull/12 prüfen' },
     { _id: 'e5', title: 'olaf-admin#3930 anderer', zustand: 'laeuft' },
+    // Pass A (Runde 3, AW5): die Live-Liste übergibt den Kurznamen, prReview/Berichtskopf tragen den vollen
+    { _id: 'f6', title: 'Irgendwas', zustand: 'laeuft', prReview: { repo: 'WirStrom1/olaf-admin', number: 77 } },
+    { _id: 'g7', title: 'Andres', zustand: 'laeuft', prompt: 'siehe foo-olaf-admin#88' },
   ] as any;
   const z = (repo: string, n: number) => strangZuPr(s, repo, n).map((x) => `${x.id}:${x.zustand}`);
   assert.deepEqual(z('WirStrom1/olaf-admin', 393), ['a1:läuft'], 'nicht #3930');
@@ -408,6 +411,9 @@ test('Knut 05.11. abends (2): welcher Strang arbeitet an einem PR — prReview, 
   assert.deepEqual(z('WirStrom1/olaf-tariff-app', 180), ['c3:steckt'], 'Titel mit Repo-Kurzname und Nummer');
   assert.deepEqual(z('WirStrom1/olaf-umbrella', 12), ['d4:läuft'], 'PR-Link im Auftrag');
   assert.deepEqual(z('WirStrom1/olaf-admin', 1), []);
+  assert.deepEqual(z('olaf-admin', 77), ['f6:läuft'], 'Kurzname der Live-Liste gegen vollen prReview');
+  assert.deepEqual(z('olaf-admin', 394), ['b2:wartet'], 'Kurzname gegen vollen Berichtskopf');
+  assert.deepEqual(z('olaf-admin', 88), [], 'kein Treffer in einem längeren Repo-Namen');
 });
 
 test('Pass A (Web 16): PR-Kennungen an einer Stelle — Kurzname der Liste, voller Name der Schlangen', async () => {

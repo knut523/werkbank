@@ -200,7 +200,8 @@ function mitStufe(e: InboxEintrag, ms: number, triage = false) {
       x.auto = triage
         // Text mit Empfehlung (Gegenprüfung T2): mindestens so viel wie die Anzeige prüft — sonst würde automatisch beantwortet,
         // was „Für dich“ als Knut-Frage zeigt (Signalwort nur in der Empfehlung, z. B. „500 €“).
-        ? klasseVon({ text: `${x.frage} ${x.empfehlung ?? ''} ${x.optionen ?? ''}`, markiert: x.stufe === 'wichtig' && /markiert/.test(s.grund) ? 'wichtig' : null, empfehlung: x.empfehlung }).klasse === 'technisch'
+        // Pass A (Runde 3, AW2): die Klasse bleibt an der Frage — die Entscheidungsseite zeigt dieselbe (eine Quelle).
+        ? (x.triage = klasseVon({ text: `${x.frage} ${x.empfehlung ?? ''} ${x.optionen ?? ''}`, markiert: x.stufe === 'wichtig' && /markiert/.test(s.grund) ? 'wichtig' : null, empfehlung: x.empfehlung })).klasse === 'technisch'
         : autoFaehig({ stufe: s.stufe, empfehlung: x.empfehlung, text: `${x.frage} ${x.optionen ?? ''}` });
     }
     const wichtig = liste.find((x) => x.stufe === 'wichtig');
@@ -215,7 +216,10 @@ function mitStufe(e: InboxEintrag, ms: number, triage = false) {
   const s = stufeVon({ text, markiert: (e.daten.markiert as string) ?? null, art: e.art });
   e.stufe = s.stufe; e.stufeGrund = s.grund;
   if (triage) {
-    const k = klasseVon({ text, markiert: (e.daten.markiert as string) ?? null, art: e.art, empfehlung: e.empfehlung });
+    // Pass A (Runde 3, AW2): ohne den Kontext wie die Anzeige (er nennt bei OLAF fast immer Kunden/Verträge) und als eine Quelle
+    // abgelegt — vorher stufte die Automatik mit Kontext als Knut-Frage ein, die Anzeige ohne als technisch: die Frage stand nirgends.
+    const k = klasseVon({ text: `${e.frage} ${e.empfehlung ?? ''} ${((e.daten.optionen as string[]) ?? []).join(' ')}`, markiert: (e.daten.markiert as string) ?? null, art: e.art, empfehlung: e.empfehlung });
+    e.daten.triage = k;
     e.autoAb = e.art === 'rueckfrage' && k.klasse === 'technisch' ? e.wartetSeit : null;
     return;
   }

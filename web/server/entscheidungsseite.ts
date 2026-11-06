@@ -37,6 +37,8 @@ export interface Frage {
   blockiert: number;
   /** Plan §23 T1 (Knut 05.11.): knut → „Für dich“; gewichtig → Hauptchat nach Council; technisch → sofort nach Empfehlung. */
   triage?: { klasse: Klasse; grund: string };
+  /** Klasse aus der Inbox (nur mit Triage gesetzt) — Vorrang vor einer eigenen Einstufung. */
+  triageInbox?: { klasse: Klasse; grund: string } | null;
   /** Unter-Chat, aus dem die Frage kommt (null: Hauptchat, Vault …). */
   strand?: string | null;
   /** Plan §23 T3: Ergebnis des Council-Checks des Hauptchats (nur gewichtige Fragen). */
@@ -102,7 +104,7 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
         const alt = Array.isArray(x.alternativen) ? [...new Set<string>(x.alternativen.map(ein).filter(Boolean))].filter((o) => o !== empfehlung).slice(0, 3) : [];
         fragen.push({ ...basis, id: `${e.id}~${x.id}`, teil: String(x.id), kennung: String(x.id), titel: tw.titel, worum, form,
           optionen, empfehlung, alternativen: form === 'wahl' ? [...new Set([...wahlKnoepfe(form, optionen, empfehlung), ...alt])].slice(0, 6) : alt,
-          stufe: x.stufe === 'wichtig' ? 'wichtig' : 'normal', stufeGrund: x.stufeGrund ?? null, autoAb: x.auto ? e.autoAb ?? null : null, council: x.council ?? null,
+          stufe: x.stufe === 'wichtig' ? 'wichtig' : 'normal', stufeGrund: x.stufeGrund ?? null, autoAb: x.auto ? e.autoAb ?? null : null, council: x.council ?? null, triageInbox: x.triage ?? null,
           antworten: antwortenFuer(form, ['ja', 'nein', 'anders', 'spaeter'], empfehlung) });
       }
       continue;
@@ -128,7 +130,7 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
     // R32: Form nur für Fragen mit Freitext-Bezug (Rückfrage, Braucht-Zeile, Vault-Frage); Push, Vault-Sync und Aufgaben behalten ihre Knöpfe.
     const empf = e.empfehlung ? ein(e.empfehlung) : (e.art === 'vaultfrage' ? empfehlungAus(ein(e.frage)) : null);
     const form: Form = klasse === 'aktion' || e.art === 'push' || e.art === 'vault' ? 'janein' : frageForm(ein(e.frage), optionen);
-    fragen.push({ ...basis, id: e.id, teil: null, kennung: null, titel: tw.titel, worum, form, optionen,
+    fragen.push({ ...basis, id: e.id, teil: null, kennung: null, titel: tw.titel, worum, form, optionen, triageInbox: (e.daten.triage as Frage['triageInbox']) ?? null,
       alternativen: form === 'wahl' ? wahlKnoepfe(form, optionen, empf) : alternativen,
       // (b) nie „wichtig“ — es ist keine Frage an Knut (Nachbesserung 02.11.).
       empfehlung: empf, stufe: e.stufe === 'wichtig' && klasse !== 'aktion' ? 'wichtig' : 'normal', stufeGrund: klasse === 'aktion' ? 'Aufgabe des Hauptchats' : e.stufeGrund ?? null,
@@ -149,7 +151,8 @@ export function fragenAus(eintraege: InboxEintrag[]): { fragen: Frage[]; sonstig
     f.triage = f.council?.urteil === 'AN_KNUT' ? { klasse: 'knut', grund: `Council: ${councilWirkung(f.council).anzeige}` }
       : f.klasse === 'aktion' ? { klasse: 'technisch', grund: 'Aufgabe des Hauptchats' }
       // Nur Frage, Empfehlung und Optionen — der Kontext („worum“) nennt bei OLAF fast immer Kunden/Verträge und machte jede Frage zur Knut-Frage.
-      : klasseVon({ text: [f.titel, f.empfehlung ?? '', ...f.optionen].join(' '), markiert, art: f.art, empfehlung: f.empfehlung });
+      // Pass A (Runde 3, AW2): mit Triage legt die Inbox die Klasse ab, nach der sie auch automatisch entscheidet — dieselbe zeigen.
+      : f.triageInbox ?? klasseVon({ text: [f.titel, f.empfehlung ?? '', ...f.optionen].join(' '), markiert, art: f.art, empfehlung: f.empfehlung });
   }
   // Wichtige oben, sonst die Reihenfolge der Inbox (blockiert am meisten, wartet am längsten); Gruppen zusammenhalten.
   const rang = new Map<string, number>();

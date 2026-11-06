@@ -136,10 +136,12 @@ const ohneBericht = (z: { zustand?: string; bericht?: unknown; paket?: unknown }
 /** Audit 05.11. (4): Takt — Eingereihtes an den Hauptchat zustellen, sobald er frei ist (gebündelt, älteste zuerst; bei Fehler
  *  zurücklegen). Ergebnis: wie viele Texte zugestellt wurden. */
 export async function hauptchatZustellen(z: { hauptchat: V2Deps['hauptchat']; laeuftChat: V2Deps['laeuftChat']; nehmen: (u: User) => Promise<{ id: string; text: string; at: Date }[]>; zuruecklegen: (u: User, l: { id: string; text: string; at: Date }[]) => Promise<void>; quittieren?: (u: User, ids: string[]) => Promise<void>; senden: (u: User, conv: string, text: string) => Promise<Date>; log: V2Deps['log'] }, u: User): Promise<number> {
-  const h = await z.hauptchat(u);
-  if (!h || hauptchatSendet.has(u.id) || (await z.laeuftChat(u, h.conv).catch(() => true))) return 0;
+  // Pass C (Runde 3, C6): die Sperre vor dem ersten await — sonst kamen Intervall und der Takt nach dem Einreihen beide durch
+  if (hauptchatSendet.has(u.id)) return 0;
   hauptchatSendet.add(u.id);
   try {
+    const h = await z.hauptchat(u);
+    if (!h || (await z.laeuftChat(u, h.conv).catch(() => true))) return 0;
     const l = await z.nehmen(u);
     if (!l.length) return 0;
     const s = [...l].sort((a, b) => +new Date(a.at) - +new Date(b.at));

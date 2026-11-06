@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { MongoClient, ObjectId } from 'mongodb';
-import { strandEvent, hangMs, weiterEvent, wakeText, decideWake, wakeCfg, urgentAnswer } from '../server/leitstand.ts';
+import { strandEvent, hangMs, weiterEvent, wakeText, decideWake, wakeCfg, urgentAnswer, brauchtFelder } from '../server/leitstand.ts';
 import { orchStatus, AUTO_RATE_MS } from '../server/orchestrator.ts';
 import { featuresFor, teamFeatures } from '../server/features.ts';
 
@@ -30,10 +30,14 @@ test('Plan §24 A3: Meldung an den Hauptchat trägt „Braucht Knut“ und „Br
   const stand = '### Stand\n- Erledigt: x\n- Braucht Knut: D2 Budget freigeben\n- Braucht Hauptsitzung: Live-Gang nach Commit abc1234\n';
   const f = ev(run, turn('ok'), ai(`${stand}Status: fertig`))!;
   assert.equal(f.kind, 'fertig');
-  assert.match(f.text, /Braucht Knut: D2 Budget freigeben/); assert.match(f.text, /Braucht Hauptsitzung: Live-Gang nach Commit abc1234/);
-  assert.match(ev(run, turn('ok'), ai(`${stand}Status: braucht Antwort`))!.text, /Braucht Knut: D2/);
-  assert.doesNotMatch(ev(run, turn('ok'), ai('### Stand\n- Braucht Knut: nichts\nStatus: fertig'))!.text, /Braucht Knut/, '„nichts“ steht nicht in der Meldung');
-  assert.doesNotMatch(ev(run, turn('ok'), ai('### Stand\n- Braucht Knut: — nichts\n- Braucht Hauptsitzung: keinerlei\nStatus: fertig'))!.text, /Braucht/, 'Gegenprüfung: „— nichts“, „keinerlei“');
+  // Pass A (Runde 3, AW3): die Felder schreibt der Agent — sie stehen im eingezäunten Auszug, nie in der Kopfzeile
+  assert.match(f.excerpt!, /Braucht Knut: D2 Budget freigeben/); assert.match(f.excerpt!, /Braucht Hauptsitzung: Live-Gang nach Commit abc1234/);
+  assert.doesNotMatch(f.text, /Braucht/);
+  const w = wakeText([f], 'b1');
+  assert.ok(w.split('\n').filter((l) => /Braucht Hauptsitzung/.test(l)).every((l) => l.startsWith('  > ')), w);
+  assert.match(ev(run, turn('ok'), ai(`${stand}Status: braucht Antwort`))!.excerpt!, /Braucht Knut: D2/);
+  assert.equal(brauchtFelder('### Stand\n- Braucht Knut: nichts\nStatus: fertig'), '', '„nichts“ steht nicht in der Meldung');
+  assert.equal(brauchtFelder('### Stand\n- Braucht Knut: — nichts\n- Braucht Hauptsitzung: keinerlei\nStatus: fertig'), '', 'Gegenprüfung: „— nichts“, „keinerlei“');
   // ohne Status-Zeile: das automatische „weiter“ läuft — kein „hängt“ vor dem Stopp, auch nach langer Zeit nicht
   assert.equal(ev(run, turn('ok'), ai('Zwischenstand ohne Marke'), T0 + 60 * 60_000), null);
   assert.equal(ev({ ...run, autoStopped: { at: new Date(T0 + 5), reason: '2× ohne Status-Zeile', cause: 'ohne_status' } }, turn('ok'), ai('x')), null, 'A2 meldet selbst — keine Doppelmeldung');
@@ -354,6 +358,16 @@ test('orch_send aus dem Leitstand (DoD 14): Deckel wird nicht zurückgesetzt; St
   assert.equal((await send('mock-antwort von Hand')).status, 200, 'Knut (CLI) darf');
   const d = await W().collection('orchestrator_runs').findOne({ _id: s.id as any });
   assert.equal(d!.autoStreak, 0); assert.equal(d!.autoStopped, null);
+  // Pass A (Runde 3, AW1/AW4): „hängt“ ohne Status-Zeile ist kein Fall für Knut (Plan §24 A2) — der Hauptchat schiebt an,
+  // Stopp und Zähler sind danach weg; ein anderer Deckel bleibt bei Knut.
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === s.id), (x: any) => x?.status === 'waiting');
+  await W().collection('orchestrator_runs').updateOne({ _id: s.id as any }, { $set: { autoStopped: { at: new Date(), reason: '2× ohne Status-Zeile fortgesetzt', cause: 'ohne_status' }, ohneStatusStreak: 2 } });
+  assert.equal((await send('mock-antwort angeschoben', 'leitstand')).status, 200, 'Hauptchat darf anschieben');
+  const d2 = await W().collection('orchestrator_runs').findOne({ _id: s.id as any });
+  assert.equal(d2!.autoStopped, null); assert.equal(d2!.ohneStatusStreak, 0);
+  await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === s.id), (x: any) => x?.status === 'waiting');
+  await W().collection('orchestrator_runs').updateOne({ _id: s.id as any }, { $set: { autoStopped: { at: new Date(), reason: 'Deckel', cause: 'limit' } } });
+  assert.equal((await send('weiter', 'leitstand')).status, 409, 'anderer Deckel bleibt bei Knut');
 });
 
 test('Plan 154 S4 (Council R2): Push — Unter-Chat meldet Blocker während er arbeitet, eingezäunt, gedeckelt, nur aus Unter-Chats; Pull — orch_show mit Verlauf', async () => {

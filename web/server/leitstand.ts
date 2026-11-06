@@ -78,17 +78,20 @@ export function brauchtFelder(text: string | null | undefined): string {
     const inhalt = (m?.[1] ?? '').trim();
     if (inhalt && !istLeer(inhalt)) teile.push(`${name}: ${inhalt.slice(0, 300)}`);
   }
-  return teile.length ? ` · ${teile.join(' · ')}` : '';
+  return teile.join('\n');
 }
 
 export function strandEvent(run: any, st: { status: string; reason: string; cause?: string }, s: StrandState | null | undefined, last: LastMsg | null, now = Date.now()): LeitEvent | null {
   const strand = { id: String(run._id), title: String(run.title ?? '') };
   const felder = last && !last.fromUser ? brauchtFelder(last.text) : '';
+  // Pass A (Runde 3, AW3): Stand-Felder und Entscheidungstitel schreibt der Agent — nur in den eingezäunten Auszug; in der Kopfzeile
+  // steht allein, was die Werkbank selbst weiß (Art, Zahl der offenen Entscheidungen).
+  const agentDaten = (mitOffen: boolean) => { const o = mitOffen ? offeneEntscheidungenText(run) : ''; return { kopf: o.match(/^ · (\d+ offene Entscheidungen?)/)?.[1] ?? '', ex: [o.replace(/^ · /, ''), felder, ex].filter(Boolean).join('\n\n') }; };
   const turnKey = s?.turn?.start ?? new Date(run.lastSentAt ?? run.startedAt).getTime();
   const ex = last && !last.fromUser ? excerpt(last.text, 400) : '';
   if (run.autoStopped?.cause === 'ohne_status') return null;   // Plan §24 A2 meldet „hängt“ selbst (keine Doppelmeldung)
   if (run.autoStopped) return { key: `deckel:${strand.id}:${new Date(run.autoStopped.at).getTime()}`, kind: 'deckel', at: new Date(run.autoStopped.at).getTime(), text: String(run.autoStopped.reason ?? 'Deckel erreicht'), strand };
-  if (run.reviewReadyAt) return { key: `review:${strand.id}:${new Date(run.reviewReadyAt).getTime()}`, kind: 'review', at: new Date(run.reviewReadyAt).getTime(), text: (run.prReview ? prReviewText(run.prReview) : 'meldet review_ready') + offeneEntscheidungenText(run) + felder, excerpt: ex, strand };
+  if (run.reviewReadyAt) return { key: `review:${strand.id}:${new Date(run.reviewReadyAt).getTime()}`, kind: 'review', at: new Date(run.reviewReadyAt).getTime(), ...((a) => ({ text: (run.prReview ? prReviewText(run.prReview) : 'meldet review_ready') + (a.kopf ? ` · ${a.kopf} — Details im Auszug` : ''), excerpt: a.ex }))(agentDaten(true)), strand };
   if (st.status === 'running') return null;
   // Sicherheitsnetz (Plan 154, G9): normal setzt das automatische „weiter“ binnen 20–40 s fort. Steht der Strang nach hangMs()
   // noch an der Grenze, meldet er „hängt“ — einmal je Zug — mit dem Grund, warum nicht fortgesetzt wurde (autoHold).
@@ -104,8 +107,8 @@ export function strandEvent(run: any, st: { status: string; reason: string; caus
     return { key: `haengt:${strand.id}:${turnKey}`, kind: 'haengt', at: endAt, text: `hängt seit ${Math.round((now - endAt) / 60_000)} min: ${st.reason}${why}`, excerpt: ex, strand };
   }
   const at =s?.turn?.end ?? last?.at ?? turnKey;
-  if (st.status === 'done') return { key: `fertig:${strand.id}:${turnKey}`, kind: 'fertig', at, text: 'meldet „fertig“' + offeneEntscheidungenText(run) + felder, excerpt: ex, strand };
-  if (st.status === 'waiting') return { key: `antwort:${strand.id}:${turnKey}`, kind: 'antwort', at, text: `wartet: ${st.reason}${felder}`, excerpt: ex, strand };
+  if (st.status === 'done') return { key: `fertig:${strand.id}:${turnKey}`, kind: 'fertig', at, ...((a) => ({ text: 'meldet „fertig“' + (a.kopf ? ` · ${a.kopf} — Details im Auszug` : ''), excerpt: a.ex }))(agentDaten(true)), strand };
+  if (st.status === 'waiting') return { key: `antwort:${strand.id}:${turnKey}`, kind: 'antwort', at, text: `wartet: ${st.reason}`, excerpt: agentDaten(false).ex, strand };
   if (st.status === 'failed') return { key: `blockiert:${strand.id}:${turnKey}`, kind: 'blockiert', at, text: st.reason, excerpt: ex, strand };
   return null;
 }

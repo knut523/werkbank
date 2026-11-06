@@ -2232,7 +2232,8 @@ async function brueckenFreigabe(u: User, strand: string, b: { pfad: string; bis?
   if (!d?.conv) throw new HttpError(404, 'Strang ohne Unterhaltung.');
   const r = await fetch(`${cfg.bridgeUrl}/internal/orch-freigabe`, { method: 'POST', headers: { ...bridgeInternal, 'content-type': 'application/json' }, body: JSON.stringify({ userId: u.id, conv: d.conv, ...b }), signal: AbortSignal.timeout(5000) });
   const j: any = await r.json().catch(() => ({}));
-  if (!r.ok) throw new HttpError(502, `Brücke: ${j.error ?? r.status}`);
+  // Pass A (Runde 3, AW-S3): eine Ablehnung der Brücke (Geheimnis-Ort, Zugangsdatei, Frist) ist kein Ausfall — 4xx mit ihrem Grund weiterreichen
+  if (!r.ok) throw new HttpError(r.status >= 400 && r.status < 500 ? r.status : 502, `Brücke: ${j.error ?? r.status}`);
   return j;
 }
 const bedarfDeps = {

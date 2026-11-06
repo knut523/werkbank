@@ -225,6 +225,20 @@ test('fixAblehnenSynchron: abgelehnt, Audit, Entwurf im Paket, kein Push; zweite
   assert.equal((await F.fixAblehnenSynchron('fix:gibtsnicht', null, 'knut')).ok, false, 'unbekannte Kennung');
 });
 
+test('Pass A (Runde 3, AW6): Ablehnen nach unlesbarem PR-Kontext sagt das im Entwurf (nie still)', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-fa6', 'feat/a6', 35);
+  await einreihen('fa6', 'olaf-fa6', 35);
+  const { d } = deps(gh, { zweig: 'feat/a6' });
+  await T.fixesCol().updateOne({ _id: 'fix:fa6' as any }, { $set: { frage: true } });
+  await F.fixTick(d); await F.fixTick(d);
+  assert.equal((await T.fixesCol().findOne({ _id: 'fix:fa6' as any }) as any).status, 'freigabe_frage');
+  await T.fixesCol().updateOne({ _id: 'fix:fa6' as any }, { $set: { punkte: { at: new Date(), lesbar: false, gesamt: 0, offen: 0, liste: [] } } });
+  assert.equal((await F.fixAblehnenSynchron('fix:fa6', null, 'knut')).ok, true);
+  const f: any = await T.fixesCol().findOne({ _id: 'fix:fa6' as any });
+  assert.match(readFileSync(join(process.env.WERKBANK_REVIEW_DIR!, f.paket, 'ablehnung.md'), 'utf8'), /could not be read/);
+});
+
 // ---------- R30a: Auto-Modus ----------
 
 test('E2E Auto grün: @fix → direkt Push + Antwort-Kommentar OHNE Klick, Meldung an den Hauptchat, Audit gepusht', async () => {
