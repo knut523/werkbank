@@ -53,17 +53,27 @@ export async function bedarfListe(u: User, o: { offen?: boolean } = {}) {
   return bedarfCol().find({ userId: u.id, ...(o.offen === false ? {} : { status: 'offen' }) }).sort({ at: -1 }).limit(100).toArray() as Promise<any[]>;
 }
 
-/** Antworten: Status setzen (nur wenn noch offen — kein Doppelklick), bei zugang/erteilt die Freigabe in der Brücke, Nachricht an den Strang. */
+/** „Erteilen“ öffnet nur bei Zugang (Freigabe in der Brücke) etwas; bei einer Entscheidung ist es die Antwort. Alles andere (GitHub,
+ *  Merge, Jira, Recht …) tut die Hauptsitzung selbst → „erledigt“ mit Beleg, oder „abgelehnt“ (Gegenprüfung 06.11.). */
+export const ERTEILBAR = new Set(['zugang', 'entscheidung']);
+
+/** Antworten (nur wenn noch offen — kein Doppelklick). Reihenfolge nach der Gegenprüfung 06.11.: erst die Freigabe in der Brücke
+ *  (scheitert sie, bleibt der Bedarf offen), dann der Status, dann die Nachricht (scheitert sie, wieder offen — Wiederholen geht). */
 export async function bedarfAntworten(u: User, id: string, a: { antwort: BedarfAntwort; notiz: string; dauerMin?: number }, deps: {
   senden: (u: User, strand: string, text: string) => Promise<unknown>;
-  freigabe: (u: User, strand: string, pfad: string, bis: Date) => Promise<void>;
+  freigabe: (u: User, strand: string, pfad: string, bis: Date) => Promise<string | void>;
+  col?: () => ReturnType<typeof bedarfCol>;
 }, now = Date.now()) {
-  const b: any = await bedarfCol().findOne({ _id: id as any, userId: u.id });
+  const col = deps.col ?? bedarfCol;
+  const b: any = await col().findOne({ _id: id as any, userId: u.id });
   if (!b) throw Object.assign(new Error('Diesen Bedarf gibt es nicht.'), { status: 404 });
+  if (b.status !== 'offen') throw Object.assign(new Error('Schon beantwortet — Seite neu laden.'), { status: 409 });
+  if (a.antwort === 'erteilt' && !ERTEILBAR.has(b.art)) throw Object.assign(new Error('Erteilen gibt es nur für Zugang und Entscheidung — sonst selbst erledigen („Erledigt“ mit Beleg) oder „Ablehnen“.'), { status: 400 });
   const bis = b.art === 'zugang' && a.antwort === 'erteilt' ? zugangBis(a.dauerMin ?? 240, now) : null;
-  const r = await bedarfCol().updateOne({ _id: id as any, status: 'offen' }, { $set: { status: a.antwort, notiz: a.notiz.slice(0, 1000), antwortAt: new Date(now), ...(bis ? { bis } : {}) } });
+  const real = bis ? (await deps.freigabe(u, b.strand.id, b.pfad, bis)) || b.pfad : b.pfad;
+  const r = await col().updateOne({ _id: id as any, status: 'offen' }, { $set: { status: a.antwort, notiz: a.notiz.slice(0, 1000), antwortAt: new Date(now), ...(bis ? { bis, pfadReal: real } : {}) } });
   if (!r.modifiedCount) throw Object.assign(new Error('Schon beantwortet — Seite neu laden.'), { status: 409 });
-  if (bis) await deps.freigabe(u, b.strand.id, b.pfad, bis);
-  await deps.senden(u, b.strand.id, bedarfAntwortText(b, a.antwort, a.notiz, bis));
+  try { await deps.senden(u, b.strand.id, bedarfAntwortText({ ...b, pfad: real }, a.antwort, a.notiz, bis)); }
+  catch (e) { await col().updateOne({ _id: id as any }, { $set: { status: 'offen' }, $unset: { antwortAt: '', notiz: '', bis: '', pfadReal: '' } }); throw e; }
   return { id, status: a.antwort, bis };
 }

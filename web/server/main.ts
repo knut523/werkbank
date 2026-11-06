@@ -30,7 +30,7 @@ import { fragenAufraeumenAn, fragenAufraeumen } from './fragenaufraeumen.ts';
 import { wahrerLauf } from './strangwahrheit.ts';
 import { baueErledigt } from './erledigt.ts';
 import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
-import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, hinweisFreigabe, hinweisMelious, meldeLeitstand, activeLeitstand } from './leitstand.ts';
+import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, meldeBedarf, hinweisFreigabe, hinweisMelious, meldeLeitstand, activeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
 import { repoFakten, reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
@@ -2139,7 +2139,8 @@ on('POST', /^\/internal\/bedarf$/, async (req, res) => {
   if ('fehler' in p) throw new HttpError(400, p.fehler);
   let r;
   try { r = await bedarfMelden(u, d, p); } catch (e: any) { throw new HttpError(e.status ?? 500, e.message); }
-  const hauptchat = r.neu ? await meldeLeitstand(u, d, `meldet Bedarf (${BEDARF_NAME[p.art]}): ${p.text}${p.pfad ? ` — ${p.pfad}` : ''} · Kennung ${r.id} · erteilen: orch_bedarf oder 2.0 „Braucht Hauptsitzung“`).catch(() => false) : true;
+  // Gegenprüfung 06.11.: Kopfzeile von der Werkbank, der Strang-Text nur als eingezäunter Auszug.
+  const hauptchat = r.neu ? await meldeBedarf(u, d, `meldet Bedarf (${BEDARF_NAME[p.art]}) · Kennung ${r.id} · beantworten: orch_bedarf oder 2.0 „Für die Hauptsitzung“`, `${p.text}${p.pfad ? ` — ${p.pfad}` : ''}`).catch(() => false) : true;
   zahlCache.delete(u.id);
   log('bedarf gemeldet', { user: u.id, strand: String(d._id), id: r.id, art: p.art, neu: r.neu });
   send(res, 200, { id: r.id, neu: r.neu, hauptchat });
@@ -2153,7 +2154,9 @@ const bedarfDeps = {
     const d: any = await orchRuns().findOne({ _id: strand as any, userId: u.id });
     if (!d?.conv) throw new HttpError(404, 'Strang ohne Unterhaltung.');
     const r = await fetch(`${cfg.bridgeUrl}/internal/orch-freigabe`, { method: 'POST', headers: { ...bridgeInternal, 'content-type': 'application/json' }, body: JSON.stringify({ userId: u.id, conv: d.conv, pfad, bis: bis.getTime() }), signal: AbortSignal.timeout(5000) });
-    if (!r.ok) throw new HttpError(502, `Brücke: ${((await r.json().catch(() => ({}))) as any).error ?? r.status}`);
+    const j: any = await r.json().catch(() => ({}));
+    if (!r.ok) throw new HttpError(502, `Brücke: ${j.error ?? r.status}`);
+    return String(j.pfad ?? pfad);   // echter Pfad (Symlinks aufgelöst) — so steht es in der Antwort an den Strang
   },
 };
 async function bedarfAntwortRoute(u: User, id: string, b: any) {

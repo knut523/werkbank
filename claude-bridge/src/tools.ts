@@ -54,7 +54,7 @@ const BASH_GITHUB_WRITE: [RegExp, string][] = [
   [git('push'), 'git push'],
   [/\bgh\s+pr\s+(create|comment|review|edit|close|reopen|ready)\b/, 'GitHub-PR schreiben'],
   [/\bgh\s+(issue|release|repo|label|secret|variable|workflow|gist)\s+(create|edit|close|delete|comment|reopen|set|run|enable|disable|fork|rename|archive|upload)\b/, 'GitHub schreiben'],
-  [/\bgh\s+api\b[^|;&]*(-X|--method)\s*(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],
+  [/\bgh\s+api\b[^|;&]*(-X|--method)[\s=]*['"]?(POST|PATCH|PUT|DELETE)/i, 'GitHub-API schreiben'],   // auch --method=POST (Gegenprüfung 06.11.)
   [/\bgh\s+api\s+(?!graphql\b)[^|;&]*\s(-f|-F|--field|--raw-field|--input)\s/, 'GitHub-API schreiben'],
   [/\bgh\s+api\s+graphql\b[^|;&]*\bmutation\b/i, 'GitHub-API schreiben (GraphQL-Mutation)'],
   [/\bgh\s+api\s+graphql\b[^|;&]*\s--input\s/, 'GitHub-API schreiben (GraphQL aus Datei)'],

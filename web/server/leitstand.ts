@@ -178,6 +178,17 @@ export async function meldeHauptchat(u: User, conv: string, art: string, text: s
   return { ok: true, id: String(d._id), art, hauptchat: !!leit };
 }
 
+/** Bedarfskanal (Knut 06.11.): Kopfzeile von der Werkbank, der Text des Strangs nur als eingezäunter Auszug (wie hauptchat_melden) —
+ *  kein Agententext in der Kopfzeile (Gegenprüfung 06.11.: sonst Anweisungen an den Hauptchat einschleusbar). Ohne Hauptchat: Inbox. */
+export async function meldeBedarf(u: User, d: any, kopf: string, auszug: string, now = Date.now()) {
+  const leit = await activeLeitstand(u);
+  if (!leit) { await meldeInbox(u, d, `${kopf}: ${auszug}`, now); return false; }
+  const at = new Date(now);
+  await events().updateOne({ _id: `${u.id}:meldung:${d._id}:bedarf:${now}` as any }, { $setOnInsert: {
+    userId: u.id, leit: leit._id, kind: 'meldung', text: kopf, excerpt: auszug.slice(0, 1200), strand: { id: String(d._id), title: String(d.title ?? '') }, at, createdAt: at, status: 'offen', retries: 0, urgent: false } }, { upsert: true });
+  return true;
+}
+
 /**
  * Hinweis an den Hauptchat nach Knuts Freigabe (Plan 154, Council R3, Bedingung 4): ein Zustand, KEIN Auftrag — die Zeile sagt
  * das ausdrücklich. Gepusht wird nur von der Hauptsitzung nach der Push-Checkliste; der pre-push-Hook prüft die Freigabe.

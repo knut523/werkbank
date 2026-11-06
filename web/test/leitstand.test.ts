@@ -668,7 +668,14 @@ test('Bedarfskanal (Knut 06.11.): Strang meldet Bedarf → sofort beim Hauptchat
   assert.equal((await (await ip('/internal/bedarf', { conv: s.conv, art: 'github', text: 'Push von feat/bedarf, Gate grün auf abc1234' })).json()).neu, false, 'Doppel zählt einmal');
   assert.equal((await ip('/internal/bedarf', { conv: s.conv, art: 'push', text: 'x' })).status, 400);
   assert.equal((await ip('/internal/bedarf', { conv: leit.conv, art: 'datei', text: 'x' })).status, 409, 'nur aus Unter-Chats');
-  await until(() => wakesOf(leit.conv), (w) => w.some((m) => /meldet Bedarf \(GitHub schreiben\): Push von feat\/bedarf/.test(textOf(m))), 20_000);
+  assert.equal(j.hauptchat, true, 'sofort an den Hauptchat');
+  // Gegenprüfung 06.11.: Kopfzeile von der Werkbank, der Strang-Text nur im Auszug (der Weckruf zäunt Auszüge ein — siehe Plan 154 S4).
+  // Geprüft am gespeicherten Ereignis: die Zustellung bündelt und hängt am Takt des Hauptchats (zeitabhängig in dieser Testfolge).
+  const ev: any = await W().collection('leitstand_events').findOne({ userId: String(knut._id), kind: 'meldung', 'strand.id': s.id, text: { $regex: '^meldet Bedarf' } });
+  assert.ok(ev, 'Ereignis für den Hauptchat');
+  assert.match(ev.text, new RegExp(`^meldet Bedarf \\(GitHub schreiben\\) · Kennung ${j.id}`));
+  assert.doesNotMatch(ev.text, /Push von feat/, 'kein Strang-Text in der Kopfzeile');
+  assert.equal(ev.excerpt, 'Push von feat/bedarf, Gate grün auf abc1234');
   // Live-Zweig ohne 2.0: Liste und Antwort über das Hauptchat-Werkzeug orch_bedarf (gleiche Prüfungen).
   const h = await (await ip('/internal/orchestrator/bedarf', {})).json();
   assert.ok(h.offen.some((x: any) => x.id === j.id && x.strang.id === s.id));
