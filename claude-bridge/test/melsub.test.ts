@@ -22,7 +22,7 @@ const key = (s: string) => `sk-mel-${s}-${'y'.repeat(24)}`;
 const MEL = { id: 'melious', label: 'Melious', token: key('gut'), kind: 'melious', rest: 150_000, fallback: false, rollen: { leser: ['glm-5.3-flash'], schreiber: ['glm-5.3-flash'], niedrig: ['glm-5.3-flash'] }, faktoren: { 'glm-5.3-flash': { input: 1, output: 4, cacheRead: 0.1 }, 'glm-5.3': { input: 3, output: 12, cacheRead: 0.3 } } };
 const ACCOUNTS: Record<string, unknown[]> = { knut: [{ id: 'chat', label: 'Chat', token: null }, MEL], ohne: [{ id: 'chat', label: 'Chat', token: null }] };
 // jcode-Nachbau: merkt sich Argumente und Schlüssel-Umgebung, antwortet mit JSON wie `jcode run --json`.
-writeFileSync(join(BIN, 'jcode'), `#!/bin/sh\nprintf '%s\\n' "$@" > ${ARGS}\n[ -n "$JCODE_PROVIDER_MELIOUS_API_KEY" ] && echo schluessel-da >> ${ARGS}\necho '{"text":"Antwort aus jcode: src/a.ts:12","model":"glm-5.3-flash","usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":400}}'\n`);
+writeFileSync(join(BIN, 'jcode'), `#!/bin/sh\nprintf '%s\\n' "$@" > ${ARGS}\ngrep -q SCHLAF ${ARGS} && sleep 3\n[ -n "$JCODE_PROVIDER_MELIOUS_API_KEY" ] && echo schluessel-da >> ${ARGS}\necho '{"text":"Antwort aus jcode: src/a.ts:12","model":"glm-5.3-flash","usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":400}}'\n`);
 writeFileSync(join(BIN, 'cswap'), `#!/bin/sh\necho '{"accounts":[{"number":1,"alias":"knut","active":true,"usage":{"fiveHour":{"pct":72,"clock":"14:00"},"sevenDay":{"pct":40,"aheadOfPace":false}}},{"number":2,"active":false,"usage":{"fiveHour":{"pct":10}}}]}'\n`);
 chmodSync(join(BIN, 'jcode'), 0o755); chmodSync(join(BIN, 'cswap'), 0o755);
 
@@ -130,9 +130,20 @@ test('Lead (Hauptchat): Auslastung beim ersten Zug, melious_sub und auslastung v
   assert.doesNotMatch(t2, /📊 Claude/, 'nur beim Wechsel der Stufe erneut');
 });
 
+test('melious_sub hält die Verbindung: Ergebnis kommt auch nach langer Laufzeit vollständig an (sonst bricht fetch nach 300 s ab, gemessen 06.11.)', async () => {
+  const c = conv(70);
+  await register('knut', c);
+  const t0 = Date.now();
+  const t = await send(c, lead([{ tool: 'melious_sub', args: { auftrag: 'SCHLAF kurz, dann antworten' } }]));
+  assert.ok(Date.now() - t0 >= 3000, 'der langsame Teilagent lief wirklich');
+  assert.match(t, /melious_sub · glm-5\.3-flash · jcode/);
+});
+
 test('melious_sub nur im laufenden Zug und nicht für fremde Unterhaltungen', async () => {
   const r = await fetch(`http://127.0.0.1:${PORT}/internal/mel-sub`, { method: 'POST', headers: { 'x-werkbank-internal': 'geheim', 'content-type': 'application/json' }, body: JSON.stringify({ userId: 'knut', conv: conv(9), auftrag: 'x' }) });
-  assert.equal(r.status, 409);
+  assert.equal(r.status, 200, 'mel-sub antwortet sofort; Fehler stehen im JSON');
+  const j: any = await r.json();
+  assert.equal(j.status, 409); assert.match(j.error, /laufenden Zugs/);
   assert.equal((await fetch(`http://127.0.0.1:${PORT}/internal/mel-sub`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 403);
   assert.ok(existsSync(ARGS));
 });

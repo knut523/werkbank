@@ -136,7 +136,8 @@ export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<
         const path = ({ delegieren: '/internal/delegate', delegation_stand: '/internal/delegate-stand', delegation_urteil: '/internal/delegate-urteil', phase_wechseln: '/internal/phase', melious_sub: '/internal/mel-sub', auslastung: '/internal/auslastung' } as Record<string, string>)[s.tool];
         const r = await fetch(`${wenv.WERKBANK_BRIDGE_URL}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': wenv.WERKBANK_INTERNAL_TOKEN }, body: JSON.stringify({ userId: wenv.WERKBANK_USER_ID, conv: wenv.WERKBANK_CONV_ID, ...s.args }) });
         const j: any = await r.json().catch(() => ({}));
-        yield text(`\n[${s.tool}] ${r.ok ? j.text : `FEHLER ${r.status}: ${j.error}`}\n`);
+        // wie web/mcp/werkbank-tools.ts: melious_sub antwortet sofort mit 200 und meldet Fehler im JSON
+        yield text(`\n[${s.tool}] ${r.ok && !j.error ? j.text : `FEHLER ${j.status ?? r.status}: ${j.error}`}\n`);
       }
       yield { type: 'result', subtype: 'success', session_id, is_error: false, usage: { input_tokens: 50, output_tokens: 20 } };
       return;
