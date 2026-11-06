@@ -23,7 +23,8 @@ import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn } from './schlange.ts';
-import { opencode2An, opencode2Ab, opencode2Urls, opencode2Pool } from './laeufer.ts';
+import { opencode2An, opencode2Ab, opencode2Pool } from './laeufer.ts';
+import { opencode2Server, oc2Home, oc2Ports, oc2Version, type Oc2Server } from './oc2server.ts';
 import { modellReihe, ensembleLauf } from './modellwahl.ts';
 import { schaetze, passt, passtJcode, schaetzungText, speicherStand, jcodeTopfGb, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
@@ -2030,6 +2031,7 @@ interface Deleg {
   text: string; span?: [number, number] | null; sub?: string; gemeldet?: boolean; diffDatei?: string; abschluss?: Abschluss; abschlussFehler?: string; reparatur?: boolean; git?: GitStand; pruef?: { eingerichtet: boolean; ref: string | null; ergebnisse: PruefErgebnis[] };
   abweichungen: string[]; pruefer?: string; modell: string | null; konto: string | null; anbieter: string | null; input: number; output: number; energie: number;
   urteil?: string; notiz?: string; aborted?: boolean; hinweis?: string; protokoll?: string; done: Promise<void>; req: TurnRequest;
+  klick?: string;   // J3: Ausgabeordner des Klickwerkzeugs (nur lesende jcode-Worker mit klick=true)
 }
 const delegs = new Map<string, Deleg>();
 const laufend = () => [...delegs.values()].filter((d) => d.status === 'laeuft').length;
@@ -2104,6 +2106,8 @@ function report(d: Deleg) { try { d.req.onDelegation?.(delegLog(d)); } catch { /
 // (Prüfer mindestens Autor-Klasse). Einschalten mit BRIDGE_WORKER_JCODE=on; jcode braucht das Profil [providers.melious].
 export const JCODE_BIN = () => process.env.BRIDGE_JCODE_BIN || join(homedir(), '.local', 'bin', 'jcode');
 export const jcodeAn = () => process.env.BRIDGE_WORKER_JCODE === 'on' && existsSync(JCODE_BIN());
+/** J3 Klickwerkzeug (Hauptsitzung 06.11. „J3 ja“): an, solange jcode-Worker an sind; BRIDGE_KLICK=aus schaltet es ab. */
+export const klickAn = () => process.env.BRIDGE_KLICK !== 'aus' && jcodeAn();
 /** Summe der token_usage aller Aufrufe einer jcode-Sitzung (input enthält den Cache-Anteil). */
 export function jcodeUsage(sessionJson: any): MeliousUsage {
   const u: MeliousUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -2133,9 +2137,9 @@ export function jcodeWritesOutside(sessionJson: any, cwd: string): string[] {
   return out;
 }
 /** jcode einmal laufen lassen (Melious-Profil). Wächter (Pilot 183): shim/bash vorn in PATH lässt nur lesende Shell-Befehle durch. */
-function jcodeSpawn(o: { cwd: string; prompt: string; model: string | null; tools: string; key: string; timeoutS: number; abbruch?: () => boolean }): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function jcodeSpawn(o: { cwd: string; prompt: string; model: string | null; tools: string; key: string; timeoutS: number; abbruch?: () => boolean; extra?: Record<string, string> }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key,
-    JCODE_HOOK_PRE_TOOL: JCODE_HOOK, JCODE_HOOK_PRE_TOOL_TIMEOUT_MS: '10000' };
+    JCODE_HOOK_PRE_TOOL: JCODE_HOOK, JCODE_HOOK_PRE_TOOL_TIMEOUT_MS: '10000', ...o.extra };
   return new Promise((res) => {
     const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', o.prompt], { cwd: o.cwd, env });
     let so = '', se = '';
@@ -2159,6 +2163,12 @@ function jcodeAuswerten(out: { stdout: string }, cwd: string, model: string | nu
   return { j, usage, draussen, gelaufen: String(j?.model ?? model ?? 'glm-5.3-flash') };
 }
 
+const KLICK_HINWEIS = `\n\nKlickwerkzeug (Persona-/Klicktest): in der Shell \`klick <persona|-> <d|m> <url> [aktion …]\` — persona Knut, Lisa oder Christoph
+(Testkonten der Test-Instanz, du siehst die Passwörter nicht), d = Desktop, m = Handy. Nur http://127.0.0.1:3436 (Werkbank-Test-Instanz)
+und die Vorschau-Ports 8110/8111 (dort persona „-“). Aktionen: warte:<ms> · klick:<sichtbarer Text> · rolle:<rolle>=<name> ·
+tippe:<selektor>=<text> · text:<selektor> · bild:<name> · voll. Mehrteilige Aktionen in Anführungszeichen. Jeder Aufruf liefert die
+Ladezeit, Texte, Fehler und die Pfade der Bildschirmfotos — nenne sie im Ergebnis je Befund.`;
+
 async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> {
   if (!jcodeAn() || d.rolle === 'pruefer') return null;
   const e = orchMap[d.workerKey];
@@ -2180,8 +2190,9 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   const t0 = Date.now();
   // Läufer (Pilot, Hauptsitzung 06.11.): lesende Worker ab opencode2Ab() gleichzeitigen Lesern auf einem opencode-2-Server; fällt er
   // aus, läuft derselbe Auftrag über jcode weiter (unten).
-  if (d.rolle === 'leser') {
-    const oc2 = opencode2Jetzt();
+  // J3: Klick-Aufträge brauchen die Shell (klick) — opencode 2 hat keine, also immer jcode.
+  if (d.rolle === 'leser' && !d.klick) {
+    const oc2 = await opencode2Jetzt(mel.token);
     if (oc2) {
       lesendLaufend++;
       const r = await oc2.zug({ cwd: d.cwd, prompt, model: reihe[0] ?? 'glm-5.3-flash', timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted, titel: `worker ${d.id}` }).finally(() => { lesendLaufend--; });
@@ -2200,7 +2211,7 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
   try {
   for (const [i, m] of (reihe.length ? reihe : ['glm-5.3-flash']).slice(0, 3).entries()) {
     model = alsModell(m);
-    out = await jcodeSpawn({ cwd: d.cwd, prompt, model, tools, key: mel.token, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted });
+    out = await jcodeSpawn({ cwd: d.cwd, prompt: d.klick ? prompt + KLICK_HINWEIS : prompt, model, tools, key: mel.token, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted, extra: d.klick ? { WERKBANK_KLICK: '1', WERKBANK_KLICK_AUS: d.klick } : undefined });
     ausw = jcodeAuswerten(out, d.cwd, model);
     if ((out.code === 0 && ausw.j) || d.aborted || ausw.draussen.length || d.rolle !== 'leser') break;
     log('worker jcode rückfall', { delegation: d.id, modell: m, exit: out.code, naechstes: reihe[i + 1] ?? null });
@@ -2298,23 +2309,32 @@ const MEL_SUB_MODELL: Record<string, string> = { flash: 'glm-5.3-flash', glm: 'g
 /** Rollen der Teilagenten, die nur lesen — die gehen standardmäßig an Melious. */
 export const LESE_TEILAGENTEN = new Set(['leser', 'strang-leser', 'ticket-pruefer', 'Explore']);
 
-/** opencode-2-Server (Pilot, Hauptsitzung 06.11.): nur mit BRIDGE_OPENCODE2=an, Server-Adressen und Passwortdatei (Inhalt nie im Log).
+/** opencode-2-Server (Pilot, Hauptsitzung 06.11.): nur mit BRIDGE_OPENCODE2=an. Die Brücke startet die Server selbst, sobald ein
+ *  lesender Auftrag sie braucht, mit dem Melious-Schlüssel aus dem Konto (wie jcode) nur in deren Umgebung — kein Schlüssel in einer
+ *  Datei oder in der Umgebung von Brücke und Strängen; das Server-Passwort entsteht im Speicher (oc2server.ts).
  *  Derselbe Pool über alle Aufrufe, damit die Verteilung die aktiven Sitzungen je Server kennt. */
+let oc2Srv: { schluessel: string; srv: Oc2Server } | null = null;
 let oc2Pool: { schluessel: string; pool: ReturnType<typeof opencode2Pool> } | null = null;
-export function opencode2Fuer(env: Record<string, string | undefined> = process.env): ReturnType<typeof opencode2Pool> | null {
-  const urls = opencode2Urls(env);
-  if (!opencode2An(env) || !urls.length || !env.BRIDGE_OPENCODE2_PW_DATEI) return null;
-  let passwort = '';
-  try { passwort = readFileSync(env.BRIDGE_OPENCODE2_PW_DATEI, 'utf8').trim(); } catch { return null; }
-  if (!passwort) return null;
-  const schluessel = `${urls.join(',')}|${env.BRIDGE_OPENCODE2_PW_DATEI}`;
-  if (oc2Pool?.schluessel !== schluessel) oc2Pool = { schluessel, pool: opencode2Pool({ urls, passwort }) };
+export async function opencode2Fuer(key: string | undefined, env: Record<string, string | undefined> = process.env): Promise<ReturnType<typeof opencode2Pool> | null> {
+  const ports = oc2Ports(env);
+  if (!opencode2An(env) || !key || !ports.length) return null;
+  const s = `${oc2Home(env)}|${ports.join(',')}|${oc2Version(env)}`;
+  if (oc2Srv?.schluessel !== s) { oc2Srv?.srv.stop(); oc2Srv = { schluessel: s, srv: opencode2Server({ home: oc2Home(env), ports, version: oc2Version(env), log: (m, d) => log(m, d ?? {}) }) }; }
+  let z: Awaited<ReturnType<Oc2Server['sichern']>> = null;
+  try { z = await oc2Srv.srv.sichern(key); } catch (e: any) { log('opencode2 nicht verfügbar', { fehler: String(e?.message ?? e).slice(0, 200) }); return null; }
+  if (!z) return null;
+  // Gegenprüfung 06.11.: neue Server-Verwaltung (z. B. andere Version) bei gleichen Ports hat ein neues Passwort → neuer Pool.
+  const pk = `${z.urls.join(',')}|${createHash('sha256').update(z.passwort).digest('hex').slice(0, 12)}`;
+  if (oc2Pool?.schluessel !== pk) oc2Pool = { schluessel: pk, pool: opencode2Pool({ urls: z.urls, passwort: z.passwort }) };
   return oc2Pool.pool;
 }
+/** Die Server der Brücke enden mit ihr. */
+export const opencode2Stop = () => { oc2Srv?.srv.stop(); oc2Srv = null; oc2Pool = null; };
+process.once('exit', opencode2Stop);
 /** Gerade laufende lesende Melious-Aufträge (melious_sub, lesende Worker) — ab opencode2Ab() übernimmt opencode 2. */
 let lesendLaufend = 0;
 export const lesendeLaeufe = () => lesendLaufend;
-export const opencode2Jetzt = (env: Record<string, string | undefined> = process.env) => (lesendLaufend >= opencode2Ab(env) ? opencode2Fuer(env) : null);
+export const opencode2Jetzt = async (key: string | undefined, env: Record<string, string | undefined> = process.env) => (lesendLaufend >= opencode2Ab(env) ? opencode2Fuer(key, env) : null);
 
 async function melKonto(live: Live, userId: string): Promise<Account | null> {
   try {
@@ -2342,7 +2362,7 @@ export async function melSub(userId: string, convId: string, b: { auftrag?: unkn
   const cwd = orchMap[key]?.dir ?? live.workDir ?? cwdMap[key] ?? homedir();
   const t0 = Date.now();
   // Läufer (Pilot, Hauptsitzung 06.11.): ab opencode2Ab() gleichzeitigen lesenden Aufträgen ein opencode-2-Server, darunter jcode.
-  let oc2 = opencode2Jetzt();
+  let oc2 = await opencode2Jetzt(mel.token);
   emitStatus(live, `🇪🇺 Melious-Teilagent (${model}, ${oc2 ? 'opencode 2' : 'jcode'}): ${auftrag.replace(/\s+/g, ' ').slice(0, 80)}${auftrag.length > 80 ? '…' : ''}`);
   const prompt = `${auftrag}\n\n(Nur lesen: nichts ändern, nichts installieren, keine Repo-Skripte ausführen.)`;
   const timeoutS = envZahl('BRIDGE_MEL_SUB_TIMEOUT_S', 900, 60), abbruch = () => live.abort.signal.aborted;
@@ -2384,6 +2404,8 @@ async function runWorker(d: Deleg, prompt: string): Promise<string> {
   // jcode zuerst (Melious-Worker); null = nicht zuständig → wie bisher über Claude Code.
   const jc = await runWorkerJcode(d, prompt);
   if (jc !== null) return jc;
+  // J3: das Klickwerkzeug gibt es nur im jcode-Worker — ohne Melious kein stiller Claude-Lauf ohne Klicks.
+  if (d.klick) return 'Klick-Auftrag nicht gestartet: Melious/jcode gerade nicht verfügbar (das Klickwerkzeug gibt es nur dort). Später erneut delegieren oder selbst mit Playwright prüfen.';
   const chunks: string[] = [];
   let closed = false;
   const fns: (() => void)[] = [];
@@ -2522,7 +2544,7 @@ const ROLLEN_SETUP: Record<Exclude<Rolle, 'pruefer'>, { profil: Profil; modell: 
 type Res = { ok: true; text: string; id?: string } | { ok: false; status: number; error: string };
 
 /** delegieren (Werkbank-MCP): Worker starten, sofort mit der Kennung antworten. */
-export async function startDelegation(userId: string, convId: string, b: { rolle?: unknown; aufgabe?: unknown; risiko?: unknown; pruefe?: unknown }): Promise<Res> {
+export async function startDelegation(userId: string, convId: string, b: { rolle?: unknown; aufgabe?: unknown; risiko?: unknown; pruefe?: unknown; klick?: unknown }): Promise<Res> {
   const parent = `${safeId(userId)}:${safeId(convId)}`;
   const e = orchMap[parent];
   if (!e || (e.kind ?? 'strand') !== 'strand') return { ok: false, status: 403, error: 'delegieren gibt es nur in Strängen.' };
@@ -2531,6 +2553,8 @@ export async function startDelegation(userId: string, convId: string, b: { rolle
   const rolle = String(b.rolle ?? '') as Rolle;
   if (!ROLLEN.includes(rolle)) return { ok: false, status: 400, error: 'rolle: leser, schreiber, bauer oder pruefer.' };
   const aufgabe = String(b.aufgabe ?? '').trim();
+  if (b.klick === true && rolle !== 'leser') return { ok: false, status: 400, error: 'klick nur mit rolle leser (Persona-/Klicktests gegen die Test-Instanz).' };
+  if (b.klick === true && !klickAn()) return { ok: false, status: 503, error: 'Klickwerkzeug ist aus (BRIDGE_KLICK=aus) oder jcode fehlt.' };
   if (!aufgabe && rolle !== 'pruefer') return { ok: false, status: 400, error: 'aufgabe fehlt.' };
   if (aufgabe.length > KAPPUNG.auftrag) return { ok: false, status: 400, error: `aufgabe ist ${aufgabe.length} Zeichen lang, höchstens ${KAPPUNG.auftrag} (C8) — kürzen oder auf mehrere Worker verteilen.` };
   const alleLauf = [...delegs.values()].filter((d) => d.status === 'laeuft');
@@ -2558,6 +2582,7 @@ export async function startDelegation(userId: string, convId: string, b: { rolle
   const git = rolle === 'bauer' || rolle === 'schreiber';
   // Platz reservieren, bevor irgendetwas wartet (Pass B, 12: sonst starten vier parallele Aufrufe vier Worker).
   const d = newDeleg(userId, parent, convId, rolle, risiko, aufgabe, e.dir, lead.req);
+  if (b.klick === true) { d.klick = join(scratchFor(userId), 'klick', d.id); mkdirSync(d.klick, { recursive: true }); }
   if (git && !(await isGitDir(e.dir))) { delegs.delete(d.id); return { ok: false, status: 400, error: `${rolle} braucht einen Git-Arbeitsordner (eigener Unter-Worktree) — hier nicht; leser nehmen oder selbst machen.` }; }
   if (git) {
     const w = await subWorktree(e.dir, d.id);

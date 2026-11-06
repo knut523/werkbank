@@ -1,10 +1,10 @@
 // Läufer-Abstraktion (Konzept J, Hauptsitzung 06.11.): jcode und opencode-2-Server; Pilot ab ~5 parallelen lesenden Aufträgen.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { opencode2Laeufer, opencode2Pool, oc2Antwort, oc2Fertig, opencode2An, opencode2Ab, opencode2Urls, NUR_LESEN, OC2_WEITER } from '../src/laeufer.ts';
+import { opencode2Laeufer, opencode2Pool, oc2Antwort, oc2Fertig, opencode2An, opencode2Ab, NUR_LESEN, OC2_WEITER } from '../src/laeufer.ts';
 
 /** Nachgebauter opencode-2-Server: zeichnet Aufrufe auf; die Sitzung wird nach `fertigNach` Abfragen fertig. */
 function server(o: { fertigNach?: number; outcome?: string; status?: number; wegBei?: number[]; nach404?: number; id?: string } = {}) {
@@ -105,15 +105,13 @@ test('Gegenprüfung 06.11.: toter Server pausiert 60 s (nächster Lauf geht an d
 test('Schalter: an nur mit BRIDGE_OPENCODE2=an, Schwelle 5 (einstellbar), nur Server auf dieser Maschine; Antwort und Fertig-Erkennung', async () => {
   assert.equal(opencode2An({}), false); assert.equal(opencode2An({ BRIDGE_OPENCODE2: 'an' }), true);
   assert.equal(opencode2Ab({}), 5); assert.equal(opencode2Ab({ BRIDGE_OPENCODE2_AB: '0' }), 0); assert.equal(opencode2Ab({ BRIDGE_OPENCODE2_AB: 'x' }), 5);
-  assert.deepEqual(opencode2Urls({ BRIDGE_OPENCODE2_URLS: 'http://127.0.0.1:47811, http://localhost:47812,https://fremd.example:1,http://10.0.0.1:2' }), ['http://127.0.0.1:47811', 'http://localhost:47812']);
   assert.equal(oc2Antwort([{ type: 'assistant', content: [{ type: 'tool' }] }, { type: 'assistant', content: [{ type: 'text', text: 'alt' }] }]), 'alt', 'neueste Nachricht mit Text');
   assert.equal(oc2Antwort([]), '');
   assert.equal(oc2Fertig({ outcome: 'succeeded', time: { busy: 5, idle: 4 } }), false, 'nach dem letzten busy noch nicht ruhig');
   const { opencode2Fuer } = await import('../src/sessions.ts');
-  const d = mkdtempSync(join(tmpdir(), 'oc2-')); writeFileSync(join(d, 'pw'), 'geheim\n');
-  assert.equal(opencode2Fuer({ BRIDGE_OPENCODE2_URLS: 'http://127.0.0.1:1', BRIDGE_OPENCODE2_PW_DATEI: join(d, 'pw') }), null, 'ohne BRIDGE_OPENCODE2=an bleibt jcode');
-  assert.equal(opencode2Fuer({ BRIDGE_OPENCODE2: 'an', BRIDGE_OPENCODE2_PW_DATEI: join(d, 'pw') }), null, 'ohne Server-Adresse kein opencode 2');
-  const p = opencode2Fuer({ BRIDGE_OPENCODE2: 'an', BRIDGE_OPENCODE2_URLS: 'http://127.0.0.1:1', BRIDGE_OPENCODE2_PW_DATEI: join(d, 'pw') });
-  assert.equal(p?.name, 'opencode2');
-  assert.equal(opencode2Fuer({ BRIDGE_OPENCODE2: 'an', BRIDGE_OPENCODE2_URLS: 'http://127.0.0.1:1', BRIDGE_OPENCODE2_PW_DATEI: join(d, 'pw') }), p, 'derselbe Pool (Zählung je Server bleibt)');
+  assert.equal(await opencode2Fuer('sk-x', {}), null, 'ohne BRIDGE_OPENCODE2=an bleibt jcode');
+  assert.equal(await opencode2Fuer(undefined, { BRIDGE_OPENCODE2: 'an' }), null, 'ohne Schlüssel aus dem Konto kein opencode 2');
+  assert.equal(await opencode2Fuer('sk-x', { BRIDGE_OPENCODE2: 'an', BRIDGE_OPENCODE2_PORTS: 'x 80' }), null, 'ohne gültigen Port kein opencode 2');
+  const d = mkdtempSync(join(tmpdir(), 'oc2-'));
+  assert.equal(await opencode2Fuer('sk-x', { BRIDGE_OPENCODE2: 'an', BRIDGE_OPENCODE2_HOME: d }), null, 'ohne Installation kein opencode 2 (Rückfall jcode)');
 });

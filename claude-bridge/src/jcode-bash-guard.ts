@@ -32,6 +32,16 @@ function gesperrt(): boolean {
   }
   return false;
 }
+// J3 (Hauptsitzung 06.11.): das Klickwerkzeug, nur wenn die Brücke den Worker mit klick=true gestartet hat. Läuft ohne Shell
+// (kein ;|&<>`$\ — jedes Wort ein Argument), die Ziele prüft klick.ts gegen die Liste im Code.
+const KLICK = /^klick(\s|$)/;
+if (process.env.WERKBANK_KLICK === '1' && KLICK.test(cmd.trim())) {
+  if (/[;&|<>`$\\\n\r]/.test(cmd)) { process.stderr.write('Abgelehnt (Werkbank-Wächter): klick ohne Shell-Zeichen (; | & < > ` $ \\) aufrufen.\n'); process.exit(126); }
+  const worte = [...cmd.trim().matchAll(/'([^']*)'|"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]).slice(1);
+  const kEnv: Record<string, string | undefined> = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG, WERKBANK_KLICK_AUS: process.env.WERKBANK_KLICK_AUS };
+  const k = spawnSync(process.execPath, ['--experimental-strip-types', '--no-warnings', resolve(import.meta.dirname, 'klick.ts'), ...worte], { stdio: 'inherit', env: kEnv as NodeJS.ProcessEnv, timeout: 180_000 });
+  process.exit(k.status ?? 1);
+}
 if (!cmd || !readOnlyBash(cmd) || gesperrt()) {
   process.stderr.write('Abgelehnt (Werkbank-Wächter): Im Melious-Worker sind nur lesende Shell-Befehle erlaubt (rg, grep, cat, head, tail, git log/show/diff …; kein sed), ohne Umleitung oder Befehlsersetzung. Dateien änderst du mit write/edit.\n');
   process.exit(126);

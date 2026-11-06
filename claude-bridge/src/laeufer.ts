@@ -2,9 +2,9 @@
 // Läufer — jcode (ein Prozess je Auftrag) oder ein opencode-2-Server (Sitzungen über HTTP: /api/session, /prompt, interrupt;
 // Test 06.11. in review-pakete/opencode2-test-0611: 20 parallel fehlerfrei, 524 MB statt 2062 MB bei jcode).
 // Entschieden (Hauptsitzung 06.11., umkehrbar, Pilot): lesende Aufträge laufen ab ~5 parallelen auf opencode-2-Servern, darunter auf
-// jcode. Bedingungen: (1) Wiederaufnahme nach einem Server-Absturz (hier: warten, Sitzung neu anstoßen; Neustart macht
-// scripts/opencode2-waechter.sh), (2) feste Version 2.2.5 (Wächter prüft), (3) mehrere Server, verteilt (opencode2Pool).
-// Schalter: BRIDGE_OPENCODE2=an, BRIDGE_OPENCODE2_URLS (kommagetrennt), BRIDGE_OPENCODE2_PW_DATEI, BRIDGE_OPENCODE2_AB (5). Rein bis auf fetch.
+// jcode. Bedingungen: (1) Wiederaufnahme nach einem Server-Absturz (hier: warten, Sitzung neu anstoßen; den Neustart macht die
+// Brücke, oc2server.ts), (2) feste Version 2.2.5 (oc2server.ts prüft), (3) mehrere Server, verteilt (opencode2Pool).
+// Schalter: BRIDGE_OPENCODE2=an, BRIDGE_OPENCODE2_PORTS (47811 47812), BRIDGE_OPENCODE2_HOME, BRIDGE_OPENCODE2_AB (5). Rein bis auf fetch.
 
 export interface LaeuferAuftrag { cwd: string; prompt: string; model: string | null; timeoutS: number; abbruch: () => boolean; titel?: string }
 export interface LaeuferNutzung { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -16,8 +16,6 @@ type Env = Record<string, string | undefined>;
 export const opencode2An = (env: Env = process.env) => env.BRIDGE_OPENCODE2 === 'an';
 /** Ab wie vielen gleichzeitig laufenden lesenden Aufträgen opencode 2 übernimmt (darunter jcode: sparsamer, kein Server nötig). */
 export const opencode2Ab = (env: Env = process.env) => { const n = Math.floor(Number(env.BRIDGE_OPENCODE2_AB)); return env.BRIDGE_OPENCODE2_AB !== undefined && Number.isFinite(n) && n >= 0 ? n : 5; };
-/** Server-Adressen — nur auf dieser Maschine (127.0.0.1/localhost); alles andere fällt weg. */
-export const opencode2Urls = (env: Env = process.env) => (env.BRIDGE_OPENCODE2_URLS ?? '').split(',').map((u) => u.trim()).filter((u) => /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(u));
 
 // Nur lesen: alles verboten, dann read/glob/grep erlaubt (die letzte passende Regel gewinnt) — verbotene Werkzeuge bietet der
 // Server dem Modell gar nicht erst an (Test „Schreibverbot“). ponytail: opencode 2 bedient nur lesende Aufträge; schreibende
