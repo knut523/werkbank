@@ -177,10 +177,17 @@ test('Hotfix 15.10.: Abo-Liste (Vorgabe die vier PRO-Modelle) an die Brücke; Mo
   assert.deepEqual(s.warnungen, []);
   await assert.rejects(M.setMelious(u, { abo: ['a b'] }), /Abo/);
   // Hauptsitzung 06.11.: eine gespeicherte alte Liste (vor glm-5.2 / deepseek-1017) wird beim Laden ergänzt, nicht ersetzt.
-  s = await M.setMelious(u, { model: '', abo: ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash', 'kimi-k3'], rollen: { leser: ['glm-5.2'], schreiber: ['glm-5.3-flash'], niedrig: ['glm-5.3-flash'] } });
+  await M.setMelious(u, { model: '', rollen: { leser: ['glm-5.2'], schreiber: ['glm-5.3-flash'], niedrig: ['glm-5.3-flash'] } });
+  // alte Liste wie vor diesem Paket gespeichert (ohne Marke aboStand)
+  await wb().collection('creds').updateOne({ userId: u.id }, { $set: { 'melious.abo': ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash', 'kimi-k3'] }, $unset: { 'melious.aboStand': '' } });
+  s = await M.meliousSettings(u);
   assert.deepEqual(s.abo, ['glm-5.3', 'glm-5.3-flash', 'deepseek-v4.1-flash', 'kimi-k3', 'glm-5.2', 'deepseek-v4.1-flash-1017']);
   assert.deepEqual(s.warnungen, [], 'glm-5.2 zählt als Abo, obwohl die gespeicherte Liste es nicht nennt');
   assert.deepEqual(((await claudeAccountsForBridge(u)).find((a: any) => a.kind === 'melious') as any).abo, s.abo, 'die Brücke bekommt die ergänzte Liste');
+  // Pass A (Spec c): wer die Liste selbst speichert, kann PRO-Modelle abwählen — sie kommen nicht wieder hinein
+  s = await M.setMelious(u, { abo: ['glm-5.3', 'glm-5.3-flash'] });
+  assert.deepEqual(s.abo, ['glm-5.3', 'glm-5.3-flash']);
+  assert.deepEqual((await M.meliousSettings(u)).abo, ['glm-5.3', 'glm-5.3-flash'], 'auch beim nächsten Laden');
   await M.setMelious(u, { model: '', ketteModell: '', abo: null, rollen: null });
   assert.deepEqual(M.ausserhalbAbo(['glm-5.3:eco', null, 'x', 'x'], M.MELIOUS_ABO), ['x']);
 });

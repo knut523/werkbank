@@ -52,7 +52,9 @@ export const ROLLEN = ['leser', 'schreiber', 'niedrig'];
 // Die Liste selbst steht in tiefe.ts (rein, auch für den Strang-Start).
 export { MELIOUS_ABO };
 /** Gespeicherte Abo-Liste plus fehlende PRO-Modelle (Hauptsitzung 06.11.: alte Listen beim Laden ergänzen statt sie wegzulassen). */
-export const aboMitPro = (abo?: string[] | null) => (abo ? [...new Set([...abo, ...MELIOUS_ABO])] : MELIOUS_ABO);
+// Pass A (Spec c): nur alte Listen (ohne Marke aboStand) werden ergänzt — wer die Liste danach selbst speichert, kann PRO-Modelle abwählen.
+export const ABO_STAND = 1;
+export const aboMitPro = (abo?: string[] | null, stand?: number | null) => (!abo ? MELIOUS_ABO : Number(stand) >= ABO_STAND ? abo : [...new Set([...abo, ...MELIOUS_ABO])]);
 /** Modellnamen, die nicht im Abo sind (`:eco` zählt wie das Modell), ohne Doppelte. */
 export const ausserhalbAbo = (modelle: (string | null | undefined)[], abo: string[]) =>
   [...new Set(modelle.filter((m): m is string => !!m).map((m) => m.replace(/:eco$/, '')))].filter((m) => !abo.includes(m));
@@ -81,7 +83,7 @@ const httpErr = (status: number, msg: string): HttpErr => Object.assign(new Erro
 interface Stored {
   token: string; last4: string; addedAt: Date; enabled?: boolean; fallback?: boolean; model?: string | null;
   dayLimit?: number | null; monthLimit?: number | null; proTakt?: number | null; taktS?: number | null;
-  faktoren?: Record<string, Faktor> | null; kalibriert?: string | null; rollen?: Record<string, string[]> | null; eco?: boolean;
+  faktoren?: Record<string, Faktor> | null; kalibriert?: string | null; rollen?: Record<string, string[]> | null; eco?: boolean; aboStand?: number | null;
   preise?: { stand: Date; faktoren: Record<string, Faktor> } | null;   // aus der Preisliste von Melious (täglich)
   kette?: boolean; ketteModell?: string | null; abo?: string[] | null;
 }
@@ -132,9 +134,9 @@ export async function meliousSettings(u: User) {
     faktorQuelle: s?.faktoren ? 'von Hand' : s?.preise ? `Preisliste Melious (${new Date(s.preise.stand).toISOString().slice(0, 10)})` : 'Kalibrierung 15.10. (Preisliste noch nicht geholt)',
     preiseStand: s?.preise?.stand ?? null,
     kalibriert: s?.kalibriert ?? null, rollen: s?.rollen ?? d.rollen, defaults: d, dashboard: MELIOUS_DASHBOARD,
-    abo: aboMitPro(s?.abo),
+    abo: aboMitPro(s?.abo, s?.aboStand),
     // Hotfix 15.10.: Modelle außerhalb des Abos laufen auf Guthaben — erlaubt, aber nie still (Hinweis in der Einrichtung).
-    warnungen: ausserhalbAbo([s?.model, s?.ketteModell ?? d.ketteModell, ...Object.values(s?.rollen ?? d.rollen).flat()], aboMitPro(s?.abo)).map((m) => `„${m}“ ist nicht im Abo und läuft auf Guthaben.`),
+    warnungen: ausserhalbAbo([s?.model, s?.ketteModell ?? d.ketteModell, ...Object.values(s?.rollen ?? d.rollen).flat()], aboMitPro(s?.abo, s?.aboStand)).map((m) => `„${m}“ ist nicht im Abo und läuft auf Guthaben.`),
   };
 }
 
@@ -372,7 +374,7 @@ export async function setMelious(u: User, b: Record<string, unknown>) {
   if (b.abo !== undefined) {
     if (b.abo === null) f('abo', null);
     else if (!Array.isArray(b.abo) || b.abo.length > 30 || !b.abo.every((m) => typeof m === 'string' && MODEL.test(m))) throw httpErr(400, 'Abo: Liste von Modellnamen.');
-    else f('abo', b.abo);
+    else { f('abo', b.abo); f('aboStand', ABO_STAND); }
   }
   if (b.rollen !== undefined) {
     if (b.rollen === null) f('rollen', null);

@@ -262,6 +262,8 @@ export function reviewPrompt(r: { repo: string; number: number; title: string; u
     // Paket 223: im Eval gaben zwei Reviews ab, bevor ihre Teilagenten zurück waren — gepostet wäre ein halbes Review.
     'TEILAGENTEN: nur im Vordergrund starten oder vor dem Abschluss auf ALLE warten und ihre Ergebnisse einarbeiten. Fehlt ein Teil noch, nicht abschließen',
     '(kein review_ready); ein Kommentar, der eine Lücke der eigenen Prüfung einräumt („this pass did not cover …“), geht nicht automatisch an den PR.',
+    // „..“ mit Absicht: beim Delta zeigt es nach einem Force-Push, was sich zwischen den Reviews änderte; dm.basis ist schon die
+    // Merge-Basis (dort gleich „...“). Die Gegenprüfung nimmt „basis...HEAD“, weil ihre Basis ein Commit der Zielbranch sein kann.
     ...(ensembleAn() ? ensembleText(delta ? `${delta.von}..${r.head}` : dm?.basis ? `${dm.basis}..${r.head}` : null) : []),
     'Arbeite nach plan-to-pr, NUR Phase 4 (Review): Pre-Checks (Basis, Diff-Umfang, Migrations/Secrets/Lizenzen), Pass A (Korrektheit),',
     'Pass B (Sicherheit, Daten, Fehlerfälle), Pass C (Einfachheit, Tests, Lesbarkeit). Die Gegenprüfung über Melious startet der Ticker danach selbst.',
