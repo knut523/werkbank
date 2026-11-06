@@ -39,20 +39,21 @@ test('Sperre (F7, Knut 19.10.): keine Zahl-Grenze — die Schätzung entscheidet
   assert.equal(mod.lockFor([board(), board()], board()), 'board-full');
 });
 
-test('Audit 05.11. (3): jcode-Stränge (0,15 GB) haben einen eigenen Topf — volle Box hält sie nicht auf, voller Topf schon; die Zahl-Grenze gilt nur für Claude', async () => {
+test('Audit 05.11. (3) / Hauptsitzung 06.11.: jcode-Stränge (0,1 GB, Topf 6 GB ≈ 60) haben einen eigenen Topf — volle Box hält sie nicht auf, voller Topf schon; die Zahl-Grenze gilt nur für Claude', async () => {
   const { schaetze, jcodeTopfGb } = await import('../src/schaetzung.ts');
   const strang = schaetze({ kind: 'strand', profil: 'bauer' }), jc = schaetze({ kind: 'strand', jcode: true });
-  assert.equal(jc.speicherGb, 0.15); assert.equal(jc.topf, 'jcode');
+  assert.equal(jc.speicherGb, 0.1); assert.equal(jc.topf, 'jcode'); assert.equal(jcodeTopfGb(), 6);
+  assert.equal(mod.lockFor(Array.from({ length: 59 }, () => ({ ...chat(), schaetzung: jc })), chat(), { neu: jc, stand: { echtGb: 4, hostFreiGb: 12 } }), 'ok', 'der 60. Lauf passt noch');
   const voll = { echtGb: 11.9, hostFreiGb: 10 };
   const claude = [chat(), chat()];
   assert.equal(mod.lockFor(claude, chat(), { neu: strang, stand: voll }), 'chat-busy', 'Claude wartet');
   assert.equal(mod.lockFor(claude, chat(), { neu: jc, stand: voll }), 'ok', 'jcode startet trotzdem');
-  const n = Math.floor(jcodeTopfGb() / 0.15);
+  const n = Math.round(jcodeTopfGb() / 0.1);
   const jcs = Array.from({ length: n }, () => ({ ...chat(), schaetzung: jc }));
   assert.equal(mod.lockFor(jcs, chat(), { neu: jc, stand: voll }), 'chat-busy', 'Topf voll');
   assert.match(mod.lockGrund, /jcode-Topf voll/);
   assert.equal(mod.lockFor(jcs, chat(), { neu: strang, stand: { echtGb: 11, hostFreiGb: 12 } }), 'ok', 'jcode-Stränge zählen nicht als laufende Claude-Züge (erster Claude-Zug startet)');
-  assert.equal(mod.lockFor([...claude], chat(), { neu: jc, stand: { echtGb: 4, hostFreiGb: 3.1 } }), 'chat-busy', 'Host-Boden gilt auch für jcode');
+  assert.equal(mod.lockFor([...claude], chat(), { neu: jc, stand: { echtGb: 4, hostFreiGb: 3.05 } }), 'chat-busy', 'Host-Boden gilt auch für jcode');
   process.env.BRIDGE_MAX_PARALLEL_CHATS = '2';
   try {
     assert.equal(mod.lockFor(claude, chat(), { neu: jc, stand: voll }), 'ok', 'Zahl-Grenze nur für Claude');

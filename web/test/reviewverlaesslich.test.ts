@@ -435,3 +435,13 @@ test('S4 Gegenprüfung: nach zwei Neustarts der Web-App ohne sie abschließen st
   const d: any = await P.reviewsCol().findOne({ _id: 'g' } as any);
   assert.equal(d.status, 'fertig'); assert.match(d.gp.fehler, /zwei Neustarts/); assert.equal(f.posts.length, 1);
 });
+
+test('Konzept J1 (Hauptsitzung 06.11.): Ensemble — drei jcode-Läufe über delegieren, jeder Befund am Code geprüft; abschaltbar', async () => {
+  const R = await import('../server/prreview.ts');
+  const t = R.reviewPrompt({ repo: 'a/b', number: 1, title: 't', url: 'u', head: SHA, by: null, trigger: 'tag' }, '/wt', '1-x');
+  assert.match(t, /ENSEMBLE \(Pass 1 über jcode\): Starte ZUERST drei unabhängige Läufe mit dem Werkzeug `delegieren`/);
+  assert.match(t, /JEDEN am Code nachprüfen/);
+  assert.match(t, /gefunden in Lauf A\/B\/C/);
+  assert.equal(R.ensembleAn({}), true, 'Vorgabe an');
+  assert.equal(R.ensembleAn({ WERKBANK_REVIEW_ENSEMBLE: 'aus' }), false);
+});

@@ -19,15 +19,16 @@ const TIEFE: Record<string, { dauerMin: number; tokens: number }> = {
 
 /** Was ein Zug voraussichtlich braucht. Chat-Zug: kurz; Strang nach Tiefe; bauende Profile mit Platz für Tests/Builds. */
 export function schaetze(o: { kind?: string; profil?: string | null; tiefe?: string | null; jcode?: boolean } = {}): Schaetzung {
-  if (o.jcode) return { speicherGb: 0.15, dauerMin: 10, tokens: 0, topf: 'jcode' };   // Melious: Energie statt Claude-Tokens
+  // Melious: Energie statt Claude-Tokens. 0,1 GB: Messung der Hauptsitzung 06.11. (2–30 parallel, 56–107 MB je Lauf, 30 parallel 1,84 GB).
+  if (o.jcode) return { speicherGb: 0.1, dauerMin: 10, tokens: 0, topf: 'jcode' };
   if (o.kind !== 'strand') return { speicherGb: 0.4, dauerMin: 5, tokens: 100_000 };
   const t = TIEFE[o.tiefe ?? 'regular'] ?? TIEFE.regular;
   const baut = !o.profil || ['voll', 'bauer', 'release'].includes(o.profil);
   return { speicherGb: baut ? 0.8 : 0.4, ...t };
 }
 
-/** Audit 05.11. (3): eigener Topf der jcode-Stränge (BRIDGE_JCODE_TOPF_GB, Vorgabe 2 GB ≈ 13 Stränge zu 0,15 GB). */
-export const jcodeTopfGb = () => { const g = Number(process.env.BRIDGE_JCODE_TOPF_GB || 2); return Number.isFinite(g) && g > 0 ? g : 2; };
+/** Eigener Topf der jcode-Stränge (Audit 05.11. (3); Hauptsitzung 06.11.: Ziel 60–80 lesende) — BRIDGE_JCODE_TOPF_GB, Vorgabe 6 GB ≈ 60 Läufe zu 0,1 GB. */
+export const jcodeTopfGb = () => { const g = Number(process.env.BRIDGE_JCODE_TOPF_GB || 6); return Number.isFinite(g) && g > 0 ? g : 6; };
 /** jcode-Strang: zählt nicht gegen die Startgrenze der Claude-Züge, nur gegen seinen Topf und den Host-Boden. */
 export function passtJcode(neu: Schaetzung, o: { stand: SpeicherStand | null; frisch: number; belegt: number }): { ok: boolean; grund: string } {
   if (o.belegt + neu.speicherGb > jcodeTopfGb() + 1e-9) return { ok: false, grund: `jcode-Topf voll (${o.belegt.toFixed(2)} von ${jcodeTopfGb()} GB)` };

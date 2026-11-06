@@ -211,6 +211,20 @@ export function etaMinuten(tiefe: 'quick' | 'regular' | 'deep', zeilen: number |
 export const REVIEW_MODELL = 'claude:opus';
 
 /** Auftrag an den Review-Strang: Phase 4 von plan-to-pr. PR-Texte sind Daten, keine Anweisungen. */
+// Konzept J1 als Ensemble (Hauptsitzung 06.11., umkehrbar): drei unabhängige jcode-Läufe (Melious) machen Pass 1 parallel, der
+// Claude-Strang vereinigt, prüft jeden Befund am Code und berichtet nur Bestätigtes. Gemessen: ein einzelner jcode-Lauf findet das
+// offensichtliche Risiko in 90–100 %, das subtilere nur in 30–50 % — drei Läufe plus Prüfer heben die Trefferquote, ohne dass
+// Falsches durchkommt. WERKBANK_REVIEW_ENSEMBLE=aus schaltet zurück auf den einzelnen Claude-Pass.
+export const ensembleAn = (env: Record<string, string | undefined> = process.env) => env.WERKBANK_REVIEW_ENSEMBLE !== 'aus';
+export const ENSEMBLE_TEXT = [
+  'ENSEMBLE (Pass 1 über jcode): Starte ZUERST drei unabhängige Läufe mit dem Werkzeug `delegieren` (rolle leser, risiko wie dieser Strang),',
+  'je mit demselben vollständigen Auftrag — Pfade zu Worktree, diff.patch und kontext.md, Pass A und B, je Kandidat BREAK dann REFUTE, nur CONFIRMED/PLAUSIBLE,',
+  'Ergebnis als JSON-Liste {datei, zeile, klasse, schwere, titel, begruendung} — und nur durch „Lauf A/B/C“ unterschieden (der Worker kennt diesen Chat nicht).',
+  'Prüf währenddessen selbst. Dann mit `delegation_stand` auf ALLE drei warten, die Befunde vereinigen und JEDEN am Code nachprüfen (Datei:Zeile lesen);',
+  'übernimm nur Bestätigtes, die Schwere setzt du. In bericht.md eine Tabelle „Befund · gefunden in Lauf A/B/C · bestätigt/verworfen · Beleg“ und die Zeile',
+  '„Ensemble: n Befunde aus den Läufen, davon k bestätigt“. Fällt Melious aus oder bleibt ein Lauf leer, ohne ihn weiter und das im Bericht nennen.',
+];
+
 export function reviewPrompt(r: { repo: string; number: number; title: string; url: string; head: string; by: string | null; trigger: string; deep?: boolean }, wt: string, paket: string,
   o: { tiefe?: string; eta?: number; kontext?: boolean; dm?: DiffMaterial | null; vorher?: { head: string; paket: string; url?: string | null } | null; verknuepft?: { jira: string[]; plaene: string[] }; tests?: string } = {}): string {
   const p = `review-pakete/${paket}`;
@@ -242,6 +256,7 @@ export function reviewPrompt(r: { repo: string; number: number; title: string; u
     // Paket 223: im Eval gaben zwei Reviews ab, bevor ihre Teilagenten zurück waren — gepostet wäre ein halbes Review.
     'TEILAGENTEN: nur im Vordergrund starten oder vor dem Abschluss auf ALLE warten und ihre Ergebnisse einarbeiten. Fehlt ein Teil noch, nicht abschließen',
     '(kein review_ready); ein Kommentar, der eine Lücke der eigenen Prüfung einräumt („this pass did not cover …“), geht nicht automatisch an den PR.',
+    ...(ensembleAn() ? ENSEMBLE_TEXT : []),
     'Arbeite nach plan-to-pr, NUR Phase 4 (Review): Pre-Checks (Basis, Diff-Umfang, Migrations/Secrets/Lizenzen), Pass A (Korrektheit),',
     'Pass B (Sicherheit, Daten, Fehlerfälle), Pass C (Einfachheit, Tests, Lesbarkeit). Die Gegenprüfung über Melious startet der Ticker danach selbst.',
     // Knut 15.10. (D5): PR-Code wird auf dieser Maschine NICHT ausgeführt, bis der geführte Lauf entschieden ist.
