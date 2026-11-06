@@ -131,7 +131,7 @@ export const ORCH_MCP_TOOLS: string[] = [
   'mcp__vault-search__vault-related', 'mcp__vault-search__vault-search',
   'mcp__werkbank__delegieren', 'mcp__werkbank__delegation_stand', 'mcp__werkbank__delegation_urteil',
   'mcp__werkbank__phase_wechseln', 'mcp__werkbank__orch_start', 'mcp__werkbank__orch_list', 'mcp__werkbank__orch_show',
-  'mcp__werkbank__orch_send', 'mcp__werkbank__orch_gruendlich', 'mcp__werkbank__orch_thema', 'mcp__werkbank__orch_review', 'mcp__werkbank__orch_ask', 'mcp__werkbank__orch_council',
+  'mcp__werkbank__orch_send', 'mcp__werkbank__orch_gruendlich', 'mcp__werkbank__orch_thema', 'mcp__werkbank__orch_review', 'mcp__werkbank__orch_ask', 'mcp__werkbank__orch_council', 'mcp__werkbank__orch_bedarf',
   'mcp__werkbank__orch_questions', 'mcp__werkbank__zusagen', 'mcp__werkbank__zusage_eintragen', 'mcp__werkbank__zusage_aendern',
   'mcp__werkbank__thema_setzen', 'mcp__werkbank__hygiene_list', 'mcp__werkbank__hygiene_snooze', 'mcp__werkbank__skills_list',
   'mcp__werkbank__review_ready', 'mcp__werkbank__jira_update', 'mcp__werkbank__jira_update_many', 'mcp__werkbank__agent_start',
@@ -202,11 +202,19 @@ export interface ClassifyContext {
 }
 
 // Voller Auto-Modus: Bash fragt nur noch bei Geheimnissen, fremden Konfigurationen und Jira-Schreiben nach.
+/** Commit-Nachrichten (-m/--message, auch -am) sind Inhalt, kein Befehl: vor dem Musterabgleich neutralisiert. Ursache der
+ *  Commit-Ablehnungen in Strängen (06.11. auf der Live-Brücke beobachtet: ein Commit-Text mit „gh api …“ wurde als GitHub-
+ *  Zugriff gesperrt). Was nach dem Zitat kommt (&& git push …), bleibt Befehl und wird weiter geprüft. */
+// Doppelte Zitate nur ohne $ und Backtick (dort führt die Shell aus — `-m "$(git push)"` bleibt sichtbar).
+export const ohneCommitText = (cmd: string) => cmd.replace(/(\bgit\b[^|;&\n]*?\scommit\b[^|;&\n]*?\s-[a-zA-Z]*m\s*|\s--message[=\s]\s*)("(?:[^"\\$`]|\\[^$`])*"|'[^']*')/g, '$1"…"');
+// Sperrenliste 06.11. (Knut: „lesen frei“): `.env` nur als echte Datei (.env, .env.local, …/.env.production) — nicht `process.env`,
+// nicht .env.example/.sample/.template (vorher fragte jedes `grep process.env` und wurde in Strängen abgelehnt).
+const ENV_DATEI = /(^|[\s/'"=<])\.env(\.(?!example\b|sample\b|template\b)[\w.-]+)?(?=$|[\s'";|&)<>])/;
 // Runde 2 (Knut, 07.10.2026: „er fragt halt immer noch viel“): nur noch echte Geheimnis-ORTE, nicht jedes Erwähnen —
 // `grep -v '.runtime'` oder `--exclude-dir=.runtime` fragen nicht mehr.
 const BASH_KEEP_CONFIRM_VOLL = [
   /\.runtime\/(claude|werkbank\/creds)\b/, /claude-accounts\.json/, /\.config\/vw\b/, /\.ssh\b/, /\.credentials/,
-  /(^|[\s;&|(`$])bw\s/, /(^|[\s;&|(`$])sudo\b/, /\.env\b/,
+  /(^|[\s;&|(`$])bw\s/, /(^|[\s;&|(`$])sudo\b/, ENV_DATEI,
 ];
 // Jira-Schreiben per Bash = ein HTTP-Aufruf an Atlassian, der schreibt. Lesen, grep nach „jira“, Dateinamen mit
 // „atlassian“ gehen an den Klassifikator. Jira-Schreiben über den Atlassian-MCP fragt unabhängig davon weiter.
@@ -306,7 +314,7 @@ export function bashGuardProblem(cmd: string, g: PathGuard | undefined): string 
 
 export function classify(tool: string, input: Record<string, unknown>, ctx: ClassifyContext = {}): { cls: ToolClass; why?: string } {
   if (tool === 'Bash') {
-    const cmd = String(input.command ?? '');
+    const cmd = ohneCommitText(String(input.command ?? ''));   // Commit-Texte sind Inhalt (06.11.)
     for (const [re, why] of BASH_BLOCKED) if (re.test(cmd)) return { cls: 'blocked', why };
     for (const [re, why] of BASH_GITHUB_WRITE) if (re.test(cmd)) return { cls: 'confirm', why };
     // R31: Coolify direkt immer nach „ja“ (Werkzeug coolify/coolify_status ist der Weg; Auto-Modus: ask-Regel COOLIFY_ASK).
@@ -340,7 +348,7 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // review_ready ändert nur Werkbank-Zustand (Fertig-Marke am eigenen Lauf) → ohne Rückfrage.
     // hauptchat_melden (Plan 154, S4): Meldung an den Hauptchat — ändert nur Werkbank-Zustand, gedeckelt in der Werkbank.
     // delegieren/delegation_*/phase_wechseln (Plan 165): Steuerung durch die Brücke; Worker arbeiten unter ihrem eigenen Wächter.
-    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'melious_sub' || name === 'auslastung' || name === 'github_lesen' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'melious_sub' || name === 'auslastung' || name === 'github_lesen' || name === 'bedarf_melden' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
     // Jira ohne Klick (Knut, 03.11.2026): WERKBANK_JIRA_OHNE_KLICK=on → im Hauptchat schreibt Jira direkt (nicht löschen); Stränge unverändert.
     if (server === 'werkbank' && JIRA_WERKBANK_SCHREIBEN.has(name) && jiraOhneKlick(ctx)) return { cls: 'auto' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.
@@ -427,9 +435,9 @@ const ORCH_BASH_BLOCK: [RegExp, string][] = [
   [/\balias\.[\w-]+/, 'Git-Alias (könnte pushen)'],
   [/\bgit-(send-pack|receive-pack)\b/, 'git push'],
   [/\bcore\.hooksPath\b|\.git\/(hooks|config)\b/, 'Git-Hooks/-Konfiguration'],
-  // Knut 06.11. (Korrektur): kein GitHub-Zugang für Stränge, auch nicht lesend — GitHub läuft über den Hauptchat (Bedarfskanal:
-  // bedarf_melden art=github, die Hauptsitzung liefert den Inhalt als Datei ins Paket).
-  [/(^|[\s;&|(`$])gh\s+\w/, 'GitHub (auch lesend nur über den Hauptchat — bedarf_melden art=github)'],
+  // Knut 06.11. (Korrektur 2): „Alles Lesende sollen die Stränge selbst können.“ gh lesend frei — auch `gh api` (GET; schreibende
+  // Formen fängt BASH_GITHUB_WRITE vorher ab), `gh run view/list`; alles andere an gh (Schreiben) → Bedarfskanal an die Hauptsitzung.
+  [/\bgh\s+(pr|issue|release|repo|label|secret|variable|workflow|gist|run)\b(?!\s+(view|list|diff|status|checks)\b)/, 'GitHub schreiben (lesen geht: view/list/diff/status/checks, gh api GET, Werkzeug github_lesen; sonst bedarf_melden art=github)'],
   [/api\.github\.com|github\.com\/[^\s]*\.git\b/, 'GitHub direkt ansprechen'],
   [/(atlassian\.net|api\.atlassian\.com)/i, 'Atlassian/Jira direkt ansprechen'],
   // Plan 132 (B7/C8): Wege zum internen Schlüssel der Werkbank — sonst könnte ein Strang Stränge starten oder den Leitstand
@@ -501,7 +509,7 @@ export function strangLokal(cmd: string, o: { dirs: string[]; docs?: string[] })
 /** Grund, warum ein Aufruf in einem Orchestrator-Strang gesperrt ist — oder null. */
 export function orchestratorBlock(tool: string, input: Record<string, unknown>): string | null {
   if (tool === 'Bash') {
-    const cmd = String(input.command ?? '');
+    const cmd = ohneCommitText(String(input.command ?? ''));   // Commit-Texte sind Inhalt (06.11.)
     for (const [re, why] of [...BASH_BLOCKED, ...BASH_GITHUB_WRITE, ...ORCH_BASH_BLOCK]) if (re.test(cmd)) return why;
     // git config: nur lesen (--get…/--list/-l); jede schreibende Form ist gesperrt.
     for (const m of cmd.matchAll(new RegExp(GIT + String.raw`config(?![\w-])([^|;&\n]*)`, 'g'))) if (!/\s(--get(-all|-regexp)?|--list|-l)\b/.test(m[1])) return 'Git-Konfiguration ändern';

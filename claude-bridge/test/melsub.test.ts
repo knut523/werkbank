@@ -137,14 +137,15 @@ test('melious_sub nur im laufenden Zug und nicht für fremde Unterhaltungen', as
   assert.ok(existsSync(ARGS));
 });
 
-test('Knut 06.11.: im Strang lokaler Commit erlaubt, gh (auch lesend) gesperrt — jede Sperre mit Grund im Log', async () => {
+test('Knut 06.11.: im Strang lokaler Commit und GitHub-Lesen erlaubt, GitHub-Schreiben gesperrt — jede Sperre mit Grund im Log', async () => {
   const c = conv(50);
   await register('knut', c);
   const ok = await send(c, tool('Bash', { command: `git -C ${WT} commit -m "Plan 94: Entwurf (Jira PM-1)"` }));
   assert.match(ok, /Bash ausgeführt/, ok);
-  const nein = await send(c, tool('Bash', { command: 'gh pr view 380' }));
+  assert.match(await send(c, tool('Bash', { command: 'gh pr view 380' })), /Bash ausgeführt/);
+  const nein = await send(c, tool('Bash', { command: 'gh pr comment 380 -b hallo' }));
   assert.match(nein, /nicht ausgeführt|gesperrt/, nein);
-  assert.match(out, /"strang gesperrt"[^\n]*gh pr view 380/);
+  assert.match(out, /"strang gesperrt"[^\n]*gh pr comment 380/);
 });
 
 test('Konzept J, J1: jcode-Strang — eigener Zug über jcode mit Status-Zeile; ohne Status-Zeile zweimal versucht, dann Claude (sichtbar)', async () => {

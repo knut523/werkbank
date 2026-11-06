@@ -43,7 +43,32 @@ test('nicht erlaubt (bleibt beim Klassifikator bzw. gesperrt): Push, Merge, frem
   assert.ok(orchestratorBlock('Bash', { command: 'git push' }));
 });
 
-test('Korrektur Knut 06.11.: kein GitHub für Stränge, auch nicht lesend (gh view/list/diff ebenfalls gesperrt)', () => {
-  for (const c of ['gh pr view 380', 'gh pr diff 380', 'gh pr list', 'gh api repos/WirStrom1/olaf-admin/pulls/380', 'gh pr checks 380', 'gh run view 1'])
+test('Ursache Commit-Ablehnung (beobachtet 06.11. auf der Live-Brücke): Wörter in der Commit-Nachricht sind Inhalt, kein Befehl', async () => {
+  const { classify } = await import('../src/tools.ts');
+  for (const c of ['git commit -m "gh pr create und git push nur über die Hauptsitzung"', "git commit -m 'Doku: git merge bleibt gesperrt; .env.local nie lesen'", 'git commit -am "Jira PM-1: curl -X POST https://api.github.com ist gesperrt"', 'git commit --message="alias.ship push erklärt"'])
+    assert.equal(orchestratorBlock('Bash', { command: c }), null, c);
+  assert.equal(classify('Bash', { command: 'git commit -m "liest jetzt .env und process.env"' }, { workDir: '/w', scope: 'voll' }).cls, 'auto');
+  // was danach kommt, bleibt Befehl
+  assert.ok(orchestratorBlock('Bash', { command: 'git commit -m "x" && git push' }));
+  assert.ok(orchestratorBlock('Bash', { command: 'git commit -m "x"; gh pr create --fill' }));
+  // Befehlsersetzung in doppelten Zitaten läuft — nie neutralisieren
+  assert.ok(orchestratorBlock('Bash', { command: 'git commit -m "$(git push)"' }));
+  assert.ok(orchestratorBlock('Bash', { command: 'git commit -m "`git push`"' }));
+});
+
+test('Sperrenliste 06.11.: „.env“ fragt nur bei echten .env-Dateien — nicht bei process.env, .env.example oder --env-file-Optionen', async () => {
+  const { classify } = await import('../src/tools.ts');
+  const ctx = { workDir: '/w', scope: 'voll' as const };
+  for (const c of ['grep -n "process.env.WERKBANK_X" src/a.ts', 'cat .env.example', 'node -e "console.log(process.env.HOME)"', 'cp .env.sample .env.sample.bak'])
+    assert.equal(classify('Bash', { command: c }, ctx).cls, 'auto', c);
+  for (const c of ['cat .env', 'cat .env.local', 'source ./.env', 'grep KEY /w/app/.env.production', "sed -n 1p '.env'"])
+    assert.equal(classify('Bash', { command: c }, ctx).cls, 'confirm', c);
+});
+
+test('Korrektur 2 Knut 06.11.: GitHub lesen frei (gh view/list/diff/checks, gh api GET), schreiben gesperrt', () => {
+  for (const c of ['gh pr view 380', 'gh pr diff 380', 'gh pr list', 'gh api repos/WirStrom1/olaf-admin/pulls/380/comments', 'gh pr checks 380', 'gh run view 1', 'gh run list'])
+    assert.equal(orchestratorBlock('Bash', { command: c }), null, c);
+  for (const c of ['gh pr comment 380 -b x', 'gh pr review 380 --approve', 'gh pr create --fill', 'gh pr merge 380', 'gh api -X POST repos/x/y/issues/1/comments -f body=x',
+    'gh api repos/x/y/issues/1/comments -f body=x', 'gh issue create -t x', 'gh run rerun 1', 'gh workflow run x'])
     assert.ok(orchestratorBlock('Bash', { command: c }), c);
 });

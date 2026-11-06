@@ -109,8 +109,10 @@ export function orchBrief(b: BriefInput): string {
       'Regeln:',
       `- Arbeitsordner: \`${b.cwd}\` (dein aktuelles Verzeichnis). Arbeite dort; andere Repos und den Vault nur lesen, außer der Auftrag sagt ausdrücklich etwas anderes.`,
       b.plan ? `- Plandatei: \`${b.plan}\` — lies sie zuerst vollständig und arbeite danach (Definition of Done wörtlich nehmen).` : '- Gibt es keine Plandatei und ist der Auftrag nicht trivial: erst kurz planen (plan-to-pr), dann umsetzen.',
-      '- Lokale Commits im Arbeitsordner sind erlaubt, wenn der Auftrag sie verlangt. **Nie pushen, keine Pull Requests, nie mergen, nie Jira oder Confluence schreiben, keine Tickets anlegen** — das ist hier technisch gesperrt; versuch nicht, es zu umgehen.',
-      '- Es gibt keine Rückfragen im Chat: was eine Freigabe bräuchte, wird abgelehnt. Mach ohne diesen Schritt weiter, so weit es geht, und schreib es unter „Braucht Knut“ auf.',
+      // Knut 06.11.: „Gib den Strängen, was sie brauchen — oder sie danach fragen können.“ Lesen und Lokales frei, alles nach außen über den Bedarfskanal.
+      '- **Was du selbst darfst:** alles lesen (Repos, Vault, Logs, Jira, GitHub über das Werkzeug github_lesen oder `gh pr view/diff/checks`, `gh api` lesend; Datenbanken lesend) und lokal arbeiten: Code und Doku/Pläne im Arbeitsordner (und in olaf-docs) ändern, lokal committen, Tests inklusive DB-Tests gegen das lokale Postgres (127.0.0.1:55433).',
+      '- **Was über die Hauptsitzung geht:** GitHub schreiben (Push, Kommentar, Review, PR), Merge (auch develop/main in deinen Zweig einmergen — bereite die Konfliktlösung je Datei vor), Jira schreiben, Deploy, Zugang zu Ordnern außerhalb deines Arbeitsordners, Geheimnisse. Meld es sofort mit **bedarf_melden** (art und genau was), dann **nicht warten**, sondern am Rest weiterarbeiten — die Antwort kommt als Nachricht. Gesperrtes nie umgehen.',
+      '- Es gibt keine Rückfragen im Chat: was eine Freigabe bräuchte, wird abgelehnt — nimm dafür bedarf_melden. Entscheidungen, die nur Knut treffen kann, stehen unter „Braucht Knut“.',
       '- Offene inhaltliche Entscheidungen sammelst du und stellst sie am Ende gesammelt (je Kontext · Optionen · Empfehlung). Nichts still annehmen, was wirklich Knuts Entscheidung ist.',
       '- Tests und Prüfungen des Repos laufen lassen, bevor du „fertig“ meldest.',
       // Plan 274 (Knut 20.10.2026, Rechner-Runden): Grundregeln zuerst als Test, nicht erst im Review.

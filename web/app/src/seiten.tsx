@@ -498,18 +498,53 @@ export function ArbeitDetail({ id }: { id: string }) {
 
 /** Runde 7 (Knut: DoD): liegen gebliebene Enden — was fertig gemeldete Unter-Chats noch offen lassen, je mit Besitzer. */
 /** Plan §24 A4: was die Hauptsitzung erledigen muss (Live-Gang nach Commit, Deploy-Go …) — aus den Stand-Blöcken, abhakbar. */
+interface Bedarf { id: string; art: string; artName: string; text: string; pfad: string | null; strang: { id: string; titel: string }; at: string }
 function HauptsitzungListe() {
-  const { d, neu } = useDaten<{ punkte: { key: string; strand: string; titel: string; text: string; erledigt: boolean }[] }>('api/v2/hauptsitzung');
+  const { d, neu } = useDaten<{ punkte: { key: string; strand: string; titel: string; text: string; erledigt: boolean }[]; bedarf?: Bedarf[] }>('api/v2/hauptsitzung');
   const offen = (d?.punkte ?? []).filter((p) => !p.erledigt);
-  if (!offen.length) return null;
+  const bedarf = d?.bedarf ?? [];
+  if (!offen.length && !bedarf.length) return null;
   const haken = async (key: string) => { await schicke(`api/v2/hauptsitzung/${encodeURIComponent(key)}`, { erledigt: true }).catch(() => null); neu(); };
   return (
     <section className="abschnitt hauptsitzung">
-      <h2>Für die Hauptsitzung ({offen.length})</h2>
+      <h2>Für die Hauptsitzung ({offen.length + bedarf.length})</h2>
+      {/* Bedarfskanal (Knut 06.11.): was Unter-Chats brauchen — sie arbeiten inzwischen am Rest weiter. */}
+      {bedarf.length > 0 && <ul className="liste">{bedarf.map((b) => <BedarfZeile key={b.id} b={b} fertig={neu} />)}</ul>}
       <ul className="liste">{offen.map((p) => (
         <li key={p.key} className="zeile"><label><input type="checkbox" onChange={() => haken(p.key)} /> {p.text}</label> <a className="klein gedimmt" href={`v2/arbeit/${p.strand}`}>{p.titel}</a></li>
       ))}</ul>
     </section>
+  );
+}
+
+/** Ein Bedarf eines Unter-Chats: Erteilen (bei Zugang mit Frist) · Erledigt (mit Notiz, z. B. Beleg) · Ablehnen (mit Grund). */
+function BedarfZeile({ b, fertig }: { b: Bedarf; fertig: () => void }) {
+  const [notiz, setNotiz] = useState('');
+  const [dauer, setDauer] = useState(240);
+  const [laeuft, setLaeuft] = useState(false);
+  const [meldung, setMeldung] = useState<string | null>(null);
+  const antworten = async (antwort: 'erteilt' | 'erledigt' | 'abgelehnt') => {
+    if (laeuft) return;
+    setLaeuft(true); setMeldung(null);
+    try { await schicke(`api/v2/bedarf/${encodeURIComponent(b.id)}`, { antwort, notiz, ...(b.art === 'zugang' ? { dauerMin: dauer } : {}) }); setMeldung('Geht an den Unter-Chat.'); setTimeout(fertig, 700); }
+    catch (e: any) { setMeldung(String(e?.message ?? e)); setLaeuft(false); }
+  };
+  const erteilbar = b.art === 'zugang' || b.art === 'recht' || b.art === 'entscheidung' || b.art === 'datei' || b.art === 'sonstiges';
+  return (
+    <li className="zeile bedarf">
+      <div className="zeile-haupt">
+        <p><span className="marke warn">{b.artName}</span> {b.text}{b.pfad ? <> — <code>{b.pfad}</code></> : null}</p>
+        <p className="klein gedimmt"><a href={`v2/arbeit/${b.strang.id}`}>{b.strang.titel || b.strang.id}</a> · {wann(b.at)}</p>
+        <input type="text" className="notiz" value={notiz} maxLength={1000} placeholder={b.art === 'github' || b.art === 'merge' ? 'Beleg (z. B. Link zum Kommentar, Commit) oder Grund' : 'Notiz an den Unter-Chat (optional)'} onChange={(e) => setNotiz(e.target.value)} />
+        <div className="knoepfe" aria-busy={laeuft}>
+          {erteilbar && <button type="button" className="knopf haupt" disabled={laeuft} onClick={() => antworten('erteilt')}>Erteilen</button>}
+          {b.art === 'zugang' && <select value={dauer} onChange={(e) => setDauer(Number(e.target.value))} aria-label="Wie lange"><option value={60}>1 h</option><option value={240}>4 h</option><option value={1440}>24 h</option></select>}
+          <button type="button" className={erteilbar ? 'knopf' : 'knopf haupt'} disabled={laeuft} onClick={() => antworten('erledigt')}>Erledigt</button>
+          <button type="button" className="knopf leise" disabled={laeuft} onClick={() => antworten('abgelehnt')}>Ablehnen</button>
+        </div>
+        {meldung && <p className="hinweis klein" role="status">{meldung}</p>}
+      </div>
+    </li>
   );
 }
 

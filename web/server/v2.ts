@@ -12,6 +12,7 @@ import { v2FreigabeAn, auszugUm, knutOffenJe, strangZuPr, jetztSatz, schritteAus
 import * as eigen from './v2chat.ts';
 import { dodAus, fastFertig, endenAus, hauptsitzungPunkte } from './dod.ts';
 import { triageAn, councilWirkung, type Council, type CouncilUrteil } from './stufe.ts';
+import { BEDARF_NAME } from './bedarf.ts';
 import type { Abgleich } from './fragenbericht.ts';
 import * as librechat from './v2librechat.ts';
 
@@ -32,6 +33,9 @@ export interface V2Deps {
   strang: (u: User, id: string) => Promise<any | null>;
   hauptchat: (u: User) => Promise<{ conv: string; url: string | null } | null>;
   laeuftChat: (u: User, conv: string) => Promise<boolean>;
+  /** Bedarfskanal (Knut 06.11.): offene Bedarfe der Stränge und die Antwort darauf (erteilt / erledigt / abgelehnt). */
+  bedarfListe?: (u: User) => Promise<any[]>;
+  bedarfAntwort?: (u: User, id: string, b: { antwort: string; notiz: string; dauerMin?: number }) => Promise<unknown>;
   /** Audit 05.11. (4): Text für den Hauptchat einreihen, solange er arbeitet (Ergebnis: wie viele jetzt warten). */
   hauptchatEinreihen?: (u: User, text: string) => Promise<number>;
   hauptchatEingereiht?: (u: User) => Promise<{ text: string; at: Date }[]>;
@@ -449,7 +453,20 @@ export function registerV2(on: On, d: V2Deps) {
     const haken = d.hauptsitzungHaken ? await d.hauptsitzungHaken.lesen(u).catch(() => new Set<string>()) : new Set<string>();
     const punkte = hauptsitzungPunkte(docs.map((x) => ({ id: String(x._id), titel: String(x.title ?? ''), stand: String(x.standVoll || x.lastExcerpt || '') })))
       .map((p) => ({ ...p, erledigt: haken.has(p.key) }));
-    send(d, res, { punkte });
+    // Bedarfskanal (Knut 06.11.): was Stränge mit bedarf_melden brauchen — oben, mit Erteilen/Erledigt/Ablehnen.
+    const bedarf = d.bedarfListe ? (await d.bedarfListe(u).catch(() => [])).map((x: any) => ({ id: String(x._id), art: x.art, artName: BEDARF_NAME[x.art as keyof typeof BEDARF_NAME] ?? x.art, text: String(x.text ?? ''), pfad: x.pfad ?? null, strang: { id: String(x.strand?.id ?? ''), titel: String(x.strand?.title ?? '') }, at: x.at })) : [];
+    send(d, res, { punkte, bedarf });
+  });
+  on('POST', /^\/api\/v2\/bedarf\/(b-[0-9a-f]{8})$/, async (req, res, m) => {
+    const u = await d.needUser(req);
+    if (!admin(u)) throw err(403, 'Nur wer die Unter-Chats führt.');
+    if (!d.bedarfAntwort) throw err(501, 'Bedarfe beantworten ist hier nicht eingerichtet.');
+    const b = await d.body(req, 8 * 1024);
+    const antwort = String(b?.antwort ?? '');
+    if (!['erteilt', 'erledigt', 'abgelehnt'].includes(antwort)) throw err(400, 'Antwort ist Erteilen, Erledigt oder Ablehnen.');
+    const r = await d.bedarfAntwort(u, m[1], { antwort, notiz: String(b?.notiz ?? '').trim().slice(0, 1000), dauerMin: b?.dauerMin != null ? Number(b.dauerMin) : undefined });
+    d.log('v2 bedarf', { user: u.id, id: m[1], antwort });
+    send(d, res, { ok: true, ...(r as any) });
   });
   on('POST', /^\/api\/v2\/hauptsitzung\/([\w:.%-]{1,160})$/, async (req, res, m) => {
     const u = await d.needUser(req);

@@ -496,6 +496,22 @@ test('Knut 05.11. 19:00 „Zum Ansehen“: Karte je fertigem Strang mit Stand un
   } finally { deps.unterchatListe = altListe; deps.strang = altStrang; delete deps.ansehenSpaeter; delete deps.ansehenAntwort; }
 });
 
+test('Bedarfskanal (Knut 06.11.): „Braucht Hauptsitzung“ zeigt die Bedarfe der Stränge; Erteilen/Erledigt/Ablehnen nur Admin, geprüft', async () => {
+  const antworten: any[] = [];
+  deps.bedarfListe = async () => [{ _id: 'b-0000abcd', art: 'github', text: 'Push von feat/x, Gate grün', pfad: null, strand: { id: 'abcd1234', title: 'Rechner' }, at: new Date(0) }];
+  deps.bedarfAntwort = async (_u, id, b) => { antworten.push([id, b.antwort, b.notiz, b.dauerMin]); return { id, status: b.antwort }; };
+  try {
+    const g = (await rufe('GET', '/api/v2/hauptsitzung', ADMIN)).b;
+    assert.equal(g.bedarf.length, 1); assert.equal(g.bedarf[0].artName, 'GitHub schreiben'); assert.equal(g.bedarf[0].strang.titel, 'Rechner');
+    assert.deepEqual((await rufe('GET', '/api/v2/hauptsitzung', LISA)).b.bedarf ?? [], []);
+    assert.equal((await rufe('POST', '/api/v2/bedarf/b-0000abcd', ADMIN, { antwort: 'erledigt', notiz: 'gepusht' })).status, 200);
+    assert.equal((await rufe('POST', '/api/v2/bedarf/b-0000abcd', ADMIN, { antwort: 'erteilt', dauerMin: 60 })).status, 200);
+    assert.deepEqual(antworten, [['b-0000abcd', 'erledigt', 'gepusht', undefined], ['b-0000abcd', 'erteilt', '', 60]]);
+    assert.equal((await rufe('POST', '/api/v2/bedarf/b-0000abcd', ADMIN, { antwort: 'vielleicht' })).status, 400);
+    assert.equal((await rufe('POST', '/api/v2/bedarf/b-0000abcd', LISA, { antwort: 'erteilt' })).status, 403);
+  } finally { delete deps.bedarfListe; delete deps.bedarfAntwort; }
+});
+
 test('Audit 05.11. (6): Review-zu-Kopf — ein Review zu einem älteren Commit ist als veraltet markiert (Liste und Detail)', async () => {
   const vorher = deps.letzteReviews;
   deps.letzteReviews = async () => [{ repo: 'o/a', number: 1, status: 'fertig', empfehlung: 'approve', head: 'aaaaaaa1111', posted: { url: 'https://github.com/o/a/pull/1#r' }, doneAt: '2026-11-03T10:00:00Z' }];
