@@ -48,6 +48,8 @@ export const ROLLEN = ['leser', 'schreiber', 'niedrig'];
 // Im PRO-Abo enthalten (Hotfix 15.10., Knut: „bei Melious nur die Modelle nutzen, die auch im Abo drin sind“); Einstellung „abo“.
 // PRO-Plan laut Knut 06.11.: glm-5.3, glm-5.3-flash, glm-5.2, deepseek-v4.1-flash-1017 (minimax-m3 über Melious nicht verfügbar).
 export const MELIOUS_ABO = ['glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'deepseek-v4.1-flash-1017', 'deepseek-v4.1-flash'];   // ohne Suffix: gespeicherte Rollen nennen es noch (Gegenprüfung 06.11.)
+/** Gespeicherte Abo-Liste plus fehlende PRO-Modelle (Hauptsitzung 06.11.: alte Listen beim Laden ergänzen statt sie wegzulassen). */
+export const aboMitPro = (abo?: string[] | null) => (abo ? [...new Set([...abo, ...MELIOUS_ABO])] : MELIOUS_ABO);
 /** Modellnamen, die nicht im Abo sind (`:eco` zählt wie das Modell), ohne Doppelte. */
 export const ausserhalbAbo = (modelle: (string | null | undefined)[], abo: string[]) =>
   [...new Set(modelle.filter((m): m is string => !!m).map((m) => m.replace(/:eco$/, '')))].filter((m) => !abo.includes(m));
@@ -103,9 +105,9 @@ export async function meliousSettings(u: User) {
     faktorQuelle: s?.faktoren ? 'von Hand' : s?.preise ? `Preisliste Melious (${new Date(s.preise.stand).toISOString().slice(0, 10)})` : 'Kalibrierung 15.10. (Preisliste noch nicht geholt)',
     preiseStand: s?.preise?.stand ?? null,
     kalibriert: s?.kalibriert ?? null, rollen: s?.rollen ?? d.rollen, defaults: d, dashboard: MELIOUS_DASHBOARD,
-    abo: s?.abo ?? d.abo,
+    abo: aboMitPro(s?.abo),
     // Hotfix 15.10.: Modelle außerhalb des Abos laufen auf Guthaben — erlaubt, aber nie still (Hinweis in der Einrichtung).
-    warnungen: ausserhalbAbo([s?.model, s?.ketteModell ?? d.ketteModell, ...Object.values(s?.rollen ?? d.rollen).flat()], s?.abo ?? d.abo).map((m) => `„${m}“ ist nicht im Abo und läuft auf Guthaben.`),
+    warnungen: ausserhalbAbo([s?.model, s?.ketteModell ?? d.ketteModell, ...Object.values(s?.rollen ?? d.rollen).flat()], aboMitPro(s?.abo)).map((m) => `„${m}“ ist nicht im Abo und läuft auf Guthaben.`),
   };
 }
 
