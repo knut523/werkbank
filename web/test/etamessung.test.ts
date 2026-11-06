@@ -23,11 +23,15 @@ test('Gruppe und Art aus dem Strang; Kalibrierung vom Genauesten zum Groben, Med
   assert.equal(E.modellVon({ lastModell: 'melious:glm-5.3' }), 'glm-5.3');
   const g = E.gruppeVon({ tiefe: 'regular', modell: 'claude:opus' });
   assert.equal(E.kalibFuer([mess({}), mess({})], g), null, 'unter 3 vergleichbaren: keine Kalibrierung');
-  // vier Läufe 40/60/80/100 min, jüngste Faktoren 1,2 → Median 70 × 1,2 = 84 min
+  // vier Läufe 40/60/80/100 min → Median 70. Phase 4: die Faktoren (Ist ÷ ETA) korrigieren die Ist-Dauer NICHT noch einmal —
+  // sie steckt schon in der Dauer (vorher 70 × 1,2 = 84, doppelt gezählt).
   const tab = [40, 60, 80, 100].map((m, i) => mess({ dauerMin: m, faktor: [1.2, 1.2, 1.0, 2.0][i], start: new Date(T0 - i * MIN) }));
   const k = E.kalibFuer(tab, g)!;
   assert.equal(k.ebene, 'Art, Tiefe und Modell'); assert.equal(k.n, 4);
-  assert.equal(Math.round(k.dauerMs! / MIN), 84);
+  assert.equal(Math.round(k.dauerMs! / MIN), 70);
+  // Drift: die jüngsten fünf brauchen 100 min, die älteren 50 → Median aller 75 × (100 ÷ 75) = 100 min
+  const drift = [...Array(5).fill(100), ...Array(5).fill(50)].map((m, i) => mess({ dauerMin: m, faktor: 2, start: new Date(T0 - i * MIN) }));
+  assert.equal(Math.round(E.kalibFuer(drift, g)!.dauerMs! / MIN), 100);
   assert.ok(k.pufferFaktor > 1.2 && k.pufferFaktor <= 2, String(k.pufferFaktor));
   // anderes Modell: fällt auf „Art und Tiefe“ zurück
   assert.equal(E.kalibFuer(tab, { ...g, modell: 'glm-5.3' })!.ebene, 'Art und Tiefe');

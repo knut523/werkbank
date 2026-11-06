@@ -340,9 +340,13 @@ function MeliousAccount() {
               const r: any = await api('/api/setup/melious/test', { method: 'POST' });
               setTest(r.ok ? '✓ funktioniert' : r.error === 'rate_limit' ? 'Rate-Limit erreicht' : r.error === 'guthaben' ? '✗ Melious-Guthaben leer (Insufficient credits) — nach dem Aufladen erneut testen' : r.error === 'auth' ? '✗ Schlüssel abgelehnt' : '✗ Fehler');
             })}>{busy === 'test' ? 'Teste …' : 'Testen'}</button>
+            {/* Phase 4: ein Schlüssel aus Vaultwarden oder der Server-Einstellung lässt sich hier nicht löschen — nur die Einstellungen */}
             <button className="btn small danger" disabled={!!busy} onClick={async () => {
-              if (await confirm({ title: 'Melious entfernen?', body: <p>Der Schlüssel wird gelöscht; der Verbrauch bleibt gezählt.</p>, danger: true, confirmLabel: 'Entfernen' })) run('rm', () => api('/api/setup/melious', { method: 'DELETE' }));
-            }}>Entfernen</button>
+              const fremd = d.quelle === 'vaultwarden' || d.quelle === 'env';
+              if (await confirm(fremd
+                ? { title: 'Melious-Einstellungen zurücksetzen?', body: <p>Der Schlüssel bleibt {d.quelle === 'vaultwarden' ? 'in Vaultwarden' : 'in der Server-Einstellung'}; „erlaubt“ geht aus, Rollen und Deckel zurück auf die Vorgabe. Der Verbrauch bleibt gezählt.</p>, danger: true, confirmLabel: 'Zurücksetzen' }
+                : { title: 'Melious entfernen?', body: <p>Der Schlüssel wird gelöscht; der Verbrauch bleibt gezählt.</p>, danger: true, confirmLabel: 'Entfernen' })) run('rm', () => api('/api/setup/melious', { method: 'DELETE' }));
+            }}>{d.quelle === 'vaultwarden' || d.quelle === 'env' ? 'Zurücksetzen' : 'Entfernen'}</button>
           </div>
         </>
       ) : <p className="small muted">Kein Schlüssel hinterlegt.</p>}

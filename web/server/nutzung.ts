@@ -70,7 +70,8 @@ export const WERKZEUGE = new Set(['delegieren', 'delegation_stand', 'delegation_
   'orch_thema', 'orch_review', 'orch_archivieren', 'orch_ask', 'orch_questions', 'zusagen', 'zusage_eintragen', 'zusage_aendern', 'thema_setzen', 'hygiene_list', 'inbox',
   'braucht_dich', 'inbox_antworten', 'hygiene_snooze', 'skills_list', 'review_ready', 'jira_update', 'jira_update_many', 'agent_start', 'pr_review_starten', 'fragenpaket',
   'fragenpaket_stand', 'jira_duplikate', 'jira_anlegen', 'pr_lage', 'github_lesen', 'github_schreiben', 'werkbank_betrieb', 'werkbank_stand', 'geheimnis_nutzen',
-  'coolify_status', 'coolify', 'datei_teilen', 'screenshot', 'hauptchat_melden', 'melious_sub', 'auslastung', 'challenge']);
+  'coolify_status', 'coolify', 'datei_teilen', 'screenshot', 'hauptchat_melden', 'melious_sub', 'auslastung', 'challenge',
+  'bedarf_melden', 'orch_bedarf', 'orch_council', 'ensemble_review']);   // Phase 4: Werkzeuge dieses PRs; Test gleicht mit mcp/werkbank-tools.ts ab
 /** Ein Aufruf eines Werkbank-Werkzeugs (vom MCP-Server gemeldet). Unbekannte Namen landen unter „andere“. */
 export function werkzeugGenutzt(name: string) { const n = String(name); merke('werkzeug', { werkzeug: WERKZEUGE.has(n) ? n : 'andere' }); }
 

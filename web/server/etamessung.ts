@@ -19,7 +19,6 @@ export interface Messung extends Gruppe {
 }
 
 export const N_LETZTE = 20, MIN_N = 3, KORREKTUR_N = 5;
-const PUFFER_MIN_MS = 5 * 60_000;
 const klemme = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 
 /** Auftragsart aus dem Strang (rein). */
@@ -54,11 +53,13 @@ export function kalibFuer(tab: KalibTabelle | null | undefined, g: Gruppe): Kali
     const v = tab.filter((m) => passt(m) && Number(m.dauerMin) > 0).sort((a, b) => new Date(b.start).getTime() - new Date(a.start).getTime()).slice(0, N_LETZTE);
     if (v.length < MIN_N) continue;
     const fak = v.map((m) => Number(m.faktor)).filter((x) => x > 0);
-    const korr = median(fak.slice(0, KORREKTUR_N));
+    const dauer = v.map((m) => Number(m.dauerMin)), alle = median(dauer)!;
+    // „Median der letzten N vergleichbaren × Korrekturfaktor“: die Korrektur ist die Drift der jüngsten Dauern gegen alle (Box voller,
+    // Modell langsamer). Phase 4: nicht die Faktoren Ist ÷ ETA — die Ist-Dauer enthält den Schätzfehler schon (sonst doppelt gezählt).
+    const korr = alle > 0 ? (median(dauer.slice(0, KORREKTUR_N)) ?? alle) / alle : 1;
     const fa = v.map((m) => Number(m.faktorAgent)).filter((x) => x > 0);
     return {
-      // „Median der letzten N vergleichbaren × Korrekturfaktor“: die jüngsten Faktoren zeigen eine Drift (Box voller, Modell langsamer).
-      dauerMs: median(v.map((m) => Number(m.dauerMin)))! * 60_000 * (korr ? klemme(korr, 0.7, 1.5) : 1),
+      dauerMs: alle * 60_000 * klemme(korr, 0.7, 1.5),
       faktorAgent: fa.length >= MIN_N ? klemme(median(fa)!, 0.7, 3) : null,
       pufferFaktor: klemme(quantil(fak, 0.8) ?? 1.25, 1.1, 3),
       n: v.length, ebene,
@@ -74,8 +75,6 @@ export function startSchaetzung(g: Gruppe, kalib: Kalib | null, medianMs: number
   return { dauerMs: ETA_VORGABE_MIN[g.tiefe] * 60_000, quelle: 'vorgabe' };
 }
 
-/** Puffer, ab dem „überfällig“ gilt (rein): (Faktor-80-%-Quantil − 1) × geschätzte Dauer, mindestens 5 min. */
-export const puffer = (dauerMs: number, kalib: Kalib | null) => Math.max(PUFFER_MIN_MS, dauerMs * ((kalib?.pufferFaktor ?? 1.25) - 1));
 
 export interface AuswertungZeile { schluessel: string; art: Art; profil: string; modell: string; n: number; medianFaktor: number | null; puenktlich: number | null; medianDauerMin: number | null; medianFaktorAgent: number | null }
 /** Auswertung je Auftragsart, Profil und Modell (rein); dazu eine Gesamtzeile. */

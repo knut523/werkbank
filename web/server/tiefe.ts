@@ -163,7 +163,11 @@ export function mediane(docs: { tiefe?: unknown; startedAt?: unknown; doneAt?: u
 export type EtaQuelle = 'agent' | 'kalibriert' | 'median' | 'vorgabe';
 /** Kalibrierung je Strang (etamessung.ts, Knut 06.11.): reist mit den Medianen zu etaFuer, damit dieses Modul rein bleibt. */
 export type EtaKalib = { dauerMs: number | null; faktorAgent: number | null; pufferFaktor: number } | null;
+// ponytail (Phase 4): Kalibrierung und Messtabelle reisen als optionale Felder an den Medianen mit — so bleiben die vielen
+// Aufrufer mit schlichten Je-Tiefe-Werten gültig; ein eigener Hüllentyp erst, wenn noch mehr mitreisen muss.
 export type EtaMediane = Record<Tiefe, number | null> & { kalib?: (d: any) => EtaKalib; tabelle?: any[] };
+/** Puffer, ab dem „überfällig“ gilt (Knut 06.11., (4)): (80-%-Faktor − 1) × geschätzte Dauer, mindestens 5 min. */
+export const pufferMs = (dauerMs: number, pufferFaktor = 1.25) => Math.max(5 * 60_000, dauerMs * (pufferFaktor - 1));
 export interface Eta { at: number | null; quelle: EtaQuelle | null; text: string; ueberfaellig: boolean }
 
 /** Ist der Strang fertig, gibt es keine ETA (Knut 20.10.2026: „warum gibst du ein ETA mit, wenn Status fertig? weird“) — auch
@@ -175,10 +179,10 @@ export const etaFertig = (d: { marke?: unknown; zustand?: unknown }, fertig = fa
  * ETA eines Strangs: die zuletzt gemeldete des Agenten, sonst Start + Median gleicher Tiefe, sonst Vorgabe. Fertige Stränge
  * (siehe etaFertig) haben keine ETA. Alte Stränge ohne Tiefe und ohne gemeldete ETA: „–“ (keine Migration).
  */
-export function etaFuer(d: { tiefe?: unknown; startedAt?: unknown; eta?: { at?: unknown; gemeldetAt?: unknown } | null; marke?: unknown; zustand?: unknown; etaMessung?: { start?: unknown; etaAt?: unknown; quelle?: unknown } | null }, o: { fertig: boolean; mediane?: EtaMediane | Record<Tiefe, number | null> | null; now?: number }): Eta {
+export function etaFuer(d: { tiefe?: unknown; startedAt?: unknown; eta?: { at?: unknown; gemeldetAt?: unknown } | null; marke?: unknown; zustand?: unknown; etaMessung?: { start?: unknown; etaAt?: unknown; quelle?: unknown } | null }, o: { fertig: boolean; mediane?: EtaMediane | null; now?: number }): Eta {
   const now = o.now ?? Date.now();
   if (etaFertig(d, o.fertig)) return { at: null, quelle: null, text: '–', ueberfaellig: false };
-  const k = (o.mediane as EtaMediane | null | undefined)?.kalib?.(d) ?? null;
+  const k = o.mediane?.kalib?.(d) ?? null;
   // Knut 06.11.: der laufende Arbeitsabschnitt zählt (Start beim Wechsel auf „läuft“), nicht der erste Start des Unter-Chats.
   const abschnitt = d.etaMessung?.start ? new Date(d.etaMessung.start as any).getTime() : NaN;
   const start = Number.isFinite(abschnitt) ? abschnitt : new Date(d.startedAt as any).getTime();
@@ -199,9 +203,8 @@ export function etaFuer(d: { tiefe?: unknown; startedAt?: unknown; eta?: { at?: 
     at = start + dauer; quelle = k?.dauerMs ? 'kalibriert' : m ? 'median' : 'vorgabe';
   }
   if (at === null || !Number.isFinite(at)) return { at: null, quelle: null, text: '–', ueberfaellig: false };
-  // (4) „überfällig“ erst nach dem kalibrierten Puffer: (80-%-Faktor − 1) × geschätzte Dauer, mindestens 5 min.
-  const puffer = Math.max(5 * 60_000, dauer * ((k?.pufferFaktor ?? 1.25) - 1));
-  return { at, quelle, ...etaAnzeige(at, now, puffer) };
+  // (4) „überfällig“ erst nach dem kalibrierten Puffer
+  return { at, quelle, ...etaAnzeige(at, now, pufferMs(dauer, k?.pufferFaktor)) };
 }
 
 /** „fertig ca. 17:30“ bzw. „überfällig seit 12 min“ (ab 120 min in Stunden). */

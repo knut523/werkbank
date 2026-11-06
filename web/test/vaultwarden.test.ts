@@ -97,6 +97,12 @@ test('Melious: Reihenfolge gespeichert → Env → Vaultwarden; Env nur mit gül
   delete process.env.MELIOUS_API_KEY;
   await M.removeMelious(knut);
   assert.equal((await M.meliousSettings(knut)).quelle, 'vaultwarden', 'nach dem Entfernen wieder der Vault');
+  // Phase 4: ein gespeicherter Schlüssel, der sich nicht mehr entschlüsseln lässt, fällt auf den Vault zurück (statt „keiner“)
+  const { wb } = await import('../server/db.ts');
+  await wb().collection('creds').updateOne({ userId: knut.id }, { $set: { 'melious.token': 'kaputt:nicht-entschluesselbar', 'melious.last4': 'xxxx' } }, { upsert: true });
+  const kaputt = await M.meliousSettings(knut);
+  assert.equal(kaputt.quelle, 'vaultwarden'); assert.equal(kaputt.last4, 'wxyz');
+  await M.removeMelious(knut);
   process.env.WERKBANK_MELIOUS_BW_ITEM = 'leer';
   assert.equal((await M.meliousSettings({ ...knut, id: '6a1b2c3d4e5f60718293a4b7' })).configured, false, 'Element ohne Schlüssel → nichts');
   delete process.env.WERKBANK_MELIOUS_BW_ITEM;

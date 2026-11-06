@@ -101,7 +101,8 @@ export const meliousBwItem = () => process.env.WERKBANK_MELIOUS_BW_ITEM || 'meli
 const bwLeer = new Map<string, number>();   // kein Treffer im Vault: 5 min nicht erneut fragen (bw braucht bis zu 20 s)
 async function schluessel(u: User, e?: Stored | null): Promise<{ token: string; quelle: SchluesselQuelle; last4: string } | null> {
   const s = e === undefined ? await einstellungen(u) : e;
-  if (s?.token) { try { const t = unseal(s.token); return { token: t, quelle: 'gespeichert', last4: s.last4 || t.slice(-4) }; } catch { return null; } }
+  // Phase 4: ein nicht mehr entschlüsselbarer Schlüssel (anderer WERKBANK_CREDS_KEY) fällt auf Env/Vaultwarden zurück statt auf „keiner“
+  if (s?.token) { try { const t = unseal(s.token); return { token: t, quelle: 'gespeichert', last4: s.last4 || t.slice(-4) }; } catch { /* weiter unten */ } }
   const env = String(process.env.MELIOUS_API_KEY ?? '').trim();
   if (MELIOUS_KEY.test(env)) return { token: env, quelle: 'env', last4: env.slice(-4) };
   if (String(u.email ?? '').toLowerCase() !== cfg.pilotEmail) return null;

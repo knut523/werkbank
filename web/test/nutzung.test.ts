@@ -95,3 +95,11 @@ test('Werkzeug-Aufrufe: nur feste Namen, nie freier Text; Antwortweg „v2“ z�
   assert.equal(a.werkzeuge['geheim-PM-123'], undefined);
   assert.equal(a.antworten.inbox.v2, 1);
 });
+
+test('Phase 4: jedes Werkzeug des Werkbank-MCP steht in WERKZEUGE (sonst zählt es unter „andere“)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const quelle = readFileSync(new URL('../mcp/werkbank-tools.ts', import.meta.url), 'utf8');
+  const namen = [...new Set([...quelle.matchAll(/name: '([a-z_]+)'/g)].map((m) => m[1]))];
+  assert.ok(namen.length > 30, 'Werkzeugnamen gefunden');
+  assert.deepEqual(namen.filter((n) => !N.WERKZEUGE.has(n)), []);
+});
