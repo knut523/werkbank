@@ -244,12 +244,25 @@ export function councilPruefen(fragen: Frage[], b: { frage?: unknown; urteil?: u
 
 export function registerV2(on0: On, d: V2Deps) {
   // Jeder schreibende Aufruf der 2.0 (Antwort, Haken, Start …) kann die Zahl ändern → Zahl-Cache leeren.
-  const on: On = (m, re, fn) => on0(m, re, m === 'GET' ? fn : (req, res, mm, url) => { zahlCache.clear(); return fn(req, res, mm, url); });
+  // Vorher und nachher leeren: der Handler baut oft selbst die Inbox (vor dem Speichern) und füllte sonst den Memo mit dem alten Stand.
+  const leeren = () => { zahlCache.clear(); ibMemo.clear(); };
+  const on: On = (m, re, fn) => on0(m, re, m === 'GET' ? fn : (req, res, mm, url) => { leeren(); return fn(req, res, mm, url).finally(leeren); });
+  // Pass A (Web 8): eine Seite baut die Inbox sonst mehrfach (Route + ucListe bei Triage, gleichzeitige Abrufe beim Laden) — 2 s je
+  // Person, gleichzeitige teilen sich einen Aufbau; gilt nur für dieselbe Quelle (Tests tauschen d.inboxFuer aus).
+  const ibMemo = new Map<string, { p: ReturnType<V2Deps['inboxFuer']>; at: number; fn: V2Deps['inboxFuer'] }>();
+  const inbox = (u: User) => {
+    const m = ibMemo.get(u.id);
+    if (m && m.fn === d.inboxFuer && Date.now() - m.at < 2_000) return m.p;
+    const p = d.inboxFuer(u);
+    ibMemo.set(u.id, { p, at: Date.now(), fn: d.inboxFuer });
+    p.catch(() => ibMemo.delete(u.id));
+    return p;
+  };
   // Plan §23 T6: mit Triage trägt jede Zeile die Zahl ihrer offenen Knut-Fragen — „wartet“ nur, wenn Knut gebraucht wird.
   const ucListe = async (u: User) => {
     const l = await d.unterchatListe(u, false);
     if (!triageAn()) return l;
-    const m = knutOffenJe(fragenAus((await d.inboxFuer(u)).eintraege).fragen);
+    const m = knutOffenJe(fragenAus((await inbox(u)).eintraege).fragen);
     for (const z of l.zeilen as any[]) z.knutOffen = m.get(String(z.id)) ?? 0;
     return l;
   };
@@ -257,7 +270,7 @@ export function registerV2(on0: On, d: V2Deps) {
   // `?teil=oben`: nur Zahl und Karten (≈ 0,1 s) — der erste Bildschirm am Handy wartet nicht auf Unter-Chats und PRs (Persona „unterwegs“).
   on('GET', /^\/api\/v2\/start$/, async (req, res, _m, url) => {
     const u = await d.needUser(req);
-    const ib = await d.inboxFuer(u);
+    const ib = await inbox(u);
     const { fragen: alleFragen, sonstiges } = fragenAus(ib.eintraege);
     const fragen = fuerKnut(alleFragen);
     const jetzt = await mitBezug(d, u, karten(d, fragen, ib.eintraege, jetztAuswahl(fragen)));
@@ -300,7 +313,7 @@ export function registerV2(on0: On, d: V2Deps) {
     const u = await d.needUser(req);
     const c = zahlCache.get(u.id);
     if (c && Date.now() - c.at < 30_000) return send(d, res, { zahl: await c.n });
-    const n = d.inboxFuer(u).then((ib) => zahlVon(ib.eintraege));
+    const n = inbox(u).then((ib) => zahlVon(ib.eintraege));
     zahlCache.set(u.id, { n, at: Date.now() });
     n.catch(() => zahlCache.delete(u.id));
     send(d, res, { zahl: await n });
@@ -309,7 +322,7 @@ export function registerV2(on0: On, d: V2Deps) {
   // --- Entscheidungen: alle offenen, wichtigste zuerst (dieselbe Zahl wie oben) ---
   on('GET', /^\/api\/v2\/entscheidungen$/, async (req, res) => {
     const u = await d.needUser(req);
-    const ib = await d.inboxFuer(u);
+    const ib = await inbox(u);
     const { fragen: alleFragen, sonstiges } = fragenAus(ib.eintraege);
     const fragen = fuerKnut(alleFragen);
     const oben = jetztAuswahl(fragen);
@@ -326,7 +339,7 @@ export function registerV2(on0: On, d: V2Deps) {
     const b = await d.body(req, 64 * 1024);
     const gesehen = new Set<string>((Array.isArray(b.ids) ? b.ids : []).map(String).slice(0, 100));
     if (!gesehen.size) throw err(400, 'Keine Fragen gewählt.');
-    const fragen = fragenAus((await d.inboxFuer(u)).eintraege).fragen.filter((f) => gesehen.has(f.id) && antwortWeg(f) === 'hier' && empfohlenBeantwortbar(f));
+    const fragen = fragenAus((await inbox(u)).eintraege).fragen.filter((f) => gesehen.has(f.id) && antwortWeg(f) === 'hier' && empfohlenBeantwortbar(f));
     if (!fragen.length) throw err(400, 'Keine dieser Fragen lässt sich wie empfohlen beantworten — bitte einzeln.');
     const r = await d.alleEmpfohlen(u, fragen.map((f) => f.id), (f) => antwortWeg(f) === 'hier');   // innen nochmal geprüft (Pass C)
     d.log('v2 alle wie empfohlen', { user: u.id, n: r.ok, ids: fragen.map((f) => f.id) });
@@ -360,7 +373,7 @@ export function registerV2(on0: On, d: V2Deps) {
     const id = String(b.id ?? '');
     const antwort = String(b.antwort ?? '');
     if (!['ja', 'anders', 'nein', 'spaeter'].includes(antwort)) throw err(400, 'Antwort ist „Ja, so“, „Anders“, „Nein“ oder „Später“.');
-    const ib = await d.inboxFuer(u);
+    const ib = await inbox(u);
     const f = fragenAus(ib.eintraege).fragen.find((x) => x.id === id);
     if (!f) throw err(409, 'Diese Frage ist schon beantwortet oder hat sich geändert — Seite neu laden.');
     if (antwortWeg(f) !== 'hier') throw err(403, 'Das gibst du in der alten Werkbank frei (Freigaben nach außen gehen in 2.0 nicht).');
@@ -385,7 +398,7 @@ export function registerV2(on0: On, d: V2Deps) {
 
   // --- Themen quer über Entscheidungen, Unter-Chats, Dokumente, PRs (S11) — Team-Freigaben gelten wie überall ---
   const themenQuellen = async (u: User) => {
-    const ib = await d.inboxFuer(u);
+    const ib = await inbox(u);
     const { fragen } = fragenAus(ib.eintraege);
     const auswahl = jetztAuswahl(fragen), obenIds = new Set(auswahl.map((x) => x.f.id));
     const kartenAlle = karten(d, fragen, ib.eintraege, [...auswahl, ...fragen.filter((f) => f.klasse !== 'aktion' && !obenIds.has(f.id)).map((f) => ({ f, grund: '' }))]);
@@ -525,7 +538,7 @@ export function registerV2(on0: On, d: V2Deps) {
     if (!admin(u)) throw err(403, 'Nur wer die Unter-Chats führt.');
     if (!d.councilAnwenden) throw err(501, 'Council-Check ist hier nicht eingerichtet.');
     const b = await d.body(req, 16 * 1024);
-    const { f, c, w } = councilPruefen(fragenAus((await d.inboxFuer(u)).eintraege).fragen, b);
+    const { f, c, w } = councilPruefen(fragenAus((await inbox(u)).eintraege).fragen, b);
     await d.councilAnwenden(u, f, c, w);
     d.log('v2 council', { user: u.id, frage: f.id, urteil: c.urteil });
     send(d, res, { ok: true, anzeige: w.anzeige, geschlossen: w.schliessen });
@@ -582,7 +595,7 @@ export function registerV2(on0: On, d: V2Deps) {
     if (!admin(u)) throw err(403, 'Unter-Chats sieht nur, wem sie gehören.');
     const doc = await d.strang(u, m[1]);
     if (!doc) throw err(404, 'Diesen Unter-Chat gibt es nicht (mehr).');
-    const [liste, ib] = await Promise.all([ucListe(u).catch(() => ({ zeilen: [] as any[] })), d.inboxFuer(u)]);
+    const [liste, ib] = await Promise.all([ucListe(u).catch(() => ({ zeilen: [] as any[] })), inbox(u)]);
     const z = liste.zeilen.find((x: any) => String(x.id) === m[1]);
     const alleFragen = fragenAus(ib.eintraege).fragen;
     const eigeneIds = new Set(fragenJeStrang(ib.eintraege, m[1]).map((f: any) => f.id));

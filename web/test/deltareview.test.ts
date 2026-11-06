@@ -128,3 +128,9 @@ test('Entwurf aus dem Paket: Kopfzeile aus review.json; nur GitHub-Links des vor
   assert.match(fremd, /changes since our review of `aaaaaaa`\./); assert.doesNotMatch(fremd, /evil/);
   assert.match(Bf.KOMMENTAR_FORM, /Empfehlung: <approve \| request-changes \| comment>/, 'Vorlage ohne vorgegebene Empfehlung');
 });
+
+test('Phase 4: der Abgleichtext behauptet keine feste Herkunft der Gegenprüfung (Ensemble oder Rückfall)', () => {
+  const t = P.abgleichText('436-werkbank-2');
+  assert.match(t, /review-pakete\/436-werkbank-2\/gegenpruefung\.md/);
+  assert.doesNotMatch(t, /glm-5\.3|DeepSeek/);
+});

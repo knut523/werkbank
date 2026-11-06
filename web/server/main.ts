@@ -1538,7 +1538,7 @@ async function inboxFuer(u: User, now = Date.now()) {
     kopfFehler: karten.filter((k) => k.kopfFehler).map((k) => ({ id: k.id, titel: k.titel })) }, { spaeter, now, annahmeMs: annahmeMs(), triage: triageAn() });
   // Plan §23 T3: Council-Urteile an die Fragen hängen (Bericht-Entscheidung: je Teil; sonst am Eintrag).
   if (triageAn()) {
-    const urteile = new Map((await councilCol().find({ userId: u.id }).toArray().catch(() => [] as any[])).map((x: any) => [String(x.frage), { urteil: x.urteil, grund: x.grund, bedingung: x.bedingung ?? null, at: x.at }]));
+    const urteile = new Map((await councilCol().find({ userId: u.id }).sort({ at: -1 }).limit(500).toArray().catch(() => [] as any[])).map((x: any) => [String(x.frage), { urteil: x.urteil, grund: x.grund, bedingung: x.bedingung ?? null, at: x.at }]));
     if (urteile.size) for (const e of ib.eintraege) {
       if (e.art === 'entscheidung') for (const x of (e.daten.entscheidungen as any[]) ?? []) { const c = urteile.get(`${e.id}~${x.id}`); if (c) x.council = c; }
       else if (urteile.has(e.id)) e.daten.council = urteile.get(e.id);
@@ -1555,7 +1555,8 @@ async function inboxFuer(u: User, now = Date.now()) {
     if (s) { ib.eintraege = wendeAufInbox(ib.eintraege, s, { an: true }); (ib as any).brauchtZu = new Map(s.geschlossen.map((g: any) => [g.strand, g.grund])); }
   }
   // Paket 436 S21: Freigaben, deren Stand auf GitHub schon gemergt ist, zählen nicht mehr — mit Beleg, jedes Mal neu gerechnet (ueberholt.ts).
-  if (admin) {
+  // Pass A (Web 8): nur abfragen, wenn eine Freigabe offen ist — sonst lädt jeder Inbox-Aufbau bis zu 2000 PRs umsonst.
+  if (admin && ib.eintraege.some((e) => e.art === 'push')) {
     const prs = ((await wb().collection('pr_ticker_prs').find({ state: 'MERGED' }, { projection: { head: 1, state: 1, at: 1 } }).sort({ at: -1 }).limit(2000).toArray().catch((e: any) => { log('ueberholt fehler', { error: String(e?.message ?? e).slice(0, 160) }); return []; })) as any[]).map((d) => ({ pr: String(d._id), head: String(d.head ?? ''), state: String(d.state), at: d.at }));
     const ueb = ueberholteFreigaben(ib.eintraege, prs);
     if (ueb.length) { const weg = new Set(ueb.map((x) => x.id)); ib.eintraege = ib.eintraege.filter((e) => !weg.has(e.id)); }
