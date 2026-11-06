@@ -43,7 +43,7 @@ before(async () => {
   await new Promise<void>((r) => web.listen(0, '127.0.0.1', () => r()));
   const wurl = `http://127.0.0.1:${(web.address() as any).port}`;
   proc = spawn(process.execPath, ['src/server.ts'], {
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_MAX_LESER: '2', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
       WERKBANK_URL: wurl, WERKBANK_INTERNAL_TOKEN: 'geheim', MELIOUS_BASE_URL: wurl, BRIDGE_CLAUDE_HOMES: HOMES, WERKBANK_ORCH_ROOTS: ORCH, WERKBANK_SKILLS_SOURCE: SKILLS,
       BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -103,7 +103,8 @@ test('Leser + Bauer: zuerst Melious, über die Abo-Modelle verteilt; Bauer im Un
   assert.match(t, /\(Mock-Lead\) .*Werkzeuge ja; Kompakt 80/);
   const [l1, l2, b] = ids(t);
   assert.ok(l1 && l2 && b, t);
-  assert.match(t, /\[delegieren\] FEHLER 429: Schon 3 Worker laufen/);
+  // J2: lesende Worker haben eine eigene Grenze (hier BRIDGE_MAX_LESER=2) — der Bauer startet trotzdem, der dritte Leser nicht.
+  assert.match(t, /\[delegieren\] FEHLER 429: Schon 2 lesende Worker laufen/);
   assert.match(t, new RegExp(`### ${l1} · leser · Risiko niedrig · fertig`));
   // Verteilung: die beiden Leser laufen auf verschiedenen Abo-Modellen.
   const m1 = t.match(new RegExp(`### ${l1}[^\\n]*\\nModell: Melious ([\\w.-]+)`))?.[1];
