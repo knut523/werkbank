@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { zielErlaubt, wsErlaubt, aktionen, ausgabeOrdner, klick, KLICK_ZIELE } from '../src/klick.ts';
+import { zielErlaubt, anfrageErlaubt, wsErlaubt, aktionen, ausgabeOrdner, klick, KLICK_ZIELE } from '../src/klick.ts';
 import { jcodeEntscheid } from '../src/jcode-pre-tool.ts';
 
 test('Allowlist im Code: nur 127.0.0.1/localhost auf 3436, 8110, 8111 — keine Live-Ports, nichts außerhalb', () => {
@@ -14,6 +14,12 @@ test('Allowlist im Code: nur 127.0.0.1/localhost auf 3436, 8110, 8111 — keine 
   for (const u of ['http://127.0.0.1:3070/', 'http://127.0.0.1:3080/', 'http://127.0.0.1:3090/', 'http://127.0.0.1/', 'https://127.0.0.1:3436/', 'http://127.0.0.2:3436/',
     'http://admin.olaf.example:3436/', 'http://a:b@127.0.0.1:3436/', 'http://127.0.0.1:3436.evil.example/', 'file:///etc/passwd', 'kein url']) assert.ok(!zielErlaubt(u), u);
   assert.ok(Object.isFrozen(KLICK_ZIELE), 'zur Laufzeit nicht erweiterbar');
+  // Hauptsitzung 06.11.: Test-Admin und Test-Bot, nur https, nur lesend
+  for (const u of ['https://olaf-bot-admin.konekto.energy/', 'https://olaf-bot-test.konekto.energy/x?y=1']) assert.ok(zielErlaubt(u), u);
+  for (const u of ['http://olaf-bot-admin.konekto.energy/', 'https://olaf-bot-admin.konekto.energy:8443/', 'https://olaf-admin.konekto.energy/', 'https://x.olaf-bot-test.konekto.energy/']) assert.ok(!zielErlaubt(u), u);
+  assert.ok(anfrageErlaubt('https://olaf-bot-admin.konekto.energy/api', 'GET')); assert.ok(!anfrageErlaubt('https://olaf-bot-admin.konekto.energy/api', 'POST'), 'nur lesend');
+  assert.ok(anfrageErlaubt('http://127.0.0.1:3436/api/x', 'POST'), 'Test-Instanz darf schreiben (Testdaten)');
+  assert.ok(Object.isFrozen(KLICK_ZIELE[0]));
   assert.ok(wsErlaubt('ws://127.0.0.1:3436/x')); assert.ok(!wsErlaubt('ws://127.0.0.1:3070/')); assert.ok(!wsErlaubt('wss://127.0.0.1:3436/')); assert.ok(!wsErlaubt('ws://1.2.3.4:3436/'));
   assert.match(String(aktionen(['warte:30000', 'warte:30000', 'warte:1'])), /Wartezeiten zusammen/);
 });
@@ -27,6 +33,7 @@ test('Aktionen werden geprüft; ohne Ausgabeordner und für fremde Ziele startet
   assert.equal((await klick(['Lisa', 'd', 'http://127.0.0.1:3436/'], undefined)).code, 4);
   assert.equal((await klick(['Unbekannt', 'd', 'http://127.0.0.1:3436/'], mkdtempSync(join(tmpdir(), 'k-')))).code, 5, 'nur Testkonten');
   assert.equal((await klick(['Lisa', 'd', 'http://127.0.0.1:8110/'], mkdtempSync(join(tmpdir(), 'k-')))).code, 5, 'Anmeldung nur an der Test-Instanz');
+  assert.equal((await klick(['Lisa', 'd', 'https://olaf-bot-admin.konekto.energy/'], mkdtempSync(join(tmpdir(), 'k-')))).code, 5, 'keine Werkbank-Anmeldung an der Test-Admin');
 });
 
 const SHIM = join(import.meta.dirname, '..', 'shim');
