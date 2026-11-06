@@ -122,6 +122,10 @@ test('opencode 2 startet nicht → alle Läufe über jcode (Rückfall), sichtbar
   const t = await send(c, lead({ auftrag: 'Review', bereich: `${BASIS}..${KOPF}` }));
   assert.match(t, /Bestätigt \(jcode glm-5\.2\)/); assert.match(t, /opencode 2 nicht verfügbar/);
   assert.deepEqual(readFileSync(join(SPUR, 'jcode'), 'utf8').trim().split('\n').sort(), ['deepseek-v4.1-flash-1017', 'glm-5.2', 'glm-5.2', 'glm-5.3-flash', 'glm-5.3-flash']);
+  // K8: höchstens 4 Ensembles je Zug
+  const c4 = conv(9); await register(c4);
+  const viele = await send(c4, `MOCK-LEAD ${JSON.stringify({ schritte: Array.from({ length: 5 }, () => ({ tool: 'ensemble_review', args: { auftrag: 'Review', bereich: `${BASIS}..${KOPF}` } })) })}`);
+  assert.equal((viele.match(/\[ensemble_review\] FEHLER 429: Höchstens 4 Review-Ensembles je Zug/g) ?? []).length, 1, viele.slice(-600));
   rmSync(join(OC2, 'aus'));
   await register(conv(3));
   assert.match(await send(conv(3), lead({ auftrag: 'R', bereich: 'a; rm -rf /' })), /FEHLER 400: bereich/);

@@ -710,7 +710,7 @@ export function statusLine(tool: string, input: Record<string, unknown>): string
     case 'Skill': return `🧰 Skill: ${short(input.skill ?? input.command, 60)}`;
     case 'Task': case 'Agent': return `🤖 Teilagent: ${short(input.description, 70)}`;
     case 'TodoWrite': case 'TaskCreate': case 'TaskUpdate': return '🗒️ Aufgabenliste aktualisiert';
-    case 'Bash': return `💻 Befehl: ${short(input.description || input.command, 80)}`;
+    case 'Bash': return `💻 Befehl: ${short(schwaerzeBefehl(String(input.description || input.command || '')), 80)}`;   // Pass C (K1): Zugangsdaten nie in Statuszeile/Steckbrief
     case 'Write': return `📝 Datei geschrieben: ${where(input.file_path)}`;
     case 'Edit': case 'MultiEdit': return `📝 Datei geändert: ${where(input.file_path)}`;
     case 'NotebookEdit': return `📝 Notebook geändert: ${where(input.notebook_path)}`;

@@ -331,7 +331,8 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
  *  Brücke ab; geschrieben wird nur, solange die Verbindung steht. `weg()` meldet, dass der Aufrufer gegangen ist (A-S3: eine Stelle). */
 async function langeAntwort(res: ServerResponse, lauf: (weg: () => boolean) => Promise<object>): Promise<void> {
   res.on('error', () => {});
-  let weg = false; res.on('close', () => { weg = !res.writableEnded; });
+  // Pass C (K11): ging der Aufrufer schon während readBody, kam 'close' vor diesem Zuhörer — dann gleich als weg werten
+  let weg = !res.socket || res.socket.destroyed; res.on('close', () => { weg = !res.writableEnded; });
   const offen = () => !res.destroyed && !res.writableEnded;
   res.writeHead(200, { 'content-type': 'application/json' });
   res.write(' ');

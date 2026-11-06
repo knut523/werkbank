@@ -43,7 +43,7 @@ export function aktionen(roh: string[]): Aktion[] | string {
   for (const a of roh) {
     if (a === 'voll') { out.push({ art: 'voll', wert: '' }); continue; }
     const i = a.indexOf(':'), art = a.slice(0, i), wert = a.slice(i + 1);
-    if (i < 1 || !['warte', 'klick', 'rolle', 'tippe', 'text', 'bild'].includes(art)) return `unbekannte Aktion „${a.slice(0, 40)}“`;
+    if (i < 1 || !['warte', 'klick', 'rolle', 'tippe', 'text', 'bild'].includes(art)) return `unbekannte Aktion „${a.slice(0, 40)}“ (mehrteilige Aktionen als ganzes Wort in Anführungszeichen, z. B. "tippe:#q=zwei Wörter")`;
     if (art === 'bild' && !/^[\w-]{1,60}$/.test(wert)) return 'bild:<name> nur Buchstaben, Ziffern, - und _';
     if (art === 'warte' && !(Number(wert) >= 0 && Number(wert) <= 30_000)) return 'warte:<ms> zwischen 0 und 30000';
     out.push({ art: art as any, wert });
@@ -98,6 +98,7 @@ export function zieleText(): string {
 const NUR_ANSEHEN = new Set(['warte', 'text', 'bild', 'voll']);
 /** Obergrenze der Ausgabe (K9): sie landet im Kontext des Modells. */
 const AUSGABE_MAX = 20_000;
+const AKTIONEN_MS = 120_000;
 
 const PLAYWRIGHT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'node_modules', 'playwright', 'index.mjs');
 
@@ -120,7 +121,8 @@ export async function klick(argv: string[], aus: string | undefined): Promise<{ 
   // Gegenprüfung 06.11.: alles, was nicht über route läuft (WebSocket, IP-Adressen), geht an einen toten Proxy — nur Loopback
   // umgeht ihn; Loopback-Ziele prüfen route/routeWebSocket gegen die Liste.
   const b = await chromium.launch({ args: ['--disable-dev-shm-usage'], proxy: { server: 'http://127.0.0.1:9', bypass: ['127.0.0.1', 'localhost', ...KLICK_ZIELE.filter((z) => z.proto === 'https:').map((z) => z.host)].join(',') } });
-  const zu = () => { void b.close().finally(() => process.exit(1)); };
+  // Pass C (K8): bei der Zeitgrenze des Wächters das Bisherige noch ausgeben, dann Browser zu
+  const zu = () => { process.stdout.write(zeilen.join('\n').slice(0, AUSGABE_MAX) + '\n… abgebrochen (Zeitgrenze)\n'); void b.close().finally(() => process.exit(1)); };
   process.once('SIGTERM', zu);   // Zeitgrenze des Wächters: Browser nicht als Waise zurücklassen
   try {
     const ctx = await b.newContext({ ...(geraet === 'm' ? { ...devices['iPhone 13'], viewport: { width: 390, height: 844 } } : { viewport: { width: 1440, height: 900 } }), locale: 'de-DE', serviceWorkers: 'block', ...(basic ? { httpCredentials: { ...basic, origin: ziel.origin } } : {}) });
@@ -141,6 +143,8 @@ export async function klick(argv: string[], aus: string | undefined): Promise<{ 
     zeilen.push(`geladen in ${Date.now() - t0} ms: ${p.url()}`);
     let voll = false;
     for (const a of akt) {
+      // Pass C (K8): Aktionen höchstens AKTIONEN_MS (der Wächter beendet klick nach 180 s), dann noch Bild und Ausgabe
+      if (Date.now() - t0 > AKTIONEN_MS) { zeilen.push(`Zeitbudget von ${AKTIONEN_MS / 1000} s erreicht — restliche Aktionen übersprungen`); break; }
       try {
         if (a.art === 'warte') await p.waitForTimeout(Number(a.wert));
         else if (a.art === 'klick') await p.getByText(a.wert, { exact: false }).first().click({ timeout: 10_000 });

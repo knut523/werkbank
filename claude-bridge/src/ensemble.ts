@@ -37,21 +37,34 @@ export const pruefHinweis = (mitDiff: boolean, knapp: boolean) =>
 export function stellen(texte: string[], dateien: string[], lies: (datei: string) => string | null): string[] {
   const refs = new Set<string>();
   for (const t of texte) for (const m of t.matchAll(/([\w./@-]+\.[A-Za-z]{1,5}):(\d+)(?:[-–](\d+))?/g)) refs.add(`${m[1].replace(/^\.\//, '')}\t${m[2]}\t${m[3] ?? m[2]}`);
-  const menge = new Set(dateien), out: string[] = [];
-  for (const r of [...refs].sort()) {
+  // K4: ein Dateiende zählt nur, wenn es genau eine Datei trifft; K5: Bereiche je Datei (± 4) zusammenlegen, wenn sie sich berühren.
+  const menge = new Set(dateien), bereiche = new Map<string, [number, number][]>(), out: string[] = [];
+  for (const r of refs) {
     const [f, as, bs] = r.split('\t'); const a = Number(as), b = Number(bs);
-    const hit = menge.has(f) ? f : dateien.find((x) => x.endsWith('/' + f));
-    if (!hit || a < 1 || b < a || b - a > 60) continue;
+    const treffer = menge.has(f) ? [f] : dateien.filter((x) => x.endsWith('/' + f));
+    if (treffer.length !== 1 || a < 1 || b < a || b - a > 60) continue;
+    bereiche.set(treffer[0], [...(bereiche.get(treffer[0]) ?? []), [a - 4, b + 4]]);
+  }
+  for (const [hit, bs] of [...bereiche].sort(([x], [y]) => x.localeCompare(y))) {
     const roh = lies(hit); if (roh === null) continue;
-    const z = roh.split('\n'), lo = Math.max(1, a - 4), hi = Math.min(z.length, b + 4);
-    if (lo > hi) continue;
-    out.push(`--- ${hit}:${lo}-${hi}\n` + Array.from({ length: hi - lo + 1 }, (_, i) => `${String(lo + i).padStart(5)} ${z[lo + i - 1]}`).join('\n'));
+    const z = roh.split('\n'), zus: [number, number][] = [];
+    for (const [lo, hi] of bs.sort((x, y) => x[0] - y[0])) {
+      const l = zus[zus.length - 1];
+      if (l && lo <= l[1] + 1) l[1] = Math.max(l[1], hi); else zus.push([lo, hi]);
+    }
+    for (const [l0, h0] of zus) {
+      const lo = Math.max(1, l0), hi = Math.min(z.length, h0);
+      if (lo > hi) continue;
+      out.push(`--- ${hit}:${lo}-${hi}\n` + Array.from({ length: hi - lo + 1 }, (_, i) => `${String(lo + i).padStart(5)} ${z[lo + i - 1]}`).join('\n'));
+    }
   }
   return out;
 }
 
 export function verifiziererPrompt(auftrag: string, dblock: string, pruefer: EnsLauf[], st: string[], knapp: boolean): string {
-  const s = st.join('\n\n').slice(0, STELLEN_MAX);
+  // Pass C (K5): nur ganze Stellen bis STELLEN_MAX, nicht mitten in einem Block abschneiden
+  let s = '';
+  for (const x of st) { if ((s ? s.length + 2 : 0) + x.length > STELLEN_MAX) break; s += (s ? '\n\n' : '') + x; }
   return `Drei unabhängige Prüfer haben denselben Auftrag bearbeitet. Auftrag: ${auftrag}${dblock}\n\n`
     + pruefer.map((r) => `=== Prüfer ${r.modell} ===\n${r.ok ? (r.text.length > PRUEFER_MAX ? r.text.slice(0, PRUEFER_MAX) + '\n[… gekürzt]' : r.text) : `(kein Ergebnis: ${r.grund ?? 'leer'})`}\n\n`).join('')
     + (s ? `Zitierte Stellen (Arbeitsstand, mit Zeilennummern):\n\`\`\`\`\n${s}\n\`\`\`\`\n\n` : '')

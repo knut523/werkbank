@@ -53,7 +53,7 @@ export function opencode2Server(o: {
   const passwort = randomBytes(24).toString('base64url');
   const auth = `Basic ${Buffer.from(`opencode:${passwort}`).toString('base64')}`;
   const run = o.lauf ?? join(o.home, 'waechter');
-  const kinder = new Map<number, { c: ChildProcess | null; bereit: boolean; neustarts: number; seit?: number; aufgegeben?: boolean }>(o.ports.map((p) => [p, { c: null, bereit: false, neustarts: 0 }]));
+  const kinder = new Map<number, { c: ChildProcess | null; bereit: boolean; neustarts: number; seit?: number; aufgegeben?: boolean; startend?: Promise<boolean> }>(o.ports.map((p) => [p, { c: null, bereit: false, neustarts: 0 }]));
   let besitzt = false, key: string | null = null, fp: string | null = null, gestoppt = false, grund: string | null = null, geprueft = false, start: Promise<Oc2Zugang | null> | null = null;
 
   const antwortet = async (p: number) => { try { return (await f(`http://127.0.0.1:${p}/api/session?limit=1`, { headers: { authorization: auth }, signal: AbortSignal.timeout(3000) })).status === 200; } catch { return false; } };
@@ -86,7 +86,12 @@ export function opencode2Server(o: {
     }
     return false;
   };
-  const starte = async (p: number): Promise<boolean> => {
+  // Pass C (K1): Neustart nach Absturz und sichern() können denselben Port gleichzeitig starten wollen — beide teilen sich einen Start.
+  const starte = (p: number): Promise<boolean> => {
+    const k = kinder.get(p)!;
+    return (k.startend ??= starteJetzt(p).finally(() => { k.startend = undefined; }));
+  };
+  const starteJetzt = async (p: number): Promise<boolean> => {
     const k = kinder.get(p)!;
     await altenBeenden(p);
     if (gestoppt || k.c) return false;

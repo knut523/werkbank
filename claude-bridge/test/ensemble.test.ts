@@ -2,7 +2,7 @@
 // auf denselben Prüfergebnissen, Rückfall jcode je Lauf, kein Prüflauf verzichtbar.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ensemble, stellen, mitRueckfall, schattenAn, diffBlock, PRUEFER, VERIFIZIERER, SCHATTEN, type EnsLauf, type Lauf } from '../src/ensemble.ts';
+import { ensemble, stellen, mitRueckfall, schattenAn, diffBlock, verifiziererPrompt, PRUEFER, VERIFIZIERER, SCHATTEN, type EnsLauf, type Lauf } from '../src/ensemble.ts';
 
 const leer = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const lauf = (laeufer: 'opencode2' | 'jcode', antwort: (m: string, p: string, rolle: string) => string | null, aufrufe: { m: string; p: string; rolle: string; laeufer: string; t: number }[]): Lauf => async (m, p, rolle) => {
@@ -56,6 +56,14 @@ test('Stellen: nur Dateien des Repos, höchstens 60 Zeilen, ± 4; Schatten bis 2
   const st = stellen(['siehe ./src/a.ts:2 und a.ts:20-22, fremd.ts:3, src/a.ts:1-200'], ['src/a.ts'], () => DATEI);
   assert.equal(st.length, 2);
   assert.deepEqual(st.map((s) => s.split('\n')[0]).sort(), ['--- src/a.ts:1-6', '--- src/a.ts:16-26']);
+  // K4: mehrdeutiges Dateiende („index.ts“ in zwei Ordnern) → keine Stelle statt der falschen Datei; K5: überlappende Stellen derselben
+  // Datei werden ein Ausschnitt
+  assert.deepEqual(stellen(['index.ts:3'], ['a/index.ts', 'b/index.ts'], () => DATEI), []);
+  assert.deepEqual(stellen(['b/index.ts:3'], ['a/index.ts', 'b/index.ts'], () => DATEI).map((s) => s.split('\n')[0]), ['--- b/index.ts:1-7']);
+  assert.deepEqual(stellen(['src/a.ts:10 und src/a.ts:12, src/a.ts:30'], ['src/a.ts'], () => DATEI).map((s) => s.split('\n')[0]), ['--- src/a.ts:6-16', '--- src/a.ts:26-30']);
+  // K5: Stellen nur ganz — eine zu große zweite Stelle fällt weg statt halb im Prompt zu stehen
+  const vp = verifiziererPrompt('A', '', [], ['--- a:1-1\n' + 'x'.repeat(30_000), '--- b:1-1\n' + 'y'.repeat(30_000)], false);
+  assert.ok(vp.includes('--- a:1-1') && !vp.includes('--- b:1-1') && !vp.includes('yyyy'), 'zweite Stelle ganz weggelassen');
   assert.equal(schattenAn({}, '2026-11-20'), true); assert.equal(schattenAn({}, '2026-11-21'), false);
   assert.equal(schattenAn({ BRIDGE_ENSEMBLE_SCHATTEN: 'aus' }, '2026-11-07'), false); assert.equal(schattenAn({ BRIDGE_ENSEMBLE_SCHATTEN: 'an' }, '2027-01-01'), true);
   assert.match(diffBlock('a..b', 'x'.repeat(90_000)), /\[… Diff gekürzt\]/); assert.equal(diffBlock('a..b', '  '), '');

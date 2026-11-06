@@ -52,6 +52,9 @@ test('Audit 05.11. (3) / Hauptsitzung 06.11.: jcode-Stränge (0,1 GB, Topf 6 GB 
   const jcs = Array.from({ length: n }, () => ({ ...chat(), schaetzung: jc }));
   assert.equal(mod.lockFor(jcs, chat(), { neu: jc, stand: voll }), 'chat-busy', 'Topf voll');
   assert.match(mod.lockGrund, /jcode-Topf voll/);
+  // Pass C (S5/K7): die maschinenweite Belegung (andere Personen, jcode-Worker) zählt, auch wenn die eigene Liste leer ist
+  assert.equal(mod.lockFor([], chat(), { neu: jc, stand: voll, jcodeBelegt: jcodeTopfGb() }), 'chat-busy', 'fremde Belegung füllt den Topf');
+  assert.equal(mod.jcodeBelegt(), 0, 'ohne laufende Züge und Worker leer');
   assert.equal(mod.lockFor(jcs, chat(), { neu: strang, stand: { echtGb: 11, hostFreiGb: 12 } }), 'ok', 'jcode-Stränge zählen nicht als laufende Claude-Züge (erster Claude-Zug startet)');
   assert.equal(mod.lockFor([...claude], chat(), { neu: jc, stand: { echtGb: 4, hostFreiGb: 3.05 } }), 'chat-busy', 'Host-Boden gilt auch für jcode');
   process.env.BRIDGE_MAX_PARALLEL_CHATS = '2';

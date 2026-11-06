@@ -414,7 +414,7 @@ type ZugLite = { readonly: boolean; mode: PermissionMode; pending: unknown; scha
 export let lockGrund = '';
 /** Darf ein neuer Zug starten? Chats: wenn die Schätzung in die Box passt (und unter einer gesetzten Obergrenze); Board-Läufe:
  *  bis MAX_BOARD_RUNS daneben. Ohne `box` gilt nur die Obergrenze (alte Aufrufer, Tests). */
-export function lockFor(mine: ZugLite[], next: { readonly: boolean; mode: PermissionMode }, box?: { neu: Schaetzung; stand: SpeicherStand | null; now?: number; vorrang?: boolean }): 'ok' | 'chat-busy' | 'board-full' {
+export function lockFor(mine: ZugLite[], next: { readonly: boolean; mode: PermissionMode }, box?: { neu: Schaetzung; stand: SpeicherStand | null; now?: number; vorrang?: boolean; jcodeBelegt?: number }): 'ok' | 'chat-busy' | 'board-full' {
   lockGrund = '';
   if (isBoardRun(next)) return mine.filter(isBoardRun).length >= MAX_BOARD_RUNS ? 'board-full' : 'ok';
   const alle = mine.filter((l) => !isBoardRun(l) && !l.pending);
@@ -425,7 +425,8 @@ export function lockFor(mine: ZugLite[], next: { readonly: boolean; mode: Permis
   const now = box?.now ?? Date.now();
   const frisch = alle.filter((l) => l.t0 && now - l.t0 < 3 * 60_000).reduce((n, l) => n + (l.schaetzung?.speicherGb ?? 0), 0);
   if (box?.neu.topf === 'jcode') {
-    const r = passtJcode(box.neu, { stand: box.stand, frisch, belegt: alle.filter(jc).reduce((n, l) => n + (l.schaetzung?.speicherGb ?? 0), 0) });
+    // Pass C (S5/K7): der Topf gilt für die Maschine — belegt zählt alle Personen und die jcode-Worker (jcodeBelegt), nicht nur `mine`
+    const r = passtJcode(box.neu, { stand: box.stand, frisch, belegt: box.jcodeBelegt ?? alle.filter(jc).reduce((n, l) => n + (l.schaetzung?.speicherGb ?? 0), 0) });
     lockGrund = r.grund;
     return r.ok ? 'ok' : 'chat-busy';
   }
@@ -1413,7 +1414,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   let mine = meine();
   const mode = autoFor(req);
   const schaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe, jcode: orchMap[key]?.laeufer === 'jcode' });
-  const box = () => ({ neu: schaetzung, stand: speicherStand(), vorrang: !!orchMap[key]?.vorrang });
+  const box = () => ({ neu: schaetzung, stand: speicherStand(), vorrang: !!orchMap[key]?.vorrang, jcodeBelegt: jcodeBelegt() });
   let lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode }, box());
   // Warteschlange statt Fehlschlag (Plan 213 S1a, K3): der Zug wartet, bis ein Platz frei ist; der Chat zeigt den Platz.
   if (lock === 'chat-busy' && schlangeAn() && !req.sink.closed) {
@@ -1425,12 +1426,14 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     if (orchMap[key]) setTurn(key, { start: Date.now(), end: null, outcome: null });
     let erst = true;
     const grund0 = lockGrund, warteAb = Date.now();   // Runde 7 B (Plan §22): Grund und Dauer der Wartezeit fürs Log
+    // K3: lockGrund gilt für den letzten Aufruf (auch eines anderen Wartenden, z. B. jcode-Topf) — je Wartendem den eigenen merken
+    let meinGrund = grund0;
     const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang, ...(schaetzung.topf ? { topf: schaetzung.topf } : {}) }, {
-      frei: () => !lives.has(key) && lockFor(meine(), { readonly: !!req.readonly, mode }, box()) === 'ok',
-      grund: () => lockGrund || 'gerade kein Platz',
+      frei: () => { if (lives.has(key)) return false; const r = lockFor(meine(), { readonly: !!req.readonly, mode }, box()); meinGrund = lockGrund; return r === 'ok'; },
+      grund: () => meinGrund || 'gerade kein Platz',
       geschlossen: () => req.sink.closed || schlangeAbbruch.has(key),
       melde: (pos) => {
-        req.sink.write(erst ? `⏳ In der Schlange: Platz ${pos} — ${lockGrund || 'gerade kein Platz'} (${schaetzungText(schaetzung)}). Startet von selbst, sobald es passt.\n\n` : `⏳ Jetzt Platz ${pos} …\n\n`);
+        req.sink.write(erst ? `⏳ In der Schlange: Platz ${pos} — ${meinGrund || 'gerade kein Platz'} (${schaetzungText(schaetzung)}). Startet von selbst, sobald es passt.\n\n` : `⏳ Jetzt Platz ${pos} …\n\n`);
         erst = false;
       },
     });
@@ -1452,7 +1455,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     // Audit 05.11. (3): Zeitdeckel bei einem Strang ist kein stilles Aus — Grund in den Chat und an den Zug; die Werkbank stellt
     // ihn gleich neu an (ohne den wachsenden Abstand der Parallelgrenze), die Schlange gibt ihm seinen alten Platz zurück.
     if (r === 'zeit' && orchMap[key]) {
-      const g = lockGrund || grund0 || 'gerade kein Platz';
+      const g = meinGrund || 'gerade kein Platz';
       setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'busy', schlange: true, grund: g.slice(0, 200) });
       req.sink.write(`⏳ Wartet schon ${Math.round((Date.now() - warteAb) / 60_000)} min in der Schlange — ${g}. Die Werkbank stellt den Zug gleich von selbst neu an; der Platz bleibt erhalten.`);
       req.sink.finish();
@@ -2007,6 +2010,12 @@ function waitClosed(sink: Sink & { onClose?: (fn: () => void) => void }, live: L
 // Konzept J2 (Hauptsitzung 06.11.): Fan-out-Lesen — lesende Worker laufen über jcode (≈ 0,1 GB) und haben eigene Grenzen: je Strang
 // BRIDGE_MAX_LESER (Vorgabe 10), auf der Maschine so viele, wie der jcode-Topf fasst. Schreibende/bauende bleiben bei 3 bzw. 6.
 export function maxLeser(): number { const n = Math.floor(Number(process.env.BRIDGE_MAX_LESER)); return Number.isFinite(n) && n >= 1 ? n : 10; }   // Funktion statt envZahl: DELEG_HINT (Modulebene) liest sie schon beim Laden
+/** Belegung des jcode-Topfs auf der Maschine: jcode-Stränge aller Personen plus laufende lesende jcode-Worker (Pass C S5/K7). */
+export function jcodeBelegt(): number {
+  const straenge = [...lives.values()].filter((l) => l.schaetzung?.topf === 'jcode').reduce((n, l) => n + (l.schaetzung?.speicherGb ?? 0), 0);
+  const worker = jcodeAn() ? [...delegs.values()].filter((d) => d.status === 'laeuft' && istLeser(d) && !d.claude).length * schaetze({ jcode: true }).speicherGb : 0;
+  return straenge + worker;
+}
 export const maxLeserBox = () => Math.max(1, Math.round(jcodeTopfGb() / schaetze({ jcode: true }).speicherGb));
 const istLeser = (d: Deleg) => d.rolle === 'leser';
 const DELEG_HINT = `Delegieren (Werkbank-MCP, Plan 165): Große, abgegrenzte Teilaufgaben (du müsstest sonst mehr als ${KAPPUNG.lohntTokens / 1000}k Tokens selbst lesen oder schreiben) gibst du gebündelt mit \`delegieren(rolle, aufgabe, risiko)\` ab — rolle leser (liest/sucht, Ergebnis mit Belegen), schreiber (Text/Dateien im eigenen Worktree), bauer (Code im eigenen Unter-Worktree vom Strang-Kopf, liefert einen Commit) oder pruefer (begutachtet eine Bauer-/Schreiber-Delegation, pruefe=<Kennung>). Worker laufen zuerst über Melious; höchstens ${KAPPUNG.maxWorker} schreibende/bauende und bis zu ${maxLeser()} lesende gleichzeitig (Fan-out-Lesen: viele kleine leser-Aufträge parallel statt eines großen); sie enden mit deinem Zug — warte mit \`delegation_stand\` auf sie, bevor du den Zug beendest. Prüf jedes Ergebnis nach der Prüfpflicht im Ergebnis (niedrig: Brücken-Prüfungen + Stichprobe; mittel: Diff lesen; hoch: zusätzlich Prüfer der Brücke), übernimm Commits mit \`git cherry-pick\` und vermerk dein Urteil mit \`delegation_urteil\`. Phasen (plan-to-pr): an jeder Phasengrenze (plan, council, bau, recherche, review, pass-c, bericht, push) schreibst du eine Übergabedatei mit den Abschnitten „## Ziel“, „## Stand“, „## Annahmen“, „## Offene Widersprüche“, „## Prüfausgaben“ (höchstens ${KAPPUNG.uebergabe} Zeichen) und rufst \`phase_wechseln(phase, uebergabe)\` — danach beendest du den Zug mit einem Satz; die Brücke setzt sofort in einer neuen Sitzung mit dem Modell der Phase fort (Opus für plan/council/pass-c/push, Sonnet für bau/recherche/review/bericht).`;
@@ -2444,6 +2453,8 @@ export async function ensembleLaufen(o: EnsAufruf): Promise<EnsErgebnis & { prot
 }
 
 /** MCP-Werkzeug ensemble_review (Strang-Lead): Auftrag + Diff-Bereich → bestätigte Befunde des Verifizierers. */
+const ENSEMBLE_JE_ZUG = 4;
+const ensembleZaehler = new WeakMap<Live, { laeuft: boolean; n: number }>();
 export async function ensembleReview(userId: string, convId: string, b: { auftrag?: unknown; bereich?: unknown; knapp?: unknown }): Promise<Res> {
   const key = `${safeId(userId)}:${safeId(convId)}`;
   const live = lives.get(key);
@@ -2453,20 +2464,27 @@ export async function ensembleReview(userId: string, convId: string, b: { auftra
   if (!auftrag) return { ok: false, status: 400, error: 'auftrag fehlt.' };
   if (auftrag.length > KAPPUNG.auftrag) return { ok: false, status: 400, error: `auftrag ist ${auftrag.length} Zeichen lang, höchstens ${KAPPUNG.auftrag}.` };
   if (bereich && !BEREICH.test(bereich)) return { ok: false, status: 400, error: 'bereich: <basis>..<kopf> oder <basis>...<kopf> (Commits oder Refs).' };
-  const mel = await melKonto(live, userId);
-  if (!mel) return { ok: false, status: 409, error: 'Melious ist für dich gerade nicht verfügbar — Review ohne Ensemble weiter und das im Bericht nennen.' };
-  // Gegenprüfung 06.11.: kein Rückfall auf das Home-Verzeichnis — das Ensemble läuft nur im Arbeitsordner des Strangs.
-  const cwd = orchMap[key]?.dir ?? live.workDir ?? cwdMap[key];
-  if (!cwd) return { ok: false, status: 409, error: 'Kein Arbeitsordner für diesen Zug — ensemble_review läuft nur im Worktree des Strangs.' };
-  emitStatus(live, `🇪🇺 Review-Ensemble (opencode 2, 3 Prüfer + Verifizierer ${VERIFIZIERER})${bereich ? `: ${bereich}` : ''}`);
+  // K8: jedes Ensemble startet einen eigenen Server und vier Läufe — je Zug eines zur Zeit und höchstens ENSEMBLE_JE_ZUG.
+  const z = ensembleZaehler.get(live) ?? { laeuft: false, n: 0 };
+  if (z.laeuft) return { ok: false, status: 429, error: 'In diesem Zug läuft schon ein Review-Ensemble — erst dessen Ergebnis abwarten.' };
+  if (z.n >= ENSEMBLE_JE_ZUG) return { ok: false, status: 429, error: `Höchstens ${ENSEMBLE_JE_ZUG} Review-Ensembles je Zug — die übrigen Prüfungen selbst machen oder im nächsten Zug.` };
+  z.laeuft = true; z.n++; ensembleZaehler.set(live, z);   // vor dem ersten await, sonst kämen zwei gleichzeitige Aufrufe durch
   try {
-    const wach = wachHalten(live);   // Pass B, A2: das Ensemble läuft bis ~30 min im MCP-Aufruf des Leads
-    const e = await ensembleLaufen({ mel, cwd, auftrag, bereich, knapp: b.knapp === true, abbruch: () => live.abort.signal.aborted, kontext: key, buchen: (u, m) => live.req!.onMeliousUsage?.(u, m) }).finally(wach);
-    return e.ok || e.verifizierer.ok ? { ok: true, text: e.text } : { ok: false, status: 502, error: `Ensemble ohne Ergebnis: ${e.grund ?? 'unbekannt'}\n${e.text}` };
-  } catch (err: any) {
-    if (err?.leer) return { ok: true, text: String(err.message) };
-    return { ok: false, status: 500, error: String(err?.message ?? err).replaceAll(mel.token, '***').slice(0, 400) };
-  }
+    const mel = await melKonto(live, userId);
+    if (!mel) return { ok: false, status: 409, error: 'Melious ist für dich gerade nicht verfügbar — Review ohne Ensemble weiter und das im Bericht nennen.' };
+    // Gegenprüfung 06.11.: kein Rückfall auf das Home-Verzeichnis — das Ensemble läuft nur im Arbeitsordner des Strangs.
+    const cwd = orchMap[key]?.dir ?? live.workDir ?? cwdMap[key];
+    if (!cwd) return { ok: false, status: 409, error: 'Kein Arbeitsordner für diesen Zug — ensemble_review läuft nur im Worktree des Strangs.' };
+    emitStatus(live, `🇪🇺 Review-Ensemble (opencode 2, 3 Prüfer + Verifizierer ${VERIFIZIERER})${bereich ? `: ${bereich}` : ''}`);
+    try {
+      const wach = wachHalten(live);   // Pass B, A2: das Ensemble läuft bis ~30 min im MCP-Aufruf des Leads
+      const e = await ensembleLaufen({ mel, cwd, auftrag, bereich, knapp: b.knapp === true, abbruch: () => live.abort.signal.aborted, kontext: key, buchen: (u, m) => live.req!.onMeliousUsage?.(u, m) }).finally(wach);
+      return e.ok || e.verifizierer.ok ? { ok: true, text: e.text } : { ok: false, status: 502, error: `Ensemble ohne Ergebnis: ${e.grund ?? 'unbekannt'}\n${e.text}` };
+    } catch (err: any) {
+      if (err?.leer) return { ok: true, text: String(err.message) };
+      return { ok: false, status: 500, error: String(err?.message ?? err).replaceAll(mel.token, '***').slice(0, 400) };
+    }
+  } finally { z.laeuft = false; }
 }
 
 /** Gegenprüfung aus der Werkbank (Ticker, kein laufender Zug): dieselbe Ensemble-Strecke mit dem Melious-Konto der Person. */

@@ -91,6 +91,9 @@ test('Phase 4 (Pass A/B): Sperr-Log schwärzt Zugangsdaten; .env-Globs fragen; G
   const { schwaerzeBefehl, classify } = await import('../src/tools.ts');
   const s = schwaerzeBefehl('GH_TOKEN=ghp_geheim123456 gh api x -H "Authorization: Bearer abcdefghijkl" && psql postgres://u:pw@localhost/x PGPASSWORD=xyz');
   for (const geheim of ['ghp_geheim123456', 'abcdefghijkl', ':pw@', 'xyz']) assert.ok(!s.includes(geheim), geheim + ' in ' + s);
+  // Pass C (K1): auch die Statuszeile (Chat, „jetzt“ im Steckbrief) zeigt keine Zugangsdaten
+  const { statusLine } = await import('../src/tools.ts');
+  assert.ok(!statusLine('Bash', { command: 'DATABASE_URL=postgresql://u:pw@localhost/t npm test' }).includes(':pw@'));
   for (const c of ['cat .env*', 'cat .en?', 'cat .env.{local,prod}', 'grep KEY .env*']) assert.notEqual(classify('Bash', { command: c }, { scope: 'voll' } as any).cls, 'auto', c);
   for (const c of ['gh api repos/a/b/issues/1/comments -fbody=x', 'gh api repos/a/b/issues --field=title=x', 'gh api repos/a/b --input=d.json', 'gh api graphql -F query=@m.graphql'])
     assert.ok(orchestratorBlock('Bash', { command: c }), c);
