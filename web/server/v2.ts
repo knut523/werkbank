@@ -106,6 +106,10 @@ export interface V2Deps {
   /** Knut 06.11.: ETA gegen Ist — Auswertung je Auftragsart/Profil/Modell (etamessung.ts). */
   /** B2 (Knut 07.11.): Status nach Thema — eine Zeile je Thema (themenlage.ts), dieselbe Rechnung wie `orch lage`. */
   themenLage?: (u: User) => Promise<import('./themenlage.ts').LageZeile[]>;
+  /** Release 2.0 (B3): Warnungen (Melious hart aus/gesperrt/unter 10 %, Claude unter 20 % frei). */
+  warnungen?: (u: User) => Promise<string[]>;
+  /** Verbrauchsbuch (B4): je Läufer heute/Woche, je Aufgabenart, Ausreißer, letzte Läufe. */
+  verbrauch?: (u: User) => Promise<unknown>;
   etaAuswertung?: (u: User) => Promise<{ zeilen: { schluessel: string; text: string; satz: string; n: number }[]; steckbrief: (doc: any) => string | null }>;
   /** Runde 7 (Abgleich: Nachreichen fehlte, 148× genutzt): Nachricht an einen Unter-Chat — läuft er, wird sie nachgereicht. */
   nachreichen?: (u: User, strandId: string, text: string) => Promise<unknown>;
@@ -576,8 +580,15 @@ export function registerV2(on0: On, d: V2Deps) {
     const k = liste.zeilen.map(arbeitKarte).map((x) => { const s = st?.get(convVon.get(x.id) ?? ''); const j = s?.running ? jetztSatz(s.jetzt) : null; return j ? { ...x, satz: `Jetzt: ${j}` } : s?.queued ? { ...x, satz: `Wartet in der Schlange (Platz ${s.queued.pos}) und startet von selbst.` } : x; });
     const fertig = k.filter((x) => x.gruppe === 'fertig').slice(0, 30);
     const ff = await fastFertigJe(d, u, fertig.map((x) => x.id));   // Runde 7: „fertig“ nur mit DoD-Beleg, sonst „fast fertig“
-    const lage = d.themenLage ? await d.themenLage(u).catch(() => null) : null;   // B2
-    send(d, res, { gruppen: { wartet: k.filter((x) => x.gruppe === 'wartet'), laeuft: k.filter((x) => x.gruppe === 'laeuft'), fertig: fertig.map((x) => (ff.has(x.id) ? { ...x, satz: ff.get(x.id)!.satz, fast: true } : x)) }, lage, at: new Date() });
+    const [lage, warnungen] = await Promise.all([d.themenLage ? d.themenLage(u).catch(() => null) : null, d.warnungen ? d.warnungen(u).catch(() => []) : []]);   // B2, B3
+    send(d, res, { gruppen: { wartet: k.filter((x) => x.gruppe === 'wartet'), laeuft: k.filter((x) => x.gruppe === 'laeuft'), fertig: fertig.map((x) => (ff.has(x.id) ? { ...x, satz: ff.get(x.id)!.satz, fast: true } : x)) }, lage, warnungen, at: new Date() });
+  });
+
+  // B4 (Knut 07.11.): Verbrauchsbuch — Tokens und Energie je Lauf und Läufer (nur Admin: Stränge gehören Knut).
+  on('GET', /^\/api\/v2\/verbrauch$/, async (req, res) => {
+    const u = await d.needUser(req);
+    if (!admin(u) || !d.verbrauch) return send(d, res, { nurAdmin: !admin(u), heute: [], woche: [], vergleich: [], ausreisser: [], laeufe: [] });
+    send(d, res, await d.verbrauch(u));
   });
 
   // Knut 06.11.: Schätzgenauigkeit der Unter-Chats (ETA gegen Ist) — für „Jetzt“.

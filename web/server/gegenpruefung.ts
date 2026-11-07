@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { WB_ROOT, cfg } from './config.ts';
 import { meliousChat, meliousKey, meliousSettings, recordMeliousUsage, MELIOUS_AUS } from './melious.ts';
 import type { User } from './auth.ts';
+import { bucheGegenpruefung } from './verbrauch.ts';
 
 export const JCODE_BIN = () => process.env.WERKBANK_JCODE_BIN || join(homedir(), '.local', 'bin', 'jcode');
 const SHIM = () => join(WB_ROOT, 'claude-bridge', 'shim');
@@ -83,18 +84,21 @@ export async function meliousPassC(u: User, o: { wt: string; basis: string; zwec
   });
   let j: any = null; try { j = JSON.parse(out.stdout); } catch { /* unten */ }
   let energie = brief.energie;
+  let tokJ = { input: 0, output: 0, cacheRead: 0 };
   if (j?.session_id && /^[\w.-]{1,120}$/.test(j.session_id)) {
     try {
       const sj = JSON.parse(readFileSync(join(homedir(), '.jcode', 'sessions', `${j.session_id}.json`), 'utf8'));
       const u2 = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
       for (const m of sj.messages ?? []) { const t = m?.token_usage; if (!t || typeof t !== 'object') continue; u2.input += t.input_tokens || 0; u2.cacheRead += t.cache_read_input_tokens || 0; u2.output += t.output_tokens || 0; }
       u2.input = Math.max(0, u2.input - u2.cacheRead);
+      tokJ = { input: u2.input + u2.cacheRead, output: u2.output, cacheRead: u2.cacheRead };
       energie += (await recordMeliousUsage(u, u2, Date.now(), String(j.model ?? modell))).energie;
     } catch { /* ohne Sitzungsdatei: nur der Prüfauftrag gebucht */ }
   }
   if (out.code !== 0 || !j?.text) return nein(`jcode-Lauf fehlgeschlagen (Exit ${out.code})`, energie);
   // Der Schlüssel darf nie im Ergebnis stehen (es geht an den Strang und von dort ggf. in einen Kommentar).
   const text = `# Prüfauftrag (glm-5.3)\n\n${brief.text}\n\n# Review (jcode + ${String(j.model ?? modell)})\n\n${String(j.text)}\n`.split(key).join('***');
+  await bucheGegenpruefung(u, null, 'passc', { ok: true, energie, modell: String(j.model ?? modell), usage: tokJ }, Date.now() - t0, Date.now(), 'jcode').catch(() => {});   // Verbrauchsbuch (B4)
   return { ok: true, text, energie: Math.round(energie), ms: Date.now() - t0 };
 }
 
@@ -137,5 +141,8 @@ export async function ensemblePassC(u: User, o: { wt: string; basis: string; zwe
   // Phase 4: die Kopfzeile nennt die Modelle, die wirklich liefen (Rückfall jcode, fehlender Schatten) — Läufer und Urteile stehen im
   // Fuß des Ensemble-Texts aus der Brücke.
   const modelle = [...new Set((Array.isArray(j.nutzung) ? j.nutzung : []).map((n: any) => String(n?.modell ?? '')).filter(Boolean))];
+  // Verbrauchsbuch (B4): das Ensemble als ein Lauf (Läufer OpenCode 2) mit den echten Tokens der Prüfer.
+  const tok = (Array.isArray(j.nutzung) ? j.nutzung : []).reduce((a: any, n: any) => ({ input: a.input + (Number(n?.usage?.input) || 0) + (Number(n?.usage?.cacheRead) || 0), output: a.output + (Number(n?.usage?.output) || 0), cacheRead: a.cacheRead + (Number(n?.usage?.cacheRead) || 0) }), { input: 0, output: 0, cacheRead: 0 });
+  await bucheGegenpruefung(u, null, 'passc', { ok: true, energie, modell: modelle.join(', ') || 'ensemble', usage: tok }, Date.now() - t0, Date.now(), 'oc2').catch(() => {});
   return { ok: true, text: `# Gegenprüfung (Ensemble${modelle.length ? `: ${modelle.join(', ')}` : ''})\n\n${String(j.text)}\n`, energie: Math.round(energie), ms: Date.now() - t0 };
 }

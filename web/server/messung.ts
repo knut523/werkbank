@@ -4,6 +4,7 @@
 
 import { wb } from './db.ts';
 import type { User } from './auth.ts';
+import { LAEUFER, AUFGABEN } from './verbrauch.ts';
 
 const zuege = () => wb().collection('zug_log');
 const delegationen = () => wb().collection('delegationen');
@@ -33,6 +34,8 @@ export async function recordZug(u: User, raw: any, now = Date.now()): Promise<vo
     phase: str(raw.phase, 20), konto: str(raw.konto, 60), anbieter: raw.anbieter === 'melious' ? 'melious' : 'claude', modell: str(raw.modell, 80) ?? '?',
     input: num(raw.input), output: num(raw.output), cacheRead: num(raw.cacheRead), energie: num(raw.energie), outcome: str(raw.outcome, 20), ms: num(raw.ms),
     delegation: str(raw.delegation, 12), parent: str(raw.parent, 140), kette: raw.kette === true,
+    // Verbrauchsbuch (B4): Läufer und Aufgabenart, wenn die Buchung sie nennt (z. B. OpenCode 2: laeufer 'oc2').
+    ...((LAEUFER as readonly string[]).includes(raw.laeufer) ? { laeufer: raw.laeufer } : {}), ...((AUFGABEN as readonly string[]).includes(raw.aufgabe) ? { aufgabe: raw.aufgabe } : {}),
   } as any);
 }
 

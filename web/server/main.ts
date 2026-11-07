@@ -35,7 +35,7 @@ import { wahrerLauf } from './strangwahrheit.ts';
 import { baueErledigt } from './erledigt.ts';
 import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, meldeBedarf, hinweisFreigabe, hinweisMelious, meldeLeitstand, activeLeitstand } from './leitstand.ts';
-import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID } from './melious.ts';
+import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID, bodenGrund } from './melious.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
 import { repoFakten, reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
 import { berichtKopf, execSummary } from './berichtkopf.ts';
@@ -125,9 +125,11 @@ import { registerV2, appDist, v2Index, hauptchatZustellen, councilPruefen } from
 import { bedarfPruefen, bedarfMelden, bedarfListe, bedarfAntworten, BEDARF_NAME } from './bedarf.ts';
 import { sammeln as sammleEreignisse, offeneEreignisse, quittieren, warten as warteAufEreignisse } from './ereignisse.ts';
 import { themenLage } from './themenlage.ts';
+import { warnungenFuer, claudeLuft, standardDeps as kontingentDeps } from './kontingent.ts';
+import { bucheGegenpruefung, verbrauchView } from './verbrauch.ts';
 import { liste as v2lcListe, volltext as v2lcVolltext, senden as v2lcSenden } from './v2librechat.ts';
 import { abgebrochenMarkieren as v2Abgebrochen } from './v2chat.ts';
-import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
+import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen, zustandVon as zustandVonRun } from './arbeit.ts';
 import { kalibTabelle, auswertung as etaGruppen, genauigkeitSatz, gruppeText, steckbriefSatz } from './etamessung.ts';
 let roadmapCache: { at: number; l: RoadmapItem[] } | null = null;
 
@@ -3900,6 +3902,13 @@ async function themenLageFuer(u: User) {
   for (const x of bedarf) { const id = String(x.strand?.id ?? ''); if (id) bedarfJe.set(id, (bedarfJe.get(id) ?? 0) + 1); }
   return themenLage(offen.zeilen as any[], erledigt.zeilen as any[], { bedarfJe });
 }
+/** Verbrauchsbuch (B4): Stränge der letzten 31 Tage mit Zustand (fertig = abgenommen oder fertig gemeldet). */
+async function verbrauchRuns(u: User) {
+  const docs: any[] = await orchRuns().find({ userId: u.id, startedAt: { $gte: new Date(Date.now() - 31 * 86400_000) } } as any)
+    .project({ conv: 1, title: 1, tiefe: 1, profil: 1, laeufer: 1, ownWorktree: 1, reviewedAt: 1, reviewedBy: 1, knutReviewedAt: 1, zustand: 1, lastStatus: 1 }).limit(3000).toArray();
+  return docs.map((d) => ({ id: String(d._id), conv: String(d.conv ?? ''), titel: String(d.title ?? ''), tiefe: d.tiefe ?? null, profil: d.profil ?? null, laeufer: d.laeufer ?? null, code: !!d.ownWorktree,
+    zustand: d.reviewedAt ? 'erledigt' : (zustandVonRun(d) ?? null) }));
+}
 /** Plan §23 T3: Council-Urteil des Hauptchats zu einer gewichtigen Frage (dieselben Prüfungen wie POST /api/v2/council). */
 async function councilMelden(u: User, b: any) {
   if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
@@ -4218,11 +4227,29 @@ on('POST', /^\/internal\/melious-usage$/, async (req, res) => {
   send(res, 200, { ok: true, rest: r.usage.rest, sperre: r.usage.sperre });
 });
 
+// Knut 07.11. („I want more than 8“): Kapazitäts-Lage für die Zulassung neuer Strang-Züge in der Brücke (kapazitaet.ts) —
+// Melious-Füllstand gegen die Untergrenze, Claude-Luft, PRs, die auf Knuts Go warten (Push-Freigaben der Inbox). Nur Zahlen.
+on('POST', /^\/internal\/kapazitaet$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const kd = kontingentDeps();
+  const [s, konten, ex, ib] = await Promise.all([meliousSettings(u).catch(() => null), kd.konten(u).catch(() => []), kd.erschoepft(u).catch(() => ({} as Record<string, number>)), inboxFuer(u).catch(() => null)]);
+  const use = s?.configured && s.enabled ? await meliousUsage(u).catch(() => null) : null;
+  const fuell = use?.energie?.fuell;
+  const luft = claudeLuft(konten, ex, Date.now());
+  send(res, 200, {
+    meliousProzent: typeof fuell === 'number' ? Math.round(fuell * 100) : null, unterBoden: !!use && !!bodenGrund(fuell, !!use.energie?.geschaetzt),
+    claudeFrei: konten.length ? luft.frei : null, claudeFreiAb: luft.bis, prWartend: ib ? ib.eintraege.filter((e: any) => e.art === 'push').length : null,
+  });
+});
+
 // Gegenprüfung durch GLM 5.3 (Werkbank-MCP „challenge“): Diff, Plan oder Council-Entscheidung, über den Melious-Schlüssel der Person.
 on('POST', /^\/internal\/melious-challenge$/, async (req, res) => {
   const b = await body(req);
   const u = await internalUser(req, b);
+  const t0 = Date.now();
   const r = await meliousChallenge(u, String(b.art ?? ''), String(b.text ?? ''), String(b.frage ?? ''), b.hoch === true);
+  if (r.energie || r.usage) await bucheGegenpruefung(u, b.conv, b.art, r, Date.now() - t0).catch(() => {});   // Verbrauchsbuch (B4)
   log('melious challenge', { user: u.id, art: String(b.art ?? ''), ok: r.ok, energie: r.energie ?? null, error: r.error ?? null, modell: r.modell ?? null, teile: r.teile ?? null, leer: r.leer ?? null });
   await recordChallenge(u, b.conv, b.art, r.ok).catch(() => {});
   send(res, 200, r);
@@ -4537,6 +4564,8 @@ registerV2(on, {
   abgleich: (u, id, stand) => abgleichFuer(u.id, id, cfg.reviewDir, stand),
   zustaende: (u) => strandStates(u) as Promise<Map<string, any>>,
   themenLage: (u) => themenLageFuer(u),   // B2
+  warnungen: (u) => warnungenFuer(u),   // B3
+  verbrauch: (u) => verbrauchView(u, () => verbrauchRuns(u)),   // B4
   etaAuswertung: async (u) => {
     // 60 s je Person zwischengespeichert — die Auswertung ist Geschichte, kein Live-Wert.
     const c = etaCache.get(u.id);

@@ -11,6 +11,7 @@ import { freigabeVerbrauchen } from './freigabe.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
+import { auslastung } from './auslastung.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -305,6 +306,14 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
     } : undefined,
     // Mehrere Claude-Konten: bei rate_limit übernimmt das nächste (Liste über den internen Kanal, nie vom Browser).
     accounts: known && INTERNAL ? () => claudeAccounts(userId) : undefined,
+    // Knut 07.11.: Zulassung nach Kapazität (Kontingent, Energie, PR-Stau) — die Lage rechnet die Werkbank.
+    kapazitaet: known && INTERNAL ? async () => {
+      const r = await fetch(`${WEB_URL}/internal/kapazitaet`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId }), signal: AbortSignal.timeout(2500) });
+      if (!r.ok) return null;
+      const j: any = await r.json();
+      const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+      return { meliousProzent: n(j.meliousProzent), unterBoden: j.unterBoden === true, claudeFrei: typeof j.claudeFrei === 'boolean' ? j.claudeFrei : null, claudeFreiAb: n(j.claudeFreiAb), prWartend: n(j.prWartend) };
+    } : undefined,
     // Jira im Chat geändert → Werkbank zieht die Tickets sofort nach und schiebt die Änderung an offene Boards.
     onJiraWrite: known && INTERNAL ? (keys, tool) => {
       log('jira im chat geschrieben', { user: userId, keys, tool });
@@ -477,6 +486,12 @@ const server = createServer(async (req, res) => {
       return json(res, 200, r);
     }
     // Mehrere Claude-Konten (nur für Werkbank-Web): Zustand je Person (erschöpft bis …) und Test eines Kontos.
+    // Release 2.0 (B3): Claude-Auslastung (cswap, 5 h / Woche) für die Warnungen in 2.0 — ohne Unterhaltung, nur Zahlen.
+    if (req.method === 'GET' && url.pathname === '/internal/auslastung-stand') {
+      if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
+      const a = await auslastung();
+      return json(res, 200, { stufe: a.stufe, fuenfH: a.fuenfH, siebenT: a.siebenT, reset: a.reset, freieKonten: a.freieKonten, grund: a.grund });
+    }
     if (req.method === 'GET' && url.pathname === '/internal/accounts-state') {
       if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
       const ex = exhaustedOf(safeId(url.searchParams.get('user') ?? ''));

@@ -30,7 +30,7 @@ import { budgetVon } from './cosbudget.ts';   // zyklisch (cosbudget → orchest
 import { budgetWirkung } from './braucht.ts';
 import { tiefeOf, istTiefe, tiefeStart, tiefeText, modellAusserhalbAbo, modellVorgaben, zuarbeitText, autoMaxFuer, etaMark, etaFuer, mediane, ETA_ZEILE, TIEFEN, GRUENDLICH_TEXT, type Tiefe, type Zuarbeit, type EtaMediane } from './tiefe.ts';
 import { kalibTabelle, kalibFuer, gruppeVon, messTakt, type KalibTabelle } from './etamessung.ts';
-import { autoAktiv, lageFuer, routingLageFuer, letzterAnbieter } from './kontingent.ts';
+import { autoAktiv, lageFuer, routingLageFuer, letzterAnbieter, claudeLuft, luftPruefungAn, standardDeps } from './kontingent.ts';
 import { klasseVon, route as routeVon, routingCfg, routingText, type Route } from './routing.ts';
 import { zustandAus, abweichung, nachfordern, statusNeu, NACHFORDER_TEXT, wienDatum, wienUm } from './zustand.ts';
 import { regelBestaetigen } from './regelquelle.ts';
@@ -553,6 +553,14 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   if (inp.code === true && !vorbauAus()) {   // WERKBANK_VORBAU_CHECK=off → kein G0, nichts blockiert
     g0 = inp.g0 ?? await g0Tor(u, { slug: inp.slug ?? null, plan, cwd: real, aufrufer: inp.aufrufer ?? 'orch start --code', title });
     if (!g0.go) throw Object.assign(err(409, g0.text), { g0: g0.public });
+  }
+  // Council 07.11. (3): Claude-Luft vor dem Start — sind alle Claude-Konten erschöpft, kein Start (sonst hängt der Strang sofort am
+  // Deckel); ausdrücklich Melious bleibt erlaubt. WERKBANK_KONTINGENT_PRUEFUNG=aus schaltet ab; ohne Brücke/Kontenliste: frei.
+  if (luftPruefungAn() && !String(inp.modell ?? '').startsWith('melious:')) {
+    const kd = standardDeps();
+    const [konten, ex] = await Promise.all([kd.konten(u).catch(() => []), kd.erschoepft(u).catch(() => ({} as Record<string, number>))]);
+    const l = claudeLuft(konten, ex, Date.now());
+    if (!l.frei) throw err(409, l.text!);
   }
   // Neuester Code (Knut 11.10.2026, fresh.ts): git fetch; Code-Auftrag → frischer Worktree vom Integrationszweig.
   const id = await newId();

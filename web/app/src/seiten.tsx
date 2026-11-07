@@ -356,7 +356,7 @@ function ThemenLage({ zeilen, wahl }: { zeilen: LageZeile[]; wahl: (t: string) =
 }
 
 export function Arbeit() {
-  const { d, fehler, neu } = useDaten<{ gruppen: Record<'wartet' | 'laeuft' | 'fertig', ArbeitKarte[]>; nurAdmin?: boolean; lage?: LageZeile[] | null }>('api/v2/arbeit');
+  const { d, fehler, neu } = useDaten<{ gruppen: Record<'wartet' | 'laeuft' | 'fertig', ArbeitKarte[]>; nurAdmin?: boolean; lage?: LageZeile[] | null; warnungen?: string[] }>('api/v2/arbeit');
   const [q, setQ] = useState('');
   const [thema, setThema] = useState<string | null>(null);   // Runde 7: nach Thema filtern
   // Radikal simpel: drei Reiter statt drei langer Abschnitte; „Fertig“ direkt erreichbar (Knut: „heute fertig“). Merkt sich die Wahl.
@@ -386,6 +386,7 @@ export function Arbeit() {
         <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Unter-Chat suchen — Enter sucht auch in alten Chats" aria-label="Unter-Chats durchsuchen" />
       </form>
       <ThemenLeiste aktiv={thema} wahl={setThema} />
+      {!!d.warnungen?.length && <div className="warnungen" role="alert">{d.warnungen.map((w) => <p key={w} className="klein hinweis-warn">⚠ {w}</p>)}</div>}
       {!!d.lage?.length && <ThemenLage zeilen={d.lage} wahl={setThema} />}
       <div className="reiter" role="tablist" aria-label="Unter-Chats">{REITER.map(([r, t]) => <button key={r} type="button" role="tab" aria-selected={reiter === r} className={reiter === r ? 'an' : ''} onClick={() => setReiter(r)}>{t}</button>)}</div>
       {such ? (l.length ? <ul className="liste">{l.map(zeile)}</ul> : <p className="leer">Nichts zu „{q.trim()}“ in deinen Unter-Chats.</p>) : reiter === 'fertig' ? (
@@ -972,6 +973,7 @@ export function Mehr() {
     ['Alle Chats', 'v2/chats', 'Jeder Chat und Unter-Chat, auch alte — mit Suche und Filtern.'],
     ['Erledigt', 'v2/erledigt', 'Was an einem Tag fertig wurde — mit Datumswahl.'],
     ['Begriffe in Klartext', 'v2/begriffe', 'Was Unter-Chat, Hauptchat und „wartet auf dich“ heißen.'],
+    ...(app.ich.admin ? [['Verbrauch', 'v2/verbrauch', 'Tokens und Energie je Lauf: Claude, jcode, OpenCode 2 und Gegenprüfungen im Vergleich, mit Ausreißern.'] as [string, string, string]] : []),
   ];
   return (
     <div className="seite">
@@ -986,6 +988,61 @@ export function Mehr() {
         <ul className="liste">{alt.map((e) => <Zeile key={e.alt} titel={e.titel} url={app.alt ? `${app.alt}/${e.url}` : null} satz={e.satz} />)}</ul>
       </Abschnitt>}
       <p className="klein gedimmt">Angemeldet als <b>{app.ich.name}</b>. <button type="button" className="knopf leise klein" onClick={() => void abmelden()}>Abmelden</button></p>
+    </div>
+  );
+}
+
+// ---------- Verbrauch (B4, Knut 07.11.: „monitor energy usage against jcode … token and energy efficient“) ----------
+
+type Laeufer = 'claude' | 'jcode' | 'oc2' | 'melious' | 'melious-challenge';
+const LAEUFER_DE: Record<Laeufer, string> = { claude: 'Claude-Konto', jcode: 'jcode', oc2: 'OpenCode 2', melious: 'Claude Code auf Melious', 'melious-challenge': 'Melious-Gegenprüfung' };
+const AUFGABE_DE: Record<string, string> = { review: 'Review regulär', 'review-tief': 'Review tief', lesen: 'Lesen', bau: 'Bauen', gegenpruefung: 'Gegenprüfung', hauptchat: 'Hauptchat', sonst: 'Sonst' };
+interface VSumme { laeufer: Laeufer; laeufe: number; versuche: number; input: number; output: number; cacheRead: number; energie: number; ms: number }
+interface VLauf { key: string; strand: string | null; titel: string; laeufer: Laeufer; modelle: string[]; aufgabe: string; ergebnis: 'fertig' | 'abgebrochen' | 'offen'; input: number; output: number; cacheRead: number; energie: number; ms: number; versuche: number; letzter: number }
+interface VDaten { nurAdmin?: boolean; heute: VSumme[]; woche: VSumme[]; vergleich: { aufgabe: string; laeufer: Laeufer; n: number; tokensMedian: number; energieMedian: number; msMedian: number }[];
+  ausreisser: { key: string; titel: string; aufgabe: string; laeufer: Laeufer; wert: 'tokens' | 'energie'; ist: number; median: number; faktor: number }[]; laeufe: VLauf[]; quelle?: string }
+const zahlK = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toLocaleString('de-DE', { maximumFractionDigits: 1 })} Mio.` : n >= 10_000 ? `${Math.round(n / 1000).toLocaleString('de-DE')} Tsd.` : Math.round(n).toLocaleString('de-DE'));
+const vDauer = (ms: number) => (ms >= 3_600_000 ? `${(ms / 3_600_000).toLocaleString('de-DE', { maximumFractionDigits: 1 })} h` : `${Math.max(0, Math.round(ms / 60_000))} min`);
+const tok = (x: { input: number; output: number; cacheRead: number }) => Math.max(0, x.input - x.cacheRead) + x.output;
+
+function Summen({ titel, l }: { titel: string; l: VSumme[] }) {
+  return (
+    <table className="verbrauch-tabelle"><caption>{titel}</caption>
+      <thead><tr><th>Läufer</th><th>Läufe</th><th>Tokens (ohne Cache)</th><th>Cache gelesen</th><th>Energie</th><th>Dauer</th></tr></thead>
+      <tbody>{l.length ? l.map((x) => <tr key={x.laeufer}><td>{LAEUFER_DE[x.laeufer]}</td><td>{x.laeufe}</td><td>{zahlK(tok(x))}</td><td>{zahlK(x.cacheRead)}</td><td>{x.energie ? zahlK(x.energie) : '–'}</td><td>{vDauer(x.ms)}</td></tr>)
+        : <tr><td colSpan={6} className="gedimmt">Noch nichts gebucht.</td></tr>}</tbody>
+    </table>
+  );
+}
+
+export function Verbrauch() {
+  const { d, fehler, neu } = useDaten<VDaten>('api/v2/verbrauch');
+  if (fehler) return <Fehler text={fehler} nochmal={neu} />;
+  if (!d) return <Laedt />;
+  if (d.nurAdmin) return <div className="seite"><h1>Verbrauch</h1><p className="leer">Das Verbrauchsbuch gehört zu den Unter-Chats — nur für Admins.</p></div>;
+  return (
+    <div className="seite">
+      <h1>Verbrauch</h1>
+      <p className="klein gedimmt">Je Lauf echte Zahlen aus der Brücke (Tokens, Melious-Energie, Dauer) — keine Schätzung, wo es echte Zahlen gibt. Ein Lauf = ein Unter-Chat samt seiner Worker oder eine Gegenprüfung.</p>
+      {d.ausreisser.length > 0 && <div className="warnungen" role="alert">{d.ausreisser.map((a) => (
+        <p key={`${a.key}-${a.wert}`} className="klein hinweis-warn">⚠ Ausreißer: „{a.titel}“ ({AUFGABE_DE[a.aufgabe] ?? a.aufgabe}, {LAEUFER_DE[a.laeufer]}) brauchte {zahlK(a.ist)} {a.wert === 'tokens' ? 'Tokens' : 'Energie'} — {a.faktor.toLocaleString('de-DE')} × der Median ({zahlK(a.median)}).</p>))}</div>}
+      <Abschnitt id="v-summen" titel="Je Läufer" erklaerung="Heute (seit Mitternacht) und die letzten 7 Tage.">
+        <Summen titel="Heute" l={d.heute} />
+        <Summen titel="Letzte 7 Tage" l={d.woche} />
+      </Abschnitt>
+      <Abschnitt id="v-vergleich" titel="Je Aufgabe und Läufer" erklaerung="Median je fertigem Lauf (30 Tage) — so lassen sich jcode, OpenCode 2 und Claude bei ähnlichen Aufgaben vergleichen.">
+        <table className="verbrauch-tabelle">
+          <thead><tr><th>Aufgabe</th><th>Läufer</th><th>fertig</th><th>Tokens je Lauf</th><th>Energie je Lauf</th><th>Dauer je Lauf</th></tr></thead>
+          <tbody>{d.vergleich.length ? d.vergleich.map((v) => <tr key={`${v.aufgabe}-${v.laeufer}`}><td>{AUFGABE_DE[v.aufgabe] ?? v.aufgabe}</td><td>{LAEUFER_DE[v.laeufer]}</td><td>{v.n}</td><td>{zahlK(v.tokensMedian)}</td><td>{v.energieMedian ? zahlK(v.energieMedian) : '–'}</td><td>{vDauer(v.msMedian)}</td></tr>)
+            : <tr><td colSpan={6} className="gedimmt">Noch keine fertigen Läufe.</td></tr>}</tbody>
+        </table>
+      </Abschnitt>
+      <Abschnitt id="v-laeufe" titel="Letzte Läufe" erklaerung="Neueste zuerst; Läufer = der mit dem größten Anteil.">
+        <ul className="liste">{d.laeufe.map((x) => (
+          <li key={x.key}>{x.strand ? <a href={`v2/arbeit/${x.strand}`}><b>{x.titel}</b></a> : <b>{x.titel}</b>} <span className="gedimmt">— {AUFGABE_DE[x.aufgabe] ?? x.aufgabe} · {LAEUFER_DE[x.laeufer]} · {x.modelle.slice(0, 3).join(', ')} · {zahlK(tok(x))} Tokens{x.cacheRead ? ` (+${zahlK(x.cacheRead)} Cache)` : ''}{x.energie ? ` · ${zahlK(x.energie)} Energie` : ''} · {vDauer(x.ms)} · {x.ergebnis}</span></li>))}
+        </ul>
+      </Abschnitt>
+      {d.quelle && <p className="klein gedimmt">Quelle: {d.quelle}</p>}
     </div>
   );
 }

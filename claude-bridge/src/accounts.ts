@@ -22,6 +22,7 @@ export interface Account {
   rest?: number;           // Melious: verbleibende Tokens bis zum Tages-/Monatsdeckel (Werkbank)
   fallback?: boolean;      // Melious: auch als letzter Ausweg, wenn alle Claude-Konten erschöpft sind
   sperre?: string;         // Melious: warum gesperrt (Deckel), für die Meldung
+  fuell?: number;         // Melious: Füllstand 0…1 (Werkbank, echt oder geschätzt) — Untergrenze BRIDGE_MELIOUS_BODEN
   // Melious-Lastverteilung (S7): Modelle mit freiem Monatsanteil (0..1, absteigend, Werkbank) und zulässige Modelle je Rolle.
   pool?: { model: string; frei: number }[];
   rollen?: Record<string, string[]>;   // je Rolle in Wunsch-Reihenfolge (die Werkbank ordnet nach Energie-Lage, S8)
@@ -156,17 +157,20 @@ const rollenOf = (v: unknown): Record<string, string[]> => Object.fromEntries(Ob
   .filter(([k, l]) => /^[a-z]{1,20}$/.test(k) && Array.isArray(l)).map(([k, l]) => [k, (l as unknown[]).filter((m): m is string => typeof m === 'string' && MODEL_NAME.test(m)).slice(0, 20)]));
 
 /** Konten in Reihenfolge, ohne Doppelte; `chat` (token null) = der Schlüssel aus der Anfrage. Immer mindestens dieser. */
-export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?: unknown; kind?: unknown; model?: unknown; pool?: unknown; rollen?: unknown; faktoren?: unknown; taktS?: unknown; eco?: unknown; kette?: unknown; ketteModell?: unknown; vorrang?: unknown; abo?: unknown; rest?: unknown; fallback?: unknown; sperre?: unknown; zuarbeit?: unknown }[] | null | undefined, chatToken: string): Account[] {
+export function normalizeAccounts(list: { id?: unknown; label?: unknown; token?: unknown; kind?: unknown; model?: unknown; pool?: unknown; rollen?: unknown; faktoren?: unknown; taktS?: unknown; eco?: unknown; kette?: unknown; ketteModell?: unknown; vorrang?: unknown; abo?: unknown; rest?: unknown; fallback?: unknown; sperre?: unknown; zuarbeit?: unknown; fuell?: unknown }[] | null | undefined, chatToken: string): Account[] {
   const out: Account[] = [];
   const seen = new Set<string>();
   for (const a of list ?? []) {
     const id = String(a?.id ?? '');
     if (a?.kind === 'melious') {
+      // Release 2.0 (B3, Council 07.11. Punkt 8): BRIDGE_MELIOUS=aus oder Füllstand unter dem Boden → kein Melious-Konto, damit
+      // kein Weg (Ersatzkette, Worker, melious_sub, Ensemble, OpenCode 2); es bleibt Claude.
+      if (meliousHartAus() || unterBoden(a.fuell)) continue;
       const token = typeof a.token === 'string' ? a.token : '';
       if (id !== MELIOUS_ID || !MELIOUS_KEY.test(token) || seen.has(token) || out.some(isMelious)) continue;
       seen.add(token);
       const name = (v: unknown) => (typeof v === 'string' && /^[\w.:/-]{1,80}$/.test(v) ? v : undefined);
-      out.push({ id, label: MELIOUS_LABEL, token, kind: 'melious', model: name(a.model), pool: poolOf(a.pool), rollen: rollenOf(a.rollen), faktoren: faktorenOf(a.faktoren), taktS: Number(a.taktS) > 0 ? Math.min(86_400, Number(a.taktS)) : undefined, eco: a.eco === true, kette: a.kette === true, ketteModell: name(a.ketteModell), vorrang: a.vorrang === true, abo: Array.isArray(a.abo) ? (a.abo as unknown[]).filter((m): m is string => typeof m === 'string' && MODEL_NAME.test(m)).slice(0, 30) : undefined, rest: Math.max(0, Number(a.rest) || 0), fallback: a.fallback === true, sperre: typeof a.sperre === 'string' ? a.sperre.slice(0, 160) : undefined, ...(a.zuarbeit === 'claude' ? { zuarbeit: 'claude' as const } : {}) });
+      out.push({ id, label: MELIOUS_LABEL, token, kind: 'melious', model: name(a.model), pool: poolOf(a.pool), rollen: rollenOf(a.rollen), faktoren: faktorenOf(a.faktoren), taktS: Number(a.taktS) > 0 ? Math.min(86_400, Number(a.taktS)) : undefined, eco: a.eco === true, kette: a.kette === true, ketteModell: name(a.ketteModell), vorrang: a.vorrang === true, abo: Array.isArray(a.abo) ? (a.abo as unknown[]).filter((m): m is string => typeof m === 'string' && MODEL_NAME.test(m)).slice(0, 30) : undefined, rest: Math.max(0, Number(a.rest) || 0), fallback: a.fallback === true, sperre: typeof a.sperre === 'string' ? a.sperre.slice(0, 160) : undefined, ...(typeof a.fuell === 'number' && Number.isFinite(a.fuell) ? { fuell: Math.max(0, Math.min(1, a.fuell)) } : {}), ...(a.zuarbeit === 'claude' ? { zuarbeit: 'claude' as const } : {}) });
       continue;
     }
     const token = id === 'chat' ? chatToken : typeof a?.token === 'string' ? a.token : '';
@@ -253,6 +257,16 @@ export function planQueue(accounts: Account[], ex: Exhausted, o: { conv: string;
   if (o.chatOn) return [mel!, ...queue];
   return mel!.fallback && o.overflow !== false ? [...queue, mel!] : queue;
 }
+
+/** Release 2.0 (B3): harter Schalter der Brücke, unabhängig von der Werkbank. */
+export const meliousHartAus = (env: Record<string, string | undefined> = process.env) => String(env.BRIDGE_MELIOUS ?? '').trim().toLowerCase() === 'aus';
+/** Council 07.11. (8): Energie-Untergrenze in % (BRIDGE_MELIOUS_BODEN, Vorgabe 20) — darunter keine neuen Melious-Läufe. */
+export function meliousBoden(env: Record<string, string | undefined> = process.env): number {
+  const v = String(env.BRIDGE_MELIOUS_BODEN ?? '').trim(), n = Number(v);
+  return v !== '' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : 20;
+}
+/** Unter dem Boden? Nur mit bekanntem Füllstand (0…1, von der Werkbank: echt oder geschätzt); unbekannt zählt nicht. */
+export const unterBoden = (fuell: unknown, env: Record<string, string | undefined> = process.env) => typeof fuell === 'number' && Number.isFinite(fuell) && fuell * 100 < meliousBoden(env);
 
 export function meliousUsable(mel: Account, ex: Exhausted, now = Date.now()): boolean {
   const v = ex[mel.id];

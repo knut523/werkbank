@@ -4,7 +4,7 @@ import { Component, lazy, Suspense, useEffect, useMemo, useState, type ReactNode
 import { abmelden, hole, schicke } from './api.ts';
 import { Kontext, useApp, type AppKontext } from './kontext.ts';
 import { ChatLeiste } from './chat.tsx';
-import { Anmelden, AlleChats, Themen, Thema, Arbeit, Begriffe, Dokument, Dokumente, Entscheidungen, Entschieden, Erledigt, Jetzt, Mehr, PrDetail, Prs, Suche, Freigabe } from './seiten.tsx';
+import { Anmelden, AlleChats, Themen, Thema, Arbeit, Begriffe, Dokument, Dokumente, Entscheidungen, Entschieden, Erledigt, Jetzt, Mehr, PrDetail, Prs, Suche, Freigabe, Verbrauch } from './seiten.tsx';
 import { ALT_PFADE } from './mehr.ts';
 import { UnterChat } from './unterchat.tsx';
 import { Fehler, Laedt, vergessen, vorab } from './teile.tsx';
@@ -37,7 +37,7 @@ const BEREICHE = [
   { url: 'v2/arbeit', label: 'Arbeit', ico: '⚙', passt: (p: string) => p.startsWith('v2/arbeit') || p.startsWith('v2/chats') || p.startsWith('v2/erledigt') },
   { url: 'v2/prs', label: 'PRs', ico: '⇄', passt: (p: string) => p.startsWith('v2/prs') },
   // Pass A (UI 22): die eingehängten alten Seiten (Board, Übersicht, Wissen …) gehören zu „Mehr“
-  { url: 'v2/mehr', label: 'Mehr', ico: '⋯', passt: (p: string) => p.startsWith('v2/mehr') || p.startsWith('v2/dokument') || p.startsWith('v2/them') || p.startsWith('v2/begriffe') || p in ALT_PFADE },
+  { url: 'v2/mehr', label: 'Mehr', ico: '⋯', passt: (p: string) => p.startsWith('v2/mehr') || p.startsWith('v2/verbrauch') || p.startsWith('v2/dokument') || p.startsWith('v2/them') || p.startsWith('v2/begriffe') || p in ALT_PFADE },
 ];
 
 /** Zu einer Sprungmarke scrollen, sobald der Abschnitt gerendert ist (Daten laden nach) — höchstens 3 s warten. */
@@ -98,6 +98,7 @@ function Seite({ pfad, such, freigabe }: { pfad: string; such: string; freigabe:
   if (pfad === 'v2/dokument') return <Dokument key={such} vault={q.get('vault')} paket={q.get('paket')} datei={q.get('datei')} />;
   if (pfad.startsWith('v2/dokumente')) return <Dokumente key={q.get('q') ?? ''} q={q.get('q') ?? ''} />;
   if (pfad.startsWith('v2/begriffe')) return <Begriffe />;
+  if (pfad.startsWith('v2/verbrauch')) return <Verbrauch />;   // B4 (unter „Mehr“)
   if (pfad.startsWith('v2/mehr')) return <Mehr />;
   if (pfad.startsWith('v2/chats')) return <AlleChats key={such} q={q.get('q') ?? ''} />;
   if (pfad === 'v2/themen') return <Themen />;

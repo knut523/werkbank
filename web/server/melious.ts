@@ -120,16 +120,31 @@ async function schluessel(u: User, e?: Stored | null): Promise<{ token: string; 
 /** Hauptsitzung 07.11.: Antwort, wenn Melious gespeichert, aber nicht erlaubt ist — mit dem Weg, der stattdessen gilt. */
 export const MELIOUS_AUS = 'Melious ist ausgeschaltet („erlaubt“ in der Einrichtung) — keine Gegenprüfung über Melious. Nimm einen unabhängigen Claude-Teilagenten (Agent, „[claude]“ in der Beschreibung) als zweiten Prüfer und nenne das im Bericht.';
 
+/** Release 2.0 (B3): harter Schalter WERKBANK_MELIOUS=aus — überstimmt „erlaubt“ jeder Person; kein Aufruf, kein Konto für die Brücke. */
+export const meliousHartAus = (env: Record<string, string | undefined> = process.env) => String(env.WERKBANK_MELIOUS ?? '').trim().toLowerCase() === 'aus';
+export const MELIOUS_HART_AUS = 'Melious ist im Betrieb hart ausgeschaltet (WERKBANK_MELIOUS=aus) — alles läuft auf Claude.';
+/** Council 07.11. (8): Energie-Untergrenze in % (WERKBANK_MELIOUS_BODEN, Vorgabe 20) — darunter keine neuen Melious-Läufe, Claude übernimmt. */
+export function meliousBoden(env: Record<string, string | undefined> = process.env): number {
+  const v = String(env.WERKBANK_MELIOUS_BODEN ?? '').trim(), n = Number(v);
+  return v !== '' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : 20;
+}
+/** Rein: Sperrgrund, wenn der Füllstand (0…1) unter dem Boden liegt; unbekannt sperrt nicht. */
+export function bodenGrund(fuell: number | null | undefined, geschaetzt: boolean, boden = meliousBoden()): string | null {
+  if (typeof fuell !== 'number' || !Number.isFinite(fuell) || fuell * 100 >= boden) return null;
+  return `Energie ${geschaetzt ? 'geschätzt ' : ''}bei ${Math.round(fuell * 100)} % — unter der Untergrenze ${boden} %, keine neuen Melious-Läufe (Claude übernimmt; nachladen)`;
+}
+
 /** Einstellungen ohne Schlüssel (für Browser und Brücke). */
 export async function meliousSettings(u: User) {
   const s = await einstellungen(u);
   const q = await schluessel(u, s);
   const d = meliousDefaults();
+  const hart = meliousHartAus();
   return {
-    configured: !!q, last4: q?.last4 ?? null, addedAt: s?.addedAt ?? null, quelle: q?.quelle ?? null,
+    configured: !!q, last4: q?.last4 ?? null, addedAt: s?.addedAt ?? null, quelle: q?.quelle ?? null, hartAus: hart,
     // model: festes Modell für alles (überstimmt die Verteilung); leer = Lastverteilung nach Rolle und Energie.
-    // Schlüssel aus Env/Vaultwarden: „erlaubt“ nur, wenn es jemand eingeschaltet hat (Vorgabe aus).
-    enabled: s?.enabled ?? (q && q.quelle !== 'gespeichert' ? false : d.enabled), fallback: s?.fallback ?? d.fallback, kette: s?.kette ?? d.kette, ketteModell: s?.ketteModell ?? d.ketteModell, model: s?.model ?? null, eco: s?.eco ?? d.eco,
+    // Schlüssel aus Env/Vaultwarden: „erlaubt“ nur, wenn es jemand eingeschaltet hat (Vorgabe aus). Hart aus: nie.
+    enabled: !hart && (s?.enabled ?? (q && q.quelle !== 'gespeichert' ? false : d.enabled)), fallback: !hart && (s?.fallback ?? d.fallback), kette: !hart && (s?.kette ?? d.kette), ketteModell: s?.ketteModell ?? d.ketteModell, model: s?.model ?? null, eco: s?.eco ?? d.eco,
     // Deckel: gesetzt, sonst Notbremse aus der Nachfüllung (Tag 1,5 ×, Monat 31 ×), sonst die Vorgabe.
     dayLimit: s?.dayLimit ?? (s?.proTakt ? Math.round(s.proTakt * (TAG_S / (s?.taktS ?? d.taktS)) * 1.5) : d.dayLimit),
     monthLimit: s?.monthLimit ?? (s?.proTakt ? Math.round(s.proTakt * (TAG_S / (s?.taktS ?? d.taktS)) * 31) : d.monthLimit),
@@ -186,7 +201,14 @@ async function chatCompletion(u: User, body: Record<string, unknown>, timeoutMs:
 }
 
 /** Ein Melious-Aufruf mit Buchung (Auto-Review, Pass C): Text oder null; Energie aus billing_cost bzw. geschätzt. */
+/** Sperrgrund der Untergrenze für diese Person (null = frei oder Füllstand unbekannt). */
+async function unterBodenFuer(u: User): Promise<string | null> {
+  const use = await meliousUsage(u).catch(() => null);
+  return use ? bodenGrund(use.energie.fuell, use.energie.geschaetzt) : null;
+}
+
 export async function meliousChat(u: User, model: string, prompt: string, maxTokens = CHALLENGE_MAX_TOKENS, timeoutMs = CHALLENGE_TIMEOUT_MS): Promise<{ text: string; energie: number } | null> {
+  if (!(await meliousSettings(u)).enabled || await unterBodenFuer(u)) return null;
   const j = await chatCompletion(u, { model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }, timeoutMs);
   if (!j || j.error) return null;
   const usage = { input: Number(j.usage?.prompt_tokens) || 0, output: Number(j.usage?.completion_tokens) || 0, cacheRead: Number(j.usage?.prompt_tokens_details?.cached_tokens) || 0, cacheWrite: 0 };
@@ -252,11 +274,13 @@ export function teileText(t: string, max = CHALLENGE_STUECK): string[] {
   return out;
 }
 
-export async function meliousChallenge(u: User, art: string, text: string, frage = '', hoch = false): Promise<{ ok: boolean; text?: string; energie?: number; bezahlt?: string | null; umwelt?: unknown; error?: string; modell?: string; teile?: number; leer?: number }> {
+export async function meliousChallenge(u: User, art: string, text: string, frage = '', hoch = false): Promise<{ ok: boolean; text?: string; energie?: number; bezahlt?: string | null; umwelt?: unknown; error?: string; modell?: string; teile?: number; leer?: number; usage?: { input: number; output: number; cacheRead: number } }> {
   const s = await meliousSettings(u);
   if (!s.configured) return { ok: false, error: 'Kein Melious-Schlüssel hinterlegt.' };
-  if (!s.enabled) return { ok: false, error: MELIOUS_AUS };
+  if (!s.enabled) return { ok: false, error: s.hartAus ? MELIOUS_HART_AUS : MELIOUS_AUS };
   if (!CHALLENGE[art]) return { ok: false, error: 'art: diff, plan oder council.' };
+  const boden = await unterBodenFuer(u);
+  if (boden) return { ok: false, error: `${boden}. Nimm einen unabhängigen Claude-Teilagenten als zweiten Prüfer und nenne das im Bericht.` };
   const t = String(text ?? '').slice(0, 200_000);
   if (!t.trim()) return { ok: false, error: 'Text fehlt.' };
   const model = art === 'council' || hoch ? (s.ketteModell || 'glm-5.3') : 'glm-5.3-flash';
@@ -264,6 +288,7 @@ export async function meliousChallenge(u: User, art: string, text: string, frage
   const kopf = frage ? `Frage des Leads: ${String(frage).slice(0, 2000)}\n\n` : '';
   const ergebnisse: { text: string; abgeschnitten: boolean; energie: number; bezahlt: string | null; umwelt: unknown; fehler?: string }[] = new Array(teile.length);
   let next = 0;
+  const tok = { input: 0, output: 0, cacheRead: 0 };   // Verbrauchsbuch (B4): echte Tokens der Gegenprüfung
   const worker = async () => {
     for (let i = next++; i < teile.length; i = next++) {
       const hinweis = teile.length > 1 ? `(Teil ${i + 1} von ${teile.length} eines größeren Textes — prüfe nur diesen Teil.)\n\n` : '';
@@ -271,6 +296,7 @@ export async function meliousChallenge(u: User, art: string, text: string, frage
       if (!j || j.error) { ergebnisse[i] = { text: '', abgeschnitten: false, energie: 0, bezahlt: null, umwelt: null, fehler: `Melious antwortet nicht${j?.error ? ` (${j.error})` : ''}` }; continue; }
       const usage = { input: Number(j.usage?.prompt_tokens) || 0, output: Number(j.usage?.completion_tokens) || 0, cacheRead: Number(j.usage?.prompt_tokens_details?.cached_tokens) || 0, cacheWrite: 0 };
       usage.input = Math.max(0, usage.input - usage.cacheRead);
+      tok.input += usage.input + usage.cacheRead; tok.output += usage.output; tok.cacheRead += usage.cacheRead;
       const booked = await recordMeliousUsage(u, usage, Date.now(), model);   // je Stück sofort gebucht, nicht erst am Ende
       ergebnisse[i] = { text: String(j.choices?.[0]?.message?.content ?? '').trim(), abgeschnitten: j.choices?.[0]?.finish_reason === 'length',
         energie: Number(j.billing_cost?.energy) || r2(booked.energie), bezahlt: j.billing_cost?.paid_with ?? null, umwelt: j.environment_impact ?? null };
@@ -282,13 +308,13 @@ export async function meliousChallenge(u: User, art: string, text: string, frage
   const leer = ergebnisse.length - mitText.length;
   if (!mitText.length) {
     const f = ergebnisse.find((e) => e?.fehler)?.fehler;
-    return { ok: false, error: f ?? `${model} lieferte keine Antwort (Denkbudget erschöpft${ergebnisse.some((e) => e?.abgeschnitten) ? ', abgeschnitten' : ''}) — Text kleiner machen oder selbst prüfen.`, energie, modell: model, teile: teile.length, leer };
+    return { ok: false, error: f ?? `${model} lieferte keine Antwort (Denkbudget erschöpft${ergebnisse.some((e) => e?.abgeschnitten) ? ', abgeschnitten' : ''}) — Text kleiner machen oder selbst prüfen.`, energie, modell: model, usage: tok, teile: teile.length, leer };
   }
   const textAll = teile.length === 1
     ? mitText[0].text + (mitText[0].abgeschnitten ? '\n\n_(Antwort am Token-Ende abgeschnitten.)_' : '')
     : ergebnisse.map((e, i) => `### Teil ${i + 1} von ${teile.length}\n${e?.text ? e.text + (e.abgeschnitten ? '\n_(abgeschnitten)_' : '') : `_(keine Antwort${e?.fehler ? `: ${e.fehler}` : ''})_`}`).join('\n\n');
   const erster = mitText[0];
-  return { ok: true, text: textAll, energie, bezahlt: erster.bezahlt, umwelt: erster.umwelt, modell: model, teile: teile.length, leer };
+  return { ok: true, text: textAll, energie, bezahlt: erster.bezahlt, umwelt: erster.umwelt, modell: model, teile: teile.length, leer, usage: tok };
 }
 
 /** Preisliste höchstens einmal am Tag holen (kostet keine Energie) und speichern. Fehler: alte Faktoren bleiben. */
@@ -438,7 +464,7 @@ export async function meliousUsage(u: User, now = Date.now()) {
   const heuteS = sum(docs.filter((d) => d.day === day)), monatS = sum(docs);
   const h = { ...heuteS, tokens: tokens(heuteS), energie: r2(heuteS.energie), limit: s.dayLimit, pct: Math.round((heuteS.energie / s.dayLimit) * 100) };
   const m = { ...monatS, tokens: tokens(monatS), energie: r2(monatS.energie), limit: s.monthLimit, pct: Math.round((monatS.energie / s.monthLimit) * 100) };
-  const sperre = m.energie >= m.limit ? 'Monatsdeckel (Energie) erreicht, wieder frei ab dem 1. des nächsten Monats'
+  const deckelSperre = m.energie >= m.limit ? 'Monatsdeckel (Energie) erreicht, wieder frei ab dem 1. des nächsten Monats'
     : h.energie >= h.limit ? 'Tagesdeckel (Energie) erreicht, wieder frei ab 00:00' : null;
   // Je Modell (Name zurückübersetzt), heute und Monat.
   const by: Record<string, { tokens: number; energie: number; turns: number; heute: number }> = {};
@@ -481,7 +507,8 @@ export async function meliousUsage(u: User, now = Date.now()) {
     ...(!proTakt ? ['Nachfüllmenge je Takt fehlt (Einrichtung) — Tempo-Steuerung aus, nur Schätzung.'] : []),
   ];
   return {
-    day, month, heute: h, monat: m, modelle, rest: Math.max(0, r2(Math.min(h.limit - h.energie, m.limit - m.energie))), sperre,
+    // Sperre: Deckel, sonst die Energie-Untergrenze (Council 07.11., 8) — sichtbar in Kontingentzeile, Routing und Warnungen.
+    day, month, heute: h, monat: m, modelle, rest: Math.max(0, r2(Math.min(h.limit - h.energie, m.limit - m.energie))), sperre: deckelSperre ?? bodenGrund(fuell, !echt),
     energie: { geschaetzt: !echt, echt, stand, fuell: fuell === null ? null : Math.round(fuell * 100) / 100, faktorQuelle: s.faktorQuelle, nachfuellungTag, topfMax, tempo, modus, vorrang, bezahlt, hinweise, taktS: s.taktS, dashboard: MELIOUS_DASHBOARD },
     quelle: echt ? `Verbrauch je Zug geschätzt (Preisliste × 10.000); Stand abgeglichen mit dem Melious-Dashboard (${echt.at.slice(11, 16)} UTC)` : 'geschätzt aus Tokens × Preisliste × 10.000 (echter Stand nur im Melious-Dashboard; Abgleich aus)',
   };
@@ -528,7 +555,9 @@ export async function meliousForBridge(u: User) {
   const heute = Object.fromEntries(use.modelle.map((m) => [m.model, m.heute]));
   const rollen = Object.fromEntries(Object.entries(s.rollen).map(([r, l]) => [r, ordneRolle(l, { modus: use.energie.modus, faktoren: s.faktoren, heute })]));
   const pool = Object.keys(s.faktoren).map((model) => ({ model, frei: 1 }));
-  return { id: MELIOUS_ID, label: 'Melious', token, kind: 'melious' as const, model: s.model, pool, rollen, faktoren: s.faktoren, taktS: s.taktS, eco: s.eco, kette: s.kette, ketteModell: s.ketteModell, vorrang: use.energie.vorrang, abo: s.abo,
+  // Council 07.11. (8): unter der Untergrenze kein Konto (die Brücke prüft fuell zusätzlich selbst, BRIDGE_MELIOUS_BODEN).
+  if (bodenGrund(use.energie.fuell, use.energie.geschaetzt)) return null;
+  return { fuell: use.energie.fuell, id: MELIOUS_ID, label: 'Melious', token, kind: 'melious' as const, model: s.model, pool, rollen, faktoren: s.faktoren, taktS: s.taktS, eco: s.eco, kette: s.kette, ketteModell: s.ketteModell, vorrang: use.energie.vorrang, abo: s.abo,
     fallback: s.fallback, rest: use.sperre ? 0 : use.rest, ...(use.sperre ? { sperre: use.sperre } : {}) };
 }
 

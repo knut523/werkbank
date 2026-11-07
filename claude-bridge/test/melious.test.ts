@@ -396,7 +396,8 @@ test('Rollen-Profile (S6): voll wie bisher; bauer nur vault-search/werkbank; les
 
 test('Ersatzkette im Strang (Knuts Setup): Opus erschöpft → Sonnet auf allen Konten → Melious glm-5.3-flash (Knut 15.10.: Unter-Stränge nie auf dem Lead-Modell), ohne Warten; Modell im Protokoll', async () => {
   ACCOUNTS.limitkette = [{ id: 'a1', label: 'Firma', token: tok('limit-kette') }, { id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL({ token: key('kette'), kette: true, ketteModell: 'glm-5.3', rest: 1_000_000 })];
-  await register('limitkette', conv(40), { risiko: 'mittel' });
+  // Knut 07.11.: Leads ohne Modell laufen auf Sonnet — dieser Test prüft die Kette ab Opus, also ausdrücklich Opus.
+  await register('limitkette', conv(40), { risiko: 'mittel', modell: 'claude:opus' });
   const t = await send(conv(40), 'Hallo', 'limitkette');
   assert.match(t, /↻ Ersatzkette: Claude Sonnet \(„Firma“\) übernimmt/);
   assert.match(t, /↻ Ersatzkette: Melious glm-5\.3-flash übernimmt/);

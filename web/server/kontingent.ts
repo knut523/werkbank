@@ -8,7 +8,7 @@ import { wb } from './db.ts';
 import type { User } from './auth.ts';
 import { autoWahl, kontingentSchwelle, modellVorgaben, type KontingentLage, type Zuarbeit } from './tiefe.ts';
 
-export interface MeliousTeil { restProzent: number | null; geschaetzt: boolean; sperre: string | null; monat: { model: string; energie: number; turns: number }[]; monatProzent: number | null }
+export interface MeliousTeil { restProzent: number | null; geschaetzt: boolean; sperre: string | null; monat: { model: string; energie: number; turns: number }[]; monatProzent: number | null; fuellProzent?: number | null }
 export interface KontoTeil { id: string; label: string; erschoepftBis: number | null; zuegeHeute: number }
 export interface Kontingent { melious: MeliousTeil | null; claude: KontoTeil[]; schwelle: number; wahl: Zuarbeit; auto: string[]; zeile: string }
 
@@ -20,6 +20,36 @@ export function meliousRestProzent(use: { sperre?: string | null; energie?: { fu
   if (typeof f === 'number' && Number.isFinite(f)) return Math.max(0, Math.min(100, Math.round(f * 100)));
   const p = use.monat?.pct;
   return typeof p === 'number' && Number.isFinite(p) ? Math.max(0, Math.min(100, 100 - p)) : null;
+}
+
+/** Council 07.11. (3): Luft vor dem Strangstart (rein) — frei, solange ein Claude-Konto nicht erschöpft ist; ohne Kontenliste frei. */
+export function claudeLuft(konten: { id: string; label: string }[], ex: Record<string, number>, now: number): { frei: boolean; bis: number | null; text: string | null } {
+  if (!konten.length) return { frei: true, bis: null, text: null };
+  const bis = konten.map((k) => ex[k.id] ?? 0);
+  if (bis.some((t) => !(t > now))) return { frei: true, bis: null, text: null };
+  const frueh = Math.min(...bis);
+  return { frei: false, bis: frueh, text: `Kein Claude-Konto frei (alle erschöpft, das erste wieder ab ${uhr(frueh)}) — Strang nicht gestartet, damit er nicht gleich am Deckel hängt. Ab dann neu starten oder ausdrücklich mit Melious (modell melious:…).` };
+}
+export const luftPruefungAn = (env: Record<string, string | undefined> = process.env) => String(env.WERKBANK_KONTINGENT_PRUEFUNG ?? '').trim().toLowerCase() !== 'aus';
+
+export interface ClaudeAuslastung { fuenfH: number | null; siebenT: number | null; reset: string | null }
+/**
+ * Release 2.0 (B3, Knut 07.11.): Warnungen für 2.0 (rein) — Melious hart aus, gesperrt (Deckel oder Untergrenze), Energie unter
+ * 10 %, und Claude unter 20 % frei (5-h- oder Wochenfenster laut cswap ≥ 80 % verbraucht) bzw. alle Konten erschöpft.
+ */
+export function warnungenAus(o: { melious: MeliousTeil | null; hartAus: boolean; konten: KontoTeil[]; auslastung: ClaudeAuslastung | null; now: number }): string[] {
+  const w: string[] = [];
+  if (o.hartAus) w.push('Melious ist hart ausgeschaltet (WERKBANK_MELIOUS=aus) — alles läuft auf Claude.');
+  const m = o.melious;
+  if (m?.sperre) w.push(`Melious gesperrt: ${m.sperre}.`);
+  if (m && typeof m.fuellProzent === 'number' && m.fuellProzent < 10) w.push(`Melious-Energie ${m.geschaetzt ? 'geschätzt ' : ''}bei ${m.fuellProzent} % (unter 10 %) — nachladen.`);
+  if (o.konten.length && o.konten.every((k) => k.erschoepftBis && k.erschoepftBis > o.now)) w.push(`Alle Claude-Konten erschöpft — das erste wieder ab ${uhr(Math.min(...o.konten.map((k) => k.erschoepftBis!)))}.`);
+  else {
+    const a = o.auslastung;
+    const knapp = [a?.fuenfH != null && a.fuenfH >= 80 ? `5 h ${a.fuenfH} %` : null, a?.siebenT != null && a.siebenT >= 80 ? `Woche ${a.siebenT} %` : null].filter(Boolean);
+    if (knapp.length) w.push(`Claude-Kontingent knapp (unter 20 % frei): ${knapp.join(' · ')} verbraucht${a?.reset ? `, 5 h frei ab ${a.reset}` : ''} — neue Stränge wechseln bei rate_limit sofort aufs nächste Konto.`);
+  }
+  return w;
 }
 
 /** Lage für die automatische Wahl (rein). */
@@ -65,6 +95,8 @@ export interface KontingentDeps {
   meliousUsage: (u: User) => Promise<any | null>;
   /** Hauptchat-Meldung bei einer Umschaltung (meldeLeitstand). */
   melde: (u: User, text: string) => Promise<void>;
+  /** Claude-Auslastung (cswap über die Brücke); fehlt = unbekannt. */
+  auslastung?: () => Promise<ClaudeAuslastung | null>;
   env?: Record<string, string | undefined>;
 }
 
@@ -84,6 +116,7 @@ export async function kontingent(u: User, d: KontingentDeps, now = Date.now()): 
     restProzent: meliousRestProzent(use), geschaetzt: !!use.energie?.geschaetzt, sperre: use.sperre ?? null,
     monat: (use.modelle ?? []).filter((m: any) => m.energie > 0 || m.turns > 0).map((m: any) => ({ model: m.model, energie: m.energie, turns: m.turns })),
     monatProzent: typeof use.monat?.pct === 'number' ? use.monat.pct : null,
+    fuellProzent: typeof use.energie?.fuell === 'number' ? Math.round(use.energie.fuell * 100) : null,
   } : null;
   const schwelle = kontingentSchwelle(env);
   const lage = lageAus(melious, claude, now);
@@ -119,7 +152,23 @@ export function standardDeps(): KontingentDeps {
       return s.configured && s.enabled ? m.meliousUsage(u) : null;
     },
     melde: async (u, text) => { await (await import('./leitstand.ts')).meldeLeitstand(u, { _id: 'kontingent', title: 'Kontingent' }, text); },
+    auslastung: async () => {
+      const [{ cfg }, { internalHeaders }] = await Promise.all([import('./config.ts'), import('./orchestrator.ts')]);
+      const r = await fetch(`${cfg.bridgeUrl}/internal/auslastung-stand`, { headers: internalHeaders(), signal: AbortSignal.timeout(1500) });
+      if (!r.ok) return null;
+      const j: any = await r.json();
+      const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+      return { fuenfH: n(j.fuenfH), siebenT: n(j.siebenT), reset: typeof j.reset === 'string' ? j.reset.slice(0, 20) : null };
+    },
   };
+}
+
+/** Release 2.0 (B3): Warnungen der Person für 2.0; bei Fehlern leer (Warnungen blockieren nie eine Seite). */
+export async function warnungenFuer(u: User, d: KontingentDeps = standardDeps(), now = Date.now()): Promise<string[]> {
+  try {
+    const [k, a, m] = await Promise.all([kontingent(u, d, now), (d.auslastung ? d.auslastung() : Promise.resolve(null)).catch(() => null), import('./melious.ts')]);
+    return warnungenAus({ melious: k.melious, hartAus: m.meliousHartAus(d.env ?? process.env), konten: k.claude, auslastung: a, now });
+  } catch { return []; }
 }
 
 /** Wird `auto` irgendwo genutzt? Nur dann braucht der Strangstart die (langsamere) Lage. */

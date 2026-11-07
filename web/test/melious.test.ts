@@ -245,7 +245,9 @@ test('Abgleich mit dem Dashboard: ohne Anmeldung aus („geschätzt“); mit Anm
   delete process.env.MELIOUS_DASHBOARD_AUTH;
 });
 
-test('Fix 15.10. challenge: council/hoch → glm-5.3; große Diffs in Stücken an Dateigrenzen, parallel; leere Antwort ist kein ok', async () => {
+test('Fix 15.10. challenge: council/hoch → glm-5.3; große Diffs in Stücken an Dateigrenzen, parallel; leere Antwort ist kein ok', async (t) => {
+  // Der Tempo-Test davor lässt den geschätzten Topf leer laufen — die Untergrenze (B3) ist eigens getestet (release-b3.test.ts).
+  process.env.WERKBANK_MELIOUS_BODEN = '0'; t.after(() => { delete process.env.WERKBANK_MELIOUS_BODEN; });
   const vor = chatAufrufe.length;
   assert.equal((await M.meliousChallenge(u, 'council', 'Sollen wir X tun?')).modell, 'glm-5.3');
   assert.equal((await M.meliousChallenge(u, 'diff', '--- a/a.ts\n+++ b/a.ts\n@@ x', '', true)).modell, 'glm-5.3');

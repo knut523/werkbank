@@ -33,6 +33,7 @@ import { modellReihe, ensembleLauf, FLASH, GLM52, type Art } from './modellwahl.
 import { schaetze, passt, passtJcode, schaetzungText, speicherStand, jcodeTopfGb, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
+import { kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, type Kapazitaet } from './kapazitaet.ts';
 
 export interface Sink {
   write(text: string): void;
@@ -1339,6 +1340,8 @@ export interface TurnRequest {
   onJiraWrite?: (keys: string[], tool: string) => void;   // erfolgreicher schreibender Jira-Aufruf im Chat
   // Weitere Claude-Konten der Person in Reihenfolge (über den internen Kanal von der Werkbank; chat = req.token).
   accounts?: () => Promise<{ id: string; label: string; token: string | null }[]>;
+  /** Kapazitäts-Lage der Person (Werkbank /internal/kapazitaet): Kontingent, Energie, PR-Stau — für die Zulassung von Strang-Zügen. */
+  kapazitaet?: () => Promise<Kapazitaet | null>;
   onMeliousUsage?: (u: MeliousUsage, model: string | null) => void;   // Verbrauch eines Melious-Versuchs (Werkbank zählt Tag/Monat/Modell, Deckel)
   // Plan 165: MCP-Server für eine andere Unterhaltung (Worker), Protokoll je Zug und je Delegation (Werkbank, Melious-Kachel).
   mcpFor?: (convId: string) => Record<string, unknown>;
@@ -1346,7 +1349,8 @@ export interface TurnRequest {
   onDelegation?: (d: DelegationLog) => void;
 }
 
-export interface ZugLog { conv: string; art: 'hauptchat' | 'strang' | 'worker'; phase: string | null; konto: string; anbieter: 'claude' | 'melious'; modell: string; input: number; output: number; energie: number; outcome: string; ms: number; delegation?: string; parent?: string; kette?: boolean }
+/** Ein Versuch fürs Verbrauchsbuch der Werkbank (verbrauch.ts): laeufer/aufgabe optional — ohne liest die Werkbank sie aus dem Modellnamen. */
+export interface ZugLog { conv: string; art: 'hauptchat' | 'strang' | 'worker'; phase: string | null; konto: string; anbieter: 'claude' | 'melious'; modell: string; input: number; output: number; cacheRead?: number; energie: number; outcome: string; ms: number; delegation?: string; parent?: string; kette?: boolean; laeufer?: 'claude' | 'jcode' | 'oc2' | 'melious'; aufgabe?: 'review' | 'review-tief' | 'lesen' | 'bau' | 'sonst' }
 export interface DelegationLog { id: string; conv: string; rolle: Rolle; risiko: Risiko; status: string; modell: string | null; konto: string | null; anbieter: string | null; start: number; ende: number | null; input: number; output: number; energie: number; abweichungen: string[]; pruefungen: { name: string; ok: boolean }[]; prueferUrteil: string | null; urteil: string | null; aufgabe: string }
 
 const MELIOUS_CMD = /^\s*\/melious(?:\s+(an|aus|status|modelle|modell)(?:\s+(\S{1,80}))?)?\s*$/i;
@@ -1463,7 +1467,18 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const mode = autoFor(req);
   const schaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe, jcode: orchMap[key]?.laeufer === 'jcode' });
   const box = () => ({ neu: schaetzung, stand: speicherStand(), vorrang: !!orchMap[key]?.vorrang, jcodeBelegt: jcodeBelegt() });
-  let lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : lockFor(mine, { readonly: !!req.readonly, mode }, box());
+  // Knut 07.11. (kapazitaet.ts): Strang-Züge zusätzlich nach Kontingent, Energie (bauend) und PR-Stau (nur der erste Zug) zulassen.
+  const kapLaden = req.kapazitaet;
+  const kapOpt = { neu: !sessionMap[key], bauend: ['voll', 'bauer', 'release'].includes(orchMap[key]?.profil ?? 'voll') };
+  if (kind === 'strand' && kapLaden) await kapazitaetLaden(req.userId, () => kapLaden());
+  const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
+  const zulassen = (r: ReturnType<typeof lockFor>): ReturnType<typeof lockFor> => {
+    if (r !== 'ok') { if (lockGrund && !lockGrund.startsWith('wartet:') && /Box|Host|Topf/.test(lockGrund)) lockGrund = `wartet: RAM — ${lockGrund}`; return r; }
+    const g = kapGrund();
+    if (g) lockGrund = g;
+    return g ? 'chat-busy' : 'ok';
+  };
+  let lock = kind === 'leitstand' || kind === 'worker' ? 'ok' : zulassen(lockFor(mine, { readonly: !!req.readonly, mode }, box()));
   let gewartet = false;   // die Wartezeit zählt nicht gegen die Zug-Obergrenze (t0; Strang e1ea43fa, Pass B)
   // Warteschlange statt Fehlschlag (Plan 213 S1a, K3): der Zug wartet, bis ein Platz frei ist; der Chat zeigt den Platz.
   if (lock === 'chat-busy' && schlangeAn() && !req.sink.closed) {
@@ -1478,7 +1493,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     // K3: lockGrund gilt für den letzten Aufruf (auch eines anderen Wartenden, z. B. jcode-Topf) — je Wartendem den eigenen merken
     let meinGrund = grund0;
     const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang, ...(schaetzung.topf ? { topf: schaetzung.topf } : {}) }, {
-      frei: () => { if (lives.has(key)) return false; const r = lockFor(meine(), { readonly: !!req.readonly, mode }, box()); meinGrund = lockGrund; return r === 'ok'; },
+      frei: () => { if (lives.has(key)) return false; const r = zulassen(lockFor(meine(), { readonly: !!req.readonly, mode }, box())); meinGrund = lockGrund; return r === 'ok'; },
       grund: () => meinGrund || 'gerade kein Platz',
       geschlossen: () => req.sink.closed || schlangeAbbruch.has(key),
       ohneDeckel: kind === 'strand',   // Strang-Züge enden nie mit „busy“ (Fehlervariante 2, 06.11.2026, Strang e1ea43fa)
@@ -1676,7 +1691,15 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const p = e?.profil ?? 'voll';
     return live.orch && !live.worker && e?.phase && !strandModel && (p === 'voll' || p === 'bauer' || p === 'release') ? (e.phaseC2 ? 'opus' : phaseModell(e.phase).modell) : undefined;
   };
-  let strandClaude = (strandModel?.startsWith('claude:') ? strandModel.slice(7) : undefined) ?? phaseClaude();
+  // Knut 07.11. („I want more than 8“): Leads ohne Modell und ohne Phase standardmäßig auf Sonnet (Opus über die Phasen plan/council/
+  // pass-c/push und für tiefe Stränge) — streckt das Claude-Kontingent. ORCH_LEAD_MODELL (Vorgabe sonnet; „aus“ = wie bisher).
+  const leadVorgabe = (): string | undefined => {
+    const e = orchMap[key];
+    const p = e?.profil ?? 'voll';
+    if (!live.orch || live.worker || strandModel || e?.phase || !(p === 'voll' || p === 'bauer' || p === 'release')) return undefined;
+    return leadModellVorgabe(e?.tiefe);
+  };
+  let strandClaude = (strandModel?.startsWith('claude:') ? strandModel.slice(7) : undefined) ?? phaseClaude() ?? leadVorgabe();
   // Rollen-Profil des Strangs (S6): fest für alle Züge. Leser und Schreiber laufen zuerst über Melious (Knut 15.10.: Standard,
   // nicht nur Überlauf), verteilt über die Modelle ihrer Rolle.
   const profil: Profil = live.orch ? orchMap[key]?.profil ?? 'voll' : 'voll';
@@ -1708,7 +1731,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const claudeAll = accounts.filter((a) => !isMelious(a));
     const claudeTight = claudeAll.some((a) => (ex[a.id]?.until ?? 0) > now);
     const melOk = !!melAcc && e.wantMel !== false && meliousUsable(melAcc, ex, now) && (melAcc.rest ?? 0) > workerMeliousReserve();
-    const claudeOk = !e.noClaude && !claudeTight && workerClaudeBusy(req.userId, key) < workerClaudeMax();
+    const claudeOk = !e.noClaude && !claudeTight && workerClaudeBusy(req.userId, key) < workerClaudeMaxFuer(e.rolle);
     const cq = claudeOk ? planQueue(claudeAll, ex, { conv: key, chatOn: false, overflow: false }).map((a) => ({ ...a, chainModel: e.workerClaude ?? 'haiku' })) : [];
     return [...(melOk ? [melAcc!] : []), ...cq];
   };
@@ -1929,7 +1952,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
           e.phase = pn.phase; e.phaseC2 = pn.c2; e.phaseModelle = []; delete e.phaseNeu;
           delete sessionMap[key];
           saveMap();
-          strandClaude = (strandModel?.startsWith('claude:') ? strandModel.slice(7) : undefined) ?? phaseClaude();
+          strandClaude = (strandModel?.startsWith('claude:') ? strandModel.slice(7) : undefined) ?? phaseClaude() ?? leadVorgabe();
           queue = leadQueue();
           i = -1;
           acct = queue[0];
@@ -2100,6 +2123,21 @@ function workerAppend(rolle: Rolle): string {
 // Zahlen aus der Umgebung: leer/fehlend = Vorgabe, „0“ ist erlaubt (z. B. keine Worker auf Claude).
 const envZahl = (name: string, vorgabe: number, min = 0) => { const v = process.env[name]; const n = Math.floor(Number(v)); return v === undefined || v === '' || !Number.isFinite(n) ? vorgabe : Math.max(min, n); };
 export const workerClaudeMax = () => envZahl('BRIDGE_WORKER_CLAUDE_MAX', 1);
+/** Rein: Lead-Modell ohne Strang-Modell und Phase (Knut 07.11.): tief → opus, sonst ORCH_LEAD_MODELL (Vorgabe sonnet); „aus“/leer → Brücken-Vorgabe. */
+export function leadModellVorgabe(tiefe: string | undefined, env: Record<string, string | undefined> = process.env): string | undefined {
+  const v = String(env.ORCH_LEAD_MODELL ?? 'sonnet').trim().toLowerCase();
+  if (!v || v === 'aus') return undefined;
+  if (tiefe === 'deep') return 'opus';
+  return /^(opus|sonnet|haiku)$/.test(v) ? v : 'sonnet';
+}
+/** Knut 07.11.: Bauer-Worker bauen mit GLM, Claude ist Lead und Prüfer — Claude-Worker für Bauer nur mit BRIDGE_WORKER_CLAUDE_MAX_BAUER (Vorgabe 0). */
+export const workerClaudeMaxFuer = (rolle: string | undefined) => (rolle === 'bauer' ? envZahl('BRIDGE_WORKER_CLAUDE_MAX_BAUER', 0) : workerClaudeMax());
+/** Rein: Modell eines Bauer-Workers — Mechanik/Tests auf glm-5.3-flash, sonst glm-5.3 (BRIDGE_BAUER_MODELL / BRIDGE_BAUER_MECHANIK_MODELL). */
+export function bauerModell(aufgabe: string, env: Record<string, string | undefined> = process.env): string {
+  const name = (v: string | undefined, vorgabe: string) => (v && /^[\w.:/-]{1,80}$/.test(v) ? v : vorgabe);
+  const mechanik = /(?:^|[^\p{L}])(tests?|testfälle|unit-?tests?|mechanisch\p{L}*|umbenenn\p{L}*|rename|formatier\p{L}*|lint\p{L}*|tippfehler|typos?|imports?|kommentare?|fixtures?|snapshots?)(?![\p{L}])/iu.test(String(aufgabe ?? ''));
+  return mechanik ? name(env.BRIDGE_BAUER_MECHANIK_MODELL, 'glm-5.3-flash') : name(env.BRIDGE_BAUER_MODELL, 'glm-5.3');
+}
 export const workerMeliousReserve = () => envZahl('BRIDGE_WORKER_MELIOUS_RESERVE', 16_000);
 export const maxWorkers = () => envZahl('BRIDGE_MAX_WORKERS', 6, 1);
 
@@ -2574,7 +2612,11 @@ export async function ensembleReview(userId: string, convId: string, b: { auftra
     emitStatus(live, `🇪🇺 Review-Ensemble (opencode 2, 3 Prüfer + Verifizierer ${VERIFIZIERER})${bereich ? `: ${bereich}` : ''}`);
     try {
       const wach = wachHalten(live);   // Pass B, A2: das Ensemble läuft bis ~30 min im MCP-Aufruf des Leads
-      const e = await ensembleLaufen({ mel, cwd, auftrag, bereich, knapp: b.knapp === true, abbruch: () => live.abort.signal.aborted, kontext: key, buchen: (u, m) => live.req!.onMeliousUsage?.(u, m) }).finally(wach);
+      const e = await ensembleLaufen({ mel, cwd, auftrag, bereich, knapp: b.knapp === true, abbruch: () => live.abort.signal.aborted, kontext: key, buchen: (u, m) => {
+        live.req!.onMeliousUsage?.(u, m);
+        // Verbrauchsbuch (B4): jeder Ensemble-Prüfer als Versuch des Strangs, Läufer OpenCode 2.
+        try { live.req!.onTurnLog?.({ conv: live.req!.convId, art: 'worker', phase: 'ensemble', konto: mel.id, anbieter: 'melious', laeufer: 'oc2', aufgabe: 'review', modell: `${m} (opencode2, ensemble)`, input: u.input + u.cacheRead, output: u.output, cacheRead: u.cacheRead, energie: Math.round(energieOf(u, m, mel.faktoren)), outcome: 'ok', ms: 0, parent: key }); } catch { /* Messung ist optional */ }
+      } }).finally(wach);
       return e.ok || e.verifizierer.ok ? { ok: true, text: e.text } : { ok: false, status: 502, error: `Ensemble ohne Ergebnis: ${e.grund ?? 'unbekannt'}\n${e.text}` };
     } catch (err: any) {
       if (err?.leer) return { ok: true, text: String(err.message) };
@@ -2880,7 +2922,8 @@ export async function startDelegation(userId: string, convId: string, b: { rolle
   }
   // Lead-Zug inzwischen zu Ende (Re-Review N7 / Pass C 3): nicht mehr starten, Angelegtes wegräumen.
   if (d.aborted || lives.get(parent) !== lead) { d.status = 'abgebrochen'; d.ende = Date.now(); await dropWorktree(d).catch(() => {}); delegs.delete(d.id); return { ok: false, status: 409, error: 'Der Zug ist inzwischen zu Ende — nichts gestartet.' }; }
-  registerWorker(d, ROLLEN_SETUP[rolle]);
+  // Knut 07.11. (Council Tempo, „Knut's decision“): Bauer auf GLM — glm-5.3 für Code, glm-5.3-flash für Mechanik/Tests.
+  registerWorker(d, rolle === 'bauer' ? { ...ROLLEN_SETUP.bauer, modell: `melious:${bauerModell(d.aufgabe)}` } : ROLLEN_SETUP[rolle]);
   d.done = delegationLauf(d);
   log('delegation gestartet', { id: d.id, parent, rolle, risiko, cwd: d.cwd });
   return { ok: true, id: d.id, text: `Delegation ${d.id} gestartet (${rolle}, Risiko ${risiko}${d.wt ? `, Unter-Worktree ${d.wt.dir}, Zweig ${d.wt.branch}` : ''}). Ergebnis mit delegation_stand — der Worker endet spätestens mit deinem Zug.` };

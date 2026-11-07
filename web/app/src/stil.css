@@ -293,3 +293,11 @@ p { margin: 0 0 var(--s1); }
 .themen-lage li { display: flex; flex-wrap: wrap; gap: .25rem .75rem; align-items: baseline; }
 .themen-lage .lage-zeile { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; font: inherit; color: inherit; }
 .themen-lage .lage-knut .lage-dran b { color: var(--warn, #b45309); }
+
+/* B4: Verbrauchsbuch */
+.verbrauch-tabelle { width: 100%; border-collapse: collapse; margin: .4rem 0 1rem; font-size: .92rem; }
+.verbrauch-tabelle caption { text-align: left; font-weight: 600; padding: .2rem 0; }
+.verbrauch-tabelle th, .verbrauch-tabelle td { text-align: left; padding: .25rem .4rem; border-bottom: 1px solid var(--linie, #e3e3e3); }
+.verbrauch-tabelle td:not(:first-child):not(:nth-child(2)) { font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) { .verbrauch-tabelle { font-size: .8rem; } .verbrauch-tabelle th, .verbrauch-tabelle td { padding: .2rem .25rem; } }
+.warnungen { margin: .4rem 0; }
