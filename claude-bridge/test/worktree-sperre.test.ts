@@ -52,6 +52,24 @@ test('fremderWorktree: Datei im Worktree eines anderen laufenden Strangs (cwd od
   assert.equal(mod.fremderWorktree('/w/a/z.ts', [], wt), null);
 });
 
+// RB4 (Plan 466, 07.11.): die Sperre ordnete fremde Worktrees falsch zu — b65de461 wurde zweimal mitten im Review gestoppt.
+test('RB4 (a): Pfade außerhalb eines Git-Worktrees (/tmp) sperren nie — weder als Ziel noch als geschriebene Datei des anderen', () => {
+  const tmpA = realpathSync(mkdtempSync(join(tmpdir(), 'rb4-a-'))), tmpB = realpathSync(mkdtempSync(join(tmpdir(), 'rb4-b-')));
+  const r = repo();
+  assert.equal(mod.fremderWorktree(join(tmpA, 'x'), [{ key: 'u:1', dir: r, written: [join(tmpB, 'y')] }]), null, 'zwei Stränge schreiben nach /tmp');
+  assert.equal(mod.fremderWorktree(join(tmpA, 'x'), [{ key: 'u:1', dir: tmpA }]), null, 'Nicht-Git-Ordner als Arbeitsordner sperrt nicht');
+  assert.equal(mod.fremderWorktree(join(r, 'src', 'x.ts'), [{ key: 'u:1', dir: r }]), 'u:1', 'echter Worktree sperrt weiter');
+});
+
+test('RB4 (b): nur was der andere Strang im LAUFENDEN Zug geschrieben hat zählt; die Ablehnung nennt den Pfad', () => {
+  const w = repo(), eigen = repo();
+  const andere = mod.andereLaufendeAus([{ key: 'u:2', userId: 'u', orch: true, worker: false, writtenZug: [] } as any], { key: 'u:1', userId: 'u' } as any, (k) => (k === 'u:2' ? eigen : null));
+  assert.equal(mod.fremderWorktree(join(w, 'src', 'x.ts'), andere), null, 'früherer Zug schrieb in W, jetzt nicht → frei');
+  const jetzt = mod.andereLaufendeAus([{ key: 'u:2', userId: 'u', orch: true, worker: false, writtenZug: [join(w, 'a.ts')] } as any], { key: 'u:1', userId: 'u' } as any, (k) => (k === 'u:2' ? eigen : null));
+  assert.equal(mod.fremderWorktree(join(w, 'src', 'x.ts'), jetzt), 'u:2');
+  assert.equal(mod.ausloeser(join(w, 'src', 'x.ts'), jetzt[0]), join(w, 'a.ts'));
+});
+
 test('Wächter: zweiter Strang darf nicht in den Worktree schreiben, in dem der erste gerade läuft; im eigenen schon; danach frei', async () => {
   const a = repo(), b = repo();
   const convA = randomUUID(), convB = randomUUID();
