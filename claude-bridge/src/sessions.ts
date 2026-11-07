@@ -2537,7 +2537,12 @@ process.once('exit', opencode2Stop);
 /** Gerade laufende lesende Melious-Aufträge (melious_sub, lesende Worker) — ab opencode2Ab() übernimmt opencode 2. */
 let lesendLaufend = 0;
 export const lesendeLaeufe = () => lesendLaufend;
-export const opencode2Jetzt = async (key: string | undefined, env: Record<string, string | undefined> = process.env) => (lesendLaufend >= opencode2Ab(env) ? opencode2Fuer(key, env) : null);
+// Release 2.0 (Lasttest D1): höchstens BRIDGE_OPENCODE2_MAX_JE_SERVER (40) Leser je Server — darüber jcode (eigener Topf).
+export const opencode2MaxGesamt = (env: Record<string, string | undefined> = process.env) => {
+  const n = Math.floor(Number(env.BRIDGE_OPENCODE2_MAX_JE_SERVER));
+  return (String(env.BRIDGE_OPENCODE2_MAX_JE_SERVER ?? '').trim() !== '' && Number.isFinite(n) && n > 0 ? n : 40) * Math.max(1, oc2Ports(env).length);
+};
+export const opencode2Jetzt = async (key: string | undefined, env: Record<string, string | undefined> = process.env) => (lesendLaufend >= opencode2Ab(env) && lesendLaufend <= opencode2MaxGesamt(env) ? opencode2Fuer(key, env) : null);
 
 async function melKonto(live: Live, userId: string): Promise<Account | null> {
   try {

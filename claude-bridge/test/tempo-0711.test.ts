@@ -70,6 +70,13 @@ test('Parität Punkt 11: im Auto-Modus fragt GitHub-Schreiben per Bash (Hook lä
   assert.ok(p.deny.includes('Bash(git merge:*)'));
 });
 
+test('OpenCode 2: höchstens 40 Leser je Server (2 Server = 80), einstellbar', async () => {
+  const { opencode2MaxGesamt } = await import('../src/sessions.ts');
+  assert.equal(opencode2MaxGesamt({}), 80);
+  assert.equal(opencode2MaxGesamt({ BRIDGE_OPENCODE2_MAX_JE_SERVER: '30' }), 60);
+  assert.equal(opencode2MaxGesamt({ BRIDGE_OPENCODE2_PORTS: '47811', BRIDGE_OPENCODE2_MAX_JE_SERVER: 'x' }), 40);
+});
+
 test('Harte Obergrenze BRIDGE_MAX_PARALLEL_CHATS gilt weiter neben der Schätzung', () => {
   const vorher = process.env.BRIDGE_MAX_PARALLEL_CHATS;
   process.env.BRIDGE_MAX_PARALLEL_CHATS = '12';
