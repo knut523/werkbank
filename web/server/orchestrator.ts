@@ -185,14 +185,14 @@ export function statusMark(text: string): 'fertig' | 'braucht Antwort' | 'blocki
   return v === 'fertig' ? 'fertig' : v === 'braucht antwort' ? 'braucht Antwort' : v === 'blockiert' ? 'blockiert' : v === 'läuft' ? 'läuft' : null;
 }
 
-export interface StrandState { running: boolean; interrupted: boolean; queued?: { pos: number; since: number; grund?: string } | null; turn: { start: number; end: number | null; outcome: string | null; modell?: string; grund?: string } | null }
+export interface StrandState { running: boolean; interrupted: boolean; queued?: { pos: number; since: number; grund?: string } | null; turn: { start: number; end: number | null; outcome: string | null; modell?: string; grund?: string; sperren?: { waechter: number; klassifikator: number; grund: string } } | null }
 export interface LastMsg { fromUser: boolean; text: string; error: boolean; at: number }
 
 /**
  * Status eines Strangs (rein, testbar). Reihenfolge: Startfehler → läuft (Brücke) → abgebrochen (Neustart) → letzte
  * Nachricht noch nicht bei der Brücke → Ausgang des Zuges → Status-Marke der Antwort.
  */
-export type AutoCause = 'limit' | 'timeout' | 'interrupted' | 'lost' | 'busy' | 'rate_limit' | 'ohne_status';
+export type AutoCause = 'limit' | 'timeout' | 'interrupted' | 'lost' | 'busy' | 'rate_limit' | 'ohne_status' | 'sperre';
 
 export function orchStatus(run: { startError?: string | null; startedAt: Date | number; lastSentAt?: Date | number | null }, s: StrandState | null | undefined, last: LastMsg | null, now = Date.now()): { status: OrchStatus; reason: string; cause?: AutoCause } {
   if (run.startError) return { status: 'failed', reason: `Start fehlgeschlagen: ${run.startError}` };
@@ -233,6 +233,10 @@ export function orchStatus(run: { startError?: string | null; startedAt: Date | 
   const mark = statusMark(last.text);
   if (mark === 'fertig') return { status: 'done', reason: 'Agent meldet „fertig“' };
   if (mark === 'blockiert') return { status: 'failed', reason: 'Agent meldet „blockiert“' };
+  // Council 07.11. (6): keine stillen Stopps — hat der Wächter im letzten Zug etwas abgelehnt oder der Auto-Modus ≥ 3-mal, und meldet der
+  // Strang nicht „fertig“, ist er blockiert, mit dem letzten Grund (kein automatisches „weiter“ — das liefe in dieselbe Sperre).
+  const sp = s.turn.sperren;
+  if (sp && (sp.waechter > 0 || sp.klassifikator >= 3)) return { status: 'failed', reason: `blockiert: ${sp.grund || 'Sperre'} (${[sp.waechter ? `${sp.waechter}× Wächter` : '', sp.klassifikator ? `${sp.klassifikator}× Auto-Modus` : ''].filter(Boolean).join(', ')}) — Grund ansehen, dann \`send <id> …\` mit anderem Weg`, cause: 'sperre' };
   // Plan §23 T8 / §24 A2 (für alle Stränge; ORCH_OHNE_STATUS=aus schaltet ab): ohne Marke, mit „läuft“ oder mit „braucht Antwort“
   // ohne etwas an Knut/Hauptchat im Stand-Block → automatisch weiter (höchstens OHNE_STATUS_MAX-mal), statt über Nacht zu parken.
   // Pass B (Runde 5, C2): nur, wenn das automatische „weiter“ auch wirklich kommt (Takt an, Zugende < 6 h, Strang < 14 Tage) — sonst
@@ -334,6 +338,7 @@ export type AutoDecision = { action: 'none' | 'wait' | 'send' | 'stop'; key?: st
 export function autoWeiter(run: AutoRun, st: { cause?: AutoCause }, s: StrandState | null | undefined, last: LastMsg | null, ctx: AutoCtx): AutoDecision {
   const cause = st.cause;
   if (!cause) return { action: 'none', why: 'kein technisches Zugende' };
+  if (cause === 'sperre') return { action: 'none', why: 'blockiert durch eine Sperre — ein „weiter“ liefe in dieselbe Sperre' };
   if (run.reviewedAt) return { action: 'none', why: 'geprüft' };
   if (run.reviewReadyAt) return { action: 'none', why: 'review_ready gemeldet' };
   if (run.autoStopped) return { action: 'none', why: 'Deckel erreicht' };

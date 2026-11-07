@@ -53,6 +53,23 @@ test('Zulassung: Kontingent, Energie (nur bauend), PR-Stau (nur neuer Strang); o
   assert.equal(prDeckel({}), 6); assert.equal(prDeckel({ BRIDGE_PR_DECKEL: '0' }), 0); assert.equal(prDeckel({ BRIDGE_PR_DECKEL: 'x' }), 6);
 });
 
+test('Bedingung 6: Routine-Baubefehle freigegeben, harte Sperren bleiben (Deny geht vor), abschaltbar', async () => {
+  const { ROUTINE_ALLOW, routineAllowAn, ORCH_DENY } = await import('../src/tools.ts');
+  for (const r of ['Bash(npm test:*)', 'Bash(node --test:*)', 'Bash(git commit:*)']) assert.ok(ROUTINE_ALLOW.includes(r), r);
+  assert.ok(!ROUTINE_ALLOW.some((r) => /push|merge|reset|rebase|curl|ssh|env/i.test(r)), 'nichts Gefährliches in der Allowlist');
+  assert.ok(ORCH_DENY.some((r) => /^Bash\(git (\* )?push/.test(r)), 'Push bleibt gesperrt');
+  assert.equal(routineAllowAn({}), true); assert.equal(routineAllowAn({ BRIDGE_ROUTINE_ALLOW: 'aus' }), false);
+});
+
+test('Parität Punkt 11: im Auto-Modus fragt GitHub-Schreiben per Bash (Hook läuft dort nicht), PR anlegen per gh nie; Lesen frei', async () => {
+  const { autoSettings } = await import('../src/sessions.ts');
+  const p = autoSettings().permissions;
+  for (const r of ['Bash(git push:*)', 'Bash(git * push*)', 'Bash(gh pr comment:*)', 'Bash(gh api * -X *)']) assert.ok(p.ask.includes(r), r);
+  assert.ok(p.deny.includes('Bash(gh pr create:*)'));
+  assert.ok(!p.ask.some((r) => r === 'Bash(gh api:*)' || r === 'Bash(gh pr view:*)'), 'GitHub lesen bleibt frei');
+  assert.ok(p.deny.includes('Bash(git merge:*)'));
+});
+
 test('Harte Obergrenze BRIDGE_MAX_PARALLEL_CHATS gilt weiter neben der Schätzung', () => {
   const vorher = process.env.BRIDGE_MAX_PARALLEL_CHATS;
   process.env.BRIDGE_MAX_PARALLEL_CHATS = '12';

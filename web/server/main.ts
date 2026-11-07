@@ -22,7 +22,7 @@ import { startAgentRun, chatUrl, ticketPrompt, startChatAgent, refreshChatRuns, 
 import { parseReview, reviewQueue, reviewComment, END_TEXT, markValid } from './review.ts';
 import { paketNachAntwort, deliver as deliverOrch, messageText } from './orchestrator.ts';
 import { nachfrageText, nidAus, type NachfrageKontext, type NachfrageArt } from './nachfrage.ts';
-import { startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane, statusSchatten, sendWarteMs, gruendlichOrch, worktreeBelegt, questions as orchQuestions } from './orchestrator.ts';
+import { internalHeaders, startOrch, listOrch, showOrch, sendOrch, reviewOrch, startAutoWeiter, startStatusTick, askKnut, listQuestions, getQuestion, answerQuestion, withdrawQuestion, runs as orchRuns, strandStates, nachtbau, g0Blocked, g0Repos, injectBridge, injectStateBridge, nachsendenInChat, setThema, etaMediane, statusSchatten, sendWarteMs, gruendlichOrch, worktreeBelegt, questions as orchQuestions } from './orchestrator.ts';
 import { pruefe, protokolliere, g0Text, g0Optionen, vorbauAus, setzeLeseQuelle, type VorbauErgebnis } from './vorbau.ts';
 import { themaOf, THEMEN } from './themen.ts';
 import { karte as uebersichtKarte, gruppieren, paketBasis, replyText, kopfAntwortEintragen, AUF_UEBERSICHT, offenFuerKnut, janein } from './uebersicht.ts';
@@ -37,7 +37,7 @@ import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, meldeBedarf, hinweisFreigabe, hinweisMelious, meldeLeitstand, activeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID, bodenGrund } from './melious.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
-import { repoFakten, reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin } from './freigabe.ts';
+import { repoFakten, reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin, bauGateAn, bauGateUrteil } from './freigabe.ts';
 import { berichtKopf, execSummary } from './berichtkopf.ts';
 import { readBericht as readBerichtDatei, reviewDir } from './bericht.ts';
 import { readBericht, paketDatei } from './bericht.ts';
@@ -1678,7 +1678,7 @@ async function inboxAntworten(u: User, id: string, b: any): Promise<any> {
     const det: any = await reviewDetail(d);
     const head = String(det?.repo?.head ?? '');
     if (!head || !head.startsWith(String(e.daten.commit))) throw new HttpError(409, 'Der Stand hat sich geändert — neu ansehen und dann freigeben.');
-    const f = await freigeben(u, d, { head, patchId: det.repo.patchId ?? null }, undefined, log);
+    const f = await freigeben(u, d, { head, patchId: det.repo.patchId ?? null }, undefined, log, bauGateAn() ? (x, h) => bauGateBruecke(u, x, h) : undefined);
     await hinweisFreigabe(u, f, d).catch(() => {});
     antwortGezaehlt('push', weg);
   } else if (e.art === 'vaultfrage') {
@@ -2434,7 +2434,7 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/freigabe$/, async (req, res, m) => {
   const u = await needAdmin(req);
   const d = await reviewStrand(u, m[1]);
   const b = await body(req);
-  const f = await freigeben(u, d, { head: b.head, patchId: b.patchId ?? null }, undefined, log);
+  const f = await freigeben(u, d, { head: b.head, patchId: b.patchId ?? null }, undefined, log, bauGateAn() ? (x, h) => bauGateBruecke(u, x, h) : undefined);
   antwortGezaehlt('push', 'ui');
   await hinweisFreigabe(u, f, d).catch(() => {});
   send(res, 200, f);
@@ -3902,6 +3902,19 @@ async function themenLageFuer(u: User) {
   for (const x of bedarf) { const id = String(x.strand?.id ?? ''); if (id) bedarfJe.set(id, (bedarfJe.get(id) ?? 0) + 1); }
   return themenLage(offen.zeilen as any[], erledigt.zeilen as any[], { bedarfJe });
 }
+/** Council 07.11. (Bedingung 4): Bau-Gate über die Brücke; ein grünes Ergebnis je Kopf wird am Strang gemerkt (kein zweiter Lauf). */
+async function bauGateBruecke(u: User, d: any, head: string): Promise<{ ok: boolean; text: string }> {
+  if (d.bauGate?.head === head && d.bauGate.ok) return { ok: true, text: d.bauGate.text };
+  let j: any = null;
+  try {
+    const r = await fetch(`${cfg.bridgeUrl}/internal/strang-pruefen`, { method: 'POST', headers: { ...internalHeaders(), 'content-type': 'application/json' }, body: JSON.stringify({ userId: u.id, conv: d.conv }), signal: AbortSignal.timeout(12 * 60_000) });
+    j = JSON.parse((await r.text()).trim() || 'null');
+  } catch { j = null; }
+  const v = bauGateUrteil(j, head);
+  await orchRuns().updateOne({ _id: d._id }, { $set: { bauGate: { head, ok: v.ok, text: v.text.slice(0, 1500), at: new Date() } } }).catch(() => {});
+  log('bau-gate', { user: u.id, strand: String(d._id), head: head.slice(0, 12), ok: v.ok });
+  return v;
+}
 /** Verbrauchsbuch (B4): Stränge der letzten 31 Tage mit Zustand (fertig = abgenommen oder fertig gemeldet). */
 async function verbrauchRuns(u: User) {
   const docs: any[] = await orchRuns().find({ userId: u.id, startedAt: { $gte: new Date(Date.now() - 31 * 86400_000) } } as any)
@@ -4565,7 +4578,7 @@ registerV2(on, {
   zustaende: (u) => strandStates(u) as Promise<Map<string, any>>,
   themenLage: (u) => themenLageFuer(u),   // B2
   warnungen: (u) => warnungenFuer(u),   // B3
-  verbrauch: (u) => verbrauchView(u, () => verbrauchRuns(u)),   // B4
+  verbrauch: async (u) => ({ ...(await verbrauchView(u, () => verbrauchRuns(u))), warnungen: await warnungenFuer(u) }),   // B4 (+ Warnung Verbrauch > Nachladen)
   etaAuswertung: async (u) => {
     // 60 s je Person zwischengespeichert — die Auswertung ist Geschichte, kein Live-Wert.
     const c = etaCache.get(u.id);

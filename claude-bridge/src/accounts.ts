@@ -260,10 +260,10 @@ export function planQueue(accounts: Account[], ex: Exhausted, o: { conv: string;
 
 /** Release 2.0 (B3): harter Schalter der Brücke, unabhängig von der Werkbank. */
 export const meliousHartAus = (env: Record<string, string | undefined> = process.env) => String(env.BRIDGE_MELIOUS ?? '').trim().toLowerCase() === 'aus';
-/** Council 07.11. (8): Energie-Untergrenze in % (BRIDGE_MELIOUS_BODEN, Vorgabe 20) — darunter keine neuen Melious-Läufe. */
+/** Notgrenze in % (BRIDGE_MELIOUS_BODEN, Vorgabe 5 — Hauptsitzung 07.11.: 20 % aufgehoben) — darunter keine neuen Melious-Läufe. */
 export function meliousBoden(env: Record<string, string | undefined> = process.env): number {
   const v = String(env.BRIDGE_MELIOUS_BODEN ?? '').trim(), n = Number(v);
-  return v !== '' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : 20;
+  return v !== '' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : 5;
 }
 /** Unter dem Boden? Nur mit bekanntem Füllstand (0…1, von der Werkbank: echt oder geschätzt); unbekannt zählt nicht. */
 export const unterBoden = (fuell: unknown, env: Record<string, string | undefined> = process.env) => typeof fuell === 'number' && Number.isFinite(fuell) && fuell * 100 < meliousBoden(env);

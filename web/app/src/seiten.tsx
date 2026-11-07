@@ -1000,7 +1000,7 @@ const AUFGABE_DE: Record<string, string> = { review: 'Review regulär', 'review-
 interface VSumme { laeufer: Laeufer; laeufe: number; versuche: number; input: number; output: number; cacheRead: number; energie: number; ms: number }
 interface VLauf { key: string; strand: string | null; titel: string; laeufer: Laeufer; modelle: string[]; aufgabe: string; ergebnis: 'fertig' | 'abgebrochen' | 'offen'; input: number; output: number; cacheRead: number; energie: number; ms: number; versuche: number; letzter: number }
 interface VDaten { nurAdmin?: boolean; heute: VSumme[]; woche: VSumme[]; vergleich: { aufgabe: string; laeufer: Laeufer; n: number; tokensMedian: number; energieMedian: number; msMedian: number }[];
-  ausreisser: { key: string; titel: string; aufgabe: string; laeufer: Laeufer; wert: 'tokens' | 'energie'; ist: number; median: number; faktor: number }[]; laeufe: VLauf[]; quelle?: string }
+  ausreisser: { key: string; titel: string; aufgabe: string; laeufer: Laeufer; wert: 'tokens' | 'energie'; ist: number; median: number; faktor: number }[]; laeufe: VLauf[]; quelle?: string; warnungen?: string[] }
 const zahlK = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toLocaleString('de-DE', { maximumFractionDigits: 1 })} Mio.` : n >= 10_000 ? `${Math.round(n / 1000).toLocaleString('de-DE')} Tsd.` : Math.round(n).toLocaleString('de-DE'));
 const vDauer = (ms: number) => (ms >= 3_600_000 ? `${(ms / 3_600_000).toLocaleString('de-DE', { maximumFractionDigits: 1 })} h` : `${Math.max(0, Math.round(ms / 60_000))} min`);
 const tok = (x: { input: number; output: number; cacheRead: number }) => Math.max(0, x.input - x.cacheRead) + x.output;
@@ -1024,6 +1024,7 @@ export function Verbrauch() {
     <div className="seite">
       <h1>Verbrauch</h1>
       <p className="klein gedimmt">Je Lauf echte Zahlen aus der Brücke (Tokens, Melious-Energie, Dauer) — keine Schätzung, wo es echte Zahlen gibt. Ein Lauf = ein Unter-Chat samt seiner Worker oder eine Gegenprüfung.</p>
+      {!!d.warnungen?.length && <div className="warnungen" role="alert">{d.warnungen.map((w) => <p key={w} className="klein hinweis-warn">⚠ {w}</p>)}</div>}
       {d.ausreisser.length > 0 && <div className="warnungen" role="alert">{d.ausreisser.map((a) => (
         <p key={`${a.key}-${a.wert}`} className="klein hinweis-warn">⚠ Ausreißer: „{a.titel}“ ({AUFGABE_DE[a.aufgabe] ?? a.aufgabe}, {LAEUFER_DE[a.laeufer]}) brauchte {zahlK(a.ist)} {a.wert === 'tokens' ? 'Tokens' : 'Energie'} — {a.faktor.toLocaleString('de-DE')} × der Median ({zahlK(a.median)}).</p>))}</div>}
       <Abschnitt id="v-summen" titel="Je Läufer" erklaerung="Heute (seit Mitternacht) und die letzten 7 Tage.">

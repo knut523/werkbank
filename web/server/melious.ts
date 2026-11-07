@@ -123,15 +123,15 @@ export const MELIOUS_AUS = 'Melious ist ausgeschaltet („erlaubt“ in der Einr
 /** Release 2.0 (B3): harter Schalter WERKBANK_MELIOUS=aus — überstimmt „erlaubt“ jeder Person; kein Aufruf, kein Konto für die Brücke. */
 export const meliousHartAus = (env: Record<string, string | undefined> = process.env) => String(env.WERKBANK_MELIOUS ?? '').trim().toLowerCase() === 'aus';
 export const MELIOUS_HART_AUS = 'Melious ist im Betrieb hart ausgeschaltet (WERKBANK_MELIOUS=aus) — alles läuft auf Claude.';
-/** Council 07.11. (8): Energie-Untergrenze in % (WERKBANK_MELIOUS_BODEN, Vorgabe 20) — darunter keine neuen Melious-Läufe, Claude übernimmt. */
+/** Notgrenze in % (WERKBANK_MELIOUS_BODEN, Vorgabe 5 — Hauptsitzung 07.11.: 20 % aufgehoben) — darunter keine neuen Melious-Läufe, Claude übernimmt. */
 export function meliousBoden(env: Record<string, string | undefined> = process.env): number {
   const v = String(env.WERKBANK_MELIOUS_BODEN ?? '').trim(), n = Number(v);
-  return v !== '' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : 20;
+  return v !== '' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : 5;
 }
 /** Rein: Sperrgrund, wenn der Füllstand (0…1) unter dem Boden liegt; unbekannt sperrt nicht. */
 export function bodenGrund(fuell: number | null | undefined, geschaetzt: boolean, boden = meliousBoden()): string | null {
   if (typeof fuell !== 'number' || !Number.isFinite(fuell) || fuell * 100 >= boden) return null;
-  return `Energie ${geschaetzt ? 'geschätzt ' : ''}bei ${Math.round(fuell * 100)} % — unter der Untergrenze ${boden} %, keine neuen Melious-Läufe (Claude übernimmt; nachladen)`;
+  return `Energie ${geschaetzt ? 'geschätzt ' : ''}bei ${Math.round(fuell * 100)} % — unter der Notgrenze ${boden} %, keine neuen Melious-Läufe (Claude übernimmt; nachladen)`;
 }
 
 /** Einstellungen ohne Schlüssel (für Browser und Brücke). */

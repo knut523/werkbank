@@ -189,6 +189,35 @@ const ORCH_TOOLS = [
     },
   },
   {
+    // Release 2.0 (Parität Terminal ↔ v2-Hauptchat, Punkt 1): derselbe Ereignisstrom wie `orch inbox` / `orch wait`, dieselbe Lage wie `orch lage`.
+    name: 'orch_ereignisse',
+    description: 'Ereignisse der Stränge (fertig, wartet, blockiert, hängt, Deckel, review_ready, Rückfragen an Knut, Bedarf) statt orch_list zu pollen. Ohne Argumente: ungelesene auflisten und quittieren. warteS (1–300): bis zum ersten Ereignis warten. nurLesen=true: nicht quittieren.',
+    inputSchema: { type: 'object', properties: { warteS: { type: 'number' }, nurLesen: { type: 'boolean' } } },
+    run: async (a: any) => {
+      const zeile = (e: any) => `${String(e.at ?? '').slice(11, 16)} ${e.kind} · ${e.strand ? `„${e.strand.title}“ (${e.strand.id}) · ` : ''}${e.text}`;
+      const warte = Math.max(0, Math.min(300, Number(a.warteS) || 0));
+      if (warte && a.nurLesen !== true) {
+        const j = await call('/internal/orchestrator/wait', { timeoutS: warte }, (warte + 30) * 1000);
+        return j.timeout ? `Kein neues Ereignis in ${warte} s.` : j.ereignisse.map(zeile).join('\n');
+      }
+      const j = await call('/internal/orchestrator/inbox', {});
+      if (!j.ereignisse.length) return 'Keine ungelesenen Ereignisse.';
+      if (a.nurLesen !== true) await call('/internal/orchestrator/inbox', { ack: j.ereignisse.map((e: any) => String(e._id)) });
+      return j.ereignisse.map(zeile).join('\n');
+    },
+  },
+  {
+    name: 'orch_lage',
+    description: 'Status nach Thema: eine Zeile je Thema — läuft · hängt · wartet auf Knut · fertig · erledigt, und wer dran ist (Knut, Hauptsitzung, Unter-Chat).',
+    inputSchema: { type: 'object', properties: {} },
+    run: async () => {
+      const j = await call('/internal/orchestrator/lage', {});
+      if (!j.zeilen.length) return 'Keine Themen mit offenen oder kürzlich erledigten Strängen.';
+      const z = (n: number, t: string) => (n ? `${n} ${t}` : '');
+      return j.zeilen.map((x: any) => `${x.thema} — ${[z(x.laeuft, 'läuft'), z(x.wartetKnut, 'wartet auf Knut'), z(x.haengt, 'hängt'), z(x.blockiert, 'blockiert'), z(x.fertig, 'fertig'), z(x.erledigt, 'erledigt')].filter(Boolean).join(' · ') || 'nichts offen'} — dran: ${x.dran}${x.als ? ` — ${x.warum}: „${x.als.titel}“ (${x.als.id})` : ''}`).join('\n');
+    },
+  },
+  {
     name: 'orch_review',
     description: 'Strang ablegen (wird nicht mehr automatisch fortgesetzt). Ersetzt NICHT Knuts Prüfung: ein fertiger Strang bleibt in Knuts Review-Schlange auf „Heute“, bis Knut „Passt“ klickt.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' }, note: { type: 'string' } }, required: ['id'] },

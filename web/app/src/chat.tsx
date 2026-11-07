@@ -11,14 +11,15 @@ import { OLAF_KURZ, OLAF_MEHR } from './begriffe.ts';
 interface Nachricht { id: string; rolle: 'ich' | 'assistent'; text: string; at: string; status: string; fehler?: string | null }
 interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string; vorlage?: string | null }[]; conv?: string | null; vorlagen?: { name: string; label: string; beschreibung: string }[]; eingereiht?: { text: string; at: string }[] }
 
-/** Runde 7 (Abgleich: „Hauptchat starten“ fehlte in 2.0, 1 004 Züge hängen am Hauptchat): derselbe Weg wie in der alten Werkbank. */
+/** Runde 7 (Abgleich: „Hauptchat starten“ fehlte in 2.0, 1 004 Züge hängen am Hauptchat): derselbe Weg wie in der alten Werkbank —
+ *  Release 2.0: mit dem Übergabe-Entwurf (offene Unter-Chats, Rückfragen, Entscheidungen), sonst lehnt der Server mit 400 ab. */
 function HauptchatStarten({ fertig }: { fertig: () => void }) {
   const [laeuft, setLaeuft] = useState(false);
   const [fehler, setFehler] = useState<string | null>(null);
   return (
     <div className="hinweis">
       <p>Gerade ist kein Hauptchat aktiv.</p>
-      <button type="button" className="knopf haupt klein" disabled={laeuft} onClick={async () => { setLaeuft(true); setFehler(null); try { await schicke('api/leitstand/start', {}); fertig(); } catch (e: any) { setFehler(e.message); } finally { setLaeuft(false); } }}>{laeuft ? 'Startet …' : 'Hauptchat starten'}</button>
+      <button type="button" className="knopf haupt klein" disabled={laeuft} onClick={async () => { setLaeuft(true); setFehler(null); try { const h = await hole<{ text?: string }>('api/leitstand/handover'); await schicke('api/leitstand/start', { handoverText: String(h?.text ?? '').trim() || 'Hauptchat aus Werkbank 2.0 gestartet — Übergabe-Entwurf leer.' }); fertig(); } catch (e: any) { setFehler(e.message); } finally { setLaeuft(false); } }}>{laeuft ? 'Startet …' : 'Hauptchat starten'}</button>
       {fehler && <p className="fehlertext klein">{fehler}</p>}
     </div>
   );

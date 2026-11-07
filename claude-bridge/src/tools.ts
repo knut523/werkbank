@@ -91,6 +91,17 @@ const BASH_KEEP_CONFIRM = [
  * dem Klassifikator und auch gegen ein Hook-„allow“; darum hier **keine** Regel für den Vault oder Jira (die bleiben beim
  * „ja“ im Chat). Absolute Pfade beginnen mit //; die Konfigurationen je Person ergänzt die Brücke (homesRoot).
  */
+/**
+ * Release 2.0 (Parität Terminal ↔ v2-Hauptchat, Punkt 11): im Auto-Modus läuft der Wächter-Hook nicht — GitHub-Schreiben per Bash
+ * muss deshalb als Regel fragen (Karte/„ja“), sonst entschiede allein der Klassifikator. PRs nur über das Werkzeug github_schreiben
+ * (pr_oeffnen mit Gate, wie require-pr-open im Terminal): `gh pr create` ist gesperrt. GitHub-Lesen bleibt frei.
+ */
+export const AUTO_GITHUB_ASK = [
+  'Bash(git push:*)', 'Bash(git * push*)', 'Bash(gh pr comment:*)', 'Bash(gh pr review:*)', 'Bash(gh pr edit:*)', 'Bash(gh pr close:*)', 'Bash(gh pr ready:*)',
+  'Bash(gh issue comment:*)', 'Bash(gh release:*)', 'Bash(gh api * -X *)', 'Bash(gh api * --method *)', 'Bash(gh api * -f *)', 'Bash(gh api * -F *)', 'Bash(gh api * --input *)',
+];
+export const AUTO_GITHUB_DENY = ['Bash(gh pr create:*)'];
+
 export const AUTO_DENY = [
   // Kein git push / gh api / gh pr create hier: Deny schlägt auch ein „ja“ im Chat — GitHub-Schreiben fragt stattdessen
   // (BASH_GITHUB_WRITE), GitHub-Lesen ist frei (Knut, 06.10.2026).
@@ -111,6 +122,18 @@ export const AUTO_DENY = [
  * (`git -C <dir> push`, `git -c x=y push` — genau der Fall, den orchestratorBlock prüft). `Bash(git * push*)` deckt sie
  * mit ab; die Muster fürs Setzen von Zweigen und Remotes sind ebenso gebaut.
  */
+/**
+ * Council 07.11. (Bedingung 6): Routine-Baubefehle bauender Stränge (voll/bauer/release) im Auto-Modus ohne Klassifikator-Frage —
+ * Tests, Builds, Typprüfung, lesendes Git, add/commit im eigenen Worktree. Deny-Regeln gehen in Claude Code vor Allow, die harten
+ * Strang-Sperren (ORCH_DENY, Push, Merge, Zugangsdaten) bleiben also wirksam. BRIDGE_ROUTINE_ALLOW=aus schaltet ab.
+ */
+export const ROUTINE_ALLOW: string[] = [
+  'Bash(npm test:*)', 'Bash(npm run test:*)', 'Bash(npm run build:*)', 'Bash(npm run lint:*)', 'Bash(npm ci:*)',
+  'Bash(node --test:*)', 'Bash(npx vite build:*)', 'Bash(npx tsc --noEmit:*)', 'Bash(npx vitest run:*)',
+  'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git rev-parse:*)',
+];
+export const routineAllowAn = (env: Record<string, string | undefined> = process.env) => String(env.BRIDGE_ROUTINE_ALLOW ?? '').trim().toLowerCase() !== 'aus';
+
 export const ORCH_DENY: string[] = [
   'Bash(*scripts/orch*)', 'Bash(orch-cli:*)',
   'Bash(*x-werkbank-internal*)', 'Bash(*WERKBANK_INTERNAL_TOKEN*)',
@@ -150,7 +173,7 @@ export const ORCH_MCP_TOOLS: string[] = [
   'mcp__vault-search__vault-related', 'mcp__vault-search__vault-search',
   'mcp__werkbank__delegieren', 'mcp__werkbank__delegation_stand', 'mcp__werkbank__delegation_urteil',
   'mcp__werkbank__phase_wechseln', 'mcp__werkbank__orch_start', 'mcp__werkbank__orch_list', 'mcp__werkbank__orch_show',
-  'mcp__werkbank__orch_send', 'mcp__werkbank__orch_gruendlich', 'mcp__werkbank__orch_thema', 'mcp__werkbank__orch_review', 'mcp__werkbank__orch_ask', 'mcp__werkbank__orch_council', 'mcp__werkbank__orch_bedarf',
+  'mcp__werkbank__orch_send', 'mcp__werkbank__orch_gruendlich', 'mcp__werkbank__orch_thema', 'mcp__werkbank__orch_review', 'mcp__werkbank__orch_ask', 'mcp__werkbank__orch_council', 'mcp__werkbank__orch_bedarf', 'mcp__werkbank__orch_ereignisse', 'mcp__werkbank__orch_lage',
   'mcp__werkbank__orch_questions', 'mcp__werkbank__zusagen', 'mcp__werkbank__zusage_eintragen', 'mcp__werkbank__zusage_aendern',
   'mcp__werkbank__thema_setzen', 'mcp__werkbank__hygiene_list', 'mcp__werkbank__hygiene_snooze', 'mcp__werkbank__skills_list',
   'mcp__werkbank__review_ready', 'mcp__werkbank__jira_update', 'mcp__werkbank__jira_update_many', 'mcp__werkbank__agent_start',

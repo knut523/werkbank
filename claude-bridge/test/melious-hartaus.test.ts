@@ -32,15 +32,15 @@ test('BRIDGE_MELIOUS=aus: kein Melious-Konto, auch nicht in der Ersatzkette', ()
   assert.equal(planQueue(acc, {}, { conv: 'c', chatOn: true, kette: true }).some(isMelious), false);
 });
 
-test('Füllstand unter dem Boden (Vorgabe 20 %): kein Melious-Konto; unbekannter Füllstand sperrt nicht; Boden einstellbar', () => {
+test('Füllstand unter der Notgrenze (Vorgabe 5 %): kein Melious-Konto; unbekannter Füllstand sperrt nicht; Grenze einstellbar', () => {
   delete env.BRIDGE_MELIOUS; delete env.BRIDGE_MELIOUS_BODEN;
-  assert.equal(meliousBoden(), 20);
-  assert.equal(normalizeAccounts(liste(0.19), 'x').some(isMelious), false);
-  assert.equal(normalizeAccounts(liste(0.2), 'x').some(isMelious), true);
+  assert.equal(meliousBoden(), 5);
+  assert.equal(normalizeAccounts(liste(0.04), 'x').some(isMelious), false);
+  assert.equal(normalizeAccounts(liste(0.05), 'x').some(isMelious), true);
   assert.equal(normalizeAccounts(liste(), 'x').some(isMelious), true);
   env.BRIDGE_MELIOUS_BODEN = '10';
   assert.equal(unterBoden(0.15), false);
   assert.equal(normalizeAccounts(liste(0.15), 'x').some(isMelious), true);
   env.BRIDGE_MELIOUS_BODEN = 'quatsch';
-  assert.equal(meliousBoden(), 20);
+  assert.equal(meliousBoden(), 5);
 });

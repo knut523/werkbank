@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './profil.ts';
 import { freigabeMerken } from './freigabe.ts';
-import { orchRoots, LIVE_ORDNER, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
+import { AUTO_GITHUB_ASK, AUTO_GITHUB_DENY, ROUTINE_ALLOW, routineAllowAn, orchRoots, LIVE_ORDNER, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
@@ -90,6 +90,8 @@ interface Live {
   workDir?: string;
   autoCalls: Map<string, { name: string; input: Record<string, unknown>; sub: boolean }>;
   denials: string[];
+  /** Council 07.11. (6): Ablehnungen dieses Zugs — Wächter (Hook) und Auto-Modus-Klassifikator, mit dem letzten Grund. */
+  sperren: Sperren;
   // Mehrere Claude-Konten: hat dieser Versuch rate_limit gemeldet (mit Reset), und ist schon etwas passiert?
   rateLimited: { resetsAt?: number } | null;
   rateLimitReset?: number;
@@ -178,7 +180,8 @@ export function autoSettings(): { permissions: { deny: string[]; ask: string[]; 
   // ask: GitHub schreiben aus dem Hauptchat (R29 D, S5) fragt immer — der Klassifikator darf es nicht durchwinken.
   // R31: Betrieb, Geheimnis-Vermittler, Coolify-Schreiben und Coolify per Bash ebenso — immer die Karte;
   // ebenso Jira schreiben über die Werkbank (anlegen auf beiden Seiten, nachziehen einzeln/gesammelt).
-  return { permissions: { deny: [...AUTO_DENY, `Read(/${homes}/*/.credentials.json)`, `Edit(/${homes}/**)`], ask: ['mcp__werkbank__github_schreiben', ...R31_KLICK, ...COOLIFY_ASK, ...(process.env.WERKBANK_JIRA_OHNE_KLICK === 'on' ? [] : JIRA_OHNE_KLICK_ASK)], disableBypassPermissionsMode: 'disable' } };
+  // Release 2.0 (Parität, Punkt 11): GitHub-Schreiben per Bash fragt auch im Auto-Modus (der Hook läuft dort nicht), gh pr create nie.
+  return { permissions: { deny: [...AUTO_DENY, ...AUTO_GITHUB_DENY, `Read(/${homes}/*/.credentials.json)`, `Edit(/${homes}/**)`], ask: ['mcp__werkbank__github_schreiben', ...AUTO_GITHUB_ASK, ...R31_KLICK, ...COOLIFY_ASK, ...(process.env.WERKBANK_JIRA_OHNE_KLICK === 'on' ? [] : JIRA_OHNE_KLICK_ASK)], disableBypassPermissionsMode: 'disable' } };
 }
 
 const ansi = (s: unknown) => String(s ?? '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -246,7 +249,8 @@ const LESER_MCP = ['vault-search', 'werkbank'];   // Suche im Vault (Lesen); rev
 export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte auf Deutsch, knapp und in Markdown. Du kannst nur lesen (Read, Grep, Glob) — schreibe und ändere nichts. Belege jede Aussage mit Datei:Zeile. Was du nicht findest, sagst du offen, statt zu raten.';
 // laeufer: 'jcode' = Strang läuft über jcode (Konzept J1; eigener Speicher-Topf). turn.grund: warum ein Zug mit „busy“ endete
 // (Grund der Parallelgrenze; Stränge warten seit dem Schlangen-Fix 06.11. ohne Zeitdeckel und enden dort nie mit „busy“).
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; laeufer?: 'jcode'; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; grund?: string };
+export interface Sperren { waechter: number; klassifikator: number; grund: string }
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; laeufer?: 'jcode'; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; grund?: string; sperren?: Sperren };
   // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
   // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
   auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string };
@@ -894,6 +898,9 @@ function handleMessage(live: Live, msg: any) {
         const call = live.autoCalls.get(msg.tool_use_id);
         live.autoCalls.delete(msg.tool_use_id);
         live.denials.push(String(msg.tool_name ?? '?'));
+        // Im Auto-Modus läuft der Hook nicht — eine Deny-Regel (Strang-Sperre) zählt deshalb wie der Wächter, sonst als Klassifikator.
+        if (/rule|deny/i.test(String(msg.decision_reason_type ?? ''))) live.sperren.waechter++; else live.sperren.klassifikator++;
+        live.sperren.grund =`Auto-Modus hat ${String(msg.tool_name ?? '?')} abgelehnt (${String(msg.decision_reason_type ?? 'Klassifikator')})`;
         log('auto abgelehnt', { conv: live.key, tool: msg.tool_name, grund: msg.decision_reason_type });
         if (live.mode === 'auto') emitStatus(live, `🛑 Auto-Modus hat abgelehnt: ${(call?.sub ? '↳ ' : '') + statusLine(String(msg.tool_name ?? ''), call?.input ?? {})}`);
       }
@@ -1189,6 +1196,7 @@ function makeGuard(live: Live) {
       // Knut 06.11. (Sperrenliste): jede Sperre in einem Strang mit Grund ins Log — vorher stand dort nur „denials: [Bash]“, und
       // niemand konnte belegen, woran ein Commit oder ein DB-Test scheiterte. Zugangsdaten in Adressen geschwärzt.
       if (live.orch && permissionDecision === 'deny') log('strang gesperrt', { conv: live.key, tool, grund: reason.slice(0, 160), befehl: tool === 'Bash' ? schwaerzeBefehl(String(toolInput.command ?? '')).slice(0, 200) : undefined, eskaliert: !!escalated });
+      if (live.orch && permissionDecision === 'deny') { live.sperren.waechter++; live.sperren.grund = `Wächter: ${reason.slice(0, 160)}`; }
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: reason } };
     };
     // Profil „release“ (Plan 213): Live-Schalten zusätzlich gesperrt; `git -C <Worktree> merge …` erlaubt — vor den Strang-Sperren,
@@ -1553,7 +1561,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     lastKind: 'none', lastStatus: '', sawStreamText: false, usage: { input: 0, output: 0, cacheRead: 0 }, turnTimer: null, confirmChain: Promise.resolve(),
     readonly: !!req.readonly, t0: gewartet ? Date.now() : req.receivedAt ?? Date.now(), times: {}, progressShown: new Map(), onSkill: req.onSkill,
     jiraCalls: new Map(), inboxCalls: new Set(), onJiraWrite: req.onJiraWrite, home: '',
-    mode, autoCalls: new Map(), denials: [], rateLimited: null, progressed: false, schaetzung,
+    mode, autoCalls: new Map(), denials: [], sperren: { waechter: 0, klassifikator: 0, grund: '' }, rateLimited: null, progressed: false, schaetzung,
     subagents: new Map(), subagentStarts: 0, agentTypes: new Map(), orch: kind === 'strand' || kind === 'worker', leit: kind === 'leitstand', worker: kind === 'worker', ...(kind === 'strand' || kind === 'leitstand' ? { req } : {}),   // Lead auch: melious_sub braucht Konten und Buchung des Zugs
     // Posteingang ab Zugbeginn: Nachreichen geht auch, während Kontext-Paket und Konten noch laden (Bild-Prüfung Plan 154).
     inbox: nachreichenOn() ? newInbox([]) : null,
@@ -1798,7 +1806,10 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // behält bewusst seine Rückfrage für Vault und Jira.
   if (live.mode === 'auto' && live.orch) {
     const deny = strandDeny(profil);
-    options.settings = { ...(options.settings ?? {}), permissions: { ...((options.settings as any)?.permissions ?? {}), deny: [...(((options.settings as any)?.permissions?.deny) ?? []), ...deny] } };
+    // Council 07.11. (6): Routine-Baubefehle bauender Stränge freigeben (Deny geht vor Allow — die harten Sperren bleiben).
+    const allow = !live.worker && (profil === 'voll' || profil === 'bauer' || profil === 'release') && routineAllowAn() ? ROUTINE_ALLOW : [];
+    const perm = (options.settings as any)?.permissions ?? {};
+    options.settings = { ...(options.settings ?? {}), permissions: { ...perm, deny: [...(perm.deny ?? []), ...deny], ...(allow.length ? { allow: [...(perm.allow ?? []), ...allow] } : {}) } };
   }
   applyHome(home, env, options);
   if (resume) options.resume = resume;
@@ -2022,7 +2033,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       live.carry = [];
       if (live.inbox?.open) closeInbox(live.inbox);
       mark(live, 'ende');
-      if ((live.orch || live.leit) && orchMap[key]?.kind !== 'beendet') setTurn(key, { ...orchMap[key]?.turn, start: orchMap[key]?.turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? (live.abort.signal.aborted ? 'aborted' : 'ok') });
+      if ((live.orch || live.leit) && orchMap[key]?.kind !== 'beendet') setTurn(key, { ...orchMap[key]?.turn, start: orchMap[key]?.turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? (live.abort.signal.aborted ? 'aborted' : 'ok'),
+        ...(live.sperren.waechter || live.sperren.klassifikator ? { sperren: { ...live.sperren } } : { sperren: undefined }) });
       log('turn end', { conv: key, usage: live.usage, ms: live.times, ...(live.subagentStarts ? { teilagenten: live.subagentStarts } : {}), ...(live.denials.length ? { denials: live.denials } : {}) });
       // Worker leben höchstens so lange wie der Lead-Zug (Council 165, 3).
       if (live.req) abortWorkersOf(key);
@@ -2202,6 +2214,26 @@ async function workerLage(req: TurnRequest, userId: string, self = ''): Promise<
   const mineL = [...lives.values()].filter((l) => l.userId === userId);
   const text = `Melious: ${mel ? `Rest ≈ ${fmtN(Math.round(mel.rest ?? 0))} Energie (Reserve für die Lead-Ersatzkette ${fmtN(workerMeliousReserve())}) — für Worker ${melious ? 'frei' : 'gesperrt'}` : 'nicht eingerichtet'} · Claude: ${claudeAll.length - tight.length}/${claudeAll.length} Konten frei${tight.length ? ` (erschöpft: ${tight.map((a) => a.label).join(', ')})` : ''}, Worker auf Claude ${busy}/${workerClaudeMax()} — ${claude ? 'frei' : 'gesperrt'} · laufend: ${mineL.filter((l) => !l.worker).length} Lead-/Chat-Züge, ${mineL.filter((l) => l.worker).length} Worker.`;
   return { melious, claude, text };
+}
+
+/**
+ * Council 07.11. (Bedingung 4, Bau-Gate): die Brücke prüft den Stand eines Strangs selbst — dieselben Prüfbefehle wie bei Workern
+ * (.werkbank am Integrations-Commit, `git diff --check`), im Arbeitsordner, ohne Geheimnisse, höchstens 10 min. Die Werkbank gibt
+ * einen Push nur nach grünem Ergebnis für genau diesen Kopf frei.
+ */
+export async function strangPruefen(userId: string, conv: string): Promise<{ ok: true; head: string; eingerichtet: boolean; gruen: boolean; ergebnisse: PruefErgebnis[] } | { ok: false; status: number; error: string }> {
+  const key = `${safeId(userId)}:${safeId(conv)}`;
+  const e = orchMap[key];
+  if (!e || e.kind === 'worker') return { ok: false, status: 404, error: 'Strang unbekannt.' };
+  if (lives.has(key)) return { ok: false, status: 409, error: 'Der Strang arbeitet gerade — erst prüfen, wenn sein Zug zu Ende ist.' };
+  if (!(await isGitDir(e.dir))) return { ok: false, status: 400, error: 'Arbeitsordner ist kein Git-Ordner.' };
+  const fest = await strangFest(key, e.dir);
+  const head = (await runCmd('git', ['-C', e.dir, 'rev-parse', 'HEAD'], { cwd: e.dir })).out.trim();
+  const mb = fest ? (await runCmd('git', ['-C', e.dir, 'merge-base', 'HEAD', fest.sha], { cwd: e.dir })).out.trim() : '';
+  if (!mb) return { ok: false, status: 409, error: 'Keine Basis (Integrationszweig) gefunden — so lässt sich der Stand nicht prüfen.' };
+  const r = await pruefenSauber(e.dir, mb, { fest, maxMs: 600_000 });
+  log('bau-gate', { conv: key, head: head.slice(0, 12), eingerichtet: r.eingerichtet, rot: r.ergebnisse.filter((p) => !p.ok).map((p) => p.name) });
+  return { ok: true, head, eingerichtet: r.eingerichtet, gruen: r.ergebnisse.every((p) => p.ok), ergebnisse: r.ergebnisse };
 }
 
 /** Integrations-Commit einmal je Strang festhalten (Re-Review N2): spätere Worker und der Phasenwechsel lesen Prüfbefehle immer von dort. */

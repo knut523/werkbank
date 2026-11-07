@@ -21,7 +21,7 @@ const uhr = (t: number) => new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/
 export function kapazitaetGrund(k: Kapazitaet | null, o: { neu: boolean; bauend: boolean }, env: Record<string, string | undefined> = process.env): string {
   if (!k || !kapazitaetAn(env)) return '';
   if (k.claudeFrei === false) return `wartet: Kontingent — kein Claude-Konto frei${k.claudeFreiAb ? ` (wieder ab ${uhr(k.claudeFreiAb)})` : ''}`;
-  if (o.bauend && k.unterBoden) return `wartet: Energie — Melious bei ${k.meliousProzent ?? '?'} % (unter der Untergrenze), nachladen`;
+  if (o.bauend && k.unterBoden) return `wartet: Energie — Melious bei ${k.meliousProzent ?? '?'} % (unter der Notgrenze), nachladen`;
   const d = prDeckel(env);
   if (o.neu && k.prWartend !== null && k.prWartend >= d) return `wartet: PR-Stau — ${k.prWartend} PRs warten auf Knuts Go (Deckel ${d}); Sammel-Freigabe auf „Jetzt“`;
   return '';

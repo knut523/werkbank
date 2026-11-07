@@ -8,7 +8,7 @@ import { wb } from './db.ts';
 import type { User } from './auth.ts';
 import { autoWahl, kontingentSchwelle, modellVorgaben, type KontingentLage, type Zuarbeit } from './tiefe.ts';
 
-export interface MeliousTeil { restProzent: number | null; geschaetzt: boolean; sperre: string | null; monat: { model: string; energie: number; turns: number }[]; monatProzent: number | null; fuellProzent?: number | null }
+export interface MeliousTeil { restProzent: number | null; geschaetzt: boolean; sperre: string | null; monat: { model: string; energie: number; turns: number }[]; monatProzent: number | null; fuellProzent?: number | null; heuteEnergie?: number | null; nachfuellungTag?: number | null }
 export interface KontoTeil { id: string; label: string; erschoepftBis: number | null; zuegeHeute: number }
 export interface Kontingent { melious: MeliousTeil | null; claude: KontoTeil[]; schwelle: number; wahl: Zuarbeit; auto: string[]; zeile: string }
 
@@ -42,6 +42,9 @@ export function warnungenAus(o: { melious: MeliousTeil | null; hartAus: boolean;
   if (o.hartAus) w.push('Melious ist hart ausgeschaltet (WERKBANK_MELIOUS=aus) — alles läuft auf Claude.');
   const m = o.melious;
   if (m?.sperre) w.push(`Melious gesperrt: ${m.sperre}.`);
+  // Hauptsitzung 07.11.: Verbrauch heute über dem Tagesnachladen → der Topf sinkt (Notgrenze 5 % ist die einzige harte Sperre).
+  if (m && typeof m.heuteEnergie === 'number' && typeof m.nachfuellungTag === 'number' && m.nachfuellungTag > 0 && m.heuteEnergie > m.nachfuellungTag)
+    w.push(`Melious-Verbrauch heute ${Math.round(m.heuteEnergie).toLocaleString('de-DE')} Energie liegt über dem Tagesnachladen (${m.nachfuellungTag.toLocaleString('de-DE')}) — der Topf sinkt.`);
   if (m && typeof m.fuellProzent === 'number' && m.fuellProzent < 10) w.push(`Melious-Energie ${m.geschaetzt ? 'geschätzt ' : ''}bei ${m.fuellProzent} % (unter 10 %) — nachladen.`);
   if (o.konten.length && o.konten.every((k) => k.erschoepftBis && k.erschoepftBis > o.now)) w.push(`Alle Claude-Konten erschöpft — das erste wieder ab ${uhr(Math.min(...o.konten.map((k) => k.erschoepftBis!)))}.`);
   else {
@@ -117,6 +120,7 @@ export async function kontingent(u: User, d: KontingentDeps, now = Date.now()): 
     monat: (use.modelle ?? []).filter((m: any) => m.energie > 0 || m.turns > 0).map((m: any) => ({ model: m.model, energie: m.energie, turns: m.turns })),
     monatProzent: typeof use.monat?.pct === 'number' ? use.monat.pct : null,
     fuellProzent: typeof use.energie?.fuell === 'number' ? Math.round(use.energie.fuell * 100) : null,
+    heuteEnergie: typeof use.heute?.energie === 'number' ? use.heute.energie : null, nachfuellungTag: typeof use.energie?.nachfuellungTag === 'number' ? Math.round(use.energie.nachfuellungTag) : null,
   } : null;
   const schwelle = kontingentSchwelle(env);
   const lage = lageAus(melious, claude, now);

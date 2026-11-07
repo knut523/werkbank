@@ -10,7 +10,7 @@
 import { freigabeVerbrauchen } from './freigabe.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
+import { strangPruefen, handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
 import { auslastung } from './auslastung.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
@@ -486,6 +486,14 @@ const server = createServer(async (req, res) => {
       return json(res, 200, r);
     }
     // Mehrere Claude-Konten (nur für Werkbank-Web): Zustand je Person (erschöpft bis …) und Test eines Kontos.
+    // Council 07.11. (Bedingung 4): Bau-Gate — die Brücke prüft den Stand eines Strangs (pruefen) vor der Push-Freigabe.
+    if (req.method === 'POST' && url.pathname === '/internal/strang-pruefen') {
+      if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
+      const b = await readBody(req);
+      const userId = String(b.userId ?? ''), conv = String(b.conv ?? '');
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId) || !/^[A-Za-z0-9_-]{1,64}$/.test(conv)) return json(res, 400, { error: 'Ungültige Person oder Unterhaltung.' });
+      return langeAntwort(res, async () => { const r = await strangPruefen(userId, conv); return r.ok ? r : { error: r.error, status: r.status }; });
+    }
     // Release 2.0 (B3): Claude-Auslastung (cswap, 5 h / Woche) für die Warnungen in 2.0 — ohne Unterhaltung, nur Zahlen.
     if (req.method === 'GET' && url.pathname === '/internal/auslastung-stand') {
       if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
