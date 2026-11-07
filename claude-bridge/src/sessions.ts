@@ -8,7 +8,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, realpathSync, statSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
 import { strangSandbox } from './sandbox.ts';
-import { schreibzielProblem } from './jcode-pre-tool.ts';
+import { schreibzielProblem, geheimHinterLink } from './jcode-pre-tool.ts';
 import { tmpdir, homedir } from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:path';
@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './profil.ts';
 import { freigabeMerken } from './freigabe.ts';
-import { orchRoots, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
+import { orchRoots, LIVE_ORDNER, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
@@ -1095,6 +1095,7 @@ export function strangFreigabe(userId: string, convId: string, pfad: string, bis
   // Pass A/C (Fix-Runde 2, P2/S11): nur unter den Arbeitswurzeln der Stränge (oder olaf-docs) und nie ein Ordner mit Zugangsdateien
   // (.env, .env.local …) — den Zugang kann auch der Hauptchat erteilen, auf Bitte eines Strangs, den PR-Text steuern könnte.
   const unterWurzel = [...orchRoots(), ...docsOrdner()].some((r) => { try { const w = realpathSync(r); return real === w || real.startsWith(w + '/'); } catch { return false; } });
+  if (LIVE_ORDNER.test(real)) throw Object.assign(new Error('Die Live-Instanz (werkbank-dev) gibt es nicht als Zugang — dort geänderter Code gälte nach dem nächsten Neustart.'), { status: 400 });   // Pass B2 (A3)
   if (!unterWurzel) throw Object.assign(new Error(`Zugang nur unter den Arbeitsordnern der Stränge (${orchRoots().join(', ')}) oder olaf-docs.`), { status: 400 });
   const envDatei = zugangsdateiIn(real);
   if (envDatei) throw Object.assign(new Error(`Ordner mit Umgebungsdateien (.env*) gibt es nicht als Zugang (${envDatei}).`), { status: 400 });
@@ -1595,6 +1596,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const r = await strangJcode(live, req, freshPrompt()).catch((e: any) => ({ ok: false, grund: String(e?.message ?? e).slice(0, 200), modell: undefined })).finally(wach);
     if (r.ok || live.abort.signal.aborted) {
       if (r.ok && orchMap[key]?.laeuferFallback) { delete orchMap[key].laeuferFallback; saveMap(); }
+      // Pass B2 (A2): eine frühere Claude-Sitzung kennt diesen jcode-Zug nicht — ein späterer Rückfall beginnt neu mit dem Verlauf
+      // (freshPrompt), statt eine veraltete Sitzung fortzusetzen.
+      if (r.ok && sessionMap[key]) { delete sessionMap[key]; saveMap(); }
       mark(live, 'ende');
       // Ein Zeitlimit bleibt ein Zeitlimit (der Hauptchat setzt dann mit „weiter“ fort), nicht „abgebrochen“.
       if (orchMap[key]) setTurn(key, { ...orchMap[key].turn, start: orchMap[key].turn?.start ?? live.t0, end: Date.now(), outcome: r.ok ? 'ok' : live.outcome ?? 'aborted', ...(r.modell ? { modell: r.modell } : {}) });
@@ -2488,6 +2492,11 @@ export async function ensembleLaufen(o: EnsAufruf): Promise<EnsErgebnis & { prot
   if (d.code !== 0) throw new Error(`Diff ${o.bereich} nicht lesbar: ${d.out.trim().slice(0, 200)}`);
   // Gegenprüfung 06.11.: leerer Bereich (z. B. Delta ohne neue Änderungen) — nichts zu prüfen, statt drei leerer Läufe.
   if (o.bereich && !d.out.trim()) throw Object.assign(new Error(`Keine Änderungen in ${o.bereich} — nichts zu prüfen, kein Ensemble gelaufen.`), { leer: true });
+  // Pass B2 (A1): die opencode-2-Prüfer haben keinen Lese-Hook — zeigt ein versionierter Symlink (z. B. aus dem PR) auf einen
+  // Geheimnis-Ort, läuft kein Ensemble in diesem Ordner.
+  const links = await runCmd('git', ['-C', o.cwd, 'ls-files', '-s'], { cwd: o.cwd, timeoutMs: 30_000 });
+  const linkPfade = links.out.split('\n').filter((z) => z.startsWith('120000 ')).map((z) => z.split('\t')[1]).filter(Boolean);
+  if (linkPfade.length && geheimHinterLink(linkPfade, o.cwd)) throw new Error('Ein Symlink im Arbeitsordner zeigt auf einen Zugangs-Ort — kein Ensemble in diesem Ordner (selbst prüfen und das im Bericht nennen).');
   const lf = await runCmd('git', ['-C', o.cwd, 'ls-files'], { cwd: o.cwd, timeoutMs: 30_000 });
   if (lf.code !== 0) throw new Error('Arbeitsordner ist kein Git-Worktree.');
   const dateien = lf.out.split('\n').filter(Boolean);

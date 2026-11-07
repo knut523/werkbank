@@ -32,6 +32,9 @@ test('Zugang: nur bestehende Ordner, keine Geheimnis-Orte, höchstens 24 h, unbe
   assert.throws(() => mod.strangFreigabe('u2', C, tief, jetzt + 1000), /Umgebungsdateien.*web\/app\/\.env/);
   const nm = realpathSync(mkdtempSync(join(tmpdir(), 'mit-env-nm-'))); mkdirSync(join(nm, 'node_modules', 'x'), { recursive: true }); writeFileSync(join(nm, 'node_modules', 'x', '.env'), 'X=1');
   assert.equal(mod.strangFreigabe('u2', C, nm, jetzt + 3600_000).pfad, nm, 'node_modules wird nicht durchsucht');
+  // Pass B2 (A3): der Live-Checkout ist weder Zugang noch Strang-Ordner
+  const live = join(realpathSync(mkdtempSync(join(tmpdir(), 'live-'))), 'werkbank-dev', 'claude-bridge'); mkdirSync(live, { recursive: true });
+  assert.throws(() => mod.strangFreigabe('u2', C, live, jetzt + 1000), /Live-Instanz/);
   if (existsSync('/usr/share')) assert.throws(() => mod.strangFreigabe('u2', C, '/usr/share', jetzt + 1000), /Arbeitsordnern/);
   assert.throws(() => mod.strangFreigabe('u2', '33333333-3333-3333-3333-333333333333', ANDERS, jetzt + 1000), /Strang/);
 });

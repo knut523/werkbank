@@ -6,8 +6,8 @@
 // im Code bestätigt.
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, readFileSync, mkdtempSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WB_ROOT, cfg } from './config.ts';
 import { meliousChat, meliousKey, meliousSettings, recordMeliousUsage, MELIOUS_AUS } from './melious.ts';
@@ -15,6 +15,15 @@ import type { User } from './auth.ts';
 
 export const JCODE_BIN = () => process.env.WERKBANK_JCODE_BIN || join(homedir(), '.local', 'bin', 'jcode');
 const SHIM = () => join(WB_ROOT, 'claude-bridge', 'shim');
+// Pass B2 (C2): dieselbe Härtung wie jcodeSpawn der Brücke — Lese-Hook (Geheimnis-Orte, Schreiben nur im Ordner), gh ohne Konto,
+// git ohne Schlüssel und ohne Passwortabfrage; vorher lief der Rückfall der Gegenprüfung nur mit dem Bash-Shim.
+let ghLeer: string | null = null;
+export function jcodeUmgebung(key: string): Record<string, string> {
+  return { PATH: `${SHIM()}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: key,
+    JCODE_HOOK_PRE_TOOL: join(WB_ROOT, 'claude-bridge', 'hooks', 'jcode-pre-tool'), JCODE_HOOK_PRE_TOOL_TIMEOUT_MS: '10000',
+    GH_CONFIG_DIR: (ghLeer ??= mkdtempSync(join(tmpdir(), 'werkbank-gp-gh-'))),
+    GIT_SSH_COMMAND: 'ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=/dev/null -o BatchMode=yes', GIT_TERMINAL_PROMPT: '0' };
+}
 const run = promisify(execFile);
 const REF = /^[0-9a-f]{40}$/;
 
@@ -57,7 +66,7 @@ export async function meliousPassC(u: User, o: { wt: string; basis: string; zwec
   // Modelltest 06.11. (Hauptsitzung): Gegenprüfungen laufen im Wechsel auf DeepSeek (anderer Blick als GLM) und glm-5.3 (zuverlässig beim
   // Hauptrisiko) — nicht mehr fest auf Flash. Das Modell steht in gegenpruefung.md.
   const modell = gegenpruefModell();
-  const env: Record<string, string> = { PATH: `${SHIM()}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: key };
+  const env = jcodeUmgebung(key);
   const out = await new Promise<{ code: number | null; stdout: string; stderr: string }>((res) => {
     // stdin zu (nichts wartet auf Eingabe); nach dem Zeitlimit SIGTERM, 30 s später SIGKILL und spätestens dann fertig.
     const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', '--model', modell, '--tools', 'read,bash,agentgrep', 'run', '--json', jcodePrompt(o.basis, brief.text)], { cwd: o.wt, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });   // eigene Prozessgruppe

@@ -77,7 +77,7 @@ import { timingSafeEqual, randomBytes } from 'node:crypto';
 import { writeJira, checkMcp, mcpState, writeMode, JiraWriteError, dryRun, describe, canWriteJira, duplikateSuchen, anlegenJira, type JiraAction } from './jirawrite.ts';
 import { jiraEventStream, jiraChanged, roadmapChanged } from './events.ts';
 import { buildFeed, prLinks, newQueue, takeDue, parseSyncQuestions, doneIds, notDone, textKey, renderApprovals, replaceWorkBlock, draftBody, feedPath, approvalsPath, writeAtomic, readOr, mtime, startVaultSync, syncLocked, type Approval } from './roadmapauto.ts';
-import { syncGithub, livePrs, GH_ORG, graphql, githubNames } from './github.ts';
+import { syncGithub, livePrs, GH_ORG, graphql, githubNames, githubLoginVon } from './github.ts';
 import { tickerTick, tickerOverview, setTickerSettings, tickerSettings, reviewsCol, reviewErlaubt, reviewLog, vermerkePosted, tickerCol, fixesCol, reviewsNachholen, tickerAus, fixEinreihen, prState } from './prticker.ts';
 import { regelDir, regelVorschlaege } from './regelquelle.ts';
 import { klonPfad, reviewTick, prNowVia, parseKommentar, fussnote, prKontextVia, vorhandenVia, realGit, POSTEN_MIN } from './prreview.ts';
@@ -86,7 +86,7 @@ import { ensemblePassC } from './gegenpruefung.ts';
 import { postReview, statusKommentar, schreibenAus, writeToken, erstelleDraftPr, prOeffnen, type ReviewEvent } from './githubwrite.ts';
 import { ketteModus, starteKette, ketteTick, ketten as ketteCol, publicKette, brichAb as ketteAbbrechen, repoAusTicket, AKTIV as KETTE_AKTIV, type KDeps } from './jirakette.ts';
 import { fuehreAus as githubAktion } from './githubaktion.ts';
-import { fixTick, fixOverview, prLageVia, pushVia, gateVia, freigabeSetzen, fixAblehnenSynchron } from './prfix.ts';
+import { fixTick, fixOverview, prLageVia, pushVia, gateVia, freigabeSetzen, fixAblehnenSynchron, fixAus } from './prfix.ts';
 import { prLage as holePrLage, prLageText, PR_LAGE_AN as prLageAn } from './prlage.ts';
 import { ZWEI_SEITEN_AN as zweiSeitenAn, anlegenEingabe } from './jiraanlegen.ts';
 import { FRAGENPAKET_AN as fragenpaketAn, paketEingabe, paketeCol, neueKennung, paketStand } from './fragenpaket.ts';
@@ -2252,7 +2252,7 @@ async function bedarfAntwortRoute(u: User, id: string, b: any) {
   if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
   const antwort = String(b.antwort ?? '');
   if (!['erteilt', 'erledigt', 'abgelehnt'].includes(antwort)) throw new HttpError(400, 'antwort: erteilt, erledigt oder abgelehnt.');
-  try { const r = await bedarfAntworten(u, id, { antwort: antwort as any, notiz: String(b.notiz ?? '').trim(), dauerMin: Number(b.dauerMin) || undefined }, bedarfDeps); zahlCache.delete(u.id); log('bedarf beantwortet', { user: u.id, id, antwort }); return r; }
+  try { const r = await bedarfAntworten(u, id, { antwort: antwort as any, notiz: String(b.notiz ?? '').trim(), dauerMin: Number(b.dauerMin) || undefined, via: b.via === 'hauptchat' ? 'hauptchat' : 'ui' }, bedarfDeps); zahlCache.delete(u.id); log('bedarf beantwortet', { user: u.id, id, antwort }); return r; }
   catch (e: any) { throw new HttpError(e.status ?? 500, e.message); }
 }
 
@@ -3876,7 +3876,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
     case 'thema': return send(res, 200, await setThema(u, id, b.thema));   // Plan 154, S2: Themen-Gruppe von Hand
     case 'council': return send(res, 200, await councilMelden(u, b));   // Plan §23 T3: Hauptchat-Werkzeug orch_council
     // Bedarfskanal (Knut 06.11.): Hauptchat-Werkzeug orch_bedarf — ohne bedarf: Liste der offenen, mit bedarf + antwort: beantworten.
-    case 'bedarf': return send(res, 200, b.bedarf ? await bedarfAntwortRoute(u, String(b.bedarf), b) : { offen: (await bedarfListe(u)).map((x: any) => ({ id: x._id, art: x.art, text: x.text, pfad: x.pfad ?? null, strang: x.strand, at: x.at })) });
+    case 'bedarf': return send(res, 200, b.bedarf ? await bedarfAntwortRoute(u, String(b.bedarf), { ...b, via: 'hauptchat' }) : { offen: (await bedarfListe(u)).map((x: any) => ({ id: x._id, art: x.art, text: x.text, pfad: x.pfad ?? null, strang: x.strand, at: x.at })) });
   }
 });
 /** Plan §23 T3: Council-Urteil des Hauptchats zu einer gewichtigen Frage (dieselben Prüfungen wie POST /api/v2/council). */
@@ -4495,8 +4495,14 @@ registerV2(on, {
     // Die Liste kennt Kurznamen; Review- und Fix-Schlange arbeiten mit owner/repo (wie der Ticker).
     const voll = prVoll(live.repo, GH_ORG);
     if (art === 'review' || art === 'tief') { const r = await reviewStarten(u, `${voll}#${live.number}`, art === 'tief' ? 'deep' : 'quick'); return { hinweis: r.hinweis }; }
+    // Pass B2 (B1/B2): die Push-Prüfung vergleicht GitHub-Logins (nicht Anzeigenamen), Besitzer ist die klickende Person, und ein
+    // ausgeschalteter Fix-Lauf nimmt nichts an — sonst „startet mit dem nächsten Takt“, und der PR wäre für weitere Fixe gesperrt.
+    const login = githubLoginVon(u.name);
+    if (!login) throw new HttpError(409, 'Für dich ist kein GitHub-Login hinterlegt (WERKBANK_GITHUB_NAMES) — ohne ihn kann ein Fix nie pushen.');
+    if (tickerAus() || fixAus() || cfg.demo) throw new HttpError(409, 'Der Fix-Lauf ist hier ausgeschaltet (PR-Ticker oder Fix aus) — nichts eingereiht.');
+    if (!(await tickerSettings()).autoFix) throw new HttpError(409, '@fix ist in den Ticker-Einstellungen aus — nichts eingereiht.');
     try {
-      const f = await fixEinreihen({ repo: voll, number: live.number, title: live.title, url: live.url, by: u.name, auftrag: art === 'auftrag' ? text : '' });
+      const f = await fixEinreihen({ repo: voll, number: live.number, title: live.title, url: live.url, by: login, ownerId: u.id, auftrag: art === 'auftrag' ? text : '' });
       log('fix eingereiht (workspace)', { user: u.id, pr, art, modus: f.modus });
       return { hinweis: `In der Fix-Schlange (${f.modus === 'trocken' ? 'Trockenlauf' : f.modus === 'frage' ? 'Push erst nach deiner Freigabe' : f.modus === 'auto' ? 'grün → Push ohne Klick' : 'wie @fix'}) — startet mit dem nächsten Takt.` };
     } catch (e: any) { throw new HttpError(e?.status ?? 400, String(e?.message ?? e)); }
@@ -4558,6 +4564,9 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, path: string) {
   if (path === '/v2' || path.startsWith('/v2/')) { base = V2_DIST; rel = path.slice(3) || '/'; index = join(V2_DIST, 'index.html'); }
   const abs = resolve(base, '.' + normalize(decodeURIComponent(rel)));
   const ok = abs.startsWith(base + '/') && existsSync(abs) && statSync(abs).isFile();
+  // Pass B2 (D1): ein fehlendes Bundle (nach dem Release neu gebaut, alter Hash) ist 404 — als index.html (200, text/html) scheiterte
+  // der Modul-Import still und die Seite blieb weiß.
+  if (!ok && /\/assets\//.test(rel)) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-cache' }); res.end('Nicht gefunden (neuer Stand — Seite neu laden).'); return; }
   const file = ok ? abs : index;
   if (!existsSync(file)) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' }); res.end(base === V2_DIST ? 'Werkbank 2.0 nicht gebaut: cd web/app && npm run build' : 'Oberfläche nicht gebaut: cd web && npm run build'); return; }
   res.writeHead(200, {

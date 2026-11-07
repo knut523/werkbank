@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import type { User } from './auth.ts';
 import { wb } from './db.ts';
+import { klasseVon } from './stufe.ts';
 
 export const BEDARF_ARTEN = ['github', 'merge', 'jira', 'deploy', 'zugang', 'recht', 'geheimnis', 'datei', 'entscheidung', 'sonstiges'] as const;
 export type BedarfArt = typeof BEDARF_ARTEN[number];
@@ -66,7 +67,7 @@ export const ERTEILBAR = new Set(['zugang', 'entscheidung']);
 
 /** Antworten (nur wenn noch offen — kein Doppelklick). Reihenfolge nach der Gegenprüfung 06.11.: erst die Freigabe in der Brücke
  *  (scheitert sie, bleibt der Bedarf offen), dann der Status, dann die Nachricht (scheitert sie, wieder offen — Wiederholen geht). */
-export async function bedarfAntworten(u: User, id: string, a: { antwort: BedarfAntwort; notiz: string; dauerMin?: number }, deps: {
+export async function bedarfAntworten(u: User, id: string, a: { antwort: BedarfAntwort; notiz: string; dauerMin?: number; via?: 'ui' | 'hauptchat' }, deps: {
   senden: (u: User, strand: string, text: string) => Promise<unknown>;
   /** Ergebnis: echter Pfad, oder { pfad, neu } (neu = vorher kein gültiger Zugang für den Pfad). */
   freigabe: (u: User, strand: string, pfad: string, bis: Date) => Promise<string | { pfad: string; neu: boolean } | void>;
@@ -79,6 +80,10 @@ export async function bedarfAntworten(u: User, id: string, a: { antwort: BedarfA
   if (!b) throw Object.assign(new Error('Diesen Bedarf gibt es nicht.'), { status: 404 });
   if (b.status !== 'offen') throw Object.assign(new Error('Schon beantwortet — Seite neu laden.'), { status: 409 });
   if (a.antwort === 'erteilt' && !ERTEILBAR.has(b.art)) throw Object.assign(new Error('Erteilen gibt es nur für Zugang und Entscheidung — sonst selbst erledigen („Erledigt“ mit Beleg) oder „Ablehnen“.'), { status: 400 });
+  // Pass B2 (C3): was Knut entscheiden muss (Geld, Recht, Zugang, Außenwirkung, Release), beantwortet der Hauptchat nicht für ihn —
+  // dieselbe Triage wie bei Rückfragen; Knut selbst antwortet in der 2.0 („Für die Hauptsitzung“).
+  if (a.via === 'hauptchat' && b.art === 'entscheidung' && a.antwort !== 'abgelehnt' && klasseVon({ text: String(b.text ?? ''), empfehlung: a.notiz || null }).klasse === 'knut')
+    throw Object.assign(new Error('Das entscheidet Knut (Geld, Recht, Zugang, Außenwirkung oder Release) — stell es ihm als Frage (orch_ask) oder lass ihn in der 2.0 antworten.'), { status: 409 });
   const bis = b.art === 'zugang' && a.antwort === 'erteilt' ? zugangBis(a.dauerMin ?? 240, now) : null;
   const fr = bis ? await deps.freigabe(u, b.strand.id, b.pfad, bis) : null;
   const real = (typeof fr === 'string' ? fr : fr?.pfad) || b.pfad;

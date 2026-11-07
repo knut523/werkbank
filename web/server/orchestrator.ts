@@ -735,7 +735,7 @@ export function mitSendung<T extends Record<string, any>>(update: T, von: 'hand'
 
 // ---------- Plan §24 A1: einreihen statt 409 (Knut 05.11.: „Alle Nudges und Nachsendungen sollen automatisch laufen“) ----------
 export type SendVia = 'hand' | 'leitstand' | 'notiz';
-export interface Ausstehend { id: string; text: string; via: SendVia; at: Date; grund: string }
+export interface Ausstehend { id: string; text: string; via: SendVia; at: Date; grund: string; anschieben?: boolean }
 export const AUSSTEHEND_MAX = 20;
 export function ausstehendEintrag(text: string, via: SendVia, grund: string, at: Date = new Date()): Ausstehend {
   return { id: randomUUID().slice(0, 8).replace(/-/g, '0'), text: String(text).slice(0, 40_000), via, at, grund: String(grund).slice(0, 300) };
@@ -746,10 +746,10 @@ export function ausstehendText(l: Ausstehend[]): string {
   if (s.length <= 1) return s[0]?.text ?? '';
   return `(Werkbank: ${s.length} Nachrichten kamen, während du beschäftigt warst — hier gesammelt, älteste zuerst.)\n\n${s.map((x) => x.text).join('\n\n---\n\n')}`;
 }
-async function einreihen(d: any, msg: string, via: SendVia, grund: string) {
+async function einreihen(d: any, msg: string, via: SendVia, grund: string, anschieben = false) {
   // Pass B (Runde 5, C1): zugestellt wird nur im Auto-Takt — ist er aus, wie früher 409 statt „kommt von selbst an“ (sie käme nie an).
   if (process.env.ORCH_AUTO_WEITER === 'off') throw err(409, `Strang ${String(d._id)}: ${grund} — die automatische Zustellung ist aus; bitte gleich noch einmal senden.`);
-  const e = ausstehendEintrag(msg, via, grund);
+  const e: Ausstehend = { ...ausstehendEintrag(msg, via, grund), ...(anschieben ? { anschieben: true } : {}) };   // Pass B2 (C4): Anschieben geht in der Schlange nicht verloren
   // Neue Nachricht: der Fehlversuchszähler beginnt neu (Knut oder der Hauptchat hat sich gekümmert).
   await runs().updateOne({ _id: d._id }, { $push: { ausstehend: { $each: [e], $slice: -AUSSTEHEND_MAX } } as any, $set: { ausstehendFehler: 0 } });
   return { id: String(d._id), conv: d.conv, url: d.url, eingereiht: true, ausstehendId: e.id, zustellung: `eingereiht (${grund}) — die Werkbank stellt sie beim nächsten freien Zug von selbst zu` };
@@ -768,7 +768,7 @@ export async function ausstehendZustellen(u: User, d: any, deps: { log?: AutoDep
   const liste: Ausstehend[] = (vorher?.value ?? vorher)?.ausstehend ?? [];
   if (!liste.length) return null;
   let r: Awaited<ReturnType<typeof sendOrch>>;
-  try { r = await sendOrch(u, String(d._id), ausstehendText(liste), ausstehendVia(liste)); }
+  try { r = await sendOrch(u, String(d._id), ausstehendText(liste), ausstehendVia(liste), { anschieben: liste.some((x) => x.anschieben) }); }
   catch (e: any) {
     // Gegenprüfung: ohne $slice zurücklegen (sonst fielen inzwischen neu eingereihte weg); Fehlversuche zählen — nach
     // AUSSTEHEND_VERSUCHE lässt der Takt den Strang in Ruhe und der Hauptchat bekommt eine Meldung.
@@ -813,7 +813,7 @@ export async function sendOrch(u: User, id: string, text: string, via: SendVia =
     // der Zug nach seinem Ende als „Nachricht nicht angekommen“), zählt nicht gegen den Deckel (Council R1, Bedingung 5).
     const r = await injectBridge(u, d.conv, msg);
     // Plan §24 A1: nicht mehr 409 nach außen — einreihen, der Takt stellt beim nächsten freien Zug zu.
-    if (!r.ok) return einreihen(d, msg, via, `arbeitet noch, nimmt gerade nichts an: ${r.error}`);
+    if (!r.ok) return einreihen(d, msg, via, `arbeitet noch, nimmt gerade nichts an: ${r.error}`, anschieben);
     // Plan 274 (D4b): jede Nachreichung verfolgen (vorher nur die letzte — eine frühere ging so unbemerkt verloren).
     const eintrag = { id: r.id, text: msg.slice(0, 20_000), at: new Date(), via, done: false };
     await runs().updateOne({ _id: d._id }, mitSendung({ $set: { lastInject: eintrag }, $push: { nachreichungen: { $each: [eintrag], $slice: -10 } } as any, $inc: { injects: 1 } }, 'nachgereicht', eintrag.at));
@@ -823,7 +823,7 @@ export async function sendOrch(u: User, id: string, text: string, via: SendVia =
   if (!d.shared) {
     const k = worktreeKonflikt([worktreeVon(d.cwd)], (await belegte(u, id)).filter((a) => a.status === 'running'));
     // Runde 7 B: Konflikte zählen; Plan §24 A1: einreihen statt 409.
-    if (k) { await runs().updateOne({ _id: d._id }, { $inc: { konflikte: 1 } }); return einreihen(d, msg, via, konfliktText(k)); }
+    if (k) { await runs().updateOne({ _id: d._id }, { $inc: { konflikte: 1 } }); return einreihen(d, msg, via, konfliktText(k), anschieben); }
   }
   const sentAt = await deliver(u, d.conv, msg);
   if (via === 'notiz') {

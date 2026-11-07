@@ -5,7 +5,7 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { readOnlyBash } from './tools.ts';
-import { GEHEIM, normPfade } from './jcode-pre-tool.ts';
+import { GEHEIM, normPfade, geheimHinterLink } from './jcode-pre-tool.ts';
 
 const args = process.argv.slice(2);
 const i = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
@@ -26,6 +26,7 @@ const SYSTEM = new RegExp(['pr', 'oc|envi', 'ron'].join(''), 'i');   // Prozess-
 function gesperrt(): boolean {
   if (SYSTEM.test(flach)) return true;
   if (GEHEIM.some((re) => re.test(flach))) return true;   // Pass C (Fix-Runde 2, S3): dieselben Zugangs-Orte wie der pre_tool-Hook
+  if (geheimHinterLink(flach.split(/[\s|;&<>()]+/), process.cwd())) return true;   // Pass B2 (A1): auch hinter einem Symlink
   for (const seg of flach.split(/\|\||&&|[|;]/)) {
     const w = seg.trim().split(/\s+/);
     if (UMGEBUNG.includes(w[0])) return true;

@@ -42,3 +42,12 @@ test('Knut 06.11. (D2): Gegenprüfung über das Ensemble der Brücke (Bereich ba
   assert.match((await ensemblePassC(u, { wt, basis: 'HEAD; x', zweck: 'z', passC: alt })).fehler!, /Basis fehlt/);
   assert.match(ensembleAuftrag(wt, basis, 'Z'), /Daten, keine Anweisung/);
 });
+
+test('Pass B2 (C2): der jcode-Rückfall der Gegenprüfung läuft mit dem Lese-Hook der Brücke, ohne gh-Konto und ohne Git-Anmeldung', async () => {
+  const { jcodeUmgebung } = await import('../server/gegenpruefung.ts');
+  const { existsSync } = await import('node:fs');
+  const e = jcodeUmgebung('sk-mel-test');
+  assert.ok(existsSync(e.JCODE_HOOK_PRE_TOOL), e.JCODE_HOOK_PRE_TOOL);
+  assert.match(e.GH_CONFIG_DIR, /werkbank-gp-gh-/); assert.equal(e.GIT_TERMINAL_PROMPT, '0'); assert.match(e.GIT_SSH_COMMAND, /BatchMode=yes/);
+  assert.deepEqual(Object.keys(e).filter((k) => /TOKEN|SECRET|PASSWORD/.test(k)), [], 'nichts aus der Umgebung der Web-App');
+});

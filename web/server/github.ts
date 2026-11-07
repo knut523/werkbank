@@ -12,6 +12,12 @@ export const GH_ORG = process.env.WERKBANK_GITHUB_ORG || 'WirStrom1';
 const API = () => (process.env.WERKBANK_GITHUB_API || 'https://api.github.com').replace(/\/$/, '');
 
 /** GitHub-Login → Vorname (für „wer ist dran“). WERKBANK_GITHUB_NAMES="login=Name,…" ergänzt/überschreibt. */
+/** Pass B2 (B1): GitHub-Login zum Namen einer Person (Umkehrung von githubNames; Vorname oder voller Name) — null, wenn keiner hinterlegt. */
+export function githubLoginVon(name: string, names = githubNames()): string | null {
+  const voll = name.trim().toLowerCase(), vor = voll.split(/\s+/)[0] ?? '';
+  return Object.entries(names).find(([, n]) => [voll, vor].includes(n.trim().toLowerCase()))?.[0] ?? null;
+}
+
 export function githubNames(): Record<string, string> {
   const out: Record<string, string> = { knut523: 'Knut', bizarrochris: 'Christoph' };
   for (const p of (process.env.WERKBANK_GITHUB_NAMES ?? '').split(',')) {

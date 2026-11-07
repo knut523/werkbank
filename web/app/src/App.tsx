@@ -1,16 +1,32 @@
 // Werkbank 2.0: die Hülle — Kopf (Name, EINE Zahl, „?“, Chat), links vier Bereiche (Handy: Leiste unten), Chat als Seitenleiste
 // auf jeder Seite. Nach dem Login landet man immer auf „Jetzt“, nie im leeren Chat (428 D2).
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { Component, lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { abmelden, hole, schicke } from './api.ts';
 import { Kontext, useApp, type AppKontext } from './kontext.ts';
 import { ChatLeiste } from './chat.tsx';
 import { Anmelden, AlleChats, Themen, Thema, Arbeit, Begriffe, Dokument, Dokumente, Entscheidungen, Entschieden, Erledigt, Jetzt, Mehr, PrDetail, Prs, Suche, Freigabe } from './seiten.tsx';
 import { ALT_PFADE } from './mehr.ts';
 import { UnterChat } from './unterchat.tsx';
-import { Laedt, vergessen, vorab } from './teile.tsx';
+import { Fehler, Laedt, vergessen, vorab } from './teile.tsx';
 import { istIntern, logisch, rel } from './format.ts';
 
-const AltSeite = lazy(() => import('./alt.tsx').then((m) => ({ default: m.AltSeite })));
+// Pass B2 (D1): nach einem Release fehlt das alte Bundle — einmal neu laden (Merker gegen eine Schleife), sonst zeigt die Fehlergrenze es an.
+const NEU_GELADEN = 'v2-neu-geladen';
+const AltSeite = lazy(() => import('./alt.tsx').then((m) => { try { sessionStorage.removeItem(NEU_GELADEN); } catch { /* egal */ } return { default: m.AltSeite }; }, (e) => {
+  let schon = false; try { schon = sessionStorage.getItem(NEU_GELADEN) === '1'; sessionStorage.setItem(NEU_GELADEN, '1'); } catch { /* egal */ }
+  if (!schon) location.reload();
+  throw e;
+}));
+/** Pass B2 (D1): ein Fehler in einer Seite (oder ein fehlendes Bundle) nimmt nicht Kopf, Navigation und Chat mit. */
+class FehlerGrenze extends Component<{ children: ReactNode; schluessel: string }, { fehler: string | null; bei: string }> {
+  state = { fehler: null as string | null, bei: '' };
+  static getDerivedStateFromError(e: unknown) { return { fehler: String((e as any)?.message ?? e) }; }
+  static getDerivedStateFromProps(p: { schluessel: string }, s: { bei: string }) { return p.schluessel !== s.bei ? { fehler: null, bei: p.schluessel } : null; }   // andere Seite: neuer Versuch
+  render() {
+    if (!this.state.fehler) return this.props.children;
+    return <div className="seite"><h1>Diese Seite ließ sich nicht anzeigen</h1><p>Meist gibt es einen neuen Stand der Werkbank. Bitte neu laden.</p><p className="leise">{this.state.fehler}</p><button type="button" className="knopf haupt" onClick={() => location.reload()}>Neu laden</button></div>;
+  }
+}
 function FreigabeAus() { const { alt } = useApp(); return <div className="seite"><h1>Freigabe</h1><p>Push-Freigaben laufen über die <a href={alt} target="_blank" rel="noreferrer">alte Werkbank</a>.</p></div>; }
 function AltBereich({ start }: { start: string }) { const { alt } = useApp(); return <AltSeite key={start} start={start} altUrl={alt} />; }
 
@@ -93,6 +109,7 @@ function Seite({ pfad, such, freigabe }: { pfad: string; such: string; freigabe:
 export function App() {
   const { pfad, such } = useAdresse();
   const [konto, setKonto] = useState<{ name: string; admin: boolean } | null | undefined>(undefined);
+  const [startFehler, setStartFehler] = useState<string | null>(null);
   const [alt, setAlt] = useState('');
   const [trocken, setTrocken] = useState(false);
   const [freigabe, setFreigabe] = useState(false);
@@ -108,7 +125,8 @@ export function App() {
 
   const pruefen = () => hole<{ user: { name: string; role: string } | null; librechatUrl: string; dryRun?: boolean; vaultDryRun?: boolean; v2Freigabe?: boolean }>('api/config')
     .then((c) => { if (typeof c.librechatUrl === 'string') setAlt(`${c.librechatUrl}/wb`); setTrocken(!!(c.dryRun || c.vaultDryRun)); setFreigabe(!!c.v2Freigabe); setKonto(c.user ? { name: c.user.name.split(/\s+/)[0], admin: c.user.role === 'ADMIN' } : null); })
-    .catch(() => setKonto(null));
+    // Pass B2 (D3): nur „nicht angemeldet“ führt zur Anmeldung — 502/403/Netz (z. B. während des Release-Neustarts) zeigen den Fehler
+    .then(() => setStartFehler(null), (e: any) => { if (e?.status === 401) setKonto(null); else setStartFehler(String(e?.message ?? e)); });
   useEffect(() => { void pruefen(); const ab = () => { vergessen(); setKonto(null); }; window.addEventListener('v2-abgemeldet', ab); return () => window.removeEventListener('v2-abgemeldet', ab); }, []);
   // Die eine Zahl: beim Start, alle 60 s und nach jeder Antwort neu (null = neu holen).
   useEffect(() => {
@@ -127,6 +145,7 @@ export function App() {
     zahl: (x) => { if (x === null) setN((v) => v + 1); else setZahl(x); },
   }), [konto, alt, trocken]);   // Pass A (UI 19): testbetrieb hängt an trocken
 
+  if (konto === undefined && startFehler) return <Fehler text={`Die Werkbank antwortet gerade nicht (${startFehler}) — vermutlich ein Neustart.`} nochmal={() => { setStartFehler(null); void pruefen(); }} />;
   if (konto === undefined) return <Laedt />;
   if (konto === null) return <Anmelden fertig={async () => { vergessen(); history.replaceState(null, '', 'v2/'); window.dispatchEvent(new PopStateEvent('popstate')); /* Runde 4: nach dem Login immer „Jetzt“ */ await vorab('api/v2/start?teil=oben'); await pruefen(); }} />;
 
@@ -152,7 +171,7 @@ export function App() {
         </nav>
         {trocken && <p className="testband" role="note">Testbetrieb: Antworten an Notizen und Jira werden hier nicht wirklich geschrieben.</p>}
         {meldung && <div className={`meldung-band${meldung.ok ? ' ok' : ''}`} role={meldung.ok ? 'status' : 'alert'}><span>{meldung.text}</span><button type="button" className="knopf leise klein" onClick={() => setMeldung(null)}>Schließen</button></div>}
-        <main className={`inhalt${ALT_PFADE[pfad] ? ' breit' : ''}`}><Seite pfad={pfad} such={such} freigabe={freigabe} /></main>
+        <main className={`inhalt${ALT_PFADE[pfad] ? ' breit' : ''}`}><FehlerGrenze schluessel={pfad}><Seite pfad={pfad} such={such} freigabe={freigabe} /></FehlerGrenze></main>
         <ChatLeiste offen={chat.offen} vorbereitet={chat.text} convWahl={chat.conv} schliessen={() => setChat({ offen: false, text: '' })} />
       </div>
     </Kontext.Provider>

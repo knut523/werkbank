@@ -234,7 +234,7 @@ function ClaudeAccounts({ chat }: { chat: boolean }) {
       {extra < d.max && (
         <form className="row" style={{ marginTop: 8 }} onSubmit={(e) => { e.preventDefault(); run('add', async () => { await api('/api/setup/claude-accounts', { body: { label, token } }); setLabel(''); setToken(''); toast('Konto hinzugefügt'); }); }}>
           <input aria-label="Name des Kontos" placeholder="Name, z. B. Privat" value={label} onChange={(e) => setLabel(e.target.value)} maxLength={40} style={{ minWidth: 160 }} />
-          <input type="password" aria-label="Token des weiteren Kontos" placeholder="sk-ant-oat… (claude setup-token)" value={token} onChange={(e) => setToken(e.target.value)} style={{ flex: 1, minWidth: 220 }} autoComplete="off" />
+          <input type="password" aria-label="Token des weiteren Kontos" placeholder="sk-ant-oat… (claude setup-token)" value={token} onChange={(e) => setToken(e.target.value)} style={{ flex: 1, minWidth: 220 }} autoComplete="new-password" data-1p-ignore data-lpignore="true" />
           <button className="btn" disabled={!label.trim() || !token || busy === 'add'}>Konto hinzufügen</button>
         </form>
       )}
@@ -351,7 +351,7 @@ function MeliousAccount() {
         </>
       ) : <p className="small muted">Kein Schlüssel hinterlegt.</p>}
       <form className="row" style={{ marginTop: 8 }} onSubmit={(e) => { e.preventDefault(); run('key', async () => { await put({ token: key }); setKey(''); toast('Melious-Schlüssel gespeichert (noch aus)'); }); }}>
-        <input type="password" aria-label="Melious-Schlüssel" placeholder="sk-mel-… (melious.ai → Account → API Keys)" value={key} onChange={(e) => setKey(e.target.value)} style={{ flex: 1, minWidth: 260 }} autoComplete="off" />
+        <input type="password" aria-label="Melious-Schlüssel" placeholder="sk-mel-… (melious.ai → Account → API Keys)" value={key} onChange={(e) => setKey(e.target.value)} style={{ flex: 1, minWidth: 260 }} autoComplete="new-password" data-1p-ignore data-lpignore="true" />
         <button className="btn" disabled={!key || busy === 'key'}>{d.configured ? 'Schlüssel ersetzen' : 'Schlüssel speichern'}</button>
       </form>
       <Err e={err} />
@@ -410,7 +410,7 @@ function Wizard({ cfg }: { cfg: Config }) {
               <li>Hier einfügen und speichern. (Alternativ im Chat: Modell-Menü → „Claude Code“ → Zahnrad, Ablauf „nie“.)</li>
             </ol>
             <form className="row" onSubmit={(e) => { e.preventDefault(); run('claude', async () => { await api('/api/setup/claude', { body: { token } }); setToken(''); toast('Claude verbunden'); }); }}>
-              <input type="password" aria-label="Claude-Token" placeholder="sk-ant-oat…" value={token} onChange={(e) => setToken(e.target.value)} style={{ flex: 1, minWidth: 260 }} autoComplete="off" />
+              <input type="password" aria-label="Claude-Token" placeholder="sk-ant-oat…" value={token} onChange={(e) => setToken(e.target.value)} style={{ flex: 1, minWidth: 260 }} autoComplete="new-password" data-1p-ignore data-lpignore="true" />
               <button className="btn primary" disabled={!token || busy === 'claude'}>{s.claude.connected ? 'Ersetzen' : 'Speichern'}</button>
               {s.claude.connected && <button type="button" className="btn danger" onClick={async () => {
                 if (await confirm({ title: 'Claude trennen?', body: <p>Der Token wird gelöscht; Chat und Board-Agent arbeiten dann nicht mehr, bis du einen neuen einträgst.</p>, danger: true, confirmLabel: 'Trennen' })) run('claude', () => api('/api/setup/claude', { method: 'DELETE' }));
@@ -442,7 +442,7 @@ function Wizard({ cfg }: { cfg: Config }) {
             </ol>
             <form className="row" onSubmit={(e) => { e.preventDefault(); run('jira', async () => { const r: any = await api('/api/setup/jira', { body: { email: jEmail, token: jToken } }); setJToken(''); toast(r.count != null ? `Jira verbunden — ${r.count} Tickets in ${cfg.project} sichtbar` : 'Jira verbunden'); }); }}>
               <input type="email" aria-label="Atlassian-E-Mail" value={jEmail} onChange={(e) => setJEmail(e.target.value)} style={{ minWidth: 220 }} />
-              <input type="password" aria-label="Atlassian-API-Token" placeholder="API-Token" value={jToken} onChange={(e) => setJToken(e.target.value)} style={{ flex: 1, minWidth: 200 }} autoComplete="off" />
+              <input type="password" aria-label="Atlassian-API-Token" placeholder="API-Token" value={jToken} onChange={(e) => setJToken(e.target.value)} style={{ flex: 1, minWidth: 200 }} autoComplete="new-password" data-1p-ignore data-lpignore="true" />
               <button className="btn primary" disabled={!jToken || busy === 'jira'}>{busy === 'jira' ? 'Prüfe …' : 'Prüfen & speichern'}</button>
               {s.jira.source === 'eigener Token' && <button type="button" className="btn danger" onClick={() => run('jira', () => api('/api/setup/jira', { method: 'DELETE' }))}>Entfernen</button>}
             </form>

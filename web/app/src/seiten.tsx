@@ -727,7 +727,7 @@ function PrAktionen({ pr, fertig }: { pr: string; fertig: () => void }) {
         <button type="button" className="knopf leise" disabled={laeuft} onClick={() => setAuftrag(auftrag === null ? '' : null)}>Auftrag …</button>
       </div>
       {/* Pass A (Spec 2): der Hinweis sichtbar statt nur als Tooltip (Handy, Tastatur, Vorlesen) */}
-      <p className="klein gedimmt">Review: drei Prüfmodelle aus der EU (Melious) und eines, das ihre Befunde gegenprüft — danach prüft Claude jeden Befund. Tiefes Review: dazu mehr Durchgänge, eine Prüfrunde mit Gegenstimmen und Tests. Fixen: offene Review-Punkte beheben; hochgeladen wird nur nach Prüfung und Freigabe.</p>
+      <p className="klein gedimmt">Review: mehrere unabhängige Prüfer (mit Melious drei EU-Modelle und ein Gegenprüfer, sonst Claude-Prüfer) — danach prüft Claude jeden Befund; welche liefen, steht im Review-Bericht. Tiefes Review: dazu mehr Durchgänge, eine Prüfrunde mit Gegenstimmen und Tests. Fixen: offene Review-Punkte beheben; hochgeladen wird nur nach Prüfung und Freigabe.</p>
       {auftrag !== null && <div className="anders"><textarea rows={2} placeholder="Was soll an diesem PR passieren? (mindestens ein Satz)" value={auftrag} onChange={(e) => setAuftrag(e.target.value)} /><button type="button" className="knopf haupt klein" disabled={laeuft || !genugAuftrag} onClick={() => los('auftrag', auftrag)}>{laeuft ? 'Startet …' : 'Unter-Chat starten'}</button></div>}
       {meldung && <p className="hinweis klein" role="status">{meldung}</p>}
     </div>

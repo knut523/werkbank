@@ -285,3 +285,11 @@ test('Hauptsitzung 07.11. (Release): Schlüssel gespeichert, aber „erlaubt“ 
   assert.equal(chatAufrufe.length, vorher, 'kein einziger Aufruf an Melious');
   await M.setMelious(u, { enabled: true });
 });
+
+test('Pass B2 (C1): ein neuer Schlüssel schaltet ein ausgeschaltetes „erlaubt“ nicht wieder ein', async () => {
+  await M.setMelious(u, { token: KEY });
+  await M.setMelious(u, { enabled: false });
+  const s = await M.setMelious(u, { token: KEY.replace(/.$/, 'z') });
+  assert.equal(s.enabled, false, 'bleibt aus');
+  await M.setMelious(u, { enabled: true });
+});

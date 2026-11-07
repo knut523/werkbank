@@ -69,7 +69,7 @@ export function AltSeite({ start, altUrl }: { start: string; altUrl: string }) {
   if (!cfg) return <div className="seite"><p className="laedt">Lädt …</p></div>;
   const s = seiteVon(hash);
   const frei = (!s?.f || cfg.features?.[s.f] !== false) && (start !== '#/lage' || !!cfg.lage);   // Lage nur, wo die alte Werkbank sie zeigt (cfg.lage)
-  const seite: ReactNode = !cfg.user ? <p>Bitte neu anmelden.</p>
+  const seite: ReactNode = !cfg.user ? <p>Bitte neu anmelden. <button type="button" className="knopf klein" onClick={() => window.dispatchEvent(new Event('v2-abgemeldet'))}>Zur Anmeldung</button></p>   // Pass B2 (D7)
     : !frei ? <div className="page"><p><b>Noch nicht für das Team freigegeben.</b></p></div>
     : start === '#/board' ? <Board cfg={cfg} hash={hash} />
     : start === '#/sprint' ? <Sprint cfg={cfg} hash={hash} />

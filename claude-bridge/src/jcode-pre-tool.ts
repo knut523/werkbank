@@ -60,11 +60,24 @@ export const normPfade = (s: string) => s.split(/(\s+)/).map((w) => (w.includes(
 // wie im Bash-Shim: so prüfen, wie die Shell es sähe (ohne Quotes, Backslashes, $VAR)
 const flach = (s: string) => s.replace(/['"\\]/g, '').replace(/\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^}]*\}/g, '');
 
+/** Pass B2 (A1): zeigt ein vorhandener Pfad über einen Symlink (z. B. aus einem PR: docs/ctx.yml → ~/.config/gh/hosts.yml) auf einen
+ *  Geheimnis-Ort? Geprüft wird der aufgelöste Pfad jedes Worts, das es als Datei oder Ordner gibt. */
+export function geheimHinterLink(woerter: string[], cwd: string): boolean {
+  for (const w of new Set(woerter)) {
+    if (!w || w.startsWith('-') || w.length > 4096) continue;
+    const p = resolve(cwd, w.replace(/^~(?=\/|$)/, process.env.HOME ?? '~'));
+    try { lstatSync(p); } catch { continue; }
+    const echt = echterPfad(p);
+    if (echt !== p && GEHEIM.some((re) => re.test(echt + (echt.endsWith('/') ? '' : '/')) || re.test(echt))) return true;
+  }
+  return false;
+}
+
 /** Entscheidung für einen Werkzeugaufruf: null = erlaubt, sonst der Grund. */
 export function jcodeEntscheid(tool: string, input: unknown, cwd: string): string | null {
   const t = tool.toLowerCase();
   const alle = texte(input, [], SCHREIBEND.has(t)).flatMap((s) => [s, normPfade(flach(s))]);
-  if (alle.some((s) => GEHEIM.some((re) => re.test(s)))) return 'Abgelehnt (Werkbank-Wächter): Umgebungs- und Zugangsdateien (.env*, /proc, Schlüssel) sind für Melious-Teilagenten gesperrt.';
+  if (alle.some((s) => GEHEIM.some((re) => re.test(s))) || geheimHinterLink(alle.flatMap((s) => s.split(/\s+/)), cwd)) return 'Abgelehnt (Werkbank-Wächter): Umgebungs- und Zugangsdateien (.env*, /proc, Schlüssel) sind für Melious-Teilagenten gesperrt.';
   if (SCHREIBEND.has(t)) {
     const o = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
     // wie jcodeWritesOutside (sessions.ts): Pfad-Felder und die Dateizeilen eines Patches

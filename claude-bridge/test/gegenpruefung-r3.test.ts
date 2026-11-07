@@ -82,3 +82,23 @@ test('Pass B (Runde 5, A2): GraphQL mit Text aus der Shell gilt als Schreiben; w
   assert.equal(githubSchreibGrund("gh api graphql -f query='{ viewer { login } }'"), null);
   assert.equal(githubSchreibGrund("gh api graphql -f query='{ repository(owner:\"o\", name:\"r\") { id } }' -F n=3"), null);
 });
+
+test('Pass B2 (A1): ein Symlink im Arbeitsordner auf einen Geheimnis-Ort wird beim Lesen erkannt (Hook und Shell-Wächter)', () => {
+  const heim = realpathSync(mkdtempSync(join(tmpdir(), 'gp-heim-')));
+  mkdirSync(join(heim, '.config', 'gh'), { recursive: true }); writeFileSync(join(heim, '.config', 'gh', 'hosts.yml'), 'oauth_token: x');
+  mkdirSync(join(wt, 'docs'), { recursive: true }); symlinkSync(join(heim, '.config', 'gh', 'hosts.yml'), join(wt, 'docs', 'ctx.yml'));
+  writeFileSync(join(wt, 'docs', 'echt.md'), '# x');
+  assert.ok(jcodeEntscheid('read', { file_path: 'docs/ctx.yml' }, wt), 'Hook');
+  assert.equal(guard('cat docs/ctx.yml'), 126, 'Shell-Wächter');
+  assert.equal(jcodeEntscheid('read', { file_path: 'docs/echt.md' }, wt), null, 'normale Datei frei');
+  assert.equal(guard('cat docs/echt.md'), 0);
+});
+
+test('Pass B2 (A3): die Live-Instanz ist kein Arbeitsordner für Stränge', async () => {
+  const { orchDirProblem, LIVE_ORDNER } = await import('../src/tools.ts');
+  assert.ok(LIVE_ORDNER.test('/home/knut/work/werkbank-dev/claude-bridge'));
+  assert.ok(!LIVE_ORDNER.test('/home/knut/work/werkbank-dev2'), 'nur genau dieser Ordner');
+  const live = join(realpathSync(mkdtempSync(join(tmpdir(), 'live-'))), 'werkbank-dev'); mkdirSync(live, { recursive: true });
+  const alt = process.env.WERKBANK_ORCH_ROOTS; process.env.WERKBANK_ORCH_ROOTS = realpathSync(tmpdir());
+  try { assert.match(String(orchDirProblem(live).problem), /Live-Instanz/); } finally { if (alt === undefined) delete process.env.WERKBANK_ORCH_ROOTS; else process.env.WERKBANK_ORCH_ROOTS = alt; }
+});

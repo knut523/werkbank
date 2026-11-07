@@ -346,8 +346,9 @@ export async function setMelious(u: User, b: Record<string, unknown>) {
     const t = String(b.token ?? '').trim();
     if (!MELIOUS_KEY.test(t)) throw httpErr(400, 'Das sieht nicht wie ein Melious-Schlüssel aus (beginnt mit sk-mel-…).');
     const prev: any = await einstellungen(u);
-    const { token: _t, last4: _l, addedAt: _a, enabled: _e, ...rest } = prev ?? {};
-    // Neuer Schlüssel: Schalter wie bisher gesetzt, sonst die Vorgabe (Knuts Setup: an; MELIOUS_STANDARD=aus: aus).
+    // Pass B2 (C1): „erlaubt“ bleibt, wie es war — ein Schlüsseltausch schaltet ein ausgeschaltetes Melious nicht wieder ein;
+    // nur ohne gesetzten Schalter gilt die Vorgabe (Knuts Setup: an; MELIOUS_STANDARD=aus: aus).
+    const { token: _t, last4: _l, addedAt: _a, ...rest } = prev ?? {};
     set.melious = { ...rest, token: seal(t), last4: t.slice(-4), addedAt: new Date() };
   } else if (!(await schluessel(u))) throw httpErr(400, 'Zuerst einen Melious-Schlüssel hinterlegen.');
   const f = (k: string, v: unknown) => { if (set.melious) (set.melious as any)[k] = v; else set[`melious.${k}`] = v; };

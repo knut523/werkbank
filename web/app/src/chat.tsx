@@ -48,7 +48,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
   async function laden() {
     const mein = ++abruf.current;   // nur die jüngste Antwort zählt (Umschalten Hauptchat/Neuer Chat)
     const q = ziel === 'hauptchat' ? 'ziel=hauptchat' : `ziel=eigen${conv ? `&conv=${encodeURIComponent(conv)}` : ''}`;
-    try { const s = await hole<Stand>(`api/v2/chat?${q}`); if (mein === abruf.current) { setStand(s); setFehler(null); } return s; } catch (e: any) { if (mein === abruf.current) setFehler(e.message); return null; }
+    try { const s = await hole<Stand>(`api/v2/chat?${q}`); if (mein === abruf.current) { setStand(s); setFehler(null); } return s; } catch (e: any) { if (e?.status === 401) window.dispatchEvent(new Event('v2-abgemeldet')); if (mein === abruf.current) setFehler(e.message); return null; }   // Pass B2 (D7): Sitzung abgelaufen → zur Anmeldung
   }
 
   // Pass A (UI 7): beim Wechsel des Reiters oder des Chats nicht kurz den alten Stand zeigen (sonst blitzte „Hauptchat starten“ auf);

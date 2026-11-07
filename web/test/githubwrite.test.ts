@@ -76,3 +76,11 @@ test('Statuszeile nennt den Grund, wenn das Posten scheitert', async () => {
   assert.equal(R.postGrundEn('GitHub antwortet mit 403 (Rate-Limit: You have exceeded a secondary rate limit)'), 'GitHub rate limit (HTTP 403)');
   assert.equal(R.postGrundEn('GitHub antwortet mit 403 (Resource not accessible)'), 'GitHub refused the post (HTTP 403)');
 });
+
+test('Pass B2 (B1): GitHub-Login zum Namen der Person — die Push-Prüfung vergleicht Logins, nicht Anzeigenamen', async () => {
+  const { githubLoginVon } = await import('../server/github.ts');
+  const n = { knut523: 'Knut', bizarrochris: 'Christoph' };
+  assert.equal(githubLoginVon('Knut Peters', n), 'knut523');
+  assert.equal(githubLoginVon('christoph', n), 'bizarrochris');
+  assert.equal(githubLoginVon('Lisa Muster', n), null, 'ohne Eintrag kein Login (dann 409 statt eines Fixes, der nie pushen kann)');
+});

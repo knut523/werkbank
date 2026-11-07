@@ -67,3 +67,11 @@ test('Bedarf: Antworttext an den Strang — erteilt (mit Frist bei zugang), erle
   assert.match(bedarfAntwortText({ ...b, art: 'merge', pfad: null }, 'abgelehnt', 'erst Gate', null), /abgelehnt.*erst Gate/);
   assert.equal(zugangBis(99999, 0).getTime(), 24 * 3600_000, 'höchstens 24 h');
 });
+
+test('Pass B2 (C3): eine Knut-Entscheidung (Geld, Release …) beantwortet nicht der Hauptchat — nur Knut in der 2.0', async () => {
+  const col = sammlung([{ _id: 'b-00000009', userId: 'k', art: 'entscheidung', text: '50 € Guthaben bei Melious aufladen?', pfad: null, strand: { id: 's1' }, status: 'offen' }]);
+  const deps = { senden: async () => {}, freigabe: async () => '', col: () => col as any };
+  await assert.rejects(bedarfAntworten(U, 'b-00000009', { antwort: 'erteilt', notiz: 'ja', via: 'hauptchat' }, deps), (e: any) => e.status === 409 && /entscheidet Knut/.test(e.message));
+  assert.equal(col.docs[0].status, 'offen');
+  assert.equal((await bedarfAntworten(U, 'b-00000009', { antwort: 'erteilt', notiz: 'ja' }, deps)).status, 'erteilt', 'Knut in der 2.0 darf');
+});

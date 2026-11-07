@@ -711,8 +711,11 @@ export function orchDirProblem(dir: string): { problem: string | null; real?: st
   let vault = resolve(VAULT_DIR); try { vault = realpathSync(VAULT_DIR); } catch { /* kein Vault */ }
   if (within(real, vault)) return { problem: 'Der Vault ist kein Arbeitsordner für Stränge.' };
   if (/(^|\/)(\.runtime[^/]*|\.git|\.claude|\.ssh)(\/|$)/.test(real)) return { problem: 'Arbeitsordner darf nicht in .runtime, .git, .claude oder .ssh liegen.' };
+  if (LIVE_ORDNER.test(real)) return { problem: 'Die Live-Instanz (werkbank-dev) ist kein Arbeitsordner für Stränge — ein eigener Worktree.' };   // Pass B2 (A3)
   return { problem: null, real };
 }
+/** Pass B2 (A3): der Live-Checkout — dort geänderte Wächter gälten nach dem nächsten Neustart (wie releaseWorktreeProblem). */
+export const LIVE_ORDNER = /(^|\/)werkbank-dev(\/|$)/;
 
 // ---------- Profil „release“ (Plan 213, Knut 17.10.: „Release-Strang darf lokal mergen“) ----------
 // Erlaubt ist genau `git -C <Worktree> merge …` (auch --abort/--continue) im zugewiesenen Release-Worktree; Konflikte löst
