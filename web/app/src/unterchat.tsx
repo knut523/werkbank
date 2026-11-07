@@ -8,6 +8,7 @@ import { useApp } from './kontext.ts';
 import { EntscheidungKarte, Fehler, Laedt, Md, useDaten, Verweise } from './teile.tsx';
 import { Abgleich, SteckbriefKasten, type Steckbrief } from './seiten.tsx';
 import { BERICHT_ANFORDERN, verlaufTeile, wann } from './format.ts';
+import { TestLinkKnopf } from './testlinks.tsx';
 
 interface Steuer { laeuft: boolean; schlange: { pos: number; grund: string } | null; gedeckelt: string | null; abgenommen: boolean; weggeraeumt: boolean; ohneBericht: boolean; modell: string | null; laeufer: string }
 interface Daten {
@@ -91,6 +92,7 @@ export function UnterChat({ id }: { id: string }) {
           {!s?.laeuft && knopf({ aktion: 'gruendlich', label: 'Gründlich', gut: 'Geht gründlicher weiter.' })}
           {!s?.abgenommen && !s?.gedeckelt && knopf({ aktion: 'anhalten', label: 'Anhalten', gut: 'Angehalten.' })}
         </div>
+        <TestLinkKnopf strang={id} />
         {d.steckbrief && <details className="uc-steckbrief"><summary>Steckbrief: wofür, Fortschritt, Ergebnisse</summary><SteckbriefKasten s={d.steckbrief} titel={d.titel} id={id} /></details>}
         {d.links.length > 0 && <Verweise links={d.links.filter((l) => !l.extern)} />}
       </header>

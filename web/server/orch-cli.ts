@@ -22,6 +22,8 @@
 //     gestartete/verworfene Items verlassen die Datei, blockierte (blocked_g0) und ungeprüfte bleiben.
 //   orch list [--all] [--json]
 //   orch show <id> [--json]
+//   orch testlink [<strang|ordner>] [--stop] [--neu] [--alle] [--json]   angemeldeter Test-Link (docs/plan-testlinks.md): Test-Umgebung
+//     starten (wartet bis Link oder Fehler mit Logauszug) bzw. stoppen; ohne Ziel: laufende Umgebungen. Nur lokale Test-DBs, 7 Tage.
 //   orch send <id> (TEXT … | --text TEXT | Text auf stdin)   läuft der Strang, wird die Nachricht in den laufenden Zug nachgereicht;
 //     sonst wartet send bis 15 s (ORCH_SEND_BESTAETIGEN_MS) auf die Bestätigung der Brücke und meldet „angekommen“ oder „nicht
 //     bestätigt“ — dann schickt die Werkbank nach 3 min denselben Text noch einmal. Arbeitet ein anderer Strang gerade im selben
@@ -62,7 +64,7 @@
 // gelesen und nie ausgegeben. Person: WERKBANK_ORCH_EMAIL (Vorgabe: Pilot-Konto der Instanz).
 
 import { readFileSync, writeFileSync, renameSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { WB_ROOT } from './config.ts';
 import { lageText } from './themenlage.ts';
 
@@ -75,7 +77,7 @@ for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a.startsWith('--')) {
     const k = a.slice(2);
-    if (['all', 'alle', 'json', 'shared', 'open', 'code', 'neu'].includes(k)) flags[k] = true;
+    if (['all', 'alle', 'json', 'shared', 'open', 'code', 'neu', 'stop'].includes(k)) flags[k] = true;
     else if (k === 'option') options.push(args[++i] ?? '');
     else flags[k] = args[++i] ?? '';
   } else pos.push(a);
@@ -107,7 +109,8 @@ export function callTimeoutMs(path: string, env = process.env, warteS = 0): numb
   if (path === 'wait') return (Math.min(900, Math.max(1, warteS || 600)) + 30) * 1000;   // B1: der Server hält die Anfrage bis zum Timeout
   const s = Number(env.ORCH_CLI_TIMEOUT_S);
   if (s > 0) return s * 1000;
-  return path === 'start' || path === 'nachtbau' ? 15 * 60_000 : 60_000;
+  // Test-Link: npm ci, Build und Migrationen können dauern (docs/plan-testlinks.md).
+  return path === 'start' || path === 'nachtbau' ? 15 * 60_000 : path === 'testlink' ? 30 * 60_000 : 60_000;
 }
 
 /** B1: eine Zeile je Ereignis (dazu bis zu vier Zeilen Auszug). */
@@ -231,6 +234,17 @@ async function main() {
       console.log(`geprüft: ${pos[0]}`);
       return;
     }
+    case 'testlink': {
+      // Ziel: Strang-Kennung (8 hex) oder Ordner (relativ zum aktuellen Verzeichnis); ohne Ziel die Liste.
+      const z = pos[0] ? (/^[0-9a-f]{8}$/.test(pos[0]) ? pos[0] : resolve(pos[0])) : '';
+      if (flags.stop && !z) die('testlink --stop braucht <strang|ordner>.');
+      if (z && !flags.stop) process.stderr.write('Test-Umgebung wird vorbereitet (Build und Migrationen können einige Minuten dauern) …\n');
+      const j = await call('testlink', { ziel: z, stop: flags.stop === true, neu: flags.neu === true, liste: !z, alle: flags.alle === true });
+      if (flags.json) return console.log(JSON.stringify(j.umgebung ?? j.umgebungen ?? null, null, 1));
+      console.log(j.text);
+      if (j.umgebung?.status === 'fehler') process.exit(2);
+      return;
+    }
     case 'freigaben': {
       const j = await call('freigaben', { alle: flags.alle === true });
       if (flags.json) return console.log(JSON.stringify(j.freigaben, null, 1));
@@ -331,7 +345,7 @@ async function main() {
       return;
     }
     default:
-      console.log(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 24).map((l) => l.slice(3)).join('\n'));
+      console.log(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 26).map((l) => l.slice(3)).join('\n'));
   }
 }
 

@@ -974,6 +974,7 @@ export function Mehr() {
     ['Erledigt', 'v2/erledigt', 'Was an einem Tag fertig wurde — mit Datumswahl.'],
     ['Begriffe in Klartext', 'v2/begriffe', 'Was Unter-Chat, Hauptchat und „wartet auf dich“ heißen.'],
     ...(app.ich.admin ? [['Verbrauch', 'v2/verbrauch', 'Tokens und Energie je Lauf: Claude, jcode, OpenCode 2 und Gegenprüfungen im Vergleich, mit Ausreißern.'] as [string, string, string]] : []),
+    ['Test-Umgebungen', 'v2/testlinks', 'Angemeldete Test-Links je Worktree: starten, öffnen, stoppen.'],
   ];
   return (
     <div className="seite">

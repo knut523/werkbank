@@ -89,6 +89,17 @@ Die Werkbank-Seiten sind **Einträge in LibreChats linker Leiste** (siehe „Die
 im Hauptbereich — mit einer Anmeldung. „Im Chat öffnen“, „Im Chat
 besprechen“ usw. starten einen neuen Chat mit vorbereitetem Text im selben Fenster.
 
+### Angemeldete Test-Links (07.11.2026)
+
+Je Worktree eine **Test-Umgebung** mit fertigem, angemeldetem Link ([`docs/plan-testlinks.md`](docs/plan-testlinks.md)):
+2.0 › Mehr › **Test-Umgebungen** (Liste, Start für einen Ordner, Stoppen), Knopf **„Test-Link“** auf der Unter-Chat-Seite,
+`scripts/orch testlink [<strang|ordner>] [--stop] [--neu]` und das Strang-Werkzeug `testlink`. Profile: olaf-admin (eigene DB
+`olaf_tl_…` auf der lokalen Postgres 55433, Migrationen, Seed, Testkonto `knut-test@example.test` als Admin), olaf-tariff-app
+(Dev-Bypass, keine Rechen-API), Werkbank-Testkopie (`scripts/isoliert.sh`, Brücke im Mock) und statische Seiten. Mails im
+Trockenlauf, Prod/UAT/Azure-Adressen werden geleert, Proxy nur über die Coder-Vorschau, Ablauf nach 7 Tagen.
+Ports: `WERKBANK_TESTLINK_PORTE` (Vorgabe 3600–3699), höchstens `WERKBANK_TESTLINK_MAX` (6) gleichzeitig, erlaubte Ordner
+`WERKBANK_TESTLINK_WURZELN` (Vorgabe `~/work`). Ablage: `.runtime/testlinks/<kennung>/` (Logs; Geheimnisse mit Rechten 600).
+
 ## Erste Schritte im Browser
 
 Die Web-App führt beim ersten Aufruf durch fünf Schritte (Seite **Einrichtung**):

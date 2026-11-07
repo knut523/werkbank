@@ -13,9 +13,8 @@ offen:
   - Vorlage in Brevo umbauen (Knut)
   - Review durch Christoph
 review:
-  - titel: Admin-Vorschau, Einstellungen → Hardware
-    url: https://3064--main--dev--knut.ws.konekto.energy/settings/hardware
-    login: https://3064--main--dev--knut.ws.konekto.energy/login?next=/settings/hardware
+  - titel: Test-Link (angemeldet), Einstellungen → Hardware
+    url: https://3601--main--dev--knut.ws.konekto.energy/settings/hardware   # aus dem Werkzeug testlink bzw. `orch testlink <ordner>`
   - screenshot: screenshots/einstellungen-800.png
   - screenshot: screenshots/einstellungen-390.png
   - pr_text: pr.md

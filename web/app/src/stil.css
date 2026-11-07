@@ -301,3 +301,9 @@ p { margin: 0 0 var(--s1); }
 .verbrauch-tabelle td:not(:first-child):not(:nth-child(2)) { font-variant-numeric: tabular-nums; }
 @media (max-width: 640px) { .verbrauch-tabelle { font-size: .8rem; } .verbrauch-tabelle th, .verbrauch-tabelle td { padding: .2rem .25rem; } }
 .warnungen { margin: .4rem 0; }
+/* Test-Links (docs/plan-testlinks.md) */
+.kasten.testlink { margin: var(--s2) 0; }
+.kasten.testlink pre { white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
+.uc-testlink { margin-top: 8px; }
+.uc-testlink .kasten.testlink { margin: 0; }
+.tl-oeffnen { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
