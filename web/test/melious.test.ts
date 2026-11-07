@@ -273,3 +273,15 @@ test('Entfernen → kein Konto mehr', async () => {
   assert.ok(!(await claudeAccountsForBridge(u)).some((a: any) => a.kind === 'melious'));
   assert.equal((await M.meliousSettings(u)).configured, false);
 });
+
+test('Hauptsitzung 07.11. (Release): Schlüssel gespeichert, aber „erlaubt“ aus → keine Gegenprüfung, kein Aufruf, Hinweis auf Claude-Teilagent', async () => {
+  await M.setMelious(u, { token: KEY });
+  await M.setMelious(u, { enabled: false });
+  assert.equal((await M.meliousSettings(u)).configured, true);
+  const vorher = chatAufrufe.length;
+  const r = await M.meliousChallenge(u, 'diff', '--- a/a.ts\n+++ b/a.ts\n@@ …');
+  assert.equal(r.ok, false); assert.match(r.error!, /ausgeschaltet/); assert.match(r.error!, /Claude-Teilagent/);
+  assert.equal(await M.meliousChat(u, 'glm-5.3', 'x'), null);
+  assert.equal(chatAufrufe.length, vorher, 'kein einziger Aufruf an Melious');
+  await M.setMelious(u, { enabled: true });
+});

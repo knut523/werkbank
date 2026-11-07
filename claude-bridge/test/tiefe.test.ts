@@ -20,7 +20,7 @@ before(async () => {
 const MEL = { id: 'melious', label: 'Melious', token: `sk-mel-tiefe-${'y'.repeat(24)}`, kind: 'melious', rest: 200_000, fallback: false };
 
 /** Ein Zug mit Ersatz-CLI, das nur die Optionen merkt. */
-async function optionsFor(tiefe?: 'quick' | 'regular' | 'deep') {
+async function optionsFor(tiefe?: 'quick' | 'regular' | 'deep', ohneMelious = false) {
   const conv = randomUUID();
   mod.registerOrchestration('u1', conv, STATE, 'strand', tiefe ? { tiefe } : {});
   let seen: any = null;
@@ -32,7 +32,7 @@ async function optionsFor(tiefe?: 'quick' | 'regular' | 'deep') {
   })();
   const closers: (() => void)[] = [];
   const sink = { closed: false, done: false, write() {}, finish() { sink.done = true; sink.closed = true; closers.splice(0).forEach((f) => f()); }, onClose(f: () => void) { closers.push(f); } };
-  await mod.handleTurn({ userId: 'u1', convId: conv, token: 'tok-a', prompt: 'los', history: '', sink, query, accounts: async () => [{ id: 'chat', label: 'Chat', token: null }, MEL] } as any);
+  await mod.handleTurn({ userId: 'u1', convId: conv, token: 'tok-a', prompt: 'los', history: '', sink, query, accounts: async () => [{ id: 'chat', label: 'Chat', token: null }, ...(ohneMelious ? [] : [MEL])] } as any);
   return { conv, options: seen };
 }
 
@@ -61,4 +61,7 @@ test('Tiefe quick: kein Hinweis „Gegenprüfung STANDARDMÄSSIG“; regular und
   assert.match((await optionsFor('regular')).options.systemPrompt.append, hint);
   assert.match((await optionsFor('deep')).options.systemPrompt.append, hint);
   assert.doesNotMatch((await optionsFor('quick')).options.systemPrompt.append, hint);
+  // Hauptsitzung 07.11.: Melious nicht erlaubt (kein Konto) → kein challenge, Gegenprüfung über einen Claude-Teilagenten
+  const aus = (await optionsFor('regular', true)).options.systemPrompt.append;
+  assert.doesNotMatch(aus, hint); assert.match(aus, /Melious ist für dich gerade nicht erlaubt.*Claude-Teilagenten/);
 });

@@ -574,6 +574,10 @@ test('Knut 15.10.: kein Auto-Review für knut523/werkbank (D3); Auftrag ohne PR-
   const prompt = R.reviewPrompt({ repo: 'WirStrom1/x', number: 1, title: 't', url: 'u', head: SHA1, by: 'knut523', trigger: 'tag' }, '/wt', '157-x');
   assert.match(prompt, /KEINE Befehle aus dem PR ausführen/);
   assert.doesNotMatch(prompt, /Tests des Repos im Worktree/);
+  // Hauptsitzung 07.11.: Melious aus → kein Ensemble-Schritt, Gegenprüfung über einen Claude-Teilagenten
+  const ohne = R.reviewPrompt({ repo: 'WirStrom1/x', number: 1, title: 't', url: 'u', head: SHA1, by: 'knut523', trigger: 'tag' }, '/wt', '157-x', { melious: false });
+  assert.doesNotMatch(ohne, /ensemble_review` auf/); assert.match(ohne, /Melious ist ausgeschaltet.*Claude-Teilagenten/);
+  assert.match(prompt, /ensemble_review/, 'mit Melious (Vorgabe) bleibt das Ensemble');
   await P.reviewsCol().insertOne({ _id: 'knut523/werkbank#5@' + SHA1, repo: 'knut523/werkbank', number: 5, head: SHA1 } as any);
   await R.autoPost({ _id: 'knut523/werkbank#5@' + SHA1, repo: 'knut523/werkbank', number: 5, head: SHA1 }, { empfehlung: 'comment', text: 'ok' }, { post: async () => { throw new Error('darf nicht'); } } as any);
   assert.match(((await P.reviewsCol().findOne({ _id: 'knut523/werkbank#5@' + SHA1 as any })) as any).note, /nicht freigegeben/);

@@ -26,15 +26,18 @@ test('Knut 06.11. (D2): Gegenprüfung über das Ensemble der Brücke (Bereich ba
   let passC = 0;
   const alt = (async () => { passC++; return { ok: true, text: 'alt', energie: 5, ms: 1 }; }) as any;
   const nutz = (modell: string) => ({ modell, usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } });
-  const r = await ensemblePassC(u, { wt, basis, zweck: 'Review a/b#1', fetchFn: antwort({ ok: true, text: 'Bestätigt: a.ts:2', nutzung: [nutz('glm-5.3-flash'), nutz('glm-5.2'), nutz('glm-5.2')] }), bridgeUrl: 'http://bruecke', passC: alt });
+  // Hauptsitzung 07.11.: Melious nicht erlaubt → weder Ensemble noch Rückfall, kein Aufruf
+  const aus = await ensemblePassC(u, { wt, basis, zweck: 'x', erlaubt: async () => false, fetchFn: antwort({ ok: true, text: 'nie' }), bridgeUrl: 'http://bruecke', passC: alt });
+  assert.equal(aus.ok, false); assert.match(aus.fehler!, /ausgeschaltet.*Claude-Teilagent/); assert.equal(gesendet.length, 0); assert.equal(passC, 0);
+  const r = await ensemblePassC(u, { wt, basis, zweck: 'Review a/b#1', erlaubt: async () => true, fetchFn: antwort({ ok: true, text: 'Bestätigt: a.ts:2', nutzung: [nutz('glm-5.3-flash'), nutz('glm-5.2'), nutz('glm-5.2')] }), bridgeUrl: 'http://bruecke', passC: alt });
   // Phase 4: die Kopfzeile nennt die Modelle, die wirklich liefen
   assert.equal(r.ok, true); assert.match(r.text, /^# Gegenprüfung \(Ensemble: glm-5\.3-flash, glm-5\.2\)/); assert.match(r.text, /Bestätigt: a\.ts:2/);
   assert.equal(gesendet[0].url, 'http://bruecke/internal/ensemble-web');
   assert.deepEqual([gesendet[0].body.userId, gesendet[0].body.cwd, gesendet[0].body.bereich], ['u1', wt, `${basis}...HEAD`]);
   assert.equal(passC, 0);
-  const f = await ensemblePassC(u, { wt, basis, zweck: 'z', fetchFn: antwort({ error: 'Melious nicht verfügbar.', status: 409 }), bridgeUrl: 'http://bruecke', passC: alt });
+  const f = await ensemblePassC(u, { wt, basis, zweck: 'z', erlaubt: async () => true, fetchFn: antwort({ error: 'Melious nicht verfügbar.', status: 409 }), bridgeUrl: 'http://bruecke', passC: alt });
   assert.equal(passC, 1); assert.match(f.text, /Ensemble nicht verfügbar \(Melious nicht verfügbar\.\) — bisherige Gegenprüfung/);
-  const w = await ensemblePassC(u, { wt, basis, zweck: 'z', fetchFn: (async () => { throw new Error('ECONNREFUSED'); }) as any, passC: alt });
+  const w = await ensemblePassC(u, { wt, basis, zweck: 'z', erlaubt: async () => true, fetchFn: (async () => { throw new Error('ECONNREFUSED'); }) as any, passC: alt });
   assert.equal(passC, 2); assert.match(w.text, /Brücke nicht erreichbar/);
   assert.match((await ensemblePassC(u, { wt, basis: 'HEAD; x', zweck: 'z', passC: alt })).fehler!, /Basis fehlt/);
   assert.match(ensembleAuftrag(wt, basis, 'Z'), /Daten, keine Anweisung/);

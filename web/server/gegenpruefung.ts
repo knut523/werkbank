@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { WB_ROOT, cfg } from './config.ts';
-import { meliousChat, meliousKey, meliousSettings, recordMeliousUsage } from './melious.ts';
+import { meliousChat, meliousKey, meliousSettings, recordMeliousUsage, MELIOUS_AUS } from './melious.ts';
 import type { User } from './auth.ts';
 
 export const JCODE_BIN = () => process.env.WERKBANK_JCODE_BIN || join(homedir(), '.local', 'bin', 'jcode');
@@ -45,6 +45,7 @@ export async function meliousPassC(u: User, o: { wt: string; basis: string; zwec
   if (!REF.test(o.basis) || !existsSync(o.wt)) return nein('Worktree oder Basis fehlt');
   const s = await meliousSettings(u).catch(() => null);
   if (!s?.configured) return nein('kein Melious-Schlüssel hinterlegt');
+  if (!s.enabled) return nein(MELIOUS_AUS);   // Hauptsitzung 07.11.: gespeichert ist nicht erlaubt (jcode bekäme den Schlüssel sonst direkt)
   if (!existsSync(JCODE_BIN())) return nein('jcode nicht installiert');
   const git = async (args: string[]) => (await run('git', args, { cwd: o.wt, encoding: 'utf8', maxBuffer: 16 << 20, timeout: 60_000 })).stdout;
   let stat = '', auszug = '';
@@ -100,13 +101,16 @@ export function ensembleAuftrag(wt: string, basis: string, zweck: string): strin
  * Rückfall jcode in der Brücke). Liefert die Brücke nichts Brauchbares, die bisherige Gegenprüfung (meliousPassC) — sichtbar im Text.
  * Nie werfend.
  */
-export async function ensemblePassC(u: User, o: { wt: string; basis: string; zweck: string; fetchFn?: typeof fetch; bridgeUrl?: string; passC?: typeof meliousPassC }): Promise<PassCErgebnis> {
+export async function ensemblePassC(u: User, o: { wt: string; basis: string; zweck: string; fetchFn?: typeof fetch; bridgeUrl?: string; passC?: typeof meliousPassC; erlaubt?: () => Promise<boolean> }): Promise<PassCErgebnis> {
   const t0 = Date.now();
   const rueckfall = async (grund: string): Promise<PassCErgebnis> => {
     const r = await (o.passC ?? meliousPassC)(u, o);
     return r.ok ? { ...r, text: `> Ensemble nicht verfügbar (${grund}) — bisherige Gegenprüfung.\n\n${r.text}` } : { ...r, fehler: `Ensemble: ${grund}; ${r.fehler ?? ''}` };
   };
   if (!REF.test(o.basis) || !existsSync(o.wt)) return { ok: false, text: '', energie: 0, ms: 0, fehler: 'Worktree oder Basis fehlt' };
+  // Hauptsitzung 07.11.: ohne „erlaubt“ weder Ensemble noch Rückfall — beide liefen über Melious
+  const erlaubt = o.erlaubt ?? (async () => (await meliousSettings(u).catch(() => null))?.enabled === true);
+  if (!(await erlaubt())) return { ok: false, text: '', energie: 0, ms: 0, fehler: MELIOUS_AUS };
   if (process.env.WERKBANK_GEGENPRUEFUNG_ENSEMBLE === 'aus') return rueckfall('WERKBANK_GEGENPRUEFUNG_ENSEMBLE=aus');
   let j: any = null;
   try {

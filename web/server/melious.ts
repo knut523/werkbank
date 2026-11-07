@@ -117,6 +117,9 @@ async function schluessel(u: User, e?: Stored | null): Promise<{ token: string; 
   return { token: t, quelle: 'vaultwarden', last4: t.slice(-4) };
 }
 
+/** Hauptsitzung 07.11.: Antwort, wenn Melious gespeichert, aber nicht erlaubt ist — mit dem Weg, der stattdessen gilt. */
+export const MELIOUS_AUS = 'Melious ist ausgeschaltet („erlaubt“ in der Einrichtung) — keine Gegenprüfung über Melious. Nimm einen unabhängigen Claude-Teilagenten (Agent, „[claude]“ in der Beschreibung) als zweiten Prüfer und nenne das im Bericht.';
+
 /** Einstellungen ohne Schlüssel (für Browser und Brücke). */
 export async function meliousSettings(u: User) {
   const s = await einstellungen(u);
@@ -171,6 +174,8 @@ export function faktorenAusPreisliste(data: any[]): Record<string, Faktor> {
 
 /** Ein Aufruf im OpenAI-Format (nur dort meldet Melious billing_cost und environment_impact). Schlüssel nie im Ergebnis/Log. */
 async function chatCompletion(u: User, body: Record<string, unknown>, timeoutMs: number): Promise<any | null> {
+  // Hauptsitzung 07.11.: ein gespeicherter Schlüssel heißt nicht „erlaubt“ — ausgeschaltet geht kein einziger Aufruf raus
+  if (!(await meliousSettings(u)).enabled) return null;
   const key = await meliousKey(u);
   if (!key) return null;
   try {
@@ -250,6 +255,7 @@ export function teileText(t: string, max = CHALLENGE_STUECK): string[] {
 export async function meliousChallenge(u: User, art: string, text: string, frage = '', hoch = false): Promise<{ ok: boolean; text?: string; energie?: number; bezahlt?: string | null; umwelt?: unknown; error?: string; modell?: string; teile?: number; leer?: number }> {
   const s = await meliousSettings(u);
   if (!s.configured) return { ok: false, error: 'Kein Melious-Schlüssel hinterlegt.' };
+  if (!s.enabled) return { ok: false, error: MELIOUS_AUS };
   if (!CHALLENGE[art]) return { ok: false, error: 'art: diff, plan oder council.' };
   const t = String(text ?? '').slice(0, 200_000);
   if (!t.trim()) return { ok: false, error: 'Text fehlt.' };
