@@ -96,8 +96,8 @@ test('Pass B2 (A1): ein Symlink im Arbeitsordner auf einen Geheimnis-Ort wird be
 
 test('Pass B2 (A3): die Live-Instanz ist kein Arbeitsordner für Stränge', async () => {
   const { orchDirProblem, LIVE_ORDNER } = await import('../src/tools.ts');
-  assert.ok(LIVE_ORDNER.test('/home/knut/work/werkbank-dev/claude-bridge'));
-  assert.ok(!LIVE_ORDNER.test('/home/knut/work/werkbank-dev2'), 'nur genau dieser Ordner');
+  assert.ok(LIVE_ORDNER.test('/srv/box/work/werkbank-dev/claude-bridge'));
+  assert.ok(!LIVE_ORDNER.test('/srv/box/work/werkbank-dev2'), 'nur genau dieser Ordner');
   const live = join(realpathSync(mkdtempSync(join(tmpdir(), 'live-'))), 'werkbank-dev'); mkdirSync(live, { recursive: true });
   const alt = process.env.WERKBANK_ORCH_ROOTS; process.env.WERKBANK_ORCH_ROOTS = realpathSync(tmpdir());
   try { assert.match(String(orchDirProblem(live).problem), /Live-Instanz/); } finally { if (alt === undefined) delete process.env.WERKBANK_ORCH_ROOTS; else process.env.WERKBANK_ORCH_ROOTS = alt; }
