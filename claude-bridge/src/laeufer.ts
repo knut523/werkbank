@@ -13,6 +13,8 @@ export interface LaeuferAuftrag {
   // Schreibende Stränge (Knut 07.11.): eigene Rechte statt NUR_LESEN, eine Sitzung über alle Züge (sitzung = Kennung aus dem
   // letzten Zug, server = dessen Server im Pool) und die Nachkontrolle der Werkzeug-Teile dieses Zugs (pruefe → Pfade draußen).
   rechte?: Oc2Regel[]; sitzung?: string; server?: string; pruefe?: (nachrichten: any[]) => string[];
+  // Werkbank-Werkzeuge (oc2mcp.ts): MCP-Server je Arbeitsordner, vor jedem Zug eingetragen (idempotent, übersteht Server-Neustarts).
+  mcp?: { name: string; config: Record<string, unknown> };
 }
 export interface LaeuferNutzung { input: number; output: number; cacheRead: number; cacheWrite: number }
 /** code: 0 = sauber zu Ende, sonst Fehler/Abbruch/Zeit; text: Antwort; gelaufen: tatsächliches Modell. */
@@ -125,6 +127,11 @@ export function opencode2Laeufer(o: { base: string; passwort: string; fetchFn?: 
       let sid: string | null = null, vor = leer(), seit = 0;
       const fehler = (s: any, grund: string): LaeuferErgebnis => ({ code: -1, text: '', usage: nutzungSeit(oc2Nutzung(s), vor), gelaufen: modell, draussen: [], grund, ...(sid ? { sitzung: sid } : {}) });
       try {
+        if (a.mcp) {
+          // Test 07.11.: location als deepObject; schlägt das Eintragen fehl, läuft der Zug ohne die Werkzeuge (Stand-Block reicht).
+          const q = `location%5Bdirectory%5D=${encodeURIComponent(a.cwd)}`, n = encodeURIComponent(a.mcp.name);
+          await call('PUT', `/api/experimental/mcp/${n}?${q}`, { config: a.mcp.config }).then(() => call('POST', `/api/experimental/mcp/${n}/connect?${q}`)).catch(() => null);
+        }
         // Schreibende Stränge: dieselbe Sitzung über alle Züge (der Kontext bleibt). Ist sie weg (404), beginnt eine neue.
         if (a.sitzung && /^ses_\w{1,80}$/.test(a.sitzung)) {
           const alt = await call('GET', `/api/session/${a.sitzung}`).then((x) => x?.data, (e: any) => { if (/HTTP 404/.test(String(e?.message))) return null; throw e; });
