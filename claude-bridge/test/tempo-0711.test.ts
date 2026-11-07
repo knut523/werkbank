@@ -10,6 +10,7 @@ test('Bauer-Modell: Code auf glm-5.3, Mechanik und Tests auf glm-5.3-flash; Scha
   assert.equal(bauerModell('Schreibe Unit-Tests für kapazitaet.ts'), 'glm-5.3-flash');
   assert.equal(bauerModell('Umbenennung von foo nach bar, rein mechanisch'), 'glm-5.3-flash');
   assert.equal(bauerModell('Contest-Logik bauen'), 'glm-5.3', '„Contest“ ist kein Test');
+  assert.equal(bauerModell('Implementiere die Zulassung und schreibe Tests dazu'), 'glm-5.3', 'Pass B: Code mit Tests bleibt glm-5.3');
   assert.equal(bauerModell('Code', { BRIDGE_BAUER_MODELL: 'glm-5.2' }), 'glm-5.2');
   assert.equal(bauerModell('tests', { BRIDGE_BAUER_MECHANIK_MODELL: 'deepseek-v4.1-flash-1017' }), 'deepseek-v4.1-flash-1017');
   assert.equal(bauerModell('Code', { BRIDGE_BAUER_MODELL: 'kaputt modell!' }), 'glm-5.3', 'ungültiger Name → Vorgabe');
@@ -43,6 +44,7 @@ const k = (o: Partial<Kapazitaet> = {}): Kapazitaet => ({ meliousProzent: 60, un
 test('Zulassung: Kontingent, Energie (nur bauend), PR-Stau (nur neuer Strang); ohne Lage oder abgeschaltet frei', () => {
   assert.equal(kapazitaetGrund(k(), { neu: true, bauend: true }, {}), '');
   assert.match(kapazitaetGrund(k({ claudeFrei: false, claudeFreiAb: Date.UTC(2026, 10, 7, 14) }), { neu: false, bauend: false }, {}), /^wartet: Kontingent — kein Claude-Konto frei \(wieder ab 15:00\)/);
+  assert.equal(kapazitaetGrund(k({ claudeFrei: false }), { neu: false, bauend: false, claude: false }, {}), '', 'Pass B: Stränge auf Melious/jcode warten nicht auf Claude');
   assert.match(kapazitaetGrund(k({ unterBoden: true, meliousProzent: 15 }), { neu: false, bauend: true }, {}), /^wartet: Energie — Melious bei 15 %/);
   assert.equal(kapazitaetGrund(k({ unterBoden: true }), { neu: false, bauend: false }, {}), '', 'lesende Stränge laufen auf Claude weiter');
   assert.match(kapazitaetGrund(k({ prWartend: 6 }), { neu: true, bauend: true }, {}), /^wartet: PR-Stau — 6 PRs warten auf Knuts Go \(Deckel 6\)/);
@@ -55,7 +57,9 @@ test('Zulassung: Kontingent, Energie (nur bauend), PR-Stau (nur neuer Strang); o
 
 test('Bedingung 6: Routine-Baubefehle freigegeben, harte Sperren bleiben (Deny geht vor), abschaltbar', async () => {
   const { ROUTINE_ALLOW, routineAllowAn, ORCH_DENY } = await import('../src/tools.ts');
-  for (const r of ['Bash(npm test:*)', 'Bash(node --test:*)', 'Bash(git commit:*)']) assert.ok(ROUTINE_ALLOW.includes(r), r);
+  for (const r of ['Bash(npm test)', 'Bash(npm run build)', 'Bash(git commit:*)']) assert.ok(ROUTINE_ALLOW.includes(r), r);
+  assert.ok(!ROUTINE_ALLOW.some((r) => /git (diff|log|show)|npm ci|node --test/.test(r)), 'Pass B: nichts, das außerhalb des Worktrees liest');
+  assert.ok(ORCH_DENY.includes('Bash(*.credentials*)') && ORCH_DENY.includes('Bash(*--no-index*)'));
   assert.ok(!ROUTINE_ALLOW.some((r) => /push|merge|reset|rebase|curl|ssh|env/i.test(r)), 'nichts Gefährliches in der Allowlist');
   assert.ok(ORCH_DENY.some((r) => /^Bash\(git (\* )?push/.test(r)), 'Push bleibt gesperrt');
   assert.equal(routineAllowAn({}), true); assert.equal(routineAllowAn({ BRIDGE_ROUTINE_ALLOW: 'aus' }), false);
@@ -75,6 +79,14 @@ test('OpenCode 2: höchstens 40 Leser je Server (2 Server = 80), einstellbar', a
   assert.equal(opencode2MaxGesamt({}), 80);
   assert.equal(opencode2MaxGesamt({ BRIDGE_OPENCODE2_MAX_JE_SERVER: '30' }), 60);
   assert.equal(opencode2MaxGesamt({ BRIDGE_OPENCODE2_PORTS: '47811', BRIDGE_OPENCODE2_MAX_JE_SERVER: 'x' }), 40);
+});
+
+test('Pass B: ein nur aus eigenem Grund wartender Platz (PR-Stau …) hält die Schlange nicht auf', async () => {
+  const { reihe } = await import('../src/schlange.ts');
+  const t = Date.now();
+  const q = [{ key: 'a', userId: 'u', since: t - 1000, vorrang: false, gehalten: true }, { key: 'b', userId: 'u', since: t, vorrang: false }];
+  assert.deepEqual(reihe(q, 'u', undefined, t).map((p) => p.key), ['b', 'a']);
+  assert.deepEqual(reihe(q.map((p) => ({ ...p, gehalten: false })), 'u', undefined, t).map((p) => p.key), ['a', 'b']);
 });
 
 test('Harte Obergrenze BRIDGE_MAX_PARALLEL_CHATS gilt weiter neben der Schätzung', () => {

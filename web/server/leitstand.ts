@@ -104,7 +104,8 @@ export function strandEvent(run: any, st: { status: string; reason: string; caus
   // noch an der Grenze, meldet er „hängt“ — einmal je Zug — mit dem Grund, warum nicht fortgesetzt wurde (autoHold).
   // Plan §24 A2: ohne Status-Zeile setzt das automatische „weiter“ fort; nach dem Stopp meldet es selbst („hängt“) — hier nichts.
   if (st.cause === 'ohne_status') return null;
-  if (st.cause) {
+  // Council 6: eine Sperre ist kein technisches Zugende — sofort als „blockiert“ melden (unten), nicht erst nach hangMs als „hängt“.
+  if (st.cause && st.cause !== 'sperre') {
     const endAt = s?.turn?.end ?? s?.turn?.start ?? new Date(run.lastSentAt ?? run.startedAt).getTime();
     // Gewollte Wartezeiten des Auto-weiter zuerst abwarten (Council R1, Bedingung 6): Parallelgrenze 2 min, Kontingent 30 min.
     const grace = st.cause === 'busy' ? AUTO_BUSY_MS : st.cause === 'rate_limit' ? AUTO_RATE_MS : 0;

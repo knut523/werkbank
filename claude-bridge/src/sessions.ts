@@ -1477,7 +1477,10 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const box = () => ({ neu: schaetzung, stand: speicherStand(), vorrang: !!orchMap[key]?.vorrang, jcodeBelegt: jcodeBelegt() });
   // Knut 07.11. (kapazitaet.ts): Strang-Züge zusätzlich nach Kontingent, Energie (bauend) und PR-Stau (nur der erste Zug) zulassen.
   const kapLaden = req.kapazitaet;
-  const kapOpt = { neu: !sessionMap[key], bauend: ['voll', 'bauer', 'release'].includes(orchMap[key]?.profil ?? 'voll') };
+  // Pass B (07.11.): „neu“ = noch kein Zug (sessionMap leert sich bei jcode und Phasenwechsel); Kontingent nur für Stränge auf Claude.
+  const kapProfil = orchMap[key]?.profil ?? 'voll';
+  const kapOpt = { neu: !orchMap[key]?.turn, bauend: ['voll', 'bauer', 'release'].includes(kapProfil),
+    claude: !String(orchMap[key]?.modell ?? '').startsWith('melious:') && orchMap[key]?.laeufer !== 'jcode' && kapProfil !== 'leser' && kapProfil !== 'schreiber' };
   if (kind === 'strand' && kapLaden) await kapazitaetLaden(req.userId, () => kapLaden());
   const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
   const zulassen = (r: ReturnType<typeof lockFor>): ReturnType<typeof lockFor> => {
@@ -1503,6 +1506,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang, ...(schaetzung.topf ? { topf: schaetzung.topf } : {}) }, {
       frei: () => { if (lives.has(key)) return false; const r = zulassen(lockFor(meine(), { readonly: !!req.readonly, mode }, box())); meinGrund = lockGrund; return r === 'ok'; },
       grund: () => meinGrund || 'gerade kein Platz',
+      gehalten: () => !!kapGrund(),
       geschlossen: () => req.sink.closed || schlangeAbbruch.has(key),
       ohneDeckel: kind === 'strand',   // Strang-Züge enden nie mit „busy“ (Fehlervariante 2, 06.11.2026, Strang e1ea43fa)
       melde: (pos, minuten) => {
@@ -1721,7 +1725,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Ein ausdrücklich gesetztes Claude-Modell des Strangs (`--modell claude:…`) schlägt Profil und Vorrang (Befund live 15.10.:
   // `--modell claude:opus --profil schreiber` lief auf Melious); Melious bleibt dann nur Ersatz, wenn Claude erschöpft ist.
   const profilMel = (profil === 'leser' || profil === 'schreiber') && !strandClaude;
-  const chatOn = meliousChatOn(key) || !!strandMel || profilMel || (!!melAcc?.vorrang && risiko === 'niedrig' && !strandClaude);
+  // Pass B: der Melious-Vorrang (Energie würde verfallen) gilt weiter für Leads, die nur nach Vorgabe auf Sonnet laufen.
+  const strandClaudeGesetzt = (strandModel?.startsWith('claude:') ? strandModel.slice(7) : undefined) ?? phaseClaude();
+  const chatOn = meliousChatOn(key) || !!strandMel || profilMel || (!!melAcc?.vorrang && risiko === 'niedrig' && !strandClaudeGesetzt);
   // Ersatzkette für Hauptchat und Strang-Leads (Knut 15.10.: „keine Limitations“): Opus → Sonnet → Melious, ohne Warten.
   const ketteMit = (m?: Account) => !!m?.kette && (live.leit || (live.orch && !profilMel));
   // strandClaude kann sich im Zug ändern (Phasenwechsel, Plan 165) — deshalb bei jedem Aufruf neu gelesen.
@@ -2148,7 +2154,9 @@ export const workerClaudeMaxFuer = (rolle: string | undefined) => (rolle === 'ba
 export function bauerModell(aufgabe: string, env: Record<string, string | undefined> = process.env): string {
   const name = (v: string | undefined, vorgabe: string) => (v && /^[\w.:/-]{1,80}$/.test(v) ? v : vorgabe);
   const mechanik = /(?:^|[^\p{L}])(tests?|testfälle|unit-?tests?|mechanisch\p{L}*|umbenenn\p{L}*|rename|formatier\p{L}*|lint\p{L}*|tippfehler|typos?|imports?|kommentare?|fixtures?|snapshots?)(?![\p{L}])/iu.test(String(aufgabe ?? ''));
-  return mechanik ? name(env.BRIDGE_BAUER_MECHANIK_MODELL, 'glm-5.3-flash') : name(env.BRIDGE_BAUER_MODELL, 'glm-5.3');
+  // Pass B: nur reine Mechanik auf Flash — „implementiere X und schreibe Tests“ bleibt Code (glm-5.3).
+  const bauen = /(implementier|feature|neue[nrs]? (funktion|route|seite|endpunkt)|fix|behebe|baue?n?\b|logik|refaktor)/i.test(String(aufgabe ?? ''));
+  return mechanik && !bauen ? name(env.BRIDGE_BAUER_MECHANIK_MODELL, 'glm-5.3-flash') : name(env.BRIDGE_BAUER_MODELL, 'glm-5.3');
 }
 export const workerMeliousReserve = () => envZahl('BRIDGE_WORKER_MELIOUS_RESERVE', 16_000);
 export const maxWorkers = () => envZahl('BRIDGE_MAX_WORKERS', 6, 1);
@@ -2232,6 +2240,10 @@ export async function strangPruefen(userId: string, conv: string): Promise<{ ok:
   const mb = fest ? (await runCmd('git', ['-C', e.dir, 'merge-base', 'HEAD', fest.sha], { cwd: e.dir })).out.trim() : '';
   if (!mb) return { ok: false, status: 409, error: 'Keine Basis (Integrationszweig) gefunden — so lässt sich der Stand nicht prüfen.' };
   const r = await pruefenSauber(e.dir, mb, { fest, maxMs: 600_000 });
+  // Pass B: geprüft ist nur, was während der Prüfung unverändert und sauber war (ein neuer Zug könnte committet haben).
+  const nachher = (await runCmd('git', ['-C', e.dir, 'rev-parse', 'HEAD'], { cwd: e.dir })).out.trim();
+  const schmutz = (await runCmd('git', ['-C', e.dir, 'status', '--porcelain', '--untracked-files=no'], { cwd: e.dir })).out.trim();
+  if (nachher !== head || schmutz || lives.has(key)) return { ok: false, status: 409, error: 'Der Stand hat sich während der Prüfung geändert (neuer Commit, ungesicherte Änderungen oder ein laufender Zug) — noch einmal prüfen.' };
   log('bau-gate', { conv: key, head: head.slice(0, 12), eingerichtet: r.eingerichtet, rot: r.ergebnisse.filter((p) => !p.ok).map((p) => p.name) });
   return { ok: true, head, eingerichtet: r.eingerichtet, gruen: r.ergebnisse.every((p) => p.ok), ergebnisse: r.ergebnisse };
 }

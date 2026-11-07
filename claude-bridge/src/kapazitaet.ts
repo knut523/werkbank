@@ -18,9 +18,9 @@ const uhr = (t: number) => new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/
  * Rein: warum ein Strang-Zug (noch) nicht starten darf, oder '' wenn er darf. `neu` = erster Zug des Strangs (nur dann zählt der
  * PR-Stau — ein laufender Strang soll seinen PR fertig machen können); `bauend` = Profil voll/bauer/release (GLM-Bauer brauchen Energie).
  */
-export function kapazitaetGrund(k: Kapazitaet | null, o: { neu: boolean; bauend: boolean }, env: Record<string, string | undefined> = process.env): string {
+export function kapazitaetGrund(k: Kapazitaet | null, o: { neu: boolean; bauend: boolean; claude?: boolean }, env: Record<string, string | undefined> = process.env): string {
   if (!k || !kapazitaetAn(env)) return '';
-  if (k.claudeFrei === false) return `wartet: Kontingent — kein Claude-Konto frei${k.claudeFreiAb ? ` (wieder ab ${uhr(k.claudeFreiAb)})` : ''}`;
+  if (k.claudeFrei === false && o.claude !== false) return `wartet: Kontingent — kein Claude-Konto frei${k.claudeFreiAb ? ` (wieder ab ${uhr(k.claudeFreiAb)})` : ''}`;
   if (o.bauend && k.unterBoden) return `wartet: Energie — Melious bei ${k.meliousProzent ?? '?'} % (unter der Notgrenze), nachladen`;
   const d = prDeckel(env);
   if (o.neu && k.prWartend !== null && k.prWartend >= d) return `wartet: PR-Stau — ${k.prWartend} PRs warten auf Knuts Go (Deckel ${d}); Sammel-Freigabe auf „Jetzt“`;
@@ -35,7 +35,8 @@ export function kapazitaetJetzt(userId: string, laden: (userId: string) => Promi
   const c = lage.get(userId);
   if ((!c || now - c.at > 30_000) && !laedt.has(userId)) {
     laedt.add(userId);
-    laden(userId).then((k) => lage.set(userId, { at: Date.now(), k }), () => lage.set(userId, { at: Date.now(), k: c?.k ?? null })).finally(() => laedt.delete(userId));
+    // Pass B: ohne Antwort die alte Lage höchstens 2 min weiterreichen, danach zählt nur der RAM (keine eingefrorene Sperre).
+    laden(userId).then((k) => lage.set(userId, { at: Date.now(), k }), () => { if (!c || Date.now() - c.at >= 120_000) lage.set(userId, { at: Date.now(), k: null }); }).finally(() => laedt.delete(userId));
   }
   return c?.k ?? null;
 }
@@ -45,7 +46,7 @@ export async function kapazitaetLaden(userId: string, laden: (userId: string) =>
   if (c && Date.now() - c.at <= 30_000) return c.k;
   const k = await Promise.race([laden(userId).catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), 2000))]);
   if (k) lage.set(userId, { at: Date.now(), k });
-  return k ?? c?.k ?? null;
+  return k ?? (c && Date.now() - c.at < 120_000 ? c.k : null);
 }
 /** Nur für Tests. */
 export const kapazitaetVergessen = () => { lage.clear(); laedt.clear(); };

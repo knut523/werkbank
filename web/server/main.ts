@@ -3888,8 +3888,10 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
       return send(res, 200, { ereignisse: await offeneEreignisse(u) });
     }
     case 'wait': {
-      let weg = false; req.on('close', () => { weg = true; });
-      return send(res, 200, await warteAufEreignisse(u, { warteMs: Math.max(1, Number(b.timeoutS) || 600) * 1000, abgebrochen: () => weg }));
+      // Pass B (07.11.): Abbruch am Socket der Antwort erkennen (req 'close' kommt nach dem gelesenen Body sofort oder nie);
+      // höchstens 280 s — Nodes fetch bricht nach 300 s ohne Antwortkopf ab, sonst gingen Ereignisse an einen toten Aufrufer.
+      let weg = false; res.on('close', () => { if (!res.writableFinished) weg = true; });
+      return send(res, 200, await warteAufEreignisse(u, { warteMs: Math.min(280, Math.max(1, Number(b.timeoutS) || 240)) * 1000, abgebrochen: () => weg }));
     }
     // B2 (Knut 07.11.): Status nach Thema — eine Zeile je Thema, wer ist dran (dieselbe Rechnung wie die 2.0, Seite Arbeit).
     case 'lage': return send(res, 200, { zeilen: await themenLageFuer(u) });

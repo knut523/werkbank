@@ -10,7 +10,7 @@ import { existsSync, readFileSync, mkdtempSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WB_ROOT, cfg } from './config.ts';
-import { meliousChat, meliousKey, meliousSettings, recordMeliousUsage, MELIOUS_AUS } from './melious.ts';
+import { meliousChat, meliousKey, meliousSettings, recordMeliousUsage, unterBodenFuer, MELIOUS_AUS, MELIOUS_HART_AUS } from './melious.ts';
 import type { User } from './auth.ts';
 import { bucheGegenpruefung } from './verbrauch.ts';
 
@@ -55,7 +55,9 @@ export async function meliousPassC(u: User, o: { wt: string; basis: string; zwec
   if (!REF.test(o.basis) || !existsSync(o.wt)) return nein('Worktree oder Basis fehlt');
   const s = await meliousSettings(u).catch(() => null);
   if (!s?.configured) return nein('kein Melious-Schlüssel hinterlegt');
-  if (!s.enabled) return nein(MELIOUS_AUS);   // Hauptsitzung 07.11.: gespeichert ist nicht erlaubt (jcode bekäme den Schlüssel sonst direkt)
+  if (!s.enabled) return nein(s.hartAus ? MELIOUS_HART_AUS : MELIOUS_AUS);   // Hauptsitzung 07.11.: gespeichert ist nicht erlaubt (jcode bekäme den Schlüssel sonst direkt)
+  const boden = await unterBodenFuer(u).catch(() => null);   // Pass B: Grund der Notgrenze statt „lieferte keinen Prüfauftrag“
+  if (boden) return nein(boden);
   if (!existsSync(JCODE_BIN())) return nein('jcode nicht installiert');
   const git = async (args: string[]) => (await run('git', args, { cwd: o.wt, encoding: 'utf8', maxBuffer: 16 << 20, timeout: 60_000 })).stdout;
   let stat = '', auszug = '';
@@ -95,7 +97,11 @@ export async function meliousPassC(u: User, o: { wt: string; basis: string; zwec
       energie += (await recordMeliousUsage(u, u2, Date.now(), String(j.model ?? modell))).energie;
     } catch { /* ohne Sitzungsdatei: nur der Prüfauftrag gebucht */ }
   }
-  if (out.code !== 0 || !j?.text) return nein(`jcode-Lauf fehlgeschlagen (Exit ${out.code})`, energie);
+  if (out.code !== 0 || !j?.text) {
+    // Pass B: auch ein fehlgeschlagener Lauf hat verbraucht — ins Verbrauchsbuch.
+    await bucheGegenpruefung(u, null, 'passc', { ok: false, energie, modell: String(j?.model ?? modell), usage: tokJ }, Date.now() - t0, Date.now(), 'jcode').catch(() => {});
+    return nein(`jcode-Lauf fehlgeschlagen (Exit ${out.code})`, energie);
+  }
   // Der Schlüssel darf nie im Ergebnis stehen (es geht an den Strang und von dort ggf. in einen Kommentar).
   const text = `# Prüfauftrag (glm-5.3)\n\n${brief.text}\n\n# Review (jcode + ${String(j.model ?? modell)})\n\n${String(j.text)}\n`.split(key).join('***');
   await bucheGegenpruefung(u, null, 'passc', { ok: true, energie, modell: String(j.model ?? modell), usage: tokJ }, Date.now() - t0, Date.now(), 'jcode').catch(() => {});   // Verbrauchsbuch (B4)
@@ -123,7 +129,7 @@ export async function ensemblePassC(u: User, o: { wt: string; basis: string; zwe
   if (!REF.test(o.basis) || !existsSync(o.wt)) return { ok: false, text: '', energie: 0, ms: 0, fehler: 'Worktree oder Basis fehlt' };
   // Hauptsitzung 07.11.: ohne „erlaubt“ weder Ensemble noch Rückfall — beide liefen über Melious
   const erlaubt = o.erlaubt ?? (async () => (await meliousSettings(u).catch(() => null))?.enabled === true);
-  if (!(await erlaubt())) return { ok: false, text: '', energie: 0, ms: 0, fehler: MELIOUS_AUS };
+  if (!(await erlaubt())) return { ok: false, text: '', energie: 0, ms: 0, fehler: (await meliousSettings(u).catch(() => null))?.hartAus ? MELIOUS_HART_AUS : MELIOUS_AUS };
   if (process.env.WERKBANK_GEGENPRUEFUNG_ENSEMBLE === 'aus') return rueckfall('WERKBANK_GEGENPRUEFUNG_ENSEMBLE=aus');
   let j: any = null;
   try {
@@ -137,6 +143,7 @@ export async function ensemblePassC(u: User, o: { wt: string; basis: string; zwe
   for (const n of Array.isArray(j?.nutzung) ? j.nutzung : []) {
     try { energie += (await recordMeliousUsage(u, n.usage, Date.now(), String(n.modell))).energie; } catch { /* Buchung ist Zusatz */ }
   }
+  if ((!j || j.error || !j.text) && energie > 0) await bucheGegenpruefung(u, null, 'passc', { ok: false, energie, modell: 'ensemble' }, Date.now() - t0, Date.now(), 'oc2').catch(() => {});   // Pass B: verbrauchte Energie auch ohne Ergebnis
   if (!j || j.error || !j.text) { const r = await rueckfall(String(j?.error ?? 'leere Antwort').slice(0, 200)); return { ...r, energie: r.energie + Math.round(energie) }; }
   // Phase 4: die Kopfzeile nennt die Modelle, die wirklich liefen (Rückfall jcode, fehlender Schatten) — Läufer und Urteile stehen im
   // Fuß des Ensemble-Texts aus der Brücke.

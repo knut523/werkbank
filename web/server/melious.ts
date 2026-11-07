@@ -129,7 +129,9 @@ export function meliousBoden(env: Record<string, string | undefined> = process.e
   return v !== '' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : 5;
 }
 /** Rein: Sperrgrund, wenn der Füllstand (0…1) unter dem Boden liegt; unbekannt sperrt nicht. */
-export function bodenGrund(fuell: number | null | undefined, geschaetzt: boolean, boden = meliousBoden()): string | null {
+export function bodenGrund(fuell: number | null | undefined, geschaetzt: boolean, boden = meliousBoden(), auchGeschaetzt = String(process.env.WERKBANK_MELIOUS_BODEN_GESCHAETZT ?? '').trim() === 'an'): string | null {
+  // Pass B (07.11.): hart nur auf dem echten Stand (Dashboard) — eine Schätzung (Faktoren × Tokens) sperrte sonst einen vollen Topf.
+  if (geschaetzt && !auchGeschaetzt) return null;
   if (typeof fuell !== 'number' || !Number.isFinite(fuell) || fuell * 100 >= boden) return null;
   return `Energie ${geschaetzt ? 'geschätzt ' : ''}bei ${Math.round(fuell * 100)} % — unter der Notgrenze ${boden} %, keine neuen Melious-Läufe (Claude übernimmt; nachladen)`;
 }
@@ -202,7 +204,7 @@ async function chatCompletion(u: User, body: Record<string, unknown>, timeoutMs:
 
 /** Ein Melious-Aufruf mit Buchung (Auto-Review, Pass C): Text oder null; Energie aus billing_cost bzw. geschätzt. */
 /** Sperrgrund der Untergrenze für diese Person (null = frei oder Füllstand unbekannt). */
-async function unterBodenFuer(u: User): Promise<string | null> {
+export async function unterBodenFuer(u: User): Promise<string | null> {
   const use = await meliousUsage(u).catch(() => null);
   return use ? bodenGrund(use.energie.fuell, use.energie.geschaetzt) : null;
 }
@@ -508,7 +510,7 @@ export async function meliousUsage(u: User, now = Date.now()) {
   ];
   return {
     // Sperre: Deckel, sonst die Energie-Untergrenze (Council 07.11., 8) — sichtbar in Kontingentzeile, Routing und Warnungen.
-    day, month, heute: h, monat: m, modelle, rest: Math.max(0, r2(Math.min(h.limit - h.energie, m.limit - m.energie))), sperre: deckelSperre ?? bodenGrund(fuell, !echt),
+    day, month, heute: h, monat: m, modelle, rest: Math.max(0, r2(Math.min(h.limit - h.energie, m.limit - m.energie))), sperre: deckelSperre ?? bodenGrund(fuell === null ? null : Math.round(fuell * 100) / 100, !echt),
     energie: { geschaetzt: !echt, echt, stand, fuell: fuell === null ? null : Math.round(fuell * 100) / 100, faktorQuelle: s.faktorQuelle, nachfuellungTag, topfMax, tempo, modus, vorrang, bezahlt, hinweise, taktS: s.taktS, dashboard: MELIOUS_DASHBOARD },
     quelle: echt ? `Verbrauch je Zug geschätzt (Preisliste × 10.000); Stand abgeglichen mit dem Melious-Dashboard (${echt.at.slice(11, 16)} UTC)` : 'geschätzt aus Tokens × Preisliste × 10.000 (echter Stand nur im Melious-Dashboard; Abgleich aus)',
   };

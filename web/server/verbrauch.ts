@@ -75,21 +75,25 @@ export function verbrauchAus(zuege: Zug[], runs: RunInfo[], now: number, o: { ta
   const tagAb = o.tagAb ?? wienTagesbeginn(now).getTime(), wocheAb = now - 7 * 86400_000;
   const runJeConv = new Map(runs.map((r) => [r.conv, r]));
   const je = { heute: new Map<Laeufer, Summe>(), woche: new Map<Laeufer, Summe>() };
-  const laeufe = new Map<string, Lauf & { anteil: Map<Laeufer, number>; ausgang: string | null }>();
+  const laeufe = new Map<string, Lauf & { anteil: Map<Laeufer, number>; ausgang: string | null; lead: Laeufer | null; in: { heute: Set<Laeufer>; woche: Set<Laeufer> } }>();
   for (const z of [...zuege].sort((a, b) => t(a.at) - t(b.at))) {
     const l = laeuferVon(z), at = t(z.at);
     const conv = z.art === 'worker' ? String(z.parent ?? '').split(':').pop() || null : z.conv;
-    const key = z.art === 'gegenpruefung' ? `gp:${z.conv ?? ''}:${at}` : z.art === 'hauptchat' ? `hc:${at}` : `s:${conv}`;
+    // Pass B: ohne Strang (kein conv/parent) je Versuch ein eigener Lauf — sonst würden sie zu einem Riesenlauf „s:null“.
+    const key = z.art === 'gegenpruefung' ? `gp:${z.conv ?? ''}:${at}` : z.art === 'hauptchat' ? `hc:${at}` : conv ? `s:${conv}` : `x:${at}`;
     const r = conv ? runJeConv.get(conv) ?? null : null;
     let x = laeufe.get(key);
     if (!x) {
       x = { key, strand: r?.id ?? null, titel: r?.titel ?? (z.art === 'gegenpruefung' ? 'Gegenprüfung' : z.art === 'hauptchat' ? 'Hauptchat' : 'Strang (ohne Eintrag)'),
-        laeufer: l, modelle: [], aufgabe: aufgabeVon(z, r), ergebnis: 'offen', input: 0, output: 0, cacheRead: 0, energie: 0, ms: 0, versuche: 0, letzter: at, anteil: new Map(), ausgang: null };
+        laeufer: l, modelle: [], aufgabe: aufgabeVon(z, r), ergebnis: 'offen', input: 0, output: 0, cacheRead: 0, energie: 0, ms: 0, versuche: 0, letzter: at, anteil: new Map(), ausgang: null, lead: null, in: { heute: new Set(), woche: new Set() } };
       laeufe.set(key, x);
     }
     x.input += z.input ?? 0; x.output += z.output ?? 0; x.cacheRead += z.cacheRead ?? 0; x.energie += z.energie ?? 0; x.ms += z.ms ?? 0; x.versuche++; x.letzter = at;
     if (z.modell && !x.modelle.includes(z.modell)) x.modelle.push(z.modell);
-    x.anteil.set(l, (x.anteil.get(l) ?? 0) + tokensOf(z) + (z.energie ?? 0));
+    // Pass B: Läufer des Laufs = der des Leads (Versuche ohne Worker); nur ohne Lead nach Anteil (Tokens inkl. Cache).
+    if (z.art !== 'worker') x.lead = l;
+    x.anteil.set(l, (x.anteil.get(l) ?? 0) + (z.input ?? 0) + (z.output ?? 0));
+    for (const [ab, nm] of [[tagAb, 'heute'], [wocheAb, 'woche']] as const) if (at >= ab) x.in[nm].add(l);
     if (z.art !== 'worker') x.ausgang = z.outcome ?? null;
     for (const [ab, m] of [[tagAb, je.heute], [wocheAb, je.woche]] as const) {
       if (at < ab) continue;
@@ -98,14 +102,15 @@ export function verbrauchAus(zuege: Zug[], runs: RunInfo[], now: number, o: { ta
       m.set(l, s);
     }
   }
-  const liste: Lauf[] = [...laeufe.values()].map(({ anteil, ausgang, ...x }) => {
+  const dabei = new Map<string, { heute: Set<Laeufer>; woche: Set<Laeufer> }>();
+  const liste: Lauf[] = [...laeufe.values()].map(({ anteil, ausgang, lead, in: dort, ...x }) => {
+    dabei.set(x.key, dort);
     const r = x.strand ? runs.find((y) => y.id === x.strand) : null;
-    // Läufer des Laufs: der mit dem größten Anteil (Tokens + Energie) — ein Claude-Lead mit jcode-Workern bleibt „Claude“.
-    const laeufer = [...anteil].sort((a, b) => b[1] - a[1])[0]?.[0] ?? x.laeufer;
+    const laeufer = lead ?? [...anteil].sort((a, b) => b[1] - a[1])[0]?.[0] ?? x.laeufer;
     return { ...x, laeufer, energie: Math.round(x.energie), ergebnis: ergebnisVon(r?.zustand, ausgang) };
   });
-  // Läufe je Läufer zählen (ein Lauf zählt dort, wo er gelaufen ist, im Zeitraum seines letzten Versuchs).
-  for (const x of liste) for (const [ab, m] of [[tagAb, je.heute], [wocheAb, je.woche]] as const) if (x.letzter >= ab && m.has(x.laeufer)) m.get(x.laeufer)!.laeufe++;
+  // Pass B: ein Lauf zählt im Zeitraum bei jedem Läufer, der dort Versuche für ihn hatte.
+  for (const x of liste) for (const nm of ['heute', 'woche'] as const) for (const l of dabei.get(x.key)?.[nm] ?? []) je[nm].get(l)!.laeufe++;
   const fertig = liste.filter((x) => x.ergebnis === 'fertig' && x.aufgabe !== 'hauptchat');
   const gruppen = new Map<string, Lauf[]>();
   for (const x of fertig) { const k = `${x.aufgabe}|${x.laeufer}`; gruppen.set(k, [...(gruppen.get(k) ?? []), x]); }
@@ -142,7 +147,7 @@ export async function bucheGegenpruefung(u: User, conv: unknown, art: unknown, r
 /** Das Verbrauchsbuch der Person (30 Tage). `runs`: die Stränge mit ihrem Zustand (aus der Unter-Chat-Liste). */
 export async function verbrauchView(u: User, runs: () => Promise<RunInfo[]>, now = Date.now()) {
   const zs: any[] = await wb().collection('zug_log').find({ userId: u.id, at: { $gte: new Date(now - 30 * 86400_000) } })
-    .project({ at: 1, conv: 1, art: 1, anbieter: 1, modell: 1, konto: 1, laeufer: 1, aufgabe: 1, input: 1, output: 1, cacheRead: 1, energie: 1, outcome: 1, ms: 1, parent: 1 }).limit(20_000).toArray();
+    .project({ at: 1, conv: 1, art: 1, anbieter: 1, modell: 1, konto: 1, laeufer: 1, aufgabe: 1, input: 1, output: 1, cacheRead: 1, energie: 1, outcome: 1, ms: 1, parent: 1 }).sort({ at: -1 }).limit(20_000).toArray();
   const r = await runs().catch(() => [] as RunInfo[]);
   return { ...verbrauchAus(zs, r, now), at: new Date(now).toISOString(), quelle: 'zug_log (Brücke je Versuch: Tokens, Energie, Dauer) und Gegenprüfungen über Melious; 30 Tage' };
 }

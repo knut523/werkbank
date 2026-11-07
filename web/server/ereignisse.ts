@@ -60,8 +60,17 @@ export async function sammeln(u: User, now = Date.now(), deps: Deps = { strandSt
 
 export interface EreignisDoc { _id: string; kind: string; text: string; excerpt: string; strand: { id: string; title: string } | null; at: Date; gelesen: Date | null }
 
+let indiziert = false;
+/** Pass B: Index für die Warterunden und Aufbewahrung 30 Tage (die Sammlung wuchs sonst unbegrenzt). */
+async function ensureIndexes() {
+  if (indiziert) return;
+  indiziert = true;
+  try { await ereignisseCol().createIndex({ userId: 1, gelesen: 1, at: 1 }); await ereignisseCol().createIndex({ createdAt: 1 }, { expireAfterSeconds: 30 * 86400 }); } catch { indiziert = false; }
+}
+
 /** Ungelesene Ereignisse, älteste zuerst. */
 export async function offeneEreignisse(u: User, limit = 50): Promise<EreignisDoc[]> {
+  await ensureIndexes();
   return ereignisseCol().find({ userId: u.id, gelesen: null }).sort({ at: 1, _id: 1 }).limit(limit).toArray() as any;
 }
 
@@ -75,9 +84,14 @@ export async function quittieren(u: User, ids: string[] | 'alle', now = Date.now
 export async function warten(u: User, o: { warteMs: number; intervallMs?: number; sammelnFn?: (u: User) => Promise<unknown>; abgebrochen?: () => boolean }): Promise<{ ereignisse: EreignisDoc[]; timeout: boolean }> {
   const bis = Date.now() + Math.max(0, Math.min(o.warteMs, WARTE_MAX_MS));
   const sam = o.sammelnFn ?? ((x: User) => sammeln(x));
+  // Pass B (07.11.): neu sammeln (Brücke + letzte Nachricht je Strang) höchstens alle 15 s, dazwischen nur die Sammlung lesen.
+  const sammelAbstand = Math.max(o.intervallMs ?? 3000, o.sammelnFn ? 0 : 15_000);
+  let zuletzt = 0;
   for (;;) {
-    await sam(u).catch(() => 0);
+    if (Date.now() - zuletzt >= sammelAbstand) { zuletzt = Date.now(); await sam(u).catch(() => 0); }
     const l = await offeneEreignisse(u);
+    // Pass B: nie für einen Aufrufer quittieren, der schon weg ist — sonst wären die Ereignisse verloren.
+    if (l.length && o.abgebrochen?.()) return { ereignisse: [], timeout: true };
     if (l.length) { await quittieren(u, l.map((x) => String(x._id))); return { ereignisse: l, timeout: false }; }
     if (Date.now() >= bis || o.abgebrochen?.()) return { ereignisse: [], timeout: true };
     await new Promise((r) => setTimeout(r, Math.min(o.intervallMs ?? 3000, Math.max(0, bis - Date.now()))));

@@ -16,9 +16,10 @@ test('hart aus nur mit WERKBANK_MELIOUS=aus; Notgrenze mit Vorgabe 5 und gültig
   assert.equal(meliousBoden({ WERKBANK_MELIOUS_BODEN: '150' }), 5);
 });
 
-test('Untergrenze: darunter Sperrgrund mit echtem Prozent, darüber und unbekannt frei', () => {
+test('Notgrenze: darunter Sperrgrund mit echtem Prozent, darüber und unbekannt frei', () => {
   assert.match(bodenGrund(0.19, false, 20)!, /19 % — unter der Notgrenze 20 %/);
-  assert.match(bodenGrund(0.05, true, 20)!, /geschätzt bei 5 %/);
+  assert.equal(bodenGrund(0.05, true, 20), null, 'geschätzter Stand sperrt nicht (Pass B)');
+  assert.match(bodenGrund(0.05, true, 20, true)!, /geschätzt bei 5 %/);
   assert.equal(bodenGrund(0.2, false, 20), null);
   assert.equal(bodenGrund(null, false, 20), null);
   assert.equal(bodenGrund(0.1, false, 0), null, 'Boden 0 = aus');

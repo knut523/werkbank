@@ -57,7 +57,7 @@ export function zustandAus(e: ZustandEingang, now = Date.now()): { zustand: Zust
   if (e.offeneFragen > 0) return { zustand: 'wartet', grund: `${e.offeneFragen} Rückfrage${e.offeneFragen > 1 ? 'n' : ''} an dich` };
   if (e.status === 'done') return { zustand: 'fertig', grund: e.reason };
   if (e.status === 'failed') {
-    if (e.marke === 'blockiert' || /^Start fehlgeschlagen/.test(e.reason)) return { zustand: 'blockiert', grund: e.reason };
+    if (e.marke === 'blockiert' || /^Start fehlgeschlagen|^blockiert: /.test(e.reason)) return { zustand: 'blockiert', grund: e.reason };
     // Parallelgrenze, Kontingent, verlorene Nachricht, Fehler der Sitzung: technisch — das automatische „weiter“ übernimmt.
     return { zustand: 'haengt', grund: e.reason };
   }

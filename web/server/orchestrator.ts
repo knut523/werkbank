@@ -236,7 +236,7 @@ export function orchStatus(run: { startError?: string | null; startedAt: Date | 
   // Council 07.11. (6): keine stillen Stopps — hat der Wächter im letzten Zug etwas abgelehnt oder der Auto-Modus ≥ 3-mal, und meldet der
   // Strang nicht „fertig“, ist er blockiert, mit dem letzten Grund (kein automatisches „weiter“ — das liefe in dieselbe Sperre).
   const sp = s.turn.sperren;
-  if (sp && (sp.waechter > 0 || sp.klassifikator >= 3)) return { status: 'failed', reason: `blockiert: ${sp.grund || 'Sperre'} (${[sp.waechter ? `${sp.waechter}× Wächter` : '', sp.klassifikator ? `${sp.klassifikator}× Auto-Modus` : ''].filter(Boolean).join(', ')}) — Grund ansehen, dann \`send <id> …\` mit anderem Weg`, cause: 'sperre' };
+  if (sp && (sp.waechter > 0 || sp.klassifikator >= 3) && mark !== 'braucht Antwort') return { status: 'failed', reason: `blockiert: ${sp.grund || 'Sperre'} (${[sp.waechter ? `${sp.waechter}× Wächter` : '', sp.klassifikator ? `${sp.klassifikator}× Auto-Modus` : ''].filter(Boolean).join(', ')}) — Grund ansehen, dann \`send <id> …\` mit anderem Weg`, cause: 'sperre' };
   // Plan §23 T8 / §24 A2 (für alle Stränge; ORCH_OHNE_STATUS=aus schaltet ab): ohne Marke, mit „läuft“ oder mit „braucht Antwort“
   // ohne etwas an Knut/Hauptchat im Stand-Block → automatisch weiter (höchstens OHNE_STATUS_MAX-mal), statt über Nacht zu parken.
   // Pass B (Runde 5, C2): nur, wenn das automatische „weiter“ auch wirklich kommt (Takt an, Zugende < 6 h, Strang < 14 Tage) — sonst
@@ -271,7 +271,7 @@ export function mitDeckel(st: { status: OrchStatus; reason: string; cause?: Auto
 
 export const AUTO_BUSY_MS = 2 * 60_000, AUTO_RATE_MS = 30 * 60_000, AUTO_SAVE_MS = 30_000, AUTO_STALE_MS = 6 * 3600_000;
 export const autoMax = () => Math.max(1, Math.floor(Number(process.env.ORCH_AUTO_WEITER_MAX)) || 30);
-export const CAUSE_TEXT: Record<AutoCause, string> = { limit: 'Schrittlimit', timeout: 'Zeitlimit', interrupted: 'Brücke neu gestartet', lost: 'Nachricht nicht angekommen', busy: 'Parallelgrenze', rate_limit: 'Kontingent', ohne_status: 'Zug endete ohne Status-Zeile' };
+export const CAUSE_TEXT: Record<AutoCause, string> = { limit: 'Schrittlimit', timeout: 'Zeitlimit', interrupted: 'Brücke neu gestartet', lost: 'Nachricht nicht angekommen', busy: 'Parallelgrenze', rate_limit: 'Kontingent', ohne_status: 'Zug endete ohne Status-Zeile', sperre: 'Sperre (Wächter/Auto-Modus)' };
 /** Plan §23 T8: so oft höchstens „weiter“ nach einem Zug ohne Status-Marke (oder mit „läuft“) — danach „hängt“ + Hauptchat. */
 export const OHNE_STATUS_MAX = 2;
 /** Hauptsitzung 05.11. 17:20: Anstoß erst so lange nach dem Zugende (Zeit, die Antwort zu lesen). */
@@ -531,7 +531,7 @@ export interface StrangImWorktree { id: string; title: string; status: OrchStatu
 /** Belegt ein anderer Strang einen dieser Worktrees? Belegt = läuft, wartet oder hängt an einer Grenze, die automatisch fortgesetzt wird. */
 export function worktreeKonflikt(ziel: string[], andere: StrangImWorktree[]): StrangImWorktree | null {
   const z = new Set(ziel);
-  return andere.find((a) => (a.status === 'running' || a.status === 'waiting' || (a.status === 'failed' && !!a.cause)) && a.trees.some((t) => z.has(t))) ?? null;
+  return andere.find((a) => (a.status === 'running' || a.status === 'waiting' || (a.status === 'failed' && !!a.cause && a.cause !== 'sperre')) && a.trees.some((t) => z.has(t))) ?? null;
 }
 export const konfliktText = (k: StrangImWorktree) => `Im selben Worktree arbeitet schon der Strang ${k.id} („${k.title}“, ${k.status}) — höchstens ein Strang je Worktree. Warten, bis er fertig ist, einen eigenen Worktree nehmen oder ausdrücklich --shared.`;
 
@@ -558,14 +558,6 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   if (inp.code === true && !vorbauAus()) {   // WERKBANK_VORBAU_CHECK=off → kein G0, nichts blockiert
     g0 = inp.g0 ?? await g0Tor(u, { slug: inp.slug ?? null, plan, cwd: real, aufrufer: inp.aufrufer ?? 'orch start --code', title });
     if (!g0.go) throw Object.assign(err(409, g0.text), { g0: g0.public });
-  }
-  // Council 07.11. (3): Claude-Luft vor dem Start — sind alle Claude-Konten erschöpft, kein Start (sonst hängt der Strang sofort am
-  // Deckel); ausdrücklich Melious bleibt erlaubt. WERKBANK_KONTINGENT_PRUEFUNG=aus schaltet ab; ohne Brücke/Kontenliste: frei.
-  if (luftPruefungAn() && !String(inp.modell ?? '').startsWith('melious:')) {
-    const kd = standardDeps();
-    const [konten, ex] = await Promise.all([kd.konten(u).catch(() => []), kd.erschoepft(u).catch(() => ({} as Record<string, number>))]);
-    const l = claudeLuft(konten, ex, Date.now());
-    if (!l.frei) throw err(409, l.text!);
   }
   // Neuester Code (Knut 11.10.2026, fresh.ts): git fetch; Code-Auftrag → frischer Worktree vom Integrationszweig.
   const id = await newId();
@@ -604,6 +596,14 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
   const profil = inp.profil && inp.profil !== 'voll' ? inp.profil : null;
   // Konzept J, J1: Läufer automatisch und sichtbar (Grund am Strang); jcode nur für lesende Aufträge ohne Kundendaten.
   const lw = laeuferWahl({ titel: title, prompt, code: inp.code === true, profil, laeufer: inp.laeufer ?? null, modell: inp.modell ? String(inp.modell) : null });
+  // Council 07.11. (3): Claude-Luft vor dem Start — sind alle Claude-Konten erschöpft und läuft der Strang auf Claude (nicht Melious,
+  // nicht jcode, kein Melious-Ausweg), kein Start: er hinge sofort am Deckel. WERKBANK_KONTINGENT_PRUEFUNG=aus schaltet ab.
+  if (luftPruefungAn() && !String(modell ?? '').startsWith('melious:') && lw.laeufer !== 'jcode') {
+    const kd = standardDeps();
+    const [konten, ex, ms] = await Promise.all([kd.konten(u).catch(() => []), kd.erschoepft(u).catch(() => ({} as Record<string, number>)), meliousSettings(u).catch(() => null)]);
+    const l = claudeLuft(konten, ex, Date.now());
+    if (!l.frei && !(ms?.enabled && (ms.fallback || ms.kette))) throw err(409, `${l.text!}${fresh.worktree ? ` (Der frische Worktree ${real} bleibt liegen und wird beim nächsten Start wiederverwendet oder aufgeräumt.)` : ''}`);
+  }
   // 1) Bei der Brücke anmelden (prüft den Ordner selbst). Ohne Anmeldung kein Chat (fail closed).
   const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}), tiefe, ...(inp.vorrang === true ? { vorrang: true } : {}), ...(lw.laeufer === 'jcode' ? { laeufer: 'jcode' } : {}) }), signal: AbortSignal.timeout(5000) });
   const rj: any = await reg.json().catch(() => ({}));

@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 // Audit 05.11. (3): eigener Topf für jcode-Stränge (eigene Reihe — sie warten nicht hinter Claude-Zügen, die auf Speicher warten);
 // Wartegrund am Platz (sichtbar in /orch/state); Schlange auf Platte (BRIDGE_STATE_DIR/schlange.json): nach Neustart oder
 // Zeitdeckel bekommt ein Zug, der wiederkommt (automatisches Fortsetzen der Werkbank), seinen alten Platz zurück.
-export interface Platz { key: string; userId: string; since: number; vorrang: boolean; topf?: string; grund?: string }
+export interface Platz { key: string; userId: string; since: number; vorrang: boolean; topf?: string; grund?: string; gehalten?: boolean }
 
 const schlange: Platz[] = [];
 /** Gemerkte Plätze (key → since) von Zügen, die die Schlange ohne Start verlassen haben oder vor einem Neustart warteten. */
@@ -48,6 +48,8 @@ export const alterMs = () => { const m = Number(process.env.BRIDGE_QUEUE_ALTER_M
 export function reihe(q: readonly Platz[], userId: string, topf?: string, jetzt: number = Date.now()): Platz[] {
   const altertAb = jetzt - alterMs();
   return q.filter((p) => p.userId === userId && (p.topf ?? '') === (topf ?? '')).sort((a, b) =>
+    // Pass B (07.11.): wer nur aus eigenem Grund wartet (PR-Stau, Energie, Kontingent — kapazitaet.ts), hält die anderen nicht auf.
+    Number(!!a.gehalten) - Number(!!b.gehalten) ||
     Number(b.since <= altertAb) - Number(a.since <= altertAb)   // gealterte Züge zuerst (negativ = a vorn)
     || (a.since <= altertAb ? 0 : Number(b.vorrang) - Number(a.vorrang))   // sonst Vorrang
     || a.since - b.since);
@@ -89,7 +91,7 @@ export function wecke(): void {
  * `ohneDeckel`: Strang- und Worker-Züge enden nie mit 'zeit' (Fehlervariante 2, 06.11.2026) — sie warten, bis sie dran sind;
  * die Verbindungskontrolle (`geschlossen`) bleibt die einzige Abbruchbedingung.
  */
-export async function warte(p: Omit<Platz, 'since' | 'grund'>, o: { frei: () => boolean; grund?: () => string; geschlossen: () => boolean; melde: (pos: number, minuten?: number) => void; now?: () => number; takt?: number; ohneDeckel?: boolean }): Promise<'start' | 'zu' | 'zeit'> {
+export async function warte(p: Omit<Platz, 'since' | 'grund'>, o: { frei: () => boolean; grund?: () => string; gehalten?: () => boolean; geschlossen: () => boolean; melde: (pos: number, minuten?: number) => void; now?: () => number; takt?: number; ohneDeckel?: boolean }): Promise<'start' | 'zu' | 'zeit'> {
   const now = o.now ?? Date.now;
   const alt = frueher.get(p.key);
   const ankunft = now();
@@ -102,6 +104,8 @@ export async function warte(p: Omit<Platz, 'since' | 'grund'>, o: { frei: () => 
   try {
     for (;;) {
       if (o.geschlossen()) return 'zu';
+      const h = !!o.gehalten?.();
+      if (h !== !!platz.gehalten) { platz.gehalten = h; if (!h) wecke(); }
       const pos = position(schlange, p.key, now());
       if (pos === 1 && !startSperre && o.frei()) { gestartet = true; startSperre = true; return 'start'; }
       const g = o.grund?.() ?? platz.grund;

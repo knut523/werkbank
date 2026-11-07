@@ -128,9 +128,10 @@ export const AUTO_DENY = [
  * Strang-Sperren (ORCH_DENY, Push, Merge, Zugangsdaten) bleiben also wirksam. BRIDGE_ROUTINE_ALLOW=aus schaltet ab.
  */
 export const ROUTINE_ALLOW: string[] = [
-  'Bash(npm test:*)', 'Bash(npm run test:*)', 'Bash(npm run build:*)', 'Bash(npm run lint:*)', 'Bash(npm ci:*)',
-  'Bash(node --test:*)', 'Bash(npx vite build:*)', 'Bash(npx tsc --noEmit:*)', 'Bash(npx vitest run:*)',
-  'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git rev-parse:*)',
+  // Pass B (07.11.): schmal gehalten — kein git diff/log/show (lesen über --no-index/--output außerhalb des Worktrees), kein npm ci
+  // (Install-Skripte), kein node --test/vitest mit beliebigen Dateien. Restrisiko: npm test/build führt Skripte des Strangs aus.
+  'Bash(npm test)', 'Bash(npm run test)', 'Bash(npm run build)', 'Bash(npm run lint)',
+  'Bash(npx vite build)', 'Bash(npx tsc --noEmit)', 'Bash(git status)', 'Bash(git add:*)', 'Bash(git commit:*)',
 ];
 export const routineAllowAn = (env: Record<string, string | undefined> = process.env) => String(env.BRIDGE_ROUTINE_ALLOW ?? '').trim().toLowerCase() !== 'aus';
 
@@ -138,7 +139,7 @@ export const ORCH_DENY: string[] = [
   'Bash(*scripts/orch*)', 'Bash(orch-cli:*)',
   'Bash(*x-werkbank-internal*)', 'Bash(*WERKBANK_INTERNAL_TOKEN*)',
   'Bash(*localhost*/internal/*)', 'Bash(*127.0.0.1*/internal/*)', 'Bash(*0.0.0.0*/internal/*)', 'Bash(*[::1]*/internal/*)',
-  'Bash(*/proc/*environ*)', 'Bash(*.env.local*)', 'Bash(*.config/gh/*)',
+  'Bash(*/proc/*environ*)', 'Bash(*.env.local*)', 'Bash(*.config/gh/*)', 'Bash(*.credentials*)', 'Bash(*--no-index*)',
   'Bash(git push:*)', 'Bash(git * push*)',
   'Bash(git send-pack:*)', 'Bash(git * send-pack*)',
   'Bash(git update-ref:*)', 'Bash(git * update-ref*)',
