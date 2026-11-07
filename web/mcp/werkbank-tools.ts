@@ -74,6 +74,14 @@ const BEDARF_MELDEN = {
     return `Gemeldet (${j.id}) — ${j.hauptchat ? 'die Hauptsitzung hat es sofort' : 'gerade kein Hauptchat aktiv; es steht unter „Braucht Hauptsitzung“'}. Arbeite am Rest weiter; die Antwort kommt als Nachricht.`;
   },
 };
+// Test-Links (Knut 06./07.11.: „always give me a magic logged in link, this is a test env“; docs/plan-testlinks.md): der Strang holt
+// sich für seinen Worktree eine angemeldete Test-Umgebung und trägt den Link in den Bericht ein. Nur lokale Test-DBs, Ablauf 7 Tage.
+const TESTLINK = {
+  name: 'testlink',
+  description: 'Angemeldeten Test-Link für Sichtbares holen (olaf-admin, olaf-tariff-app, Werkbank-Testkopie, Ordner mit index.html): baut/startet eine Test-Umgebung für deinen Arbeitsordner (oder ordner = absoluter Pfad deines Worktrees, wenn der Arbeitsordner das Review-Paket ist), eigene lokale Test-DB, Mails im Trockenlauf, Proxy mit Test-Sitzung — und prüft sie (mit Sitzung 200, ohne 401/30x). Wartet bis Link oder Fehler (Build: einige Minuten). Den Link trägst du im Bericht unter review: ein (titel: Test-Link (angemeldet), url: …); „lokal“ ist für deine eigenen Screenshots. stop=true beendet die Umgebung, neu=true baut neu (frische DB), liste=true zeigt die laufenden.',
+  inputSchema: { type: 'object', properties: { ordner: { type: 'string' }, stop: { type: 'boolean' }, neu: { type: 'boolean' }, liste: { type: 'boolean' } } },
+  run: async (a: any) => (await call('/internal/testlink', { conv: process.env.WERKBANK_CONV_ID || '', ordner: a.ordner ?? '', stop: a.stop === true, neu: a.neu === true, liste: a.liste === true }, 30 * 60_000)).text,
+};
 const DELEG_TOOLS = [
   {
     name: 'delegieren',
@@ -508,7 +516,7 @@ serve('werkbank', '0.1.0', [
   // Delegieren und Phasen-Lead (Plan 165): nur in Strängen; die Brücke kennt Person und Strang aus dieser Umgebung.
   ...(process.env.WERKBANK_STRANG === '1' && process.env.WERKBANK_BRIDGE_URL ? DELEG_TOOLS : []),
   // Knut 06.11.: Stränge lesen GitHub selbst (github_lesen) und melden alles darüber hinaus über den Bedarfskanal.
-  ...(process.env.WERKBANK_STRANG === '1' ? [GITHUB_LESEN, BEDARF_MELDEN] : []),
+  ...(process.env.WERKBANK_STRANG === '1' ? [GITHUB_LESEN, BEDARF_MELDEN, TESTLINK] : []),
   // Native Verteilung Claude ↔ Melious (Knut 19.10.): Lead und Stränge.
   ...(process.env.WERKBANK_BRIDGE_URL ? [
     {

@@ -57,10 +57,9 @@ export const BERICHT_PFLICHT = [
   '  - …',
   'offen:                        # was Knut tun muss, höchstens 5 kurze Zeilen; leer = nichts',
   '  - …',
-  'review:                       # wo Knut reviewt (Coder-Vorschau mit Login-Link, Screenshots, PR-Text)',
-  '  - titel: Admin-Vorschau',
-  '    url: https://<port>--main--dev--knut.ws.konekto.energy/<seite>',
-  '    login: https://<port>--main--dev--knut.ws.konekto.energy/login?next=/<seite>',
+  'review:                       # wo Knut reviewt (angemeldeter Test-Link, Screenshots, PR-Text)',
+  '  - titel: Test-Link (angemeldet)',
+  '    url: https://<port>--main--dev--knut.ws.konekto.energy/<seite>   # aus dem Werkzeug testlink — Knut ist damit sofort angemeldet',
   '  - screenshot: screenshots/<name>.png',
   '  - pr_text: pr.md',
   'fragen:                       # nur echte Entscheidungen Knuts, je mit Empfehlung; antwort bleibt leer — jede Frage muss ohne andere Datei verständlich sein (Entscheidungsseite)',
@@ -82,6 +81,8 @@ export const BERICHT_PFLICHT = [
   '---',
   '```',
   '- `status`: `bereit_fuer_github` nur, wenn Tests grün, Review-Pässe durch und nichts offen; sonst `wartet_auf_knut` (Review/Fragen) oder `blockiert`. Der Kopf muss zum Text passen; ändert sich etwas, Kopf mit ändern (auch `commit`).',
+  // Knut 06./07.11.: „always give me a magic logged in link, this is a test env“ (docs/plan-testlinks.md).
+  '- Bei allem Sichtbaren (olaf-admin, Tarif-App, Werkbank, statische Seite) holst du dir mit dem Werkzeug **testlink** einen angemeldeten Test-Link (eigene lokale Test-DB, Mails im Trockenlauf, 7 Tage gültig) und trägst ihn unter `review:` ein — nie einen Link, bei dem Knut sich erst anmelden muss. Schlägt testlink fehl, steht der Grund mit Logauszug in der Antwort.',
   '- Darunter mindestens ein Mermaid-Diagramm (```` ```mermaid ````) „Wie es jetzt funktioniert“ (Ablauf/Datenfluss des Gebauten, `flowchart LR`); bei mehreren PRs oder Repos zusätzlich „Ausroll-Reihenfolge“. Dazu Screenshots bei allem Sichtbaren.',
   '- PR-Tabelle: nur PRs, die es auf GitHub wirklich gibt, mit `pr:`-Link; nicht gepushte Zweige ohne `pr:` (erscheinen als „lokal, nicht auf GitHub“). Einen Stand (offen/gemergt) schreibst du nicht hin — den holt der Leitstand selbst von GitHub.',
   '- Optional HTML-Folien nach `docs/bericht-folien-vorlage.html` im Werkbank-Repo. Folie 1 ist die Exec Summary (Titel, Status, Worum es geht · Was jetzt anders ist · Was du tun musst, PR-Tabelle); dann Ablauf, Ausrollen, Screenshots, Prüfungen, Entscheidungen.',
@@ -165,7 +166,9 @@ export function orchBrief(b: BriefInput): string {
       'Schreib den Abschnitt selbst als normales Markdown, nicht als Codeblock. Die ETA schätzt du schon in der ersten Antwort (Uhrzeit in Wiener Zeit oder Dauer ab jetzt) und ziehst sie bei jeder Antwort nach. Bei „Status: fertig“ lässt du die ETA-Zeile weg.',
     ].join('\n'),
     // Phase 4: ein jcode-Strang schreibt nur im Arbeitsordner — die Werkbank übernimmt bericht.md ins Paket (reviewdatei.ts).
-    b.jcode ? BERICHT_PFLICHT.replace(/`~\/work\/knut\/review-pakete\/NNN-<slug>\/bericht\.md` \(das Paket nennt der Auftrag\)/, '`bericht.md` in deinem Arbeitsordner (die Werkbank übernimmt ihn ins Review-Paket)') : BERICHT_PFLICHT,
+    b.jcode ? BERICHT_PFLICHT.replace(/`~\/work\/knut\/review-pakete\/NNN-<slug>\/bericht\.md` \(das Paket nennt der Auftrag\)/, '`bericht.md` in deinem Arbeitsordner (die Werkbank übernimmt ihn ins Review-Paket)')
+      // jcode hat kein Werkzeug testlink: den angemeldeten Link holt die Hauptsitzung (`orch testlink <ordner>`).
+      .replace(/holst du dir mit dem Werkzeug \*\*testlink\*\* einen angemeldeten Test-Link[^—]*— /, 'braucht Knut einen angemeldeten Test-Link — schreib „Test-Link für <Ordner>“ unter „Braucht Knut“ (die Hauptsitzung holt ihn mit `orch testlink`); ') : BERICHT_PFLICHT,
     `---\n\nAuftrag:\n${b.prompt.trim()}`,
   ].join('\n\n');
 }

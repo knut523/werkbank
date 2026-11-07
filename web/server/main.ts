@@ -10,7 +10,7 @@ import { join, extname, resolve, normalize, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import YAML from 'yaml';
-import { cfg, WEB_DIR, WB_ROOT, sprintRoot, browseUrl, isMainSite, siteFor, jiraSites } from './config.ts';
+import { cfg, WEB_DIR, WB_ROOT, RT, sprintRoot, browseUrl, isMainSite, siteFor, jiraSites } from './config.ts';
 import { connect, wb, lc } from './db.ts';
 import { librechatLogin, createSession, destroySession, currentUser, allowed, teammates, userById, type User } from './auth.ts';
 import { listClaudeAccounts, addClaudeAccount, removeClaudeAccount, reorderClaudeAccounts, claudeAccountToken, claudeAccountsForBridge } from './creds.ts';
@@ -123,6 +123,8 @@ import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
 import { chatStatusAn, offeneJeStrang, hauptchatJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
 import { registerV2, appDist, v2Index, hauptchatZustellen, councilPruefen } from './v2.ts';
 import { bedarfPruefen, bedarfMelden, bedarfListe, bedarfAntworten, BEDARF_NAME } from './bedarf.ts';
+import { registerTestlinks, testlinkIntern, type TestlinkDeps } from './testlinkroutes.ts';
+import { aufraeumen as testlinkAufraeumen } from './testlink.ts';
 import { liste as v2lcListe, volltext as v2lcVolltext, senden as v2lcSenden } from './v2librechat.ts';
 import { abgebrochenMarkieren as v2Abgebrochen } from './v2chat.ts';
 import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
@@ -2226,6 +2228,21 @@ on('POST', /^\/internal\/bedarf$/, async (req, res) => {
   log('bedarf gemeldet', { user: u.id, strand: String(d._id), id: r.id, art: p.art, neu: r.neu });
   send(res, 200, { id: r.id, neu: r.neu, hauptchat });
 });
+// Test-Links (docs/plan-testlinks.md): Strang-Werkzeug `testlink` — Ziel ist der eigene Strang (Unterhaltung), wahlweise ein Ordner.
+const testlinkDeps: TestlinkDeps = {
+  tl: { ablage: join(RT, 'testlinks'), log }, needUser, body, send, log,
+  strang: (u, id) => orchRuns().findOne({ _id: id as any, userId: u.id, kind: { $nin: ['leitstand', 'worker'] } }),
+  strangVonConv: (u, conv) => orchRuns().findOne({ userId: u.id, conv, kind: { $nin: ['leitstand', 'worker'] } }),
+};
+on('POST', /^\/internal\/testlink$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  send(res, 200, await testlinkIntern(testlinkDeps, u, { conv: String(b.conv ?? ''), ziel: b.ordner ?? '', stop: b.stop === true, neu: b.neu === true, liste: b.liste === true }));
+});
+registerTestlinks(on, testlinkDeps);
+// Abgelaufene (7 Tage) und verwaiste Test-Umgebungen aufräumen — auch ohne Hintergrund-Jobs (lokal, nichts nach außen).
+setInterval(() => { testlinkAufraeumen(testlinkDeps.tl).catch((e) => log('testlink aufräumen fehler', { error: String(e?.message ?? e).slice(0, 160) })); }, 10 * 60_000).unref();
+
 /** Zugang eines Strangs in der Brücke erteilen oder (entziehen: true) wieder wegnehmen. */
 async function brueckenFreigabe(u: User, strand: string, b: { pfad: string; bis?: number; entziehen?: boolean }): Promise<any> {
   const d: any = await orchRuns().findOne({ _id: strand as any, userId: u.id });
@@ -3840,7 +3857,7 @@ async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
   return internalUser(req, { userId: d ? String(d._id) : '' });
 }
 
-on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich|aktion|council|bedarf)$/, async (req, res, m) => {
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich|aktion|council|bedarf|testlink)$/, async (req, res, m) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
   const id = String(b.id ?? '');
@@ -3877,6 +3894,8 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
     case 'council': return send(res, 200, await councilMelden(u, b));   // Plan §23 T3: Hauptchat-Werkzeug orch_council
     // Bedarfskanal (Knut 06.11.): Hauptchat-Werkzeug orch_bedarf — ohne bedarf: Liste der offenen, mit bedarf + antwort: beantworten.
     case 'bedarf': return send(res, 200, b.bedarf ? await bedarfAntwortRoute(u, String(b.bedarf), { ...b, via: 'hauptchat' }) : { offen: (await bedarfListe(u)).map((x: any) => ({ id: x._id, art: x.art, text: x.text, pfad: x.pfad ?? null, strang: x.strand, at: x.at })) });
+    // Test-Links (docs/plan-testlinks.md): `orch testlink [<strang|ordner>] [--stop] [--neu]` — wartet bis Link oder Fehler.
+    case 'testlink': return send(res, 200, await testlinkIntern(testlinkDeps, u, { ziel: b.ziel, stop: b.stop === true, neu: b.neu === true, liste: b.liste === true, alle: b.alle === true }));
   }
 });
 /** Plan §23 T3: Council-Urteil des Hauptchats zu einer gewichtigen Frage (dieselben Prüfungen wie POST /api/v2/council). */

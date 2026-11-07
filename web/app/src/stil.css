@@ -286,3 +286,10 @@ p { margin: 0 0 var(--s1); }
 .alt-seite { font-size: 14px; }
 .wie-bisher { margin: 4px 0 var(--s1); }
 .alt-seite select, .alt-seite input, .alt-seite textarea { max-width: 100%; }
+
+/* Test-Links (docs/plan-testlinks.md) */
+.kasten.testlink { margin: var(--s2) 0; }
+.kasten.testlink pre { white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
+.uc-testlink { margin-top: 8px; }
+.uc-testlink .kasten.testlink { margin: 0; }
+.tl-oeffnen { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }

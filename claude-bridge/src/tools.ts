@@ -445,7 +445,8 @@ export function classify(tool: string, input: Record<string, unknown>, ctx: Clas
     // review_ready ändert nur Werkbank-Zustand (Fertig-Marke am eigenen Lauf) → ohne Rückfrage.
     // hauptchat_melden (Plan 154, S4): Meldung an den Hauptchat — ändert nur Werkbank-Zustand, gedeckelt in der Werkbank.
     // delegieren/delegation_*/phase_wechseln (Plan 165): Steuerung durch die Brücke; Worker arbeiten unter ihrem eigenen Wächter.
-    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'melious_sub' || name === 'ensemble_review' || name === 'auslastung' || name === 'github_lesen' || name === 'bedarf_melden' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln')) return { cls: 'read' };
+    // testlink (docs/plan-testlinks.md): lokale Test-Umgebung mit angemeldetem Link — nur lokale Test-DBs, nichts nach außen.
+    if (server === 'werkbank' && (name === 'hygiene_list' || name === 'inbox' || name === 'melious_sub' || name === 'ensemble_review' || name === 'auslastung' || name === 'github_lesen' || name === 'bedarf_melden' || name === 'hygiene_snooze' || name === 'skills_list' || name === 'review_ready' || name === 'hauptchat_melden' || name === 'challenge' || name === 'delegieren' || name === 'delegation_stand' || name === 'delegation_urteil' || name === 'phase_wechseln' || name === 'testlink')) return { cls: 'read' };
     // Jira ohne Klick (Knut, 03.11.2026): WERKBANK_JIRA_OHNE_KLICK=on → im Hauptchat schreibt Jira direkt (nicht löschen); Stränge unverändert.
     if (server === 'werkbank' && JIRA_WERKBANK_SCHREIBEN.has(name) && jiraOhneKlick(ctx)) return { cls: 'auto' };
     // Jira schreiben (einzeln/gesammelt) und einen neuen Chat mit Agent starten: immer erst nach „ja“.

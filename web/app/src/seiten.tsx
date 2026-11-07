@@ -951,6 +951,7 @@ export function Mehr() {
     ['Alle Chats', 'v2/chats', 'Jeder Chat und Unter-Chat, auch alte — mit Suche und Filtern.'],
     ['Erledigt', 'v2/erledigt', 'Was an einem Tag fertig wurde — mit Datumswahl.'],
     ['Begriffe in Klartext', 'v2/begriffe', 'Was Unter-Chat, Hauptchat und „wartet auf dich“ heißen.'],
+    ['Test-Umgebungen', 'v2/testlinks', 'Angemeldete Test-Links je Worktree: starten, öffnen, stoppen.'],
   ];
   return (
     <div className="seite">

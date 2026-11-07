@@ -7,6 +7,7 @@ import { ChatLeiste } from './chat.tsx';
 import { Anmelden, AlleChats, Themen, Thema, Arbeit, Begriffe, Dokument, Dokumente, Entscheidungen, Entschieden, Erledigt, Jetzt, Mehr, PrDetail, Prs, Suche, Freigabe } from './seiten.tsx';
 import { ALT_PFADE } from './mehr.ts';
 import { UnterChat } from './unterchat.tsx';
+import { TestUmgebungen } from './testlinks.tsx';
 import { Fehler, Laedt, vergessen, vorab } from './teile.tsx';
 import { istIntern, logisch, rel } from './format.ts';
 
@@ -99,6 +100,7 @@ function Seite({ pfad, such, freigabe }: { pfad: string; such: string; freigabe:
   if (pfad.startsWith('v2/dokumente')) return <Dokumente key={q.get('q') ?? ''} q={q.get('q') ?? ''} />;
   if (pfad.startsWith('v2/begriffe')) return <Begriffe />;
   if (pfad.startsWith('v2/mehr')) return <Mehr />;
+  if (pfad.startsWith('v2/testlinks')) return <TestUmgebungen />;   // Test-Links (docs/plan-testlinks.md)
   if (pfad.startsWith('v2/chats')) return <AlleChats key={such} q={q.get('q') ?? ''} />;
   if (pfad === 'v2/themen') return <Themen />;
   if (pfad === 'v2/thema') return <Thema key={such} name={q.get('name') ?? ''} />;
