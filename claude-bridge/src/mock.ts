@@ -125,6 +125,14 @@ export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<
     }
     // Plan 165: Lead, der die Werkzeuge delegieren/delegation_*/phase_wechseln über die Brücke aufruft wie der Werkbank-MCP
     // (Person/Strang/Adresse aus dessen Umgebung). „MOCK-LEAD {json}“ mit schritte: [{ tool, args }].
+    // OC2-Strang (Knut 07.11.): Claude-Verifizierer des Gates — lehnt ab, solange der Diff „MOCK-ABLEHNEN“ enthält; nennt seine Werkzeuge.
+    if (prompt.startsWith('Du bist der Claude-Verifizierer')) {
+      const ab = /^\+.*MOCK-ABLEHNEN/m.test(prompt);
+      const t = `(Mock-Verifizierer) Modell ${options.model ?? 'Standard'}; Werkzeuge ${(options.allowedTools ?? []).join(',')}; Runde ${prompt.match(/Runde (\d+)/)?.[1]}.\n${ab ? '- gebaut.txt:1 — MOCK-ABLEHNEN steht noch drin — entfernen\nURTEIL: abgelehnt' : 'URTEIL: ok'}`;
+      yield text(t);
+      yield { type: 'result', subtype: 'success', session_id, is_error: false, result: t, usage: { input_tokens: 400, output_tokens: 40 } };
+      return;
+    }
     const leadM = prompt.match(/MOCK-LEAD (\{.*\})/);
     if (!mel && /limit/.test(tok) && (leadM || prompt.startsWith('Neue Phase „') || prompt.startsWith('Auftrag vom Strang-Lead'))) { yield* limited(); return; }
     if (leadM && !prompt.startsWith('Neue Phase „')) {

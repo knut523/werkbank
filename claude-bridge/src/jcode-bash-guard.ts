@@ -52,6 +52,8 @@ if (!cmd || !readOnlyBash(cmd) || gesperrt()) {
 // Der Shell (und allem darunter) den Schlüssel gar nicht erst mitgeben; -f: keine Glob-Expansion.
 const env = { ...process.env };
 delete env.JCODE_PROVIDER_MELIOUS_API_KEY;
+// opencode 2 (schreibende Stränge, 07.11.): Schlüssel und Server-Passwort stehen in der Umgebung des Servers.
+for (const k of ['MELIOUS_API_KEY', 'OPENCODE_SERVER_PASSWORD', 'OPENCODE_PASSWORD']) delete env[k];
 // Pass C (Runde 3): lesende git-Befehle starten sonst Programme aus einer untergeschobenen Konfiguration (core.fsmonitor über
 // eine selbst geschriebene .git-Datei, Pager). Diese Einträge gelten vor jeder Repo-Konfiguration. Gegenprüfung (B10): kein leeres
 // diff.external (hieße „Programm ''“) — --ext-diff lehnt readOnlyBash ab, .git/config beschreibt jcode nicht (Schreibwächter).

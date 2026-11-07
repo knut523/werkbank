@@ -20,6 +20,7 @@ import { mcpCall, mcpStatus } from './mcpcall.ts';
 import { directCall } from './mcpdirect.ts';
 import { homeFor, ensureHome, atlassianServer, leitstandMcp, type ClaudeHome } from './claudehome.ts';
 import { log } from './log.ts';
+import { oc2McpStrang, oc2McpAntwort } from './oc2mcp.ts';
 import { testAccount, loadAccounts, markExhausted, exhaustedOf, balanceStats, clearExhausted, MELIOUS_KEY, MELIOUS_ID, MELIOUS_MODEL } from './accounts.ts';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -356,6 +357,23 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://x');
   try {
     if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, mock: MOCK, ...stats(Number(url.searchParams.get('seit')) || undefined), konten: balanceStats() });
+    // Werkbank-Werkzeuge der OC2-Stränge (oc2mcp.ts): das Strang-Token im Header bestimmt Person und Strang.
+    if (req.method === 'POST' && url.pathname === '/oc2-mcp') {
+      const strang = oc2McpStrang(req.headers.authorization);
+      if (!strang || !INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
+      const msg = await readBody(req);
+      const werkbank = async (pfad: string, daten: object) => {
+        const r = await fetch(`${WEB_URL}${pfad}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId: strang.userId, ...daten }), signal: AbortSignal.timeout(30_000) });
+        const j: any = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error ?? `Werkbank antwortet mit ${r.status}`);
+        return j;
+      };
+      const antworten = await Promise.all((Array.isArray(msg) ? msg : [msg]).map((m) => oc2McpAntwort(m, strang, werkbank)));
+      const echte = antworten.filter(Boolean);
+      log('oc2-mcp', { conv: strang.conv, methoden: (Array.isArray(msg) ? msg : [msg]).map((m: any) => (m?.method === 'tools/call' ? `call:${m?.params?.name}` : m?.method)).slice(0, 5) });
+      if (!echte.length) { res.writeHead(202); res.end(); return; }
+      return json(res, 200, Array.isArray(msg) ? echte : echte[0]);
+    }
     // Sitzungen einer Person (nur für Werkbank-Web, mit internem Token; ohne Inhalte außer dem Kurztitel).
     if (req.method === 'GET' && url.pathname === '/sessions') {
       if (!INTERNAL || req.headers['x-werkbank-internal'] !== INTERNAL) return json(res, 403, { error: 'Nicht erlaubt' });
@@ -388,7 +406,7 @@ const server = createServer(async (req, res) => {
       // Tiefe (Plan 205): nur Stränge, nur beim Start; unbekannt → 400.
       if (kind === 'strand' && b.tiefe != null && !TIEFEN.includes(b.tiefe)) return json(res, 400, { error: 'Tiefe: quick, regular oder deep.' });
       const tiefe = kind === 'strand' ? b.tiefe as Tiefe | undefined : undefined;
-      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil, tiefe, vorrang: b.vorrang === true, ...(b.laeufer === 'jcode' ? { laeufer: 'jcode' as const } : {}) }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
+      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil, tiefe, vorrang: b.vorrang === true, ...(b.laeufer === 'jcode' || b.laeufer === 'oc2' ? { laeufer: b.laeufer as 'jcode' | 'oc2' } : {}) }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
       log(kind === 'leitstand' ? 'leitstand angemeldet' : 'strang angemeldet', { user: userId, conv });
       return json(res, 200, { ok: true, dir: real, mode: autoFor({ email }) });
     }

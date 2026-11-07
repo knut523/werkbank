@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { oc2Pruefen, oc2Umgebung, oc2Ports, opencode2Server } from '../src/oc2server.ts';
+import { oc2Pruefen, oc2Umgebung, oc2Ports, opencode2Server , OC2_SHIM } from '../src/oc2server.ts';
 
 const installation = (konfig = '{ "providers": { "melious": {} }, "update": "disable", "share": "disabled" }') => {
   const h = mkdtempSync(join(tmpdir(), 'oc2s-'));
@@ -28,7 +28,9 @@ test('Prüfung vor dem ersten Start: feste Version, nur Melious, keine Updates, 
 
 test('Umgebung der Server: Schlüssel und Passwort, sonst nichts aus der Umgebung der Brücke', () => {
   const u = oc2Umgebung('/h', 'sk-k', 'pw', { PATH: '/bin', WERKBANK_INTERNAL_TOKEN: 'geheim', ANTHROPIC_API_KEY: 'x' });
-  assert.equal(u.MELIOUS_API_KEY, 'sk-k'); assert.equal(u.OPENCODE_SERVER_PASSWORD, 'pw'); assert.equal(u.PATH, '/bin');
+  assert.equal(u.MELIOUS_API_KEY, 'sk-k'); assert.equal(u.OPENCODE_SERVER_PASSWORD, 'pw');
+  // 07.11.: der Shell-Wächter vorn (schreibende Stränge), Projekt-Konfiguration aus
+  assert.equal(u.PATH, `${OC2_SHIM}:/bin`); assert.ok(OC2_SHIM.endsWith('/shim')); assert.equal(u.OPENCODE_DISABLE_PROJECT_CONFIG, '1');
   assert.ok(!('WERKBANK_INTERNAL_TOKEN' in u) && !('ANTHROPIC_API_KEY' in u));
   assert.equal(u.XDG_CONFIG_HOME, '/h/xdg/config');
 });

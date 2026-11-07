@@ -8,7 +8,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, realpathSync, statSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
 import { strangSandbox } from './sandbox.ts';
-import { schreibzielProblem, geheimHinterLink } from './jcode-pre-tool.ts';
+import { schreibzielProblem, geheimHinterLink, GEHEIM } from './jcode-pre-tool.ts';
 import { tmpdir, homedir } from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:path';
@@ -24,7 +24,9 @@ import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn, vergiss, maxWarteMs } from './schlange.ts';
-import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer, type LaeuferNutzung } from './laeufer.ts';
+import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer, oc2Schreibrechte, oc2SchreibtDraussen, type LaeuferNutzung } from './laeufer.ts';
+import { bauZug, linksNachDraussen, urteilAus, verifiziererPrompt, MAX_RUNDEN, type BauDeps, type Verdikt } from './oc2strang.ts';
+import { oc2McpToken } from './oc2mcp.ts';
 import { testkontoNamen, zieleText } from './klick.ts';
 import { ensemble, mitRueckfall, schattenAn, VERIFIZIERER, type Lauf, type EnsLauf, type EnsErgebnis } from './ensemble.ts';
 import { createServer as netServer } from 'node:net';
@@ -32,7 +34,7 @@ import { opencode2Server, oc2Home, oc2Ports, oc2Version, type Oc2Server } from '
 import { modellReihe, ensembleLauf, FLASH, GLM52, type Art } from './modellwahl.ts';
 import { schaetze, passt, passtJcode, schaetzungText, speicherStand, jcodeTopfGb, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
-import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
+import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, meliousHartAus, unterBoden, meliousBoden, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 import { kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, type Kapazitaet } from './kapazitaet.ts';
 
 export interface Sink {
@@ -252,7 +254,7 @@ export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte 
 // laeufer: 'jcode' = Strang läuft über jcode (Konzept J1; eigener Speicher-Topf). turn.grund: warum ein Zug mit „busy“ endete
 // (Grund der Parallelgrenze; Stränge warten seit dem Schlangen-Fix 06.11. ohne Zeitdeckel und enden dort nie mit „busy“).
 export interface Sperren { waechter: number; klassifikator: number; grund: string }
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; laeufer?: 'jcode'; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; grund?: string; sperren?: Sperren };
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; laeufer?: 'jcode' | 'oc2'; oc2?: { sitzung: string; server: string }; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; grund?: string; sperren?: Sperren };
   // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
   // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
   auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string };
@@ -542,12 +544,12 @@ export function workDirFor(userId: string, convId: string): string {
  * Meldet eine neue Unterhaltung als Orchestrator-Strang an: Arbeitsordner = dir (vorher geprüft, siehe server.ts),
  * strengere Sperren. Nur für Unterhaltungen ohne Sitzung und ohne Ordner — eine bestehende wird nie umgebogen.
  */
-export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; vorrang?: boolean; laeufer?: 'jcode' } = {}): void {
+export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; vorrang?: boolean; laeufer?: 'jcode' | 'oc2' } = {}): void {
   const key = `${safeId(userId)}:${safeId(convId)}`;
   if (sessionMap[key] || cwdMap[key] || orchMap[key] || lives.has(key)) throw Object.assign(new Error('Unterhaltung gibt es schon.'), { status: 409 });
   if (o.profil === 'release') { const p = kind === 'strand' ? releaseWorktreeProblem(dir) : 'Profil release nur für Stränge.'; if (p) throw Object.assign(new Error(p), { status: 400 }); }
   cwdMap[key] = dir;
-  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}), ...(o.tiefe && o.tiefe !== 'regular' && TIEFEN.includes(o.tiefe) ? { tiefe: o.tiefe } : {}), ...(o.vorrang ? { vorrang: true } : {}), ...(o.laeufer === 'jcode' && kind === 'strand' ? { laeufer: 'jcode' as const } : {}) };
+  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}), ...(o.tiefe && o.tiefe !== 'regular' && TIEFEN.includes(o.tiefe) ? { tiefe: o.tiefe } : {}), ...(o.vorrang ? { vorrang: true } : {}), ...((o.laeufer === 'jcode' || o.laeufer === 'oc2') && kind === 'strand' ? { laeufer: o.laeufer } : {}) };
   saveMap();
 }
 
@@ -1494,7 +1496,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const meine = () => [...lives.values()].filter((l) => l.userId === req.userId && !l.leit && !l.worker);
   let mine = meine();
   const mode = autoFor(req);
-  const schaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe, jcode: orchMap[key]?.laeufer === 'jcode' });
+  const schaetzung = schaetze({ kind: kind ?? undefined, profil: orchMap[key]?.profil, tiefe: orchMap[key]?.tiefe, jcode: orchMap[key]?.laeufer === 'jcode' || orchMap[key]?.laeufer === 'oc2' });   // OC2: die Server laufen ohnehin, der Zug selbst ist klein
   const box = () => ({ neu: schaetzung, stand: speicherStand(), vorrang: !!orchMap[key]?.vorrang, jcodeBelegt: jcodeBelegt() });
   // Knut 07.11. (kapazitaet.ts): Strang-Züge zusätzlich nach Kontingent, Energie (bauend) und PR-Stau (nur der erste Zug) zulassen.
   const kapLaden = req.kapazitaet;
@@ -1637,11 +1639,13 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
 
   // Konzept J, J1: jcode-Strang — eigener Zugweg (Verlauf aus LibreChat + neue Nachricht, wie eine neue Sitzung). Nur wenn jcode kein
   // brauchbares Ergebnis liefert, läuft dieser Zug mit Claude weiter — sichtbar im Chat und im Steckbrief (laeuferFallback).
-  if (live.orch && !live.worker && orchMap[key]?.laeufer === 'jcode') {
+  if (live.orch && !live.worker && (orchMap[key]?.laeufer === 'jcode' || orchMap[key]?.laeufer === 'oc2')) {
     // Phase 4 (Pass B, A1): der jcode-Lauf schickt keine SDK-Nachrichten — ohne Nachstellen beendete der Leerlauf-Timer jeden
     // Strang-Zug nach 15 min (BRIDGE_JCODE_STRANG_TIMEOUT_S wirkte nie).
     const wach = wachHalten(live);
-    const r = await strangJcode(live, req, freshPrompt()).catch((e: any) => ({ ok: false, grund: String(e?.message ?? e).slice(0, 200), modell: undefined })).finally(wach);
+    // Knut 07.11.: OC2-Strang — eine Sitzung über alle Züge, darum nur die neue Nachricht (der Verlauf steht in der Sitzung).
+    const oc2 = orchMap[key]?.laeufer === 'oc2';
+    const r = await (oc2 ? strangOc2(live, req, orchMap[key]?.oc2 ? req.prompt : freshPrompt()) : strangJcode(live, req, freshPrompt())).catch((e: any) => ({ ok: false, grund: String(e?.message ?? e).slice(0, 200), modell: undefined })).finally(wach);
     if (r.ok || live.abort.signal.aborted) {
       if (r.ok && orchMap[key]?.laeuferFallback) { delete orchMap[key].laeuferFallback; saveMap(); }
       // Pass B2 (A2): eine frühere Claude-Sitzung kennt diesen jcode-Zug nicht — ein späterer Rückfall beginnt neu mit dem Verlauf
@@ -1650,7 +1654,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       mark(live, 'ende');
       // Ein Zeitlimit bleibt ein Zeitlimit (der Hauptchat setzt dann mit „weiter“ fort), nicht „abgebrochen“.
       if (orchMap[key]) setTurn(key, { ...orchMap[key].turn, start: orchMap[key].turn?.start ?? live.t0, end: Date.now(), outcome: r.ok ? 'ok' : live.outcome ?? 'aborted', ...(r.modell ? { modell: r.modell } : {}) });
-      log('turn end', { conv: key, laeufer: 'jcode', ok: r.ok, usage: live.usage });
+      log('turn end', { conv: key, laeufer: oc2 ? 'oc2' : 'jcode', ok: r.ok, usage: live.usage });
       if (live.inbox?.open) closeInbox(live.inbox);   // Nachgereichtes hat jcode nicht gesehen → „ungelesen“, der Client sendet neu
       live.inbox = null;
       end(live);
@@ -1663,7 +1667,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     // (sonst starten bei gestörtem Melious alle jcode-Stränge zugleich Claude-Prozesse). Kein Platz: warten, bis einer frei wird.
     const passt = () => lockFor(meine().filter((l) => l !== live), { readonly: !!req.readonly, mode }, { neu: claudeSchaetzung, stand: speicherStand(), vorrang: !!orchMap[key]?.vorrang, jcodeBelegt: jcodeBelegt() }) === 'ok';
     if (!passt()) {
-      emitStatus(live, `jcode lieferte kein brauchbares Ergebnis (${r.grund}) — der Zug wartet auf einen freien Platz für Claude (${lockGrund || 'gerade kein Platz'}).`);
+      emitStatus(live, `${oc2 ? 'opencode 2' : 'jcode'} lieferte kein brauchbares Ergebnis (${r.grund}) — der Zug wartet auf einen freien Platz für Claude (${lockGrund || 'gerade kein Platz'}).`);
       live.schaetzung = undefined;   // Gegenprüfung (B4): beim Warten weder im jcode-Topf noch schon als Claude-Zug zählen
       const wachW = wachHalten(live);
       try { while (!passt() && !live.abort.signal.aborted) await new Promise((res) => setTimeout(res, 5000)); } finally { wachW(); }
@@ -1671,7 +1675,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         // Gegenprüfung (B4): dasselbe Ende wie oben — sonst stand der Zug für immer auf „läuft“ und Nachgereichtes in einer offenen Inbox
         mark(live, 'ende');
         if (orchMap[key]) setTurn(key, { ...orchMap[key].turn, start: orchMap[key].turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? 'aborted' });
-        log('turn end', { conv: key, laeufer: 'jcode→claude', ok: false, wartend: true });
+        log('turn end', { conv: key, laeufer: oc2 ? 'oc2→claude' : 'jcode→claude', ok: false, wartend: true });
         if (live.inbox?.open) closeInbox(live.inbox);
         live.inbox = null;
         end(live);
@@ -1679,7 +1683,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       }
     }
     live.schaetzung = claudeSchaetzung;
-    emitStatus(live, `jcode lieferte kein brauchbares Ergebnis (${r.grund}) — dieser Zug läuft mit Claude weiter.`);
+    emitStatus(live, `${oc2 ? 'opencode 2' : 'jcode'} lieferte kein brauchbares Ergebnis (${r.grund}) — dieser Zug läuft mit Claude weiter.`);
   }
 
   // Die Sitzung (und ihre Bash-Befehle) bekommt keine Geheimnisse der Werkbank mit.
@@ -2533,6 +2537,144 @@ async function strangJcode(live: Live, req: TurnRequest, prompt: string): Promis
     grund = r.grund;
   }
   return { ok: false, grund };
+}
+
+// ---------- OC2-Strang (Knut 07.11.: „building does not have to be with Claude — Claude just needs to review“) ----------
+// Ein Strang mit `laeufer: 'oc2'` baut auf opencode 2 (Melious, GLM) in EINER Sitzung über alle Züge; jeder Zug mit Änderungen geht
+// durchs Claude-Gate (oc2strang.ts: pruefen() + Claude-Verifizierer, abgelehnt zurück an denselben Bauer). Nur mit
+// BRIDGE_OPENCODE2_STRANG=an; sonst, ohne Melious (aus, unter der Untergrenze) oder ohne Server fällt der Zug sichtbar auf Claude zurück.
+export const opencode2StrangAn = (env: Record<string, string | undefined> = process.env) => env.BRIDGE_OPENCODE2_STRANG === 'an';
+const GATE_MODELL = () => (/^(opus|sonnet|haiku)$/.test(process.env.BRIDGE_OC2_GATE_MODELL ?? '') ? process.env.BRIDGE_OC2_GATE_MODELL! : 'sonnet');
+/** Checkliste als Linse für den Verifizierer (Council 07.11.): das Gate-Skript vor GitHub, falls installiert; BRIDGE_GATE_CHECKLISTE=aus schaltet ab. */
+const GATE_CHECKLISTE = () => { const v = process.env.BRIDGE_GATE_CHECKLISTE; if (v === 'aus') return null; const f = v || join(homedir(), 'work', 'knut', 'tools', 'pre-push-gate', 'pre-push-gate.sh'); return existsSync(f) ? f : null; };
+/** Modell des OC2-Bauers: fest gesetzt (melious:…) → das; Leser-Profil → glm-5.3-flash; sonst wie die Bauer-Worker (glm-5.3, Mechanik flash). */
+export const oc2StrangModell = (e: { modell?: string; profil?: string }, auftrag: string) =>
+  typeof e.modell === 'string' && e.modell.startsWith('melious:') && e.modell !== 'melious:auto' ? e.modell.slice(8) : e.profil === 'leser' ? FLASH : bauerModell(auftrag);
+
+/** Claude-Verifizierer: ein kurzer SDK-Lauf mit dem Claude-Konto der Person, nur Read/Grep/Glob im Arbeitsordner. */
+async function claudeVerifizierer(live: Live, req: TurnRequest, prompt: string, cwd: string): Promise<Verdikt & { usage?: MeliousUsage; konto?: string; ms: number }> {
+  const t0 = Date.now();
+  let accounts: Account[] = [];
+  try { accounts = normalizeAccounts(req.accounts ? await req.accounts() : [], req.token).filter((a) => !isMelious(a)); } catch { /* unten */ }
+  const acct = planQueue(accounts, exhaustedOf(safeId(req.userId)), { conv: live.key, chatOn: false, overflow: false })[0];
+  if (!acct) return { urteil: 'offen', befunde: '', grund: 'kein Claude-Konto frei', ms: 0 };
+  const env: Record<string, string | undefined> = { ...process.env };
+  for (const k of Object.keys(env)) if (SECRET_ENV.test(k)) delete env[k];
+  for (const k of ['ANTHROPIC_BASE_URL', 'BW_SESSION']) delete env[k];
+  accountEnv(env, acct);
+  const wurzel = realpathSync(cwd);
+  // Lesen nur im Arbeitsordner (echter Pfad, auch hinter Symlinks) und nie Zugangsdateien.
+  const innen = (p: unknown) => typeof p !== 'string' || !p || !schreibzielProblem(p, wurzel)?.includes('Arbeitsordner');
+  const nurLesen = async (tool: string, input: Record<string, unknown>) => (['Read', 'Grep', 'Glob'].includes(tool) && innen(input.file_path ?? input.path) && !GEHEIM.some((re) => re.test(String(input.file_path ?? input.path ?? '')))
+    ? { behavior: 'allow' as const, updatedInput: input } : { behavior: 'deny' as const, message: 'Verifizierer: nur Read/Grep/Glob im Arbeitsordner.' });
+  const abort = new AbortController();
+  const stop = () => abort.abort();
+  live.abort.signal.addEventListener('abort', stop);
+  const timer = setTimeout(stop, envZahl('BRIDGE_OC2_GATE_TIMEOUT_S', 900, 60) * 1000);
+  let text = '', usage: MeliousUsage | undefined, fehler = '';
+  try {
+    const options: Record<string, any> = {
+      cwd: wurzel, settingSources: [], skills: [], model: GATE_MODELL(), maxTurns: 40, permissionMode: 'default', abortController: abort, env, mcpServers: {},
+      allowedTools: ['Read', 'Grep', 'Glob'], disallowedTools: ['Bash', 'Write', 'Edit', 'NotebookEdit', 'Task', 'Agent', 'WebFetch', 'WebSearch', 'AskUserQuestion'],
+      canUseTool: nurLesen,
+      hooks: { PreToolUse: [{ hooks: [async (i: any) => { const r = await nurLesen(i.tool_name, i.tool_input ?? {}); return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: r.behavior, permissionDecisionReason: r.behavior === 'deny' ? r.message : 'Verifizierer liest' } }; }] }] },
+    };
+    applyHome(homeFor(safeId(req.userId), req.email), env, options);
+    for await (const m of req.query({ prompt, options })) {
+      if (m.type === 'assistant') { if (m.error) fehler = String(m.error); const t = (m.message?.content ?? []).filter((b: any) => b?.type === 'text').map((b: any) => b.text).join('\n'); if (t) text = t; }
+      if (m.type === 'result') { if (typeof m.result === 'string' && m.result) text = m.result; usage = usageOf(m.usage); if (m.is_error) fehler ||= String(m.subtype ?? 'Fehler'); }
+    }
+  } catch (err: any) { fehler = String(err?.message ?? err).slice(0, 200); }
+  finally { clearTimeout(timer); live.abort.signal.removeEventListener('abort', stop); }
+  const v = urteilAus(text);
+  return { ...v, ...(fehler && v.urteil === 'offen' ? { grund: `Claude-Verifizierer: ${fehler}` } : {}), usage, konto: acct.id, modell: `claude ${GATE_MODELL()}`, ms: Date.now() - t0 };
+}
+
+/** Ein Zug eines OC2-Strangs. ok → Antwort ist geschrieben und gebucht; sonst Grund (der Zug läuft dann mit Claude weiter). */
+async function strangOc2(live: Live, req: TurnRequest, prompt: string): Promise<{ ok: boolean; grund: string; modell?: string }> {
+  const e = orchMap[live.key];
+  if (!e) return { ok: false, grund: 'Strang unbekannt' };
+  if (!opencode2StrangAn()) return { ok: false, grund: 'OC2-Stränge sind aus (BRIDGE_OPENCODE2_STRANG)' };
+  // Untergrenze (Release 2.0 B3): ein Konto unter dem Boden filtert normalizeAccounts weg — hier nur, damit der Grund sichtbar ist.
+  let roh: any[] = []; try { roh = req.accounts ? await req.accounts() : []; } catch { /* unten */ }
+  const melRoh = roh.find((a) => a?.kind === 'melious');
+  if (meliousHartAus()) return { ok: false, grund: 'Melious ist hart aus (BRIDGE_MELIOUS=aus)' };
+  if (melRoh && unterBoden(melRoh.fuell)) return { ok: false, grund: `Melious unter der Untergrenze (${Math.round(Number(melRoh.fuell) * 100)} % < ${meliousBoden()} %) — keine neuen OC2-Züge` };
+  const mel = await melKonto(live, req.userId);
+  if (!mel) return { ok: false, grund: 'kein nutzbares Melious-Konto' };
+  const pool = await opencode2Fuer(mel.token, { ...process.env, BRIDGE_OPENCODE2: 'an' });
+  if (!pool) return { ok: false, grund: 'kein opencode-2-Server (Installation, Version oder Konfiguration, siehe Log „opencode2 nicht gestartet“)' };
+  const cwd = e.dir, modell = oc2StrangModell(e, e.auftrag ?? prompt);
+  const git = await isGitDir(cwd);
+  const g = (...a: string[]) => runCmd('git', ['-C', cwd, ...a], { cwd });
+  const start = git ? (await g('rev-parse', 'HEAD')).out.trim() : '';
+  const neuVorher = new Set(git ? (await g('ls-files', '--others', '--exclude-standard', '-z')).out.split('\0').filter(Boolean) : []);
+  let modellGelaufen = modell;
+  const buche = (o: { anbieter: 'melious' | 'claude'; konto: string; laeufer: 'oc2' | 'claude'; aufgabe: 'bau' | 'review'; modell: string; usage: MeliousUsage; energie: number; outcome: string; ms: number; phase?: string }) => {
+    live.usage.input += o.usage.input + o.usage.cacheRead; live.usage.output += o.usage.output;
+    if (o.anbieter === 'melious') try { req.onMeliousUsage?.(o.usage, o.modell); } catch { /* egal */ }
+    try { req.onTurnLog?.({ conv: req.convId, art: 'strang', phase: o.phase ?? null, konto: o.konto, anbieter: o.anbieter, laeufer: o.laeufer, aufgabe: o.aufgabe, modell: o.laeufer === 'oc2' ? `${o.modell} (opencode2)` : o.modell, input: o.usage.input + o.usage.cacheRead, output: o.usage.output, cacheRead: o.usage.cacheRead, energie: o.energie, outcome: o.outcome, ms: o.ms } as ZugLog); } catch { /* egal */ }
+  };
+  const deps: BauDeps = {
+    status: (t) => emitStatus(live, t),
+    async bauen(p, runde) {
+      if (live.abort.signal.aborted) return { ok: false, text: '', grund: 'abgebrochen' };
+      emitStatus(live, `⏳ opencode 2 (Melious ${modell}) baut …${runde > 1 ? ` (Runde ${runde}: Befunde des Claude-Verifizierers)` : ''}`);
+      const t0 = Date.now();
+      const r = await pool.zug({
+        cwd, prompt: p, model: modell, timeoutS: envZahl('BRIDGE_JCODE_STRANG_TIMEOUT_S', 3600, 60), abbruch: () => live.abort.signal.aborted, titel: `strang ${live.key.slice(-8)}`,
+        rechte: oc2Schreibrechte(linksNachDraussen(cwd), ['werkbank_*']), sitzung: e.oc2?.sitzung, server: e.oc2?.server,
+        mcp: { name: 'werkbank', config: { type: 'remote', url: `http://127.0.0.1:${Number(process.env.BRIDGE_PORT || 3090)}/oc2-mcp`, headers: { authorization: `Bearer ${oc2McpToken(req.userId, req.convId)}` } } },
+        pruefe: (n) => oc2SchreibtDraussen(n, (x) => !!schreibzielProblem(x, cwd)),
+      });
+      modellGelaufen = r.gelaufen;
+      // Sitzung merken (auch nach einem Fehler: der nächste Zug setzt sie fort, statt den Kontext zu verlieren).
+      if (r.sitzung && r.server && (e.oc2?.sitzung !== r.sitzung || e.oc2?.server !== r.server)) { e.oc2 = { sitzung: r.sitzung, server: r.server }; saveMap(); }
+      const energie = mel.faktoren ? energieOf(r.usage, r.gelaufen, mel.faktoren) : 0;
+      buche({ anbieter: 'melious', konto: mel.id, laeufer: 'oc2', aufgabe: 'bau', modell: r.gelaufen, usage: r.usage, energie, outcome: r.code === 0 ? 'ok' : 'fehler', ms: Date.now() - t0, phase: runde > 1 ? `gate-runde-${runde}` : undefined });
+      const x = jcodeStrangErgebnis({ code: r.code, j: r.code === 0 ? { text: r.text } : null, draussen: r.draussen });
+      log('strang oc2', { conv: live.key, runde, code: r.code, ok: x.ok, grund: x.grund || r.grund || null, modell: r.gelaufen, ms: Date.now() - t0, energie: Math.round(energie), sitzung: r.sitzung ? 'ja' : 'nein' });
+      if (r.draussen.length) {
+        // Schreibgrenze verletzt (Nachkontrolle): Zug verwerfen, Sitzung NICHT fortsetzen, sichtbar melden.
+        delete e.oc2; saveMap();
+        log('strang oc2 ausserhalb', { conv: live.key, pfade: r.draussen.slice(0, 10) });
+        emitStatus(live, `⛔ opencode 2 hat außerhalb des Arbeitsordners geschrieben (${r.draussen.slice(0, 3).join(', ')}) — Zug verworfen, bitte prüfen.`);
+      }
+      return { ok: x.ok, text: x.text, grund: x.grund || r.grund || `Code ${r.code}`, modell: `${r.gelaufen} (opencode2)` };
+    },
+    async aenderung() {
+      if (!git) return { diff: '', dateien: ['(kein Git-Ordner — Änderungen nicht feststellbar)'] };
+      const diff = (await g('diff', '--no-color', '--no-ext-diff', start)).out;
+      const neu = (await g('ls-files', '--others', '--exclude-standard', '-z')).out.split('\0').filter((f) => f && !neuVorher.has(f));
+      const dateien = [...new Set([...(await g('diff', '--name-only', start)).out.split('\n').filter(Boolean), ...neu])];
+      if (!dateien.length) return null;
+      let neuDiff = '';
+      for (const f of neu.slice(0, 40)) { try { const t = readFileSync(join(cwd, f), 'utf8'); neuDiff += `\n--- /dev/null\n+++ b/${f}\n${t.slice(0, 20_000).split('\n').map((l) => `+${l}`).join('\n')}`; } catch { /* Binär/weg */ } }
+      return { diff: diff + neuDiff, dateien };
+    },
+    async pruefen() {
+      if (!git) return { text: 'kein Git-Ordner — keine Prüfungen', rot: false };
+      const r = await pruefenSauber(cwd, start, { fest: await strangFest(live.key, cwd), maxMs: 600_000 });
+      let text = r.ergebnisse.map((x) => `${x.ok ? 'grün' : 'ROT'} ${x.name} (${x.befehl})${x.ok ? '' : `\n${x.ausgabe.slice(-1500)}`}`).join('\n') + (r.eingerichtet ? '' : '\n(keine Prüfbefehle eingerichtet — .werkbank/pruefungen.json)');
+      const cl = GATE_CHECKLISTE();
+      if (cl) {
+        const zweig = (await g('rev-parse', '--abbrev-ref', 'HEAD')).out.trim();
+        const c = await runCmd(cl, [cwd, 'HEAD', zweig, '--kurz'], { cwd, timeoutMs: 120_000, max: 12_000 }).catch((err: any) => ({ code: -1, out: String(err?.message ?? err) }));
+        text += `\n\n## Checkliste (Gate-Skript, Linse für den Verifizierer)\n${c.out.trim().slice(-8000)}`;
+      }
+      return { text, rot: r.ergebnisse.some((x) => !x.ok) };
+    },
+    async verifizieren(o) {
+      const v = await claudeVerifizierer(live, req, verifiziererPrompt({ auftrag: e.auftrag ?? prompt, antwort: o.antwort, diff: o.diff, dateien: o.dateien, pruef: o.pruef, runde: o.runde, cwd }), cwd);
+      if (v.usage) buche({ anbieter: 'claude', konto: v.konto ?? 'claude', laeufer: 'claude', aufgabe: 'review', modell: v.modell ?? 'claude', usage: v.usage, energie: 0, outcome: v.urteil, ms: v.ms, phase: 'oc2-gate' });
+      log('strang oc2 gate', { conv: live.key, runde: o.runde, urteil: v.urteil, rot: o.pruef.rot, dateien: o.dateien.length, grund: v.grund ?? null, ms: v.ms });
+      return v;
+    },
+  };
+  const r = await bauZug(prompt, deps, envZahl('BRIDGE_OC2_GATE_RUNDEN', MAX_RUNDEN, 1));
+  if (!r.ok) return { ok: false, grund: r.grund };
+  emitModelText(live, r.text);
+  return { ok: true, grund: '', modell: `${modellGelaufen} (opencode2${r.gate === 'nicht-noetig' ? '' : `, Gate ${r.gate}`})` };
 }
 
 // ---------- melious_sub (Knut 19.10.: „nativ mehr auf Melious und Claude verteilen“) ----------

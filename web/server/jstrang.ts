@@ -9,8 +9,14 @@ const LESEND = /\b(review|pr-review|gegenpr[üu]f|pr[üu]f|recherch|analyse|ist-
 // Kundendaten bleiben bei den bestehenden Regeln (Konzept J, Datenschutz) — im Zweifel Claude.
 const KUNDENDATEN = /kundendaten|personenbezogen|dsgvo|kundenliste|kunden-?export|zählpunkt.*liste/i;
 
-export function laeuferWahl(o: { titel: string; prompt: string; code?: boolean; profil?: string | null; laeufer?: string | null; modell?: string | null }, env: Record<string, string | undefined> = process.env): { laeufer: 'claude' | 'jcode'; grund: string } {
+export function laeuferWahl(o: { titel: string; prompt: string; code?: boolean; profil?: string | null; laeufer?: string | null; modell?: string | null }, env: Record<string, string | undefined> = process.env): { laeufer: 'claude' | 'jcode' | 'oc2'; grund: string } {
   if (o.laeufer === 'claude') return { laeufer: 'claude', grund: 'ausdrücklich Claude' };
+  // Knut 07.11.: schreibende Stränge auf opencode 2 — nur ausdrücklich (`--laeufer oc2`). GLM baut, Claude prüft jeden Bau-Zug (Brücke,
+  // oc2strang.ts); ob es läuft, entscheidet die Brücke je Zug (BRIDGE_OPENCODE2_STRANG, Melious-Untergrenze) — sonst sichtbar Claude.
+  if (o.laeufer === 'oc2' || o.laeufer === 'opencode2') {
+    if (KUNDENDATEN.test(`${o.titel} ${o.prompt}`)) return { laeufer: 'claude', grund: 'Kundendaten — bleibt bei Claude' };
+    return { laeufer: 'oc2', grund: 'ausdrücklich opencode 2 (GLM baut, Claude prüft jeden Bau-Zug)' };
+  }
   // Ausdrücklich ein Claude-Modell (z. B. die PR-Review-Stränge: REVIEW_MODELL, brauchen review_ready über MCP) → bleibt Claude.
   if (o.laeufer !== 'jcode' && o.modell?.startsWith('claude:')) return { laeufer: 'claude', grund: `Modell ausdrücklich ${o.modell}` };
   if (!jcodeStrangAn(env)) return { laeufer: 'claude', grund: 'jcode-Stränge sind aus (WERKBANK_JCODE_STRANG)' };

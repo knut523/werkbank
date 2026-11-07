@@ -15,7 +15,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { DOD_PFLICHT } from './dod.ts';
 import { findBericht, eigenesPaket, reviewDir } from './bericht.ts';
 import { laeuferWahl } from './jstrang.ts';
-import { ergebnisseUebernehmen, reviewDateiLesen, REVIEW_DATEI_HINWEIS } from './reviewdatei.ts';
+import { ergebnisseUebernehmen, reviewDateiLesen, REVIEW_DATEI_HINWEIS, OC2_BERICHT_HINWEIS } from './reviewdatei.ts';
 import { kopfPflege } from './berichtstand.ts';
 import { cfg } from './config.ts';
 import { wb, lc } from './db.ts';
@@ -42,7 +42,7 @@ export const internalHeaders = () => ({ 'content-type': 'application/json', 'x-w
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 OLAF-Werkbank';
 
-export interface BriefInput { title: string; prompt: string; cwd: string; plan?: string | null; person?: string; stand?: string | null; tiefe?: Tiefe | null; modell?: string | null; zuarbeit?: Zuarbeit; jcode?: boolean }
+export interface BriefInput { title: string; prompt: string; cwd: string; plan?: string | null; person?: string; stand?: string | null; tiefe?: Tiefe | null; modell?: string | null; zuarbeit?: Zuarbeit; jcode?: boolean; oc2?: boolean }
 
 // Berichtsvorlage für jeden Strang (docs/plan-leitstand.md, Teil C, C8; Knut 14.10.2026): fester Kopf, den „Heute“ liest, und
 // Pflicht-Visualisierung neben Screenshots. Vollständiges Muster: docs/bericht-vorlage.md, Folien: docs/bericht-folien-vorlage.html.
@@ -115,6 +115,15 @@ const JCODE_REGELN = [
   '- Es gibt keine Rückfragen im Chat; Entscheidungen, die nur Knut treffen kann, stehen unter „Braucht Knut“.',
 ];
 
+// Knut 07.11.: ein OC2-Strang (opencode 2, GLM) baut im Arbeitsordner; Werkzeuge der Werkbank über MCP (werkbank_*), Shell nur lesend
+// (der Wächter lehnt Schreibendes ab — auch git commit), jeder Zug mit Änderungen geht durch das Claude-Gate der Brücke.
+const OC2_REGELN = [
+  '- **Was du selbst darfst:** alles im Arbeitsordner lesen und dort Dateien ändern (write/edit). Die Shell ist nur lesend (rg, cat, git log/diff/status …) — committen und Pakete installieren gehen nicht; dein Stand bleibt im Arbeitsordner. Außerhalb des Arbeitsordners liest und schreibst du nichts.',
+  '- **Werkzeuge der Werkbank:** werkbank_bedarf_melden (alles, was du nicht selbst darfst: GitHub, Merge, Jira, Zugang, Entscheidung — danach nicht warten), werkbank_hauptchat_melden (Blocker/Risiko sofort), werkbank_review_ready (am Ende).',
+  '- **Claude-Gate:** Hast du etwas geändert, prüft die Werkbank deinen Stand (Tests des Repos) und ein Claude-Verifizierer liest den Diff. Lehnt er ab, bekommst du seine Befunde als nächste Nachricht — behebe genau die, ohne Umbau.',
+  '- Es gibt keine Rückfragen im Chat; Entscheidungen, die nur Knut treffen kann, stehen unter „Braucht Knut“.',
+];
+
 /** Erster Text des Strangs. Erste Zeile = Titel; der Auftrag steht am Ende. */
 export function orchBrief(b: BriefInput): string {
   const first = (b.person || 'Knut').split(/\s+/)[0];
@@ -126,7 +135,7 @@ export function orchBrief(b: BriefInput): string {
       'Regeln:',
       `- Arbeitsordner: \`${b.cwd}\` (dein aktuelles Verzeichnis). Arbeite dort; andere Repos und den Vault nur lesen, außer der Auftrag sagt ausdrücklich etwas anderes.`,
       b.plan ? `- Plandatei: \`${b.plan}\` — lies sie zuerst vollständig und arbeite danach (Definition of Done wörtlich nehmen).` : '- Gibt es keine Plandatei und ist der Auftrag nicht trivial: erst kurz planen (plan-to-pr), dann umsetzen.',
-      ...(b.jcode ? JCODE_REGELN : WERKZEUG_REGELN),
+      ...(b.oc2 ? OC2_REGELN : b.jcode ? JCODE_REGELN : WERKZEUG_REGELN),
       '- Offene inhaltliche Entscheidungen sammelst du und stellst sie am Ende gesammelt (je Kontext · Optionen · Empfehlung). Nichts still annehmen, was wirklich Knuts Entscheidung ist.',
       '- Tests und Prüfungen des Repos laufen lassen, bevor du „fertig“ meldest.',
       // Plan 274 (Knut 20.10.2026, Rechner-Runden): Grundregeln zuerst als Test, nicht erst im Review.
@@ -138,10 +147,10 @@ export function orchBrief(b: BriefInput): string {
     ].join('\n'),
     // Plan 205: Tiefe (Pflichtschritte) und ETA (Pflichtzeile im Stand-Block, die Werkbank liest sie wie „Status:“).
     // Pass A (Fix-Runde 2): jcode-Stränge haben kein `challenge` und keine Teilagenten — Gegenprüfung macht der Lead/die Werkbank
-    b.jcode ? tiefeText(b.tiefe ?? tiefeOf(null)).replace(/[^.;]*`?challenge`?[^.;]*[.;]/g, '').replace(/\s{2,}/g, ' ').trim() + ' Eine Gegenprüfung mit einem zweiten Modell startet die Werkbank nach deinem „fertig“.' : tiefeText(b.tiefe ?? tiefeOf(null)),
+    b.jcode || b.oc2 ? tiefeText(b.tiefe ?? tiefeOf(null)).replace(/[^.;]*`?challenge`?[^.;]*[.;]/g, '').replace(/\s{2,}/g, ' ').trim() + ' Eine Gegenprüfung mit einem zweiten Modell startet die Werkbank nach deinem „fertig“.' : tiefeText(b.tiefe ?? tiefeOf(null)),
     // Knut 26.10.2026: Stränge auf Claude geben Zuarbeit an Melious (Abo, Energie statt Geld).
     // R31: WERKBANK_ZUARBEIT (melious | claude | auto) bestimmt, wohin die Zuarbeit geht.
-    ...(String(b.modell ?? '').startsWith('melious:') || b.jcode ? [] : [zuarbeitText(b.zuarbeit ?? 'melious')]),
+    ...(String(b.modell ?? '').startsWith('melious:') || b.jcode || b.oc2 ? [] : [zuarbeitText(b.zuarbeit ?? 'melious')]),
     REGEL_PFLICHT,
     [
       'Schließe JEDE Antwort mit diesem Abschnitt (die Haupt-Sitzung liest ihn maschinell; nach „Status:“ genau eines der drei Wörter — „fertig“ nur, wenn der Auftrag erledigt und geprüft ist):',
@@ -166,7 +175,7 @@ export function orchBrief(b: BriefInput): string {
       'Schreib den Abschnitt selbst als normales Markdown, nicht als Codeblock. Die ETA schätzt du schon in der ersten Antwort (Uhrzeit in Wiener Zeit oder Dauer ab jetzt) und ziehst sie bei jeder Antwort nach. Bei „Status: fertig“ lässt du die ETA-Zeile weg.',
     ].join('\n'),
     // Phase 4: ein jcode-Strang schreibt nur im Arbeitsordner — die Werkbank übernimmt bericht.md ins Paket (reviewdatei.ts).
-    b.jcode ? BERICHT_PFLICHT.replace(/`~\/work\/knut\/review-pakete\/NNN-<slug>\/bericht\.md` \(das Paket nennt der Auftrag\)/, '`bericht.md` in deinem Arbeitsordner (die Werkbank übernimmt ihn ins Review-Paket)')
+    b.jcode || b.oc2 ? BERICHT_PFLICHT.replace(/`~\/work\/knut\/review-pakete\/NNN-<slug>\/bericht\.md` \(das Paket nennt der Auftrag\)/, '`bericht.md` in deinem Arbeitsordner (die Werkbank übernimmt ihn ins Review-Paket)')
       // jcode hat kein Werkzeug testlink: den angemeldeten Link holt die Hauptsitzung (`orch testlink <ordner>`).
       .replace(/holst du dir mit dem Werkzeug \*\*testlink\*\* einen angemeldeten Test-Link[^—]*— /, 'braucht Knut einen angemeldeten Test-Link — schreib „Test-Link für <Ordner>“ unter „Braucht Knut“ (die Hauptsitzung holt ihn mit `orch testlink`); ') : BERICHT_PFLICHT,
     `---\n\nAuftrag:\n${b.prompt.trim()}`,
@@ -608,12 +617,12 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
     if (!l.frei && !(ms?.enabled && (ms.fallback || ms.kette))) throw err(409, `${l.text!}${fresh.worktree ? ` (Der frische Worktree ${real} bleibt liegen und wird beim nächsten Start wiederverwendet oder aufgeräumt.)` : ''}`);
   }
   // 1) Bei der Brücke anmelden (prüft den Ordner selbst). Ohne Anmeldung kein Chat (fail closed).
-  const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}), tiefe, ...(inp.vorrang === true ? { vorrang: true } : {}), ...(lw.laeufer === 'jcode' ? { laeufer: 'jcode' } : {}) }), signal: AbortSignal.timeout(5000) });
+  const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}), tiefe, ...(inp.vorrang === true ? { vorrang: true } : {}), ...(lw.laeufer !== 'claude' ? { laeufer: lw.laeufer } : {}) }), signal: AbortSignal.timeout(5000) });
   const rj: any = await reg.json().catch(() => ({}));
   if (!reg.ok) throw err(reg.status === 400 || reg.status === 409 || reg.status === 403 ? reg.status : 502, rj.error ?? `Brücke antwortet mit ${reg.status}`);
   const stand = [fresh.status, g0 ? g0.text : null].filter(Boolean).join('\n') || null;
   // Konzept J1: ein jcode-Strang hat kein review_ready-Werkzeug — er meldet „fertig“ über eine Datei im Arbeitsordner (reviewdatei.ts).
-  const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand, tiefe, modell, zuarbeit: vorgaben.zuarbeit, jcode: lw.laeufer === 'jcode' }) +(lw.laeufer === 'jcode' ? `\n\n${REVIEW_DATEI_HINWEIS}` : '');
+  const text = orchBrief({ title, prompt, cwd: rj.dir ?? real, plan, person: u.name, stand, tiefe, modell, zuarbeit: vorgaben.zuarbeit, jcode: lw.laeufer === 'jcode', oc2: lw.laeufer === 'oc2' }) + (lw.laeufer === 'jcode' ? `\n\n${REVIEW_DATEI_HINWEIS}` : lw.laeufer === 'oc2' ? `\n\n${OC2_BERICHT_HINWEIS}` : '');
   const { lauf, explicit } = laufName(title, inp.lauf);
   // Bericht-Pfad aus dem VOLLEN Auftrag und der Plandatei (F7) — der gespeicherte Auftrag ist gekürzt.
   let planText = '';
@@ -1213,7 +1222,7 @@ export async function statusTick(deps: Pick<AutoDeps, 'userById' | 'log'> & { me
         if (heil && (await runs().updateOne({ _id: d._id }, { $set: heil }).catch(() => null))?.modifiedCount) { Object.assign(d, heil); deps.log?.('bericht neu zugeordnet', { id: d._id, paket: heil.paket }); }
         try { const ks = await kopfPflege(d, now); if (Object.keys(ks).length) { await runs().updateOne({ _id: d._id }, { $set: ks }); Object.assign(d, ks); } }
         catch (e: any) { deps.log?.('bericht-kopf fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }); }
-        if (d.laeufer === 'jcode') await reviewDateiAbgleich(d, deps.log).catch((e: any) => deps.log?.('review-datei fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }));
+        if (d.laeufer === 'jcode' || d.laeufer === 'oc2') await reviewDateiAbgleich(d, deps.log).catch((e: any) => deps.log?.('review-datei fehler', { id: d._id, error: String(e?.message ?? e).slice(0, 160) }));
         const sd = states.get(d.conv);
         // Reibung #6: Zwischenergebnis melden, sobald der Bericht im laufenden Zug geschrieben ist.
         if (deps.melde && d.bericht && sd?.running) {

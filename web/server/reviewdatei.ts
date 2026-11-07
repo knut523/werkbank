@@ -58,3 +58,5 @@ export function ergebnisseUebernehmen(ordner: string | null | undefined, paketOr
 export const REVIEW_DATEI_HINWEIS = `Du hast kein Werkzeug review_ready und schreibst nur in deinem Arbeitsordner. Statt review_ready: lege dort ${REVIEW_DATEI} an — `
   + `{"gemacht":"…","nicht_gemacht":"…","risiko":"…","dod":[{"punkt":"…","stand":"ja|teilweise|nein","beleg":"…"}],"artefakte":["…"]} — `
   + `und schreib befunde.json und bericht.md ebenfalls in den Arbeitsordner; die Werkbank übernimmt sie ins Review-Paket.`;
+// Knut 07.11.: OC2-Stränge haben review_ready über MCP (werkbank_review_ready), schreiben aber wie jcode nur im Arbeitsordner.
+export const OC2_BERICHT_HINWEIS = 'Fertig meldest du mit werkbank_review_ready. bericht.md und befunde.json legst du in deinen Arbeitsordner — die Werkbank übernimmt sie ins Review-Paket.';
