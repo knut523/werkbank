@@ -2548,7 +2548,7 @@ async function strangOc2(live: Live, req: TurnRequest, prompt: string): Promise<
   const buche = (o: { anbieter: 'melious' | 'claude'; konto: string; laeufer: 'oc2' | 'claude'; aufgabe: 'bau' | 'review'; modell: string; usage: MeliousUsage; energie: number; outcome: string; ms: number; phase?: string }) => {
     live.usage.input += o.usage.input + o.usage.cacheRead; live.usage.output += o.usage.output;
     if (o.anbieter === 'melious') try { req.onMeliousUsage?.(o.usage, o.modell); } catch { /* egal */ }
-    try { req.onTurnLog?.({ conv: req.convId, art: 'strang', phase: o.phase ?? null, konto: o.konto, anbieter: o.anbieter, laeufer: o.laeufer, aufgabe: o.aufgabe, modell: o.laeufer === 'oc2' ? `${o.modell} (opencode2)` : o.modell, input: o.usage.input + o.usage.cacheRead, output: o.usage.output, cacheRead: o.usage.cacheRead, energie: Math.round(o.energie), outcome: o.outcome, ms: o.ms } as ZugLog); } catch { /* egal */ }
+    try { req.onTurnLog?.({ conv: req.convId, art: 'strang', phase: o.phase ?? null, konto: o.konto, anbieter: o.anbieter, laeufer: o.laeufer, aufgabe: o.aufgabe, modell: o.laeufer === 'oc2' ? `${o.modell} (opencode2)` : o.modell, input: o.usage.input + o.usage.cacheRead, output: o.usage.output, cacheRead: o.usage.cacheRead, energie: o.energie, outcome: o.outcome, ms: o.ms } as ZugLog); } catch { /* egal */ }
   };
   const deps: BauDeps = {
     status: (t) => emitStatus(live, t),
