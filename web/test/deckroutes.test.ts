@@ -22,7 +22,7 @@ const gesendet: { strand: string; text: string; automatisch: boolean }[] = [];
 let sendenFehler: Error | null = null;
 const gerendert: string[] = [];
 let modul: ReturnType<typeof registerDecks>;
-const fund = (slug: string, fassungen: string[]): Fund => ({ slug, mtime: 1, fassungen: fassungen.map((f) => ({ fassung: f, datum: '2026-11-06', pdf: `/ablage/2026-11-06_deck_${slug}_${f}.pdf`, pptx: null, mtime: 1 })) });
+const fund = (slug: string, fassungen: string[], mtimes?: number[]): Fund => ({ slug, mtime: 1, fassungen: fassungen.map((f, i) => ({ fassung: f, datum: '2026-11-06', pdf: `/ablage/2026-11-06_deck_${slug}_${f}.pdf`, pptx: null, mtime: mtimes?.[i] ?? i + 1 })) });
 
 before(async () => {
   client = new MongoClient(TEST_MONGO); await client.connect();
@@ -233,7 +233,7 @@ test('Rate-Limit: 30 Kommentare je Link in 10 min; Fehlversuche je Adresse gedec
 
 test('Takt: neue Fassung in der Ablage wird gerendert (ältere nicht); offene gehen automatisch, aber höchstens alle 10 min', async () => {
   gerendert.length = 0;
-  fundListe = [fund('flex', ['v0', 'v1', 'v2', 'v3']), fund('wirt', ['v1'])];
+  fundListe = [fund('flex', ['v0', 'v1', 'v2', 'v3'], [1, 2, 3, Date.now() + 1000]), fund('wirt', ['v1'])];
   await db.collection('deck_kommentare').insertOne({ _id: 'k-takt' as any, deck: 'flex', folie: 1, fassung: 'v2', text: 'auto', markierung: null, autor: 'Knut', extern: false, userId: 'k', linkId: null, status: 'offen', grund: null, at: new Date(), verlauf: [] });
   const vorher = gesendet.length;
   await modul.takt(); await modul.warten();
@@ -321,4 +321,39 @@ test('Download: Quelldatei der Fassung aus der Ablage (angemeldet und mit Teil-L
   assert.equal((await rufe('GET', '/api/deck-teilen/datei/v2/pdf', null, undefined, { 'x-deck-token': l.b.token })).status, 200);
   const w = await rufe('POST', '/api/v2/decks/wirt/links', ADMIN, {});
   assert.equal((await rufe('GET', '/api/deck-teilen/datei/v2/pdf', null, undefined, { 'x-deck-token': w.b.token })).status, 404, 'Link eines anderen Decks');
+});
+
+test('Fassungsfolge nach Dateizeit: v7-skizze, dann v7-1 — v7-1 wird neu und aktuell (Altdeck Zwischengate)', async () => {
+  const seit = Date.now();
+  fundListe = [fund('zg', ['v6-2', 'v7-skizze'], [seit - 2000, seit - 1000])];
+  await rufe('POST', '/api/v2/decks', ADMIN, { slug: 'zg', unterchat: 'abcd1234' }); await modul.warten();
+  assert.equal((await rufe('GET', '/api/v2/decks/zg', ADMIN)).b.aktuell, 'v7-skizze');
+  // der Unter-Chat legt v7-1 ab (Name sortiert vor v7-skizze, Datei ist neuer)
+  fundListe = [fund('zg', ['v6-2', 'v7-skizze', 'v7-1'], [seit - 2000, seit - 1000, Date.now() + 5000])];
+  await modul.takt(); await modul.warten();
+  const d = await rufe('GET', '/api/v2/decks/zg', ADMIN);
+  assert.equal(d.b.aktuell, 'v7-1');
+  assert.deepEqual(d.b.fassungen.map((f: any) => f.fassung), ['v6-2', 'v7-skizze', 'v7-1']);
+  // Zielname der nächsten Fassung: frei und nach der neuesten Datei
+  await rufe('POST', '/api/v2/decks/zg/kommentar', ADMIN, { folie: 1, text: 'weiter' });
+  await rufe('POST', '/api/v2/decks/zg/senden', ADMIN);
+  assert.match(gesendet.at(-1)!.text, /_deck_zg_v7-2\.pptx/);
+  // unveränderte Fassung nicht neu erzeugen (Kommentare und Markierungen gehören zu ihr)
+  assert.equal((await rufe('POST', '/api/v2/decks/zg/rendern', ADMIN, { fassung: 'v7-1' })).status, 409);
+});
+
+test('Rückmeldung dreht keine Entscheidung, die Knut danach selbst getroffen hat', async () => {
+  const d = await rufe('GET', '/api/v2/decks/zg', ADMIN);
+  const k = d.b.kommentare.find((x: any) => x.status === 'gesendet');
+  await rufe('POST', `/api/v2/decks/zg/kommentar/${k.id}`, ADMIN, { status: 'abgelehnt', grund: 'Knut: bleibt so' });
+  const r = await rufe('POST', '/internal/deck/rueckmeldung', null, { deck: 'zg', conv: 'conv-deck', id: k.id, status: 'umgesetzt' }, { 'x-intern': 'ok' });
+  assert.equal(r.b.ok, false);
+  assert.equal((await rufe('GET', '/api/v2/decks/zg', ADMIN)).b.kommentare.find((x: any) => x.id === k.id).status, 'abgelehnt');
+});
+
+test('Teil-Link: Download nur PDF (keine bearbeitbare PowerPoint)', async () => {
+  const l = await rufe('POST', '/api/v2/decks/zg/links', ADMIN, {});
+  assert.ok(!routen.some(([m, re]) => m === 'GET' && re.test('/api/deck-teilen/datei/v7-1/pptx')));
+  const g = await rufe('GET', '/api/deck-teilen', null, undefined, { 'x-deck-token': l.b.token });
+  assert.ok(g.b.fassungen.every((f: any) => f.pptx === undefined));
 });

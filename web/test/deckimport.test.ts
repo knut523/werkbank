@@ -72,7 +72,7 @@ test('Übernehmen: Bilder als s-NN.png, Hash nur wenn Folienzahl passt, Deck mit
   assert.equal(readFileSync(join(wurzel, 'flex-vortrag', 'v7-1', 's-03.png'), 'utf8'), 'bild v7-1 3');
   const d = await db.collection<any>('decks').findOne({ _id: 'flex-vortrag' });
   assert.equal(d.strand, 'ba58c60a'); assert.equal(d.auto, true); assert.equal(d.owner, 'k'); assert.equal(d.ordner, '/ablage');
-  assert.deepEqual(d.fassungen.map((f: any) => [f.fassung, f.folien, f.hashes.length]), [['v7', 2, 0], ['v7-1', 3, 3]]);
+  assert.deepEqual(d.fassungen.map((f: any) => [f.fassung, f.folien, f.hashes.length, f.stand]), [['v7', 2, 0, 1], ['v7-1', 3, 3, 1]], 'stand = Dateizeit der Quelle');
   // in der Werkbank geändert, dann zweiter Import: bleibt
   await db.collection<any>('deck_kommentare').updateOne({ _id: a.kommentare[3]._id }, { $set: { status: 'abgelehnt', grund: 'nein' } });
   const r2 = await schreiben(altLesen(alt, funde) as AltDeck, { col, wurzel, owner: 'k', funde, hashes });

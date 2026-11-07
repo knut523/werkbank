@@ -336,3 +336,4 @@ p { margin: 0 0 var(--s1); }
 @media (min-width: 900px) { .teilen .inhalt { padding: var(--s3) var(--s4); } }
 .teilen-name { display: flex; align-items: center; gap: 6px; } .teilen-name input { font: inherit; padding: 6px 10px; border: 1px solid #cdd3da; border-radius: 10px; width: 9em; }
 .laedt-bild { aspect-ratio: 16 / 9; width: 100%; background: var(--grund); }
+.deck-kommentar.andere-fassung { opacity: .6; }

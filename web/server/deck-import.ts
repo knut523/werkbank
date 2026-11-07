@@ -49,7 +49,8 @@ export function altLesen(ordner: string, funde: Fund[] = []): AltDeck | { ordner
     const status = STATUS_ALT[String(x.status)] ?? 'offen';
     const fassung = fassungOk(x.fassung) ? x.fassung : info.fassung;
     const zeit = /^\d{2}:\d{2}$/.test(String(x.zeit)) ? x.zeit : '12:00';
-    const at = new Date(`${tagVon(fassung)}T${zeit}:00+01:00`);   // Wiener Zeit (November: MEZ)
+    // genauer Zeitpunkt, wo die Altdaten ihn haben (gesendet_um, Sekunden); sonst Datum der Fassung + Uhrzeit, Wiener Zeit (November: MEZ)
+    const at = Number(x.gesendet_um) > 1e9 ? new Date(Number(x.gesendet_um) * 1000) : new Date(`${tagVon(fassung)}T${zeit}:00+01:00`);
     const autor = String(x.autor || 'Knut').slice(0, 40);
     return {
       _id: `k-alt-${kurz}-${Number(x.id) || 0}`, deck: slug, folie: Number.isInteger(x.folie) && x.folie >= 0 ? x.folie : 0, fassung, text: String(x.text).slice(0, 4000),
@@ -95,13 +96,15 @@ export async function schreiben(a: AltDeck, d: { col: { decks: () => Collection<
   const da = new Set((vorhanden?.fassungen ?? []).map((f) => f.fassung));
   const fund = d.funde.find((x) => x.slug === a.slug);
   const neu: DeckFassung[] = [];
-  for (const f of a.fassungen.filter((x) => !da.has(x.fassung))) {
+  for (const [i, f] of a.fassungen.entries()) {
+    if (da.has(f.fassung)) continue;
     const ziel = join(resolve(d.wurzel), a.slug, f.fassung);
     mkdirSync(ziel, { recursive: true });
     f.bilder.forEach((p, i) => copyFileSync(p, join(ziel, `s-${String(i + 1).padStart(2, '0')}.png`)));
     const quelle = fund?.fassungen.find((x) => x.fassung === f.fassung);
     const hashes = quelle?.pdf ? await (d.hashes ?? pdfHashes)(quelle.pdf) : [];
-    neu.push({ fassung: f.fassung, datei: basename(quelle?.pdf ?? quelle?.pptx ?? `${a.slug}_${f.fassung}`), folien: f.bilder.length, hashes: hashes.length === f.bilder.length ? hashes : [], at: new Date() });
+    // stand = Dateizeit der Quelle (Reihenfolge, „aktuell“); ohne Datei die Reihenfolge der Altdaten (i ms)
+    neu.push({ fassung: f.fassung, datei: basename(quelle?.pdf ?? quelle?.pptx ?? `${a.slug}_${f.fassung}`), folien: f.bilder.length, hashes: hashes.length === f.bilder.length ? hashes : [], at: new Date(), stand: quelle?.mtime ?? i });
   }
   const neuste = fund?.fassungen.at(-1);
   if (!vorhanden) {
@@ -133,22 +136,27 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const quellen = cfg.deckQuellen.length ? cfg.deckQuellen : [cfg.docsDir, cfg.reviewDir, join(homedir(), 'work', 'knut', 'downloads', 'teilen')];
   const funde = gruppieren(ablageScan(quellen));
   const alt = (ordner.length ? ordner : ALTE_ORDNER).map((o) => altLesen(resolve(o), funde));
-  const db = await import('./db.ts');
+  // Trockenlauf: ein reiner Lese-Client — db.connect() legte Indizes an, also schriebe (Pass B 10)
+  const { MongoClient } = await import('mongodb');
+  const leser = new MongoClient(cfg.mongoUri, { serverSelectionTimeoutMS: 4000 });
   let vorhanden = new Map<string, { fassungen: string[]; kommentare: Set<string> }>();
   let verbunden = false;
   try {
-    await db.connect(); verbunden = true;
+    await leser.connect(); verbunden = true;
     for (const a of alt) {
       if ('fehler' in a) continue;
-      const x = await db.wb().collection<DeckDoc>('decks').findOne({ _id: a.slug });
-      const ks = await db.wb().collection<KommentarDoc>('deck_kommentare').find({ _id: { $in: a.kommentare.map((k) => k._id) } }, { projection: { _id: 1 } }).toArray();
+      const x = await leser.db(cfg.db).collection<DeckDoc>('decks').findOne({ _id: a.slug });
+      const ks = await leser.db(cfg.db).collection<KommentarDoc>('deck_kommentare').find({ _id: { $in: a.kommentare.map((k) => k._id) } }, { projection: { _id: 1 } }).toArray();
       if (x || ks.length) vorhanden.set(a.slug, { fassungen: (x?.fassungen ?? []).map((f) => f.fassung), kommentare: new Set(ks.map((k) => k._id)) });
     }
   } catch (e: any) { console.log(`(Datenbank nicht erreichbar: ${String(e?.message ?? e).slice(0, 120)} — Trockenlauf ohne Abgleich)`); vorhanden = new Map(); }
   console.log(`${schreib ? 'ÜBERNEHMEN' : 'TROCKENLAUF (nichts wird geschrieben; mit --schreiben übernehmen)'} → Folien nach ${cfg.deckDir}, Datenbank ${cfg.db}\n`);
   console.log(planText(alt, vorhanden));
+  await leser.close().catch(() => {});
   if (schreib) {
     if (!verbunden) { console.error('\nAbbruch: keine Datenbank.'); process.exit(2); }
+    const db = await import('./db.ts');
+    await db.connect();
     const mail = (ownerMail || cfg.pilotEmail).toLowerCase();
     const u: any = await db.lc().collection('users').findOne({ email: mail }, { projection: { _id: 1 } });
     if (!u) { console.error(`\nAbbruch: kein Konto ${mail} (--owner E-Mail).`); process.exit(2); }

@@ -12,7 +12,7 @@ import { randomBytes } from 'node:crypto';
 import type { Collection } from 'mongodb';
 import type { User } from './auth.ts';
 import {
-  gruppieren, fassungVergleich, deckTitel, slugOk, fassungOk, folienPfad, fassungOrdner, pgmHash, geaendert, statusWechsel, rueckmeldungErlaubt,
+  gruppieren, fassungVergleich, naechsteFassung, deckTitel, slugOk, fassungOk, folienPfad, fassungOrdner, pgmHash, geaendert, statusWechsel, rueckmeldungErlaubt,
   kommentarPruefen, neuesToken, tokenHash, tokenFormOk, linkGueltig, ablaufAus, Fenster, nachrichtAnUnterchat, STATUS_TEXT,
   type Fund, type FundFassung, type Status, type Markierung,
 } from './decks.ts';
@@ -21,7 +21,8 @@ type Handler = (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray, 
 type On = (method: string, path: RegExp, h: Handler) => void;
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 
-export interface DeckFassung { fassung: string; datei: string; folien: number; hashes: string[]; at: Date }
+/** stand = Änderungszeit der Quelldatei (ms) — bestimmt Reihenfolge und „aktuell“; Namen wie v7-skizze/v7-1 sagen nichts über die Zeit (Pass B 1). */
+export interface DeckFassung { fassung: string; datei: string; folien: number; hashes: string[]; at: Date; stand?: number }
 export interface DeckDoc {
   _id: string; titel: string; owner: string; strand: string | null; auto: boolean; ordner: string | null;
   fassungen: DeckFassung[]; fehlgeschlagen?: string[]; renderFehler?: { fassung: string; text: string; at: Date } | null;
@@ -132,7 +133,7 @@ export async function rendernEcht(q: { pdf: string | null; pptx: string | null }
 
 // ---------- Sichten ----------
 
-export const fassungenSortiert = (d: Pick<DeckDoc, 'fassungen'>) => [...(d.fassungen ?? [])].sort((a, b) => fassungVergleich(a.fassung, b.fassung));
+export const fassungenSortiert = (d: Pick<DeckDoc, 'fassungen'>) => [...(d.fassungen ?? [])].sort((a, b) => (a.stand ?? 0) - (b.stand ?? 0) || fassungVergleich(a.fassung, b.fassung));
 const aktuellVon = (d: DeckDoc) => fassungenSortiert(d).at(-1) ?? null;
 function kommentarSicht(k: KommentarDoc) {
   return { id: k._id, folie: k.folie, fassung: k.fassung, text: k.text, markierung: k.markierung, autor: k.autor, extern: k.extern, status: k.status, statusText: STATUS_TEXT[k.status], grund: k.grund, at: k.at, gesendetAt: k.gesendetAt ?? null, erledigtIn: k.erledigtIn ?? null };
@@ -168,7 +169,7 @@ export function registerDecks(on: On, d: DeckDeps) {
       laeuft = `${slug}/${f.fassung}`;
       try {
         const r = await rendern({ pdf: f.pdf, pptx: f.pptx }, fassungOrdner(d.wurzel, slug, f.fassung));
-        const eintrag: DeckFassung = { fassung: f.fassung, datei: basename(f.pdf ?? f.pptx ?? ''), folien: r.folien, hashes: r.hashes, at: new Date() };
+        const eintrag: DeckFassung = { fassung: f.fassung, datei: basename(f.pdf ?? f.pptx ?? ''), folien: r.folien, hashes: r.hashes, at: new Date(), stand: f.mtime };
         await C.decks().updateOne({ _id: slug }, { $pull: { fassungen: { fassung: f.fassung } as any, fehlgeschlagen: f.fassung } });
         await C.decks().updateOne({ _id: slug }, { $push: { fassungen: eintrag }, $set: { renderFehler: null } });
         d.log('deck gerendert', { deck: slug, fassung: f.fassung, folien: r.folien });
@@ -201,7 +202,12 @@ export function registerDecks(on: On, d: DeckDeps) {
       const u = await d.userById(deck.owner);
       if (!u) throw err(409, 'Die Besitzerin des Decks gibt es nicht mehr.');
       const akt = aktuellVon(deck);
-      const text = nachrichtAnUnterchat({ slug: deck._id, titel: deck.titel, fassung: akt?.fassung ?? '?', ordner: deck.ordner ?? '(Ordner der letzten Fassung)', heute: d.heute(), kommentare: offen.map((k) => ({ id: k._id, folie: k.folie, fassung: k.fassung, text: k.text, autor: k.autor, extern: k.extern, markierung: k.markierung })) });
+      // Zielname: nach der neuesten Datei in den Dokumenten (auch wenn sie noch gerendert wird), nie ein vergebener Name (Pass B 2)
+      const fund = fundVon(deck._id, true);
+      const belegt = new Set([...(fund?.fassungen ?? []).map((f) => f.fassung), ...deck.fassungen.map((f) => f.fassung)]);
+      const neueste = [...(fund?.fassungen ?? [])].sort((a, b) => a.mtime - b.mtime).at(-1)?.fassung ?? akt?.fassung ?? 'v1';
+      let ziel = naechsteFassung(neueste); while (belegt.has(ziel)) ziel = naechsteFassung(ziel);
+      const text = nachrichtAnUnterchat({ slug: deck._id, titel: deck.titel, fassung: akt?.fassung ?? '?', ziel, ordner: deck.ordner ?? '(Ordner der letzten Fassung)', heute: d.heute(), kommentare: offen.map((k) => ({ id: k._id, folie: k.folie, fassung: k.fassung, text: k.text, autor: k.autor, extern: k.extern, markierung: k.markierung })) });
       try { await d.senden(u, deck.strand, text, automatisch); }
       catch (e: any) {
         // Meldungen der Unter-Chat-Logik sprechen von „Strang“ — in der 2.0 heißt das „Unter-Chat“ (Begriffe, plan-werkbank-2 §4)
@@ -230,11 +236,10 @@ export function registerDecks(on: On, d: DeckDeps) {
     const l = decks.length ? funde(true) : [];
     for (const deck of decks) {
       const fund = l.find((f) => f.slug === deck._id);
-      const akt = aktuellVon(deck);
       const da = new Set([...(deck.fassungen ?? []).map((f) => f.fassung), ...(deck.fehlgeschlagen ?? [])]);
-      // nur NEUERE Fassungen als die aktuelle — ältere aus der Ablage rendert man auf Wunsch (Knopf), nicht von selbst
-      // ohne gerenderte Fassung nichts von selbst (Anlegen reiht die neuesten fünf ein; sonst rendert der Takt alle alten — Pass A 6)
-      const neu = akt ? (fund?.fassungen ?? []).filter((f) => !da.has(f.fassung) && fassungVergleich(f.fassung, akt.fassung) > 0) : [];
+      // neu = nach dem Anlegen/Import in die Dokumente gelegt (Dateizeit, nicht Name — Pass B 1); Älteres nur per Knopf
+      const seit = new Date(deck.erstellt).getTime();
+      const neu = (fund?.fassungen ?? []).filter((f) => !da.has(f.fassung) && f.mtime > seit);
       if (neu.length) einreihen(deck._id, neu);
       const zuletzt = deck.letzterVersuch ?? deck.letzterVersand;
       if (deck.auto && deck.strand && (!zuletzt || Date.now() - new Date(zuletzt).getTime() >= sendenMs)) {
@@ -272,12 +277,12 @@ export function registerDecks(on: On, d: DeckDeps) {
     const strand = b.unterchat ? String(b.unterchat) : null;
     if (strand && !/^[0-9a-f]{8}$/.test(strand)) throw err(400, 'Unter-Chat: 8-stellige Kennung.');
     const fund = slugOk(slug) ? fundVon(slug, true) : null;
-    if (!fund) throw err(404, 'Kein Deck mit diesem Namen in der Ablage.');
-    const neueste = fund.fassungen.at(-1)!;
+    if (!fund) throw err(404, 'Kein Deck mit diesem Namen in den Dokumenten.');
+    const neueste = [...fund.fassungen].sort((a, b) => a.mtime - b.mtime).at(-1)!;
     const doc: DeckDoc = { _id: slug, titel: deckTitel(slug), owner: u.id, strand, auto: !!strand, ordner: dirname(neueste.pdf ?? neueste.pptx!), fassungen: [], fehlgeschlagen: [], renderFehler: null, erstellt: new Date(), letzterVersand: null, sendeFehler: null };
     const r = await C.decks().updateOne({ _id: slug }, { $setOnInsert: doc }, { upsert: true });
     if (!r.upsertedCount) throw err(409, 'Das Deck ist schon angelegt.');
-    const n = einreihen(slug, fund.fassungen.slice(-ALT.bis));
+    const n = einreihen(slug, [...fund.fassungen].sort((a, b) => a.mtime - b.mtime).slice(-ALT.bis));
     d.log('deck angelegt', { deck: slug, user: u.id, strand, rendern: n });
     d.send(res, 200, { ok: true, slug, rendern: n });
   });
@@ -397,10 +402,13 @@ export function registerDecks(on: On, d: DeckDeps) {
     const deck = await deckOder404(m[1]);
     const b = await d.body(req, 4096);
     const fund = fundVon(deck._id, true);
-    if (!fund) throw err(404, 'Das Deck liegt nicht mehr in der Ablage.');
+    if (!fund) throw err(404, 'Das Deck liegt nicht mehr in den Dokumenten.');
     // ohne Angabe: alles, was in der Ablage liegt und noch nicht gerendert ist; mit fassung: genau diese (auch erneut)
     const l = fassungOk(b.fassung) ? fund.fassungen.filter((f) => f.fassung === b.fassung) : fund.fassungen.filter((f) => !deck.fassungen.some((x) => x.fassung === f.fassung));
-    if (fassungOk(b.fassung) && !l.length) throw err(404, 'Diese Fassung liegt nicht in der Ablage.');
+    if (fassungOk(b.fassung) && !l.length) throw err(404, 'Diese Fassung liegt nicht in den Dokumenten.');
+    // eine erzeugte Fassung bleibt, wie sie kommentiert wurde — neu erzeugt nur, wenn ihre Datei inzwischen ersetzt wurde (Pass B 8)
+    const schon = fassungOk(b.fassung) ? deck.fassungen.find((x) => x.fassung === b.fassung) : null;
+    if (schon && l[0] && l[0].mtime <= (schon.stand ?? Infinity) && !(deck.fehlgeschlagen ?? []).includes(b.fassung)) throw err(409, `${b.fassung} ist schon erzeugt und die Datei unverändert.`);
     const n = einreihen(deck._id, l);
     d.send(res, 200, { ok: true, rendern: n });
   });
@@ -452,7 +460,7 @@ export function registerDecks(on: On, d: DeckDeps) {
     // Texte anderer Externer, keine internen Kommentare und Notizen
     const kommentare = await C.kommentare().find({ deck: deck._id, linkId: link._id }).sort({ at: 1 }).limit(2000).toArray();
     // extern: keine Kennungen der Personen/Links, kein Unter-Chat, keine Links
-    d.send(res, 200, { slug: deck._id, titel: deck.titel, aktuell: aktuellVon(deck)?.fassung ?? null, fassungen: fassungenSicht(deck, fundVon(deck._id)).map(({ hashes: _h, datei: _d, ...f }) => f), kommentare: kommentare.map((k) => ({ ...kommentarSicht(k), grund: null, erledigtIn: null })), name: link.name, ablauf: link.ablauf });
+    d.send(res, 200, { slug: deck._id, titel: deck.titel, aktuell: aktuellVon(deck)?.fassung ?? null, fassungen: fassungenSicht(deck, fundVon(deck._id)).map(({ hashes: _h, datei: _d, pptx: _p, ...f }) => f), kommentare: kommentare.map((k) => ({ ...kommentarSicht(k), grund: null, erledigtIn: null })), name: link.name, ablauf: link.ablauf });
   });
 
   on('GET', /^\/api\/deck-teilen\/bild\/([\w.-]{1,40})\/(\d{1,3})$/, async (req, res, m) => {
@@ -461,8 +469,10 @@ export function registerDecks(on: On, d: DeckDeps) {
     bildSenden(res, folienPfad(d.wurzel, deck._id, m[1], Number(m[2])), true);
   });
 
-  on('GET', /^\/api\/deck-teilen\/datei\/([\w.-]{1,40})\/(pdf|pptx)$/, async (req, res, m) => {
+  // extern nur das PDF einer erzeugten Fassung (lesen und kommentieren — keine bearbeitbare PowerPoint, Pass B Hinweis)
+  on('GET', /^\/api\/deck-teilen\/datei\/([\w.-]{1,40})\/(pdf)$/, async (req, res, m) => {
     const { deck } = await linkVon(req, req.headers['x-deck-token']);
+    if (!deck.fassungen.some((f) => f.fassung === m[1])) throw err(404, 'Datei nicht gefunden.');
     dateiSenden(res, deck._id, m[1], m[2]);
   });
 
@@ -497,7 +507,8 @@ export function registerDecks(on: On, d: DeckDeps) {
       if (!KOMMENTAR_ID.test(id)) { ergebnis.push({ id, ok: false, fehler: 'Kennung ungültig.' }); continue; }
       const k = await C.kommentare().findOne({ _id: id, deck: deck._id });
       if (!k) { ergebnis.push({ id, ok: false, fehler: 'Kommentar nicht gefunden.' }); continue; }
-      if (!rueckmeldungErlaubt(k.status, status)) { ergebnis.push({ id, ok: false, fehler: `Kommentar ist „${STATUS_TEXT[k.status]}“ — Rückmeldung nur zu gesendeten, nur umgesetzt/abgelehnt.` }); continue; }
+      const vonHand = k.status !== 'gesendet' && k.verlauf?.at(-1)?.durch !== 'Unter-Chat';   // Knut hat danach selbst entschieden (Pass B 15)
+      if (!rueckmeldungErlaubt(k.status, status) || vonHand) { ergebnis.push({ id, ok: false, fehler: `Kommentar ist „${STATUS_TEXT[k.status]}“ — Rückmeldung nur zu gesendeten, nur umgesetzt/abgelehnt.` }); continue; }
       const f = statusWechsel(k.status, status as Status, grund);
       if (f) { ergebnis.push({ id, ok: false, fehler: f }); continue; }
       const jetzt = new Date();

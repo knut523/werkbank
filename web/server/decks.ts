@@ -192,8 +192,8 @@ export function geaendert(vorher: string[] | null | undefined, nachher: string[]
 // ---------- Nachricht an den Deck-Unter-Chat ----------
 
 export interface NachrichtKommentar { id: string; folie: number; fassung: string; text: string; autor: string; extern?: boolean; markierung: Markierung | null }
-export function nachrichtAnUnterchat(d: { slug: string; titel: string; fassung: string; ordner: string; heute: string; kommentare: NachrichtKommentar[] }): string {
-  const ziel = `${d.ordner.replace(/\/$/, '')}/${d.heute}_deck_${d.slug}_${naechsteFassung(d.fassung)}`;
+export function nachrichtAnUnterchat(d: { slug: string; titel: string; fassung: string; ziel?: string; ordner: string; heute: string; kommentare: NachrichtKommentar[] }): string {
+  const ziel = `${d.ordner.replace(/\/$/, '')}/${d.heute}_deck_${d.slug}_${d.ziel ?? naechsteFassung(d.fassung)}`;
   const zeilen = d.kommentare.map((k) => {
     const wo = k.folie ? `Folie ${k.folie}` : 'Ganzes Deck/Storyline';
     const wer = `${k.autor || 'Knut'}${k.extern ? ' (extern)' : ''}`;

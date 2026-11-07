@@ -127,10 +127,12 @@ try {
   await h.goto(`${URL0}/v2/decks`); await h.getByRole('heading', { name: 'Decks im Review' }).waitFor();
   await shot(h, '09-liste-390', true);
   const l = await (await ctx('lisa', 1440)).newPage();
-  await l.goto(`${URL0}/v2/decks/beispiel-review`); await l.locator('#folie-1 img').waitFor();
-  assert.equal(await l.getByText('Mit Externen teilen').count(), 0, 'Team: keine Teil-Links');
-  assert.equal(await l.getByRole('button', { name: 'Ablehnen …' }).count(), 0, 'Team: kein Status von Hand');
-  ok('Team-Sicht (Lisa): lesen und kommentieren, keine Steuerung');
+  // Team ohne Freigabe „decks“ (WERKBANK_TEAM_FEATURES): gesperrt wie jede andere Funktion
+  await l.goto(`${URL0}/v2/decks/beispiel-review`);
+  await l.getByText(/Decks im Review.*noch nicht freigegeben/).waitFor();
+  assert.equal(await l.locator('#folie-1').count(), 0, 'Team ohne Freigabe: keine Folien');
+  ok('Team ohne Freigabe (Lisa): Deck-Review gesperrt');
+  await shot(l, '11-team-ohne-freigabe-1440');
   await k.goto(`${URL0}/v2/decks/olaf-zwischengate`); await k.locator('#folie-1').scrollIntoViewIfNeeded(); await k.locator('#folie-1 img').waitFor();
   await k.selectOption('#d-filter', 'kommentiert');
   await shot(k, '10-zwischengate-importiert-1440');

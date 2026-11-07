@@ -50,10 +50,10 @@ export function Decks() {
     <div className="seite">
       <h1>Decks im Review</h1>
       <p className="unterzeile">Folien ansehen, je Folie kommentieren, Fassungen vergleichen. Kommentare gehen gesammelt an den Unter-Chat, der das Deck baut.</p>
-      <Abschnitt id="d-review" titel="Im Review" erklaerung="Decks, die hier angelegt sind: jede neue Fassung in der Ablage erscheint von selbst (die Folien werden aus PDF oder PowerPoint erzeugt). Zahlen rechts: offene Kommentare.">
-        {d.decks.length ? <ul className="liste">{d.decks.map((x) => <Zeile key={x.slug} titel={x.titel} url={`v2/decks/${x.slug}`} satz={satz(x)} marke={marke(x)} rechts={uhr(x.at)} />)}</ul> : <p className="leer">Noch kein Deck im Review. Lege unten eines aus der Ablage an.</p>}
+      <Abschnitt id="d-review" titel="Im Review" erklaerung="Decks, die hier angelegt sind: jede neue Fassung in deinen Dokumenten erscheint von selbst (die Folien werden aus PDF oder PowerPoint erzeugt). Zahlen rechts: offene Kommentare.">
+        {d.decks.length ? <ul className="liste">{d.decks.map((x) => <Zeile key={x.slug} titel={x.titel} url={`v2/decks/${x.slug}`} satz={satz(x)} marke={marke(x)} rechts={uhr(x.at)} />)}</ul> : <p className="leer">Noch kein Deck im Review. Lege unten eines aus deinen Dokumenten an.</p>}
       </Abschnitt>
-      <Abschnitt id="d-ablage" titel="In der Ablage" erklaerung="Decks, die in Dokumenten, Berichten oder im Teilen-Ordner liegen (Dateiname mit „_deck_“ und Fassung), aber noch nicht im Review sind. Anlegen erzeugt die Folienbilder der neuesten fünf Fassungen.">
+      <Abschnitt id="d-ablage" titel="In den Dokumenten" erklaerung="Decks, die in deinen Dokumenten oder im Teilen-Ordner liegen (Dateiname mit „_deck_“ und Fassung), aber noch nicht im Review sind. Anlegen erzeugt die Folienbilder der neuesten fünf Fassungen.">
         {d.ablage.length ? <><ul className="liste">{(alle ? d.ablage : d.ablage.slice(0, 5)).map((x) => (
           <li key={x.slug} className="zeile">
             <div className="zeile-haupt">
@@ -67,7 +67,7 @@ export function Decks() {
             </div>
             <div className="zeile-rechts"><span className="zeit">{tag(x.at)}</span>{d.admin && anlegen !== x.slug && <button type="button" className="knopf klein" onClick={() => { setAnlegen(x.slug); setMelde(null); }}>Anlegen …</button>}</div>
           </li>
-        ))}</ul>{d.ablage.length > 5 && <button type="button" className="knopf leise klein" onClick={() => setAlle(!alle)}>{alle ? 'Weniger zeigen' : `Alle ${d.ablage.length} zeigen`}</button>}</> : <p className="leer">Keine weiteren Decks in der Ablage.</p>}
+        ))}</ul>{d.ablage.length > 5 && <button type="button" className="knopf leise klein" onClick={() => setAlle(!alle)}>{alle ? 'Weniger zeigen' : `Alle ${d.ablage.length} zeigen`}</button>}</> : <p className="leer">Keine weiteren Decks in deinen Dokumenten.</p>}
       </Abschnitt>
     </div>
   );
@@ -164,11 +164,11 @@ function Folie(p: FolieProps) {
         ) : <FolienBild src={p.bild(p.fassung, p.nr)} alt={`Folie ${p.nr}, Fassung ${p.fassung}`} marken={marken(p.fassung)} zeichnen={zeichnen} neu={mark} setNeu={setMark} />}
       </div>}
       <div className="deck-folie-kommentare">
-        <Kommentare liste={eigene} admin={p.admin} status={p.status} />
+        <Kommentare liste={eigene} admin={p.admin} status={p.status} fassung={p.fassung} />
         <label className="unsichtbar" htmlFor={`t-${p.nr}`}>{p.nr ? `Kommentar zu Folie ${p.nr}` : 'Kommentar zum ganzen Deck'}</label>
         <textarea id={`t-${p.nr}`} className="deck-text" value={text} onChange={(e) => setText(e.target.value)} placeholder={p.nr ? 'Was soll sich auf dieser Folie ändern?' : 'Reihenfolge, Kernbotschaft, Folie streichen …'} maxLength={4000} />
         {p.nr > 0 && <div className="antworten">
-          <button type="button" className={`knopf klein${zeichnen ? ' an' : ''}`} aria-pressed={zeichnen} onClick={() => { setZeichnen(!zeichnen); if (zeichnen) setMark(null); }}>{zeichnen ? (mark ? 'Bereich markiert ✓' : 'Bereich auf dem Bild ziehen …') : 'Bereich markieren'}</button>
+          <button type="button" className={`knopf klein${zeichnen ? ' an' : ''}`} aria-pressed={zeichnen} onClick={() => setZeichnen(!zeichnen)}>{zeichnen ? (mark ? 'Fertig markiert' : 'Bereich auf dem Bild ziehen …') : mark ? 'Markierung ändern' : 'Bereich markieren'}</button>
           {mark && <button type="button" className="knopf leise klein" onClick={() => setMark(null)}>Markierung entfernen</button>}
         </div>}
         <div className="antworten">
@@ -181,17 +181,18 @@ function Folie(p: FolieProps) {
   );
 }
 
-function Kommentare({ liste, admin, status }: { liste: DeckKommentar[]; admin: boolean; status?: FolieProps['status'] }) {
+function Kommentare({ liste, admin, status, fassung }: { liste: DeckKommentar[]; admin: boolean; status?: FolieProps['status']; fassung: string }) {
   if (!liste.length) return null;
-  return <ol className="deck-kommentare">{liste.map((k, i) => <KommentarZeile key={k.id} k={k} nr={i + 1} admin={admin} status={status} />)}</ol>;
+  // Kommentare zu anderen Fassungen derselben Foliennummer: gedimmt (der Inhalt kann ein anderer sein)
+  return <ol className="deck-kommentare">{liste.map((k, i) => <KommentarZeile key={k.id} k={k} nr={i + 1} admin={admin} status={status} andere={k.folie > 0 && k.fassung !== fassung} />)}</ol>;
 }
-function KommentarZeile({ k, nr, admin, status }: { k: DeckKommentar; nr: number; admin: boolean; status?: FolieProps['status'] }) {
+function KommentarZeile({ k, nr, admin, status, andere }: { k: DeckKommentar; nr: number; admin: boolean; status?: FolieProps['status']; andere?: boolean }) {
   const [ablehnen, setAblehnen] = useState(false);
   const [grund, setGrund] = useState('');
   const [fehler, setFehler] = useState<string | null>(null);
   const setzen = async (s: Status, g = '') => { setFehler(null); try { await status!(k.id, s, g); setAblehnen(false); setGrund(''); } catch (e: any) { setFehler(e.message); } };
   return (
-    <li className={`deck-kommentar ${STATUS_TON[k.status]}`}>
+    <li className={`deck-kommentar ${STATUS_TON[k.status]}${andere ? ' andere-fassung' : ''}`} title={andere ? `zu Fassung ${k.fassung}` : undefined}>
       <div className="deck-kommentar-kopf">
         <span className="klein"><b>{k.markierung ? `${nr} · ` : ''}{k.autor}</b>{k.extern ? ' (extern)' : ''} · {uhr(k.at)} · {k.fassung}</span>
         <span className={`marke ${STATUS_TON[k.status]}`}>{k.statusText}{k.status === 'umgesetzt' && k.erledigtIn ? ` in ${k.erledigtIn}` : ''}</span>
@@ -213,20 +214,22 @@ function KommentarZeile({ k, nr, admin, status }: { k: DeckKommentar; nr: number
 
 function Praesentation({ bilder, start, ende }: { bilder: string[]; start: number; ende: (i: number) => void }) {
   const [i, setI] = useState(start);
+  const jetzt = useRef(start); jetzt.current = i;   // für Esc/Vollbild-Ende ohne Setter im State-Updater (Pass B 12)
   useEffect(() => {
     const el = document.documentElement;
     el.requestFullscreen?.().catch(() => {});
     const taste = (e: KeyboardEvent) => {
       if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); setI((x) => Math.min(bilder.length - 1, x + 1)); }
       else if (['ArrowLeft', 'PageUp', 'Backspace'].includes(e.key)) { e.preventDefault(); setI((x) => Math.max(0, x - 1)); }
-      else if (e.key === 'Escape') setI((x) => { ende(x); return x; });
+      else if (e.key === 'Escape') ende(jetzt.current);
     };
-    const voll = () => { if (!document.fullscreenElement) setI((x) => { ende(x); return x; }); };
+    const voll = () => { if (!document.fullscreenElement) ende(jetzt.current); };
     document.addEventListener('keydown', taste); document.addEventListener('fullscreenchange', voll);
     return () => { document.removeEventListener('keydown', taste); document.removeEventListener('fullscreenchange', voll); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); };
   }, []);
   return (
-    <div className="praesentation" role="dialog" aria-label="Präsentation" onClick={() => setI((x) => Math.min(bilder.length - 1, x + 1))}>
+    // Tippen links (erstes Drittel) blättert zurück, sonst vor — auch am Handy
+    <div className="praesentation" role="dialog" aria-modal="true" aria-label="Präsentation" tabIndex={-1} ref={(el) => el?.focus()} onClick={(e) => { const zurueck = e.clientX < window.innerWidth / 3; setI((x) => Math.max(0, Math.min(bilder.length - 1, x + (zurueck ? -1 : 1)))); }}>
       <Bild key={i} src={bilder[i]} alt={`Folie ${i + 1}`} sofort />
       <span className="praes-zahl">{i + 1} / {bilder.length}</span>
       <button type="button" className="knopf klein praes-ende" onClick={(e) => { e.stopPropagation(); ende(i); }}>Beenden (Esc)</button>
@@ -272,7 +275,7 @@ function FolienListe({ d, bild, datei, admin, extern, senden, status }: { d: { a
       </div>
       <p className="klein gedimmt">{fd.folien} Folien · {v ? `${geaendertGegen.size ? `geändert gegenüber ${v}: Folie ${[...geaendertGegen].join(', ')}` : `keine Änderung gegenüber ${v} erkannt`}` : geaendertText(fd, vorher)}</p>
       <Folie key="0" nr={0} {...gemeinsam()} />
-      {nummern.map((n) => <Folie key={n} nr={n} {...gemeinsam()} geaendert={geaendertGegen.has(n)} neuIn={neuIn(n)} praesentieren={() => setPraes(n - 1)} />)}
+      {nummern.map((n) => <Folie key={`${f}-${n}`} nr={n} {...gemeinsam()} geaendert={geaendertGegen.has(n)} neuIn={neuIn(n)} praesentieren={() => setPraes(n - 1)} />)}
       {!nummern.length && <p className="leer">Keine Folie passt zum Filter.</p>}
       {praes !== null && <Praesentation bilder={Array.from({ length: fd.folien }, (_, i) => bild(f, i + 1))} start={praes} ende={(i) => { setPraes(null); document.getElementById(`folie-${i + 1}`)?.scrollIntoView({ block: 'start' }); }} />}
     </>
@@ -323,7 +326,7 @@ function DeckSteuerung({ d, neu }: { d: DeckDaten; neu: () => void }) {
   };
   return (
     <div className="deck-steuerung">
-      <Abschnitt id="d-unterchat" titel="Unter-Chat" erklaerung="Offene Kommentare gehen gesammelt an den Unter-Chat, der das Deck baut — automatisch alle 10 Minuten (abschaltbar) oder sofort per Knopf. Er legt die nächste Fassung in der Ablage ab und meldet je Kommentar „umgesetzt“ oder „abgelehnt mit Grund“ zurück.">
+      <Abschnitt id="d-unterchat" titel="Unter-Chat" erklaerung="Offene Kommentare gehen gesammelt an den Unter-Chat, der das Deck baut — automatisch alle 10 Minuten (abschaltbar) oder sofort per Knopf. Er legt die nächste Fassung in den Dokumenten ab und meldet je Kommentar „umgesetzt“ oder „abgelehnt mit Grund“ zurück.">
         <div className="kasten">
           <div className="filter">
             <label htmlFor="d-uc">Unter-Chat</label>
@@ -337,9 +340,8 @@ function DeckSteuerung({ d, neu }: { d: DeckDaten; neu: () => void }) {
           <div className="antworten">
             <button type="button" className="knopf haupt klein" disabled={!d.unterchat || !offen} onClick={() => void tun('senden', {}, (r) => (r.gesendet ? `${r.gesendet} Kommentar${r.gesendet === 1 ? '' : 'e'} an den Unter-Chat geschickt.` : 'Nichts Offenes zu senden.'))}>Jetzt an Unter-Chat senden ({offen})</button>
             <button type="button" className="knopf klein" onClick={() => void tun('rendern', {}, (r) => (r.rendern ? `Folien für ${r.rendern} Fassung${r.rendern === 1 ? '' : 'en'} werden erzeugt …` : 'Alles schon erzeugt.'))}>Neue Fassung suchen</button>
-            {d.aktuell && <button type="button" className="knopf leise klein" onClick={() => void tun('rendern', { fassung: d.aktuell }, () => `Folien für ${d.aktuell} werden neu erzeugt …`)}>{d.aktuell} neu erzeugen</button>}
           </div>
-          {!!d.weitereInAblage?.length && <p className="klein gedimmt">Ältere Fassungen in der Ablage, noch ohne Folien: {d.weitereInAblage.join(', ')} — <button type="button" className="knopf leise klein" onClick={() => void tun('rendern', {}, (r) => `Folien für ${r.rendern} Fassungen werden erzeugt …`)}>auch erzeugen</button></p>}
+          {!!d.weitereInAblage?.length && <p className="klein gedimmt">Ältere Fassungen in den Dokumenten, noch ohne Folien: {d.weitereInAblage.join(', ')} — <button type="button" className="knopf leise klein" onClick={() => void tun('rendern', {}, (r) => `Folien für ${r.rendern} Fassungen werden erzeugt …`)}>auch erzeugen</button></p>}
           {d.ordner && <p className="klein gedimmt">Neue Fassungen erwartet in: <code>{d.ordner}</code></p>}
         </div>
       </Abschnitt>
@@ -382,11 +384,11 @@ async function teilenSchicke(token: string, pfad: string, body: unknown) {
 }
 
 export function DeckTeilen() {
-  const token = useMemo(() => { const t = decodeURIComponent(location.hash.replace(/^#/, '')); teilenToken = t; return t; }, []);
+  const token = useMemo(() => { let t = ''; try { t = decodeURIComponent(location.hash.replace(/^#/, '')); } catch { /* kaputter #-Teil: wie ohne Token */ } teilenToken = t; return t; }, []);
   const [d, setD] = useState<(DeckDaten & { name: string; ablauf: string }) | null>(null);
   const [fehler, setFehler] = useState<string | null>(null);
   const [name, setName] = useState(() => { try { return localStorage.getItem('deck-name') ?? ''; } catch { return ''; } });
-  const laden = () => teilenHole<DeckDaten & { name: string; ablauf: string }>(token, 'api/deck-teilen').then((x) => { setD(x); setFehler(null); if (!name && x.name) setName(x.name); }, (e) => setFehler(e.message));
+  const laden = () => teilenHole<DeckDaten & { name: string; ablauf: string }>(token, 'api/deck-teilen').then((x) => { setD(x); setFehler(null); setName((n) => n || x.name || ''); }, (e) => setFehler(e.message));
   useEffect(() => { if (!token) { setFehler('Dieser Link ist unvollständig. Bitte frag nach einem neuen.'); return; } void laden(); const t = setInterval(() => void laden(), 30_000); return () => clearInterval(t); }, []);
   useEffect(() => { try { localStorage.setItem('deck-name', name); } catch { /* egal */ } }, [name]);
   if (fehler && !d) return <div className="teilen"><div className="seite"><h1>Deck-Review</h1><p className="fehler">{fehler}</p></div></div>;
@@ -404,6 +406,7 @@ export function DeckTeilen() {
       </header>
       <main className="inhalt seite deck-seite">
         <h1>{d.titel}</h1>
+        {fehler && <p className="fehler" role="alert">{fehler}</p>}
         <p className="unterzeile">Kommentiere direkt an der Folie — optional mit markiertem Bereich. Das Team sieht deine Kommentare und arbeitet sie in die nächste Fassung ein; hier siehst du deine eigenen mit ihrem Stand. Link gültig bis {tag(d.ablauf)}.</p>
         <FolienListe d={d} bild={bild} datei={(f, art) => `api/deck-teilen/datei/${encodeURIComponent(f)}/${art}`} admin={false} extern senden={senden} />
       </main>
