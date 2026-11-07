@@ -292,7 +292,9 @@ p { margin: 0 0 var(--s1); }
 .marke.rot { background: var(--rot-hell); color: var(--rot); }
 .deck-seite { max-width: 1280px; }
 .inhalt:has(.deck-seite) { max-width: none; }
-.deck-werkzeug { position: sticky; top: var(--kopf-h); z-index: 5; background: var(--grund); padding: 8px 0; }
+.deck-werkzeug { background: var(--grund); padding: 8px 0; }
+.deck-werkzeug select { flex: 1 1 40%; }
+@media (min-width: 900px) { .deck-werkzeug { position: sticky; top: var(--kopf-h); z-index: 5; } .deck-werkzeug select { flex: 0 1 auto; } }
 .deck-folie { display: grid; grid-template-columns: 1fr; gap: var(--s2); margin-bottom: var(--s2); }
 .deck-folie.ganz { display: block; }
 .deck-folie.ganz h2 { margin-bottom: var(--s1); }
@@ -301,11 +303,11 @@ p { margin: 0 0 var(--s1); }
 .folie-bild { position: relative; border: 1px solid var(--linie); border-radius: 8px; overflow: hidden; background: #fff; line-height: 0; }
 .folie-bild img { width: 100%; height: auto; display: block; user-select: none; }
 .folie-bild.zeichnen { cursor: crosshair; touch-action: none; outline: 3px dashed var(--akzent); outline-offset: 2px; }
-.markierung { position: absolute; border: 2px solid var(--warn); background: rgba(154, 91, 0, .08); border-radius: 3px; pointer-events: none; line-height: 1.2; }
+.markierung { position: absolute; border: 2px solid var(--warn); background: transparent; border-radius: 3px; pointer-events: none; line-height: 1.2; }
 .markierung b { position: absolute; top: -2px; left: -2px; background: var(--warn); color: #fff; font-size: .7rem; padding: 1px 5px; border-radius: 3px 0 3px 0; }
-.markierung.blau { border-color: var(--akzent); background: rgba(31, 95, 209, .08); } .markierung.blau b { background: var(--akzent); }
-.markierung.gruen { border-color: var(--gruen); background: rgba(29, 122, 70, .06); } .markierung.gruen b { background: var(--gruen); }
-.markierung.rot { border-color: var(--rot); background: rgba(180, 35, 24, .06); } .markierung.rot b { background: var(--rot); }
+.markierung.blau { border-color: var(--akzent); } .markierung.blau b { background: var(--akzent); }
+.markierung.gruen { border-color: var(--gruen); } .markierung.gruen b { background: var(--gruen); }
+.markierung.rot { border-color: var(--rot); } .markierung.rot b { background: var(--rot); }
 .markierung.neu { border: 2px dashed var(--akzent); background: rgba(31, 95, 209, .15); }
 .vergleich { display: grid; grid-template-columns: 1fr; gap: var(--s1); }
 .vergleich figure { margin: 0; }
@@ -320,6 +322,7 @@ p { margin: 0 0 var(--s1); }
 .deck-text { width: 100%; min-height: 84px; font: inherit; padding: 10px 12px; border: 1px solid #cdd3da; border-radius: 10px; background: #fff; }
 .knopf.an { border-color: var(--akzent); color: var(--akzent); background: var(--akzent-hell); }
 .deck-steuerung .kasten { display: flex; flex-direction: column; gap: 6px; }
+@media (min-width: 1100px) { .deck-steuerung { display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--s3); } .deck-steuerung > [role=status] { grid-column: 1 / -1; } .deck-steuerung .abschnitt { margin-bottom: var(--s2); } }
 .deck-uc { font: inherit; padding: 8px 10px; border: 1px solid #cdd3da; border-radius: 10px; width: 14em; max-width: 100%; }
 .deck-schalter { display: flex; align-items: center; gap: 8px; min-height: 36px; }
 .deck-link code { overflow-wrap: anywhere; font-size: .85rem; }

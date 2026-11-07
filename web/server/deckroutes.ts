@@ -195,7 +195,12 @@ export function registerDecks(on: On, d: DeckDeps) {
       const akt = aktuellVon(deck);
       const text = nachrichtAnUnterchat({ slug: deck._id, titel: deck.titel, fassung: akt?.fassung ?? '?', ordner: deck.ordner ?? '(Ordner der letzten Fassung)', heute: d.heute(), kommentare: offen.map((k) => ({ id: k._id, folie: k.folie, fassung: k.fassung, text: k.text, autor: k.autor, extern: k.extern, markierung: k.markierung })) });
       try { await d.senden(u, deck.strand, text); }
-      catch (e: any) { await C.decks().updateOne({ _id: deck._id }, { $set: { sendeFehler: String(e?.message ?? e).slice(0, 200) } }); throw e; }
+      catch (e: any) {
+        // Meldungen der Unter-Chat-Logik sprechen von „Strang“ — in der 2.0 heißt das „Unter-Chat“ (Begriffe, plan-werkbank-2 §4)
+        const text = String(e?.message ?? e).replace(/\bStr(a|ä)nge?\b/g, (w) => (w.length > 6 ? 'Unter-Chats' : 'Unter-Chat')).slice(0, 200);
+        await C.decks().updateOne({ _id: deck._id }, { $set: { sendeFehler: text } });
+        throw Object.assign(new Error(text), { status: e?.status && e.status < 500 ? e.status : 409 });
+      }
       const jetzt = new Date();
       await C.kommentare().updateMany({ _id: { $in: offen.map((k) => k._id) }, status: 'offen' }, { $set: { status: 'gesendet', gesendetAt: jetzt }, $push: { verlauf: { status: 'gesendet', at: jetzt, durch } } });
       await C.decks().updateOne({ _id: deck._id }, { $set: { letzterVersand: jetzt, sendeFehler: null } });
@@ -409,7 +414,8 @@ export function registerDecks(on: On, d: DeckDeps) {
 
   on('GET', /^\/api\/deck-teilen$/, async (req, res) => {
     const { link, deck } = await linkVon(req, req.headers['x-deck-token']);
-    const kommentare = await C.kommentare().find({ deck: deck._id }).sort({ at: 1 }).limit(2000).toArray();
+    // Notizen („nur für mich“, gehen nicht an den Unter-Chat) bleiben intern
+    const kommentare = await C.kommentare().find({ deck: deck._id, status: { $ne: 'notiz' } }).sort({ at: 1 }).limit(2000).toArray();
     // extern: keine Kennungen der Personen/Links, kein Unter-Chat, keine Links
     d.send(res, 200, { slug: deck._id, titel: deck.titel, aktuell: aktuellVon(deck)?.fassung ?? null, fassungen: fassungenSicht(deck).map(({ hashes: _h, datei: _d, ...f }) => f), kommentare: kommentare.map(kommentarSicht), name: link.name, ablauf: link.ablauf });
   });

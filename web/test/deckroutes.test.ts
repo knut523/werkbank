@@ -115,10 +115,12 @@ test('Kommentar: offen oder Notiz; Folie muss es in der Fassung geben; Markierun
 
 test('Senden: offene gesammelt an den verknüpften Unter-Chat, danach „an Unter-Chat“; Notizen bleiben; Fehler lässt sie offen', async () => {
   sendenFehler = new Error('409 belegt');
-  assert.equal((await rufe('POST', '/api/v2/decks/flex/senden', ADMIN)).status, 500);
+  assert.equal((await rufe('POST', '/api/v2/decks/flex/senden', ADMIN)).status, 409, 'Meldung lesbar, nicht „Interner Fehler“');
+  sendenFehler = new Error('Strang abcd1234 gibt es nicht.');
+  assert.equal((await rufe('POST', '/api/v2/decks/flex/senden', ADMIN)).b.error, 'Unter-Chat abcd1234 gibt es nicht.');
   let d = await rufe('GET', '/api/v2/decks/flex', ADMIN);
   assert.equal(d.b.kommentare.filter((k: any) => k.status === 'offen').length, 2);
-  assert.match(d.b.sendeFehler, /belegt/);
+  assert.match(d.b.sendeFehler, /Unter-Chat abcd1234/);
   sendenFehler = null;
   assert.equal((await rufe('POST', '/api/v2/decks/flex/senden', LISA)).status, 403);
   const r = await rufe('POST', '/api/v2/decks/flex/senden', ADMIN);
@@ -183,6 +185,7 @@ test('Teil-Link: Token nur einmal, gespeichert nur der Hash; nur dieses Deck; Ab
   assert.equal(g.status, 200); assert.equal(g.b.slug, 'flex'); assert.equal(g.b.name, 'Peter');
   assert.equal(g.b.unterchat, undefined); assert.equal(g.b.links, undefined); assert.equal(g.b.fassungen[0].hashes, undefined);
   assert.ok(g.b.kommentare.every((k: any) => k.userId === undefined && k.linkId === undefined));
+  assert.ok(g.b.kommentare.length > 0 && g.b.kommentare.every((k: any) => k.status !== 'notiz'), 'Notizen bleiben intern');
   assert.equal((await rufe('GET', '/api/deck-teilen', null, undefined, { 'x-deck-token': 'x'.repeat(43) })).status, 404);
   assert.equal((await rufe('GET', '/api/deck-teilen', null)).status, 404);
   // Bild: nur Fassungen dieses Decks
