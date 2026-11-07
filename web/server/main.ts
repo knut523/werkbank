@@ -4563,16 +4563,20 @@ const deckCol = { decks: () => wb().collection<any>('decks'), kommentare: () => 
 const deckModul = registerDecks(on, {
   needUser, body, send, log, col: deckCol, wurzel: cfg.deckDir,
   intern: (req, b) => internalUser(req, b),
-  quellen: cfg.deckQuellen.length ? cfg.deckQuellen : [cfg.docsDir, cfg.reviewDir, join(homedir(), 'work', 'knut', 'downloads', 'teilen')],
-  senden: (u, strand, text) => sendOrch(u, strand, text),
+  // ohne Angabe: Dokumente und Teilen-Ordner — nicht die Review-Pakete (rund 67 000 Einträge, Kopien von Decks; Pass A 7)
+  quellen: cfg.deckQuellen.length ? cfg.deckQuellen : [cfg.docsDir, join(homedir(), 'work', 'knut', 'downloads', 'teilen')],
+  // automatisch wie der Hauptchat (respektiert Deckel und Knuts Abnahme), der Knopf als Knuts eigene Nachricht
+  senden: (u, strand, text, automatisch) => sendOrch(u, strand, text, automatisch ? 'leitstand' : 'hand'),
   strangConv: async (u, strand) => { const r: any = await orchRuns().findOne({ _id: strand as any, userId: u.id }, { projection: { conv: 1 } }); return r?.conv ? String(r.conv) : null; },
   userById: (id) => userById(id),
   heute: wienDatum,
 });
 {
   const s = Number(process.env.WERKBANK_DECK_TAKT_S ?? 60);
-  let indiziert = false;
-  if (s > 0) setInterval(() => { (async () => { if (!indiziert) { await deckIndizes(deckCol); indiziert = true; } await deckModul.takt(); })().catch((e) => log('deck takt fehler', { error: String(e?.message ?? e).slice(0, 200) })); }, s * 1000).unref();
+  // Indizes (u. a. eindeutiger Token-Hash) beim Start, auch ohne Takt; bis die Datenbank steht, im Abstand erneut versuchen
+  const indizes = (n = 0) => deckIndizes(deckCol).catch(() => { if (n < 20) setTimeout(() => indizes(n + 1), 15_000).unref(); });
+  setTimeout(() => indizes(), 3000).unref();
+  if (s > 0) setInterval(() => { deckModul.takt().catch((e) => log('deck takt fehler', { error: String(e?.message ?? e).slice(0, 200) })); }, s * 1000).unref();
 }
 
 function serveStatic(req: IncomingMessage, res: ServerResponse, path: string) {
@@ -4592,7 +4596,7 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, path: string) {
     'cache-control': file.includes('/assets/') || file.startsWith(FONTS) ? 'public, max-age=31536000, immutable' : 'no-cache',
     'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'SAMEORIGIN',
     // base-uri: 2.0 setzt <base href> auf den eigenen Ursprung (S16); die alte Oberfläche bleibt bei 'none'.
-    'content-security-policy': `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri ${base === V2_DIST ? "'self'" : "'none'"}`,
+    'content-security-policy': `default-src 'self'; img-src 'self' data:${base === V2_DIST ? ' blob:' : ''}; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri ${base === V2_DIST ? "'self'" : "'none'"}`,
   });
   if (req.method === 'HEAD') return res.end();
   // 2.0 (S16): die Seite selbst mit <base href> fürs Präfix (/werkbank über den LibreChat-Proxy) — nur aus der Erlaubnisliste (C3).

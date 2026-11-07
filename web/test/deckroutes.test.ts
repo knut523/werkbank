@@ -18,7 +18,7 @@ let client: MongoClient, db: Db;
 const routen: [string, RegExp, any][] = [];
 const wurzel = mkdtempSync(join(tmpdir(), 'decks-'));
 let fundListe: Fund[] = [];
-const gesendet: { strand: string; text: string }[] = [];
+const gesendet: { strand: string; text: string; automatisch: boolean }[] = [];
 let sendenFehler: Error | null = null;
 const gerendert: string[] = [];
 let modul: ReturnType<typeof registerDecks>;
@@ -34,7 +34,7 @@ before(async () => {
     intern: async (req: any) => { if (req.headers?.['x-intern'] !== 'ok') throw Object.assign(new Error('Nicht erlaubt.'), { status: 403 }); return ADMIN; },
     body: async (req: any) => req.b ?? {}, send: (res: any, status, b) => { res.status = status; res.b = b; }, log: () => {},
     col, wurzel, quellen: [],
-    senden: async (_u, strand, text) => { if (sendenFehler) throw sendenFehler; gesendet.push({ strand, text }); },
+    senden: async (_u, strand, text, automatisch) => { if (sendenFehler) throw sendenFehler; gesendet.push({ strand, text, automatisch }); },
     strangConv: async (_u, strand) => (strand === 'abcd1234' ? 'conv-deck' : null),
     userById: async (id) => (id === 'k' ? ADMIN : null),
     heute: () => '2026-11-07',
@@ -126,7 +126,8 @@ test('Senden: offene gesammelt an den verknüpften Unter-Chat, danach „an Unte
   const r = await rufe('POST', '/api/v2/decks/flex/senden', ADMIN);
   assert.equal(r.b.gesendet, 2);
   assert.equal(gesendet.length, 1); assert.equal(gesendet[0].strand, 'abcd1234');
-  assert.match(gesendet[0].text, /Folie 2 \(Fassung v2\) · Lisa: Zahl prüfen/);
+  assert.match(gesendet[0].text, /Folie 2 \(Fassung v2\) · Lisa:\n    > Zahl prüfen/);
+  assert.equal(gesendet[0].automatisch, false, 'Knopf = eigene Nachricht');
   assert.match(gesendet[0].text, /2026-11-07_deck_flex_v2-1\.pptx/);
   assert.doesNotMatch(gesendet[0].text, /nur für mich/);
   d = await rufe('GET', '/api/v2/decks/flex', ADMIN);
@@ -185,23 +186,29 @@ test('Teil-Link: Token nur einmal, gespeichert nur der Hash; nur dieses Deck; Ab
   assert.equal(g.status, 200); assert.equal(g.b.slug, 'flex'); assert.equal(g.b.name, 'Peter');
   assert.equal(g.b.unterchat, undefined); assert.equal(g.b.links, undefined); assert.equal(g.b.fassungen[0].hashes, undefined);
   assert.ok(g.b.kommentare.every((k: any) => k.userId === undefined && k.linkId === undefined));
-  assert.ok(g.b.kommentare.length > 0 && g.b.kommentare.every((k: any) => k.status !== 'notiz'), 'Notizen bleiben intern');
+  assert.equal(g.b.kommentare.length, 0, 'extern zuerst nichts: keine internen Kommentare, keine Notizen');
   assert.equal((await rufe('GET', '/api/deck-teilen', null, undefined, { 'x-deck-token': 'x'.repeat(43) })).status, 404);
   assert.equal((await rufe('GET', '/api/deck-teilen', null)).status, 404);
   // Bild: nur Fassungen dieses Decks
-  const bild = await rufe('GET', `/api/deck-teilen/bild/v2/1?t=${token}`, null);
+  const bild = await rufe('GET', '/api/deck-teilen/bild/v2/1', null, undefined, t);
+  assert.equal(bild.kopf['cache-control'], 'no-store', 'extern kein Cache');
   assert.equal(bild.status, 200); assert.match(String(bild.daten), /flex_v2.pdf 1/);
-  assert.equal((await rufe('GET', `/api/deck-teilen/bild/v2/1`, null)).status, 404);
+  assert.equal((await rufe('GET', `/api/deck-teilen/bild/v2/1?t=${token}`, null)).status, 404, 'Token in der Adresse gilt nicht');
   // Kommentar: Kopf, Name
   assert.equal((await rufe('POST', '/api/deck-teilen/kommentar', null, { name: 'Peter', folie: 1, text: 'Hallo' }, { ...t, 'x-werkbank': '0' })).status, 403);
   assert.equal((await rufe('POST', '/api/deck-teilen/kommentar', null, { name: '', folie: 1, text: 'Hallo' }, t)).status, 400);
   const k = await rufe('POST', '/api/deck-teilen/kommentar', null, { name: 'Peter M.', folie: 1, text: 'Hallo', notiz: true }, t);
   assert.equal(k.status, 200); assert.equal(k.b.kommentar.extern, true); assert.equal(k.b.kommentar.status, 'offen', 'extern nie Notiz');
   assert.equal((await db.collection('deck_kommentare').findOne({ _id: k.b.kommentar.id }))!.deck, 'flex', 'landet im Deck des Links');
+  await db.collection('deck_kommentare').updateOne({ _id: k.b.kommentar.id }, { $set: { status: 'abgelehnt', grund: 'intern: Peter liegt falsch' } });
+  const g2 = await rufe('GET', '/api/deck-teilen', null, undefined, t);
+  assert.deepEqual(g2.b.kommentare.map((x: any) => [x.text, x.status, x.grund]), [['Hallo', 'abgelehnt', null]], 'nur eigene, mit Stand, ohne Grund');
+  const fremd = await rufe('POST', '/api/v2/decks/flex/links', ADMIN, { name: 'Andere Firma' });
+  assert.equal((await rufe('GET', '/api/deck-teilen', null, undefined, { 'x-deck-token': fremd.b.token })).b.kommentare.length, 0, 'Kommentare eines anderen Links unsichtbar');
   // Widerruf
   assert.equal((await rufe('POST', `/api/v2/decks/flex/links/${l.b.id}/widerrufen`, ADMIN)).b.widerrufen, 1);
   assert.equal((await rufe('GET', '/api/deck-teilen', null, undefined, t)).status, 404);
-  assert.equal((await rufe('GET', `/api/deck-teilen/bild/v2/1?t=${token}`, null)).status, 404);
+  assert.equal((await rufe('GET', '/api/deck-teilen/bild/v2/1', null, undefined, t)).status, 404);
   // Ablauf
   const l2 = await rufe('POST', '/api/v2/decks/wirt/links', ADMIN, { tage: 3 });
   await db.collection('deck_links').updateOne({ _id: l2.b.id }, { $set: { ablauf: new Date(Date.now() - 1000) } });
@@ -218,6 +225,10 @@ test('Rate-Limit: 30 Kommentare je Link in 10 min; Fehlversuche je Adresse gedec
   for (let i = 0; i < 62; i++) stati.push((await rufe('GET', '/api/deck-teilen', null, undefined, { 'x-deck-token': 'y'.repeat(43), 'x-ip': '9.9.9.9' })).status);
   assert.equal(stati[0], 404); assert.equal(stati.at(-1), 429);
   assert.equal((await rufe('GET', '/api/deck-teilen', null, undefined, { 'x-deck-token': 'y'.repeat(43), 'x-ip': '8.8.8.8' })).status, 404, 'andere Adresse nicht betroffen');
+  // X-Forwarded-For: der erste Eintrag ist frei wählbar — gezählt wird der letzte (vom eigenen Proxy)
+  const xff: number[] = [];
+  for (let i = 0; i < 62; i++) xff.push((await rufe('GET', '/api/deck-teilen', null, undefined, { 'x-deck-token': 'z'.repeat(43), 'x-forwarded-for': `10.0.0.${i}, 7.7.7.7` })).status);
+  assert.equal(xff.at(-1), 429, 'gefälschter erster Eintrag umgeht das Limit nicht');
 });
 
 test('Takt: neue Fassung in der Ablage wird gerendert (ältere nicht); offene gehen automatisch, aber höchstens alle 10 min', async () => {
@@ -228,11 +239,20 @@ test('Takt: neue Fassung in der Ablage wird gerendert (ältere nicht); offene ge
   await modul.takt(); await modul.warten();
   assert.deepEqual(gerendert, ['/ablage/2026-11-06_deck_flex_v3.pdf'], 'nur die neuere Fassung, v0 nicht');
   assert.equal(gesendet.length, vorher, 'letzter Versand < 10 min → noch nicht');
-  await db.collection('decks').updateOne({ _id: 'flex' as any }, { $set: { letzterVersand: new Date(Date.now() - 11 * 60_000) } });
+  await db.collection('decks').updateOne({ _id: 'flex' as any }, { $set: { letzterVersand: new Date(Date.now() - 11 * 60_000), letzterVersuch: new Date(Date.now() - 11 * 60_000) } });
   await modul.takt();
   assert.equal(gesendet.length, vorher + 1);
   assert.match(gesendet.at(-1)!.text, /\[k-takt\]/);
-  await db.collection('decks').updateOne({ _id: 'flex' as any }, { $set: { auto: false, letzterVersand: null } });
+  assert.equal(gesendet.at(-1)!.automatisch, true, 'Takt sendet wie der Hauptchat (Deckel/Abnahme gelten)');
+  // Fehlschlag zählt als Versuch: nicht jede Minute erneut
+  await db.collection('deck_kommentare').updateOne({ _id: 'k-takt' as any }, { $set: { status: 'offen' } });
+  await db.collection('decks').updateOne({ _id: 'flex' as any }, { $set: { letzterVersand: null, letzterVersuch: null } });
+  sendenFehler = new Error('Strang abcd1234 hat seinen Deckel erreicht');
+  await modul.takt(); await modul.takt();
+  sendenFehler = null;
+  assert.equal(gesendet.length, vorher + 1, 'nach Fehlschlag kein zweiter Versuch im selben Fenster');
+  assert.ok((await db.collection<any>('decks').findOne({ _id: 'flex' as any })).letzterVersuch);
+  await db.collection('decks').updateOne({ _id: 'flex' as any }, { $set: { auto: false, letzterVersand: null, letzterVersuch: null } });
   await db.collection('deck_kommentare').updateOne({ _id: 'k-takt' as any }, { $set: { status: 'offen' } });
   await modul.takt();
   assert.equal(gesendet.length, vorher + 1, 'abgeschaltet → nichts');
@@ -285,4 +305,20 @@ test('Rendern echt (pdftoppm): Folien s-01…, Hash je Folie; gleiche Folie → 
   const nochmal = await rendernEcht({ pdf: join(d, 'b.pdf'), pptx: null }, join(d, 'out', 'v1'));
   assert.equal(nochmal.folien, 2, 'Überschreiben einer Fassung geht');
   await assert.rejects(rendernEcht({ pdf: null, pptx: null }, join(d, 'out', 'v3')), /Keine Quelle/);
+});
+
+test('Download: Quelldatei der Fassung aus der Ablage (angemeldet und mit Teil-Link), sonst 404', async () => {
+  const d0 = mkdtempSync(join(tmpdir(), 'deckdl-'));
+  writeFileSync(join(d0, '2026-11-06_deck_flex_v2.pdf'), '%PDF-test');
+  fundListe = [{ slug: 'flex', mtime: 1, fassungen: [{ fassung: 'v2', datum: '2026-11-06', pdf: join(d0, '2026-11-06_deck_flex_v2.pdf'), pptx: null, mtime: 1 }] }, fund('wirt', ['v1'])];
+  const r = await rufe('GET', '/api/v2/decks/flex/datei/v2/pdf', LISA);
+  assert.equal(r.status, 200); assert.equal(String(r.daten), '%PDF-test'); assert.match(r.kopf['content-disposition'], /attachment; filename="2026-11-06_deck_flex_v2.pdf"/);
+  assert.equal((await rufe('GET', '/api/v2/decks/flex/datei/v2/pptx', LISA)).status, 404);
+  assert.equal((await rufe('GET', '/api/v2/decks/flex/datei/v2/pdf', null)).status, 401);
+  const d = await rufe('GET', '/api/v2/decks/flex', LISA);
+  assert.deepEqual(d.b.fassungen.find((f: any) => f.fassung === 'v2'), { ...d.b.fassungen.find((f: any) => f.fassung === 'v2'), pdf: true, pptx: false });
+  const l = await rufe('POST', '/api/v2/decks/flex/links', ADMIN, {});
+  assert.equal((await rufe('GET', '/api/deck-teilen/datei/v2/pdf', null, undefined, { 'x-deck-token': l.b.token })).status, 200);
+  const w = await rufe('POST', '/api/v2/decks/wirt/links', ADMIN, {});
+  assert.equal((await rufe('GET', '/api/deck-teilen/datei/v2/pdf', null, undefined, { 'x-deck-token': w.b.token })).status, 404, 'Link eines anderen Decks');
 });

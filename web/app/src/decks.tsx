@@ -31,6 +31,7 @@ export function Decks() {
   const [anlegen, setAnlegen] = useState<string | null>(null);
   const [unterchat, setUnterchat] = useState('');
   const [melde, setMelde] = useState<string | null>(null);
+  const [alle, setAlle] = useState(false);
   if (fehler && !d) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
   const los = async (slug: string) => {
@@ -53,7 +54,7 @@ export function Decks() {
         {d.decks.length ? <ul className="liste">{d.decks.map((x) => <Zeile key={x.slug} titel={x.titel} url={`v2/decks/${x.slug}`} satz={satz(x)} marke={marke(x)} rechts={uhr(x.at)} />)}</ul> : <p className="leer">Noch kein Deck im Review. Lege unten eines aus der Ablage an.</p>}
       </Abschnitt>
       <Abschnitt id="d-ablage" titel="In der Ablage" erklaerung="Decks, die in Dokumenten, Berichten oder im Teilen-Ordner liegen (Dateiname mit „_deck_“ und Fassung), aber noch nicht im Review sind. Anlegen erzeugt die Folienbilder der neuesten fünf Fassungen.">
-        {d.ablage.length ? <ul className="liste">{d.ablage.map((x) => (
+        {d.ablage.length ? <><ul className="liste">{(alle ? d.ablage : d.ablage.slice(0, 5)).map((x) => (
           <li key={x.slug} className="zeile">
             <div className="zeile-haupt">
               <span className="zeile-titel">{x.titel}</span>
@@ -66,10 +67,39 @@ export function Decks() {
             </div>
             <div className="zeile-rechts"><span className="zeit">{tag(x.at)}</span>{d.admin && anlegen !== x.slug && <button type="button" className="knopf klein" onClick={() => { setAnlegen(x.slug); setMelde(null); }}>Anlegen …</button>}</div>
           </li>
-        ))}</ul> : <p className="leer">Keine weiteren Decks in der Ablage.</p>}
+        ))}</ul>{d.ablage.length > 5 && <button type="button" className="knopf leise klein" onClick={() => setAlle(!alle)}>{alle ? 'Weniger zeigen' : `Alle ${d.ablage.length} zeigen`}</button>}</> : <p className="leer">Keine weiteren Decks in der Ablage.</p>}
       </Abschnitt>
     </div>
   );
+}
+
+// ---------- Bild: intern direkt, auf der Teilen-Seite mit dem Token im Kopf (Blob) — das Token steht nie in einer Adresse ----------
+
+let teilenToken = '';
+async function teilenBlob(pfad: string): Promise<Blob> {
+  const r = await fetch(pfad, { headers: { 'x-deck-token': teilenToken }, credentials: 'omit' });
+  if (!r.ok) throw new ApiFehler(r.status, klartext(r.status));
+  return r.blob();
+}
+function Bild({ src, alt, sofort = false }: { src: string; alt: string; sofort?: boolean }) {
+  const extern = !!teilenToken && src.startsWith('api/deck-teilen/');
+  const [url, setUrl] = useState<string | null>(extern ? null : src);
+  const ref = useRef<HTMLImageElement>(null);
+  useEffect(() => {
+    if (!extern) { setUrl(src); return; }
+    let weg = false, u: string | null = null;
+    const laden = () => teilenBlob(src).then((b) => { if (weg) return; u = URL.createObjectURL(b); setUrl(u); }).catch(() => {});
+    // wie loading=lazy: erst holen, wenn die Folie in die Nähe kommt
+    const io = !sofort && 'IntersectionObserver' in window ? new IntersectionObserver((e) => { if (e.some((x) => x.isIntersecting)) { io!.disconnect(); void laden(); } }, { rootMargin: '600px' }) : null;
+    if (io && ref.current) io.observe(ref.current); else void laden();
+    return () => { weg = true; io?.disconnect(); if (u) URL.revokeObjectURL(u); };
+  }, [src, extern]);
+  return <img ref={ref} src={url ?? 'data:image/gif;base64,R0lGODlhAQABAAAAACw='} alt={alt} loading={extern ? undefined : 'lazy'} draggable={false} className={url ? '' : 'laedt-bild'} />;
+}
+async function herunterladen(pfad: string) {
+  const b = await teilenBlob(pfad);
+  const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = decodeURIComponent(pfad.split('/').slice(-2).join('.'));
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
 }
 
 // ---------- Folienbild mit Markierungen (und Zeichnen) ----------
@@ -85,7 +115,7 @@ function FolienBild({ src, alt, marken, zeichnen, neu, setNeu }: { src: string; 
       onPointerDown={zeichnen ? (e) => { (e.target as Element).setPointerCapture?.(e.pointerId); start.current = punkt(e); setNeu(null); } : undefined}
       onPointerMove={zeichnen ? (e) => { if (start.current) setNeu(rechteck(start.current, punkt(e))); } : undefined}
       onPointerUp={zeichnen ? (e) => { if (start.current) { const r = rechteck(start.current, punkt(e)); setNeu(r.w > 0.01 && r.h > 0.01 ? r : null); } start.current = null; } : undefined}>
-      <img src={src} alt={alt} loading="lazy" draggable={false} />
+      <Bild src={src} alt={alt} />
       {marken.map((x) => <span key={x.nr} className={`markierung ${x.ton}`} style={stil(x.m)}><b>{x.nr}</b></span>)}
       {neu && <span className="markierung neu" style={stil(neu)} />}
     </div>
@@ -197,7 +227,7 @@ function Praesentation({ bilder, start, ende }: { bilder: string[]; start: numbe
   }, []);
   return (
     <div className="praesentation" role="dialog" aria-label="Präsentation" onClick={() => setI((x) => Math.min(bilder.length - 1, x + 1))}>
-      <img src={bilder[i]} alt={`Folie ${i + 1}`} />
+      <Bild key={i} src={bilder[i]} alt={`Folie ${i + 1}`} sofort />
       <span className="praes-zahl">{i + 1} / {bilder.length}</span>
       <button type="button" className="knopf klein praes-ende" onClick={(e) => { e.stopPropagation(); ende(i); }}>Beenden (Esc)</button>
     </div>
@@ -206,7 +236,7 @@ function Praesentation({ bilder, start, ende }: { bilder: string[]; start: numbe
 
 // ---------- Folienliste (gemeinsam für Werkbank und Teilen-Seite) ----------
 
-function FolienListe({ d, bild, admin, extern, senden, status }: { d: { aktuell: string | null; fassungen: DeckFassung[]; kommentare: DeckKommentar[] }; bild: (f: string, n: number) => string; admin: boolean; extern: boolean; senden: FolieProps['senden']; status?: FolieProps['status'] }) {
+function FolienListe({ d, bild, datei, admin, extern, senden, status }: { d: { aktuell: string | null; fassungen: DeckFassung[]; kommentare: DeckKommentar[] }; bild: (f: string, n: number) => string; datei: (f: string, art: 'pdf' | 'pptx') => string; admin: boolean; extern: boolean; senden: FolieProps['senden']; status?: FolieProps['status'] }) {
   const [fassung, setFassung] = useState<string | null>(null);
   const [vergleich, setVergleich] = useState<string>('');
   const [filter, setFilter] = useState<'alle' | 'kommentiert' | 'geaendert'>('alle');
@@ -236,6 +266,9 @@ function FolienListe({ d, bild, admin, extern, senden, status }: { d: { aktuell:
         <label htmlFor="d-filter">Zeigen</label>
         <select id="d-filter" value={filter} onChange={(e) => setFilter(e.target.value as any)}><option value="alle">alle Folien</option><option value="kommentiert">nur kommentierte</option><option value="geaendert">nur geänderte</option></select>
         <button type="button" className="knopf klein" onClick={() => setPraes(0)}>▶ Präsentieren</button>
+        {(['pdf', 'pptx'] as const).filter((art) => fd[art]).map((art) => extern
+          ? <button key={art} type="button" className="knopf klein" onClick={() => void herunterladen(datei(f, art))}>⬇ {art === 'pdf' ? 'PDF' : 'PowerPoint'}</button>
+          : <a key={art} className="knopf klein" href={datei(f, art)} download>⬇ {art === 'pdf' ? 'PDF' : 'PowerPoint'}</a>)}
       </div>
       <p className="klein gedimmt">{fd.folien} Folien · {v ? `${geaendertGegen.size ? `geändert gegenüber ${v}: Folie ${[...geaendertGegen].join(', ')}` : `keine Änderung gegenüber ${v} erkannt`}` : geaendertText(fd, vorher)}</p>
       <Folie key="0" nr={0} {...gemeinsam()} />
@@ -255,7 +288,8 @@ export function Deck({ slug }: { slug: string }) {
   useEffect(() => { const t = setInterval(neu, 20_000); return () => clearInterval(t); }, [neu]);   // neue Fassungen und Rückmeldungen erscheinen von selbst
   if (fehler && !d) return <Fehler text={fehler} nochmal={neu} />;
   if (!d) return <Laedt />;
-  const bild = (f: string, n: number) => `api/v2/decks/${slug}/bild/${encodeURIComponent(f)}/${n}`;
+  // Render-Zeitpunkt in der Adresse: nach „neu erzeugen“ derselben Fassung kein altes Bild aus dem Cache
+  const bild = (f: string, n: number) => `api/v2/decks/${slug}/bild/${encodeURIComponent(f)}/${n}?r=${encodeURIComponent(d.fassungen.find((x) => x.fassung === f)?.at ?? '')}`;
   const senden: FolieProps['senden'] = async (b) => { await schicke(`api/v2/decks/${slug}/kommentar`, b); neu(); };
   const status: FolieProps['status'] = async (id, s, grund) => { await schicke(`api/v2/decks/${slug}/kommentar/${id}`, { status: s, grund }); neu(); };
   const offen = d.kommentare.filter((k) => k.status === 'offen').length;
@@ -266,7 +300,7 @@ export function Deck({ slug }: { slug: string }) {
       <p className="unterzeile">{d.aktuell ? `Aktuell ${d.aktuell}` : 'Noch keine Folien'} · {d.kommentare.length} Kommentare{offen ? `, ${offen} offen` : ''}{d.rendern.length ? ` · Folien für ${d.rendern.join(', ')} werden gerade erzeugt …` : ''}</p>
       {d.renderFehler && <p className="fehler">Die Folien für {d.renderFehler.fassung} ließen sich nicht erzeugen: {d.renderFehler.text}</p>}
       {app.ich.admin && <DeckSteuerung d={d} neu={neu} />}
-      <FolienListe d={d} bild={bild} admin={d.admin} extern={false} senden={senden} status={status} />
+      <FolienListe d={d} bild={bild} datei={(f, art) => `api/v2/decks/${slug}/datei/${encodeURIComponent(f)}/${art}`} admin={d.admin} extern={false} senden={senden} status={status} />
     </div>
   );
 }
@@ -348,7 +382,7 @@ async function teilenSchicke(token: string, pfad: string, body: unknown) {
 }
 
 export function DeckTeilen() {
-  const token = useMemo(() => decodeURIComponent(location.hash.replace(/^#/, '')), []);
+  const token = useMemo(() => { const t = decodeURIComponent(location.hash.replace(/^#/, '')); teilenToken = t; return t; }, []);
   const [d, setD] = useState<(DeckDaten & { name: string; ablauf: string }) | null>(null);
   const [fehler, setFehler] = useState<string | null>(null);
   const [name, setName] = useState(() => { try { return localStorage.getItem('deck-name') ?? ''; } catch { return ''; } });
@@ -357,7 +391,7 @@ export function DeckTeilen() {
   useEffect(() => { try { localStorage.setItem('deck-name', name); } catch { /* egal */ } }, [name]);
   if (fehler && !d) return <div className="teilen"><div className="seite"><h1>Deck-Review</h1><p className="fehler">{fehler}</p></div></div>;
   if (!d) return <div className="teilen"><Laedt /></div>;
-  const bild = (f: string, n: number) => `api/deck-teilen/bild/${encodeURIComponent(f)}/${n}?t=${encodeURIComponent(token)}`;
+  const bild = (f: string, n: number) => `api/deck-teilen/bild/${encodeURIComponent(f)}/${n}`;
   const senden: FolieProps['senden'] = async (b) => {
     if (name.trim().length < 2) throw new Error('Bitte oben deinen Namen eintragen — er steht dann bei deinem Kommentar.');
     await teilenSchicke(token, 'api/deck-teilen/kommentar', { ...b, notiz: false, name: name.trim() });
@@ -370,8 +404,8 @@ export function DeckTeilen() {
       </header>
       <main className="inhalt seite deck-seite">
         <h1>{d.titel}</h1>
-        <p className="unterzeile">Kommentiere direkt an der Folie — optional mit markiertem Bereich. Das Team sieht deine Kommentare und arbeitet sie in die nächste Fassung ein. Link gültig bis {tag(d.ablauf)}.</p>
-        <FolienListe d={d} bild={bild} admin={false} extern senden={senden} />
+        <p className="unterzeile">Kommentiere direkt an der Folie — optional mit markiertem Bereich. Das Team sieht deine Kommentare und arbeitet sie in die nächste Fassung ein; hier siehst du deine eigenen mit ihrem Stand. Link gültig bis {tag(d.ablauf)}.</p>
+        <FolienListe d={d} bild={bild} datei={(f, art) => `api/deck-teilen/datei/${encodeURIComponent(f)}/${art}`} admin={false} extern senden={senden} />
       </main>
     </div>
   );

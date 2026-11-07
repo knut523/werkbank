@@ -1,6 +1,6 @@
 // Deck-Review: reine Regeln der Oberfläche (ohne React), getestet in test/deckkern.test.ts.
 
-export interface DeckFassung { fassung: string; folien: number; at: string; geaendert: number[] | null }
+export interface DeckFassung { fassung: string; folien: number; at: string; geaendert: number[] | null; pdf?: boolean; pptx?: boolean }
 
 /** Foliennummern, die sich zwischen zwei beliebigen Fassungen geändert haben (Server liefert nur „gegenüber der vorigen“) —
  *  aus den Ketten der Änderungen: eine Folie gilt als geändert, wenn sie in irgendeiner Fassung dazwischen geändert wurde. */

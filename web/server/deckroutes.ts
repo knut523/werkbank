@@ -1,6 +1,6 @@
 // Deck-Review in der Werkbank 2.0 (docs/plan-deck-review.md): Routen, Datenbank, Rendern und Takt. Regeln in decks.ts.
 //  - /api/v2/decks*        hinter der Anmeldung; Anlegen, Senden, Status, Einstellungen, Teil-Links, Rendern nur Admin
-//  - /api/deck-teilen*     öffentlich, nur mit Teil-Token (Kopf x-deck-token, bei Bildern ?t=): ein Deck, lesen + kommentieren
+//  - /api/deck-teilen*     öffentlich, nur mit Teil-Token (Kopf x-deck-token, nie in der Adresse): ein Deck, lesen + kommentieren
 //  - /internal/deck/rueckmeldung   Werkzeug deck_rueckmeldung — nur aus dem mit dem Deck verknüpften Unter-Chat
 // Datenbank: decks (je Slug), deck_kommentare, deck_links (nur Hash des Tokens). Bilder: <wurzel>/<slug>/<fassung>/s-NN.png.
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -25,7 +25,7 @@ export interface DeckFassung { fassung: string; datei: string; folien: number; h
 export interface DeckDoc {
   _id: string; titel: string; owner: string; strand: string | null; auto: boolean; ordner: string | null;
   fassungen: DeckFassung[]; fehlgeschlagen?: string[]; renderFehler?: { fassung: string; text: string; at: Date } | null;
-  erstellt: Date; letzterVersand?: Date | null; sendeFehler?: string | null; importiert?: string | null;
+  erstellt: Date; letzterVersand?: Date | null; letzterVersuch?: Date | null; sendeFehler?: string | null; importiert?: string | null;
 }
 export interface KommentarDoc {
   _id: string; deck: string; folie: number; fassung: string; text: string; markierung: Markierung | null; autor: string; extern: boolean;
@@ -47,7 +47,7 @@ export interface DeckDeps {
   /** Ablage-Wurzeln, in denen Decks gefunden werden (WERKBANK_DECK_QUELLEN). */
   quellen: string[];
   /** Nachricht an einen Unter-Chat (derselbe Weg wie `orch send`). */
-  senden: (u: User, strand: string, text: string) => Promise<unknown>;
+  senden: (u: User, strand: string, text: string, automatisch: boolean) => Promise<unknown>;
   /** Unterhaltung eines Unter-Chats der Person (für die Rückmeldung: nur der verknüpfte darf). */
   strangConv: (u: User, strand: string) => Promise<string | null>;
   userById: (id: string) => Promise<User | null>;
@@ -94,7 +94,12 @@ export function werkzeug(name: 'pdftoppm' | 'soffice'): string {
   for (const d of [...String(process.env.PATH ?? '').split(':'), join(homedir(), '.local', 'bin')]) if (d && existsSync(join(d, name))) return join(d, name);
   return name;
 }
-const lauf = (bin: string, args: string[], ms: number) => new Promise<void>((ok, nein) => execFile(bin, args, { timeout: ms, maxBuffer: 4 << 20 }, (e, _o, se) => (e ? nein(new Error(`${basename(bin)}: ${String(se || e.message).trim().slice(0, 300)}`)) : ok())));
+/** Werkzeug ohne Shell; eigene Prozessgruppe, damit das Zeitlimit auch Kindprozesse beendet (soffice ist ein Wrapper — Pass A 12). */
+const lauf = (bin: string, args: string[], ms: number) => new Promise<void>((ok, nein) => {
+  const c = execFile(bin, args, { maxBuffer: 4 << 20, detached: true }, (e, _o, se) => { clearTimeout(t); return e ? nein(new Error(`${basename(bin)}: ${zuLang ? 'Zeitlimit' : String(se || e.message).trim().slice(0, 300)}`)) : ok(); });
+  let zuLang = false;
+  const t = setTimeout(() => { zuLang = true; try { process.kill(-c.pid!, 'SIGKILL'); } catch { c.kill('SIGKILL'); } }, ms);
+});
 
 export async function rendernEcht(q: { pdf: string | null; pptx: string | null }, ziel: string): Promise<{ folien: number; hashes: string[] }> {
   mkdirSync(dirname(ziel), { recursive: true });
@@ -103,13 +108,13 @@ export async function rendernEcht(q: { pdf: string | null; pptx: string | null }
     let pdf = q.pdf;
     if (!pdf && q.pptx) {
       // Eigenes LibreOffice-Profil je Lauf: ein offenes soffice der Person sperrt sonst das Standardprofil.
-      await lauf(werkzeug('soffice'), [`-env:UserInstallation=file://${tmp}/lo`, '--headless', '--convert-to', 'pdf', '--outdir', tmp, q.pptx], 180_000);
+      await lauf(werkzeug('soffice'), [`-env:UserInstallation=file://${tmp}/lo`, '--headless', '--convert-to', 'pdf', '--outdir', tmp, q.pptx], 120_000);
       pdf = join(tmp, basename(q.pptx).replace(/\.pptx$/i, '.pdf'));
       if (!existsSync(pdf)) throw new Error('LibreOffice hat kein PDF erzeugt.');
     }
     if (!pdf) throw new Error('Keine Quelle.');
     mkdirSync(join(tmp, 'png')); mkdirSync(join(tmp, 'pgm'));
-    await lauf(werkzeug('pdftoppm'), ['-r', '110', '-png', pdf, join(tmp, 'png', 's')], 180_000);
+    await lauf(werkzeug('pdftoppm'), ['-r', '110', '-png', pdf, join(tmp, 'png', 's')], 120_000);
     await lauf(werkzeug('pdftoppm'), ['-r', '12', '-gray', pdf, join(tmp, 'pgm', 'h')], 60_000);
     const nr = (n: string) => Number(/-(\d+)\.\w+$/.exec(n)?.[1] ?? 0);
     const pngs = readdirSync(join(tmp, 'png')).filter((n) => n.endsWith('.png')).sort((a, b) => nr(a) - nr(b));
@@ -118,7 +123,8 @@ export async function rendernEcht(q: { pdf: string | null; pptx: string | null }
     const aus = join(tmp, 'aus'); mkdirSync(aus);
     for (const n of pngs) renameSync(join(tmp, 'png', n), join(aus, `s-${String(nr(n)).padStart(2, '0')}.png`));
     const hashes = pgms.map((n) => pgmHash(readFileSync(join(tmp, 'pgm', n))) ?? '');
-    rmSync(ziel, { recursive: true, force: true });
+    // erst das neue Verzeichnis an seinen Platz, dann das alte weg — kein Moment ohne Bilder (Pass A 5)
+    if (existsSync(ziel)) { const alt = join(tmp, 'alt'); renameSync(ziel, alt); }
     renameSync(aus, ziel);
     return { folien: pngs.length, hashes };
   } finally { rmSync(tmp, { recursive: true, force: true }); }
@@ -131,9 +137,9 @@ const aktuellVon = (d: DeckDoc) => fassungenSortiert(d).at(-1) ?? null;
 function kommentarSicht(k: KommentarDoc) {
   return { id: k._id, folie: k.folie, fassung: k.fassung, text: k.text, markierung: k.markierung, autor: k.autor, extern: k.extern, status: k.status, statusText: STATUS_TEXT[k.status], grund: k.grund, at: k.at, gesendetAt: k.gesendetAt ?? null, erledigtIn: k.erledigtIn ?? null };
 }
-function fassungenSicht(d: DeckDoc) {
+function fassungenSicht(d: DeckDoc, fund?: Fund | null) {
   const l = fassungenSortiert(d);
-  return l.map((f, i) => ({ fassung: f.fassung, datei: f.datei, folien: f.folien, at: f.at, geaendert: i ? geaendert(l[i - 1].hashes, f.hashes) : null, hashes: f.hashes }));
+  return l.map((f, i) => { const q = fund?.fassungen.find((x) => x.fassung === f.fassung); return { fassung: f.fassung, datei: f.datei, folien: f.folien, at: f.at, geaendert: i ? geaendert(l[i - 1].hashes, f.hashes) : null, hashes: f.hashes, pdf: !!q?.pdf, pptx: !!q?.pptx }; });
 }
 
 // ---------- Registrierung ----------
@@ -183,7 +189,9 @@ export function registerDecks(on: On, d: DeckDeps) {
 
   // --- Senden an den Deck-Unter-Chat (Knopf und Takt); je Deck nie zwei Sendungen gleichzeitig ---
   const sendet = new Set<string>();
-  const sendeDeck = async (deck: DeckDoc, durch: string): Promise<number> => {
+  // automatisch: wie eine Nachricht des Hauptchats — respektiert Deckel und Knuts Abnahme des Unter-Chats (Pass A 1);
+  // der Knopf ist Knuts eigene Nachricht.
+  const sendeDeck = async (deck: DeckDoc, durch: string, automatisch = false): Promise<number> => {
     if (!deck.strand) throw err(409, 'Mit dem Deck ist kein Unter-Chat verknüpft.');
     if (sendet.has(deck._id)) return 0;
     sendet.add(deck._id);
@@ -194,23 +202,30 @@ export function registerDecks(on: On, d: DeckDeps) {
       if (!u) throw err(409, 'Die Besitzerin des Decks gibt es nicht mehr.');
       const akt = aktuellVon(deck);
       const text = nachrichtAnUnterchat({ slug: deck._id, titel: deck.titel, fassung: akt?.fassung ?? '?', ordner: deck.ordner ?? '(Ordner der letzten Fassung)', heute: d.heute(), kommentare: offen.map((k) => ({ id: k._id, folie: k.folie, fassung: k.fassung, text: k.text, autor: k.autor, extern: k.extern, markierung: k.markierung })) });
-      try { await d.senden(u, deck.strand, text); }
+      try { await d.senden(u, deck.strand, text, automatisch); }
       catch (e: any) {
         // Meldungen der Unter-Chat-Logik sprechen von „Strang“ — in der 2.0 heißt das „Unter-Chat“ (Begriffe, plan-werkbank-2 §4)
         const text = String(e?.message ?? e).replace(/\bStr(a|ä)nge?\b/g, (w) => (w.length > 6 ? 'Unter-Chats' : 'Unter-Chat')).slice(0, 200);
-        await C.decks().updateOne({ _id: deck._id }, { $set: { sendeFehler: text } });
+        // auch ein Fehlschlag zählt als Versuch — sonst versuchte der Takt es jede Minute neu (Pass A 9)
+        await C.decks().updateOne({ _id: deck._id }, { $set: { sendeFehler: text, letzterVersuch: new Date() } });
         throw Object.assign(new Error(text), { status: e?.status && e.status < 500 ? e.status : 409 });
       }
       const jetzt = new Date();
       await C.kommentare().updateMany({ _id: { $in: offen.map((k) => k._id) }, status: 'offen' }, { $set: { status: 'gesendet', gesendetAt: jetzt }, $push: { verlauf: { status: 'gesendet', at: jetzt, durch } } });
-      await C.decks().updateOne({ _id: deck._id }, { $set: { letzterVersand: jetzt, sendeFehler: null } });
+      await C.decks().updateOne({ _id: deck._id }, { $set: { letzterVersand: jetzt, letzterVersuch: jetzt, sendeFehler: null } });
       d.log('deck gesendet', { deck: deck._id, strand: deck.strand, n: offen.length, durch });
       return offen.length;
     } finally { sendet.delete(deck._id); }
   };
 
   // --- Takt (alle 60 s): neue Fassungen in der Ablage rendern; offene Kommentare automatisch senden (höchstens alle 10 min) ---
+  let taktLaeuft = false;
   const takt = async () => {
+    if (taktLaeuft) return;   // Pass A 10: ein langsamer Lauf überlappt nicht mit dem nächsten
+    taktLaeuft = true;
+    try { await taktEinmal(); } finally { taktLaeuft = false; }
+  };
+  const taktEinmal = async () => {
     const decks = await C.decks().find({}).toArray();
     const l = decks.length ? funde(true) : [];
     for (const deck of decks) {
@@ -218,10 +233,12 @@ export function registerDecks(on: On, d: DeckDeps) {
       const akt = aktuellVon(deck);
       const da = new Set([...(deck.fassungen ?? []).map((f) => f.fassung), ...(deck.fehlgeschlagen ?? [])]);
       // nur NEUERE Fassungen als die aktuelle — ältere aus der Ablage rendert man auf Wunsch (Knopf), nicht von selbst
-      const neu = (fund?.fassungen ?? []).filter((f) => !da.has(f.fassung) && (!akt || fassungVergleich(f.fassung, akt.fassung) > 0));
+      // ohne gerenderte Fassung nichts von selbst (Anlegen reiht die neuesten fünf ein; sonst rendert der Takt alle alten — Pass A 6)
+      const neu = akt ? (fund?.fassungen ?? []).filter((f) => !da.has(f.fassung) && fassungVergleich(f.fassung, akt.fassung) > 0) : [];
       if (neu.length) einreihen(deck._id, neu);
-      if (deck.auto && deck.strand && (!deck.letzterVersand || Date.now() - new Date(deck.letzterVersand).getTime() >= sendenMs)) {
-        await sendeDeck(deck, 'automatisch').catch((e) => d.log('deck senden fehler', { deck: deck._id, error: String(e?.message ?? e).slice(0, 200) }));
+      const zuletzt = deck.letzterVersuch ?? deck.letzterVersand;
+      if (deck.auto && deck.strand && (!zuletzt || Date.now() - new Date(zuletzt).getTime() >= sendenMs)) {
+        await sendeDeck(deck, 'automatisch', true).catch((e) => d.log('deck senden fehler', { deck: deck._id, error: String(e?.message ?? e).slice(0, 200) }));
       }
     }
   };
@@ -271,27 +288,43 @@ export function registerDecks(on: On, d: DeckDeps) {
     const kommentare = await C.kommentare().find({ deck: deck._id }).sort({ at: 1 }).limit(2000).toArray();
     const fund = fundVon(deck._id);
     const da = new Set(deck.fassungen.map((f) => f.fassung));
-    const basis = { slug: deck._id, titel: deck.titel, aktuell: aktuellVon(deck)?.fassung ?? null, fassungen: fassungenSicht(deck), kommentare: kommentare.map(kommentarSicht), rendern: eingereiht(deck._id), renderFehler: deck.renderFehler ?? null, admin: admin(u) };
+    const basis = { slug: deck._id, titel: deck.titel, aktuell: aktuellVon(deck)?.fassung ?? null, fassungen: fassungenSicht(deck, fund), kommentare: kommentare.map(kommentarSicht), rendern: eingereiht(deck._id), renderFehler: deck.renderFehler ?? null, admin: admin(u) };
     if (!admin(u)) return d.send(res, 200, basis);
     const links = await C.links().find({ deck: deck._id }).sort({ erstellt: -1 }).limit(50).toArray();
     d.send(res, 200, {
       ...basis, unterchat: deck.strand, auto: deck.auto, ordner: deck.ordner, letzterVersand: deck.letzterVersand ?? null, sendeFehler: deck.sendeFehler ?? null,
-      naechsterVersand: deck.auto && deck.strand ? new Date(Math.max(Date.now(), new Date(deck.letzterVersand ?? 0).getTime() + sendenMs)) : null,
+      naechsterVersand: deck.auto && deck.strand ? new Date(Math.max(Date.now(), new Date(deck.letzterVersuch ?? deck.letzterVersand ?? 0).getTime() + sendenMs)) : null,
       weitereInAblage: (fund?.fassungen ?? []).filter((f) => !da.has(f.fassung)).map((f) => f.fassung),
       links: links.map((l) => ({ id: l._id, name: l.name, ablauf: l.ablauf, widerrufen: l.widerrufen, erstellt: l.erstellt, genutzt: l.genutzt, kommentare: l.kommentare, gueltig: linkGueltig(l) })),
     });
   });
 
-  const bildSenden = (res: ServerResponse, p: string | null) => {
+  const bildSenden = (res: ServerResponse, p: string | null, oeffentlich = false) => {
     if (!p || !existsSync(p)) throw err(404, 'Folie nicht gefunden.');
-    res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' });
-    createReadStream(p).pipe(res);
+    // extern kein Cache (Widerruf wirkt sofort); intern hängt der Render-Zeitpunkt an der Adresse (?r=), daher länger
+    res.writeHead(200, { 'content-type': 'image/png', 'cache-control': oeffentlich ? 'no-store' : 'private, max-age=86400', 'x-content-type-options': 'nosniff' });
+    // Pass A 5: eine Datei, die zwischen Prüfung und Öffnen verschwindet (Neu-Rendern), beendet nur diese Antwort, nicht den Server
+    createReadStream(p).on('error', () => res.destroy()).pipe(res);
   };
   on('GET', /^\/api\/v2\/decks\/([a-z0-9-]{1,81})\/bild\/([\w.-]{1,40})\/(\d{1,3})$/, async (req, res, m) => {
     await d.needUser(req);
     const deck = await deckOder404(m[1]);
     if (!deck.fassungen.some((f) => f.fassung === m[2])) throw err(404, 'Folie nicht gefunden.');
     bildSenden(res, folienPfad(d.wurzel, deck._id, m[2], Number(m[3])));
+  });
+
+  /** Download der Quelldatei einer Fassung (PDF/PPTX) — wie die alte Seite („⬇ PDF / ⬇ PPTX“). Pfad nur aus dem Ablage-Fund. */
+  const dateiSenden = (res: ServerResponse, slug: string, fassung: string, art: string) => {
+    const f = fassungOk(fassung) ? fundVon(slug)?.fassungen.find((x) => x.fassung === fassung) : null;
+    const p = art === 'pdf' ? f?.pdf : art === 'pptx' ? f?.pptx : null;
+    if (!p || !existsSync(p)) throw err(404, 'Datei nicht gefunden.');
+    res.writeHead(200, { 'content-type': art === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'content-disposition': `attachment; filename="${basename(p).replace(/[^\w.-]/g, '_')}"`, 'cache-control': 'private, no-cache', 'x-content-type-options': 'nosniff' });
+    createReadStream(p).on('error', () => res.destroy()).pipe(res);
+  };
+  on('GET', /^\/api\/v2\/decks\/([a-z0-9-]{1,81})\/datei\/([\w.-]{1,40})\/(pdf|pptx)$/, async (req, res, m) => {
+    await d.needUser(req);
+    const deck = await deckOder404(m[1]);
+    dateiSenden(res, deck._id, m[2], m[3]);
   });
 
   /** Kommentar anlegen (angemeldet oder extern) — gemeinsame Prüfung. */
@@ -398,7 +431,8 @@ export function registerDecks(on: On, d: DeckDeps) {
   const fehlversuche = new Fenster(60, 10 * 60_000);
   const kommentarFenster = new Fenster(30, 10 * 60_000);
   const abrufFenster = new Fenster(1500, 10 * 60_000);
-  const adresse = (req: IncomingMessage) => String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket.remoteAddress || '?';
+  // wie /api/login: der LETZTE Eintrag (den hängt der eigene Proxy an); den ersten setzt der Aufrufer selbst (Pass A 2)
+  const adresse = (req: IncomingMessage) => String(req.headers['x-forwarded-for'] ?? '').split(',').pop()!.trim() || req.socket.remoteAddress || '?';
   /** Link zum Token — nur gültige; Fehlversuche je Adresse gedeckelt. Immer dieselbe Antwort, egal ob unbekannt, abgelaufen oder widerrufen. */
   const linkVon = async (req: IncomingMessage, token: unknown): Promise<{ link: LinkDoc; deck: DeckDoc }> => {
     const ip = adresse(req);
@@ -414,16 +448,22 @@ export function registerDecks(on: On, d: DeckDeps) {
 
   on('GET', /^\/api\/deck-teilen$/, async (req, res) => {
     const { link, deck } = await linkVon(req, req.headers['x-deck-token']);
-    // Notizen („nur für mich“, gehen nicht an den Unter-Chat) bleiben intern
-    const kommentare = await C.kommentare().find({ deck: deck._id, status: { $ne: 'notiz' } }).sort({ at: 1 }).limit(2000).toArray();
+    // Pass A 4 (Entscheidung D2, Empfehlung): extern nur die Kommentare DIESES Links, mit Status, ohne Gründe — keine Namen und
+    // Texte anderer Externer, keine internen Kommentare und Notizen
+    const kommentare = await C.kommentare().find({ deck: deck._id, linkId: link._id }).sort({ at: 1 }).limit(2000).toArray();
     // extern: keine Kennungen der Personen/Links, kein Unter-Chat, keine Links
-    d.send(res, 200, { slug: deck._id, titel: deck.titel, aktuell: aktuellVon(deck)?.fassung ?? null, fassungen: fassungenSicht(deck).map(({ hashes: _h, datei: _d, ...f }) => f), kommentare: kommentare.map(kommentarSicht), name: link.name, ablauf: link.ablauf });
+    d.send(res, 200, { slug: deck._id, titel: deck.titel, aktuell: aktuellVon(deck)?.fassung ?? null, fassungen: fassungenSicht(deck, fundVon(deck._id)).map(({ hashes: _h, datei: _d, ...f }) => f), kommentare: kommentare.map((k) => ({ ...kommentarSicht(k), grund: null, erledigtIn: null })), name: link.name, ablauf: link.ablauf });
   });
 
-  on('GET', /^\/api\/deck-teilen\/bild\/([\w.-]{1,40})\/(\d{1,3})$/, async (req, res, m, url) => {
-    const { deck } = await linkVon(req, url.searchParams.get('t'));
+  on('GET', /^\/api\/deck-teilen\/bild\/([\w.-]{1,40})\/(\d{1,3})$/, async (req, res, m) => {
+    const { deck } = await linkVon(req, req.headers['x-deck-token']);   // Token nur im Kopf, nie in der Adresse (Proxy-Logs)
     if (!deck.fassungen.some((f) => f.fassung === m[1])) throw err(404, 'Folie nicht gefunden.');
-    bildSenden(res, folienPfad(d.wurzel, deck._id, m[1], Number(m[2])));
+    bildSenden(res, folienPfad(d.wurzel, deck._id, m[1], Number(m[2])), true);
+  });
+
+  on('GET', /^\/api\/deck-teilen\/datei\/([\w.-]{1,40})\/(pdf|pptx)$/, async (req, res, m) => {
+    const { deck } = await linkVon(req, req.headers['x-deck-token']);
+    dateiSenden(res, deck._id, m[1], m[2]);
   });
 
   on('POST', /^\/api\/deck-teilen\/kommentar$/, async (req, res) => {
@@ -461,8 +501,8 @@ export function registerDecks(on: On, d: DeckDeps) {
       const f = statusWechsel(k.status, status as Status, grund);
       if (f) { ergebnis.push({ id, ok: false, fehler: f }); continue; }
       const jetzt = new Date();
-      await C.kommentare().updateOne({ _id: k._id, status: k.status }, { $set: { status: status as Status, grund: grund || null, erledigtIn: fassung }, $push: { verlauf: { status: status as Status, at: jetzt, durch: 'Unter-Chat', grund: grund || null } } });
-      ergebnis.push({ id, ok: true });
+      const r = await C.kommentare().updateOne({ _id: k._id, status: k.status }, { $set: { status: status as Status, grund: grund || null, erledigtIn: fassung }, $push: { verlauf: { status: status as Status, at: jetzt, durch: 'Unter-Chat', grund: grund || null } } });
+      ergebnis.push(r.modifiedCount ? { id, ok: true } : { id, ok: false, fehler: 'Gerade in der Werkbank geändert — Stand neu lesen und erneut melden.' });
     }
     d.log('deck rueckmeldung', { deck: deck._id, n: ergebnis.length, ok: ergebnis.filter((x) => x.ok).length });
     d.send(res, 200, { ok: ergebnis.every((x) => x.ok), ergebnis });
