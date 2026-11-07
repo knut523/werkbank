@@ -8,7 +8,8 @@ import { spawn as nodeSpawn, execFileSync, type ChildProcess } from 'node:child_
 import { randomBytes, createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 type Env = Record<string, string | undefined>;
 export interface Oc2Zugang { urls: string[]; passwort: string }
@@ -36,13 +37,19 @@ export function oc2Pruefen(home: string, version: string, versionVon: (bin: stri
 export function oc2Umgebung(home: string, key: string, passwort: string, env: Env = process.env, daten?: string): Record<string, string> {
   const x = join(home, 'xdg'), d = daten ?? x;   // daten: eigene Sitzungsdaten (Review-Server); die Konfiguration bleibt die geprüfte
   return {
-    PATH: env.PATH ?? '/usr/bin:/bin', HOME: homedir(), LANG: env.LANG ?? 'C.UTF-8',
+    // Schreibende Stränge (07.11.): die Shell von opencode 2 ruft `bash` über PATH — vorn steht der Wächter (nur lesende Befehle,
+    // ohne Schlüssel in der Umgebung), wie bei jcode. Lesende Sitzungen haben keine Shell (NUR_LESEN).
+    PATH: `${OC2_SHIM}:${env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: env.LANG ?? 'C.UTF-8',
     XDG_CONFIG_HOME: join(x, 'config'), XDG_DATA_HOME: join(d, 'data'), XDG_STATE_HOME: join(d, 'state'), XDG_CACHE_HOME: join(d, 'cache'),
+    // Test 07.11.: ohne diesen Schalter liest opencode 2 eine opencode.json(c) aus dem Arbeitsordner (Rechte, MCP-Programme) — die
+    // könnte ein schreibender Strang selbst anlegen. Nur die geprüfte Konfiguration gilt.
+    OPENCODE_DISABLE_PROJECT_CONFIG: '1',
     OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_SHARE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1', DO_NOT_TRACK: '1', OPENCODE_DISABLE_FREE_MODELS: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1',
     OPENCODE_SERVER_PASSWORD: passwort, MELIOUS_API_KEY: key,
   };
 }
 
+export const OC2_SHIM = join(dirname(fileURLToPath(import.meta.url)), '..', 'shim');
 const fingerabdruck = (key: string) => createHash('sha256').update(key).digest('hex').slice(0, 16);
 
 export function opencode2Server(o: {
