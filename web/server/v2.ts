@@ -104,6 +104,8 @@ export interface V2Deps {
   /** Runde 7 (Knut: Unter-Chats transparent): Zustand der Stränge bei der Brücke, je Unterhaltung (strandStates). */
   zustaende?: (u: User) => Promise<Map<string, any>>;
   /** Knut 06.11.: ETA gegen Ist — Auswertung je Auftragsart/Profil/Modell (etamessung.ts). */
+  /** B2 (Knut 07.11.): Status nach Thema — eine Zeile je Thema (themenlage.ts), dieselbe Rechnung wie `orch lage`. */
+  themenLage?: (u: User) => Promise<import('./themenlage.ts').LageZeile[]>;
   etaAuswertung?: (u: User) => Promise<{ zeilen: { schluessel: string; text: string; satz: string; n: number }[]; steckbrief: (doc: any) => string | null }>;
   /** Runde 7 (Abgleich: Nachreichen fehlte, 148× genutzt): Nachricht an einen Unter-Chat — läuft er, wird sie nachgereicht. */
   nachreichen?: (u: User, strandId: string, text: string) => Promise<unknown>;
@@ -574,7 +576,8 @@ export function registerV2(on0: On, d: V2Deps) {
     const k = liste.zeilen.map(arbeitKarte).map((x) => { const s = st?.get(convVon.get(x.id) ?? ''); const j = s?.running ? jetztSatz(s.jetzt) : null; return j ? { ...x, satz: `Jetzt: ${j}` } : s?.queued ? { ...x, satz: `Wartet in der Schlange (Platz ${s.queued.pos}) und startet von selbst.` } : x; });
     const fertig = k.filter((x) => x.gruppe === 'fertig').slice(0, 30);
     const ff = await fastFertigJe(d, u, fertig.map((x) => x.id));   // Runde 7: „fertig“ nur mit DoD-Beleg, sonst „fast fertig“
-    send(d, res, { gruppen: { wartet: k.filter((x) => x.gruppe === 'wartet'), laeuft: k.filter((x) => x.gruppe === 'laeuft'), fertig: fertig.map((x) => (ff.has(x.id) ? { ...x, satz: ff.get(x.id)!.satz, fast: true } : x)) }, at: new Date() });
+    const lage = d.themenLage ? await d.themenLage(u).catch(() => null) : null;   // B2
+    send(d, res, { gruppen: { wartet: k.filter((x) => x.gruppe === 'wartet'), laeuft: k.filter((x) => x.gruppe === 'laeuft'), fertig: fertig.map((x) => (ff.has(x.id) ? { ...x, satz: ff.get(x.id)!.satz, fast: true } : x)) }, lage, at: new Date() });
   });
 
   // Knut 06.11.: Schätzgenauigkeit der Unter-Chats (ETA gegen Ist) — für „Jetzt“.

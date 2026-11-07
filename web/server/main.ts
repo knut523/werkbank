@@ -123,6 +123,8 @@ import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
 import { chatStatusAn, offeneJeStrang, hauptchatJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
 import { registerV2, appDist, v2Index, hauptchatZustellen, councilPruefen } from './v2.ts';
 import { bedarfPruefen, bedarfMelden, bedarfListe, bedarfAntworten, BEDARF_NAME } from './bedarf.ts';
+import { sammeln as sammleEreignisse, offeneEreignisse, quittieren, warten as warteAufEreignisse } from './ereignisse.ts';
+import { themenLage } from './themenlage.ts';
 import { liste as v2lcListe, volltext as v2lcVolltext, senden as v2lcSenden } from './v2librechat.ts';
 import { abgebrochenMarkieren as v2Abgebrochen } from './v2chat.ts';
 import { zeile as arbeitZeile, chatStatusVon, sortiere as arbeitSortiere, repos as arbeitRepos, startEingabe, prAus, prZeilen } from './arbeit.ts';
@@ -3840,7 +3842,7 @@ async function orchPerson(req: IncomingMessage, b: any): Promise<User> {
   return internalUser(req, { userId: d ? String(d._id) : '' });
 }
 
-on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich|aktion|council|bedarf)$/, async (req, res, m) => {
+on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|thema|gruendlich|aktion|council|bedarf|inbox|wait|lage)$/, async (req, res, m) => {
   const b = await body(req, 1 << 20);
   const u = await orchPerson(req, b);
   const id = String(b.id ?? '');
@@ -3877,8 +3879,27 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
     case 'council': return send(res, 200, await councilMelden(u, b));   // Plan §23 T3: Hauptchat-Werkzeug orch_council
     // Bedarfskanal (Knut 06.11.): Hauptchat-Werkzeug orch_bedarf — ohne bedarf: Liste der offenen, mit bedarf + antwort: beantworten.
     case 'bedarf': return send(res, 200, b.bedarf ? await bedarfAntwortRoute(u, String(b.bedarf), { ...b, via: 'hauptchat' }) : { offen: (await bedarfListe(u)).map((x: any) => ({ id: x._id, art: x.art, text: x.text, pfad: x.pfad ?? null, strang: x.strand, at: x.at })) });
+    // B1 (Knut 07.11.): Ereignisstrom für die Terminal-Sitzung — inbox listet (oder quittiert), wait blockiert bis zum ersten Ereignis.
+    case 'inbox': {
+      if (b.ack !== undefined) return send(res, 200, { quittiert: await quittieren(u, b.ack === 'alle' ? 'alle' : (Array.isArray(b.ack) ? b.ack : [b.ack]).map(String)) });
+      await sammleEreignisse(u).catch((e) => log('ereignisse sammeln fehler', { user: u.id, error: String(e?.message ?? e).slice(0, 160) }));
+      return send(res, 200, { ereignisse: await offeneEreignisse(u) });
+    }
+    case 'wait': {
+      let weg = false; req.on('close', () => { weg = true; });
+      return send(res, 200, await warteAufEreignisse(u, { warteMs: Math.max(1, Number(b.timeoutS) || 600) * 1000, abgebrochen: () => weg }));
+    }
+    // B2 (Knut 07.11.): Status nach Thema — eine Zeile je Thema, wer ist dran (dieselbe Rechnung wie die 2.0, Seite Arbeit).
+    case 'lage': return send(res, 200, { zeilen: await themenLageFuer(u) });
   }
 });
+/** B2: Lage nach Thema für eine Person — offene Unter-Chats, die der letzten 14 Tage erledigten, offener Bedarf je Strang. */
+async function themenLageFuer(u: User) {
+  const [offen, erledigt, bedarf] = await Promise.all([unterchatListe(u, false), unterchatListe(u, true), bedarfListe(u).catch(() => [] as any[])]);
+  const bedarfJe = new Map<string, number>();
+  for (const x of bedarf) { const id = String(x.strand?.id ?? ''); if (id) bedarfJe.set(id, (bedarfJe.get(id) ?? 0) + 1); }
+  return themenLage(offen.zeilen as any[], erledigt.zeilen as any[], { bedarfJe });
+}
 /** Plan §23 T3: Council-Urteil des Hauptchats zu einer gewichtigen Frage (dieselben Prüfungen wie POST /api/v2/council). */
 async function councilMelden(u: User, b: any) {
   if (u.role !== 'ADMIN') throw new HttpError(403, 'Nur für Admins.');
@@ -4515,6 +4536,7 @@ registerV2(on, {
   wiederOeffnen: async (u, id) => { const ok = await wiederOeffnen(u.id, id); if (ok) zahlCache.delete(u.id); return ok; },
   abgleich: (u, id, stand) => abgleichFuer(u.id, id, cfg.reviewDir, stand),
   zustaende: (u) => strandStates(u) as Promise<Map<string, any>>,
+  themenLage: (u) => themenLageFuer(u),   // B2
   etaAuswertung: async (u) => {
     // 60 s je Person zwischengespeichert — die Auswertung ist Geschichte, kein Live-Wert.
     const c = etaCache.get(u.id);

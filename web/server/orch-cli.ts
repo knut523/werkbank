@@ -40,6 +40,11 @@
 //     [--key <slug>#<id>] [--quelle drift]   Schlüssel offen/beantwortet → Exit 3 (keine zweite Frage); Tageskappe → Exit 4
 //     [--stufe wichtig|normal]   wichtig = Knut entscheidet selbst; normal = Empfehlung gilt nach 24 h (Regeln stufen nie herunter)
 //   orch questions list [--open] [--json] · orch questions get <id> [--json] · orch questions withdraw <id>
+//   orch inbox [--json] [--ack <id>|--ack alle]   ungelesene Ereignisse der Stränge (fertig, wartet, blockiert, hängt, Deckel,
+//     review_ready, Rückfrage an Knut, Bedarf) — für die Terminal-Sitzung, ohne zu quittieren; --ack quittiert
+//   orch wait [--timeout S] [--json]   blockiert bis zum ersten ungelesenen Ereignis (Vorgabe 600 s, höchstens 900), gibt es aus und
+//     quittiert es; Timeout ohne Ereignis → Exit 2. Statt `orch list` in einer Schleife (Knut 07.11.)
+//   orch lage [--json]   Status nach Thema: eine Zeile je Thema — läuft · wartet · hängt · blockiert · fertig · erledigt · wer ist dran
 //   orch leitstand start --handover DATEI [--json]   Leitstand-Chat (Plan 132, nur Admin): Übergabe aus der Datei (Vorlage
 //     docs/leitstand-uebergabe-vorlage.md), ein vorhandener Leitstand wird beendet. Danach weckt die Werkbank ihn bei Ereignissen.
 //
@@ -59,6 +64,7 @@
 import { readFileSync, writeFileSync, renameSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { WB_ROOT } from './config.ts';
+import { lageText } from './themenlage.ts';
 
 const args = process.argv.slice(2);
 const cmd = args.shift() ?? 'help';
@@ -97,10 +103,19 @@ async function stdin(): Promise<string> {
 
 // Zeitlimit je Aufruf (Plan 154, G12): start/nachtbau laufen mit G0 (git fetch, Prüfungen) länger als eine Minute — bricht die
 // CLI vorher ab, legt der Server den Strang trotzdem an, und ein zweiter Versuch startet doppelt. ORCH_CLI_TIMEOUT_S überschreibt.
-export function callTimeoutMs(path: string, env = process.env): number {
+export function callTimeoutMs(path: string, env = process.env, warteS = 0): number {
+  if (path === 'wait') return (Math.min(900, Math.max(1, warteS || 600)) + 30) * 1000;   // B1: der Server hält die Anfrage bis zum Timeout
   const s = Number(env.ORCH_CLI_TIMEOUT_S);
   if (s > 0) return s * 1000;
   return path === 'start' || path === 'nachtbau' ? 15 * 60_000 : 60_000;
+}
+
+/** B1: eine Zeile je Ereignis (dazu bis zu vier Zeilen Auszug). */
+const EREIGNIS_ICON: Record<string, string> = { fertig: '✅', antwort: '✋', frage: '❓', blockiert: '❌', haengt: '⚠️', deckel: '⛔', review: '🔎', bedarf: '📨' };
+export function ereignisZeile(e: { _id?: string; kind: string; text: string; excerpt?: string; strand?: { id: string; title: string } | null; at?: string | Date }): string {
+  const kopf = `${EREIGNIS_ICON[e.kind] ?? '•'} ${e.kind.padEnd(9)} ${e.strand ? `${e.strand.id} „${e.strand.title}“: ` : ''}${e.text}`;
+  const aus = String(e.excerpt ?? '').split('\n').filter((l) => l.trim()).slice(0, 4).map((l) => `   │ ${l}`);
+  return [kopf, ...aus].join('\n');
 }
 
 /** Text für `send`: Positionsargumente nach der ID oder --text, nicht beides (G11). null = von stdin lesen. */
@@ -119,7 +134,7 @@ async function call(path: string, b: Record<string, unknown>): Promise<any> {
   try {
     r = await fetch(`${base}/internal/orchestrator/${path}`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': token() },
-      body: JSON.stringify({ ...(email ? { email } : {}), ...b }), signal: AbortSignal.timeout(callTimeoutMs(path)),
+      body: JSON.stringify({ ...(email ? { email } : {}), ...b }), signal: AbortSignal.timeout(callTimeoutMs(path, process.env, Number(b.timeoutS) || 0)),
     });
   } catch (e: any) {
     if (e?.name === 'TimeoutError') die(`Keine Antwort nach ${Math.round(callTimeoutMs(path) / 1000)} s — der Server arbeitet evtl. weiter. Vor einem erneuten Versuch \`orch list\` prüfen (sonst doppelter Start).`);
@@ -240,6 +255,32 @@ async function main() {
       if (!pos[0]) die('freigabe-gepusht <freigabe-id> [--pr URL]');
       const j = await call('freigabe-gepusht', { id: pos[0], pr: typeof flags.pr === 'string' ? flags.pr : null });
       console.log(`gepusht vermerkt: ${j.id}${j.pr ? ` ${j.pr}` : ''}`);
+      return;
+    }
+    case 'inbox': {
+      if (typeof flags.ack === 'string') { const j = await call('inbox', { ack: flags.ack === 'alle' ? 'alle' : flags.ack.split(',') }); return console.log(`quittiert: ${j.quittiert}`); }
+      const j = await call('inbox', {});
+      if (flags.json) return console.log(JSON.stringify(j.ereignisse, null, 1));
+      if (!j.ereignisse.length) return console.log('Keine ungelesenen Ereignisse.');
+      for (const e of j.ereignisse) console.log(`${ereignisZeile(e)}\n   (${e._id})`);
+      console.log(`\n${j.ereignisse.length} ungelesen — quittieren: orch inbox --ack alle (oder --ack <id>[,<id>])`);
+      return;
+    }
+    case 'wait': {
+      const s = typeof flags.timeout === 'string' ? Number(flags.timeout) : 600;
+      if (!(s > 0)) die('wait --timeout S (Sekunden, höchstens 900)');
+      const j = await call('wait', { timeoutS: Math.min(900, s) });
+      if (flags.json) { console.log(JSON.stringify(j, null, 1)); if (j.timeout) process.exit(2); return; }
+      if (j.timeout) { console.log(`keine Ereignisse in ${Math.min(900, s)} s`); process.exit(2); }
+      for (const e of j.ereignisse) console.log(ereignisZeile(e));
+      return;
+    }
+    case 'lage': {
+      const j = await call('lage', {});
+      if (flags.json) return console.log(JSON.stringify(j.zeilen, null, 1));
+      if (!j.zeilen.length) return console.log('Keine Unter-Chats.');
+      const D: Record<string, string> = { Knut: '🙋', Hauptsitzung: '🛰️', 'Unter-Chat': '⏳', niemand: '✅' };
+      for (const z of j.zeilen) console.log(`${D[z.dran] ?? '•'} ${lageText(z)}`);
       return;
     }
     case 'thema': {

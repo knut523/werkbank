@@ -335,8 +335,28 @@ function GeschlossenListe({ l, geoeffnet }: { l: Geschlossen[]; geoeffnet: () =>
 
 // ---------- Arbeit ----------
 
+/** B2 (Knut 07.11.): Status nach Thema — eine Zeile je Thema: was läuft, was hängt, wer ist dran (dieselbe Rechnung wie `orch lage`). */
+interface LageZeile { thema: string; offen: number; laeuft: number; wartetKnut: number; haengt: number; blockiert: number; fertig: number; erledigt: number; dran: 'Knut' | 'Hauptsitzung' | 'Unter-Chat' | 'niemand'; warum: string; als: { id: string; titel: string } | null }
+function ThemenLage({ zeilen, wahl }: { zeilen: LageZeile[]; wahl: (t: string) => void }) {
+  const knut = zeilen.filter((z) => z.dran === 'Knut').length;
+  const zahl = (n: number, t: string) => (n ? `${n} ${t}` : '');
+  return (
+    <details className="themen-lage">
+      <summary>Nach Thema — {knut ? `bei ${knut} Thema${knut > 1 ? 'n' : ''} bist du dran` : 'du bist nirgends dran'}</summary>
+      <ul className="liste">{zeilen.map((z) => (
+        <li key={z.thema} className={`lage-${z.dran === 'Unter-Chat' ? 'uc' : z.dran.toLowerCase()}`}>
+          <button type="button" className="lage-zeile" onClick={() => wahl(z.thema)} title={`Nur „${z.thema}“ zeigen`}>
+            <b>{z.thema}</b> <span className="gedimmt">{[zahl(z.laeuft, 'läuft'), zahl(z.wartetKnut, 'wartet auf dich'), zahl(z.haengt, 'hängt'), zahl(z.blockiert, 'blockiert'), zahl(z.fertig, 'fertig'), zahl(z.erledigt, 'erledigt')].filter(Boolean).join(' · ') || 'nichts offen'}</span>
+          </button>
+          <span className="lage-dran">dran: <b>{z.dran === 'Knut' ? 'du' : z.dran}</b>{z.als ? <> — {z.warum}: <a href={`v2/arbeit/${z.als.id}`}>{z.als.titel}</a></> : null}</span>
+        </li>))}
+      </ul>
+    </details>
+  );
+}
+
 export function Arbeit() {
-  const { d, fehler, neu } = useDaten<{ gruppen: Record<'wartet' | 'laeuft' | 'fertig', ArbeitKarte[]>; nurAdmin?: boolean }>('api/v2/arbeit');
+  const { d, fehler, neu } = useDaten<{ gruppen: Record<'wartet' | 'laeuft' | 'fertig', ArbeitKarte[]>; nurAdmin?: boolean; lage?: LageZeile[] | null }>('api/v2/arbeit');
   const [q, setQ] = useState('');
   const [thema, setThema] = useState<string | null>(null);   // Runde 7: nach Thema filtern
   // Radikal simpel: drei Reiter statt drei langer Abschnitte; „Fertig“ direkt erreichbar (Knut: „heute fertig“). Merkt sich die Wahl.
@@ -366,6 +386,7 @@ export function Arbeit() {
         <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Unter-Chat suchen — Enter sucht auch in alten Chats" aria-label="Unter-Chats durchsuchen" />
       </form>
       <ThemenLeiste aktiv={thema} wahl={setThema} />
+      {!!d.lage?.length && <ThemenLage zeilen={d.lage} wahl={setThema} />}
       <div className="reiter" role="tablist" aria-label="Unter-Chats">{REITER.map(([r, t]) => <button key={r} type="button" role="tab" aria-selected={reiter === r} className={reiter === r ? 'an' : ''} onClick={() => setReiter(r)}>{t}</button>)}</div>
       {such ? (l.length ? <ul className="liste">{l.map(zeile)}</ul> : <p className="leer">Nichts zu „{q.trim()}“ in deinen Unter-Chats.</p>) : reiter === 'fertig' ? (
         <>

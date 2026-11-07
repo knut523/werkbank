@@ -1049,6 +1049,28 @@ test('Pass C: Abweichung auf der Karten-Seite gesammelt, letzte Antwort über He
   await orch(['review', st.id]);
 });
 
+test('B1/B2 (Knut 07.11.): orch wait liefert „fertig“ als Ereignis (statt Pollen), inbox ist danach leer; orch lage eine Zeile je Thema', async () => {
+  const s = JSON.parse((await orch(['start', '--title', 'Ereignis-Strang', '--cwd', WT('wt-ereignis'), '--json'], 'mock-antwort erledigt.\\nStatus: fertig')).out);
+  const st = await until(async () => JSON.parse((await orch(['list', '--json'])).out).find((x: any) => x.id === s.id), (x: any) => x?.status === 'done', 30_000);
+  const w = await orch(['wait', '--timeout', '30', '--json']);
+  assert.equal(w.code, 0, `${w.err} ${w.out} · Strang: ${JSON.stringify(st)} · inbox: ${(await orch(['inbox', '--json'])).out}`);
+  const j = JSON.parse(w.out);
+  assert.equal(j.timeout, false);
+  assert.ok(j.ereignisse.some((e: any) => e.kind === 'fertig' && e.strand?.id === s.id), w.out);
+  // quittiert: ein zweites wait ohne neues Ereignis dieses Strangs endet mit Timeout (Exit 2)
+  const leer = await orch(['wait', '--timeout', '2', '--json']);
+  assert.ok(!JSON.parse(leer.out).ereignisse.some((e: any) => e.strand?.id === s.id && e.kind === 'fertig'), 'nicht zweimal');
+  const ib = await orch(['inbox']);
+  assert.equal(ib.code, 0, ib.err);
+  const lage = await orch(['lage', '--json']);
+  assert.equal(lage.code, 0, lage.err);
+  const zeilen = JSON.parse(lage.out);
+  assert.ok(Array.isArray(zeilen) && zeilen.length > 0);
+  assert.ok(zeilen.every((z: any) => ['Knut', 'Hauptsitzung', 'Unter-Chat', 'niemand'].includes(z.dran)));
+  assert.match((await orch(['lage'])).out, / — dran: /);
+  await orch(['review', s.id]);
+});
+
 test('Council-Diff Teil B (B-21/B-25, zuletzt — beendet die Brücke): Brücke weg → Heute zeigt die Karte weiter (nur Mongo), Passt → 503', async () => {
   const st = await doneStrand('Teil B: Brücke weg', 'wt-b7');
   const card = await until(() => cardOf(st.id), (c: any) => !!c);
