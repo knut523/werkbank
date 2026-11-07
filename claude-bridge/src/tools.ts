@@ -43,7 +43,9 @@ const BASH_BLOCKED: [RegExp, string][] = [
   [git('merge'), 'git merge'],
   [/\bgh\s+pr\s+merge\b/, 'GitHub-PR mergen'],
   [/\bgh\s+api\b[^|;&]*\/(merge|merges)\b/, 'Merge über die GitHub-API'],
-  [/\/merge\b[^|;&]*github|github[^|;&]*\/merge\b/i, 'Merge über GitHub'],
+  // Plan 465: nur ein Aufruf (HTTP-Client oder Interpreter) auf …/pulls/<n>/merge bzw. …/merges — nicht jeder Text, in dem
+  // „github“ und „/merge“ vorkommen (traf Berichte per Heredoc mit PR-Link und „/merge-Strategie“).
+  [/\b(curl|wget|https?|xh|fetch|node|python3?|deno|bun|perl|ruby)\b[^|;&]*\/(pulls\/\d+\/merge|merges)\b/i, 'Merge über GitHub'],
   [git('push', String.raw`[^|;&]*(\s--force\b|\s--force-with-lease\b|\s-f\b|\s\+\S)`), 'Force-Push'],
   [git('push', String.raw`[^|;&]*[\s:'"]` + PROTECTED), 'Push auf main/master/develop'],
 ];
@@ -206,7 +208,62 @@ export interface ClassifyContext {
  *  Commit-Ablehnungen in Strängen (06.11. auf der Live-Brücke beobachtet: ein Commit-Text mit „gh api …“ wurde als GitHub-
  *  Zugriff gesperrt). Was nach dem Zitat kommt (&& git push …), bleibt Befehl und wird weiter geprüft. */
 // Doppelte Zitate nur ohne $ und Backtick (dort führt die Shell aus — `-m "$(git push)"` bleibt sichtbar).
-export const ohneCommitText = (cmd: string) => cmd.replace(/(\bgit\b[^|;&\n]*?\scommit\b[^|;&\n]*?\s-[a-zA-Z]*m\s*|\s--message[=\s]\s*)("(?:[^"\\$`]|\\[^$`])*"|'[^']*')/g, '$1"…"');
+// Pass A (Fix-Runde 2, S3): nur wenn das Segment mit `git … commit` beginnt (nicht `eval echo --message …`), --message nur dort,
+// und nie, wenn eval oder `sh -c` im Befehl steht (dann ist ein „Text“ wieder Befehl).
+// Pass A (Runde 3): nur Treffer, die außerhalb eines Zitats beginnen — sonst startet `echo "x; git commit -m "; <Befehl>; echo "y"`
+// eine Neutralisierung mitten im Zitat und verdeckt den Befehl dahinter.
+// Gegenprüfung (B3): auch `$'…'` (Backslash schützt das Hochkomma) und Kommentare (`#` am Wortanfang bis Zeilenende — ein Hochkomma
+// darin öffnet kein Zitat); ein Treffer im Kommentar zählt als „im Zitat“ (wird nicht neutralisiert).
+const imZitat = (s: string, bis: number) => {
+  let q = '';
+  for (let i = 0; i < bis; i++) {
+    const c = s[i];
+    if (q === '"' || q === "$'") { if (c === '\\') { i++; continue; } if (c === (q === '"' ? '"' : "'")) q = ''; continue; }
+    if (q === "'") { if (c === "'") q = ''; continue; }
+    if (c === '\\') { i++; continue; }
+    if (c === '$' && s[i + 1] === "'") { q = "$'"; i++; continue; }
+    if (c === '"' || c === "'") { q = c; continue; }
+    if (c === '#' && (i === 0 || /\s/.test(s[i - 1]))) { const nl = s.indexOf('\n', i); if (nl < 0 || nl >= bis) return true; i = nl; }
+  }
+  return q !== '';
+};
+// Plan 465: Heredoc-Körper sind Text, wenn sie ein reiner Datenleser bekommt (cat > datei, tee, git commit -F -, grep …) und die
+// Zeile nichts weiterleitet. Bekommt sie eine Shell, ein Interpreter oder eine Pipe, bleibt der Befehl unverändert (dann führt er aus).
+// `<<` in Zitat oder Kommentar ist kein Heredoc; ohne Endmarke bleibt alles, wie es ist.
+const DATEN_LESER = /^(cat|tee|git|wc|grep|rg|head|tail|sort|uniq)$/;
+const AUSFUEHRER = /(^|[^\w-])((ba|z|da|k)?sh|eval|source|exec|python3?|node|perl|ruby|php|deno|bun|tsx|npx|xargs|env|sudo|ssh|psql|mongosh|mysql|sqlite3)([^\w-]|$)/;
+export function ohneHeredoc(cmd: string): string {
+  if (!cmd.includes('<<')) return cmd;
+  const zeilen = cmd.split('\n'), aus: string[] = [];
+  let start = 0, gefunden = false;
+  for (let i = 0; i < zeilen.length; i++) {
+    const z = zeilen[i]; aus.push(z);
+    const marken: { ende: string; tabs: boolean }[] = [];
+    for (const m of z.matchAll(/<<(-?)[ \t]*(['"]?)([A-Za-z_]\w*)\2/g)) {
+      // `"$(` öffnet in bash einen neuen Befehl, kein Zitat; ein danach falsch gezähltes Zitat lässt den Befehl nur unverändert (sicher)
+      if (z[m.index! + 2] === '<' || imZitat(cmd.replace(/"\$\(/g, ' $('), start + m.index!)) continue;   // <<< ist ein Here-String, kein Heredoc
+      const wort = (z.slice(0, m.index).split(/[;&|(]|\$\(/).pop() ?? '').trim().replace(/^([A-Z_][A-Z0-9_]*=\S+\s+)*/, '').split(/\s+/)[0];
+      if (!DATEN_LESER.test(wort) || z.slice(m.index! + m[0].length).includes('|')) return cmd;
+      marken.push({ ende: m[3], tabs: m[1] === '-' });
+    }
+    start += z.length + 1;
+    for (const mk of marken) {
+      let j = i + 1;
+      while (j < zeilen.length && (mk.tabs ? zeilen[j].replace(/^\t+/, '') : zeilen[j]) !== mk.ende) j++;
+      if (j >= zeilen.length) return cmd;
+      for (let k = i + 1; k < j; k++) start += zeilen[k].length + 1;
+      aus.push('…', zeilen[j]); start += zeilen[j].length + 1;
+      i = j; gefunden = true;
+    }
+  }
+  const neu = aus.join('\n');
+  const rest = neu.replace(/^…$/gm, '');
+  // auch eine geschriebene Datei, die danach läuft: `. x`, `./x`, `/tmp/x`, `~/x`, `$SHELL x`
+  return gefunden && !AUSFUEHRER.test(rest) && !/(^|[;&|\n(`]\s*)(\.\s|\$|\.{0,2}\/|~\/)/m.test(rest) ? neu : cmd;
+}
+export const ohneCommitText = (roh: string) => { const cmd = ohneHeredoc(roh); return (/\beval\b|\b(ba|z|da)?sh\s+-c\b/.test(cmd) ? cmd
+  : cmd.replace(/((?:^|[;&|(]\s*)(?:[A-Z_][A-Z0-9_]*=\S+\s+)*git\b[^|;&\n]*?\scommit\b[^|;&\n]*?(?:\s-[a-zA-Z]*m\s*|\s--message[=\s]\s*))("(?:[^"\\$`]|\\[^$`])*"|'[^']*')/g,
+    (m: string, vor: string, _t: string, at: number) => (imZitat(cmd, at) ? m : `${vor}"…"`))); };
 // Sperrenliste 06.11. (Knut: „lesen frei“): `.env` nur als echte Datei (.env, .env.local, …/.env.production) — nicht `process.env`,
 // nicht .env.example/.sample/.template (vorher fragte jedes `grep process.env` und wurde in Strängen abgelehnt).
 const ENV_DATEI = /(^|[\s/'"=<])\.env(\.(?!example\b|sample\b|template\b)[\w.-]+)?(?=$|[\s'";|&)<>])/;
