@@ -163,7 +163,7 @@ test('strandDeny: Jira-Schreiben und Orchestrator-Werkzeuge sind als Deny-Regeln
     'mcp__werkbank__orch_start', 'mcp__werkbank__orch_send', 'mcp__werkbank__agent_start',
     'mcp__werkbank__zusage_eintragen', 'mcp__werkbank__thema_setzen']) assert.ok(d.includes(t), t);
   for (const t of ['mcp__atlassian__getJiraIssue', 'mcp__atlassian__searchJiraIssuesUsingJql', 'mcp__werkbank__skills_list',
-    'mcp__werkbank__review_ready', 'mcp__werkbank__hauptchat_melden', 'mcp__werkbank__delegieren']) {
+    'mcp__werkbank__review_ready', 'mcp__werkbank__hauptchat_melden', 'mcp__werkbank__delegieren', 'mcp__werkbank__deck_rueckmeldung']) {
     assert.ok(!d.some((x) => x === t), `${t} ist lesend/frei und darf nicht gesperrt sein`);
   }
   assert.ok(strandDeny('leser').includes('Bash(curl:*)'), 'Leser: kein Netz');

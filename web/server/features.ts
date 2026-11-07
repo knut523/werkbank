@@ -13,6 +13,7 @@ export const FEATURES = [
   { id: 'ziele', label: 'Ziele' },
   { id: 'skills', label: 'Skills' },
   { id: 'dateien', label: 'Dateien & Teilen' },
+  { id: 'decks', label: 'Decks im Review' },
   { id: 'orchestrator', label: 'Rückfragen des Orchestrators' },
   { id: 'ansetzen', label: 'Agent ansetzen' },
   { id: 'leitstand', label: 'Hauptchat (führt die Unter-Chats)' },
@@ -36,6 +37,7 @@ const API: [RegExp, FeatureId][] = [
   [/^\/api\/goals(\/|$)/, 'ziele'],
   [/^\/api\/skills(\/|$)/, 'skills'],
   [/^\/api\/(files|chats|sharelog|scratch)(\/|$)/, 'dateien'],
+  [/^\/api\/v2\/decks(\/|$)/, 'decks'],   // Deck-Review: Team nur mit Freigabe (Pass A 8); der Teil-Link (/api/deck-teilen) hat sein eigenes Token
   [/^\/api\/leitstand(\/|$)/, 'leitstand'],
   [/^\/api\/uebersicht(\/|$)/, 'uebersicht'],
   [/^\/api\/cos(\/|$)/, 'cos'],

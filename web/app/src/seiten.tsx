@@ -969,6 +969,7 @@ export function Mehr() {
   const SEITEN: [string, string, string][] = [
     ['Alles, was auf dich wartet', 'v2/entscheidungen', 'Jede offene Frage und Freigabe, nach Thema — auch „Alle wie empfohlen“.'],
     ['Dokumente', 'v2/dokumente', 'Berichte der Agenten und Notizen aus der Wissenssammlung.'],
+    ['Decks im Review', 'v2/decks', 'Folien ansehen, je Folie kommentieren, Fassungen vergleichen, mit Externen teilen.'],
     ['Themen', 'v2/themen', 'Alles zu Flex, Rechner, Admin, Werkbank … auf einer Seite.'],
     ['Alle Chats', 'v2/chats', 'Jeder Chat und Unter-Chat, auch alte — mit Suche und Filtern.'],
     ['Erledigt', 'v2/erledigt', 'Was an einem Tag fertig wurde — mit Datumswahl.'],

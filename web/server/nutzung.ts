@@ -66,7 +66,7 @@ export const COS_AKTIONEN = new Set(['triage', 'einwurf', 'nachfassen', 'nachfas
 export function cosAktion(aktion: string) { const a = String(aktion).toLowerCase(); merke('aktion', { aktion: COS_AKTIONEN.has(a) ? a : 'andere' }); }
 
 // --- Werkzeug-Aufrufe der Hauptchat-Werkzeuge (Nutzungs-Audit 437, D2): feste Liste, nur der Name, nie Argumente ---
-export const WERKZEUGE = new Set(['delegieren', 'delegation_stand', 'delegation_urteil', 'phase_wechseln', 'orch_start', 'orch_list', 'orch_show', 'orch_send', 'orch_gruendlich',
+export const WERKZEUGE = new Set(['deck_rueckmeldung', 'delegieren', 'delegation_stand', 'delegation_urteil', 'phase_wechseln', 'orch_start', 'orch_list', 'orch_show', 'orch_send', 'orch_gruendlich',
   'orch_thema', 'orch_review', 'orch_archivieren', 'orch_ask', 'orch_questions', 'zusagen', 'zusage_eintragen', 'zusage_aendern', 'thema_setzen', 'hygiene_list', 'inbox',
   'braucht_dich', 'inbox_antworten', 'hygiene_snooze', 'skills_list', 'review_ready', 'jira_update', 'jira_update_many', 'agent_start', 'pr_review_starten', 'fragenpaket',
   'fragenpaket_stand', 'jira_duplikate', 'jira_anlegen', 'pr_lage', 'github_lesen', 'github_schreiben', 'werkbank_betrieb', 'werkbank_stand', 'geheimnis_nutzen',

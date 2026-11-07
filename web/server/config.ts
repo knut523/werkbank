@@ -59,6 +59,9 @@ export const cfg = {
   docsDir: resolve(env.WERKBANK_DOCS_DIR || join(homedir(), 'work', 'dokumente')),
   // Agenten-Ergebnisse (docs/plan-dateien-vollstaendig.md, S3): Review-Pakete der Haupt-Sitzung und der Stränge, nur lesen.
   reviewDir: resolve(env.WERKBANK_REVIEW_DIR || join(homedir(), 'work', 'knut', 'review-pakete')),
+  // Deck-Review (docs/plan-deck-review.md): gerenderte Folien und die Ablage-Wurzeln, in denen Decks gefunden werden (Doppelpunkt-Liste).
+  deckDir: resolve(env.WERKBANK_DECK_DIR || join(env.WERKBANK_DATA_DIR || join(RT, 'werkbank'), 'decks')),
+  deckQuellen: (env.WERKBANK_DECK_QUELLEN ?? '').split(':').filter(Boolean).map((p) => resolve(p)),
   scratchDays: Number(env.WERKBANK_SCRATCH_DAYS ?? 30), // 0 = nie aufräumen
   backupKey: env.WERKBANK_BACKUP_KEY || '', // 64 Hex-Zeichen; verschlüsselt Personendaten-Dateien im Backup
   backupKeep: Number(env.WERKBANK_BACKUP_KEEP || 7),

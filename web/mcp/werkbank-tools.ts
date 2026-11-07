@@ -81,6 +81,24 @@ const TESTLINK = {
   description: 'Angemeldeten Test-Link für Sichtbares holen (olaf-admin, olaf-tariff-app, Werkbank-Testkopie, Ordner mit index.html): baut/startet eine Test-Umgebung für deinen Arbeitsordner (oder ordner = absoluter Pfad deines Worktrees, wenn der Arbeitsordner das Review-Paket ist), eigene lokale Test-DB, Mails im Trockenlauf, Proxy mit Test-Sitzung — und prüft sie (mit Sitzung 200, ohne 401/30x). Wartet bis Link oder Fehler (Build: einige Minuten). Den Link trägst du im Bericht unter review: ein (titel: Test-Link (angemeldet), url: …); „lokal“ ist für deine eigenen Screenshots. stop=true beendet die Umgebung, neu=true baut neu (frische DB), liste=true zeigt die laufenden.',
   inputSchema: { type: 'object', properties: { ordner: { type: 'string' }, stop: { type: 'boolean' }, neu: { type: 'boolean' }, liste: { type: 'boolean' } } },
   run: async (a: any) => (await call('/internal/testlink', { conv: process.env.WERKBANK_CONV_ID || '', ordner: a.ordner ?? '', stop: a.stop === true, neu: a.neu === true, liste: a.liste === true }, 30 * 60_000)).text,
+// Deck-Review (docs/plan-deck-review.md): der Deck-Unter-Chat meldet je Kommentar zurück — die Werkbank prüft, dass dieser
+// Unter-Chat mit dem Deck verknüpft ist (Unterhaltung aus der Umgebung, nie aus den Argumenten).
+const DECK_RUECKMELDUNG = {
+  name: 'deck_rueckmeldung',
+  description: 'Deck-Review: je Kommentar zurückmelden, was du damit gemacht hast. deck = Name aus der Nachricht (deck="…"); eintraege = Liste aus id (Kennung in eckigen Klammern, z. B. k-1a2b3c4d), status umgesetzt|abgelehnt, grund (ein Satz; bei abgelehnt Pflicht), fassung (die neue Fassung, z. B. v5-3). Nur für Kommentare, die dir die Werkbank geschickt hat.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      deck: { type: 'string' },
+      eintraege: { type: 'array', maxItems: 60, items: { type: 'object', properties: { id: { type: 'string' }, status: { type: 'string', enum: ['umgesetzt', 'abgelehnt'] }, grund: { type: 'string' }, fassung: { type: 'string' } }, required: ['id', 'status'] } },
+    },
+    required: ['deck', 'eintraege'],
+  },
+  run: async (a: any) => {
+    const j = await call('/internal/deck/rueckmeldung', { deck: a.deck, eintraege: a.eintraege, conv: process.env.WERKBANK_CONV_ID || '' });
+    const l = (j.ergebnis ?? []) as { id: string; ok: boolean; fehler?: string }[];
+    return `${l.filter((x) => x.ok).length} von ${l.length} zurückgemeldet.${l.filter((x) => !x.ok).map((x) => `\n- ${x.id}: ${x.fehler}`).join('')}`;
+  },
 };
 const DELEG_TOOLS = [
   {
@@ -545,7 +563,7 @@ serve('werkbank', '0.1.0', [
   // Delegieren und Phasen-Lead (Plan 165): nur in Strängen; die Brücke kennt Person und Strang aus dieser Umgebung.
   ...(process.env.WERKBANK_STRANG === '1' && process.env.WERKBANK_BRIDGE_URL ? DELEG_TOOLS : []),
   // Knut 06.11.: Stränge lesen GitHub selbst (github_lesen) und melden alles darüber hinaus über den Bedarfskanal.
-  ...(process.env.WERKBANK_STRANG === '1' ? [GITHUB_LESEN, BEDARF_MELDEN, TESTLINK] : []),
+  ...(process.env.WERKBANK_STRANG === '1' ? [GITHUB_LESEN, BEDARF_MELDEN, TESTLINK, DECK_RUECKMELDUNG] : []),
   // Native Verteilung Claude ↔ Melious (Knut 19.10.): Lead und Stränge.
   ...(process.env.WERKBANK_BRIDGE_URL ? [
     {
