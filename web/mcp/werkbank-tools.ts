@@ -74,6 +74,25 @@ const BEDARF_MELDEN = {
     return `Gemeldet (${j.id}) — ${j.hauptchat ? 'die Hauptsitzung hat es sofort' : 'gerade kein Hauptchat aktiv; es steht unter „Braucht Hauptsitzung“'}. Arbeite am Rest weiter; die Antwort kommt als Nachricht.`;
   },
 };
+// Deck-Review (docs/plan-deck-review.md): der Deck-Unter-Chat meldet je Kommentar zurück — die Werkbank prüft, dass dieser
+// Unter-Chat mit dem Deck verknüpft ist (Unterhaltung aus der Umgebung, nie aus den Argumenten).
+const DECK_RUECKMELDUNG = {
+  name: 'deck_rueckmeldung',
+  description: 'Deck-Review: je Kommentar zurückmelden, was du damit gemacht hast. deck = Name aus der Nachricht (deck="…"); eintraege = Liste aus id (Kennung in eckigen Klammern, z. B. k-1a2b3c4d), status umgesetzt|abgelehnt, grund (ein Satz; bei abgelehnt Pflicht), fassung (die neue Fassung, z. B. v5-3). Nur für Kommentare, die dir die Werkbank geschickt hat.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      deck: { type: 'string' },
+      eintraege: { type: 'array', maxItems: 60, items: { type: 'object', properties: { id: { type: 'string' }, status: { type: 'string', enum: ['umgesetzt', 'abgelehnt'] }, grund: { type: 'string' }, fassung: { type: 'string' } }, required: ['id', 'status'] } },
+    },
+    required: ['deck', 'eintraege'],
+  },
+  run: async (a: any) => {
+    const j = await call('/internal/deck/rueckmeldung', { deck: a.deck, eintraege: a.eintraege, conv: process.env.WERKBANK_CONV_ID || '' });
+    const l = (j.ergebnis ?? []) as { id: string; ok: boolean; fehler?: string }[];
+    return `${l.filter((x) => x.ok).length} von ${l.length} zurückgemeldet.${l.filter((x) => !x.ok).map((x) => `\n- ${x.id}: ${x.fehler}`).join('')}`;
+  },
+};
 const DELEG_TOOLS = [
   {
     name: 'delegieren',
@@ -508,7 +527,7 @@ serve('werkbank', '0.1.0', [
   // Delegieren und Phasen-Lead (Plan 165): nur in Strängen; die Brücke kennt Person und Strang aus dieser Umgebung.
   ...(process.env.WERKBANK_STRANG === '1' && process.env.WERKBANK_BRIDGE_URL ? DELEG_TOOLS : []),
   // Knut 06.11.: Stränge lesen GitHub selbst (github_lesen) und melden alles darüber hinaus über den Bedarfskanal.
-  ...(process.env.WERKBANK_STRANG === '1' ? [GITHUB_LESEN, BEDARF_MELDEN] : []),
+  ...(process.env.WERKBANK_STRANG === '1' ? [GITHUB_LESEN, BEDARF_MELDEN, DECK_RUECKMELDUNG] : []),
   // Native Verteilung Claude ↔ Melious (Knut 19.10.): Lead und Stränge.
   ...(process.env.WERKBANK_BRIDGE_URL ? [
     {

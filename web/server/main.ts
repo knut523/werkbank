@@ -122,6 +122,8 @@ import { entwurfHash, postenErlaubt } from './befunde.ts';
 import { index as gedaechtnisIndex } from './prgedaechtnis.ts';
 import { chatStatusAn, offeneJeStrang, hauptchatJeStrang, fragenJeStrang, ersterSatz, zaehleChat } from './chatstatus.ts';
 import { registerV2, appDist, v2Index, hauptchatZustellen, councilPruefen } from './v2.ts';
+import { registerDecks, deckIndizes } from './deckroutes.ts';
+import { homedir } from 'node:os';
 import { bedarfPruefen, bedarfMelden, bedarfListe, bedarfAntworten, BEDARF_NAME } from './bedarf.ts';
 import { liste as v2lcListe, volltext as v2lcVolltext, senden as v2lcSenden } from './v2librechat.ts';
 import { abgebrochenMarkieren as v2Abgebrochen } from './v2chat.ts';
@@ -4556,6 +4558,22 @@ registerV2(on, {
   },
 });
 const V2_DIST = appDist(WEB_DIR);
+// Deck-Review (docs/plan-deck-review.md): ersetzt die Nebenserver deck-review*; Takt alle 60 s (WERKBANK_DECK_TAKT_S, 0 = aus).
+const deckCol = { decks: () => wb().collection<any>('decks'), kommentare: () => wb().collection<any>('deck_kommentare'), links: () => wb().collection<any>('deck_links') };
+const deckModul = registerDecks(on, {
+  needUser, body, send, log, col: deckCol, wurzel: cfg.deckDir,
+  intern: (req, b) => internalUser(req, b),
+  quellen: cfg.deckQuellen.length ? cfg.deckQuellen : [cfg.docsDir, cfg.reviewDir, join(homedir(), 'work', 'knut', 'downloads', 'teilen')],
+  senden: (u, strand, text) => sendOrch(u, strand, text),
+  strangConv: async (u, strand) => { const r: any = await orchRuns().findOne({ _id: strand as any, userId: u.id }, { projection: { conv: 1 } }); return r?.conv ? String(r.conv) : null; },
+  userById: (id) => userById(id),
+  heute: wienDatum,
+});
+{
+  const s = Number(process.env.WERKBANK_DECK_TAKT_S ?? 60);
+  let indiziert = false;
+  if (s > 0) setInterval(() => { (async () => { if (!indiziert) { await deckIndizes(deckCol); indiziert = true; } await deckModul.takt(); })().catch((e) => log('deck takt fehler', { error: String(e?.message ?? e).slice(0, 200) })); }, s * 1000).unref();
+}
 
 function serveStatic(req: IncomingMessage, res: ServerResponse, path: string) {
   let base = DIST, rel = path, index = join(DIST, 'index.html');
