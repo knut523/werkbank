@@ -81,6 +81,8 @@ interface Live {
   workDir?: string;
   autoCalls: Map<string, { name: string; input: Record<string, unknown>; sub: boolean }>;
   denials: string[];
+  /** RB4: in diesem Zug geschriebene Dateien (Worktree-Sperre). */
+  writtenZug?: string[];
   // Mehrere Claude-Konten: hat dieser Versuch rate_limit gemeldet (mit Reset), und ist schon etwas passiert?
   rateLimited: { resetsAt?: number } | null;
   rateLimitReset?: number;
@@ -989,6 +991,8 @@ function rememberWritten(live: Live, tool: string, toolInput: Record<string, unk
   if (f && /^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) {
     const seen = lastSeen.get(live.key);
     if (seen) seen.written = [...new Set([...(seen.written ?? []), String(f)])].slice(-50);
+    // RB4: für die Worktree-Sperre zählt nur, was in DIESEM Zug geschrieben wurde (live lebt genau einen Zug).
+    live.writtenZug = [...new Set([...(live.writtenZug ?? []), String(f)])].slice(-50);
   }
 }
 
@@ -1010,12 +1014,24 @@ export function worktreeOf(pfad: string): string {
   return wt;
 }
 
-/** Läuft gerade ein ANDERER Strang in dem Worktree, in den `datei` gehört? → dessen Schlüssel, sonst null (rein bis auf worktreeOf). */
-export function fremderWorktree(datei: string, andere: { key: string; dir?: string | null; written?: string[] }[], wtOf: (p: string) => string = worktreeOf): string | null {
+/** RB4 (Plan 466): Git-Worktree eines Pfads oder null, wenn er in keinem Git-Repo liegt (/tmp, ~/work/knut, Review-Pakete). */
+export const gitWorktreeOf = (pfad: string): string | null => {
+  const wt = worktreeOf(pfad);
+  try { return existsSync(join(wt, '.git')) ? wt : null; } catch { return null; }
+};
+
+/** Welcher Pfad des anderen Strangs liegt im selben Worktree wie `datei`? (für die Meldung; rein bis auf wtOf) */
+export function ausloeser(datei: string, a: { dir?: string | null; written?: string[] }, wtOf: (p: string) => string | null = gitWorktreeOf): string | null {
   const ziel = wtOf(datei);
-  for (const a of andere) {
-    if ([a.dir, ...(a.written ?? [])].filter(Boolean).some((p) => wtOf(String(p)) === ziel)) return a.key;
-  }
+  if (!ziel) return null;
+  return [a.dir, ...(a.written ?? [])].filter(Boolean).map(String).find((p) => wtOf(p) === ziel) ?? null;
+}
+
+/** Läuft gerade ein ANDERER Strang in dem Worktree, in den `datei` gehört? → dessen Schlüssel, sonst null (rein bis auf wtOf).
+ *  RB4: nur echte Git-Worktrees zählen; `written` = im laufenden Zug geschrieben (andereLaufendeAus). */
+export function fremderWorktree(datei: string, andere: { key: string; dir?: string | null; written?: string[] }[], wtOf: (p: string) => string | null = gitWorktreeOf): string | null {
+  if (!wtOf(datei)) return null;
+  for (const a of andere) if (ausloeser(datei, a, wtOf)) return a.key;
   return null;
 }
 
@@ -1052,12 +1068,14 @@ export function docsOrdner(): string[] {
 }
 
 /** Andere laufende Stränge derselben Person (ohne Worker, ohne Hauptchat) mit Arbeitsordner und geschriebenen Dateien. */
-function andereLaufende(live: Live) {
+/** Rein (RB4): andere laufende Stränge derselben Person mit Arbeitsordner und den im laufenden Zug geschriebenen Dateien. */
+export function andereLaufendeAus(alle: Pick<Live, 'key' | 'userId' | 'orch' | 'worker' | 'writtenZug'>[], live: Pick<Live, 'key' | 'userId'>, dirOf: (key: string) => string | null | undefined): { key: string; dir: string | null; written: string[] }[] {
   // Gleicher Arbeitsordner = bewusst geteilt (orch start --shared; ohne es lehnt die Werkbank den Start ab) — nicht sperren (Pass C).
-  const eigen = orchMap[live.key]?.dir;
-  return [...lives.values()].filter((l) => l !== live && l.key !== live.key && l.userId === live.userId && l.orch && !l.worker && !(eigen && orchMap[l.key]?.dir === eigen))
-    .map((l) => ({ key: l.key, dir: orchMap[l.key]?.dir ?? null, written: lastSeen.get(l.key)?.written ?? [] }));
+  const eigen = dirOf(live.key);
+  return alle.filter((l) => l !== live && l.key !== live.key && l.userId === live.userId && l.orch && !l.worker && !(eigen && dirOf(l.key) === eigen))
+    .map((l) => ({ key: l.key, dir: dirOf(l.key) ?? null, written: l.writtenZug ?? [] }));
 }
+function andereLaufende(live: Live) { return andereLaufendeAus([...lives.values()], live, (k) => orchMap[k]?.dir); }
 
 /**
  * Der Wächter. Als PreToolUse-Hook: (input) mit tool_name/tool_input. Als canUseTool (Eskalation des Auto-Modus oder
@@ -1117,11 +1135,14 @@ function makeGuard(live: Live) {
       // Plan 274 (D4a): höchstens ein Strang je Worktree — nicht in einen Worktree schreiben, in dem gerade ein anderer Strang arbeitet.
       const datei = toolInput.file_path ?? toolInput.notebook_path;
       if (!live.worker && datei && /^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool) && process.env.BRIDGE_WORKTREE_SPERRE !== 'off') {
-        const anderer = fremderWorktree(String(datei), andereLaufende(live));
+        const al = andereLaufende(live);
+        const anderer = fremderWorktree(String(datei), al);
         if (anderer) {
           const conv = anderer.split(':').pop();
-          emitStatus(live, `⛔ Worktree belegt: dort arbeitet gerade der Strang ${conv} — ${statusLine(tool, toolInput)} nicht ausgeführt`);
-          return decide('deny', `Im Worktree dieser Datei arbeitet gerade ein anderer Strang (Unterhaltung ${conv}) — höchstens ein Strang je Worktree, sonst überschreibt ihr euch gegenseitig. Nicht umgehen: schreib unter „Offen“, was dort noch zu tun ist, oder arbeite in deinem eigenen Worktree.`);
+          const pfad = ausloeser(String(datei), al.find((x) => x.key === anderer)!) ?? '?';
+          log('worktree belegt', { conv: live.key, anderer, pfad });
+          emitStatus(live, `⛔ Worktree belegt: dort arbeitet gerade der Strang ${conv} — ${statusLine(tool, toolInput)} nicht ausgeführt (wegen ${pfad})`);
+          return decide('deny', `Im Worktree dieser Datei arbeitet gerade ein anderer Strang (Unterhaltung ${conv}, wegen ${pfad}) — höchstens ein Strang je Worktree, sonst überschreibt ihr euch gegenseitig. Nicht umgehen: schreib unter „Offen“, was dort noch zu tun ist, oder arbeite in deinem eigenen Worktree.`);
         }
       }
     }
