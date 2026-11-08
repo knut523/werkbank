@@ -78,3 +78,78 @@ test('Gegenprüfung: Vorabbuchung des Zugs und Abrechnung nach server.ts müssen
     k.budgetVergessen(); k.budgetPersistenz(null);
   }
 });
+
+// ---------- Gegenprüfung Runde 3 (meliousFrei je Person: Kennung beim Schreiben, Frische beim Lesen) ----------
+
+test('18 setzeMelious und claudeBudgetGrund bilden für denselben Personen-Wert verschiedene Schlüssel — die Setzung verpufft still', async () => {
+  // Der Leser hasht den Personen-Wert vorher (`meliousFrei.get(safeId(o.userId))`), der Setzer legt ihn unverändert ab
+  // (`meliousFrei.set(userId, …)`). Derselbe Personen-Wert ergibt damit zwei Schlüssel: wer setzeMelious mit dem rohen Wert
+  // der Person aufruft — der Parameter heißt `userId`, und genau so hat die produktive Lesestelle (sessions.ts:1855) es
+  // früher getan — setzt einen Eintrag, den niemand liest. Die Person gilt weiter als „Melious nicht frei“ und wartet bei
+  // heißen Claude-Konten, statt auf Melious auszuweichen. Der gehashte Aufruf (wie heute in sessions.ts) ist die Kontrolle:
+  // nur wenn beide Schreibweisen denselben Schlüssel bilden, ist die Schnittstelle sicher.
+  const b = await import('../src/claudebudget.ts');
+  const m = await import('../src/sessions.ts');
+  const T = Date.parse('2026-11-08T10:00:00Z');
+  b.budgetVergessen();
+  b.aktualisiere({ accounts: [{ number: 1, usage: { fiveHour: { pct: 99 }, sevenDay: { pct: 50, aheadOfPace: false } } }] }, { chat: '1' });
+  const u = 'knut@maxenergy.at';
+  try {
+    assert.notEqual(m.safeId(u), u, 'Testannahme: diese Kennung wird von safeId() normalisiert');
+    b.setzeMelious(u, true);
+    assert.equal(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: u }, T), '',
+      'setzeMelious(userId) und claudeBudgetGrund(userId) müssen denselben Schlüssel bilden — sonst verpufft die Setzung still');
+    b.setzeMelious(m.safeId(u), true);
+    assert.equal(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: u }, T), '', 'gehasht gesetzt (wie sessions.ts:1855): die Person darf auf Melious ausweichen');
+  } finally { b.budgetVergessen(); }
+});
+
+test('19 Erster Strang-Zug einer Person nach dem Start: Melious ist frei, der Zug wird trotzdem als „Melious nicht frei“ abgewiesen', async () => {
+  // Der Wert je Person wird erst NACH der Zulassung gesetzt (sessions.ts:1855), gelesen wird er davor (sessions.ts:1560,
+  // zulassen → kapGrund → claudeBudgetGrund → wartenGrund). Bei einem frischen Prozess (Zustand ist nur im Speicher, jeder
+  // Neustart/Deploy verliert ihn) hat die Person keinen Eintrag, und der dokumentierte Rückfall auf die prozessweite Setzung
+  // ist in der Produktion nirgends geschrieben (kein Aufruf von setzeMelious(boolean) außerhalb der Tests). Ergebnis: der Zug
+  // mit freiem Melious und heißen Claude-Konten läuft nicht los, sondern landet mit falscher Begründung in der Schlange.
+  // Genau der Fall, den die Änderung tragen soll („a darf auf Melious ausweichen“).
+  const b = await import('../src/claudebudget.ts');
+  const m = await import('../src/sessions.ts');
+  const vorher = { queue: process.env.BRIDGE_QUEUE, budget: process.env.BRIDGE_MELIOUS_BUDGET,
+    karte: process.env.BRIDGE_CLAUDE_KONTO_MAP, cb: process.env.BRIDGE_CLAUDEBUDGET, kap: process.env.BRIDGE_KAPAZITAET };
+  process.env.BRIDGE_QUEUE = '0';                 // nicht in der Schlange hängen: die Abweisung ist sofort sichtbar
+  process.env.BRIDGE_MELIOUS_BUDGET = 'aus';      // hier soll nur das Claude-Kontingent entscheiden
+  delete process.env.BRIDGE_CLAUDE_KONTO_MAP;     // kein cswap-Abruf (auslastung.ts) dazwischen, der die Lage überschreibt
+  delete process.env.BRIDGE_CLAUDEBUDGET;         // Schalter nicht von außen aus
+  delete process.env.BRIDGE_KAPAZITAET;
+  b.budgetVergessen(); k.budgetVergessen();
+  // Rangfolge aus cswap: ein Konto, 5-h-Fenster voll und vor dem Wochenplan → keine Luft, also „alle Konten heiß“.
+  b.aktualisiere({ accounts: [{ number: 1, usage: { fiveHour: { pct: 99 }, sevenDay: { pct: 50, aheadOfPace: false } } }] }, { chat: '1' });
+  const DIR = mkdtempSync(join(tmpdir(), 'cb-person-frisch-'));
+  const u = 'knut@maxenergy.at', conv = randomUUID();
+  const MEL = { id: 'melious', label: 'Melious', token: `sk-mel-${'z'.repeat(24)}`, kind: 'melious', rest: 200_000, fallback: false,
+    faktoren: { 'glm-5.3': { input: 3, output: 12, cacheRead: 0.3 } } };
+  m.registerOrchestration(u, conv, DIR, 'strand', { modell: 'claude:sonnet' });   // Claude-Strang, profil voll → das Kontingent entscheidet
+  let out = '', gestartet = false;
+  const s: any = { closed: false, done: false, write(t: string) { out += t; }, finish() { s.done = true; s.closed = true; }, onClose() {} };
+  try {
+    let wache: NodeJS.Timeout | undefined;
+    await Promise.race([
+      m.handleTurn({ userId: u, convId: conv, token: 'tok-person-frisch', prompt: 'Bitte den PR prüfen', history: '', sink: s,
+        query: () => { gestartet = true; return (async function* () { yield { type: 'result', subtype: 'success', session_id: 'x', is_error: false, usage: {} }; })(); },
+        accounts: async () => [{ id: 'chat', label: 'Chat', token: null }, MEL],
+        kapazitaet: async () => ({ meliousProzent: 24, unterBoden: false, claudeFrei: true, claudeFreiAb: null, prWartend: 0, stand: 243_000, topfMax: 1_024_000, echt: true }),
+        onMeliousUsage: () => {},
+      } as any),
+      new Promise((r) => { wache = setTimeout(r, 3000); }),
+    ]);
+    clearTimeout(wache);
+    assert.ok(gestartet, `Melious ist für diese Person frei (Rest 200 000, kein Sperrvermerk) — der Zug muss anlaufen, nicht warten. Meldung: ${JSON.stringify(out.slice(0, 300))}`);
+    assert.doesNotMatch(out, /Melious nicht frei/);
+  } finally {
+    if (vorher.queue === undefined) delete process.env.BRIDGE_QUEUE; else process.env.BRIDGE_QUEUE = vorher.queue;
+    if (vorher.budget === undefined) delete process.env.BRIDGE_MELIOUS_BUDGET; else process.env.BRIDGE_MELIOUS_BUDGET = vorher.budget;
+    if (vorher.karte === undefined) delete process.env.BRIDGE_CLAUDE_KONTO_MAP; else process.env.BRIDGE_CLAUDE_KONTO_MAP = vorher.karte;
+    if (vorher.cb === undefined) delete process.env.BRIDGE_CLAUDEBUDGET; else process.env.BRIDGE_CLAUDEBUDGET = vorher.cb;
+    if (vorher.kap === undefined) delete process.env.BRIDGE_KAPAZITAET; else process.env.BRIDGE_KAPAZITAET = vorher.kap;
+    b.budgetVergessen(); k.budgetVergessen();
+  }
+});
