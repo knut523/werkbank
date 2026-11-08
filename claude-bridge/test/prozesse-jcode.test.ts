@@ -75,3 +75,43 @@ test('opencodeSpawn (opencode run): Timeout beendet Kind und Enkel, binnen Frist
 test('opencodeSpawn (opencode run): Abbruch beendet Kind und Enkel', async () => {
   await pruefe('opencode', true);
 });
+
+// ── Gegenprüfung R4 (Verträge des Registers; Stand 1993d3b, kein Produktcode geändert) ─────────────────────
+// Der Plan (docs/plan-prozessregister.md) verlangt von JEDEM Kindprozess einen Registereintrag mit
+// „Besitzer, PID + Startzeit, Frist, letzte Aktivität“ (Strukturregel) und die Start-Mini-Spec nennt die
+// Angaben ausdrücklich: `starte(cmd, args, { besitzer, art, fristMs, cwd, env })`. Aufräumen, Wächter und
+// Anzeige lesen NUR aus diesem Register: „pro Strang Prozesse mit Art, Laufzeit, letzte Aktivität, Frist,
+// Zustand“ (Sicht), R10 „Frist überschritten → Check-in; + Gnadenfrist → beenden“, R11 „processes mit art,
+// laufzeitS, zuletztAktivS, fristAt, zustand“, R12 „Prozesse je Strang“. jcodeSpawn/opencodeSpawn füllen
+// davon nur art und Besitzer-Name — Frist bleibt leer, als Besitzer steht die Startfunktion.
+// (Die Fakes aus `before` laufen bis zum KILL; aufgeräumt wird über die Gruppe, die Einträge verschwinden.)
+
+function laufend() {
+  const jc = mod.jcodeSpawn({ cwd: dir, prompt: 't', model: null, tools: 'read', key: 'k', timeoutS: 600, extra: { JCODE_TEST_ENKEL: join(dir, 'enkel-register-jc') } });
+  const oj = mod.opencodeSpawn({ cwd: dir, prompt: join(dir, 'enkel-register-oc'), timeoutS: 600, abbruch: () => false });
+  const e = [liste({ art: 'jcode' }).at(-1), liste({ art: 'opencode-run' }).at(-1)];
+  const weg = async () => { for (const x of e) if (x) { try { process.kill(-x.pid, 'SIGKILL'); } catch { /* weg */ } } await Promise.allSettled([jc, oj]); };
+  return { e, weg };
+}
+
+test('jcodeSpawn/opencodeSpawn: Registereintrag trägt die Frist (timeoutS) — sonst wird der Lauf für Wächter und Anzeige nie überfällig', async () => {
+  const { e, weg } = laufend();
+  try {
+    for (const [name, x] of [['jcode', e[0]], ['opencode-run', e[1]]] as const) {
+      assert.ok(x, `${name}: Prozess steht im Register`);
+      assert.notEqual(x!.fristAt, null, `${name}: fristAt gesetzt — der Wächter (R10) prüft nur fristAt, die Anzeige zeigt die Spalte Frist`);
+      assert.ok(x!.fristAt! - x!.startedAt >= 600_000 - 5_000 && x!.fristAt! - x!.startedAt <= 600_000 + 60_000,
+        `${name}: Frist liegt bei timeoutS (600 s), nicht bei ${x!.fristAt! - x!.startedAt} ms`);
+    }
+  } finally { await weg(); }
+});
+
+test('jcodeSpawn/opencodeSpawn: Registereintrag nennt den Auftraggeber (Besitzer), nicht die Startfunktion', async () => {
+  const { e, weg } = laufend();
+  try {
+    for (const [name, x, nurFunktion] of [['jcode', e[0], 'jcodeSpawn'], ['opencode-run', e[1], 'opencodeSpawn']] as const) {
+      assert.ok(x, `${name}: Prozess steht im Register`);
+      assert.notEqual(x!.besitzer, nurFunktion, `${name}: Besitzer = Auftraggeber (Strang), nicht die Startfunktion — sonst findet kein Strang seinen Lauf (Sicht/R11/R12), kein Strang-Wächter kann ihn melden (R10: lives.get(besitzer)) und beenden(<Besitzer>) fasst die Läufe aller Stränge auf einmal an`);
+    }
+  } finally { await weg(); }
+});
