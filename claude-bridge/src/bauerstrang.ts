@@ -4,7 +4,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { mitDeckel, bauerDeckelMs, abbruchFristMs, DECKEL_LOG, bestofnAn, inSchutzzone, inSonnetzone, bauerFuer, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, SONNET, pruefSemaphor, pruefLauf, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
+import { tamperGruende, mitDeckel, bauerDeckelMs, abbruchFristMs, DECKEL_LOG, bestofnAn, inSchutzzone, inSonnetzone, bauerFuer, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, SONNET, pruefSemaphor, pruefLauf, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
 import { budgetGrund } from './kapazitaet.ts';
 import { pruefSchleife, BAUER_REGELN, type Phase } from './strangpruefung.ts';
 import { FLASH, DEEPSEEK } from './modellwahl.ts';
@@ -19,6 +19,8 @@ export interface StrangRennen {
   zug(dir: string, modell: string, prompt: string, signal?: AbortSignal): Promise<{ ok: boolean; text: string; grund: string }>;
   /** Prüfbefehle des Repos (tsc/lint = schnell, alles = voll) im Worktree; die Semaphor-Klammer setzt dieses Modul. */
   pruefe(dir: string, base: string, art: 'schnell' | 'voll'): Promise<{ ok: boolean; log: string; tsc?: boolean; lint?: boolean }>;
+  /** Hat das Repo konfigurierte Prüfbefehle (.werkbank/pruefungen.json)? false → kein Rennen: ohne Prüfung gäbe es keinen belegbaren Sieger. Nicht gesetzt = Rennen wie bisher. */
+  eingerichtet?(): Promise<boolean>;
   status?(t: string): void;
 }
 export type StrangAusgang = { ok: boolean; text: string; grund: string; modell?: string } | null;
@@ -32,6 +34,20 @@ async function anwenden(cwd: string, diff: string, rueck = false): Promise<boole
   const dir = mkdtempSync(join(tmpdir(), 'bauer-patch-'));
   try { const f = join(dir, 'p.diff'); writeFileSync(f, diff.endsWith('\n') ? diff : diff + '\n'); return (await git(cwd, 'apply', '--binary', ...(rueck ? ['-R'] : []), f)).code === 0; }
   finally { rmSync(dir, { recursive: true, force: true }); }
+}
+/** Kandidaten-Diff gegen base (Index nach `add -A`), ohne Renames. */
+export async function kandidatDiff(dir: string, base: string): Promise<string> {
+  await git(dir, 'add', '-A');
+  // --no-renames: ein Umbenennen aus dem Testmuster erscheint als gelöschte Testdatei + neue Datei (tamperGruende liest sonst nur das Ziel);
+  // core.quotepath=false: Nicht-ASCII-Pfade bleiben im Header unquotiert lesbar.
+  return (await git(dir, '-c', 'core.quotepath=false', 'diff', '--cached', '--binary', '--no-color', '--no-renames', base)).out;
+}
+/** Urteil über das Ergebnis der Prüfbefehle. */
+export function pruefUrteil(r: { eingerichtet: boolean; ergebnisse: { name: string; ok: boolean; ausgabe: string }[] }) {
+  // Ohne .werkbank/pruefungen.json läuft nur der leere diff-check: „grün“ wäre ein Freispruch ohne tsc/lint/Tests.
+  if (!r.eingerichtet) return { ok: false, log: 'keine Prüfbefehle eingerichtet (.werkbank/pruefungen.json) — kein automatischer Sieger', tsc: true, lint: true };
+  const rot = r.ergebnisse.filter((x) => !x.ok);
+  return { ok: !rot.length, log: rot.map((x) => `${x.name}: ${x.ausgabe.slice(-800)}`).join('\n'), tsc: !rot.some((x) => /tsc|typ/i.test(x.name)), lint: !rot.some((x) => /lint/i.test(x.name)) };
 }
 /** Betroffene Tests: geänderte *.test.ts mit `node --test` im nächsten Ordner mit package.json (über den Semaphor). */
 async function betroffeneTests(dir: string, diff: string): Promise<{ ok: boolean; log: string }> {
@@ -60,6 +76,12 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   // Sonnet-Klasse (wb21/i-f-sonnet-glm): Geld/Konten oder Melious leer → Sonnet baut, kein Best-of-N. Abschalten: BRIDGE_SONNETKLASSE=aus.
   const meliousLeer = o.userId ? budgetGrund(o.userId, 'bauer', Date.now(), env) !== '' : false;
   if (bauerFuer(dateien, env, undefined, meliousLeer)[0] === 'sonnet') return sonnetUebergabe();
+  // Vor dem Rennen entscheiden: ohne Prüfbefehle wäre jeder Kandidat rot (drei verschwendete Bauer-Läufe) und die Statistik würde vergiftet (zaehle(stat, null)).
+  if (o.eingerichtet && !(await o.eingerichtet().catch(() => true))) {
+    const grund = 'keine Prüfbefehle eingerichtet (.werkbank/pruefungen.json) — kein Best-of-N, Sonnet baut';
+    emittiereLauf({ id: o.id, bauer: [], sieger: null, abgelehnt: [], gateLog: [grund] } as Parameters<typeof emittiereLauf>[0]);
+    return { ok: false, text: '', grund };
+  }
   let zone = false;
   const schleifeAn = String(env.BRIDGE_STRANGPRUEFUNG ?? '').trim().toLowerCase() !== 'aus';   // L2-Schalter, Standard an
   const subs = new Map<string, { dir: string; base: string }>(), texte = new Map<string, string>();
@@ -78,8 +100,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
       const p = op?.fehlerlogs?.length ? `${plan}\n\n## Fehlerlogs der vorigen Bauer (nicht wiederholen)\n${op.fehlerlogs.join('\n---\n').slice(-6000)}` : plan;
       const r = await o.zug(s.dir, bauer, p, op?.signal);
       texte.set(bauer, r.text);
-      await git(s.dir, 'add', '-A');
-      const diff = (await git(s.dir, 'diff', '--cached', '--binary', '--no-color', s.base)).out;
+      const diff = await kandidatDiff(s.dir, s.base);
       // Schutzzone am tatsächlichen Diff (nicht nur an Pfaden im Plantext): berührt der Kandidat sie, darf er nicht gewinnen. Abschalten: BRIDGE_DIFFZONE=aus.
       if (String(env.BRIDGE_DIFFZONE ?? '').trim().toLowerCase() !== 'aus') {
         const namen = (await run('git', ['-C', s.dir, '-c', 'core.quotepath=false', 'diff', '--cached', '--name-only', '--no-renames', s.base], { cwd: s.dir, max: 1e7 })).out.split('\n').filter(Boolean);
@@ -97,7 +118,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     const r = await mitDeckel(async (signal) => { const z = await o.zug(dir, modell, prompt, signal); text = z.text; return { bauer: modell, ok: z.ok, diff: '', log: z.ok ? '' : z.grund }; }, modell, prueferMs, abbruchFristMs(env)).catch(() => null);
     return !r || r.log === DECKEL_LOG ? '' : text;
   };
-  const diffVon = async (dir: string, base: string) => { await git(dir, 'add', '-A'); return (await git(dir, 'diff', '--cached', '--binary', '--no-color', base)).out; };
+  const diffVon = kandidatDiff;
   const neueTests = async (dir: string) => (await git(dir, 'ls-files', '-o', '--exclude-standard')).out.split('\n').filter((f) => /\.test\.[cm]?[jt]s$/.test(f));
   async function testLauf(dir: string, f: string): Promise<{ ok: boolean; log: string }> {
     let d = dirname(f); while (d !== '.' && !existsSync(join(dir, d, 'package.json'))) d = dirname(d);
@@ -118,6 +139,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   /** Prüfschleife am Kandidaten (in dessen Unter-Worktree), danach voller Lauf erneut. Rot/ohne Ergebnis/Deckel → { ok: false }. Setzt k.diff auf den Diff samt Fix und Prüfer-Tests. */
   async function strangPruefen(k: { bauer: string; diff: string }): Promise<{ ok: boolean; log: string }> {
     const s = subs.get(k.bauer)!; geschleift.add(k);
+    await git(s.dir, 'add', '-A'); const baumBauer = (await git(s.dir, 'write-tree')).out.trim();   // Stand des Bauers, gegen den der Fixer gemessen wird
     const pruefer = k.bauer === DEEPSEEK ? FLASH : DEEPSEEK;
     o.status?.(`⏳ Best-of-N: Strang-Prüfung (${pruefer} prüft ${k.bauer}) …`);
     const e = await pruefSchleife({
@@ -148,6 +170,9 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     gateLog.push(`Strang-Prüfung: ${e.ende}, ${e.runden} Runde(n), rot gesehen: ${e.roteTests.join(', ') || '-'}, offen: ${e.offen.join(', ') || '-'}`);
     if (e.ende !== 'konvergiert') return { ok: false, log: `Strang-Prüfung ${e.ende}; offen: ${e.offen.join(', ')}` };
     k.diff = await diffVon(s.dir, s.base);
+    // Tamper-Guard auch am Endstand: der Fixer darf bestehende Repo-Tests und die Tests des Bauers weder löschen noch schwächen (gegen base UND gegen den Bauer-Stand).
+    const tamper = [...new Set([...tamperGruende(k.diff), ...tamperGruende(await diffVon(s.dir, baumBauer))])];
+    if (tamper.length) { gateLog.push(`Tamper-Guard nach der Strang-Prüfung: ${tamper.slice(0, 3).join('; ')}`); return { ok: false, log: `Tamper-Guard: ${tamper.slice(0, 3).join('; ')}` }; }
     if (String(env.BRIDGE_DIFFZONE ?? '').trim().toLowerCase() !== 'aus') {
       const namen = (await run('git', ['-C', s.dir, '-c', 'core.quotepath=false', 'diff', '--cached', '--name-only', '--no-renames', s.base], { cwd: s.dir, max: 1e7 })).out.split('\n').filter(Boolean);
       if (inSchutzzone(namen, env)) { zone = true; gateLog.push('Schutzzone im Diff nach der Strang-Prüfung'); return { ok: false, log: 'Schutzzone im Diff' }; }
@@ -156,6 +181,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     gateLog.push(`voll nach Schleife: ${v.ok ? 'grün' : `rot ${v.log.slice(-300)}`}`);
     return v;
   }
+  const volliert = new WeakSet<object>();   // Kandidaten, an denen rennen() 'voll' schon gelaufen ist (Retry-Sieger: nie)
   const deps: Deps = {
     bauen(bauer, a, op) {
       let fertig = false;
@@ -170,6 +196,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
       return { tsc: p.tsc ?? p.ok, lint: p.lint ?? p.ok, tests: p.ok && t.ok, log: p.ok ? t.log : p.log };
     },
     async voll(k) {
+      volliert.add(k);
       const s = subs.get(k.bauer)!;
       const v = await pruefSemaphor.run(() => o.pruefe(s.dir, s.base, 'voll'));
       return v.ok && schleifeAn ? strangPruefen(k) : v;   // L2: Sieger-Kandidat durch die Prüfschleife; rot → Rangfolge/L3-Kette in rennen()
@@ -177,10 +204,11 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     ledger: schleifeAn ? (e) => { ledgerEvent = e; } : emittiereLauf,
   };
   const lauf = await rennen(deps, { id: o.id, plan: o.prompt, dateien }, { env, stat });
-  // Ein Retry-Sieger (L3c) läuft in rennen() nicht durch voll: hier nachholen; rot → Kette erschöpft → Sonnet.
-  if (schleifeAn && lauf.sieger && !geschleift.has(lauf.sieger) && subs.has(lauf.sieger.bauer)) {
-    const v = await strangPruefen(lauf.sieger).catch((e) => ({ ok: false, log: String(e) }));
-    if (!v.ok) { lauf.logs.push(`${lauf.sieger.bauer}: Strang-Prüfung rot\n${v.log.slice(-1500)}`); lauf.sieger = null; lauf.verlierer = undefined; if (!zone) lauf.weiter = 'sonnet'; if (ledgerEvent) ledgerEvent.sieger = null; }
+  // Ein Retry-Sieger (L3c) läuft in rennen() nicht durch voll: hier nachholen (mit Schleife: Strang-Prüfung samt vollem Lauf, ohne: nur voll); rot → Kette erschöpft → Sonnet.
+  if (lauf.sieger && !geschleift.has(lauf.sieger) && !volliert.has(lauf.sieger) && subs.has(lauf.sieger.bauer)) {
+    const w = lauf.sieger, ws = subs.get(w.bauer)!;
+    const v = await (schleifeAn ? strangPruefen(w) : pruefSemaphor.run(() => o.pruefe(ws.dir, ws.base, 'voll'))).catch((e) => ({ ok: false, log: String(e) }));
+    if (!v.ok) { lauf.logs.push(`${w.bauer}: ${schleifeAn ? 'Strang-Prüfung' : 'voller Lauf'} rot\n${v.log.slice(-1500)}`); lauf.sieger = null; lauf.verlierer = undefined; if (!zone) lauf.weiter = 'sonnet'; if (ledgerEvent) ledgerEvent.sieger = null; }
   }
   if (ledgerEvent) emittiereLauf({ ...ledgerEvent, ...(phasen ? { phasen } : {}), gateLog });
   if (o.statistikPfad) statistikSpeichern(o.statistikPfad, stat);

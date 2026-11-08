@@ -21,7 +21,7 @@ import { freigabeMerken } from './freigabe.ts';
 import { AUTO_GITHUB_ASK, AUTO_GITHUB_DENY, ROUTINE_ALLOW, routineAllowAn, orchRoots, LIVE_ORDNER, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { kontextVon, sollUebergeben, statusblock, uebergabeHinweis, ladeStand, speichereStand } from './uebergabe.ts';
-import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, reviewSchluessel, pruefAuftrag, rundeStand, rundeVermerken, urteilMerken, urteilZu, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
+import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, reviewSchluessel, pruefAuftrag, rundeStand, rundeVermerken, urteilMerken, urteilZu, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, pruefBefehle, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { starte, beenden, liste, type Eintrag } from './prozesse.ts';
@@ -31,11 +31,13 @@ import type { SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { testAccount } from './accounts.ts';
+/** Höchstwartezeit eines Zuges auf die Probe unbekannter Konten (BRIDGE_PROBE_WARTE_MS, Vorgabe 30 s). */
+const probeWarteMs = () => { const n = Number(process.env.BRIDGE_PROBE_WARTE_MS); return Number.isFinite(n) && n >= 0 ? n : 30_000; };
 const MOCK_PROBE = process.env.BRIDGE_MOCK === '1' || process.env.BRIDGE_MOCK === 'true';
-import { rolleVon, budgetOrdnen, budgetMerkeIn, claudeBudgetGrund, endpruefungKontoFuer, zugGelaufen, probeUnbekannte, setzeMelious, budgetAn as claudeBudgetAn } from './claudebudget.ts';
+import { rolleVon, budgetOrdnen, budgetMerkeIn, claudeBudgetGrund, endpruefungKontoFuer, zugGelaufen, probeUnbekannte, probeAusstehend, setzeMelious, budgetAn as claudeBudgetAn } from './claudebudget.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn, vergiss, maxWarteMs } from './schlange.ts';
 import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer, oc2Schreibrechte, oc2SchreibtDraussen, type LaeuferNutzung } from './laeufer.ts';
-import { bestofnStrang, bestofnAblehnung, ablehnungsZiel } from './bauerstrang.ts';
+import { bestofnStrang, bestofnAblehnung, ablehnungsZiel, pruefUrteil } from './bauerstrang.ts';
 import { bauZug, linksNachDraussen, urteilAus, verifiziererPrompt, MAX_RUNDEN, type BauDeps, type Verdikt } from './oc2strang.ts';
 import { oc2McpToken } from './oc2mcp.ts';
 import { testkontoNamen, zieleText } from './klick.ts';
@@ -732,6 +734,8 @@ export const MEL_SUB_HINT_CLAUDE = `Verteilung Claude ↔ Melious: Melious ist g
 export { safeId };
 
 /** Kennung einer Unterhaltung: Buchung beim Zug-Start (hier) und Abrechnung gegen den Ist-Verbrauch (server.ts, onMeliousUsage) müssen dieselbe benutzen. */
+/** Hat diese Unterhaltung einen laufenden Zug (z. B. mit offener Rückfrage)? */
+export const hatLaufendenZug = (userId: string, convId: string): boolean => lives.has(sitzungsKey(userId, convId));
 export const sitzungsKey = (userId: string, convId: string): string => `${safeId(userId)}:${safeId(convId)}`;
 
 // ---------- Ausgabe ----------
@@ -1044,10 +1048,11 @@ function handleMessage(live: Live, msg: any) {
           if (block.name === INBOX_TOOL && !msg.parent_tool_use_id) live.inboxCalls.add(block.id);
           if (cls === 'read') emitStatus(live, subPrefix(live, msg.parent_tool_use_id) + statusLine(block.name, block.input ?? {}));
           // Schreibende Werkzeuge melden sich erst nach der Bestätigung (siehe Hook).
-        } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
-          live.progressed = true;
+        } else if (block.type === 'text' && !msg.parent_tool_use_id && !msg.error) {
+          // Die Schlussantwort gehört in den Statusblock der Übergabe, auch wenn sie schon gestreamt wurde (sawStreamText);
+          // nur das Ausgeben bleibt davon abhängig.
           { const u = uebergabeStand.get(live.key); if (u) { u.letzte = String(block.text ?? '').slice(-4000); saveUebergabe(); } }
-          emitModelText(live, block.text);
+          if (!live.sawStreamText) { live.progressed = true; emitModelText(live, block.text); }
         }
       }
       return;
@@ -1597,6 +1602,14 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   let fruehKonten: Promise<any[] | null> | null = null;
   let melBuchbar = false;   // Melious für die Person nutzbar: nur dann gibt es etwas vorab zu buchen (ohne Konto verbraucht der Zug keine Melious-Energie)
   if (req.accounts) { fruehKonten = req.accounts().catch(() => null); await fruehKonten.then((l) => { if (l) { const mel = normalizeAccounts(l, req.token).find(isMelious); melBuchbar = !!mel && meliousUsable(mel, exhaustedOf(safeId(req.userId)), Date.now()); setzeMelious(req.userId, melBuchbar); } }); }
+  // Die Prüfung oben lag vor den Awaits (Kapazität, Kontenliste): eine zweite Nachricht derselben Unterhaltung hat in der Zwischenzeit
+  // einen Zug angemeldet. Hier erneut prüfen (wie in der Schlange unten) und die Zählung der eigenen Züge neu lesen.
+  if (lives.has(key)) {
+    req.sink.write('Diese Unterhaltung arbeitet noch an der vorigen Nachricht. Bitte kurz warten.');
+    req.sink.finish();
+    return;
+  }
+  mine = meine();
   const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
   const zulassen = (r: ReturnType<typeof lockFor>): ReturnType<typeof lockFor> => {
     if (r !== 'ok') { if (lockGrund && !lockGrund.startsWith('wartet:') && /Box|Host|Topf/.test(lockGrund)) lockGrund = `wartet: RAM — ${lockGrund}`; return r; }
@@ -1903,16 +1916,28 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   if (claudeBudgetAn() && process.env.BRIDGE_CLAUDE_KONTO_MAP) void auslastung().catch(() => {});   // hält die Konto-Lage (cswap, höchstens alle 5 min) frisch
   setzeMelious(req.userId, !!melAcc && meliousUsable(melAcc, exhaustedOf(safeId(req.userId)), Date.now()));   // roher Wert: setzeMelious bildet safeId selbst
   // Konten ohne Usage („unbekannt“) erst nach einem echten Probe-Aufruf (kleinstes Modell, ein Satz) freigeben — beim ersten Sehen, danach alle 30 min.
-  if (claudeBudgetAn() && !MOCK_PROBE) void probeUnbekannte(accounts.filter((a) => !isMelious(a)).map((a) => a.id), async (id) => {
+  const claudeIds = accounts.filter((a) => !isMelious(a)).map((a) => a.id);
+  const probe = claudeBudgetAn() && !MOCK_PROBE ? probeUnbekannte(claudeIds, async (id) => {
     const a = accounts.find((x) => x.id === id);
     return !!a && (await testAccount(req.query as any, { token: a.token, cwd: scratch, home, probe: true })).ok;
-  }).catch(() => {});
+  }).catch(() => {}) : null;
   let queue = live.worker ? workerQueue() : leadQueue();
+  // Alle Claude-Konten „unbekannt“ (cswap ohne Usage, z. B. frisch eingetragene Tokens): die Schlange ist leer, bis die Probe lief.
+  // Auf die laufende bzw. fällige Probe warten (höchstens 30 s) und neu rechnen — sonst scheitert der erste Zug, auch Leads und der Hauptchat.
+  if (!queue.length && probe && probeAusstehend(claudeIds)) {
+    emitStatus(live, '⏳ Neues Claude-Konto wird geprüft …');
+    let wecker: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([probe, new Promise((r) => { wecker = setTimeout(r, probeWarteMs()); })]);
+    clearTimeout(wecker);
+    queue = live.worker ? workerQueue() : leadQueue();
+  }
   const tokens = accounts.map((a) => a.token);
   const redact = (t: string) => tokens.reduce((x, tok) => x.replaceAll(tok, '***'), t);
   if (!queue.length) {
-    // Nur Worker: kein Konto frei (C7) — sofort zurück an den Lead, kein Warten.
-    emitStatus(live, '⚠️ Für diesen Worker ist gerade kein Konto frei (Melious unter der Reserve oder aus, Claude-Deckel für Worker erreicht oder ein Claude-Konto erschöpft) — der Lead macht es selbst.');
+    // Worker: kein Konto frei (C7) — sofort zurück an den Lead, kein Warten. Leads, Chats und der Hauptchat: kein Worker-Text.
+    emitStatus(live, live.worker
+      ? '⚠️ Für diesen Worker ist gerade kein Konto frei (Melious unter der Reserve oder aus, Claude-Deckel für Worker erreicht oder ein Claude-Konto erschöpft) — der Lead macht es selbst.'
+      : '⚠️ Kein Claude-Konto ist gerade nutzbar: neue Konten ohne Nutzungsdaten werden erst nach einem erfolgreichen Probe-Aufruf freigegeben, und der ist (noch) nicht gelungen. Bitte in einer Minute erneut senden.');
     live.outcome = 'rate_limit';
     setTurn(key, { start: live.t0, end: Date.now(), outcome: 'rate_limit' });
     end(live);
@@ -2150,7 +2175,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         }
         if (!live.rateLimited || live.abort.signal.aborted) break;
         // Paket D: 402/Energie bei Melious → Breaker mit Backoff, der Schlüssel wird NICHT geparkt (06.11.: geparkter Schlüssel ließ die Stränge stehen).
-        if (isMelious(acct) && budgetAn() && live.melious?.fehler === 'energie') budgetFehler(user);
+        if (isMelious(acct) && budgetAn() && live.melious?.fehler === 'energie') budgetFehler(req.userId);
         else markExhausted(user, acct, live.rateLimited.resetsAt);
         if (!queue[i + 1] && kontenFehlen && !live.worker) {
           // Liste fehlte: nicht „ausgeschöpft“ melden, sondern nachladen und mit der vollen Kette weitermachen (ohne schon Versuchtes).
@@ -2356,6 +2381,7 @@ const laufend = () => [...delegs.values()].filter((d) => d.status === 'laeuft').
 
 /** Prüfbefehle mit eigener, danach gelöschter HOME. */
 async function pruefenSauber(dir: string, base: string, o: { fest?: { ref: string; sha: string } | null; maxMs?: number; nur?: (name: string) => boolean } = {}) {
+  if (process.env.BRIDGE_TEST_PRUEF_WIRFT && existsSync(process.env.BRIDGE_TEST_PRUEF_WIRFT)) throw new Error('Testnaht: Prüfung wirft');   // nur Tests: Flag-Datei
   const env = checkEnv();
   try { return await pruefen(dir, base, env, o); } finally { raeumeEnv(env); }
 }
@@ -2765,15 +2791,14 @@ async function strangOc2(live: Live, req: TurnRequest, prompt: string): Promise<
   const bestofnPruefe = async (dir: string, base: string, art: 'schnell' | 'voll') => {
     const fest = await strangFest(live.key, cwd);
     const r = await pruefenSauber(dir, base, { fest, maxMs: 600_000, ...(art === 'schnell' ? { nur: (n: string) => /tsc|typ|lint/i.test(n) } : {}) });
-    const rot = r.ergebnisse.filter((x) => !x.ok);
-    return { ok: !rot.length, log: rot.map((x) => `${x.name}: ${x.ausgabe.slice(-800)}`).join('\n'), tsc: !rot.some((x) => /tsc|typ/i.test(x.name)), lint: !rot.some((x) => /lint/i.test(x.name)) };
+    return pruefUrteil(r);
   };
   const deps: BauDeps = {
     status: (t) => emitStatus(live, t),
     async bauen(p, runde) {
       if (live.abort.signal.aborted) return { ok: false, text: '', grund: 'abgebrochen' };
       // Best-of-N (bauerrennen.ts, BRIDGE_BESTOFN=aus schaltet ab): erster Zug = zwei Bauer, danach Verlierer-Retry/Eskalation statt Fix.
-      if (runde === 1) { const b = await bestofnStrang({ cwd, id: bestofnId(live.key), prompt: p, statistikPfad: join(cfg.stateDir, 'bauerstatistik.json'), status: (t) => emitStatus(live, t), zug: ocZug, pruefe: bestofnPruefe, userId: req.userId }); if (b) return b; }
+      if (runde === 1) { const b = await bestofnStrang({ cwd, id: bestofnId(live.key), prompt: p, statistikPfad: join(cfg.stateDir, 'bauerstatistik.json'), status: (t) => emitStatus(live, t), zug: ocZug, pruefe: bestofnPruefe, eingerichtet: async () => !!(await pruefBefehle(cwd, await strangFest(live.key, cwd)))?.list.length, userId: req.userId }); if (b) return b; }
       else { const f = await bestofnAblehnung(bestofnId(live.key), p.slice(0, 500)); if (f?.art === 'verlierer') return { ok: true, text: `Verlierer-Diff (${f.bauer}) angewendet`, grund: '', modell: `${f.bauer} (Best-of-N)` }; const z = ablehnungsZiel(f); if (z) return z; }   // Eskalation = Sonnet-Klasse: ok:false → Claude-Rückfall, nie 'sonnet' auf OC2
       emitStatus(live, `⏳ opencode 2 (Melious ${modell}) baut …${runde > 1 ? ` (Runde ${runde}: Befunde des Claude-Verifizierers)` : ''}`);
       const t0 = Date.now();
@@ -3412,7 +3437,8 @@ export async function phaseWechseln(userId: string, convId: string, b: { phase?:
   if (!statSync(file).isFile()) return { ok: false, status: 400, error: `${raw} ist keine Datei.` };
   if (statSync(file).size > 4 * KAPPUNG.uebergabe) return { ok: false, status: 400, error: `Übergabe ist zu groß (höchstens ${KAPPUNG.uebergabe} Zeichen, C8).` };
   // Laufende Worker kennt die neue Sitzung nicht — erst abwarten (sonst enden sie verwaist mit dem Zug).
-  if (runningOf(key).length) return { ok: false, status: 409, error: `Noch ${runningOf(key).length} Worker laufen — erst delegation_stand abwarten und Ergebnisse in die Übergabe schreiben, dann wechseln.` };
+  const workerLaufen = (): Res | null => runningOf(key).length ? { ok: false, status: 409, error: `Noch ${runningOf(key).length} Worker laufen — erst delegation_stand abwarten und Ergebnisse in die Übergabe schreiben, dann wechseln.` } : null;
+  const w0 = workerLaufen(); if (w0) return w0;
   let text = readFileSync(file, 'utf8');
   const c = checkUebergabe(text);
   if (!c.ok) return { ok: false, status: 400, error: `Übergabe ungültig (C1): ${warum(c)}. Kein Wechsel — Datei ergänzen und noch einmal.` };
@@ -3426,13 +3452,19 @@ export async function phaseWechseln(userId: string, convId: string, b: { phase?:
     if (mb) {
       // Höchstens 10 min (Pass B, 10: sonst greift die Leerlaufgrenze des Lead-Zugs); Zeitgeber vorher und nachher frisch.
       armTurnTimer(lead);
-      const r = await pruefenSauber(e.dir, mb, { fest, maxMs: 600_000 });
+      let r: Awaited<ReturnType<typeof pruefenSauber>> | undefined;
+      let pruefFehler = '';
+      try { r = await pruefenSauber(e.dir, mb, { fest, maxMs: 600_000 }); }
+      catch (err) { pruefFehler = err instanceof Error ? err.message : String(err); }
+      finally { if (lives.get(key) === lead) armTurnTimer(lead); }   // immer wieder scharf, auch wenn die Prüfung wirft
       if (lives.get(key) !== lead) return { ok: false, status: 409, error: 'Der Zug ist inzwischen zu Ende — kein Wechsel.' };
-      armTurnTimer(lead);
+      if (!r) return { ok: false, status: 500, error: `Prüfung der Brücke fehlgeschlagen (${pruefFehler.slice(0, 200)}) — kein Wechsel, noch einmal versuchen.` };
       pruefText = `\n\n## Prüfausgaben der Brücke (Ersatz-Lead ${ersatz.join(', ')})\n\n${r.ergebnisse.map((p) => `- ${p.ok ? 'grün' : 'ROT'} ${p.name} (\`${p.befehl}\`)${p.ok ? '' : `: ${p.ausgabe.slice(-400)}`}`).join('\n')}${r.eingerichtet ? '' : '\n- keine Prüfbefehle eingerichtet (.werkbank/pruefungen.json)'}`;
       text += pruefText;
     }
   }
+  // Während der Prüfung (bis 10 min) kann der Lead einen Worker gestartet haben — nochmal prüfen, sonst endet er verwaist.
+  const w1 = workerLaufen(); if (w1) return w1;
   e.phaseNeu = { phase, text, c2, at: Date.now() };
   e.vorgeprueft = nachPush && b.vorpruefung === 'gruen';   // nur review→push mit grünem Urteil; jeder andere Wechsel setzt zurück
   saveMap();

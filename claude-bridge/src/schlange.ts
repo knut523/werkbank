@@ -37,6 +37,8 @@ function speichern(): void {
 }
 // Drain vor dem Neustart (Release-Blocker): ab SIGTERM/SIGINT keine neuen Plätze; Wartende bleiben in schlange.json.
 let drainAb = false;
+/** Läuft der Drain? (server.ts: neue Züge ablehnen, den Rest weiter bedienen.) */
+export const drainLaeuft = () => drainAb;
 /** Frist in Sekunden (BRIDGE_DRAIN_SEK, Vorgabe 120); BRIDGE_DRAIN=aus: sofort beenden wie bisher. */
 export const drainSek = () => { if (String(process.env.BRIDGE_DRAIN ?? '').toLowerCase() === 'aus') return 0; const s = Number(process.env.BRIDGE_DRAIN_SEK ?? 120); return Number.isFinite(s) && s >= 0 ? s : 120; };
 /** Keine neuen Plätze mehr vergeben, laufende Läufe bis zur Frist beenden lassen, Schlange sichern. Gibt zurück, ob alles leer lief. */

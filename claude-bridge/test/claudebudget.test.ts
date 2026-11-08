@@ -89,7 +89,7 @@ test('7 Hauptchat-Tagesbudget, Tageswechsel, Einhängung in kapazitaetGrund, Sch
   assert.equal(b.claudeBudgetGrund({ rolle: 'strang' }, T0, env), '');
   assert.equal(b.claudeBudgetGrund({ rolle: 'hauptchat' }, T0 + 24 * H, env), '');
   const k = { meliousProzent: 90, unterBoden: false, claudeFrei: true, claudeFreiAb: null, prWartend: 0 };
-  const o = { neu: false, bauend: false, rolle: 'hauptchat' };
+  const o = { neu: false, bauend: false, rolle: 'hauptchat', jetzt: T0 };  // feste Zeit: sonst entscheidet die Wanduhr (anderer Tag als T0 → Tagesbudget zurückgesetzt)
   const alt = process.env.BRIDGE_HAUPTCHAT_TAGES_PCT; process.env.BRIDGE_HAUPTCHAT_TAGES_PCT = '10';
   try {
     assert.match(kapazitaetGrund(k, o, {}), /Tagesbudget/);
