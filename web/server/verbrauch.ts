@@ -17,9 +17,11 @@ export const LAEUFER_DE: Record<Laeufer, string> = { claude: 'Claude-Konto', jco
 export const AUFGABEN = ['review', 'review-tief', 'lesen', 'bau', 'gegenpruefung', 'hauptchat', 'sonst'] as const;
 export type Aufgabe = typeof AUFGABEN[number];
 export const AUFGABE_DE: Record<Aufgabe, string> = { review: 'Review regulär', 'review-tief': 'Review tief', lesen: 'Lesen', bau: 'Bauen', gegenpruefung: 'Gegenprüfung', hauptchat: 'Hauptchat', sonst: 'Sonst' };
+export const ROLLEN = ['bauer', 'pruefer', 'leser', 'endpruefung', 'hauptchat'] as const;
+export type Rolle = typeof ROLLEN[number];
 export type Ergebnis = 'fertig' | 'abgebrochen' | 'offen';
 
-export interface Zug { at: Date | number; conv: string | null; art: string; anbieter: string; modell: string; konto?: string | null; laeufer?: string | null; aufgabe?: string | null; input: number; output: number; cacheRead: number; energie: number; outcome: string | null; ms: number; parent?: string | null }
+export interface Zug { at: Date | number; conv: string | null; art: string; anbieter: string; modell: string; konto?: string | null; laeufer?: string | null; aufgabe?: string | null; input: number; output: number; cacheRead: number; energie: number; outcome: string | null; ms: number; parent?: string | null; turns?: number | null; rolle?: string | null; prKopf?: string | null; bauer?: string | null; sieger?: boolean | null; abgelehnt?: boolean | null }
 export interface RunInfo { id: string; conv: string; titel: string; tiefe?: string | null; profil?: string | null; laeufer?: string | null; code?: boolean; zustand?: string | null }
 
 /** Läufer eines Versuchs (rein): ausdrücklich gebucht, sonst aus Modellname bzw. Anbieter. */
@@ -62,7 +64,8 @@ const tokensOf = (z: { input: number; output: number; cacheRead?: number }) => M
 
 export interface Summe { laeufe: number; versuche: number; input: number; output: number; cacheRead: number; energie: number; ms: number }
 const leer = (): Summe => ({ laeufe: 0, versuche: 0, input: 0, output: 0, cacheRead: 0, energie: 0, ms: 0 });
-export interface Lauf { key: string; strand: string | null; titel: string; laeufer: Laeufer; modelle: string[]; aufgabe: Aufgabe; ergebnis: Ergebnis; input: number; output: number; cacheRead: number; energie: number; ms: number; versuche: number; letzter: number }
+export interface Lauf { key: string; strand: string | null; titel: string; laeufer: Laeufer; modelle: string[]; aufgabe: Aufgabe; ergebnis: Ergebnis; input: number; output: number; cacheRead: number; energie: number; ms: number; versuche: number; letzter: number;
+  turns?: number; rolle?: string | null; prKopf?: string | null; bauer?: string | null; sieger?: boolean | null; abgelehnt?: boolean | null }
 export interface Vergleich { aufgabe: Aufgabe; laeufer: Laeufer; n: number; tokensMedian: number; energieMedian: number; msMedian: number }
 export interface Ausreisser { key: string; titel: string; aufgabe: Aufgabe; laeufer: Laeufer; wert: 'tokens' | 'energie'; ist: number; median: number; faktor: number }
 
@@ -85,10 +88,16 @@ export function verbrauchAus(zuege: Zug[], runs: RunInfo[], now: number, o: { ta
     let x = laeufe.get(key);
     if (!x) {
       x = { key, strand: r?.id ?? null, titel: r?.titel ?? (z.art === 'gegenpruefung' ? 'Gegenprüfung' : z.art === 'hauptchat' ? 'Hauptchat' : 'Strang (ohne Eintrag)'),
-        laeufer: l, modelle: [], aufgabe: aufgabeVon(z, r), ergebnis: 'offen', input: 0, output: 0, cacheRead: 0, energie: 0, ms: 0, versuche: 0, letzter: at, anteil: new Map(), ausgang: null, lead: null, in: { heute: new Set(), woche: new Set() } };
+        laeufer: l, modelle: [], aufgabe: aufgabeVon(z, r), ergebnis: 'offen', input: 0, output: 0, cacheRead: 0, energie: 0, ms: 0, versuche: 0, letzter: at,
+        turns: 0, rolle: z.rolle ?? null, prKopf: z.prKopf ?? null, bauer: z.bauer ?? null, sieger: z.sieger ?? null, abgelehnt: z.abgelehnt ?? null,
+        anteil: new Map(), ausgang: null, lead: null, in: { heute: new Set(), woche: new Set() } };
       laeufe.set(key, x);
     }
     x.input += z.input ?? 0; x.output += z.output ?? 0; x.cacheRead += z.cacheRead ?? 0; x.energie += z.energie ?? 0; x.ms += z.ms ?? 0; x.versuche++; x.letzter = at;
+    x.turns = (x.turns ?? 0) + (z.turns ?? 1);
+    if (z.rolle && !x.rolle) x.rolle = z.rolle; if (z.prKopf && !x.prKopf) x.prKopf = z.prKopf; if (z.bauer && !x.bauer) x.bauer = z.bauer;
+    if (x.sieger === null && typeof z.sieger === 'boolean') x.sieger = z.sieger;
+    if (x.abgelehnt === null && typeof z.abgelehnt === 'boolean') x.abgelehnt = z.abgelehnt;
     if (z.modell && !x.modelle.includes(z.modell)) x.modelle.push(z.modell);
     // Pass B: Läufer des Laufs = der des Leads (Versuche ohne Worker); nur ohne Lead nach Anteil (Tokens inkl. Cache).
     if (z.art !== 'worker') x.lead = l;
@@ -134,6 +143,60 @@ export function verbrauchAus(zuege: Zug[], runs: RunInfo[], now: number, o: { ta
   };
 }
 
+export interface Kennzahlen { tage: number; tokensJeTurn: number; opusAnteil: number; reviewsJePrKopf: number; claudeTokensJePr: number; reworkQuote: Record<string, number>; siegQuote: Record<string, number> }
+
+const laufKeyVon = (z: Pick<Zug, 'art' | 'conv'>, at: number) => z.art === 'gegenpruefung' ? `gp:${z.conv ?? ''}:${at}` : z.art === 'hauptchat' ? `hc:${at}` : z.conv ? `s:${z.conv}` : `x:${at}`;
+
+/**
+ * Rein (Ledger-Kennzahlen, Paket C — council-bestofn-0811: Siegquote je Modell, Ablehnungsquote, Claude-Tokens je PR):
+ * Tokens je Zug (Züge ohne Buchung zählen 1), Opus-Anteil an den Tokens, Reviews je PR-Head (Mittel), Claude-Tokens je PR-Head (Mittel
+ * der Summe), Nacharbeit- und Siegquote je Bauer. Alte Einträge ohne die neuen Felder zählen nur Tokens/Züge und bleiben draußen.
+ */
+export function kennzahlenAus(zuege: Zug[], now: number, tage = 30): Kennzahlen {
+  const ab = now - tage * 86400_000;
+  type X = { tokens: number; opus: number; claude: number; turns: number; prKopf: string | null; rolle: string | null; bauer: string | null; sieger: boolean | null; abgelehnt: boolean | null };
+  const je = new Map<string, X>();
+  for (const z of zuege) {
+    const at = t(z.at);
+    if (at < ab) continue;
+    const k = laufKeyVon(z, at);
+    const x: X = je.get(k) ?? { tokens: 0, opus: 0, claude: 0, turns: 0, prKopf: null, rolle: null, bauer: null, sieger: null, abgelehnt: null };
+    if (!je.has(k)) je.set(k, x);
+    const tk = tokensOf(z);
+    x.tokens += tk; if (/opus/i.test(String(z.modell ?? ''))) x.opus += tk; if (z.anbieter === 'claude') x.claude += tk;
+    x.turns += z.turns ?? 1;
+    if (z.prKopf && !x.prKopf) x.prKopf = z.prKopf; if (z.rolle && !x.rolle) x.rolle = z.rolle; if (z.bauer && !x.bauer) x.bauer = z.bauer;
+    if (x.sieger === null && typeof z.sieger === 'boolean') x.sieger = z.sieger;
+    if (x.abgelehnt === null && typeof z.abgelehnt === 'boolean') x.abgelehnt = z.abgelehnt;
+  }
+  const alle = [...je.values()];
+  const tokens = alle.reduce((s, x) => s + x.tokens, 0), zuegeAnzahl = alle.reduce((s, x) => s + x.turns, 0);
+  const kopfe = new Set(alle.map((x) => x.prKopf).filter(Boolean));
+  const jeBauer = new Map<string, { n: number; abgelehnt: number; sieger: number }>();
+  for (const x of alle) if (x.bauer) { const b = jeBauer.get(x.bauer) ?? { n: 0, abgelehnt: 0, sieger: 0 }; b.n++; if (x.abgelehnt) b.abgelehnt++; if (x.sieger) b.sieger++; jeBauer.set(x.bauer, b); }
+  const quote = (aus: (b: { n: number; abgelehnt: number; sieger: number }) => number) => Object.fromEntries([...jeBauer].map(([b, x]) => [b, Math.round((aus(x) / x.n) * 100) / 100]));
+  const claudeJePr = new Map<string, number>();
+  for (const x of alle) if (x.prKopf) claudeJePr.set(x.prKopf, (claudeJePr.get(x.prKopf) ?? 0) + x.claude);
+  return {
+    tage,
+    tokensJeTurn: zuegeAnzahl ? Math.round((tokens / zuegeAnzahl) * 10) / 10 : 0,
+    opusAnteil: tokens ? Math.round((alle.reduce((s, x) => s + x.opus, 0) / tokens) * 1000) / 10 : 0,
+    reviewsJePrKopf: kopfe.size ? Math.round((alle.filter((x) => x.rolle === 'pruefer' && x.prKopf).length / kopfe.size) * 100) / 100 : 0,
+    claudeTokensJePr: claudeJePr.size ? Math.round([...claudeJePr.values()].reduce((s, v) => s + v, 0) / claudeJePr.size) : 0,
+    reworkQuote: quote((x) => x.abgelehnt), siegQuote: quote((x) => x.sieger),
+  };
+}
+
+export const ledgerAn = (env: Record<string, string | undefined> = process.env) => String(env.WERKBANK_LEDGER ?? '').trim().toLowerCase() !== 'aus';
+
+/** Die Ledger-Kennzahlen der Person über `zeitraumTage` (Zug_log). Aus mit WERKBANK_LEDGER=aus (Muster BRIDGE_KAPAZITAET). */
+export async function kennzahlen(u: User, zeitraumTage = 30, now = Date.now(), env: Record<string, string | undefined> = process.env): Promise<Kennzahlen | null> {
+  if (!ledgerAn(env)) return null;
+  const zs: any[] = await wb().collection('zug_log').find({ userId: u.id, at: { $gte: new Date(now - zeitraumTage * 86400_000) } })
+    .project({ at: 1, conv: 1, art: 1, anbieter: 1, modell: 1, input: 1, output: 1, cacheRead: 1, turns: 1, rolle: 1, prKopf: 1, bauer: 1, sieger: 1, abgelehnt: 1 }).limit(20_000).toArray();
+  return kennzahlenAus(zs as unknown as Zug[], now, zeitraumTage);
+}
+
 /** Eine Gegenprüfung (challenge: melious-challenge; Pass C: Ensemble oc2 bzw. Rückfall jcode) als Lauf buchen (echte Energie aus billing_cost bzw. der Buchung) — nur Zahlen, kein Inhalt. */
 export async function bucheGegenpruefung(u: User, conv: unknown, art: unknown, r: { ok: boolean; energie?: number; modell?: string; usage?: { input?: number; output?: number; cacheRead?: number } }, ms: number, now = Date.now(), laeufer: Laeufer = 'melious-challenge'): Promise<void> {
   await wb().collection('zug_log').insertOne({
@@ -147,7 +210,7 @@ export async function bucheGegenpruefung(u: User, conv: unknown, art: unknown, r
 /** Das Verbrauchsbuch der Person (30 Tage). `runs`: die Stränge mit ihrem Zustand (aus der Unter-Chat-Liste). */
 export async function verbrauchView(u: User, runs: () => Promise<RunInfo[]>, now = Date.now()) {
   const zs: any[] = await wb().collection('zug_log').find({ userId: u.id, at: { $gte: new Date(now - 30 * 86400_000) } })
-    .project({ at: 1, conv: 1, art: 1, anbieter: 1, modell: 1, konto: 1, laeufer: 1, aufgabe: 1, input: 1, output: 1, cacheRead: 1, energie: 1, outcome: 1, ms: 1, parent: 1 }).sort({ at: -1 }).limit(20_000).toArray();
+    .project({ at: 1, conv: 1, art: 1, anbieter: 1, modell: 1, konto: 1, laeufer: 1, aufgabe: 1, input: 1, output: 1, cacheRead: 1, energie: 1, outcome: 1, ms: 1, parent: 1, turns: 1, rolle: 1, prKopf: 1, bauer: 1, sieger: 1, abgelehnt: 1 }).sort({ at: -1 }).limit(20_000).toArray();
   const r = await runs().catch(() => [] as RunInfo[]);
   return { ...verbrauchAus(zs, r, now), at: new Date(now).toISOString(), quelle: 'zug_log (Brücke je Versuch: Tokens, Energie, Dauer) und Gegenprüfungen über Melious; 30 Tage' };
 }
