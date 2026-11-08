@@ -35,7 +35,7 @@ import { modellReihe, ensembleLauf, FLASH, GLM52, type Art } from './modellwahl.
 import { schaetze, passt, passtJcode, schaetzungText, speicherStand, jcodeTopfGb, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, meliousHartAus, unterBoden, meliousBoden, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
-import { istJobtyp, budgetPersistenz, type Jobtyp, kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, jobtypVon, RANG, budgetBuche, budgetFehler, budgetTick, budgetMelder, leseAktualisieren, leseAufClaude, budgetAn, type Kapazitaet } from './kapazitaet.ts';
+import { istJobtyp, budgetPersistenz, type Jobtyp, kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, jobtypVon, RANG, budgetBuche, budgetFehler, budgetTick, budgetFreigeben, budgetMelder, leseAktualisieren, leseAufClaude, budgetAn, type Kapazitaet } from './kapazitaet.ts';
 import { auslastung as claudeAuslastung } from './auslastung.ts';
 
 export interface Sink {
@@ -776,6 +776,7 @@ function end(live: Live) {
   if (live.pending) { clearTimeout(live.pending.timer); live.pending = null; }
   detach(live);
   lives.delete(live.key);
+  budgetFreigeben(live.userId, live.key);   // Paket D: Vorabbuchung ohne Abrechnung zurück (sonst leert sich der Eimer an Zügen ohne Melious-Verbrauch)
   wecke();   // ein Platz ist frei (Plan 213 S1a)
 }
 

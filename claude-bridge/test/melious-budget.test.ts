@@ -211,3 +211,10 @@ test('Airbag-Meldung: einmal je Auslösung (nicht je Tick), erneut erst nach Erh
   k.budgetAnker(U, { stand: 90_000, echt: true }, TAG + 20_000, {}); k.budgetGrund(U, 'bauer', TAG + 20_000, {});
   assert.deepEqual(m, ['airbag', 'airbag'], 'zweite Auslösung nach Erholung');
 });
+
+test('Vorabbuchung ohne Abrechnung wird beim Zugende freigegeben (sonst hängt die Schlange am leeren Eimer)', () => {
+  const env = { BRIDGE_MELIOUS_BUDGET: 'an' } as any;
+  const u = 'frei-' + Math.random();
+  for (let i = 0; i < 50; i++) { k.budgetBuche(u, 'k' + i, 'bauer', 1_000, env); k.budgetFreigeben(u, 'k' + i, 1_000, env); }
+  assert.equal(k.budgetBuche(u, 'neu', 'bauer', 1_000, env).ok, true);
+});
