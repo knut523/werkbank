@@ -232,3 +232,17 @@ test('Drain: keine neuen Plätze, Frist wird abgewartet, Wartende bleiben in sch
   assert.equal(JSON.parse(readFileSync(f, 'utf8')).plaetze[0].key, 'w');
   zu = true; assert.equal(await w, 'zu');
 });
+
+test('Rollback: schlange.json im alten Format (ohne bis/frueher) wird gelesen, das neue Format behält plaetze/key/userId/since', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'rb-'));
+  const f = join(d, 'schlange.json');
+  (await import('node:fs')).writeFileSync(f, JSON.stringify({ plaetze: [{ key: 'alt', userId: 'u', since: 5, vorrang: false }] }));
+  merkeIn(f);
+  let zu = false;
+  const w = warte({ key: 'alt', userId: 'u', vorrang: false }, { frei: () => false, geschlossen: () => zu, melde: () => {}, takt: 10 });
+  await new Promise((r) => setTimeout(r, 30));
+  const j = JSON.parse(readFileSync(f, 'utf8'));
+  assert.equal(j.plaetze[0].since, 5, 'alter Platz übernommen');
+  assert.deepEqual(Object.keys(j.plaetze[0]).filter((k) => ['key', 'userId', 'since', 'vorrang'].includes(k)).sort(), ['key', 'since', 'userId', 'vorrang']);
+  zu = true; assert.equal(await w, 'zu');
+});

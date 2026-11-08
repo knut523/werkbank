@@ -125,7 +125,9 @@ case "${1:-}" in
     next_steps
     exit $rc ;;
   down) "$HERE/stop.sh" ;;
-  restart) drain; "$HERE/stop.sh"; "$HERE/start.sh" && health ;;
+  # Rollback-Notiz: schlange.json (.runtime/bridge/) hat ein altes und neues Format-kompatibles Layout (plaetze/frueher, Felder nur ergänzt) —
+  # eine ältere Brücke liest sie weiter; vor jedem Neustart/Rollback eine Sicherung als schlange.json.vor-neustart (Release-Skript release-live-2.0.sh gibt es in diesem Zweig nicht).
+  restart) drain; cp -f "$RT/bridge/schlange.json" "$RT/bridge/schlange.json.vor-neustart" 2>/dev/null; "$HERE/stop.sh"; "$HERE/start.sh" && health ;;
   status) "$HERE/status.sh" ;;
   update)
     echo "OLAF Workspace: auffrischen"
