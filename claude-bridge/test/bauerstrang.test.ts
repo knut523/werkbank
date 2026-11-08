@@ -366,3 +366,26 @@ test('Fix 2: Fixer schwächt den EIGENEN neuen Test des Bauers → nicht ok, Gru
     assert.ok(ev.find((x) => x.id === 'fx2b').gateLog.some((l: string) => /Tamper-Guard nach der Strang-Prüfung.*neu\.test\.ts/.test(l)), JSON.stringify(ev.find((x) => x.id === 'fx2b')?.gateLog));
   } finally { bauerEreignisse.off('lauf', h); rmSync(wurzel, { recursive: true, force: true }); }
 });
+
+test('Fix 3: BRIDGE_STRANGPRUEFUNG=aus — Retry-Sieger mit rotem vollen Lauf wird nicht angewendet (Sonnet-Übergabe)', async () => {
+  const { wurzel, cwd } = repo();
+  const aufrufe: string[] = [];
+  const retryZug = async (dir: string, m: string) => { aufrufe.push(m); writeFileSync(join(dir, 'src/a.ts'), zeilen(aufrufe.length > 2 ? 3 : 9)); return { ok: true, text: `fertig ${m}`, grund: '' }; };
+  let schnellN = 0; const voll: string[] = [];
+  const p = async (_d: string, _b: string, art: 'schnell' | 'voll') => { if (art === 'voll') { voll.push(art); return { ok: false, log: 'voll rot' }; } return ++schnellN <= 2 ? { ok: false, log: 'tsc rot im Rennen' } : { ok: true, log: '' }; };
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx3', prompt: 'ändere src/a.ts', env: { BRIDGE_STRANGPRUEFUNG: 'aus' }, zug: retryZug, pruefe: p });
+    assert.equal(aufrufe.length, 3, 'zwei Rennbauer plus Retry');
+    assert.equal(voll.length, 1, 'voller Lauf lief am Retry-Sieger');
+    assert.equal(r?.ok, false, JSON.stringify(r)); assert.match(r!.grund, /Sonnet-Klasse/);
+    assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), 'export const a = 0;\n', 'nichts angewendet');
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('Fix 3: Schleife aus, normaler Sieger — voller Lauf genau einmal (kein Doppellauf)', async () => {
+  const { wurzel, cwd } = repo(); let voll = 0;
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx3b', prompt: 'ändere src/a.ts', env: { BRIDGE_STRANGPRUEFUNG: 'aus' }, zug: zug({ [FLASH]: 6, [DEEPSEEK]: 2 }), pruefe: async (_d, _b, art) => { if (art === 'voll') voll++; return { ok: true, log: '' }; } });
+    assert.equal(r?.ok, true); assert.equal(voll, 1);
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});

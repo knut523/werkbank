@@ -166,6 +166,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     gateLog.push(`voll nach Schleife: ${v.ok ? 'grün' : `rot ${v.log.slice(-300)}`}`);
     return v;
   }
+  const volliert = new WeakSet<object>();   // Kandidaten, an denen rennen() 'voll' schon gelaufen ist (Retry-Sieger: nie)
   const deps: Deps = {
     bauen(bauer, a, op) {
       let fertig = false;
@@ -180,6 +181,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
       return { tsc: p.tsc ?? p.ok, lint: p.lint ?? p.ok, tests: p.ok && t.ok, log: p.ok ? t.log : p.log };
     },
     async voll(k) {
+      volliert.add(k);
       const s = subs.get(k.bauer)!;
       const v = await pruefSemaphor.run(() => o.pruefe(s.dir, s.base, 'voll'));
       return v.ok && schleifeAn ? strangPruefen(k) : v;   // L2: Sieger-Kandidat durch die Prüfschleife; rot → Rangfolge/L3-Kette in rennen()
@@ -187,10 +189,11 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     ledger: schleifeAn ? (e) => { ledgerEvent = e; } : emittiereLauf,
   };
   const lauf = await rennen(deps, { id: o.id, plan: o.prompt, dateien }, { env, stat });
-  // Ein Retry-Sieger (L3c) läuft in rennen() nicht durch voll: hier nachholen ; rot → Kette erschöpft → Sonnet.
-  if (schleifeAn && lauf.sieger && !geschleift.has(lauf.sieger) && subs.has(lauf.sieger.bauer)) {
-    const v = await strangPruefen(lauf.sieger).catch((e) => ({ ok: false, log: String(e) }));
-    if (!v.ok) { lauf.logs.push(`${lauf.sieger.bauer}: Strang-Prüfung rot\n${v.log.slice(-1500)}`); lauf.sieger = null; lauf.verlierer = undefined; if (!zone) lauf.weiter = 'sonnet'; if (ledgerEvent) ledgerEvent.sieger = null; }
+  // Ein Retry-Sieger (L3c) läuft in rennen() nicht durch voll: hier nachholen (mit Schleife: Strang-Prüfung samt vollem Lauf, ohne: nur voll); rot → Kette erschöpft → Sonnet.
+  if (lauf.sieger && !geschleift.has(lauf.sieger) && !volliert.has(lauf.sieger) && subs.has(lauf.sieger.bauer)) {
+    const w = lauf.sieger, ws = subs.get(w.bauer)!;
+    const v = await (schleifeAn ? strangPruefen(w) : pruefSemaphor.run(() => o.pruefe(ws.dir, ws.base, 'voll'))).catch((e) => ({ ok: false, log: String(e) }));
+    if (!v.ok) { lauf.logs.push(`${w.bauer}: ${schleifeAn ? 'Strang-Prüfung' : 'voller Lauf'} rot\n${v.log.slice(-1500)}`); lauf.sieger = null; lauf.verlierer = undefined; if (!zone) lauf.weiter = 'sonnet'; if (ledgerEvent) ledgerEvent.sieger = null; }
   }
   if (ledgerEvent) emittiereLauf({ ...ledgerEvent, ...(phasen ? { phasen } : {}), gateLog });
   if (o.statistikPfad) statistikSpeichern(o.statistikPfad, stat);
