@@ -40,6 +40,13 @@ export async function kandidatDiff(dir: string, base: string): Promise<string> {
   // core.quotepath=false: Nicht-ASCII-Pfade bleiben im Header unquotiert lesbar.
   return (await git(dir, '-c', 'core.quotepath=false', 'diff', '--cached', '--binary', '--no-color', '--no-renames', base)).out;
 }
+/** Urteil über das Ergebnis der Prüfbefehle. */
+export function pruefUrteil(r: { eingerichtet: boolean; ergebnisse: { name: string; ok: boolean; ausgabe: string }[] }) {
+  // Ohne .werkbank/pruefungen.json läuft nur der leere diff-check: „grün“ wäre ein Freispruch ohne tsc/lint/Tests.
+  if (!r.eingerichtet) return { ok: false, log: 'keine Prüfbefehle eingerichtet (.werkbank/pruefungen.json) — kein automatischer Sieger', tsc: true, lint: true };
+  const rot = r.ergebnisse.filter((x) => !x.ok);
+  return { ok: !rot.length, log: rot.map((x) => `${x.name}: ${x.ausgabe.slice(-800)}`).join('\n'), tsc: !rot.some((x) => /tsc|typ/i.test(x.name)), lint: !rot.some((x) => /lint/i.test(x.name)) };
+}
 /** Betroffene Tests: geänderte *.test.ts mit `node --test` im nächsten Ordner mit package.json (über den Semaphor). */
 async function betroffeneTests(dir: string, diff: string): Promise<{ ok: boolean; log: string }> {
   const dateien = [...diff.matchAll(/^diff --git a\/\S+ b\/(\S+)$/gm)].map((m) => m[1]).filter((f) => /\.test\.[cm]?[jt]s$/.test(f));

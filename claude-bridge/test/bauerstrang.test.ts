@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { bestofnStrang, bestofnAblehnung, ablehnungsZiel, kandidatDiff } from '../src/bauerstrang.ts';
+import { bestofnStrang, bestofnAblehnung, ablehnungsZiel, kandidatDiff, pruefUrteil } from '../src/bauerstrang.ts';
 import { bauerEreignisse, statistikLaden, tamperGruende, SONNET } from '../src/bauerrennen.ts';
 import { FLASH, DEEPSEEK, GLM } from '../src/modellwahl.ts';
 import { BAUER_REGELN } from '../src/strangpruefung.ts';
@@ -388,4 +388,15 @@ test('Fix 3: Schleife aus, normaler Sieger — voller Lauf genau einmal (kein Do
     const r = await bestofnStrang({ cwd, id: 'fx3b', prompt: 'ändere src/a.ts', env: { BRIDGE_STRANGPRUEFUNG: 'aus' }, zug: zug({ [FLASH]: 6, [DEEPSEEK]: 2 }), pruefe: async (_d, _b, art) => { if (art === 'voll') voll++; return { ok: true, log: '' }; } });
     assert.equal(r?.ok, true); assert.equal(voll, 1);
   } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('Fix 4: pruefUrteil — ohne eingerichtete Prüfbefehle kein Sieger (ok:false, feste Meldung); mit grünen Prüfungen ok; rot bleibt rot', () => {
+  const gruen = { name: 'diff-check', befehl: 'git diff --check', ok: true, code: 0, ausgabe: '', ms: 1 };
+  for (const art of ['schnell', 'voll'] as const) {
+    const leer = pruefUrteil({ eingerichtet: false, ergebnisse: [gruen] });
+    assert.equal(leer.ok, false, art); assert.equal(leer.log, 'keine Prüfbefehle eingerichtet (.werkbank/pruefungen.json) — kein automatischer Sieger');
+  }
+  assert.equal(pruefUrteil({ eingerichtet: true, ergebnisse: [gruen] }).ok, true);
+  const rot = pruefUrteil({ eingerichtet: true, ergebnisse: [gruen, { ...gruen, name: 'tsc', ok: false, ausgabe: 'TS2322' }] });
+  assert.equal(rot.ok, false); assert.equal(rot.tsc, false); assert.equal(rot.lint, true); assert.match(rot.log, /tsc: TS2322/);
 });
