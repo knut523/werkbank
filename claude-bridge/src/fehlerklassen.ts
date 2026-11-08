@@ -12,11 +12,3 @@ export function fehlerklasse(code: string | null | undefined, text = ''): Fehler
   return 'sonst';
 }
 
-/** Rein: Wartezeit in ms bis zum nächsten Versuch; null = nicht wiederholen (Eingabe) bzw. sofort (sonst). Backoff 1, 2, 4, 8, 16 min. */
-export function wartezeitMs(k: Fehlerklasse, o: { resetsAt?: number | null; versuch?: number; now?: number } = {}): number | null {
-  const now = o.now ?? Date.now();
-  if (k === 'eingabe') return null;
-  if (k === 'limit') return o.resetsAt && o.resetsAt > now ? o.resetsAt - now : 30 * 60_000;
-  if (k === 'ueberlast') return 60_000 * 2 ** Math.min(4, Math.max(0, o.versuch ?? 0));
-  return 0;
-}

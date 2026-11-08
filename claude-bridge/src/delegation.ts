@@ -72,7 +72,7 @@ export function urteilMerken(schluessel: string, u: Urteil): void {
 }
 /** Vorhandenes Urteil zum Schlüssel (nur mit Dedupe an). */
 export const urteilZu = (schluessel: string, env: Record<string, string | undefined> = process.env): Urteil | undefined => (dedupeAn(env) ? urteile.get(schluessel) : undefined);
-export const urteileLeeren = () => urteile.clear();
+export const _urteileLeeren = () => urteile.clear();
 
 // ---------- Runden: ab Runde 2 nur Delta und nur Blocker (Wave 21 B4) ----------
 
@@ -81,7 +81,7 @@ const runden = new Map<string, { runde: number; kopf: string | null }>();
 /** Bisherige Prüfrunden eines Strangs (Zahl, Kopf der letzten geprüften Fassung). */
 export const rundeStand = (parent: string) => runden.get(parent) ?? { runde: 0, kopf: null };
 export const rundeVermerken = (parent: string, kopf: string | null) => { runden.set(parent, { runde: rundeStand(parent).runde + 1, kopf }); };
-export const rundenLeeren = () => runden.clear();
+export const _rundenLeeren = () => runden.clear();
 /** Auftrag des Prüfers: Runde 1 und „vor Push“ voll, ab Runde 2 nur das Delta seit der letzten Runde und nur Blocker (BRIDGE_PRUEF_DELTA=aus → immer voll). */
 export function pruefAuftrag(o: { ofId: string; runde: number; vorPush?: boolean; deltaVon?: string | null; hinweis?: string }, env: Record<string, string | undefined> = process.env): string {
   const basis = `Prüfe die Arbeit der Delegation ${o.ofId} gegen ihren Auftrag: Korrektheit, Randfälle, entfernte Invarianten, Sicherheit. Ändere nichts.`;

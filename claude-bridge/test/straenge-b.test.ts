@@ -25,10 +25,10 @@ test('B2: effort low für Lese-Jobs, abschaltbar', () => {
   assert.equal(effortLesen({ BRIDGE_EFFORT_LESER: 'aus' }), undefined);
 });
 
-import { reviewSchluessel, urteilMerken, urteilZu, urteileLeeren } from '../src/delegation.ts';
+import { reviewSchluessel, urteilMerken, urteilZu, _urteileLeeren } from '../src/delegation.ts';
 
 test('B3: gleicher Schlüssel (head, base, Kommentare) → vorhandenes Urteil; anderer Kommentarstand → neue Review; Schalter aus → immer neu', () => {
-  urteileLeeren();
+  _urteileLeeren();
   const k = reviewSchluessel({ headSha: 'a1', baseSha: 'b1', kommentare: 2 });
   assert.equal(urteilZu(k), undefined);
   urteilMerken(k, { urteil: 'maengel', befunde: ['src/a.ts:3 hoch'], von: 'd-1', at: 1 });
@@ -38,10 +38,10 @@ test('B3: gleicher Schlüssel (head, base, Kommentare) → vorhandenes Urteil; a
   assert.equal(urteilZu(k, { BRIDGE_REVIEW_DEDUPE: 'aus' }), undefined);
 });
 
-import { pruefAuftrag, rundeStand, rundeVermerken, rundenLeeren, PRUEF_FORMAT } from '../src/delegation.ts';
+import { pruefAuftrag, rundeStand, rundeVermerken, _rundenLeeren, PRUEF_FORMAT } from '../src/delegation.ts';
 
 test('B4: Runde 1 und „vor Push“ voll; ab Runde 2 nur Delta und nur Blocker; festes Ausgabeformat; Schalter aus = voll', () => {
-  rundenLeeren();
+  _rundenLeeren();
   assert.equal(rundeStand('p').runde, 0);
   const r1 = pruefAuftrag({ ofId: 'd-1', runde: 1 });
   assert.match(r1, /Runde 1: voller Durchgang/); assert.ok(r1.includes(PRUEF_FORMAT)); assert.match(r1, /datei:zeile/);
