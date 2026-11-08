@@ -95,3 +95,15 @@ VERDICT: HOLD (0,85 Ursachen / 0,5 Vollständigkeit 41 min). Bindende Bedingunge
 - **Befund:** `mel-sub -p` reicht den ganzen Auftrag als **ein** Argument an `melious run` (`melious-plugin/plugins/melious/bin/mel-sub:39`). Linux begrenzt ein Einzelargument auf 128 KB. Pass C web (Prompt + 1680-Zeilen-Diff) scheiterte daran dreimal — zweimal fälschlich als „API nicht erreichbar“ gemeldet, einmal als `Argument list too long`.
 - **Dauerhafte Lösung (eigenes Item, melious-plugin):** Aufträge über ~100 KB schreibt mel-sub selbst in eine Datei und hängt sie per `-f` an; ein Startfehler des Aufrufs wird als solcher gemeldet, nie als Netzfehler. Test: 200-KB-Auftrag läuft durch.
 - **Bis dahin:** große Eingaben immer per `-f <datei>` übergeben (dokumentierter Weg, kein Workaround).
+
+## Anhang: Maschinen-Wrapper unter Wegwerf-HOME (Gate, sauber-env.sh)
+
+Das Gate und `werkbank.sh test` laufen mit Wegwerf-HOME. Zwei Wrapper in `~/.local/bin` (Maschinendateien, nicht im Repository,
+kein Skript im Repo erzeugt sie) suchten ihre Dateien über `$HOME` und fielen damit aus (`deckroutes.test.ts` #11: `pdftoppm: ... No such file`):
+
+- `pdftoppm`: `R=$HOME/.local/lo-root/root` → jetzt `R=$(dirname "$(dirname "$(readlink -f "$0")")")/lo-root/root`
+- `soffice`: gleiche Wurzel, dazu `FONTCONFIG_FILE=$HOME/.config/lo-fonts/fonts.conf` → jetzt vom echten Pfad des Wrappers abgeleitet (`~/.local` → `~/.config/lo-fonts`)
+
+Wer die Wrapper auf einer neuen Maschine neu anlegt, muss sie so schreiben (ein Wrapper, der `$HOME` liest, bricht unter dem Gate).
+Noch `$HOME`-abhängig, aber für das Gate unerheblich (kein Test ruft sie): `~/.local/bin/blink` (`$HOME/.bun`, `$HOME/.config/jev/env`) und
+`~/.local/bin/olaf-posthog-daily.sh` (Cron-Skript). Die übrigen Wrapper sind Symlinks oder pip-Skripte mit absolutem Shebang.
