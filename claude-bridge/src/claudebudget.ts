@@ -251,10 +251,10 @@ export function endpruefungKontoFuer(ereignis: string, item: string, now: number
 
 function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereignis?: string; item?: string; vorgeprueft?: boolean }, now: number, env: Record<string, string | undefined>): string {
   if (o.rolle === 'endpruefung') {
-    if (o.vorgeprueft === false) return 'wartet: Endprüfung — erst die Sonnet-Vorprüfung, sonst frisst das Sicherheitsnetz das Limit';
+    if (o.vorgeprueft !== true) return 'wartet: Endprüfung — erst die Sonnet-Vorprüfung, sonst frisst das Sicherheitsnetz das Limit';
     const e = o.ereignis ?? o.item ?? '', it = o.item ?? e;
     const f = fenster.get(e) ?? { first: now, items: new Map<string, boolean>() };
-    f.items.set(it, true); fenster.set(e, f);
+    f.items.set(it, o.vorgeprueft === true); fenster.set(e, f);
     if (now < f.first + fensterMs(env)) return `wartet: Endprüfung gebündelt vor der Push-Welle — startet ab ${uhr(f.first + fensterMs(env))}`;
   }
   const konten = [...lagen.values()];
